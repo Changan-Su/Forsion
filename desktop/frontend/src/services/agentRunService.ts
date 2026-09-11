@@ -14,6 +14,7 @@ registerMessages({
   'agentrun.connected': { zh: '已连接 · sandbox={sandbox}', en: 'Connected · sandbox={sandbox}' },
   'agentrun.connectFailed': { zh: '连接失败', en: 'Connection failed' },
   'agentrun.subscribeFailed': { zh: '订阅失败 ({status})', en: 'Event stream subscription failed ({status})' },
+  'agentrun.stopUnconfirmed': { zh: '尚未确认任务停止，请重试停止操作。', en: 'The run has not confirmed it stopped. Please try stopping it again.' },
 })
 
 function headers(token: string): Record<string, string> {
@@ -99,11 +100,44 @@ export async function startRun(
   return r.json()
 }
 
-export async function abortRun(cfg: TanguDesktopConfig, runId: string): Promise<void> {
-  await authFetch(`${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/abort`, {
+async function requestAbort(cfg: TanguDesktopConfig, runId: string): Promise<{ settled?: boolean; status?: string }> {
+  // 超时覆盖读取 body 的全过程,不只等 HTTP 响应头。
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(new DOMException('Stop request timed out', 'TimeoutError')), 5000)
+  try {
+    const r = await authFetch(`${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/abort`, {
     method: 'POST',
     headers: headers(cfg.token),
-  }).catch(() => {})
+    signal: ac.signal,
+    })
+    if (!r.ok) throw new Error((await r.text().catch(() => '')) || `HTTP ${r.status}`)
+    return await r.json()
+  } finally { clearTimeout(timer) }
+}
+
+export async function abortRun(cfg: TanguDesktopConfig, runId: string): Promise<void> {
+  await requestAbort(cfg, runId)
+}
+
+export type TerminalRunStatus = 'done' | 'failed' | 'aborted'
+function isTerminalStatus(status: unknown): status is TerminalRunStatus {
+  return status === 'done' || status === 'failed' || status === 'aborted'
+}
+
+/** 保留 SSE 订阅直到真终态。新引擎等 finally;旧引擎回退到显式的终态记录,空列表不是证明。 */
+export async function abortRunAndWait(cfg: TanguDesktopConfig, runId: string, sessionId: string): Promise<TerminalRunStatus> {
+  const deadline = Date.now() + 10_000
+  do {
+    const result = await requestAbort(cfg, runId)
+    if (result.settled === true && isTerminalStatus(result.status)) return result.status
+    if (result.settled === undefined) {
+      const run = (await listActiveRuns(cfg, sessionId)).find((r) => r.id === runId)
+      if (run && isTerminalStatus(run.status)) return run.status
+    }
+    if (Date.now() >= deadline) break
+    await delay(250)
+  } while (Date.now() < deadline)
+  throw new Error(translate('agentrun.stopUnconfirmed'))
 }
 
 /** 运行时转向:把消息注入仍在跑的 run(下一迭代生效)。run 已结束 → 409 返回 {ok:false,reason:'not_active'},前端回退起新 run。 */
@@ -121,6 +155,22 @@ export async function steerRun(
   if (!r.ok) throw new Error((await r.text().catch(() => '')) || `HTTP ${r.status}`)
   const j = await r.json().catch(() => ({}))
   return { ok: true, userMessageId: j.userMessageId }
+}
+
+/** Wake queued input in the SAME run. Old engines may reject flush; never fall back to abort. */
+export async function expediteSteer(cfg: TanguDesktopConfig, runId: string): Promise<{ ok: boolean }> {
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(new DOMException('Steering request timed out', 'TimeoutError')), 5000)
+  try {
+    const r = await authFetch(`${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/steer`, {
+      method: 'POST', headers: headers(cfg.token), signal: ac.signal, body: JSON.stringify({ flush: true }),
+    })
+    if (r.status === 409) return { ok: false }
+    if (!r.ok) throw new Error((await r.text().catch(() => '')) || `HTTP ${r.status}`)
+    const result = await r.json()
+    if (result.ok !== true) throw new Error('Steering was not acknowledged')
+    return { ok: true }
+  } finally { clearTimeout(timer) }
 }
 
 /** 撤回一条尚未注入的转向消息。gone=true:已注入或 run 已终结(来不及了,交给事件流收拾)。 */
@@ -143,12 +193,17 @@ export async function listActiveRuns(
   cfg: TanguDesktopConfig,
   sessionId: string,
 ): Promise<Array<{ id: string; status: string; assistant_message_id: string | null }>> {
-  const r = await authFetch(`${cfg.backendUrl}/agent/runs?session_id=${encodeURIComponent(sessionId)}`, {
-    headers: headers(cfg.token),
-  })
-  if (!r.ok) return []
-  const j = await r.json().catch(() => ({ runs: [] }))
-  return j.runs || []
+  const ac = new AbortController()
+  const timer = setTimeout(() => ac.abort(new DOMException('Run status request timed out', 'TimeoutError')), 5000)
+  try {
+    const r = await authFetch(`${cfg.backendUrl}/agent/runs?session_id=${encodeURIComponent(sessionId)}`, {
+      headers: headers(cfg.token), signal: ac.signal,
+    })
+    if (!r.ok) throw new Error((await r.text().catch(() => '')) || `HTTP ${r.status}`)
+    const j = await r.json()
+    if (!Array.isArray(j.runs)) throw new Error('Invalid run status response')
+    return j.runs
+  } finally { clearTimeout(timer) }
 }
 
 /** 兑现一次询问(ask_user/exit_plan_mode)。410 = 已不在等待(过期/他端已处理)。 */

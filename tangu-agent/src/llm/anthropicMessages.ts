@@ -220,9 +220,8 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
 
   guard.arm();
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = await guard.read(reader);
     if (done) break;
-    guard.arm();
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
     buffer = lines.pop() || '';
@@ -245,6 +244,8 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
         }
         case 'content_block_start': {
           const cb = ev.content_block;
+          if (cb?.type === 'tool_use' && !blocks.has(ev.index)
+            && ((typeof cb.id === 'string' && cb.id) || (typeof cb.name === 'string' && cb.name))) guard.progress();
           if (cb?.type === 'tool_use') blocks.set(ev.index, { id: cb.id || `toolu_${ev.index}`, name: cb.name || '', arguments: '' });
           else blocks.set(ev.index, null);
           break;
@@ -253,14 +254,17 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
           const d = ev.delta;
           if (!d) break;
           if (d.type === 'text_delta' && typeof d.text === 'string') {
+            if (d.text) guard.progress();
             content += d.text;
             onToken?.(d.text);
           } else if (d.type === 'thinking_delta' && typeof d.thinking === 'string') {
+            if (d.thinking) guard.progress();
             reasoning += d.thinking;
             onReasoning?.(d.thinking);
           } else if (d.type === 'input_json_delta' && typeof d.partial_json === 'string') {
             const t = blocks.get(ev.index);
             if (t) {
+              if (d.partial_json) guard.progress();
               t.arguments += d.partial_json;
               onToolCallDelta?.({ id: t.id, name: t.name, argsLen: t.arguments.length, args: t.arguments, argsDelta: d.partial_json });
             }

@@ -1,7 +1,7 @@
 /**
  * Docker 沙箱（v1：ephemeral-per-exec —— 每次执行起一个一次性具名容器，跑完即焚）。
  * 安全红线：--network none、--init（reap 僵尸/转发信号）、cap-drop ALL、no-new-privileges、
- * 只读 rootfs + 可写工作区、CPU/内存/pids 配额、超时/中止用 `docker kill <name>` 真停容器
+ * 只读 rootfs + 可写工作区、CPU/内存/pids 配额、超时/中止等待 `docker rm -f <name>` 确认容器清理
  * （不是杀 CLI —— 杀 CLI 会留孤儿容器占资源）、输出截断、不注入任何密钥/env。
  * 并发上限信号量防止容器风暴打爆宿主。
  *
@@ -17,12 +17,14 @@
  * 缓存目录；exec 时把该目录只读挂到 /pkgs 并设 PYTHONPATH=/pkgs。共享缓存=每个包全局只装一次，
  * 后续 run 直接挂载零成本。安装容器默认 --only-binary（不跑 setup.py，杜绝装包期任意代码执行）。
  */
-import { spawn, execFile } from 'child_process';
+import { execFile } from 'child_process';
 import { randomUUID } from 'crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { sandboxConfig } from './sandboxConfig.js';
+import { ExecutionQueue } from './executionQueue.js';
+import { assertDockerWorkspaceAvailable, dockerQuarantines, DockerCleanupError, removeDockerContainer, runDocker, scheduleDockerStartupInspection, startDockerContainer, waitDockerStartupCleanup } from './dockerLifecycle.js';
 
 export interface ExecResult {
   stdout: string;
@@ -58,7 +60,7 @@ const MAX_INSTALL_PKGS = 20;
 // 包名/版本规格允许集：名字[extras](==/>=/... 版本)*；禁止 flags/URL/路径/shell 元字符。
 const PKG_SPEC_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*(\[[A-Za-z0-9,._-]+\])?([=<>!~]=?[0-9A-Za-z.*+!-]+)*$/;
 let pkgDirReady = false;
-let installChain: Promise<unknown> = Promise.resolve(); // 串行化安装（pip --target 非并发安全）
+const installQueue = new ExecutionQueue(() => 1); // pip --target admission is cancellable while queued
 
 export const MAX_OUTPUT = 16_000;
 // run_python（持久 kernel 路径）的全文捕获上限：远高于 MAX_OUTPUT，让 registry 拿到完整输出后
@@ -104,37 +106,23 @@ export function getSandboxSnapshot() {
   return {
     active: getActiveExecs(),
     activeCount: activeExecs.size,
+    allocatedSlots: slots.activeCount,
     maxConcurrent: sandboxConfig().maxConcurrent,
-    queued: waiters.length,
+    queued: slots.queued,
     recent: getRecentExecs(20),
     totalRecent: recentExecs.length,
+    quarantined: dockerQuarantines(),
   };
 }
 
 // ── 计数信号量：限制并发容器数（上限运行期可调，admin 设置 → sandboxConfig）──
-let active = 0;
-const waiters: Array<() => void> = [];
-function acquire(): Promise<void> {
-  if (active < sandboxConfig().maxConcurrent) { active++; return Promise.resolve(); }
-  return new Promise((resolve) => waiters.push(resolve));
-}
-function pump(): void {
-  while (waiters.length && active < sandboxConfig().maxConcurrent) {
-    active++;
-    waiters.shift()!();
-  }
-}
-function release(): void {
-  active = Math.max(0, active - 1);
-  pump();
-}
-/** 并发上限被调高后立即唤醒排队任务（admin 改设置后调用）。 */
-export function pumpWaiters(): void {
-  pump();
-}
-
-/** 供 sessionSandbox 复用同一并发信号量（会话级 kernel exec 也受 maxConcurrent 约束）。 */
-export function acquireSlot(): Promise<void> { return acquire(); }
+const slots = new ExecutionQueue(() => sandboxConfig().maxConcurrent);
+async function acquire(signal?: AbortSignal): Promise<void> { await waitDockerStartupCleanup(signal); return slots.acquire(signal); }
+function release(): void { slots.release(); }
+/** 并发上限被调高后立即唤醒排队任务。 */
+export function pumpWaiters(): void { slots.pump(); }
+/** Cancelled or expired waiters are removed before they can own a container slot. */
+export function acquireSlot(signal?: AbortSignal): Promise<void> { return acquire(signal); }
 export function releaseSlot(): void { release(); }
 
 /** 供外部（sessionSandbox）登记一次执行到可观测表，admin 面板能看到会话 kernel 的真实占用。返回 startedAt。 */
@@ -159,22 +147,19 @@ export function endExec(
 }
 
 /** 解析 Python 镜像：首选自建镜像，缺失则回落官方 slim（只探一次）。 */
-export function resolvePythonImage(): Promise<string> {
-  if (pythonImageResolved) return Promise.resolve(pythonImageResolved);
-  if (process.env.AGENT_SANDBOX_PYTHON_IMAGE) { // 显式指定就不探测
-    pythonImageResolved = PYTHON_IMAGE;
-    return Promise.resolve(pythonImageResolved);
-  }
-  return new Promise((resolve) => {
-    execFile('docker', ['image', 'inspect', PYTHON_IMAGE], { timeout: 5000 }, (err) => {
-      pythonImageResolved = err ? PYTHON_IMAGE_FALLBACK : PYTHON_IMAGE;
-      if (err) console.warn(`[agent-core] 沙箱镜像 ${PYTHON_IMAGE} 不存在，回落 ${PYTHON_IMAGE_FALLBACK}（文档库不可用，请构建：docker build -t ${PYTHON_IMAGE} server/microserver/agent-core/sandbox）`);
-      resolve(pythonImageResolved!);
-    });
-  });
+export async function resolvePythonImage(signal?: AbortSignal): Promise<string> {
+  signal?.throwIfAborted();
+  if (pythonImageResolved) return pythonImageResolved;
+  if (process.env.AGENT_SANDBOX_PYTHON_IMAGE) return (pythonImageResolved = PYTHON_IMAGE);
+  const result = await runDocker(['image', 'inspect', PYTHON_IMAGE], { signal });
+  signal?.throwIfAborted();
+  pythonImageResolved = result.code === 0 && !result.reason ? PYTHON_IMAGE : PYTHON_IMAGE_FALLBACK;
+  return pythonImageResolved;
 }
 
 export async function ensurePkgDir(): Promise<void> {
+  await waitDockerStartupCleanup();
+  assertDockerWorkspaceAvailable(PKG_DIR);
   if (pkgDirReady) return;
   await fsp.mkdir(PKG_DIR, { recursive: true }).catch(() => {});
   pkgDirReady = true;
@@ -219,11 +204,18 @@ async function walkSize(dir: string): Promise<number> {
 
 /** 清空包缓存内容（保留目录本身）。返回清掉前的体积 MB。 */
 export async function clearPkgCache(): Promise<number> {
+  await installQueue.acquire();
+  try { return await clearPkgCacheUnlocked(); }
+  finally { installQueue.release(); }
+}
+
+async function clearPkgCacheUnlocked(): Promise<number> {
   await ensurePkgDir();
   const before = await getCacheSizeBytes();
   let entries: any[] = [];
   try { entries = await fsp.readdir(PKG_DIR); } catch { /* none */ }
   for (const name of entries) {
+    assertDockerWorkspaceAvailable(PKG_DIR);
     await fsp.rm(path.join(PKG_DIR, name), { recursive: true, force: true }).catch(() => {});
   }
   return Math.round((before / (1024 * 1024)) * 10) / 10;
@@ -246,6 +238,12 @@ export async function getCacheInfo(): Promise<{ sizeMB: number; maxMB: number; t
 
 /** 执行缓存策略：超龄(TTL) 或 超体积(MB) 则清空。返回是否清理 + 原因。 */
 export async function enforceCachePolicy(): Promise<{ cleared: boolean; reason?: string; sizeMB?: number }> {
+  await installQueue.acquire();
+  try { return await enforceCachePolicyUnlocked(); }
+  finally { installQueue.release(); }
+}
+
+async function enforceCachePolicyUnlocked(): Promise<{ cleared: boolean; reason?: string; sizeMB?: number }> {
   const { pkgCacheMaxMB, pkgCacheTtlDays } = sandboxConfig();
   await ensurePkgDir();
 
@@ -255,7 +253,7 @@ export async function enforceCachePolicy(): Promise<{ cleared: boolean; reason?:
       const st = await fsp.stat(path.join(PKG_DIR, LAST_USED_MARKER));
       const ageDays = (Date.now() - st.mtimeMs) / 86_400_000;
       if (ageDays > pkgCacheTtlDays) {
-        const mb = await clearPkgCache();
+        const mb = await clearPkgCacheUnlocked();
         console.log(`[agent-core] 包缓存超 ${pkgCacheTtlDays} 天未用，已清空（${mb}MB）`);
         return { cleared: true, reason: 'ttl', sizeMB: mb };
       }
@@ -265,7 +263,7 @@ export async function enforceCachePolicy(): Promise<{ cleared: boolean; reason?:
   if (pkgCacheMaxMB > 0) {
     const mb = (await getCacheSizeBytes()) / (1024 * 1024);
     if (mb > pkgCacheMaxMB) {
-      const cleared = await clearPkgCache();
+      const cleared = await clearPkgCacheUnlocked();
       console.log(`[agent-core] 包缓存 ${cleared}MB 超上限 ${pkgCacheMaxMB}MB，已清空`);
       return { cleared: true, reason: 'size', sizeMB: cleared };
     }
@@ -288,10 +286,13 @@ export function stopCacheJanitor(): void {
 
 /** 在沙箱里跑一段 Python（代码经 stdin 传入，避免参数转义问题）。 */
 export async function runPython(code: string, opts?: ExecOpts): Promise<ExecResult> {
-  const image = await resolvePythonImage();
+  opts?.signal?.throwIfAborted();
+  if (opts?.mountDir) assertDockerWorkspaceAvailable(opts.mountDir);
+  const image = await resolvePythonImage(opts?.signal);
   await ensurePkgDir();
   void touchLastUsed(); // 标记缓存被使用（TTL 计时），不阻塞
-  await acquire();
+  await acquire(opts?.signal);
+  let quarantined = false;
   try {
     return await runInDocker({
       image,
@@ -302,9 +303,8 @@ export async function runPython(code: string, opts?: ExecOpts): Promise<ExecResu
       pkgMount: { dir: PKG_DIR, ro: true },
       ...opts,
     });
-  } finally {
-    release();
-  }
+  } catch (e) { quarantined = e instanceof DockerCleanupError; throw e; }
+  finally { if (!quarantined) release(); }
 }
 
 function installErr(msg: string): ExecResult {
@@ -324,164 +324,128 @@ export async function installPackages(packages: string[], opts?: ExecOpts): Prom
   for (const p of pkgs) {
     if (!PKG_SPEC_RE.test(p)) return installErr(`invalid package spec: "${p}" (only name[extras][version] allowed)`);
   }
-  await ensurePkgDir();
-  const image = await resolvePythonImage();
-
-  // 串行化：把本次安装挂到 installChain 尾部，避免并发 pip --target 互相破坏。
-  const run = installChain.then(async () => {
-    // 装前先按策略清理（若已超龄/超体积），给本次安装腾空间，避免刚装就被清。
-    await enforceCachePolicy().catch(() => {});
+  opts?.signal?.throwIfAborted();
+  await installQueue.acquire(opts?.signal);
+  try {
+    opts?.signal?.throwIfAborted();
+    await ensurePkgDir();
+    const image = await resolvePythonImage(opts?.signal);
+    await enforceCachePolicyUnlocked();
     await touchLastUsed();
-    await acquire();
+    await acquire(opts?.signal);
+    let quarantined = false;
     try {
       const cmd = ['pip', 'install', '--target', '/pkgs', '--no-input', '--no-cache-dir', '--disable-pip-version-check'];
-      if (PIP_INDEX_URL) cmd.push('--index-url', PIP_INDEX_URL); // 中国大陆镜像:清华 PyPI 等
+      if (PIP_INDEX_URL) cmd.push('--index-url', PIP_INDEX_URL);
       if (INSTALL_ONLY_BINARY) cmd.push('--only-binary', ':all:');
       cmd.push(...pkgs);
-      return await runInDocker({
-        image,
-        cmd,
-        stdinData: '',
-        kind: 'pip-install',
-        network: 'bridge',                       // 仅安装容器带网
-        pkgMount: { dir: PKG_DIR, ro: false },   // 写入共享缓存
-        env: { HOME: '/tmp' },
-        timeoutMs: opts?.timeoutMs ?? INSTALL_TIMEOUT_MS,
-        signal: opts?.signal,
-        runId: opts?.runId,
-      });
-    } finally {
-      release();
-    }
-  });
-  installChain = run.then(() => undefined, () => undefined);
-  return run;
+      return await runInDocker({ image, cmd, stdinData: '', kind: 'pip-install', network: 'bridge',
+        pkgMount: { dir: PKG_DIR, ro: false }, env: { HOME: '/tmp' },
+        timeoutMs: opts?.timeoutMs ?? INSTALL_TIMEOUT_MS, signal: opts?.signal, runId: opts?.runId });
+    } catch (e) { quarantined = e instanceof DockerCleanupError; throw e; }
+    finally { if (!quarantined) release(); }
+  } finally { installQueue.release(); }
 }
 
-// ── per-run 暖容器：一个 run 复用一个常驻容器，docker exec 跑代码（省冷启 ~1s/次）──
-interface RunContainer { name: string; mountDir: string; createdAt: number; starting?: Promise<boolean>; }
+// ── per-run warm containers: lifecycle serialized through confirmed cleanup ──
+interface RunContainer {
+  name: string; mountDir: string; started: boolean; lock: ExecutionQueue;
+  closing?: Promise<void>; quarantined?: Error;
+}
 const runContainers = new Map<string, RunContainer>();
 
-function dockerRm(name: string): void {
-  execFile('docker', ['rm', '-f', name], () => {});
-}
-
-async function ensureRunContainer(runId: string, mountDir: string): Promise<string | null> {
-  const existing = runContainers.get(runId);
-  if (existing) {
-    if (existing.starting) return (await existing.starting) ? existing.name : null;
-    return existing.name;
-  }
-  const image = await resolvePythonImage();
-  await ensurePkgDir();
-  const name = `agent-run-${runId}`;
-  const rc: RunContainer = { name, mountDir, createdAt: Date.now() };
-  rc.starting = (async () => {
-    await new Promise<void>((r) => execFile('docker', ['rm', '-f', name], () => r())); // 清同名残留
-    const args = [
-      'run', '-d', '--name', name, '--init',
-      '--network', 'none', '--cpus', '1', '--memory', '512m', '--pids-limit', '128',
-      '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-      '--read-only', '--tmpfs', '/tmp:rw,size=64m',
-    ];
-    try {
-      const uid = typeof process.getuid === 'function' ? process.getuid() : null;
-      const gid = typeof process.getgid === 'function' ? process.getgid() : null;
-      if (uid != null && gid != null) args.push('--user', `${uid}:${gid}`);
-    } catch { /* 非 POSIX */ }
-    args.push(
-      // 唯一持久可写处：/workspace 与 /mnt/data 同指会话工作区目录。HOME/缓存指到易失 /tmp。
-      '-v', `${mountDir}:/workspace:rw`, '-v', `${mountDir}:/mnt/data:rw`, '-v', `${PKG_DIR}:/pkgs:ro`,
-      '-e', 'PYTHONPATH=/pkgs', '-e', 'HOME=/tmp', '-e', 'TMPDIR=/tmp', '-e', 'MPLCONFIGDIR=/tmp/mpl',
-      '-e', 'XDG_CACHE_HOME=/tmp/.cache', '-e', 'XDG_CONFIG_HOME=/tmp/.config', '-e', 'XDG_DATA_HOME=/tmp/.local',
-      '--workdir', '/workspace', '--entrypoint', 'sleep', image, 'infinity',
-    );
-    return await new Promise<boolean>((resolve) => {
-      execFile('docker', args, { timeout: 60_000 }, (err) => resolve(!err));
-    });
-  })();
-  runContainers.set(runId, rc);
-  const ok = await rc.starting;
-  rc.starting = undefined;
-  if (!ok) { runContainers.delete(runId); return null; }
-  return name;
-}
-
-/**
- * 在 run 的暖容器里 docker exec 跑 python。首次调用：本次走 ephemeral（与纯 ephemeral 同速，不回退变慢），
- * 同时后台预热暖容器；后续调用直接 docker exec 复用（省冷启 ~1s/次）。建容器失败则一直 ephemeral。
- */
-export async function runPythonInRun(runId: string, mountDir: string, code: string, opts?: ExecOpts): Promise<ExecResult> {
-  if (!runContainers.has(runId)) {
-    const res = await runPython(code, { mountDir, ...opts }); // 首次走 ephemeral（与纯 ephemeral 同速）
-    void ensureRunContainer(runId, mountDir).catch(() => {}); // 完成后再后台预热（与后续 LLM 间隙重叠，不抢首调用资源）
-    return res;
-  }
-  const name = await ensureRunContainer(runId, mountDir);
-  if (!name) return runPython(code, { mountDir, ...opts });
-  await acquire();
+export function getUidGidArgs(): string[] {
   try {
-    return await execInContainer(runId, name, code, opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS, opts?.signal);
-  } finally {
-    release();
-  }
+    const uid = process.getuid?.(), gid = process.getgid?.();
+    return uid != null && gid != null ? ['--user', `${uid}:${gid}`] : [];
+  } catch { return []; }
+}
+export function sandboxEnvArgs(): string[] {
+  return Object.entries({ PYTHONPATH: '/pkgs', HOME: '/tmp', TMPDIR: '/tmp', MPLCONFIGDIR: '/tmp/mpl',
+    XDG_CACHE_HOME: '/tmp/.cache', XDG_CONFIG_HOME: '/tmp/.config', XDG_DATA_HOME: '/tmp/.local' })
+    .flatMap(([key, value]) => ['-e', `${key}=${value}`]);
+}
+export function warmContainerArgs(name: string, dir: string, image: string): string[] {
+  return ['run', '-d', '--name', name, '--init', '--network', 'none', '--cpus', '1', '--memory', '512m', '--pids-limit', '128',
+    '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only', '--tmpfs', '/tmp:rw,size=64m',
+    ...getUidGidArgs(), '-v', `${dir}:/workspace:rw`, '-v', `${dir}:/mnt/data:rw`, '-v', `${PKG_DIR}:/pkgs:ro`,
+    ...sandboxEnvArgs(), '--workdir', '/workspace', '--entrypoint', 'sleep', image, 'infinity'];
 }
 
-/** run 结束清掉暖容器。 */
-export function releaseRunContainer(runId: string): void {
+/** Warm startup is part of this operation; no unowned background creation can outlive run disposal. */
+export async function runPythonInRun(runId: string, mountDir: string, code: string, opts?: ExecOpts): Promise<ExecResult> {
+  opts?.signal?.throwIfAborted();
+  assertDockerWorkspaceAvailable(mountDir);
+  let rc = runContainers.get(runId);
+  if (rc?.closing || rc?.quarantined) throw rc.quarantined || new Error('Run sandbox is being disposed');
+  if (!rc) {
+    rc = { name: `agent-run-${randomUUID()}`, mountDir, started: false, lock: new ExecutionQueue(() => 1) };
+    runContainers.set(runId, rc);
+  }
+  if (path.resolve(rc.mountDir) !== path.resolve(mountDir)) throw new Error('Run sandbox workspace cannot change');
+  await rc.lock.acquire(opts?.signal);
+  try {
+    if (rc.closing || rc.quarantined) throw rc.quarantined || new Error('Run sandbox is being disposed');
+    opts?.signal?.throwIfAborted();
+    await acquire(opts?.signal);
+    let quarantined = false;
+    try {
+      if (!rc.started) {
+        const image = await resolvePythonImage(opts?.signal);
+        await ensurePkgDir();
+        rc.started = await startDockerContainer(rc.name, warmContainerArgs(rc.name, mountDir, image), [mountDir], opts?.signal);
+        if (!rc.started) return installErr('Docker warm container failed to start');
+      }
+      const result = await executeDocker(rc.name, ['exec', '-i', rc.name, 'python3', '-'], code,
+        { ...opts, mountDir, runId }, false);
+      if (result.aborted || result.timedOut || result.exitCode !== 0) rc.started = false;
+      return result;
+    } catch (e) {
+      quarantined = e instanceof DockerCleanupError;
+      if (quarantined) rc.quarantined = e as Error;
+      throw e;
+    } finally { if (!quarantined) release(); }
+  } finally { rc.lock.release(); }
+}
+
+export async function releaseRunContainer(runId: string): Promise<void> {
   const rc = runContainers.get(runId);
   if (!rc) return;
-  runContainers.delete(runId);
-  dockerRm(rc.name);
+  if (rc.closing) return rc.closing;
+  rc.closing = (async () => {
+    await rc.lock.acquire(undefined, 0);
+    try {
+      await removeDockerContainer(rc.name, [rc.mountDir]);
+      if (runContainers.get(runId) === rc) runContainers.delete(runId);
+    } catch (e) { rc.quarantined = e as Error; throw e; }
+    finally { rc.lock.release(); }
+  })();
+  return rc.closing;
 }
 
-/** 进程启动时清理上个进程遗留的 agent-run-* 暖容器（孤儿）。 */
 export function reapOrphanRunContainers(): void {
-  execFile('docker', ['ps', '-aq', '--filter', 'name=agent-run-'], { timeout: 5000 }, (err, stdout) => {
-    if (err || !stdout) return;
-    const ids = String(stdout).split('\n').map((s) => s.trim()).filter(Boolean);
-    if (ids.length) execFile('docker', ['rm', '-f', ...ids], () => {});
-  });
+  if (runContainers.size || activeExecs.size) return; // startup-only
+  // Names do not establish ownership: Desktop and CLI instances may share the same Docker daemon.
+  void scheduleDockerStartupInspection(['agent-run-', 'agent-sbx-'])
+    .catch((e) => console.warn('[agent-core] existing sandbox inspection failed:', e));
 }
 
-function execInContainer(runId: string, name: string, code: string, timeoutMs: number, signal?: AbortSignal): Promise<ExecResult> {
-  const startedAt = Date.now();
-  activeExecs.set(name, { name, runId, kind: 'python', startedAt });
-  const finish = (r: ExecResult) => {
-    activeExecs.delete(name);
-    recentExecs.unshift({
-      name, runId, kind: 'python', startedAt, endedAt: Date.now(),
-      ms: Date.now() - startedAt, exitCode: r.exitCode, timedOut: !!r.timedOut, aborted: !!r.aborted,
-    });
-    if (recentExecs.length > MAX_HISTORY) recentExecs.length = MAX_HISTORY;
-  };
-  return new Promise<ExecResult>((resolve) => {
-    let stdout = '', stderr = '', timedOut = false, aborted = false, settled = false;
-    const child = spawn('docker', ['exec', '-i', name, 'python3', '-'], { stdio: ['pipe', 'pipe', 'pipe'] });
-    // 超时/中止 → kill 整个暖容器（其内 exec 进程随之死），从 map 删除让下次重建
-    const killContainer = () => { runContainers.delete(runId); execFile('docker', ['kill', name], () => dockerRm(name)); };
-    const killer = setTimeout(() => { timedOut = true; killContainer(); }, timeoutMs);
-    const onAbort = () => { aborted = true; killContainer(); };
-    if (signal) {
-      if (signal.aborted) { aborted = true; queueMicrotask(killContainer); }
-      else signal.addEventListener('abort', onAbort, { once: true });
-    }
-    const cleanup = () => { clearTimeout(killer); if (signal) signal.removeEventListener('abort', onAbort); };
-    child.stdout.on('data', (d) => { if (stdout.length < MAX_OUTPUT) stdout += d.toString(); });
-    child.stderr.on('data', (d) => { if (stderr.length < MAX_OUTPUT) stderr += d.toString(); });
-    child.on('error', (err) => {
-      if (settled) return; settled = true; cleanup();
-      runContainers.delete(runId); // exec 失败（容器可能已死）→ 下次重建
-      const r: ExecResult = { stdout, stderr: `${stderr}\n[docker exec error] ${err.message}`.slice(0, MAX_OUTPUT), exitCode: null, timedOut, aborted };
-      finish(r); resolve(r);
-    });
-    child.on('close', (code) => {
-      if (settled) return; settled = true; cleanup();
-      const r: ExecResult = { stdout: stdout.slice(0, MAX_OUTPUT), stderr: stderr.slice(0, MAX_OUTPUT), exitCode: code, timedOut, aborted };
-      finish(r); resolve(r);
-    });
-    try { child.stdin.write(code); child.stdin.end(); } catch { /* close handler resolves */ }
-  });
+async function executeDocker(name: string, args: string[], input: string, opts: ExecOpts, ephemeral: boolean, writableDirs = opts.mountDir ? [opts.mountDir] : []): Promise<ExecResult> {
+  opts.signal?.throwIfAborted();
+  for (const dir of writableDirs) assertDockerWorkspaceAvailable(dir);
+  const kind = opts.kind || 'python';
+  const started = beginExec(name, opts.runId ?? null, kind);
+  const result = await runDocker(args, { signal: opts.signal, input, timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS, maxOutputBytes: MAX_OUTPUT });
+  // CLI close alone proves nothing about a detached/daemon-side container. Always remove ephemeral
+  // containers; failed warm execs are discarded before the caller releases its workspace lease.
+  if (ephemeral || result.reason || result.cleanupTimedOut || result.code !== 0 || opts.signal?.aborted) {
+    await removeDockerContainer(name, writableDirs, !ephemeral || (!result.reason && !result.cleanupTimedOut));
+  }
+  const out: ExecResult = { stdout: result.stdout, stderr: result.stderr + (result.reason ? `\n[${result.reason}]` : '') + (result.cleanupTimedOut ? '\n[CLI exit acknowledgement timed out; container removal confirmed]' : ''),
+    exitCode: result.cleanupTimedOut && result.code === 0 ? 1 : result.code,
+    timedOut: result.reason === 'timeout', aborted: result.reason === 'aborted' || !!opts.signal?.aborted };
+  endExec(name, opts.runId ?? null, kind, started, out);
+  return out;
 }
 
 /**
@@ -489,7 +453,10 @@ function execInContainer(runId: string, name: string, code: string, timeoutMs: n
  * 供 agent 自定义 JS 工具的云端执行——纯计算；要联网请用 http executor。
  */
 export async function runNode(script: string, opts?: ExecOpts): Promise<ExecResult> {
-  await acquire();
+  opts?.signal?.throwIfAborted();
+  if (opts?.mountDir) assertDockerWorkspaceAvailable(opts.mountDir);
+  await acquire(opts?.signal);
+  let quarantined = false;
   try {
     const timeoutMs = opts?.timeoutMs ?? (nodeImageWarmed ? DEFAULT_TIMEOUT_MS : NODE_FIRST_RUN_TIMEOUT_MS);
     const r = await runInDocker({
@@ -502,9 +469,8 @@ export async function runNode(script: string, opts?: ExecOpts): Promise<ExecResu
     });
     if (r.exitCode === 0 || (r.stdout && r.stdout.length)) nodeImageWarmed = true;
     return r;
-  } finally {
-    release();
-  }
+  } catch (e) { quarantined = e instanceof DockerCleanupError; throw e; }
+  finally { if (!quarantined) release(); }
 }
 
 interface DockerRunArgs extends ExecOpts {
@@ -517,6 +483,7 @@ interface DockerRunArgs extends ExecOpts {
 }
 
 function runInDocker(args: DockerRunArgs): Promise<ExecResult> {
+  args.signal?.throwIfAborted();
   const { image, cmd, stdinData } = args;
   const timeoutMs = args.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const name = `agent-sbx-${randomUUID()}`;
@@ -568,88 +535,8 @@ function runInDocker(args: DockerRunArgs): Promise<ExecResult> {
 
   dockerArgs.push('--workdir', '/workspace', image, ...cmd);
 
-  const startedAt = Date.now();
-  activeExecs.set(name, { name, runId: args.runId ?? null, kind, startedAt });
-
-  const finish = (r: ExecResult) => {
-    activeExecs.delete(name);
-    recentExecs.unshift({
-      name, runId: args.runId ?? null, kind, startedAt, endedAt: Date.now(),
-      ms: Date.now() - startedAt, exitCode: r.exitCode, timedOut: !!r.timedOut, aborted: !!r.aborted,
-    });
-    if (recentExecs.length > MAX_HISTORY) recentExecs.length = MAX_HISTORY;
-  };
-
-  return new Promise<ExecResult>((resolve) => {
-    let stdout = '';
-    let stderr = '';
-    let timedOut = false;
-    let aborted = false;
-    let settled = false;
-
-    const child = spawn('docker', dockerArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
-
-    // 真停容器（不是杀 CLI）：docker kill 具名容器；rm -f 作为兜底清孤儿。
-    const killContainer = () => {
-      execFile('docker', ['kill', name], () => {
-        execFile('docker', ['rm', '-f', name], () => {});
-      });
-    };
-
-    const killer = setTimeout(() => { timedOut = true; killContainer(); }, timeoutMs);
-
-    // 中止信号：abort 时真停容器（与超时同路径）。
-    const onAbort = () => { aborted = true; killContainer(); };
-    if (args.signal) {
-      if (args.signal.aborted) { aborted = true; queueMicrotask(killContainer); }
-      else args.signal.addEventListener('abort', onAbort, { once: true });
-    }
-    const cleanup = () => {
-      clearTimeout(killer);
-      if (args.signal) args.signal.removeEventListener('abort', onAbort);
-    };
-
-    child.stdout.on('data', (d) => { if (stdout.length < MAX_OUTPUT) stdout += d.toString(); });
-    child.stderr.on('data', (d) => { if (stderr.length < MAX_OUTPUT) stderr += d.toString(); });
-
-    child.on('error', (err) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      execFile('docker', ['rm', '-f', name], () => {}); // 兜底
-      const r: ExecResult = {
-        stdout,
-        stderr: `${stderr}\n[docker spawn error] ${err.message}`.slice(0, MAX_OUTPUT),
-        exitCode: null,
-        timedOut,
-        aborted,
-      };
-      finish(r);
-      resolve(r);
-    });
-
-    child.on('close', (code) => {
-      if (settled) return;
-      settled = true;
-      cleanup();
-      const r: ExecResult = {
-        stdout: stdout.slice(0, MAX_OUTPUT),
-        stderr: stderr.slice(0, MAX_OUTPUT),
-        exitCode: code,
-        timedOut,
-        aborted,
-      };
-      finish(r);
-      resolve(r);
-    });
-
-    try {
-      child.stdin.write(stdinData);
-      child.stdin.end();
-    } catch {
-      /* ignore — close handler will resolve */
-    }
-  });
+  const writableDirs = [...(args.mountDir ? [args.mountDir] : []), ...(args.pkgMount && !args.pkgMount.ro ? [args.pkgMount.dir] : [])];
+  return executeDocker(name, dockerArgs, stdinData, { ...args, timeoutMs, kind }, true, writableDirs);
 }
 
 /** 给调用方临时目录的根（os.tmpdir 下，调用方负责 mkdtemp/rm）。 */

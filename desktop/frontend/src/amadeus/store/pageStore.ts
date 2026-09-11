@@ -632,12 +632,14 @@ function makePageStore(opts: PageStoreOptions = {}) {
         await flush
         if (path === flushingPath) await inflightSave?.catch(() => {}) // 更早发起的在途写也要等
       }
+      // 移动/改名会清掉旧路径的 pendingPage。等待保存期间路径已经失效时,不要再向旧地址发读请求。
+      if (seq !== loadSeq || get().pendingPage !== path) return
       try {
         const page = await amadeus.loadPage(path)
-        if (seq !== loadSeq) return // 已被更新的导航取代
+        if (seq !== loadSeq || get().pendingPage !== path) return // 新导航或路径变更已经取代本次读取
         set({ activePage: path, pendingPage: null, ...hydrate(page), status: 'ready' })
       } catch (e) {
-        if (seq === loadSeq) set({ status: 'idle', error: String(e), pendingPage: null })
+        if (seq === loadSeq && get().pendingPage === path) set({ status: 'idle', error: String(e), pendingPage: null })
       }
     },
 
@@ -1053,22 +1055,15 @@ function makePageStore(opts: PageStoreOptions = {}) {
           return
         }
       }
-      const active = get().activePage
-      const wasActive = active === pagePath
-      const activeInFd = !!active && hasFd && active.startsWith(`${fd}/`)
       // 移动会触发全库引用重写:所有面板先落盘(不止本面板;理由同 renamePage,Codex 评审 P1)。
       await flushAllScopes()
       try {
         const newPath = await amadeus.movePage(pagePath, dst)
-        // unified 实例握着旧路径,后续编辑会把旧文件写回来(remap 只认 v3 scope;Codex P0)。
-        retireUnifiedPath(pagePath)
-        if (wasActive) set({ activePage: newPath, pendingPage: null })
+        if (newPath === pagePath) return
         remapScopePaths(pagePath, newPath, 'file')
         if (hasFd) {
           try {
             const newFd = await amadeus.moveFolder(fd, dst)
-            retireUnifiedPath(fd, 'prefix')
-            if (activeInFd) set({ activePage: newFd + active.slice(fd.length) })
             remapScopePaths(fd, newFd, 'prefix')
           } catch (e) {
             set({ error: translate('pagestore.error.fdMoveFailed', { err: String(e) }) })
@@ -1093,15 +1088,10 @@ function makePageStore(opts: PageStoreOptions = {}) {
     },
 
     async renameFolder(folderPath, newName) {
-      const active = get().activePage
       // 文件夹改名触发树下全部页面的引用重写:所有面板先落盘(理由同 renamePage,Codex 评审 P1)。
       await flushAllScopes()
       try {
         const newFolder = await amadeus.renameFolder(folderPath, newName)
-        retireUnifiedPath(folderPath, 'prefix') // unified 实例不吃 remap,退休防旧路径复活(Codex P0)
-        if (active && (active === folderPath || active.startsWith(folderPath + '/'))) {
-          set({ activePage: newFolder + active.slice(folderPath.length) })
-        }
         remapScopePaths(folderPath, newFolder, 'prefix')
       } catch (e) {
         set({ error: String(e) })
@@ -1602,6 +1592,9 @@ async function flushVaultEditors(): Promise<void> {
  * 发起操作的面板自己已 set 过新路径 → 等值判定天然跳过,重复调用无害。
  */
 export function remapScopePaths(oldP: string, newP: string, kind: 'file' | 'prefix'): void {
+  if (oldP === newP) return
+  // 退休与路径广播必须是同一个入口的职责,否则笔记视图等调用者只 remap、漏停旧的 unified 写管线。
+  retireUnifiedPath(oldP, kind)
   const hit = (a: string): boolean => (kind === 'file' ? a === oldP : a === oldP || a.startsWith(`${oldP}/`))
   const to = (a: string): string => (kind === 'file' ? newP : newP + a.slice(oldP.length))
   for (const s of stores.values()) {
@@ -1611,6 +1604,12 @@ export function remapScopePaths(oldP: string, newP: string, kind: 'file' | 'pref
     const patch: Partial<PageState> = {}
     if (st.activePage && hit(st.activePage)) patch.activePage = to(st.activePage)
     if (st.activeNotePath && hit(st.activeNotePath)) patch.activeNotePath = to(st.activeNotePath)
+    // 在途读取也握着旧路径:迟到的结果若仍能 hydrate,会把已迁移的 activePage/标签再次改回旧名。
+    // 取消旧请求,由路径广播让宿主重新分类/装载新路径;不要把旧文件快照当作新路径的读取结果。
+    if (st.pendingPage && hit(st.pendingPage)) {
+      patch.pendingPage = null
+      patch.status = st.manifest ? 'ready' : 'idle'
+    }
     if (Object.keys(patch).length) s.setState(patch)
   }
   emitNotePathGone(oldP, kind, newP) // v4 标签自己改指(v3 走效果③,两边写同一个值,幂等)

@@ -109,3 +109,8 @@ export function runWithAgentSlug<T>(agentSlug: string, fn: () => Promise<T>, dis
     displayAgentSlug: displayAgentSlug ?? agentSlug,
   }, fn);
 }
+
+/** Trusted background/HTTP entry: bind a fresh owner and Agent, never inherit another run's token. */
+export function runWithUserAgentScope<T>(userId: string, agentSlug: string, fn: () => Promise<T>): Promise<T> {
+  return als.run({ userId, agentSlug, displayAgentSlug: agentSlug }, fn);
+}

@@ -37,10 +37,11 @@ import { setActiveSpace, useSpaceStore, useRibbonStore, useWorkspace, label, mov
 import { rankIds, reorderBase, unionOrder } from '@lcl/engine/ribbonRegistry'
 import type { SpaceDefinition, RibbonFolder, RibbonItem, ViewProps } from '@lcl/engine'
 import { askString } from '@amadeus/components/askString'
-import { useApp, newChatModelId, stickyDefaults, withAmadeusWorkspace, applyPreset, newSessionPreset } from '../stores/appStore'
+import { useApp, newChatModelId, stickyDefaults, withAmadeusWorkspace, applyPreset, newSessionPreset, resolveNewSessionWorkspace } from '../stores/appStore'
 import { currentPlatform } from '../services/agentRunService'
 import type { Attachment } from '../types'
 import { usePageStore } from '../amadeus/store/pageStore'
+import { ProjectSelector } from '../components/ProjectSelector'
 import { Composer2 } from './chat2/Composer2'
 import { useI18n } from '../i18n'
 import { useShallow } from 'zustand/react/shallow'
@@ -93,6 +94,9 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
   const s = useApp(useShallow((state) => ({
     cfg: state.cfg,
     desktopConfig: state.desktopConfig,
+    desktopMode: state.desktopMode,
+    homeDir: state.homeDir,
+    defaultWsDir: state.defaultWsDir,
     modelsResp: state.modelsResp,
     newChatWs: state.newChatWs,
     newChatCfg: state.newChatCfg,
@@ -115,17 +119,33 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
     setVoiceMode: state.setVoiceMode,
     setExecConfig: state.setExecConfig,
     openSettings: state.openSettings,
+    setNewChatWs: state.setNewChatWs,
+    addLocalWorkspace: state.addLocalWorkspace,
+    addCloudProject: state.addCloudProject,
+    workspaces: state.workspaces,
+    sessions: state.sessions,
+    archivedSessions: state.archivedSessions,
+    cloudProjects: state.cloudProjects,
+    channelWorkspaces: state.channelWorkspaces,
+    tr: state.tr,
   })))
 
-  // 模式先于工作区(与 ChatView 空态、send() 同源 newSessionPreset):chat 恒 sandbox + 无根。
-  const preset = newSessionPreset(s.sessionMode, s.newChatWs, currentPlatform())
-  const cloud = preset === 'chat' || s.newChatWs?.kind === 'cloud' || s.newChatWs?.kind === 'rootless'
+  // Project pill 与 send() 共用真实落点解析：主页不能再继承一枚用户看不见的 newChatWs，
+  // 也不能在 Chat 时无提示地把会话放进「不在项目中工作」。
+  const platform = currentPlatform()
+  const targetWorkspace = resolveNewSessionWorkspace(s, platform)
+  const workspaceList = useMemo(() => s.workspaces(), [
+    s.workspaces, s.sessions, s.archivedSessions, s.cloudProjects, s.channelWorkspaces,
+    s.defaultWsDir, s.homeDir, s.tr, vaultRoot,
+  ])
+  const preset = newSessionPreset(s.sessionMode, targetWorkspace, platform)
+  const cloud = preset === 'chat' || targetWorkspace.kind === 'cloud' || targetWorkspace.kind === 'rootless'
   const config = useMemo(() => withAmadeusWorkspace(applyPreset({
     execMode: cloud ? 'sandbox' : 'host',
     ...stickyDefaults(s.desktopConfig, !cloud, preset),
-    cwd: cloud ? undefined : (s.newChatWs?.path || undefined),
+    cwd: cloud ? undefined : (targetWorkspace.path || undefined),
     ...s.newChatCfg,
-  }, preset), vaultRoot), [cloud, preset, s.desktopConfig, s.newChatCfg, s.newChatWs?.path, vaultRoot])
+  }, preset), vaultRoot), [cloud, preset, s.desktopConfig, s.newChatCfg, targetWorkspace.path, vaultRoot])
   const modelId = newChatModelId(s) || ''
   const visibleModels = !s.modelsResp?.models
     ? null
@@ -156,6 +176,15 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
         }
       }}
     >
+      <div className="hp-projectbar">
+        <ProjectSelector
+          workspaces={workspaceList}
+          value={targetWorkspace.key}
+          onChange={s.setNewChatWs}
+          onAddProject={window.tangu?.pickDirectory ? () => void s.addLocalWorkspace() : undefined}
+          onAddCloudProject={(name) => void s.addCloudProject(name)}
+        />
+      </div>
       <Composer2
         sessionId={null}
         autoFocus={false}

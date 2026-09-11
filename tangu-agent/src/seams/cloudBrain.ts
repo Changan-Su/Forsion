@@ -98,20 +98,27 @@ export interface UsersBrain {
 }
 
 export interface MemoryBrain {
-  getMemory(userId: string): Promise<{ content: string; updatedAt: any }>;
+  /** Optional local structured memory API. All operations inherit the trusted active
+   * agent scope; callers cannot select another agent via model-generated arguments. */
+  getMemorySnapshot?(userId: string): Promise<import('../services/memoryRepository.js').MemorySnapshot>;
+  commitMemory?(userId: string, proposal: import('../services/memoryRepository.js').MemoryCommit): Promise<import('../services/memoryRepository.js').MemorySnapshot>;
+  mutateMemory?(userId: string, mutation: import('../services/memoryRepository.js').MemoryMutation): Promise<import('../services/memoryRepository.js').MemorySnapshot>;
+  listMemoryRevisions?(userId: string): Promise<import('../services/memoryRepository.js').MemoryRevision[]>;
+  restoreMemoryRevision?(userId: string, version: string, expectedVersion: string, signal?: AbortSignal): Promise<import('../services/memoryRepository.js').MemorySnapshot>;
+  getMemory(userId: string, opts?: { signal?: AbortSignal }): Promise<{ content: string; updatedAt: any }>;
   appendMemoryEntry(
     userId: string,
     text: string,
-    opts?: { dedup?: boolean; cap?: number },
+    opts?: { dedup?: boolean; cap?: number; signal?: AbortSignal },
   ): Promise<AppendMemoryResult>;
   /** 整体覆盖用户长期记忆(读-改-写:Historian 据现有记忆做增量或修订)。可选——旧 brain 未实现时调用方降级为 append。 */
-  setMemory?(userId: string, content: string): Promise<{ content: string; updatedAt: any }>;
+  setMemory?(userId: string, content: string, opts?: { signal?: AbortSignal }): Promise<{ content: string; updatedAt: any }>;
   appendLogEntry(
     userId: string,
     text: string,
-    opts?: { date?: string; time?: string },
+    opts?: { date?: string; time?: string; signal?: AbortSignal },
   ): Promise<{ date: string; time: string }>;
-  getLog(userId: string, date?: string): Promise<{ date: string; content: string; updatedAt: any }>;
+  getLog(userId: string, date?: string, opts?: { signal?: AbortSignal }): Promise<{ date: string; content: string; updatedAt: any }>;
 }
 
 export interface AssetsBrain {
@@ -208,10 +215,10 @@ export interface AgentFilePutBody {
   baseSeq?: number;
 }
 export interface AgentFilesBrain {
-  getManifest(userId: string): Promise<Array<{ slug: string; files: AgentFileMeta[] }>>;
-  getFile(userId: string, slug: string, relPath: string): Promise<AgentFileContent | null>;
-  putFile(userId: string, slug: string, relPath: string, body: AgentFilePutBody): Promise<{ mtimeMs: number; seq?: number; hash?: string | null }>;
-  deleteFile(userId: string, slug: string, relPath: string, mtimeMs: number, deviceId?: string, baseSeq?: number): Promise<void>;
+  getManifest(userId: string, opts?: { signal?: AbortSignal }): Promise<Array<{ slug: string; files: AgentFileMeta[] }>>;
+  getFile(userId: string, slug: string, relPath: string, opts?: { signal?: AbortSignal }): Promise<AgentFileContent | null>;
+  putFile(userId: string, slug: string, relPath: string, body: AgentFilePutBody, opts?: { signal?: AbortSignal }): Promise<{ mtimeMs: number; seq?: number; hash?: string | null }>;
+  deleteFile(userId: string, slug: string, relPath: string, mtimeMs: number, deviceId?: string, baseSeq?: number, opts?: { signal?: AbortSignal }): Promise<void>;
 }
 
 /** agent 文件 CAS 条件写失败(409)。info.seq=0 = 服务端已无 live 行;content 仅文本 live 行携带。 */

@@ -102,7 +102,7 @@ async function bootMirror(files: string[]): Promise<{ engine: { stop: () => Prom
   })
   stop = () => engine.stop()
   await engine.restart()
-  await settle()
+  await vi.waitFor(() => expect(engine.getStatus().state).toBe('idle'))
   for (const p of files) expect(await fs.readFile(path.join(mirror, p), 'utf8')).toBe(`content of ${p}`)
   return { engine, mirror }
 }

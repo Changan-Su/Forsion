@@ -3,6 +3,7 @@
 const fs = require('node:fs')
 const path = require('node:path')
 const asar = require('@electron/asar')
+const { execFileSync } = require('node:child_process')
 
 const desktop = path.resolve(__dirname, '..')
 const expectedVersion = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8')).version
@@ -60,6 +61,10 @@ for (const dir of resources) {
   check(manifest.version === installed.version && cuPkg.version === installed.version, 'Packaged CU version differs from build dependency')
   check(fs.existsSync(path.join(cu, 'tangu-plugins', 'computer-use', 'dist', 'index.js')), 'CU engine bundle missing')
   check(fs.existsSync(path.join(cu, 'scripts', 'setup-helper.mjs')), 'CU setup script missing')
+  // Verify sealed App ZIPs, not only loose bridge files. ZIP transport prevents
+  // afterPack --deep signing from replacing the helper's original identity.
+  try { execFileSync(process.execPath, [path.join(cu, 'scripts', 'verify-macos-bundles.mjs')], { stdio: 'pipe' }) }
+  catch (error) { errors.push(`Invalid sealed CU app bundle: ${error.stderr?.toString() || error.message}`) }
   for (const platform of ['windows', 'linux']) {
     check(!fs.existsSync(path.join(cu, 'native', platform, 'bridge-rs', 'target')), `Rust build cache leaked into packaged CU (${platform})`)
   }

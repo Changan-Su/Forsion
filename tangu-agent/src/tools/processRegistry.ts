@@ -6,7 +6,9 @@
  *   - dispose()(模块卸载/进程退出)SIGKILL 所有在跑子进程,防泄漏
  *   - writeStdin/waitForOutput:交互式驱动(write_process_input 工具用),给 stdin 喂输入 + yield 收集新输出
  */
-import { spawn, type ChildProcess } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
+import type { ToolContext } from './toolTypes.js';
+import { spawnHostShell, hostSandboxEnabled, hostSandboxScopeKey } from '../sandbox/hostSandbox.js';
 
 const OUTPUT_CAP = 200_000;
 const FINISHED_TTL_MS = 30 * 60 * 1000;
@@ -24,6 +26,7 @@ export interface BackgroundProcess {
   output: string; // stdout+stderr 合流 ring buffer
   truncated: boolean;
   child: ChildProcess | null;
+  sandboxScope: string;
   lastDataAt: number; // 最近一次产出输出的时刻（write_process_input 的 yield 模型据此判「空闲」）
 }
 
@@ -76,7 +79,8 @@ function append(p: BackgroundProcess, chunk: string): void {
   }
 }
 
-export function startBackgroundProcess(sessionId: string, command: string, cwd: string): BackgroundProcess | string {
+export function startBackgroundProcess(sessionId: string, command: string, cwd: string, ctx?: ToolContext): BackgroundProcess | string {
+  if (ctx?.signal?.aborted) return 'Error: background process start aborted';
   const running = [...procs.values()].filter((p) => p.sessionId === sessionId && p.status === 'running');
   if (running.length >= MAX_PER_SESSION) {
     return `Error: 本会话已有 ${running.length} 个后台进程在跑(上限 ${MAX_PER_SESSION});先 kill_process 清理。`;
@@ -84,7 +88,7 @@ export function startBackgroundProcess(sessionId: string, command: string, cwd: 
   const id = `bg_${Date.now().toString(36)}_${++seq}`;
   let child: ChildProcess;
   try {
-    child = spawn(command, { cwd, shell: true, detached: true });
+    child = spawnHostShell(ctx || { cwd }, command);
   } catch (e: any) {
     return `Error: spawn failed: ${e?.message || e}`;
   }
@@ -93,6 +97,7 @@ export function startBackgroundProcess(sessionId: string, command: string, cwd: 
     status: 'running', exitCode: null,
     startedAt: Date.now(), endedAt: null,
     output: '', truncated: false, child, lastDataAt: Date.now(),
+    sandboxScope: hostSandboxScopeKey(ctx || { cwd }),
   };
   child.stdout?.on('data', (d) => append(p, d.toString()));
   child.stderr?.on('data', (d) => append(p, d.toString()));
@@ -146,10 +151,13 @@ const CTRL_C = '\x03'; // ETX (Ctrl-C):管道无真 TTY,转成 SIGINT 发给进�
  *   - 输入恰为单个 \x03(Ctrl-C)→ 发 SIGINT(管道无 TTY,无法靠字节传中断)
  *   - 否则写入,appendNewline 时补 \n(多数行式程序需要换行才处理一行)
  */
-export function writeStdin(sessionId: string, id: string, data: string, appendNewline: boolean): string {
+export function writeStdin(sessionId: string, id: string, data: string, appendNewline: boolean, ctx?: ToolContext): string {
   const p = getProcess(sessionId, id);
   if (!p) return `Error: 进程 ${id} 不存在`;
   if (p.status !== 'running' || !p.child) return `Error: 进程 ${id} 已结束(status=${p.status}),无法写入`;
+  if (ctx && hostSandboxEnabled(ctx) && p.sandboxScope !== hostSandboxScopeKey(ctx)) {
+    return 'Error: this process was started with a different host sandbox policy or workspace; start a new process before sending input';
+  }
   if (data === CTRL_C) {
     const child = p.child;
     try { killTree(child, 'SIGINT'); } catch { /* 已退出 */ }

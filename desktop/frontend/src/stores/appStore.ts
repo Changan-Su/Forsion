@@ -15,7 +15,7 @@ import type {
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
 import { effectiveSessionMode, type SessionMode } from '../views/sessionMode'
-import { abortRun, cancelSteer, currentPlatform, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
+import { abortRunAndWait, cancelSteer, currentPlatform, expediteSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
 import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
 import { recordUiAction } from '../diag'
 import { splitSuggestions } from '../views/chat2/suggest'
@@ -35,6 +35,11 @@ import { registerMessages, translate, translationValues } from '../i18n'
 // store 活在 React 之外,取词一律走模块级 `translate`,不能用 hook。
 registerMessages({
   'appstore.contentTruncated': { zh: '[输出过长,界面已截断显示]', en: '[Output too long, truncated for display]' },
+  'appstore.stopping': { zh: '正在停止，等待任务退出…', en: 'Stopping; waiting for the run to exit…' },
+  'appstore.stopFailed': { zh: '停止尚未确认：{e}', en: 'Stop not confirmed: {e}' },
+  'appstore.steerQueued': { zh: '插话已请求，将在安全边界接入；原任务继续保留。', en: 'Steering requested at the next safe boundary; the original task is preserved.' },
+  'appstore.steerFailed': { zh: '暂未加速插话，消息仍保留在等待区：{e}', en: 'Could not expedite steering; your message remains queued: {e}' },
+  'appstore.steerDiscardedCall': { zh: '插话中断了此工具调用的生成；工具尚未执行。', en: 'Steering interrupted this tool call during generation; it was not executed.' },
 })
 
 export type { SettingsTab }
@@ -209,6 +214,8 @@ function agentStamp(s: Pick<AppState, 'engines' | 'agentDefs' | 'defaultAgentSlu
 const runAborts = new Map<string, AbortController>()
 const subscribedRuns = new Set<string>()
 const stoppedRuns = new Set<string>()
+const stopRequests = new Map<string, Promise<boolean>>()
+const stopTerminals = new Map<string, { assistantId: string; event: AgentRunEvent }>()
 // 计划批准时选了「自动开始执行」的 **run**:该 run done 时消费、自动发起执行消息(engine plan_approved 带 auto)。
 // ⚠️ 按 runId 记而非 sessionId(Codex 评审 #4):按会话记的话,用户 stop 掉计划 run 后标记泄漏,
 // 该会话下一个无关 run 的 done 会莫名自动「开始执行」。所有终结路径统一在 endRun 清理。
@@ -307,6 +314,39 @@ export const rootlessWs = (t: AppState['tr']): WorkspaceDescriptor =>
 /** 引擎有真实 host FS:managed 桌面,或设备页(unitPage,引擎是对方的 managed 引擎)。 */
 const isHostCapable = (s: Pick<AppState, 'desktopMode'>): boolean =>
   s.desktopMode === 'managed' || (typeof window !== 'undefined' && !!window.tangu?.unitPage)
+
+/** 新对话在「没有显式 Project 选择」时的真实落点。
+ *
+ * 发送链、/new 与 Homepage 的 Project pill 必须共用这一处：否则 Homepage 会显示一个项目，
+ * `send()` 却按 sessionMode/端能力把会话写进另一个项目（09-08 实报「聊完找不到」）。
+ * 显式项目永远原样保留；Chat 的隐式落点是「不在项目中工作」；Work 再按 host 能力落
+ * 本地默认工作区或默认云 Project。 */
+export function resolveNewSessionWorkspace(
+  s: Pick<AppState, 'sessionMode' | 'newChatWs' | 'desktopMode' | 'defaultWsDir' | 'homeDir' | 'tr'>,
+  platform: 'desktop' | 'web' | 'mobile',
+): WorkspaceDescriptor {
+  if (s.newChatWs) return s.newChatWs
+  if (newSessionPreset(s.sessionMode, null, platform) === 'chat') return rootlessWs(s.tr)
+  if (isHostCapable(s)) {
+    const path = s.defaultWsDir || s.homeDir || null
+    return {
+      key: path || DEFAULT_LOCAL_WORKSPACE_KEY,
+      name: s.tr('app.defaultWorkspace'),
+      kind: 'local',
+      path,
+      system: true,
+      sessionKeys: path ? [path] : [],
+    }
+  }
+  return {
+    key: cloudProjectKey(DEFAULT_CLOUD_PROJECT),
+    name: DEFAULT_CLOUD_PROJECT,
+    kind: 'cloud',
+    path: null,
+    system: true,
+    project: DEFAULT_CLOUD_PROJECT,
+  }
+}
 
 const SESSION_MODE_KEY = 'forsion_tangu_session_mode'
 function loadSessionMode(): SessionMode | null {
@@ -467,7 +507,7 @@ export interface AppState {
    *  seq 让连拖同一条也能触发。 */
   draftRefs: { refs: ChatRef[]; seq: number } | null
   /** steer 等待区:run 跑动中发出的消息先等在这里,引擎 turn_boundary 注入后才进对话(id=引擎 userMessageId)。 */
-  steerPendingBySession: Record<string, Array<{ id: string; text: string; attachments?: Attachment[] }>>
+  steerPendingBySession: Record<string, Array<{ id: string; text: string; attachments?: Attachment[]; localOnly?: boolean }>>
   /** ↑ 历史召回的补充池:steer 消息**入队即记**(类 pi addToHistory-on-enqueue),被删/被撤回后仍能从 ↑ 找回。 */
   steerSentBySession: Record<string, string[]>
   /** run 终结时未送达的插话回填输入框(per-session,防串会话;ChatView 并进 seedText 通道)。 */
@@ -478,6 +518,7 @@ export interface AppState {
   messagesBySession: Record<string, UiMessage[]>
   configBySession: Record<string, AgentConfig>
   runningBySession: Record<string, string>
+  stoppingBySession: Record<string, string | undefined>
   groupVoting: Record<string, boolean>
   /** LLM 瞬时失败重试中(引擎 status/llm_retry 事件):渲染「第 N/M 次重试,Xs 后」。任何后续非 status 事件即清除。 */
   llmRetryBySession: Record<string, { attempt: number; max: number; waitMs: number; error?: string } | undefined>
@@ -546,7 +587,7 @@ export interface AppState {
   withdrawSteer(sessionId: string, msgId: string): Promise<string | null>
   /** 「立即插话」:打断当前 run,把等待区消息按序强发。 */
   steerNow(sessionId?: string | null): Promise<void>
-  stop(sessionId?: string | null): void
+  stop(sessionId?: string | null): Promise<boolean>
   truncateAndResend(fromIndex: number, text: string, attachments: Attachment[], sessionId?: string | null): Promise<void>
   editUserMessage(messageId: string, newText: string, sessionId?: string | null): void
   regenerate(messageId: string, sessionId?: string | null): void
@@ -690,6 +731,7 @@ export const useApp = create<AppState>((set, get) => ({
   deskBySession: typeof localStorage !== 'undefined' ? unpackDeskMap(localStorage.getItem(DESK_PERSIST_KEY)) : {},
   voiceOnByAgent: {},
   runningBySession: {},
+  stoppingBySession: {},
   groupVoting: {},
   llmRetryBySession: {},
   compactingBySession: {},
@@ -742,6 +784,12 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   reduceEvent: (sessionId, runId, assistantRef, ev) => {
+    // 旧订阅迟到的 token/终态不得污染新 run。停止中的终态先保留,等后端 finally 退出确认。
+    if (get().runningBySession[sessionId] !== runId) return
+    if (get().stoppingBySession[sessionId] === runId && (ev.type === 'done' || ev.type === 'error')) {
+      stopTerminals.set(runId, { assistantId: assistantRef.current, event: ev })
+      return
+    }
     const t = get().tr
     const { patchMessage } = get()
     const pl = ev.payload || {}
@@ -1038,7 +1086,11 @@ export const useApp = create<AppState>((set, get) => ({
           const finalizedId = have.has(pl.finalizedAssistantId) ? pl.finalizedAssistantId : assistantRef.current
           const prevSeg = list.find((m) => m.id === finalizedId)
           const next = list
-            .map((m) => (m.id === finalizedId ? { ...m, content: capContent(pl.finalizedContent || m.content), status: 'done' as const } : m))
+            .map((m) => (m.id === finalizedId ? {
+              ...m, content: capContent(pl.finalizedContent || m.content), status: 'done' as const,
+              toolEvents: m.toolEvents?.map((tool) => !tool.done && tool.startedAt == null
+                ? { ...tool, done: true, isError: true, result: translate('appstore.steerDiscardedCall') } : tool),
+            } : m))
             .filter((m) => !(m.id === finalizedId && !m.content.trim() && !(m.toolEvents?.length)))
           const additions: UiMessage[] = []
           for (const u of users) if (!have.has(u.id)) additions.push({ id: u.id, role: 'user', content: u.content, attachments: pendAtt.get(u.id), status: 'done', timestamp: Date.now() })
@@ -1196,6 +1248,7 @@ export const useApp = create<AppState>((set, get) => ({
     // 才兜底收尾——后端还在跑(慢模型/长任务)时 run 仍在活跃集,绝不误杀。
     runWatchdogs.set(runId, setInterval(() => { void (async () => {
       if (get().runningBySession[sessionId] !== runId) return
+      if (stoppedRuns.has(runId)) return // 停止请求的退出确认归 stop() 管,DB 终态不等于清理完毕。
       const cur = (get().messagesBySession[sessionId] || []).find((m) => m.id === assistantRef.current)
       if (!cur || cur.status !== 'streaming') return
       let active: Array<{ id: string; status?: string }> = []
@@ -1216,6 +1269,7 @@ export const useApp = create<AppState>((set, get) => ({
     })() }, 30000))
     void subscribeRunEvents(get().cfg, runId, (ev) => get().reduceEvent(sessionId, runId, assistantRef, ev), ac.signal)
       .catch((e) => {
+        if (get().runningBySession[sessionId] !== runId || stoppedRuns.has(runId)) return
         if (!stoppedRuns.has(runId)) {
           get().patchMessage(sessionId, assistantRef.current, (m) => ({ ...m, status: 'error', error: e?.message || get().tr('app.eventStreamInterrupted') }))
         }
@@ -1720,11 +1774,7 @@ export const useApp = create<AppState>((set, get) => ({
     // 「新建会话」(/new、侧栏按钮)没有显式工作区 → 与空态打字同一条模式规则(newSessionPreset,D5):
     // chat → 无根会话;work → 有 host FS 走默认工作区,没有(web/mobile)走默认云项目——与 send() 的落点一致
     // (defaultWorkspace() 在 web 上是 path 为空的 local 描述符,会建出既无项目也非无根的会话;creview 09-07 F4)。
-    const preset = newSessionPreset(get().sessionMode, null, currentPlatform())
-    const ws: WorkspaceDescriptor = preset === 'chat' ? rootlessWs(get().tr)
-      : isHostCapable(get()) ? get().defaultWorkspace()
-      : { key: cloudProjectKey(DEFAULT_CLOUD_PROJECT), name: DEFAULT_CLOUD_PROJECT, kind: 'cloud', path: null, system: true, project: DEFAULT_CLOUD_PROJECT }
-    return get().createInWorkspace(ws)
+    return get().createInWorkspace(resolveNewSessionWorkspace(get(), currentPlatform()))
   },
 
   addLocalWorkspace: async () => {
@@ -1943,10 +1993,12 @@ export const useApp = create<AppState>((set, get) => ({
     track('chat.send')
     const t = get().tr
     let sid = targetSessionId === undefined ? get().activeId : targetSessionId
+    const stopping = sid && get().stoppingBySession[sid]
+    if (stopping && !(await stopRequests.get(stopping))) return false
     const wasNewChat = !sid
     let implicitInit: AgentConfig | null = null
     if (!sid) {
-      const ws = get().newChatWs
+      const ws = resolveNewSessionWorkspace(get(), currentPlatform())
       // 设备页(unitPage)与 managed 同判:引擎是对方的 managed 引擎,有真实 host FS(defaultWsDir/homeDir
       // 已经 /unit/config 透传)。判成 external 会把新对话全建成云端 sandbox —— host 工具整个消失
       // (desk_present「当前环境没有该工具」)、直连模型被过滤、药丸显示「选择模型」(2026-08-24 用户实报三症状同根)。
@@ -2073,7 +2125,7 @@ export const useApp = create<AppState>((set, get) => ({
     const item = (get().steerPendingBySession[sessionId] || []).find((p) => p.id === msgId)
     if (!item) return null
     const runId = get().runningBySession[sessionId]
-    if (runId) {
+    if (runId && !item.localOnly) {
       const r = await cancelSteer(get().cfg, runId, msgId).catch(() => ({ ok: false, gone: false }))
       // 来不及(已注入/引擎已收尾):等待区的这条交给 turn_boundary 或 endRun 收拾,别在这里硬拔。
       if (!r.ok) return null
@@ -2085,42 +2137,57 @@ export const useApp = create<AppState>((set, get) => ({
   steerNow: async (targetSessionId) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
-    const pending = (get().steerPendingBySession[sid] || []).slice()
-    if (!pending.length) return
-    // 先逐条撤销**引擎侧**队列再打断(Codex 评审 #3):否则 abort 落地前引擎可能恰好到迭代边界把
-    // 队列注入落库,重发就成了双份指令。撤不掉(gone=已注入/正在注入)或网络错的条目一律不重发
-    // ——宁可少发一条(文本仍在 ↑ 历史),不可让模型收到两遍。
     const runId = get().runningBySession[sid]
-    const resend: typeof pending = []
-    for (const p of pending) {
-      if (!runId) { resend.push(p); continue }
-      const r = await cancelSteer(get().cfg, runId, p.id).catch(() => ({ ok: false }))
-      if (r.ok) resend.push(p)
-    }
-    // 清等待区再 stop:endRun 的「余量回填输入框」只兜真正没送出去的,这批要么马上强发要么已注入。
-    set((s) => ({ steerPendingBySession: { ...s.steerPendingBySession, [sid]: [] } }))
-    get().stop(sid)
-    // ponytail: 点「插话」=撤回成功的按原序冲出去(实际队列深度≈1)。第一条起新 run,后续几条在新
-    // run 上要么重新排进等待区、要么(新 run 尚未活跃)各自成排队 run——两种都保序,语义等价。
-    for (const p of resend) {
-      await get().send(p.text, p.attachments || [], undefined, undefined, undefined, sid)
+    if (!runId || !(get().steerPendingBySession[sid] || []).length || get().stoppingBySession[sid]) return
+    try {
+      const result = await expediteSteer(get().cfg, runId)
+      if (result.ok && get().runningBySession[sid] === runId) get().toast(translate('appstore.steerQueued'))
+      // Only turn_boundary removes the queued messages, including their attachments.
+    } catch (e: any) {
+      get().toast(translate('appstore.steerFailed', { e: e?.message || String(e) }), true)
     }
   },
 
   stop: (targetSessionId) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
-    if (!sid) return
+    if (!sid) return Promise.resolve(true)
     const runId = get().runningBySession[sid]
-    if (!runId) return
+    if (!runId) return Promise.resolve(true)
+    const pending = stopRequests.get(runId)
+    if (pending) return pending
     stoppedRuns.add(runId)
-    void abortRun(get().cfg, runId).catch(() => {})
-    runAborts.get(runId)?.abort()
-    set((s) => {
-      const list = s.messagesBySession[sid]
-      if (!list) return s
-      return { messagesBySession: { ...s.messagesBySession, [sid]: list.map((m) => (m.status === 'streaming' ? { ...m, status: 'stopped' as const } : m)) } }
-    })
-    endRun(set, get, sid, runId)
+    planAutoStart.delete(runId)
+    set((s) => ({ stoppingBySession: { ...s.stoppingBySession, [sid]: runId } }))
+    get().toast(translate('appstore.stopping'))
+    const request = (async () => {
+      try {
+        const status = await abortRunAndWait(get().cfg, runId, sid)
+        if (get().runningBySession[sid] !== runId) return true
+        set((s) => ({ stoppingBySession: { ...s.stoppingBySession, [sid]: undefined } }))
+        const terminal = stopTerminals.get(runId)
+        if (terminal) {
+          get().reduceEvent(sid, runId, { current: terminal.assistantId }, terminal.event)
+        } else {
+          set((s) => ({ messagesBySession: { ...s.messagesBySession, [sid]: (s.messagesBySession[sid] || []).map((m) =>
+            m.status === 'streaming' ? { ...m, live: undefined,
+              status: status === 'aborted' ? 'stopped' as const : status === 'failed' ? 'error' as const : 'done' as const,
+              ...(status === 'failed' ? { error: translate('agentrun.stopUnconfirmed') } : {}),
+            } : m) } }))
+          endRun(set, get, sid, runId)
+        }
+        return status !== 'failed'
+      } catch (e: unknown) {
+        if (get().runningBySession[sid] !== runId) return true
+        get().toast(translate('appstore.stopFailed', { e: e instanceof Error ? e.message : String(e) }), true)
+        return false
+      } finally {
+        stopRequests.delete(runId)
+        set((s) => s.stoppingBySession[sid] === runId
+          ? { stoppingBySession: { ...s.stoppingBySession, [sid]: undefined } } : {})
+      }
+    })()
+    stopRequests.set(runId, request)
+    return request
   },
 
   truncateAndResend: async (fromIndex, text, attachments, targetSessionId) => {
@@ -2562,9 +2629,11 @@ export function steerAcceptPatch(
 
 /** run 结束清理(对齐 App.tsx endRun):删句柄/订阅 + 清 running + 非活跃则标未读。 */
 function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () => AppState, sessionId: string, runId: string): void {
+  runAborts.get(runId)?.abort()
   runAborts.delete(runId)
   subscribedRuns.delete(runId)
   stoppedRuns.delete(runId)
+  stopTerminals.delete(runId)
   // 计划自动开始的兜底清理:done 路径在调 endRun **之前**已消费;其余一切终结路径(stop/错误/看门狗)
   // 在此作废,防止标记泄漏到该会话后续无关 run(Codex 评审 #4)。
   planAutoStart.delete(runId)
@@ -2578,11 +2647,14 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
     delete next[sessionId]
     // run 终结时还没被注入的插话:引擎侧队列已丢,回填该会话的输入框(类 pi「Esc=先取回队列再中止」)。
     // 自然收尾(done)前引擎会把队列全量注入,这里有货基本只出现在中止/失败路径。
-    const leftover = s.steerPendingBySession[sessionId]
+    const pending = s.steerPendingBySession[sessionId] || []
+    const localDrafts = pending.filter((p) => p.localOnly)
+    const leftover = pending.filter((p) => !p.localOnly)
     return {
       runningBySession: next,
+      stoppingBySession: { ...s.stoppingBySession, [sessionId]: undefined },
       ...(leftover?.length ? {
-        steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: [] },
+        steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: localDrafts },
         steerRestoreBySession: { ...s.steerRestoreBySession, [sessionId]: leftover.map((p) => p.text).join('\n\n') },
       } : {}),
     }

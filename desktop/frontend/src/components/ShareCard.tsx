@@ -4,7 +4,7 @@
  * - 发布:公开只读链接,任何人可访问,Unpublish 即失效。
  * 配额随套餐(服务端强制;此处仅展示与报错透传):free 共享不可用/发布3;plus 2/10;pro 10/∞。
  */
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { X, Copy, Check, Link2, Globe2, Trash2, RotateCw, Cloud, CloudOff } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { usePageStore } from '@amadeus/store/pageStore'
@@ -72,16 +72,26 @@ registerMessages({
 const fmtQuota = (n: number): string => (Number.isFinite(n) ? String(n) : translate('share.unlimited'))
 const baseName = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$/i, '')
 
-export function ShareCard({ path: localPath, anchor, onClose }: { path: string; anchor: { x: number; y: number }; onClose: () => void }): React.ReactElement | null {
-  const collab = window.amadeusCollab
-  const { t } = useI18n()
-  const toast = (msg: string, err = false): void => useApp.getState().toast(msg, err)
+interface ShareCardProps { path: string; anchor: { x: number; y: number }; onClose: () => void }
+
+export function ShareCard({ path: localPath, anchor, onClose }: ShareCardProps): React.ReactElement | null {
   // 共享/发布操作的对象是**云端文件**:本地侧路径要按注册表翻成 `<云名>/<path>`(服务端不校验路径
   // 存在性,拿本地路径建 share 会生成一条 404 的链接);没开同步的页根本没有云端对象 → 只给引导。
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const vaultSide = usePageStore((s) => s.vaultSide)
   const entryVaults = useEntrySync((s) => s.vaults)
   const path = cloudPathFor(entryVaults, vaultRoot, vaultSide, localPath) ?? ''
+  // 文件移动、切库或同步映射改变时,旧 token、参与者和进行中的操作都属于旧目标。
+  // 用完整目标身份重建内部状态,避免新路径首帧仍能点击旧页面的取消发布/共享按钮。
+  return <ShareCardTarget key={JSON.stringify([vaultRoot, vaultSide, localPath, path])} path={path} localPath={localPath} anchor={anchor} onClose={onClose} />
+}
+
+function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & { localPath: string }): React.ReactElement | null {
+  const collab = window.amadeusCollab
+  const { t } = useI18n()
+  const toast = (msg: string, err = false): void => useApp.getState().toast(msg, err)
+  const alive = useRef(false)
+  const requestSequence = useRef(0)
   const [tab, setTab] = useState<'share' | 'publish'>('share')
   const [share, setShare] = useState<AmadeusPageShare | null>(null)
   const [quota, setQuota] = useState<AmadeusCollabQuota | null>(null)
@@ -94,12 +104,15 @@ export function ShareCard({ path: localPath, anchor, onClose }: { path: string; 
   const [notOwner, setNotOwner] = useState(false)
 
   const refresh = (): void => {
-    if (!collab || !path) return
+    if (!alive.current || !collab || !path) return
+    const sequence = ++requestSequence.current
+    const current = (): boolean => alive.current && sequence === requestSequence.current
     void collab.pageShare(path)
-      .then((r) => { setShare(r.share); setQuota(r.quota); setNotOwner(false) })
-      .catch((e) => { if ((e as any)?.status === 404) setNotOwner(true) })
+      .then((r) => { if (current()) { setShare(r.share); setQuota(r.quota); setNotOwner(false) } })
+      .catch((e) => { if (current() && (e as { status?: number })?.status === 404) setNotOwner(true) })
     void collab.publishes()
       .then((r) => {
+        if (!current()) return
         setQuota(r.quota)
         setPubCount(r.shares.length)
         const hit = r.shares.find((s) => s.path === path && s.mode === 'page')
@@ -108,14 +121,19 @@ export function ShareCard({ path: localPath, anchor, onClose }: { path: string; 
       })
       .catch(() => {})
   }
-  useEffect(refresh, [path]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    alive.current = true
+    refresh()
+    return () => { alive.current = false; requestSequence.current++ }
+  }, [collab, path]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!collab) return null
 
   const copy = (text: string, key: string): void => {
     void navigator.clipboard.writeText(text).then(() => {
+      if (!alive.current) return
       setCopied(key)
-      setTimeout(() => setCopied(null), 1200)
+      setTimeout(() => { if (alive.current) setCopied(null) }, 1200)
     })
   }
   const err = (e: unknown, fallback: string): void => {
@@ -125,7 +143,9 @@ export function ShareCard({ path: localPath, anchor, onClose }: { path: string; 
   }
   const run = (p: Promise<unknown>, ok?: string, fallback = t('share.opFailed')): void => {
     setBusy(true)
-    void p.then(() => { if (ok) toast(ok); refresh() }).catch((e) => err(e, fallback)).finally(() => setBusy(false))
+    void p.then(() => { if (alive.current) { if (ok) toast(ok); refresh() } })
+      .catch((e) => { if (alive.current) err(e, fallback) })
+      .finally(() => { if (alive.current) setBusy(false) })
   }
 
   return (

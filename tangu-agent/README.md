@@ -74,6 +74,7 @@
 - **文件安全闸**（fsPolicy）：硬拒敏感目录（`.git` / `~/.ssh` / `~/.aws` / 云密钥…），越出工作区的写入升级为人工确认。
 - **后台进程**：`run_background` 起长任务、轮询输出、发交互输入、SIGTERM/SIGKILL 终止。
 - **Docker 沙箱**：`run_python`（Python 3.12，自动同步工作区，预装 20+ 库）+ 按需 `pip_install`；无 docker 自动降级禁用。
+- **本地 OS 沙箱（可选）**：macOS / Linux 的命令与文件写入隔离、网络开关；默认关闭，配置入口与边界见 [运行取消与本地沙箱](docs/runtime-safety.md)。
 - **看图 / 生成图**：`view_image` 识图、`generate_image` 文生图（行内缩略图）。
 - **联网**：本地浏览器工具（搜索 DuckDuckGo/Bing/Google/Baidu + 读 a11y 树 + 点击/输入/滚动/执行 JS）、`web_search`、`web_fetch`（带 SSRF 防护，拦内网/元数据地址）。
 - **MCP**：连接任意 MCP server（stdio / HTTP / SSE）扩展工具集。
@@ -281,6 +282,14 @@ npm test            # vitest
 ```
 
 桌面端构建隔离，自带 `electron-vite`：`npm run desktop:dev`（dev 用系统 node 跑后端，免原生模块重建）。
+
+停止/重启与图片上下文回归：在 `../desktop` 运行 `npm run check:run-lifecycle`。离线使用合成截图、真实 agent loop + 内存 SQLite、前端 store 和 HTTP 故障桩；覆盖图片编码误计、实测用量与新增工具结果、无进展重复压缩、压缩/首帧阶段取消、迟到结果、停止确认与继续运行。用例同时纳入两端既有的 `npm test` 发布门禁，不需要模型密钥或真实用户数据。
+
+预算与取消纪律：传输字节不能作为图片 token；上下文基准必须在前缀改写后失效。`abort` 的 `success` 只表示请求已接受，只有 `settled: true` 且 `status` 为终态才表示运行与清理已退出。退出未确认时保留忙状态并允许重试，禁止只清 UI 或用超时竞速假装底层任务已停止；现有会话及原始附件不得为恢复运行而静默删除。
+
+插话与工具发现也纳入 `check:run-lifecycle`：`POST /agent/runs/:id/steer` 的 `{flush:true}` 只唤醒已经排队的消息，不停止或重建 run；仅模型采样可被插话中断，执行中的工具保留到安全边界。历史恢复必须读取成对的工具调用与结果，缺失结果标为未知，不能默认成功或盲目重跑。`load_tools` 分清常驻可调用、按需解锁、当前不可用三种状态。仪器使用临时 localhost HTTP 服务检验鉴权和路由，不访问公网或调用真实模型。
+
+Steering regression checks preserve the same run, completed tool evidence and queued images. An expedited message interrupts model sampling only; executing tools finish at a safe boundary. Replay restores call/result pairs without re-executing operations. Missing outcomes remain explicitly unknown. The offline harness uses a temporary localhost HTTP server and needs no provider credentials.
 
 > CI：仅 **推送 `v*` 版本 tag**（或在 Actions 手动触发）才会运行测试并构建三平台安装包、发布 Release——日常 push 不触发，详见 [`.github/workflows/build-desktop.yml`](./.github/workflows/build-desktop.yml)。
 

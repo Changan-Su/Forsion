@@ -90,18 +90,21 @@ const Stat: React.FC<{ d: Desc }> = ({ d }) =>
     </span>
   ) : null
 
-const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc }> = ({ ev, desc }) => {
+const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean }> = ({ ev, desc, running }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   // 只在展开时构造 diff(P1:文件修改类工具详情渲染 diff 而非裸 JSON)
   const diff = useMemo(() => (open ? toolDiffText(ev.name, ev.arguments) : null), [open, ev.name, ev.arguments])
   const verb = desc.verbKey ? t(desc.verbKey) : ev.name
+  // 工具结果帧可能在用户停止 run 时来不及抵达。此时 ev.done 仍为 false，
+  // 但父消息已不再运行，不能继续显示「正在执行」的流光或 busy 语义。
+  const active = running && !ev.done
   return (
     <div className="tool-row">
-      <button className="tool-row-head" aria-busy={!ev.done} onClick={() => setOpen((o) => !o)}>
+      <button className="tool-row-head" aria-busy={active} onClick={() => setOpen((o) => !o)}>
         {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         <span className="tool-row-copy">
-          <span className={`tool-row-copy-text${!ev.done ? ' chat-run-shimmer-text' : ''}`}>
+          <span className={`tool-row-copy-text${active ? ' chat-run-shimmer-text' : ''}`}>
             <span className="tool-row-verb">{verb}</span>
             <span className={`tool-row-target${desc.isFile ? ' file' : ''}`}>{desc.target}</span>
           </span>
@@ -148,6 +151,7 @@ export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean }> = (
 
   const allDone = events.every((e) => e.done)
   const anyErr = events.some((e) => e.isError)
+  const active = !!running && !allDone
   // 运行中:展示第一个未完成的调用作为「当前」;都完成则无。
   const curIdx = running ? events.findIndex((e) => !e.done) : -1
   const curDesc = curIdx >= 0 ? descs[curIdx] : null
@@ -155,7 +159,7 @@ export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean }> = (
 
   return (
     <div className="tool-group">
-      <button className="tool-group-head" aria-busy={!allDone} onClick={() => setOpen((o) => !o)}>
+      <button className="tool-group-head" aria-busy={active} onClick={() => setOpen((o) => !o)}>
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         <Terminal size={12} className="tool-group-ic" />
         {!open && curDesc ? (
@@ -166,7 +170,7 @@ export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean }> = (
             </span>
           </span>
         ) : (
-          <span className={`tool-group-sum${!allDone ? ' chat-run-shimmer-text' : ''}`}>{summary}</span>
+          <span className={`tool-group-sum${active ? ' chat-run-shimmer-text' : ''}`}>{summary}</span>
         )}
         <span className="tool-group-status">
           {allDone ? (anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} /> : <CheckCircle2 size={13} style={{ color: 'var(--green)' }} />) : null}
@@ -174,7 +178,7 @@ export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean }> = (
       </button>
       <AnimatedCollapse open={open}>
         <div className="tool-group-list">
-          {events.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} />)}
+          {events.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} running={!!running} />)}
         </div>
       </AnimatedCollapse>
     </div>

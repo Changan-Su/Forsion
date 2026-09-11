@@ -12,11 +12,12 @@ import { realpathSync } from 'node:fs';
 import type { ToolContext } from './toolTypes.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../seams/runContext.js';
+import { protectedHostPaths } from '../sandbox/hostSandboxProtection.js';
 
 /** agent 自己目录里的身份/自进化文件:generic 写工具(write_file/edit_file/apply_patch…)一律硬拒——
  *  人格(SOUL/config)归用户在设置里改;工作笔记必须走 manage_harness 的快照/封顶/脱敏管线,
  *  否则文件工具就是一条绕过人格主权与 journal 的后门(Codex 评审 #1)。Library/MEMORY/LOG 照旧可写。 */
-const SELF_PROTECTED_AGENT_FILES = new Set(['SOUL.md', 'config.toml', 'HARNESS.md', '.harness-refinements.jsonl', '.harness-raw.md']);
+const SELF_PROTECTED_AGENT_FILES = new Set(['SOUL.md', 'config.toml', 'HARNESS.md', '.harness-refinements.jsonl', '.harness-raw.md', '.cloudsync-accounts.json', '.memory-state.json', '.memory-tombstones.json', '.memory-dream.json', '.memory-raw.md', '.memory.lock']);
 
 /** 本次 run 的可写根:当前工作目录 + 当前 agent 的专属文件夹 + 用户显式添加的额外工作文件夹。 */
 export function writableRoots(ctx: ToolContext): string[] {
@@ -80,6 +81,10 @@ export interface WritePathVerdict {
 /** 判定一次 host 写入路径。abs 应为已解析的绝对路径;内部再做 realpath 归一(防软链)。 */
 export function checkWritePath(ctx: ToolContext, abs: string): WritePathVerdict {
   const resolved = realResolve(abs);
+  if (ctx.hostSandbox && ctx.hostSandbox.mode !== 'off' && (
+    resolved.split(path.sep).some((part) => part === '.agents' || part === '.codex') ||
+    protectedHostPaths().some((protectedPath) => isInside(resolved, protectedPath) || isInside(path.resolve(abs), protectedPath))
+  )) return { ok: false, hardDeny: true, reason: `Host sandbox protects runtime configuration or metadata: ${resolved}` };
   if (isProtected(resolved)) {
     return { ok: false, hardDeny: true, reason: `受保护路径,禁止写入:${resolved}` };
   }

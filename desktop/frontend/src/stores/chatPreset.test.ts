@@ -8,7 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_CLOUD_PROJECT, ROOTLESS_WORKSPACE_KEY, type WorkspaceDescriptor } from '../types'
-import { useApp, newSessionPreset, stickyDefaults, applyPreset, type AppState } from './appStore'
+import { useApp, newSessionPreset, stickyDefaults, applyPreset, resolveNewSessionWorkspace, type AppState } from './appStore'
 import { effectiveSessionMode, sessionsInMode, workspacesInMode } from '../views/sessionMode'
 import { currentPlatform } from '../services/agentRunService'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -49,6 +49,18 @@ describe('newSessionPreset(唯一判定源)', () => {
     expect(newSessionPreset(null, null, 'desktop')).toBeUndefined()
     expect(newSessionPreset(null, null, 'web')).toBeUndefined()
     expect(newSessionPreset(null, null, 'mobile')).toBeUndefined()
+  })
+})
+
+describe('resolveNewSessionWorkspace(Homepage / send / newSession 共用落点)', () => {
+  const tr = ((k: string) => k) as AppState['tr']
+  it('显式项目原样保留；Chat 未选项目时明示无根落点', () => {
+    expect(resolveNewSessionWorkspace({ sessionMode: 'chat', newChatWs: localWs, desktopMode: 'managed', defaultWsDir: '/default', homeDir: '/home', tr }, 'desktop')).toBe(localWs)
+    expect(resolveNewSessionWorkspace({ sessionMode: 'chat', newChatWs: null, desktopMode: 'managed', defaultWsDir: '/default', homeDir: '/home', tr }, 'desktop')).toMatchObject({ key: ROOTLESS_WORKSPACE_KEY, kind: 'rootless' })
+  })
+  it('Work 未选项目时按端能力落本地默认工作区或默认云 Project', () => {
+    expect(resolveNewSessionWorkspace({ sessionMode: 'work', newChatWs: null, desktopMode: 'managed', defaultWsDir: '/default', homeDir: '/home', tr }, 'desktop')).toMatchObject({ key: '/default', kind: 'local', path: '/default' })
+    expect(resolveNewSessionWorkspace({ sessionMode: 'work', newChatWs: null, desktopMode: 'external', defaultWsDir: '/default', homeDir: '/home', tr }, 'web')).toMatchObject({ kind: 'cloud', project: DEFAULT_CLOUD_PROJECT })
   })
 })
 

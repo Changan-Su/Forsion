@@ -5,6 +5,8 @@
  */
 import type { Tool, ToolCall } from '../core/types.js';
 import { deps } from '../seams/runtime.js';
+import { DockerCleanupError } from '../sandbox/dockerLifecycle.js';
+import { isHostSandboxRestricted, isHostSandboxToolAllowed, resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { executeCustomTool } from './customTools.js';
 import { registerToolProvider, resolveTools, isDeferredIn, type ToolDef } from './toolRegistry.js';
 import { presetOf } from '../core/presetTable.js';
@@ -115,8 +117,9 @@ function withTimeoutSignal(ctx: ToolContext, timeoutMs?: number): { scopedCtx: T
   if (!timeoutMs || timeoutMs <= 0) return { scopedCtx: ctx, cleanup: () => {} };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
-  const onAbort = (): void => ac.abort();
-  ctx.signal?.addEventListener('abort', onAbort, { once: true });
+  const onAbort = (): void => ac.abort(ctx.signal?.reason);
+  if (ctx.signal?.aborted) onAbort();
+  else ctx.signal?.addEventListener('abort', onAbort, { once: true });
   return {
     scopedCtx: { ...ctx, signal: ac.signal },
     cleanup: () => {
@@ -241,7 +244,7 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
   const taken = new Set<string>(tools.keys());
   // 自定义/MCP 工具按 PRESET_TABLE.externalTools 在此再拒一次:主 loop 对 chat 本就不构造这两个 Map,
   // 这里让 getToolDefinitions/executeTool 自身也满足默认拒(内部调用方带 Map 也绕不过;creview 09-07 E8)。
-  const externalOk = presetOf(ctx.preset).externalTools;
+  const externalOk = presetOf(ctx.preset).externalTools && !isHostSandboxRestricted(ctx);
   if (externalOk && ctx.customTools && ctx.customTools.size) {
     for (const t of ctx.customTools.values()) {
       if (taken.has(t.name)) continue; // 内置同名优先
@@ -277,7 +280,13 @@ const TOOL_NAME_ALIASES: Record<string, string> = { muse_watch: 'manage_automati
 
 /** 执行一个工具调用。先查（按模式/profile 过滤的）内置，再查本 run 的自定义工具；未知工具返回 isError。 */
 export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<ToolResult> {
+  ctx.signal?.throwIfAborted();
+  // Legacy/internal callers still receive the trusted policy before executing a covered tool.
+  if (ctx.execMode === 'host' && !ctx.hostSandbox) ctx = { ...ctx, hostSandbox: resolveHostSandboxPolicy() };
   const name = TOOL_NAME_ALIASES[call.function.name] || call.function.name;
+  if (!isHostSandboxToolAllowed(name, ctx)) {
+    return { toolCallId: call.id, name, result: `Error: tool "${name}" is unavailable under the current host sandbox policy.`, isError: true };
+  }
   let args: Record<string, any> = {};
   try {
     args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
@@ -301,14 +310,20 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
     let undoSnapshot: (() => Promise<void>) | null = null;
     try {
       const text = await inLock(async () => {
-        const undo = await snapshotForCheckpoint(name, call, ctx);
+        // 排队等写锁时也可能被停;尚未开始的工具不得在稍后拿锁时复活。
+        scopedCtx.signal?.throwIfAborted();
+        // Checkpoint rollback currently writes in the engine process; restricted tools must stay inside the broker.
+        const undo = isHostSandboxRestricted(ctx) ? null : await snapshotForCheckpoint(name, call, ctx);
         undoSnapshot = undo;
         try {
+          scopedCtx.signal?.throwIfAborted();
           const out = String(await impl.execute(args, scopedCtx));
           if (undo && out.startsWith('Error')) await undo();
           else if (undo) await recordPostWrite(ctx.sessionId, ctx.runId!, writeTargetsAbs(call, ctx));
           return out;
         } catch (err) {
+          // A container may still be mutating its mount. Do not rollback into it or hide this as a tool timeout.
+          if (err instanceof DockerCleanupError) { undoSnapshot = null; throw err; }
           if (undo) await undo(); // 撤销也留在锁内:它是写盘
           undoSnapshot = null;
           throw err;
@@ -319,6 +334,7 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
       // 持久化里都是「成功」。与下面自定义工具分支(早就按 'Error:' 判)口径统一。
       return { toolCallId: call.id, name, result: text, isError: text.startsWith('Error:') };
     } catch (e: any) {
+      if (e instanceof DockerCleanupError) throw e;
       if (undoSnapshot) await (undoSnapshot as () => Promise<void>)();
       if (scopedCtx.signal?.aborted && !ctx.signal?.aborted) {
         return { toolCallId: call.id, name, result: `Error: tool timed out after ${caps.defaultTimeoutMs}ms. If you retry, narrow the operation (smaller file / shorter command) or split it into steps.`, isError: true };
@@ -329,7 +345,7 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
     }
   }
 
-  const externalOk = presetOf(ctx.preset).externalTools; // 与 getToolDefinitions 同判:chat 下自定义/MCP 工具执行边界也拒
+  const externalOk = presetOf(ctx.preset).externalTools && !isHostSandboxRestricted(ctx); // 与 getToolDefinitions 同判
   const custom = externalOk ? ctx.customTools?.get(name) : undefined;
   if (custom) {
     try {
@@ -337,6 +353,7 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
       const isError = typeof result === 'string' && result.startsWith('Error:');
       return { toolCallId: call.id, name, result: String(result), isError };
     } catch (e: any) {
+      if (e instanceof DockerCleanupError) throw e;
       return { toolCallId: call.id, name, result: `Error: ${e?.message || e}`, isError: true };
     }
   }

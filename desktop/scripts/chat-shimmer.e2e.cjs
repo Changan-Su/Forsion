@@ -5,6 +5,7 @@
  *  ① 工具组 + Pin Summary 不再出现旋转 Loader 或椭圆标记；
  *  ②「正在思考」使用同一套 shimmer,且不再带 streaming-caret 方块；
  *  ③ 每段运行文案只有一层不重复的窄光,扫出后保留停顿再重启。
+ *  ④ 用户停止任务后,未收到 tool_result 的命令也必须立即撤掉 shimmer / aria-busy。
  * 同时检查 aria-busy / role=status 与 reduced-motion 静止回退。
  *
  * 需先 npm run build。用法:npm run e2e:chatshimmer
@@ -27,6 +28,7 @@ const SHOTS = {
   taskDark: path.join(os.tmpdir(), 'forsion-chat-shimmer-summary-dark.png'),
   thinkingLight: path.join(os.tmpdir(), 'forsion-chat-shimmer-thinking-light.png'),
   thinkingDark: path.join(os.tmpdir(), 'forsion-chat-shimmer-thinking-dark.png'),
+  stopped: path.join(os.tmpdir(), 'forsion-chat-shimmer-stopped.png'),
 }
 const results = []
 function check(name, ok, detail) {
@@ -58,6 +60,37 @@ async function dismissNotifications(win) {
   await win.waitForTimeout(250)
 }
 
+/** 启动缺省是 Home Space；先切 Agent Space，再把侧栏切到会话列表。 */
+async function openChatSession(win) {
+  await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
+  await win.waitForTimeout(1000)
+  const clicked = await win.evaluate((names) => {
+    const button = [...document.querySelectorAll('button.rb-space')]
+      .find((item) => names.some((name) => (item.getAttribute('title') || item.textContent || '').includes(name)))
+    if (button) { button.click(); return (button.getAttribute('title') || button.textContent || '').trim() }
+    return null
+  }, ['Agent', 'Tangu'])
+  await win.waitForTimeout(1500)
+  if (!(await win.locator('.t2s-search input').first().count().catch(() => 0))) {
+    await win.click('.dv-edge-left').catch(() => {})
+    await win.waitForTimeout(700)
+  }
+  const picker = win.locator('.t2sw-mode-picker').first()
+  if (await picker.count().catch(() => 0)) {
+    await picker.locator('.t2sw-mode-trigger').click().catch(() => {})
+    await picker.locator('[data-workspace-mode="sessions"]').click().catch(() => {})
+    await win.waitForTimeout(1000)
+  }
+  const row = win.locator('.t2s-srow', { hasText: 'Shimmer 验收' }).first()
+  if (!(await row.count().catch(() => 0))) {
+    const shot = path.join(os.tmpdir(), 'forsion-chat-shimmer-nav-fail.png')
+    await win.screenshot({ path: shot })
+    throw new Error(`没找到会话行(切到的 Space=${JSON.stringify(clicked)});截图 ${shot}`)
+  }
+  await row.click()
+  await win.waitForTimeout(900)
+}
+
 async function main() {
   if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) {
     console.error('缺 out/main/main.js —— 先跑 npm run build')
@@ -84,14 +117,7 @@ async function main() {
       const b = win.locator(`text=${label}`).first()
       if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break }
     }
-    await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
-    await win.waitForTimeout(1000)
-    if (!(await win.locator('.t2s-mode').first().count().catch(() => 0))) {
-      await win.click('.dv-edge-left').catch(() => {})
-      await win.waitForTimeout(700)
-    }
-    await win.locator('.t2s-srow', { hasText: 'Shimmer 验收' }).first().click()
-    await win.waitForTimeout(900)
+    await openChatSession(win)
 
     stub.script([
       { type: 'tool_call', delay: 3500, payload: { id: 'shimmer-tool', name: 'read_file', arguments: JSON.stringify({ path: '/tmp/shimmer-demo/README.md' }) } },
@@ -258,6 +284,29 @@ async function main() {
       await win.locator('.t2-chat-view').first().screenshot({ path: SHOTS.dark })
       await win.locator('.tool-group').last().screenshot({ path: SHOTS.toolDark })
       await win.locator('.t2-tsum-in').first().screenshot({ path: SHOTS.taskDark })
+    }
+
+    // 后端故意不发 tool_result:这就是用户停止时最容易残留的现场。父消息一旦 stopped,
+    // 工具卡必须立即静止；不能靠永远不会到的结束帧来撤动画。
+    await win.locator('.t2c-stop').first().click()
+    await win.waitForTimeout(350)
+    const stopped = await win.evaluate(() => {
+      const group = document.querySelector('.tool-group')
+      const task = document.querySelector('.t2-tsum')
+      return {
+        groupBusy: group?.querySelector('.tool-group-head')?.getAttribute('aria-busy'),
+        groupShimmers: group?.querySelectorAll('.chat-run-shimmer-text').length ?? -1,
+        groupAnimations: group?.getAnimations({ subtree: true }).filter((a) => a.animationName === 'chat-run-shimmer').length ?? -1,
+        taskBusy: task?.getAttribute('aria-busy'),
+        taskShimmers: task?.querySelectorAll('.chat-run-shimmer-text').length ?? -1,
+      }
+    })
+    check('停止后未完成命令立即撤掉流光与 busy 状态',
+      stopped.groupBusy === 'false' && stopped.groupShimmers === 0 && stopped.groupAnimations === 0,
+      JSON.stringify(stopped))
+    check('停止后任务概览同步静止', stopped.taskBusy === 'false' && stopped.taskShimmers === 0, JSON.stringify(stopped))
+    if (!NEGATIVE_CONTROL) {
+      await win.locator('.tool-group').last().screenshot({ path: SHOTS.stopped })
       for (const shot of Object.values(SHOTS)) console.log(`截图: ${shot}`)
     }
   } finally {

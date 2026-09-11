@@ -137,7 +137,28 @@ export function estimateTokensRough(text: string): number {
   return Math.ceil(ascii / 4) + (text.length - ascii);
 }
 
-/** 单条消息的粗估(含 parts 数组与 tool_calls 参数;image_url 按 URL 长度/8 折算,仅作预算用)。 */
+// 图片是独立模态,base64 只是传输编码,绝不能按字符当正文计费。
+// 未获得 provider usage 时用有界启发值(不是各模型精确价格);实际用量由 ContextUsageTracker 校准。
+const IMAGE_TOKEN_ESTIMATE = 4096;
+
+function isImagePart(value: any): boolean {
+  return value && ['image_url', 'input_image', 'image'].includes(value.type);
+}
+
+/** 同时覆盖 user parts 与 Responses 工具图片;只替换估算副本,不改发送/落盘内容。 */
+function estimateStructuredTokens(value: unknown): number {
+  let images = 0;
+  const json = JSON.stringify(value, (_key, part) => {
+    if (isImagePart(part)) {
+      images++;
+      return { type: 'image' };
+    }
+    return part;
+  });
+  return estimateTokensRough(json || '') + images * IMAGE_TOKEN_ESTIMATE;
+}
+
+/** 单条消息的粗估(文本 + 独立图片预算 + tool_calls;不重复计算 Responses 重放正文)。 */
 export function estimateMessageTokens(m: any): number {
   let n = 8; // 角色/分隔开销
   const c = m?.content;
@@ -145,17 +166,17 @@ export function estimateMessageTokens(m: any): number {
     n += estimateTokensRough(c);
   } else if (Array.isArray(c)) {
     for (const p of c) {
-      if (p?.type === 'text') n += estimateTokensRough(String(p.text ?? ''));
-      else if (p?.type === 'image_url') n += Math.ceil(String(p.image_url?.url ?? '').length / 8);
+      if (p?.type === 'text' || p?.type === 'input_text') n += estimateTokensRough(String(p.text ?? ''));
+      else if (isImagePart(p)) n += IMAGE_TOKEN_ESTIMATE;
+      else n += estimateStructuredTokens(p);
     }
   }
   if (Array.isArray(m?.tool_calls)) {
     for (const t of m.tool_calls) n += estimateTokensRough(String(t?.function?.arguments ?? ''));
   }
-  // Responses replay 态(encrypted reasoning 等原始 items):上轮 usage 与文本估算都看不见它,
-  // 不计会让预算低估、小窗口模型撞 overflow(Codex 评审二轮 #3)。粗按序列化长度 /4。
+  // Responses 使用 providerItems 替代正文/tool_calls,不是把两份都发送;取较大者保守兜底。
   if (Array.isArray(m?.providerItems) && m.providerItems.length) {
-    try { n += Math.ceil(JSON.stringify(m.providerItems).length / 4); } catch { /* ignore */ }
+    try { n = Math.max(n, 8 + estimateStructuredTokens(m.providerItems)); } catch { /* ignore */ }
   }
   return n;
 }
@@ -164,6 +185,46 @@ export function estimateMessagesTokens(msgs: ChatMessage[]): number {
   let n = 0;
   for (const m of msgs) n += estimateMessageTokens(m);
   return n;
+}
+
+/** provider 实测输入 + 该输入之后新增的消息。压缩/前缀改写后旧基准不可复用。 */
+export class ContextUsageTracker {
+  private baseline?: { tokens: number; prefix: Array<{ message: ChatMessage; estimate: number }> };
+
+  observe(messages: ChatMessage[], promptTokens: number): void {
+    this.baseline = Number.isFinite(promptTokens) && promptTokens > 0
+      ? { tokens: promptTokens, prefix: messages.map((message) => ({ message, estimate: estimateMessageTokens(message) })) }
+      : undefined;
+  }
+
+  invalidate(): void { this.baseline = undefined; }
+
+  estimate(messages: ChatMessage[]): number {
+    const base = this.baseline;
+    if (!base || messages.length < base.prefix.length || base.prefix.some((p, i) =>
+      p.message !== messages[i] || p.estimate !== estimateMessageTokens(messages[i]))) {
+      return estimateMessagesTokens(messages);
+    }
+    return base.tokens + estimateMessagesTokens(messages.slice(base.prefix.length));
+  }
+}
+
+/** 压缩后仍处于高水位时,没有实质新增内容就不再重复摘要(包括失败/no-op)。 */
+export class CompactionAttemptGuard {
+  private retryAt = 0;
+  private context?: { prefix: ChatMessage[]; tokens: number; minimumGrowth: number };
+  shouldAttempt(tokens: number, messages?: ChatMessage[]): boolean {
+    const previous = this.context;
+    if (previous && messages && previous.prefix.every((m, i) => messages[i] === m) &&
+      estimateMessagesTokens(messages) - previous.tokens < previous.minimumGrowth) return false;
+    return tokens >= this.retryAt;
+  }
+  record(afterTokens: number, windowTokens: number, messages?: ChatMessage[]): void {
+    const minimumGrowth = Math.max(1024, Math.ceil(windowTokens * 0.02));
+    this.context = messages ? { prefix: messages.slice(), tokens: estimateMessagesTokens(messages), minimumGrowth } : undefined;
+    this.retryAt = afterTokens > windowTokens * FORCE_COMPACT_RATIO
+      ? afterTokens + minimumGrowth : 0;
+  }
 }
 
 export interface CompactResult {

@@ -5,13 +5,14 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { Loader2, X, Upload, Trash2, FileText, Image as ImageIcon, Undo2 } from 'lucide-react'
 import {
-  getAgentMemory, putAgentMemory, listAgentLogDates, getAgentLog, putAgentLog,
+  listAgentLogDates, getAgentLogSnapshot, putAgentLog,
   listAgentLibrary, getAgentLibraryFile, putAgentLibraryFile, deleteAgentLibraryFile,
   getAgentHarness, rollbackHarnessEntry,
   type AgentLibraryFile, type HarnessEntry, type HarnessJournalLine,
 } from '../services/backendService'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
+import { AgentMemoryPanel } from './AgentMemoryPanel'
 
 // 与后端 agentRegistry 的文本扩展名口径一致(决定上传走 content 还是 dataBase64)。
 const LIB_TEXT_EXTS = new Set(['md', 'markdown', 'txt', 'text', 'json', 'jsonl', 'toml', 'yaml', 'yml', 'csv', 'tsv', 'xml', 'html', 'htm', 'css', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'sh', 'log', 'ini', 'env', 'rs', 'go', 'java', 'c', 'cpp', 'h', 'rb', 'php', 'sql'])
@@ -30,19 +31,25 @@ function fileToBase64(file: File): Promise<string> {
 
 type Tab = 'memory' | 'log' | 'library' | 'harness'
 
-export const AgentMemoryModal: React.FC<{
+type AgentMemoryModalProps = {
   cfg: TanguDesktopConfig
   slug: string
   name: string
+  shareDefaultMemory?: boolean
   onClose: () => void
-}> = ({ cfg, slug, name, onClose }) => {
+}
+
+export const AgentMemoryModal: React.FC<AgentMemoryModalProps> = (props) =>
+  <AgentMemoryModalBody key={JSON.stringify([props.cfg.backendUrl, props.cfg.token, props.slug, props.shareDefaultMemory])} {...props} />
+
+const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name, shareDefaultMemory, onClose }) => {
   const { t } = useI18n()
   const [tab, setTab] = useState<Tab>('memory')
 
-  // 记忆
-  const [memory, setMemory] = useState('')
-  const [memBusy, setMemBusy] = useState(false)
-  const [memSaved, setMemSaved] = useState(false)
+  const alive = useRef(true)
+  const logRequest = useRef(0)
+  const logWriteLock = useRef(false)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
 
   // 日志
   const [dates, setDates] = useState<string[]>([])
@@ -50,6 +57,9 @@ export const AgentMemoryModal: React.FC<{
   const [logContent, setLogContent] = useState('')
   const [logBusy, setLogBusy] = useState(false)
   const [logSaved, setLogSaved] = useState(false)
+  const [logVersion, setLogVersion] = useState<string | null>(null)
+  const [logError, setLogError] = useState('')
+  const [logReload, setLogReload] = useState(0)
 
   // 资料库
   const [libFiles, setLibFiles] = useState<AgentLibraryFile[]>([])
@@ -74,29 +84,36 @@ export const AgentMemoryModal: React.FC<{
   }
 
   useEffect(() => {
-    void getAgentMemory(cfg, slug).then(setMemory).catch(() => {})
-    void listAgentLogDates(cfg, slug).then((ds) => { setDates(ds); if (ds.length) setLogDate(ds[ds.length - 1]) }).catch(() => {})
+    void listAgentLogDates(cfg, slug).then((ds) => { if (alive.current) { setDates(ds); if (ds.length) setLogDate(ds[ds.length - 1]) } }).catch((e) => { if (alive.current) setLogError(e.message) })
     void reloadLib()
     void reloadHarness()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug])
 
   useEffect(() => {
-    if (!logDate) { setLogContent(''); return }
-    void getAgentLog(cfg, slug, logDate).then(setLogContent).catch(() => {})
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [logDate, slug])
-
-  const saveMem = async (): Promise<void> => {
-    setMemBusy(true); setMemSaved(false)
-    try { await putAgentMemory(cfg, slug, memory); setMemSaved(true); setTimeout(() => setMemSaved(false), 1500) }
-    finally { setMemBusy(false) }
-  }
-  const saveLog = async (): Promise<void> => {
+    const request = ++logRequest.current
+    setLogVersion(null); setLogSaved(false); setLogError(''); setLogContent('')
     if (!logDate) return
-    setLogBusy(true); setLogSaved(false)
-    try { await putAgentLog(cfg, slug, logDate, logContent); setLogSaved(true); setTimeout(() => setLogSaved(false), 1500) }
-    finally { setLogBusy(false) }
+    setLogBusy(true)
+    void getAgentLogSnapshot(cfg, slug, logDate).then((result) => {
+      if (alive.current && request === logRequest.current) { setLogContent(result.content); setLogVersion(result.version) }
+    }).catch((e) => { if (alive.current && request === logRequest.current) setLogError(e.message) })
+      .finally(() => { if (alive.current && request === logRequest.current) setLogBusy(false) })
+    return () => { ++logRequest.current }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [logDate, slug, logReload])
+
+  const saveLog = async (): Promise<void> => {
+    if (!logDate || !logVersion || logBusy || logWriteLock.current) return
+    logWriteLock.current = true
+    const request = logRequest.current
+    setLogBusy(true); setLogSaved(false); setLogError('')
+    try {
+      await putAgentLog(cfg, slug, logDate, logContent, logVersion)
+      const result = await getAgentLogSnapshot(cfg, slug, logDate)
+      if (alive.current && request === logRequest.current) { setLogContent(result.content); setLogVersion(result.version); setLogSaved(true) }
+    } catch (e: any) { if (alive.current && request === logRequest.current) setLogError(e?.message || t('agentMemory.error')) }
+    finally { logWriteLock.current = false; if (alive.current && request === logRequest.current) setLogBusy(false) }
   }
 
   const openLib = async (fname: string): Promise<void> => {
@@ -174,34 +191,25 @@ export const AgentMemoryModal: React.FC<{
           {tabBtn('harness', t('settings.agents.tabHarness'))}
         </div>
 
-        {tab === 'memory' && (
-          <div className="field">
-            <label>{t('settings.agents.memory')}</label>
-            <textarea rows={12} value={memory} onChange={(e) => setMemory(e.target.value)} />
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
-              <button className="btn primary sm" disabled={memBusy} onClick={() => void saveMem()}>
-                {memBusy ? <Loader2 size={13} className="spin" /> : null} {t('common.save')}
-              </button>
-              {memSaved && <span style={{ fontSize: 12, color: 'var(--accent-ink)' }}>{t('settings.agents.memSaved')}</span>}
-            </div>
-          </div>
-        )}
+        {tab === 'memory' && <AgentMemoryPanel cfg={cfg} slug={slug} shareDefaultMemory={shareDefaultMemory} />}
 
         {tab === 'log' && (
           <div className="field">
             <label>{t('settings.agents.log')}</label>
+            {logError && <div role="alert" className="hint" style={{ color: 'var(--danger)' }}>{logError}</div>}
             {dates.length === 0
-              ? <div className="hint">{t('settings.agents.noLog')}</div>
+              ? (!logError && <div className="hint">{t('settings.agents.noLog')}</div>)
               : (
                 <>
-                  <select value={logDate} onChange={(e) => setLogDate(e.target.value)}>
+                  <select disabled={logBusy} value={logDate} onChange={(e) => setLogDate(e.target.value)}>
                     {dates.map((d) => <option key={d} value={d}>{d}</option>)}
                   </select>
-                  <textarea rows={12} value={logContent} onChange={(e) => setLogContent(e.target.value)} style={{ marginTop: 6 }} />
+                  <textarea aria-label={t('settings.agents.log')} disabled={logBusy || !logVersion} rows={12} value={logContent} onChange={(e) => { setLogContent(e.target.value); setLogSaved(false) }} style={{ marginTop: 6 }} />
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6 }}>
-                    <button className="btn primary sm" disabled={logBusy} onClick={() => void saveLog()}>
+                    <button className="btn primary sm" disabled={logBusy || !logVersion} onClick={() => void saveLog()}>
                       {logBusy ? <Loader2 size={13} className="spin" /> : null} {t('common.save')}
                     </button>
+                    <button className="btn sm" disabled={logBusy} onClick={() => setLogReload((n) => n + 1)}>{t('agentMemory.reload')}</button>
                     {logSaved && <span style={{ fontSize: 12, color: 'var(--accent-ink)' }}>{t('settings.agents.memSaved')}</span>}
                   </div>
                 </>

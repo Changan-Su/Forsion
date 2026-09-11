@@ -40,7 +40,7 @@ export const hostProcessProvider: ToolProvider = {
       execute: (args, ctx) => {
         const command = String(args.command ?? '').trim();
         if (!command) return 'Error: command is required';
-        const r = startBackgroundProcess(ctx.sessionId, command, ctx.cwd || process.cwd());
+        const r = startBackgroundProcess(ctx.sessionId, command, ctx.cwd || process.cwd(), ctx);
         if (typeof r === 'string') return r;
         return `started background process ${r.id} (pid ${r.pid})\n稍后用 read_process_output 查看输出。`;
       },
@@ -154,7 +154,7 @@ export const hostProcessProvider: ToolProvider = {
         );
         const fromLen = p.output.length;
         if (input !== '') {
-          const w = writeStdin(ctx.sessionId, id, input, appendNewline);
+          const w = writeStdin(ctx.sessionId, id, input, appendNewline, ctx);
           if (w.startsWith('Error:')) return w;
         }
         const { output, status } = await waitForOutput(p, fromLen, { capMs, signal: ctx.signal });

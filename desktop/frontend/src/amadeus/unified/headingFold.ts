@@ -146,7 +146,7 @@ export function hiddenRanges(doc: ProseNode, folded: number[]): Array<{ start: n
 }
 
 /** 折叠标题的小节末尾之后那个位置(顶层坐标);该标题没折叠或不可折叠返回 null。
- *  键盘层用它把「折叠态标题上回车」的新块插到隐藏区**之后** —— 插在紧邻处会直接掉进 display:none。 */
+ *  键盘层也用它判定光标所在标题是否处于折叠态。 */
 export function foldedSectionAfter(state: EditorState, headingPos: number): number | null {
   const st = headingFoldKey.getState(state)
   if (!st?.folded.includes(headingPos)) return null

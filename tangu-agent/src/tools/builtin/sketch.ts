@@ -4,8 +4,9 @@
  * (exit_plan_mode 同款),零 schema 变更零迁移;result 只回短确认(display_file 同款)。
  * 渲染面契约(前端 SketchCard):sandbox iframe 仅 allow-scripts + 内层 CSP default-src 'none'
  * —— JS 可跑,无网络、无宿主 API、无导航;描述里必须把这个能力包络讲给模型。
- * 门禁:sketchEnabledFor 按 ctx.client 白名单(desktop|web)+ 排除子代理。CLI/TUI/通道/自动化 run
- * 无 client tag → 不注册(default-deny),满足「CLI 不注册」且天然覆盖 external 后端模式。
+ * 门禁:sketchEnabledFor 按 ctx.client 白名单(desktop|web)+ 排除子代理。CLI/TUI/自动化等无
+ * client tag 的 run 不注册(default-deny);通道 run 可能带 Desktop 宿主 tag,故另由 channelSession
+ * 明确排除(远程面只渲染纯文本)。
  * ⚠️移动端(Capacitor 原生 App,client=mobile/*)刻意排除:其 WebView 的 addJavascriptInterface
  * 原生桥(Filesystem/Preferences/Browser 插件)对子 iframe 可见,sandbox/CSP 拦不住 JS 桥对象——
  * 卡内脚本能直接删文件/清 token。渲染层(SketchCard)另有 Capacitor-native 拒渲染兜底(跨端看历史卡)。

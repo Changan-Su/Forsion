@@ -9,6 +9,7 @@
 import type { ToolImpl, ToolContext } from './toolTypes.js';
 import type { AppProfile } from '../seams/appProfile.js';
 import { presetOf } from '../core/presetTable.js';
+import { isHostSandboxRestricted, isHostSandboxToolAllowed, resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 
 export interface ToolDef extends ToolImpl {
   name: string;
@@ -98,6 +99,8 @@ export function listToolProviders(): ToolProvider[] {
  */
 export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string, ToolDef> {
   const host = ctx.execMode === 'host';
+  const sandboxCtx = { ...ctx, hostSandbox: ctx.hostSandbox ?? (ctx.execMode === 'sandbox' ? undefined : resolveHostSandboxPolicy()) };
+  const sandboxRestricted = isHostSandboxRestricted(sandboxCtx);
   let builtins = profile.toolLoadout.builtins;
   // 部署级白名单(TANGU_TOOL_BUILTINS 等)含 deferred 工具却漏列 load_tools → 自动补上:
   // 否则目录还在、唯一解锁入口没了,deferred 工具永久不可达(还可能被同名 custom 工具顶替)。
@@ -108,6 +111,7 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string,
   }
   const out = new Map<string, ToolDef>();
   const add = (t: ToolDef, isBuiltin: boolean, fromPlugin = false): void => {
+    if (sandboxRestricted && (!isBuiltin || fromPlugin || !isHostSandboxToolAllowed(t.name, sandboxCtx))) return;
     const m = t.mode || 'both';
     if (host && m === 'sandbox') return;
     if (!host && m === 'host') return;

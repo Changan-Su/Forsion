@@ -175,23 +175,45 @@ export function allowAlways(sessionId: string, toolName: string): void {
   }
   s.add(toolName);
 }
-// ── known-safe bash 白名单(借 Codex 的 prefix-rule 思路):只读单命令免审批,纯 UX。──
+// A convenience classifier, not a security boundary. Unknown syntax/options require approval.
 const SAFE_BASH_PROGRAMS = new Set([
-  'ls', 'pwd', 'cat', 'head', 'tail', 'wc', 'echo', 'stat', 'file', 'which', 'date', 'whoami',
-  'env', 'printenv', 'grep', 'rg', 'find', 'tree', 'du', 'df', 'basename', 'dirname', 'realpath',
-  'readlink', 'uname', 'hostname',
+  'ls', 'pwd', 'cat', 'head', 'tail', 'wc', 'echo', 'stat', 'which', 'whoami',
+  'du', 'df', 'basename', 'dirname', 'realpath', 'readlink', 'uname',
 ]);
-const SAFE_GIT_SUB = new Set(['status', 'diff', 'log', 'show', 'branch', 'remote', 'rev-parse', 'describe']);
-// shell 元字符:链式/管道/重定向/子命令/转义 → 一律视为不安全(防 `ls; rm -rf /` 之类绕过)。
-const SHELL_META = /[;&|<>$`(){}\n\\]/;
+const SAFE_GIT_FLAGS = new Set([
+  '--short', '--branch', '--porcelain', '--porcelain=v1', '--porcelain=v2',
+  '--stat', '--numstat', '--shortstat', '--name-only', '--name-status',
+  '--cached', '--staged', '--check', '--no-patch', '--oneline', '--all',
+  '--no-color', '--no-ext-diff', '--no-textconv', '--abbrev-ref', '--show-toplevel',
+  '--show-prefix', '--show-cdup', '--is-inside-work-tree', '--verify',
+]);
 
-/** 命令是否「已知只读、单条简单调用」→ 可免审批。任何元字符即判不安全。 */
+/** Only simple unquoted word tokens are classified. Shell parsing remains the shell's job. */
 export function isKnownSafeBash(command: string): boolean {
   const cmd = String(command || '').trim();
-  if (!cmd || SHELL_META.test(cmd)) return false;
-  const parts = cmd.split(/\s+/);
-  if (parts[0] === 'git') return SAFE_GIT_SUB.has(parts[1] || '');
-  return SAFE_BASH_PROGRAMS.has(parts[0]);
+  // Deny substitutions, expansions, quotes, shell operators, escapes and control characters.
+  if (!cmd || /[^A-Za-z0-9_./:@%+=, \-]/.test(cmd)) return false;
+  const [program, ...args] = cmd.split(/ +/);
+  if (SAFE_BASH_PROGRAMS.has(program)) return true;
+  if (program === 'date') return args.every((a) => a === '-u' || a === '--utc' || a.startsWith('+'));
+  if (program === 'hostname') return args.length === 0;
+  // rg can execute --pre helpers and read config containing --pre; remove that implicit input.
+  // Even without --pre, arbitrary flags can gain new behavior, so only a bounded option set.
+  if (program === 'rg' || program === 'grep') {
+    const flags = new Set(['-n', '-i', '-l', '-L', '-c', '-r', '-R', '-v', '-w', '-F', '-E', '--files', '--hidden', '--no-ignore', '--no-config', '--line-number', '--ignore-case', '--fixed-strings', '--files-with-matches', '--count']);
+    if (program === 'rg' && process.env.RIPGREP_CONFIG_PATH) return false;
+    return args.every((a) => !a.startsWith('-') || a === '--' || flags.has(a));
+  }
+  if (program !== 'git') return false;
+  const [sub, ...rest] = args;
+  // branch and remote have mutating forms; only exact listing invocations qualify.
+  if (sub === 'branch') return rest.every((a) => ['-a', '-r', '--all', '--remotes', '--list'].includes(a));
+  if (sub === 'remote') return rest.length === 0 || (rest.length === 1 && rest[0] === '-v');
+  // diff/show can invoke configured external diff/textconv commands. Keep these behind approval
+  // unless callers explicitly disable both extension mechanisms.
+  if (['diff', 'show'].includes(sub) && !(rest.includes('--no-ext-diff') && rest.includes('--no-textconv'))) return false;
+  if (!['status', 'diff', 'show', 'log', 'rev-parse', 'describe'].includes(sub)) return false;
+  return rest.every((a) => !a.startsWith('-') || a === '--' || SAFE_GIT_FLAGS.has(a) || /^--max-count=[0-9]+$/.test(a));
 }
 
 // 路径抽取已迁 tools/writeTargets.ts(检查点快照共用同一口径,见该文件头注)。

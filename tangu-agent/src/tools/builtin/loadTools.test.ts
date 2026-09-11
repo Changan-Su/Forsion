@@ -25,9 +25,20 @@ describe('load_tools × CODING_PRESET_DEFERRED', () => {
     expect(unlocked).toEqual(expect.arrayContaining(['read_session', 'search_sessions', 'web_search']));
   });
 
-  it('无 preset:同名工具本就不是 deferred,行为不变(仍 not loadable)', async () => {
+  it('already callable tools are reported as available, not unknown', async () => {
     const ctx = { ...baseCtx, unlockTools: () => {} } as any;
     const r = String(await tool.execute({ names: ['read_session'] }, ctx));
-    expect(r).toContain('Unknown/not loadable');
+    expect(r).toContain('Already available');
+    expect(r).not.toContain('Unknown/not loadable');
+  });
+
+  it('distinguishes a mixed batch of direct, deferred and unavailable tools', async () => {
+    const unlocked: string[] = [];
+    const ctx = { ...baseCtx, unlockTools: (ns: string[]) => unlocked.push(...ns) } as any;
+    const r = String(await tool.execute({ names: ['read_session', 'calculator', 'not_a_tool'] }, ctx));
+    expect(r).toContain('Already available: read_session');
+    expect(r).toContain('Loaded tool(s): calculator');
+    expect(r).toContain('Unavailable in this session: not_a_tool');
+    expect(unlocked).toEqual(['calculator']);
   });
 });

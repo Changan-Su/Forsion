@@ -183,9 +183,8 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
 
   guard.arm();
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = await guard.read(reader);
     if (done) break;
-    guard.arm();
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
     buffer = lines.pop() || '';
@@ -203,12 +202,14 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
       const type: string = ev.type || '';
       if (type === 'response.output_text.delta') {
         if (typeof ev.delta === 'string') {
+          if (ev.delta) guard.progress();
           content += ev.delta;
           onToken?.(ev.delta);
         }
       } else if (type === 'response.output_item.added' && ev.item?.type === 'function_call') {
         const key = ev.item.id || ev.item_id || `fc_${ev.output_index ?? order.length}`;
         if (!fnCalls.has(key)) {
+          if ([ev.item.id, ev.item.call_id, ev.item.name, ev.item.arguments].some((v) => typeof v === 'string' && v)) guard.progress();
           fnCalls.set(key, { id: ev.item.call_id || ev.item.id || key, name: ev.item.name || '', arguments: ev.item.arguments || '' });
           order.push(key);
         }
@@ -216,11 +217,13 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
         const key = ev.item_id || `fc_${ev.output_index ?? 0}`;
         const c = fnCalls.get(key);
         if (c && typeof ev.delta === 'string') {
+          if (ev.delta) guard.progress();
           c.arguments += ev.delta;
           onToolCallDelta?.({ id: c.id, name: c.name, argsLen: c.arguments.length, args: c.arguments, argsDelta: ev.delta });
         }
       } else if (type.startsWith('response.reasoning') && type.endsWith('.delta')) {
         if (typeof ev.delta === 'string') {
+          if (ev.delta) guard.progress();
           reasoning += ev.delta;
           onReasoning?.(ev.delta);
         }

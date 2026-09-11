@@ -44,6 +44,18 @@ export interface ChannelServiceOpts {
   inboxDirName: string;
   /** 新会话默认标题。 */
   sessionTitle: string;
+  /**
+   * 承载本通道引擎的客户端面标识(desktop/2.9.9)。通常由 Desktop spawn 时经
+   * TANGU_HOST_CLIENT 注入;显式值仅供其它宿主/测试注入。
+   */
+  hostClientTag?: string;
+}
+
+// 与 routes/runs.ts 的公开请求闸同形。这里读的是受信宿主 env,但仍收紧形状,
+// 避免手动启动 standalone 时把脏值写进 client-stats;云端 brain-api 落 api_usage_logs 前还会再验一次。
+const HOST_CLIENT_TAG_RE = /^(desktop|web|mobile|cli|tui)\/[A-Za-z0-9._-]{1,32}$/;
+export function normalizeChannelHostClientTag(v: unknown): string | undefined {
+  return typeof v === 'string' && HOST_CLIENT_TAG_RE.test(v) ? v : undefined;
 }
 
 export function parseJson(v: any): any {
@@ -56,6 +68,7 @@ export class ChannelService {
   readonly kind: ChannelKind;
   readonly driver: ChannelDriver;
   private readonly opts: ChannelServiceOpts;
+  private readonly hostClientTag?: string;
   private readonly activeRunsByPeer = new Map<string, string>();
   // 通道内审批:peer → 当前待批操作(收到 approval_request 时登记;用户回「批准/拒绝」时取用)。
   private readonly pendingApprovalByPeer = new Map<string, { runId: string; approvalId: string; preview: string; agentSlug?: string }>();
@@ -68,6 +81,7 @@ export class ChannelService {
     this.kind = opts.kind;
     this.driver = opts.driver;
     this.opts = opts;
+    this.hostClientTag = normalizeChannelHostClientTag(opts.hostClientTag ?? process.env.TANGU_HOST_CLIENT);
   }
 
   settings() { return channelSettings(this.kind); }
@@ -329,6 +343,9 @@ export class ChannelService {
         userMessageId,
         attachments, // 通道入站图片 → 与网页发图同一条多模态路径
         agentConfig,
+        // 通道消息没有渲染层 POST /agent/runs 可自报端信息;继承托管引擎的 Desktop 端/版本。
+        // 下游仍由 input.source.channel 区分微信/Telegram/QQ。
+        ...(this.hostClientTag ? { client: this.hostClientTag } : {}),
         source: { channel: this.kind, accountId: msg.accountId, openid: msg.peerId, messageId: msg.messageId },
       },
     });

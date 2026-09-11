@@ -10,7 +10,9 @@
  * 判据:
  *   1 默认开:ribbon 有主页图标,点进去主区是主页视图
  *   2 收纳架默认只露一排(6 项 + 全部),「全部」进入二级收纳层 = spaceRegistry 的完整投影
- *   3 输入区字面复用 ChatView 的 Composer2(模式/模型/附件/发送全在),旧浏览器搜索选择器完全不在
+ *   3 输入区字面复用 ChatView 的 ProjectSelector + Composer2：发送前明示会话落在哪个项目，
+ *     可切到「不在项目中工作」并即时回显；菜单遵循选择面等宽/28px 行/圆角分组/渐进搜索，
+ *     支持 Home/方向键/Escape 与焦点归还；模式/模型/附件/发送全在，旧浏览器搜索选择器完全不在
  *   4 切走后 space:home 命名布局里仍然只有 homepage、没有 chat
  *   5 收纳:坞 = ribbon 上区的**另一个投影** —— 造一份「收纳夹装着日历+编码」的 ribbon 存档,
  *     坞里就该出现夹子格、成员不再单独占格、点开二级应用层能切过去,且 ribbon 上是同一份分组
@@ -358,13 +360,74 @@ async function main() {
       add: document.querySelectorAll('.hp-composer .add-pill-wrap').length,
       mode: document.querySelectorAll('.hp-composer .mode-pill-wrap').length,
       send: document.querySelectorAll('.hp-composer .t2c-send').length,
+      project: document.querySelectorAll('.hp-composer .project-selector').length,
+      projectName: (document.querySelector('.hp-composer .project-pill-name')?.textContent || '').trim(),
     }))()`)
     check(
       '3 输入区复用 Composer2 完整控件,旧浏览器搜索 UI 已移除',
       composed.composer === 1 && composed.legacySearch === 0
-        && composerControls.textarea === 1 && composerControls.add === 1 && composerControls.mode === 1 && composerControls.send === 1,
+        && composerControls.textarea === 1 && composerControls.add === 1 && composerControls.mode === 1 && composerControls.send === 1
+        && composerControls.project === 1 && composerControls.projectName.length > 0,
       JSON.stringify({ composer: composed.composer, legacySearch: composed.legacySearch, ...composerControls }),
     )
+    await win.click('.hp-composer .project-pill')
+    await win.waitForSelector('.hp-composer .project-menu-projectless', { state: 'visible' })
+    await win.waitForTimeout(220)
+    const projectMenuUi = await win.evaluate(`(() => {
+      const pill = document.querySelector('.hp-composer .project-pill')
+      const menu = document.querySelector('.hp-composer .project-menu')
+      const item = document.querySelector('.hp-composer .project-menu-list .project-menu-item')
+      const utility = document.querySelector('.hp-composer .project-menu-projectless')
+      const p = pill.getBoundingClientRect(), m = menu.getBoundingClientRect(), i = item.getBoundingClientRect()
+      const pcs = getComputedStyle(pill), mcs = getComputedStyle(menu), ucs = getComputedStyle(utility)
+      return {
+        pillW: p.width, menuW: m.width, aligned: Math.abs(p.left - m.left), itemH: i.height,
+        pillBorder: pcs.borderTopWidth, menuRadius: parseFloat(mcs.borderTopLeftRadius),
+        utilityRadius: parseFloat(ucs.borderTopLeftRadius), utilityBorder: ucs.borderTopWidth,
+        searches: menu.querySelectorAll('.project-menu-search').length,
+        active: menu.querySelectorAll('.project-menu-item.active[aria-checked="true"]').length,
+      }
+    })()`)
+    check(
+      '3a Project 选择器符合新菜单几何:等宽/对齐/28px 行/无轮廓 pill/少量项目不露搜索',
+      Math.abs(projectMenuUi.pillW - projectMenuUi.menuW) < 1
+        && projectMenuUi.aligned < 1 && projectMenuUi.itemH >= 27 && projectMenuUi.itemH <= 29
+        && projectMenuUi.pillBorder === '0px' && projectMenuUi.menuRadius >= 8
+        && projectMenuUi.utilityRadius >= 6 && projectMenuUi.utilityBorder === '0px'
+        && projectMenuUi.searches === 0 && projectMenuUi.active === 1,
+      JSON.stringify(projectMenuUi),
+    )
+    if (SHOT) {
+      const projectOut = path.join(os.tmpdir(), 'forsion-homepage.project-menu.png')
+      await win.screenshot({ path: projectOut })
+      console.log(`  截图 → ${projectOut}`)
+    }
+    await win.keyboard.press('Home')
+    const projectKeyboardHome = await win.evaluate(`document.activeElement?.matches('.project-menu-item.active') || false`)
+    await win.keyboard.press('ArrowDown')
+    const projectKeyboardMoved = await win.evaluate(`document.activeElement?.matches('.project-menu-item:not(.active)') || false`)
+    await win.keyboard.press('Escape')
+    const projectKeyboardClosed = await win.evaluate(`!document.querySelector('.hp-composer .project-menu') && document.activeElement?.matches('.hp-composer .project-pill')`)
+    check(
+      '3b Project 菜单支持 Home / 方向键 / Escape，关闭后焦点回到 pill',
+      projectKeyboardHome && projectKeyboardMoved && projectKeyboardClosed,
+      JSON.stringify({ projectKeyboardHome, projectKeyboardMoved, projectKeyboardClosed }),
+    )
+    await win.click('.hp-composer .project-pill')
+    await win.waitForSelector('.hp-composer .project-menu-projectless', { state: 'visible' })
+    await win.click('.hp-composer .project-menu-projectless')
+    await win.waitForTimeout(180)
+    const projectlessName = await win.locator('.hp-composer .project-pill-name').textContent()
+    await win.click('.hp-composer .project-pill')
+    const projectlessSelected = await win.locator('.hp-composer .project-menu-projectless .project-menu-check').count() === 1
+    check(
+      '3c Homepage Project 可切到项目外且立即回显',
+      !!projectlessName?.trim() && projectlessSelected,
+      JSON.stringify({ projectlessName: projectlessName?.trim(), projectlessSelected }),
+    )
+    // 后续用例继续按 Work 默认 Project 运行，不让这条交互断言污染其他场景。
+    await win.click('.hp-composer .project-menu-list .project-menu-item')
+    await win.waitForTimeout(180)
 
     // 4 切去 Tangu 不许污染主页命名布局。真发送由本台架的断网后端门控;
     //   发送强制 sessionId=null 由源码 + typecheck 钉住。
@@ -745,13 +808,20 @@ async function main() {
     await win.waitForTimeout(600)
     const shortWindow = await win.evaluate(`(() => {
       const r = document.querySelector('.hp-root').getBoundingClientRect()
+      const rect = (sel) => {
+        const b = document.querySelector(sel)?.getBoundingClientRect()
+        return b ? { top: Math.round(b.top - r.top), bottom: Math.round(b.bottom - r.top), height: Math.round(b.height) } : null
+      }
       const fits = (sel) => {
         const e = document.querySelector(sel)
         if (!e) return null
         const b = e.getBoundingClientRect()
         return b.top >= r.top - 0.5 && b.bottom <= r.bottom + 0.5
       }
-      return { h: Math.round(r.height), clock: fits('.hp-clock'), composer: fits('.hp-composer'), spaces: fits('.hp-spaces') }
+      return {
+        h: Math.round(r.height), clock: fits('.hp-clock'), composer: fits('.hp-composer'), spaces: fits('.hp-spaces'),
+        rects: { clock: rect('.hp-clock'), composer: rect('.hp-composer'), spaces: rect('.hp-spaces') },
+      }
     })()`)
     if (SHOT) {
       const shortOut = path.join(os.tmpdir(), 'forsion-homepage.short-window.png')

@@ -11,7 +11,7 @@ import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import { createRun, getRunForUser, listActiveRunsBySession, listEventsFrom } from '../services/runStore.js';
-import { enqueueRun, abortRun, enqueueSteer, cancelSteer } from '../services/agentLoop.js';
+import { enqueueRun, abortRun, enqueueSteer, expediteSteer, cancelSteer, waitForRunSettlement } from '../services/agentLoop.js';
 import { subscribe, type AgentEvent } from '../services/eventBus.js';
 
 const router = Router();
@@ -320,7 +320,10 @@ router.post('/agent/runs/:id/abort', authMiddleware, async (req: AuthRequest, re
     const run = await getRunForUser(req.params.id, userId);
     if (!run) return res.status(404).json({ detail: 'Run not found' });
     abortRun(req.params.id);
-    res.json({ success: true });
+    const settled = await waitForRunSettlement(req.params.id);
+    const fresh = await getRunForUser(req.params.id, userId);
+    // success 只代表接受取消;settled + status 才代表已退出。字段向后兼容现有客户端/网关。
+    res.json({ success: true, settled, status: fresh?.status || run.status });
   } catch (err: any) {
     res.status(500).json({ detail: err?.message || 'Failed to abort run' });
   }
@@ -331,6 +334,14 @@ router.post('/agent/runs/:id/steer', authMiddleware, async (req: AuthRequest, re
   try {
     const userId = req.user!.userId;
     const { message, attachments } = req.body || {};
+    // Reuse the steer route so existing desktop/web/mobile gateways pass it through.
+    // A flush only wakes already queued input. It never cancels the task or resends text.
+    if (req.body?.flush === true) {
+      const run = await getRunForUser(req.params.id, userId);
+      if (!run) return res.status(404).json({ detail: 'Run not found' });
+      const ok = expediteSteer(req.params.id);
+      return res.status(ok ? 200 : 409).json({ ok, reason: ok ? undefined : 'not_active' });
+    }
     if (typeof message !== 'string' || !message.trim()) {
       return res.status(400).json({ detail: 'message is required' });
     }

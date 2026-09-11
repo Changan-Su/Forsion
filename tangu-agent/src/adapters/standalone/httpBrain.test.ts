@@ -3,7 +3,7 @@
  *
  * server 的 brain/llm/stream 每 15s 发一个 `: ping` SSE 注释行防边缘代理判 504。那是**服务端自己**
  * 发的，上游挂死时照发不误 —— 若按帧续命，客户端会被这假活信号一路喂饱：零 token、零错误、
- * 永不超时，用户侧就是「模型一直没反应」。所以这里的 guard 只认 `data:` 帧。
+ * 永不超时，用户侧就是「模型一直没反应」。语义看门狗只认有效正文、思考和工具增量。
  *
  * 跑：cd Forsion-Genesis/tangu-agent && npx vitest run src/adapters/standalone/httpBrain.test.ts
  */
@@ -107,22 +107,22 @@ describe('httpBrain.streamProviderCompletion 空闲看门狗', () => {
     ).rejects.toMatchObject({ status: 502, message: 'upstream exploded' });
   });
 
-  it('服务端转达的 `t:\'alive\'` 帧续命 —— 上游只发 keepalive 的健康流不被误杀', async () => {
+  it('服务端转达的 alive 不能无限延长无语义进展的等待', async () => {
     process.env.TANGU_BRAIN_STREAM_IDLE_MS = '250';
     stubFetch(
       [
-        frame({ t: 'alive' }), // 上游活着但还没有语义事件（长思考模型）
+        frame({ t: 'alive' }),
         frame({ t: 'alive' }),
         frame({ t: 'alive' }),
         frame({ t: 'token', d: '想好了' }),
         frame({ t: 'done', content: '想好了', toolCalls: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }),
       ],
-      100, // 累计 500ms > 250ms 窗口，全靠 alive 帧续命
+      100,
     );
     const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
 
-    const r = await brain.llm.streamProviderCompletion({ payload: { __forsion_model_id: 'm' } } as any);
-    expect(r.content).toBe('想好了');
+    await expect(brain.llm.streamProviderCompletion({ payload: { __forsion_model_id: 'm' } } as any))
+      .rejects.toMatchObject({ status: 504, message: 'stream progress idle timeout' });
   });
 
   it('run abort 语义不被误标成超时', async () => {
@@ -247,3 +247,29 @@ describe('httpBrain 请求超时与错误面', () => {
   });
 });
 
+describe('account sync cancellation transport', () => {
+  it('passes cancellation to every file and legacy memory request without serializing the signal', async () => {
+    const brain = createHttpBrain({ cloudUrl: 'https://synthetic.invalid', token: 'synthetic' });
+    const operations: Array<(signal: AbortSignal) => Promise<unknown>> = [
+      (signal) => brain.agentFiles!.getManifest('u', { signal }),
+      (signal) => brain.agentFiles!.getFile('u', 'agent', 'MEMORY.md', { signal }),
+      (signal) => brain.agentFiles!.putFile('u', 'agent', 'MEMORY.md', { content: 'synthetic', isBinary: false, size: 9, mtimeMs: 1 }, { signal }),
+      (signal) => brain.agentFiles!.deleteFile('u', 'agent', 'MEMORY.md', 1, undefined, 1, { signal }),
+      (signal) => brain.memory.getMemory('u', { signal }),
+      (signal) => brain.memory.setMemory!('u', 'synthetic', { signal }),
+      (signal) => brain.memory.getLog('u', '2026-09-08', { signal }),
+      (signal) => brain.memory.appendLogEntry('u', 'synthetic', { date: '2026-09-08', signal }),
+    ];
+    for (const operation of operations) {
+      let transport: AbortSignal | undefined;
+      vi.stubGlobal('fetch', (_url: unknown, init: RequestInit) => {
+        expect(String(init.body ?? '')).not.toContain('"signal"');
+        transport = init.signal ?? undefined;
+        return new Promise((_, reject) => transport!.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')), { once: true }));
+      });
+      const controller = new AbortController(); const pending = operation(controller.signal);
+      expect(transport).toBeDefined(); controller.abort();
+      await expect(pending).rejects.toThrow('aborted'); expect(transport!.aborted).toBe(true);
+    }
+  });
+});

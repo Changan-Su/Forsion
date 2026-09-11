@@ -10,7 +10,8 @@
  * 线格式对齐 Claude Code：stdout JSON `{decision,reason,hookSpecificOutput,continue,...}`，
  * 或退出码（0 ok / 2 block + stderr reason / 其它 fail）。不认识的输出 fail-open（标 failed，绝不静默改行为）。
  */
-import { spawn } from 'node:child_process';
+import { runBoundedProcess, type BoundedProcessResult } from '../utils/boundedProcess.js';
+import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
 import { loadHooksConfig, discoverHooks } from './config.js';
 import { matcherMatches } from './matcher.js';
 import { foldVerdict } from './events.js';
@@ -39,58 +40,18 @@ function matchTarget(event: HookEventName, input: HookInput): string {
   return input.tool_name || '';
 }
 
-interface SpawnResult {
-  code: number;
-  stdout: string;
-  stderr: string;
-  timedOut: boolean;
-}
-
 function runCommand(
   handler: DiscoveredHook['handler'],
   input: string,
   timeoutMs: number,
   cwd: string | undefined,
   signal: AbortSignal | undefined,
-): Promise<SpawnResult> {
-  return new Promise((resolve) => {
-    const isWin = process.platform === 'win32';
-    const shell = isWin ? process.env.COMSPEC || 'cmd.exe' : '/bin/sh';
-    const command = isWin && handler.commandWindows ? handler.commandWindows : handler.command;
-    const args = isWin ? ['/C', command] : ['-lc', command];
-    let stdout = '';
-    let stderr = '';
-    let timedOut = false;
-    let done = false;
-    const finish = (code: number): void => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      if (signal) signal.removeEventListener('abort', onAbort);
-      resolve({ code, stdout, stderr, timedOut });
-    };
-    const onAbort = (): void => {
-      try { child.kill('SIGKILL'); } catch { /* already dead */ }
-      finish(130);
-    };
-    const child = spawn(shell, args, { cwd, env: process.env });
-    const timer = setTimeout(() => {
-      timedOut = true;
-      try { child.kill('SIGKILL'); } catch { /* already dead */ }
-      finish(124);
-    }, timeoutMs);
-    if (signal) {
-      if (signal.aborted) { onAbort(); return; }
-      signal.addEventListener('abort', onAbort, { once: true });
-    }
-    child.stdout.on('data', (d) => { stdout += d; });
-    child.stderr.on('data', (d) => { stderr += d; });
-    child.on('error', (e) => { stderr += String(e?.message || e); finish(127); });
-    child.on('close', (code) => finish(code == null ? 0 : code));
-    try {
-      child.stdin.write(input);
-      child.stdin.end();
-    } catch { /* stdin closed early */ }
+): Promise<BoundedProcessResult> {
+  const isWin = process.platform === 'win32';
+  const shell = isWin ? process.env.COMSPEC || 'cmd.exe' : '/bin/sh';
+  const command = isWin && handler.commandWindows ? handler.commandWindows : handler.command;
+  return runBoundedProcess(shell, isWin ? ['/D', '/C', command] : ['-lc', command], {
+    cwd, env: process.env, input, timeoutMs, signal, maxOutputBytes: 256 * 1024,
   });
 }
 
@@ -141,11 +102,24 @@ export async function executeHook(
   ctx: HookRunContext,
 ): Promise<HookRunResult> {
   const started = Date.now();
-  const timeoutMs = Math.max(1000, (hook.handler.timeout ?? 600) * 1000);
+  if ((ctx.execMode && ctx.execMode !== 'host') || isHostSandboxRestricted(ctx)) {
+    return { key: hook.key, event: hook.event, status: 'failed', durationMs: 0,
+      failReason: 'Shell hooks are disabled while local sandbox restrictions are active' };
+  }
+  const seconds = Number.isFinite(hook.handler.timeout) ? hook.handler.timeout! : 600;
+  const timeoutMs = Math.min(2_147_483_647, Math.max(1000, seconds * 1000));
   const payload = JSON.stringify({ ...input, hook_event_name: hook.event });
   const sr = await runCommand(hook.handler, payload, timeoutMs, ctx.cwd, ctx.signal);
-  const parsed = sr.timedOut
-    ? { status: 'failed' as HookRunStatus, failReason: 'hook timed out' }
+  const failure = sr.reason === 'timeout' ? 'hook timed out'
+    : sr.reason === 'aborted' ? 'hook cancelled'
+    : sr.reason === 'output-limit' ? 'hook exceeded the 256 KiB output limit'
+    : sr.reason === 'spawn-error' ? `hook failed to start: ${sr.error?.message || 'unknown error'}`
+    : undefined;
+  const failReason = sr.cleanupTimedOut
+    ? `${failure || 'hook exited'}; process-tree shutdown was not acknowledged`
+    : failure;
+  const parsed = failReason
+    ? { status: 'failed' as HookRunStatus, failReason }
     : parseHookOutput(hook.event, sr.code, sr.stdout, sr.stderr);
   return {
     key: hook.key,
@@ -160,6 +134,9 @@ export async function executeHook(
 /** 派发点唯一入口。host-only 闸在最顶（云端/worker 直接空判定，绝不读 config、绝不 spawn）。 */
 export async function runHooks(event: HookEventName, input: HookInput, ctx: HookRunContext): Promise<HookVerdict> {
   if (!ctx.profile?.capabilities?.hostExec || ctx.execMode !== 'host') return emptyVerdict();
+  if (isHostSandboxRestricted(ctx)) {
+    return { ...emptyVerdict(), systemMessages: ['Shell hooks are disabled while local sandbox restrictions are active'] };
+  }
 
   let selected: DiscoveredHook[];
   try {

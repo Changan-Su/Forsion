@@ -1,6 +1,6 @@
 {
   "name": "forsion-desktop",
-  "version": "2.9.9",
+  "version": "2.10.1",
   "description": "Forsion Desktop — AI 驱动的应用生态系统的桌面端(Electron):Tangu Agent 引擎 + LCL 可停靠工作区框架 + 可插拔功能空间(对话/笔记/日历/收件箱/编码),按产品档案裁出全家桶与单品发行版",
   "author": "Forsion",
   "private": true,
@@ -14,6 +14,10 @@
     "web": "vite frontend",
     "gallery": "echo '→ http://localhost:8100/lcl/gallery/' && python3 -m http.server 8100 --bind 127.0.0.1 --directory ..",
     "test": "npm run check:shadowcontract && vitest run",
+    "check:run-lifecycle": "node scripts/run-lifecycle.check.cjs",
+    "check:installer": "node scripts/installer-compile.check.cjs",
+    "check:backend-deps": "node scripts/backend-dependencies.check.cjs",
+    "test:sync": "vitest run electron/amadeus/sync electron/amadeus/ipc.move.test.ts electron/amadeus/ipc.entrymove.test.ts electron/amadeus/ipc.account.test.ts electron/amadeus/settings.account.test.ts frontend/src/amadeus/store/pageStore.move-race.test.ts frontend/src/stores/entrySyncStore frontend/src/services/cloudBridgeVanished.test.ts frontend/src/components/ShareCard.race.test.ts frontend/src/amadeusFolderPublish.test.ts",
     "test:accounts": "vitest run forsionAuth authMainLifecycle externalAuthLifecycle accountTransition AccountCard cloudAccount cloudHttpAccount cloudBridgeCacheAccount contentLayoutAccount settings.account ipc.account collabMain.account appStore.connect engine.lifecycle writeFailures pageStore.vaultswitch dbStore.test drawingStore.test electron/amadeus/sync/engine.test.ts",
     "e2e:editor": "node scripts/e2e-editor.cjs",
     "e2e:dnd": "node scripts/block-dnd.e2e.cjs",

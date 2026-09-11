@@ -761,7 +761,7 @@ There are three kinds of Enter — do not mix them up:
 
 | Key | Result |
 |---|---|
-| `Enter` | Starts a new paragraph. On a folded heading, the new paragraph lands after the folded section and inherits the heading's level |
+| `Enter` | Starts a new paragraph. In a heading, the left half stays a heading and the right half becomes body text; a folded heading expands first, then starts body text below it |
 | `Shift + Enter` | A line break inside the same paragraph — no new paragraph |
 | `⌘/Ctrl + Enter` | Inside a quote = a line break within the quote; inside a list = same as Enter, it splits the item; everywhere else = a new empty paragraph below, without splitting the current text |
 | `Tab` | Indents the paragraph one level; inserts two spaces inside a code block (a multi-line selection is indented line by line); moves to the next cell in a table; sinks a list item |

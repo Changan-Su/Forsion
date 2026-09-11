@@ -1,6 +1,6 @@
 /**
  * 每-agent 云文件镜像引擎(agentFileSync)。用 TANGU_HOME 临时目录 + 内存 fake AgentFilesBrain
- * (LWW 守卫与服务端一致)验证 push/pull/LWW/墓碑/LOG 合并/共用记忆去重/5MB 跳过。
+ * (seq/hash/CAS 与当前服务端一致)验证 push/pull/LWW/墓碑/LOG 合并/共用记忆去重/5MB 跳过。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync, utimesSync } from 'node:fs';
@@ -10,13 +10,14 @@ import { runAgentFilesSync } from '../src/services/agentFileSync.js';
 import { agentSyncScope, setAgentSyncPermission } from '../src/services/cloudSyncAccount.js';
 import { saveAgent } from '../src/agents/agentRegistry.js';
 import { agentsDir } from '../src/core/tanguHome.js';
-import type { AgentFilesBrain } from '../src/seams/cloudBrain.js';
+import { createHash } from 'node:crypto';
+import { AgentFileConflictError, type AgentFilesBrain } from '../src/seams/cloudBrain.js';
 
 let home: string;
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'tangu-afs-')); process.env.TANGU_HOME = home; });
 afterEach(() => { delete process.env.TANGU_HOME; try { rmSync(home, { recursive: true, force: true }); } catch { /* ignore */ } });
 
-/** 内存 fake：行为镜像 server tanguAgentFilesService(LWW ON CONFLICT WHERE mtime_ms < EXCLUDED)。 */
+/** 内存 fake：行为镜像当前 server tanguAgentFilesService 的 CAS 和旧调用 mtime 守卫。 */
 function fakeCloud(enabledSlugs: string[] = []) {
   const rows = new Map<string, any>();
   const puts = new Map<string, number>(); // 计数 putFile(键=slug/relPath),验证「去重一次」
@@ -28,7 +29,7 @@ function fakeCloud(enabledSlugs: string[] = []) {
       for (const [k, r] of rows) {
         const [slug, relPath] = k.split('\0');
         const arr = bySlug.get(slug) ?? [];
-        arr.push({ relPath, mtimeMs: r.mtimeMs, size: r.size ?? 0, isBinary: !!r.isBinary, deleted: !!r.deleted });
+        arr.push({ relPath, mtimeMs: r.mtimeMs, size: r.size ?? 0, isBinary: !!r.isBinary, deleted: !!r.deleted, seq: r.seq, hash: r.hash });
         bySlug.set(slug, arr);
       }
       return [...bySlug.entries()].map(([slug, files]) => ({ slug, files }));
@@ -36,30 +37,35 @@ function fakeCloud(enabledSlugs: string[] = []) {
     async getFile(_u, slug, relPath) {
       const r = rows.get(key(slug, relPath));
       if (!r) return null;
-      if (r.deleted) return { isBinary: false, mtimeMs: r.mtimeMs, deleted: true };
+      if (r.deleted) return { isBinary: false, mtimeMs: r.mtimeMs, deleted: true, seq: r.seq, hash: null };
       return r.isBinary
-        ? { contentBase64: r.contentBase64, isBinary: true, mtimeMs: r.mtimeMs, deleted: false }
-        : { content: r.content, isBinary: false, mtimeMs: r.mtimeMs, deleted: false };
+        ? { contentBase64: r.contentBase64, isBinary: true, mtimeMs: r.mtimeMs, deleted: false, seq: r.seq, hash: r.hash }
+        : { content: r.content, isBinary: false, mtimeMs: r.mtimeMs, deleted: false, seq: r.seq, hash: r.hash };
     },
     async putFile(_u, slug, relPath, body) {
       const k = key(slug, relPath);
       puts.set(`${slug}/${relPath}`, (puts.get(`${slug}/${relPath}`) ?? 0) + 1);
       const ex = rows.get(k);
-      if (!ex || ex.mtimeMs < body.mtimeMs) {
-        rows.set(k, { content: body.content, contentBase64: body.contentBase64, isBinary: !!body.isBinary, size: body.size, mtimeMs: body.mtimeMs, deleted: false });
-        return { mtimeMs: body.mtimeMs };
+      const seq = ex && !ex.deleted ? ex.seq : 0;
+      if (body.baseSeq !== undefined && body.baseSeq !== seq) throw new AgentFileConflictError({ code: 'CONFLICT', seq, hash: ex?.hash ?? null, mtimeMs: ex?.mtimeMs ?? 0, deleted: !!ex?.deleted });
+      if (body.baseSeq !== undefined || !ex || ex.mtimeMs < body.mtimeMs) {
+        const hash = createHash('sha256').update(body.isBinary ? Buffer.from(body.contentBase64 ?? '', 'base64') : body.content ?? '').digest('hex');
+        const next = { ...body, seq: (ex?.seq ?? 0) + 1, hash, deleted: false };
+        rows.set(k, next);
+        return { mtimeMs: next.mtimeMs, seq: next.seq, hash };
       }
-      return { mtimeMs: ex.mtimeMs };
+      return { mtimeMs: ex.mtimeMs, seq: ex.seq, hash: ex.hash };
     },
-    async deleteFile(_u, slug, relPath, mtimeMs) {
+    async deleteFile(_u, slug, relPath, mtimeMs, _device, baseSeq) {
       const k = key(slug, relPath);
       const ex = rows.get(k);
-      if (!ex || ex.mtimeMs < mtimeMs) rows.set(k, { isBinary: false, size: 0, mtimeMs, deleted: true });
+      if (baseSeq !== undefined && ex && !ex.deleted && baseSeq !== ex.seq) throw new AgentFileConflictError({ code: 'CONFLICT', seq: ex.seq, hash: ex.hash, mtimeMs: ex.mtimeMs, deleted: false });
+      if (baseSeq !== undefined || !ex || ex.mtimeMs < mtimeMs) rows.set(k, { isBinary: false, size: 0, mtimeMs, deleted: true, seq: (ex?.seq ?? 0) + 1, hash: null });
     },
   };
   // Mirror the account-specific consent recorded by the agent settings route.
   // A legacy config.toml cloud_sync bit alone does not enroll an existing local folder.
-  for (const slug of enabledSlugs) setAgentSyncPermission(slug, agentSyncScope(brain, 'u')!, true);
+  for (const slug of enabledSlugs) setAgentSyncPermission(slug, agentSyncScope(brain, 'u')!, true, true);
   return brain;
 }
 
@@ -120,22 +126,25 @@ describe('agentFileSync — LWW', () => {
 describe('agentFileSync — tombstones', () => {
   it('local delete propagates a tombstone to cloud', async () => {
     await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
-    writeFileSync(join(tDir('tester'), 'MEMORY.md'), 'mem');
+    mkdirSync(join(tDir('tester'), 'Library'), { recursive: true });
+    writeFileSync(join(tDir('tester'), 'Library/note.md'), 'mem');
     const cloud = fakeCloud(['tester']);
     await runAgentFilesSync(cloud, 'u'); // push → prev-state records it
-    rmSync(join(tDir('tester'), 'MEMORY.md'));
+    rmSync(join(tDir('tester'), 'Library/note.md'));
     const r = await runAgentFilesSync(cloud, 'u'); // local gone + prev exists → tombstone
-    expect((await cloud.getFile('u', 'tester', 'MEMORY.md'))!.deleted).toBe(true);
+    expect((await cloud.getFile('u', 'tester', 'Library/note.md'))!.deleted).toBe(true);
     expect(r.deleted).toBeGreaterThan(0);
   });
 
   it('cloud tombstone (newer) removes the local file', async () => {
     await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
-    const mem = join(tDir('tester'), 'MEMORY.md');
+    mkdirSync(join(tDir('tester'), 'Library'), { recursive: true });
+    const mem = join(tDir('tester'), 'Library/note.md');
     writeFileSync(mem, 'mem');
     utimesSync(mem, new Date(1000), new Date(1000)); // 本地很旧
     const cloud = fakeCloud(['tester']);
-    await cloud.deleteFile('u', 'tester', 'MEMORY.md', future()); // 云端墓碑更新
+    await runAgentFilesSync(cloud, 'u'); // establish a shared baseline before the cloud deletion
+    await cloud.deleteFile('u', 'tester', 'Library/note.md', future()); // 云端墓碑更新
     await runAgentFilesSync(cloud, 'u');
     expect(existsSync(mem)).toBe(false);
   });

@@ -256,7 +256,7 @@ const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 
   )
 }
 
-export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId }: { msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string }) {
+export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false }: { msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
   const { t } = useI18n()
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
   const [suggestSent, setSuggestSent] = useState(false)
@@ -418,9 +418,10 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {!!msg.todos?.length && <TodoList todos={msg.todos} />}
         {/* 判空看 body 不看 msg.content:刚开始打建议围栏时 content 非空但正文为空,
             看 content 会让整条消息只剩一个署名圆点,连「思考中」都不显示。 */}
-        {/* 等模型实况:每次调用(含工具轮之后)都画「发送 N KB / 等首帧 + 已等秒数」;老引擎没有 llm_call 事件时退回下面那行 */}
-        {msg.status === 'streaming' && msg.live && <LiveWaitLine live={msg.live} />}
-        {!body && msg.status === 'streaming' && !msg.toolEvents?.length && !msg.reasoning && !msg.live && (
+        {/* 测试性等待详情:开启时每次调用(含工具轮之后)画「发送 N KB / 等首帧 + 已等秒数」。
+            默认关闭时仍保留通用「思考中」反馈，不能因 msg.live 存在而把两行一起吞掉。 */}
+        {showWaitDetails && msg.status === 'streaming' && msg.live && <LiveWaitLine live={msg.live} />}
+        {!body && msg.status === 'streaming' && !msg.toolEvents?.length && !msg.reasoning && (!msg.live || !showWaitDetails) && (
           <div className="t2-dim chat-thinking-live chat-run-shimmer-text" role="status" aria-live="polite">
             {t('chat.thinking')}
           </div>

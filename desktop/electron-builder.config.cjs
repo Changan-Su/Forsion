@@ -4,6 +4,7 @@
  *  beforeBuild(fetch-python)/afterPack(better-sqlite3 重建)按同一档案短路。 */
 const { readFileSync } = require('fs')
 const { join } = require('path')
+const { backendDependencyFilter } = require('./build/backend-dependencies.cjs')
 
 const id = process.env.FORSION_PRODUCT || 'forsion'
 const product = JSON.parse(readFileSync(join(__dirname, 'products', `${id}.json`), 'utf8'))
@@ -89,7 +90,11 @@ module.exports = {
     ...(product.agentBackend
       ? [
           { from: '../tangu-agent/dist', to: 'tangu-server/dist' },
-          { from: '../tangu-agent/node_modules', to: 'tangu-server/node_modules' },
+          {
+            from: '../tangu-agent/node_modules',
+            to: 'tangu-server/node_modules',
+            filter: backendDependencyFilter(require('../tangu-agent/package-lock.json')),
+          },
           { from: '../tangu-agent/package.json', to: 'tangu-server/package.json' },
           { from: '../tangu-agent/skills', to: 'tangu-server/skills' },
           { from: '../tangu-agent/agent-skills', to: 'tangu-server/agent-skills' },
@@ -133,5 +138,10 @@ module.exports = {
   },
   win: { target: 'nsis', icon: 'build/icon.ico' },
   // 卸载时询问是否清除用户数据(~/.forsion、~/Forsion、%APPDATA%\Forsion);见 build/installer.nsh。
-  nsis: { include: 'build/installer.nsh' },
+  nsis: {
+    include: 'build/installer.nsh',
+    oneClick: false,
+    installerLanguages: ['en_US', 'zh_CN'],
+    runAfterFinish: true,
+  },
 }

@@ -848,8 +848,8 @@ registerMessages({
     "en": "Usually not needed — browser login is enough"
   },
   "settings.sandbox.label": {
-    "zh": "代码沙箱",
-    "en": "Code sandbox"
+    "zh": "Python / JavaScript 沙箱",
+    "en": "Python / JavaScript sandbox"
   },
   "settings.sandbox.auto": {
     "zh": "自动检测",

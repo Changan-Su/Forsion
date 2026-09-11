@@ -56,7 +56,7 @@ describe('agent 身份/自进化文件硬拒(Codex 评审 #1 + 复核软链绕�
 
   it('generic 写自己 SOUL.md/config.toml/HARNESS.md/journal → 硬拒;Library/MEMORY 照常可写', () => {
     enterRunContext('u1', 'r1', DEFAULT_AGENT_SLUG, 'testbot');
-    for (const f of ['SOUL.md', 'config.toml', 'HARNESS.md', '.harness-refinements.jsonl', '.harness-raw.md']) {
+    for (const f of ['SOUL.md', 'config.toml', 'HARNESS.md', '.harness-refinements.jsonl', '.harness-raw.md', '.cloudsync-accounts.json', '.memory-state.json', '.memory-tombstones.json', '.memory-dream.json', '.memory-raw.md', '.memory.lock']) {
       // 展示身份与记忆域两个 slug 的目录都拒
       expect(checkWritePath(ctx(ws), path.join(agentsDir(), 'testbot', f)).hardDeny, f).toBe(true);
       expect(checkWritePath(ctx(ws), path.join(agentsDir(), DEFAULT_AGENT_SLUG, f)).hardDeny, `mem:${f}`).toBe(true);

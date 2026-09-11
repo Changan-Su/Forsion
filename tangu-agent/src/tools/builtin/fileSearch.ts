@@ -5,15 +5,13 @@
  *     未命中(纯 Penzor 云模式)→ glob 走 listWorkspaceMetas 元数据;search 拉取文件内容(带量级上限)
  * 输出统一截断,跳过 .git/node_modules 等重目录与二进制文件。
  */
-import { spawn } from 'node:child_process';
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import { getSessionDir } from '../../sandbox/sessionSandbox.js';
 import { listWorkspaceMetas, readWorkspaceFileRaw, scopeOf } from '../fileWorkspace.js';
+import { runBoundedProcess } from '../../utils/boundedProcess.js';
+import { FileSearchWorker, checkSearchAbort, searchAbortError } from './fileSearchWorker.js';
 
-const SKIP_DIRS = new Set(['.git', 'node_modules', 'dist', 'build', '.cache', '.venv', 'venv', '__pycache__', '.next', 'target', 'out']);
 const MAX_FILES_VISITED = 5000;
 const MAX_MATCHES = 200;
 const MAX_FILE_BYTES = 1024 * 1024;
@@ -21,6 +19,19 @@ const MAX_OUTPUT_CHARS = 20_000;
 const MAX_GLOB_RESULTS = 500;
 // 纯 Penzor 云模式 search 的远程拉取上限(每文件一次 OSS 往返,必须收紧)
 const CLOUD_SEARCH_MAX_FILES = 30;
+
+/** One budget covers discovery, remote reads and matching, including fallback. */
+function withSearchLifetime(execute: (args: Record<string, any>, ctx: ToolContext) => Promise<string>) {
+  return async (args: Record<string, any>, ctx: ToolContext): Promise<string> => {
+    checkSearchAbort(ctx.signal);
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(ctx.signal?.reason);
+    ctx.signal?.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => controller.abort(new Error('Search exceeded its 30 second deadline')), 30_000);
+    try { return await execute(args, { ...ctx, signal: controller.signal }); }
+    finally { clearTimeout(timer); ctx.signal?.removeEventListener('abort', onAbort); }
+  };
+}
 
 /** glob → RegExp:支持 **(跨目录)、*(段内)、?、{a,b}。匹配相对路径(posix)。 */
 export function globToRegExp(glob: string): RegExp {
@@ -64,33 +75,6 @@ function looksBinary(buf: Buffer): boolean {
   return false;
 }
 
-/** 递归收集 baseDir 下文件相对路径(posix),跳过重目录/点目录,带访问上限。 */
-async function walkFiles(baseDir: string): Promise<string[]> {
-  const out: string[] = [];
-  const queue = [''];
-  while (queue.length && out.length < MAX_FILES_VISITED) {
-    const rel = queue.shift()!;
-    const dir = path.join(baseDir, rel);
-    let entries;
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      continue;
-    }
-    for (const e of entries) {
-      const r = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) {
-        if (SKIP_DIRS.has(e.name) || e.name.startsWith('.')) continue;
-        queue.push(r);
-      } else if (e.isFile()) {
-        out.push(r);
-        if (out.length >= MAX_FILES_VISITED) break;
-      }
-    }
-  }
-  return out;
-}
-
 interface SearchHit { file: string; line: number; text: string }
 
 function formatHits(hits: SearchHit[], truncatedScan: boolean): string {
@@ -113,84 +97,48 @@ function formatHits(hits: SearchHit[], truncatedScan: boolean): string {
   return out + footer;
 }
 
-/** 纯 Node 内容搜索(host 无 rg / sandbox 本地目录通用)。 */
-async function nodeSearch(baseDir: string, regex: RegExp, include?: RegExp): Promise<string> {
-  const rels = await walkFiles(baseDir);
-  const hits: SearchHit[] = [];
-  for (const rel of rels) {
-    if (hits.length >= MAX_MATCHES) break;
-    if (include && !include.test(rel)) continue;
-    let buf: Buffer;
-    try {
-      const st = await fs.stat(path.join(baseDir, rel));
-      if (st.size > MAX_FILE_BYTES) continue;
-      buf = await fs.readFile(path.join(baseDir, rel));
-    } catch {
-      continue;
-    }
-    if (looksBinary(buf)) continue;
-    const lines = buf.toString('utf-8').split('\n');
-    for (let i = 0; i < lines.length && hits.length < MAX_MATCHES; i++) {
-      if (regex.test(lines[i])) hits.push({ file: rel, line: i + 1, text: lines[i].trim() });
-    }
-  }
-  return formatHits(hits, rels.length >= MAX_FILES_VISITED);
-}
-
 /** host 模式优先 ripgrep(ENOENT 回退 nodeSearch)。 */
-function rgSearch(cwd: string, pattern: string, include?: string, signal?: AbortSignal): Promise<string | null> {
-  return new Promise((resolve) => {
-    const args = ['-n', '--no-messages', '--max-count', '50', '--max-filesize', '1M', '-e', pattern];
-    if (include) args.push('--glob', include);
-    args.push('.');
-    let child;
-    try {
-      child = spawn('rg', args, { cwd, signal });
-    } catch {
-      resolve(null);
-      return;
-    }
-    let out = '';
-    let resolved = false;
-    child.on('error', () => { if (!resolved) { resolved = true; resolve(null); } }); // rg 不存在 → 回退
-    child.stdout?.on('data', (d) => {
-      if (out.length < MAX_OUTPUT_CHARS * 2) out += d.toString();
-    });
-    const timer = setTimeout(() => child.kill('SIGKILL'), 30_000);
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (resolved) return;
-      resolved = true;
-      if (code === 0 || code === 1) {
-        // rg: 0=有匹配,1=无匹配
-        if (!out.trim()) { resolve('(no matches)'); return; }
-        let text = out.trimEnd();
-        const lines = text.split('\n');
-        let footer = `\n${lines.length} matching line(s)`;
-        if (text.length > MAX_OUTPUT_CHARS) { text = text.slice(0, MAX_OUTPUT_CHARS) + '\n…[truncated]'; }
-        resolve(text + footer);
-      } else {
-        resolve(`Error: rg exited ${code}(检查 pattern 的正则语法)`);
-      }
-    });
-  });
+async function rgSearch(cwd: string, pattern: string, include?: string, signal?: AbortSignal, caseSensitive = false): Promise<string | null> {
+  checkSearchAbort(signal);
+  const args = ['-n', '--no-messages', '--max-count', '50', '--max-filesize', '1M', caseSensitive ? '--case-sensitive' : '--ignore-case', '-e', pattern];
+  if (include) args.push('--glob', include);
+  args.push('.');
+  const result = await runBoundedProcess('rg', args, { cwd, signal, timeoutMs: 30_000, maxOutputBytes: MAX_OUTPUT_CHARS * 4 });
+  checkSearchAbort(signal);
+  if (result.reason === 'aborted') throw searchAbortError(signal);
+  if (result.cleanupTimedOut) throw new Error('Search process shutdown was not acknowledged');
+  if (result.reason === 'spawn-error') {
+    if (result.error?.code === 'ENOENT') return null;
+    throw result.error || new Error('Failed to start ripgrep');
+  }
+  if (result.reason === 'timeout') throw new Error('Search timed out');
+  if (result.reason !== 'output-limit' && result.code !== 0 && result.code !== 1) return `Error: rg exited ${result.code} (check the regular expression syntax)`;
+  if (!result.stdout.trim()) return '(no matches)';
+  const text = result.stdout.trimEnd();
+  return text.slice(0, MAX_OUTPUT_CHARS) + (text.length > MAX_OUTPUT_CHARS || result.reason === 'output-limit' ? '\n…[truncated]' : '')
+    + `\n${text.split('\n').length} matching line(s)`;
 }
 
 /** 纯 Penzor 云模式:按元数据挑文件,逐个拉内容搜(上限收紧)。 */
-async function cloudSearch(ctx: ToolContext, regex: RegExp, include?: RegExp): Promise<string> {
-  const metas = await listWorkspaceMetas(ctx.userId, ctx.appId, scopeOf(ctx));
-  const candidates = metas
-    .filter((m) => (!include || include.test(m.path)) && m.size <= MAX_FILE_BYTES && (m.mimeType.startsWith('text/') || m.mimeType === 'application/json'))
-    .slice(0, CLOUD_SEARCH_MAX_FILES);
+async function cloudSearch(ctx: ToolContext, worker: FileSearchWorker): Promise<string> {
+  checkSearchAbort(ctx.signal);
+  const metas = await listWorkspaceMetas(ctx.userId, ctx.appId, scopeOf(ctx), ctx.signal);
+  checkSearchAbort(ctx.signal);
+  const eligible = metas.filter(m => m.size <= MAX_FILE_BYTES && (m.mimeType.startsWith('text/') || m.mimeType === 'application/json'));
+  const paths = await worker.run<string[]>({ type: 'select', paths: eligible.map(m => m.path), limit: CLOUD_SEARCH_MAX_FILES });
+  const candidates = eligible.filter(m => paths.includes(m.path));
   const hits: SearchHit[] = [];
   for (const m of candidates) {
+    checkSearchAbort(ctx.signal);
     if (hits.length >= MAX_MATCHES) break;
-    const raw = await readWorkspaceFileRaw(ctx.userId, ctx.appId, scopeOf(ctx), m.path).catch(() => null);
-    if (!raw || looksBinary(raw.content)) continue;
-    const lines = raw.content.toString('utf-8').split('\n');
-    for (let i = 0; i < lines.length && hits.length < MAX_MATCHES; i++) {
-      if (regex.test(lines[i])) hits.push({ file: m.path, line: i + 1, text: lines[i].trim() });
-    }
+    const raw = await readWorkspaceFileRaw(ctx.userId, ctx.appId, scopeOf(ctx), m.path, ctx.signal).catch(error => {
+      checkSearchAbort(ctx.signal);
+      if (error?.name === 'AbortError') throw error;
+      return null;
+    });
+    checkSearchAbort(ctx.signal);
+    if (!raw || raw.content.length > MAX_FILE_BYTES || looksBinary(raw.content)) continue;
+    hits.push(...await worker.run<SearchHit[]>({ type: 'content', file: m.path, text: raw.content.toString('utf8'), limit: MAX_MATCHES - hits.length }));
   }
   const capped = metas.length > candidates.length ? `(云端工作区按前 ${CLOUD_SEARCH_MAX_FILES} 个文本文件搜索)` : '';
   return formatHits(hits, false) + (capped ? `\n${capped}` : '');
@@ -198,8 +146,15 @@ async function cloudSearch(ctx: ToolContext, regex: RegExp, include?: RegExp): P
 
 /** 解析本次调用的搜索根:host → cwd;sandbox → 本地 hydrate 目录(无则 null=纯云)。 */
 async function resolveBaseDir(ctx: ToolContext): Promise<string | null> {
+  checkSearchAbort(ctx.signal);
   if (ctx.execMode === 'host') return ctx.cwd || process.cwd();
-  return getSessionDir(ctx).catch(() => null);
+  const dir = await getSessionDir(ctx).catch(error => {
+    checkSearchAbort(ctx.signal);
+    if (error?.name === 'AbortError') throw error;
+    return null;
+  });
+  checkSearchAbort(ctx.signal);
+  return dir;
 }
 
 export const fileSearchProvider: ToolProvider = {
@@ -226,24 +181,31 @@ export const fileSearchProvider: ToolProvider = {
           },
         },
       },
-      execute: async (args, ctx) => {
+      execute: withSearchLifetime(async (args, ctx) => {
+        checkSearchAbort(ctx.signal);
         const pattern = String(args.pattern ?? '');
         if (!pattern) return 'Error: pattern is required';
+        if (pattern.length > 4096 || String(args.include || '').length > 4096) return 'Error: pattern exceeds 4096 characters';
         let regex: RegExp;
         try {
           regex = new RegExp(pattern, args.case_sensitive ? '' : 'i');
         } catch (e: any) {
-          return `Error: 非法正则: ${e?.message || e}`;
+          return `Error: invalid regular expression: ${e?.message || e}`;
         }
         const include = args.include ? globToRegExp(String(args.include)) : undefined;
         const baseDir = await resolveBaseDir(ctx);
-        if (!baseDir) return cloudSearch(ctx, regex, include);
         if (ctx.execMode === 'host') {
-          const viaRg = await rgSearch(baseDir, pattern, args.include ? String(args.include) : undefined, ctx.signal);
+          const viaRg = await rgSearch(baseDir!, pattern, args.include ? String(args.include) : undefined, ctx.signal, !!args.case_sensitive);
           if (viaRg !== null) return viaRg;
         }
-        return nodeSearch(baseDir, regex, include);
-      },
+        checkSearchAbort(ctx.signal);
+        const worker = new FileSearchWorker({ pattern: regex.source, flags: regex.flags, include: include?.source }, ctx.signal);
+        try {
+          if (!baseDir) return await cloudSearch(ctx, worker);
+          const result = await worker.run<{ hits: SearchHit[]; capped: boolean }>({ type: 'scan', base: baseDir });
+          return formatHits(result.hits, result.capped);
+        } finally { await worker.dispose(); }
+      }),
     },
     {
       name: 'glob_files',
@@ -264,23 +226,30 @@ export const fileSearchProvider: ToolProvider = {
           },
         },
       },
-      execute: async (args, ctx) => {
+      execute: withSearchLifetime(async (args, ctx) => {
+        checkSearchAbort(ctx.signal);
         const pattern = String(args.pattern ?? '');
         if (!pattern) return 'Error: pattern is required';
+        if (pattern.length > 4096) return 'Error: pattern exceeds 4096 characters';
         const re = globToRegExp(pattern);
         const baseDir = await resolveBaseDir(ctx);
-        let rels: string[];
-        if (baseDir) {
-          rels = await walkFiles(baseDir);
-        } else {
-          rels = (await listWorkspaceMetas(ctx.userId, ctx.appId, scopeOf(ctx))).map((m) => m.path);
+        const worker = new FileSearchWorker({ include: re.source }, ctx.signal);
+        let matched: string[];
+        try {
+          if (baseDir) matched = await worker.run({ type: 'glob', base: baseDir });
+          else {
+            const metas = await listWorkspaceMetas(ctx.userId, ctx.appId, scopeOf(ctx), ctx.signal);
+            checkSearchAbort(ctx.signal);
+            matched = await worker.run({ type: 'select', paths: metas.map(m => m.path), limit: MAX_GLOB_RESULTS });
+          }
+        } finally {
+          await worker.dispose();
         }
-        const matched = rels.filter((r) => re.test(r)).slice(0, MAX_GLOB_RESULTS);
         if (!matched.length) return '(no files matched)';
         let out = matched.join('\n');
         if (matched.length >= MAX_GLOB_RESULTS) out += `\n…[capped at ${MAX_GLOB_RESULTS}]`;
         return out;
-      },
+      }),
     },
   ],
 };

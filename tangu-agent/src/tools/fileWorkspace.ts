@@ -12,6 +12,7 @@ import { deps } from '../seams/runtime.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
+import { cancellableRead, throwIfReadAborted } from '../utils/readCancellation.js';
 
 // ── 注入依赖的 lazy 别名:把 Penzor cloudStorageService 收敛到 brain.storage(保持调用点不变)──
 const cloudStorageService = {
@@ -98,10 +99,11 @@ async function resolveDir(
   appId: string,
   segments: string[],
   create: boolean,
+  signal?: AbortSignal,
 ): Promise<string> {
   let parent = 'ROOT';
   for (const seg of segments) {
-    const items: any[] = await cloudStorageService.listDirectory(parent, userId, appId);
+    const items: any[] = await cancellableRead(() => cloudStorageService.listDirectory(parent, userId, appId), signal);
     const dir = items.find((i) => i.name === seg && i.fileType === 'directory');
     if (dir) {
       parent = dir.id;
@@ -421,26 +423,36 @@ const materializedCache = new Set<string>();
 export interface WorkspaceMeta { path: string; size: number; mimeType: string; updatedAt: number; }
 
 /** 递归列出工作区 scope 下的所有文件（扁平相对路径 + 元信息）。 */
-export async function listWorkspaceMetas(userId: string, appId: string, scope: WsScope): Promise<WorkspaceMeta[]> {
+export async function listWorkspaceMetas(userId: string, appId: string, scope: WsScope, signal?: AbortSignal): Promise<WorkspaceMeta[]> {
+  throwIfReadAborted(signal);
   let rootId: string;
   try {
-    rootId = await resolveDir(userId, appId, wsSegments(scope, []), false);
-  } catch {
+    rootId = await resolveDir(userId, appId, wsSegments(scope, []), false, signal);
+  } catch (error) {
+    throwIfReadAborted(signal);
+    if (error instanceof Error && error.name === 'AbortError') throw error;
     return [];
   }
   const out: WorkspaceMeta[] = [];
   const queue: Array<{ id: string; rel: string }> = [{ id: rootId, rel: '' }];
   let count = 0;
-  while (queue.length) {
+  let visited = 0;
+  while (queue.length && visited++ < 2000 && count < 2000) {
+    throwIfReadAborted(signal);
     const node = queue.shift()!;
     let items: any[];
-    try { items = await cloudStorageService.listDirectory(node.id, userId, appId); } catch { continue; }
+    try { items = await cancellableRead(() => cloudStorageService.listDirectory(node.id, userId, appId), signal); }
+    catch (error) {
+      throwIfReadAborted(signal);
+      if (error instanceof Error && error.name === 'AbortError') throw error;
+      continue;
+    }
     for (const it of items) {
       const rel = node.rel ? `${node.rel}/${it.name}` : it.name;
       if (it.fileType === 'directory') {
-        queue.push({ id: it.id, rel });
+        if (queue.length < 2000) queue.push({ id: it.id, rel });
       } else if (it.fileType === 'file') {
-        if (count++ > 2000) continue;
+        if (count++ >= 2000) break;
         const updatedAt = it.updatedAt ? Number(it.updatedAt) : (it.updated_at ? Number(it.updated_at) : Date.now());
         // 按扩展名定 mime（存库 mime 在写入时多为 text/plain，不可靠）→ 前端图标/预览判断正确。
         out.push({ path: rel, size: Number(it.fileSize) || 0, mimeType: mimeForName(it.name), updatedAt });
@@ -451,16 +463,22 @@ export async function listWorkspaceMetas(userId: string, appId: string, scope: W
 }
 
 /** 读取会话云端工作区某文件的原始字节 + mime（供前端预览/下载）。 */
-export async function readWorkspaceFileRaw(userId: string, appId: string, scope: WsScope, p: string): Promise<{ content: Buffer; mimeType: string } | null> {
+export async function readWorkspaceFileRaw(userId: string, appId: string, scope: WsScope, p: string, signal?: AbortSignal): Promise<{ content: Buffer; mimeType: string } | null> {
+  throwIfReadAborted(signal);
   const all = wsSegments(scope, splitPath(p));
   const name = all.pop();
   if (!name) return null;
   let parent: string;
-  try { parent = await resolveDir(userId, appId, all, false); } catch { return null; }
-  const items: any[] = await cloudStorageService.listDirectory(parent, userId, appId);
+  try { parent = await resolveDir(userId, appId, all, false, signal); }
+  catch (error) {
+    throwIfReadAborted(signal);
+    if (error instanceof Error && error.name === 'AbortError') throw error;
+    return null;
+  }
+  const items: any[] = await cancellableRead(() => cloudStorageService.listDirectory(parent, userId, appId), signal);
   const file = items.find((i) => i.name === name && i.fileType === 'file');
   if (!file) return null;
-  const { content } = await cloudStorageService.getFileContent(file.id, userId);
+  const { content } = await cancellableRead<any>(() => cloudStorageService.getFileContent(file.id, userId), signal);
   // 按扩展名定 mime（存库 mime 写入时多为 text/plain，对二进制预览不可靠）。
   return { content, mimeType: mimeForName(name) };
 }

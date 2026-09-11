@@ -33,7 +33,7 @@ import {
 } from './syncPaths'
 import { createCloudClient, CloudHttpError, type CloudChange, type CloudClient, type CloudTreeEntry } from './cloudClient'
 import { startSse, type SseHandle } from './sseClient'
-import { createShadowSaver, loadShadow, type SyncShadow } from './shadow'
+import { createShadowSaver, loadShadow, type SyncShadow, type LocalMove } from './shadow'
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024 // 与服务端 MAX_TEXT_BYTES 一致;二进制同限(P1 服务端补齐)
 const RETRY_MS = 30_000
@@ -109,7 +109,7 @@ interface EngineDeps {
   onPresenceRoster?: (vaultId: string, data: unknown) => void
   /** 远端结构事件已应用到本地后的回调(move/rename-folder/move-folder/delete*)。
    *  按条目同步用它跟进注册表路径,否则远端改名后 scope 失配静默停同步。 */
-  onRemoteApplied?: (ev: CloudChange) => void
+  onRemoteApplied?: (ev: CloudChange) => void | Promise<void>
 }
 
 /** 绑定配置:一个引擎实例同步「一个本地目录 ↔ 一个云 vault 的一个范围」。 */
@@ -334,12 +334,14 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   }
 
   let tmpCounter = 0
-  const atomicWrite = async (abs: string, data: string | Buffer): Promise<void> => {
+  const atomicWrite = async (abs: string, data: string | Buffer, current: () => boolean = () => true): Promise<boolean> => {
     await fs.mkdir(path.dirname(abs), { recursive: true })
     // 后缀模式对齐 vaultManager.atomicWrite —— watcher 的 ignored 规则会滤掉这些临时文件。
     const tmp = `${abs}.tmp-${process.pid}-${Date.now()}-${tmpCounter++}`
     await fs.writeFile(tmp, data as any)
+    if (!current()) { await fs.rm(tmp, { force: true }); return false }
     await fs.rename(tmp, abs)
+    return true
   }
 
   const statOf = async (abs: string): Promise<{ size: number; mtimeMs: number } | null> => {
@@ -401,7 +403,8 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   // ── 拉(服务端 → 本地)─────────────────────────────────────────────────────
   /** 把服务端当前内容落到本地;带脏检测(本地未同步的改动先另存冲突副本)。 */
   const pullPath = async (serverPath: string, knownSeq: number | null): Promise<void> => {
-    if (!client || !shadow) return
+    if (!client || !shadow || pendingMovePath(serverPath)) return
+    const revision = structuralRevision
     const kind = kindForServerPath(serverPath)
     let content: string | Buffer
     let seq: number
@@ -440,6 +443,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     }
 
     const local = await localHashOf(serverPath)
+    if (revision !== structuralRevision || pendingMovePath(serverPath)) return
     if (local && local.hash === hash) {
       await setShadowEntry(serverPath, seq, hash) // 内容已一致,只记账
       return
@@ -448,12 +452,13 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     if (local && (!entry || local.hash !== entry.hash)) {
       // 本地有未同步改动。markdown 先试机会性三方合并(base 按 shadow 基线从服务端版本快照找);
       // 干净合并 → 本地落合并稿、shadow 记服务端态、排队推回(竞态由 PUT 409 兜);否则冲突副本。
-      if (entry && kind === 'page' && typeof content === 'string' && (await tryMergeText(serverPath, entry, local, content, seq, hash))) {
+      if (entry && kind === 'page' && typeof content === 'string' && (await tryMergeText(serverPath, entry, local, content, seq, hash, () => revision === structuralRevision && !pendingMovePath(serverPath)))) {
         return
       }
+      if (revision !== structuralRevision || pendingMovePath(serverPath)) return
       await materializeConflictCopy(serverPath)
     }
-    await atomicWrite(localAbs(serverPath), content)
+    if (!(await atomicWrite(localAbs(serverPath), content, () => revision === structuralRevision && !pendingMovePath(serverPath)))) return
     await setShadowEntry(serverPath, seq, hash)
   }
 
@@ -466,6 +471,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     serverContent: string,
     serverSeq: number,
     serverHash: string,
+    current: () => boolean,
   ): Promise<boolean> => {
     try {
       if (!client || !shadow) return false
@@ -477,7 +483,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       if (sha256(base) !== entry.hash) return false // 快照对不上基线(5min 合并窗跳过等)→ 不赌
       const merged = mergeText3(local.buf.toString('utf8'), base, serverContent)
       if (merged === null) return false
-      await atomicWrite(localAbs(serverPath), merged)
+      if (!(await atomicWrite(localAbs(serverPath), merged, current))) return true
       await setShadowEntry(serverPath, serverSeq, serverHash) // shadow=服务端态 → 下面这单对账把合并稿推回
       enqueue({ key: serverPath, run: () => reconcileLocal(serverPath) })
       return true
@@ -532,6 +538,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   const applyRemoteDelete = async (serverPath: string): Promise<void> => {
     if (!shadow) return
     const local = await localHashOf(serverPath)
+    if (pendingMovePath(serverPath)) return
     const entry = shadow.files[serverPath] ?? null
     const d = decide(local?.hash ?? null, entry, null)
     if (d.kind === 'deleteLocal') {
@@ -644,7 +651,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     saver.save(shadow)
     if (ev.op === 'move' || ev.op === 'rename-folder' || ev.op === 'move-folder' || ev.op === 'delete' || ev.op === 'delete-folder') {
       try {
-        deps.onRemoteApplied?.(ev)
+        await deps.onRemoteApplied?.(ev)
       } catch {
         /* 回调故障不阻断同步 */
       }
@@ -745,7 +752,8 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   }
 
   const pushDelete = async (serverPath: string): Promise<void> => {
-    if (!client || !shadow) return
+    if (!client || !shadow || pendingMovePath(serverPath)) return
+    const revision = structuralRevision
     const entry = shadow.files[serverPath]
     if (!entry) return
     if (isTextKind(kindForServerPath(serverPath))) {
@@ -764,6 +772,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
         throw e
       }
     }
+    if (revision !== structuralRevision || pendingMovePath(serverPath)) return
     try {
       await client.deleteFile(shadow.vaultId, serverPath, entry.seq) // 条件删:基线后被写过 → 409
     } catch (e) {
@@ -790,9 +799,85 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     return false
   }
 
+  let structuralRevision = 0
+  const localMoveHolds = new Set<{ from: string; to: string }>()
+  const moveCallbacks = new Map<string, () => void>()
+  const moveKey = (move: LocalMove): string => JSON.stringify([move.from, move.to])
+  const under = (p: string, root: string): boolean => p === root || p.startsWith(`${root}/`)
+  const pendingMovePath = (p: string): boolean => [...(shadow?.moves ?? []), ...localMoveHolds].some((m) => under(p, m.from) || under(p, m.to))
+  const hasPendingMoves = (): boolean => !!(shadow?.moves?.length || localMoveHolds.size)
+
+  const runLocalMove = async (move: LocalMove): Promise<void> => {
+    if (!client || !shadow) return
+    const { from, to, kind } = move
+    if (fromServer(from) === null || fromServer(to) === null) throw new Error('Invalid queued cloud move')
+    // Capture identity evidence before migrating the shadow. Retrying a failed
+    // acknowledgement must not lose the source hash along with its old key.
+    move.hashes ??= Object.fromEntries(Object.entries(shadow.files).filter(([p]) => under(p, from)).map(([p, e]) => [p.slice(from.length), e.hash]))
+    saver.save(shadow)
+    // The journal must reach disk before the remote mutation starts.
+    await saver.flush(true)
+    let seq: number | undefined
+    let sourceMissing = false
+    try {
+      if (kind === 'folder') {
+        const fromDir = path.posix.dirname(from) === '.' ? '' : path.posix.dirname(from)
+        const toDir = path.posix.dirname(to) === '.' ? '' : path.posix.dirname(to)
+        if (fromDir === toDir) await client.renameFolder(shadow.vaultId, from, path.posix.basename(to))
+        else await client.moveFolder(shadow.vaultId, from, toDir)
+      } else {
+        const result = await client.move(shadow.vaultId, from, to)
+        seq = Number(result.seq)
+      }
+    } catch (error) {
+      // A timeout/503/permission failure is never permission to delete/recreate
+      // the cloud object. The durable operation remains for retry.
+      if (!(error instanceof CloudHttpError) || error.status !== 404) throw error
+      const tree = await client.tree(shadow.vaultId)
+      const atSource = tree.entries.some((e) => under(e.path, from)) || tree.folders.some((f) => under(f, from))
+      if (atSource) throw error
+      const destination = tree.entries.find((e) => e.path === to)
+      // Lost HTTP response: source absent + destination present means the move
+      // already committed. Adopt its sequence without issuing a new object.
+      seq = destination?.seq
+      sourceMissing = !destination && !tree.entries.some((e) => under(e.path, to)) && !tree.folders.some((f) => under(f, to))
+      if (!sourceMissing) {
+        const originals = Object.entries(move.hashes)
+        const sameContents = originals.length > 0 && originals.every(([suffix, originalHash]) =>
+          tree.entries.some((e) => e.path === to + suffix && e.hash === originalHash))
+        // A different client may have deleted the source and created an unrelated
+        // destination. Without identity evidence never adopt/overwrite that file.
+        if (!sameContents) throw new CloudHttpError(409, { code: 'MOVE_DESTINATION_CHANGED' }, 'local-move')
+      }
+    }
+    if (sourceMissing) {
+      for (const key of Object.keys(shadow.files)) if (under(key, from)) delete shadow.files[key]
+    } else {
+      migrateShadowPrefix(from, to)
+      if (seq !== undefined && shadow.files[to]) shadow.files[to].seq = seq
+    }
+    shadow.moves = (shadow.moves ?? []).filter((m) => moveKey(m) !== moveKey(move))
+    saver.save(shadow)
+    try { await saver.flush(true) } catch (error) {
+      shadow.moves.unshift(move)
+      saver.save(shadow)
+      throw error
+    }
+    const done = moveCallbacks.get(moveKey(move))
+    moveCallbacks.delete(moveKey(move))
+    done?.()
+    // Keep the old stat/hash until actual reconciliation: replacing only stat
+    // would disguise edits made before the move as already uploaded. A→B→C
+    // must also skip B while the later structural operation is pending.
+    if (!pendingMovePath(to)) {
+      if (kind === 'folder') await scanJob()
+      else await reconcileLocal(to)
+    }
+  }
+
   /** 本地触发的单路径对账(远端视角用 shadow 基线近似;真变更由 PUT 409 兜住)。 */
   const reconcileLocal = async (serverPath: string): Promise<void> => {
-    if (!shadow) return
+    if (!shadow || pendingMovePath(serverPath)) return
     // scope 缩小(按条目同步剔除子页面/关闭条目)后 shadow 里还留着旧路径,而 scanJob 会按 shadow
     // 键补队到这里 —— 不复查范围的话:本地改过=push 把已排除内容推上云,本地删了=pushDelete 抹掉
     // 云端副本。范围外一律只丢基线(与 fullReconcile 对同一情形的 dropShadow 同结论)。
@@ -802,6 +887,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     }
     if (!(await rootAlive())) return
     const local = await localHashOf(serverPath)
+    if (pendingMovePath(serverPath)) return
     const entry = shadow.files[serverPath] ?? null
     const d = decide(local?.hash ?? null, entry, entry ? { seq: entry.seq, hash: entry.hash } : null)
     switch (d.kind) {
@@ -883,10 +969,12 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
 
   /** 轻量扫描:stat 与 shadow 不符的路径入队对账(推方向兜底)。 */
   const scanJob = async (): Promise<void> => {
+    const revision = structuralRevision
+    if (hasPendingMoves() || revision !== structuralRevision) return
     if (!shadow) return
     if (!(await rootAlive())) return
     const seen = await walkLocal()
-    if (!seen) return
+    if (!seen || hasPendingMoves() || revision !== structuralRevision) return
     // 待确认里已无破坏性动作可做的条目撤销:本地删除(remote)而文件已被放回来;远端删除(local)而本地
     // 文件自己也没了。名单清空 = 风暴过去,闩解除(远端恢复了文件的情况由 fullReconcile 重新推导)。
     let pendingChanged = false
@@ -918,9 +1006,12 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
 
   /** 全量三方对账(首次启用 / reset / 追赶缺口 / 手动 syncNow)。 */
   const fullReconcile = async (): Promise<void> => {
+    const revision = structuralRevision
+    if (hasPendingMoves() || revision !== structuralRevision) return // Replay structural intent before inferring add/delete.
     if (!client || !shadow || !boundRoot) return
     if (!(await rootAlive())) return
     const tree = await client.tree(shadow.vaultId)
+    if (hasPendingMoves() || revision !== structuralRevision) return
     const remote = new Map<string, CloudTreeEntry>()
     for (const e of tree.entries) {
       if (fromServer(e.path) === null || !scoped(e.path, e.kind)) continue // 绑定外/范围外不参与对账
@@ -928,7 +1019,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     }
 
     const localStats = await walkLocal()
-    if (!localStats) return
+    if (!localStats || hasPendingMoves() || revision !== structuralRevision) return
     const paths = new Set<string>([...remote.keys(), ...localStats.keys(), ...Object.keys(shadow.files)])
 
     // 先出全量计划(纯判定),过删除保护阈值,再执行——否则级联删除(空根/坏 tree/误删镜像)
@@ -936,6 +1027,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     const tracked = Object.keys(shadow.files).length
     const plan: Array<{ sp: string; d: ReturnType<typeof decide>; rSeq: number | null; localHash: string | null }> = []
     for (const sp of paths) {
+      if (hasPendingMoves() || revision !== structuralRevision) return
       const entry = shadow.files[sp] ?? null
       const r = remote.get(sp) ?? null
       const st = localStats.get(sp) ?? null
@@ -947,12 +1039,14 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       }
       plan.push({ sp, d: decide(localHash, entry, r ? { seq: r.seq, hash: r.hash } : null), rSeq: r?.seq ?? null, localHash })
     }
+    if (hasPendingMoves() || revision !== structuralRevision) return
     const delCount = plan.filter((p) => p.d.kind === 'deleteLocal' || p.d.kind === 'pushDelete').length
     const tripped = !allowMassDeleteOnce && (stormLatched || shouldTripMassDelete(delCount, tracked, MASS_DELETE_ABS))
     if (tripped && delCount) stormLatched = true
     pendingDeletions.clear()
 
     for (const { sp, d, rSeq, localHash } of plan) {
+      if (hasPendingMoves() || revision !== structuralRevision) return
       if (tripped && (d.kind === 'deleteLocal' || d.kind === 'pushDelete')) {
         pendingDeletions.set(sp, d.kind === 'deleteLocal' ? 'local' : 'remote')
         continue
@@ -966,6 +1060,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
           continue
         }
       }
+      if (hasPendingMoves() || revision !== structuralRevision) return
       switch (d.kind) {
         case 'adopt':
           await setShadowEntry(sp, rSeq!, localHash!)
@@ -1211,6 +1306,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
         }
       }
       startWatcher()
+      for (const move of shadow.moves ?? []) enqueue({ key: `move:${moveKey(move)}`, run: () => runLocalMove(move) })
       enqueue({ run: fullReconcile })
       enqueue({
         run: async () => {
@@ -1325,60 +1421,51 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       }
     },
 
+    holdLocalMove(fromRel: string, toRel: string): () => void {
+      const server = (rel: string): string => binding.serverDir ? `${binding.serverDir}/${rel.replace(/\\/g, '/').normalize('NFC')}` : rel.replace(/\\/g, '/').normalize('NFC')
+      const hold = { from: server(fromRel), to: server(toRel) }
+      ++structuralRevision
+      localMoveHolds.add(hold)
+      return () => { localMoveHolds.delete(hold) }
+    },
+
     /** 本地移动(moveEntry 钩子)。跨子树边界 = 一侧删一侧建;目录移动逐条目处理。 */
-    notifyLocalMove(fromVaultRel: string, toVaultRel: string): void {
-      if (!shadow || state === 'disabled' || state === 'auth-required') return
-      const from = toServer(fromVaultRel)
+    async notifyLocalMove(fromVaultRel: string, toVaultRel: string, onSettled?: () => void, kind?: 'file' | 'folder'): Promise<void> {
+      let from = toServer(fromVaultRel)
       const to = toServer(toVaultRel)
-      if (!from && !to) return
-      if (from && to && client) {
-        // 双端都在子树内:优先精确 move(保服务端文件 id/版本链);目录 move 走文件夹 API。
-        const vaultId = shadow.vaultId
-        enqueue({
-          run: async () => {
-            if (!client || !shadow) return
-            const st = await statOf(localAbs(to))
-            const isDir = st === null && (await fs.stat(localAbs(to)).then((s) => s.isDirectory()).catch(() => false))
-            try {
-              if (isDir) {
-                const fromDir = from.slice(0, from.lastIndexOf('/'))
-                const toDir = to.slice(0, to.lastIndexOf('/'))
-                const fromName = from.split('/').pop()!
-                const toName = to.split('/').pop()!
-                if (fromDir === toDir && fromName !== toName) await client.renameFolder(vaultId, from, toName)
-                else await client.moveFolder(vaultId, from, toDir)
-                migrateShadowPrefix(from, to)
-              } else if (shadow.files[from]) {
-                const r = await client.move(vaultId, from, to)
-                const entry = shadow.files[from]
-                delete shadow.files[from]
-                shadow.files[to] = { ...entry, seq: Number((r as any)?.seq ?? entry.seq) }
-                saver.save(shadow)
-                // move 后本地 stat 变了,刷新记账
-                await setShadowEntry(to, shadow.files[to].seq, shadow.files[to].hash)
-              } else {
-                enqueue({ key: to, run: () => reconcileLocal(to) })
-              }
-            } catch {
-              // 精确 move 失败(如服务端没有源):退化为两端各自对账。
-              enqueue({ key: from, run: () => reconcileLocal(from) })
-              enqueue({ key: to, run: () => reconcileLocal(to) })
-              const prefix = `${from}/`
-              for (const key of Object.keys(shadow?.files ?? {})) {
-                if (key.startsWith(prefix)) enqueue({ key, run: () => reconcileLocal(key) })
-              }
-              void scanLater()
-            }
-          },
-        })
+      // A page's .fd move can arrive after its .md enrollment has converged.
+      // A tracked source + covered destination still denotes an exact move.
+      const previous = shadow ?? await loadShadow(binding.shadowName)
+      const rawFrom = toServerPath(fromVaultRel, '')
+      const candidate = rawFrom && (binding.serverDir ? `${binding.serverDir}/${rawFrom}` : rawFrom)
+      if (!from && to && candidate && previous && Object.keys(previous.files).some((p) => p === candidate || p.startsWith(`${candidate}/`))) from = candidate
+      if (!from && !to) { onSettled?.(); return }
+      if (from && to) {
+        // Disabled / starting engines can still record a local rename against
+        // their last shadow. Re-enabling replays it before dropping old scopes.
+        const journal = shadow ?? previous
+        if (!journal) { onSettled?.(); return }
+        const movedKind = kind ?? (Object.keys(journal.files).some((p) => p.startsWith(`${from}/`)) ? 'folder' : 'file')
+        const move: LocalMove = { from, to, kind: movedKind }
+        journal.moves ??= []
+        if (!journal.moves.some((m) => moveKey(m) === moveKey(move))) { journal.moves.push(move); ++structuralRevision }
+        if (onSettled) moveCallbacks.set(moveKey(move), onSettled)
+        saver.save(journal)
+        try { await saver.flush(true) } catch (error) {
+          journal.moves = journal.moves.filter((m) => moveKey(m) !== moveKey(move))
+          moveCallbacks.delete(moveKey(move))
+          saver.save(journal)
+          throw error
+        }
+        if (shadow === journal && accepting && state !== 'disabled' && state !== 'auth-required') {
+          enqueue({ key: `move:${moveKey(move)}`, run: () => runLocalMove(move) })
+        }
         return
       }
-      // 单侧在子树内:入界 = 新增,出界 = 删除。目录用前缀对账 + 扫描兜底。
+      // One side belongs to a different binding: ordinary creation/deletion.
       if (from) this.notifyLocal(fromVaultRel, 'remove')
-      if (to) {
-        enqueue({ key: to, run: () => reconcileLocal(to) })
-        void scanLater()
-      }
+      if (to) { enqueue({ key: to, run: () => reconcileLocal(to) }); scanLater() }
+      onSettled?.()
     },
 
     async setEnabled(on: boolean): Promise<SyncStatus> {
@@ -1401,6 +1488,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       if (state === 'disabled' || state === 'auth-required' || !client) {
         await restart()
       } else {
+        for (const move of shadow?.moves ?? []) enqueue({ key: `move:${moveKey(move)}`, run: () => runLocalMove(move) })
         enqueue({ run: fullReconcile })
       }
       return getStatus()

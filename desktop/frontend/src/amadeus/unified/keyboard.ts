@@ -27,7 +27,7 @@ import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { classifyEmbed } from './embedLayer'
-import { foldedSectionAfter, isHiddenAt } from './headingFold'
+import { foldedSectionAfter, headingFoldKey, isHiddenAt } from './headingFold'
 import { isListFolded, listHiddenRanges } from './listFold'
 import { applyTrigger, canAutoTriggerFromBlock, matchTrigger, textBeforeCursor, unwrapAtStart } from '../blocks/markdown/blockTriggers'
 import { paragraphIndentAt } from '../blocks/markdown/paragraphIndent'
@@ -82,22 +82,38 @@ function chain(...cmds: Command[]): Command {
 
 // ── Enter ────────────────────────────────────────────────────────────────────
 
-/** 折叠态标题上回车:新块落到**隐藏区之后**,并继承原标题的级别(AFFiNE 同款)。
- *  不接这条的话新段落正好插在隐藏区起点,一按回车就掉进 display:none —— 光标守卫只会把它弹走,
- *  用户看到的是「回车了,但什么都没发生」。 */
+/** 折叠态标题上回车:先展开小节,再按普通标题语义把右半拆成正文。
+ *  正文若在标题仍折叠时插到它下面,会立刻成为隐藏区的新成员,光标守卫再把光标弹到下一标题；
+ *  所以展开与拆分必须在同一个事务里完成。 */
 const enterFoldedHeading: Command = (state, dispatch) => {
   const { $from, empty } = state.selection
-  if (!empty) return false
-  const d = topDepth($from)
-  if (d !== 1 || $from.parent.type.name !== 'heading') return false
-  const after = foldedSectionAfter(state, $from.before(1))
-  if (after == null) return false
-  const heading = state.schema.nodes.heading
-  if (!heading) return false
-  const node = heading.createAndFill({ level: $from.parent.attrs.level ?? 1 })
-  if (!node) return false
-  const tr = state.tr.insert(after, node)
-  tr.setSelection(TextSelection.near(tr.doc.resolve(after + 1)))
+  if (!empty || $from.parentOffset === 0) return false
+  if ($from.parent.type.name !== 'heading') return false
+  const headingPos = $from.before($from.depth)
+  if (foldedSectionAfter(state, headingPos) == null) return false
+  const paragraph = state.schema.nodes.paragraph
+  if (!paragraph) return false
+  const tr = state.tr.split($from.pos, 1, [{ type: paragraph }])
+  tr.setMeta(headingFoldKey, { toggle: headingPos })
+  dispatch?.(tr.scrollIntoView())
+  return true
+}
+
+/** 普通标题回车不续标题:左半仍是标题,右半从正文开始。列表另由 splitListItem 续同类项。
+ *  行首是一个边界特例:在标题上方插入空正文,保留整条原标题。 */
+const enterHeadingToParagraph: Command = (state, dispatch) => {
+  const { $from, empty } = state.selection
+  if (!empty || $from.parent.type.name !== 'heading') return false
+  const paragraph = state.schema.nodes.paragraph
+  if (!paragraph) return false
+  if ($from.parentOffset === 0) {
+    const at = $from.before($from.depth)
+    const tr = state.tr.insert(at, paragraph.create())
+    tr.setSelection(TextSelection.near(tr.doc.resolve(at + 1)))
+    dispatch?.(tr.scrollIntoView())
+    return true
+  }
+  const tr = state.tr.split($from.pos, 1, [{ type: paragraph }])
   dispatch?.(tr.scrollIntoView())
   return true
 }
@@ -219,6 +235,7 @@ const enterKeepIndent: Command = (state, dispatch) => {
 
 const enterCmd: Command = chain(
   enterFoldedHeading,
+  enterHeadingToParagraph,
   enterOnBlockSelection,
   enterRunsTrigger, // `# `+回车仍要能变标题,故缩进继承排在它之后
   enterEmptyListItem,

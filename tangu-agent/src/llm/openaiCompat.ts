@@ -210,9 +210,8 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
 
   guard.arm();
   while (true) {
-    const { done, value } = await reader.read();
+    const { done, value } = await guard.read(reader);
     if (done) break;
-    guard.arm();
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
     buffer = lines.pop() || '';
@@ -231,11 +230,13 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
       const delta = choice?.delta;
       if (delta) {
         if (typeof delta.content === 'string' && delta.content) {
+          guard.progress();
           content += delta.content;
           onToken?.(delta.content);
         }
         const r = delta.reasoning_content ?? delta.reasoning;
         if (typeof r === 'string' && r) {
+          guard.progress();
           reasoning += r;
           onReasoning?.(r);
         }
@@ -243,9 +244,12 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
           for (const tc of delta.tool_calls) {
             const idx = typeof tc.index === 'number' ? tc.index : 0;
             const cur = toolAcc.get(idx) || { id: '', name: '', arguments: '' };
+            const startsTool = (typeof tc.id === 'string' && tc.id && !cur.id)
+              || (typeof tc.function?.name === 'string' && tc.function.name && !cur.name);
             if (tc.id) cur.id = tc.id;
             if (tc.function?.name) cur.name = tc.function.name;
             const argsDelta = typeof tc.function?.arguments === 'string' ? tc.function.arguments : '';
+            if (startsTool || argsDelta) guard.progress();
             if (argsDelta) cur.arguments += argsDelta;
             toolAcc.set(idx, cur);
             if (onToolCallDelta)
