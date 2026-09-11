@@ -48,7 +48,9 @@ export interface MuseConfig {
   maxRestartsPerWindow: number;
   /** token 预算：滚动窗口（小时；默认 5）。与 restartWindowHours 相互独立。 */
   tokenBudgetWindowHours: number;
-  /** token 预算：每窗口内本 Muse 会话最多累计消耗 token（默认 100000；0=关闭）。 */
+  /** token 预算：每窗口内本 Muse 会话最多累计的**计费** token = Σ(未缓存 prompt + completion)，缓存命中不计（默认 100000；0=关闭）。
+   *  09-11 两次实测每周期 4.6–6.1 万 → 5h 内放行 2–3 个周期：典型周期下默认 2h 心跳不受限，重周期会被削到约 2.5h 一次。
+   *  ⚠️ 保存设置写回整份 normalize 后的配置 → 启用过 Muse 的用户这里已固化为 100000，改默认值只影响新启用（口径见 muse.ts tokensInWindow）。 */
   maxTokensPerWindow: number;
   /** z：每个运行周期最多迭代轮数（默认 10；找 1-3 条 TODO 无需更多迭代）。 */
   maxIterationsPerCycle: number;

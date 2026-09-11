@@ -259,16 +259,30 @@ async function isRunning(sessionId: string): Promise<boolean> {
   return !!rows.length;
 }
 
-/** 本 Muse 会话在最近 windowHours 小时内累计消耗的 token（滚动窗口，直接从 agent_runs 求和 →
- *  跨进程重启不丢；单 run 失控另由 TANGU_MAX_RUN_COST 兜底，此处只算「一段时间反复唤醒」的累计）。 */
+/** 本 Muse 会话最近 windowHours 小时内的**计费** token = Σ 逐次 LLM 调用的 (prompt − cached) + completion。
+ *  取自 agent_run_events 的 usage 事件(每次调用落库,删会话才清;跨进程重启不丢)。不用 agent_runs.tokens_total:
+ *  它把每轮重发、命中前缀缓存的 prompt 全额累加。09-11 live 台架两次实测:10 轮周期毛量 ~31 万(计费 ~4.6 万)、
+ *  9 轮周期 20.9 万(计费 6.1 万),默认 10 万/5h 于是每 5 小时只放行一个周期;且它只在 done/超额时写,失败·中止的 run 记 0。
+ *  窗口按事件时间(花钱的时刻)。单 run 失控另由 TANGU_MAX_RUN_COST 兜底,此处只算「一段时间反复唤醒」的累计。
+ *  ponytail: 缓存读并非免费(约标价 1/10);要计它就在 billableTokens 里给 cached 加权。 */
 export async function tokensInWindow(sessionId: string, windowHours: number): Promise<number> {
-  // NOT(older than) = created_at 落在窗口内；created_at 有默认值不为空，故取反等价于 >=。方言经 getOlderThanSql。
-  const within = `NOT (${getOlderThanSql('created_at', Math.round(windowHours * 60))})`;
+  // NOT(older than) = 落在窗口内;created_at 有默认值不为空。方言经 getOlderThanSql(限定列名原样内插)。
+  const within = `NOT (${getOlderThanSql('e.created_at', Math.round(windowHours * 60))})`;
   const rows = await query<any[]>(
-    `SELECT COALESCE(SUM(tokens_total), 0) AS t FROM agent_runs WHERE session_id = ? AND ${within}`,
+    `SELECT e.payload FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id
+     WHERE r.session_id = ? AND e.type = 'usage' AND ${within}`,
     [sessionId],
   );
-  return Number(rows[0]?.t || 0);
+  return rows.reduce((sum, row) => sum + billableTokens(row.payload), 0);
+}
+
+/** 单条 usage 事件的计费 token:缓存命中的 prompt 不计(Anthropic 的 prompt 已含 cache_write,照计)。
+ *  payload 在 PG 回对象、SQLite 回 JSON 串;坏行按 0。 */
+function billableTokens(payload: any): number {
+  let u = payload;
+  try { if (typeof u === 'string') u = JSON.parse(u); } catch { return 0; }
+  const n = (v: any): number => Math.max(0, Number(v) || 0);
+  return Math.max(0, n(u?.prompt) - n(u?.cached)) + n(u?.completion);
 }
 
 /** 是否有任何**用户**会话的 run 正在排队/运行——后台 Muse 据此让位，避免与用户抢同一模型账号/速率。 */
@@ -580,19 +594,20 @@ async function tick(): Promise<void> {
     if (sid && (await isRunning(sid))) { lastRunning = true; return; }
     lastRunning = false;
 
-    // token 预算：本 Muse 会话最近 tokenBudgetWindowHours 小时累计 token 超上限 → 本轮不起新周期。
+    // token 预算：本 Muse 会话最近 tokenBudgetWindowHours 小时累计**计费** token(缓存命中不计)超上限 → 本轮不起新周期。
     // 挡的是「后台反复唤醒把一段时间的额度烧穿」；单趟失控由 TANGU_MAX_RUN_COST 兜底，两层不重叠。
+    let spent = 0;
     if (cfg.maxTokensPerWindow > 0 && sid) {
-      const spent = await tokensInWindow(sid, cfg.tokenBudgetWindowHours);
+      spent = await tokensInWindow(sid, cfg.tokenBudgetWindowHours);
       if (spent >= cfg.maxTokensPerWindow) {
-        log(`token 预算用尽(近 ${cfg.tokenBudgetWindowHours}h 已用 ${spent}/${cfg.maxTokensPerWindow}),本轮跳过`);
+        log(`token 预算用尽(近 ${cfg.tokenBudgetWindowHours}h 已计 ${spent}/${cfg.maxTokensPerWindow},未缓存 prompt+completion),本轮跳过`);
         return;
       }
     }
 
     if (restartsThisWindow >= cfg.maxRestartsPerWindow) { log(`本窗口预算用尽(${restartsThisWindow}/${cfg.maxRestartsPerWindow})`); return; }
     restartsThisWindow += 1;
-    log(`启动第 ${restartsThisWindow}/${cfg.maxRestartsPerWindow} 个思考周期(模型 ${cfg.modelId},档位 ${cfg.mode},触发 ${trigger})`);
+    log(`启动第 ${restartsThisWindow}/${cfg.maxRestartsPerWindow} 个思考周期(模型 ${cfg.modelId},档位 ${cfg.mode},触发 ${trigger},token 已计 ${spent}/${cfg.maxTokensPerWindow})`);
     await startCycle(cfg, buildTriggerKickoff(museFired) + scheduleKickoff(dueMuse), trigger, quietSince);
     // lastFiredAt / lastRun 只在周期真正启动后写回:被上面任何闸挡住 → 下轮重试,不白烧 cooldown。
     if (museFired.length) await markTriggersFired(museFired.map((t) => t.id), undefined, trigCursors);
