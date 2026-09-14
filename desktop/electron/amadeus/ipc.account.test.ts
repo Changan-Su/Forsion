@@ -152,3 +152,40 @@ it('third-party sync refuses unowned and other-account cloud mirrors as its loca
     expect(await resolveLocalSyncRoot()).toEqual({ error: 'cloud-vault-forbidden' })
   }
 })
+
+it('resumes a pre-account-scoping entry binding of the same account from its old shadow baseline', async () => {
+  const { createHash } = await import('node:crypto')
+  const { cloudAccountNamespace } = await import('./settings')
+  const local = path.join(env.root, 'my-local-notes')
+  await fs.mkdir(local)
+  const original = 'note synced before the upgrade'
+  await fs.writeFile(path.join(local, 'Selected.md'), `${original}\n\nedited offline after the upgrade`)
+  env.remote.set('A', new Map([['A folder/Selected.md', original]]))
+  const ns = cloudAccountNamespace()
+  const h8 = createHash('sha256').update(local).digest('hex').slice(0, 8)
+  await fs.writeFile(path.join(env.root, `amadeus-sync-entry-${h8}.json`), JSON.stringify({
+    vaultRoot: local, folder: '', vaultId: 'vault-A', cursor: 42, lastSyncAt: 1700000000000,
+    files: { 'A folder/Selected.md': { seq: 1, hash: createHash('sha256').update(original).digest('hex'), size: original.length, mtimeMs: 1000 } },
+  }))
+  await fs.writeFile(path.join(env.root, 'amadeus-config.json'), JSON.stringify({
+    localVault: local, lastVault: local,
+    legacyCloudState: { cloudSync: { vaultId: 'vault-A', deviceId: 'desk-old' }, entrySync: [{ vaultRoot: local, cloudName: 'A folder', entries: [{ path: 'Selected.md', kind: 'page' }] }] },
+    cloudAccounts: { [ns]: { cloudSync: { vaultId: 'vault-A', deviceId: 'desk-new' } } },
+  }))
+  const { registerIpc } = await import('./ipc')
+  const { IPC } = await import('@amadeus-shared/ipc')
+  const { SYNC_IPC } = await import('./sync/ipcKeys')
+  const runtime = registerIpc(() => null)
+  stop = runtime.stopSync
+  await invoke(IPC.restoreVault)
+  await vi.waitFor(() => expect(env.writes).toContainEqual({ account: 'A', vault: 'vault-A', path: 'A folder/Selected.md' }))
+  expect((await invoke(SYNC_IPC.entryGet)).vaults[0].cloudName).toBe('A folder')
+  // Baseline resumed: the offline edit is pushed in place instead of being parked as a conflict copy.
+  expect(env.writes.some((w) => w.path.includes('(conflict'))).toBe(false)
+  expect(await fs.readdir(local)).toEqual(['Selected.md'])
+  expect(env.remote.get('A')!.get('A folder/Selected.md')).toContain('edited offline after the upgrade')
+  const stored = JSON.parse(await fs.readFile(path.join(env.root, 'amadeus-config.json'), 'utf8'))
+  expect(stored.legacyCloudState).toBeUndefined()
+  expect(stored.cloudAccounts[ns].entrySync[0].cloudName).toBe('A folder')
+  await expect(fs.access(path.join(env.root, `amadeus-sync-entry-${h8}.json`))).rejects.toThrow()
+})

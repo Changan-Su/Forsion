@@ -7,6 +7,7 @@ import { app } from 'electron'
 import { isDevMode } from '../forsionHome'
 import { loadTanguCreds } from '../forsionAuth'
 import { forsionAccountId } from '../../shared/forsionAccount'
+import { renameShadowFile } from './sync/shadow'
 
 export interface AmadeusCloudSyncConfig {
   enabled?: boolean
@@ -108,6 +109,43 @@ export function writeConfig(patch: Partial<AmadeusConfig>, accountId = currentCl
   const snapshot = structuredClone(patch)
   const work = writes.then(() => persistConfig(snapshot, accountId))
   writes = work.catch(() => {})
+  return work
+}
+
+/** Adopt pre-account-scoping bindings once the signed-in account has resolved its own
+ * cloud vault and it is the vault those bindings were made against. Vault ownership is
+ * per user, so equality proves the owner. Legacy entry shadows move into the account
+ * namespace so sync resumes from its baseline instead of re-pairing every file.
+ * ponytail: called from refreshEntryBindings; an account whose vault id is still unknown
+ * at that moment adopts on the next refresh or launch, no change listener. */
+export function adoptLegacyCloudState(accountId = currentCloudAccountId()): Promise<boolean> {
+  const work = writes.then(async () => {
+    if (!accountId) return false
+    const stored = await storedConfig()
+    const key = cloudAccountNamespace(accountId)
+    const legacy = stored.legacyCloudState
+    const own = stored.cloudAccounts?.[key]
+    const vaultId = legacy?.cloudSync?.vaultId
+    if (!legacy || !own || !vaultId || own.cloudSync?.vaultId !== vaultId) return false
+    const known = new Set((own.entrySync ?? []).map((v) => v.vaultRoot))
+    const adopted = (legacy.entrySync ?? []).filter((v) => !known.has(v.vaultRoot))
+    const hash8 = (s: string): string => createHash('sha256').update(s).digest('hex').slice(0, 8)
+    try {
+      for (const v of adopted) {
+        await renameShadowFile(`amadeus-sync-entry-${hash8(v.vaultRoot)}`, `amadeus-sync-${key}-entry-${hash8(v.vaultRoot)}`)
+      }
+    } catch {
+      return false // shadow move failed (EPERM, EBUSY…): keep the legacy state, never adopt onto an empty baseline
+    }
+    own.entrySync = [...(own.entrySync ?? []), ...adopted]
+    delete stored.legacyCloudState
+    // Adopted in memory either way; a failed write leaves legacyCloudState on disk,
+    // so the next launch retries (shadow rename is skipped once the target exists).
+    // A rejection here would stop refreshEntryBindings before unrelated engines start.
+    try { await persistConfig({}, accountId) } catch { /* retry next launch */ }
+    return true
+  })
+  writes = work.then(() => {}, () => {})
   return work
 }
 

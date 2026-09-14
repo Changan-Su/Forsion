@@ -4,7 +4,7 @@
  * shadow 即墓碑知识源:重置/长离线后的全量对账全靠它区分「云端删了」和「本地新增」。
  */
 
-import { promises as fs } from 'node:fs'
+import { constants, promises as fs } from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
 import { isDevMode } from '../../forsionHome'
@@ -106,4 +106,20 @@ export async function deleteShadowFile(name: string): Promise<void> {
   } catch {
     /* absent */
   }
+}
+
+/** Move a shadow under a new name (legacy → account-scoped). The copy is exclusive, so an
+ *  existing target (the newer baseline) always wins. Only "target exists" and "no source"
+ *  resolve to false; any other failure (EPERM, EBUSY…) throws so the caller retries later
+ *  instead of adopting a binding onto an empty baseline. */
+export async function renameShadowFile(from: string, to: string): Promise<boolean> {
+  try {
+    await fs.copyFile(file(from), file(to), constants.COPYFILE_EXCL)
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException)?.code
+    if (code === 'EEXIST' || code === 'ENOENT') return false
+    throw e
+  }
+  await fs.unlink(file(from)).catch(() => {}) // the copy is the move; a lingering source is harmless (target wins next time)
+  return true
 }

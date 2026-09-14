@@ -16,7 +16,7 @@ import { VaultIndex } from './fs/vaultIndex'
 import { withDbLock } from './fs/dbLock'
 import { writeVaultText } from './fs/pageWrite'
 import { findMarkLine } from '@amadeus-shared/mdMarks'
-import { cloudAccountNamespace, currentCloudAccountId, readConfig, updateConfig, writeConfig } from './settings'
+import { adoptLegacyCloudState, cloudAccountNamespace, currentCloudAccountId, readConfig, updateConfig, writeConfig } from './settings'
 import { defaultWorkspaceDir, forsionHomeDir, tanguDataDir } from '../forsionHome'
 import { builtinPluginIds } from '../builtinPlugins'
 import { logActivity, logNoteEdit } from '../activityLog'
@@ -392,12 +392,17 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     }
   }
   const refreshEntryBindings = async (): Promise<void> => {
-    if (!syncReady || !currentCloudAccountId()) return
+    // One account for the whole refresh: the awaits below must not let a credential
+    // change (before the account watcher restarts sync) mix A's engines with B's registry.
+    const accountId = currentCloudAccountId()
+    if (!syncReady || !accountId) return
     const epoch = syncEpoch
     const session = collabMain
-    const accountConfig = await readConfig()
+    const ns = cloudAccountNamespace(accountId)
+    await adoptLegacyCloudState(accountId) // pre-2.9.9 bindings of this same account resume here (moves their shadow too)
+    const accountConfig = await readConfig(accountId)
     const list = accountConfig.entrySync ?? []
-    if (epoch !== syncEpoch || !syncReady) return
+    if (epoch !== syncEpoch || !syncReady || accountId !== currentCloudAccountId()) return
     const want = new Map(list.map((v) => [v.vaultRoot, v]))
     for (const [root, rec] of entryEngines) {
       const v = want.get(root)
@@ -406,7 +411,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       if (epoch !== syncEpoch) return
       entryEngines.delete(root)
       // 云名变更:serverDir 变了,旧 shadow 的服务端路径键全部失效,必须清掉重来。
-      if (v) await deleteShadowFile(`amadeus-sync-${cloudAccountNamespace()}-entry-${hash8(root)}`)
+      if (v) await deleteShadowFile(`amadeus-sync-${ns}-entry-${hash8(root)}`)
       if (epoch !== syncEpoch) return
     }
     for (const v of list) {
@@ -418,8 +423,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       const scope = { current: buildScope(v.entries, v.exclude ?? []) }
       const cloudName = v.cloudName
       const engine = createSyncEngine(entryEngineDeps(v.vaultRoot), {
+        accountId,
         localRoot: v.vaultRoot,
-        shadowName: `amadeus-sync-${cloudAccountNamespace()}-entry-${hash8(v.vaultRoot)}`,
+        shadowName: `amadeus-sync-${ns}-entry-${hash8(v.vaultRoot)}`,
         vaultId: 'first',
         serverDir: cloudName,
         clientIdSuffix: `entry-${hash8(v.vaultRoot)}`,
