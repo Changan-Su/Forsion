@@ -774,10 +774,20 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     }
     if (revision !== structuralRevision || pendingMovePath(serverPath)) return
     try {
-      await client.deleteFile(shadow.vaultId, serverPath, entry.seq) // 条件删:基线后被写过 → 409
+      // 条件删:基线后被写过 → 409。用户点过「确认删除」的那一轮带 confirmed,服务端删除闸据此放行。
+      await client.deleteFile(shadow.vaultId, serverPath, entry.seq, { confirmed: allowMassDeleteOnce })
     } catch (e) {
       if (e instanceof CloudHttpError && e.status === 409) {
         await pullPath(serverPath, Number(e.body?.seq ?? 0) || null) // 编辑胜删除:拉回
+        return
+      }
+      if (e instanceof CloudHttpError && e.status === 429 && e.body?.code === 'MASS_DELETE_BLOCKED') {
+        // 服务端删除闸拦下(本客户端单删累计过量):与本地风暴闸同治 —— 记待确认、落闩,
+        // 之后的删除不再碰服务端;用户在设置页「确认删除」后下一轮全量对账带 confirmed 重推。
+        pendingDeletions.set(serverPath, 'remote')
+        stormLatched = true
+        persistPending()
+        emitStatus()
         return
       }
       throw e

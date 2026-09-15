@@ -58,9 +58,9 @@ export function createCloudClient(cfg: CloudClientConfig) {
   const request = async (
     method: string,
     url: string,
-    init?: { json?: unknown; form?: FormData; timeoutMs?: number },
+    init?: { json?: unknown; form?: FormData; timeoutMs?: number; headers?: Record<string, string> },
   ): Promise<any> => {
-    const headers: Record<string, string> = { Authorization: `Bearer ${cfg.token}` }
+    const headers: Record<string, string> = { Authorization: `Bearer ${cfg.token}`, ...init?.headers }
     if (method !== 'GET') headers['X-Amadeus-Client'] = cfg.clientId
     let body: any
     if (init?.json !== undefined) {
@@ -132,11 +132,12 @@ export function createCloudClient(cfg: CloudClientConfig) {
       })
     },
 
-    /** 条件删(baseSeq 不符 → 409 {code, seq};旧服务端忽略参数 = 原无条件语义)。 */
-    async deleteFile(vaultId: string, path: string, baseSeq?: number): Promise<void> {
+    /** 条件删(baseSeq 不符 → 409 {code, seq};旧服务端忽略参数 = 原无条件语义)。
+     *  confirmed = 用户点过「确认删除」的那一轮:服务端删除闸(429 MASS_DELETE_BLOCKED)据此放行。 */
+    async deleteFile(vaultId: string, path: string, baseSeq?: number, opts?: { confirmed?: boolean }): Promise<void> {
       const params: Record<string, string> = { path }
       if (baseSeq !== undefined) params.baseSeq = String(baseSeq)
-      await request('DELETE', `${api}/vaults/${vaultId}/file?${q(params)}`)
+      await request('DELETE', `${api}/vaults/${vaultId}/file?${q(params)}`, opts?.confirmed ? { headers: { 'X-Amadeus-Delete-Confirmed': '1' } } : undefined)
     },
 
     move(vaultId: string, from: string, to: string): Promise<{ seq: number }> {

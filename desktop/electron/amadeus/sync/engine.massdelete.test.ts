@@ -22,6 +22,8 @@ const env = vi.hoisted(() => ({
   statFail: null as null | string,
   renameFail: false,
   watch: {} as Record<string, (p: string) => void>,
+  deleteCalls: [] as Array<{ p: string; confirmed: boolean }>,
+  serverBlockAfter: null as null | number, // 假服务端删除闸:未确认单删超过 N 条 → 429 MASS_DELETE_BLOCKED
 }))
 vi.mock('electron', () => ({ app: { getPath: () => env.root, once: vi.fn(), removeListener: vi.fn() } }))
 vi.mock('../../forsionHome', () => ({ isDevMode: () => false, forsionHomeDir: () => env.root, defaultWorkspaceDir: () => env.root }))
@@ -46,7 +48,14 @@ vi.mock('./cloudClient', () => {
         if (!e) throw new CloudHttpError(404, null)
         return { content: `content of ${p}`, seq: e.seq, hash: e.hash }
       },
-      deleteFile: async (_v: string, p: string) => { env.deleted.push(p); env.remote = env.remote.filter((x) => x.path !== p) },
+      deleteFile: async (_v: string, p: string, _seq?: number, opts?: { confirmed?: boolean }) => {
+        const confirmed = !!opts?.confirmed
+        env.deleteCalls.push({ p, confirmed })
+        if (!confirmed && env.serverBlockAfter !== null && env.deleteCalls.filter((c) => !c.confirmed).length > env.serverBlockAfter) {
+          throw new CloudHttpError(429, { code: 'MASS_DELETE_BLOCKED' })
+        }
+        env.deleted.push(p); env.remote = env.remote.filter((x) => x.path !== p)
+      },
       putFile: async () => ({ seq: 1, hash: 'h' }),
       changes: async () => ({ changes: [], seq: 10 }),
     }),
@@ -89,11 +98,13 @@ beforeEach(async () => {
   env.statFail = null
   env.renameFail = false
   env.watch = {}
+  env.deleteCalls = []
+  env.serverBlockAfter = null
 })
 afterEach(async () => { await stop?.(); await fs.rm(env.root, { recursive: true, force: true }) })
 
 /** 起一个 own 镜像引擎,让它把 remote 全拉下来(shadow 跟踪全部文件)。 */
-async function bootMirror(files: string[]): Promise<{ engine: { stop: () => Promise<void>; restart: () => Promise<unknown>; getStatus: () => { pendingDeletions: number; state: string } }; mirror: string }> {
+async function bootMirror(files: string[]): Promise<{ engine: { stop: () => Promise<void>; restart: () => Promise<unknown>; getStatus: () => { pendingDeletions: number; state: string }; confirmMassDeletions: () => unknown }; mirror: string }> {
   const mirror = path.join(env.root, 'mirror')
   env.remote = files.map((p, i) => ({ path: p, kind: 'page', seq: i + 1, hash: sha(`content of ${p}`), size: 10 }))
   const { createSyncEngine } = await import('./engine')
@@ -125,6 +136,23 @@ it('只删少数几个文件照常推删除(不误伤正常删除)', async () =>
   env.sse!.onOpen()
   await settle()
   expect(env.deleted.sort()).toEqual(['a.md', 'b.md'])
+  expect(engine.getStatus().pendingDeletions).toBe(0)
+})
+
+// 服务端删除闸(2026-09-15,server lib/deleteGuard.ts):本地阈值拦不住的小批量(或旧版本客户端)由服务端按
+// 30 条/10 分钟/客户端拒掉。负对照(本地实跑过):去掉 pushDelete 里的 429 分支 → 错误进 skipped、待确认为 0 → 红。
+it('服务端删除闸 429 MASS_DELETE_BLOCKED = 记待确认并落闩,不再碰服务端;「确认删除」后带 confirmed 重推', async () => {
+  const files = ['a.md', 'b.md', 'c.md', 'd.md', 'e.md', 'f.md', 'g.md', 'h.md', 'i.md', 'j.md']
+  const { engine, mirror } = await bootMirror(files)
+  env.serverBlockAfter = 1 // 服务端只放第 1 条未确认删除
+  for (const p of ['a.md', 'b.md', 'c.md']) await fs.rm(path.join(mirror, p)) // 3 < 10 的一半:本地计划级阈值不拦
+  env.sse!.onOpen(); await settle()
+  expect(env.deleted).toEqual(['a.md'])
+  expect(engine.getStatus().pendingDeletions).toBe(2)
+  expect(env.deleteCalls.filter((c) => !c.confirmed).length).toBe(2) // 第 2 条被拒即落闩,第 3 条没再碰服务端
+  engine.confirmMassDeletions(); await settle()
+  expect(env.deleted.sort()).toEqual(['a.md', 'b.md', 'c.md'])
+  expect(env.deleteCalls.filter((c) => c.confirmed).map((c) => c.p).sort()).toEqual(['b.md', 'c.md'])
   expect(engine.getStatus().pendingDeletions).toBe(0)
 })
 
