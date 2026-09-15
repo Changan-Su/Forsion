@@ -1,4 +1,4 @@
-import { hasNativeFeature, amadeusAvailable } from './features/runtime'
+import { hasNativeFeature, amadeusAvailable, inboxAvailable } from './features/runtime'
 /** 具体的 Space 定义 + 注册入口。Space = 取代「App」的功能组合(见 engine/types.SpaceDefinition)。
  *  每个 Space 贡献一个 ribbon 顶部图标(可拖动改序,默认排在折叠钮之下、商店之上),点击切换。
  *  Tangu Space = 现有助手界面(会话/对话/文件/目录/记忆/子聊天)。Amadeus Space 见 Milestone 2。 */
@@ -220,8 +220,8 @@ const SPACES: SpaceDefinition[] = [
   // 与旧 Forsion Desktop 的「先看到桌面首页」一致;插件页关掉后下次启动即整条不出现。
   ...(homepageAvailable() && builtinEnabled('home') ? [homepageSpace] : []),
   ...(hasNativeFeature('tangu') ? [tanguSpace] : []),
-  // Inbox 与视图注册同门控(桌面壳 backendStatus 或 移动端本地 inbox mobile;Tangu Web 两者皆无 → 不注册)。
-  ...(PRODUCT.nativeFeatures === undefined && PRODUCT.spaces.includes('inbox') && (window.tangu?.backendStatus || window.tangu?.mobile) ? [inboxSpace] : []),
+  // Inbox 与视图注册同门控(inboxAvailable:旧档案 spaces 点名 + backendStatus/mobile;Unit 宿主 = tangu 包 + 本地引擎)。
+  ...(inboxAvailable() ? [inboxSpace] : []),
   ...(hasNativeFeature('amadeus') && amadeusAvailable() && AMADEUS_ENABLED ? [amadeusSpace] : []),
   // Calendar 已是**内置插件**(builtins/calendar:Space + 三个视图随插件启停)。这里仍按槽位声明式带上,
   // 保住 ribbon 默认序与「上次退出停在日历」的启动恢复;插件页关掉后下次启动即整条不出现。

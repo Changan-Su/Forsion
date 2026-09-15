@@ -98,7 +98,6 @@ const SKIP = {
 const KNOWN_GATES = {
   'window.tangu?.account': '共享账号能力：Unit 网页投射安装账号提供方时也显示原生 AccountCard；desktop/mobile 常规产品继续由 PRODUCT.agentBackend 显示相同组件。',
   'window.amadeus': 'Amadeus Space 整体;desktop=IPC 桥 / web=云桥 / mobile=Capacitor 桥,三端都有',
-  'window.tangu?.backendStatus': '桌面壳语义(含 external 模式)',
   'window.tangu?.mobile': '移动端标志',
   'window.tangu?.cloudWeb': 'web 云壳标志(cloudWeb shim 注入)— 端判定单源 services/agentRunService.ts 的 currentPlatform();web 有、desktop/mobile 天然无。新会话现已全端默认 Work，此标志用于工作区落点等端差异，不是功能门控',
   'window.tangu?.spacesList': '用户自定义 Space 读盘 — 仅桌面',

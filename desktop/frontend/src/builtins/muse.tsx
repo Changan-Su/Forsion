@@ -86,8 +86,8 @@ export function agentSpaceFor(slug: 'muse'): SpaceDefinition {
 
 export const museSpace: SpaceDefinition = agentSpaceFor('muse')
 
-/** 产品档案点名 + 本地 tangu 后端(端点都是本地特性;Tangu Web 无 backendStatus → 不注册)。 */
-export const museAvailable = (): boolean => PRODUCT.spaces.includes('muse') && !!window.tangu?.backendStatus
+/** 旧档案点名 + 本地 tangu 后端;Unit 宿主 = tangu 包 + 本地引擎(判定单源 features/runtime,与 Inbox 同一条)。 */
+export { museAvailable } from '../features/runtime'
 
 export function installMuseViews(): void {
   registerView({

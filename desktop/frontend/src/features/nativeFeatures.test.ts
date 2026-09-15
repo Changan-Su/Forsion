@@ -36,7 +36,7 @@ import { registerAmadeusViews } from './amadeus'
 import { registerTanguViews } from './tangu'
 import { registerOperationsViews } from './operations'
 import { installCalendarViews } from '../builtins/calendar'
-import { amadeusAvailable, miniFeatureAvailable, sessionsAvailable } from './runtime'
+import { amadeusAvailable, inboxAvailable, miniFeatureAvailable, museAvailable, sessionsAvailable } from './runtime'
 const register = () => { registerAmadeusViews(); registerTanguViews(); registerOperationsViews(); installCalendarViews() }
 
 beforeEach(() => {
@@ -108,6 +108,33 @@ describe('native package contribution boundary', () => {
     expect(state.views.has('public-view')).toBe(true)
     expect(sessionsAvailable()).toBe(true)
     expect(miniFeatureAvailable('amadeus')).toBe(true)
+  })
+
+  it('grants Inbox and Muse with the tangu package on a Unit, and by profile spaces on legacy hosts', () => {
+    const engine = { tangu: { backendStatus: async () => ({}) } }
+    state.profile.nativeFeatures = ['tangu']
+    vi.stubGlobal('window', engine)
+    expect(inboxAvailable()).toBe(true)
+    expect(museAvailable()).toBe(true)
+    state.profile.nativeFeatures = ['amadeus']
+    expect(inboxAvailable()).toBe(false)
+    expect(museAvailable()).toBe(false)
+    state.profile.nativeFeatures = ['tangu']
+    vi.stubGlobal('window', { tangu: {} }) // Unit whose Tangu runs on the cloud fleet only: no local engine
+    expect(inboxAvailable()).toBe(false)
+    expect(museAvailable()).toBe(false)
+    const spaces = state.profile.spaces
+    state.profile.nativeFeatures = undefined // legacy: profile spaces decide, the local backend is still required
+    vi.stubGlobal('window', engine)
+    expect(inboxAvailable()).toBe(false)
+    expect(museAvailable()).toBe(false)
+    state.profile.spaces = [...spaces, 'inbox', 'muse']
+    expect(inboxAvailable()).toBe(true)
+    expect(museAvailable()).toBe(true)
+    vi.stubGlobal('window', { tangu: { mobile: true } }) // mobile shell keeps its local inbox; Muse needs the engine
+    expect(inboxAvailable()).toBe(true)
+    expect(museAvailable()).toBe(false)
+    state.profile.spaces = spaces
   })
 
   it('provides stable Space identities and never lets legacy flags bypass an explicit empty list', () => {
