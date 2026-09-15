@@ -121,6 +121,8 @@ export const hostProcessProvider: ToolProvider = {
       name: 'write_process_input',
       mode: 'host',
       isEnabledFor: (profile) => profile.capabilities.hostExec,
+      deferred: true, // E2:只在「run_background 起了交互式进程」之后才用得上 → 按需装载
+      deferHint: 'Drive an interactive background process: write a line to its stdin (or just poll) and read the new output.',
       definition: {
         type: 'function',
         function: {

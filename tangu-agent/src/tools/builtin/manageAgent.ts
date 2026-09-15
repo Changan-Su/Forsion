@@ -6,12 +6,16 @@
  * 写文件经 agentLoop 的审批闸门（与其它 host 写工具同档）。
  */
 import type { ToolProvider } from '../toolRegistry.js';
-import { listAgents, getAgent, saveAgent, deleteAgent, slugify, isValidSlug } from '../../agents/agentRegistry.js';
+import { listAgents, getAgent, saveAgent, deleteAgent, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN, DEFAULT_MAX_ITERATIONS } from '../../agents/agentRegistry.js';
 import { THINKING_LEVELS } from '../../llm/modelCapabilities.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
 
 /** 自我判定用展示身份优先:shareDefaultMemory 的 agent 其 currentAgentSlug()=xyra,拿它比对会漏拦自己。 */
 const selfSlug = (): string | undefined => currentDisplayAgentSlug() || currentAgentSlug();
+/** 「自己」= 当前执行身份 ∪ 委派方(ctx.subAgentDelegator):被委派的具名子代理在自己的 ALS 里跑,
+ *  父代理会变成「别人」—— 不连委派方一起保护,父代理借子代理之手就能删改父代理自己(Codex 09-15 复审 #1)。 */
+const isSelf = (slug: string, ctx: { subAgentDelegator?: string }): boolean =>
+  slug === selfSlug() || (!!ctx.subAgentDelegator && slug === ctx.subAgentDelegator);
 
 export const manageAgentProvider: ToolProvider = {
   id: 'builtin:manage_agent',
@@ -41,14 +45,14 @@ export const manageAgentProvider: ToolProvider = {
               model: { type: 'string', description: 'Model id that overrides the session model (optional)' },
               tools: { type: 'array', items: { type: 'string' }, description: 'Allowlist of enabled custom/MCP tool ids (optional)' },
               thinking_level: { type: 'string', enum: [...THINKING_LEVELS], description: 'Thinking intensity (optional)' },
-              max_iterations: { type: 'number', description: 'Maximum number of loop iterations (optional)' },
+              max_iterations: { type: 'number', description: `Maximum loop iterations per turn (optional, at least ${AGENT_MAX_ITERATIONS_MIN}; an agent may raise its own cap but never lower it)` },
               approval_mode: { type: 'string', enum: ['readonly', 'auto-edit', 'full-auto'], description: 'Approval level (optional)' },
             },
             required: ['action'],
           },
         },
       },
-      execute: async (args) => {
+      execute: async (args, ctx) => {
         const action = String(args.action || '');
         try {
           if (action === 'list') {
@@ -60,7 +64,7 @@ export const manageAgentProvider: ToolProvider = {
             const slug = String(args.slug || '');
             if (!slug) return 'Error: delete 需要 slug';
             // 不能删除自己:删了再 create 同 slug = 绕过下面的人格守卫(Codex 评审 #2)。
-            if (slug === selfSlug()) return 'Error: 不能删除自己(当前激活的 agent);请用户在设置里操作。';
+            if (isSelf(slug, ctx)) return 'Error: 不能删除自己(当前激活的 agent);请用户在设置里操作。';
             const ok = await deleteAgent(slug);
             return ok ? `已删除 agent: ${slug}` : `未找到 agent: ${slug}`;
           }
@@ -75,11 +79,19 @@ export const manageAgentProvider: ToolProvider = {
             // 人格主权:不能改写**自己**的人格——system_prompt/SOUL 归用户所有(create 撞自己 slug 同样拦,
             // saveAgent 对已存在 slug 是覆盖)。运行参数(model/tools/thinking 等)放行:那是自调参,不是人格漂移。
             // agent 自有的可进化层是 HARNESS.md(manage_harness)。
-            if (slug === selfSlug()) {
+            if (isSelf(slug, ctx)) {
               const soulChanged = args.soul != null && String(args.soul) !== (existing?.soul || '');
               if (!existing || String(args.system_prompt) !== existing.systemPrompt || soulChanged) {
                 return 'Error: 不能修改自己的人格(system_prompt/SOUL 归用户所有)。运行参数(model/tools/thinking_level 等)可改——原样回传现有 system_prompt 即可;工作方法的沉淀请用 manage_harness。';
               }
+            }
+            // 轮数:低于下限一律拒(与 routes/agents 同口径);对**自己**只许持平或调高 —— 模型给自己写个 3,之后每回合
+            // 两次工具调用就收尾,用户在会话里看不出是谁改的(09-13 导出实证)。
+            if (args.max_iterations != null) {
+              const want = Number(args.max_iterations);
+              if (!Number.isFinite(want) || want < AGENT_MAX_ITERATIONS_MIN) return `Error: max_iterations must be at least ${AGENT_MAX_ITERATIONS_MIN} (got ${args.max_iterations}).`;
+              const cur = existing?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+              if (isSelf(slug, ctx) && want < cur) return `Error: an agent may not lower its own max_iterations (current ${cur}, requested ${want}). Keep it or raise it; only the user can lower it in Settings.`;
             }
             const def = await saveAgent({
               slug,
@@ -88,7 +100,8 @@ export const manageAgentProvider: ToolProvider = {
               model: args.model != null ? String(args.model) : undefined,
               tools: Array.isArray(args.tools) ? args.tools.map((t: any) => String(t)) : undefined,
               thinkingLevel: args.thinking_level,
-              maxIterations: args.max_iterations != null ? Number(args.max_iterations) : undefined,
+              // 省略 ≠ 清空:否则 update 只改 model 就把自己的 150 降回默认 90,上面的「不许自降」守卫形同虚设(Codex 09-13 #1)
+              maxIterations: args.max_iterations != null ? Number(args.max_iterations) : (existing?.maxIterations ?? undefined),
               approvalMode: args.approval_mode,
               systemPrompt: String(args.system_prompt),
               soul: args.soul != null ? String(args.soul) : undefined,

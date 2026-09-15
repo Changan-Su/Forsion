@@ -19,10 +19,45 @@
  */
 import type { StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError } from '../core/types.js';
+import { PROTOCOL_MARK } from './openaiCompat.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 
 const ANTHROPIC_VERSION = '2023-06-01';
 const DEFAULT_MAX_TOKENS = 8192;
+/** Anthropic 硬上限:一次请求最多 4 个 cache_control 断点(多发即 400)。 */
+const MAX_CACHE_BREAKPOINTS = 4;
+
+/** thinking / redacted_thinking 块不做缓存断点载体(可缓存块是 text/image/tool_use/tool_result 一族)。 */
+function lastCacheableBlock(content: unknown): any {
+  if (!Array.isArray(content)) return null;
+  for (let i = content.length - 1; i >= 0; i--) {
+    const b: any = content[i];
+    if (b && typeof b === 'object' && b.type !== 'thinking' && b.type !== 'redacted_thinking') return b;
+  }
+  return null;
+}
+
+/**
+ * 打 ≤4 个 cache_control 断点:tools 尾 → system 尾 → 最后几条消息(新→旧)。
+ *
+ * 断点是 Anthropic 唯一的缓存入口(不打就每轮全价重读 20k 固定头)。写 1.25× / 读 0.1×,
+ * agent 循环里同一前缀至少被读一次就回本。**按协议门控**(不是按思考格式):能收这个字段的是
+ * 原生 /v1/messages,与模型思不思考无关。
+ * ponytail: 优先级与上限写死 —— 4 是协议定死的,顺序只有这一种正确解,没有第二种取法可配。
+ */
+function applyCacheBreakpoints(body: any): void {
+  const targets: any[] = [];
+  const tools: any[] = Array.isArray(body.tools) ? body.tools : [];
+  if (tools.length) targets.push(tools[tools.length - 1]);
+  const system: any[] = Array.isArray(body.system) ? body.system : [];
+  if (system.length) targets.push(system[system.length - 1]);
+  const msgs: any[] = Array.isArray(body.messages) ? body.messages : [];
+  for (let i = msgs.length - 1; i >= 0 && targets.length < MAX_CACHE_BREAKPOINTS && msgs.length - i <= 3; i--) {
+    const block = lastCacheableBlock(msgs[i]?.content);
+    if (block) targets.push(block);
+  }
+  for (const t of targets.slice(0, MAX_CACHE_BREAKPOINTS)) t.cache_control = { type: 'ephemeral' };
+}
 
 /** {baseUrl}(可能带或不带 /v1)→ /v1/messages 完整端点。 */
 export function anthropicMessagesUrl(baseUrl: string): string {
@@ -74,7 +109,9 @@ function convertContentParts(parts: any[]): any[] {
         if (/^https?:\/\//.test(url)) return { type: 'image', source: { type: 'url', url } };
         return null; // 不可识别的图片引用:丢弃该 part
       }
-      return p; // 已是 Anthropic 块原样透传
+      // 已是 Anthropic 块:**拷一层**再透传 —— 断点会往块上写 cache_control,原样透传就写进了调用方
+      // 的共享历史,下一轮那些旧断点还在,累积超过 4 个即 400(与 B5 的 system 深拷贝同一类事故)。
+      return { ...p };
     })
     .filter(Boolean);
 }
@@ -105,6 +142,8 @@ function convertTools(tools: any[]): any[] | undefined {
 export function openaiToAnthropicBody(payload: any): any {
   const sysTexts: string[] = [];
   const messages: any[] = [];
+  const think = payload.thinking;
+  const thinkOn = think?.type === 'enabled' || think?.type === 'adaptive';
   let pendingToolResults: any[] = [];
   const flush = (): void => {
     if (pendingToolResults.length) {
@@ -127,6 +166,18 @@ export function openaiToAnthropicBody(payload: any): any {
     flush(); // 非 tool 消息前,先收尾累积的 tool_result 成一条 user
     if (m.role === 'assistant') {
       const blocks: any[] = [];
+      // 思考延续性:本 run 内该轮的 thinking 块(带 signature)原样排在最前回灌 —— Anthropic 契约
+      // 要求工具轮带回当轮思考块,少了要么被拒、要么模型从零重推理。只在本次请求确实开着思考时回
+      // (关思考还发思考块是未定义行为);跨 run 水合的历史没有 providerItems,自然降级。
+      if (thinkOn) {
+        for (const it of Array.isArray(m.providerItems) ? m.providerItems : []) {
+          if (it?.type === 'thinking' && typeof it.signature === 'string' && it.signature) {
+            blocks.push({ type: 'thinking', thinking: String(it.thinking ?? ''), signature: it.signature });
+          } else if (it?.type === 'redacted_thinking' && it.data) {
+            blocks.push({ type: 'redacted_thinking', data: it.data });
+          }
+        }
+      }
       const text = typeof m.content === 'string' ? m.content : contentToText(m.content);
       if (text) blocks.push({ type: 'text', text });
       for (const tc of Array.isArray(m.tool_calls) ? m.tool_calls : []) {
@@ -162,8 +213,6 @@ export function openaiToAnthropicBody(payload: any): any {
   else if (tc && typeof tc === 'object' && tc.type === 'function') body.tool_choice = { type: 'tool', name: tc.function?.name };
   // 扩展思考:tuneOpenAiDirectPayload 按能力表把档位写成 payload.thinking(+ 自适应档的 output_config),
   // 这里原样透传。Anthropic 强制 max_tokens > budget_tokens —— 能力表已夹紧,此处兜底再抬一次。
-  const think = payload.thinking;
-  const thinkOn = think?.type === 'enabled' || think?.type === 'adaptive';
   if (thinkOn || think?.type === 'disabled') {
     body.thinking = think;
     if (think.type === 'enabled' && typeof think.budget_tokens === 'number' && body.max_tokens <= think.budget_tokens) {
@@ -173,6 +222,7 @@ export function openaiToAnthropicBody(payload: any): any {
   }
   // 思考开时 Anthropic 拒 temperature≠1,索性不发。
   if (!thinkOn && typeof payload.temperature === 'number') body.temperature = payload.temperature;
+  if (payload[PROTOCOL_MARK] === 'anthropic-messages') applyCacheBreakpoints(body);
   return body;
 }
 
@@ -210,9 +260,17 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
   let content = '';
   let reasoning = '';
   let finishReason: string | undefined;
-  const usage = { prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, cache_write_tokens: 0 };
+  // cached_tokens 不预置 0:上游没报缓存量时保持 undefined(报 0 = 真没命中,与没报是两回事)。
+  const usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    cached_tokens?: number;
+    cache_write_tokens?: number;
+  } = { prompt_tokens: 0, completion_tokens: 0 };
   let inputTokens = 0;
   const blocks = new Map<number, { id: string; name: string; arguments: string } | null>();
+  // 思考块按 index 累积(thinking_delta + signature_delta):回给 loop 挂到 assistant 消息,工具轮原样回灌。
+  const thinkingBlocks = new Map<number, { thinking: string; signature: string; redactedData?: string }>();
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
@@ -238,8 +296,8 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
         case 'message_start': {
           const u = ev.message?.usage || {};
           inputTokens = u.input_tokens || 0;
-          usage.cached_tokens = u.cache_read_input_tokens || 0;
-          usage.cache_write_tokens = u.cache_creation_input_tokens || 0;
+          if (typeof u.cache_read_input_tokens === 'number') usage.cached_tokens = u.cache_read_input_tokens;
+          if (typeof u.cache_creation_input_tokens === 'number') usage.cache_write_tokens = u.cache_creation_input_tokens;
           break;
         }
         case 'content_block_start': {
@@ -248,6 +306,14 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
             && ((typeof cb.id === 'string' && cb.id) || (typeof cb.name === 'string' && cb.name))) guard.progress();
           if (cb?.type === 'tool_use') blocks.set(ev.index, { id: cb.id || `toolu_${ev.index}`, name: cb.name || '', arguments: '' });
           else blocks.set(ev.index, null);
+          if (cb?.type === 'thinking') {
+            thinkingBlocks.set(ev.index, {
+              thinking: typeof cb.thinking === 'string' ? cb.thinking : '',
+              signature: typeof cb.signature === 'string' ? cb.signature : '',
+            });
+          } else if (cb?.type === 'redacted_thinking' && cb.data) {
+            thinkingBlocks.set(ev.index, { thinking: '', signature: '', redactedData: String(cb.data) });
+          }
           break;
         }
         case 'content_block_delta': {
@@ -260,7 +326,13 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
           } else if (d.type === 'thinking_delta' && typeof d.thinking === 'string') {
             if (d.thinking) guard.progress();
             reasoning += d.thinking;
+            const tb = thinkingBlocks.get(ev.index);
+            if (tb) tb.thinking += d.thinking;
             onReasoning?.(d.thinking);
+          } else if (d.type === 'signature_delta' && typeof d.signature === 'string') {
+            // 签名是回灌的准入票据:少了它这块思考回传必被拒,所以 signature 缺失的块整块不回。
+            const tb = thinkingBlocks.get(ev.index);
+            if (tb) tb.signature += d.signature;
           } else if (d.type === 'input_json_delta' && typeof d.partial_json === 'string') {
             const t = blocks.get(ev.index);
             if (t) {
@@ -287,7 +359,7 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
   }
 
   // 总输入 = 未缓存 + 缓存读 + 缓存写(Anthropic input_tokens 仅含未缓存部分)
-  usage.prompt_tokens = inputTokens + usage.cached_tokens + usage.cache_write_tokens;
+  usage.prompt_tokens = inputTokens + (usage.cached_tokens ?? 0) + (usage.cache_write_tokens ?? 0);
   if (usage.completion_tokens === 0 && content) usage.completion_tokens = Math.ceil(content.length / 4);
 
   const toolCalls = Array.from(blocks.entries())
@@ -299,5 +371,18 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
       function: { name: t!.name, arguments: t!.arguments || '{}' },
     }));
 
-  return { content, reasoning, toolCalls, usage, finishReason };
+  // 思考块原料回给 loop(挂成 assistant.providerItems,下一轮由 openaiToAnthropicBody 原样回灌)。
+  // 没拿到 signature 的块(流被截断)整块丢弃——半截签名回传必被拒。
+  const outputItems = Array.from(thinkingBlocks.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([, t]) =>
+      t.redactedData
+        ? { type: 'redacted_thinking', data: t.redactedData }
+        : t.signature
+          ? { type: 'thinking', thinking: t.thinking, signature: t.signature }
+          : null,
+    )
+    .filter(Boolean) as any[];
+
+  return { content, reasoning, toolCalls, usage, finishReason, ...(outputItems.length ? { outputItems } : {}) };
 }

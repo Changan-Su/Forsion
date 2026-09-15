@@ -11,7 +11,7 @@
  * 无人值守护栏(评审定论):
  *   - approvalMode **强制 'full-auto'**——approvals.requestApproval 无超时,后台 run 没有 SSE
  *     订阅者,非 full-auto 必然永久卡 'running' 直到进程重启;不用 planMode(只读白名单废掉意义)。
- *   - maxIterations = min(def.maxIterations ?? 20, 50);单趟成本闸 TANGU_MAX_RUN_COST 自动生效。
+ *   - maxIterations = min(agentCapOf(def) ?? 20, 50)(定义值低于 AGENT_MAX_ITERATIONS_MIN 按未设);单趟成本闸 TANGU_MAX_RUN_COST 自动生效。
  *   - 在跑/无模型/agent 不存在 → 本轮跳过且**不算起跑**(调用方不 mark,下轮重试)。
  *   - 自激回路:含 LLM 的 watch 规则由 cooldown ≥1h 下限兜底(且评估侧每 tick 只取一行);日程由 repeat ≥1h 下限+每 tick 起跑帽兜底;
  *     db_changed 纯动作链靠三件:① 自写不可见(advanceSelfCursors 按**精确因果合并**推本规则自己的游标,规则永远不被
@@ -26,7 +26,7 @@ import { query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
 import { createRun } from './runStore.js';
 import { enqueueRun } from './agentLoop.js';
-import { getAgent, listAgents, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
+import { agentCapOf, getAgent, listAgents, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { resolveBackgroundModelId } from './specialAgentsConfig.js';
 import { condSummary, cursorMismatch, disableTrigger, loadTriggers, normalizeVaultRel, replaceKeyPart, sameVault, watchedCols, type MuseTrigger, type ActionSpec, type TriggerContext, type DbLike } from './museTriggers.js';
 import { mutateDb, readDbOrNull, type DbFile } from './amadeusDb.js';
@@ -159,7 +159,8 @@ export async function launchUnattendedRun(spec: UnattendedSpec): Promise<boolean
         agentSlug: spec.agentSlug,
         execMode: 'host',
         approvalMode: 'full-auto',
-        maxIterations: Math.min(def.maxIterations ?? 20, 50),
+        maxIterations: Math.min(agentCapOf(def) ?? 20, 50), // 低于下限的定义值按未设
+        maxIterationsSource: 'automation', // 收尾提示 / context_info 点名来源:这不是会话 /loop(Codex 09-13 #3)
         automationOrigin: spec.triggerKey, // 活动行 o= 标记 → event_seen 防自激
       },
     },

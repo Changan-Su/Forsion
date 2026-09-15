@@ -56,6 +56,28 @@ Agent 定义已有有效本地快照时立即开跑，云文件同步在后台�
 - desktop 的 `AgentMemoryPanel.test.ts`、`AgentMemoryModal.log.test.ts`、`backendService.memory.test.ts`：晚回包隔离、409 草稿、单次写入与日志版本。
 - `desktop/scripts/agent-memory.check.cjs`：真实 Electron + 生产记忆/Dream 路由 + SQLite/临时 home，验证界面到持久化、遗忘/恢复、Agent 切换和中英/明暗截图。其他引擎端点和模型返回为可控替身，不读写个人记忆或发真实模型请求。
 
+- `npm run live:harness -- --only historian,dream,recall`（tangu-agent，2026-09-11 起）：真 standalone × Codex 直连真模型 × 隔离 home，走完 Historian 首轮候选 → Dream 整固 → 新会话只凭记忆作答，`report.md` 里有 `.memory-raw.md`、整固后的 MEMORY 与模型原话。上面几条都是合成替身，只有这一条能回答「真模型到底记没记住」。
+
 ## 本地合成性能记录
 
 2026-09-08，Node 22.23.1 / Apple M5 / 内存 SQLite：2 个 Agent，各 10 个会话、1000 条消息与 20,000 字符记忆。预热 3 次后测 20 次，召回 p50 **9.88 ms**、p95 **13.83 ms**；每次 11 条 SQL，注入 **2841 字符**，无跨 Agent 内容。此记录不含网络、模型推理或生产尾延迟，不能据此承诺对话整体提速倍数。原始样本见 [memory-recall-benchmark.json](memory-recall-benchmark.json)。
+
+## 召回块的落点(2026-09-14 起)
+
+`buildAgentMemoryContext` 返回的三段现在分开出账:`stable` = §1 存储证据(与本条消息、本会话都无关,Dream 之间稳定),`volatile` = §2 按查询打分 + §3 跨会话历史片段(带 `[session_id=…; message_id=…]`,每条消息都不同)。`content` 仍是整块,恒等于 `[stable, volatile].filter(Boolean).join('\n')`。
+
+落点由 `TANGU_MEMORY_VOLATILE` 决定:
+
+| 取值 | 易变段去哪 | 用途 |
+|---|---|---|
+| `tail`(缺省) | 对话尾部 user 消息(与 `/skill`、`@` 提及、运行时 git/todo 同一条通道),不落库不上屏 | 让系统提示前缀跨会话可共享 |
+| `system-end` | 仍在系统消息里,但挪到 `systemParts` 最末尾 | 变体 S:不改「记忆是 system 角色」的权重 |
+| `system` | 旧位置(记忆块整块留在系统提示 44% 处) | A/B 基线,与改动前逐字节一致 |
+
+稳定段恒留原位。`sketchTurnSignal`(按本条消息的正则取 3 种值)跟易变段同一落点。
+
+**为什么**:易变段卡在系统提示中部,等于每来一条新消息就把它后面的技能目录与 ~13k 工具头一起从缓存里作废;实测同 agent+模型的不同会话,系统提示正是在记忆块处首次分叉。
+
+**代价**:`tail` 档下,开发者「显示 system prompt」事件与 context 视图的 `memory` 分段都不再含召回的历史片段 —— 它们在最后一条 user 消息里,不在系统提示里。
+
+仪器:`memoryRecall.test.ts` 钉住「两段拼回 = content」(字节等价,A/B 才干净);`TANGU_CACHE_PROBE=1` + `agentConfig.cacheProbe` 开 `cache_probe` 事件,按段出 hash,直接看得到哪一段动了。

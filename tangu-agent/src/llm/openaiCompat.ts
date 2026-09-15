@@ -23,6 +23,59 @@ export const DIRECT_MARK = '__tangu_direct';
 export const PROTOCOL_MARK = '__tangu_protocol';
 /** Codex 订阅:chatgpt-account-id 头取值(从 id_token 解出,随 payload 透传到 responses 客户端)。 */
 export const ACCOUNT_MARK = '__tangu_account';
+/** run id(BuildPayloadOpts.runId 透传):Responses 客户端据此把粘性路由态按 run 存,绝不跨 run。 */
+export const RUN_MARK = '__tangu_run';
+
+/**
+ * 缓存路由键(prompt_cache_key / Codex 的 session_id 头)的取值域闸门。
+ *
+ * 缺省 `agent`(09-15 live 实测后翻转):按 agent+模型 取键,让同一 agent 的不同会话共享上游前缀桶 ——
+ * cache 场景四档 2×2:异文新会话首调 0% → 44%,同文新会话 0% → 45%,同会话续写不受影响(93–94%)。
+ * `TANGU_CACHE_KEY_SCOPE=session` 退回旧行为(同会话粘同机)。
+ * 上游没传 agent 身份(后台阶段 / 子代理)时保持会话键——绝不静默换桶,否则样本分不清是谁的效果。
+ */
+export function resolveCacheKey(opts: { cacheKey?: string; agentId?: string; apiModelId?: string }): string | undefined {
+  if (process.env.TANGU_CACHE_KEY_SCOPE === 'session') return opts.cacheKey;
+  if (!opts.agentId) return opts.cacheKey;
+  return `agent:${opts.agentId}:${opts.apiModelId || ''}`;
+}
+
+/**
+ * chat-completions 上 wire 的 messages —— 剥掉引擎内部字段。两类,门控不同:
+ *
+ * 1. `providerItems`(Responses / Anthropic 的原始 output items,含 encrypted reasoning)**无条件剥**。
+ *    它是引擎自己的载体,**没有任何** chat-completions 端点认识它。挂上去的路子有两条:同 run 内
+ *    assistantTurnOf 无条件挂;跨 run 由 historyReplay 按「同模型 + 同协议」挂 —— 后者的协议判据在
+ *    hydrate 时只拿得到模型的**静态**标记,而 tuneOpenAiDirectPayload 能把本轮动态改道 Responses,
+ *    所以「上一轮走 Responses、这一轮回 chat-completions」时历史上确实可能带着它走到这里。
+ *    严格网关见到未知键直接 400,故本函数是最后一道、也是**不看端点**的那道闸。
+ * 2. `reasoning_content` **默认剥掉,只对已知收该字段的族放行**:DeepSeek 现行文档要求带 tools 的续轮
+ *    把此前每条 assistant 的 reasoning_content 原样回传,否则 400;GLM(zai)线上形态相同;Qwen 只在
+ *    开思考时收。其余端点(OpenAI 官方 / Azure / vLLM 类网关)对未知键没有文档 —— 未知端点绝不发未知字段。
+ *    该字段只挂在**本 run 内存里**的 assistant 消息上(落库与跨 run 水合都不带),天然「同轮内回灌」。
+ */
+export function compatWireMessages(payload: any, target: { baseUrl?: string; provider?: string }): any[] {
+  const msgs: any[] = Array.isArray(payload?.messages) ? payload.messages : [];
+  const internal = (m: any): boolean => !!m && (m.reasoning_content !== undefined || m.providerItems !== undefined);
+  // 一条都不带内部字段 → 原样返回**同一个数组**(调用方据此判「没动过」;别换成恒等 map)。
+  if (!msgs.some(internal)) return msgs;
+  const cap = resolveModelCapability({
+    baseUrl: target.baseUrl,
+    provider: target.provider,
+    modelId: String(payload?.model || ''),
+  });
+  const replay =
+    cap.format === 'deepseek' || cap.format === 'zai' || (cap.format === 'qwen' && payload?.enable_thinking === true);
+  return msgs.map((m) => {
+    if (!internal(m)) return m;
+    // providerItems 先无条件摘掉,再按能力表决定 reasoning_content 的去留(放行那支也**必须**过这一摘:
+    // 直接 `return m` 会把 providerItems 一起送上 DeepSeek/GLM 的 wire)。
+    const { providerItems: _dropItems, ...kept } = m;
+    if (replay && m.role === 'assistant' && m.reasoning_content) return kept;
+    const { reasoning_content: _dropCot, ...rest } = kept;
+    return rest;
+  });
+}
 
 /** 把 image attachments 合进最后一条 user 消息（搬自 llmService.applyAttachments,纯函数）。 */
 function applyAttachments(finalMessages: any[], attachments: any[]): any[] {
@@ -58,7 +111,15 @@ export function buildOpenAiCompatPayload(opts: BuildPayloadOpts): any {
     cacheKey,
   } = opts;
 
-  const finalMessages = applyAttachments([...messages], attachments);
+  // prefix 兜底档会**就地改写** system 消息(appendSystemToPayload),而 messages[0] 与调用方
+  // (agentLoop 的 workingMessages)是同一个对象 —— 不拷就把兜底指令逐轮累积进共享历史,前缀每轮
+  // 分叉、缓存全 miss。content 为数组的分支同样要拷(那条路径是 push,写的是共享数组)。
+  const finalMessages = applyAttachments(
+    (messages as any[]).map((m) =>
+      m?.role === 'system' ? { ...m, ...(Array.isArray(m.content) ? { content: [...m.content] } : {}) } : m,
+    ),
+    attachments,
+  );
 
   const payload: any = {
     model: apiModelId,
@@ -76,9 +137,15 @@ export function buildOpenAiCompatPayload(opts: BuildPayloadOpts): any {
   // OpenAI 官方 API 直连:prompt_cache_key 按会话粘机提升前缀缓存命中(其他 provider 不发,
   // 防严格网关拒未知字段)。Responses 协议(Codex 订阅)也带上——它不进 wire body
   // (openaiToResponsesBody 白名单重建),只喂 session_id 头的稳定化(缓存/路由粘性)。
-  if (cacheKey && ((opts.model as any)?.provider === 'openai' || (opts.model as any)?.[PROTOCOL_MARK] === 'openai-responses')) {
-    payload.prompt_cache_key = cacheKey;
+  // ⚠️ provider 是**用户可自定义**的 providerId,不保证 'openai' 指向官方端点:真正决定这个字段
+  // 上不上 chat-completions wire 的是 streamOpenAiCompat 里的官方 host 闸(见 isOfficialOpenAiHost)。
+  const routingKey = resolveCacheKey({ cacheKey, agentId: opts.agentId, apiModelId });
+  if (routingKey && ((opts.model as any)?.provider === 'openai' || (opts.model as any)?.[PROTOCOL_MARK] === 'openai-responses')) {
+    payload.prompt_cache_key = routingKey;
   }
+  // run 身份透传(私有标记,发请求前剥掉):Responses 客户端按 run 存粘性路由态。
+  const runId = opts.runId;
+  if (typeof runId === 'string' && runId) payload[RUN_MARK] = runId;
   // 透传直连协议/账号标记,供 streamProviderCompletion 分发到原生订阅客户端。
   const dm = opts.model as any;
   if (dm?.[PROTOCOL_MARK]) payload[PROTOCOL_MARK] = dm[PROTOCOL_MARK];
@@ -165,11 +232,31 @@ export async function streamOpenAiCompat(opts: StreamOpts): Promise<StreamResult
   return withStreamIdle(opts.signal, (guard) => runOpenAiCompatStream(opts, guard));
 }
 
+/** 官方 OpenAI 端点判定 —— hostname **全等**比对(用 includes 会把 api.openai.com.evil.tld 认成官方)。 */
+function isOfficialOpenAiHost(baseUrl: string | undefined): boolean {
+  try {
+    return new URL(baseUrl || '').hostname.toLowerCase() === 'api.openai.com';
+  } catch {
+    return false;
+  }
+}
+
 async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): Promise<StreamResult> {
   const { apiKey, baseUrl, payload, onToken, onReasoning, onToolCallDelta } = opts;
-  // 剥掉私有标记,再发给 provider。
-  const { [DIRECT_MARK]: _omitDirect, __forsion_model_id: _omitFsn, [PROTOCOL_MARK]: _omitProto, [ACCOUNT_MARK]: _omitAcct, ...clean } = payload as any;
-  const streamPayload = { ...clean, stream: true, stream_options: { include_usage: true } };
+  // 剥掉私有标记,再发给 provider。prompt_cache_key 一并摘下,只在官方 host 上补回(见下)。
+  const { [DIRECT_MARK]: _omitDirect, __forsion_model_id: _omitFsn, [PROTOCOL_MARK]: _omitProto, [ACCOUNT_MARK]: _omitAcct, [RUN_MARK]: _omitRun, prompt_cache_key: cacheKeyField, ...clean } = payload as any;
+  const streamPayload = {
+    ...clean,
+    messages: compatWireMessages(clean, { baseUrl, provider: opts.provider }),
+    stream: true,
+    stream_options: { include_usage: true },
+    // prompt_cache_key 只对官方 api.openai.com 上 wire:providerId 是用户可自定义字符串
+    // (providerRegistry 不保证 'openai' == 官方端点),把任意严格网关注册成 'openai' 后,这个它
+    // 没声明支持的字段会随每次请求发出去,可能直接 400 —— 未知端点绝不发未知字段。
+    // ponytail: 官方 host 但注册在别的 providerId 下时 payload 本就没有这个字段(build 侧门控未放宽),
+    // 这里补不回来 —— 那是既有的漏优化,不是本次回归。
+    ...(cacheKeyField && isOfficialOpenAiHost(baseUrl) ? { prompt_cache_key: cacheKeyField } : {}),
+  };
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (apiKey && apiKey !== '__cloud_proxy__') headers.Authorization = `Bearer ${apiKey}`;
@@ -201,7 +288,14 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
   let content = '';
   let reasoning = '';
   let finishReason: string | undefined;
-  const usage = { prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, cache_write_tokens: 0 };
+  // 可选字段必须在字面量里预置类型,否则后面按需赋值会 TS2339。
+  const usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    cached_tokens?: number;
+    cache_write_tokens: number;
+    reasoning_tokens?: number;
+  } = { prompt_tokens: 0, completion_tokens: 0, cache_write_tokens: 0 };
   const toolAcc = new Map<number, { id: string; name: string; arguments: string }>();
 
   const reader = response.body.getReader();
@@ -267,9 +361,16 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
           json.usage.prompt_tokens_details?.cached_tokens ??
           json.usage.prompt_cache_hit_tokens ??
           json.usage.cache_read_input_tokens;
-        if (typeof cached === 'number' && cached > 0) usage.cached_tokens = cached;
+        // 上游**没报**缓存量 → 保持 undefined:报了 0(这次真没命中)与根本没报是两件事,
+        // 都归 0 就把「这家网关不转发缓存字段」洗成了「命中率 0%」,命中率报表整片失真。
+        if (typeof cached === 'number') usage.cached_tokens = cached;
         const written = json.usage.cache_creation_input_tokens ?? json.usage.prompt_cache_write_tokens;
         if (typeof written === 'number' && written > 0) usage.cache_write_tokens = written;
+        // chat-completions 的隐藏思考量(DeepSeek/GLM/Qwen 走这条路);此前整条链路不解析 → 计量盲区。
+        // 与 cached_tokens 同一条极性:上游报了就赋值(**含 0**),没报保持 undefined。
+        // 把 0 过滤掉 = 把「这轮真没思考」洗成「上游没报」,与 Responses 侧语义相反。
+        const reasoningTokens = json.usage.completion_tokens_details?.reasoning_tokens;
+        if (typeof reasoningTokens === 'number') usage.reasoning_tokens = reasoningTokens;
       }
     }
   }

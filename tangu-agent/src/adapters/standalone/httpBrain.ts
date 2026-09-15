@@ -33,6 +33,38 @@ export interface HttpBrainConfig {
   token: string | (() => string);
 }
 
+/**
+ * F2/C-2:托管链路的 usage 极性还原。server 为计费把 cached_tokens 恒归一成数字(没命中记 0),
+ * 于是「上游根本没报缓存」在线上被压成了 0,与「上游报了 0 次命中」再也分不开;直连三家解析器
+ * (openaiCompat / openaiResponses / anthropicMessages)在没报时留 undefined。不在这里还原极性,
+ * agentLoop 的 `cached_tokens !== undefined` 在托管链路恒为真,两条链路的数据就进不了同一张表
+ * (scripts/cache-hit-report.mjs 按 cacheReported === false 分桶)。
+ *   cacheReported === true → 照抄;=== false → undefined;
+ *   字段缺席(2.10.x 老服务端还没有这个标志)→ 只有 > 0 能反证上游确实报过,0 一律记「不知道」。
+ * ponytail: reasoning_tokens 没有对应的 reported 标志(server 恒初始化 0,只在上游报了才覆盖),
+ *   同样只能按 > 0 反证。上限:上游「报了 0 个推理 token」会被当成没报 —— 这对 A3 的结论等价
+ *   (输出没花在推理上),真要分开得等 server 侧补一枚 reasoningReported。
+ */
+function normalizeHostedUsage(u: any): StreamResult['usage'] {
+  const { cacheReported, cached_tokens: cached, reasoning_tokens: reasoning, ...rest } = u;
+  const cacheKnown = cacheReported === true || (cacheReported === undefined && cached > 0);
+  return {
+    ...rest,
+    ...(cacheKnown ? { cached_tokens: cached } : {}),
+    ...(reasoning > 0 ? { reasoning_tokens: reasoning } : {}),
+  };
+}
+
+/**
+ * F1 合并端点的**负**能力缓存,按归一化 base URL 记「这个服务端没有 /build-and-stream」。
+ * 必须模块级而非实例级:同进程重新装配 createHttpBrain(worker 换 token、断线重连、多 brain 并存)
+ * 会让每个新实例再白传一次整份上下文去探测 —— 正是 F1 要省掉的那一腿(评审 #7)。
+ * ponytail:只记否定、按 base URL 分桶、进程生命周期无 TTL。**比原实例内语义更长寿**:旧写法在
+ * 重新装配 brain 时会重探,服务端中途升级能在重连后自动认出合并端点;现在要重启引擎才重新探测。
+ * 这是 F1 省掉那一腿的代价,真要两头兼顾得加 TTL 或让服务端在 /health 里报能力位。
+ */
+const combinedUnsupported = new Set<string>();
+
 export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   const base = cfg.cloudUrl.replace(/\/+$/, '');
   const authHeaders = (): Record<string, string> => ({
@@ -131,19 +163,67 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     return (await r.json()) as T;
   }
 
+  // ── F1 三次传输合一 ────────────────────────────────────────────────────────
+  // 旧链路每轮迭代要传三次整份上下文:build-payload 上传 → 下载装配好的 payload → stream 再上传。
+  // 现在 buildProviderPayload 只返回**惰性描述符**(零网络),stream 时一次 POST 到合并端点
+  // /api/brain/llm/build-and-stream(服务端装配后直接流)。收益是首帧,不是 token。
+  // 老服务端(2.10.x 在装机上仍在跑)没有该路由 → 404,本进程之后一律回落旧两步;两个老端点原样保留。
+  const LAZY_MARK = '__forsion_lazy_build';
+  type LazyBuild = { [LAZY_MARK]: true; modelId: string } & Record<string, unknown>;
+  const UNSUPPORTED = Symbol('brain.combined.unsupported');
+
+  /** 合并端点的探测判据必须**两面**:404(路由不存在)固然是,2xx 而非 SSE(反代/兜底页把未知路径
+   *  吞成 HTML 200)也是 —— 否则 SSE 解析器一帧不见,静默返回空正文。真端点必走 stream 处理器,
+   *  头里恒是 text/event-stream,所以这道闸不会误判真实响应。 */
+  const notCombined = (r: Response): boolean =>
+    r.status === 404 || (r.ok && !(r.headers.get('content-type') || '').includes('text/event-stream'));
+
   // ── LLM 流式:读 SSE,逐条转回 onToken/onReasoning/onToolCallDelta,done 时返回累积结果 ──
   async function streamProviderCompletion(opts: StreamOpts): Promise<StreamResult> {
-    const modelId = String((opts.payload as any)?.__forsion_model_id ?? '');
+    const lazy = (opts.payload as any)?.[LAZY_MARK] ? (opts.payload as LazyBuild) : null;
+    if (lazy && !combinedUnsupported.has(base)) {
+      const { [LAZY_MARK]: _mark, ...body } = lazy;
+      const r = await brainStream('/api/brain/llm/build-and-stream', body, opts, true);
+      if (r !== UNSUPPORTED) return r;
+      combinedUnsupported.add(base);
+    }
+    // 回落:老两步。描述符在这里才真正物化(build-payload 的请求体与老链路逐字段相同)。
+    let payload = opts.payload;
+    if (lazy) {
+      const { [LAZY_MARK]: _mark, ...body } = lazy;
+      payload = (await postJson<{ payload: any }>('/api/brain/llm/build-payload', body, opts.signal)).payload;
+    }
+    const modelId = String((payload as any)?.__forsion_model_id ?? lazy?.modelId ?? '');
+    return await brainStream('/api/brain/llm/stream', { modelId, payload }, opts, false) as StreamResult;
+  }
+
+  async function brainStream(
+    path: string, body: unknown, opts: StreamOpts, detect: boolean,
+  ): Promise<StreamResult | typeof UNSUPPORTED> {
     // 传输与语义各自计时:server 的 : ping / alive 只续传输;有效正文、思考或工具增量才续语义。
     // 这样持续心跳仍无法掩盖上游无进展,同时保留托管流原有 300s 预算。
     const guard = streamIdleGuard(opts.signal, BRAIN_STREAM_IDLE_MS);
+    // 上传腿(首帧前)沿用 postJson 那把随体积放大的尺子。F1 之后整份上下文的真实上传发生在这里、
+    // 不再是 build-payload,那道闸必须跟着搬过来 —— 否则带图的慢上行要一路吊到 360s 的流看门狗
+    // 才收场(2026-08-27 实证:两个 run 都死在 view_image 之后那一 leg)。响应头一到即作废,
+    // 绝不能让它在长流中途开火。
+    const raw = JSON.stringify(body);
+    const bytes = Buffer.byteLength(raw, 'utf-8');
+    const upload = new AbortController();
+    const uploadTimer = setTimeout(
+      () => upload.abort(Object.assign(new Error('upload timeout'), { name: 'TimeoutError' })),
+      sizedTimeoutMs(bytes),
+    );
     try {
-      const r = await fetch(`${base}/api/brain/llm/stream`, {
+      const r = await fetch(`${base}${path}`, {
         method: 'POST',
         headers: authHeaders(),
-        body: JSON.stringify({ modelId, payload: opts.payload }),
-        signal: guard.signal,
-      });
+        body: raw,
+        signal: AbortSignal.any([guard.signal, upload.signal]),
+      }).catch((e) => { throw netError(e, path, bytes); });
+      clearTimeout(uploadTimer);
+      // 探测失败不能算「已受理」:onResponseStart 会把 uploadMs 定格在这次白跑的上传上。
+      if (detect && notCombined(r)) { await r.text().catch(() => ''); return UNSUPPORTED; }
       opts.onResponseStart?.(); // 服务端设完 SSE 头即 flush:头到达 = 整份上下文已送达服务端
       if (!r.ok || !r.body) {
         const detail = await r.text().catch(() => '');
@@ -195,8 +275,12 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
             result.content = ev.content ?? result.content;
             result.reasoning = ev.reasoning ?? result.reasoning;
             result.toolCalls = ev.toolCalls ?? [];
-            result.usage = ev.usage ?? result.usage;
+            result.usage = ev.usage ? normalizeHostedUsage(ev.usage) : result.usage;
             result.finishReason = ev.finishReason;
+            // 回放原料:直连 provider 自己填 outputItems,托管面只能靠 done 帧转运。漏抄这一行
+            // 不会红 —— 只是 historyReplay 写侧在整条托管链路上恒空,跨 run 思考延续性永远为零。
+            // 老服务端不发这个字段(与「空组」同义):保持 undefined,绝不造一个空数组。
+            if (Array.isArray(ev.outputItems) && ev.outputItems.length) result.outputItems = ev.outputItems;
           } else if (ev.t === 'error') {
             throw new LlmError(ev.status || 502, ev.message || 'brain stream error');
           }
@@ -206,6 +290,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     } catch (err) {
       throw mapStreamAbort(err, guard.signal, opts.signal);
     } finally {
+      clearTimeout(uploadTimer);
       guard.dispose();
     }
   }
@@ -217,13 +302,12 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         // apiKey/baseUrl 是占位(stream 一律走云端代理,不真用它们);model 透传给 build。
         return { model: r.model, apiKey: '__cloud_proxy__', baseUrl: base, apiModelId: r.apiModelId };
       },
+      // F1:只造惰性描述符,不发网络请求 —— 真正的上传在 streamProviderCompletion 里发生一次。
+      // ⚠️ `...rest` 整体展开是契约(见 httpBrain.client.test.ts):改成逐字段挑选,client/cacheKey 等
+      // 会静默消失且没有任何东西变红。signal 摘掉:AbortSignal 进 JSON.stringify 会变成 {} 白送上云。
       buildProviderPayload: async (opts: BuildPayloadOpts) => {
-        const { signal, ...rest } = opts as BuildPayloadOpts & { signal?: AbortSignal };
-        const r = await postJson<{ payload: any }>('/api/brain/llm/build-payload', {
-          modelId: (opts.model as any)?.id,
-          ...rest, // signal 摘掉:AbortSignal 进 JSON.stringify 会变成 {} 白送上云
-        }, signal);
-        return r.payload;
+        const { signal: _signal, ...rest } = opts as BuildPayloadOpts & { signal?: AbortSignal };
+        return { [LAZY_MARK]: true, modelId: String((opts.model as any)?.id ?? ''), ...rest };
       },
       streamProviderCompletion,
     },

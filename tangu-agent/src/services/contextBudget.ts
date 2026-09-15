@@ -9,11 +9,16 @@
  *    平时历史 append-only;只有越过 COMPACT_TRIGGER_RATIO 才折叠一次,缓存 miss 摊薄成偶发。
  *  - capToolResult:工具结果入列硬帽,兜底未封顶路径(host list_dir 大目录、custom provider 等)。
  *
- * 模型上下文窗口:见 modelContextWindowInfo 的优先级链 —— 人填的(env 覆盖 / admin 在模型上填的
- *    context_window)> 上游实测的(contextWindowStore 从超长报错里回学)> 手写族表 > 128k 兜底。
+ * 模型上下文窗口:见 modelContextWindowInfo 的优先级链 —— 人填的(env 覆盖 / 用户本机 modelOverrides /
+ *    admin 在模型上填的 context_window)> 上游实测的(contextWindowStore 从超长报错里回学)> 手写族表 > 272k 兜底。
  */
-import type { ChatMessage } from '../core/types.js';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { tanguHome } from '../core/tanguHome.js';
+import type { ChatMessage, ToolCall } from '../core/types.js';
 import { learnedWindow } from './contextWindowStore.js';
+import { modelOverrides } from './modelOverrides.js';
 
 /**
  * 锚定消息(借 Codex「reference context item」):注入的 system/skills/memory 块等——compactContext 永不折叠。
@@ -25,9 +30,13 @@ export function pinMessage<T extends object>(m: T): T {
   return m;
 }
 
+/**
+ * 未知模型的窗口兜底。2026-09-11 起 272k(原 128k):主流模型都到 200k+ 了,128k 让每个族表没收录的模型
+ * 在 64k 就开始机械折叠。报大了的那一头由 contextWindowStore 兜:撞一次上游溢出就回学到真实上限,只调小。
+ */
 export const CONTEXT_WINDOW_TOKENS = (() => {
   const v = Number(process.env.TANGU_CONTEXT_WINDOW_TOKENS);
-  return Number.isFinite(v) && v >= 4_000 ? Math.floor(v) : 128_000;
+  return Number.isFinite(v) && v >= 4_000 ? Math.floor(v) : 272_000;
 })();
 
 /** 入站 user 消息:估算超窗口 50% → 拒绝(run 直接失败,消息不落库)。 */
@@ -43,7 +52,8 @@ export const FORCE_COMPACT_RATIO = 0.95;
  * 已知模型族的窗口兜底(input 预算口径,保守值):模型对象没带 context_window 时按 id 匹配。
  * 128k 全局默认对 400k 族(gpt-5 等)意味着 64k 就触发机械折叠——绞碎上下文+打断前缀缓存
  * (WB-Bench 取证:44 次中途缓存整体断裂,约占 uncached 输入 28%)。
- * ponytail: 手写小表只收录确定安全的族;不认识 → 维持 128k 默认。
+ * 匹配同时试模型对象上的 apiModelId(上游模型名):托管目录导入的模型 id 是 pr-<hash>,只按 id 匹配永远落空。
+ * ponytail: 手写小表只收录确定安全的族;不认识 → 维持全局默认。
  */
 const FAMILY_WINDOWS: Array<[RegExp, number]> = [
   [/codex-mini/i, 200_000], // 先于 gpt-5|codex:codex-mini 是 o4-mini 底,272k 会溢出
@@ -85,11 +95,11 @@ const MODEL_WINDOW_OVERRIDES: Record<string, number> = (() => {
 
 /**
  * 解析某模型的上下文窗口。优先级 = **人说的 > 上游说的 > 我们猜的**:
- *   override  env `TANGU_MODEL_CONTEXT_WINDOWS` 覆盖表(手动兜底,最高)
+ *   override  env `TANGU_MODEL_CONTEXT_WINDOWS` 覆盖表(运维逃生口,最高)> 用户本机 config.json modelOverrides
  *   model     模型元数据自带(托管面 admin 在模型上填的窗口 / provider 返回的字段)
  *   learned   从上游「超长被拒」的报错里回学到的真实上限(自动识别,见 contextWindowStore)
- *   family    手写模型族表(猜的)
- *   default   128k 兜底(猜的)
+ *   family    手写模型族表(猜的;id 与 apiModelId 都试)
+ *   default   272k 兜底(猜的)
  *
  * learned 排在 family 之前、model 之后:它是上游亲口说的实测值,比手写族表准;但人明确填过的
  * 值不被它推翻(冲突只体现在 source 标注上,不静默改配置)。
@@ -99,12 +109,16 @@ export type CtxWindowSource = 'override' | 'model' | 'learned' | 'family' | 'def
 /** modelContextWindow 的带来源版本:值与来源一起给,供 context 视图如实标注。 */
 export function modelContextWindowInfo(modelId?: string | null, modelObj?: any): { tokens: number; source: CtxWindowSource } {
   if (modelId && MODEL_WINDOW_OVERRIDES[modelId]) return { tokens: MODEL_WINDOW_OVERRIDES[modelId], source: 'override' };
+  const user = modelId ? modelOverrides()[modelId]?.contextWindow : undefined;
+  if (user) return { tokens: user, source: 'override' };
   const fromObj = Number(modelObj?.context_window ?? modelObj?.contextWindow);
   if (Number.isFinite(fromObj) && fromObj >= 4_000) return { tokens: Math.floor(fromObj), source: 'model' };
   const learned = modelId ? learnedWindow(modelId) : undefined;
   if (learned) return { tokens: learned, source: 'learned' };
-  if (modelId) {
-    for (const [re, win] of FAMILY_WINDOWS) if (re.test(modelId)) return { tokens: win, source: 'family' };
+  const apiModelId = modelObj?.apiModelId ?? modelObj?.api_model_id;
+  for (const candidate of [modelId, apiModelId]) {
+    if (!candidate || typeof candidate !== 'string') continue;
+    for (const [re, win] of FAMILY_WINDOWS) if (re.test(candidate)) return { tokens: win, source: 'family' };
   }
   return { tokens: CONTEXT_WINDOW_TOKENS, source: 'default' };
 }
@@ -122,10 +136,17 @@ const MSG_TRUNC_THRESHOLD = 8_000; // 中段 user/assistant 消息超此长度�
 const MSG_TRUNC_HEAD = 2_000;
 const MSG_TRUNC_TAIL = 500;
 
-/** 单条工具结果入列硬帽(与 host read_file 的 100k 上限对齐;头+尾保留 traceback)。 */
-const TOOL_RESULT_MAX_CHARS = 100_000;
-const TOOL_RESULT_HEAD = 4_000;
-const TOOL_RESULT_TAIL = 1_500;
+/**
+ * 单条工具结果入列硬帽:48k 字符 ≈ 12k token,对齐 Codex 的模型可见输出上限(报告 E4)。
+ * 原值 100k 只兜「炸穿上下文」,一条结果仍能独吞窗口的 1/6;12k token 是上游实测的收益拐点。
+ * 中段截断:头 34k + 尾 12k(尾必须厚 —— 报错/测试汇总/最终状态几乎都在结尾),全文落盘给路径,
+ * 截掉的部分模型可以 read_file/grep 回去取,截断不再是信息湮灭。
+ */
+const TOOL_RESULT_MAX_CHARS = 48_000;
+const TOOL_RESULT_HEAD = 34_000;
+const TOOL_RESULT_TAIL = 12_000;
+/** 历史单条消息硬帽:与工具结果帽解耦,维持 100k(与 host read_file 上限对齐)。 */
+const HISTORY_MSG_MAX_CHARS = 100_000;
 
 /** CJK 感知粗估:ASCII ≈4 字符/token,其余(CJK/二进制替换符)≈1 token/字符。 */
 export function estimateTokensRough(text: string): number {
@@ -174,6 +195,9 @@ export function estimateMessageTokens(m: any): number {
   if (Array.isArray(m?.tool_calls)) {
     for (const t of m.tool_calls) n += estimateTokensRough(String(t?.function?.arguments ?? ''));
   }
+  // D1:deepseek/zai/qwen(思考)格式会把 reasoning_content 回灌上线;其余格式在 wire 层剥掉。
+  // ponytail: 估算器不知道格式,一律计入(codex/* 只是几百字节的摘要,过估可忽略);要精确就按 cap.format 门控。
+  if (typeof m?.reasoning_content === 'string' && m.reasoning_content) n += estimateTokensRough(m.reasoning_content);
   // Responses 使用 providerItems 替代正文/tool_calls,不是把两份都发送;取较大者保守兜底。
   if (Array.isArray(m?.providerItems) && m.providerItems.length) {
     try { n = Math.max(n, 8 + estimateStructuredTokens(m.providerItems)); } catch { /* ignore */ }
@@ -278,24 +302,81 @@ export function compactContext(msgs: ChatMessage[]): CompactResult {
   return { changed: savedChars > 0, savedChars, breakdown };
 }
 
-/** 工具结果入列硬帽:超 100k 字符截头留尾。正常工具自身已有更小的帽,这里只兜未封顶路径。 */
+/**
+ * 超帽工具结果全文落盘,返回路径(落不下去返回 '' —— 只退化为纯截断,绝不因此报错)。
+ * 文件名取内容 sha256:**确定性**是硬要求 —— capToolResult 也跑在 historyReplay 的重建路径上,
+ * 随机名会让同一条历史每次 hydrate 出不同字节,provider 前缀缓存逐轮清零(2026-06-10 审计同款坑)。
+ * 内容相同即同一个文件,天然去重、重复调用幂等。
+ * 落点是**引擎家目录**(`<TANGU_HOME>/tool-spill`)而不是 os.tmpdir():tmpdir 会被系统/重启回收,
+ * 而这条路径要在**历史回放**里仍然可达(同一条工具结果几天后 hydrate 出来,标记里的路径还得有文件)。
+ * ponytail: 不做清理/配额 —— 上限就是「超 48k 的工具结果各存一份」,按内容去重;要收割再单开一个 GC。
+ */
+function spillToolResult(text: string): string {
+  try {
+    const dir = path.join(tanguHome(), 'tool-spill');
+    const file = path.join(dir, `tool-${createHash('sha256').update(text).digest('hex').slice(0, 16)}.txt`);
+    if (!existsSync(file)) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(file, text, 'utf-8');
+    }
+    return file;
+  } catch {
+    return '';
+  }
+}
+
+/** 工具结果入列硬帽:超 48k 字符中段截断(头+尾),全文落盘并把路径写进标记。
+ *  正常工具自身已有更小的帽,这里既兜未封顶路径,也给所有路径一条「回去取全文」的出口。 */
 export function capToolResult(text: string): string {
   if (typeof text !== 'string' || text.length <= TOOL_RESULT_MAX_CHARS) return text;
   const omitted = text.length - TOOL_RESULT_HEAD - TOOL_RESULT_TAIL;
+  const file = spillToolResult(text);
+  // 路径是**宿主机**上的:sandbox execMode 下模型的 read_file/grep 看不到它 —— 与其让模型白试一轮,
+  // 不如在标记里说清楚(诚实的仪器 > 好看的承诺)。
+  const where = file
+    ? ` full output saved on the host at ${file} (host filesystem only; not reachable from a sandboxed execution mode)`
+      + ` — read_file or grep that file for the omitted part;`
+    : '';
   return (
     text.slice(0, TOOL_RESULT_HEAD) +
-    `\n…[single tool output too large, omitted ${omitted} chars]…\n` +
+    `\n…[tool output too large: omitted ${omitted} chars of ${text.length} total;${where} showing head+tail]…\n` +
     text.slice(-TOOL_RESULT_TAIL)
   );
 }
 
 /** 历史单条消息硬帽(hydrate 时用,防被巨型消息毒化的会话永久不可用;确定性 → 跨 run 前缀稳定)。 */
 export function capHistoryContent(text: string): string {
-  if (typeof text !== 'string' || text.length <= TOOL_RESULT_MAX_CHARS) return text;
+  if (typeof text !== 'string' || text.length <= HISTORY_MSG_MAX_CHARS) return text;
   const omitted = text.length - MSG_TRUNC_HEAD - MSG_TRUNC_TAIL;
   return (
     text.slice(0, MSG_TRUNC_HEAD) +
     `\n…[history message too large, omitted ${omitted} chars]…\n` +
     text.slice(-MSG_TRUNC_TAIL)
   );
+}
+
+/** 本轮 response → assistant 历史消息。凡是**还会发起下一次请求**的分支(主循环的工具轮/审计/verify/
+ *  steer/Stop-hook 续跑/文本工具调用纠正,以及 delegate 子代理的工具轮)都必须经此构造:
+ *  providerItems(Responses 原始 items,含 encrypted reasoning)一并挂上,否则续跑轮把 reasoning
+ *  延续性弄丢(Codex 评审二轮 #2);reasoning_content 缺失还会让 DeepSeek/ZAI/带思考的 Qwen
+ *  在工具轮之后直接 400(Codex 评审三轮 #2 —— 子代理那条调用点原先是手搓的)。
+ *  真·收尾(不再续轮)不需要。仅 in-memory,finalize 落库走显式字段,不入 DB。
+ *  住在 contextBudget 而不是 agentLoop:subAgent 也要用,而 agentLoop → registry → delegate →
+ *  subAgent 已是一条链,反向 import 会成环。 */
+export function assistantTurnOf(
+  res: { outputItems?: any[]; reasoning?: string },
+  content: string,
+  toolCalls?: ToolCall[],
+): ChatMessage {
+  return {
+    role: 'assistant',
+    content,
+    ...(toolCalls ? { tool_calls: toolCalls } : {}),
+    ...(Array.isArray(res.outputItems) && res.outputItems.length ? { providerItems: res.outputItems } : {}),
+    // D1:chat-completions 的同轮内思考回灌载体。这里**无条件挂上**,上 wire 与否由各客户端把关:
+    // 直连 chat-completions 走 compatWireMessages 的能力表门控(默认剥,只对 deepseek/zai/带思考的
+    // qwen 放行),Responses/Anthropic 白名单重建 body 天然不带,托管面由 server llmService 默认剥。
+    // 不落库、不进跨 run 水合(本函数产物只进 workingMessages)。
+    ...(res.reasoning ? { reasoning_content: res.reasoning } : {}),
+  } as ChatMessage;
 }

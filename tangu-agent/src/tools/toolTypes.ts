@@ -40,6 +40,17 @@ export interface ToolContext {
   profile?: AppProfile;
   /** delegate 子代理深度(0/缺省=主 loop,1=子代理内)。深度 ≥1 时 delegate 工具不可见,防递归裂变。 */
   subAgentDepth?: number;
+  /** 委派方(depth 0 的主 agent)在本次 delegate 里**显式授予**的管理面工具名(已归一的正典名)。
+   *  仅在 subAgentDepth ≥ 1 时有意义;引擎内部字段 —— 本字段本身不落库、不从历史重建:每次委派都由
+   *  delegate 的实参重新校验后生成。(模型写在 delegate 实参里的 grantTools 与 start 事件里的 grants
+   *  照常随工具调用历史 / 审计事件落库 —— 那是模型的原话与审计面,不是权限来源,回放时不会据此恢复权限。)
+   *  它只抬起**一道**闸:子代理管理面硬闸(isSubAgentDenied)。宿主沙箱策略 / toolsMode / planMode /
+   *  preset 正向面 / isEnabledFor / 审批闸门(gateToolCall)一概照旧 —— 被授权的子代理永远不会比父代理更强。 */
+  subAgentGrants?: ReadonlySet<string>;
+  /** 委派方(发起本次 delegate 的 agent)的 slug;仅 subAgentDepth ≥ 1 时有值。manage_agent 的
+   *  「不能删/改自己」守卫按**执行身份**判,具名子代理 B 在自己的 ALS 里跑时 A 就成了「别人」——
+   *  A 借 B 之手删改 A 自己,等于子代理比父代理更强(Codex 09-15 复审 #1)。守卫因此同时保护本字段。 */
+  subAgentDelegator?: string;
   /** 本 run 激活的 Normal Agent 定义 slug(start_discussion 的「分身」据此取主 agent 人设;缺省=默认 agent)。 */
   agentSlug?: string;
   /** 讨论 run 标记:start_discussion 起的后台群聊 run 内,start_discussion/wait_discussion 不可见(防递归)。 */
@@ -68,8 +79,14 @@ export interface ToolContext {
    *  不从历史恢复(hydrate 不带 tool_calls)。 */
   unlockedTools?: ReadonlySet<string>;
   /** load_tools 的解锁回调(loop 提供):记入 run 级集合并触发下一迭代 defs 重算。
-   *  缺省(子代理/群聊等)= 不支持解锁 → load_tools 不暴露,deferred 保持隐藏。 */
-  unlockTools?: (names: string[]) => void;
+   *  缺省(群聊等)= 不支持解锁 → load_tools 不暴露,deferred 保持隐藏。
+   *  返回值可选:给回**实际解锁的**名字 —— 实现方可以拒掉一部分(子代理的管理面 deny 名单),
+   *  load_tools 据此把被拒的如实报成「本会话不可用」,而不是谎报已装载。 */
+  unlockTools?: (names: string[]) => void | string[];
+  /** load_tools 本 run 已露过面(getToolDefinitions 首次把它放进 defs 时置位)。之后即使目录被解锁光
+   *  (lockedCount===0)也继续留在原位 —— 从 defs 中间删掉它会让后面所有工具头整体错位,
+   *  「解锁前是解锁后的逐字节前缀」这条前缀缓存承诺就断了。run 级 ctx 对象上的标志,不落库。 */
+  loadToolsExposed?: boolean;
   /** 本次 run 的模型 id(delegate 子代理沿用父模型)。 */
   modelId?: string;
   /** 默认生图模型 id(generate_image 缺省据此选模型;来自 agentConfig.imageModelId)。 */

@@ -2,7 +2,8 @@
  * deferred tools 按需装载(P0-2,借 pi deferred-tools):
  * registry 级——defer 工具默认不进 defs、load_tools 只在「有未解锁项且调用方支持」时出现、
  *   解锁后追加在内置 defs 末尾、muse/automation 全量、deferGroup 连坐、部署白名单自动补 load_tools;
- * loop 级——模型调 load_tools 后下一迭代 tools 里出现解锁工具;真实 delegate 子代理拿精简集且不污染父。
+ * loop 级——模型调 load_tools 后下一迭代 tools 里出现解锁工具;真实 delegate 子代理能自助解锁**能力面**、
+ *   解锁不了**管理面**(manage_* 族),且不污染父 run 的解锁面。
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -199,26 +200,65 @@ describe('loop 级:load_tools 解锁 → 下一迭代 defs 含解锁工具', () 
     expect(String(sys?.content)).toContain('manage_automation');
   });
 
-  it('真实 delegate 子代理:拿精简集(无 load_tools/deferred/delegate),父 run 解锁面不被污染', async () => {
+  it('真实 delegate 子代理:能力面可自助解锁、管理面解锁不了(目录/defs/load_tools 三处),父 run 不被污染', async () => {
+    // 子代理有自己的解锁集(从父集合拷贝而来)→ load_tools 常驻,缺工具时自助解锁而不是整轮放弃。
+    // 但**管理面**(manage_* 族)是例外:它们改的是 agent 定义/自动化规则/日程这类跨 run 存续的配置,
+    // 子代理不得自助解锁(SUB_AGENT_UNLOCK_DENY)。本条一次钉四件:能力面能装、管理面装不了、
+    // 父 run 的解锁面不被污染、delegate 本体在子代理内不可见(深度防递归)。
     const { home, llmPayloads } = await setupLoop((call) => {
       if (call === 1) {
         return { content: '', toolCalls: [{ id: 'd1', type: 'function', function: { name: 'delegate', arguments: '{"task":"analyze the numbers and report"}' } }], finishReason: 'tool_calls' };
       }
-      if (call === 2) return { content: '子代理完成', toolCalls: [], finishReason: 'stop' }; // 子代理唯一一轮
+      // 子代理第一轮:同时要一个能力面工具与一个管理面工具
+      if (call === 2) {
+        return { content: '', toolCalls: [{ id: 's1', type: 'function', function: { name: 'load_tools', arguments: '{"names":["calculator","manage_automation"]}' } }], finishReason: 'tool_calls' };
+      }
+      if (call === 3) return { content: '子代理完成', toolCalls: [], finishReason: 'stop' };
       return { content: '汇总完毕', toolCalls: [], finishReason: 'stop' };
     });
     cleanupHome = home;
     await runToDone('R2', '委派个任务');
 
-    expect(llmPayloads.length).toBe(3);
-    const subNames = (llmPayloads[1].tools || []).map((t: any) => t.function?.name);
-    expect(subNames.length).toBeGreaterThan(0);
-    expect(subNames).not.toContain('load_tools'); // 剥掉 unlockTools → 不可解锁
-    expect(subNames).not.toContain('manage_automation'); // deferred 隐藏
-    expect(subNames).not.toContain('delegate'); // 深度防递归
-    // 父 run 第二轮(汇总轮)defs 不被子代理污染:仍无 deferred、仍有 load_tools
-    const mainNames = (llmPayloads[2].tools || []).map((t: any) => t.function?.name);
+    // 非空转前提:同形状 ctx 在**父级**(depth 0)下 registry 本来就把这两个都列进 deferred 目录 ——
+    // 下面「子代理目录里没有 manage_automation」才是硬闸拦下的,而不是某个无关门禁本来就不给。
+    const catCtx = { userId: 'u1', sessionId: 'S', appId: 'tangu', profile, execMode: 'host', cwd: '/tmp' } as ToolContext;
+    const rawParent = listDeferredTools(catCtx).map((d) => d.name);
+    expect(rawParent).toContain('calculator');
+    expect(rawParent).toContain('manage_automation');
+    // depth≥1:能力面照旧在目录里,管理面被共享策略层(resolveTools)整族剔除 —— 连目录都进不去。
+    const rawSub = listDeferredTools({ ...catCtx, subAgentDepth: 1 } as ToolContext).map((d) => d.name);
+    expect(rawSub).toContain('calculator');
+    expect(rawSub).not.toContain('manage_automation');
+
+    expect(llmPayloads.length).toBe(4);
+    const toolNames = (p: any): string[] => (p.tools || []).map((t: any) => t.function?.name);
+    const subNames1 = toolNames(llmPayloads[1]);
+    expect(subNames1.length).toBeGreaterThan(0);
+    expect(subNames1).toContain('load_tools');
+    expect(subNames1).not.toContain('calculator'); // deferred 本体仍需先解锁
+    expect(subNames1).not.toContain('manage_automation');
+    expect(subNames1).not.toContain('delegate'); // 深度防递归
+
+    // ① 目录段:能力面列出、管理面不列(模型根本不知道有这条路)
+    const subSys = String((llmPayloads[1].messages as any[]).find((m) => m.role === 'system')?.content || '');
+    expect(subSys).toContain('## Additional Tools (load on demand)');
+    expect(subSys).toContain('- calculator: ');
+    expect(subSys).not.toContain('- manage_automation: ');
+
+    // ② load_tools 的回答:能力面报已装载,管理面如实报「本会话不可用」(不许谎报成功)
+    const toolMsg = String((llmPayloads[2].messages as any[]).filter((m) => m.role === 'tool').pop()?.content || '');
+    expect(toolMsg).toContain('Loaded tool(s): calculator');
+    expect(toolMsg).toContain('Unavailable in this session: manage_automation');
+
+    // ③ 子代理下一轮 defs:能力面进来了,管理面的定义从不出现
+    const subNames2 = toolNames(llmPayloads[2]);
+    expect(subNames2).toContain('calculator');
+    expect(subNames2).not.toContain('manage_automation');
+
+    // ④ 父 run 第二轮(汇总轮)defs 不被子代理污染:子代理解锁的 calculator 也不外溢
+    const mainNames = toolNames(llmPayloads[3]);
     expect(mainNames).toContain('load_tools');
+    expect(mainNames).not.toContain('calculator');
     expect(mainNames).not.toContain('manage_automation');
   });
 });

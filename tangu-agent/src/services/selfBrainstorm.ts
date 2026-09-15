@@ -15,6 +15,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
 import { publish } from './eventBus.js';
+import { publishBackgroundUsage } from './backgroundUsage.js';
 import { getToolDefinitions } from '../tools/registry.js';
 import { modelContextWindow, estimateMessageTokens } from './contextBudget.js';
 import type { ToolContext } from '../tools/toolTypes.js';
@@ -234,6 +235,10 @@ export async function runSelfBrainstorm(p: BrainstormParams): Promise<string> {
         usage: { prompt: res.usage?.prompt_tokens || 0, completion: res.usage?.completion_tokens || 0 },
         toolCalls: [],
       });
+      // 分身也烧父 run 的 token,上台账(A5):`subagent` 事件只给子聊天区渲染,不进用量口径。
+      // await 而非 void:publish 之前还要异步算费,fire-and-forget 会在父 run 收尾后才落地而丢事件
+      // (Codex 评审三轮 #3)。函数自身吞掉记账错误,不会把失败传给脑暴。
+      await publishBackgroundUsage('brainstorm', ctx.modelId || '', res.usage, { runId, model, iteration: round - 1 });
     }
     const text = String(res.content || '').trim();
     if (!text && res.toolCalls?.length) throw new Error('seat emitted only tool calls (discarded)');

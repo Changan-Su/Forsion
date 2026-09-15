@@ -8,7 +8,8 @@
  *
  * 桶:llm_wait(等首帧,含上传)/ stream(生成:token+reasoning+工具参数)/ tool / approval / inquiry /
  *     retry / compaction / queue / post_llm。usage 事件带 ttftMs/uploadMs/requestBytes(≥ 2.9.8 引擎)时
- *     按测量值报首帧与上传;老数据退回事件间隙(秒级精度)。
+ *     按测量值报首帧与上传;老数据退回事件间隙(秒级精度)。带 `usage.phase` 的是后台调用
+ *     (压缩 / delegate / muse-judge / brainstorm),单列一行,不进主循环的 prompt / 缓存 / 首帧分布。
  * 2026-09-06 本机取证:llm_wait 52% / stream 43% / tool 2%(见 docs/Log/v2.0_2026-09-06.md)。
  * attribute()/collapse()/stateAfter() 是纯函数,test/stallTimeline.test.ts 钉它们。
  */
@@ -61,7 +62,7 @@ export function attribute(runs) {
     const es = r.events || [];
     if (!es.length) continue;
     const m = r.model || '?';
-    const pm = (perModel[m] ||= { n: 0, ttft: [], ttftMeasured: [], upload: [], prompt: [], cached: [], silent: [] });
+    const pm = (perModel[m] ||= { n: 0, ttft: [], ttftMeasured: [], upload: [], prompt: [], cached: [], silent: [], bg: {} });
     pm.n++;
     let silent = 0; let stream = 0;
     for (let i = 0; i < es.length; i++) {
@@ -69,9 +70,16 @@ export function attribute(runs) {
       const span = (e.tEnd ?? e.t) - e.t; // 折叠流段自身的时长
       if (span > 0) { add('stream', span); stream += span; }
       if (e.type === 'usage') {
-        if (e.prompt) { pm.prompt.push(e.prompt); pm.cached.push((e.cached || 0) / e.prompt); }
-        if (e.ttftMs != null) pm.ttftMeasured.push(e.ttftMs);
-        if (e.uploadMs != null) pm.upload.push(e.uploadMs);
+        // 带 phase 的是**后台调用**(压缩 / delegate / muse-judge / brainstorm):自成一桶,不进主循环的
+        // prompt / 缓存 / 首帧分布,否则压缩那次的 prompt 与首帧会混进「模型 p50」把主循环画像搅烂。
+        if (e.phase) {
+          const b = (pm.bg[e.phase] ||= { n: 0, prompt: 0, cached: 0 });
+          b.n++; b.prompt += e.prompt || 0; b.cached += e.cached || 0;
+        } else {
+          if (e.prompt) { pm.prompt.push(e.prompt); pm.cached.push((e.cached || 0) / e.prompt); }
+          if (e.ttftMs != null) pm.ttftMeasured.push(e.ttftMs);
+          if (e.uploadMs != null) pm.upload.push(e.uploadMs);
+        }
       }
       if (e.type === 'tool_result' && e.elapsedMs != null) (tools[e.name || '?'] ||= []).push(e.elapsedMs);
       if (e.type === 'approval_request') {
@@ -109,13 +117,13 @@ const pick = (type, p) => {
     case 'tool_call': case 'approval_request': return { name: p?.name };
     case 'tool_result': return { name: p?.name, elapsedMs: p?.elapsedMs, isError: !!p?.isError };
     case 'status': return { phase: p?.phase ?? p?.state, stage: p?.stage, bytes: p?.bytes, uploadMs: p?.uploadMs };
-    case 'usage': return { prompt: p?.prompt, cached: p?.cached, ttftMs: p?.ttftMs, uploadMs: p?.uploadMs, llmMs: p?.llmMs, requestBytes: p?.requestBytes };
+    case 'usage': return { prompt: p?.prompt, cached: p?.cached, phase: p?.phase, ttftMs: p?.ttftMs, uploadMs: p?.uploadMs, llmMs: p?.llmMs, requestBytes: p?.requestBytes };
     case 'error': return { error: String(p?.error ?? '').slice(0, 120) };
     default: return {};
   }
 };
 
-async function fromDb(file, days) {
+export async function fromDb(file, days) {
   const { default: Database } = await import('better-sqlite3');
   const db = new Database(file, { readonly: true, fileMustExist: true });
   const runs = db.prepare(`SELECT id, model_id, status, error, created_at FROM agent_runs WHERE created_at > datetime('now', ?) ORDER BY created_at`).all(`-${days} days`);
@@ -161,6 +169,8 @@ export function report(runs) {
   for (const [m, pm] of Object.entries(r.perModel).sort((a, b) => b[1].n - a[1].n)) {
     const tt = pm.ttftMeasured.length ? pm.ttftMeasured : pm.ttft;
     lines.push(`${m.padEnd(40)} n=${String(pm.n).padStart(3)} 首帧 ${sec(pct(tt, 0.5)).padStart(3)}/${sec(pct(tt, 0.9)).padStart(3)}s${pm.ttftMeasured.length ? '' : '(间隙)'} | 上传 ${sec(pct(pm.upload, 0.5))}s | prompt ${Math.round(pct(pm.prompt, 0.5) || 0)}/${Math.round(pct(pm.prompt, 0.9) || 0)} | 缓存 ${(100 * (mean(pm.cached) || 0)).toFixed(0)}% | 静默 ${sec(pct(pm.silent, 0.5))}/${sec(pct(pm.silent, 0.9))}s`);
+    const bg = Object.entries(pm.bg || {});
+    if (bg.length) lines.push(`${' '.repeat(40)} 后台调用(不计入上面的分布):${bg.map(([p, b]) => `${p} n=${b.n} prompt=${b.prompt}`).join(' | ')}`);
   }
   lines.push('\n## 工具耗时(秒)');
   for (const [name, xs] of Object.entries(r.tools).sort((a, b) => b[1].reduce((x, y) => x + y, 0) - a[1].reduce((x, y) => x + y, 0)).slice(0, 12)) {

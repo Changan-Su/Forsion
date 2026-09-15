@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import {
   CONTEXT_WINDOW_TOKENS,
   INPUT_HARD_RATIO,
@@ -14,6 +14,18 @@ import {
   capToolResult,
   capHistoryContent,
 } from './contextBudget.js';
+import { resetModelOverridesForTest } from './modelOverrides.js';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+// 用户覆盖层默认读真家目录的 config.json —— 整个套件钉成内存表,开发机上有没有 modelOverrides 段都不影响断言。
+beforeEach(() => resetModelOverridesForTest());
+
+// 落盘断言必须钉住家目录:不钉的话 capToolResult 会往开发者真实的 ~/.tangu 里写测试垃圾(dev/正式家目录隔离)。
+const testHome = mkdtempSync(join(tmpdir(), 'tangu-spill-home-'));
+process.env.TANGU_HOME = testHome;
+afterAll(() => { delete process.env.TANGU_HOME; try { rmSync(testHome, { recursive: true, force: true }); } catch { /* ignore */ } });
 
 describe('modelContextWindowInfo 来源标注', () => {
   it('model 元数据 / family 族表 / default 兜底 三档来源正确', () => {
@@ -22,6 +34,24 @@ describe('modelContextWindowInfo 来源标注', () => {
     expect(modelContextWindowInfo('whatever')).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'default' })
     // 无效元数据(<4k)不算 model 档,落到后续档位
     expect(modelContextWindowInfo('whatever', { context_window: 100 }).source).toBe('default')
+  })
+  it('族表同时按模型对象的 apiModelId 匹配:目录导入的 pr-<hash> id 不再一律落默认档(2026-09-11 生产实报)', () => {
+    const hashId = 'pr-4cbcb1891e630b889b329a3dd0a77df84c2406e0babae76e'
+    expect(modelContextWindowInfo(hashId, { contextWindow: null, apiModelId: 'gpt-6-astra' })).toEqual({ tokens: 272_000, source: 'family' })
+    expect(modelContextWindowInfo('Auto', { apiModelId: 'claude-opus-5' })).toEqual({ tokens: 1_000_000, source: 'family' })
+    // admin 把 272K 填成 272:模型自报值无效 → 仍靠 apiModelId 走族表,而不是默认档
+    expect(modelContextWindowInfo(hashId, { contextWindow: 272, apiModelId: 'gpt-6-astra' })).toEqual({ tokens: 272_000, source: 'family' })
+    // 有效的自报值压过族表
+    expect(modelContextWindowInfo(hashId, { contextWindow: 272_000, apiModelId: 'gpt-6-astra' }).source).toBe('model')
+    // id 命中优先于 apiModelId(数组顺序)
+    expect(modelContextWindowInfo('kimi/kimi-k3', { apiModelId: 'gpt-5' })).toEqual({ tokens: 1_000_000, source: 'family' })
+  })
+  it('用户本机 modelOverrides 压过模型自报 / 族表,但低于 4k 的脏值被滤掉', () => {
+    resetModelOverridesForTest({ 'pr-x': { contextWindow: 500_000 }, 'codex/gpt-5.6-sol': { contextWindow: 1_050_000 }, dirty: { contextWindow: 272 } })
+    expect(modelContextWindowInfo('pr-x', { contextWindow: 272_000, apiModelId: 'gpt-6-astra' })).toEqual({ tokens: 500_000, source: 'override' })
+    expect(modelContextWindowInfo('codex/gpt-5.6-sol')).toEqual({ tokens: 1_050_000, source: 'override' })
+    expect(modelContextWindowInfo('dirty')).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'default' })
+    expect(modelContextWindowInfo('untouched', { contextWindow: 200_000 })).toEqual({ tokens: 200_000, source: 'model' })
   })
 })
 
@@ -82,10 +112,10 @@ describe('contextBudget constants', () => {
     expect(INPUT_WARN_RATIO).toBe(0.25);
     expect(COMPACT_TRIGGER_RATIO).toBe(0.5);
   });
-  it('default context window is 128k when env unset', () => {
+  it('default context window is 272k when env unset (2026-09-11 起;原 128k 让未收录模型 64k 就折叠)', () => {
     // CI 不设 TANGU_CONTEXT_WINDOW_TOKENS
     if (!process.env.TANGU_CONTEXT_WINDOW_TOKENS) {
-      expect(CONTEXT_WINDOW_TOKENS).toBe(128_000);
+      expect(CONTEXT_WINDOW_TOKENS).toBe(272_000);
     }
     expect(CONTEXT_WINDOW_TOKENS).toBeGreaterThanOrEqual(4_000);
   });
@@ -189,15 +219,37 @@ describe('capToolResult / capHistoryContent', () => {
     expect(capToolResult(s)).toBe(s);
     expect(capHistoryContent(s)).toBe(s);
   });
-  it('caps oversize tool result keeping head+tail', () => {
-    const s = 'a'.repeat(200_000);
+  it('caps oversize tool result with a middle truncation + spill path (E4)', () => {
+    // 头尾各自可识别:中段被切掉后 head/tail 不能互相冒充。
+    const s = 'H'.repeat(100_000) + 'MIDDLE_ONLY_MARKER' + 'T'.repeat(100_000);
     const out = capToolResult(s);
-    expect(out.length).toBeLessThan(s.length);
-    expect(out).toContain('single tool output too large');
-    expect(out.startsWith('a'.repeat(4_000))).toBe(true);
-    expect(out.endsWith('a'.repeat(1_500))).toBe(true);
+    expect(out.length).toBeLessThanOrEqual(48_000); // 模型可见量 ≤ 帽(≈12k token,Codex 对齐)
+    expect(out.startsWith('H'.repeat(34_000))).toBe(true);
+    expect(out.endsWith('T'.repeat(12_000))).toBe(true);
+    expect(out).not.toContain('MIDDLE_ONLY_MARKER'); // 中段截断,不是尾截断
+    const cut = s.length - 34_000 - 12_000;
+    expect(out).toContain(`omitted ${cut} chars of ${s.length} total`);
+
+    // 全文落盘 + 路径写进标记 —— 截断不再是信息湮灭。
+    const file = /saved on the host at (\S+) \(/.exec(out)?.[1];
+    expect(file).toBeTruthy();
+    expect(readFileSync(file!, 'utf-8')).toBe(s);
+
+    // 落点是**引擎家目录**而非 os.tmpdir():tmpdir 会被系统/重启回收,而历史回放几天后 hydrate
+    // 出同一条工具结果时,标记里的路径还得指向真文件。
+    expect(file!.startsWith(join(testHome, 'tool-spill'))).toBe(true);
+    // 标记必须如实说明这是宿主机路径(sandbox execMode 下模型的 read_file/grep 够不着),
+    // 否则模型会照着标记白试一轮。
+    expect(out).toContain('not reachable from a sandboxed execution mode');
+
+    // 确定性:同输入必须字节相同(historyReplay 也走这条路径,随机名 = 前缀缓存逐轮清零)。
+    expect(capToolResult(s)).toBe(out);
   });
-  it('caps oversize history content keeping head+tail', () => {
+  it('leaves a result at exactly the cap untouched', () => {
+    const s = 'a'.repeat(48_000);
+    expect(capToolResult(s)).toBe(s);
+  });
+  it('caps oversize history content keeping head+tail (帽与工具结果帽解耦,仍是 100k)', () => {
     const s = 'a'.repeat(200_000);
     const out = capHistoryContent(s);
     expect(out.length).toBeLessThan(s.length);

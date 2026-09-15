@@ -8,7 +8,7 @@ import { deps } from '../seams/runtime.js';
 import { DockerCleanupError } from '../sandbox/dockerLifecycle.js';
 import { isHostSandboxRestricted, isHostSandboxToolAllowed, resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { executeCustomTool } from './customTools.js';
-import { registerToolProvider, resolveTools, isDeferredIn, type ToolDef } from './toolRegistry.js';
+import { registerToolProvider, resolveTools, isDeferredIn, isSubAgentDenied, canonicalToolName, type ToolDef } from './toolRegistry.js';
 import { presetOf } from '../core/presetTable.js';
 import { datetimeProvider, calculatorProvider } from './builtin/coreUtils.js';
 import { memoryLogProvider } from './builtin/memoryLog.js';
@@ -229,11 +229,20 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
   if (!deferBypass) {
     for (const t of tools.values()) if (isDeferredIn(ctx, t.name, t.deferred) && !unlocked?.has(t.name)) lockedCount++;
   }
+  // load_tools 一旦在本 run 露过面就**粘住**到 run 结束(ctx 级标志,三个 loop 的 ctx 对象都跨迭代复用)。
+  // 此前的判据只有 lockedCount>0:一次 load_tools 把目录里最后一批解锁掉,下一轮 lockedCount===0 →
+  // load_tools 被**从 defs 中间删掉**,解锁项又追加在末尾 —— 工具 JSON 从 load_tools 原来的位置起
+  // 整体错位,「解锁前那份是解锁后那份的逐字节前缀」这条缓存承诺当场作废(前缀缓存从该点全 miss)。
+  // 粘住只多一份 ~450B 的工具头,换的是前缀不动。
+  const showLoadTools = !!ctx.unlockTools && (lockedCount > 0 || !!ctx.loadToolsExposed);
   const defs: Tool[] = [];
   const unlockedDeferred: Tool[] = [];
   for (const [name, t] of tools) {
     if (name === 'use_skill' && !hasSkills) continue; // 无启用技能时不暴露 use_skill
-    if (name === 'load_tools' && (lockedCount === 0 || !ctx.unlockTools)) continue; // 无可解锁项/不支持解锁时不暴露
+    if (name === 'load_tools') {
+      if (!showLoadTools) continue; // 无可解锁项(且本 run 从未露面)/不支持解锁时不暴露
+      ctx.loadToolsExposed = true;
+    }
     if (isDeferredIn(ctx, name, t.deferred) && !deferBypass) {
       if (unlocked?.has(name)) unlockedDeferred.push(t.definition);
       continue;
@@ -275,15 +284,27 @@ export function listDeferredTools(ctx: ToolContext): { name: string; hint: strin
   return out;
 }
 
-/** 旧工具名静默别名(不进 defs/快照):只兜升级瞬间仍引用旧名的存量会话上下文。 */
-const TOOL_NAME_ALIASES: Record<string, string> = { muse_watch: 'manage_automation' };
+// 旧工具名别名表(muse_watch → manage_automation)已迁 toolRegistry.ts:共享策略层的
+// isSubAgentDenied 要先归一再判闸,留在本文件会成环(toolRegistry → registry → toolRegistry)。
 
 /** 执行一个工具调用。先查（按模式/profile 过滤的）内置，再查本 run 的自定义工具；未知工具返回 isError。 */
 export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<ToolResult> {
   ctx.signal?.throwIfAborted();
   // Legacy/internal callers still receive the trusted policy before executing a covered tool.
   if (ctx.execMode === 'host' && !ctx.hostSandbox) ctx = { ...ctx, hostSandbox: resolveHostSandboxPolicy() };
-  const name = TOOL_NAME_ALIASES[call.function.name] || call.function.name;
+  const name = canonicalToolName(call.function.name);
+  // 子代理硬闸(共享执行层):管理面对 subAgentDepth≥1 缺省拒,**早于**任何审批闸门 ——
+  // 别去问用户批不批一个本就不该存在的调用。resolveTools 那边已让它不可见,这里是「模型凭名字
+  // 硬调」那条路(defs 不是能力边界)。按归一后的名字判,旧别名 muse_watch 两种拼写都覆盖;
+  // 父代理在 delegate.grantTools 里点名授予过的工具(ctx.subAgentGrants)不在此拒 —— 判据在
+  // isSubAgentDenied 内部,本处天然随之放行(仍要过下面的沙箱/解析/审批各闸)。
+  if (isSubAgentDenied(ctx, name)) {
+    return {
+      toolCallId: call.id, name,
+      result: `Error: tool "${name}" is unavailable to sub-agents — it changes agent / skill / automation / schedule / harness configuration, which only the main agent may do unless it grants that tool when delegating (delegate.grantTools). State what you need in your final report instead; do not retry this name.`,
+      isError: true,
+    };
+  }
   if (!isHostSandboxToolAllowed(name, ctx)) {
     return { toolCallId: call.id, name, result: `Error: tool "${name}" is unavailable under the current host sandbox policy.`, isError: true };
   }

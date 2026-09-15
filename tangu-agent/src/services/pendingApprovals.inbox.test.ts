@@ -26,6 +26,7 @@ vi.mock('../tools/builtin/inboxSend.js', () => ({
 }));
 vi.mock('../tools/toolRegistry.js', () => ({
   listToolProviders: () => [{ origin: 'builtin', tools: () => [{ name: 'write_file' }] }],
+  AGENT_SCOPED_TOOLS: new Set(['manage_harness', 'manage_skill', 'manage_agent']), // deferApproval 的 ALS 闸要读
 }));
 vi.mock('../seams/runtime.js', () => ({
   deps: () => ({ brain: { memory: { appendLogEntry: async (_u: string, line: string) => { state.logs.push(line); } } } }),

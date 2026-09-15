@@ -3,7 +3,9 @@
  *   GET/POST /agent/special/config                     读/写 ~/.tangu/special-agents.json
  *   GET      /agent/special/historian/activity?limit=  Historian 活动流（special_agent_log）
  *   GET      /agent/special/muse/todos?status=         Muse TODO 列表
- *   PATCH    /agent/special/muse/todos/:id { status }  改 TODO 状态
+ *   GET      /agent/special/muse/todos/:id             单条 TODO(收件箱任务卡按真状态决定给不给按钮)
+ *   PATCH    /agent/special/muse/todos/:id { status, from? }  改 TODO 状态(带 from = CAS,不符 409)
+ *   POST     /agent/special/muse/todos/:id/approve     批准 TODO → 一次性、此刻到期的 Muse 日程(收件箱任务卡「交给 Muse 执行」)
  *   POST     /agent/special/muse/todos/inject { todoIds, sessionId }  注入选中 TODO 到会话并起 run
  *   GET      /agent/special/muse/status                Muse 运行态 + 本窗口预算余量
  *   GET      /agent/special/muse/triggers              自动化规则列表(manage_automation 工具/构建器写入;附 nextRunAt)
@@ -43,7 +45,7 @@ import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 import { listAutomationSessions, fireTrigger, listExecutions, isAutomationTool, launchUnattendedRun, automationMessage } from '../services/automation.js';
 import { resolveTools, declaredApproval } from '../tools/toolRegistry.js';
 import type { ToolContext } from '../tools/toolTypes.js';
-import { loadSchedule, entriesOf, validateEntryInput, upsertEntry, removeEntry } from '../services/agentSchedule.js';
+import { loadSchedule, entriesOf, validateEntryInput, upsertEntry, ensureEntry, removeEntry } from '../services/agentSchedule.js';
 import { MUSE_AGENT_SLUG, ensureMuseAgent, getAgent, listAgents, isValidSlug } from '../agents/agentRegistry.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { listApprovals, decideApproval, getApproval } from '../services/pendingApprovals.js';
@@ -133,22 +135,44 @@ router.get('/agent/special/muse/todos', authMiddleware, async (req: AuthRequest,
   }
 });
 
+// 单条 TODO:收件箱任务卡按它的真状态决定给不给按钮(列表接口有 500 行上限,老 TODO 会查不到 → 被当成 pending)。
+router.get('/agent/special/muse/todos/:id', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const rows = await query<any[]>(`SELECT id, title, status FROM muse_todos WHERE id = ? AND user_id = ? LIMIT 1`, [req.params.id, req.user!.userId]);
+    if (!rows?.[0]) return res.status(404).json({ error: 'todo_not_found', detail: 'todo not found' });
+    res.json({ todo: rows[0] });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'todo failed' });
+  }
+});
+
+const TODO_STATUSES = ['pending', 'injected', 'done', 'dismissed'];
 router.patch('/agent/special/muse/todos/:id', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
     const userId = req.user!.userId;
     const status = String(req.body?.status || '');
-    if (!['pending', 'injected', 'done', 'dismissed'].includes(status)) {
+    if (!TODO_STATUSES.includes(status)) {
       return res.status(400).json({ detail: 'invalid status' });
     }
+    // from = CAS(收件箱任务卡用):当前状态正是 from 才改,否则 409 —— 别处处理过的待办不许被一张旧卡改回去 / 改成忽略。
+    // 不带 from = 照旧无条件改(MuseView)。
+    const from = req.body?.from == null ? '' : String(req.body.from);
+    if (from && !TODO_STATUSES.includes(from)) return res.status(400).json({ detail: 'invalid from' });
     const rows = await query<any[]>(
-      `SELECT title FROM muse_todos WHERE id = ? AND user_id = ? LIMIT 1`,
-      [req.params.id, userId],
+      `UPDATE muse_todos SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?${from ? ' AND status = ?' : ''} RETURNING title`,
+      from ? [status, req.params.id, userId, from] : [status, req.params.id, userId],
     );
-    await query(
-      `UPDATE muse_todos SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`,
-      [status, req.params.id, userId],
-    );
+    if (from && !rows?.length) return res.status(409).json({ error: 'todo_not_pending', detail: `todo is not ${from}` });
+    if (from === 'pending' && (status === 'injected' || status === 'dismissed')) {
+      // 卡片落点(新会话 / 在此 / 忽略)走这里、不走批准路由:此前某次批准若停在「条目已落、状态未改」,那条孤儿条目
+      // 这时就该撤掉 —— 否则状态一变 injected,到期闸会放它跑,Muse 与会话各做一遍(Codex 09-11 P1)。
+      const db = await loadSchedule(MUSE_AGENT_SLUG).catch(() => null);
+      for (const e of db ? entriesOf(db).filter((x) => x.description === `todo ${req.params.id}`) : []) {
+        await removeEntry(MUSE_AGENT_SLUG, e.id).catch(() => {});
+      }
+    }
     // 反馈闭环:完成/驳回写进 Muse 的 LOG,下周期它 read_log 即见,据此校准后续提议。
     const title = String(rows?.[0]?.title || '').trim();
     if (title && (status === 'done' || status === 'dismissed')) {
@@ -157,6 +181,56 @@ router.patch('/agent/special/muse/todos/:id', authMiddleware, async (req: AuthRe
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'update todo failed' });
+  }
+});
+
+/** 本地时刻 → 日程锚点 `YYYY-MM-DDTHH:mm`(dueEntries 按本地时间解析;与桌面 taskLanding.localStamp 同格式)。 */
+function localMinute(d: Date): string {
+  const p = (x: number): string => String(x).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+const MUSE_TODO_EXEC_PREFIX = 'The user approved this todo you proposed: carry it out now within your permission tier, then remove this entry. ';
+
+// 批准 Muse 的 TODO(收件箱任务卡「交给 Muse 执行」,2026-09-11):任务书按 id 从库里取规范 title/detail —— 不信信件正文;
+// 建一条一次性、此刻到期的 Muse 日程(到期回灌 Muse 周期,按它自己的权限档执行,越档动作照常回到审批卡),再 CAS pending → injected。
+// 顺序是「日程先落、状态后改」:两步之间进程退出 = TODO 仍 pending、条目已在,再点一次按 `todo <id>` 找回同一条、只改状态
+// —— 不会出现「已 injected 却没有条目」、也不会重复建(Codex 09-11 P1)。
+router.post('/agent/special/muse/todos/:id/approve', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  const userId = req.user!.userId;
+  const id = String(req.params.id || '');
+  try {
+    if (!loadSpecialAgentsConfig().muse.enabled) return res.status(409).json({ error: 'muse_disabled', detail: 'Muse is disabled' });
+    const t = (await query<any[]>(`SELECT title, detail, status FROM muse_todos WHERE id = ? AND user_id = ? LIMIT 1`, [id, userId]))?.[0];
+    if (!t || t.status !== 'pending') return res.status(409).json({ error: 'todo_not_pending', detail: 'todo not found or already handled' });
+    const title = String(t.title || '').trim();
+    const v = validateEntryInput({
+      name: title,
+      date: localMinute(new Date()),
+      auto: true,
+      todo: true,
+      prompt: MUSE_TODO_EXEC_PREFIX + title + (t.detail ? `\n\n${t.detail}` : ''),
+      description: `todo ${id}`,
+    }, { maxPrompt: 4500 }); // 前缀 + 标题 200 + detail 4000 装得下;别的日程入口仍是 4000
+    if (!v.ok) throw new Error(v.error);
+    const r = await ensureEntry(MUSE_AGENT_SLUG, v.value, (e) => e.description === `todo ${id}`, (await getAgent(MUSE_AGENT_SLUG))?.name);
+    if (!r.ok) throw new Error(r.error);
+    const won = await query<any[]>(
+      `UPDATE muse_todos SET status = 'injected', updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND user_id = ? AND status = 'pending' RETURNING id`,
+      [id, userId],
+    );
+    if (!won?.length) {
+      // 查的时候还是 pending、改的时候已经不是:另一次批准赢了(injected)就留着同一条条目;被忽略 / 完成了才撤回这次新建的。
+      const now = (await query<any[]>(`SELECT status FROM muse_todos WHERE id = ? AND user_id = ? LIMIT 1`, [id, userId]))?.[0]?.status;
+      if (r.created && now !== 'injected') await removeEntry(MUSE_AGENT_SLUG, r.entry.id);
+      return res.status(409).json({ error: 'todo_not_pending', detail: 'todo already handled' });
+    }
+    void appendMuseFeedback(userId, `[feedback] todo "${title}" approved by user: Muse should carry it out now`);
+    kickMuse();
+    res.json({ ok: true, entry: r.entry });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'approve todo failed' });
   }
 });
 

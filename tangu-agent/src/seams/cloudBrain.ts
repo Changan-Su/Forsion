@@ -43,6 +43,12 @@ export interface BuildPayloadOpts {
   stream?: boolean;
   /** 缓存路由键(传 sessionId):OpenAI 官方 API 的 prompt_cache_key,同会话请求粘到同一推理机提升前缀缓存命中。 */
   cacheKey?: string;
+  /** 运行中的 agent slug(B4② 实验载体)。TANGU_CACHE_KEY_SCOPE='agent' 时直连面据此把缓存路由键
+   *  改成 agent+模型 维度(resolveCacheKey);缺省档与托管面都忽略它。 */
+  agentId?: string;
+  /** 当前 run id(B4① 实验载体)。直连 Responses 客户端据此把 Codex 的粘性路由态按 run 存,绝不跨 run;
+   *  缺省档与托管面都忽略它。 */
+  runId?: string;
   /** GPT-5 系可见正文详略(Responses 直连才上 wire;coding 预设传 'low' 对齐 codex 模型默认)。 */
   verbosity?: 'low' | 'medium' | 'high';
   /** 思考摘要开关(Responses 直连):'none'=不生成摘要(headless/bench 省输出;UI 将看不到思考过程)。缺省=auto。 */

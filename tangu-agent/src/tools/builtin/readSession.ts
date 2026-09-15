@@ -5,10 +5,12 @@
  * 没有这个工具时那只是给人看的书签,agent 读不到内容;有了它,引用才真的是引用。
  *
  * 运行时边界是 user + app + Agent。管理界面的会话浏览由 routes 独立提供。
+ * 数据经 deps().state.readSessionTranscript(SQL 在 services/sessionSearchSql.ts;thin worker 经网关代查)——
+ * 本文件只剩入参整形与输出措辞,不再直连 core/db.js(否则云端 Web / 移动端整体抛错)。
  */
 import type { ToolProvider } from '../toolRegistry.js';
-import { query } from '../../core/db.js';
-import { sessionAgentPredicate, sessionToolScope } from '../../services/sessionSearch.js';
+import { deps } from '../../seams/runtime.js';
+import { sessionToolScope } from '../../services/sessionSearch.js';
 
 /** 一条消息压成一行(工具调用只留名字;正文按 perMsg 截断)。
  *  ⚠️助手消息在库里 role='model'(不是 'assistant'),这里归一化,免得模型把它当成用户发言。 */
@@ -70,45 +72,24 @@ export const readSessionProvider: ToolProvider = {
         const charOffset = Math.min(1_000_000, Math.max(0, Math.floor(Number(args.char_offset) || 0)));
         const messageId = String(args.message_id || '').trim();
         const beforeId = String(args.before_message_id || '').trim();
-        const ownership = sessionAgentPredicate(sessionToolScope(ctx.agentSlug));
-        const scope = `s.id = ? AND s.user_id = ? AND s.app_id = ? AND s.kind = 'user' AND ${ownership.sql}`;
-        const scopeParams = [sid, ctx.userId, ctx.appId, ...ownership.params];
+        const toolScope = sessionToolScope(ctx.agentSlug);
         ctx.signal?.throwIfAborted();
 
         if (sid === ctx.sessionId) return 'read_session: that is the current session — its history is already in context.';
-        const sess = await query<any[]>(
-          `SELECT s.id, substr(s.title, 1, 500) AS title, substr(s.summary, 1, 2000) AS summary FROM chat_sessions s WHERE ${scope}`,
-          scopeParams,
-        );
+        const transcript = await deps().state.readSessionTranscript({
+          sessionId: sid, userId: ctx.userId, appId: ctx.appId, toolScope,
+          limit, perMessageChars: perMsg, charOffset,
+          messageId: messageId || undefined, beforeMessageId: beforeId || undefined, signal: ctx.signal,
+        });
         ctx.signal?.throwIfAborted();
-        if (!sess.length) return `read_session: no session ${sid} (it may belong to someone else, or have been deleted).`;
-
+        if (!transcript.session) return `read_session: no session ${sid} (it may belong to someone else, or have been deleted).`;
+        if (transcript.anchorMissing) return 'read_session: message not found in this session.';
         // 取最近 limit 条(DESC + LIMIT),再翻回时间正序展示。
-        // limit 已 clamp 成 1..300 的整数,内联进 SQL(LIMIT 占位符不是所有后端都吃)。
-        let pageSql = '';
-        const pageParams: unknown[] = [];
-        if (messageId) { pageSql = ' AND m.id = ?'; pageParams.push(messageId); }
-        else if (beforeId) {
-          const anchor = await query<any[]>(
-            `SELECT m.id, m.timestamp FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id WHERE ${scope} AND m.id = ?`,
-            [...scopeParams, beforeId],
-          );
-          ctx.signal?.throwIfAborted();
-          if (!anchor.length) return 'read_session: message not found in this session.';
-          pageSql = ' AND (m.timestamp < ? OR (m.timestamp = ? AND m.id < ?))';
-          pageParams.push(anchor[0].timestamp, anchor[0].timestamp, beforeId);
-        }
-        const rows = (await query<any[]>(
-          `SELECT m.id, m.timestamp, m.role, substr(m.content, ${charOffset + 1}, ${perMsg + 1}) AS content,`
-            + ` substr(CAST(m.tool_calls AS TEXT), 1, 4000) AS tool_calls FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id`
-            + ` WHERE ${scope}${pageSql} ORDER BY m.timestamp DESC, m.id DESC LIMIT ${messageId ? 1 : limit}`,
-          [...scopeParams, ...pageParams],
-        )).slice().reverse();
-        ctx.signal?.throwIfAborted();
+        const rows = transcript.rows.slice().reverse();
         if (messageId && !rows.length) return 'read_session: message not found in this session.';
-        const title = sess[0].title || '(untitled)';
+        const title = transcript.session.title || '(untitled)';
         // Historian 摘要放头部:引用消费的第一跳先看摘要,再决定要不要细读逐条消息。
-        const summary = String(sess[0].summary || '').trim();
+        const summary = String(transcript.session.summary || '').trim();
         const summaryLine = summary ? `\nSummary: ${summary}` : '';
         if (!rows.length) return `Session "${title}" (${sid}) has no messages.${summaryLine}`;
         const head = `Session "${title}" (${sid}) — ${rows.length} message(s), oldest first${rows.length >= limit ? ' (truncated to the most recent)' : ''}:`;

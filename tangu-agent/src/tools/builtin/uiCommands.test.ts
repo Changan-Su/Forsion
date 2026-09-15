@@ -121,3 +121,36 @@ describe('set_ui_setting 之后 list_ui_commands 反映新值', () => {
     });
   });
 });
+
+/**
+ * 2026-09-11 实报:set-active-space 连续 50 次以 `{}` 到达渲染端。非 object 的 args 以前被静默丢掉,
+ * 渲染端只能回「missing required argument "id"」,模型以为自己传了、原样重试。
+ */
+describe('run_ui_command 的 args 形状', () => {
+  it('JSON 字符串照收;非 object 明确退回且不下发', async () => {
+    const { configureTangu } = await import('../../seams/runtime.js');
+    const { createTanguProfile } = await import('../../profiles/index.js');
+    const { executeTool } = await import('../registry.js');
+    const { resolveUiAction } = await import('../../services/uiAck.js');
+    const stub = new Proxy({}, { get: () => () => { throw new Error('stub'); } }) as any;
+    const profile = createTanguProfile({ sandboxMode: 'none' });
+    const sent: any[] = [];
+    const fakeState = new Proxy({
+      appendEvent: async (runId: string, type: string, payload: any) => {
+        if (type === 'ui_cmd') { sent.push(payload); queueMicrotask(() => resolveUiAction(runId, payload.ackId, { ok: true })); }
+        return 1;
+      },
+    } as Record<string, any>, { get: (t, k) => (k in t ? t[k as string] : () => { throw new Error(`stub state.${String(k)}`); }) });
+    configureTangu({ host: stub, brain: stub, billing: stub, profile, state: fakeState });
+    const ctx: any = {
+      userId: 'u1', sessionId: 's1', appId: 'tangu', runId: 'r2', profile, client: 'desktop/0.0.0', execMode: 'host', cwd: '/tmp',
+      uiCommands: [{ id: 'set-active-space', description: 'switch Space' }],
+    };
+    const run = (a: unknown) => executeTool({ id: 'c', type: 'function', function: { name: 'run_ui_command', arguments: JSON.stringify({ id: 'set-active-space', args: a }) } } as any, ctx);
+
+    expect((await run('{"id":"agent"}')).result).toBe('Ran set-active-space.');
+    expect(sent[0].args).toEqual({ id: 'agent' });
+    for (const bad of ['agent', 42, ['agent']]) expect((await run(bad)).result).toMatch(/args must be a JSON object/);
+    expect(sent).toHaveLength(1);
+  });
+});

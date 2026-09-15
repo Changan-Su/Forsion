@@ -13,7 +13,7 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
-import { listAgents, getAgent, saveAgent, deleteAgent, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG, slugify, isValidSlug } from '../agents/agentRegistry.js';
+import { listAgents, getAgent, saveAgent, deleteAgent, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN } from '../agents/agentRegistry.js';
 import {
   cloudAgentsEnabled, cloudListAgents, cloudGetAgent, cloudSaveAgent, cloudDeleteAgent,
   cloudSaveAgentAvatar, cloudReadAgentAvatar, cloudDeleteAgentAvatar, cloudReadAgentsMeta, cloudWriteAgentsMeta,
@@ -76,6 +76,8 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
       while (await getDef(`${base}-${n}`)) n++;
       slug = `${base}-${n}`;
     }
+    // Agent 级轮数下限(与 agentActivation / manage_agent 同口径):低于下限显式 400,别让 buildAgentDef 静默清空。
+    if (Number(b.maxIterations) > 0 && Number(b.maxIterations) < AGENT_MAX_ITERATIONS_MIN) return res.status(400).json({ detail: `max_iterations must be at least ${AGENT_MAX_ITERATIONS_MIN}` });
     const input = {
       slug,
       name: String(b.name),
@@ -116,6 +118,7 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
     const b = req.body || {};
     const scope = cloud ? null : agentSyncScope(deps().brain.agentFiles, req.user!.userId);
     if (!cloud && b.cloudSync && !scope) return res.status(400).json({ detail: 'Sign in to a Forsion account before enabling cloud sync' });
+    if (Number(b.maxIterations) > 0 && Number(b.maxIterations) < AGENT_MAX_ITERATIONS_MIN) return res.status(400).json({ detail: `max_iterations must be at least ${AGENT_MAX_ITERATIONS_MIN}` });
     const input = {
       slug,
       name: b.name != null ? String(b.name) : cur.name,

@@ -279,9 +279,57 @@ router.get('/agent/sessions/:id/config', authMiddleware, async (req: AuthRequest
   }
 });
 
+/** 从「按 e.id 降序」的 usage 事件里取最近一条**主循环**的(C-5:带 phase 的是后台调用,
+ *  prompt 是压缩/子代理/脑暴自己的上下文)。PG 给 jsonb 对象、SQLite 给 JSON 字符串,故统一过
+ *  parseMaybeJson;窗口内全是后台事件 → {} → contextTokens 0(与「没有事件」同义)。 */
+export function pickMainLoopUsage(rows: Array<{ payload?: any }> | undefined): any {
+  return mainLoopUsageIn(rows || []) ?? {};
+}
+
+/** 同一判别的「找没找到」版:分页要靠 undefined 决定继不继续往回翻(`{}` 分不开「找到一条空
+ *  payload」与「一条主循环 usage 都没有」)。 */
+function mainLoopUsageIn(rows: Array<{ payload?: any }>): any | undefined {
+  for (const r of rows) {
+    const p = parseMaybeJson(r?.payload);
+    if (p && typeof p === 'object' && p.phase == null) return p;
+  }
+  return undefined;
+}
+
+/** 一页 usage 事件(按 e.id 降序);cursor=null 取最新一页,否则取 id < cursor 的下一页。 */
+export type UsagePageFetcher = (cursor: number | null) => Promise<Array<{ id?: any; payload?: any }>>;
+
+/**
+ * 向前(时间倒序)翻页找最近一条**主循环** usage。
+ * 固定 20 条窗口不行:一次 delegate 就能产出 20+ 条后台 usage,窗口内全是后台事件时本接口会
+ * 谎报 contextTokens=0,尽管更早明明有有效的主循环记录(Codex 评审三轮 #7)。
+ * 游标用 `e.id <`(而非 OFFSET):翻页期间有新事件写入也不会错位重复。
+ * ponytail: 上限 10 页 × 20 条 = 200 行 —— 够覆盖已知生产者上限(delegate 24 轮 + 脑暴席位),
+ * 再深的就如实回落 0,不为极端情形做无界扫描。
+ */
+export async function findMainLoopUsage(
+  fetchPage: UsagePageFetcher,
+  opts?: { pageSize?: number; maxPages?: number },
+): Promise<any> {
+  const pageSize = opts?.pageSize ?? 20;
+  const maxPages = opts?.maxPages ?? 10;
+  let cursor: number | null = null;
+  for (let page = 0; page < maxPages; page++) {
+    const rows = await fetchPage(cursor);
+    if (!rows?.length) break;
+    const hit = mainLoopUsageIn(rows);
+    if (hit) return hit;
+    if (rows.length < pageSize) break; // 最后一页,不用再翻
+    const nextCursor = Number(rows[rows.length - 1]?.id);
+    if (!Number.isFinite(nextCursor)) break; // 后端没给 id:退回单页行为,绝不死循环
+    cursor = nextCursor;
+  }
+  return {};
+}
+
 // 本会话累计 token 消耗（跨 run 求和），供客户端「本会话 token」显示。
 // contextTokens = 最近一次 usage 事件的 prompt（当前上下文占用）：客户端只在流式期间收到 usage 事件，
-// 重载/重开会话后没有它，上下文圈只能显示 0%（连「该不该压缩」都判断不了）。事件本就落库，这里回放最后一条。
+// 重载/重开会话后没有它，上下文圈只能显示 0%（连「该不该压缩」都判断不了）。事件本就落库，这里回放最后一条主循环的（见 pickMainLoopUsage）。
 router.get('/agent/sessions/:id/usage', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
@@ -292,12 +340,14 @@ router.get('/agent/sessions/:id/usage', authMiddleware, async (req: AuthRequest,
       [req.params.id],
     );
     // e.id 单调递增（PG BIGSERIAL / SQLite AUTOINCREMENT），跨 run 取真正的最后一条。
-    const ev = await query<any[]>(
-      `SELECT e.payload FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id
-       WHERE r.session_id = ? AND e.type = 'usage' ORDER BY e.id DESC LIMIT 1`,
-      [req.params.id],
-    );
-    const last = parseMaybeJson(ev[0]?.payload) || {};
+    // 每页 20 条再在 JS 里挑主循环那条(不写 SQL 的 JSON 谓词——PG jsonb 与 SQLite text 两套语法);
+    // 整页都是后台事件就按游标继续往回翻(见 findMainLoopUsage 的上限说明)。
+    const last = await findMainLoopUsage(async (cursor) => query<any[]>(
+      `SELECT e.id, e.payload FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id
+       WHERE r.session_id = ? AND e.type = 'usage'${cursor === null ? '' : ' AND e.id < ?'}
+       ORDER BY e.id DESC LIMIT 20`,
+      cursor === null ? [req.params.id] : [req.params.id, cursor],
+    ));
     res.json({ tokensTotal: Number(rows[0]?.total) || 0, contextTokens: Number(last.prompt) || 0 });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'usage failed' });
@@ -309,12 +359,26 @@ router.get('/agent/sessions/:id/usage', authMiddleware, async (req: AuthRequest,
 //    scripts/stall-timeline.mjs 归属「秒数去哪了」(2026-09-06 取证:本机 52% 墙钟在等首帧)。
 //    token/reasoning/tool_stream 连续同类折叠成一段(首末时刻+条数);其余事件只留定位字段
 //    (工具名/耗时/阶段/用量/首帧毫秒)。最近 40 个 run,单会话导出可控。──
-function timelineFields(type: string, p: any): Record<string, unknown> {
+export function timelineFields(type: string, p: any): Record<string, unknown> {
   switch (type) {
     case 'tool_call': return { name: p?.name };
     case 'tool_result': return { name: p?.name, elapsedMs: p?.elapsedMs, isError: !!p?.isError, outputChars: p?.outputChars };
     case 'status': return { phase: p?.phase ?? p?.state, stage: p?.stage, bytes: p?.bytes, uploadMs: p?.uploadMs, attempt: p?.attempt, waitMs: p?.waitMs, iteration: p?.iteration };
-    case 'usage': return { prompt: p?.prompt, completion: p?.completion, cached: p?.cached, ttftMs: p?.ttftMs, uploadMs: p?.uploadMs, llmMs: p?.llmMs, requestBytes: p?.requestBytes, iteration: p?.iteration };
+    // phase 分辨「后台调用(compaction/historian/brainstorm/muse-judge/delegate)」与主循环调用(无 phase);
+    // 缺了它导出的时间线两者混在一起,stall-timeline.mjs 也分不开。主循环侧 undefined,res.json 直接丢掉,不占体积。
+    // A4/C-2 的仪器字段一并透传:cacheReported 分「上游没报缓存」与「真 0 命中」,systemBytes/toolsBytes
+    // 是固定头的两块体量,headHash 串起 cache_probe,reasoningTokens 是推理分账 —— 少任何一个,
+    // 导出的时间线都撑不起「缓存为什么没命中 / output 花在哪」这两问(Codex 评审三轮 #6)。
+    // 主循环没报时这些键是 undefined,res.json 直接丢掉,不占导出体积。
+    case 'usage': return {
+      prompt: p?.prompt, completion: p?.completion, cached: p?.cached, phase: p?.phase,
+      ttftMs: p?.ttftMs, uploadMs: p?.uploadMs, llmMs: p?.llmMs, requestBytes: p?.requestBytes, iteration: p?.iteration,
+      cacheReported: p?.cacheReported, systemBytes: p?.systemBytes, toolsBytes: p?.toolsBytes,
+      headHash: p?.headHash, reasoningTokens: p?.reasoningTokens,
+    };
+    // ponytail: 只带定位字段,不带 segments —— 逐段 hash/bytes 一次迭代九条,导出日志用不上;
+    // 要逐段对比走 scripts/cache-hit-report.mjs,它直接读 agent_run_events。
+    case 'cache_probe': return { probeSeq: p?.probeSeq, headHash: p?.headHash, changedSegments: p?.changedSegments, headHashSameAsAgentModel: p?.headHashSameAsAgentModel };
     case 'error': return { error: String(p?.error ?? '').slice(0, 200), aborted: !!p?.aborted };
     case 'approval_request': return { name: p?.name };
     case 'approval_result': return { action: p?.action };

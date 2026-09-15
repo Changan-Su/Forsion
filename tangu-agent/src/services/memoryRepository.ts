@@ -153,8 +153,12 @@ export function atomicWriteMemoryFile(baseDir: string, relPath: string, content:
     // Recheck immediately before rename; replacing a target symlink must never be silent.
     safeMemoryPath(baseDir, relPath, true);
     renameSync(tmp, target);
-    const parent = openSync(dirname(target), constants.O_RDONLY);
-    try { fsyncSync(parent); } finally { closeSync(parent); }
+    // Windows cannot fsync a directory handle (FlushFileBuffers needs write access → EPERM);
+    // NTFS journals the rename itself.
+    if (process.platform !== 'win32') {
+      const parent = openSync(dirname(target), constants.O_RDONLY);
+      try { fsyncSync(parent); } finally { closeSync(parent); }
+    }
   } finally {
     if (fd !== undefined) closeSync(fd);
     try { unlinkSync(tmp); } catch (e) { if (!isMissing(e)) throw e; }

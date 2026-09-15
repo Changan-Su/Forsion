@@ -77,3 +77,15 @@ describe('looksLikeToolCallText', () => {
     expect(looksLikeToolCallText('hello world')).toBe(false);
   });
 });
+
+// 09-13 用户导出:末轮不带 tools 时模型把调用写成 ` to=list_dir code:\n{"path":…}` / `{"command":…}` 原样上屏。
+describe('looksLikeToolCallText · Harmony/网关裸渲染 to=NAME', () => {
+  it('识别 ` to=NAME code:` 与 `commentary to=functions.NAME json{`', () => {
+    expect(looksLikeToolCallText('我现在读取两个目录。 to=list_dir code:\n{"path":"D:\\\\desktop"} to=run_bash code:\n{"command":"dir"}')).toBe(true);
+    expect(looksLikeToolCallText('commentary to=functions.read_file json{"path":"a.md"}')).toBe(true);
+  });
+  it('散文里的 to= 与不带 JSON 的写法不误判', () => {
+    expect(looksLikeToolCallText('send the file to=bob before noon')).toBe(false);
+    expect(looksLikeToolCallText('set to=list_dir mode and wait')).toBe(false);
+  });
+});

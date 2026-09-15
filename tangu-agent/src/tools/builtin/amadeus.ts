@@ -365,6 +365,13 @@ function mk(
     execute,
   };
 }
+/** 日历族(list/create/edit/delete ×5)整族按需装载(E2,§五):60 天 prod 数据里 0% 的 run 用到,
+ *  常驻 ~2.8KB defs 换不回来;目录仍留一行,load_tools 解锁其一即整组到位(deferGroup)。
+ *  笔记族不动(amadeus_list_notes / read_note / write_note 是常用面)。 */
+function deferCalendar(t: ToolDef, hint: string): ToolDef {
+  return { ...t, deferred: true, deferGroup: 'calendar', deferHint: hint };
+}
+
 const noVault = 'No Amadeus vault found on this machine — the user may not have set up Amadeus notes/calendar yet.';
 const noBackend = 'Amadeus is not available in this environment (no local vault access and no cloud vault connection).';
 
@@ -449,7 +456,7 @@ export const amadeusProvider: ToolProvider = {
     ),
 
     // ── 日历 ──
-    mk(
+    deferCalendar(mk(
       'amadeus_list_calendars',
       "List the user's calendars (multi-dimensional tables that have a calendarDate column), with their names, paths, event counts and columns.",
       {},
@@ -472,8 +479,8 @@ export const amadeusProvider: ToolProvider = {
           2,
         );
       },
-    ),
-    mk(
+    ), "List the user's calendars (start here; loads the whole calendar set)."),
+    deferCalendar(mk(
       'amadeus_list_events',
       "List calendar events/schedule. Optionally restrict to one calendar (by name or path) and/or a date range. Returns each event's calendar, id, title, start, end, allDay and other properties.",
       {
@@ -506,8 +513,8 @@ export const amadeusProvider: ToolProvider = {
         if (!events.length) return 'No events found for that query.';
         return JSON.stringify(events, null, 2);
       },
-    ),
-    mk(
+    ), 'Read events in a date range from the calendars.'),
+    deferCalendar(mk(
       'amadeus_create_event',
       'Add an event to the user\'s calendar. Times are "YYYY-MM-DD" (all-day) or "YYYY-MM-DDTHH:mm" (with a time).',
       {
@@ -535,8 +542,8 @@ export const amadeusProvider: ToolProvider = {
           return { ok: true, msg: `Created event "${args.title}" (${value}) in "${cal.db.name}". id=${id}` };
         });
       },
-    ),
-    mk(
+    ), 'Add an event to a calendar.'),
+    deferCalendar(mk(
       'amadeus_edit_event',
       'Edit an existing calendar event by id. Only the fields you pass are changed.',
       {
@@ -571,8 +578,8 @@ export const amadeusProvider: ToolProvider = {
           return { ok: true, msg: `Updated event ${args.eventId} in "${cal.db.name}".` };
         });
       },
-    ),
-    mk(
+    ), 'Change an existing calendar event.'),
+    deferCalendar(mk(
       'amadeus_delete_event',
       'Delete a calendar event by id.',
       {
@@ -592,7 +599,7 @@ export const amadeusProvider: ToolProvider = {
           return { ok: true, msg: `Deleted event ${args.eventId} from "${cal.db.name}".` };
         });
       },
-    ),
+    ), 'Remove a calendar event.'),
   ],
 };
 

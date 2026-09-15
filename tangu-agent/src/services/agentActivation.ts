@@ -6,7 +6,7 @@
  * agentConfig(就地修改,会话值优先),返回记忆/日志作用域 slug。无 agentSlug / 两路都未命中 / 出错 → 默认。
  */
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
-import { builtinAgentDef, resolveActiveSlug, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
+import { agentCapOf, builtinAgentDef, resolveActiveSlug, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
 
 export interface AgentActivation {
   /** 人格 slug(start_discussion 分身、prompt section、Library 取用据此)。 */
@@ -48,7 +48,12 @@ export async function applyAgentActivation(
       if (!agentConfig.systemPrompt && def.systemPrompt) agentConfig.systemPrompt = def.systemPrompt;
       if (!agentConfig.soul && def.soul) agentConfig.soul = def.soul;
       if (!agentConfig.libraryOrder && def.libraryOrder?.length) agentConfig.libraryOrder = def.libraryOrder;
-      if (agentConfig.maxIterations == null && def.maxIterations != null) agentConfig.maxIterations = def.maxIterations;
+      // Agent 级轮数下限:低于下限视为误设(一个写了 3 的 agent 每回合两次工具调用就被迫收尾,09-13 用户导出实证),
+      // 忽略并回落默认,告警点名文件与值,让人能在设置里看见并改掉。会话级 /loop 不套下限(那是显式意图)。
+      if (agentConfig.maxIterations == null) {
+        const cap = agentCapOf(def); // 低于下限 → null + 告警(同一函数也服务 groupChat / automation)
+        if (cap != null) agentConfig.maxIterations = cap;
+      }
       if (!agentConfig.thinkingLevel && def.thinkingLevel) agentConfig.thinkingLevel = def.thinkingLevel;
       if (!agentConfig.approvalMode && def.approvalMode) agentConfig.approvalMode = def.approvalMode;
       if ((!agentConfig.enabledToolIds || !agentConfig.enabledToolIds.length) && def.tools.length) {

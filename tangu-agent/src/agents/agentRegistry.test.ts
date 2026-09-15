@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { parseAgentFile, serializeAgent, slugify, isValidSlug, parseAgentConfig, serializeAgentConfig, type NormalAgentDef } from './agentRegistry.js';
+import { describe, it, expect, vi } from 'vitest';
+import { parseAgentFile, serializeAgent, slugify, isValidSlug, parseAgentConfig, serializeAgentConfig, buildAgentDef, AGENT_MAX_ITERATIONS_MIN, type NormalAgentDef } from './agentRegistry.js';
 
 describe('slugify / isValidSlug', () => {
   it('lowercases + hyphenates + strips', () => {
@@ -118,5 +118,20 @@ describe('created_by = system (系统 agent,如 Muse)', () => {
     expect(parseAgentConfig('x', 'created_by = "weird"\n', '').createdBy).toBe('user');
     expect(parseAgentConfig('x', 'created_by = "agent"\n', '').createdBy).toBe('agent');
     expect(parseAgentConfig('x', '', '').createdBy).toBe('user');
+  });
+});
+
+describe('buildAgentDef · max_iterations 下限', () => {
+  it('低于下限清空(不 throw:头像上传等路径会原样透传旧值)并告警', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const def = buildAgentDef('a1', null, { name: 'A', systemPrompt: 'p', maxIterations: 3 } as any);
+    expect(def.maxIterations).toBeNull();
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+  it('达到下限保留;解析仍忠实于磁盘值(UI 要能看见误设的 3)', () => {
+    const def = buildAgentDef('a1', null, { name: 'A', systemPrompt: 'p', maxIterations: AGENT_MAX_ITERATIONS_MIN } as any);
+    expect(def.maxIterations).toBe(AGENT_MAX_ITERATIONS_MIN);
+    expect(parseAgentConfig('a1', 'name = "A"\nmax_iterations = 3\n', '').maxIterations).toBe(3);
   });
 });

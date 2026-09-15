@@ -1,12 +1,20 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatMessage } from '../core/types.js';
 
-const fake = vi.hoisted(() => ({ query: vi.fn(), resolve: vi.fn(), build: vi.fn(), stream: vi.fn() }));
+const fake = vi.hoisted(() => ({
+  query: vi.fn(), resolve: vi.fn(), build: vi.fn(), stream: vi.fn(),
+  publish: vi.fn(), cost: vi.fn(),
+}));
 vi.mock('../core/db.js', () => ({ query: fake.query }));
-vi.mock('../seams/runtime.js', () => ({ deps: () => ({ brain: { llm: {
-  resolveModelAndKey: fake.resolve, buildProviderPayload: fake.build, streamProviderCompletion: fake.stream,
-} } }) }));
+vi.mock('./eventBus.js', () => ({ publish: fake.publish }));
+vi.mock('../seams/runtime.js', () => ({ deps: () => ({
+  brain: { llm: {
+    resolveModelAndKey: fake.resolve, buildProviderPayload: fake.build, streamProviderCompletion: fake.stream,
+  } },
+  billing: { calculateCost: fake.cost },
+}) }));
 import { compactWorkingMessages, compactSession } from './compaction.js';
+import { enterRunContext } from '../seams/runContext.js';
 
 const message = (role: string, content: string): ChatMessage => ({ role, content }) as ChatMessage;
 function history(): ChatMessage[] {
@@ -23,6 +31,35 @@ beforeEach(() => {
   fake.resolve.mockResolvedValue({ model: {}, apiKey: 'test', baseUrl: 'test', apiModelId: 'test' });
   fake.build.mockImplementation(async (opts) => opts);
   fake.stream.mockResolvedValue({ content: '## Goal\nContinue fixing the parser; keep the failing test evidence.' });
+  fake.cost.mockResolvedValue(0.5);
+  fake.publish.mockResolvedValue(1);
+});
+
+// A5 / 契约 C-5:后台 LLM 调用必须上台账,否则 Muse 预算与「本 run 花了多少」都有洞。
+describe('compaction 摘要调用的用量台账', () => {
+  it('在 run 上下文里发一条 phase=compaction 的 usage 事件(不发 total/costTotal)', async () => {
+    fake.stream.mockResolvedValue({
+      content: '## Goal\nkeep going',
+      usage: { prompt_tokens: 1200, completion_tokens: 300, cached_tokens: 900 },
+    });
+    enterRunContext('u1', 'run-compact-1');
+    const r = await compactWorkingMessages(history(), 'm');
+    expect(r.ok).toBe(true);
+    const call = fake.publish.mock.calls.find((c) => c[1] === 'usage');
+    expect(call).toBeTruthy();
+    expect(call![0]).toBe('run-compact-1');
+    expect(call![2]).toMatchObject({ phase: 'compaction', prompt: 1200, completion: 300, cached: 900, cacheReported: true, cost: 0.5 });
+    expect(call![2]).not.toHaveProperty('total');
+    expect(call![2]).not.toHaveProperty('costTotal');
+  });
+
+  it('provider 没报缓存命中量时 cacheReported=false(「没报」≠「0 命中」)', async () => {
+    fake.stream.mockResolvedValue({ content: '## Goal\nkeep going', usage: { prompt_tokens: 10, completion_tokens: 2 } });
+    enterRunContext('u1', 'run-compact-2');
+    await compactWorkingMessages(history(), 'm');
+    const call = fake.publish.mock.calls.find((c) => c[1] === 'usage');
+    expect(call![2]).toMatchObject({ cached: 0, cacheReported: false });
+  });
 });
 
 describe('current working context compaction', () => {

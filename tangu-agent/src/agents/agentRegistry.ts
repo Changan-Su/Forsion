@@ -24,6 +24,13 @@ import { loadSpecialAgentsConfig, DEFAULT_MUSE_PROMPT } from '../services/specia
 import { THINKING_LEVELS } from '../llm/modelCapabilities.js';
 import type { ThinkingLevel } from '../core/types.js';
 
+/** 循环轮数缺省(会话/Agent 都没给时 agentLoop 用它)与 **Agent 级下限**:Agent 定义里低于下限的 max_iterations
+ *  视为误设 —— 一个写了 3 的 agent,每回合两次工具调用就被迫收尾,用户只看到「空话空转」(09-13 用户导出实证)。
+ *  三处同口径:激活时忽略并告警(agentActivation)、保存时清空并告警(buildAgentDef)、路由与 manage_agent 显式拒绝。
+ *  会话级 /loop 不套下限:那是用户显式意图(/loop 1 单发)。桌面 AgentsTab 的 min 与此同步。 */
+export const DEFAULT_MAX_ITERATIONS = 90;
+export const AGENT_MAX_ITERATIONS_MIN = 10;
+
 /** agent 定义里的思考档位。`''` = 未声明(跟随会话默认),其余同 core 的 ThinkingLevel 七档。 */
 export type ThinkLevel = ThinkingLevel | '';
 export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | 'custom' | '';
@@ -652,6 +659,30 @@ export interface SaveAgentInput {
 
 /** existing + input → 完整 def 的合并语义(校验/裁剪/缺省保留已有字段)。纯函数:本地 saveAgent 与
  *  云端 cloudAgentStore 共用同一份,防两处合并规则漂移。 */
+/** 保存时的 Agent 级轮数:低于下限清空并告警,**不 throw** —— saveAgentAvatar / ensureXyraDefaults / cloudSaveAgentAvatar
+ *  都把磁盘上的旧值原样透传再存,抛错会让「上传头像」因一个不相干的旧值失败。显式拒绝在 routes/agents 与 manage_agent 两个入口做。 */
+function clampAgentMaxIterations(slug: string, v: number | string | null | undefined): number | null {
+  const n = typeof v === 'string' ? Number(v) : v; // REST 客户端可能传 "50":路由校验用 Number 放行、这里再按非数清空就成了静默丢值(Codex 09-13 #7)
+  if (n == null || !Number.isFinite(n) || n <= 0) return null;
+  if (n < AGENT_MAX_ITERATIONS_MIN) {
+    console.warn(`[tangu] agent ${slug}: max_iterations=${n} 低于下限 ${AGENT_MAX_ITERATIONS_MIN},已清空(回落默认 ${DEFAULT_MAX_ITERATIONS})`);
+    return null;
+  }
+  return Math.min(200, Math.floor(n));
+}
+
+/** 运行期取 Agent 定义的轮数上限:低于下限视为误设 → null 并告警。agentActivation / groupChat / automation 三处同口径
+ *  (Codex 09-13 #3:只在激活处套下限,群聊和自动化仍会照跑磁盘上的 3);解析层 parseAgentConfig 仍忠实于磁盘值,UI 才看得见误设。 */
+export function agentCapOf(def: Pick<NormalAgentDef, 'slug' | 'maxIterations'>): number | null {
+  const v = def.maxIterations;
+  if (v == null || !(v > 0)) return null;
+  if (v < AGENT_MAX_ITERATIONS_MIN) {
+    console.warn(`[tangu] agent ${def.slug}: config.toml max_iterations=${v} 低于下限 ${AGENT_MAX_ITERATIONS_MIN},忽略(回落默认 ${DEFAULT_MAX_ITERATIONS})`);
+    return null;
+  }
+  return v;
+}
+
 export function buildAgentDef(slug: string, existing: NormalAgentDef | null, input: SaveAgentInput): NormalAgentDef {
   if (!isValidSlug(slug)) throw new Error('invalid slug');
   if (!input.name?.trim()) throw new Error('name required');
@@ -666,10 +697,7 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
     model: (input.model || '').trim(),
     tools: Array.isArray(input.tools) ? input.tools.filter((t) => typeof t === 'string' && t.trim()).slice(0, 100) : [],
     thinkingLevel: THINK.includes(input.thinkingLevel as ThinkLevel) ? (input.thinkingLevel as ThinkLevel) : '',
-    maxIterations:
-      input.maxIterations != null && Number.isFinite(input.maxIterations) && input.maxIterations > 0
-        ? Math.min(200, Math.floor(input.maxIterations))
-        : null,
+    maxIterations: clampAgentMaxIterations(slug, input.maxIterations),
     approvalMode: APPROVAL.includes(input.approvalMode as ApprovalMode) ? (input.approvalMode as ApprovalMode) : '',
     createdBy: existing?.createdBy || input.createdBy || 'user',
     createdAt: existing?.createdAt || new Date().toISOString(),

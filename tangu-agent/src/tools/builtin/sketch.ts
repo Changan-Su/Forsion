@@ -140,37 +140,30 @@ export const sketchProvider: ToolProvider = {
         type: 'function',
         function: {
           name: 'sketch',
+          // E1 三段式(§五):何时用 → 策略 → 何时别用。构图/视觉语法**不重复**在这里 ——
+          // 它们是 SKETCH_SECTION 的正文,而段与工具同门禁(sketchEnabledFor),工具在场 ⟺ 段在场。
+          // ponytail: 上限=1.5KB。`--fs-*` 变量表与 `fs-*` 类名表留全(§六 P08:SKETCH_SECTION 里
+          //           没有这两张表,SKETCH_SECTION 反过来让模型「从工具描述取 .fs-* 类」)。
           description:
-            'Draw a visual card inline in the conversation, rendered from self-contained HTML. ' +
-            'Use it to show the USER charts, diagrams, tables, comparisons, timelines, proposed layouts, ' +
-            'or small interactive widgets directly in the chat flow, instead of describing them in prose.\n' +
-            'SANDBOX: the card renders in a sandboxed frame — JavaScript runs, but there is NO network access, ' +
-            'NO host API, and NO navigation. Inline all CSS/JS, embed images as data: URIs, never reference ' +
-            'external scripts/styles/fonts/URLs (charting libraries and web fonts are unavailable — draw charts ' +
-            'with inline SVG or divs), and do not use eval/new Function. Links and form submissions do nothing; ' +
-            'handle interactions with inline JS.\n' +
-            'THEME: the host injects its live theme as CSS variables — use them and never hardcode colors, ' +
-            'or the card will clash in dark mode and on other skins. Available: ' +
-            '--fs-bg (transparent card canvas), --fs-surface (subtle fill), --fs-text, --fs-muted, --fs-faint, ' +
-            '--fs-border, --fs-rule (hairline for gridlines/axes), --fs-accent, --fs-accent-soft, ' +
-            '--fs-green, --fs-danger, --fs-radius, --fs-font, --fs-mono, and a 5-step data series ramp ' +
-            '--fs-s1..--fs-s5 (s1 is the accent, s2..s5 fade — use s1 for the value in focus and the rest for context). ' +
-            'The canvas stays transparent so it inherits whichever chat surface is behind it; the other variables ' +
-            'update live when the user switches theme, and body already inherits background/color/font.\n' +
-            'FOUNDATION: the wrapper includes polished responsive classes; use them instead of rebuilding basic ' +
-            'typography every time: fs-header, fs-eyebrow, fs-title, fs-subtitle, fs-plot, fs-caption/fs-source, ' +
-            'fs-stat-grid, fs-stat, fs-value, fs-label, fs-panel, fs-row, fs-chip, fs-bar-track, and fs-bar-fill. ' +
-            'The four-part default is <header class="fs-header">title + subtitle</header>, ' +
-            '<figure class="fs-plot">visual</figure>, then <footer class="fs-source">source/method</footer>.\n' +
-            'STYLE: editorial and restrained — conclusion-led hierarchy, real data units over decoration, useful ' +
-            'density, generous whitespace, hairline guides over boxes and fills, and one focal accent per card. ' +
-            'Labels, units and a source/caption line are mandatory chart parts. Prefer direct labels on the data ' +
-            'over a separate legend. Add quiet structure (guides, ticks, annotations, alignment) so sparse data does ' +
-            'not look unfinished. No gradients, no shadows, no emoji as data marks, at most 5 categorical series.\n' +
-            'SIZE: the card is ~700px wide and auto-sizes to its content height. Anything taller than about half ' +
-            'the chat area is folded behind an expand toggle, so put the headline number or the point of the card ' +
-            'at the top. Each call appends a NEW card (cards cannot be updated — call again with revised HTML). ' +
-            'The result is only a confirmation; the user sees the rendered card.',
+            'Draw a visual card inline in the chat from self-contained HTML: charts, diagrams, comparisons, ' +
+            'timelines, layouts, small interactive widgets. The "Visual cards" section of your instructions ' +
+            'covers when to draw and how to compose.\n' +
+            'SANDBOX: JavaScript runs, but there is NO network, host API or navigation. Inline all CSS/JS, ' +
+            'embed images as data: URIs, never reference external scripts/styles/fonts (no charting ' +
+            'libraries or web fonts — draw with inline SVG or divs), no eval/new Function. Links and form ' +
+            'submits do nothing; interaction must be inline JS.\n' +
+            'THEME: use the injected CSS variables, never hardcode colors — they track the live theme: ' +
+            '--fs-bg (transparent card canvas), --fs-surface, --fs-text, --fs-muted, --fs-faint, --fs-border, ' +
+            '--fs-rule (hairline for gridlines/axes), --fs-accent, --fs-accent-soft, --fs-green, --fs-danger, ' +
+            '--fs-radius, --fs-font, --fs-mono, and the series ramp --fs-s1..--fs-s5 (s1 = accent for the focus ' +
+            'value; s2..s5 fade for context). body inherits background/color/font.\n' +
+            'CLASSES: fs-header, fs-eyebrow, fs-title, fs-subtitle, ' +
+            'fs-plot, fs-caption/fs-source, fs-stat-grid, fs-stat, fs-value, fs-label, fs-panel, fs-row, ' +
+            'fs-chip, fs-bar-track, fs-bar-fill.\n' +
+            'SIZE: ~700px wide, auto height; past ~half the chat area it folds behind an expand toggle, so ' +
+            'put the headline first. Each call appends a NEW card (no in-place updates); the result is ' +
+            'only a confirmation, the user sees the card.\n' +
+            'Not for source code, files, or one-number answers — those stay in prose.',
           parameters: {
             type: 'object',
             properties: {

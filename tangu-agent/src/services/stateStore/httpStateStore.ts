@@ -18,11 +18,13 @@ import type { AgentRun } from '../runStore.js';
 import type {
   ActiveRunRow,
   FinalizeMessageInput,
+  MessageStepRow,
   RawMessageRow,
   StateStore,
   StepInput,
   StepRow,
 } from '../../seams/stateStore.js';
+import type { SessionHit, SessionTranscript } from '../sessionSearch.js';
 
 // ── per-dispatch token 登记表(runId/sessionId → token) + 请求期回退 ALS ──
 interface TokenEntry { token: string; }
@@ -107,12 +109,14 @@ export function createHttpStateStore(cfg: HttpStateStoreConfig): StateStore {
     return h;
   };
 
-  async function reqJson<T>(method: string, path: string, token: string | undefined, body?: any): Promise<T> {
+  async function reqJson<T>(method: string, path: string, token: string | undefined, body?: any, signal?: AbortSignal): Promise<T> {
+    const timeout = AbortSignal.timeout(STATE_TIMEOUT_MS);
     const r = await fetch(`${base}${path}`, {
       method,
       headers: headers(token),
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(STATE_TIMEOUT_MS),
+      // 调用方(run 取消)的 signal 与超时二选一先到;老 Node 没有 AbortSignal.any 时只保留超时。
+      signal: signal && typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, timeout]) : timeout,
     });
     if (r.status === 404) return null as unknown as T;
     if (!r.ok) {
@@ -245,6 +249,29 @@ export function createHttpStateStore(cfg: HttpStateStoreConfig): StateStore {
     async listSteps(runId): Promise<StepRow[]> {
       return (await reqJson<StepRow[]>('GET', `/runs/${encodeURIComponent(runId)}/steps`, tokenForRun(runId))) || [];
     },
+    // B3(跨 run 回放交错):POST 而非 GET —— id 批最多 200 条,塞不进 query string。
+    // **失败一律返空数组**(= hydrate 拿到空 Map → 退回扁平回放,与升级前完全一致),与 recall 两法刻意相反:
+    // 那边 404 必须炸(「搜不到」被当成「没聊过」会误导模型),这边 404 只说明网关还没这条路由(老 server),
+    // 少一截缓存前缀而已,绝不能把 hydrate 连坐炸掉。网关侧同样按 token userId 夹归属,与本地 SQL 同构。
+    async listStepsForMessages(sessionId, messageIds): Promise<MessageStepRow[]> {
+      if (!Array.isArray(messageIds) || !messageIds.length) return [];
+      try {
+        const rows = await reqJson<MessageStepRow[] | null>(
+          'POST', `/sessions/${encodeURIComponent(sessionId)}/steps-for-messages`, tokenForSession(sessionId),
+          { messageIds }, // 服务端封顶 200 条;hydrate 窗口(50)远在其下
+        );
+        if (!Array.isArray(rows)) return []; // null = 404(老网关没这条路由)
+        return rows.map((r: any) => ({
+          messageId: String(r?.messageId ?? ''),
+          stepNo: Number(r?.stepNo) || 0,
+          llmResponse: r?.llmResponse ?? null,
+          toolCalls: r?.toolCalls ?? null,
+        }));
+      } catch (e: any) {
+        console.warn(`[tangu-worker] 分步回放读取失败,本次回退扁平回放 session=${sessionId}:`, e?.message || e);
+        return [];
+      }
+    },
 
     // ── events ──
     async appendEvent(runId, type, payload): Promise<number> {
@@ -295,6 +322,22 @@ export function createHttpStateStore(cfg: HttpStateStoreConfig): StateStore {
     },
     async setAgentConfig(sessionId, agentConfigJson) {
       await reqJson('POST', `/sessions/${encodeURIComponent(sessionId)}/agent-config`, tokenForSession(sessionId), { agentConfig: agentConfigJson });
+    },
+
+    // ── session recall:worker 不持库,经网关代查。token 取当前 run(目标会话是**别的**会话,不能按 sessionId 取)。
+    //    网关返回 200 + { session:null } 表示无此会话;裸 404 只可能是网关还没有这条路由(引擎没同代升级)——
+    //    抛明确错误而不是当「无结果」,否则模型会把「搜不到」当成「没聊过」。
+    async searchSessions(input): Promise<SessionHit[]> {
+      const { signal, ...body } = input;
+      const r = await reqJson<SessionHit[] | null>('POST', '/sessions/search', currentToken(), body, signal);
+      if (r === null) throw new Error('session recall is not served by this gateway (agent-state route missing; upgrade the server engine)');
+      return r;
+    },
+    async readSessionTranscript(input): Promise<SessionTranscript> {
+      const { signal, sessionId, ...body } = input;
+      const r = await reqJson<SessionTranscript | null>('POST', `/sessions/${encodeURIComponent(sessionId)}/transcript`, currentToken(), body, signal);
+      if (r === null) throw new Error('session recall is not served by this gateway (agent-state route missing; upgrade the server engine)');
+      return r;
     },
   };
 }

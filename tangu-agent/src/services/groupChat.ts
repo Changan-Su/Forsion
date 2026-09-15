@@ -26,7 +26,7 @@ import { gateToolCall, type ApprovalMode } from './approvals.js';
 import { publish, drain } from './eventBus.js';
 import { updateRunStatus } from './runStore.js';
 import { requestInquiry } from './inquiries.js';
-import { getAgent, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
+import { agentCapOf, getAgent, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { enterRunContext } from '../seams/runContext.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { capToolResult } from './contextBudget.js';
@@ -155,7 +155,9 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
       for (const agent of participants) {
         if (signal.aborted) throw new AbortLikeError();
         // 本发言人的记忆作用域:其 remember/log_event 落到自己的 agent 文件夹(顺序执行,enterWith 即时生效)。
-        enterRunContext(p.userId, p.runId, resolveMemorySlug(agent));
+        // 展示身份必须带上发言人自己:shareDefaultMemory 的参与者记忆域是 xyra,不传第 4 参 manage_agent/manage_harness 就把它
+        // 当成「别人」—— 能改自己的人格、能给自己调低轮数;主 loop 一直是传 activeAgentSlug 的(Codex 09-13 #2)。
+        enterRunContext(p.userId, p.runId, resolveMemorySlug(agent), agent.slug);
         // 额度复查(标准计费才有意义;standalone 为 noop → 恒 ok)
         const can = await deps().billing.canConsumeTokenPoints(userId, 1).catch(() => ({ ok: true } as any));
         if (!can.ok) {
@@ -283,7 +285,7 @@ async function runGroupTurn(ctx: ChatMessage[], agent: NormalAgentDef, p: GroupC
     // 需要时按 agent.tools 走 loadCustomTools 即可补上。
   };
   let toolDefs = getToolDefinitions(toolCtx);
-  const maxIter = Math.min(agent.maxIterations || GROUP_TURN_MAX_ITER, GROUP_TURN_MAX_ITER);
+  const maxIter = Math.min(agentCapOf(agent) || GROUP_TURN_MAX_ITER, GROUP_TURN_MAX_ITER); // 低于下限的定义值按未设(与主 loop 同口径)
 
   let text = '';
   let cost = 0;

@@ -120,7 +120,7 @@ async function resolveDir(
         else throw e;
       }
     } else {
-      throw new Error(`directory not found: ${seg}`);
+      throw Object.assign(new Error(`directory not found: ${seg}`), { code: 'ENOENT' }); // 与本地版同一口径:ENOENT = 空目录,其余上抛
     }
   }
   return parent;
@@ -150,8 +150,11 @@ export async function listFiles(userId: string, appId: string, scope: WsScope, p
   let parent: string;
   try {
     parent = await resolveDir(userId, appId, wsSegments(scope, splitPath(path)), false);
-  } catch {
-    return '(empty directory)'; // 工作区尚未创建
+  } catch (e: any) {
+    // 只有「目录还没建」才算空;云端连不上 / 鉴权失败必须上抛 —— 2026-09-11 真模型 live 台架实报:
+    // 未登录时这里吞掉 fetch failed 回「(empty directory)」,模型据此答「无法读取」,与 read_file 的报错自相矛盾。
+    if (e?.code === 'ENOENT') return '(empty directory)'; // 工作区尚未创建
+    throw e;
   }
   const items: any[] = await cloudStorageService.listDirectory(parent, userId, appId);
   if (!items.length) return '(empty directory)';
@@ -215,8 +218,9 @@ export async function listFilesLocal(baseDir: string, sub: string): Promise<stri
   let entries: any[];
   try {
     entries = await fs.readdir(dir, { withFileTypes: true });
-  } catch {
-    return '(empty directory)';
+  } catch (e: any) {
+    if (e?.code === 'ENOENT') return '(empty directory)';
+    throw e; // ENOTDIR / EACCES 如实报,别让模型把「是个文件 / 没权限」读成「空目录」
   }
   if (!entries.length) return '(empty directory)';
   const lines: string[] = [];

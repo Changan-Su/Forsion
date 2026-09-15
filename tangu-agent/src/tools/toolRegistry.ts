@@ -41,7 +41,88 @@ export { CODING_PRESET_DEFERRED } from '../core/presetTable.js';
  *  共用本判定——2026-08-09 前 load_tools 只认静态 deferred:true,coding 预设的情境 deferred
  *  工具在目录里被广而告之却解锁不了("Unknown/not loadable"),Codex 评审抓到的存量 bug。 */
 export function isDeferredIn(ctx: ToolContext, name: string, deferred?: boolean): boolean {
+  // 子代理(delegate)现在**有** load_tools 这条通道了(subAgent.ts 给它自己的 unlockedTools/
+  // unlockTools + 目录段),deferred 工具不再是「看不见且取不回」。这条窄口因此不再是能力闸,
+  // 只剩一个作用:省掉那一轮 load_tools。read_document 值得省 —— delegate 自己的描述就写着
+  // batch file analysis,PDF/Office 正是那里的典型输入;read_file 读二进制文档只有乱码,且
+  // (hostExec.ts 有意如此)不给任何指向 read_document 的提示,子代理拿到的是**静默的垃圾**
+  // 而不是可恢复的报错,发现不了就不会去 load。
+  // ponytail: 上限=一个工具名。别在这儿续名单 —— 其余按需工具走 load_tools 那条通道即可。
+  if (name === 'read_document' && (ctx.subAgentDepth || 0) >= 1) return false;
   return !!deferred || presetOf(ctx.preset).toolFace.deferred.has(name);
+}
+
+/** 旧工具名静默别名(不进 defs/快照):只兜升级瞬间仍引用旧名的存量会话上下文。
+ *  住这里(而非 registry.ts)的理由与 SUB_AGENT_DENY_TOOLS 同:共享策略层要先归一再判闸,
+ *  放在门面层会让 toolRegistry → registry 成环。 */
+export const TOOL_NAME_ALIASES: Record<string, string> = { muse_watch: 'manage_automation' };
+
+/** 工具名归一:旧别名 → 正典名;非别名原样返回。
+ *  必须 Object.hasOwn:模型硬调一个叫 `constructor` / `toString` / `__proto__` 的工具名时,
+ *  普通对象的 `[name]` 会沿原型链取到函数/对象,下游 `name.startsWith` 直接 TypeError 掀翻整轮(Codex 09-15)。 */
+export function canonicalToolName(name: string): string {
+  return Object.hasOwn(TOOL_NAME_ALIASES, name) ? TOOL_NAME_ALIASES[name] : name;
+}
+
+/** 一个工具的全部拼写:正典名 + 指向它的旧别名。审批规则匹配用 —— 用户既可能按新名写规则
+ *  (`deny: ["manage_automation"]`),也可能沿用旧名(`deny: ["muse_watch"]` / `muse_*`),两种都得挡得住。 */
+export function toolNameSpellings(name: string): string[] {
+  const canonical = canonicalToolName(name);
+  return [canonical, ...Object.keys(TOOL_NAME_ALIASES).filter((k) => TOOL_NAME_ALIASES[k] === canonical)];
+}
+
+/**
+ * 子代理(delegate;ctx.subAgentDepth ≥ 1)的管理面**缺省硬闸**。它们改的是 agent 定义 / 技能 /
+ * 自动化规则 / 日程 / harness,即「下一次 run 长什么样」,越权后果跨 run 存续;而子代理的任务正文
+ * 本身就是模型生成的文本(delegate 的 task/instructions),不该默认成为改配置的入口。
+ *
+ * **缺省仍是拒**;唯一的开口是「委派时由父代理逐次授予」:depth 0 的主 agent 在 delegate 的
+ * `grantTools` 里点名某个管理工具,该名字经 SubAgentParams.grantTools → ctx.subAgentGrants 下来,
+ * 本闸对它放行(见下方 isSubAgentDenied)。
+ *
+ * ⚠️ 不变量:**被授权的子代理永远不会比父代理更强**。两条一起保证:
+ *   ① delegate 执行时按 resolveTools(父 profile, 父 ctx) 核验 —— 父自己此刻解析不出来的名字授不了;
+ *   ② 授予只抬起**这一道**闸。宿主沙箱策略(hostSandboxPolicy)、toolsMode/toolsList、planMode、
+ *      preset 正向面、工具自身 isEnabledFor、以及审批闸门(gateToolCall)一概照旧 ——
+ *      被授权 ≠ 免审批,host 模式该弹的窗一个不少。
+ *
+ * 单源住这里(而不是 subAgent.ts):resolveTools(共享可见性层)与 executeTool(共享执行层)
+ * 都要用它,放在 services 层会成环(toolRegistry → subAgent → registry → toolRegistry)。
+ * `muse_watch` 这条旧别名留在集合里属 belt-and-braces:isSubAgentDenied 现在**先归一再判**,
+ * 理论上它已是死条目 —— 但名单被当作纯名字集合直接 `.has()` 的调用点(测试、未来的新调用点)
+ * 仍靠它兜住旧拼写,删掉只省不了什么,风险却是静默放行。
+ *
+ * ⚠️ 本硬闸**优先于** Muse / 自动化 run 的 deferBypass:父 run 是系统驱动的不等于它派出去的
+ * 子代理也该有改配置的权限(此前 deferBypass 会把整族管理工具直接放进子代理首轮工具面)。
+ */
+export const SUB_AGENT_DENY_TOOLS: ReadonlySet<string> = new Set<string>([
+  'manage_agent', 'manage_skill', 'manage_automation', 'manage_schedule', 'manage_harness',
+  'muse_watch',
+]);
+
+/** 父代理可在 delegate.grantTools 里授予的管理工具(正典名,不含别名):delegate 的 enum 与入参校验单源。 */
+export const SUB_AGENT_GRANTABLE_TOOLS: readonly string[] = [
+  'manage_agent', 'manage_skill', 'manage_automation', 'manage_schedule', 'manage_harness',
+];
+
+/** 写入目标取自 **ALS 当前身份**(currentDisplayAgentSlug() || currentAgentSlug())而非入参的工具:
+ *  同一份参数换个身份执行就写到**别人**的文件夹去。manage_harness → agents/<slug>/HARNESS.md;
+ *  manage_skill(scope='agent')→ agents/<slug>/skills;manage_agent → 「不许改自己」那道自我判定。
+ *
+ *  用处:延后执行(pendingApprovals)时执行身份是**重建**的,与当时的 ALS 未必一致 ——
+ *  子代理发起、用户事后批准的那一笔会落到父代理身上(2026-09-15 抓到的目标漂移)。
+ *  参数里带显式目标的工具(manage_automation / manage_schedule / write_file …)不在此列,重放无歧义。 */
+export const AGENT_SCOPED_TOOLS: ReadonlySet<string> = new Set<string>([
+  'manage_harness', 'manage_skill', 'manage_agent',
+]);
+
+/** 本 ctx 下该工具是否命中子代理硬闸(深度 0 的主 loop 不受影响)。
+ *  **先归一后判**:调用点传原始名(subAgent 审批前那道按 call.function.name 判)也拦得住旧别名;
+ *  授予同样按正典名比对 —— 授了 manage_automation,子代理写 muse_watch 也一样放行。 */
+export function isSubAgentDenied(ctx: Pick<ToolContext, 'subAgentDepth' | 'subAgentGrants'>, name: string): boolean {
+  if ((ctx.subAgentDepth || 0) < 1) return false;
+  const canonical = canonicalToolName(name);
+  return SUB_AGENT_DENY_TOOLS.has(canonical) && !ctx.subAgentGrants?.has(canonical);
 }
 
 // ── 全局(内置)provider 注册表。注册顺序即工具喂给 LLM 的顺序——不可随意调换。──
@@ -111,6 +192,9 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string,
   }
   const out = new Map<string, ToolDef>();
   const add = (t: ToolDef, isBuiltin: boolean, fromPlugin = false): void => {
+    // 子代理硬闸放在**最前**:defs / 目录 / load_tools 的可解锁集 / executeTool 的按名解析
+    // 全经本函数,一处拒=四处都没有。放在 deferBypass 之前(Muse/自动化的子代理也一样拒)。
+    if (isSubAgentDenied(ctx, t.name)) return;
     if (sandboxRestricted && (!isBuiltin || fromPlugin || !isHostSandboxToolAllowed(t.name, sandboxCtx))) return;
     const m = t.mode || 'both';
     if (host && m === 'sandbox') return;

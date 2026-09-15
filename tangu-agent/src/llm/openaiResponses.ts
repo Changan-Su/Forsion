@@ -13,12 +13,31 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError } from '../core/types.js';
-import { ACCOUNT_MARK } from './openaiCompat.js';
+import { ACCOUNT_MARK, RUN_MARK } from './openaiCompat.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 
 // —— 逆向所得常量(易碎,集中于此)——
 const BETA_HEADER = 'responses=experimental';
 const ORIGINATOR = 'codex_cli_rs';
+/** Codex 后端的粘性路由态头(codex-rs client.rs:155:首个响应里拿到、同 turn 内每请求回带、跨 turn 不带)。 */
+const TURN_STATE_HEADER = 'x-codex-turn-state';
+
+/**
+ * 粘性路由实验(TANGU_CODEX_TURN_STATE=1)。key=runId —— **绝不跨 run 回带**(codex-rs 按 turn 取,
+ * run 是我们这边最接近 turn 的边界);上游没给 run 身份就不回带,宁可测不出也不串。
+ * ponytail: 进程内 Map + 200 条硬上限,不做 TTL —— 闸默认关,开了也只在一次台架里跑几十个 run。
+ */
+const turnStateByRun = new Map<string, string>();
+const TURN_STATE_MAX_RUNS = 200;
+
+function rememberTurnState(runId: string | undefined, value: string | null | undefined): void {
+  if (!runId || !value) return;
+  turnStateByRun.set(runId, value);
+  if (turnStateByRun.size > TURN_STATE_MAX_RUNS) {
+    const oldest = turnStateByRun.keys().next().value;
+    if (oldest !== undefined) turnStateByRun.delete(oldest);
+  }
+}
 
 /** 会话级稳定 session UUID:cacheKey 本身是 UUID 就直用;否则 md5 → UUID 形状;没有则回退随机。 */
 export function stableSessionUuid(cacheKey?: unknown): string {
@@ -129,6 +148,9 @@ export async function streamOpenAiResponses(opts: StreamOpts): Promise<StreamRes
 async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard): Promise<StreamResult> {
   const { apiKey, baseUrl, payload, onToken, onReasoning, onToolCallDelta } = opts;
   const accountId = (payload as any)?.[ACCOUNT_MARK];
+  const runIdMark = (payload as any)?.[RUN_MARK];
+  const runId = typeof runIdMark === 'string' && runIdMark ? runIdMark : undefined;
+  const turnStateOn = process.env.TANGU_CODEX_TURN_STATE === '1';
   const body = openaiToResponsesBody(payload);
 
   const headers: Record<string, string> = {
@@ -145,6 +167,9 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
     // 服务端的缓存/路由粘性。cacheKey(=sessionId)非 UUID 形状时降级为哈希出的稳定 UUID。
     headers.session_id = stableSessionUuid((payload as any)?.prompt_cache_key);
     headers['chatgpt-account-id'] = String(accountId);
+    // 同 run 内回带上一次响应给的路由态(实验闸)。
+    const prevTurnState = turnStateOn && runId ? turnStateByRun.get(runId) : undefined;
+    if (prevTurnState) headers[TURN_STATE_HEADER] = prevTurnState;
   }
 
   const response = await fetch(`${baseUrl}/responses`, {
@@ -153,6 +178,16 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
     body: JSON.stringify(body),
     signal: guard.signal,
   });
+  // 取证:这个头**在不在**永远记一行(不记取值——它是路由凭据)。否则「上游根本没这个头」与
+  // 「回带了但没效果」在实验报表里长得一模一样,B4① 判不了。
+  const turnState = accountId ? response.headers?.get?.(TURN_STATE_HEADER) : null;
+  if (accountId) {
+    console.debug(
+      `[codex] ${TURN_STATE_HEADER} ${turnState ? `present(len=${turnState.length})` : 'absent'}` +
+        ` run=${runId || 'n/a'} echo=${turnStateOn ? 'on' : 'off'}`,
+    );
+  }
+  if (turnStateOn) rememberTurnState(runId, turnState);
   opts.onResponseStart?.();
 
   if (!response.ok || !response.body) {
@@ -169,7 +204,15 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
   let reasoning = '';
   let finishReason: string | undefined;
   let incomplete = false; // response.incomplete(max_output_tokens 等):输出被截断,工具参数不可信
-  const usage = { prompt_tokens: 0, completion_tokens: 0, cached_tokens: 0, cache_write_tokens: 0, reasoning_tokens: 0 };
+  // cached_tokens / reasoning_tokens 都不预置 0:上游没报时必须保持 undefined(报 0 = 真没命中/真没思考,
+  // 是两回事)。预置 0 会让「上游压根没这个字段」在下游报表里长得和「明确报了 0」一模一样。
+  const usage: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    cached_tokens?: number;
+    cache_write_tokens: number;
+    reasoning_tokens?: number;
+  } = { prompt_tokens: 0, completion_tokens: 0, cache_write_tokens: 0 };
   // 完整 output items(reasoning/message/function_call,按 output_item.done 到达序):回给 loop 挂到
   // assistant 消息上,续轮原样回灌(reasoning 延续性)。截断响应(incomplete)不回——半截参数不可信。
   const outputItems: any[] = [];
@@ -239,9 +282,10 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
           usage.prompt_tokens = u.input_tokens || usage.prompt_tokens;
           usage.completion_tokens = u.output_tokens || usage.completion_tokens;
           const cached = u.input_tokens_details?.cached_tokens;
-          if (typeof cached === 'number' && cached > 0) usage.cached_tokens = cached;
+          if (typeof cached === 'number') usage.cached_tokens = cached;
+          // 报了就赋值(**含 0**);没报保持缺席 —— 与 openaiCompat 同一条极性契约。
           const rt = u.output_tokens_details?.reasoning_tokens;
-          if (typeof rt === 'number' && rt > 0) usage.reasoning_tokens = rt;
+          if (typeof rt === 'number') usage.reasoning_tokens = rt;
         }
       } else if (type === 'response.failed' || type === 'error') {
         throw new LlmError(502, ev.response?.error?.message || ev.error?.message || 'Codex stream error');

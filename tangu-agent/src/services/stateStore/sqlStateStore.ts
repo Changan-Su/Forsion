@@ -8,10 +8,12 @@
  */
 import { query, getOlderThanSql } from '../../core/db.js';
 import { appendEventLocal, drainLocal, type AgentEvent } from '../eventBus.js';
+import { readSessionTranscriptInDb, searchSessionsInDb } from '../sessionSearchSql.js';
 import type { AgentRun } from '../runStore.js';
 import type {
   ActiveRunRow,
   FinalizeMessageInput,
+  MessageStepRow,
   RawMessageRow,
   StateStore,
   StepInput,
@@ -120,6 +122,23 @@ export function createSqlStateStore(): StateStore {
       }));
     },
 
+    async listStepsForMessages(sessionId, messageIds): Promise<MessageStepRow[]> {
+      if (!Array.isArray(messageIds) || !messageIds.length) return [];
+      const rows = await query<any[]>(
+        `SELECT r.assistant_message_id AS message_id, s.step_no, s.llm_response, s.tool_calls
+           FROM agent_steps s JOIN agent_runs r ON r.id = s.run_id
+          WHERE r.session_id = ? AND r.assistant_message_id IN (${messageIds.map(() => '?').join(',')})
+          ORDER BY s.step_no ASC`,
+        [sessionId, ...messageIds],
+      );
+      return rows.map((r) => ({
+        messageId: String(r.message_id),
+        stepNo: Number(r.step_no) || 0,
+        llmResponse: safeParse(r.llm_response),
+        toolCalls: safeParse(r.tool_calls),
+      }));
+    },
+
     // ── events ── (透传 eventBus 本地机制:seq 播种 + emit + per-run 写链)
     appendEvent(runId, type, payload) { return appendEventLocal(runId, type, payload); },
     drain(runId) { return drainLocal(runId); },
@@ -199,5 +218,9 @@ export function createSqlStateStore(): StateStore {
     async setAgentConfig(sessionId, agentConfigJson) {
       await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = ?`, [agentConfigJson, sessionId]);
     },
+
+    // ── session recall(SQL 本体见 sessionSearchSql.ts:两方言同一条 SQL,原样从 sessionSearch.ts / readSession.ts 搬来)──
+    searchSessions: (input) => searchSessionsInDb(input),
+    readSessionTranscript: (input) => readSessionTranscriptInDb(input),
   };
 }

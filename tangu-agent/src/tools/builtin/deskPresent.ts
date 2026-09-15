@@ -30,14 +30,15 @@ export const deskPresentProvider: ToolProvider = {
         type: 'function',
         function: {
           name: 'desk_present',
+          // E1 三段式(§五):何时用 → 参数/策略 → 何时别用。ponytail: 上限 600B(实测正好 600)。
+          // 「笔记就是 vault 里的 .md,别导出副本」这句留着——它是实测踩过的坑(模型会先 export 再展示),
+          // 不是可有可无的措辞;视图 id 的举例砍到一个,其余由 params schema 承担。
           description:
-            'Present one or two things in the Agent Desk — a stage panel beside the chat that the user watches while you work. Items render stacked top-to-bottom. ' +
-            'Two item kinds: {type:"file", path} shows a local file; {type:"view", view} opens a registered desktop view by its type id (built-in or plugin-added — e.g. "calendar", "todo-list", "activity-log", "amadeus-graph"), with optional params. ' +
-            'Files inside the user\'s Amadeus vault render with Forsion\'s NATIVE editors (rich note editor, mindmap, whiteboard, database). Amadeus notes ARE plain .md files in the vault folder — to show one, pass its vault-relative path (the same path the amadeus tool uses) or its absolute path. Never export/copy a note to show it. ' +
-            'Other files render as a generic preview (HTML as a live preview). ' +
-            'Use size to control the presentation: "card" tucks the Desk into its small preview card, "half"/"wide" expand the side panel. ' +
-            'Files you edit are staged automatically; call this for deliberate presentation, not after every edit. ' +
-            'The panel can be unavailable (feature disabled or narrow window) — that is not an error; just continue.',
+            'Present one or two things in the Agent Desk — a stage panel the user watches beside the chat while you work. ' +
+            'Items: {type:"file", path} or {type:"view", view} (a registered desktop view type id such as "calendar", plus optional params). ' +
+            'Vault files open in Forsion\'s NATIVE editors; Amadeus notes ARE plain .md there — pass the vault-relative or absolute path, never an exported copy. Other files get a generic preview (HTML live). ' +
+            'size: "card" collapses to the preview card; "half"/"wide" expand it. ' +
+            'Use it for deliberate presentation, not after every edit; an unavailable panel is not an error.',
           parameters: {
             type: 'object',
             properties: {

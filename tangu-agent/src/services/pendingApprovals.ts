@@ -25,6 +25,7 @@ import type { ToolCall, ChatMessage } from '../core/types.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 import type { ApprovalDecision, ApprovalReason } from './approvals.js';
 import { WRITE_TOOLS, writeTargetsOf } from '../tools/writeTargets.js';
+import { AGENT_SCOPED_TOOLS } from '../tools/toolRegistry.js';
 import { snapshotBeforeWrite, recordPostWrite } from './checkpoints.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG, readUserMd } from '../core/tanguHome.js';
@@ -32,6 +33,7 @@ import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { loadSpecialAgentsConfig, resolveBackgroundModelId } from './specialAgentsConfig.js';
 import { sendInboxMessage } from '../tools/builtin/inboxSend.js';
 import { backgroundClientTag } from '../core/version.js';
+import { publishBackgroundUsage } from './backgroundUsage.js';
 
 export type ApprovalDeferral = 'queue' | 'agent';
 
@@ -62,6 +64,9 @@ export interface DeferCtx {
   agentSlug?: string;
   cwd?: string;
   approvalDeferral?: ApprovalDeferral;
+  /** 此刻真正执行该调用的身份(具名子代理的展示 slug),与 agentSlug 不同才有值。
+   *  唯一用途:挡住 AGENT_SCOPED_TOOLS 排队 —— 见 deferApproval 里那道闸。 */
+  execAgentSlug?: string;
 }
 
 function log(msg: string): void {
@@ -263,6 +268,9 @@ export async function decideApproval(
 /** 代批裁决(mode='agent'):默认 agent 的人格 + USER.md + 用户长期记忆,一次补全,输出 JSON。任何失败 → 否决(转排队)。 */
 export async function judgeApproval(input: {
   userId: string; agentSlug: string; call: ToolCall; preview: string; reason?: ApprovalReason;
+  /** 父 run(= 被代批的那个 Muse 周期)。判官的 token 必须挂在它身上,否则 tokensInWindow 的
+   *  agent_run_events → agent_runs → chat_sessions(kind='muse')连接查不到,这笔钱对预算完全不可见。 */
+  runId?: string;
 }): Promise<{ approve: boolean; reason: string }> {
   try {
     const def = await getAgent(DEFAULT_AGENT_SLUG).catch(() => null);
@@ -295,8 +303,12 @@ export async function judgeApproval(input: {
       messages: [{ role: 'system', content: system }, { role: 'user', content: user }] as ChatMessage[],
       projectSource: '', usageSource: 'tangu', client: backgroundClientTag('muse'),
       temperature: 0, maxTokens: 300, stream: true, provider: (model as any)?.provider,
+      // D3:判官只做一次 JSON 二选一,不需要思考预算(缺省档在 DeepSeek 这类端点上 = high)。
+      thinkingLevel: 'low',
     } as any);
     const res = await llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider });
+    // C-5 台账:放在解析之前 —— 模型没给出裁决(下面 return)也照样烧了 token。
+    await publishBackgroundUsage('muse-judge', modelId, res?.usage, { runId: input.runId, model });
     try {
       const cost = await deps().billing.calculateCost(modelId, res?.usage?.prompt_tokens || 0, res?.usage?.completion_tokens || 0);
       const u = await deps().brain.users.getUserById(input.userId);
@@ -358,7 +370,7 @@ export async function deferApproval(
   const agentSlug = ctx.agentSlug || DEFAULT_AGENT_SLUG;
   let note: string | undefined;
   if (ctx.approvalDeferral === 'agent') {
-    const v = await judgeApproval({ userId, agentSlug, call, preview, reason });
+    const v = await judgeApproval({ userId, agentSlug, call, preview, reason, runId });
     if (v.approve) {
       // 审计行:代批放行也留痕(status=approved, decided_by=agent),面板能看到「谁替你点的头」。
       await query(
@@ -379,6 +391,21 @@ export async function deferApproval(
       rejectReason:
         `This action needs the user's approval, and "${call.function.name}" is an external/custom tool that cannot be queued for later approval. ` +
         'Skip it (or use a built-in alternative) and continue with other work.',
+    };
+  }
+  // ALS 作用域的工具 × 执行身份≠本 run 的 agent:**不排队**。排队意味着事后由 executeApproved 重建
+  // 上下文重放,而重建出来的身份是 row.agent_slug(本 run 的 agent),不是此刻发起调用的那个具名子代理 ——
+  // 同一笔 manage_harness,当场执行写子代理的 HARNESS.md,事后批准却写到父代理头上(目标漂移)。
+  // 行里只有一个 agent_slug 字段,它同时被 LOG/收件箱/叫醒 Muse 用着,不能改判成子代理身份;
+  // 与其安静地写错文件,不如当场拒绝并告诉模型把结论写进最终报告。
+  // (代批档 'agent' 不受影响:它在上面就地放行,执行仍发生在子代理的 ALS 作用域内。)
+  if (ctx.execAgentSlug && ctx.execAgentSlug !== agentSlug && AGENT_SCOPED_TOOLS.has(call.function.name)) {
+    return {
+      action: 'reject',
+      rejectReason:
+        `"${call.function.name}" writes to whichever agent is running it, and it needs the user's approval, which can only happen after you have finished. ` +
+        `Queuing it would apply it to "${agentSlug}" instead of "${ctx.execAgentSlug}", so it is refused here. ` +
+        'Put what you wanted to record into your final report instead, and let the delegating agent decide.',
     };
   }
   const q = await queueApproval({

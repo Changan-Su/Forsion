@@ -12,6 +12,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
+import { publishBackgroundUsage } from './backgroundUsage.js';
 import type { ChatMessage } from '../core/types.js';
 
 // 结构化交接(借 pi 的 checkpoint schema + Codex 的 handoff 框架):压缩摘要的消费者是「接手续做的
@@ -140,6 +141,8 @@ async function summarizeTranscript(
   signal?.throwIfAborted();
   const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, signal });
   signal?.throwIfAborted();
+  // 摘要调用上台账(A5):无 run 上下文(/compact 路由等)时静默跳过。
+  await publishBackgroundUsage('compaction', modelId, (res as any)?.usage, { model });
   return String(res?.content || '').trim();
 }
 

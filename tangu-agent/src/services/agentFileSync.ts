@@ -272,11 +272,12 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
     const current = memory ? Buffer.from(memory.snapshot().content) : readSyncBytes(root, abs);
     if ((current === null ? null : sha256(current)) !== hash) throw new Error(`local file changed during sync: ${p}`);
   };
+  let archivedAs = '';
   const archive = (): void => {
     if (!initial) return;
     let name = conflictCopyName(p, new Date());
     for (let n = 2; existsSync(join(dir, name)); n++) name = `${conflictCopyName(p, new Date())}.${n}`;
-    atomicSyncWrite(root, join(dir, name), initial, guard); result.conflicts++;
+    atomicSyncWrite(root, join(dir, name), initial, guard); result.conflicts++; archivedAs = name;
   };
   const pull = async (conflict: boolean): Promise<void> => {
     guard(); const file = await cloud.getFile(uid, slug, p, { signal }); guard();
@@ -291,6 +292,17 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
       record(file.seq, sha256(bytes), file.mtimeMs);
     });
     result.pulled++;
+    // 定义文件被云端覆盖必须留痕:别的设备/网页端存过 config.toml,本机就静默换了参数,09-13 排查时无从判断是谁写的。
+    // Library 文件量大不记;config.toml 额外对比 max_iterations —— 最容易悄悄咬人的一个字段。
+    if (p === 'config.toml' || p === 'SOUL.md' || p === 'HARNESS.md') { // 明确白名单:Library 量大、USER.md(__user__)不在本条留痕范围
+      let delta = '';
+      if (p === 'config.toml') {
+        const before = initial ? parseAgentConfig(slug, initial.toString('utf8'), '').maxIterations : null;
+        const after = parseAgentConfig(slug, bytes.toString('utf8'), '').maxIterations;
+        if (before !== after) delta = `;max_iterations ${before ?? '(未设)'} → ${after ?? '(未设)'}`;
+      }
+      console.log(`[agent sync] ${initial ? '已从云端拉取覆盖' : '已从云端拉取新文件'} ${slug}/${p}(seq ${file.seq ?? '-'}${archivedAs ? `,本地版本已存为 ${archivedAs}` : ''}${delta})`);
+    }
   };
   if (decision.kind === 'pull' || decision.kind === 'conflict') { await pull(decision.kind === 'conflict'); return; }
   if (decision.kind === 'deleteLocal') {

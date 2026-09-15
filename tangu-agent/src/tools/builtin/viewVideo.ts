@@ -120,6 +120,8 @@ export const viewVideoProvider: ToolProvider = {
       name: 'view_video',
       mode: 'host', // 对象是宿主机文件路径;沙箱形态无此路径面也无 ffmpeg
       isEnabledFor: (profile) => !!profile.capabilities.hostExec && !!findBin('ffprobe') && !!findBin('ffmpeg'),
+      deferred: true, // E2:低频「看视频」动作(且需本机 ffmpeg)→ 目录留一行,用时 load_tools 解锁
+      deferHint: 'Watch a local video file yourself — a contact sheet of frames, or one frame at a timestamp.',
       capabilities: { sideEffect: 'read', parallel: true, defaultTimeoutMs: 180_000 },
       definition: {
         type: 'function',

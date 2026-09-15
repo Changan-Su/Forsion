@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { openaiToResponsesBody, streamOpenAiResponses, stableSessionUuid } from './openaiResponses.js';
-import { ACCOUNT_MARK } from './openaiCompat.js';
+import { ACCOUNT_MARK, RUN_MARK } from './openaiCompat.js';
 
 describe('openaiToResponsesBody', () => {
   it('maps system→instructions, messages→input, tools flattened, tool result→function_call_output', () => {
@@ -22,6 +22,21 @@ describe('openaiToResponsesBody', () => {
     expect(body.tools[0]).toMatchObject({ type: 'function', name: 'read', parameters: { type: 'object' } });
     expect(body.tool_choice).toBe('auto');
     expect(body.store).toBe(false);
+  });
+
+  // D1 的另一半:agentLoop 现在无条件把 reasoning_content 挂到本 run 内存里的 assistant 消息上,
+  // 这条钉住它绝不随 Responses body 上 wire —— 订阅私有端点见未知字段直接 400。
+  it('assistant 的 reasoning_content 不进 body(白名单重建,未知端点绝不发未知字段)', () => {
+    const body = openaiToResponsesBody({
+      model: 'gpt-5-codex',
+      messages: [
+        { role: 'user', content: 'hi' },
+        { role: 'assistant', content: 'VISIBLE-BODY', reasoning_content: 'COT-SECRET' },
+      ],
+    });
+    // 两条一起才不是空断言:正文进了 body(这条 assistant 确实被转换过),思考没进。
+    expect(JSON.stringify(body)).toContain('VISIBLE-BODY');
+    expect(JSON.stringify(body)).not.toContain('COT-SECRET');
   });
 
   it('reasoning_effort → body.reasoning(effort+summary),max_tokens → max_output_tokens(官方直连思考档)', () => {
@@ -109,6 +124,28 @@ describe('stableSessionUuid(缓存/路由粘性:同会话稳定,不再每请求�
 describe('streamOpenAiResponses SSE parse', () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  /** 只喂一条 response.completed,取回归一化后的 usage。 */
+  const usageOf = async (u: any): Promise<any> => {
+    const sse = `data: ${JSON.stringify({ type: 'response.completed', response: { usage: u } })}\n`;
+    vi.stubGlobal('fetch', () =>
+      Promise.resolve({
+        ok: true,
+        body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }),
+      }),
+    );
+    const res = await streamOpenAiResponses({
+      apiKey: 'x', baseUrl: 'https://example/codex', payload: { model: 'gpt-5-codex', messages: [] },
+    } as any);
+    return res.usage;
+  };
+
+  // 与 openaiCompat 同一条极性契约:两套协议对「没报 / 报了 0」必须给出同一语义。
+  it('reasoning_tokens 极性:上游没报 → 整个键缺席;明确报 0 → 键在且为 0', async () => {
+    expect(await usageOf({ input_tokens: 10, output_tokens: 5 })).not.toHaveProperty('reasoning_tokens');
+    expect(await usageOf({ input_tokens: 10, output_tokens: 5, output_tokens_details: { reasoning_tokens: 0 } }))
+      .toHaveProperty('reasoning_tokens', 0);
+  });
+
   it('parses streamed text + function_call into normalized OpenAI shape', async () => {
     const ev = (o: any): string => `data: ${JSON.stringify(o)}\n`;
     const sse = [
@@ -185,5 +222,78 @@ describe('streamOpenAiResponses SSE parse', () => {
     const res = await streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://api.openai.com/v1', payload: { model: 'gpt-5.6-luna', messages: [] } } as any);
     expect(res.finishReason).toBe('length');
     expect(res.toolCalls.length).toBe(1); // 调用保留(供 loop 置错回喂),但绝不能报 tool_calls
+  });
+});
+
+// ── B4①(C-6):Codex 后端的粘性路由态 x-codex-turn-state ───────────────────────
+describe('x-codex-turn-state 回带(TANGU_CODEX_TURN_STATE)', () => {
+  const OLD = process.env.TANGU_CODEX_TURN_STATE;
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (OLD === undefined) delete process.env.TANGU_CODEX_TURN_STATE;
+    else process.env.TANGU_CODEX_TURN_STATE = OLD;
+  });
+
+  const SSE = 'data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n';
+  const stubFetch = (seen: Array<Record<string, string>>, turnState: string | null = 'TS-1') =>
+    vi.stubGlobal('fetch', (_u: any, init: any) => {
+      seen.push(init.headers);
+      return Promise.resolve({
+        ok: true,
+        headers: new Headers(turnState ? { 'x-codex-turn-state': turnState } : {}),
+        body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(SSE)); c.close(); } }),
+      });
+    });
+  const call = (runId?: string, accountId: string | null = 'acct_1') =>
+    streamOpenAiResponses({
+      apiKey: 'x', baseUrl: 'https://chatgpt.com/backend-api/codex',
+      payload: {
+        model: 'gpt-5-codex', messages: [],
+        ...(accountId ? { [ACCOUNT_MARK]: accountId } : {}),
+        ...(runId ? { [RUN_MARK]: runId } : {}),
+      },
+    } as any);
+
+  it('闸开:同 run 的后续请求回带,换一个 run 不带(跨 run 回带 = 把别人的路由态贴上去)', async () => {
+    process.env.TANGU_CODEX_TURN_STATE = '1';
+    const seen: Array<Record<string, string>> = [];
+    stubFetch(seen);
+    await call('run-A');
+    await call('run-A');
+    await call('run-B');
+    await call('run-A');
+    expect(seen[0]['x-codex-turn-state']).toBeUndefined(); // 首请求无从回带
+    expect(seen[1]['x-codex-turn-state']).toBe('TS-1');
+    expect(seen[2]['x-codex-turn-state']).toBeUndefined(); // 新 run:不继承
+    expect(seen[3]['x-codex-turn-state']).toBe('TS-1');
+  });
+
+  it('闸关(缺省)一次都不回带', async () => {
+    // 显式清掉实验变量:测试进程若本来就带着 TANGU_CODEX_TURN_STATE=1 启动,这条用例实际测的是
+    // 「闸开」并会红(评审 #11)。还原交给本 describe 的 afterEach(它按 OLD 逐字恢复)。
+    delete process.env.TANGU_CODEX_TURN_STATE;
+    const seen: Array<Record<string, string>> = [];
+    stubFetch(seen);
+    await call('run-C');
+    await call('run-C');
+    expect(seen[1]['x-codex-turn-state']).toBeUndefined();
+  });
+
+  it('没有 run 身份时不回带(宁可测不出,不串 run)', async () => {
+    process.env.TANGU_CODEX_TURN_STATE = '1';
+    const seen: Array<Record<string, string>> = [];
+    stubFetch(seen);
+    await call(undefined);
+    await call(undefined);
+    expect(seen[1]['x-codex-turn-state']).toBeUndefined();
+  });
+
+  it('上游根本没给这个头 → 无可回带(报表据此把「不存在」与「无效果」分开)', async () => {
+    process.env.TANGU_CODEX_TURN_STATE = '1';
+    const seen: Array<Record<string, string>> = [];
+    stubFetch(seen, null);
+    await call('run-D');
+    await call('run-D');
+    expect(seen[1]['x-codex-turn-state']).toBeUndefined();
   });
 });

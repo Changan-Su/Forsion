@@ -178,7 +178,7 @@ export function parseTextToolCalls(content: string): ParseResult {
  * 正文是否「看起来含工具调用意图」但没被解析成结构化调用。
  * agent loop 的安全网:原生 tool_calls 为空、文本兜底也没解出来,但正文带工具调用标记时,
  * 别静默收尾——而是回灌一条纠正提示让模型用原生函数调用重试(见 agentLoop 的 recovery)。
- * 严格匹配「带 name= 的 invoke / 带起始 token 的 Kimi·DeepSeek」,避免把单纯讨论这些语法的散文误判。
+ * 严格匹配「带 name= 的 invoke / 带起始 token 的 Kimi·DeepSeek / 紧跟 JSON 的 to=NAME」,避免把单纯讨论这些语法的散文误判。
  * 字符类 [^<>] + 长度上限:这函数跑在 recovery 路径的原始模型正文上,裸 `<` 串否则会 O(n²) 卡死。
  */
 export function looksLikeToolCallText(content: string): boolean {
@@ -186,6 +186,9 @@ export function looksLikeToolCallText(content: string): boolean {
   return (
     /<[^<>]*?invoke\s+name="/i.test(content) ||
     content.includes('<|tool_call_begin|>') ||
-    content.includes('｜tool▁call▁begin｜')
+    content.includes('｜tool▁call▁begin｜') ||
+    // ④ Harmony / 网关裸渲染:` to=list_dir code:\n{"path":…}`、`commentary to=functions.x json{…}`(09-13 用户导出实证:
+    //    末轮不带 tools 时模型这么写,原样上了屏)。要求紧跟 `{"` 以免散文里的 to= 误判;只做识别(纠错重试 / 终稿丢弃),不解析。
+    /\bto=(?:functions\.)?[A-Za-z_][\w.\-]*\s*(?:code|json)?\s*:?\s*\{"/.test(content)
   );
 }

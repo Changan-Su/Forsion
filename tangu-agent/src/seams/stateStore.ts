@@ -13,6 +13,7 @@
  */
 import type { AgentRun } from '../services/runStore.js';
 import type { AgentEvent } from '../services/eventBus.js';
+import type { SessionHit, SessionSearchInput, SessionTranscript, SessionTranscriptInput } from '../services/sessionSearch.js';
 
 export interface StepInput {
   id: string;
@@ -31,6 +32,16 @@ export interface StepRow {
   toolCalls: any;
   toolResults: any;
   createdAt: string | null;
+}
+
+/** B3(跨 run 回放交错重建):一条 assistant 消息背后、其 run 的某一轮步骤。
+ *  只取重建所需三列 —— tool_results 不取(结果一律从 chat_messages 行拿,免得 hydrate 把大结果读两遍)。 */
+export interface MessageStepRow {
+  /** agent_runs.assistant_message_id —— 与 chat_messages.id 对齐。 */
+  messageId: string;
+  stepNo: number;
+  llmResponse: any;
+  toolCalls: any;
 }
 
 export interface ActiveRunRow {
@@ -91,6 +102,10 @@ export interface StateStore {
   // ── steps ──
   appendStep(step: StepInput): Promise<void>;
   listSteps(runId: string): Promise<StepRow[]>;
+  /** 可选(B3):按 assistant 消息 id 批量取其 run 的分步记录,供 hydrate 重建在线时的
+   *  assistant→tool→assistant 交错。**未实现即优雅降级**:thin worker 没有对应的
+   *  /api/agent-state 端点,回放退回扁平形态(= 2026-09 之前的行为),只是少一截缓存前缀。 */
+  listStepsForMessages?(sessionId: string, messageIds: string[]): Promise<MessageStepRow[]>;
 
   // ── events ──
   /** 分配 seq + 持久化 + 实时 emit(SqlStateStore);worker 写 NDJSON 通道。返回 seq。 */
@@ -122,4 +137,12 @@ export interface StateStore {
   /** chat_sessions.agent_config 原始值。 */
   getAgentConfig(sessionId: string): Promise<any>;
   setAgentConfig(sessionId: string, agentConfigJson: string): Promise<void>;
+
+  // ── session recall(工具 search_sessions / read_session 与记忆召回的历史段)──
+  // 2026-09-13 前这两条直连 core/db.js → thin worker(云端 Web / 移动端)整体抛错。SQL 本体在
+  // services/sessionSearchSql.ts;HttpStateStore 经网关 /api/agent-state/sessions/* 代查(归属仍按 token userId)。
+  /** 检索/列出会话(语义正典见 services/sessionSearch.ts 头注)。 */
+  searchSessions(input: SessionSearchInput): Promise<SessionHit[]>;
+  /** 另一会话的会话头 + 一页原始消息(最新在前;塑形在 read_session 工具)。 */
+  readSessionTranscript(input: SessionTranscriptInput): Promise<SessionTranscript>;
 }

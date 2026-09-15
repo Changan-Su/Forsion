@@ -27,7 +27,7 @@ export const loadToolsProvider: ToolProvider = {
               names: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Exact tool names from the Additional Tools catalog, e.g. ["manage_automation"]',
+                description: 'Exact tool names from the Additional Tools catalog, e.g. ["browser_snapshot"]',
               },
             },
             required: ['names'],
@@ -36,7 +36,7 @@ export const loadToolsProvider: ToolProvider = {
       },
       execute: async (args, ctx) => {
         const names = Array.isArray(args.names) ? (args.names as unknown[]).map(String) : [];
-        if (!names.length) return 'Error: names is required — pass the tool names to load, e.g. {"names":["manage_automation"]}';
+        if (!names.length) return 'Error: names is required — pass the tool names to load, e.g. {"names":["browser_snapshot"]}';
         if (!ctx.unlockTools) return 'Error: load_tools is not available in this context.';
         const profile = ctx.profile ?? deps().profile;
         // 可解锁集合必须与目录/defs 过滤同一判定(isDeferredIn=静态标记∪coding 情境集),
@@ -56,9 +56,13 @@ export const loadToolsProvider: ToolProvider = {
             for (const [n2, t2] of available) if (t2.deferGroup === t.deferGroup) toUnlock.add(n2);
           }
         }
-        if (toUnlock.size) ctx.unlockTools([...toUnlock]);
-        let msg = toUnlock.size
-          ? `Loaded tool(s): ${[...toUnlock].join(', ')}. Their full definitions are now available — call them directly in your next step.`
+        // 回调可以拒掉一部分(子代理的管理面 deny 名单):返回数组时以**它实际解锁的**为准,
+        // 被拒的并入 unknown 如实报「本会话不可用」——谎报已装载会让模型下一轮去调一个永远没有定义的工具。
+        const accepted = toUnlock.size ? ctx.unlockTools([...toUnlock]) : undefined;
+        const loaded = Array.isArray(accepted) ? [...toUnlock].filter((n) => accepted.includes(n)) : [...toUnlock];
+        if (Array.isArray(accepted)) for (const n of toUnlock) if (!accepted.includes(n)) unknown.push(n);
+        let msg = loaded.length
+          ? `Loaded tool(s): ${loaded.join(', ')}. Their full definitions are now available — call them directly in your next step.`
           : 'No tools loaded.';
         if (ready.size) msg += ` Already available: ${[...ready].join(', ')}. Call these tools directly; no loading is needed.`;
         if (unknown.length) msg += ` Unavailable in this session: ${[...new Set(unknown)].join(', ')}. This may reflect platform support, plugin settings or permissions; it does not mean the other tools failed. Use only visible tools or exact names from the Additional Tools catalog.`;

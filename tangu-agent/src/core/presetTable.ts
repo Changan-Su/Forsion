@@ -90,9 +90,18 @@ export const CHAT_HOST_DISK_HIDDEN: ReadonlySet<string> = new Set(['search_files
 
 const EMPTY: ReadonlySet<string> = new Set();
 
-/** work(preset 缺省)= 今天的行为,逐字节零变化。 */
+/** work(缺省档)下也按需装载的工具(E2,§五「延迟候选」):60 天 per-tool 使用率低于
+ *  2.3–3.1% 的盈亏平衡线,常驻 defs 不划算 —— 目录仍留一行,load_tools 可解锁。
+ *  ⚠️ 其余 E2 工具都在自己的 ToolDef 上写 `deferred: true`(仓内既有约定),只有 read_document
+ *  的定义住 `src/tools/hostExec.ts` —— 该文件正被另一条 lane 改(见 test/readDocumentDocx.test.ts),
+ *  本轮不动它。
+ *  // ponytail: 上限=一条名单。等 hostExec.ts 空出来,把这条搬去定义上的 `deferred: true` + deferHint,
+ *  //           本 Set 随即清空(coding 档 CODING_PRESET_DEFERRED 已含 read_document,chat 档整族不在面上)。 */
+const WORK_DEFERRED: ReadonlySet<string> = new Set(['read_document']);
+
+/** work(preset 缺省)= 今天的行为,除 WORK_DEFERRED 这一份按需装载名单外零变化。 */
 const WORK: PresetSpec = {
-  toolFace: { face: EMPTY, rejectHostMode: false, hostDiskHidden: EMPTY, deferred: EMPTY },
+  toolFace: { face: EMPTY, rejectHostMode: false, hostDiskHidden: EMPTY, deferred: WORK_DEFERRED },
   persona: 'keep',
   persistence: true,
   noPreamble: false,

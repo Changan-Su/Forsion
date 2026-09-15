@@ -3,8 +3,11 @@
  *
  * 身份 = 文件夹系统 agent `~/.tangu/agents/muse/`（config.toml developer_instructions + SOUL.md 人格 +
  * 自己的 MEMORY.md/LOG，经 agentConfig.agentSlug 激活）：跨周期持久记忆，用户可像普通 agent 一样编辑其
- * 人格与指令。每周期的**动态**上下文（TODO 预算、用户记忆快照、跨 agent 活动摘要、近期会话标题、授权
- * 文件夹、TODO 去重提示）注入 kickoff 消息。
+ * 人格与指令。每周期的**动态**上下文（用户记忆快照、跨 agent 活动摘要、活动尾、近期会话标题、授权
+ * 文件夹、TODO 去重提示、本次触发原因）经 `input.ephemeralHint` 走尾部 user 通道注入：**不落库、不回放**
+ * （2026-09-14：它是 5k 字符的时点摘要，落库后每个后续周期都要重发 N 份陈旧副本，缓存与窗口双输）。
+ * 落库的 kickoff 只剩一段同配置下逐字不变的短指令 —— 会话内回放于是是稳定前缀。
+ * 会话按消息数轮换（见 MUSE_SESSION_MAX_MESSAGES），运行态（lastCycleAt）落 ~/.tangu/muse-state.json（引擎自有状态域，**不在** Muse 可写的 agent 目录里）。
  *
  * 运行形态（2026-09-10 权限档改版）：每个周期 = 在隔离的 kind='muse' 会话里起一个 run（经 agentLoop）。
  * Muse 不再跑只读 planMode,而是像普通 agent 一样按**权限档**工作(cfg.mode,与普通 agent 的审批档对齐):
@@ -30,9 +33,9 @@ import { deps } from '../seams/runtime.js';
 import { createRun, setRunTerminalListener } from './runStore.js';
 import { enqueueRun } from './agentLoop.js';
 import { loadSpecialAgentsConfig, legacyMusePrompt, isWithinActiveHours, buildTodoDedupHint, resolveBackgroundModelId, type MuseConfig } from './specialAgentsConfig.js';
-import { MUSE_AGENT_SLUG, ensureMuseAgent, listAgents, resolveMemorySlug } from '../agents/agentRegistry.js';
+import { MUSE_AGENT_SLUG, ensureMuseAgent, getAgent, listAgents, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
-import { DEFAULT_AGENT_SLUG, agentsDir, checkpointsDir } from '../core/tanguHome.js';
+import { DEFAULT_AGENT_SLUG, agentsDir, checkpointsDir, tanguHome } from '../core/tanguHome.js';
 import { backgroundClientTag } from '../core/version.js';
 import { displayText } from '../core/displayText.js';
 
@@ -72,6 +75,39 @@ export function museSpaceDir(): string {
 export function museJournalPath(date = localDate()): string {
   return path.join(museLibraryDir(), 'Journal', `${date}.md`);
 }
+
+/** Muse 的运行态落盘,住**引擎自有状态域** ~/.tangu/(与 special-agents.json 这份 Muse 配置同级)。
+ *  刻意**不**放 agents/muse/:那是 Muse 自己的可写根(fsPolicy.writableRoots),调度控制态放在模型
+ *  能写的地方,Muse 或一次提示注入把 lastCycleAt 写成远未来,下次启动读回后心跳条件长期不成立 =
+ *  把自己永久停掉(Codex 评审 #2)。位置只挡住 write 工具的可写根,run_bash 那条路另算:文件名同时在
+ *  hostSandboxProtection 的 deny 名单里,两道闸都钉。同理**不做**旧位置(agents/muse/state.json)回读迁移 —— 回读就
+ *  把这条攻击面原样搬回来;升级后最多多跑一个周期。
+ *  今天只有 lastCycleAt:只住内存时**每次启动 app 都会在 15s 后必跑一个周期**(§3.4),开机频繁的用户
+ *  等于把心跳配置架空。ponytail: 直接整文件读写、坏文件当没跑过(退回今天的行为),不上原子写/版本号
+ *  —— 单写者、丢了最多多跑一个周期。要再存别的运行态就往这个对象里加字段。 */
+export function museStateFile(): string {
+  return path.join(tanguHome(), 'muse-state.json');
+}
+export async function readLastCycleAt(): Promise<number> {
+  try {
+    const raw = JSON.parse(await fs.readFile(museStateFile(), 'utf8'));
+    const v = Number(raw?.lastCycleAt);
+    // 晚于当前时刻的值只可能来自篡改或时钟回拨 → 当没跑过。宁可多跑一个周期,也不让一个坏值把 Muse 停死。
+    return Number.isFinite(v) && v > 0 && v <= Date.now() ? v : 0;
+  } catch { return 0; }
+}
+export async function writeLastCycleAt(ms: number): Promise<void> {
+  try {
+    await fs.mkdir(path.dirname(museStateFile()), { recursive: true });
+    await fs.writeFile(museStateFile(), JSON.stringify({ lastCycleAt: ms }), 'utf8');
+  } catch (e: any) { log(`写 muse-state.json 失败:${e?.message || e}`); }
+}
+/** 进程内只读一次(tick 与 museStatus 都等它:桌面每 4s 轮询 status,比首个 tick 早 15 秒)。 */
+let stateLoad: Promise<void> | null = null;
+function loadMuseState(): Promise<void> {
+  if (!stateLoad) stateLoad = readLastCycleAt().then((v) => { if (v > lastCycleAt) lastCycleAt = v; });
+  return stateLoad;
+}
 export function localDate(d = new Date()): string {
   const p = (x: number): string => String(x).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
@@ -81,15 +117,22 @@ function localTime(d = new Date()): string {
   return `${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-/** 周期 run 的 agentConfig(纯函数,按权限档合成;单测钉三档)。 */
-export function museAgentConfig(cfg: MuseConfig): Record<string, unknown> {
+/** 周期 run 的 agentConfig(纯函数,按权限档合成;单测钉三档)。
+ *  agentThinking = muse 这个文件夹 agent 自己 config.toml 里的思考档(startCycle 读进来):
+ *  用户显式设过就尊重他的,没设才用后台缺省。 */
+export function museAgentConfig(cfg: MuseConfig, agentThinking?: string): Record<string, unknown> {
   const base = {
     muse: true,
     planMode: false,
     execMode: 'host',
     agentSlug: MUSE_AGENT_SLUG,
     cwd: museLibraryDir(),
+    // D3(09-14):后台周期缺省思考·低 —— 「找 1-3 件值得做的事」是判断题不是推演题,medium 只是多烧推理 token。
+    // ⚠️ agentActivation 只在 agentConfig **没有**该字段时才用 def 的值,所以这里必须自己先合一次,
+    // 否则硬写 'low' = 静默压过用户在 config.toml 里的 model_reasoning_effort。
+    thinkingLevel: agentThinking || 'low',
     maxIterations: cfg.maxIterationsPerCycle,
+    maxIterationsSource: 'muse', // 收尾提示 / context_info 点名来源:Muse 每周期轮数,不是会话 /loop
     automationOrigin: MUSE_AGENT_SLUG, // 活动行 o=muse:自己写的 agent.edit 不唤醒盯自己的规则
   };
   if (cfg.mode === 'auto') return { ...base, approvalMode: 'full-auto', extraRoots: [museSpaceDir(), ...cfg.allowedFolders.slice(0, 8)] };
@@ -196,8 +239,19 @@ async function sendDailyDigestIfDue(cfg: MuseConfig, userId: string): Promise<vo
 /** Muse 自己 SCHEDULE.db 的到期 auto 条目(自触发 / Track)。 */
 export async function museDueSchedules(now = new Date()): Promise<ScheduleEntry[]> {
   const db = await loadSchedule(MUSE_AGENT_SLUG);
-  return db ? dueEntries(entriesOf(db), now) : [];
+  const due = db ? dueEntries(entriesOf(db), now) : [];
+  // 批准 TODO 建的条目(description = `todo <id>`)只在那条 TODO 真是 injected 时放行:批准路由「先落条目、后改状态」,
+  // 两步之间的孤儿条目要等重试把状态改成 injected 才生效;TODO 被忽略了也就不跑。查不到 = 一条都不放(Codex 09-11 P1)。
+  const ids = due.map((e) => MUSE_TODO_ENTRY.exec(e.description)?.[1]).filter((x): x is string => !!x);
+  if (!ids.length) return due;
+  let live = new Set<string>();
+  try {
+    const rows = await query<any[]>(`SELECT id FROM muse_todos WHERE status = 'injected' AND id IN (${ids.map(() => '?').join(',')})`, ids);
+    live = new Set((rows || []).map((r) => String(r.id)));
+  } catch { /* fail closed */ }
+  return due.filter((e) => { const m = MUSE_TODO_ENTRY.exec(e.description); return !m || live.has(m[1]); });
 }
+const MUSE_TODO_ENTRY = /^todo ([A-Za-z0-9_-]{1,64})$/;
 
 function scheduleKickoff(due: ScheduleEntry[]): string {
   if (!due.length) return '';
@@ -232,22 +286,42 @@ function nowHour(): number {
   return new Date().getHours();
 }
 
+/** 轮换阈值:一个 Muse 会话攒够这么多条消息就换新的(2026-09-14 C1a)。
+ *  从前取**最老**的那行永久复用 → 会话只涨不换,每个周期都在回放几十条陈旧周期,25/38 个周期在第 0 轮就撞压缩线。
+ *  ponytail: 按**条数**而不是字节 —— 条数一眼可算、无需估 token。若 live 台架仍见第 0 轮压缩(工具结果嵌在
+ *  assistant 行里、单条很肥),对策是把这个常数调小,不是改判据。 */
+export const MUSE_SESSION_MAX_MESSAGES = 30;
+
+/** 纯函数(单测钉):这个会话该退休了吗。 */
+export function shouldRotateMuseSession(messageCount: number): boolean {
+  return messageCount >= MUSE_SESSION_MAX_MESSAGES;
+}
+
+/** 当前活动的 Muse 会话 = **最新**的那行(轮换后老会话留在库里只作历史,不再写入)。
+ *  museStatus / tick 都经本函数取,桌面 MuseView 读的是 museStatus().sessionId —— 「活动指针」只此一处。 */
 export async function getMuseSessionId(userId: string): Promise<string | null> {
   const rows = await query<any[]>(
-    `SELECT id FROM chat_sessions WHERE user_id = ? AND kind = 'muse' ORDER BY created_at ASC LIMIT 1`,
+    `SELECT id FROM chat_sessions WHERE user_id = ? AND kind = 'muse' ORDER BY created_at DESC LIMIT 1`,
     [userId],
   );
   return rows[0]?.id || null;
 }
 
-async function ensureMuseSession(userId: string, modelId: string): Promise<string> {
+async function messageCount(sessionId: string): Promise<number> {
+  const rows = await query<any[]>(`SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ?`, [sessionId]);
+  return Number(rows?.[0]?.n) || 0; // PG 回字符串、SQLite 回数字
+}
+
+/** 活动会话;不存在或已攒满 → 开一个新的(标题恒 'Muse':kind='muse' 不进会话列表,重名不可见)。export 供单测钉轮换边界。 */
+export async function ensureMuseSession(userId: string, modelId: string): Promise<string> {
   const existing = await getMuseSessionId(userId);
-  if (existing) return existing;
+  if (existing && !shouldRotateMuseSession(await messageCount(existing).catch(() => 0))) return existing;
   const id = uuidv4();
   await query(
     `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind) VALUES (?, ?, ?, 'Muse', ?, 'muse')`,
     [id, userId, deps().profile.appId, modelId],
   );
+  if (existing) log(`会话 ${existing} 已满 ${MUSE_SESSION_MAX_MESSAGES} 条,轮换到 ${id}`);
   return id;
 }
 
@@ -259,30 +333,54 @@ async function isRunning(sessionId: string): Promise<boolean> {
   return !!rows.length;
 }
 
-/** 本 Muse 会话最近 windowHours 小时内的**计费** token = Σ 逐次 LLM 调用的 (prompt − cached) + completion。
+/** 毛 prompt 上限 = maxTokensPerWindow × 本因子。09-11 实测毛量/计费量 ≈ 3.4–6.7 倍,取 6:典型周期下
+ *  仍是计费闸先到(行为不变),只有「命中率变好 → 计费掉下去 → 周期变多」时毛量闸才接手。
+ *  ponytail: 不给它单独的配置项 —— 用户只该拨一个预算旋钮(maxTokensPerWindow),这条跟着它按比例走。 */
+const GROSS_TOKENS_FACTOR = 6;
+
+/** 该用户**全部** Muse 会话最近 windowHours 小时内的两个量:
+ *    billable = Σ 逐次 LLM 调用的 (prompt − cached) + completion —— 成本口径,对应 maxTokensPerWindow;
+ *    gross    = Σ prompt —— 毛量口径(缓存命中照算),对应 grossCap:命中率越好 billable 越小、周期越多,
+ *               毛量却照涨(每次仍要把整份上下文送上去),只按计费量封顶挡不住「一段时间反复唤醒」。
+ *  按 kind='muse' AND user_id 计而不是单个会话:09-14 起会话会轮换,只算活动会话 = 换一次会话预算清零。
  *  取自 agent_run_events 的 usage 事件(每次调用落库,删会话才清;跨进程重启不丢)。不用 agent_runs.tokens_total:
  *  它把每轮重发、命中前缀缓存的 prompt 全额累加。09-11 live 台架两次实测:10 轮周期毛量 ~31 万(计费 ~4.6 万)、
- *  9 轮周期 20.9 万(计费 6.1 万),默认 10 万/5h 于是每 5 小时只放行一个周期;且它只在 done/超额时写,失败·中止的 run 记 0。
+ *  9 轮周期 20.9 万(计费 6.1 万);且它只在 done/超额时写,失败·中止的 run 记 0。
  *  窗口按事件时间(花钱的时刻)。单 run 失控另由 TANGU_MAX_RUN_COST 兜底,此处只算「一段时间反复唤醒」的累计。
  *  ponytail: 缓存读并非免费(约标价 1/10);要计它就在 billableTokens 里给 cached 加权。 */
-export async function tokensInWindow(sessionId: string, windowHours: number): Promise<number> {
+export async function tokensInWindow(userId: string, windowHours: number): Promise<{ billable: number; gross: number }> {
   // NOT(older than) = 落在窗口内;created_at 有默认值不为空。方言经 getOlderThanSql(限定列名原样内插)。
   const within = `NOT (${getOlderThanSql('e.created_at', Math.round(windowHours * 60))})`;
   const rows = await query<any[]>(
     `SELECT e.payload FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id
-     WHERE r.session_id = ? AND e.type = 'usage' AND ${within}`,
-    [sessionId],
+     JOIN chat_sessions s ON s.id = r.session_id
+     WHERE s.kind = 'muse' AND s.user_id = ? AND e.type = 'usage' AND ${within}`,
+    [userId],
   );
-  return rows.reduce((sum, row) => sum + billableTokens(row.payload), 0);
+  return rows.reduce(
+    (acc, row) => {
+      const u = usageOf(row.payload);
+      acc.billable += billableTokens(u);
+      acc.gross += num(u?.prompt);
+      return acc;
+    },
+    { billable: 0, gross: 0 },
+  );
+}
+
+/** payload 在 PG 回对象、SQLite 回 JSON 串;坏行 → null(按 0 计)。 */
+function usageOf(payload: any): any {
+  if (typeof payload !== 'string') return payload;
+  try { return JSON.parse(payload); } catch { return null; }
+}
+function num(v: any): number {
+  return Math.max(0, Number(v) || 0);
 }
 
 /** 单条 usage 事件的计费 token:缓存命中的 prompt 不计(Anthropic 的 prompt 已含 cache_write,照计)。
- *  payload 在 PG 回对象、SQLite 回 JSON 串;坏行按 0。 */
-function billableTokens(payload: any): number {
-  let u = payload;
-  try { if (typeof u === 'string') u = JSON.parse(u); } catch { return 0; }
-  const n = (v: any): number => Math.max(0, Number(v) || 0);
-  return Math.max(0, n(u?.prompt) - n(u?.cached)) + n(u?.completion);
+ *  只看 prompt/cached/completion 三个字段 —— completion 已含推理 token,另加 reasoningTokens 就是重复计。 */
+function billableTokens(u: any): number {
+  return Math.max(0, num(u?.prompt) - num(u?.cached)) + num(u?.completion);
 }
 
 /** 是否有任何**用户**会话的 run 正在排队/运行——后台 Muse 据此让位，避免与用户抢同一模型账号/速率。 */
@@ -439,20 +537,19 @@ function spaceKickoff(): string {
     'It is reloaded after your cycle ends; a load failure reaches you as a [feedback] entry mentioning the Space.';
 }
 
-async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbeat', quietSince = false): Promise<void> {
-  const userId = museUserId();
-  const sessionId = await ensureMuseSession(userId, cfg.modelId);
-  await ensureMuseDirs().catch(() => {});
-  // 动态上下文全部进 kickoff 消息(每周期新鲜数据);静态身份(developer_instructions + SOUL + Muse 自己
-  // 的长期记忆)由 agentSlug 激活注入 system——不再内联 systemPrompt,否则会覆盖文件夹里的用户编辑。
-  const hint =
-    (await userMemoryHint(userId)) +
-    (await recentActivityHint(userId)) +
-    (await activityTailHint()) +
-    (await recentSessionTitles(userId)) +
-    (await folderHint(cfg.allowedFolders)) +
-    (await existingTodoHint(userId));
-  const pending = await countPendingApprovals(userId).catch(() => 0);
+/**
+ * 周期消息拆两半(纯函数,单测钉)。C1b(2026-09-14):
+ *   message       = **落库**的短指令。同一份配置下逐字不变 → 会话内每个后续周期回放的都是同一段前缀,
+ *                   可缓存;权限档 / Space 契约 / TODO 配额这些「本周期必须知道的规矩」留在这里。
+ *   ephemeralHint = 本周期的时点简报(触发原因、待批数、安静提示、各类摘要),经 input.ephemeralHint
+ *                   走尾部 user 通道(与 /skill、@ 提及同一条),**不落 chat_messages、不进历史回放**。
+ *                   从前它落库:5k 字符 × 每个后续周期重发一份陈旧副本,既占窗口又打断前缀缓存。
+ * 顺序与从前一字不差(quiet → pending → 触发 → 各摘要),模型看到的拼接结果不变。
+ */
+export function buildCycleMessages(
+  cfg: MuseConfig,
+  dyn: { extraKickoff?: string; hint?: string; pending?: number; quietSince?: boolean },
+): { message: string; ephemeralHint: string } {
   const message =
     'Start this round: first use read_log to review your own recent cycles, the [feedback] entries showing how the user handled your previous todos, and any [approval] entries about actions you deferred earlier. ' +
     'Then combine your long-term memory with the context below to find the 1-3 most worthwhile things to do for the user right now — and do them where your permission tier allows. ' +
@@ -462,11 +559,31 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
     spaceKickoff() + ' ' +
     (cfg.escalateTo ? `For work that needs a stronger model, delegate to the agent "${cfg.escalateTo}". ` : '') +
     (cfg.notify === 'digest' ? 'Notification policy is digest: do not message the user per item; write what matters into your journal, a daily digest is sent for you. ' : '') +
-    'You may use remember to record durable insights about the user (what they value, accept, or dismiss). When done, briefly say what you did and what you deferred.' +
-    (quietSince ? '\n\n(No new user messages since your last cycle — this is a heartbeat; maintenance, preparation or simply "nothing to do" are all fine answers.)' : '') +
-    (pending ? `\n\n(${pending} of your earlier actions are still waiting for the user's approval — do not re-request them.)` : '') +
-    extraKickoff +
-    hint;
+    'You may use remember to record durable insights about the user (what they value, accept, or dismiss). When done, briefly say what you did and what you deferred.';
+  const ephemeralHint =
+    (dyn.quietSince ? '\n\n(No new user messages since your last cycle — this is a heartbeat; maintenance, preparation or simply "nothing to do" are all fine answers.)' : '') +
+    (dyn.pending ? `\n\n(${dyn.pending} of your earlier actions are still waiting for the user's approval — do not re-request them.)` : '') +
+    (dyn.extraKickoff || '') +
+    (dyn.hint || '');
+  return { message, ephemeralHint: ephemeralHint.replace(/^\n+/, '') };
+}
+
+async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbeat', quietSince = false): Promise<void> {
+  const userId = museUserId();
+  const sessionId = await ensureMuseSession(userId, cfg.modelId);
+  await ensureMuseDirs().catch(() => {});
+  // 动态上下文全部走 ephemeralHint(每周期新鲜数据,不落库);静态身份(developer_instructions + SOUL + Muse 自己
+  // 的长期记忆)由 agentSlug 激活注入 system——不再内联 systemPrompt,否则会覆盖文件夹里的用户编辑。
+  const hint =
+    (await userMemoryHint(userId)) +
+    (await recentActivityHint(userId)) +
+    (await activityTailHint()) +
+    (await recentSessionTitles(userId)) +
+    (await folderHint(cfg.allowedFolders)) +
+    (await existingTodoHint(userId));
+  const pending = await countPendingApprovals(userId).catch(() => 0);
+  const { message, ephemeralHint } = buildCycleMessages(cfg, { extraKickoff, hint, pending, quietSince });
+  const agentThinking = (await getAgent(MUSE_AGENT_SLUG).catch(() => null))?.thinkingLevel;
   const runId = uuidv4();
   await createRun({
     id: runId,
@@ -477,15 +594,19 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
     assistantMessageId: uuidv4(),
     input: {
       message,
+      // 本周期简报:agentLoop 把它拼到给模型的最后一条 user 消息上,不写 chat_messages、不进回放(契约 C-3)。
+      // 它仍会随 input 落在 agent_runs.input 里(排障可查),但模型侧每周期只见一份最新的。
+      ephemeralHint,
       userMessageId: uuidv4(),
       attachments: [],
       client: backgroundClientTag('muse'), // 后台用量归因(api_usage_logs.client),与用户 run 可分
       background: 'muse', // 引擎内部来源标记(路由组装 input 时不透传此键):agentLoop 只对它放行 approvalDeferral
-      agentConfig: museAgentConfig(cfg),
+      agentConfig: museAgentConfig(cfg, agentThinking),
     },
   });
   currentSessionId = sessionId;
   lastCycleAt = Date.now();
+  void writeLastCycleAt(lastCycleAt); // 落盘:进程重启后不再「开机 15s 必跑一个周期」
   lastRunning = true;
   pendingJournal = { runId, sessionId, trigger, mode: cfg.mode, startedAt: lastCycleAt };
   enqueueRun(sessionId, runId);
@@ -514,6 +635,7 @@ async function tick(): Promise<void> {
   ticking = true;
   try {
     if (!isLocal()) return;
+    await loadMuseState(); // lastCycleAt 落盘值(只读一次):重启后心跳接着上次算,不再开机就跑
     await flushJournal(); // 上一周期若已收尾 → 记一行(run 终态会 kickMuse,所以通常紧跟着周期结束)
     // ── 盯任务规则评估(零 token 代码判定)。刻意放在 muse.enabled/activeHours 闸**之前**:
     // 带 agentSlug 的规则属于任意 agent 的自动化,关掉 Muse 不应连它们一起灭。
@@ -594,20 +716,27 @@ async function tick(): Promise<void> {
     if (sid && (await isRunning(sid))) { lastRunning = true; return; }
     lastRunning = false;
 
-    // token 预算：本 Muse 会话最近 tokenBudgetWindowHours 小时累计**计费** token(缓存命中不计)超上限 → 本轮不起新周期。
-    // 挡的是「后台反复唤醒把一段时间的额度烧穿」；单趟失控由 TANGU_MAX_RUN_COST 兜底，两层不重叠。
-    let spent = 0;
-    if (cfg.maxTokensPerWindow > 0 && sid) {
-      spent = await tokensInWindow(sid, cfg.tokenBudgetWindowHours);
-      if (spent >= cfg.maxTokensPerWindow) {
-        log(`token 预算用尽(近 ${cfg.tokenBudgetWindowHours}h 已计 ${spent}/${cfg.maxTokensPerWindow},未缓存 prompt+completion),本轮跳过`);
+    // token 预算(两道,近 tokenBudgetWindowHours 小时、该用户全部 Muse 会话):任一超限本轮不起新周期。
+    //   ① maxTokensPerWindow —— **计费**量(缓存命中不计),成本闸,用户可配;
+    //   ② 毛 prompt 闸 —— 缓存命中越好 ① 掉得越快、周期越多,毛量却照涨(每次仍送整份上下文)。
+    // 挡的是「后台反复唤醒把一段时间的额度烧穿」;单趟失控由 TANGU_MAX_RUN_COST 兜底,层层不重叠。
+    let spent = { billable: 0, gross: 0 };
+    const grossCap = cfg.maxTokensPerWindow * GROSS_TOKENS_FACTOR;
+    if (cfg.maxTokensPerWindow > 0) {
+      spent = await tokensInWindow(userId, cfg.tokenBudgetWindowHours);
+      if (spent.billable >= cfg.maxTokensPerWindow) {
+        log(`token 预算用尽(近 ${cfg.tokenBudgetWindowHours}h 计费 ${spent.billable}/${cfg.maxTokensPerWindow},未缓存 prompt+completion),本轮跳过`);
+        return;
+      }
+      if (spent.gross >= grossCap) {
+        log(`毛 prompt 预算用尽(近 ${cfg.tokenBudgetWindowHours}h 毛量 ${spent.gross}/${grossCap}),本轮跳过`);
         return;
       }
     }
 
     if (restartsThisWindow >= cfg.maxRestartsPerWindow) { log(`本窗口预算用尽(${restartsThisWindow}/${cfg.maxRestartsPerWindow})`); return; }
     restartsThisWindow += 1;
-    log(`启动第 ${restartsThisWindow}/${cfg.maxRestartsPerWindow} 个思考周期(模型 ${cfg.modelId},档位 ${cfg.mode},触发 ${trigger},token 已计 ${spent}/${cfg.maxTokensPerWindow})`);
+    log(`启动第 ${restartsThisWindow}/${cfg.maxRestartsPerWindow} 个思考周期(模型 ${cfg.modelId},档位 ${cfg.mode},触发 ${trigger},计费 ${spent.billable}/${cfg.maxTokensPerWindow},毛量 ${spent.gross}/${grossCap})`);
     await startCycle(cfg, buildTriggerKickoff(museFired) + scheduleKickoff(dueMuse), trigger, quietSince);
     // lastFiredAt / lastRun 只在周期真正启动后写回:被上面任何闸挡住 → 下轮重试,不白烧 cooldown。
     if (museFired.length) await markTriggersFired(museFired.map((t) => t.id), undefined, trigCursors);
@@ -682,6 +811,7 @@ export interface MuseStatus {
 }
 
 export async function museStatus(): Promise<MuseStatus> {
+  await loadMuseState(); // 桌面每 4s 轮询,比首个 tick(15s)早:没有这句,启动头 15 秒 lastCycleAt 一律显示「从未」
   let cfg;
   try { cfg = loadSpecialAgentsConfig().muse; } catch { cfg = null; }
   // sessionId/running 从 DB 实查(进程内 flag 重启后漂移;工作视图的「当前思考」也靠 sessionId 复原)。

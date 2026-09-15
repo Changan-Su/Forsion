@@ -17,7 +17,7 @@ import path from 'node:path';
 import type { ToolContext, ToolImpl } from './toolTypes.js';
 import type { ToolProvider } from './toolRegistry.js';
 import { checkWritePath } from './fsPolicy.js';
-import { citeHitFor, citeHowFor, citeRefFor, grepPages, pageFilter, pagesOf, renderPages, type DocPage } from './documentPages.js';
+import { citeHitFor, citeHowFor, citeRefFor, docxText, grepPages, pageFilter, pagesOf, renderPages, type DocPage } from './documentPages.js';
 import { amadeusVaultPath } from './builtin/amadeus.js';
 
 const READ_MAX_CHARS = 100_000;
@@ -49,8 +49,9 @@ function vaultRootOrNull(): string | null {
   }
 }
 
-/** 上一次 read_document 的解析结果（键=路径+mtime+size+ino+ocr）。定位→读页是两趟调用，别重解析整本书。 */
-let docMemo: { key: string; pages: DocPage[] } | null = null;
+/** 上一次 read_document 的解析结果（键=路径+mtime+size+ino+ocr）。定位→读页是两趟调用，别重解析整本书。
+ *  plainText = 没走 LibreOffice 的 docx 纯文本兜底（整篇算一页，没有排版页）。 */
+let docMemo: { key: string; pages: DocPage[]; plainText?: boolean } | null = null;
 
 /** 按扩展名判定是否受支持的图片;非图片返回 null。 */
 function imageMimeForPath(p: string): string | null {
@@ -550,7 +551,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
     },
   },
 
-  // 文档阅读器：把 PDF（及装了 LibreOffice/ImageMagick 时的 docx/xlsx/pptx）抽成 markdown，
+  // 文档阅读器：把 PDF（及装了 LibreOffice/ImageMagick 时的 docx/xlsx/pptx；没装时 docx 退回纯文本）抽成 markdown，
   // 让 agent 真正"读到"内容。read_file 读这类二进制只会吐乱码。引擎用 LiteParse（纯 JS，
   // PDF 走内置 PDFium 无需外部二进制；OCR 默认关，省去 tesseract 模型下载与扫描件的慢）。
   // 输出按**真页码**分页（`--- page N ---`）：模型据此写 `[[file.pdf#page=N]]`，桌面端聊天里
@@ -564,7 +565,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         name: 'read_document',
         description:
           'Extract the text/markdown content of a document so you can actually read it — use this instead of read_file for binary documents (read_file would return garbled bytes). ' +
-          'PDF works out of the box; docx/xlsx/pptx need LibreOffice installed on the machine. Path resolved relative to the current working directory. ' +
+          'PDF works out of the box; xlsx/pptx need LibreOffice installed on the machine, and without it docx is read as plain text (no page layout). Path resolved relative to the current working directory. ' +
           'The text is split into pages marked "--- page N ---" (N is the real page number). A whole long document comes back truncated, so for a big file work in two steps: ' +
           'search:"phrase" to find where something is (literal case-insensitive substring, NOT semantic — retry with other wordings if it misses), then pages:"12-18" to read that part in full. ' +
           'When you tell the user something you read here, cite the spot as a wikilink — copy the exact form printed in this tool\'s output header (e.g. [[papers/report.pdf#page=12]]) and only change the page number. ' +
@@ -612,8 +613,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       // 但那样 search 和 pages 就成了两条码路——真遇到大到解析不起的文档再拆。
       // 备忘键带 size+ino:同步/备份还原可以保留原 mtime 换掉内容,只认 mtime 会一直吐旧正文(Codex)。
       const memoKey = `${abs}|${stat.mtimeMs}|${stat.size}|${stat.ino}|${args.ocr === true}`;
-      let pages = docMemo?.key === memoKey ? docMemo.pages : null;
-      if (!pages) {
+      let memo = docMemo?.key === memoKey ? docMemo : null;
+      if (!memo) {
         try {
           const options = { outputFormat: 'markdown', ocrEnabled: args.ocr === true, quiet: true, maxPages: READ_DOC_MAX_PAGES };
           let result: any;
@@ -629,12 +630,18 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
           // ⚠️ 会走到这的是 txt/md/csv 这类被 liteparse 直接吃掉的;docx/xlsx/pptx 只要装了
           //    LibreOffice 就有**真 pages**（实测）。别拿本行当「非 PDF 没有页码」的依据 ——
           //    教不教页码锚一律**按后缀**判(documentPages.citeHowFor,理由写在那儿)。
-          pages = parsed.length ? pagesOf(md, parsed) : md ? [{ page: 1, text: md }] : [];
-          docMemo = { key: memoKey, pages };
+          memo = { key: memoKey, pages: parsed.length ? pagesOf(md, parsed) : md ? [{ page: 1, text: md }] : [] };
         } catch (e: any) {
-          return `Error: document parsing failed (${e?.message || e}). docx/xlsx/pptx require LibreOffice installed on this machine.`;
+          // docx 在没装 LibreOffice(或 soffice 转换失败)的机器上退回纯文本 —— 否则模型只能自己写 python-docx
+          // 脚本去啃(2026-09-11 Windows 实报,连环出错)。装了就走上面那条:真分页优先。
+          // 纯文本也抽不出字(坏档 / 通篇是图)才报原错 —— 那种情况装 LibreOffice(+ocr)确实是出路。
+          const text = /\.docx$/i.test(abs) ? await hostSandboxFs(ctx).readFile(abs).then(docxText).catch(() => '') : '';
+          if (!text) return `Error: document parsing failed (${e?.message || e}). docx/xlsx/pptx require LibreOffice installed on this machine.`;
+          memo = { key: memoKey, pages: [{ page: 1, text }], plainText: true };
         }
+        docMemo = memo;
       }
+      const { pages } = memo;
       if (!pages.length || !pages.some((p) => p.text)) {
         return `Parsed but no text extracted: ${relDisplay(ctx, abs)} may be a scanned/image-only PDF.` +
           (args.ocr === true ? ' (still empty with OCR enabled)' : ' Retry with ocr:true to run OCR.');
@@ -643,7 +650,10 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       // 给**vault 相对路径**(渲染层按整路径精确匹配),vault 外给**绝对路径**(桌面端只读打开)。
       const citeRef = citeRefFor(abs, vaultRootOrNull(), path.sep);
       const capped = pages.length >= READ_DOC_MAX_PAGES ? ` — ⚠️ only the first ${READ_DOC_MAX_PAGES} pages were parsed` : '';
-      const head = `# ${path.basename(abs)} (${pages.length} pages${capped}) — ${citeHowFor(abs, citeRef)}\n\n`;
+      const extent = memo.plainText
+        ? 'plain text only: LibreOffice unavailable, so no page layout; equations are flattened'
+        : `${pages.length} pages${capped}`;
+      const head = `# ${path.basename(abs)} (${extent}) — ${citeHowFor(abs, citeRef)}\n\n`;
       if (search) {
         const { hits, total } = grepPages(pages, search);
         if (!total) return `${head}No line contains "${search}". It is a literal substring match — try another wording, or read pages directly.`;

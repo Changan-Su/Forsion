@@ -206,6 +206,9 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         dispatch({ type: 'TOOL_RESULT', id: p.id, name: p.name, result: String(p.result ?? ''), isError: !!p.isError });
         break;
       case 'usage':
+        // C-5:带 phase 的是后台调用的用量,lastPrompt/iteration 会被刷成子代理的值。
+        // 与下方 context_info 同理跳过(等同本轮之前的行为:那时后台调用根本不发 usage)。
+        if (p.phase) break;
         dispatch({ type: 'USAGE', tokens: (p.prompt || 0) + (p.completion || 0), cost: p.cost || 0, cached: p.cached || 0, iteration: p.iteration || 0, prompt: p.prompt || 0 });
         break;
       case 'status':

@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ publish: vi.fn(async () => 1) }));
 vi.mock('./eventBus.js', () => ({ publish: state.publish }));
 vi.mock('../hooks/index.js', () => ({ runHooks: vi.fn(async () => ({})) }));
-vi.mock('../tools/toolRegistry.js', () => ({ declaredApproval: vi.fn() }));
+// canonicalToolName:gateToolCall 入口拿它归一工具名(旧别名不得绕过用户规则),mock 必须给,
+// 但本块不测归一(那在 approvalAlias.test.ts),原样返回即可。
+vi.mock('../tools/toolRegistry.js', () => ({ declaredApproval: vi.fn(), canonicalToolName: (n: string) => n }));
 import { gateToolCall, resolveApproval } from './approvals.js';
 import type { ToolCall } from '../core/types.js';
 

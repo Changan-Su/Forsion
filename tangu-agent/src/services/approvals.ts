@@ -18,7 +18,7 @@ import { writeTargetsOf } from '../tools/writeTargets.js';
 import type { ToolCall } from '../core/types.js';
 import { runHooks } from '../hooks/index.js';
 import { currentAgentSlug } from '../seams/runContext.js';
-import { declaredApproval } from '../tools/toolRegistry.js';
+import { canonicalToolName, declaredApproval, toolNameSpellings } from '../tools/toolRegistry.js';
 import { getRawSection } from '../core/config.js';
 import type { AppProfile } from '../seams/appProfile.js';
 
@@ -296,8 +296,13 @@ function ruleMatches(rule: string, call: ToolCall): boolean {
   const i = rule.indexOf(':');
   const toolPat = (i >= 0 ? rule.slice(0, i) : rule).trim();
   const argPrefix = i >= 0 ? rule.slice(i + 1).trim() : '';
-  const name = call.function.name;
-  const toolOk = toolPat.endsWith('*') ? name.startsWith(toolPat.slice(0, -1)) : name === toolPat;
+  // 工具名按**全部拼写**比:gateToolCall 入口已把调用归一成正典名,但用户的存量规则可能还写着旧名
+  // (`deny: ["muse_watch"]` / `muse_*`)—— 只拿正典名去比,升级那一刻这些规则就静默失效(Codex 09-15)。
+  // 精确规则本身也先归一(规则写 muse_watch = 规则写 manage_automation);通配规则按前缀对每个拼写各试一次。
+  const spellings = toolNameSpellings(call.function.name);
+  const wildcard = toolPat.endsWith('*');
+  const patCanon = wildcard ? toolPat : canonicalToolName(toolPat);
+  const toolOk = spellings.some((n) => (wildcard ? n.startsWith(patCanon.slice(0, -1)) : n === patCanon));
   if (!toolOk) return false;
   return !argPrefix || ruleSubject(call).trim().startsWith(argPrefix);
 }
@@ -326,6 +331,7 @@ export function customVerdict(call: ToolCall, rules: CustomApprovalRules): 'allo
 /**
  * loop 工具执行前的审批闸门。返回归一化决定（approve / reject）。
  *   - execMode!=='host' 且非 mcp__ → 立即 approve（**server/worker 零影响**）
+ *   - 入口先把工具名归一成正典名(旧别名不得绕过用户规则),此后全程按归一后的 call 判定
  *   - custom 档命中规则 → deny 直接拒 / allow 直接放 / ask 强制批；未命中按其 base 档
  *   - run_bash 且 known-safe(只读单命令) → 立即 approve（纯 UX,即便 readonly）
  *   - 越界写(工作区外,非保护路径)→ 强制升级审批（auto-edit 也要批;full-auto 放行;不吃「总允许」）
@@ -338,9 +344,20 @@ export async function gateToolCall(
     sessionId: string; execMode?: string; approvalMode?: ApprovalMode; cwd?: string; extraRoots?: string[]; profile?: AppProfile;
     /** 无人值守 run(Muse ask/agent 档):需要人决定时不 await 订阅者,改走 pendingApprovals(排队 / 代批)。 */
     approvalDeferral?: 'queue' | 'agent'; userId?: string; agentSlug?: string;
+    /** 本次调用**此刻真正的执行身份**(具名子代理的展示 slug),与 agentSlug(run 的归属 agent)不同时才给。
+     *  两个用处:① PermissionRequest hook 的 agent_slug 用它(hook 按执行身份裁决);
+     *  ② pendingApprovals:ALS 作用域的工具不能排队等事后重放,否则会写到 agentSlug 那个 agent 头上。 */
+    execAgentSlug?: string;
   },
   signal?: AbortSignal,
 ): Promise<ApprovalDecision> {
+  // 工具名**先归一**(旧别名 muse_watch → manage_automation):下面每一道判定都直接读
+  // call.function.name —— custom 规则匹配(customVerdictDetailed/ruleMatches)、approvalPreview、
+  // PermissionRequest hook 的 tool_name、approval_request 事件、以及「总允许」的键。只归一一个局部变量
+  // 的话,模型写旧别名就能整片绕过用户写的 deny/ask 规则(executeTool 照样按正典名执行真工具),
+  // 而 manage_automation 这类工具的**唯一**审批控制正是 custom 规则。归一后弹窗显示的也是真正会跑的那个名字。
+  const canonical = canonicalToolName(call.function.name);
+  if (canonical !== call.function.name) call = { ...call, function: { ...call.function, name: canonical } };
   const name = call.function.name;
   // host 模式全部过闸;非 host 仅 MCP 工具过闸(本地形态的 sandbox 会话也可能挂 MCP)。
   if (ctx.execMode !== 'host' && !name.startsWith('mcp__')) return { action: 'approve' };
@@ -377,7 +394,9 @@ export async function gateToolCall(
   const permV = await runHooks('PermissionRequest', {
     tool_name: name,
     tool_input: parseCallArgs(call),
-    session_id: ctx.sessionId, run_id: runId, cwd: ctx.cwd, agent_slug: currentAgentSlug(),
+    // 具名子代理的调用在父 run 的 ALS 里送审、却在子代理的 ALS 里执行(subAgent.ts runWithAgentSlug):
+    // hook 必须看到**执行身份**,否则「只允许父代理」的 hook 会放行一个其实由 subby 执行的 manage_harness(Codex 09-15)。
+    session_id: ctx.sessionId, run_id: runId, cwd: ctx.cwd, agent_slug: ctx.execAgentSlug ?? currentAgentSlug(),
   }, {
     profile: ctx.profile,
     execMode: ctx.execMode === 'host' ? 'host' : 'sandbox',

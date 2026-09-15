@@ -72,6 +72,9 @@ const snapshot: ChatMessage[] = [
 function mkCtx(snap: ChatMessage[] = snapshot): any {
   return {
     userId: 'u', sessionId: 'sess-1', appId: 'tangu', modelId: 'm1', profile, execMode: 'host', thinkingLevel: 'high',
+    // E2 起 self_brainstorm 是 deferred:真实执行时父 ctx 必然已带它的解锁态(模型得先 load_tools
+    // 才调得到本工具),forkTools = getToolDefinitions(ctx) 才和父面逐字节一致。夹具照此还原。
+    unlockedTools: new Set(['self_brainstorm']),
     getWorkingMessages: () => snap.map((m) => ({ ...m })),
   };
 }

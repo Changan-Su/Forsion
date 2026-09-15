@@ -60,9 +60,11 @@ describe('registry 级:chat 正向工具面', () => {
     const gui = names({ ...base, preset: 'chat', client: 'web/1.0.0' });
     expect(gui).toEqual([...chat, 'sketch']);
     expect(bytes({ ...base, preset: 'chat', client: 'web/1.0.0' })).toBeLessThanOrEqual(11_900);
-    // 对照:work 面不动(28 个),chat 是过滤出来的子集,不是重排
+    // 对照:work 面(23 个),chat 是过滤出来的子集,不是重排
+    // 28 → 23:E2(§五「延迟候选」)把 amadeus 日历 CRUD ×5 转成静态 deferred,云端 sandbox 面同受影响。
+    // chat 面本身逐字未变(上面那条 toEqual 仍绿):两个日历读工具本就在 CHAT_PRESET_DEFERRED 里。
     const work = names(base);
-    expect(work.length).toBe(28);
+    expect(work.length).toBe(23);
     expect(work.filter((n) => chat.includes(n))).toEqual(chat);
   });
 

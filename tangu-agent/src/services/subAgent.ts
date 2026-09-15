@@ -8,7 +8,9 @@
  *   - maxIterations 24,单工具结果照旧 capToolResult 由各工具自管
  *   - 工具集 = 主 registry 按 subCtx 过滤(delegate 自动滤掉);审批闸门照走(host 模式)
  *   - 仅 hostExec profile 暴露(本地形态;云端待计费/配额按子轮次核验后再开)——故计费走
- *     noopBilling,这里不重复扣点;usage 经 `subagent` 事件上报给父 run 的订阅者
+ *     noopBilling,这里不重复扣点;子聊天区渲染走 `subagent` 事件,**用量口径**另走父 run 的
+ *     `usage` 事件(phase='delegate',见 backgroundUsage.ts)
+ *   - 思考档继承父 run(subAgentThinkingLevel),具名 agent 的显式档优先
  *
  * 另有一条**引擎子代理**路径(engineId,见 runEngineSubAgent):子代理后端换成外部 agent CLI
  * (claude-code/codex,复用 src/engines 的 ACP 管理器)。借 DSH 的 subagent-provider 思路,但不新建
@@ -17,11 +19,15 @@
 import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
-import { getToolDefinitions, executeTool, type ToolContext } from '../tools/registry.js';
+import { getToolDefinitions, listDeferredTools, executeTool, type ToolContext } from '../tools/registry.js';
+import { SUB_AGENT_DENY_TOOLS, isSubAgentDenied, canonicalToolName } from '../tools/toolRegistry.js';
 import { gateToolCall, requestApproval } from './approvals.js';
 import { publish } from './eventBus.js';
+import { publishBackgroundUsage } from './backgroundUsage.js';
+import { assistantTurnOf } from './contextBudget.js';
 import { getAgent, resolveActiveSlug, resolveMemorySlug } from '../agents/agentRegistry.js';
-import { runWithAgentSlug } from '../seams/runContext.js';
+import { runWithAgentSlug, currentAgentSlug } from '../seams/runContext.js';
+import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { projectDocSection } from './projectDoc.js';
 import { loadSkillLoadout, type SkillLoadout } from './skillLoadout.js';
 import { loadCustomTools } from '../tools/customTools.js';
@@ -34,6 +40,34 @@ import type { ChatMessage } from '../core/types.js';
 // 其 token 不进 costTotal —— 这个常数就是子代理**唯一**的失控闸,且 delegate 可并行多开。
 export const SUB_MAX_ITERATIONS = 24;
 const SUB_RESULT_CAP = 12_000;
+
+/**
+ * 子代理的管理面 deny 名单 —— **单源已迁 tools/toolRegistry.ts**(共享策略层:resolveTools 与
+ * executeTool 都要用它,放在本文件会成环)。此处 re-export 只为保持既有 import 路径。
+ *
+ * ⚠️ 它是**静态**名单(缺省档)。本文件五道闸如今一律走 `isSubAgentDenied(denyProbe, name)`
+ * 判定,而不是直接 `.has()` —— 因为父代理可在 delegate 的 `grantTools` 里逐次授予其中某个工具
+ * (见 SubAgentParams.grantTools),授予过的名字必须在五道闸里同时放行,否则「首轮给了定义、
+ * 执行时被第三道闸拒掉」这种半开状态比不给还糟。
+ *
+ * 能力面(browser 细粒度 / 日历 / view_video / calculator / read_document / generate_image…)
+ * 照旧可自助解锁 —— 只拦这一族。五道闸同时在(任缺一道都不算拦住):
+ *   ① resolveTools 按 subAgentDepth≥1 整族剔除 → defs / 目录 / load_tools 的可解锁集三处同时没有,
+ *      且**优先于** Muse/自动化的 deferBypass;
+ *   ② executeTool 早于任何审批闸门硬拒(模型凭名字直调那条路);
+ *   ③ 本文件:审批前再拒一次(不拿一个注定被拒的调用去打扰用户);
+ *   ④ seed 时从父集合拷贝里剔掉(父解锁过 manage_schedule 也不外溢给子代理 —— 除非本次显式授予);
+ *   ⑤ unlockTools 回调忽略,并如实返回「实际解锁了什么」→ load_tools 报 "Unavailable in this session"。
+ * ③④⑤ 是 ①② 的 belt-and-braces:单独去掉任一条,①② 仍然拦得住。
+ */
+export const SUB_AGENT_UNLOCK_DENY = SUB_AGENT_DENY_TOOLS;
+
+/** 本次委派授予的管理工具集(正典名)。delegate 已按父代理的 resolveTools 核验过可达性,
+ *  这里只做归一 + 去重。**只有自有子 loop 用它**:外部引擎跑自己的工具面,授予对它无意义,
+ *  delegate 与 runSubAgent 入口都拒掉 engine × grantTools 的组合,引擎路的 start 事件因此恒发 `grants: []`。 */
+function grantsOf(p: SubAgentParams): Set<string> {
+  return new Set<string>((p.grantTools ?? []).map((n) => canonicalToolName(String(n))));
+}
 
 /** 具名子代理的技能装载:临时以该 agent 的身份圈 ALS 作用域(listLocalSkills 据此叠加
  *  agents/<slug>/skills),取回与主循环同形状的目录段与可用技能集。失败回 null 不阻断委派。
@@ -96,6 +130,11 @@ export interface SubAgentParams {
   name?: string;
   /** 外部引擎 id(claude-code/codex/…):有值时整个子任务委托给该 CLI 跑,不走 Tangu 自有子 loop。 */
   engineId?: string;
+  /** 本次委派**显式授予**的管理面工具(正典名;delegate 已校验名字合法且父代理此刻真解析得出)。
+   *  缺省/空 = 沿用「管理面对子代理一律拒」的老行为。见 toolRegistry.SUB_AGENT_DENY_TOOLS 的注释。
+   *  ⚠️ 与 engineId **互斥**:外部 CLI 的工具面不经 Tangu 的闸,授予到不了它那里。delegate 已当场拒绝
+   *  这个组合;直调本函数时它同样无效(引擎路只会发 `grants: []`),别以为带上就生效了。 */
+  grantTools?: string[];
 }
 
 /** 组装子代理拿到的任务正文:可选的父会话只读转写 + 任务 + 背景。自有 loop 与外部引擎两条路共用。
@@ -174,7 +213,11 @@ async function runEngineSubAgent(p: SubAgentParams, engineId: string): Promise<s
   const translate = createEngineEventTranslator(subId);
 
   void publish(runId, 'subchat', { kind: 'subagent', id: subId, title: label, task: p.task.slice(0, 120) });
-  void publish(runId, 'subagent', { phase: 'start', subId, label, task: p.task.slice(0, 200) });
+  // grants 在引擎路**恒空**:外部 CLI 跑它自己的工具面,根本不经 Tangu 的 registry/硬闸,授予对它无意义。
+  // delegate 已当场拒绝 engine × grantTools 的组合(见 delegate.ts),这里发 `grants: []` + `engine` 标记
+  // 是第二道诚实性保证:事件流是审计面,绝不能记下一条从未真正授出去的管理面权限;而 engine 标记让消费者
+  // 不必读源码注释就能把两条路分开(此前发的是 p.grantTools 原值,审计上读起来就是「引擎子代理拿到了 manage_*」)。
+  void publish(runId, 'subagent', { phase: 'start', subId, label, task: p.task.slice(0, 200), grants: [], engine: engineId });
 
   // ACP 无 system 提示位:子代理契约与内联人设一并前置进 prompt 正文。
   const message = [p.instructions?.trim(), SUB_SYSTEM_PROMPT, await buildTaskBody(p)]
@@ -208,8 +251,22 @@ async function runEngineSubAgent(p: SubAgentParams, engineId: string): Promise<s
   }
 }
 
+/**
+ * 子代理思考档(报告 D3):具名 agent 的显式档 > **父 run 的档** > 会话缺省 medium。
+ * 原来第二档是硬编码的 'medium' —— 用户把主对话拨到 low/off,委派出去的子代理照样按 medium 烧推理
+ * (DeepSeek 一侧 medium=high),档位设置对 delegate 形同虚设。Codex 的 review 子代理走 Low、
+ * 子代理继承父档,这里对齐。导出仅为测试。
+ */
+export function subAgentThinkingLevel(agentLevel?: string, parentLevel?: string): string {
+  return agentLevel || parentLevel || 'medium';
+}
+
 export async function runSubAgent(p: SubAgentParams): Promise<string> {
   const { parentCtx } = p;
+  // engine × grantTools 在**入口**就拒(不只靠 delegate):直调本函数带上授予名,静默丢掉等于让调用方以为授出去了(Codex 09-15)。
+  if (p.engineId && p.grantTools?.length) {
+    throw new Error(`grantTools does not apply to engine delegation ('${p.engineId}' runs its own tools and never sees ${p.grantTools.join(', ')})`);
+  }
   if (p.engineId) return runEngineSubAgent(p, p.engineId);
   const runId = parentCtx.runId || '';
   const subId = uuidv4(); // 子聊天区据此把本子代理的流式内容归到一个气泡组(同 run 内可多个子代理)
@@ -236,11 +293,8 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   // memSlug=DEFAULT,技能仍是它自己的。装载失败不阻断委派(与主循环「加载失败不阻断 run」同口径)。
   const skillSlug = def && p.agentSlug ? resolveActiveSlug(String(p.agentSlug)) : '';
   const skills = skillSlug ? await loadSubAgentSkills(skillSlug, parentCtx) : null;
-  const sysPrompt = [persona, SUB_SYSTEM_PROMPT, TOOL_FAILURE_SECTION, AUTONOMY_SECTION, envSection, projectDoc, ...(skills?.sections ?? [])]
-    .filter((s): s is string => !!s)
-    .join('\n\n---\n');
   const effModelId = def?.model || p.modelId;
-  const thinking = (def?.thinkingLevel as any) || 'medium'; // 子代理默认思考·中(与会话默认一致);agent 显式档位优先
+  const thinking = subAgentThinkingLevel(def?.thinkingLevel, parentCtx.thinkingLevel);
   const memSlug = def ? resolveMemorySlug(def) : ''; // 具名子代理:remember/log_event 落它自己(或共用默认)
 
   // 具名 agent 用它自己的工具集:按 def.tools 白名单重载 custom 工具(空=不限→继承父)。
@@ -253,20 +307,75 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     } catch { /* 失败回退父工具集 */ }
   }
 
+  // 子代理有**自己**的解锁面:从父集合的**拷贝**起步(父已解锁的按需工具直接可用,不必再花一轮),
+  // 之后 load_tools 只写这一份 —— 父 run 的集合绝不被污染。此前这里显式剥掉 unlockedTools/unlockTools,
+  // 于是 deferred 工具对子代理「看不见且取不回」:browser 细粒度/日历/view_video/write_process_input/
+  // set_ui_setting 在委派出去的那一刻整片消失(read_document 曾为此在 isDeferredIn 开窄口)。
+  // 防递归不靠「藏掉整个 deferred 面」:delegate / start_discussion / wait_discussion / self_brainstorm
+  // 各自的 isEnabledFor 已按 subAgentDepth≥1 拒掉,resolveTools 在 unlocked 被查之前就把它们滤走了。
+  // 拷贝时就把管理面剔掉:父 run 解锁过 manage_schedule 不等于子代理也该有(SUB_AGENT_UNLOCK_DENY)。
+  // ⚠️ 判据一律走 isSubAgentDenied(denyProbe, n) 而不是静态 `.has(n)`:本次委派授予过的名字
+  // (grants)要在 seed / unlockTools / 目录 三处同时放行,否则会出现「defs 里有、解锁不了」
+  // 或「目录里不列、模型不知道能用」这类半开状态。未授予的照旧全剔。
+  const grants = grantsOf(p);
+  const denyProbe = { subAgentDepth: (parentCtx.subAgentDepth || 0) + 1, subAgentGrants: grants as ReadonlySet<string> };
+  const subUnlocked = new Set<string>([...(parentCtx.unlockedTools ?? [])].filter((n) => !isSubAgentDenied(denyProbe, n)));
+  // 授予项**预解锁**:管理面工具都是 deferred,不预解锁的话子代理还得先花一轮 load_tools 才拿得到定义。
+  // 父代理点名授予本身就等于说「这个子任务需要它」——那一轮往返没有信息量。
+  for (const g of grants) subUnlocked.add(g);
+  let subDefsDirty = false;
   const subCtx: ToolContext = {
     ...parentCtx,
     subAgentDepth: (parentCtx.subAgentDepth || 0) + 1,
+    subAgentGrants: grants,
+    // 委派方身份:manage_agent 守卫要连它一起保护(具名子代理在自己的 ALS 里跑,父代理会变成「别人」)。
+    subAgentDelegator: parentCtx.subAgentDelegator || parentCtx.agentSlug || currentAgentSlug(),
     customTools: subCustomTools,
     // 具名 agent 的可用技能集(use_skill 按 ctx.enabledSkillIds 鉴权);未装载则继承父。
     ...(skills ? { enabledSkillIds: skills.enabledSkillIds } : {}),
-    // 子代理拿精简集:显式剥掉父的解锁面。若继承 unlockTools,子代理会看到 load_tools 且「解锁成功」,
-    // 但自己的 toolDefs 本轮已冻结永不刷新,反而把父 run 的集合污染置脏——语义与「完全隐藏」设计对齐。
-    unlockedTools: undefined,
-    unlockTools: undefined,
+    unlockedTools: subUnlocked,
+    // 返回**实际解锁的**名字:被 deny 的那些由 load_tools 如实报成「本会话不可用」,
+    // 不能让模型拿着一句「已装载」去调一个永远不会出现在 defs 里的工具。
+    unlockTools: (names) => {
+      const accepted: string[] = [];
+      for (const n of names) {
+        if (isSubAgentDenied(denyProbe, n)) continue; // 管理面:未获授予的子代理不得自助解锁
+        if (!subUnlocked.has(n)) { subUnlocked.add(n); subDefsDirty = true; } // 下一迭代重算 defs(解锁项追加在末尾,前缀字节不动)
+        accepted.push(n);
+      }
+      return accepted;
+    },
   };
-  const toolDefs = getToolDefinitions(subCtx);
+  // deferred 目录段(与主 loop / 群聊同款):不注入的话子代理看得见 load_tools 却不知道能装什么。
+  // 门禁字段用**同一个 subCtx**,目录与真实工具面天然不分叉(agentLoop 那边是手抄一份 toolGateCtx
+  // 才做到的同一件事)。Muse/自动化 run 全量可见、也没有 load_tools → 不注入目录,免得广而告之取不回。
+  const deferBypass = !!subCtx.muse || !!subCtx.automationOrigin;
+  // 管理面从目录里滤掉:不告诉模型它能装(与 unlockTools 的硬拦同一份判定,见 denyProbe)。
+  // 本次授予的那几个**也滤**:它们已预解锁进首轮 defs,目录段的原话是「exist but are not loaded yet」,
+  // 再列一行模型就会先白花一轮 load_tools(live 09-15 实测:授了 manage_schedule 的子代理仍先 load_tools 再调)。
+  // 目录在子代理 run 内只算一次,滤掉授予项不影响稳定性。
+  const deferredCatalog = deferBypass ? [] : listDeferredTools(subCtx).filter((d) => !isSubAgentDenied(denyProbe, d.name) && !grants.has(d.name));
+  const deferSection = deferredCatalog.length
+    ? '## Additional Tools (load on demand)\n' +
+      'These tools exist but are not loaded into context yet. When a task needs one, FIRST call `load_tools` with the exact tool names (one call may load several), wait for its result, then call the loaded tools normally. Do not invent parameters for tools you have not loaded.\n' +
+      deferredCatalog.map((d) => `- ${d.name}: ${d.hint}`).join('\n')
+    : null;
+  const sysPrompt = [persona, SUB_SYSTEM_PROMPT, TOOL_FAILURE_SECTION, AUTONOMY_SECTION, envSection, projectDoc, ...(skills?.sections ?? []), deferSection]
+    .filter((s): s is string => !!s)
+    .join('\n\n---\n');
+  let toolDefs = getToolDefinitions(subCtx);
 
   const { model, apiKey, baseUrl, apiModelId } = await llm.resolveModelAndKey(effModelId);
+
+  // Lifecycle hook 派发上下文(与 agentLoop 的 hookCtx 同形;host-only 闸在 runHooks 顶部)。
+  const hookAgentSlug = skillSlug || parentCtx.agentSlug || currentAgentSlug();
+  const hookCtx = (): HookRunContext => ({
+    profile: parentCtx.profile, execMode: parentCtx.execMode, cwd: parentCtx.cwd, sessionId: parentCtx.sessionId, runId,
+    agentSlug: hookAgentSlug, signal: parentCtx.signal, hostSandbox: parentCtx.hostSandbox,
+  });
+  const hookParseArgs = (s: string): any => { try { return s ? JSON.parse(s) : {}; } catch { return {}; } };
+  const hookContextText = (v: HookVerdict): string =>
+    [...v.additionalContext, ...v.systemMessages.map((m) => `⚠ ${m}`)].join('\n\n').trim();
 
   const messages: ChatMessage[] = [
     { role: 'system', content: sysPrompt } as ChatMessage,
@@ -277,7 +386,8 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   if (runId) {
     // 向父 run 流宣告一个「子聊天」(子代理),前端据此在子聊天区建一个可切换条目。
     void publish(runId, 'subchat', { kind: 'subagent', id: subId, title: label, task: p.task.slice(0, 120) });
-    void publish(runId, 'subagent', { phase: 'start', subId, label, task: p.task.slice(0, 200) });
+    // grants:本次委派授予了哪些管理工具 —— 审计面(UI / live 台架)唯一能看到这件事的地方。
+    void publish(runId, 'subagent', { phase: 'start', subId, label, task: p.task.slice(0, 200), grants: [...grants] });
   }
 
   let finalContent = '';
@@ -286,6 +396,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   let hitCap = false;
   for (let iteration = 0; iteration < SUB_MAX_ITERATIONS; iteration++) {
     if (parentCtx.signal?.aborted) throw new Error('aborted');
+    if (subDefsDirty) { toolDefs = getToolDefinitions(subCtx); subDefsDirty = false; } // load_tools 解锁生效
     const lastIter = iteration === SUB_MAX_ITERATIONS - 1;
 
     const payload = await llm.buildProviderPayload({
@@ -298,7 +409,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       tools: lastIter ? undefined : toolDefs,
       toolChoice: lastIter ? undefined : 'auto',
       attachments: [],
-      thinkingLevel: thinking,
+      thinkingLevel: thinking as any,
       stream: true,
       // 子代理用独立缓存路由键:消息序列与父会话完全不同,蹭父会话的键反而打散其缓存。
       // 按 subId 细分:并行多个子代理时互不打散彼此的前缀(各自迭代轮次内的自相似才是缓存收益点)。
@@ -327,6 +438,10 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
         usage: { prompt: res.usage.prompt_tokens || 0, completion: res.usage.completion_tokens || 0 },
         toolCalls: (res.toolCalls || []).map((c) => c.function.name),
       });
+      // 子代理走 noopBilling 不扣点,但 token 是真烧的:上父 run 的台账(A5),否则「本 run 花了多少」缺这一块。
+      // 必须 await:函数内部还要先异步算一次费才 publish,fire-and-forget 会在父 run 收尾/失败后才落地,
+      // 事件被清空的缓冲丢掉 —— 台账永久缺项(Codex 评审三轮 #3)。它自己吞掉记账错误,不会传播失败。
+      await publishBackgroundUsage('delegate', effModelId, res.usage, { runId, model, iteration });
     }
 
     if (!res.toolCalls?.length || lastIter) {
@@ -337,16 +452,40 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       break;
     }
 
-    messages.push({ role: 'assistant', content: res.content || '', tool_calls: res.toolCalls } as ChatMessage);
+    // 与主循环同一个构造器:providerItems + reasoning_content 必须跟着工具轮回灌,否则 DeepSeek/ZAI/
+    // 带思考的 Qwen 在工具轮之后的下一次请求可能直接 400(Codex 评审三轮 #2)。
+    messages.push(assistantTurnOf(res, res.content || '', res.toolCalls));
     for (const call of res.toolCalls) {
       if (parentCtx.signal?.aborted) throw new Error('aborted');
+      // 管理面硬闸:**审批之前**就短路 —— 不拿一个注定被共享执行层拒掉的调用去打扰用户。
+      // 传的是**原始**工具名,isSubAgentDenied 内部先归一(muse_watch → manage_automation)再判:
+      // 授予了 manage_automation 时,模型写旧别名 muse_watch 也必须照常进审批,而不是在这儿被跳过 ——
+      // 跳过审批等于「授予 = 免审批」,那正是本次改动明确不做的事。
+      // 拒绝措辞单源在 executeTool:它在任何副作用之前返回那一句,这里只是不走审批。
+      const denied = isSubAgentDenied(subCtx, call.function.name);
+      // —— PreToolUse hook(host-only;云端在 runHooks 顶部即空判定)—— 此前子代理循环**完全不跑** lifecycle hook,
+      // 宿主配了「拦 manage_schedule」的 PreToolUse,父代理被拦、授给子代理就绕过去了(Codex 09-15 复审 #2)。
+      // 与主循环同序:先 hook(block / 改写参数)、再审批(基于改写后的内容)、再执行、最后 PostToolUse。
+      // agent_slug 给**执行身份**(具名子代理 = skillSlug),与 PermissionRequest 那道口径一致。
+      const preV = denied ? null : await runHooks('PreToolUse', {
+        tool_name: call.function.name, tool_input: hookParseArgs(call.function.arguments),
+        session_id: parentCtx.sessionId, run_id: runId, cwd: parentCtx.cwd, agent_slug: hookAgentSlug,
+      }, hookCtx());
+      if (parentCtx.signal?.aborted) throw new Error('aborted');
+      const hookCall = preV?.updatedInput
+        ? { ...call, function: { ...call.function, arguments: JSON.stringify(preV.updatedInput) } }
+        : call;
       // 审批闸门照走(host 模式破坏性操作仍需用户批准;审批请求发到父 run 的事件流)
-      const decision = await gateToolCall(
+      const decision = denied || preV?.block ? null : await gateToolCall(
         runId,
-        call,
+        hookCall,
         {
           // 无人值守父 run(Muse ask/agent 档)的异步审批档随父 ctx 下来:否则子代理越界会挂在没人应答的同步审批上(Codex 09-10 P1-7)。
           approvalDeferral: parentCtx.approvalDeferral, userId: parentCtx.userId, agentSlug: parentCtx.agentSlug,
+          // 执行身份 ≠ run 归属身份:具名子代理此刻按 skillSlug 跑(下面 runWithAgentSlug 的展示 slug),
+          // 而排队行只存得下 agentSlug。ALS 作用域的工具(manage_harness/…)因此不能排队等事后重放,
+          // 否则同一笔会写到父代理头上 —— 判定在 pendingApprovals,这里只把真实身份如实报上去。
+          ...(skillSlug ? { execAgentSlug: skillSlug } : {}),
           sessionId: parentCtx.sessionId, execMode: parentCtx.execMode, approvalMode: parentCtx.approvalMode,
           // 越界写升级按真实工作区判定、PermissionRequest hook 需要 profile(Codex 评审 #3)
           cwd: parentCtx.cwd, extraRoots: parentCtx.extraRoots, profile: parentCtx.profile,
@@ -355,13 +494,17 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       );
       let content: string;
       let isError = false;
-      if (decision.action === 'reject') {
+      let execCall = hookCall;
+      if (preV?.block) {
+        content = `⛔ Hook 拦截：${preV.blockReason || 'PreToolUse hook 阻止了该操作'}`;
+        isError = true;
+      } else if (decision && decision.action === 'reject') {
         content = decision.rejectReason || 'The user rejected this operation.';
         isError = true;
       } else {
-        const execCall = decision.argsOverride
-          ? { ...call, function: { ...call.function, arguments: JSON.stringify(decision.argsOverride) } }
-          : call;
+        execCall = decision?.argsOverride
+          ? { ...hookCall, function: { ...hookCall.function, arguments: JSON.stringify(decision.argsOverride) } }
+          : hookCall;
         // 具名子代理:在它自己的记忆作用域内执行(remember/log_event 落它的文件夹),用完即恢复父作用域。
         // 展示/技能身份单独给实际 slug:use_skill 等在执行期按 displayAgentSlug 解析 agents/<slug>/skills。
         const r = def
@@ -369,6 +512,17 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
           : await executeTool(execCall, subCtx);
         content = r.result;
         isError = r.isError;
+        // —— PostToolUse hook:反馈 / 上下文追加进本条 tool 消息尾部(与主循环同款,不破坏消息序)——
+        const postV = await runHooks('PostToolUse', {
+          tool_name: r.name, tool_input: hookParseArgs(execCall.function.arguments), tool_response: content, is_error: isError,
+          session_id: parentCtx.sessionId, run_id: runId, cwd: parentCtx.cwd, agent_slug: hookAgentSlug,
+        }, hookCtx());
+        const hookExtra = [
+          preV ? hookContextText(preV) : '',
+          hookContextText(postV),
+          postV.block ? `⛔ Hook 反馈：${postV.blockReason || 'PostToolUse hook 阻止'}` : '',
+        ].filter(Boolean).join('\n\n');
+        if (hookExtra) content = `${content}\n\n${hookExtra}`;
       }
       if (runId) {
         void publish(runId, 'subagent', {

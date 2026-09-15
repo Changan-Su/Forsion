@@ -159,6 +159,16 @@ describe('httpBrain 请求超时与错误面', () => {
     messages: [{ role: 'user', content: 'x'.repeat(chars) }],
     ...(signal ? { signal } : {}),
   });
+  // F1 之后 buildProviderPayload 只造惰性描述符(零网络),整份上下文的**上传**发生在合并端点
+  // /brain/llm/build-and-stream 这一腿。本 describe 钉的一直是那一腿的超时与错误面,故照搬过来。
+  const upload = async (o: any): Promise<unknown> => {
+    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
+    return brain.llm.streamProviderCompletion({
+      apiKey: 'x', baseUrl: '',
+      payload: await brain.llm.buildProviderPayload(o),
+      ...(o.signal ? { signal: o.signal } : {}),
+    } as any);
+  };
 
   afterEach(() => {
     delete process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS;
@@ -170,22 +180,20 @@ describe('httpBrain 请求超时与错误面', () => {
     process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS = '80';
     process.env.TANGU_BRAIN_HTTP_TIMEOUT_PER_MB_MS = '0';
     hangingFetch();
-    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
     const runSignal = new AbortController().signal; // 用户没点停,只是把 run 的信号传了进去
 
-    await expect(brain.llm.buildProviderPayload(buildOpts(10, runSignal)))
-      .rejects.toThrow(/build-payload 超时/);
+    await expect(upload(buildOpts(10, runSignal)))
+      .rejects.toThrow(/build-and-stream 超时/);
   });
 
   it('超时窗口随 body 放大', async () => {
     process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS = '60';
     process.env.TANGU_BRAIN_HTTP_TIMEOUT_PER_MB_MS = '600';
     hangingFetch();
-    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
 
     const timeOf = async (chars: number): Promise<number> => {
       const t0 = Date.now();
-      await brain.llm.buildProviderPayload(buildOpts(chars)).catch(() => undefined);
+      await upload(buildOpts(chars)).catch(() => undefined);
       return Date.now() - t0;
     };
     const small = await timeOf(10);          // ≈60ms
@@ -196,9 +204,8 @@ describe('httpBrain 请求超时与错误面', () => {
 
   it('错误带上端点与体积,不再是裸的 undici 原文', async () => {
     vi.stubGlobal('fetch', () => Promise.reject(new TypeError('fetch failed')));
-    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
-    await expect(brain.llm.buildProviderPayload(buildOpts(1024 * 1024)))
-      .rejects.toThrow(/build-payload 连接失败.*body 1\.0MB.*cloud\.test/s);
+    await expect(upload(buildOpts(1024 * 1024)))
+      .rejects.toThrow(/build-and-stream 连接失败.*body 1\.0MB.*cloud\.test/s);
   });
 
   it('生图窗口不被通用超时截断(负对照:把 floorMs 并进取消信号会把 180s 砍成 60s)', async () => {
@@ -217,13 +224,12 @@ describe('httpBrain 请求超时与错误面', () => {
     process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS = '40';
     process.env.TANGU_BRAIN_HTTP_TIMEOUT_PER_MB_MS = '800';
     hangingFetch();
-    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
 
     const timeOf = async (text: string): Promise<number> => {
       const t0 = Date.now();
-      await brain.llm.buildProviderPayload({
+      await upload({
         model: { id: 'm' }, apiModelId: 'm', messages: [{ role: 'user', content: text }],
-      } as any).catch(() => undefined);
+      }).catch(() => undefined);
       return Date.now() - t0;
     };
     const N = 350_000;
@@ -237,12 +243,11 @@ describe('httpBrain 请求超时与错误面', () => {
     let sentBody = '';
     vi.stubGlobal('fetch', (_u: any, init: any) => {
       sentBody = String(init?.body ?? '');
-      return Promise.resolve(new Response(JSON.stringify({ payload: { ok: 1 } }), {
-        status: 200, headers: { 'Content-Type': 'application/json' },
+      return Promise.resolve(new Response(`data: ${JSON.stringify({ t: 'done' })}\n\n`, {
+        status: 200, headers: { 'Content-Type': 'text/event-stream' },
       }));
     });
-    const brain = createHttpBrain({ cloudUrl: 'https://cloud.test', token: 't' });
-    await brain.llm.buildProviderPayload(buildOpts(10, new AbortController().signal));
+    await upload(buildOpts(10, new AbortController().signal));
     expect(Object.keys(JSON.parse(sentBody))).not.toContain('signal');
   });
 });

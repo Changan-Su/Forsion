@@ -117,7 +117,8 @@ describe('Sketch 主动触发交付闸', () => {
     const run = await runToSettled({}, '比较 Notion、Obsidian 和 Logseq 的定位和优缺点', 'desktop/2.8.0');
     expect(run.status).toBe('done');
     expect(llmPayloads.length).toBe(3);
-    expect(String((llmPayloads[0].messages as any[]).find((m) => m.role === 'system')?.content)).toContain('Visual-first note for this turn');
+    // 2026-09-15 起本轮信号随 TANGU_MEMORY_VOLATILE(缺省 tail)落在最后一条 user 消息,不再进系统提示。
+    expect(userTexts(llmPayloads[0])).toContain('Visual-first note for this turn');
     expect(userTexts(llmPayloads[1])).toContain('<visual_delivery_check>');
     expect((llmPayloads[2].messages as any[]).some((m) => m.role === 'tool' && String(m.content).includes('Sketch card rendered'))).toBe(true);
     const rows = await query<any[]>(`SELECT content, tool_calls FROM chat_messages WHERE session_id = 'S'`);
@@ -132,7 +133,7 @@ describe('Sketch 主动触发交付闸', () => {
     const run = await runToSettled({}, '只用文字比较 Notion 和 Obsidian，不要画图', 'desktop/2.8.0');
     expect(run.status).toBe('done');
     expect(llmPayloads.length).toBe(1);
-    expect(String((llmPayloads[0].messages as any[]).find((m) => m.role === 'system')?.content)).not.toContain('Visual-first note for this turn');
+    expect(userTexts(llmPayloads[0])).not.toContain('Visual-first note for this turn');
   }, 20_000);
 });
 

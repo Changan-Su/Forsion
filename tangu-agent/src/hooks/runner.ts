@@ -12,6 +12,7 @@
  */
 import { runBoundedProcess, type BoundedProcessResult } from '../utils/boundedProcess.js';
 import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
+import { toolNameSpellings } from '../tools/toolRegistry.js';
 import { loadHooksConfig, discoverHooks } from './config.js';
 import { matcherMatches } from './matcher.js';
 import { foldVerdict } from './events.js';
@@ -31,6 +32,17 @@ const emptyVerdict = (): HookVerdict => ({ additionalContext: [], systemMessages
 /** Stop / UserPromptSubmit 恒运行（Codex：这两个事件忽略 matcher）。 */
 function ignoresMatcher(event: HookEventName): boolean {
   return event === 'UserPromptSubmit' || event === 'Stop';
+}
+
+/** 按 matcher 挑出本事件要跑的 hook。工具事件按工具的**全部拼写**比(正典名 + 指向它的旧别名,toolNameSpellings):
+ *  matcher 写 `manage_automation` 而模型调旧名 `muse_watch`(或反过来,存量 matcher 写旧名)都得命中 ——
+ *  审批与执行都已归一成正典名,只有 hook 还按原名比的话,别名就成了绕过 PreToolUse 的路(Codex 09-15 复审 #3)。
+ *  导出仅为测试。 */
+export function selectHooksFor(event: HookEventName, input: HookInput, active: DiscoveredHook[]): DiscoveredHook[] {
+  if (ignoresMatcher(event)) return active;
+  const target = matchTarget(event, input);
+  const targets = input.tool_name ? toolNameSpellings(target) : [target];
+  return active.filter((h) => targets.some((t) => matcherMatches(h.matcher, t)));
 }
 
 /** matcher 比对的目标：工具名 / source / agent_type。 */
@@ -143,8 +155,7 @@ export async function runHooks(event: HookEventName, input: HookInput, ctx: Hook
     const cfg = loadHooksConfig();
     const active = discoverHooks(cfg, event).filter((h) => h.active);
     if (!active.length) return emptyVerdict();
-    const target = matchTarget(event, input);
-    selected = ignoresMatcher(event) ? active : active.filter((h) => matcherMatches(h.matcher, target));
+    selected = selectHooksFor(event, input, active);
   } catch {
     return emptyVerdict();
   }

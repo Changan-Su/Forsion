@@ -14,6 +14,8 @@ export const brainstormProvider: ToolProvider = {
       name: 'self_brainstorm',
       mode: 'both',
       isEnabledFor: (profile, ctx) => profile.capabilities.hostExec && !(ctx.subAgentDepth && ctx.subAgentDepth >= 1),
+      deferred: true, // E2:仅用于「决策贵、值得分身互搏」的少数场合 → 目录留一行,用时 load_tools 解锁
+      deferHint: 'Fork yourself into parallel perspectives to stress-test an expensive, genuinely open decision.',
       definition: {
         type: 'function',
         function: {

@@ -253,7 +253,12 @@ export const browserToolsProvider: ToolProvider = {
         function: {
           name: 'browser_search',
           description:
-            'Open a search engine in the local lightweight browser and return a page snapshot. Use this as a fallback when web_search is unavailable or you need to interact with the results page — it is slower and may hit captchas. The @eN refs in the results can be used with browser_click/browser_type to interact further.',
+            // E2 之后 browser_click/browser_type 已转 deferred:这句若不说「先 load_tools」,
+            // 模型会直接调一个不在面上的工具,白烧一轮才被 registry 的未知工具提示引回来。
+            // 但 plan mode 把控制族整族滤掉(PLAN_MODE_TOOLS 只放行 snapshot/screenshot),目录里
+            // 根本没有它们 —— 故措辞只承诺「目录里出现时再 load」,不承诺一定解得开(否则 plan mode
+            // 下模型照样白烧一轮换来 "Unavailable in this session")。
+            'Open a search engine in the local lightweight browser and return a page snapshot. Use this as a fallback when web_search is unavailable or you need to interact with the results page — it is slower and may hit captchas. To act on the @eN refs in the results, load the browser control tools (browser_click/browser_type/...) with load_tools when they appear in the "Additional Tools" catalog; they are not offered in plan mode.',
           parameters: {
             type: 'object',
             properties: {
@@ -292,10 +297,16 @@ export const browserToolsProvider: ToolProvider = {
       },
       execute: async (args, ctx) => toJson(await navigate(ctx, String(args.url ?? ''))),
     },
+    // ── 以下细粒度操作工具整族按需装载(E2,§五)──────────────────────────────────────
+    // 入口(browser_search / browser_navigate / browser_task)常驻,且两个入口的返回值里已内嵌
+    // compact 快照与 @eN refs;真要逐步操作页面时才 load_tools 一次,deferGroup 让整套一起到位。
     {
       name: 'browser_snapshot',
       mode: 'host',
       isEnabledFor: (profile) => profile.features.webSearch && profile.capabilities.hostExec,
+      deferred: true,
+      deferGroup: 'browser',
+      deferHint: 'Re-read the current page as a snapshot with @eN refs (loads the whole browser control set below).',
       capabilities: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: DEFAULT_TIMEOUT_MS },
       definition: {
         type: 'function',
@@ -318,6 +329,9 @@ export const browserToolsProvider: ToolProvider = {
       name: 'browser_click',
       mode: 'host',
       isEnabledFor: (profile) => profile.features.webSearch && profile.capabilities.hostExec,
+      deferred: true,
+      deferGroup: 'browser',
+      deferHint: 'Click an @eN element ref on the current page.',
       capabilities: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: DEFAULT_TIMEOUT_MS },
       definition: {
         type: 'function',
@@ -337,6 +351,9 @@ export const browserToolsProvider: ToolProvider = {
       name: 'browser_type',
       mode: 'host',
       isEnabledFor: (profile) => profile.features.webSearch && profile.capabilities.hostExec,
+      deferred: true,
+      deferGroup: 'browser',
+      deferHint: 'Type text into an @eN input ref on the current page.',
       capabilities: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: DEFAULT_TIMEOUT_MS },
       definition: {
         type: 'function',
@@ -356,6 +373,9 @@ export const browserToolsProvider: ToolProvider = {
       name: 'browser_scroll',
       mode: 'host',
       isEnabledFor: (profile) => profile.features.webSearch && profile.capabilities.hostExec,
+      deferred: true,
+      deferGroup: 'browser',
+      deferHint: 'Scroll the current page up or down.',
       capabilities: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: DEFAULT_TIMEOUT_MS },
       definition: {
         type: 'function',
@@ -376,6 +396,9 @@ export const browserToolsProvider: ToolProvider = {
       name: 'browser_back',
       mode: 'host',
       isEnabledFor: (profile) => profile.features.webSearch && profile.capabilities.hostExec,
+      deferred: true,
+      deferGroup: 'browser',
+      deferHint: 'Go back to the previous page.',
       capabilities: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: DEFAULT_TIMEOUT_MS },
       definition: {
         type: 'function',
@@ -387,6 +410,9 @@ export const browserToolsProvider: ToolProvider = {
       name: 'browser_press',
       mode: 'host',
       isEnabledFor: (profile) => profile.features.webSearch && profile.capabilities.hostExec,
+      deferred: true,
+      deferGroup: 'browser',
+      deferHint: 'Press a key (Enter/Tab/Escape) on the current page.',
       capabilities: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: DEFAULT_TIMEOUT_MS },
       definition: {
         type: 'function',
@@ -406,6 +432,9 @@ export const browserToolsProvider: ToolProvider = {
       name: 'browser_console',
       mode: 'host',
       isEnabledFor: (profile) => profile.features.webSearch && profile.capabilities.hostExec,
+      deferred: true,
+      deferGroup: 'browser',
+      deferHint: 'Read the page console/errors, or evaluate a JS expression in the page.',
       capabilities: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: DEFAULT_TIMEOUT_MS },
       definition: {
         type: 'function',
@@ -434,6 +463,9 @@ export const browserToolsProvider: ToolProvider = {
       name: 'browser_screenshot',
       mode: 'host',
       isEnabledFor: (profile) => profile.features.webSearch && profile.capabilities.hostExec,
+      deferred: true,
+      deferGroup: 'browser',
+      deferHint: 'Save a PNG screenshot of the current page and return its path.',
       capabilities: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: DEFAULT_TIMEOUT_MS },
       definition: {
         type: 'function',

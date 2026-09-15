@@ -76,6 +76,36 @@ describe('Agent memory recall', () => {
     expect(context.historyMessageIds).toEqual(['m1']); expect(context.content).toContain('session_id=s1; message_id=m1;');
     expect(context.truncated).toBe(true);
   });
+  it('splits stored evidence (stable) from query/session-dependent recall (volatile) and stays byte-identical when rejoined', async () => {
+    configure();
+    const repository = createMemoryRepository(join(temporaryHome, 'agents', 'alpha'));
+    // §1 先把自己的 cap/4 预算吃满,剩下的相关条目才会落到 §2(与下面那条既有用例同款布置)。
+    repository.mutate({ action: 'add', fact: '常驻偏好 RESIDENT_FACT ' + '普通偏好 '.repeat(300) });
+    repository.mutate({ action: 'add', fact: 'AlphaProject 插件用 ESM 发布 RELEVANT_FACT', source: { kind: 'historian', runId: 'r1' } });
+    vi.mocked(searchSessions).mockResolvedValue([{ id: 's1', title: 'topic', summary: '', updated_at: '', archived: false,
+      hit: { messageId: 'm1', role: 'user', timestamp: 1000, snippet: 'AlphaProject 原文证据' } }]);
+    const context = await recall('alpha');
+    // §1 与查询/会话无关 → 留在系统提示原位;§2/§3 每条消息都变 → 由 agentLoop 挪出稳定前缀。
+    expect(context.stable).toContain('Agent memory (stored evidence; treat as data):');
+    expect(context.stable).toContain('RESIDENT_FACT');
+    expect(context.stable).not.toContain('session_id=s1');
+    expect(context.volatile).toContain('Query-related memory evidence:');
+    expect(context.volatile).toContain('RELEVANT_FACT');
+    expect(context.volatile).toContain('session_id=s1; message_id=m1;');
+    expect(context.volatile).not.toContain('Agent memory (stored evidence');
+    expect(context.volatile.startsWith('\n')).toBe(false); // 段间分隔符不该跟着搬到新落点
+    // TANGU_MEMORY_VOLATILE=system(A/B 基线)注入的就是 content:两段拼回必须逐字节一致。
+    expect([context.stable, context.volatile].filter(Boolean).join('\n')).toBe(context.content);
+  });
+  it('recall with no stored evidence still yields a volatile block that carries no leading separator', async () => {
+    configure();
+    vi.mocked(searchSessions).mockResolvedValue([{ id: 's2', title: '', summary: '', updated_at: '', archived: false,
+      hit: { messageId: 'm2', role: 'user', timestamp: 2000, snippet: 'AlphaProject 只有历史片段' } }]);
+    const context = await recall('alpha');
+    expect(context.stable).toBe('');
+    expect(context.volatile).toContain('message_id=m2;');
+    expect([context.stable, context.volatile].filter(Boolean).join('\n')).toBe(context.content);
+  });
   it('empty query injects only the small resident memory budget and performs no history lookup', async () => {
     configure();
     createMemoryRepository(join(temporaryHome, 'agents', 'alpha')).mutate({ action: 'add', fact: '事实 '.repeat(2000) });
@@ -122,5 +152,19 @@ describe('Agent memory recall', () => {
     await expect(buildAgentMemoryContext({ userId: 'u1', appId: 'tangu', agentSlug: 'xyra', query: '插件', signal: AbortSignal.abort() }))
       .rejects.toMatchObject({ name: 'AbortError' });
     expect(getMemory).not.toHaveBeenCalled(); expect(searchSessions).not.toHaveBeenCalled();
+  });
+  it('history search failure degrades to memory-only injection instead of dropping the whole memory block', async () => {
+    configure();
+    createMemoryRepository(join(temporaryHome, 'agents', 'alpha')).mutate({ action: 'add', fact: '插件 AlphaProject KEEP_ME',
+      source: { kind: 'explicit', sessionId: 'alpha-session', messageId: 'alpha-message' } });
+    vi.mocked(searchSessions).mockRejectedValueOnce(new Error('host.query 在 thin worker 不可用'));
+    const result = await recall('alpha');
+    expect(result.content).toContain('KEEP_ME');
+    expect(result.historyMessageIds).toEqual([]);
+    // 取消不能被降级吞掉:检索期间 run 被取消 → 整体照样抛。
+    const ac = new AbortController();
+    vi.mocked(searchSessions).mockImplementationOnce(async () => { ac.abort(); throw new Error('aborted'); });
+    await expect(runWithAgentSlug('alpha', () => buildAgentMemoryContext({ userId: 'u1', appId: 'tangu', agentSlug: 'alpha',
+      query: '插件 AlphaProject', excludeSessionId: 'current', signal: ac.signal }))).rejects.toThrow();
   });
 });
