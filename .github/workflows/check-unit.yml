@@ -29,6 +29,8 @@ jobs:
           npm ci --prefix tangu-agent --no-audit --no-fund
           npm ci --prefix desktop --no-audit --no-fund
           npm ci --prefix web --no-audit --no-fund
+          # web 的 tsconfig 经 @mobile 别名拽进 mobile/src,tsc 从那里向上找的是 mobile 自己的 node_modules(同 build-web.yml)
+          npm ci --prefix mobile --no-audit --no-fund
       - name: Check shared runtime and Unit lifecycle
         run: |
           npm run typecheck --prefix tangu-agent
