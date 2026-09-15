@@ -6,9 +6,9 @@ Unit is the independently runnable Forsion framework, sharing the Genesis Deskto
 
 ## Desktop 同步 / Desktop synchronization
 
-`upstream.json` 记录已合入的 Desktop 稳定版标签、提交和 Unit 修订号。同步方向为 Desktop → Unit；共享功能复用源码，Unit 维护宿主适配。本分支不向 Desktop 主线自动回合，也不从商业 Server 仓库同步代码。
+Desktop 基线不再手工维护：构建时由 git 推导，取检出历史里最新的 `v*` 稳定版标签作基线，距它的提交数作 Unit 修订号。同步方向为 Desktop → Unit；共享功能复用源码，Unit 维护宿主适配。本分支不向 Desktop 主线自动回合，也不从商业 Server 仓库同步代码。
 
-`upstream.json` records the merged Desktop stable tag, commit and Unit revision. Synchronization flows from Desktop into Unit. Shared features reuse source code; Unit maintains its host adapters. This branch does not automatically merge back into Desktop or import the commercial Server repository.
+The Desktop baseline is no longer hand-maintained: the build derives it from git, taking the newest `v*` stable tag contained in the checkout as the baseline and the number of commits since it as the Unit revision. Synchronization flows from Desktop into Unit. Shared features reuse source code; Unit maintains its host adapters. This branch does not automatically merge back into Desktop or import the commercial Server repository.
 
 ```sh
 # Refresh upstream refs, then inspect drift without changing source.
@@ -16,13 +16,13 @@ git fetch origin main --tags
 node unit/check-sync.mjs
 ```
 
-发现新稳定版后，在 Unit 分支合并对应标签并处理冲突；更新 `upstream.json`，运行类型、插件、账号和本地安装验收，再构建发行。尤其检查已抽取的共享处理器是否接到了上游修复。版本检查会拒绝“只改版本号、没有合入上游提交”的假同步。检查基于已获取的标签；它不会自行联网或自动合并。
+发现新稳定版后，合并对应标签并处理冲突，运行类型、插件、账号和本地安装验收，再构建发行。尤其检查已抽取的共享处理器是否接到了上游修复。构建前的检查只拦一种情况：仓里已有比当前检出更新的稳定版标签而它不在 HEAD 历史里（在旧检出上打包）。package.json 版本越过标签视为预发布构建，记入 `release.json` 而不报错。检查基于已获取的标签；它不会自行联网或自动合并。
 
-When a new stable release is available, merge its tag into the Unit branch, resolve conflicts, update `upstream.json`, and run type, plugin, account and local installation checks before building. Verify that fixes in extracted shared handlers are carried forward. The version check rejects a version bump without the upstream commit in ancestry. It checks fetched tags and does not fetch or merge automatically.
+When a new stable release is available, merge its tag, resolve conflicts, and run type, plugin, account and local installation checks before building. Verify that fixes in extracted shared handlers are carried forward. The pre-build check refuses exactly one situation: a newer stable tag exists in the repository but not in HEAD's history (packaging from a stale checkout). A package version beyond the tag is a pre-release build, recorded in `release.json` rather than refused. It checks fetched tags and does not fetch or merge automatically.
 
-`.github/workflows/check-unit.yml` 提供分支检查和手动构建；发行包中的 `release.json` 记录 Desktop 基线、Unit 修订号及源码提交。检查本身不发布版本。
+`.github/workflows/check-unit.yml` 提供分支检查和手动构建；发行包中的 `release.json` 记录 Desktop 基线标签与提交、Unit 修订号、是否预发布及源码提交。检查本身不发布版本。
 
-`.github/workflows/check-unit.yml` provides branch validation and manual builds. Each distribution contains `release.json` with its Desktop baseline, Unit revision and source commit. Validation does not publish a release.
+`.github/workflows/check-unit.yml` provides branch validation and manual builds. Each distribution contains `release.json` with its Desktop baseline tag and commit, Unit revision, pre-release flag and source commit. Validation does not publish a release.
 
 ## 构建与安装 / Build and install
 

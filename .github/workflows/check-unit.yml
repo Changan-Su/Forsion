@@ -3,9 +3,18 @@ name: check-unit
 on:
   workflow_dispatch:
   push:
-    branches: [codex/unit-server-runtime]
+    branches: [main, codex/unit-server-runtime]
+    paths: &unit_paths
+      - 'unit/**'
+      - 'desktop/**'
+      - 'web/**'
+      - 'mobile/src/**'
+      - 'lcl/**'
+      - 'tangu-agent/**'
+      - '.github/workflows/check-unit.yml'
   pull_request:
-    branches: [codex/unit-server-runtime]
+    branches: [main, codex/unit-server-runtime]
+    paths: *unit_paths
 
 permissions:
   contents: read
