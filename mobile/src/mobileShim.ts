@@ -176,6 +176,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     return APP_VERSION
   }
 
+  /** 取一份 JSON;失败(超时 / 断网 / 非 2xx / 坏 JSON)返回 null —— 调用方要能区分「没答上」和「答了没有新版」。 */
   const getJson = async (url: string, ms = 6000): Promise<any> => {
     const ac = new AbortController()
     const timer = setTimeout(() => ac.abort(), ms)
@@ -185,20 +186,32 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     } catch { return null } finally { clearTimeout(timer) }
   }
 
-  const checkForUpdates = async (): Promise<UpdStatus> => {
+  let updInflight: Promise<UpdStatus> | null = null
+  const runCheck = async (): Promise<UpdStatus> => {
     emitUpd({ phase: 'checking' })
     try {
       const current = await installedVersion()
       const cands: Array<{ version: string; url: string }> = []
+      let answered = 0
       // ⚠️ backendUrl 已含 /api,路径从 /api 之后写起(同 cloudJson 的坑)。
       const cfg = await getJson(`${backendUrl}/website/config`)
-      const srvVer = String(cfg?.platforms?.android?.version || '').trim()
-      if (srvVer) cands.push({ version: srvVer, url: `${backendUrl}/website/download/android` })
+      if (cfg) {
+        answered += 1
+        const srvVer = String(cfg?.platforms?.android?.version || '').trim()
+        // 网关那份要管理员点过「从 GitHub 导入」才有值:空 = 还没导入,不是错。
+        if (srvVer) cands.push({ version: srvVer, url: `${backendUrl}/website/download/android` })
+      }
       const rel = await getJson('https://api.github.com/repos/Changan-Su/Forsion/releases/latest')
-      const ghVer = String(rel?.tag_name || '').replace(/^v/i, '').trim()
-      const asset = (rel?.assets || []).find((a: any) => /-android(-debug)?\.apk$/i.test(String(a?.name || '')))
-      // 没有 APK 资产 = 这个 tag 的 build-android 挂了(它不阻断发版),别报一个下不到的新版本。
-      if (ghVer && asset?.browser_download_url) cands.push({ version: ghVer, url: String(asset.browser_download_url) })
+      if (rel) {
+        answered += 1
+        const ghVer = String(rel?.tag_name || '').replace(/^v/i, '').trim()
+        const asset = (rel?.assets || []).find((a: any) => /-android(-debug)?\.apk$/i.test(String(a?.name || '')))
+        // 没有 APK 资产 = 这个 tag 的 build-android 挂了(它不阻断发版),别报一个下不到的新版本。
+        if (ghVer && asset?.browser_download_url) cands.push({ version: ghVer, url: String(asset.browser_download_url) })
+      }
+      // **两个源都没答上**(离线 / 网关挂了 + GitHub 在大陆不可达)不能报「已是最新版」——
+      // 那会把一次失败伪装成「检查过了,没新版」,用户永远等不到提醒(Codex 09-15)。
+      if (!answered) return emitUpd({ phase: 'error', error: translate('about.update.unreachable') })
       const best = cands.reduce<{ version: string; url: string } | null>((acc, c) => (!acc || isNewer(c.version, acc.version) ? c : acc), null)
       if (best && isNewer(best.version, current)) {
         apkUrl = best.url
@@ -208,6 +221,11 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     } catch (e) {
       return emitUpd({ phase: 'error', error: String((e as Error)?.message || e) })
     }
+  }
+  /** 启动静默检查与「更新」页打开时的检查会撞在一起:复用在途那一次,避免后发先至把 available 覆盖回 not-available。 */
+  const checkForUpdates = (): Promise<UpdStatus> => {
+    if (!updInflight) updInflight = runCheck().finally(() => { updInflight = null })
+    return updInflight
   }
 
   // 身份字段压在最后:落盘偏好(可能是旧号 / 被人改过的 localStorage)绝不该盖掉连接与鉴权。
