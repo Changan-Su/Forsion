@@ -18,8 +18,8 @@
 </div>
 
 <p align="center">
-  <img src="./.github/assets/showcase/workbench.png" alt="编码工作室中的 Agent 对话与赛车网页预览" width="920" />
-  <br><sub>真实桌面截图：Agent 对话与项目预览位于同一个工作区。</sub>
+  <img src="./.github/assets/showcase/workbench.png" alt="编码工作室中的公开样例对话与 Reading room 实时预览" width="920" />
+  <br><sub>Forsion Desktop v2.10.4 的真实 Electron 截图，内容为公开样例数据。</sub>
 </p>
 
 ## 用 Forsion 完成三件事
@@ -29,8 +29,8 @@
 授权 Agent 读取资料，把它们整理成本地 Markdown 笔记。在 **Note（Amadeus 笔记）** 中继续编辑，补充双链。
 
 <p align="center">
-  <img src="./.github/assets/showcase/notes.png" alt="Forsion Note 编辑器中呈现的样例笔记" width="820" />
-  <br><sub>真实 Note 编辑器，内容使用公开样例数据。</sub>
+  <img src="./.github/assets/showcase/notes.png" alt="Forsion Desktop v2.10.4 Note 工作区中的公开样例笔记" width="920" />
+  <br><sub>Forsion Desktop v2.10.4 Note 工作区，内容为公开样例数据。</sub>
 </p>
 
 ### 从一个想法，做出可预览的网页
@@ -42,8 +42,8 @@
 在**日历**中汇总笔记多维表里的日期和待办。在**自动化**中配置并授权后续任务，让结果送到**收件箱**。
 
 <p align="center">
-  <img src="./.github/assets/showcase/calendar.png" alt="日历空间中来自工作区的日期与任务记录" width="820" />
-  <br><sub>真实桌面截图：日期、待办与多维表记录集中显示。</sub>
+  <img src="./.github/assets/showcase/calendar.png" alt="Forsion Desktop v2.10.4 日历中的公开日期与任务记录" width="920" />
+  <br><sub>Forsion Desktop v2.10.4 日历，内容为公开样例数据。</sub>
 </p>
 
 ## 下载与开始使用

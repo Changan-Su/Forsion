@@ -18,8 +18,8 @@ Bring agents, knowledge, and everyday work together.
 </div>
 
 <p align="center">
-  <img src="./.github/assets/showcase/workbench.png" alt="Coding Studio with an Agent conversation and a racing webpage preview" width="920" />
-  <br><sub>Real desktop capture: the Agent conversation and project preview share one workspace.</sub>
+  <img src="./.github/assets/showcase/workbench.png" alt="Coding Studio with a public Agent conversation and a live Reading room preview" width="920" />
+  <br><sub>Forsion Desktop v2.10.4, captured in Electron with public fixture data.</sub>
 </p>
 
 ## Three ways to use Forsion
@@ -29,8 +29,8 @@ Bring agents, knowledge, and everyday work together.
 Ask an Agent to turn source files into a local Markdown note, within the access you authorize. Continue editing and linking it in **Note (Amadeus)**.
 
 <p align="center">
-  <img src="./.github/assets/showcase/notes.png" alt="A sample note rendered in Forsion's Note editor" width="820" />
-  <br><sub>The real Note editor with public sample content.</sub>
+  <img src="./.github/assets/showcase/notes.png" alt="A public sample note in the Forsion Desktop v2.10.4 Note workspace" width="920" />
+  <br><sub>Forsion Desktop v2.10.4 Note workspace, captured with public fixture data.</sub>
 </p>
 
 ### Build a webpage from an idea
@@ -42,8 +42,8 @@ In **Coding Studio**, turn an idea into a local webpage project with an Agent. T
 View dates and to-dos from your note databases in **Calendar**. Configure authorized follow-up tasks in **Automation** and receive their results in **Inbox**.
 
 <p align="center">
-  <img src="./.github/assets/showcase/calendar.png" alt="Calendar showing dated records and tasks from the workspace" width="820" />
-  <br><sub>Real desktop capture: dates, to-dos, and database records in one view.</sub>
+  <img src="./.github/assets/showcase/calendar.png" alt="Forsion Desktop v2.10.4 Calendar showing public dated records and tasks" width="920" />
+  <br><sub>Forsion Desktop v2.10.4 Calendar, captured with public fixture data.</sub>
 </p>
 
 ## Download and start
