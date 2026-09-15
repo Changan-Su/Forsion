@@ -59,6 +59,8 @@ const GATE_FILES = [
   path.join(GENESIS, 'desktop/frontend/src/amadeus/blocks/database/csvExport.ts'),
   // 2026-09-07 加入 agentRunService.ts:端判定单源 currentPlatform()(chat/work 新会话默认档据此派生)。
   path.join(GENESIS, 'desktop/frontend/src/services/agentRunService.ts'),
+  // 2026-09-15 加入 features/runtime.ts:Inbox/Muse 的能力判定(inboxAvailable/museAvailable)从 bootstrapEngine 搬到这里,门控随之搬家。
+  path.join(GENESIS, 'desktop/frontend/src/features/runtime.ts'),
 ]
 
 /** 移动端**故意**不要的东西:名字 → 理由。理由留空 = 视为未声明,照样红灯。 */
@@ -98,6 +100,7 @@ const SKIP = {
 const KNOWN_GATES = {
   'window.tangu?.account': '共享账号能力：Unit 网页投射安装账号提供方时也显示原生 AccountCard；desktop/mobile 常规产品继续由 PRODUCT.agentBackend 显示相同组件。',
   'window.amadeus': 'Amadeus Space 整体;desktop=IPC 桥 / web=云桥 / mobile=Capacitor 桥,三端都有',
+  'window.tangu?.backendStatus': '桌面壳语义(含 external 模式);2026-09-15 起 Inbox/Muse 的判定单源在 features/runtime.ts(inboxAvailable/museAvailable),bootstrapEngine 不再直接写它',
   'window.tangu?.mobile': '移动端标志',
   'window.tangu?.cloudWeb': 'web 云壳标志(cloudWeb shim 注入)— 端判定单源 services/agentRunService.ts 的 currentPlatform();web 有、desktop/mobile 天然无。新会话现已全端默认 Work，此标志用于工作区落点等端差异，不是功能门控',
   'window.tangu?.spacesList': '用户自定义 Space 读盘 — 仅桌面',

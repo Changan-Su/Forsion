@@ -4,7 +4,7 @@
 import { type ReactNode } from 'react'
 import { Plus, SquarePen, Bot, MessageCircle, FileText, CalendarDays, Mail, ListTodo, Code2, Workflow, Network, PenTool, Globe, TerminalSquare, LayoutDashboard, House } from 'lucide-react'
 import { useApp } from '../stores/appStore'
-import { hasNativeFeature, amadeusAvailable } from '../features/runtime'
+import { hasNativeFeature, amadeusAvailable, inboxAvailable } from '../features/runtime'
 import { openSpecial } from './SpecialViews'
 import { useWorkspace, useSpaceStore, getActiveSpace, getView, label, startOpenDrag } from '@lcl/engine'
 import { AMADEUS_ENABLED } from '../spaces'
@@ -71,7 +71,7 @@ export function NewTabView({ leaf }: ViewProps) {
     // 日历/待办来自「日历」内置插件:在插件页关掉即反注册 → getView 落空 → 这两块自动消失(同下面的浏览器/终端)。
     { key: 'calendar', icon: <CalendarDays size={20} />, label: t('view.calendar'), run: () => ws().openView('calendar', {}, 'main'), show: !!getView('calendar'), drag: { type: 'calendar' } },
     { key: 'todo-list', icon: <ListTodo size={20} />, label: t('view.todo'), run: () => ws().openView('todo-list', {}, 'main'), show: !!getView('todo-list'), drag: { type: 'todo-list' } },
-    { key: 'inbox', icon: <Mail size={20} />, label: t('inbox.reader'), run: () => ws().openView('inbox-reader', {}, 'main'), show: hasBackend, drag: { type: 'inbox-reader' } },
+    { key: 'inbox', icon: <Mail size={20} />, label: t('inbox.reader'), run: () => ws().openView('inbox-reader', {}, 'main'), show: inboxAvailable(), drag: { type: 'inbox-reader' } }, // 与 Inbox 视图注册同判定:无引擎/无 tangu 包的本地 Unit、不点名 inbox 的单品档案都有 backendStatus 却没注册视图 → 卡片不能只看 hasBackend
     { key: 'agents', icon: <Bot size={20} />, label: t('special.agents.title'), run: () => openSpecial('agents'), show: hasBackend && (s.specialEnabled.historian || s.specialEnabled.muse) },
     // Coding / Automation Space 的主视图(单例);仅其注册(产品档案 + 能力门控)后出现,drag 可拖入任意区。
     { key: 'code-studio', icon: <Code2 size={20} />, label: t('view.codeStudio'), run: () => ws().openView('code-studio', {}, 'main'), show: !!getView('code-studio'), drag: { type: 'code-studio' } },
