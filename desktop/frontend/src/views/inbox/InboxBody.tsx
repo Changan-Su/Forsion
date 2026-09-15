@@ -42,7 +42,9 @@ export function InboxBody({ msg }: { msg: InboxMessage }) {
       {text.trim() && (
         <div className="am-app tangu-lovable amx-pane amx-editor ibx-amadeus" data-inbox-body="amadeus">
           <Suspense fallback={<div className="ibx-body-plain">{text}</div>}>
-            <UnifiedPageLazy key={msg.id} path={`inbox/${msg.id}.md`} initial={text} readOnly compact />
+            {/* hardBreaks:信按聊天口径,一个 `\n` 就是一行(标准 markdown 里它渲染成空格 ——
+                服务端广播与 agent 信里的换行此前全被吃掉,挤成一整段)。 */}
+            <UnifiedPageLazy key={msg.id} path={`inbox/${msg.id}.md`} initial={text} readOnly compact hardBreaks />
           </Suspense>
         </div>
       )}

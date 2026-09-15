@@ -48,6 +48,7 @@ import { NoteCover, CoverPicker, IconPicker, randomEmoji, UNTITLED_RE } from '..
 import { OverlayPortal } from '../lib/overlayPortal'
 import { OverlayAt } from '../lib/clampMenu'
 import { applyTrigger, type Trigger } from '../blocks/markdown/blockTriggers'
+import { hardBreakRemark } from '../blocks/markdown/softBreak'
 import { createBlockLayer } from './blockLayer'
 import { askDeleteRemovedAssets, refTextOf } from './assetDelete'
 import { columnPlugins, createColumnsFold, parseLayoutJson, deriveLayoutJson, splitToColumn, freshAnchorId, mintCardCopies } from './columns'
@@ -833,7 +834,7 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
   )
 }
 
-export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, compact = false, readOnly = false }: {
+export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvasMode, compact = false, readOnly = false, hardBreaks = false }: {
   /** Mini Panel keeps a small editable title and body, without page decoration or metadata. */
   compact?: boolean
   path: string
@@ -854,6 +855,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
    *  舞台只能平移缩放,标题/封面/属性只展示。桥那头(shareBridge)的写方法本就拒绝 —— 这里是第一道闸,
    *  桥是第二道;两道缺一不可(桥拒了会 toast「保存失败」,用户以为自己在编辑)。 */
   readOnly?: boolean
+  /** 单个 `\n` 当换行渲染(收件箱的信按聊天口径;标准 markdown 里它是空格)。**别按 readOnly 判** ——
+   *  公开分享页也是 readOnly,那是笔记,得守标准 markdown 语义。见 softBreak.ts 的 hardBreakRemark。 */
+  hardBreaks?: boolean
 }): ReactElement {
   const pageDir = path.split('/').slice(0, -1).join('/')
   const scoped = useScopedPageStore()
@@ -1167,9 +1171,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       ...createCardDepthDeco(() => parseCanvasJson(canvasLineOf(pipe.fm))),
       ...headingFoldPlugins,
       ...listFoldPlugins,
+      // 收件箱:单个 `\n` = 一次换行(标准 markdown 里它是空格)。extraPlugins 在 MarkdownBlock 里
+      // 排在最后 .use,故必定跑在 commonmark 的 remark-line-break 之后。
+      ...(hardBreaks ? hardBreakRemark : []),
     ],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [layer, path, readOnly],
+    [layer, path, readOnly, hardBreaks],
   )
   useEffect(() => {
     if (!blockMenu) return
