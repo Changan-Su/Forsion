@@ -134,6 +134,22 @@ async function main() {
       await ctx.close()
     }
 
+    // ── D:两个版本源都不可达 —— 必须报错,不许显示成「已是最新版本」 ──
+    {
+      const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
+      await ctx.addInitScript(() => { try { localStorage.setItem('forsion_tangu_onboarding_done', '1'); localStorage.setItem('forsion_token', 'e2e-update') } catch { /* ignore */ } })
+      const page = await ctx.newPage()
+      await page.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"username":"e2e"}' }))
+      await page.route('**/api/**', (r) => r.abort())
+      await page.route('**/api.github.com/**', (r) => r.abort())
+      await page.goto(URL, { waitUntil: 'domcontentloaded', timeout: 30_000 })
+      await page.waitForTimeout(3000)
+      const st = await page.evaluate(() => window.tangu.checkForUpdates())
+      if (st && st.phase === 'error') pass('两个源都连不上 → error(不伪装成「已是最新版」)')
+      else fail('两个源都连不上 → error', JSON.stringify(st))
+      await ctx.close()
+    }
+
     // ── C:负对照 —— 网关那份不比装机版新,就不该有任何动静 ──
     {
       const { ctx, page } = await open(OLDER)

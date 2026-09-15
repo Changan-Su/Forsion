@@ -776,6 +776,8 @@ const zh: Dict = {
   'about.update.goToDownload': '前往下载',
   'about.update.error': '更新失败:{error}',
   'about.update.unsupported': '开发环境不支持自动更新',
+  // 两个版本源都没答上(离线 / 网关不可达 / GitHub 被墙)—— 不能显示成「已是最新版本」
+  'about.update.unreachable': '连不上更新服务器,稍后再试',
   'about.update.beta': '接收测试版更新',
   'about.update.betaHint': '打开后会收到 x.y.z-beta.N 这类预发布版本(功能更早、也更可能有问题)。关着则完全看不到它们。正式版永远优先:测试版之后发的正式版照常推送。',
   'app.update.bannerTitle': '发现新版本 v{version}',
@@ -2487,6 +2489,7 @@ const en: Dict = {
   'about.update.goToDownload': 'Go to download',
   'about.update.error': 'Update failed: {error}',
   'about.update.unsupported': 'Auto-update unavailable in dev',
+  'about.update.unreachable': 'Could not reach the update server, try again later',
   'about.update.beta': 'Receive beta updates',
   'about.update.betaHint': 'Get pre-release builds like x.y.z-beta.N — newer features, more likely to break. With this off they are invisible to you. Stable always wins: a stable release published after a beta is still offered.',
   'app.update.bannerTitle': 'New version v{version} available',
