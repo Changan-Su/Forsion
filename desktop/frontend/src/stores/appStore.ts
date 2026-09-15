@@ -1044,6 +1044,10 @@ export const useApp = create<AppState>((set, get) => ({
         break
       }
       case 'usage': {
+        // C-5:带 phase 的是后台调用(压缩/子代理/脑暴/判官)的用量,prompt 是它自己那一小段上下文,
+        // 不是主对话的——放进去上下文进度条会在每次 delegate/脑暴/压缩时塌成子代理的体量。
+        // (后台事件刻意不带 total/costTotal/costLimit,故 live 与成本闸本就不受影响,只需拦这一处。)
+        if (pl.phase) break
         // 成本闸预警(H3):越过上限 80% 的那一刻提示一次(runCost 是引擎发的绝对值,新 run 从小
         // 值重来,阈值判断天然按 run 复位,无需另存旗标)。
         const prev = get().usageBySession[sessionId]
