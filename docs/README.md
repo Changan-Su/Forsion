@@ -9,7 +9,7 @@ Forsion(扶桑)是一个**本地优先的 AI 工作台**。它以 **Tangu** 智�
 
 你可以用官方云端模型开箱即用,也可以带自己的 API Key、订阅账号甚至本地模型。笔记是磁盘上的 Markdown,记忆是你能打开编辑的文本,云端能力全部是可选叠加。
 
-> 📌 本文档对应 **Forsion Desktop 2.7.x**。每个版本具体改了什么,看应用内的 设置 → 关于 → 更新日志,或 [GitHub Releases](https://github.com/Changan-Su/Forsion/releases)。
+> 📌 本文档随 Forsion Desktop 源码维护；已安装版本的变化请看应用内的 设置 → 关于 → 更新日志，或 [GitHub Releases](https://github.com/Changan-Su/Forsion/releases)。
 
 ## 从哪儿开始
 
