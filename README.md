@@ -4,8 +4,8 @@
 
 # Forsion
 
-**Your local AI workbench.**<br>
-Bring agents, knowledge, and everyday work together.
+**A second brain you own.**<br>
+Remembers your context. Thinks with you. Follows through.
 
 **English** · [简体中文](./README.zh-CN.md)
 
@@ -13,38 +13,104 @@ Bring agents, knowledge, and everyday work together.
 ![Platforms](https://img.shields.io/badge/desktop-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-555)
 [![License](https://img.shields.io/badge/license-Modified%20Apache--2.0-6f42c1)](./LICENSE)
 
-[Download](https://github.com/Changan-Su/Forsion/releases/latest) · [Quick start](./docs/getting-started/quickstart.en.md) · [Website](https://forsion.net)
+[Download](https://github.com/Changan-Su/Forsion/releases/latest) · [Quick start](./docs/getting-started/quickstart.en.md) · [Documentation (中文)](./docs/README.md) · [Website](https://forsion.net)
 
 </div>
 
-<p align="center">
-  <img src="./.github/assets/showcase/workbench.png" alt="Coding Studio with a public Agent conversation and a live Reading room preview" width="920" />
-  <br><sub>Forsion Desktop v2.10.4, captured in Electron with public fixture data.</sub>
-</p>
+Forsion is a **local-first second brain**. Keep research, ideas, and projects in your own knowledge base. Work with Agents that carry long-term memory, let Muse follow up on ongoing work, and add tools and workflows through plugins.
 
-## Three ways to use Forsion
+**Build knowledge → Think with context → Take action → Bring results back.** Each new task can build on what came before.
 
-### Turn source material into notes
+| Knowledge & memory | Multi-agent collaboration | Proactive follow-up | Extensions |
+| --- | --- | --- | --- |
+| Notes, links, and long-term memory | Multi-agent discussions and parallel subtasks | Proactive Muse and automation | Plugins, skills, and custom Spaces |
 
-Ask an Agent to turn source files into a local Markdown note, within the access you authorize. Continue editing and linking it in **Note (Amadeus)**.
+## Give your work lasting context
 
-<p align="center">
-  <img src="./.github/assets/showcase/notes.png" alt="A public sample note in the Forsion Desktop v2.10.4 Note workspace" width="920" />
-  <br><sub>Forsion Desktop v2.10.4 Note workspace, captured with public fixture data.</sub>
-</p>
+Your **Amadeus knowledge base** holds the material you collect, the ideas you develop, and the work you finish. **Agent memory** holds preferences, facts, and project context gathered while working with you. Keep the sources close and carry useful context into the next conversation.
 
-### Build a webpage from an idea
-
-In **Coding Studio**, turn an idea into a local webpage project with an Agent. The main screenshot shows its conversation and preview, where you can inspect and refine the result.
-
-### Keep track of what happens next
-
-View dates and to-dos from your note databases in **Calendar**. Configure authorized follow-up tasks in **Automation** and receive their results in **Inbox**.
+- **Connect your material.** Local Markdown, bidirectional links, backlinks, and a graph view. Reference attachments, databases, and conversations from notes to keep conclusions connected to their sources.
+- **Organize your thinking.** Manage projects through table, board, calendar, and gallery views. Explore ideas on a whiteboard, annotate PDFs, and assemble research in dashboards.
+- **Manage what Agents remember.** Each Agent has its own personality, Library, logs, and memory settings. Inspect, revise, consolidate, or forget facts in the memory panel. Historian maintains conversation logs and memory candidates; when enabled, Dream consolidates memories and candidates, while recall searches history within the Agent's scope.
 
 <p align="center">
-  <img src="./.github/assets/showcase/calendar.png" alt="Forsion Desktop v2.10.4 Calendar showing public dated records and tasks" width="920" />
-  <br><sub>Forsion Desktop v2.10.4 Calendar, captured with public fixture data.</sub>
+  <img src="./.github/assets/showcase/notes.png" alt="Forsion's Amadeus knowledge base with a project note, research, and next actions" width="920" />
+  <br><sub>Actual Note workspace in Forsion Desktop v2.10.4, with public sample data.</sub>
 </p>
+
+[Explore the knowledge base (中文)](./docs/amadeus/overview.md) · [Agent memory (中文)](./docs/agents/memory.md)
+
+## Muse: a second brain that follows up
+
+Give ongoing work to **Muse, the proactive Agent**. Once enabled, Muse wakes on heartbeats, schedules, and rules. It uses recent work and its own memory to prepare material, suggest next steps, or carry out tasks within the permissions and budget you set.
+
+- **Keep an eye on ongoing work.** Hand a task from a conversation to Muse for tracking, or configure a scheduled or event-based rule. Heartbeats give it regular opportunities to review what needs attention.
+- **Bring decisions to you.** Results arrive in Inbox. Task cards let you ask Muse to execute, start a new conversation, or dismiss a suggestion. Approve or reject pending actions in the message itself.
+- **Build a workspace of its own.** Muse has a Library and work journals. It can also write and gradually improve its own Space, organizing ongoing work into a browsable interface.
+
+Muse is off by default and currently runs in local mode. Configure active hours, frequency, budget, and approval mode; activity awareness is a separate opt-in. For repeatable processes, **Automation** connects time, events, or database changes to action chains involving Agents, notifications, and database operations.
+
+[Muse (中文)](./docs/agents/muse.md) · [Automation (中文)](./docs/spaces/automation.md) · [Inbox (中文)](./docs/spaces/inbox.md)
+
+## Multiple Agents, shared work
+
+Create Agents for research, writing, development, or everyday planning, each with its own personality, model, Library, and tool permissions. Discuss a problem from several perspectives, or divide independent work into parallel subtasks.
+
+| Collaboration mode | How to use it |
+| --- | --- |
+| **Multi-agent group chat** | Let different roles respond, challenge assumptions, and develop a proposal in turns. Agents vote on whether to continue each round; you can interject or @ a participant. |
+| **Parallel subtasks** | Delegate independent research, implementation, or checks, pass the context each task needs, and have the main Agent bring the results together. |
+| **Self-brainstorming** | Explore several perspectives on a problem, compare alternatives, and form a conclusion. |
+| **External Agent engines** | Connect locally installed engines such as Claude Code and Codex through ACP, bringing them into Forsion conversations and workspaces. |
+
+Group chat, subtask execution, and these external engines use local mode. The knowledge base provides material you can authorize Agents to access, while their memory and tool settings remain individually manageable.
+
+[Agents (中文)](./docs/agents/overview.md) · [Group chat (中文)](./docs/chat/group-chat.md) · [External engines (中文)](./docs/agents/external-engines.md)
+
+## A plugin system for a growing second brain
+
+Extensions can change both **what your AI can do** and **how you work with it**. Plugins can add tools, note features, workspace views, automation events, or an entire Space.
+
+- **Install a workflow together.** A plugin bundle can deliver an interface, engine tools, Agents, skills, and Spaces, all managed from one place.
+- **Connect collection to action.** For example, Bluebird turns videos into notes; Computer Use lets Agents operate desktop applications on supported platforms; plugin events can trigger automation.
+- **Turn experience into reusable capability.** Skills capture ways of working, and MCP connects external tools and data. The marketplace offers plugins, Agents, skills, Spaces, themes, and web apps. Ask an Agent to use the built-in extension development skill to create an extension of your own.
+
+[Plugins and extension points (中文)](./docs/customization/plugins.md) · [Marketplace (中文)](./docs/customization/market.md) · [Skills (中文)](./docs/agents/skills.md)
+
+## Put it together in one project
+
+For a research project, you could build up this workflow:
+
+1. **Collect context.** Bring articles, PDFs, and saved material into your knowledge base. Link sources, open questions, and project notes.
+2. **Develop a judgment.** Ask research and review Agents to compare approaches, delegate independent investigations, and save the conclusions with their evidence.
+3. **Make something.** Review and edit notes, code, images, or webpages directly in Agent Desk. For an interactive prototype, continue building and previewing it in Coding Studio.
+4. **Keep it moving.** Assign follow-up work to Muse or Automation, check dates and to-dos in Calendar, and respond to suggestions in Inbox. Add new conclusions and outputs to the project note.
+
+This is a suggested workflow you can configure. You choose model connections, access to material, Muse settings, and plugins.
+
+<p align="center">
+  <img src="./.github/assets/showcase/workbench.png" alt="Coding Studio showing a public sample conversation beside its Reading room webpage" width="920" />
+  <br><sub>Coding Studio is one place to create an output. Forsion Desktop v2.10.4, with public sample data.</sub>
+</p>
+
+<details>
+<summary>Calendar: bring dates and to-dos from your knowledge base into your day</summary>
+
+<p align="center">
+  <img src="./.github/assets/showcase/calendar.png" alt="Forsion Calendar brings together dated records and tasks from databases" width="920" />
+  <br><sub>Actual Calendar workspace in Forsion Desktop v2.10.4, with public sample data.</sub>
+</p>
+
+</details>
+
+## Work in an environment you control
+
+- **Arrange the workspace.** Spaces, split panels, draggable tabs, independent windows, and Mini Panel let you place conversations, sources, outputs, and plugin views where they fit. Restore layouts when you return.
+- **Choose your models.** Use Forsion-hosted models, your own API connection, OpenAI-compatible endpoints, local Ollama, or supported subscription logins.
+- **Continue elsewhere.** Talk to Agents through configured WeChat, Telegram, or QQ channels. Web and Android clients provide cloud-connected access, with capabilities that differ from Desktop.
+- **Keep access to your data.** Inspect and back up local notes and files, and view or edit Agent memory. Cloud-model requests go to the provider you choose; enabling account sync or sharing sends the corresponding content to the cloud.
+
+[Workspace (中文)](./docs/getting-started/workspace.md) · [Channels (中文)](./docs/chat/channels.md) · [Client capabilities (中文)](./docs/reference/web-and-mobile.md) · [Data and privacy (中文)](./docs/reference/data-and-privacy.md)
 
 ## Download and start
 
@@ -56,56 +122,13 @@ Download the latest desktop installer from [GitHub Releases](https://github.com/
 | Windows | `Forsion-*.exe` | NSIS installer. |
 | Linux | `Forsion-*.AppImage` | Add execute permission, then run. |
 
-1. **Install and open Forsion.** First launch guides you through the connection, model, theme, and workspace. The desktop app includes the Agent backend and a Node.js runtime.
-2. **Connect a model.** Sign in to Forsion, add your own API connection or local Ollama, or use a supported subscription login in local mode. Choose your model in **Settings → Models**.
-3. **Try one task in Agent.** Paste a short piece of source material and ask: “Organize this into a note and save it to my knowledge base.” Review any requested access, then open **Note** to check and edit the result.
+1. **Install and connect a model.** First launch helps configure your connection, model, and workspace. The desktop installer includes the Agent backend and Node.js runtime.
+2. **Bring some real context.** Create a project note with a goal, sources, and next steps. Ask an Agent to read it, and explicitly tell it a preference worth remembering.
+3. **Arrange a follow-up.** In local mode, enable Muse with the permissions and budget you choose, or create an automation rule. Review the result in Inbox.
 
-See the [English quick start](./docs/getting-started/quickstart.en.md) for the first conversation, notes, and automation. The [full documentation](./docs/README.md) is currently in Chinese.
+The [quick start](./docs/getting-started/quickstart.en.md) walks through this path and introduces multi-agent work and plugins.
 
 > **Installer signing:** macOS builds use ad-hoc signing and are not yet notarized; Windows builds may trigger SmartScreen. Download from this repository's Releases. If Gatekeeper blocks the first open on macOS, right-click the app and choose “Open”, or allow it in **System Settings → Privacy & Security**.
-
-## Three principles
-
-- **Your data starts locally.** Notes, files, conversations, and configuration live on your device by default. They can be inspected and backed up; Forsion Cloud is an optional connection layer. Requests to a cloud model are sent to the provider you choose.
-- **AI can act on the work.** Within the permissions you configure, Agents can read material, edit files, run tools, and carry out follow-up tasks. Memory, skills, and MCP help them work with your context.
-- **Shape your own workspace.** Split panels, move tabs, open independent windows, and save layouts. Themes, plugins, skills, Agents, and custom Spaces are installed as local files that you can inspect and change.
-
-<p align="center">
-  <img src="./.github/assets/readme-fusang-tree.jpg" alt="The Fusang tree illustrates connections between knowledge, Agents, and workflows" width="560" />
-</p>
-
-## Six built-in Spaces
-
-A Space is a working context inside the same workbench. These Spaces share workspace files, search, layouts, and Agent capabilities.
-
-| Space | What you can do |
-| --- | --- |
-| **Agent (Tangu)** | Talk through a task and let an Agent use project files, tools, skills, memory, and delegated sub-tasks. Connect installed external engines such as Claude Code and Codex. |
-| **Note (Amadeus)** | Keep local Markdown notes, bidirectional links, backlinks, tags, graph views, databases, attachments, whiteboards, and PDF annotations. |
-| **Calendar** | View dated records and to-dos from note databases with filters and views across databases. |
-| **Inbox** | Read Agent results, local notifications, and Forsion service messages; manage unread and archived messages. |
-| **Coding Studio** | Put the project brief, conversation, source files, and live webpage preview in one workspace. |
-| **Automation** | Configure triggers and action chains, schedule Agent tasks, and review their execution history and results. |
-
-<details>
-<summary>More about models, tools, and the workspace</summary>
-
-### Agents and models
-
-- OpenAI-compatible endpoints, local Ollama, Forsion-hosted models, and supported subscription logins.
-- Tool approvals, file-access boundaries, commands, background tasks, browser and image tools, a Docker Python sandbox, and bundled Computer Use tools for supported desktop platforms.
-- MCP, editable skills, folder-based Agents, long-term memory, group chat, sub-task delegation, and instructions added while a task is running.
-- External Agent CLIs such as Claude Code and Codex via ACP, with permission requests handled by Forsion.
-- Muse can follow configured schedules and rules, sending results to Inbox under its configured permissions and budget.
-
-### Knowledge and layouts
-
-- Notes and attachments are stored in local Vaults, readable and backed up by ordinary file tools.
-- Databases support table, board, calendar, and gallery views, with filters, sorting, relations, grouping, and rollups.
-- Quick find can jump to notes, databases, and chat sessions.
-- Sidebars, tabs, split panels, cross-window dragging, floating Mini cards, and layout restoration keep different working contexts in one app.
-
-</details>
 
 ## Where Your Data Lives
 

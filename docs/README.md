@@ -1,13 +1,13 @@
 ---
 title: Forsion 文档中心
-description: Forsion 桌面 AI 工作台的使用文档——对话、Agent、笔记、自动化、扩展,以及整个产品家族。
+description: Forsion Second Brain 使用文档——知识与记忆、Muse 主动跟进、多 Agent 协作、插件扩展与整个产品家族。
 ---
 
 # Forsion 文档中心
 
-Forsion(扶桑)是一个**本地优先的 AI 工作台**。它以 **Tangu** 智能体引擎为核心,把对话、笔记(**Amadeus**)、日历、自动化、收件箱、编码装进一个可自由布局的工作区——AI 不只回答问题,还能记笔记、管日程、盯任务、写代码并当场预览。
+Forsion（扶桑）是一个**本地优先的 Second Brain**：把材料、想法和成果沉淀在知识库，让 Agent 带着长期记忆与你协作，让 Muse 主动跟进，再通过插件扩展工具与工作方式。新的行动产出回到知识库，成为下一次工作的背景。
 
-你可以用官方云端模型开箱即用,也可以带自己的 API Key、订阅账号甚至本地模型。笔记是磁盘上的 Markdown,记忆是你能打开编辑的文本,云端能力全部是可选叠加。
+**Amadeus** 承载笔记、双链、多维表、白板与研究材料；**Tangu** 提供记忆、工具和多 Agent 协作；**Muse、自动化与收件箱**把持续工作接起来；**插件、Skills、MCP 与 Space**让这套环境按需扩展。你可以选用云端模型或自己的模型连接，本地笔记和 Agent 记忆可以直接查看、编辑与备份。
 
 > 📌 本文档随 Forsion Desktop 源码维护；已安装版本的变化请看应用内的 设置 → 关于 → 更新日志，或 [GitHub Releases](https://github.com/Changan-Su/Forsion/releases)。
 
@@ -18,7 +18,10 @@ Forsion(扶桑)是一个**本地优先的 AI 工作台**。它以 **Tangu** 智�
 | 第一次用,先跑通 | [安装与更新](getting-started/installation.md) → [快速上手](getting-started/quickstart.md) |
 | 搞清楚界面怎么用 | [工作区与界面](getting-started/workspace.md) |
 | 接自己的模型 / API Key | [模型与接入方式](chat/models-and-providers.md) |
-| 让 AI 动手做事,而不只是聊天 | [工具与审批](chat/tools-and-approvals.md) → [自动化](spaces/automation.md) |
+| 建立能持续使用的知识与背景 | [Amadeus](amadeus/overview.md) → [Agent 记忆](agents/memory.md) |
+| 让 AI 主动跟进交代过的事 | [Muse](agents/muse.md) → [自动化](spaces/automation.md) → [收件箱](spaces/inbox.md) |
+| 让多个 Agent 讨论或分工 | [Agent 总览](agents/overview.md) → [群聊](chat/group-chat.md) |
+| 给 AI 接入工具并配置行动权限 | [工具与审批](chat/tools-and-approvals.md) |
 | 从 Obsidian 迁过来 | [Amadeus 总览](amadeus/overview.md) → [编辑器](amadeus/editor.md) |
 | 在手机 / 浏览器上用 | [浏览器版与移动端](reference/web-and-mobile.md) |
 | 把工作台改造成自己的样子 | [插件](customization/plugins.md) → [应用市场](customization/market.md) |
@@ -28,7 +31,7 @@ Forsion(扶桑)是一个**本地优先的 AI 工作台**。它以 **Tangu** 智�
 
 - [Forsion 是什么](getting-started/introduction.md) — 产品家族与设计理念
 - [安装与更新](getting-started/installation.md) — macOS / Windows / Linux、更新通道、运行环境
-- [快速上手](getting-started/quickstart.md) — 十分钟跑通第一次对话与第一篇笔记
+- [快速上手](getting-started/quickstart.md) — 从项目笔记到记忆、多 Agent、主动跟进与插件
 - [核心概念](getting-started/concepts.md) — Agent、会话、Space、审批档位这些词各指什么
 - [工作区与界面](getting-started/workspace.md) — Ribbon、标签页、状态栏、通知、内置浏览器与终端
 

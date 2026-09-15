@@ -1,77 +1,81 @@
 ---
 title: Quick start
-description: Connect a model, start a conversation, write your first note, and try automation in Forsion Desktop.
+description: Start with a project note, then try long-term memory, multiple Agents, proactive Muse, and plugins in Forsion.
 ---
 
 # Quick start
 
-Once you have [installed Forsion Desktop](https://github.com/Changan-Su/Forsion/releases/latest), try the steps below. This guide uses the current English interface names; the full guides linked below are currently in Chinese.
+Start with something you are already working on: a research question, an article, or a project you want to build. These steps gradually bring it into your second brain. Complete the first three, then add collaboration and follow-up as needed. The detailed guides linked below are currently in Chinese.
 
 ## 1. Connect a model
 
-Open **Settings → Models** and choose a connection:
+Install and open Forsion Desktop. In **Settings → Models**, choose a connection:
 
-- **Forsion account:** sign in to use Forsion-hosted models without managing an API key.
-- **Your own API connection:** add a provider and its API key. Anthropic can be connected directly, and OpenAI-compatible endpoints are also supported.
-- **Local model:** connect Ollama or your own compatible model endpoint.
-- **Subscription login:** supported ChatGPT (Codex) and xAI Grok subscriptions can be connected through OAuth in local mode.
+- **Forsion account:** sign in to use Forsion-hosted models.
+- **Your own API:** add a provider and API key. Direct Anthropic connections and OpenAI-compatible endpoints are supported.
+- **Local model:** connect Ollama or your own compatible endpoint.
+- **Subscription login:** local mode supports ChatGPT (Codex) and xAI Grok subscription logins.
 
-To use an installed Claude Code CLI, choose it as the runtime engine for a new conversation. It uses its own login state; this is separate from a direct Anthropic API connection.
+The multi-agent and Muse steps below use **local mode**. The local engine can call a cloud model you configure; requests go to the chosen provider. An installed Claude Code or Codex CLI can also connect as an external engine. See [models and providers](../chat/models-and-providers.md) and [external engines](../agents/external-engines.md).
 
-Cloud-model requests are sent to the provider you select. See [models and providers (Chinese)](../chat/models-and-providers.md) and [external engines (Chinese)](../agents/external-engines.md) for connection details.
+## 2. Give the project a home
 
-## 2. Start a conversation
+Create a project note in **Note (Amadeus)** with:
 
-Open **Agent (Tangu)**, select a model, and send a message. Responses appear as a stream; models that expose reasoning can show it in a collapsible section.
+- **A goal:** what you want to make and who it is for.
+- **Sources:** existing articles, files, and reference links.
+- **Open questions:** what you still need to understand and what comes next.
 
-When the Agent needs to read or change files, run commands, or use other tools, its approval settings determine which actions need your confirmation. Review the requested action and its working folder before approving it. The approval modes are **Readonly**, **Auto edit**, **Full auto**, and **Custom**.
+Use `[[` to link notes, attachments, databases, or conversations. Type `/` to insert a database, whiteboard, or other content. Notes live in your local knowledge base and can be inspected and backed up with ordinary file tools.
 
-For a task you want to discuss first, enable **Plan mode**. The Agent investigates and proposes a plan before you approve execution.
+Open **Agent (Tangu)**, reference the note or give its file path, and try:
 
-Try pasting a short piece of material and asking:
+> Read this project note. Organize the known facts, open questions, and next steps. Save the result to my knowledge base and retain the source links.
 
-> Organize this material into a note and save it to my knowledge base. Keep the main facts and add a short list of next steps.
+Authorize access to the material the task needs. Agent Desk can show notes and other outputs beside the conversation, where you can open, inspect, and edit them. See [Amadeus](../amadeus/overview.md), [Agent Desk](../chat/agent-desk.md), and [tool approvals](../chat/tools-and-approvals.md).
 
-When the window is wide enough, the task overview and generated files appear beside the conversation. You can review the plan, working folders, sources, and results there. See [tools and approvals (Chinese)](../chat/tools-and-approvals.md) and [Agent Desk (Chinese)](../chat/agent-desk.md).
+## 3. Build memory across conversations
 
-### Build a webpage in Coding Studio
+Keep project material in the knowledge base. Explicitly tell your Agent a working preference worth retaining:
 
-Open **Coding Studio** and write your goal, audience, and requirements in a project brief. Creating a project saves the brief to `FORSION_BRIEF.md` and prepares a conversation draft; the Agent starts only after you confirm and send the draft.
+> Remember: when you help me research, put conclusions first, then sources, and call out uncertainty separately.
 
-Inspect the webpage in the preview beside the conversation and ask for changes. See [Coding Studio (Chinese)](../spaces/coding.md) for preview modes and working with existing projects.
+Open that Agent's **memory panel** and check what it recorded. Revise memories, inspect history, or remove a fact from active memory. Start a new conversation about the project and check whether it uses the appropriate context.
 
-## 3. Write your first note
+Agents have individually manageable personalities, Libraries, logs, and memory settings. You can enable Historian and Dream for further maintenance; automatic Dream maintenance is off by default. See [Agents](../agents/overview.md) and [memory](../agents/memory.md).
 
-Switch to **Note (Amadeus)** and create a note, or open the one the Agent saved:
+## 4. Bring different Agents into the work
 
-- Type Markdown; `#` followed by a space creates a heading.
-- Type `[[` to link to notes, attachments, databases, or conversations.
-- Type `/` to insert a database, whiteboard, code block, or other content.
+Create two roles in Agent management, such as a research partner and a proposal reviewer. Give them distinct responsibilities and select their models and tool permissions.
 
-Notes are Markdown files in your workspace. You can read and back them up with ordinary file tools. See the [Note overview (Chinese)](../amadeus/overview.md).
+- **Discuss approaches:** start a group chat, choose both Agents, and ask them to compare two options. They respond in turns; you can interject or @ a participant.
+- **Divide the investigation:** in an ordinary task, ask the main Agent to delegate independent questions to subtasks, pass the context they need, and bring back sources and conclusions.
 
-## 4. Try a follow-up task
+Save the conclusions you adopt to the project note. Group chat supports discussion; parallel subtasks support independent execution. See [group chat](../chat/group-chat.md) and [Agents](../agents/overview.md).
 
-Open **Automation** and create a rule. A rule combines a trigger with a sequence of actions: for example, a daily trigger, an Agent that summarizes the day's schedule, and a notification action.
+## 5. Arrange a proactive follow-up
 
-Results arrive in **Inbox**, and each execution has a record you can review. For unattended work, give the selected Agent the permissions its task needs, or restrict it to tools that do not require approval; otherwise it may wait for approval and time out.
+Enable **Muse** in the background Agent settings. Set active hours, heartbeat frequency, budget, and permissions first. Muse is off by default. In its approval mode, actions that need your decision enter a pending queue; delegated approval and full-access modes are also available.
 
-**Calendar** can bring together dates and to-dos from your note databases. Use it to check the records your scheduled task will summarize. See [automation (Chinese)](../spaces/automation.md), [Inbox (Chinese)](../spaces/inbox.md), and [Calendar (Chinese)](../amadeus/calendar.md).
+Ask Muse to track a next step, such as reviewing the project note at an agreed time and collecting unresolved questions. Its schedules, heartbeats, and rules trigger follow-up work, with results delivered to **Inbox**.
 
-## 5. Explore the marketplace
+Respond in Inbox: ask Muse to execute a suggested task, continue in a new conversation, or dismiss it. Approve or reject pending actions there. Muse also builds up its own Library and journals, and can gradually create a Space of its own.
 
-The marketplace offers skills, Agents, plugins, Spaces, themes, and website apps. Install an item to extend your workspace; inspect its settings and permissions as needed. See the [marketplace guide (Chinese)](../customization/market.md).
+For a defined process, use **Automation** to create a daily trigger followed by an Agent progress summary and a notification. Use **Calendar** to bring together dates and to-dos from databases. See [Muse](../agents/muse.md), [Automation](../spaces/automation.md), and [Inbox](../spaces/inbox.md).
 
-## 6. Arrange the workspace
+## 6. Extend the workflow
 
-Use the ribbon on the left to switch Spaces. Drag tabs into split panels or independent windows, and use the built-in browser and terminal when your task needs them.
+Open the **marketplace** and choose an extension for the task at hand. Explore Bluebird to turn videos into notes, install a Skill for a reusable way of working, or add a plugin for extra tools and interface features.
 
-The status bar shows information such as the current Space, running conversations, sync progress, and note word count. See the [workspace guide (Chinese)](workspace.md).
+A plugin bundle can include an interface, engine tools, Agents, skills, and Spaces. Read its description, dependencies, and settings, then use it in the project. MCP can also connect external tools and data. See [plugins](../customization/plugins.md), [the marketplace](../customization/market.md), and [Skills](../agents/skills.md).
 
-## Next steps
+## Bring the results back
 
-- [Core concepts (Chinese)](concepts.md) — Agents, conversations, Spaces, and approvals.
-- [Agent overview (Chinese)](../agents/overview.md) — create an Agent with its own instructions and knowledge.
-- [Coding Studio (Chinese)](../spaces/coding.md) — start with a project brief and inspect the webpage preview.
-- [Full documentation (Chinese)](../README.md).
-- [Back to the English README](../../README.md).
+Use whiteboards, PDF annotations, or databases as the research develops. For a web prototype, open **Coding Studio**, write the project brief, and confirm and send the conversation draft it creates. Inspect and refine the result in the preview. Add the outputs, links, and next steps to the project note.
+
+Arrange tabs, split panels, and independent windows to keep conversations beside sources. Optionally configure WeChat, Telegram, or QQ channels to reach Agents from other entry points.
+
+- [Workspace](workspace.md) — panels, Spaces, and layouts.
+- [Coding Studio](../spaces/coding.md) — from a brief to a webpage preview.
+- [Channels](../chat/channels.md) — contact your Agents through messaging tools.
+- [Back to the README](../../README.md).

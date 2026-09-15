@@ -19,7 +19,7 @@
       const logo = new Image();
       const product = new Image();
       logo.src = "/repo/.github/assets/showcase/logo.svg";
-      product.src = "/repo/.github/assets/showcase/workbench.png";
+      product.src = "/repo/.github/assets/showcase/notes.png";
 
       Promise.all([logo.decode(), product.decode()]).then(() => {
         context.fillStyle = "#f1f5f1";
@@ -33,18 +33,21 @@
         context.textAlign = "right";
         context.fillStyle = "#52695d";
         context.font = "400 16px system-ui, sans-serif";
-        context.fillText("A second brain you own.", 1218, 74);
+        context.fillText("Local knowledge. Lasting context.", 1218, 74);
         context.textAlign = "left";
 
         context.fillStyle = "#1c352b";
         context.font = "650 58px system-ui, sans-serif";
-        context.fillText("Your local", 62, 218);
-        context.fillText("AI workbench.", 62, 281);
+        context.fillText("Your second", 62, 218);
+        context.fillText("brain.", 62, 281);
 
         context.fillStyle = "#52695d";
         context.font = "400 22px system-ui, sans-serif";
-        context.fillText("Bring agents, knowledge, and", 62, 339);
-        context.fillText("everyday work together.", 62, 371);
+        context.fillText("Remembers. Collaborates. Acts.", 62, 339);
+        context.fillText("A second brain you own.", 62, 371);
+
+        context.font = "500 17px system-ui, sans-serif";
+        context.fillText("Memory · Muse · Multi-agent · Plugins", 62, 449);
 
         context.save();
         context.shadowColor = "rgba(28, 53, 43, 0.16)";

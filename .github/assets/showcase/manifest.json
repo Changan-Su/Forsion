@@ -52,9 +52,10 @@
       "width": 1280,
       "height": 640,
       "colorType": "RGBA",
-      "sha256": "7e5f0e515b41bb91dad09460a11c7c5dd58217cefa285d3b4e4b894c19fc1ba7",
+      "sha256": "144d491cc003b11e563387c5e41247b8692e6ecfe796112725852297efbbff0c",
       "captureMethod": "Browser canvas export",
-      "scenario": "Designed GitHub social composition generated from the current workbench.png"
+      "scenario": "Designed GitHub Second Brain composition generated from the current notes.png",
+      "generatedAt": "2026-09-15T16:17:01Z"
     },
     "logo.svg": {
       "sha256": "b63079a5adfaa70f94f2a8647df7e96e66a1c67eeaa3c54973c49433c58278fe",
