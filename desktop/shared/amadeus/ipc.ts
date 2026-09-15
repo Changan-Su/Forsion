@@ -245,14 +245,19 @@ export interface ExternalPluginSource {
    *  The main process excludes these from the page list (listPages) so its compiler never rewrites them
    *  (= corruption); the renderer's registerFileType supplies the matching icon/view/embed behaviour. */
   fileExtensions?: string[]
-  /** Present → listed but not loadable: 'api' = apiVersion mismatch, 'minApp' = app too old. */
-  blocked?: 'api' | 'minApp'
+  /** Present → listed but not loadable: 'api' = apiVersion mismatch, 'minApp' = app too old,
+   *  'invalid' = agent-owned Space plugin whose manifest.json is missing/broken (reason in `blockedReason`). */
+  blocked?: 'api' | 'minApp' | 'invalid'
+  blockedReason?: string
   /** 捆绑包内嵌内容清单(缺省 = 纯 UI 插件)。 */
   bundle?: PluginBundleInfo
   /** 随 App 内置(主进程 builtinPlugins.ts 播种的捆绑包):设置页标「内置」、不给卸载按钮(只能停用)。
    *  ⚠️ 名字不叫 builtin:渲染层 pluginStore 用 `builtin` 区分「代码里注册的内置插件」与外置来源(reload 时按它筛),
    *  播种来的仍是外置来源,只是不可卸载。 */
   preinstalled?: boolean
+  /** Agent 自建 Space 插件(2026-09-11):来源 `<tangu>/agents/<slug>/Space/`,id 固定 `agent-<slug>`;不可卸载(关开关即可),
+   *  capabilities / fileExtensions / requiresApp / onboarding / bundle 一律不带(没有「用户点安装」这一步授权)。值 = agent slug。 */
+  agent?: string
 }
 
 /** Semver-ish comparator (copied from lcl/spaces/userSpaces.core.ts — main process has no @lcl alias). */

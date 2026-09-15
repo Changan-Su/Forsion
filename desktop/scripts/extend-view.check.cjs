@@ -15,6 +15,7 @@ const REPO = path.resolve(ROOT, '../..')
 const PLUGIN = process.env.SERVER_ADMIN_PLUGIN || path.join(REPO, 'Forsion-Instrumentality-Project/forsion-plugin-server-admin')
 const SERVER = process.env.FORSION_SERVER_DIR || path.join(REPO, 'server')
 const SHOTS = process.env.EXTEND_SHOTS || '/tmp/forsion-extend-shots'
+const GROUPS_ONLY = process.argv.includes('--groups-only')
 const passed = (message) => console.log('PASS  ' + message)
 async function closeNativeExtension(win) {
   await win.locator('.wb-tab[data-transient="true"]').click({ button: 'right' })
@@ -32,6 +33,12 @@ async function main() {
   ]
   const fixtures = {}
   for (const a of APPS) fixtures[a.appId] = (await import(pathToFileURL(path.join(SERVER, `microserver/${a.appId}/admin/e2e.fixture.mjs`)).href)).default
+  if (GROUPS_ONLY) {
+    const mocks = fixtures['core-models'].mocks
+    mocks.find((m) => m.path === '/api/admin/model-catalog').body = { groups: [{ id: 'core', name: '常用模型', sortOrder: 0 }, { id: 'preview', name: '预览模型', sortOrder: 1 }], multiplierBaseline: null }
+    mocks.find((m) => m.path === '/api/admin/models').body.forEach((m, i) => { if (i < 4) { m.groupId = i < 2 ? 'core' : 'preview'; m.groupName = i < 2 ? '常用模型' : '预览模型' } })
+    mocks.find((m) => m.path === '/api/admin/model-providers').body = [{ id: 'sf', name: 'SiliconFlow', kind: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1', modelCount: 0, lastStatus: { models: { status: 'ok', count: 96 }, balance: { status: 'error', detail: 'Provider returned HTTP 410' } } }]
+  }
   // core-admin's fixture is a stub (its assertions live in the plugin e2e); the same minimal data set gives its tables rows here.
   fixtures['core-admin'].mocks = [
     { path: '/api/admin/users', body: [
@@ -133,6 +140,42 @@ async function main() {
     assert.equal(await win.locator(DATA_ROWS).count(), 5)
     assert.equal(await win.locator('[data-hook="mtable"] table').count(), 0, 'native host must not fall back to the classic table')
     assert.equal(await win.locator('[data-hook="mtable"] .amx-db-addrow, [data-hook="mtable"] .amx-db-addcol, [data-hook="mtable"] .amx-db-rowdel').count(), 0, 'plugin tables are read-only')
+    if (GROUPS_ONLY) {
+      const heads = win.locator('[data-hook="mtable"] .amx-db-grouphead')
+      assert.equal(await heads.count(), 3)
+      assert.ok((await heads.nth(0).innerText()).includes('常用模型'))
+      assert.ok((await heads.nth(1).innerText()).includes('预览模型'))
+      await heads.first().click()
+      assert.equal(await win.locator(DATA_ROWS).count(), 3)
+      await heads.first().click()
+      passed('admin model table starts in catalog order with collapsible groups and an unset group')
+      const query = win.locator('[data-hook="mtable"] .amx-db-search')
+      await query.evaluate((input) => {
+        Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'https://api.siliconflow.cn/v1')
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      assert.equal(await query.inputValue(), '')
+      assert.equal(await win.locator(DATA_ROWS).count(), 5)
+      passed('background autofill does not filter the real admin model table')
+      await win.mouse.move(30, 30)
+      await win.screenshot({ path: path.join(SHOTS, 'model-groups-light.png') })
+      await win.locator('[data-hook="mtable"] .amx-db-groupbtn').click()
+      const menu = win.locator('.amx-db-group-menu')
+      await menu.getByLabel('按属性分组', { exact: true }).selectOption('provider')
+      assert.ok(await heads.count() > 1)
+      await menu.getByLabel('按属性分组', { exact: true }).selectOption('group')
+      await win.screenshot({ path: path.join(SHOTS, 'model-groups-menu.png') })
+      await win.mouse.click(30, 30)
+      await menu.waitFor({ state: 'detached' })
+      await win.locator('[data-tab="providers"]').click()
+      await win.waitForSelector('[data-hook="providers-table"] .amx-db')
+      assert.ok((await win.locator('[data-hook="providers-table"]').innerText()).includes('官方余额接口已停用'))
+      assert.equal(await win.locator('[data-hook="providers-table"] a[href="https://cloud.siliconflow.cn"]').count(), 1)
+      await win.screenshot({ path: path.join(SHOTS, 'siliconflow-retired.png') })
+      passed('SiliconFlow retirement is clear and links to the official console')
+      assert.deepEqual(errors, [])
+      return
+    }
     const rowOrder = () => win.locator(DATA_ROWS).evaluateAll((rows) => rows.map((r) => r.getAttribute('data-row')))
     const order0 = await rowOrder()
     const nameHeader = win.locator('[data-hook="mtable"] .amx-db-hrow .amx-db-th').first()
@@ -198,6 +241,10 @@ async function main() {
     await win.waitForTimeout(400)
     const w2 = await groupWidth()
     assert.ok(w0 < w2 - 20 && w1 <= w2, `right group must tween open: ${w0} → ${w1} → ${w2}`)
+    const workbenchWidth = await win.locator('.wb-dockview').evaluate((el) => el.getBoundingClientRect().width)
+    const regularRightWidth = Math.round(Math.min(300, Math.max(240, workbenchWidth * 0.191)))
+    const expectedTempWidth = Math.max(regularRightWidth, Math.min(Math.max(220, Math.min(680, Math.round(workbenchWidth * 0.6))), Math.round(regularRightWidth * 1.2)))
+    assert.ok(Math.abs(w2 - expectedTempWidth) < 3, `new temporary View should open 20% wider than the regular panel default: ${w2} vs ${expectedTempWidth}`)
     // Side tab groups are icon-only, so the extension must name and close itself (the mobile drawer bar and bottom tabs already do).
     assert.equal((await win.locator('.wb-extend-head .wb-extend-title').innerText()).trim(), '新增模型')
     assert.equal(await win.locator('[data-hook="tab-body"] [data-hook="form-actions"]').count(), 0)

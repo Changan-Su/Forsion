@@ -10,6 +10,9 @@ import { ProjectSelector } from '../components/ProjectSelector'
 import { WorkspaceFilePreview } from '../components/WorkspaceFilePreview'
 import { targetFor } from '../components/InlineFiles'
 import { openWsFile } from './wsFileNav'
+import { openNewChat } from '../sessionNav'
+import { postMuseFeedback, saveAgentScheduleEntry } from '../services/backendService'
+import { runTaskCard } from './chat2/taskLanding'
 import { resolveDeskPath } from '../stores/deskPlan'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage } from './chat2/EditorialMessage'
@@ -467,6 +470,8 @@ export function ChatView({ leaf, params }: ViewProps) {
                       onInquiry: (iid, ans) => s.answerInquiry(m.id, iid, ans, activeId),
                       // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
                       onSuggest: (text) => void s.send(text, [], undefined, undefined, undefined, activeId),
+                      onTask: (card, landing) => runTaskCard(card, landing, activeId),
+
                       ...(ttsEnabled ? { onSpeak: (text) => speak(m.id, text) } : {}),
                     }}
                   />
@@ -709,3 +714,6 @@ export function ChatView({ leaf, params }: ViewProps) {
     </div>
   )
 }
+
+/** 本地时刻 → 日程锚点串 `YYYY-MM-DDTHH:mm`(与 agentSchedule 的 calendarDate 编码同款;绝不走 toISOString=UTC)。 */
+

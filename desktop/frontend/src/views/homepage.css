@@ -32,8 +32,8 @@
    * 薄面用于输入区/坞,厚面用于抽屉;色值继续只取 Genesis 的背景轴。 */
   --hp-glass-tint: color-mix(in srgb, var(--bg-card) 46%, transparent);
   --hp-glass-thick-tint: color-mix(in srgb, var(--bg-card) 58%, transparent);
-  --hp-glass-sheen: linear-gradient(145deg, color-mix(in srgb, var(--bg-card) 20%, transparent), transparent 48%, color-mix(in srgb, var(--accent-ink) 4%, transparent));
-  --hp-glass-filter: blur(40px) saturate(160%);
+  --hp-glass-sheen: var(--gl-sheen, linear-gradient(145deg, color-mix(in srgb, var(--bg-card) 20%, transparent), transparent 48%, color-mix(in srgb, var(--accent-ink) 4%, transparent)));
+  --hp-glass-filter: var(--gl-blur-float, blur(40px) saturate(160%));
 }
 
 /* 壁纸是主页自己的真实底层,玻璃叶子才能在它上面取样。没有图片时也保留一张
@@ -302,8 +302,25 @@
   background: var(--overlay-light, color-mix(in srgb, var(--bg-card) 72%, transparent));
 }
 
-/* 图片壁纸和主题生成舞台都支持玻璃。取样和材质落在绘制叶子,不放到定位外壳。 */
-.hp-root .hp-composer .t2c-card,
+/* 图片壁纸和主题生成舞台都支持玻璃。输入卡材质画在无子节点的伪元素上，避免输入卡自身成为
+ * backdrop root 后切断模型 / 模式 / 添加菜单及其二级浮面的页面采样。 */
+.hp-root .hp-composer .t2c-card {
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  isolation: isolate;
+}
+.hp-root .hp-composer .t2c-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: var(--hp-glass-sheen), var(--hp-glass-tint);
+  backdrop-filter: var(--hp-glass-filter);
+  -webkit-backdrop-filter: var(--hp-glass-filter);
+}
 .hp-root .hp-spaces {
   border-color: transparent;
   background: var(--hp-glass-sheen), var(--hp-glass-tint);
@@ -311,7 +328,7 @@
   -webkit-backdrop-filter: var(--hp-glass-filter);
 }
 .hp-root .hp-composer .t2c-card.dragover { border-color: var(--accent-ink); }
-html[data-glass='off'] .hp-root .hp-composer .t2c-card,
+html[data-glass='off'] .hp-root .hp-composer .t2c-card::before,
 html[data-glass='off'] .hp-root .hp-spaces,
 html[data-glass='off'] .hp-root .hp-organizer-panel::before,
 html[data-glass='off'] .hp-root .hp-folder-panel::before,

@@ -112,6 +112,37 @@ export async function runMigration(): Promise<void> {
   `));
   await query(`CREATE INDEX IF NOT EXISTS idx_muse_todos_user ON muse_todos(user_id, status)`);
 
+  // 无人值守 run 的**异步审批**清单(2026-09-10,Muse 权限档 ask/agent):越界写 / 跑命令不再卡死 run,
+  // 而是落这里 → 用户(或代批 agent)裁决 → 引擎按**原参数**直接执行(services/pendingApprovals.ts)。
+  // 本地特性,云端建空表零写入(同 muse_todos 纪律)。args=工具参数 JSON 原文;cwd=当时的工作目录(相对路径同解)。
+  await query(ddl(`
+    CREATE TABLE IF NOT EXISTS pending_approvals (
+      id VARCHAR(36) PRIMARY KEY,
+      user_id VARCHAR(36) NOT NULL,
+      session_id VARCHAR(36) NOT NULL,
+      run_id VARCHAR(36),
+      agent_slug VARCHAR(64),
+      tool VARCHAR(64) NOT NULL,
+      args TEXT,
+      preview TEXT,
+      reason TEXT,
+      cwd TEXT,
+      status VARCHAR(16) NOT NULL DEFAULT 'pending',
+      decided_by VARCHAR(16),
+      note TEXT,
+      result TEXT,
+      dedupe_key VARCHAR(64),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      decided_at TIMESTAMP
+    )
+  `));
+  await query(`CREATE INDEX IF NOT EXISTS idx_pending_approvals_user ON pending_approvals(user_id, status, created_at)`);
+  // 同 (用户, 工具+cwd+参数) 只允许一条 pending:并发排队撞索引 → 读端改用赢家的行(部分索引语法 SQLite/PG 同形)。
+  await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_approvals_dedupe
+    ON pending_approvals(user_id, dedupe_key) WHERE status = 'pending' AND dedupe_key IS NOT NULL`);
+
+
+
   // Special Agent（Historian/Muse）人类可读活动流（驱动工作视图）。
   await query(ddl(`
     CREATE TABLE IF NOT EXISTS special_agent_log (

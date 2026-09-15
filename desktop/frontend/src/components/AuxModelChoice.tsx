@@ -10,10 +10,19 @@
 import { useEffect, useState } from 'react'
 import { Eye, Sparkles } from 'lucide-react'
 import { ModelSelect } from './ModelSelect'
+import { SettingsRow } from './SettingsPrimitives'
 import { registerMessages, useI18n } from '../i18n'
 import type { ModelsResponse, VisionMode } from '../types'
 
 registerMessages({
+  'aux.backgroundCompact': { zh: '后台任务', en: 'Background tasks' },
+  'aux.backgroundCompactHint': { zh: '用于后台智能体、摘要与整理。', en: 'For background agents, summaries and organization.' },
+  'aux.visionCompact': { zh: '图像识别', en: 'Image recognition' },
+  'aux.visionCompactHint': { zh: '主模型无法看图时，辅助理解图片。', en: 'Helps interpret images when the main model cannot.' },
+  'aux.visionBehavior': { zh: '图像处理方式', en: 'Image handling' },
+  'aux.visionCompact.auto': { zh: '按需使用', en: 'When needed' },
+  'aux.visionCompact.always': { zh: '始终使用', en: 'Always' },
+  'aux.visionCompact.off': { zh: '直接交给主模型', en: 'Send to main model' },
   'aux.visionModeLabel': { zh: '何时使用图像识别', en: 'When to use image recognition' },
   'aux.visionMode.auto': { zh: '自动 — 主模型看不了图时才用', en: 'Auto — only when the main model has no vision' },
   'aux.visionMode.always': { zh: '总是 — 所有图都先转成文字', en: 'Always — transcribe every image first' },
@@ -24,7 +33,7 @@ registerMessages({
   },
 })
 
-export function AuxModelChoice({ models }: { models: ModelsResponse | null }) {
+export function AuxModelChoice({ models, compact = false }: { models: ModelsResponse | null; compact?: boolean }) {
   const { t } = useI18n()
   const [background, setBackground] = useState('')
   const [vision, setVision] = useState('')
@@ -46,6 +55,22 @@ export function AuxModelChoice({ models }: { models: ModelsResponse | null }) {
   const visionCapable = llms.filter((m) => m.supportsVision !== false)
 
   const modes: VisionMode[] = ['auto', 'always', 'off']
+
+  if (compact) return <>
+    <SettingsRow label={t('aux.backgroundCompact')} description={t('aux.backgroundCompactHint')} control={
+      <ModelSelect models={llms} value={background} cloudDefaultId={models?.backgroundModelId} icon={<Sparkles size={13} />} ariaLabel={t('aux.backgroundCompact')}
+        onChange={(id) => { setBackground(id); void window.tangu?.setConfig?.({ backgroundModelId: id }) }} />
+    } />
+    <SettingsRow label={t('aux.visionCompact')} description={t('aux.visionCompactHint')} control={
+      <ModelSelect models={visionCapable} value={vision} cloudDefaultId={models?.visionModelId} icon={<Eye size={13} />} disabled={visionMode === 'off'} ariaLabel={t('aux.visionCompact')}
+        onChange={(id) => { setVision(id); void window.tangu?.setConfig?.({ visionModelId: id }) }} />
+    } />
+    <SettingsRow label={t('aux.visionBehavior')} description={t(`aux.visionMode.${visionMode}`)} control={
+      <select aria-label={t('aux.visionBehavior')} value={visionMode} onChange={(e) => { const mode = e.target.value as VisionMode; setVisionMode(mode); void window.tangu?.setConfig?.({ visionMode: mode }) }}>
+        {modes.map((mode) => <option key={mode} value={mode}>{t(`aux.visionCompact.${mode}`)}</option>)}
+      </select>
+    } />
+  </>
 
   return (
     <>

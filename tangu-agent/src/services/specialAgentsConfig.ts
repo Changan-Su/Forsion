@@ -58,8 +58,23 @@ export interface MuseConfig {
   supervisorPollMinutes: number;
   /** 运行时段（基于设备本地时，0-23 时；null=全天）。end 可小于 start 表示跨夜。 */
   activeHours: { start: number; end: number } | null;
-  /** Muse 可读的授权本地文件夹（绝对路径；空=不读本地文件）。 */
+  /** Muse 可读的授权本地文件夹（绝对路径；空=不读本地文件）。'auto' 档下并入可写根(extraRoots)。 */
   allowedFolders: string[];
+  /**
+   * 权限档(2026-09-10 与普通 agent 的审批档对齐;三档都能在自己的 Library + agent 目录里自由工作):
+   *   ask   = 越界写 / 跑命令 → 排进待批清单(pending_approvals),用户在 MuseView 批准后由引擎按原参数执行;
+   *   agent = 同上,但先让默认 agent 代用户裁决一次(一次机会),否决才排给用户;
+   *   auto  = 完全放开(full-auto;allowedFolders 并入可写根)。
+   * 任何档下插件安装 / 通道外发都不在 Muse 手里(前者恒走用户确认,后者 Muse 无 inbox_send)。
+   */
+  mode: 'ask' | 'agent' | 'auto';
+  /** 心跳间隔(小时;0=只在日程到期 / 规则命中时醒来)。到点即起一个周期,哪怕没有新用户活动(安静周期也记日志)。 */
+  /** 心跳间隔(分钟;0=只按日程/规则醒来)。2026-09-11 由小时改分钟:旧配置的 heartbeatHours 读入时 ×60 归一,不再写回。 */
+  heartbeatMinutes: number;
+  /** 通知策略:immediate=每条产出即时进收件箱;digest=攒进当日 Journal,只发日报(urgent 例外)。 */
+  notify: 'immediate' | 'digest';
+  /** 难活升级给哪个 agent(slug;空=由 developer_instructions 自行决定/不升级)。经 delegate 按该 agent 的模型跑。 */
+  escalateTo: string;
 }
 // 注:旧字段 compactAtRatio(声明后从未被读)与 prompt(人格已迁入 ~/.tangu/agents/muse/ 文件夹,
 // 见 legacyMusePrompt 的一次性迁移)已移除;旧 config.json 里的残留键被 normalize 静默丢弃。
@@ -76,11 +91,12 @@ export const DEFAULT_HISTORIAN_PROMPT =
   'Always judge based on the actual content; when in doubt, leave it out — never fabricate, never restate the obvious.';
 
 export const DEFAULT_MUSE_PROMPT =
-  'You are Muse, an agent that keeps thinking in the background and proactively spots opportunities for the user. ' +
-  'Each cycle you receive fresh context in the kickoff message: the user\'s long-term memory, recent activity across their agents, recent conversation topics, and authorized local folders — and you can read more with your tools. ' +
-  'You have exactly two write permissions: add_muse_todo, your only output to the user — submit genuinely high-value, actionable todos, sparingly; ' +
-  'and remember, your private long-term memory — record durable insights about what the user values, accepts, or dismisses, so future cycles propose better and repeat less. ' +
-  'Everything else is read-only. Keep thinking: what can I do for the user right now?';
+  'You are Muse, the user\'s background agent: you keep watching their work and proactively improve their experience. ' +
+  'Each cycle you receive fresh context in the kickoff message: the user\'s long-term memory, recent activity across their agents, recent conversation topics, your own schedule that came due, and authorized local folders — and you can read more with your tools. ' +
+  'You may act, within your permission tier: work freely inside your own Library (notes, drafts, your daily journal) and your own Space (a Forsion plugin you build and improve; its path arrives each cycle), propose todos with add_muse_todo, message the user only for things worth their attention, ' +
+  'schedule your own follow-ups with manage_schedule, delegate hard work to a stronger agent, and record durable insights with remember. ' +
+  'Actions outside your Library (user workspaces, shell commands) may be queued for the user\'s approval — never retry a deferred action in the same cycle; the outcome appears in your log as an [approval] entry. ' +
+  'Prefer preparing quietly over interrupting. Keep thinking: what can I do for the user right now?';
 
 export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
   historian: {
@@ -99,13 +115,19 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     maxRestartsPerWindow: 3,
     tokenBudgetWindowHours: 5,
     maxTokensPerWindow: 100_000,
-    maxIterationsPerCycle: 10,
+    maxIterationsPerCycle: 20,
     maxTodosPerWindow: 5,
     supervisorPollMinutes: 5,
     activeHours: null,
     allowedFolders: [],
+    mode: 'ask',
+    heartbeatMinutes: 120,
+    notify: 'immediate',
+    escalateTo: '',
   },
 };
+
+export const MUSE_MODES = ['ask', 'agent', 'auto'] as const;
 
 const clampInt = (v: any, def: number, min: number, max: number): number => {
   const n = Math.floor(Number(v));
@@ -152,9 +174,18 @@ export function normalizeConfig(raw: any): SpecialAgentsConfig {
       allowedFolders: Array.isArray(m.allowedFolders)
         ? m.allowedFolders.filter((x: any) => typeof x === 'string' && x.trim()).slice(0, 50)
         : d.muse.allowedFolders,
+      // 未知值一律回落 ask(最保守档):旧引擎写的配置 / 手改错字都不会意外放开权限。
+      mode: (MUSE_MODES as readonly string[]).includes(m.mode) ? m.mode : d.muse.mode,
+      heartbeatMinutes: clampInt(
+        m.heartbeatMinutes ?? (typeof m.heartbeatHours === 'number' && Number.isFinite(m.heartbeatHours) ? Math.round(m.heartbeatHours * 60) : undefined),
+        d.muse.heartbeatMinutes, 0, 10080,
+      ),
+      notify: m.notify === 'digest' ? 'digest' : d.muse.notify,
+      escalateTo: asStr(m.escalateTo, d.muse.escalateTo).trim().slice(0, 64),
     },
   };
 }
+
 
 /**
  * 旧版 muse.prompt 自定义值(人格已迁入 agents/muse/ 文件夹)——读**原始**配置(不走 normalize,

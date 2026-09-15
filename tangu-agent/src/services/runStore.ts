@@ -64,8 +64,11 @@ async function emitRunTerminal(id: string, status: string): Promise<void> {
   let input: any = run.input;
   if (typeof input === 'string') { try { input = JSON.parse(input); } catch { input = {}; } }
   const cfg = (input && typeof input === 'object' ? input.agentConfig : null) || {};
-  if (cfg.muse) return;
+  // Muse 自己的周期不写 run.done 活动行(否则它盯 run.done 的规则会被自己唤醒),但**要**叫醒 supervisor:
+  // 周期末的 Journal 行与待批执行后的续跑都靠这一下(2026-09-10 前这里直接 return,Muse 收尾无人知晓)。
+  if (cfg.muse) { runTerminalListener?.(); return; }
   const { appendActivityLine } = await import('./userActivity.js');
+
   await appendActivityLine('run.done', {
     agent: typeof cfg.agentSlug === 'string' ? cfg.agentSlug : undefined,
     s: String(run.session_id || '').slice(0, 6),

@@ -338,16 +338,16 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       listBroadcasts: async (since?: string) => {
         const r = await getJson<{ broadcasts: Array<{
           id: string; title: string; body: string | null; created_at: string;
-          attachments?: string | null; expires_at?: string | null; claimed?: boolean;
+          attachments?: string | null; expires_at?: string | null; claimed?: boolean; claim_requirements?: string | null;
         }> }>(
           `/api/brain/inbox/broadcasts${since ? `?since=${encodeURIComponent(since)}` : ''}`,
         );
         return r?.broadcasts ?? [];
       },
       // 领取附件:postJson 失败抛 LlmError(status, detail),claim 路由按 status 透传(410=过期等)。
-      claimBroadcast: (broadcastId: string) =>
+      claimBroadcast: (broadcastId: string, client?: string) =>
         postJson<{ claimed: boolean; alreadyClaimed?: boolean }>(
-          `/api/brain/inbox/broadcasts/${encodeURIComponent(broadcastId)}/claim`, {},
+          `/api/brain/inbox/broadcasts/${encodeURIComponent(broadcastId)}/claim`, client ? { client } : {},
         ),
     },
     storage: {

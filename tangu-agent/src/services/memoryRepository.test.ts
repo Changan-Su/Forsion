@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileS
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-const fault = vi.hoisted(() => ({ read: '', rename: '', remaining: 0 }));
+const fault = vi.hoisted(() => ({ read: '', rename: '', remaining: 0, hostPlatform: process.platform }));
 vi.mock('node:fs', async (original) => {
   const fs = await original<typeof import('node:fs')>();
   return {
@@ -19,6 +19,12 @@ vi.mock('node:fs', async (original) => {
         fault.remaining--; throw Object.assign(new Error('synthetic disk write failure'), { code: 'EIO' });
       }
       return fs.renameSync(...args);
+    },
+    // Emulates Windows (FlushFileBuffers on a directory handle → EPERM) when a test stubs
+    // process.platform on a POSIX host; on a real Windows host the real call runs.
+    fsyncSync: (fd: number) => {
+      if (process.platform === 'win32' && fault.hostPlatform !== 'win32' && fs.fstatSync(fd).isDirectory()) throw Object.assign(new Error('EPERM: operation not permitted, fsync'), { code: 'EPERM' });
+      return fs.fsyncSync(fd);
     },
   };
 });
@@ -225,6 +231,24 @@ describe('per-agent durable memory repository', () => {
     fault.rename = '.memory-state.json'; fault.remaining = 1;
     expect(() => repo.add('lost write')).toThrow('synthetic disk write failure');
     expect(repo.snapshot()).toEqual(old);
+  });
+
+  it('upgrades and commits on Windows, where a directory handle cannot be fsynced', () => {
+    const platform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    Object.defineProperty(process, 'platform', { value: 'win32' });
+    try {
+      writeFileSync(join(dir, 'MEMORY.md'), 'legacy fact\n');
+      const repo = createMemoryRepository(dir);
+      // The on-disk state 2.10.0–2.10.2 left on Windows: metadata committed, projection still pending.
+      fault.rename = 'MEMORY.md'; fault.remaining = 1;
+      expect(() => repo.snapshot()).toThrow('synthetic disk write failure');
+      expect(JSON.parse(readFileSync(join(dir, '.memory-state.json'), 'utf8')).projectionPending).toBe(true);
+      const migrated = repo.snapshot();
+      expect(migrated.content).toBe('legacy fact\n');
+      repo.add('new fact', { expectedVersion: migrated.version });
+      expect(readFileSync(join(dir, 'MEMORY.md'), 'utf8')).toBe('legacy fact\nnew fact');
+      expect(JSON.parse(readFileSync(join(dir, '.memory-state.json'), 'utf8')).projectionPending).toBe(false);
+    } finally { Object.defineProperty(process, 'platform', platform); }
   });
 
   it('rejects symlinked Agent directories and memory files', () => {

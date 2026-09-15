@@ -19,6 +19,8 @@ export interface DbColumn {
   type: string
   /** select 与 multiselect 共用的选项池(标签字符串,顺序即菜单顺序);互切类型零迁移。 */
   options?: string[]
+  /** 可选的显示名映射；基元仍存稳定选项值，插件表格用于本地化与组名。 */
+  optionLabels?: Record<string, string>
   /** 列宽 px,拖拽落盘;缺=弹性列。 */
   width?: number
   /** type='formula':表达式源码(语法见 db/formula.ts);单元格值为计算结果,不落盘。 */
@@ -81,11 +83,17 @@ export interface DbView {
   id: string
   name: string
   type: string
-  /** kanban:分组列 id(select);chart:分组列 id(任意列);table:分组列 id(单选列 或 日期列)。缺 = 渲染端自动挑。 */
+  /** kanban:分组列 id(select);chart:分组列 id(任意列);table:属性分组列 id(类型见 db/groupRows.ts)。
+   *  table 缺 = 不分组；其他视图缺 = 渲染端自动挑。 */
   groupBy?: string
   /** table 分组按**日期列**时的键档位:'day' = 落盘串前 10 位 `YYYY-MM-DD`,'month' = 前 7 位 `YYYY-MM`;
-   *  缺 = day。单选列分组忽略本字段(纯逻辑 db/groupDate.ts)。 */
+   *  缺 = day。非日期属性忽略本字段(纯逻辑 db/groupDate.ts)。 */
   groupUnit?: 'day' | 'month'
+  /** Group 视图配置；顺序/隐藏项使用 groupRows.groupValueKey 的无冲突键。 */
+  groupSort?: 'manual' | 'asc' | 'desc'
+  groupOrder?: string[]
+  groupHidden?: string[]
+  groupHideEmpty?: boolean
   /** table 层级树(2.9):自指关联列 id(type='rowlink' 且 refDb 指向本表,cell = 父行 id)。
    *  存在 = 表格体按父子缩进渲染;**孤儿(父行被筛掉/已删)当根**,树照常;环 / 超深 / 重复行 id 才整表退回平铺
    *  (纯逻辑 db/tree.ts buildTree —— 判据与理由以那份文件头为准,别在这儿各写一份)。
@@ -116,6 +124,9 @@ export interface DbView {
   /** 本视图独立列宽(colId → px;缺 = 跟全局 column.width)。**存在即整体替代**全局宽:视图里没条目的列一律弹性,
    *  不回落 column.width(否则独立视图里双击复位又把全局宽请回来)。`{}` 是合法的「开了但没拖过」态,不是空值。 */
   widths?: Record<string, number>
+  /** 表格视图自适应列宽。缺/true = 默认开启，按表头与主内容估宽；false = 使用 widths / column.width 手动布局。
+   *  关闭时渲染端会把当前自适应宽写入本视图 widths，避免切换瞬间跳回旧的等分布局。 */
+  autoSize?: boolean
   /** 表格视图页脚统计:colId → 统计方式(count/sum/avg/min/max/checked/unchecked)。 */
   stats?: Record<string, string>
   /** form(表单视图,type='form'):字段集 = columns 序 − hidden − 计算列 − 盖章列(渲染端算,不落盘);
@@ -184,6 +195,7 @@ const dbColumnSchema = z.object({
   // 值本身仍由 cellValueSchema 严格校验,未知类型只会渲染回退为文本,不丢数据。
   type: z.string().min(1),
   options: z.array(z.string()).optional(),
+  optionLabels: z.record(z.string(), z.string()).optional(),
   width: z.number().positive().optional(),
   formula: z.string().optional(),
   refDb: z.string().optional(),
@@ -216,6 +228,10 @@ const dbViewSchema = z.object({
   groupBy: z.string().optional(),
   // 表格日期分组档位 / 表格层级树列(接口 DbView.groupUnit / treeCol;strip 陷阱同上,漏这里 = 菜单一选保存即丢)
   groupUnit: z.enum(['day', 'month']).optional(),
+  groupSort: z.enum(['manual', 'asc', 'desc']).optional(),
+  groupOrder: z.array(z.string()).optional(),
+  groupHidden: z.array(z.string()).optional(),
+  groupHideEmpty: z.boolean().optional(),
   treeCol: z.string().optional(),
   chartKind: z.string().optional(),
   agg: z.string().optional(),
@@ -226,9 +242,10 @@ const dbViewSchema = z.object({
   sort: z.object({ colId: z.string().min(1), dir: z.enum(['asc', 'desc']) }).optional(),
   sorts: z.array(z.object({ colId: z.string().min(1), dir: z.enum(['asc', 'desc']) })).optional(),
   hidden: z.array(z.string()).optional(),
-  // 每视图列序 / 列宽(接口 DbView.order / widths;strip 陷阱同上,漏这里 = 开关一开保存即丢)
+  // 每视图列序 / 列宽 / 自适应模式(接口 DbView.order / widths / autoSize;strip 陷阱同上,漏这里 = 开关一开保存即丢)
   order: z.array(z.string()).optional(),
   widths: z.record(z.string(), z.number().positive()).optional(),
+  autoSize: z.boolean().optional(),
   stats: z.record(z.string(), z.string()).optional(),
   // 表单视图嵌套配置:接口 DbViewForm 加字段必须同步到这里(strip 陷阱同上)。
   form: z.object({

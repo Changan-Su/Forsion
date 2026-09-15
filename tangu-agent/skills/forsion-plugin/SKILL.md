@@ -1,7 +1,7 @@
 ---
 name: Forsion 扩展开发
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架市场的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
-version: 1.14.0
+version: 1.16.0
 author: Forsion
 category: Forsion
 ---
@@ -119,6 +119,16 @@ Computer Use 占用外部应用前台时，宿主可临时打开 Tangu Mini 观�
 3. **都不行**(没 delegate / 云端库 / 第 2 档失败)→ 让用户从命令面板打开工作台自己操作。
 
 需要桌面主进程能力时(语音转写、系统面)引擎侧已有 MCP 桥工具,如 `transcribe_audio(path, timestamps?)` —— 它在没开桌面/云端 worker 上自动隐身。**调用方明确说了「我自己接力转写」时,即使工具可见也不要调**。子 agent 继承**父会话**的审批档位,不是它 config 里的 `approval_mode`。
+## Agent 自建 Space(2026-09-11 起;Muse 首例)
+
+一个 agent 自己的 Space = 它目录下的一个桌面插件:`<tangu>/agents/<slug>/Space/{manifest.json, main.js}`,与普通桌面插件**同一份契约**(manifest + 裸 `setup(ctx)` 体,`registerView` / `registerCommand` / `registerStatusItem` / `registerSetting` / `notify` / `loadData` 都能用),但有五条不同:
+
+1. **id 固定 `agent-<slug>`**,manifest 里的 `id` 被无视 —— 写别家的 id 也顶不掉真插件;
+2. **主槽 = `registerView({ id: 'home', … })`**:桌面该 agent 的 Space 主区渲染这一个视图,其它视图照常 `ctx.openView` 开标签页;
+3. `capabilities` / `fileExtensions` / `requiresApp` / `onboarding` / `events` 一律不生效(没有「用户点安装」这步授权),bundle 子目录(引擎插件/技能/agents/spaces)也**不生效**(引擎只认一个 bundle 根);
+4. 纯 JS、无构建、无 CDN(CSP `default-src 'self'`);想用库就内联进 main.js;
+5. **不监听文件**:桌面按引擎在你周期收尾时打的内容戳重载,所以一个周期里改完再收尾即可;加载失败(setup 抛错 / manifest 缺失或坏)会以 `[feedback]` 行回到你的日志,下个周期修。
+
 ## 桌面插件:贡献点全表(动手前先看这张表)
 
 `ctx` 上的注册口就这些 —— **内置与外置拿到的是同一份**(`pluginStore.makeContext`,能力对等原则)。
@@ -415,6 +425,8 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
   (try/catch 照不到),列表就此定格为空。宿主挂载列表面 / 切库都会重订阅,这是重读的门。
   (青鸟 2026-08-28 实报「明明有记录却是空」,根因即此。)
 - 行首图标 `iconUrl`(favicon 等)与 `icon`(词表键)**两个都给**:老宿主 / 取不到图时退 `icon`。
+- 行可带 `unread: true`(2026-09-11 起):宿主在行首图标角上画与未读会话同一个点;老宿主忽略。
+  宿主自己的收件箱就是这么接进统一左栏的(`plugin:inbox:messages`,分组 = 未读 / 发信人 / 已归档),可当参考实现。
 - `drop` 不声明就完全没有拖放;声明了也是宿主判形点亮、插件决定接不接。
 - 细节与全部字段语义见正典文档同名小节 + `amadeus/plugins/types.ts` 的 `ListSourceContribution`。
 

@@ -198,9 +198,10 @@ export interface SpaceDefinition {
    *  只有确实需要更宽起手的 Space 才设(如 Coding 对话栏 1.2)。用户拖过之后一律以记住的宽度为准。 */
   sideDefaultScale?: { left?: number; right?: number }
   /** 「工作区」视图处于 auto 档时,主视图**没有硬规则**则左栏落这个;**缺省 'sessions' = 与其他 Space 一致**。
-   *  只有主区内容天然对应某个侧栏档的 Space 才设(如 Amadeus → 'notes')。
+   *  只有主区内容天然对应某个侧栏档的 Space 才设(如 Amadeus → 'notes';Inbox → 收件箱列表源 'plugin:inbox:messages',
+   *  2026-09-11 —— 列表源不在场时宿主退回缺省档)。
    *  右栏不受此影响(恒为 'files' = 参考/附件栏)。硬规则见 frontend/src/views/workspaceMode.ts。 */
-  autoWorkspaceMode?: 'sessions' | 'files' | 'notes'
+  autoWorkspaceMode?: 'sessions' | 'files' | 'notes' | `plugin:${string}`
 }
 
 /** 插件契约 —— Amadeus PluginContext 的超集(加了 registerView / registerRibbonIcon)。 */

@@ -8,6 +8,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Check, ChevronDown, Search } from 'lucide-react'
 import { zoomOf } from '@lcl/engine'
+import { ModelMetadata } from './ModelMetadata'
+import { useModelPickerPreferences } from '../modelPickerPreferences'
 import { groupModelsByProvider } from './ModelGroupList'
 import { registerMessages, useI18n } from '../i18n'
 import { isCoarsePointer } from '../touch'
@@ -23,7 +25,7 @@ const SEARCH_THRESHOLD = 12
 /** 菜单最大高度 + 间距,与 .composer-menu 的 max-height:320 对齐(翻转判定用)。 */
 const MENU_MAX = 330
 
-export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, disabled }: {
+export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, disabled, defaultLabel, ariaLabel }: {
   models: ModelInfo[]
   /** 空串 = 未选择(跟随云端默认槽)。 */
   value: string
@@ -32,8 +34,11 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
   /** admin 的 app 级默认槽 id;有值时空选显示成「跟随云端默认(某模型)」。 */
   cloudDefaultId?: string | null
   disabled?: boolean
+  defaultLabel?: string
+  ariaLabel?: string
 }) {
   const { t } = useI18n()
+  const prefs = useModelPickerPreferences()
   const [open, setOpen] = useState(false)
   const [up, setUp] = useState(false)
   const [query, setQuery] = useState('')
@@ -60,18 +65,18 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
   }, [open])
 
   const nameOf = (id: string): string => models.find((m) => m.id === id)?.name || id
-  const followLabel = cloudDefaultId ? `${t('msel.follow')} · ${nameOf(cloudDefaultId)}` : t('msel.none')
+  const followLabel = cloudDefaultId ? `${defaultLabel || t('msel.follow')} · ${nameOf(cloudDefaultId)}` : defaultLabel || t('msel.none')
   const label = value ? nameOf(value) : followLabel
 
   const q = query.trim().toLowerCase()
   const groups = groupModelsByProvider(
-    q ? models.filter((m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)) : models,
+    q ? models.filter((m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)) : models, prefs,
   )
   const pick = (id: string): void => { onChange(id); setOpen(false) }
 
   return (
     <div ref={wrapRef} className="model-select" data-cmenu>
-      <button className={`model-select-btn${open ? ' is-open' : ''}`} disabled={disabled} onClick={() => setOpen((o) => !o)}>
+      <button className={`model-select-btn${open ? ' is-open' : ''}`} aria-label={ariaLabel} aria-expanded={open} disabled={disabled} onClick={() => setOpen((o) => !o)}>
         {icon}
         <span className="grow">{label}</span>
         <ChevronDown size={12} />
@@ -79,7 +84,7 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
       {open && (
         <div className={`composer-menu ${up ? 'composer-menu--up' : 'composer-menu--down'}`}>
           {models.length >= SEARCH_THRESHOLD && (
-            <span className="model-search">
+            <span className="model-picker-search">
               <Search size={12} />
               {/* 触屏不自动聚焦:软键盘会把浮层挤走,点条目那一下就落空(见 ../touch.ts)。 */}
               <input autoFocus={!isCoarsePointer()} value={query} placeholder={t('model.searchPlaceholder')} onChange={(e) => setQuery(e.target.value)} />
@@ -90,13 +95,14 @@ export function ModelSelect({ models, value, onChange, icon, cloudDefaultId, dis
             <span className="grow">{followLabel}</span>
             <span className="mi-check">{value ? '' : <Check size={12} />}</span>
           </button>
-          {groups.map((g) => (
-            <div key={g.provider}>
-              <div className="menu-section">{g.provider}</div>
+          {groups.map((g, index) => (
+            <div key={g.key}>
+              {groups[index - 1]?.source !== g.source && <div className="menu-source">{t(g.source === 'forsion' ? 'model.group.forsion' : 'model.group.direct')}</div>}
+              {g.provider && <div className="menu-section">{g.provider}</div>}
               {g.models.map((m) => (
                 <button key={`${m.source}-${m.id}`} className={`menu-item${m.id === value ? ' active' : ''}`} onClick={() => pick(m.id)}>
                   <span className="grow">{m.name}</span>
-                  {m.source === 'direct' && <span className="model-group-tag">{t('model.group.direct')}</span>}
+                  <ModelMetadata model={m} />
                   <span className="mi-check">{m.id === value ? <Check size={12} /> : ''}</span>
                 </button>
               ))}

@@ -257,7 +257,8 @@ describe('关联表多值 / 反向引用 / 盖章', () => {
   it('关联列筛选:kind 折算成 multiselect,has=目标行 id;筛选值控件列出目标行标题(不是空下拉)', async () => {
     await mount(ordersDb([{ id: 'v', name: '表', type: 'table', filters: [{ colId: 'rel', op: 'has', value: 'p3' }] }]))
     expect(firstCol()).toEqual(['甲'])
-    await act(async () => { host().querySelector<HTMLElement>('.amx-db-filterbtn')!.click() })
+    // Group / filter / auto-size share the toolbar button style; target the filter action itself.
+    await act(async () => { host().querySelector<HTMLElement>('.amx-db-filterbtn[title="筛选(本视图)"]')!.click() })
     const sels = [...host().querySelectorAll<HTMLSelectElement>('.amx-db-pop .amx-db-fltrow .amx-db-fltsel')]
     expect(sels).toHaveLength(3) // 列 / op / 值
     expect([...sels[1].options].map((o) => o.value)).toEqual(['has', 'nothas', 'empty', 'notempty']) // multiselect 口径

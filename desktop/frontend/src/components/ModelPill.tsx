@@ -1,3 +1,5 @@
+import { groupPickerModels, useModelPickerPreferences } from '../modelPickerPreferences'
+import { ModelMetadata } from './ModelMetadata'
 /**
  * Chat View 模型 / Effort 控制器。
  *
@@ -6,7 +8,7 @@
  * 在后续会话继续继承。外部 ACP 引擎没有 Tangu 推理档与辅助模型时，保留单独的模型选择行。
  */
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, Bot } from 'lucide-react'
+import { ChevronDown, ChevronRight, Bot, Search } from 'lucide-react'
 import { nestedPanelPlacement, UI_ZOOM_EVENT, zoomOf, useEdgeNudge } from '@lcl/engine'
 import type { NestedPanelPlacement } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
@@ -27,8 +29,8 @@ registerMessages({
   'pill.smarter': { zh: '更智能', en: 'Smarter' },
 })
 
-export interface ModelPillOption { id: string; name: string; description?: string }
-export interface ModelPillGroup { label: string; options: ModelPillOption[] }
+export interface ModelPillOption extends Pick<ModelInfo, 'id' | 'name' | 'tags' | 'multiplier'> { description?: string; source?: ModelInfo['source'] }
+export interface ModelPillGroup { key?: string; label: string; source?: ModelInfo['source']; options: ModelPillOption[] }
 type Thinking = NonNullable<AgentConfig['thinkingLevel']>
 type Pane = 'model' | DefaultModelSlot
 
@@ -92,6 +94,8 @@ export const ModelPill: React.FC<{
   modelsResponse, defaultModelIds, onDefaultModelChange, emptyLabel, footnote, title,
 }) => {
   const { t } = useI18n()
+  const pickerPrefs = useModelPickerPreferences()
+  const [query, setQuery] = useState('')
   const [internalOpen, setInternalOpen] = useState(false)
   const open = controlledOpen ?? internalOpen
   const setPillOpen = (next: boolean): void => {
@@ -108,7 +112,7 @@ export const ModelPill: React.FC<{
   const subFix = useEdgeNudge(pane ? `${pane}:${placement}` : '', { boundary: '.t2-chat-view' })
 
   useEffect(() => {
-    if (!open) { setPane(null); setAdvanced(false); return }
+    if (!open) { setPane(null); setAdvanced(false); setQuery(''); return }
     const onDown = (e: MouseEvent) => { if (!wrapRef.current?.contains(e.target as Node)) setPillOpen(false) }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPillOpen(false) }
     document.addEventListener('mousedown', onDown)
@@ -145,7 +149,7 @@ export const ModelPill: React.FC<{
 
   const all = groups.flatMap((g) => g.options)
   const hasModels = all.length > 0
-  const current = all.find((m) => m.id === modelId)
+  const current = all.find((m) => m.id === modelId) || modelsResponse?.models.find((m) => m.id === modelId)
   const readonly = !onThinkingChange && !hasModels && !!emptyLabel
   const label = current?.name || emptyLabel || t('input.selectModel')
   const effLevel: Thinking = thinkingLevel || 'medium'
@@ -159,17 +163,9 @@ export const ModelPill: React.FC<{
     : ''
   const isMax = effLevel === 'max'
 
-  const groupCatalog = (models: ModelInfo[]): ModelPillGroup[] => {
-    const map = new Map<string, ModelPillGroup>()
-    for (const m of models) {
-      const key = `${m.source}:${m.provider}`
-      const source = m.source === 'direct' ? t('model.group.direct') : t('model.group.forsion')
-      let g = map.get(key)
-      if (!g) { g = { label: `${m.provider} · ${source}`, options: [] }; map.set(key, g) }
-      g.options.push({ id: m.id, name: m.name, description: `${m.provider} · ${m.id}` })
-    }
-    return [...map.values()]
-  }
+  const groupCatalog = (models: ModelInfo[]): ModelPillGroup[] => groupPickerModels(models, pickerPrefs).map((g) => ({
+    key: g.key, source: g.source, label: g.provider, options: g.models.map((m) => ({ ...m, description: `${m.provider} · ${m.id}` })),
+  }))
 
   const slotModels = (slot: DefaultModelSlot): ModelInfo[] => catalogForDefaultSlot(modelsResponse?.models || [], slot)
   const cloudDefaultFor = (slot: DefaultModelSlot): string | null | undefined => modelsResponse?.[slot]
@@ -189,13 +185,15 @@ export const ModelPill: React.FC<{
     { slot: 'visionModelId', label: t('pill.defaultVisionModel') },
   ]
 
-  const paneGroups = pane === 'model' ? groups : pane ? groupCatalog(slotModels(pane)) : []
+  const rawPaneGroups = pane === 'model' ? groups : pane ? groupCatalog(slotModels(pane)) : []
+  const q = query.trim().toLowerCase()
+  const paneGroups = rawPaneGroups.map((g) => ({ ...g, options: g.options.filter((m) => `${g.label} ${m.name} ${m.id} ${m.tags?.map((tag) => tag.text).join(' ') || ''}`.toLowerCase().includes(q)) })).filter((g) => g.options.length)
   const paneValue = pane === 'model' ? modelId : pane ? (defaultModelIds?.[pane] || '') : ''
   const selectDefault = (slot: DefaultModelSlot, id: string): void => {
     onDefaultModelChange?.(slot, id)
     setPane(null)
   }
-  const showPane = (p: Pane) => (): void => setPane(p)
+  const showPane = (p: Pane) => (): void => { if (pane !== p) setQuery(''); setPane(p) }
 
   if (readonly) {
     return (
@@ -326,6 +324,7 @@ export const ModelPill: React.FC<{
               data-pane={pane}
               style={subFix.style}
             >
+              {rawPaneGroups.reduce((n, g) => n + g.options.length, 0) >= 8 && <label className="model-picker-search"><Search size={12} /><input aria-label={t('model.searchPlaceholder')} placeholder={t('model.searchPlaceholder')} value={query} onChange={(e) => setQuery(e.target.value)} /></label>}
               {pane !== 'model' && (
                 <button
                   className={`menu-item${paneValue ? '' : ' active'}`}
@@ -335,9 +334,10 @@ export const ModelPill: React.FC<{
                   <span className="mi-check">{paneValue ? '' : '✓'}</span>
                 </button>
               )}
-              {paneGroups.map((g) => (
-                <React.Fragment key={g.label}>
-                  <div className="menu-section">{g.label}</div>
+              {paneGroups.map((g, index) => (
+                <React.Fragment key={g.key || g.label}>
+                  {g.source && paneGroups[index - 1]?.source !== g.source && <div className="menu-source">{t(g.source === 'forsion' ? 'model.group.forsion' : 'model.group.direct')}</div>}
+                  {g.label && <div className="menu-section">{g.label}</div>}
                   {g.options.map((m) => (
                     <button
                       key={m.id}
@@ -349,6 +349,7 @@ export const ModelPill: React.FC<{
                       }}
                     >
                       <span className="grow">{m.name}</span>
+                      {m.source && <ModelMetadata model={{ source: m.source, tags: m.tags, multiplier: m.multiplier }} />}
                       <span className="mi-check">{m.id === paneValue ? '✓' : ''}</span>
                     </button>
                   ))}

@@ -13,7 +13,8 @@
 import type { ToolProvider } from '../toolRegistry.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
-import { applyHarnessEdit, loadHarness, MAX_ENTRIES, TITLE_MAX, BODY_MAX, EVIDENCE_MAX } from '../../agents/harnessStore.js';
+import { applyHarnessEdit, loadHarness, appendHarnessCandidates, MAX_ENTRIES, TITLE_MAX, BODY_MAX, EVIDENCE_MAX } from '../../agents/harnessStore.js';
+import { getAgent, isValidSlug } from '../../agents/agentRegistry.js';
 
 export const manageHarnessProvider: ToolProvider = {
   id: 'builtin:manage_harness',
@@ -30,7 +31,8 @@ export const manageHarnessProvider: ToolProvider = {
           name: 'manage_harness',
           description:
             'Curate your own Working Notes — durable lessons about HOW you should work for this user, injected into your system prompt every session (per-agent; this is your self-evolution surface). ' +
-            'Use after reflecting on a conversation (e.g. the /refine flow). action ∈ upsert | delete | list | rollback. ' +
+            'Use after reflecting on a conversation (e.g. the /refine flow). action ∈ upsert | delete | list | rollback | propose. ' +
+            'propose (with agent + candidates) suggests lessons to ANOTHER agent: they land in that agent\'s candidate inbox and are only adopted when it next runs /refine — you never write another agent\'s notes directly. ' +
             'upsert WITHOUT id creates an entry (needs title + body + evidence of what actually happened); upsert WITH id revises it (version bumps, old version stays recoverable). ' +
             'rollback restores an entry to its previous version (this also overwrites hand-edits made since). ' +
             `Keep entries sharp: title ≤${TITLE_MAX} chars, body ≤${BODY_MAX}, evidence ≤${EVIDENCE_MAX}, max ${MAX_ENTRIES} entries — at the cap, merge or delete weaker entries first. ` +
@@ -41,7 +43,9 @@ export const manageHarnessProvider: ToolProvider = {
           parameters: {
             type: 'object',
             properties: {
-              action: { type: 'string', enum: ['upsert', 'delete', 'list', 'rollback'], description: 'The operation' },
+              action: { type: 'string', enum: ['upsert', 'delete', 'list', 'rollback', 'propose'], description: 'The operation' },
+              agent: { type: 'string', description: 'propose: slug of the agent to propose to' },
+              candidates: { type: 'array', items: { type: 'string' }, description: 'propose: 1-3 one-line lessons for that agent (each ≤300 chars)' },
               id: { type: 'string', description: 'Entry id (e.g. "h-x3k9"); required for delete/rollback; upsert with id = revise, without = create' },
               kind: { type: 'string', enum: ['note', 'recipe'], description: 'Entry type (default "note")' },
               title: { type: 'string', description: `Short label (≤${TITLE_MAX} chars; required to create)` },
@@ -58,8 +62,22 @@ export const manageHarnessProvider: ToolProvider = {
         const slug = currentDisplayAgentSlug() || currentAgentSlug() || DEFAULT_AGENT_SLUG;
         const action = String(args.action || '');
         try {
+          if (action === 'propose') {
+            // 只追加对方的候选收件箱(.harness-raw.md),不碰 HARNESS.md:候选是提名非资产,采纳权在对方的 /refine。
+            const target = String(args.agent || '').trim();
+            if (!target || !isValidSlug(target)) return 'Error: propose needs a valid agent slug';
+            if (!(await getAgent(target))) return `Error: agent "${target}" does not exist`;
+            const cands = (Array.isArray(args.candidates) ? args.candidates : [])
+              .map((c: unknown) => String(c ?? '').replace(/\s+/g, ' ').trim().slice(0, 300))
+              .filter(Boolean)
+              .slice(0, 3);
+            if (!cands.length) return 'Error: propose needs 1-3 non-empty candidates';
+            const n = await appendHarnessCandidates(target, ctx.sessionId, cands.map((c: string) => `(proposed by ${slug}) ${c}`));
+            return n ? `Proposed ${n} candidate(s) to "${target}" (adopted only if it accepts them at its next /refine).` : `Nothing new to propose to "${target}" (duplicates of existing candidates).`;
+          }
           if (action === 'list') {
             const entries = await loadHarness(slug);
+
             if (!entries.length) return '(working notes are empty)';
             return entries
               .map((e) => `- [${e.id}] (${e.kind}, v${e.version}, ${e.updatedAt || e.createdAt}) ${e.title} — ${e.body.replace(/\s*\n\s*/g, ' ')}${e.evidence ? ` (evidence: ${e.evidence})` : ''}`)

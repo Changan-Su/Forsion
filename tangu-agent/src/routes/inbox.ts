@@ -6,6 +6,7 @@
  *   POST   /agent/inbox/read-all                                              全部已读
  *   DELETE /agent/inbox/:id                                                   软删
  *   POST   /agent/inbox/pull                                                  手动拉服务端广播
+ *   POST   /agent/inbox/:id/claim { client? }                                  领取广播附件(发放 / 条件裁决全在服务端)
  *   POST   /agent/inbox { title, body? }                                      本地系统消息(桌面壳用:插件引导提醒等)
  *
  * 时间纪律:写入/比较一律 JS 生成的 UTC 'YYYY-MM-DD HH:MM:SS' 串(不用 SQL CURRENT_TIMESTAMP 比较——
@@ -40,12 +41,14 @@ const ts = (v: any): string | null =>
 const COLS = 'id, title, body, sender_kind, sender_id, origin_broadcast_id, read_at, archived_at, attachments, expires_at, created_at';
 
 function serialize(r: any) {
-  // attachments 落库形态 {items:[...], claimed:bool}(inboxPull 包装);脏 JSON 按无附件。
-  let attachments: { items: any[]; claimed: boolean } | null = null;
+  // attachments 落库形态 {items:[...], claimed:bool, requires?}(inboxPull 包装);脏 JSON 按无附件。
+  let attachments: { items: any[]; claimed: boolean; requires?: Record<string, unknown> } | null = null;
   if (r.attachments) {
     try {
       const p = JSON.parse(String(r.attachments));
-      if (Array.isArray(p?.items) && p.items.length) attachments = { items: p.items, claimed: !!p.claimed };
+      if (Array.isArray(p?.items) && p.items.length) {
+        attachments = { items: p.items, claimed: !!p.claimed, ...(p.requires && typeof p.requires === 'object' ? { requires: p.requires } : {}) };
+      }
     } catch { /* 脏行防御 */ }
   }
   return {
@@ -215,8 +218,9 @@ router.delete('/agent/inbox/:id', authMiddleware, async (req: AuthRequest, res) 
   }
 });
 
-// 领取广播附件:发放/资格/过期/幂等全在服务端(brain seam 转发);本地只把 attachments.claimed 翻真。
-// 过期本地先拒一道(410),但真正的闸在服务端(本地钟不可信)。
+// 领取广播附件:发放/资格/过期/领取条件/幂等全在服务端(brain seam 转发);本地只把 attachments.claimed 翻真。
+// 过期本地先拒一道(410),但真正的闸在服务端(本地钟不可信)。body.client(`desktop/2.10.1`)原样转发,
+// 服务端按它判最低版本并做白名单校验——这里只截长度,不另养一份标签正则。
 router.post('/agent/inbox/:id/claim', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
@@ -235,7 +239,8 @@ router.post('/agent/inbox/:id/claim', authMiddleware, async (req: AuthRequest, r
     if (!seam?.claimBroadcast) return res.status(501).json({ detail: '未配置云端连接,无法领取' });
     let r: { claimed: boolean; alreadyClaimed?: boolean };
     try {
-      r = await seam.claimBroadcast(m.origin_broadcast_id);
+      const client = typeof req.body?.client === 'string' ? req.body.client.slice(0, 64) : undefined;
+      r = await seam.claimBroadcast(m.origin_broadcast_id, client);
     } catch (e: any) {
       // httpBrain 抛 LlmError(status, detail);detail 是服务端 JSON 文本({error, detail}),解析透传
       const status = Number(e?.status);

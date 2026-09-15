@@ -21,7 +21,11 @@ const router = Router();
  * 锁死 `<平台>/<版本>` 形态且平台只认自家客户端(cli/tui 预留)——不只挡脏字符,还挡任意串:
  * 认证用户能造高基数标签污染无分页的统计分组(2026-08-03 Codex 评审)。不合法 → undefined。
  */
+// ⚠️ 只列**客户端**家族:引擎自起的后台 run(muse.ts / automation.ts)直接写 input.client=`muse/<ver>`|`automation/<ver>`,
+// 不经本路由;这里若放行它们,任何认证调用者都能把自己的 run 伪装成后台用量(Codex 09-10 P2-11)。
 const CLIENT_TAG_RE = /^(desktop|web|mobile|cli|tui)\/[A-Za-z0-9._-]{1,32}$/;
+
+
 export function normalizeClientTag(v: unknown): string | undefined {
   return typeof v === 'string' && CLIENT_TAG_RE.test(v) ? v : undefined;
 }

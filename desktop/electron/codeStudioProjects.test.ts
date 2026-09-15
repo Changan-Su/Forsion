@@ -221,7 +221,8 @@ describe('Coding Studio source snapshots', () => {
     const manifest = JSON.parse(await fs.readFile(path.join(historyPath(after.id), 'manifest.json'), 'utf8'))
     const saved = await fs.readFile(path.join(historyPath(after.id), 'files', manifest.entries[0].hash), 'utf8')
     expect(saved).toBe('#!/bin/sh\necho first')
-    expect((await fs.stat(path.join(root, 'run.sh'))).mode & 0o777).toBe(0o764)
+    // Windows 没有 POSIX 可执行位:chmod 只落只读属性,stat 恒报 0o666/0o444,保留权限这条在那里无从断言。
+    if (process.platform !== 'win32') expect((await fs.stat(path.join(root, 'run.sh'))).mode & 0o777).toBe(0o764)
   })
 
   it('keeps a directory symlink intact when it replaces a recorded source directory', async () => {
@@ -240,6 +241,8 @@ describe('Coding Studio source snapshots', () => {
 })
 
 describe('Coding Studio project watcher', () => {
+  // 真 chokidar 的用例走原生模式(产品默认;轮询只是 EMFILE 兜底)。轮询靠 stat 比 size/mtime,而 Windows 文件
+  // 时间戳粒度粗:紧跟上次写入的同尺寸改写 mtime 不变,轮询看不见(2026-09-11 windows-2022 实测)。
   it('prunes dependency and hidden build directories during startup', async () => {
     await put('tokens.ts', 'initial')
     await put('node_modules/big/package/src/main.ts', 'do not watch')
@@ -253,13 +256,13 @@ describe('Coding Studio project watcher', () => {
       return instance
     })
     const changes: CodeStudioProjectChange[] = []
-    const watcher = createCodeStudioProjectWatcher((event) => changes.push(event), undefined, { usePolling: true })
+    const watcher = createCodeStudioProjectWatcher((event) => changes.push(event))
     closers.push(watcher.close)
     await watcher.setRoot(root)
     const watched = Object.keys(instances[0].getWatched())
-    expect(watched.some((dir) => /node_modules|\.next|\/dist(?:\/|$)/.test(dir))).toBe(false)
+    expect(watched.some((dir) => /node_modules|\.next|[\\/]dist(?:[\\/]|$)/.test(dir))).toBe(false)
     await put('tokens.ts', 'changed')
-    await vi.waitFor(() => expect(changes.some((event) => event.path === 'tokens.ts')).toBe(true))
+    await vi.waitFor(() => expect(changes.some((event) => event.path === 'tokens.ts')).toBe(true), { timeout: 4000 })
   })
 
   it('reports a fatal watcher error after readiness with its project root', async () => {
@@ -350,7 +353,7 @@ describe('Coding Studio project watcher', () => {
     await fs.writeFile(path.join(outside, 'external.ts'), 'initial')
     await fs.symlink(outside, path.join(root, 'linked'))
     const changes: CodeStudioProjectChange[] = []
-    const watcher = createCodeStudioProjectWatcher((event) => changes.push(event), undefined, { usePolling: true })
+    const watcher = createCodeStudioProjectWatcher((event) => changes.push(event))
     closers.push(watcher.close)
     await watcher.setRoot(root)
     await put('index.html', 'changed')
@@ -370,10 +373,13 @@ describe('Coding Studio project watcher', () => {
     await fs.mkdir(other)
     await fs.writeFile(path.join(other, 'second.ts'), 'two')
     const changes: CodeStudioProjectChange[] = []
-    const watcher = createCodeStudioProjectWatcher((event) => changes.push(event), undefined, { usePolling: true })
+    const watcher = createCodeStudioProjectWatcher((event) => changes.push(event))
     closers.push(watcher.close)
     await watcher.setRoot(root)
-    await watcher.setRoot(other)
+    // 宿主把 setRoot 的返回值原样回给渲染层去比对事件 root:经别名进来也必须报真实根。
+    const alias = path.join(home, 'other-alias')
+    await fs.symlink(other, alias)
+    expect(await watcher.setRoot(alias)).toBe(other)
     changes.length = 0
     await put('first.ts', 'old changed')
     await fs.writeFile(path.join(other, 'second.ts'), 'new changed')

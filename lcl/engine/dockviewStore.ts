@@ -13,7 +13,7 @@ import type { DockviewApi, IDockviewPanel } from 'dockview-react'
 import type { DockSide, Leaf, SidebarDefaults, ViewLocation } from './types'
 import { getView } from './viewRegistry'
 import { identitySig, label } from './types'
-import { computeSideWidth, computeBottomHeight } from './sideWidth'
+import { computeSideWidth, computeBottomHeight, computeTransientSideWidth } from './sideWidth'
 import { shouldRecordSideWidth } from './sideCapture'
 import { locOf, type DropTarget } from './dropModel'
 import { useNav } from './navStore'
@@ -44,7 +44,7 @@ function nextId(api: DockviewApi, type: string): string {
  *  bottom 同理(它的补间量的是高),另外还挡住 captureSideWidths 记下补间中间高。 */
 const sidebarAnimating: Record<DockSide, boolean> = { left: false, right: false, bottom: false }
 const toggleReleases: Partial<Record<DockSide, () => void>> = {}
-const extensions: Partial<Record<DockSide, { dismiss(): void; dispose(instant?: boolean): void | Promise<void>; id: string; previousId?: string }>> = {}
+const extensions: Partial<Record<DockSide, { dismiss(): void; dispose(instant?: boolean): void | Promise<void>; id: string; previousId?: string; defaultWidth?: number }>> = {}
 const dismissExtensions = (): void => {
   for (const side of ['left', 'right', 'bottom'] as const) { extensions[side]?.dismiss(); extensions[side]?.dispose(true) } // layout is being rebuilt: no tween
 }
@@ -121,7 +121,9 @@ let pinGen = 0
  *  pinSides 与折叠/展开动画都以此为准,故记住宽度即被尊重(不被重钉回黄金分割)= 持久化。 */
 function sideTargetWidth(api: DockviewApi, loc: 'left' | 'right'): number {
   const st = useWorkspace.getState()
-  return computeSideWidth(api.width, loc, { free: st.sideFree[loc], saved: st.sideWidths[loc], scale: st.sideScale[loc] })
+  const regular = computeSideWidth(api.width, loc, { free: st.sideFree[loc], saved: st.sideWidths[loc], scale: st.sideScale[loc] })
+  // 新建的临时二级 View 默认略宽；一旦用户拖出自己的宽度，立即以用户记录为准。
+  return st.sideWidths[loc] == null ? (extensions[loc]?.defaultWidth ?? regular) : regular
 }
 
 /** 底部面板的目标高(纯几何在 sideWidth.computeBottomHeight)。底部不进 pinSides 体系:
@@ -1010,12 +1012,23 @@ function layoutViewsAllRegistered(dockview: unknown): boolean {
 
 /** 退役视图 → 统一视图(2026-07-03):会话列表/工作区文件/笔记库 并入 'workspace',
  *  目录/Amadeus 大纲 并入 'outline'。迁移后旧注册删除,launcher/palette 不再出现旧名。 */
-const RETIRED_VIEW_MAP: Record<string, string> = {
+/** 值 = 新类型,或 `{ type, params }`:迁移时顺手补参数 —— 只补布局里没有的键,不覆盖用户存过的。 */
+type RetiredTarget = string | { type: string; params: Record<string, unknown> }
+const RETIRED_VIEW_MAP: Record<string, RetiredTarget> = {
   sessions: 'workspace',
   files: 'workspace',
   'amadeus-pages': 'workspace',
   toc: 'outline',
   'amadeus-outline': 'outline',
+  // 收件箱左栏并入统一工作区(2026-09-11):老布局里的独立 inbox-list → workspace,并钉 mode = 收件箱列表源 ——
+  // 旧叶子可能不在 Inbox Space(用户手摆到别处),光改类型会落到当前 Space 的自动档(会话 / 笔记)(Codex 09-11 P1)。
+  // inbox-list 类型仍注册着(仪表盘卡片引用它),其整页渲染同样钉这个档(bootstrapEngine 的 defaultMode)。
+  'inbox-list': { type: 'workspace', params: { mode: 'plugin:inbox:messages' } },
+}
+
+function retiredTarget(t: string | undefined): { type: string; params: Record<string, unknown> } | null {
+  const n = t ? RETIRED_VIEW_MAP[t] : undefined
+  return !n ? null : typeof n === 'string' ? { type: n, params: {} } : n
 }
 
 /** 历史布局就地迁移(幂等,载入时跑):①退役视图改名(dockview panels + 侧栏 stash;同侧重复由
@@ -1026,11 +1039,13 @@ export function migrateLayoutBlob(layout: Pick<LayoutEnvelopeV4, 'dockview' | 's
   if (panels) {
     for (const p of Object.values(panels)) {
       if (!p || typeof p !== 'object') continue
-      const params = p.params ?? {}
-      const next = params.__type && RETIRED_VIEW_MAP[params.__type]
+      const params = (p.params ??= {})
+      const next = retiredTarget(params.__type)
       if (next) {
-        params.__type = next
-        p.contentComponent = next
+        params.__type = next.type
+        p.contentComponent = next.type
+        const bag = params as Record<string, unknown>
+        for (const [k, v] of Object.entries(next.params)) if (bag[k] === undefined) bag[k] = v
       }
       if ((params.__loc ?? 'main') === 'main') p.contentComponent = '__frame'
     }
@@ -1038,7 +1053,10 @@ export function migrateLayoutBlob(layout: Pick<LayoutEnvelopeV4, 'dockview' | 's
   for (const side of ['left', 'right', 'bottom'] as const) {
     const sb = layout.sidebars?.[side]
     if (!sb) continue
-    sb.stash = sb.stash.map((v) => (RETIRED_VIEW_MAP[v.type] ? { ...v, type: RETIRED_VIEW_MAP[v.type] } : v))
+    sb.stash = sb.stash.map((v) => {
+      const next = retiredTarget(v.type)
+      return next ? { ...v, type: next.type, params: { ...next.params, ...(v.params ?? {}) } } : v
+    })
   }
 }
 
@@ -1097,6 +1115,9 @@ export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) =>
   const minOff = vert ? { minimumHeight: 0 } : { minimumWidth: 0 }
   const minOn = vert ? { minimumHeight: DV_GROUP_MIN } : { minimumWidth: DV_GROUP_MIN }
   const canTween = typeof requestAnimationFrame === 'function'
+  const defaultWidth = side === 'bottom' || existing.length > 0 || useWorkspace.getState().sideWidths[side] != null
+    ? undefined
+    : computeTransientSideWidth(api.width, sideTargetWidth(api, side))
   /** Hold the neighbouring panels while this side changes size; released after the layout settles (same as toggleSidebar). */
   const holdNeighbour = (): (() => void) => {
     toggleReleases[side]?.()
@@ -1112,7 +1133,7 @@ export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) =>
   let closing: Promise<void> | null = null
   let release: (() => void) | null = null // the neighbour hold taken for the open tween; assigned before addPanel
   const lease = {
-    id, dismiss, previousId: previous?.id,
+    id, dismiss, previousId: previous?.id, defaultWidth,
     dispose(instant = false): void | Promise<void> {
       if (disposed) return closing ?? undefined
       disposed = true

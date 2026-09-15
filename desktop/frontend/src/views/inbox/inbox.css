@@ -1,22 +1,7 @@
-/* 收件箱(Inbox Space):容器/搜索/滚动/未读点复用 sidebar2.css 的 t2s-*;此处只补 ibx- 专有件。
+/* 收件箱(Inbox Space):左栏 = 统一工作区的列表源(行 / 搜索 / 未读点全是 sidebar2.css 的 t2s-*);此处只剩阅读面板的 ibx- 专有件。
    全 token 驱动(--sidebar-bg/--text*/--accent/--border),四主题 × 明暗自动成立。 */
 
-/* ── 列表(左栏)── */
-.ibx-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 10px 10px 4px;
-}
-.ibx-head-title {
-  font-size: 12.5px;
-  font-weight: 700;
-  color: var(--text);
-  flex: 1;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
+/* ── 发信人头像 / 图标按钮(阅读面板头部在用;左栏列表 2026-09-11 起并入统一工作区)── */
 .ibx-iconbtn {
   display: inline-flex;
   align-items: center;
@@ -34,65 +19,6 @@
 .ibx-iconbtn .spin { animation: ibx-spin 0.9s linear infinite; }
 @keyframes ibx-spin { to { transform: rotate(360deg); } }
 
-.ibx-chips {
-  display: flex;
-  gap: 4px;
-  padding: 4px 10px 8px;
-  flex-wrap: wrap;
-}
-.ibx-chip {
-  border: 1px solid var(--border);
-  background: transparent;
-  color: var(--text-muted);
-  border-radius: 999px;
-  padding: 2px 10px;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.12s;
-}
-.ibx-chip:hover { color: var(--text); }
-.ibx-chip.on {
-  background: color-mix(in srgb, var(--accent-ink) 14%, transparent);
-  border-color: color-mix(in srgb, var(--accent-ink) 45%, transparent);
-  color: var(--accent-ink);
-}
-
-/* 两行邮件行(t2s-srow 是 28px 单行,不够放 发件人+标题+摘要) */
-.ibx-row {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  width: 100%;
-  border: none;
-  background: transparent;
-  text-align: left;
-  padding: 7px 8px;
-  border-radius: 8px;
-  cursor: pointer;
-  position: relative;
-}
-.ibx-row:hover { background: color-mix(in srgb, var(--text) 6%, transparent); }
-.ibx-row.active {
-  background: color-mix(in srgb, var(--accent-ink) 12%, transparent);
-}
-.ibx-row.active::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 8px;
-  bottom: 8px;
-  width: 2.5px;
-  border-radius: 2px;
-  background: var(--accent-ink);
-}
-.ibx-dotcol {
-  width: 8px;
-  display: flex;
-  justify-content: center;
-  padding-top: 6px;
-  flex-shrink: 0;
-}
 .ibx-ava {
   width: 28px;
   height: 28px;
@@ -115,12 +41,6 @@
   background: color-mix(in srgb, var(--accent-ink) 14%, transparent);
   margin-top: 1px;
 }
-.ibx-main { flex: 1; min-width: 0; }
-.ibx-l1 {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
 .ibx-sender {
   font-size: 12px;
   font-weight: 600;
@@ -138,29 +58,6 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-}
-.ibx-l2 {
-  display: block; /* 裸 span 默认 inline,overflow/ellipsis 对 inline 盒无效 → 块级化后截断才生效(l1 靠 flex 白得) */
-  font-size: 12px;
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  margin-top: 1px;
-}
-.ibx-l2 .ibx-title { color: var(--text-light, var(--text)); }
-.ibx-row.unread .ibx-title { font-weight: 700; color: var(--text); }
-.ibx-snippet { opacity: 0.75; }
-
-.ibx-empty {
-  padding: 28px 14px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--text-faint);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
 }
 
 /* ── 阅读面板(主区)── */
@@ -198,8 +95,22 @@
   align-items: center;
 }
 .ibx-reader-body { font-size: 14px; line-height: 1.65; color: var(--text-light, var(--text)); }
-/* 整块 ![[...]] 嵌入卡片(InboxBody):与前后正文块留出间距;.am-app 作用域内块样式自带边框/左条。 */
-.ibx-reader-body .ibx-embed { margin: 12px 0; }
+/* 正文 = 真 Amadeus 只读页(InboxBody,2026-09-11):compact 已去封面/属性面板,页面标题(合成路径的 basename)
+   会跟阅读面板自己的 <h1> 重复 → 隐掉;纸面不要再吃一层上边距。 */
+.ibx-reader-body .amx-title-wrap { display: none; }
+.ibx-reader-body .ibx-amadeus .amx-doc.unified-page { padding-top: 0; }
+/* 纸面(标题容器 .amx-doc 与块画布 .page-view.unified-body)的 48px 左右内边距是给编辑态的块把手留的;
+   只读的收件箱里正文要跟标题 / 末尾卡片对齐(实测缩进来自 .page-view,见 09-11 Log)。 */
+.ibx-reader-body .ibx-amadeus .amx-doc,
+.ibx-reader-body .ibx-amadeus .page-view { padding-left: 0; padding-right: 0; }
+/* 编辑器 chunk 还没到时先把原文摆出来(骨架纪律:新加载分支禁写空白)。 */
+.ibx-body-plain { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* 末尾卡片(审批卡 / 任务卡):与正文留出间距;卡面样式复用聊天的 .t2-taskcard。 */
+.ibx-cards { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; }
+.ibx-approval-preview { font-family: var(--font-mono, monospace); font-size: 12px; overflow-wrap: anywhere; }
+.ibx-approval-meta { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
+.ibx-approval-result { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; max-height: 160px; overflow: auto; color: var(--text-muted); }
+.ibx-approval-err { color: var(--danger); font-size: 12px; }
 .ibx-reader-empty {
   height: 100%;
   display: flex;
@@ -251,5 +162,11 @@
 }
 .ibx-claim-btn:disabled { cursor: default; opacity: 0.55; }
 .ibx-claim-btn.done { background: var(--bg-secondary, transparent); color: var(--text-faint); border: 1px solid var(--border); opacity: 1; }
-/* 列表行的物品标记 */
-.ibx-item-gift { flex: none; font-size: 12px; }
+/* 领取条件:ok=满足、bad=不满足、无修饰=还不知道(会员档位没拉到,交给服务端裁决)。✓/✗ 让状态不只靠颜色。 */
+.ibx-req { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -2px 0 12px; font-size: 12px; }
+.ibx-req-label { color: var(--text-faint); margin-right: 2px; }
+.ibx-req-chip { padding: 2px 9px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-muted, var(--text-faint)); }
+.ibx-req-chip.ok { color: var(--text); }
+.ibx-req-chip.ok::before { content: '✓ '; }
+.ibx-req-chip.bad { color: var(--danger, #c4554d); border-color: color-mix(in srgb, var(--danger, #c4554d) 45%, transparent); }
+.ibx-req-chip.bad::before { content: '✗ '; }

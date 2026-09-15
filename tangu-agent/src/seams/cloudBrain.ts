@@ -340,8 +340,11 @@ export interface InboxBrain {
   listBroadcasts(since?: string): Promise<Array<{
     id: string; title: string; body: string | null; created_at: string;
     attachments?: string | null; expires_at?: string | null; claimed?: boolean;
+    /** 领取条件 JSON 原文({minVersion?, tiers?},服务端 claimRequirements.ts);只拿来展示,裁决在服务端。 */
+    claim_requirements?: string | null;
   }>>;
   /** 领取广播附件(对端 POST /api/brain/inbox/broadcasts/:id/claim;发放全在服务端)。
-   *  失败抛错;错误对象带 status(410=已过期/403=非目标/404=不存在)。 */
-  claimBroadcast(broadcastId: string): Promise<{ claimed: boolean; alreadyClaimed?: boolean }>;
+   *  client=领取端自报的 `desktop/2.10.1`(服务端按它判最低版本)。
+   *  失败抛错;错误对象带 status(410=已过期/403=非目标或不满足领取条件/404=不存在)。 */
+  claimBroadcast(broadcastId: string, client?: string): Promise<{ claimed: boolean; alreadyClaimed?: boolean }>;
 }

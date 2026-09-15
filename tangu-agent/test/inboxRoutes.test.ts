@@ -3,10 +3,10 @@
  * 覆盖:filter 可见集(scheduled 档已下线;legacy 未到期 deliver_at 行不冒出)/unread-count(latestId 含已读)/
  * PATCH 读写/read-all 不动 legacy 未投递行/软删语义(视图消失但广播游标仍含该行)/pull 无 seam 时优雅降级。
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import express from 'express';
 import type { Server } from 'node:http';
-import { configureTangu } from '../src/seams/runtime.js';
+import { configureTangu, deps } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
 import { createSqliteHost } from '../src/adapters/standalone/sqliteHost.js';
 import { toSqliteDDL } from '../src/core/dialectDDL.js';
@@ -123,5 +123,49 @@ describe('/agent/inbox', () => {
     const r = await api('/agent/inbox/pull', { method: 'POST' });
     expect(r.pulled).toBe(false);
     expect(r.added).toBe(0);
+  });
+});
+
+describe('/agent/inbox 领取条件', () => {
+  const REQ = { minVersion: '2.11.0', tiers: ['plus', 'pro'] };
+  const ITEMS = [{ kind: 'points', amount: 1 }];
+  const c1 = async (): Promise<any> => (await api('/agent/inbox?filter=all')).messages.find((x: any) => x.id === 'c1');
+  beforeAll(async () => {
+    await query(
+      `INSERT INTO inbox_messages (id, user_id, title, body, sender_kind, sender_id, origin_broadcast_id, attachments, created_at)
+       VALUES ('c1', ?, '奖励', '', 'server', 'forsion', 'b-c1', ?, ?)`,
+      [USER, JSON.stringify({ items: ITEMS, claimed: false, requires: REQ }), utc(-1_000)],
+    );
+  });
+  afterAll(() => { delete (deps().brain as any).inbox; });
+
+  it('列表把 requires 原样带给阅读面板', async () => {
+    expect((await c1()).attachments).toEqual({ items: ITEMS, claimed: false, requires: REQ });
+  });
+
+  it('领取:body.client 原样转发;服务端 403 claim_requirements_unmet 透传错误码且本地不翻 claimed;满足后再领才翻', async () => {
+    const claimBroadcast = vi.fn()
+      .mockRejectedValueOnce(Object.assign(
+        new Error(JSON.stringify({ error: 'claim_requirements_unmet', detail: '需要客户端 2.11.0 及以上版本才能领取' })), { status: 403 }))
+      .mockResolvedValueOnce({ claimed: true, alreadyClaimed: false });
+    (deps().brain as any).inbox = { claimBroadcast };
+    const r1 = await fetch(`${base}/agent/inbox/c1/claim`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer x' }, body: JSON.stringify({ client: 'desktop/2.10.1' }),
+    });
+    expect(r1.status).toBe(403);
+    expect(await r1.json()).toEqual({ error: 'claim_requirements_unmet', detail: '需要客户端 2.11.0 及以上版本才能领取' });
+    expect(claimBroadcast).toHaveBeenLastCalledWith('b-c1', 'desktop/2.10.1');
+    expect((await c1()).attachments.claimed).toBe(false);
+
+    expect(await api('/agent/inbox/c1/claim', { method: 'POST', body: JSON.stringify({ client: 'desktop/2.11.0' }) })).toEqual({ ok: true, alreadyClaimed: false });
+    expect(claimBroadcast).toHaveBeenLastCalledWith('b-c1', 'desktop/2.11.0');
+    expect((await c1()).attachments).toEqual({ items: ITEMS, claimed: true, requires: REQ });
+  });
+
+  it('老桌面不带 client → 转发 undefined(服务端按「没报版本」处理)', async () => {
+    const claimBroadcast = vi.fn().mockResolvedValue({ claimed: true, alreadyClaimed: true });
+    (deps().brain as any).inbox = { claimBroadcast };
+    await api('/agent/inbox/c1/claim', { method: 'POST' });
+    expect(claimBroadcast).toHaveBeenLastCalledWith('b-c1', undefined);
   });
 });

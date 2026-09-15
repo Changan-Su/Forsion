@@ -68,6 +68,10 @@ export const manageScheduleProvider: ToolProvider = {
         },
       },
       execute: async (args, ctx) => {
+        // 同 manage_automation 的信任边界:ask/agent 档的 Muse 只能管自己的日程(别人的 auto 条目到期是对方的 full-auto 会话)。
+        if ((ctx as any).muse && ctx.approvalMode !== 'full-auto' && args.agent && String(args.agent) !== (ctx.agentSlug || 'muse')) {
+          return 'Error: in your current permission tier you can only manage your own schedule (omit the agent parameter).';
+        }
         const action = String(args.action || '');
         const slug = String(args.agent || ctx.agentSlug || DEFAULT_AGENT_SLUG).trim();
         const def = await getAgent(slug);

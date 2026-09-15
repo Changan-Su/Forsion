@@ -289,7 +289,11 @@ export function installSmoothCaret(): void {
   enabled = isSmoothCaretOn()
   document.documentElement.classList.toggle('sc-on', enabled)
   document.addEventListener('selectionchange', () => schedule())
-  document.addEventListener('input', () => schedule(), true) // 排版变化(autoGrow 等)可能不触发 selectionchange
+  // 键入时原生 textarea 的文字与插入点会在同一帧前进；若仍沿用 90ms transform 过渡，
+  // 自绘 caret 会在连续输入中永远落后一截（内容越长、连打越明显）。文字输入优先逐帧贴住
+  // 原生位置；方向键、鼠标点击等没有 input 的光标移动仍保留丝滑过渡。
+  // 回归: scripts/smooth-caret.check.cjs 的「连续键入后覆盖层当帧贴住内容」。
+  document.addEventListener('input', () => schedule(false), true) // 排版变化(autoGrow 等)可能不触发 selectionchange
   document.addEventListener('scroll', () => schedule(false), { capture: true, passive: true })
   window.addEventListener('resize', () => schedule(false))
   // 移动端软键盘弹起/收起改的是 visualViewport,window 的 resize 未必发(Android 的 overlays-content 模式)。

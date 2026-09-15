@@ -15,7 +15,8 @@
  *  · 列 id = spec 的 `column.key`,行 id = `row.id` —— 与插件侧同一套标识,回调不需要任何映射表。
  *  · `__actions` 是保留列 id(操作列),插件不许自己用。
  */
-import { DB_VERSION, type DbColumn, type DbFile, type DbRow, type CellValue } from '@amadeus-shared/db/schema'
+import { DB_VERSION, DEFAULT_DB_VIEW, type DbColumn, type DbFile, type DbRow, type CellValue } from '@amadeus-shared/db/schema'
+import { groupValueKey } from '@amadeus-shared/db/groupRows'
 import type { TableCell, TableColumn, TableSpec } from './types'
 
 /** 操作列的保留列 id(渲染端按它画按钮)。 */
@@ -70,6 +71,13 @@ export function validateTableSpec(spec: TableSpec): void {
     if (typeof c.label !== 'string') bad(`列 ${c.key} 的 label 必须是字符串`, `column ${c.key}: label must be a string`)
   }
   const ids = new Set<string>()
+  if (spec.actionsAfter !== undefined && !keys.has(spec.actionsAfter)) bad('操作列的插入位置不存在', 'actionsAfter column does not exist')
+  if (spec.groupBy) {
+    if (!isObj(spec.groupBy) || !keys.has(spec.groupBy.key)) bad('分组列不存在', 'group column does not exist')
+    if (spec.groupBy.sort && !['manual', 'asc', 'desc'].includes(spec.groupBy.sort)) bad('分组排序无效', 'invalid group sort')
+    if (spec.groupBy.order && (!Array.isArray(spec.groupBy.order) || spec.groupBy.order.some((v) => typeof v !== 'string'))) bad('分组顺序无效', 'invalid group order')
+    if (spec.groupBy.hideEmpty !== undefined && typeof spec.groupBy.hideEmpty !== 'boolean') bad('隐藏空组须为布尔值', 'hideEmpty must be boolean')
+  }
   for (const r of spec.rows) {
     if (!isObj(r) || typeof r.id !== 'string' || !r.id) bad('每行都要有非空 id', 'every row needs a non-empty id')
     if (ids.has(r.id)) bad(`行 id 重复:${r.id}`, `duplicate row id: ${r.id}`)
@@ -164,7 +172,10 @@ function colToDb(col: TableColumn, spec: TableSpec): DbColumn {
     break
   }
   const out: DbColumn = { id: col.key, name: col.label, type }
-  if (col.kind === 'select' && Array.isArray(col.options)) out.options = col.options.map((o) => o.value)
+  if (col.kind === 'select' && Array.isArray(col.options)) {
+    out.options = col.options.map((o) => o.value)
+    out.optionLabels = Object.fromEntries(col.options.map((o) => [o.value, o.label ?? o.value]))
+  }
   if (typeof col.width === 'number' && col.width > 0) out.width = col.width
   // ponytail: align / nowrap 只由降级路径(panel-lib 的经典 <table>)兑现 —— 原生表有自己的列宽/对齐语汇,
   // 为两个装饰属性去改 DbColumn 落盘格式不值当。
@@ -175,14 +186,18 @@ function colToDb(col: TableColumn, spec: TableSpec): DbColumn {
 export function specToDb(spec: TableSpec): DbFile {
   validateTableSpec(spec)
   const columns: DbColumn[] = spec.columns.map((c) => colToDb(c, spec))
-  if (spec.actions) columns.push({ id: TABLE_ACTIONS_COL, name: spec.actionsLabel ?? '', type: 'text' })
+  if (spec.actions) columns.splice(spec.actionsAfter ? columns.findIndex((c) => c.id === spec.actionsAfter) + 1 : columns.length,
+    0, { id: TABLE_ACTIONS_COL, name: spec.actionsLabel ?? '', type: 'text' })
   const rows: DbRow[] = spec.rows.map((r) => {
     const cells: Record<string, CellValue> = {}
     for (const c of spec.columns) cells[c.key] = cellValue(c.kind, (r.cells ?? {})[c.key])
     if (spec.actions) cells[TABLE_ACTIONS_COL] = ''
     return { id: r.id, cells }
   })
-  return { version: DB_VERSION, name: spec.id, columns, rows }
+  return { version: DB_VERSION, name: spec.id, columns, rows, ...(spec.groupBy ? { views: [{
+    ...DEFAULT_DB_VIEW, groupBy: spec.groupBy.key, groupSort: spec.groupBy.sort,
+    groupOrder: spec.groupBy.order?.map(groupValueKey), groupHideEmpty: spec.groupBy.hideEmpty,
+  }] } : {}) }
 }
 
 /** TableSpec → cellMeta 边料(rowId → colId → 装饰)。空装饰的格不占位。 */

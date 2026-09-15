@@ -332,7 +332,7 @@ function EmbedBody({ kind, pagePath, replaceText, insertAfter, readOnly = false 
     case 'button': {
       const spec = parseButtonBlock('```forsion-button\n' + kind.src + '\n```')
       if (!spec) return <span /> // JSON 坏:装饰层不该到这(classify 已过),兜底空
-      return <ButtonBlock spec={spec} onChange={(next: ButtonSpec) => rewrite(codeBody(serializeButtonBlock(next)))} />
+      return <ButtonBlock spec={spec} readOnly={readOnly} onChange={(next: ButtonSpec) => rewrite(codeBody(serializeButtonBlock(next)))} />
     }
   }
 }

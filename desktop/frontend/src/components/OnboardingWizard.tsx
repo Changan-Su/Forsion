@@ -24,7 +24,7 @@ import { AsrModelChoice } from './AsrModelChoice'
 import { listFonts } from '../fontPresets'
 import { AuxModelChoice } from './AuxModelChoice'
 import { Markdown } from './Markdown'
-import { CHANGELOG } from '../changelog'
+import { APP_VERSION, CHANGELOG } from '../changelog'
 import { track } from '../achievements/store'
 import { applyUiFonts, readFont, writeFont } from '../uiFont'
 
@@ -385,7 +385,7 @@ export const OnboardingWizard: React.FC<{
               </button>
             </div>
             <div className="ob-hero-foot">
-              <span>{t('onboarding.welcome.version', { v: appVer || CHANGELOG[0]?.version || '' })}</span>
+              <span>{t('onboarding.welcome.version', { v: appVer || APP_VERSION || '' })}</span>
               <button className="ob-hero-skip" onClick={finish}>{t('onboarding.nav.skip')}</button>
             </div>
           </div>

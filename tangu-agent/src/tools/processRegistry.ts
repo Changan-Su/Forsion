@@ -101,6 +101,9 @@ export function startBackgroundProcess(sessionId: string, command: string, cwd: 
   };
   child.stdout?.on('data', (d) => append(p, d.toString()));
   child.stderr?.on('data', (d) => append(p, d.toString()));
+  // 进程关了 stdin / 写入时恰好退出 → 异步 EPIPE(writeStdin 的 try/catch 接不住,无监听即未捕获异常)。
+  // 流报错后 writable=false,下次 writeStdin 照常返回「不可写」,这里无需另报。
+  child.stdin?.on('error', () => { /* ignore */ });
   child.on('error', (e: any) => {
     append(p, `\n[error] ${e?.message || e}`);
     p.status = 'error';

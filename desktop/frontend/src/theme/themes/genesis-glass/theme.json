@@ -35,18 +35,18 @@
     {
       "key": "--gl-float-pct",
       "label": "浮层浓度",
-      "description": "菜单 / 弹窗 / toast / 命令面板",
+      "description": "大型弹窗的基准浓度；菜单自动薄一档，侧栏浮层自动厚一档",
       "type": "number",
-      "default": 84,
+      "default": 72,
       "min": 50,
-      "max": 100,
+      "max": 90,
       "step": 2,
       "unit": "%"
     },
     {
       "key": "--gl-blur-radius",
-      "label": "浮层模糊",
-      "description": "只影响浮层；外壳的模糊来自窗口原生材质，调不了也不该调",
+      "label": "局部模糊",
+      "description": "影响输入卡、菜单和弹窗；外壳模糊仍由窗口原生材质提供",
       "type": "number",
       "default": 40,
       "min": 0,
@@ -59,10 +59,11 @@
       "label": "透色鲜艳度",
       "description": "不提饱和度，透过来的东西就是一层脏灰",
       "type": "select",
-      "default": "190%",
+      "default": "160%",
       "options": [
         { "value": "120%", "label": "克制" },
-        { "value": "190%", "label": "标准" },
+        { "value": "160%", "label": "标准" },
+        { "value": "190%", "label": "鲜明" },
         { "value": "240%", "label": "浓郁" }
       ]
     },

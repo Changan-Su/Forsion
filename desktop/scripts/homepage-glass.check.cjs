@@ -82,6 +82,9 @@ async function main() {
     // 固定夹具只写临时 userData,同时覆盖二级收纳夹。
     await win.evaluate(() => {
       localStorage.setItem('forsion_tangu_active_space', 'home')
+      localStorage.setItem('forsion_theme_lang', 'genesis-glass')
+      localStorage.setItem('forsion_theme_skin', 'cream')
+      localStorage.setItem('forsion_theme_bg', 'cream')
       localStorage.setItem('forsion_tangu_ribbon_order', JSON.stringify(['space:home', 'folder:glass', 'space:tangu', 'space:inbox']))
       localStorage.setItem('forsion_tangu_ribbon_v2', JSON.stringify({ bottomOrder: [], commandItems: [], commandIcons: {}, folders: [
         { id: 'folder:glass', name: '工作空间', zone: 'top', items: ['space:calendar', 'space:coding'] },
@@ -146,8 +149,67 @@ async function main() {
       .hp-wallpaper-art, .hp-wallpaper-edge, .hp-wallpaper-tone, .hp-glow { display: none !important; }
     ` })
     await win.evaluate(() => { document.documentElement.dataset.glass = 'on' })
+    await win.click('.hp-composer .model-pill-btn')
+    await win.waitForSelector('.hp-composer .composer-menu--model')
+    const modelMenu = await probe(win, app, '.hp-composer .composer-menu--model', '::before')
+    check('模型一级菜单真实采样壁纸', modelMenu.difference > 4 && modelMenu.backdrop.includes('blur('), modelMenu)
+    await win.click('.hp-composer .cm-model-row')
+    await win.waitForSelector('.hp-composer .cm-sub[data-pane="model"]')
+    const modelSubmenu = await probe(win, app, '.hp-composer .cm-sub[data-pane="model"]')
+    check('模型二级选择面真实采样壁纸', modelSubmenu.difference > 4 && modelSubmenu.backdrop.includes('blur('), modelSubmenu)
+    const materialPair = await win.evaluate(() => {
+      const alphaOf = (color) => {
+        const match = /\/\s*([0-9.]+)\s*\)/.exec(color) || /rgba\([^,]+,[^,]+,[^,]+,\s*([0-9.]+)\)/.exec(color)
+        return match ? Number(match[1]) : 1
+      }
+      const read = (selector, pseudo = '') => {
+        const style = getComputedStyle(document.querySelector(selector), pseudo || null)
+        return {
+          alpha: alphaOf(style.backgroundColor),
+          filter: style.backdropFilter,
+          sheen: style.backgroundImage !== 'none',
+        }
+      }
+      return {
+        chatbox: read('.hp-composer .t2c-card', '::before'),
+        menu: read('.hp-composer .composer-menu--model', '::before'),
+        submenu: read('.hp-composer .cm-sub[data-pane="model"]'),
+      }
+    })
+    check('模型菜单与 Chatbox 共用同一高光和模糊,仅加厚一档', materialPair.chatbox.sheen
+      && materialPair.menu.sheen && materialPair.submenu.sheen
+      && materialPair.chatbox.filter === materialPair.menu.filter
+      && materialPair.menu.filter === materialPair.submenu.filter
+      && materialPair.chatbox.alpha >= 0.44 && materialPair.chatbox.alpha <= 0.52
+      && materialPair.menu.alpha >= 0.55 && materialPair.menu.alpha <= 0.63
+      && materialPair.submenu.alpha >= 0.55 && materialPair.submenu.alpha <= 0.63,
+    materialPair)
+    if (SHOT) {
+      const shot = path.join(os.tmpdir(), `forsion-homepage.glass-model-${process.pid}.png`)
+      await win.screenshot({ path: shot })
+      console.log(`SCREENSHOT model-menus ${shot}`)
+    }
+    await win.keyboard.press('Escape')
+    await win.click('.rb-bottom .rb-slot[data-id="rb-cmd"] button')
+    await win.waitForSelector('.cmd-panel')
+    const commandPanel = await probe(win, app, '.cmd-panel')
+    // 命令面板背后已经先经过遮罩的 6px 模糊,二次 40px 模糊的绝对像素差会小于直接压在条纹上的菜单。
+    // 同时钉死物理拓扑:祖先必须无 filter,遮罩材质在 ::before,否则会重新截断子面板取样。
+    const commandTopology = await win.locator('.cmd-overlay').evaluate((el) => ({
+      parent: getComputedStyle(el).backdropFilter,
+      material: getComputedStyle(el, '::before').backdropFilter,
+    }))
+    check('命令面板穿过自身遮罩真实采样页面', commandPanel.backdrop.includes('blur(')
+      && commandPanel.difference > 2 && commandTopology.parent === 'none' && commandTopology.material.includes('blur('),
+    { panel: commandPanel, overlay: commandTopology })
+    if (SHOT) {
+      const shot = path.join(os.tmpdir(), `forsion-homepage.glass-command-${process.pid}.png`)
+      await win.screenshot({ path: shot })
+      console.log(`SCREENSHOT command-panel ${shot}`)
+    }
+    await win.keyboard.press('Escape')
     for (const [name, selector, pseudo] of [
-      ['输入框', '.hp-composer .t2c-card', ''],
+      ['输入框', '.hp-composer .t2c-card', '::before'],
       ['Space 收纳架', '.hp-spaces', ''],
     ]) {
       const p = await probe(win, app, selector, pseudo)
@@ -155,14 +217,14 @@ async function main() {
     }
     // 负对照:只隔断输入区祖先的 backdrop,blur 声明仍在,像素差必须归零。
     const blocker = await win.addStyleTag({ content: '.hp-composer { opacity: 0.999 !important; }' })
-    const negative = await probe(win, app, '.hp-composer .t2c-card')
+    const negative = await probe(win, app, '.hp-composer .t2c-card', '::before')
     check('负对照能识别仅半透明、blur 空采样', negative.difference < 1, negative)
     await blocker.evaluate((el) => el.remove())
-    const restored = await probe(win, app, '.hp-composer .t2c-card')
+    const restored = await probe(win, app, '.hp-composer .t2c-card', '::before')
     check('输入框在透明度切换后仍能采样', restored.difference > 4, restored)
     // 关闭景深时仍须有本地磨砂,不能依靠整张 wallpaper 的 filter 冒充材质。
     await win.locator('.hp-composer .t2c-ta').dispatchEvent('pointerdown')
-    const focused = await probe(win, app, '.hp-composer .t2c-card')
+    const focused = await probe(win, app, '.hp-composer .t2c-card', '::before')
     check('输入模式保留清晰前景与局部磨砂', focused.difference > 4, focused)
     await win.locator('.hp-root').dispatchEvent('pointerdown')
 
@@ -221,7 +283,7 @@ async function main() {
       document.documentElement.dataset.mode = 'dark'
       document.documentElement.classList.add('dark')
     })
-    const dark = await probe(win, app, '.hp-composer .t2c-card')
+    const dark = await probe(win, app, '.hp-composer .t2c-card', '::before')
     check('深色输入框仍有真实磨砂', dark.difference > 4, dark)
     await win.locator('.hp-root').dispatchEvent('contextmenu')
     await win.waitForSelector('.hp-organizer-panel')
@@ -230,7 +292,7 @@ async function main() {
     await win.click('.hp-organizer-head > button')
     await win.waitForTimeout(400)
     await win.emulateMedia({ reducedMotion: 'reduce' })
-    const still = await probe(win, app, '.hp-composer .t2c-card')
+    const still = await probe(win, app, '.hp-composer .t2c-card', '::before')
     check('减少动画不会关掉局部磨砂', still.difference > 4, still)
     await win.emulateMedia({ reducedMotion: 'no-preference' })
     await fixture.evaluate((el) => el.remove())

@@ -17,8 +17,9 @@ registerMessages({
   'pluginview.mountFailed': { zh: '插件视图加载失败(见控制台)', en: 'Plugin view failed to load (see console)' },
 })
 
-/** DOM-mount 宿主:div 交给插件的 mount(),卸载时跑其返回的清理函数。 */
-const PluginViewHost: React.FC<ViewProps & { def: ViewContribution }> = ({ def, extendView, leaf, params }) => {
+/** DOM-mount 宿主:div 交给插件的 mount(),卸载时跑其返回的清理函数。
+ *  导出给 builtins/muse 的主槽复用:Muse Space 主区渲染 agent-muse 插件的 home 视图时走的就是这份契约。 */
+export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution }> = ({ def, extendView, leaf, params }) => {
   const ref = useRef<HTMLDivElement>(null)
   const current = useRef({ leaf, params })
   current.current = { leaf, params }

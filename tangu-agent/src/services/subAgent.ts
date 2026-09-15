@@ -345,6 +345,8 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
         runId,
         call,
         {
+          // 无人值守父 run(Muse ask/agent 档)的异步审批档随父 ctx 下来:否则子代理越界会挂在没人应答的同步审批上(Codex 09-10 P1-7)。
+          approvalDeferral: parentCtx.approvalDeferral, userId: parentCtx.userId, agentSlug: parentCtx.agentSlug,
           sessionId: parentCtx.sessionId, execMode: parentCtx.execMode, approvalMode: parentCtx.approvalMode,
           // 越界写升级按真实工作区判定、PermissionRequest hook 需要 profile(Codex 评审 #3)
           cwd: parentCtx.cwd, extraRoots: parentCtx.extraRoots, profile: parentCtx.profile,

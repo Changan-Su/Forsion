@@ -114,4 +114,18 @@ describe('pullBroadcastsOnce', () => {
     const { added } = await pullBroadcastsOnce(USER);
     expect(added).toBe(0);
   });
+
+  it('领取条件并进附件包装 {items, claimed, requires};脏条件 JSON 只丢条件不丢附件;无附件不落条件', async () => {
+    const items = JSON.stringify([{ kind: 'points', amount: 100, label: { zh: '积分 ×100', en: 'Points ×100' } }]);
+    listBroadcasts.mockResolvedValueOnce([
+      { ...B1, attachments: items, claim_requirements: JSON.stringify({ minVersion: '2.11.0', tiers: ['plus', 'pro'] }) },
+      { ...B2, attachments: items, claim_requirements: '{oops' },
+      { id: 'b3', title: 'T3', body: '', created_at: '2026-07-01 10:00:02.000000', claim_requirements: JSON.stringify({ minVersion: '9.9.9' }) },
+    ]);
+    await pullBroadcastsOnce(USER);
+    const all = await rows();
+    expect(JSON.parse(all[0].attachments)).toEqual({ items: JSON.parse(items), claimed: false, requires: { minVersion: '2.11.0', tiers: ['plus', 'pro'] } });
+    expect(JSON.parse(all[1].attachments)).toEqual({ items: JSON.parse(items), claimed: false });
+    expect(all[2].attachments).toBeNull();
+  });
 });
