@@ -1,4 +1,83 @@
 <!doctype html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Forsion social preview</title><style>
-*{box-sizing:border-box}html,body{margin:0;width:1280px;height:640px;overflow:hidden}body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;background:#f1f5f1;color:#1c352b}.cover{width:1280px;height:640px;padding:58px 62px;position:relative;overflow:hidden}.brand{display:flex;align-items:center;gap:12px;font-size:29px;font-weight:650;letter-spacing:-1px}.brand img{width:34px;height:38px;object-fit:contain}.copy{position:relative;z-index:1;width:475px}h1{font-size:58px;line-height:1.08;letter-spacing:-2.7px;margin:69px 0 24px;font-weight:650}p{font-size:22px;line-height:1.45;max-width:360px;color:#52695d;margin:0}.address{position:absolute;left:62px;bottom:55px;font-size:17px;color:#52695d}.product{position:absolute;left:580px;top:135px;width:970px;border-radius:15px;border:1px solid #c4cec6;box-shadow:0 28px 68px #214b2e22;overflow:hidden;background:#f6f4ef}.product img{display:block;width:100%;height:auto}.rootline{position:absolute;right:50px;top:57px;font-size:16px;color:#52695d}
-</style></head><body><main class="cover"><div class="copy"><div class="brand"><img src="/repo/.github/assets/showcase/logo.svg" alt="">Forsion</div><h1>Your local<br>AI workbench.</h1><p>Bring agents, knowledge, and everyday work together.</p></div><div class="product"><img src="/repo/.github/assets/showcase/workbench.png" alt="Forsion desktop with an Agent conversation and a live project preview"></div><span class="rootline">A second brain you own.</span><span class="address">forsion.net</span></main></body></html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1280, initial-scale=1" />
+    <title>Forsion social preview</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { width: 1280px; height: 640px; margin: 0; overflow: hidden; }
+      body { background: #f1f5f1; }
+      canvas { display: block; width: 1280px; height: 640px; }
+    </style>
+  </head>
+  <body>
+    <canvas width="1280" height="640" aria-label="Forsion GitHub social preview"></canvas>
+    <script>
+      const canvas = document.querySelector("canvas");
+      const context = canvas.getContext("2d");
+      const logo = new Image();
+      const product = new Image();
+      logo.src = "/repo/.github/assets/showcase/logo.svg";
+      product.src = "/repo/.github/assets/showcase/workbench.png";
+
+      Promise.all([logo.decode(), product.decode()]).then(() => {
+        context.fillStyle = "#f1f5f1";
+        context.fillRect(0, 0, 1280, 640);
+
+        context.drawImage(logo, 62, 56, 34, 38);
+        context.fillStyle = "#1c352b";
+        context.font = "650 29px system-ui, sans-serif";
+        context.fillText("Forsion", 108, 86);
+
+        context.textAlign = "right";
+        context.fillStyle = "#52695d";
+        context.font = "400 16px system-ui, sans-serif";
+        context.fillText("A second brain you own.", 1218, 74);
+        context.textAlign = "left";
+
+        context.fillStyle = "#1c352b";
+        context.font = "650 58px system-ui, sans-serif";
+        context.fillText("Your local", 62, 218);
+        context.fillText("AI workbench.", 62, 281);
+
+        context.fillStyle = "#52695d";
+        context.font = "400 22px system-ui, sans-serif";
+        context.fillText("Bring agents, knowledge, and", 62, 339);
+        context.fillText("everyday work together.", 62, 371);
+
+        context.save();
+        context.shadowColor = "rgba(28, 53, 43, 0.16)";
+        context.shadowBlur = 32;
+        context.shadowOffsetY = 14;
+        context.fillStyle = "#eef3ef";
+        context.beginPath();
+        context.roundRect(572, 142, 646, 364, 15);
+        context.fill();
+        context.restore();
+
+        context.save();
+        context.beginPath();
+        context.roundRect(572, 142, 646, 364, 15);
+        context.clip();
+        context.drawImage(product, 572, 142, 646, 364);
+        context.restore();
+
+        context.strokeStyle = "rgba(31, 53, 43, 0.22)";
+        context.lineWidth = 1;
+        context.beginPath();
+        context.roundRect(572.5, 142.5, 645, 363, 14.5);
+        context.stroke();
+
+        context.fillStyle = "#52695d";
+        context.font = "400 17px system-ui, sans-serif";
+        context.fillText("forsion.net", 62, 585);
+
+        canvas.toBlob(async blob => {
+          const response = await fetch("/capture/social-preview.png", { method: "POST", body: blob });
+          document.title = response.ok ? "saved:social-preview" : "failed:social-preview";
+        }, "image/png");
+      });
+    </script>
+  </body>
+</html>
