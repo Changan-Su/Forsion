@@ -16,9 +16,9 @@ git fetch origin main --tags
 node unit/check-sync.mjs
 ```
 
-发现新稳定版后，合并对应标签并处理冲突，运行类型、插件、账号和本地安装验收，再构建发行。尤其检查已抽取的共享处理器是否接到了上游修复。构建前的检查只拦一种情况：仓里已有比当前检出更新的稳定版标签而它不在 HEAD 历史里（在旧检出上打包）。package.json 版本越过标签视为预发布构建，记入 `release.json` 而不报错。检查基于已获取的标签；它不会自行联网或自动合并。
+发现新稳定版后，合并对应标签并处理冲突，运行类型、插件、账号和本地安装验收，再构建发行。尤其检查已抽取的共享处理器是否接到了上游修复。构建前的检查只拦一种情况：仓里已有比当前检出更新的稳定版标签而它不在 HEAD 历史里（在旧检出上打包）。不是恰好在稳定版标签提交上的构建（有后续提交，或 package.json 版本已越过标签）都记为预发布，写进 `release.json` 而不报错；package.json 版本低于基线标签则拒绝。检查基于已获取的标签；它不会自行联网或自动合并。
 
-When a new stable release is available, merge its tag, resolve conflicts, and run type, plugin, account and local installation checks before building. Verify that fixes in extracted shared handlers are carried forward. The pre-build check refuses exactly one situation: a newer stable tag exists in the repository but not in HEAD's history (packaging from a stale checkout). A package version beyond the tag is a pre-release build, recorded in `release.json` rather than refused. It checks fetched tags and does not fetch or merge automatically.
+When a new stable release is available, merge its tag, resolve conflicts, and run type, plugin, account and local installation checks before building. Verify that fixes in extracted shared handlers are carried forward. The pre-build check refuses exactly one situation: a newer stable tag exists in the repository but not in HEAD's history (packaging from a stale checkout). Any build that is not exactly the tagged commit (later commits, or a package version already bumped past the tag) is recorded in `release.json` as a pre-release rather than refused; a package version behind the baseline tag is refused. It checks fetched tags and does not fetch or merge automatically.
 
 `.github/workflows/check-unit.yml` 提供分支检查和手动构建；发行包中的 `release.json` 记录 Desktop 基线标签与提交、Unit 修订号、是否预发布及源码提交。检查本身不发布版本。
 
