@@ -229,3 +229,28 @@ export const softBreakRemark = $remark('amadeusSoftBreak', () =>
     return (tree: MdNode): void => expand(tree)
   },
 )
+
+// ── 收件箱:单个 `\n` 就是换行 ────────────────────────────────────────────────
+//
+// CommonMark 的软换行(单个 `\n`)渲染成**一个空格**:Milkdown 的 remark-line-break 把它变成
+// `break{data.isInline:true}`,hardbreak schema 的 toDOM 对 isInline 给的是 `<span> </span>`
+// 而不是 `<br>`。于是服务端广播 / agent 信里写的
+//   第一行
+//   第二行
+// 在收件箱里显示成「第一行 第二行」(用户 2026-09-15 实报;Suspense 占位那一帧因为 pre-wrap
+// 是分行的,所以看着像「先对后错」)。
+//
+// 收件箱的正文是**信**不是 markdown 文档,按聊天口径:一个 `\n` = 一行。把 break 的 isInline
+// 拍成 false,schema 就出 `<br>`。**只给收件箱挂**(UnifiedPage 的 hardBreaks 开关)——
+// 笔记与分享页仍按标准 markdown 走,那边「软换行=空格」是对的。
+export function forceHardBreaks(tree: MdNode): void {
+  const walk = (n: MdNode): void => {
+    if (!n || typeof n !== 'object') return
+    if (n.type === 'break') n.data = { ...(n.data || {}), isInline: false }
+    for (const kid of Array.isArray(n.children) ? n.children : []) walk(kid)
+  }
+  walk(tree)
+}
+
+export const hardBreakRemark = $remark('amadeusHardBreak', () => () => (tree: MdNode): void =>
+  forceHardBreaks(tree))

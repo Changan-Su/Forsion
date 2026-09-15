@@ -30,6 +30,7 @@ const NEGATIVE_CONTROL = process.argv.includes('--nc')
 const SHOT = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-amadeus.png')
 const SHOT_REQ = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-claimreq.png')
 const SHOT_TODO = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-musetodo.png')
+const SHOT_BC = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-broadcast.png')
 const results = []
 const check = (name, ok, detail) => { results.push({ name, ok }); console.log(`${ok ? '✅' : '❌'} ${name}${ok ? '' : ` — ${detail || ''}`}`) }
 
@@ -38,7 +39,10 @@ const PREVIEW = 'write ~/Documents/todo.md (120 chars)' // 只在假引擎的审
 const FENCES = `${F}forsion-approval\n{"id":"apv-1"}\n${F}\n\n${F}forsion-task\ntitle: 补 README 的 Windows 安装步骤\ntldr: 现在只有 mac/linux\n---\n在 README.md 的安装章节补 Windows 步骤,含 PowerShell 命令。\n${F}`
 const BODY_AGENT = `Muse 想把今天的待办整理进笔记。\n\n## 今日整理\n\n| 项目 | 状态 |\n|---|---|\n| 收件箱 Amadeus 化 | 进行中 |\n\n> [!note]\n> 这是一条 callout。\n\n${FENCES}`
 const BODY_BUTTON = `点一下整理:\n\n${F}forsion-button\n{"v":1,"label":"整理今天的笔记","icon":"✨","triggerId":"w-nonexistent"}\n${F}\n\n未配置的按钮:\n\n${F}forsion-button\n{"v":1,"label":""}\n${F}`
-const BODY_SERVER = `服务端广播也带围栏(不该出卡):\n\n${FENCES}`
+const BC_IMG = 'https://api.forsion.net/api/inbox/broadcast-images/2f1b1d2e-0000-4000-8000-000000000001'
+// 换行 + 插图 = 服务端广播实际会发的形状(2026-09-15):单个 \n 必须真换行(标准 markdown 里它是空格),
+// 绝对 https 图片地址不许被当成库内相对路径改写成 amadeus-asset://。
+const BODY_SERVER = `服务端广播也带围栏(不该出卡):\n\n第一行\n第二行\n\n![](${BC_IMG})\n\n${FENCES}`
 const at = (h) => `2026-09-11 ${h}:00:00`
 const MESSAGES = [
   { id: 'm1', title: '请审批:写待办文件', body: BODY_AGENT, sender_kind: 'agent', sender_id: 'muse', origin_broadcast_id: null, read_at: null, archived_at: null, created_at: at('09') },
@@ -273,6 +277,18 @@ async function main() {
     }))
     check('服务端广播里的围栏:零卡片,围栏内容按代码块露出(信任闸)', srv.cards === 0 && srv.code && !srv.approvalLeak, JSON.stringify(srv))
 
+    // ⑧ 广播正文的换行与插图(2026-09-15 用户实报「收到的 inbox 没有换行」)
+    const fmt = await win.evaluate((img) => {
+      const body = document.querySelector('.ibx-reader-body')
+      const para = [...(body?.querySelectorAll('p') || [])].find((el) => (el.textContent || '').includes('第一行'))
+      const one = para?.querySelector('span[data-type="hardbreak"][data-is-inline="true"]')
+      const imgEl = body?.querySelector(`img[src="${img}"]`)
+      return { hasPara: !!para, br: !!para?.querySelector('br'), softSpace: !!one, img: !!imgEl, anySrc: body?.querySelector('img')?.getAttribute('src') || '' }
+    }, BC_IMG)
+    check('广播正文:单个换行渲染成真换行(不是空格)', fmt.hasPara && fmt.br && !fmt.softSpace, JSON.stringify(fmt))
+    check('广播正文:绝对 https 图片地址原样进 <img>(没被改写成库内资源)', fmt.img, JSON.stringify(fmt))
+    if (!NEGATIVE_CONTROL) await win.screenshot({ path: SHOT_BC }).catch(() => {}) // 观感自查:换行与插图得肉眼看一眼
+
     // 切回 m1:审批卡仍是已批准(重挂后按 id 重读行,不是靠正文)
     await openMessage(win, '请审批')
     await win.waitForTimeout(1200)
@@ -380,7 +396,7 @@ async function main() {
     stub.close()
   }
   const failed = results.filter((r) => !r.ok)
-  console.log(`\n${results.length - failed.length}/${results.length} 通过${NEGATIVE_CONTROL ? `(负对照:${failed.length} 条转红,预期 ≥3)` : ''}${NEGATIVE_CONTROL ? '' : ` · 截图 ${SHOT}、${SHOT_REQ}`}`)
+  console.log(`\n${results.length - failed.length}/${results.length} 通过${NEGATIVE_CONTROL ? `(负对照:${failed.length} 条转红,预期 ≥3)` : ''}${NEGATIVE_CONTROL ? '' : ` · 截图 ${SHOT}、${SHOT_REQ}、${SHOT_BC}`}`)
   if (NEGATIVE_CONTROL) process.exit(failed.length >= 3 ? 1 : 2)
   process.exit(failed.length ? 1 : 0)
 }
