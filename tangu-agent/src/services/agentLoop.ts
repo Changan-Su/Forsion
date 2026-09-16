@@ -808,6 +808,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         userMessageId: input.userMessageId,
         attachments,
         signal: ac.signal,
+        drainSteer: () => drainSteer(runId), // 用户插话在发言人边界注入(团队运行模式);本模块私有函数经参数借出
       });
       // 群聊 run 也按轮触发 Historian(标题/LOG 维护)——原先此分支提前 return,群聊会话永远没有标题维护。
       // Historian 内部只数 done run 且有实质增量地板,失败/中止场景自然无害。
