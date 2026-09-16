@@ -11,6 +11,9 @@ import { registerFont as registerHostFont } from '../../fontPresets'
 import { create } from 'zustand'
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { pluginHostPath } from './hostPaths'
+
+/** window.tangu,在没有 window 的环境(vitest node 环境、云端 worker)返回 undefined 而不是抛 ReferenceError。 */
+const hostTangu = (): typeof window.tangu => (typeof window !== 'undefined' ? window.tangu : undefined)
 import { noteOf, usePageStore } from '../store/pageStore'
 import { useUiStore } from '../store/uiStore'
 import { setTheme as applyAccent, toggleMode } from '../theme/ThemeManager'
@@ -265,7 +268,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     notify: (m) => useUiStore.getState().notify(m),
     readFile: (p) => amadeus.readTextFile(p),
     assetUrl: (p) => toAssetUrl(p),
-    hostPath: (p) => pluginHostPath(usePageStore.getState().vaultRoot, p, { executionCapabilities: { host: readTangu()?.hostExecution?.() ?? window.tangu?.executionCapabilities?.host ?? false } }),
+    hostPath: (p) => pluginHostPath(usePageStore.getState().vaultRoot, p, { executionCapabilities: { host: readTangu()?.hostExecution?.() ?? hostTangu()?.executionCapabilities?.host ?? false } }),
     writeFile: (p, text) => (ok() ? amadeus.writeTextFile(p, text) : Promise.resolve()),
     // 多维表比对交换写口(2026-09-02):与 dbStore 同一条 db:write-cas 路。写成功后让渲染端已加载的
     // 那份热重载(否则表格要等 VaultWatcher 一拍),并踢一下引擎(让盯这张表的 db_changed 规则 ~2s 内看到)。
@@ -682,10 +685,10 @@ export const usePluginStore = create<PluginState>((set, get) => {
     }
     return {
     app: appApi,
-    account: window.tangu?.account ? {
-      ...window.tangu.account,
+    account: hostTangu()?.account ? {
+      ...hostTangu()!.account!,
       subscribe: (listener) => {
-        const off = window.tangu!.account!.subscribe(listener)
+        const off = hostTangu()!.account!.subscribe(listener)
         const dispose = () => { off(); tanguUnsubs.delete(dispose) }
         tanguUnsubs.add(dispose)
         return dispose
