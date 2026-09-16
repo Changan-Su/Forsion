@@ -5,7 +5,8 @@
  * agentLoop:run 带 mentionedProjects → 末条 user 消息尾部注入派遣指令(只闸 hostExec,不看 groupChat)。
  */
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configureTangu } from '../src/seams/runtime.js';
@@ -61,39 +62,45 @@ const waitRun = async (runId: string): Promise<string> => {
 describe('start_project_session', () => {
   it('建可见项目会话(形状)+ 首个 run 跑完;parent_session_id 指回私聊', async () => {
     const { project } = await setup();
-    const ctx: any = { userId: 'u1', sessionId: 'solo-1', appId: 'tangu', modelId: 'm1', agentSlug: DEFAULT_AGENT_SLUG, profile: createTanguProfile({ sandboxMode: 'none' }), execMode: 'host' };
+    const ctx: any = { userId: 'u1', sessionId: 'solo-1', appId: 'tangu', modelId: 'm1', agentSlug: DEFAULT_AGENT_SLUG, profile: createTanguProfile({ sandboxMode: 'none' }), execMode: 'host', dispatchTargets: [realpathSync(project)] };
     const out = String(await tool().execute({ project_path: project, message: 'Write README', project_name: 'Proj A' }, ctx));
     expect(out).toMatch(/^Started session /);
     const sid = out.match(/Started session (\S+)/)![1];
     const row = (await query<any[]>(`SELECT * FROM chat_sessions WHERE id = ?`, [sid]))[0];
     expect(row.kind).toBe('user');
-    expect(row.project_path).toBe(project);
+    expect(row.project_path).toBe(realpathSync(project));
     expect(row.project_name).toBe('Proj A');
     expect(!!row.projectless).toBe(false);
     expect(row.parent_session_id).toBe('solo-1');
     expect(row.title).toBe('Write README');
-    expect(JSON.parse(row.agent_config)).toEqual({ execMode: 'host', cwd: project, preset: null, agentSlug: DEFAULT_AGENT_SLUG });
+    expect(JSON.parse(row.agent_config)).toEqual({ execMode: 'host', cwd: realpathSync(project), preset: null, agentSlug: DEFAULT_AGENT_SLUG });
     const runId = out.match(/run (\S+)\)/)![1];
     expect(await waitRun(runId)).toBe('done');
     const msgs = await query<any[]>(`SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp`, [sid]);
     expect(msgs[0]).toMatchObject({ role: 'user', content: 'Write README' });
   });
 
-  it('参数校验:相对路径 / 不存在 / 非目录 → 文本错误,不建会话', async () => {
+  it('参数校验:相对路径 / 不存在 / 非目录 / 不在本轮 @ 过的项目里 / 根目录与家目录 → 文本错误,不建会话', async () => {
     const { project } = await setup();
-    const ctx: any = { userId: 'u1', sessionId: 's', appId: 'tangu', modelId: 'm1', profile: createTanguProfile({ sandboxMode: 'none' }) };
+    const other = join(home!, 'other'); mkdirSync(other, { recursive: true });
+    const ctx: any = { userId: 'u1', sessionId: 's', appId: 'tangu', modelId: 'm1', profile: createTanguProfile({ sandboxMode: 'none' }), dispatchTargets: [realpathSync(project), realpathSync(homedir()), '/'] };
     expect(String(await tool().execute({ project_path: 'rel/path', message: 'x' }, ctx))).toMatch(/absolute/);
     expect(String(await tool().execute({ project_path: join(project, 'nope'), message: 'x' }, ctx))).toMatch(/does not exist/);
     expect(String(await tool().execute({ project_path: project, message: '' }, ctx))).toMatch(/message is required/);
+    expect(String(await tool().execute({ project_path: other, message: 'x' }, ctx))).toMatch(/@-mentioned/); // 存在但不在本轮提及里
+    expect(String(await tool().execute({ project_path: homedir(), message: 'x' }, ctx))).toMatch(/refusing/); // 即便被 @ 了,家目录也拒
+    expect(String(await tool().execute({ project_path: '/', message: 'x' }, ctx))).toMatch(/refusing/);
     expect((await query<any[]>(`SELECT COUNT(*) AS n FROM chat_sessions`))[0].n).toBe(0);
   });
 
   it('可见性:host 可见(deferred);子代理内 / 讨论 run 内不可见;云端 profile 不可见', async () => {
     await setup();
     const host = createTanguProfile({ sandboxMode: 'none' });
-    const base: any = { userId: 'u1', sessionId: 's', appId: host.appId, profile: host, execMode: 'host', unlockTools: () => {} };
-    const names = (ctx: any) => getToolDefinitions(ctx).map((t: any) => t.function?.name);
-    expect(names({ ...base, enabledDeferred: ['start_project_session'] }).includes('start_project_session') || tool().isEnabledFor!(host, base)).toBe(true);
+    const base: any = { userId: 'u1', sessionId: 's', appId: host.appId, profile: host, execMode: 'host', unlockTools: () => {}, dispatchTargets: ['/tmp/x'] };
+    void getToolDefinitions;
+    expect(tool().isEnabledFor!(host, base)).toBe(true);
+    expect(tool().isEnabledFor!(host, { ...base, dispatchTargets: [] })).toBe(false); // 本轮没 @ 项目 → 不可见(任何 host 会话都能装载 = 任意目录升级成工作区)
+    expect(tool().isEnabledFor!(host, { ...base, dispatchTargets: undefined })).toBe(false);
     expect(tool().isEnabledFor!(host, { ...base, subAgentDepth: 1 })).toBe(false);
     expect(tool().isEnabledFor!(host, { ...base, inDiscussion: true })).toBe(false);
     expect(tool().isEnabledFor!(createAiStudioProfile(), base)).toBe(false);

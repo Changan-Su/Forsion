@@ -19,6 +19,7 @@ import { engineLibDir } from '../core/tanguHome.js';
 import { SESSION_COLS, rowToSession } from './sessions.js';
 import { forceHistorianForSession } from '../services/localHistorian.js';
 import { startMemoryDream } from '../services/memoryDream.js';
+import { withKeyLock } from '../core/keyLock.js';
 
 const router = Router();
 const ENGINE_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
@@ -98,9 +99,13 @@ router.post('/agent/solo/:kind/:id/open', authMiddleware, async (req: AuthReques
     const appId = deps().profile.appId;
     const r = await resolveSolo(req.params.kind, req.params.id);
     if (!r) return res.status(404).json({ detail: 'unknown agent or engine' });
-    const cur = await activeSolo(userId, appId, r.kind, req.params.id);
-    if (cur) return res.json({ session: cur, created: false });
-    res.json({ session: await createSolo(userId, appId, r), created: true });
+    // 先查后建按 (user, kind, id) 串行:两个窗口同时点头像只得一条(creview 09-16 P1)。
+    const out = await withKeyLock(`solo:${userId}:${r.kind}:${req.params.id}`, async () => {
+      const cur = await activeSolo(userId, appId, r.kind, req.params.id);
+      if (cur) return { session: cur, created: false };
+      return { session: await createSolo(userId, appId, r), created: true };
+    });
+    res.json(out);
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'solo open failed' });
   }
@@ -113,8 +118,9 @@ router.post('/agent/solo/:kind/:id/rotate', authMiddleware, async (req: AuthRequ
     const appId = deps().profile.appId;
     const r = await resolveSolo(req.params.kind, req.params.id);
     if (!r) return res.status(404).json({ detail: 'unknown agent or engine' });
+    await withKeyLock(`solo:${userId}:${r.kind}:${req.params.id}`, async () => {
     const cur = await activeSolo(userId, appId, r.kind, req.params.id);
-    if (cur && (await hasActiveRun(cur.id))) return res.status(409).json({ detail: 'run_active' });
+    if (cur && (await hasActiveRun(cur.id))) { res.status(409).json({ detail: 'run_active' }); return; }
     // 记忆:只有 Agent 私聊有 Tangu 记忆。强制采候选在后台跑(Historian 自带 90s 预算与并发上限),采完再 Dream 整固;
     // 本地 Historian 不跳过 archived,先归档不影响它;客户端拿到新会话即可继续,采集状态经 memory 字段告知。
     let memory: 'queued' | 'skipped' | 'none' = 'none';
@@ -125,6 +131,7 @@ router.post('/agent/solo/:kind/:id/rotate', authMiddleware, async (req: AuthRequ
     }
     if (cur) await query(`UPDATE chat_sessions SET archived = ?, updated_at = ${getNowSql()} WHERE id = ?`, [true, cur.id]);
     res.json({ session: await createSolo(userId, appId, r), memory });
+    });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'solo rotate failed' });
   }

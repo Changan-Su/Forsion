@@ -43,6 +43,13 @@ registerMessages({
   'orbits.team.deleted': { zh: '团队已删除(历史会话保留,只读)', en: 'Team deleted (past sessions are kept, read-only)' },
   'orbits.team.confirmDelete': { zh: '删除团队「{name}」?会连同它的 TEAM.md 与 Library 一起删除,不可恢复。', en: 'Delete team "{name}"? Its TEAM.md and Library folder are deleted with it and cannot be recovered.' },
   'orbits.row.openMuseSpace': { zh: '打开 Muse 空间', en: 'Open the Muse space' },
+  'orbits.gone.agent': { zh: '该 Agent 已删除,只剩历史会话', en: 'This agent was deleted; only its past sessions remain' },
+  'orbits.gone.engine': { zh: '该引擎已卸载,只剩历史会话', en: 'This engine is no longer installed; only its past sessions remain' },
+  'orbits.gone.team': { zh: '该团队已删除,只剩历史会话', en: 'This team was deleted; only its past sessions remain' },
+  'orbits.gone.agentBadge': { zh: '已删除', en: 'Deleted' },
+  'orbits.gone.engineBadge': { zh: '已卸载', en: 'Uninstalled' },
+  'orbits.gone.teamBadge': { zh: '已删除', en: 'Deleted' },
+  'orbits.team.deleteBusy': { zh: '这个团队还有会话在运行,先停掉再删', en: 'This team still has a running session; stop it before deleting' },
   'orbits.row.editAgent': { zh: '编辑 Agent', en: 'Edit agent' },
   'orbits.badge.running': { zh: '运行中', en: 'Running' },
   'orbits.badge.proactive': { zh: '主动式', en: 'Proactive' },
@@ -111,6 +118,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     configBySession: state.configBySession,
     teams: state.teams,
     refreshTeams: state.refreshTeams,
+    refreshSessions: state.refreshSessions,
   })))
   // 旧的持久化快照 / 未刷新前可能没有 teams:按空表渲染,不让一个 undefined 把整块侧栏交给 ErrorBoundary。
   const teams = Array.isArray(s.teams) ? s.teams : []
@@ -149,7 +157,8 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const inSide = (p: string | null | undefined): boolean => (sideFilter === 'cloud' ? !p : !!p)
   const sideOf = sideFilter ? (x: { project_path?: string | null }) => inSide(x.project_path) : undefined
   const sessions = useMemo(() => sessionsInMode(s.sessions, mode, sideOf).filter((x) => !inOrbit(x)), [s.sessions, s.configBySession, sideFilter, mode]) // eslint-disable-line react-hooks/exhaustive-deps
-  const archivedSessions = useMemo(() => sessionsInMode(s.archivedSessions, mode, sideOf).filter((x) => !inOrbit(x)), [s.archivedSessions, s.configBySession, sideFilter, mode]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 归档区不剔除轨道会话:删掉的团队 / 卸载的引擎留下的历史在这里仍找得到(只读口径)。
+  const archivedSessions = useMemo(() => sessionsInMode(s.archivedSessions, mode, sideOf), [s.archivedSessions, sideFilter, mode]) // eslint-disable-line react-hooks/exhaustive-deps
   const workspaces = useMemo(() => {
     const all = s.workspaces()
     const sideKeep = sideFilter ? (w: (typeof all)[number]) => (sideFilter === 'cloud' ? w.kind === 'cloud' || w.kind === 'rootless' : w.kind !== 'cloud' && w.kind !== 'rootless') : undefined
@@ -162,6 +171,20 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   // host 闸:云端 agent 定义没有 libraryDir ⇒ 不能开私聊(D3 / §9 云端边界;引擎 solo 端点也是 404),不列;Muse 例外(它开的是 Space)。
   const agents = useMemo(() => s.agentDefs.filter((a) => (a.createdBy !== 'system' || a.slug === 'muse') && (a.slug === 'muse' || !!a.libraryDir)), [s.agentDefs])
   const installedEngines = useMemo(() => s.engines.filter((e) => e.status !== 'not-installed'), [s.engines])
+  /** 幽灵会话(creview 09-16):活动会话里带轨道身份、但对应实体已不在(agent 删了 / 引擎卸了 / 团队删了但会话未归档)——
+   *  它们被 inOrbit 从项目区剔除,若不给一行入口,切走之后就再也回不去。每个身份一行「墓碑」,点击直接打开最新那条会话。 */
+  const tombstones = useMemo(() => {
+    const have = { agent: new Set(agents.map((a) => a.slug)), engine: new Set(installedEngines.map((e) => e.id)), team: new Set(teams.map((t) => t.slug)) }
+    const out = new Map<string, { kind: 'agent' | 'engine' | 'team'; id: string; sessionId: string }>()
+    for (const x of s.sessions) {
+      const c = s.configBySession[x.id]
+      const ident = c?.soloAgentSlug ? ['agent', c.soloAgentSlug] as const : c?.soloEngineId ? ['engine', c.soloEngineId] as const : c?.teamSlug ? ['team', c.teamSlug] as const : null
+      if (!ident || have[ident[0]].has(ident[1])) continue
+      const key = `${ident[0]}:${ident[1]}`
+      if (!out.has(key)) out.set(key, { kind: ident[0], id: ident[1], sessionId: x.id }) // s.sessions 按 updated_at 降序 → 第一条即最新
+    }
+    return [...out.values()]
+  }, [s.sessions, s.configBySession, agents, installedEngines, teams])
   /** 有活跃 run 的私聊 agent(按运行中的 run 反查,O(running) 不是 O(会话×agent))。 */
   const runningSolo = useMemo(() => {
     const out = new Set<string>()
@@ -177,7 +200,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const activeSpaceId = useSpaceStore((st) => st.activeSpaceId)
   const hasMuseSpace = useSpaceStore((st) => st.spaces.some((x) => x.id === 'muse'))
   // Chat 档与云端侧都与 Agent 轨道互斥(§3.5):整块隐藏,不是列出来再置灰。
-  const showOrbitBlock = mode !== 'chat' && sideFilter !== 'cloud' && (agents.length > 0 || installedEngines.length > 0 || teams.length > 0)
+  const showOrbitBlock = mode !== 'chat' && sideFilter !== 'cloud' && (agents.length > 0 || installedEngines.length > 0 || teams.length > 0 || tombstones.length > 0)
 
   const openMuse = (): void => {
     // ⚠️ Muse Space 只在 museAvailable() && 内建插件启用时注册;未注册就切等于点了个死按钮,如实告诉用户。
@@ -331,6 +354,19 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
               ><MoreHorizontal size={14} /></span>
             </button>
           ))}
+          {tombstones.map((g) => (
+            <button
+              key={`gone:${g.kind}:${g.id}`}
+              type="button"
+              className={`t2o-row t2o-row-gone${s.activeId === g.sessionId || (activeCfg && (activeCfg.soloAgentSlug === g.id || activeCfg.soloEngineId === g.id || activeCfg.teamSlug === g.id)) ? ' active' : ''}`}
+              title={t(g.kind === 'engine' ? 'orbits.gone.engine' : g.kind === 'team' ? 'orbits.gone.team' : 'orbits.gone.agent')}
+              onClick={() => openSession(g.sessionId)}
+            >
+              <span className="t2o-lead"><span className="t2o-avatar t2o-avatar-text" style={{ background: 'var(--overlay-medium)', color: 'var(--text-faint, var(--text-muted))' }}>{firstChar(g.id)}</span></span>
+              <span className="t2o-name">{g.id}</span>
+              <span className="t2o-badge">{t(g.kind === 'engine' ? 'orbits.gone.engineBadge' : g.kind === 'team' ? 'orbits.gone.teamBadge' : 'orbits.gone.agentBadge')}</span>
+            </button>
+          ))}
         </div>
       )}
 
@@ -422,7 +458,15 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
                 // 引擎侧 fs.rm 整个 teams/<slug>/(含 Library/ 里的用户内容),不可逆 —— 与 SidebarPane 删工作区同款先确认。
                 const tm = teams.find((x) => x.slug === slug)
                 if (!window.confirm(t('orbits.team.confirmDelete', { name: tm?.name || slug }))) return
-                void api.deleteTeam(s.cfg, slug).then(() => s.refreshTeams()).then(() => s.toast(t('orbits.team.deleted'))).catch((e: any) => s.toast(e?.message || String(e), true))
+                void api.deleteTeam(s.cfg, slug)
+                  .then((r) => { if (!r || r.ok !== true) throw new Error('delete failed') })
+                  .then(() => Promise.all([s.refreshTeams(), s.refreshSessions(s.cfg)]))
+                  .then(() => {
+                    // 当前正开着这个团队的会话 → 它已被归档,换到新对话,别让人继续往已删的 cwd 里发消息
+                    if (s.activeId && s.configBySession[s.activeId]?.teamSlug === slug) openNewChat()
+                    s.toast(t('orbits.team.deleted'))
+                  })
+                  .catch((e: any) => s.toast(/409|run_active/.test(String(e?.message || '')) ? t('orbits.team.deleteBusy') : (e?.message || String(e)), true))
               }}>
                 <UsersRound size={13} /> {t('orbits.row.deleteTeam')}
               </button>
@@ -432,7 +476,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
       )}
       {teamEditor && (
         <TeamEditor
-          agents={s.agentDefs}
+          agents={agents.filter((a) => a.slug !== 'muse')}
           team={teamEditor.team}
           onClose={() => setTeamEditor(null)}
           onSaved={(saved) => { const isNew = !teamEditor.team; setTeamEditor(null); if (isNew) openTeam(saved.slug) }}

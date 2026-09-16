@@ -554,7 +554,20 @@ router.put('/agent/sessions/:id/config', authMiddleware, async (req: AuthRequest
     const msgCount = hasLockedFactKey(stored)
       ? Number((await query<any[]>(`SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ?`, [req.params.id]))[0]?.n || 0)
       : 0;
+    // 轨道身份键要改(存值里有、请求里不同)时,活动 run 期间一律 409:首轮 run 刚提交、用户消息还没落库(COUNT=0)那一瞬,
+    // 锁按消息数是不生效的,而 dispatchRun 可能已按旧身份分了流(creview 09-16 P1)。
+    // 漏传身份键不算「改」(锁会补回);只有请求里显式带了不同的值才算。
+    const identityChange = hasLockedFactKey(stored) && LOCKED_SESSION_FACT_KEYS.some((k) => k !== 'preset'
+      && Object.prototype.hasOwnProperty.call(stored, k) && (stored as any)[k] != null
+      && Object.prototype.hasOwnProperty.call(body, k) && (body as any)[k] !== (stored as any)[k]);
+    if (identityChange) {
+      const active = await query<any[]>(`SELECT 1 FROM agent_runs WHERE session_id = ? AND status IN ('queued','running') LIMIT 1`, [req.params.id]);
+      if (active.length) return res.status(409).json({ detail: 'session identity is locked while a run is active' });
+    }
     const cfg = applySessionFactLock(stored, body, msgCount);
+    // 锁合并之后再校验一次:请求体单看合法(只带 soloEngineId),合并回存值的 soloAgentSlug 就成了双身份 —— 这种 PUT 整条拒绝(creview 09-16 P0)。
+    const mergedErr = validSessionFacts(cfg);
+    if (mergedErr) return res.status(400).json({ detail: mergedErr });
     await query(`UPDATE chat_sessions SET agent_config = ?, updated_at = ${getNowSql()} WHERE id = ?`, [
       JSON.stringify(cfg), req.params.id,
     ]);

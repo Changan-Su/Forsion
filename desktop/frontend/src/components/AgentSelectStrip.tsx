@@ -131,24 +131,22 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
     if (!engineId && !groupStale && sameOrder(pickedSlugs, next)) return
     const st = useApp.getState()
     const dropEngine = !!engineId
+    // 一次操作只发**一笔**整包 PUT(几笔并发整体替换,「最后调用」不保证最后落库);临时 Agent 随成员集合一起清理,免得下次打开浮层复活。
+    const temps = (cfg.groupTempAgents || []).filter((a) => next.includes(a.slug))
+    const engineOff = dropEngine ? { engineId: undefined, engineModelId: undefined } : {}
     if (next.length >= TEAM_MIN) {
-      const patch = { groupChat: true, groupAgents: next, groupMaxRounds: cfg.groupMaxRounds ?? TEAM_MAX_ROUNDS }
-      if (sessionId) {
-        if (dropEngine) st.setSessionEngine('', sessionId)
-        st.setSessionGroup(patch, sessionId)
-      } else {
-        st.setNewChatCfg((c) => ({ ...c, ...patch, ...(dropEngine ? { engineId: undefined, engineModelId: undefined } : {}) }))
-      }
+      const patch = { groupChat: true, groupAgents: next, groupTempAgents: temps.length ? temps : undefined, groupMaxRounds: cfg.groupMaxRounds ?? TEAM_MAX_ROUNDS, ...engineOff }
+      if (sessionId) st.patchSessionConfig(patch, sessionId)
+      else st.setNewChatCfg((c) => ({ ...c, ...patch }))
       return
     }
-    // 降回 ≤1:立刻撤团队模式(引擎侧 <2 人整条 run failed),再把人写进 agentSlug。
+    // 降回 ≤1:立刻撤团队模式(引擎侧 <2 人整条 run failed),并把人写进 agentSlug —— 同一笔。
     const slug = next[0] || ''
+    const off = { groupChat: false, groupAgents: undefined, groupTempAgents: undefined, ...engineOff }
     if (sessionId) {
-      if (dropEngine) st.setSessionEngine('', sessionId)
-      st.setSessionGroup({ groupChat: false, groupAgents: undefined }, sessionId)
-      st.selectSessionAgent(slug, sessionId) // 最后一发 PUT 是超集,不会把上面两笔冲掉
+      st.selectSessionAgent(slug, sessionId, off)
     } else {
-      st.setNewChatCfg((c) => ({ ...c, groupChat: false, groupAgents: undefined, ...(dropEngine ? { engineId: undefined, engineModelId: undefined } : {}) }))
+      st.setNewChatCfg((c) => ({ ...c, ...off }))
       st.selectNewChatAgent(slug)
     }
   }
@@ -157,11 +155,7 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
   const applyEngine = (id: string): void => {
     const st = useApp.getState()
     if (sessionId) {
-      st.setSessionEngine(id, sessionId) // 内部已写 groupChat:false
-      if (id) {
-        st.setSessionGroup({ groupChat: false, groupAgents: undefined }, sessionId)
-        if (cfg.agentSlug) st.selectSessionAgent('', sessionId)
-      }
+      st.setSessionEngine(id, sessionId) // 选中引擎时内部同一笔写 groupChat:false / groupAgents / agentSlug 清空
     } else {
       st.setNewChatCfg((c) => ({
         ...c,

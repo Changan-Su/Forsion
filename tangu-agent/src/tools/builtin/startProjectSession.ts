@@ -6,7 +6,8 @@
  * 仅 host 形态;子代理内 / 讨论 run 内不可见(防递归);deferred(低频,1KB schema)。
  */
 import { v4 as uuidv4 } from 'uuid';
-import { statSync } from 'node:fs';
+import { statSync, realpathSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { query } from '../../core/db.js';
 import { createRun } from '../../services/runStore.js';
@@ -15,8 +16,19 @@ import type { ToolProvider } from '../toolRegistry.js';
 import type { AppProfile } from '../../seams/appProfile.js';
 import type { ToolContext } from '../toolTypes.js';
 
+// 只在「Agent 私聊 + 本轮 @ 了项目」的 run 里可见(agentLoop 把 realpath 放进 ctx.dispatchTargets);子代理 / 讨论 run / 云端不可见。
 const guard = (profile: AppProfile, ctx: ToolContext): boolean =>
-  !!profile.capabilities.hostExec && !(ctx.subAgentDepth && ctx.subAgentDepth >= 1) && !ctx.inDiscussion;
+  !!profile.capabilities.hostExec && !(ctx.subAgentDepth && ctx.subAgentDepth >= 1) && !ctx.inDiscussion
+  && Array.isArray(ctx.dispatchTargets) && ctx.dispatchTargets.length > 0;
+
+/** 根目录 / 家目录及其祖先绝不能当项目工作区(一旦成了会话 cwd,auto-edit 写入就不再触发越界审批)。 */
+export function isForbiddenProjectRoot(p: string): boolean {
+  const norm = path.resolve(p);
+  const home = path.resolve(homedir());
+  if (norm === path.parse(norm).root) return true;
+  if (norm === home) return true;
+  return home.startsWith(norm + path.sep); // 家目录的祖先(/Users、/home …)
+}
 
 export interface DispatchInput {
   userId: string; appId: string; modelId: string; agentSlug?: string;
@@ -81,12 +93,17 @@ export const dispatchProvider: ToolProvider = {
         if (!projectPath || !path.isAbsolute(projectPath)) return 'Error: project_path must be an absolute directory path';
         if (!message) return 'Error: message is required';
         try { if (!statSync(projectPath).isDirectory()) return 'Error: project_path is not a directory'; } catch { return 'Error: project_path does not exist'; }
+        // 只能派往本轮用户 @ 过的项目(realpath 逐字相等),且拒绝根目录 / 家目录及其祖先。
+        let real = '';
+        try { real = realpathSync(projectPath); } catch { return 'Error: project_path does not exist'; }
+        if (!(ctx.dispatchTargets || []).includes(real)) return 'Error: project_path must be one of the projects the user @-mentioned in this message';
+        if (isForbiddenProjectRoot(real)) return 'Error: refusing to use the filesystem root or the home directory as a project';
         const modelId = ctx.modelId || ctx.profile?.defaultModelId || '';
         if (!modelId) return 'Error: no model available (the run carries no modelId)';
         try {
           const { sessionId, runId } = await dispatchProjectSession({
             userId: ctx.userId, appId: ctx.appId, modelId, agentSlug: ctx.agentSlug,
-            projectPath, projectName: args.project_name ? String(args.project_name) : undefined, title: args.title ? String(args.title) : undefined,
+            projectPath: real, projectName: args.project_name ? String(args.project_name) : undefined, title: args.title ? String(args.title) : undefined,
             message, parentSessionId: ctx.sessionId,
           });
           // 侧栏被告知(方案 §5.4 硬化 ②):前端据此刷新会话列表并提示;不等 listSessions 轮询(它没有轮询)。

@@ -10,13 +10,14 @@ import type { StreamOpts, BuildPayloadOpts } from '../seams/cloudBrain.js';
 import { LlmError, type ThinkingLevel, type ChatMessage, type ToolCall } from '../core/types.js';
 import { clampThinkingLevel, resolveModelCapability } from '../llm/modelCapabilities.js';
 import { PROTOCOL_MARK } from '../llm/openaiCompat.js';
+import { realpathSync } from 'node:fs';
 import { publish, drain, cleanup } from './eventBus.js';
 import { makeUiSettingsUpdater } from './uiAck.js';
 import { gateToolCall, requestApproval, type ApprovalDecision, type ApprovalMode } from './approvals.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } from '../seams/runContext.js';
 import path from 'node:path';
-import { agentsDir, readUserMd, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
+import { agentsDir, readUserMd, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery } from './runStore.js';
 import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, type ToolContext } from '../tools/registry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
@@ -37,7 +38,7 @@ import {
   ContextUsageTracker, CompactionAttemptGuard, assistantTurnOf,
 } from './contextBudget.js';
 import { getLatestSummary, compactWorkingMessages } from './compaction.js';
-import { getAgent, isValidSlug, DEFAULT_MAX_ITERATIONS } from '../agents/agentRegistry.js';
+import { getAgent, isValidSlug, DEFAULT_MAX_ITERATIONS, libDirOf } from '../agents/agentRegistry.js';
 import { loadHarness, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { applyAgentActivation } from './agentActivation.js';
@@ -273,10 +274,22 @@ export function bindSessionFacts(agentConfig: any, facts: SessionFacts): void {
   for (const k of SESSION_FACT_KEYS) {
     if (facts[k]) agentConfig[k] = facts[k]; else delete agentConfig[k];
   }
-  if (facts.soloAgentSlug) { agentConfig.agentSlug = facts.soloAgentSlug; agentConfig.groupChat = undefined; agentConfig.engineId = undefined; }
-  if (facts.soloEngineId) { agentConfig.engineId = facts.soloEngineId; agentConfig.groupChat = undefined; }
-  // 独立团队:groupAgents 缺省由团队成员表填(teamRegistry,随独立团队实体一期落地);这里只钉死「永远是群聊、不委托引擎」。
-  if (facts.teamSlug) { agentConfig.groupChat = true; agentConfig.engineId = undefined; }
+  // 身份锁住的不只是「谁」,还有「在哪跑」:私聊/独立团队的工作区由身份派生并覆盖 run 值(漏传 cwd 会退成 sandbox / 进程目录;
+  // 传别的项目路径会让锁定身份跑到别处 —— creview 09-16 P1),host 也一并钉死。
+  if (facts.soloAgentSlug) {
+    agentConfig.agentSlug = facts.soloAgentSlug; agentConfig.groupChat = undefined; agentConfig.engineId = undefined;
+    agentConfig.execMode = 'host'; agentConfig.cwd = libDirOf(facts.soloAgentSlug); agentConfig.preset = null;
+  }
+  if (facts.soloEngineId) {
+    agentConfig.engineId = facts.soloEngineId; agentConfig.groupChat = undefined;
+    agentConfig.execMode = 'host'; agentConfig.cwd = engineLibDir(facts.soloEngineId); agentConfig.preset = null;
+  }
+  // 独立团队:groupAgents 缺省由团队成员表填(teamRegistry,激活块里补);这里只钉死「永远是群聊、不委托引擎、host」;cwd 随团队 Library 在激活块补。
+  if (facts.teamSlug) { agentConfig.groupChat = true; agentConfig.engineId = undefined; agentConfig.execMode = 'host'; agentConfig.preset = null; }
+}
+
+function safeRealpath(p: string): string {
+  try { return realpathSync(p); } catch { return ''; }
 }
 
 async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
@@ -286,9 +299,21 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
       const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
       // 存值为准:私聊外部引擎会话恒走该引擎;私聊 Agent / 独立团队会话恒不走外部引擎(run 带 engineId 也不算)。
       const facts = await storedSessionFacts(run.session_id);
-      const engineId: string | undefined = facts.soloEngineId || (facts.soloAgentSlug || facts.teamSlug ? undefined : input?.agentConfig?.engineId);
       const profile = resolveProfile((run as any).app_id) ?? deps().profile;
       const engines = deps().engines;
+      if (facts.soloEngineId) {
+        // 引擎私聊是**强制**分支:引擎被移除 / 非 host 形态 → 明确失败,绝不回落 Tangu 自有 loop(否则「Codex 私聊」无提示地
+        // 变成默认 Agent 的人格、工具和记忆 —— creview 09-16 P0)。请求里的 preset 也不看(存值 preset 恒 null)。
+        if (!(profile.capabilities.hostExec && engines?.has(facts.soloEngineId))) {
+          const error = `engine_unavailable:${facts.soloEngineId}`;
+          await publish(runId, 'error', { error, detail: 'This direct chat is bound to an external engine that is not available on this host.' }).catch(() => {});
+          await drain(runId).catch(() => {});
+          await updateRunStatus(runId, 'failed', { error }).catch(() => {});
+          return;
+        }
+        return await externalEngineLoop(runId, ac, run, facts.soloEngineId);
+      }
+      const engineId: string | undefined = facts.soloAgentSlug || facts.teamSlug ? undefined : input?.agentConfig?.engineId;
       // 红线:未声明 hostExec 的 profile(云端形态)→ engines 不注入/为空 → 一律回落 runLoop。
       if (engineId && profile.capabilities.hostExec && engines?.has(engineId) && !(await chatPresetLocked(run.session_id, input?.agentConfig))) {
         return await externalEngineLoop(runId, ac, run, engineId);
@@ -309,6 +334,8 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
   const sessionId = run.session_id;
   const userId = run.user_id;
   const modelId = run.model_id || '';
+  // 私聊引擎会话(存值 soloEngineId):工作区与记忆口径都随身份走(见下)。
+  const engineSolo = (await storedSessionFacts(sessionId)).soloEngineId || '';
   const assistantId = run.assistant_message_id;
   const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
   const agentConfig = plainObject(input.agentConfig);
@@ -340,7 +367,8 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
       engineModelId: agentConfig.engineModelId,
       message: String(input.message || ''),
       attachments: input.attachments || [],
-      cwd: typeof agentConfig.cwd === 'string' && agentConfig.cwd ? agentConfig.cwd : undefined,
+      // 引擎私聊的工作区由身份派生(engines/<id>/Library),不信 run 值;普通引擎会话照旧取 run 的 cwd。
+      cwd: engineSolo ? engineLibDir(engineSolo) : (typeof agentConfig.cwd === 'string' && agentConfig.cwd ? agentConfig.cwd : undefined),
       signal: ac.signal,
       publish: (type: string, payload: any) => {
         if (ac.signal.aborted) return;
@@ -358,7 +386,8 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     await publish(runId, 'done', { content: finalContent });
     await updateRunStatus(runId, 'done', { result: { content: finalContent } });
     // Historian 从会话解析记忆域；文件同步使用已捕获的展示身份，不能拿共享记忆桶替代。
-    void onUserRunDone(sessionId, userId).finally(() => scheduleAgentFilesSync(userId, displayAgentSlug));
+    // 引擎私聊没有 Tangu 记忆:不跑 Historian(它找不到会话 Agent 会回落默认 Agent,把 Codex/PI 的对话写进 Xyra 的 LOG/MEMORY),也不同步 Agent 文件。
+    if (!engineSolo) void onUserRunDone(sessionId, userId).finally(() => scheduleAgentFilesSync(userId, displayAgentSlug));
   } catch (err: any) {
     const aborted = err?.name === 'AbortError' || ac.signal.aborted;
     const status = aborted ? 'aborted' : 'failed';
@@ -593,6 +622,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         if (!Array.isArray(agentConfig.groupAgents) || agentConfig.groupAgents.length < 2) agentConfig.groupAgents = team.members.map((m) => m.slug);
         if (agentConfig.teamMode !== 'meeting' && agentConfig.teamMode !== 'collab') agentConfig.teamMode = team.mode;
         if (!(Number(agentConfig.groupMaxRounds) > 0)) agentConfig.groupMaxRounds = team.maxRounds;
+        agentConfig.cwd = team.libraryDir; // 团队会话的工作区由团队定义派生,不信 run 值(与私聊同款锁)
         agentConfig.teamDoc = team.doc.trim() ? team.doc.trim() : undefined;
         agentConfig.teamRoles = Object.fromEntries(team.members.filter((m) => m.role).map((m) => [m.slug, m.role]));
       }
@@ -1086,8 +1116,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 门禁是 `client + uiCommands`,此前这里两个都没传,真实 GUI run 的「Additional Tools」里根本
     // 没有它,而它的完整定义又因 deferred 被藏起来 → 用户开口要求换主题时模型无从解锁(Codex 评审三轮·tools #1)。
     // 故抽成一个字面量,下面的 toolCtx 原样展开它;新增门禁字段只需加在这里一处。
+    // 私聊里 @ 了的项目:派遣工具只在「本会话是 Agent 私聊 + 本轮确有项目提及」时可见,且只能派往这些 realpath(creview 09-16 P0:
+    // 否则任何 host 会话都能把 / 或家目录升级成新会话工作区)。
+    const dispatchTargets: string[] = typeof agentConfig.soloAgentSlug === 'string' && Array.isArray(agentConfig.mentionedProjects)
+      ? agentConfig.mentionedProjects.map((p: any) => (p && typeof p.path === 'string' ? safeRealpath(p.path) : '')).filter(Boolean).slice(0, 8)
+      : [];
     const toolGateCtx = {
       userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings,
+      dispatchTargets,
       hostSandbox: runHostSandbox,
       enabledSkillIds, execMode, cwd, extraRoots, approvalMode, profile, modelId, planMode, wsProject,
       muse: !!agentConfig.muse,

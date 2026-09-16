@@ -114,6 +114,11 @@ describe('routes /agent/teams', () => {
     expect((await call('DELETE', '/agent/teams/team-abc-2')).body.ok).toBe(true);
     expect((await call('GET', '/agent/teams/team-abc-2')).status).toBe(404);
     expect((await listTeams()).map((t) => t.slug)).toEqual(['team-abc']);
+    // 成员必须本地可解析:云端 / 已删 agent 不能进成员表(否则首条消息 group_needs_2_agents)
+    const bad = await call('POST', '/agent/teams', { name: 'Ghosts', members: [{ slug: 'ario' }, { slug: 'nobody' }] });
+    expect(bad.status).toBe(400);
+    expect(bad.body.detail).toMatch(/nobody/);
+    expect((await call('PATCH', '/agent/teams/team-abc', { members: [{ slug: 'ario' }, { slug: 'nobody' }] })).status).toBe(400);
   });
 
   it('session/open:幂等;形状 = projectless + teamSlug + groupChat + 成员表 + teamMode + cwd=团队 Library + preset null;过 validSessionFacts', async () => {
@@ -156,6 +161,21 @@ describe('routes /agent/teams', () => {
     // 会话里的发言归属:agent_slug 落列
     const msgs = await query<any[]>(`SELECT agent_slug FROM chat_messages WHERE session_id = ? AND role = 'model' ORDER BY timestamp`, [s.id]);
     expect(msgs.map((m) => m.agent_slug)).toEqual(['ario', 'bo']);
+  });
+
+  it('DELETE:有活动 run → 409 不删;无活动 run → 删定义并归档该团队的历史会话', async () => {
+    const mk = await call('POST', '/agent/teams', { name: 'Del me', members: [{ slug: 'ario' }, { slug: 'bo' }] });
+    const slug = mk.body.team.slug;
+    const s = (await call('POST', `/agent/teams/${slug}/session/open`)).body.session;
+    await query(`INSERT INTO agent_runs (id, session_id, user_id, status, input) VALUES ('tr-del', ?, ?, 'running', '{}')`, [s.id, USER]);
+    const busy = await call('DELETE', `/agent/teams/${slug}`);
+    expect(busy.status).toBe(409);
+    expect((await call('GET', `/agent/teams/${slug}`)).status).toBe(200);
+    await query(`UPDATE agent_runs SET status = 'done' WHERE id = 'tr-del'`);
+    const ok = await call('DELETE', `/agent/teams/${slug}`);
+    expect(ok.status).toBe(200);
+    expect((await call('GET', `/agent/teams/${slug}`)).status).toBe(404);
+    expect(!!(await query<any[]>(`SELECT archived FROM chat_sessions WHERE id = ?`, [s.id]))[0].archived).toBe(true);
   });
 
   it('云端 profile → 404', async () => {

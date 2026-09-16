@@ -634,8 +634,10 @@ export interface AppState {
   ensureSoloSession(kind: 'agent' | 'engine', id: string): Promise<SessionRecord | null>
   /** 私聊「新会话(先总结记忆)」:旧会话归档、新会话进列表;返回新会话与记忆采集状态;活动 run 时返回 null 并提示。 */
   rotateSoloSession(kind: 'agent' | 'engine', id: string): Promise<{ session: SessionRecord; memory: 'queued' | 'skipped' | 'none' } | null>
-  /** 把引擎侧建好的会话并进本地列表(去重 + 预填 agent_config + 标记历史已加载)。 */
-  adoptSession(session: SessionRecord): void
+  /** 把引擎侧建好的会话并进本地列表(去重 + 预填 agent_config);fresh=刚建的空会话才标「历史已加载」,既有会话仍要拉历史与活跃 run。 */
+  adoptSession(session: SessionRecord, opts?: { fresh?: boolean }): void
+  /** 一次 PUT 合并多个字段(选择条一次操作只发一笔,免得并发整体替换互相冲掉)。 */
+  patchSessionConfig(patch: Partial<AgentConfig>, sessionId?: string | null): void
   /** 独立团队(Agent 轨道):定义列表(host-only;云端恒空)。 */
   teams: TeamDef[]
   refreshTeams(): Promise<void>
@@ -644,7 +646,7 @@ export interface AppState {
   /** 一次性播种源(拍板 ⑬):某会话的**下一次**发送带 groupSeedSessionId(私聊里拉起群聊 → 团队首会话播私聊摘要),发完即清。run 事实,不落库。 */
   seedOnceBySession: Record<string, string>
   setSeedOnce(sessionId: string, fromSessionId: string): void
-  selectSessionAgent(slug: string, sessionId?: string | null): void
+  selectSessionAgent(slug: string, sessionId?: string | null, extraPatch?: Partial<AgentConfig>): void
   selectNewChatAgent(slug: string): void
   setNewChatWs(ws: WorkspaceDescriptor | null): void
   setNewChatCfg(fn: (c: AgentConfig) => AgentConfig): void
@@ -696,6 +698,32 @@ function persistDeskSoon(): void {
     deskPersistTimer = null
     try { localStorage.setItem(DESK_PERSIST_KEY, packDeskMap(useApp.getState().deskBySession)) } catch { /* ignore */ }
   }, 500)
+}
+
+const soloRotateInflight = new Map<string, Promise<{ session: SessionRecord; memory: 'queued' | 'skipped' | 'none' } | null>>()
+async function rotateSoloImpl(get: () => AppState, set: (fn: (st: AppState) => Partial<AppState> | AppState) => void, kind: 'agent' | 'engine', id: string): Promise<{ session: SessionRecord; memory: 'queued' | 'skipped' | 'none' } | null> {
+    const t = get().tr
+    try {
+      const r = await api.soloRotate(get().cfg, kind, id)
+      if (!r?.session?.id) throw new Error(t('solo.engineTooOld'))
+      // 旧的活动私聊会话已在引擎侧归档:本地列表同步挪到归档区(不重拉整表)。
+      const key = kind === 'agent' ? 'soloAgentSlug' : 'soloEngineId'
+      set((st) => {
+        const olds = st.sessions.filter((s) => s.id !== r.session.id && st.configBySession[s.id]?.[key] === id)
+        if (!olds.length) return {}
+        const ids = new Set(olds.map((s) => s.id))
+        return {
+          sessions: st.sessions.filter((s) => !ids.has(s.id)),
+          archivedSessions: [...olds.map((s) => ({ ...s, archived: true })), ...st.archivedSessions],
+        }
+      })
+      get().adoptSession(r.session, { fresh: true })
+      return r
+    } catch (e: any) {
+      const busy = /409|run_active/.test(String(e?.message || ''))
+      get().toast(busy ? t('solo.rotateBusy') : (e?.message || t('app.cannotCreateSession')), true)
+      return null
+    }
 }
 
 export const useApp = create<AppState>((set, get) => ({
@@ -2095,10 +2123,7 @@ export const useApp = create<AppState>((set, get) => ({
     }
     if (skillIds?.length) agentConfig.requestedSkillIds = skillIds
     const seedFrom = get().seedOnceBySession[sessionId]
-    if (seedFrom) {
-      agentConfig.groupSeedSessionId = seedFrom
-      set((st) => { const next = { ...st.seedOnceBySession }; delete next[sessionId]; return { seedOnceBySession: next } })
-    }
+    if (seedFrom) agentConfig.groupSeedSessionId = seedFrom // 发送成功后才清(下面 startRun 之后):网络失败重试仍要带上
     if (mentions?.priorityAgent) agentConfig.priorityAgent = mentions.priorityAgent
     if (mentions?.mentionAgents?.length) agentConfig.mentionedAgentSlugs = mentions.mentionAgents
     if (mentions?.mentionProjects?.length) agentConfig.mentionedProjects = mentions.mentionProjects // 私聊里 @项目派遣(run 事实,不落库)
@@ -2140,6 +2165,7 @@ export const useApp = create<AppState>((set, get) => ({
     try {
       const r = await startRun(get().cfg, { sessionId, message: text, modelId: sessionModelId, attachments, agentConfig })
       uiActionOwnedRuns.add(r.runId) // G2:本窗口是这条 run 的发起者 → 只有本窗口执行它的界面动作
+      if (seedFrom) set((st) => { const next = { ...st.seedOnceBySession }; delete next[sessionId]; return { seedOnceBySession: next } })
       // 助手身份盖章:外部引擎名 / Normal Agent / 群聊由 group_speaker 逐发言人盖(见 agentStamp)。
       const stamp = agentStamp(get(), agentConfig)
       set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: [
@@ -2472,7 +2498,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (!sid) return
     if (get().configBySession[sid]?.preset === 'chat') return // chat 会话不委托外部引擎(引擎侧 chatPresetLocked 同样拒)
     set((s) => {
-      const next = { ...(s.configBySession[sid] || {}), engineId: engineId || undefined, engineModelId: undefined, ...(engineId ? { groupChat: false } : {}) }
+      const next = { ...(s.configBySession[sid] || {}), engineId: engineId || undefined, engineModelId: undefined, ...(engineId ? { groupChat: false, groupAgents: undefined, agentSlug: undefined } : {}) }
       void api.putSessionConfig(get().cfg, sid, next).catch(() => {})
       return { configBySession: { ...s.configBySession, [sid]: next } }
     })
@@ -2495,9 +2521,9 @@ export const useApp = create<AppState>((set, get) => ({
   ensureTeamSession: async (slug) => {
     const t = get().tr
     try {
-      const { session } = await api.teamSessionOpen(get().cfg, slug)
+      const { session, created } = await api.teamSessionOpen(get().cfg, slug)
       if (!session?.id) throw new Error(t('solo.engineTooOld'))
-      get().adoptSession(session)
+      get().adoptSession(session, { fresh: created === true })
       return session
     } catch (e: any) {
       get().toast(e?.message || t('app.cannotCreateSession'), true)
@@ -2508,9 +2534,9 @@ export const useApp = create<AppState>((set, get) => ({
   ensureSoloSession: async (kind, id) => {
     const t = get().tr
     try {
-      const { session } = await api.soloOpen(get().cfg, kind, id)
+      const { session, created } = await api.soloOpen(get().cfg, kind, id)
       if (!session?.id) throw new Error(t('solo.engineTooOld')) // 老引擎对未知路由回 200 空对象:别把 undefined 并进列表
-      get().adoptSession(session)
+      get().adoptSession(session, { fresh: created === true })
       return session
     } catch (e: any) {
       get().toast(e?.message || t('app.cannotCreateSession'), true)
@@ -2518,34 +2544,25 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
-  rotateSoloSession: async (kind, id) => {
-    const t = get().tr
-    try {
-      const r = await api.soloRotate(get().cfg, kind, id)
-      if (!r?.session?.id) throw new Error(t('solo.engineTooOld'))
-      // 旧的活动私聊会话已在引擎侧归档:本地列表同步挪到归档区(不重拉整表)。
-      const key = kind === 'agent' ? 'soloAgentSlug' : 'soloEngineId'
-      set((st) => {
-        const olds = st.sessions.filter((s) => s.id !== r.session.id && st.configBySession[s.id]?.[key] === id)
-        if (!olds.length) return {}
-        const ids = new Set(olds.map((s) => s.id))
-        return {
-          sessions: st.sessions.filter((s) => !ids.has(s.id)),
-          archivedSessions: [...olds.map((s) => ({ ...s, archived: true })), ...st.archivedSessions],
-        }
-      })
-      get().adoptSession(r.session)
-      return r
-    } catch (e: any) {
-      const busy = /409|run_active/.test(String(e?.message || ''))
-      get().toast(busy ? t('solo.rotateBusy') : (e?.message || t('app.cannotCreateSession')), true)
-      return null
-    }
+  rotateSoloSession: (kind, id) => {
+    // 同一私聊的 rotate 在飞时复用同一个 Promise(双击 / 多处入口不会连续归档刚建的会话)。
+    const key = `${kind}:${id}`
+    const inflight = soloRotateInflight.get(key)
+    if (inflight) return inflight
+    const p = rotateSoloImpl(get, set, kind, id).finally(() => { soloRotateInflight.delete(key) })
+    soloRotateInflight.set(key, p)
+    return p
   },
 
   /** 把引擎侧建好的会话并进本地列表(去重 + 预填 agent_config + 标记历史已加载,免得 setActiveId 拉空历史冲掉配置)。 */
-  adoptSession: (session) => {
-    loadedHistory.add(session.id)
+  patchSessionConfig: (patch, targetSessionId) => {
+    const sid = targetSessionId === undefined ? get().activeId : targetSessionId
+    if (!sid) return
+    set((s) => { const next = { ...(s.configBySession[sid] || {}), ...patch }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
+  },
+
+  adoptSession: (session, opts) => {
+    if (opts?.fresh) loadedHistory.add(session.id) // 冷启动打开既有私聊/团队会话:必须正常 loadSessionHistory(历史 + 活跃 run 订阅)
     set((st) => ({
       sessions: [session, ...st.sessions.filter((s) => s.id !== session.id)],
       archivedSessions: st.archivedSessions.filter((s) => s.id !== session.id),
@@ -2557,15 +2574,20 @@ export const useApp = create<AppState>((set, get) => ({
   setSessionGroup: (patch, targetSessionId) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
+    // 轨道身份锁在 store 层也守一道:私聊永不进团队模式;独立团队永不退出(引擎侧 bindSessionFacts 同样强制,这里是为了 UI 不分叉)。
+    const cur = get().configBySession[sid]
+    if ((cur?.soloAgentSlug || cur?.soloEngineId) && patch.groupChat) return
+    if (cur?.teamSlug && patch.groupChat === false) return
     set((s) => { const next = { ...(s.configBySession[sid] || {}), ...patch }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
   },
 
-  selectSessionAgent: (slug, targetSessionId) => {
+  selectSessionAgent: (slug, targetSessionId, extraPatch) => {
     const t = get().tr
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
     const def = slug ? get().agentDefs.find((a) => a.slug === slug) : null
-    set((s) => { const next = { ...(s.configBySession[sid] || {}), agentSlug: slug || undefined }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
+    // extraPatch 与 agentSlug 同一笔 PUT(选择条降回单人时要连团队字段一起写,拆成两笔会互相冲掉)。
+    set((s) => { const next = { ...(s.configBySession[sid] || {}), ...(extraPatch || {}), agentSlug: slug || undefined }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
     // remember=false:这是 agent 预设强加的,不该把用户的「新会话默认模型/思考档」也一并改掉。
     if (def?.model) get().setSessionModel(def.model, sid, false)
     if (def?.thinkingLevel) get().setSessionThinking(def.thinkingLevel, sid, false)

@@ -7,7 +7,7 @@
 //    (2026-08-16 用户实报:「他们都会直接替换 A chatview」)。侧栏的聊天不冻:那份是 Space 配方里的
 //    常驻陪伴视图(Coding/Amadeus 空间),冻了等于把用户的主力聊天锁死。
 import { useApp } from './stores/appStore'
-import { useWorkspace, activeMainPanel } from '@lcl/engine'
+import { useWorkspace, activeMainPanel, useSpaceStore, setActiveSpace } from '@lcl/engine'
 import { planNewChat, planSessionOpen, type ChatLeaf } from './sessionOpenPlan'
 import { registerMessages, translate } from './i18n'
 
@@ -100,14 +100,20 @@ export function openNewChat(): void {
  *  `kind='agent'` 时 id = agent slug,`kind='engine'` 时 id = 外部引擎 id。
  *  P1 只钉签名:真正的「解析该 agent 最新未归档的 soloAgentSlug 会话,没有就经 rotate 端点新建」落在 P2,
  *  换实现时**不动调用点**(方案 §3.4 / §5)。 */
+/** 主页 Space 没有聊天主区:从主页(选择条右键「私聊」等)进轨道会话要先切到 Tangu Space,否则会把主页 leaf 原地导航成聊天。 */
+function leaveHomeSpace(): void {
+  if (useSpaceStore.getState().activeSpaceId === 'home') setActiveSpace('tangu')
+}
+
 export function openSolo(kind: 'agent' | 'engine', id: string): void {
-  void useApp.getState().ensureSoloSession(kind, id).then((s) => { if (s) openSession(s.id) })
+  void useApp.getState().ensureSoloSession(kind, id).then((s) => { if (s) { leaveHomeSpace(); openSession(s.id) } })
 }
 
 /** 私聊「新会话(先总结记忆)」:引擎侧归档旧会话 + 建新(Agent 私聊后台采记忆);旧会话还在跑 → store 已提示,这里不动。 */
-export function rotateSolo(kind: 'agent' | 'engine', id: string): void {
-  void useApp.getState().rotateSoloSession(kind, id).then((r) => {
+export function rotateSolo(kind: 'agent' | 'engine', id: string): Promise<void> {
+  return useApp.getState().rotateSoloSession(kind, id).then((r) => {
     if (!r) return
+    leaveHomeSpace()
     openSession(r.session.id)
     useApp.getState().toast(translate(r.memory === 'queued' ? 'orbits.rotate.queued' : r.memory === 'skipped' ? 'orbits.rotate.skipped' : 'orbits.rotate.none'))
   })
@@ -115,5 +121,5 @@ export function rotateSolo(kind: 'agent' | 'engine', id: string): void {
 
 /** 独立团队(Agent 轨道的持久团队)的统一入口:该团队最新未归档会话,没有就建;不内联展开(方案 §3.4)。 */
 export function openTeam(slug: string, opts?: { newTab?: boolean }): void {
-  void useApp.getState().ensureTeamSession(slug).then((s) => { if (s) openSession(s.id, opts) })
+  void useApp.getState().ensureTeamSession(slug).then((s) => { if (s) { leaveHomeSpace(); openSession(s.id, opts) } })
 }

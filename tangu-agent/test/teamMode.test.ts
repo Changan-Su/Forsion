@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configureTangu } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
-import { runGroupChat, collabNext, parseMentions, type CollabState } from '../src/services/groupChat.js';
+import { runGroupChat, collabNext, parseMentions, isDoneSpeech, type CollabState } from '../src/services/groupChat.js';
 
 const profile = createTanguProfile({ sandboxMode: 'none' });
 const hostStub: any = new Proxy({}, { get: () => () => { throw new Error('host stub'); } });
@@ -23,11 +23,22 @@ describe('collabNext / parseMentions(纯函数)', () => {
     st.cycleSpoken.add('b'); st.cycleSpoken.add('c');
     expect(collabNext(st)).toBeNull();
   });
-  it('按出现顺序解析 @<name> / @<slug>,排除自己,模型不守约定 = 空', () => {
+  it('按出现顺序解析 @<name> / @<slug>,排除自己,模型不守约定 = 空;词法边界:@Ann 不命中 @Anna,同位取最长', () => {
     const ps = [{ slug: 'alpha', name: 'Alpha' }, { slug: 'beta', name: 'Beta Bo' }, { slug: 'gamma', name: 'Gamma' }];
     expect(parseMentions('先 @Gamma 看看,再 @Beta Bo 补测试;@Alpha 我自己不算', ps, 'alpha')).toEqual(['gamma', 'beta']);
     expect(parseMentions('@beta 用 slug 也行', ps, 'alpha')).toEqual(['beta']);
     expect(parseMentions('没有点名', ps, 'alpha')).toEqual([]);
+    const pre = [{ slug: 'ann', name: 'Ann' }, { slug: 'anna', name: 'Anna' }];
+    expect(parseMentions('@Anna 你来', pre, 'zed')).toEqual(['anna']);
+    expect(parseMentions('@Ann 你来', pre, 'zed')).toEqual(['ann']);
+    expect(parseMentions('@Ann,@Anna 都来', pre, 'zed')).toEqual(['ann', 'anna']);
+  });
+  it('DONE 只认独占一行:NOT DONE / 行尾 DONE 不算', () => {
+    expect(isDoneSpeech('接口好了\nDONE')).toBe(true);
+    expect(isDoneSpeech('  DONE  ')).toBe(true);
+    expect(isDoneSpeech('接口 NOT DONE')).toBe(false);
+    expect(isDoneSpeech('接口好了 DONE')).toBe(false);
+    expect(isDoneSpeech('done')).toBe(false);
   });
 });
 
@@ -95,7 +106,7 @@ const ended = () => events.find((e) => e.type === 'group_ended')?.payload;
 
 describe('协作模式', () => {
   it('被 @ 者优先 → 轮转 → 周期分隔 → 整周期无人点名且无人写 DONE → idle 停;事件带 mode/step', async () => {
-    script = { alpha: ['@Beta 你先做接口', '我这边没事了'], beta: ['接口好了 DONE', '好'] };
+    script = { alpha: ['@Beta 你先做接口', '我这边没事了'], beta: ['接口好了\nDONE', '好'] };
     await runGroupChat(params());
     // 周期 1:alpha(轮转首位)→ beta(被点名);周期 2:alpha → beta(都无点名、无 DONE)→ idle
     expect(speakers()).toEqual(['alpha', 'beta', 'alpha', 'beta']);
@@ -106,7 +117,7 @@ describe('协作模式', () => {
   });
 
   it('全员 DONE 且无人再点名 → done 停', async () => {
-    script = { alpha: ['分工完毕 DONE'], beta: ['DONE'] };
+    script = { alpha: ['分工完毕\nDONE'], beta: ['DONE'] };
     await runGroupChat(params());
     expect(speakers()).toEqual(['alpha', 'beta']);
     expect(ended().reason).toBe('done');
@@ -141,16 +152,46 @@ describe('协作模式', () => {
   });
 });
 
+describe('收尾与 DONE 残留', () => {
+  it('用户插话让所有 DONE 作废:alpha 先 DONE,插话后 beta 再 DONE 也不算全员完成', async () => {
+    script = { alpha: ['DONE', '还没完'], beta: ['@Alpha 新要求怎么办\nDONE', 'DONE'] };
+    let once = true;
+    const drainSteer = (): any[] => { if (once && speakers().length === 1) { once = false; return [{ id: 'st1', content: '再加个需求' }]; } return []; };
+    await runGroupChat(params({ drainSteer, agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 3, groupNoSummary: true, groupSeedHistory: false, teamMode: 'collab' } }));
+    // 步 1 alpha DONE;步 2 前插话 → doneSet 清空;beta「@Alpha …DONE」(DONE 发言不解析点名);全员未在同一周期 DONE
+    expect(ended().reason).not.toBe('done');
+    expect(speakers().length).toBeGreaterThanOrEqual(3);
+  });
+  it('最后一位发言期间的插话不丢:收尾前再消费一次并让全员再回应一趟', async () => {
+    script = { alpha: ['a1', 'a-late'], beta: ['b1', 'b-late'] };
+    let fired = false;
+    const drainSteer = (): any[] => {
+      // 会议模式 1 轮:alpha、beta 说完后循环结束;此时才有插话进来(边界 drain 都已过去)
+      if (!fired && speakers().length === 2 && events.some((e) => e.type === 'group_speaker' && e.payload.phase === 'end' && e.payload.slug === 'beta')) { fired = true; return [{ id: 'late', content: '等等,还有一点' }]; }
+      return [];
+    };
+    await runGroupChat(params({ drainSteer, agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 1, groupNoSummary: true, groupSeedHistory: false } }));
+    expect(inserted.some((m) => m.id === 'late')).toBe(true); // 落库了,没被 finally 清掉
+    expect(speakers()).toEqual(['alpha', 'beta', 'alpha', 'beta']); // 多回应一趟
+    expect(finals.map((f) => f.content)).toContain('**🗣 Alpha**\n\na-late');
+  });
+});
+
 describe('播种源(拍板 ⑬)', () => {
   it('groupSeedSessionId 指向别的会话 → 用那条会话的历史播种;缺省用本会话', async () => {
     const seen: string[] = [];
     const st: any = (configureTangu as any); void st;
     // 换一个 state:countSessionMessages 记录被问到的会话 id(buildHistorySeed 第一步就是它)
     const prev = (await import('../src/seams/runtime.js')).deps();
-    configureTangu({ ...(prev as any), state: { ...(prev as any).state, countSessionMessages: async (id: string) => { seen.push(id); return 0; } } });
+    configureTangu({ ...(prev as any), state: { ...(prev as any).state, countSessionMessages: async (id: string) => { seen.push(id); return 0; }, getSessionOwner: async (id: string) => (id === 'solo-42' ? 'u1' : id === 'theirs' ? 'u2' : null) } });
     script = { alpha: ['DONE'], beta: ['DONE'] };
     await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 1, groupNoSummary: true, teamMode: 'collab', groupSeedSessionId: 'solo-42' } }));
     expect(seen[0]).toBe('solo-42');
+    // 越权:别人的会话 id 作播种源 → 整条 run failed,不读、不静默回退
+    seen.length = 0; events.length = 0;
+    await runGroupChat(params({ runId: 'r2', agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 1, groupNoSummary: true, teamMode: 'collab', groupSeedSessionId: 'theirs' } }));
+    expect(events.some((e) => e.type === 'error' && e.payload.error === 'seed_session_forbidden')).toBe(true);
+    expect(seen).toEqual([]);
     seen.length = 0;
     await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 1, groupNoSummary: true, teamMode: 'collab' } }));
     expect(seen[0]).toBe('s1');

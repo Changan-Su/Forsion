@@ -55,6 +55,8 @@ export interface ToolContext {
   agentSlug?: string;
   /** 讨论 run 标记:start_discussion 起的后台群聊 run 内,start_discussion/wait_discussion 不可见(防递归)。 */
   inDiscussion?: boolean;
+  /** 私聊里本轮 @ 了的项目(realpath):start_project_session 只在非空时可见,且只能派往其中之一(引擎内部字段,不落库)。 */
+  dispatchTargets?: string[];
   /** 计划模式(类 Claude plan mode):只暴露只读工具 + exit_plan_mode;custom/MCP 工具一并隐藏。 */
   planMode?: boolean;
   /** Muse run 标记:仅此时 add_muse_todo(Muse 唯一写权限)可见。 */

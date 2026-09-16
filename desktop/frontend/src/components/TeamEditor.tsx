@@ -23,7 +23,8 @@ registerMessages({
   'team.editor.rounds': { zh: '轮数上限(协作 = 步数 ÷ 成员数)', en: 'Max rounds (collab: steps ÷ members)' },
   'team.editor.doc': { zh: 'TEAM.md(团队约定,模型读取,建议英文)', en: 'TEAM.md (team charter read by the models; English recommended)' },
   'team.editor.docPlaceholder': { zh: '# Team\n## Mission\n## Roles\n## Workflow\n## Protocol', en: '# Team\n## Mission\n## Roles\n## Workflow\n## Protocol' },
-  'team.editor.needTwo': { zh: '至少选择 2 名成员', en: 'Pick at least 2 members' },
+  'team.editor.needTwo': { zh: '至少选择 2 名在册成员', en: 'Pick at least 2 members that still exist' },
+  'team.editor.missing': { zh: '已不存在', en: 'missing' },
   'team.editor.save': { zh: '保存', en: 'Save' },
   'team.editor.create': { zh: '创建团队', en: 'Create team' },
   'team.editor.cancel': { zh: '取消', en: 'Cancel' },
@@ -42,6 +43,7 @@ export const TeamEditor: React.FC<{
 }> = ({ agents, team, initialMembers, onSaved, onClose }) => {
   const { t } = useI18n()
   const candidates = useMemo(() => agents.filter((a) => a.createdBy !== 'system'), [agents])
+  const candidateSlugs = useMemo(() => new Set(candidates.map((a) => a.slug)), [candidates])
   const [name, setName] = useState(team?.name || '')
   const [members, setMembers] = useState<Array<{ slug: string; role: string }>>(() =>
     team ? team.members.map((m) => ({ ...m })) : (initialMembers || []).filter((s) => candidates.some((a) => a.slug === s)).map((slug) => ({ slug, role: '' })))
@@ -49,7 +51,9 @@ export const TeamEditor: React.FC<{
   const [rounds, setRounds] = useState<number>(team?.maxRounds || 7)
   const [doc, setDoc] = useState(team?.doc || '')
   const [busy, setBusy] = useState(false)
-  const canSave = name.trim().length > 0 && members.length >= 2 && !busy
+  // 只数还在名册里的成员:已删 / 系统 agent 留在成员表里会让运行时整条 run failed(<2 人)。
+  const presentCount = members.filter((m) => candidateSlugs.has(m.slug)).length
+  const canSave = name.trim().length > 0 && presentCount >= 2 && !busy
 
   const toggle = (slug: string) =>
     setMembers((prev) => (prev.some((m) => m.slug === slug) ? prev.filter((m) => m.slug !== slug) : [...prev, { slug, role: '' }]))
@@ -92,7 +96,7 @@ export const TeamEditor: React.FC<{
         <div className="field">
           <label>{t('team.editor.members')}</label>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 220, overflow: 'auto' }}>
-            {candidates.map((a) => {
+            {[...candidates, ...members.filter((m) => !candidateSlugs.has(m.slug)).map((m) => ({ slug: m.slug, name: `${m.slug} (${t('team.editor.missing')})` } as NormalAgentDef))].map((a) => {
               const idx = members.findIndex((m) => m.slug === a.slug)
               const on = idx >= 0
               return (
@@ -110,7 +114,7 @@ export const TeamEditor: React.FC<{
               )
             })}
           </div>
-          {members.length < 2 && <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 4 }}>{t('team.editor.needTwo')}</div>}
+          {presentCount < 2 && <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 4 }}>{t('team.editor.needTwo')}</div>}
         </div>
 
         <div className="field-row">

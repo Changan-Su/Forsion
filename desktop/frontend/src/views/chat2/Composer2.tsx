@@ -985,7 +985,7 @@ export const Composer2: React.FC<{
     }
     setHint(null)
     const mentions = projectMode
-      ? { mentionProjects: mentionedProjects.length ? mentionedProjects : undefined }
+      ? { mentionProjects: (() => { const live = mentionedProjects.filter((p) => outgoing.includes(`@${p.name}`)); return live.length ? live : undefined })() } // 用户删掉了 @项目 文本就不再派遣
       : inGroup
         ? { priorityAgent: mentionedSlug || undefined }
         : { mentionAgents: mentionAgents.length ? mentionAgents : undefined }

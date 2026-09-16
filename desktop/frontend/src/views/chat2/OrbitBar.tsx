@@ -49,7 +49,10 @@ export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: 
   const nameOf = (slug: string): string => s.agentDefs.find((a) => a.slug === slug)?.name || slug
   const soloAgent = cfg.soloAgentSlug ? s.agentDefs.find((a) => a.slug === cfg.soloAgentSlug) : null
   const soloEngine = cfg.soloEngineId ? s.engines.find((e) => e.id === cfg.soloEngineId) : null
-  const team = cfg.teamSlug ? (Array.isArray(s.teams) ? s.teams : []).find((x) => x.slug === cfg.teamSlug) || null : null
+  // 身份看锁定事实 teamSlug,不看 TeamDef 有没有加载到(列表未到 / 定义已删时仍是独立团队,不能露「退出团队模式」)。
+  const isTeam = !!cfg.teamSlug
+  const team = isTeam ? (Array.isArray(s.teams) ? s.teams : []).find((x) => x.slug === cfg.teamSlug) || null : null
+  const [rotating, setRotating] = useState(false)
   const members = useMemo(() => (Array.isArray(cfg.groupAgents) ? cfg.groupAgents : []), [cfg.groupAgents])
   const inTeamMode = !!cfg.groupChat && members.length >= 2
 
@@ -69,13 +72,13 @@ export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: 
           {kind === 'agent' && (
             <button type="button" className="t2o-bar-chip" onClick={() => setTeamEditor(true)} title={t('orbit.bar.raiseTeam')}><UsersRound size={12} /> {t('orbit.bar.raiseTeam')}</button>
           )}
-          <button type="button" className="t2o-bar-chip" disabled={running} onClick={() => rotateSolo(kind, id)} title={t(kind === 'agent' ? 'orbit.bar.newSession' : 'orbit.bar.newSessionEngine')}>
+          <button type="button" className="t2o-bar-chip" disabled={running || rotating} onClick={() => { setRotating(true); void rotateSolo(kind, id).finally(() => setRotating(false)) }} title={t(kind === 'agent' ? 'orbit.bar.newSession' : 'orbit.bar.newSessionEngine')}>
             <MessageSquarePlus size={12} /> {t(kind === 'agent' ? 'orbit.bar.newSession' : 'orbit.bar.newSessionEngine')}
           </button>
         </span>
         {teamEditor && kind === 'agent' && (
           <TeamEditor
-            agents={s.agentDefs}
+            agents={s.agentDefs.filter((a) => a.createdBy !== 'system' && !!a.libraryDir)}
             team={null}
             initialMembers={[id]}
             onClose={() => setTeamEditor(false)}
@@ -95,11 +98,11 @@ export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: 
     )
   }
 
-  if (!inTeamMode && !team) return null
+  if (!inTeamMode && !isTeam) return null
   const mode: 'meeting' | 'collab' = cfg.teamMode === 'collab' ? 'collab' : 'meeting'
-  const title = team ? team.name : t('orbit.bar.teamMode')
+  const title = isTeam ? (team?.name || cfg.teamSlug!) : t('orbit.bar.teamMode')
   return (
-    <div className="t2o-bar" role="status" data-orbit={team ? 'team' : 'teammode'}>
+    <div className="t2o-bar" role="status" data-orbit={isTeam ? 'team' : 'teammode'}>
       <span className="t2o-bar-title">{title}</span>
       <span className="t2o-bar-sub">{t('orbit.bar.members', { n: members.length })} · {t(mode === 'collab' ? 'orbit.bar.collab' : 'orbit.bar.meeting')}</span>
       <span className="t2o-bar-avatars">
@@ -115,7 +118,7 @@ export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: 
         <button type="button" className="t2o-bar-chip" disabled={running} onClick={() => s.setSessionGroup({ teamMode: mode === 'collab' ? 'meeting' : 'collab' }, sessionId)}>
           <Repeat size={12} /> {t(mode === 'collab' ? 'orbit.bar.switchToMeeting' : 'orbit.bar.switchToCollab')}
         </button>
-        {!team && (
+        {!isTeam && (
           <button type="button" className="t2o-bar-chip" disabled={running} onClick={() => {
             // 拍板 ⑪:退出后由进入团队模式前的 Agent 接手(存值 agentSlug,setSessionGroup 不动它);开局即团队 → 全局默认 Agent。
             s.setSessionGroup({ groupChat: false }, sessionId)
@@ -133,7 +136,7 @@ export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: 
           initialIntensity={cfg.groupIntensity}
           initialRounds={cfg.groupMaxRounds}
           // 独立团队不能退出团队模式:不给「关闭群聊」按钮(active=false 时浮层不渲染它)。
-          active={!team}
+          active={!isTeam}
           onConfirm={(r) => {
             const added = r.groupAgents.filter((x) => !members.includes(x)).map(nameOf)
             s.setSessionGroup({ groupChat: true, ...r }, sessionId)

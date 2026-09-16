@@ -617,7 +617,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           groupTempAgents={mvCfg.groupTempAgents}
           groupIntensity={mvCfg.groupIntensity}
           groupMaxRounds={mvCfg.groupMaxRounds}
-          onGroupChange={activeId ? (patch) => s.setSessionGroup(patch, activeId) : (patch) => s.setNewChatCfg((c) => ({ ...c, ...patch }))}
+          // 轨道身份锁住的会话(私聊 / 独立团队)不给旧群聊配置器:私聊不能进团队模式,独立团队不能「关闭群聊」;拉人走 OrbitBar。
+          onGroupChange={mvCfg.soloAgentSlug || mvCfg.soloEngineId || mvCfg.teamSlug ? undefined : activeId ? (patch) => s.setSessionGroup(patch, activeId) : (patch) => s.setNewChatCfg((c) => ({ ...c, ...patch }))}
           skills={s.skillsList}
           agents={s.agentDefs}
           // 拍板 ⑪:对话中可切 Agent,入口先放模式切换菜单;群聊态 / 私聊(钉死)/ 引擎会话不给。

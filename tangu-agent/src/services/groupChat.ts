@@ -83,14 +83,29 @@ export function collabNext(st: CollabState): string | null {
 }
 /** 从一段发言里按出现顺序解析被 @ 的成员(按 @<name> 或 @<slug>;排除自己;去重)。模型不守约定 = 无人被点名。 */
 export function parseMentions(text: string, participants: Array<{ slug: string; name: string }>, selfSlug: string): string[] {
-  const hits: Array<{ i: number; slug: string }> = [];
+  // 词法边界:@Ann 不能命中 @Anna(名字 / slug 后面不能紧跟字母数字 _ -);同一位置多个命中取最长;重叠命中只算一个。
+  const esc = (k: string): string => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const hits: Array<{ i: number; len: number; slug: string }> = [];
   for (const a of participants) {
     if (a.slug === selfSlug) continue;
-    const idx = [`@${a.name}`, `@${a.slug}`].map((k) => text.indexOf(k)).filter((i) => i >= 0);
-    if (idx.length) hits.push({ i: Math.min(...idx), slug: a.slug });
+    for (const key of new Set([a.name, a.slug].filter(Boolean))) {
+      const re = new RegExp(`@${esc(key)}(?![\\p{L}\\p{N}_-])`, 'gu');
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(text))) { hits.push({ i: m.index, len: m[0].length, slug: a.slug }); if (!m[0].length) re.lastIndex++; }
+    }
   }
-  return hits.sort((x, y) => x.i - y.i).map((h) => h.slug);
+  hits.sort((x, y) => x.i - y.i || y.len - x.len);
+  const out: string[] = [];
+  let lastEnd = -1;
+  for (const h of hits) {
+    if (h.i < lastEnd) continue;
+    lastEnd = h.i + h.len;
+    if (!out.includes(h.slug)) out.push(h.slug);
+  }
+  return out;
 }
+/** DONE 只认独占一行(约定写在自己一行);「NOT DONE」「done」都不算。 */
+export const isDoneSpeech = (text: string): boolean => /^\s*DONE\s*$/m.test(text);
 
 /** 本次群聊 run 的真实 token 累计(usage 事件的 total + 终态 tokens_total 用)。 */
 // cost/limit 挂在 meter 上随处可达:usage 事件要带「本 run 累计成本+上限」(H3 成本闸可见,与 agentLoop 同口径)。
@@ -132,7 +147,17 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
     // **之前**读,否则开场白会在上下文块里重复出现。历史为空 → 无条目,与旧行为一致。
     // 播种源缺省是本会话;私聊里「拉起群聊」建的独立团队首个 run 可指定 groupSeedSessionId = 那条私聊(拍板 ⑬:私聊摘要播种进团队首会话)。
     // 这是 run 事实(客户端只在首条消息带一次,不落库);只能指向同一用户的会话 —— 由 buildHistorySeed 只读消息表、不改任何东西兜住。
-    const seedFrom = typeof p.agentConfig.groupSeedSessionId === 'string' && p.agentConfig.groupSeedSessionId ? p.agentConfig.groupSeedSessionId : sessionId;
+    let seedFrom = typeof p.agentConfig.groupSeedSessionId === 'string' && p.agentConfig.groupSeedSessionId ? p.agentConfig.groupSeedSessionId : sessionId;
+    if (seedFrom !== sessionId) {
+      // 越权红线:播种源必须是同一用户的会话(否则任何人填个 UUID 就能把别人的对话喂给模型、还往那条会话写压缩检查点)。校验失败整条 run 拒绝,不静默回退。
+      const owner = await state.getSessionOwner(seedFrom).catch(() => null);
+      if (owner !== userId) {
+        await publish(runId, 'error', { error: 'seed_session_forbidden' });
+        await drain(runId);
+        await updateRunStatus(runId, 'failed', { error: 'seed_session_forbidden' });
+        return;
+      }
+    }
     const seedEntry = p.agentConfig.groupSeedHistory !== false
       ? await buildHistorySeed(seedFrom, modelId, p.appId).catch(() => null)
       : null;
@@ -289,7 +314,7 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
         // 用户插话先于「要不要停」:它是对全员的新输入 —— 本周期重新算一遍(谁都还没回应它),且本身算「有人被点名」,
         // 所以「整周期无人点名但用户刚插话」不会 idle(负对照)。
         const injected = await drainUserSteer(cycle);
-        if (injected) { st.cycleSpoken = new Set(); cycleMentions += injected; }
+        if (injected) { st.cycleSpoken = new Set(); cycleMentions += injected; doneSet = new Set(); } // 用户有新话:谁的 DONE 都作废,大家重新回应
         // 周期分隔:全员本周期都发过言且无人被点名 → 新周期;整周期无人点名且无人写 DONE → 空转停。
         let slug = collabNext(st);
         if (!slug) {
@@ -302,15 +327,30 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
         const agent = bySlug.get(slug)!;
         const r = await speak(agent, cycle);
         st.cycleSpoken.add(slug);
-        if (/\bDONE\b/.test(r.text)) {
+        if (isDoneSpeech(r.text)) {
           doneSet.add(slug);
           if (doneSet.size === participants.length) { stopReason = 'done'; break; }
         } else {
+          doneSet.delete(slug); // 说了 DONE 之后又发了实质内容 = 没完
           for (const m of parseMentions(r.text, participants, slug)) {
             if (!st.pending.includes(m)) { st.pending.push(m); cycleMentions++; }
           }
         }
         if (r.stop) { stopReason = r.stop; break; }
+      }
+    }
+
+    // 收尾前再消费一次插话:最后一位发言 / 投票 / 收场判定期间进来的消息,enqueueSteer 已经答应「收到了」,
+    // 不能在 finally 清队列时直接丢掉 —— 有就再让全员回应一遍(有界:一趟),然后把趟内又来的持久化进对话。
+    if (!signal.aborted && stopReason !== 'quota' && stopReason !== 'cost_limit') {
+      const late = await drainUserSteer(roundsRun);
+      if (late > 0) {
+        for (const agent of participants) {
+          if (signal.aborted) throw new AbortLikeError();
+          const r = await speak(agent, roundsRun);
+          if (r.stop) { stopReason = r.stop; break; }
+        }
+        await drainUserSteer(roundsRun);
       }
     }
 
