@@ -130,8 +130,11 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
     // 消息,参与者要看得到此前对话。先经 compactSession 压缩再注入(用户口径「先 Compact 再注入」),
     // 摘要作为一条上下文条目进 transcript → 每个参与者首轮 delta 自然看到。必须在 ② 落库开场白
     // **之前**读,否则开场白会在上下文块里重复出现。历史为空 → 无条目,与旧行为一致。
+    // 播种源缺省是本会话;私聊里「拉起群聊」建的独立团队首个 run 可指定 groupSeedSessionId = 那条私聊(拍板 ⑬:私聊摘要播种进团队首会话)。
+    // 这是 run 事实(客户端只在首条消息带一次,不落库);只能指向同一用户的会话 —— 由 buildHistorySeed 只读消息表、不改任何东西兜住。
+    const seedFrom = typeof p.agentConfig.groupSeedSessionId === 'string' && p.agentConfig.groupSeedSessionId ? p.agentConfig.groupSeedSessionId : sessionId;
     const seedEntry = p.agentConfig.groupSeedHistory !== false
-      ? await buildHistorySeed(sessionId, modelId, p.appId).catch(() => null)
+      ? await buildHistorySeed(seedFrom, modelId, p.appId).catch(() => null)
       : null;
 
     // ② 用户消息落库(group 分支早于 runLoop 的 insertUserMessage 点,故此处补上)

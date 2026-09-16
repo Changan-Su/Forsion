@@ -141,6 +141,22 @@ describe('协作模式', () => {
   });
 });
 
+describe('播种源(拍板 ⑬)', () => {
+  it('groupSeedSessionId 指向别的会话 → 用那条会话的历史播种;缺省用本会话', async () => {
+    const seen: string[] = [];
+    const st: any = (configureTangu as any); void st;
+    // 换一个 state:countSessionMessages 记录被问到的会话 id(buildHistorySeed 第一步就是它)
+    const prev = (await import('../src/seams/runtime.js')).deps();
+    configureTangu({ ...(prev as any), state: { ...(prev as any).state, countSessionMessages: async (id: string) => { seen.push(id); return 0; } } });
+    script = { alpha: ['DONE'], beta: ['DONE'] };
+    await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 1, groupNoSummary: true, teamMode: 'collab', groupSeedSessionId: 'solo-42' } }));
+    expect(seen[0]).toBe('solo-42');
+    seen.length = 0;
+    await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 1, groupNoSummary: true, teamMode: 'collab' } }));
+    expect(seen[0]).toBe('s1');
+  });
+});
+
 describe('会议模式与共用行为', () => {
   it('未知 teamMode 回落会议:固定发言序 + 投票;首条用户消息不再烤进 system,teamDoc 注入每位成员 system', async () => {
     script = { alpha: ['a1', 'a2'], beta: ['b1', 'b2'] };
