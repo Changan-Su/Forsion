@@ -7,11 +7,18 @@
  *   生产网关(location.origin=https://localhost 不能同源),VITE_API_ORIGIN 覆盖。
  * - **web(dev/preview)**:localStorage token + 同源/代理 /auth 跳转(等价 webShim),便于不出包快速联调。
  *
- * 其余 host 能力(文件系统/providers/mcp/market/更新…)缺省 → 共享组件 `window.tangu?.X` 可选链自然隐藏。
+ * 其余 host 能力(文件系统/providers/mcp/market…)缺省 → 共享组件 `window.tangu?.X` 可选链自然隐藏。
+ *
+ * **更新检查是例外**(2026-09-15 补):`checkForUpdates`/`onUpdaterStatus`/`downloadUpdate` 三件
+ * 共享 UI(bootstrap 的启动静默检查→自动弹「更新」页、设置-关于的按钮)全靠可选链探测,移动端缺席
+ * = 装了旧版也永远没有任何提示。安装仍由系统完成(下载 APK 手动安装),故不实现 installUpdate。
  */
+import { App } from '@capacitor/app'
 import { Browser } from '@capacitor/browser'
 import { InAppBrowser, ToolbarPosition, iOSViewStyle, iOSAnimation } from '@capacitor/inappbrowser'
 import { translate } from '@/i18n'
+import { APP_VERSION } from '@/changelog'
+import { isNewer } from '../../desktop/shared/updateVersion'
 import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudAccountCache'
 import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken } from './capacitorAuth'
 
@@ -145,6 +152,82 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     }
   }
 
+  // ── 更新检查 ──────────────────────────────────────────────────────────────
+  // 版本源两处,取更新的那一个:① Forsion 网关 `/website/config`(大陆可达,下载走 dl.forsion.net;
+  // 但要管理员在后台点过「从 GitHub 导入」才会有值,可能落后甚至为空)② GitHub releases/latest
+  // (最新,但大陆不一定连得上,且 build-android 失败时 release 里可能压根没有 APK → 必须核到资产才算数)。
+  // 全程不抛:bootstrap 用 `void checkForUpdates()`,抛出去就是 unhandledrejection(移动端 e2e 直接红)。
+  type UpdStatus = { phase: string; version?: string; error?: string }
+  const updListeners = new Set<(st: UpdStatus) => void>()
+  let updStatus: UpdStatus = { phase: 'idle' }
+  let apkUrl = ''
+  const emitUpd = (st: UpdStatus): UpdStatus => {
+    updStatus = st
+    for (const cb of updListeners) { try { cb(st) } catch { /* 一个订阅者炸了不连累别人 */ } }
+    return st
+  }
+
+  /** 装机版本。本机 gradle 缺省 "1.0"、非 tag 的 CI 构建是 "0.0.0-ci.N" —— 都不是发布号,退回包内 CHANGELOG。 */
+  const installedVersion = async (): Promise<string> => {
+    try {
+      const v = (await App.getInfo()).version
+      if (v && /^\d+\.\d+\.\d+/.test(v) && !/-ci\./.test(v)) return v
+    } catch { /* web(dev/preview)没有 Capacitor */ }
+    return APP_VERSION
+  }
+
+  /** 取一份 JSON;失败(超时 / 断网 / 非 2xx / 坏 JSON)返回 null —— 调用方要能区分「没答上」和「答了没有新版」。 */
+  const getJson = async (url: string, ms = 6000): Promise<any> => {
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), ms)
+    try {
+      const r = await origFetch(url, { signal: ac.signal })
+      return r.ok ? await r.json() : null
+    } catch { return null } finally { clearTimeout(timer) }
+  }
+
+  let updInflight: Promise<UpdStatus> | null = null
+  const runCheck = async (): Promise<UpdStatus> => {
+    emitUpd({ phase: 'checking' })
+    try {
+      const current = await installedVersion()
+      const cands: Array<{ version: string; url: string }> = []
+      let answered = 0
+      // ⚠️ backendUrl 已含 /api,路径从 /api 之后写起(同 cloudJson 的坑)。
+      const cfg = await getJson(`${backendUrl}/website/config`)
+      if (cfg) {
+        answered += 1
+        const srvVer = String(cfg?.platforms?.android?.version || '').trim()
+        // 网关那份要管理员点过「从 GitHub 导入」才有值:空 = 还没导入,不是错。
+        if (srvVer) cands.push({ version: srvVer, url: `${backendUrl}/website/download/android` })
+      }
+      const rel = await getJson('https://api.github.com/repos/Changan-Su/Forsion/releases/latest')
+      if (rel) {
+        answered += 1
+        const ghVer = String(rel?.tag_name || '').replace(/^v/i, '').trim()
+        const asset = (rel?.assets || []).find((a: any) => /-android(-debug)?\.apk$/i.test(String(a?.name || '')))
+        // 没有 APK 资产 = 这个 tag 的 build-android 挂了(它不阻断发版),别报一个下不到的新版本。
+        if (ghVer && asset?.browser_download_url) cands.push({ version: ghVer, url: String(asset.browser_download_url) })
+      }
+      // **两个源都没答上**(离线 / 网关挂了 + GitHub 在大陆不可达)不能报「已是最新版」——
+      // 那会把一次失败伪装成「检查过了,没新版」,用户永远等不到提醒(Codex 09-15)。
+      if (!answered) return emitUpd({ phase: 'error', error: translate('about.update.unreachable') })
+      const best = cands.reduce<{ version: string; url: string } | null>((acc, c) => (!acc || isNewer(c.version, acc.version) ? c : acc), null)
+      if (best && isNewer(best.version, current)) {
+        apkUrl = best.url
+        return emitUpd({ phase: 'available', version: best.version })
+      }
+      return emitUpd({ phase: 'not-available' })
+    } catch (e) {
+      return emitUpd({ phase: 'error', error: String((e as Error)?.message || e) })
+    }
+  }
+  /** 启动静默检查与「更新」页打开时的检查会撞在一起:复用在途那一次,避免后发先至把 available 覆盖回 not-available。 */
+  const checkForUpdates = (): Promise<UpdStatus> => {
+    if (!updInflight) updInflight = runCheck().finally(() => { updInflight = null })
+    return updInflight
+  }
+
   // 身份字段压在最后:落盘偏好(可能是旧号 / 被人改过的 localStorage)绝不该盖掉连接与鉴权。
   const config = (): Record<string, unknown> => ({
     modelId: '', ...readPrefs(),
@@ -170,6 +253,16 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     accountQuota: () => cloudJson('GET', '/token-quota/my'),
     openExternal,
     openUnitPage,
+    checkForUpdates,
+    // 订阅即补发最近一次状态:设置-关于只在挂载时 subscribe(不重新检查),不补发就永远停在 idle。
+    onUpdaterStatus: (cb: (st: UpdStatus) => void) => {
+      updListeners.add(cb)
+      if (updStatus.phase !== 'idle') { try { cb(updStatus) } catch { /* ignore */ } }
+      return () => updListeners.delete(cb)
+    },
+    // 安装交给系统:开系统浏览器下载 APK(网关那条会 302 到 dl.forsion.net),用户点一下安装。
+    // 刻意不实现 installUpdate —— 应用内安装要 REQUEST_INSTALL_PACKAGES + FileProvider,另立项。
+    downloadUpdate: async () => { await openExternal(apkUrl || 'https://github.com/Changan-Su/Forsion/releases/latest') },
     // 账号名下设备名册(Forsion Unit):互联入口 UnitsSheet 的数据面;与桌面 units:list IPC 同形 {status,json}。
     unitsList: () => cloudJson('GET', '/units'),
     accountUseResetCard: (type?: string) => {

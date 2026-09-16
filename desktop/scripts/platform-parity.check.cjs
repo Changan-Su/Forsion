@@ -61,6 +61,10 @@ const GATE_FILES = [
   path.join(GENESIS, 'desktop/frontend/src/services/agentRunService.ts'),
   // 2026-09-15 加入 features/runtime.ts:Inbox/Muse 的能力判定(inboxAvailable/museAvailable)从 bootstrapEngine 搬到这里,门控随之搬家。
   path.join(GENESIS, 'desktop/frontend/src/features/runtime.ts'),
+  // 2026-09-15 加入 bootstrap.ts:启动期的 host 门控也住在这儿(更新检查、收件箱打开事件)。
+  // 实证:`checkForUpdates`/`onUpdaterStatus` 移动端 shim 一直没实现 → 装了旧版永远没有更新提醒,
+  // 而 A/B/C 三段全绿(useBootstrap 两边都调),D 段又扫不到这个文件 = 整条通道没有台账。
+  path.join(GENESIS, 'desktop/frontend/src/stores/bootstrap.ts'),
 ]
 
 /** 移动端**故意**不要的东西:名字 → 理由。理由留空 = 视为未声明,照样红灯。 */
@@ -111,6 +115,9 @@ const KNOWN_GATES = {
   'window.tangu?.openMini': 'Mini 卡片命令 — 仅桌面',
   'window.tangu?.unitsList': 'Unit 切换器(Ribbon head)— 仅真桌面:名册/配对回收走桌面 IPC,设备行=打开对方设备页(B 端渲染,方案 §11);web/mobile 无此 IPC,vault 切换仍走 VaultSideSwitch mobile 分支',
   'window.tangu?.unitPage': 'unit 设备页标志(unitShim 注入)— 设备页无 vault 桥仍须装插件宿主;desktop/web/mobile 天然无此标志,行为不变',
+  'window.tangu?.checkForUpdates': '启动静默检查更新 — 桌面 electron-updater / 移动端 shim 自己查(网关 /website/config + GitHub releases,见 mobileShim);web 恒最新,天然无',
+  'window.tangu?.onUpdaterStatus': '更新状态订阅(启动自动弹「更新」页 + 设置-关于的按钮)— 同上,桌面与移动端都有,web 无',
+  'window.tangu?.onInboxOpen': '系统通知点开收件箱 — 仅 Electron(webContents.send);移动端通知未接,点角标进 Space',
   'window.amadeus?.exportCsv': '多维表「导出 CSV」的落盘通道(保存对话框)— 仅 Electron 桌面。web 无此 IPC → 降级成浏览器 Blob 下载;移动端(window.tangu?.mobile)WebView 里 `<a download>` 不落盘 → **整个按钮不渲染**(留个点了没反应的按钮比没有更糟)。判据单源 blocks/database/csvExport.ts 的 csvExportMode()',
 }
 
