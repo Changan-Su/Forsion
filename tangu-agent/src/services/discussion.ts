@@ -1,5 +1,5 @@
 /**
- * @讨论(Mode B):主 agent「分身」一个自己进**后台 2 人群聊**,和被 @ 的对象 agent 来回讨论到投票结束,
+ * @讨论(Mode B):主 agent「分身」一个自己进**后台 2 人群聊**,和被 @ 的对象 agent 来回讨论到双方都以 DONE 收尾,
  * 把综合结论带回。复用 muse 的「独立 session + 自有 run + enqueueRun」后台范式(同会话 run 串行 → 后台讨论
  * 必须独立 session,否则排在主 run 队列后面等它结束)+ runGroupChat 编排(经 agentLoop 的 groupChat 闸自动路由)。
  *
@@ -36,7 +36,7 @@ export interface StartDiscussionParams {
   /** 讨论话题(自包含——对象看不到主对话)。 */
   topic: string;
   context?: string;
-  /** 讨论深度(轮数;默认 7,封顶 30,投票可提前结束)。 */
+  /** 讨论深度硬上限(轮数;封顶 30;不传 = 只有天花板,双方 DONE 即结束)。 */
   maxRounds?: number;
   /** Background Session 父链接:发起讨论的主会话 id(右栏「子聊天」经 /background 端点持久列出)。 */
   parentSessionId?: string;

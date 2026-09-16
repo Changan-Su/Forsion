@@ -47,8 +47,10 @@ export const TeamEditor: React.FC<{
   const [busy, setBusy] = useState(false)
   // 只数还在名册里的成员:已删 / 系统 agent 留在成员表里会让运行时整条 run failed(<2 人)。
   const presentCount = members.filter((m) => candidateSlugs.has(m.slug)).length
-  // 名称可空:缺省 = 成员名相连(与引擎 defaultTeamName 同款;将来若从项目里建团队再 `@ 项目`)。占位符就是这个缺省,用户看得到会叫什么。
+  // 名称可空:新建时缺省 = 成员名相连(引擎 defaultTeamName 生成,前端只把同款算出来当占位符);编辑时留空 = 保留原名(PATCH 空白不改名)。
+  // 名称一律原样交给服务端,前端不替它补缺省 —— 否则编辑时清空会把团队意外改名成缺省名(Codex 09-16 r3 #7)。
   const defaultName = members.map((m) => candidates.find((a) => a.slug === m.slug)?.name || m.slug).join(' & ')
+  const namePlaceholder = team ? team.name : (defaultName || t('team.editor.namePlaceholder'))
   const canSave = presentCount >= 2 && !busy
 
   const toggle = (slug: string) =>
@@ -60,7 +62,7 @@ export const TeamEditor: React.FC<{
     setBusy(true)
     const st = useApp.getState()
     try {
-      const input = { name: name.trim() || defaultName, members, doc }
+      const input = { name: name.trim(), members, doc }
       const saved = team ? await api.patchTeam(st.cfg, team.slug, input) : await api.createTeam(st.cfg, input)
       await st.refreshTeams()
       st.toast(t('team.editor.saved'))
@@ -86,7 +88,7 @@ export const TeamEditor: React.FC<{
 
         <div className="field">
           <label>{t('team.editor.name')}</label>
-          <input type="text" value={name} placeholder={defaultName || t('team.editor.namePlaceholder')} onChange={(e) => setName(e.target.value)} autoFocus />
+          <input type="text" value={name} placeholder={namePlaceholder} onChange={(e) => setName(e.target.value)} autoFocus />
         </div>
 
         <div className="field">

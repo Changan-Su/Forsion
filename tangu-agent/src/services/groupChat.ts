@@ -112,8 +112,8 @@ export function parseMentions(text: string, participants: Array<{ slug: string; 
   }
   return out;
 }
-/** DONE 只认独占一行(约定写在自己一行);「NOT DONE」「done」都不算。 */
-export const isDoneSpeech = (text: string): boolean => /^\s*DONE\s*$/m.test(text);
+/** DONE 只认发言的最后一个非空行(约定:独占一行、写在末尾);正文中间 / 代码块里的 DONE、「NOT DONE」「done」都不算(Codex 09-16 r3 #1)。 */
+export const isDoneSpeech = (text: string): boolean => (text.trimEnd().split('\n').pop() || '').trim() === 'DONE';
 
 /** 本次群聊 run 的真实 token 累计(usage 事件的 total + 终态 tokens_total 用)。 */
 // cost/limit 挂在 meter 上随处可达:usage 事件要带「本 run 累计成本+上限」(H3 成本闸可见,与 agentLoop 同口径)。
@@ -131,7 +131,8 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
   try {
     // ① 载入参与者:groupAgents 是有序 slug 列表(已存 Normal Agent + 临时 Agent 混合);
     // 临时 Agent 定义随会话 agentConfig.groupTempAgents 传来(不落 ~/.tangu/agents,仅本会话用),按 slug 优先命中。
-    const slugs: string[] = Array.isArray(p.agentConfig.groupAgents) ? p.agentConfig.groupAgents.map(String) : [];
+    // 保序去重:重复 slug(TUI `/groupchat a a`)会让 done.size 永远追不上 participants.length → 周期边界取不到发言人(Codex 09-16 r3 #2)。
+    const slugs: string[] = [...new Set<string>(Array.isArray(p.agentConfig.groupAgents) ? p.agentConfig.groupAgents.map(String) : [])];
     const tempBySlug = new Map(sanitizeTempAgents(p.agentConfig.groupTempAgents).map((a) => [a.slug, a]));
     const loaded = await Promise.all(slugs.map(async (s) => tempBySlug.get(s) || (await getAgent(s).catch(() => null))));
     const participants = loaded.filter((a): a is NormalAgentDef => !!a);
@@ -285,14 +286,16 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
     for (let step = 1; step <= maxSteps; step++) {
       if (signal.aborted) throw new AbortLikeError();
       // 用户插话先于「要不要停」:它是对全员的新输入 —— 谁的 DONE 都作废,本周期重来,大家重新回应。
-      const injected = await drainUserSteer(cycle);
+      // 预算尾巴上(剩余步数不够全员各回应一次)不在这里消费:留给收尾那趟(全员各回应一次,有界),否则最后几步只够
+      // 一两位回应、其余成员没见到这条插话就到顶了(Codex 09-16 r3 #3);上限本身不因插话突破。
+      const injected = step + st.participants.length - 1 <= maxSteps ? await drainUserSteer(cycle) : 0;
       if (injected) { st.cycleSpoken = new Set(); st.done = new Set(); }
       let slug = teamNext(st);
       if (!slug) {
-        if (st.done.size === participants.length) { stopReason = 'done'; break; }
         cycle++; st.cycleSpoken = new Set();
         await publish(runId, 'group_cycle', { cycle });
-        slug = teamNext(st)!;
+        slug = teamNext(st);
+        if (!slug) { stopReason = 'done'; break; } // 去重后到不了这里(全员 DONE 在下面即刻判定);守住而不是断言
       }
       roundsRun = cycle;
       const agent = bySlug.get(slug)!;
@@ -306,6 +309,8 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
         for (const m of parseMentions(r.text, participants, slug)) if (!st.pending.includes(m)) st.pending.push(m);
       }
       if (r.stop) { stopReason = r.stop; break; }
+      // 全员 DONE 即刻判定(不等下一步的周期边界):最后一步上全员 DONE 才不会被记成 max_rounds(Codex 09-16 r3 #5)。
+      if (st.done.size === st.participants.length) { stopReason = 'done'; break; }
     }
 
     // 收尾前再消费一次插话:最后一位发言 / 投票 / 收场判定期间进来的消息,enqueueSteer 已经答应「收到了」,

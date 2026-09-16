@@ -1,6 +1,6 @@
 /**
  * start_discussion / wait_discussion(Mode B):主 agent「分身」一个自己进后台 2 人群聊,和对象 agent
- * 来回讨论到投票结束(services/discussion.ts)。start 立即返回句柄(后台跑,主 run 不阻塞),
+ * 来回讨论到双方都以 DONE 收尾(services/discussion.ts)。start 立即返回句柄(后台跑,主 run 不阻塞),
  * wait 按句柄取结论(跑完直接返回、没跑完就阻塞等)——主 agent「继续处理主进程 / 需要时再等」二者皆可。
  *
  * 仅 host 形态暴露(分身要起后台 run + 读本地 agents 人设);防递归:子代理内 / 讨论 run 内不可见。
@@ -31,7 +31,7 @@ export const discussProvider: ToolProvider = {
         function: {
           name: 'start_discussion',
           description:
-            'Spawn a background discussion: a fork of yourself debates a peer agent over several rounds until both vote to end, then a moderator synthesizes a conclusion. ' +
+            'Spawn a background discussion: a fork of yourself debates a peer agent; each side ends its remark with DONE once it has nothing to add, and when both are done a moderator synthesizes a conclusion. ' +
             'Returns a discussionId immediately and runs in the background (non-blocking) — you can keep working and call wait_discussion later, or call it right away to block until the conclusion is ready. ' +
             'Use this (instead of delegate) when the task benefits from genuine back-and-forth deliberation with another agent rather than a one-shot subtask. ' +
             'Provide peer (a named agent slug, e.g. one the user @-mentioned) OR instructions (to spin up an ad-hoc peer). The topic must be self-contained (the peer cannot see this conversation).',

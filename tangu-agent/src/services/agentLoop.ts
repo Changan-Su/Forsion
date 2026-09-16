@@ -1423,7 +1423,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           '## Mentioned Agents for This Turn\n' +
           'The user @-mentioned the following agents for this message. When their expertise fits the request, involve them and then synthesize the result into your reply. Two ways, pick per the task:\n' +
           '- `delegate` with the matching `agentSlug` — a quick one-shot subtask (the subagent runs with that agent\'s persona and returns a single report). Use for fetch/search/analysis you just need an answer to.\n' +
-          '- `start_discussion` with `peer` = the matching slug — a genuine back-and-forth deliberation (a fork of you debates them over rounds until they vote to end; collect it with `wait_discussion`). Use when the question benefits from real discussion/disagreement.\n' +
+          '- `start_discussion` with `peer` = the matching slug — a genuine back-and-forth deliberation (a fork of you debates them until both sides are done; collect it with `wait_discussion`). Use when the question benefits from real discussion/disagreement.\n' +
           'Mentioned agents:\n' +
           mentioned.map((a) => `- ${a.name} (slug: \`${a.slug}\`)${a.description ? ` — ${a.description}` : ''}`).join('\n');
         for (let i = workingMessages.length - 1; i >= 0; i--) {

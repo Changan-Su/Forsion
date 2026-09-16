@@ -34,12 +34,15 @@ describe('teamNext / parseMentions(纯函数)', () => {
     expect(parseMentions('@Ann 你来', pre, 'zed')).toEqual(['ann']);
     expect(parseMentions('@Ann,@Anna 都来', pre, 'zed')).toEqual(['ann', 'anna']);
   });
-  it('DONE 只认独占一行:NOT DONE / 行尾 DONE 不算', () => {
+  it('DONE 只认最后一个非空行:NOT DONE / 行尾 DONE / 中间行 DONE / 代码块里的 DONE 都不算', () => {
     expect(isDoneSpeech('接口好了\nDONE')).toBe(true);
+    expect(isDoneSpeech('接口好了\nDONE\n\n  ')).toBe(true);
     expect(isDoneSpeech('  DONE  ')).toBe(true);
     expect(isDoneSpeech('接口 NOT DONE')).toBe(false);
     expect(isDoneSpeech('接口好了 DONE')).toBe(false);
     expect(isDoneSpeech('done')).toBe(false);
+    expect(isDoneSpeech('DONE\n但还有后续:测试没写')).toBe(false); // 中间行不算(Codex r3 #1)
+    expect(isDoneSpeech('脚本:\n```\necho ok\nDONE\n```')).toBe(false); // 代码块里的不算
   });
 });
 
@@ -154,6 +157,23 @@ describe('统一调度:被 @ 者优先,成员各自以 DONE 表态', () => {
     // 插话后:alpha DONE、beta DONE → 全员 DONE → done;共 4 步
     expect(speakers()).toEqual(['alpha', 'beta', 'alpha', 'beta']);
     expect(ended().reason).toBe('done');
+  });
+
+  it('预算尾巴上的插话(剩余步数不够全员各回应一次)推迟到收尾那趟:上限不突破,但每位成员都回应一次', async () => {
+    script = { alpha: ['a1', 'a-after'], beta: ['b1', 'b-after'] };
+    let once = true;
+    const drainSteer = (): any[] => {
+      // 第 2 步(= 最后一步)之前就进来:此时只剩 1 步,不够 2 人各回应一次 → 不在循环里消费(beta 第 2 步看不到它),收尾趟两人各回应一次
+      if (once && speakers().length >= 1) { once = false; return [{ id: 'st-tail', content: '补一句' }]; }
+      return [];
+    };
+    await runGroupChat(params({ drainSteer, agentConfig: cfg({ groupMaxRounds: 1 }) }));
+    expect(speakers()).toEqual(['alpha', 'beta', 'alpha', 'beta']); // 修前:alpha, alpha —— 插话重置后 alpha 占掉最后一步,beta 没回应
+    expect(ended()).toMatchObject({ reason: 'max_rounds', steps: 4 });
+    const betaSpeech = calls.filter((c) => slugFromKey(c.cacheKey) === 'beta');
+    const lastUser = (c: any) => String(c.messages.filter((m: any) => m.role === 'user').at(-1)!.content);
+    expect(lastUser(betaSpeech[0])).not.toContain('补一句');
+    expect(lastUser(betaSpeech[1])).toContain('[User] 补一句');
   });
 
   it('最后一位发言期间的插话不丢:收尾前再消费一次并让全员再回应一趟', async () => {

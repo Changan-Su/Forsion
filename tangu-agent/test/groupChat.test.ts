@@ -126,6 +126,21 @@ describe('runGroupChat', () => {
     expect(events.find((e) => e.type === 'group_ended')?.payload).toMatchObject({ reason: 'done', steps: 2, rounds: 1 });
   });
 
+  it('all members DONE on the very last allowed step still ends as done, not max_rounds', async () => {
+    doneDecider = () => true;
+    await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 1 } }));
+    expect(events.find((e) => e.type === 'group_ended')?.payload).toMatchObject({ reason: 'done', steps: 2, rounds: 1 });
+  });
+
+  it('duplicate slugs are deduped in order (TUI `/groupchat a a b`): no crash at the cycle boundary, 2 participants', async () => {
+    doneDecider = () => true;
+    await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'alpha', 'beta'], groupMaxRounds: 3 } }));
+    const ended = events.find((e) => e.type === 'group_ended')?.payload;
+    expect(ended).toMatchObject({ reason: 'done', steps: 2 });
+    expect(ended.participants.map((a: any) => a.slug)).toEqual(['alpha', 'beta']);
+    expect(statuses.some((s) => s.status === 'failed')).toBe(false);
+  });
+
   it('explicit groupMaxRounds stays a hard cap when nobody says DONE (internal callers: discussion / historian assist)', async () => {
     doneDecider = () => false;
     await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 3 } }));
