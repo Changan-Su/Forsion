@@ -24,6 +24,7 @@ import memoryMaintenanceRouter from './routes/memoryMaintenance.js';
 import assetsRouter from './routes/assets.js';
 import agentsRouter from './routes/agents.js';
 import soloRouter from './routes/solo.js';
+import teamsRouter from './routes/teams.js';
 import pluginsRouter from './routes/plugins.js';
 import specialRouter from './routes/special.js';
 import commandsRouter from './routes/commands.js';
@@ -92,6 +93,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(assetsRouter);
   dataRouter.use(agentsRouter);
   dataRouter.use(soloRouter);
+  dataRouter.use(teamsRouter);
   dataRouter.use(pluginsRouter);
   dataRouter.use(specialRouter);
   dataRouter.use(hooksRouter);

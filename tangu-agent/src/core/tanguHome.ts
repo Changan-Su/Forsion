@@ -83,6 +83,8 @@ export const pluginsDir = (): string => join(tanguHome(), 'plugins');
 export const agentsDir = (): string => join(tanguHome(), 'agents');
 /** 外部引擎(Codex / PI 等 CLI,视作特殊的独立 Agent)的私聊工作区:~/.tangu/engines/<id>/Library(引擎没有 Tangu 记忆,只有这个目录)。 */
 export const engineLibDir = (id: string): string => join(tanguHome(), 'engines', id, 'Library');
+/** 独立团队(Agent 轨道的持久团队实体)目录:~/.tangu/teams/<slug>/(config.toml + TEAM.md + Library/)。绝不在调用点拼 join(homedir(),'.tangu','teams')。 */
+export const teamsDir = (): string => join(tanguHome(), 'teams');
 /** 默认 Agent 的 slug(承载迁移自旧全局记忆/日志;无 agentSlug 时记忆落此)。 */
 export const DEFAULT_AGENT_SLUG = 'xyra';
 /** 全局用户画像文件(所有 agent 可见,用户主改、agent 可改)。 */

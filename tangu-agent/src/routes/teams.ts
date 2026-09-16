@@ -1,0 +1,137 @@
+/**
+ * 独立团队(Agent 轨道的持久团队实体)—— host-only,镜像 routes/agents.ts 的形状(云端 404,不做半可用)。
+ *   GET    /agent/teams                     → { teams }
+ *   GET    /agent/teams/:slug               → { team }
+ *   POST   /agent/teams                     → { team }   name + members(≥2)必填;slug 唯一化(撞了递增后缀),更新走 PATCH
+ *   PATCH  /agent/teams/:slug               → { team }   逐字段合并
+ *   DELETE /agent/teams/:slug               → { ok }     只删定义与 Library;历史会话留着(teamSlug 指向已删团队 = 归档口径由客户端定)
+ *   GET/PUT /agent/teams-meta               → { order }
+ *   POST   /agent/teams/:slug/session/open  → { session, created }  该团队的活动会话,没有就建(§6.1 形状,与 solo/open 同形)
+ */
+import { Router } from 'express';
+import { v4 as uuidv4 } from 'uuid';
+import { mkdirSync } from 'node:fs';
+import { authMiddleware, AuthRequest } from '../core/http.js';
+import { query, getDbType } from '../core/db.js';
+import { deps } from '../seams/runtime.js';
+import { isValidSlug, slugify } from '../agents/agentRegistry.js';
+import { listTeams, getTeam, saveTeam, deleteTeam, readTeamsMeta, writeTeamsMeta, type TeamDef } from '../agents/teamRegistry.js';
+import { SESSION_COLS, rowToSession } from './sessions.js';
+
+const router = Router();
+
+function ensureLocal(res: any): boolean {
+  if (!deps().profile.capabilities.hostExec) {
+    res.status(404).json({ detail: '团队仅在本地(桌面/TUI)可用' });
+    return false;
+  }
+  return true;
+}
+
+router.get('/agent/teams', authMiddleware, async (_req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try { res.json({ teams: await listTeams() }); } catch (e: any) { res.status(500).json({ detail: e?.message || 'list teams failed' }); }
+});
+
+router.get('/agent/teams-meta', authMiddleware, (_req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  res.json(readTeamsMeta());
+});
+router.put('/agent/teams-meta', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try { res.json(await writeTeamsMeta({ order: Array.isArray(req.body?.order) ? req.body.order : undefined })); }
+  catch (e: any) { res.status(400).json({ detail: e?.message || 'write meta failed' }); }
+});
+
+router.get('/agent/teams/:slug', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  const team = await getTeam(req.params.slug);
+  if (!team) return res.status(404).json({ detail: 'team not found' });
+  res.json({ team });
+});
+
+router.post('/agent/teams', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const b = req.body || {};
+    if (!b.name || !Array.isArray(b.members)) return res.status(400).json({ detail: 'name 与 members 必填' });
+    let slug = typeof b.slug === 'string' && isValidSlug(b.slug) ? b.slug : slugify(String(b.name));
+    if (await getTeam(slug)) {
+      const base = slug.slice(0, 60);
+      let n = 2;
+      while (await getTeam(`${base}-${n}`)) n++;
+      slug = `${base}-${n}`;
+    }
+    const team = await saveTeam({ slug, name: String(b.name), description: b.description, mode: b.mode, maxRounds: b.maxRounds, lead: b.lead, avatar: b.avatar, members: b.members, doc: b.doc });
+    res.json({ team });
+  } catch (e: any) {
+    res.status(400).json({ detail: e?.message || 'create team failed' });
+  }
+});
+
+router.patch('/agent/teams/:slug', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const existing = await getTeam(req.params.slug);
+    if (!existing) return res.status(404).json({ detail: 'team not found' });
+    const b = req.body || {};
+    const team = await saveTeam({
+      slug: existing.slug, name: b.name != null ? String(b.name) : existing.name,
+      description: b.description, mode: b.mode, maxRounds: b.maxRounds, lead: b.lead, avatar: b.avatar,
+      members: Array.isArray(b.members) ? b.members : undefined, doc: b.doc != null ? String(b.doc) : undefined,
+    });
+    res.json({ team });
+  } catch (e: any) {
+    res.status(400).json({ detail: e?.message || 'update team failed' });
+  }
+});
+
+router.delete('/agent/teams/:slug', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  if (!(await getTeam(req.params.slug))) return res.status(404).json({ detail: 'team not found' });
+  res.json({ ok: await deleteTeam(req.params.slug) });
+});
+
+/** 独立团队会话形状(方案 §6.1):projectless + teamSlug(轨道身份,锁)+ 运行模式字段(可变)+ cwd = 团队 Library。 */
+export function teamSessionConfig(team: TeamDef): Record<string, unknown> {
+  return {
+    teamSlug: team.slug, groupChat: true, groupAgents: team.members.map((m) => m.slug), teamMode: team.mode,
+    groupMaxRounds: team.maxRounds, execMode: 'host', cwd: team.libraryDir, preset: null,
+  };
+}
+
+async function activeTeamSession(userId: string, appId: string, slug: string): Promise<any | null> {
+  const pred = getDbType() === 'sqlite'
+    ? `(agent_config IS NOT NULL AND json_valid(agent_config) AND json_type(agent_config) = 'object' AND json_extract(agent_config, '$.teamSlug') = ?)`
+    : `(agent_config IS NOT NULL AND jsonb_typeof(agent_config) = 'object' AND (agent_config ->> 'teamSlug') = ?)`;
+  const rows = await query<any[]>(
+    `SELECT ${SESSION_COLS} FROM chat_sessions WHERE user_id = ? AND app_id = ? AND archived = ? AND kind = 'user' AND ${pred} ORDER BY updated_at DESC LIMIT 1`,
+    [userId, appId, false, slug],
+  );
+  return rows[0] ? rowToSession(rows[0]) : null;
+}
+
+router.post('/agent/teams/:slug/session/open', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const team = await getTeam(req.params.slug);
+    if (!team) return res.status(404).json({ detail: 'team not found' });
+    const userId = req.user!.userId;
+    const appId = deps().profile.appId;
+    const cur = await activeTeamSession(userId, appId, team.slug);
+    if (cur) return res.json({ session: cur, created: false });
+    try { mkdirSync(team.libraryDir, { recursive: true }); } catch { /* ignore */ }
+    const id = uuidv4();
+    await query(
+      `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, emoji, project_path, project_name, projectless, agent_config)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, userId, appId, team.name.slice(0, 200), deps().profile.defaultModelId || null, null, null, null, true, JSON.stringify(teamSessionConfig(team))],
+    );
+    const rows = await query<any[]>(`SELECT ${SESSION_COLS} FROM chat_sessions WHERE id = ?`, [id]);
+    res.json({ session: rowToSession(rows[0]), created: true });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'team session open failed' });
+  }
+});
+
+export default router;

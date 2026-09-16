@@ -160,7 +160,12 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
     for (const a of participants) {
     // 群聊发言人与子代理同理:同一个 cwd、同一套文件工具 → 项目约定必须在场(codex)。
     const groupProjectDoc = p.execMode === 'host' ? ((s) => (s ? '\n\n---\n' + s : ''))(projectDocSection(p.cwd)) : '';
-      ctxByAgent.set(a.slug, [{ role: 'system', content: buildGroupSystem(a, roster, p.agentConfig.teamDoc) + deferSection + groupProjectDoc } as ChatMessage]);
+      // 独立团队:TEAM.md(全员共识、逐字不变 → 前缀缓存友好)+ 本成员的 role,显式注入 system;PROJECT_DOC_FILENAMES 是封闭白名单,
+      // 工作目录里放 TEAM.md 不会被自动读到。项目轨道的团队模式两者都空。
+      const role = p.agentConfig.teamRoles && typeof p.agentConfig.teamRoles === 'object' ? String(p.agentConfig.teamRoles[a.slug] || '') : '';
+      const teamDoc = [typeof p.agentConfig.teamDoc === 'string' && p.agentConfig.teamDoc.trim() ? '## Team\n' + p.agentConfig.teamDoc.trim() : '', role ? `## Your role\n${role}` : '']
+        .filter(Boolean).join('\n\n') || undefined;
+      ctxByAgent.set(a.slug, [{ role: 'system', content: buildGroupSystem(a, roster, teamDoc) + deferSection + groupProjectDoc } as ChatMessage]);
       seen.set(a.slug, 0);
     }
     const transcript: TranscriptEntry[] = [
