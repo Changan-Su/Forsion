@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { blankDrawing, BLANK_SCENE_JSON, parseDrawing } from '@amadeus-shared/excalidraw/format'
 
 const vault = vi.hoisted(() => ({ root: '/account-a', listeners: [] as Array<(s: { vaultRoot: string | null }, p: { vaultRoot: string | null }) => void> }))
-vi.mock('./pageStore', () => ({ usePageStore: {
+vi.mock('./pageStore', () => ({ onNotePathGone: () => () => {}, usePageStore: {
   getState: () => ({ vaultRoot: vault.root }),
   subscribe: (listener: (s: { vaultRoot: string | null }, p: { vaultRoot: string | null }) => void) => { vault.listeners.push(listener); return () => {} },
 } }))

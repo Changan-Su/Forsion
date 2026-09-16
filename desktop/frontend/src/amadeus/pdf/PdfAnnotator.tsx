@@ -28,6 +28,7 @@ import {
 import { isHostPath, buildPdfLink } from '@amadeus-shared/pdfLink'
 import { askString } from '../components/askString'
 import { amadeus } from '../api'
+import { registerUnifiedPipe } from '../unified/lifecycle'
 import { registerMessages, translate, useI18n } from '../../i18n'
 import {
   addBookmark, addInk, addNote, addShape, addTextMarkup,
@@ -310,6 +311,7 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
     const container = containerRef.current
     if (!container) return
     let dead = false
+    let retired = false // 本路径已被树上挪走 / 删除(或换库):写队列与卸载收尾一律不再碰盘,见下方生命周期登记
     setStatus('loading')
 
     const eventBus = new EventBus()
@@ -365,7 +367,7 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
         after?.(ok)
       }
       const run = state.chain.then(async () => {
-        if (dead || !state.doc) { fire(false); return }
+        if (dead || retired || !state.doc) { fire(false); return }
         // docStale=上次 swapDoc 没跑成,doc 落后于磁盘:纯 flush 必须压掉(旧 doc+脏内容会盖掉磁盘上
         // 更新的字节);op 写入则改以磁盘字节为基线。该窗内编辑器未存改动本就随换档丢(既有语义)。
         if (!op && (!state.dirty || state.docStale)) return
@@ -1295,6 +1297,24 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
     })
     ro.observe(container)
 
+    // 生命周期登记(与 unified 编辑器同一处):树上改名 / 挪走 / 删除之前 flushAllScopes 先把批注落到**旧路径**
+    // (随文件挪走 / 进回收站),动盘成功后 retireUnifiedPath 退休本实例;换库前同理。不退休的话,标签跟到新路径
+    // 重挂时下面那段卸载收尾会把整份 PDF 写回旧位置(幽灵文件),删除则把刚进回收站的文件建回来。
+    const unregister = readOnly ? null : registerUnifiedPipe({
+      path: pdfPath,
+      flush: async (strict) => {
+        commitInk()
+        await enqueue()
+        // docStale 时脏内容本就写不进去(见 enqueue),不拿它拦换库
+        if (strict && ((state.dirty && !state.docStale) || myPending.length)) throw new Error(`PDF changes could not be saved: ${pdfPath}`)
+      },
+      retire: () => {
+        retired = true
+        if (state.timer) { clearTimeout(state.timer); state.timer = null }
+        if (inkTimer) { clearTimeout(inkTimer); inkTimer = null }
+      },
+    })
+
     void (async () => {
       try {
         // 读字节走 IPC 再 getDocument({data}):不能用 {url:'amadeus-asset://…'} —— dev 渲染器是
@@ -1364,7 +1384,7 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
         const inkTail = myPending.splice(0)
         const eraseTail = pendingErase.splice(0) // 没确认落盘的擦除也要兜(removeInkAnnots 幂等,补擦无害)
         const doc = state.doc
-        if (!state.dirty && !inkTail.length && !eraseTail.length) return
+        if (retired || (!state.dirty && !inkTail.length && !eraseTail.length)) return
         try {
           let b: Uint8Array | null
           if (state.docStale && state.lastBytes) {
@@ -1382,6 +1402,7 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
           await amadeus.saveVaultBytes(pdfPath, b)
         } catch { /* ignore */ }
       })).finally(() => {
+        unregister?.() // 收尾写完才注销:收尾途中被挪走 / 删除,照样能被退休
         myCommitting.length = 0
         try { state.doc?.destroy() } catch { /* ignore */ }
         state.doc = null

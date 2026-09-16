@@ -7,7 +7,7 @@ import type { DbFile } from '@amadeus-shared/db/schema'
 import { stampUpdatedRows } from '@amadeus-shared/db/stamp'
 import { amadeus } from '../api'
 import { kickAutomation } from './automationKick'
-import { usePageStore } from './pageStore'
+import { onNotePathGone, usePageStore } from './pageStore'
 
 export interface DbEntry {
   status: 'loading' | 'ok' | 'missing' | 'corrupt'
@@ -239,6 +239,30 @@ useDbStore.subscribe((s, p) => {
   saveTimers.clear()
   pendingOps.clear()
   inFlight.clear()
+})
+
+// 树上挪走 / 删除之后(本窗发起,或别的窗口经主进程转来):攥着旧路径的条目别再往那儿写 —— db:write-cas
+// 缺文件即新建。挪走 → 条目改指新路径,待写照常落过去(本窗发起的在动盘前已由 flushAllScopes 冲过,
+// 这里接的是之后还挂着旧引用的地方继续改、以及别的窗口转来本窗来不及冲的那批);删除 → 清掉待写,标缺失。
+onNotePathGone((from, kind, to) => {
+  const dead = (p: string | null): p is string => !!p && (kind === 'file' ? p === from : p === from || p.startsWith(`${from}/`))
+  const refs = Object.keys(useDbStore.getState().entries).filter((ref) => dead(useDbStore.getState().entries[ref].path))
+  if (!refs.length) return
+  if (!to) {
+    for (const ref of refs) {
+      clearTimeout(saveTimers.get(ref))
+      saveTimers.delete(ref)
+      pendingOps.delete(ref)
+    }
+  }
+  useDbStore.setState((s) => {
+    const entries = { ...s.entries }
+    for (const ref of refs) {
+      const e = entries[ref]
+      entries[ref] = to ? { ...e, path: kind === 'file' ? to : to + e.path!.slice(from.length) } : { status: 'missing', path: null, data: null }
+    }
+    return { entries }
+  })
 })
 
 // 退出前 best-effort 冲刷(与 pageStore 400ms 防抖同级的既有丢尾窗口,尽力缩小)。

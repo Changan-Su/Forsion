@@ -68,6 +68,14 @@ const api: AmadeusApi = {
       ipcRenderer.removeListener(IPC.structureChange, listener)
     }
   },
+  broadcastPathGone: (event) => { void ipcRenderer.invoke(IPC.pathGone, event) },
+  onPathGone: (cb) => {
+    const listener = (_event: IpcRendererEvent, e: Parameters<typeof cb>[0]): void => cb(e)
+    ipcRenderer.on(IPC.pathGone, listener)
+    return () => {
+      ipcRenderer.removeListener(IPC.pathGone, listener)
+    }
+  },
   onDbExternalChange: (cb) => {
     const listener = (_event: IpcRendererEvent, dbPath: string): void => cb(dbPath)
     ipcRenderer.on(IPC.dbChange, listener)

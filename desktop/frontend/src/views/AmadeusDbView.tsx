@@ -6,7 +6,6 @@ import { useTheme } from '../stores/themeStore'
 import { useDbStore } from '@amadeus/store/dbStore'
 import { DatabaseEmbed } from '@amadeus/blocks/database/DatabaseEmbed'
 import '@amadeus/blocks' // 属性类型/块注册 side-effect,独立挂载时不能指望编辑器先加载
-import { useFollowPathGone } from './followPathGone'
 
 const dbBase = (p: string): string => (p.split(/[\\/]/).pop() || p).replace(/\.db$/i, '')
 
@@ -19,7 +18,6 @@ export function AmadeusDbView({ leaf }: ViewProps) {
   const flat = useTheme((s) => s.flat)
   const name = useDbStore((s) => (dbPath ? s.entries[dbPath]?.data?.name : undefined))
   const gen = useDbStore((s) => s.gen) // 缓存整片作废后重读(见 dbStore 的 gen)
-  useFollowPathGone(leaf.id, 'dbPath', dbPath)
   useEffect(() => {
     if (dbPath) void useDbStore.getState().load(dbPath, dbPath)
   }, [dbPath, gen])

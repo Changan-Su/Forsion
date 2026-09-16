@@ -161,6 +161,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     notifyWindows(channel, payload)
     emitRemote(channel, payload, null)
   }
+  // 渲染层的路径广播(树上改名 / 挪走 / 删除)转给**其它**窗口:标签、scope、多维表白板条目的跟随都只在
+  // 发起窗口的 realm 里跑,structureChange 又不带路径 → 分离窗 / Mini 卡一直攥着旧路径。发起窗口已处理过,不回发。
+  // 直接挂 ipcMain,不走下面的 handle():那个会进 /vault/rpc 派发表,远端设备不该能往本机窗口里灌路径广播。
+  ipcMain.handle(IPC.pathGone, (e, event) => {
+    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.webContents !== e.sender) w.webContents.send(IPC.pathGone, event)
+  })
   /**
    * 写通道 → 回灌事件映射。为什么需要它:savePage 一类的写不广播(本窗自己知道),watcher 又按
    * 自写账本压掉主进程落盘 —— 设备互联后「另一端」就永远听不到。两个派发口各补一半:

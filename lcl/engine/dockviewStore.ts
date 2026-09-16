@@ -437,6 +437,10 @@ interface WorkspaceState {
    *  插件 UI 继续存活),且这个已不存在的类型会留在持久化布局里 → 下次启动 layoutViewsAllRegistered
    *  判定失败,**整份布局被丢弃回默认**。清场必须以 api.panels 为准,不能按位置手写枚举。 */
   closeViewsOfType(type: string): void
+  /** 按参数改写 / 关掉 leaf,**含没挂载的**:折叠侧栏序列化进 stash 的条目(无 id → 就地改写或摘掉)。
+   *  fn 返回 undefined = 不动;null = 关掉(走 closeLeaf 的收尾,不是裸 panel.api.close());对象 = 合并进参数。
+   *  引擎不懂参数语义,改哪个键由调用方定(文件改名 / 删除跟随见 frontend views/followPathGone.ts)。 */
+  remapLeaves(fn: (type: string, params: Record<string, unknown>) => Record<string, unknown> | null | undefined): void
   /** 恢复默认布局:清空 → 重建默认(黄金分割 中 0.618 / 两侧各 0.191)→ 清持久化。 */
   resetLayout(): void
   /** 按当前容器宽把两侧栏重钉回目标宽(容器 resize 后调,补 dockview 不自动重算黄金分割的缺口)。 */
@@ -700,6 +704,29 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       if (api.panels.some((p) => p.id === hit.id && panelType(p) === type)) break
     }
     get().refreshTabs()
+  },
+
+  remapLeaves(fn) {
+    for (const p of [...(get().api?.panels ?? [])]) { // 快照:closeLeaf 会就地改 api.panels
+      const { __loc, __type, ...params } = (p.params ?? {}) as PanelMeta & Record<string, unknown>
+      void __loc
+      void __type
+      const next = fn(panelType(p), params)
+      if (next === null) get().closeLeaf(p.id)
+      else if (next) makeLeaf(p).setParams(next)
+    }
+    let changed = false
+    const stash = Object.fromEntries(Object.entries(get().stash).map(([side, list]) => [side, list.flatMap((v) => {
+      const next = fn(v.type, v.params)
+      if (next === undefined) return [v]
+      changed = true
+      return next === null ? [] : [{ ...v, params: { ...v.params, ...next } }]
+    })])) as WorkspaceState['stash']
+    if (changed) {
+      set({ stash })
+      get().refreshTabs() // 收起态的侧栏图标从 stash 取
+      scheduleWorkspaceSave()
+    }
   },
 
   resetLayout() {

@@ -14,7 +14,7 @@ import { parseDrawing, withSceneJson, isDrawingPath } from '@amadeus-shared/exca
 import { readBoard, writeBoard, DEFAULT_BOARD, type BoardSettings } from '@amadeus-shared/excalidraw/board'
 import { mergeScenes, type SceneLike } from '@amadeus-shared/excalidraw/reconcile'
 import { amadeus } from '../api'
-import { usePageStore } from './pageStore'
+import { onNotePathGone, usePageStore } from './pageStore'
 
 export interface DrawEntry {
   status: 'loading' | 'ok' | 'missing' | 'corrupt'
@@ -324,6 +324,32 @@ export const useDrawStore = create<DrawStoreState>((set, get) => ({
 amadeus?.onExternalChange?.((p) => {
   // amadeus 也可能整个 undefined(web harness/无桥环境),方法级 ?. 拦不住
   void applyExternal(p)
+})
+
+// 树上挪走 / 删除之后:同 dbStore —— 白板写同样缺文件即新建。挪走 → 条目改指,还挂着旧引用的画布接着画
+// 落到新位置;删除 → 清掉待写与去重基线,标缺失(画布卸载时的 flush 也就无事可写)。
+onNotePathGone((from, kind, to) => {
+  const dead = (p: string | null): p is string => !!p && (kind === 'file' ? p === from : p === from || p.startsWith(`${from}/`))
+  const refs = Object.keys(useDrawStore.getState().entries).filter((ref) => dead(useDrawStore.getState().entries[ref].path))
+  if (!refs.length) return
+  if (!to) {
+    for (const ref of refs) {
+      clearTimeout(saveTimers.get(ref))
+      saveTimers.delete(ref)
+      pendingScene.delete(ref)
+      lastSceneJson.delete(ref)
+    }
+  }
+  useDrawStore.setState((s) => {
+    const entries = { ...s.entries }
+    for (const ref of refs) {
+      const e = entries[ref]
+      entries[ref] = to
+        ? { ...e, path: kind === 'file' ? to : to + e.path!.slice(from.length) }
+        : { status: 'missing', path: null, source: null, scene: null, settings: DEFAULT_BOARD }
+    }
+    return { entries }
+  })
 })
 
 // 退出前 best-effort 冲刷(与 dbStore/pageStore 同级的既有丢尾窗口,尽力缩小)。

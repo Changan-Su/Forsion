@@ -532,7 +532,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       try {
         // 与 switchVaultSide 同理:换根前先把各面板的待存内容写回【旧根】。
         // 这里的 flush 放在弹目录选择框之前,用户取消了也无害(本来就该落盘)。
-        await flushVaultEditors()
+        await flushAllScopes(true)
         const info = await amadeus.openVault()
         if (!info) return
         resetAllScopeDocs()
@@ -572,7 +572,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         // 切根前必须先把待存内容在【旧根】落盘并等掉在途写:保存走「相对路径 + 当前根」,
         // 根先换会把旧库活动页原样写进新库(本地页凭空复制进云端库、再被在线同步推上服务器)。
         // **所有面板**都要 flush —— 分屏后隔壁面板各有一份 store 和一个防抖定时器。
-        await flushVaultEditors()
+        await flushAllScopes(true)
         const info = await api.switchSide(side)
         if (!info) return
         set({
@@ -1001,8 +1001,8 @@ function makePageStore(opts: PageStoreOptions = {}) {
       }
       // unified(v4)实例:先冲洗在途写,**删除成功后**才退休 —— 先退休再删,一旦删除 IPC 失败,
       // 文件还在而编辑器已永久只读,后续输入全部静默丢失(Codex 终审 P0)。删除 IPC 窗口里新排的
-      // 防抖写 ≥800ms,晚于紧随其后的退休,复活窗口可忽略。
-      await flushUnifiedScopes()
+      // 防抖写 ≥800ms,晚于紧随其后的退休,复活窗口可忽略。多维表 / 白板的待写同理先落盘(回收站里是最新的)。
+      await Promise.all([flushUnifiedScopes(), flushFileStores()])
       // 桌面端优先移入回收站(.trash,可恢复);缺 trash API 的端保持硬删。
       const trash = amadeus.trashEntry?.bind(amadeus)
       try {
@@ -1108,7 +1108,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         saveTimer = null
       }
       // 同 deletePage:先冲洗,删除成功后才退休(删失败不许把树下 unified 实例变永久只读,Codex 终审 P0)。
-      await flushUnifiedScopes()
+      await Promise.all([flushUnifiedScopes(), flushFileStores()])
       try {
         if (amadeus.trashEntry) {
           await amadeus.trashEntry(folderPath)
@@ -1565,7 +1565,7 @@ const vaultSlice = (s: PageState): VaultSlice =>
   ({ vaultRoot: s.vaultRoot, vaultSide: s.vaultSide, pages: s.pages, folders: s.folders, files: s.files, icons: s.icons })
 
 /**
- * 换库(切本地/云端、换根)前:**所有面板**的待存内容先在旧根落盘。
+ * 换库(切本地/云端、换根)、改名、移动前:**所有面板**的待存内容先在旧根 / 旧路径落盘。
  * 保存走「相对路径 + 当前根」,只 flush 自己那份的话,隔壁面板揣着的旧库活动页会在根换掉之后才写出去 ——
  * 表现就是「切换本地/云端后,本地库里凭空多出一篇云端的笔记」(用户实报)。分屏之前只有一份 store,
  * 所以这条链是分屏引入的:switchVaultSide 里的单份 flush + 作废,分屏后只护住了当前面板。
@@ -1575,14 +1575,18 @@ export async function flushAllScopes(strict = false): Promise<void> {
     ...[...stores.values()].map((s) => strict ? s.getState().flushSave(true) : s.getState().flushSave().catch(() => {})),
     // unified(v4)实例的写盘管线不在 scope store 里,经登记处一起落盘(Codex P0:换库竞态)。
     flushUnifiedScopes(strict),
+    flushFileStores(strict),
   ])
 }
 
-/** Files embedded in notes have their own debounce/write queues. Drain all of
- * them against the old root before any local/cloud directory switch. */
-async function flushVaultEditors(): Promise<void> {
+/** 多维表(dbStore 500ms)与白板(drawingStore 800ms)的防抖写也不在 scope store 里。动文件之前不冲的话,
+ *  计时器照旧烧到**旧路径**:db:write-cas 与白板写都是缺文件即新建 —— 挪走 / 改名留下幽灵文件、删除把
+ *  回收站里的文件建回来(2026-09-16)。之后攥着旧路径的条目由两个 store 各自订阅路径广播改指 / 标缺失。 */
+async function flushFileStores(strict = false): Promise<void> {
+  // 动态 import:两个 store 反向静态 import 本模块
   const [{ useDbStore }, { useDrawStore }] = await Promise.all([import('./dbStore'), import('./drawingStore')])
-  await Promise.all([flushAllScopes(true), useDbStore.getState().flushAll(true), useDrawStore.getState().flushAll(true)])
+  const settle = (p: Promise<void>): Promise<void> => (strict ? p : p.catch(() => {}))
+  await Promise.all([settle(useDbStore.getState().flushAll(strict)), settle(useDrawStore.getState().flushAll(strict))])
 }
 
 /**
@@ -1630,7 +1634,31 @@ export function onNotePathGone(f: PathGoneListener): () => void {
 }
 function emitNotePathGone(from: string, kind: 'file' | 'prefix', to: string | null): void {
   for (const f of pathGoneListeners) f(from, kind, to)
+  // 分离窗 / Mini 卡各是独立的 JS realm,这条广播只在本窗里跑;主进程那边只发不带路径的 structureChange。
+  // 经主进程转给其它窗口,那边的标签 / scope / 多维表白板条目才跟得上(见下面的 onPathGone)。
+  const root = usePageStore.getState().vaultRoot
+  if (!relayingRemote && root) amadeus?.broadcastPathGone?.({ from, kind, to, root })
 }
+
+let relayingRemote = false
+/** 别的窗口改名 / 挪走 / 删除了文件:盘已经动完,本窗只做内存侧的同一套收尾,不再转回去。
+ *  带库根:主进程同一时刻只有一个库根,但本窗可能还攥着上一个库(待重载),对不上就不理。
+ *  本窗没绑库根(只挂了 PDF / 图片的分离窗不触发 restoreVault)照样收:它的读写本来就落在主进程当前的库上。 */
+amadeus?.onPathGone?.(({ from, kind, to, root }) => {
+  const mine = usePageStore.getState().vaultRoot
+  if (mine && mine !== root) return
+  relayingRemote = true
+  try {
+    if (to) remapScopePaths(from, to, kind)
+    else {
+      retireUnifiedPath(from, kind)
+      clearScopeNotePaths(from, kind)
+      emitNotePathGone(from, kind, null)
+    }
+  } finally {
+    relayingRemote = false
+  }
+})
 
 /** 删除后把各 scope 里指向该路径(或其子树)的 activeNotePath 清掉。
  *  v3 有 activeInside 那条善后分支兜底,v4 的 activePage 恒 null 走不到 —— 不清的话

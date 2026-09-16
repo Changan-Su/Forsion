@@ -49,6 +49,8 @@ export const IPC = {
   fetchLinkMeta: 'web:link-meta',
   searchImages: 'web:search-images',
   structureChange: 'vault:structure-change',
+  /** 渲染层的路径广播(改名 / 挪走 / 删除)跨窗口转发:渲染层 invoke 进主进程,主进程转给**其它**窗口。 */
+  pathGone: 'vault:path-gone',
   listPlugins: 'plugins:list',
   openPluginsFolder: 'plugins:open-folder',
   scaffoldPlugin: 'plugins:scaffold',
@@ -354,6 +356,14 @@ export interface LinkMeta {
   siteName?: string
 }
 
+/** 库里某路径(kind='prefix' 时含子树)被挪走 / 改名(to=新路径)或删除(to=null)。root = 发起窗口的库根。 */
+export interface PathGoneEvent {
+  from: string
+  kind: 'file' | 'prefix'
+  to: string | null
+  root: string
+}
+
 /** 回收站条目:name = .trash 内扁平文件名;original = 删除前的 vault 相对路径。 */
 export interface TrashEntry {
   name: string
@@ -494,6 +504,10 @@ export interface AmadeusApi {
   searchImages?(query: string): Promise<Array<{ thumb: string; full: string; author?: string }>>
   /** Subscribe to vault structure changes (pages/folders added/removed). Returns unsubscribe. */
   onStructureChange(cb: () => void): () => void
+  /** 把本窗的路径广播转给其它窗口(可选:只有多窗口的桌面宿主有)。 */
+  broadcastPathGone?(event: PathGoneEvent): void
+  /** 订阅其它窗口转来的路径广播。 */
+  onPathGone?(cb: (event: PathGoneEvent) => void): () => void
   /** Subscribe to external `.db` content changes (e.g. the agent editing calendars on disk). Returns unsubscribe. */
   onDbExternalChange(cb: (dbPath: string) => void): () => void
   /** 订阅**非 .md / .db** 文件的外部内容改动(vault 相对路径)。`ctx.app.watchFile` 的底座 ——

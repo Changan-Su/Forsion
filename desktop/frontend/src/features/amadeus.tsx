@@ -13,6 +13,7 @@ import { AmadeusMediaView } from '../views/AmadeusMediaView'
 import { AmadeusSearchView, AmadeusTagsView, AmadeusLocalGraphView } from '../amadeusPanels'
 import { VIEW_FILE_MATCH } from '../viewFileMatch'
 import { amadeusAvailable } from './runtime'
+import { installLeafPathFollow } from '../views/followPathGone'
 const app = () => useApp.getState()
 
 /** Editor helpers share compiled implementations; their package grants activation. */
@@ -21,6 +22,8 @@ export function registerAmadeusViews(): void {
   // Amadeus 依赖 electron 预载的 window.amadeus 文件系统桥;Tangu Web(无 host)下缺省 → 整个 Space 不注册,
   // 与 market/feedback 的 window.tangu?.X 门控同纪律。否则视图挂载即 deref undefined amadeus 崩溃。
   if (amadeusAvailable()) {
+    // 树上改名 / 挪走 / 删除 → 工作区里攥着该路径的文件标签跟随或关掉(含没挂载的:折叠侧栏、单列后台、崩掉的视图)。
+    installLeafPathFollow()
     // 笔记库/大纲已并入统一的 workspace/outline 视图(见上);Amadeus 专属侧视图保留。
     // 编辑器 = 非 singleton 多实例(类 Obsidian 每笔记一个 tab,params.notePath 认领笔记并随布局持久化);
     // 可关闭:关到主区最后一个 → 落 launcher 启动器(见 workspaceStore.closeLeaf)。

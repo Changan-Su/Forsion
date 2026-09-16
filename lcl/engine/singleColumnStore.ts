@@ -214,6 +214,8 @@ interface WS {
   activateLeaf(id: string): void
   closeLeaf(id: string): void
   closeViewsOfType(type: string): void
+  /** 同桌面版:三桶里的 leaf 一个不漏(单列壳只渲染当前那个,后台的视图没挂载、自己收不到任何广播)。 */
+  remapLeaves(fn: (type: string, params: Record<string, unknown>) => Record<string, unknown> | null | undefined): void
   resetLayout(): void
   saveCurrent(): void
   saveNamed(name: string): void
@@ -479,6 +481,14 @@ export const useWorkspace = create<WS>((set, get) => {
 
     closeViewsOfType(type) {
       for (const rec of allRecs().filter((r) => r.type === type)) get().closeLeaf(rec.id)
+    },
+
+    remapLeaves(fn) {
+      for (const rec of allRecs()) {
+        const next = fn(rec.type, rec.params)
+        if (next === null) get().closeLeaf(rec.id)
+        else if (next) leaf(rec).setParams(next)
+      }
     },
 
     resetLayout() {

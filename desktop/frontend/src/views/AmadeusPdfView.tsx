@@ -8,7 +8,6 @@ import { lazyRetry } from '../lazyRetry'
 import { useTheme } from '../stores/themeStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { isHostPath } from '@amadeus-shared/pdfLink'
-import { useFollowPathGone } from './followPathGone'
 
 const PdfAnnotator = lazyRetry(() => import('@amadeus/pdf/PdfAnnotator').then((m) => ({ default: m.PdfAnnotator })))
 
@@ -24,7 +23,6 @@ export function AmadeusPdfView({ leaf }: ViewProps) {
   // 若在 root 落地前就读字节 → 主进程「No vault is open」。gate 住:vault ready 前不挂 PdfAnnotator(不读字节)。
   // 库外 PDF(引用条给的绝对路径)不经 vault 通道读字节 → 不必等 vault 落地。
   const vaultReady = usePageStore((s) => !!s.vaultRoot) || isHostPath(pdfPath)
-  useFollowPathGone(leaf.id, 'pdfPath', pdfPath)
   // navigateLeaf 会把标题重置为 displayName,挂载/换文件后设回 PDF 名(AmadeusDbView 同款)。
   useEffect(() => {
     if (pdfPath) leaf.setTitle(pdfBase(pdfPath))
