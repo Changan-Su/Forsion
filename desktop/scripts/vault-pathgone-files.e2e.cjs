@@ -8,7 +8,7 @@
  *   P1 树上改多维表名(renameDb):标签跟到新名,且不把它抢到前台(旧实现逐个 navigateLeaf:清参数 + setActive)
  *   P2 树上改文件夹名(prefix 广播):五个标签的参数全部跟到新文件夹,插件视图按新路径重挂,图片 src 换新
  *   P3 树上删 PDF:PDF 标签关掉,其余不动,文件没被建回来
- *   P4 树上删整个文件夹:剩下的标签全部关掉,文件夹没被建回来
+ *   P4 树上删整个文件夹:剩下的标签全部关掉(主区最后一个经 closeLeaf 就地变 home 占位,不被拆空),文件夹没被建回来
  *   媒体(amadeus-media)树上点不开(交系统播放器),只有单测覆盖。
  *
  * 用法:npm run build && npm run e2e:pathgonefiles   (--shot 存截图到 /tmp/forsion-pathgone-files-*.png)
@@ -141,23 +141,26 @@ async function main() {
       return Object.values((v && v.dockview && v.dockview.panels) || {}).map((p) => p.params || {})
     })
     const paramOf = async (key) => (await panelParams()).filter((p) => typeof p[key] === 'string').map((p) => p[key])
+    const mainTypes = async () => (await panelParams()).filter((p) => (p.__loc || 'main') === 'main').map((p) => p.__type)
     const tabOpen = async (t) => (await tabTitles()).some((x) => x === t)
 
     // ── P0 夹具:五类文件各开一个标签 ──────────────────────────────────────
     await expand('资料', '图.png')
     // 插件注册文件类型之前,.probe.md 行会被当笔记开(= 进 compiler)—— 等行标题剥成插件基名再点。
     await row('导图').waitFor({ timeout: 20_000 })
-    for (const t of TABS) {
-      await row(t.row).click({ modifiers: ['Meta'] }) // ⌘ 点 = 新标签
+    for (const [i, t] of TABS.entries()) {
+      // 第一个就地替换主区缺省标签,其余 ⌘ 点新开 —— 主区只剩这五个,P4 删光时才走得到「关掉最后一个主标签」
+      await row(t.row).click(i === 0 ? undefined : { modifiers: ['Meta'] })
       await until(() => tabOpen(t.title))
     }
     await win.waitForTimeout(1500)
     const t0 = await tabTitles()
     const opened0 = await until(async () => {
       for (const t of TABS) if ((await paramOf(t.key)).join() !== `资料/${t.file}`) return false
-      return true
+      return (await mainTypes()).length === TABS.length
     })
-    check('P0 五类文件各开一个标签,布局里各攥着 资料/ 下的路径', TABS.every((t) => t0.includes(t.title)) && opened0, JSON.stringify(t0))
+    check('P0 五类文件各开一个标签(主区只有这五个),布局里各攥着 资料/ 下的路径', TABS.every((t) => t0.includes(t.title)) && opened0,
+      `${JSON.stringify(t0)} main=${JSON.stringify(await mainTypes())}`)
     await shot('p0-open')
 
     // ── P1 树上改多维表名(renameDb),图片标签在前台 ─────────────────────────
@@ -221,6 +224,9 @@ async function main() {
       return true
     })
     check('P4a 文件夹里剩下的标签全部关掉(布局里也没有了)', allClosed, JSON.stringify(await tabTitles()))
+    // 关的是主区最后几个标签:须走 store 的 closeLeaf 收尾(最后一个就地变 home 占位),裸 panel.api.close() 会把主区组整个拆掉
+    const main4 = await until(async () => (await mainTypes()).join() === 'home')
+    check('P4d 主区最后一个标签被关后就地留下 home 占位(没有被拆空)', main4, `main=${JSON.stringify(await mainTypes())}`)
     await win.waitForTimeout(3000)
     check('P4b 文件夹与文件没被建回来', !fs.existsSync(path.join(vault, '资料改')))
     const sk = await win.evaluate(() => [...document.querySelectorAll('.sk')].filter((e) => e.getBoundingClientRect().width > 0 && !e.closest('.t2s-side')).length)
