@@ -31,6 +31,7 @@ import { museTodoProvider } from './builtin/museTodo.js';
 import { channelToolsProvider } from './builtin/channelTools.js';
 import { applyPatchProvider } from './builtin/applyPatch.js';
 import { discussProvider } from './builtin/discuss.js';
+import { dispatchProvider } from './builtin/startProjectSession.js';
 import { displayFileProvider } from './builtin/displayTools.js';
 import { deskPresentProvider } from './builtin/deskPresent.js';
 import { imageGenProvider } from './builtin/imageTools.js';
@@ -156,6 +157,7 @@ registerToolProvider(museTodoProvider); // Muse 唯一写权限;仅 ctx.muse 可
 registerToolProvider(channelToolsProvider); // host-only:通道会话里发文件/图片(append 末尾,保前缀缓存)
 registerToolProvider(applyPatchProvider); // both:结构化补丁编辑(云端+host 共用,append 末尾,保前缀缓存)
 registerToolProvider(discussProvider); // host-only:start_discussion/wait_discussion(分身进后台群聊讨论;append 末尾,保前缀缓存)
+registerToolProvider(dispatchProvider); // host-only:start_project_session(私聊里 @项目派遣;deferred,append 末尾)
 registerToolProvider(displayFileProvider); // both:display_file 在桌面对话区展示文件给用户(append 末尾,保前缀缓存)
 registerToolProvider(manageSkillProvider); // host-only:把「这类活怎么干」沉淀成本地技能(append 末尾,保前缀缓存)
 registerToolProvider(imageGenProvider); // both:generate_image 文生图→落盘+对话区展示(append 末尾,保前缀缓存)

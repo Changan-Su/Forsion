@@ -1351,6 +1351,31 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
     }
 
+    // @ 提及的项目(私聊里派遣,方案 §5.4):用户 @ 了某个项目 → 提示 agent 用 start_project_session 在那边开会话干活。
+    // 只闸 hostExec(工具本身 host-only);绝不套 ps.groupChat(那是 delegate/start_discussion 的闸)。run 事实,不落库。
+    const mentionedProjects: Array<{ name: string; path: string }> = Array.isArray(agentConfig.mentionedProjects)
+      ? agentConfig.mentionedProjects.filter((x: any) => x && typeof x.path === 'string' && x.path).map((x: any) => ({ name: String(x.name || x.path), path: String(x.path) })).slice(0, 8)
+      : [];
+    if (mentionedProjects.length && profile.capabilities.hostExec) {
+      const directive =
+        '## Mentioned Projects for This Turn\n' +
+        'The user @-mentioned the following project(s). If they are asking you to go do work there, first call `load_tools` with ["start_project_session"], then call `start_project_session` ' +
+        'with the project_path and a self-contained instruction (the new session cannot see this conversation). Tell the user briefly what you started, and keep the conversation here. ' +
+        'If the request is a question you can answer from here, just answer.\n' +
+        'Mentioned projects:\n' +
+        mentionedProjects.map((p) => `- ${p.name} — \`${p.path}\``).join('\n');
+      for (let i = workingMessages.length - 1; i >= 0; i--) {
+        const m = workingMessages[i];
+        if (m.role !== 'user') continue;
+        if (typeof m.content === 'string') {
+          workingMessages[i] = { ...m, content: m.content ? `${m.content}\n\n${directive}` : directive };
+        } else if (Array.isArray(m.content)) {
+          workingMessages[i] = { ...m, content: [...m.content, { type: 'text', text: directive }] } as ChatMessage;
+        }
+        break;
+      }
+    }
+
     // @ 提及的 agent(单聊):用户 @ 了别的 Normal Agent → 提示主 agent 用 delegate(agentSlug=…) 把相关
     // 子任务交给它们(子代理用该 agent 人格跑),再综合回复。仅 host(delegate 可见)注入;同尾部 user 指令策略。
     const mentionSlugs: string[] = Array.isArray(agentConfig.mentionedAgentSlugs)
