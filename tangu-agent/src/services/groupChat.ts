@@ -280,7 +280,9 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
       const st: CollabState = { participants: participants.map((a) => a.slug), pending: [], cycleSpoken: new Set() };
       let cycle = 1;
       let cycleMentions = 0;
-      let cycleDone = false;
+      // 本周期内写了 DONE 的成员:全员 DONE → done 停。写 DONE 的那条发言里的 @ 不再排队(收尾致谢式的「@某某 谢了,DONE」
+      // 不该把对方重新拉回来 —— live 台架 09-16 实测两人互相致谢无限循环到 max_rounds)。
+      let doneSet = new Set<string>();
       stopReason = 'max_rounds';
       for (let step = 1; step <= maxSteps; step++) {
         if (signal.aborted) throw new AbortLikeError();
@@ -291,9 +293,8 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
         // 周期分隔:全员本周期都发过言且无人被点名 → 新周期;整周期无人点名且无人写 DONE → 空转停。
         let slug = collabNext(st);
         if (!slug) {
-          if (cycleDone && cycleMentions === 0) { stopReason = 'done'; break; }
-          if (cycleMentions === 0) { stopReason = 'idle'; break; }
-          cycle++; cycleMentions = 0; cycleDone = false; st.cycleSpoken = new Set();
+          if (cycleMentions === 0) { stopReason = doneSet.size === participants.length ? 'done' : 'idle'; break; }
+          cycle++; cycleMentions = 0; doneSet = new Set(); st.cycleSpoken = new Set();
           await publish(runId, 'group_cycle', { cycle });
           slug = collabNext(st)!;
         }
@@ -301,10 +302,14 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
         const agent = bySlug.get(slug)!;
         const r = await speak(agent, cycle);
         st.cycleSpoken.add(slug);
-        for (const m of parseMentions(r.text, participants, slug)) {
-          if (!st.pending.includes(m)) { st.pending.push(m); cycleMentions++; }
+        if (/\bDONE\b/.test(r.text)) {
+          doneSet.add(slug);
+          if (doneSet.size === participants.length) { stopReason = 'done'; break; }
+        } else {
+          for (const m of parseMentions(r.text, participants, slug)) {
+            if (!st.pending.includes(m)) { st.pending.push(m); cycleMentions++; }
+          }
         }
-        if (/\bDONE\b/.test(r.text)) cycleDone = true;
         if (r.stop) { stopReason = r.stop; break; }
       }
     }
