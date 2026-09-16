@@ -8,8 +8,7 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Folder, PanelsTopLeft, Users, Sparkles,
-  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, type LucideIcon,
-} from 'lucide-react'
+  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, type LucideIcon, Bot } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { useCodeStudio } from '../../stores/codeStudioStore'
 import { normPath } from '../coding/studioModel'
@@ -37,6 +36,7 @@ import { AddContentMenu, type AddContentReference } from './AddContentMenu'
 import './composer2.css'
 
 registerMessages({
+  'input.agentSwitch.section': { zh: '切换 Agent', en: 'Switch agent' },
   // Chat / Work 是会话事实;可见切换统一放在侧栏胶囊。
   'input.presetChat': { zh: 'Chat', en: 'Chat' }, // 产品词,中英同形(与侧栏胶囊 sidebar.mode.* 同一套)
   'input.presetWork': { zh: 'Work', en: 'Work' },
@@ -234,6 +234,9 @@ export const Composer2: React.FC<{
   onGroupChange?: (patch: Pick<AgentConfig, 'groupChat' | 'groupAgents' | 'groupTempAgents' | 'groupIntensity' | 'groupMaxRounds'>) => void
   skills?: SkillInfo[] | null
   agents?: NormalAgentDef[]
+  /** 对话中切换 Agent(拍板 ⑪:入口先放模式切换菜单)。给了才渲染;群聊态 / 引擎会话 / chat 预设不渲染。 */
+  onAgentSwitch?: (slug: string) => void
+  currentAgentSlug?: string
   onNewSession?: () => void
   onBranch?: () => void
   onOpenSettings?: () => void
@@ -281,7 +284,7 @@ export const Composer2: React.FC<{
   verifyCommand, onVerifyCommandChange,
   preset, onPresetChange, planMode, onPlanModeChange, voiceMode, onVoiceModeChange, skills,
   groupChat, groupAgents, groupTempAgents, groupIntensity, groupMaxRounds, onGroupChange,
-  agents, onNewSession, onBranch, onOpenSettings,
+  agents, onAgentSwitch, currentAgentSlug, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
   quotedText, onClearQuote,
   contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact,
@@ -1115,7 +1118,7 @@ export const Composer2: React.FC<{
     : isHost ? curApproval.Icon
     : MessageSquare
   // Chat 是轻量对话，不露出 Work 才需要的计划/群聊/审批模式入口。
-  const showModeChip = !isChat && (!!onPlanModeChange || isHost || !!onGroupChange)
+  const showModeChip = !isChat && (!!onPlanModeChange || isHost || !!onGroupChange || !!onAgentSwitch)
   const currentEngine = (engines || []).find((e) => e.id === engineId)
   const engineLabel = currentEngine?.name || t('input.engineDefault')
   const isEngine = !!engineId
@@ -1421,6 +1424,18 @@ export const Composer2: React.FC<{
                           <span className="grow">{planMode ? t('input.planModeOn') : t('input.planModeEnable')}</span>
                           {planMode && <Check size={13} />}
                         </button>
+                      </>
+                    )}
+                    {onAgentSwitch && !isEngine && !isChat && !groupActive && !!agents?.length && (
+                      <>
+                        <div className="menu-section">{t('input.agentSwitch.section')}</div>
+                        {agents.filter((a) => a.createdBy !== 'system').map((a) => (
+                          <button key={a.slug} className={`menu-item${currentAgentSlug === a.slug ? ' active' : ''}`} onClick={() => { onAgentSwitch(a.slug); setOpenMenu(null) }}>
+                            <Bot size={14} />
+                            <span className="grow">{a.name}</span>
+                            {currentAgentSlug === a.slug && <Check size={13} />}
+                          </button>
+                        ))}
                       </>
                     )}
                     {onGroupChange && !isEngine && !isChat && (

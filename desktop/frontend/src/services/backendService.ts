@@ -5,8 +5,7 @@
 import type {
   AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, MuseLibraryEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo,
   NormalAgentDef, SessionRecord, SkillInfo, SpecialAgentsConfig,
-  TanguDesktopConfig, ToolsResponse, WorkspaceFileMeta,
-} from '../types'
+  TanguDesktopConfig, ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
 import { AGENT_APP_ID } from './agentRunService'
 import { localInbox } from './localInbox' // 移动端(window.tangu?.mobile)下 inbox 走设备本地存储
@@ -88,6 +87,27 @@ export const createSession = (
     method: 'POST',
     body: JSON.stringify({ app_id: AGENT_APP_ID, ...(init || {}) }),
   }).then((r) => r.session)
+
+/** 私聊(Agent 轨道):该 Agent / 外部引擎的活动私聊会话,没有就建(引擎侧单点,多窗口同击只得一条)。host-only:云端 404。 */
+export const soloOpen = (cfg: TanguDesktopConfig, kind: 'agent' | 'engine', id: string) =>
+  request<{ session: SessionRecord; created: boolean }>(cfg, `/agent/solo/${kind}/${encodeURIComponent(id)}/open`, { method: 'POST', body: '{}' })
+
+/** 独立团队(host-only,云端 [] / 404)。 */
+export const listTeams = (cfg: TanguDesktopConfig) =>
+  request<{ teams: TeamDef[] }>(cfg, '/agent/teams').then((r) => r.teams).catch(() => [] as TeamDef[])
+export const createTeam = (cfg: TanguDesktopConfig, input: { name: string; members: Array<{ slug: string; role?: string }>; mode?: 'meeting' | 'collab'; maxRounds?: number; lead?: string; avatar?: string; doc?: string; description?: string }) =>
+  request<{ team: TeamDef }>(cfg, '/agent/teams', { method: 'POST', body: JSON.stringify(input) }).then((r) => r.team)
+export const patchTeam = (cfg: TanguDesktopConfig, slug: string, patch: Partial<{ name: string; members: Array<{ slug: string; role?: string }>; mode: 'meeting' | 'collab'; maxRounds: number; lead: string; avatar: string; doc: string; description: string }>) =>
+  request<{ team: TeamDef }>(cfg, `/agent/teams/${encodeURIComponent(slug)}`, { method: 'PATCH', body: JSON.stringify(patch) }).then((r) => r.team)
+export const deleteTeam = (cfg: TanguDesktopConfig, slug: string) =>
+  request<{ ok: boolean }>(cfg, `/agent/teams/${encodeURIComponent(slug)}`, { method: 'DELETE' })
+/** 该团队的活动会话,没有就建(引擎侧单点)。 */
+export const teamSessionOpen = (cfg: TanguDesktopConfig, slug: string) =>
+  request<{ session: SessionRecord; created: boolean }>(cfg, `/agent/teams/${encodeURIComponent(slug)}/session/open`, { method: 'POST', body: '{}' })
+
+/** 私聊「新会话(先总结记忆)」:旧会话有活动 run → 409 run_active;memory:queued=后台采候选中 / skipped=Historian 没起来 / none=引擎或无旧会话。 */
+export const soloRotate = (cfg: TanguDesktopConfig, kind: 'agent' | 'engine', id: string) =>
+  request<{ session: SessionRecord; memory: 'queued' | 'skipped' | 'none' }>(cfg, `/agent/solo/${kind}/${encodeURIComponent(id)}/rotate`, { method: 'POST', body: '{}' })
 
 export const updateSession = (
   cfg: TanguDesktopConfig,

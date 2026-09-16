@@ -11,8 +11,7 @@ import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 import type {
   AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, CtxInfo, ModelsResponse, NormalAgentDef,
   MsgSeg, SessionRecord, SkillInfo, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
-  DefaultModelSlot,
-} from '../types'
+  DefaultModelSlot, TeamDef } from '../types'
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
 import { effectiveSessionMode, type SessionMode } from '../views/sessionMode'
@@ -35,6 +34,7 @@ import { registerMessages, translate, translationValues } from '../i18n'
 // 本文件自带的词条片段(命名空间 `appstore.*`,与其它文件不重叠)。
 // store 活在 React 之外,取词一律走模块级 `translate`,不能用 hook。
 registerMessages({
+  'solo.rotateBusy': { zh: '这条私聊还在运行中,等它结束再开新会话', en: 'This direct chat is still running; wait for it to finish before starting a new session' },
   'appstore.contentTruncated': { zh: '[输出过长,界面已截断显示]', en: '[Output too long, truncated for display]' },
   'appstore.stopping': { zh: '正在停止，等待任务退出…', en: 'Stopping; waiting for the run to exit…' },
   'appstore.stopFailed': { zh: '停止尚未确认：{e}', en: 'Stop not confirmed: {e}' },
@@ -627,7 +627,18 @@ export interface AppState {
   setVoiceMode(slug: string, on: boolean): Promise<void>
   setSessionEngine(engineId: string, sessionId?: string | null): void
   setSessionEngineModel(engineModelId: string, sessionId?: string | null): void
-  setSessionGroup(patch: Pick<AgentConfig, 'groupChat' | 'groupAgents' | 'groupTempAgents' | 'groupIntensity' | 'groupMaxRounds'>, sessionId?: string | null): void
+  setSessionGroup(patch: Pick<AgentConfig, 'groupChat' | 'groupAgents' | 'groupTempAgents' | 'groupIntensity' | 'groupMaxRounds' | 'teamMode'>, sessionId?: string | null): void
+  /** 私聊(Agent 轨道):拿到/建立该 Agent 或外部引擎的活动私聊会话并并进列表(不切 activeId —— 导航由 sessionNav.openSolo 做)。 */
+  ensureSoloSession(kind: 'agent' | 'engine', id: string): Promise<SessionRecord | null>
+  /** 私聊「新会话(先总结记忆)」:旧会话归档、新会话进列表;返回新会话与记忆采集状态;活动 run 时返回 null 并提示。 */
+  rotateSoloSession(kind: 'agent' | 'engine', id: string): Promise<{ session: SessionRecord; memory: 'queued' | 'skipped' | 'none' } | null>
+  /** 把引擎侧建好的会话并进本地列表(去重 + 预填 agent_config + 标记历史已加载)。 */
+  adoptSession(session: SessionRecord): void
+  /** 独立团队(Agent 轨道):定义列表(host-only;云端恒空)。 */
+  teams: TeamDef[]
+  refreshTeams(): Promise<void>
+  /** 拿到/建立该团队的活动会话并并进列表(导航由 sessionNav.openTeam 做)。 */
+  ensureTeamSession(slug: string): Promise<SessionRecord | null>
   selectSessionAgent(slug: string, sessionId?: string | null): void
   selectNewChatAgent(slug: string): void
   setNewChatWs(ws: WorkspaceDescriptor | null): void
@@ -2453,6 +2464,71 @@ export const useApp = create<AppState>((set, get) => ({
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
     set((s) => { const next = { ...(s.configBySession[sid] || {}), engineModelId: engineModelId || undefined }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
+  },
+
+  teams: [],
+  refreshTeams: async () => {
+    const c = get().cfg
+    const teams = await api.listTeams(c)
+    set({ teams })
+  },
+  ensureTeamSession: async (slug) => {
+    const t = get().tr
+    try {
+      const { session } = await api.teamSessionOpen(get().cfg, slug)
+      get().adoptSession(session)
+      return session
+    } catch (e: any) {
+      get().toast(e?.message || t('app.cannotCreateSession'), true)
+      return null
+    }
+  },
+
+  ensureSoloSession: async (kind, id) => {
+    const t = get().tr
+    try {
+      const { session } = await api.soloOpen(get().cfg, kind, id)
+      get().adoptSession(session)
+      return session
+    } catch (e: any) {
+      get().toast(e?.message || t('app.cannotCreateSession'), true)
+      return null
+    }
+  },
+
+  rotateSoloSession: async (kind, id) => {
+    const t = get().tr
+    try {
+      const r = await api.soloRotate(get().cfg, kind, id)
+      // 旧的活动私聊会话已在引擎侧归档:本地列表同步挪到归档区(不重拉整表)。
+      const key = kind === 'agent' ? 'soloAgentSlug' : 'soloEngineId'
+      set((st) => {
+        const olds = st.sessions.filter((s) => s.id !== r.session.id && st.configBySession[s.id]?.[key] === id)
+        if (!olds.length) return {}
+        const ids = new Set(olds.map((s) => s.id))
+        return {
+          sessions: st.sessions.filter((s) => !ids.has(s.id)),
+          archivedSessions: [...olds.map((s) => ({ ...s, archived: true })), ...st.archivedSessions],
+        }
+      })
+      get().adoptSession(r.session)
+      return r
+    } catch (e: any) {
+      const busy = /409|run_active/.test(String(e?.message || ''))
+      get().toast(busy ? t('solo.rotateBusy') : (e?.message || t('app.cannotCreateSession')), true)
+      return null
+    }
+  },
+
+  /** 把引擎侧建好的会话并进本地列表(去重 + 预填 agent_config + 标记历史已加载,免得 setActiveId 拉空历史冲掉配置)。 */
+  adoptSession: (session) => {
+    loadedHistory.add(session.id)
+    set((st) => ({
+      sessions: [session, ...st.sessions.filter((s) => s.id !== session.id)],
+      archivedSessions: st.archivedSessions.filter((s) => s.id !== session.id),
+      configBySession: { ...st.configBySession, [session.id]: session.agent_config || st.configBySession[session.id] || {} },
+      messagesBySession: st.messagesBySession[session.id] ? st.messagesBySession : { ...st.messagesBySession, [session.id]: [] },
+    }))
   },
 
   setSessionGroup: (patch, targetSessionId) => {

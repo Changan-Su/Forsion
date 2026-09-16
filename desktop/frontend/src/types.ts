@@ -376,6 +376,26 @@ export const FONT_MONO_KEY = 'forsion_tangu_font_mono'
 export interface AgentsMeta { order: string[]; defaultSlug: string }
 
 /** 本地 Normal Agent 定义(~/.tangu/agents/<slug>/;后端 agentRegistry 解析)。 */
+/** 独立团队(Agent 轨道的持久团队实体;引擎 agents/teamRegistry.ts 同形)。项目轨道的「团队模式」是会话级运行模式,不用这个。 */
+export interface TeamDef {
+  slug: string
+  name: string
+  description: string
+  /** 运行模式缺省档(会话内可切):meeting=会议;collab=协作。 */
+  mode: 'meeting' | 'collab'
+  maxRounds: number
+  lead: string
+  /** 可选 emoji;空 = 成员头像组合。 */
+  avatar: string
+  /** 数组顺序 = 发言顺序。 */
+  members: Array<{ slug: string; role: string }>
+  createdAt: string
+  /** TEAM.md 正文。 */
+  doc: string
+  /** 团队会话的 cwd(团队自己的 Library)。 */
+  libraryDir: string
+}
+
 export interface NormalAgentDef {
   slug: string
   name: string
