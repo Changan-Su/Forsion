@@ -5,11 +5,12 @@
 import { useEffect, useRef } from 'react'
 import type { ViewProps } from '@lcl/engine'
 import { useTheme } from '../stores/themeStore'
-import { usePageStore, pageStoreFor } from '../amadeus/store/pageStore'
+import { usePageStore } from '../amadeus/store/pageStore'
 import { usePluginStore, findFileType, fileTypeBaseName, addPluginViewTeardown } from '../amadeus/plugins/pluginStore'
 import { createPluginViewSurface } from '../amadeus/plugins/viewSurface'
 import { isBuiltinFileType } from '@amadeus-shared/builtinTypes'
 import { openFile } from '../amadeusNav'
+import { useFollowPathGone } from './followPathGone'
 
 export function AmadeusPluginFileView({ leaf }: ViewProps) {
   const filePath = typeof leaf.params.filePath === 'string' ? leaf.params.filePath : ''
@@ -22,6 +23,9 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
   // 插件按新库重读(不存在则显示错误态,不会用旧内容写坏新库);也自愈「库未就绪时先挂 → 读到 null」的启动态(Codex #1)。
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const hostRef = useRef<HTMLDivElement | null>(null)
+  // 改名跟车(树上 renameAt/movePage/renameFolder、标题栏 renamePage 都经 remapScopePaths 广播):setParams 换
+  // filePath → 下面主 effect 按新路径重挂。原先订阅本 scope 的 activePage,插件没经 surface.loadPage 装过文件就永远等不到。
+  useFollowPathGone(leaf.id, 'filePath', filePath)
 
   useEffect(() => {
     if (filePath && ft) leaf.setTitle(fileTypeBaseName(filePath, ft.extensions) || ft.title || filePath)
@@ -52,16 +56,6 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
     const pluginId = usePluginStore.getState().fileTypes.find((o) => o.item === ft)?.pluginId ?? 'unknown'
     const vs = createPluginViewSurface(pluginId, `plug:${leaf.id}`, ft.extensions ?? [])
     const dereg = addPluginViewTeardown(pluginId, vs.dispose)
-    // 改名跟车(2026-08-14 完整笔记面后,标题栏/树上都能改名):改名会 remap 本视图 scope store
-    // 的 activePage(renamePage 直改 / renameAt 的 remapScopePaths),leaf 参数不跟着换,重启/重开
-    // 就指回旧路径。setParams 换 filePath → 本 effect 按新路径重挂(改名罕见,重挂代价可接受)。
-    // 订阅住在主 effect 里与 surface 同源同灭 —— 单独 effect 无条件 pageStoreFor 会在 ft 缺席时
-    // 凭空造出无人回收的 scope store(评审 P2)。
-    const unsub = pageStoreFor(`plug:${leaf.id}`).subscribe((s, prev) => {
-      if (prev.activePage === filePath && s.activePage && s.activePage !== filePath) {
-        leaf.setParams({ ...leaf.params, filePath: s.activePage })
-      }
-    })
     let cleanup: (() => void) | void
     try {
       cleanup = ft.mount(el, { filePath, surface: vs.surface })
@@ -74,7 +68,6 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
       } catch {
         /* ignore */
       }
-      unsub()
       dereg()
       vs.dispose()
       // 微任务后再摘容器:插件的延迟 unmount 还要在它身上跑一拍(直接 remove 会让 React 卸到

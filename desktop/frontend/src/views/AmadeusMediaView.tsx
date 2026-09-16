@@ -17,6 +17,7 @@ import { toAssetUrl } from '@amadeus-shared/assets'
 import { useTheme } from '../stores/themeStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { MediaPlayer } from '@amadeus/components/MediaPlayer'
+import { useFollowPathGone } from './followPathGone'
 
 const baseOf = (p: string): string => p.split(/[\\/]/).pop() || p
 
@@ -29,6 +30,7 @@ export function AmadeusMediaView({ leaf }: ViewProps) {
   // 同 PDF/图片:asset:// 按「当前打开的 vault」解析,启动恢复 tab 时 vault 可能还没 open →
   // 先不挂播放器(否则加载失败,且 vault 就绪后 src 不变不会自愈)。vaultRoot 落地即重渲。
   const vaultReady = usePageStore((s) => !!s.vaultRoot)
+  useFollowPathGone(leaf.id, 'path', path)
   useEffect(() => { if (path) leaf.setTitle(baseOf(path)) }, [path]) // eslint-disable-line react-hooks/exhaustive-deps
   if (!path) return <div className="amx-db amx-db-state">未指定媒体文件。</div>
   // ⚠️ loc 必须是**新对象也无所谓、但 at 变了要能重跳**:MediaPlayer 的 seek effect 依赖 loc?.at,

@@ -83,6 +83,7 @@
     "e2e:pdfcite": "node scripts/pdf-citation.e2e.cjs",
     "check:hlband": "node scripts/pdf-highlight-geometry.check.cjs",
     "e2e:filecite": "node scripts/file-citation.e2e.cjs",
+    "e2e:pathgonefiles": "node scripts/vault-pathgone-files.e2e.cjs",
     "check:textfrag": "electron scripts/text-fragment.check.cjs",
     "check:assetfetch": "electron scripts/asset-fetch.check.cjs",
     "check:rtc": "electron scripts/rtc-capability.check.cjs",

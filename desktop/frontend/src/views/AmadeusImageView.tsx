@@ -6,6 +6,7 @@ import type { ViewProps } from '@lcl/engine'
 import { useTheme } from '../stores/themeStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { toAssetUrl } from '@amadeus-shared/assets'
+import { useFollowPathGone } from './followPathGone'
 
 const imgBase = (p: string): string => p.split(/[\\/]/).pop() || p
 
@@ -16,6 +17,7 @@ export function AmadeusImageView({ leaf }: ViewProps) {
   // 同 PDF:asset:// 协议按「当前打开的 vault」解析,启动恢复 tab 时 vault 可能还没 open →
   // 先不挂 <img>(否则碎图,且 vault 就绪后 src 不变不会自愈)。vaultRoot 落地即重渲挂载。
   const vaultReady = usePageStore((s) => !!s.vaultRoot)
+  useFollowPathGone(leaf.id, 'imagePath', imagePath)
   const [actual, setActual] = useState(false) // false=适应窗口,true=原始像素
   // navigateLeaf 会把标题重置为 displayName,挂载/换文件后设回图片名(AmadeusPdfView 同款);换文件回到适应窗口。
   useEffect(() => {
