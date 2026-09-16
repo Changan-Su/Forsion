@@ -73,6 +73,8 @@ export interface NormalAgentDef {
   toolsList?: string[];
   /** 该 agent 支持/出现于哪些 app(小写,如 ["echo"]);空=不限制(由调用方默认)。来自 config.toml apps。 */
   apps?: string[];
+  /** 本地 agent 的 Library 绝对路径(私聊会话的 cwd);云端 agent 无此字段 ⇒ 不能开私聊(私聊 host-only)。 */
+  libraryDir?: string;
 }
 
 /** 记忆/日志作用域 slug:共用默认 → DEFAULT_AGENT_SLUG;否则该 agent 自己。 */
@@ -600,12 +602,12 @@ export async function listAgents(): Promise<NormalAgentDef[]> {
       const slug = e.name;
       if (!isValidSlug(slug)) continue;
       if (!existsSync(path.join(dir, slug, 'config.toml'))) continue;
-      try { defs.push(await parseAgentFolder(slug, path.join(dir, slug))); } catch { /* 跳过坏目录 */ }
+      try { defs.push({ ...(await parseAgentFolder(slug, path.join(dir, slug))), libraryDir: libDirOf(slug) }); } catch { /* 跳过坏目录 */ }
     } else if (e.isFile() && e.name.endsWith('.md') && !e.name.endsWith('.md.bak')) {
       // 防御:遗留扁平(ensureAgentsReady 已迁移,正常到不了这)→ 迁移后读。
       const slug = e.name.slice(0, -3);
       if (!isValidSlug(slug)) continue;
-      try { await migrateFlatToFolder(slug); defs.push(await parseAgentFolder(slug, path.join(dir, slug))); } catch { /* ignore */ }
+      try { await migrateFlatToFolder(slug); defs.push({ ...(await parseAgentFolder(slug, path.join(dir, slug))), libraryDir: libDirOf(slug) }); } catch { /* ignore */ }
     }
   }
   // 按 meta.order 排(order 内按序在前,order 外按 name 在后)。
@@ -621,11 +623,11 @@ export async function getAgent(slug: string): Promise<NormalAgentDef | null> {
   await ensureAgentsReady();
   const adir = path.join(agentsDir(), slug);
   if (existsSync(path.join(adir, 'config.toml'))) {
-    try { return await parseAgentFolder(slug, adir); } catch { return null; }
+    try { return { ...(await parseAgentFolder(slug, adir)), libraryDir: libDirOf(slug) }; } catch { return null; }
   }
   // 遗留扁平:迁移后再读
   if (existsSync(path.join(agentsDir(), `${slug}.md`))) {
-    try { await migrateFlatToFolder(slug); return await parseAgentFolder(slug, adir); } catch { return null; }
+    try { await migrateFlatToFolder(slug); return { ...(await parseAgentFolder(slug, adir)), libraryDir: libDirOf(slug) }; } catch { return null; }
   }
   return null;
 }
@@ -850,7 +852,7 @@ export function sanitizeLibraryName(name: string): string {
   return n;
 }
 
-function libDirOf(slug: string): string {
+export function libDirOf(slug: string): string {
   if (!isValidSlug(slug)) throw new Error('invalid slug');
   return path.join(agentsDir(), slug, 'Library');
 }

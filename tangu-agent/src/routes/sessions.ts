@@ -18,6 +18,7 @@ import { compactSession } from '../services/compaction.js';
 import { branchSession } from '../services/sessionBranch.js';
 import { listCheckpoints, restoreCodeSince, removeSessionCheckpoints } from '../services/checkpoints.js';
 import { searchSessions, splitTerms, dayArg, fmtDate } from '../services/sessionSearch.js';
+import { isValidSlug } from '../agents/agentRegistry.js';
 
 const router = Router();
 
@@ -28,11 +29,42 @@ export function validPreset(v: unknown): boolean {
   return v == null || v === 'coding' || v === 'chat';
 }
 
-/** 空白会话锁的服务端不变量(creview 09-07 E4/F3):会话一旦有消息,存值里的 preset 不可被整对象写接口改掉——
- *  客户端加载窗口里从 {} 起步的 PUT、漏传 preset、或写 work 都改不了;空白会话与无 preset 键的老会话照旧整体替换。 */
-export function applyPresetLock(stored: unknown, cfg: Record<string, unknown>, messageCount: number): Record<string, unknown> {
-  if (!stored || typeof stored !== 'object' || !Object.prototype.hasOwnProperty.call(stored, 'preset')) return cfg;
-  return messageCount > 0 ? { ...cfg, preset: (stored as any).preset } : cfg;
+/** 轨道身份类会话事实(建会话写一次、跑过一轮即锁):preset(既有)+ 私聊(Agent / 外部引擎)+ 独立团队。
+ *  运行模式键(groupChat / groupAgents / teamMode)刻意不在此列 —— 它们要在会话中途可进可退。新增一项必须四处同改:
+ *  POST 校验、PUT 校验 + 消息数门、本锁、引擎侧(agentLoop 的 pickSessionFacts/bindSessionFacts「存值为准」)。 */
+export const LOCKED_SESSION_FACT_KEYS = ['preset', 'soloAgentSlug', 'soloEngineId', 'teamSlug'] as const;
+const SOLO_ENGINE_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
+
+/** 会话事实校验:非法返回错误串(写接口 400,不静默折成合法值),合法返回 null。三个轨道身份键互斥。 */
+export function validSessionFacts(cfg: Record<string, any> | null | undefined): string | null {
+  if (!cfg || typeof cfg !== 'object') return null;
+  if (!validPreset(cfg.preset)) return 'invalid preset';
+  for (const k of ['soloAgentSlug', 'teamSlug'] as const) {
+    if (cfg[k] != null && (typeof cfg[k] !== 'string' || !isValidSlug(cfg[k]))) return `invalid ${k}`;
+  }
+  if (cfg.soloEngineId != null && (typeof cfg.soloEngineId !== 'string' || !SOLO_ENGINE_ID_RE.test(cfg.soloEngineId))) return 'invalid soloEngineId';
+  const set = [cfg.soloAgentSlug, cfg.soloEngineId, cfg.teamSlug].filter((v) => v != null).length;
+  if (set > 1) return 'soloAgentSlug / soloEngineId / teamSlug are mutually exclusive';
+  return null;
+}
+
+/** 空白会话锁的服务端不变量(creview 09-07 E4/F3,泛化到全部锁定键):会话一旦有消息,存值里**已有的**锁定键不可被整对象写接口
+ *  改掉 —— 客户端加载窗口里从 {} 起步的 PUT、漏传、或写别的值都改不了;空白会话与不含该键的老会话照旧整体替换(逐键判断)。 */
+export function applySessionFactLock(stored: unknown, cfg: Record<string, unknown>, messageCount: number): Record<string, unknown> {
+  if (!stored || typeof stored !== 'object' || messageCount <= 0) return cfg;
+  let out = cfg;
+  for (const k of LOCKED_SESSION_FACT_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(stored, k)) continue;
+    if (out === cfg) out = { ...cfg };
+    out[k] = (stored as any)[k];
+  }
+  return out;
+}
+/** 旧名(preset 单键时代)保留给既有调用方/测试;语义 = applySessionFactLock。 */
+export const applyPresetLock = applySessionFactLock;
+
+function hasLockedFactKey(stored: unknown): boolean {
+  return !!stored && typeof stored === 'object' && LOCKED_SESSION_FACT_KEYS.some((k) => Object.prototype.hasOwnProperty.call(stored, k));
 }
 
 function parseMaybeJson(v: any): any {
@@ -85,7 +117,8 @@ router.post('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => 
     // 初始 agent_config 与建会话同一条 INSERT(原子):客户端不必再补一次 PUT——补 PUT 失败会留下没有 preset/execMode 的
     // chat 会话,重载后被当 work 初始化(creview 09-07 F2)。老客户端不传 → null,行为不变。
     const initCfg = agent_config && typeof agent_config === 'object' && !Array.isArray(agent_config) ? agent_config : null;
-    if (initCfg && !validPreset(initCfg.preset)) return res.status(400).json({ detail: 'invalid preset' });
+    const factErr = validSessionFacts(initCfg);
+    if (factErr) return res.status(400).json({ detail: factErr });
     const id = uuidv4();
     await query(
       `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, emoji, project_path, project_name, projectless, agent_config)
@@ -515,13 +548,13 @@ router.put('/agent/sessions/:id/config', authMiddleware, async (req: AuthRequest
     const s = await getOwnSession(req.params.id, userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
     const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
-    if (!validPreset(body.preset)) return res.status(400).json({ detail: 'invalid preset' });
+    const factErr = validSessionFacts(body);
+    if (factErr) return res.status(400).json({ detail: factErr });
     const stored = parseMaybeJson(s.agent_config);
-    const hasPresetKey = !!stored && typeof stored === 'object' && Object.prototype.hasOwnProperty.call(stored, 'preset');
-    const msgCount = hasPresetKey
+    const msgCount = hasLockedFactKey(stored)
       ? Number((await query<any[]>(`SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ?`, [req.params.id]))[0]?.n || 0)
       : 0;
-    const cfg = applyPresetLock(stored, body, msgCount);
+    const cfg = applySessionFactLock(stored, body, msgCount);
     await query(`UPDATE chat_sessions SET agent_config = ?, updated_at = ${getNowSql()} WHERE id = ?`, [
       JSON.stringify(cfg), req.params.id,
     ]);

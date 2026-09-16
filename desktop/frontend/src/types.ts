@@ -399,6 +399,8 @@ export interface NormalAgentDef {
   shareDefaultMemory?: boolean
   /** 开启云同步:该 agent 全部文件跨设备完全镜像(默认 false=纯本地)。 */
   cloudSync?: boolean
+  /** 本地 agent 的 Library 绝对路径(私聊会话的 cwd);云端 agent 缺省 ⇒ 不能开私聊。 */
+  libraryDir?: string
   /** 允许读用户活动日志(read_activity 工具);默认 false=仅 Muse 可读。 */
   activityAccess?: boolean
   /** 内置工具名单:'deny'=toolsList 内禁用(其余可用);'allow'=仅 toolsList 可用;缺省=不限制。 */
@@ -447,6 +449,14 @@ export interface AgentConfig {
   preset?: 'coding' | 'chat'
   /** 群聊模式:≥2 个 Normal Agent 轮流发言、投票、可总结。host-only。 */
   groupChat?: boolean
+  /** 团队运行模式(两条轨道共用):meeting=会议(固定发言序 + 投票);collab=协作(被 @ 者优先、无人点名即停)。缺省 meeting;可变、不锁。 */
+  teamMode?: 'meeting' | 'collab'
+  /** 轨道身份(会话事实,建会话写一次、跑过一轮即锁,引擎侧存值为准):私聊 Agent。 */
+  soloAgentSlug?: string
+  /** 轨道身份:私聊外部引擎(Codex / PI 等 CLI 视作特殊的独立 Agent)。 */
+  soloEngineId?: string
+  /** 轨道身份:独立团队(Agent 轨道的持久团队实体)。 */
+  teamSlug?: string
   /** 群聊参与者 slug(≥2;含已存 Normal Agent 与临时 Agent,按顺序)。 */
   groupAgents?: string[]
   /** 临时 Agent 定义(仅本会话群聊用,不持久化到 ~/.tangu/agents)。slug 在 groupAgents 中列出。 */

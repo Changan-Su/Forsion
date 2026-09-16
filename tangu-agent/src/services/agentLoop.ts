@@ -246,12 +246,46 @@ export async function chatPresetLocked(sessionId: string, agentConfig: any): Pro
   } catch { return true; }
 }
 
+/** 轨道身份类会话事实(私聊 Agent / 私聊外部引擎 / 独立团队)。**存值是唯一真源**:这些键只在建会话时写一次,run 带的值只能被
+ *  存值覆盖、绝不反向补锁(老会话缺键 = 不是私聊/团队;按 run 补锁会让一个带错字段的客户端把普通会话变成私聊)。 */
+export interface SessionFacts { soloAgentSlug?: string; soloEngineId?: string; teamSlug?: string }
+const SESSION_FACT_KEYS = ['soloAgentSlug', 'soloEngineId', 'teamSlug'] as const;
+export function pickSessionFacts(stored: any): SessionFacts {
+  const out: SessionFacts = {};
+  if (stored && typeof stored === 'object' && !Array.isArray(stored)) {
+    for (const k of SESSION_FACT_KEYS) {
+      const v = stored[k];
+      if (typeof v === 'string' && v) out[k] = v;
+    }
+  }
+  return out;
+}
+export async function storedSessionFacts(sessionId: string): Promise<SessionFacts> {
+  try {
+    const raw = await deps().state.getAgentConfig(sessionId);
+    return pickSessionFacts(typeof raw === 'string' ? JSON.parse(raw) : raw);
+  } catch { return {}; }
+}
+/** 条件绑定:把存值里的轨道身份绑进本 run 的 agentConfig。agentSlug 刻意不进锁集(写穿是 07-02 竞速事故的根治),
+ *  私聊靠这里强制 agentSlug = soloAgentSlug;私聊永不进群聊分叉、也不委托外部引擎;独立团队永远是群聊。 */
+export function bindSessionFacts(agentConfig: any, facts: SessionFacts): void {
+  for (const k of SESSION_FACT_KEYS) {
+    if (facts[k]) agentConfig[k] = facts[k]; else delete agentConfig[k];
+  }
+  if (facts.soloAgentSlug) { agentConfig.agentSlug = facts.soloAgentSlug; agentConfig.groupChat = undefined; agentConfig.engineId = undefined; }
+  if (facts.soloEngineId) { agentConfig.engineId = facts.soloEngineId; agentConfig.groupChat = undefined; }
+  // 独立团队:groupAgents 缺省由团队成员表填(teamRegistry,随独立团队实体一期落地);这里只钉死「永远是群聊、不委托引擎」。
+  if (facts.teamSlug) { agentConfig.groupChat = true; agentConfig.engineId = undefined; }
+}
+
 async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
   try {
     const run = await getRun(runId);
     if (run) {
       const input = typeof run.input === 'string' ? safeParse(run.input) : run.input || {};
-      const engineId: string | undefined = input?.agentConfig?.engineId;
+      // 存值为准:私聊外部引擎会话恒走该引擎;私聊 Agent / 独立团队会话恒不走外部引擎(run 带 engineId 也不算)。
+      const facts = await storedSessionFacts(run.session_id);
+      const engineId: string | undefined = facts.soloEngineId || (facts.soloAgentSlug || facts.teamSlug ? undefined : input?.agentConfig?.engineId);
       const profile = resolveProfile((run as any).app_id) ?? deps().profile;
       const engines = deps().engines;
       // 红线:未声明 hostExec 的 profile(云端形态)→ engines 不注入/为空 → 一律回落 runLoop。
@@ -549,6 +583,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     ac.signal.throwIfAborted();
     const stored = rawStored ? (typeof rawStored === 'string' ? JSON.parse(rawStored) : rawStored) : null;
     if (stored !== null && (typeof stored !== 'object' || Array.isArray(stored))) throw new Error('Invalid stored session Agent configuration');
+    // 轨道身份先于 agentSlug 纠偏:私聊会话的 agentSlug 由 soloAgentSlug 钉死,下面的写穿会把存值也顺手纠回来。
+    bindSessionFacts(agentConfig, pickSessionFacts(stored));
     const patch: Record<string, unknown> = {};
     if (!agentConfig.agentSlug && stored?.agentSlug) {
       agentConfig.agentSlug = stored.agentSlug;
