@@ -1,7 +1,7 @@
 /** P0 一致性锁:fileMatch 声明表 ↔ 运行时判定(isDrawingPath/isDashboardPath 等 shared 函数)。
  *  声明表是 deep link / 嵌卡的白名单依据;运行时分派另有其主(毁档防线),两边漂移=deep link 开错视图。 */
 import { describe, expect, it } from 'vitest'
-import { VIEW_FILE_MATCH, extHit, fileMatchViewType } from './viewFileMatch'
+import { FILE_VIEW_PARAM, VIEW_FILE_MATCH, extHit, fileMatchViewType } from './viewFileMatch'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { isDashboardPath } from '@amadeus-shared/dashboard'
 
@@ -28,6 +28,15 @@ describe('viewFileMatch 声明 ↔ 运行时判定一致', () => {
     expect(extHit('库/数据.db', 'amadeus-db')).toBe(true)
     expect(fileMatchViewType('图/截图.PNG')).toBe('amadeus-image')
     expect(fileMatchViewType('归档.zip')).toBe(null)
+  })
+
+  it('每个认领文件的 view 都登记了身份参数(导航历史 / 最近使用 / 树行高亮共用)', () => {
+    // P3a 注册成 'dashboard' 时两张旧表都没跟上 → 仪表盘标签箭头恒灰、进不了最近使用、树上亮错行
+    for (const type of Object.keys(VIEW_FILE_MATCH)) {
+      if (type !== 'amadeus-editor') expect(FILE_VIEW_PARAM[type], type).toBeTruthy()
+    }
+    expect(FILE_VIEW_PARAM.dashboard).toBe('dashPath')
+    expect(FILE_VIEW_PARAM['amadeus-dashboard']).toBe('dashPath') // 旧布局 / 旧记账照认
   })
 
   it('.md 的 editor 兜底优先级最低(0),其余声明全部更高', () => {

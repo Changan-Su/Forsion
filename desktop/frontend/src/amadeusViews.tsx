@@ -71,6 +71,7 @@ import './views/chat2/sidebar2.css' // t2s- 侧栏样式(通常已随 SessionsVi
 import { OverlayAt } from '@lcl/engine'
 import { SidebarRow } from './components/SidebarRow'
 import { parentOf, rowDropTarget, dropKeyOf, takesHostPaths } from './views/treeDrop'
+import { FILE_VIEW_PARAM } from './viewFileMatch'
 import { registerMessages, translate, useI18n } from './i18n'
 
 registerMessages({
@@ -305,6 +306,12 @@ const useAmadeusNav = create<{ locate: { path: string; n: number } | null; reque
 usePageStore.subscribe((state, prev) => {
   const p = state.activePage
   if (!p || p === prev.activePage) return
+  // 仪表盘也往本 leaf 的 scope 里 loadPage,但它的历史/最近使用归 bootstrapEngine 的 mainTabs 订阅
+  // (file:dashboard:*,复原走 navigateLeaf('dashboard'))。这里再记一条 amadeus:* = 同一页两条:
+  // 后退空按一下、复原后前进段被截、最近使用重复,复原这条还会把仪表盘塞进笔记编辑器(真 Electron 实测)。
+  // ⚠️ 只在有 api 时让路:移动单列壳 api 恒 null,mainTabs 那条一个文件视图都记不到,这里也不记的话
+  //    手机上的仪表盘连「最近使用」都没了(静默少功能,check:parity 抓不到)。
+  if (isDashboardPath(p) && useWorkspace.getState().api) return
   // ⚠️ 归属面板必须**在这里**定下来:门面订阅来自「当前活动面板」,也就是刚刚导航的那个。
   // 放进 microtask 里再问 activeMainPanel(),用户手快切到另一半屏时这条历史就记到隔壁去了,
   // 后退时也会把笔记退进隔壁(Codex 复审)。
@@ -923,12 +930,13 @@ export function AmadeusPagesView() {
     return { vaultSecs, rest }
   }, [tree, entryVaults, mirrorVaults, vaultSide, webVaultNames])
 
-  // 白板/PDF/.db 开在各自的独立视图、不写 activePage → 树行永远不亮。聚焦主 tab 是这类视图时
+  // 白板/PDF/.db/仪表盘/图片 开在各自的独立视图、activePage 不归树管 → 聚焦主 tab 是这类视图时
   // 按其文件参数点亮对应行(编辑器/其他视图聚焦时回落 activePage,原行为)。mainTabs 随激活变化刷新。
+  // 表与导航历史共用(FILE_VIEW_PARAM)。漏在表外的视图会回落 activePage = 亮错行(仪表盘曾如此)。
   const mainTabs = useWorkspace((s) => s.mainTabs)
   const activeViewFile = useMemo(() => {
     const tab = mainTabs.find((x) => x.active)
-    const key = tab && ({ 'amadeus-drawing': 'drawingPath', 'amadeus-pdf': 'pdfPath', 'amadeus-db': 'dbPath', 'amadeus-plugin-file': 'filePath' } as Record<string, string>)[tab.type]
+    const key = tab && FILE_VIEW_PARAM[tab.type]
     // leafById 两壳皆有;移动单列壳 api 恒 null(getPanel 读法在手机上恒 null→白板/PDF 树行不亮)。
     const v = key ? (useWorkspace.getState().leafById(tab!.id)?.params as Record<string, unknown> | undefined)?.[key] : null
     return typeof v === 'string' ? v : null

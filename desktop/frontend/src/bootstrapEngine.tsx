@@ -46,6 +46,7 @@ import { ActivityLogView } from './views/ActivityLogView'
 import { ActiveWindowView } from './views/ActiveWindowView'
 import { ActivityDashboardCard, InboxDashboardCard } from './views/DashboardCompactViews'
 import { installDeepLinks } from './deepLinkInstall'
+import { FILE_VIEW_PARAM } from './viewFileMatch'
 
 // 本文件自有的词条(命名空间 `bootengine.*`,勿与别处撞键)。视图 displayName / 命令 title 都是
 // **惰性**求值的函数,所以一律在函数体里调 translate(),语言切换后重取即新文案(勿提到模块常量里)。
@@ -264,7 +265,7 @@ export function installEngine(): void {
   //   setParams 也发 refreshTabs,所以「同一个 tab 里换一个文件」这类**就地跳转**同样会到达这里
   //   (此前一律看不见 → 用户实报「同一个 View 里页面跳转,前进后退无法识别」)。
   const RECENT_FILE_PARAM: Record<string, string> = {
-    'amadeus-db': 'dbPath', 'amadeus-pdf': 'pdfPath', 'amadeus-drawing': 'drawingPath', 'amadeus-dashboard': 'dashPath', 'amadeus-image': 'imagePath', 'amadeus-plugin-file': 'filePath',
+    ...FILE_VIEW_PARAM, // 与树行高亮共用一张(曾各抄一份,仪表盘改名后两份都漏)
     'wsfile': 'path', // 工作区文件预览:只记有 path 的(tkey 瞬态目标无 path → 天然排除,重开不了)
   }
   const RECENT_VIEW_TYPES = new Set(['calendar', 'todo-list', 'inbox-reader', 'agents-detail', 'code-studio', 'automation-detail'])

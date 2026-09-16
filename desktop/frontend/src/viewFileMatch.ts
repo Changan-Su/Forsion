@@ -17,6 +17,17 @@ export const VIEW_FILE_MATCH: Record<string, { extensions: string[]; priority: n
   'amadeus-editor': { extensions: ['.md'], priority: 0 },
 }
 
+/** 文件类 view 的身份参数(哪个 param 攥着 vault 相对路径)。导航历史 / 最近使用(bootstrapEngine)
+ *  与树行高亮(amadeusViews)共用这一张 —— 从前两处各抄一份,P3a 把仪表盘注册成 'dashboard' 时
+ *  两份都没跟上(一份只认旧键、一份压根没有):仪表盘标签箭头恒灰、进不了最近使用、树上亮错行(2026-09-16)。
+ *  笔记编辑器(notePath)不在此列,它走 pageStore 那条链。与 VIEW_FILE_MATCH 的覆盖由测试锁住。 */
+export const FILE_VIEW_PARAM: Record<string, string> = {
+  'amadeus-db': 'dbPath', 'amadeus-pdf': 'pdfPath', 'amadeus-drawing': 'drawingPath', 'amadeus-image': 'imagePath',
+  dashboard: 'dashPath',
+  'amadeus-dashboard': 'dashPath', // legacy:旧网格版已下线,留着认旧布局 / 旧记账
+  'amadeus-plugin-file': 'filePath', // 插件文件类型运行期注册,不在 VIEW_FILE_MATCH 里
+}
+
 /** path 后缀命中某 type 的声明?(大小写不敏感) */
 export function extHit(path: string, type: string): boolean {
   const m = VIEW_FILE_MATCH[type]
