@@ -25,8 +25,8 @@
   background: transparent; /* 宿主面板已画 sidebar-bg;子视图不重画(与 sidebar2.css `.t2sw .t2s-side { background: transparent }` 同一条纪律) */
   font-family: var(--font-ui);
   color: var(--text);
-  /* 头部与 Agent 块不在 `.t2s-side` 内,拿不到那边的 no-drag 兜底 —— mac frameless 上不声明就可能被
-   * 上层拖窗区吞掉点击。 */
+  /* 头部行不在 `.t2s-side` 内,拿不到那边的 no-drag 兜底 —— mac frameless 上不声明就可能被
+   * 上层拖窗区吞掉点击(轨道行已住进 SidebarPane 的 .t2s-scroll,那边自带 no-drag)。 */
   -webkit-app-region: no-drag;
 }
 /* 横向内边距对齐 `.t2s-scroll` 的 6px,头部与列表的左边缘才在同一条竖线上。 */
