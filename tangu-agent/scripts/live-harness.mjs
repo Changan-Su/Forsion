@@ -45,7 +45,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['chat', 'tool', 'loop', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant'];
+const KEYS = ['chat', 'tool', 'loop', 'group', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant'];
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
@@ -304,7 +304,7 @@ async function seedMemory() {
 async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}) {
   const t0 = Date.now();
   const { runId } = await api('/agent/runs', { method: 'POST', body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
-  const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], approvals: 0, usages: [], probes: [], content: '', error: null, ttftMs: null, wallMs: 0 };
+  const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], approvals: 0, usages: [], probes: [], content: '', error: null, done: false, group: { speakers: [], ended: null }, ttftMs: null, wallMs: 0 };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
@@ -343,13 +343,16 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
             if (id) await api(`/agent/runs/${runId}/approvals/${id}`, { method: 'POST', body: JSON.stringify({ action: 'approve' }) }).catch((err) => { ev.approveError = String(err.message); });
           }
           else if (e.type === 'usage') ev.usages.push(p);
+          // 团队运行模式(群聊分叉):发言序 + 收场原因是 group 场景的唯一观测点;done 的 content 恒空,靠 ev.done 判链路走通。
+          else if (e.type === 'group_speaker' && p.phase === 'start') ev.group.speakers.push(String(p.slug || '?'));
+          else if (e.type === 'group_ended') ev.group.ended = p;
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
-          else if (e.type === 'done') { ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
+          else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); break outer; }
         }
       }
     }
-    if (!ev.content && !ev.error) ev.error = 'SSE 结束但无 done/error';
+    if (!ev.done && !ev.error) ev.error = 'SSE 结束但无 done/error';
   } catch (e) {
     ev.error = ac.signal.aborted ? `run ${timeoutMs / 1000}s 超时` : String(e?.message || e);
     if (ac.signal.aborted) await api(`/agent/runs/${runId}/abort`, { method: 'POST', body: '{}' }).catch(() => {}); // 断 SSE 不等于停 run:服务端还在烧额度
@@ -436,6 +439,31 @@ try {
     const hit = ev.content.includes(MARKER);
     const anchors = anchorsOk(ev);
     return { ok: !ev.error && ev.toolCalls.length > 0 && hit && anchors, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};标记${hit ? '命中' : '未命中'};done 锚点${anchors ? '对齐' : `不对齐(${JSON.stringify(ev.toolOffsets)})`}${ev.approvals ? `;代批 ${ev.approvals}${ev.approveError ? '(失败:' + ev.approveError + ')' : ''}` : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // 团队运行模式(新工作区 × 轨道体系 P5a/P5b):同一条群聊分叉,teamMode=collab。判的是模型配不配合 @ 约定:
+  // Alpha 规划并 @Beta → 下一位必须是 Beta(被点名者优先);Beta 回 @Alpha + DONE → Alpha 收尾 DONE → 全员 DONE 停(done),
+  // 或整周期无人再点名(idle)。发言序与收场原因来自 group_speaker / group_ended;每条发言落库带发言人前缀。
+  await scenario('group', 'group 团队协作模式(两名 agent 互相 @ 后收敛)', async () => {
+    const mk = (slug, name, systemPrompt) => api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name, description: 'live harness', systemPrompt }) }).catch(() => null);
+    await mk('live-alpha', 'Alpha', 'You are Alpha, the planner. On the first request, split the job: tell @Beta in one sentence exactly what to write, addressing them as "@Beta", and stop. When Beta reports back, reply with a one-line summary of the result and then the word DONE on its own line.');
+    await mk('live-beta', 'Beta', 'You are Beta, the executor. When @Alpha assigns you something, produce it in one short paragraph without using tools, address your reply to "@Alpha", and end with DONE on its own line.');
+    const sessG = `live-g-${Date.now()}`;
+    const ev = await run(sessG, '请规划:写一句关于协作的口号,交给合适的人执行。', 300_000, {
+      groupChat: true, groupAgents: ['live-alpha', 'live-beta'], teamMode: 'collab', groupMaxRounds: 3, groupNoSummary: true, groupSeedHistory: false,
+    });
+    const sp = ev.group.speakers;
+    const reason = ev.group.ended?.reason || null;
+    const mentionRouted = sp.length >= 2 && sp[0] === 'live-alpha' && sp[1] === 'live-beta';
+    const converged = reason === 'done' || reason === 'idle';
+    const msgs = await api(`/agent/sessions/${sessG}/messages?limit=50`).catch(() => null);
+    const list = Array.isArray(msgs?.messages) ? msgs.messages : Array.isArray(msgs) ? msgs : [];
+    const attributed = list.filter((m) => m.role === 'model' && /^\*\*🗣 (Alpha|Beta)\*\*/.test(String(m.content || ''))).length;
+    return {
+      ok: !ev.error && mentionRouted && converged && sp.length <= 6,
+      detail: ev.error || `发言序 ${sp.join('→') || '无'};收场 ${reason || '无'}(${ev.group.ended?.mode || '?'} · ${ev.group.ended?.steps ?? '?'} 步);带发言人前缀的落库消息 ${attributed} 条`,
+      output: list.filter((m) => m.role === 'model').map((m) => String(m.content || '')).join('\n\n---\n\n'), ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
+    };
   });
 
   // 复现 09-13 用户导出的失败形态:上限极低时末轮不带 tools,模型不该把调用手写进正文(` to=x code:{…}` / 裸工具参数 JSON),
