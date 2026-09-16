@@ -22,7 +22,7 @@ import { isValidSlug } from '../agents/agentRegistry.js';
 
 const router = Router();
 
-const SESSION_COLS = 'id, title, summary, model_id, archived, emoji, agent_config, project_path, project_name, projectless, created_at, updated_at';
+export const SESSION_COLS = 'id, title, summary, model_id, archived, emoji, agent_config, project_path, project_name, projectless, created_at, updated_at';
 
 /** preset 合法值:缺省/null(= work)、'coding'、'chat'。写接口对非法值 400,不静默折成 work(creview 09-07 E5)。 */
 export function validPreset(v: unknown): boolean {
@@ -73,7 +73,7 @@ function parseMaybeJson(v: any): any {
   try { return JSON.parse(v); } catch { return null; }
 }
 
-function rowToSession(r: any): any {
+export function rowToSession(r: any): any {
   return { ...r, agent_config: parseMaybeJson(r.agent_config), projectless: !!r.projectless };
 }
 

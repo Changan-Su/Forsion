@@ -354,21 +354,38 @@ export async function onUserRunDone(sessionId: string, userId: string, memScopeS
   // 加锁在首个 await 之前,并发 done 只有一个能进。
   if (historianBusySessions.has(sessionId)) { log(`会话 ${sessionId.slice(0, 8)} 上一轮维护尚在进行,跳过本轮`); return; }
   if (historianBusySessions.size >= 2) return; // bounded background work; never queue user turns
+  await runHistorianSlot(sessionId, () => runHistorianForSession(sessionId, userId, memScopeSlug, forkSeed));
+}
+
+/** 私聊「新会话(先总结记忆)」用(方案 §5.3 ②):绕过到点轮与增量地板,立刻对该会话采一次候选(标题/摘要/LOG/记忆候选),
+ *  仍受 90s 预算、并发 2、会话级互斥与 historian.enabled 约束;只往 .memory-raw.md 追加候选,绝不直写 MEMORY.md。
+ *  返回 null = 没起来(非本地 / 该会话上一轮维护还在飞 / 并发已满 / Historian 关闭),否则是「本次采集结束(true=判断跑完,false=中途失败)」的 Promise。 */
+export function forceHistorianForSession(sessionId: string, userId: string, memScopeSlug?: string): Promise<boolean> | null {
+  if (!isLocal()) return null;
+  try { if (!loadSpecialAgentsConfig().historian.enabled) return null; } catch { return null; }
+  if (historianBusySessions.has(sessionId) || historianBusySessions.size >= 2) return null;
+  return runHistorianSlot(sessionId, () => runHistorianForSession(sessionId, userId, memScopeSlug, undefined, { force: true }));
+}
+
+/** 会话级互斥 + 90s 预算的执行槽(onUserRunDone 与 force 共用;add 在首个 await 之前,并发进入只有一个能占到)。 */
+async function runHistorianSlot(sessionId: string, fn: () => Promise<void>): Promise<boolean> {
   historianBusySessions.add(sessionId);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error('Historian time budget exceeded')), 90_000);
   timer.unref?.();
   try {
-    await historianSignal.run(controller.signal, () => runHistorianForSession(sessionId, userId, memScopeSlug, forkSeed));
+    await historianSignal.run(controller.signal, fn);
+    return true;
   } catch (e: any) {
     log(`Historian skipped: ${e?.message || e}`);
+    return false;
   } finally {
     clearTimeout(timer);
     historianBusySessions.delete(sessionId);
   }
 }
 
-async function runHistorianForSession(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed): Promise<void> {
+async function runHistorianForSession(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed, opts?: { force?: boolean }): Promise<void> {
   // 解析本 run 的记忆域:优先传入的 memScopeSlug;否则(外部引擎等未做激活的路径)从会话 agent_config.agentSlug
   // 兜底读——那存的是 active slug,须经 resolveMemorySlug 折叠 shareDefaultMemory 才与 run 内记忆读写同域。
   // 重注入 Historian 自己的异步上下文 → deps().brain.memory(动态本地库)读写落到该 agent 的文件夹(fire-and-forget
@@ -420,7 +437,8 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     if (roundN < 1) return;
 
     // 周期合一:标题 + LOG/memory 同一节奏(每 everyRounds 轮),用户设几轮就是几轮,节奏可预期。
-    const due = isRoundDue(roundN, cfg.everyRounds, cfg.firstRoundTrigger);
+    // force(私聊 rotate):不看到点轮与增量地板,本次一定采;其余闸(kind/roundN≥1/模型/预算)照旧。
+    const due = !!opts?.force || isRoundDue(roundN, cfg.everyRounds, cfg.firstRoundTrigger);
     if (!due) return;
     const titleDue = due;
     const memoryDue = due;
@@ -428,7 +446,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     const summaryDue = due; // 摘要与标题同属 Historian 自有资产(非记忆资产):三种模式都由 judge 维护
 
     // 实质增量地板:自上次维护以来新增内容太少 → 跳过整次判断(避免琐碎轮重复总结 / 反复重写记忆侵蚀)。
-    if (!(await enoughNewSinceLastAction(sessionId))) { log(`第 ${roundN} 轮到点但自上次维护无实质新增,跳过`); return; }
+    if (!opts?.force && !(await enoughNewSinceLastAction(sessionId))) { log(`第 ${roundN} 轮到点但自上次维护无实质新增,跳过`); return; }
 
     // 辅助模式(assist):LOG/memory 不由 Historian 写,分支(branch)出后台群聊讨论交主 Agent 定夺;
     // 标题仍由 Historian 独立维护(主 Agent 没有改标题的工具,标题也非记忆资产)。
