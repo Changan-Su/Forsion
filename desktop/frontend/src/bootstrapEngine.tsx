@@ -273,9 +273,15 @@ export function installEngine(): void {
   useWorkspace.subscribe((st, prev) => {
     if (st.mainTabs === prev.mainTabs) return // 主区标签(含激活)变化才看
     const api = ws().api
-    const p = api ? activeMainPanel(api) : null
+    // ⚠️ 移动单列壳 `api` 恒 null → 退回激活的主 tab + leafById(两壳都有);类型取 tab.type,
+    //    单列壳 navigateLeaf 存的是裸参数、不带 __type。不退:手机上文件/功能视图一条历史、一条最近使用都不记,
+    //    安卓返回键从 PDF 直接关标签(笔记丢了),check:parity 抓不到。桌面 api 为空时 mainTabs 恒 [],行为不变。
+    //    迷你面板也是单列 store,但不退:它的主 leaf 是紧凑视图(插件的 plugin:*:mini 适配器),记进与主窗共享的
+    //    最近使用 = 主窗把紧凑适配器开进主区(Codex 评审);同理 amadeusViews 的仪表盘跳过在迷你面板里不生效。
+    const tab = api || windowKind() === 'mini' ? undefined : st.mainTabs.find((t) => t.active)
+    const p = api ? activeMainPanel(api) : tab ? ws().leafById(tab.id) : null
     const params = (p?.params ?? {}) as Record<string, unknown>
-    const type = typeof params.__type === 'string' ? params.__type : ''
+    const type = tab ? tab.type : typeof params.__type === 'string' ? params.__type : ''
     const fileParam = RECENT_FILE_PARAM[type]
     // per-tab 导航历史(2026-08-17):PDF/白板/多维表/图片/仪表盘/插件文件/工作区预览此前一条都不记,
     // 于是这类标签的箭头恒灰,同一标签里「笔记→PDF→笔记」中间那步也会被跳过。restore 只碰本 leaf。

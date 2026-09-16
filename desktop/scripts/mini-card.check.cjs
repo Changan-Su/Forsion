@@ -89,6 +89,8 @@ async function main() {
     await switchTo('Mini 探针'); await mini.getByRole('button', { name: 'Choose item 42', exact: true }).click()
     await mini.waitForFunction(() => document.querySelector('.mini-probe-mini')?.textContent === 'Item: 42')
     check('plugin params change without remount', await mini.evaluate(() => window.__miniProbe.mounts === 1))
+    // Mini 与主窗同源共享「最近使用」:紧凑适配器进去 = 主窗启动器把它开进主区(09-16 单列壳记账补丁的 Codex 评审)
+    check('compact plugin view stays out of shared recents', await mini.evaluate(() => !JSON.parse(localStorage.getItem('forsion_tangu_recent_views') || '[]').some((i) => i.key.startsWith('view:plugin:mini-probe:mini'))))
     await mini.getByRole('button', { name: '在主面板显示', exact: true }).click()
     await win.waitForFunction(() => document.querySelector('.mini-probe-full')?.textContent === 'Item: 42')
     check('plugin handoff preserves entity params', true)

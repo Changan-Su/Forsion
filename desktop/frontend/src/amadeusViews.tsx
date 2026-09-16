@@ -72,6 +72,7 @@ import { OverlayAt } from '@lcl/engine'
 import { SidebarRow } from './components/SidebarRow'
 import { parentOf, rowDropTarget, dropKeyOf, takesHostPaths } from './views/treeDrop'
 import { FILE_VIEW_PARAM } from './viewFileMatch'
+import { windowKind } from './windowKind'
 import { registerMessages, translate, useI18n } from './i18n'
 
 registerMessages({
@@ -309,9 +310,9 @@ usePageStore.subscribe((state, prev) => {
   // 仪表盘也往本 leaf 的 scope 里 loadPage,但它的历史/最近使用归 bootstrapEngine 的 mainTabs 订阅
   // (file:dashboard:*,复原走 navigateLeaf('dashboard'))。这里再记一条 amadeus:* = 同一页两条:
   // 后退空按一下、复原后前进段被截、最近使用重复,复原这条还会把仪表盘塞进笔记编辑器(真 Electron 实测)。
-  // ⚠️ 只在有 api 时让路:移动单列壳 api 恒 null,mainTabs 那条一个文件视图都记不到,这里也不记的话
-  //    手机上的仪表盘连「最近使用」都没了(静默少功能,check:parity 抓不到)。
-  if (isDashboardPath(p) && useWorkspace.getState().api) return
+  // 桌面与移动单列壳都跳:mainTabs 那条在手机上也记账了(mobile e2e:fileback 锁住)。迷你面板例外 ——
+  // mainTabs 那条在迷你面板里不记(见 bootstrapEngine),MiniAmadeus 里点开的仪表盘只剩这里记。
+  if (isDashboardPath(p) && windowKind() !== 'mini') return
   // ⚠️ 归属面板必须**在这里**定下来:门面订阅来自「当前活动面板」,也就是刚刚导航的那个。
   // 放进 microtask 里再问 activeMainPanel(),用户手快切到另一半屏时这条历史就记到隔壁去了,
   // 后退时也会把笔记退进隔壁(Codex 复审)。
