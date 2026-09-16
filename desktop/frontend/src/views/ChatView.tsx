@@ -615,8 +615,6 @@ export function ChatView({ leaf, params }: ViewProps) {
           groupChat={mvCfg.groupChat}
           groupAgents={mvCfg.groupAgents}
           groupTempAgents={mvCfg.groupTempAgents}
-          groupIntensity={mvCfg.groupIntensity}
-          groupMaxRounds={mvCfg.groupMaxRounds}
           // 轨道身份锁住的会话(私聊 / 独立团队)不给旧群聊配置器:私聊不能进团队模式,独立团队不能「关闭群聊」;拉人走 OrbitBar。
           onGroupChange={mvCfg.soloAgentSlug || mvCfg.soloEngineId || mvCfg.teamSlug ? undefined : activeId ? (patch) => s.setSessionGroup(patch, activeId) : (patch) => s.setNewChatCfg((c) => ({ ...c, ...patch }))}
           skills={s.skillsList}

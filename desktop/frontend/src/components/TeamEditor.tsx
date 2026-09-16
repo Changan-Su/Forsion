@@ -1,6 +1,6 @@
 /**
- * 独立团队编辑器(Agent 轨道的持久团队实体;方案 §6.1 / P5c):名称 + 成员(勾选顺序 = 发言顺序,每人一行角色)+ 运行模式缺省档
- * + 轮数 + TEAM.md 正文。保存走 /agent/teams(POST 新建 / PATCH 更新),成功后刷新 store.teams。
+ * 独立团队编辑器(Agent 轨道的持久团队实体;方案 §6.1 / P5c):名称(可空,缺省按成员名生成)+ 成员(勾选顺序 = 发言顺序,每人一行角色)
+ * + TEAM.md 正文。09-16 起没有运行模式与轮数字段。保存走 /agent/teams(POST 新建 / PATCH 更新),成功后刷新 store.teams。
  * 与 GroupChatSetup 同一套浮层视觉;v1 不做拖拽排序、不做头像上传(方案 §10)。
  */
 import React, { useMemo, useState } from 'react'
@@ -13,14 +13,10 @@ import type { NormalAgentDef, TeamDef } from '../types'
 registerMessages({
   'team.editor.titleNew': { zh: '新建团队', en: 'New team' },
   'team.editor.titleEdit': { zh: '编辑团队', en: 'Edit team' },
-  'team.editor.name': { zh: '团队名称', en: 'Team name' },
-  'team.editor.namePlaceholder': { zh: '例如:发布小组', en: 'e.g. Release crew' },
+  'team.editor.name': { zh: '团队名称(可空)', en: 'Team name (optional)' },
+  'team.editor.namePlaceholder': { zh: '留空 = 按成员名自动命名', en: 'Leave empty to name it after the members' },
   'team.editor.members': { zh: '成员(勾选顺序 = 发言顺序)', en: 'Members (pick order = speaking order)' },
   'team.editor.rolePlaceholder': { zh: '角色 / 分工(可选)', en: 'Role (optional)' },
-  'team.editor.mode': { zh: '默认运行模式', en: 'Default run mode' },
-  'team.editor.modeMeeting': { zh: '会议:固定发言序 + 投票', en: 'Meeting: fixed order + votes' },
-  'team.editor.modeCollab': { zh: '协作:被 @ 者优先,无人点名即停', en: 'Collab: mentioned members go first, stops when nobody is addressed' },
-  'team.editor.rounds': { zh: '轮数上限(协作 = 步数 ÷ 成员数)', en: 'Max rounds (collab: steps ÷ members)' },
   'team.editor.doc': { zh: 'TEAM.md(团队约定,模型读取,建议英文)', en: 'TEAM.md (team charter read by the models; English recommended)' },
   'team.editor.docPlaceholder': { zh: '# Team\n## Mission\n## Roles\n## Workflow\n## Protocol', en: '# Team\n## Mission\n## Roles\n## Workflow\n## Protocol' },
   'team.editor.needTwo': { zh: '至少选择 2 名在册成员', en: 'Pick at least 2 members that still exist' },
@@ -47,13 +43,13 @@ export const TeamEditor: React.FC<{
   const [name, setName] = useState(team?.name || '')
   const [members, setMembers] = useState<Array<{ slug: string; role: string }>>(() =>
     team ? team.members.map((m) => ({ ...m })) : (initialMembers || []).filter((s) => candidates.some((a) => a.slug === s)).map((slug) => ({ slug, role: '' })))
-  const [mode, setMode] = useState<'meeting' | 'collab'>(team?.mode || 'meeting')
-  const [rounds, setRounds] = useState<number>(team?.maxRounds || 7)
   const [doc, setDoc] = useState(team?.doc || '')
   const [busy, setBusy] = useState(false)
   // 只数还在名册里的成员:已删 / 系统 agent 留在成员表里会让运行时整条 run failed(<2 人)。
   const presentCount = members.filter((m) => candidateSlugs.has(m.slug)).length
-  const canSave = name.trim().length > 0 && presentCount >= 2 && !busy
+  // 名称可空:缺省 = 成员名相连(与引擎 defaultTeamName 同款;将来若从项目里建团队再 `@ 项目`)。占位符就是这个缺省,用户看得到会叫什么。
+  const defaultName = members.map((m) => candidates.find((a) => a.slug === m.slug)?.name || m.slug).join(' & ')
+  const canSave = presentCount >= 2 && !busy
 
   const toggle = (slug: string) =>
     setMembers((prev) => (prev.some((m) => m.slug === slug) ? prev.filter((m) => m.slug !== slug) : [...prev, { slug, role: '' }]))
@@ -64,7 +60,7 @@ export const TeamEditor: React.FC<{
     setBusy(true)
     const st = useApp.getState()
     try {
-      const input = { name: name.trim(), members, mode, maxRounds: Math.max(1, Math.min(30, Math.floor(rounds) || 1)), doc }
+      const input = { name: name.trim() || defaultName, members, doc }
       const saved = team ? await api.patchTeam(st.cfg, team.slug, input) : await api.createTeam(st.cfg, input)
       await st.refreshTeams()
       st.toast(t('team.editor.saved'))
@@ -90,7 +86,7 @@ export const TeamEditor: React.FC<{
 
         <div className="field">
           <label>{t('team.editor.name')}</label>
-          <input type="text" value={name} placeholder={t('team.editor.namePlaceholder')} onChange={(e) => setName(e.target.value)} autoFocus />
+          <input type="text" value={name} placeholder={defaultName || t('team.editor.namePlaceholder')} onChange={(e) => setName(e.target.value)} autoFocus />
         </div>
 
         <div className="field">
@@ -115,20 +111,6 @@ export const TeamEditor: React.FC<{
             })}
           </div>
           {presentCount < 2 && <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 4 }}>{t('team.editor.needTwo')}</div>}
-        </div>
-
-        <div className="field-row">
-          <div className="field">
-            <label>{t('team.editor.mode')}</label>
-            <select value={mode} onChange={(e) => setMode(e.target.value === 'collab' ? 'collab' : 'meeting')}>
-              <option value="meeting">{t('team.editor.modeMeeting')}</option>
-              <option value="collab">{t('team.editor.modeCollab')}</option>
-            </select>
-          </div>
-          <div className="field">
-            <label>{t('team.editor.rounds')}</label>
-            <input type="number" min={1} max={30} value={rounds} onChange={(e) => setRounds(Number(e.target.value))} />
-          </div>
         </div>
 
         <div className="field">

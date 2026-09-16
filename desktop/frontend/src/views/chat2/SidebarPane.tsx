@@ -93,6 +93,19 @@ export interface SidebarPaneProps {
    *  ⚠️ 返回的图标必须自带 `className="t2s-lead-icon t2s-dim"`:槽靠 `.t2s-lead-icon{width:1em}` 收住
    *  lucide 默认的 24px,漏了就把 26.8px 的二级行撑高。 */
   rowIcon?: (s: SessionRecord) => React.ReactNode
+  /** 一级列表的排序:manual(缺省)= wsOrder 拖拽序;activity = 按最近活动(组内会话 updated_at 最大值)降序,
+   *  与 extraRows 合成**一个**列表,组拖拽禁用(顺序是派生的)。轨道档用。 */
+  orderBy?: 'manual' | 'activity'
+  /** 额外的一级行(轨道档的私聊 / 引擎 / 团队行):at = 该行的最近活动时间戳(ms;0 = 从未),只在 orderBy='activity' 下参与混排。 */
+  extraRows?: Array<{ key: string; at: number; node: React.ReactNode }>
+}
+
+/** 会话最近活动时间(ms):updated_at 随每条助手消息落库刷新(引擎 sqlStateStore.finalizeAssistantMessage),解析不了 = 0。 */
+export function sessionActivityAt(updatedAt: string | null | undefined): number {
+  const raw = String(updatedAt || '').trim()
+  if (!raw) return 0
+  const n = Date.parse(raw.includes('T') ? raw : raw.replace(' ', 'T'))
+  return Number.isFinite(n) ? n : 0
 }
 
 /** ids = 本次菜单的作用集合(右键落在多选里 → 整批;否则就它自己);archived 取被右键那条的状态。 */
@@ -167,6 +180,20 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     return [...out, ...rest]
   }, [p.workspaces, wsOrder])
   const dragIdx = dragKey ? orderedWorkspaces.findIndex((w) => w.key === dragKey) : -1
+
+  /** 一级条目 = 工作区组 ∪ 额外行。manual = 组按 wsOrder;activity = 两者按最近活动降序合成一个列表
+   *  (稳定排序:同一时间戳时额外行按给定序在前、组按手排序在后;从未活动的沉底)。 */
+  type Entry = { key: string; at: number; ws?: WorkspaceDescriptor; node?: React.ReactNode }
+  const entries = useMemo<Entry[]>(() => {
+    const wsEntries: Entry[] = orderedWorkspaces.map((ws) => ({
+      key: `ws:${ws.key}`, ws,
+      at: (grouped.get(ws.key) || []).reduce((m, s) => Math.max(m, sessionActivityAt(s.updated_at)), 0),
+    }))
+    if (p.orderBy !== 'activity') return wsEntries
+    const extra: Entry[] = (p.extraRows || []).map((r) => ({ key: `row:${r.key}`, at: r.at, node: r.node }))
+    return [...extra, ...wsEntries].sort((a, b) => b.at - a.at)
+  }, [orderedWorkspaces, grouped, p.orderBy, p.extraRows])
+  const manualOrder = p.orderBy !== 'activity'
 
   /** 落到 targetKey 上 = 顶掉它的位置,其余顺次让位。语义与 ribbon 共用 lcl 的 moveTo(已单测),
    *  别再手写「插到目标之前」那套:下移一格会算成空操作,且永远排不到最末 = 用户报的「线显示了但松手没动」。 */
@@ -341,7 +368,9 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
           </div>
         )}
 
-        {orderedWorkspaces.map((ws, wi) => {
+        {entries.map((en, wi) => {
+              if (en.node) return <React.Fragment key={en.key}>{en.node}</React.Fragment>
+              const ws = en.ws!
               const items = grouped.get(ws.key) || []
               // 平铺(Chat 模式):整组直接铺开,不画组头、不折叠、不限条数(聊天列表就该是整份)。
               if (p.flat) return <div key={ws.key} className="t2s-group-sessions t2s-flat">{items.map(renderItem)}</div>
@@ -377,7 +406,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                       ws.path || '',
                       tipT('tip.sessions', { count: items.length }),
                     ].filter(Boolean))}
-                    draggable={wsRenaming !== ws.key}
+                    draggable={manualOrder && wsRenaming !== ws.key}
                     onDragStart={(e) => {
                       // 用元素自身作拖影并按抓取点对齐光标(否则默认拖影/setState 重渲会让图标与光标错位)。
                       const r = e.currentTarget.getBoundingClientRect()

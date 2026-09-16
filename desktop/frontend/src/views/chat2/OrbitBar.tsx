@@ -1,11 +1,12 @@
 /**
  * 轨道状态条(方案 §5.1 私聊 / §6.3 团队;贴主视图纸卡顶部,层 3,不描边):
  *   私聊(soloAgentSlug / soloEngineId):头像 + 名字 + 「工作区 = Library · 历史会话仅 Agent 可读」+ 「新会话(先总结记忆)」+ 「拉起群聊」(Agent 私聊才有,P5d)
- *   团队模式(项目轨道 groupChat)/ 独立团队(teamSlug):名称 + 「{n} 人 · 会议/协作」+ 成员头像 + 芯片「拉人」「会议⇄协作」+「退出团队模式」(独立团队没有:它就是团队)
+ *   团队模式(项目轨道 groupChat)/ 独立团队(teamSlug):名称 + 「{n} 人」+ 成员头像 + 芯片「拉人」+「退出团队模式」(独立团队没有:它就是团队)。
+ *   09-16 起没有会议 / 协作之分,状态条上也没有模式切换。
  * 非轨道会话不渲染。拉人复用 GroupChatSetup;成员变更后显示一行提示「{names} 加入 · 此前对话已摘要给成员」(引擎 groupSeedHistory 缺省开)。
  */
 import React, { useEffect, useMemo, useState } from 'react'
-import { UserPlus, LogOut, Repeat, MessageSquarePlus, UsersRound } from 'lucide-react'
+import { UserPlus, LogOut, MessageSquarePlus, UsersRound } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
@@ -24,12 +25,8 @@ registerMessages({
   'orbit.bar.teamCreated': { zh: '已建立团队 {name},对话在新标签继续', en: 'Team {name} created — the conversation continues in a new tab' },
   'orbit.bar.teamMode': { zh: '团队模式', en: 'Team mode' },
   'orbit.bar.members': { zh: '{n} 人', en: '{n} members' },
-  'orbit.bar.meeting': { zh: '会议', en: 'Meeting' },
-  'orbit.bar.collab': { zh: '协作', en: 'Collab' },
   'orbit.bar.addPeople': { zh: '拉人', en: 'Add people' },
   'orbit.bar.exit': { zh: '退出团队模式', en: 'Exit team mode' },
-  'orbit.bar.switchToCollab': { zh: '切到协作', en: 'Switch to collab' },
-  'orbit.bar.switchToMeeting': { zh: '切到会议', en: 'Switch to meeting' },
   'orbit.bar.joined': { zh: '{names} 加入 · 此前对话已摘要给成员', en: '{names} joined · earlier conversation summarized for members' },
   'orbit.bar.exited': { zh: '已退出团队模式,由 {name} 继续', en: 'Left team mode; {name} continues' },
 })
@@ -99,12 +96,11 @@ export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: 
   }
 
   if (!inTeamMode && !isTeam) return null
-  const mode: 'meeting' | 'collab' = cfg.teamMode === 'collab' ? 'collab' : 'meeting'
   const title = isTeam ? (team?.name || cfg.teamSlug!) : t('orbit.bar.teamMode')
   return (
     <div className="t2o-bar" role="status" data-orbit={isTeam ? 'team' : 'teammode'}>
       <span className="t2o-bar-title">{title}</span>
-      <span className="t2o-bar-sub">{t('orbit.bar.members', { n: members.length })} · {t(mode === 'collab' ? 'orbit.bar.collab' : 'orbit.bar.meeting')}</span>
+      <span className="t2o-bar-sub">{t('orbit.bar.members', { n: members.length })}</span>
       <span className="t2o-bar-avatars">
         {members.slice(0, 6).map((slug) => {
           const url = s.agentAvatars[slug]
@@ -115,9 +111,6 @@ export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: 
       </span>
       <span className="t2o-bar-acts">
         <button type="button" className="t2o-bar-chip" disabled={running} onClick={() => setSetupOpen(true)}><UserPlus size={12} /> {t('orbit.bar.addPeople')}</button>
-        <button type="button" className="t2o-bar-chip" disabled={running} onClick={() => s.setSessionGroup({ teamMode: mode === 'collab' ? 'meeting' : 'collab' }, sessionId)}>
-          <Repeat size={12} /> {t(mode === 'collab' ? 'orbit.bar.switchToMeeting' : 'orbit.bar.switchToCollab')}
-        </button>
         {!isTeam && (
           <button type="button" className="t2o-bar-chip" disabled={running} onClick={() => {
             // 拍板 ⑪:退出后由进入团队模式前的 Agent 接手(存值 agentSlug,setSessionGroup 不动它);开局即团队 → 全局默认 Agent。
@@ -133,8 +126,6 @@ export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: 
           models={s.modelsResp?.models}
           initialAgents={members}
           initialTempAgents={cfg.groupTempAgents}
-          initialIntensity={cfg.groupIntensity}
-          initialRounds={cfg.groupMaxRounds}
           // 独立团队不能退出团队模式:不给「关闭群聊」按钮(active=false 时浮层不渲染它)。
           active={!isTeam}
           onConfirm={(r) => {

@@ -51,7 +51,7 @@ export interface AppProfile {
   /** 能力门禁(红线④):未声明 hostExec 的 app,agent_config.execMode='host' 一律强制回 sandbox。 */
   capabilities: {
     hostExec: boolean;
-    /** 群聊编排(多轮 LLM + cast_vote 投票 + 主持人总结),纯编排无 host 访问 → 可 per-app 覆盖授予。 */
+    /** 群聊编排(多轮 LLM,成员以 DONE 自决收场 + 主持人总结),纯编排无 host 访问 → 可 per-app 覆盖授予。 */
     groupChat: boolean;
     memory: boolean;
     log: boolean;

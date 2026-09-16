@@ -22,9 +22,9 @@ import { createRun, getRun } from '../src/services/runStore.js';
 import { enqueueRun, pickSessionFacts, bindSessionFacts, storedSessionFacts } from '../src/services/agentLoop.js';
 
 describe('路由级:会话事实锁与校验', () => {
-  it('锁集只含轨道身份键;运行模式键(groupChat/groupAgents/teamMode)恒不在锁集', () => {
+  it('锁集只含轨道身份键;运行模式键(groupChat/groupAgents)恒不在锁集', () => {
     expect([...LOCKED_SESSION_FACT_KEYS]).toEqual(['preset', 'soloAgentSlug', 'soloEngineId', 'teamSlug']);
-    for (const k of ['groupChat', 'groupAgents', 'teamMode', 'agentSlug']) expect((LOCKED_SESSION_FACT_KEYS as readonly string[]).includes(k)).toBe(false);
+    for (const k of ['groupChat', 'groupAgents', 'groupTempAgents', 'agentSlug']) expect((LOCKED_SESSION_FACT_KEYS as readonly string[]).includes(k)).toBe(false);
   });
 
   it('applySessionFactLock:有消息 → 存值里已有的锁定键逐个压回 PUT;缺键的照 PUT;空白会话原样', () => {
@@ -47,7 +47,7 @@ describe('路由级:会话事实锁与校验', () => {
     expect(validSessionFacts(null)).toBeNull();
     expect(validSessionFacts({ soloAgentSlug: 'ario', preset: 'coding' })).toBeNull();
     expect(validSessionFacts({ soloEngineId: 'claude-code' })).toBeNull();
-    expect(validSessionFacts({ teamSlug: 'team-abc', teamMode: 'collab', groupChat: true })).toBeNull();
+    expect(validSessionFacts({ teamSlug: 'team-abc', groupAgents: ['a', 'b'], groupChat: true })).toBeNull();
     expect(validSessionFacts({ soloAgentSlug: '../etc' })).toBe('invalid soloAgentSlug');
     expect(validSessionFacts({ teamSlug: 'Has Space' })).toBe('invalid teamSlug');
     expect(validSessionFacts({ soloEngineId: 'a/b' })).toBe('invalid soloEngineId');

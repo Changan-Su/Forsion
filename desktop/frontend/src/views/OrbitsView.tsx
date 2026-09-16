@@ -3,11 +3,13 @@
  *
  * 轨道只有两种:**项目轨道**(可展开会话)与 **Agent 轨道**(私聊 / 持久团队,以自己的 Library 为工作区)。
  * 团队与主动式是**运行模式**,不是第三、第四种轨道。本视图把三种**行形状**混排在 40px 一级行里:
- *   ① 私聊行(Agent 轨道)② 团队行(Agent 轨道,P5c 才落地)③ 项目行(项目轨道,整段复用 SidebarPane)。
+ *   ① 私聊行(Agent 轨道)② 团队行(Agent 轨道)③ 项目行(项目轨道,整段复用 SidebarPane)。
+ * **一个列表、按最近消息时间降序**(09-16 用户拍板:Agent / 团队 / 项目不分块,一起按最新消息排):私聊 / 引擎 / 团队行
+ * 作为 `extraRows` 交给 SidebarPane 与项目组按 `at` 合成一个列表(orderBy='activity');从未有过会话的沉底,同时间戳保持名册序。
  *
  * 三源分别取数、**不给 `WorkspaceDescriptor.kind` 加成员**(§D15:20+ 消费点全无穷举检查,加成员 tsc 零报错
  * 而行为异构漂移)。胶囊(Chat/Work)与本地/云端侧过滤只喂 project 源:Chat 恒 sandbox + 抹 agentSlug,
- * 与 Agent 轨道互斥;云端侧是 host-only,故 Agent 轨道块在这两种情况下整块隐藏(§3.5)。
+ * 与 Agent 轨道互斥;云端侧是 host-only,故 Agent 轨道行在这两种情况下整批不列(§3.5)。
  *
  * 样式全在 `chat2/orbits.css`(`.t2o-` 前缀,不改 `sidebar2.css` 本体);几何见该文件头注。
  */
@@ -15,7 +17,7 @@ import React, { useEffect, useMemo, useState } from 'react'
 import { MoreHorizontal, Pencil, Plus, SquarePen, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { OverlayAt, setActiveSpace, useSpaceStore } from '@lcl/engine'
-import { SidebarPane } from './chat2/SidebarPane'
+import { SidebarPane, sessionActivityAt } from './chat2/SidebarPane'
 import { EngineIcon } from '../components/EngineIcon'
 import { useApp } from '../stores/appStore'
 import { openSpecial } from './SpecialViews'
@@ -195,6 +197,17 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     }
     return out
   }, [s.runningBySession, s.configBySession])
+  /** 每个轨道身份的最近活动(= 其活动会话里最大的 updated_at;从未 = 0),供一级行与项目组混排。 */
+  const activityByIdent = useMemo(() => {
+    const out = new Map<string, number>()
+    for (const x of s.sessions) {
+      const c = s.configBySession[x.id]
+      const key = c?.soloAgentSlug ? `agent:${c.soloAgentSlug}` : c?.soloEngineId ? `engine:${c.soloEngineId}` : c?.teamSlug ? `team:${c.teamSlug}` : null
+      if (!key) continue
+      out.set(key, Math.max(out.get(key) || 0, sessionActivityAt(x.updated_at)))
+    }
+    return out
+  }, [s.sessions, s.configBySession])
   // 高亮源 = 当前会话的轨道身份,不另造通道(§3.2)。
   const activeCfg = s.activeId ? s.configBySession[s.activeId] : undefined
   const activeSpaceId = useSpaceStore((st) => st.activeSpaceId)
@@ -254,6 +267,82 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     )
   }
 
+  // 一级列表的轨道行(私聊 / 引擎 / 团队 / 墓碑):交给 SidebarPane 与项目组按最近活动混排;Chat 档 / 云端侧整批不列(§3.5)。
+  const orbitRows: Array<{ key: string; at: number; node: React.ReactNode }> = []
+  if (showOrbitBlock) {
+    const at = (key: string): number => activityByIdent.get(key) || 0
+    for (const a of agents) orbitRows.push({ key: `agent:${a.slug}`, at: at(`agent:${a.slug}`), node: agentRow(a.slug, a.name) })
+    for (const e of installedEngines) orbitRows.push({ key: `engine:${e.id}`, at: at(`engine:${e.id}`), node: (
+        <button
+          key={`engine:${e.id}`}
+          type="button"
+          className={`t2o-row${activeCfg?.soloEngineId === e.id ? ' active' : ''}`}
+          title={e.name || e.id}
+          onClick={() => openSolo('engine', e.id)}
+        >
+          <span className="t2o-lead t2o-lead-box"><EngineIcon engineId={e.id} size={16} />{runningSolo.has(`engine:${e.id}`) && <span className="t2s-dot running" title={t('orbits.badge.running')} />}</span>
+          <span className="t2o-name">{e.name || e.id}</span>
+          {e.status === 'needs-signin' && <span className="t2o-badge">{t('orbits.engine.needsSignin')}</span>}
+          <span
+            className="t2o-tail"
+            role="button"
+            tabIndex={0}
+            aria-label={t('orbits.row.menu')}
+            title={t('orbits.row.menu')}
+            onClick={(ev) => { ev.stopPropagation(); setPlusMenu(null); setRowMenu({ ...anchorOf(ev), kind: 'engine', slug: e.id }) }}
+            onKeyDown={(ev) => {
+              if (ev.key !== 'Enter' && ev.key !== ' ') return
+              ev.preventDefault(); ev.stopPropagation(); setPlusMenu(null); setRowMenu({ ...anchorOf(ev), kind: 'engine', slug: e.id })
+            }}
+          ><MoreHorizontal size={14} /></span>
+        </button>
+    ) })
+    // 团队行(Agent 轨道的持久团队):组合头像;点击直入该团队最新会话,不内联展开(§3.4)。
+    for (const tm of teams) orbitRows.push({ key: `team:${tm.slug}`, at: at(`team:${tm.slug}`), node: (
+        <button
+          key={`team:${tm.slug}`}
+          type="button"
+          className={`t2o-row${activeCfg?.teamSlug === tm.slug ? ' active' : ''}`}
+          title={tm.name}
+          onClick={() => openTeam(tm.slug)}
+        >
+          <span className="t2o-lead">
+            <AvatarStack
+              items={tm.members.map((m) => ({ slug: m.slug, name: s.agentDefs.find((a) => a.slug === m.slug)?.name || m.slug, avatarUrl: s.agentAvatars[m.slug] }))}
+              emoji={tm.avatar || undefined}
+              size={30}
+            />
+          </span>
+          <span className="t2o-name">{tm.name}</span>
+          <span
+            className="t2o-tail"
+            role="button"
+            tabIndex={0}
+            aria-label={t('orbits.row.menu')}
+            title={t('orbits.row.menu')}
+            onClick={(ev) => { ev.stopPropagation(); setPlusMenu(null); setRowMenu({ ...anchorOf(ev), kind: 'team', slug: tm.slug }) }}
+            onKeyDown={(ev) => {
+              if (ev.key !== 'Enter' && ev.key !== ' ') return
+              ev.preventDefault(); ev.stopPropagation(); setPlusMenu(null); setRowMenu({ ...anchorOf(ev), kind: 'team', slug: tm.slug })
+            }}
+          ><MoreHorizontal size={14} /></span>
+        </button>
+    ) })
+    for (const g of tombstones) orbitRows.push({ key: `gone:${g.kind}:${g.id}`, at: at(`${g.kind}:${g.id}`), node: (
+        <button
+          key={`gone:${g.kind}:${g.id}`}
+          type="button"
+          className={`t2o-row t2o-row-gone${s.activeId === g.sessionId || (activeCfg && (activeCfg.soloAgentSlug === g.id || activeCfg.soloEngineId === g.id || activeCfg.teamSlug === g.id)) ? ' active' : ''}`}
+          title={t(g.kind === 'engine' ? 'orbits.gone.engine' : g.kind === 'team' ? 'orbits.gone.team' : 'orbits.gone.agent')}
+          onClick={() => openSession(g.sessionId)}
+        >
+          <span className="t2o-lead"><span className="t2o-avatar t2o-avatar-text" style={{ background: 'var(--overlay-medium)', color: 'var(--text-faint, var(--text-muted))' }}>{firstChar(g.id)}</span></span>
+          <span className="t2o-name">{g.id}</span>
+          <span className="t2o-badge">{t(g.kind === 'engine' ? 'orbits.gone.engineBadge' : g.kind === 'team' ? 'orbits.gone.teamBadge' : 'orbits.gone.agentBadge')}</span>
+        </button>
+    ) })
+  }
+
   return (
     <div className="t2o">
       {/* ① 新对话 + Chat/Work 胶囊 + 「+」操作菜单(§3.6)。SidebarPane 的 showSpecial 关掉,这行自己画。 */}
@@ -294,86 +383,12 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
         </div>
       </div>
 
-      {/* ② Agent 轨道:私聊行(本地 agent)→ 外部引擎行 →(P5c)团队行。 */}
-      {showOrbitBlock && (
-        <div className="t2o-agents">
-          {agents.map((a) => agentRow(a.slug, a.name))}
-          {installedEngines.map((e) => (
-            <button
-              key={`engine:${e.id}`}
-              type="button"
-              className={`t2o-row${activeCfg?.soloEngineId === e.id ? ' active' : ''}`}
-              title={e.name || e.id}
-              onClick={() => openSolo('engine', e.id)}
-            >
-              <span className="t2o-lead t2o-lead-box"><EngineIcon engineId={e.id} size={16} />{runningSolo.has(`engine:${e.id}`) && <span className="t2s-dot running" title={t('orbits.badge.running')} />}</span>
-              <span className="t2o-name">{e.name || e.id}</span>
-              {e.status === 'needs-signin' && <span className="t2o-badge">{t('orbits.engine.needsSignin')}</span>}
-              <span
-                className="t2o-tail"
-                role="button"
-                tabIndex={0}
-                aria-label={t('orbits.row.menu')}
-                title={t('orbits.row.menu')}
-                onClick={(ev) => { ev.stopPropagation(); setPlusMenu(null); setRowMenu({ ...anchorOf(ev), kind: 'engine', slug: e.id }) }}
-                onKeyDown={(ev) => {
-                  if (ev.key !== 'Enter' && ev.key !== ' ') return
-                  ev.preventDefault(); ev.stopPropagation(); setPlusMenu(null); setRowMenu({ ...anchorOf(ev), kind: 'engine', slug: e.id })
-                }}
-              ><MoreHorizontal size={14} /></span>
-            </button>
-          ))}
-          {/* 团队行(Agent 轨道的持久团队,P5c):组合头像;点击直入该团队最新会话,不内联展开(§3.4);顺序 = teams/.meta.json。 */}
-          {teams.map((tm) => (
-            <button
-              key={`team:${tm.slug}`}
-              type="button"
-              className={`t2o-row${activeCfg?.teamSlug === tm.slug ? ' active' : ''}`}
-              title={tm.name}
-              onClick={() => openTeam(tm.slug)}
-            >
-              <span className="t2o-lead">
-                <AvatarStack
-                  items={tm.members.map((m) => ({ slug: m.slug, name: s.agentDefs.find((a) => a.slug === m.slug)?.name || m.slug, avatarUrl: s.agentAvatars[m.slug] }))}
-                  emoji={tm.avatar || undefined}
-                  size={30}
-                />
-              </span>
-              <span className="t2o-name">{tm.name}</span>
-              <span
-                className="t2o-tail"
-                role="button"
-                tabIndex={0}
-                aria-label={t('orbits.row.menu')}
-                title={t('orbits.row.menu')}
-                onClick={(ev) => { ev.stopPropagation(); setPlusMenu(null); setRowMenu({ ...anchorOf(ev), kind: 'team', slug: tm.slug }) }}
-                onKeyDown={(ev) => {
-                  if (ev.key !== 'Enter' && ev.key !== ' ') return
-                  ev.preventDefault(); ev.stopPropagation(); setPlusMenu(null); setRowMenu({ ...anchorOf(ev), kind: 'team', slug: tm.slug })
-                }}
-              ><MoreHorizontal size={14} /></span>
-            </button>
-          ))}
-          {tombstones.map((g) => (
-            <button
-              key={`gone:${g.kind}:${g.id}`}
-              type="button"
-              className={`t2o-row t2o-row-gone${s.activeId === g.sessionId || (activeCfg && (activeCfg.soloAgentSlug === g.id || activeCfg.soloEngineId === g.id || activeCfg.teamSlug === g.id)) ? ' active' : ''}`}
-              title={t(g.kind === 'engine' ? 'orbits.gone.engine' : g.kind === 'team' ? 'orbits.gone.team' : 'orbits.gone.agent')}
-              onClick={() => openSession(g.sessionId)}
-            >
-              <span className="t2o-lead"><span className="t2o-avatar t2o-avatar-text" style={{ background: 'var(--overlay-medium)', color: 'var(--text-faint, var(--text-muted))' }}>{firstChar(g.id)}</span></span>
-              <span className="t2o-name">{g.id}</span>
-              <span className="t2o-badge">{t(g.kind === 'engine' ? 'orbits.gone.engineBadge' : g.kind === 'team' ? 'orbits.gone.teamBadge' : 'orbits.gone.agentBadge')}</span>
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* ③ 项目轨道:整段复用 SidebarPane(折叠持久化 / 组拖拽 / 多选 / 右键菜单全白拿)。 */}
+      {/* 项目轨道 + 上面的轨道行:整段复用 SidebarPane(折叠持久化 / 多选 / 右键菜单全白拿;activity 排序下组拖拽禁用)。 */}
       <div className="t2o-projects">
         <SidebarPane
           collapsed={false}
+          orderBy="activity"
+          extraRows={orbitRows}
           sessions={sessions}
           archivedSessions={archivedSessions}
           // 右键菜单/拖拽/计数仍要拿未经过模式与侧过滤的全集;会话查找统一走全局快速查找(⌘P)。

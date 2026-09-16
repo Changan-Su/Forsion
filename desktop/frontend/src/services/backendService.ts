@@ -96,9 +96,10 @@ export const soloOpen = (cfg: TanguDesktopConfig, kind: 'agent' | 'engine', id: 
 export const listTeams = (cfg: TanguDesktopConfig) =>
   // 老引擎 / 桩引擎对未知路由可能回 200 空对象:形状不对一律当空表,别让 undefined 流进 store(OrbitsView .map 会炸掉整块侧栏)。
   request<{ teams: TeamDef[] }>(cfg, '/agent/teams').then((r) => (Array.isArray(r?.teams) ? r.teams : [])).catch(() => [] as TeamDef[])
-export const createTeam = (cfg: TanguDesktopConfig, input: { name: string; members: Array<{ slug: string; role?: string }>; mode?: 'meeting' | 'collab'; maxRounds?: number; lead?: string; avatar?: string; doc?: string; description?: string }) =>
+/** name 可省:引擎按成员名生成缺省(有 project 再 `@ 项目`)。 */
+export const createTeam = (cfg: TanguDesktopConfig, input: { name?: string; project?: string; members: Array<{ slug: string; role?: string }>; lead?: string; avatar?: string; doc?: string; description?: string }) =>
   request<{ team: TeamDef }>(cfg, '/agent/teams', { method: 'POST', body: JSON.stringify(input) }).then((r) => r.team)
-export const patchTeam = (cfg: TanguDesktopConfig, slug: string, patch: Partial<{ name: string; members: Array<{ slug: string; role?: string }>; mode: 'meeting' | 'collab'; maxRounds: number; lead: string; avatar: string; doc: string; description: string }>) =>
+export const patchTeam = (cfg: TanguDesktopConfig, slug: string, patch: Partial<{ name: string; members: Array<{ slug: string; role?: string }>; lead: string; avatar: string; doc: string; description: string }>) =>
   request<{ team: TeamDef }>(cfg, `/agent/teams/${encodeURIComponent(slug)}`, { method: 'PATCH', body: JSON.stringify(patch) }).then((r) => r.team)
 export const deleteTeam = (cfg: TanguDesktopConfig, slug: string) =>
   request<{ ok: boolean }>(cfg, `/agent/teams/${encodeURIComponent(slug)}`, { method: 'DELETE' })

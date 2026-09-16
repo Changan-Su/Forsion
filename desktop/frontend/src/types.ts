@@ -381,9 +381,7 @@ export interface TeamDef {
   slug: string
   name: string
   description: string
-  /** 运行模式缺省档(会话内可切):meeting=会议;collab=协作。 */
-  mode: 'meeting' | 'collab'
-  maxRounds: number
+  /** 可选起头人(元数据;调度不走它)。09-16 起没有运行模式与轮数上限。 */
   lead: string
   /** 可选 emoji;空 = 成员头像组合。 */
   avatar: string
@@ -467,10 +465,8 @@ export interface AgentConfig {
   /** 工作预设(**会话事实**,与引擎 core/presetTable.ts 同源):'chat'=轻聊天(正向工具面、临时工作区、答完即停、不写笔记)/
    *  'coding'=编码 / 缺省=work。建会话时定,跑过一轮后引擎锁定(run 带别的值只警告不切)—— 换模式 = 新建会话。 */
   preset?: 'coding' | 'chat'
-  /** 群聊模式:≥2 个 Normal Agent 轮流发言、投票、可总结。host-only。 */
+  /** 团队模式(群聊):≥2 个 Normal Agent 轮流发言,被 @ 者优先,各自以 DONE 表态收场(没有投票、没有轮数上限),可总结。host-only。 */
   groupChat?: boolean
-  /** 团队运行模式(两条轨道共用):meeting=会议(固定发言序 + 投票);collab=协作(被 @ 者优先、无人点名即停)。缺省 meeting;可变、不锁。 */
-  teamMode?: 'meeting' | 'collab'
   /** run 事实(不落库):私聊里 @ 了的项目(引擎据此注入派遣指令,start_project_session)。 */
   mentionedProjects?: Array<{ name: string; path: string }>
   /** run 事实(不落库):团队首个 run 的播种源会话(私聊里拉起群聊 → 私聊摘要进团队首会话,拍板 ⑬);只由 send() 按 seedOnceBySession 带一次。 */
@@ -489,10 +485,6 @@ export interface AgentConfig {
   priorityAgent?: string
   /** 本条消息 @ 的 agent slug 列表(单聊:提示主 agent 用 delegate 把子任务交给这些 Normal Agent 作 subagent;per-message,不持久化)。 */
   mentionedAgentSlugs?: string[]
-  /** 讨论强度(仅 UI 展示;轮数以 groupMaxRounds 为准)。 */
-  groupIntensity?: 'relaxed' | 'medium' | 'intense' | 'custom'
-  /** 最大讨论轮数(轻松3/中等7/激烈15/自定义N;后端 clamp 1..30)。 */
-  groupMaxRounds?: number
 }
 
 /** 通道类型(微信/Telegram/QQ;与引擎 channels/types.ts 对齐)。 */

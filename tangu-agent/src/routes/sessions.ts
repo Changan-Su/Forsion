@@ -30,7 +30,7 @@ export function validPreset(v: unknown): boolean {
 }
 
 /** 轨道身份类会话事实(建会话写一次、跑过一轮即锁):preset(既有)+ 私聊(Agent / 外部引擎)+ 独立团队。
- *  运行模式键(groupChat / groupAgents / teamMode)刻意不在此列 —— 它们要在会话中途可进可退。新增一项必须四处同改:
+ *  运行模式键(groupChat / groupAgents)刻意不在此列 —— 它们要在会话中途可进可退。新增一项必须四处同改:
  *  POST 校验、PUT 校验 + 消息数门、本锁、引擎侧(agentLoop 的 pickSessionFacts/bindSessionFacts「存值为准」)。 */
 export const LOCKED_SESSION_FACT_KEYS = ['preset', 'soloAgentSlug', 'soloEngineId', 'teamSlug'] as const;
 const SOLO_ENGINE_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;

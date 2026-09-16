@@ -230,9 +230,7 @@ export const Composer2: React.FC<{
   groupChat?: boolean
   groupAgents?: string[]
   groupTempAgents?: NormalAgentDef[]
-  groupIntensity?: AgentConfig['groupIntensity']
-  groupMaxRounds?: number
-  onGroupChange?: (patch: Pick<AgentConfig, 'groupChat' | 'groupAgents' | 'groupTempAgents' | 'groupIntensity' | 'groupMaxRounds'>) => void
+  onGroupChange?: (patch: Pick<AgentConfig, 'groupChat' | 'groupAgents' | 'groupTempAgents'>) => void
   skills?: SkillInfo[] | null
   agents?: NormalAgentDef[]
   /** 对话中切换 Agent(拍板 ⑪:入口先放模式切换菜单)。给了才渲染;群聊态 / 引擎会话 / chat 预设不渲染。 */
@@ -286,7 +284,7 @@ export const Composer2: React.FC<{
   maxIterations, onMaxIterationsChange,
   verifyCommand, onVerifyCommandChange,
   preset, onPresetChange, planMode, onPlanModeChange, voiceMode, onVoiceModeChange, skills,
-  groupChat, groupAgents, groupTempAgents, groupIntensity, groupMaxRounds, onGroupChange,
+  groupChat, groupAgents, groupTempAgents, onGroupChange,
   agents, onAgentSwitch, currentAgentSlug, mentionProjects, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
   quotedText, onClearQuote,
@@ -1149,8 +1147,6 @@ export const Composer2: React.FC<{
           models={models}
           initialAgents={groupAgents || []}
           initialTempAgents={groupTempAgents}
-          initialIntensity={groupIntensity}
-          initialRounds={groupMaxRounds}
           active={groupActive}
           onConfirm={(r) => { onGroupChange?.({ groupChat: true, ...r }); setGroupSetupOpen(false); track('chat.group') }}
           onDisable={() => onGroupChange?.({ groupChat: false })}

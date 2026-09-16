@@ -441,27 +441,28 @@ try {
     return { ok: !ev.error && ev.toolCalls.length > 0 && hit && anchors, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};标记${hit ? '命中' : '未命中'};done 锚点${anchors ? '对齐' : `不对齐(${JSON.stringify(ev.toolOffsets)})`}${ev.approvals ? `;代批 ${ev.approvals}${ev.approveError ? '(失败:' + ev.approveError + ')' : ''}` : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
-  // 团队运行模式(新工作区 × 轨道体系 P5a/P5b):同一条群聊分叉,teamMode=collab。判的是模型配不配合 @ 约定:
-  // Alpha 规划并 @Beta → 下一位必须是 Beta(被点名者优先);Beta 回 @Alpha + DONE → Alpha 收尾 DONE → 全员 DONE 停(done),
-  // 或整周期无人再点名(idle)。发言序与收场原因来自 group_speaker / group_ended;每条发言落库带发言人前缀。
+  // 团队运行模式(新工作区 × 轨道体系;09-16 起只有一套调度:被 @ 者优先 + 成员各自以 DONE 表态,没有会议/协作之分、没有投票、
+  // 没有缺省轮数上限)。判的是模型配不配合 @ 与 DONE 约定:Alpha 规划并 @Beta → 下一位必须是 Beta(被点名者优先);
+  // Beta 回 @Alpha → Alpha 收尾 DONE → Beta(只靠群聊规则,自己的提示词里没写 DONE)表态 DONE → 全员 DONE 停(done)。
+  // 刻意不传 groupMaxRounds:兜底天花板 30 周期 + 300s 超时,模型不守约定就会在这里失败 —— 这正是要验的东西。
   await scenario('group', 'group 团队协作模式(两名 agent 互相 @ 后收敛)', async () => {
     const mk = (slug, name, systemPrompt) => api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name, description: 'live harness', systemPrompt }) }).catch(() => null);
     await mk('live-alpha', 'Alpha', 'You are Alpha, the planner. On the first request, split the job: tell @Beta in one sentence exactly what to write, addressing them as "@Beta", and stop. When Beta reports back, reply with a one-line summary of the result and then the word DONE on its own line.');
-    await mk('live-beta', 'Beta', 'You are Beta, the executor. When @Alpha assigns you something, produce it in one short paragraph without using tools, address your reply to "@Alpha", and end with DONE on its own line.');
+    await mk('live-beta', 'Beta', 'You are Beta, the executor. When @Alpha assigns you something, produce it in one short paragraph without using tools and address your reply to "@Alpha".');
     const sessG = `live-g-${Date.now()}`;
     const ev = await run(sessG, '请规划:写一句关于协作的口号,交给合适的人执行。', 300_000, {
-      groupChat: true, groupAgents: ['live-alpha', 'live-beta'], teamMode: 'collab', groupMaxRounds: 3, groupNoSummary: true, groupSeedHistory: false,
+      groupChat: true, groupAgents: ['live-alpha', 'live-beta'], groupNoSummary: true, groupSeedHistory: false,
     });
     const sp = ev.group.speakers;
     const reason = ev.group.ended?.reason || null;
     const mentionRouted = sp.length >= 2 && sp[0] === 'live-alpha' && sp[1] === 'live-beta';
-    const converged = reason === 'done' || reason === 'idle';
+    const converged = reason === 'done';
     const msgs = await api(`/agent/sessions/${sessG}/messages?limit=50`).catch(() => null);
     const list = Array.isArray(msgs?.messages) ? msgs.messages : Array.isArray(msgs) ? msgs : [];
     const attributed = list.filter((m) => m.role === 'model' && /^\*\*🗣 (Alpha|Beta)\*\*/.test(String(m.content || ''))).length;
     return {
       ok: !ev.error && mentionRouted && converged && sp.length <= 6,
-      detail: ev.error || `发言序 ${sp.join('→') || '无'};收场 ${reason || '无'}(${ev.group.ended?.mode || '?'} · ${ev.group.ended?.steps ?? '?'} 步);带发言人前缀的落库消息 ${attributed} 条`,
+      detail: ev.error || `发言序 ${sp.join('→') || '无'};收场 ${reason || '无'}(${ev.group.ended?.steps ?? '?'} 步 · ${ev.group.ended?.rounds ?? '?'} 周期);带发言人前缀的落库消息 ${attributed} 条`,
       output: list.filter((m) => m.role === 'model').map((m) => String(m.content || '')).join('\n\n---\n\n'), ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
     };
   });

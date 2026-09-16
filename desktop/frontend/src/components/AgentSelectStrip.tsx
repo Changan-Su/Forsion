@@ -4,8 +4,8 @@
  * 本机 Agent + (execMode==='host' 时)可用外部引擎(CLI 视作特殊的独立 Agent,单选互斥)。
  *
  * 语义(§4 表):0 选 = 默认 Agent(清 agentSlug/engineId/groupChat,今天的行为);1 选 = `agentSlug`
- * (**仍是项目会话,不是私聊**);≥2 选 = 本会话进入**团队模式**(groupChat + groupAgents 按点选序
- * + groupMaxRounds),降回 1 立刻撤(引擎侧 <2 人整条 run failed,前端必须守 ≥2)。
+ * (**仍是项目会话,不是私聊**);≥2 选 = 本会话进入**团队模式**(groupChat + groupAgents 按点选序;
+ * 没有模式与轮数字段,成员各自以 DONE 表态收场),降回 1 立刻撤(引擎侧 <2 人整条 run failed,前端必须守 ≥2)。
  * 右键 / 长按 pill = 「私聊」(Agent 轨道的入口,与侧栏私聊行同一张表)。
  *
  * 样式复用既有 `.engine-picker` / `.engine-pill` / `.agent-pill-avatar` 一套(base.css 不动):
@@ -29,15 +29,13 @@ registerMessages({
   'agentSelect.title': { zh: '选择 Agent', en: 'Pick agents' },
   'agentSelect.hint': { zh: '选择一个或多个 Agent 以开始', en: 'Pick one or more agents to start' },
   'agentSelect.removeHint': { zh: '再次点击移除', en: 'Click again to remove' },
-  'agentSelect.team': { zh: '团队模式 · {n} 人 · 会议', en: 'Team mode · {n} people · Meeting' },
+  'agentSelect.team': { zh: '团队模式 · {n} 人', en: 'Team mode · {n} people' },
   'agentSelect.picked': { zh: '已选', en: 'Picked' },
   'agentSelect.default': { zh: '默认 Agent', en: 'Default agent' },
   'agentSelect.defaultTag': { zh: '默认', en: 'Default' },
   'agentSelect.direct': { zh: '私聊', en: 'Direct chat' },
 })
 
-/** 团队模式缺省轮数(§4:P1 只写 7,teamMode 随 P5a 落地)。 */
-const TEAM_MAX_ROUNDS = 7
 /** 进团队模式的人数下限(引擎侧 <2 人整条 run failed);也是「画发言序号」的门槛 —— 单选没有顺序可言。 */
 const TEAM_MIN = 2
 
@@ -135,7 +133,7 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
     const temps = (cfg.groupTempAgents || []).filter((a) => next.includes(a.slug))
     const engineOff = dropEngine ? { engineId: undefined, engineModelId: undefined } : {}
     if (next.length >= TEAM_MIN) {
-      const patch = { groupChat: true, groupAgents: next, groupTempAgents: temps.length ? temps : undefined, groupMaxRounds: cfg.groupMaxRounds ?? TEAM_MAX_ROUNDS, ...engineOff }
+      const patch = { groupChat: true, groupAgents: next, groupTempAgents: temps.length ? temps : undefined, ...engineOff }
       if (sessionId) st.patchSessionConfig(patch, sessionId)
       else st.setNewChatCfg((c) => ({ ...c, ...patch }))
       return

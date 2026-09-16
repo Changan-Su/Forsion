@@ -2,7 +2,7 @@
  * 独立团队(Agent 轨道的持久团队实体)—— host-only,镜像 routes/agents.ts 的形状(云端 404,不做半可用)。
  *   GET    /agent/teams                     → { teams }
  *   GET    /agent/teams/:slug               → { team }
- *   POST   /agent/teams                     → { team }   name + members(≥2)必填;slug 唯一化(撞了递增后缀),更新走 PATCH
+ *   POST   /agent/teams                     → { team }   members(≥2)必填;name 可省(缺省 = 成员名相连);slug 唯一化(撞了递增后缀),更新走 PATCH
  *   PATCH  /agent/teams/:slug               → { team }   逐字段合并
  *   DELETE /agent/teams/:slug               → { ok }     只删定义与 Library;历史会话留着(teamSlug 指向已删团队 = 归档口径由客户端定)
  *   GET/PUT /agent/teams-meta               → { order }
@@ -62,23 +62,40 @@ async function unresolvedMember(members: unknown): Promise<string | null> {
   return null;
 }
 
+/** 团队名缺省 = 成员名相连(用户 09-16:名称不必填,给个按 Agent 名生成的缺省;将来若从项目里建团队再 `+ 项目`)。 */
+export async function defaultTeamName(members: Array<{ slug?: string }>, project?: string): Promise<string> {
+  const names: string[] = [];
+  for (const m of members) {
+    const slug = String(m?.slug || '').trim();
+    if (!slug) continue;
+    const def = await getAgent(slug).catch(() => null);
+    names.push(def?.name || slug);
+  }
+  const base = names.join(' & ');
+  return (project ? `${base} @ ${project}` : base).slice(0, 100);
+}
+
 router.post('/agent/teams', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
     const b = req.body || {};
-    if (!b.name || !Array.isArray(b.members)) return res.status(400).json({ detail: 'name 与 members 必填' });
+    if (!Array.isArray(b.members)) return res.status(400).json({ detail: 'members 必填' });
     const missing = await unresolvedMember(b.members);
     if (missing) return res.status(400).json({ detail: `member not found locally: ${missing}` });
+    const name = String(b.name || '').trim() || await defaultTeamName(b.members, typeof b.project === 'string' ? b.project.trim() : '');
+    if (!name) return res.status(400).json({ detail: 'members 必填' });
     // slug 唯一化 + 落盘串行:两个同名 POST 不会选中同一个 slug 互相覆盖(creview 09-16 P1)。
     const team = await withKeyLock('team:create', async () => {
-      let slug = typeof b.slug === 'string' && isValidSlug(b.slug) ? b.slug : slugify(String(b.name));
+      // 中文 / emoji 名 slugify 后为空 → 落到固定基名再加序号(slugify 自己的空回落是 'agent',是 agent 语义,团队不借)。
+      const ascii = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+      let slug = typeof b.slug === 'string' && isValidSlug(b.slug) ? b.slug : (ascii ? slugify(name) : 'team');
       if (await getTeam(slug)) {
         const base = slug.slice(0, 60);
         let n = 2;
         while (await getTeam(`${base}-${n}`)) n++;
         slug = `${base}-${n}`;
       }
-      return saveTeam({ slug, name: String(b.name), description: b.description, mode: b.mode, maxRounds: b.maxRounds, lead: b.lead, avatar: b.avatar, members: b.members, doc: b.doc });
+      return saveTeam({ slug, name, description: b.description, lead: b.lead, avatar: b.avatar, members: b.members, doc: b.doc });
     });
     res.json({ team });
   } catch (e: any) {
@@ -95,8 +112,8 @@ router.patch('/agent/teams/:slug', authMiddleware, async (req: AuthRequest, res)
     const missing = await unresolvedMember(b.members);
     if (missing) return res.status(400).json({ detail: `member not found locally: ${missing}` });
     const team = await saveTeam({
-      slug: existing.slug, name: b.name != null ? String(b.name) : existing.name,
-      description: b.description, mode: b.mode, maxRounds: b.maxRounds, lead: b.lead, avatar: b.avatar,
+      slug: existing.slug, name: b.name != null && String(b.name).trim() ? String(b.name) : existing.name,
+      description: b.description, lead: b.lead, avatar: b.avatar,
       members: Array.isArray(b.members) ? b.members : undefined, doc: b.doc != null ? String(b.doc) : undefined,
     });
     res.json({ team });
@@ -136,12 +153,9 @@ function teamSlugPredicate(alias: string): string {
     : `(${col} IS NOT NULL AND jsonb_typeof(${col}) = 'object' AND (${col} ->> 'teamSlug') = ?)`;
 }
 
-/** 独立团队会话形状(方案 §6.1):projectless + teamSlug(轨道身份,锁)+ 运行模式字段(可变)+ cwd = 团队 Library。 */
+/** 独立团队会话形状(方案 §6.1):projectless + teamSlug(轨道身份,锁)+ 成员表(可变)+ cwd = 团队 Library。没有运行模式与轮数字段。 */
 export function teamSessionConfig(team: TeamDef): Record<string, unknown> {
-  return {
-    teamSlug: team.slug, groupChat: true, groupAgents: team.members.map((m) => m.slug), teamMode: team.mode,
-    groupMaxRounds: team.maxRounds, execMode: 'host', cwd: team.libraryDir, preset: null,
-  };
+  return { teamSlug: team.slug, groupChat: true, groupAgents: team.members.map((m) => m.slug), execMode: 'host', cwd: team.libraryDir, preset: null };
 }
 
 async function activeTeamSession(userId: string, appId: string, slug: string): Promise<any | null> {

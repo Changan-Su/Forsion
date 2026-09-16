@@ -37,6 +37,7 @@ registerMessages({
   'appstore.dispatchStarted': { zh: '已在 {name} 新建会话开工', en: 'Started a session in {name}' },
   'solo.engineTooOld': { zh: '当前引擎版本不支持私聊/团队会话,请升级引擎', en: 'This engine version does not support direct or team sessions; please update the engine' },
   'solo.rotateBusy': { zh: '这条私聊还在运行中,等它结束再开新会话', en: 'This direct chat is still running; wait for it to finish before starting a new session' },
+  'group.ended.done': { zh: '全员表示已完成', en: 'All members are done' },
   'appstore.contentTruncated': { zh: '[输出过长,界面已截断显示]', en: '[Output too long, truncated for display]' },
   'appstore.stopping': { zh: '正在停止，等待任务退出…', en: 'Stopping; waiting for the run to exit…' },
   'appstore.stopFailed': { zh: '停止尚未确认：{e}', en: 'Stop not confirmed: {e}' },
@@ -629,7 +630,7 @@ export interface AppState {
   setVoiceMode(slug: string, on: boolean): Promise<void>
   setSessionEngine(engineId: string, sessionId?: string | null): void
   setSessionEngineModel(engineModelId: string, sessionId?: string | null): void
-  setSessionGroup(patch: Pick<AgentConfig, 'groupChat' | 'groupAgents' | 'groupTempAgents' | 'groupIntensity' | 'groupMaxRounds' | 'teamMode'>, sessionId?: string | null): void
+  setSessionGroup(patch: Pick<AgentConfig, 'groupChat' | 'groupAgents' | 'groupTempAgents'>, sessionId?: string | null): void
   /** 私聊(Agent 轨道):拿到/建立该 Agent 或外部引擎的活动私聊会话并并进列表(不切 activeId —— 导航由 sessionNav.openSolo 做)。 */
   ensureSoloSession(kind: 'agent' | 'engine', id: string): Promise<SessionRecord | null>
   /** 私聊「新会话(先总结记忆)」:旧会话归档、新会话进列表;返回新会话与记忆采集状态;活动 run 时返回 null 并提示。 */
@@ -1084,7 +1085,7 @@ export const useApp = create<AppState>((set, get) => ({
       case 'group_ended': {
         (assistantRef as GroupRef).groupEnded = true
         const reasonMap: Record<string, string> = {
-          vote: t('group.ended.vote'), max_rounds: t('group.ended.maxRounds'), cost_limit: t('group.ended.costLimit'), quota: t('group.ended.quota'),
+          done: t('group.ended.done'), vote: t('group.ended.vote'), max_rounds: t('group.ended.maxRounds'), cost_limit: t('group.ended.costLimit'), quota: t('group.ended.quota'),
         }
         const reason = reasonMap[String(pl.reason)] || t('group.ended.default')
         set((s) => ({
@@ -2107,6 +2108,10 @@ export const useApp = create<AppState>((set, get) => ({
     const storedAgentConfig = implicitInit || get().configBySession[sessionId] || {}
     const scopedAgentConfig = withAmadeusWorkspace(storedAgentConfig, activeAmadeusRoot())
     let agentConfig = { ...scopedAgentConfig }
+    // 09-16 起团队模式没有轮数上限 / 强度(成员各自以 DONE 表态收场):老会话存下来的这两个键不再随 run 发出,
+    // 否则引擎会把 groupMaxRounds 当成显式硬上限(那是留给讨论 / Historian 辅助等内部调用方的)。存值不动,只是不带。
+    delete (agentConfig as Record<string, unknown>).groupMaxRounds
+    delete (agentConfig as Record<string, unknown>).groupIntensity
     // 存量本机会话第一次发送时补齐系统 Vault 根:不仅本轮权限生效,后续 UI/重启也保持同一工作范围。
     if (!implicitInit && scopedAgentConfig !== storedAgentConfig) {
       set((st) => ({ configBySession: { ...st.configBySession, [sessionId]: scopedAgentConfig } }))

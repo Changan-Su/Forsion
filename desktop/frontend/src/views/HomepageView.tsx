@@ -227,8 +227,6 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
         groupChat={config.groupChat}
         groupAgents={config.groupAgents}
         groupTempAgents={config.groupTempAgents}
-        groupIntensity={config.groupIntensity}
-        groupMaxRounds={config.groupMaxRounds}
         onGroupChange={(patch) => s.setNewChatCfg((c) => ({ ...c, ...patch }))}
         skills={s.skillsList}
         agents={s.agentDefs}

@@ -12,8 +12,9 @@
  *   3  .t2o 里的项目组头 40±0.5;二级 .t2s-srow 仍是 26.797±0.5(二级行本体不许被改)
  *   4  左边缘:一级头像左 = 滚动区左 + 20;二级图标左 = 滚动区左 + 30.5±1;一级与组头图标逐像素同列
  *   5  胶囊切 Chat → Agent 轨道的 .t2o-row 全隐(count 0);切回 Work → 回来(§3.5)
- *   6  ⚠️ 一级行**不在** .t2s-side 里(DESIGN.md:232 的 check:listsrc 教训:台架套上 .t2s-side 就恒绿,
- *      而生产里 .t2o 是 dockview 面板、外面没有那层作用域,--t2s-icon / .t2s-lead-icon 的规则都够不着)
+ *   6  一级行与项目组在**同一个滚动区**里混排成一个列表,并按最近消息时间降序(09-16 用户拍板:Agent / 团队 / 项目不分块);
+ *      从未有过会话的 Agent 沉底、保持名册序。(旧的「一级行不在 .t2s-side 里」断言随混排作废:行现在就住在 SidebarPane 里,
+ *      .t2o-row 自带 --t2s-icon 覆盖,不靠外层作用域)
  *   7  旧档 sessions 仍可达,且顶部有「已有新版」提示条(§3.7 第 8 条)
  *   8  亮 / 暗 / 375px 三张真实截图(DESIGN.md §8:几何断言全绿 ≠ 看起来对,自己看)
  *
@@ -78,20 +79,22 @@ const AGENTS = [
 /** 私聊 open 端点的夹具回应(桩引擎没有 /agent/solo 路由;由 startFront 代理答):点私聊行 → 拿到 orb-s1 这条会话。main() 里赋值。 */
 let SOLO_OPEN_RESPONSE = null
 
-/** 会话名册:两条项目会话(出一个项目组 + 两条二级行)+ 一条无根会话(出「不在项目中工作」组)。 */
+/** 会话名册:两条项目会话(出一个项目组 + 两条二级行)+ 一条无根会话(出「不在项目中工作」组)。
+ *  updated_at 刻意错开 —— 混排断言(6a)靠它:私聊 12:00 最新 → Xyra 行最上;项目里最新 11:00 → Orbit Project 组其次;
+ *  无根 10:00 → 再次;Orbit One / Orbit Two 没有会话 → 沉底(名册序)。 */
 const sessionFixtures = (projectDir) => {
-  const at = '2026-09-16 09:00:00'
-  const base = { summary: '', archived: false, model_id: 'm1', agent_config: null, created_at: at, updated_at: at }
+  const at = (t) => ({ created_at: '2026-09-16 09:00:00', updated_at: `2026-09-16 ${t}` })
+  const base = { summary: '', archived: false, model_id: 'm1', agent_config: null }
   return [
-    { ...base, id: 'orb-p1', title: '项目会话一', project_path: projectDir, project_name: 'Orbit Project', projectless: false },
-    { ...base, id: 'orb-p2', title: '项目会话二', project_path: projectDir, project_name: 'Orbit Project', projectless: false },
-    { ...base, id: 'orb-c1', title: '无根会话', project_path: null, project_name: null, projectless: true },
+    { ...base, ...at('09:00:00'), id: 'orb-p1', title: '项目会话一', project_path: projectDir, project_name: 'Orbit Project', projectless: false },
+    { ...base, ...at('09:30:00'), id: 'orb-p2', title: '项目会话二', project_path: projectDir, project_name: 'Orbit Project', projectless: false },
+    { ...base, ...at('10:00:00'), id: 'orb-c1', title: '无根会话', project_path: null, project_name: null, projectless: true },
     // Agent 轨道的私聊会话:projectless 但带 soloAgentSlug —— 必须**不**落进「不在项目中工作」组(§3.5 inOrbit 剔除)
-    { ...base, id: 'orb-s1', title: '私聊会话', project_path: null, project_name: null, projectless: true,
+    { ...base, ...at('12:00:00'), id: 'orb-s1', title: '私聊会话', project_path: null, project_name: null, projectless: true,
       agent_config: { soloAgentSlug: 'xyra', agentSlug: 'xyra', execMode: 'host', cwd: '/tmp/orbit-xyra-library', preset: null } },
     // 项目轨道里处于团队模式的会话:二级行前导图标换 Users(§3.5 rowIcon),打开后主区顶部有团队模式状态条(§6.3)
-    { ...base, id: 'orb-p3', title: '团队模式会话', project_path: projectDir, project_name: 'Orbit Project', projectless: false,
-      agent_config: { groupChat: true, groupAgents: ['xyra', 'orbit-one'], teamMode: 'meeting', execMode: 'host', cwd: projectDir } },
+    { ...base, ...at('11:00:00'), id: 'orb-p3', title: '团队模式会话', project_path: projectDir, project_name: 'Orbit Project', projectless: false,
+      agent_config: { groupChat: true, groupAgents: ['xyra', 'orbit-one'], execMode: 'host', cwd: projectDir } },
   ]
 }
 
@@ -168,7 +171,13 @@ const PROBE = `(() => {
   const srowLead = q(srow, '.t2s-lead')
   const srowScroller = srow ? scrollerOf(srow) : null
   const modeOn = q(pane, '.t2s-mode button.on')
+  // 一级列表的 DOM 序(一级行 + 项目组头),混排断言用
+  const level1 = all(orbit, '.t2o-row, .t2s-group').filter(vis).map((e) => e.classList.contains('t2o-row')
+    ? { kind: 'row', text: ((q(e, '.t2o-name') || e).textContent || '').trim().slice(0, 24) }
+    : { kind: 'group', text: ((q(e, '.t2s-group-label') || e).textContent || '').trim().slice(0, 24) })
   return {
+    level1,
+    sameScroller: !!(rowScroller && srowScroller && rowScroller === srowScroller),
     panes: panes.length,
     hasOrbit: !!orbit,
     orbitRect: rect(orbit),
@@ -316,10 +325,16 @@ async function run(app, win) {
   check(`2c ⚠️<img> 实际渲染 ${AVATAR_BOX}×${AVATAR_BOX}(check:listsrc 教训:不显式定尺寸会按原始 32/48px 撑爆行)`,
     !!st.img && near(st.img.w, AVATAR_BOX, 0.5) && near(st.img.h, AVATAR_BOX, 0.5), JSON.stringify(st.img))
 
-  // ── 6 台架照生产:一级行不在 .t2s-side 里(DESIGN.md:232)────────────────────
-  check('6 ⚠️一级 .t2o-row 不落在 .t2s-side 里(套上就恒绿,而生产 .t2o 外面没有那层作用域)',
-    st.rowGeom.length > 0 && st.rowGeom.every((r) => !r.insideSide) && (!st.img || !st.img.insideSide),
-    JSON.stringify({ rowsInsideSide: st.rowGeom.filter((r) => r.insideSide).length, imgInsideSide: st.img && st.img.insideSide }))
+  // ── 6 一个列表:一级行与项目组同一滚动区、按最近消息时间混排(09-16 用户拍板)────────
+  check('6 一级 .t2o-row 与项目组在同一个滚动区里(不分块,一个列表)',
+    st.rowGeom.length > 0 && st.sameScroller, JSON.stringify({ sameScroller: st.sameScroller, scroller: st.rowScrollerCls }))
+  const pos = (kind, text) => st.level1.findIndex((e) => e.kind === kind && e.text.includes(text))
+  const ix = { xyra: pos('row', 'Xyra'), project: pos('group', 'Orbit Project'), one: pos('row', 'Orbit One'), two: pos('row', 'Orbit Two') }
+  const groups = st.level1.filter((e) => e.kind === 'group')
+  const rootlessIx = groups.length >= 2 ? st.level1.indexOf(groups[1]) : -1 // 第二个组 = 无根组(10:00)
+  check('6a 一级列表按最近消息时间降序混排:私聊 12:00 的 Xyra > 项目 11:00 的 Orbit Project > 无根 10:00 > 无会话的 Orbit One > Orbit Two(名册序沉底)',
+    ix.xyra >= 0 && ix.project > ix.xyra && rootlessIx > ix.project && ix.one > rootlessIx && ix.two > ix.one,
+    JSON.stringify({ order: st.level1.map((e) => `${e.kind}:${e.text}`), ix, rootlessIx }))
 
   // ── 3 项目区(复用的 SidebarPane):组头 40 / 二级行 26.797 ─────────────────
   check(`3 .t2o 里的项目组头 ${LEVEL1_H}px ±0.5(作用域覆盖 .t2o .t2s-group .t2s-folder-row)`,
@@ -344,8 +359,8 @@ async function run(app, win) {
   await win.locator('.t2o .t2s-srow', { hasText: '团队模式会话' }).first().click()
   const teamBar = await win.waitForSelector('.t2o-bar[data-orbit="teammode"]', { timeout: 15_000 }).catch(() => null)
   const teamBarSt = teamBar ? await win.evaluate(`(() => { const b = document.querySelector('.t2o-bar[data-orbit="teammode"]'); return { h: b.getBoundingClientRect().height, chips: Array.from(b.querySelectorAll('.t2o-bar-chip')).map((c) => c.textContent.trim()), title: (b.querySelector('.t2o-bar-title') || {}).textContent } })()`) : null
-  check('3d 团队模式会话打开后主区顶部有状态条:团队模式 · 拉人 / 会议⇄协作 / 退出团队模式 三枚芯片,高 ≥32',
-    !!teamBarSt && teamBarSt.chips.length === 3 && teamBarSt.h >= 31.5, JSON.stringify(teamBarSt))
+  check('3d 团队模式会话打开后主区顶部有状态条:团队模式 · 拉人 / 退出团队模式 两枚芯片(09-16 起没有会议⇄协作切换),高 ≥32',
+    !!teamBarSt && teamBarSt.chips.length === 2 && teamBarSt.h >= 31.5, JSON.stringify(teamBarSt))
   await win.screenshot({ path: shots.bar }).catch(() => {})
   await win.locator('.t2o .t2o-row', { hasText: 'Xyra' }).first().click()
   const soloBar = await win.waitForSelector('.t2o-bar[data-orbit="solo"]', { timeout: 15_000 }).catch(() => null)

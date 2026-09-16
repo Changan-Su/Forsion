@@ -42,7 +42,7 @@ export const discussProvider: ToolProvider = {
               peer: { type: 'string', description: 'Optional: a named agent slug to discuss with (use the slug of an @-mentioned agent). Provide peer OR instructions.' },
               instructions: { type: 'string', description: 'Optional: inline persona/role for an ad-hoc peer when no named agent fits. Provide peer OR instructions.' },
               context: { type: 'string', description: 'Optional: background the peer needs (relevant paths, constraints, known facts).' },
-              maxRounds: { type: 'number', description: 'Optional: how deep the discussion may go (rounds; default 7, max 30). Voting can end it earlier.' },
+              maxRounds: { type: 'number', description: 'Optional: hard cap on how deep the discussion may go (rounds, max 30). Members end it earlier by finishing their remark with DONE; default = no cap below the ceiling.' },
             },
             required: ['topic'],
           },

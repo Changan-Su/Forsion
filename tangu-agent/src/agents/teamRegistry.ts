@@ -10,17 +10,13 @@ import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { teamsDir } from '../core/tanguHome.js';
 import { isValidSlug, slugify } from './agentRegistry.js';
 
-export type TeamMode = 'meeting' | 'collab';
 export interface TeamMember { slug: string; role: string }
 export interface TeamDef {
   slug: string;
   name: string;
   description: string;
-  /** 团队运行模式缺省档(会话内可切);未知回落 meeting。 */
-  mode: TeamMode;
-  /** 会议轮数 / 协作最大步数÷成员数;经 clampRounds 钳 1..30。 */
-  maxRounds: number;
-  /** 可选:协作周期的起头发言人;缺省 = 第一位成员。无人被点名时的兜底不走它(策略两轨共用,项目轨道没有 config)。 */
+  /** 可选:起头发言人;缺省 = 第一位成员。调度不走它(被 @ 者优先 → 成员序轮转),只是元数据。
+   *  09-16 起团队没有运行模式与轮数上限(旧 config.toml 里的 mode / max_rounds 读时忽略、写时不再落盘)。 */
   lead: string;
   /** 可选 emoji;空 = 成员头像组合。 */
   avatar: string;
@@ -50,14 +46,11 @@ export function parseTeamConfig(slug: string, tomlRaw: string, doc: string): Tea
     seen.add(s);
     members.push({ slug: s, role: str(m?.role).trim().slice(0, 500) });
   }
-  const rounds = Number(meta.max_rounds);
   const lead = str(meta.lead).trim();
   return {
     slug,
     name: str(meta.name) || slug,
     description: str(meta.description),
-    mode: meta.mode === 'collab' ? 'collab' : 'meeting',
-    maxRounds: Number.isFinite(rounds) && rounds > 0 ? Math.min(30, Math.max(1, Math.floor(rounds))) : 7,
     lead: seen.has(lead) ? lead : (members[0]?.slug || ''),
     avatar: str(meta.avatar).trim().slice(0, 16),
     members,
@@ -71,8 +64,6 @@ export function parseTeamConfig(slug: string, tomlRaw: string, doc: string): Tea
 export function serializeTeamConfig(def: TeamDef): string {
   const head: Record<string, unknown> = { name: def.name };
   if (def.description) head.description = def.description;
-  head.mode = def.mode;
-  head.max_rounds = def.maxRounds;
   if (def.lead) head.lead = def.lead;
   if (def.avatar) head.avatar = def.avatar;
   head.created_at = def.createdAt || new Date().toISOString();
@@ -151,8 +142,6 @@ export interface SaveTeamInput {
   slug?: string;
   name: string;
   description?: string;
-  mode?: string;
-  maxRounds?: number | null;
   lead?: string;
   avatar?: string;
   members?: Array<{ slug: string; role?: string }>;
@@ -168,15 +157,12 @@ export function buildTeamDef(slug: string, existing: TeamDef | null, input: Save
     .map((m) => ({ slug: String(m?.slug || '').trim(), role: String(m?.role || '').trim().slice(0, 500) }))
     .filter((m) => isValidSlug(m.slug) && !seen.has(m.slug) && (seen.add(m.slug), true));
   if (members.length < 2) throw new Error('a team needs at least 2 members');
-  const rounds = input.maxRounds != null ? Number(input.maxRounds) : existing?.maxRounds ?? 7;
   const lead = (input.lead ?? existing?.lead ?? '').trim();
   const doc = (input.doc ?? existing?.doc ?? '').replace(/\r\n/g, '\n');
   return {
     slug,
     name: input.name.trim().slice(0, 100),
     description: (input.description ?? existing?.description ?? '').trim().slice(0, 500),
-    mode: (input.mode ?? existing?.mode) === 'collab' ? 'collab' : 'meeting',
-    maxRounds: Number.isFinite(rounds) && rounds > 0 ? Math.min(30, Math.max(1, Math.floor(rounds))) : 7,
     lead: seen.has(lead) ? lead : members[0].slug,
     avatar: (input.avatar ?? existing?.avatar ?? '').trim().slice(0, 16),
     members,

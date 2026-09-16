@@ -1,22 +1,21 @@
 /**
- * 群聊模式设置:选 ≥2 个参与者(已有 Normal Agent 勾选 + 临时 Agent 内联创建)+ 讨论强度。
+ * 团队模式(群聊)成员设置:选 ≥2 个参与者(已有 Normal Agent 勾选 + 临时 Agent 内联创建)。
  * 临时 Agent 字段同 Normal Agent,但**不持久化**到 ~/.tangu/agents,仅随本会话 agentConfig 传给后端。
- * 确认 → 写入会话 agentConfig(groupChat/groupAgents/groupTempAgents/groupIntensity/groupMaxRounds)。
+ * 确认 → 写入会话 agentConfig(groupChat/groupAgents/groupTempAgents)。09-16 起没有讨论强度 / 轮数:成员各自以 DONE 表态收场。
  */
 import React, { useMemo, useState } from 'react'
 import { Users, Check, X, Plus, Pencil, Trash2, UserPlus } from 'lucide-react'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'
-import type { ModelInfo, NormalAgentDef, ThinkingLevel } from '../types'
 
-type Intensity = 'relaxed' | 'medium' | 'intense' | 'custom'
-const PRESET_ROUNDS: Record<Exclude<Intensity, 'custom'>, number> = { relaxed: 3, medium: 7, intense: 15 }
+registerMessages({
+  'group.setup.selfPacedHint': { zh: '成员被 @ 时优先发言;每位成员说完自己决定还要不要继续,全员表示完成即结束,没有轮数上限。', en: 'Members who get @-mentioned speak next; after each remark a member decides whether to continue, and the chat ends once everyone is done — no round limit.' },
+})
+import type { ModelInfo, NormalAgentDef, ThinkingLevel } from '../types'
 
 export interface GroupSetupResult {
   groupAgents: string[]
   groupTempAgents: NormalAgentDef[]
-  groupIntensity: Intensity
-  groupMaxRounds: number
 }
 
 type TempDraft = {
@@ -39,23 +38,18 @@ export const GroupChatSetup: React.FC<{
   models?: ModelInfo[] | null
   initialAgents: string[]
   initialTempAgents?: NormalAgentDef[]
-  initialIntensity?: Intensity
-  initialRounds?: number
   active: boolean
   onConfirm: (r: GroupSetupResult) => void
   onDisable: () => void
   onClose: () => void
-}> = ({ agents, models, initialAgents, initialTempAgents, initialIntensity = 'medium', initialRounds = 7, active, onConfirm, onDisable, onClose }) => {
+}> = ({ agents, models, initialAgents, initialTempAgents, active, onConfirm, onDisable, onClose }) => {
   const { t } = useI18n()
   const savedSlugs = useMemo(() => new Set(agents.map((a) => a.slug)), [agents])
   const [selectedSaved, setSelectedSaved] = useState<string[]>(() => initialAgents.filter((s) => savedSlugs.has(s)))
   const [tempAgents, setTempAgents] = useState<NormalAgentDef[]>(initialTempAgents || [])
-  const [intensity, setIntensity] = useState<Intensity>(initialIntensity)
-  const [customRounds, setCustomRounds] = useState<number>(initialIntensity === 'custom' ? initialRounds : 5)
   const [editingTemp, setEditingTemp] = useState<TempDraft | null>(null)
 
   const modelOptions = useMemo(() => (models || []).map((m) => ({ id: m.id, label: m.name || m.id })), [models])
-  const rounds = intensity === 'custom' ? Math.max(1, Math.min(30, Math.floor(customRounds) || 1)) : PRESET_ROUNDS[intensity]
   const total = selectedSaved.length + tempAgents.length
   const canStart = total >= 2
 
@@ -84,8 +78,6 @@ export const GroupChatSetup: React.FC<{
     onConfirm({
       groupAgents: [...selectedSaved, ...tempAgents.map((a) => a.slug)],
       groupTempAgents: tempAgents,
-      groupIntensity: intensity,
-      groupMaxRounds: rounds,
     })
   }
 
@@ -211,31 +203,7 @@ export const GroupChatSetup: React.FC<{
               <Plus size={13} /> {t('group.setup.addTemp')}
             </button>
 
-            {/* 讨论强度 */}
-            <div style={{ fontSize: 12, fontWeight: 600, margin: '4px 0 6px', color: 'var(--text-dim)' }}>{t('group.setup.intensity')}</div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 10 }}>
-              {(['relaxed', 'medium', 'intense', 'custom'] as const).map((k) => {
-                const on = intensity === k
-                const label = k === 'custom' ? t('group.intensity.custom') : `${t(`group.intensity.${k}`)} · ${PRESET_ROUNDS[k]}${t('group.setup.roundsUnit')}`
-                return (
-                  <button key={k} onClick={() => setIntensity(k)} style={{
-                    padding: '6px 12px', borderRadius: 16, fontSize: 12, cursor: 'pointer',
-                    border: `1px solid ${on ? 'var(--accent)' : 'var(--border)'}`,
-                    background: on ? 'var(--accent)' : 'transparent', color: on ? 'var(--on-accent)' : 'inherit',
-                  }}>{label}</button>
-                )
-              })}
-            </div>
-            {intensity === 'custom' && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, fontSize: 13 }}>
-                <span>{t('group.setup.customRounds')}</span>
-                <input type="number" min={1} max={30} value={customRounds} onChange={(e) => setCustomRounds(Number(e.target.value))}
-                  style={{ width: 72, padding: '4px 8px', borderRadius: 6, border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'inherit' }} />
-                <span style={{ color: 'var(--text-dim)' }}>{t('group.setup.roundsRange')}</span>
-              </div>
-            )}
-
-            <div style={{ fontSize: 12, color: 'var(--text-dim)', margin: '6px 0 14px' }}>{t('group.setup.scaleHint', { rounds, agents: total })}</div>
+            <div style={{ fontSize: 12, color: 'var(--text-dim)', margin: '6px 0 14px' }}>{t('group.setup.selfPacedHint')}</div>
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               {active && <button className="btn sm" onClick={() => { onDisable(); onClose() }}>{t('group.setup.disable')}</button>}

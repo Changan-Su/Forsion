@@ -1,7 +1,8 @@
 /**
  * 群聊编排单测(无网络:fake llm/state/billing 经 configureTangu 注入)。
  * 覆盖:发言顺序、各 agent 私有持久上下文(只见他人公开发言、不见他人私有人格)、
- * 投票过半提前停 / 不足跑满轮数、<2 参与者报错、主持人总结(是/否)。
+ * 全员 DONE 即停 / 无人 DONE 时显式 groupMaxRounds 仍是硬上限(内部调用方)、<2 参与者报错、主持人总结(是/否)。
+ * 09-16 起没有投票与缺省轮数:成员在发言末尾自己决定还聊不聊(DONE 独占一行)。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -20,7 +21,8 @@ let events: Array<{ type: string; payload: any }>;
 let finals: Array<{ content: string; modelId: string }>;
 let statuses: Array<{ status: string; extra: any }>;
 let calls: Array<{ cacheKey: string; messages: any[]; toolChoice: any }>;
-let voteDecider: (slug: string) => boolean;
+/** 每位成员「说完这句要不要继续」:true = 这条发言以 DONE 收尾。 */
+let doneDecider: (slug: string, nth: number) => boolean;
 let inquiryAnswer: string;
 
 const slugFromKey = (k: string): string => (k.split(':grp:')[1] || '');
@@ -37,7 +39,7 @@ beforeEach(() => {
   writeAgent('beta', 'Beta', '你是 Beta,只有 Beta 知道的秘密人格 BBB。');
 
   events = []; finals = []; statuses = []; calls = [];
-  voteDecider = () => false;
+  doneDecider = () => false;
   inquiryAnswer = '否,不用';
   const perSlug: Record<string, number> = {};
 
@@ -48,13 +50,9 @@ beforeEach(() => {
       const p = o.payload;
       calls.push({ cacheKey: p.cacheKey, messages: p.messages, toolChoice: p.toolChoice });
       const usage = { prompt_tokens: 10, completion_tokens: 5 };
-      if (p.toolChoice && p.toolChoice.function?.name === 'cast_vote') {
-        const end = voteDecider(slugFromKey(p.cacheKey));
-        return { content: '', reasoning: '', toolCalls: [{ id: 'v', type: 'function', function: { name: 'cast_vote', arguments: JSON.stringify({ end, reason: 'r' }) } }], usage };
-      }
       const slug = slugFromKey(p.cacheKey);
       perSlug[slug] = (perSlug[slug] || 0) + 1;
-      const text = slug === 'host' ? 'HOST-SUMMARY' : `${slug}-speech-${perSlug[slug]}`;
+      const text = slug === 'host' ? 'HOST-SUMMARY' : `${slug}-speech-${perSlug[slug]}${doneDecider(slug, perSlug[slug]) ? '\nDONE' : ''}`;
       if (o.onToken) o.onToken(text);
       return { content: text, reasoning: '', toolCalls: [], usage };
     },
@@ -101,7 +99,7 @@ const speechCalls = (slug: string) =>
 describe('runGroupChat', () => {
   it('agents speak in order; each keeps a private persistent context (sees others\' public speech, not their persona)', async () => {
     await runGroupChat(params());
-    // 4 条发言(2 agent × 2 轮),顺序 alpha,beta,alpha,beta
+    // 无人 DONE → 跑到显式上限:4 条发言(2 agent × 2 周期),顺序 alpha,beta,alpha,beta
     expect(finals.map((f) => f.content)).toEqual([
       '**🗣 Alpha**\n\nalpha-speech-1',
       '**🗣 Beta**\n\nbeta-speech-1',
@@ -120,21 +118,26 @@ describe('runGroupChat', () => {
     expect(statuses.at(-1)?.status).toBe('done');
   });
 
-  it('majority vote ends the discussion early', async () => {
-    voteDecider = () => true; // 全员投票结束
+  it('every member ending with DONE stops the discussion (no vote step, no vote events)', async () => {
+    doneDecider = () => true; // 每位成员第一句就 DONE
     await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 5 } }));
-    // 只跑 1 轮(2 条发言)即停
     expect(finals.filter((f) => f.content.includes('speech')).length).toBe(2);
-    const vote = events.find((e) => e.type === 'group_vote');
-    expect(vote?.payload).toMatchObject({ endCount: 2, total: 2 });
-    expect(events.find((e) => e.type === 'group_ended')?.payload.reason).toBe('vote');
+    expect(events.some((e) => e.type === 'group_vote' || e.type === 'group_voting')).toBe(false);
+    expect(events.find((e) => e.type === 'group_ended')?.payload).toMatchObject({ reason: 'done', steps: 2, rounds: 1 });
   });
 
-  it('runs to maxRounds when no majority', async () => {
-    voteDecider = () => false;
+  it('explicit groupMaxRounds stays a hard cap when nobody says DONE (internal callers: discussion / historian assist)', async () => {
+    doneDecider = () => false;
     await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 3 } }));
-    expect(finals.filter((f) => f.content.includes('speech')).length).toBe(6); // 3 轮 × 2
+    expect(finals.filter((f) => f.content.includes('speech')).length).toBe(6); // 3 周期 × 2
     expect(events.find((e) => e.type === 'group_ended')?.payload.reason).toBe('max_rounds');
+  });
+
+  it('no groupMaxRounds = no default cap: members keep going until they all say DONE (well past the old default of 7 rounds)', async () => {
+    // alpha 第 9 句才 DONE,beta 第 10 句才 DONE → 19 步收场;旧缺省 7 轮(14 步)会把它掐断
+    doneDecider = (slug, nth) => (slug === 'alpha' ? nth >= 9 : nth >= 10);
+    await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'beta'] } }));
+    expect(events.find((e) => e.type === 'group_ended')?.payload).toMatchObject({ reason: 'done', steps: 19 });
   });
 
   it('errors (no done) with fewer than 2 valid participants', async () => {
@@ -146,7 +149,7 @@ describe('runGroupChat', () => {
   });
 
   it('host summarizes when user says yes, not when no', async () => {
-    voteDecider = () => true;
+    doneDecider = () => true;
     inquiryAnswer = '是,总结';
     await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 3 } }));
     expect(finals.some((f) => f.content.includes('主持人') && f.content.includes('HOST-SUMMARY'))).toBe(true);

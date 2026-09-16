@@ -15,7 +15,7 @@
  * 桌面与移动抽屉共用这一份:不写任何 `::-webkit-scrollbar`、不假设桌面独有的容器。
  */
 
-/* ── 外壳:头部 / Agent 轨道块 / 项目区三段竖排,块间 6px,不加分区头(照草图) ── */
+/* ── 外壳:头部 + 一个列表(私聊 / 引擎 / 团队行与项目组按最近活动混排在 SidebarPane 的 .t2s-scroll 里),不加分区头(照草图) ── */
 .t2o {
   display: flex;
   flex-direction: column;
@@ -29,19 +29,8 @@
    * 上层拖窗区吞掉点击。 */
   -webkit-app-region: no-drag;
 }
-/* 横向内边距对齐 `.t2s-scroll` 的 6px,三段的左边缘才在同一条竖线上。 */
-.t2o-head,
-.t2o-agents { padding-inline: 6px; }
-/* Agent 轨道块:优先让项目区占空间;自己装不下才收缩并自滚(不写滚动条样式,交给平台)。 */
-.t2o-agents {
-  display: flex;
-  flex-direction: column;
-  flex: 0 1 auto;
-  min-height: 0;
-  margin-bottom: 6px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-}
+/* 横向内边距对齐 `.t2s-scroll` 的 6px,头部与列表的左边缘才在同一条竖线上。 */
+.t2o-head { padding-inline: 6px; }
 .t2o-projects {
   display: flex;
   flex: 1 1 auto;
@@ -80,7 +69,7 @@
 }
 .t2o-plus:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); }
 
-/* ── 一级行(私聊 / 引擎 / 团队) ── */
+/* ── 一级行(私聊 / 引擎 / 团队):住在 SidebarPane 的 .t2s-scroll 里(6px 内边距),与项目组头同一条 20px 竖线 ── */
 .t2o-row {
   position: relative;
   display: flex;

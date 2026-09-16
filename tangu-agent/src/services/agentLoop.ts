@@ -615,13 +615,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (stored !== null && (typeof stored !== 'object' || Array.isArray(stored))) throw new Error('Invalid stored session Agent configuration');
     // 轨道身份先于 agentSlug 纠偏:私聊会话的 agentSlug 由 soloAgentSlug 钉死,下面的写穿会把存值也顺手纠回来。
     bindSessionFacts(agentConfig, pickSessionFacts(stored));
-    // 独立团队:成员表 / 模式缺省档 / TEAM.md 从团队定义补(run 自带的 groupAgents 优先 —— 会话里拉非成员按会话覆盖,不改团队配置)。
+    // 独立团队:成员表 / TEAM.md 从团队定义补(run 自带的 groupAgents 优先 —— 会话里拉非成员按会话覆盖,不改团队配置)。
     if (typeof agentConfig.teamSlug === 'string') {
       const team = await getTeam(agentConfig.teamSlug).catch(() => null);
       if (team) {
         if (!Array.isArray(agentConfig.groupAgents) || agentConfig.groupAgents.length < 2) agentConfig.groupAgents = team.members.map((m) => m.slug);
-        if (agentConfig.teamMode !== 'meeting' && agentConfig.teamMode !== 'collab') agentConfig.teamMode = team.mode;
-        if (!(Number(agentConfig.groupMaxRounds) > 0)) agentConfig.groupMaxRounds = team.maxRounds;
         agentConfig.cwd = team.libraryDir; // 团队会话的工作区由团队定义派生,不信 run 值(与私聊同款锁)
         agentConfig.teamDoc = team.doc.trim() ? team.doc.trim() : undefined;
         agentConfig.teamRoles = Object.fromEntries(team.members.filter((m) => m.role).map((m) => [m.slug, m.role]));
