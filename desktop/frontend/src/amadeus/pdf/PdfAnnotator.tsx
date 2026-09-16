@@ -312,6 +312,8 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
     if (!container) return
     let dead = false
     let retired = false // 本路径已被树上挪走 / 删除(或换库):写队列与卸载收尾一律不再碰盘,见下方生命周期登记
+    let tail: Promise<void> | null = null // 卸载收尾那一次写(排在写队列之后,不并进 state.chain):生命周期 flush 要等它
+    let tailFailed = false
     setStatus('loading')
 
     const eventBus = new EventBus()
@@ -382,6 +384,7 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
           fire(true)
           return
         }
+        if (retired) { fire(false); return } // 存档 / pdf-lib 那几跳 await 期间被挪走删除:不写旧路径
         await amadeus.saveVaultBytes(pdfPath, next)
         state.lastBytes = next
         written = true
@@ -1303,6 +1306,11 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
     const unregister = readOnly ? null : registerUnifiedPipe({
       path: pdfPath,
       flush: async (strict) => {
+        if (tail) { // 已卸载:收尾那一次就是最后的落盘(enqueue 此时恒短路),等它写完再放行动盘 / 换库
+          await tail
+          if (strict && tailFailed) throw new Error(`PDF changes could not be saved: ${pdfPath}`)
+          return
+        }
         commitInk()
         await enqueue()
         // docStale 时脏内容本就写不进去(见 enqueue),不拿它拦换库
@@ -1380,7 +1388,7 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
       // 尾部落盘:排在既有写队列后(串行),完成后统一销毁当前 doc——
       // destroy 必须等 save 完成,否则 saveDocument() 读到一半 doc 被销毁 → 快速关 tab 丢最后一次批注。
       // 待写桶必须在链**内**才收(在途批次的 after 回调可能把没写成的退回来;链后收才一个不漏不重)。
-      void (readOnly ? state.chain : state.chain.then(async () => {
+      tail = (readOnly ? state.chain : state.chain.then(async () => {
         const inkTail = myPending.splice(0)
         const eraseTail = pendingErase.splice(0) // 没确认落盘的擦除也要兜(removeInkAnnots 幂等,补擦无害)
         const doc = state.doc
@@ -1399,8 +1407,9 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
           if (!b) return
           if (eraseTail.length) b = await removeAnnots(b, eraseTail, INK_ONLY)
           if (inkTail.length) b = await addInk(b, inkTail)
+          if (retired) return // 收尾途中被挪走 / 删除:不写旧路径(退休发生在上面几跳 await 里也拦得住)
           await amadeus.saveVaultBytes(pdfPath, b)
-        } catch { /* ignore */ }
+        } catch { tailFailed = true }
       })).finally(() => {
         unregister?.() // 收尾写完才注销:收尾途中被挪走 / 删除,照样能被退休
         myCommitting.length = 0

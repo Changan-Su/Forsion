@@ -23,6 +23,9 @@ export function AmadeusPdfView({ leaf }: ViewProps) {
   // 若在 root 落地前就读字节 → 主进程「No vault is open」。gate 住:vault ready 前不挂 PdfAnnotator(不读字节)。
   // 库外 PDF(引用条给的绝对路径)不经 vault 通道读字节 → 不必等 vault 落地。
   const vaultReady = usePageStore((s) => !!s.vaultRoot) || isHostPath(pdfPath)
+  // 换库(本地 ⇄ 云端、换根)后同一个相对路径指的是另一份文件:阅读器按库根重挂,不然它攥着旧库的整份字节,
+  // 下一笔批注经 saveVaultBytes 写进新库的同名 PDF(Codex 评审 P1)。库外 PDF 与库无关,不跟着重挂。
+  const vaultRoot = usePageStore((s) => s.vaultRoot)
   // navigateLeaf 会把标题重置为 displayName,挂载/换文件后设回 PDF 名(AmadeusDbView 同款)。
   useEffect(() => {
     if (pdfPath) leaf.setTitle(pdfBase(pdfPath))
@@ -33,7 +36,7 @@ export function AmadeusPdfView({ leaf }: ViewProps) {
     <div className="am-app tangu-lovable amx-pane amx-pdfview" data-mode={mode} data-flat={flat ? '1' : '0'} style={{ height: '100%' }}>
       {vaultReady ? (
         <Suspense fallback={<Skeleton variant="document" />}>
-          <PdfAnnotator pdfPath={pdfPath} initialPage={page} initialQuote={quote} />
+          <PdfAnnotator key={isHostPath(pdfPath) ? 'host' : vaultRoot ?? ''} pdfPath={pdfPath} initialPage={page} initialQuote={quote} />
         </Suspense>
       ) : (
         <div style={{ padding: 24, color: 'var(--text-muted, #888)' }}>等待 Vault 打开…</div>

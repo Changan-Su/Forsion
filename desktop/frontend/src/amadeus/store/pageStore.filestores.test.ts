@@ -181,6 +181,24 @@ describe('白板:防抖窗口里的笔画 × 树上改名文件夹 / 删除', ()
   })
 })
 
+describe('笔记连带 .fd 子文件夹删除:子文件夹没删掉', () => {
+  it('不广播「.fd 整棵已删」:里面的多维表条目照常可写,标签不被关', async () => {
+    const m = await setup({ '1.md': '', 'N.md': '# N\n', 'N.fd/表.db': DB })
+    const trash = m.amadeus.trashEntry
+    m.amadeus.trashEntry = async (p: string) => {
+      if (p.endsWith('.fd')) throw new Error('EBUSY')
+      await trash(p)
+    }
+    await m.useDbStore.getState().load('N.fd/表.db', 'N.fd/表.db')
+    const seen: string[] = []
+    m.onNotePathGone((from, kind, to) => seen.push(`${from}|${kind}|${to}`))
+    await m.usePageStore.getState().deletePage('N.md')
+    expect(m.disk.has('N.fd/表.db')).toBe(true)
+    expect(seen).toEqual(['N.md|file|null'])
+    expect(m.useDbStore.getState().entries['N.fd/表.db']?.status).toBe('ok')
+  })
+})
+
 describe('路径广播跨窗口转发', () => {
   it('本窗发起的挪动/删除经主进程转给别的窗口,带上库根', async () => {
     const m = await setup({ '1.md': '', '资料/表.db': DB })

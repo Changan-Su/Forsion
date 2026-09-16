@@ -1013,15 +1013,21 @@ function makePageStore(opts: PageStoreOptions = {}) {
         return
       }
       retireUnifiedPath(pagePath)
-      if (hasFd && fd) retireUnifiedPath(fd, 'prefix')
       clearScopeNotePaths(pagePath, 'file') // v4:activeInside 那条善后分支看不见它(Codex 评审 high)
-      if (hasFd && fd) clearScopeNotePaths(fd, 'prefix')
-      if (hasFd) {
+      let fdGone = false
+      if (hasFd && fd) {
         try {
           if (trash) await trash(fd)
           else await amadeus.deleteFolder(fd)
+          fdGone = true
         } catch (e) {
           set({ error: String(e) }) // 失败 = 孤儿 .fd,树里按普通文件夹可见,可手动处理
+        }
+        // 同本页:删成功才退休 / 清路径 / 广播。.fd 没删掉时它下面的文件都还在 —— 退休了编辑器打字静默不落盘,
+        // 广播了标签被关、多维表白板的待写被丢(Codex 评审 P1)。
+        if (fdGone) {
+          retireUnifiedPath(fd, 'prefix')
+          clearScopeNotePaths(fd, 'prefix')
         }
       }
       if (trash) useUiStore.getState().notify(translate('pagestore.notify.movedToTrash'))
@@ -1034,7 +1040,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
       }
       // 放在善后**之后**广播:v3 此刻 activePage 才落到 next,标签的回落逻辑读它才是对的。
       emitNotePathGone(pagePath, 'file', null)
-      if (hasFd && fd) emitNotePathGone(fd, 'prefix', null)
+      if (fdGone && fd) emitNotePathGone(fd, 'prefix', null)
     },
 
     async movePage(pagePath, destFolder) {
