@@ -10,6 +10,7 @@
     "build": "npm run prepare-assets && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test:attachpaths": "node scripts/attachment-paths.test.cjs",
     "e2e:boot": "node scripts/mobile-boot.e2e.cjs",
     "e2e:noteopen": "node scripts/note-open.e2e.cjs",
     "e2e:editorbar": "node scripts/editor-capsule.e2e.cjs",
@@ -20,7 +21,8 @@
     "e2e:homeback": "node scripts/home-back.e2e.cjs",
     "e2e:fileback": "node scripts/file-back.e2e.cjs",
     "e2e:unitsentry": "node scripts/units-entry.e2e.cjs",
-    "e2e:update": "node scripts/update-remind.e2e.cjs"
+    "e2e:update": "node scripts/update-remind.e2e.cjs",
+    "e2e:attachsave": "node scripts/attachment-save.e2e.cjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.7",

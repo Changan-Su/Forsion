@@ -20,6 +20,8 @@ export function attachmentPaths(
     : opts.mode === 'vault' ? clean(opts.folder)
     : clean(`${pageDirRel}/attachments`)
   const fileVaultRel = destDirRel ? `${destDirRel}/${base}` : base
-  const pageRel = path.relative(pageDirRel || '.', fileVaultRel)
+  // 两端补 '/' 成绝对路径再求相对:path-browserify 遇相对路径会回落 process.cwd(),WebView 里没有 process
+  // (本地库 saveAttachment 曾因此一律抛)。库内路径下结果与 desktop 的 node 版逐格一致(scripts/attachment-paths.test.cjs)。
+  const pageRel = path.relative(`/${pageDirRel}`, `/${fileVaultRel}`)
   return { destDirRel, fileVaultRel, pageRel }
 }
