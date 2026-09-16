@@ -249,6 +249,10 @@
 }
 
 /* ── 轨道状态条(OrbitBar,方案 §6.3):贴主视图纸卡顶部,层 3,不描边、底 overlay-light、圆角随卡 ── */
+/* .t2-chat-body 是横向 flex(正文 + 悬浮层并排):状态条不能当它的普通子项(会变成正文左侧的一根「列」,竖直居中),
+ * 必须绝对定位钉在纸卡顶边;正文顶部让出条高,首条消息别被盖住。 */
+.t2-chat-body > .t2o-bar { position: absolute; top: 0; left: 0; right: 0; z-index: 3; }
+.t2-chat-body:has(> .t2o-bar) .t2-stream { padding-top: 36px; }
 .t2o-bar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   min-height: 32px; padding: 4px 10px;
