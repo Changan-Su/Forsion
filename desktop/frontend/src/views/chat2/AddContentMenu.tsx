@@ -7,7 +7,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ChevronDown, ChevronRight, FileText, MessageSquarePlus, MessagesSquare,
-  PanelsTopLeft, Paperclip, Plus, Search,
+  PanelsTopLeft, Paperclip, Plus, Search, UserPlus,
 } from 'lucide-react'
 import { allViews, getView, label, nestedPanelPlacement, UI_ZOOM_EVENT, useEdgeNudge, useWorkspace, zoomOf } from '@lcl/engine'
 import { registerMessages, useI18n } from '../../i18n'
@@ -19,6 +19,7 @@ import type { ChatRef } from './chatDragRef'
 registerMessages({
   'addMenu.label': { zh: '添加', en: 'Add' },
   'addMenu.newChat': { zh: '新对话', en: 'New chat' },
+  'addMenu.agent': { zh: '添加 Agent', en: 'Add agent' },
   'addMenu.files': { zh: '添加文件或文件夹', en: 'Add files or folders' },
   'addMenu.conversation': { zh: '添加对话', en: 'Add conversation' },
   'addMenu.view': { zh: '添加正在使用的 View', en: 'Add an active View' },
@@ -59,11 +60,12 @@ export const AddContentMenu: React.FC<{
   canUsePathPicker: boolean
   onOpenChange: (open: boolean) => void
   onNewSession?: () => void
+  onAddAgent?: () => void
   onPickPaths: (items: Array<{ path: string; isDirectory: boolean }>) => void | Promise<void>
   onPickFiles: (files: FileList | null) => void | Promise<void>
   onAddReference: (ref: AddContentReference) => void
 }> = ({
-  open, disabled, activeSessionId, canUsePathPicker, onOpenChange, onNewSession,
+  open, disabled, activeSessionId, canUsePathPicker, onOpenChange, onNewSession, onAddAgent,
   onPickPaths, onPickFiles, onAddReference,
 }) => {
   const { t } = useI18n()
@@ -248,6 +250,9 @@ export const AddContentMenu: React.FC<{
             <MessageSquarePlus size={14} />
             <span className="grow">{t('addMenu.newChat')}</span>
           </button>
+          {onAddAgent && <button className="menu-item" data-add-agent onClick={() => { onAddAgent(); onOpenChange(false) }}>
+            <UserPlus size={14} /><span className="grow">{t('addMenu.agent')}</span>
+          </button>}
           <button className="menu-item" onClick={() => { void choosePaths() }}>
             <Paperclip size={14} />
             <span className="grow">{t('addMenu.files')}</span>

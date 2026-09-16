@@ -355,18 +355,13 @@ async function run(app, win) {
     orbitRows.texts.length > 0 && !orbitRows.soloLeaked, JSON.stringify(orbitRows.texts))
   check('3c 团队模式的项目会话二级行前导图标换成 Users(SidebarPane.rowIcon)', orbitRows.teamHasUsers, JSON.stringify(orbitRows))
 
-  // ── 3d/3e 轨道状态条(OrbitBar,§6.3 / §5.1):打开团队模式会话 → 团队条三枚芯片;切到私聊会话 → 私聊条两枚芯片 + 私聊行高亮 ──
   await win.locator('.t2o .t2s-srow', { hasText: '团队模式会话' }).first().click()
-  const teamBar = await win.waitForSelector('.t2o-bar[data-orbit="teammode"]', { timeout: 15_000 }).catch(() => null)
-  const teamBarSt = teamBar ? await win.evaluate(`(() => { const b = document.querySelector('.t2o-bar[data-orbit="teammode"]'); return { h: b.getBoundingClientRect().height, chips: Array.from(b.querySelectorAll('.t2o-bar-chip')).map((c) => c.textContent.trim()), title: (b.querySelector('.t2o-bar-title') || {}).textContent } })()`) : null
-  check('3d 团队模式会话打开后主区顶部有状态条:团队模式 · 拉人 / 退出团队模式 两枚芯片(09-16 起没有会议⇄协作切换),高 ≥32',
-    !!teamBarSt && teamBarSt.chips.length === 2 && teamBarSt.h >= 31.5, JSON.stringify(teamBarSt))
-  await win.screenshot({ path: shots.bar }).catch(() => {})
+  await sleep(500)
+  check('3d 团队会话顶部状态条已移除', await win.locator('.t2o-bar').count() === 0, '')
+  await win.screenshot({ path: shots.bar })
   await win.locator('.t2o .t2o-row', { hasText: 'Xyra' }).first().click()
-  const soloBar = await win.waitForSelector('.t2o-bar[data-orbit="solo"]', { timeout: 15_000 }).catch(() => null)
-  const soloSt = soloBar ? await win.evaluate(`(() => { const b = document.querySelector('.t2o-bar[data-orbit="solo"]'); const row = Array.from(document.querySelectorAll('.t2o .t2o-row')).find((r) => (r.textContent || '').includes('Xyra')); return { chips: Array.from(b.querySelectorAll('.t2o-bar-chip')).map((c) => c.textContent.trim()), rowActive: !!(row && row.classList.contains('active')) } })()`) : null
-  check('3e 私聊会话打开后:私聊状态条(拉起群聊 / 新会话先总结记忆)+ 侧栏对应私聊行高亮(高亮源 = configBySession 的 soloAgentSlug)',
-    !!soloSt && soloSt.chips.length === 2 && soloSt.rowActive, JSON.stringify(soloSt))
+  await sleep(500)
+  check('3e 私聊行高亮且顶部无重复状态条', await win.locator('.t2o .t2o-row.active', { hasText: 'Xyra' }).count() === 1 && await win.locator('.t2o-bar').count() === 0, '')
   await win.locator('.t2o .t2s-srow', { hasText: '项目会话一' }).first().click().catch(() => {})
   await sleep(600)
 
@@ -387,21 +382,26 @@ async function run(app, win) {
   await sleep(350)
   await (await leftPane(win)).screenshot({ path: shots.light })
 
-  // ── 5 胶囊 Chat ⇄ Work:Agent 轨道行整片隐藏 / 回来(§3.5)────────────────
-  check('5pre 顶部行有 Chat/Work 胶囊(§3.1)', st.hasModeBtn, JSON.stringify({ modeActive: st.modeActive }))
-  if (st.hasModeBtn) {
-    await win.locator('.t2sw [data-mode="chat"]').first().click()
-    await sleep(900)
-    const chat = await win.evaluate(PROBE)
-    check('5 切 Chat → Agent 轨道一级行全隐(count 0;Chat 恒 sandbox,与私聊/团队互斥)',
-      chat.rowCount === 0 && st.rowCount > 0,
-      JSON.stringify({ before: st.rowCount, after: chat.rowCount, modeActive: chat.modeActive, rows: chat.rowGeom.map((r) => r.text) }))
-    await win.locator('.t2sw [data-mode="work"]').first().click()
-    await sleep(900)
-    const back = await win.evaluate(PROBE)
-    check('5a 切回 Work → 一级行原样回来(数量与切之前一致)',
-      back.rowCount === st.rowCount && back.rowCount > 0, JSON.stringify({ before: st.rowCount, after: back.rowCount }))
-  }
+  check('5 顶部不再显示 Chat/Work,筛选胶囊在 New Session 下一行', !st.hasModeBtn && await win.locator('.t2o-filters [role="tab"]').count() === 4, '')
+  const alignment = await win.evaluate(() => {
+    const q = (s) => document.querySelector(s).getBoundingClientRect()
+    return { title: q('.t2o-head .t2s-special-title').left, row: q('.t2o-row .t2o-name').left,
+      lead: q('.t2o-head .t2s-special-ic').left, rowLead: q('.t2o-row .t2o-lead').left,
+      headBottom: q('.t2o-head').bottom, filterTop: q('.t2o-filters').top }
+  })
+  check('5a New Session 图标槽与文字均对齐一级条目', near(alignment.title, alignment.row, .6) && near(alignment.lead, alignment.rowLead, .6) && alignment.filterTop >= alignment.headBottom - 1, JSON.stringify(alignment))
+  await win.locator('[data-filter="agent"]').first().click()
+  const agent = await win.evaluate(PROBE)
+  check('5b Agent 只显示代理 / 引擎,不显示项目组', agent.rowCount === AGENTS.length && agent.folderRowH.length === 0, String(agent.rowCount))
+  await win.locator('[data-filter="team"]').first().click()
+  const team = await win.evaluate(PROBE)
+  check('5c Team 只显示团队', team.rowCount === 1 && team.folderRowH.length === 0, String(team.rowCount))
+  await win.locator('[data-filter="project"]').first().click()
+  const project = await win.evaluate(PROBE)
+  check('5d Project 只显示项目组', project.rowCount === 0 && project.folderRowH.length > 0, String(project.folderRowH.length))
+  await win.locator('[data-filter="all"]').first().click()
+  const all = await win.evaluate(PROBE)
+  check('5e All 恢复混排列表', all.rowCount === st.rowCount && all.folderRowH.length === st.folderRowH.length, '')
 
   // ── 8b 暗色截图 ───────────────────────────────────────────────────────────
   // 明暗真源 = forsion_theme_pref(themeStore persistPref);落盘后 reload,装载器才会重算 token
@@ -483,7 +483,9 @@ async function main() {
 
   const fixtures = sessionFixtures(projectDir)
   SOLO_OPEN_RESPONSE = { session: fixtures.find((x) => x.id === 'orb-s1'), created: false }
-  const stub = await startStubEngine({ agents: AGENTS, sessions: fixtures })
+  const stub = await startStubEngine({ agents: AGENTS, sessions: fixtures, handle: ({ path: route }) => {
+    if (route === '/agent/teams') return { teams: [{ slug: 'ui-team', name: 'UI Team', members: [{ slug: 'xyra' }, { slug: 'orbit-one' }] }] }
+  } })
   const front = await startFront(stub.url)
   // 未打包时主进程用 `<dir>-dev`,两份都种;vault 也预置,免得停在笔记库引导。
   for (const dir of [userData, `${userData}-dev`]) {

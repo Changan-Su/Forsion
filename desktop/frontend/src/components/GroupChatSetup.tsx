@@ -39,10 +39,11 @@ export const GroupChatSetup: React.FC<{
   initialAgents: string[]
   initialTempAgents?: NormalAgentDef[]
   active: boolean
+  hideDisable?: boolean
   onConfirm: (r: GroupSetupResult) => void
   onDisable: () => void
   onClose: () => void
-}> = ({ agents, models, initialAgents, initialTempAgents, active, onConfirm, onDisable, onClose }) => {
+}> = ({ agents, models, initialAgents, initialTempAgents, active, hideDisable, onConfirm, onDisable, onClose }) => {
   const { t } = useI18n()
   const savedSlugs = useMemo(() => new Set(agents.map((a) => a.slug)), [agents])
   const [selectedSaved, setSelectedSaved] = useState<string[]>(() => initialAgents.filter((s) => savedSlugs.has(s)))
@@ -206,7 +207,7 @@ export const GroupChatSetup: React.FC<{
             <div style={{ fontSize: 12, color: 'var(--text-dim)', margin: '6px 0 14px' }}>{t('group.setup.selfPacedHint')}</div>
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              {active && <button className="btn sm" onClick={() => { onDisable(); onClose() }}>{t('group.setup.disable')}</button>}
+              {active && !hideDisable && <button className="btn sm" onClick={() => { onDisable(); onClose() }}>{t('group.setup.disable')}</button>}
               <button className="btn primary sm" onClick={confirm} disabled={!canStart}>{active ? t('group.setup.update') : t('group.setup.start')}</button>
             </div>
             {!canStart && <div style={{ fontSize: 11, color: 'var(--danger)', textAlign: 'right', marginTop: 6 }}>{t('group.setup.needTwo')}</div>}

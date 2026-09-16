@@ -670,6 +670,14 @@ export const getSpecialConfig = (cfg: TanguDesktopConfig) =>
 export const saveSpecialConfig = (cfg: TanguDesktopConfig, patch: Partial<SpecialAgentsConfig>) =>
   request<{ config: SpecialAgentsConfig }>(cfg, '/agent/special/config', { method: 'POST', body: JSON.stringify(patch) }).then((r) => r.config)
 
+export interface SessionHistorianStatus {
+  running: boolean
+  activity: HistorianActivityItem[]
+  records: Array<{ id: string; content: string; timestamp: number }>
+}
+export const getSessionHistorian = (cfg: TanguDesktopConfig, sessionId: string, detail = false) =>
+  request<SessionHistorianStatus>(cfg, `/agent/special/historian/activity?limit=8&sessionId=${encodeURIComponent(sessionId)}${detail ? '&detail=1' : ''}`)
+
 export const getHistorianActivity = (cfg: TanguDesktopConfig, limit = 50) =>
   request<{ activity: HistorianActivityItem[] }>(cfg, `/agent/special/historian/activity?limit=${limit}`).then((r) => r.activity)
 

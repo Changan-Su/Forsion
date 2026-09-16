@@ -1,16 +1,16 @@
 /** 主区聊天 leaf：followActive 跟随侧栏；分屏 leaf 用 sessionId 固定会话。 */
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
 import { ArrowDown, Folder, MessageSquarePlus, Quote } from 'lucide-react'
 import type { AgentConfig, UiMessage } from '../types'
 import { Composer2 } from './chat2/Composer2'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
-import { OrbitBar } from './chat2/OrbitBar'
 import { ProjectSelector } from '../components/ProjectSelector'
 import { WorkspaceFilePreview } from '../components/WorkspaceFilePreview'
 import { targetFor } from '../components/InlineFiles'
 import { openWsFile } from './wsFileNav'
-import { openNewChat } from '../sessionNav'
+import { openNewChat, openSession, rotateSolo } from '../sessionNav'
+import { TeamEditor } from '../components/TeamEditor'
 import { postMuseFeedback, saveAgentScheduleEntry } from '../services/backendService'
 import { runTaskCard } from './chat2/taskLanding'
 import { resolveDeskPath } from '../stores/deskPlan'
@@ -24,7 +24,9 @@ import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
 import { useWorkspace, useSpaceStore, UI_MODE, Skeleton } from '@lcl/engine'
 import { AgentDesk, DeskCard } from './chat2/AgentDesk'
-import { TeamDesk, TeamDeskCard } from './chat2/TeamDesk'
+import { HistorianStatus } from './chat2/HistorianStatus'
+import { TeamStatus } from './chat2/TeamDesk'
+import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
 import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
 import type { ViewProps } from '@lcl/engine/types'
@@ -47,6 +49,7 @@ const EMPTY_STRS: string[] = []
 export function ChatView({ leaf, params }: ViewProps) {
   const { t } = useI18n()
   const showWaitDetails = useChatWaitDetailsEnabled()
+  const [raiseTeam, setRaiseTeam] = useState(false)
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const chatAreaRef = useRef<HTMLDivElement>(null)
   const streamingNodeRef = useRef<HTMLDivElement | null>(null)
@@ -66,6 +69,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     activeSession: state.sessions.find((x) => x.id === activeId) || state.archivedSessions.find((x) => x.id === activeId) || null,
     activeMessages: (activeId && state.messagesBySession[activeId]) || EMPTY_MESSAGES,
     running: !!(activeId && state.runningBySession[activeId]),
+    historianEnabled: state.specialEnabled.historian,
     execConfig: (activeId && state.configBySession[activeId]) || EMPTY_CONFIG,
     activeUsage: (activeId && state.usageBySession[activeId]) || EMPTY_USAGE,
     activeCtxInfo: (activeId && state.ctxInfoBySession[activeId]) || null,
@@ -281,50 +285,61 @@ export function ChatView({ leaf, params }: ViewProps) {
     setShowJump(false)
   }, [])
 
-  // 用户滚离底部后不抢滚动；重新到底即恢复跟随。
+  // Follow actual content height, including complete team remarks and their presentation animation.
+  // Only an upward user gesture releases the anchor; a layout-induced scroll event cannot release it.
+  useLayoutEffect(() => {
+    stickToBottom.current = !s.jumpTarget
+    pendingCountRef.current = 0
+  }, [activeId])
   useEffect(() => {
     const el = chatScrollRef.current
-    if (!el) return
+    const content = el?.querySelector('.t2-stream-inner')
+    if (!el || !content) return
+    let raf = 0
+    let previousTop = el.scrollTop
+    let pointerDown = false
     const update = (): void => {
-      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
-      stickToBottom.current = atBottom
-      setShowJump(!atBottom)
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+      if (atBottom) stickToBottom.current = true
+      else if (pointerDown && el.scrollTop < previousTop) stickToBottom.current = false
+      previousTop = el.scrollTop
+      setShowJump(!atBottom && !stickToBottom.current)
     }
-    const releaseIfUp = (): void => {
-      if (el.scrollHeight - el.scrollTop - el.clientHeight >= 80) {
-        stickToBottom.current = false
-        setShowJump(true)
-      }
+    const release = (): void => { stickToBottom.current = false; setShowJump(true) }
+    const onWheel = (e: WheelEvent): void => { if (e.deltaY < 0) release() }
+    let touchY = 0
+    const onTouchStart = (e: TouchEvent): void => { touchY = e.touches[0]?.clientY || 0 }
+    const onTouchMove = (e: TouchEvent): void => { if ((e.touches[0]?.clientY || 0) > touchY) release() }
+    const down = (): void => { pointerDown = true }
+    const up = (): void => { pointerDown = false }
+    const onKey = (e: KeyboardEvent): void => { if (['ArrowUp', 'PageUp', 'Home'].includes(e.key) && !(e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement)) release() }
+    const follow = (): void => {
+      if (stickToBottom.current) { el.scrollTop = el.scrollHeight; previousTop = el.scrollTop; setShowJump(false) }
     }
-    const onWheel = (e: WheelEvent): void => { if (e.deltaY < 0) releaseIfUp() }
+    const ro = new ResizeObserver(() => { cancelAnimationFrame(raf); raf = requestAnimationFrame(follow) })
+    ro.observe(content)
+    ro.observe(el)
+    follow()
     el.addEventListener('scroll', update, { passive: true })
     el.addEventListener('wheel', onWheel, { passive: true })
-    el.addEventListener('touchmove', releaseIfUp, { passive: true })
+    el.addEventListener('touchstart', onTouchStart, { passive: true })
+    el.addEventListener('touchmove', onTouchMove, { passive: true })
+    el.addEventListener('pointerdown', down)
+    el.addEventListener('keydown', onKey)
+    window.addEventListener('pointerup', up)
     return () => {
-      el.removeEventListener('scroll', update)
-      el.removeEventListener('wheel', onWheel)
-      el.removeEventListener('touchmove', releaseIfUp)
+      ro.disconnect(); cancelAnimationFrame(raf)
+      el.removeEventListener('scroll', update); el.removeEventListener('wheel', onWheel)
+      el.removeEventListener('touchstart', onTouchStart); el.removeEventListener('touchmove', onTouchMove)
+      el.removeEventListener('pointerdown', down); el.removeEventListener('keydown', onKey)
+      window.removeEventListener('pointerup', up)
     }
   }, [activeId])
 
-  // 流式消息实际变高时吸底，避免逐 token effect 与 Markdown 布局互相追逐。
-  useEffect(() => {
-    if (!streamingId) return
-    const node = streamingNodeRef.current
-    const el = chatScrollRef.current
-    if (!node || !el) return
-    const follow = (): void => { if (stickToBottom.current) el.scrollTop = el.scrollHeight }
-    follow()
-    const ro = new ResizeObserver(() => requestAnimationFrame(follow))
-    ro.observe(node)
-    return () => ro.disconnect()
-  }, [streamingId, activeId])
-
-  // 非流式插入新消息时做一次吸底（Compact 进度条进出场同样改高度，一并跟）。
   const compactingOn = s.compacting !== undefined
-  useEffect(() => {
-    if (!streamingId && stickToBottom.current) scrollToBottom()
-  }, [activeMessages, streamingId, scrollToBottom, compactingOn])
+  useLayoutEffect(() => {
+    if (stickToBottom.current && !s.jumpTarget) scrollToBottom()
+  }, [activeMessages, historyLoading, scrollToBottom, compactingOn])
 
   // 审批/询问属于必须看到的操作，首次出现时强制定位到底部。
   useEffect(() => {
@@ -383,8 +398,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   const hasMessages = activeMessages.length > 0
   // Agent Desk:桌面端默认开(移动端没有);用户可在设置→高级关掉,窄容器由 CSS 容器查询兜底隐藏。
   const deskEnabled = !studioChat && UI_MODE !== 'mobile' && !!s.desktopConfig?.agentDeskEnabled
-  // Team Desk(方案 §6.4):团队会话(独立团队 / 项目轨道的团队模式)里替换 Agent Desk,恒开(拍板 ⑲),不受 agentDeskEnabled;边界同 Agent Desk(桌面、非 Studio)。
-  const teamDesk = !studioChat && UI_MODE !== 'mobile' && (!!mvCfg.teamSlug || (!!mvCfg.groupChat && (Array.isArray(mvCfg.groupAgents) ? mvCfg.groupAgents.length : 0) >= 2))
+  // 团队成员列表嵌入 Pin Summary 的运行状态,Agent Desk 保持独立。
+  const teamDesk = !studioChat && UI_MODE !== 'mobile' && !!mvCfg.groupChat && (mvCfg.groupAgents?.length || 0) >= 2
 
   // 工作区(会话/笔记/文件)拖进来即引用:**整个聊天区**都是落区,不用瞄准输入框。
   // 只吃 chatDragRef 的两个 MIME —— OS 文件仍归输入框卡片那套(附件/路径插入),两条路不打架。
@@ -415,11 +430,20 @@ export function ChatView({ leaf, params }: ViewProps) {
       onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setRefDrop(false) }}
       onDrop={onRefDrop}
     >
+      {raiseTeam && mvCfg.soloAgentSlug && activeId && <TeamEditor
+        agents={s.agentDefs.filter((a) => a.createdBy !== 'system' && !!a.libraryDir)} team={null} initialMembers={[mvCfg.soloAgentSlug]}
+        onClose={() => setRaiseTeam(false)} onSaved={(saved) => {
+          setRaiseTeam(false)
+          const parentId = activeId
+          void useApp.getState().ensureTeamSession(saved.slug).then((session) => {
+            if (!session) return
+            useApp.getState().setSeedOnce(session.id, parentId)
+            openSession(session.id, { newTab: true })
+          })
+        }} />}
       <div className="t2-chat-col">
       <ErrorBoundary key={activeId || 'none'}>
         <div className="t2-chat-body" ref={chatAreaRef}>
-          {/* 轨道状态条(方案 §5.1 / §6.3):私聊 = 工作区提示 + 新会话 + 拉起群聊;团队模式 / 独立团队 = 成员 + 拉人 / 退出 / 会议⇄协作。非轨道会话不渲染。 */}
-          {activeId && !params.miniSurface && <OrbitBar sessionId={activeId} cfg={mvCfg} running={running} />}
           {hasMessages && <FloatingToc scrollContainerRef={chatScrollRef} scanTrigger={activeMessages.length} />}
           <div className="t2-stream" ref={registerChatScroll}>
             <div className="t2-stream-inner">
@@ -429,6 +453,8 @@ export function ChatView({ leaf, params }: ViewProps) {
               historyLoading ? <Skeleton variant="chat" /> : null
             ) : (
               activeMessages.map((m) => {
+                if (m.teamSummary) return null
+                if (m.work && !m.content && !m.error && !m.approvals?.length && !m.inquiries?.length) return null
                 if (m.role === 'user' && m.id === editingId) {
                   return (
                     <div key={m.id} className="t2-userwrap">
@@ -482,6 +508,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                 )
               })
             )}
+            {activeMessages.filter((m) => m.teamSummary).slice(-1).map((m) => <TeamSummary key={m.id} message={m} />)}
             {running && activeId && s.isGroupVoting && <div className="t2-sys"><span className="t2-dot" /> {t('group.voting.inProgress')}</div>}
             {running && activeId && s.llmRetry && (
               <div className="t2-sys t2-retry" title={s.llmRetry.error}>
@@ -618,8 +645,15 @@ export function ChatView({ leaf, params }: ViewProps) {
           groupChat={mvCfg.groupChat}
           groupAgents={mvCfg.groupAgents}
           groupTempAgents={mvCfg.groupTempAgents}
-          // 轨道身份锁住的会话(私聊 / 独立团队)不给旧群聊配置器:私聊不能进团队模式,独立团队不能「关闭群聊」;拉人走 OrbitBar。
-          onGroupChange={mvCfg.soloAgentSlug || mvCfg.soloEngineId || mvCfg.teamSlug ? undefined : activeId ? (patch) => s.setSessionGroup(patch, activeId) : (patch) => s.setNewChatCfg((c) => ({ ...c, ...patch }))}
+          // Solo agents create a separate team from the add menu; project and team sessions edit their roster in place.
+          onGroupChange={mvCfg.soloAgentSlug || mvCfg.soloEngineId ? undefined : activeId ? (patch) => s.setSessionGroup(patch, activeId) : (patch) => s.setNewChatCfg((c) => ({ ...c, ...patch }))}
+          onAddAgent={mvCfg.soloAgentSlug ? () => setRaiseTeam(true) : undefined}
+          onNormalWork={() => {
+            const patch: Partial<AgentConfig> = { planMode: false, groupChat: false, approvalMode: 'auto-edit' }
+            if (mvCfg.teamSlug && !mvCfg.agentSlug) patch.agentSlug = mvCfg.groupAgents?.[0] || s.defaultAgentSlug
+            if (activeId) s.setExecConfig(patch, activeId)
+            else { s.setSessionMode('work'); s.setNewChatCfg((cfg) => ({ ...cfg, ...patch })) }
+          }}
           skills={s.skillsList}
           agents={s.agentDefs}
           // 拍板 ⑪:对话中可切 Agent,入口先放模式切换菜单;群聊态 / 私聊(钉死)/ 引擎会话不给。
@@ -627,7 +661,11 @@ export function ChatView({ leaf, params }: ViewProps) {
           currentAgentSlug={mvCfg.agentSlug || s.defaultAgentSlug}
           // 私聊(Agent 轨道):@ 候选换成本机项目 → 派遣(方案 §5.4);只有带路径的本地工作区(派遣工具 host-only)。
           mentionProjects={mvCfg.soloAgentSlug ? s.workspaces().filter((w) => w.kind === 'local' && !!w.path).map((w) => ({ name: w.name, path: w.path! })) : undefined}
-          onNewSession={() => void s.newSession()}
+          onNewSession={() => {
+            if (mvCfg.soloAgentSlug) { if (!running) void rotateSolo('agent', mvCfg.soloAgentSlug) }
+            else if (mvCfg.soloEngineId) { if (!running) void rotateSolo('engine', mvCfg.soloEngineId) }
+            else void s.newSession()
+          }}
           onBranch={activeId ? () => void s.branchFromMessage(undefined, activeId) : undefined}
           onOpenSettings={() => s.openSettings('skills')}
           onExecConfigChange={(patch) => s.setExecConfig(patch, activeId)}
@@ -668,6 +706,10 @@ export function ChatView({ leaf, params }: ViewProps) {
         * (卡片右侧留 --tsum-gut 让 thumb 落位)。够宽才显示(容器查询),见 chat2.css .t2-rail */}
       <div className="t2-rail">
         <TaskSummary
+          teamStatus={activeId && (teamDesk || s.historianEnabled) ? <>
+            {teamDesk && <TeamStatus sessionId={activeId} />}
+            {s.historianEnabled && <HistorianStatus key={activeId} sessionId={activeId} />}
+          </> : undefined}
           messages={activeMessages}
           running={running}
           cwd={mvCfg.cwd}
@@ -701,10 +743,10 @@ export function ChatView({ leaf, params }: ViewProps) {
             openWsFile(targetFor(f, s.cfg, activeId || '', mvCfg.execMode))
           }}
         />
-        {teamDesk && activeId ? <TeamDeskCard sessionId={activeId} /> : deskEnabled && activeId ? <DeskCard sessionId={activeId} /> : null}
+        {deskEnabled && activeId ? <DeskCard sessionId={activeId} /> : null}
       </div>
       </div>
-      {teamDesk && activeId ? <TeamDesk sessionId={activeId} /> : deskEnabled && activeId ? <AgentDesk sessionId={activeId} /> : null}
+      {deskEnabled && activeId ? <AgentDesk sessionId={activeId} /> : null}
     </div>
   )
 }

@@ -1,3 +1,4 @@
+import { useApp } from '../stores/appStore'
 /**
  * 设置 → 后台智能体（Special Agents：Historian / Muse）。默认关闭、开启需选模型。
  * 改动即存（POST /agent/special/config 合并）。仅本地后端可用。
@@ -50,7 +51,7 @@ export const SpecialAgentsTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg })
     if (!conf) return
     const next = { ...conf, historian: { ...conf.historian, ...patch } }
     setConf(next)
-    void saveSpecialConfig(cfg, { historian: next.historian }).then(setConf).catch((e) => setMsg(t('settings.special.saveFail', { e: e?.message || e })))
+    void saveSpecialConfig(cfg, { historian: next.historian }).then((saved) => { setConf(saved); void useApp.getState().refreshSpecialEnabled(cfg) }).catch((e) => setMsg(t('settings.special.saveFail', { e: e?.message || e })))
   }
   const saveMuse = (patch: Partial<MuseConfig>): void => {
     if (!conf) return

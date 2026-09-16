@@ -6,7 +6,7 @@
  * 首轮(roundN=1)在 assist 配置下仍走独立模式(写 LOG、不起讨论)。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configureTangu } from '../src/seams/runtime.js';
@@ -38,6 +38,8 @@ beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'tangu-hist-assist-'));
   process.env.TANGU_HOME = home;
   appendedLogs = [];
+  mkdirSync(join(home, 'agents'), { recursive: true });
+  writeFileSync(join(home, 'agents', 'xyra.md'), '---\nname: Xyra\ncreated_by: user\n---\nAssistant.');
 
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: USER });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
@@ -118,7 +120,7 @@ describe('Historian assist 模式', () => {
     // branch 出的讨论会话:kind='discussion',parent_session_id 指回主会话(Background Session 统一链接),继承了消息
     const disc = await query<any[]>(`SELECT id, title, kind, parent_session_id FROM chat_sessions WHERE kind = 'discussion'`);
     expect(disc.length).toBe(1);
-    expect(String(disc[0].title)).toContain('记忆维护');
+    expect(String(disc[0].title)).toContain('Historian');
     expect(disc[0].parent_session_id).toBe('S');
     const copied = await query<any[]>(`SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ?`, [disc[0].id]);
     expect(Number(copied[0].n)).toBe(2);
@@ -148,13 +150,30 @@ describe('Historian assist 模式', () => {
 
     // 子聊天面板的持久事实来源(GET /agent/sessions/:id/background 同款查询):按父链接列出 + 最新 run
     const bg = await query<any[]>(
-      `SELECT id, kind FROM chat_sessions WHERE parent_session_id = 'S' AND user_id = ? AND kind != 'user' ORDER BY created_at DESC`,
+      `SELECT id, kind FROM chat_sessions WHERE parent_session_id = 'S' AND user_id = ? AND kind = 'discussion' ORDER BY created_at DESC`,
       [USER],
     );
     expect(bg.length).toBe(1);
     const bgRun = await query<any[]>(`SELECT id, status FROM agent_runs WHERE session_id = ? ORDER BY created_at DESC LIMIT 1`, [bg[0].id]);
     expect(bgRun[0].id).toBe(runs[0].id);
     expect(bgRun[0].status).toBe('queued'); // enqueueRun 被 mock,run 停在落库初态
+  });
+
+  it('later assist reviews reuse the discussion and stable Historian member', async () => {
+    writeConfig('assist', 1);
+    await seedSession('reuse'); await seedMessages('reuse'); await seedDoneRuns('reuse', 2);
+    await onUserRunDone('reuse', USER);
+    const first = await query<any[]>("SELECT id FROM chat_sessions WHERE parent_session_id = 'reuse' AND kind = 'discussion'");
+    await query("INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES ('new-input', 'reuse', 'user', ?, ?)", ['new substantive progress '.repeat(20), Date.now() + 1000]);
+    await query("UPDATE special_agent_log SET created_at = '2000-01-01 00:00:00' WHERE session_ref = 'reuse'");
+    await onUserRunDone('reuse', USER);
+    const second = await query<any[]>("SELECT id FROM chat_sessions WHERE parent_session_id = 'reuse' AND kind = 'discussion'");
+    expect(second).toEqual(first);
+    const runs = await query<any[]>('SELECT input FROM agent_runs WHERE session_id = ?', [first[0].id]);
+    expect(runs).toHaveLength(2);
+    const inputs = runs.map((r) => typeof r.input === 'string' ? JSON.parse(r.input) : r.input);
+    expect(inputs[0].agentConfig.groupAgents).toEqual(inputs[1].agentConfig.groupAgents);
+    expect(inputs[1].message).toContain('new substantive progress');
   });
 
   it('未到期轮什么都不做(周期合一:标题+记忆同一节奏,每 everyRounds 轮)', async () => {

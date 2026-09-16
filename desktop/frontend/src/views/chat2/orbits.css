@@ -292,3 +292,23 @@
 .t2-team-done { font-size: 11.5px; margin-top: 4px; color: var(--accent-ink); opacity: 0.85; }
 @keyframes t2o-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 @media (prefers-reduced-motion: reduce) { .t2o-desk-dot, .t2o-bar-avatar.is-working { animation: none; } }
+
+/* Team status inside Pin Summary; independent from Agent Desk presentation. */
+.t2o-team-status { margin-top: 8px; }
+.t2o-team-status .t2o-desk-row { width: 100%; text-align: left; border: 0; background: transparent; padding: 5px 0; cursor: pointer; }
+.t2o-team-status .t2o-desk-row:hover { color: var(--accent-ink); }
+.t2o-team-status .t2o-desk-work { max-height: 280px; padding: 8px 0; }
+.t2-team-summary { margin: 16px 0; padding: 12px 16px; border-radius: 12px; background: var(--overlay-light, rgba(127,127,127,.06)); color: var(--text-muted); font-size: 12px; }
+.t2-team-summary > summary { cursor: pointer; font-weight: 600; }
+.t2-team-summary .md-body { margin-top: 12px; color: var(--text); }
+
+/* Header uses the same 30px leading slot and 8px gap as first-level orbit rows. */
+.t2o-head .t2s-special { padding-inline: 14px 6px; gap: 8px; min-height: 40px; }
+.t2o-head .t2s-special-ic { width: 30px; height: 30px; align-items: center; justify-content: center; }
+.t2o-filters.t2s-vaultseg { width: auto; height: 28px; margin: 0 20px 8px; flex-shrink: 0; }
+.t2o-filters.t2s-vaultseg button { flex: 1; min-width: 0; padding-inline: 3px; font-size: 11.5px; }
+.t2o-filters .t2s-vaultseg-thumb { width: calc((100% - 4px) / 4); }
+
+.t2o-historian-event { margin-block: 6px; color: var(--text-muted); font-size: 11.5px; overflow-wrap: anywhere; }
+.historian-working { animation: t2o-pulse 1.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .historian-working { animation: none; } }

@@ -8,8 +8,8 @@
  * 作为 `extraRows` 交给 SidebarPane 与项目组按 `at` 合成一个列表(orderBy='activity');从未有过会话的沉底,同时间戳保持名册序。
  *
  * 三源分别取数、**不给 `WorkspaceDescriptor.kind` 加成员**(§D15:20+ 消费点全无穷举检查,加成员 tsc 零报错
- * 而行为异构漂移)。胶囊(Chat/Work)与本地/云端侧过滤只喂 project 源:Chat 恒 sandbox + 抹 agentSlug,
- * 与 Agent 轨道互斥;云端侧是 host-only,故 Agent 轨道行在这两种情况下整批不列(§3.5)。
+ * 而行为异构漂移)。工作区固定 Work,胶囊只筛选 All / Agent / Team / Project;Agent 轨道为 host-only,
+ * 云端侧不列 Agent 轨道行(§3.5)。
  *
  * 样式全在 `chat2/orbits.css`(`.t2o-` 前缀,不改 `sidebar2.css` 本体);几何见该文件头注。
  */
@@ -26,13 +26,17 @@ import { AvatarStack } from '../components/AvatarStack'
 import { TeamEditor } from '../components/TeamEditor'
 import * as api from '../services/backendService'
 import { usePageStore } from '../amadeus/store/pageStore'
-import { currentPlatform } from '../services/agentRunService'
-import { effectiveSessionMode, sessionsInMode, workspacesInMode } from './sessionMode'
+import { sessionsInMode, workspacesInMode } from './sessionMode'
 import { registerMessages, useI18n } from '../i18n'
 import type { SessionRecord, TeamDef } from '../types'
 import './chat2/orbits.css'
 
 registerMessages({
+  'orbits.filter.label': { zh: '筛选工作区', en: 'Filter workspace' },
+  'orbits.filter.all': { zh: 'All', en: 'All' },
+  'orbits.filter.agent': { zh: 'Agent', en: 'Agent' },
+  'orbits.filter.team': { zh: 'Team', en: 'Team' },
+  'orbits.filter.project': { zh: 'Project', en: 'Project' },
   'orbits.plus.tip': { zh: '新建', en: 'New' },
   'orbits.plus.agent': { zh: '新建 Agent', en: 'New agent' },
   'orbits.plus.team': { zh: '新建团队', en: 'New team' },
@@ -131,21 +135,20 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const [plusMenu, setPlusMenu] = useState<MenuAt | null>(null)
   const [rowMenu, setRowMenu] = useState<RowMenu | null>(null)
 
-  // Chat/Work 胶囊与「模式跟着打开的会话走(只有一个方向)」的 effect 与 SessionsView 逐字一致 ——
-  // 换个侧栏档位不该换这条行为,否则同一个会话在两档里高亮不一样。
-  const mode = effectiveSessionMode(s.sessionMode, currentPlatform())
+  // This workspace stays in Work; filtering changes the list only, never the active conversation.
+  const mode = 'work' as const
+  const [filter, setFilter] = useState<'all' | 'agent' | 'team' | 'project'>(() => {
+    const saved = localStorage.getItem('forsion_orbits_filter')
+    return saved === 'agent' || saved === 'team' || saved === 'project' ? saved : 'all'
+  })
   /** Agent 轨道的会话(私聊 / 独立团队)不属于任何项目 —— 不剔掉的话 `projectless:true` 会把它们
    *  落进「不在项目中工作」组(§3.5)。未打开过的会话也判得出:refreshSessions 已用列表行自带的
-   *  agent_config 预填 configBySession。它们结构上 projectless 但语义上是 Work(恒 host + cwd 钉死),
-   *  「模式跟着打开的会话走」要把它们当 work 看,否则在 Chat 档打开一条私聊 = 侧栏没有任何高亮行。 */
+   *  agent_config 预填 configBySession。它们结构上 projectless 但语义上属于各自的工作轨道。 */
   const inOrbit = (x: SessionRecord): boolean => {
     const c = s.configBySession[x.id]
     return !!(c?.soloAgentSlug || c?.soloEngineId || c?.teamSlug)
   }
-  const worklike = (x: SessionRecord | null): boolean => !!x && (!x.projectless || inOrbit(x))
-  useEffect(() => {
-    if (mode === 'chat' && worklike(activeSession)) s.setSessionMode('work')
-  }, [activeSession?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (s.sessionMode !== 'work') s.setSessionMode('work') }, [s.sessionMode, s.setSessionMode])
 
   useEffect(() => {
     if (!plusMenu && !rowMenu) return
@@ -212,8 +215,8 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const activeCfg = s.activeId ? s.configBySession[s.activeId] : undefined
   const activeSpaceId = useSpaceStore((st) => st.activeSpaceId)
   const hasMuseSpace = useSpaceStore((st) => st.spaces.some((x) => x.id === 'muse'))
-  // Chat 档与云端侧都与 Agent 轨道互斥(§3.5):整块隐藏,不是列出来再置灰。
-  const showOrbitBlock = mode !== 'chat' && sideFilter !== 'cloud' && (agents.length > 0 || installedEngines.length > 0 || teams.length > 0 || tombstones.length > 0)
+  // Agent workspaces are local-only; the cloud sidebar does not expose them.
+  const showOrbitBlock = sideFilter !== 'cloud' && (agents.length > 0 || installedEngines.length > 0 || teams.length > 0 || tombstones.length > 0)
 
   const openMuse = (): void => {
     // ⚠️ Muse Space 只在 museAvailable() && 内建插件启用时注册;未注册就切等于点了个死按钮,如实告诉用户。
@@ -267,7 +270,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     )
   }
 
-  // 一级列表的轨道行(私聊 / 引擎 / 团队 / 墓碑):交给 SidebarPane 与项目组按最近活动混排;Chat 档 / 云端侧整批不列(§3.5)。
+  // 一级列表的轨道行(私聊 / 引擎 / 团队 / 墓碑):交给 SidebarPane 与项目组按最近活动混排;云端侧整批不列(§3.5)。
   const orbitRows: Array<{ key: string; at: number; node: React.ReactNode }> = []
   if (showOrbitBlock) {
     const at = (key: string): number => activityByIdent.get(key) || 0
@@ -345,33 +348,15 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
 
   return (
     <div className="t2o">
-      {/* ① 新对话 + Chat/Work 胶囊 + 「+」操作菜单(§3.6)。SidebarPane 的 showSpecial 关掉,这行自己画。 */}
+      {/* New session and creation menu; the four-way filter occupies its own row below. */}
       <div className="t2o-head">
         <div className="t2s-special-group">
           <div className="t2s-special-row">
             {/* 尺寸由 `.t2o .t2s-special-ic > svg` 的 --t2s-icon 接管,故不传 size(传了也无效)。 */}
-            <button type="button" className="t2s-special" onClick={() => openNewChat()}>
+            <button type="button" className="t2s-special" onClick={() => { s.setSessionMode('work'); openNewChat() }}>
               <span className="t2s-special-ic"><SquarePen /></span>
-              <span className="t2s-special-title">{t('sidebar.newChat')}</span>
+              <span className="t2s-special-title">{t('orbits.row.newSession')}</span>
             </button>
-            <div className="t2s-vaultseg t2s-mode" role="tablist" aria-label={t('sidebar.mode.tip')} title={t('sidebar.mode.tip')}>
-              <div className="t2s-vaultseg-thumb" data-side={mode} />
-              {(['chat', 'work'] as const).map((m) => (
-                <button
-                  key={m}
-                  type="button"
-                  role="tab"
-                  aria-selected={mode === m}
-                  data-mode={m}
-                  className={mode === m ? 'on' : undefined}
-                  onClick={() => {
-                    // 开着 work 会话点 Chat:列表只剩 chat,主区那个 work 会话就没有对应行了 → 顺手开一个新对话。
-                    s.setSessionMode(m)
-                    if (m === 'chat' && worklike(activeSession)) openNewChat()
-                  }}
-                >{t(m === 'chat' ? 'sidebar.mode.chat' : 'sidebar.mode.work')}</button>
-              ))}
-            </div>
             <button
               type="button"
               className="t2o-plus"
@@ -383,13 +368,20 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
         </div>
       </div>
 
+      <div className="t2o-filters t2s-vaultseg" role="tablist" aria-label={t('orbits.filter.label')}>
+        <div className="t2s-vaultseg-thumb" style={{ transform: `translateX(${['all', 'agent', 'team', 'project'].indexOf(filter) * 100}%)` }} />
+        {(['all', 'agent', 'team', 'project'] as const).map((kind) => <button key={kind} role="tab" type="button"
+          data-filter={kind} aria-selected={filter === kind} className={filter === kind ? 'on' : undefined}
+          onClick={() => { setFilter(kind); localStorage.setItem('forsion_orbits_filter', kind) }}>{t(`orbits.filter.${kind}`)}</button>)}
+      </div>
+
       {/* 项目轨道 + 上面的轨道行:整段复用 SidebarPane(折叠持久化 / 多选 / 右键菜单全白拿;activity 排序下组拖拽禁用)。 */}
       <div className="t2o-projects">
         <SidebarPane
           collapsed={false}
           orderBy="activity"
-          extraRows={orbitRows}
-          sessions={sessions}
+          extraRows={orbitRows.filter((row) => filter === 'all' || (filter === 'team' ? /^(gone:)?team:/.test(row.key) : filter === 'agent' ? /^(gone:)?(agent|engine):/.test(row.key) : false))}
+          sessions={filter === 'all' || filter === 'project' ? sessions : []}
           archivedSessions={archivedSessions}
           // 右键菜单/拖拽/计数仍要拿未经过模式与侧过滤的全集;会话查找统一走全局快速查找(⌘P)。
           allSessions={s.sessions}
@@ -404,12 +396,9 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
           // 「新对话」行由 .t2o-head 自己画(要挂胶囊与「+」菜单),这里关掉免得画两份。
           showSpecial={false}
           onNewChat={() => openNewChat()}
-          mode={mode}
-          onModeChange={(m) => { s.setSessionMode(m); if (m === 'chat' && worklike(activeSession)) openNewChat() }}
-          flat={mode === 'chat'}
           rowIcon={teamIcon}
           onOpenWorkspace={(wsKey) => openSpecial('workspace', wsKey)}
-          workspaces={workspaces}
+          workspaces={filter === 'all' || filter === 'project' ? workspaces : []}
           onNewInWorkspace={(ws) => void s.createInWorkspace(ws)}
           onAddWorkspace={() => void s.addLocalWorkspace()}
           onRenameWorkspace={(ws, name) => void s.renameWorkspace(ws, name)}

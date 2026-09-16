@@ -59,11 +59,11 @@ describe('teamDue / parseMentions / isDoneSpeech / teamMemberSection(纯函数)'
     expect(isDoneSpeech('DONE\n但还有后续:测试没写')).toBe(false); // 中间行不算(Codex r3 #1)
     expect(isDoneSpeech('脚本:\n```\necho ok\nDONE\n```')).toBe(false); // 代码块里的不算
   });
-  it('teamMemberSection:自己的线程 / 只有最终消息进团队聊天 / 等人就 @ 且不写 DONE / 完事 DONE / 同目录并行编辑纪律 / 无轮数无投票;teamDoc 拼在末尾', () => {
+  it('teamMemberSection:自己的线程 / 随时主动发言 / 等人就 @ 且不写 DONE / 完事 DONE / 同目录并行编辑纪律 / 无轮数无投票;teamDoc 拼在末尾', () => {
     const sys = teamMemberSection('Alpha', '- Alpha(alpha):——\n- Beta(beta):——', '## Team\nAlpha owns API; Beta owns tests.');
     expect(sys).toContain('You are "Alpha"');
     expect(sys).toContain('works in their own thread, in parallel');
-    expect(sys).toContain('only ever sees the final message');
+    expect(sys).toContain('Use team_say whenever');
     expect(sys).toContain('end WITHOUT DONE');
     expect(sys).toContain('end your final message with DONE on its own line');
     expect(sys).toContain('never rewrite files a teammate owns');
@@ -76,7 +76,7 @@ describe('teamDue / parseMentions / isDoneSpeech / teamMemberSection(纯函数)'
 // ── 假载体:不建会话不起 run,记录每次激活的输入,按剧本回发言;并发用计数器观测;honor abort 信号。──
 let home: string;
 let events: Array<{ type: string; payload: any }>;
-let finals: Array<{ content: string; agentSlug?: string }>;
+let finals: Array<{ content: string; agentSlug?: string; timestamp?: number }>;
 let inserted: Array<{ id: string; content: string }>;
 let statuses: Array<{ status: string; extra: any }>;
 let acts: Array<{ slug: string; nth: number; delta: string; cycle: number; inlineDef: boolean; teamDoc?: string; roster: string; runId: string }>;
@@ -130,7 +130,7 @@ beforeEach(() => {
   };
   const fakeState: any = {
     insertUserMessage: async (m: any) => { inserted.push({ id: m.id, content: m.content }); },
-    finalizeAssistantMessage: async (m: any) => { finals.push({ content: m.content, agentSlug: m.agentSlug }); },
+    finalizeAssistantMessage: async (m: any) => { finals.push({ content: m.content, agentSlug: m.agentSlug, timestamp: m.timestamp }); },
     appendEvent: async (_r: string, type: string, payload: any) => { events.push({ type, payload }); return events.length; },
     drain: async () => {},
     updateRunStatus: async (_id: string, status: string, extra: any) => { statuses.push({ status, extra }); },
@@ -171,7 +171,8 @@ describe('统一调度:并行 + 全员起头 + 被 @ 者优先 + 成员各自以
     expect(events.some((e) => e.type === 'group_voting' || e.type === 'group_vote')).toBe(false);
     const endA = events.find((e) => e.type === 'group_speaker' && e.payload.phase === 'end' && e.payload.slug === 'alpha')!.payload;
     expect(endA.text).toBe('a1\nDONE');
-    expect(finals).toEqual([{ content: '**🗣 Alpha**\n\na1\nDONE', agentSlug: 'alpha' }, { content: '**🗣 Beta**\n\nb1\nDONE', agentSlug: 'beta' }]);
+    expect(events.find((e) => e.type === 'token')?.payload).toMatchObject({ delta: 'a1\nDONE', publicSpeech: true });
+    expect(finals).toMatchObject([{ content: '**🗣 Alpha**\n\na1\nDONE', agentSlug: 'alpha' }, { content: '**🗣 Beta**\n\nb1\nDONE', agentSlug: 'beta' }]);
     expect(starts().map((s) => [s.slug, s.sessionId, s.runId])).toEqual([['alpha', 'ws-alpha', 'child-alpha-1'], ['beta', 'ws-beta', 'child-beta-1']]);
     expect(starts()[0].messageId).toBe(endA.messageId);
     expect(starts()[0].task).toContain('start');
@@ -289,7 +290,7 @@ describe('统一调度:并行 + 全员起头 + 被 @ 者优先 + 成员各自以
     const ac = new AbortController();
     const aborted: string[] = [];
     const t0 = Date.now();
-    setTimeout(() => ac.abort(), 30);
+    onActivate = () => { if (acts.length === 2) setTimeout(() => ac.abort(), 10); }; // Wait for both child runs, independent of filesystem / test runner load.
     await runGroupChat(params({ signal: ac.signal, abortChild: (id: string) => aborted.push(id) }));
     expect(Date.now() - t0).toBeLessThan(2000);
     expect(aborted.sort()).toEqual(['child-alpha-1', 'child-beta-1']);
@@ -316,7 +317,8 @@ describe('统一调度:并行 + 全员起头 + 被 @ 者优先 + 成员各自以
     await runGroupChat(params({ abortChild: (id: string) => aborted.push(id) }));
     expect(ended().reason).toBe('cost_limit');
     expect(events.some((e) => e.type === 'status' && e.payload.phase === 'group_cost_limit')).toBe(true);
-    expect(aborted).toEqual(['child-beta-1']);
+    expect(aborted).toEqual(['child-alpha-1']);
+    expect(acts.map((a) => a.slug)).toEqual(['alpha']);
     const usage = events.find((e) => e.type === 'usage')!.payload;
     expect(usage).toMatchObject({ agentId: 'alpha', costTotal: 50_000, costLimit: 40_000, total: 15 });
   });
@@ -337,13 +339,55 @@ describe('统一调度:并行 + 全员起头 + 被 @ 者优先 + 成员各自以
       a.onEvent?.({ seq: 2, type: 'tool_call', payload: { id: 'c1', name: 'edit_file', arguments: '{"path":"src/api.ts"}' } });
       a.onEvent?.({ seq: 3, type: 'inquiry_request', payload: { inquiryId: 'q1', question: '要不要 v1?', options: ['要', '不要'] } });
       a.onEvent?.({ seq: 4, type: 'token', payload: { delta: 'x' } }); // 过程 token 不转发
+      a.onEvent?.({ seq: 5, type: 'desk_present', payload: { path: '/tmp/preview.html' } });
+      a.onEvent?.({ seq: 6, type: 'desk_capture_request', payload: { shotId: 'shot-alpha' } });
     };
     await runGroupChat(params());
     const mid = starts().find((s) => s.slug === 'alpha')!.messageId;
     expect(events.find((e) => e.type === 'approval_request')?.payload).toMatchObject({ approvalId: 'ap1', name: 'run_bash', runId: 'child-alpha-1', agentSlug: 'alpha', agentName: 'Alpha', messageId: mid });
     expect(events.find((e) => e.type === 'inquiry_request')?.payload).toMatchObject({ inquiryId: 'q1', runId: 'child-alpha-1', agentSlug: 'alpha', messageId: mid });
     expect(events.find((e) => e.type === 'team_activity')?.payload).toMatchObject({ slug: 'alpha', tool: 'edit_file', messageId: mid });
-    expect(events.some((e) => e.type === 'token')).toBe(false);
+    expect(events.find((e) => e.type === 'desk_present')?.payload).toEqual({ path: '/tmp/preview.html' });
+    expect(events.find((e) => e.type === 'desk_capture_request')?.payload).toMatchObject({ shotId: 'shot-alpha', runId: 'child-alpha-1' });
+    expect(events.some((e) => e.type === 'token' && e.payload.delta === 'x')).toBe(false);
+  });
+
+  it('bare DONE and empty final responses do not add empty public bubbles', async () => {
+    script = { alpha: ['DONE'], beta: ['', 'DONE'] };
+    await runGroupChat(params());
+    expect(finals).toHaveLength(0);
+    expect(events.some((e) => e.type === 'group_speaker')).toBe(false);
+    expect(ended().reason).toBe('done');
+  });
+
+  it.each([false, true])('public @remarks reactivate teammates only when requestReply=%s', async (requestReply) => {
+    script = { alpha: ['DONE'], beta: ['DONE', 'DONE'] };
+    delayOf = (slug) => slug === 'alpha' ? 10 : 20;
+    onActivate = (a) => {
+      if (a.member.slug === 'alpha') a.onEvent?.({ seq: 1, type: 'team_speech', payload: { text: '@Beta result ready', requestReply } });
+    };
+    await runGroupChat(params());
+    expect(finals).toHaveLength(1);
+    expect(finals[0].content).toContain('@Beta result ready');
+    expect(acts.filter((a) => a.slug === 'beta')).toHaveLength(requestReply ? 2 : 1);
+    expect(ended().reason).toBe('done');
+  });
+
+  it('members post multiple remarks before completing, with matching event and database order', async () => {
+    script = { alpha: ['alpha final\nDONE'], beta: ['beta final\nDONE'] };
+    delayOf = (slug) => slug === 'alpha' ? 30 : 60;
+    onActivate = (a) => {
+      if (a.member.slug !== 'beta') return;
+      a.onEvent?.({ seq: 1, type: 'team_speech', payload: { text: 'first finding' } });
+      a.onEvent?.({ seq: 2, type: 'team_speech', payload: { text: 'second finding' } });
+    };
+    await runGroupChat(params());
+    const speeches = events.filter((e) => e.type === 'group_speaker' && e.payload.phase === 'end');
+    expect(speeches.map((e) => e.payload.text)).toEqual(['first finding', 'second finding', 'alpha final\nDONE', 'beta final\nDONE']);
+    expect(finals.map((f) => f.content.split('**\n\n')[1])).toEqual(speeches.map((e) => e.payload.text));
+    expect(events.findIndex((e) => e.type === 'group_speaker')).toBeLessThan(events.findIndex((e) => e.type === 'team_member' && e.payload.phase === 'end'));
+    expect(inflightMax).toBe(2);
+    expect(finals.every((f, i) => i === 0 || f.timestamp! > finals[i - 1].timestamp!)).toBe(true);
   });
 
   it('临时成员 inlineDef;teamDoc / role / roster 下发到每次激活;首条用户消息只在 delta 里', async () => {

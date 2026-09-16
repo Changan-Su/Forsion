@@ -55,6 +55,10 @@ export interface ToolContext {
   agentSlug?: string;
   /** 讨论 run 标记:start_discussion 起的后台群聊 run 内,start_discussion/wait_discussion 不可见(防递归)。 */
   inDiscussion?: boolean;
+  teamSessionId?: string;
+  sayToTeam?: (text: string, requestReply: boolean) => Promise<void>;
+  /** 临时团队成员(定义随 run 下发,不在 ~/.tangu/agents):持久写面(记忆 / 日志 / 人格 / 工作笔记 / 日程)一律不可见。 */
+  ephemeral?: boolean;
   /** 私聊里本轮 @ 了的项目(realpath):start_project_session 只在非空时可见,且只能派往其中之一(引擎内部字段,不落库)。 */
   dispatchTargets?: string[];
   /** 计划模式(类 Claude plan mode):只暴露只读工具 + exit_plan_mode;custom/MCP 工具一并隐藏。 */

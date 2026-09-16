@@ -165,7 +165,7 @@ describe('routes /agent/teams', () => {
     }
     const ev = await query<any[]>(`SELECT type, payload FROM agent_run_events WHERE run_id = 'TR1' AND type IN ('group_speaker','group_ended')`);
     const speakers = ev.filter((e) => e.type === 'group_speaker').map((e) => (typeof e.payload === 'string' ? JSON.parse(e.payload) : e.payload)).filter((p) => p.phase === 'start').map((p) => p.slug);
-    expect(speakers).toEqual(['ario', 'bo']); // 没有轮数上限;两人首句都 DONE → 全员 DONE 收场
+    expect([...speakers].sort()).toEqual(['ario', 'bo']); // 并行完成的先后不固定;每人一条 DONE → 全员收场
     const ended = ev.find((e) => e.type === 'group_ended');
     expect(JSON.parse(ended!.payload)).toMatchObject({ reason: 'done', steps: 2 });
     // 09-16 第四轮:成员在各自的工作会话里跑子 run(真 agentLoop),团队段拼在成员自己的 system 里(teamMemberSection 的 You are "<Name>" 行认人)。

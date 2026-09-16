@@ -9,7 +9,7 @@
  */
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
-import { createRun, getRun } from './runStore.js';
+import { createRun, getRun, updateRunStatus } from './runStore.js';
 import { subscribe, type AgentEvent } from './eventBus.js';
 import type { NormalAgentDef } from '../agents/agentRegistry.js';
 
@@ -19,6 +19,9 @@ export const TEAMWORK_KIND = 'teamwork';
 const WAIT_MAX_MS = 2 * 60 * 60 * 1000;
 /** 团队 run 中止后给子 run 收尾的宽限(abortRun 后等它发 error/done)。 */
 const ABORT_GRACE_MS = 10_000;
+/** 终态事件(done / error)先于 agent_runs.status 落库(agentLoop 先 publish 再 updateRunStatus):收到事件后等库里也到终态,最多这么久。 */
+const STATUS_SETTLE_MS = 10_000;
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export interface MemberActivation {
   teamRunId: string;
@@ -115,7 +118,12 @@ export const activateMember: ActivateMember = async (a) => {
   let sessionId: string | undefined;
   let runId: string | undefined;
   let off: (() => void) | undefined;
+  let enqueued = false;
   const aborted = (): boolean => a.signal.aborted;
+  // 子 run 行一旦建了,要么成功入队、要么显式终态化:否则它留在 queued,Team Desk 显示忙碌、引擎重启后恢复器还会把它跑起来(Codex 09-16 r4 #4)。
+  const settleUnqueued = async (status: 'aborted' | 'failed', error: string): Promise<void> => {
+    if (runId && !enqueued) await updateRunStatus(runId, status, { error }).catch(() => {});
+  };
   try {
     sessionId = await ensureMemberSession(a);
     runId = uuidv4();
@@ -136,9 +144,10 @@ export const activateMember: ActivateMember = async (a) => {
       if (ev.type === 'done' || ev.type === 'error') settle();
     });
     const loop = await import('./agentLoop.js');
-    if (aborted()) return { status: 'aborted', text: '', sessionId, runId };
+    if (aborted()) { await settleUnqueued('aborted', 'aborted before start'); return { status: 'aborted', text: '', sessionId, runId }; }
     a.onStarted?.({ sessionId, runId });
     loop.enqueueRun(sessionId, runId);
+    enqueued = true;
 
     const childId = runId;
     const waited = await new Promise<'terminal' | 'aborted' | 'timeout'>((resolve) => {
@@ -165,13 +174,20 @@ export const activateMember: ActivateMember = async (a) => {
     if (waited === 'aborted') return { status: 'aborted', text: '', sessionId, runId };
     if (waited === 'timeout') return { status: 'failed', text: '', error: 'activation timed out', sessionId, runId };
 
-    const run = await getRun(runId);
+    // 终态事件先于状态落库:等库里也到终态再读结果,否则成功的发言会被读成 failed: running(Codex 09-16 r4 #1)。
+    let run = await getRun(runId);
+    for (let waited = 0; run && !isTerminal(run.status) && waited < STATUS_SETTLE_MS; waited += 50) {
+      await sleep(50);
+      run = await getRun(runId);
+    }
     if (!run) return { status: 'failed', text: '', error: 'run row missing', sessionId, runId };
+    if (!isTerminal(run.status)) return { status: 'failed', text: '', error: `run status did not settle (${run.status})`, sessionId, runId };
     if (run.status === 'aborted') return { status: aborted() ? 'aborted' : 'failed', text: '', error: 'aborted', sessionId, runId };
     if (run.status !== 'done') return { status: 'failed', text: '', error: String(run.error || run.status), sessionId, runId };
     const result = parseJson(run.result);
     return { status: 'done', text: String(result?.content ?? ''), sessionId, runId };
   } catch (err: any) {
+    await settleUnqueued(aborted() ? 'aborted' : 'failed', err?.message || String(err));
     return { status: aborted() ? 'aborted' : 'failed', text: '', error: err?.message || String(err), sessionId, runId };
   } finally {
     off?.();

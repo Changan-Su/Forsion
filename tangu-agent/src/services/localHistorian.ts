@@ -8,10 +8,10 @@
  *   - 首轮（roundN===1 且 firstRoundTrigger）必触发。
  *
  * 三种工作模式（cfg.mode）：
- *   - independent（默认）：Historian 自己结构化判断并写 title/summary/LOG；memory 走两阶段(借 Codex
+ *   - independent（默认）：每个父会话复用固定隐藏 Historian Session,与团队总结共享,24k 字符触发压缩;Historian 结构化判断并写 title/summary/LOG；memory 走两阶段(借 Codex
  *     记忆流水线):按轮只**采集候选**(带 No-op 门)进 <agent>/.memory-raw.md,攒够一批才跑**整固**
  *     (由单独启用的 Dream 做来源校验、版本提交与可恢复的整理)——见 maybeConsolidate。
- *   - assist（辅助）：标题/摘要仍独立维护；LOG/memory 到点时改为 branch 出隐藏讨论会话（kind='discussion'，
+ *   - assist（辅助）：标题/摘要仍独立维护；LOG/memory 到点时首次 branch、之后复用隐藏讨论会话（kind='discussion'，
  *     继承最近 30 条），与主 Agent 开一场无主持人的简短群聊（Historian 临时人格先评估，主 Agent 定夺并
  *     自己调 log_event/remember 写入自己的记忆域）。首轮始终 independent。此模式下 memory 为追加式
  *     （remember），候选整理由每 Agent 的 Dream 设置控制。
@@ -26,6 +26,7 @@
  * 成本：背景任务、用户未主动发起 → 只记 usage（projectSource='tangu-historian'），默认不扣配额。
  */
 import { v4 as uuidv4 } from 'uuid';
+import { completeHistorianTask } from './historianSession.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { query } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
@@ -60,6 +61,7 @@ const HARNESS_RAW_MAX_PER_ROUND = 3;
 // LOG/候选、竞态覆盖标题/摘要。锁忙=直接跳过本轮(维护是尽力而为,下个到点轮自然补),绝不能把
 // 「锁忙」当 fork 失败再并发启动 independent。
 const historianBusySessions = new Set<string>();
+export const isHistorianBusy = (sessionId: string): boolean => historianBusySessions.has(sessionId);
 
 /** 测试用:清空整固互斥/退避/会话互斥状态(模块级,跨用例会串)。 */
 export function resetHistorianConsolidationState(): void {
@@ -213,36 +215,6 @@ async function recentTranscript(sessionId: string, limit = 30): Promise<{ text: 
   let s = lines.join('\n');
   if (s.length > MAX_TRANSCRIPT_CHARS) s = s.slice(-MAX_TRANSCRIPT_CHARS);
   return { text: s, anchorMessageId };
-}
-
-/** 单次轻量补全（系统提示 + transcript）。失败返回 content=''(并打日志说明原因)。记 usage（默认不扣配额）。
- *  finishReason 透传给调用方——整固「全文改写」被截断必须可检测(Codex #3)。 */
-async function complete(label: string, modelId: string, system: string, transcript: string, userId: string, maxTokens: number): Promise<{ content: string; finishReason?: string }> {
-  try {
-    const signal = historianSignal.getStore();
-    signal?.throwIfAborted();
-    const { model, apiKey, baseUrl, apiModelId } = await deps().brain.llm.resolveModelAndKey(modelId);
-    signal?.throwIfAborted();
-    const payload = await deps().brain.llm.buildProviderPayload({
-      model, apiModelId,
-      messages: [{ role: 'system', content: system }, { role: 'user', content: transcript }] as ChatMessage[],
-      projectSource: '', // 不叠项目层提示词
-      usageSource: 'tangu', // 记账归进 Tangu 桶(本地特性,恒 tangu;否则云端兜底记 tangu-brain)
-      temperature: 0.3, maxTokens, stream: true, signal,
-      provider: (model as any)?.provider,
-    } as any);
-    historianSignal.getStore()?.throwIfAborted();
-    const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal: historianSignal.getStore() });
-    historianSignal.getStore()?.throwIfAborted();
-    await recordJudgeUsage(userId, modelId, model, res);
-    historianSignal.getStore()?.throwIfAborted();
-    const out = String(res?.content || '').trim();
-    if (!out) log(`${label} 模型返回空内容(model=${modelId})`);
-    return { content: out, finishReason: (res as any)?.finishReason };
-  } catch (e: any) {
-    log(`${label} 模型调用失败(model=${modelId}): ${e?.message || e}`);
-    return { content: '' };
-  }
 }
 
 /** Historian 侧模型调用统一记账(usage 归 tangu-historian,默认不扣配额)。绝不抛。 */
@@ -487,8 +459,9 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
       }
       if (!raw) {
         const sys = buildJudgeSystem(cfg.prompt, titleDue, judgeLog, judgeMemory, summaryDue, judgeHarness);
-        const input = prevSummary ? `${transcript}\n\n[Previous summary]\n${prevSummary}` : transcript;
-        raw = (await complete('判断', cfg.modelId, sys, input, userId, 1600)).content;
+        const result = await completeHistorianTask({ sessionId, userId, modelId: cfg.modelId, task: 'judge', instructions: prevSummary ? `${sys}\n\n[Previous summary]\n${prevSummary}` : sys, transcript, maxTokens: 1600, signal: historianSignal.getStore() });
+        await recordJudgeUsage(userId, cfg.modelId, result.model, result);
+        raw = result.content;
       }
       historianSignal.getStore()?.throwIfAborted();
       const j = parseJudgement(raw);
@@ -651,15 +624,17 @@ async function startAssistDiscussion(opts: {
     if (!last[0]?.id) return null;
 
     const appId = String(sk.app_id || deps().profile.appId);
-    const branch = await branchSession({
-      sourceSessionId: sessionId,
-      userId,
-      appId,
-      messageId: String(last[0].id),
-      title: `记忆维护:${String(sk.title || '').slice(0, 40) || sessionId.slice(0, 8)}`,
-      kind: 'discussion',
-      lastN: 30,
-      parentSessionId: sessionId, // Background Session 父链接:子聊天面板经 /background 端点持久列出
+    const existing = await query<any[]>(
+      `SELECT id, agent_config FROM chat_sessions WHERE parent_session_id = ? AND user_id = ? AND kind = 'discussion' ORDER BY created_at ASC`,
+      [sessionId, userId],
+    );
+    const reused = existing.find((row) => {
+      try { return (typeof row.agent_config === 'string' ? JSON.parse(row.agent_config) : row.agent_config)?.historianAssist; }
+      catch { return false; }
+    });
+    const branch = reused ? { id: String(reused.id) } : await branchSession({
+      sourceSessionId: sessionId, userId, appId, messageId: String(last[0].id),
+      title: 'Historian · memory review', kind: 'discussion', lastN: 30, parentSessionId: sessionId,
     });
     if (!branch) return null;
 
@@ -669,7 +644,7 @@ async function startAssistDiscussion(opts: {
     const todayLog = String((await deps().brain.memory.getLog(userId).catch(() => ({ content: '' } as any)))?.content || '').trim();
 
     const topics = [opts.wantLog ? 'the daily LOG' : '', opts.wantMemory ? 'the long-term MEMORY' : ''].filter(Boolean).join(' and ');
-    const histSlug = `historian-${uuidv4().slice(0, 8)}`;
+    const histSlug = `historian-${branch.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 12).toLowerCase()}`;
     const histDef = {
       slug: histSlug,
       name: 'Historian',
@@ -682,7 +657,9 @@ async function startAssistDiscussion(opts: {
         `You must NOT call remember or log_event yourself: ${mainDef.name} owns its memory and makes the final call. Be brief.`,
     };
 
+    const freshContext = reused ? (await recentTranscript(sessionId)).text : '';
     const message =
+      (freshContext ? `[Current conversation]\n${freshContext}\n\n` : '') +
       `[Historian assist] Decide together whether ${topics} should be updated for this conversation (see the context above). ` +
       `Historian speaks first with its assessment; then ${mainDef.name} makes the final call and, if an update is warranted, ` +
       'performs it ITSELF by calling log_event (one short sentence for what happened today) and/or remember (only long-term stable facts/preferences about the user — be restrained). ' +
@@ -704,6 +681,7 @@ async function startAssistDiscussion(opts: {
         attachments: [],
         agentConfig: {
           groupChat: true,
+          historianAssist: true,
           groupAgents: [activeSlug, histSlug],
           groupTempAgents: [histDef],
           priorityAgent: histSlug, // Historian 先开口(评估),主 Agent 随后定夺
@@ -716,6 +694,7 @@ async function startAssistDiscussion(opts: {
         },
       },
     });
+    if (!reused) await query('UPDATE chat_sessions SET agent_config = ? WHERE id = ?', [JSON.stringify({ historianAssist: true }), branch.id]);
     // 动态 import:localHistorian 被 agentLoop 静态引用,反向静态 import 会成环(同 discussion.ts)。
     const { enqueueRun } = await import('./agentLoop.js');
     enqueueRun(branch.id, runId);

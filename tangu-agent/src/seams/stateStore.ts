@@ -63,6 +63,8 @@ export interface RawMessageRow {
 }
 
 export interface FinalizeMessageInput {
+  /** Optional monotonic transcript timestamp for serialized concurrent team remarks. */
+  timestamp?: number;
   messageId: string;
   sessionId: string;
   modelId: string;
@@ -119,6 +121,7 @@ export interface StateStore {
   countSessionMessages(sessionId: string): Promise<number>;
   listSessionMessagesWindow(sessionId: string, limit: number, offset: number): Promise<RawMessageRow[]>;
   insertUserMessage(m: {
+    timestamp?: number;
     id: string;
     sessionId: string;
     content: string;

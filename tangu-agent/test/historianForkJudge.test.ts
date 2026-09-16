@@ -167,9 +167,9 @@ describe('Historian fork 判官', () => {
     llmScript = [judgeJson({ title: '回落标题' })];
     await onUserRunDone('S', USER); // 不传 seed
     expect(builds.length).toBe(1);
-    expect(builds[0].cacheKey).toBeUndefined(); // independent 判断不带 cacheKey
+    expect(builds[0].cacheKey).toMatch(/:historian$/); // independent 判断复用固定 Historian 的 cacheKey
     expect(resolveCalls).toEqual(['m1']);
-    expect(String(builds[0].messages[0].content)).toContain('Read the conversation below');
+    expect(String(builds[0].messages.at(-1).content)).toContain('Read the conversation below');
     expect((await sessionRow()).title).toBe('回落标题');
   });
 
@@ -178,7 +178,7 @@ describe('Historian fork 判官', () => {
     llmScript = ['这不是 JSON,判官跑偏写了一段长文……', judgeJson({ title: '回落丙' })];
     await onUserRunDone('S', USER, undefined, seed);
     expect(builds.length).toBe(2);
-    expect(builds[1].cacheKey).toBeUndefined();
+    expect(builds[1].cacheKey).toMatch(/:historian$/);
     expect((await sessionRow()).title).toBe('回落丙');
   });
 
@@ -200,7 +200,7 @@ describe('Historian fork 判官', () => {
     await onUserRunDone('S', USER, undefined, seed);
     expect(builds.length).toBe(2);
     expect(builds[0].cacheKey).toBe('S');
-    expect(builds[1].cacheKey).toBeUndefined();
+    expect(builds[1].cacheKey).toMatch(/:historian$/);
     expect((await sessionRow()).title).toBe('回落标题');
   });
 
@@ -235,7 +235,7 @@ describe('Historian fork 判官', () => {
     llmScript = [judgeJson({ title: '超窗回落' })];
     await onUserRunDone('S', USER, undefined, seed);
     expect(builds.length).toBe(1); // fork 在护栏处止步,没有发出请求
-    expect(builds[0].cacheKey).toBeUndefined();
+    expect(builds[0].cacheKey).toMatch(/:historian$/);
     expect(resolveCalls).toEqual(['m-small', 'm1']); // fork 只解析了模型(算窗口),判断走 cfg 模型
     expect((await sessionRow()).title).toBe('超窗回落');
   });

@@ -39,6 +39,7 @@ registerMessages({
   'input.agentSwitch.section': { zh: '切换 Agent', en: 'Switch agent' },
   'input.mention.projectNote': { zh: '派往项目 · 在该项目新建会话开工', en: 'Dispatch to project · starts a new session there' },
   // Chat / Work 是会话事实;可见切换统一放在侧栏胶囊。
+  'input.normalWork': { zh: '普通模式', en: 'Normal mode' },
   'input.presetChat': { zh: 'Chat', en: 'Chat' }, // 产品词,中英同形(与侧栏胶囊 sidebar.mode.* 同一套)
   'input.presetWork': { zh: 'Work', en: 'Work' },
   'input.presetLocked': { zh: '模式在创建会话时确定;换模式请新建会话', en: 'Mode is fixed when the session is created; start a new session to change it' },
@@ -230,6 +231,8 @@ export const Composer2: React.FC<{
   groupChat?: boolean
   groupAgents?: string[]
   groupTempAgents?: NormalAgentDef[]
+  onAddAgent?: () => void
+  onNormalWork?: () => void
   onGroupChange?: (patch: Pick<AgentConfig, 'groupChat' | 'groupAgents' | 'groupTempAgents'>) => void
   skills?: SkillInfo[] | null
   agents?: NormalAgentDef[]
@@ -284,7 +287,7 @@ export const Composer2: React.FC<{
   maxIterations, onMaxIterationsChange,
   verifyCommand, onVerifyCommandChange,
   preset, onPresetChange, planMode, onPlanModeChange, voiceMode, onVoiceModeChange, skills,
-  groupChat, groupAgents, groupTempAgents, onGroupChange,
+  groupChat, groupAgents, groupTempAgents, onGroupChange, onAddAgent, onNormalWork,
   agents, onAgentSwitch, currentAgentSlug, mentionProjects, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
   quotedText, onClearQuote,
@@ -1148,6 +1151,7 @@ export const Composer2: React.FC<{
           initialAgents={groupAgents || []}
           initialTempAgents={groupTempAgents}
           active={groupActive}
+          hideDisable
           onConfirm={(r) => { onGroupChange?.({ groupChat: true, ...r }); setGroupSetupOpen(false); track('chat.group') }}
           onDisable={() => onGroupChange?.({ groupChat: false })}
           onClose={() => setGroupSetupOpen(false)}
@@ -1402,6 +1406,7 @@ export const Composer2: React.FC<{
               canUsePathPicker={isHost}
               onOpenChange={(next) => setOpenMenu(next ? 'add' : null)}
               onNewSession={onNewSession}
+              onAddAgent={!running && !isChat && !isEngine ? onAddAgent || (onGroupChange ? () => setGroupSetupOpen(true) : undefined) : undefined}
               onPickPaths={pickHostPaths}
               onPickFiles={pickMixedFiles}
               onAddReference={addContentReference}
@@ -1423,6 +1428,11 @@ export const Composer2: React.FC<{
                 </button>
                 {openMenu === 'mode' && (
                   <div ref={modeFix.ref} className="composer-menu composer-menu--mode" style={modeFix.style}>
+                    {onNormalWork && !isChat && <button className={`menu-item${!planMode && !groupActive && approval === 'auto-edit' ? ' active' : ''}`} data-normal-work
+                      disabled={running} onClick={() => { onNormalWork(); setOpenMenu(null) }}>
+                      <Bot size={14} /><span className="grow">{t('input.normalWork')}</span>
+                      {!planMode && !groupActive && approval === 'auto-edit' && <Check size={13} />}
+                    </button>}
                     {onPlanModeChange && !isChat && (
                       <>
                         <div className="menu-section">{t('input.planMode')}</div>

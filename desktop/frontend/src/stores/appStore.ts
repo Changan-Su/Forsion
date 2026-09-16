@@ -80,6 +80,8 @@ export function sketchFromToolEvent(ev: ToolEvent): SketchItem | undefined {
 export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: string; color: string }, resolveSlug?: (slug: string) => string | undefined): UiMessage {
   const role = r.role === 'model' || r.role === 'assistant' ? 'assistant' : 'user'
   let content = r.content || ''
+  const teamSummary = role === 'assistant' && content.startsWith('**📋 Historian**\n\n')
+  if (teamSummary) content = content.slice('**📋 Historian**\n\n'.length)
   let agentId: string | undefined
   let agentName: string | undefined
   let teamDone = false
@@ -109,6 +111,7 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
     status: 'done', timestamp: Number(r.timestamp) || 0,
     agentId, agentName, agentColor,
     ...(teamDone ? { teamDone: true } : {}),
+    ...(teamSummary ? { teamSummary: true } : {}),
   }
   if (role === 'assistant' && Array.isArray(r.tool_calls) && r.tool_calls.length) {
     const results = new Map<string, any>((Array.isArray(r.tool_results) ? r.tool_results : []).map((t: any) => [t.tool_call_id, t]))
@@ -1008,7 +1011,7 @@ export const useApp = create<AppState>((set, get) => ({
       case 'desk_capture_request':
         if (pl.shotId) {
           const cfg = get().cfg
-          void import('../views/chat2/deskCapture').then((m) => m.answerDeskCapture(cfg, runId, sessionId, String(pl.shotId)))
+          void import('../views/chat2/deskCapture').then((m) => m.answerDeskCapture(cfg, String(pl.runId || runId), sessionId, String(pl.shotId)))
         }
         break
       case 'approval_request': {
@@ -1106,7 +1109,14 @@ export const useApp = create<AppState>((set, get) => ({
           set((s) => {
             const list = s.messagesBySession[sessionId] || []
             // 并行团队:team_member start 已经按同一个 messageId 建了占位气泡 → 只把指针指过去,不再建第二条。
-            if (list.some((m) => m.id === mid)) return {}
+            const existing = list.find((m) => m.id === mid)
+            if (existing) {
+              // Runtime placeholders have no position in the public transcript until they speak.
+              if (!existing.work) return {}
+              return { messagesBySession: { ...s.messagesBySession, [sessionId]: [
+                ...list.filter((m) => m.id !== mid), { ...existing, work: undefined, timestamp: Date.now() },
+              ] } }
+            }
             // 首位发言人:把 run 占位气泡(assistantId)就地改成持久 uuid 并盖发言人身份(保留已有内容);
             // 其余发言人:各自追加一条以持久 uuid 为 id 的气泡。id 对齐落库行 → 轮询/重载不产生重复。
             if (wasFirst) {
@@ -1123,7 +1133,8 @@ export const useApp = create<AppState>((set, get) => ({
           // 并行团队:成员的发言不再逐 token 流进团队 run,end 带正文 → 这里整段落进气泡(老引擎不带 text 时正文已由 token 填好)。
           const raw = typeof pl.text === 'string' ? pl.text : ''
           const { text, done } = raw ? splitDoneMark(raw) : { text: '', done: false }
-          patchMessage(sessionId, mid, (m) => ({ ...m, status: 'done', work: undefined, ...(raw ? { content: capContent(text), segments: pushTextSeg(undefined, text), teamDone: done } : {}) }))
+          // 旧引擎不带 messageId:start / end 各合成一次 id 对不上 → 按当前发言人指针落,否则气泡永远 streaming(Codex 09-16 r4 #9)。
+          patchMessage(sessionId, pl.messageId ? mid : ref.current, (m) => ({ ...m, status: 'done', work: undefined, ...(raw ? { content: capContent(text), segments: pushTextSeg(undefined, text), teamDone: done, revealAt: m.revealAt || (m.status === 'streaming' ? Date.now() : undefined) } : {}) }))
         }
         break
       }
@@ -1146,6 +1157,11 @@ export const useApp = create<AppState>((set, get) => ({
             const next = idx >= 0 ? list.map((m, i) => (i === idx ? { ...m, ...bubble } : m)) : [...list, bubble]
             return { messagesBySession: { ...s.messagesBySession, [sessionId]: next } }
           })
+        } else if (pl.phase === 'end' && mid && pl.reason === 'done') {
+          set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: (s.messagesBySession[sessionId] || [])
+            .filter((m) => m.id !== mid || m.content.trim() || m.approvals?.length || m.inquiries?.length)
+            .map((m) => m.id === mid ? { ...m, work: undefined, status: 'done' as const } : m),
+          } }))
         } else if (pl.phase === 'end' && mid && pl.reason === 'failed') {
           patchMessage(sessionId, mid, (m) => ({ ...m, status: 'error', work: undefined, error: String(pl.error || 'activation failed') }))
         } else if (pl.phase === 'end' && mid && pl.reason === 'aborted') {
@@ -1171,6 +1187,15 @@ export const useApp = create<AppState>((set, get) => ({
           if (!cur[slug]) return {}
           return { teamWorkBySession: { ...s.teamWorkBySession, [sessionId]: { ...cur, [slug]: { ...cur[slug], activity } } } }
         })
+        break
+      }
+      case 'group_summary': {
+        const id = String(pl.messageId || '')
+        if (!id || !pl.text) break
+        set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: [
+          ...(s.messagesBySession[sessionId] || []).filter((m) => m.id !== id),
+          { id, role: 'assistant', content: String(pl.text), status: 'done', timestamp: Date.now(), teamSummary: true },
+        ] } }))
         break
       }
       case 'group_voting':
@@ -1250,15 +1275,19 @@ export const useApp = create<AppState>((set, get) => ({
           const have = new Set(list.map((m) => m.id))
           // 后端 finalizedAssistantId 与乐观/恢复气泡 id 不一致时,回退到当前正在累积的 assistantRef,
           // 否则那条气泡会被孤立(永远「思考中」)且新段无身份退回「TANGU」。
-          const finalizedId = have.has(pl.finalizedAssistantId) ? pl.finalizedAssistantId : assistantRef.current
+          // 并行团队:首批成员还没 settle 时 lastMessageId 为空 → 事件不带 finalizedAssistantId;此时绝不能拿当前占位气泡当「已收尾」
+          // 去标完成 / 删除(它可能正承载审批卡,删了子 run 就永久等人;Codex 09-16 r4 #3)。团队模式下只信明确的 id。
+          const grp = !!(assistantRef as GroupRef).group
+          const finalizedId = have.has(pl.finalizedAssistantId) ? pl.finalizedAssistantId : grp ? '' : assistantRef.current
           const prevSeg = list.find((m) => m.id === finalizedId)
+          const keep = (m: UiMessage): boolean => !!m.work || (m.approvals || []).some((a) => a.status === 'pending') || (m.inquiries || []).some((q) => q.status === 'pending')
           const next = list
-            .map((m) => (m.id === finalizedId ? {
+            .map((m) => (finalizedId && m.id === finalizedId && !m.work ? {
               ...m, content: capContent(pl.finalizedContent || m.content), status: 'done' as const,
               toolEvents: m.toolEvents?.map((tool) => !tool.done && tool.startedAt == null
                 ? { ...tool, done: true, isError: true, result: translate('appstore.steerDiscardedCall') } : tool),
             } : m))
-            .filter((m) => !(m.id === finalizedId && !m.content.trim() && !(m.toolEvents?.length)))
+            .filter((m) => !(finalizedId && m.id === finalizedId && !m.content.trim() && !(m.toolEvents?.length) && !keep(m)))
           const additions: UiMessage[] = []
           for (const u of users) if (!have.has(u.id)) additions.push({ id: u.id, role: 'user', content: u.content, attachments: pendAtt.get(u.id), status: 'done', timestamp: Date.now() })
           if (newId && !have.has(newId)) additions.push({ id: newId, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now() + 1, agentId: prevSeg?.agentId, agentName: prevSeg?.agentName })
@@ -2707,10 +2736,9 @@ export const useApp = create<AppState>((set, get) => ({
   setSessionGroup: (patch, targetSessionId) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
-    // 轨道身份锁在 store 层也守一道:私聊永不进团队模式;独立团队永不退出(引擎侧 bindSessionFacts 同样强制,这里是为了 UI 不分叉)。
+    // 轨道身份锁在 store 层也守一道:私聊永不进团队模式;团队的工作区身份固定,运行模式可切换。
     const cur = get().configBySession[sid]
     if ((cur?.soloAgentSlug || cur?.soloEngineId) && patch.groupChat) return
-    if (cur?.teamSlug && patch.groupChat === false) return
     set((s) => { const next = { ...(s.configBySession[sid] || {}), ...patch }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
   },
 

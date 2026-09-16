@@ -5,8 +5,8 @@
  * 设计要点:
  *   - 团队会话的 run(本函数)= 协调器,一条事件流;成员的实际工作 = 各自一条后台工作会话(kind='teamwork',父链接 = 团队会话,
  *     一人一条跨 run 复用 = 私有持久上下文)里的子 run(services/teamRuns.ts;走 agentLoop 完整主循环)。
- *   - 每次激活只注入「它上次之后团队里新说的话」delta(formatDelta),发言 = 子 run 的最终助手消息,抄回团队会话(`**🗣 name**` 消息 +
- *     group_speaker start/end,end 带 text —— 主聊天不再逐 token 流,过程在成员自己的流里,Team Desk 直播它)。
+ *   - 每次激活只注入「它上次之后团队里新说的话」delta(formatDelta),主动发言与最终报告按到达顺序抄回团队会话(`**🗣 name**` 消息 +
+ *     group_speaker start/end,end 带 text —— 主聊天不再逐 token 流,过程在成员自己的流里,从 Pin Summary 成员行展开)。
  *   - 调度只有一套(teamDue,纯函数):全员起头(拍板 ⑮)+ 用户消息里的 @ 与 priorityAgent 先起;被 @ 者 FIFO 优先;
  *     并发上限 TEAM_MAX_CONCURRENT(内部调用方传 groupMaxConcurrent:1 即退化成旧的顺序交替,拍板 ⑯);
  *     成员发言末尾自己决定还聊不聊(最后一个非空行 DONE = 我这边完了,之后不再轮到它,除非被 @ 或用户再开口);
@@ -15,20 +15,20 @@
  *     = 单 run 上限 × 成员数)、额度、用户中止(级联中止子 run)。
  *   - 子 run 的审批 / 询问转发到团队 run 的流上(带子 runId 与 messageId):用户在主聊天就能批,不必点开 Team Desk。
  *   - 用户插话:立刻落库 + 进 transcript + turn_boundary;全员 DONE 作废;空闲成员立刻再起,跑着的下次激活看到。
- *   - 结束后 ask_user「是否总结?」→ 是则固定「主持人」persona 一次性总结。
+ *   - 成员可用 team_say 随时发言;收尾由本会话固定 Historian 生成底部摘要附件,不询问用户。
  *   - 仅 standalone/desktop(host)形态触达(由 agentLoop 的 groupChat 闸门把守)。
  *
  * 不从 ./agentLoop import(agentLoop import 本模块 → 避免循环);所需 brain/billing/state 直接走 deps(),steer / abort 经参数借入。
  */
 import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
-import type { ChatMessage } from '../core/types.js';
 import type { StreamResult } from '../seams/cloudBrain.js';
 import { THINKING_LEVELS } from '../llm/modelCapabilities.js';
 import type { AppProfile } from '../seams/appProfile.js';
 import { publish, drain, type AgentEvent } from './eventBus.js';
 import { updateRunStatus } from './runStore.js';
-import { requestInquiry } from './inquiries.js';
+import { completeHistorianTask } from './historianSession.js';
+import { loadSpecialAgentsConfig, resolveBackgroundModelId } from './specialAgentsConfig.js';
 import { getAgent, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { compactSession, getLatestSummary } from './compaction.js';
@@ -42,6 +42,7 @@ const SPEECH_CAP = 16_000;
 
 export const HOST_SLUG = '__host__';
 const USER_SLUG = '__user__';
+export const TEAM_SUMMARY_PREFIX = '**📋 Historian**\n\n';
 /** 播种的「此前对话」上下文条目(默认播种,groupSeedHistory:false 显式关):不属于任何发言人,formatDelta 原样呈现。 */
 export const CONTEXT_SLUG = '__context__';
 
@@ -70,6 +71,8 @@ export interface GroupChatParams {
   waitSteer?: () => Promise<void>;
   /** 由 agentLoop 注入:中止一个子 run(成本 / 额度停机时级联)。 */
   abortChild?: (runId: string) => void;
+  /** 由 agentLoop 注入:调度结束后关掉本 run 的插话入口(enqueueSteer 返回 false → 客户端回退起新 run 排队),否则总结阶段收到的插话没人消费、收尾时被丢掉。 */
+  closeSteer?: () => void;
   /** 成员激活载体;缺省 = teamRuns.activateMember(子会话 + 子 run)。单测注入假实现只验调度。 */
   activateMember?: ActivateMember;
 }
@@ -156,6 +159,14 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
   const state = deps().state;
 
   try {
+    // ⓪ 载体是本地库 + 进程内事件总线(子会话 query()、子 run subscribe()):thin worker / 云端形态没有这两样,
+    //    与其成员逐个失败或挂到超时,不如明确拒绝(Codex 09-16 r4 #2)。start_discussion / Historian 辅助本就 host-only。
+    if (!p.profile.capabilities.hostExec) {
+      await publish(runId, 'error', { error: 'team_mode_requires_local_engine', detail: 'Team mode runs members in local background sessions; it is not available on this engine.' });
+      await drain(runId);
+      await updateRunStatus(runId, 'failed', { error: 'team_mode_requires_local_engine' });
+      return;
+    }
     // ① 载入参与者:groupAgents 是有序 slug 列表(已存 Normal Agent + 临时 Agent 混合);
     // 临时 Agent 定义随会话 agentConfig.groupTempAgents 传来(不落 ~/.tangu/agents,仅本会话用),按 slug 优先命中。
     // 保序去重:重复 slug(TUI `/groupchat a a`)会让 done.size 永远追不上 participants.length → 周期边界取不到发言人(Codex 09-16 r3 #2)。
@@ -237,30 +248,86 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
     const activate = p.activateMember ?? realActivateMember;
     const approvalMode = typeof p.agentConfig.approvalMode === 'string' ? p.agentConfig.approvalMode : undefined;
 
+    let speechQueue: Promise<void> = Promise.resolve();
+    let speechFailure: unknown;
+    let wakeSpeech: (() => void) | undefined;
+    let lastTimestamp = Date.now();
+    const nextTimestamp = (): number => (lastTimestamp = Math.max(Date.now(), lastTimestamp + 1));
+    const enqueueTranscript = (action: () => Promise<void>): Promise<void> => {
+      speechQueue = speechQueue.then(() => {
+        if (speechFailure) throw speechFailure;
+        return action();
+      }).catch((e) => { speechFailure = e; wakeSpeech?.(); });
+      return speechQueue;
+    };
+
     // 用户插话:立刻落库 + 进 transcript + 通知前端离开等待区。返回条数(据此让全员 DONE 作废、空闲成员再起)。
     const drainUserSteer = async (round: number): Promise<number> => {
       const steered = p.drainSteer?.() ?? [];
       if (!steered.length) return 0;
-      for (const m of steered) {
-        await state.insertUserMessage({
-          id: m.id, sessionId, content: m.content, modelId,
-          attachments: Array.isArray(m.attachments) && m.attachments.length ? m.attachments : null,
-        }).catch(() => {});
-        transcript.push({ round, slug: USER_SLUG, name: 'User', text: m.content });
-      }
-      await publish(runId, 'turn_boundary', {
-        finalizedAssistantId: lastMessageId, userMessages: steered.map((m) => ({ id: m.id, content: m.content })),
+      await enqueueTranscript(async () => {
+        for (const m of steered) {
+          await state.insertUserMessage({
+            id: m.id, sessionId, content: m.content, modelId, timestamp: nextTimestamp(),
+            attachments: Array.isArray(m.attachments) && m.attachments.length ? m.attachments : null,
+          });
+          transcript.push({ round, slug: USER_SLUG, name: 'User', text: m.content });
+        }
+        await publish(runId, 'turn_boundary', {
+          finalizedAssistantId: lastMessageId, userMessages: steered.map((m) => ({ id: m.id, content: m.content })),
+        });
       });
+      if (speechFailure) throw speechFailure;
       return steered.length;
+    };
+
+    type Settled = { slug: string; cycle: number; messageId: string; outcome: MemberOutcome };
+    const childRuns = new Map<string, string>(); // slug → 正在跑的子 runId(级联中止用)
+    const abortInFlight = (): void => { for (const id of childRuns.values()) p.abortChild?.(id); };
+    // 团队成本天花板是硬上限:用量事件一越线就停止新激活并级联中止在跑的成员(不等某个子 run 自然结束才在 settle 里判;Codex 09-16 r4 #7)。
+    let costExceeded = false;
+    const trackCost = (): void => {
+      if (costExceeded || !(teamCostLimit > 0) || !isOverRunCost(meter.cost, teamCostLimit)) return;
+      costExceeded = true;
+      void publish(runId, 'status', { phase: 'group_cost_limit', costTotal: meter.cost });
+      abortInFlight();
+    };
+
+    // Serialize public remarks (including final reports): publication and persistence share one order.
+    const postSpeech = (agent: NormalAgentDef, text: string, round: number, messageId = uuidv4(), requestReply = true): Promise<void> => {
+      return enqueueTranscript(async () => {
+        signal.throwIfAborted();
+        const base = { slug: agent.slug, name: agent.name, round, messageId };
+        await state.finalizeAssistantMessage({
+          messageId, sessionId, modelId: agent.model || modelId, agentSlug: agent.slug, timestamp: nextTimestamp(),
+          content: `**🗣 ${agent.name}**\n\n${text}`, reasoning: '', toolCalls: [], toolResults: [],
+        });
+        await publish(runId, 'group_speaker', { ...base, phase: 'start' });
+        // Older discussion panels consume tokens; clients rendering end.text must ignore this mirror.
+        await publish(runId, 'token', { delta: text, agentId: agent.slug, publicSpeech: true });
+        await publish(runId, 'group_speaker', { ...base, phase: 'end', text });
+        lastMessageId = messageId;
+        transcript.push({ round, slug: agent.slug, name: agent.name, text });
+        if (requestReply && !isDoneSpeech(text)) {
+          for (const m of parseMentions(text, participants, agent.slug)) if (!st.pending.includes(m)) st.pending.push(m);
+        }
+        wakeSpeech?.();
+      });
     };
 
     // 子 run 事件转发:审批 / 询问带上子 runId 与本次发言的 messageId(桌面在主聊天里就地批,不必点开 Team Desk);
     // 工具活动压成一行 team_activity(卡片那一行动态);用量并进团队计量(团队天花板据此判)。
-    const forward = (agent: NormalAgentDef, messageId: string, childRunId: () => string | undefined) => (ev: AgentEvent): void => {
+    const forward = (agent: NormalAgentDef, messageId: string, cycle: number, childRunId: () => string | undefined) => (ev: AgentEvent): void => {
       const pl = ev.payload || {};
       const t = ev.type;
       const tag = { agentSlug: agent.slug, agentName: agent.name, messageId, runId: childRunId() };
-      if (t === 'approval_request' || t === 'approval_result' || t === 'inquiry_request' || t === 'inquiry_result') {
+      if (t === 'team_speech' && typeof pl.text === 'string' && pl.text.trim()) {
+        void postSpeech(agent, pl.text.trim().slice(0, SPEECH_CAP), cycle, undefined, pl.requestReply === true);
+      } else if (t === 'desk_capture_request') {
+        void publish(runId, t, { ...pl, runId: childRunId() });
+      } else if (t === 'desk_present') {
+        void publish(runId, t, pl);
+      } else if (t === 'approval_request' || t === 'approval_result' || t === 'inquiry_request' || t === 'inquiry_result') {
         void publish(runId, t, { ...pl, ...tag });
       } else if (t === 'tool_call') {
         void publish(runId, 'team_activity', { slug: agent.slug, name: agent.name, messageId, tool: String(pl.name || ''), argsPreview: String(pl.arguments || '').slice(0, 160) });
@@ -268,12 +335,9 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
         const promptT = Number(pl.prompt) || 0; const compT = Number(pl.completion) || 0; const cost = Number(pl.cost) || 0;
         meter.tokens += promptT + compT; meter.cost += cost;
         void publish(runId, 'usage', { prompt: promptT, completion: compT, cached: Number(pl.cached) || 0, cost, total: meter.tokens, costTotal: meter.cost, costLimit: meter.limit, agentId: agent.slug });
+        trackCost();
       }
     };
-
-    type Settled = { slug: string; cycle: number; messageId: string; outcome: MemberOutcome };
-    const childRuns = new Map<string, string>(); // slug → 正在跑的子 runId(级联中止用)
-    const abortInFlight = (): void => { for (const id of childRuns.values()) p.abortChild?.(id); };
 
     /** 起一次激活(不 await):算 delta、推进已读指针、起子 run。返回 settle 后的结果,绝不 reject。 */
     const launch = (slug: string, cycle: number): Promise<Settled> => {
@@ -294,7 +358,7 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
           childId = ids.runId; childRuns.set(slug, ids.runId);
           void publish(runId, 'team_member', { slug, name: agent.name, phase: 'start', messageId, cycle, sessionId: ids.sessionId, runId: ids.runId, task });
         },
-        onEvent: forward(agent, messageId, () => childId),
+        onEvent: forward(agent, messageId, cycle, () => childId),
       }).catch((err: any): MemberOutcome => ({ status: signal.aborted ? 'aborted' : 'failed', text: '', error: err?.message || String(err) }));
       return run.then((outcome) => { childRuns.delete(slug); return { slug, cycle, messageId, outcome }; });
     };
@@ -305,16 +369,11 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
       steps++;
       const base = { slug: r.slug, name: agent.name, round: r.cycle, step: steps, messageId: r.messageId };
       if (r.outcome.status === 'done') {
-        const text = (r.outcome.text.trim() || '(no report this activation)').slice(0, SPEECH_CAP);
-        await publish(runId, 'group_speaker', { ...base, phase: 'start' });
-        await publish(runId, 'group_speaker', { ...base, phase: 'end', text });
-        lastMessageId = r.messageId;
-        transcript.push({ round: r.cycle, slug: r.slug, name: agent.name, text });
-        // 每条发言 = 团队会话里一条独立 model 消息(前缀发言人,reload/网页可读;agent_slug 落列供归属/头像)。
-        await state.finalizeAssistantMessage({
-          messageId: r.messageId, sessionId, modelId: agent.model || modelId, agentSlug: r.slug,
-          content: `**🗣 ${agent.name}**\n\n${text}`, reasoning: '', toolCalls: [], toolResults: [],
-        }).catch(() => {});
+        const text = r.outcome.text.trim().slice(0, SPEECH_CAP);
+        // A bare completion marker or empty turn has no public content. Keep it in the member status.
+        if (text && !/^DONE[.。!！]?$/.test(text)) await postSpeech(agent, text, r.cycle, r.messageId);
+        else await speechQueue;
+        if (speechFailure) throw speechFailure;
         await publish(runId, 'team_member', { ...base, phase: 'end', reason: 'done', sessionId: r.outcome.sessionId, runId: r.outcome.runId });
         if (isDoneSpeech(text)) {
           // 写 DONE 的那条发言里的 @ 不再排队(收尾致谢式的「@某某 谢了,DONE」不该把对方重新拉回来 —— live 台架 09-16 实测两人互相致谢无限循环)。
@@ -331,11 +390,8 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
         st.done.add(r.slug);
         await publish(runId, 'team_member', { ...base, phase: 'end', reason: 'failed', error: r.outcome.error, sessionId: r.outcome.sessionId, runId: r.outcome.runId });
       }
-      if (teamCostLimit > 0 && isOverRunCost(meter.cost, teamCostLimit)) {
-        await publish(runId, 'status', { phase: 'group_cost_limit', costTotal: meter.cost });
-        return true;
-      }
-      return false;
+      trackCost();
+      return costExceeded;
     };
 
     // ── 调度(只有这一套):全员起头,被 @ 者优先,并发上限内能起就起;周期边界 = 没人在跑也没人能起。──
@@ -360,6 +416,7 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
     try {
       for (;;) {
         if (signal.aborted) throw new AbortLikeError();
+        if (speechFailure) throw speechFailure;
         // 插话先于调度:队列里已有的立即消费(等待期间到达的靠 waitSteer 唤醒);它是对全员的新输入 —— 谁的 DONE 都作废,本周期重来。
         // 预算尾巴上(剩余激活数不够全员各回应一次)不在这里消费:留给收尾那趟(全员各回应一次,有界;Codex 09-16 r3 #3),
         // 否则最后几次激活只够一两位回应、其余成员没见到这条插话就到顶了;上限本身不因插话突破。
@@ -371,13 +428,14 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
           for (const s of st.running) if (!st.pending.includes(s)) st.pending.push(s);
         }
         for (const slug of activations < maxActivations ? teamDue(st, cap) : []) {
-          if (activations >= maxActivations) break;
+          if (activations >= maxActivations || costExceeded) break;
           if (!(await quotaOk())) { await publish(runId, 'error', { error: 'token_quota_exceeded' }); stopReason = 'quota'; break; }
           activations++;
           st.running.add(slug); st.cycleSpoken.add(slug); st.done.delete(slug); // 被 @ 的 DONE 成员重新入场:这次激活重新表态
           inFlight.set(slug, launch(slug, cycle));
         }
         if (stopReason === 'quota') { abortInFlight(); break; }
+        if (costExceeded) { stopReason = 'cost_limit'; break; } // 用量事件里越线的:在跑的已级联中止,下面等它们收场
         if (!inFlight.size) {
           if (st.done.size === participants.length) { stopReason = 'done'; break; }
           if (activations >= maxActivations) { stopReason = 'max_rounds'; break; }
@@ -387,6 +445,7 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
         }
         const settled = await Promise.race<Settled | null>([
           ...inFlight.values(),
+          new Promise<null>((resolve) => { wakeSpeech = () => resolve(null); }),
           ...(p.waitSteer && canDrain ? [p.waitSteer().then(() => null)] : []),
           abortWait,
         ]);
@@ -398,23 +457,30 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
       // 停机后还有子 run 在跑(成本 / 额度停机已级联中止;done / max_rounds 时不会有):等它们收场,发言照样抄回。
       for (const r of await Promise.all(inFlight.values())) { st.running.delete(r.slug); await settle(r); }
       inFlight.clear();
+      if (costExceeded && stopReason !== 'quota') stopReason = 'cost_limit';
 
       // 收尾前再消费一次插话:最后几次激活 / 收场判定期间进来的消息,enqueueSteer 已经答应「收到了」,
       // 不能在 finally 清队列时直接丢掉 —— 有就再让全员回应一趟(有界:一趟,并发上限内分批),然后把趟内又来的持久化进对话。
-      if (!signal.aborted && stopReason !== 'quota' && stopReason !== 'cost_limit') {
+      // 收尾趟是有界的例外(每人至多一次,受成本天花板约束、不受激活数上限约束):不这么做,最后几次激活期间的插话会被
+      // 丢在地上(Codex r2 曾判为缺陷);Codex r4 #8 指出它突破了激活数上限 —— 有意为之,记在方案 §6.4。
+      if (!signal.aborted && stopReason !== 'quota' && !costExceeded) {
         const late = await drainUserSteer(roundsRun);
         if (late > 0) {
           const queue = participants.map((a) => a.slug);
-          while (queue.length) {
+          while (queue.length && !costExceeded) {
             if (signal.aborted) throw new AbortLikeError();
             const batch = queue.splice(0, cap);
             for (const r of await Promise.all(batch.map((slug) => launch(slug, roundsRun)))) {
-              if (await settle(r)) { stopReason = 'cost_limit'; queue.length = 0; break; }
+              if (await settle(r)) { stopReason = 'cost_limit'; queue.length = 0; }
             }
           }
           await drainUserSteer(roundsRun);
         }
       }
+      // 调度到此为止:之后的 Historian 摘要不消费插话 → 关掉入口,客户端回退起新 run 排在本 run 后面。
+      await speechQueue;
+      if (speechFailure) throw speechFailure;
+      p.closeSteer?.();
     } catch (err) {
       abortInFlight(); // 团队 run 自己出错 / 被中止:子 run 不能变成没人管的孤儿
       throw err;
@@ -425,28 +491,31 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
       participants: participants.map((a) => ({ slug: a.slug, name: a.name })),
     });
 
-    // ④ 主持人总结。groupNoSummary(Historian 辅助讨论等:结论=主 agent 的工具动作,无需总结)→ 整步跳过;
-    // groupAutoSummary(后台 @讨论:无交互用户)→ 直接总结;否则询问用户(run 内 await,不结束 run)。
+    // Historian supplies an optional attachment. Never ask for mandatory input or fail the team for a summary failure.
     let summarized = false;
-    if (!signal.aborted && !p.agentConfig.groupNoSummary) {
-      const ans = p.agentConfig.groupAutoSummary
-        ? '是,总结'
-        : await requestInquiry(
-            runId,
-            { question: '群聊讨论已结束,需要主持人总结一下吗?', options: ['是,总结', '否,不用'], allowFreeText: false },
-            signal,
-          );
-      if (ans.startsWith('是')) {
-        const hostRound = roundsRun + 1;
+    if (!signal.aborted && !p.agentConfig.groupNoSummary && stopReason !== 'quota' && stopReason !== 'cost_limit') {
+      try {
         const hostMessageId = uuidv4();
-        await publish(runId, 'group_speaker', { slug: HOST_SLUG, name: '主持人', round: hostRound, phase: 'start', messageId: hostMessageId });
-        const summary = await runHostSummary(transcript, p, meter);
-        await publish(runId, 'group_speaker', { slug: HOST_SLUG, name: '主持人', round: hostRound, phase: 'end', messageId: hostMessageId });
-        await state.finalizeAssistantMessage({
-          messageId: hostMessageId, sessionId, modelId,
-          content: `**🗣 主持人**\n\n${summary.text}`, reasoning: '', toolCalls: [], toolResults: [],
-        }).catch(() => {});
-        summarized = true;
+        const cfg = loadSpecialAgentsConfig().historian;
+        const summaryModel = await resolveBackgroundModelId(cfg.modelId).catch(() => '') || modelId;
+        const result = await completeHistorianTask({
+          sessionId, userId, modelId: summaryModel, task: 'team-summary',
+          instructions: [cfg.prompt, HOST_PROMPT].filter(Boolean).join('\n\n'),
+          transcript: transcript.map((t) => `[${t.name}]\n${t.text}`).join('\n\n'),
+          maxTokens: 1200, signal,
+        });
+        await account(p, result, summaryModel, result.model, HOST_SLUG, meter);
+        if (result.content) {
+          await state.finalizeAssistantMessage({
+            messageId: hostMessageId, sessionId, modelId: summaryModel, timestamp: nextTimestamp(),
+            content: TEAM_SUMMARY_PREFIX + result.content, reasoning: '', toolCalls: [], toolResults: [],
+          });
+          await publish(runId, 'group_summary', { messageId: hostMessageId, text: result.content, historianSessionId: result.historianSessionId });
+          summarized = true;
+        }
+      } catch (err: any) {
+        if (signal.aborted) throw new AbortLikeError();
+        console.warn('[agent-core] optional Historian team summary unavailable:', err?.message || err);
       }
     }
 
@@ -462,28 +531,6 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
     await drain(runId).catch(() => {});
     await updateRunStatus(runId, status, { error: msg }).catch(() => {});
   }
-}
-
-/** 主持人总结:一次性流式,tag agentId=__host__。 */
-async function runHostSummary(transcript: TranscriptEntry[], p: GroupChatParams, meter: Meter): Promise<{ text: string; cost: number }> {
-  const llm = deps().brain.llm;
-  const { model, apiKey, baseUrl, apiModelId } = await llm.resolveModelAndKey(p.modelId);
-  const body = transcript.map((t) => `【${t.name}】\n${t.text}`).join('\n\n');
-  const messages: ChatMessage[] = [
-    { role: 'system', content: HOST_PROMPT } as ChatMessage,
-    { role: 'user', content: `Here is the full record of the group discussion:\n\n${body}` } as ChatMessage,
-  ];
-  const payload = await llm.buildProviderPayload({
-    model, apiModelId, messages, projectSource: p.appId, temperature: 0.4,
-    attachments: [], thinkingLevel: 'off', stream: true, cacheKey: `${p.sessionId}:grp:host`,
-  });
-  let streamed = '';
-  const res = await llm.streamProviderCompletion({
-    apiKey, baseUrl, payload, provider: (model as any)?.provider, signal: p.signal,
-    onToken: (d) => { streamed += d; void publish(p.runId, 'token', { delta: d, agentId: HOST_SLUG }); },
-  });
-  const cost = await account(p, res, p.modelId, model, HOST_SLUG, meter);
-  return { text: (res.content || streamed || '(no summary)').slice(0, SPEECH_CAP), cost };
 }
 
 /** 计费 + 发 usage 事件(usage 取自真实 provider 用量,即使 noop 计费也让前端 token 表生效)。 */
@@ -556,8 +603,8 @@ export function teamMemberSection(agentName: string, roster: string, teamDoc?: s
     roster +
     '\n\n' +
     `You are "${agentName}". How the team works:\n` +
-    '- Every member works in their own thread, in parallel. The team chat only ever sees the final message of each of your activations — put your report there: what you did, what you found or decided, what you need from others. Tool calls and drafts stay in your thread.\n' +
-    '- Address a member with @<name>; quote their words with a markdown blockquote (starting with >). A member you @-mention is activated next with your message.\n' +
+    '- Every member works in their own thread, in parallel. Use team_say whenever you have a useful progress update, finding, question or handoff to share in the main team chat, without waiting to finish your work. Each remark is posted in arrival order. Your final answer is also posted; do not repeat earlier remarks. Tool calls and private drafts stay in your thread.\n' +
+    '- Address a member with @<name>; quote their words with a markdown blockquote (starting with >). In team_say, set requestReply=true only for a question or new work that needs the mentioned member to act. Ordinary progress and completion acknowledgements do not reactivate teammates. A request in your final answer without DONE also activates the mentioned member. Do not ask teammates to confirm an already completed task.\n' +
     '- You are activated whenever the team chat has new remarks for you: a teammate @-mentioned you, the user spoke, or a new cycle started because someone still has work to do.\n' +
     '- If you are waiting on a teammate, @-mention them with exactly what you need and end WITHOUT DONE — you will be activated again when they report back or when the next cycle starts.\n' +
     '- When your part is complete and nobody needs anything more from you, end your final message with DONE on its own line as the last line. You then stay silent unless a member @-mentions you or the user speaks again. The team is finished once every member has ended with DONE; there is no round limit and no vote.\n' +
@@ -614,7 +661,7 @@ export async function buildHistorySeed(sessionId: string, modelId: string, appId
 }
 
 const HOST_PROMPT =
-  'You are the moderator of this multi-agent group chat. Based on the full discussion record, give the user a clear, objective summary:\n' +
+  'You are this conversation’s Historian, also serving as the team moderator. Your summary is an optional attachment below the chat, not another participant speech. Based on the full discussion record, give the user a clear, objective summary:\n' +
   '1. The core topic of the discussion\n' +
   '2. Each side\'s main points (grouped by member)\n' +
   '3. Consensus reached and remaining disagreements\n' +

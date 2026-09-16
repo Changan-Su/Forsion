@@ -30,7 +30,7 @@ function sseLines(events) {
  */
 async function startStubEngine(data = {}) {
   const seen = {
-    runs: [], inquiries: [], approvals: [], approvalRules: [], search: [], checkpoints: 0, restore: [], messagesDeleted: [],
+    runs: [], configs: [], inquiries: [], approvals: [], approvalRules: [], search: [], checkpoints: 0, restore: [], messagesDeleted: [],
   };
   const queue = [];
   const state = {
@@ -145,7 +145,10 @@ async function startStubEngine(data = {}) {
       return json({ session: s });
     }
     if (/^\/agent\/sessions\/[^/]+\/messages$/.test(p)) return json({ messages: state.messages });
-    if (/^\/agent\/sessions\/[^/]+\/config$/.test(p)) return json({ agent_config: { execMode: 'host', approvalMode: 'auto-edit' } });
+    if (/^\/agent\/sessions\/[^/]+\/config$/.test(p)) {
+      if (req.method === 'PUT') seen.configs.push({ sessionId: p.split('/')[3], config: await body() });
+      return json({ agent_config: { execMode: 'host', approvalMode: 'auto-edit' } });
+    }
     if (/^\/agent\/sessions\/[^/]+\/background$/.test(p)) return json({ background: [] });
     if (p === '/agent/models') return json({ models: state.models, defaultModelId: state.models[0]?.id, directProviders: data.directProviders || [] });
     if (p === '/agent/agents') return json({ agents: data.agents || [] });

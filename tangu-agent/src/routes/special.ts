@@ -34,6 +34,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
+import { isHistorianBusy } from '../services/localHistorian.js';
+import { hasHistorianTask } from '../services/historianSession.js';
 import { createRun } from '../services/runStore.js';
 import { enqueueRun } from '../services/agentLoop.js';
 import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt } from '../services/specialAgentsConfig.js';
@@ -108,12 +110,27 @@ router.get('/agent/special/historian/activity', authMiddleware, async (req: Auth
   try {
     const userId = req.user!.userId;
     const limit = Math.min(Math.max(1, Number(req.query.limit) || 50), 200);
+    const sessionId = typeof req.query.sessionId === 'string' ? req.query.sessionId : '';
+    if (sessionId) {
+      const own = await query<any[]>('SELECT id FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1', [sessionId, userId]);
+      if (!own[0]) return res.status(404).json({ detail: 'Session not found' });
+    }
     const rows = await query<any[]>(
       `SELECT id, action, detail, session_ref, created_at FROM special_agent_log
-       WHERE user_id = ? AND agent = 'historian' ORDER BY created_at DESC LIMIT ${Math.floor(limit)}`,
-      [userId],
+       WHERE user_id = ? AND agent = 'historian'${sessionId ? ' AND session_ref = ?' : ''} ORDER BY created_at DESC LIMIT ${Math.floor(limit)}`,
+      sessionId ? [userId, sessionId] : [userId],
     );
-    res.json({ activity: rows || [] });
+    if (!sessionId) return res.json({ activity: rows || [] });
+    const assist = await query<any[]>(`SELECT s.agent_config FROM agent_runs r JOIN chat_sessions s ON s.id = r.session_id
+      WHERE s.parent_session_id = ? AND s.user_id = ? AND s.kind = 'discussion'
+      AND r.status IN ('queued', 'running')`, [sessionId, userId]);
+    const assisting = assist.some((row) => {
+      try { return !!(typeof row.agent_config === 'string' ? JSON.parse(row.agent_config) : row.agent_config)?.historianAssist; } catch { return false; }
+    });
+    const records = req.query.detail === '1' ? await query<any[]>(`SELECT m.id, m.content, m.timestamp FROM chat_messages m
+      JOIN chat_sessions s ON s.id = m.session_id WHERE s.parent_session_id = ? AND s.user_id = ?
+      AND s.kind = 'historian' AND m.role = 'model' ORDER BY m.timestamp DESC LIMIT 6`, [sessionId, userId]) : [];
+    res.json({ activity: rows || [], records, running: isHistorianBusy(sessionId) || hasHistorianTask(userId, sessionId) || assisting });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'activity failed' });
   }

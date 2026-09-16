@@ -168,7 +168,7 @@ export function createSqlStateStore(): StateStore {
          VALUES (?, ?, 'user', ?, ?, ?, FALSE, ?)
          ON CONFLICT (id) DO NOTHING`,
         [
-          m.id, m.sessionId, m.content, Date.now(), m.modelId,
+          m.id, m.sessionId, m.content, m.timestamp ?? Date.now(), m.modelId,
           Array.isArray(m.attachments) && m.attachments.length ? JSON.stringify(m.attachments) : null,
         ],
       );
@@ -180,7 +180,7 @@ export function createSqlStateStore(): StateStore {
          VALUES (?, ?, 'model', ?, ?, ?, ?, FALSE, ?, ?, NULL, ?, ?)
          ON CONFLICT (id) DO UPDATE SET content=EXCLUDED.content, reasoning=EXCLUDED.reasoning, tool_calls=EXCLUDED.tool_calls, tool_results=EXCLUDED.tool_results, display_files=EXCLUDED.display_files, agent_slug=EXCLUDED.agent_slug, updated_at=CURRENT_TIMESTAMP`,
         [
-          m.messageId, m.sessionId, m.content, Date.now(), m.modelId,
+          m.messageId, m.sessionId, m.content, m.timestamp ?? Date.now(), m.modelId,
           m.reasoning || null,
           m.toolCalls.length ? JSON.stringify(m.toolCalls) : null,
           m.toolResults.length ? JSON.stringify(m.toolResults) : null,

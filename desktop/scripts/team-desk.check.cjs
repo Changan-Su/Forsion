@@ -1,16 +1,6 @@
-/**
- * Team Desk × 并行团队的桌面接线检查(真 Electron + 桩引擎;方案 §6.4 B,09-16 第四轮)。
- *
- * 钉的是引擎事件面 → 主聊天 / 状态条 / Team Desk 三处的接线,不是几何:
- *   1  团队会话(groupChat + groupAgents ≥ 2)里车道渲染 Team Desk 卡(data-team-desk="card"),不是 Agent Desk 卡;成员行数 = 成员数
- *   2  team_member start → 每位成员一条占位气泡(data-team-work="working"),首位成员收养 run 占位;team_activity → 行动态带工具名
- *   3  转发的 approval_request(带子 runId + messageId)→ 落在该成员的占位气泡上(data-team-work="waiting")+ Team Desk 行 / 状态条头像标等审批;
- *      点「批准」→ POST 到**子 run**(/agent/runs/<childRunId>/approvals/<id>),不是团队 run
- *   4  group_speaker end 带 text → 正文整段落进气泡(不靠 token 流);group_ended → 成员回到完成态、气泡不再 streaming、没有重复气泡
- *   5  点卡片 → 展开侧板(data-team-desk="panel".open):成员条 2 个 tab,选中成员的工作区带任务行
- *   6  亮 / 暗截图各一(观感类改动交付前必看一张真图)
- *
- * 跑:node scripts/team-desk.check.cjs   (与 orbitside.check 同一套启动:桩引擎 + 独立 userData;若已有 dev 版 Electron 在跑先 pkill,单实例锁)
+/** Team UI regression: Pin Summary member rows, independent Agent Desk, chronological public remarks,
+ * forwarded approvals, optional Historian attachment and light/dark screenshots.
+ * Run after npm run build: npm run check:teamdesk (isolated Electron user data).
  */
 const fs = require('fs')
 const os = require('os')
@@ -39,13 +29,14 @@ const sessionFixtures = (projectDir) => {
       agent_config: { groupChat: true, groupAgents: ['xyra', 'orbit-one'], execMode: 'host', cwd: projectDir } },
   ]
 }
-/** 会话里已有两条消息:Team Desk 卡与 Agent Desk 卡同规则,空会话不占位(免与 Agent 选择器争位)。 */
+/** 会话里已有两条消息:验证 Pin Summary 与 Agent Desk 同时可见。 */
 const MESSAGES = [
   { id: 'td-m1', session_id: SESSION_ID, role: 'user', content: '先做接口和测试', timestamp: '2026-09-16 10:00:00' },
   { id: 'td-m2', session_id: SESSION_ID, role: 'model', content: '**🗣 Xyra**\n\n收到,先拆一下。', agent_slug: 'xyra', timestamp: '2026-09-16 10:00:05' },
 ]
 
 /** 团队 run 的事件剧本(引擎 §6.4 事件面):两位成员同时起 → xyra 有工具活动并等审批 → 批准后两人先后发言 → 全员 DONE 收场。 */
+const LONG_REPORT = '测试写好了\n\n' + Array.from({ length: 18 }, (_, i) => `第 ${i + 1} 项：接口响应、参数校验、异常处理和并发行为均已验证。`).join('\n\n') + '\n@Xyra 接口给你\nDONE'
 const RUN_SCRIPT = [
   { type: 'team_member', payload: { slug: 'xyra', name: 'Xyra', phase: 'start', messageId: 'mid-x-1', cycle: 1, sessionId: 'ws-x', runId: 'child-x-1', task: '先做接口' } },
   { type: 'team_member', payload: { slug: 'orbit-one', name: 'Orbit One', phase: 'start', messageId: 'mid-o-1', cycle: 1, sessionId: 'ws-o', runId: 'child-o-1', task: '写测试' }, delay: 100 },
@@ -54,11 +45,12 @@ const RUN_SCRIPT = [
   // 给检查留 4s 去点「批准」(桩不会因 POST 放行,靠固定延时)
   { type: 'approval_result', payload: { approvalId: 'ap1', action: 'approve', runId: 'child-x-1', agentSlug: 'xyra', messageId: 'mid-x-1' }, delay: 4000 },
   { type: 'group_speaker', payload: { slug: 'orbit-one', name: 'Orbit One', round: 1, step: 1, phase: 'start', messageId: 'mid-o-1' }, delay: 400 },
-  { type: 'group_speaker', payload: { slug: 'orbit-one', name: 'Orbit One', round: 1, step: 1, phase: 'end', messageId: 'mid-o-1', text: '测试写好了\n@Xyra 接口给你\nDONE' } },
+  { type: 'group_speaker', payload: { slug: 'orbit-one', name: 'Orbit One', round: 1, step: 1, phase: 'end', messageId: 'mid-o-1', text: LONG_REPORT } },
   { type: 'team_member', payload: { slug: 'orbit-one', name: 'Orbit One', phase: 'end', reason: 'done', messageId: 'mid-o-1', sessionId: 'ws-o', runId: 'child-o-1' } },
-  { type: 'group_speaker', payload: { slug: 'xyra', name: 'Xyra', round: 1, step: 2, phase: 'start', messageId: 'mid-x-1' }, delay: 400 },
+  { type: 'group_speaker', payload: { slug: 'xyra', name: 'Xyra', round: 1, step: 2, phase: 'start', messageId: 'mid-x-1' }, delay: 1800 },
   { type: 'group_speaker', payload: { slug: 'xyra', name: 'Xyra', round: 1, step: 2, phase: 'end', messageId: 'mid-x-1', text: '接口完成:src/api.ts\nDONE' } },
   { type: 'team_member', payload: { slug: 'xyra', name: 'Xyra', phase: 'end', reason: 'done', messageId: 'mid-x-1', sessionId: 'ws-x', runId: 'child-x-1' } },
+  { type: 'group_summary', payload: { messageId: 'summary-1', text: '接口与测试已完成,可以一起验收。' } },
   { type: 'group_ended', payload: { rounds: 1, reason: 'done', steps: 2, participants: [{ slug: 'xyra', name: 'Xyra' }, { slug: 'orbit-one', name: 'Orbit One' }] } },
   { type: 'done', payload: { content: '', group: true } },
 ]
@@ -66,10 +58,12 @@ const RUN_SCRIPT = [
 const PROBE = `(() => {
   const q = (s, r = document) => Array.from(r.querySelectorAll(s))
   const vis = (e) => { const r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(e).visibility !== 'hidden' }
-  const card = document.querySelector('[data-team-desk="card"]')
+  const card = document.querySelector('[data-team-desk="status"]')
   const rows = card ? q('.t2o-desk-row', card).map((r) => ({ slug: r.dataset.slug, status: r.dataset.status, activity: (r.querySelector('.t2o-desk-activity') || {}).textContent || '' })) : null
   const panel = document.querySelector('[data-team-desk="panel"]')
   return {
+    statusInSummary: !!document.querySelector('.t2-tsum [data-team-desk="status"]'),
+    summaryCards: q('[data-team-summary]').length,
     hasTeamCard: !!card, cardGone: !!(card && card.classList.contains('gone')), cardVisible: !!(card && vis(card)),
     plainDeskCards: q('.agent-desk-card:not([data-team-desk])').length,
     rows,
@@ -84,7 +78,7 @@ const PROBE = `(() => {
     panelOpen: !!(panel && panel.classList.contains('open')),
     tabs: panel ? q('.t2o-desk-tab', panel).map((b) => ({ slug: b.dataset.slug, status: b.dataset.status, selected: b.getAttribute('aria-selected') === 'true' })) : null,
     taskLine: (document.querySelector('[data-team-desk="work"] .t2o-desk-task') || {}).textContent || '',
-    bodyText: (document.querySelector('.t2-stream') || document.body).innerText.slice(0, 4000),
+    bodyText: (document.querySelector('.t2-stream') || document.body).innerText.slice(0, 8000),
   }
 })()`
 
@@ -126,15 +120,15 @@ async function run(app, win, stub) {
   await win.reload({ waitUntil: 'domcontentloaded' })
   await win.waitForSelector('#root', { timeout: 30_000 })
   await openTeamSession(win)
-  const shots = { light: path.join(os.tmpdir(), `forsion-teamdesk-light-${process.pid}.png`), dark: path.join(os.tmpdir(), `forsion-teamdesk-dark-${process.pid}.png`) }
+  const shots = { team: path.join(os.tmpdir(), `forsion-teamdesk-team-${process.pid}.png`), light: path.join(os.tmpdir(), `forsion-teamdesk-light-${process.pid}.png`), dark: path.join(os.tmpdir(), `forsion-teamdesk-dark-${process.pid}.png`) }
 
-  // ── 1 团队会话里是 Team Desk 卡,不是 Agent Desk 卡 ─────────────────────
-  await win.waitForSelector('[data-team-desk="card"]', { timeout: 15_000 }).catch(() => {})
+  // ── 1 成员状态进入 Pin Summary,Agent Desk 保留 ─────────────────────
+  await win.waitForSelector('[data-team-desk="status"]', { timeout: 15_000 }).catch(() => {})
   let st = await win.evaluate(PROBE)
-  check('1 团队会话的车道渲染 Team Desk 卡(data-team-desk="card"),且没有 Agent Desk 卡', st.hasTeamCard && st.plainDeskCards === 0, JSON.stringify({ hasTeamCard: st.hasTeamCard, plain: st.plainDeskCards }))
-  if (!st.hasTeamCard) { console.error('PROBE ' + JSON.stringify({ ...st, bodyText: st.bodyText.slice(0, 200) })); throw new StopEarly('Team Desk 卡未渲染') }
+  check('1 团队成员列表在 Pin Summary 中,Agent Desk 卡保留', st.hasTeamCard && st.statusInSummary && st.plainDeskCards === 1, JSON.stringify({ hasTeamCard: st.hasTeamCard, plain: st.plainDeskCards }))
+  if (!st.hasTeamCard) { console.error('PROBE ' + JSON.stringify({ ...st, bodyText: st.bodyText.slice(0, 200) })); throw new StopEarly('Pin Summary 成员列表未渲染') }
   check('1a 卡片在场(会话有消息 → 不 gone)且成员行 = 2、都是空闲', st.cardVisible && !st.cardGone && Array.isArray(st.rows) && st.rows.length === 2 && st.rows.every((r) => r.status === 'idle'), JSON.stringify(st.rows))
-  check('1b 状态条是团队模式状态条(data-orbit="teammode")', st.barOrbit === 'teammode', JSON.stringify({ barOrbit: st.barOrbit }))
+  check('1b 顶部团队状态条已移除', st.barOrbit === null, JSON.stringify({ barOrbit: st.barOrbit }))
 
   // ── 2/3 起一次 run:两位成员同时起 → xyra 等审批 ───────────────────────
   stub.script(RUN_SCRIPT)
@@ -144,9 +138,9 @@ async function run(app, win, stub) {
   st = await win.evaluate(PROBE)
   const xy = (st.rows || []).find((r) => r.slug === 'xyra') || {}
   const ob = (st.rows || []).find((r) => r.slug === 'orbit-one') || {}
-  check('2 team_member start → 两位成员各一条占位气泡;xyra 因审批标 waiting、orbit-one working', st.workBubbles.length === 2 && st.workBubbles.includes('waiting') && st.workBubbles.includes('working'), JSON.stringify(st.workBubbles))
+  check('2 仅需要审批的成员在主聊天露出卡片,其他运行占位不显示', st.workBubbles.length === 1 && st.workBubbles.includes('waiting'), JSON.stringify(st.workBubbles))
   check('2a Team Desk 行状态跟着走:xyra=waiting(此前 team_activity 的工具名已进动态)、orbit-one=working', xy.status === 'waiting' && ob.status === 'working', JSON.stringify(st.rows))
-  check('2b 状态条:两枚头像带 data-work,副文案有「工作中」与「等待审批」', st.barWork.length === 2 && st.barWork.includes('waiting') && /工作中/.test(st.barSub) && /等待审批/.test(st.barSub), JSON.stringify({ barWork: st.barWork, barSub: st.barSub }))
+
   check('3 转发的审批落在主聊天(审批卡 1 张),不必点开 Team Desk', st.approvalCards === 1, JSON.stringify({ approvalCards: st.approvalCards }))
   if (st.approvalCards === 1) {
     await win.locator('.approval-card .btn.primary').first().click()
@@ -157,23 +151,53 @@ async function run(app, win, stub) {
     check('3a 点「批准」→ POST 到子 run', false, '没有审批卡可点')
   }
 
+  await win.waitForFunction(() => !!document.querySelector('#tocmsg-mid-o-1 .t2-content'))
+  const earlyLength = await win.locator('#tocmsg-mid-o-1 .t2-content').innerText().then((s) => s.length)
+  check('3b 新团队发言有逐字展示的中间帧', earlyLength > 0 && earlyLength < LONG_REPORT.length - 40, String(earlyLength))
+  await sleep(1000)
+  const gap = await win.locator('.t2-stream').evaluate((el) => el.scrollHeight - el.scrollTop - el.clientHeight)
+  check('3c 另一成员仍在运行时,长发言动画结束后自动吸底', gap < 8, String(gap))
+  await win.locator('.t2-stream').hover()
+  await win.mouse.wheel(0, -650)
+  await sleep(150)
+  const readingTop = await win.locator('.t2-stream').evaluate((el) => el.scrollTop)
   // ── 4 发言到达 → 正文落进气泡;收场 → 成员回到完成态、不再有 streaming 气泡 ─
   await win.getByText('接口完成', { exact: false }).first().waitFor({ timeout: 20_000 }).catch(() => {})
   await sleep(600)
   st = await win.evaluate(PROBE)
   check('4 group_speaker end 带 text → 两位成员的发言正文都在主聊天里(不靠 token 流)', /测试写好了/.test(st.bodyText) && /接口完成/.test(st.bodyText), st.bodyText.slice(0, 300).replace(/\n/g, ' '))
+  const retainedTop = await win.locator('.t2-stream').evaluate((el) => el.scrollTop)
+  check('3d 向上阅读时,后续消息不抢滚动位置', Math.abs(retainedTop - readingTop) < 8, `${readingTop} → ${retainedTop}`)
+  await win.locator('.t2-jump').click()
+  await sleep(350)
   check('4a 收场后没有 streaming 占位(data-team-work 0、思考中 0),没有重复气泡', st.workBubbles.length === 0 && st.thinking === 0, JSON.stringify({ workBubbles: st.workBubbles, thinking: st.thinking }))
   check('4b group_ended → Team Desk 行回到非忙碌态、状态条头像不再高亮', Array.isArray(st.rows) && st.rows.every((r) => r.status !== 'working' && r.status !== 'waiting') && st.barWork.length === 0, JSON.stringify({ rows: st.rows, barWork: st.barWork }))
   check('4c 收场系统行出现「全员表示已完成」', /全员表示已完成/.test(st.bodyText), '')
   check('4d 发言末尾的 DONE 剥成「已完成」小标记(两条),正文里不再裸露 DONE', st.doneMarks === 2 && st.rawDone === 0, JSON.stringify({ doneMarks: st.doneMarks, rawDone: st.rawDone }))
 
-  // ── 5 展开侧板 ───────────────────────────────────────────────────────────
-  await win.locator('[data-team-desk="card"]').click()
-  await win.waitForSelector('[data-team-desk="panel"].open', { timeout: 10_000 }).catch(() => {})
-  await sleep(700)
-  st = await win.evaluate(PROBE)
-  check('5 点卡片 → 侧板展开,成员条 2 个 tab、有一个选中', st.panelOpen && Array.isArray(st.tabs) && st.tabs.length === 2 && st.tabs.filter((x) => x.selected).length === 1, JSON.stringify({ open: st.panelOpen, tabs: st.tabs }))
-  check('5a 选中成员的工作区带任务行(team_member start 的 task)', /先做接口|写测试/.test(st.taskLine), JSON.stringify({ taskLine: st.taskLine }))
+  check('4e 公开发言按到达顺序排列', st.bodyText.indexOf('测试写好了') < st.bodyText.indexOf('接口完成'), '')
+  check('4f Historian 摘要附着于底部,不要求回答询问', st.summaryCards === 1 && !/需要主持人总结/.test(st.bodyText), '')
+  await win.locator('[data-team-summary] summary').click()
+  check('4g 摘要可展开阅读', await win.locator('[data-team-summary]').innerText().then((s) => s.includes('一起验收')), '')
+  await dismissToasts(win)
+  for (const slug of ['xyra', 'orbit-one']) {
+    await win.locator(`[data-team-desk="status"] button[data-slug="${slug}"]`).click()
+    check(`5 点击 ${slug} 打开成员工作记录`, await win.locator(`[data-team-desk="status"] button[data-slug="${slug}"]`).getAttribute('aria-expanded') === 'true' && await win.locator('[data-team-desk="work"]').count() === 1, '')
+  }
+  await win.locator('[data-historian-status] > button').click()
+  await win.getByText('已保存该会话的工作约定', { exact: false }).first().waitFor()
+  check('6 Historian 有独立可展开的状态行', await win.locator('.t2-tsum [data-historian-work]').count() === 1, '')
+  await win.screenshot({ path: shots.team })
+  await win.locator('.add-pill-btn').click()
+  await win.locator('[data-add-agent]').click()
+  check('6a 加号菜单可打开添加 Agent', await win.getByText('群聊模式', { exact: true }).count() === 1, '')
+  await win.locator('button[title="关闭"]').last().click()
+  await win.locator('.mode-pill-btn').click()
+  await win.locator('[data-normal-work]').click()
+  await sleep(300)
+  const normal = stub.seen.configs.at(-1)?.config
+  check('6b 普通模式关闭团队和计划,恢复 auto-edit', normal?.groupChat === false && normal?.planMode === false && normal?.approvalMode === 'auto-edit', JSON.stringify(normal))
+  check('6c 普通模式仍保留 Historian,团队成员表退出', await win.locator('[data-historian-status]').count() === 1 && await win.locator('[data-team-desk="status"]').count() === 0, '')
   await dismissToasts(win)
   await win.mouse.move(640, 900)
   await sleep(300)
@@ -184,7 +208,7 @@ async function run(app, win, stub) {
   await win.evaluate(`localStorage.setItem('forsion_theme_pref', 'dark')`)
   await win.reload({ waitUntil: 'domcontentloaded' })
   await openTeamSession(win).catch(() => {})
-  await win.waitForSelector('[data-team-desk="card"]', { timeout: 15_000 }).catch(() => {})
+  await win.waitForSelector('[data-team-desk="status"]', { timeout: 15_000 }).catch(() => {})
   await sleep(800)
   await dismissToasts(win)
   await sleep(300)
@@ -198,7 +222,11 @@ async function main() {
   const vault = path.join(home, 'vault')
   const projectDir = path.join(home, 'Orbit Project')
   for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
-  const stub = await startStubEngine({ agents: AGENTS, sessions: sessionFixtures(projectDir), messages: MESSAGES })
+  const stub = await startStubEngine({ agents: AGENTS, sessions: sessionFixtures(projectDir), messages: MESSAGES, handle: ({ path: route, url }) => {
+    if (route === '/agent/special/config') return { config: { historian: { enabled: true }, muse: { enabled: false } } }
+    if (route === '/agent/special/historian/activity') return { running: false, activity: [{ id: 'hist-action', detail: '已保存该会话的工作约定', session_ref: SESSION_ID }], records: url.searchParams.get('detail') === '1' ? [{ id: 'hist-record', content: '团队接口与测试的分工已记录。' }] : [] }
+    if (route === '/agent/runs' && url.searchParams.has('sessionId')) return { runs: [] }
+  } })
   for (const dir of [userData, `${userData}-dev`]) {
     fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'e2e' }), 'utf8')
     fs.writeFileSync(path.join(dir, 'amadeus-config.dev.json'), JSON.stringify({ localVault: vault, lastVault: vault }), 'utf8')
@@ -208,7 +236,7 @@ async function main() {
   try {
     app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url } })
   } catch (e) {
-    console.error('启动失败。若已有 dev 版 Electron 在跑,先 pkill -f "node_modules/electron/dist/Electron.app"(单实例锁)。')
+    console.error('隔离 Electron 启动失败;保留现有应用实例。')
     try { stub.close() } catch { /* ignore */ }
     throw e
   }

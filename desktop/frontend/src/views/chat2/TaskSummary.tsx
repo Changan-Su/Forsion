@@ -111,7 +111,8 @@ const fmtDur = (ms: number): string => {
 }
 const baseName = (p: string): string => p.split(/[/\\]/).filter(Boolean).pop() || p
 
-export function TaskSummary({ messages, running, cwd, hostCwd, onJumpToAttention, onShowEditing, onOpenFile, extraRoots = [], lockedRoots = [], onAddRoot, onRemoveRoot, modelId }: {
+export function TaskSummary({ messages, running, cwd, hostCwd, onJumpToAttention, onShowEditing, onOpenFile, extraRoots = [], lockedRoots = [], onAddRoot, onRemoveRoot, modelId, teamStatus }: {
+  teamStatus?: React.ReactNode
   messages: UiMessage[]
   running: boolean
   cwd?: string
@@ -157,13 +158,14 @@ export function TaskSummary({ messages, running, cwd, hostCwd, onJumpToAttention
 
   return (
     // 卡本身不再单列标题(对齐 Codex:开篇即第一个分区),标题降级为无障碍名。
-    <aside className={`t2-tsum${hasFacts(f) ? ' show' : ''}`} aria-hidden={!hasFacts(f)} aria-busy={f.state === 'running'} aria-label={t('tsum.title')}>
+    <aside className={`t2-tsum${hasFacts(f) || teamStatus ? ' show' : ''}`} aria-hidden={!hasFacts(f) && !teamStatus} aria-busy={f.state === 'running'} aria-label={t('tsum.title')}>
       <div className="t2-tsum-in">
         <div className={`t2-tsum-state ${f.state}`} role="status" aria-live="polite">
           {StateIcon && <StateIcon size={14} />}
           <span className={`t2-tsum-state-tx${f.state === 'running' ? ' chat-run-shimmer-text' : ''}`}>{t(`tsum.state.${f.state === 'idle' ? 'done' : f.state}`)}</span>
           {f.todos.length > 0 && <span className="t2-tsum-count">{done}/{f.todos.length}</span>}
         </div>
+        {teamStatus}
         {elapsed >= 30_000 && <div className="t2-tsum-sub">{t('tsum.elapsed', { t: fmtDur(elapsed) })}</div>}
         {act && <div className="t2-tsum-sub" title={act.target}>{act.verbKey ? t(act.verbKey) : f.action!.name} {act.target}</div>}
 

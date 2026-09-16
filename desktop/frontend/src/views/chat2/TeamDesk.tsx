@@ -1,20 +1,10 @@
-/**
- * Team Desk(方案 §6.4 B;09-16 第四轮拍板 ⑲ 恒开、⑳ 只看最近一次激活):团队会话里替换 Agent Desk 的成员工作台。
- *   卡片态(车道下半,壳复用 .agent-desk-card):每成员一行 = 头像 + 名字 + 状态点 + 一行动态;标题「Team Desk · n 人 · k 工作中」。
- *   展开态(侧板,壳复用 .agent-desk 与 deskBySession 的 mode / fraction):成员条 + 选中成员的工作转录 —— 订阅它子 run 的事件流
- *   (运行中直播;已结束从 seq 0 回放),与右栏子聊天面板的 DiscussionView 同一机制。
- *   审批 / 询问不在这里:成员子 run 的审批已转发到主聊天的占位气泡上(用户拍板:不用点开也能传递),这里只看过程。
- *   数据:teamWorkBySession(team_member / team_activity 事件)+ 挂载时 hydrateTeamWork(/background?kind=teamwork 复原)。
- * 仅桌面(与 Agent Desk 同边界);移动端只有状态条上的头像高亮。
- */
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Users, Maximize2, Minimize2, Loader2 } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { ChevronRight, Loader2 } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp, type TeamWorkMember } from '../../stores/appStore'
 import { subscribeRunEvents } from '../../services/agentRunService'
 import { SegList } from '../../components/SubChatsTab'
-import { useDeskGrip } from './AgentDesk'
 import type { AgentRunEvent, SubChatSeg, TanguDesktopConfig } from '../../types'
 
 registerMessages({
@@ -74,40 +64,29 @@ function activityLine(m: TeamWorkMember, t: (k: string, v?: Record<string, strin
   return t('teamdesk.status.idle')
 }
 
-/** 卡片态:车道下半的常驻预览;点整卡 / 放大钮 → 展开侧板。空会话不占位(与 Agent Desk 卡同规则,免与 Agent 选择器争位)。 */
-export function TeamDeskCard({ sessionId }: { sessionId: string }) {
+/** Team activity belongs to Pin Summary; each member opens its own live work record. */
+export function TeamStatus({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const members = useTeamMembers(sessionId)
-  const mode = useApp((s) => s.deskBySession[sessionId]?.mode)
-  const hasMessages = useApp((s) => !!s.messagesBySession[sessionId]?.length)
+  const cfg = useApp((s) => s.cfg)
   const hydrate = useApp((s) => s.hydrateTeamWork)
-  useEffect(() => { void hydrate(sessionId) }, [sessionId, hydrate])
-  const gone = mode === 'open' || !hasMessages
-  const working = members.filter((m) => m.status === 'working' || m.status === 'waiting').length
-  const expand = gone ? undefined : () => useApp.getState().patchDesk(sessionId, { mode: 'open' })
+  const [picked, setPicked] = useState<string | null>(null)
+  useEffect(() => { setPicked(null); void hydrate(sessionId) }, [sessionId, hydrate])
   return (
-    <div data-desk-session={sessionId} data-team-desk="card" className={`agent-desk-card${expand ? ' act' : ''}${gone ? ' gone' : ''}`} onClick={expand} title={expand ? t('teamdesk.expand') : undefined}>
-      <div className="agent-desk-card-head">
-        <Users size={12} className="agent-desk-spark" />
-        <span className="agent-desk-card-title">{t('teamdesk.title')} · {t('teamdesk.summary', { n: members.length, k: working })}</span>
-        {expand && (
-          <button className="icon-btn" title={t('teamdesk.expand')} onClick={(e) => { e.stopPropagation(); expand() }}>
-            <Maximize2 size={13} />
+    <div className="t2o-team-status" data-team-desk="status">
+      {members.map((m) => (
+        <div key={m.slug}>
+          <button type="button" className="t2o-desk-row" data-slug={m.slug} data-status={m.status}
+            aria-expanded={picked === m.slug} onClick={() => setPicked(picked === m.slug ? null : m.slug)}>
+            <Avatar slug={m.slug} name={m.name} status={m.status} />
+            <span className="t2o-desk-name">{m.name}</span>
+            <span className="t2o-desk-dot" data-status={m.status} title={t(`teamdesk.status.${m.status}`)} />
+            <span className="t2o-desk-activity">{activityLine(m, t)}</span>
+            <ChevronRight size={12} style={{ transform: picked === m.slug ? 'rotate(90deg)' : undefined }} />
           </button>
-        )}
-      </div>
-      <div className="agent-desk-card-body">
-        <div className="t2o-desk-rows">
-          {members.map((m) => (
-            <div className="t2o-desk-row" key={m.slug} data-slug={m.slug} data-status={m.status}>
-              <Avatar slug={m.slug} name={m.name} status={m.status} />
-              <span className="t2o-desk-name">{m.name}</span>
-              <span className="t2o-desk-dot" data-status={m.status} title={t(`teamdesk.status.${m.status}`)} />
-              <span className="t2o-desk-activity">{activityLine(m, t)}</span>
-            </div>
-          ))}
+          {picked === m.slug && <MemberWork cfg={cfg} member={m} />}
         </div>
-      </div>
+      ))}
     </div>
   )
 }
@@ -149,53 +128,6 @@ function MemberWork({ cfg, member }: { cfg: TanguDesktopConfig; member: TeamWork
       <SegList segs={segs} />
       {streaming && segs.length > 0 && <div className="panel-note" style={{ fontSize: 11.5, marginTop: 6 }}><Loader2 size={12} className="spin" /> {t('teamdesk.live')}</div>}
       <div ref={endRef} />
-    </div>
-  )
-}
-
-/** 展开态:侧板(与 AgentDesk 同壳:flex-basis 过渡、拖宽、data-desk-session 认领)。 */
-export function TeamDesk({ sessionId }: { sessionId: string }) {
-  const { t } = useI18n()
-  const members = useTeamMembers(sessionId)
-  const desk = useApp((s) => s.deskBySession[sessionId])
-  const cfg = useApp((s) => s.cfg)
-  const rootRef = useRef<HTMLDivElement>(null)
-  const onGrip = useDeskGrip(sessionId, rootRef)
-  const [picked, setPicked] = useState<string | null>(null)
-  // 缺省看正在忙的第一位;都闲着看第一位
-  const selected = members.find((m) => m.slug === picked) || members.find((m) => m.status === 'working' || m.status === 'waiting') || members[0]
-  const open = desk?.mode === 'open'
-  const frac = desk?.fraction ?? 0.46
-  const working = members.filter((m) => m.status === 'working' || m.status === 'waiting').length
-  return (
-    <div ref={rootRef} data-desk-session={sessionId} data-team-desk="panel" className={`agent-desk${open ? ' open' : ''}`} style={{ '--desk-w': `${(frac * 100).toFixed(2)}%` } as React.CSSProperties}>
-      {open && (
-        <>
-          <div className="agent-desk-grip" onPointerDown={onGrip} />
-          <div className="agent-desk-inner">
-            <div className="agent-desk-head">
-              <Users size={13} className="agent-desk-spark" />
-              <span className="agent-desk-title">{t('teamdesk.title')}</span>
-              <span className="agent-desk-note">{t('teamdesk.summary', { n: members.length, k: working })}</span>
-              <button className="icon-btn" title={t('teamdesk.collapse')} onClick={() => useApp.getState().patchDesk(sessionId, { mode: undefined })}>
-                <Minimize2 size={14} />
-              </button>
-            </div>
-            <div className="agent-desk-body">
-              <div className="t2o-desk-strip" role="tablist">
-                {members.map((m) => (
-                  <button key={m.slug} type="button" role="tab" className="t2o-desk-tab" aria-selected={selected?.slug === m.slug} data-slug={m.slug} data-status={m.status} onClick={() => setPicked(m.slug)}>
-                    <Avatar slug={m.slug} name={m.name} status={m.status} />
-                    <span>{m.name}</span>
-                    <span className="t2o-desk-dot" data-status={m.status} />
-                  </button>
-                ))}
-              </div>
-              {selected ? <MemberWork cfg={cfg} member={selected} /> : <div className="t2o-desk-empty">{t('teamdesk.noWork')}</div>}
-            </div>
-          </div>
-        </>
-      )}
     </div>
   )
 }

@@ -192,6 +192,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
     const p = ev.payload || {};
     switch (ev.type) {
       case 'token':
+        if (p.publicSpeech) break; // Complete team remarks are rendered once by group_speaker end.
         bufferToken(p.delta || '');
         break;
       case 'reasoning':
@@ -255,6 +256,10 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
       case 'team_member':
         flushNow();
         dispatch({ type: 'GROUP_NOTE', text: p.phase === 'start' ? `⏳ ${p.name || p.slug} 开始工作…` : `${p.reason === 'failed' ? '⚠️' : '✔'} ${p.name || p.slug} 本次工作结束(${p.reason || 'done'})`, tone: p.reason === 'failed' ? 'error' : 'info' });
+        break;
+      case 'group_summary':
+        flushNow();
+        dispatch({ type: 'GROUP_NOTE', text: `📋 Historian\n${p.text || ''}`, tone: 'info' });
         break;
       case 'group_voting':
         flushNow();

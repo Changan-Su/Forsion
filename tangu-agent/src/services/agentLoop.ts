@@ -51,6 +51,7 @@ import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { isRetryableLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
+import { query } from '../core/db.js';
 import { getTeam } from '../agents/teamRegistry.js';
 import { listPluginMetas } from '../plugins/registry.js';
 import { isPluginEnabledSync } from '../plugins/settingsStore.js';
@@ -98,6 +99,9 @@ const immediateSteers = new Set<string>();
 const steerWakeups = new Map<string, () => void>();
 /** 团队 run 的插话唤醒:enqueueSteer 即 resolve(一条 promise 直到下一次到达);groupChat 在等子 run 时据此被叫醒,不必轮询。 */
 const steerArrivals = new Map<string, { promise: Promise<void>; resolve: () => void }>();
+/** 调度已结束、不再消费插话的 run(团队 run 收尾阶段):enqueueSteer 返回 false → 客户端回退起新 run 排队,消息不丢。 */
+const steerClosed = new Set<string>();
+function closeSteer(runId: string): void { steerClosed.add(runId); }
 function waitSteer(runId: string): Promise<void> {
   let w = steerArrivals.get(runId);
   if (!w) {
@@ -122,7 +126,7 @@ export function expediteSteer(runId: string): boolean {
 /** 入队一条转向消息；run 非活跃返回 false（前端据此回退 startRun）。 */
 export function enqueueSteer(runId: string, msg: SteerMsg): boolean {
   const ac = abortControllers.get(runId);
-  if (!ac || ac.signal.aborted) return false;
+  if (!ac || ac.signal.aborted || steerClosed.has(runId)) return false;
   const q = steerQueue.get(runId);
   if (q) q.push(msg);
   else steerQueue.set(runId, [msg]);
@@ -283,7 +287,7 @@ export async function storedSessionFacts(sessionId: string): Promise<SessionFact
   } catch { return {}; }
 }
 /** 条件绑定:把存值里的轨道身份绑进本 run 的 agentConfig。agentSlug 刻意不进锁集(写穿是 07-02 竞速事故的根治),
- *  私聊靠这里强制 agentSlug = soloAgentSlug;私聊永不进群聊分叉、也不委托外部引擎;独立团队永远是群聊。 */
+ *  私聊靠这里强制 agentSlug = soloAgentSlug;私聊永不进群聊分叉、也不委托外部引擎;团队工作区不随运行模式切换。 */
 export function bindSessionFacts(agentConfig: any, facts: SessionFacts): void {
   for (const k of SESSION_FACT_KEYS) {
     if (facts[k]) agentConfig[k] = facts[k]; else delete agentConfig[k];
@@ -298,8 +302,8 @@ export function bindSessionFacts(agentConfig: any, facts: SessionFacts): void {
     agentConfig.engineId = facts.soloEngineId; agentConfig.groupChat = undefined;
     agentConfig.execMode = 'host'; agentConfig.cwd = engineLibDir(facts.soloEngineId); agentConfig.preset = null;
   }
-  // 独立团队:groupAgents 缺省由团队成员表填(teamRegistry,激活块里补);这里只钉死「永远是群聊、不委托引擎、host」;cwd 随团队 Library 在激活块补。
-  if (facts.teamSlug) { agentConfig.groupChat = true; agentConfig.engineId = undefined; agentConfig.execMode = 'host'; agentConfig.preset = null; }
+  // 独立团队:groupAgents 缺省由团队成员表填(teamRegistry,激活块里补);默认团队模式,显式 false 切回普通 Work;不委托引擎、host;cwd 随团队 Library 在激活块补。
+  if (facts.teamSlug) { agentConfig.groupChat = agentConfig.groupChat !== false; agentConfig.engineId = undefined; agentConfig.execMode = 'host'; agentConfig.preset = null; }
 }
 
 function safeRealpath(p: string): string {
@@ -459,8 +463,26 @@ async function terminalizeQueuedAbort(runId: string): Promise<void> {
  *  必须在 failStaleRuns() 之后调用（避免捡到即将被标 failed 的陈旧行）。返回重入队数量。 */
 export async function recoverQueuedRuns(): Promise<number> {
   const rows = await listPendingRunsForRecovery();
-  for (const r of rows) enqueueRun(r.session_id, r.id);
-  return rows.length;
+  // 团队成员工作会话(kind=teamwork)里的子 run 只由团队 run 驱动:重启后团队 run 从头再激活、会新建子 run;遗留的子 run 不能再跑
+  //(没人订阅它的事件、它的审批会永久占住成员会话的串行队列、工具动作会重做)→ 直接终态化(Codex 09-16 r4 #5)。
+  let kinds = new Map<string, string>();
+  try {
+    const ids = [...new Set(rows.map((r) => r.session_id))];
+    if (ids.length) {
+      const ks = await query<any[]>(`SELECT id, kind FROM chat_sessions WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
+      kinds = new Map((ks || []).map((k) => [String(k.id), String(k.kind || 'user')]));
+    }
+  } catch { /* 查不到 kind 按普通会话处理 */ }
+  let n = 0;
+  for (const r of rows) {
+    if (kinds.get(r.session_id) === 'teamwork') {
+      await updateRunStatus(r.id, 'aborted', { error: 'orphaned teamwork run (engine restart)' }).catch(() => {});
+      continue;
+    }
+    enqueueRun(r.session_id, r.id);
+    n++;
+  }
+  return n;
 }
 
 /** 中止所有在飞 run(dispose/卸载用)。各 run 的 finally 会自行清理 + 推进队列。 */
@@ -607,6 +629,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const inlineMemberDef: NormalAgentDef | null = isTeamMember && teamMember.def && typeof teamMember.def === 'object' && String(teamMember.def.slug || '') === String(agentConfig.agentSlug || '')
     ? (sanitizeTempAgents([teamMember.def])[0] || null)
     : null;
+  // 临时成员绝不能借同名冒充 / 改写磁盘上的真实 Agent(Codex 09-16 r4 #10):slug 撞了就拒。
+  if (inlineMemberDef && (await getAgent(inlineMemberDef.slug).catch(() => null))) {
+    throw new Error(`Ephemeral team member "${inlineMemberDef.slug}" collides with a saved agent; pick another slug.`);
+  }
   // 客户端面标识(desktop/2.7.9):/agent/runs 已过白名单闸后落 input.client。随每次 LLM 调用带下去,
   // 记进 api_usage_logs.client —— admin 的「API 用量」按 app × 端 × 版本看每一次调用。
   const clientTag = typeof input.client === 'string' ? input.client : undefined;
@@ -872,6 +898,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         drainSteer: () => drainSteer(runId), // 用户插话在调度点注入(团队运行模式);本模块私有函数经参数借出
         waitSteer: () => waitSteer(runId), // 等子 run 期间插话到达即唤醒
         abortChild: (id) => abortRun(id), // 成本 / 额度停机或团队 run 出错时级联中止子 run
+        closeSteer: () => closeSteer(runId), // 调度结束后关插话入口(总结阶段没人消费)
       });
       // 群聊 run 也按轮触发 Historian(标题/LOG 维护)——原先此分支提前 return,群聊会话永远没有标题维护。
       // Historian 内部只数 done run 且有实质增量地板,失败/中止场景自然无害。
@@ -1023,7 +1050,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //     契约之前:属每-agent 身份层,只在 refine 轮低频变化 → 放稳定区护前缀缓存。与 6) 记忆放
     //     易变区尾部是刻意不同(记忆每几轮就重写),别「统一」。仅 host(云端无 agent 目录);
     //     随人格一起被 coding 预设抑制。
-    if (execMode === 'host' && !suppressCompanionPersona) {
+    if (execMode === 'host' && !suppressCompanionPersona && !inlineMemberDef) {
       try {
         const harnessBlock = renderHarnessSection(await loadHarness(activeAgentSlug));
         if (harnessBlock) systemParts.push(harnessBlock);
@@ -1071,7 +1098,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 5) 你的专属文件夹(仅 host:agent 有文件读写工具、能访问绝对路径;云端 sandbox 文件夹不可达 → 不注入)。
     //    让 agent 认知自己的 home + Library,主动往 Library 沉淀/读取资料,并理解 MEMORY/LOG 的归属。
     //    coding 预设不注入(remember/log_event 已转 deferred,陪伴式沉淀指引与编码任务无关)。
-    if (execMode === 'host' && ps.hostExtras) {
+    if (execMode === 'host' && ps.hostExtras && !inlineMemberDef) { // 临时成员没有专属文件夹(不建、不教它往那里写)
       const home = path.join(agentsDir(), activeAgentSlug);
       const libDir = path.join(home, 'Library');
       let folderBlock =
@@ -1162,7 +1189,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       toolsList,
       agentSlug: activeAgentSlug,
       thinkingLevel,
+      teamSessionId: isTeamMember ? String(teamMember.teamSessionId) : undefined,
       inDiscussion: isTeamMember || undefined, // 团队成员不可再起讨论 / 派遣 / 界面动作(防裂变;与旧群聊发言人同款)
+      ephemeral: !!inlineMemberDef || undefined, // 临时成员:记忆 / 日志 / 人格 / 工作笔记等持久写面全关(没有自己的文件夹可写)
     };
     const deferredCatalog = deferBypass ? [] : listDeferredTools(toolGateCtx as ToolContext);
     const unlockedTools = new Set<string>();
@@ -1579,6 +1608,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 门禁字段单源:与上面 listDeferredTools 拿到的是同一份,目录与工具面不会分叉。
       ...toolGateCtx,
       signal: ac.signal, customTools, mcpTools,
+      sayToTeam: isTeamMember ? async (text, requestReply) => {
+        ac.signal.throwIfAborted();
+        await publish(runId, 'team_speech', { text, requestReply });
+      } : undefined,
       imageModelId: typeof agentConfig.imageModelId === 'string' ? agentConfig.imageModelId : undefined,
       visionModelId: typeof agentConfig.visionModelId === 'string' ? agentConfig.visionModelId : undefined,
       approvalDeferral,
@@ -2496,6 +2529,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     immediateSteers.delete(runId);
     steerWakeups.delete(runId);
     steerArrivals.delete(runId);
+    steerClosed.delete(runId);
     runSession.delete(runId);
     advanceQueue(sessionId); // 推进同会话队列：起下一个排队 run（正常完成/失败/中止都经此）
     setTimeout(() => cleanup(runId), 30_000);

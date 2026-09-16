@@ -75,7 +75,10 @@ describe('loop 级:pickSessionFacts / bindSessionFacts(纯函数)', () => {
     expect(c.groupChat).toBeUndefined();
     const d: any = { groupChat: false, engineId: 'codex' };
     bindSessionFacts(d, { teamSlug: 'abc' });
-    expect(d).toMatchObject({ groupChat: true, teamSlug: 'abc' });
+    expect(d).toMatchObject({ groupChat: false, teamSlug: 'abc' });
+    const defaultTeam: any = {};
+    bindSessionFacts(defaultTeam, { teamSlug: 'abc' });
+    expect(defaultTeam.groupChat).toBe(true);
     expect(d.engineId).toBeUndefined();
   });
 });

@@ -208,7 +208,7 @@ describe('自进化自动档(harness_candidates,P3)', () => {
     })];
     await onUserRunDone('S2', USER, DEFAULT_AGENT_SLUG); // 模拟 shareDefaultMemory:记忆域折叠到默认
 
-    expect(String(llmPayloads[0].messages[0].content)).toContain('harness_candidates'); // 字段规格进了 judge 提示词
+    expect(String(llmPayloads[0].messages.at(-1).content)).toContain('harness_candidates'); // 字段规格进了 judge 提示词
     // memory 候选 → 折叠记忆域;harness 候选 → agent 本体(agent_config.agentSlug)
     expect(parseRawLines(readFileSync(rawFile(), 'utf8')).map((r) => r.text)).toEqual(['用户偏好中文']);
     const inbox = readFileSync(join(agentsDir(), 'mybot', '.harness-raw.md'), 'utf8');
@@ -223,7 +223,7 @@ describe('自进化自动档(harness_candidates,P3)', () => {
   it('默认关:judge 提示词无该字段;半服从模型硬给 harness_candidates 也被忽略', async () => {
     llmScript = [JSON.stringify({ title: '标题', log: '', memory_candidates: [], harness_candidates: ['Sneaky lesson'] })];
     await onUserRunDone('S', USER);
-    expect(String(llmPayloads[0].messages[0].content)).not.toContain('harness_candidates');
+    expect(String(llmPayloads[0].messages.at(-1).content)).not.toContain('harness_candidates');
     expect(existsSync(join(agentsDir(), DEFAULT_AGENT_SLUG, '.harness-raw.md'))).toBe(false);
   });
 

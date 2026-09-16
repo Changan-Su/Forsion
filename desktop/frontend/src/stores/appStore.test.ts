@@ -10,6 +10,12 @@ describe('recordToUi agent 身份', () => {
   const resolveGroup = (name: string) => (name === 'Host' ? { slug: '__host__', color: '#000' } : { color: '#111' })
   const resolveSlug = (slug: string) => ({ christina: 'Christina', xyra: 'Tangu Arioso' }[slug])
 
+  it('Historian 摘要重载后仍是附件,不变成普通发言', () => {
+    const m = recordToUi({ id: 'sum', role: 'model', content: '**📋 Historian**\n\nTeam completed.' }, resolveGroup, resolveSlug)
+    expect(m).toMatchObject({ content: 'Team completed.', teamSummary: true, status: 'done' })
+    expect(m.revealAt).toBeUndefined()
+  })
+
   it('用 agent_slug 还原 agentId + agentName(单聊,不染色)', () => {
     const m = recordToUi({ id: 'm1', role: 'model', content: '早上好', agent_slug: 'christina' }, resolveGroup, resolveSlug)
     expect(m.agentId).toBe('christina')
@@ -110,6 +116,13 @@ describe('appStore.reduceEvent', () => {
     expect(list[1]).toMatchObject({ agentId: 'bo', status: 'streaming', work: { activity: '写测试' } })
     expect(st.teamWorkBySession.s1.xyra).toMatchObject({ status: 'waiting', runId: 'child-x-1', sessionId: 'ws-x' })
     expect(st.teamWorkBySession.s1.bo).toMatchObject({ status: 'working', activity: undefined })
+    // 首批成员还没 settle 时用户插话:turn_boundary 不带 finalizedAssistantId → 只插用户消息,承载审批卡的占位气泡不能被标完成 / 删掉(Codex r4 #3)
+    emit('turn_boundary', { finalizedAssistantId: undefined, userMessages: [{ id: 'u9', content: '别忘了 v1' }] })
+    st = useApp.getState()
+    list = st.messagesBySession.s1
+    expect(list.map((m) => m.id)).toEqual(['a1', 'mid-b', 'u9'])
+    expect(list[0]).toMatchObject({ status: 'streaming', work: { waiting: true } })
+    expect(list[0].approvals?.[0].status).toBe('pending')
     emit('approval_result', { approvalId: 'ap1', action: 'approve', runId: 'child-x-1', agentSlug: 'xyra', messageId: 'a1' })
     emit('group_speaker', { phase: 'start', slug: 'bo', name: 'Bo', round: 1, messageId: 'mid-b' })
     emit('group_speaker', { phase: 'end', slug: 'bo', name: 'Bo', round: 1, messageId: 'mid-b', text: '测试写好了\n@Xyra 接口给你\nDONE' })
@@ -120,12 +133,40 @@ describe('appStore.reduceEvent', () => {
     emit('group_ended', { rounds: 1, reason: 'done', steps: 2 })
     st = useApp.getState()
     list = st.messagesBySession.s1
-    expect(list.map((m) => m.id)).toEqual(['a1', 'mid-b', expect.stringMatching(/^ended-/)]) // group_speaker start 不重复建气泡
+    expect(list.map((m) => m.id)).toEqual(['u9', 'mid-b', 'a1', expect.stringMatching(/^ended-/)]) // group_speaker start 不重复建气泡
     expect(list[1]).toMatchObject({ content: '测试写好了\n@Xyra 接口给你', status: 'done', teamDone: true, work: undefined })
-    expect(list[0]).toMatchObject({ content: '接口完成', status: 'done', teamDone: true })
-    expect(list[0].approvals?.[0].status).toBe('approved')
+    expect(list[2]).toMatchObject({ content: '接口完成', status: 'done', teamDone: true })
+    expect(list[2].approvals?.[0].status).toBe('approved')
     expect(st.teamWorkBySession.s1.xyra.status).toBe('idle')
     expect(st.teamWorkBySession.s1.bo).toMatchObject({ status: 'idle', runId: 'child-b-1' }) // 保留 runId:Team Desk 展开态回放最近一次激活
+  })
+
+  it('主动发言不占用运行占位;纯完成标记清掉占位,摘要独立保存且可重放', () => {
+    const ref = { current: 'a1' }
+    const emit = (type: string, payload: Record<string, unknown>) => useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 1, type, payload } as AgentRunEvent)
+    emit('team_member', { phase: 'start', slug: 'xyra', name: 'Xyra', messageId: 'a1', runId: 'child' })
+    emit('group_speaker', { phase: 'start', slug: 'xyra', name: 'Xyra', messageId: 'remark' })
+    emit('group_speaker', { phase: 'end', slug: 'xyra', messageId: 'remark', text: 'Work in progress' })
+    expect(useApp.getState().messagesBySession.s1.find((m) => m.id === 'remark')?.revealAt).toBe(Date.now())
+    expect(useApp.getState().messagesBySession.s1.find((m) => m.id === 'a1')?.work).toBeDefined()
+    emit('team_member', { phase: 'end', slug: 'xyra', messageId: 'a1', reason: 'done' })
+    emit('group_summary', { messageId: 'summary', text: 'Summary text' })
+    emit('group_summary', { messageId: 'summary', text: 'Summary text' })
+    expect(useApp.getState().messagesBySession.s1.map((m) => m.id)).toEqual(['remark', 'summary'])
+    expect(useApp.getState().messagesBySession.s1[1]).toMatchObject({ teamSummary: true, content: 'Summary text' })
+  })
+
+  it('旧引擎的 group_speaker 不带 messageId:start / end 按当前发言人指针落,气泡不会永远 streaming(Codex r4 #9)', () => {
+    const ref = { current: 'a1' } as { current: string; group?: boolean; groupSeen?: boolean; reuseNext?: boolean; groupEnded?: boolean }
+    const emit = (type: string, payload: Record<string, unknown> = {}) => {
+      useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 1, type, payload } as AgentRunEvent)
+    }
+    emit('group_speaker', { phase: 'start', slug: 'xyra', name: 'Xyra', round: 1 })
+    emit('token', { delta: '老引擎的正文', agentId: 'xyra' })
+    emit('group_speaker', { phase: 'end', slug: 'xyra', round: 1 })
+    const list = useApp.getState().messagesBySession.s1
+    expect(list.length).toBe(1)
+    expect(list[0]).toMatchObject({ content: '老引擎的正文', status: 'done', agentId: 'xyra' })
   })
 
   it('覆盖消息、工具、审批、询问、计划、群聊、用量、转向及子聊天事件', () => {

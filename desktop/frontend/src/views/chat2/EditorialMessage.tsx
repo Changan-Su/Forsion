@@ -23,6 +23,7 @@ registerMessages({
   'chat.team.done': { zh: '已完成', en: 'Done' },
 })
 import { ToolGroup } from '../../components/ToolGroup'
+import { useSpeechReveal } from './useSpeechReveal'
 import { ApprovalCard } from '../../components/ApprovalCard'
 import { InquiryCard, PlanCard, TodoList } from '../../components/InquiryCard'
 import { registerMessages, useI18n } from '../../i18n'
@@ -271,6 +272,7 @@ const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 
 
 export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false }: { msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
   const { t } = useI18n()
+  msg = useSpeechReveal(msg)
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
   const [suggestSent, setSuggestSent] = useState(false)
   const [rewindOpen, setRewindOpen] = useState(false)
