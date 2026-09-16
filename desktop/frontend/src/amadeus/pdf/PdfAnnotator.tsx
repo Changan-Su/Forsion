@@ -1313,6 +1313,11 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, readOnly: rea
         }
         commitInk()
         await enqueue()
+        if (tail) { // 等写队列那几跳里组件卸载了:收尾才是最后一次写,同样要等它(Codex 复审)
+          await tail
+          if (strict && tailFailed) throw new Error(`PDF changes could not be saved: ${pdfPath}`)
+          return
+        }
         // docStale 时脏内容本就写不进去(见 enqueue),不拿它拦换库
         if (strict && ((state.dirty && !state.docStale) || myPending.length)) throw new Error(`PDF changes could not be saved: ${pdfPath}`)
       },

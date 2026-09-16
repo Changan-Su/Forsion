@@ -427,6 +427,14 @@ function makePageStore(opts: PageStoreOptions = {}) {
    *  列表 emoji 与笔记标题大图标(都读这张表)一起消失,要手动刷新/切库才恢复(2026-08-05 用户实报
    *  「图标莫名不显示」)。移动端弱网/后台唤醒期一次失败很常见 → 3s/12s 各补一枪;
    *  root 已变(切库)立即放弃,由新根自己的流程拉,同原 root 守卫语义。 */
+  /** 删没删掉以盘面为准。回收站是「先挪进 .trash、再记元数据 / 重建索引」,后两步失败也会 reject,可条目已经离库 ——
+   *  当失败处理就不退休、不广播,开着的编辑器与待写会把它建回来(Codex 评审)。列不出清单时按「还在」保守处理。 */
+  const entryGone = async (path: string): Promise<boolean> => {
+    await get().refreshStructure().catch(() => {})
+    const { pages, files, folders } = get()
+    return !pages.includes(path) && !files.includes(path) && !folders.includes(path)
+  }
+
   const fetchIcons = (root: string | null, attempt = 0): void => {
     void amadeus.pageIcons?.()
       .then((icons) => { if (get().vaultRoot === root) set({ icons }) })
@@ -1010,7 +1018,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         else await amadeus.deletePage(pagePath)
       } catch (e) {
         set({ error: String(e) })
-        return
+        if (!(await entryGone(pagePath))) return
       }
       retireUnifiedPath(pagePath)
       clearScopeNotePaths(pagePath, 'file') // v4:activeInside 那条善后分支看不见它(Codex 评审 high)
@@ -1022,6 +1030,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
           fdGone = true
         } catch (e) {
           set({ error: String(e) }) // 失败 = 孤儿 .fd,树里按普通文件夹可见,可手动处理
+          fdGone = await entryGone(fd)
         }
         // 同本页:删成功才退休 / 清路径 / 广播。.fd 没删掉时它下面的文件都还在 —— 退休了编辑器打字静默不落盘,
         // 广播了标签被关、多维表白板的待写被丢(Codex 评审 P1)。
@@ -1124,7 +1133,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         }
       } catch (e) {
         set({ error: String(e) })
-        return
+        if (!(await entryGone(folderPath))) return
       }
       retireUnifiedPath(folderPath, 'prefix') // 树下 unified 实例的防抖写会复活刚删的文件(Codex P0)
       clearScopeNotePaths(folderPath, 'prefix') // 同 deletePage:v4 的 activeNotePath 不清就指着已删的路径

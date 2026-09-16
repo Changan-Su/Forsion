@@ -199,6 +199,39 @@ describe('笔记连带 .fd 子文件夹删除:子文件夹没删掉', () => {
   })
 })
 
+describe('回收站先挪走、后记元数据:后一步失败也 reject,可条目已经离库', () => {
+  const lateFail = (m: Awaited<ReturnType<typeof setup>>, match: (p: string) => boolean) => {
+    const trash = m.amadeus.trashEntry
+    m.amadeus.trashEntry = async (p: string) => {
+      await trash(p)
+      if (match(p)) throw new Error('ENOSPC: trash meta')
+    }
+  }
+
+  it('deletePage:按盘面判定已删 —— 广播照发、多维表条目标缺失,之后的改动不把文件建回来', async () => {
+    const m = await setup({ '1.md': '', '资料/表.db': DB })
+    lateFail(m, () => true)
+    await m.useDbStore.getState().load('资料/表.db', '资料/表.db')
+    const seen: string[] = []
+    m.onNotePathGone((from, kind, to) => seen.push(`${from}|${kind}|${to}`))
+    await m.usePageStore.getState().deletePage('资料/表.db')
+    expect(seen).toEqual(['资料/表.db|file|null'])
+    m.useDbStore.getState().mutate('资料/表.db', (d) => ({ ...d, name: '删后又改' }))
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(m.disk.has('资料/表.db')).toBe(false)
+  })
+
+  it('笔记连带的 .fd 与 deleteFolder 同理', async () => {
+    const m = await setup({ '1.md': '', 'N.md': '# N\n', 'N.fd/表.db': DB, '资料/板.excalidraw.md': BOARD })
+    lateFail(m, (p) => p.endsWith('.fd') || p === '资料')
+    const seen: string[] = []
+    m.onNotePathGone((from, kind, to) => seen.push(`${from}|${kind}|${to}`))
+    await m.usePageStore.getState().deletePage('N.md')
+    await m.usePageStore.getState().deleteFolder('资料')
+    expect(seen).toEqual(['N.md|file|null', 'N.fd|prefix|null', '资料|prefix|null'])
+  })
+})
+
 describe('路径广播跨窗口转发', () => {
   it('本窗发起的挪动/删除经主进程转给别的窗口,带上库根', async () => {
     const m = await setup({ '1.md': '', '资料/表.db': DB })
