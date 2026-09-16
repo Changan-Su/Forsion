@@ -304,7 +304,7 @@ async function seedMemory() {
 async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}) {
   const t0 = Date.now();
   const { runId } = await api('/agent/runs', { method: 'POST', body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
-  const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], approvals: 0, usages: [], probes: [], content: '', error: null, done: false, group: { speakers: [], ended: null }, ttftMs: null, wallMs: 0 };
+  const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], approvals: 0, usages: [], probes: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [] }, ttftMs: null, wallMs: 0 };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
@@ -346,6 +346,8 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           // 团队运行模式(群聊分叉):发言序 + 收场原因是 group 场景的唯一观测点;done 的 content 恒空,靠 ev.done 判链路走通。
           else if (e.type === 'group_speaker' && p.phase === 'start') ev.group.speakers.push(String(p.slug || '?'));
           else if (e.type === 'group_ended') ev.group.ended = p;
+          // 并行团队(09-16 第四轮):成员激活的起止时刻 —— 「真并行」的唯一观测点是两次激活的时间区间交叠。
+          else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), at: Date.now(), runId: p.runId || null });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); break outer; }
@@ -441,28 +443,31 @@ try {
     return { ok: !ev.error && ev.toolCalls.length > 0 && hit && anchors, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};标记${hit ? '命中' : '未命中'};done 锚点${anchors ? '对齐' : `不对齐(${JSON.stringify(ev.toolOffsets)})`}${ev.approvals ? `;代批 ${ev.approvals}${ev.approveError ? '(失败:' + ev.approveError + ')' : ''}` : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
-  // 团队运行模式(新工作区 × 轨道体系;09-16 起只有一套调度:被 @ 者优先 + 成员各自以 DONE 表态,没有会议/协作之分、没有投票、
-  // 没有缺省轮数上限)。判的是模型配不配合 @ 与 DONE 约定:Alpha 规划并 @Beta → 下一位必须是 Beta(被点名者优先);
-  // Beta 回 @Alpha → Alpha 收尾 DONE → Beta(只靠群聊规则,自己的提示词里没写 DONE)表态 DONE → 全员 DONE 停(done)。
-  // 刻意不传 groupMaxRounds:兜底天花板 30 周期 + 300s 超时,模型不守约定就会在这里失败 —— 这正是要验的东西。
-  await scenario('group', 'group 团队协作模式(两名 agent 互相 @ 后收敛)', async () => {
+  // 并行团队(新工作区 × 轨道体系,09-16 第四轮:成员各自在自己的工作会话里并行干活、全员起头、被 @ 者优先、成员各自以 DONE 表态,
+  // 没有会议/协作之分、没有投票、没有缺省轮数上限)。判三件事:① **真并行** —— 两名成员的激活时间区间交叠(team_member start/end);
+  // ② 模型配合团队规则 —— Beta 等 Alpha 派活时 @Alpha 且不写 DONE(等人规则),派到活后完成并写 DONE(自己的提示词里没写 DONE);
+  // ③ 全员 DONE 收场(done)且总激活数有界。刻意不传 groupMaxRounds:兜底天花板 30 周期 + 300s 超时,模型不守约定就会在这里失败。
+  await scenario('group', 'group 并行团队(两名 agent 同时起、互相 @ 后收敛)', async () => {
     const mk = (slug, name, systemPrompt) => api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name, description: 'live harness', systemPrompt }) }).catch(() => null);
-    await mk('live-alpha', 'Alpha', 'You are Alpha, the planner. On the first request, split the job: tell @Beta in one sentence exactly what to write, addressing them as "@Beta", and stop. When Beta reports back, reply with a one-line summary of the result and then the word DONE on its own line.');
-    await mk('live-beta', 'Beta', 'You are Beta, the executor. When @Alpha assigns you something, produce it in one short paragraph without using tools and address your reply to "@Alpha".');
+    await mk('live-alpha', 'Alpha', 'You are Alpha, the planner. On the first request, split the job: tell @Beta in one sentence exactly what to write, addressing them as "@Beta". When Beta reports back, reply with a one-line summary of the result and then the word DONE on its own line.');
+    await mk('live-beta', 'Beta', 'You are Beta, the executor. Only Alpha assigns work. When @Alpha assigns you something, produce it in one short paragraph without using tools and address your reply to "@Alpha".');
     const sessG = `live-g-${Date.now()}`;
     const ev = await run(sessG, '请规划:写一句关于协作的口号,交给合适的人执行。', 300_000, {
       groupChat: true, groupAgents: ['live-alpha', 'live-beta'], groupNoSummary: true, groupSeedHistory: false,
     });
     const sp = ev.group.speakers;
     const reason = ev.group.ended?.reason || null;
-    const mentionRouted = sp.length >= 2 && sp[0] === 'live-alpha' && sp[1] === 'live-beta';
+    // 交叠:某次 start 落在另一位成员的某次 [start, end] 区间里
+    const spans = (slug) => ev.group.starts.filter((s) => s.slug === slug).map((s, i) => ({ start: s.at, end: ev.group.ends.filter((x) => x.slug === slug)[i]?.at ?? Infinity }));
+    const overlap = spans('live-alpha').some((a) => spans('live-beta').some((b) => a.start <= b.end && b.start <= a.end));
     const converged = reason === 'done';
+    const both = sp.includes('live-alpha') && sp.includes('live-beta');
     const msgs = await api(`/agent/sessions/${sessG}/messages?limit=50`).catch(() => null);
     const list = Array.isArray(msgs?.messages) ? msgs.messages : Array.isArray(msgs) ? msgs : [];
     const attributed = list.filter((m) => m.role === 'model' && /^\*\*🗣 (Alpha|Beta)\*\*/.test(String(m.content || ''))).length;
     return {
-      ok: !ev.error && mentionRouted && converged && sp.length <= 6,
-      detail: ev.error || `发言序 ${sp.join('→') || '无'};收场 ${reason || '无'}(${ev.group.ended?.steps ?? '?'} 步 · ${ev.group.ended?.rounds ?? '?'} 周期);带发言人前缀的落库消息 ${attributed} 条`,
+      ok: !ev.error && both && overlap && converged && sp.length <= 8,
+      detail: ev.error || `发言序 ${sp.join('→') || '无'};并行${overlap ? '交叠' : '未交叠(串行!)'};收场 ${reason || '无'}(${ev.group.ended?.steps ?? '?'} 步 · ${ev.group.ended?.rounds ?? '?'} 周期);带发言人前缀的落库消息 ${attributed} 条`,
       output: list.filter((m) => m.role === 'model').map((m) => String(m.content || '')).join('\n\n---\n\n'), ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
     };
   });

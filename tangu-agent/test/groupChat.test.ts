@@ -1,8 +1,7 @@
 /**
- * 群聊编排单测(无网络:fake llm/state/billing 经 configureTangu 注入)。
- * 覆盖:发言顺序、各 agent 私有持久上下文(只见他人公开发言、不见他人私有人格)、
- * 全员 DONE 即停 / 无人 DONE 时显式 groupMaxRounds 仍是硬上限(内部调用方)、<2 参与者报错、主持人总结(是/否)。
- * 09-16 起没有投票与缺省轮数:成员在发言末尾自己决定还聊不聊(DONE 独占一行)。
+ * 团队运行模式编排单测(无网络:fake state/billing 经 configureTangu 注入;成员载体 = 注入的假 activateMember,只验编排)。
+ * 覆盖:并行周期与显式上限、全员 DONE 即停、最后一步全员 DONE 记 done、重复 slug 去重、无缺省上限、<2 参与者报错、主持人总结(是/否)、
+ * 临时 Agent 参与 / 校验丢弃。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
@@ -12,6 +11,7 @@ import { configureTangu } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
 import { runGroupChat } from '../src/services/groupChat.js';
 import { resolveInquiry } from '../src/services/inquiries.js';
+import type { ActivateMember } from '../src/services/teamRuns.js';
 
 const profile = createTanguProfile({ sandboxMode: 'none' });
 const hostStub: any = new Proxy({}, { get: () => () => { throw new Error('host stub'); } });
@@ -20,12 +20,19 @@ let home: string;
 let events: Array<{ type: string; payload: any }>;
 let finals: Array<{ content: string; modelId: string }>;
 let statuses: Array<{ status: string; extra: any }>;
-let calls: Array<{ cacheKey: string; messages: any[]; toolChoice: any }>;
+let acts: Array<{ slug: string; nth: number; delta: string }>;
 /** 每位成员「说完这句要不要继续」:true = 这条发言以 DONE 收尾。 */
 let doneDecider: (slug: string, nth: number) => boolean;
 let inquiryAnswer: string;
 
-const slugFromKey = (k: string): string => (k.split(':grp:')[1] || '');
+const fakeActivate: ActivateMember = async (a) => {
+  const slug = a.member.slug;
+  const nth = acts.filter((x) => x.slug === slug).length + 1;
+  acts.push({ slug, nth, delta: a.delta });
+  a.onStarted?.({ sessionId: `ws-${slug}`, runId: `child-${slug}-${nth}` });
+  await new Promise((r) => setTimeout(r, 3));
+  return { status: 'done', text: `${slug}-speech-${nth}${doneDecider(slug, nth) ? '\nDONE' : ''}`, sessionId: `ws-${slug}`, runId: `child-${slug}-${nth}` };
+};
 
 function writeAgent(slug: string, name: string, body: string): void {
   writeFileSync(join(home, 'agents', `${slug}.md`), `---\nname: ${name}\ncreated_by: user\n---\n${body}\n`, 'utf8');
@@ -35,26 +42,18 @@ beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), 'tangu-group-'));
   process.env.TANGU_HOME = home;
   mkdirSync(join(home, 'agents'), { recursive: true });
-  writeAgent('alpha', 'Alpha', '你是 Alpha,只有 Alpha 知道的秘密人格 AAA。');
-  writeAgent('beta', 'Beta', '你是 Beta,只有 Beta 知道的秘密人格 BBB。');
-
-  events = []; finals = []; statuses = []; calls = [];
+  writeAgent('alpha', 'Alpha', '你是 Alpha。');
+  writeAgent('beta', 'Beta', '你是 Beta。');
+  events = []; finals = []; statuses = []; acts = [];
   doneDecider = () => false;
   inquiryAnswer = '否,不用';
-  const perSlug: Record<string, number> = {};
-
   const fakeLlm: any = {
     resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test' }, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' }),
-    buildProviderPayload: async (o: any) => ({ cacheKey: o.cacheKey, messages: o.messages, toolChoice: o.toolChoice }),
+    buildProviderPayload: async (o: any) => ({ cacheKey: o.cacheKey, messages: o.messages }),
     streamProviderCompletion: async (o: any) => {
-      const p = o.payload;
-      calls.push({ cacheKey: p.cacheKey, messages: p.messages, toolChoice: p.toolChoice });
-      const usage = { prompt_tokens: 10, completion_tokens: 5 };
-      const slug = slugFromKey(p.cacheKey);
-      perSlug[slug] = (perSlug[slug] || 0) + 1;
-      const text = slug === 'host' ? 'HOST-SUMMARY' : `${slug}-speech-${perSlug[slug]}${doneDecider(slug, perSlug[slug]) ? '\nDONE' : ''}`;
+      const text = 'HOST-SUMMARY';
       if (o.onToken) o.onToken(text);
-      return { content: text, reasoning: '', toolCalls: [], usage };
+      return { content: text, reasoning: '', toolCalls: [], usage: { prompt_tokens: 10, completion_tokens: 5 } };
     },
   };
   const fakeState: any = {
@@ -67,13 +66,10 @@ beforeEach(() => {
     },
     drain: async () => {},
     updateRunStatus: async (_id: string, status: string, extra: any) => { statuses.push({ status, extra }); },
+    countSessionMessages: async () => 0,
+    getSessionOwner: async () => 'u1',
   };
-  const fakeBilling: any = {
-    canConsumeTokenPoints: async () => ({ ok: true }),
-    consumeTokenPoints: async () => ({ ok: true }),
-    calculateCost: async () => 0,
-    logApiUsage: async () => {},
-  };
+  const fakeBilling: any = { canConsumeTokenPoints: async () => ({ ok: true }), consumeTokenPoints: async () => ({ ok: true }), calculateCost: async () => 0, logApiUsage: async () => {} };
   configureTangu({ host: hostStub, brain: { llm: fakeLlm } as any, billing: fakeBilling, profile, state: fakeState });
 });
 
@@ -86,34 +82,27 @@ function params(over: Partial<any> = {}): any {
   return {
     runId: 'r1', sessionId: 's1', userId: 'u1', appId: 'tangu', modelId: 'gpt',
     execMode: 'host', cwd: '/tmp', profile,
-    agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 2 },
+    agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 2, groupSeedHistory: false },
     message: 'discuss X', userMessageId: 'um1', attachments: [],
-    signal: new AbortController().signal,
+    signal: new AbortController().signal, activateMember: fakeActivate,
     ...over,
   };
 }
-
-const speechCalls = (slug: string) =>
-  calls.filter((c) => slugFromKey(c.cacheKey) === slug && (c.toolChoice === 'auto' || c.toolChoice === 'none'));
+const endedPayload = () => events.find((e) => e.type === 'group_ended')?.payload;
 
 describe('runGroupChat', () => {
-  it('agents speak in order; each keeps a private persistent context (sees others\' public speech, not their persona)', async () => {
+  it('members are activated cycle by cycle in parallel up to the explicit cap; each speech lands as a prefixed model message; each activation only sees the delta since its last one', async () => {
     await runGroupChat(params());
-    // 无人 DONE → 跑到显式上限:4 条发言(2 agent × 2 周期),顺序 alpha,beta,alpha,beta
+    // 无人 DONE → 跑到显式上限:4 次激活(2 成员 × 2 周期);同一周期两人并行,收场按完成先后
     expect(finals.map((f) => f.content)).toEqual([
       '**🗣 Alpha**\n\nalpha-speech-1',
       '**🗣 Beta**\n\nbeta-speech-1',
       '**🗣 Alpha**\n\nalpha-speech-2',
       '**🗣 Beta**\n\nbeta-speech-2',
     ]);
-    // alpha 第 2 轮发言的上下文:含自己上轮发言(持久)+ beta 上轮公开发言(delta),且不含 beta 私有人格
-    const alpha2 = speechCalls('alpha')[1];
-    const flat = alpha2.messages.map((m: any) => String(m.content || '')).join('\n');
-    expect(alpha2.messages.some((m: any) => m.role === 'assistant' && m.content === 'alpha-speech-1')).toBe(true);
-    expect(flat).toContain('beta-speech-1');
-    expect(flat).toContain('You are "Alpha"');    // 自己的人格在
-    expect(flat).not.toContain('只有 Beta 知道');  // 他人私有人格不泄露
-    // 终态 done
+    const alpha2 = acts.filter((a) => a.slug === 'alpha')[1];
+    expect(alpha2.delta).toContain('@Beta:\nbeta-speech-1'); // 周期 2 看到 beta 周期 1 的公开发言
+    expect(alpha2.delta).not.toContain('alpha-speech-1'); // 自己的发言不回灌(住在自己的工作会话里)
     expect(events.some((e) => e.type === 'done')).toBe(true);
     expect(statuses.at(-1)?.status).toBe('done');
   });
@@ -123,19 +112,19 @@ describe('runGroupChat', () => {
     await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 5 } }));
     expect(finals.filter((f) => f.content.includes('speech')).length).toBe(2);
     expect(events.some((e) => e.type === 'group_vote' || e.type === 'group_voting')).toBe(false);
-    expect(events.find((e) => e.type === 'group_ended')?.payload).toMatchObject({ reason: 'done', steps: 2, rounds: 1 });
+    expect(endedPayload()).toMatchObject({ reason: 'done', steps: 2, rounds: 1 });
   });
 
-  it('all members DONE on the very last allowed step still ends as done, not max_rounds', async () => {
+  it('all members DONE on the very last allowed activation still ends as done, not max_rounds', async () => {
     doneDecider = () => true;
     await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 1 } }));
-    expect(events.find((e) => e.type === 'group_ended')?.payload).toMatchObject({ reason: 'done', steps: 2, rounds: 1 });
+    expect(endedPayload()).toMatchObject({ reason: 'done', steps: 2, rounds: 1 });
   });
 
-  it('duplicate slugs are deduped in order (TUI `/groupchat a a b`): no crash at the cycle boundary, 2 participants', async () => {
+  it('duplicate slugs are deduped in order (TUI `/groupchat a a b`): 2 participants, no crash', async () => {
     doneDecider = () => true;
     await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'alpha', 'beta'], groupMaxRounds: 3 } }));
-    const ended = events.find((e) => e.type === 'group_ended')?.payload;
+    const ended = endedPayload();
     expect(ended).toMatchObject({ reason: 'done', steps: 2 });
     expect(ended.participants.map((a: any) => a.slug)).toEqual(['alpha', 'beta']);
     expect(statuses.some((s) => s.status === 'failed')).toBe(false);
@@ -145,14 +134,14 @@ describe('runGroupChat', () => {
     doneDecider = () => false;
     await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 3 } }));
     expect(finals.filter((f) => f.content.includes('speech')).length).toBe(6); // 3 周期 × 2
-    expect(events.find((e) => e.type === 'group_ended')?.payload.reason).toBe('max_rounds');
+    expect(endedPayload().reason).toBe('max_rounds');
   });
 
   it('no groupMaxRounds = no default cap: members keep going until they all say DONE (well past the old default of 7 rounds)', async () => {
-    // alpha 第 9 句才 DONE,beta 第 10 句才 DONE → 19 步收场;旧缺省 7 轮(14 步)会把它掐断
+    // alpha 第 9 句才 DONE,beta 第 10 句才 DONE → 19 次激活收场;旧缺省 7 轮(14 步)会把它掐断
     doneDecider = (slug, nth) => (slug === 'alpha' ? nth >= 9 : nth >= 10);
     await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'beta'] } }));
-    expect(events.find((e) => e.type === 'group_ended')?.payload).toMatchObject({ reason: 'done', steps: 19 });
+    expect(endedPayload()).toMatchObject({ reason: 'done', steps: 19 });
   });
 
   it('errors (no done) with fewer than 2 valid participants', async () => {
@@ -169,8 +158,7 @@ describe('runGroupChat', () => {
     await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 3 } }));
     expect(finals.some((f) => f.content.includes('主持人') && f.content.includes('HOST-SUMMARY'))).toBe(true);
 
-    // 重置并选「否」
-    events = []; finals = []; statuses = []; calls = [];
+    events = []; finals = []; statuses = []; acts = [];
     inquiryAnswer = '否,不用';
     await runGroupChat(params({ agentConfig: { groupAgents: ['alpha', 'beta'], groupMaxRounds: 3 } }));
     expect(finals.some((f) => f.content.includes('HOST-SUMMARY'))).toBe(false);

@@ -29,6 +29,8 @@ registerMessages({
   'orbit.bar.exit': { zh: '退出团队模式', en: 'Exit team mode' },
   'orbit.bar.joined': { zh: '{names} 加入 · 此前对话已摘要给成员', en: '{names} joined · earlier conversation summarized for members' },
   'orbit.bar.exited': { zh: '已退出团队模式,由 {name} 继续', en: 'Left team mode; {name} continues' },
+  'orbit.bar.working': { zh: '{n} 人工作中', en: '{n} working' },
+  'orbit.bar.waiting': { zh: '{name} 等待审批', en: '{name} waiting for approval' },
 })
 
 export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: AgentConfig; running: boolean }): React.ReactElement | null {
@@ -36,6 +38,7 @@ export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: 
   const s = useApp(useShallow((st) => ({
     agentDefs: st.agentDefs, agentAvatars: st.agentAvatars, engines: st.engines, teams: st.teams, defaultAgentSlug: st.defaultAgentSlug,
     modelsResp: st.modelsResp, setSessionGroup: st.setSessionGroup, ensureTeamSession: st.ensureTeamSession, setSeedOnce: st.setSeedOnce, toast: st.toast,
+    teamWork: st.teamWorkBySession[sessionId],
   })))
   const [setupOpen, setSetupOpen] = useState(false)
   const [teamEditor, setTeamEditor] = useState(false)
@@ -52,6 +55,9 @@ export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: 
   const [rotating, setRotating] = useState(false)
   const members = useMemo(() => (Array.isArray(cfg.groupAgents) ? cfg.groupAgents : []), [cfg.groupAgents])
   const inTeamMode = !!cfg.groupChat && members.length >= 2
+  // 并行团队:工作中 / 等审批的成员在头像上高亮(状态条是移动端与折叠卡片时唯一能看到「谁在忙、谁在等你」的地方)。
+  const waitingNames = members.filter((slug) => running && s.teamWork?.[slug]?.status === 'waiting').map(nameOf)
+  const workingCount = members.filter((slug) => running && s.teamWork?.[slug]?.status === 'working').length
 
   if (cfg.soloAgentSlug || cfg.soloEngineId) {
     const kind: 'agent' | 'engine' = cfg.soloAgentSlug ? 'agent' : 'engine'
@@ -100,13 +106,15 @@ export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: 
   return (
     <div className="t2o-bar" role="status" data-orbit={isTeam ? 'team' : 'teammode'}>
       <span className="t2o-bar-title">{title}</span>
-      <span className="t2o-bar-sub">{t('orbit.bar.members', { n: members.length })}</span>
+      <span className="t2o-bar-sub">{t('orbit.bar.members', { n: members.length })}{workingCount ? ` · ${t('orbit.bar.working', { n: workingCount })}` : ''}{waitingNames.length ? ` · ${t('orbit.bar.waiting', { name: waitingNames.join('、') })}` : ''}</span>
       <span className="t2o-bar-avatars">
         {members.slice(0, 6).map((slug) => {
           const url = s.agentAvatars[slug]
+          const st = running ? s.teamWork?.[slug]?.status : undefined
+          const cls = `t2o-bar-avatar${st === 'working' ? ' is-working' : st === 'waiting' ? ' is-waiting' : ''}`
           return url
-            ? <img key={slug} src={url} width={18} height={18} alt="" title={nameOf(slug)} className="t2o-bar-avatar" />
-            : <span key={slug} className="t2o-bar-avatar t2o-bar-avatar-text" title={nameOf(slug)}>{[...nameOf(slug)][0] || '?'}</span>
+            ? <img key={slug} src={url} width={18} height={18} alt="" title={nameOf(slug)} className={cls} data-work={st === 'working' || st === 'waiting' ? st : undefined} />
+            : <span key={slug} className={`${cls} t2o-bar-avatar-text`} title={nameOf(slug)} data-work={st === 'working' || st === 'waiting' ? st : undefined}>{[...nameOf(slug)][0] || '?'}</span>
         })}
       </span>
       <span className="t2o-bar-acts">

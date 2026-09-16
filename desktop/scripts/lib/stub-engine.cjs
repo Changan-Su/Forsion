@@ -114,7 +114,7 @@ async function startStubEngine(data = {}) {
     }
     if (/^\/agent\/runs\/[^/]+\/approvals\/[^/]+$/.test(p)) {
       const b = await body();
-      seen.approvals.push({ approvalId: p.split('/').pop(), ...b });
+      seen.approvals.push({ approvalId: p.split('/').pop(), runId: p.split('/')[3], ...b });
       return json({ ok: true });
     }
 

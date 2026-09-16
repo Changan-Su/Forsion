@@ -142,10 +142,12 @@ export interface BackgroundSessionInfo {
   createdAt: string
   runId: string | null
   runStatus: string | null
+  /** 团队成员的工作会话(kind=teamwork):归属的成员 slug;老引擎 / 其他 kind 没有。 */
+  agentSlug?: string | null
 }
-export const getBackgroundSessions = (cfg: TanguDesktopConfig, sessionId: string) =>
+export const getBackgroundSessions = (cfg: TanguDesktopConfig, sessionId: string, kind?: string) =>
   request<{ background: BackgroundSessionInfo[] }>(
-    cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/background`,
+    cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/background${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`,
   ).then((r) => r.background)
 
 export const listMessages = (cfg: TanguDesktopConfig, sessionId: string, limit = 200, before?: number) =>

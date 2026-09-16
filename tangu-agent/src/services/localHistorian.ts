@@ -708,6 +708,7 @@ async function startAssistDiscussion(opts: {
           groupTempAgents: [histDef],
           priorityAgent: histSlug, // Historian 先开口(评估),主 Agent 随后定夺
           groupMaxRounds: 2, // 简短:评估+定夺各一轮的硬上限;成员写 DONE 可提前收束
+          groupMaxConcurrent: 1, // 评估 → 定夺有先后,不并行(拍板 ⑯:内部调用方退化成顺序)
           groupNoSummary: true, // 结论=主 Agent 的工具动作,无需主持人总结
           groupSeedHistory: true, // 参与者看得到 branch 继承来的对话上下文
           execMode: 'sandbox', // 讨论不需要 host FS;sandbox+full-auto → 后台绝不卡审批

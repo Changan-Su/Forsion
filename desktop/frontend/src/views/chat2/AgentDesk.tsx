@@ -169,13 +169,9 @@ function DeskLivePane({ sessionId, item }: { sessionId: string; item: DeskItem }
   )
 }
 
-export function AgentDesk({ sessionId }: { sessionId: string }) {
-  const { t } = useI18n()
-  const desk = useApp((s) => s.deskBySession[sessionId])
-  const claimKey = useClaimKey(desk?.items?.slice(0, 2) ?? [])
-  const rootRef = useRef<HTMLDivElement>(null)
-
-  const onGrip = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+/** 侧板拖宽(比例制,zoom 免疫);AgentDesk 与 TeamDesk 共用同一段手势与同一份 deskBySession.fraction。 */
+export function useDeskGrip(sessionId: string, rootRef: React.RefObject<HTMLDivElement | null>): (e: React.PointerEvent<HTMLDivElement>) => void {
+  return useCallback((e: React.PointerEvent<HTMLDivElement>) => {
     const host = rootRef.current?.parentElement // .t2-chat-view(row 容器)
     if (!host) return
     e.preventDefault()
@@ -199,7 +195,15 @@ export function AgentDesk({ sessionId }: { sessionId: string }) {
     el.addEventListener('pointerup', done)
     el.addEventListener('pointercancel', done)
     el.addEventListener('lostpointercapture', done)
-  }, [sessionId])
+  }, [sessionId, rootRef])
+}
+
+export function AgentDesk({ sessionId }: { sessionId: string }) {
+  const { t } = useI18n()
+  const desk = useApp((s) => s.deskBySession[sessionId])
+  const claimKey = useClaimKey(desk?.items?.slice(0, 2) ?? [])
+  const rootRef = useRef<HTMLDivElement>(null)
+  const onGrip = useDeskGrip(sessionId, rootRef)
 
   if (!desk || !desk.items.length) return null
   const open = desk.mode === 'open'

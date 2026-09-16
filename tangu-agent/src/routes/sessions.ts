@@ -165,11 +165,13 @@ router.post('/agent/sessions/:id/branch', authMiddleware, async (req: AuthReques
 router.get('/agent/sessions/:id/background', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
+    // ?kind=teamwork:团队成员的工作会话(Team Desk 复原用;一人一条,按 agent_config.agentSlug 归属)。不传 = 旧口径(所有隐藏子会话,最近 10 条)。
+    const kind = typeof req.query.kind === 'string' && /^[a-z]{1,16}$/.test(req.query.kind) ? req.query.kind : null;
     const rows = await query<any[]>(
-      `SELECT id, kind, title, created_at FROM chat_sessions
-       WHERE parent_session_id = ? AND user_id = ? AND kind != 'user'
-       ORDER BY created_at DESC LIMIT 10`,
-      [req.params.id, userId],
+      `SELECT id, kind, title, created_at, agent_config FROM chat_sessions
+       WHERE parent_session_id = ? AND user_id = ? AND kind != 'user'${kind ? ' AND kind = ?' : ''}
+       ORDER BY created_at DESC LIMIT ${kind ? 50 : 10}`,
+      kind ? [req.params.id, userId, kind] : [req.params.id, userId],
     );
     const background: any[] = [];
     for (const s of rows) {
@@ -177,8 +179,10 @@ router.get('/agent/sessions/:id/background', authMiddleware, async (req: AuthReq
         `SELECT id, status FROM agent_runs WHERE session_id = ? ORDER BY created_at DESC LIMIT 1`,
         [s.id],
       );
+      let agentSlug: string | null = null;
+      try { const c = typeof s.agent_config === 'string' ? JSON.parse(s.agent_config) : s.agent_config; agentSlug = typeof c?.agentSlug === 'string' ? c.agentSlug : null; } catch { /* 畸形配置按无归属 */ }
       background.push({
-        sessionId: s.id, kind: s.kind, title: s.title, createdAt: s.created_at,
+        sessionId: s.id, kind: s.kind, title: s.title, createdAt: s.created_at, agentSlug,
         runId: r[0]?.id || null, runStatus: r[0]?.status || null,
       });
     }

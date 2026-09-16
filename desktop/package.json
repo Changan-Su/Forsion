@@ -146,6 +146,7 @@
     "check:chatside": "node scripts/chat-sidepanel.check.cjs",
     "check:sessionmode": "node scripts/session-mode.check.cjs",
     "check:orbitside": "node scripts/orbitside.check.cjs",
+    "check:teamdesk": "node scripts/team-desk.check.cjs",
     "check:canvas": "node scripts/e2e-editor.cjs --check=unified-canvas",
     "check:tutorial": "node scripts/e2e-editor.cjs --check=tutorial-note",
     "check:tabicon": "node scripts/e2e-editor.cjs --check=tab-icon",

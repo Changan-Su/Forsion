@@ -747,6 +747,7 @@ export type MsgSeg =
 
 export interface ApprovalRequest {
   approvalId: string
+  /** 要兑现到哪条 run:普通 run = 本 run;团队成员的审批由团队 run 转发,这里是**子 run** 的 id(引擎事件带 runId 时以它为准)。 */
   runId: string
   name: string
   arguments?: string
@@ -794,6 +795,12 @@ export interface TodoItem {
 }
 
 /** 等模型期间的实况(status:llm_call 事件;仅内存不持久化)。since=本次调用起点(重试续用),bytes=上传字节。 */
+/** 团队成员本次激活的过程状态(主聊天气泡上的一行;详情在 Team Desk)。 */
+export interface TeamWork {
+  activity?: string
+  waiting?: boolean
+}
+
 export interface LiveWait {
   phase: 'sending' | 'accepted'
   bytes?: number
@@ -825,6 +832,9 @@ export interface UiMessage {
   sketches?: SketchItem[]
   /** 模型调用等待期:sending=正在上传上下文,accepted=已送达等首帧;首帧/工具/结束即清(见 appStore reduceEvent)。 */
   live?: LiveWait
+  /** 并行团队(09-16 第四轮):成员在自己的工作会话里干活,这条气泡是它本次激活的占位,发言到达(group_speaker end 带 text)才填正文;
+   *  activity = 当前工具一行动态(team_activity),waiting = 等审批 / 询问。end 即清。 */
+  work?: TeamWork
   status?: 'streaming' | 'done' | 'error' | 'stopped'
   error?: string
   timestamp: number
@@ -835,6 +845,8 @@ export interface UiMessage {
   agentColor?: string
   /** 群聊轮次(用于分组/调试)。 */
   groupRound?: number
+  /** 并行团队:这条发言以 DONE 收尾(成员表态「我这边完了」)。正文里的 DONE 已剥掉,气泡上以「已完成」小标记呈现。 */
+  teamDone?: boolean
   /** 群聊投票汇总(role=system 的投票行渲染成投票 chip)。 */
   groupVote?: { round: number; endCount: number; total: number; votes: Array<{ name: string; end: boolean; reason: string }> }
 }

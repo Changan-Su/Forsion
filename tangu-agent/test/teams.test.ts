@@ -168,12 +168,18 @@ describe('routes /agent/teams', () => {
     expect(speakers).toEqual(['ario', 'bo']); // 没有轮数上限;两人首句都 DONE → 全员 DONE 收场
     const ended = ev.find((e) => e.type === 'group_ended');
     expect(JSON.parse(ended!.payload)).toMatchObject({ reason: 'done', steps: 2 });
-    const arioSys = String(llmPayloads.find((p) => String(p.cacheKey || '').endsWith(':grp:ario'))?.messages?.[0]?.content || '');
+    // 09-16 第四轮:成员在各自的工作会话里跑子 run(真 agentLoop),团队段拼在成员自己的 system 里(teamMemberSection 的 You are "<Name>" 行认人)。
+    const sysOf = (name: string): string => String(llmPayloads.map((p) => String(p.messages?.[0]?.content || '')).find((c) => c.includes(`You are "${name}"`)) || '');
+    const arioSys = sysOf('Ario');
+    expect(arioSys).toContain('## Team Mode');
     expect(arioSys).toContain('## Team\n# Team abc\nAlpha owns API.');
     expect(arioSys).toContain('## Your role\nAPI');
-    const boSys = String(llmPayloads.find((p) => String(p.cacheKey || '').endsWith(':grp:bo'))?.messages?.[0]?.content || '');
+    const boSys = sysOf('Bo');
     expect(boSys).toContain('## Team\n');
     expect(boSys).not.toContain('## Your role');
+    // 成员的工作会话:一人一条,隐藏(kind=teamwork),父链接 = 团队会话
+    const work = await query<any[]>(`SELECT kind, agent_config FROM chat_sessions WHERE parent_session_id = ? ORDER BY created_at`, [s.id]);
+    expect(work.map((w) => [w.kind, JSON.parse(w.agent_config).agentSlug])).toEqual([['teamwork', 'ario'], ['teamwork', 'bo']]);
     // 会话里的发言归属:agent_slug 落列
     const msgs = await query<any[]>(`SELECT agent_slug FROM chat_messages WHERE session_id = ? AND role = 'model' ORDER BY timestamp`, [s.id]);
     expect(msgs.map((m) => m.agent_slug)).toEqual(['ario', 'bo']);

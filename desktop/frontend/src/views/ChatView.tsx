@@ -24,6 +24,7 @@ import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
 import { useWorkspace, useSpaceStore, UI_MODE, Skeleton } from '@lcl/engine'
 import { AgentDesk, DeskCard } from './chat2/AgentDesk'
+import { TeamDesk, TeamDeskCard } from './chat2/TeamDesk'
 import { useI18n } from '../i18n'
 import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
 import type { ViewProps } from '@lcl/engine/types'
@@ -382,6 +383,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   const hasMessages = activeMessages.length > 0
   // Agent Desk:桌面端默认开(移动端没有);用户可在设置→高级关掉,窄容器由 CSS 容器查询兜底隐藏。
   const deskEnabled = !studioChat && UI_MODE !== 'mobile' && !!s.desktopConfig?.agentDeskEnabled
+  // Team Desk(方案 §6.4):团队会话(独立团队 / 项目轨道的团队模式)里替换 Agent Desk,恒开(拍板 ⑲),不受 agentDeskEnabled;边界同 Agent Desk(桌面、非 Studio)。
+  const teamDesk = !studioChat && UI_MODE !== 'mobile' && (!!mvCfg.teamSlug || (!!mvCfg.groupChat && (Array.isArray(mvCfg.groupAgents) ? mvCfg.groupAgents.length : 0) >= 2))
 
   // 工作区(会话/笔记/文件)拖进来即引用:**整个聊天区**都是落区,不用瞄准输入框。
   // 只吃 chatDragRef 的两个 MIME —— OS 文件仍归输入框卡片那套(附件/路径插入),两条路不打架。
@@ -698,10 +701,10 @@ export function ChatView({ leaf, params }: ViewProps) {
             openWsFile(targetFor(f, s.cfg, activeId || '', mvCfg.execMode))
           }}
         />
-        {deskEnabled && activeId ? <DeskCard sessionId={activeId} /> : null}
+        {teamDesk && activeId ? <TeamDeskCard sessionId={activeId} /> : deskEnabled && activeId ? <DeskCard sessionId={activeId} /> : null}
       </div>
       </div>
-      {deskEnabled && activeId ? <AgentDesk sessionId={activeId} /> : null}
+      {teamDesk && activeId ? <TeamDesk sessionId={activeId} /> : deskEnabled && activeId ? <AgentDesk sessionId={activeId} /> : null}
     </div>
   )
 }

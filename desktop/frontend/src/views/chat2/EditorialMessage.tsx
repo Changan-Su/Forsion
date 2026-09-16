@@ -15,6 +15,13 @@ import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
 import { SketchCards } from '../../components/SketchCard'
 import { SystemPromptBlock } from '../../components/SystemPromptBlock'
+
+registerMessages({
+  'chat.team.working': { zh: '工作中 · {activity}', en: 'Working · {activity}' },
+  'chat.team.workingIdle': { zh: '工作中', en: 'Working' },
+  'chat.team.waiting': { zh: '等待你的审批', en: 'Waiting for your approval' },
+  'chat.team.done': { zh: '已完成', en: 'Done' },
+})
 import { ToolGroup } from '../../components/ToolGroup'
 import { ApprovalCard } from '../../components/ApprovalCard'
 import { InquiryCard, PlanCard, TodoList } from '../../components/InquiryCard'
@@ -435,10 +442,22 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {/* 测试性等待详情:开启时每次调用(含工具轮之后)画「发送 N KB / 等首帧 + 已等秒数」。
             默认关闭时仍保留通用「思考中」反馈，不能因 msg.live 存在而把两行一起吞掉。 */}
         {showWaitDetails && msg.status === 'streaming' && msg.live && <LiveWaitLine live={msg.live} />}
-        {!body && msg.status === 'streaming' && !msg.toolEvents?.length && !msg.reasoning && (!msg.live || !showWaitDetails) && (
+        {/* 并行团队:成员在自己的工作会话里干活,这条是它本次激活的占位 —— 一行动态(当前工具 / 等审批),发言到达才有正文;详情在 Team Desk。 */}
+        {msg.status === 'streaming' && msg.work && (
+          <div className="t2-dim chat-thinking-live" role="status" aria-live="polite" data-team-work={msg.work.waiting ? 'waiting' : 'working'}>
+            <span className={msg.work.waiting ? undefined : 'chat-run-shimmer-text'}>
+              {msg.work.waiting ? t('chat.team.waiting') : msg.work.activity ? t('chat.team.working', { activity: msg.work.activity }) : t('chat.team.workingIdle')}
+            </span>
+          </div>
+        )}
+        {!body && msg.status === 'streaming' && !msg.work && !msg.toolEvents?.length && !msg.reasoning && (!msg.live || !showWaitDetails) && (
           <div className="t2-dim chat-thinking-live chat-run-shimmer-text" role="status" aria-live="polite">
             {t('chat.thinking')}
           </div>
+        )}
+        {/* 并行团队:发言以 DONE 收尾 → 正文里的 DONE 已剥掉,这里一枚小标记(成员表态「我这边完了」)。 */}
+        {msg.teamDone && msg.status !== 'streaming' && (
+          <div className="t2-dim t2-team-done" data-team-done="1">✓ {t('chat.team.done')}</div>
         )}
         {!!msg.displayFiles?.length && fileCtx && (
           <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} />

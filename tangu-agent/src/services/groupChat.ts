@@ -1,46 +1,43 @@
-import { resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 /**
- * 群聊模式(Group Chat)编排:用户选 ≥2 个 Normal Agent,发一条消息后 agents **轮流进入 run 并发言**。
+ * 团队运行模式(原「群聊」)编排:用户选 ≥2 个 Normal Agent,发一条消息后成员**各自在自己的工作会话里并行干活**,
+ * 团队会话只是协调层(用户与成员、成员之间的「发言」落在这里)。09-16 第四轮(用户拍板 ⑭–㉓)。
  *
  * 设计要点:
- *   - 整个群聊 = **一个 run**(一条事件流):前端订阅同一 runId,事件带 `agentId` 路由到各发言人气泡。
- *   - 每个 agent 一份**私有持久上下文**(`ctxByAgent`),跨轮累积自己的思考;轮到它时只注入「别人这轮
- *     新说的话」delta —— 只见他人**公开发言**,不见他人私有 reasoning/tool 轮。
- *   - 顺序执行(非并发):后发言者经工作区 + 公开记录看到先前改动。工具走完整集(host),审批闸照走。
- *   - 调度只有一套(09-16 用户拍板:不再分会议 / 协作,也没有缺省轮数上限):被 @ 者 FIFO 优先,
- *     否则按成员序轮转本周期还没发言、也没表态 DONE 的成员;每位成员**发言末尾自己决定还聊不聊**
- *     (DONE 独占一行 = 我这边完了,之后不再轮到它,除非被 @ 或用户再开口);全员 DONE → 结束。
- *     没有「投票」这一步。上界只剩:显式 groupMaxRounds(讨论 / Historian 辅助等内部调用方传)、
- *     MAX_GROUP_ROUNDS 兜底天花板、run 成本上限、用户中止。
+ *   - 团队会话的 run(本函数)= 协调器,一条事件流;成员的实际工作 = 各自一条后台工作会话(kind='teamwork',父链接 = 团队会话,
+ *     一人一条跨 run 复用 = 私有持久上下文)里的子 run(services/teamRuns.ts;走 agentLoop 完整主循环)。
+ *   - 每次激活只注入「它上次之后团队里新说的话」delta(formatDelta),发言 = 子 run 的最终助手消息,抄回团队会话(`**🗣 name**` 消息 +
+ *     group_speaker start/end,end 带 text —— 主聊天不再逐 token 流,过程在成员自己的流里,Team Desk 直播它)。
+ *   - 调度只有一套(teamDue,纯函数):全员起头(拍板 ⑮)+ 用户消息里的 @ 与 priorityAgent 先起;被 @ 者 FIFO 优先;
+ *     并发上限 TEAM_MAX_CONCURRENT(内部调用方传 groupMaxConcurrent:1 即退化成旧的顺序交替,拍板 ⑯);
+ *     成员发言末尾自己决定还聊不聊(最后一个非空行 DONE = 我这边完了,之后不再轮到它,除非被 @ 或用户再开口);
+ *     周期边界 = 没人在跑也没人能起 → 全员 DONE 则停,否则新周期(未 DONE 的成员并行再来一轮)。没有投票、没有缺省轮数。
+ *     上界:显式 groupMaxRounds(内部调用方)或 MAX_GROUP_ROUNDS 天花板 × 成员数 = 最大激活次数、团队成本天花板(子 run 用量求和,
+ *     = 单 run 上限 × 成员数)、额度、用户中止(级联中止子 run)。
+ *   - 子 run 的审批 / 询问转发到团队 run 的流上(带子 runId 与 messageId):用户在主聊天就能批,不必点开 Team Desk。
+ *   - 用户插话:立刻落库 + 进 transcript + turn_boundary;全员 DONE 作废;空闲成员立刻再起,跑着的下次激活看到。
  *   - 结束后 ask_user「是否总结?」→ 是则固定「主持人」persona 一次性总结。
- *   - 仅 standalone/desktop(host)形态触达(由 agentLoop 的 hostExec 闸门把守);云端 worker 不调本模块。
+ *   - 仅 standalone/desktop(host)形态触达(由 agentLoop 的 groupChat 闸门把守)。
  *
- * 不从 ./agentLoop import(agentLoop import 本模块 → 避免循环);所需 brain/billing/state 直接走 deps()。
+ * 不从 ./agentLoop import(agentLoop import 本模块 → 避免循环);所需 brain/billing/state 直接走 deps(),steer / abort 经参数借入。
  */
 import { v4 as uuidv4 } from 'uuid';
-import { projectDocSection } from './projectDoc.js';
 import { deps } from '../seams/runtime.js';
 import type { ChatMessage } from '../core/types.js';
 import type { StreamResult } from '../seams/cloudBrain.js';
 import { THINKING_LEVELS } from '../llm/modelCapabilities.js';
 import type { AppProfile } from '../seams/appProfile.js';
-import type { ToolContext } from '../tools/registry.js';
-import { getToolDefinitions, executeTool, listDeferredTools } from '../tools/registry.js';
-import { gateToolCall, type ApprovalMode } from './approvals.js';
-import { publish, drain } from './eventBus.js';
+import { publish, drain, type AgentEvent } from './eventBus.js';
 import { updateRunStatus } from './runStore.js';
 import { requestInquiry } from './inquiries.js';
-import { agentCapOf, getAgent, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
-import { enterRunContext } from '../seams/runContext.js';
+import { getAgent, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
-import { capToolResult } from './contextBudget.js';
 import { compactSession, getLatestSummary } from './compaction.js';
+import { activateMember as realActivateMember, type ActivateMember, type MemberOutcome } from './teamRuns.js';
 
 /** 兜底天花板(周期数;每周期 = 还想聊的成员各说一次)。不是缺省上限:没传 groupMaxRounds 时团队只靠成员自己的 DONE 收场,这里只防失控。 */
 const MAX_GROUP_ROUNDS = 30;
-// ponytail: 单个发言「轮」的迭代上限 —— 讨论轮通常是「几次调研工具 + 发言」,不需要主 loop 的 90。
-// agent.maxIterations 可往下压,但封顶 GROUP_TURN_MAX_ITER 防群聊里单 agent 烧穿。
-const GROUP_TURN_MAX_ITER = 16;
+/** 同时在跑的成员激活数上限(拍板 ⑱);内部调用方传 groupMaxConcurrent:1 = 顺序交替。环境变量 TANGU_TEAM_CONCURRENCY 可调。 */
+const TEAM_MAX_CONCURRENT = Math.max(1, Math.floor(Number(process.env.TANGU_TEAM_CONCURRENCY)) || 3);
 const SPEECH_CAP = 16_000;
 
 export const HOST_SLUG = '__host__';
@@ -69,25 +66,47 @@ export interface GroupChatParams {
   signal: AbortSignal;
   /** 由 agentLoop 注入(本模块不 import agentLoop):取出本 run 已排队的用户插话。缺省 = 没有插话通道(与旧行为一致)。 */
   drainSteer?: () => Array<{ id: string; content: string; attachments?: any[] }>;
+  /** 由 agentLoop 注入:下一条插话到达即 resolve(团队 run 在等子 run 时据此被唤醒)。缺省 = 只在调度点拉取。 */
+  waitSteer?: () => Promise<void>;
+  /** 由 agentLoop 注入:中止一个子 run(成本 / 额度停机时级联)。 */
+  abortChild?: (runId: string) => void;
+  /** 成员激活载体;缺省 = teamRuns.activateMember(子会话 + 子 run)。单测注入假实现只验调度。 */
+  activateMember?: ActivateMember;
 }
 
 export interface TranscriptEntry { round: number; slug: string; name: string; text: string }
 
 export interface TeamState {
   participants: string[];
-  /** 被 @ 的成员 FIFO(含已表态 DONE 的:被点名即重新入场)。 */
+  /** 被 @ 的成员 FIFO(含已表态 DONE 的:被点名即重新入场;正在跑的留在队里,它下次激活的 delta 里自然有这条点名)。 */
   pending: string[];
+  /** 本周期已经激活过的成员。 */
   cycleSpoken: Set<string>;
   /** 已表态 DONE 的成员:轮转时跳过,直到被 @ 或用户再开口。 */
   done: Set<string>;
+  /** 正在跑的成员(同一成员同一时刻只有一次激活)。 */
+  running: Set<string>;
 }
-/** 下一位发言人(纯函数,可测):被 @ 者 FIFO(已不在场的点名跳过)→ 本周期未发言且未表态 DONE 的成员按序轮转 → null = 本周期结束。 */
-export function teamNext(st: TeamState): string | null {
-  while (st.pending.length) {
-    const s = st.pending.shift()!;
-    if (st.participants.includes(s)) return s;
+/**
+ * 现在该起哪些成员(纯函数,可测):被 @ 者 FIFO(已不在场的点名丢弃;正在跑的留队)→ 本周期未激活且未 DONE 的成员按序轮转,
+ * 总数不超过 cap − 正在跑的。返回空且没人在跑 = 周期边界。cap=1 时逐字等于旧的 teamNext 顺序。
+ */
+export function teamDue(st: TeamState, cap: number): string[] {
+  const out: string[] = [];
+  const free = (): number => cap - st.running.size - out.length;
+  st.pending = st.pending.filter((s) => st.participants.includes(s));
+  for (const s of [...st.pending]) {
+    if (free() <= 0) break;
+    if (st.running.has(s) || out.includes(s)) continue;
+    out.push(s);
+    st.pending.splice(st.pending.indexOf(s), 1);
   }
-  return st.participants.find((s) => !st.cycleSpoken.has(s) && !st.done.has(s)) ?? null;
+  for (const s of st.participants) {
+    if (free() <= 0) break;
+    if (st.running.has(s) || out.includes(s) || st.cycleSpoken.has(s) || st.done.has(s)) continue;
+    out.push(s);
+  }
+  return out;
 }
 /** 从一段发言里按出现顺序解析被 @ 的成员(按 @<name> 或 @<slug>;排除自己;去重)。模型不守约定 = 无人被点名。 */
 export function parseMentions(text: string, participants: Array<{ slug: string; name: string }>, selfSlug: string): string[] {
@@ -112,8 +131,16 @@ export function parseMentions(text: string, participants: Array<{ slug: string; 
   }
   return out;
 }
-/** DONE 只认发言的最后一个非空行(约定:独占一行、写在末尾);正文中间 / 代码块里的 DONE、「NOT DONE」「done」都不算(Codex 09-16 r3 #1)。 */
-export const isDoneSpeech = (text: string): boolean => (text.trimEnd().split('\n').pop() || '').trim() === 'DONE';
+/**
+ * DONE 只看发言的最后一个非空行(约定:独占一行、写在末尾;正文中间 / 代码块里的 DONE 不算,Codex 09-16 r3 #1)。
+ * 模型常把 DONE 缀在最后一句的句尾(live 09-16 第四轮实测:「@Alpha:确认,口号为“…”。 DONE」被判「没完」→ 两人互相点名跑满 60 步),
+ * 所以行尾的 DONE 也认;「NOT DONE」「done」不算。宁可早停一位成员(被 @ / 用户开口即回来),不可整场空转到天花板。
+ */
+export const isDoneSpeech = (text: string): boolean => {
+  const last = (text.trimEnd().split('\n').pop() || '').trim();
+  if (last === 'DONE') return true;
+  return /(?:^|\s)DONE[.。!！]?$/.test(last) && !/\bNOT\s+DONE[.。!！]?$/.test(last);
+};
 
 /** 本次群聊 run 的真实 token 累计(usage 事件的 total + 终态 tokens_total 用)。 */
 // cost/limit 挂在 meter 上随处可达:usage 事件要带「本 run 累计成本+上限」(H3 成本闸可见,与 agentLoop 同口径)。
@@ -182,46 +209,35 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
     const maxRounds = roundCap(p.agentConfig.groupMaxRounds);
     const roster = participants.map((a) => `- ${a.name}(${a.slug})：${a.description || '——'}`).join('\n');
 
-    // ③ 每 agent 私有持久上下文 + 已读指针(seen[slug] = transcript 中已注入到该 agent 的条数)
-    // deferred 工具目录段(P0-2):群聊发言人与主 loop 同款按需装载——目录进各自 system,
-    // load_tools 解锁(per-turn,见 runGroupTurn)。不注入则 deferred 工具被静默砍掉。
-    const groupDeferred = listDeferredTools({
-      userId: p.userId, sessionId, appId: p.appId, profile: p.profile, execMode: p.execMode, cwd: p.cwd,
-    });
-    const deferSection = groupDeferred.length
-      ? '\n\n## Additional Tools (load on demand)\nThese tools exist but are not loaded yet. When needed, FIRST call `load_tools` with the exact names, wait for the result, then call them normally.\n' +
-        groupDeferred.map((d) => `- ${d.name}: ${d.hint}`).join('\n')
-      : '';
-    const ctxByAgent = new Map<string, ChatMessage[]>();
+    // ③ 已读指针(seen[slug] = transcript 中已注入到该成员的条数);成员的私有上下文住在各自的工作会话里(teamRuns.ts),这里不再持有。
     const seen = new Map<string, number>();
-    for (const a of participants) {
-    // 群聊发言人与子代理同理:同一个 cwd、同一套文件工具 → 项目约定必须在场(codex)。
-    const groupProjectDoc = p.execMode === 'host' ? ((s) => (s ? '\n\n---\n' + s : ''))(projectDocSection(p.cwd)) : '';
-      // 独立团队:TEAM.md(全员共识、逐字不变 → 前缀缓存友好)+ 本成员的 role,显式注入 system;PROJECT_DOC_FILENAMES 是封闭白名单,
-      // 工作目录里放 TEAM.md 不会被自动读到。项目轨道的团队模式两者都空。
+    for (const a of participants) seen.set(a.slug, 0);
+    const teamDocFor = (a: NormalAgentDef): string | undefined => {
+      // 独立团队:TEAM.md(全员共识、逐字不变 → 前缀缓存友好)+ 本成员的 role;项目轨道的团队模式两者都空。
       const role = p.agentConfig.teamRoles && typeof p.agentConfig.teamRoles === 'object' ? String(p.agentConfig.teamRoles[a.slug] || '') : '';
-      const teamDoc = [typeof p.agentConfig.teamDoc === 'string' && p.agentConfig.teamDoc.trim() ? '## Team\n' + p.agentConfig.teamDoc.trim() : '', role ? `## Your role\n${role}` : '']
+      return [typeof p.agentConfig.teamDoc === 'string' && p.agentConfig.teamDoc.trim() ? '## Team\n' + p.agentConfig.teamDoc.trim() : '', role ? `## Your role\n${role}` : '']
         .filter(Boolean).join('\n\n') || undefined;
-      ctxByAgent.set(a.slug, [{ role: 'system', content: buildGroupSystem(a, roster, teamDoc) + deferSection + groupProjectDoc } as ChatMessage]);
-      seen.set(a.slug, 0);
-    }
+    };
     const transcript: TranscriptEntry[] = [
       ...(seedEntry ? [seedEntry] : []),
       { round: 0, slug: USER_SLUG, name: 'User', text: String(p.message) },
     ];
 
-    let costTotal = 0;
     const runCostLimit = runCostCeiling();
-    const meter: Meter = { tokens: 0, cost: 0, limit: runCostLimit };
+    // 团队成本天花板 = 单 run 上限 × 成员数(拍板 ⑱;子 run 各自还受主循环的单 run 上限)。0 = 关。
+    const teamCostLimit = runCostLimit > 0 ? runCostLimit * participants.length : 0;
+    const meter: Meter = { tokens: 0, cost: 0, limit: teamCostLimit };
     let stopReason = 'max_rounds';
-    let roundsRun = 0;
+    let roundsRun = 1;
 
     const bySlug = new Map(participants.map((a) => [a.slug, a]));
+    const inlineSlugs = new Set(tempBySlug.keys());
     let lastMessageId: string | undefined;
     let steps = 0;
+    const activate = p.activateMember ?? realActivateMember;
+    const approvalMode = typeof p.agentConfig.approvalMode === 'string' ? p.agentConfig.approvalMode : undefined;
 
-    // 发言人边界:先消费用户插话(落库 + 进 transcript + 通知前端离开等待区),再给本发言人算 delta。
-    // 只在边界注入、不打断正在跑的发言(不提供 expediteSteer)。返回条数(据此让全员重新回应)。
+    // 用户插话:立刻落库 + 进 transcript + 通知前端离开等待区。返回条数(据此让全员 DONE 作废、空闲成员再起)。
     const drainUserSteer = async (round: number): Promise<number> => {
       const steered = p.drainSteer?.() ?? [];
       if (!steered.length) return 0;
@@ -238,93 +254,170 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
       return steered.length;
     };
 
-    /** 一位成员发言一次(= 一步)。返回发言文本;stop 非空 = 整场要停(额度/成本)。 */
-    const speak = async (agent: NormalAgentDef, round: number): Promise<{ text: string; stop?: string }> => {
-      // 本发言人的记忆作用域:其 remember/log_event 落到自己的 agent 文件夹(顺序执行,enterWith 即时生效)。
-      // 展示身份必须带上发言人自己:shareDefaultMemory 的参与者记忆域是 xyra,不传第 4 参 manage_agent/manage_harness 就把它
-      // 当成「别人」—— 能改自己的人格、能给自己调低轮数;主 loop 一直是传 activeAgentSlug 的(Codex 09-13 #2)。
-      enterRunContext(p.userId, p.runId, resolveMemorySlug(agent), agent.slug);
-      // 额度复查(标准计费才有意义;standalone 为 noop → 恒 ok)
-      const can = await deps().billing.canConsumeTokenPoints(userId, 1).catch(() => ({ ok: true } as any));
-      if (!can.ok) {
-        await publish(runId, 'error', { error: 'token_quota_exceeded' });
-        return { text: '', stop: 'quota' };
+    // 子 run 事件转发:审批 / 询问带上子 runId 与本次发言的 messageId(桌面在主聊天里就地批,不必点开 Team Desk);
+    // 工具活动压成一行 team_activity(卡片那一行动态);用量并进团队计量(团队天花板据此判)。
+    const forward = (agent: NormalAgentDef, messageId: string, childRunId: () => string | undefined) => (ev: AgentEvent): void => {
+      const pl = ev.payload || {};
+      const t = ev.type;
+      const tag = { agentSlug: agent.slug, agentName: agent.name, messageId, runId: childRunId() };
+      if (t === 'approval_request' || t === 'approval_result' || t === 'inquiry_request' || t === 'inquiry_result') {
+        void publish(runId, t, { ...pl, ...tag });
+      } else if (t === 'tool_call') {
+        void publish(runId, 'team_activity', { slug: agent.slug, name: agent.name, messageId, tool: String(pl.name || ''), argsPreview: String(pl.arguments || '').slice(0, 160) });
+      } else if (t === 'usage') {
+        const promptT = Number(pl.prompt) || 0; const compT = Number(pl.completion) || 0; const cost = Number(pl.cost) || 0;
+        meter.tokens += promptT + compT; meter.cost += cost;
+        void publish(runId, 'usage', { prompt: promptT, completion: compT, cached: Number(pl.cached) || 0, cost, total: meter.tokens, costTotal: meter.cost, costLimit: meter.limit, agentId: agent.slug });
       }
-      // delta = 该 agent 上次发言以来的新条目 → 作为一条 user 消息注入它的私有上下文
-      const from = seen.get(agent.slug) ?? 0;
-      const ctx = ctxByAgent.get(agent.slug)!;
-      ctx.push({ role: 'user', content: formatDelta(transcript.slice(from), agent.name) } as ChatMessage);
-      // 持久消息 id 下发给前端,使实时气泡 id 与落库 uuid 对齐 → 轮询/重载按 id 合并不产生重复气泡。
-      const messageId = uuidv4();
-      steps++;
-      await publish(runId, 'group_speaker', { slug: agent.slug, name: agent.name, round, step: steps, phase: 'start', messageId });
-      const turn = await runGroupTurn(ctx, agent, p, meter);
-      costTotal += turn.cost;
-      await publish(runId, 'group_speaker', { slug: agent.slug, name: agent.name, round, step: steps, phase: 'end', messageId });
-      lastMessageId = messageId;
-      transcript.push({ round, slug: agent.slug, name: agent.name, text: turn.text });
-      seen.set(agent.slug, transcript.length); // 含自己这条 → 下次 delta 自动排除自己
-      // 每条发言 = 一条独立 model 消息(前缀发言人,reload/网页可读;agent_slug 落列供归属/头像)。复用 finalizeAssistantMessage。
-      await state.finalizeAssistantMessage({
-        messageId, sessionId, modelId: agent.model || modelId, agentSlug: agent.slug,
-        content: `**🗣 ${agent.name}**\n\n${turn.text}`, reasoning: '', toolCalls: [], toolResults: [],
-      }).catch(() => {});
-      if (runCostLimit > 0 && isOverRunCost(costTotal, runCostLimit)) {
-        await publish(runId, 'status', { phase: 'group_cost_limit', costTotal });
-        return { text: turn.text, stop: 'cost_limit' };
-      }
-      return { text: turn.text };
     };
 
-    // ── 调度(两条轨道共用,只有这一套):一「步」一位发言人;被 @ 者 FIFO → 轮转本周期未发言且未 DONE 的成员 →
-    //    周期边界:全员 DONE → done 停,否则开新周期(DONE 的成员跳过)。没有投票、没有缺省轮数;
-    //    maxRounds 只是显式上限(内部调用方)或兜底天花板,折算成最大步数(= 周期数 × 成员数)。
-    const maxSteps = maxRounds * participants.length;
-    const st: TeamState = { participants: participants.map((a) => a.slug), pending: [], cycleSpoken: new Set(), done: new Set() };
-    let cycle = 1;
-    stopReason = 'max_rounds';
-    for (let step = 1; step <= maxSteps; step++) {
-      if (signal.aborted) throw new AbortLikeError();
-      // 用户插话先于「要不要停」:它是对全员的新输入 —— 谁的 DONE 都作废,本周期重来,大家重新回应。
-      // 预算尾巴上(剩余步数不够全员各回应一次)不在这里消费:留给收尾那趟(全员各回应一次,有界),否则最后几步只够
-      // 一两位回应、其余成员没见到这条插话就到顶了(Codex 09-16 r3 #3);上限本身不因插话突破。
-      const injected = step + st.participants.length - 1 <= maxSteps ? await drainUserSteer(cycle) : 0;
-      if (injected) { st.cycleSpoken = new Set(); st.done = new Set(); }
-      let slug = teamNext(st);
-      if (!slug) {
-        cycle++; st.cycleSpoken = new Set();
-        await publish(runId, 'group_cycle', { cycle });
-        slug = teamNext(st);
-        if (!slug) { stopReason = 'done'; break; } // 去重后到不了这里(全员 DONE 在下面即刻判定);守住而不是断言
-      }
-      roundsRun = cycle;
-      const agent = bySlug.get(slug)!;
-      st.done.delete(slug); // 被 @ 的 DONE 成员重新入场:这次发言重新表态
-      const r = await speak(agent, cycle);
-      st.cycleSpoken.add(slug);
-      if (isDoneSpeech(r.text)) {
-        // 写 DONE 的那条发言里的 @ 不再排队(收尾致谢式的「@某某 谢了,DONE」不该把对方重新拉回来 —— live 台架 09-16 实测两人互相致谢无限循环)。
-        st.done.add(slug);
-      } else {
-        for (const m of parseMentions(r.text, participants, slug)) if (!st.pending.includes(m)) st.pending.push(m);
-      }
-      if (r.stop) { stopReason = r.stop; break; }
-      // 全员 DONE 即刻判定(不等下一步的周期边界):最后一步上全员 DONE 才不会被记成 max_rounds(Codex 09-16 r3 #5)。
-      if (st.done.size === st.participants.length) { stopReason = 'done'; break; }
-    }
+    type Settled = { slug: string; cycle: number; messageId: string; outcome: MemberOutcome };
+    const childRuns = new Map<string, string>(); // slug → 正在跑的子 runId(级联中止用)
+    const abortInFlight = (): void => { for (const id of childRuns.values()) p.abortChild?.(id); };
 
-    // 收尾前再消费一次插话:最后一位发言 / 投票 / 收场判定期间进来的消息,enqueueSteer 已经答应「收到了」,
-    // 不能在 finally 清队列时直接丢掉 —— 有就再让全员回应一遍(有界:一趟),然后把趟内又来的持久化进对话。
-    if (!signal.aborted && stopReason !== 'quota' && stopReason !== 'cost_limit') {
-      const late = await drainUserSteer(roundsRun);
-      if (late > 0) {
-        for (const agent of participants) {
-          if (signal.aborted) throw new AbortLikeError();
-          const r = await speak(agent, roundsRun);
-          if (r.stop) { stopReason = r.stop; break; }
+    /** 起一次激活(不 await):算 delta、推进已读指针、起子 run。返回 settle 后的结果,绝不 reject。 */
+    const launch = (slug: string, cycle: number): Promise<Settled> => {
+      const agent = bySlug.get(slug)!;
+      const from = seen.get(slug) ?? 0;
+      // 自己的发言不回灌(它住在自己的工作会话里;并行下自己那条会在起了之后才进 transcript,靠指针排不掉)。
+      const unread = transcript.slice(from).filter((t) => t.slug !== slug);
+      const delta = formatDelta(unread, agent.name);
+      seen.set(slug, transcript.length); // 起了就算读过:之后的新话留给下次激活
+      const messageId = uuidv4();
+      let childId: string | undefined;
+      const task = unread.filter((t) => t.slug !== CONTEXT_SLUG).map((t) => t.text).join(' ').replace(/\s+/g, ' ').slice(0, 160);
+      const run = activate({
+        teamRunId: runId, teamSessionId: sessionId, userId, appId: p.appId, modelId,
+        member: agent, inlineDef: inlineSlugs.has(slug), delta, cycle, roster, teamDoc: teamDocFor(agent),
+        execMode: p.execMode, cwd: p.cwd, extraRoots: p.extraRoots, wsProject: p.wsProject, approvalMode, signal,
+        onStarted: (ids) => {
+          childId = ids.runId; childRuns.set(slug, ids.runId);
+          void publish(runId, 'team_member', { slug, name: agent.name, phase: 'start', messageId, cycle, sessionId: ids.sessionId, runId: ids.runId, task });
+        },
+        onEvent: forward(agent, messageId, () => childId),
+      }).catch((err: any): MemberOutcome => ({ status: signal.aborted ? 'aborted' : 'failed', text: '', error: err?.message || String(err) }));
+      return run.then((outcome) => { childRuns.delete(slug); return { slug, cycle, messageId, outcome }; });
+    };
+
+    /** 一次激活收场:发言抄回团队会话(消息 + 事件 + transcript),DONE / @ 记账。返回 true = 整场要停(成本)。 */
+    const settle = async (r: Settled): Promise<boolean> => {
+      const agent = bySlug.get(r.slug)!;
+      steps++;
+      const base = { slug: r.slug, name: agent.name, round: r.cycle, step: steps, messageId: r.messageId };
+      if (r.outcome.status === 'done') {
+        const text = (r.outcome.text.trim() || '(no report this activation)').slice(0, SPEECH_CAP);
+        await publish(runId, 'group_speaker', { ...base, phase: 'start' });
+        await publish(runId, 'group_speaker', { ...base, phase: 'end', text });
+        lastMessageId = r.messageId;
+        transcript.push({ round: r.cycle, slug: r.slug, name: agent.name, text });
+        // 每条发言 = 团队会话里一条独立 model 消息(前缀发言人,reload/网页可读;agent_slug 落列供归属/头像)。
+        await state.finalizeAssistantMessage({
+          messageId: r.messageId, sessionId, modelId: agent.model || modelId, agentSlug: r.slug,
+          content: `**🗣 ${agent.name}**\n\n${text}`, reasoning: '', toolCalls: [], toolResults: [],
+        }).catch(() => {});
+        await publish(runId, 'team_member', { ...base, phase: 'end', reason: 'done', sessionId: r.outcome.sessionId, runId: r.outcome.runId });
+        if (isDoneSpeech(text)) {
+          // 写 DONE 的那条发言里的 @ 不再排队(收尾致谢式的「@某某 谢了,DONE」不该把对方重新拉回来 —— live 台架 09-16 实测两人互相致谢无限循环)。
+          st.done.add(r.slug);
+        } else {
+          for (const m of parseMentions(text, participants, r.slug)) if (!st.pending.includes(m)) st.pending.push(m);
         }
-        await drainUserSteer(roundsRun);
+      } else if (r.outcome.status === 'aborted') {
+        await publish(runId, 'team_member', { ...base, phase: 'end', reason: 'aborted', sessionId: r.outcome.sessionId, runId: r.outcome.runId });
+      } else {
+        // 失败的成员按 DONE 记(否则每个周期反复失败地重起);队友在 transcript 里看得到,被 @ 或用户开口才再试。
+        const text = `(activation failed: ${r.outcome.error || 'unknown error'})`;
+        transcript.push({ round: r.cycle, slug: r.slug, name: agent.name, text });
+        st.done.add(r.slug);
+        await publish(runId, 'team_member', { ...base, phase: 'end', reason: 'failed', error: r.outcome.error, sessionId: r.outcome.sessionId, runId: r.outcome.runId });
       }
+      if (teamCostLimit > 0 && isOverRunCost(meter.cost, teamCostLimit)) {
+        await publish(runId, 'status', { phase: 'group_cost_limit', costTotal: meter.cost });
+        return true;
+      }
+      return false;
+    };
+
+    // ── 调度(只有这一套):全员起头,被 @ 者优先,并发上限内能起就起;周期边界 = 没人在跑也没人能起。──
+    const cap = concurrencyCap(p.agentConfig.groupMaxConcurrent, participants.length);
+    const maxActivations = maxRounds * participants.length;
+    const st: TeamState = { participants: participants.map((a) => a.slug), pending: [], cycleSpoken: new Set(), done: new Set(), running: new Set() };
+    // 入场种子:priorityAgent(内部调用方:讨论对象先回应话题)+ 用户消息里的 @(取代旧「本场优先发言」)。
+    for (const slug of [prioritySlug, ...parseMentions(String(p.message), participants, '')]) {
+      if (slug && st.participants.includes(slug) && !st.pending.includes(slug)) st.pending.push(slug);
+    }
+    let cycle = 1;
+    let activations = 0;
+    const inFlight = new Map<string, Promise<Settled>>();
+    const quotaOk = async (): Promise<boolean> => {
+      const can = await deps().billing.canConsumeTokenPoints(userId, 1).catch(() => ({ ok: true } as any));
+      return !!can.ok;
+    };
+    const abortWait = new Promise<null>((resolve) => {
+      if (signal.aborted) resolve(null);
+      else signal.addEventListener('abort', () => resolve(null), { once: true });
+    });
+    try {
+      for (;;) {
+        if (signal.aborted) throw new AbortLikeError();
+        // 插话先于调度:队列里已有的立即消费(等待期间到达的靠 waitSteer 唤醒);它是对全员的新输入 —— 谁的 DONE 都作废,本周期重来。
+        // 预算尾巴上(剩余激活数不够全员各回应一次)不在这里消费:留给收尾那趟(全员各回应一次,有界;Codex 09-16 r3 #3),
+        // 否则最后几次激活只够一两位回应、其余成员没见到这条插话就到顶了;上限本身不因插话突破。
+        const canDrain = activations + participants.length <= maxActivations;
+        const injected = canDrain ? await drainUserSteer(cycle) : 0;
+        if (injected) {
+          st.cycleSpoken = new Set(); st.done = new Set();
+          // 正在跑的成员这次激活看不到这条插话:留队,跑完立刻再起一次(delta 里才有它)—— 否则两人都带着 DONE 收场,用户的话没人回。
+          for (const s of st.running) if (!st.pending.includes(s)) st.pending.push(s);
+        }
+        for (const slug of activations < maxActivations ? teamDue(st, cap) : []) {
+          if (activations >= maxActivations) break;
+          if (!(await quotaOk())) { await publish(runId, 'error', { error: 'token_quota_exceeded' }); stopReason = 'quota'; break; }
+          activations++;
+          st.running.add(slug); st.cycleSpoken.add(slug); st.done.delete(slug); // 被 @ 的 DONE 成员重新入场:这次激活重新表态
+          inFlight.set(slug, launch(slug, cycle));
+        }
+        if (stopReason === 'quota') { abortInFlight(); break; }
+        if (!inFlight.size) {
+          if (st.done.size === participants.length) { stopReason = 'done'; break; }
+          if (activations >= maxActivations) { stopReason = 'max_rounds'; break; }
+          cycle++; roundsRun = cycle; st.cycleSpoken = new Set();
+          await publish(runId, 'group_cycle', { cycle });
+          continue;
+        }
+        const settled = await Promise.race<Settled | null>([
+          ...inFlight.values(),
+          ...(p.waitSteer && canDrain ? [p.waitSteer().then(() => null)] : []),
+          abortWait,
+        ]);
+        if (!settled) continue; // 插话到了(回到循环顶消费)或被中止(循环顶抛)
+        inFlight.delete(settled.slug); st.running.delete(settled.slug);
+        if (await settle(settled)) { stopReason = 'cost_limit'; abortInFlight(); break; }
+        if (st.done.size === participants.length && !inFlight.size && !st.pending.length) { stopReason = 'done'; break; }
+      }
+      // 停机后还有子 run 在跑(成本 / 额度停机已级联中止;done / max_rounds 时不会有):等它们收场,发言照样抄回。
+      for (const r of await Promise.all(inFlight.values())) { st.running.delete(r.slug); await settle(r); }
+      inFlight.clear();
+
+      // 收尾前再消费一次插话:最后几次激活 / 收场判定期间进来的消息,enqueueSteer 已经答应「收到了」,
+      // 不能在 finally 清队列时直接丢掉 —— 有就再让全员回应一趟(有界:一趟,并发上限内分批),然后把趟内又来的持久化进对话。
+      if (!signal.aborted && stopReason !== 'quota' && stopReason !== 'cost_limit') {
+        const late = await drainUserSteer(roundsRun);
+        if (late > 0) {
+          const queue = participants.map((a) => a.slug);
+          while (queue.length) {
+            if (signal.aborted) throw new AbortLikeError();
+            const batch = queue.splice(0, cap);
+            for (const r of await Promise.all(batch.map((slug) => launch(slug, roundsRun)))) {
+              if (await settle(r)) { stopReason = 'cost_limit'; queue.length = 0; break; }
+            }
+          }
+          await drainUserSteer(roundsRun);
+        }
+      }
+    } catch (err) {
+      abortInFlight(); // 团队 run 自己出错 / 被中止:子 run 不能变成没人管的孤儿
+      throw err;
     }
 
     await publish(runId, 'group_ended', {
@@ -371,91 +464,6 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
   }
 }
 
-/** 一个 agent 的「发言」轮:私有上下文上的小 agentic loop(完整工具 + 流式),返回最终发言文本。 */
-async function runGroupTurn(ctx: ChatMessage[], agent: NormalAgentDef, p: GroupChatParams, meter: Meter): Promise<{ text: string; cost: number }> {
-  const { runId, sessionId, appId, execMode, cwd, extraRoots, profile, signal } = p;
-  const llm = deps().brain.llm;
-  const effModelId = agent.model || p.modelId;
-  const { model, apiKey, baseUrl, apiModelId } = await llm.resolveModelAndKey(effModelId);
-  const approvalMode: ApprovalMode =
-    agent.approvalMode || (execMode === 'host' ? 'auto-edit' : 'full-auto');
-
-  // deferred 解锁:per-turn 空集起步(与主 loop 的 per-run 同构,粒度更小;turn 内 load_tools 后下一迭代生效)。
-  const turnUnlocked = new Set<string>();
-  let turnDefsDirty = false;
-  const toolCtx: ToolContext = {
-    userId: p.userId, sessionId, appId, runId, signal,
-    execMode, cwd, extraRoots, approvalMode, profile, hostSandbox: execMode === 'host' ? resolveHostSandboxPolicy() : undefined, modelId: effModelId, planMode: false, muse: false,
-    wsProject: p.wsProject,
-    // 群聊发言人不可再起讨论(start_discussion/wait_discussion 隐藏)——防递归裂变。
-    inDiscussion: true,
-    unlockedTools: turnUnlocked,
-    unlockTools: (names) => {
-      let changed = false;
-      for (const n of names) if (!turnUnlocked.has(n)) { turnUnlocked.add(n); changed = true; }
-      if (changed) turnDefsDirty = true;
-    },
-    // ponytail: v1 群聊每 agent 用内置工具集(读/写/执行已够「完整工具」);custom/MCP per-agent 暂不接,
-    // 需要时按 agent.tools 走 loadCustomTools 即可补上。
-  };
-  let toolDefs = getToolDefinitions(toolCtx);
-  const maxIter = Math.min(agentCapOf(agent) || GROUP_TURN_MAX_ITER, GROUP_TURN_MAX_ITER); // 低于下限的定义值按未设(与主 loop 同口径)
-
-  let text = '';
-  let cost = 0;
-  for (let iteration = 0; iteration < maxIter; iteration++) {
-    if (signal.aborted) throw new AbortLikeError();
-    if (turnDefsDirty) { toolDefs = getToolDefinitions(toolCtx); turnDefsDirty = false; } // load_tools 解锁生效
-    const lastIter = iteration === maxIter - 1;
-    // 最后一轮不发 tools(而非 toolChoice:'none'):思考模式渠道(DeepSeek 等)会以
-    // "Thinking mode does not support this tool_choice" 拒绝显式 tool_choice,整场讨论直接失败。
-    const payload = await llm.buildProviderPayload({
-      model, apiModelId, messages: ctx, projectSource: appId,
-      temperature: 0.7, tools: lastIter ? undefined : toolDefs, toolChoice: lastIter ? undefined : 'auto',
-      attachments: [], thinkingLevel: agent.thinkingLevel || 'medium', stream: true, // 参与者发言默认思考·中(与会话默认一致);投票/主持收尾仍 off
-      cacheKey: `${sessionId}:grp:${agent.slug}`,
-    });
-    const res = await llm.streamProviderCompletion({
-      apiKey, baseUrl, payload, provider: (model as any)?.provider, signal,
-      onToken: (d) => { void publish(runId, 'token', { delta: d, agentId: agent.slug }); },
-      onReasoning: (d) => { void publish(runId, 'reasoning', { delta: d, agentId: agent.slug }); },
-      onToolCallDelta: (info) => {
-        if (info.argsDelta) void publish(runId, 'tool_stream', { id: info.id, name: info.name, delta: info.argsDelta, agentId: agent.slug });
-      },
-    });
-    cost += await account(p, res, effModelId, model, agent.slug, meter);
-
-    if (!res.toolCalls?.length || lastIter) {
-      text = res.content || text;
-      if (res.content) ctx.push({ role: 'assistant', content: res.content } as ChatMessage);
-      break;
-    }
-
-    ctx.push({ role: 'assistant', content: res.content || '', tool_calls: res.toolCalls } as ChatMessage);
-    for (const call of res.toolCalls) {
-      if (signal.aborted) throw new AbortLikeError();
-      await publish(runId, 'tool_call', { id: call.id, name: call.function.name, arguments: call.function.arguments, agentId: agent.slug });
-      const decision = await gateToolCall(runId, call, { sessionId, execMode, approvalMode, cwd, extraRoots }, signal);
-      let content: string;
-      let isError = false;
-      if (decision.action === 'reject') {
-        content = 'The user rejected this operation.';
-        isError = true;
-      } else {
-        const execCall = decision.argsOverride
-          ? { ...call, function: { ...call.function, arguments: JSON.stringify(decision.argsOverride) } }
-          : call;
-        const r = await executeTool(execCall, toolCtx);
-        content = capToolResult(r.result);
-        isError = r.isError;
-      }
-      await publish(runId, 'tool_result', { id: call.id, name: call.function.name, result: content, isError, agentId: agent.slug });
-      ctx.push({ role: 'tool', content, tool_call_id: call.id } as ChatMessage);
-    }
-  }
-  return { text: (text || '(no remark this round)').slice(0, SPEECH_CAP), cost };
-}
-
 /** 主持人总结:一次性流式,tag agentId=__host__。 */
 async function runHostSummary(transcript: TranscriptEntry[], p: GroupChatParams, meter: Meter): Promise<{ text: string; cost: number }> {
   const llm = deps().brain.llm;
@@ -498,11 +506,18 @@ function roundCap(v: any): number {
   return Math.min(n, MAX_GROUP_ROUNDS);
 }
 
+/** 显式 groupMaxConcurrent(内部调用方:讨论 / Historian 辅助传 1 = 顺序交替)钳 1..成员数;没传 = TEAM_MAX_CONCURRENT(不超过成员数)。 */
+function concurrencyCap(v: any, members: number): number {
+  const n = Math.floor(Number(v));
+  const base = Number.isFinite(n) && n >= 1 ? n : TEAM_MAX_CONCURRENT;
+  return Math.max(1, Math.min(base, members));
+}
+
 const THINK_LEVELS: readonly string[] = THINKING_LEVELS;
 const APPROVAL_MODES = ['readonly', 'auto-edit', 'full-auto'];
 
 /** 临时 Agent 定义来自客户端(本会话用,不落盘):校验必填 + 钳制各字段,复刻 agentRegistry.saveAgent 的口径。 */
-function sanitizeTempAgents(raw: any): NormalAgentDef[] {
+export function sanitizeTempAgents(raw: any): NormalAgentDef[] {
   if (!Array.isArray(raw)) return [];
   const out: NormalAgentDef[] = [];
   for (const r of raw) {
@@ -530,29 +545,34 @@ function sanitizeTempAgents(raw: any): NormalAgentDef[] {
   return out;
 }
 
-function buildGroupSystem(agent: NormalAgentDef, roster: string, teamDoc?: string): string {
+/**
+ * 成员系统提示里的团队段(拼在成员自己的人格之后;agentLoop 在 agentConfig.teamMember 在场时注入)。全员共识、逐字不变 → 前缀缓存友好。
+ * 规则按并行模型写:自己的线程里干活、只有最终消息进团队聊天、等人就 @ 并不写 DONE、完事写 DONE、同目录并行编辑的纪律。
+ */
+export function teamMemberSection(agentName: string, roster: string, teamDoc?: string): string {
   return (
-    (agent.systemPrompt ? agent.systemPrompt.trim() + '\n\n' : '') +
-    (agent.soul && agent.soul.trim() ? '## Persona\n' + agent.soul.trim() + '\n\n' : '') +
-    '## Group Chat Mode\n' +
-    'You are participating in a multi-agent group discussion. Members present:\n' +
+    '## Team Mode\n' +
+    "You are a member of a team working on the user's request. Members present:\n" +
     roster +
     '\n\n' +
-    `You are "${agent.name}". Rules:\n` +
-    "- Each time you first see other members' new remarks, then it is your turn. Give **your own** view based on the whole discussion: you may agree, challenge, add to, or propose something new, but keep your professional perspective and persona — do not blindly agree.\n" +
-    '- Address a member with @<name>; quote their words with a markdown blockquote (starting with >). The member you @-mention speaks next.\n' +
-    '- Be concise and well-grounded; address the issue, not the person. Use tools (read files/search/run, etc.) to support your view when needed, but your remark is the deliverable.\n' +
-    '- After every remark, decide for yourself whether you still need to speak. If your part is finished and nobody else needs to act, end the remark with DONE on its own line as the last line — you then stay silent unless a member @-mentions you or the user speaks again. Otherwise leave DONE out (and @-mention whoever should act next). The discussion ends once every member has ended with DONE; there is no round limit and no vote.' +
+    `You are "${agentName}". How the team works:\n` +
+    '- Every member works in their own thread, in parallel. The team chat only ever sees the final message of each of your activations — put your report there: what you did, what you found or decided, what you need from others. Tool calls and drafts stay in your thread.\n' +
+    '- Address a member with @<name>; quote their words with a markdown blockquote (starting with >). A member you @-mention is activated next with your message.\n' +
+    '- You are activated whenever the team chat has new remarks for you: a teammate @-mentioned you, the user spoke, or a new cycle started because someone still has work to do.\n' +
+    '- If you are waiting on a teammate, @-mention them with exactly what you need and end WITHOUT DONE — you will be activated again when they report back or when the next cycle starts.\n' +
+    '- When your part is complete and nobody needs anything more from you, end your final message with DONE on its own line as the last line. You then stay silent unless a member @-mentions you or the user speaks again. The team is finished once every member has ended with DONE; there is no round limit and no vote.\n' +
+    '- Teammates may be editing the same workspace at the same time: say which files you own, stay inside them, and never rewrite files a teammate owns.\n' +
+    '- Be concise and well-grounded; keep your professional perspective and persona — do not blindly agree.' +
     (teamDoc ? '\n\n' + teamDoc : '')
   );
 }
 
 export function formatDelta(delta: TranscriptEntry[], selfName: string): string {
-  if (!delta.length) return `It is now your turn (${selfName}) to speak.`;
+  if (!delta.length) return `You are activated now (${selfName}): continue your part and post your report to the team chat as your final message.`;
   const lines = delta
     .map((t) => (t.slug === CONTEXT_SLUG ? t.text : t.slug === USER_SLUG ? `[User] ${t.text}` : `@${t.name}:\n${t.text}`))
     .join('\n\n');
-  return `New remarks in the group:\n\n${lines}\n\n———\nIt is now your turn (${selfName}) to speak. You may @ a member, or quote their remark with >.`;
+  return `New remarks in the team chat:\n\n${lines}\n\n———\nYou are activated now (${selfName}). Do your part, then post your report to the team chat as your final message (you may @ a member, or quote their remark with >).`;
 }
 
 /**

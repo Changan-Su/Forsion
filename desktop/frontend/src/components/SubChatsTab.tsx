@@ -19,7 +19,7 @@ function color(slug: string): string {
 }
 
 /** 渲染一串子聊天段(发言文本 / 工具 / 投票)。 */
-const SegList: React.FC<{ segs: SubChatSeg[] }> = ({ segs }) => (
+export const SegList: React.FC<{ segs: SubChatSeg[] }> = ({ segs }) => (
   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
     {segs.map((seg, i) => {
       if (seg.t === 'tool') return (

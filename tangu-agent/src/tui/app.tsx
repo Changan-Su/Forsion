@@ -245,8 +245,16 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
       case 'group_speaker':
         if (p.phase === 'start') {
           flushNow();
-          dispatch({ type: 'GROUP_NOTE', text: `🗣 ${p.name || p.slug}${p.round ? `  ·  第 ${p.round} 轮` : ''}`, tone: 'info' });
+          dispatch({ type: 'GROUP_NOTE', text: `🗣 ${p.name || p.slug}${p.round ? `  ·  第 ${p.round} 周期` : ''}`, tone: 'info' });
+        } else if (p.phase === 'end' && typeof p.text === 'string' && p.text) {
+          // 并行团队(09-16 第四轮):成员的发言不再逐 token 流进团队 run,end 带正文 → 这里整段打出来。
+          flushNow();
+          dispatch({ type: 'GROUP_NOTE', text: p.text, tone: 'info' });
         }
+        break;
+      case 'team_member':
+        flushNow();
+        dispatch({ type: 'GROUP_NOTE', text: p.phase === 'start' ? `⏳ ${p.name || p.slug} 开始工作…` : `${p.reason === 'failed' ? '⚠️' : '✔'} ${p.name || p.slug} 本次工作结束(${p.reason || 'done'})`, tone: p.reason === 'failed' ? 'error' : 'info' });
         break;
       case 'group_voting':
         flushNow();

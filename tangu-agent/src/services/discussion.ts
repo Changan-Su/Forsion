@@ -99,6 +99,7 @@ export async function startDiscussion(p: StartDiscussionParams): Promise<string>
         groupTempAgents,
         priorityAgent: peerSlug, // 对象先发(回应主 agent 抛出的话题),主 agent 分身随后接
         groupMaxRounds: p.maxRounds,
+        groupMaxConcurrent: 1, // 讨论是两人交替(对象先回应话题,分身再接),不并行(拍板 ⑯:内部调用方退化成顺序)
         groupAutoSummary: true, // 后台无交互用户 → 直接出主持人总结作结论(不问 ask_user)
         _discussion: true, // 标记:此 run 内禁再起讨论(防递归)
         execMode: 'host',

@@ -82,12 +82,15 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
   let content = r.content || ''
   let agentId: string | undefined
   let agentName: string | undefined
+  let teamDone = false
   let agentColor: string | undefined
   if (role === 'assistant' && resolveGroup) {
     const m = GROUP_SPEAKER_RE.exec(content)
     if (m) {
       agentName = m[1].trim()
       content = m[2]
+      const dm = splitDoneMark(content)
+      if (dm.done) { content = dm.text; teamDone = true }
       const g = resolveGroup(agentName)
       agentId = g.slug
       agentColor = g.color
@@ -105,6 +108,7 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
     displayFiles: Array.isArray(r.display_files) && r.display_files.length ? r.display_files : undefined,
     status: 'done', timestamp: Number(r.timestamp) || 0,
     agentId, agentName, agentColor,
+    ...(teamDone ? { teamDone: true } : {}),
   }
   if (role === 'assistant' && Array.isArray(r.tool_calls) && r.tool_calls.length) {
     const results = new Map<string, any>((Array.isArray(r.tool_results) ? r.tool_results : []).map((t: any) => [t.tool_call_id, t]))
@@ -141,6 +145,35 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
 }
 
 type GroupRef = { current: string; groupSeen?: boolean; group?: boolean; groupEnded?: boolean; reuseNext?: boolean }
+/** 团队成员的工作状态一行(见 teamWorkBySession)。 */
+export interface TeamWorkMember {
+  slug: string
+  name: string
+  /** 成员的工作会话(kind=teamwork)与当前子 run;Team Desk 展开态按 runId 订阅它的流。 */
+  sessionId?: string
+  runId?: string
+  /** 本次激活在团队会话里的发言 id(占位气泡)。 */
+  messageId?: string
+  status: 'idle' | 'working' | 'waiting' | 'done' | 'failed'
+  task?: string
+  activity?: string
+  since: number
+}
+/** 团队成员发言末尾的 DONE(独占一行或缀在末句;与引擎 isDoneSpeech 同口径):剥掉,气泡上改用「已完成」标记。 */
+export function splitDoneMark(text: string): { text: string; done: boolean } {
+  const lines = text.trimEnd().split('\n')
+  const last = (lines[lines.length - 1] || '').trim()
+  if (last === 'DONE') return { text: lines.slice(0, -1).join('\n').trimEnd(), done: true }
+  const m = /^(.*?)(?:^|\s)DONE[.。!！]?$/.exec(last)
+  if (m && !/\bNOT\s+DONE[.。!！]?$/.test(last)) return { text: [...lines.slice(0, -1), m[1].trimEnd()].join('\n').trimEnd(), done: true }
+  return { text, done: false }
+}
+/** 团队成员转发的审批 / 询问按它本次激活的占位气泡落;没带 messageId(普通 run / 老引擎)落当前发言人气泡。 */
+const targetOfFor = (get: () => AppState, sessionId: string, current: () => string) => (pl: any): string => {
+  const mid = typeof pl?.messageId === 'string' ? pl.messageId : ''
+  if (mid && (get().messagesBySession[sessionId] || []).some((m) => m.id === mid)) return mid
+  return current()
+}
 function groupColor(slug: string): string {
   if (slug === '__host__') return '#b8860b'
   let h = 0
@@ -529,6 +562,10 @@ export interface AppState {
   /** 手动 Compact 进度 0-100(undefined = 未在压缩)。ponytail: 客户端估算,compact 接口一次性返回没有进度信号。 */
   compactingBySession: Record<string, number | undefined>
   subChatsBySession: Record<string, SubChat[]>
+  /** 并行团队(09-16 第四轮):每个团队会话里成员的工作状态(team_member / team_activity 事件驱动;Team Desk 与状态条读它)。 */
+  teamWorkBySession: Record<string, Record<string, TeamWorkMember>>
+  /** 打开 / 重载团队会话时从 /background?kind=teamwork 复原成员表(不覆盖已有实时状态)。 */
+  hydrateTeamWork(sessionId: string): Promise<void>
   usageBySession: Record<string, { ctx: number; base: number; live: number; runCost?: number; costLimit?: number }>
   /** 引擎 context_info 事件(每 run 一条):窗口值+来源、注入段分解、指令文件、历史规模。ctx 环弹层消费。 */
   ctxInfoBySession: Record<string, CtxInfo>
@@ -782,6 +819,7 @@ export const useApp = create<AppState>((set, get) => ({
   llmRetryBySession: {},
   compactingBySession: {},
   subChatsBySession: {},
+  teamWorkBySession: {},
   usageBySession: {},
   ctxInfoBySession: {},
   unread: loadUnread(),
@@ -840,6 +878,13 @@ export const useApp = create<AppState>((set, get) => ({
     const { patchMessage } = get()
     const pl = ev.payload || {}
     const assistantId = assistantRef.current
+    const targetOf = targetOfFor(get, sessionId, () => assistantRef.current)
+    // 团队成员的审批 / 询问在等 → Team Desk 与状态条上标「等待审批」;兑现后回到工作中(只动已登记的成员)。
+    const setTeamStatus = (sid: string, slug: string, status: 'waiting' | 'working'): void => set((s) => {
+      const cur = s.teamWorkBySession[sid]
+      if (!cur?.[slug] || (status === 'working' && cur[slug].status !== 'waiting')) return {}
+      return { teamWorkBySession: { ...s.teamWorkBySession, [sid]: { ...cur, [slug]: { ...cur[slug], status } } } }
+    })
     // 重试提示自清:重试后流恢复(token/…)或终结(done/error)的第一个非 status 事件就撤掉横幅。
     if (ev.type !== 'status' && get().llmRetryBySession[sessionId]) {
       set((s) => ({ llmRetryBySession: { ...s.llmRetryBySession, [sessionId]: undefined } }))
@@ -976,15 +1021,21 @@ export const useApp = create<AppState>((set, get) => ({
             ...(['readonly', 'auto-edit', 'full-auto'].includes(pl.reason.mode) ? { mode: pl.reason.mode } : {}),
           }
           : undefined
-        patchMessage(sessionId, assistantId, (m) => ({
-          ...m, live: undefined, approvals: [...(m.approvals || []), { approvalId: pl.approvalId, runId, name: pl.name, arguments: pl.arguments, preview: pl.preview || '', status: 'pending' as const, ...(reason ? { reason } : {}) }],
+        // 落点:团队成员的转发事件带 messageId(它本次激活的占位气泡)与子 runId;普通 run 落当前气泡(群聊里首位发言人的占位已被改名成持久 id,
+        // 用闭包常量 assistantId 会落到一条不存在的消息上 —— 一律走 ref.current)。
+        patchMessage(sessionId, targetOf(pl), (m) => ({
+          ...m, live: undefined, work: m.work ? { ...m.work, waiting: true } : m.work,
+          approvals: [...(m.approvals || []), { approvalId: pl.approvalId, runId: String(pl.runId || runId), name: pl.name, arguments: pl.arguments, preview: pl.preview || '', status: 'pending' as const, ...(reason ? { reason } : {}) }],
         }))
+        if (typeof pl.agentSlug === 'string') setTeamStatus(sessionId, pl.agentSlug, 'waiting')
         break
       }
       case 'approval_result':
-        patchMessage(sessionId, assistantId, (m) => ({
-          ...m, approvals: (m.approvals || []).map((a) => a.approvalId === pl.approvalId ? { ...a, status: pl.action === 'reject' ? ('rejected' as const) : ('approved' as const) } : a),
+        patchMessage(sessionId, targetOf(pl), (m) => ({
+          ...m, work: m.work ? { ...m.work, waiting: false } : m.work,
+          approvals: (m.approvals || []).map((a) => a.approvalId === pl.approvalId ? { ...a, status: pl.action === 'reject' ? ('rejected' as const) : ('approved' as const) } : a),
         }))
+        if (typeof pl.agentSlug === 'string') setTeamStatus(sessionId, pl.agentSlug, 'working')
         break
       case 'session_created': {
         // 私聊里 @项目派遣(start_project_session):引擎在项目里建了一条可见会话 → 刷新列表 + 提示(侧栏没有轮询)。
@@ -994,7 +1045,7 @@ export const useApp = create<AppState>((set, get) => ({
       }
       case 'inquiry_request': {
         const inq = {
-          inquiryId: pl.inquiryId, runId, question: pl.question || '',
+          inquiryId: pl.inquiryId, runId: String(pl.runId || runId), question: pl.question || '',
           options: Array.isArray(pl.options) ? pl.options : [], status: 'pending' as const,
           // kind='plan' → 渲染专属计划卡(批准 / 编辑后批准 / 打回);未知值当通用问答。
           ...(pl.kind === 'plan' ? { kind: 'plan' as const } : {}),
@@ -1014,14 +1065,17 @@ export const useApp = create<AppState>((set, get) => ({
             },
           }))
         } else {
-          patchMessage(sessionId, assistantId, (m) => ({ ...m, inquiries: [...(m.inquiries || []), inq] }))
+          patchMessage(sessionId, targetOf(pl), (m) => ({ ...m, work: m.work ? { ...m.work, waiting: true } : m.work, inquiries: [...(m.inquiries || []), inq] }))
+          if (typeof pl.agentSlug === 'string') setTeamStatus(sessionId, pl.agentSlug, 'waiting')
         }
         break
       }
       case 'inquiry_result':
-        patchMessage(sessionId, assistantId, (m) => ({
-          ...m, inquiries: (m.inquiries || []).map((q) => q.inquiryId === pl.inquiryId ? { ...q, status: 'answered' as const, answer: String(pl.answer ?? '') } : q),
+        patchMessage(sessionId, targetOf(pl), (m) => ({
+          ...m, work: m.work ? { ...m.work, waiting: false } : m.work,
+          inquiries: (m.inquiries || []).map((q) => q.inquiryId === pl.inquiryId ? { ...q, status: 'answered' as const, answer: String(pl.answer ?? '') } : q),
         }))
+        if (typeof pl.agentSlug === 'string') setTeamStatus(sessionId, pl.agentSlug, 'working')
         break
       case 'plan':
         patchMessage(sessionId, assistantId, (m) => ({ ...m, planProposal: String(pl.plan || '') }))
@@ -1051,6 +1105,8 @@ export const useApp = create<AppState>((set, get) => ({
           ref.current = mid
           set((s) => {
             const list = s.messagesBySession[sessionId] || []
+            // 并行团队:team_member start 已经按同一个 messageId 建了占位气泡 → 只把指针指过去,不再建第二条。
+            if (list.some((m) => m.id === mid)) return {}
             // 首位发言人:把 run 占位气泡(assistantId)就地改成持久 uuid 并盖发言人身份(保留已有内容);
             // 其余发言人:各自追加一条以持久 uuid 为 id 的气泡。id 对齐落库行 → 轮询/重载不产生重复。
             if (wasFirst) {
@@ -1064,8 +1120,57 @@ export const useApp = create<AppState>((set, get) => ({
             return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...list, { id: mid, role: 'assistant' as const, content: '', status: 'streaming' as const, timestamp: Date.now(), agentId: slug, agentName: name, agentColor: color, groupRound: round }] } }
           })
         } else if (pl.phase === 'end') {
-          patchMessage(sessionId, ref.current, (m) => ({ ...m, status: 'done' }))
+          // 并行团队:成员的发言不再逐 token 流进团队 run,end 带正文 → 这里整段落进气泡(老引擎不带 text 时正文已由 token 填好)。
+          const raw = typeof pl.text === 'string' ? pl.text : ''
+          const { text, done } = raw ? splitDoneMark(raw) : { text: '', done: false }
+          patchMessage(sessionId, mid, (m) => ({ ...m, status: 'done', work: undefined, ...(raw ? { content: capContent(text), segments: pushTextSeg(undefined, text), teamDone: done } : {}) }))
         }
+        break
+      }
+      case 'team_member': {
+        // 并行团队:成员本次激活的起止(方案 §6.4)。start → 按发言的持久 id 建一条占位气泡(首位成员收养 run 占位),正文等 group_speaker end;
+        // end reason=failed → 占位气泡标错;done 的正文由 group_speaker end 填。同时维护 Team Desk 的成员表。
+        const ref = assistantRef as GroupRef
+        const slug = String(pl.slug || '')
+        const name = String(pl.name || slug)
+        const mid = String(pl.messageId || '')
+        if (pl.phase === 'start' && mid) {
+          const wasFirst = !ref.groupSeen
+          ref.group = true; ref.groupSeen = true; ref.reuseNext = false; ref.current = mid
+          set((s) => {
+            const list = s.messagesBySession[sessionId] || []
+            // 已有同 id 的气泡(重放 / 迟到事件)不再建;唯一例外是「首位成员收养 run 占位」且引擎把占位 id 当作发言 id(老引擎 / 单测夹具)。
+            if (list.some((m) => m.id === mid) && !(wasFirst && mid === assistantId)) return {}
+            const bubble = { id: mid, role: 'assistant' as const, content: '', status: 'streaming' as const, timestamp: Date.now(), agentId: slug, agentName: name, agentColor: groupColor(slug), groupRound: Number(pl.cycle) || 0, work: { activity: String(pl.task || '') } }
+            const idx = wasFirst ? list.findIndex((m) => m.id === assistantId) : -1
+            const next = idx >= 0 ? list.map((m, i) => (i === idx ? { ...m, ...bubble } : m)) : [...list, bubble]
+            return { messagesBySession: { ...s.messagesBySession, [sessionId]: next } }
+          })
+        } else if (pl.phase === 'end' && mid && pl.reason === 'failed') {
+          patchMessage(sessionId, mid, (m) => ({ ...m, status: 'error', work: undefined, error: String(pl.error || 'activation failed') }))
+        } else if (pl.phase === 'end' && mid && pl.reason === 'aborted') {
+          patchMessage(sessionId, mid, (m) => ({ ...m, status: 'stopped', work: undefined }))
+        }
+        set((s) => {
+          const cur = s.teamWorkBySession[sessionId] || {}
+          const prev = cur[slug] || { slug, name, status: 'idle' as const, since: Date.now() }
+          const next = pl.phase === 'start'
+            ? { ...prev, name, sessionId: String(pl.sessionId || prev.sessionId || ''), runId: String(pl.runId || ''), messageId: mid, status: 'working' as const, task: String(pl.task || ''), activity: undefined, since: Date.now() }
+            : { ...prev, name, runId: String(pl.runId || prev.runId || ''), messageId: mid || prev.messageId, status: (pl.reason === 'failed' ? 'failed' : pl.reason === 'aborted' ? 'idle' : 'done') as TeamWorkMember['status'], activity: undefined, since: Date.now() }
+          return { teamWorkBySession: { ...s.teamWorkBySession, [sessionId]: { ...cur, [slug]: next } } }
+        })
+        break
+      }
+      case 'team_activity': {
+        // 成员子 run 的一次工具调用 → 占位气泡与 Team Desk 上的一行动态(过程 token 不进团队 run)。
+        const slug = String(pl.slug || '')
+        const activity = `${String(pl.tool || '')}${pl.argsPreview ? ' ' + String(pl.argsPreview).slice(0, 80) : ''}`
+        if (pl.messageId) patchMessage(sessionId, String(pl.messageId), (m) => (m.work ? { ...m, work: { ...m.work, activity } } : m))
+        set((s) => {
+          const cur = s.teamWorkBySession[sessionId] || {}
+          if (!cur[slug]) return {}
+          return { teamWorkBySession: { ...s.teamWorkBySession, [sessionId]: { ...cur, [slug]: { ...cur[slug], activity } } } }
+        })
         break
       }
       case 'group_voting':
@@ -1084,6 +1189,12 @@ export const useApp = create<AppState>((set, get) => ({
       }
       case 'group_ended': {
         (assistantRef as GroupRef).groupEnded = true
+        set((s) => {
+          const cur = s.teamWorkBySession[sessionId]
+          if (!cur) return {}
+          const next = Object.fromEntries(Object.entries(cur).map(([k, v]) => [k, { ...v, status: v.status === 'failed' ? v.status : ('idle' as const), activity: undefined }]))
+          return { teamWorkBySession: { ...s.teamWorkBySession, [sessionId]: next } }
+        })
         const reasonMap: Record<string, string> = {
           done: t('group.ended.done'), vote: t('group.ended.vote'), max_rounds: t('group.ended.maxRounds'), cost_limit: t('group.ended.costLimit'), quota: t('group.ended.quota'),
         }
@@ -1398,6 +1509,23 @@ export const useApp = create<AppState>((set, get) => ({
     } catch {
       if (generation === authGeneration) set({ specialEnabled: { historian: false, muse: false } })
     }
+  },
+
+  hydrateTeamWork: async (sessionId) => {
+    // 打开 / 重载团队会话:成员的工作会话与最近一次 run 从持久端点复原(实时事件只覆盖本客户端订阅着的团队 run)。已有实时状态的成员不覆盖。
+    let rows: api.BackgroundSessionInfo[] = []
+    try { rows = await api.getBackgroundSessions(get().cfg, sessionId, 'teamwork') } catch { return }
+    set((s) => {
+      const cur = s.teamWorkBySession[sessionId] || {}
+      const next = { ...cur }
+      for (const r of rows) {
+        if (!r.agentSlug || next[r.agentSlug]) continue
+        const running = r.runStatus === 'running' || r.runStatus === 'queued'
+        const name = s.agentDefs.find((a) => a.slug === r.agentSlug)?.name || r.agentSlug
+        next[r.agentSlug] = { slug: r.agentSlug, name, sessionId: r.sessionId, runId: r.runId || undefined, status: running ? 'working' : r.runStatus === 'failed' ? 'failed' : r.runId ? 'done' : 'idle', since: Date.now() }
+      }
+      return { teamWorkBySession: { ...s.teamWorkBySession, [sessionId]: next } }
+    })
   },
 
   mergeBackgroundSubChats: (sessionId, items) => {

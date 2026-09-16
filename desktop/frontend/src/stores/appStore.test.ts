@@ -93,6 +93,41 @@ describe('appStore.reduceEvent', () => {
 
   afterEach(() => vi.useRealTimers())
 
+  it('并行团队:team_member start 收养占位气泡 / 转发审批按 messageId + 子 runId 落点 / team_activity 动态 / group_speaker end 带 text 剥 DONE / group_ended 复位', () => {
+    const ref = { current: 'a1' } as { current: string; group?: boolean; groupSeen?: boolean; reuseNext?: boolean; groupEnded?: boolean }
+    const emit = (type: string, payload: Record<string, unknown> = {}) => {
+      useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 1, type, payload } as AgentRunEvent)
+    }
+    emit('team_member', { slug: 'xyra', name: 'Xyra', phase: 'start', messageId: 'a1', cycle: 1, sessionId: 'ws-x', runId: 'child-x-1', task: '先做接口' })
+    emit('team_member', { slug: 'bo', name: 'Bo', phase: 'start', messageId: 'mid-b', cycle: 1, sessionId: 'ws-b', runId: 'child-b-1', task: '写测试' })
+    emit('team_activity', { slug: 'xyra', messageId: 'a1', tool: 'edit_file', argsPreview: '{"path":"api.ts"}' })
+    emit('approval_request', { approvalId: 'ap1', name: 'run_bash', preview: 'npm test', runId: 'child-x-1', agentSlug: 'xyra', messageId: 'a1' })
+    let st = useApp.getState()
+    let list = st.messagesBySession.s1
+    expect(list.map((m) => m.id)).toEqual(['a1', 'mid-b']) // 首位成员收养 run 占位 a1,第二位追加;没有多余气泡
+    expect(list[0]).toMatchObject({ agentId: 'xyra', status: 'streaming', work: { activity: 'edit_file {"path":"api.ts"}', waiting: true } })
+    expect(list[0].approvals?.[0]).toMatchObject({ approvalId: 'ap1', runId: 'child-x-1' }) // 兑现到子 run
+    expect(list[1]).toMatchObject({ agentId: 'bo', status: 'streaming', work: { activity: '写测试' } })
+    expect(st.teamWorkBySession.s1.xyra).toMatchObject({ status: 'waiting', runId: 'child-x-1', sessionId: 'ws-x' })
+    expect(st.teamWorkBySession.s1.bo).toMatchObject({ status: 'working', activity: undefined })
+    emit('approval_result', { approvalId: 'ap1', action: 'approve', runId: 'child-x-1', agentSlug: 'xyra', messageId: 'a1' })
+    emit('group_speaker', { phase: 'start', slug: 'bo', name: 'Bo', round: 1, messageId: 'mid-b' })
+    emit('group_speaker', { phase: 'end', slug: 'bo', name: 'Bo', round: 1, messageId: 'mid-b', text: '测试写好了\n@Xyra 接口给你\nDONE' })
+    emit('team_member', { slug: 'bo', name: 'Bo', phase: 'end', reason: 'done', messageId: 'mid-b', runId: 'child-b-1' })
+    emit('group_speaker', { phase: 'start', slug: 'xyra', name: 'Xyra', round: 1, messageId: 'a1' })
+    emit('group_speaker', { phase: 'end', slug: 'xyra', name: 'Xyra', round: 1, messageId: 'a1', text: '接口完成 DONE' })
+    emit('team_member', { slug: 'xyra', name: 'Xyra', phase: 'end', reason: 'done', messageId: 'a1', runId: 'child-x-1' })
+    emit('group_ended', { rounds: 1, reason: 'done', steps: 2 })
+    st = useApp.getState()
+    list = st.messagesBySession.s1
+    expect(list.map((m) => m.id)).toEqual(['a1', 'mid-b', expect.stringMatching(/^ended-/)]) // group_speaker start 不重复建气泡
+    expect(list[1]).toMatchObject({ content: '测试写好了\n@Xyra 接口给你', status: 'done', teamDone: true, work: undefined })
+    expect(list[0]).toMatchObject({ content: '接口完成', status: 'done', teamDone: true })
+    expect(list[0].approvals?.[0].status).toBe('approved')
+    expect(st.teamWorkBySession.s1.xyra.status).toBe('idle')
+    expect(st.teamWorkBySession.s1.bo).toMatchObject({ status: 'idle', runId: 'child-b-1' }) // 保留 runId:Team Desk 展开态回放最近一次激活
+  })
+
   it('覆盖消息、工具、审批、询问、计划、群聊、用量、转向及子聊天事件', () => {
     const ref = { current: 'a1' } as { current: string; group?: boolean; groupSeen?: boolean; reuseNext?: boolean; groupEnded?: boolean }
     const emit = (type: string, payload: Record<string, unknown> = {}) => {
