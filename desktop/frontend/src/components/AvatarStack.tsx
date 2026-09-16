@@ -27,8 +27,6 @@ export interface AvatarStackItem {
   slug: string
   name: string
   avatarUrl?: string
-  /** `config.toml` 的 emoji 头像:单人时整格显示,不合成圆底。 */
-  emoji?: string
 }
 
 /** 一格的几何。`more` 有值 = 这格不是头像而是「+N」徽章。 */
@@ -95,9 +93,15 @@ export function avatarColorIndex(slug: string): number {
   return (h % PALETTE_SLOTS) + 1
 }
 
-/** 无头像时的底色:六档色板优先,未定义则回落 accent 18% 混色。 */
+/** slug → 色相(与 appStore.groupColor / OrbitsView.slugTint 同一个 31 进制哈希):群聊发言人徽章与私聊头像底色必须同色相。 */
+export function slugTint(slug: string): string {
+  let h = 0
+  for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0
+  return `hsl(${h % 360} 62% 45%)`
+}
+/** 无头像时的底色:slug 色相 18% 混色(仓内没有 --c1..--c6 这套色板,别再引)。 */
 function initialBackground(slug: string): string {
-  return `var(--c${avatarColorIndex(slug)}, color-mix(in srgb, var(--accent-ink) 18%, transparent))`
+  return `color-mix(in srgb, ${slugTint(slug)} 18%, transparent)`
 }
 
 function firstChar(name: string): string {
@@ -120,11 +124,13 @@ export const AvatarStack: React.FC<{
   /** 外框边长,缺省 30。内区 = size - 2×`AVATAR_STACK_PAD`。 */
   size?: number
   className?: string
-}> = ({ items, size = AVATAR_STACK_SIZE, className }) => {
+  /** 整体 emoji(独立团队 config.toml 的 avatar):非空则整格显示 emoji、不合成成员头像(§3.3)。与成员数无关。 */
+  emoji?: string
+}> = ({ items, size = AVATAR_STACK_SIZE, className, emoji }) => {
   const { t } = useI18n()
   const inner = size - AVATAR_STACK_PAD * 2
   const cells = avatarStackLayout(items.length, inner)
-  const soloEmoji = items.length === 1 ? items[0].emoji : undefined
+  const soloEmoji = emoji && emoji.trim() ? emoji.trim() : undefined
   return (
     <div
       className={className ? `t2o-avstack ${className}` : 't2o-avstack'}

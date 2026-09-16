@@ -35,6 +35,7 @@ import { registerMessages, translate, translationValues } from '../i18n'
 // store 活在 React 之外,取词一律走模块级 `translate`,不能用 hook。
 registerMessages({
   'appstore.dispatchStarted': { zh: '已在 {name} 新建会话开工', en: 'Started a session in {name}' },
+  'solo.engineTooOld': { zh: '当前引擎版本不支持私聊/团队会话,请升级引擎', en: 'This engine version does not support direct or team sessions; please update the engine' },
   'solo.rotateBusy': { zh: '这条私聊还在运行中,等它结束再开新会话', en: 'This direct chat is still running; wait for it to finish before starting a new session' },
   'appstore.contentTruncated': { zh: '[输出过长,界面已截断显示]', en: '[Output too long, truncated for display]' },
   'appstore.stopping': { zh: '正在停止，等待任务退出…', en: 'Stopping; waiting for the run to exit…' },
@@ -306,7 +307,7 @@ export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean, pr
  *  草稿里 work 下改出的 execMode:'host' 也压不过它(F6)。work 原样返回。 */
 export function applyPreset(cfg: AgentConfig, preset: 'chat' | undefined): AgentConfig {
   if (preset !== 'chat') return cfg
-  return { ...cfg, preset: 'chat', execMode: 'sandbox', cwd: undefined, agentSlug: undefined, engineId: undefined, engineModelId: undefined, planMode: undefined, groupChat: undefined }
+  return { ...cfg, preset: 'chat', execMode: 'sandbox', cwd: undefined, agentSlug: undefined, engineId: undefined, engineModelId: undefined, planMode: undefined, groupChat: undefined, groupAgents: undefined }
 }
 
 /** 「不在项目中工作」无根工作区描述符(项目列表底部常驻项、选 chat 时的落点、web 端 /new 的落点)。 */
@@ -2495,6 +2496,7 @@ export const useApp = create<AppState>((set, get) => ({
     const t = get().tr
     try {
       const { session } = await api.teamSessionOpen(get().cfg, slug)
+      if (!session?.id) throw new Error(t('solo.engineTooOld'))
       get().adoptSession(session)
       return session
     } catch (e: any) {
@@ -2507,6 +2509,7 @@ export const useApp = create<AppState>((set, get) => ({
     const t = get().tr
     try {
       const { session } = await api.soloOpen(get().cfg, kind, id)
+      if (!session?.id) throw new Error(t('solo.engineTooOld')) // 老引擎对未知路由回 200 空对象:别把 undefined 并进列表
       get().adoptSession(session)
       return session
     } catch (e: any) {
@@ -2519,6 +2522,7 @@ export const useApp = create<AppState>((set, get) => ({
     const t = get().tr
     try {
       const r = await api.soloRotate(get().cfg, kind, id)
+      if (!r?.session?.id) throw new Error(t('solo.engineTooOld'))
       // 旧的活动私聊会话已在引擎侧归档:本地列表同步挪到归档区(不重拉整表)。
       const key = kind === 'agent' ? 'soloAgentSlug' : 'soloEngineId'
       set((st) => {

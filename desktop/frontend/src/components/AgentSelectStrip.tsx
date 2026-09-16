@@ -13,7 +13,7 @@
  * 窄栏(≤520px 容器查询)折叠成单个 `CompactChatPicker` 也是白拿 —— 见 components/compactChatPicker.css,
  * 它按 `.newchat-pickers > .engine-picker > .engine-picker-bar/-hint` 收起,故根节点必须留在那个位置。
  */
-import React, { useMemo, useState } from 'react'
+import React, { useMemo, useState, useRef, useEffect } from 'react'
 import { Loader2, MessageCircle } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { registerMessages, useI18n } from '../i18n'
@@ -103,6 +103,10 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
       const temp = cfg.groupTempAgents?.find((a) => a.slug === slug)
       list.push({ id: agentId(slug), kind: 'agent', slug, name: temp?.name || slug, description: temp?.description })
     }
+    // 已钉住但已被删的单个 agent 同理:不画出来用户就退不掉它(会话仍按它跑)。
+    if (cfg.agentSlug && !list.some((i) => i.id === agentId(cfg.agentSlug!))) {
+      list.push({ id: agentId(cfg.agentSlug), kind: 'agent', slug: cfg.agentSlug, name: cfg.agentSlug })
+    }
     // 外部引擎只在 host 会话里当候选(§11 ⑦:CLI 视作特殊的独立 Agent);
     // 已经选中的那一枚无论如何都要在场,否则用户退不掉它。
     if (cfg.execMode === 'host') {
@@ -112,7 +116,7 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
       list.push({ id: engineKey(engineId), kind: 'engine', engineId, name: s.engines.find((e) => e.id === engineId)?.name || engineId })
     }
     return list
-  }, [s.agentDefs, s.engines, engineId, cfg.execMode, cfg.groupAgents, cfg.groupTempAgents])
+  }, [s.agentDefs, s.engines, engineId, cfg.execMode, cfg.groupAgents, cfg.groupTempAgents, cfg.agentSlug])
 
   const byId = useMemo(() => new Map(items.map((i) => [i.id, i])), [items])
   const picked = pickedIds.map((id) => byId.get(id)).filter((i): i is Candidate => !!i)
@@ -168,7 +172,18 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
     }
   }
 
+  // 切换后把键盘焦点还给同一枚 pill:pill 在「已选 / 候选」两段间移动会被 React 重挂(两段是不同的 children 槽位),焦点会掉到 body。
+  const refocusId = useRef<string | null>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const id = refocusId.current
+    if (!id) return
+    refocusId.current = null
+    const el = rootRef.current?.querySelector<HTMLElement>(`[data-pill-id="${CSS.escape(id)}"]`)
+    el?.focus()
+  })
   const toggle = (item: Candidate): void => {
+    refocusId.current = item.id
     if (item.kind === 'engine') { applyEngine(item.engineId === engineId ? '' : item.engineId); return }
     const next = pickedSlugs.includes(item.slug) ? pickedSlugs.filter((x) => x !== item.slug) : [...pickedSlugs, item.slug]
     applyAgents(next)
@@ -204,6 +219,7 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
         key={item.id}
         type="button"
         aria-pressed={isPicked}
+        data-pill-id={item.id}
         className={`engine-pill agent-pill${isPicked ? ' selected' : ''}`}
         data-agent-slug={item.kind === 'agent' ? item.slug : undefined}
         data-engine-id={item.kind === 'engine' ? item.engineId : undefined}
@@ -229,7 +245,7 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
   const compactValue = pickedIds[0] || ''
   const compactIcon = picked[0] ? pillIcon(picked[0]) : <EngineIcon engineId="" size={16} />
   return (
-    <div className="engine-picker agent-picker agent-select-strip" role="group" aria-label={t('agentSelect.title')}>
+    <div ref={rootRef} className="engine-picker agent-picker agent-select-strip" role="group" aria-label={t('agentSelect.title')}>
       {/* 窄栏芯片的前缀要短,故用既有的「Agent」词条;整条的可访问名走根节点 aria-label。 */}
       <CompactChatPicker
         label={t('chatPicker.agent')}
@@ -252,10 +268,13 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
         }}
         busy={!!warming}
       />
-      <PillBar label={t('agentSelect.title')}>
-        {picked.map((item, i) => renderPill(item, i))}
-        {picked.length > 0 && <span key="sep" className="agent-select-sep" aria-hidden="true" style={SEP_STYLE} />}
-        {candidates.map((item) => renderPill(item, null))}
+      <PillBar label={t('agentSelect.title')} role="group">
+        {/* 单一 children 数组(同一键空间):pill 从候选段挪到已选段时 React 移动节点而不是重挂。 */}
+        {[
+          ...picked.map((item, i) => renderPill(item, i)),
+          ...(picked.length > 0 ? [<span key="sep" className="agent-select-sep" aria-hidden="true" style={SEP_STYLE} />] : []),
+          ...candidates.map((item) => renderPill(item, null)),
+        ]}
       </PillBar>
       {teamCount >= TEAM_MIN && <div className="agent-select-team" style={TEAM_STYLE}>{t('agentSelect.team', { n: teamCount })}</div>}
       <div className="engine-picker-hint">{picked.length ? t('agentSelect.removeHint') : t('agentSelect.hint')}</div>

@@ -22,7 +22,7 @@
   flex: 1;
   min-height: 0;
   min-width: 0;
-  background: var(--sidebar-bg);
+  background: transparent; /* 宿主面板已画 sidebar-bg;子视图不重画(与 sidebar2.css `.t2sw .t2s-side { background: transparent }` 同一条纪律) */
   font-family: var(--font-ui);
   color: var(--text);
   /* 头部与 Agent 块不在 `.t2s-side` 内,拿不到那边的 no-drag 兜底 —— mac frameless 上不声明就可能被

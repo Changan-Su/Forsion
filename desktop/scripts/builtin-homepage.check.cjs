@@ -671,11 +671,11 @@ async function main() {
       return {
         active: root?.classList.contains('hp-composer-focused') || false,
         filter: paper ? getComputedStyle(paper).filter : '',
-        backdrop: card ? getComputedStyle(card).backdropFilter : '',
+        backdrop: card ? getComputedStyle(card, '::before').backdropFilter /* v2.10.2 起玻璃画在 ::before,卡本体恒 none(homepage.css) */ : '',
       }
     })()`)
     await win.evaluate(`document.documentElement.dataset.glass = 'off'`)
-    const glassOff = await win.evaluate(`getComputedStyle(document.querySelector('.hp-composer .t2c-card')).backdropFilter`)
+    const glassOff = await win.evaluate(`getComputedStyle(document.querySelector('.hp-composer .t2c-card'), '::before').backdropFilter`)
     await win.evaluate(`document.documentElement.dataset.glass = 'on'`)
     check(
       '13 Chatbox 文本区与相关控件共用聚焦景深,玻璃可可靠降级',

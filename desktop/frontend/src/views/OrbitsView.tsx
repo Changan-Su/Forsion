@@ -34,14 +34,15 @@ registerMessages({
   'orbits.plus.tip': { zh: '新建', en: 'New' },
   'orbits.plus.agent': { zh: '新建 Agent', en: 'New agent' },
   'orbits.plus.team': { zh: '新建团队', en: 'New team' },
-  'orbits.plus.teamSoon': { zh: '团队功能随后到来', en: 'Teams are coming soon' },
   'orbits.plus.project': { zh: '新建项目', en: 'New project' },
   'orbits.row.menu': { zh: '更多', en: 'More' },
   'orbits.row.newSession': { zh: '新会话', en: 'New session' },
   'orbits.row.newSessionMemory': { zh: '新会话(先总结记忆)', en: 'New session (summarize memory first)' },
   'orbits.row.editTeam': { zh: '编辑团队', en: 'Edit team' },
   'orbits.row.deleteTeam': { zh: '删除团队', en: 'Delete team' },
-  'orbits.team.deleted': { zh: '团队已删除(历史会话保留)', en: 'Team deleted (past sessions are kept)' },
+  'orbits.team.deleted': { zh: '团队已删除(历史会话保留,只读)', en: 'Team deleted (past sessions are kept, read-only)' },
+  'orbits.team.confirmDelete': { zh: '删除团队「{name}」?会连同它的 TEAM.md 与 Library 一起删除,不可恢复。', en: 'Delete team "{name}"? Its TEAM.md and Library folder are deleted with it and cannot be recovered.' },
+  'orbits.row.openMuseSpace': { zh: '打开 Muse 空间', en: 'Open the Muse space' },
   'orbits.row.editAgent': { zh: '编辑 Agent', en: 'Edit agent' },
   'orbits.badge.running': { zh: '运行中', en: 'Running' },
   'orbits.badge.proactive': { zh: '主动式', en: 'Proactive' },
@@ -114,7 +115,6 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   // 旧的持久化快照 / 未刷新前可能没有 teams:按空表渲染,不让一个 undefined 把整块侧栏交给 ErrorBoundary。
   const teams = Array.isArray(s.teams) ? s.teams : []
   const [teamEditor, setTeamEditor] = useState<{ team: TeamDef | null } | null>(null)
-  useEffect(() => { void s.refreshTeams() }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const runningIds = useMemo(() => new Set(Object.keys(s.runningBySession)), [s.runningBySession])
   const activeSession = s.sessions.find((x) => x.id === s.activeId) || s.archivedSessions.find((x) => x.id === s.activeId) || null
   const amadeusRoot = usePageStore((state) => state.vaultRoot)
@@ -124,8 +124,17 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   // Chat/Work 胶囊与「模式跟着打开的会话走(只有一个方向)」的 effect 与 SessionsView 逐字一致 ——
   // 换个侧栏档位不该换这条行为,否则同一个会话在两档里高亮不一样。
   const mode = effectiveSessionMode(s.sessionMode, currentPlatform())
+  /** Agent 轨道的会话(私聊 / 独立团队)不属于任何项目 —— 不剔掉的话 `projectless:true` 会把它们
+   *  落进「不在项目中工作」组(§3.5)。未打开过的会话也判得出:refreshSessions 已用列表行自带的
+   *  agent_config 预填 configBySession。它们结构上 projectless 但语义上是 Work(恒 host + cwd 钉死),
+   *  「模式跟着打开的会话走」要把它们当 work 看,否则在 Chat 档打开一条私聊 = 侧栏没有任何高亮行。 */
+  const inOrbit = (x: SessionRecord): boolean => {
+    const c = s.configBySession[x.id]
+    return !!(c?.soloAgentSlug || c?.soloEngineId || c?.teamSlug)
+  }
+  const worklike = (x: SessionRecord | null): boolean => !!x && (!x.projectless || inOrbit(x))
   useEffect(() => {
-    if (mode === 'chat' && activeSession && !activeSession.projectless) s.setSessionMode('work')
+    if (mode === 'chat' && worklike(activeSession)) s.setSessionMode('work')
   }, [activeSession?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -139,13 +148,6 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   // 侧过滤:会话的云/本地归属 = project_path 有无(appStore 同判据);工作区按 kind。
   const inSide = (p: string | null | undefined): boolean => (sideFilter === 'cloud' ? !p : !!p)
   const sideOf = sideFilter ? (x: { project_path?: string | null }) => inSide(x.project_path) : undefined
-  /** Agent 轨道的会话(私聊 / 独立团队)不属于任何项目 —— 不剔掉的话 `projectless:true` 会把它们
-   *  落进「不在项目中工作」组(§3.5)。未打开过的会话也判得出:refreshSessions 已用列表行自带的
-   *  agent_config 预填 configBySession。 */
-  const inOrbit = (x: SessionRecord): boolean => {
-    const c = s.configBySession[x.id]
-    return !!(c?.soloAgentSlug || c?.soloEngineId || c?.teamSlug)
-  }
   const sessions = useMemo(() => sessionsInMode(s.sessions, mode, sideOf).filter((x) => !inOrbit(x)), [s.sessions, s.configBySession, sideFilter, mode]) // eslint-disable-line react-hooks/exhaustive-deps
   const archivedSessions = useMemo(() => sessionsInMode(s.archivedSessions, mode, sideOf).filter((x) => !inOrbit(x)), [s.archivedSessions, s.configBySession, sideFilter, mode]) // eslint-disable-line react-hooks/exhaustive-deps
   const workspaces = useMemo(() => {
@@ -157,14 +159,16 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   // ── Agent 轨道 ───────────────────────────────────────────────────────────
   // 本地 agent:排除 createdBy:'system'(historian 之类的内建),但 Muse 例外 —— 它有自己的一行。
   // 顺序照 agentDefs 已有的顺序(= agents/.meta.json 的 order),不在这里另排一遍。
-  const agents = useMemo(() => s.agentDefs.filter((a) => a.createdBy !== 'system' || a.slug === 'muse'), [s.agentDefs])
+  // host 闸:云端 agent 定义没有 libraryDir ⇒ 不能开私聊(D3 / §9 云端边界;引擎 solo 端点也是 404),不列;Muse 例外(它开的是 Space)。
+  const agents = useMemo(() => s.agentDefs.filter((a) => (a.createdBy !== 'system' || a.slug === 'muse') && (a.slug === 'muse' || !!a.libraryDir)), [s.agentDefs])
   const installedEngines = useMemo(() => s.engines.filter((e) => e.status !== 'not-installed'), [s.engines])
   /** 有活跃 run 的私聊 agent(按运行中的 run 反查,O(running) 不是 O(会话×agent))。 */
   const runningSolo = useMemo(() => {
     const out = new Set<string>()
     for (const id of Object.keys(s.runningBySession)) {
-      const slug = s.configBySession[id]?.soloAgentSlug
-      if (slug) out.add(slug)
+      const c = s.configBySession[id]
+      if (c?.soloAgentSlug) out.add(c.soloAgentSlug)
+      if (c?.soloEngineId) out.add(`engine:${c.soloEngineId}`)
     }
     return out
   }, [s.runningBySession, s.configBySession])
@@ -251,7 +255,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
                   onClick={() => {
                     // 开着 work 会话点 Chat:列表只剩 chat,主区那个 work 会话就没有对应行了 → 顺手开一个新对话。
                     s.setSessionMode(m)
-                    if (m === 'chat' && activeSession && !activeSession.projectless) openNewChat()
+                    if (m === 'chat' && worklike(activeSession)) openNewChat()
                   }}
                 >{t(m === 'chat' ? 'sidebar.mode.chat' : 'sidebar.mode.work')}</button>
               ))}
@@ -279,7 +283,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
               title={e.name || e.id}
               onClick={() => openSolo('engine', e.id)}
             >
-              <span className="t2o-lead t2o-lead-box"><EngineIcon engineId={e.id} size={16} /></span>
+              <span className="t2o-lead t2o-lead-box"><EngineIcon engineId={e.id} size={16} />{runningSolo.has(`engine:${e.id}`) && <span className="t2s-dot running" title={t('orbits.badge.running')} />}</span>
               <span className="t2o-name">{e.name || e.id}</span>
               {e.status === 'needs-signin' && <span className="t2o-badge">{t('orbits.engine.needsSignin')}</span>}
               <span
@@ -307,7 +311,8 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
             >
               <span className="t2o-lead">
                 <AvatarStack
-                  items={tm.members.map((m) => ({ slug: m.slug, name: s.agentDefs.find((a) => a.slug === m.slug)?.name || m.slug, avatarUrl: s.agentAvatars[m.slug], ...(tm.avatar ? { emoji: tm.avatar } : {}) }))}
+                  items={tm.members.map((m) => ({ slug: m.slug, name: s.agentDefs.find((a) => a.slug === m.slug)?.name || m.slug, avatarUrl: s.agentAvatars[m.slug] }))}
+                  emoji={tm.avatar || undefined}
                   size={30}
                 />
               </span>
@@ -349,7 +354,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
           showSpecial={false}
           onNewChat={() => openNewChat()}
           mode={mode}
-          onModeChange={(m) => { s.setSessionMode(m); if (m === 'chat' && activeSession && !activeSession.projectless) openNewChat() }}
+          onModeChange={(m) => { s.setSessionMode(m); if (m === 'chat' && worklike(activeSession)) openNewChat() }}
           flat={mode === 'chat'}
           rowIcon={teamIcon}
           onOpenWorkspace={(wsKey) => openSpecial('workspace', wsKey)}
@@ -374,7 +379,6 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
           <button type="button" onClick={() => { setPlusMenu(null); s.openSettings('agents') }}>
             <UserPlus size={13} /> {t('orbits.plus.agent')}
           </button>
-          {/* 独立团队实体落在 P5c;先置灰占住入口,别让用户以为没这回事(§3.6)。 */}
           <button type="button" onClick={() => { setPlusMenu(null); setTeamEditor({ team: null }) }}>
             <UsersRound size={13} /> {t('orbits.plus.team')}
           </button>
@@ -386,7 +390,13 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
 
       {rowMenu && (
         <OverlayAt className="ctx-menu" x={rowMenu.x} y={rowMenu.y} onClick={(e) => e.stopPropagation()}>
-          {rowMenu.kind === 'agent' && (
+          {rowMenu.kind === 'agent' && rowMenu.slug === 'muse' && (
+            /* Muse 不进聊天(D18):没有私聊 rotate,只有 Space。 */
+            <button type="button" onClick={() => { setRowMenu(null); openMuse() }}>
+              <SquarePen size={13} /> {t('orbits.row.openMuseSpace')}
+            </button>
+          )}
+          {rowMenu.kind === 'agent' && rowMenu.slug !== 'muse' && (
             <>
               {/* 「新会话(先总结记忆)」= rotate 端点:归档旧私聊 + 建新,后台采记忆(§5.3)。 */}
               <button type="button" onClick={() => { const slug = rowMenu.slug; setRowMenu(null); rotateSolo('agent', slug) }}>
@@ -409,6 +419,9 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
               </button>
               <button type="button" onClick={() => {
                 const slug = rowMenu.slug; setRowMenu(null)
+                // 引擎侧 fs.rm 整个 teams/<slug>/(含 Library/ 里的用户内容),不可逆 —— 与 SidebarPane 删工作区同款先确认。
+                const tm = teams.find((x) => x.slug === slug)
+                if (!window.confirm(t('orbits.team.confirmDelete', { name: tm?.name || slug }))) return
                 void api.deleteTeam(s.cfg, slug).then(() => s.refreshTeams()).then(() => s.toast(t('orbits.team.deleted'))).catch((e: any) => s.toast(e?.message || String(e), true))
               }}>
                 <UsersRound size={13} /> {t('orbits.row.deleteTeam')}

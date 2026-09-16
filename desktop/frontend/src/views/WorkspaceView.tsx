@@ -174,7 +174,8 @@ export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?:
   const automaticMode = availableMode(resolvedModes.automatic)
   const mode = availableMode(resolvedModes.active)
   // 生效档是旧「会话(旧)」时给一行升级提示(方案 §11 ⑥:不迁 params.mode,只给一条可点的路)。
-  const showLegacyHint = mode === 'sessions' && hasSessions && !legacyHintDismissed
+  // 只对手选过旧档的存量用户(leaf.params.mode==='sessions')露提示条;仅仅是自动落到 sessions 的别的 Space 不算(§11 ⑥)。
+  const showLegacyHint = override === 'sessions' && hasSessions && !legacyHintDismissed
 
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const activePage = usePageStore((s) => s.activePage ?? s.activeNotePath) // v4 不设 activePage

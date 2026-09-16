@@ -16,7 +16,7 @@ import { CompactChatPicker } from './CompactChatPicker'
  * 末页再点循环回第一页(用户拍板)。AgentPicker 复用。
  * ⋯ 在滚动容器外独占一列,不覆盖末尾选项;滚动宽度即完整可点击的宽度。
  */
-export const PillBar: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => {
+export const PillBar: React.FC<{ label: string; children: React.ReactNode; /** 多选条(aria-pressed 的 toggle)传 'group';缺省 radiogroup 给单选的引擎/Agent 选择器。 */ role?: 'radiogroup' | 'group' }> = ({ label, children, role = 'radiogroup' }) => {
   const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
   const [more, setMore] = useState(false)
@@ -43,7 +43,7 @@ export const PillBar: React.FC<{ label: string; children: React.ReactNode }> = (
   // 直接改 scrollLeft 而非 scrollIntoView —— 后者会连带滚动祖先(聊天区)。
   useEffect(() => {
     const el = ref.current
-    const sel = el?.querySelector<HTMLElement>('[aria-checked="true"]')
+    const sel = el?.querySelector<HTMLElement>('[aria-checked="true"],[aria-pressed="true"]')
     if (!el || !sel) return
     const bar = el.getBoundingClientRect()
     const p = sel.getBoundingClientRect()
@@ -66,7 +66,7 @@ export const PillBar: React.FC<{ label: string; children: React.ReactNode }> = (
 
   return (
     <div className="engine-picker-bar" data-more={more || undefined}>
-      <div className="engine-picker-scroll" ref={ref} role="radiogroup" aria-label={label}>{children}</div>
+      <div className="engine-picker-scroll" ref={ref} role={role} aria-label={label}>{children}</div>
       {more && (
         <button type="button" className="engine-picker-more" onClick={page} title={t('pill.more')} aria-label={t('pill.more')}>
           <MoreHorizontal size={16} />

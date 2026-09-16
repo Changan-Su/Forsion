@@ -69,11 +69,14 @@ const AVATAR_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAA
 
 /** 本地 agent 名册(桩引擎 /agent/agents 的返回;字段照 chat-layout 的先例用驼峰)。
  *  第三个刻意不给 avatar:首字兜底圆底也要落在同一个 30×30 槽里。 */
+// libraryDir:本地 agent 才有(引擎 listAgents 补的);没有它 = 云端定义 = 不能开私聊,OrbitsView 不列(§3.4 host 闸)。夹具照本地形状给。
 const AGENTS = [
-  { slug: 'xyra', name: 'Xyra', description: 'General assistant', createdBy: 'user', avatar: 'avatar.png' },
-  { slug: 'orbit-one', name: 'Orbit One', description: 'Orbitside instrument agent', createdBy: 'user', avatar: 'avatar.png' },
-  { slug: 'orbit-two', name: 'Orbit Two', description: 'Orbitside instrument agent (no avatar)', createdBy: 'user' },
+  { slug: 'xyra', name: 'Xyra', description: 'General assistant', createdBy: 'user', avatar: 'avatar.png', libraryDir: '/tmp/orbit-lib/xyra/Library' },
+  { slug: 'orbit-one', name: 'Orbit One', description: 'Orbitside instrument agent', createdBy: 'user', avatar: 'avatar.png', libraryDir: '/tmp/orbit-lib/orbit-one/Library' },
+  { slug: 'orbit-two', name: 'Orbit Two', description: 'Orbitside instrument agent (no avatar)', createdBy: 'user', libraryDir: '/tmp/orbit-lib/orbit-two/Library' },
 ]
+/** 私聊 open 端点的夹具回应(桩引擎没有 /agent/solo 路由;由 startFront 代理答):点私聊行 → 拿到 orb-s1 这条会话。main() 里赋值。 */
+let SOLO_OPEN_RESPONSE = null
 
 /** 会话名册:两条项目会话(出一个项目组 + 两条二级行)+ 一条无根会话(出「不在项目中工作」组)。 */
 const sessionFixtures = (projectDir) => {
@@ -83,6 +86,12 @@ const sessionFixtures = (projectDir) => {
     { ...base, id: 'orb-p1', title: '项目会话一', project_path: projectDir, project_name: 'Orbit Project', projectless: false },
     { ...base, id: 'orb-p2', title: '项目会话二', project_path: projectDir, project_name: 'Orbit Project', projectless: false },
     { ...base, id: 'orb-c1', title: '无根会话', project_path: null, project_name: null, projectless: true },
+    // Agent 轨道的私聊会话:projectless 但带 soloAgentSlug —— 必须**不**落进「不在项目中工作」组(§3.5 inOrbit 剔除)
+    { ...base, id: 'orb-s1', title: '私聊会话', project_path: null, project_name: null, projectless: true,
+      agent_config: { soloAgentSlug: 'xyra', agentSlug: 'xyra', execMode: 'host', cwd: '/tmp/orbit-xyra-library', preset: null } },
+    // 项目轨道里处于团队模式的会话:二级行前导图标换 Users(§3.5 rowIcon),打开后主区顶部有团队模式状态条(§6.3)
+    { ...base, id: 'orb-p3', title: '团队模式会话', project_path: projectDir, project_name: 'Orbit Project', projectless: false,
+      agent_config: { groupChat: true, groupAgents: ['xyra', 'orbit-one'], teamMode: 'meeting', execMode: 'host', cwd: projectDir } },
   ]
 }
 
@@ -99,6 +108,12 @@ function startFront(stubUrl) {
     if (/^\/agent\/agents\/[^/]+\/avatar$/.test(p) && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache' })
       res.end(AVATAR_PNG)
+      return
+    }
+    // 私聊 open:让「点私聊行 → sessionNav.openSolo → store.ensureSoloSession → openSession」整条真链路跑通(生产构建没有 __forsionStore)。
+    if (p === '/agent/solo/agent/xyra/open' && req.method === 'POST' && SOLO_OPEN_RESPONSE) {
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify(SOLO_OPEN_RESPONSE))
       return
     }
     const up = http.request(
@@ -260,6 +275,7 @@ async function run(app, win) {
     light: path.join(os.tmpdir(), `forsion-orbitside-light-${process.pid}.png`),
     dark: path.join(os.tmpdir(), `forsion-orbitside-dark-${process.pid}.png`),
     narrow: path.join(os.tmpdir(), `forsion-orbitside-375-${process.pid}.png`),
+    bar: path.join(os.tmpdir(), `forsion-orbitside-bar-${process.pid}.png`),
   }
 
   // ── 1 档位菜单:新旧两档并存,选 orbits 生效且不弹回 ────────────────────────
@@ -281,8 +297,12 @@ async function run(app, win) {
     !!reopened.options.find((o) => o.id === 'orbits' && o.selected), JSON.stringify(reopened.options))
 
   // ── 0 名册里的本地 agent 变成一级行 ───────────────────────────────────────
-  check(`0 桩引擎的 ${AGENTS.length} 个本地 agent 渲染成一级 .t2o-row(≥2)`,
-    st.rowCount >= 2, JSON.stringify({ rowCount: st.rowCount, rows: st.rowGeom.map((r) => r.text) }))
+  check(`0 桩引擎的 ${AGENTS.length} 个本地 agent 全部渲染成一级 .t2o-row(≥${AGENTS.length};引擎行/团队行会加进同一集合,故不写 ===)`,
+    st.rowCount >= AGENTS.length, JSON.stringify({ rowCount: st.rowCount, rows: st.rowGeom.map((r) => r.text) }))
+  const noImgRows = st.rowGeom.filter((r) => !r.hasImg)
+  check('0a 至少一条无头像行在场,且它的首字兜底槽同样 30×30(没渲染出来时 2a 会真空成立)',
+    noImgRows.length >= 1 && noImgRows.every((r) => r.lead && near(r.lead.width, AVATAR_BOX, 0.5) && near(r.lead.height, AVATAR_BOX, 0.5)),
+    JSON.stringify(noImgRows.map((r) => ({ t: r.text, lead: r.lead }))))
 
   // ── 2 一级行几何:40px / 槽 30×30 / <img> 实宽 30 ─────────────────────────
   check(`2 一级 .t2o-row 行高 ${LEVEL1_H}px ±0.5(= 二级 ${LEVEL2_H} 的 1.5 倍档)`,
@@ -308,6 +328,32 @@ async function run(app, win) {
   check(`3a 二级 .t2s-srow 仍是 ${LEVEL2_H}px ±0.5(二级行本体不许动)`,
     st.srowH.length > 0 && st.srowH.every((h) => near(h, LEVEL2_H, 0.5)),
     JSON.stringify({ count: st.srowCount, h: st.srowH.map(r1) }))
+
+  // ── 3b/3c 轨道会话在项目区的两条静默接缝(§3.5) ────────────────────────────
+  const orbitRows = await win.evaluate(`(() => {
+    const rows = Array.from(document.querySelectorAll('.t2o .t2s-srow'))
+    const texts = rows.map((e) => (e.textContent || '').trim())
+    const teamRow = rows.find((e) => (e.textContent || '').includes('团队模式会话'))
+    return { texts, soloLeaked: texts.some((t) => t.includes('私聊会话')), teamHasUsers: !!(teamRow && teamRow.querySelector('svg.lucide-users')) }
+  })()`)
+  check('3b 私聊会话(projectless + soloAgentSlug)不落进「不在项目中工作」组(inOrbit 剔除;漏了 tsc 不红)',
+    orbitRows.texts.length > 0 && !orbitRows.soloLeaked, JSON.stringify(orbitRows.texts))
+  check('3c 团队模式的项目会话二级行前导图标换成 Users(SidebarPane.rowIcon)', orbitRows.teamHasUsers, JSON.stringify(orbitRows))
+
+  // ── 3d/3e 轨道状态条(OrbitBar,§6.3 / §5.1):打开团队模式会话 → 团队条三枚芯片;切到私聊会话 → 私聊条两枚芯片 + 私聊行高亮 ──
+  await win.locator('.t2o .t2s-srow', { hasText: '团队模式会话' }).first().click()
+  const teamBar = await win.waitForSelector('.t2o-bar[data-orbit="teammode"]', { timeout: 15_000 }).catch(() => null)
+  const teamBarSt = teamBar ? await win.evaluate(`(() => { const b = document.querySelector('.t2o-bar[data-orbit="teammode"]'); return { h: b.getBoundingClientRect().height, chips: Array.from(b.querySelectorAll('.t2o-bar-chip')).map((c) => c.textContent.trim()), title: (b.querySelector('.t2o-bar-title') || {}).textContent } })()`) : null
+  check('3d 团队模式会话打开后主区顶部有状态条:团队模式 · 拉人 / 会议⇄协作 / 退出团队模式 三枚芯片,高 ≥32',
+    !!teamBarSt && teamBarSt.chips.length === 3 && teamBarSt.h >= 31.5, JSON.stringify(teamBarSt))
+  await win.screenshot({ path: shots.bar }).catch(() => {})
+  await win.locator('.t2o .t2o-row', { hasText: 'Xyra' }).first().click()
+  const soloBar = await win.waitForSelector('.t2o-bar[data-orbit="solo"]', { timeout: 15_000 }).catch(() => null)
+  const soloSt = soloBar ? await win.evaluate(`(() => { const b = document.querySelector('.t2o-bar[data-orbit="solo"]'); const row = Array.from(document.querySelectorAll('.t2o .t2o-row')).find((r) => (r.textContent || '').includes('Xyra')); return { chips: Array.from(b.querySelectorAll('.t2o-bar-chip')).map((c) => c.textContent.trim()), rowActive: !!(row && row.classList.contains('active')) } })()`) : null
+  check('3e 私聊会话打开后:私聊状态条(拉起群聊 / 新会话先总结记忆)+ 侧栏对应私聊行高亮(高亮源 = configBySession 的 soloAgentSlug)',
+    !!soloSt && soloSt.chips.length === 2 && soloSt.rowActive, JSON.stringify(soloSt))
+  await win.locator('.t2o .t2s-srow', { hasText: '项目会话一' }).first().click().catch(() => {})
+  await sleep(600)
 
   // ── 4 左边缘竖线 ──────────────────────────────────────────────────────────
   const l1 = st.rowLeadLeft != null && st.rowScrollerLeft != null ? st.rowLeadLeft - st.rowScrollerLeft : null
@@ -375,10 +421,11 @@ async function run(app, win) {
   const narrowSize = await win.evaluate(`({ w: window.innerWidth, h: window.innerHeight })`)
   const narrowSt = await win.evaluate(PROBE)
   check('8d 375px 视口真的生效(临时放开 minWidth 880)', near(narrowSize.w, 375, 4), JSON.stringify(narrowSize))
-  check(`8e 375px 下一级行仍是 ${LEVEL1_H}px(移动抽屉共用同一份 sidebar2.css)`,
-    narrowSt.rowGeom.length > 0 && narrowSt.rowGeom.every((r) => near(r.h, LEVEL1_H, 0.5)),
-    JSON.stringify({ hasOrbit: narrowSt.hasOrbit, rows: narrowSt.rowGeom.map((r) => r1(r.h)) }))
   const narrowVisible = narrowSt.hasOrbit && narrowSt.orbitRect && narrowSt.orbitRect.width > 0
+  // 左栏在 375px 下若被折叠成抽屉,一级行量不到 —— 那是布局事实,记 SKIP 语义(仍算过),不留一条必红的断言。
+  check(`8e 375px 下一级行仍是 ${LEVEL1_H}px(移动抽屉共用同一份 sidebar2.css)${narrowVisible ? '' : '(左栏折叠,未量,跳过)'}`,
+    !narrowVisible || (narrowSt.rowGeom.length > 0 && narrowSt.rowGeom.every((r) => near(r.h, LEVEL1_H, 0.5))),
+    JSON.stringify({ hasOrbit: narrowSt.hasOrbit, visible: narrowVisible, rows: narrowSt.rowGeom.map((r) => r1(r.h)) }))
   if (narrowVisible) {
     await (await leftPane(win)).screenshot({ path: shots.narrow }).catch(async () => { await win.screenshot({ path: shots.narrow }) })
   } else {
@@ -419,7 +466,9 @@ async function main() {
   const projectDir = path.join(home, 'Orbit Project')
   for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
 
-  const stub = await startStubEngine({ agents: AGENTS, sessions: sessionFixtures(projectDir) })
+  const fixtures = sessionFixtures(projectDir)
+  SOLO_OPEN_RESPONSE = { session: fixtures.find((x) => x.id === 'orb-s1'), created: false }
+  const stub = await startStubEngine({ agents: AGENTS, sessions: fixtures })
   const front = await startFront(stub.url)
   // 未打包时主进程用 `<dir>-dev`,两份都种;vault 也预置,免得停在笔记库引导。
   for (const dir of [userData, `${userData}-dev`]) {

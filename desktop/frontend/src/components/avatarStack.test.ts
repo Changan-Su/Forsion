@@ -161,8 +161,8 @@ describe('<AvatarStack> 渲染', () => {
     expect(host.textContent).toBe('A')
   })
 
-  it('单人 + emoji 头像:整格显示 emoji,不合成圆底', async () => {
-    await render(React.createElement(AvatarStack, { items: [{ slug: 'muse', name: 'Muse', emoji: '✦' }] }))
+  it('整体 emoji(团队 avatar):整格显示 emoji,不合成成员头像;与成员数无关', async () => {
+    await render(React.createElement(AvatarStack, { items: [{ slug: 'muse', name: 'Muse' }], emoji: '✦' }))
     expect(host.textContent).toBe('✦')
     expect(host.querySelector('img')).toBeNull()
   })
