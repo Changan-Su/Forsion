@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1280, initial-scale=1" />
+    <title>Forsion social preview</title>
+    <style>
+      * { box-sizing: border-box; }
+      html, body { width: 1280px; height: 640px; margin: 0; overflow: hidden; }
+      body { background: #f1f5f1; }
+      canvas { display: block; width: 1280px; height: 640px; }
+    </style>
+  </head>
+  <body>
+    <canvas width="1280" height="640" aria-label="Forsion GitHub social preview"></canvas>
+    <script>
+      const canvas = document.querySelector("canvas");
+      const context = canvas.getContext("2d");
+      const logo = new Image();
+      const product = new Image();
+      logo.src = "/repo/.github/assets/showcase/logo.svg";
+      product.src = "/repo/.github/assets/showcase/notes.png";
+
+      Promise.all([logo.decode(), product.decode()]).then(() => {
+        context.fillStyle = "#f1f5f1";
+        context.fillRect(0, 0, 1280, 640);
+
+        context.drawImage(logo, 62, 56, 34, 38);
+        context.fillStyle = "#1c352b";
+        context.font = "650 29px system-ui, sans-serif";
+        context.fillText("Forsion", 108, 86);
+
+        context.textAlign = "right";
+        context.fillStyle = "#52695d";
+        context.font = "400 16px system-ui, sans-serif";
+        context.fillText("Local knowledge. Lasting context.", 1218, 74);
+        context.textAlign = "left";
+
+        context.fillStyle = "#1c352b";
+        context.font = "650 58px system-ui, sans-serif";
+        context.fillText("Your second", 62, 218);
+        context.fillText("brain.", 62, 281);
+
+        context.fillStyle = "#52695d";
+        context.font = "400 22px system-ui, sans-serif";
+        context.fillText("Remembers. Collaborates. Acts.", 62, 339);
+        context.fillText("A second brain you own.", 62, 371);
+
+        context.font = "500 17px system-ui, sans-serif";
+        context.fillText("Memory · Muse · Multi-agent · Plugins", 62, 449);
+
+        context.save();
+        context.shadowColor = "rgba(28, 53, 43, 0.16)";
+        context.shadowBlur = 32;
+        context.shadowOffsetY = 14;
+        context.fillStyle = "#eef3ef";
+        context.beginPath();
+        context.roundRect(572, 142, 646, 364, 15);
+        context.fill();
+        context.restore();
+
+        context.save();
+        context.beginPath();
+        context.roundRect(572, 142, 646, 364, 15);
+        context.clip();
+        context.drawImage(product, 572, 142, 646, 364);
+        context.restore();
+
+        context.strokeStyle = "rgba(31, 53, 43, 0.22)";
+        context.lineWidth = 1;
+        context.beginPath();
+        context.roundRect(572.5, 142.5, 645, 363, 14.5);
+        context.stroke();
+
+        context.fillStyle = "#52695d";
+        context.font = "400 17px system-ui, sans-serif";
+        context.fillText("forsion.net", 62, 585);
+
+        canvas.toBlob(async blob => {
+          const response = await fetch("/capture/social-preview.png", { method: "POST", body: blob });
+          document.title = response.ok ? "saved:social-preview" : "failed:social-preview";
+        }, "image/png");
+      });
+    </script>
+  </body>
+</html>

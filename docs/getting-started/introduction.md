@@ -1,11 +1,15 @@
 ---
 title: Forsion 是什么
-description: 产品家族总览:Tangu 引擎、Forsion Desktop、Amadeus 笔记,以及它们背后的设计理念。
+description: Forsion Second Brain：知识与记忆、主动式 Agent、多 Agent 协作和可扩展工作区。
 ---
 
 # Forsion 是什么
 
-Forsion(扶桑)是一个 **AI 工作台**:AI 在这里不只回答问题,还能记笔记、管日程、盯任务、跑自动化、写代码并当场预览——而这一切都发生在你自己的电脑上。
+Forsion（扶桑）是一个**本地优先的 Second Brain**。知识库保存材料、想法和成果；拥有长期记忆的 Agent 带着背景与你思考和协作；Muse 主动跟进持续工作；插件为 AI 和工作区补充新的能力。
+
+这几部分形成一条持续的路径：**知识积累 → 带着上下文思考 → 主动行动 → 成果回到知识库**。写网页、做研究、安排日程都是这条路径上的使用场景。
+
+Forsion is a **local-first second brain**: a knowledge base for your material and results, Agents with long-term memory for ongoing collaboration, Muse for proactive follow-up, and plugins that extend both tools and the workspace. Each result can become context for the next task.
 
 ## 产品家族
 

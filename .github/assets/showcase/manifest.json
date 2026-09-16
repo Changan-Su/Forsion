@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-15T15:24:49Z",
+  "source": {
+    "releaseTag": "v2.10.4",
+    "commit": "edfd128259535ad778fdc964ddcb049cca3603f1",
+    "desktopTree": "69c5c590ea4dbe8a7b5d4bdc682b41b5aa73ab93",
+    "packageVersion": "2.10.4",
+    "productTreeMatchesRelease": true
+  },
+  "fixture": {
+    "isolated": true,
+    "publicDataOnly": true,
+    "personalWorkspaceData": false,
+    "liveModelCalls": 0
+  },
+  "assets": {
+    "workbench.png": {
+      "width": 1600,
+      "height": 900,
+      "colorType": "RGB",
+      "sha256": "a8d95a93071c43e407a4da432936119b52d0f494155272911a84e3210717de6c",
+      "captureMethod": "Electron BrowserWindow.capturePage",
+      "scenario": "Coding Studio with a public Reading room project and sample conversation",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false
+    },
+    "notes.png": {
+      "width": 1600,
+      "height": 900,
+      "colorType": "RGB",
+      "sha256": "1851aa223c495fa53b24c00f9caa167e1d508e39f5d52a65e4b4d15eebcb8f13",
+      "captureMethod": "Playwright Electron screenshot",
+      "scenario": "Note workspace with the public Product research Markdown fixture",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false
+    },
+    "calendar.png": {
+      "width": 1600,
+      "height": 900,
+      "colorType": "RGB",
+      "sha256": "b06f188415208429431540c29dc1299a5b6faeee8d53b784134f11e1f7045f13",
+      "captureMethod": "Playwright Electron screenshot",
+      "scenario": "Calendar workspace with an isolated public date and database fixture",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false
+    },
+    "social-preview.png": {
+      "width": 1280,
+      "height": 640,
+      "colorType": "RGBA",
+      "sha256": "144d491cc003b11e563387c5e41247b8692e6ecfe796112725852297efbbff0c",
+      "captureMethod": "Browser canvas export",
+      "scenario": "Designed GitHub Second Brain composition generated from the current notes.png",
+      "generatedAt": "2026-09-15T16:17:01Z"
+    },
+    "logo.svg": {
+      "sha256": "b63079a5adfaa70f94f2a8647df7e96e66a1c67eeaa3c54973c49433c58278fe",
+      "source": "desktop/frontend/public/Forsion-LOGO3.svg"
+    }
+  }
+}
