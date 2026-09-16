@@ -13,7 +13,10 @@ type Rec = {
   type: string
   params: Record<string, unknown>
   setParams: (p: Record<string, unknown>) => void
+  /** leaf 句柄自己的 close():dockview 里是裸 panel.api.close(),仪表盘卡里是 removeCard。 */
   close: () => void
+  /** store 的 closeLeaf(id):带「最后一个主标签变 home / 侧栏补占位 / 清导航史」收尾的正路。 */
+  closeLeaf: () => void
   replace: (p: Record<string, unknown>) => void
 }
 /** 工作区里真实存在的标签(leafById 查得到的)。仪表盘卡 / Agent Desk 卡是视图自己合成的句柄,不在这里。 */
@@ -30,6 +33,7 @@ vi.mock('@lcl/engine', () => ({
         return r ? { id, type: r.type, loc: 'main', params: r.params, setTitle: () => {}, setParams: r.setParams, close: r.close } : null
       },
       navigateLeaf: (id: string, _type: string, params: Record<string, unknown> = {}) => { ws.leaves.get(id)?.replace(params) },
+      closeLeaf: (id: string) => { ws.leaves.get(id)?.closeLeaf() },
     }),
   },
 }))
@@ -121,6 +125,7 @@ async function mount(c: Case, filePath: string, { inWorkspace = true } = {}) {
     // dockview updateParameters 是合并语义
     setParams: vi.fn((p: Record<string, unknown>) => { rec.params = { ...rec.params, ...p }; render() }),
     close: vi.fn(),
+    closeLeaf: vi.fn(),
     replace: (p) => { rec.params = { ...p }; render() },
   }
   if (inWorkspace) ws.leaves.set(LEAF, rec)
@@ -150,6 +155,7 @@ describe.each(CASES)('$type 标签:树上改名 / 挪走 / 删除后不攥旧路
     await act(async () => store.remapScopePaths(c.file, `归档/${c.file}`, 'file'))
     await settle()
     expect(rec.params).toEqual({ [c.key]: `归档/${c.file}`, ...c.extra?.[1] })
+    expect(rec.closeLeaf).not.toHaveBeenCalled()
     expect(rec.close).not.toHaveBeenCalled()
   })
 
@@ -160,12 +166,13 @@ describe.each(CASES)('$type 标签:树上改名 / 挪走 / 删除后不攥旧路
     expect(rec.params[c.key]).toBe(`资料2/${c.file}`)
   })
 
-  it('树上删除(deletePage):关掉标签,不改指到任何路径', async () => {
+  it('树上删除(deletePage):经 store 的 closeLeaf 关掉标签,不走裸 leaf.close()、不改指到任何路径', async () => {
     const { store, disk, rec } = await mount(c, c.file)
     await act(async () => { await store.usePageStore.getState().deletePage(c.file) })
     await settle()
     expect(disk.has(c.file)).toBe(false)
-    expect(rec.close).toHaveBeenCalled()
+    expect(rec.closeLeaf).toHaveBeenCalled()
+    expect(rec.close).not.toHaveBeenCalled()
     expect(rec.setParams).not.toHaveBeenCalled()
   })
 
@@ -173,7 +180,8 @@ describe.each(CASES)('$type 标签:树上改名 / 挪走 / 删除后不攥旧路
     const { store, rec } = await mount(c, `资料/${c.file}`)
     await act(async () => { await store.usePageStore.getState().deleteFolder('资料') })
     await settle()
-    expect(rec.close).toHaveBeenCalled()
+    expect(rec.closeLeaf).toHaveBeenCalled()
+    expect(rec.close).not.toHaveBeenCalled()
   })
 
   it('不在工作区里的宿主(仪表盘卡 / Desk 卡)一概不动:卡片的 close() = 从仪表盘里删卡并落盘', async () => {
@@ -183,6 +191,7 @@ describe.each(CASES)('$type 标签:树上改名 / 挪走 / 删除后不攥旧路
     await settle()
     expect(rec.setParams).not.toHaveBeenCalled()
     expect(rec.close).not.toHaveBeenCalled()
+    expect(rec.closeLeaf).not.toHaveBeenCalled()
   })
 
   it('无关路径的广播不动(同名前缀的兄弟文件夹不算子树)', async () => {
@@ -192,6 +201,21 @@ describe.each(CASES)('$type 标签:树上改名 / 挪走 / 删除后不攥旧路
     await settle()
     expect(rec.setParams).not.toHaveBeenCalled()
     expect(rec.close).not.toHaveBeenCalled()
+    expect(rec.closeLeaf).not.toHaveBeenCalled()
+  })
+})
+
+describe('插件文件:视图内换文件', () => {
+  it('插件经 surface.loadPage 在本视图里换到另一个同类型文件:标签参数跟过去', async () => {
+    const c = CASES.find((x) => x.type === 'amadeus-plugin-file')!
+    const { store, rec } = await mount(c, c.file)
+    // surface 在本测试里是桩,直接摆出「本视图 scope 先装着本文件、再被插件换成另一张」这两步状态
+    const scope = store.pageStoreFor(`plug:${LEAF}`)
+    await act(async () => scope.setState({ activePage: c.file }))
+    await act(async () => scope.setState({ activePage: '另一张.probe.md' }))
+    await settle()
+    expect(rec.params.filePath).toBe('另一张.probe.md')
+    expect(rec.closeLeaf).not.toHaveBeenCalled()
   })
 })
 
