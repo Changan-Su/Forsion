@@ -50,7 +50,7 @@ async function main() {
     }
     const view = win.locator('.t2-chat-view').first()
     await view.waitFor({ timeout: 30000 })
-    await view.locator('.agent-picker .engine-pill').first().waitFor({ state: 'attached', timeout: 30000 })
+    await view.locator('.agent-select-strip .agent-pill').first().waitFor({ state: 'attached', timeout: 30000 })
     // 真 Electron 会沿用系统指针位置；缩宽恰好把 pill 移到指针下时会展开名称，改变内容宽度。
     await win.mouse.move(1, 1)
     await win.waitForTimeout(700)
@@ -96,37 +96,44 @@ async function main() {
     const wide = await safe('宽栏')
     check('宽栏仍在 View 中心', wide.emptyVisible && Math.abs((wide.empty.top + wide.empty.bottom - wide.col.top - wide.col.bottom) / 2) < 2, wide)
     check('宽栏保留胶囊', wide.compact.length === 0, wide)
-    const more = await view.locator('.agent-picker').evaluate((el) => {
+    const more = await view.locator('.agent-select-strip').evaluate((el) => {
       const scroll = el.querySelector('.engine-picker-scroll')
       const button = el.querySelector('.engine-picker-more')
       scroll.scrollLeft = scroll.scrollWidth
       return { scrollRight: scroll.getBoundingClientRect().right, moreLeft: button?.getBoundingClientRect().left }
     })
     check('更多按钮不盖住选项', more.moreLeft >= more.scrollRight, more)
-    const fitsWidth = await view.locator('.agent-picker .engine-picker-scroll').evaluate((el) => el.scrollWidth + 16)
+    const fitsWidth = await view.locator('.agent-select-strip .engine-picker-scroll').evaluate((el) => el.scrollWidth + 16)
     await resize(fitsWidth, 820)
-    const fit = await view.locator('.agent-picker .engine-picker-scroll').evaluate((el) => ({
+    const fit = await view.locator('.agent-select-strip .engine-picker-scroll').evaluate((el) => ({
       content: el.scrollWidth, viewport: el.clientWidth, bar: el.parentElement.clientWidth,
       col: el.closest('.t2-chat-col').clientWidth, padding: getComputedStyle(el.parentElement).padding,
     }))
-    check('刚好容纳全部选项时收起更多按钮', await view.locator('.agent-picker .engine-picker-more').count() === 0, { fitsWidth, ...fit })
+    check('刚好容纳全部选项时收起更多按钮', await view.locator('.agent-select-strip .engine-picker-more').count() === 0, { fitsWidth, ...fit })
 
     await resize(420, 720)
     const narrow = await safe('窄栏')
-    check('窄栏两个带名称的入口并排', narrow.compact.length === 2 && Math.abs(narrow.compact[0].top - narrow.compact[1].top) < 1, narrow)
-    await view.locator('.agent-picker select').selectOption('agent-17')
-    check('选择 Agent 更新当前名称', (await view.locator('.agent-picker .compact-chat-picker-name').textContent()) === agents[17].name)
-    await view.locator('.engine-picker:not(.agent-picker) select').selectOption('codex')
+    // 轨道方案 §4:引擎选择器并入 Agent 选择条,窄栏因此只剩**一个**带名称的入口(原来是引擎 + Agent 两个)。
+    check('窄栏折叠成单个带名称的入口', narrow.compact.length === 1, narrow)
+    await view.locator('.agent-select-strip select').selectOption('agent:agent-17')
+    check('选择 Agent 更新当前名称', (await view.locator('.agent-select-strip .compact-chat-picker-name').textContent()) === agents[17].name)
+    await view.locator('.agent-select-strip select').selectOption('engine:codex')
     await win.waitForTimeout(150)
-    check('外部引擎隐藏 Tangu Agent 入口', await view.locator('.agent-picker').count() === 0)
-    await view.locator('.engine-picker select').selectOption('')
-    await view.locator('.agent-picker select').waitFor()
-    await view.locator('.agent-picker select').selectOption('xyra')
+    // 「外部引擎与 Agent 互斥」的老意图:以前靠整条 Agent 选择器消失,现在靠选中集只剩引擎那一枚。
+    const enginePicked = await view.locator('.agent-select-strip .agent-pill[aria-pressed="true"]').evaluateAll(
+      (els) => els.map((el) => el.dataset.engineId || `agent:${el.dataset.agentSlug}`))
+    check('选外部引擎即清空 Agent(单选互斥)', enginePicked.length === 1 && enginePicked[0] === 'codex', enginePicked.join(','))
+    await view.locator('.agent-select-strip .agent-pill[data-agent-slug="xyra"]:not([disabled])').waitFor({ state: 'attached', timeout: 30000 })
+    await view.locator('.agent-select-strip select').selectOption('agent:xyra')
+    await win.waitForTimeout(150)
+    const agentPicked = await view.locator('.agent-select-strip .agent-pill[aria-pressed="true"]').evaluateAll(
+      (els) => els.map((el) => el.dataset.engineId || `agent:${el.dataset.agentSlug}`))
+    check('再选 Agent 即退掉外部引擎', agentPicked.length === 1 && agentPicked[0] === 'agent:xyra', agentPicked.join(','))
     await view.screenshot({ path: path.join(home, 'narrow.png') })
 
     await resize(320, 620)
     const small = await safe('极窄栏')
-    check('极窄栏入口上下排列', small.compact.length === 2 && small.compact[1].top >= small.compact[0].bottom + 5, small)
+    check('极窄栏仍只有一个入口且不出列', small.compact.length === 1 && small.compact[0].right <= small.col.right + 1, small)
     await view.screenshot({ path: path.join(home, 'small.png') })
     await resize(420, 360)
     await safe('矮窗口')
@@ -148,7 +155,7 @@ async function main() {
     await win.waitForTimeout(180)
     await resize(420, 720)
     await safe('英文窄栏')
-    check('英文引擎入口已翻译', await view.locator('.engine-picker:not(.agent-picker) select').getAttribute('aria-label') === 'Engine')
+    check('英文选择条已翻译', await view.locator('.agent-select-strip').getAttribute('aria-label') === 'Pick agents')
     await view.screenshot({ path: path.join(home, 'narrow-en.png') })
 
     await win.evaluate(() => window.tangu.openMini({}))

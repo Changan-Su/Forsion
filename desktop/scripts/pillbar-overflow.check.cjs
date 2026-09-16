@@ -1,5 +1,5 @@
 /**
- * 新对话 pill 选择条(EnginePicker / AgentPicker)溢出契约检查(真 Chromium 断言)。
+ * 新对话 pill 选择条(AgentSelectStrip,前身是 EnginePicker / AgentPicker)溢出契约检查(真 Chromium 断言)。
  *
  * 为什么存在:「⋯ 翻页」整个特性挂在一个**纯 CSS 布局前提**上 —— `.engine-picker-bar` 原本是
  * `inline-flex`(按内容自适应宽度),于是 `scrollWidth === clientWidth` 恒成立,
@@ -38,13 +38,21 @@ function check(name, ok, detail) {
 }
 
 const BASE_CSS = fs.readFileSync(path.join(__dirname, '../frontend/src/styles/base.css'), 'utf8')
-/** 复刻 ChatView 的真实结构:.t2-chat-view(内联 flex 列)> .newchat-pickers > .engine-picker > PillBar。 */
+/** 复刻 ChatView 的真实结构:.t2-chat-view(内联 flex 列)> .newchat-pickers > .agent-select-strip > PillBar。
+ *  选择条是多选(已选在前、竖线、候选在后),故第一枚 pill 选中 + 一根 1px 竖线也照着摆 ——
+ *  它们同在滚动容器里,是溢出宽度的一部分。 */
 function page(nPills, viewWidth) {
-  const pills = Array.from({ length: nPills }, (_, i) =>
-    `<button class="engine-pill${i === nPills - 1 ? ' selected' : ''}" aria-checked="${i === nPills - 1}">
+  const pill = (i, picked) =>
+    `<button class="engine-pill agent-pill${picked ? ' selected' : ''}" aria-pressed="${picked}" data-agent-slug="agent-${i}">
+       ${picked ? '<span class="agent-pill-index" style="display:inline-flex;min-width:14px;height:14px;margin-right:4px">1</span>' : ''}
        <span class="engine-pill-icon"><span class="agent-pill-initial">A</span></span>
        <span class="engine-pill-label">Agent ${i}</span>
-     </button>`).join('')
+     </button>`
+  const pills = [
+    pill(0, true),
+    '<span class="agent-select-sep" aria-hidden="true" style="flex:none;width:1px;height:20px;margin:0 4px;background:var(--border)"></span>',
+    ...Array.from({ length: Math.max(0, nPills - 1) }, (_, i) => pill(i + 1, false)),
+  ].join('')
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     :root { --bg-card:#fff; --bg:#fff; --border:#ddd; --border-width:1px; --overlay-light:#eee;
             --text:#111; --text-muted:#666; --text-faint:#999; --font-ui:system-ui; }
@@ -55,12 +63,12 @@ function page(nPills, viewWidth) {
   </style></head><body>
     <div class="t2-chat-view">
       <div class="newchat-pickers">
-        <div class="engine-picker agent-picker">
+        <div class="engine-picker agent-picker agent-select-strip" role="group" aria-label="选择 Agent">
           <div class="engine-picker-bar" data-more>
-            <div class="engine-picker-scroll" role="radiogroup">${pills}</div>
+            <div class="engine-picker-scroll">${pills}</div>
             <button class="engine-picker-more">⋯</button>
           </div>
-          <div class="engine-picker-hint">选择 Agent</div>
+          <div class="engine-picker-hint">选择一个或多个 Agent 以开始</div>
         </div>
       </div>
     </div>
@@ -68,9 +76,9 @@ function page(nPills, viewWidth) {
 }
 
 const measure = () => {
-  const bar = document.querySelector('.engine-picker-bar')
-  const scroll = document.querySelector('.engine-picker-scroll')
-  const more = document.querySelector('.engine-picker-more')
+  const bar = document.querySelector('.agent-select-strip .engine-picker-bar')
+  const scroll = document.querySelector('.agent-select-strip .engine-picker-scroll')
+  const more = document.querySelector('.agent-select-strip .engine-picker-more')
   const view = document.querySelector('.t2-chat-view')
   return {
     viewW: view.getBoundingClientRect().width,
@@ -107,7 +115,7 @@ const measure = () => {
   // ③ 滚动真的可行(overflow-x:auto 生效,且能滚到底)
   await p.setContent(page(20, 420))
   const scrolled = await p.evaluate(() => {
-    const el = document.querySelector('.engine-picker-scroll')
+    const el = document.querySelector('.agent-select-strip .engine-picker-scroll')
     el.scrollLeft = 99999
     return { left: el.scrollLeft, max: el.scrollWidth - el.clientWidth }
   })

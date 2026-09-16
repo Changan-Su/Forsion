@@ -66,6 +66,9 @@ const tanguSpace: SpaceDefinition = {
   mini: { name: 'Tangu', view: { type: 'mini-tangu', params: { followActive: true } }, mainView: { type: 'chat' } },
   name: () => app().tr('space.tangu'),
   icon: Bot,
+  // 主区没有硬规则(启动器 / Agents 详情…)时左栏落新版会话侧栏;chat 主区由 registerView 的
+  // workspaceSource 声明位管(features/tangu.tsx)。
+  autoWorkspaceMode: 'orbits',
   sidebarDefaults: TANGU_SIDE_VIEWS,
   /** 对话(主)→ 工作区(左,自动=会话)→ 右栏(同会话 ChatView + 文件/大纲/记忆/子聊天,默认折叠)。 */
   build() {

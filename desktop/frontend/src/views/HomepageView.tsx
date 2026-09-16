@@ -42,6 +42,7 @@ import { currentPlatform } from '../services/agentRunService'
 import type { Attachment } from '../types'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { ProjectSelector } from '../components/ProjectSelector'
+import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { Composer2 } from './chat2/Composer2'
 import { useI18n } from '../i18n'
 import { useShallow } from 'zustand/react/shallow'
@@ -176,6 +177,10 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
         }
       }}
     >
+      {/* 主页恒是新对话(sessionId=null):Agent 选择条落在项目栏之上(§11 拍板 ⑦ 的推荐档,接线为零)。 */}
+      <div className="newchat-pickers">
+        <AgentSelectStrip sessionId={null} cfg={config} />
+      </div>
       <div className="hp-projectbar">
         <ProjectSelector
           workspaces={workspaceList}

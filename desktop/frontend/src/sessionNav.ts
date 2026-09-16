@@ -9,6 +9,13 @@
 import { useApp } from './stores/appStore'
 import { useWorkspace, activeMainPanel } from '@lcl/engine'
 import { planNewChat, planSessionOpen, type ChatLeaf } from './sessionOpenPlan'
+import { registerMessages, translate } from './i18n'
+
+registerMessages({
+  'orbits.rotate.queued': { zh: '已开新会话,正在后台总结上一段的记忆', en: 'New session started; summarizing the previous one in the background' },
+  'orbits.rotate.skipped': { zh: '已开新会话(这次没有采集记忆:Historian 未启用或正忙)', en: 'New session started (memory was not collected this time: Historian is off or busy)' },
+  'orbits.rotate.none': { zh: '已开新会话', en: 'New session started' },
+})
 
 interface PanelLike { id: string; params?: Record<string, unknown> }
 
@@ -87,4 +94,26 @@ export function openNewChat(): void {
     return
   }
   ws.openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
+}
+
+/** 私聊(Agent 轨道的单人形态)的统一入口 —— 侧栏私聊行 / 引擎行、Agent 选择器的「私聊」都只认这一扇门。
+ *  `kind='agent'` 时 id = agent slug,`kind='engine'` 时 id = 外部引擎 id。
+ *  P1 只钉签名:真正的「解析该 agent 最新未归档的 soloAgentSlug 会话,没有就经 rotate 端点新建」落在 P2,
+ *  换实现时**不动调用点**(方案 §3.4 / §5)。 */
+export function openSolo(kind: 'agent' | 'engine', id: string): void {
+  void useApp.getState().ensureSoloSession(kind, id).then((s) => { if (s) openSession(s.id) })
+}
+
+/** 私聊「新会话(先总结记忆)」:引擎侧归档旧会话 + 建新(Agent 私聊后台采记忆);旧会话还在跑 → store 已提示,这里不动。 */
+export function rotateSolo(kind: 'agent' | 'engine', id: string): void {
+  void useApp.getState().rotateSoloSession(kind, id).then((r) => {
+    if (!r) return
+    openSession(r.session.id)
+    useApp.getState().toast(translate(r.memory === 'queued' ? 'orbits.rotate.queued' : r.memory === 'skipped' ? 'orbits.rotate.skipped' : 'orbits.rotate.none'))
+  })
+}
+
+/** 独立团队(Agent 轨道的持久团队)的统一入口:该团队最新未归档会话,没有就建;不内联展开(方案 §3.4)。 */
+export function openTeam(slug: string, opts?: { newTab?: boolean }): void {
+  void useApp.getState().ensureTeamSession(slug).then((s) => { if (s) openSession(s.id, opts) })
 }

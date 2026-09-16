@@ -1,0 +1,275 @@
+/**
+ * 轨道侧栏(`OrbitsView`)的作用域样式。前缀一律 `.t2o-`,**不改 sidebar2.css 本体**
+ * (`.t2s-srow` / `.t2s-group` / `.t2s-folder-row` 与三个 view 共用的 `--t2s-icon` 声明都不动)。
+ *
+ * 几何(方案 §3.2,26.797 × 1.5 = 40.2 取整):
+ *   一级行 `.t2o-row`            = padding-block 5 + 内容盒 30 = **40px**
+ *   项目组头 `.t2s-folder-row`   = padding-block 5 + 槽 30     = **40px**(同一档,靠作用域覆盖抬上来)
+ *   二级会话行 `.t2s-srow`       = **26.797px 不动**(本文件一个字节都不碰它)
+ *   头像左边缘 = 滚动区 6 + 行内左内边距 14 = **20px**;二级行图标左边缘 30.5px 落在头像列内
+ *   名字左边缘 = 20 + 30 + gap 8 = **58px**(组头 6 + 9.5 + 4.5 + 30 + 8 = 58,逐像素对齐)
+ *
+ * ⚠️ 两条 DESIGN.md §7 纪律:① 覆盖一律写 longhand(`padding-block` / `padding-inline`),简写会把
+ * 基础规则里带变量的那条整条吃掉;② 同特异性的覆盖块放文件末尾 —— 本文件对 sidebar2.css 的覆盖
+ * 全部抬到更高特异性((0,3,0) / (0,4,0)),不赌 import 顺序。
+ * 桌面与移动抽屉共用这一份:不写任何 `::-webkit-scrollbar`、不假设桌面独有的容器。
+ */
+
+/* ── 外壳:头部 / Agent 轨道块 / 项目区三段竖排,块间 6px,不加分区头(照草图) ── */
+.t2o {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  background: var(--sidebar-bg);
+  font-family: var(--font-ui);
+  color: var(--text);
+  /* 头部与 Agent 块不在 `.t2s-side` 内,拿不到那边的 no-drag 兜底 —— mac frameless 上不声明就可能被
+   * 上层拖窗区吞掉点击。 */
+  -webkit-app-region: no-drag;
+}
+/* 横向内边距对齐 `.t2s-scroll` 的 6px,三段的左边缘才在同一条竖线上。 */
+.t2o-head,
+.t2o-agents { padding-inline: 6px; }
+/* Agent 轨道块:优先让项目区占空间;自己装不下才收缩并自滚(不写滚动条样式,交给平台)。 */
+.t2o-agents {
+  display: flex;
+  flex-direction: column;
+  flex: 0 1 auto;
+  min-height: 0;
+  margin-bottom: 6px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.t2o-projects {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 96px;
+  min-width: 0;
+}
+
+/* ── 头部行(新对话 + Chat/Work 胶囊 + 「+」)──
+ * `.t2s-special*` / `.t2s-vaultseg` 的基础规则是无作用域的,直接复用;但下面这几条在 sidebar2.css 里
+ * 挂着 `.t2s-side` 前缀,而本块在 `.t2s-side` **外面** —— 不补一份,图标会落回 lucide 默认 24px、
+ * 胶囊会失去 94×26 的尺寸。 */
+.t2o { --t2s-icon: 16.9px; }
+.t2o .t2s-special-ic > svg { width: var(--t2s-icon); height: var(--t2s-icon); }
+.t2o .t2s-vaultseg.t2s-mode {
+  width: 94px;
+  height: 26px;
+  flex-shrink: 0;
+  margin-block: 0;
+  margin-inline: 0 4px;
+}
+.t2o .t2s-vaultseg.t2s-mode button { padding: 0; font-size: 11.5px; line-height: 16px; }
+/* 操作菜单档的 24×24 触发钮(§3.6)。 */
+.t2o-plus {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
+}
+.t2o-plus:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); }
+
+/* ── 一级行(私聊 / 引擎 / 团队) ── */
+.t2o-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 40px;
+  padding-block: 5px;
+  padding-inline: 14px 6px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--duration-fast, 0.15s);
+  /* 槽 = --t2s-icon + 1.5 → 30px:行内若出现 `.t2s-lead` 形态的前导槽(团队行 / 将来的扩展),
+   * 不必另写尺寸就与 `.t2o-lead` 同大。 */
+  --t2s-icon: 28.5px;
+}
+.t2o-row:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
+.t2o-row.active { background: color-mix(in srgb, var(--accent-ink) 12%, transparent); }
+/* 选中态左侧 2px 色条,与 `.t2s-srow.active::before` 同语汇(只是行更高,上下留白按 40px 重算)。 */
+.t2o-row.active::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent-ink);
+}
+.t2o-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* 前导槽 30px(命中仓内既有的 `.ribbon-account .account-avatar` 档,不引入第四个头像尺寸)。 */
+.t2o-row .t2o-lead {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+}
+/* 引擎行:同为 Agent 轨道,沿用 30px 圆底 + 品牌单色标记(项目行的方块留给项目轨道)。 */
+.t2o-lead-box {
+  border-radius: 50%;
+  background: var(--overlay-light, rgba(127, 127, 127, 0.08));
+  color: var(--text-muted);
+}
+/* `<img>` **必须**显式定尺寸(JSX 里也传了 width/height 30):不定就按原始像素撑爆行 —— check:listsrc 的教训。 */
+.t2o-avatar {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  flex-shrink: 0;
+}
+.t2o-avatar-text {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+}
+/* 状态点贴槽右下角:**绝对定位**不进内联流(同 `.t2s-lead .t2s-dot` 的手法与理由)。
+ * 主动式徽章挪到右上角,与 running 同时亮得下。描边是零模糊环,不是空间高程。 */
+.t2o-lead .t2s-dot {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  box-shadow: 0 0 0 1.5px var(--sidebar-bg);
+}
+.t2o-lead .t2s-dot.proactive {
+  top: -1px;
+  bottom: auto;
+  background: var(--accent-ink);
+}
+
+/* 行尾 24×24;hover / 键盘聚焦才现,**触屏常显**(交换规则锁在 (hover: hover) 里,
+ * 否则 tap 后 :hover 驻留会把它永久留在半透明态)。 */
+.t2o-tail {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  border-radius: 7px;
+  color: var(--text-faint, var(--text-muted));
+  cursor: pointer;
+  opacity: 1;
+  transition: opacity var(--duration-fast, 0.15s), background var(--duration-fast, 0.15s);
+}
+@media (hover: hover) {
+  .t2o-tail { opacity: 0; }
+  .t2o-row:hover .t2o-tail,
+  .t2o-row:focus-within .t2o-tail { opacity: 0.7; }
+  /* ⚠️ 必须写成 `.t2o-row .t2o-tail:hover`(0,3,0):指针停在 ⋯ 上时行也 hover 着,
+   * 裸 `.t2o-tail:hover`(0,2,0)会被上面那条压住,永远亮不到 1。同特异性靠源码顺序,故放它之后。 */
+  .t2o-row .t2o-tail:hover { opacity: 1; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
+}
+
+/* 「待登录」之类的行尾标记:芯片没有底色,描边就是它的形状(DESIGN.md §5 的不去边四类之一)。 */
+.t2o-badge {
+  flex-shrink: 0;
+  padding-block: 1px;
+  padding-inline: 6px;
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: 999px;
+  color: var(--text-faint, var(--text-muted));
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+/* 置灰的菜单项(`.ctx-menu button:disabled` 在 base.css 里没有正典)。
+ * ⚠️ 类名写两遍是为了把 hover 归零抬到 (0,3,0) —— base.css 的 `.ctx-menu button:hover` 是 (0,2,1),
+ * 裸 `.t2o-item-off:hover`(0,2,0)压不住,置灰项照样会亮起 hover 底(disabled 元素仍匹配 :hover)。 */
+.t2o-item-off { opacity: 0.45; cursor: default; }
+.t2o-item-off.t2o-item-off:hover { background: transparent; color: var(--text-light); }
+
+/* ══ 对 sidebar2.css 的作用域覆盖(全部抬到 ≥(0,3,0),不赌 import 顺序)══ */
+
+/* 层级语汇:整片 sidebar-bg 由 `.t2o` 一个元素上色,内层 `.t2s-side` 置透明 —— 两处都上色的话,
+ * 换肤把 --sidebar-bg 调成半透时会在 Agent 块下沿留一道色差缝。 */
+.t2o .t2o-projects > .t2s-side { background: transparent; }
+
+/* 项目组头抬到与一级行同档 40px:padding-block 5 + 槽 30。
+ * ⚠️ padding-inline 的左边必须留 4.5px —— `.t2s-group` 的内联 `folderPadLeft(0)=9.5` 加它才是 14,
+ *    槽左边缘才落在 6+14=20px(与私聊头像同一条竖线)。gap 跟一级行的 8px,名字才对得上 58px。
+ *    同时压过 `.t2s-side .t2s-folder-row{padding:4.5px}` 与文件末尾的 `.t2sw .t2s-folder-row{padding-block:3px}`
+ *    两条 (0,2,0)。 */
+.t2o .t2s-group .t2s-folder-row {
+  gap: 8px;
+  padding-block: 5px;
+  padding-inline: 4.5px;
+}
+/* 30px 圆角方块装既有的 Folder/FolderOpen —— **不动 font-size**:槽内图标靠 `1em` 跟着
+ * `--t2s-icon`(16.9px)走,改了字号图标就跟着变大。 */
+.t2o .t2s-group .t2s-folder-row .t2s-lead {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--overlay-light, rgba(127, 127, 127, 0.08));
+}
+/* hover 换出的箭头是 JSX 硬写的 `size={12}`(表现属性,CSS 压得过):30px 槽里 12px 太细,
+ * 用作用域 CSS 抬到 16px,**不新增 JSX size 传参**(§10 纪律)。 */
+.t2o .t2s-group .t2s-folder-row .t2s-lead-chev > svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ── 轨道状态条(OrbitBar,方案 §6.3):贴主视图纸卡顶部,层 3,不描边、底 overlay-light、圆角随卡 ── */
+.t2o-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  min-height: 32px; padding: 4px 10px;
+  background: var(--overlay-light, rgba(127, 127, 127, 0.08));
+  border-radius: inherit; border-bottom-left-radius: 0; border-bottom-right-radius: 0;
+  font-size: 11.5px; color: var(--text-muted);
+}
+.t2o-bar-lead { display: inline-flex; align-items: center; width: 18px; height: 18px; flex-shrink: 0; }
+.t2o-bar-title { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.t2o-bar-sub { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 auto; }
+.t2o-bar-avatars { display: inline-flex; align-items: center; gap: 2px; }
+.t2o-bar-avatar { width: 18px; height: 18px; border-radius: 50%; object-fit: cover; display: inline-flex; align-items: center; justify-content: center; }
+.t2o-bar-avatar-text { font-size: 9px; font-weight: 600; color: var(--text); background: color-mix(in srgb, var(--accent-ink) 14%, transparent); }
+.t2o-bar-acts { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+/* 按钮·药丸·芯片不去边(DESIGN.md §5)。 */
+.t2o-bar-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  font: inherit; font-size: 11.5px; font-weight: 600; line-height: 1; color: var(--text);
+  padding: 4px 9px; border-radius: 999px; border: 1px solid var(--border); background: transparent; cursor: pointer;
+}
+.t2o-bar-chip:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
+.t2o-bar-chip:disabled { opacity: 0.5; cursor: default; }
+.t2o-bar-note { flex-basis: 100%; font-size: 11px; color: var(--text-faint, var(--text-muted)); }
+@media (max-width: 360px) { .t2o-bar-sub, .t2o-bar-title { display: none; } }

@@ -4,8 +4,8 @@ import { AnimatePresence } from 'framer-motion'
 import { ArrowDown, Folder, MessageSquarePlus, Quote } from 'lucide-react'
 import type { AgentConfig, UiMessage } from '../types'
 import { Composer2 } from './chat2/Composer2'
-import { EnginePicker } from '../components/EnginePicker'
-import { AgentPicker } from '../components/AgentPicker'
+import { AgentSelectStrip } from '../components/AgentSelectStrip'
+import { OrbitBar } from './chat2/OrbitBar'
 import { ProjectSelector } from '../components/ProjectSelector'
 import { WorkspaceFilePreview } from '../components/WorkspaceFilePreview'
 import { targetFor } from '../components/InlineFiles'
@@ -191,7 +191,6 @@ export function ChatView({ leaf, params }: ViewProps) {
   const visibleModels = !s.modelsResp?.models
     ? null
     : selectableChatModels(s.modelsResp.models)
-  const availableEngines = s.engines.filter((e) => e.available)
   const curEngineId = activeId ? execConfig.engineId : s.newChatCfg.engineId
   const streamingId = useMemo(() => activeMessages.find((m) => m.status === 'streaming')?.id ?? null, [activeMessages])
   // composer ↑↓ 历史召回:本会话已发送的用户消息(旧→新)+ steer 入队即记的补充池(被删/撤回的插话
@@ -416,6 +415,8 @@ export function ChatView({ leaf, params }: ViewProps) {
       <div className="t2-chat-col">
       <ErrorBoundary key={activeId || 'none'}>
         <div className="t2-chat-body" ref={chatAreaRef}>
+          {/* 轨道状态条(方案 §5.1 / §6.3):私聊 = 工作区提示 + 新会话 + 拉起群聊;团队模式 / 独立团队 = 成员 + 拉人 / 退出 / 会议⇄协作。非轨道会话不渲染。 */}
+          {activeId && !params.miniSurface && <OrbitBar sessionId={activeId} cfg={mvCfg} running={running} />}
           {hasMessages && <FloatingToc scrollContainerRef={chatScrollRef} scanTrigger={activeMessages.length} />}
           <div className="t2-stream" ref={registerChatScroll}>
             <div className="t2-stream-inner">
@@ -547,26 +548,12 @@ export function ChatView({ leaf, params }: ViewProps) {
           正文才能真正铺满整列。留在外面就会各占一段布局,反倒被悬浮的卡盖住。
           新加与输入卡同簇的东西请一并放进来 —— 高度由 anchor 统一量成 --t2-composer-h。 */}
       <div className="composer-anchor" ref={composerRef}>
-        {/* Chat 固定使用创建时的当前默认 Agent，不露选择器；Work 的云会话仍可选 Agent，外部引擎仍 host-only。 */}
-        {!params.miniSurface && !hasMessages && mvCfg.preset !== 'chat' && !mvCfg.groupChat && (
+        {/* Chat 固定使用创建时的当前默认 Agent，不露选择器；Work 的云会话仍可选 Agent，外部引擎仍 host-only。
+            轨道方案 §4:门控去掉 `!groupChat`(06-25 那道「群聊态无单一主 agent」门的理由随选择条消失 ——
+            **这条就是群聊/团队模式的配置器**),换成轨道身份钉死的三把锁(私聊 / 私聊引擎 / 独立团队)。 */}
+        {!params.miniSurface && !hasMessages && mvCfg.preset !== 'chat' && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.teamSlug && (
           <div className="newchat-pickers">
-            {mvCfg.execMode === 'host' && availableEngines.length > 0 && (
-              <EnginePicker
-                engines={availableEngines}
-                selectedId={mvCfg.engineId || ''}
-                warmingId={mvCfg.engineId && !s.engineCaps[mvCfg.engineId] ? mvCfg.engineId : null}
-                onSelect={(id) => (activeId ? s.setSessionEngine(id, activeId) : s.setNewChatCfg((c) => ({ ...c, engineId: id || undefined, engineModelId: undefined, ...(id ? { groupChat: false } : {}) })))}
-              />
-            )}
-            {!mvCfg.engineId && s.agentDefs.length > 0 && (
-              <AgentPicker
-                agents={s.agentDefs}
-                selectedSlug={mvCfg.agentSlug || ''}
-                defaultSlug={s.defaultAgentSlug}
-                avatars={s.agentAvatars}
-                onSelect={activeId ? (slug) => s.selectSessionAgent(slug, activeId) : s.selectNewChatAgent}
-              />
-            )}
+            <AgentSelectStrip sessionId={activeId} cfg={mvCfg} />
           </div>
         )}
   
@@ -633,6 +620,11 @@ export function ChatView({ leaf, params }: ViewProps) {
           onGroupChange={activeId ? (patch) => s.setSessionGroup(patch, activeId) : (patch) => s.setNewChatCfg((c) => ({ ...c, ...patch }))}
           skills={s.skillsList}
           agents={s.agentDefs}
+          // 拍板 ⑪:对话中可切 Agent,入口先放模式切换菜单;群聊态 / 私聊(钉死)/ 引擎会话不给。
+          onAgentSwitch={activeId && hasMessages && !mvCfg.groupChat && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.teamSlug && !mvCfg.engineId ? (slug) => s.selectSessionAgent(slug, activeId) : undefined}
+          currentAgentSlug={mvCfg.agentSlug || s.defaultAgentSlug}
+          // 私聊(Agent 轨道):@ 候选换成本机项目 → 派遣(方案 §5.4);只有带路径的本地工作区(派遣工具 host-only)。
+          mentionProjects={mvCfg.soloAgentSlug ? s.workspaces().filter((w) => w.kind === 'local' && !!w.path).map((w) => ({ name: w.name, path: w.path! })) : undefined}
           onNewSession={() => void s.newSession()}
           onBranch={activeId ? () => void s.branchFromMessage(undefined, activeId) : undefined}
           onOpenSettings={() => s.openSettings('skills')}

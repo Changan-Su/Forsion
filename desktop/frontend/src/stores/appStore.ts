@@ -34,6 +34,7 @@ import { registerMessages, translate, translationValues } from '../i18n'
 // 本文件自带的词条片段(命名空间 `appstore.*`,与其它文件不重叠)。
 // store 活在 React 之外,取词一律走模块级 `translate`,不能用 hook。
 registerMessages({
+  'appstore.dispatchStarted': { zh: '已在 {name} 新建会话开工', en: 'Started a session in {name}' },
   'solo.rotateBusy': { zh: '这条私聊还在运行中,等它结束再开新会话', en: 'This direct chat is still running; wait for it to finish before starting a new session' },
   'appstore.contentTruncated': { zh: '[输出过长,界面已截断显示]', en: '[Output too long, truncated for display]' },
   'appstore.stopping': { zh: '正在停止，等待任务退出…', en: 'Stopping; waiting for the run to exit…' },
@@ -583,7 +584,7 @@ export interface AppState {
   deleteSession(id: string): Promise<void>
   renameWorkspace(ws: WorkspaceDescriptor, name: string): Promise<void>
   removeWorkspace(ws: WorkspaceDescriptor): Promise<void>
-  send(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[] }, sessionId?: string | null): Promise<boolean>
+  send(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null): Promise<boolean>
   /** 撤回一条等待中的插话(删除/↑取回)。返回消息文本;已注入或来不及则 null(等待区交给事件流收拾)。 */
   withdrawSteer(sessionId: string, msgId: string): Promise<string | null>
   /** 「立即插话」:打断当前 run,把等待区消息按序强发。 */
@@ -639,6 +640,9 @@ export interface AppState {
   refreshTeams(): Promise<void>
   /** 拿到/建立该团队的活动会话并并进列表(导航由 sessionNav.openTeam 做)。 */
   ensureTeamSession(slug: string): Promise<SessionRecord | null>
+  /** 一次性播种源(拍板 ⑬):某会话的**下一次**发送带 groupSeedSessionId(私聊里拉起群聊 → 团队首会话播私聊摘要),发完即清。run 事实,不落库。 */
+  seedOnceBySession: Record<string, string>
+  setSeedOnce(sessionId: string, fromSessionId: string): void
   selectSessionAgent(slug: string, sessionId?: string | null): void
   selectNewChatAgent(slug: string): void
   setNewChatWs(ws: WorkspaceDescriptor | null): void
@@ -952,6 +956,12 @@ export const useApp = create<AppState>((set, get) => ({
           ...m, approvals: (m.approvals || []).map((a) => a.approvalId === pl.approvalId ? { ...a, status: pl.action === 'reject' ? ('rejected' as const) : ('approved' as const) } : a),
         }))
         break
+      case 'session_created': {
+        // 私聊里 @项目派遣(start_project_session):引擎在项目里建了一条可见会话 → 刷新列表 + 提示(侧栏没有轮询)。
+        void get().refreshSessions(get().cfg).catch(() => {})
+        get().toast(get().tr('appstore.dispatchStarted', { name: String(pl.projectName || pl.projectPath || '') }))
+        break
+      }
       case 'inquiry_request': {
         const inq = {
           inquiryId: pl.inquiryId, runId, question: pl.question || '',
@@ -1345,6 +1355,7 @@ export const useApp = create<AppState>((set, get) => ({
     void api.listEngines(c).then((e) => { if (latest()) set({ engines: e }) }).catch(() => { if (latest()) set({ engines: [] }) })
     void get().refreshSpecialEnabled(c)
     get().refreshAgents()
+    void get().refreshTeams()
     void window.tangu?.authStatus?.().then((a) => { if (latest()) set({ authInfo: a }) }).catch(() => { if (latest()) set({ authInfo: null }) })
   },
 
@@ -2082,8 +2093,14 @@ export const useApp = create<AppState>((set, get) => ({
       void api.putSessionConfig(get().cfg, sessionId, pinned).catch(() => {})
     }
     if (skillIds?.length) agentConfig.requestedSkillIds = skillIds
+    const seedFrom = get().seedOnceBySession[sessionId]
+    if (seedFrom) {
+      agentConfig.groupSeedSessionId = seedFrom
+      set((st) => { const next = { ...st.seedOnceBySession }; delete next[sessionId]; return { seedOnceBySession: next } })
+    }
     if (mentions?.priorityAgent) agentConfig.priorityAgent = mentions.priorityAgent
     if (mentions?.mentionAgents?.length) agentConfig.mentionedAgentSlugs = mentions.mentionAgents
+    if (mentions?.mentionProjects?.length) agentConfig.mentionedProjects = mentions.mentionProjects // 私聊里 @项目派遣(run 事实,不落库)
     if (!agentConfig.imageModelId && get().cfg.imageModelId) agentConfig.imageModelId = get().cfg.imageModelId
     // 辅助视觉模型:本端刚改完就生效(不必等引擎那边 config.json 的 60s 槽缓存过期)。
     if (!agentConfig.visionModelId && get().cfg.visionModelId) agentConfig.visionModelId = get().cfg.visionModelId
@@ -2466,11 +2483,13 @@ export const useApp = create<AppState>((set, get) => ({
     set((s) => { const next = { ...(s.configBySession[sid] || {}), engineModelId: engineModelId || undefined }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
   },
 
+  seedOnceBySession: {},
+  setSeedOnce: (sessionId, fromSessionId) => set((st) => ({ seedOnceBySession: { ...st.seedOnceBySession, [sessionId]: fromSessionId } })),
   teams: [],
   refreshTeams: async () => {
     const c = get().cfg
     const teams = await api.listTeams(c)
-    set({ teams })
+    set({ teams: Array.isArray(teams) ? teams : [] })
   },
   ensureTeamSession: async (slug) => {
     const t = get().tr

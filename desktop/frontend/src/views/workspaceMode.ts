@@ -1,7 +1,10 @@
 /** 统一「工作区」视图的模式模型(纯函数,无 React/amadeus 依赖 → node 环境可测)。 */
 // 仅类型导入(编译期擦除,不引入任何运行时依赖 → 上面那条「node 环境可测」不受影响)。
 import type { ViewLocation } from '@lcl/engine'
-export type WorkspaceMode = 'sessions' | 'files' | 'notes'
+/** 工作区档位。`orbits` = 新版会话侧栏(轨道:项目 / Agent,档位名「会话」);
+ *  `sessions` = 旧版会话列表(档位名「会话(旧)」)—— id 不改:它随布局持久化,发版即冻结,
+ *  存量用户手选过的 `params.mode` 不迁移(方案 §3.7-8)。 */
+export type WorkspaceMode = 'orbits' | 'sessions' | 'files' | 'notes'
 
 /** 扩展模式 = 内置三档 + 插件列表源(`plugin:<pid>:<srcId>`,View 基座 P2)。 */
 export type WorkspaceModeEx = WorkspaceMode | `plugin:${string}`

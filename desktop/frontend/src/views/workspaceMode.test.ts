@@ -38,6 +38,22 @@ describe('autoWorkspaceMode', () => {
     // 无声明(undefined/null)→ 原路不变
     expect(autoWorkspaceMode('left', 'chat', 'sessions', null)).toBe('sessions')
   })
+  it('轨道侧栏(2026-09-16):chat 主视图声明 workspaceSource=orbits → 左栏自动落新档', () => {
+    // 自动档翻转走**声明位**,不改 :36 的 chat 硬规则 —— 没声明时 chat 仍回旧档 sessions。
+    expect(autoWorkspaceMode('left', 'chat', 'sessions', 'orbits')).toBe('orbits')
+    expect(autoWorkspaceMode('left', 'chat', 'orbits', 'orbits')).toBe('orbits')
+    expect(autoWorkspaceMode('left', 'chat', 'sessions')).toBe('sessions') // 硬规则未动
+  })
+  it('轨道侧栏:右栏仍恒为文件(声明位管不着参考/附件栏)', () => {
+    expect(autoWorkspaceMode('right', 'chat', 'orbits', 'orbits')).toBe('files')
+    expect(autoWorkspaceMode('right', 'launcher', 'orbits')).toBe('files')
+  })
+  it('轨道侧栏:tanguSpace 默认档 = orbits → 主区是启动器/无主视图时左栏也是新档', () => {
+    expect(autoWorkspaceMode('left', null, 'orbits')).toBe('orbits')
+    expect(autoWorkspaceMode('left', 'launcher', 'orbits')).toBe('orbits')
+    expect(autoWorkspaceMode('left', 'agents-detail', 'orbits')).toBe('orbits')
+  })
+
   it('Space 默认档缺省 = sessions(没点名的 Space 沿用现状)', () => {
     expect(autoWorkspaceMode('left', 'launcher')).toBe('sessions')
   })

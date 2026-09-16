@@ -88,6 +88,11 @@ export interface SidebarPaneProps {
   /** 右键菜单、拖拽引用和工作区计数用的全集(sessions 可能被模式过滤过);缺省 = sessions / archivedSessions。 */
   allSessions?: SessionRecord[]
   allArchived?: SessionRecord[]
+  /** 会话行前导图标的替身(返回非 null 才接管,否则照旧 MessageSquare)。OrbitsView 用它把「团队模式」
+   *  的项目会话换成 Users 图标 —— 行高与排版一个像素都不动(方案 §3.5)。
+   *  ⚠️ 返回的图标必须自带 `className="t2s-lead-icon t2s-dim"`:槽靠 `.t2s-lead-icon{width:1em}` 收住
+   *  lucide 默认的 24px,漏了就把 26.8px 的二级行撑高。 */
+  rowIcon?: (s: SessionRecord) => React.ReactNode
 }
 
 /** ids = 本次菜单的作用集合(右键落在多选里 → 整批;否则就它自己);archived 取被右键那条的状态。 */
@@ -264,7 +269,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
       // 前导槽:与笔记/插件源 view 同构 → 三模式切换时图标不跳。状态点绝对定位贴在图标角上,
       // **不能内联排在标题前** —— 那样有状态的行会被推右 6px,会话行自己就先不齐了。
       lead={<>
-        <MessageSquare className="t2s-lead-icon t2s-dim" />
+        {p.rowIcon?.(s) ?? <MessageSquare className="t2s-lead-icon t2s-dim" />}
         {p.runningIds.has(s.id)
           ? <span className="t2s-dot running" title={t('sidebar.running')} />
           : p.unreadIds.has(s.id) ? <span className="t2s-dot unread" title={t('sidebar.unread')} /> : null}

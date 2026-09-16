@@ -4,7 +4,7 @@
  *   1 桌面端默认 Work:复用 Local/Cloud 滑块胶囊、Work 亮且滑块在右;列表按项目分组(≥2 组,含「不在项目中工作」),chat 与 work 会话都在
  *     会话面自身不再画搜索框(搜索统一走全局快速查找)
  *   2 切 Chat:只剩 chat 会话、平铺(0 个组头,.t2s-flat 在);work 会话不在列表里;空态项目选择器不露出
- *     且输入区不显示模式胶囊、上下文圆环和 Agent 选择器
+ *     且输入区不显示模式胶囊、上下文圆环和 Agent 选择条
  *   3 reload 恢复模式，且工作区组的 name/key 均唯一
  *   4 模式跟着打开的会话走:在 Chat 里打开 work 会话 → 胶囊切回 Work、组头回来
  *   5 截图(亮/暗各一张侧栏)—— DESIGN.md §8:几何断言全绿 ≠ 看起来对,自己看
@@ -50,7 +50,9 @@ const SIDEBAR_STATE = () => {
     activeRow: ((document.querySelector('.t2s-side .t2s-srow.active') || {}).textContent || '').trim().slice(0, 30),
     composerModeChips: visibleCount('.t2c .mode-pill-btn'),
     contextRings: visibleCount('.t2c .t2c-ctxring'),
-    agentPickers: visibleCount('.t2c .agent-picker'),
+    // ⚠️ 选择条是 Composer2(.t2c)的**兄弟**、同住 .composer-anchor —— 老选择器 `.t2c .agent-picker`
+    // 永远匹配不到,这条断言一直是假绿(轨道方案 P1 顺手纠正)。
+    agentStrips: visibleCount('.composer-anchor .agent-select-strip'),
   }
 }
 
@@ -178,8 +180,8 @@ async function main() {
       JSON.stringify(st))
     check('2b 开着 work 会话切 Chat → 主区变成新对话空态,且不露出项目选择器', st.activeRow === '' && st.projectBar === 0, JSON.stringify({ activeRow: st.activeRow, projectBar: st.projectBar }))
     check('2c Chat 模式不露出「添加本地工作区」(Work 的事)', st.addWs === 0, `addWs=${st.addWs}`)
-    check('2d Chat 输入区不显示模式胶囊、上下文圆环和 Agent 选择器', st.composerModeChips === 0 && st.contextRings === 0 && st.agentPickers === 0,
-      JSON.stringify({ composerModeChips: st.composerModeChips, contextRings: st.contextRings, agentPickers: st.agentPickers }))
+    check('2d Chat 输入区不显示模式胶囊、上下文圆环和 Agent 选择条', st.composerModeChips === 0 && st.contextRings === 0 && st.agentStrips === 0,
+      JSON.stringify({ composerModeChips: st.composerModeChips, contextRings: st.contextRings, agentStrips: st.agentStrips }))
     await win.locator('.model-pill-btn').click()
     await win.locator('.cm-model-row').hover()
     await win.waitForSelector('.cm-sub[data-pane="model"]', { timeout: 5_000 })
@@ -234,8 +236,8 @@ async function main() {
     await sleep(1500)
     st = await stateOf()
     check('5b 开着(最近更新的)chat 会话 reload → 恢复它、模式仍 Chat(localStorage 持久)', st.active === 'chat' && st.stored === 'chat' && st.groups === 0, JSON.stringify({ active: st.active, stored: st.stored, groups: st.groups, activeRow: st.activeRow }))
-    check('5c reload 后 Chat 输入区仍不显示模式胶囊、上下文圆环和 Agent 选择器', st.composerModeChips === 0 && st.contextRings === 0 && st.agentPickers === 0,
-      JSON.stringify({ composerModeChips: st.composerModeChips, contextRings: st.contextRings, agentPickers: st.agentPickers }))
+    check('5c reload 后 Chat 输入区仍不显示模式胶囊、上下文圆环和 Agent 选择条', st.composerModeChips === 0 && st.contextRings === 0 && st.agentStrips === 0,
+      JSON.stringify({ composerModeChips: st.composerModeChips, contextRings: st.contextRings, agentStrips: st.agentStrips }))
     // 暗色:用户明暗偏好的真源是 forsion_theme_pref(themeStore persistPref;forced_scheme 只是首屏防闪的派生提示,会被 apply 抹掉),
     // 落盘后 reload,装载器按它重算 token(只改 html[data-mode] 不重算,截出来还是亮的)。
     await win.evaluate(`localStorage.setItem('forsion_theme_pref', 'dark')`)

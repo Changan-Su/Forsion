@@ -201,7 +201,7 @@ export interface SpaceDefinition {
    *  只有主区内容天然对应某个侧栏档的 Space 才设(如 Amadeus → 'notes';Inbox → 收件箱列表源 'plugin:inbox:messages',
    *  2026-09-11 —— 列表源不在场时宿主退回缺省档)。
    *  右栏不受此影响(恒为 'files' = 参考/附件栏)。硬规则见 frontend/src/views/workspaceMode.ts。 */
-  autoWorkspaceMode?: 'sessions' | 'files' | 'notes' | `plugin:${string}`
+  autoWorkspaceMode?: 'orbits' | 'sessions' | 'files' | 'notes' | `plugin:${string}`
 }
 
 /** 插件契约 —— Amadeus PluginContext 的超集(加了 registerView / registerRibbonIcon)。 */

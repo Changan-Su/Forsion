@@ -37,6 +37,7 @@ import './composer2.css'
 
 registerMessages({
   'input.agentSwitch.section': { zh: '切换 Agent', en: 'Switch agent' },
+  'input.mention.projectNote': { zh: '派往项目 · 在该项目新建会话开工', en: 'Dispatch to project · starts a new session there' },
   // Chat / Work 是会话事实;可见切换统一放在侧栏胶囊。
   'input.presetChat': { zh: 'Chat', en: 'Chat' }, // 产品词,中英同形(与侧栏胶囊 sidebar.mode.* 同一套)
   'input.presetWork': { zh: 'Work', en: 'Work' },
@@ -241,7 +242,9 @@ export const Composer2: React.FC<{
   onBranch?: () => void
   onOpenSettings?: () => void
   onExecConfigChange: (patch: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd'>) => void
-  onSend: (text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[] }) => Promise<boolean>
+  onSend: (text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }) => Promise<boolean>
+  /** 私聊会话(Agent 轨道):@ 候选池换成本机项目(派遣,方案 §5.4);给了非空数组即视为私聊。 */
+  mentionProjects?: Array<{ name: string; path: string }>
   onStop: () => void
   quotedText?: string
   onClearQuote?: () => void
@@ -284,7 +287,7 @@ export const Composer2: React.FC<{
   verifyCommand, onVerifyCommandChange,
   preset, onPresetChange, planMode, onPlanModeChange, voiceMode, onVoiceModeChange, skills,
   groupChat, groupAgents, groupTempAgents, groupIntensity, groupMaxRounds, onGroupChange,
-  agents, onAgentSwitch, currentAgentSlug, onNewSession, onBranch, onOpenSettings,
+  agents, onAgentSwitch, currentAgentSlug, mentionProjects, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
   quotedText, onClearQuote,
   contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact,
@@ -735,12 +738,16 @@ export const Composer2: React.FC<{
   useEffect(() => { setSlashIndex(0) }, [slash?.start, slash?.token])
 
   const inGroup = !!groupChat && (groupAgents?.length || 0) >= 2
+  const [mentionedProjects, setMentionedProjects] = useState<Array<{ name: string; path: string }>>([])
+  const projectMode = !!mentionProjects?.length
   const mentionPool = useMemo<NormalAgentDef[]>(() => {
+    // 私聊:候选 = 项目(借 NormalAgentDef 的 slug/name/description 三个字段承载,slug = 路径;不进 delegate 池)。
+    if (projectMode) return (mentionProjects || []).map((p) => ({ slug: p.path, name: p.name, description: p.path } as NormalAgentDef))
     if (!inGroup) return agents || []
     const saved = (agents || []).filter((a) => groupAgents!.includes(a.slug))
     const seen = new Set(saved.map((a) => a.slug))
     return [...saved, ...(groupTempAgents || []).filter((a) => !seen.has(a.slug))]
-  }, [inGroup, agents, groupAgents, groupTempAgents])
+  }, [inGroup, agents, groupAgents, groupTempAgents, projectMode, mentionProjects])
   const mention = useMemo(() => {
     if (disabled || slashOpen || mentionDismissed) return null
     const m = /(?:^|\s)@([^\s@]*)$/.exec(draft.slice(0, cursorPos))
@@ -760,7 +767,8 @@ export const Composer2: React.FC<{
     const insert = `@${a.name} `
     const next = before + insert + draft.slice(cursorPos)
     setDraft(next)
-    if (inGroup) setMentionedSlug(a.slug)
+    if (projectMode) setMentionedProjects((prev) => (prev.some((p) => p.path === a.slug) ? prev : [...prev, { name: a.name, path: a.slug }]))
+    else if (inGroup) setMentionedSlug(a.slug)
     else setMentionAgents((prev) => (prev.includes(a.slug) ? prev : [...prev, a.slug]))
     const caret = before.length + insert.length
     requestAnimationFrame(() => {
@@ -976,9 +984,11 @@ export const Composer2: React.FC<{
       return
     }
     setHint(null)
-    const mentions = inGroup
-      ? { priorityAgent: mentionedSlug || undefined }
-      : { mentionAgents: mentionAgents.length ? mentionAgents : undefined }
+    const mentions = projectMode
+      ? { mentionProjects: mentionedProjects.length ? mentionedProjects : undefined }
+      : inGroup
+        ? { priorityAgent: mentionedSlug || undefined }
+        : { mentionAgents: mentionAgents.length ? mentionAgents : undefined }
     void onSend(outgoing, attachments, wsFiles, pinnedSkills.map((s) => s.id), mentions).then((accepted) => {
       if (!accepted) return
       setDraft('')
@@ -989,6 +999,7 @@ export const Composer2: React.FC<{
       setPinnedSkills([])
       setMentionedSlug('')
       setMentionAgents([])
+      setMentionedProjects([])
       onClearQuote?.()
       requestAnimationFrame(autoGrow)
     })
@@ -1348,7 +1359,7 @@ export const Composer2: React.FC<{
           )}
           {mentionActive && !refActive && ( /* [[ 内打 @ 时两菜单可同时命中,文件引用优先(与 onKeyDown 一致) */
             <div className="t2c-menu">
-              <div className="t2c-menu-sec">{inGroup ? t('input.mention.groupNote') : t('input.mention.delegateNote')}</div>
+              <div className="t2c-menu-sec">{projectMode ? t('input.mention.projectNote') : inGroup ? t('input.mention.groupNote') : t('input.mention.delegateNote')}</div>
               {mentionMatches.map((a, i) => (
                 <button
                   key={a.slug}

@@ -471,6 +471,10 @@ export interface AgentConfig {
   groupChat?: boolean
   /** 团队运行模式(两条轨道共用):meeting=会议(固定发言序 + 投票);collab=协作(被 @ 者优先、无人点名即停)。缺省 meeting;可变、不锁。 */
   teamMode?: 'meeting' | 'collab'
+  /** run 事实(不落库):私聊里 @ 了的项目(引擎据此注入派遣指令,start_project_session)。 */
+  mentionedProjects?: Array<{ name: string; path: string }>
+  /** run 事实(不落库):团队首个 run 的播种源会话(私聊里拉起群聊 → 私聊摘要进团队首会话,拍板 ⑬);只由 send() 按 seedOnceBySession 带一次。 */
+  groupSeedSessionId?: string
   /** 轨道身份(会话事实,建会话写一次、跑过一轮即锁,引擎侧存值为准):私聊 Agent。 */
   soloAgentSlug?: string
   /** 轨道身份:私聊外部引擎(Codex / PI 等 CLI 视作特殊的独立 Agent)。 */

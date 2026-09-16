@@ -12,13 +12,15 @@ import { amadeusAvailable, sessionsAvailable } from '../features/runtime'
 import { useMemo, useState, useEffect, useReducer, useRef, type ReactNode } from 'react'
 import { useWorkspace, activeMainPanel, scheduleWorkspaceSave, useSpaceStore, getView } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
-import { Check, ChevronDown, FileText, Folder, Search } from 'lucide-react'
+import { Check, ChevronDown, FileText, Folder, Search, X } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { ListAction, ListItem, ListSourceContribution } from '@amadeus/plugins/types'
 import { useApp } from '../stores/appStore'
 import { registerMessages, useI18n } from '../i18n'
 import { useShallow } from 'zustand/react/shallow'
 import { SessionsView } from './SessionsView'
+// TODO(簇 C):OrbitsView = 新版会话侧栏(轨道体系 P1),由另一簇创建;契约 props = { sideFilter?: 'local' | 'cloud' }。
+import { OrbitsView } from './OrbitsView'
 import { TocView } from './RightViews'
 import { FilesPanel } from './chat2/FilesPanel'
 import { PATHS_MIME as DRAG_MIME } from './chat2/chatDragRef'
@@ -36,6 +38,15 @@ import { ensureAmadeusReady } from '../amadeusPlugins'
 registerMessages({
   'wsview.all': { zh: '全部', en: 'All' },
   'wsview.noMatches': { zh: '没有匹配项', en: 'No matches' },
+  // 新旧两个会话档并存:新档(轨道侧栏)占「会话」这个名字,旧档降为「会话(旧)」——
+  // 档位 id 仍是 'sessions'(布局持久化键,发版即冻结),只改文案。
+  'workspace.mode.orbits': { zh: '会话', en: 'Sessions' },
+  'workspace.mode.sessionsLegacy': { zh: '会话(旧)', en: 'Sessions (legacy)' },
+  // 旧档顶部的升级提示条(存量用户手选过旧档 → 不迁移 params.mode,只给一条可点的路,方案 §11 ⑥)。
+  'workspace.legacyHint': { zh: '已有新版会话侧栏', en: 'A new sessions sidebar is available' },
+  'workspace.legacyHint.switch': { zh: '切换', en: 'Switch' },
+  // 纯图标的 × 需要可访问名;消隐只管这一次会话,故 zh 写「关闭」而非「不再提示」(后者是持久化承诺)。
+  'workspace.legacyHint.dismiss': { zh: '关闭', en: 'Dismiss' },
 })
 
 /** 当前活动主 leaf 的视图类型(订阅 mainTabs 驱动重算;焦点在侧栏时 activeMainPanel 有组内回退)。 */
@@ -112,14 +123,24 @@ function FilesBody({ vaultCtx, sideFilter }: { vaultCtx: { root: string; noteDir
 
 const MODE_KEYS: Array<{ id: WorkspaceMode | 'auto'; label: string }> = [
   { id: 'auto', label: 'workspace.mode.auto' },
-  { id: 'sessions', label: 'workspace.mode.sessions' },
+  { id: 'orbits', label: 'workspace.mode.orbits' },
+  { id: 'sessions', label: 'workspace.mode.sessionsLegacy' },
   { id: 'files', label: 'workspace.mode.files' },
   { id: 'notes', label: 'workspace.mode.notes' },
 ]
 
+/** 档位 → 文案键:必须查 MODE_KEYS 而不是拼 `workspace.mode.${mode}` —— 旧档的键名(sessions)
+ *  与文案键(sessionsLegacy)从此不同名,拼串会让触发器把旧档也显示成「会话」,与新档撞名。
+ *  插件列表源不在表内,回落原来的拼串路(它们本来就由 src.title 接管,不走这里)。 */
+const modeLabelKey = (mode: WorkspaceModeEx): string =>
+  MODE_KEYS.find((m) => m.id === mode)?.label ?? `workspace.mode.${mode}`
+
 export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?: WorkspaceModeEx }) {
   const { t } = useI18n()
   const [modeMenuOpen, setModeMenuOpen] = useState(false)
+  // 旧档提示条的消隐:**只管这一次会话**(React state,不落盘)—— 存量用户手选过的档位不迁移,
+  // 提示条是他们唯一那条可点的路,下次开窗还得给。
+  const [legacyHintDismissed, setLegacyHintDismissed] = useState(false)
   const modePickerRef = useRef<HTMLDivElement>(null)
   const modeTriggerRef = useRef<HTMLButtonElement>(null)
   const hasNotes = amadeusAvailable()
@@ -134,7 +155,7 @@ export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?:
   // defaultMode:宿主给某个视图类型钉的起始档(如 inbox-list → 收件箱),布局里没存 mode 时用它(Codex 09-11 P1)。
   const raw = leaf.params.mode ?? defaultMode
   const override: WorkspaceModeEx | 'auto' =
-    (raw === 'sessions' && hasSessions) || raw === 'files' || (raw === 'notes' && hasNotes) ? raw
+    ((raw === 'sessions' || raw === 'orbits') && hasSessions) || raw === 'files' || (raw === 'notes' && hasNotes) ? raw
     : typeof raw === 'string' && raw.startsWith('plugin:') && sourceAlive(raw) ? (raw as WorkspaceModeEx)
     : 'auto'
   // 主视图无硬规则时落本 Space 的默认档(如 Amadeus → 笔记、Inbox → 收件箱列表源);缺省 sessions = 与其它 Space 一致。
@@ -147,11 +168,13 @@ export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?:
   const declaredLive = declared && (!declared.startsWith('plugin:') || sourceAlive(declared)) ? declared : null
   const auto = autoWorkspaceMode(loc, mainType, spaceAuto, declaredLive)
   const resolvedModes = resolveWorkspaceModes(override, auto, hasNotes)
-  const availableMode = (mode: WorkspaceModeEx): WorkspaceModeEx => mode === 'sessions' && !hasSessions
+  const availableMode = (mode: WorkspaceModeEx): WorkspaceModeEx => (mode === 'sessions' || mode === 'orbits') && !hasSessions
     ? hasNotes ? 'notes' : liveSources.length ? `plugin:${liveSources[0].pluginId}:${liveSources[0].item.id}` : 'files'
     : mode
   const automaticMode = availableMode(resolvedModes.automatic)
   const mode = availableMode(resolvedModes.active)
+  // 生效档是旧「会话(旧)」时给一行升级提示(方案 §11 ⑥:不迁 params.mode,只给一条可点的路)。
+  const showLegacyHint = mode === 'sessions' && hasSessions && !legacyHintDismissed
 
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const activePage = usePageStore((s) => s.activePage ?? s.activeNotePath) // v4 不设 activePage
@@ -172,14 +195,14 @@ export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?:
     : null
 
   const modeOptions = [
-    ...MODE_KEYS.filter((m) => (m.id !== 'notes' || hasNotes) && (m.id !== 'sessions' || hasSessions)).map((m) => ({ id: m.id as WorkspaceModeEx | 'auto', text: t(m.label) })),
+    ...MODE_KEYS.filter((m) => (m.id !== 'notes' || hasNotes) && ((m.id !== 'sessions' && m.id !== 'orbits') || hasSessions)).map((m) => ({ id: m.id as WorkspaceModeEx | 'auto', text: t(m.label) })),
     ...liveSources.map((o) => ({ id: `plugin:${o.pluginId}:${o.item.id}` as WorkspaceModeEx, text: o.item.title })),
   ]
-  const effectiveModeText = pluginSrc?.title ?? t(`workspace.mode.${mode}`)
+  const effectiveModeText = pluginSrc?.title ?? t(modeLabelKey(mode))
   const automaticPluginSrc = automaticMode.startsWith('plugin:')
     ? liveSources.find((o) => `plugin:${o.pluginId}:${o.item.id}` === automaticMode)?.item ?? null
     : null
-  const automaticModeText = automaticPluginSrc?.title ?? t(`workspace.mode.${automaticMode}`)
+  const automaticModeText = automaticPluginSrc?.title ?? t(modeLabelKey(automaticMode))
   const modeTriggerText = override === 'auto'
     ? `${t('workspace.mode.auto')} · ${automaticModeText}`
     : effectiveModeText
@@ -230,6 +253,7 @@ export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?:
 
   const body: ReactNode =
     pluginSrc ? <PluginListBody src={pluginSrc} />
+    : mode === 'orbits' ? <OrbitsView sideFilter={sideFilter} />
     : mode === 'sessions' ? <SessionsView sideFilter={sideFilter} />
     : mode === 'files' ? <FilesBody vaultCtx={vaultCtx} sideFilter={sideFilter} />
     : hasNotes ? <AmadeusPagesView />
@@ -292,6 +316,41 @@ export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?:
           </div>
         </div>
       </div>
+      {/* 旧档升级提示条(26.8px = 工作区行基准)。放在 `.t2sw-body` **之前**:body 的
+          `> * { flex: 1 }` 会把任何直接子元素撑成半屏。
+          TODO(CSS):`.t2sw-legacyhint` 的几何暂用内联样式 —— sidebar2.css 本轮归别的簇改,
+          解锁后把这几条搬进 CSS(类名已就位);颜色一律走 token,不写死色值。 */}
+      {showLegacyHint && (
+        <div
+          className="t2sw-legacyhint"
+          style={{ flex: '0 0 26.8px', height: '26.8px', display: 'flex', alignItems: 'center', gap: 6, padding: '0 7.5px', background: 'var(--overlay-light, rgba(127, 127, 127, 0.08))' }}
+        >
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-muted)', fontSize: '11.5px', fontWeight: 400 }}>
+            {t('workspace.legacyHint')}
+          </span>
+          {/* 与档位菜单同一条路:pickMode 已经做了 setParams + scheduleWorkspaceSave。
+              两枚小按钮借同文件内的 `.t2sw-plug-mini`(本视图的小文字按钮)**只为 hover 底色** ——
+              它的 `margin-left:auto` 与 `:hover{color:var(--text)}` 都被这里的内联值压掉。 */}
+          <button
+            type="button"
+            className="t2sw-legacyhint-btn t2sw-plug-mini"
+            style={{ marginLeft: 0, color: 'var(--accent-ink)', fontSize: '11.5px' }}
+            onClick={() => pickMode('orbits')}
+          >
+            {t('workspace.legacyHint.switch')}
+          </button>
+          <button
+            type="button"
+            className="t2sw-legacyhint-x t2sw-plug-mini"
+            style={{ marginLeft: 0, color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center' }}
+            title={t('workspace.legacyHint.dismiss')}
+            aria-label={t('workspace.legacyHint.dismiss')}
+            onClick={() => setLegacyHintDismissed(true)}
+          >
+            <X size={12} aria-hidden />
+          </button>
+        </div>
+      )}
       <div className="t2sw-body">{body}</div>
     </div>
   )
