@@ -7,6 +7,7 @@
  * window.tangu 用假桥:广播像真 IPC 一样「没人订阅就丢」,这样负对照(把注册挪回 await 之后)真会红。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { PRODUCT } from '../product'
 
 const testConnection = vi.fn<(c: { backendUrl: string; token: string }) => Promise<{ ok: boolean; message: string; authRejected?: boolean }>>()
 vi.mock('../services/agentRunService', async (importOriginal) => ({
@@ -180,5 +181,17 @@ describe('appStore.boot:非 host(web/移动端)的首启引导', () => {
     arm({ mode: 'external', host: false })
     await bootNow()
     expect(useApp.getState().onboarding).toBe(false)
+  })
+
+  it('部署产品禁用引导:首次访问和未读版本都直接进入插件', async () => {
+    const previous = PRODUCT.onboarding
+    PRODUCT.onboarding = false
+    try {
+      vi.stubGlobal('localStorage', { getItem: () => null, setItem: () => {} })
+      arm({ mode: 'external', host: false })
+      ;(globalThis as any).window.tangu.appVersion = async () => 'new-unit-version'
+      await bootNow()
+      expect(useApp.getState().onboarding).toBe(false)
+    } finally { PRODUCT.onboarding = previous }
   })
 })

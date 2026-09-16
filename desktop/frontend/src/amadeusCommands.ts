@@ -1,3 +1,4 @@
+import { amadeusAvailable } from './features/runtime'
 /** Amadeus Space 的命令集:进入 Space 时注册进 engine 命令面板(mod+k),离开时撤销
  *  (engine 命令是全局平面列表,没有 Space 作用域,只能 add/remove 手动圈地)。
  *  mod+n 在 Space 内让位给「新建笔记」:进入时摘下 new-chat、离开时原样放回;
@@ -48,6 +49,7 @@ const CMDS: Command[] = [
 
 /** 打开(或聚焦)左栏全文搜索。旧引擎只激活已存在面板,后半段保留为跨版本兜底。 */
 export function openSearchView(): void {
+  if (!amadeusAvailable()) return
   ws().showSideView('left', 'amadeus-search')
   const st = useWorkspace.getState()
   const api = (st as unknown as { api?: { panels: Array<{ params?: Record<string, unknown> }> } }).api
@@ -74,6 +76,7 @@ function leave(): void {
 let installed = false
 /** 由 registerSpaces() 在 window.amadeus && dev-gate 内调用一次。 */
 export function installAmadeusCommands(): void {
+  if (!amadeusAvailable()) return
   if (installed) return
   installed = true
   const apply = (id: string | null | undefined): void => { if (id === 'amadeus') enter(); else leave() }

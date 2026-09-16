@@ -26,8 +26,7 @@ function showMessage(text: string): void {
   el.appendChild(d)
 }
 
-async function boot(token: string): Promise<void> {
-  const api = getApiBase()
+async function boot(token: string, api = getApiBase()): Promise<void> {
   const base = `${api}/amadeus/public/shares/${encodeURIComponent(token)}`
   let meta: ShareMeta
   try {
@@ -59,8 +58,8 @@ async function boot(token: string): Promise<void> {
   m.mountShareViewer({ token, base, meta, tree, onCurrentChange: (p) => { shared.current = p } })
 }
 
-export function mountSharePage(token: string): void {
-  boot(token).catch((e) => {
+export function mountSharePage(token: string, options?: { apiBase: string }): void {
+  boot(token, options?.apiBase).catch((e) => {
     console.error('[share] boot failed:', e)
     showMessage(translate('sharepage.loadFailed'))
   })

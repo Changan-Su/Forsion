@@ -40,6 +40,18 @@ function isRealDir(p: string): boolean {
 export function bundleDirs(): string[] {
   if (process.env.TANGU_PLUGINS === 'off') return [];
   if (process.env.TANGU_PLUGINS_DIR) return []; // 显式覆盖 = 只认那一个目录(云端/docker 形态)
+  // Unit passes only active, validated package roots. An explicit empty list must
+  // stay empty rather than discovering disabled installations in the shared directory.
+  if (process.env.TANGU_BUNDLE_DIRS !== undefined) {
+    let roots: unknown;
+    try { roots = JSON.parse(process.env.TANGU_BUNDLE_DIRS); } catch {
+      throw new Error('TANGU_BUNDLE_DIRS must be a JSON array of absolute package paths');
+    }
+    if (!Array.isArray(roots) || roots.some((root) => typeof root !== 'string' || !path.isAbsolute(root))) {
+      throw new Error('TANGU_BUNDLE_DIRS must be a JSON array of absolute package paths');
+    }
+    return [...new Set(roots as string[])].filter((root) => isRealDir(root) && existsSync(path.join(root, 'manifest.json'))).sort();
+  }
   const root = path.join(forsionSharedDir(), 'plugins');
   let names: string[];
   try {

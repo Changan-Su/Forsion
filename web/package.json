@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
     "prepare-fonts": "node ../desktop/build/gen-fonts.cjs --out public/fonts",
-    "prepare-assets": "npm run prepare-board && npm run prepare-fonts"
+    "prepare-assets": "npm run prepare-board && npm run prepare-fonts",
+    "check:dockerctx": "node scripts/docker-context-build.mjs"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "npm:@zsviczian/excalidraw@0.18.122",

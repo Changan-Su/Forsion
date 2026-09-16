@@ -30,6 +30,12 @@ COPY desktop/CHANGELOG.md ./desktop/CHANGELOG.md
 COPY desktop/build/copy-excalidraw-assets.cjs ./desktop/build/copy-excalidraw-assets.cjs
 # 同理:UI 字体预设的裁剪脚本(web 的 prepare-fonts 调它,产物 public/fonts 也不入库)。
 COPY desktop/build/gen-fonts.cjs ./desktop/build/gen-fonts.cjs
+# web/vite.config.ts 顶层 import '../unit/releasePolicy.mjs'(Unit 发行时校验打包输入;镜像里不启用,但顶层 import 照样求值,
+# 缺了它 vite 连配置都加载不了 → 整个 build 红)。只拷这一个文件,别把 unit/ 整目录带进上下文。
+COPY unit/releasePolicy.mjs ./unit/releasePolicy.mjs
+# desktop/shared/product.ts(Unit 分支起共享的产品档案)静态 import ../products/forsion.json;main 上旧的 frontend/product.ts
+# 是把回退档案写死在源码里的,所以以前不需要这一层。三个 json 都拷,products.test.ts 无害。
+COPY desktop/products ./desktop/products
 COPY web ./web
 RUN cd web && npm run build   # vite 经 /app/node_modules 解析全部依赖 → /app/web/dist(base '/')
 

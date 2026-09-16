@@ -16,8 +16,10 @@ import { extname, normalize, sep } from 'node:path'
 import { readFile, realpath } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
 import type { AddressInfo } from 'node:net'
-import { IPC } from '@amadeus-shared/ipc'
+import type { Duplex } from 'node:stream'
+import { IPC } from '../shared/amadeus/ipc'
 import type { VaultFace } from './amadeus/ipc'
+import { PRODUCT, type ProductProfile } from './product'
 
 export interface PairedDevice { id: string; name: string; tokenHash: string; createdAt: number }
 
@@ -38,7 +40,7 @@ export const VAULT_RPC_ALLOW: ReadonlySet<string> = new Set([
   IPC.emptyTrash, IPC.pageIcons, IPC.fetchLinkMeta, IPC.searchImages, IPC.dbRead, IPC.dbWrite,
   IPC.dbWriteCas, IPC.drawingRead, IPC.drawingWrite, IPC.readTextFile, IPC.writeTextFile,
   IPC.listPageProps, IPC.setPageFrontmatter, IPC.renamePageFile, IPC.renameDbFile,
-  IPC.pluginDataRead, IPC.pluginDataWrite,
+  IPC.pluginDataRead, IPC.pluginDataWrite, IPC.patchMark,
 ])
 
 /** RPC 里字节参数/返回值的 JSON 包裹形态(Uint8Array ↔ base64)。 */
@@ -50,6 +52,13 @@ const encodeRpcResult = (r: unknown): unknown =>
   r instanceof Uint8Array ? { __u8: Buffer.from(r).toString('base64') } : r
 
 export interface UnitWebDeps {
+  account?: {
+    metadata: () => { apiBase: string; loginPath: string } | undefined
+    handle: (path: string, req: http.IncomingMessage, res: http.ServerResponse) => Promise<boolean>
+  }
+  /** Optional generic backend contributions. true means the request was accepted. */
+  routeRequest?: (req: http.IncomingMessage, res: http.ServerResponse) => boolean | Promise<boolean>
+  routeUpgrade?: (req: http.IncomingMessage, socket: Duplex, head: Buffer) => boolean
   /** 本机 managed 引擎(未就绪 url=null → /engine 回 503)。 */
   getEngine: () => { url: string | null; token: string }
   /** B 侧原生确认框:展示设备名+6 位码,用户点允许=true。 */
@@ -74,6 +83,8 @@ export interface UnitWebDeps {
   readHostDir: (p: string) => Promise<Array<{ name: string; isDir: boolean; size: number; path: string }> | null>
   readHostStat: (p: string) => Promise<{ isDir: boolean; mtimeMs: number; birthtimeMs: number | null; files?: number; folders?: number } | null>
   meta: { instanceId: string; name: string; version: string }
+  /** Explicit web publishing only exposes code/layout. Host data keeps the pairing boundary. */
+  projection?: { mode: 'public' | 'local'; basePath: string; product: ProductProfile; capabilities?: () => object; localCapabilities?: () => { vault: boolean; engine: boolean; host: boolean } }
   /** P2P 应答(方案 §12,可缺省):收 offer SDP 出 answer SDP,DataChannel 开门后由主进程把
    *  信道接到本机 unitWeb(attachHostChannel)。缺省 = 本端不支持 P2P,路由回 501。 */
   p2pAnswer?: (offerSdp: string) => Promise<string>
@@ -121,6 +132,9 @@ const PLACEHOLDER = `<!doctype html><meta charset="utf-8"><title>Forsion Unit</t
 <p>或设置环境变量 <code>TANGU_UNIT_WEB_DIST</code> 指向已有的 web 构建目录后重启 Forsion。</p></body>`
 
 export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?: string }): Promise<UnitWebHandle> {
+  if (deps.projection && !/^\/(?:[a-zA-Z0-9_-]+\/)*$/.test(deps.projection.basePath)) {
+    throw new Error('Projection basePath must be an absolute path ending in /')
+  }
   const internalSecret = randomUUID()
   const pending = new Map<string, PendingPair>()
   const pendingByIp = new Map<string, string>()
@@ -235,11 +249,16 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     const norm = normalize(rel).replace(/^([/\\])+/, '')
     if (norm.startsWith('..')) { json(res, 400, { detail: 'bad path' }); return }
     try {
-      let buf = await readFile(`${dist}/${norm}`)
+      const [rootReal, fileReal] = await Promise.all([realpath(dist), realpath(`${dist}/${norm}`)])
+      if (!fileReal.startsWith(rootReal + sep)) { json(res, 404, { detail: 'not found' }); return }
+      let buf = await readFile(fileReal)
       const ext = extname(norm)
       if (norm === 'index.html') {
         // 注入 unit 标记 + 元数据:同一份 web 构建两用,web/src/main.tsx 据此在登录跳转之前改装 unitShim。
-        const inject = `<script>window.__FORSION_UNIT_PAGE__=${JSON.stringify({ instanceId: deps.meta.instanceId, name: deps.meta.name, version: deps.meta.version })}</script>`
+        const encode = (value: unknown): string => JSON.stringify(value).replace(/</g, '\\u003c')
+        const meta = { ...deps.meta, ...(deps.projection ? { projection: deps.projection.mode, browserStorage: deps.projection.mode === 'public', account: deps.account?.metadata(), capabilities: deps.projection.capabilities?.(), localCapabilities: deps.projection.mode === 'local' ? deps.projection.localCapabilities?.() : undefined } : {}) }
+        const baseTag = deps.projection ? `<base href="${deps.projection.basePath}">` : ''
+        const inject = `${baseTag}<script>window.__FORSION_UNIT_PAGE__=${encode(meta)};window.__FORSION_PRODUCT_RUNTIME__=${encode(deps.projection?.product ?? PRODUCT)}</script>`
         let html = buf.toString('utf8').replace(/<head>/i, `<head>${inject}`)
         // ⚠️ 设备页必须放行 'unsafe-eval':插件宿主用 new Function 求值插件代码,而 web 构建的
         // CSP(script-src 'self' 'unsafe-inline')没它 —— 19 个插件会**全部** setup 失败,页面看起来
@@ -269,16 +288,39 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
   }
 
   const handler = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
+    if (await deps.routeRequest?.(req, res)) return
     gc()
-    const url = req.url || '/'
+    let url = req.url || '/'
+    if (deps.projection) {
+      const prefix = deps.projection.basePath.replace(/\/$/, '')
+      if (url === prefix || url.startsWith(prefix + '?')) {
+        res.writeHead(308, { Location: prefix + '/' + url.slice(prefix.length) }); res.end(); return
+      }
+      if (url.startsWith(prefix + '/')) url = url.slice(prefix.length)
+    }
     const path = url.split('?')[0]
     const ip = req.socket.remoteAddress || 'unknown'
 
+    // A published shell is a website. It publishes installed plugin code and layouts,
+    // never the publisher's vault, engine, credentials, settings, or pairing endpoints.
+    if (deps.projection?.mode === 'public') {
+      if (await deps.account?.handle(path, req, res)) return
+      if (req.method !== 'GET' && req.method !== 'HEAD') { json(res, 405, { detail: 'Read-only projection' }); return }
+      if (path === '/unit/whoami') { json(res, 200, { ok: true, scope: 'shell' }); return }
+      if (path === '/unit/plugins') { json(res, 200, { appVersion: deps.meta.version, plugins: await deps.readPlugins() }); return }
+      if (path === '/unit/spaces') { json(res, 200, { spaces: await deps.readSpaces() }); return }
+      if (path === '/unit/config') { json(res, 200, { config: {} }); return }
+      if (path === '/unit/providers') { json(res, 200, { providers: [] }); return }
+      if (path === '/unit/meta') { json(res, 200, { ...deps.meta, pair: false, projection: 'public', account: deps.account?.metadata(), capabilities: deps.projection?.capabilities?.() }); return }
+      if (/^\/(?:unit|vault|engine)(?:\/|$)/.test(path)) { json(res, 403, { detail: 'Host capability is not published' }); return }
+    }
+
     // ── 公开面(无鉴权):元数据 / 配对流 / 静态壳(壳只是代码,数据面全在鉴权后) ──
     if (path === '/unit/meta' && req.method === 'GET') {
-      json(res, 200, { ...deps.meta, pair: true })
+      json(res, 200, { ...deps.meta, pair: !deps.projection, ...(deps.projection?.mode === 'local' ? { projection: 'local', localCapabilities: deps.projection.localCapabilities?.() } : {}) })
       return
     }
+    if (deps.projection?.mode === 'local' && path.startsWith('/unit/pair/')) { json(res, 403, { detail: 'Use the workspace owner access key' }); return }
     if (path === '/unit/pair/request' && req.method === 'POST') {
       const prevId = pendingByIp.get(ip)
       if (prevId && pending.get(prevId)?.status === 'pending') { json(res, 429, { detail: '已有待确认的配对请求', code: 'PAIR_PENDING' }); return }
@@ -503,13 +545,18 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
   })
 
   return new Promise((resolve, reject) => {
+    if (deps.routeUpgrade) server.on('upgrade', (req, socket, head) => {
+      if (!deps.routeUpgrade!(req, socket, head)) socket.destroy()
+    })
+    const sockets = new Set<Duplex>()
+    server.on('connection', (socket) => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)) })
     server.once('error', reject)
     server.listen(opts.port, opts.bindHost ?? '0.0.0.0', () => {
       const { port } = server.address() as AddressInfo
       resolve({
         port,
         internalSecret,
-        close: () => new Promise<void>((r) => { server.close(() => r()); server.closeAllConnections?.() }),
+        close: () => new Promise<void>((r) => { server.close(() => r()); for (const socket of sockets) socket.destroy() }),
       })
     })
   })

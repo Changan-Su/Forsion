@@ -6,10 +6,16 @@
 import { subscribePresence, type PresenceUser } from './cloudPresence'
 import { ensureActiveVault, ACTIVE_VAULT_KEY } from './cloudBridge'
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
+import { cloudAccountIdentity } from '@/services/cloudAccountCache'
 
 export interface CollabCfg {
   apiBase: string
   getToken(): string
+  request?(path: string, init?: RequestInit): Promise<Response>
+  getUserId?(): string
+  signal?: AbortSignal
+  /** Unit projections own share/invite routes below their projection base. */
+  linkBase?: string
 }
 
 const j = async <T>(res: Response): Promise<T> => {
@@ -26,18 +32,40 @@ const j = async <T>(res: Response): Promise<T> => {
 
 export function installCloudCollab(cfg: CollabCfg): void {
   const activeVaultKey = contentStorageKey(ACTIVE_VAULT_KEY)
-  const call = async <T>(method: string, path: string, body?: unknown): Promise<T> =>
-    j<T>(await fetch(`${cfg.apiBase}/amadeus${path}`, {
+  const initialToken = cfg.getToken()
+  const owner = cloudAccountIdentity(cfg.apiBase, initialToken)
+  const assertActive = () => {
+    const token = cfg.getToken()
+    if (cfg.signal?.aborted || !token || (owner ? cloudAccountIdentity(cfg.apiBase, token) !== owner : token !== initialToken)) {
+      throw new Error('Cloud account changed')
+    }
+    return token
+  }
+  const call = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
+    const token = assertActive()
+    const controller = new AbortController()
+    const cancel = () => controller.abort(cfg.signal?.reason)
+    cfg.signal?.addEventListener('abort', cancel, { once: true })
+    const timer = setTimeout(() => controller.abort(), 20_000)
+    try {
+      const result = await j<T>(await (cfg.request ?? fetch)(`${cfg.apiBase}/amadeus${path}`, {
       method,
       headers: {
-        Authorization: `Bearer ${cfg.getToken()}`,
+        Authorization: `Bearer ${token}`,
         ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
       // 桌面端 collabMain 每个请求都挂 20s 超时;这里对齐 —— 否则某个 vault 的连接建起来却不回,
       // listAllShares 的串行循环会永远卡在那一库,Public View 一直转圈。
-      signal: AbortSignal.timeout(20_000),
+      signal: controller.signal,
     }))
+      assertActive()
+      return result
+    } finally {
+      clearTimeout(timer)
+      cfg.signal?.removeEventListener('abort', cancel)
+    }
+  }
 
   const vid = (): Promise<string> => ensureActiveVault()
 
@@ -48,7 +76,7 @@ export function installCloudCollab(cfg: CollabCfg): void {
    * 取服务端 AMADEUS_WEB_ORIGIN(desktop collabMain.linkBase 同款端点),失败才回落同源。
    * 同步 API(inviteUrl/publishUrl)读缓存,故装配时就预热一次。
    */
-  let linkBaseCache: string | null = null
+  let linkBaseCache: string | null = cfg.linkBase?.replace(/\/+$/, '') || null
   const primeLinkBase = async (): Promise<string> => {
     if (linkBaseCache) return linkBaseCache
     try {
@@ -60,9 +88,11 @@ export function installCloudCollab(cfg: CollabCfg): void {
     return linkBaseCache
   }
   const linkBase = (): string => linkBaseCache ?? location.origin
-  void primeLinkBase() // 预热:同步的 inviteUrl/publishUrl 只能读缓存
+  if (!cfg.signal?.aborted) void primeLinkBase() // 预热:同步的 inviteUrl/publishUrl 只能读缓存
 
   const myUserId = (): string | null => {
+    assertActive()
+    if (cfg.getUserId) return cfg.getUserId()
     try {
       const payload = cfg.getToken().split('.')[1]
       const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')))
@@ -74,13 +104,14 @@ export function installCloudCollab(cfg: CollabCfg): void {
 
   let hbTimer: ReturnType<typeof setInterval> | null = null
   let hbPage: string | null = null
+  const stopHeartbeat = () => {
+    if (hbTimer) { clearInterval(hbTimer); hbTimer = null }
+  }
+  cfg.signal?.addEventListener('abort', stopHeartbeat, { once: true })
   const beat = (): void => {
+    if (cfg.signal?.aborted) return
     void vid().then((v) =>
-      fetch(`${cfg.apiBase}/amadeus/vaults/${encodeURIComponent(v)}/presence`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${cfg.getToken()}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ page: hbPage }),
-      }),
+      call('POST', `/vaults/${encodeURIComponent(v)}/presence`, { page: hbPage }),
     ).catch(() => {})
   }
 
@@ -88,6 +119,7 @@ export function installCloudCollab(cfg: CollabCfg): void {
     listVaults: () => call<{ vaults: any[] }>('GET', '/vaults').then((r) => r.vaults),
     activeVaultId: vid,
     switchVault(id: string) {
+      assertActive()
       try { localStorage.setItem(activeVaultKey, id) } catch { /* ignore */ }
       location.reload()
     },
@@ -154,13 +186,12 @@ export function installCloudCollab(cfg: CollabCfg): void {
     },
     // ── presence ──
     heartbeat(page: string | null) {
+      assertActive()
       hbPage = page
       beat()
       if (!hbTimer) hbTimer = setInterval(beat, 30_000)
     },
-    stopHeartbeat() {
-      if (hbTimer) { clearInterval(hbTimer); hbTimer = null }
-    },
+    stopHeartbeat,
     onPresence: (cb: (list: PresenceUser[]) => void) => subscribePresence(cb),
     myUserId,
   }

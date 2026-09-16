@@ -1,0 +1,12 @@
+{
+  "id": "basic",
+  "displayName": "Forsion Basic",
+  "appId": "com.forsion.basic",
+  "productName": "Forsion Basic",
+  "artifactPrefix": "ForsionBasic",
+  "defaultSpace": "home",
+  "spaces": ["home"],
+  "agentBackend": false,
+  "market": true,
+  "unit": true
+}

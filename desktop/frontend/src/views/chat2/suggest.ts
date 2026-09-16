@@ -49,6 +49,9 @@ export interface TaskCard {
   title: string
   tldr?: string
   track?: boolean
+  /** Muse TODO 的行 id(引擎在 add_muse_todo 的收件箱投影里写 `todo: <id>`):落点回写这条 TODO,「交给 Muse」= 批准它去做(见 taskLanding)。
+   *  只有调用方显式开 `todo` 才解析(收件箱里 Muse 自己的信);别处的 `todo:` 按未知键忽略 —— 别的 agent 不能冒充 Muse 的待办。 */
+  todo?: string
   prompt: string
 }
 
@@ -78,7 +81,7 @@ export interface Suggestions {
 const FRESH = (): SuggestState => ({ fence: 0, fenceChar: '', kind: null, pending: [] })
 
 /** 围栏正文(不含开栏行)→ 任务卡;缺 title/prompt → null(整块还回正文由调用方决定:这里只认合法卡)。 */
-export function parseTaskCard(lines: string[]): TaskCard | null {
+export function parseTaskCard(lines: string[], opts?: { todo?: boolean }): TaskCard | null {
   const idx = lines.findIndex((l) => DIVIDER.test(l))
   let header: string[]
   let body: string[]
@@ -97,6 +100,7 @@ export function parseTaskCard(lines: string[]): TaskCard | null {
   let title = ''
   let tldr = ''
   let track = false
+  let todo = ''
   for (const h of header) {
     const m = HEADER.exec(h)
     if (!m) continue
@@ -104,13 +108,15 @@ export function parseTaskCard(lines: string[]): TaskCard | null {
     if (k === 'title') title = m[2]
     else if (k === 'tldr') tldr = m[2]
     else if (k === 'track') track = /^(true|yes|1)$/i.test(m[2])
+    else if (k === 'todo') todo = m[2]
     // 未知键忽略:将来加字段不破旧客户端
   }
   const prompt = body.join('\n').trim().slice(0, PROMPT_MAX)
   if (!title) title = (body.find((l) => l.trim()) || '').trim()
   title = title.trim().slice(0, TITLE_MAX)
   if (!title || !prompt) return null
-  return { title, ...(tldr ? { tldr: tldr.slice(0, TLDR_MAX) } : {}), ...(track ? { track: true } : {}), prompt }
+  // todo id 与审批 id 同一形态约束;不合法只丢这个键(卡照出,只是不回写 TODO)。
+  return { title, ...(tldr ? { tldr: tldr.slice(0, TLDR_MAX) } : {}), ...(track ? { track: true } : {}), ...(opts?.todo && APPROVAL_ID_RE.test(todo) ? { todo } : {}), prompt }
 }
 
 /** 围栏正文 → 审批行 id:认 `{"id":"…"}` JSON、`id: …` 行、或单独一行裸 id;别的 → null(整块还回正文)。 */
@@ -129,13 +135,14 @@ export function parseApprovalId(lines: string[]): string | null {
 
 /**
  * @param kinds 认哪几种围栏(缺省全部);不认的围栏按普通代码块留在正文。
+ * @param todo 任务卡的 `todo:` 头是否生效(缺省否;只有收件箱里 Muse 自己的信才开,见 InboxBody)。
  * @param streaming 后面还可能有文本(还在流式打字,或这只是消息里靠前的一段)→ 没收口的围栏先藏起来
  *                  (否则用户会先看见一段裸代码块再看它消失);整条消息**已完成且这是最后一段**却没收口 =
  *                  模型写坏了,把内容**还回正文**,绝不吞用户看得见的字。
  */
 export function splitSuggestions(
   raw: string,
-  opts?: { streaming?: boolean; state?: SuggestState; kinds?: FenceKind[] },
+  opts?: { streaming?: boolean; state?: SuggestState; kinds?: FenceKind[]; todo?: boolean },
 ): Suggestions {
   const kinds = opts?.kinds ?? DEFAULT_KINDS
   // 续读状态深拷贝 pending:调用方常把上一段的 state 存起来复用,这里就地 push 会污染它。
@@ -154,7 +161,7 @@ export function splitSuggestions(
   const close = (closingLine: string): void => {
     if (st.kind === 'suggest') for (const l of st.pending.slice(1)) take(l)
     else if (st.kind === 'task') {
-      const card = parseTaskCard(st.pending.slice(1))
+      const card = parseTaskCard(st.pending.slice(1), { todo: opts?.todo })
       if (card && tasks.length < MAX_TASKS) tasks.push(card)
       else body.push(...st.pending, closingLine) // 写坏的、或超过上限的:原样还回正文(Codex 09-11 P2:第三张不能凭空消失)
     } else if (st.kind === 'approval') {

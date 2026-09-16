@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileS
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-const fault = vi.hoisted(() => ({ read: '', rename: '', remaining: 0 }));
+const fault = vi.hoisted(() => ({ read: '', rename: '', remaining: 0, hostPlatform: process.platform }));
 vi.mock('node:fs', async (original) => {
   const fs = await original<typeof import('node:fs')>();
   return {
@@ -20,9 +20,10 @@ vi.mock('node:fs', async (original) => {
       }
       return fs.renameSync(...args);
     },
-    // Windows semantics: FlushFileBuffers on a directory handle fails, surfaced by libuv as EPERM.
+    // Emulates Windows (FlushFileBuffers on a directory handle → EPERM) when a test stubs
+    // process.platform on a POSIX host; on a real Windows host the real call runs.
     fsyncSync: (fd: number) => {
-      if (process.platform === 'win32' && fs.fstatSync(fd).isDirectory()) throw Object.assign(new Error('EPERM: operation not permitted, fsync'), { code: 'EPERM' });
+      if (process.platform === 'win32' && fault.hostPlatform !== 'win32' && fs.fstatSync(fd).isDirectory()) throw Object.assign(new Error('EPERM: operation not permitted, fsync'), { code: 'EPERM' });
       return fs.fsyncSync(fd);
     },
   };

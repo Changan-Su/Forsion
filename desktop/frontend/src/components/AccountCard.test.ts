@@ -78,3 +78,34 @@ it('reports a failed sign out instead of silently claiming success', async () =>
   await tick()
   expect(onToast).toHaveBeenCalledWith(expect.stringContaining('Cannot clear credentials'), true)
 })
+
+it('shows working sign-in and sign-out actions for a minimal Unit without unavailable account services', async () => {
+  delete window.tangu!.accountQuota
+  delete window.tangu!.authAccounts
+  delete window.tangu!.forsionSwitchAccount
+  await mount()
+  await click('Alice')
+  await tick()
+  expect(document.body.textContent).not.toContain('额度剩余')
+  expect(document.body.textContent).not.toContain('邀请好友')
+  expect(document.body.textContent).not.toContain('用户中心')
+  expect(document.body.textContent).toContain('登录其他账号')
+  expect(document.querySelector<HTMLButtonElement>('.ap-danger')).not.toBeNull()
+  await click('登录其他账号')
+  expect(window.tangu!.forsionLogin).toHaveBeenCalledOnce()
+  await click('Alice')
+  await act(async () => { document.querySelector<HTMLButtonElement>('.ap-danger')!.click() })
+  expect(window.tangu!.forsionLogout).toHaveBeenCalledOnce()
+})
+
+it('keeps usage, invite, and account-center actions when the host provides those services', async () => {
+  window.tangu!.openAccountCenter = vi.fn().mockResolvedValue({ ok: true })
+  await mount()
+  await click('Alice')
+  await tick()
+  expect(document.body.textContent).toContain('额度剩余')
+  expect(document.body.textContent).toContain('邀请好友')
+  expect(document.body.textContent).toContain('用户中心')
+  await click('邀请好友')
+  expect(window.tangu!.openAccountCenter).toHaveBeenCalledWith('points-exchange')
+})

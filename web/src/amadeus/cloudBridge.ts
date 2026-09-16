@@ -77,6 +77,8 @@ export interface CloudBridgeCfg {
   apiBase: string
   getToken(): string
   onAuthError(): void
+  request?(path: string, init?: RequestInit): Promise<Response>
+  signal?: AbortSignal
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +126,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     getToken: cfg.getToken,
     clientId,
     onUnauthorized: cfg.onAuthError,
+    request: cfg.request,
+    signal: cfg.signal,
   })
 
   // ---- vault 身份 -----------------------------------------------------------
@@ -157,6 +161,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     return vaultPromise
   }
   activeVaultResolver = ensureVault
+  if (cfg.signal) setRoster([])
 
   // ---- 页面内容缓存(SWR:切页命中立即渲染,后台比对 seq;写路径/SSE 失效) --------
   // 高 RTT(实测 ~285ms/往返)下切回看过的页零等待。值是 parsePageSource 产物,
@@ -367,15 +372,17 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   let assetToken = ''
   let assetTimer: ReturnType<typeof setTimeout> | null = null
   async function refreshAssetToken(): Promise<void> {
+    if (cfg.signal?.aborted) return
     if (assetTimer) { clearTimeout(assetTimer); assetTimer = null }
     try {
       const v = await ensureVault()
       const r = await http.post<{ token: string; ttlSec: number }>(`/amadeus/vaults/${encodeURIComponent(v)}/asset-token`)
+      if (cfg.signal?.aborted) return
       assetToken = r.token
       const ttl = Math.max(60, r.ttlSec || 600)
       assetTimer = setTimeout(() => { void refreshAssetToken() }, (ttl / 2) * 1000)
     } catch {
-      assetTimer = setTimeout(() => { void refreshAssetToken() }, 30_000) // 失败 30s 重试
+      if (!cfg.signal?.aborted) assetTimer = setTimeout(() => { void refreshAssetToken() }, 30_000) // 失败 30s 重试
     }
   }
 
@@ -396,9 +403,18 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
 
   // ---- SSE ------------------------------------------------------------------
   let stopEvents: (() => void) | null = null
+  cfg.signal?.addEventListener('abort', () => {
+    if (assetTimer) clearTimeout(assetTimer)
+    assetTimer = null
+    assetToken = ''
+    stopEvents?.()
+    stopEvents = null
+    if (activeVaultResolver === ensureVault) { activeVaultResolver = null; setRoster([]) }
+  }, { once: true })
   function startEvents(v: string): void {
-    if (stopEvents) return
+    if (stopEvents || cfg.signal?.aborted) return
     stopEvents = startCloudEvents({
+      signal: cfg.signal,
       url: () => `${cfg.apiBase}/amadeus/vaults/${encodeURIComponent(v)}/events?token=${encodeURIComponent(cfg.getToken())}`,
       clientId,
       knownSeq: (p) => seqMap.get(p),
@@ -585,6 +601,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         // startEvents 全会话只有这一次机会(restoreVault 被 amadeusBooted 门闩住)→ 失败必须重试,
         // 三次退避仍失败才 toast(评审 P2:此前静默吞错=实时同步整会话失联且用户无感知)。
         for (let attempt = 0; ; attempt++) {
+          if (cfg.signal?.aborted) return
           try {
             const v = await ensureVault()
             await fetchTree(true)
@@ -592,8 +609,14 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
             fireStructure()
             return
           } catch {
+            if (cfg.signal?.aborted) return
             if (attempt >= 2) { notify('云端连接失败,内容可能不是最新 —— 请刷新页面', true); return }
-            await new Promise((r) => setTimeout(r, [3000, 10000][attempt]))
+            await new Promise<void>((resolve) => {
+              const done = () => { clearTimeout(timer); cfg.signal?.removeEventListener('abort', done); resolve() }
+              const timer = setTimeout(done, [3000, 10000][attempt])
+              cfg.signal?.addEventListener('abort', done, { once: true })
+              if (cfg.signal?.aborted) done()
+            })
           }
         }
       })()
@@ -1062,7 +1085,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     },
     readVaultBytes: async (vaultRel) => {
       const v = await ensureVault()
-      const r = await fetch(
+      const r = await (cfg.request ?? fetch)(
         `${cfg.apiBase}/amadeus/vaults/${encodeURIComponent(v)}/asset?path=${encodeURIComponent(vaultRel)}`,
         { headers: { Authorization: `Bearer ${cfg.getToken()}` } }, // assetAuth 收 Bearer 主 token,无需等 asset-token
       )

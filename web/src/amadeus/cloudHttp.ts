@@ -28,6 +28,9 @@ export interface CloudHttpCfg {
   clientId: string
   /** 401 → 登录跳转(webShim.redirectToLogin)。 */
   onUnauthorized(): void
+  /** Optional existing host transport/session lifetime (Unit visitor adapters). */
+  request?(path: string, init?: RequestInit): Promise<Response>
+  signal?: AbortSignal
 }
 
 export interface CloudHttp {
@@ -44,7 +47,7 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
   const owner = cloudAccountIdentity(cfg.apiBase, initialToken)
   const assertAccount = (): string => {
     const token = cfg.getToken()
-    if (!token || (owner ? cloudAccountIdentity(cfg.apiBase, token) !== owner : token !== initialToken)) {
+    if (cfg.signal?.aborted || !token || (owner ? cloudAccountIdentity(cfg.apiBase, token) !== owner : token !== initialToken)) {
       throw new HttpError(409, { code: 'ACCOUNT_CHANGED' }, 'Cloud account changed')
     }
     return token
@@ -68,16 +71,19 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
     // 上传(multipart form)放宽到 120s;普通请求 30s。
     const timeoutMs = opts?.form ? 120_000 : 30_000
     const ctrl = new AbortController()
+    const cancel = () => ctrl.abort(cfg.signal?.reason)
+    cfg.signal?.addEventListener('abort', cancel, { once: true })
     const timer = setTimeout(() => ctrl.abort(), timeoutMs)
     let res: Response
     try {
-      res = await fetch(`${cfg.apiBase}${path}${qs}`, { method, headers, body, signal: ctrl.signal })
+      res = await (cfg.request ?? fetch)(`${cfg.apiBase}${path}${qs}`, { method, headers, body, signal: ctrl.signal })
     } catch (e) {
       throw new HttpError(0, null, ctrl.signal.aborted
         ? `请求超时(${timeoutMs / 1000}s),请检查网络后重试`
         : `网络错误:${e instanceof Error ? e.message : String(e)}`)
     } finally {
       clearTimeout(timer)
+      cfg.signal?.removeEventListener('abort', cancel)
     }
     assertAccount()
     if (res.status === 401) {
@@ -98,11 +104,17 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
     new Promise<T>((resolve, reject) => {
       const xhr = new XMLHttpRequest()
       const token = assertAccount()
+      const cancel = () => xhr.abort()
+      const cleanup = () => cfg.signal?.removeEventListener('abort', cancel)
       xhr.open('POST', `${cfg.apiBase}${path}`)
       xhr.setRequestHeader('Authorization', `Bearer ${token}`)
       xhr.setRequestHeader('X-Amadeus-Client', cfg.clientId)
-      xhr.upload.onprogress = (ev) => { if (ev.lengthComputable) onProgress(ev.loaded, ev.total) }
+      xhr.upload.onprogress = (ev) => {
+        try { assertAccount(); if (ev.lengthComputable) onProgress(ev.loaded, ev.total) }
+        catch (error) { xhr.abort(); reject(error) }
+      }
       xhr.onload = () => {
+        cleanup()
         try { assertAccount() } catch (error) { reject(error); return }
         if (xhr.status === 401) { cfg.onUnauthorized(); reject(new HttpError(401, null)); return }
         let parsed: unknown
@@ -110,8 +122,11 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
         if (xhr.status < 200 || xhr.status >= 300) { reject(new HttpError(xhr.status, parsed)); return }
         resolve(parsed as T)
       }
-      xhr.onerror = () => reject(new HttpError(0, null, 'network error'))
-      xhr.ontimeout = () => reject(new HttpError(0, null, 'timeout'))
+      xhr.onerror = () => { cleanup(); reject(new HttpError(0, null, 'network error')) }
+      xhr.ontimeout = () => { cleanup(); reject(new HttpError(0, null, 'timeout')) }
+      xhr.onabort = () => { cleanup(); reject(new HttpError(409, { code: 'ACCOUNT_CHANGED' }, 'Cloud request cancelled')) }
+      xhr.timeout = 120_000
+      cfg.signal?.addEventListener('abort', cancel, { once: true })
       xhr.send(form)
     })
 

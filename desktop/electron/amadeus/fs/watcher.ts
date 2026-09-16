@@ -23,6 +23,7 @@ export class VaultWatcher {
     /** 外部对**其余**文件的内容改动(片段 `.js`、附件…);ctx.app.watchFile 的数据源。
      *  ⚠️只发 change,不发 add/unlink —— 那两类照旧由 onStructureChange 覆盖。 */
     private readonly onExternalFileChange?: (filePath: string) => void,
+    private readonly onError?: (error: unknown) => void,
   ) {}
 
   start(root: string): void {
@@ -37,6 +38,7 @@ export class VaultWatcher {
         return base.startsWith('.') || base === 'node_modules' || /\.tmp-\d+-\d+-\d+$/.test(base)
       },
     })
+    if (this.onError) this.watcher.on('error', this.onError)
     this.watcher.on('change', (abs) => {
       void this.handle(abs, root)
     })
@@ -74,9 +76,25 @@ export class VaultWatcher {
   }
 
   stop(): void {
-    if (this.watcher) {
-      void this.watcher.close()
-      this.watcher = null
-    }
+    void this.close()
+  }
+
+  /** Standalone plugin lifecycle awaits watcher shutdown before replacing a package. */
+  async close(): Promise<void> {
+    const watcher = this.watcher
+    this.watcher = null
+    await watcher?.close()
+  }
+
+  /** Used by a headless host before advertising its vault as ready. */
+  ready(): Promise<void> {
+    const watcher = this.watcher
+    if (!watcher) return Promise.resolve()
+    return new Promise((resolve, reject) => {
+      const done = (): void => { watcher.off('error', fail); resolve() }
+      const fail = (error: unknown): void => { watcher.off('ready', done); reject(error) }
+      watcher.once('ready', done)
+      watcher.once('error', fail)
+    })
   }
 }

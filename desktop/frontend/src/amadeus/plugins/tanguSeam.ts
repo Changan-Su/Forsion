@@ -31,6 +31,8 @@ export interface TanguSessionInfo {
 }
 
 export interface TanguProbe {
+  /** True only when the active engine executes against this host filesystem. */
+  hostExecution?(): boolean
   /** 主区聊天此刻**实际会用**的模型;一个都没有 → null。 */
   activeModel(): TanguModelInfo | null
   /** 当前模型目录里的全部对话模型(只含 llm,不混入生图 / 语音模型)。 */

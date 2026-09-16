@@ -47,4 +47,30 @@ describe('cloud HTTP account boundary', () => {
     await expect(http.put('/amadeus/private.md', { content: 'private to one' })).rejects.toMatchObject({ body: { code: 'ACCOUNT_CHANGED' } })
     expect(fetch).toHaveBeenCalledTimes(1)
   })
+
+  it('uses the injected existing account request without a second global fetch', async () => {
+    const fetch = vi.fn()
+    const request = vi.fn(async () => new Response('{"ok":true}'))
+    vi.stubGlobal('fetch', fetch)
+    const http = createCloudHttp({ apiBase: 'https://cloud.test/api', getToken: () => 'tab-token', clientId: 'unit', onUnauthorized: vi.fn(), request })
+    await expect(http.get('/amadeus/vaults')).resolves.toEqual({ ok: true })
+    expect(request).toHaveBeenCalledWith('https://cloud.test/api/amadeus/vaults', expect.objectContaining({ headers: { Authorization: 'Bearer tab-token' } }))
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('aborts an upload and stops progress delivery when its visitor session ends', async () => {
+    const scope = new AbortController()
+    const xhr = { open: vi.fn(), setRequestHeader: vi.fn(), upload: {} as { onprogress?: (event: unknown) => void },
+      send: vi.fn(), abort: vi.fn(() => xhr.onabort?.()), onabort: undefined as (() => void) | undefined }
+    vi.stubGlobal('XMLHttpRequest', class { constructor() { return xhr } })
+    const progress = vi.fn()
+    const http = createCloudHttp({ apiBase: 'https://cloud.test/api', getToken: () => 'tab-token', clientId: 'unit', onUnauthorized: vi.fn(), signal: scope.signal })
+    const uploading = expect(http.postForm('/amadeus/upload', new FormData(), progress)).rejects.toMatchObject({ body: { code: 'ACCOUNT_CHANGED' } })
+    expect(xhr.setRequestHeader).toHaveBeenCalledWith('Authorization', 'Bearer tab-token')
+    scope.abort()
+    await uploading
+    xhr.upload.onprogress?.({ lengthComputable: true, loaded: 10, total: 20 })
+    expect(progress).not.toHaveBeenCalled()
+    expect(xhr.abort).toHaveBeenCalled()
+  })
 })

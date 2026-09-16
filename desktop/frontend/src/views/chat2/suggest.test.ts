@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { splitSuggestions } from './suggest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { splitSuggestions, type FenceKind } from './suggest'
 
 const F = '```'
 
@@ -212,3 +214,37 @@ describe('缺省种类与上限(Codex 09-11)', () => {
   })
 })
 
+describe('任务卡 todo 头(Muse TODO 的收件箱投影,2026-09-11)', () => {
+  // 引擎单测(tangu-agent/test/museTodo.test.ts)生成 / 比对的同一份产物:键名一漂,两边一起红
+  const fixture = (name: string): string => readFileSync(fileURLToPath(new URL(`../../../../../tangu-agent/test/fixtures/${name}`, import.meta.url).href), 'utf8')
+  const inbox = { kinds: ['task', 'approval'] as FenceKind[], todo: true }
+
+  it('引擎夹具:正文 = detail(不留围栏),一张卡带 todo id,任务书 = 标题 + detail', () => {
+    const r = splitSuggestions(fixture('muse-todo-mail.md'), inbox)
+    expect(r.tasks).toHaveLength(1)
+    expect(r.tasks[0]).toMatchObject({ title: '恢复并验收鹈鹕骑自行车网页动画', todo: 'todo-fixture-1' })
+    expect(r.tasks[0].prompt.startsWith('恢复并验收鹈鹕骑自行车网页动画\n\n上次生成 run 失败')).toBe(true)
+    expect(r.text).toContain('pelican-cycling.html')
+    expect(r.text).not.toMatch(/forsion-task|todo-fixture-1/)
+  })
+
+  it('detail 末尾代码块没收口(引擎补了收口):卡照样摘出,代码留在正文', () => {
+    const r = splitSuggestions(fixture('muse-todo-mail-openfence.md'), inbox)
+    expect(r.tasks).toHaveLength(1)
+    expect(r.tasks[0].todo).toBe('todo-fixture-2')
+    expect(r.text).toContain('exportAll')
+    expect(r.text).not.toMatch(/forsion-task|todo-fixture-2/)
+  })
+
+  it('todo 语义要调用方显式开:缺省(聊天 / 非 Muse 的信)只当普通任务卡', () => {
+    const r = splitSuggestions(fixture('muse-todo-mail.md'), { kinds: ['task', 'approval'] })
+    expect(r.tasks).toHaveLength(1)
+    expect(r.tasks[0].todo).toBeUndefined()
+  })
+
+  it('非法 todo id 只丢这个键,卡照出', () => {
+    const r = splitSuggestions(`${F}forsion-task\ntitle: t\ntodo: ../x y\n---\ndo it\n${F}`, { todo: true })
+    expect(r.tasks).toHaveLength(1)
+    expect(r.tasks[0].todo).toBeUndefined()
+  })
+})

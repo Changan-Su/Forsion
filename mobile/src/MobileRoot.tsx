@@ -1,3 +1,4 @@
+import { amadeusAvailable } from '@/features/runtime'
 /**
  * 移动端 App 根:启动副作用(连接/轮询,复用 desktop useBootstrap)+ 主题桥接给 MobileShell +
  * 设置浮层(账号/登录)+ 首启引导 + Amadeus 对话框宿主 + 通知。刻意精简 desktop Root 的桌面专属浮层
@@ -100,7 +101,7 @@ export function MobileRoot() {
   // 抽屉里的 AmadeusPagesView)→ 用户体感「打开工作区加载半天」。启动空闲后先拉起 vault
   // (云端树快照命中时立即有内容,随后后台 revalidate),main view 不受阻。
   useEffect(() => {
-    if (!window.amadeus) return
+    if (!amadeusAvailable()) return
     const t = window.setTimeout(() => { ensureAmadeusReady() }, 1200)
     return () => window.clearTimeout(t)
   }, [])
@@ -131,7 +132,7 @@ export function MobileRoot() {
           NewDrawingHost / ConfirmDialog / AutomationBuilderHost / TemplatePicker 都住在里面。
           不挂它,移动端所有 askString()(新建文件夹、添加属性、存为集合…共 20 处)的 promise 永不 resolve
           —— 点了没反应且不报错。门控与 desktop Root 同款。 */}
-      {window.amadeus && <AmadeusOverlays />}
+      {amadeusAvailable() && <AmadeusOverlays />}
 
       {/* 下面三个的共同点:它们在移动端都点得到,不挂宿主就是「点完没有任何东西渲染」的静默死按钮
           (状态置了 true,宿主不在),不是「移动端没这功能」。到达路径两种:

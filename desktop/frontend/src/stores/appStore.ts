@@ -1,3 +1,4 @@
+import { PRODUCT } from '../product'
 /**
  * 应用状态 store —— App.tsx 的忠实搬迁(单 store)。
  * ponytail: single store now; split into config/sessions/runs/catalog if it grows.
@@ -313,7 +314,7 @@ export const rootlessWs = (t: AppState['tr']): WorkspaceDescriptor =>
 
 /** 引擎有真实 host FS:managed 桌面,或设备页(unitPage,引擎是对方的 managed 引擎)。 */
 const isHostCapable = (s: Pick<AppState, 'desktopMode'>): boolean =>
-  s.desktopMode === 'managed' || (typeof window !== 'undefined' && !!window.tangu?.unitPage)
+  s.desktopMode === 'managed' || (typeof window !== 'undefined' && !!window.tangu?.unitPage && window.tangu.hostFiles !== false)
 
 /** 新对话在「没有显式 Project 选择」时的真实落点。
  *
@@ -685,10 +686,10 @@ export const useApp = create<AppState>((set, get) => ({
   tr: (k) => k,
   // 云 web/mobile:boot() 异步回填前的早期请求(布局恢复后的轮询等)会拿默认 cfg 打
   // localhost:8787(控制台 ERR_CONNECTION_REFUSED 红噪音)。壳在挂载前已装好
-  // window.tangu.cloudWeb + localStorage token(统一键 forsion_token),同步读即得正确初值。
-  cfg: typeof window !== 'undefined' && (window as any).tangu?.cloudWeb
+  // window.tangu.initialConfig 提供已验证账号初值；旧 Web/mobile 保留既有回退。
+  cfg: (typeof window !== 'undefined' && window.tangu?.initialConfig) || (typeof window !== 'undefined' && window.tangu?.cloudWeb
     ? { backendUrl: location.origin + '/api', token: (() => { try { return localStorage.getItem('forsion_token') || '' } catch { return '' } })(), modelId: '' }
-    : { backendUrl: 'http://localhost:8787', token: '', modelId: '' },
+    : { backendUrl: 'http://localhost:8787', token: '', modelId: '' }),
   desktopConfig: null,
   cfgLoaded: false,
   connState: 'idle',
@@ -1459,7 +1460,7 @@ export const useApp = create<AppState>((set, get) => ({
     // 注意:不能再用 stored.token 当「有无凭证」信号——managed 后端现在恒有 token(无 Forsion 时回退本地令牌,
     // 见 backendManager.getToken),会把新用户误判为已配置。真实凭证只看 authStatus.loggedIn(读 auth.json,
     // 不含本地回退)+ 直连 provider。
-    if (stored && window.tangu?.envCheck) {
+    if (PRODUCT.onboarding !== false && stored && window.tangu?.envCheck) {
       try {
         if (!localStorage.getItem(ONBOARDING_DISMISS_KEY)) {
           // void 不 await:两条 IPC 只决定要不要弹引导,不该拖住 boot 的 resolve(bootstrap 等 boot 完才往下走)。
@@ -1471,7 +1472,7 @@ export const useApp = create<AppState>((set, get) => ({
           }).catch(() => { /* 引导判定失败不阻断 */ })
         }
       } catch { /* 引导判定失败不阻断 */ }
-    } else if (stored) {
+    } else if (PRODUCT.onboarding !== false && stored) {
       // web / 移动端(无 envCheck):登录早在挂载前由 webShim / mobileShim 完成(无 token 直接跳
       // /auth),也没有 provider / 本机环境这些概念 —— 「首启」的唯一信号就是没跳过过。
       // 步骤序同步收缩到 welcome/theme/done,见 OnboardingWizard.stepOrder。
@@ -1481,7 +1482,7 @@ export const useApp = create<AppState>((set, get) => ({
     // 只在 host 生效(web/移动端没有 appVersion,这条自然 no-op):web 每次发版都全屏拦一次
     // 所有在线用户,代价与收益不成比例 —— 更新日志那边从欢迎页的抽屉照样看得到。
     // seen 与当前版本不同(含老用户首次启用本功能,seen 为空)→ 弹一次,弹完即标记不再重复。
-    void window.tangu?.appVersion?.().then((ver) => {
+    if (PRODUCT.onboarding !== false) void window.tangu?.appVersion?.().then((ver) => {
       if (!ver) return
       let seen: string | null = null
       try { seen = localStorage.getItem(ONBOARDING_VERSION_KEY) } catch { seen = null }

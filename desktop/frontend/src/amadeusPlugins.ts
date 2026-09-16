@@ -1,3 +1,4 @@
+import { amadeusAvailable } from './features/runtime'
 /** 桌面壳的 Amadeus 插件装载(vendored pluginStore 保持与独立版同构,桌面差异全部收在这里):
  *  - 选择性安装 builtins:callout 标注 + 字数统计。跳过 core-commands(指向未挂载的 Amadeus 面板/与壳重复)、
  *    outline(壳有原生大纲视图)、extra-themes(其 [data-theme=…] 选择器在桌面 EditorScope 下永不命中)。
@@ -22,7 +23,7 @@ export function installAmadeusPlugins(): void {
   installed = true
   syncPluginViews() // 插件视图桥先就位:随后的 init/loadExternal 里注册的视图第一时间进 LCL 注册表
   installPluginStatusBridge() // 状态条项桥同理(→ 全局状态栏)
-  installAmadeusAutomationBridge() // Amadeus「按钮」块 → 本地引擎自动化(云端/移动端不注册=按钮显示不支持)
+  if (amadeusAvailable()) installAmadeusAutomationBridge() // Amadeus「按钮」块 → 本地引擎自动化(云端/移动端不注册=按钮显示不支持)
   // Mini/detached renderers share preferences but own plugin instances. Revoke local views
   // immediately when another window disables their owner; do not repeat automation mutations.
   window.addEventListener('storage', (event) => {
@@ -31,7 +32,7 @@ export function installAmadeusPlugins(): void {
     void import('./userSpaces').then((m) => m.loadUserSpaces())
   })
   const store = usePluginStore.getState()
-  store.init([calloutBlocks, wordCount])
+  store.init(amadeusAvailable() ? [calloutBlocks, wordCount] : [])
   void store.loadExternal().then(() => {
     // 捆绑包内嵌的 Space 引用插件自己的视图,必须等插件装完(视图已注册)才过得了 parseSpaceJson 的
     // isViewRegistered 闸 —— bootstrapEngine 那次 loadUserSpaces 跑在插件之前,注定被「未注册视图」跳过。
@@ -78,6 +79,7 @@ let amadeusBooted = false
  *  新壳若只挂 amadeus-editor 则谁都不触发 —— mini 卡片就是这么栽的(只挂主区 leaf,左栏永不挂载
  *  → Amadeus 恒显「打开 Vault 文件夹」空态)。 */
 export function ensureAmadeusReady(): void {
+  if (!amadeusAvailable()) return
   if (amadeusBooted) return
   amadeusBooted = true
   installAmadeusPlugins()

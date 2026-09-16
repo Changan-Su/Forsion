@@ -1,3 +1,4 @@
+import { amadeusAvailable, sessionsAvailable } from './features/runtime'
 /** 全局快速查找(Notion quick-find 式,居中悬浮):按名称模糊搜 笔记 / 文件 / chat 会话,回车打开。
  *  空态显示最近(localStorage 记录,回退最近更新的会话)。ribbon 搜索图标 / ⌘P 唤起;挂在 Root。
  *
@@ -159,7 +160,7 @@ function QuickFindInner() {
       emoji: s.emoji ?? undefined,
       open: () => openSession(s.id),
     }))
-    return [...notes, ...dbItems, ...fileItems, ...sess]
+    return [...(amadeusAvailable() ? [...notes, ...dbItems, ...fileItems] : []), ...(sessionsAvailable() ? sess : [])]
   }, [pages, files, dbs, sessions, t])
 
   const results = useMemo<Item[]>(() => {

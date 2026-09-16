@@ -537,6 +537,8 @@ export interface ModelInfo {
   modelType?: 'llm' | 'image_gen' | 'asr'
   /** 模型上下文窗口(tokens);输入框「上下文占比」进度条用。后端缺省回退全局默认。 */
   contextWindow?: number
+  /** contextWindow 的来源:override=env 或本机 modelOverrides / model=模型自报 / learned=上游报错回学 / family=族表推断 / default=兜底。设置页据此区分「已覆盖」与「自动」。 */
+  contextWindowSource?: 'override' | 'model' | 'learned' | 'family' | 'default'
   /** 能不能直接「看」图。黑名单制:缺省/true=能;false=遇图自动转交「辅助模型 · 图像识别」。 */
   supportsVision?: boolean
   /** 该模型真正支持的思考档(引擎能力表下发;仅 llm)。思考菜单据此把不支持的档标灰。缺省=不知道,全可选。 */
@@ -973,6 +975,13 @@ declare global {
       /** unit 设备页标志(B 端渲染,unitShim 注入):本页是另一台设备曝出来的 Forsion 面 ——
        *  插件清单走对方的 unit/plugins,无 vault 桥(本地 vault 面 = v2.1)。 */
       unitPage?: boolean
+      /** A local engine sharing the active vault filesystem. Cloud/virtual vaults never qualify. */
+      executionCapabilities?: { host: boolean }
+      /** Explicit host filesystem availability; published cloud Units set false. */
+      hostFiles?: boolean
+      /** Verified account config installed synchronously before stores initialize. */
+      initialConfig?: StoredDesktopConfig
+      account?: import('./amadeus/plugins/types').PluginAccount
       getConfig(): Promise<StoredDesktopConfig>
       setConfig(patch: Partial<StoredDesktopConfig>): Promise<StoredDesktopConfig>
       backendStatus?(): Promise<BackendStatusInfo>

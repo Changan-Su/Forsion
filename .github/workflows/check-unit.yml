@@ -1,0 +1,61 @@
+name: check-unit
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, codex/unit-server-runtime]
+    # 发版 tag 也跑:forsion-release 先推发布提交再推 tag,只跟 branches 的话 revision 0 的 Unit 包永远不会自动产出(tag 推送不评估 paths)。
+    tags: ['v*']
+    paths: &unit_paths
+      - 'unit/**'
+      - 'desktop/**'
+      - 'web/**'
+      - 'mobile/src/**'
+      - 'mobile/package.json'
+      - 'mobile/package-lock.json'
+      - 'lcl/**'
+      - 'tangu-agent/**'
+      - '.github/workflows/check-unit.yml'
+  pull_request:
+    branches: [main, codex/unit-server-runtime]
+    paths: *unit_paths
+
+permissions:
+  contents: read
+
+jobs:
+  independent-unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Check Desktop baseline and commercial exclusions
+        run: |
+          node unit/check-sync.mjs
+          node --test unit/*.test.mjs
+      - name: Install shared dependencies
+        run: |
+          npm ci --prefix tangu-agent --no-audit --no-fund
+          npm ci --prefix desktop --no-audit --no-fund
+          npm ci --prefix web --no-audit --no-fund
+          # web 的 tsconfig 经 @mobile 别名拽进 mobile/src,tsc 从那里向上找的是 mobile 自己的 node_modules(同 build-web.yml)
+          npm ci --prefix mobile --no-audit --no-fund
+      - name: Check shared runtime and Unit lifecycle
+        run: |
+          npm run typecheck --prefix tangu-agent
+          npm run typecheck --prefix desktop
+          npm run typecheck --prefix web
+          npm run check:parity --prefix desktop
+          cd desktop
+          npx vitest run electron/unit*.test.ts electron/backendRunner.test.ts electron/basicUnit.test.ts frontend/src/services/unitAccount.test.ts frontend/src/services/unitCloudTransport.test.ts frontend/src/features/nativeFeatures.test.ts
+      - name: Build independent Unit distribution
+        run: node unit/build.mjs --package --local-plugins
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forsion-unit-linux-x64
+          path: unit/dist/
+          if-no-files-found: error

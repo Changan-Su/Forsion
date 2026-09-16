@@ -2,7 +2,7 @@
  * 侧栏左下角 Forsion 账号卡(forsion-ui UserProfileCard 规范):
  *  - 已登录:36px 头像(URL,或渐变圆+首字母)+ 昵称 + 会员徽章(TierBadge),副标题「用户中心」;
  *    点击弹出账号菜单(额度剩余百分比/重置卡/升级会员/邀请好友/用户中心/登出);
- *    宿主能力缺席(web 无 accountQuota IPC)时回落为直接打开个人中心。悬停露出「登出」。
+ *    按宿主实际能力显示额度、账号中心等入口。悬停露出「登出」。
  *  - 未登录:头像占位 + 「登录 / 注册」+ 副标题「点击登录」;不登录 Tangu 也能正常用。
  * 自管 authStatus(挂载即拉 + 监听 auth:device 推登录链接);登录/登出后回调 onAuthChange 让上层重连。
  */
@@ -211,6 +211,8 @@ export const AccountCard: React.FC<{
   }
 
   const loggedIn = !!auth?.loggedIn
+  const hasQuota = !!window.tangu?.accountQuota
+  const hasAccountCenter = !!window.tangu?.openAccountCenter
   // 过期 = token 仍在(loggedIn)但 whoami 判定失效(tokenValid:false)。此时绝不当「已登录」对待。
   const expired = loggedIn && auth?.tokenValid === false
   // 引擎轴(managed 才有,external/纯 Amadeus 形态 backendState=null):与「登没登录」正交。
@@ -258,11 +260,11 @@ export const AccountCard: React.FC<{
         <RotateCcw size={14} /><span>{t('sidebar.account.engineDown')}</span>
       </button>}
       {loggedIn && <>
-      <button className="ap-item" onClick={() => setUsageOpen((v) => !v)}>
+      {hasQuota && <button className="ap-item" onClick={() => setUsageOpen((v) => !v)}>
         <Gauge size={14} /><span>{t('sidebar.account.menu.usage')}</span><span className="grow" />
         {usageOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-      </button>
-      {usageOpen && (
+      </button>}
+      {hasQuota && usageOpen && (
         <div className="ap-usage">
           {quota ? (
             <>
@@ -285,7 +287,7 @@ export const AccountCard: React.FC<{
               <span>{t('sidebar.account.menu.upgrade')}</span><span className="grow" /><ExternalLink size={12} />
             </button>
           )}
-          {!!quota && ([
+          {!!quota && !!window.tangu?.accountUseResetCard && ([
             ['both', quota.resetCards, 'sidebar.account.menu.resets'],
             ['weekly', quota.resetCardsWeekly, 'sidebar.account.menu.resetsWeekly'],
           ] as Array<[ResetScope, number | undefined, string]>).map(([scope, n, key]) => (n || 0) > 0 && (
@@ -296,12 +298,14 @@ export const AccountCard: React.FC<{
           ))}
         </div>
       )}
+      {hasAccountCenter && <>
       <button className="ap-item" onClick={() => { void window.tangu?.openAccountCenter?.('points-exchange'); setMenu(null) }}>
         <Send size={14} /><span>{t('sidebar.account.menu.invite')}</span>
       </button>
       <button className="ap-item" onClick={() => { openCenter(); setMenu(null) }}>
         <UserRound size={14} /><span>{t('sidebar.account.menu.center')}</span><span className="grow" /><ExternalLink size={12} />
       </button>
+      </>}
       </>}
       <AccountSwitcher menu busy={loggingIn} onSelect={(id) => void login(id)} onAdd={() => void login()} />
       {loggedIn && <button className="ap-item ap-danger" onClick={() => { setMenu(null); void logout() }}>
@@ -332,7 +336,7 @@ export const AccountCard: React.FC<{
         className={`account-card${stateClass}`}
         role="button"
         tabIndex={0}
-        title={engineDown ? t('sidebar.account.engineDown') : engineStarting ? t('sidebar.account.engineStarting') : expired ? t('sidebar.account.expired') : loggedIn ? t('sidebar.account.center') : t('sidebar.account.loginHint')}
+        title={engineDown ? t('sidebar.account.engineDown') : engineStarting ? t('sidebar.account.engineStarting') : expired ? t('sidebar.account.expired') : loggedIn ? (hasAccountCenter ? t('sidebar.account.center') : display) : t('sidebar.account.loginHint')}
         onClick={activate}
         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activate(e) } }}
       >

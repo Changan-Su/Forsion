@@ -7,7 +7,7 @@ import { windowKind } from './windowKind'
 import {
   Bot, Inbox, Mail, NotebookText, BookOpen, Briefcase, CalendarDays, MessageCircle, Folder, FolderOpen,
   FileText, Star, Heart, Home, Target, Zap, Globe, Music, Image, Video, Code, Terminal, LayoutGrid, Sparkles,
-  Boxes, ListTree,
+  Boxes, ListTree, Server, ServerCog,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import {
@@ -22,6 +22,7 @@ import { currentLocale } from './i18n'
 import { track } from './achievements/store'
 import { act } from './activity/log'
 import { readDisabledPluginIds } from '@amadeus/plugins/pluginStore'
+import { PRODUCT } from './product'
 
 // 保留 id:用户/市场的 space.json 不许占用宿主 Space 的 id。calendar 现在是内置插件(关掉即不注册),
 // 更要留着 —— 否则关掉期间被别人占了 id,重新启用时两份 Space 撞车。
@@ -32,7 +33,7 @@ const SPACE_ICONS: Record<string, LucideIcon> = {
   'calendar-days': CalendarDays, 'message-circle': MessageCircle, folder: Folder, 'folder-open': FolderOpen,
   'file-text': FileText, star: Star, heart: Heart, home: Home, target: Target, zap: Zap, globe: Globe,
   music: Music, image: Image, video: Video, code: Code, terminal: Terminal, 'layout-grid': LayoutGrid,
-  sparkles: Sparkles, boxes: Boxes, 'list-tree': ListTree,
+  sparkles: Sparkles, boxes: Boxes, 'list-tree': ListTree, server: Server, 'server-cog': ServerCog,
 }
 
 const ws = () => useWorkspace.getState()
@@ -44,6 +45,7 @@ const userIds = new Map<string, string>()
 const pluginSpaceOwner = new Map<string, string>()
 /** 已注册插件 Space 的原始 space.json:配方变了(插件更新)才注销重注册,不变则不动(防 ribbon 无谓抖动)。 */
 const pluginSpaceJson = new Map<string, string>()
+let pluginOnlyStartupResolved = false
 
 export const isUserSpace = (id: string): boolean => userIds.has(id)
 
@@ -192,6 +194,15 @@ async function loadUserSpacesOnce(): Promise<void> {
     }
   }
   // 启动恢复时活动 Space 可能正是刚注册的用户 Space:installEngine 曾按 fallback(tangu)设过侧栏默认,补正。
+  // A plugin-only product has no synchronous fallback Space. Activate its default
+  // once plugin views and recipes are ready, using the ordinary Space switch path.
+  if (!pluginOnlyStartupResolved && PRODUCT.spaces.length === 0
+    && useSpaceStore.getState().spaces.some((s) => s.id === PRODUCT.defaultSpace)) {
+    pluginOnlyStartupResolved = true
+    if (useSpaceStore.getState().activeSpaceId !== PRODUCT.defaultSpace) setActiveSpace(PRODUCT.defaultSpace)
+    // mainTabs is shared by Dockview and SingleColumnHost (whose api is always null).
+    else if (ws().mainTabs.length === 0) ws().resetLayout()
+  }
   const sp = getActiveSpace()
   if (sp) ws().setSidebarDefaults(sp.sidebarDefaults)
 }

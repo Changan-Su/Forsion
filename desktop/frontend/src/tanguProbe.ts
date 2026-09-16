@@ -98,6 +98,7 @@ export function subscribeReady(cb: () => void): () => void {
 
 export function installTanguProbe(): void {
   setTanguProbe({
+    hostExecution: () => window.tangu?.executionCapabilities?.host ?? (useApp.getState().desktopConfig?.mode === 'managed'),
     activeModel: readActiveModel,
     models: readModels,
     activeSpace: readActiveSpace,
