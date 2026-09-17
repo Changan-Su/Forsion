@@ -1,8 +1,8 @@
 # Showcase assets / 展示素材
 
-The READMEs display six new **v2.11.0** screenshots directly in the relevant feature sections. Captured from the real Electron build at `d3fc60f9`, whose desktop tree matches the v2.11.0 release, they use one isolated public research-project fixture. The interface is real; conversation text, memory records, team status and Inbox tasks are seeded sample data. No model calls or personal workspace data were used.
+The READMEs display six new **v2.11.0** screenshots directly in the relevant feature sections. Captured from the real Electron build at `5e2fe953`, whose desktop tree matches the v2.11.0 release, they use one isolated public research-project fixture. The interface is real; conversation text, memory records, team status and Inbox tasks are seeded sample data. No model calls or personal workspace data were used.
 
-中英文 README 在对应段落直接展示六张新 **v2.11.0** 截图。来源为 `d3fc60f9` 的真实 Electron 构建，其 desktop 源码树与 v2.11.0 发布版本一致；使用隔离的公开研究项目夹具。界面真实，对话、记忆、团队状态和收件箱任务为预置样例，不是模型实测，不包含个人数据。
+中英文 README 在对应段落直接展示六张新 **v2.11.0** 截图。来源为 `5e2fe953` 的真实 Electron 构建，其 desktop 源码树与 v2.11.0 发布版本一致；使用隔离的公开研究项目夹具。界面真实，对话、记忆、团队状态和收件箱任务为预置样例，不是模型实测，不包含个人数据。
 
 All six images are complete 1600 × 1000 content viewports, with no post-capture crop, frame, matte, recoloring, or UI modification. / 六张均为完整 1600 × 1000 内容视口，未做后期裁边、边框、铺底、调色或界面修改。
 
@@ -14,6 +14,8 @@ All six images are complete 1600 × 1000 content viewports, with no post-capture
 | `team-thread.png` | Recita's full child conversation beside the main discussion. / 主讨论旁的 Recita 完整子会话。 |
 | `muse-inbox.png` | Follow-up task, expanded instructions and action controls. / 跟进任务、展开的任务书与处理按钮。 |
 | `project-note.png` | Sources, responsibilities and next steps in a local Markdown file. / 本地 Markdown 中的来源、职责与下一步。 |
+
+The capture fixture uses the built-in portraits from `tangu-agent/src/agents/builtinAvatars.ts` and `defaultAvatar.ts`, served through the app's normal avatar endpoint. Arioso retains its canonical `xyra` identifier. Capturing fails if portraits are not requested or visible images fail to decode. / 拍摄夹具通过正常头像接口提供仓库内置原版头像；Arioso 沿用真实标识 `xyra`。头像未请求或可见图片解码失败时终止拍摄，避免再次交付占位图。
 
 ## Reproduce / 复现
 
@@ -46,9 +48,9 @@ The public story follows **capture and connect → remember context → think an
 
 展示主线为**记录与连接 → 记住背景 → 团队思考与执行 → 主动跟进 → 成果沉淀**，插件扩展整条工作流。README 的项目案例是建议配置的使用路径，并非一次模型执行记录。截图只展示标明的工作区与公开样例，不作为多 Agent 或 Muse 真实执行的证据。
 
-Feature copy was rechecked against **v2.11.0 / `ad3bbfba`** on 2026-09-17. README screenshot provenance is now **v2.11.0 / `d3fc60f9`**; six new product captures now accompany that copy; no live-model demonstration was run. See the [bilingual messaging guide](../../../docs/showcase/messaging.md) for reusable copy, source evidence, and the next recording brief.
+Feature copy was rechecked against **v2.11.0 / `ad3bbfba`** on 2026-09-17. README screenshot provenance is now **v2.11.0 / `5e2fe953`**; six new product captures now accompany that copy; no live-model demonstration was run. See the [bilingual messaging guide](../../../docs/showcase/messaging.md) for reusable copy, source evidence, and the next recording brief.
 
-功能文案于 2026-09-17 按 **v2.11.0 / `ad3bbfba`** 重新核对；README 截图来源为 **v2.11.0 / `d3fc60f9`**，本次补齐六张新界面截图，未运行真实模型演示。[双语宣传主线](../../../docs/showcase/messaging.md)提供可复用文案、源码依据与下一轮录制脚本。
+功能文案于 2026-09-17 按 **v2.11.0 / `ad3bbfba`** 重新核对；README 截图来源为 **v2.11.0 / `5e2fe953`**，本次补齐六张新界面截图，未运行真实模型演示。[双语宣传主线](../../../docs/showcase/messaging.md)提供可复用文案、源码依据与下一轮录制脚本。
 
 | Capability / 能力 | Evidence / 依据 | Presentation boundary / 展示边界 |
 | --- | --- | --- |

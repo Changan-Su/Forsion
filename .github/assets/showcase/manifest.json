@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-17T15:28:41.718275+00:00",
+  "generatedAt": "2026-09-17T19:04:03.874170+00:00",
   "source": {
     "releaseTag": "v2.11.0",
-    "commit": "d3fc60f9525f6c97bf4ad42300c777abfda4bca4",
+    "commit": "5e2fe953cc86971f5d93312bd9cc71bb279592a8",
     "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
     "packageVersion": "2.11.0",
     "productTreeMatchesRelease": true
@@ -13,7 +13,9 @@
     "publicDataOnly": true,
     "personalWorkspaceData": false,
     "liveModelCalls": 0,
-    "scriptedBackend": true
+    "scriptedBackend": true,
+    "builtinAgentPortraits": true,
+    "ariosoSlug": "xyra"
   },
   "assets": {
     "workbench.png": {
@@ -103,103 +105,108 @@
       "sha256": "be5f965ddfc24903a8788138b8999566e08b5d413499f736f35a485bdc439a20",
       "source": {
         "releaseTag": "v2.11.0",
-        "commit": "d3fc60f9525f6c97bf4ad42300c777abfda4bca4",
+        "commit": "5e2fe953cc86971f5d93312bd9cc71bb279592a8",
         "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
         "packageVersion": "2.11.0",
         "productTreeMatchesRelease": true
       },
       "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
       "scenario": "Markdown slash menu in the public research note",
-      "generatedAt": "2026-09-17T15:28:41.718275+00:00",
+      "generatedAt": "2026-09-17T19:04:03.874170+00:00",
       "crop": false,
       "matte": false,
       "colorTreatment": false,
       "publicFixture": true,
-      "liveModelCalls": 0
+      "liveModelCalls": 0,
+      "builtinAgentPortraits": true
     },
     "agent-memory.png": {
       "width": 1600,
       "height": 1000,
       "colorType": "RGB",
-      "sha256": "ef277bd3a24f07fedbcd83b43b2f34ed974e75f5b78a6e1aad15b31dc5751ea5",
+      "sha256": "415771b023d1e75a34448e45fc7b1edb28dac16a83d2fb5839e3d74b95002cfd",
       "source": {
         "releaseTag": "v2.11.0",
-        "commit": "d3fc60f9525f6c97bf4ad42300c777abfda4bca4",
+        "commit": "5e2fe953cc86971f5d93312bd9cc71bb279592a8",
         "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
         "packageVersion": "2.11.0",
         "productTreeMatchesRelease": true
       },
       "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
       "scenario": "Arioso memory panel with three public context entries",
-      "generatedAt": "2026-09-17T15:28:41.718275+00:00",
+      "generatedAt": "2026-09-17T19:04:03.874170+00:00",
       "crop": false,
       "matte": false,
       "colorTreatment": false,
       "publicFixture": true,
-      "liveModelCalls": 0
+      "liveModelCalls": 0,
+      "builtinAgentPortraits": true
     },
     "team-desk.png": {
       "width": 1600,
       "height": 1000,
       "colorType": "RGB",
-      "sha256": "9cbfce5754512a43e4ff87067bb62fc4314300dfb7c55a88e7977bd5be17e104",
+      "sha256": "f89a4a746a4e3db046d01f7338a6c9778721bd62556fdd8ea8fc7de6ebbcd896",
       "source": {
         "releaseTag": "v2.11.0",
-        "commit": "d3fc60f9525f6c97bf4ad42300c777abfda4bca4",
+        "commit": "5e2fe953cc86971f5d93312bd9cc71bb279592a8",
         "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
         "packageVersion": "2.11.0",
         "productTreeMatchesRelease": true
       },
       "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
       "scenario": "TEAM public discussion and persisted member status",
-      "generatedAt": "2026-09-17T15:28:41.718275+00:00",
+      "generatedAt": "2026-09-17T19:04:03.874170+00:00",
       "crop": false,
       "matte": false,
       "colorTreatment": false,
       "publicFixture": true,
-      "liveModelCalls": 0
+      "liveModelCalls": 0,
+      "builtinAgentPortraits": true
     },
     "team-thread.png": {
       "width": 1600,
       "height": 1000,
       "colorType": "RGB",
-      "sha256": "7482c18077d81d8b54d2bfbffb740a73b25021d13f6ed8e9815c1bc939616cc2",
+      "sha256": "846782573c75874ee56f0ac3e709debb15ec79bc79c3182ce6958813480fc888",
       "source": {
         "releaseTag": "v2.11.0",
-        "commit": "d3fc60f9525f6c97bf4ad42300c777abfda4bca4",
+        "commit": "5e2fe953cc86971f5d93312bd9cc71bb279592a8",
         "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
         "packageVersion": "2.11.0",
         "productTreeMatchesRelease": true
       },
       "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
       "scenario": "Recita child conversation beside the public TEAM discussion",
-      "generatedAt": "2026-09-17T15:28:41.718275+00:00",
+      "generatedAt": "2026-09-17T19:04:03.874170+00:00",
       "crop": false,
       "matte": false,
       "colorTreatment": false,
       "publicFixture": true,
-      "liveModelCalls": 0
+      "liveModelCalls": 0,
+      "builtinAgentPortraits": true
     },
     "muse-inbox.png": {
       "width": 1600,
       "height": 1000,
       "colorType": "RGB",
-      "sha256": "2802d2b803f47a7e46786afdafc5916eaea326f7889cc711b35745d27cac7ef0",
+      "sha256": "1b287e409b6a723176db0f187ad57e9344da03d117c082f66589a44e3365bcfc",
       "source": {
         "releaseTag": "v2.11.0",
-        "commit": "d3fc60f9525f6c97bf4ad42300c777abfda4bca4",
+        "commit": "5e2fe953cc86971f5d93312bd9cc71bb279592a8",
         "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
         "packageVersion": "2.11.0",
         "productTreeMatchesRelease": true
       },
       "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
       "scenario": "Muse Inbox follow-up with task details and action controls",
-      "generatedAt": "2026-09-17T15:28:41.718275+00:00",
+      "generatedAt": "2026-09-17T19:04:03.874170+00:00",
       "crop": false,
       "matte": false,
       "colorTreatment": false,
       "publicFixture": true,
-      "liveModelCalls": 0
+      "liveModelCalls": 0,
+      "builtinAgentPortraits": true
     },
     "project-note.png": {
       "width": 1600,
@@ -208,20 +215,22 @@
       "sha256": "611e3e999f79358fac98aa7a65a5bd41731886a83a8b3a888d46e1da44810a24",
       "source": {
         "releaseTag": "v2.11.0",
-        "commit": "d3fc60f9525f6c97bf4ad42300c777abfda4bca4",
+        "commit": "5e2fe953cc86971f5d93312bd9cc71bb279592a8",
         "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
         "packageVersion": "2.11.0",
         "productTreeMatchesRelease": true
       },
       "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
       "scenario": "Local project note linking material, responsibilities and next steps",
-      "generatedAt": "2026-09-17T15:28:41.718275+00:00",
+      "generatedAt": "2026-09-17T19:04:03.874170+00:00",
       "crop": false,
       "matte": false,
       "colorTreatment": false,
       "publicFixture": true,
-      "liveModelCalls": 0
+      "liveModelCalls": 0,
+      "builtinAgentPortraits": true
     }
   },
-  "captureScript": "docs/showcase/capture.cjs"
+  "captureScript": "docs/showcase/capture.cjs",
+  "captureScriptSha256": "ddf4dede000766fc92e07d0d660587ce314e01a50f389591365e5c8bccb10e1c"
 }
