@@ -11,6 +11,8 @@
  * 也会落进编辑器,只是装的是仪表盘文件)。负对照(09-16 实跑):纯 HEAD → PDF 那条红(关成 home);
  * 只修 mainTabs、笔记订阅仍按 api 放行 → 仪表盘那条红(空按)+ 最近使用重复。
  *
+ * 第 4 段(同日晚):切 Space 往返后的历史 —— 换布局清栈、但还原出来的前台文件视图要有栈底,见段内注释。
+ *
  * 骨架照抄 home-back.e2e.cjs(返回键)+ note-open.e2e.cjs(种库 / 抽屉点行)。
  */
 const http = require('http')
@@ -130,8 +132,7 @@ async function main() {
     }
 
     // 种库:笔记 + 库根 PDF + 仪表盘,然后重开(预热早把空库读进 store 了,见 note-open 同款告警)。
-    // PDF 走 writeTextFile:tinyPdf 是纯 ASCII,逐字节等价。⚠️ 别用 saveAttachment —— 移动端那条
-    // attachmentPaths 的 path-browserify.relative 会碰 process.cwd(),浏览器 / WebView 里直接抛(09-16 实测,既有)。
+    // PDF 走 writeTextFile:tinyPdf 是纯 ASCII,逐字节等价(当初为绕开 saveAttachment 碰 process.cwd() 的崩溃,60d5ed90 已修)。
     const pdf = tinyPdf(['e2e fileback']).toString('latin1')
     await page.evaluate(async ({ NOTE, PDF, DASH, pdf }) => {
       await window.amadeus.newPage(`${NOTE}.md`)
@@ -190,6 +191,32 @@ async function main() {
     const dashKeys = recent.filter((k) => k.includes(`${DASH}.dashboard`))
     ok('3b 最近使用里仪表盘恰好一条 file:dashboard:*(没有 note:*.dashboard.md 重复)',
       dashKeys.length === 1 && dashKeys[0] === `file:dashboard:${DASH}.dashboard.md`, JSON.stringify(dashKeys))
+
+    // ── 4. 切 Space 往返:换布局时清历史,但还原出来的前台文件视图要有栈底 ──
+    // 09-16 起单列 store 在 applyNamed(applySCBlob)/ resetLayout 里自己清;setActiveSpace 结尾那次 reset 删了 ——
+    // 它跑在重建之后,会把还原出来的前台视图刚记的栈底一起清掉(桌面 active-tab.e2e 的 S3/D1 就是它)。
+    // 手机上 4c 在修前也是绿的(实测),这一段真正钉的是 4d:删了结尾 reset 却没在单列 store 里补清 →
+    // 切换前的笔记条目串进来,第二下返回退回笔记(负对照实跑 4d 红)。
+    const switchSpace = async (id) => {
+      if (!(await page.$('.mb-drawer--left.open'))) { await tap(page.locator('.mb-topbar .mb-icon-btn').first()); await page.waitForTimeout(600) }
+      const all = await page.$$eval('.mb-drawer-foot .mb-tab', (els) => els.map((e) => e.dataset.space || ''))
+      if (!all.includes(id)) throw new Error(`左抽屉底部没有 ${id} space tab(现有: ${all.join(',')})`)
+      await tap(page.locator(`.mb-drawer-foot .mb-tab >> nth=${all.indexOf(id)}`))
+      await page.waitForTimeout(1200)
+    }
+    await openRow(PDF) // 栈:[笔记, PDF]
+    await switchSpace('tangu')
+    await switchSpace('amadeus')
+    const s4 = await state()
+    ok('4a 切到 Tangu 再切回 Note:PDF 还原在前台', s4.view === 'amadeus-pdf', JSON.stringify(s4))
+    await openRow(NOTE) // 就地开笔记,点行顺带收抽屉
+    ok('4b 这一下返回真的打进了 MobileRoot', await back())
+    const s4c = await state()
+    ok('4c 往返后就地开笔记再返回 → 回到还原出来的 PDF(栈底得在)',
+      s4c.view === 'amadeus-pdf', JSON.stringify(s4c))
+    ok('4d0 这一下返回真的打进了 MobileRoot', await back())
+    const s4d = await state()
+    ok('4d ⚠️ 再返回 → 到栈底关掉标签,不许退回切 Space 之前的笔记(没清历史 = 串栈)', s4d.view !== 'amadeus-editor', JSON.stringify(s4d))
     await ctx.close()
   } catch (e) {
     fails.push(String((e && e.message) || e))

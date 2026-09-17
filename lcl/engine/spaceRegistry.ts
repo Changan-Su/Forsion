@@ -7,7 +7,6 @@ import { IS_MINI_PANEL, IS_TRANSIENT_MINI_PANEL } from './uiMode'
 import { supportsMiniPanel } from './miniPanel'
 import type { SpaceDefinition } from './types'
 import { useWorkspace } from './workspaceStore'
-import { useNav } from './navStore'
 import { loadLayout, saveLayout, clearLayout, loadNamedLayout, saveNamedLayout } from './layoutPersist'
 
 const ACTIVE_KEY = IS_MINI_PANEL ? 'forsion_mini_active_space' : 'forsion_tangu_active_space'
@@ -61,7 +60,6 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
     if (IS_MINI_PANEL) {
       // Never restore the old Mini/mobile workspace blob or build desktop sidebars.
       ws.resetLayout()
-      useNav.getState().reset()
       return
     }
     ws.setSidebarDefaults(toSpace.sidebarDefaults) // 3. 两路都需(applyNamed 不跑 build)
@@ -69,10 +67,10 @@ export const useSpaceStore = create<SpaceState>((set, get) => ({
 
     // 4. 还原目标 Space:有命名布局则应用(applyNamed 不持久化,补 saveCurrent);否则 resetLayout 重建+持久化
     const saved = ws.namedLayouts().includes(spaceLayoutName(toId))
+    // per-tab 历史由 applyNamed / resetLayout 各自在换布局时清(两种 store 都是)。⚠️ 这里别再补一次 reset:
+    // 它跑在重建之后,会把还原出来的前台文件视图刚记下的栈底一起清掉 → 后退恒灰(09-16 active-tab.e2e)。
     if (saved && ws.applyNamed(spaceLayoutName(toId))) ws.saveCurrent()
     else ws.resetLayout()
-
-    useNav.getState().reset() // 布局整体更换,旧 leaf id 全失效 → 清全部 per-tab 历史
   },
 }))
 

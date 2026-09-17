@@ -277,13 +277,20 @@ function panelsAt(api: DockviewApi, loc: ViewLocation): IDockviewPanel[] {
   return api.panels.filter((p) => ((p.params ?? {}) as PanelMeta).__loc === loc)
 }
 
-/** 主区「当前显示」的 panel:全局 activePanel 若在主区用它;否则(焦点在侧栏,最常见于点侧栏列表项)
- *  取主区组内的 activePanel。就地导航/前进后退都以它为作用对象。 */
+/** 最后一次作为全局 activePanel 出现的主区 panel 所在的**组**(refreshTabs 维护,换布局清空)。
+ *  记组不记 panel:侧栏聚焦期间关掉那张标签,同组顶上来的照样认得;拖放后 refreshTabs 会重记(Codex 复审)。 */
+let lastMainGroupId: string | null = null
+
+/** 主区「当前显示」的 panel:全局 activePanel 若在主区用它;否则(焦点在侧栏,如点了侧栏自己的标签头)
+ *  取主区组内的 activePanel,优先**最后聚焦的那一组** —— 分屏时不认它就回落成 panels 里第一组(左组),
+ *  树行高亮 / 箭头落到另一半屏(09-16 Codex 评审)。就地导航/前进后退都以它为作用对象。 */
 export function activeMainPanel(api: DockviewApi): IDockviewPanel | null {
   const mains = panelsAt(api, 'main')
   const global = api.activePanel
   if (global && mains.some((p) => p.id === global.id)) return global
-  return mains.find((p) => (p as { group?: { activePanel?: { id?: string } } }).group?.activePanel?.id === p.id) ?? mains[0] ?? null
+  const groupOf = (p: IDockviewPanel) => (p as { group?: { id?: string; activePanel?: { id?: string } } }).group
+  const fronts = mains.filter((p) => groupOf(p)?.activePanel?.id === p.id)
+  return fronts.find((p) => groupOf(p)?.id === lastMainGroupId) ?? fronts[0] ?? mains[0] ?? null
 }
 
 /** 给某 location 计算新 panel 的放置位置。
@@ -540,6 +547,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const api = get().api
     if (!api) { if (get().mainTabs.length) set({ mainTabs: [] }); return }
     const activeId = api.activePanel?.id
+    if (api.activePanel && ((api.activePanel.params ?? {}) as PanelMeta).__loc === 'main') {
+      lastMainGroupId = (api.activePanel as { group?: { id?: string } }).group?.id ?? null
+    }
     const tabs: MainTab[] = panelsAt(api, 'main').map((p) => {
       const type = panelType(p)
       const params = (p.params ?? {}) as Record<string, unknown>
@@ -634,6 +644,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const panel = api?.getPanel(panelId)
     if (!api || !panel) return
     const loc = locOf(target.group) // 目标面板身份 → 落子后视图继承(侧栏=图标 / 主区=tab+标题)
+    // 拖出主区要记住源组:moveTo 会同步激活落点组里的它,那一刻 __loc 还是 main → refreshTabs 把落点组
+    // 记成「最后的主区组」,下面改完 __loc 再刷也改不回来(Codex 复审)。
+    const srcMainGroup = ((panel.params ?? {}) as PanelMeta).__loc === 'main' ? (panel as { group?: { id?: string } }).group?.id ?? null : null
     // 拖动前各侧计数:占位进退判定不能依赖 visible 标志(moveTo 触发的 syncPanelState 可能已翻转它)。
     const sideBefore = { left: panelsAt(api, 'left').length, right: panelsAt(api, 'right').length, bottom: panelsAt(api, 'bottom').length }
     try {
@@ -641,6 +654,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       else panel.api.moveTo({ group: target.group, position: target.dir }) // 方向 = 面板内分屏并新建组
     } catch { return }
     panel.api.updateParameters({ ...(panel.params ?? {}), __loc: loc })
+    if (srcMainGroup && loc !== 'main') lastMainGroupId = srcMainGroup
     // 把最后一个主区 view 拖去侧栏 → 主区空:补 home 空态占位(与关掉最后一个 tab 同观感,不留空白)。
     if (panelsAt(api, 'main').length === 0) get().openView('home', {}, 'main')
     // 侧栏占位进退:某侧被拖空 → 补占位(保住 drop 靶);拖入真实 tab 的一侧若有占位 → 占位退位。
@@ -736,6 +750,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     try { api.clear() } catch { /* ignore */ }
     clearLayout()
     useNav.getState().reset() // 布局重建,旧 leaf id 全失效
+    lastMainGroupId = null // 组 id 同样会被新布局复用
     set({ stash: { left: [], right: [], bottom: [] }, stashActive: { left: null, right: null, bottom: null }, leftVisible: true, rightVisible: true, bottomVisible: false, focusedChatLeafId: null })
     get().defaultBuilder?.() // 重建默认;openView 的 firstOfSide → sizeSide 按黄金分割钉宽
     scheduleWorkspaceSave()
@@ -1005,7 +1020,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       migrateLayoutBlob(blob)
       dismissExtensions()
       api.fromJSON(blob.dockview as never)
-      useNav.getState().reset() // 布局整体更换,旧 leaf id 全失效
+      // 布局整体更换,旧 leaf id 全失效。⚠️ 放在 fromJSON **之后**:拆旧建新途中的激活事件也会让订阅方记账,
+      // 挪到前面的话,途中记下的条目会留在新布局复用的 leaf id(如 launcher#1)上。
+      useNav.getState().reset()
+      lastMainGroupId = null // 组 id 也会被新布局复用;下面的 refreshTabs 按新布局的全局 activePanel 重记
       set({
         leftVisible: blob.sidebars.left.visible,
         rightVisible: blob.sidebars.right.visible,
@@ -1014,6 +1032,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         stash: { left: blob.sidebars.left.stash, right: blob.sidebars.right.stash, bottom: blob.sidebars.bottom?.stash ?? [] },
       })
       pinSides(api)
+      // 重置之后必须让订阅方再跑一遍,给还原出来的前台文件/功能视图补栈底;不补 = 切 Space 往返后后退恒灰,
+      // 就地开别的笔记再也退不回来(09-16 active-tab.e2e)。⚠️ 先清空再刷:拆建途中的激活事件通常已把
+      // mainTabs 刷成终态(那时记下的栈底刚被上面的 reset 清掉),直接 refreshTabs 会判「无变化」不 set(探针实测)。
+      set({ mainTabs: [] })
+      get().refreshTabs()
       return true
     } catch {
       return false // 损坏布局:调用方回退 resetLayout

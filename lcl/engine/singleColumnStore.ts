@@ -17,6 +17,7 @@ import { nativeExtendTargets } from './nativeExtendView'
 import type { Leaf, ViewLocation, SidebarDefaults } from './types'
 import { identitySig, label } from './types'
 import { getView } from './viewRegistry'
+import { useNav } from './navStore'
 import type { PersistedPanel } from './layoutPersist'
 import { contentStorageKey } from './contentStorageScope'
 
@@ -122,6 +123,9 @@ function applySCBlob(raw: unknown): boolean {
   const right = knownLeaves(raw.right)
   const pick = (want: string | null, pool: LeafRec[]): string | null =>
     pool.some((r) => r.id === want) ? want : pool[pool.length - 1]?.id ?? null
+  // 换布局:旧 leaf id 的历史全失效(还原出来的 id 与旧布局重合 = 安卓返回退进别的 Space 的内容)。
+  // 须在下面 refreshTabs 之前,那一刷给前台文件视图记的栈底要留着。
+  useNav.getState().reset()
   useWorkspace.setState({
     mainLeaves: main, leftLeaves: left, rightLeaves: right,
     activeMainId: pick(raw.activeMainId, main),
@@ -497,6 +501,7 @@ export const useWorkspace = create<WS>((set, get) => {
         activeMainId: null, leftActiveId: null, rightActiveId: null,
         leftVisible: false, rightVisible: false, focusedChatLeafId: null,
       })
+      useNav.getState().reset() // 同桌面版:布局重建,旧 leaf id 的历史全失效;须在重建之前,重建时记下的栈底要留着
       get().defaultBuilder?.() // = getActiveSpace().build()（切 Space 时 spaceRegistry 已先切 id）
       get().refreshTabs()
     },

@@ -936,7 +936,11 @@ export function AmadeusPagesView() {
   // 表与导航历史共用(FILE_VIEW_PARAM)。漏在表外的视图会回落 activePage = 亮错行(仪表盘曾如此)。
   const mainTabs = useWorkspace((s) => s.mainTabs)
   const activeViewFile = useMemo(() => {
-    const tab = mainTabs.find((x) => x.active)
+    // ⚠️ 桌面按 activeMainPanel 定主区前台 leaf:点左侧栏**自己的标签头**会把 dockview activePanel 挪进侧栏,
+    //    mainTabs[].active 全变 false → 回落 activePage 亮错行(09-16 active-tab.e2e T2)。单列壳 api 恒 null,照旧看 mainTabs。
+    const api = useWorkspace.getState().api
+    const am = api ? activeMainPanel(api) : null
+    const tab = am ? { id: am.id, type: String(((am.params ?? {}) as { __type?: unknown }).__type ?? '') } : mainTabs.find((x) => x.active)
     const key = tab && FILE_VIEW_PARAM[tab.type]
     // leafById 两壳皆有;移动单列壳 api 恒 null(getPanel 读法在手机上恒 null→白板/PDF 树行不亮)。
     const v = key ? (useWorkspace.getState().leafById(tab!.id)?.params as Record<string, unknown> | undefined)?.[key] : null
