@@ -13,6 +13,7 @@ import { registerMessages, translate, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { track } from '../achievements/store'
 import { act } from '../activity/log'
+import { agentDescription } from './builtinAgentDescriptions'
 
 registerMessages({
   'agentstab.userMdTemplate': {
@@ -282,7 +283,8 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
           </div>
           <div className="field">
             <label>{t('settings.agents.maxIter')}</label>
-            <input type="number" min={1} max={200} value={editing.maxIterations}
+            {/* min=10 与引擎 AGENT_MAX_ITERATIONS_MIN 同步:低于下限引擎会忽略并 400,别让用户填得进去 */}
+            <input type="number" min={10} max={200} value={editing.maxIterations}
               onChange={(e) => setEditing({ ...editing, maxIterations: e.target.value })} />
           </div>
           <div className="field">
@@ -410,7 +412,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
                 {a.slug === defaultSlug && <span style={{ color: 'var(--accent-ink)', marginLeft: 8, fontSize: 11 }}>· {t('settings.agents.isDefault')}</span>}
                 {a.createdBy === 'agent' && <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 11 }}>· {t('settings.agents.byAgent')}</span>}
                 {a.createdBy === 'system' && <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 11 }}>· {t('agent.badge.system')}</span>}
-                {a.description && <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 12 }}>{a.description.length > 60 ? `${a.description.slice(0, 60)}…` : a.description}</span>}
+                {a.description && <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 12 }}>{agentDescription(a, t).length > 60 ? `${agentDescription(a, t).slice(0, 60)}…` : agentDescription(a, t)}</span>}
               </span>
               <button className="icon-btn" title={a.cloudSync ? t('settings.agents.cloudSyncOn') : t('settings.agents.cloudSyncOff')}
                 onClick={() => toggleCloudSync(a)} style={a.cloudSync ? { color: 'var(--accent-ink)' } : { opacity: 0.5 }}><Cloud size={13} /></button>

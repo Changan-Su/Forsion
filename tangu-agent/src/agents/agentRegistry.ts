@@ -18,10 +18,13 @@ import { mkdirSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { agentsDir, memoryDir, userMdFile, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
-import { DEFAULT_AGENT_AVATAR_B64, DEFAULT_AGENT_AVATAR_MIME } from './defaultAvatar.js';
+import { builtinAgentAvatar } from './builtinAvatars.js';
+import { LEGACY_PERSONAS } from './legacyPersonas.js';
+import { ARIOSO_SYSTEM_PROMPT, ARIOSO_SOUL, ARIA_SYSTEM_PROMPT, ARIA_SOUL, RECITA_SYSTEM_PROMPT, RECITA_SOUL } from './personaPrompts.js';
 import { CODING_AGENT_VERSION, CODING_SYSTEM_PROMPT, CODING_SOUL } from './codingPrompt.js';
-import { loadSpecialAgentsConfig, DEFAULT_MUSE_PROMPT } from '../services/specialAgentsConfig.js';
+import { loadSpecialAgentsConfig, legacyMusePrompt, DEFAULT_MUSE_PROMPT } from '../services/specialAgentsConfig.js';
 import { THINKING_LEVELS } from '../llm/modelCapabilities.js';
+import { normalizeCompactionLayer } from '../services/compactionSettings.js';
 import type { ThinkingLevel } from '../core/types.js';
 
 /** 循环轮数缺省(会话/Agent 都没给时 agentLoop 用它)与 **Agent 级下限**:Agent 定义里低于下限的 max_iterations
@@ -45,6 +48,8 @@ export interface NormalAgentDef {
   model: string;
   /** 启用的 custom/MCP 工具 id 白名单（[]=不限制，继承会话设置）。 */
   tools: string[];
+  enabledSkillIds?: string[];
+  enabledMcpServers?: string[];
   thinkingLevel: ThinkLevel;
   /** 最大循环轮数（null=用默认）。 */
   maxIterations: number | null;
@@ -66,6 +71,9 @@ export interface NormalAgentDef {
   cloudSync?: boolean;
   /** 允许读用户活动日志(read_activity 工具);默认/false=仅 Muse 可读。 */
   activityAccess?: boolean;
+  /** 上下文压缩旋钮(config.toml 的 `[compaction]` 表,已归一化;字段见 services/compactionSettings)。
+   *  作为 run 级层并入 agentConfig.compaction,压过 config.json 的同名段。 */
+  compaction?: Record<string, unknown>;
   /** 内置工具名单模式:'deny'=toolsList 内禁用(其余可用);'allow'=仅 toolsList 可用;缺省=不限制。
    *  只约束无门禁的内置工具(见 toolRegistry.resolveTools);区别于 tools=自定义工具选择。 */
   toolsMode?: 'allow' | 'deny';
@@ -133,6 +141,8 @@ export function parseAgentFile(slug: string, raw: string): NormalAgentDef {
     description: meta.description || '',
     model: meta.model || '',
     tools,
+    enabledSkillIds: Array.isArray(meta.enabled_skill_ids) ? meta.enabled_skill_ids.filter((v: unknown) => typeof v === 'string') : undefined,
+    enabledMcpServers: Array.isArray(meta.enabled_mcp_servers) ? meta.enabled_mcp_servers.filter((v: unknown) => typeof v === 'string') : undefined,
     thinkingLevel: thinking,
     maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.min(200, Math.floor(maxIter)) : null,
     approvalMode: approval,
@@ -187,6 +197,8 @@ export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): N
     description: str(meta.description),
     model: str(meta.model),
     tools,
+    enabledSkillIds: Array.isArray(meta.enabled_skill_ids) ? meta.enabled_skill_ids.filter((v: unknown) => typeof v === 'string') : undefined,
+    enabledMcpServers: Array.isArray(meta.enabled_mcp_servers) ? meta.enabled_mcp_servers.filter((v: unknown) => typeof v === 'string') : undefined,
     thinkingLevel: think,
     maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.min(200, Math.floor(maxIter)) : null,
     approvalMode: approval,
@@ -204,6 +216,9 @@ export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): N
       ? meta.tools_list.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 200)
       : undefined,
     apps,
+    ...(meta.compaction && typeof meta.compaction === 'object' && Object.keys(normalizeCompactionLayer(meta.compaction)).length
+      ? { compaction: normalizeCompactionLayer(meta.compaction) as Record<string, unknown> }
+      : {}),
   };
 }
 
@@ -224,6 +239,8 @@ export function serializeAgentConfig(def: NormalAgentDef): string {
   if (def.approvalMode) obj.approval_mode = def.approvalMode;
   if (def.maxIterations != null) obj.max_iterations = def.maxIterations;
   if (def.tools.length) obj.tools = def.tools;
+  if (def.enabledSkillIds) obj.enabled_skill_ids = def.enabledSkillIds;
+  if (def.enabledMcpServers) obj.enabled_mcp_servers = def.enabledMcpServers;
   if (def.libraryOrder && def.libraryOrder.length) obj.library_order = def.libraryOrder;
   if (def.apps && def.apps.length) obj.apps = def.apps;
   if (def.avatar) obj.avatar = def.avatar;
@@ -236,15 +253,17 @@ export function serializeAgentConfig(def: NormalAgentDef): string {
   }
   obj.created_by = def.createdBy;
   obj.created_at = def.createdAt || new Date().toISOString();
+  // [compaction] 表单独串在**最后**:TOML 里表头之后的裸键都归该表,developer_instructions 必须先于它落盘。
+  const tables = def.compaction && Object.keys(def.compaction).length ? '\n' + stringifyToml({ compaction: def.compaction }) : '';
   const di = def.systemPrompt || '';
   // developer_instructions 常多行:用 TOML 多行字面串(''')——用户手编 config.toml 时可原样换行、无需转义,
   // 避免「在基本串 "..." 里直接敲回车 → 非法 TOML → 整个 agent 解析失败」。仅当含 ''' 或以 ' 结尾(破坏闭合)
   // 时回退 smol-toml 的转义单行串。'''\n 后的首换行被 TOML 裁掉,故内容原样保真。
   if (di.includes('\n') && !di.includes("'''") && !di.endsWith("'")) {
-    return stringifyToml(obj) + `developer_instructions = '''\n${di}'''\n`;
+    return stringifyToml(obj) + `developer_instructions = '''\n${di}'''\n` + tables;
   }
   obj.developer_instructions = di;
-  return stringifyToml(obj);
+  return stringifyToml(obj) + tables;
 }
 
 // ── mtime 缓存(各 agent 子目录的 config.toml + SOUL.md 指纹)──
@@ -285,48 +304,42 @@ async function dirStamp(dir: string): Promise<string> {
   return parts.sort().join('|');
 }
 
-/** 内置默认 Normal Agent 预设。xyra = 默认 agent(承载迁移自旧全局记忆/日志)。 */
-export const DEFAULT_AGENTS: Array<Pick<NormalAgentDef, 'slug' | 'name' | 'description' | 'systemPrompt'> & Partial<NormalAgentDef>> = [
+type BuiltinAgentPreset = Pick<NormalAgentDef, 'slug' | 'name' | 'description' | 'systemPrompt'> & Partial<NormalAgentDef>;
+
+export const MUSE_AGENT_SLUG = 'muse';
+
+/** Muse 的内置骨架。人格/指令英文(硬编码模型提示纪律);每周期的动态上下文(预算/用户记忆快照/
+ *  活动摘要)由 muse.ts 注入 kickoff 消息,不在此处。 */
+const MUSE_AGENT_PRESET: BuiltinAgentPreset = {
+  slug: MUSE_AGENT_SLUG,
+  name: 'Muse',
+  description: 'A quiet background observer that finds worthwhile next steps',
+  createdBy: 'system',
+  systemPrompt: DEFAULT_MUSE_PROMPT,
+  soul:
+    '# Muse\n\nA quiet observer with a spark of initiative. Muse watches the flow of the user\'s work and life from the background, ' +
+    'connects scattered threads across conversations and files, and surfaces the few things genuinely worth doing next.\n' +
+    'Curious but restrained: proposes only what is actionable and valuable now, learns from what the user accepts or dismisses, ' +
+    'and would rather stay silent than waste the user\'s attention.',
+};
+
+
+/** 内置名册共五位。xyra 保持既有标识,以延续 Arioso 的会话、记忆与日志。 */
+export const DEFAULT_AGENTS: BuiltinAgentPreset[] = [
   {
-    slug: DEFAULT_AGENT_SLUG,
-    name: 'Tangu Arioso',
-    description: 'Tangu 默认助手,承载你的长期记忆与日志',
-    thinkingLevel: 'low',
-    systemPrompt:
-      "You are Tangu Arioso — the user's default AI assistant. Reliable, restrained, and pragmatic: answer accurately and clearly, think through multi-step tasks before acting, " +
-      'and state uncertainty honestly rather than making things up. You have your own long-term memory and logs: use remember to record user facts/preferences worth keeping long-term, ' +
-      "and use log_event to record completed work/conclusions in the current day's log.",
-    soul:
-      '# Tangu Arioso\n\nCalm, focused, and warm. Like a long-term companion assistant: remembers the user\'s preferences and history, and thinks things through before acting.\n' +
-      "Speaks concisely without rambling; when uncertain, says so honestly without fabricating; respects the user's time and replies in the user's language by default.",
+    slug: DEFAULT_AGENT_SLUG, name: 'Arioso', version: '1.1.0',
+    description: 'Quiet warmth and clear judgment, with memory of what matters to you',
+    thinkingLevel: 'low', systemPrompt: ARIOSO_SYSTEM_PROMPT, soul: ARIOSO_SOUL,
   },
   {
-    slug: 'general-assistant',
-    name: '通用助手',
-    description: '严谨可靠的全能助手,适合日常问答与多步任务',
-    thinkingLevel: 'low',
-    systemPrompt:
-      'You are a helpful, rigorous, and reliable general-purpose assistant. Strive for accurate, clear, well-organized answers; state uncertainty honestly rather than making things up. ' +
-      "For multi-step tasks, briefly outline your approach before acting, and verify with tools when needed. Reply in the user's language by default.",
+    slug: 'aria', name: 'Aria',
+    description: 'Emotional insight, expressive writing, and imaginative collaboration',
+    thinkingLevel: 'low', systemPrompt: ARIA_SYSTEM_PROMPT, soul: ARIA_SOUL,
   },
   {
-    slug: 'code-reviewer',
-    name: '代码审查员',
-    description: '专注质量、安全与可维护性的代码审查',
-    thinkingLevel: 'medium',
-    systemPrompt:
-      'You are a senior code reviewer. When reviewing code, focus on: correctness and edge cases, security vulnerabilities, concurrency and performance, readability and naming, ' +
-      'and error handling and test coverage. Give concrete, actionable changes graded as "Critical / Suggestion / Nit", and explain why; understand the context and existing style before commenting. ' +
-      'Do not speculate, do not give empty praise — point things out only when there is a real issue.',
-  },
-  {
-    slug: 'writing-polish',
-    name: '写作润色',
-    description: '把文字改得清晰、流畅、有力,保留原意与语气',
-    thinkingLevel: 'low',
-    systemPrompt:
-      "You are a writing editor. Your task is to make the text clearer, smoother, and more persuasive while preserving the author's original meaning and tone: " +
-      'cut redundancy, tighten logic, unify terminology, and fix grammatical errors. Unless asked, do not change facts or opinions; provide the revised version, and you may append one or two notes on the key changes.',
+    slug: 'recita', name: 'Recita',
+    description: 'Critical thinking, grounded decisions, and practical next steps',
+    thinkingLevel: 'medium', systemPrompt: RECITA_SYSTEM_PROMPT, soul: RECITA_SOUL,
   },
   {
     // Coding Space 的默认 agent:像 Google AI Studio 的 app builder。预览端(codePreview.ts)按需转译
@@ -339,6 +352,7 @@ export const DEFAULT_AGENTS: Array<Pick<NormalAgentDef, 'slug' | 'name' | 'descr
     systemPrompt: CODING_SYSTEM_PROMPT,
     soul: CODING_SOUL,
   },
+  MUSE_AGENT_PRESET,
 ];
 
 /** 内置预设的完整 def(纯内存,不落盘):云端虚拟条目(cloudAgentStore 列表合成)与 run 侧
@@ -346,11 +360,11 @@ export const DEFAULT_AGENTS: Array<Pick<NormalAgentDef, 'slug' | 'name' | 'descr
 export function builtinAgentDef(slug: string): NormalAgentDef | null {
   const a = DEFAULT_AGENTS.find((x) => x.slug === slug);
   if (!a) return null;
-  return buildAgentDef(a.slug, null, {
+  return { ...buildAgentDef(a.slug, null, {
     slug: a.slug, name: a.name, description: a.description, model: a.model, tools: a.tools,
     thinkingLevel: a.thinkingLevel, maxIterations: a.maxIterations, approvalMode: a.approvalMode,
     systemPrompt: a.systemPrompt, soul: a.soul, createdBy: a.createdBy || 'user',
-  });
+  }), version: a.version || '1.0.0', avatar: builtinAgentAvatar(a.slug) ? 'avatar.jpg' : undefined };
 }
 
 /** 写一个默认 agent 的骨架(目录 + Library/ + 缺失的 config.toml / SOUL.md);幂等,不覆盖已有文件。
@@ -360,7 +374,7 @@ async function writeAgentScaffold(a: (typeof DEFAULT_AGENTS)[number]): Promise<v
   mkdirSync(path.join(adir, 'Library'), { recursive: true }); // 建 agent 目录 + Library(头像/资料)
   if (!existsSync(path.join(adir, 'config.toml'))) {
     const def: NormalAgentDef = {
-      slug: a.slug, name: a.name, version: '1.0.0', description: a.description || '', model: a.model || '',
+      slug: a.slug, name: a.name, version: a.version || '1.0.0', description: a.description || '', model: a.model || '',
       tools: a.tools || [], thinkingLevel: a.thinkingLevel || '', maxIterations: a.maxIterations ?? null,
       approvalMode: a.approvalMode || '', createdBy: a.createdBy || 'user', createdAt: new Date().toISOString(),
       systemPrompt: a.systemPrompt, soul: a.soul || '', libraryOrder: [],
@@ -393,22 +407,6 @@ async function refreshBuiltinAgent(a: (typeof DEFAULT_AGENTS)[number]): Promise<
 
 // ── Muse 系统 agent(Special Agent 的文件夹化身份;由 muse supervisor 按需播种/自愈)──
 
-export const MUSE_AGENT_SLUG = 'muse';
-
-/** Muse 的内置骨架。人格/指令英文(硬编码模型提示纪律);每周期的动态上下文(预算/用户记忆快照/
- *  活动摘要)由 muse.ts 注入 kickoff 消息,不在此处。 */
-const MUSE_AGENT_PRESET: (typeof DEFAULT_AGENTS)[number] = {
-  slug: MUSE_AGENT_SLUG,
-  name: 'Muse',
-  description: '后台缪斯:持续观察你的活动,主动发现值得做的事(经 Muse TODO 提交)',
-  createdBy: 'system',
-  systemPrompt: DEFAULT_MUSE_PROMPT,
-  soul:
-    '# Muse\n\nA quiet observer with a spark of initiative. Muse watches the flow of the user\'s work and life from the background, ' +
-    'connects scattered threads across conversations and files, and surfaces the few things genuinely worth doing next.\n' +
-    'Curious but restrained: proposes only what is actionable and valuable now, learns from what the user accepts or dismisses, ' +
-    'and would rather stay silent than waste the user\'s attention.',
-};
 
 /**
  * 确保 Muse 系统 agent 文件夹存在(幂等,绝不覆盖已有文件——用户对 SOUL/指令的修改被尊重)。
@@ -422,57 +420,83 @@ export async function ensureMuseAgent(legacyPrompt?: string): Promise<void> {
   cache = null;
 }
 
-/** 默认 agent 显式删头像的标记:存在则 ensureXyraDefaults 不再自动补种(由 deleteAgentAvatar 写入)。 */
-const avatarRemovedMarker = (): string => path.join(agentsDir(), DEFAULT_AGENT_SLUG, '.avatar-removed');
+/** 内置头像显式删除后不复活;自定义头像和独立的记忆保持原样。 */
+const avatarRemovedMarker = (slug: string): string => path.join(agentsDir(), slug, '.avatar-removed');
 
-/** 让已存在的默认 agent 平滑跟随内置默认(每次启动幂等运行):
- *  ① 品牌改名:把 name/systemPrompt/SOUL 里的字面 "Tangu Xyra" → "Tangu Arioso"(只动这串,不碰用户其余文字;
- *     已是新名则 no-op,用户改过名则不含该串、不受影响)。
- *  ② 默认头像自愈:只要「没有可用头像文件」(config.avatar 未设,或指向的文件已丢失=旧 marker 误判/被外部删)
- *     就补种内置默认头像;唯一例外是用户经设置显式删过(.avatar-removed)。这样 config 指向却丢文件的 404 会自动修复。 */
-async function ensureXyraDefaults(): Promise<void> {
-  const cur = await getAgent(DEFAULT_AGENT_SLUG);
-  if (!cur) return;
-  const rebrand = (s: string | undefined): string => (s || '').split('Tangu Xyra').join('Tangu Arioso');
-  const name = rebrand(cur.name), systemPrompt = rebrand(cur.systemPrompt), soul = rebrand(cur.soul);
-  if (name !== cur.name || systemPrompt !== cur.systemPrompt || soul !== cur.soul) {
-    await saveAgent({
-      slug: DEFAULT_AGENT_SLUG, name, description: cur.description, model: cur.model, tools: cur.tools,
-      thinkingLevel: cur.thinkingLevel, maxIterations: cur.maxIterations, approvalMode: cur.approvalMode,
-      systemPrompt, soul, avatar: cur.avatar, createdBy: cur.createdBy,
-      shareDefaultMemory: cur.shareDefaultMemory, cloudSync: cur.cloudSync,
-    });
-  }
-  if (existsSync(avatarRemovedMarker())) return; // 用户显式删过 → 尊重,不补种
-  const a = await getAgent(DEFAULT_AGENT_SLUG);
-  const avatarFile = a?.avatar
-    ? path.join(agentsDir(), DEFAULT_AGENT_SLUG, a.avatar.includes('/') ? a.avatar : path.join('Library', a.avatar))
-    : null;
-  const avatarOk = !!avatarFile && existsSync(avatarFile);
-  if (!avatarOk) {
-    await saveAgentAvatar(DEFAULT_AGENT_SLUG, DEFAULT_AGENT_AVATAR_B64, DEFAULT_AGENT_AVATAR_MIME).catch(() => { /* ignore */ });
-  }
+/** Arioso 逐字段升级:只替换原装文案,保留用户写过的人格、名字及所有配置。云端也复用此纯函数。 */
+export function upgradeAriosoPersona(cur: NormalAgentDef): NormalAgentDef {
+  if (cur.slug !== DEFAULT_AGENT_SLUG) return cur;
+  const old = LEGACY_PERSONAS[0];
+  const preset = DEFAULT_AGENTS[0];
+  const rebrand = (s = ''): string => s.split('Tangu Xyra').join('Tangu Arioso');
+  return {
+    ...cur,
+    name: rebrand(cur.name) === old.name ? preset.name : cur.name,
+    description: cur.description === old.description ? preset.description : cur.description,
+    systemPrompt: rebrand(cur.systemPrompt).trim() === old.systemPrompt.trim() ? preset.systemPrompt : cur.systemPrompt,
+    soul: rebrand(cur.soul).trim() === old.soul?.trim() ? preset.soul : cur.soul,
+    version: cur.version === '1.0.0' ? preset.version! : cur.version,
+  };
 }
 
-/** 首启播种默认 agent 为文件夹。**默认 agent(xyra)无视 .seeded marker 总是补齐**——老用户(旧扁平时代
- *  已写过 .seeded)升级后也保证有完整的 xyra(config.toml + SOUL.md + Library);其余默认 agent 受 marker
- *  守护(删了不复活)。 */
+/** 旧内置身份按固定 slug 退出名册,不以历史提示词/用户配置作为例外。文件保留供历史会话读取。 */
+export function isRetiredBuiltin(def: Pick<NormalAgentDef, 'slug'>): boolean {
+  return ['general-assistant', 'code-reviewer', 'writing-polish'].includes(def.slug);
+}
+
+/** 用户排序优先;缺省按内置名册顺序,其后为用户创建的 agent。 */
+export function sortAgentDefs(defs: NormalAgentDef[], order: string[]): NormalAgentDef[] {
+  const defaults = DEFAULT_AGENTS.map((a) => a.slug);
+  const rank = (slug: string): number => {
+    const explicit = order.indexOf(slug);
+    if (explicit >= 0) return explicit;
+    const builtin = defaults.indexOf(slug);
+    return order.length + (builtin >= 0 ? builtin : defaults.length);
+  };
+  return defs.sort((a, b) => rank(a.slug) - rank(b.slug) || a.name.localeCompare(b.name));
+}
+
+async function ensureBuiltinAvatar(slug: string): Promise<void> {
+  const avatar = builtinAgentAvatar(slug);
+  if (!avatar || existsSync(avatarRemovedMarker(slug))) return;
+  const cur = await getAgent(slug);
+  if (!cur) return;
+  const preset = DEFAULT_AGENTS.find((a) => a.slug === slug);
+  if (slug !== DEFAULT_AGENT_SLUG && !cur.avatar && cur.systemPrompt !== preset?.systemPrompt) return;
+  const filename = cur.avatar
+    ? path.join(agentsDir(), slug, cur.avatar.includes('/') ? cur.avatar : path.join('Library', cur.avatar))
+    : null;
+  if (filename && existsSync(filename)) return;
+  await saveAgentAvatar(slug, avatar.data.toString('base64'), avatar.mimeType);
+}
+
+/** Arioso/Coding 保持原来的补齐语义;Aria/Recita/Muse 独立播种标记让已有安装也能获得新名册,
+ *  此后尊重用户删除。Muse 的身份可见不代表开启后台功能。 */
 async function seedDefaultAgentsOnce(): Promise<void> {
   mkdirSync(agentsDir(), { recursive: true });
-  const xyra = DEFAULT_AGENTS.find((a) => a.slug === DEFAULT_AGENT_SLUG);
-  if (xyra) await writeAgentScaffold(xyra);
-  await ensureXyraDefaults().catch(() => { /* ignore */ });
-  // coding = Coding Space 默认 agent,晚于 .seeded 机制加入 → 无视 marker 总是补齐(幂等,不覆盖用户改动),
-  // 否则老用户升级后 Coding Space 里选不到它。版本更新时刷新提示词(内置 builder agent 的提示词由我们维护)。
-  const coding = DEFAULT_AGENTS.find((a) => a.slug === 'coding');
-  if (coding) { await writeAgentScaffold(coding); await refreshBuiltinAgent(coding).catch(() => { /* ignore */ }); }
-  const marker = path.join(agentsDir(), '.seeded');
-  if (existsSync(marker)) return;
-  for (const a of DEFAULT_AGENTS) {
-    if (a.slug === DEFAULT_AGENT_SLUG || a.slug === 'coding') continue; // 已处理
-    await writeAgentScaffold(a);
+  const arioso = DEFAULT_AGENTS[0];
+  await writeAgentScaffold(arioso);
+  const adir = path.join(agentsDir(), DEFAULT_AGENT_SLUG);
+  const cur = await parseAgentFolder(DEFAULT_AGENT_SLUG, adir);
+  const upgraded = upgradeAriosoPersona(cur);
+  if (JSON.stringify(upgraded) !== JSON.stringify(cur)) {
+    await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig(upgraded), 'utf-8');
+    if (upgraded.soul !== cur.soul) await fs.writeFile(path.join(adir, 'SOUL.md'), upgraded.soul || '', 'utf-8');
   }
-  await fs.writeFile(marker, new Date().toISOString(), 'utf-8');
+  const coding = DEFAULT_AGENTS.find((a) => a.slug === 'coding')!;
+  await writeAgentScaffold(coding);
+  await refreshBuiltinAgent(coding);
+  const marker = path.join(agentsDir(), '.seeded-personas-v1');
+  if (!existsSync(marker)) {
+    for (const a of DEFAULT_AGENTS) {
+      if (a.slug === MUSE_AGENT_SLUG) await ensureMuseAgent(legacyMusePrompt());
+      else await writeAgentScaffold(a);
+    }
+    await fs.writeFile(marker, new Date().toISOString(), 'utf-8');
+  }
+  for (const slug of [DEFAULT_AGENT_SLUG, 'aria', 'recita']) await ensureBuiltinAvatar(slug);
+  const oldMarker = path.join(agentsDir(), '.seeded');
+  if (!existsSync(oldMarker)) await fs.writeFile(oldMarker, new Date().toISOString(), 'utf-8');
 }
 
 /** 旧扁平 <slug>.md → <slug>/(config.toml + 空 SOUL.md);原文件留 .bak。幂等、非破坏。 */
@@ -560,13 +584,18 @@ export function resolveActiveSlug(slug?: string): string {
 export interface AgentsMeta { order: string[]; defaultSlug: string }
 const agentsMetaFile = (): string => path.join(agentsDir(), '.meta.json');
 
+export function normalizeAgentsMeta(meta: Partial<AgentsMeta>): AgentsMeta {
+  return {
+    order: Array.isArray(meta?.order) ? meta.order.filter((slug) => typeof slug === 'string' && isValidSlug(slug) && !isRetiredBuiltin({ slug })) : [],
+    defaultSlug: typeof meta?.defaultSlug === 'string' && isValidSlug(meta.defaultSlug) && !isRetiredBuiltin({ slug: meta.defaultSlug })
+      ? meta.defaultSlug : DEFAULT_AGENT_SLUG,
+  };
+}
+
 export function readAgentsMeta(): AgentsMeta {
   try {
     const m = JSON.parse(readFileSync(agentsMetaFile(), 'utf8'));
-    return {
-      order: Array.isArray(m.order) ? m.order.filter((s: any) => typeof s === 'string') : [],
-      defaultSlug: typeof m.defaultSlug === 'string' && m.defaultSlug ? m.defaultSlug : DEFAULT_AGENT_SLUG,
-    };
+    return normalizeAgentsMeta(m);
   } catch {
     return { order: [], defaultSlug: DEFAULT_AGENT_SLUG };
   }
@@ -574,10 +603,10 @@ export function readAgentsMeta(): AgentsMeta {
 
 export async function writeAgentsMeta(patch: Partial<AgentsMeta>): Promise<AgentsMeta> {
   const cur = readAgentsMeta();
-  const next: AgentsMeta = {
+  const next = normalizeAgentsMeta({
     order: Array.isArray(patch.order) ? patch.order.filter((s) => typeof s === 'string' && isValidSlug(s)) : cur.order,
     defaultSlug: patch.defaultSlug != null && isValidSlug(patch.defaultSlug) ? patch.defaultSlug : cur.defaultSlug,
-  };
+  });
   mkdirSync(agentsDir(), { recursive: true });
   await fs.writeFile(agentsMetaFile(), JSON.stringify(next, null, 2), 'utf-8');
   cache = null; // 顺序变 → 列表缓存失效
@@ -611,11 +640,10 @@ export async function listAgents(): Promise<NormalAgentDef[]> {
     }
   }
   // 按 meta.order 排(order 内按序在前,order 外按 name 在后)。
-  const order = readAgentsMeta().order;
-  const idx = (s: string): number => { const i = order.indexOf(s); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
-  defs.sort((a, b) => { const d = idx(a.slug) - idx(b.slug); return d !== 0 ? d : a.name.localeCompare(b.name); });
-  cache = { stamp, defs };
-  return defs;
+  const meta = readAgentsMeta();
+  const visible = sortAgentDefs(defs.filter((a) => !isRetiredBuiltin(a)), meta.order);
+  cache = { stamp, defs: visible };
+  return visible;
 }
 
 export async function getAgent(slug: string): Promise<NormalAgentDef | null> {
@@ -638,6 +666,8 @@ export interface SaveAgentInput {
   description?: string;
   model?: string;
   tools?: string[];
+  enabledSkillIds?: string[] | null;
+  enabledMcpServers?: string[] | null;
   thinkingLevel?: ThinkLevel;
   maxIterations?: number | null;
   approvalMode?: ApprovalMode;
@@ -693,6 +723,8 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
   if (!existing && !input.systemPrompt?.trim()) throw new Error('systemPrompt required');
   const def: NormalAgentDef = {
     slug,
+    enabledSkillIds: input.enabledSkillIds === undefined ? existing?.enabledSkillIds : input.enabledSkillIds === null ? undefined : [...new Set(input.enabledSkillIds.filter((v) => typeof v === 'string' && v.trim()))].slice(0, 500),
+    enabledMcpServers: input.enabledMcpServers === undefined ? existing?.enabledMcpServers : input.enabledMcpServers === null ? undefined : [...new Set(input.enabledMcpServers.filter((v) => typeof v === 'string' && v.trim()))].slice(0, 200),
     name: input.name.trim().slice(0, 120),
     version: existing?.version || '1.0.0', // 保留原版本;新建默认 1.0.0
     description: (input.description || '').trim().slice(0, 300),
@@ -706,6 +738,8 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
     systemPrompt: (input.systemPrompt != null ? String(input.systemPrompt) : existing?.systemPrompt || '').trim().slice(0, 100_000),
     soul: (input.soul != null ? String(input.soul) : existing?.soul || '').slice(0, 100_000),
     libraryOrder: existing?.libraryOrder || [],
+    apps: existing?.apps,
+    compaction: existing?.compaction,
     avatar: input.avatar !== undefined ? (input.avatar ? String(input.avatar) : undefined) : existing?.avatar,
     shareDefaultMemory: input.shareDefaultMemory !== undefined ? input.shareDefaultMemory : existing?.shareDefaultMemory,
     cloudSync: input.cloudSync !== undefined ? input.cloudSync : existing?.cloudSync,
@@ -787,6 +821,7 @@ export async function saveAgentAvatar(slug: string, base64: string, mimeType: st
     thinkingLevel: cur.thinkingLevel, maxIterations: cur.maxIterations, approvalMode: cur.approvalMode,
     systemPrompt: cur.systemPrompt, soul: cur.soul, avatar: filename, createdBy: cur.createdBy,
   });
+  if (builtinAgentAvatar(slug)) await fs.rm(avatarRemovedMarker(slug), { force: true });
   return filename;
 }
 
@@ -821,9 +856,9 @@ export async function deleteAgentAvatar(slug: string): Promise<boolean> {
     thinkingLevel: cur.thinkingLevel, maxIterations: cur.maxIterations, approvalMode: cur.approvalMode,
     systemPrompt: cur.systemPrompt, soul: cur.soul, avatar: '', createdBy: cur.createdBy,
   });
-  // 默认 agent:记下「用户显式删过」,否则下次启动 ensureXyraDefaults 会把内置默认头像补回来。
-  if (slug === DEFAULT_AGENT_SLUG) {
-    await fs.writeFile(avatarRemovedMarker(), new Date().toISOString(), 'utf-8').catch(() => { /* ignore */ });
+  // 内置头像均尊重用户显式删除。
+  if (builtinAgentAvatar(slug)) {
+    await fs.writeFile(avatarRemovedMarker(slug), new Date().toISOString(), 'utf-8').catch(() => { /* ignore */ });
   }
   return true;
 }

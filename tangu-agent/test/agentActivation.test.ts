@@ -6,6 +6,8 @@
 import { describe, it, expect } from 'vitest';
 import { applyAgentActivation, type AgentsBrainLike } from '../src/services/agentActivation.js';
 import type { NormalAgentDef } from '../src/agents/agentRegistry.js';
+import { LEGACY_PERSONAS } from '../src/agents/legacyPersonas.js';
+import { ARIOSO_SYSTEM_PROMPT, ARIOSO_SOUL } from '../src/agents/personaPrompts.js';
 
 const NONE = async (): Promise<NormalAgentDef | null> => null;
 function def(p: Partial<NormalAgentDef>): NormalAgentDef {
@@ -17,6 +19,20 @@ function def(p: Partial<NormalAgentDef>): NormalAgentDef {
 }
 
 describe('applyAgentActivation', () => {
+  it('upgrades an original cloud Arioso persona at activation while preserving session overrides', async () => {
+    const old = def({ ...LEGACY_PERSONAS[0], thinkingLevel: 'low', version: '1.0.0' });
+    const brain: AgentsBrainLike = { getAgent: async () => old };
+    const cfg: any = { agentSlug: 'xyra' };
+    await applyAgentActivation(cfg, 'u1', NONE, brain);
+    expect(cfg.systemPrompt).toBe(ARIOSO_SYSTEM_PROMPT);
+    expect(cfg.soul).toBe(ARIOSO_SOUL);
+    const override: any = { agentSlug: 'xyra', systemPrompt: 'Session instructions', soul: 'Session soul' };
+    await applyAgentActivation(override, 'u1', NONE, brain);
+    expect(override.systemPrompt).toBe('Session instructions');
+    expect(override.soul).toBe('Session soul');
+    expect(old.systemPrompt).toBe(LEGACY_PERSONAS[0].systemPrompt);
+  });
+
   it('无 agentSlug → 默认作用域,不读任何源', async () => {
     const cfg: any = {};
     const r = await applyAgentActivation(cfg, 'u1', NONE, null);

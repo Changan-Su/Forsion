@@ -4,6 +4,7 @@
  * 有头像显示圆形头像,否则显示名字首字母/首字。
  */
 import React from 'react'
+import { agentDescription } from './builtinAgentDescriptions'
 import { useI18n } from '../i18n'
 import { PillBar } from './EnginePicker'
 import { CompactChatPicker } from './CompactChatPicker'
@@ -34,7 +35,7 @@ export const AgentPicker: React.FC<{
         icon={avatars[effective]
           ? <img className="agent-pill-avatar" src={avatars[effective]} alt="" />
           : <span className="agent-pill-initial">{firstChar(selected?.name || '')}</span>}
-        options={agents.map((agent) => ({ value: agent.slug, name: agent.name, description: agent.description }))}
+        options={agents.map((agent) => ({ value: agent.slug, name: agent.name, description: agentDescription(agent, t) }))}
         onChange={onSelect}
       />
       <PillBar label={t('agent.pickTitle')}>
@@ -48,7 +49,7 @@ export const AgentPicker: React.FC<{
               role="radio"
               aria-checked={selected}
               className={`engine-pill${selected ? ' selected' : ''}`}
-              title={a.description ? `${a.name} — ${a.description}` : a.name}
+              title={a.description ? `${a.name} — ${agentDescription(a, t)}` : a.name}
               onClick={() => onSelect(a.slug)}
             >
               <span className="engine-pill-icon">

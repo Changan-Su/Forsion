@@ -14,6 +14,7 @@ import {
   cloudReadAgentsMeta, cloudWriteAgentsMeta,
 } from '../src/agents/cloudAgentStore.js';
 import { DEFAULT_AGENTS } from '../src/agents/agentRegistry.js';
+import { LEGACY_PERSONAS } from '../src/agents/legacyPersonas.js';
 
 type Row = { content?: string; contentBase64?: string; isBinary: boolean; mtimeMs: number; size: number; deleted: boolean };
 
@@ -70,6 +71,32 @@ describe('cloudAgentsEnabled', () => {
 });
 
 describe('cloudListAgents — 虚拟预设(零落库)', () => {
+  it('shows the five current presets and serves built-in portraits without storage writes', async () => {
+    expect((await cloudListAgents('u1')).map((a) => a.slug)).toEqual(['xyra', 'aria', 'recita', 'coding', 'muse']);
+    for (const slug of ['xyra', 'aria', 'recita']) {
+      expect((await cloudGetAgent('u1', slug))?.avatar).toBe('avatar.jpg');
+      expect((await cloudReadAgentAvatar('u1', slug))?.mimeType).toBe('image/jpeg');
+    }
+    expect(agentFiles.store.size).toBe(0);
+    await cloudDeleteAgentAvatar('u1', 'aria');
+    expect(await cloudReadAgentAvatar('u1', 'aria')).toBeNull();
+    expect(await cloudReadAgentAvatar('u2', 'aria')).not.toBeNull();
+  });
+
+  it('retires stored preset identities regardless of customized fields or default selection, without deleting history', async () => {
+    for (const old of LEGACY_PERSONAS.slice(1)) await cloudSaveAgent('u1', old.slug, old as any);
+    const before = agentFiles.store.size;
+    expect((await cloudListAgents('u1')).map((a) => a.slug)).toEqual(['xyra', 'aria', 'recita', 'coding', 'muse']);
+    expect(agentFiles.store.size).toBe(before);
+    expect((await cloudGetAgent('u1', 'code-reviewer'))?.systemPrompt).toBe(LEGACY_PERSONAS[2].systemPrompt);
+    await cloudSaveAgent('u1', 'code-reviewer', { ...LEGACY_PERSONAS[2], name: 'My reviewer' } as any);
+    await agentFiles.putFile('u1', '__meta__', '.meta.json', { content: JSON.stringify({ defaultSlug: 'code-reviewer', order: ['code-reviewer', 'aria'] }), isBinary: false, mtimeMs: 1, size: 100 });
+    expect((await cloudListAgents('u1')).some((a) => a.slug === 'code-reviewer')).toBe(false);
+    expect(await cloudReadAgentsMeta('u1')).toEqual({ defaultSlug: 'xyra', order: ['aria'] });
+    expect(await cloudWriteAgentsMeta('u1', { defaultSlug: 'general-assistant', order: ['writing-polish', 'recita'] }))
+      .toEqual({ defaultSlug: 'xyra', order: ['recita'] });
+  });
+
   it('lists built-in presets WITHOUT writing anything to the store', async () => {
     const first = await cloudListAgents('u1');
     expect(first.length).toBe(DEFAULT_AGENTS.length);
@@ -120,9 +147,9 @@ describe('cloudSaveAgent — upsert 合并', () => {
 describe('cloudDeleteAgent', () => {
   it('deleting a virtual preset tombstones it and it never comes back; default agent protected', async () => {
     expect(await cloudDeleteAgent('u1', 'xyra')).toBe(false);
-    expect(await cloudDeleteAgent('u1', 'general-assistant')).toBe(true); // 从未物化 → 落 config.toml 墓碑
+    expect(await cloudDeleteAgent('u1', 'aria')).toBe(true); // 从未物化 → 落 config.toml 墓碑
     const after = await cloudListAgents('u1');
-    expect(after.every((a) => a.slug !== 'general-assistant')).toBe(true); // 墓碑过不再合成
+    expect(after.every((a) => a.slug !== 'aria')).toBe(true); // 墓碑过不再合成
   });
 
   it('tombstones all files of a stored agent', async () => {
@@ -135,15 +162,15 @@ describe('cloudDeleteAgent', () => {
   it('editing a virtual preset materializes it (write-time only)', async () => {
     expect(agentFiles.store.size).toBe(0);
     // PATCH 路由语义:cur=cloudGetAgent(虚拟预设兜底命中),未传字段用 cur 回填
-    const cur = await cloudGetAgent('u1', 'code-reviewer');
-    expect(cur?.systemPrompt).toContain('senior code reviewer');
-    const updated = await cloudSaveAgent('u1', 'code-reviewer', {
-      slug: 'code-reviewer', name: '我的审查员', systemPrompt: cur!.systemPrompt,
+    const cur = await cloudGetAgent('u1', 'recita');
+    expect(cur?.systemPrompt).toContain('You are Recita');
+    const updated = await cloudSaveAgent('u1', 'recita', {
+      slug: 'recita', name: '我的审查员', systemPrompt: cur!.systemPrompt,
     });
     expect(updated.name).toBe('我的审查员');
-    expect(updated.systemPrompt).toContain('senior code reviewer');
+    expect(updated.systemPrompt).toBe(cur!.systemPrompt);
     expect(agentFiles.store.size).toBeGreaterThan(0); // 显式编辑才落库
-    const back = await cloudGetAgent('u1', 'code-reviewer');
+    const back = await cloudGetAgent('u1', 'recita');
     expect(back?.name).toBe('我的审查员'); // 之后读到的是库里的真身
   });
 });
@@ -175,8 +202,8 @@ describe('avatar 往返', () => {
 describe('agents-meta(__meta__ 哨兵)', () => {
   it('defaults to xyra; write round-trips order/defaultSlug', async () => {
     expect(await cloudReadAgentsMeta('u1')).toEqual({ order: [], defaultSlug: 'xyra' });
-    const next = await cloudWriteAgentsMeta('u1', { order: ['general-assistant', 'xyra'], defaultSlug: 'general-assistant' });
-    expect(next.defaultSlug).toBe('general-assistant');
-    expect(await cloudReadAgentsMeta('u1')).toEqual({ order: ['general-assistant', 'xyra'], defaultSlug: 'general-assistant' });
+    const next = await cloudWriteAgentsMeta('u1', { order: ['aria', 'xyra'], defaultSlug: 'aria' });
+    expect(next.defaultSlug).toBe('aria');
+    expect(await cloudReadAgentsMeta('u1')).toEqual({ order: ['aria', 'xyra'], defaultSlug: 'aria' });
   });
 });

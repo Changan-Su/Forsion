@@ -135,3 +135,39 @@ describe('buildAgentDef · max_iterations 下限', () => {
     expect(parseAgentConfig('a1', 'name = "A"\nmax_iterations = 3\n', '').maxIterations).toBe(3);
   });
 });
+
+describe('config.toml [compaction] 表(09-15 压缩旋钮 per-agent 层)', () => {
+  it('解析:合法字段归一化后进 def.compaction;非法字段丢弃;无表则无字段', () => {
+    const toml = [
+      'name = "Long Runner"',
+      '',
+      '[compaction]',
+      'reserveTokens = 32000',
+      'keepRecentTokens = 40000',
+      'thinking = "inherit"',
+      'instructions = "always keep ticket ids"',
+      'summaryMaxTokens = "abc"',
+      'bogus = 1',
+    ].join('\n');
+    const def = parseAgentConfig('runner', toml, '');
+    expect(def.compaction).toEqual({ reserveTokens: 32000, keepRecentTokens: 40000, thinking: 'inherit', instructions: 'always keep ticket ids' });
+    expect(parseAgentConfig('plain', 'name = "x"', '').compaction).toBeUndefined();
+  });
+  it('序列化 ↔ 解析往返:全部七个字段;[compaction] 表落在标量键之后,不吞掉多行 developer_instructions', () => {
+    const compaction = {
+      enabled: false, reserveTokens: 32000, keepRecentTokens: 40000, summaryMaxTokens: 4096,
+      thinking: 'low', model: 'cheap-model', instructions: 'keep ids', prompt: 'CUSTOM BASE',
+    };
+    const def = { ...parseAgentConfig('r', 'name = "r"', ''), compaction, systemPrompt: 'line1\nline2' } as NormalAgentDef;
+    const toml = serializeAgentConfig(def);
+    expect(toml).toContain('[compaction]');
+    expect(toml.indexOf("developer_instructions = '''")).toBeLessThan(toml.indexOf('[compaction]'));
+    const back = parseAgentConfig('r', toml, '');
+    expect(back.compaction).toEqual(compaction);
+    expect(back.systemPrompt).toBe('line1\nline2');
+    expect(back.name).toBe('r');
+    // 单行 developer_instructions 那条路同样不被表头吞掉
+    const single = serializeAgentConfig({ ...def, systemPrompt: 'one line' } as NormalAgentDef);
+    expect(parseAgentConfig('r', single, '')).toMatchObject({ systemPrompt: 'one line', compaction });
+  });
+});

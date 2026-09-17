@@ -12,8 +12,10 @@ import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import {
   DEFAULT_AGENTS, builtinAgentDef, buildAgentDef, parseAgentConfig, serializeAgentConfig, isValidSlug,
   AVATAR_MIME_EXT, AVATAR_EXT_MIME, AVATAR_MAX_BYTES,
+  isRetiredBuiltin, normalizeAgentsMeta, sortAgentDefs, upgradeAriosoPersona,
   type NormalAgentDef, type SaveAgentInput, type AgentsMeta,
 } from './agentRegistry.js';
+import { builtinAgentAvatar } from './builtinAvatars.js';
 
 /** 云端 agents 可用 = 非 host-exec profile 且注入了 agentFiles seam(旧云端/未注入 → 路由回落 404)。 */
 export function cloudAgentsEnabled(): boolean {
@@ -43,7 +45,7 @@ export async function cloudGetAgent(userId: string, slug: string): Promise<Norma
   if (cfg == null) return builtinAgentDef(slug);
   const soul = (await readText(userId, slug, 'SOUL.md')) ?? '';
   try {
-    return parseAgentConfig(slug, cfg, soul);
+    return upgradeAriosoPersona(parseAgentConfig(slug, cfg, soul));
   } catch {
     return null;
   }
@@ -77,10 +79,8 @@ export async function cloudListAgents(userId: string): Promise<NormalAgentDef[]>
     const d = builtinAgentDef(a.slug);
     if (d) defs.push(d);
   }
-  const order = (await cloudReadAgentsMeta(userId)).order;
-  const idx = (s: string): number => { const i = order.indexOf(s); return i < 0 ? Number.MAX_SAFE_INTEGER : i; };
-  defs.sort((a, b) => { const d = idx(a.slug) - idx(b.slug); return d !== 0 ? d : a.name.localeCompare(b.name); });
-  return defs;
+  const meta = await cloudReadAgentsMeta(userId);
+  return sortAgentDefs(defs.filter((a) => !isRetiredBuiltin(a)), meta.order);
 }
 
 export async function cloudSaveAgent(userId: string, slug: string, input: SaveAgentInput): Promise<NormalAgentDef> {
@@ -149,6 +149,8 @@ export async function cloudReadAgentAvatar(userId: string, slug: string): Promis
   if (!cur?.avatar) return null;
   const rel = cur.avatar.includes('/') ? cur.avatar : `Library/${cur.avatar}`;
   const f = await files().getFile(userId, slug, rel).catch(() => null);
+  // 虚拟内置头像零落库;显式删除后的墓碑或空 avatar 不回退。
+  if (!f && cur.avatar === 'avatar.jpg') return builtinAgentAvatar(slug);
   if (!f || f.deleted || !f.isBinary || !f.contentBase64) return null;
   const ext = (cur.avatar.split('.').pop() || '').toLowerCase();
   return { data: Buffer.from(f.contentBase64, 'base64'), mimeType: AVATAR_EXT_MIME[ext] || 'application/octet-stream' };
@@ -172,10 +174,7 @@ export async function cloudReadAgentsMeta(userId: string): Promise<AgentsMeta> {
     const raw = await readText(userId, '__meta__', '.meta.json');
     if (raw == null) return { order: [], defaultSlug: DEFAULT_AGENT_SLUG };
     const m = JSON.parse(raw);
-    return {
-      order: Array.isArray(m.order) ? m.order.filter((s: unknown) => typeof s === 'string') : [],
-      defaultSlug: typeof m.defaultSlug === 'string' && m.defaultSlug ? m.defaultSlug : DEFAULT_AGENT_SLUG,
-    };
+    return normalizeAgentsMeta(m);
   } catch {
     return { order: [], defaultSlug: DEFAULT_AGENT_SLUG };
   }
@@ -183,10 +182,10 @@ export async function cloudReadAgentsMeta(userId: string): Promise<AgentsMeta> {
 
 export async function cloudWriteAgentsMeta(userId: string, patch: Partial<AgentsMeta>): Promise<AgentsMeta> {
   const cur = await cloudReadAgentsMeta(userId);
-  const next: AgentsMeta = {
+  const next = normalizeAgentsMeta({
     order: Array.isArray(patch.order) ? patch.order.filter((s) => typeof s === 'string' && isValidSlug(s)) : cur.order,
     defaultSlug: patch.defaultSlug != null && isValidSlug(patch.defaultSlug) ? patch.defaultSlug : cur.defaultSlug,
-  };
+  });
   await putText(userId, '__meta__', '.meta.json', JSON.stringify(next, null, 2));
   return next;
 }

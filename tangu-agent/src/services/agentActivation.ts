@@ -6,7 +6,7 @@
  * agentConfig(就地修改,会话值优先),返回记忆/日志作用域 slug。无 agentSlug / 两路都未命中 / 出错 → 默认。
  */
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
-import { agentCapOf, builtinAgentDef, resolveActiveSlug, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
+import { agentCapOf, builtinAgentDef, resolveActiveSlug, resolveMemorySlug, upgradeAriosoPersona, type NormalAgentDef } from '../agents/agentRegistry.js';
 
 export interface AgentActivation {
   /** 人格 slug(start_discussion 分身、prompt section、Library 取用据此)。 */
@@ -43,6 +43,8 @@ export async function applyAgentActivation(
       if (!def) def = builtinAgentDef(String(agentConfig.agentSlug));
     }
     if (def) {
+      // 云端 Brain 直接读存储,绕过 cloudAgentStore;原装人格升级必须与列表展示同源。
+      def = upgradeAriosoPersona(def);
       activeAgentSlug = resolveActiveSlug(agentConfig.agentSlug);
       memScopeSlug = resolveMemorySlug(def);
       if (!agentConfig.systemPrompt && def.systemPrompt) agentConfig.systemPrompt = def.systemPrompt;
@@ -59,11 +61,19 @@ export async function applyAgentActivation(
       if ((!agentConfig.enabledToolIds || !agentConfig.enabledToolIds.length) && def.tools.length) {
         agentConfig.enabledToolIds = def.tools;
       }
+      const legacyEmptySkills = Array.isArray(agentConfig.enabledSkillIds) && !agentConfig.enabledSkillIds.length && agentConfig.skillsConfigured !== true;
+      if ((agentConfig.enabledSkillIds == null || legacyEmptySkills) && def.enabledSkillIds) {
+        agentConfig.enabledSkillIds = def.enabledSkillIds;
+        agentConfig.skillsConfigured = true;
+      }
+      if (agentConfig.enabledMcpServers == null && def.enabledMcpServers) agentConfig.enabledMcpServers = def.enabledMcpServers;
       if (agentConfig.activityAccess == null && def.activityAccess) agentConfig.activityAccess = true;
       if (agentConfig.toolsMode == null && def.toolsMode) {
         agentConfig.toolsMode = def.toolsMode;
         agentConfig.toolsList = def.toolsList || [];
       }
+      // 压缩旋钮:会话级显式值优先,否则 Agent config.toml 的 [compaction] 表(run 级层,压过 config.json)。
+      if (agentConfig.compaction == null && def.compaction) agentConfig.compaction = def.compaction;
     }
   } catch {
     /* 加载失败不阻断 run */
