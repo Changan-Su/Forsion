@@ -92,12 +92,20 @@ async function main() {
 
   // ⚠️ 别拿 `.t2s-srow` 存不存在当判据:侧栏切到「笔记」时那些行也是 .t2s-srow(通用行类),
   //    看着像有会话、其实一条都点不出聊天面板。必须先把分类切到「会话」。
+  //    「会话」档 = `orbits`(新版侧栏,下面的新建锚在它顶行);`sessions` 是「会话(旧)」,那里没有这个锚。
   // ⚠️ 这段只为**新建流程**铺路;--reuse 下跑它会把你刚切好的会话挤掉(点第一行 = 换 activeId)。
   if (!REUSE) {
+    // dev 重启缺省落「主页」Space(08-28 起),那里没有侧栏 —— 下面的档位与新建锚全都不存在,只会干等超时。
+    // 按 Ribbon 槽的 data-id 切进 Tangu Space(不随语言变);按钮已带 .on(本来就在)就不点。
+    const toTangu = page.locator('.rb-slot[data-id="space:tangu"] .rb-space:not(.on)').first()
+    if (await toTangu.count().catch(() => 0)) {
+      await toTangu.click()
+      await page.waitForTimeout(1500)
+    }
     const picker = page.locator('.t2sw-mode-picker').first()
     if (await picker.count().catch(() => 0)) {
       await picker.locator('.t2sw-mode-trigger').click().catch(() => {})
-      await picker.locator('[data-workspace-mode="sessions"]').click().catch(() => {})
+      await picker.locator('[data-workspace-mode="orbits"]').click().catch(() => {})
       await page.waitForTimeout(1200)
     }
     const anyRow = page.locator('.t2s-srow').first()
@@ -119,17 +127,24 @@ async function main() {
     sid = await page.evaluate(() => window.__forsionStore.getState().activeId)
     check('L1 复用当前会话里待决的那张计划卡', !!sid, `sid=${sid}`)
   } else {
-    // 走**真实 UI 路径**建会话:侧栏工作区分组上的「＋」(`.t2s-group-add`,title 里带工作区名)。
-    // ⚠️ 别用 store.createInWorkspace:它只改 activeId,**不开 tab**(开 tab 在 UI 层 —— store
-    //    不能 import sessionNav,会成环)。结果是会话建好了、消息却压根不进 DOM,
-    //    看起来跟「计划卡没出现」一模一样。08-18 在这上面白烧了两轮真模型。
+    // 建会话分两步(09-17 真实例上改):
+    // ① 必须先点侧栏的新建入口(OrbitsView 顶行 `[data-act="new-chat"]`)——只有它经 `openNewChat()`
+    //    **真的开一个 tab**:主区换成跟随 activeId 的主聊天。但它只给空白草稿(activeId=null),会话要等首条
+    //    消息才建;草稿上 setSessionPlanMode 直接 return、send 又拿工作区路径盖掉 cwd,不能拿草稿直接跑。
+    // ② 再用 store.createInWorkspace(本地默认工作区)真建会话:activeId 一变,① 开出的跟随档 tab 就跟过去。
+    //    ⚠️ 不先做 ① 就单用它:它只改 activeId、**不开 tab** —— 主区停在笔记/钉住的聊天上时消息压根不进 DOM,
+    //    看起来跟「计划卡没出现」一模一样(开 tab 在 UI 层,store 不能 import sessionNav,会成环)。08-18 在这上面白烧了两轮真模型。
+    // ⚠️ 入口别按文案找:按钮字随语言与改版变(换 OrbitsView 后是「新会话 / New session」,旧正则两种语言都落空)。
     const before = await page.evaluate(() => window.__forsionStore.getState().activeId)
-    // 必须走侧栏的「新建会话」(`.t2s-special-title` = sidebar.newChat)——只有它经 `openNewChat()`
-    // **真的开一个 tab**。工作区分组行上的「＋」和 store.createInWorkspace 都只改 activeId:
-    // 多标签下 activeId ≠ 可见面板的会话,于是消息进了 store 却不进 DOM,长得和「计划卡没出现」一样。
-    const newBtn = page.locator('.t2s-special-title', { hasText: /新建会话|New chat/i }).first()
+    const newBtn = page.locator('[data-act="new-chat"]').first()
     await newBtn.waitFor({ state: 'visible', timeout: 15_000 })
     await newBtn.click()
+    const blank = await until(page, () => (window.__forsionStore.getState().activeId === null && !!document.querySelector('.t2c-ta')) || null, 10_000, 500)
+    check('L1a 新建入口把主区切成空白跟随聊天(activeId=null + 输入框在)', !!blank, '')
+    await page.evaluate(() => {
+      const s = window.__forsionStore.getState()
+      return s.createInWorkspace(s.workspaces().find((w) => w.kind === 'local' && w.system))
+    })
     sid = await until(page, (prev) => {
       const id = window.__forsionStore.getState().activeId
       return id && id !== prev ? id : null
@@ -137,7 +152,7 @@ async function main() {
     check('L1 新建会话并真的开出 tab(走侧栏「新建会话」)', !!sid && sid !== before, `sid=${sid}`)
     if (!sid) { await browser.close(); process.exit(1) }
 
-    // openNewChat 落在默认工作区 → 把 cwd/执行档补成本轮要测的那套
+    // 会话建在本地默认工作区 → 把 cwd/执行档补成本轮要测的那套
     await page.evaluate(({ s, cwd }) => window.__forsionStore.getState()
       .setExecConfig({ execMode: 'host', approvalMode: 'full-auto', cwd }, s), { s: sid, cwd: CWD })
     await sleep(800)
