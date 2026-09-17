@@ -389,6 +389,8 @@ export class VaultIndex {
       if (shared.has(assetKey(ref))) continue
       const abs = await this.vault.resolveAttachment(pagePath, ref)
       if (!abs) continue
+      // 附件只认普通文件:引用解析到目录(`[子](x.fd)`)时整棵连带删是误删(Codex 评审 09-17)
+      if (!(await fs.stat(abs).then((st) => st.isFile(), () => false))) continue
       const rel = path.relative(root, abs)
       if (rel && !rel.startsWith('..') && !path.isAbsolute(rel) && !out.includes(rel)) out.push(rel)
     }

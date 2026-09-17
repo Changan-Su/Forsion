@@ -1706,20 +1706,24 @@ export async function trashVaultFiles(paths: string[]): Promise<void> {
   if (!paths.length) return
   await flushFileStores()
   for (const p of paths) {
-    // 附件引用也可能解析到一个目录(`./x.fd`):按子树收尾,否则底下开着的标签与待写活下来(Codex 评审 P2)
-    const kind = usePageStore.getState().folders.includes(p) ? 'prefix' : 'file'
+    // 只删文件:目录不是附件,整棵连带删属误删(主进程 exclusiveAssets 已滤,这里兜别的宿主)(Codex 评审)
+    if (usePageStore.getState().folders.includes(p)) continue
     try {
       if (amadeus.trashEntry) await amadeus.trashEntry(p)
       else await amadeus.deletePage(p) // removeEntry:对任意 vault 文件通用(同左栏删文件)
     } catch {
-      // 回收站先挪走、再写元数据与重建索引:后半段报错时盘上已经没了。同 deletePage,按盘面判定(Codex 评审 P1)
-      await usePageStore.getState().refreshStructure().catch(() => {})
-      const { pages, files, folders } = usePageStore.getState()
-      if (pages.includes(p) || files.includes(p) || folders.includes(p)) continue
+      // 回收站先挪走、再写元数据与重建索引:后半段报错时盘上已经没了 —— 按刷新后的盘面判定(同 deletePage);
+      // 刷不出盘面就当没删,旧列表证明不了什么(Codex 评审)
+      const store = usePageStore.getState()
+      const gone = await store.refreshStructure().then(() => {
+        const { pages, files, folders } = usePageStore.getState()
+        return !pages.includes(p) && !files.includes(p) && !folders.includes(p)
+      }, () => false)
+      if (!gone) continue
     }
-    retireUnifiedPath(p, kind)
-    clearScopeNotePaths(p, kind)
-    emitNotePathGone(p, kind, null)
+    retireUnifiedPath(p)
+    clearScopeNotePaths(p, 'file')
+    emitNotePathGone(p, 'file', null)
   }
 }
 

@@ -306,20 +306,32 @@ describe('树外入口直接删文件:删块连带文件 / 删笔记连带独占
     expect(panels.map((p) => p.id)).toEqual(['front', 'img'])
   })
 
-  it('引用解析到一个目录(`x.fd`):按子树收尾,底下开着的标签一并关(Codex 评审 P2)', async () => {
-    const { ws, disk } = await boot('dock', ['笔记.md', 'Project.fd/表.db', 'Project.fd2/表.db'])
+  it('目标是目录(别的宿主没滤掉 `x.fd` 这种引用):不连带删整棵树,底下的标签不动(Codex 复审)', async () => {
+    const { ws, disk } = await boot('dock', ['笔记.md', 'Project.fd/表.db'])
     Object.assign((window as unknown as { amadeus: object }).amadeus, { exclusiveAssets: async () => ['Project.fd'] })
-    const { api, panels } = dockApi([
-      { id: 'front', type: 'x' },
-      { id: 'db', type: 'amadeus-db', params: { dbPath: 'Project.fd/表.db' } },
-      { id: 'sib', type: 'amadeus-db', params: { dbPath: 'Project.fd2/表.db' } },
-    ])
+    const { api, panels } = dockApi([{ id: 'front', type: 'x' }, { id: 'db', type: 'amadeus-db', params: { dbPath: 'Project.fd/表.db' } }])
     ws.getState().setApi(api)
     const { askDeleteRemovedAssets } = await import('@amadeus/unified/assetDelete')
     await act(async () => { await askDeleteRemovedAssets('笔记.md', '[](Project.fd)', '') })
     await settle()
-    expect(disk.has('Project.fd/表.db')).toBe(false)
-    expect(panels.map((p) => p.id)).toEqual(['front', 'sib'])
+    expect(disk.has('Project.fd/表.db')).toBe(true)
+    expect(panels.map((p) => p.id)).toEqual(['front', 'db'])
+  })
+
+  it('删除报错且盘面刷不出来:不拿旧列表当「已删」,标签不动(Codex 复审)', async () => {
+    const { store, ws } = await boot('dock', ['笔记.md', '图.png'])
+    store.pageStoreFor(store.MAIN_SCOPE).setState({ files: [] }) // 文件列表还没加载到 / 已过期
+    Object.assign((window as unknown as { amadeus: object }).amadeus, {
+      exclusiveAssets: async () => ['图.png'],
+      trashEntry: async () => { throw new Error('EPERM') },
+      listFiles: async () => { throw new Error('vault offline') },
+    })
+    const { api, panels } = dockApi([{ id: 'front', type: 'x' }, { id: 'img', type: 'amadeus-image', params: { imagePath: '图.png' } }])
+    ws.getState().setApi(api)
+    const { askDeleteRemovedAssets } = await import('@amadeus/unified/assetDelete')
+    await act(async () => { await askDeleteRemovedAssets('笔记.md', '![](图.png)', '') })
+    await settle()
+    expect(panels.map((p) => p.id)).toEqual(['front', 'img'])
   })
 })
 
