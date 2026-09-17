@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { registerPlugin } from './registry.js';
+import { getRawSection, updateSection } from '../core/config.js';
 import {
   isPluginEnabledSync, setPluginEnabled, getScopeSettings, setScopeSettings,
   getPluginSettingsSync, resolveImageListScope, parseScope,
@@ -44,6 +45,15 @@ describe('plugin settingsStore', () => {
     const v = getScopeSettings(PID, 'global');
     expect(v.delay).toBe(500);
     expect(v.flag).toBe(true); // untouched default
+  });
+
+  it('另一个进程刚改了同一插件的全局设置 → 本进程带着旧缓存再写,不会把对方的改动盖掉', async () => {
+    await setScopeSettings(PID, 'global', { delay: 500 }); // 本进程缓存:__enabled true、delay 500
+    // 「另一个进程」直接改 config.json:禁用插件并加了个键(本进程缓存不知道)
+    updateSection('plugins', (sec: any) => ({ ...sec, global: { ...sec.global, [PID]: { ...sec.global[PID], __enabled: false, other: 'x' } } }));
+    await setScopeSettings(PID, 'global', { delay: 700 });
+    expect((getRawSection('plugins') as any).global[PID]).toMatchObject({ __enabled: false, other: 'x', delay: 700 });
+    await setPluginEnabled(PID, true); // 还原,后面的用例依赖「已开启」
   });
 
   it('per-agent scalar overrides global, image-list whole-group resolution', async () => {

@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { enginePrefsFile, enginesFile } from '../core/tanguHome.js';
 import { dshEngineDef } from './dsh.js';
-import { getRawSection, saveSection } from '../core/config.js';
+import { getRawSection, updateSection } from '../core/config.js';
 
 export interface EngineDef {
   id: string;
@@ -175,7 +175,9 @@ export interface EnginePrefs {
 
 /** 读引擎偏好:config.json 的 enginePrefs 段优先,缺失回落 ~/.tangu/engine-prefs.json;损坏 → {}。 */
 export function loadEnginePrefs(): EnginePrefs {
-  const sec = getRawSection('enginePrefs');
+  return enginePrefsFrom(getRawSection('enginePrefs'));
+}
+function enginePrefsFrom(sec: any): EnginePrefs {
   if (sec !== undefined) return sec && typeof sec === 'object' ? sec : {};
   try {
     return JSON.parse(readFileSync(enginePrefsFile(), 'utf-8')) || {};
@@ -186,10 +188,11 @@ export function loadEnginePrefs(): EnginePrefs {
 
 /** 写某引擎的默认模型(空串=清除)→ config.json 的 enginePrefs 段。 */
 export function saveEngineDefaultModel(id: string, modelId: string): void {
-  const prefs = loadEnginePrefs();
-  prefs[id] = { ...(prefs[id] || {}), defaultModel: modelId || undefined };
   try {
-    saveSection('enginePrefs', prefs);
+    updateSection('enginePrefs', (sec) => { // 锁内读改写
+      const prefs = enginePrefsFrom(sec);
+      return { ...prefs, [id]: { ...(prefs[id] || {}), defaultModel: modelId || undefined } };
+    });
   } catch (e: any) {
     console.warn('[engines] 保存 engine-prefs 失败:', e?.message || e);
   }

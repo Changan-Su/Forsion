@@ -27,6 +27,8 @@ export function tanguHome(): string {
  * home 目录名为 `tangu`(桌面托管 ~/.forsion/tangu;CLI 经 ~/.tangu 软链指入)→ 父目录(如 ~/.forsion);
  * 否则(纯 standalone ~/.tangu 真目录、云 worker、测试)→ home 自身=旧行为。经 realpath 判断:
  * ~/.tangu 是软链时按真身归位,CLI 与桌面不分脑。
+ * desktop/electron/forsionHome.ts 的 forsionHomeDir 逐行照抄本函数,改一边必须改另一边:同一个 TANGU_HOME
+ * 两边解析出不同的 config.json,跨进程写锁 `<config.json>.lock` 就各锁各的(两边 test 同形态对照)。
  */
 export function forsionSharedDir(): string {
   const h = tanguHome();

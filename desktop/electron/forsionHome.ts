@@ -3,13 +3,13 @@
  * 兼容策略 = 三重保险:
  *  ① 迁移:真目录 ~/.tangu 改名为 ~/.forsion(同卷 rename 瞬时完成,不复制不丢数据);
  *  ② 兼容软链 ~/.tangu → ~/.forsion:CLI/TUI/微信 runtime/第三方插件/文档里硬编码旧路径全部照常;
- *  ③ 子进程 env:desktop spawn 托管后端时显式传 TANGU_HOME=~/.forsion(backendManager),
+ *  ③ 子进程 env:desktop spawn 托管后端时显式传 TANGU_HOME=~/.forsion/tangu(backendManager),
  *     即使用户删了软链也不会分脑。standalone(纯 CLI 无 desktop)刻意不迁,经软链共享同一真身。
  * 默认工作区 ~/Tangu → ~/Forsion 同法(sessions 表里存的绝对 project_path 经软链继续解析)。
  * TANGU_HOME 已被显式设置(测试/多实例重定向)→ 整体跳过迁移,尊重重定向。
  */
-import { existsSync, lstatSync, mkdirSync, renameSync, rmSync, symlinkSync } from 'fs'
-import { join } from 'path'
+import { existsSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync, symlinkSync } from 'fs'
+import { basename, dirname, join } from 'path'
 import { homedir } from 'os'
 
 /** dev 态(!app.isPackaged,main.ts 装载时注入):数据目录与正式版完全隔离,且永不触发迁移。
@@ -18,8 +18,18 @@ let devMode = false
 export function setDevMode(v: boolean): void { devMode = v }
 export const isDevMode = (): boolean => devMode
 
-export const forsionHomeDir = (): string =>
-  process.env.TANGU_HOME || join(homedir(), devMode ? '.forsion-dev' : '.forsion')
+/** Forsion 根 = 共享域(auth/provider-auth/config.json/activity/desktop-bridge)+ desktop 自有内容。
+ *  TANGU_HOME 与引擎同义 = **引擎 home**:realpath 后目录名叫 tangu → 根 = 其父目录;否则根 = 它自身(字面路径)、
+ *  引擎 home = 根/tangu。逐行照抄 tangu-agent/src/core/tanguHome.ts 的 forsionSharedDir,改一边必须改另一边:
+ *  两边解析出的 config.json 不是同一个文件,跨进程写锁 `<config.json>.lock` 就锁不住对方(2026-09-17 Codex 评审:
+ *  TANGU_HOME=/x/tangu 时桌面写 /x/tangu/config.json、CLI 写 /x/config.json)。未设 TANGU_HOME 不走此规则。 */
+export const forsionHomeDir = (): string => {
+  const h = process.env.TANGU_HOME
+  if (!h) return join(homedir(), devMode ? '.forsion-dev' : '.forsion')
+  let real = h
+  try { real = realpathSync(h) } catch { /* 尚不存在:按字面路径判断 */ }
+  return basename(real) === 'tangu' ? dirname(real) : h
+}
 /** 引擎(tangu-agent)数据子目录:spawn 托管后端时 TANGU_HOME 指此,引擎私有数据全在其内。
  *  顶层 ~/.forsion 只留共享域文件(auth/provider-auth/config.json/activity)与 desktop 自有内容。 */
 export const tanguDataDir = (): string => join(forsionHomeDir(), 'tangu')

@@ -10,7 +10,7 @@ import { promises as fsp } from 'node:fs';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { tanguHome, agentsDir } from '../core/tanguHome.js';
-import { getRawSection, saveSection } from '../core/config.js';
+import { getRawSection, updateSection } from '../core/config.js';
 import { getPluginMeta } from './registry.js';
 
 export type Scope = 'global' | { agentSlug: string };
@@ -58,28 +58,36 @@ const cache = new Map<string, Record<string, any>>();
 
 // 全局插件设置(含 __enabled)→ config.json 的 plugins.global[id](唯一真源);per-agent 留 agent 文件夹。
 // 惰性迁移:某 id 未入 config → 回落 legacy ~/.tangu/plugins-config/<id>/settings.json,写时落 config。
+function globalFrom(id: string, fromCfg: unknown): Record<string, any> {
+  if (fromCfg && typeof fromCfg === 'object') return fromCfg as Record<string, any>;
+  try { return JSON.parse(readFileSync(settingsFileOf(id, 'global'), 'utf8')) || {}; } catch { return {}; }
+}
 function readRaw(id: string, scope: Scope): Record<string, any> {
   const k = cacheKey(id, scope);
   const c = cache.get(k);
   if (c) return c;
   let obj: Record<string, any> = {};
   if (scope === 'global') {
-    const fromCfg = getRawSection('plugins')?.global?.[id];
-    if (fromCfg && typeof fromCfg === 'object') obj = fromCfg;
-    else { try { obj = JSON.parse(readFileSync(settingsFileOf(id, 'global'), 'utf8')) || {}; } catch { obj = {}; } }
+    obj = globalFrom(id, getRawSection('plugins')?.global?.[id]);
   } else {
     try { obj = JSON.parse(readFileSync(settingsFileOf(id, scope), 'utf8')) || {}; } catch { obj = {}; }
   }
   cache.set(k, obj);
   return obj;
 }
-async function writeRaw(id: string, scope: Scope, obj: Record<string, any>): Promise<void> {
+/** 把 patch 合并进某作用域的设置并落盘。global 在 config.json 锁内以磁盘最新值为底合并:本进程缓存可能已被
+ *  别的进程(CLI / 桌面托管引擎)改旧,拿缓存合成整块写回会盖掉对方刚改的键(甚至把禁用的插件重新启用)。 */
+async function writeRaw(id: string, scope: Scope, patch: Record<string, any>): Promise<void> {
   if (scope === 'global') {
-    const sec = (getRawSection('plugins') as any) || {};
-    saveSection('plugins', { ...sec, global: { ...(sec.global || {}), [id]: obj } });
+    let obj: Record<string, any> = {};
+    updateSection('plugins', (sec: any) => {
+      obj = { ...globalFrom(id, sec?.global?.[id]), ...patch };
+      return { ...(sec || {}), global: { ...(sec?.global || {}), [id]: obj } };
+    });
     cache.set(cacheKey(id, scope), obj);
     return;
   }
+  const obj = { ...readRaw(id, scope), ...patch };
   const f = settingsFileOf(id, scope);
   await fsp.mkdir(path.dirname(f), { recursive: true });
   await fsp.writeFile(f, JSON.stringify(obj, null, 2), 'utf8');
@@ -105,7 +113,7 @@ export function isPluginEnabledSync(id: string): boolean {
   return ENABLED_KEY in g ? !!g[ENABLED_KEY] : !!getPluginMeta(id)?.defaultEnabled;
 }
 export async function setPluginEnabled(id: string, enabled: boolean): Promise<void> {
-  await writeRaw(id, 'global', { ...readRaw(id, 'global'), [ENABLED_KEY]: !!enabled });
+  await writeRaw(id, 'global', { [ENABLED_KEY]: !!enabled });
 }
 
 // ── 单作用域设置(供面板读写;含 default 兜底)──
@@ -113,7 +121,7 @@ export function getScopeSettings(id: string, scope: Scope): Record<string, any> 
   return { ...schemaDefaults(id), ...stripMeta(readRaw(id, scope)) };
 }
 export async function setScopeSettings(id: string, scope: Scope, patch: Record<string, any>): Promise<Record<string, any>> {
-  await writeRaw(id, scope, { ...readRaw(id, scope), ...patch });
+  await writeRaw(id, scope, patch);
   return getScopeSettings(id, scope);
 }
 
@@ -178,11 +186,11 @@ export async function deletePluginFile(id: string, scope: Scope, name: string): 
 /** 卸载清理:删全局设置(config 段 + legacy 目录)、每-agent 覆盖与 blob、内存缓存。插件文件夹删除与重启由调用方负责。 */
 export async function clearPluginData(id: string): Promise<void> {
   sanitizeId(id);
-  const sec = (getRawSection('plugins') as any) || {};
-  if (sec.global && id in sec.global) {
+  updateSection('plugins', (sec: any) => {
+    if (!sec?.global || !(id in sec.global)) return undefined;
     const { [id]: _omit, ...rest } = sec.global;
-    saveSection('plugins', { ...sec, global: rest });
-  }
+    return { ...sec, global: rest };
+  });
   await fsp.rm(path.join(tanguHome(), 'plugins-config', id), { recursive: true, force: true });
   let slugs: string[] = [];
   try {

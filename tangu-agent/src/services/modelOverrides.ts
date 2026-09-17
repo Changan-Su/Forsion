@@ -7,10 +7,10 @@
  * key = 引擎里用的模型 id(托管=目录 id 如 `pr-…`;直连=`<providerId>/<model>`),与 /agent/models 下发的一致。
  * 段名不叫 `models`:那段已被桌面的辅助模型槽(models.background / vision / visionMode)占用。
  * 读取每次走 config.json(几 KB 的同步读;调用点是 run 开头与模型列表,不值得加缓存);
- * 写入经 saveSection(config.json 唯一写入口,坏 JSON 拒写)。env `TANGU_MODEL_CONTEXT_WINDOWS` 仍压过本段(运维逃生口)。
+ * 写入经 updateSection(锁内读改写,坏 JSON 拒写)。env `TANGU_MODEL_CONTEXT_WINDOWS` 仍压过本段(运维逃生口)。
  * ponytail: 目前只有 contextWindow 一个字段,清窗口=删条目;加 maxTokens / 思考档映射时改成按字段合并。
  */
-import { getRawSection, saveSection } from '../core/config.js';
+import { getRawSection, updateSection } from '../core/config.js';
 
 export interface ModelOverride { contextWindow?: number }
 
@@ -39,15 +39,15 @@ export function modelOverrides(): Record<string, ModelOverride> {
 export function setModelContextWindow(modelId: string, tokens: number | null): Record<string, ModelOverride> {
   const id = String(modelId || '').trim();
   if (!id) throw new Error('modelId required');
-  const next = { ...modelOverrides() };
-  if (tokens == null) delete next[id];
-  else {
-    if (!Number.isFinite(tokens) || tokens < MIN_OVERRIDE_TOKENS) throw new Error(`contextWindow is in tokens: minimum ${MIN_OVERRIDE_TOKENS} (for 272K enter 272000)`);
-    next[id] = { ...next[id], contextWindow: Math.floor(tokens) };
-  }
-  if (memory) memory = next;
-  else saveSection('modelOverrides', next);
-  return next;
+  if (tokens != null && (!Number.isFinite(tokens) || tokens < MIN_OVERRIDE_TOKENS)) throw new Error(`contextWindow is in tokens: minimum ${MIN_OVERRIDE_TOKENS} (for 272K enter 272000)`);
+  const apply = (raw: unknown): Record<string, ModelOverride> => {
+    const next = sanitize(raw);
+    if (tokens == null) delete next[id];
+    else next[id] = { ...next[id], contextWindow: Math.floor(tokens) };
+    return next;
+  };
+  if (memory) return (memory = apply(memory));
+  return updateSection('modelOverrides', apply)!; // 锁内读改写
 }
 
 export function resetModelOverridesForTest(seed?: Record<string, ModelOverride>): void {

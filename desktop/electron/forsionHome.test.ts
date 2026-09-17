@@ -1,9 +1,11 @@
 /** ~/.tangu → ~/.forsion 迁移:改名/兼容软链/并存保守/幂等 + 两层布局 migrateEngineData。 */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, lstatSync, realpathSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { migratePair, migrateEngineData, setDevMode, forsionHomeDir, defaultWorkspaceDir } from './forsionHome'
+import { migratePair, migrateEngineData, setDevMode, forsionHomeDir, tanguDataDir, defaultWorkspaceDir } from './forsionHome'
+// 故意跨包 import 引擎源码(只依赖 node:*):下面逐字比对两边的解析结果,任一侧改规则都会红,别当脏依赖清掉。
+import { authFile, configFile, providerAuthFile } from '../../tangu-agent/src/core/tanguHome'
 
 const noop = (): void => {}
 const setup = (): { old: string; nu: string } => {
@@ -98,6 +100,34 @@ describe('migrateEngineData(两层布局:顶层引擎条目 → tangu/)', () => 
     expect(existsSync(join(home, 'amadeus', 'plugins'))).toBe(false)
     migrateEngineData(noop, home) // 幂等
     expect(existsSync(join(home, 'plugins', 'activitywatch'))).toBe(true)
+  })
+})
+
+// 同形态钉在 tangu-agent/src/core/tanguHome.test.ts。两边不是同一份 config.json = 跨进程写锁 <config.json>.lock 各锁各的。
+describe('TANGU_HOME 与引擎同义:桌面与引擎 / CLI 解析出同一份共享域文件', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+  const sameAsEngine = (): void => {
+    expect(join(forsionHomeDir(), 'config.json')).toBe(configFile())
+    expect(join(forsionHomeDir(), 'auth.json')).toBe(authFile())
+    expect(join(forsionHomeDir(), 'provider-auth.json')).toBe(providerAuthFile())
+  }
+
+  it('<tmp>/tangu → 根 = 父目录(realpath),引擎 home = 它自身', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'fh-env-'))
+    mkdirSync(join(tmp, 'tangu'))
+    vi.stubEnv('TANGU_HOME', join(tmp, 'tangu'))
+    expect(join(forsionHomeDir(), 'config.json')).toBe(join(realpathSync(tmp), 'config.json'))
+    expect(tanguDataDir()).toBe(join(realpathSync(tmp), 'tangu'))
+    sameAsEngine()
+  })
+
+  it('<tmp>/other → 根 = 它自身(字面路径),引擎 home = 其下 tangu/(config-race e2e 按此形态核 config.json)', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'fh-env-'))
+    mkdirSync(join(tmp, 'other'))
+    vi.stubEnv('TANGU_HOME', join(tmp, 'other'))
+    expect(join(forsionHomeDir(), 'config.json')).toBe(join(tmp, 'other', 'config.json'))
+    expect(tanguDataDir()).toBe(join(tmp, 'other', 'tangu'))
+    sameAsEngine()
   })
 })
 

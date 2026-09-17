@@ -7,7 +7,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { forsionSharedDir } from './tanguHome.js';
+import { authFile, configFile, forsionSharedDir, providerAuthFile } from './tanguHome.js';
 
 const prevHome = process.env.TANGU_HOME;
 afterEach(() => {
@@ -46,5 +46,29 @@ describe('forsionSharedDir', () => {
     expect(forsionSharedDir()).toBe(join(tmpdir(), 'fsd-nope'));
     process.env.TANGU_HOME = join(tmpdir(), 'fsd-nope', '.tangu');
     expect(forsionSharedDir()).toBe(join(tmpdir(), 'fsd-nope', '.tangu'));
+  });
+});
+
+// 同形态钉在 desktop/electron/forsionHome.test.ts(那边还直接比对本模块的返回值)。桌面主进程与引擎 / CLI 同写
+// config.json、共用写锁 <config.json>.lock —— 同一个 TANGU_HOME 解析出两份文件,锁就各锁各的。
+describe('共享域文件路径(桌面同形态对照)', () => {
+  it('<tmp>/tangu → 父目录(realpath)', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'fsd-env-'));
+    mkdirSync(join(tmp, 'tangu'));
+    process.env.TANGU_HOME = join(tmp, 'tangu');
+    expect(configFile()).toBe(join(realpathSync(tmp), 'config.json'));
+    expect(authFile()).toBe(join(realpathSync(tmp), 'auth.json'));
+    expect(providerAuthFile()).toBe(join(realpathSync(tmp), 'provider-auth.json'));
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it('<tmp>/other → 它自身(字面路径)', () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'fsd-env-'));
+    mkdirSync(join(tmp, 'other'));
+    process.env.TANGU_HOME = join(tmp, 'other');
+    expect(configFile()).toBe(join(tmp, 'other', 'config.json'));
+    expect(authFile()).toBe(join(tmp, 'other', 'auth.json'));
+    expect(providerAuthFile()).toBe(join(tmp, 'other', 'provider-auth.json'));
+    rmSync(tmp, { recursive: true, force: true });
   });
 });

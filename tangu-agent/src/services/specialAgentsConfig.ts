@@ -10,7 +10,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { specialAgentsConfigFile } from '../core/tanguHome.js';
-import { getRawSection, saveSection } from '../core/config.js';
+import { getRawSection, updateSection } from '../core/config.js';
 import { deps } from '../seams/runtime.js';
 
 export interface HistorianConfig {
@@ -205,7 +205,9 @@ export function legacyMusePrompt(): string {
 }
 
 export function loadSpecialAgentsConfig(): SpecialAgentsConfig {
-  const sec = getRawSection('specialAgents');
+  return specialAgentsFrom(getRawSection('specialAgents'));
+}
+function specialAgentsFrom(sec: unknown): SpecialAgentsConfig {
   if (sec !== undefined) return normalizeConfig(sec);
   try {
     return normalizeConfig(JSON.parse(readFileSync(specialAgentsConfigFile(), 'utf8')));
@@ -216,13 +218,13 @@ export function loadSpecialAgentsConfig(): SpecialAgentsConfig {
 
 /** 深合并 patch（historian/muse 各自浅合并）后归一化并落 config.json 的 specialAgents 段；返回归一化全量。 */
 export function saveSpecialAgentsConfig(patch: Partial<SpecialAgentsConfig>): SpecialAgentsConfig {
-  const cur = loadSpecialAgentsConfig();
-  const merged: SpecialAgentsConfig = normalizeConfig({
-    historian: { ...cur.historian, ...(patch.historian || {}) },
-    muse: { ...cur.muse, ...(patch.muse || {}) },
-  });
-  saveSection('specialAgents', merged);
-  return merged;
+  return updateSection('specialAgents', (sec): SpecialAgentsConfig => { // 锁内读改写
+    const cur = specialAgentsFrom(sec);
+    return normalizeConfig({
+      historian: { ...cur.historian, ...(patch.historian || {}) },
+      muse: { ...cur.muse, ...(patch.muse || {}) },
+    });
+  })!;
 }
 
 /**

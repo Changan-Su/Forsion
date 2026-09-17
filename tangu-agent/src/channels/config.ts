@@ -5,7 +5,7 @@
  */
 import path from 'node:path';
 import { homedir } from 'node:os';
-import { getRawSection, saveSection } from '../core/config.js';
+import { getRawSection, updateSection } from '../core/config.js';
 import { tanguHome } from '../core/tanguHome.js';
 import type { ApprovalMode, ChannelKind, ChannelSettings } from './types.js';
 
@@ -69,8 +69,6 @@ export function channelSettings(kind: ChannelKind): ChannelSettings {
 
 /** 合并写回某通道设置(只动传入的键;secrets 传空串表示清除)。 */
 export function saveChannelSettings(kind: ChannelKind, patch: Partial<ChannelSettings>): ChannelSettings {
-  const all = ((getRawSection('channels') as any) || {});
-  all[kind] = { ...(all[kind] || {}), ...patch };
-  saveSection('channels', all);
+  updateSection('channels', (all: any) => ({ ...(all || {}), [kind]: { ...(all?.[kind] || {}), ...patch } })); // 锁内读改写:别的进程同时改别的通道不会被盖掉
   return channelSettings(kind);
 }

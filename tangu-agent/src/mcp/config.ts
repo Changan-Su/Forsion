@@ -53,7 +53,10 @@ function legacyLoadMcp(file: string): McpConfig {
 /** 显式传 file → 读该文件(explicit/单测);否则 config.json 的 mcp 段优先,缺失回落 ~/.tangu/mcp.json。 */
 export function loadMcpConfig(file?: string): McpConfig {
   if (file) return legacyLoadMcp(file);
-  const sec = getRawSection('mcp');
+  return mcpConfigFrom(getRawSection('mcp'));
+}
+/** mcp 段原始值 → 配置(段缺失回落 ~/.tangu/mcp.json);给 updateSection('mcp', …) 在锁内用。 */
+export function mcpConfigFrom(sec: any): McpConfig {
   if (sec !== undefined) {
     const servers = sec?.mcpServers;
     return { mcpServers: servers && typeof servers === 'object' ? servers : {} };

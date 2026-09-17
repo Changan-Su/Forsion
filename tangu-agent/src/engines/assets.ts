@@ -12,7 +12,8 @@ import path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { parseFrontmatter } from '../skills/localSkills.js';
 import { skillsDir } from '../core/tanguHome.js';
-import { loadMcpConfig, saveMcpConfig, type McpServerConfig } from '../mcp/config.js';
+import { loadMcpConfig, mcpConfigFrom, type McpServerConfig } from '../mcp/config.js';
+import { updateSection } from '../core/config.js';
 
 function expandHome(p: string): string {
   return p.startsWith('~/') ? path.join(os.homedir(), p.slice(2)) : p;
@@ -136,9 +137,11 @@ export function importEngineMcp(engineId: string, name: string): ImportResult {
   if (!spec?.mcp) return { ok: false, error: 'no mcp config' };
   const server = readEngineMcpServers(spec)[name];
   if (!server) return { ok: false, error: 'server not found' };
-  const cfg = loadMcpConfig();
-  if (cfg.mcpServers[name]) return { ok: false, error: 'already exists' };
-  cfg.mcpServers[name] = normalizeMcpServer(server);
-  saveMcpConfig(cfg);
-  return { ok: true };
+  let exists = false;
+  updateSection('mcp', (sec) => { // 锁内读改写:判重与写入看的是同一份,别的进程刚加的同名 server 不会被盖掉
+    const { mcpServers } = mcpConfigFrom(sec);
+    if (mcpServers[name]) { exists = true; return undefined; }
+    return { mcpServers: { ...mcpServers, [name]: normalizeMcpServer(server) } };
+  });
+  return exists ? { ok: false, error: 'already exists' } : { ok: true };
 }

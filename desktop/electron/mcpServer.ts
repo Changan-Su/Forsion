@@ -14,14 +14,14 @@
  *
  * ponytail: 工具 = inbox_send + transcribe_audio,无状态每请求一套 server+transport。日历/笔记/Space 按需加。
  */
-import { createServer as createHttpServer, type IncomingMessage } from 'node:http'
-import { createServer as createNetServer } from 'node:net'
+import { createServer as createHttpServer, type IncomingMessage, type Server } from 'node:http'
 import { writeFileSync, mkdirSync, chmodSync, rmSync } from 'node:fs'
 import { join, dirname, isAbsolute } from 'node:path'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
 import { type CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
+import { createSerialQueue } from './configWrite'
 
 const DEFAULT_PORT = 3591
 const HOST = '127.0.0.1'
@@ -138,18 +138,22 @@ async function readBody(req: IncomingMessage): Promise<unknown> {
   return raw ? JSON.parse(raw) : undefined
 }
 
-/** 空闲端口探测:默认口占用则递增找,全占也返回默认(交给 listen 报错)。 */
-function tryListen(port: number): Promise<boolean> {
-  return new Promise((resolve) => {
-    const s = createNetServer()
-    s.once('error', () => resolve(false))
-    s.once('listening', () => s.close(() => resolve(true)))
-    s.listen(port, HOST)
-  })
-}
-async function pickPort(start: number): Promise<number> {
-  for (let p = start; p < start + 20; p++) if (await tryListen(p)) return p
-  return start
+/** 直接拿真服务器绑定,绑不上就顺延(共试 tries 个口)。不先开临时服务器探测:探测放掉端口到真绑定之间会被别的进程抢走,
+ *  而没挂 'error' 的 listen 撞上 EADDRINUSE = 主进程未捕获异常 + promise 永不落定(await 它的 config:set 跟着挂死)。
+ *  任何绑定错误都顺延(同原探测):Windows 上 Hyper-V/WSL 保留端口段报的是 EACCES 而不是 EADDRINUSE。 */
+async function listenFrom(server: Server, first: number, tries: number): Promise<number> {
+  for (let port = first; ; port++) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (e: Error) => { server.off('listening', onListening); reject(e) }
+        const onListening = () => { server.off('error', onError); resolve() }
+        server.once('error', onError).once('listening', onListening).listen(port, HOST)
+      })
+      return port
+    } catch (e) {
+      if (port >= first + tries - 1) throw e
+    }
+  }
 }
 
 function writeEndpointFile(f: string, endpoint: string, secret: string, log: (m: string) => void): void {
@@ -175,10 +179,12 @@ export function unpublishExternalEndpoint(homeDir: string, log: (m: string) => v
   }
 }
 
-export async function startForsionMcp(deps: McpDeps): Promise<{ url: string; port: number; close: () => void }> {
+export async function startForsionMcp(
+  deps: McpDeps,
+  { port: firstPort = DEFAULT_PORT, tries = 20 } = {},
+): Promise<{ url: string; port: number; close: () => void }> {
   const log = deps.log ?? (() => {})
-  const port = await pickPort(DEFAULT_PORT)
-  const allowedHosts = [`${HOST}:${port}`, `localhost:${port}`]
+  let allowedHosts: string[] = [] // 绑定成功后按实际端口填(请求只可能在那之后到)
 
   const httpServer = createHttpServer(async (req, res) => {
     try {
@@ -218,10 +224,48 @@ export async function startForsionMcp(deps: McpDeps): Promise<{ url: string; por
     }
   })
 
-  await new Promise<void>((resolve) => httpServer.listen(port, HOST, resolve))
+  const port = await listenFrom(httpServer, firstPort, tries)
+  httpServer.on('error', (e) => log(`[mcp] server error: ${e.message}`)) // 绑定后的错误(如 accept 报 EMFILE)无监听 = 主进程崩
+  allowedHosts = [`${HOST}:${port}`, `localhost:${port}`]
   const endpoint = `http://${HOST}:${port}/mcp`
-  // 引擎桥的发现文件:常驻、每次启动重写(端口/密钥都会变);外部面的 forsion-mcp.json 由 main 按开关发布/删除。
+  // 引擎桥的发现文件:常驻、每次启动重写(端口/密钥都会变);外部面的 forsion-mcp.json 由 createMcpLifecycle 按开关发布/删除。
   writeEndpointFile(join(deps.homeDir, 'desktop-bridge.json'), endpoint, deps.bridgeSecret, log)
   log(`[mcp] Forsion Desktop MCP on ${endpoint}`)
   return { url: endpoint, port, close: () => httpServer.close() }
+}
+
+type McpHandle = Awaited<ReturnType<typeof startForsionMcp>>
+
+/** main.ts applyForsionMcp 的实体:服务常驻、只起一次;开关只管外部面(forsion-mcp.json + 守门)。
+ *  所有 apply 串行 —— 启动期再来一次开关(启动那次 × config:set)不会起第二个服务、漏一个句柄;启动失败不缓存,
+ *  下一次 apply 重试。按调用顺序,**被更新的请求取代的那次直接跳过**(不发布、不启动,交给最新那次)→ 最终态 = 最后一次请求,
+ *  中途也不会先发布再撤销。enabled 可传「在队列里现读配置」的函数(启动那次):读配置慢于用户切开关时,读到的旧值作废。
+ *  守门读的开关在 apply(boolean) 当下就改(关 = 立刻拒外部密钥);撤销发现文件不等服务起来(起不来也得撤)。 */
+export function createMcpLifecycle(o: {
+  start: (externalEnabled: () => boolean) => Promise<McpHandle>
+  homeDir: () => string
+  localSecret: () => string
+  log?: (m: string) => void
+}): { apply: (enabled: boolean | (() => Promise<boolean>)) => Promise<void>; externalUrl: () => string | null } {
+  const queue = createSerialQueue()
+  let handle: McpHandle | null = null
+  let externalOn = false
+  let latest = 0
+  return {
+    apply(enabled) {
+      const me = ++latest
+      if (typeof enabled === 'boolean') externalOn = enabled
+      return queue(async () => {
+        if (me !== latest) return
+        const on = typeof enabled === 'boolean' ? enabled : await enabled()
+        if (me !== latest) return // 读配置期间用户又切了开关
+        externalOn = on
+        if (!on) unpublishExternalEndpoint(o.homeDir(), o.log)
+        const h = (handle ??= await o.start(() => externalOn))
+        if (on && me === latest) publishExternalEndpoint(o.homeDir(), h.url, o.localSecret(), o.log)
+      })
+    },
+    /** 外部面开着且服务已起 → 端点;启动中 / 关着 → null(设置页据此才显示连接信息) */
+    externalUrl: () => (externalOn && handle ? handle.url : null),
+  }
 }
