@@ -84,7 +84,7 @@ type HomeDispatch = (
   workspaceFiles?: Attachment[],
   skillIds?: string[],
   mentions?: { priorityAgent?: string; mentionAgents?: string[] },
-) => void
+) => Promise<boolean>
 
 /**
  * 主页只做「新对话」的宿主接线,输入 UI 和交互不复制:字面挂的就是 ChatView 里的 Composer2。
@@ -92,6 +92,7 @@ type HomeDispatch = (
  */
 function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDispatch; onInputModeChange: (focused: boolean) => void }) {
   const vaultRoot = usePageStore((state) => state.vaultRoot)
+  const activeSpaceId = useSpaceStore((state) => state.activeSpaceId)
   const s = useApp(useShallow((state) => ({
     cfg: state.cfg,
     desktopConfig: state.desktopConfig,
@@ -192,6 +193,8 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
       </div>
       <Composer2
         sessionId={null}
+        // 实时对话只在 Home 空间里的主页接得住;主页被当成标签开进别的 Space 时它不会随发送卸载,交接不成立
+        liveOwner={activeSpaceId === 'home'}
         autoFocus={false}
         disabled={s.connState !== 'ok'}
         running={false}
@@ -232,10 +235,8 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
         agents={s.agentDefs}
         onOpenSettings={() => s.openSettings('skills')}
         onExecConfigChange={(patch) => s.setExecConfig(patch, null)}
-        onSend={async (text, attachments, workspaceFiles, skillIds, mentions) => {
-          onDispatch(text, attachments, workspaceFiles, skillIds, mentions)
-          return true
-        }}
+        // 返回**真实发送**的结果(退场动效 + 建会话 + 起 run 之后):实时语音靠它判断「上一句还在途中」。
+        onSend={(text, attachments, workspaceFiles, skillIds, mentions) => onDispatch(text, attachments, workspaceFiles, skillIds, mentions)}
         onStop={() => {}}
         autoRefFromMain={false}
       />
@@ -567,9 +568,9 @@ export function HomepageView(_props: ViewProps) {
    *  ⚠️**整段动作**搬进回调,不是只搬 setActiveSpace —— 发 Tangu 那条链
    *  (setActiveSpace → openNewChat → send)的顺序契约不许被动画拆开。
    *  重入守卫用 ref 不用 state:连点两下不能排出两次跳转。 */
-  const leaveThen = (run: () => void): void => {
-    if (leaveTimer.current) return
-    if (reduceMotion) { run(); return }
+  const leaveThen = (run: () => void): boolean => {
+    if (leaveTimer.current) return false
+    if (reduceMotion) { run(); return true }
     setLeaving(true)
     pending.current = run // 卸载兜底要拿得到(见上面的 cleanup)
     leaveTimer.current = window.setTimeout(() => {
@@ -577,6 +578,7 @@ export function HomepageView(_props: ViewProps) {
       pending.current = null
       run()
     }, LEAVE_MS)
+    return true
   }
 
   const hasTangu = spaces.some((s) => s.id === 'tangu')
@@ -735,12 +737,15 @@ export function HomepageView(_props: ViewProps) {
    *  ① 不会把主页 leaf 就地换成 chat;② 不会把上次 activeId 当成续聊;
    *  ③ 不调 openNewChat,因此 Composer2 里刚选的模型/模式/工作区不会被它的「清新会话草稿」逻辑擦掉。 */
   const dispatchChat: HomeDispatch = (text, attachments, workspaceFiles, skillIds, mentions) => {
-    if (!hasTangu) return
-    leaveThen(() => {
-      setActiveSpace('tangu')
-      // 老用户的 Tangu 命名布局可能把主 chat 关过;首页发话就是显式要去聊天,这里保证有一张聊天视图接住新会话。
-      useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
-      void useApp.getState().send(text, attachments, workspaceFiles, skillIds, mentions, null)
+    if (!hasTangu) return Promise.resolve(false)
+    return new Promise<boolean>((resolve) => {
+      const queued = leaveThen(() => {
+        setActiveSpace('tangu')
+        // 老用户的 Tangu 命名布局可能把主 chat 关过;首页发话就是显式要去聊天,这里保证有一张聊天视图接住新会话。
+        useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
+        resolve(useApp.getState().send(text, attachments, workspaceFiles, skillIds, mentions, null))
+      })
+      if (!queued) resolve(false) // 连点第二下被重入守卫挡掉:没发
     })
   }
 

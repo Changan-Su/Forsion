@@ -11,7 +11,11 @@ interface Props {
   recording: boolean
   busy: boolean
   onStop: () => void
-  onSend: () => void
+  /** 缺省 = 不出 ↑(实时对话:说完自动发)。 */
+  onSend?: () => void
+  /** 给了就替换计时(实时对话的「聆听中 / 转写中」);■ 的 title 同步用 stopTitle。 */
+  status?: string
+  stopTitle?: string
   t: (k: string, p?: Record<string, unknown>) => string
 }
 
@@ -19,7 +23,7 @@ const STEP_MS = 40      // 每 40ms 落一根柱
 const PX_PER_MS = 0.1   // 滚动速度 ≈100px/s → 柱距 4px
 const GAIN = 3.2        // 语音时域 RMS 偏小,放大到可见
 
-export function VoiceRecordingBar({ analyser, recording, busy, onStop, onSend, t }: Props) {
+export function VoiceRecordingBar({ analyser, recording, busy, onStop, onSend, status, stopTitle, t }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [sec, setSec] = useState(0)
 
@@ -96,9 +100,9 @@ export function VoiceRecordingBar({ analyser, recording, busy, onStop, onSend, t
   return (
     <div className="t2c-voicebar">
       <canvas ref={canvasRef} className="t2c-voicewave" />
-      <span className="t2c-voicetime">{time}</span>
-      <button className="t2c-voicestop" title={t('input.micStop')} onClick={onStop}><Square size={12} /></button>
-      <button className="t2c-send" title={t('input.send')} onClick={onSend}><ArrowUp size={16} /></button>
+      <span className="t2c-voicetime">{status ?? time}</span>
+      <button className="t2c-voicestop" title={stopTitle ?? t('input.micStop')} onClick={onStop}><Square size={12} /></button>
+      {onSend && <button className="t2c-send" title={t('input.send')} onClick={onSend}><ArrowUp size={16} /></button>}
     </div>
   )
 }

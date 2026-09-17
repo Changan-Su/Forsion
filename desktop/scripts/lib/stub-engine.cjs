@@ -42,6 +42,10 @@ async function startStubEngine(data = {}) {
     failApprovalRules: false,
     checkpoints: data.checkpoints || [],
     restoreReport: data.restoreReport || { restored: [], deleted: [], skipped: [], conflicts: [], failed: [] },
+    /** >0 = POST /agent/runs 延迟这么多毫秒才应答(run 已记进 seen.runs)。 */
+    runDelayMs: 0,
+    /** true = POST /agent/runs 回 500(测「发送没被接受」的收尾)。 */
+    failRuns: false,
     /** 置 true 后检索端点回 500(测「失败 ≠ 无结果」)。 */
     failSearch: false,
   };
@@ -73,6 +77,9 @@ async function startStubEngine(data = {}) {
       const id = `r${seen.runs.length + 1}`;
       seen.runs.push({ runId: id, message: b.message, sessionId: b.session_id, agentConfig: b.agent_config });
       runs.set(id, sseLines(queue.shift() || []));
+      // 起 run 慢一拍(测「发送往返途中又来一句」这类在途竞态;live-voice.e2e 用)
+      if (state.runDelayMs) await new Promise((r) => setTimeout(r, state.runDelayMs));
+      if (state.failRuns) return json({ detail: 'stub: run rejected' }, 500);
       return json({ runId: id, assistantMessageId: `a-${id}`, userMessageId: `u-${id}` });
     }
     if (/^\/agent\/runs\/[^/]+\/events$/.test(p)) {

@@ -8,8 +8,9 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Folder, PanelsTopLeft, Users, Sparkles,
-  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, type LucideIcon, Bot } from 'lucide-react'
+  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, type LucideIcon, Bot } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
+import { useLiveVoice } from '../../hooks/useLiveVoice'
 import { useCodeStudio } from '../../stores/codeStudioStore'
 import { normPath } from '../coding/studioModel'
 import { VoiceRecordingBar } from './VoiceRecordingBar'
@@ -254,6 +255,10 @@ export const Composer2: React.FC<{
   onPresetChange?: (p: 'chat' | 'work') => void
   voiceMode?: boolean
   onVoiceModeChange?: (on: boolean) => void
+  /** 实时语音对话的接收方(显示按钮、接主页交接)。缺省 = sessionId===null(主页)。ChatView 传「跟随侧栏的主区聊天」。 */
+  liveOwner?: boolean
+  /** 实时对话真正发往的会话(pinned leaf 是它自己的会话);缺省回落 activeSessionId。 */
+  liveSessionKey?: string | null
   groupChat?: boolean
   groupAgents?: string[]
   groupTempAgents?: NormalAgentDef[]
@@ -313,7 +318,7 @@ export const Composer2: React.FC<{
   defaultModelIds, onDefaultModelChange,
   maxIterations, onMaxIterationsChange,
   verifyCommand, onVerifyCommandChange,
-  preset, onPresetChange, planMode, onPlanModeChange, voiceMode, onVoiceModeChange, skills,
+  preset, onPresetChange, planMode, onPlanModeChange, voiceMode, onVoiceModeChange, liveOwner, liveSessionKey, skills,
   groupChat, groupAgents, groupTempAgents, onGroupChange, onAddAgent, onNormalWork,
   agents, onAgentSwitch, currentAgentSlug, mentionProjects, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
@@ -501,6 +506,27 @@ export const Composer2: React.FC<{
     if (draft.trim()) send()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [voice.recording, voice.busy])
+
+  // 实时对话(免手):一直听,说完一句转写 → 直接作为消息发出(不经草稿,引用芯片/自动引用与键盘发送同一条 sendMessage);
+  // Agent 回复期间不接新的开口。草稿里有手打内容 → 只追加不自动发(别把半截手写替用户发出去);没发成的也落回草稿。
+  // 在途排队、交接、换会话挂断都住在 useLiveVoice 的 LiveSession 里;接收方与会话由挂载方显式给(评审 r2)。
+  const storeActiveSessionId = useApp((s) => s.activeId)
+  const activeSessionId = sessionId === undefined ? storeActiveSessionId : sessionId
+  const draftRef = useRef(draft)
+  draftRef.current = draft
+  const appendToDraft = (text: string) => setDraft((d) => (d.trim() ? d.replace(/\s+$/, '') + ' ' + text : text))
+  const liveOwnerResolved = liveOwner ?? sessionId === null // 缺省只有主页输入框是接收方;ChatView 显式传
+  const live = useLiveVoice((text) => {
+    if (draftRef.current.trim()) { appendToDraft(text); return }
+    const sent = sendMessage(text)
+    if (!sent) appendToDraft(text)
+    return sent
+  }, {
+    paused: running || !!disabled, owner: liveOwnerResolved, handoffOnSend: sessionId === null,
+    sessionKey: liveSessionKey !== undefined ? liveSessionKey : activeSessionId,
+    onKeep: appendToDraft, // 没被接受的语音(连同排队句)由 hook 交还给**当前**接收方的草稿
+  })
+  const liveBar = live.active && !running
 
   const isHost = execConfig.execMode === 'host'
   const isChat = preset === 'chat'
@@ -874,8 +900,6 @@ export const Composer2: React.FC<{
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const pageIcons = usePageStore((s) => s.icons)
   const chatSessions = useApp((s) => s.sessions)
-  const storeActiveSessionId = useApp((s) => s.activeId)
-  const activeSessionId = sessionId === undefined ? storeActiveSessionId : sessionId
   const studioPrompt = useCodeStudio(s => s.pendingPrompt)
   // Studio references append to this project's visible composer. Claim once before updating:
   // hidden / secondary chat views must not consume another project's request or erase its draft.
@@ -961,10 +985,11 @@ export const Composer2: React.FC<{
   }, [isHost, autoRefFromMain, mainRefKey, mainNote, vaultRoot, autoRefOff, refChips])
   const allRefChips = autoChip ? [autoChip, ...refChips] : refChips
 
-  const send = () => {
-    const text = draft.trim()
+  /** override = 实时对话直接发的转写文本(不读也不清草稿)。返回这次发送的 promise(accepted);没发出去返回 undefined。 */
+  const sendMessage = (override?: string) => {
+    const text = (override ?? draft).trim()
     const feedbackMatch = /^\/feedback(?:\s+([\s\S]*))?$/i.exec(text)
-    if (feedbackMatch && window.tangu?.submitFeedback) {
+    if (override == null && feedbackMatch && window.tangu?.submitFeedback) {
       if (useApp.getState().openFeedback(feedbackMatch[1]?.trim())) {
         setDraft('')
         requestAnimationFrame(autoGrow)
@@ -1061,10 +1086,10 @@ export const Composer2: React.FC<{
       : inGroup
         ? { priorityAgent: mentionedSlug || undefined }
         : { mentionAgents: mentionAgents.length ? mentionAgents : undefined }
-    void onSend(outgoing, attachments, wsFiles, pinnedSkills.map((s) => s.id), mentions).then((accepted) => {
-      if (!accepted) return
-      setDraft('')
-      setHistPos(0)
+    // 返回这次发送的 promise:实时对话据此判断「上一句还在途中」(键盘/按钮调用方忽略返回值)。
+    return onSend(outgoing, attachments, wsFiles, pinnedSkills.map((s) => s.id), mentions).then((accepted) => {
+      if (!accepted) return false
+      if (!override) { setDraft(''); setHistPos(0) }
       setAttachments([])
       setWsFiles([])
       setRefChips([]) // 自动那条不在这里面 —— 它是 activePage 的派生量,下一条消息照旧自动挂上
@@ -1074,8 +1099,11 @@ export const Composer2: React.FC<{
       setMentionedProjects([])
       onClearQuote?.()
       requestAnimationFrame(autoGrow)
+      return true
     })
   }
+  // 通话中手动发送也登记在途:空态手动发一句建出会话,不算「用户切走」而挂断。
+  const send = () => { live.track(sendMessage()) }
 
   const pickFiles = async (files: FileList | null) => {
     if (!files) return
@@ -1486,6 +1514,11 @@ export const Composer2: React.FC<{
             />
             {voiceActive ? (
               <VoiceRecordingBar analyser={voice.analyser} recording={voice.recording} busy={voice.busy} onStop={voice.toggle} onSend={voiceSend} t={t} />
+            ) : liveBar ? (
+              <VoiceRecordingBar
+                analyser={live.analyser} recording busy={false} onStop={live.stop} stopTitle={t('livevoice.stop')} t={t}
+                status={live.phase === 'transcribing' ? t('input.micBusy') : t('input.micListening')}
+              />
             ) : (<>
             {showModeChip && (
               <span className={`mode-pill-wrap t2c-capsule-peer${openMenu === 'mode' ? ' is-open' : ''}`} data-cmenu>
@@ -1664,11 +1697,21 @@ export const Composer2: React.FC<{
             <button
               className={`t2c-iconbtn t2c-mic-control t2c-collapse-on-capsule-open${voice.recording ? ' recording' : ''}`}
               title={voice.busy ? t('input.micBusy') : voice.recording ? t('input.micStop') : voice.error || t('input.micStart')}
-              disabled={disabled || voice.busy || !voice.supported}
+              disabled={disabled || voice.busy || !voice.supported || live.active}
               onClick={voice.toggle}
             >
               {voice.busy ? <Loader2 size={14} className="spin" /> : <Mic size={14} />}
             </button>
+            {live.supported && liveOwnerResolved && (
+              <button
+                className={`t2c-iconbtn t2c-live-control t2c-collapse-on-capsule-open${live.active ? ' recording' : ''}`}
+                title={live.active ? t('livevoice.stop') : live.error || t('livevoice.start')}
+                disabled={!live.active && !!disabled}
+                onClick={live.active ? live.stop : live.start}
+              >
+                <AudioLines size={14} />
+              </button>
+            )}
             {running ? (
               <>
                 {(!!draft.trim() || allRefChips.length > 0) && (
@@ -1682,8 +1725,11 @@ export const Composer2: React.FC<{
             )}
             </>)}
           </div>
-          {voice.error && !voice.recording && !voice.busy && (
+          {voice.error && !voice.recording && !voice.busy && !live.active && (
             <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{voice.error}</div>
+          )}
+          {live.error && (live.active || !voice.error) && (
+            <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{live.error}</div>
           )}
         </div>
       </div>

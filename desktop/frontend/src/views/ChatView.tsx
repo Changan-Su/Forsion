@@ -630,6 +630,9 @@ export function ChatView({ leaf, params }: ViewProps) {
           )}
         </AnimatePresence>
         <Composer2
+          // 实时语音:只有跟随侧栏的主区聊天接得住(固定会话的分屏/隐藏标签不许抢交接);发往的就是本视图的会话
+          liveOwner={followActive && leaf.loc === 'main'}
+          liveSessionKey={activeId}
           disabled={!!params.readOnly || s.connState !== 'ok' || (studioChat && !studioRoot)}
           disabledPlaceholder={studioChat && !studioRoot ? t('studio.chooseProject') : undefined}
           running={running}

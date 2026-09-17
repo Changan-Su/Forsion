@@ -19,6 +19,7 @@
  *   npm run live:harness -- --only deferred                  # E2 按需装载:load_tools 先于 read_document + 子代理 read_document 直通 + 子代理自己 load_tools 解锁 browser_snapshot
  *   npm run live:harness -- --only grant                     # 改 delegate.grantTools / 子代理管理面闸后跑:授予时子代理用得上 manage_schedule,不授予时照旧被拒(正负两跑,均 action=list 无副作用)
  *   npm run live:harness -- --only churn                     # 同会话 6 连发的后续调用命中画像(不设命中率阈值,六个 run 须跑完)
+ *   npm run live:harness -- --only ttft --ttft-rounds 5      # 首 token 延迟:preset(chat|work)× 思考档(off|medium)2×2,每格 N 会话 × 2 轮(冷/热缓存),交错跑
  *   node scripts/live-harness.mjs --selftest                 # 纯判据(done 锚点 / load_tools 措辞 / 子代理归属)的负对照;不起引擎、不需凭证
  *
  * 凭证:把 ~/.forsion-dev/provider-auth.json(--auth 可改)**软链**进隔离共享域 —— 引擎自己读,本脚本不读;
@@ -47,15 +48,16 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'chat', 'tool', 'loop', 'group', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs'];
+const KEYS = ['personas', 'chat', 'tool', 'loop', 'group', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['personas', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs']);
+const OPT_IN = new Set(['personas', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
+const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
 { // --only 写错 / 缺上游 → 直接拒,别跑出 0/0 或靠猜答的假绿(Codex 09-12)
   const bad = [...ONLY].filter((k) => !KEYS.includes(k));
   const missing = [...ONLY].flatMap((k) => (NEEDS[k] || []).filter((d) => !ONLY.has(d)).map((d) => `${k} 需要 ${d}`));
@@ -319,7 +321,7 @@ async function seedMemory() {
 async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client) {
   const t0 = Date.now();
   const { runId } = await api('/agent/runs', { method: 'POST', body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, client, agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
-  const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], approvals: 0, usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, wallMs: 0 };
+  const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], approvals: 0, usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, firstTokenMs: null, wallMs: 0 };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
@@ -335,7 +337,8 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           if (!line.startsWith('data:')) continue;
           let e; try { e = JSON.parse(line.slice(5).trim()); } catch { continue; }
           const p = e.payload || {};
-          if (e.type === 'token' || e.type === 'reasoning' || e.type === 'tool_stream') { if (ev.ttftMs == null) ev.ttftMs = Date.now() - t0; if (e.type === 'token') ev.tokens += 1; }
+          // firstTokenMs = 首个正文 token(语音能开口念的时刻);ttftMs 还含 reasoning/tool_stream
+          if (e.type === 'token' || e.type === 'reasoning' || e.type === 'tool_stream') { if (ev.ttftMs == null) ev.ttftMs = Date.now() - t0; if (e.type === 'token') { ev.tokens += 1; if (ev.firstTokenMs == null) ev.firstTokenMs = Date.now() - t0; } }
           else if (e.type === 'tool_call') { ev.toolCalls.push(p.name || '?'); ev.toolCallIds.push(p.id); }
           // 「调用过」≠「跑成了」:deferred 场景要判 read_document 真解析出了标记,不是报错后被 read_file 兜住。
           // `full` 留**未截断**的原文:bigread 要判的截断标记落在第 4000 字符附近,先截到 4000 就永远看不见
@@ -409,6 +412,16 @@ function museSection(fence) {
   if (!m) return [];
   return ['## Muse', '### Journal', fence(m.journal), '### TODO', fence(JSON.stringify(m.todos, null, 1)), '### 审批队列', fence(JSON.stringify(m.approvals, null, 1)), '### 状态', fence(JSON.stringify(m.status, null, 1))];
 }
+/** ttft 场景的中位数表;逐条样本在 results.json 的 ttftSamples。 */
+function ttftSection() {
+  const m = results.find((r) => r.ttftSummary);
+  if (!m) return [];
+  const n = (x) => (x == null ? '-' : String(x));
+  return ['## 首 token 延迟(中位数)', '',
+    '| 格 | 轮 | n | 首 token | 首 token 范围 | 引擎 ttft | 上传 | 引擎开销 | 墙钟 | prompt | 缓存 | 推理 tok | 请求字节 |', '|---|---|---|---|---|---|---|---|---|---|---|---|---|',
+    ...m.ttftSummary.map((s) => `| ${s.cell} | ${s.turn} | ${s.n} | ${sec(s.firstToken)} | ${s.firstTokenRange} | ${sec(s.engineTtft)} | ${sec(s.upload)} | ${sec(s.overhead)} | ${sec(s.wall)} | ${n(s.prompt)} | ${n(s.cached)} | ${n(s.reasoning)} | ${n(s.bytes)} |`),
+    '', '首 token = POST /agent/runs → 首个正文 token(客户端测);引擎 ttft = 发出 LLM 请求 → 首帧;引擎开销 = 客户端首帧 − 引擎 ttft(会话/记忆/提示词组装 + SSE 连接)。', ''];
+}
 async function finish(reason) {
   if (finished) return; finished = true;
   rmSync(authLink, { force: true }); // 任何退出路径都不留凭证软链
@@ -427,6 +440,7 @@ async function finish(reason) {
     '', '## 模型原话(按场景)',
     ...results.flatMap((r) => [`### ${r.name}`, fence(r.output)]),
     ...museSection(fence),
+    ...ttftSection(),
     '', '## 时间线归属(stall-timeline,同一 state.db)', fence(timeline, 6000), '',
   ].join('\n');
   writeFileSync(join(OUT, 'report.md'), md);
@@ -1009,6 +1023,56 @@ try {
     };
   });
 
+  // 首 token 延迟(实时语音的前置取数,方案 B-9/D15):preset × 思考档 2×2,分开「上下文瘦身」与「不思考」各值多少。
+  // 形态照桌面真发的:chat = preset+sandbox(applyPreset),work = host+cwd;client 带 desktop/ 让 sketch/ui 工具按桌面在场。
+  // 每格每轮一个新会话跑两轮:第 1 轮 = 新会话(前缀缓存冷/半冷),第 2 轮 = 同会话续聊(语音对话的稳态)。格子按轮旋转顺序,抵消时段漂移。
+  // 引擎开销 = 客户端首帧 − 引擎 ttftMs(POST → 发出 LLM 请求:会话/记忆/技能/提示词组装),决定要不要短路由。
+  // ponytail: 未带 ui_commands/ui_settings 目录(真桌面会带,前缀更长);sandbox 云工作区在台架里是死地址,不调工具就不碰。
+  await scenario('ttft', `ttft 首 token 延迟(${TTFT_ROUNDS} 轮 × 4 格 × 2 轮对话)`, async () => {
+    const CELLS = [
+      { id: 'chat·off', cfg: { preset: 'chat', execMode: 'sandbox', cwd: undefined, thinkingLevel: 'off' } },
+      { id: 'work·off', cfg: { thinkingLevel: 'off' } },
+      { id: 'chat·medium', cfg: { preset: 'chat', execMode: 'sandbox', cwd: undefined, thinkingLevel: 'medium' } },
+      { id: 'work·medium', cfg: { thinkingLevel: 'medium' } },
+    ];
+    const TURNS = ['今天有点累,随便陪我聊两句吧。', '那你觉得周末去爬山好,还是在家看电影好?一两句话说说就行。'];
+    const samples = [];
+    for (let r = 0; r < TTFT_ROUNDS; r++) {
+      for (let k = 0; k < CELLS.length; k++) {
+        const cell = CELLS[(k + r) % CELLS.length];
+        const sid = `live-ttft-${r}-${cell.id.replace('·', '-')}-${Date.now()}`;
+        for (let t = 0; t < TURNS.length; t++) {
+          const ev = await run(sid, TURNS[t], 120_000, cell.cfg, 'desktop/live-harness');
+          const u = ev.usages[0] || {};
+          samples.push({
+            cell: cell.id, round: r, turn: t + 1, error: ev.error, toolCalls: ev.toolCalls,
+            firstFrameMs: ev.ttftMs, firstTokenMs: ev.firstTokenMs, wallMs: ev.wallMs,
+            engineTtftMs: u.ttftMs ?? null, uploadMs: u.uploadMs ?? null, llmMs: u.llmMs ?? null,
+            engineOverheadMs: ev.ttftMs != null && u.ttftMs != null ? ev.ttftMs - u.ttftMs : null,
+            prompt: u.prompt ?? null, cached: u.cached ?? null, reasoning: u.reasoning ?? null, requestBytes: u.requestBytes ?? null,
+            reply: ev.content.slice(0, 120),
+          });
+          console.log(`  ${cell.id} r${r} t${t + 1}  token ${sec(ev.firstTokenMs)}  引擎开销 ${sec(samples.at(-1).engineOverheadMs)}  prompt ${u.prompt ?? '-'}/缓存 ${u.cached ?? '-'}${ev.error ? '  ERR ' + ev.error : ''}`);
+        }
+      }
+    }
+    const bad = samples.filter((s) => s.error);
+    const toolish = samples.filter((s) => s.cell.startsWith('chat') && s.toolCalls.length);
+    const med = (xs) => { const v = xs.filter((x) => x != null).sort((a, b) => a - b); return v.length ? v[Math.floor((v.length - 1) / 2)] : null; };
+    const summary = CELLS.flatMap((c) => TURNS.map((_, t) => {
+      const xs = samples.filter((s) => s.cell === c.id && s.turn === t + 1 && !s.error);
+      const col = (k) => xs.map((s) => s[k]);
+      const range = (k) => { const v = col(k).filter((x) => x != null); return v.length ? `${sec(Math.min(...v))}–${sec(Math.max(...v))}` : '-'; };
+      return { cell: c.id, turn: t + 1, n: xs.length, firstToken: med(col('firstTokenMs')), firstTokenRange: range('firstTokenMs'), engineTtft: med(col('engineTtftMs')), upload: med(col('uploadMs')), overhead: med(col('engineOverheadMs')), wall: med(col('wallMs')), prompt: med(col('prompt')), cached: med(col('cached')), reasoning: med(col('reasoning')), bytes: med(col('requestBytes')) };
+    }));
+    const pick = (cell, turn) => summary.find((s) => s.cell === cell && s.turn === turn);
+    return {
+      ok: bad.length === 0,
+      detail: `${samples.length} run,错 ${bad.length};chat 调了工具 ${toolish.length} 次;第 2 轮首 token 中位 chat·off ${sec(pick('chat·off', 2).firstToken)} / work·medium ${sec(pick('work·medium', 2).firstToken)}`,
+      output: samples.map((s) => `[${s.cell} r${s.round} t${s.turn}] ${s.reply}`).join('\n'),
+      ttftSummary: summary, ttftSamples: samples,
+    };
+  });
   await finish();
 } catch (e) {
   console.error(String(e?.message || e));
