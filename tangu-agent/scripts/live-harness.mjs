@@ -61,6 +61,7 @@ const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS
 { // --only 写错 / 缺上游 → 直接拒,别跑出 0/0 或靠猜答的假绿(Codex 09-12)
   const bad = [...ONLY].filter((k) => !KEYS.includes(k));
   const missing = [...ONLY].flatMap((k) => (NEEDS[k] || []).filter((d) => !ONLY.has(d)).map((d) => `${k} 需要 ${d}`));
+  if (ONLY.has('ttft') && !(Number.isInteger(TTFT_ROUNDS) && TTFT_ROUNDS >= 1)) { console.error(`--ttft-rounds 无效:须为 ≥1 的整数(得到 ${TTFT_ROUNDS})`); process.exit(2); }
   if (!ONLY.size || bad.length || missing.length) { console.error(`--only 无效:${bad.length ? '未知 ' + bad.join(',') : ''}${missing.length ? ' ' + missing.join(';') : ''}${!ONLY.size ? '为空' : ''};合法值 ${KEYS.join(',')}`); process.exit(2); }
 }
 
@@ -144,6 +145,17 @@ const run3Verdict = (ev) => {
   return { unlock, ok3Raw, delegated, parentPreUnlocked, subDenied, inconclusive: !ok3Raw && !ev.error && delegated && parentPreUnlocked && !subDenied };
 };
 
+/**
+ * ttft 定级。样本必须条条有「首个正文 token」与引擎 usage 的 ttft:done 了却没 token、usage 丢了 = 事件协议或采集回归,
+ * 只看 error 会假绿(Codex 评审 09-17);条数必须 = 轮 × 格 × 对话轮,零轮不算过。
+ */
+const ttftVerdict = (samples, expected) => {
+  const errors = samples.filter((s) => s.error).length;
+  const noToken = samples.filter((s) => !s.error && s.firstTokenMs == null).length;
+  const noUsage = samples.filter((s) => !s.error && s.engineTtftMs == null).length;
+  return { ok: expected > 0 && samples.length === expected && !errors && !noToken && !noUsage, errors, noToken, noUsage };
+};
+
 // ── --selftest:上面三个纯判据的负对照(不起引擎、不烧额度、不需要凭证)。每条都配一个**该红的**输入。──
 if (argv.includes('--selftest')) {
   const fails = [];
@@ -178,8 +190,16 @@ if (argv.includes('--selftest')) {
   check('③ 父先解锁但子代理吃到 not available(负对照)',
     grade(ev3of(['load_tools', 'delegate'], [pRes('load_tools', LOADED), pRes('delegate')], [sub('A', 'browser_snapshot', { preview: DENIED })])), 'FAIL');
   check('③ run 报错(负对照)', run3Verdict({ ...ev3of(['load_tools', 'delegate'], [pRes('load_tools', LOADED), pRes('delegate')], [sub('A', 'browser_snapshot')]), error: 'boom' }).inconclusive, false);
+  // ttft 定级:齐全才过;缺首 token / 缺 usage / 条数不足 / 零轮 / run 报错都得红
+  const ts = (extra = {}) => ({ error: null, firstTokenMs: 900, engineTtftMs: 800, ...extra });
+  check('ttft 齐全', ttftVerdict([ts(), ts()], 2).ok, true);
+  check('ttft 缺首 token(负对照)', ttftVerdict([ts(), ts({ firstTokenMs: null })], 2).ok, false);
+  check('ttft 缺 usage(负对照)', ttftVerdict([ts({ engineTtftMs: null }), ts()], 2).ok, false);
+  check('ttft 条数不足(负对照)', ttftVerdict([ts()], 2).ok, false);
+  check('ttft 零轮(负对照)', ttftVerdict([], 0).ok, false);
+  check('ttft run 报错(负对照)', ttftVerdict([ts({ error: 'boom' }), ts()], 2).ok, false);
   if (fails.length) { console.error(`--selftest 失败 ${fails.length} 条:\n  ${fails.join('\n  ')}`); process.exit(1); }
-  console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict,含负对照)');
+  console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict,含负对照)');
   process.exit(0);
 }
 
@@ -1056,19 +1076,19 @@ try {
         }
       }
     }
-    const bad = samples.filter((s) => s.error);
     const toolish = samples.filter((s) => s.cell.startsWith('chat') && s.toolCalls.length);
     const med = (xs) => { const v = xs.filter((x) => x != null).sort((a, b) => a - b); return v.length ? v[Math.floor((v.length - 1) / 2)] : null; };
     const summary = CELLS.flatMap((c) => TURNS.map((_, t) => {
-      const xs = samples.filter((s) => s.cell === c.id && s.turn === t + 1 && !s.error);
+      const xs = samples.filter((s) => s.cell === c.id && s.turn === t + 1 && !s.error && s.firstTokenMs != null);
       const col = (k) => xs.map((s) => s[k]);
       const range = (k) => { const v = col(k).filter((x) => x != null); return v.length ? `${sec(Math.min(...v))}–${sec(Math.max(...v))}` : '-'; };
       return { cell: c.id, turn: t + 1, n: xs.length, firstToken: med(col('firstTokenMs')), firstTokenRange: range('firstTokenMs'), engineTtft: med(col('engineTtftMs')), upload: med(col('uploadMs')), overhead: med(col('engineOverheadMs')), wall: med(col('wallMs')), prompt: med(col('prompt')), cached: med(col('cached')), reasoning: med(col('reasoning')), bytes: med(col('requestBytes')) };
     }));
     const pick = (cell, turn) => summary.find((s) => s.cell === cell && s.turn === turn);
+    const v = ttftVerdict(samples, TTFT_ROUNDS * CELLS.length * TURNS.length);
     return {
-      ok: bad.length === 0,
-      detail: `${samples.length} run,错 ${bad.length};chat 调了工具 ${toolish.length} 次;第 2 轮首 token 中位 chat·off ${sec(pick('chat·off', 2).firstToken)} / work·medium ${sec(pick('work·medium', 2).firstToken)}`,
+      ok: v.ok,
+      detail: `${samples.length} run,错 ${v.errors};缺首 token ${v.noToken};缺 usage ${v.noUsage};chat 调了工具 ${toolish.length} 次;第 2 轮首 token 中位 chat·off ${sec(pick('chat·off', 2).firstToken)} / work·medium ${sec(pick('work·medium', 2).firstToken)}`,
       output: samples.map((s) => `[${s.cell} r${s.round} t${s.turn}] ${s.reply}`).join('\n'),
       ttftSummary: summary, ttftSamples: samples,
     };

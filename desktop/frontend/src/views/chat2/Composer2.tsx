@@ -988,8 +988,10 @@ export const Composer2: React.FC<{
   /** override = 实时对话直接发的转写文本(不读也不清草稿)。返回这次发送的 promise(accepted);没发出去返回 undefined。 */
   const sendMessage = (override?: string) => {
     const text = (override ?? draft).trim()
-    const feedbackMatch = /^\/feedback(?:\s+([\s\S]*))?$/i.exec(text)
-    if (override == null && feedbackMatch && window.tangu?.submitFeedback) {
+    // 斜杠命令只认键盘草稿:实时转写(override)一律当普通消息发,不执行本地命令(Codex 评审 09-17)
+    const cmd = override == null ? text : ''
+    const feedbackMatch = /^\/feedback(?:\s+([\s\S]*))?$/i.exec(cmd)
+    if (feedbackMatch && window.tangu?.submitFeedback) {
       if (useApp.getState().openFeedback(feedbackMatch[1]?.trim())) {
         setDraft('')
         requestAnimationFrame(autoGrow)
@@ -1000,14 +1002,14 @@ export const Composer2: React.FC<{
     // 不放行的话按回车毫无反应 = 哑火(评审 M2)。斜杠命令那几段都要求 text,故只在这之后判空。
     if (!text && !allRefChips.length) return
     // /compact [focus]:带关注点时不能走弹层菜单(那条只认裸命令),在这里直接派发
-    const compactMatch = /^\/compact(?:\s+([\s\S]+))?$/i.exec(text)
+    const compactMatch = /^\/compact(?:\s+([\s\S]+))?$/i.exec(cmd)
     if (compactMatch && onCompact) {
       onCompact((compactMatch[1] || '').trim() || undefined)
       setDraft('')
       requestAnimationFrame(autoGrow)
       return
     }
-    const loopMatch = /^\/loop(?:\s+(\d+))?$/i.exec(text)
+    const loopMatch = /^\/loop(?:\s+(\d+))?$/i.exec(cmd)
     if (loopMatch && onMaxIterationsChange) {
       if (loopMatch[1]) {
         const n = Math.min(Math.max(1, parseInt(loopMatch[1], 10)), 200)
@@ -1021,7 +1023,7 @@ export const Composer2: React.FC<{
       return
     }
     // /verify <命令|off>:设/清本会话验证命令(收尾闸门;引擎收尾前自动跑,不绿不许收)。
-    const verifyMatch = /^\/verify(?:\s+([\s\S]+))?$/i.exec(text)
+    const verifyMatch = /^\/verify(?:\s+([\s\S]+))?$/i.exec(cmd)
     if (verifyMatch && isHost && onVerifyCommandChange) {
       const arg = (verifyMatch[1] || '').trim()
       if (!arg) {
@@ -1037,7 +1039,7 @@ export const Composer2: React.FC<{
       requestAnimationFrame(autoGrow)
       return
     }
-    if (onVoiceModeChange && /^\/(voice|text)$/i.test(text)) {
+    if (onVoiceModeChange && /^\/(voice|text)$/i.test(cmd)) {
       const on = /^\/voice$/i.test(text)
       onVoiceModeChange(on)
       setHint(on ? t('input.slash.voiceOnHint') : t('input.slash.voiceOffHint'))
@@ -1046,7 +1048,7 @@ export const Composer2: React.FC<{
       return
     }
     // /think|/effort <档位>:敲完回车直接生效(菜单点选之外的键盘路径)。
-    const thinkMatch = /^\/(?:think|effort)(?:\s+(\S+))?$/i.exec(text)
+    const thinkMatch = /^\/(?:think|effort)(?:\s+(\S+))?$/i.exec(cmd)
     if (thinkMatch && onThinkingChange) {
       const lv = (thinkMatch[1] || '').toLowerCase() as NonNullable<AgentConfig['thinkingLevel']>
       if (THINKING_LEVELS.includes(lv)) {
@@ -1060,7 +1062,7 @@ export const Composer2: React.FC<{
       return
     }
     // 用户自定义命令:服务端展开($ARGUMENTS/$1..$9)后当普通消息发出去。
-    const customMatch = /^\/([a-z0-9][a-z0-9-]*)(?:\s+([\s\S]*))?$/i.exec(text)
+    const customMatch = /^\/([a-z0-9][a-z0-9-]*)(?:\s+([\s\S]*))?$/i.exec(cmd)
     if (customMatch && customCommands.some((c) => c.name === customMatch[1].toLowerCase())) {
       const name = customMatch[1].toLowerCase()
       const args = customMatch[2] || ''
