@@ -1,118 +1,136 @@
 <div align="center">
 
+<img src="./desktop/build/icon.png" alt="Forsion logo" width="72" />
+
 # Forsion
 
-**An evolvable, local-first AI workbench.**
-
-Agents, knowledge, and everyday work — together in a second brain you own.<br>
-For ideas, notes, planning, coding, and the workflows that connect them.
+**A second brain you own.**<br>
+Remembers your context. Thinks with you. Follows through.
 
 **English** · [简体中文](./README.zh-CN.md)
 
 [![Latest release](https://img.shields.io/github/v/release/Changan-Su/Forsion?display_name=tag&sort=semver&label=release)](https://github.com/Changan-Su/Forsion/releases)
-[![Build desktop](https://github.com/Changan-Su/Forsion/actions/workflows/build-desktop.yml/badge.svg)](https://github.com/Changan-Su/Forsion/actions/workflows/build-desktop.yml)
-![Node.js](https://img.shields.io/badge/Node.js-%E2%89%A520-339933?logo=node.js&logoColor=white)
 ![Platforms](https://img.shields.io/badge/desktop-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-555)
 [![License](https://img.shields.io/badge/license-Modified%20Apache--2.0-6f42c1)](./LICENSE)
 
-[Website](https://forsion.net) · [Download](https://github.com/Changan-Su/Forsion/releases) · [Documentation](./docs/README.md) · [Core Capabilities](#core-capabilities) · [Contributing](#contributing)
+[Download](https://github.com/Changan-Su/Forsion/releases/latest) · [Quick start](./docs/getting-started/quickstart.en.md) · [Documentation (中文)](./docs/README.md) · [Website](https://forsion.net)
 
 </div>
 
-<p align="center">
-  <img src="./.github/assets/readme-fusang-tree.jpg" alt="Forsion connects Agents, knowledge, tools and workflows into an evolvable second brain" width="100%" />
-</p>
+Forsion is a **local-first second brain**. Keep research, ideas, and projects in your own knowledge base. Work with Agents that carry long-term memory, let Muse follow up on ongoing work, and add tools and workflows through plugins.
 
-## From a Single Thought to a System That Keeps Working
+**Build knowledge → Think with context → Take action → Bring results back.** Each new task can build on what came before.
 
-A thought might begin as a conversation, become a note, then a set of tasks, then a bit of code, and finally circle back into your calendar and inbox. Traditional software slices these steps into isolated apps; most AI products can only see the context inside the current chat box.
+| Knowledge & memory | Multi-agent collaboration | Proactive follow-up | Extensions |
+| --- | --- | --- | --- |
+| Notes, links, and long-term memory | Multi-agent discussions and parallel subtasks | Proactive Muse and automation | Plugins, skills, and custom Spaces |
 
-Forsion aims to do something different: **let knowledge, tools and Agents work continuously inside one shared environment.**
+## Give your work lasting context
 
-You can discuss an idea with Tangu, let it read material once authorized, organize it into Amadeus notes, write the dates into Calendar, generate a real project in Coding, then have Automation carry the follow-up work forward and deliver the results to your Inbox. Information no longer has to be copied back and forth between apps, and Agents no longer have to understand your world from scratch every time.
+Your **Amadeus knowledge base** holds the material you collect, the ideas you develop, and the work you finish. **Agent memory** holds preferences, facts, and project context gathered while working with you. Keep the sources close and carry useful context into the next conversation.
 
-The system follows three principles:
-
-- **Grow locally first, then choose how to sync.** Files, notes, sessions and configuration land on your device by default — easy for Agents to read, and easy for you to inspect, back up and protect. Forsion Cloud is an optional connective layer, not a prerequisite for using the local workbench.
-- **From passive recording to active collaboration.** Memory, tasks and tools are not merely saved; once you explicitly configure and authorize them, Agents and automation can keep organizing information, driving tasks forward and delivering results.
-- **Instead of adapting to fixed software, shape your own workflow.** Spaces define the context you're working in right now, Views and layouts decide how information appears, and plugins, skills and Agents let the workbench gradually grow into something that fits you.
-
-That is what Forsion means by a "second brain": not another information silo, but a personal system you own — one that understands context and helps you act.
-
-## What Is Forsion
-
-Forsion is more than an AI chat client. It treats the AI Agent as a foundational capability of the workbench, so conversations can work alongside real files, notes, projects, schedules and automation tasks.
-
-**Forsion Genesis** is the unified source repository for the Forsion product family. It contains:
-
-- The interface-agnostic **Tangu Agent runtime**, which can run in a terminal, a headless service or a desktop app;
-- The **LCL workspace engine** built on the Space / View / Plugin model;
-- **Forsion Desktop** for everyday use;
-- Web and Android clients that reuse the same rendering layer;
-- Standalone distributions such as the full-featured Forsion build and Amadeus, tailored from product profiles.
-
-### One Engine, Many Product Forms
-
-- **AI is part of the workflow**: within the scope you authorize, Agents can read projects, edit files, run tools, and use skills and MCP — rather than staying stuck in a chat window.
-- **Local-first, not local-only**: workspaces, sessions, skills and settings are stored on your machine by default; you can also connect local models, your own APIs, subscription accounts or Forsion Cloud as needed.
-- **One workbench, many working contexts**: conversation, notes, calendar, coding and automation are organized into switchable Spaces that share files, search, layout and context.
-- **The interface can be recomposed**: panels support drag-and-drop, split views, stacking, standalone windows, layout memory and custom Spaces — suitable for everything from lightweight capture to complex projects.
-- **One core, many runtimes**: desktop, TUI, HTTP service, Web and mobile share the same core contracts, reducing feature drift and making self-hosting and extension easier.
-- **Driven by product profiles**: the same source can combine different Spaces, branding and backend capabilities to build a complete workbench or a product focused on a single scenario.
-
-## Core Capabilities
+- **Connect your material.** Local Markdown, bidirectional links, backlinks, and a graph view. Reference attachments, databases, and conversations from notes to keep conclusions connected to their sources.
+- **Organize your thinking.** Manage projects through table, board, calendar, and gallery views. Explore ideas on a whiteboard, annotate PDFs, and assemble research in dashboards.
+- **Manage what Agents remember.** Each Agent has its own personality, Library, logs, and memory settings. Inspect, revise, consolidate, or forget facts in the memory panel. Historian maintains conversation logs and memory candidates; when enabled, Dream consolidates memories and candidates, while recall searches history within the Agent's scope.
 
 <p align="center">
-  <img src="./.github/assets/readme-connected-workbench.jpg" alt="A connected Forsion workbench composed of Agent, notes, calendar, coding, inbox and automation Spaces" width="100%" />
+  <img src="./.github/assets/showcase/notes.png" alt="Forsion's Amadeus knowledge base with a project note, research, and next actions" width="920" />
+  <br><sub>Actual Note workspace in Forsion Desktop v2.10.4, with public sample data.</sub>
 </p>
 
-Every Space is focused, but none is isolated. They share the same workbench, files, search, context and Agent capabilities, so a piece of work can move forward without being repeatedly copied between apps.
+[Explore the knowledge base (中文)](./docs/amadeus/overview.md) · [Agent memory (中文)](./docs/agents/memory.md)
 
-### Six Built-in Spaces
+## Muse: a second brain that follows up
 
-| Space | Purpose |
+Give ongoing work to **Muse, the proactive Agent**. Once enabled, Muse wakes on heartbeats, schedules, and rules. It uses recent work and its own memory to prepare material, suggest next steps, or carry out tasks within the permissions and budget you set.
+
+- **Keep an eye on ongoing work.** Hand a task from a conversation to Muse for tracking, or configure a scheduled or event-based rule. Heartbeats give it regular opportunities to review what needs attention.
+- **Bring decisions to you.** Results arrive in Inbox. Task cards let you ask Muse to execute, start a new conversation, or dismiss a suggestion. Approve or reject pending actions in the message itself.
+- **Build a workspace of its own.** Muse has a Library and work journals. It can also write and gradually improve its own Space, organizing ongoing work into a browsable interface.
+
+Muse is off by default and currently runs in local mode. Configure active hours, frequency, budget, and approval mode; activity awareness is a separate opt-in. For repeatable processes, **Automation** connects time, events, or database changes to action chains involving Agents, notifications, and database operations.
+
+[Muse (中文)](./docs/agents/muse.md) · [Automation (中文)](./docs/spaces/automation.md) · [Inbox (中文)](./docs/spaces/inbox.md)
+
+## Multiple Agents, shared work
+
+Create Agents for research, writing, development, or everyday planning, each with its own personality, model, Library, and tool permissions. Discuss a problem from several perspectives, or divide independent work into parallel subtasks.
+
+| Collaboration mode | How to use it |
 | --- | --- |
-| **Tangu** | AI conversation and task execution; supports sessions, project files, memory, skills, sub-tasks, multi-Agent, and connecting external Agent engines such as Claude Code and Codex. |
-| **Amadeus** | Local knowledge base; supports Markdown, bidirectional links, backlinks, graph view, tags, full-text search, databases, attachments and PDF. |
-| **Calendar** | Aggregates dates and to-dos from Amadeus databases, providing calendar, time-window, filter and cross-base task views. |
-| **Inbox** | A central place for local messages, system notifications and Forsion service messages, with unread state and reminders. |
-| **Coding** | Puts requirement conversations, code editing, project files and live preview in one workspace — ideal for quickly building web prototypes. |
-| **Automation** | Configure scheduled tasks and watch rules, and review the execution records and results of unattended Agents. |
+| **Multi-agent group chat** | Let different roles respond, challenge assumptions, and develop a proposal in turns. Agents vote on whether to continue each round; you can interject or @ a participant. |
+| **Parallel subtasks** | Delegate independent research, implementation, or checks, pass the context each task needs, and have the main Agent bring the results together. |
+| **Self-brainstorming** | Explore several perspectives on a problem, compare alternatives, and form a conclusion. |
+| **External Agent engines** | Connect locally installed engines such as Claude Code and Codex through ACP, bringing them into Forsion conversations and workspaces. |
 
-### Agents & Models
+Group chat, subtask execution, and these external engines use local mode. The knowledge base provides material you can authorize Agents to access, while their memory and tool settings remain individually manageable.
 
-- Supports OpenAI-compatible endpoints, local Ollama, Forsion-hosted models, and supported subscription-account login methods.
-- Supports tool-approval tiers, file-access boundaries, command execution, background tasks, browser tools, image tools and a Docker Python sandbox.
-- Supports MCP, editable skills, folder-based Agents, long-term memory, group chat, sub-task delegation and appending instructions mid-run.
-- Can connect installed external Agent CLIs such as Claude Code and Codex via ACP, routing their permission requests uniformly through Forsion.
+[Agents (中文)](./docs/agents/overview.md) · [Group chat (中文)](./docs/chat/group-chat.md) · [External engines (中文)](./docs/agents/external-engines.md)
 
-> Forsion itself does not change the data policies of upstream model services. When you use cloud models, the relevant requests are sent to the provider you chose; when you use local models and local capabilities, you can keep the data on your own device.
+## A plugin system for a growing second brain
 
-### Local Knowledge & Workspace
+Extensions can change both **what your AI can do** and **how you work with it**. Plugins can add tools, note features, workspace views, automation events, or an entire Space.
 
-- Notes and attachments are saved directly in a local Vault, readable and backable by other file tools.
-- Databases support table, board, calendar and gallery views, with configurable filters, sorting, relations and rollups.
-- Global quick-find jumps to notes, databases and chat sessions.
-- The workspace supports left/right sidebars, tabs, arbitrary splits, cross-window drag-and-drop, floating Mini cards and layout restoration.
-- Custom themes, skills, Agents, plugins and Spaces are all installed as local files, easy to inspect, modify and version-control.
+- **Install a workflow together.** A plugin bundle can deliver an interface, engine tools, Agents, skills, and Spaces, all managed from one place.
+- **Connect collection to action.** For example, Bluebird turns videos into notes; Computer Use lets Agents operate desktop applications on supported platforms; plugin events can trigger automation.
+- **Turn experience into reusable capability.** Skills capture ways of working, and MCP connects external tools and data. The marketplace offers plugins, Agents, skills, Spaces, themes, and web apps. Ask an Agent to use the built-in extension development skill to create an extension of your own.
 
-## Download & Install
+[Plugins and extension points (中文)](./docs/customization/plugins.md) · [Marketplace (中文)](./docs/customization/market.md) · [Skills (中文)](./docs/agents/skills.md)
 
-### Install the Desktop App
+## Put it together in one project
 
-Head to [GitHub Releases](https://github.com/Changan-Su/Forsion/releases) to download the latest version.
+For a research project, you could build up this workflow:
 
-| Platform | Current release artifact | Notes |
+1. **Collect context.** Bring articles, PDFs, and saved material into your knowledge base. Link sources, open questions, and project notes.
+2. **Develop a judgment.** Ask research and review Agents to compare approaches, delegate independent investigations, and save the conclusions with their evidence.
+3. **Make something.** Review and edit notes, code, images, or webpages directly in Agent Desk. For an interactive prototype, continue building and previewing it in Coding Studio.
+4. **Keep it moving.** Assign follow-up work to Muse or Automation, check dates and to-dos in Calendar, and respond to suggestions in Inbox. Add new conclusions and outputs to the project note.
+
+This is a suggested workflow you can configure. You choose model connections, access to material, Muse settings, and plugins.
+
+<p align="center">
+  <img src="./.github/assets/showcase/workbench.png" alt="Coding Studio showing a public sample conversation beside its Reading room webpage" width="920" />
+  <br><sub>Coding Studio is one place to create an output. Forsion Desktop v2.10.4, with public sample data.</sub>
+</p>
+
+<details>
+<summary>Calendar: bring dates and to-dos from your knowledge base into your day</summary>
+
+<p align="center">
+  <img src="./.github/assets/showcase/calendar.png" alt="Forsion Calendar brings together dated records and tasks from databases" width="920" />
+  <br><sub>Actual Calendar workspace in Forsion Desktop v2.10.4, with public sample data.</sub>
+</p>
+
+</details>
+
+## Work in an environment you control
+
+- **Arrange the workspace.** Spaces, split panels, draggable tabs, independent windows, and Mini Panel let you place conversations, sources, outputs, and plugin views where they fit. Restore layouts when you return.
+- **Choose your models.** Use Forsion-hosted models, your own API connection, OpenAI-compatible endpoints, local Ollama, or supported subscription logins.
+- **Continue elsewhere.** Talk to Agents through configured WeChat, Telegram, or QQ channels. Web and Android clients provide cloud-connected access, with capabilities that differ from Desktop.
+- **Keep access to your data.** Inspect and back up local notes and files, and view or edit Agent memory. Cloud-model requests go to the provider you choose; enabling account sync or sharing sends the corresponding content to the cloud.
+
+[Workspace (中文)](./docs/getting-started/workspace.md) · [Channels (中文)](./docs/chat/channels.md) · [Client capabilities (中文)](./docs/reference/web-and-mobile.md) · [Data and privacy (中文)](./docs/reference/data-and-privacy.md)
+
+## Download and start
+
+Download the latest desktop installer from [GitHub Releases](https://github.com/Changan-Su/Forsion/releases/latest).
+
+| Platform | Release artifact | Notes |
 | --- | --- | --- |
-| macOS | `Forsion-*.dmg` | Currently auto-builds the Apple Silicon (arm64) version. |
+| macOS | `Forsion-*.dmg` | Apple Silicon (arm64). |
 | Windows | `Forsion-*.exe` | NSIS installer. |
-| Linux | `Forsion-*.AppImage` | Add execute permission after downloading, then run. |
+| Linux | `Forsion-*.AppImage` | Add execute permission, then run. |
 
-The first launch walks you through connection method, model, theme, workspace and a local environment check. The desktop install bundles the Agent backend and everything needed to run — no need to install Node.js beforehand.
+1. **Install and connect a model.** First launch helps configure your connection, model, and workspace. The desktop installer includes the Agent backend and Node.js runtime.
+2. **Bring some real context.** Create a project note with a goal, sources, and next steps. Ask an Agent to read it, and explicitly tell it a preference worth remembering.
+3. **Arrange a follow-up.** In local mode, enable Muse with the permissions and budget you choose, or create an automation rule. Review the result in Inbox.
 
-> **A note on installer signing**: the macOS build currently uses ad-hoc signing and has not yet been notarized by Apple; the Windows build may also trigger SmartScreen. Only download from this repository's Releases. If Gatekeeper blocks the first open on macOS, right-click the app and choose "Open", or allow it under "System Settings → Privacy & Security".
+The [quick start](./docs/getting-started/quickstart.en.md) walks through this path and introduces multi-agent work and plugins.
 
-### Where Your Data Lives
+> **Installer signing:** macOS builds use ad-hoc signing and are not yet notarized; Windows builds may trigger SmartScreen. Download from this repository's Releases. If Gatekeeper blocks the first open on macOS, right-click the app and choose “Open”, or allow it in **System Settings → Privacy & Security**.
+
+## Where Your Data Lives
 
 The official desktop build uses, by default:
 
@@ -124,6 +142,15 @@ The official desktop build uses, by default:
 The dev build uses separate `~/.forsion-dev/` and `~/Forsion-Dev/` so it won't pollute production data. Legacy `~/.tangu` / `~/Tangu` data is migrated by the desktop app, which keeps a compatibility entry point.
 
 Back up these two directories regularly, just like ordinary documents. Before running high-privilege Agent tasks, confirm the approval tier and the current working directory.
+
+## For developers
+
+**Forsion Genesis** is the source repository for the product family: the Tangu Agent runtime, the LCL Space / View / Plugin engine, Desktop, Web, Android, and product profiles such as Amadeus.
+
+See [web/README.md](./web/README.md) for Web deployment and [mobile/README.md](./mobile/README.md) for Android builds. Expand below for all development commands and the architecture.
+
+<details>
+<summary>Development, deployment, and architecture</summary>
 
 ## Local Development
 
@@ -288,6 +315,8 @@ The release workflow is triggered by `v*` tags: it first checks Tangu Agent type
 
 User-visible desktop changes should be recorded in [desktop/CHANGELOG.md](./desktop/CHANGELOG.md).
 
+</details>
+
 ## Contributing
 
 Issues and Pull Requests are welcome. To make problems easier to reproduce and merge:
@@ -309,11 +338,3 @@ Forsion Genesis uses the [Modified Apache License 2.0](./LICENSE). It is based o
 - Commercial use is permitted when the additional conditions are met; a commercial license should be obtained for multi-tenant deployment or other authorizations.
 
 Please read the full license text before using, distributing or offering services based on this project. This license includes restrictions beyond Apache-2.0, so it should not be understood as the standard Apache-2.0 license alone.
-
----
-
-<div align="center">
-
-**Forsion — bring Agents into your workflow, not just into a chat box.**
-
-</div>
