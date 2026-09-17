@@ -313,6 +313,19 @@ async function main() {
     await win.locator('.t2sw-mode-picker').first().locator('.t2sw-mode-trigger').click({ timeout: 10_000 })
     await win.locator('.t2sw-mode-menu').first().waitFor({ state: 'visible', timeout: 10_000 })
     await win.waitForTimeout(280) // 等 220ms 弹性展开结束；中途截图会把整张菜单连文字一起拍成半透明
+    const modeMenu = await win.locator('.t2sw-mode-menu').first().evaluate((menu) => {
+      const items = Array.from(menu.querySelectorAll('.t2sw-mode-item'))
+      const rects = items.map((el) => {
+        const r = el.getBoundingClientRect()
+        return { display: getComputedStyle(el).display, x: r.x, y: r.y, w: r.width, h: r.height }
+      })
+      return { menuW: menu.getBoundingClientRect().width, rects }
+    })
+    check('10 工作区 List 切换仍是纵向全宽下拉项(不退化成文字串)',
+      modeMenu.rects.length >= 4
+        && modeMenu.rects.every((r) => r.display === 'flex' && r.w >= modeMenu.menuW - 12 && r.h >= 26)
+        && modeMenu.rects.slice(1).every((r, i) => r.y >= modeMenu.rects[i].y + modeMenu.rects[i].h - 1),
+      JSON.stringify(modeMenu))
     await win.screenshot({ path: shot })
     console.log(`\n截图:${shot}`)
   } finally {

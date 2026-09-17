@@ -59,37 +59,88 @@ function embedMatches(rawTarget: string, ownerKey: string | null, id: string): b
 
 export class VaultIndex {
   private entries = new Map<string, Entry>()
+  /** 在途重建期间被增量 update/remove 过的路径:换表时以增量为准(重建更早读到的可能是改前盘面)。 */
+  private touched: Set<string> | null = null
+  private building: Promise<void> | null = null
+  private again = false
+  /** 每路径的增量序号(update/remove 各 +1),迟到的旧读据此作废。
+   *  ponytail: 碰过的路径各常驻一个数,规模 = 库里出现过的路径数;真嫌大再在换表时清。 */
+  private seq = new Map<string, number>()
 
   constructor(private readonly vault: VaultManager) {}
 
-  /** Full rebuild from disk. Safe to call before a vault is open (no-ops). */
-  async build(): Promise<void> {
-    this.entries.clear()
-    let pages: string[]
+  /** Full rebuild from disk. Safe to call before a vault is open (no-ops).
+   *  ⚠️ 建在新表上、读完一次性换:原先先 clear 再分片重读,读者(pageIcons/search/marks)撞上半截索引,
+   *  渲染端拿残表整表覆盖图标 = 「有图标的笔记不显示图标」(2026-09-16 实报)。
+   *  并发调用合并成「在途这遍跑完再来一遍」,await 返回时索引一定反映调用之后的盘面。 */
+  build(): Promise<void> {
+    this.again = true
+    this.building ??= (async () => {
+      try {
+        while (this.again) {
+          this.again = false
+          await this.rebuild()
+        }
+      } finally {
+        this.building = null
+      }
+    })()
+    return this.building
+  }
+
+  private async rebuild(): Promise<void> {
+    const touched = (this.touched = new Set<string>())
     try {
-      pages = await this.vault.listPages()
-    } catch {
-      return
-    }
-    for (let i = 0; i < pages.length; i += READ_CONCURRENCY) {
-      const slice = pages.slice(i, i + READ_CONCURRENCY)
-      const read = await Promise.all(slice.map((p) => this.readEntry(p)))
-      for (const e of read) if (e) this.entries.set(e.path, e)
+      let pages: string[]
+      try {
+        pages = await this.vault.listPages()
+      } catch {
+        // 只有「还没开库」会抛(collectFiles 逐目录吞掉 fs 错误),此时空表就是对的
+        this.entries = new Map()
+        return
+      }
+      const next = new Map<string, Entry>()
+      for (let i = 0; i < pages.length; i += READ_CONCURRENCY) {
+        const slice = pages.slice(i, i + READ_CONCURRENCY)
+        const read = await Promise.all(slice.map((p) => this.readEntry(p)))
+        for (const e of read) if (e) next.set(e.path, e)
+      }
+      for (const p of touched) {
+        const e = this.entries.get(p)
+        if (e) next.set(p, e)
+        else next.delete(p)
+      }
+      this.entries = next
+    } finally {
+      this.touched = null
     }
   }
 
   async update(pagePath: string): Promise<void> {
+    const mine = this.bump(pagePath)
+    const root = this.vault.getRoot()
     const e = await this.readEntry(pagePath)
+    // 读盘期间被更晚的 update/remove 取代,或库根换了:旧读不许回写(删掉的页会被塞回来 / 旧库同名页串进新库)
+    if (this.seq.get(pagePath) !== mine || this.vault.getRoot() !== root) return
     if (e) this.entries.set(pagePath, e)
     else this.entries.delete(pagePath)
+    this.touched?.add(pagePath)
   }
 
   remove(pagePath: string): void {
+    this.bump(pagePath)
     this.entries.delete(pagePath)
+    this.touched?.add(pagePath)
+  }
+
+  private bump(pagePath: string): number {
+    const n = (this.seq.get(pagePath) ?? 0) + 1
+    this.seq.set(pagePath, n)
+    return n
   }
 
   async rename(oldPath: string, newPath: string): Promise<void> {
-    this.entries.delete(oldPath)
+    this.remove(oldPath)
     await this.update(newPath)
   }
 

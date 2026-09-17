@@ -16,8 +16,14 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
 import { PageScopeCtx, disposePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { readDash2Layout } from '@amadeus-shared/dashboard'
 import { readDash3Layout, readDashMode } from '@amadeus-shared/dashboard3'
+import { registerMessages, useI18n } from '../i18n'
 import { DashboardCanvasView } from './DashboardCanvasView'
 import { DashboardGridView } from './DashboardGridView'
+import { useFollowPathGone } from './followPathGone'
+
+registerMessages({
+  'dashview.loadFailed': { zh: '打不开仪表盘', en: 'Could not open dashboard' },
+})
 
 export function DashboardView(props: ViewProps) {
   return (
@@ -28,6 +34,7 @@ export function DashboardView(props: ViewProps) {
 }
 
 function DashboardRouter(props: ViewProps) {
+  const { t } = useI18n()
   const dashPath = typeof props.leaf.params.dashPath === 'string' ? props.leaf.params.dashPath : ''
   const store = useScopedPageStore()
   const activePage = usePageStore((s) => s.activePage)
@@ -44,15 +51,36 @@ function DashboardRouter(props: ViewProps) {
    *  (上一页的保存/改名也会留下),正常切页时会在 effect 跑起来之前先闪一帧「打不开新页:旧错误」
    *  (codex 2026-09-02 [medium])。 */
   const [failedPath, setFailedPath] = useState<string | null>(null)
+  /** 清单里还有没有本文件(复合后缀在各端归 pages 还是 files 不保证一致,两边都认)。 */
+  const known = usePageStore((s) => !!dashPath && (s.pages.includes(dashPath) || s.files.includes(dashPath)))
+  /** ⚠️ activePage 也必须进 deps:本 scope 的 activePage 会被**别人**挪走 —— 树上删掉本仪表盘时
+   *  deletePage 把活动 scope 导航去下一篇、往本 scope 里 loadPage 的各种入口(双链/历史/插件)。
+   *  只看 [dashPath, vaultRoot] 的话两边都等不到 = 永久骨架屏(2026-09-16 用户实报「本地文件一直在加载」)。
+   *  挪走了就重装;本页在途(pendingPage)不重复发。 */
   useEffect(() => {
-    if (!dashPath || dashPath === store.getState().activePage) return
+    const st = store.getState()
+    if (!dashPath || dashPath === st.activePage || dashPath === st.pendingPage) return
+    // ⚠️ 库已就绪而清单里没有本文件 → 绝不装载:web(loadOrCreate)与移动端的 loadPage 缺文件即新建,
+    //    刚删掉的 / 另一侧库里的仪表盘会被建回一份空的(换侧、启动恢复时 activePage 为空,同样要挡)。
+    //    清单也可能只是还没刷到它(插件写完即开)→ 先刷一次,仍没有才落失败态;刷到了 known 翻转会重跑本 effect。
+    if (vaultRoot && !known) {
+      void st.refreshStructure().catch(() => {}).then(() => {
+        const s = store.getState()
+        if (!s.pages.includes(dashPath) && !s.files.includes(dashPath)) setFailedPath(dashPath)
+      })
+      return
+    }
     setFailedPath(null)
     // loadPage 自己吞异常(失败时只置 error/status),所以判成败看它有没有把 activePage 换过来。
-    void store.getState().loadPage(dashPath).then(() => {
+    void st.loadPage(dashPath).then(() => {
       // 库还没落地那一发**不算失败**(它必失败,且落地后本 effect 会重跑)—— 否则启动时先闪一帧红。
       if (vaultRoot && store.getState().activePage !== dashPath) setFailedPath(dashPath)
     })
-  }, [dashPath, vaultRoot]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [dashPath, vaultRoot, activePage, known]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 本仪表盘文件被改名/挪走 → 标签跟到新路径;被删 → 关掉标签(remap 只改 store 的 activePage,不改 leaf 参数)。
+  // 与其余文件类标签共用一份:参数须在广播那一刻现取,闭包里的 leaf.params 是挂载时快照,会把「解锁编辑」退回去。
+  useFollowPathGone(props.leaf.id, 'dashPath', dashPath)
 
   // ⚠️ scope 的销毁**只在这一层**。放在两个子视图里的话,grid ↔ canvas 互换时旧视图的 cleanup
   //    会把新视图已经取到手的那份 store 摘成孤儿 —— 之后全局访问会另建一份空 store,保存/广播/
@@ -76,7 +104,7 @@ function DashboardRouter(props: ViewProps) {
   // 骨架屏纪律要防的那件事(文件被删/改名时也走这里)。
   if (dashPath && activePage !== dashPath) {
     return failedPath === dashPath
-      ? <div className="amx-db amx-db-state">打不开仪表盘 <code>{dashPath}</code>{loadError ? `:${loadError}` : ''}</div>
+      ? <div className="amx-db amx-db-state">{t('dashview.loadFailed')} <code>{dashPath}</code>{loadError ? `: ${loadError}` : ''}</div>
       : <Skeleton variant="document" />
   }
   return (

@@ -143,6 +143,23 @@ async function main() {
       rowD.columns.length === 3 && rowD.columns.map((c) => c.children[0]?.ref).join() === 'b1,b3,b2',
       JSON.stringify(rowD.columns.map((c) => c.children.map((x) => x.ref))),
     )
+
+    // E. 用户实报:框选多个块后拖到侧边分栏，不能只搬主动拖起的第一块。
+    // 选择本身已有 block-file-ops / unified-page 的框选仪器；这里从 selection store 注入多选，
+    // 专钉 PageView onDragStart 不得塌成单选 + pageStore 必须单事务搬整组这条接线。
+    await freshPage(page)
+    await page.evaluate(() => window.__dndSelect(['b1', 'b2']))
+    await drag(page, 'b1', 'b3', 'right')
+    t = await root(page)
+    const rowE = t.children[0]
+    const colsE = rowE.columns.map((c) => c.children.map((x) => x.ref))
+    check(
+      'E1 多选 b1+b2 → b3 右缘:整组进入同一新列',
+      t.children.length === 1 && JSON.stringify(colsE) === '[["b3"],["b1","b2"]]',
+      JSON.stringify(colsE),
+    )
+    const selectedE = await page.locator('.block-host[data-selected]').evaluateAll((els) => els.map((el) => el.dataset.blockId).sort())
+    check('E2 拖完仍保留整组选择态', JSON.stringify(selectedE) === '["b1","b2"]', JSON.stringify(selectedE))
   } finally {
     await browser.close()
     if (vite) vite.kill()
