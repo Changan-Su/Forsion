@@ -4,8 +4,8 @@
 
 # Forsion
 
-**A second brain you own.**<br>
-Remembers your context. Thinks with you. Follows through.
+**Remember it. Think it through. Keep it moving.**<br>
+A local-first AI second brain you own.
 
 **English** · [简体中文](./README.zh-CN.md)
 
@@ -17,98 +17,125 @@ Remembers your context. Thinks with you. Follows through.
 
 </div>
 
-Forsion is a **local-first second brain**. Keep research, ideas, and projects in your own knowledge base. Work with Agents that carry long-term memory, let Muse follow up on ongoing work, and add tools and workflows through plugins.
+Forsion is a **local-first AI second brain**. Organize your own Markdown files in a Notion-style block editor, think with Agents that retain useful context, build a TEAM to move projects forward, and let Muse follow up within the boundaries you set.
 
-**Build knowledge → Think with context → Take action → Bring results back.** Each new task can build on what came before.
+**Make each piece of thinking a starting point for the next.** Sources, preferences, discussions, outputs, and follow-ups come together in one workspace.
 
-| Knowledge & memory | Multi-agent collaboration | Proactive follow-up | Extensions |
-| --- | --- | --- | --- |
-| Notes, links, and long-term memory | Multi-agent discussions and parallel subtasks | Proactive Muse and automation | Plugins, skills, and custom Spaces |
-
-## Give your work lasting context
-
-Your **Amadeus knowledge base** holds the material you collect, the ideas you develop, and the work you finish. **Agent memory** holds preferences, facts, and project context gathered while working with you. Keep the sources close and carry useful context into the next conversation.
-
-- **Connect your material.** Local Markdown, bidirectional links, backlinks, and a graph view. Reference attachments, databases, and conversations from notes to keep conclusions connected to their sources.
-- **Organize your thinking.** Manage projects through table, board, calendar, and gallery views. Explore ideas on a whiteboard, annotate PDFs, and assemble research in dashboards.
-- **Manage what Agents remember.** Each Agent has its own personality, Library, logs, and memory settings. Inspect, revise, consolidate, or forget facts in the memory panel. Historian maintains conversation logs and memory candidates; when enabled, Dream consolidates memories and candidates, while recall searches history within the Agent's scope.
-
-<p align="center">
-  <img src="./.github/assets/showcase/notes.png" alt="Forsion's Amadeus knowledge base with a project note, research, and next actions" width="920" />
-  <br><sub>Actual Note workspace in Forsion Desktop v2.10.4, with public sample data.</sub>
-</p>
-
-[Explore the knowledge base (中文)](./docs/amadeus/overview.md) · [Agent memory (中文)](./docs/agents/memory.md)
-
-## Muse: a second brain that follows up
-
-Give ongoing work to **Muse, the proactive Agent**. Once enabled, Muse wakes on heartbeats, schedules, and rules. It uses recent work and its own memory to prepare material, suggest next steps, or carry out tasks within the permissions and budget you set.
-
-- **Keep an eye on ongoing work.** Hand a task from a conversation to Muse for tracking, or configure a scheduled or event-based rule. Heartbeats give it regular opportunities to review what needs attention.
-- **Bring decisions to you.** Results arrive in Inbox. Task cards let you ask Muse to execute, start a new conversation, or dismiss a suggestion. Approve or reject pending actions in the message itself.
-- **Build a workspace of its own.** Muse has a Library and work journals. It can also write and gradually improve its own Space, organizing ongoing work into a browsable interface.
-
-Muse is off by default and currently runs in local mode. Configure active hours, frequency, budget, and approval mode; activity awareness is a separate opt-in. For repeatable processes, **Automation** connects time, events, or database changes to action chains involving Agents, notifications, and database operations.
-
-[Muse (中文)](./docs/agents/muse.md) · [Automation (中文)](./docs/spaces/automation.md) · [Inbox (中文)](./docs/spaces/inbox.md)
-
-## Multiple Agents, shared work
-
-Create Agents for research, writing, development, or everyday planning, each with its own personality, model, Library, and tool permissions. Discuss a problem from several perspectives, or divide independent work into parallel subtasks.
-
-| Collaboration mode | How to use it |
+| Part of your second brain | How it works in Forsion |
 | --- | --- |
-| **Multi-agent group chat** | Let different roles respond, challenge assumptions, and develop a proposal in turns. Agents vote on whether to continue each round; you can interject or @ a participant. |
-| **Parallel subtasks** | Delegate independent research, implementation, or checks, pass the context each task needs, and have the main Agent bring the results together. |
-| **Self-brainstorming** | Explore several perspectives on a problem, compare alternatives, and form a conclusion. |
-| **External Agent engines** | Connect locally installed engines such as Claude Code and Codex through ACP, bringing them into Forsion conversations and workspaces. |
+| **Capture and connect** | Block editing on local `.md` files, linked to notes, PDFs, whiteboards, databases, and conversations. |
+| **Remember context** | Inspectable, editable long-term memory that carries preferences and project background across conversations. |
+| **Think and act together** | Agents with distinct personalities, persistent TEAMs, parallel work, and Team Desk. |
+| **Follow through** | Muse wakes on heartbeats, schedules, and rules, bringing results and decisions to Inbox. |
+| **Extend your workflow** | Plugins bring tools, Agents, skills, and dedicated workspaces into the same flow. |
 
-Group chat, subtask execution, and these external engines use local mode. The knowledge base provides material you can authorize Agents to access, while their memory and tool settings remain individually manageable.
+## Markdown files. A block editor you can think in.
 
-[Agents (中文)](./docs/agents/overview.md) · [Group chat (中文)](./docs/chat/group-chat.md) · [External engines (中文)](./docs/agents/external-engines.md)
+**Notion-style block editing, built on local `.md` files.** In the Amadeus knowledge base, headings, paragraphs, to-dos, code, and embedded content become blocks you can organize. Write with Markdown shortcuts, insert content with `/`, arrange sources in columns, and inspect block source. Your notes remain files on disk that you can open, back up, and ask an Agent to read or update.
 
-## A plugin system for a growing second brain
+- **Give a page structure.** Markdown shortcuts, slash commands, columns, section folding, callouts, page icons, and covers help organize longer notes.
+- **Connect your material.** Use `[[wikilinks]]`, backlinks, and a graph to connect ideas. Embed notes, images, databases, and whiteboards; reference notes directly in chat.
+- **Put sources to work.** Within the access you authorize, Agents can read sources, compare approaches, and write conclusions and next steps back to the project. You and your Agents work with the same actual files.
 
-Extensions can change both **what your AI can do** and **how you work with it**. Plugins can add tools, note features, workspace views, automation events, or an entire Space.
+| A way to think or work | The tools to support it |
+| --- | --- |
+| Organize structured research and projects | Databases with table, board, calendar, and gallery views, plus filtering, sorting, and grouping. |
+| Explore relationships and reasoning | Excalidraw-compatible whiteboards; PDF annotations saved into the PDF itself. |
+| Build a project home | Dashboards combining notes, databases, whiteboards, images, and webpage cards. |
+| Bring next steps into your day | Calendar aggregates database dates and to-dos, with external calendar subscriptions. |
 
-- **Install a workflow together.** A plugin bundle can deliver an interface, engine tools, Agents, skills, and Spaces, all managed from one place.
-- **Connect collection to action.** For example, Bluebird turns videos into notes; Computer Use lets Agents operate desktop applications on supported platforms; plugin events can trigger automation.
-- **Turn experience into reusable capability.** Skills capture ways of working, and MCP connects external tools and data. The marketplace offers plugins, Agents, skills, Spaces, themes, and web apps. Ask an Agent to use the built-in extension development skill to create an extension of your own.
+Notes use local Markdown, with compatible formats for links, properties, and whiteboards. Rendering of extensions such as columns, databases, and plugin blocks depends on the application opening them.
 
-[Plugins and extension points (中文)](./docs/customization/plugins.md) · [Marketplace (中文)](./docs/customization/market.md) · [Skills (中文)](./docs/agents/skills.md)
+[Block editor (中文)](./docs/amadeus/editor.md) · [Knowledge base (中文)](./docs/amadeus/overview.md) · [Databases (中文)](./docs/amadeus/databases.md) · [Whiteboards (中文)](./docs/amadeus/whiteboard.md)
 
-## Put it together in one project
+## Keep the background worth carrying forward
 
-For a research project, you could build up this workflow:
+**Your knowledge base holds the material. Memory carries useful context.** Full articles, evidence, and outputs stay in the project. Preferences, facts, and lasting background you explicitly share can become Agent memory, giving the next conversation somewhere to begin.
 
-1. **Collect context.** Bring articles, PDFs, and saved material into your knowledge base. Link sources, open questions, and project notes.
-2. **Develop a judgment.** Ask research and review Agents to compare approaches, delegate independent investigations, and save the conclusions with their evidence.
-3. **Make something.** Review and edit notes, code, images, or webpages directly in Agent Desk. For an interactive prototype, continue building and previewing it in Coding Studio.
-4. **Keep it moving.** Assign follow-up work to Muse or Automation, check dates and to-dos in Calendar, and respond to suggestions in Inbox. Add new conclusions and outputs to the project note.
+- **See what it remembers.** Inspect, revise, and organize memories in the memory panel. Check sources and revision history, or remove an item from active memory.
+- **Give each Agent its own continuity.** Agents have a personality (SOUL), memory, Library, and work journal, with individually manageable models, tool permissions, and memory settings.
+- **Maintain the accumulated context.** Historian organizes logs and memory candidates. Enable Dream when you want memory consolidation; conversation recall searches relevant history within the Agent's scope.
 
-This is a suggested workflow you can configure. You choose model connections, access to material, Muse settings, and plugins.
+Try: “When helping me research, lead with conclusions, then sources, and call out uncertainty separately.” Check that it was saved, then start another conversation about the project and inspect how it uses that preference. Automatic Dream maintenance is off by default; forgetting removes active memory while retaining revision history.
 
-<p align="center">
-  <img src="./.github/assets/showcase/workbench.png" alt="Coding Studio showing a public sample conversation beside its Reading room webpage" width="920" />
-  <br><sub>Coding Studio is one place to create an output. Forsion Desktop v2.10.4, with public sample data.</sub>
-</p>
+[Memory (中文)](./docs/agents/memory.md) · [Configure Agents (中文)](./docs/agents/overview.md)
+
+## TEAM: room for imagination, scrutiny, and shared work
+
+**A solo project can still have different perspectives and lasting roles.** Aria attends to feeling and creative possibilities; Recita examines evidence, assumptions, and feasibility; Arioso weighs your aims and tradeoffs with independent judgment. Coding focuses on implementation, while Muse follows up proactively. Customize them or create your own Agents.
+
+**TEAM in v2.11 makes collaboration something you can build on:**
+
+- **Shared expectations.** Select two or more Agents to start team mode. Persistent teams retain members and roles, have a Library, and use `TEAM.md` for common goals and working agreements.
+- **Parallel work.** Members research, write, or execute in their own child conversations, posting progress, questions, and handoffs to the main conversation. Interject or @ a member to keep the work focused.
+- **Visible progress and outputs.** Team Desk shows who is working, awaiting approval, or done. Open a member's full child conversation; review approval requests and public outputs in the main conversation.
+- **A home for each task.** Use `@project` in a private chat to dispatch work into a new conversation in that project. Agents Space manages Agents and teams; the Orbits sidebar brings private chats, teams, projects, and external engines together.
+
+You can also delegate independent subtasks from an ordinary conversation or connect installed Claude Code and Codex engines through ACP. Teams and these local execution features use local mode. Context is passed as needed; Agent memories and tool settings remain individually managed.
+
+[TEAM and Team Desk](./docs/chat/group-chat.en.md) · [Agents and personalities (中文)](./docs/agents/overview.md) · [External engines (中文)](./docs/agents/external-engines.md)
+
+## Muse: keep the follow-up moving
+
+**Hand ongoing work to a proactive Agent.** Once enabled, Muse wakes on heartbeats, schedules, and rules to review recent work, organize material, suggest next steps, or carry out tasks within configured permissions and budgets.
+
+- **Hand over a next step.** Assign a conversation task card to Muse, or configure schedules and event rules. Heartbeats let it periodically revisit work worth moving forward.
+- **Bring decisions back to you.** Results arrive in Inbox. Execute a task with Muse, continue in a new conversation, or dismiss it; approve or reject pending actions.
+- **Give ongoing work a place.** Muse builds its own Library and journals, and can write and gradually improve its own Space to make that work browsable.
+
+Muse is off by default and currently runs in local mode, with the device and relevant processes available. You set active hours, frequency, budgets, and approval behavior. For defined processes, **Automation** connects time, events, or database changes to Agent actions, notifications, and table operations.
+
+[Proactive Muse (中文)](./docs/agents/muse.md) · [Automation (中文)](./docs/spaces/automation.md) · [Inbox (中文)](./docs/spaces/inbox.md)
+
+## Plugins: bring your way of working
+
+**Your second brain can grow with your work.** A plugin bundle can deliver an interface, engine tools, Agents, skills, and a Space together, connecting collection, processing, and output.
+
+- **Collect and act.** Bluebird turns videos into notes; Computer Use lets Agents operate desktop applications on supported platforms; plugin events can trigger automation.
+- **Reuse a method.** Skills preserve ways of doing tasks, MCP connects external tools and data, and plugins extend note blocks, views, and workspaces.
+- **Build your own environment.** Install plugins, Agents, skills, Spaces, themes, and web apps from the marketplace. Agents can also use built-in extension-development skills to create extensions for you.
+
+[Plugins (中文)](./docs/customization/plugins.md) · [Marketplace (中文)](./docs/customization/market.md) · [Skills (中文)](./docs/agents/skills.md)
+
+## From a few sources to a research talk you can keep developing
+
+Try building up this workflow with a real project:
+
+1. **Create a project note.** Organize goals, sources, and questions with blocks; embed PDFs, whiteboards, or databases.
+2. **Think with context.** Reference your material and a confirmed writing preference. Ask Aria to explore directions, Recita to examine evidence, and Arioso to help weigh the options.
+3. **Divide the work with TEAM.** Assign independent investigations, drafts, or checks to members, then follow progress and outputs in Team Desk.
+4. **Write decisions back to files.** Review the result and ask an Agent to save the outline, sources, and open questions. Inspect and edit them in Agent Desk; continue in Coding Studio if you need a webpage prototype.
+5. **Leave a follow-up.** Ask Muse to revisit the project at an agreed time, handle its results in Inbox, and add new conclusions to the project.
+
+This is a configurable example, dependent on the model, source access, and tools you choose. When you return, the project files and confirmed context give you a starting point.
 
 <details>
-<summary>Calendar: bring dates and to-dos from your knowledge base into your day</summary>
+<summary>Workspace screenshots: Note, Coding Studio, and Calendar (v2.10.4 public samples)</summary>
+
+These real Electron workspace captures use isolated public sample data. They show how notes and outputs are organized in v2.10.4; they do not depict the v2.11 TEAM interface or a live model run.
 
 <p align="center">
-  <img src="./.github/assets/showcase/calendar.png" alt="Forsion Calendar brings together dated records and tasks from databases" width="920" />
-  <br><sub>Actual Calendar workspace in Forsion Desktop v2.10.4, with public sample data.</sub>
+  <img src="./.github/assets/showcase/notes.png" alt="Public project note in the v2.10.4 Note workspace" width="920" />
+  <br><sub>Project material, ideas, and next steps in one note.</sub>
+</p>
+<p align="center">
+  <img src="./.github/assets/showcase/workbench.png" alt="Public Reading room webpage sample in v2.10.4 Coding Studio" width="920" />
+  <br><sub>Coding Studio brings the conversation and webpage output together.</sub>
+</p>
+<p align="center">
+  <img src="./.github/assets/showcase/calendar.png" alt="Public dates and task data in v2.10.4 Calendar" width="920" />
+  <br><sub>Calendar brings dated database records into your day.</sub>
 </p>
 
 </details>
 
 ## Work in an environment you control
 
-- **Arrange the workspace.** Spaces, split panels, draggable tabs, independent windows, and Mini Panel let you place conversations, sources, outputs, and plugin views where they fit. Restore layouts when you return.
+- **Arrange your thinking space.** Spaces, split panels, draggable tabs, independent windows, and Mini Panel keep conversations, material, and outputs side by side, with restorable layouts.
+- **Talk through the work.** Hands-free live voice sends after you pause; the call continues when you switch to other views.
 - **Choose your models.** Use Forsion-hosted models, your own API connection, OpenAI-compatible endpoints, local Ollama, or supported subscription logins.
-- **Continue elsewhere.** Talk to Agents through configured WeChat, Telegram, or QQ channels. Web and Android clients provide cloud-connected access, with capabilities that differ from Desktop.
-- **Keep access to your data.** Inspect and back up local notes and files, and view or edit Agent memory. Cloud-model requests go to the provider you choose; enabling account sync or sharing sends the corresponding content to the cloud.
+- **Reach Agents elsewhere.** Configure WeChat, Telegram, or QQ channels. Web and Android offer cloud-connected access, with capabilities that differ from Desktop.
+- **Keep access to your accumulated work.** Inspect and back up local files, and edit memory. Cloud models, account sync, and sharing send the relevant content to the services involved.
 
 [Workspace (中文)](./docs/getting-started/workspace.md) · [Channels (中文)](./docs/chat/channels.md) · [Client capabilities (中文)](./docs/reference/web-and-mobile.md) · [Data and privacy (中文)](./docs/reference/data-and-privacy.md)
 
@@ -124,7 +151,7 @@ Download the latest desktop installer from [GitHub Releases](https://github.com/
 
 1. **Install and connect a model.** First launch helps configure your connection, model, and workspace. The desktop installer includes the Agent backend and Node.js runtime.
 2. **Bring some real context.** Create a project note with a goal, sources, and next steps. Ask an Agent to read it, and explicitly tell it a preference worth remembering.
-3. **Arrange a follow-up.** In local mode, enable Muse with the permissions and budget you choose, or create an automation rule. Review the result in Inbox.
+3. **Finish one useful task.** Ask an Agent to produce something from your material, inspect the saved file, and check an explicitly saved preference in the memory panel. Add TEAM, Muse, and plugins when you need them.
 
 The [quick start](./docs/getting-started/quickstart.en.md) walks through this path and introduces multi-agent work and plugins.
 

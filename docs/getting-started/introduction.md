@@ -5,11 +5,23 @@ description: Forsion Second Brain：知识与记忆、主动式 Agent、多 Agen
 
 # Forsion 是什么
 
-Forsion（扶桑）是一个**本地优先的 Second Brain**。知识库保存材料、想法和成果；拥有长期记忆的 Agent 带着背景与你思考和协作；Muse 主动跟进持续工作；插件为 AI 和工作区补充新的能力。
+**不止记下来，还能接着做下去。**
 
-这几部分形成一条持续的路径：**知识积累 → 带着上下文思考 → 主动行动 → 成果回到知识库**。写网页、做研究、安排日程都是这条路径上的使用场景。
+Forsion（扶桑）是一个**本地优先的 AI 第二大脑**：在自己的 Markdown 文件上用块编辑整理知识，让可编辑的长期记忆保留背景，和不同人格的 Agent 一起思考，用 TEAM 并行推进项目，再由 Muse 在授权范围内继续跟进。
 
-Forsion is a **local-first second brain**: a knowledge base for your material and results, Agents with long-term memory for ongoing collaboration, Muse for proactive follow-up, and plugins that extend both tools and the workspace. Each result can become context for the next task.
+**记录与连接 → 记住背景 → 团队思考与执行 → 主动跟进 → 成果沉淀。** 插件为这条路径补充工具、技能与工作空间，前一次积累成为下一次工作的起点。
+
+Forsion is a **local-first AI second brain**: block editing on your own Markdown files, editable long-term memory, Agents with distinct perspectives, persistent TEAMs for parallel work, and Muse for proactive follow-up. Plugins extend the tools and workspace; results return to the project and become a starting point for what comes next.
+
+## 第二大脑如何接上你的工作 / How it connects your work
+
+| 能力 / Capability | 使用价值 / Value |
+| --- | --- |
+| [块编辑与知识库](../amadeus/editor.md) / Markdown blocks | 直观组织本地文件，连接来源与产物。 / Organize local files and connect sources to outputs. |
+| [长期记忆](../agents/memory.md) / Memory | 检查、修改并沿用重要背景。 / Inspect, revise, and reuse useful context. |
+| [TEAM 与 Team Desk](../chat/group-chat.md) / [TEAM](../chat/group-chat.en.md) | 保存成员与职责，看见并行工作过程。 / Retain roles and follow parallel work. |
+| [Muse](../agents/muse.md) / Follow-up | 在配置范围内持续跟进，将结果带回收件箱。 / Follow up within configured boundaries and report to Inbox. |
+| [插件](../customization/plugins.md) / Plugins | 加入工具、Agent、技能与工作空间。 / Add tools, Agents, skills, and workspaces. |
 
 ## 产品家族
 
@@ -27,7 +39,7 @@ Forsion is a **local-first second brain**: a knowledge base for your material an
 
 ## 设计理念
 
-**本地优先。** 你的笔记是磁盘上的 Markdown 文件,Agent 的记忆是你能打开编辑的文本,配置是一个 JSON。卸载 Forsion,你的数据还在,还能用任何编辑器打开。云端能力(在线同步、共享、云端模型)全部是可选叠加,不开就不上传。详见[数据与隐私](../reference/data-and-privacy.md)。
+**本地优先。** 你的笔记是磁盘上的 Markdown 文件,Agent 的记忆是你能打开编辑的文本,配置是一个 JSON。卸载 Forsion,你的数据还在,还能用任何编辑器打开。使用云端模型、账号同步或共享时，相应内容会发送到所用服务；请按实际连接与设置检查数据流向。详见[数据与隐私](../reference/data-and-privacy.md)。
 
 **Agent 是长期伙伴,不是一次性会话。** 每个 Agent 有自己的人格设定、独立记忆、资料库和日志,越用越懂你。详见 [Agent 总览](../agents/overview.md)。
 

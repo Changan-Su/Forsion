@@ -20,7 +20,7 @@ The multi-agent and Muse steps below use **local mode**. The local engine can ca
 
 ## 2. Give the project a home
 
-Create a project note in **Note (Amadeus)** with:
+Use the block editor in **Note (Amadeus)** to create a local Markdown project note with:
 
 - **A goal:** what you want to make and who it is for.
 - **Sources:** existing articles, files, and reference links.
@@ -44,14 +44,15 @@ Open that Agent's **memory panel** and check what it recorded. Revise memories, 
 
 Agents have individually manageable personalities, Libraries, logs, and memory settings. You can enable Historian and Dream for further maintenance; automatic Dream maintenance is off by default. See [Agents](../agents/overview.md) and [memory](../agents/memory.md).
 
-## 4. Bring different Agents into the work
+## 4. Move the project forward with TEAM
 
-Create two roles in Agent management, such as a research partner and a proposal reviewer. Give them distinct responsibilities and select their models and tool permissions.
+Select two or more Agents above the composer to enter team mode. Try Aria for creative directions and Recita for checking evidence, or add a research partner of your own.
 
-- **Discuss approaches:** start a group chat, choose both Agents, and ask them to compare two options. They respond in turns; you can interject or @ a participant.
-- **Divide the investigation:** in an ordinary task, ask the main Agent to delegate independent questions to subtasks, pass the context they need, and bring back sources and conclusions.
+- **Define responsibilities:** give members different outputs, such as a draft, source checks, and open questions. For repeated work, create a persistent team in Agents Space and save shared agreements in `TEAM.md`.
+- **Inspect progress:** members work in parallel child conversations. Check their state and details in Team Desk; progress, public outputs, and approvals return to the main conversation.
+- **Give results a home:** review and save them to your project note. In private chat, `@project` can also dispatch a task into a new conversation in that project.
 
-Save the conclusions you adopt to the project note. Group chat supports discussion; parallel subtasks support independent execution. See [group chat](../chat/group-chat.md) and [Agents](../agents/overview.md).
+Ordinary conversations can delegate independent subtasks with context passed as needed. See [TEAM and Team Desk](../chat/group-chat.en.md) and [Agents](../agents/overview.md).
 
 ## 5. Arrange a proactive follow-up
 

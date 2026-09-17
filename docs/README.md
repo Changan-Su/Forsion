@@ -5,9 +5,9 @@ description: Forsion Second Brain 使用文档——知识与记忆、Muse 主�
 
 # Forsion 文档中心
 
-Forsion（扶桑）是一个**本地优先的 Second Brain**：把材料、想法和成果沉淀在知识库，让 Agent 带着长期记忆与你协作，让 Muse 主动跟进，再通过插件扩展工具与工作方式。新的行动产出回到知识库，成为下一次工作的背景。
+Forsion（扶桑）是一个**本地优先的 AI 第二大脑**：把材料、想法和成果沉淀在知识库，让 Agent 带着长期记忆与你协作，让 Muse 主动跟进，再通过插件扩展工具与工作方式。新的行动产出回到知识库，成为下一次工作的背景。
 
-**Amadeus** 承载笔记、双链、多维表、白板与研究材料；**Tangu** 提供记忆、工具和多 Agent 协作；**Muse、自动化与收件箱**把持续工作接起来；**插件、Skills、MCP 与 Space**让这套环境按需扩展。你可以选用云端模型或自己的模型连接，本地笔记和 Agent 记忆可以直接查看、编辑与备份。
+**Amadeus** 在本地 Markdown 上提供 Notion 风格的块编辑，连接双链、多维表、白板与研究材料；**Tangu** 提供可编辑记忆、不同人格的 Agent 与并行 TEAM，长期团队用 `TEAM.md` 保存共同约定，Team Desk 展示成员工作；**Muse、自动化与收件箱**把持续工作接起来；**插件、Skills、MCP 与 Space**让这套环境按需扩展。你可以选用云端模型或自己的模型连接，本地笔记和 Agent 记忆可以直接查看、编辑与备份。
 
 > 📌 本文档随 Forsion Desktop 源码维护；已安装版本的变化请看应用内的 设置 → 关于 → 更新日志，或 [GitHub Releases](https://github.com/Changan-Su/Forsion/releases)。
 
@@ -20,7 +20,7 @@ Forsion（扶桑）是一个**本地优先的 Second Brain**：把材料、想�
 | 接自己的模型 / API Key | [模型与接入方式](chat/models-and-providers.md) |
 | 建立能持续使用的知识与背景 | [Amadeus](amadeus/overview.md) → [Agent 记忆](agents/memory.md) |
 | 让 AI 主动跟进交代过的事 | [Muse](agents/muse.md) → [自动化](spaces/automation.md) → [收件箱](spaces/inbox.md) |
-| 让多个 Agent 讨论或分工 | [Agent 总览](agents/overview.md) → [群聊](chat/group-chat.md) |
+| 让多个 Agent 讨论或分工 | [Agent 总览](agents/overview.md) → [TEAM 与 Team Desk](chat/group-chat.md) |
 | 给 AI 接入工具并配置行动权限 | [工具与审批](chat/tools-and-approvals.md) |
 | 从 Obsidian 迁过来 | [Amadeus 总览](amadeus/overview.md) → [编辑器](amadeus/editor.md) |
 | 在手机 / 浏览器上用 | [浏览器版与移动端](reference/web-and-mobile.md) |
@@ -42,7 +42,7 @@ Forsion（扶桑）是一个**本地优先的 Second Brain**：把材料、想�
 - [工具与审批](chat/tools-and-approvals.md) — 审批四档、计划模式、工作范围、MCP、项目指令文件
 - [附件与图片](chat/attachments-and-vision.md) — 发图识图、文件预览、AI 生成的文件
 - [Agent Desk 与任务概览](chat/agent-desk.md) — 让成果摆在聊天旁边,而不是埋进消息流
-- [群聊模式](chat/group-chat.md) — 多个 Agent 同场讨论
+- [TEAM 与 Team Desk](chat/group-chat.md) — 长期团队、成员职责、并行子会话与项目派遣（[English](chat/group-chat.en.md)）
 - [通道](chat/channels.md) — 从微信 / Telegram / QQ 直接使唤你的 Agent
 
 ## Agent
