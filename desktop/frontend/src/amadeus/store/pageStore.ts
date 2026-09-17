@@ -1706,13 +1706,20 @@ export async function trashVaultFiles(paths: string[]): Promise<void> {
   if (!paths.length) return
   await flushFileStores()
   for (const p of paths) {
+    // 附件引用也可能解析到一个目录(`./x.fd`):按子树收尾,否则底下开着的标签与待写活下来(Codex 评审 P2)
+    const kind = usePageStore.getState().folders.includes(p) ? 'prefix' : 'file'
     try {
       if (amadeus.trashEntry) await amadeus.trashEntry(p)
       else await amadeus.deletePage(p) // removeEntry:对任意 vault 文件通用(同左栏删文件)
-    } catch { continue }
-    retireUnifiedPath(p)
-    clearScopeNotePaths(p, 'file')
-    emitNotePathGone(p, 'file', null)
+    } catch {
+      // 回收站先挪走、再写元数据与重建索引:后半段报错时盘上已经没了。同 deletePage,按盘面判定(Codex 评审 P1)
+      await usePageStore.getState().refreshStructure().catch(() => {})
+      const { pages, files, folders } = usePageStore.getState()
+      if (pages.includes(p) || files.includes(p) || folders.includes(p)) continue
+    }
+    retireUnifiedPath(p, kind)
+    clearScopeNotePaths(p, kind)
+    emitNotePathGone(p, kind, null)
   }
 }
 

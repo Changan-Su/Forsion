@@ -277,6 +277,50 @@ describe('树外入口直接删文件:删块连带文件 / 删笔记连带独占
     expect(disk.has('图.png')).toBe(false)
     expect(panels.map((p) => p.id)).toEqual(['front', 'pdf'])
   })
+
+  it('回收站先挪走、写元数据时才报错:按盘面判定,文件已经没了照样收尾(Codex 评审 P1)', async () => {
+    const { ws, disk } = await boot('dock', ['笔记.md', '图.png'])
+    Object.assign((window as unknown as { amadeus: object }).amadeus, {
+      exclusiveAssets: async () => ['图.png'],
+      trashEntry: async (p: string) => { disk.delete(p); throw new Error('写回收站元数据失败') },
+    })
+    const { api, panels } = dockApi([{ id: 'front', type: 'x' }, { id: 'img', type: 'amadeus-image', params: { imagePath: '图.png' } }])
+    ws.getState().setApi(api)
+    const { askDeleteRemovedAssets } = await import('@amadeus/unified/assetDelete')
+    await act(async () => { await askDeleteRemovedAssets('笔记.md', '![](图.png)', '') })
+    await settle()
+    expect(panels.map((p) => p.id)).toEqual(['front'])
+  })
+
+  it('真删不掉(盘上还在):标签不动', async () => {
+    const { ws } = await boot('dock', ['笔记.md', '图.png'])
+    Object.assign((window as unknown as { amadeus: object }).amadeus, {
+      exclusiveAssets: async () => ['图.png'],
+      trashEntry: async () => { throw new Error('EPERM') },
+    })
+    const { api, panels } = dockApi([{ id: 'front', type: 'x' }, { id: 'img', type: 'amadeus-image', params: { imagePath: '图.png' } }])
+    ws.getState().setApi(api)
+    const { askDeleteRemovedAssets } = await import('@amadeus/unified/assetDelete')
+    await act(async () => { await askDeleteRemovedAssets('笔记.md', '![](图.png)', '') })
+    await settle()
+    expect(panels.map((p) => p.id)).toEqual(['front', 'img'])
+  })
+
+  it('引用解析到一个目录(`x.fd`):按子树收尾,底下开着的标签一并关(Codex 评审 P2)', async () => {
+    const { ws, disk } = await boot('dock', ['笔记.md', 'Project.fd/表.db', 'Project.fd2/表.db'])
+    Object.assign((window as unknown as { amadeus: object }).amadeus, { exclusiveAssets: async () => ['Project.fd'] })
+    const { api, panels } = dockApi([
+      { id: 'front', type: 'x' },
+      { id: 'db', type: 'amadeus-db', params: { dbPath: 'Project.fd/表.db' } },
+      { id: 'sib', type: 'amadeus-db', params: { dbPath: 'Project.fd2/表.db' } },
+    ])
+    ws.getState().setApi(api)
+    const { askDeleteRemovedAssets } = await import('@amadeus/unified/assetDelete')
+    await act(async () => { await askDeleteRemovedAssets('笔记.md', '[](Project.fd)', '') })
+    await settle()
+    expect(disk.has('Project.fd/表.db')).toBe(false)
+    expect(panels.map((p) => p.id)).toEqual(['front', 'sib'])
+  })
 })
 
 type Mounted = { type: string; key: string; file: string; load: () => Promise<ComponentType<any>> }
