@@ -182,7 +182,9 @@ async function run(app, win, stub) {
   await dismissToasts(win)
   for (const slug of ['xyra', 'orbit-one']) {
     await win.locator(`[data-team-desk="status"] button[data-slug="${slug}"]`).click()
-    check(`5 点击 ${slug} 打开成员工作记录`, await win.locator(`[data-team-desk="status"] button[data-slug="${slug}"]`).getAttribute('aria-expanded') === 'true' && await win.locator('[data-team-desk="work"]').count() === 1, '')
+    await win.locator('.child-chat-panel [data-chat-surface="child-chat"]').waitFor()
+    check(`5 点击 ${slug} 打开成员工作记录`, await win.locator(`[data-team-desk="status"] button[data-slug="${slug}"]`).getAttribute('aria-pressed') === 'true' && await win.locator('.child-chat-panel [data-chat-surface="child-chat"]').count() === 1, '')
+    await win.locator('.child-chat-panel .agent-desk-head button').click()
   }
   await win.locator('[data-historian-status] > button').click()
   await win.getByText('已保存该会话的工作约定', { exact: false }).first().waitFor()
@@ -222,7 +224,10 @@ async function main() {
   const vault = path.join(home, 'vault')
   const projectDir = path.join(home, 'Orbit Project')
   for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
-  const stub = await startStubEngine({ agents: AGENTS, sessions: sessionFixtures(projectDir), messages: MESSAGES, handle: ({ path: route, url }) => {
+  const stub = await startStubEngine({ agents: AGENTS, sessions: sessionFixtures(projectDir), messages: MESSAGES, override: ({ path: route, method }) => {
+    if (route === '/agent/runs' && method === 'GET') return { runs: [] }
+    if (route.endsWith('/detail')) { const id = route.split('/')[3]; return { session: { ...sessionFixtures(projectDir)[0], id, agent_config: { agentSlug: id === 'ws-x' ? 'xyra' : 'orbit-one', execMode: 'host', cwd: projectDir, teamMember: { teamSessionId: SESSION_ID } } } } }
+  }, handle: ({ path: route, url }) => {
     if (route === '/agent/special/config') return { config: { historian: { enabled: true }, muse: { enabled: false } } }
     if (route === '/agent/special/historian/activity') return { running: false, activity: [{ id: 'hist-action', detail: '已保存该会话的工作约定', session_ref: SESSION_ID }], records: url.searchParams.get('detail') === '1' ? [{ id: 'hist-record', content: '团队接口与测试的分工已记录。' }] : [] }
     if (route === '/agent/runs' && url.searchParams.has('sessionId')) return { runs: [] }

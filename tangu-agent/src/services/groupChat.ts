@@ -33,6 +33,7 @@ import { getAgent, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { compactSession, getLatestSummary } from './compaction.js';
 import { activateMember as realActivateMember, type ActivateMember, type MemberOutcome } from './teamRuns.js';
+import { TEAM_OUTPUT_MODE, teamOutputCollector, teamOutputRecord } from './teamOutputs.js';
 
 /** 兜底天花板(周期数;每周期 = 还想聊的成员各说一次)。不是缺省上限:没传 groupMaxRounds 时团队只靠成员自己的 DONE 收场,这里只防失控。 */
 const MAX_GROUP_ROUNDS = 30;
@@ -242,6 +243,7 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
     let roundsRun = 1;
 
     const bySlug = new Map(participants.map((a) => [a.slug, a]));
+    await publish(runId, TEAM_OUTPUT_MODE, { version: 1 });
     const inlineSlugs = new Set(tempBySlug.keys());
     let lastMessageId: string | undefined;
     let steps = 0;
@@ -349,6 +351,8 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
       seen.set(slug, transcript.length); // 起了就算读过:之后的新话留给下次激活
       const messageId = uuidv4();
       let childId: string | undefined;
+      let collectOutput: ReturnType<typeof teamOutputCollector> | undefined;
+      const forwardEvent = forward(agent, messageId, cycle, () => childId);
       const task = unread.filter((t) => t.slug !== CONTEXT_SLUG).map((t) => t.text).join(' ').replace(/\s+/g, ' ').slice(0, 160);
       const run = activate({
         teamRunId: runId, teamSessionId: sessionId, userId, appId: p.appId, modelId,
@@ -356,9 +360,18 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
         execMode: p.execMode, cwd: p.cwd, extraRoots: p.extraRoots, wsProject: p.wsProject, approvalMode, signal,
         onStarted: (ids) => {
           childId = ids.runId; childRuns.set(slug, ids.runId);
+          collectOutput = teamOutputCollector({ ...ids, slug, name: agent.name, modelId: agent.model || modelId });
           void publish(runId, 'team_member', { slug, name: agent.name, phase: 'start', messageId, cycle, sessionId: ids.sessionId, runId: ids.runId, task });
         },
-        onEvent: forward(agent, messageId, cycle, () => childId),
+        onEvent: (ev) => {
+          const output = collectOutput?.(ev);
+          if (output) void enqueueTranscript(async () => {
+            const timestamp = nextTimestamp();
+            await state.finalizeAssistantMessage({ ...output, sessionId, reasoning: '', timestamp });
+            await publish(runId, 'team_output', { message: teamOutputRecord(output, timestamp) });
+          });
+          forwardEvent(ev);
+        },
       }).catch((err: any): MemberOutcome => ({ status: signal.aborted ? 'aborted' : 'failed', text: '', error: err?.message || String(err) }));
       return run.then((outcome) => { childRuns.delete(slug); return { slug, cycle, messageId, outcome }; });
     };
@@ -483,6 +496,8 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
       p.closeSteer?.();
     } catch (err) {
       abortInFlight(); // 团队 run 自己出错 / 被中止:子 run 不能变成没人管的孤儿
+      // Completed deliverables already queued before cancellation must reach disk before the terminal event.
+      await speechQueue;
       throw err;
     }
 

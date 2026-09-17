@@ -15,7 +15,7 @@ import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
-import { getRun, updateRunStatus } from '../src/services/runStore.js';
+import { createRun, getRun, updateRunStatus } from '../src/services/runStore.js';
 import { publish } from '../src/services/eventBus.js';
 import { getAgent } from '../src/agents/agentRegistry.js';
 import { activateMember, ensureMemberSession, memberRunConfig, TEAMWORK_KIND, type MemberActivation } from '../src/services/teamRuns.js';
@@ -66,6 +66,8 @@ describe('teamRuns', () => {
     const id1 = await ensureMemberSession(a);
     const id2 = await ensureMemberSession(a);
     expect(id2).toBe(id1);
+    const concurrent = await Promise.all([ensureMemberSession(a), ensureMemberSession(a)]);
+    expect(concurrent).toEqual([id1, id1]);
     const rows = await query<any[]>(`SELECT kind, parent_session_id, agent_config, title FROM chat_sessions WHERE id = ?`, [id1]);
     expect(rows[0].kind).toBe(TEAMWORK_KIND);
     expect(rows[0].parent_session_id).toBe('team-1');
@@ -132,5 +134,47 @@ describe('teamRuns', () => {
     const out = await p;
     expect(out.status).toBe('aborted');
     expect((abortRun as any).mock.calls[0][0]).toBe(out.runId);
+  });
+});
+
+
+describe('legacy team output recovery', () => {
+  it('recovers only announced child outputs, deduplicates concurrent loads, preserves deletions and session ordering', async () => {
+    const { recoverTeamOutputs } = await import('../src/services/teamOutputs.js');
+    const a = await base();
+    const childId = await ensureMemberSession(a);
+    await query("INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES ('user-legacy', 'team-1', 'user', 'draw', 1)");
+    await createRun({ id: 'legacy-parent', sessionId: 'team-1', userId: USER, appId: 'tangu', modelId: 'm', assistantMessageId: 'unused', input: { userMessageId: 'user-legacy' } });
+    const makeChild = async (id: string) => {
+      await createRun({ id, sessionId: childId, userId: USER, appId: 'tangu', modelId: 'm', assistantMessageId: id + '-msg', input: {} });
+      await publish(id, 'tool_call', { id: 'card', name: 'sketch', arguments: JSON.stringify({ html: '<h1>' + id + '</h1>' }) });
+      await publish(id, 'tool_result', { id: 'card', result: 'Sketch card rendered.' });
+      await publish(id, 'display_file', { name: 'report.pdf', path: '/tmp/report.pdf' });
+    };
+    await makeChild('announced');
+    await makeChild('private-followup');
+    await publish('legacy-parent', 'team_member', { phase: 'start', runId: 'announced', sessionId: childId, slug: 'bo', name: 'Bo' });
+    await updateRunStatus('legacy-parent', 'done');
+    await query("UPDATE chat_sessions SET updated_at = '2020-01-01 00:00:00' WHERE id = 'team-1'");
+    await Promise.all([recoverTeamOutputs('team-1', USER), recoverTeamOutputs('team-1', USER)]);
+    const rows = await query<any[]>("SELECT * FROM chat_messages WHERE session_id = 'team-1' AND role = 'model'");
+    expect(rows).toHaveLength(2);
+    expect(JSON.stringify(rows)).toContain('announced');
+    expect(JSON.stringify(rows)).not.toContain('private-followup');
+    expect(JSON.parse(rows.find((r) => JSON.parse(r.display_files).length).display_files)[0].sourceSessionId).toBe(childId);
+    expect((await query<any[]>("SELECT updated_at FROM chat_sessions WHERE id = 'team-1'"))[0].updated_at).toContain('2020-01-01');
+    await query("DELETE FROM chat_messages WHERE session_id = 'team-1' AND role = 'model'");
+    await recoverTeamOutputs('team-1', USER);
+    expect(await query<any[]>("SELECT id FROM chat_messages WHERE session_id = 'team-1' AND role = 'model'")).toHaveLength(0);
+  });
+  it('does not restore rewound turns or read another owner', async () => {
+    const { recoverTeamOutputs } = await import('../src/services/teamOutputs.js');
+    await createRun({ id: 'deleted-parent', sessionId: 'team-1', userId: USER, appId: 'tangu', modelId: 'm', assistantMessageId: 'unused', input: { userMessageId: 'gone' } });
+    await publish('deleted-parent', 'team_member', { phase: 'start', runId: 'untrusted' });
+    await updateRunStatus('deleted-parent', 'done');
+    await recoverTeamOutputs('team-1', 'other-user');
+    expect(await query<any[]>("SELECT id FROM agent_run_events WHERE type = 'team_output_mode'")).toHaveLength(0);
+    await recoverTeamOutputs('team-1', USER);
+    expect(await query<any[]>("SELECT id FROM chat_messages WHERE session_id = 'team-1'")).toHaveLength(0);
   });
 });

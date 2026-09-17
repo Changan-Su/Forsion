@@ -6,7 +6,7 @@
  * 样式全在 sidebar2.css(t2s- 前缀,token 驱动);右键菜单复用 base.css 的 .ctx-menu。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, FolderX, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare } from 'lucide-react'
+import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, FolderX, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Pin, PinOff } from 'lucide-react'
 import { folderPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
 import { moveTo } from '@lcl/engine'
@@ -18,6 +18,7 @@ import { tipProps, tipT } from '../../hoverTip'
 import { setChannelConnectedSession } from '../../services/backendService'
 import { useChannels } from '../../stores/channelsStore'
 import { setChatRefDrag } from './chatDragRef'
+import { isOrbitPinned, orderOrbitEntries, type OrbitPinTimes } from './orbitPins'
 import './sidebar2.css'
 import { OverlayAt } from '@lcl/engine'
 
@@ -33,6 +34,8 @@ registerMessages({
   'sidebar.mode.chat': { zh: 'Chat', en: 'Chat' },
   'sidebar.mode.work': { zh: 'Work', en: 'Work' },
   'sidebar.mode.tip': { zh: 'Chat:轻聊天,只列聊天会话;Work:完整工具面,列出全部项目', en: 'Chat: light conversations, chat sessions only. Work: full toolset, all projects' },
+  'sidebar.pin': { zh: 'Pin 到顶部', en: 'Pin to top' },
+  'sidebar.unpin': { zh: '取消 Pin', en: 'Unpin' },
 })
 
 const COLLAPSE_KEY = 'forsion_tangu_collapsed_projects'
@@ -80,6 +83,9 @@ export interface SidebarPaneProps {
   /** 共享「进入的工作区」key(与文件面板联动展开;不收其余)。 */
   activeWorkspaceKey?: string | null
   onEnterWorkspace?: (key: string) => void
+  /** 某些会话是独立一级轨道,没有项目分组。返回 null = 选中时不联动任何项目;
+   *  缺省仍按 sessionWorkspaceKey 处理,普通 SessionsView 行为不变。 */
+  sessionWorkspaceKeyOf?: (session: SessionRecord) => string | null
   /** Chat/Work 模式胶囊(新对话行右侧);两者都给才渲染。 */
   mode?: 'chat' | 'work' | null
   onModeChange?: (m: 'chat' | 'work') => void
@@ -98,6 +104,11 @@ export interface SidebarPaneProps {
   orderBy?: 'manual' | 'activity'
   /** 额外的一级行(轨道档的私聊 / 引擎 / 团队行):at = 该行的最近活动时间戳(ms;0 = 从未),只在 orderBy='activity' 下参与混排。 */
   extraRows?: Array<{ key: string; at: number; node: React.ReactNode }>
+  /** 轨道档一级条目的 Pin 时间。key 是 `ws:${workspaceKey}` / `row:${extraRow.key}`。 */
+  pinnedEntries?: Readonly<OrbitPinTimes>
+  onTogglePinned?: (entryKey: string) => void
+  /** 用户显式进入一级条目时更新 Pin 区内的最近激活顺序;不写会话 updated_at。 */
+  onActivateEntry?: (entryKey: string) => void
 }
 
 /** 会话最近活动时间(ms):updated_at 随每条助手消息落库刷新(引擎 sqlStateStore.finalizeAssistantMessage),解析不了 = 0。 */
@@ -149,6 +160,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   const [dragKey, setDragKey] = useState<string | null>(null)
   const [dragOverKey, setDragOverKey] = useState<string | null>(null)
   const renameRef = useRef<HTMLInputElement>(null)
+  const didMountActiveWorkspace = useRef(false)
   const [wsMenu, setWsMenu] = useState<{ ws: WorkspaceDescriptor; x: number; y: number } | null>(null)
   const [wsRenaming, setWsRenaming] = useState<string | null>(null)
   const [wsDraft, setWsDraft] = useState('')
@@ -191,8 +203,8 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     }))
     if (p.orderBy !== 'activity') return wsEntries
     const extra: Entry[] = (p.extraRows || []).map((r) => ({ key: `row:${r.key}`, at: r.at, node: r.node }))
-    return [...extra, ...wsEntries].sort((a, b) => b.at - a.at)
-  }, [orderedWorkspaces, grouped, p.orderBy, p.extraRows])
+    return orderOrbitEntries([...extra, ...wsEntries], p.pinnedEntries || {})
+  }, [orderedWorkspaces, grouped, p.orderBy, p.extraRows, p.pinnedEntries])
   const manualOrder = p.orderBy !== 'activity'
 
   /** 落到 targetKey 上 = 顶掉它的位置,其余顺次让位。语义与 ribbon 共用 lcl 的 moveTo(已单测),
@@ -230,8 +242,11 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     })
   }
   const enterGroup = (key: string): void => { p.onEnterWorkspace?.(key); openGroup(key) }
-  // 文件面板那侧进入工作区时,本面板同步展开它(同样不收其余)。
+  // activeWorkspaceKey 的显式写入口(setActiveWorkspaceKey / setActiveId)已经原子地维护 openWorkspaceKeys。
+  // 首次 mount 不能再按 active key 强开一次:切回 Tangu Space 会把用户离开前主动收起的项目弹开。
+  // 挂载后的 key 变化仍要同步(例如另一侧文件面板进入了不同工作区)。
   useEffect(() => {
+    if (!didMountActiveWorkspace.current) { didMountActiveWorkspace.current = true; return }
     if (p.activeWorkspaceKey != null) openGroup(p.activeWorkspaceKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.activeWorkspaceKey])
@@ -307,7 +322,11 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
         const act = sel.click(s.id, e)
         if (act.open === 'none') return
         p.onSelect(s.id, act.open === 'new' ? { newTab: true } : undefined)
-        enterGroup(sessionWorkspaceKey(s, p.workspaces))
+        const workspaceKey = p.sessionWorkspaceKeyOf ? p.sessionWorkspaceKeyOf(s) : sessionWorkspaceKey(s, p.workspaces)
+        if (workspaceKey) {
+          p.onActivateEntry?.(`ws:${workspaceKey}`)
+          enterGroup(workspaceKey)
+        }
       }}
       onContextMenu={(e) => openMenu(e, s)}
       // 拖到聊天区 = 插入 [[session:id]] 引用(agent 用 read_session 读)。重命名中不拖,否则选不了文字。
@@ -371,6 +390,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
         {entries.map((en, wi) => {
               if (en.node) return <React.Fragment key={en.key}>{en.node}</React.Fragment>
               const ws = en.ws!
+              const pinned = isOrbitPinned(p.pinnedEntries || {}, en.key)
               const items = grouped.get(ws.key) || []
               // 平铺(Chat 模式):整组直接铺开,不画组头、不折叠、不限条数(聊天列表就该是整份)。
               if (p.flat) return <div key={ws.key} className="t2s-group-sessions t2s-flat">{items.map(renderItem)}</div>
@@ -400,6 +420,8 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                   <div
                     className={`t2s-group${overCls}${dragKey === ws.key ? ' dragging' : ''}`}
                     data-workspace-key={ws.key}
+                    data-pinned={pinned ? 'true' : undefined}
+                    data-active={p.activeWorkspaceKey === ws.key ? 'true' : undefined}
                     // 组头 = depth 0;减掉 toggle 自带内边距,槽才与组内会话行落在同一竖线(见 treeIndent.ts)。
                     style={{ paddingLeft: folderPadLeft(0) }}
                     {...tipProps(() => [
@@ -407,6 +429,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                       tipT('tip.sessions', { count: items.length }),
                     ].filter(Boolean))}
                     draggable={manualOrder && wsRenaming !== ws.key}
+                    onContextMenu={(e) => openWsMenu(e, ws)}
                     onDragStart={(e) => {
                       // 用元素自身作拖影并按抓取点对齐光标(否则默认拖影/setState 重渲会让图标与光标错位)。
                       const r = e.currentTarget.getBoundingClientRect()
@@ -432,24 +455,26 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                       </div>
                     ) : ws.kind === 'channel' ? (
                       // 通道文件夹:纯展开折叠(与普通工作区一致)。行尾连接状态点。
-                      <button className="t2s-group-toggle t2s-folder-row" onClick={() => { isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
+                      <button className="t2s-group-toggle t2s-folder-row" onClick={() => { p.onActivateEntry?.(en.key); isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
                         {wsLead(ws, isCollapsed)}
                         <span className="t2s-group-label">{ws.name}</span>
+                        {pinned && <Pin className="t2o-pin-mark" aria-hidden="true" />}
                         <span className={`t2s-mini-dot${channelRunning.get(ws.channel || 'wechat') ? ' ok' : ''}`} />
                       </button>
                     ) : (
                       // 点组头 = 纯展开/折叠,**不跳主区**(用户拍板;进工作区详情走「查看更多」或组菜单)。
                       // 已展开再点 = 折叠(toggleGroup 不动 activeWorkspaceKey,不会被联动 effect 弹回);收起时点 = 展开自己。
-                      <button className="t2s-group-toggle t2s-folder-row" onClick={() => { isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
+                      <button className="t2s-group-toggle t2s-folder-row" onClick={() => { p.onActivateEntry?.(en.key); isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
                         {wsLead(ws, isCollapsed)}
                         <span className="t2s-group-label">{ws.name}</span>
+                        {pinned && <Pin className="t2o-pin-mark" aria-hidden="true" />}
                       </button>
                     )}
                     {/* 行尾顺序:… 在左、+ 在右(同笔记树)。 */}
-                    {!ws.system && (
-                      <button className="t2s-group-add" title={t('sidebar.ws.menu')} onClick={(e) => openWsMenu(e, ws)}><MoreHorizontal size={14} /></button>
+                    {(!ws.system || p.onTogglePinned) && (
+                      <button type="button" className="t2s-group-add" title={t('sidebar.ws.menu')} onClick={(e) => openWsMenu(e, ws)}><MoreHorizontal size={14} /></button>
                     )}
-                    <button className="t2s-group-add" title={t('sidebar.newChatIn', { name: ws.name })} onClick={() => p.onNewInWorkspace(ws)}><Plus size={14} /></button>
+                    <button type="button" className="t2s-group-add" title={t('sidebar.newChatIn', { name: ws.name })} onClick={() => p.onNewInWorkspace(ws)}><Plus size={14} /></button>
                   </div>
                   <AnimatedCollapse open={!isCollapsed}>
                     <div className={`t2s-group-sessions${after && !isCollapsed ? ' drag-over-end' : ''}`} {...dropOn}>
@@ -540,17 +565,30 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
 
       {wsMenu && (
         <OverlayAt className="ctx-menu" x={wsMenu.x} y={wsMenu.y} onClick={(e) => e.stopPropagation()}>
-          <button onClick={() => { setWsDraft(wsMenu.ws.name); setWsRenaming(wsMenu.ws.key); setWsMenu(null) }}>
-            <Pencil size={13} /> {t('sidebar.ws.rename')}
-          </button>
-          <button className="danger" onClick={() => {
-            const ws = wsMenu.ws
-            const count = [...allSessions, ...allArchived].filter((s) => s.project_path === ws.key).length
-            setWsMenu(null)
-            if (window.confirm(t('sidebar.ws.removeConfirm', { name: ws.name, count }))) p.onRemoveWorkspace(ws)
-          }}>
-            <Trash2 size={13} /> {t('sidebar.ws.remove')}
-          </button>
+          {p.onTogglePinned && (() => {
+            const key = `ws:${wsMenu.ws.key}`
+            const pinned = isOrbitPinned(p.pinnedEntries || {}, key)
+            return (
+              <button onClick={() => { setWsMenu(null); p.onTogglePinned?.(key) }}>
+                {pinned ? <PinOff size={13} /> : <Pin size={13} />} {t(pinned ? 'sidebar.unpin' : 'sidebar.pin')}
+              </button>
+            )
+          })()}
+          {!wsMenu.ws.system && (
+            <>
+              <button onClick={() => { setWsDraft(wsMenu.ws.name); setWsRenaming(wsMenu.ws.key); setWsMenu(null) }}>
+                <Pencil size={13} /> {t('sidebar.ws.rename')}
+              </button>
+              <button className="danger" onClick={() => {
+                const ws = wsMenu.ws
+                const count = [...allSessions, ...allArchived].filter((s) => s.project_path === ws.key).length
+                setWsMenu(null)
+                if (window.confirm(t('sidebar.ws.removeConfirm', { name: ws.name, count }))) p.onRemoveWorkspace(ws)
+              }}>
+                <Trash2 size={13} /> {t('sidebar.ws.remove')}
+              </button>
+            </>
+          )}
         </OverlayAt>
       )}
     </aside>

@@ -69,7 +69,16 @@ function parseJson(v: unknown): any {
 }
 
 /** 该团队会话下这位成员的工作会话(没有就建)。按 parent + kind 查,再在 JS 里比 agent_config.agentSlug(行数 ≤ 成员数,不加列不加索引)。 */
-export async function ensureMemberSession(a: Pick<MemberActivation, 'teamSessionId' | 'userId' | 'appId' | 'modelId' | 'member'>): Promise<string> {
+const preparingMembers = new Map<string, Promise<string>>();
+export function ensureMemberSession(a: Pick<MemberActivation, 'teamSessionId' | 'userId' | 'appId' | 'modelId' | 'member'>): Promise<string> {
+  const key = `${a.userId}:${a.teamSessionId}:${a.member.slug}`;
+  const pending = preparingMembers.get(key);
+  if (pending) return pending;
+  const created = findOrCreateMemberSession(a).finally(() => preparingMembers.delete(key));
+  preparingMembers.set(key, created);
+  return created;
+}
+async function findOrCreateMemberSession(a: Pick<MemberActivation, 'teamSessionId' | 'userId' | 'appId' | 'modelId' | 'member'>): Promise<string> {
   const rows = await query<any[]>(
     `SELECT id, agent_config FROM chat_sessions WHERE parent_session_id = ? AND user_id = ? AND kind = ? ORDER BY created_at ASC`,
     [a.teamSessionId, a.userId, TEAMWORK_KIND],
@@ -126,6 +135,8 @@ export const activateMember: ActivateMember = async (a) => {
   };
   try {
     sessionId = await ensureMemberSession(a);
+    // Direct follow-ups in the child Chat View retain its team identity and execution scope.
+    await query('UPDATE chat_sessions SET agent_config = ? WHERE id = ?', [JSON.stringify(memberRunConfig(a)), sessionId]);
     runId = uuidv4();
     await createRun({
       id: runId,

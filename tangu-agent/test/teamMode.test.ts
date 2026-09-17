@@ -76,7 +76,7 @@ describe('teamDue / parseMentions / isDoneSpeech / teamMemberSection(纯函数)'
 // ── 假载体:不建会话不起 run,记录每次激活的输入,按剧本回发言;并发用计数器观测;honor abort 信号。──
 let home: string;
 let events: Array<{ type: string; payload: any }>;
-let finals: Array<{ content: string; agentSlug?: string; timestamp?: number }>;
+let finals: any[];
 let inserted: Array<{ id: string; content: string }>;
 let statuses: Array<{ status: string; extra: any }>;
 let acts: Array<{ slug: string; nth: number; delta: string; cycle: number; inlineDef: boolean; teamDoc?: string; roster: string; runId: string }>;
@@ -130,7 +130,7 @@ beforeEach(() => {
   };
   const fakeState: any = {
     insertUserMessage: async (m: any) => { inserted.push({ id: m.id, content: m.content }); },
-    finalizeAssistantMessage: async (m: any) => { finals.push({ content: m.content, agentSlug: m.agentSlug, timestamp: m.timestamp }); },
+    finalizeAssistantMessage: async (m: any) => { finals.push(m); },
     appendEvent: async (_r: string, type: string, payload: any) => { events.push({ type, payload }); return events.length; },
     drain: async () => {},
     updateRunStatus: async (_id: string, status: string, extra: any) => { statuses.push({ status, extra }); },
@@ -422,5 +422,44 @@ describe('播种源(拍板 ⑬)', () => {
     seen.length = 0;
     await runGroupChat(params({ agentConfig: cfg({ groupSeedHistory: true }) }));
     expect(seen[0]).toBe('s1');
+  });
+});
+
+
+describe('team public outputs', () => {
+  it('retains a successfully delivered file if the member subsequently fails', async () => {
+    script = { beta: ['DONE'] };
+    onActivate = (a) => {
+      if (a.member.slug !== 'alpha') return;
+      a.onEvent?.({ seq: 1, type: 'display_file', payload: { name: 'done.pdf', path: '/tmp/done.pdf' } });
+      return { status: 'failed', text: '', error: 'later step failed' };
+    };
+    await runGroupChat(params());
+    expect(events.filter((e) => e.type === 'team_output')).toHaveLength(1);
+    expect(finals[0].displayFiles[0].name).toBe('done.pdf');
+    expect(ends().find((e) => e.slug === 'alpha').reason).toBe('failed');
+  });
+
+  it('publishes completed sketches and display files immediately, persists even when final speech is only DONE', async () => {
+    script = { alpha: ['DONE'], beta: ['DONE'] };
+    onActivate = (a) => {
+      if (a.member.slug !== 'alpha') return;
+      const send = (seq: number, type: string, payload: any) => a.onEvent?.({ seq, type, payload });
+      send(1, 'tool_call', { id: 'private', name: 'read_file', arguments: '{"path":"private.txt"}' });
+      send(2, 'tool_result', { id: 'private', result: 'PRIVATE-NOTES' });
+      send(3, 'tool_call', { id: 'card', name: 'sketch', arguments: JSON.stringify({ title: 'Workflow', html: '<h1>Workflow</h1>' }) });
+      send(4, 'tool_result', { id: 'card', result: 'Sketch card rendered in the conversation.' });
+      send(4, 'tool_result', { id: 'card', result: 'Sketch card rendered in the conversation.' });
+      send(5, 'display_file', { name: 'report.pdf', path: '/tmp/report.pdf', mime: 'application/pdf' });
+    };
+    await runGroupChat(params({ agentConfig: cfg({ groupNoSummary: true }) }));
+    const outputs = events.filter((e) => e.type === 'team_output');
+    expect(outputs).toHaveLength(2);
+    expect(finals).toHaveLength(2);
+    expect(outputs[0].payload.message.tool_calls[0].function.name).toBe('sketch');
+    expect(outputs[1].payload.message.display_files[0].sourceSessionId).toBe('ws-alpha');
+    expect(JSON.stringify(finals)).not.toContain('PRIVATE-NOTES');
+    expect(events.findIndex((e) => e.type === 'team_output')).toBeLessThan(events.findIndex((e) => e.type === 'team_member' && e.payload.phase === 'end'));
+    expect(finals.map((m) => m.messageId)).toEqual(outputs.map((e) => e.payload.message.id));
   });
 });

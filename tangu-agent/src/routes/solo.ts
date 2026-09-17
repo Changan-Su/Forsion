@@ -12,7 +12,7 @@ import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { mkdirSync } from 'node:fs';
 import { authMiddleware, AuthRequest } from '../core/http.js';
-import { query, getDbType, getNowSql } from '../core/db.js';
+import { query, getDbType } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
 import { getAgent, isValidSlug, libDirOf, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { engineLibDir } from '../core/tanguHome.js';
@@ -129,7 +129,7 @@ router.post('/agent/solo/:kind/:id/rotate', authMiddleware, async (req: AuthRequ
       memory = started ? 'queued' : 'skipped';
       if (started) void started.then((ran) => { if (ran) startMemoryDream(userId, r.memSlug!); }).catch(() => {});
     }
-    if (cur) await query(`UPDATE chat_sessions SET archived = ?, updated_at = ${getNowSql()} WHERE id = ?`, [true, cur.id]);
+    if (cur) await query(`UPDATE chat_sessions SET archived = ? WHERE id = ?`, [true, cur.id]);
     res.json({ session: await createSolo(userId, appId, r), memory });
     });
   } catch (e: any) {

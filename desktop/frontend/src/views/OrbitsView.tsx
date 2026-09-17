@@ -14,7 +14,7 @@
  * 样式全在 `chat2/orbits.css`(`.t2o-` 前缀,不改 `sidebar2.css` 本体);几何见该文件头注。
  */
 import React, { useEffect, useMemo, useState } from 'react'
-import { MoreHorizontal, Pencil, Plus, SquarePen, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
+import { MoreHorizontal, Pencil, Pin, PinOff, Plus, SquarePen, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { OverlayAt, setActiveSpace, useSpaceStore } from '@lcl/engine'
 import { SidebarPane, sessionActivityAt } from './chat2/SidebarPane'
@@ -28,7 +28,8 @@ import * as api from '../services/backendService'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { sessionsInMode, workspacesInMode } from './sessionMode'
 import { registerMessages, useI18n } from '../i18n'
-import type { SessionRecord, TeamDef } from '../types'
+import { isIndependentOrbitConfig, sessionWorkspaceKey, type SessionRecord, type TeamDef } from '../types'
+import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
 import './chat2/orbits.css'
 
 registerMessages({
@@ -42,6 +43,8 @@ registerMessages({
   'orbits.plus.team': { zh: '新建团队', en: 'New team' },
   'orbits.plus.project': { zh: '新建项目', en: 'New project' },
   'orbits.row.menu': { zh: '更多', en: 'More' },
+  'orbits.row.pin': { zh: 'Pin 到顶部', en: 'Pin to top' },
+  'orbits.row.unpin': { zh: '取消 Pin', en: 'Unpin' },
   'orbits.row.newSession': { zh: '新会话', en: 'New session' },
   'orbits.row.newSessionMemory': { zh: '新会话(先总结记忆)', en: 'New session (summarize memory first)' },
   'orbits.row.editTeam': { zh: '编辑团队', en: 'Edit team' },
@@ -77,7 +80,7 @@ function firstChar(text: string): string {
 }
 
 interface MenuAt { x: number; y: number }
-interface RowMenu extends MenuAt { kind: 'agent' | 'engine' | 'team'; slug: string }
+interface RowMenu extends MenuAt { kind: 'agent' | 'engine' | 'team' | 'gone'; slug: string; entryKey: string }
 
 /** 把按钮的矩形换成菜单锚点(贴左下角,留 4px 缝)。 */
 function anchorOf(e: React.MouseEvent | React.KeyboardEvent): MenuAt {
@@ -134,6 +137,28 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const amadeusRoot = usePageStore((state) => state.vaultRoot)
   const [plusMenu, setPlusMenu] = useState<MenuAt | null>(null)
   const [rowMenu, setRowMenu] = useState<RowMenu | null>(null)
+  const [pinnedEntries, setPinnedEntries] = useState<OrbitPinTimes>(readOrbitPins)
+
+  const updatePins = (change: (prev: Readonly<OrbitPinTimes>) => OrbitPinTimes): void => {
+    setPinnedEntries((prev) => {
+      const next = change(prev)
+      if (next !== prev) writeOrbitPins(next)
+      return next
+    })
+  }
+  const togglePinned = (entryKey: string): void => updatePins((prev) => toggleOrbitPin(prev, entryKey))
+  const activatePinned = (entryKey: string): void => updatePins((prev) => touchOrbitPin(prev, entryKey))
+  /** 非 Project 一级行共用同一份菜单状态；`…` 锚到按钮下方，右键锚到指针位置。 */
+  const showRowMenu = (at: MenuAt, kind: RowMenu['kind'], slug: string, entryKey: string): void => {
+    setPlusMenu(null)
+    setRowMenu({ ...at, kind, slug, entryKey })
+  }
+  const openRowMenuAtAnchor = (e: React.MouseEvent | React.KeyboardEvent, kind: RowMenu['kind'], slug: string, entryKey: string): void => {
+    e.preventDefault(); e.stopPropagation(); showRowMenu(anchorOf(e), kind, slug, entryKey)
+  }
+  const openRowMenuAtPointer = (e: React.MouseEvent, kind: RowMenu['kind'], slug: string, entryKey: string): void => {
+    e.preventDefault(); e.stopPropagation(); showRowMenu({ x: e.clientX, y: e.clientY }, kind, slug, entryKey)
+  }
 
   // This workspace stays in Work; filtering changes the list only, never the active conversation.
   const mode = 'work' as const
@@ -145,8 +170,8 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
    *  落进「不在项目中工作」组(§3.5)。未打开过的会话也判得出:refreshSessions 已用列表行自带的
    *  agent_config 预填 configBySession。它们结构上 projectless 但语义上属于各自的工作轨道。 */
   const inOrbit = (x: SessionRecord): boolean => {
-    const c = s.configBySession[x.id]
-    return !!(c?.soloAgentSlug || c?.soloEngineId || c?.teamSlug)
+    // 列表行的 agent_config 是冷启动真源;configBySession 尚未预填时也必须判得出,否则会闪进 rootless。
+    return isIndependentOrbitConfig(s.configBySession[x.id] || x.agent_config)
   }
   useEffect(() => { if (s.sessionMode !== 'work') s.setSessionMode('work') }, [s.sessionMode, s.setSessionMode])
 
@@ -229,6 +254,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     (s.configBySession[x.id]?.groupChat ? <Users className="t2s-lead-icon t2s-dim" /> : null)
 
   const agentRow = (slug: string, name: string): React.ReactElement => {
+    const entryKey = `row:agent:${slug}`
     const url = s.agentAvatars[slug]
     const isMuse = slug === 'muse'
     const active = isMuse ? activeSpaceId === 'muse' : activeCfg?.soloAgentSlug === slug
@@ -238,8 +264,10 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
         key={`agent:${slug}`}
         type="button"
         className={`t2o-row${active ? ' active' : ''}`}
+        data-pinned={isOrbitPinned(pinnedEntries, entryKey) ? 'true' : undefined}
         title={name}
-        onClick={() => { isMuse ? openMuse() : openSolo('agent', slug) }}
+        onClick={() => { activatePinned(entryKey); isMuse ? openMuse() : openSolo('agent', slug) }}
+        onContextMenu={(e) => openRowMenuAtPointer(e, 'agent', slug, entryKey)}
       >
         <span className="t2o-lead">
           {url
@@ -254,16 +282,17 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
           {isMuse && <span className="t2s-dot proactive" title={t('orbits.badge.proactive')} />}
         </span>
         <span className="t2o-name">{name || slug}</span>
+        {isOrbitPinned(pinnedEntries, entryKey) && <Pin className="t2o-pin-mark" aria-hidden="true" />}
         <span
           className="t2o-tail"
           role="button"
           tabIndex={0}
           aria-label={t('orbits.row.menu')}
           title={t('orbits.row.menu')}
-          onClick={(e) => { e.stopPropagation(); setPlusMenu(null); setRowMenu({ ...anchorOf(e), kind: 'agent', slug }) }}
+          onClick={(e) => openRowMenuAtAnchor(e, 'agent', slug, entryKey)}
           onKeyDown={(e) => {
             if (e.key !== 'Enter' && e.key !== ' ') return
-            e.preventDefault(); e.stopPropagation(); setPlusMenu(null); setRowMenu({ ...anchorOf(e), kind: 'agent', slug })
+            openRowMenuAtAnchor(e, 'agent', slug, entryKey)
           }}
         ><MoreHorizontal size={14} /></span>
       </button>
@@ -275,39 +304,49 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   if (showOrbitBlock) {
     const at = (key: string): number => activityByIdent.get(key) || 0
     for (const a of agents) orbitRows.push({ key: `agent:${a.slug}`, at: at(`agent:${a.slug}`), node: agentRow(a.slug, a.name) })
-    for (const e of installedEngines) orbitRows.push({ key: `engine:${e.id}`, at: at(`engine:${e.id}`), node: (
+    for (const e of installedEngines) {
+      const entryKey = `row:engine:${e.id}`
+      orbitRows.push({ key: `engine:${e.id}`, at: at(`engine:${e.id}`), node: (
         <button
           key={`engine:${e.id}`}
           type="button"
           className={`t2o-row${activeCfg?.soloEngineId === e.id ? ' active' : ''}`}
+          data-pinned={isOrbitPinned(pinnedEntries, entryKey) ? 'true' : undefined}
           title={e.name || e.id}
-          onClick={() => openSolo('engine', e.id)}
+          onClick={() => { activatePinned(entryKey); openSolo('engine', e.id) }}
+          onContextMenu={(ev) => openRowMenuAtPointer(ev, 'engine', e.id, entryKey)}
         >
           <span className="t2o-lead t2o-lead-box"><EngineIcon engineId={e.id} size={16} />{runningSolo.has(`engine:${e.id}`) && <span className="t2s-dot running" title={t('orbits.badge.running')} />}</span>
           <span className="t2o-name">{e.name || e.id}</span>
           {e.status === 'needs-signin' && <span className="t2o-badge">{t('orbits.engine.needsSignin')}</span>}
+          {isOrbitPinned(pinnedEntries, entryKey) && <Pin className="t2o-pin-mark" aria-hidden="true" />}
           <span
             className="t2o-tail"
             role="button"
             tabIndex={0}
             aria-label={t('orbits.row.menu')}
             title={t('orbits.row.menu')}
-            onClick={(ev) => { ev.stopPropagation(); setPlusMenu(null); setRowMenu({ ...anchorOf(ev), kind: 'engine', slug: e.id }) }}
+            onClick={(ev) => openRowMenuAtAnchor(ev, 'engine', e.id, entryKey)}
             onKeyDown={(ev) => {
               if (ev.key !== 'Enter' && ev.key !== ' ') return
-              ev.preventDefault(); ev.stopPropagation(); setPlusMenu(null); setRowMenu({ ...anchorOf(ev), kind: 'engine', slug: e.id })
+              openRowMenuAtAnchor(ev, 'engine', e.id, entryKey)
             }}
           ><MoreHorizontal size={14} /></span>
         </button>
     ) })
+    }
     // 团队行(Agent 轨道的持久团队):组合头像;点击直入该团队最新会话,不内联展开(§3.4)。
-    for (const tm of teams) orbitRows.push({ key: `team:${tm.slug}`, at: at(`team:${tm.slug}`), node: (
+    for (const tm of teams) {
+      const entryKey = `row:team:${tm.slug}`
+      orbitRows.push({ key: `team:${tm.slug}`, at: at(`team:${tm.slug}`), node: (
         <button
           key={`team:${tm.slug}`}
           type="button"
           className={`t2o-row${activeCfg?.teamSlug === tm.slug ? ' active' : ''}`}
+          data-pinned={isOrbitPinned(pinnedEntries, entryKey) ? 'true' : undefined}
           title={tm.name}
-          onClick={() => openTeam(tm.slug)}
+          onClick={() => { activatePinned(entryKey); openTeam(tm.slug) }}
+          onContextMenu={(ev) => openRowMenuAtPointer(ev, 'team', tm.slug, entryKey)}
         >
           <span className="t2o-lead">
             <AvatarStack
@@ -317,33 +356,54 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
             />
           </span>
           <span className="t2o-name">{tm.name}</span>
+          {isOrbitPinned(pinnedEntries, entryKey) && <Pin className="t2o-pin-mark" aria-hidden="true" />}
           <span
             className="t2o-tail"
             role="button"
             tabIndex={0}
             aria-label={t('orbits.row.menu')}
             title={t('orbits.row.menu')}
-            onClick={(ev) => { ev.stopPropagation(); setPlusMenu(null); setRowMenu({ ...anchorOf(ev), kind: 'team', slug: tm.slug }) }}
+            onClick={(ev) => openRowMenuAtAnchor(ev, 'team', tm.slug, entryKey)}
             onKeyDown={(ev) => {
               if (ev.key !== 'Enter' && ev.key !== ' ') return
-              ev.preventDefault(); ev.stopPropagation(); setPlusMenu(null); setRowMenu({ ...anchorOf(ev), kind: 'team', slug: tm.slug })
+              openRowMenuAtAnchor(ev, 'team', tm.slug, entryKey)
             }}
           ><MoreHorizontal size={14} /></span>
         </button>
     ) })
-    for (const g of tombstones) orbitRows.push({ key: `gone:${g.kind}:${g.id}`, at: at(`${g.kind}:${g.id}`), node: (
+    }
+    for (const g of tombstones) {
+      const rowKey = `gone:${g.kind}:${g.id}`
+      const entryKey = `row:${rowKey}`
+      orbitRows.push({ key: rowKey, at: at(`${g.kind}:${g.id}`), node: (
         <button
           key={`gone:${g.kind}:${g.id}`}
           type="button"
           className={`t2o-row t2o-row-gone${s.activeId === g.sessionId || (activeCfg && (activeCfg.soloAgentSlug === g.id || activeCfg.soloEngineId === g.id || activeCfg.teamSlug === g.id)) ? ' active' : ''}`}
+          data-pinned={isOrbitPinned(pinnedEntries, entryKey) ? 'true' : undefined}
           title={t(g.kind === 'engine' ? 'orbits.gone.engine' : g.kind === 'team' ? 'orbits.gone.team' : 'orbits.gone.agent')}
-          onClick={() => openSession(g.sessionId)}
+          onClick={() => { activatePinned(entryKey); openSession(g.sessionId) }}
+          onContextMenu={(ev) => openRowMenuAtPointer(ev, 'gone', g.id, entryKey)}
         >
           <span className="t2o-lead"><span className="t2o-avatar t2o-avatar-text" style={{ background: 'var(--overlay-medium)', color: 'var(--text-faint, var(--text-muted))' }}>{firstChar(g.id)}</span></span>
           <span className="t2o-name">{g.id}</span>
           <span className="t2o-badge">{t(g.kind === 'engine' ? 'orbits.gone.engineBadge' : g.kind === 'team' ? 'orbits.gone.teamBadge' : 'orbits.gone.agentBadge')}</span>
+          {isOrbitPinned(pinnedEntries, entryKey) && <Pin className="t2o-pin-mark" aria-hidden="true" />}
+          <span
+            className="t2o-tail"
+            role="button"
+            tabIndex={0}
+            aria-label={t('orbits.row.menu')}
+            title={t('orbits.row.menu')}
+            onClick={(ev) => openRowMenuAtAnchor(ev, 'gone', g.id, entryKey)}
+            onKeyDown={(ev) => {
+              if (ev.key !== 'Enter' && ev.key !== ' ') return
+              openRowMenuAtAnchor(ev, 'gone', g.id, entryKey)
+            }}
+          ><MoreHorizontal size={14} /></span>
         </button>
     ) })
+    }
   }
 
   return (
@@ -381,6 +441,9 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
         <SidebarPane
           collapsed={false}
           orderBy="activity"
+          pinnedEntries={pinnedEntries}
+          onTogglePinned={togglePinned}
+          onActivateEntry={activatePinned}
           extraRows={orbitRows.filter((row) => filter === 'all' || (filter === 'team' ? /^(gone:)?team:/.test(row.key) : filter === 'agent' ? /^(gone:)?(agent|engine):/.test(row.key) : false))}
           sessions={filter === 'all' || filter === 'project' ? sessions : []}
           archivedSessions={archivedSessions}
@@ -412,6 +475,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
           onAuthChange={() => { setTimeout(() => void s.connect(s.cfg), 1500) }}
           activeWorkspaceKey={s.activeWorkspaceKey}
           onEnterWorkspace={(key) => s.setActiveWorkspaceKey(key)}
+          sessionWorkspaceKeyOf={(session) => inOrbit(session) ? null : sessionWorkspaceKey(session, workspaces)}
         />
       </div>
 
@@ -431,6 +495,10 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
 
       {rowMenu && (
         <OverlayAt className="ctx-menu" x={rowMenu.x} y={rowMenu.y} onClick={(e) => e.stopPropagation()}>
+          <button type="button" onClick={() => { const key = rowMenu.entryKey; setRowMenu(null); togglePinned(key) }}>
+            {isOrbitPinned(pinnedEntries, rowMenu.entryKey) ? <PinOff size={13} /> : <Pin size={13} />}
+            {t(isOrbitPinned(pinnedEntries, rowMenu.entryKey) ? 'orbits.row.unpin' : 'orbits.row.pin')}
+          </button>
           {rowMenu.kind === 'agent' && rowMenu.slug === 'muse' && (
             /* Muse 不进聊天(D18):没有私聊 rotate,只有 Space。 */
             <button type="button" onClick={() => { setRowMenu(null); openMuse() }}>

@@ -115,6 +115,13 @@
   font-weight: 600;
   line-height: 1.4;
 }
+.t2o-pin-mark {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--accent-ink);
+  opacity: 0.72;
+}
 
 /* 前导槽 30px(命中仓内既有的 `.ribbon-account .account-avatar` 档,不引入第四个头像尺寸)。 */
 .t2o-row .t2o-lead {
@@ -305,6 +312,8 @@
 /* Header uses the same 30px leading slot and 8px gap as first-level orbit rows. */
 .t2o-head .t2s-special { padding-inline: 14px 6px; gap: 8px; min-height: 40px; }
 .t2o-head .t2s-special-ic { width: 30px; height: 30px; align-items: center; justify-content: center; }
+/* 胶囊自身没有前导图标,所以外边线对齐 New Session / 一级 item 的 30px 图标左缘(20px),
+ * 而不是按钮 hover 面的 6px 外框；视觉上不会再向两侧突出。 */
 .t2o-filters.t2s-vaultseg { width: auto; height: 28px; margin: 0 20px 8px; flex-shrink: 0; }
 .t2o-filters.t2s-vaultseg button { flex: 1; min-width: 0; padding-inline: 3px; font-size: 11.5px; }
 .t2o-filters .t2s-vaultseg-thumb { width: calc((100% - 4px) / 4); }

@@ -16,7 +16,11 @@
  *      从未有过会话的 Agent 沉底、保持名册序。(旧的「一级行不在 .t2s-side 里」断言随混排作废:行现在就住在 SidebarPane 里,
  *      .t2o-row 自带 --t2s-icon 覆盖,不靠外层作用域)
  *   7  旧档 sessions 仍可达,且顶部有「已有新版」提示条(§3.7 第 8 条)
- *   8  亮 / 暗 / 375px 三张真实截图(DESIGN.md §8:几何断言全绿 ≠ 看起来对,自己看)
+ *   8  档位下拉随 panel resize;New Session / 一级行共用 6px 点击外框,筛选胶囊对齐 20px 图标列
+ *   9  点击独立 Agent 不展开「不在项目中」,也不改变一级活动排序;切出再切回 Tangu 不强开已收起项目
+ *  10  Project 行 hover 的 `…` 在 `+` 左边;Project / Agent / Engine / TEAM 等全部一级行整行右键打开各自 `…` 菜单;
+ *      全部一级行可 Pin,Pin 区按最近激活排序并持久化
+ *  11  亮 / 暗 / 375px 三张真实截图(DESIGN.md §8:几何断言全绿 ≠ 看起来对,自己看)
  *
  * 跑法:npm run build && npm run check:orbitside(单实例锁:先退掉 dev 版 Electron)。
  *
@@ -82,13 +86,15 @@ let SOLO_OPEN_RESPONSE = null
 /** 会话名册:两条项目会话(出一个项目组 + 两条二级行)+ 一条无根会话(出「不在项目中工作」组)。
  *  updated_at 刻意错开 —— 混排断言(6a)靠它:私聊 12:00 最新 → Xyra 行最上;项目里最新 11:00 → Orbit Project 组其次;
  *  无根 10:00 → 再次;Orbit One / Orbit Two 没有会话 → 沉底(名册序)。 */
-const sessionFixtures = (projectDir) => {
+const sessionFixtures = (projectDir, defaultDir) => {
   const at = (t) => ({ created_at: '2026-09-16 09:00:00', updated_at: `2026-09-16 ${t}` })
   const base = { summary: '', archived: false, model_id: 'm1', agent_config: null }
   return [
     { ...base, ...at('09:00:00'), id: 'orb-p1', title: '项目会话一', project_path: projectDir, project_name: 'Orbit Project', projectless: false },
     { ...base, ...at('09:30:00'), id: 'orb-p2', title: '项目会话二', project_path: projectDir, project_name: 'Orbit Project', projectless: false },
     { ...base, ...at('10:00:00'), id: 'orb-c1', title: '无根会话', project_path: null, project_name: null, projectless: true },
+    // 切 Space 回归:先打开这条、收起 Tangu 默认工作区,切出再切回时会话可以恢复,但项目不能被动展开。
+    { ...base, ...at('08:00:00'), id: 'orb-d1', title: '默认工作区会话', project_path: defaultDir, project_name: 'Tangu 默认工作区', projectless: false },
     // Agent 轨道的私聊会话:projectless 但带 soloAgentSlug —— 必须**不**落进「不在项目中工作」组(§3.5 inOrbit 剔除)
     { ...base, ...at('12:00:00'), id: 'orb-s1', title: '私聊会话', project_path: null, project_name: null, projectless: true,
       agent_config: { soloAgentSlug: 'xyra', agentSlug: 'xyra', execMode: 'host', cwd: '/tmp/orbit-xyra-library', preset: null } },
@@ -171,6 +177,10 @@ const PROBE = `(() => {
   const srowLead = q(srow, '.t2s-lead')
   const srowScroller = srow ? scrollerOf(srow) : null
   const modeOn = q(pane, '.t2s-mode button.on')
+  const modeTrigger = q(pane, '.t2sw-mode-trigger')
+  const headRow = q(orbit, '.t2o-head .t2s-special-row')
+  const headLead = q(orbit, '.t2o-head .t2s-special-ic')
+  const filters = q(orbit, '.t2o-filters')
   // 一级列表的 DOM 序(一级行 + 项目组头),混排断言用
   const level1 = all(orbit, '.t2o-row, .t2s-group').filter(vis).map((e) => e.classList.contains('t2o-row')
     ? { kind: 'row', text: ((q(e, '.t2o-name') || e).textContent || '').trim().slice(0, 24) }
@@ -215,6 +225,11 @@ const PROBE = `(() => {
     srowScrollerLeft: srowScroller ? rect(srowScroller).left : null,
     modeActive: modeOn ? modeOn.dataset.mode || null : null,
     hasModeBtn: !!(q(orbit, '[data-mode="chat"]') || q(pane, '[data-mode="chat"]')),
+    alignment: {
+      pane: rect(pane), trigger: rect(modeTrigger), head: rect(headRow), filters: rect(filters),
+      headLead: rect(headLead), row: rect(firstRow), rowLead: rect(firstLead),
+      group: rect(groups[0] || null), groupLead: rect(q(groups[0] || null, '.t2s-lead')),
+    },
     legacyHint: ${JSON.stringify(LEGACY_HINT_SELECTORS)}.find((sel) => vis(q(pane, sel))) || null,
     modeLabel: (q(pane, '.t2sw-mode-label') || {}).textContent || null,
   }
@@ -285,6 +300,7 @@ async function run(app, win) {
     dark: path.join(os.tmpdir(), `forsion-orbitside-dark-${process.pid}.png`),
     narrow: path.join(os.tmpdir(), `forsion-orbitside-375-${process.pid}.png`),
     bar: path.join(os.tmpdir(), `forsion-orbitside-bar-${process.pid}.png`),
+    actions: path.join(os.tmpdir(), `forsion-orbitside-actions-${process.pid}.png`),
   }
 
   // ── 1 档位菜单:新旧两档并存,选 orbits 生效且不弹回 ────────────────────────
@@ -359,9 +375,40 @@ async function run(app, win) {
   await sleep(500)
   check('3d 团队会话顶部状态条已移除', await win.locator('.t2o-bar').count() === 0, '')
   await win.screenshot({ path: shots.bar })
+  const orderBeforeOrbitOpen = (await win.evaluate(PROBE)).level1.map((e) => `${e.kind}:${e.text}`)
+  const foundRootless = await win.evaluate(`(() => {
+    const rows = Array.from(document.querySelectorAll('.t2o .t2s-srow'))
+    const row = rows.find((e) => (e.textContent || '').includes('无根会话'))
+    if (!row) return false
+    const group = Array.from(document.querySelectorAll('.t2o .t2s-group')).find((g) => {
+      const next = g.nextElementSibling
+      return !!next && next.contains(row)
+    })
+    if (!group) return false
+    const r = row.getBoundingClientRect()
+    if (r.width > 0 && r.height > 0) group.querySelector('.t2s-group-toggle')?.click()
+    return true
+  })()`)
+  await sleep(500)
   await win.locator('.t2o .t2o-row', { hasText: 'Xyra' }).first().click()
   await sleep(500)
   check('3e 私聊行高亮且顶部无重复状态条', await win.locator('.t2o .t2o-row.active', { hasText: 'Xyra' }).count() === 1 && await win.locator('.t2o-bar').count() === 0, '')
+  const afterOrbitOpen = await win.evaluate(`(() => {
+    const rows = Array.from(document.querySelectorAll('.t2o .t2s-srow'))
+    const rootless = rows.find((e) => (e.textContent || '').includes('无根会话'))
+    const r = rootless?.getBoundingClientRect()
+    const visible = !!r && r.width > 0 && r.height > 0
+    const level1 = Array.from(document.querySelectorAll('.t2o .t2o-row, .t2o .t2s-group'))
+      .filter((e) => { const b = e.getBoundingClientRect(); return b.width > 0 && b.height > 0 })
+      .map((e) => e.classList.contains('t2o-row')
+        ? 'row:' + ((e.querySelector('.t2o-name') || e).textContent || '').trim().slice(0, 24)
+        : 'group:' + ((e.querySelector('.t2s-group-label') || e).textContent || '').trim().slice(0, 24))
+    return { visible, level1 }
+  })()`)
+  check('3f 点击独立 Agent 不会误展开「不在项目中工作」', foundRootless && !afterOrbitOpen.visible,
+    JSON.stringify({ foundRootless, rootlessVisible: afterOrbitOpen.visible }))
+  check('3g 纯点击独立 Agent 不改变一级活动排序', JSON.stringify(afterOrbitOpen.level1) === JSON.stringify(orderBeforeOrbitOpen),
+    JSON.stringify({ before: orderBeforeOrbitOpen, after: afterOrbitOpen.level1 }))
   await win.locator('.t2o .t2s-srow', { hasText: '项目会话一' }).first().click().catch(() => {})
   await sleep(600)
 
@@ -390,6 +437,51 @@ async function run(app, win) {
       headBottom: q('.t2o-head').bottom, filterTop: q('.t2o-filters').top }
   })
   check('5a New Session 图标槽与文字均对齐一级条目', near(alignment.title, alignment.row, .6) && near(alignment.lead, alignment.rowLead, .6) && alignment.filterTop >= alignment.headBottom - 1, JSON.stringify(alignment))
+
+  // ── 8 档位触发器响应 panel 宽度 + 筛选胶囊与图标列对齐 ─────────────────────
+  const alignedToTrigger = (a) => {
+    if (!a?.pane || !a.trigger || !a.head || !a.filters || !a.headLead || !a.row || !a.rowLead || !a.group || !a.groupLead) return false
+    const outerRows = [a.head, a.row, a.group]
+    const iconColumn = [a.headLead, a.rowLead, a.groupLead]
+    return near(a.trigger.left - a.pane.left, 6, .75)
+      && near(a.pane.width - a.trigger.width, 12, 1.25)
+      && outerRows.every((r) => near(r.left, a.trigger.left, .75) && near(r.width, a.trigger.width, 1.25))
+      && iconColumn.every((r) => near(r.left, a.filters.left, .75))
+      && near(a.pane.width - a.filters.width, 40, 1.25)
+  }
+  check('8 档位下拉与一级行共用 6px 点击外框,筛选胶囊对齐 20px 图标列',
+    alignedToTrigger(st.alignment), JSON.stringify(st.alignment))
+
+  const panelBefore = st.alignment
+  const leftSash = await win.evaluate(`(() => {
+    const panes = Array.from(document.querySelectorAll('.t2sw'))
+    const pane = panes.slice().sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)[0]
+    const group = pane && pane.closest('.dv-groupview')
+    if (!group) return null
+    const edge = group.getBoundingClientRect().right
+    let best = null
+    for (const s of document.querySelectorAll('.dv-sash')) {
+      const b = s.getBoundingClientRect()
+      if (b.height < 100) continue
+      const d = Math.abs(b.left + b.width / 2 - edge)
+      if (!best || d < best.d) best = { d, x: b.left + b.width / 2, y: b.top + b.height / 2 }
+    }
+    return best && best.d < 24 ? best : null
+  })()`)
+  if (leftSash) {
+    await win.mouse.move(leftSash.x, leftSash.y)
+    await win.mouse.down()
+    await win.mouse.move(leftSash.x + 96, leftSash.y, { steps: 10 })
+    await win.mouse.up()
+    await sleep(900)
+  }
+  st = await win.evaluate(PROBE)
+  const panelDelta = st.alignment.pane && panelBefore.pane ? st.alignment.pane.width - panelBefore.pane.width : 0
+  const triggerDelta = st.alignment.trigger && panelBefore.trigger ? st.alignment.trigger.width - panelBefore.trigger.width : 0
+  check('8a 拖动 panel sash 后档位下拉等量伸缩（不再锁死 224px）',
+    !!leftSash && Math.abs(panelDelta) > 40 && near(triggerDelta, panelDelta, 2) && alignedToTrigger(st.alignment),
+    JSON.stringify({ panelBefore: panelBefore.pane, panelAfter: st.alignment.pane, triggerBefore: panelBefore.trigger, triggerAfter: st.alignment.trigger, panelDelta: r1(panelDelta), triggerDelta: r1(triggerDelta) }))
+
   await win.locator('[data-filter="agent"]').first().click()
   const agent = await win.evaluate(PROBE)
   check('5b Agent 只显示代理 / 引擎,不显示项目组', agent.rowCount === AGENTS.length && agent.folderRowH.length === 0, String(agent.rowCount))
@@ -402,6 +494,87 @@ async function run(app, win) {
   await win.locator('[data-filter="all"]').first().click()
   const all = await win.evaluate(PROBE)
   check('5e All 恢复混排列表', all.rowCount === st.rowCount && all.folderRowH.length === st.folderRowH.length, '')
+
+  // ── 10 Project 更多菜单 + 全一级 Pin + Pin 区最近激活排序 ────────────────
+  const projectActions = await win.locator('.t2o .t2s-group').evaluateAll((groups) => groups.map((g) =>
+    Array.from(g.querySelectorAll(':scope > .t2s-group-add')).map((b) => b.getAttribute('title') || ''),
+  ))
+  check('10 每个 Project 一级行 hover 动作都有两枚,且 `…` 在 `+` 左边(系统工作区也不例外)',
+    projectActions.length > 0 && projectActions.every((xs) => xs.length === 2 && /操作|action/i.test(xs[0]) && /新建|New chat/i.test(xs[1])),
+    JSON.stringify(projectActions))
+
+  const orbitProject = win.locator('.t2o .t2s-group', { hasText: 'Orbit Project' }).first()
+  await orbitProject.hover()
+  await (await leftPane(win)).screenshot({ path: shots.actions })
+  await orbitProject.click({ button: 'right' })
+  const contextPin = win.locator('.ctx-menu button', { hasText: /Pin 到顶部|Pin to top/ }).last()
+  check('10r 一级 Project 整行右键打开与 `…` 相同的操作菜单',
+    await contextPin.isVisible().catch(() => false), '')
+  await win.keyboard.press('Escape')
+  await win.mouse.click(900, 700)
+  const orbitRowRightClicks = []
+  const level1Rows = win.locator('.t2o .t2o-row')
+  for (let i = 0; i < await level1Rows.count(); i++) {
+    const row = level1Rows.nth(i)
+    const name = ((await row.locator('.t2o-name').textContent().catch(() => '')) || '').trim()
+    await row.click({ button: 'right' })
+    const menuVisible = await win.locator('.ctx-menu button', { hasText: /Pin 到顶部|Pin to top/ }).last().isVisible().catch(() => false)
+    orbitRowRightClicks.push({ name, menuVisible })
+    await win.mouse.click(900, 700)
+  }
+  check('10s Agent / Engine / TEAM 等其它一级行整行右键也打开各自 `…` 菜单',
+    orbitRowRightClicks.length > 0 && orbitRowRightClicks.every((x) => x.menuVisible), JSON.stringify(orbitRowRightClicks))
+  await orbitProject.locator(':scope > .t2s-group-add').first().click()
+  await win.locator('.ctx-menu button', { hasText: /Pin 到顶部|Pin to top/ }).last().click()
+  const xyra = win.locator('.t2o .t2o-row', { hasText: 'Xyra' }).first()
+  await xyra.hover()
+  await xyra.locator('.t2o-tail').click()
+  await win.locator('.ctx-menu button', { hasText: /Pin 到顶部|Pin to top/ }).last().click()
+  await sleep(350)
+  let pinState = await win.evaluate(`(() => ({
+    order: Array.from(document.querySelectorAll('.t2o [data-pinned="true"]')).map((e) => ((e.querySelector('.t2o-name, .t2s-group-label') || e).textContent || '').trim()),
+    marks: document.querySelectorAll('.t2o [data-pinned="true"] .t2o-pin-mark').length,
+  }))()`)
+  check('10a 所有一级类型共用 Pin:后 Pin 的 Agent 位于先 Pin 的 Project 之前,并显示 Pin 标记',
+    pinState.order[0] === 'Xyra' && pinState.order[1] === 'Orbit Project' && pinState.marks >= 2, JSON.stringify(pinState))
+
+  // 点已 Pin Project 是 Pin 区的“最近激活”,只改变 Pin 时间,不会改消息 updated_at。
+  await orbitProject.locator('.t2s-group-toggle').click()
+  await sleep(350)
+  pinState = await win.evaluate(`(() => ({
+    order: Array.from(document.querySelectorAll('.t2o [data-pinned="true"]')).map((e) => ((e.querySelector('.t2o-name, .t2s-group-label') || e).textContent || '').trim()),
+    saved: localStorage.getItem('forsion_orbits_pinned_entries_v1'),
+  }))()`)
+  check('10b Pin 区按最近激活排序:再次激活 Project 后它移到 Pin 区首位',
+    pinState.order[0] === 'Orbit Project' && pinState.order[1] === 'Xyra', JSON.stringify(pinState))
+  check('10c Pin 状态已持久化', !!pinState.saved && pinState.saved.includes('ws:') && pinState.saved.includes('row:agent:xyra'), pinState.saved)
+
+  // ── 9a Tangu Space 被动恢复:会话恢复,Project 折叠状态不被 setActiveId / mount effect 撬开 ──
+  const defaultGroup = win.locator('.t2o .t2s-group', { hasText: 'Tangu 默认工作区' }).first()
+  const defaultRow = win.locator('.t2o .t2s-srow', { hasText: '默认工作区会话' }).first()
+  if (!(await defaultRow.isVisible().catch(() => false))) await defaultGroup.locator('.t2s-group-toggle').click()
+  await defaultRow.click()
+  await sleep(250)
+  // 显式收起后离开;activeWorkspaceKey 仍指向它,正好覆盖原 bug 的触发条件。
+  if (await defaultGroup.locator('.t2s-lead-chev.open').count()) await defaultGroup.locator('.t2s-group-toggle').click()
+  const otherSpace = win.locator('.rb-space:not(:has(svg.lucide-bot))').first()
+  const canSwitchSpace = await otherSpace.count().catch(() => 0)
+  if (canSwitchSpace) {
+    await otherSpace.click()
+    await sleep(700)
+    await win.locator('.rb-space:has(svg.lucide-bot)').first().click()
+    await win.waitForSelector('.t2o', { timeout: 15_000 }).catch(() => {})
+    await sleep(800)
+  }
+  const spaceRestore = await win.evaluate(`(() => {
+    const group = Array.from(document.querySelectorAll('.t2o .t2s-group')).find((g) => (g.textContent || '').includes('Tangu 默认工作区'))
+    const row = Array.from(document.querySelectorAll('.t2o .t2s-srow')).find((e) => (e.textContent || '').includes('默认工作区会话'))
+    const r = row && row.getBoundingClientRect()
+    return { hasGroup: !!group, active: group?.getAttribute('data-active') === 'true', open: !!group?.querySelector('.t2s-lead-chev.open'), rowVisible: !!r && r.width > 0 && r.height > 0, rowActive: !!row?.classList.contains('active') }
+  })()`)
+  check('9a 切出再切回 Tangu:默认工作区不会被动激活,已收起状态也保持不变',
+    !!canSwitchSpace && spaceRestore.hasGroup && !spaceRestore.active && !spaceRestore.open && !spaceRestore.rowVisible,
+    JSON.stringify({ canSwitchSpace: !!canSwitchSpace, ...spaceRestore }))
 
   // ── 8b 暗色截图 ───────────────────────────────────────────────────────────
   // 明暗真源 = forsion_theme_pref(themeStore persistPref);落盘后 reload,装载器才会重算 token
@@ -416,6 +589,8 @@ async function run(app, win) {
   check('8b 暗色截图确实是暗色(html[data-mode]=dark)', darkMode === 'dark', `data-mode=${darkMode}`)
   check('8c reload 后仍停在 orbits 档(leaf.params 持久化)', dark.hasOrbit,
     JSON.stringify({ hasOrbit: dark.hasOrbit, modeLabel: dark.modeLabel }))
+  const persistedPins = await win.evaluate(`Array.from(document.querySelectorAll('.t2o [data-pinned="true"]')).map((e) => ((e.querySelector('.t2o-name, .t2s-group-label') || e).textContent || '').trim())`)
+  check('10d reload 后 Pin 区与排序仍保留', persistedPins[0] === 'Orbit Project' && persistedPins[1] === 'Xyra', JSON.stringify(persistedPins))
   await dismissToasts(win)
   await win.mouse.move(1270, 950)
   await sleep(350)
@@ -465,7 +640,7 @@ async function run(app, win) {
   check(`7b 旧档顶部有「已有新版 →」提示条(§3.7 第 8 条;认 ${LEGACY_HINT_SELECTORS.join(' / ')})`,
     !!leg.legacyHint, `matched=${leg.legacyHint}`)
 
-  check('8 三张截图落盘(亮 / 暗 / 375px —— DESIGN.md §8:自己看)',
+  check('11 界面截图落盘(亮 / 暗 / 375px / Project hover 动作 —— DESIGN.md §8:自己看)',
     Object.values(shots).every((p) => fs.existsSync(p)), Object.values(shots).join(' '))
   return shots
 }
@@ -479,9 +654,10 @@ async function main() {
   const userData = path.join(home, 'userdata')
   const vault = path.join(home, 'vault')
   const projectDir = path.join(home, 'Orbit Project')
-  for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
+  const defaultDir = path.join(home, 'Default Workspace')
+  for (const dir of [userData, `${userData}-dev`, vault, projectDir, defaultDir]) fs.mkdirSync(dir, { recursive: true })
 
-  const fixtures = sessionFixtures(projectDir)
+  const fixtures = sessionFixtures(projectDir, defaultDir)
   SOLO_OPEN_RESPONSE = { session: fixtures.find((x) => x.id === 'orb-s1'), created: false }
   const stub = await startStubEngine({ agents: AGENTS, sessions: fixtures, handle: ({ path: route }) => {
     if (route === '/agent/teams') return { teams: [{ slug: 'ui-team', name: 'UI Team', members: [{ slug: 'xyra' }, { slug: 'orbit-one' }] }] }
@@ -489,7 +665,7 @@ async function main() {
   const front = await startFront(stub.url)
   // 未打包时主进程用 `<dir>-dev`,两份都种;vault 也预置,免得停在笔记库引导。
   for (const dir of [userData, `${userData}-dev`]) {
-    fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: front.url, token: 'e2e' }), 'utf8')
+    fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: front.url, token: 'e2e', defaultWorkspaceDir: defaultDir }), 'utf8')
     fs.writeFileSync(path.join(dir, 'amadeus-config.dev.json'), JSON.stringify({ localVault: vault, lastVault: vault }), 'utf8')
   }
 

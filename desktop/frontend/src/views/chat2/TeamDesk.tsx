@@ -1,11 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronRight, Loader2 } from 'lucide-react'
+import { useEffect, useMemo } from 'react'
+import { ChevronRight } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp, type TeamWorkMember } from '../../stores/appStore'
-import { subscribeRunEvents } from '../../services/agentRunService'
-import { SegList } from '../../components/SubChatsTab'
-import type { AgentRunEvent, SubChatSeg, TanguDesktopConfig } from '../../types'
+import { useChildChat } from '../../stores/childChatStore'
 
 registerMessages({
   'teamdesk.title': { zh: '团队工作台', en: 'Team Desk' },
@@ -24,28 +22,22 @@ registerMessages({
   'teamdesk.collapse': { zh: '收起', en: 'Collapse' },
 })
 
-/** 发言人徽章配色:与 appStore.groupColor 同算法(前端派生,稳定色相)。 */
-function colorOf(slug: string): string {
-  let h = 0
-  for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0
-  return `hsl(${h % 360} 62% 45%)`
-}
-
 /** 团队会话的成员表:配置里的成员序为准,工作状态从 teamWorkBySession 合并(没起过的成员 = 空闲)。 */
 function useTeamMembers(sessionId: string): TeamWorkMember[] {
   const s = useApp(useShallow((st) => ({
-    cfg: st.configBySession[sessionId], work: st.teamWorkBySession[sessionId], agentDefs: st.agentDefs, running: st.runningBySession[sessionId],
+    cfg: st.configBySession[sessionId], work: st.teamWorkBySession[sessionId], agentDefs: st.agentDefs, running: st.runningBySession[sessionId], childRuns: st.runningBySession,
   })))
   return useMemo(() => {
     const slugs: string[] = Array.isArray(s.cfg?.groupAgents) ? s.cfg!.groupAgents!.map(String) : []
     return slugs.map((slug) => {
       const w = s.work?.[slug]
       const name = s.agentDefs.find((a) => a.slug === slug)?.name || w?.name || slug
-      // 团队 run 没在跑 → 谁都不可能「工作中 / 等审批」(迟到的事件流或复原的旧状态别把人钉在忙碌态)
-      const status = w ? (!s.running && (w.status === 'working' || w.status === 'waiting') ? 'idle' : w.status) : 'idle'
+      // A user can continue a member independently after the parent team has finished.
+      const childRunning = w?.sessionId && s.childRuns[w.sessionId]
+      const status = childRunning ? (w?.status === 'waiting' ? 'waiting' : 'working') : w ? (!s.running && (w.status === 'working' || w.status === 'waiting') ? 'idle' : w.status) : 'idle'
       return { ...(w || { since: 0 }), slug, name, status } as TeamWorkMember
     })
-  }, [s.cfg, s.work, s.agentDefs, s.running])
+  }, [s.cfg, s.work, s.agentDefs, s.running, s.childRuns])
 }
 
 function Avatar({ slug, name, status }: { slug: string; name: string; status: TeamWorkMember['status'] }) {
@@ -68,66 +60,23 @@ function activityLine(m: TeamWorkMember, t: (k: string, v?: Record<string, strin
 export function TeamStatus({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const members = useTeamMembers(sessionId)
-  const cfg = useApp((s) => s.cfg)
   const hydrate = useApp((s) => s.hydrateTeamWork)
-  const [picked, setPicked] = useState<string | null>(null)
-  useEffect(() => { setPicked(null); void hydrate(sessionId) }, [sessionId, hydrate])
+  const picked = useChildChat((s) => s.selected[sessionId]?.id)
+  useEffect(() => { void hydrate(sessionId) }, [sessionId, hydrate])
   return (
     <div className="t2o-team-status" data-team-desk="status">
       {members.map((m) => (
         <div key={m.slug}>
           <button type="button" className="t2o-desk-row" data-slug={m.slug} data-status={m.status}
-            aria-expanded={picked === m.slug} onClick={() => setPicked(picked === m.slug ? null : m.slug)}>
+            aria-pressed={picked === m.slug} onClick={() => useChildChat.getState().open(sessionId, { id: m.slug, title: m.name, slug: m.slug, sessionId: m.sessionId, runId: m.runId, task: m.task })}>
             <Avatar slug={m.slug} name={m.name} status={m.status} />
             <span className="t2o-desk-name">{m.name}</span>
             <span className="t2o-desk-dot" data-status={m.status} title={t(`teamdesk.status.${m.status}`)} />
             <span className="t2o-desk-activity">{activityLine(m, t)}</span>
-            <ChevronRight size={12} style={{ transform: picked === m.slug ? 'rotate(90deg)' : undefined }} />
+            <ChevronRight size={12} />
           </button>
-          {picked === m.slug && <MemberWork cfg={cfg} member={m} />}
         </div>
       ))}
-    </div>
-  )
-}
-
-/** 选中成员的工作转录:订阅它当前 / 最近一次子 run 的事件流(token → 文本;tool_call → 工具行;done / error 收尾)。 */
-function MemberWork({ cfg, member }: { cfg: TanguDesktopConfig; member: TeamWorkMember }) {
-  const { t } = useI18n()
-  const [segs, setSegs] = useState<SubChatSeg[]>([])
-  const [streaming, setStreaming] = useState(false)
-  const endRef = useRef<HTMLDivElement>(null)
-  const runId = member.runId
-  useEffect(() => {
-    if (!runId) { setSegs([]); setStreaming(false); return }
-    const ac = new AbortController()
-    setSegs([]); setStreaming(true)
-    const col = colorOf(member.slug)
-    const append = (delta: string) => setSegs((s) => {
-      const last = s[s.length - 1]
-      if (last && last.t === 'text') return [...s.slice(0, -1), { ...last, text: last.text + delta }]
-      return [...s, { t: 'text', speaker: member.name, color: col, text: delta }]
-    })
-    void subscribeRunEvents(cfg, runId, (ev: AgentRunEvent) => {
-      const p = ev.payload || {}
-      switch (ev.type) {
-        case 'token': if (p.delta) append(String(p.delta)); break
-        case 'tool_call': setSegs((s) => [...s, { t: 'tool', name: String(p.name || ''), preview: typeof p.arguments === 'string' ? p.arguments.slice(0, 200) : '' }]); break
-        case 'tool_result': if (p.isError) setSegs((s) => [...s, { t: 'tool', name: String(p.name || ''), preview: String(p.result || '').slice(0, 200), error: true }]); break
-        case 'done': case 'error': setStreaming(false); break
-      }
-    }, ac.signal).catch(() => setStreaming(false))
-    return () => ac.abort()
-  }, [cfg, runId, member.slug, member.name])
-  useEffect(() => { endRef.current?.scrollIntoView({ block: 'end' }) }, [segs])
-  if (!runId) return <div className="t2o-desk-empty">{t('teamdesk.noWork')}</div>
-  return (
-    <div className="t2o-desk-work" data-team-desk="work">
-      {member.task && <div className="t2o-desk-task">{t('teamdesk.task', { task: member.task })}</div>}
-      {segs.length === 0 && streaming && <div className="panel-note" style={{ fontSize: 11.5 }}><Loader2 size={12} className="spin" /> {t('teamdesk.connecting')}</div>}
-      <SegList segs={segs} />
-      {streaming && segs.length > 0 && <div className="panel-note" style={{ fontSize: 11.5, marginTop: 6 }}><Loader2 size={12} className="spin" /> {t('teamdesk.live')}</div>}
-      <div ref={endRef} />
     </div>
   )
 }
