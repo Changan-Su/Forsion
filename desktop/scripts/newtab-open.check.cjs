@@ -13,6 +13,8 @@
  *   3 聊天在场且可见,且主区标签没有净增(不留一个没人用的空白标签)
  *
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测(同 check:chatside)。
+ * ⚠️ 入口按 `[data-act="new-chat"]` 找,别按文案:09-17 侧栏换成 OrbitsView 后按钮字变「新会话」,
+ *    按「新对话」找的旧写法在第 2 项之前就超时(假红)。
  * 跑:npm run check:newtab
  */
 const fs = require('fs')
@@ -76,12 +78,13 @@ async function main() {
       JSON.stringify(blank),
     )
 
-    // 侧栏「新对话」(SpecialRow);左栏折叠时先展开。
-    if (!(await win.locator('.t2s-special', { hasText: '新对话' }).first().count().catch(() => 0))) {
+    // 侧栏新建入口(OrbitsView 顶行,走 openNewChat);左栏折叠时先展开(折叠态可能还挂在 DOM 里,故看可见而非 count)。
+    const newChat = win.locator('[data-act="new-chat"]').first()
+    if (!(await newChat.isVisible().catch(() => false))) {
       await win.click('.dv-edge-left').catch(() => {})
       await win.waitForTimeout(800)
     }
-    await win.locator('.t2s-special', { hasText: '新对话' }).first().click()
+    await newChat.click()
     await win.waitForTimeout(1200)
     const after = await win.evaluate(SNAP)
 

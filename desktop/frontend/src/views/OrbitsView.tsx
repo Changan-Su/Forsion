@@ -352,8 +352,9 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
       <div className="t2o-head">
         <div className="t2s-special-group">
           <div className="t2s-special-row">
-            {/* 尺寸由 `.t2o .t2s-special-ic > svg` 的 --t2s-icon 接管,故不传 size(传了也无效)。 */}
-            <button type="button" className="t2s-special" onClick={() => { s.setSessionMode('work'); openNewChat() }}>
+            {/* 尺寸由 `.t2o .t2s-special-ic > svg` 的 --t2s-icon 接管,故不传 size(传了也无效)。
+                data-act = 台架锚(check:newtab):文案随语言与改版变,台架别按文字找它。 */}
+            <button type="button" className="t2s-special" data-act="new-chat" onClick={() => { s.setSessionMode('work'); openNewChat() }}>
               <span className="t2s-special-ic"><SquarePen /></span>
               <span className="t2s-special-title">{t('orbits.row.newSession')}</span>
             </button>
