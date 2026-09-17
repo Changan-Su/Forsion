@@ -112,7 +112,7 @@ export function Ribbon() {
   const topE = zoneList('top')
   const botE = zoneList('bottom')
   /** 收纳夹成员表是持久化的,里面会留下**已解析不出来**的 id —— 图标退役(如 2026-08-31 撤下的
-   *  rb-search/rb-locale/rb-feedback)、插件卸载、命令消失都会造成。计数与空态一律按能解析出来的
+   *  rb-search/rb-locale;rb-feedback 09-17 已放回)、插件卸载、命令消失都会造成。计数与空态一律按能解析出来的
    *  成员算,否则用户看到「标着 (1) 的收纳夹打开却一片空白」,连「拖图标进来」的空态提示都不给。
    *  成员**行**照旧按原数组渲染(解析不出的渲染成 null):`flyRow` 拿的下标要与原数组对齐,
    *  过滤掉会让拖拽重排写回错位的顺序。 */

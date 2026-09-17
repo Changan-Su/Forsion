@@ -1,18 +1,13 @@
-/** 反馈弹窗:写问题/建议 → 自动附带本次会话日志(设置·高级那份)→ 提交 Forsion 反馈中心。 */
-import React, { useState } from 'react'
-import { X, MessageSquare, Loader2, MessagesSquare } from 'lucide-react'
+/** Feedback keeps its draft, shows exactly which diagnostics will be sent, and never silently drops a large attachment. */
+import React, { useEffect, useRef, useState } from 'react'
+import { X, MessageSquare, Loader2, MessagesSquare, Bug, Lightbulb, Check, FileText, ArrowLeft, RefreshCw } from 'lucide-react'
 import { useWorkspace } from '@lcl/engine'
-import { registerMessages, useI18n } from '../i18n'
+import { useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
-import { buildSessionLogPayload, sessionLogFilename } from '../services/sessionLog'
+import { buildFeedbackReport, FEEDBACK_LOG_LIMIT, FEEDBACK_TEXT_LIMIT, type FeedbackReport } from '../services/feedbackReport'
 import type { SessionRecord, TanguDesktopConfig } from '../types'
-
-registerMessages({
-  'feedback.diagnosePrompt': {
-    zh: '我在使用 Tangu 时遇到一个问题，想请你帮我诊断：\n\n{description}\n\n请结合当前会话的上下文分析可能的原因，并给出排查步骤。',
-    en: 'I ran into a problem while using Tangu and would like your help diagnosing it:\n\n{description}\n\nUsing the context of this session, analyze the likely causes and suggest troubleshooting steps.',
-  },
-})
+import './feedbackMessages'
+import './feedback.css'
 
 export const FeedbackModal: React.FC<{
   cfg: TanguDesktopConfig
@@ -20,89 +15,164 @@ export const FeedbackModal: React.FC<{
   onClose: () => void
 }> = ({ cfg, activeSession, onClose }) => {
   const { t } = useI18n()
-  const [text, setText] = useState('')
+  // Freeze the originating session: changing the active tab must not attach a different conversation.
+  const [context] = useState(() => ({ cfg, session: activeSession }))
+  const text = useApp((s) => s.feedbackDraft)
+  const [kind, setKind] = useState<'bug' | 'idea' | 'other'>('bug')
+  const [diagnostics, setDiagnostics] = useState(true)
+  const [conversation, setConversation] = useState(false)
+  const [activity, setActivity] = useState(false)
+  const [revision, setRevision] = useState(0)
+  const [prepared, setPrepared] = useState<{ key: string; report?: FeedbackReport; failed?: boolean } | null>(null)
+  const [preview, setPreview] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [done, setDone] = useState(false)
-  const [msg, setMsg] = useState('')
+  const [result, setResult] = useState<{ id?: string | null; attachmentSkipped?: boolean } | null>(null)
+  const [error, setError] = useState('')
+  const dialog = useRef<HTMLDivElement>(null)
+  const submitting = useRef(false)
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+  const wantsLog = diagnostics || conversation || activity
+  const selectionKey = `${diagnostics}:${conversation}:${activity}:${revision}`
+  const current = prepared?.key === selectionKey ? prepared : null
+  const preparing = wantsLog && !current
+  const report = wantsLog ? current?.report : undefined
+  const tooLarge = !!report && report.bytes > FEEDBACK_LOG_LIMIT
+  const tooLong = text.trim().length > FEEDBACK_TEXT_LIMIT
+  const canSubmit = !!text.trim() && !tooLong && !busy && !result && !preparing && !tooLarge && (!wantsLog || !!report)
+  const close = (): void => { if (!submitting.current) closeRef.current() }
+
+  useEffect(() => {
+    if (!wantsLog) return
+    let alive = true
+    void buildFeedbackReport(context.cfg, context.session, { diagnostics, conversation, activity })
+      .then((value) => { if (alive) setPrepared({ key: selectionKey, report: value }) })
+      .catch(() => { if (alive) setPrepared({ key: selectionKey, failed: true }) })
+    return () => { alive = false }
+  }, [context, diagnostics, conversation, activity, revision, selectionKey, wantsLog])
+
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null
+    const frame = requestAnimationFrame(() => dialog.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus())
+    const keydown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        event.preventDefault(); event.stopImmediatePropagation()
+        if (!submitting.current) closeRef.current()
+      }
+      if (event.key === 'Tab') {
+        const nodes = Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), textarea:not(:disabled), input:not(:disabled), [tabindex="0"]') || [])
+          .filter((node) => node.getClientRects().length > 0)
+        const first = nodes[0], last = nodes[nodes.length - 1]
+        if (!first) { event.preventDefault(); dialog.current?.focus(); return }
+        if (event.shiftKey && (document.activeElement === first || !dialog.current?.contains(document.activeElement))) {
+          event.preventDefault(); last.focus()
+        } else if (!event.shiftKey && (document.activeElement === last || !dialog.current?.contains(document.activeElement))) {
+          event.preventDefault(); first.focus()
+        }
+      }
+    }
+    document.addEventListener('keydown', keydown, true)
+    return () => { cancelAnimationFrame(frame); document.removeEventListener('keydown', keydown, true); previous?.focus() }
+  }, [])
 
   const submit = async (): Promise<void> => {
-    const description = text.trim()
-    if (!description) { setMsg(t('feedback.errEmpty')); return }
-    if (!window.tangu?.submitFeedback) { setMsg(t('feedback.errUnavailable')); return }
-    setBusy(true); setMsg('')
+    if (!canSubmit || submitting.current) return
+    if (!window.tangu?.submitFeedback) { setError(t('feedback.errUnavailable')); return }
+    submitting.current = true; setBusy(true); setError('')
     try {
-      let sessionLogJson: string | undefined
-      let sessionLogName: string | undefined
-      if (activeSession) {
-        try {
-          sessionLogJson = JSON.stringify(await buildSessionLogPayload(cfg, activeSession), null, 2)
-          sessionLogName = sessionLogFilename(activeSession)
-        } catch { /* 日志取不到也不挡提交 */ }
-      }
-      const r = await window.tangu.submitFeedback({ description, sessionLogJson, sessionLogName })
-      if (!r.ok) {
-        const err = r.error === 'not-logged-in' ? t('feedback.errNotLoggedIn') : (r.error || '')
-        setMsg(t('feedback.errFail', { err }))
+      const response = await window.tangu.submitFeedback({
+        description: `[Tangu · ${t(`feedback.${kind}`)}]\n\n${text.trim()}`,
+        ...(report ? { sessionLogJson: report.json, sessionLogName: report.filename } : {}),
+      })
+      if (!response.ok) {
+        setError(response.error === 'attachment-too-large' ? t('feedback.tooLarge') : t('feedback.errFail', { err: response.error === 'not-logged-in' ? t('feedback.errNotLoggedIn') : response.error || 'Unknown error' }))
       } else {
-        setDone(true)
-        setMsg(r.attachmentSkipped ? t('feedback.okNoLog') : t('feedback.ok'))
-        setTimeout(onClose, 1400)
+        setResult(response)
+        useApp.setState({ feedbackDraft: '' })
       }
-    } finally {
-      setBusy(false)
-    }
+    } catch (err) {
+      setError(t('feedback.errFail', { err: String((err as Error)?.message || err) }))
+    } finally { submitting.current = false; setBusy(false) }
   }
 
-  // 「让 Tangu 帮我诊断」:把问题描述预填进当前会话聊天框,交给内嵌 agent 就地排查(很多「bug」其实是配置/用法困惑)。
   const diagnoseViaChat = (): void => {
-    const description = text.trim()
-    if (!description) return
-    const prompt = t('feedback.diagnosePrompt', { description })
-    useApp.getState().setPendingDraft(prompt)
+    if (!text.trim() || busy) return
+    useApp.getState().setPendingDraft(t('feedback.diagnosePrompt', { description: text.trim() }))
     useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
-    onClose()
+    close()
   }
+  const size = report ? `${(report.bytes / 1024).toFixed(1)} KB` : ''
 
   return (
-    <div className="memv-modal" onClick={onClose}>
-      <div className="modal modal-sm" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-head">
-          <MessageSquare size={15} style={{ marginRight: 6 }} />
-          {t('feedback.title')}
-          <span className="grow" />
-          <button className="icon-btn" onClick={onClose} title={t('settings.btn.cancel')}><X size={16} /></button>
+    <div className="memv-modal feedback-overlay" onClick={(event) => { if (event.target === event.currentTarget) close() }}>
+      <div ref={dialog} className="modal feedback-modal" role="dialog" aria-modal="true" aria-labelledby="feedback-title" tabIndex={-1}
+        onKeyDown={(event) => {
+          if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); void submit() }
+        }}>
+        <div className="modal-head feedback-head">
+          <div className="feedback-heading"><MessageSquare size={19} /><div><h2 id="feedback-title">{t('feedback.title')}</h2><p>{t('feedback.subtitle')}</p></div></div>
+          <button className="icon-btn" onClick={close} disabled={busy} aria-label={t('settings.btn.cancel')}><X size={18} /></button>
         </div>
-        <div className="modal-body">
-          <div className="field">
-            <label>{t('feedback.label')}</label>
-            <textarea
-              autoFocus
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder={t('feedback.placeholder')}
-              disabled={busy || done}
-              style={{ width: '100%', resize: 'vertical', minHeight: 150 }}
-            />
+        {result ? <>
+          <div className="modal-body feedback-success" role="status">
+            <span className="feedback-success-icon"><Check size={28} /></span>
+            <h3>{t('feedback.successTitle')}</h3><p>{t('feedback.successHint')}</p>
+            {result.id && <code>{t('feedback.ticket', { id: result.id })}</code>}
+            {result.attachmentSkipped && <p className="feedback-warning">{t('feedback.okNoLog')}</p>}
           </div>
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 8 }}>
-            {activeSession ? t('feedback.logAttached', { name: sessionLogFilename(activeSession) }) : t('feedback.noSession')}
+          <div className="feedback-footer">
+            {window.tangu?.openAccountCenter && <button className="btn ghost" onClick={() => { void window.tangu!.openAccountCenter!('feedback').catch(() => useApp.getState().toast(t('feedback.errUnavailable'), true)) }}>{t('feedback.viewFeedback')}</button>}
+            <span className="grow" /><button autoFocus className="btn primary" onClick={close}>{t('feedback.done')}</button>
           </div>
-          {msg ? (
-            <div style={{ fontSize: 12, marginTop: 8, color: done ? 'var(--accent-ink)' : 'var(--danger)' }}>{msg}</div>
-          ) : null}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 14 }}>
-            <button className="btn ghost" onClick={diagnoseViaChat} disabled={busy || done || !text.trim()} title={t('feedback.diagnoseViaChatHint')}>
-              <MessagesSquare size={14} style={{ marginRight: 6 }} />
-              {t('feedback.diagnoseViaChat')}
-            </button>
-            <span style={{ flex: 1 }} />
-            <button className="btn" onClick={onClose} disabled={busy}>{t('settings.btn.cancel')}</button>
-            <button className="btn primary" onClick={() => void submit()} disabled={busy || done || !text.trim()}>
-              {busy ? <Loader2 size={14} className="spin" style={{ marginRight: 6 }} /> : null}
-              {t('feedback.submit')}
-            </button>
+        </> : <>
+          <div className="modal-body feedback-body">
+            {preview ? <>
+              <button className="btn ghost sm feedback-back" onClick={() => setPreview(false)}><ArrowLeft size={14} />{t('feedback.backToForm')}</button>
+              <div className="feedback-file"><FileText size={15} /><span>{report?.filename}</span><span>{size}</span></div>
+              <pre className="feedback-preview" tabIndex={0}>{report?.json}</pre>
+            </> : <>
+              <div className="feedback-kinds" role="group" aria-label={t('feedback.kind')}>
+                {([{ id: 'bug', Icon: Bug }, { id: 'idea', Icon: Lightbulb }, { id: 'other', Icon: MessageSquare }] as const).map(({ id, Icon }) => (
+                  <button key={id} className="btn ghost" aria-pressed={kind === id} disabled={busy} onClick={() => setKind(id)}><Icon size={15} />{t(`feedback.${id}`)}</button>
+                ))}
+              </div>
+              <div className="feedback-description">
+                <label htmlFor="feedback-description">{kind === 'bug' ? t('feedback.description') : t('feedback.label')}</label>
+                <textarea id="feedback-description" value={text} onChange={(event) => { useApp.setState({ feedbackDraft: event.target.value }); setError('') }}
+                  placeholder={t(`feedback.${kind}Placeholder`)} disabled={busy} aria-invalid={tooLong} aria-describedby="feedback-count" />
+                <span id="feedback-count" className={tooLong ? 'feedback-warning' : 'feedback-count'}>{text.trim().length.toLocaleString()} / {FEEDBACK_TEXT_LIMIT.toLocaleString()}</span>
+              </div>
+              <section className="feedback-context" aria-labelledby="feedback-context-title">
+                <div className="feedback-section-heading"><h3 id="feedback-context-title">{t('feedback.context')}</h3><code>/feedback</code></div>
+                <p className="feedback-session">{context.session ? t('feedback.sessionContext', { name: context.session.title || context.session.id.slice(0, 8) }) : t('feedback.withoutSession')}</p>
+                {([
+                  { id: 'diagnostics', checked: diagnostics, change: setDiagnostics, unavailable: false },
+                  { id: 'conversation', checked: conversation, change: setConversation, unavailable: !context.session },
+                  { id: 'activity', checked: activity, change: setActivity, unavailable: !window.tangu?.exportActivity },
+                ] as const).map((option) => <label key={option.id} className="feedback-option" data-disabled={option.unavailable || undefined}>
+                  <input type="checkbox" checked={option.checked} onChange={(event) => option.change(event.target.checked)} disabled={busy || option.unavailable} />
+                  <span><strong>{t(`feedback.${option.id}`)}</strong><small>{t(`feedback.${option.id}Hint`)}</small></span>
+                </label>)}
+              </section>
+              <div className="feedback-report-status" role="status">
+                <span>{preparing ? <><Loader2 size={13} className="spin" />{t('feedback.preparing')}</> : report ? <><FileText size={13} />{t('feedback.ready', { size })}</> : !wantsLog ? t('feedback.textOnly') : t('feedback.prepareFailed')}</span>
+                <div>{report && <button className="btn ghost sm" onClick={() => setPreview(true)} disabled={busy}>{t('feedback.preview')}</button>}
+                  {wantsLog && <button className="icon-btn" onClick={() => setRevision((n) => n + 1)} disabled={busy || preparing} aria-label={t('feedback.refresh')} title={t('feedback.refresh')}><RefreshCw size={13} /></button>}</div>
+              </div>
+              {!!report?.missing.length && <p className="feedback-warning">{t('feedback.partial', { sources: report.missing.map((source) => t(`feedback.source.${source}`)).join(', ') })}</p>}
+              {report?.truncated && <p className="feedback-note">{t('feedback.truncated')}</p>}
+              {wantsLog && <p className="feedback-note">{t('feedback.privacy')}</p>}
+            </>}
+            {tooLarge && <p className="feedback-warning" role="alert">{t('feedback.tooLarge')}</p>}
+            {tooLong && <p className="feedback-warning" role="alert">{t('feedback.limit', { max: FEEDBACK_TEXT_LIMIT })}</p>}
+            {error && <p className="feedback-warning" role="alert">{error}</p>}
           </div>
-        </div>
+          <div className="feedback-footer">
+            <button className="btn ghost feedback-diagnose" onClick={diagnoseViaChat} disabled={busy || !text.trim()} title={t('feedback.diagnoseViaChatHint')}><MessagesSquare size={15} />{t('feedback.diagnoseViaChat')}</button>
+            <span className="grow" />
+            <button className="btn primary" onClick={() => void submit()} disabled={!canSubmit}>{busy && <Loader2 size={14} className="spin" />}{t(busy ? 'feedback.sending' : error ? 'feedback.retry' : 'feedback.submit')}</button>
+          </div>
+        </>}
       </div>
     </div>
   )
