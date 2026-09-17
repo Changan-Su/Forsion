@@ -1,66 +1,163 @@
 import { describe, it, expect } from 'vitest';
-import { extractFileOps, formatFileOps, foldWorkingWithSummary, parseFileOps, type FileOps } from './compaction.js';
+import {
+  extractFileOps, formatFileOps, parseFileOps, compactionRange, buildTranscript, rowCoverage,
+  summaryMessage, isSummaryMessage, compactSystemPrompt, type FileOps,
+} from './compaction.js';
+import { estimateMessageTokens } from './contextBudget.js';
 import type { ChatMessage } from '../core/types.js';
 
 function mk(role: string, content: string): ChatMessage {
   return { role, content } as ChatMessage;
 }
 
-describe('foldWorkingWithSummary', () => {
-  it('keeps leading system block + tail, replaces middle with one summary system msg', () => {
+describe('compactionRange — 按 token 预算切(借 pi findCutPoint),批次绝不拆', () => {
+  it('从最新往回累计到 keepRecentTokens,其后最近的非 tool 消息为切点;开头 system 块不进范围', () => {
     const msgs: ChatMessage[] = [
-      mk('system', 'sys1'),
-      mk('system', 'sys2'),
-      ...Array.from({ length: 20 }, (_, i) => mk(i % 2 ? 'assistant' : 'user', `m${i}`)),
+      mk('system', 'sys'),
+      ...Array.from({ length: 20 }, (_, i) => mk(i % 2 ? 'assistant' : 'user', `m${i} ` + 'x'.repeat(80))),
     ];
-    const before = msgs.length;
-    foldWorkingWithSummary(msgs, 'SUMMARY', 5);
-    // head(2 system) + 1 summary + tail(5) = 8
-    expect(msgs.length).toBe(8);
-    expect(msgs[0].content).toBe('sys1');
-    expect(msgs[1].content).toBe('sys2');
-    expect((msgs[2] as any).role).toBe('system');
-    expect(msgs[2].content).toContain('SUMMARY');
-    // tail preserved (last 5 of original)
-    expect(msgs[msgs.length - 1].content).toBe(`m19`);
-    expect(before).toBe(22);
+    const perMsg = estimateMessageTokens(msgs[1]);
+    const r = compactionRange(msgs, perMsg * 4)!;
+    expect(r.head).toBe(1);
+    // 保留最后 4 条(累计恰好 ≥ 预算处)→ 切点 = 倒数第 4 条
+    expect(r.cut).toBe(msgs.length - 4);
+    expect(msgs.slice(r.cut).map((m) => String(m.content).slice(0, 3))).toEqual(['m16', 'm17', 'm18', 'm19']);
   });
 
-  it('no-op when too short to fold', () => {
-    const msgs: ChatMessage[] = [mk('system', 's'), mk('user', 'a'), mk('assistant', 'b')];
-    const copy = msgs.map((m) => ({ ...m }));
-    foldWorkingWithSummary(msgs, 'SUMMARY', 12);
-    expect(msgs).toEqual(copy);
-  });
-
-  it('折叠边界落在 tool 结果批次中间:回退到该批次的 assistant,绝不产出孤立 role:tool', () => {
+  it('切点落在 tool 结果批次里 → 前移到批次后的下一条非 tool 消息(整批进摘要)', () => {
     const msgs: ChatMessage[] = [
       mk('system', 's'),
-      ...Array.from({ length: 10 }, (_, i) => mk(i % 2 ? 'assistant' : 'user', `m${i}`)),
-      { role: 'assistant', content: '', tool_calls: [{ id: 't1' }] } as any,
-      ...Array.from({ length: 6 }, (_, i) => ({ role: 'tool', content: `r${i}`, tool_call_id: `t${i}` }) as any),
-      mk('assistant', 'final'),
+      ...Array.from({ length: 6 }, (_, i) => mk(i % 2 ? 'assistant' : 'user', `m${i}`)),
+      { role: 'assistant', content: '', tool_calls: [{ id: 't1' }, { id: 't2' }] } as any,
+      { role: 'tool', content: 'r1 ' + 'x'.repeat(400), tool_call_id: 't1' } as any,
+      { role: 'tool', content: 'r2 ' + 'x'.repeat(400), tool_call_id: 't2' } as any,
+      mk('assistant', 'after batch'),
+      mk('user', 'next question'),
     ];
-    // 总长 19;名义边界 19-4=15 落在 tool 批次(12..17)→ 回退到 11(带 tool_calls 的 assistant)
-    foldWorkingWithSummary(msgs, 'S', 4);
-    expect(msgs.length).toBe(10); // head(1) + summary(1) + [assistant+6 tool+final](8)
-    const roles = msgs.map((m: any) => m.role);
-    const firstTool = roles.indexOf('tool');
-    expect(firstTool).toBeGreaterThan(0);
-    expect((msgs[firstTool - 1] as any).tool_calls).toBeTruthy(); // 第一条 tool 前必是它的 assistant
+    const tail2 = estimateMessageTokens(msgs[msgs.length - 1]) + estimateMessageTokens(msgs[msgs.length - 2]);
+    const r = compactionRange(msgs, tail2 + 1)!; // 名义切点会落在 r2 上
+    expect((msgs[r.cut] as any).role).toBe('assistant');
+    expect(msgs[r.cut].content).toBe('after batch');
+    expect(msgs.slice(r.head, r.cut).filter((m) => m.role === 'tool')).toHaveLength(2);
   });
 
-  it('handles no leading system block', () => {
-    const msgs: ChatMessage[] = Array.from({ length: 30 }, (_, i) => mk(i % 2 ? 'assistant' : 'user', `m${i}`));
-    foldWorkingWithSummary(msgs, 'S', 4);
-    expect((msgs[0] as any).role).toBe('system'); // summary at front
-    expect(msgs.length).toBe(5); // summary + tail(4)
+  it('对话以一批工具结果收尾(run 内最常见)→ 退到发起这批调用的 assistant,整批原样保留', () => {
+    const msgs: ChatMessage[] = [
+      mk('system', 's'),
+      ...Array.from({ length: 6 }, (_, i) => mk(i % 2 ? 'assistant' : 'user', `m${i}`)),
+      { role: 'assistant', content: 'calling', tool_calls: [{ id: 'a' }, { id: 'b' }] } as any,
+      { role: 'tool', content: 'a result', tool_call_id: 'a' } as any,
+      { role: 'tool', content: 'b result', tool_call_id: 'b' } as any,
+    ];
+    const r = compactionRange(msgs, 5)!; // 预算小到最后一条 tool 就够
+    expect(msgs[r.cut].content).toBe('calling');
+    expect(msgs.slice(r.cut).map((m: any) => m.tool_call_id)).toEqual([undefined, 'a', 'b']);
   });
 
-  it('摘要头带连续性契约(压缩点不重做已完成工作)', () => {
-    const msgs: ChatMessage[] = Array.from({ length: 30 }, (_, i) => mk(i % 2 ? 'assistant' : 'user', `m${i}`));
-    foldWorkingWithSummary(msgs, 'S', 4);
-    expect(msgs[0].content).toContain('do not restart the task or redo finished work');
+  it('全部都在保留预算内 / 只有摘要 / 太短 → null', () => {
+    const short: ChatMessage[] = [mk('system', 's'), mk('user', 'a'), mk('assistant', 'b')];
+    expect(compactionRange(short, 20_000)).toBeNull();
+    expect(compactionRange([mk('system', 's'), summaryMessage('prev'), mk('user', 'a')], 0)).toBeNull();
+    expect(compactionRange([mk('system', 's')], 0)).toBeNull();
+  });
+
+  it('上一份摘要在范围内(增量更新),head 仍只跳过注入的 system 块', () => {
+    const msgs: ChatMessage[] = [
+      mk('system', 'sys'), summaryMessage('prev'),
+      ...Array.from({ length: 10 }, (_, i) => mk(i % 2 ? 'assistant' : 'user', `m${i} ` + 'x'.repeat(40))),
+    ];
+    const r = compactionRange(msgs, estimateMessageTokens(msgs[2]) * 2)!;
+    expect(r.head).toBe(1);
+    expect(isSummaryMessage(msgs[r.head])).toBe(true);
+    expect(r.cut).toBe(msgs.length - 2);
+  });
+});
+
+describe('buildTranscript — pi 式行格式;[Existing Summary] 永不被截,超预算从最旧丢并留标记', () => {
+  const fresh = (): FileOps => ({ read: new Set(), modified: new Set() });
+
+  it('user / assistant / tool calls / tool result 各有标签;结果只留头尾;上一摘要剥掉头与文件块后进 [Existing Summary]', () => {
+    const ops = fresh();
+    const msgs: ChatMessage[] = [
+      summaryMessage('PREV-GOAL keep-me' + formatFileOps({ read: new Set(['old.ts']), modified: new Set() })),
+      mk('user', 'ORIGINAL_GOAL'),
+      { role: 'assistant', content: 'Changing', tool_calls: [{ id: 'e1', type: 'function', function: { name: 'edit_file', arguments: '{"path":"src/p.ts","old_string":"a","new_string":"b"}' } }] } as any,
+      { role: 'tool', tool_call_id: 'e1', content: 'HEAD-' + 'x'.repeat(10_000) + '-TAIL' } as any,
+    ];
+    const t = buildTranscript(msgs, ops, 100_000);
+    expect(t.incremental).toBe(true);
+    expect(t.text.startsWith('[Existing Summary]\nPREV-GOAL keep-me\n\n[New Conversation]\n')).toBe(true);
+    expect(t.text).not.toContain('<file-operations>');
+    expect(t.text).not.toContain('## Compacted Summary');
+    expect(t.text).toContain('[User]\nORIGINAL_GOAL');
+    expect(t.text).toContain('[Assistant]\nChanging');
+    expect(t.text).toContain('[Assistant tool calls]\nedit_file({"path":"src/p.ts"');
+    expect(t.text).toContain('[Tool result: edit_file]\nHEAD-');
+    expect(t.text).toContain('chars omitted');
+    expect(t.text).toContain('-TAIL');
+    expect(t.text).not.toContain('JSON.stringify');
+    expect([...ops.read]).toEqual(['old.ts']);
+    expect([...ops.modified]).toEqual(['src/p.ts']);
+  });
+
+  it('超预算:只丢新对话最旧的条目并标记条数,上一摘要与最新条目完整保留', () => {
+    const msgs: ChatMessage[] = [
+      summaryMessage('PREV keep'),
+      ...Array.from({ length: 400 }, (_, i) => mk(i % 2 ? 'assistant' : 'user', `m${i} ` + 'x'.repeat(200))),
+    ];
+    const t = buildTranscript(msgs, fresh(), 6_000);
+    expect(t.omitted).toBeGreaterThan(0);
+    expect(t.text.startsWith('[Existing Summary]\nPREV keep')).toBe(true);
+    expect(t.text).toContain('earlier entries omitted');
+    expect(t.text).toContain('m399 ');
+    expect(t.text).not.toContain('[User]\nm0 ');
+    const short = buildTranscript([mk('user', 'hi'), mk('assistant', 'yo')], fresh(), 100);
+    expect(short.text).toBe('[User]\nhi\n\n[Assistant]\nyo');
+    expect(short.omitted).toBe(0);
+  });
+
+  it('图片等非文本 part 转成占位,注入的 system 块不转写', () => {
+    const msgs: ChatMessage[] = [
+      mk('system', 'injected instructions'),
+      { role: 'user', content: [{ type: 'text', text: 'look' }, { type: 'image_url', image_url: { url: 'data:...' } }] } as any,
+    ];
+    const t = buildTranscript(msgs, fresh(), 10_000);
+    expect(t.text).toBe('[User]\nlook\n[image_url omitted; inspect the original artifact if needed]');
+  });
+});
+
+describe('rowCoverage — 检查点对某一行的覆盖状态(hydrate 与 compactSession 同一把尺)', () => {
+  it('无检查点全部 uncovered;边界行按 id 认:更早覆盖、同一毫秒的邻行原样回放、行内切点 partial', () => {
+    expect(rowCoverage({ id: 'a', timestamp: 5 }, null)).toBe('uncovered');
+    const cp = { id: 'c', summary: 's', throughTimestamp: 10, throughMessageId: 'x', throughToolCallId: 't3' };
+    expect(rowCoverage({ id: 'a', timestamp: 9 }, cp)).toBe('covered');
+    expect(rowCoverage({ id: 'a', timestamp: 10 }, cp)).toBe('uncovered'); // 同一毫秒的邻行:重复安全,吞掉才丢数据
+    expect(rowCoverage({ id: 'b', timestamp: 11 }, cp)).toBe('uncovered');
+    expect(rowCoverage({ id: 'x', timestamp: 10 }, cp)).toBe('partial');
+    expect(rowCoverage({ id: 'x', timestamp: 10 }, { ...cp, throughToolCallId: undefined })).toBe('covered');
+  });
+  it('时间戳缺失 / 非法 → uncovered(未知不是「最早」);老检查点(无行 id)维持 <= 语义', () => {
+    const cp = { id: 'c', summary: 's', throughTimestamp: 10, throughMessageId: 'x' };
+    expect(rowCoverage({ id: 'a' }, cp)).toBe('uncovered');
+    expect(rowCoverage({ id: 'a', timestamp: 0 }, cp)).toBe('uncovered');
+    expect(rowCoverage({ id: 'a', timestamp: Number.NaN }, cp)).toBe('uncovered');
+    const legacy = { id: 'c', summary: 's', throughTimestamp: 10 };
+    expect(rowCoverage({ id: 'a', timestamp: 10 }, legacy)).toBe('covered');
+    expect(rowCoverage({ id: 'a', timestamp: 11 }, legacy)).toBe('uncovered');
+    expect(rowCoverage({ id: 'a' }, legacy)).toBe('uncovered');
+  });
+});
+
+describe('summaryMessage — run 内与 hydrate 同一构造器,带连续性契约', () => {
+  it('头 + 连续性一句 + 摘要;isSummaryMessage 只认这个头', () => {
+    const m = summaryMessage('## Goal\nfoo');
+    expect(m.role).toBe('system');
+    const text = String(m.content);
+    expect(text).toContain('do not restart the task or redo finished work');
+    expect(text.endsWith('## Goal\nfoo')).toBe(true);
+    expect(isSummaryMessage(m)).toBe(true);
+    expect(isSummaryMessage(mk('system', 'other'))).toBe(false);
+    expect(isSummaryMessage(mk('user', text))).toBe(false);
   });
 });
 
@@ -130,31 +227,22 @@ describe('文件操作机械追踪(借 pi:清单正确性与摘要模型脱钩)'
   });
 });
 
-describe('compactSystemPrompt — 增量压缩 PRESERVE/UPDATE 指令(借 pi,07-30 二轮)', () => {
-  it('无上一检查点:基础骨架,不带增量指令;有:附 UPDATE/preserve 指令', async () => {
-    const { compactSystemPrompt } = await import('./compaction.js');
+describe('compactSystemPrompt — 增量 PRESERVE/UPDATE 指令 + 可配指令 / 关注点', () => {
+  it('无上一检查点:基础骨架,不带增量指令;有:附 UPDATE/preserve 指令;Goal 段要求逐字引用当前请求', () => {
     const base = compactSystemPrompt(false);
     expect(base).toContain('## In progress / Next steps');
+    expect(base).toContain('quoting the user\'s current request verbatim');
     expect(base).not.toContain('[Existing Summary]');
     const inc = compactSystemPrompt(true);
     expect(inc.startsWith(base)).toBe(true); // 基础骨架逐字节不动,只在尾部附加
     expect(inc).toContain('UPDATE it instead of restarting');
     expect(inc).toContain('preserve every still-relevant fact');
   });
-});
-
-describe('buildCompactTranscript — 增量压缩上一检查点永不被截(Codex 评审 #7)', () => {
-  it('新对话超长:只截其尾部,[Existing Summary] 完整保留在头', async () => {
-    const { buildCompactTranscript } = await import('./compaction.js');
-    const prev = 'PREV-GOAL keep-me';
-    const convo = Array.from({ length: 4000 }, (_, i) => `User: m${i} ` + 'x'.repeat(20)).join('\n'); // >100k
-    const t = buildCompactTranscript(prev, convo);
-    expect(t.startsWith('[Existing Summary]\nPREV-GOAL keep-me')).toBe(true);
-    expect(t).toContain('[New Conversation]');
-    expect(t).toContain('m3999 ');       // 新对话尾部在
-    expect(t).not.toContain('m0 ');      // 头部被预算截掉的是新对话,不是检查点
-    expect(t.length).toBeLessThanOrEqual(60_000 + 200);
-    // 无上一检查点:不加块头,原样(短的不截)
-    expect(buildCompactTranscript('', 'User: hi\nAI: yo')).toBe('User: hi\nAI: yo');
+  it('settings.prompt 整体替换基础指令;instructions 与 /compact <focus> 一起进 Additional focus', () => {
+    const p = compactSystemPrompt(true, { prompt: 'CUSTOM BASE', instructions: 'always keep ticket ids' }, 'focus on the migration');
+    expect(p.startsWith('CUSTOM BASE')).toBe(true);
+    expect(p).toContain('UPDATE it instead of restarting');
+    expect(p).toContain('Additional focus: always keep ticket ids\nfocus on the migration');
+    expect(compactSystemPrompt(false, {}, '')).not.toContain('Additional focus');
   });
 });

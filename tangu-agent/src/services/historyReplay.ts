@@ -32,6 +32,7 @@
  *    **只会假不匹配,不会假匹配**(静态有标记的 Codex/Anthropic 直连两侧恒相等),所以是丢优化不是丢正确性;
  *    真要救它,得把 tuneOpenAiDirectPayload 在 hydrate 前对着空 payload 探一次,别在这里手抄一份 viaResponses 判据。 */
 import type { ChatMessage, ToolCall } from '../core/types.js';
+import { deps } from '../seams/runtime.js';
 import { capToolResult, capHistoryContent } from './contextBudget.js';
 
 /** 落库到 agent_steps.llm_response 的 outputItems 字节硬帽。超帽**整组丢弃**并留标记(而不是存半组):
@@ -131,6 +132,36 @@ export interface ReplayStep {
   toolCalls?: unknown;
 }
 
+/**
+ * B3(Token/缓存评审 §五):取窗口内各 assistant 消息背后的 agent_steps,供 replayAssistantHistory
+ * 重建在线时的 assistant→tool→assistant 交错(扁平回放会让下个 run 的缓存前缀在 run 边界就分叉)。
+ * 只多一次查询(每 run 一次,不在迭代热路径),且不取 tool_results —— 结果从消息行本身拿。
+ * 任何失败 / 未实现(thin worker 无此端点 / 单测桩没有 state)→ 空 Map → 回放退回扁平形态。
+ * hydrate 与 compactSession 共用(09-15 起手动压缩也按同一形态转写)。
+ */
+export async function loadReplaySteps(
+  sessionId: string,
+  rows: Array<{ id: string; role: string }>,
+): Promise<Map<string, ReplayStep[]>> {
+  const map = new Map<string, ReplayStep[]>();
+  const state = deps().state;
+  const load = state?.listStepsForMessages;
+  const ids = rows.filter((r) => r.role === 'model' || r.role === 'assistant').map((r) => r.id);
+  if (!load || !ids.length) return map;
+  try {
+    for (const s of await load.call(state, sessionId, ids)) {
+      const list = map.get(s.messageId);
+      const step: ReplayStep = { stepNo: s.stepNo, llmResponse: s.llmResponse, toolCalls: s.toolCalls };
+      if (list) list.push(step);
+      else map.set(s.messageId, [step]);
+    }
+  } catch (e: any) {
+    console.warn('[agent-core] 分步回放读取失败,本次回退扁平回放:', e?.message || e);
+    return new Map();
+  }
+  return map;
+}
+
 function sanitizeCalls(value: unknown): ToolCall[] {
   const calls: ToolCall[] = [];
   const ids = new Set<string>();
@@ -205,6 +236,36 @@ export function replayAssistantHistory(
     { role: 'assistant', content, tool_calls: calls },
     ...calls.map((c) => flatToolMessage(c, results)),
   ];
+}
+
+/**
+ * 压缩检查点的行内切点(09-15):同一 assistant 行里,`toolCallId` 这个调用(含它之前的全部轮次)
+ * 已被摘要覆盖,只回放其后的工具轮。对 replayAssistantHistory 的产物操作,两种形态都吃:
+ *  - 交错形态:切点总落在某轮的最后一个调用(压缩范围从不拆批次)→ 丢掉该轮及之前的整轮。
+ *  - 扁平形态:整行调用都挂在一条 assistant 上 → 改写成只带剩余调用的 assistant(正文原样保留,
+ *    providerItems 丢弃 —— Responses 会按 items 整组替代,留着就把已丢的 function_call 灌回去、
+ *    对应 output 又没了,上游 400)。
+ * 三种情况**整行原样回放**(重复是安全的,多丢才是事故):切点 id 找不到、id 在本行出现 ≠1 次
+ * (文本兜底的 call_fb_0 跨轮重名)、切点后没有任何东西可保留却又不是行尾。
+ */
+export function dropCoveredCalls(messages: ChatMessage[], toolCallId: string): ChatMessage[] {
+  if (!toolCallId) return messages;
+  let seen = 0;
+  for (const m of messages) for (const c of (m as any).tool_calls || []) if (c?.id === toolCallId) seen++;
+  if (seen !== 1) return messages;
+  const resultIdx = messages.findIndex((m) => m.role === 'tool' && (m as any).tool_call_id === toolCallId);
+  if (resultIdx < 0) return messages;
+  let ownerIdx = -1;
+  for (let i = resultIdx - 1; i >= 0; i--) {
+    if (messages[i].role === 'assistant' && ((messages[i] as any).tool_calls || []).some((c: any) => c?.id === toolCallId)) { ownerIdx = i; break; }
+  }
+  if (ownerIdx < 0) return messages;
+  const calls: ToolCall[] = (messages[ownerIdx] as any).tool_calls;
+  const remaining = calls.slice(calls.findIndex((c) => c.id === toolCallId) + 1);
+  const out: ChatMessage[] = [];
+  if (remaining.length) out.push({ role: 'assistant', content: messages[ownerIdx].content, tool_calls: remaining } as ChatMessage);
+  out.push(...messages.slice(resultIdx + 1));
+  return out;
 }
 
 /** 重建交错;三道闸任一不过返回 null(调用方退回扁平)。 */

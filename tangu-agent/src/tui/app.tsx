@@ -11,6 +11,7 @@ import { createRun } from '../services/runStore.js';
 import { enqueueRun, abortRun } from '../services/agentLoop.js';
 import { subscribe } from '../services/eventBus.js';
 import { compactSession } from '../services/compaction.js';
+import { resolveCompactionSettings, globalCompactionLayer } from '../services/compactionSettings.js';
 import { branchSession } from '../services/sessionBranch.js';
 import { modelContextWindow } from '../services/contextBudget.js';
 import { listAgents, getAgent, saveAgent, deleteAgent } from '../agents/agentRegistry.js';
@@ -872,8 +873,14 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
           notice('有运行中的任务，待其结束后再压缩。', 'warn');
           return;
         }
-        notice('正在压缩上下文…');
-        void compactSession(sessionIdRef.current, cfgRef.current.model)
+        notice(rest ? `正在压缩上下文(关注:${rest})…` : '正在压缩上下文…');
+        // 旋钮与自动压缩同一契约:当前 Agent 的 [compaction] 表 > config.json > 缺省
+        void (async () => {
+          const def = cfgRef.current.activeAgentSlug ? await getAgent(cfgRef.current.activeAgentSlug).catch(() => null) : null;
+          return compactSession(sessionIdRef.current, cfgRef.current.model, 'tangu', undefined, {
+            focus: rest || undefined, settings: resolveCompactionSettings(def?.compaction, globalCompactionLayer()),
+          });
+        })()
           .then((r) =>
             r.ok
               ? notice(`已压缩：折叠 ${r.summarizedCount ?? 0} 条消息为摘要，后续对话从此精简续接。`)

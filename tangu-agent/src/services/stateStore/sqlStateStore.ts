@@ -163,15 +163,18 @@ export function createSqlStateStore(): StateStore {
       );
     },
     async insertUserMessage(m) {
-      await query(
+      const inserted = await query<any[]>(
         `INSERT INTO chat_messages (id, session_id, role, content, timestamp, model_id, is_error, attachments)
          VALUES (?, ?, 'user', ?, ?, ?, FALSE, ?)
-         ON CONFLICT (id) DO NOTHING`,
+         ON CONFLICT (id) DO NOTHING
+         RETURNING id`,
         [
           m.id, m.sessionId, m.content, m.timestamp ?? Date.now(), m.modelId,
           Array.isArray(m.attachments) && m.attachments.length ? JSON.stringify(m.attachments) : null,
         ],
       );
+      // 会话活动只随**新**消息推进:恢复/重试把同一 message id 再写一遍时不冒充新活动。
+      if (inserted.length) await query(`UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [m.sessionId]).catch(() => {});
     },
     async finalizeAssistantMessage(m: FinalizeMessageInput) {
       const displayFiles = Array.isArray(m.displayFiles) && m.displayFiles.length ? JSON.stringify(m.displayFiles) : null;

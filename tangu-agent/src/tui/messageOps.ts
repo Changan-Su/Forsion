@@ -3,6 +3,7 @@
  * 而消息编辑/删除本就是 standalone/TUI 的宿主功能）。抽成模块以便真 sqlite 单测。
  */
 import { query } from '../core/db.js';
+import { bumpHistoryRevision } from '../services/historyRevision.js';
 import type { TranscriptItem } from './types.js';
 
 /** 最近一条 user 消息内容（无则 null）。供 /edit 取初值。 */
@@ -25,6 +26,7 @@ export async function deleteLastExchange(sessionId: string): Promise<string | nu
   );
   if (!rows.length) return null;
   await query(`DELETE FROM chat_messages WHERE session_id = ? AND timestamp >= ?`, [sessionId, rows[0].timestamp]);
+  bumpHistoryRevision(sessionId); // 在飞的后台摘要落库前复核版本 → 基于已删消息的结果作废
   return String(rows[0].content ?? '');
 }
 

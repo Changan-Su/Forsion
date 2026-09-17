@@ -46,6 +46,14 @@ describe('loadSubAgentSkills(具名子代理技能面)', () => {
     expect(out!.enabledSkillIds).not.toContain('local:bb-video');
   });
 
+  it('显式卸下全部技能在委派路径也生效', async () => {
+    writeFileSync(path.join(home, 'agents', 'bluebird', 'config.toml'), 'name = "Bluebird"\nenabled_skill_ids = []\n');
+    const { loadSubAgentSkills } = await import('./subAgent.js');
+    const out = await loadSubAgentSkills('bluebird', { userId: 'u', appId: 'tangu', execMode: 'host' } as any);
+    expect(out!.enabledSkillIds).toEqual([]);
+    expect(out!.sections.join('\n')).not.toContain('bb-video');
+  });
+
   it('runWithAgentSlug 第三参:记忆作用域与展示/技能身份可分开', async () => {
     const rc = await import('../seams/runContext.js');
     await rc.runWithAgentSlug('DEFAULT', async () => {

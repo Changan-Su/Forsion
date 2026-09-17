@@ -17,16 +17,16 @@ describe('createEngineEventTranslator', () => {
     const t = createEngineEventTranslator('sub-1');
     expect(t('tool_call', { id: 'c1', name: 'read_file', arguments: '{"path":"a.ts"}' })).toBeNull();
     expect(t('tool_result', { id: 'c1', name: 'read_file', result: 'contents', isError: false })).toEqual({
-      phase: 'tool', subId: 'sub-1', name: 'read_file', args: '{"path":"a.ts"}', isError: false, preview: 'contents',
+      phase: 'tool', subId: 'sub-1', id: 'c1', name: 'read_file', args: '{"path":"a.ts"}', isError: false, preview: 'contents',
     });
   });
 
-  it('对象形态的 arguments 序列化;结果与参数各自截断到 400', () => {
+  it('对象形态的 arguments 序列化;保留完整结果与参数供子会话阅读', () => {
     const t = createEngineEventTranslator('s');
     t('tool_call', { id: 'c1', name: 'x', arguments: { a: 1 } });
     const ev = t('tool_result', { id: 'c1', name: 'x', result: 'y'.repeat(1000) })!;
     expect(ev.args).toBe('{"a":1}');
-    expect(ev.preview).toHaveLength(400);
+    expect(ev.preview).toHaveLength(1000);
   });
 
   it('没配对的 tool_result 也出事件(args 空),且参数用后即清不串到下一次', () => {
@@ -67,7 +67,8 @@ function setup(opts: { engines?: FakeEngine[]; run?: (ctx: any) => any } = {}) {
     profile,
     brain: stub,
     store: stub,
-    state: { appendEvent: async (_r: string, type: string, payload: any) => { events.push({ type, payload }); return events.length; }, drain: async () => {} } as any,
+    host: { query: async () => [] },
+    state: { insertUserMessage: async () => {}, finalizeAssistantMessage: async () => {}, appendEvent: async (_r: string, type: string, payload: any) => { events.push({ type, payload }); return events.length; }, drain: async () => {} } as any,
     ...(engines ? {
       engines: {
         list: () => engines.map((e) => ({ id: e.id, name: e.name, available: e.available, status: e.available ? 'available' : 'not-installed' })),
@@ -124,7 +125,9 @@ describe('引擎子代理', () => {
 
     expect(out).toBe('the report');
     expect(runCalls).toHaveLength(1);
-    expect(runCalls[0]).toMatchObject({ engineId: 'codex', sessionId: 's', userId: 'u', cwd: '/work' });
+    expect(runCalls[0].sessionId).not.toBe('s');
+    expect(events.find((e) => e.type === 'subchat')?.payload.sessionId).toBe(runCalls[0].sessionId);
+    expect(runCalls[0]).toMatchObject({ engineId: 'codex', userId: 'u', cwd: '/work' });
     // ACP 无 system 位:子代理契约必须随正文一起过去,否则外部 agent 不知道要交自洽终稿
     expect(runCalls[0].message).toContain('audit the parser');
     expect(runCalls[0].message).toContain('self-contained final report');

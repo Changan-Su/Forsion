@@ -35,9 +35,9 @@ export async function loadSkillLoadout(
 ): Promise<SkillLoadout> {
   // chat 预设:用户可扩展技能体系整体不在(方案 D23)——目录段不注、use_skill 不暴露(工具面由 core/presetTable 硬闸拒)。
   if (!presetOf(agentConfig?.preset).skills) return { enabledSkillIds: [], sections: [], requested: [] };
-  // 显式技能集须为「非空数组」才算数:空数组([])按「未配置」处理,避免某轮 agentConfig 漏带或传空
+  // 旧客户端的空数组([])按「未配置」处理;skillsConfigured=true 则允许显式卸下全部技能。避免旧客户端传空
   // 列表时把整段技能从 system prompt 抹掉(表现为「装完技能后本轮 agent 不知道有哪些 skills,刷新才好」)。
-  const explicit = Array.isArray(agentConfig.enabledSkillIds) && agentConfig.enabledSkillIds.length > 0;
+  const explicit = Array.isArray(agentConfig.enabledSkillIds) && (agentConfig.enabledSkillIds.length > 0 || agentConfig.skillsConfigured === true);
   let enabledSkillIds: string[] = explicit ? agentConfig.enabledSkillIds : [];
   let inlineSkills: Array<{ name: string; body: string }> = [];
   let deferredSkills: Array<{ id: string; name: string; description: string }> = [];

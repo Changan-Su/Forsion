@@ -3,8 +3,8 @@ import {
   CONTEXT_WINDOW_TOKENS,
   INPUT_HARD_RATIO,
   INPUT_WARN_RATIO,
-  COMPACT_TRIGGER_RATIO,
-  FORCE_COMPACT_RATIO,
+  compactionThreshold,
+  CompactionAttemptGuard,
   modelContextWindow,
   modelContextWindowInfo,
   estimateTokensRough,
@@ -55,11 +55,28 @@ describe('modelContextWindowInfo 来源标注', () => {
   })
 })
 
-describe('modelContextWindow + FORCE_COMPACT_RATIO', () => {
-  it('FORCE_COMPACT_RATIO is 0.95 and above COMPACT_TRIGGER_RATIO', () => {
-    expect(FORCE_COMPACT_RATIO).toBe(0.95);
-    expect(FORCE_COMPACT_RATIO).toBeGreaterThan(COMPACT_TRIGGER_RATIO);
+describe('compactionThreshold — 窗口 − 预留(借 pi reserveTokens 的绝对余量口径)', () => {
+  it('预留 = max(reserveTokens, 5% 窗口):大窗口按比例、中窗口按绝对值', () => {
+    expect(compactionThreshold(272_000, 16_384)).toBe(272_000 - 16_384);
+    expect(compactionThreshold(200_000, 16_384)).toBe(200_000 - 16_384);
+    expect(compactionThreshold(1_000_000, 16_384)).toBe(950_000); // 5% = 50k > 16k
   });
+  it('小窗口:预留封顶在窗口一半,触发线不低于 50%(台架 4k/8k 窗不至于每轮都压)', () => {
+    expect(compactionThreshold(4_000, 16_384)).toBe(2_000);
+    expect(compactionThreshold(8_000, 16_384)).toBe(4_000);
+    expect(compactionThreshold(40_000, 2_048)).toBe(40_000 - 2_048);
+  });
+  it('CompactionAttemptGuard 按触发线判「压缩后仍在高位」', () => {
+    const guard = new CompactionAttemptGuard();
+    guard.record(97_000, 100_000, undefined, 90_000);
+    expect(guard.shouldAttempt(97_000)).toBe(false); // 仍高于线且没涨够 2%
+    expect(guard.shouldAttempt(99_100)).toBe(true);
+    guard.record(50_000, 100_000, undefined, 90_000);
+    expect(guard.shouldAttempt(91_000)).toBe(true); // 压到线下了,下次越线就能再压
+  });
+});
+
+describe('modelContextWindow', () => {
   it('falls back to global default with no override/obj', () => {
     expect(modelContextWindow(undefined)).toBe(CONTEXT_WINDOW_TOKENS);
     expect(modelContextWindow('whatever')).toBe(CONTEXT_WINDOW_TOKENS);
@@ -110,7 +127,6 @@ describe('contextBudget constants', () => {
   it('hold the audited ratios', () => {
     expect(INPUT_HARD_RATIO).toBe(0.5);
     expect(INPUT_WARN_RATIO).toBe(0.25);
-    expect(COMPACT_TRIGGER_RATIO).toBe(0.5);
   });
   it('default context window is 272k when env unset (2026-09-11 起;原 128k 让未收录模型 64k 就折叠)', () => {
     // CI 不设 TANGU_CONTEXT_WINDOW_TOKENS

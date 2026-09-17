@@ -1,5 +1,5 @@
 /**
- * delegate 子代理:在父 run 内开一个独立上下文的小 loop(无 DB 会话、无历史),
+ * delegate 子代理:在父 run 内开一个独立上下文的小 loop,完整记录保存在关联的隐藏子会话中,
  * 把可并行/可隔离的子任务(大范围搜索、批量文件分析)外包出去,只把**结论**带回父上下文,
  * 避免父上下文被中间过程灌爆(对齐 hermes delegate_task / Claude Code Agent tool)。
  *
@@ -16,6 +16,7 @@
  * (claude-code/codex,复用 src/engines 的 ACP 管理器)。借 DSH 的 subagent-provider 思路,但不新建
  * 注册表——engines 管理器本来就是「一 run 一进程」的 provider 目录,这里只是把它接到子代理位上。
  */
+import { createDelegateTranscript } from './delegateTranscript.js';
 import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
@@ -77,8 +78,12 @@ export async function loadSubAgentSkills(
   parentCtx: Pick<ToolContext, 'userId' | 'appId' | 'execMode' | 'preset'>,
 ): Promise<SkillLoadout | null> {
   try {
+    const def = await getAgent(agentSlug);
     return await runWithAgentSlug(agentSlug, () =>
-      loadSkillLoadout(parentCtx.userId, parentCtx.appId, { execMode: parentCtx.execMode, preset: parentCtx.preset }),
+      loadSkillLoadout(parentCtx.userId, parentCtx.appId, {
+        execMode: parentCtx.execMode, preset: parentCtx.preset,
+        ...(def?.enabledSkillIds ? { enabledSkillIds: def.enabledSkillIds, skillsConfigured: true } : {}),
+      }),
     );
   } catch {
     return null;
@@ -184,9 +189,9 @@ export function createEngineEventTranslator(subId: string): (type: string, paylo
         return {
           phase: 'tool', subId,
           name: String(pl.name || ''),
-          args: args.slice(0, 400),
+          id, args,
           isError: !!pl.isError,
-          preview: String(pl.result ?? '').slice(0, 400),
+          preview: String(pl.result ?? ''),
         };
       }
       default:
@@ -211,16 +216,19 @@ async function runEngineSubAgent(p: SubAgentParams, engineId: string): Promise<s
   const subId = uuidv4();
   const label = p.name || engines.list().find((e) => e.id === engineId)?.name || engineId;
   const translate = createEngineEventTranslator(subId);
+  const taskBody = await buildTaskBody(p);
+  const transcript = await createDelegateTranscript(subId, parentCtx, label, p.modelId, taskBody, { engineId, systemPrompt: p.instructions || SUB_SYSTEM_PROMPT });
+  const calls = new Map<string, { name: string; args: string }>();
 
-  void publish(runId, 'subchat', { kind: 'subagent', id: subId, title: label, task: p.task.slice(0, 120) });
+  void publish(runId, 'subchat', { kind: 'subagent', id: subId, sessionId: subId, title: label, task: p.task.slice(0, 120) });
   // grants 在引擎路**恒空**:外部 CLI 跑它自己的工具面,根本不经 Tangu 的 registry/硬闸,授予对它无意义。
   // delegate 已当场拒绝 engine × grantTools 的组合(见 delegate.ts),这里发 `grants: []` + `engine` 标记
   // 是第二道诚实性保证:事件流是审计面,绝不能记下一条从未真正授出去的管理面权限;而 engine 标记让消费者
   // 不必读源码注释就能把两条路分开(此前发的是 p.grantTools 原值,审计上读起来就是「引擎子代理拿到了 manage_*」)。
-  void publish(runId, 'subagent', { phase: 'start', subId, label, task: p.task.slice(0, 200), grants: [], engine: engineId });
+  void publish(runId, 'subagent', { phase: 'start', subId, sessionId: subId, messageId: transcript.messageId, label, task: p.task, grants: [], engine: engineId });
 
   // ACP 无 system 提示位:子代理契约与内联人设一并前置进 prompt 正文。
-  const message = [p.instructions?.trim(), SUB_SYSTEM_PROMPT, await buildTaskBody(p)]
+  const message = [p.instructions?.trim(), SUB_SYSTEM_PROMPT, taskBody]
     .filter((s): s is string => !!s)
     .join('\n\n---\n\n');
 
@@ -228,7 +236,7 @@ async function runEngineSubAgent(p: SubAgentParams, engineId: string): Promise<s
     const res = await engines.run({
       engineId,
       runId,
-      sessionId: parentCtx.sessionId,
+      sessionId: subId,
       userId: parentCtx.userId,
       modelId: p.modelId,
       message,
@@ -236,15 +244,21 @@ async function runEngineSubAgent(p: SubAgentParams, engineId: string): Promise<s
       // 引擎侧模型不指定 → manager 回落该引擎的默认模型偏好(设置页 Agent CLIs 配的那个)。
       signal: parentCtx.signal ?? new AbortController().signal,
       publish: (type, payload) => {
+        if (type === 'token') transcript.token(String(payload.delta || ''));
+        if (type === 'reasoning') transcript.reasoning(String(payload.delta || ''));
+        if (type === 'tool_call') calls.set(String(payload.id), { name: String(payload.name || ''), args: typeof payload.arguments === 'string' ? payload.arguments : JSON.stringify(payload.arguments || {}) });
+        if (type === 'tool_result') { const call = calls.get(String(payload.id)); transcript.tool(String(payload.id), call?.name || String(payload.name || ''), call?.args || '', String(payload.result || ''), !!payload.isError); }
         const ev = translate(type, payload);
         if (ev) void publish(runId, 'subagent', ev);
       },
       requestApproval: (preview, toolCall) => requestApproval(runId, toolCall, preview, parentCtx.signal),
     });
     const result = (res.content || '(the sub-agent produced no conclusion)').slice(0, SUB_RESULT_CAP);
+    await transcript.finish(res.content);
     void publish(runId, 'subagent', { phase: 'done', subId, resultChars: result.length });
     return result;
   } catch (e) {
+    await transcript.finish().catch(() => {});
     // 失败/中止也要收尾,否则子聊天区那条永远转圈。
     void publish(runId, 'subagent', { phase: 'done', subId, resultChars: 0 });
     throw e;
@@ -331,6 +345,8 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
     // 委派方身份:manage_agent 守卫要连它一起保护(具名子代理在自己的 ALS 里跑,父代理会变成「别人」)。
     subAgentDelegator: parentCtx.subAgentDelegator || parentCtx.agentSlug || currentAgentSlug(),
     customTools: subCustomTools,
+    ...(def?.toolsMode ? { toolsMode: def.toolsMode, toolsList: def.toolsList || [] } : {}),
+    ...(def?.enabledMcpServers ? { mcpTools: new Map([...(parentCtx.mcpTools || [])].filter(([, tool]) => def.enabledMcpServers!.includes(tool.serverName))) } : {}),
     // 具名 agent 的可用技能集(use_skill 按 ctx.enabledSkillIds 鉴权);未装载则继承父。
     ...(skills ? { enabledSkillIds: skills.enabledSkillIds } : {}),
     unlockedTools: subUnlocked,
@@ -383,17 +399,22 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   ];
 
   const label = def?.name || p.name || 'Subagent';
+  const transcript = await createDelegateTranscript(subId, parentCtx, label, effModelId, String(messages[1].content), {
+    agentSlug: p.agentSlug || parentCtx.agentSlug || currentAgentSlug(), systemPrompt: persona || SUB_SYSTEM_PROMPT,
+    subAgentGrants: [...grants],
+  });
   if (runId) {
     // 向父 run 流宣告一个「子聊天」(子代理),前端据此在子聊天区建一个可切换条目。
-    void publish(runId, 'subchat', { kind: 'subagent', id: subId, title: label, task: p.task.slice(0, 120) });
+    void publish(runId, 'subchat', { kind: 'subagent', id: subId, sessionId: subId, title: label, task: p.task.slice(0, 120) });
     // grants:本次委派授予了哪些管理工具 —— 审计面(UI / live 台架)唯一能看到这件事的地方。
-    void publish(runId, 'subagent', { phase: 'start', subId, label, task: p.task.slice(0, 200), grants: [...grants] });
+    void publish(runId, 'subagent', { phase: 'start', subId, sessionId: subId, messageId: transcript.messageId, label, task: p.task, grants: [...grants] });
   }
 
   let finalContent = '';
   let lastTool: { name: string; isError: boolean; preview: string } | null = null;
   let pendingCall: string | null = null;
   let hitCap = false;
+  try {
   for (let iteration = 0; iteration < SUB_MAX_ITERATIONS; iteration++) {
     if (parentCtx.signal?.aborted) throw new Error('aborted');
     if (subDefsDirty) { toolDefs = getToolDefinitions(subCtx); subDefsDirty = false; } // load_tools 解锁生效
@@ -423,8 +444,8 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       provider: (model as any)?.provider,
       signal: parentCtx.signal,
       // 流式回灌子聊天区(tag subId);主聊天不渲染 `subagent` 事件,故不会串进主气泡。
-      onToken: (d) => { if (runId) void publish(runId, 'subagent', { phase: 'token', subId, delta: d }); },
-      onReasoning: (d) => { if (runId) void publish(runId, 'subagent', { phase: 'reasoning', subId, delta: d }); },
+      onToken: (d) => { transcript.token(d); if (runId) void publish(runId, 'subagent', { phase: 'token', subId, delta: d }); },
+      onReasoning: (d) => { transcript.reasoning(d); if (runId) void publish(runId, 'subagent', { phase: 'reasoning', subId, delta: d }); },
       onToolCallDelta: (info) => {
         if (info.argsDelta && runId) void publish(runId, 'subagent', { phase: 'tool_stream', subId, id: info.id, name: info.name, delta: info.argsDelta });
       },
@@ -529,19 +550,28 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
           phase: 'tool',
           subId,
           name: call.function.name,
-          args: (call.function.arguments || '').slice(0, 400),
+          id: call.id,
+          args: call.function.arguments || '',
           isError,
-          preview: content.slice(0, 400),
+          preview: content,
         });
       }
+      transcript.tool(call.id, call.function.name, call.function.arguments || '', content, isError);
+      await transcript.save();
       lastTool = { name: call.function.name, isError, preview: content.slice(0, 600) };
       messages.push({ role: 'tool', content, tool_call_id: call.id } as ChatMessage);
     }
   }
 
   const result = (finalContent || exhaustedReport(lastTool, pendingCall, hitCap)).slice(0, SUB_RESULT_CAP);
+  await transcript.finish(finalContent || result);
   if (runId) void publish(runId, 'subagent', { phase: 'done', subId, resultChars: result.length });
   return result;
+  } catch (error) {
+    await transcript.finish().catch(() => {});
+    if (runId) void publish(runId, 'subagent', { phase: 'done', subId, error: String(error), resultChars: 0 });
+    throw error;
+  }
 }
 
 /** 没拿到结论时交回**发生过什么**,而不是一句空话:父代理据此决定接手还是换路。导出仅为测试。 */

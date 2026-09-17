@@ -331,3 +331,46 @@ describe('providerItems cross the run boundary only for the model and protocol t
     expect((full[0] as any).providerItems).toEqual([reasoning, fc('c1'), fc('c2')]);
   });
 });
+
+describe('dropCoveredCalls — 压缩检查点的行内切点', () => {
+  const tcall = (id: string) => ({ id, type: 'function', function: { name: 'todo_read', arguments: '{}' } });
+  it('交错形态:切点在某轮最后一个调用 → 丢掉该轮及之前的整轮,其后原样', async () => {
+    const { dropCoveredCalls } = await import('./historyReplay.js');
+    const msgs: any[] = [
+      { role: 'assistant', content: 'turn1', tool_calls: [tcall('a')], providerItems: [{ type: 'function_call', call_id: 'a' }] },
+      { role: 'tool', tool_call_id: 'a', content: 'ra' },
+      { role: 'assistant', content: 'turn2', tool_calls: [tcall('b')] },
+      { role: 'tool', tool_call_id: 'b', content: 'rb' },
+      { role: 'assistant', content: 'final' },
+    ];
+    expect(dropCoveredCalls(msgs, 'a')).toEqual(msgs.slice(2));
+    expect(dropCoveredCalls(msgs, 'b')).toEqual([{ role: 'assistant', content: 'final' }]);
+  });
+  it('扁平形态:整行调用挂在一条 assistant 上 → 改写成只带剩余调用(正文保留、providerItems 丢弃)', async () => {
+    const { dropCoveredCalls } = await import('./historyReplay.js');
+    const msgs: any[] = [
+      { role: 'assistant', content: 'all', tool_calls: [tcall('a'), tcall('b'), tcall('c')], providerItems: [{ type: 'function_call', call_id: 'a' }] },
+      { role: 'tool', tool_call_id: 'a', content: 'ra' },
+      { role: 'tool', tool_call_id: 'b', content: 'rb' },
+      { role: 'tool', tool_call_id: 'c', content: 'rc' },
+    ];
+    const out = dropCoveredCalls(msgs, 'b');
+    expect(out).toEqual([
+      { role: 'assistant', content: 'all', tool_calls: [tcall('c')] },
+      { role: 'tool', tool_call_id: 'c', content: 'rc' },
+    ]);
+    expect((out[0] as any).providerItems).toBeUndefined();
+  });
+  it('切点找不到 / id 在行内出现 ≠1 次(call_fb_0 跨轮重名)→ 整行原样回放(重复安全,多丢不安全)', async () => {
+    const { dropCoveredCalls } = await import('./historyReplay.js');
+    const dup: any[] = [
+      { role: 'assistant', content: 't1', tool_calls: [tcall('call_fb_0')] },
+      { role: 'tool', tool_call_id: 'call_fb_0', content: 'r1' },
+      { role: 'assistant', content: 't2', tool_calls: [tcall('call_fb_0')] },
+      { role: 'tool', tool_call_id: 'call_fb_0', content: 'r2' },
+    ];
+    expect(dropCoveredCalls(dup, 'call_fb_0')).toBe(dup);
+    expect(dropCoveredCalls(dup, 'missing')).toBe(dup);
+    expect(dropCoveredCalls(dup, '')).toBe(dup);
+  });
+});

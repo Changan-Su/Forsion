@@ -4,9 +4,11 @@
  *  - estimateTokensRough:CJK 感知的粗估(ASCII ~4 字符/token,非 ASCII ~1 token/字符)。
  *    比 length/4 对中文/二进制垃圾准一个量级——77 万 token 事故的 prompt 用 length/4 会低估 4 倍。
  *  - 入站闸门(对齐 Hermes context_references 的窗口相对预算):估算 > 窗口 50% 拒绝、> 25% 警告。
- *  - compactContext:阈值触发的**一次性批量折叠**(保头 3 + 尾 20,中段定型),幂等——
- *    替代旧 trimStaleToolMessages 的每轮就地改写(那会让前缀缓存逐轮清零,见 2026-06-10 审计)。
- *    平时历史 append-only;只有越过 COMPACT_TRIGGER_RATIO 才折叠一次,缓存 miss 摊薄成偶发。
+ *  - compactionThreshold:LLM 摘要压缩的触发线 = 窗口 − 预留(借 pi reserveTokens 的绝对余量口径,
+ *    不再是 95% 这种比例)。平时历史 append-only;09-15 起**不再有 50% 的机械折叠档**——它每轮改写
+ *    最近 ~20 条之外的消息,前缀缓存从改写点起每轮都断,且在还远没满载时就把工具输出绞成 450 字符,
+ *    对缓存计价的供应商是净亏;单条工具结果的 48k 硬帽已兜住「77 万 token」那类事故。
+ *  - compactContext:机械批量折叠(保头 3 + 尾 20,中段定型),幂等——现在**只作 LLM 摘要失败时的兜底**。
  *  - capToolResult:工具结果入列硬帽,兜底未封顶路径(host list_dir 大目录、custom provider 等)。
  *
  * 模型上下文窗口:见 modelContextWindowInfo 的优先级链 —— 人填的(env 覆盖 / 用户本机 modelOverrides /
@@ -31,6 +33,20 @@ export function pinMessage<T extends object>(m: T): T {
 }
 
 /**
+ * 有损消息(09-15):内容已被机械折叠(compactContext)或 hydrate 时按单条硬帽截断过,与落库原文不再等价。
+ * 压缩边界看到范围里有它就**不落持久检查点**(只留 run 内摘要)—— 否则摘要只见过 450 字符的折叠文本,
+ * 却把整行标成「已覆盖」,原文从此再也回放不到(Codex 09-15 评审 #4/#5)。同 pinMessage:对象身份,不进 wire。
+ */
+const lossyMessages = new WeakSet<object>();
+export function markLossy<T extends object>(m: T): T {
+  if (m) lossyMessages.add(m);
+  return m;
+}
+export function isLossy(m: unknown): boolean {
+  return !!m && typeof m === 'object' && lossyMessages.has(m);
+}
+
+/**
  * 未知模型的窗口兜底。2026-09-11 起 272k(原 128k):主流模型都到 200k+ 了,128k 让每个族表没收录的模型
  * 在 64k 就开始机械折叠。报大了的那一头由 contextWindowStore 兜:撞一次上游溢出就回学到真实上限,只调小。
  */
@@ -43,10 +59,18 @@ export const CONTEXT_WINDOW_TOKENS = (() => {
 export const INPUT_HARD_RATIO = 0.5;
 /** 入站 user 消息:估算超窗口 25% → 放行但发警告事件。 */
 export const INPUT_WARN_RATIO = 0.25;
-/** 真实 prompt 用量(或粗估)超窗口 50% → 触发一次 compactContext(机械折叠安全网)。 */
-export const COMPACT_TRIGGER_RATIO = 0.5;
-/** 实时上下文用量超窗口此比例(0.95) → 强制一次 compactSession(满载兜底,持久化总结)。 */
-export const FORCE_COMPACT_RATIO = 0.95;
+/** 预留至少占窗口的比例:粗估误差 + 下一轮输出 + 摘要本身都要从这里出;1M 窗口按 16k 预留太薄。 */
+const RESERVE_MIN_RATIO = 0.05;
+/**
+ * LLM 摘要压缩的触发线(token):窗口 − max(reserveTokens, 5% 窗口),且不低于窗口一半——
+ * 小窗口(测试台架 4k / 台架故意设的 8k)下预留不能吃掉整个窗口,否则每轮都压。
+ * 272k 窗 → 255.6k;200k → 183.6k;1M → 950k;4k → 2k。
+ */
+export function compactionThreshold(windowTokens: number, reserveTokens: number): number {
+  const w = Math.max(0, Math.floor(windowTokens));
+  const reserve = Math.min(Math.max(Math.floor(reserveTokens) || 0, Math.ceil(w * RESERVE_MIN_RATIO)), Math.floor(w / 2));
+  return w - reserve;
+}
 
 /**
  * 已知模型族的窗口兜底(input 预算口径,保守值):模型对象没带 context_window 时按 id 匹配。
@@ -146,7 +170,7 @@ const TOOL_RESULT_MAX_CHARS = 48_000;
 const TOOL_RESULT_HEAD = 34_000;
 const TOOL_RESULT_TAIL = 12_000;
 /** 历史单条消息硬帽:与工具结果帽解耦,维持 100k(与 host read_file 上限对齐)。 */
-const HISTORY_MSG_MAX_CHARS = 100_000;
+export const HISTORY_MSG_MAX_CHARS = 100_000;
 
 /** CJK 感知粗估:ASCII ≈4 字符/token,其余(CJK/二进制替换符)≈1 token/字符。 */
 export function estimateTokensRough(text: string): number {
@@ -223,11 +247,23 @@ export class ContextUsageTracker {
 
   invalidate(): void { this.baseline = undefined; }
 
-  estimate(messages: ChatMessage[]): number {
+  /** 实测口径的用量(基准前缀仍完整时 = 上次 prompt_tokens + 之后新增的粗估);没有可用基准 → undefined。
+   *  与 estimate 的区别:这里绝不拿纯粗估冒充实测 —— 压缩时按「实测/粗估」换算保留预算,粗估冒充会把
+   *  固定的工具头当成消息膨胀比例(Codex 09-15 评审 #9)。 */
+  measured(messages: ChatMessage[]): number | undefined {
+    const base = this.baseline;
+    if (!base || messages.length < base.prefix.length || base.prefix.some((p, i) =>
+      p.message !== messages[i] || p.estimate !== estimateMessageTokens(messages[i]))) return undefined;
+    return base.tokens + estimateMessagesTokens(messages.slice(base.prefix.length));
+  }
+
+  /** roughExtra:没有可用实测基准、只能粗估时额外计入的开销(工具定义头 —— 它在 prompt_tokens 里、不在消息里;
+   *  run 首轮的触发判断若漏掉它,会比实测少算几千 token,压缩晚一轮才来)。有基准时它已含在实测里,不重复加。 */
+  estimate(messages: ChatMessage[], roughExtra = 0): number {
     const base = this.baseline;
     if (!base || messages.length < base.prefix.length || base.prefix.some((p, i) =>
       p.message !== messages[i] || p.estimate !== estimateMessageTokens(messages[i]))) {
-      return estimateMessagesTokens(messages);
+      return estimateMessagesTokens(messages) + Math.max(0, roughExtra);
     }
     return base.tokens + estimateMessagesTokens(messages.slice(base.prefix.length));
   }
@@ -243,11 +279,11 @@ export class CompactionAttemptGuard {
       estimateMessagesTokens(messages) - previous.tokens < previous.minimumGrowth) return false;
     return tokens >= this.retryAt;
   }
-  record(afterTokens: number, windowTokens: number, messages?: ChatMessage[]): void {
+  /** thresholdTokens 缺省按预留缺省值算;压缩后仍在触发线之上时,要再涨 minimumGrowth 才允许再试。 */
+  record(afterTokens: number, windowTokens: number, messages?: ChatMessage[], thresholdTokens = compactionThreshold(windowTokens, 16_384)): void {
     const minimumGrowth = Math.max(1024, Math.ceil(windowTokens * 0.02));
     this.context = messages ? { prefix: messages.slice(), tokens: estimateMessagesTokens(messages), minimumGrowth } : undefined;
-    this.retryAt = afterTokens > windowTokens * FORCE_COMPACT_RATIO
-      ? afterTokens + minimumGrowth : 0;
+    this.retryAt = afterTokens > thresholdTokens ? afterTokens + minimumGrowth : 0;
   }
 }
 
@@ -288,12 +324,14 @@ export function compactContext(msgs: ChatMessage[]): CompactResult {
         `\n…[context compacted: tool output folded, was ${len} chars]…\n` +
         m.content.slice(-TOOL_FOLD_TAIL);
       savedChars += len - m.content.length;
+      markLossy(m); // 折叠过的消息不许被后续摘要「当作原文」推进持久检查点
     } else if ((m.role === 'user' || m.role === 'assistant') && len > MSG_TRUNC_THRESHOLD) {
       m.content =
         m.content.slice(0, MSG_TRUNC_HEAD) +
         `\n…[context compacted: omitted ${len - MSG_TRUNC_HEAD - MSG_TRUNC_TAIL} chars]…\n` +
         m.content.slice(-MSG_TRUNC_TAIL);
       savedChars += len - m.content.length;
+      markLossy(m);
       // 折叠改写了正文 → 挂着的 Responses 原始 items(含旧全文)不再对应,退回文本重建,防止把
       // 被折叠掉的内容原样回灌(providerItems 仅 in-memory,删除只影响本 run 的续轮)。
       delete (m as any).providerItems;

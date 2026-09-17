@@ -86,3 +86,24 @@ describe('优先级:人说的 > 上游说的 > 我们猜的', () => {
     expect(modelContextWindowInfo('some-self-hosted-model')).toEqual({ tokens: 32_000, source: 'learned' });
   });
 });
+
+describe('isContextOverflowError — 只认 400/413 + 溢出措辞(压缩后重试的闸)', () => {
+  it('OpenAI / Anthropic / 兼容代理的真实措辞 → true;数字型上限也算', async () => {
+    const { isContextOverflowError } = await import('./contextWindowStore.js');
+    const { LlmError } = await import('../core/types.js');
+    expect(isContextOverflowError(new LlmError(400, "This model's maximum context length is 128000 tokens. However, your messages resulted in 130512 tokens."))).toBe(true);
+    expect(isContextOverflowError(new LlmError(400, 'prompt is too long: 210000 tokens > 200000 maximum'))).toBe(true);
+    expect(isContextOverflowError(new LlmError(413, 'request_too_large'))).toBe(true);
+    expect(isContextOverflowError(new LlmError(400, 'Your input exceeds the context window of this model.'))).toBe(true);
+    expect(isContextOverflowError(new LlmError(400, 'context_length_exceeded'))).toBe(true);
+  });
+  it('别的状态码 / 别的 400 / 非 LlmError → false', async () => {
+    const { isContextOverflowError } = await import('./contextWindowStore.js');
+    const { LlmError } = await import('../core/types.js');
+    expect(isContextOverflowError(new LlmError(500, 'maximum context length is 128000 tokens'))).toBe(false);
+    expect(isContextOverflowError(new LlmError(429, 'too many tokens per minute'))).toBe(false);
+    expect(isContextOverflowError(new LlmError(400, 'invalid api key'))).toBe(false);
+    expect(isContextOverflowError(new Error('maximum context length is 128000 tokens'))).toBe(false);
+    expect(isContextOverflowError(undefined)).toBe(false);
+  });
+});

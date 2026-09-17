@@ -1,7 +1,7 @@
 /**
  * 上下文窗口的**自动识别**层 —— 手写族表(contextBudget 的 FAMILY_WINDOWS)之外的证据源。
  *
- * 背景:窗口值是四个阈值的分母(入站 25%/50% 闸门、50% 机械折叠、95% 强制压缩)与界面进度环。
+ * 背景:窗口值是入站 25%/50% 闸门、压缩触发线(窗口 − 预留)与界面进度环的分母。
  * 此前它只有「手写族表 + 128k 兜底」两档:族表没收录的新模型一律按 128k 算,64k 就开始绞上下文;
  * 而族表收录错了(报大了)则是另一头 —— 直接撞 provider 溢出、整轮请求失败。
  *
@@ -25,6 +25,7 @@
 import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { tanguHome } from '../core/tanguHome.js';
+import { LlmError } from '../core/types.js';
 
 const file = (): string => join(tanguHome(), 'context-windows.json');
 
@@ -40,6 +41,48 @@ const PATTERNS: readonly RegExp[] = [
   /maximum context length is\s+(\d+)/i, // OpenAI 及大量兼容实现
   />\s*(\d+)\s*maximum/i, // Anthropic:「prompt is too long: N tokens > M maximum」
 ];
+
+/**
+ * 「输入超长被拒」的措辞表(借 pi packages/ai overflow.ts 的实测集,每条背后一个 issue)。
+ * 与 PATTERNS 分工:PATTERNS 要抠出**数字**(回学窗口),这张表只回答**是不是溢出**(压缩后重试)。
+ * 只在 400/413 上判:别的状态码里出现这些词多半是转述,不是本次请求超长。
+ */
+const OVERFLOW_HINTS: readonly RegExp[] = [
+  /prompt is too long/i, // Anthropic
+  /request_too_large/i, // Anthropic 413
+  /input is too long for requested model/i, // Bedrock
+  /exceeds the context window/i, // OpenAI Completions / Responses
+  /exceeds (?:the )?(?:model'?s )?maximum context length/i, // LiteLLM 等兼容代理
+  /input token count.*exceeds the maximum/i, // Gemini
+  /maximum prompt length is \d+/i, // xAI
+  /reduce the length of the messages/i, // Groq
+  /maximum context length is \d+ tokens/i, // OpenRouter 及多数兼容实现
+  /exceeds (?:the )?maximum allowed input length/i, // OpenRouter / Poolside
+  /is longer than the model'?s context length/i, // Together
+  /exceeds the limit of \d+/i, // GitHub Copilot
+  /exceeds the available context size/i, // llama.cpp
+  /greater than the context length/i, // LM Studio
+  /context window exceeds limit/i, // MiniMax
+  /exceeded model token limit/i, // Kimi
+  /too large for model with \d+ maximum context length/i, // Mistral
+  /but the configured context size is/i, // DeepSeek server
+  /model_context_window_exceeded/i, // z.ai
+  /prompt too long; exceeded (?:max )?context length/i, // Ollama
+  /range of input length should be/i, // DashScope / Qwen
+  /context[_ ]length[_ ]exceeded/i, // 通用
+  /too many tokens/i, // 通用
+];
+
+/**
+ * 这次模型调用是不是「输入超出上下文窗口」被拒(→ agentLoop 强制压缩一次后重试本轮)。
+ * 只认 LlmError 400/413:传输错 / 5xx / 429 各有自己的重试语义,不许混进来。
+ */
+export function isContextOverflowError(err: unknown): boolean {
+  if (!(err instanceof LlmError)) return false;
+  if (err.status !== 400 && err.status !== 413) return false;
+  const text = String(err.message || '');
+  return parseContextLimit(text) !== undefined || OVERFLOW_HINTS.some((re) => re.test(text));
+}
 
 /** 从上游错误文案里抠出真实上限;认不出返回 undefined(认不出是安全的,乱认才危险)。 */
 export function parseContextLimit(detail: string | undefined): number | undefined {
