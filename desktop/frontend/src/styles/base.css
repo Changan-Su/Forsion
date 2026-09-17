@@ -1086,11 +1086,6 @@ a:hover { color: var(--accent-ink); }
   outline: none;
 }
 .msg-edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.streaming-caret::after {
-  content: '▍';
-  color: var(--accent-ink);
-  animation: pulse-soft 1s infinite;
-}
 
 /* 丝滑光标(默认关;smoothCaret.ts):隐藏原生 caret,自绘覆盖层平滑跟随 */
 html.sc-on .milkdown .ProseMirror,

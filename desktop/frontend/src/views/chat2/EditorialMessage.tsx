@@ -6,7 +6,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type Ref } from 'react'
 import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare } from 'lucide-react'
 import * as api from '../../services/backendService'
-import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, MsgSeg, InquiryRequest, SketchItem, LiveWait } from '../../types'
+import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../types'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { Markdown } from '../../components/Markdown'
@@ -35,18 +35,6 @@ import { splitSuggestions, type SuggestState, type TaskCard } from './suggest'
 import { TaskCards, type TaskLanding } from './TaskCards'
 export type { TaskLanding }
 import './chat2.css'
-
-/** 流式光标该落在哪一段:整条消息**最后一个真正渲染出来的**段的下标。
- *  它若落在工具段上,正文分支就永远不匹配 → 一个光标都不显示 —— 工具组自己的转圈已经在表达「在忙」。
- *  (旧行为是每个文字段都挂 streaming-caret,多次调工具时中间会留下一串闪烁块。)
- *  空文字段 / ids 解析不到事件的工具段都渲染成 null,不能算末尾。 */
-export function caretSegIndex(segs: MsgSeg[], toolEvents?: ToolEvent[]): number {
-  for (let i = segs.length - 1; i >= 0; i--) {
-    const s = segs[i]
-    if (s.t === 'text' ? !!s.text : s.ids.some((id) => toolEvents?.some((e) => e.id === id))) return i
-  }
-  return -1
-}
 
 export type OrderedToolPart =
   | { t: 'tools'; events: ToolEvent[] }
@@ -270,7 +258,7 @@ const RewindMenu: React.FC<{ at: number; ctx?: FileCtx; onPick: (mode: 'code' | 
   )
 }
 
-export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false }: { msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
+export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false, footer }: { /** 助手气泡正文末尾的附加行(ChatView 给最后一条助手消息挂 run 统计)。 */ footer?: React.ReactNode; msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
   const { t } = useI18n()
   msg = useSpeechReveal(msg)
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
@@ -370,7 +358,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
           // 直播与带锚点的历史:按发生顺序渲染文字/工具,并把 Sketch 插在对应工具完成点。
           // 无段(旧历史 / 语音整条朗读)→ 回退老序:所有工具一块 + 全文。
           if (msg.segments?.length && !voiceMode) {
-            const caretAt = msg.status === 'streaming' ? caretSegIndex(msg.segments, msg.toolEvents) : -1
+            // 流式正文末尾不画闪烁光标(09-16 用户要求去掉):「在输出」由署名旁的圆点与底部 run 统计行表达。
             // 一道围栏可能被中间的工具块切成两段 —— 状态要续读,否则后半段的建议原文会漏进正文。
             let fenceState: SuggestState | undefined
             // 只有**最后一个文本段**才能把未收口的围栏还回正文:靠前的段后面还有段,围栏可能在那里收口
@@ -382,7 +370,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
                 fenceState = parsed.state
                 const segBody = parsed.text
                 return segBody
-                  ? <div key={i} className={`t2-content${i === caretAt ? ' streaming-caret' : ''}`}><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} /></div>
+                  ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} /></div>
                   : null
               }
               const evs = seg.ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]
@@ -402,7 +390,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} cfg={voice!.cfg} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
-                  : <div className={`t2-content${msg.status === 'streaming' ? ' streaming-caret' : ''}`}><Markdown content={body} anchorPrefix={`toc-${msg.id}`} /></div>
+                  : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} /></div>
               )}
             </>
           )
@@ -474,6 +462,8 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
           </div>
         )}
         {msg.status === 'stopped' && <div className="t2-dim">⏹ {t('chat.aborted')}</div>}
+        {/* run 统计行放操作条之前:流式 → 完成时它原地不动,悬停出现的操作条长在下面,不会把它顶走。 */}
+        {footer}
         {(msg.status === 'done' || msg.status === 'stopped') && (
           <div className="t2-actions">
             <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(body)}><Copy size={14} /></button>
