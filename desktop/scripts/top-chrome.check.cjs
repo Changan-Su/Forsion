@@ -10,6 +10,7 @@
  *  B tab 胶囊完整落在 tab 栏内,上下各留 ≥1px —— 压 tab 栏高度时最先崩的就是它。
  *  C 纸卡顶贴 tab 栏(gutter 0),左右仍留 8px:浮卡观感靠三边 + 圆角,不靠顶边。
  *  D 侧栏(图标 tab)组不吃纸卡 gutter —— 那条规则本就 :not(:has(.wb-tab--icon)),别被误改成全局。
+ *  G 右上角浮钮组次序与间距(恢复布局 → 小窗 → 底部面板 → 右栏),并截一张该区域的图自己看。
  *
  * 改 --dv-tabs-and-actions-container-height / .dv-content-container padding / .rb padding 后必跑。
  * 需要先 npm run build。跑:node scripts/top-chrome.check.cjs
@@ -102,6 +103,19 @@ async function main() {
   // 掉队时容器仍在 32,但首元素掉到 44,观感就是「侧栏比主区矮一截」。2026-07-30 用户实报过一次。
   check('F 左侧栏首元素不比主区纸卡低太多(≤6px)', g.sideFirstTop === null || g.sideFirstTop - g.cardTop <= 6,
     `侧栏首元素=${g.sideFirstTop} 纸卡=${g.cardTop} 差=${g.sideFirstTop === null ? 'n/a' : (g.sideFirstTop - g.cardTop).toFixed(1)}`)
+
+  // G 右上角浮钮组(2026-09-14 用户指定次序:小窗在底部面板左边)。桌面必有小窗钮;缝 2px、同一行。
+  const edge = await win.evaluate(() => ['reset', 'mini', 'bottom', 'right'].map((k) => {
+    const r = document.querySelector(`.dv-edge-actions > .dv-edge-${k}`)?.getBoundingClientRect()
+    return r && { k, left: +r.left.toFixed(1), right: +r.right.toFixed(1), top: +r.top.toFixed(1) }
+  }))
+  check('G 右上角浮钮组 = 恢复布局 → 小窗 → 底部面板 → 右栏,缝 2px 同一行',
+    edge.every(Boolean) && edge.every((b, i) => i === 0 || (Math.abs(b.left - edge[i - 1].right - 2) <= 0.5 && b.top === edge[0].top)),
+    edge.map((b) => (b ? `${b.k}@${b.left}~${b.right}/${b.top}` : 'missing')).join(' '))
+  const shot = path.join(home, 'edge-actions.png') // 观感自查(DESIGN.md §8):几何对 ≠ 看起来对
+  const vw = await win.evaluate(() => window.innerWidth)
+  await win.screenshot({ path: shot, clip: { x: vw - 240, y: 0, width: 240, height: 44 } })
+  console.log(`截图 ${shot}`)
 
   await app.close()
   const bad = results.filter((r) => !r.ok)

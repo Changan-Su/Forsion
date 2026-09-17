@@ -15,6 +15,7 @@ import { AskStringHost } from './amadeus/components/askString'
 import { DeleteAssetsHost } from './amadeus/components/askDeleteAssets'
 import type { FocusPlace } from './amadeus/blocks/registry'
 import { PageView } from './amadeus/components/PageView'
+import { useBlockSelection } from './amadeus/store/blockSelection'
 import { AmadeusPluginFileView } from './views/AmadeusPluginFileView'
 import { DashboardCanvasView } from './views/DashboardCanvasView'
 import { DashboardGridView } from './views/DashboardGridView'
@@ -201,6 +202,8 @@ function Harness() {
 function DndHarness() {
   const manifest = usePageStore((s) => s.manifest)
   ;(window as unknown as { __dndRoot: unknown }).__dndRoot = manifest?.root
+  ;(window as unknown as { __dndSelect: (ids: string[]) => void }).__dndSelect =
+    (ids) => useBlockSelection.getState().setMany(ids)
   return (
     <div className="amadeus-root am-app" style={{ maxWidth: 720, margin: '40px auto', padding: 16 }}>
       <PageView bare />

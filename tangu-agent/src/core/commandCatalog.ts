@@ -33,6 +33,7 @@ export interface CommandSpec {
 export const COMMAND_CATALOG: CommandSpec[] = [
   // ── 会话 ──────────────────────────────────────────────────────────────
   { name: '/help', key: 'help', zh: '显示帮助与命令列表', en: 'Show help and the command list', surfaces: ['tui', 'desktop'] },
+  { name: '/feedback', key: 'feedback', zh: '提交问题或建议，可在命令后填写反馈内容', en: 'Report an issue or suggestion; optionally add your feedback after the command', surfaces: ['desktop'] },
   { name: '/new', key: 'new', zh: '开始新会话', en: 'Start a new session', surfaces: ['tui', 'desktop'] },
   { name: '/clear', key: 'clear', zh: '清屏（保留会话历史）', en: 'Clear the screen (history is kept)', surfaces: ['tui'] },
   { name: '/sessions', key: 'sessions', zh: '列出最近会话', en: 'List recent sessions', surfaces: ['tui', 'desktop'] },
@@ -43,7 +44,12 @@ export const COMMAND_CATALOG: CommandSpec[] = [
     en: 'Branch a new session from a reply (inherits history); defaults to the latest',
     surfaces: ['tui', 'desktop'],
   },
-  { name: '/compact', key: 'compact', zh: '压缩上下文：总结后精简续接（同会话）', en: 'Compact context: summarize, then continue compactly', surfaces: ['tui', 'desktop'] },
+  {
+    name: '/compact', key: 'compact', arg: '[关注点]',
+    zh: '压缩上下文：总结后精简续接（同会话；可附本次摘要的关注点）',
+    en: 'Compact context: summarize, then continue compactly (optional focus for this summary)',
+    surfaces: ['tui', 'desktop'],
+  },
   {
     name: '/status', key: 'status',
     zh: '本会话概况：模型 / 思考档 / 审批档 / 工作目录 / 用量',

@@ -5,6 +5,7 @@
  */
 import { create } from 'zustand'
 import { setActiveSpace } from '@lcl/engine'
+import { translate } from '../i18n'
 import { useApp } from './appStore'
 import { notifyApp } from './notificationStore'
 import {
@@ -26,10 +27,17 @@ let lastServerCount = 0
 let unreadRun: Promise<void> | null = null
 let unreadAgain = false
 
-/** 发件人显示名(列表/阅读/系统通知三处共用)。system 文案在调用点求值(防 i18n 早求值)。 */
+/** 自动化通知的 sender_id 是引擎路由标识,不是用户可见的发件人名。 */
+export function isAutomationSender(m: Pick<InboxMessage, 'sender_kind' | 'sender_id'>): boolean {
+  return m.sender_kind === 'agent' && !!m.sender_id?.startsWith('automation:')
+}
+
+/** 发件人显示名(列表/阅读/系统通知三处共用)。内部 sender_id 不得泄漏到 UI。
+ *  这是非 React 出口,直接读模块级 translate 快照,冷启动 / 测试期也不会回显裸 key。 */
 export function senderOf(m: Pick<InboxMessage, 'sender_kind' | 'sender_id'>): string {
   if (m.sender_kind === 'server') return 'Forsion'
-  if (m.sender_kind === 'system') return useApp.getState().tr('inbox.sender.system')
+  if (m.sender_kind === 'system') return translate('inbox.sender.system')
+  if (isAutomationSender(m)) return translate('inbox.sender.automation')
   const a = useApp.getState().agentDefs.find((x) => x.slug === m.sender_id)
   return a?.name || m.sender_id || 'agent'
 }

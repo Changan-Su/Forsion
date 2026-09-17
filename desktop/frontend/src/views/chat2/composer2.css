@@ -32,7 +32,11 @@
      (根治「首启引导后输入区塌成 0、须刷新才有」)。 */
   min-height: 1.6em; max-height: 200px; display: block;
 }
-.t2c-ta::placeholder { color: var(--text-faint, var(--text-muted)); }
+.t2c-ta::placeholder { color: var(--text-faint, var(--text-muted)); transition: opacity .3s ease; }
+/* 等待期间小贴士换条:先淡出再换字(Composer2 tipFade) */
+.t2c-ta[data-tip-fade]::placeholder { opacity: 0; }
+/* 窄输入框里小贴士折行(Composer2 tipTall):撑到两行,别把后半句裁掉 */
+.t2c-ta[data-tip-tall] { min-height: 3.2em; }
 
 /* 卡内底排:+ · 模式 / 上下文环 · 模型 · mic · 圆形发送 · 停止 */
 .t2c-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: nowrap; }

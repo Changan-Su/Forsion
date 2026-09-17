@@ -280,6 +280,11 @@ export async function runMigration(): Promise<void> {
     // 多通道:账号/绑定表补 channel 列(存量行默认 wechat;telegram/qq 复用同两张表)。
     ['tangu_wechat_accounts', `channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`],
     ['tangu_wechat_bindings', `channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`],
+    // 压缩检查点的行内切点(09-15 自动压缩持久化):through_timestamp 之前的行整体被摘要覆盖,
+    // 而 through_message_id 指向的那一行只覆盖到 through_tool_call_id 这个调用(含),其后的工具轮
+    // hydrate 时原样回放。两列皆空 = 老语义(整行边界)。
+    ['session_summaries', 'through_message_id VARCHAR(36)'],
+    ['session_summaries', 'through_tool_call_id VARCHAR(128)'],
   ];
   for (const [table, col] of columnBackfills) await addColumnIfMissing(table, col);
   await query(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent ON chat_sessions(parent_session_id)`);

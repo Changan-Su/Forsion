@@ -23,6 +23,7 @@ function decodeDataUrl(u: string): PreviewData {
 /** 把一个 DisplayFile 变成 WorkspaceFilePreview 能消费的 target(load 懒拉字节)。
  *  任务概览的产物/来源行也复用它(host 读主进程、沙箱读工作区、dataUrl 直接解),一处逻辑。 */
 export function targetFor(f: DisplayFile, cfg: TanguDesktopConfig, sessionId: string, execMode: ExecMode): PreviewTarget {
+  sessionId = f.sourceSessionId || sessionId
   return {
     name: f.name,
     // path 只在本机绝对路径时给:openWsFile 用它做「同路径聚焦 + 随布局持久化」,而恢复时是走
@@ -50,6 +51,7 @@ export function targetFor(f: DisplayFile, cfg: TanguDesktopConfig, sessionId: st
 
 /** 缩略图:dataUrl / 沙箱直链直接用;host 路径异步读字节做 blob URL。 */
 const Thumb: React.FC<{ f: DisplayFile; cfg: TanguDesktopConfig; sessionId: string; execMode: ExecMode; onClick: () => void }> = ({ f, cfg, sessionId, execMode, onClick }) => {
+  sessionId = f.sourceSessionId || sessionId
   const direct = f.dataUrl || (f.path && execMode !== 'host' ? api.workspaceDownloadUrl(cfg, sessionId, f.path) : null)
   const [src, setSrc] = useState<string | null>(direct)
   const urlRef = useRef<string | null>(null)

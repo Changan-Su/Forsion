@@ -452,8 +452,9 @@
 .t2sw { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .t2sw-mode-slot { position: relative; z-index: 6; flex: 0 0 36px; min-height: 36px; }
 .t2sw-mode-picker {
-  position: absolute; top: 6px; left: 7.5px;
-  width: min(var(--menu-select-width, 224px), calc(100% - 15px));
+  /* 与列表滚动区的 6px inset 共用一条外边线；左右同时锚定后，触发器会随 panel resize，
+   * 不再在宽面板里停在固定的 224px。 */
+  position: absolute; top: 6px; left: 6px; right: 6px;
   border-radius: var(--radius-md, 10px);
   background: var(--overlay-subtle, rgba(127, 127, 127, 0.04));
   transition:
@@ -501,6 +502,20 @@
   max-height: min(320px, calc(100vh - 64px)); overflow-y: auto;
   padding: 0 var(--menu-shell-padding, 4px) var(--menu-shell-padding, 4px);
 }
+/* 不能只借 `.project-menu-item` 这个名字:它的布局基座原本由 `.composer-menu button` 提供，
+ * WorkspaceView 不在 composer 里，结果菜单项退回浏览器原生 inline button，所有文字挤成一串
+ * （2026-09-15 实报）。工作区下拉必须在自己的作用域里把完整按钮契约带齐。 */
+.t2sw-mode-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; min-height: var(--menu-item-min-height, 28px);
+  padding: var(--menu-item-pad-block, 4px) var(--menu-item-pad-inline, 8px);
+  border: none; border-radius: var(--radius-md, 8px);
+  outline: none; background: transparent;
+  color: var(--text); font-family: var(--font-ui); font-size: 12px; text-align: left;
+  cursor: pointer;
+}
+.t2sw-mode-item:hover { background: var(--menu-hover, rgba(127, 127, 127, 0.12)); }
+.t2sw-mode-item .project-menu-name { flex: 1; }
 .project-menu-item.t2sw-mode-item.is-selected { background: var(--accent-light); color: var(--accent-ink); }
 .project-menu-item.t2sw-mode-item:focus-visible { outline: none; background: var(--menu-hover, rgba(127, 127, 127, 0.12)); color: var(--text); }
 .project-menu-item.t2sw-mode-item.is-selected:focus-visible { background: var(--accent-light); color: var(--accent-ink); }

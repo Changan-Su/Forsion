@@ -15,6 +15,7 @@ import { windowKind } from './windowKind'
 import { DetachedRoot } from './DetachedRoot'
 import { MiniRoot } from './MiniRoot'
 import { installMultiWindow } from './multiWindow'
+import { installKeepAwakeReport } from './keepAwakeReport'
 import { installSmoothCaret } from './smoothCaret'
 import { installViewportLock } from './viewportLock'
 import { applyUiFonts } from './uiFont'
@@ -65,6 +66,8 @@ try {
   installEngine()
   // 多窗接线:把引擎 detach 缝接到 window.tangu(桌面);web/移动 no-op。须在任何 WbTab 渲染前设好缝。
   installMultiWindow()
+  // 有会话运行时不休眠(设置→常规,默认关):在飞 run 数报主进程;web/移动 no-op。
+  installKeepAwakeReport()
   // 丝滑光标(默认关;设置→外观开关)。
   installSmoothCaret()
   // 视口滚动锁:页面本身永不该滚;滚起来就弹回去(见 viewportLock.ts 的病理与实测)。

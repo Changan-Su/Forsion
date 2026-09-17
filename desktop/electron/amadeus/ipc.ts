@@ -540,8 +540,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       if (structureTimer) clearTimeout(structureTimer)
       structureTimer = setTimeout(() => {
         structureTimer = null
-        void index.build()
-        notifyAll(IPC.structureChange)
+        // 等索引换完表再广播:渲染端被叫醒就去拉 pageIcons,早发一拍拿到的是改动前的表
+        // (外部改名后新路径没图标,要等下一次刷新)。
+        void index.build().catch(() => {}).then(() => notifyAll(IPC.structureChange))
       }, 300)
     },
     (dbPath) => {

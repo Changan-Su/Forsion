@@ -170,6 +170,9 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
     if (owner && owner !== userId) {
       return res.status(404).json({ detail: 'Session not found' });
     }
+    if ((await import('../services/delegateTranscript.js')).isDelegateActive(session_id)) {
+      return res.status(409).json({ detail: 'This delegated task is still running. Continue after it finishes.' });
+    }
     if (!owner) {
       const title =
         typeof message === 'string' && message.trim() ? message.trim().slice(0, 60) : 'New Chat';

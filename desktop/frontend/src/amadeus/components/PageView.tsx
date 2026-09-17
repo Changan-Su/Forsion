@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import {
   DndContext,
   DragOverlay,
@@ -35,6 +35,7 @@ registerMessages({
   'amxpv.foldSection': { zh: '折叠小节', en: 'Collapse section' },
   'amxpv.addBlock': { zh: '＋ 新块', en: '＋ New block' },
   'amxpv.dndHint': { zh: '拖动 ⠿ 到列边缘可分栏 · 拖到行间可新建行', en: 'Drag ⠿ to a column edge to split into columns · drop between rows to add a row' },
+  'amxpv.dragBlocks': { zh: '{n} 个块', en: '{n} blocks' },
 })
 
 type TFn = ReturnType<typeof useI18n>['t']
@@ -119,7 +120,9 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
     if (cur) scoped.getState().requestFocusAt(cur.blockId, cur.anchor)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [activeId, setActiveId] = useState<string | null>(null)
+  const [activeIds, setActiveIds] = useState<string[]>([])
+  const dragIdsRef = useRef<string[]>([])
+  const activeId = activeIds[0] ?? null
   const [editingTitle, setEditingTitle] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }))
@@ -226,9 +229,18 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
   }
 
   const onDragStart = (e: DragStartEvent): void => {
-    setActiveId(String(e.active.id))
-    setDnd(String(e.active.id), null)
-    useBlockSelection.getState().select(String(e.active.id)) // 拖拽期该块保持高亮
+    const id = String(e.active.id)
+    const selection = useBlockSelection.getState()
+    // 从多选中的任一块拖起 = 搬整组；从组外块拖起才切回单选。顺序取布局视觉序，
+    // 不取 Set 插入序（框选方向相反时 Set 顺序也可能相反）。
+    const ids = selection.ids.has(id)
+      ? scoped.getState().flatOrder().filter((blockId) => selection.ids.has(blockId))
+      : [id]
+    if (!selection.ids.has(id)) selection.select(id)
+    const dragIds = ids.length ? ids : [id]
+    dragIdsRef.current = dragIds
+    setActiveIds(dragIds)
+    setDnd(id, null)
   }
 
   const onDragOver = (e: DragOverEvent): void => {
@@ -240,31 +252,34 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
   }
 
   const onDragCancel = (): void => {
-    setActiveId(null)
+    dragIdsRef.current = []
+    setActiveIds([])
     setDnd(null, null)
   }
 
   const onDragEnd = (e: DragEndEvent): void => {
-    setActiveId(null)
-    setDnd(null, null)
     const activeBlock = String(e.active.id)
+    const dragBlocks = dragIdsRef.current.includes(activeBlock) ? dragIdsRef.current : [activeBlock]
+    dragIdsRef.current = []
+    setActiveIds([])
+    setDnd(null, null)
     if (!e.over) return
     const overId = String(e.over.id)
 
     if (overId.startsWith('bedge:')) {
       // 块级并排:只与目标那一块成两栏(Notion 语义)
       const [, targetBlock, side] = overId.split(':')
-      scoped.getState().pairBlocks(activeBlock, targetBlock, side === 'left' ? 'left' : 'right')
+      scoped.getState().pairBlocks(dragBlocks, targetBlock, side === 'left' ? 'left' : 'right')
     } else if (overId.startsWith('edge:')) {
       const [, rowId, side] = overId.split(':')
-      addColumnWithBlock(rowId, activeBlock, side === 'left' ? 'left' : 'right')
+      addColumnWithBlock(rowId, dragBlocks, side === 'left' ? 'left' : 'right')
     } else if (overId.startsWith('gap:')) {
-      addRowWithBlock(Number(overId.slice(4)), activeBlock)
+      addRowWithBlock(Number(overId.slice(4)), dragBlocks)
     } else if (overId.startsWith('col:')) {
-      moveBlock(activeBlock, overId.slice(4), null)
+      moveBlock(dragBlocks, overId.slice(4), null)
     } else if (overId !== activeBlock) {
       const colId = columnOfBlock(overId)
-      if (colId) moveBlock(activeBlock, colId, overId)
+      if (colId) moveBlock(dragBlocks, colId, overId)
     }
   }
 
@@ -369,7 +384,12 @@ export function PageView({ bare = false }: { bare?: boolean } = {}) {
           })}
         </div>
         <DragOverlay dropAnimation={null}>
-          {activeId ? <div className="drag-overlay">{previewText(blocks[activeId]?.content, t)}</div> : null}
+          {activeId ? (
+            <div className="drag-overlay">
+              {activeIds.length > 1 ? `${t('amxpv.dragBlocks', { n: activeIds.length })} · ` : ''}
+              {previewText(blocks[activeId]?.content, t)}
+            </div>
+          ) : null}
         </DragOverlay>
       </DndContext>
 

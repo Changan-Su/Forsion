@@ -6,7 +6,7 @@ import { HostSandboxSettings } from './HostSandboxSettings'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling } from 'lucide-react'
+import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling, Coffee } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { AccountSwitcher } from './AccountSwitcher'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
@@ -82,6 +82,11 @@ import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWai
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
+  'settingsmodal.keepAwake.title': { zh: '有会话运行时阻止休眠', en: 'Stay awake while sessions run' },
+  'settingsmodal.keepAwake.description': {
+    zh: '会话运行期间阻止电脑因闲置自动休眠，全部结束后恢复；屏幕仍会熄灭。合盖、手动睡眠照常生效；Windows 笔记本用电池时，系统仍可能按电源策略休眠。',
+    en: 'Keeps your computer from sleeping when idle while sessions are running, and restores normal sleep when they finish. The display can still turn off. Closing the lid or choosing Sleep still works, and Windows laptops on battery may still sleep per power policy.',
+  },
   'modelsettings.title': { zh: '模型', en: 'Models' },
   'modelsettings.defaults': { zh: '默认模型', en: 'Default models' },
   'modelsettings.display': { zh: '分组与显示', en: 'Groups & visibility' },
@@ -1301,6 +1306,15 @@ export const SettingsModal: React.FC<{
                           {t('settings.workspace.hint')}
                         </div>
                       </section>
+                    )}
+
+                    {isDesktop && stored && (
+                      <SettingsPanel
+                        icon={<Coffee size={16} />}
+                        title={t('settingsmodal.keepAwake.title')}
+                        description={t('settingsmodal.keepAwake.description')}
+                        actions={<SettingsSwitch checked={!!stored.keepAwakeWhileRunning} onChange={(on) => void window.tangu!.setConfig({ keepAwakeWhileRunning: on }).then(setStored)} label={t('settingsmodal.keepAwake.title')} />}
+                      />
                     )}
 
                     {isDesktop && mode === 'managed' && stored && (

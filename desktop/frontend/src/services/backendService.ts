@@ -96,6 +96,11 @@ export const soloOpen = (cfg: TanguDesktopConfig, kind: 'agent' | 'engine', id: 
 export const listTeams = (cfg: TanguDesktopConfig) =>
   // 老引擎 / 桩引擎对未知路由可能回 200 空对象:形状不对一律当空表,别让 undefined 流进 store(OrbitsView .map 会炸掉整块侧栏)。
   request<{ teams: TeamDef[] }>(cfg, '/agent/teams').then((r) => (Array.isArray(r?.teams) ? r.teams : [])).catch(() => [] as TeamDef[])
+export const getTeam = (cfg: TanguDesktopConfig, slug: string) =>
+  request<{ team: TeamDef }>(cfg, `/agent/teams/${encodeURIComponent(slug)}`).then((r) => {
+    if (!r.team || !Array.isArray(r.team.members)) throw new Error('Team unavailable')
+    return r.team
+  })
 /** name 可省:引擎按成员名生成缺省(有 project 再 `@ 项目`)。 */
 export const createTeam = (cfg: TanguDesktopConfig, input: { name?: string; project?: string; members: Array<{ slug: string; role?: string }>; lead?: string; avatar?: string; doc?: string; description?: string }) =>
   request<{ team: TeamDef }>(cfg, '/agent/teams', { method: 'POST', body: JSON.stringify(input) }).then((r) => r.team)
@@ -145,6 +150,11 @@ export interface BackgroundSessionInfo {
   /** 团队成员的工作会话(kind=teamwork):归属的成员 slug;老引擎 / 其他 kind 没有。 */
   agentSlug?: string | null
 }
+
+export const getSessionDetail = (cfg: TanguDesktopConfig, sessionId: string) =>
+  request<{ session: SessionRecord & { delegate_running?: boolean } }>(cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/detail`).then((r) => r.session)
+export const openTeamMemberSession = (cfg: TanguDesktopConfig, parentId: string, slug: string) =>
+  request<{ session: SessionRecord }>(cfg, `/agent/sessions/${encodeURIComponent(parentId)}/team-members/${encodeURIComponent(slug)}`, { method: 'POST' }).then((r) => r.session)
 export const getBackgroundSessions = (cfg: TanguDesktopConfig, sessionId: string, kind?: string) =>
   request<{ background: BackgroundSessionInfo[] }>(
     cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/background${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`,
@@ -245,10 +255,10 @@ export const getSessionTimeline = (cfg: TanguDesktopConfig, sessionId: string) =
   request<{ runs: any[] }>(cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/timeline`).then((r) => r.runs || [])
 
 /** 手动压缩上下文(生成并持久化总结检查点;后续 run 起步即精简)。 */
-export const compactSession = (cfg: TanguDesktopConfig, sessionId: string, modelId?: string) =>
+export const compactSession = (cfg: TanguDesktopConfig, sessionId: string, modelId?: string, instructions?: string) =>
   request<{ ok: boolean; reason?: string; summarizedCount?: number }>(
     cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/compact`,
-    { method: 'POST', body: JSON.stringify(modelId ? { model_id: modelId } : {}) },
+    { method: 'POST', body: JSON.stringify({ ...(modelId ? { model_id: modelId } : {}), ...(instructions ? { instructions } : {}) }) },
   )
 
 // ── 模型 / 技能 / 工具 ──
@@ -365,8 +375,8 @@ export const fetchProviderModels = (
     signal,
   }, { timeoutMs: 30000 }).then((r) => r.models)
 
-export const listSkills = (cfg: TanguDesktopConfig) =>
-  request<{ skills: SkillInfo[] }>(cfg, '/agent/skills').then((r) => r.skills)
+export const listSkills = (cfg: TanguDesktopConfig, agentSlug?: string) =>
+  request<{ skills: SkillInfo[] }>(cfg, `/agent/skills${agentSlug ? `?agentSlug=${encodeURIComponent(agentSlug)}` : ''}`).then((r) => r.skills)
 
 /** 本地技能上云(owner=当前用户,云端 Tangu 会话即可启用)。 */
 export const uploadSkillToCloud = (cfg: TanguDesktopConfig, localId: string) =>
@@ -511,7 +521,7 @@ export const listAgents = (cfg: TanguDesktopConfig) =>
   request<{ agents: NormalAgentDef[] }>(cfg, '/agent/agents').then((r) => r.agents).catch(() => [] as NormalAgentDef[])
 
 /** toolsMode/toolsList 传 null=显式清除(JSON 会剔掉 undefined 键=保留旧值)。 */
-export const saveAgentDef = (cfg: TanguDesktopConfig, def: Omit<Partial<NormalAgentDef>, 'toolsMode' | 'toolsList'> & { toolsMode?: 'allow' | 'deny' | null; toolsList?: string[] | null }, slug?: string) =>
+export const saveAgentDef = (cfg: TanguDesktopConfig, def: Omit<Partial<NormalAgentDef>, 'toolsMode' | 'toolsList' | 'enabledSkillIds' | 'enabledMcpServers'> & { enabledSkillIds?: string[] | null; enabledMcpServers?: string[] | null; toolsMode?: 'allow' | 'deny' | null; toolsList?: string[] | null }, slug?: string) =>
   request<{ agent: NormalAgentDef }>(
     cfg,
     slug ? `/agent/agents/${encodeURIComponent(slug)}` : '/agent/agents',

@@ -16,6 +16,8 @@ import { runTaskCard } from './chat2/taskLanding'
 import { resolveDeskPath } from '../stores/deskPlan'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage } from './chat2/EditorialMessage'
+import { RunStatsLine } from './chat2/RunStatsLine'
+import { inRunWindow } from '../stores/runStats'
 import { EmptyState2 } from './chat2/EmptyState2'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
@@ -26,6 +28,8 @@ import { useWorkspace, useSpaceStore, UI_MODE, Skeleton } from '@lcl/engine'
 import { AgentDesk, DeskCard } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
 import { TeamStatus } from './chat2/TeamDesk'
+import { ChildChatPanel, SubChatStatus } from './chat2/ChildChatPanel'
+import { useChildChat } from '../stores/childChatStore'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
 import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
@@ -45,10 +49,14 @@ const EMPTY_CONFIG: AgentConfig = {}
 const EMPTY_USAGE: { ctx: number; base: number; live: number; runCost?: number; costLimit?: number } = { ctx: 0, base: 0, live: 0 }
 const EMPTY_STEER: Array<{ id: string; text: string }> = []
 const EMPTY_STRS: string[] = []
+/** 列表里不画的消息:团队总结(单独挂尾部)与只有工作占位、没东西可看的成员气泡。 */
+const isHiddenInList = (m: UiMessage): boolean =>
+  !!m.teamSummary || (!!m.work && !m.content && !m.error && !m.approvals?.length && !m.inquiries?.length)
 
 export function ChatView({ leaf, params }: ViewProps) {
   const { t } = useI18n()
   const showWaitDetails = useChatWaitDetailsEnabled()
+  const childSelections = useChildChat((state) => state.selected)
   const [raiseTeam, setRaiseTeam] = useState(false)
   const chatScrollRef = useRef<HTMLDivElement>(null)
   const chatAreaRef = useRef<HTMLDivElement>(null)
@@ -69,6 +77,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     activeSession: state.sessions.find((x) => x.id === activeId) || state.archivedSessions.find((x) => x.id === activeId) || null,
     activeMessages: (activeId && state.messagesBySession[activeId]) || EMPTY_MESSAGES,
     running: !!(activeId && state.runningBySession[activeId]),
+    runStats: (activeId && state.runStatsBySession[activeId]) || null,
     historianEnabled: state.specialEnabled.historian,
     execConfig: (activeId && state.configBySession[activeId]) || EMPTY_CONFIG,
     activeUsage: (activeId && state.usageBySession[activeId]) || EMPTY_USAGE,
@@ -149,7 +158,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   const [quoteButton, setQuoteButton] = useState<{ x: number; y: number; text: string } | null>(null)
   const [quotedText, setQuotedText] = useState('')
   const [refDrop, setRefDrop] = useState(false) // 工作区条目拖到聊天区上方(整块高亮)
-  const activeSession = s.activeSession
+  const childSession = useChildChat((state) => activeId ? state.sessions[activeId] : undefined)
+  const activeSession = s.activeSession || childSession
   const activeModel = (s.modelsResp?.models || []).find((m) => m.id === (activeSession?.model_id || s.cfg.modelId || s.modelsResp?.defaultModelId || '')) || null
   // 切模型后 SSE 重放会把 setSessionModel 清掉的旧 context_info 复活——事件带的 modelId 与当前
   // 会话模型不一致就视同没有(老引擎事件不带 modelId → 放行,保持兼容)
@@ -198,6 +208,17 @@ export function ChatView({ leaf, params }: ViewProps) {
     : selectableChatModels(s.modelsResp.models)
   const curEngineId = activeId ? execConfig.engineId : s.newChatCfg.engineId
   const streamingId = useMemo(() => activeMessages.find((m) => m.status === 'streaming')?.id ?? null, [activeMessages])
+  // run 统计(耗时 · tokens · 思考)挂在本 run 最后一条画出来的助手气泡末尾;run 结束后冻结,直到下一个 run 覆盖。
+  // 本 run 还没有可见气泡(团队成员都在干活、占位被隐藏)→ 运行中在列表末尾单独起一行。
+  const runStats = s.runStats
+  const runStatsMsgId = useMemo(() => {
+    if (!runStats) return null
+    for (let i = activeMessages.length - 1; i >= 0; i--) {
+      const m = activeMessages[i]
+      if (m.role === 'assistant' && !isHiddenInList(m)) return inRunWindow(runStats, m.timestamp) ? m.id : null
+    }
+    return null
+  }, [activeMessages, runStats])
   // composer ↑↓ 历史召回:本会话已发送的用户消息(旧→新)+ steer 入队即记的补充池(被删/撤回的插话
   // 仍可从 ↑ 找回;已注入的会同时出现在消息里,按文本去重)。打断标记是机器行,不进历史。
   const sentHistory = useMemo(() => {
@@ -397,9 +418,9 @@ export function ChatView({ leaf, params }: ViewProps) {
 
   const hasMessages = activeMessages.length > 0
   // Agent Desk:桌面端默认开(移动端没有);用户可在设置→高级关掉,窄容器由 CSS 容器查询兜底隐藏。
-  const deskEnabled = !studioChat && UI_MODE !== 'mobile' && !!s.desktopConfig?.agentDeskEnabled
+  const deskEnabled = !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!s.desktopConfig?.agentDeskEnabled
   // 团队成员列表嵌入 Pin Summary 的运行状态,Agent Desk 保持独立。
-  const teamDesk = !studioChat && UI_MODE !== 'mobile' && !!mvCfg.groupChat && (mvCfg.groupAgents?.length || 0) >= 2
+  const teamDesk = !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!mvCfg.groupChat && (mvCfg.groupAgents?.length || 0) >= 2
 
   // 工作区(会话/笔记/文件)拖进来即引用:**整个聊天区**都是落区,不用瞄准输入框。
   // 只吃 chatDragRef 的两个 MIME —— OS 文件仍归输入框卡片那套(附件/路径插入),两条路不打架。
@@ -453,8 +474,7 @@ export function ChatView({ leaf, params }: ViewProps) {
               historyLoading ? <Skeleton variant="chat" /> : null
             ) : (
               activeMessages.map((m) => {
-                if (m.teamSummary) return null
-                if (m.work && !m.content && !m.error && !m.approvals?.length && !m.inquiries?.length) return null
+                if (isHiddenInList(m)) return null
                 if (m.role === 'user' && m.id === editingId) {
                   return (
                     <div key={m.id} className="t2-userwrap">
@@ -476,6 +496,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                     msg={m}
                     showWaitDetails={showWaitDetails}
                     rootRef={m.id === streamingId ? streamingNodeRef : undefined}
+                    footer={m.id === runStatsMsgId && runStats ? <RunStatsLine stats={runStats} /> : undefined}
                     avatarUrl={m.role !== 'assistant' ? undefined : (() => {
                       // 群聊发言人:优先 agentId,缺失时按名反查 slug(agentDefs 晚到时自动纠正);仍无则不回退会话默认头像。
                       const aid = m.agentId || (m.agentName ? s.agentDefs.find((a) => a.name === m.agentName)?.slug : undefined)
@@ -492,14 +513,14 @@ export function ChatView({ leaf, params }: ViewProps) {
                     voice={ttsEnabled ? { on: voiceOn, cfg: s.cfg, stored: s.desktopConfig } : undefined}
                     handlers={{
                       onCopy: copy,
-                      onRegenerate: () => s.regenerate(m.id, activeId),
-                      onBranch: () => void s.branchFromMessage(m.id, activeId),
-                      onEdit: () => startEdit(m.id, m.content),
-                      onRewind: (mode) => void s.rewindTo(m.id, mode, activeId),
+                      onRegenerate: params.readOnly ? undefined : () => s.regenerate(m.id, activeId),
+                      onBranch: params.childSurface ? undefined : () => void s.branchFromMessage(m.id, activeId),
+                      onEdit: params.readOnly ? undefined : () => startEdit(m.id, m.content),
+                      onRewind: params.readOnly ? undefined : (mode) => void s.rewindTo(m.id, mode, activeId),
                       onApproval: (aid, action, args) => void s.decideApproval(m.id, aid, action, args, activeId),
                       onInquiry: (iid, ans) => s.answerInquiry(m.id, iid, ans, activeId),
                       // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
-                      onSuggest: (text) => void s.send(text, [], undefined, undefined, undefined, activeId),
+                      onSuggest: params.readOnly ? undefined : (text) => void s.send(text, [], undefined, undefined, undefined, activeId),
                       onTask: (card, landing) => runTaskCard(card, landing, activeId),
 
                       ...(ttsEnabled ? { onSpeak: (text) => speak(m.id, text) } : {}),
@@ -508,6 +529,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                 )
               })
             )}
+            {running && runStats && !runStatsMsgId && runStats.finishedAt == null && <div className="t2-runstats-solo"><RunStatsLine stats={runStats} /></div>}
             {activeMessages.filter((m) => m.teamSummary).slice(-1).map((m) => <TeamSummary key={m.id} message={m} />)}
             {running && activeId && s.isGroupVoting && <div className="t2-sys"><span className="t2-dot" /> {t('group.voting.inProgress')}</div>}
             {running && activeId && s.llmRetry && (
@@ -581,7 +603,7 @@ export function ChatView({ leaf, params }: ViewProps) {
         {/* Chat 固定使用创建时的当前默认 Agent，不露选择器；Work 的云会话仍可选 Agent，外部引擎仍 host-only。
             轨道方案 §4:门控去掉 `!groupChat`(06-25 那道「群聊态无单一主 agent」门的理由随选择条消失 ——
             **这条就是群聊/团队模式的配置器**),换成轨道身份钉死的三把锁(私聊 / 私聊引擎 / 独立团队)。 */}
-        {!params.miniSurface && !hasMessages && mvCfg.preset !== 'chat' && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.teamSlug && (
+        {!params.miniSurface && !params.childSurface && !hasMessages && mvCfg.preset !== 'chat' && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.teamSlug && (
           <div className="newchat-pickers">
             <AgentSelectStrip sessionId={activeId} cfg={mvCfg} />
           </div>
@@ -608,14 +630,14 @@ export function ChatView({ leaf, params }: ViewProps) {
           )}
         </AnimatePresence>
         <Composer2
-          disabled={s.connState !== 'ok' || (studioChat && !studioRoot)}
+          disabled={!!params.readOnly || s.connState !== 'ok' || (studioChat && !studioRoot)}
           disabledPlaceholder={studioChat && !studioRoot ? t('studio.chooseProject') : undefined}
           running={running}
           execConfig={mvCfg}
           models={visibleModels}
           modelsResponse={s.modelsResp}
           modelId={mvModelId}
-          onModelChange={(id) => s.setSessionModel(id, activeId)}
+          onModelChange={(id) => s.setSessionModel(id, activeId, !params.childSurface)}
           engines={s.engines}
           engineId={mvCfg.engineId}
           engineModels={mvCfg.engineId ? (s.engineCaps[mvCfg.engineId]?.models ?? []) : undefined}
@@ -623,7 +645,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           onEngineModelChange={activeId ? (id) => s.setSessionEngineModel(id, activeId) : (id) => s.setNewChatCfg((c) => ({ ...c, engineModelId: id || undefined }))}
           engineCommands={mvCfg.engineId ? (s.engineCaps[mvCfg.engineId]?.commands ?? []) : undefined}
           thinkingLevel={mvCfg.thinkingLevel}
-          onThinkingChange={(lv) => s.setSessionThinking(lv, activeId)}
+          onThinkingChange={(lv) => s.setSessionThinking(lv, activeId, !params.childSurface)}
           defaultModelIds={{
             backgroundModelId: s.desktopConfig?.backgroundModelId || '',
             imageModelId: s.cfg.imageModelId || '',
@@ -646,7 +668,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           groupAgents={mvCfg.groupAgents}
           groupTempAgents={mvCfg.groupTempAgents}
           // Solo agents create a separate team from the add menu; project and team sessions edit their roster in place.
-          onGroupChange={mvCfg.soloAgentSlug || mvCfg.soloEngineId ? undefined : activeId ? (patch) => s.setSessionGroup(patch, activeId) : (patch) => s.setNewChatCfg((c) => ({ ...c, ...patch }))}
+          onGroupChange={params.childSurface || mvCfg.soloAgentSlug || mvCfg.soloEngineId ? undefined : activeId ? (patch) => s.setSessionGroup(patch, activeId) : (patch) => s.setNewChatCfg((c) => ({ ...c, ...patch }))}
           onAddAgent={mvCfg.soloAgentSlug ? () => setRaiseTeam(true) : undefined}
           onNormalWork={() => {
             const patch: Partial<AgentConfig> = { planMode: false, groupChat: false, approvalMode: 'auto-edit' }
@@ -657,16 +679,16 @@ export function ChatView({ leaf, params }: ViewProps) {
           skills={s.skillsList}
           agents={s.agentDefs}
           // 拍板 ⑪:对话中可切 Agent,入口先放模式切换菜单;群聊态 / 私聊(钉死)/ 引擎会话不给。
-          onAgentSwitch={activeId && hasMessages && !mvCfg.groupChat && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.teamSlug && !mvCfg.engineId ? (slug) => s.selectSessionAgent(slug, activeId) : undefined}
+          onAgentSwitch={!params.childSurface && activeId && hasMessages && !mvCfg.groupChat && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.teamSlug && !mvCfg.engineId ? (slug) => s.selectSessionAgent(slug, activeId) : undefined}
           currentAgentSlug={mvCfg.agentSlug || s.defaultAgentSlug}
           // 私聊(Agent 轨道):@ 候选换成本机项目 → 派遣(方案 §5.4);只有带路径的本地工作区(派遣工具 host-only)。
           mentionProjects={mvCfg.soloAgentSlug ? s.workspaces().filter((w) => w.kind === 'local' && !!w.path).map((w) => ({ name: w.name, path: w.path! })) : undefined}
-          onNewSession={() => {
+          onNewSession={params.childSurface ? undefined : () => {
             if (mvCfg.soloAgentSlug) { if (!running) void rotateSolo('agent', mvCfg.soloAgentSlug) }
             else if (mvCfg.soloEngineId) { if (!running) void rotateSolo('engine', mvCfg.soloEngineId) }
             else void s.newSession()
           }}
-          onBranch={activeId ? () => void s.branchFromMessage(undefined, activeId) : undefined}
+          onBranch={!params.childSurface && activeId ? () => void s.branchFromMessage(undefined, activeId) : undefined}
           onOpenSettings={() => s.openSettings('skills')}
           onExecConfigChange={(patch) => s.setExecConfig(patch, activeId)}
           onSend={async (text, attachments, workspaceFiles, skillIds, mentions) => {
@@ -687,13 +709,13 @@ export function ChatView({ leaf, params }: ViewProps) {
           sessionTokens={activeUsage.base + activeUsage.live}
           runCost={activeUsage.runCost}
           costLimit={activeUsage.costLimit}
-          onCompact={() => void s.compact(activeId)}
-          seedText={s.steerRestore ?? s.pendingDraft}
-          appendRefs={s.draftRefs}
+          onCompact={(focus) => void s.compact(activeId, focus)}
+          seedText={s.steerRestore ?? (params.childSurface ? null : s.pendingDraft)}
+          appendRefs={params.childSurface ? null : s.draftRefs}
           onAppendRefsConsumed={s.clearDraftRefs}
           // 聊天开在侧栏(Amadeus 右栏等)→ 默认引用主区当前打开的那篇笔记;聊天自己就是主区时无从谈起
-          autoRefFromMain={leaf.loc !== 'main'}
-          onSeedConsumed={() => { if (s.steerRestore && activeId) s.clearSteerRestore(activeId); else s.setPendingDraft(null) }}
+          autoRefFromMain={!params.childSurface && leaf.loc !== 'main'}
+          onSeedConsumed={() => { if (s.steerRestore && activeId) s.clearSteerRestore(activeId); else if (!params.childSurface) s.setPendingDraft(null) }}
           sentHistory={sentHistory}
           pendingSteer={s.steerPending}
           onCancelSteer={activeId ? (id) => { void s.withdrawSteer(activeId, id) } : undefined}
@@ -704,10 +726,11 @@ export function ChatView({ leaf, params }: ViewProps) {
       {/* 右侧车道:任务概览卡 + Agent Desk 卡片态。锚在整列(.t2-chat-col,含输入框区)——
         * Desk 卡底缘与输入框底缘同一条线(都是列底 -16px);滚动条仍在最右缘
         * (卡片右侧留 --tsum-gut 让 thumb 落位)。够宽才显示(容器查询),见 chat2.css .t2-rail */}
-      <div className="t2-rail">
+      {!params.childSurface && <div className="t2-rail">
         <TaskSummary
-          teamStatus={activeId && (teamDesk || s.historianEnabled) ? <>
+          teamStatus={activeId ? <>
             {teamDesk && <TeamStatus sessionId={activeId} />}
+            <SubChatStatus sessionId={activeId} />
             {s.historianEnabled && <HistorianStatus key={activeId} sessionId={activeId} />}
           </> : undefined}
           messages={activeMessages}
@@ -744,12 +767,12 @@ export function ChatView({ leaf, params }: ViewProps) {
           }}
         />
         {deskEnabled && activeId ? <DeskCard sessionId={activeId} /> : null}
+      </div>}
       </div>
-      </div>
-      {deskEnabled && activeId ? <AgentDesk sessionId={activeId} /> : null}
+      {deskEnabled && activeId && !childSelections[activeId] ? <AgentDesk sessionId={activeId} /> : null}
+      {!params.childSurface && activeId ? <ChildChatPanel key={activeId} parentId={activeId} /> : null}
     </div>
   )
 }
 
 /** 本地时刻 → 日程锚点串 `YYYY-MM-DDTHH:mm`(与 agentSchedule 的 calendarDate 编码同款;绝不走 toISOString=UTC)。 */
-

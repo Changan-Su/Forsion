@@ -6,12 +6,14 @@
  * 模型原话进 report.md 供人读(「实际体验」只能靠这个感知,几何断言看不出来)。
  *
  *   npm run build && npm run live:harness                    # 全部场景(约 5-10 分钟,真烧订阅额度)
+ *   npm run live:harness -- --only personas                 # 三位音乐人格的同题实测(身份自动验,表达读原话)
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
  *   TANGU_LIVE_MODEL=codex/gpt-5.6-sol npm run live:harness  # 换模型
  *   npm run live:harness -- --only historian,dream,muse --muse-mode auto   # Muse 三档:ask(缺省)|agent|auto
  *   npm run live:harness -- --only chat,tool --exec-mode sandbox           # 负对照:sandbox 模式下工具走云工作区,未登录应报错而非假空目录
  *   npm run live:harness -- --only conflict                  # 改 skills/amadeus-note-format(同步冲突副本合并)后跑:技能装载 + 双向并集 + 画布对不动
+ *   npm run live:harness -- --only autocompact --window 32000  # 自动压缩持久化(09-15):把该模型窗口钉到 32k 灌满 → run 内自动压缩落检查点 → 下个 run 从摘要接着答;改 compaction / hydrate 后跑
  *   npm run live:harness -- --only cache                     # 前缀缓存命中(A/B/B′/C/D + head hash 探针);token 节省看 scripts/cache-hit-report.mjs
  *   npm run live:harness -- --only recall-unprompted --ab-memory   # B1 行为闸:记忆易变段走 tail vs system 各跑一遍(两次引擎启动,顺序)
  *   npm run live:harness -- --only deferred                  # E2 按需装载:load_tools 先于 read_document + 子代理 read_document 直通 + 子代理自己 load_tools 解锁 browser_snapshot
@@ -45,11 +47,13 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['chat', 'tool', 'loop', 'group', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant'];
+const KEYS = ['personas', 'chat', 'tool', 'loop', 'group', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs'];
+// autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
+const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant']);
+const OPT_IN = new Set(['personas', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs']);
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 { // --only 写错 / 缺上游 → 直接拒,别跑出 0/0 或靠猜答的假绿(Codex 09-12)
@@ -258,7 +262,11 @@ const startedAt = new Date().toISOString();
 const child = spawn(process.execPath, [
   entry, '--port', String(port), '--host', '127.0.0.1', '--data-dir', join(home, 'state.db'),
   '--sandbox', SANDBOX, '--cloud-url', 'http://127.0.0.1:9', '--token', TOKEN,
-], { env: { ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1' }, stdio: ['ignore', 'pipe', 'pipe'] });
+], { env: {
+  ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
+  // --window:只钉台架模型的窗口(contextBudget 的 env 覆盖表,最高优先级),别的模型不受影响
+  ...(WINDOW ? { TANGU_MODEL_CONTEXT_WINDOWS: JSON.stringify({ [MODEL]: WINDOW }) } : {}),
+}, stdio: ['ignore', 'pipe', 'pipe'] });
 child.stdout.on('data', (d) => appendFileSync(engineLog, d));
 child.stderr.on('data', (d) => appendFileSync(engineLog, d));
 let childExit = null;
@@ -274,6 +282,13 @@ const api = async (path, init = {}) => {
   return body;
 };
 const museLogTail = () => { try { return readFileSync(engineLog, 'utf8').split('\n').filter((l) => l.includes('[muse]')).slice(-6).join(' ⏎ '); } catch { return ''; } };
+/** 直接读隔离 state.db 的压缩检查点(只读打开,引擎同时写着也安全);没有 HTTP 面,只能这么核。 */
+const summariesOf = async (sessionId) => {
+  const { default: Database } = await import('better-sqlite3');
+  const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+  try { return db.prepare('SELECT summary, through_timestamp, through_message_id, through_tool_call_id FROM session_summaries WHERE session_id = ? ORDER BY through_timestamp').all(sessionId); }
+  finally { db.close(); }
+};
 const asList = (x, key) => Array.isArray(x) ? x : Array.isArray(x?.[key]) ? x[key] : Array.isArray(x?.rows) ? x.rows : [];
 
 // 桌面 work 会话的 per-run 配置(execMode/cwd 只经 agent_config 传,见 agentLoop.ts:581;appStore.ts:1553 同形)。
@@ -301,10 +316,10 @@ async function seedMemory() {
   memorySeeded = true;
 }
 /** 起 run 并消费 SSE 到 done/error;approval_request 一律代批(记数),单 run 超时算 error。 */
-async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}) {
+async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client) {
   const t0 = Date.now();
-  const { runId } = await api('/agent/runs', { method: 'POST', body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
-  const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], approvals: 0, usages: [], probes: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [] }, ttftMs: null, wallMs: 0 };
+  const { runId } = await api('/agent/runs', { method: 'POST', body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, client, agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
+  const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], approvals: 0, usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, wallMs: 0 };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
@@ -346,11 +361,14 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           // 团队运行模式(群聊分叉):发言序 + 收场原因是 group 场景的唯一观测点;done 的 content 恒空,靠 ev.done 判链路走通。
           else if (e.type === 'group_speaker' && p.phase === 'start') ev.group.speakers.push(String(p.slug || '?'));
           else if (e.type === 'group_speaker' && p.phase === 'end') ev.group.remarks.push({ ...p, at: Date.now(), duringActivation: ev.group.starts.some((s) => s.slug === p.slug && !ev.group.ends.some((x) => x.runId === s.runId)) });
+          else if (e.type === 'team_output') ev.group.outputs.push(p.message);
           else if (e.type === 'group_summary') ev.group.summary = p;
           else if (e.type === 'group_ended') ev.group.ended = p;
           // 并行团队(09-16 第四轮):成员激活的起止时刻 —— 「真并行」的唯一观测点是两次激活的时间区间交叠。
           else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), at: Date.now(), runId: p.runId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
+          // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
+          else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped'].includes(p.phase)) ev.statuses.push(p);
           else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); ev.toolOffsets = p.toolOffsets ?? null; break outer; }
           else if (e.type === 'error') { ev.error = String(p.error || 'error'); break outer; }
         }
@@ -432,6 +450,18 @@ try {
   rmSync(authLink, { force: true }); // 凭证只在引擎启动时装载一次,之后不再读文件 → 立刻拆掉软链
 
   const sessA = `live-a-${Date.now()}`;
+  // 同题分别激活三位内置人格。自动断言只证身份接线与完成;表达差异读报告里的模型原话判断。
+  for (const [slug, name] of [['xyra', 'Arioso'], ['aria', 'Aria'], ['recita', 'Recita']]) {
+    await scenario('personas', `personas ${name}`, async () => {
+      const ev = await run(`live-persona-${slug}-${Date.now()}`,
+        '先用一行报出你的名字。我做了三个月的独立应用，朋友只说“还行”，我很失落，觉得这证明我没有创造力。我想明天辞职全职做它，但目前没有付费用户，存款只够三个月。你怎么看？也请给我一句可以放在产品首页的文案。请控制在 220 字以内，不调用工具。',
+        120_000, { agentSlug: slug });
+      return { ok: !ev.error && ev.done && ev.content.includes(name) && ev.content.length > 60,
+        detail: ev.error || `${name} 身份与完成检查;人格质量需阅读原话`,
+        output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+    });
+  }
+
   const chat = await scenario('chat', 'chat 基础对话', async () => {
     const ev = await run(sessA, '用一句话介绍你自己,句末加上 OK。');
     return { ok: !ev.error && ev.content.length > 0, detail: ev.error || `${ev.content.length} 字`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
@@ -443,6 +473,29 @@ try {
     const hit = ev.content.includes(MARKER);
     const anchors = anchorsOk(ev);
     return { ok: !ev.error && ev.toolCalls.length > 0 && hit && anchors, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};标记${hit ? '命中' : '未命中'};done 锚点${anchors ? '对齐' : `不对齐(${JSON.stringify(ev.toolOffsets)})`}${ev.approvals ? `;代批 ${ev.approvals}${ev.approveError ? '(失败:' + ev.approveError + ')' : ''}` : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  await scenario('childchat', 'childchat 委派完整落库与原子会话续聊', async () => {
+    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: 'live-idle', name: 'Idle member', systemPrompt: 'Be concise.' }) });
+    const team = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'Unstarted team', model_id: MODEL, agent_config: { ...AGENT_CONFIG, groupChat: true, groupAgents: ['live-idle'] } }) })).session;
+    const openMember = () => api(`/agent/sessions/${team.id}/team-members/live-idle`, { method: 'POST' }).then((r) => r.session);
+    const [first, again] = await Promise.all([openMember(), openMember()]);
+    if (first.id !== again.id || first.agent_config.teamMember.teamSessionId !== team.id || first.agent_config.cwd !== AGENT_CONFIG.cwd) return { ok: false, detail: 'Idle member carrier or scope mismatch', output: JSON.stringify({ first, again }) };
+    const parentId = `live-child-parent-${Date.now()}`;
+    const parent = await run(parentId, `Use delegate exactly once. Ask the child to read ${markerFile}, remember the code value, and report it. Do not read the file yourself. After the child completes, reply briefly.`, 240_000);
+    const children = asList(await api(`/agent/sessions/${parentId}/background?kind=delegate`), 'background');
+    const child = children[0];
+    if (parent.error || !child) return { ok: false, detail: parent.error || 'No persisted delegate child', output: parent.content };
+    const detail = (await api(`/agent/sessions/${child.sessionId}/detail`)).session;
+    const before = asList(await api(`/agent/sessions/${child.sessionId}/messages`), 'messages');
+    const parentBefore = asList(await api(`/agent/sessions/${parentId}/messages`), 'messages');
+    const serialized = JSON.stringify(before);
+    const follow = await run(child.sessionId, 'Without using any tools, repeat the exact code value you read in your previous task. Reply with only that code.', 120_000, detail.agent_config);
+    const after = asList(await api(`/agent/sessions/${child.sessionId}/messages`), 'messages');
+    const parentAfter = asList(await api(`/agent/sessions/${parentId}/messages`), 'messages');
+    const mainList = asList(await api('/agent/sessions?limit=100'), 'sessions');
+    const ok = !follow.error && parent.toolCalls.includes('delegate') && serialized.includes(MARKER) && before.some((m) => m.role === 'user') && before.some((m) => m.tool_calls?.length) && follow.content.includes(MARKER) && after.length > before.length && parentBefore.length === parentAfter.length && !mainList.some((s) => s.id === child.sessionId) && detail.agent_config.delegatedFrom === parentId;
+    return { ok, detail: follow.error || `child ${child.sessionId}; messages ${before.length}→${after.length}; parent ${parentBefore.length}→${parentAfter.length}; recall ${follow.content.includes(MARKER)}; retained link ${detail.agent_config.delegatedFrom === parentId}`, output: JSON.stringify({ before, follow: follow.content }, null, 2), ttftMs: ttft(follow), tokens: tokensOf(parent) + tokensOf(follow), toolCalls: parent.toolCalls };
   });
 
   // 并行团队(新工作区 × 轨道体系,09-16 第四轮:成员各自在自己的工作会话里并行干活、全员起头、被 @ 者优先、成员各自以 DONE 表态,
@@ -477,6 +530,22 @@ try {
       detail: ev.error || `发言序 ${sp.join('→') || '无'};并行${overlap ? '交叠' : '未交叠(串行!)'};收场 ${reason || '无'}(${ev.group.ended?.steps ?? '?'} 步 · ${ev.group.ended?.rounds ?? '?'} 周期);带发言人前缀的落库消息 ${attributed} 条;工作中发言 ${early};固定 Historian 摘要 ${hasSummary}`,
       output: list.filter((m) => m.role === 'model').map((m) => String(m.content || '')).join('\n\n---\n\n'), ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
     };
+  });
+
+  await scenario('teamoutputs', 'teamoutputs 成员 sketch 与文件交付到主会话', async () => {
+    const file = join(workspace, 'team-delivery.txt');
+    writeFileSync(file, 'TEAM-FILE-CONTENT');
+    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: 'live-artist', name: 'Artist', systemPrompt: 'On this task, use sketch once to draw a small two-step workflow. Include TEAM-SKETCH-CONTENT in its HTML. Then use display_file to show the exact file path provided by the user. Finish with only DONE. Do not delegate or ask teammates to do this.' }) });
+    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: 'live-observer', name: 'Observer', systemPrompt: 'For this test, do not call any tools. Reply only DONE and do not address other members.' }) });
+    const sid = `live-output-${Date.now()}`;
+    const ev = await run(sid, `Artist: draw the workflow and display this existing file: ${file}. Observer: just finish.`, 180_000, { groupChat: true, groupAgents: ['live-artist', 'live-observer'], groupSeedHistory: false, groupNoSummary: true, groupMaxRounds: 1 }, 'desktop/live-harness');
+    const persisted = (await api(`/agent/sessions/${sid}/messages`)).messages || [];
+    const sketches = ev.group.outputs.filter((m) => m.tool_calls?.some((c) => c.function?.name === 'sketch' && c.function.arguments.includes('TEAM-SKETCH-CONTENT')));
+    const files = ev.group.outputs.filter((m) => m.display_files?.some((f) => f.path === file && f.sourceSessionId !== sid));
+    const durable = ev.group.outputs.every((m) => persisted.some((p) => p.id === m.id && JSON.stringify(p.tool_calls || []) === JSON.stringify(m.tool_calls || []) && JSON.stringify(p.display_files || []) === JSON.stringify(m.display_files || [])));
+    return { ok: !ev.error && ev.done && sketches.length === 1 && files.length === 1 && durable,
+      detail: ev.error || `主流 sketch=${sketches.length}, files=${files.length}, 落库一致=${durable}`,
+      output: JSON.stringify(ev.group.outputs), ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
   // 复现 09-13 用户导出的失败形态:上限极低时末轮不带 tools,模型不该把调用手写进正文(` to=x code:{…}` / 裸工具参数 JSON),
@@ -547,6 +616,33 @@ try {
     const ev = await run(sessD, '刚才那个文件里 code = 后面的值是什么?只回答值本身。');
     const kept = ev.content.includes(MARKER);
     return { ok: !ev.error && c.ok === true && kept, detail: `压缩 ${JSON.stringify(c).slice(0, 90)};压缩后标记${kept ? '仍答对' : '丢失'}${ev.error ? ';' + ev.error : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: (tokensOf(pre) || 0) + (tokensOf(ev) || 0) || null, toolCalls: [...pre.toolCalls, ...ev.toolCalls] };
+  });
+
+  // 自动压缩持久化(09-15 对标 pi/Codex)。需要 --window(缺省 272k 窗灌不满):触发线 = 窗口 − max(16384, 5%) → 32k 窗 = 16k。
+  // ① 读标记文件(小)② 一条 ~8k token 的大消息:首轮粗估(系统提示 + 工具头 + 历史 + 大消息)越线 → run 内自动压缩把①总结成
+  //   **持久**检查点(已落库行,立刻落)③ 追问标记:首轮再越线 → 增量压缩把②总结进同一条链 → 标记只能从两次链式摘要里答。
+  // 断言:两个 run 都发了 compacted(至少一次 persisted:true)、session_summaries 真有行、③ 的主循环 prompt 比 ② 小、③ 答中标记。
+  await scenario('autocompact', 'autocompact 自动压缩持久化(需 --window)', async () => {
+    if (!WINDOW) return { ok: false, skipped: true, detail: '未指定 --window(缺省 272k 窗口灌不满);示例 --only autocompact --window 32000' };
+    const sessE = `live-e-${Date.now()}`;
+    const pre = await run(sessE, `请用工具读取文件 ${markerFile},把文件里 code = 后面的值原样回复给我,不要多说。`);
+    if (pre.error || !pre.content.includes(MARKER)) return { ok: false, detail: `前置读标记失败:${pre.error || '未命中'}`, output: pre.content, toolCalls: pre.toolCalls };
+    const ctxWin = pre.statuses.find((s) => s.phase === 'context_info')?.ctxWindow;
+    if (ctxWin !== WINDOW) return { ok: false, detail: `窗口覆盖未生效:context_info.ctxWindow=${ctxWin},期望 ${WINDOW}(引擎读的是 TANGU_MODEL_CONTEXT_WINDOWS)` };
+    const filler = Array.from({ length: 220 }, (_, i) => `Paragraph ${i + 1}: The archive team catalogued ledgers, maps and correspondence from the northern warehouses, noting shelf, box and folio for each item.`).join('\n');
+    const big = await run(sessE, `下面是一段资料,读完只回复「收到」两个字,不要总结。\n\n${filler}`);
+    const ask = await run(sessE, '刚才那个 marker 文件里 code = 后面的值是什么?只回答值本身。');
+    const compacted = (ev) => ev.statuses.filter((s) => s.phase === 'compacted' && !s.fallback);
+    const mainPrompt = (ev) => Number((ev.usages || []).find((u) => !u.phase)?.prompt) || 0;
+    let rows = []; let dbErr = '';
+    try { rows = await summariesOf(sessE); } catch (e) { dbErr = String(e?.message || e); }
+    const kept = ask.content.includes(MARKER);
+    const shrank = mainPrompt(ask) > 0 && mainPrompt(big) > 0 && mainPrompt(ask) < mainPrompt(big);
+    const ok = !big.error && !ask.error && compacted(big).length >= 1 && compacted(ask).length >= 1
+      && [...compacted(big), ...compacted(ask)].some((s) => s.persisted) && rows.length >= 1 && kept && shrank;
+    const detail = big.error || ask.error || dbErr
+      || `②压缩 ${compacted(big).length} 次(persisted ${compacted(big).filter((s) => s.persisted).length});③压缩 ${compacted(ask).length} 次(persisted ${compacted(ask).filter((s) => s.persisted).length});检查点行 ${rows.length}(切点 ${rows.map((r) => r.through_tool_call_id ? '行内' : '整行').join('/') || '-'});主循环 prompt ②${mainPrompt(big)} → ③${mainPrompt(ask)}${shrank ? '(变小)' : '(未变小)'};标记${kept ? '仍答对' : '丢失'}`;
+    return { ok, detail, output: `【②】${big.content}\n\n【③】${ask.content}\n\n【摘要链】\n${rows.map((r) => r.summary).join('\n---\n')}`, ttftMs: ttft(ask), tokens: (tokensOf(pre) || 0) + (tokensOf(big) || 0) + (tokensOf(ask) || 0) || null, toolCalls: [...pre.toolCalls, ...big.toolCalls, ...ask.toolCalls] };
   });
 
   // 技能改动的真模型验证:amadeus-note-format §十 同步冲突副本合并。原位 = 云端版(-S)、副本 = 本机版(-L),共同基线两行;

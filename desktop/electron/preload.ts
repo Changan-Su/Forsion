@@ -129,6 +129,8 @@ const api = {
   exportActivity: (days?: number): Promise<string> => ipcRenderer.invoke('activity:export', days),
   /** 前台窗口采样(默认拒:主进程 config.activeWindowEnabled 关着时恒 null)。 */
   activeWindow: (): Promise<ActiveWindowSample | null> => ipcRenderer.invoke('system:activeWindow'),
+  /** 本窗口订阅着的在飞 run 数(「有会话运行时不休眠」,开关与判定在主进程 keepAwake.ts)。 */
+  reportRunningSessions: (count: number): void => ipcRenderer.send('power:running', count),
   /** 拖入文件 → 绝对路径(Electron≥32 File.path 已移除,必须 webUtils 在渲染层取)。 */
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   /** 本机工作区文件浏览:列目录 / 读文件(主进程 fs)。 */
@@ -395,6 +397,7 @@ const AGENT_KEYS = [
   'pluginsUserInstalled', 'pluginsUninstall',
   'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', // 设备互联依赖 agent 后端
   'act', 'exportActivity', // 活动日志喂后台 Muse;无 agent 后端的产品形态记了也没读者
+  'reportRunningSessions', // 无 agent 后端就没有 run
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
 if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'marketInstalled', 'marketUninstall'] as const) delete (api as Record<string, unknown>)[k]

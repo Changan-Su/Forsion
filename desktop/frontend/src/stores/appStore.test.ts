@@ -99,6 +99,25 @@ describe('appStore.reduceEvent', () => {
 
   afterEach(() => vi.useRealTimers())
 
+  it('team outputs render immediately, survive DONE-only activation and match history without replay duplicates', () => {
+    const ref = { current: 'a1' }
+    const emit = (type: string, payload: any) => useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 1, type, payload })
+    emit('team_member', { phase: 'start', slug: 'bo', name: 'Bo', messageId: 'work', runId: 'child' })
+    const message = { id: 'output', role: 'model', content: '**🗣 Bo**\n\n', agent_slug: 'bo', timestamp: 5,
+      tool_calls: [{ id: 'sketch', function: { name: 'sketch', arguments: JSON.stringify({ html: '<h1>Complete sketch</h1>' }) }, ui_content_offset: 0 }],
+      tool_results: [{ tool_call_id: 'sketch', content: 'Rendered.' }],
+      display_files: [{ name: 'report.pdf', path: '/tmp/report.pdf', sourceSessionId: 'child-session' }],
+    }
+    emit('team_output', { message })
+    emit('team_output', { message })
+    expect(ref.current).toBe('work') // public outputs do not hijack concurrent member routing
+    emit('team_member', { phase: 'end', reason: 'done', slug: 'bo', messageId: 'work' })
+    const list = useApp.getState().messagesBySession.s1
+    expect(list).toHaveLength(1)
+    expect(list[0]).toMatchObject({ id: 'output', content: '', agentId: 'bo', sketches: [{ html: '<h1>Complete sketch</h1>' }], displayFiles: message.display_files })
+    expect(list[0]).toEqual(recordToUi(message, () => ({ slug: 'bo', color: list[0].agentColor! })))
+  })
+
   it('并行团队:team_member start 收养占位气泡 / 转发审批按 messageId + 子 runId 落点 / team_activity 动态 / group_speaker end 带 text 剥 DONE / group_ended 复位', () => {
     const ref = { current: 'a1' } as { current: string; group?: boolean; groupSeen?: boolean; reuseNext?: boolean; groupEnded?: boolean }
     const emit = (type: string, payload: Record<string, unknown> = {}) => {
@@ -284,6 +303,13 @@ describe('appStore.reduceEvent', () => {
     emit('status', { phase: 'compacted', forced: true, fallback: true, savedChars: 99, iteration: 4 })
     msgs = useApp.getState().messagesBySession.s1
     expect(msgs[msgs.length - 1].content).toBe('ctx.compacted.auto')
+    // 上游拒收超长输入后的压缩重试(reason=overflow)用自己的措辞;别的 reason 仍是 forced 文案
+    emit('status', { phase: 'compacted', forced: true, reason: 'overflow', persisted: true, iteration: 5 })
+    msgs = useApp.getState().messagesBySession.s1
+    expect(msgs[msgs.length - 1].content).toBe('ctx.compacted.overflow')
+    emit('status', { phase: 'compacted', forced: true, reason: 'threshold', persisted: false, iteration: 6 })
+    msgs = useApp.getState().messagesBySession.s1
+    expect(msgs[msgs.length - 1].content).toBe('ctx.compacted.forced')
   })
 
   it('done 与 error 正确收尾并过期未决操作', () => {
@@ -300,6 +326,30 @@ describe('appStore.reduceEvent', () => {
     useApp.getState().reduceEvent('s1', 'r2', ref, { seq: 2, type: 'error', payload: { error: 'boom' } })
     expect(useApp.getState().messagesBySession.s1[0]).toMatchObject({ status: 'error', error: 'boom' })
     expect(useApp.getState().runningBySession.s1).toBeUndefined()
+  })
+
+  it('done 带 toolOffsets:引擎丢掉的流式正文撤下、收尾提示补上;旧引擎不带锚点则直播段不动', () => {
+    // 复现 09-15 截图:两轮工具后末轮不带 tools,DeepSeek 把 read_session 手写成 DSML 流上屏,引擎丢弃后只落停止说明。
+    const dsml = '<｜｜DSML｜｜tool_calls> <｜｜DSML｜｜invoke name="read_session"> <｜｜DSML｜｜parameter name="session_id" string="true">x</｜｜DSML｜｜parameter> </｜｜DSML｜｜invoke> </｜｜DSML｜｜tool_calls>'
+    const final = '(模型把工具调用写成了正文、未被执行,该段已丢弃。) > ⚠️ 已达到最大循环轮数(3 轮)'
+    const replay = (runId: string, done: Record<string, unknown>) => {
+      useApp.setState({ messagesBySession: { s1: [assistant()] }, runningBySession: { s1: runId } })
+      const ref = { current: 'a1' }
+      const emit = (seq: number, type: string, payload: unknown) => useApp.getState().reduceEvent('s1', runId, ref, { seq, type, payload } as AgentRunEvent)
+      emit(1, 'tool_call', { id: 't1', name: 'read_file', arguments: '{}' })
+      emit(2, 'tool_result', { id: 't1', name: 'read_file', result: 'ok' })
+      emit(3, 'tool_call', { id: 't2', name: 'view_image', arguments: '{}' })
+      emit(4, 'tool_result', { id: 't2', name: 'view_image', result: 'ok' })
+      emit(5, 'token', { delta: dsml.slice(0, 30) })
+      emit(6, 'token', { delta: dsml.slice(30) })
+      emit(7, 'done', done)
+      return useApp.getState().messagesBySession.s1[0]
+    }
+    const settled = replay('r1', { content: final, toolOffsets: [{ id: 't1', offset: 0 }, { id: 't2', offset: 0 }] })
+    expect(settled.segments).toEqual([{ t: 'tools', ids: ['t1', 't2'] }, { t: 'text', text: final }])
+    expect(settled.content).toBe(final)
+    const legacy = replay('r2', { content: final })
+    expect(legacy.segments).toEqual([{ t: 'tools', ids: ['t1', 't2'] }, { t: 'text', text: dsml }])
   })
 
   it('status/llm_retry 设置重试横幅,流恢复(下一个非 status 事件)即自清', () => {
@@ -608,6 +658,70 @@ describe('toggleOpenWorkspace', () => {
     expect(keys()).toEqual([])
     useApp.getState().setActiveWorkspaceKey('a') // 再点进去 —— 值没变,但必须重新展开
     expect(keys()).toEqual(['a'])
+  })
+})
+
+describe('独立轨道会话与项目活动隔离', () => {
+  const session = (id: string, patch: Partial<SessionRecord> = {}): SessionRecord => ({
+    id, title: id, summary: null, model_id: null, archived: false, emoji: null, agent_config: null,
+    project_path: null, project_name: null, projectless: true,
+    created_at: '2026-09-16T09:00:00.000Z', updated_at: '2026-09-16T09:00:00.000Z',
+    ...patch,
+  })
+  const solo = session('solo', { agent_config: { soloAgentSlug: 'xyra' } })
+  const team = session('team', { agent_config: { teamSlug: 'ui-team', groupChat: true } })
+  const rootless = session('rootless')
+
+  beforeEach(() => {
+    useApp.setState(initial, true)
+    useApp.setState({
+      connState: 'idle', sessions: [rootless, solo, team], archivedSessions: [], configBySession: {},
+      activeWorkspaceKey: 'kept-project', openWorkspaceKeys: ['kept-project'],
+    })
+  })
+
+  it('点独立 Agent / TEAM 不映射成「不在项目中」,普通无根会话仍会', () => {
+    useApp.getState().setActiveId('solo') // 刻意只靠列表行 agent_config,覆盖冷启动 config map 尚未预填
+    expect(useApp.getState().activeWorkspaceKey).toBe('kept-project')
+    expect(useApp.getState().openWorkspaceKeys).toEqual(['kept-project'])
+
+    useApp.getState().setActiveId('team')
+    expect(useApp.getState().activeWorkspaceKey).toBe('kept-project')
+    expect(useApp.getState().openWorkspaceKeys).toEqual(['kept-project'])
+
+    useApp.getState().setActiveId('rootless')
+    expect(useApp.getState().activeWorkspaceKey).toBe(ROOTLESS_WORKSPACE_KEY)
+    expect(useApp.getState().openWorkspaceKeys).toEqual(['kept-project', ROOTLESS_WORKSPACE_KEY])
+  })
+
+  it('open 返回既有会话时原位刷新,纯点击不会把它 unshift 到首位', () => {
+    useApp.getState().adoptSession({ ...team, title: '更新后的团队名' })
+    expect(useApp.getState().sessions.map((x) => x.id)).toEqual(['rootless', 'solo', 'team'])
+    expect(useApp.getState().sessions[2].title).toBe('更新后的团队名')
+  })
+
+  it('纯点击不改活动时间,新消息完成才推进', () => {
+    const before = useApp.getState().sessions[0].updated_at
+    useApp.getState().setActiveId('rootless')
+    expect(useApp.getState().sessions[0].updated_at).toBe(before)
+
+    useApp.setState({
+      activeId: null, // 避开当前会话 done 的 TTS 浏览器桥;本测试只钉活动时间
+      messagesBySession: { rootless: [{ ...assistant(), id: 'reply' }] },
+      runningBySession: { rootless: 'run' },
+    })
+    useApp.getState().reduceEvent('rootless', 'run', { current: 'reply' }, {
+      seq: 1, type: 'done', payload: { content: '新消息' },
+    } as AgentRunEvent)
+    expect(Date.parse(useApp.getState().sessions[0].updated_at)).toBeGreaterThan(Date.parse(before))
+  })
+
+  it('Space 被动恢复会话时不激活或展开它所属的 Project', () => {
+    useApp.setState({ activeWorkspaceKey: 'kept-project', openWorkspaceKeys: [] })
+    useApp.getState().setActiveId('rootless', { revealWorkspace: false })
+    expect(useApp.getState().activeId).toBe('rootless')
+    expect(useApp.getState().activeWorkspaceKey).toBeNull()
+    expect(useApp.getState().openWorkspaceKeys).toEqual([])
   })
 })
 

@@ -22,6 +22,7 @@ export const DESKTOP_IMPLEMENTED: string[] = [
   '/think',
   '/approval',
   '/help',
+  '/feedback',
   '/skills',
   '/tools',
   '/agents',

@@ -107,7 +107,12 @@ describe.skipIf(!native)('real OS host sandbox (temporary paths only)', () => {
     const moved = await command(ctx, ['/bin/mv', home, path.join(cwd, 'renamed')]);
     expect(moved.code, moved.output).not.toBe(0);
     expect(await fs.readFile(config, 'utf8')).toBe('original');
+    // 抢占 config.json 的写锁同样被拒:占住它 = 用户的设置(含收紧审批)都存不进去
+    const locked = await command(ctx, ['/bin/sh', '-c', ': > "$1"', 'sh', `${config}.lock`]);
+    expect(locked.code, locked.output).not.toBe(0);
+    await expect(fs.stat(`${config}.lock`)).rejects.toThrow();
     expect(protectedHostPaths()).toContain(process.execPath);
+    expect(protectedHostPaths()).toContain(`${config}.lock`);
   });
   it('uses the same policy through the actual host tools and background process registry', async () => {
     const { ctx, cwd, outside } = await fixture();

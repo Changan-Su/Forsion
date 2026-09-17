@@ -6,9 +6,10 @@
  * 收件箱因此不再有自己的左栏组件(旧 Gmail 式 InboxListView 已删),Inbox Space 左栏就是 workspace 视图,
  * 自动档由 Space 默认档 + 阅读面板的 workspaceSource 指到这里;别的 Space 的工作区选择器里也能手动切到它。
  *
- * 分组(可选中的文件夹,「全部」由宿主给):未读 / 每个发信人 / 已归档。agent 按 slug 各一个;系统消息不管
- * 来自哪个插件并成一个「系统」,服务端广播一个「Forsion」(同名文件夹重复出现分不清)。
- * 未归档与已归档是 store 里**两份独立数据**,subscribe 时都拉:未读 / 按发信人在未归档那份上客户端筛。
+ * 分组(可选中的来源筛选,「全部」由宿主给):未读 / Forsion / 自动化 / 智能体 / 系统 / 已归档。
+ * 来源顺序固定,只显示当前有消息的类别。不再按 agent slug 平铺,尤其 `automation:<ruleId>` 只是引擎路由标识,
+ * 必须全部并入「自动化」,否则每条规则都会制造一个永久文件夹并泄漏内部 id。
+ * 未归档与已归档是 store 里**两份独立数据**,subscribe 时都拉:未读 / 按来源在未归档那份上客户端筛。
  * ⚠️ items() / groups() 只读不写,渲染期零副作用 —— 旧写法在 items() 里切全局服务端档,左右栏各选一个分组
  *    就会互相切档无限拉取(2026-09-11 自查)。
  * 文案一律现取:title / label 是字符串字段,赋值即定格,切语言不变(CLAUDE.md 双语纪律)→ 用 getter。
@@ -18,14 +19,22 @@ import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { ListGroup, ListItem, ListSourceContribution } from '@amadeus/plugins/types'
 import { translate } from '../../i18n'
 import { useApp } from '../../stores/appStore'
-import { useInbox, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
+import { useInbox, isAutomationSender, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
 import { INBOX_WORKSPACE_MODE } from '../workspaceMode'
 
 // 源身份单源:从工作区模式串 `plugin:<pid>:<srcId>` 拆出来 —— Space 默认档 / workspaceSource / 注册三处永远一致。
 const [, SOURCE_OWNER, SOURCE_ID] = INBOX_WORKSPACE_MODE.split(':')
 const UNREAD = 'unread'
 const ARCHIVED = 'archived'
-const SENDER = 's:'
+const SOURCE = 'source:'
+
+type SourceKind = 'forsion' | 'automation' | 'agents' | 'system'
+const SOURCE_GROUPS: Array<{ kind: SourceKind; titleKey: string; icon?: string }> = [
+  { kind: 'forsion', titleKey: 'inbox.source.forsion' },
+  { kind: 'automation', titleKey: 'inbox.source.automation', icon: 'today' },
+  { kind: 'agents', titleKey: 'inbox.source.agents' },
+  { kind: 'system', titleKey: 'inbox.sender.system', icon: 'info' },
+]
 
 /** 相对时间;>7 天转日期。 */
 function timeAgo(iso: string | null): string {
@@ -39,8 +48,12 @@ function timeAgo(iso: string | null): string {
   return d.toLocaleDateString()
 }
 
-const senderKey = (m: InboxMessage): string =>
-  m.sender_kind === 'agent' ? `${SENDER}agent:${m.sender_id ?? ''}` : `${SENDER}${m.sender_kind}:`
+const sourceKind = (m: InboxMessage): SourceKind => {
+  if (m.sender_kind === 'server') return 'forsion'
+  if (m.sender_kind === 'system') return 'system'
+  return isAutomationSender(m) ? 'automation' : 'agents'
+}
+const sourceKey = (m: InboxMessage): string => `${SOURCE}${sourceKind(m)}`
 
 function toItem(m: InboxMessage): ListItem {
   const avatar = m.sender_kind === 'agent' && m.sender_id ? useApp.getState().agentAvatars[m.sender_id] : undefined
@@ -65,24 +78,26 @@ export const inboxListSource: ListSourceContribution = {
     // 未归档那份里可能有刚点了「归档」、PATCH 还没回来的行 —— 按字段立即挪走。
     let list = group === ARCHIVED ? st.archived : st.messages.filter((m) => !m.archived_at)
     if (group === UNREAD) list = list.filter((m) => !m.read_at)
-    else if (group?.startsWith(SENDER)) list = list.filter((m) => senderKey(m) === group)
+    else if (group?.startsWith(SOURCE)) list = list.filter((m) => sourceKey(m) === group)
     const q = f?.query?.trim().toLowerCase()
     if (q) list = list.filter((m) => m.title.toLowerCase().includes(q) || (m.body || '').toLowerCase().includes(q) || senderOf(m).toLowerCase().includes(q))
     return list.map(toItem)
   },
   groups() {
     const st = useInbox.getState()
-    const senders = new Map<string, ListGroup>()
+    const counts = new Map<SourceKind, number>()
     for (const m of st.messages) {
       if (m.archived_at) continue
-      const k = senderKey(m)
-      const g = senders.get(k)
-      if (g) g.count = (g.count ?? 0) + 1
-      else senders.set(k, { key: k, title: senderOf(m), count: 1, ...(m.sender_kind === 'system' ? { icon: 'info' } : {}) })
+      const kind = sourceKind(m)
+      counts.set(kind, (counts.get(kind) ?? 0) + 1)
     }
+    const sources: ListGroup[] = SOURCE_GROUPS.flatMap(({ kind, titleKey, icon }) => {
+      const count = counts.get(kind)
+      return count ? [{ key: `${SOURCE}${kind}`, title: translate(titleKey), count, ...(icon ? { icon } : {}) }] : []
+    })
     return [
       { key: UNREAD, title: translate('inbox.filter.unread'), count: st.unreadCount },
-      ...[...senders.values()].sort((a, b) => (b.count ?? 0) - (a.count ?? 0)),
+      ...sources,
       { key: ARCHIVED, title: translate('inbox.filter.archived'), ...(st.archivedLoaded ? { count: st.archived.length } : {}) },
     ]
   },

@@ -633,33 +633,22 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
 .dv-edge-toggle:hover,
 .dv-nav-btn:hover:not(:disabled) { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
 .dv-nav-btn:disabled { opacity: 0.32; cursor: default; }
-/* 右栏折叠钮:浮在工作区右上角(=右panel最右缘),收起后仍在原处。 */
-.dv-edge-right {
+/* 右上角浮钮组(恢复布局 / 小窗 / 底部面板 / 右栏):浮在工作区右上角(=右panel最右缘),侧栏收起后仍在原处。
+ * flex 排队而非逐枚写死 right 偏移 —— 小窗钮只在桌面有,web 少一枚也不留空洞。 */
+.dv-edge-actions {
   position: absolute;
   top: 5px;
   right: 6px;
   z-index: 6;
+  display: flex;
+  gap: 2px;
   -webkit-app-region: no-drag;
-  background: var(--sidebar-bg);
 }
-/* 底部面板折叠钮:紧挨右栏钮的**左边**(26px 钮宽 + 2px 缝 = 28)。同样浮着,底部收起后仍在原处。 */
-.dv-edge-bottom {
-  position: absolute;
-  top: 5px;
-  right: 34px;
-  z-index: 6;
-  -webkit-app-region: no-drag;
-  background: var(--sidebar-bg);
-}
-/* 恢复默认布局钮:再往左退一格(26 + 2 = 28)。resetLayout 重建的是**当前 Space** 的 build()。 */
-.dv-edge-reset {
-  position: absolute;
-  top: 5px;
-  right: 62px;
-  z-index: 6;
-  -webkit-app-region: no-drag;
-  background: var(--sidebar-bg);
-}
+/* 保持 (0,1,0):别写成 .dv-edge-actions > .dv-edge-toggle,那会压过上面的 :hover 底色。 */
+.dv-edge-reset,
+.dv-edge-mini,
+.dv-edge-bottom,
+.dv-edge-right { background: var(--sidebar-bg); }
 /* 展开态高亮:底部面板不像左右栏那样一眼可见「有没有开」(它可能被拖得很矮),故钮自己表达开合。 */
 .dv-edge-bottom.is-on { color: var(--accent-ink, var(--accent, var(--text))); }
 

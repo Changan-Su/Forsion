@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { useInbox, type InboxMessage } from '../../stores/inboxStore'
+import { useInbox, senderOf, type InboxMessage } from '../../stores/inboxStore'
 import { inboxListSource as src } from './inboxListSource'
 
 const msg = (id: string, extra: Partial<InboxMessage> = {}): InboxMessage => ({
@@ -18,6 +18,9 @@ beforeEach(() => {
       msg('5', { sender_kind: 'system', sender_id: 'plugin:callroom' }),
       msg('6', { sender_kind: 'system', sender_id: 'plugin:pc-erp' }),
       msg('7', { archived_at: '2026-09-11 09:30:00' }), // 刚点了归档、PATCH 未回
+      msg('8', { sender_id: 'automation:w-da28d2' }),
+      msg('9', { sender_id: 'automation:w-d06155' }),
+      msg('10', { sender_id: 'ariosto' }),
     ],
     archived: [msg('4', { archived_at: '2026-09-10 08:00:00', read_at: '2026-09-10 08:00:00' })],
     archivedLoaded: true, unreadCount: 4, ...spies,
@@ -25,11 +28,12 @@ beforeEach(() => {
 })
 
 describe('收件箱列表源(统一工作区)', () => {
-  it('全部 = 未归档那份(刚归档的立即挪走);未读点只挂未读行;未读 / 按发信人客户端筛;搜索叠加正文', () => {
-    expect(src.items().map((i) => i.key)).toEqual(['1', '2', '3', '5', '6'])
-    expect(src.items().map((i) => !!i.unread)).toEqual([true, false, true, true, true])
-    expect(src.items({ group: 'unread' }).map((i) => i.key)).toEqual(['1', '3', '5', '6'])
-    expect(src.items({ group: 's:agent:muse' }).map((i) => i.key)).toEqual(['1', '2'])
+  it('全部 = 未归档那份(刚归档的立即挪走);未读点只挂未读行;未读 / 按来源客户端筛;搜索叠加正文', () => {
+    expect(src.items().map((i) => i.key)).toEqual(['1', '2', '3', '5', '6', '8', '9', '10'])
+    expect(src.items().map((i) => !!i.unread)).toEqual([true, false, true, true, true, true, true, true])
+    expect(src.items({ group: 'unread' }).map((i) => i.key)).toEqual(['1', '3', '5', '6', '8', '9', '10'])
+    expect(src.items({ group: 'source:agents' }).map((i) => i.key)).toEqual(['1', '2', '10'])
+    expect(src.items({ group: 'source:automation' }).map((i) => i.key)).toEqual(['8', '9'])
     expect(src.items({ query: 'alpha' }).map((i) => i.key)).toEqual(['3'])
   })
 
@@ -40,10 +44,12 @@ describe('收件箱列表源(统一工作区)', () => {
     expect(spies.refreshArchived).not.toHaveBeenCalled()
   })
 
-  it('分组:未读(服务端未读数)→ 发信人按条数降序(系统消息不分插件并成一个)→ 已归档(条数)', () => {
+  it('分组:未读 → 固定来源顺序 → 已归档;多个自动化规则并成一组且不泄漏规则 id', () => {
     const g = src.groups!()
-    expect(g.map((x) => x.key)).toEqual(['unread', 's:agent:muse', 's:system:', 's:server:', 'archived'])
-    expect(g.map((x) => x.count)).toEqual([4, 2, 2, 1, 1])
+    expect(g.map((x) => x.key)).toEqual(['unread', 'source:forsion', 'source:automation', 'source:agents', 'source:system', 'archived'])
+    expect(g.map((x) => x.count)).toEqual([4, 1, 2, 3, 2, 1])
+    expect(g.map((x) => x.title)).not.toContain('automation:w-da28d2')
+    expect(senderOf(useInbox.getState().messages.find((m) => m.id === '8')!)).toBe('自动化')
   })
 
   it('subscribe 一次拉三样(未归档 / 未读数 / 已归档),退订后不再通知', () => {

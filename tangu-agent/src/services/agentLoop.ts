@@ -33,11 +33,16 @@ import { DockerCleanupError } from '../sandbox/dockerLifecycle.js';
 import { resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { listFilesLocal, sanitizeProjectName } from '../tools/fileWorkspace.js';
 import {
-  modelContextWindowInfo, INPUT_HARD_RATIO, INPUT_WARN_RATIO, COMPACT_TRIGGER_RATIO, FORCE_COMPACT_RATIO,
+  modelContextWindowInfo, INPUT_HARD_RATIO, INPUT_WARN_RATIO, compactionThreshold,
   estimateTokensRough, estimateMessagesTokens, compactContext, capToolResult, capHistoryContent, pinMessage,
-  ContextUsageTracker, CompactionAttemptGuard, assistantTurnOf,
+  ContextUsageTracker, CompactionAttemptGuard, assistantTurnOf, markLossy, HISTORY_MSG_MAX_CHARS,
 } from './contextBudget.js';
-import { getLatestSummary, compactWorkingMessages } from './compaction.js';
+import {
+  getLatestSummary, compactWorkingMessages, compactSession, summaryMessage, rowCoverage,
+  tagMessageSource, messageSource, persistCheckpoint, messageTimestamp, type CompactBoundary,
+} from './compaction.js';
+import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
+import { isContextOverflowError } from './contextWindowStore.js';
 import { getAgent, isValidSlug, DEFAULT_MAX_ITERATIONS, libDirOf, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { loadHarness, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
@@ -46,7 +51,7 @@ import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, type HistorianForkSeed } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
 import { describeImages, resolveVisionModelId, shouldDescribeImages } from './visionService.js';
-import { replayAssistantHistory, stepLlmResponse, type ReplayStep } from './historyReplay.js';
+import { replayAssistantHistory, stepLlmResponse, loadReplaySteps, dropCoveredCalls } from './historyReplay.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { isRetryableLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
@@ -497,38 +502,44 @@ export function activeRunCount(): number {
 
 const HYDRATE_MAX = 50;
 const HYDRATE_BLOCK = 10; // 窗口起点按块对齐:跨 run 前缀仅每 ~5 个 run 移动一次,而非逐 run 滑动(缓存友好)
+const HYDRATE_EXTEND_MAX = 100; // 有检查点但没覆盖到窗口起点时,窗口最多再往前扩这么多行(宁可多回放,不静默丢)
+const LAZY_CHECKPOINT_WAIT_MS = 45_000; // 下个 run 等上一个 run 在飞的惰性检查点的上限
+/** 每会话在飞的惰性检查点(run 收尾后起的 fire-and-forget 摘要);下个 run hydrate 前等它落库。 */
+const lazyCheckpoints = new Map<string, Promise<void>>();
+const sleepMs = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** 该会话是否有在飞的 run(路由层用:手动 /compact 与在途落库不许并发)。 */
+export function sessionHasActiveRun(sessionId: string): boolean {
+  for (const sid of runSession.values()) if (sid === sessionId) return true;
+  return false;
+}
 
 /**
- * B3(Token/缓存评审 §五):取窗口内各 assistant 消息背后的 agent_steps,供 replayAssistantHistory
- * 重建在线时的 assistant→tool→assistant 交错(扁平回放会让下个 run 的缓存前缀在 run 边界就分叉)。
- * 只多一次查询(每 run 一次,不在迭代热路径),且不取 tool_results —— 结果从消息行本身拿。
- * 任何失败 / 未实现(thin worker 无此端点)→ 空 Map → 回放退回扁平形态,与升级前完全一致。
- * 不排 excludeMessageId:本 run 的 assistant 行此刻还没落库,不在 rows 里(steer 中途 finalize 的段
- * 即便进来,闸①也会因步骤覆盖不上而退回扁平)。
- * 注:HYDRATE_MAX / HYDRATE_BLOCK 的窗口算术只数 **DB 行**,回放吐出的消息变多不影响对齐;
- * currentUserIndex 也只在 user 行上取 out.length-1,同样不受影响。
+ * run 收尾后的惰性检查点(借 pi 在 agent_end 时机做压缩):下个 run 的 hydrate 窗口(最近 HYDRATE_MAX 行,
+ * 块对齐)之外若还有未被检查点覆盖的老行,先给它们做一份**持久**摘要 —— 此前这些行只是静默不进上下文,
+ * 一场几十轮的长对话在第 51 行起就开始「失忆」,除非用户手动 /compact。fire-and-forget,不占下个 run 的
+ * 首帧;窗口起点每 HYDRATE_BLOCK 行才挪一次,所以约每 5 个 run 才多一次摘要调用(增量,带上一检查点)。
+ * 分步回放(agent_steps)与 hydrate 同源,故窗口算术只数 DB 行。无 run 上下文 → 用量台账静默跳过(与手动 /compact 同)。
  */
-async function loadReplaySteps(
-  sessionId: string,
-  rows: Array<{ id: string; role: string }>,
-): Promise<Map<string, ReplayStep[]>> {
-  const map = new Map<string, ReplayStep[]>();
-  const state = deps().state;
-  const load = state.listStepsForMessages;
-  const ids = rows.filter((r) => r.role === 'model' || r.role === 'assistant').map((r) => r.id);
-  if (!load || !ids.length) return map;
-  try {
-    for (const s of await load.call(state, sessionId, ids)) {
-      const list = map.get(s.messageId);
-      const step: ReplayStep = { stepNo: s.stepNo, llmResponse: s.llmResponse, toolCalls: s.toolCalls };
-      if (list) list.push(step);
-      else map.set(s.messageId, [step]);
-    }
-  } catch (e: any) {
-    console.warn('[agent-core] 分步回放读取失败,本次回退扁平回放:', e?.message || e);
-    return new Map();
-  }
-  return map;
+async function checkpointRowsOutsideWindow(
+  sessionId: string, modelId: string, appId: string, settings: CompactionSettings, runThinking: ThinkingLevel,
+): Promise<void> {
+  if (!settings.enabled || !modelId) return;
+  const n = await deps().state.countSessionMessages(sessionId);
+  const next = n + 1; // 下个 run hydrate 时已多落一行 user;窗口起点按它算
+  if (next <= HYDRATE_MAX) return;
+  const start = Math.ceil((next - HYDRATE_MAX) / HYDRATE_BLOCK) * HYDRATE_BLOCK;
+  const outside = await deps().state.listSessionMessagesWindow(sessionId, start, 0);
+  const last = outside[outside.length - 1];
+  const throughTs = Number(last?.timestamp) || 0;
+  if (!throughTs) return;
+  const prev = await getLatestSummary(sessionId);
+  // 已覆盖到窗口外最后一行(且不是只覆盖了它一半)→ 没有要做的
+  if (prev && prev.throughTimestamp >= throughTs && !(prev.throughMessageId && prev.throughTimestamp === throughTs)) return;
+  const r = await compactSession(sessionId, modelId, appId, undefined, { throughTs, settings, runThinking });
+  if (r.ok) console.info(`[agent-core] session=${sessionId} hydrate 窗口外 ${outside.length} 行已做持久压缩检查点(through=${throughTs})`);
+  // thin worker 没有本地库:每个长会话 run 收尾都会 'load messages failed',那是 fail-safe 不是故障,别刷 warn
+  else if (r.reason !== 'nothing to compact' && r.reason !== 'load messages failed') console.warn(`[agent-core] session=${sessionId} 窗口外老行压缩未成: ${r.reason}`);
 }
 
 /**
@@ -549,32 +560,55 @@ async function hydrateHistory(
    *  (historyReplay 文件头 ①)。protocol 只能取模型上的**静态**标记 —— hydrate 发生在 buildProviderPayload
    *  之前,动态改道(思考开 → Responses)那一档此时还没定,故只会判「不匹配」,不会误判匹配。 */
   replayFor?: { apiModelId?: string; protocol?: string },
-): Promise<{ messages: ChatMessage[]; currentUserIndex: number }> {
+): Promise<{ messages: ChatMessage[]; currentUserIndex: number; checkpointThrough: { ts: number; rowId?: string; partial: boolean } }> {
+  // 上一个 run 收尾后起的惰性检查点还在跑 → 等它(有界):否则这一轮的窗口起点已经越过那批老行,
+  // 而检查点还没落,老行既没摘要也没回放(Codex 09-15 评审 #2)。等的是已经在飞的任务,不是新起摘要。
+  const inflight = lazyCheckpoints.get(sessionId);
+  if (inflight) await Promise.race([inflight, sleepMs(LAZY_CHECKPOINT_WAIT_MS)]);
+  // 压缩检查点先读:窗口起点要照着它定 —— 见 session_summaries 则丢弃被覆盖的行、开头注入一条摘要;
+  // 行内切点的那一行只回放切点之后的工具轮(rowCoverage / dropCoveredCalls)。每条回放消息打上来源行标记,
+  // run 内压缩据此判断总结覆盖到了哪一行、能不能立刻落检查点。
+  // fail-safe:无检查点 / 读失败 / 行缺 timestamp(worker) → through=0,行为与未压缩完全一致。
+  const checkpoint = await getLatestSummary(sessionId);
+  const through = checkpoint?.throughTimestamp || 0;
   const n = await deps().state.countSessionMessages(sessionId);
-  const start = n > HYDRATE_MAX ? Math.ceil((n - HYDRATE_MAX) / HYDRATE_BLOCK) * HYDRATE_BLOCK : 0;
+  let start = n > HYDRATE_MAX ? Math.ceil((n - HYDRATE_MAX) / HYDRATE_BLOCK) * HYDRATE_BLOCK : 0;
+  // 有检查点时窗口起点不能越过它:起点之前那一行还没被覆盖(惰性检查点失败 / 没跑到),就把窗口往前
+  // 扩到覆盖处,封顶 HYDRATE_EXTEND_MAX —— 宁可多回放,不静默丢。没有检查点(thin worker / 从未压缩)维持原窗口。
+  if (checkpoint && start > 0) {
+    const floor = Math.max(0, start - HYDRATE_EXTEND_MAX);
+    while (start > floor) {
+      const prev = await deps().state.listSessionMessagesWindow(sessionId, 1, start - 1);
+      if (!prev[0] || rowCoverage(prev[0], checkpoint) === 'covered') break;
+      start = Math.max(floor, start - HYDRATE_BLOCK);
+    }
+  }
   // 显式 LIMIT(=窗口剩余条数)而非裸 OFFSET:SQLite 不允许无 LIMIT 的 OFFSET(PG 允许);
   // 取 [start, n) 区间,n/start 已知,两方言皆合法。
   const rows = await deps().state.listSessionMessagesWindow(sessionId, Math.max(0, n - start), start);
   const stepsByMessage = await loadReplaySteps(sessionId, rows);
-  // 压缩检查点：见 session_summaries 则丢弃 through_timestamp 及之前的消息，开头注入一条摘要。
-  // fail-safe：无检查点 / 读失败 / 行缺 timestamp(worker) → through=0，行为与未压缩完全一致。
-  const checkpoint = await getLatestSummary(sessionId);
-  const through = checkpoint?.throughTimestamp || 0;
   const out: ChatMessage[] = [];
   let lastUserWithImages = -1; // out 中最新带图 user 消息的下标
   let currentUserIndex = -1; // out 中「本轮那条 user 消息」的下标(按行 id 认,不靠倒扫猜)
   let lastUserImages: ReturnType<typeof normalizeImageAttachments> = [];
   for (const r of rows) {
     if (r.id === excludeMessageId) continue;
-    if (through > 0 && (Number(r.timestamp) || 0) <= through) continue;
+    const coverage = rowCoverage(r, checkpoint);
+    if (coverage === 'covered') continue;
     const role = r.role === 'model' ? 'assistant' : r.role;
     if (role !== 'user' && role !== 'assistant' && role !== 'system') continue;
     const content = r.content || '';
+    const src = { id: r.id, ts: Number(r.timestamp) || 0 };
+    // 超单条硬帽的行回放出来是截断文本:标成有损,run 内压缩总结到它时不推进持久检查点(原文只在 DB 里)
+    const lossy = String(content).length > HISTORY_MSG_MAX_CHARS;
     if (role === 'assistant') {
-      out.push(...replayAssistantHistory(r, stepsByMessage.get(r.id), replayFor));
+      let replayed = replayAssistantHistory(r, stepsByMessage.get(r.id), replayFor);
+      if (coverage === 'partial' && checkpoint?.throughToolCallId) replayed = dropCoveredCalls(replayed, checkpoint.throughToolCallId);
+      for (const m of replayed) out.push(lossy ? markLossy(tagMessageSource(m, src)) : tagMessageSource(m, src));
       continue;
     }
-    out.push({ role, content: capHistoryContent(content) } as ChatMessage);
+    const msg = tagMessageSource({ role, content: capHistoryContent(content) } as ChatMessage, src);
+    out.push(lossy ? markLossy(msg) : msg);
     if (role === 'user' && currentUserMessageId && r.id === currentUserMessageId) currentUserIndex = out.length - 1;
     if (role === 'user' && r.attachments) {
       const imgs = normalizeImageAttachments(r.attachments);
@@ -592,12 +626,15 @@ async function hydrateHistory(
       ? `${m.content}\n\n(The image(s) attached to this message were transcribed by the vision assistant model, because the current model has no native image input. Description follows.)\n\n${described}`
       : toImageParts(m.content, lastUserImages);
   }
-  // 图片物化在前(用 out 内下标)、摘要 unshift 在后,避免下标错位。
+  // 图片物化在前(用 out 内下标)、摘要 unshift 在后,避免下标错位。摘要消息与 run 内压缩产物同一构造器 → 逐字相同。
   if (checkpoint && through > 0) {
-    out.unshift({ role: 'system', content: '## Compacted Summary of Earlier Conversation\n' + checkpoint.summary } as ChatMessage);
+    out.unshift(summaryMessage(checkpoint.summary));
     if (currentUserIndex >= 0) currentUserIndex += 1; // unshift 把所有下标推后一位
   }
-  return { messages: out, currentUserIndex };
+  return {
+    messages: out, currentUserIndex,
+    checkpointThrough: { ts: through, rowId: checkpoint?.throughMessageId, partial: !!(checkpoint?.throughMessageId && checkpoint.throughToolCallId) },
+  };
 }
 
 async function runLoop(runId: string, ac: AbortController): Promise<void> {
@@ -662,6 +699,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (stored !== null && (typeof stored !== 'object' || Array.isArray(stored))) throw new Error('Invalid stored session Agent configuration');
     // 轨道身份先于 agentSlug 纠偏:私聊会话的 agentSlug 由 soloAgentSlug 钉死,下面的写穿会把存值也顺手纠回来。
     bindSessionFacts(agentConfig, pickSessionFacts(stored));
+    if (stored?.delegatedFrom) {
+      agentConfig.delegatedFrom = stored.delegatedFrom;
+      agentConfig.delegatedBy = stored.delegatedBy;
+      agentConfig.subAgentGrants = stored.subAgentGrants || [];
+    }
     // 独立团队:成员表 / TEAM.md 从团队定义补(run 自带的 groupAgents 优先 —— 会话里拉非成员按会话覆盖,不改团队配置)。
     if (typeof agentConfig.teamSlug === 'string') {
       const team = await getTeam(agentConfig.teamSlug).catch(() => null);
@@ -737,6 +779,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   if (agentConfig.agentSlug && activeAgentSlug !== agentConfig.agentSlug) {
     throw new Error('The selected Agent could not be activated. The run was not started with another Agent.');
   }
+  // 压缩旋钮:run 级(会话 / Agent config.toml 的 [compaction],已由 applyAgentActivation 并入)> config.json > 缺省。
+  const compactionCfg = compactionSettingsFor(agentConfig.compaction);
   // 把激活的 agent slug 穿透进 run 上下文:本地记忆层(remember/log_event/Historian)据此落到
   // ~/.tangu/agents/<slug>/;未选择时使用默认 Agent，无效身份已在上面拒绝。enterWith 覆盖整个异步子树。
   // memScopeSlug=共用默认时落 DEFAULT,否则该 agent 自己——保证「每个 agent 只写自己的(或显式共用默认的)」。
@@ -876,6 +920,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const pendingDisplayFiles: DisplayFileItem[] = [];
   // 当前正在累积的助手消息 id;steer 注入时 finalize 当前段、改用新 id 续接下一段(见迭代循环)。
   let currentAssistantId = run.assistant_message_id || uuidv4();
+  // 压缩检查点的「段落库后补落」钩子:函数级声明,catch(中止落半截)路径也要调;真身在 workingMessages 就位后赋值。
+  let settleCheckpointAfterFinalize: (messageId: string) => Promise<void> = async () => {};
 
   try {
     runHostSandbox = execMode === 'host' ? resolveHostSandboxPolicy() : undefined;
@@ -984,7 +1030,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         return null;
       }
     };
-    const { messages: history, currentUserIndex } = await hydrateHistory(
+    const { messages: history, currentUserIndex, checkpointThrough } = await hydrateHistory(
       sessionId, run.assistant_message_id || '', describeUserImages,
       typeof input.userMessageId === 'string' ? input.userMessageId : undefined,
       { apiModelId: replayModelKey, protocol: stepItemBinding.protocol },
@@ -1187,6 +1233,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       automationOrigin: typeof agentConfig.automationOrigin === 'string' ? agentConfig.automationOrigin : undefined,
       toolsMode,
       toolsList,
+      subAgentDepth: agentConfig.delegatedFrom ? 1 : undefined,
+      subAgentGrants: agentConfig.delegatedFrom ? new Set<string>(agentConfig.subAgentGrants || []) : undefined,
+      subAgentDelegator: agentConfig.delegatedBy,
       agentSlug: activeAgentSlug,
       thinkingLevel,
       teamSessionId: isTeamMember ? String(teamMember.teamSessionId) : undefined,
@@ -1321,6 +1370,53 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
     ctxMark('plan');
     workingMessages.push(...history);
+
+    // ── run 内压缩的检查点账本(09-15 自动压缩持久化)────────────────────────────
+    // 从 hydrate 拿到的检查点起单调累积(时间戳 + 行 id + 是否行内切点);pending = 总结覆盖到了本 run
+    // 尚未落库的助手段,等该段 finalize(收尾 / 中止落半截 / steer 拆段)后再落库 —— 那时才知道它的行时间戳。
+    const checkpoint: {
+      throughTs: number; throughRowId?: string; partial: boolean;
+      pending?: { summary: string; toolCallId: string; messageId: string };
+    } = { throughTs: checkpointThrough.ts, throughRowId: checkpointThrough.rowId, partial: checkpointThrough.partial };
+    /** 一次成功的 run 内压缩 → 按边界落检查点。返回本次是否已落库(pending 的算未落)。 */
+    const recordBoundary = async (summary: string, b?: CompactBoundary): Promise<boolean> => {
+      if (!b) return false;
+      // 范围里有机械折叠过 / 按硬帽截过的消息:摘要没见过原文,只留在本 run 内存里,不推进持久检查点
+      if (b.lossy) { checkpoint.pending = undefined; return false; }
+      if (b.pendingToolCallId) {
+        checkpoint.pending = { summary, toolCallId: b.pendingToolCallId, messageId: currentAssistantId };
+        return false;
+      }
+      checkpoint.pending = undefined;
+      if (b.partialRow) {
+        const ok = await persistCheckpoint(sessionId, summary, { ts: b.partialRow.ts, messageId: b.partialRow.id, toolCallId: b.partialRow.toolCallId });
+        if (ok) Object.assign(checkpoint, { throughTs: b.partialRow.ts, throughRowId: b.partialRow.id, partial: true });
+        return ok;
+      }
+      if (!b.through) return false;
+      // 更晚的时间戳,或同一时间戳上「更完整」(行内切点 → 整行 / 同一毫秒的邻行)才算前进
+      const advances = b.through.ts > checkpoint.throughTs
+        || (b.through.ts === checkpoint.throughTs && (checkpoint.partial || checkpoint.throughRowId !== b.through.id));
+      if (!advances) return false;
+      const ok = await persistCheckpoint(sessionId, summary, { ts: b.through.ts, messageId: b.through.id });
+      if (ok) Object.assign(checkpoint, { throughTs: b.through.ts, throughRowId: b.through.id, partial: false });
+      return ok;
+    };
+    /** 某 assistant 段刚落库:给它在 workingMessages 里的消息打上来源行(后续压缩把它们当已落库行算),
+     *  并把等着它的 pending 检查点落库。读不到时间戳(thin worker 无本地库)→ 什么都不做,fail-safe。 */
+    settleCheckpointAfterFinalize = async (messageId: string): Promise<void> => {
+      const ts = await messageTimestamp(messageId);
+      if (!ts) return;
+      for (const m of workingMessages) {
+        if (!messageSource(m) && (m.role === 'assistant' || m.role === 'tool')) tagMessageSource(m, { id: messageId, ts });
+      }
+      const p = checkpoint.pending;
+      if (p?.messageId !== messageId) return;
+      checkpoint.pending = undefined;
+      if (await persistCheckpoint(sessionId, p.summary, { ts, messageId, toolCallId: p.toolCallId })) {
+        Object.assign(checkpoint, { throughTs: ts, throughRowId: messageId, partial: true });
+      }
+    };
     // context 视图数据(H5/H8/B2):窗口值+来源、指令文件清单+截断、注入段分解、历史规模。
     // 纯只读一次性事件,不进模型上下文;桌面 ctx 环弹层消费。
     // 思考档:请求档 vs 实际生效档(能力表 clamp;与 payload 构建同一张表,H6 降档可见)。
@@ -1340,6 +1436,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       phase: 'context_info',
       ctxWindow: ctxWindowTokens,
       ctxWindowSource,
+      // 压缩触发线(窗口 − 预留)与本 run 生效的压缩旋钮来源:客户端进度环据此画「到这就会压」的刻度
+      compactAt: compactionThreshold(ctxWindowTokens, compactionCfg.reserveTokens),
+      compactionEnabled: compactionCfg.enabled,
       sections: ctxMarks,
       files: projectDocInfo?.sources ?? [],
       filesTruncated: projectDocInfo?.truncated ?? false,
@@ -1379,11 +1478,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         return;
       }
       const m = workingMessages[tailUserIndex];
+      const src = messageSource(m); // 换了对象身份,来源行标记要跟着搬(压缩边界靠它认「这条已落库」)
       if (typeof m.content === 'string') {
         workingMessages[tailUserIndex] = { ...m, content: m.content ? `${m.content}\n\n${text}` : text };
       } else if (Array.isArray(m.content)) {
         workingMessages[tailUserIndex] = { ...m, content: [...m.content, { type: 'text', text }] } as ChatMessage;
       }
+      if (src) tagMessageSource(workingMessages[tailUserIndex], src);
     };
     const tailRuntimeText = (): string => {
       if (tailUserIndex < 0) return '';
@@ -1538,6 +1639,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const finalizedContent = finalContent;
       if (finalContent.trim() || allToolCalls.length) {
         await finalizeAssistantMessage(finalizedId, sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, pendingDisplayFiles.splice(0));
+        await settleCheckpointAfterFinalize(finalizedId);
       }
       for (const m of msgs) {
         await deps().state.insertUserMessage({
@@ -1546,9 +1648,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         });
         const images = normalizeImageAttachments(m.attachments);
         const described = images.length ? await describeUserImages(images) : null;
-        workingMessages.push({ role: 'user', content: described
+        const pushed = { role: 'user', content: described
           ? `${m.content}\n\n[Attached images transcribed by the vision assistant]\n${described}`
-          : images.length ? toImageParts(m.content, images) : m.content } as ChatMessage);
+          : images.length ? toImageParts(m.content, images) : m.content } as ChatMessage;
+        workingMessages.push(pushed);
+        const ts = await messageTimestamp(m.id); // 刚落库的转向消息也是已落库行
+        if (ts) tagMessageSource(pushed, { id: m.id, ts });
       }
       finalContent = '';
       finalReasoning = '';
@@ -1846,6 +1951,55 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
     const contextUsage = new ContextUsageTracker();
     const compactionGuard = new CompactionAttemptGuard();
+    // 压缩触发线 = 窗口 − 预留(借 pi reserveTokens 的绝对余量;272k 窗缺省 255.6k)。
+    const compactAt = compactionThreshold(ctxWindowTokens, compactionCfg.reserveTokens);
+    let hookVetoedCompaction = false; // PreCompact hook 否决过 → 不再按估算拦请求,交给 provider 裁决
+    let overflowRecovered = false; // 上游报「输入超窗口」后压缩重试:每 run 一次
+    let toolsOverhead = 0; // 本轮工具定义头的粗估 token(只在没有实测基准时计入,见 ContextUsageTracker.estimate)
+    /**
+     * 一次 LLM 摘要压缩(threshold=估算越线 / overflow=上游拒收后)。PreCompact hook 只在真要摘要时问一次;
+     * 摘要失败退机械折叠(compactContext,如实标 fallback);成功即按边界落检查点(已落库部分立刻落,
+     * 本 run 尚未落库的段等 finalize)。返回本次是否改动了上下文。
+     */
+    const runCompaction = async (reason: 'threshold' | 'overflow', beforeTokens: number, iteration: number): Promise<boolean> => {
+      const pcV = await runHooks('PreCompact', { source: 'auto', session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug }, hookCtx());
+      if (pcV.stop) {
+        hookVetoedCompaction = true;
+        void publish(runId, 'status', { phase: 'compaction_skipped', reason: 'hook', iteration });
+        return false;
+      }
+      void publish(runId, 'status', { phase: 'compacting', forced: true, reason, iteration });
+      // 换算比例只认 provider 实测(上游拒收时下界 = 窗口);纯粗估不冒充实测。越线本身已成立,故一律 force。
+      const measured = contextUsage.measured(workingMessages);
+      const cr = compactionCfg.enabled
+        ? await compactWorkingMessages(workingMessages, modelId, appId, ac.signal, {
+          settings: compactionCfg, runThinking: thinkingLevel, windowTokens: ctxWindowTokens, force: true,
+          overheadTokens: toolsOverhead,
+          measuredTokens: reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured,
+        })
+        : { ok: false, reason: 'llm compaction disabled' }; // enabled=false:不做摘要,只走下面的机械兜底
+      let changed = false;
+      if (cr.ok && cr.summary) {
+        changed = true;
+        contextUsage.invalidate();
+        const persisted = await recordBoundary(cr.summary, cr.boundary);
+        void publish(runId, 'status', { phase: 'compacted', forced: true, reason, persisted, summarized: cr.summarizedCount, iteration });
+      } else {
+        const r = compactContext(workingMessages);
+        if (r.changed) {
+          changed = true;
+          contextUsage.invalidate();
+          // 只在真折叠了才宣告,且带 savedChars:fallback 是机械折叠,不许对用户谎称「已生成摘要」
+          void publish(runId, 'status', { phase: 'compacted', forced: true, fallback: true, reason, savedChars: r.savedChars, iteration });
+        } else {
+          console.warn(`[agent-core] run=${runId} 压缩未改动上下文: ${cr.reason}`);
+        }
+      }
+      const afterTokens = contextUsage.estimate(workingMessages, toolsOverhead);
+      compactionGuard.record(afterTokens, ctxWindowTokens, workingMessages, compactAt);
+      void publish(runId, 'status', { phase: 'compaction_budget', iteration, beforeTokens, afterTokens, changed: afterTokens < beforeTokens });
+      return changed;
+    };
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       if (ac.signal.aborted) throw new AbortLikeError();
       // load_tools 解锁后的 defs 重算(未解锁迭代零开销;解锁项按 registry 规则追加在内置 defs 末尾)
@@ -1854,6 +2008,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         toolDefsDirty = false;
         toolsJson = JSON.stringify(toolDefs ?? []);
       }
+      toolsOverhead = toolDefs?.length ? estimateTokensRough(toolsJson) : 0;
       // 迭代边界注入运行时转向消息(在压缩 / 模型调用之前 → 新 U 参与上下文与折叠 tail 计算)。
       const steered = drainSteer(runId);
       if (steered.length) await applySteering(steered);
@@ -1868,45 +2023,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
       await publish(runId, 'status', { iteration });
 
-      // 上下文压缩(替代旧的每轮就地 trim——那会让前缀缓存逐轮清零):平时 append-only。
-      //   ≥95%(FORCE_COMPACT_RATIO):总结当前工作快照并替换同一前缀(含本轮工具结果)。不推进持久化
-      //     through_timestamp:当前助手段尚未落库,否则会删除未进摘要的工作或跳过后续消息。
-      //   ≥50%(COMPACT_TRIGGER_RATIO):机械批量折叠中段(运行内、不落库),缓存 miss 摊薄成偶发。
+      // 上下文压缩(替代旧的每轮就地 trim——那会让前缀缓存逐轮清零):平时 append-only,
+      // 只在估算越过触发线(窗口 − 预留)时做一次 LLM 摘要,替换前段、原样保留最近 keepRecentTokens。
+      // 09-15 起没有 50% 的机械折叠档(见 contextBudget 头注);压缩结果按边界落 session_summaries,
+      // 下个 run 从摘要接着跑,不再把整段原样回放后再总结一遍。
       // 实测输入 + 尚未被实测覆盖的增量:不能让全历史粗估永远压过 provider 的真实用量。
-      const estPrompt = contextUsage.estimate(workingMessages);
-      // —— PreCompact hook：压缩将触发时先问 hook（continue:false → 跳过本次压缩；host-only，云端 no-op）——
-      let skipCompact = false;
-      if (modelId && estPrompt > ctxWindowTokens * COMPACT_TRIGGER_RATIO) {
-        const pcV = await runHooks('PreCompact', { source: 'auto', session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug }, hookCtx());
-        skipCompact = !!pcV.stop;
-      }
-      if (!skipCompact && modelId && estPrompt > ctxWindowTokens * FORCE_COMPACT_RATIO && compactionGuard.shouldAttempt(estPrompt, workingMessages)) {
-        void publish(runId, 'status', { phase: 'compacting', forced: true, iteration });
-        const cr = await compactWorkingMessages(workingMessages, modelId, appId, ac.signal);
-        if (cr.ok && cr.summary) {
-          contextUsage.invalidate();
-          void publish(runId, 'status', { phase: 'compacted', forced: true, iteration });
-        } else {
-          const r = compactContext(workingMessages);
-          if (r.changed) {
-            contextUsage.invalidate();
-            // 只在真折叠了才宣告,且带 savedChars:fallback 是机械折叠,不许对用户谎称「已生成摘要」
-            void publish(runId, 'status', { phase: 'compacted', forced: true, fallback: true, savedChars: r.savedChars, iteration });
-          }
-        }
-        const afterTokens = contextUsage.estimate(workingMessages);
-        compactionGuard.record(afterTokens, ctxWindowTokens, workingMessages);
-        void publish(runId, 'status', { phase: 'compaction_budget', iteration, beforeTokens: estPrompt, afterTokens, changed: afterTokens < estPrompt });
-      } else if (estPrompt > ctxWindowTokens * COMPACT_TRIGGER_RATIO) {
-        const r = compactContext(workingMessages);
-        if (r.changed) {
-          contextUsage.invalidate(); // 折叠后旧用量失效,下轮重新以真实值为准
-          console.warn(
-            `[agent-core] run=${runId} 上下文压缩:省 ${r.savedChars.toLocaleString()} 字符;` +
-              `压缩前最大消息: ${r.breakdown.map((b) => `#${b.index}(${b.role},${b.chars.toLocaleString()}字符)`).join(' ')}`,
-          );
-          void publish(runId, 'status', { phase: 'compacted', savedChars: r.savedChars, iteration });
-        }
+      const estPrompt = contextUsage.estimate(workingMessages, toolsOverhead);
+      if (modelId && estPrompt > compactAt && compactionGuard.shouldAttempt(estPrompt, workingMessages)) {
+        await runCompaction('threshold', estPrompt, iteration); // enabled=false 时里面只走机械兜底
       }
 
       // 最后一轮强制不再调工具，逼模型产出最终文本（避免以 tool_calls 收尾、finalContent 为空）
@@ -1916,7 +2040,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const effectiveToolsText = lastIter || !toolDefs?.length ? '' : toolsJson;
       const effectiveToolsBytes = Buffer.byteLength(effectiveToolsText, 'utf8');
       // 末轮说明不在 workingMessages 里,预算检查给它留 ~80 token,别让本该优雅收尾的最后一发撞 provider 输入上限(Codex 09-13 #8)。
-      if (!skipCompact && contextUsage.estimate(workingMessages) + (lastIter ? 80 : 0) >= ctxWindowTokens) {
+      if (!hookVetoedCompaction && contextUsage.estimate(workingMessages, lastIter ? 0 : toolsOverhead) + (lastIter ? 80 : 0) >= ctxWindowTokens) {
         throw new Error('Context remains over the model input budget after compaction. Reduce large attachments or use a larger-context model; the original conversation has been preserved.');
       }
 
@@ -1971,6 +2095,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       let res!: Awaited<ReturnType<typeof streamProviderCompletion>>;
       let partialText = ''; // 本次尝试已流出的正文(中流断线恢复时回灌上下文用)
       let resumedMidstream = false;
+      let retryIteration = false; // 上游拒收超长输入 → 压缩后重进本轮(不消耗迭代额度)
       // 首帧计时仪器(2026-09-06 取证:本机 52% 墙钟在等首帧,用户报「卡住」):requestBytes=本轮上传体量,
       // uploadMs=响应头到达(托管面即上下文送达服务端),ttftMs=首帧,llmMs=整次调用。随 usage 事件落库,
       // scripts/stall-timeline.mjs 据此归属;status:llm_call 让客户端把等待画成「发送 N KB / 等首帧 + 秒数」。
@@ -2049,6 +2174,19 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             break;
           }
           if (err instanceof AbortLikeError) throw err;
+          // 输入超出窗口被拒(估算偏小 / 窗口猜大了):强制压缩一次后重进本轮(借 pi 的 overflow
+          // compact-and-retry;每 run 一次,免得估算与上游两边永远对不上时空转)。上游报错里的真实上限
+          // 已由 learnFromUpstreamError 学下来,下个 run 起触发线按真值算。
+          if (!emitted && !overflowRecovered && isContextOverflowError(err)) {
+            overflowRecovered = true;
+            console.warn(`[agent-core] run=${runId} 上游拒收超长输入,压缩后重试本轮: ${(err as any)?.message || err}`);
+            if (await runCompaction('overflow', contextUsage.estimate(workingMessages, toolsOverhead), iteration)) {
+              retryIteration = true;
+              iteration -= 1;
+              break;
+            }
+            throw err; // 压不动(hook 否决 / 没有可总结的)→ 照常报错
+          }
           // 中流断线恢复(借 pi 的 session 级重试思想):此前「吐过帧就整 run 报废」对长任务是灾难——
           // 第 40 迭代断一次线,前面全部白跑。改为:已流出的半截正文按「段切分」落库(用户看到的内容
           // 原样保留),回灌上下文 + 一条不落库的续写指令,退避后从下一迭代接着跑。慢失败(idle 超时)
@@ -2102,7 +2240,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         }
       }
 
-      if (resumedMidstream) continue; // 中流断线已段切分回灌:res 未产出,直接进下一迭代续写(steer 照常在迭代顶注入)
+      if (resumedMidstream || retryIteration) continue; // 中流断线已段切分回灌 / 溢出已压缩:res 未产出,重进本迭代(steer 照常在迭代顶注入)
 
       // 供应商可能在取消之后才返回成功;不允许迟到的结果启动工具/续跑或发布 done。
       ac.signal.throwIfAborted();
@@ -2460,6 +2598,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       currentAssistantId,
       sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, pendingDisplayFiles.splice(0),
     );
+    await settleCheckpointAfterFinalize(currentAssistantId); // 本 run 压缩覆盖到的助手段刚落库 → 检查点补落
     await flush(); // 先把会话工作区改动回写 Penzor，再发 done，保证客户端收到 done 时云端文件已就绪
     await drain(runId); // 确保 token 等事件全部落库后再发 done
     // toolOffsets = 本条落库消息的工具锚点(同 ui_content_offset)。客户端在 done 时据此按终稿重排直播段,
@@ -2490,6 +2629,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       modelId,
     };
     void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
+    // 惰性检查点:下个 run 的 hydrate 窗口之外若还有未被摘要覆盖的老行,现在(不占下个 run 首帧)做一份。
+    // 登记在飞:下个 run(排队中的可能立刻起跑)hydrate 前先等它,别让窗口起点越过还没落检查点的老行。
+    {
+      const task: Promise<void> = checkpointRowsOutsideWindow(sessionId, modelId, appId, compactionCfg, thinkingLevel)
+        .catch((e) => console.warn(`[agent-core] session=${sessionId} 窗口外老行压缩失败:`, e?.message || e))
+        .finally(() => { if (lazyCheckpoints.get(sessionId) === task) lazyCheckpoints.delete(sessionId); });
+      lazyCheckpoints.set(sessionId, task);
+    }
   } catch (err: any) {
     // ac.signal.aborted 也算:用户按停后,在途的前置请求可能以传输错(非 AbortError)收尾,
     // 只认错误名会把用户主动停止误记成 failed(Codex 评审逮到)。
@@ -2504,6 +2651,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       await finalizeAssistantMessage(
         currentAssistantId, sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, pendingDisplayFiles.splice(0),
       ).catch((e) => console.warn('[agent-core] persist partial on abort failed:', e));
+      // 半截段落库了 → 本 run 压缩覆盖到它的检查点一并补落(否则下个 run 又把整段原样回放再总结一遍)
+      await settleCheckpointAfterFinalize(currentAssistantId).catch((e: any) => console.warn('[agent-core] settle checkpoint on abort failed:', e?.message || e));
       // 用户主动打断 → 半截助手消息后面补一条打断标记(user 行)。没有它,后续 run 的模型把这条
       // 半截消息当成已完成的收尾,任务就地蒸发;有了它,配合系统提示的 Task Persistence 段,
       // 模型知道该核对现场并接着干。仅中止路径:普通失败(网络/配额)另有 error 语义,不标。

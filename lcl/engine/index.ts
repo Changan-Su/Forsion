@@ -40,13 +40,15 @@ export type { NavEntry } from './navStore'
 export { useStatusStore, addStatusItem, removeStatusItem } from './statusRegistry'
 export { StatusBar, arrangeStatusItems } from './StatusBar'
 export {
+  loadLayout,
+  saveLayout,
   saveNamedLayout,
   loadNamedLayout,
   listNamedLayouts,
   deleteNamedLayout,
   clearLayout,
 } from './layoutPersist'
-export type { PersistedPanel } from './layoutPersist'
+export type { PersistedPanel, LayoutBlob } from './layoutPersist'
 /** 视口锚定的 fixed 浮层(右键菜单/补全/弹出层):自带 CSS zoom 反补偿 + 越界翻面。别再手写 left/top。 */
 export { OverlayAt, useClampedMenu, clampMenu, useEdgeNudge, nestedPanelPlacement, zoomOf, UI_ZOOM_EVENT } from './menuAnchor'
 export type { NestedPanelPlacement } from './menuAnchor'
@@ -69,3 +71,5 @@ export type { DetachApi, ViewRef } from './detachSeam'
 
 export type { ExtendViewController, ExtendViewOptions, ExtendViewHandle, ExtendViewSide, ExtendViewCloseReason } from './extendView'
 export { ExtendViewHost } from './ExtendViewHost'
+
+export { contentStorageKey } from './contentStorageScope'

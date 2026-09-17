@@ -12,7 +12,7 @@ import {
   type IDockviewHeaderActionsProps,
   type DockviewTheme,
 } from 'dockview-react'
-import { X, Plus, PanelLeft, PanelRight, PanelBottom, RotateCcwSquare, ArrowLeft, ArrowRight, AppWindow } from 'lucide-react'
+import { X, Plus, PanelLeft, PanelRight, PanelBottom, RotateCcwSquare, ArrowLeft, ArrowRight, AppWindow, PictureInPicture2 } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import 'dockview-react/dist/styles/dockview.css'
 import type { Leaf, ViewDefinition } from './types'
@@ -22,6 +22,7 @@ import { NativeExtendView } from './nativeExtendView'
 import { allViews, getView, subscribeViews } from './viewRegistry'
 import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension } from './dockviewStore'
 import { useNav } from './navStore'
+import { useCommandStore } from './commandRegistry'
 import { getActiveSpace } from './spaceRegistry'
 import { computeDropTarget, locOf, type DropTarget } from './dropModel'
 import { getDetachApi, type ViewRef } from './detachSeam'
@@ -376,6 +377,8 @@ export const WorkspaceHost: React.FC<{
   // (= 加底部面板之前主区一直就是这样),也不要一次阶跃。真要收掉那点空当,得让 padding 与补间
   // 同相位地一起动,不是翻一个类能了的。
   const bottomVisible = useWorkspace((s) => s.bottomVisible)
+  // 小窗钮跟着宿主的 open-mini 命令走:只有桌面注册它(web 无 openMini)→ 引擎不碰 window.tangu。
+  const miniCmd = useCommandStore((s) => s.commands.find((c) => c.id === 'open-mini'))
   // 视图注册表 → Dockview components map(注册变化时重建,支持运行期注册)。
   const [version, setVersion] = useState(0)
   useEffect(() => subscribeViews(() => setVersion((v) => v + 1)), [])
@@ -532,28 +535,35 @@ export const WorkspaceHost: React.FC<{
                     * 程序化移动/分屏不受 disableDnd 影响,故落子照常;提示与落子同源 computeDropTarget → 天生一致。 */
         onReady={onReady}
       />
-      {/* 右上角浮层三枚:恢复默认布局 → 底部面板 → 右栏(用户指定的次序);折叠钮收起后都仍在原处,可重开。 */}
-      <button
-        className="dv-edge-toggle dv-edge-reset"
-        title={document.documentElement.lang.startsWith('zh') ? '恢复本 Space 默认布局' : 'Restore default layout for this Space'}
-        onClick={() => useWorkspace.getState().resetLayout()}
-      >
-        <RotateCcwSquare size={15} />
-      </button>
-      <button
-        className={`dv-edge-toggle dv-edge-bottom${bottomVisible ? ' is-on' : ''}`}
-        title={document.documentElement.lang.startsWith('zh') ? '底部面板 (⌘/Ctrl+J)' : 'Toggle bottom panel (Ctrl/Cmd+J)'}
-        onClick={() => useWorkspace.getState().toggleSidebar('bottom')}
-      >
-        <PanelBottom size={15} />
-      </button>
-      <button
-        className="dv-edge-toggle dv-edge-right"
-        title={document.documentElement.lang.startsWith('zh') ? '右侧栏' : 'Toggle right panel'}
-        onClick={() => useWorkspace.getState().toggleSidebar('right')}
-      >
-        <PanelRight size={15} />
-      </button>
+      {/* 右上角浮钮组:恢复默认布局 → 小窗(仅桌面)→ 底部面板 → 右栏(用户指定的次序);折叠钮收起后都仍在原处,可重开。 */}
+      <div className="dv-edge-actions">
+        <button
+          className="dv-edge-toggle dv-edge-reset"
+          title={document.documentElement.lang.startsWith('zh') ? '恢复本 Space 默认布局' : 'Restore default layout for this Space'}
+          onClick={() => useWorkspace.getState().resetLayout()}
+        >
+          <RotateCcwSquare size={15} />
+        </button>
+        {miniCmd && (
+          <button className="dv-edge-toggle dv-edge-mini" title={`${label(miniCmd.title)} (⌘/Ctrl+⇧+M)`} onClick={() => void miniCmd.run()}>
+            <PictureInPicture2 size={15} />
+          </button>
+        )}
+        <button
+          className={`dv-edge-toggle dv-edge-bottom${bottomVisible ? ' is-on' : ''}`}
+          title={document.documentElement.lang.startsWith('zh') ? '底部面板 (⌘/Ctrl+J)' : 'Toggle bottom panel (Ctrl/Cmd+J)'}
+          onClick={() => useWorkspace.getState().toggleSidebar('bottom')}
+        >
+          <PanelBottom size={15} />
+        </button>
+        <button
+          className="dv-edge-toggle dv-edge-right"
+          title={document.documentElement.lang.startsWith('zh') ? '右侧栏' : 'Toggle right panel'}
+          onClick={() => useWorkspace.getState().toggleSidebar('right')}
+        >
+          <PanelRight size={15} />
+        </button>
+      </div>
     </>
   )
 }

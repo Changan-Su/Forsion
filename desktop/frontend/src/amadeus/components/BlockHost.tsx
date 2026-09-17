@@ -329,7 +329,8 @@ export const BlockHost = memo(function BlockHost({
     useSortable({ id: blockId })
 
   // 块级左右边缘落点(Notion 式两栏配对):仅拖拽进行中且非自身时激活/显示。
-  const dndPairing = usePageStore((s) => s.dndActiveId !== null && s.dndActiveId !== blockId)
+  // 多选拖拽时其它选中块也是载荷的一部分，不应再成为“与自己配对”的边缘落点。
+  const dndPairing = usePageStore((s) => s.dndActiveId !== null && s.dndActiveId !== blockId) && !selected
   const leftEdge = useDroppable({ id: `bedge:${blockId}:left`, disabled: !dndPairing })
   const rightEdge = useDroppable({ id: `bedge:${blockId}:right`, disabled: !dndPairing })
   const blockEdges = dndPairing ? (
@@ -386,6 +387,9 @@ export const BlockHost = memo(function BlockHost({
   // 焦点进入块 → 清块选中 / 退出嵌入源码编辑;但源码编辑器自身获焦除外(否则一聚焦就退出)。
   const onBlockFocus = (e: ReactFocusEvent): void => {
     if ((e.target as HTMLElement).closest?.('.embed-src-input')) return
+    // 拖拽手柄在 PointerSensor 激活前会先获焦。这里若把 selection 清掉，PageView.onDragStart
+    // 看到的就只剩一个主动块，多选拖拽永远退化成单块。只豁免手柄，＋/折叠等其它控件维持旧语义。
+    if ((e.target as HTMLElement).closest?.('.drag-handle')) return
     const st = useBlockSelection.getState()
     if (st.ids.size || st.activeEmbed) st.clear()
   }
@@ -453,7 +457,10 @@ export const BlockHost = memo(function BlockHost({
         {...listeners}
         onClick={(e) => {
           e.stopPropagation()
-          useBlockSelection.getState().select(blockId) // Notion 式:点手柄=选中块(键盘删/复制可用)
+          const selection = useBlockSelection.getState()
+          // 点未选块 = 单选；已在多选组内则保持整组。拖拽松手可能生成尾随 click，
+          // 无条件 select(blockId) 会让布局虽整组搬完，高亮却只剩主动块。
+          if (!selection.ids.has(blockId)) selection.select(blockId)
           const r = e.currentTarget.getBoundingClientRect()
           setBlockMenu({ x: r.left, y: r.bottom + 4 })
         }}

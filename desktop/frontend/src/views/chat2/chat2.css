@@ -140,6 +140,11 @@
 .t2-content th { background: var(--overlay-subtle); font-weight: 600; }
 .t2-content tbody tr:nth-child(2n) td { background: var(--overlay-subtle); }
 
+/* run 统计行(最后一条助手气泡末尾:耗时 · tokens · 思考);等宽数字免得逐秒跳宽 */
+.t2-runstats { font-size: 12px; line-height: 18px; font-variant-numeric: tabular-nums; }
+/* 本 run 还没有可见气泡时的独立一行:缩进对齐助手正文列(头像 34px + 间距 12px) */
+.t2-runstats-solo { padding-left: 46px; }
+
 /* 悬浮动作行 */
 .t2-actions { display: flex; gap: 4px; opacity: 0; transition: opacity var(--duration-fast, .15s); }
 .t2-asst:hover .t2-actions, .t2-userwrap:hover .t2-actions,
@@ -487,7 +492,7 @@
  * 阈值 760(2026-07-26 从 860 放宽,用户要求「再窄一点也要有」):1440 屏两侧栏全开
  * = 1440 − ribbon 44 − 左栏 280 − 右栏 300 ≈ 816,860 时这档正好落空。届时正文列 ≈450px,
  * 仍能读(曾定 1120,得关左栏才出来;860 得是 1512 屏)。再往下压正文就挤成条了,别再放。
- * 面板宽只写 --tsum-w 一处:正文让位、输入框让位、「回到底部」让位共用,不许各写各的。
+ * 面板宽只写 --tsum-w 一处:正文、欢迎区、输入框、「回到底部」让位共用,不许各写各的。
  * 依据:WMOS《Forsion-Codex Claude 右侧卡片原型》§17.2 三档响应式的 shift 档。 */
 .t2-chat-view { --tsum-w: 296px; --tsum-gut: 16px; }
 /* 右侧车道:绝对定位叠在滚动区右缘 —— .t2-stream 保持通栏,滚动条因此落在最右边
@@ -573,7 +578,7 @@
    * 这个区分是必须的:曾经无差别挂 250ms 过渡,开右栏时正文列宽 820→564→820 折返,
    * 补间停了 padding 还在动 44px —— 就是用户报的「面板停了字还在窜」。别把它挪出容器查询。
    * 曲线取苹果那条低回弹 spring 的贝塞尔近似;比卡片自身的 0.3s 慢一档(布局比卡片重)。 */
-  .t2-stream, .composer-anchor, .t2-jump {
+  .t2-stream, .composer-anchor, .t2-chat-col > .t2-empty, .t2-jump {
     transition-property: padding-right, right;
     transition-duration: 0.45s;
     transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
@@ -586,6 +591,8 @@
   /* .gone(展开侧板期间)不算在场:否则侧板占位 + 车道让位双重挤压正文 */
   .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone)) .t2-stream { padding-right: var(--tsum-w); }
   .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone)) .composer-anchor { padding-right: var(--tsum-w); }
+  /* 欢迎区与输入框共用可用宽度和让位动效,避免 Logo 仍以包含右侧车道的整列居中。 */
+  .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone)) .t2-chat-col > .t2-empty { right: var(--tsum-w); }
   .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone)) .t2-jump { right: calc(var(--tsum-w) + 22px); }
 }
 /* 退场那一刻卡片还没 display:none(等动画跑完),但已经不该吃点击 */
@@ -593,7 +600,7 @@
   .t2-tsum, .agent-desk-card { pointer-events: none; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .t2-tsum, .agent-desk-card, .t2-jump, .t2-stream, .composer-anchor { transition: none; }
+  .t2-tsum, .agent-desk-card, .t2-jump, .t2-stream, .composer-anchor, .t2-chat-col > .t2-empty { transition: none; }
   .t2-tsum, .agent-desk-card { scale: 1; translate: none; }
 }
 /* 一张 hug 内容的浮卡(对齐 Codex:不是通栏侧栏,而是贴右上角、高度随内容的卡)。 */
@@ -882,4 +889,3 @@
   font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1.5;
   white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow-y: auto;
 }
-

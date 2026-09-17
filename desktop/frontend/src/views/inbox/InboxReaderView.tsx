@@ -5,11 +5,11 @@
  * 2026-09-11 起;见其头注)。
  */
 import { useEffect, useState } from 'react'
-import { Archive, ArchiveRestore, Cloud, Info, Mail, MailOpen, MessageCircle, Trash2 } from 'lucide-react'
+import { Archive, ArchiveRestore, Cloud, Info, Mail, MailOpen, MessageCircle, Trash2, Workflow } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import { APP_VERSION } from '../../changelog'
 import { useApp } from '../../stores/appStore'
-import { useInbox, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
+import { useInbox, isAutomationSender, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
 import { useWorkspace, setActiveSpace } from '@lcl/engine'
 import { InboxBody } from './InboxBody'
 import { hasUnknownRequirement, tierFromAuth, unmetClaimRequirements } from './claimRequirements'
@@ -41,6 +41,7 @@ export function InboxReaderView() {
 
   const senderAgent = msg.sender_kind === 'agent' && msg.sender_id ? agentDefs.find((a) => a.slug === msg.sender_id) : null
   const avatarUrl = senderAgent ? avatars[senderAgent.slug] : undefined
+  const automationSender = isAutomationSender(msg)
 
   // 过期态:展示层判断(真正的领取闸在服务端)。
   const expiresAt = parseUtc(msg.expires_at ?? null)
@@ -69,7 +70,7 @@ export function InboxReaderView() {
               <img className="ibx-ava" src={avatarUrl} alt="" />
             ) : (
               <span className="ibx-ava-fallback">
-                {msg.sender_kind === 'server' ? <Cloud size={14} /> : msg.sender_kind === 'system' ? <Info size={14} /> : (senderOf(msg) || '?').slice(0, 1).toUpperCase()}
+                {msg.sender_kind === 'server' ? <Cloud size={14} /> : msg.sender_kind === 'system' ? <Info size={14} /> : automationSender ? <Workflow size={14} /> : (senderOf(msg) || '?').slice(0, 1).toUpperCase()}
               </span>
             )}
             <span className="ibx-sender">{senderOf(msg)}</span>

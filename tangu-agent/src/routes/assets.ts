@@ -13,6 +13,9 @@ import { deps } from '../seams/runtime.js';
 import { resolveTools } from '../tools/toolRegistry.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 
+import { runWithAgentSlug } from '../seams/runContext.js';
+import { isValidSlug } from '../agents/agentRegistry.js';
+
 const router = Router();
 
 router.get('/agent/skills', authMiddleware, async (req: AuthRequest, res) => {
@@ -21,7 +24,9 @@ router.get('/agent/skills', authMiddleware, async (req: AuthRequest, res) => {
     let skills: any[] = [];
     if (listSkills) {
       // forUser:进程内实现按其过滤(全局 ∪ 本人上传);httpBrain 由 token 隐含、忽略该字段。
-      skills = (await listSkills({ visibleOnly: true, forUser: req.user!.userId }).catch(() => [])) || [];
+      const slug = typeof req.query.agentSlug === 'string' && isValidSlug(req.query.agentSlug) ? req.query.agentSlug : null;
+      const load = () => listSkills({ visibleOnly: true, forUser: req.user!.userId });
+      skills = (await (slug ? runWithAgentSlug(slug, load, slug) : load()).catch(() => [])) || [];
     }
     res.json({
       skills: skills.map((s: any) => ({

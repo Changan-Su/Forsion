@@ -105,9 +105,9 @@ export function installNotificationWiring(): void {
     remoteWas = s.running
   })
 
-  // C. agent 会话结束(runningBySession 只增删单键,无整表重置——boot 后仅初始化一次)。
-  // 结局从该会话末条助手消息读(endRun 前 patchMessage 已落):error → 失败红卡;
-  // stopped = 用户亲手停的,不打扰;其余按完成。
+  // C. agent 会话结束。结局从该会话末条助手消息读(endRun 前 patchMessage 已落终态):error → 失败红卡、done → 完成;
+  // stopped = 用户亲手停的,不打扰;看不到结局(消息已不在)也不报 —— 外部模式切号会把 runningBySession 与消息同拍整表清空,
+  // 那不是 run 结束。
   let prevRunning = useApp.getState().runningBySession
   useApp.subscribe((s) => {
     if (s.runningBySession === prevRunning) return
@@ -118,8 +118,8 @@ export function installNotificationWiring(): void {
       if (sid === s.activeId) continue // 正看着的会话,结果就在眼前
       const msgs = s.messagesBySession[sid] || []
       const last = [...msgs].reverse().find((m) => m.role === 'assistant')
-      if (last?.status === 'stopped') continue
-      const failed = last?.status === 'error'
+      if (last?.status !== 'done' && last?.status !== 'error') continue
+      const failed = last.status === 'error'
       const sess = s.sessions.find((x) => x.id === sid) || s.archivedSessions.find((x) => x.id === sid)
       notifyApp({
         event: 'agent.done', level: failed ? 'error' : 'success',

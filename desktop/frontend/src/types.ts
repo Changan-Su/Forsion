@@ -85,6 +85,7 @@ export interface SubChat {
   id: string                 // subId(subagent)| discussion runId
   kind: 'discussion' | 'subagent'
   title: string
+  sessionId?: string
   runId?: string             // discussion:要订阅的 run(= id)
   streaming: boolean
   segs: SubChatSeg[]         // subagent 内容随主流累积;discussion 由面板二开 SSE 现拉,segs 保持空
@@ -385,7 +386,7 @@ export interface TeamDef {
   lead: string
   /** 可选 emoji;空 = 成员头像组合。 */
   avatar: string
-  /** 数组顺序 = 发言顺序。 */
+  /** 阵容显示顺序;成员独立并行工作,不限制发言顺序。 */
   members: Array<{ slug: string; role: string }>
   createdAt: string
   /** TEAM.md 正文。 */
@@ -402,6 +403,8 @@ export interface NormalAgentDef {
   description: string
   model: string
   tools: string[]
+  enabledSkillIds?: string[]
+  enabledMcpServers?: string[]
   thinkingLevel: ThinkingLevel | ''
   maxIterations: number | null
   approvalMode: 'readonly' | 'auto-edit' | 'full-auto' | 'custom' | ''
@@ -465,7 +468,7 @@ export interface AgentConfig {
   /** 工作预设(**会话事实**,与引擎 core/presetTable.ts 同源):'chat'=轻聊天(正向工具面、临时工作区、答完即停、不写笔记)/
    *  'coding'=编码 / 缺省=work。建会话时定,跑过一轮后引擎锁定(run 带别的值只警告不切)—— 换模式 = 新建会话。 */
   preset?: 'coding' | 'chat'
-  /** 团队模式(群聊):≥2 个 Normal Agent 轮流发言,被 @ 者优先,各自以 DONE 表态收场(没有投票、没有轮数上限),可总结。host-only。 */
+  /** 团队模式(群聊):≥2 个 Normal Agent 独立并行工作,被 @ 者可继续响应,各自以 DONE 表态收场(没有投票、没有轮数上限)。host-only。 */
   groupChat?: boolean
   /** run 事实(不落库):私聊里 @ 了的项目(引擎据此注入派遣指令,start_project_session)。 */
   mentionedProjects?: Array<{ name: string; path: string }>
@@ -481,11 +484,19 @@ export interface AgentConfig {
   groupAgents?: string[]
   /** 临时 Agent 定义(仅本会话群聊用,不持久化到 ~/.tangu/agents)。slug 在 groupAgents 中列出。 */
   groupTempAgents?: NormalAgentDef[]
+  /** 会话团队的共同指令与成员职责;独立 TEAM 在运行时以持久定义为准。 */
+  teamDoc?: string
+  teamRoles?: Record<string, string>
   /** 本条消息 @ 的 agent slug(群聊:该 agent 本场优先发言;per-message,发送后清空,不持久化)。 */
   priorityAgent?: string
   /** 本条消息 @ 的 agent slug 列表(单聊:提示主 agent 用 delegate 把子任务交给这些 Normal Agent 作 subagent;per-message,不持久化)。 */
   mentionedAgentSlugs?: string[]
 }
+
+/** 独立 Agent / 外部引擎 / TEAM 会话虽以 `projectless` 运行,但它们各自就是一级工作轨道,
+ *  不能再被项目分组逻辑当成「不在项目中工作」。身份键是会话事实,三者互斥。 */
+export const isIndependentOrbitConfig = (config: AgentConfig | null | undefined): boolean =>
+  !!(config?.soloAgentSlug || config?.soloEngineId || config?.teamSlug)
 
 /** 通道类型(微信/Telegram/QQ;与引擎 channels/types.ts 对齐)。 */
 export type ChannelKind = 'wechat' | 'telegram' | 'qq'
@@ -694,6 +705,8 @@ export interface Attachment {
 /** agent 主动展示给用户的文件(display_file / generate_image / 表情包);path 或 dataUrl 二选一。 */
 export interface DisplayFile {
   name: string
+  /** Origin of a deliverable forwarded from a team member; used for remote file reads. */
+  sourceSessionId?: string
   mime?: string
   /** 工作区文件路径(host 会话=绝对路径;沙箱=工作区相对路径)。 */
   path?: string
@@ -718,6 +731,10 @@ export interface CtxInfo {
   /** 思考档:请求档 vs 实际生效档(能力表 clamp;不同=被自动降档,H6 降档可见)。 */
   thinkingRequested?: string
   thinkingEffective?: string
+  /** 本 run 生效的最大循环轮数与来源('session' /loop | 'agent' 定义 | 'default'):/status、/loop 提示据此,
+   *  别再只看会话配置 —— Agent 定义里的 3 轮曾显示成 90。 */
+  maxIterations?: number
+  maxIterationsSource?: 'session' | 'agent' | 'default' | 'automation' | 'muse'
   /** 事件按哪个模型算的:切模型后 SSE 重放会复活旧事件,消费方据此丢弃不匹配的。 */
   modelId?: string
 }
@@ -922,6 +939,8 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   activeWindowEnabled?: boolean
   /** Agent Desk 演出面板:聊天右侧 agent 展示区。默认开,设置→高级可关。 */
   agentDeskEnabled?: boolean
+  /** 有会话运行时阻止电脑闲置休眠(桌面专属,默认关)。 */
+  keepAwakeWhileRunning?: boolean
   /** 任务概览里点来源/产物文件时开在哪:'tab'=新标签页(默认)、'desk'=Agent Desk 演出格。 */
   summaryOpenIn?: 'tab' | 'desk'
   /** 对外 MCP 端点运行态(主进程 effectiveConfig 注入,非持久化):供「高级」页展示连接信息。 */
@@ -1090,6 +1109,8 @@ declare global {
       exportActivity?(days?: number): Promise<string>
       /** 前台窗口采样(host-only 接缝)。主进程 activeWindowEnabled 关着时恒 null —— 默认拒。 */
       activeWindow?(): Promise<ActiveWindowSample | null>
+      /** 本窗口订阅着的在飞 run 数 → 主进程「有会话运行时不休眠」(keepAwakeReport.ts 上报)。 */
+      reportRunningSessions?(count: number): void
       /** 拖入文件 → 绝对路径(本机模式粘贴路径用)。 */
       getPathForFile?(file: File): string
       /** 本机工作区文件浏览(host cwd)。 */

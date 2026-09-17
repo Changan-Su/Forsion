@@ -6,7 +6,7 @@ import { hasNativeFeature, amadeusAvailable } from './features/runtime'
 import { registerMiniViews } from './mini/miniViews'
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
 import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelBottom, Code2, Trophy, Activity, AppWindow } from 'lucide-react'
-import { registerView, addCommand, addRibbonIcon, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, adoptSpaceLayoutCold, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, supportsMiniPanel } from '@lcl/engine'
+import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, adoptSpaceLayoutCold, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, supportsMiniPanel } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { useEffect } from 'react'
 import { windowKind } from './windowKind'
@@ -222,7 +222,9 @@ export function installEngine(): void {
     if (s.activeSpaceId === p.activeSpaceId) return
     const a = app()
     const alive = (id: string): boolean => a.sessions.some((x) => x.id === id) || a.archivedSessions.some((x) => x.id === id)
-    a.setActiveId(planSpaceSwitch(spaceSessions, p.activeSpaceId, s.activeSpaceId, a.activeId, alive))
+    // Space 账本只是恢复该 Space 上次的聊天焦点,不是一次用户「进入 Project」动作。
+    // 若走 setActiveId 的默认副作用,切回 Tangu 会把该会话所属项目(常见即默认工作区)强制展开。
+    a.setActiveId(planSpaceSwitch(spaceSessions, p.activeSpaceId, s.activeSpaceId, a.activeId, alive), { revealWorkspace: false })
   })
 
   // 对话会话切换 → 喂 per-tab 导航历史 + 启动器「最近使用」。
@@ -311,23 +313,38 @@ export function installEngine(): void {
     }
   })
 
-  // ribbon = 左侧功能条:顶部 = Space 图标组(可拖动改序);商店/成就/明暗/命令/设置/账号常驻底部。
+  // ribbon = 左侧功能条:顶部 = Space 图标组(可拖动改序);反馈/商店/成就/明暗/命令/设置/账号常驻底部。
   // 左右栏折叠钮在各自面板右缘(见 WorkspaceHost);ribbon 展开/折叠钮由 Ribbon 引擎自渲染在顶部。
   // 商店(装到 ~/.tangu)与反馈(submitFeedback)是 host 能力:Tangu Web 下 window.tangu 无对应方法 → 不注册
-  // (商店 = ribbon 图标;反馈只剩命令面板一条路,门控照旧挂在那条 addCommand 上)。
-  // 商店置于底部首位:注册序即上下序,故在 rb-mode 之前注册 → 落在底部组最上方。
+  // (两者都是 ribbon 图标 + 命令面板两条路)。
+  // 反馈、商店置于底部最上方:无持久顺序时注册序即上下序,故在 rb-mode 之前、反馈又在商店之前注册。
   // Unit 切换器(head 常驻,折叠钮旁):吸收原「本地|云端」胶囊,列表式切换 本地/云端/其他设备。
   // 仅真桌面(unitsList 是 agent 后端形态的 preload 能力;web/mobile 垫片无此方法 → 不注册,
   // 它们的 vault 切换仍走 VaultSideSwitch 的 mobile 分支/云端固定形态)。
   if (window.tangu?.unitsList) addRibbonIcon({ id: 'rb-unit', side: 'head', component: UnitSwitcher })
+  if (window.tangu?.submitFeedback) {
+    addRibbonIcon({ id: 'rb-feedback', side: 'bottom', icon: MessageSquare, tooltip: () => app().tr('feedback.title'), onClick: () => { app().openFeedback() } })
+    // 老存档(用户动过底部区)的 bottomOrder 里,rb-feedback 要么还停在 08-31 前的旧位(明暗与命令之间),要么缺席
+    // (rankIds 排到区末尾)→ 只挪一次到商店之前,打标记后用户再拖到哪算哪。
+    // ponytail: 只认「商店在持久顺序里、反馈不在收纳夹里」的形状,其余形状不动(注册序或用户自己的摆法)。
+    const MOVED_KEY = 'forsion_ribbon_feedback_above_market'
+    if (!localStorage.getItem(MOVED_KEY)) {
+      const rb = useRibbonStore.getState()
+      const at = rb.bottomOrder.filter((id) => id !== 'rb-feedback').indexOf('rb-market')
+      if (at >= 0 && !rb.folders.some((f) => f.items.includes('rb-feedback'))) rb.setZoneOrder('bottom', moveTo(rb.bottomOrder, 'rb-feedback', at))
+      try { localStorage.setItem(MOVED_KEY, '1') } catch { /* ignore */ }
+    }
+  }
   if (window.tangu?.marketList) addRibbonIcon({ id: 'rb-market', side: 'bottom', icon: Store, tooltip: () => app().tr('market.title'), onClick: () => app().openMarket() })
   addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements() })
   // 主题锁定明暗时 toggleMode 静默无效 → tooltip 改说明「由主题决定」,悬停即知为何点不动(codex Low-2)。
   addRibbonIcon({ id: 'rb-mode', side: 'bottom', icon: Moon, tooltip: () => useTheme.getState().modeLocked ? app().tr('settings.theme.modeLocked') : app().tr('theme.changeMode'), onClick: () => useTheme.getState().toggleMode() })
   addRibbonIcon({ id: 'rb-cmd', side: 'bottom', icon: CommandIcon, tooltip: () => app().tr('command.palette'), onClick: openCommandPalette })
-  // 底部常驻(side:'bottom',不参与拖动排序),注册序即上下序:明暗/命令 → 设置 → 账号(账号最底)。
-  // ⚠️快速查找/语言/反馈**刻意不在条上**(2026-08-31):下区是杂物抽屉,八个同色图标一列谁也认不出,
-  //   商店与成就被埋没。三者都是低频动作 → 只留命令面板(想要的人可从 ⌘K 钉回命令区)。
+  // 底部常驻(side:'bottom'),无持久顺序时注册序即上下序:明暗/命令 → 设置 → 账号(账号最底)。
+  // 用户拖过底部区后 bottomOrder 非空,新注册项按 rankIds 排到区末尾(反馈那条由注册处的一次性迁移兜住)。
+  // ⚠️快速查找/语言**刻意不在条上**(2026-08-31):下区是杂物抽屉,八个同色图标一列谁也认不出,
+  //   商店与成就被埋没。两者都是低频动作 → 只留命令面板(想要的人可从 ⌘K 钉回命令区)。
+  //   反馈当时一并撤下,2026-09-17 按用户要求放回,排在商店之上。
   // 账号卡复用 AccountCard,随 ribbon 展开切换「完整卡 / 紧凑头像」;原聊天列表底部那份已移除,避免重复。
   addRibbonIcon({ id: 'rb-settings', side: 'bottom', icon: Settings, tooltip: () => app().tr('settings.title'), onClick: () => app().openSettings() })
   if (PRODUCT.agentBackend || window.tangu?.account) addRibbonIcon({
@@ -437,7 +454,7 @@ export function installEngine(): void {
   // 商店/成就此前**只有 ribbon 图标一个入口**,⌘K 搜不到 —— 这是「用户发现不了」的一半根因。
   if (window.tangu?.marketList) addCommand({ id: 'open-market', icon: Store, title: () => app().tr('market.title'), keywords: 'market store plugin theme skill agent 市场 商店 插件 主题 技能 扩展', run: () => app().openMarket() })
   addCommand({ id: 'open-achievements', icon: Trophy, title: () => app().tr('achievements.title'), keywords: 'achievement trophy badge medal 成就 勋章 徽章', run: () => app().openAchievements() })
-  if (window.tangu?.submitFeedback) addCommand({ id: 'open-feedback', icon: MessageSquare, title: () => app().tr('feedback.title'), keywords: 'feedback bug report 反馈 问题 建议 报错', run: () => app().openFeedback() })
+  if (window.tangu?.submitFeedback) addCommand({ id: 'open-feedback', icon: MessageSquare, title: () => app().tr('feedback.title'), keywords: 'feedback bug report 反馈 问题 建议 报错', run: () => { app().openFeedback() } })
   addCommand({ id: 'open-settings', icon: Settings, title: () => app().tr('settings.title'), keywords: 'settings 设置 preferences', hotkey: 'mod+,', run: () => app().openSettings() , invoke: {
     description: "Open the Forsion settings window, optionally straight to one page. Use it to show the user where a control lives when you cannot change it yourself.",
     params: {

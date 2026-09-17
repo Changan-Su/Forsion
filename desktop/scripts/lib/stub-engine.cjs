@@ -61,6 +61,12 @@ async function startStubEngine(data = {}) {
       try { return JSON.parse(raw || '{}'); } catch { return { __raw: raw }; }
     };
 
+    // Per-scenario overrides for persisted child sessions and configuration round trips.
+    if (typeof data.override === 'function') {
+      const result = await data.override({ path: p, method: req.method, url: u, body });
+      if (result !== undefined) return json(result.__code ? result.body : result, result.__code || 200);
+    }
+
     // ── run 生命周期 ──
     if (p === '/agent/runs' && req.method === 'POST') {
       const b = await body();
@@ -83,6 +89,21 @@ async function startStubEngine(data = {}) {
         res.write(`data: ${JSON.stringify({ seq: events.length + 1, type: 'done', payload: {} })}\n\n`);
       }
       return res.end();
+    }
+    // 停止:与真引擎同序 —— 先在事件流上发 error{aborted} 并收尾(agentLoop 的 catch),等 run 落定后才回
+    // { settled, status }(runs.ts waitForRunSettlement)。UI 在「停止中」把那条终态缓存,确认后重放。
+    // 没有这条,UI 的 abortRunAndWait 等满 10s 报「停止未确认」,run 永远不收尾。
+    if (/^\/agent\/runs\/[^/]+\/abort$/.test(p) && req.method === 'POST') {
+      const runId = p.split('/')[3];
+      seen.aborts = [...(seen.aborts || []), runId];
+      const o = open.get(runId);
+      if (o) {
+        o.res.write(`data: ${JSON.stringify({ seq: ++o.seq, type: 'error', payload: { error: 'aborted', aborted: true, content: '' } })}\n\n`);
+        o.res.end();
+        open.delete(runId);
+        await new Promise((r) => setTimeout(r, 50)); // 让 UI 先收到终态帧再拿到确认,与真引擎同序
+      }
+      return json({ success: true, settled: true, status: 'aborted' });
     }
     if (/^\/agent\/runs\/[^/]+\/inquiries\/[^/]+$/.test(p)) {
       const b = await body();

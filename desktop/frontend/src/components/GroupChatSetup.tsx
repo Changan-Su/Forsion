@@ -131,7 +131,8 @@ export const GroupChatSetup: React.FC<{
               </div>
               <div className="field">
                 <label>{t('settings.agents.maxIter')}</label>
-                <input type="number" min={1} max={200} value={editingTemp.maxIterations}
+                {/* min=10 与引擎 AGENT_MAX_ITERATIONS_MIN 同步(群聊发言人的上限同样经 agentCapOf 套下限) */}
+                <input type="number" min={10} max={200} value={editingTemp.maxIterations}
                   onChange={(e) => setEditingTemp({ ...editingTemp, maxIterations: e.target.value })} />
               </div>
               <div className="field">

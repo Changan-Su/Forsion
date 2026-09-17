@@ -135,6 +135,16 @@ describe('appStore.connect:代数只认最新', () => {
     expect(useApp.getState().connState).toBe('idle')
   })
 
+  it('external 模式切号:被 abort 的 run 订阅不走 endRun,runningBySession 必须一并清空(否则防休眠永远不放)', async () => {
+    const { broadcastAuth } = arm()
+    const boot = useApp.getState().boot()
+    await tick(10)
+    await boot
+    useApp.setState({ desktopMode: 'external', runningBySession: { 'old-session': 'old-run' } })
+    broadcastAuth()
+    expect(useApp.getState().runningBySession).toEqual({})
+  })
+
   it.each([true, false])('reconnects when backend ready arrives before auth:changed = %s', async (readyFirst) => {
     const { cfg, broadcastAuth, broadcast } = arm()
     const boot = useApp.getState().boot()

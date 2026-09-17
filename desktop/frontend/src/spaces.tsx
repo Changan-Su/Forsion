@@ -1,14 +1,16 @@
 import { hasNativeFeature, amadeusAvailable, inboxAvailable } from './features/runtime'
 /** 具体的 Space 定义 + 注册入口。Space = 取代「App」的功能组合(见 engine/types.SpaceDefinition)。
  *  每个 Space 贡献一个 ribbon 顶部图标(可拖动改序,默认排在折叠钮之下、商店之上),点击切换。
- *  Tangu Space = 现有助手界面(会话/对话/文件/目录/记忆/子聊天)。Amadeus Space 见 Milestone 2。 */
-import { Bot, Inbox, NotebookText, Code2, Workflow, Rocket } from 'lucide-react'
+ *  Tangu Space = 会话/对话/主体详情/文件/目录;Agents Space = 智能体配置。Amadeus Space 见 Milestone 2。 */
+import { Bot, Inbox, NotebookText, Code2, Workflow, Rocket, Users } from 'lucide-react'
 import { INBOX_WORKSPACE_MODE } from './views/workspaceMode'
 import { registerSpace, addRibbonIcon, useSpaceStore, useWorkspace, deleteNamedLayout, clearLayout } from '@lcl/engine'
 import type { SpaceDefinition, PersistedPanel, SidebarDefaults } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { PRODUCT } from './product'
 import { installAmadeusCommands } from './amadeusCommands'
+import { migrateTanguDetailsLayouts } from './tanguDetailsLayout'
+import './views/agentProfileMessages'
 import { SpaceButton } from './components/SpaceButton'
 import { builtinEnabled } from './builtins'
 import { calendarAvailable, calendarSpace } from './builtins/calendar'
@@ -46,15 +48,13 @@ export function resolveStartupTarget(lastExit: string): string {
   return useSpaceStore.getState().spaces.some((s) => s.id === pref) ? pref : PRODUCT.defaultSpace
 }
 
-/** Tangu Space 的侧栏默认:左=工作区(自动→会话);右=对话/工作区(自动→文件)/大纲/记忆/子聊天 同组 tab。 */
+/** Tangu Space 的侧栏默认:左=工作区(自动→会话);右=Tangu 详情/工作区(自动→文件)/大纲 同组 tab。 */
 const TANGU_SIDE_VIEWS: SidebarDefaults = {
   left: [{ type: 'workspace', params: {} }],
   right: [
-    { type: 'chat-panel', params: { followActive: true } },
+    { type: 'tangu-details', params: {} },
     { type: 'workspace', params: {} },
     { type: 'outline', params: {} },
-    { type: 'memory', params: {} },
-    { type: 'subchats', params: {} },
   ],
   // 底部面板预置终端(默认折叠,见 build())。终端被禁用 / 非桌面宿主时 getView('terminal') 为空,
   // toggleSidebar 展开路径的 known 过滤会自动跳过 → 退回空停靠区,不会开出一个死面板。
@@ -70,7 +70,7 @@ const tanguSpace: SpaceDefinition = {
   // workspaceSource 声明位管(features/tangu.tsx)。
   autoWorkspaceMode: 'orbits',
   sidebarDefaults: TANGU_SIDE_VIEWS,
-  /** 对话(主)→ 工作区(左,自动=会话)→ 右栏(同会话 ChatView + 文件/大纲/记忆/子聊天,默认折叠)。 */
+  /** 对话(主)→ 工作区(左,自动=会话)→ 右栏(主体详情 + 文件/大纲,默认折叠)。 */
   build() {
     ws().setSidebarDefaults(TANGU_SIDE_VIEWS)
     ws().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
@@ -79,6 +79,18 @@ const tanguSpace: SpaceDefinition = {
     ws().initializeSidebar('right', false)
     // 底部面板同样默认折叠,但 stash 里已放好终端 → 用户点开就是终端,而不是空停靠区。
     ws().initializeSidebar('bottom', false)
+  },
+}
+
+const agentsSpace: SpaceDefinition = {
+  id: 'agents', name: () => app().tr('agentProfile.space'), icon: Users,
+  sidebarDefaults: { left: [], right: [], bottom: [] },
+  build() {
+    ws().setSidebarDefaults({ left: [], right: [], bottom: [] })
+    ws().openView('agent-profile', {}, 'main')
+    ws().initializeSidebar('bottom', false)
+    ws().initializeSidebar('left', false)
+    ws().initializeSidebar('right', false)
   },
 }
 
@@ -222,7 +234,7 @@ const SPACES: SpaceDefinition[] = [
   // 主页也是**内置插件**(builtins/homepage:Space + homepage 视图随插件启停)。排第一 = ribbon 顶格,
   // 与旧 Forsion Desktop 的「先看到桌面首页」一致;插件页关掉后下次启动即整条不出现。
   ...(homepageAvailable() && builtinEnabled('home') ? [homepageSpace] : []),
-  ...(hasNativeFeature('tangu') ? [tanguSpace] : []),
+  ...(hasNativeFeature('tangu') ? [tanguSpace, agentsSpace] : []),
   // Inbox 与视图注册同门控(inboxAvailable:旧档案 spaces 点名 + backendStatus/mobile;Unit 宿主 = tangu 包 + 本地引擎)。
   ...(inboxAvailable() ? [inboxSpace] : []),
   ...(hasNativeFeature('amadeus') && amadeusAvailable() && AMADEUS_ENABLED ? [amadeusSpace] : []),
@@ -241,6 +253,7 @@ const SPACES: SpaceDefinition[] = [
 ]
 
 export function registerSpaces(): void {
+  if (hasNativeFeature('tangu')) migrateTanguDetailsLayouts()
   for (const sp of SPACES) {
     registerSpace(sp)
     addRibbonIcon({ id: `space:${sp.id}`, side: 'top', component: ({ expanded }) => <SpaceButton space={sp} expanded={expanded} /> })

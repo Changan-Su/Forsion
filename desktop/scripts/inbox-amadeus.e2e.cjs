@@ -1,6 +1,7 @@
 /**
  * 收件箱正文 Amadeus 化(2026-09-11)回归:真 Electron × 假引擎。
- *  ⓪ Inbox Space 左栏 = 统一工作区(自动 · 收件箱列表源):行 = 共享 SidebarRow + 未读点,分组(未读 / 发信人 / 已归档)可筛,
+ *  ⓪ Inbox Space 左栏 = 统一工作区(自动 · 收件箱列表源):行 = 共享 SidebarRow + 未读点,分组(未读 / 稳定来源类别 / 已归档)可筛,
+ *     多条 `automation:<ruleId>` 合并为「自动化」,内部 id 在分组和阅读页都不得出现;
  *     已归档是单独拉的一份(filter=archived)且点得开;旧 Gmail 式列表(.ibx-row / .ibx-chips)不复存在;
  *  ① agent 消息:正文经 UnifiedPage 只读渲染(表格 / 标题是 Milkdown DOM),页面标题被隐、阅读面板 h1 唯一,围栏原文不进正文;
  *  ② 末尾 forsion-approval 围栏 → 审批卡,卡上的预览来自 GET /agent/special/approvals 的行(正文里没这串字);
@@ -49,8 +50,10 @@ const MESSAGES = [
   { id: 'm2', title: '按钮块', body: BODY_BUTTON, sender_kind: 'agent', sender_id: 'muse', origin_broadcast_id: null, read_at: null, archived_at: null, created_at: at('08') },
   { id: 'm4', title: '已归档的旧消息', body: '旧消息正文。', sender_kind: 'agent', sender_id: 'muse', origin_broadcast_id: null, read_at: at('06'), archived_at: at('06'), created_at: at('06') },
   { id: 'm3', title: '系统公告', body: BODY_SERVER, sender_kind: NEGATIVE_CONTROL ? 'agent' : 'server', sender_id: NEGATIVE_CONTROL ? 'muse' : null, origin_broadcast_id: 'b1', read_at: null, archived_at: null, created_at: at('07') },
+  { id: 'ma1', title: '自动化汇总', body: '今日任务已汇总。', sender_kind: 'agent', sender_id: 'automation:w-da28d2', origin_broadcast_id: null, read_at: at('06'), archived_at: null, created_at: at('06') },
+  { id: 'ma2', title: '自动化提醒', body: '该检查新消息了。', sender_kind: 'agent', sender_id: 'automation:w-d06155', origin_broadcast_id: null, read_at: null, archived_at: null, created_at: at('05') },
 ]
-// ⑥ 带领取条件的两封广播:前面的行数 / 分组断言按上面 4 封算,这两封到 ⑥ 才塞进假引擎(经「拉取新消息」刷进列表)。
+// ⑥ 带领取条件的两封广播:前面的行数 / 分组断言按上面 6 封算,这两封到 ⑥ 才塞进假引擎(经「拉取新消息」刷进列表)。
 const POINTS = [{ kind: 'points', amount: 100, label: { zh: '积分 ×100', en: 'Points ×100' } }]
 const CLAIM_MESSAGES = [
   { id: 'm5', title: '新版本专属奖励', body: '升级到新版本即可领取。', sender_kind: 'server', sender_id: null, origin_broadcast_id: 'b5', read_at: null, archived_at: null, created_at: at('11'),
@@ -184,8 +187,15 @@ async function main() {
         })(),
       }
     })
-    check('收件箱 Space 左栏 = 统一工作区(自动 · 收件箱):3 行、未读点 3 个且贴在图标右下角,旧 Gmail 式列表 0 个', spaced && ws.trigger.includes('收件箱') && ws.rows === 3 && ws.dots === 3 && ws.dotInCorner && ws.oldRows === 0, JSON.stringify({ spaced, ...ws }))
-    check('工作区分组(文件夹):全部 / 未读 / 按发信人(Muse、Forsion)/ 已归档', ['全部', '未读', 'Muse', 'Forsion', '已归档'].every((g) => ws.groups.includes(g)), JSON.stringify(ws.groups))
+    check('收件箱 Space 左栏 = 统一工作区(自动 · 收件箱):5 行、未读点 4 个且贴在图标右下角,旧 Gmail 式列表 0 个', spaced && ws.trigger.includes('收件箱') && ws.rows === 5 && ws.dots === 4 && ws.dotInCorner && ws.oldRows === 0, JSON.stringify({ spaced, ...ws }))
+    check('工作区分组:全部 / 未读 / Forsion / 自动化 / 智能体 / 已归档,不显示任何 automation 规则 id',
+      ['全部', '未读', 'Forsion', '自动化', '智能体', '已归档'].every((g) => ws.groups.includes(g)) && !ws.groups.some((g) => /automation:|w-[a-z0-9]/i.test(g || '')), JSON.stringify(ws.groups))
+    await openMessage(win, '自动化汇总')
+    const automationMeta = await win.evaluate(() => {
+      const meta = document.querySelector('.ibx-reader-meta')
+      return { sender: meta?.querySelector('.ibx-sender')?.textContent || '', text: meta?.textContent || '', workflowIcon: !!meta?.querySelector('.ibx-ava-fallback svg') }
+    })
+    check('自动化阅读页:发件人为「自动化」且有图标,内部规则 id 不泄漏', automationMeta.sender === '自动化' && automationMeta.workflowIcon && !/automation:|w-da28d2/i.test(automationMeta.text), JSON.stringify(automationMeta))
     await openMessage(win, '请审批')
     // 块编辑器挂在 .unified-page 的兄弟容器里,探针以 .ibx-amadeus(整个只读页宿主)为根。
     await win.waitForSelector('.ibx-reader-body .ibx-amadeus table', { timeout: 20_000 }).catch(() => {})
@@ -236,18 +246,19 @@ async function main() {
     await win.waitForTimeout(800)
     check('任务卡「忽略」→ Muse LOG 收到 [feedback] 行,卡定格', seen.feedback.some((x) => /ignored/.test(x)) && (await win.locator('.ibx-cards .t2-taskcard.done:not(.ibx-approval)').count()) === 1, JSON.stringify(seen.feedback))
 
-    // 工作区分组筛选:未读(客户端)/ 按发信人 / 已归档(换服务端 filter)/ 回到全部
+    // 工作区分组筛选:未读(客户端)/ 稳定来源类别 / 已归档(换服务端 filter)/ 回到全部
     const clickGroup = async (name) => { await win.locator('.t2sw-plug > .t2s-srow', { hasText: name }).first().click().catch(() => {}); await win.waitForTimeout(900) }
     const listRows = () => win.locator('.t2sw-plug-list .t2s-srow').count()
     await clickGroup('未读'); const unreadRows = await listRows()
-    await clickGroup('Muse'); const museRows = await listRows()
+    await clickGroup('自动化'); const automationRows = await listRows()
+    await clickGroup('智能体'); const agentRows = await listRows()
     await clickGroup('已归档'); const archivedRows = await listRows()
     await openMessage(win, '已归档的旧消息')
     const archivedTitle = await win.locator('.ibx-reader-title').first().textContent().catch(() => '')
     await clickGroup('全部'); const allRows = await listRows()
-    check('分组筛选:未读剩 2(刚读的那封掉出)/ Muse 2(不含已归档)/ 已归档 1 封且点得开 / 回到全部 3;已归档是单独拉的(filter=archived)',
-      unreadRows === 2 && museRows === 2 && archivedRows === 1 && archivedTitle === '已归档的旧消息' && allRows === 3 && seen.filters.includes('archived'),
-      JSON.stringify({ unreadRows, museRows, archivedRows, archivedTitle, allRows, filters: seen.filters }))
+    check('分组筛选:未读剩 3(刚读的那封掉出)/ 自动化 2 / 智能体 2(不含已归档)/ 已归档 1 封且点得开 / 回到全部 5;已归档是单独拉的(filter=archived)',
+      unreadRows === 3 && automationRows === 2 && agentRows === 2 && archivedRows === 1 && archivedTitle === '已归档的旧消息' && allRows === 5 && seen.filters.includes('archived'),
+      JSON.stringify({ unreadRows, automationRows, agentRows, archivedRows, archivedTitle, allRows, filters: seen.filters }))
 
     // ④ 按钮块
     await openMessage(win, '按钮块')

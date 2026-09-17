@@ -348,7 +348,9 @@ describe('screenshot stall and stop/restart regression', () => {
     expect(summaries).toBe(1);
   });
 
-  it('fails explicitly when the protected context still cannot fit, without deleting the attachment', async () => {
+  it('fails explicitly when the context still cannot fit after one summary, without deleting the attachment', async () => {
+    // 4k 窗口连系统提示 + 工具头都装不下:压缩一次(历史截图进摘要,不再受旧「最近 12 条」保护)后仍越窗 →
+    // 明确报错,不再发第二次摘要、也不拿去撞 provider;DB 里的附件一字不动。
     await screenshotHistory();
     contextWindow = 4000;
     await launch();
@@ -357,6 +359,7 @@ describe('screenshot stall and stop/restart regression', () => {
     expect(result.error).toContain('Context remains over');
     expect(await waitForRunSettlement('runtime-r')).toBe(true);
     expect(stream).toHaveBeenCalledOnce(); // one summary, no repeated compaction/provider retry loop
+    expect(String(stream.mock.calls[0][0].payload.messages[0].content)).toContain('context checkpoint');
     const rows = await query<any[]>(`SELECT attachments FROM chat_messages WHERE id = 'history-23'`);
     expect(JSON.parse(rows[0].attachments)[0].data).toHaveLength(2_406_140);
   });

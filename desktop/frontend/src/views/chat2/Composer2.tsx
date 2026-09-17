@@ -49,6 +49,32 @@ registerMessages({
   'composer2.listSep': { zh: '、', en: ', ' },
 })
 
+// 等待期间输入框占位轮播的 Forsion 使用小贴士。每条都对过源码(09-16 核验 workflow);只收桌面与 Web 都成立的,
+// 仅桌面有的(设置里导入技能 / 另存 Space / 智能体页)不进。新增一条 = 这里加 key + 下面补 zh/en。
+const WAIT_TIP_MS = 8000
+const STEER_TIP = 'input.tip.steer' // 外部引擎(ACP)不接 steer,那种会话里不显示
+const WAIT_TIP_KEYS = [
+  STEER_TIP, 'input.tip.switchChat', 'input.tip.quote', 'input.tip.dropFiles', 'input.tip.wikiRef', 'input.tip.dragSession',
+  'input.tip.branch', 'input.tip.newTab', 'input.tip.palette', 'input.tip.quickFind', 'input.tip.findInChat', 'input.tip.toc',
+]
+// 触屏端(Android 壳复用本组件)只留与键盘 / 悬停 / 拖拽 / 侧栏无关的
+const TOUCH_TIP_KEYS = [STEER_TIP, 'input.tip.wikiRef']
+registerMessages({
+  'input.tip': { zh: '小贴士:{tip}', en: 'Tip: {tip}' },
+  'input.tip.steer': { zh: '运行中也能继续发消息,会在下一步交给 Agent', en: 'You can send while it runs: the agent reads it at the next step' },
+  'input.tip.switchChat': { zh: '可以先切去别的会话,运行不会中断,侧栏圆点标出运行中', en: 'Switch chats meanwhile; this run keeps going, marked by a sidebar dot' },
+  'input.tip.quote': { zh: '划选回复里的文字,点「引用」即可带进下一条消息', en: 'Select text in a reply and click Quote to cite it in your next message' },
+  'input.tip.dropFiles': { zh: '文件可拖到聊天区任意位置,截图可直接粘贴进输入框', en: 'Drop files anywhere in the chat, or paste a screenshot into the box' },
+  'input.tip.wikiRef': { zh: '输入 [[ 可引用历史会话,本机项目里还能引用笔记和文件', en: 'Type [[ to reference past chats, or notes and files in local projects' },
+  'input.tip.dragSession': { zh: '把侧栏的会话拖进对话区,即可挂为引用随消息发送', en: 'Drag a chat from the sidebar into the conversation to cite it' },
+  'input.tip.branch': { zh: '悬停已完成的回复,点分支图标即可从此处开出新会话', en: 'Hover a finished reply and click the branch icon to fork a new chat' },
+  'input.tip.newTab': { zh: '⌘/Ctrl 点击侧栏里的会话,会在新标签页打开', en: '⌘/Ctrl-click a session in the sidebar to open it in a new tab' },
+  'input.tip.palette': { zh: '按 ⌘/Ctrl+K 打开命令面板,搜索并执行命令', en: 'Press ⌘/Ctrl+K to open the command palette and run commands' },
+  'input.tip.quickFind': { zh: '⌘/Ctrl+P 快速查找,按名称跳到会话', en: '⌘/Ctrl+P opens quick find: jump to a session by name' },
+  'input.tip.findInChat': { zh: '⌘/Ctrl+F 在当前对话里查找文字', en: 'Press ⌘/Ctrl+F to find text in the current conversation' },
+  'input.tip.toc': { zh: '悬停对话左侧的短横线展开目录,点击即可跳回任意一轮提问', en: "Hover the bars on the chat's left edge, then click to jump to a turn" },
+})
+
 interface SlashItem { cmd: string; desc: string; run: () => void }
 type OpenMenu = 'add' | 'mode' | 'model' | 'ctx' | null
 /** [[ 引用候选:note=vault 笔记(p=vault 相对 .md 路径);session=历史会话(p=标题,供打分);
@@ -257,7 +283,8 @@ export const Composer2: React.FC<{
   costLimit?: number
   /** 引擎 context_info(窗口来源/注入段分解/指令文件/历史规模);未跑过 run 时 null。 */
   ctxInfo?: CtxInfo | null
-  onCompact?: () => void
+  /** `/compact` 或 `/compact <focus>`:focus 是本次摘要的一次性关注点(引擎 Additional focus)。 */
+  onCompact?: (instructions?: string) => void
   /** 外部预填草稿(反馈诊断/对话建 agent 等 via-chat 入口);非空时 mount/变更即写入输入框并回调清空。 */
   seedText?: string | null
   onSeedConsumed?: () => void
@@ -297,6 +324,24 @@ export const Composer2: React.FC<{
 }) => {
   const { t, locale } = useI18n()
   const [draft, setDraft] = useState('')
+  // 等待期间占位轮播使用小贴士:每个 run 从随机一条起,换条前先淡出。只在草稿为空时看得见(占位语义本身)。
+  const [tipIdx, setTipIdx] = useState(0)
+  // 触屏(Android 壳 / 手机浏览器)没有 ⌘、悬停和拖拽,只留与指针无关的几条。
+  const [touchUi] = useState(() => !!window.tangu?.mobile || !!window.matchMedia?.('(hover: none)').matches)
+  const waitTips = (touchUi ? TOUCH_TIP_KEYS : WAIT_TIP_KEYS).filter((k) => !engineId || k !== STEER_TIP)
+  const [tipFade, setTipFade] = useState(false)
+  // 窄输入框里小贴士折成两行会被一行高裁掉后半句 → 这个 run 里一旦折行就撑到两行并保持到 run 结束(不随每条贴士跳高度)。
+  const [tipTall, setTipTall] = useState(false)
+  useEffect(() => {
+    if (!running) return
+    setTipIdx(Math.floor(Math.random() * WAIT_TIP_KEYS.length))
+    let swap = 0
+    const id = window.setInterval(() => {
+      setTipFade(true)
+      swap = window.setTimeout(() => { setTipIdx((i) => i + 1); setTipFade(false) }, 300)
+    }, WAIT_TIP_MS)
+    return () => { window.clearInterval(id); window.clearTimeout(swap); setTipFade(false); setTipTall(false) }
+  }, [running])
   /** 自定义命令(~/.tangu/commands/*.md);拉不到就是空表,输入框照常可用。 */
   const [customCommands, setCustomCommands] = useState<CustomCommandInfo[]>([])
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -511,6 +556,12 @@ export const Composer2: React.FC<{
   // 草稿变化后同步高度(含发送清空后回缩):useLayoutEffect 在 React 把新值提交到 DOM 之后、绘制之前跑,
   // 量到的是当前文本;此前散落的 rAF(autoGrow) 会早于提交跑而量到旧文本 → 发送长文后输入框不回缩(本次修的 bug)。
   useLayoutEffect(autoGrow, [draft]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 空输入框里占位折行时 Chromium 的 scrollHeight 会算上它(实测 46 vs 一行 25)—— 据此判小贴士是否被裁。
+  // 换条 / 换语言后重量;宽度中途变了等下一条换上时再量。
+  useLayoutEffect(() => {
+    const ta = taRef.current
+    if (running && !tipTall && ta && !ta.value && ta.scrollHeight > ta.clientHeight + 2) setTipTall(true)
+  }, [running, tipIdx, locale, tipTall, draft])
 
   // 历史召回:older=true→↑ 取更旧、false→↓ 取更新;越过最新回到暂存草稿。光标置末尾。
   const recallHistory = (older: boolean) => {
@@ -561,7 +612,7 @@ export const Composer2: React.FC<{
     const caret = start + text.length
     requestAnimationFrame(() => {
       const ta = taRef.current
-      if (ta) { ta.focus(); ta.selectionStart = ta.selectionEnd = caret; setCursorPos(caret) }
+      if (ta) { if (!useApp.getState().feedbackOpen) ta.focus(); ta.selectionStart = ta.selectionEnd = caret; setCursorPos(caret) }
       autoGrow()
     })
     return start
@@ -600,6 +651,7 @@ export const Composer2: React.FC<{
       '/approval': () => { setOpenMenu('mode'); close() },
       // 下面这些在桌面端等价于「打开对应面板」——TUI 里是打印一段文本,GUI 里就该跳过去。
       '/help': () => { app().openSettings('about'); close() },
+      '/feedback': window.tangu?.submitFeedback ? () => { if (app().openFeedback()) close() } : undefined,
       '/skills': () => { app().openSettings('skills'); close() },
       '/tools': () => { app().openSettings('agents'); close() },
       '/agents': () => { app().openSettings('agents'); close() },
@@ -633,7 +685,8 @@ export const Composer2: React.FC<{
             `think=${thinkingLevel || 'medium'}${ctxInfo?.thinkingRequested === (thinkingLevel || 'medium') && ctxInfo.thinkingEffective && ctxInfo.thinkingEffective !== ctxInfo.thinkingRequested ? `→${ctxInfo.thinkingEffective}` : ''}`,
             `approval=${execConfig.approvalMode || '-'}`,
             `cwd=${execConfig.cwd || '-'}`,
-            `loop=${maxIterations || 90}`,
+            // 会话值(下一 run 必用)优先;没有再看引擎报的生效值(Agent 定义 / 默认),别把 Agent 定义的 3 显示成 90。
+            `loop=${maxIterations || ctxInfo?.maxIterations || 90} (${maxIterations ? 'session' : ctxInfo?.maxIterationsSource || 'default'})`,
             `verify=${verifyCommand || '-'}`,
             `tokens=${(sessionTokens ?? 0).toLocaleString()}`,
             `cost=${runCost != null ? Math.round(runCost).toLocaleString() : '-'}${costLimit != null && costLimit > 0 ? `/${costLimit.toLocaleString()}` : ''}`,
@@ -651,10 +704,12 @@ export const Composer2: React.FC<{
       const stop = handlers['/stop']
       if (stop) items.push({ cmd: '/stop', desc: describe('/stop'), run: stop })
     }
-    // 外部引擎接管时:命令来自引擎自身(ACP),只保留 /new 免得两套语义打架。
+    // 外部引擎接管时保留宿主入口 /new 与 /feedback；反馈始终由桌面处理。
     if (engineId) {
       if (onNewSession) items.push({ cmd: '/new', desc: describe('/new'), run: () => { onNewSession(); close() } })
+      if (handlers['/feedback']) items.push({ cmd: '/feedback', desc: describe('/feedback'), run: handlers['/feedback'] })
       for (const c of engineCommands || []) {
+        if (c.name.replace(/^\//, '').toLowerCase() === 'feedback' && handlers['/feedback']) continue
         items.push({
           cmd: `/${c.name}`,
           desc: c.hint ? `${c.description} · ${c.hint}` : c.description,
@@ -908,9 +963,25 @@ export const Composer2: React.FC<{
 
   const send = () => {
     const text = draft.trim()
+    const feedbackMatch = /^\/feedback(?:\s+([\s\S]*))?$/i.exec(text)
+    if (feedbackMatch && window.tangu?.submitFeedback) {
+      if (useApp.getState().openFeedback(feedbackMatch[1]?.trim())) {
+        setDraft('')
+        requestAnimationFrame(autoGrow)
+      }
+      return
+    }
     // 只挂引用不写字也算一条消息:芯片化之前拖引用会往草稿塞文本,所以「拖完直接回车」是能发的;
     // 不放行的话按回车毫无反应 = 哑火(评审 M2)。斜杠命令那几段都要求 text,故只在这之后判空。
     if (!text && !allRefChips.length) return
+    // /compact [focus]:带关注点时不能走弹层菜单(那条只认裸命令),在这里直接派发
+    const compactMatch = /^\/compact(?:\s+([\s\S]+))?$/i.exec(text)
+    if (compactMatch && onCompact) {
+      onCompact((compactMatch[1] || '').trim() || undefined)
+      setDraft('')
+      requestAnimationFrame(autoGrow)
+      return
+    }
     const loopMatch = /^\/loop(?:\s+(\d+))?$/i.exec(text)
     if (loopMatch && onMaxIterationsChange) {
       if (loopMatch[1]) {
@@ -918,7 +989,7 @@ export const Composer2: React.FC<{
         onMaxIterationsChange(n)
         setHint(t('input.slash.loopSet', { n }))
       } else {
-        setHint(t('input.slash.loop', { current: maxIterations || 90 }))
+        setHint(t('input.slash.loop', { current: maxIterations || ctxInfo?.maxIterations || 90 }))
       }
       setDraft('')
       requestAnimationFrame(autoGrow)
@@ -1252,7 +1323,9 @@ export const Composer2: React.FC<{
             rows={1}
             autoFocus={autoFocus}
             value={draft}
-            placeholder={disabled ? disabledPlaceholder || t('input.placeholderDisabled') : t('input.placeholder')}
+            placeholder={disabled ? disabledPlaceholder || t('input.placeholderDisabled') : running ? t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t('input.placeholder')}
+            data-tip-fade={(running && tipFade) || undefined}
+            data-tip-tall={(running && tipTall) || undefined}
             disabled={disabled}
             onChange={(e) => {
               setDraft(e.target.value)

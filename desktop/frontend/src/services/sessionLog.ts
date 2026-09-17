@@ -36,46 +36,79 @@ function snapshotClient(): Record<string, unknown> {
   } catch { return {} }
 }
 
-export async function buildSessionLogPayload(cfg: TanguDesktopConfig, session: SessionRecord): Promise<any> {
-  const [messages, agentConfig, backendLogs, stored, appVersion, backendStatus, usage, timeline] = await Promise.all([
-    listMessages(cfg, session.id, 500).catch(() => []),
-    getSessionConfig(cfg, session.id).catch(() => ({})),
-    window.tangu?.backendLogs?.().catch(() => []) ?? Promise.resolve([]),
-    window.tangu?.getConfig().catch(() => null) ?? Promise.resolve(null),
-    window.tangu?.appVersion?.().catch(() => null) ?? Promise.resolve(null),
-    // 桌面独有(web/mobile 垫片没有,也是 isDesktop 的判定口):可选调用,null = 没有宿主,不是宿主挂了。
-    window.tangu?.backendStatus?.().catch(() => null) ?? Promise.resolve(null),
-    // 回到路由的原始字段名({tokensTotal, contextTokens}),方便对着 /agent/sessions/:id/usage 核对。
-    getSessionUsage(cfg, session.id).then((u) => ({ tokensTotal: u.base, contextTokens: u.ctx })).catch(() => null),
-    // 事件时间线骨架(无正文):回答「秒数去哪了」——没有它,导出只能看见模型说了什么,看不见等在哪。
-    getSessionTimeline(cfg, session.id).catch(() => null),
+export interface SessionLogOptions {
+  diagnostics?: boolean
+  conversation?: boolean
+  activity?: boolean
+}
+
+/** 选项只影响反馈；设置页不传选项时仍导出完整会话日志。未勾选的来源不会读取。 */
+export async function buildSessionLogPayload(
+  cfg: TanguDesktopConfig, session: SessionRecord | null,
+  { diagnostics = true, conversation = true, activity = false }: SessionLogOptions = {},
+): Promise<Record<string, any>> {
+  const sources: Record<string, 'included' | 'unavailable' | 'failed'> = {}
+  const read = async <T,>(key: string, task: (() => Promise<T>) | undefined, fallback: T): Promise<T> => {
+    if (!task) { sources[key] = 'unavailable'; return fallback }
+    try {
+      // A stalled host must not keep the feedback panel waiting indefinitely.
+      let timer: ReturnType<typeof setTimeout> | undefined
+      try {
+        const value = await Promise.race([task(), new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('diagnostics-timeout')), 8000)
+        })])
+        sources[key] = 'included'
+        return value
+      } finally { clearTimeout(timer) }
+    } catch { sources[key] = 'failed'; return fallback }
+  }
+  const host = window.tangu
+  const [messages, agentConfig, backendLogs, stored, appVersion, backendStatus, usage, timeline, activityLog] = await Promise.all([
+    conversation && session ? read('messages', () => listMessages(cfg, session.id, 500), []) : undefined,
+    diagnostics && session ? read('agentConfig', () => getSessionConfig(cfg, session.id), {}) : undefined,
+    diagnostics ? read('backendLogs', host?.backendLogs ? () => host.backendLogs!() : undefined, []) : undefined,
+    diagnostics ? read('connection', host?.getConfig ? () => host.getConfig() : undefined, null) : null,
+    read('appVersion', host?.appVersion ? () => host.appVersion!() : undefined, null),
+    diagnostics ? read('backendStatus', host?.backendStatus ? () => host.backendStatus!() : undefined, null) : undefined,
+    diagnostics && session ? read('usage', () => getSessionUsage(cfg, session.id)
+      .then((u) => ({ tokensTotal: u.base, contextTokens: u.ctx })), null) : undefined,
+    diagnostics && session ? read('timeline', () => getSessionTimeline(cfg, session.id), null) : undefined,
+    activity ? read('activityLog', host?.exportActivity ? () => host.exportActivity!(2) : undefined, '') : undefined,
   ])
   const connectionMode = stored?.mode || 'external'
+  const activityLines = activityLog?.split('\n').filter(Boolean)
   return {
+    schemaVersion: 2,
     exportedAt: new Date().toISOString(),
     app: 'Tangu Agent Desktop',
     appVersion: appVersion || null,
-    connectionMode,
-    backendLogsAvailable: connectionMode === 'managed',
-    client: snapshotClient(),
-    uiState: snapshotUiState(),
-    uiActionLog: [...uiActionLog],
-    rendererErrors: [...rendererErrors],
-    backendStatusAvailable: !!window.tangu?.backendStatus,
-    backendStatus,
-    usage,
-    timeline,
-    session: {
+    sources,
+    ...(diagnostics ? {
+      connectionMode,
+      backendLogsAvailable: !!host?.backendLogs && connectionMode === 'managed',
+      client: snapshotClient(),
+      uiState: snapshotUiState(),
+      uiActionLog: [...uiActionLog],
+      rendererErrors: [...rendererErrors],
+      backendStatusAvailable: !!host?.backendStatus,
+      backendStatus, usage, timeline, agentConfig, backendLogs,
+    } : {}),
+    session: session ? {
       id: session.id, title: session.title, model_id: session.model_id,
       project_path: session.project_path ?? null, project_name: session.project_name ?? null,
       projectless: !!session.projectless,
       created_at: session.created_at, updated_at: session.updated_at,
-    },
-    agentConfig,
-    messageCount: messages.length,
-    messagesTruncated: messages.length >= 500,
-    messages,
-    backendLogs,
+    } : null,
+    ...(conversation && session ? {
+      messageCount: messages?.length ?? 0,
+      messagesTruncated: (messages?.length ?? 0) >= 500,
+      messages,
+    } : {}),
+    ...(activity ? {
+      activityLog: activityLines?.slice(-500).join('\n') || '',
+      activityLogTruncated: (activityLines?.length ?? 0) > 500,
+      activityDays: 2,
+    } : {}),
   }
 }
 

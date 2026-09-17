@@ -8,12 +8,13 @@ import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSession
  * 负责:建窗 + 配置持久化(IPC)+ 托管内置 tangu-server(managed 模式,backendManager)。
  * agent 调用由 renderer 直连 HTTP/SSE(localhost),不经主进程代理。
  */
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, powerMonitor, screen, globalShortcut, session, shell, nativeImage, Notification, systemPreferences, webContents } from 'electron'
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, powerMonitor, powerSaveBlocker, screen, globalShortcut, session, shell, nativeImage, Notification, systemPreferences, webContents } from 'electron'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'path'
 import { pathToFileURL } from 'url'
 import { resolveCloudApiUrl } from './cloudApiPath.js'
-import { readFile, writeFile, mkdir, chmod, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
+import { readFile, writeFile, mkdir, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
 import { writeHostTextFile } from './hostTextWrite'
+import { createSerialQueue, lockedUpdateJson, writePrivateJson } from './configWrite'
 import { existsSync, mkdirSync, realpathSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
@@ -24,7 +25,8 @@ import { homedir, hostname, networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
 import { BackendManager, bundledPythonBin, resolveBundledNode, type BackendStatus } from './backendManager'
 import { envWithFullPath } from './envPath'
-import { startForsionMcp, publishExternalEndpoint, unpublishExternalEndpoint } from './mcpServer'
+import { createKeepAwake } from './keepAwake'
+import { createMcpLifecycle, startForsionMcp } from './mcpServer'
 import { randomBytes } from 'node:crypto'
 import {
   forsionDeviceLogin, forsionLogout, forsionWhoami, loadTanguCreds, saveTanguCreds,
@@ -145,19 +147,23 @@ async function readHomeConfig(): Promise<Record<string, any>> {
     throw error // Never overwrite an unreadable security configuration with defaults.
   }
 }
-async function writeHomeConfig(c: Record<string, any>): Promise<void> {
-  await mkdir(tanguHomeDir(), { recursive: true })
-  // 临时文件 + rename 原子落位:config.json 是桌面/引擎/CLI 共读的唯一真源,
-  // 直接截断写遇 ENOSPC/中断会把整份配置(providers/browser/workspace…)清成半截 JSON。
-  const tmp = homeConfigPath() + '.tmp'
-  await writeFile(tmp, JSON.stringify(c, null, 2), 'utf8')
-  await chmod(tmp, 0o600).catch(() => {}) // 含 token/apiKey
-  await rename(tmp, homeConfigPath())
+/** config.json 的读改写:引擎 / CLI 同写这份,持跨进程写锁在写入那一刻的内容上改(configWrite.ts 的 lockedUpdateJson;
+ *  mutate 必须同步,返回 undefined = 不写)。原子落位(唯一临时名 + rename,0600 含 token/apiKey):截断直写或共用 .tmp 名
+ *  在中断/并发时会写出半截 JSON —— 之后 readHomeConfig 每次都抛,设置整片存不进去。 */
+function updateHomeConfig(mutate: (c: Record<string, any>) => Record<string, any> | undefined): Promise<void> {
+  return lockedUpdateJson(homeConfigPath(), mutate)
 }
-async function saveHomeSection(name: string, value: any): Promise<void> {
-  const c = await readHomeConfig()
-  c[name] = value
-  await writeHomeConfig(c)
+/** 两份配置文件(userData 的 shell json、config.json)的读改写在本进程内排同一条队:saveConfig / saveHomeSection 都是
+ *  「读整份 → 改 → 写整份」,并发交错 = 后写者拿旧读数盖掉前者(跨进程那一半由 updateHomeConfig 的写锁管)。
+ *  ⚠️ 队里的任务别再调 saveConfig / saveHomeSection:会排到自己后面,自等死锁。 */
+const configQueue = createSerialQueue()
+/** value 可以是 (当前段) => 新段:基于当前值算新值(列表增删、段内改一个键)必须用函数形态,锁内拿当前段算;
+ *  在外面先读再整段写回,会盖掉引擎 / 并发 IPC 在这之间写进同一段的改动。 */
+function saveHomeSection(name: string, value: unknown): Promise<void> {
+  return configQueue(() => updateHomeConfig((c) => {
+    c[name] = typeof value === 'function' ? value(c[name]) : value
+    return c
+  }))
 }
 
 /** 直连 provider 配置。读 config.json 的 providers 段优先,缺失回落 legacy ~/.tangu/providers.json。 */
@@ -176,6 +182,10 @@ interface DirectProviderConfig {
 async function readProvidersFile(): Promise<DirectProviderConfig[]> {
   const sec = (await readHomeConfig()).providers
   if (sec !== undefined) return Array.isArray(sec) ? sec : []
+  return readLegacyProviders()
+}
+/** providers 段缺失时回落的 legacy providers.json(引擎首启迁移进 config.json 后就改名 .bak 了)。 */
+async function readLegacyProviders(): Promise<DirectProviderConfig[]> {
   try {
     const parsed = JSON.parse(await readFile(join(tanguDataDir(), 'providers.json'), 'utf8')) // legacy 文件在引擎域
     return Array.isArray(parsed) ? parsed : Array.isArray(parsed?.providers) ? parsed.providers : []
@@ -184,8 +194,15 @@ async function readProvidersFile(): Promise<DirectProviderConfig[]> {
   }
 }
 
-async function writeProvidersFile(list: DirectProviderConfig[]): Promise<void> {
-  await saveHomeSection('providers', list) // 唯一真源:落 config.json providers 段(chmod 600)
+/** 读改写 providers 段:锁内拿写入那一刻的列表算新列表,返回写入后的列表。legacy 回落文件只读、没有并发写者,锁外先读好。 */
+async function updateProvidersFile(fn: (list: DirectProviderConfig[]) => DirectProviderConfig[]): Promise<DirectProviderConfig[]> {
+  const legacy = await readLegacyProviders()
+  let next: DirectProviderConfig[] = []
+  await saveHomeSection('providers', (sec: unknown) => { // 唯一真源:落 config.json providers 段(0600)
+    next = fn(sec === undefined ? legacy : Array.isArray(sec) ? sec : [])
+    return next
+  })
+  return next
 }
 
 // ── 环境检测 + 引导安装(首启向导;检测+用户确认后执行,绝不静默自动装)──────────────
@@ -394,6 +411,8 @@ interface TanguStoredConfig {
   /** 前台窗口采样接缝(electron/activeWindow.ts):开=插件可读「现在焦点在哪个 app」。
    *  默认关,且入口只在开发者选项 —— 同 mcpEnabled 的信任边界纪律,必须用户显式开启。 */
   activeWindowEnabled: boolean
+  /** 有会话运行时阻止电脑闲置休眠(electron/keepAwake.ts)。默认关。 */
+  keepAwakeWhileRunning: boolean
   /** Agent Desk 演出面板:聊天右侧 agent 展示区(编辑自动上台 + desk_present/desk_screenshot 工具)。
    *  2026-07-26 转正,默认**开**——只有显式关过的人才有 false 落盘(saveConfig 只写 patch 里出现的键,
    *  没碰过开关的装机读的是这里的默认值,改默认即生效,不需要迁移)。 */
@@ -456,6 +475,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   activityLogEnabled: true,
   mcpEnabled: false,
   activeWindowEnabled: false,
+  keepAwakeWhileRunning: false,
   agentDeskEnabled: true,
   summaryOpenIn: 'tab',
 }
@@ -490,6 +510,7 @@ const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
   'activityLogEnabled', // 桌面专属(活动日志由 main 落盘)
   'mcpEnabled', // 桌面专属(对外 MCP 端点由 main 起停)
   'activeWindowEnabled', // 桌面专属(前台窗口采样由 main 探)
+  'keepAwakeWhileRunning', // 桌面专属(powerSaveBlocker 由 main 持有)
   'agentDeskEnabled', // 桌面专属(Agent Desk 演出面板开关,纯渲染层 UI)
   'summaryOpenIn', // 桌面专属(任务概览的文件打开去处,纯渲染层 UI)
   'lastApprovalMode', 'lastThinkingLevel', 'lastChatThinkingLevel', // 桌面专属(新会话起步档位的记忆,纯渲染层 UI;chat 单独一槽)
@@ -509,6 +530,14 @@ const sampleActiveWindow = createSampler({
   platform: process.platform,
 })
 
+/** 「有会话运行时不休眠」开关的内存镜像(真源 = config.keepAwakeWhileRunning),同 activeWindowOn 默认关。 */
+let keepAwakeOn = false
+const keepAwake = createKeepAwake({
+  isEnabled: () => keepAwakeOn,
+  start: () => powerSaveBlocker.start('prevent-app-suspension'),
+  stop: (id) => powerSaveBlocker.stop(id),
+})
+
 async function readShellConfig(): Promise<Partial<TanguStoredConfig>> {
   let cur: Partial<TanguStoredConfig> = {}
   try { cur = JSON.parse(await readFile(configPath(), 'utf8')) } catch { /* 无文件 → 空 */ }
@@ -522,8 +551,9 @@ async function readShellConfig(): Promise<Partial<TanguStoredConfig>> {
         const legacy = JSON.parse(await readFile(legacyPath, 'utf8')) as Partial<TanguStoredConfig>
         if (legacy.mode) {
           const seeded = { ...legacy, ...cur } // 本端已显式设的键优先
-          await mkdir(app.getPath('userData'), { recursive: true }).catch(() => {})
-          await writeFile(configPath(), JSON.stringify(seeded, null, 2), 'utf8') // 落盘一次,此后与旧目录解耦
+          // 落盘一次,此后与旧目录解耦。这条经 loadConfig 走、排不进 configQueue(唯一临时名只保证不写坏文件,不防内容回退);
+          // 正常启动时首次播种在 migrateCloudTokenToAuthJson 里就 await 完了,早于 IPC 注册,碰不上并发写
+          await writePrivateJson(configPath(), seeded)
           return seeded
         }
       } catch { /* 该旧目录无配置 → 试下一个 */ }
@@ -592,8 +622,20 @@ async function loadConfig(): Promise<TanguStoredConfig> {
   return merged
 }
 
-/** patch 按键分流:shell 键 → desktop 文件;config-backed 键 → config.json 对应段(唯一真源)。 */
-async function saveConfig(patch: Partial<TanguStoredConfig>, accountCreds = loadTanguCreds()): Promise<TanguStoredConfig> {
+/** patch 按键分流:shell 键 → desktop 文件;config-backed 键 → config.json 对应段(唯一真源)。
+ *  排 configQueue;返回**写入前**的配置 —— 与写入同一队位读出,调用方拿它判「变没变」才不会读到别人写了一半的盘面。
+ *  patch 也可以是 (写入前配置) => patch:基于当前值算新值(配对设备列表增删)必须用函数形态,在队外读会丢并发更新。 */
+function saveConfig(
+  patch: Partial<TanguStoredConfig> | ((before: TanguStoredConfig) => Partial<TanguStoredConfig>),
+  accountCreds = loadTanguCreds(),
+): Promise<TanguStoredConfig> {
+  return configQueue(async () => {
+    const before = await loadConfig()
+    await writeConfigPatch(typeof patch === 'function' ? patch(before) : patch, accountCreds)
+    return before
+  })
+}
+async function writeConfigPatch(patch: Partial<TanguStoredConfig>, accountCreds: ReturnType<typeof loadTanguCreds>): Promise<void> {
   const accountPatch: Partial<ReturnType<typeof loadAccountCloudSettings>> = {}
   if ('forsionSyncEnabled' in patch) accountPatch.forsionSyncEnabled = patch.forsionSyncEnabled === true
   if ('forsionLastSyncedAt' in patch) accountPatch.forsionLastSyncedAt = patch.forsionLastSyncedAt || 0
@@ -605,12 +647,13 @@ async function saveConfig(patch: Partial<TanguStoredConfig>, accountCreds = load
   const shell = await readShellConfig()
   let shellTouched = false
   for (const k of SHELL_KEYS) if (k in patch) { (shell as any)[k] = (patch as any)[k]; shellTouched = true }
-  if (shellTouched) {
-    await mkdir(app.getPath('userData'), { recursive: true }).catch(() => {})
-    await writeFile(configPath(), JSON.stringify(shell, null, 2), 'utf8')
-  }
-  // config-backed 键 → config.json 段
-  const home = await readHomeConfig()
+  if (shellTouched) await writePrivateJson(configPath(), shell)
+  // config-backed 键 → config.json 段:持跨进程写锁、在写入那一刻的内容上合并(引擎 / CLI 同写这份);
+  // patch 里没有这类键(最常见的 lastApprovalMode 之类)就不碰锁
+  if (applyHomePatch({}, patch)) await updateHomeConfig((home) => applyHomePatch(home, patch))
+}
+/** 把 patch 里 config-backed 的键合进 config.json 各段;一个都没有 → undefined(不写)。 */
+function applyHomePatch(home: Record<string, any>, patch: Partial<TanguStoredConfig>): Record<string, any> | undefined {
   const cloud = { ...(home.cloud || {}) }, browser = { ...(home.browser || {}) }, notes = { ...(home.notes || {}) }, tts = { ...(home.tts || {}) }, asr = { ...(home.asr || {}) }
   const auxModels = { ...(home.models || {}) }
   let cT = false, bT = false, oT = false, nT = false, tT = false, aT = false, mT = false
@@ -645,8 +688,7 @@ async function saveConfig(patch: Partial<TanguStoredConfig>, accountCreds = load
   if (tT) home.tts = tts
   if (aT) home.asr = asr
   if (mT) home.models = auxModels
-  if (cT || bT || oT || nT || tT || aT || mT) await writeHomeConfig(home)
-  return loadConfig()
+  return cT || bT || oT || nT || tT || aT || mT ? home : undefined
 }
 
 /** 一次性迁移:历史第二真源的 cloud token(config.json cloud.token,以及更老版本残留在桌面 shell 配置
@@ -661,13 +703,15 @@ async function migrateCloudTokenToAuthJson(): Promise<void> {
     const creds = loadTanguCreds()
     if (!creds.token) saveTanguCreds({ ...creds, token: String(legacy) })
     if (home.cloud?.token) {
-      delete home.cloud.token
-      await writeHomeConfig(home)
+      await updateHomeConfig((c) => {
+        if (!c.cloud?.token) return undefined
+        delete c.cloud.token
+        return c
+      })
     }
     if (shell.cloudToken) {
       delete shell.cloudToken
-      await mkdir(app.getPath('userData'), { recursive: true }).catch(() => {})
-      await writeFile(configPath(), JSON.stringify(shell, null, 2), 'utf8')
+      await writePrivateJson(configPath(), shell)
     }
   } catch (e) {
     console.error('[auth] cloud.token 迁移失败(忽略,登录态以 auth.json 为准):', e)
@@ -682,40 +726,40 @@ let isQuitting = false
 // MCP 端点(electron/mcpServer.ts):**常驻**(08-24 引擎原生路 P1)——App 启动即起,给引擎当
 // ASR 桥(transcribe_audio,凭每次启动随机的 bridgeSecret)。设置「高级」开关只管**外部 agent 面**:
 // 开=接受 localSecret + 发布 forsion-mcp.json;关=拒外部密钥 + 删发现文件(知情启用的同意语义)。
-let mcpHandle: Awaited<ReturnType<typeof startForsionMcp>> | null = null
-let mcpExternalEnabled = false
 const mcpBridgeSecret = randomBytes(24).toString('hex')
 /** 主进程 ASR 的路径面(在 ipc 注册段与 runTranscribe 一起定义后赋值;桥调用时兜空)。 */
 let mcpTranscribeFile:
   | ((p: string, req: { timestamps?: boolean; language?: string }) => Promise<string | { text: string; segments?: Array<{ start: number; end: number; text: string }> }>)
   | null = null
-async function applyForsionMcp(enabled: boolean): Promise<void> {
+// 启动那次 apply 与 config:set 的 apply 可能并发:lifecycle 串行化,只起一个服务、发布/撤销按调用顺序(见 mcpServer.ts)。
+const mcpLifecycle = createMcpLifecycle({
+  start: (externalEnabled) => startForsionMcp({
+    getEngine: () => ({ url: backend.getStatus().url, token: backend.getToken() }),
+    localSecret: backend.localSecret(),
+    bridgeSecret: mcpBridgeSecret,
+    externalEnabled,
+    transcribeFile: (p, req) => {
+      if (!mcpTranscribeFile) return Promise.reject(new Error('ASR 未初始化'))
+      return mcpTranscribeFile(p, req)
+    },
+    homeDir: forsionHomeDir(),
+    log: (m) => console.log(m),
+  }),
+  homeDir: () => forsionHomeDir(),
+  localSecret: () => backend.localSecret(),
+  log: (m) => console.log(m),
+})
+async function applyForsionMcp(enabled: boolean | (() => Promise<boolean>)): Promise<void> {
   try {
-    mcpExternalEnabled = enabled
-    if (!mcpHandle) {
-      mcpHandle = await startForsionMcp({
-        getEngine: () => ({ url: backend.getStatus().url, token: backend.getToken() }),
-        localSecret: backend.localSecret(),
-        bridgeSecret: mcpBridgeSecret,
-        externalEnabled: () => mcpExternalEnabled,
-        transcribeFile: (p, req) => {
-          if (!mcpTranscribeFile) return Promise.reject(new Error('ASR 未初始化'))
-          return mcpTranscribeFile(p, req)
-        },
-        homeDir: forsionHomeDir(),
-        log: (m) => console.log(m),
-      })
-    }
-    if (enabled) publishExternalEndpoint(forsionHomeDir(), mcpHandle.url, backend.localSecret(), (m) => console.log(m))
-    else unpublishExternalEndpoint(forsionHomeDir(), (m) => console.log(m))
+    await mcpLifecycle.apply(enabled)
   } catch (e) {
     console.error('[mcp] apply enabled failed:', e)
   }
 }
 /** 渲染端「高级」页展示用:开关语义不变——running/url 只反映**外部 agent 面**是否开启(桥面常驻不展示)。 */
 function forsionMcpStatus(): { running: boolean; url: string | null; token: string } {
-  const on = mcpExternalEnabled && !!mcpHandle
-  return { running: on, url: on ? mcpHandle!.url : null, token: backend.localSecret() }
+  const url = mcpLifecycle.externalUrl()
+  return { running: !!url, url, token: backend.localSecret() }
 }
 
 // ── 设备互联(方案 §11,B 端渲染):「允许其他设备连接本机」开关起停两件东西 ──────────────
@@ -953,8 +997,9 @@ async function doRefreshUnitHost(): Promise<void> {
     pairedDevices: {
       list: (): PairedDevice[] => unitPairedCache,
       add: async (d: PairedDevice): Promise<void> => {
-        unitPairedCache = [...unitPairedCache, d]
-        await saveConfig({ unitPairedDevices: unitPairedCache })
+        let next: PairedDevice[] = []
+        await saveConfig((c) => ({ unitPairedDevices: (next = [...(c.unitPairedDevices || []), d]) })) // 以队内读到的列表为底,与并发的撤销互不抹掉
+        unitPairedCache = next // 落盘成功才放行:写失败不留一台只在内存里的已配对设备
       },
     },
     readPlugins: () => (amadeusReadPlugins ? amadeusReadPlugins() : Promise.resolve([])),
@@ -1046,7 +1091,8 @@ async function doRefreshUnitHost(): Promise<void> {
     },
     log: (m: string) => console.log(m),
   }
-  unitPairedCache = stored.unitPairedDevices || []
+  // 配对名单在队列里现读,别用开头那份快照:上面几处 await 期间用户可能刚撤销了设备,旧快照会把它重新放行
+  unitPairedCache = await configQueue(async () => (await loadConfig()).unitPairedDevices || [])
   try {
     // 端口保持稳定(便于手输 IP 直连):首选已存端口/8791,被占则退化系统分配并回写。
     const want = stored.unitWebPort || 8791
@@ -1783,8 +1829,10 @@ app.whenReady().then(async () => {
 
   // 用户活动日志:开关初值 + 30 天轮转 + app.start 事件(埋点面见 frontend/src/activity/log.ts)。
   try {
-    setActivityLogEnabled((await loadConfig()).activityLogEnabled !== false)
-    activeWindowOn = (await loadConfig()).activeWindowEnabled === true
+    const startCfg = await loadConfig()
+    setActivityLogEnabled(startCfg.activityLogEnabled !== false)
+    activeWindowOn = startCfg.activeWindowEnabled === true
+    keepAwakeOn = startCfg.keepAwakeWhileRunning === true
     void pruneActivity()
     logActivity('app.start', { v: app.getVersion() })
   } catch { /* 装饰性,不阻塞启动 */ }
@@ -1800,13 +1848,37 @@ app.whenReady().then(async () => {
   // 与 activityLogEnabled 同款——config:set 里同步刷新,免得每次采样都读一遍盘。
   ipcMain.handle('system:activeWindow', () => sampleActiveWindow())
 
+  // 「有会话运行时不休眠」:各窗口报自己订阅着的在飞 run 数,判定与 powerSaveBlocker 都在 keepAwake.ts。
+  // 窗口销毁 / 渲染进程崩溃 / 主框架换了新文档(重载,含新页面没跑到上报那步)/ 主框架加载失败(卫星窗口没有
+  // recoverRenderer 兜重载)都来不及报 0 → 这里替它清;新页面重新订阅到 run 会再报上来。宁可短暂放行休眠,也不让旧计数把电脑一直顶着。
+  const keepAwakeWatched = new Set<number>()
+  ipcMain.on('power:running', (e, count: unknown) => {
+    if (!isTrustedSender(e) || !e.senderFrame) return // senderFrame 为空 = 旧文档导航后才到的迟到上报,丢弃
+    const wc = e.sender
+    const id = wc.id
+    if (!keepAwakeWatched.has(id)) {
+      keepAwakeWatched.add(id)
+      wc.once('destroyed', () => { keepAwakeWatched.delete(id); keepAwake.forget(id) })
+      wc.on('render-process-gone', () => keepAwake.forget(id))
+      wc.on('did-navigate', () => keepAwake.forget(id))
+      wc.on('did-fail-load', (_ev, code, _desc, _url, isMainFrame) => { if (isMainFrame && code !== -3) keepAwake.forget(id) }) // -3=导航被取消,旧页面还在
+    }
+    keepAwake.report(id, Number.isSafeInteger(count) && (count as number) > 0)
+  })
+  // Windows 在用户主动睡眠时终止电源请求,唤醒后手里的 id 已失效 → 重新申请(macOS 断言跨睡眠保留,重申无害)。
+  powerMonitor.on('resume', () => keepAwake.rearm())
+
   ipcMain.handle('config:get', () => effectiveConfig())
   ipcMain.handle('config:set', async (_e, patch: Partial<TanguStoredConfig>) => {
-    const accountCreds = loadTanguCreds() // Capture before loadConfig's first await.
-    const before = await loadConfig()
-    await saveConfig(patch, accountCreds)
+    const accountCreds = loadTanguCreds() // Capture before saveConfig's first await.
+    // before 与写入同一队位读出(见 saveConfig);下面的内存镜像紧跟本次落盘赋值,先于下一个排队的写 → 顺序与盘面一致。
+    const before = await saveConfig(patch, accountCreds)
     if (patch.activityLogEnabled !== undefined) setActivityLogEnabled(patch.activityLogEnabled !== false)
     if (patch.activeWindowEnabled !== undefined) activeWindowOn = patch.activeWindowEnabled === true
+    if (patch.keepAwakeWhileRunning !== undefined) {
+      keepAwakeOn = patch.keepAwakeWhileRunning === true
+      keepAwake.refresh() // 运行中切开关:关要立刻放、开要立刻拦,不等下一次上报
+    }
     // 模式/托管参数变化 → 重启托管后端(切到 external 则停掉)。
     const managedKeys: Array<keyof TanguStoredConfig> = [
       'mode', 'cloudUrl', 'sandbox', 'hostSandbox', 'pythonMode', 'mirror',
@@ -1992,13 +2064,18 @@ app.whenReady().then(async () => {
   // T1 配对设备的回收面(B 侧自己的 UI;无回收的配对不许上线——方案 §11.3)。
   ipcMain.handle('units:pairedList', async () => (await loadConfig()).unitPairedDevices || [])
   ipcMain.handle('units:pairedRemove', async (_e, id: string) => {
-    const cur = (await loadConfig()).unitPairedDevices || []
-    unitPairedCache = cur.filter((d) => d.id !== String(id))
-    await saveConfig({ unitPairedDevices: unitPairedCache })
-    // P2P 是站着的信道,建立后逐请求走 x-unit-internal——不收的话被撤销的设备继续全权访问,
-    // 直到信道偶然断开(Codex H2)。粗粒度全收(含账号态会话):撤销是低频动作,重连便宜。
-    // ponytail: 按主体(pairHash)定向收要把身份穿进 PeerEntry,撤销频率撑不起那台机器
-    await closeAllP2p()
+    try {
+      await saveConfig((c) => {
+        // 队内读当前列表:队外读会抹掉并发配上的设备。撤销先于落盘生效(fail-closed):写盘失败也不再放行它,直到重启重读磁盘
+        unitPairedCache = (c.unitPairedDevices || []).filter((d) => d.id !== String(id))
+        return { unitPairedDevices: unitPairedCache }
+      })
+    } finally {
+      // P2P 是站着的信道,建立后逐请求走 x-unit-internal——不收的话被撤销的设备继续全权访问,
+      // 直到信道偶然断开(Codex H2)。粗粒度全收(含账号态会话):撤销是低频动作,重连便宜。落盘失败也照收。
+      // ponytail: 按主体(pairHash)定向收要把身份穿进 PeerEntry,撤销频率撑不起那台机器
+      await closeAllP2p()
+    }
     return { ok: true }
   })
 
@@ -2544,35 +2621,44 @@ app.whenReady().then(async () => {
   ipcMain.handle('discovery:scan', () => scanAll())
   ipcMain.handle('discovery:importSkills', (_e, ids: string[]) =>
     importSkills(Array.isArray(ids) ? ids.filter((x) => typeof x === 'string') : [], tanguDataDir()))
-  ipcMain.handle('discovery:importMcp', async (_e, names: string[]) => {
+  // 两次导入并发会在同一个 legacy mcp.json 上互相覆盖 → 整段串行(不能用 configQueue:里面要 saveHomeSection,会自等死锁)
+  const importMcpQueue = createSerialQueue()
+  ipcMain.handle('discovery:importMcp', (_e, names: string[]) => importMcpQueue(async () => {
     // importMcp 在 legacy mcp.json 上做合并:先把 config.json 的 mcp 段播种进去(免丢已有),导入后再写回 config.json。
     const home = await readHomeConfig()
-    await mkdir(tanguDataDir(), { recursive: true })
-    await writeFile(mcpFile(), JSON.stringify({ mcpServers: home.mcp?.mcpServers || {} }, null, 2), 'utf8')
+    await writePrivateJson(mcpFile(), { mcpServers: home.mcp?.mcpServers || {} }) // 播种内容含 env/headers 密钥 → 0600
     const r = await importMcp(Array.isArray(names) ? names.filter((x) => typeof x === 'string') : [], tanguDataDir())
-    try {
-      const merged = JSON.parse(await readFile(mcpFile(), 'utf8'))
-      await saveHomeSection('mcp', { mcpServers: merged?.mcpServers || {} })
-    } catch { /* importMcp 未写文件(无导入项)→ config.json 不变 */ }
-    return r
-  })
+    let merged: Record<string, unknown> = {}
+    try { merged = JSON.parse(await readFile(mcpFile(), 'utf8'))?.mcpServers || {} } catch { /* 读不回 = 没导入成 */ }
+    const got = r.imported.filter((k) => k in merged)
+    // 只把这次新导入的键合进写入那一刻的 mcp 段:上面播种读的是旧段,整段写回会盖掉在这之间落盘的 mcp:write / 引擎改动。
+    // 同名以段里已有的为准(importer 按播种快照避让,之后别处写进来的同名不能被导入盖掉),返回值只报真落盘的。
+    let landed: string[] = []
+    if (got.length) {
+      await saveHomeSection('mcp', (sec: any) => {
+        landed = got.filter((k) => !(k in (sec?.mcpServers ?? {})))
+        return { ...sec, mcpServers: { ...sec?.mcpServers, ...Object.fromEntries(landed.map((k) => [k, merged[k]])) } }
+      })
+    }
+    return { ...r, imported: landed }
+  }))
 
   // ── 直连 provider 管理(写 ~/.tangu/providers.json;managed 模式保存后重启后端加载)──
   ipcMain.handle('providers:list', () => readProvidersFile())
   ipcMain.handle('providers:save', async (_e, provider: DirectProviderConfig) => {
     if (!provider?.providerId || !provider?.baseUrl) throw new Error('providerId 与 baseUrl 必填')
-    const list = await readProvidersFile()
-    const i = list.findIndex((p) => p.providerId === provider.providerId)
-    if (i >= 0) list[i] = provider
-    else list.push(provider)
-    await writeProvidersFile(list)
+    const list = await updateProvidersFile((cur) => {
+      const i = cur.findIndex((p) => p.providerId === provider.providerId)
+      if (i >= 0) cur[i] = provider
+      else cur.push(provider)
+      return cur
+    })
     const stored = await loadConfig()
     if (stored.mode === 'managed') void ensureBackend()
     return list
   })
   ipcMain.handle('providers:delete', async (_e, providerId: string) => {
-    const list = (await readProvidersFile()).filter((p) => p.providerId !== providerId)
-    await writeProvidersFile(list)
+    const list = await updateProvidersFile((cur) => cur.filter((p) => p.providerId !== providerId))
     const stored = await loadConfig()
     if (stored.mode === 'managed') void ensureBackend()
     return list
@@ -2798,8 +2884,7 @@ app.whenReady().then(async () => {
   // 测试版通道开关。落 config.json 的 updater 段;updater.ts 每次检查现读,改完无需重启。
   ipcMain.handle('updater:getBeta', () => betaChannelOn())
   ipcMain.handle('updater:setBeta', async (_e, on: boolean) => {
-    const c = await readHomeConfig()
-    await saveHomeSection('updater', { ...(c.updater || {}), beta: !!on })
+    await saveHomeSection('updater', (sec: any) => ({ ...sec, beta: !!on }))
     return { ok: true }
   })
   ipcMain.handle('updater:download', () => downloadUpdate())
@@ -2816,16 +2901,21 @@ app.whenReady().then(async () => {
   //   desktop:userData 里的壳层配置(窗口/Amadeus)
   ipcMain.handle('app:clearData', async (_e, opts: { desktop?: boolean; tangu?: boolean }) => {
     await backend.stop() // 释放 state.db 句柄,否则占用删不掉
-    if (opts?.tangu) {
-      for (const p of [forsionHomeDir(), forsionWorkspaceDir(), join(homedir(), '.tangu'), join(homedir(), 'Tangu')]) {
-        await rm(p, { recursive: true, force: true }).catch(() => {})
+    // 与配置写入同排一队:在途的写先落完再删;删完同一拍就退出,排在后面的写来不及把 config.json(含 apiKey)写回来
+    await configQueue(async () => {
+      if (opts?.tangu) {
+        // 显式 TANGU_HOME=…/tangu 时 forsionHomeDir() 是推导出的父目录(可能是 ~ 或整块数据盘)→ 绝不整删,只删用户指定的那个。
+        // ponytail: 该形态下父目录里的共享域文件(auth/config.json 等)会留下;要连带清就得逐项列共享域条目。
+        for (const p of [process.env.TANGU_HOME || forsionHomeDir(), forsionWorkspaceDir(), join(homedir(), '.tangu'), join(homedir(), 'Tangu')]) {
+          await rm(p, { recursive: true, force: true }).catch(() => {})
+        }
       }
-    }
-    if (opts?.desktop) {
-      for (const f of ['tangu-desktop-config.json', 'amadeus-config.json']) {
-        await rm(join(app.getPath('userData'), f), { force: true }).catch(() => {})
+      if (opts?.desktop) {
+        for (const f of ['tangu-desktop-config.json', 'amadeus-config.json']) {
+          await rm(join(app.getPath('userData'), f), { force: true }).catch(() => {})
+        }
       }
-    }
+    })
     isQuitting = true
     app.relaunch()
     app.exit(0)
@@ -3028,7 +3118,7 @@ app.whenReady().then(async () => {
   })
 
   // 提交反馈到 Forsion 反馈中心(token 留主进程,不下发渲染层)。会话日志 JSON 作附件随附,
-  // >5MB 则省略附件、正文照常提交(后端附件硬上限 5MB)。
+  // 超限在发送前拒绝,不再静默省略用户选择的附件(后端硬上限 5MB)。
   ipcMain.handle('feedback:submit', async (
     _e,
     input: { description?: string; sessionLogJson?: string; sessionLogName?: string },
@@ -3040,12 +3130,13 @@ app.whenReady().then(async () => {
     if (!cloudUrl || !token) return { ok: false, error: 'not-logged-in' }
     const description = (input?.description || '').trim()
     if (!description) return { ok: false, error: 'empty' }
+    if (description.length > 10000) return { ok: false, error: 'description-too-long' }
 
     const attachments: Array<{ filename: string; mime_type: string; size: number; data_base64: string }> = []
-    let attachmentSkipped = false
+    const attachmentSkipped = false
     if (input?.sessionLogJson) {
       const buf = Buffer.from(input.sessionLogJson, 'utf8')
-      if (buf.length > 5 * 1024 * 1024) attachmentSkipped = true
+      if (buf.length > 5 * 1024 * 1024) return { ok: false, error: 'attachment-too-large' }
       else attachments.push({
         filename: input.sessionLogName || 'tangu-session.json',
         mime_type: 'application/json',
@@ -3414,8 +3505,9 @@ app.whenReady().then(async () => {
   // (4s 封顶,离线不拖启动);无需续期时(1h 内换过)立即落到 finally,后端照常即刻起。
   void refreshAuthSliding(4000).catch(() => {}).finally(() => { void ensureBackend() })
   setInterval(() => { void refreshAuthSliding() }, 24 * 3600_000) // 一直开着不关的也算「在用软件」
-  // 对外 MCP 端点:仅在设置「高级」已开启时随 App 启动(默认关);不依赖后端就绪,工具调用时现取引擎地址。
-  void loadConfig().then((c) => applyForsionMcp(c.mcpEnabled))
+  // MCP 服务常驻、随 App 启动(引擎的 ASR 桥要用);外部面按设置「高级」开关(默认关)。开关值在 lifecycle 队列里现读:
+  // 若先读到旧值、用户又在读完前切了开关,旧值作废(见 createMcpLifecycle)。不依赖后端就绪,工具调用时现取引擎地址。
+  void applyForsionMcp(async () => (await loadConfig()).mcpEnabled)
   // ⚠️必须**先于** createWindow / restoreDetachedWindows:恢复的终端 tab 一挂载就 pty:spawn,
   // 那时 handler 还没注册的话 IPC 直接「No handler registered」,视图落进已退出态且不会重试。
   registerPtyIpc(isTrustedSender)

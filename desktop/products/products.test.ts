@@ -25,6 +25,7 @@ describe('产品档案', () => {
       artifactPrefix: 'Forsion',
       defaultSpace: 'tangu',
       spaces: ['home', 'tangu', 'inbox', 'amadeus', 'calendar', 'coding', 'automation', 'muse', 'public'],
+
       agentBackend: true,
       market: true,
     })

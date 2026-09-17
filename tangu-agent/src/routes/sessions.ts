@@ -12,13 +12,20 @@
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
-import { query, getNowSql } from '../core/db.js';
+import { query } from '../core/db.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import { compactSession } from '../services/compaction.js';
+import { resolveCompactionSettings, globalCompactionLayer } from '../services/compactionSettings.js';
+import { bumpHistoryRevision } from '../services/historyRevision.js';
+import { sessionHasActiveRun } from '../services/agentLoop.js';
+import { getAgent } from '../agents/agentRegistry.js';
 import { branchSession } from '../services/sessionBranch.js';
 import { listCheckpoints, restoreCodeSince, removeSessionCheckpoints } from '../services/checkpoints.js';
 import { searchSessions, splitTerms, dayArg, fmtDate } from '../services/sessionSearch.js';
 import { isValidSlug } from '../agents/agentRegistry.js';
+import { isDelegateActive } from '../services/delegateTranscript.js';
+import { ensureMemberSession, memberRunConfig } from '../services/teamRuns.js';
+import { recoverTeamOutputs } from '../services/teamOutputs.js';
 
 const router = Router();
 
@@ -95,6 +102,7 @@ router.get('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => {
     if (!profile) return res.status(400).json({ detail: `unknown app_id: ${req.query.app_id}` });
     const archived = req.query.archived === 'true';
     const limit = Math.floor(Math.min(Math.max(1, Number(req.query.limit) || 200), 500)); // floor:非整数插进 LIMIT 会成非法 SQL
+    await recoverTeamOutputs(req.params.id, userId);
     // kind = 'user' 排除 Special Agent（historian/muse）工作会话——它们隔离不进会话列表。
     const rows = await query<any[]>(
       `SELECT ${SESSION_COLS} FROM chat_sessions
@@ -165,12 +173,12 @@ router.post('/agent/sessions/:id/branch', authMiddleware, async (req: AuthReques
 router.get('/agent/sessions/:id/background', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
-    // ?kind=teamwork:团队成员的工作会话(Team Desk 复原用;一人一条,按 agent_config.agentSlug 归属)。不传 = 旧口径(所有隐藏子会话,最近 10 条)。
+    // ?kind=teamwork:团队成员的工作会话(Team Desk 复原用;一人一条,按 agent_config.agentSlug 归属)。不传 = 所有隐藏子会话,最近 100 条。
     const kind = typeof req.query.kind === 'string' && /^[a-z]{1,16}$/.test(req.query.kind) ? req.query.kind : null;
     const rows = await query<any[]>(
       `SELECT id, kind, title, created_at, agent_config FROM chat_sessions
        WHERE parent_session_id = ? AND user_id = ? AND kind != 'user'${kind ? ' AND kind = ?' : ''}
-       ORDER BY created_at DESC LIMIT ${kind ? 50 : 10}`,
+       ORDER BY created_at DESC LIMIT 100`,
       kind ? [req.params.id, userId, kind] : [req.params.id, userId],
     );
     const background: any[] = [];
@@ -183,13 +191,49 @@ router.get('/agent/sessions/:id/background', authMiddleware, async (req: AuthReq
       try { const c = typeof s.agent_config === 'string' ? JSON.parse(s.agent_config) : s.agent_config; agentSlug = typeof c?.agentSlug === 'string' ? c.agentSlug : null; } catch { /* 畸形配置按无归属 */ }
       background.push({
         sessionId: s.id, kind: s.kind, title: s.title, createdAt: s.created_at, agentSlug,
-        runId: r[0]?.id || null, runStatus: r[0]?.status || null,
+        runId: r[0]?.id || null, runStatus: isDelegateActive(s.id) ? 'running' : r[0]?.status || null,
       });
     }
     res.json({ background });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list background sessions failed' });
   }
+});
+
+// Hidden child sessions can be opened without promoting them into the main session list.
+router.post('/agent/sessions/:id/team-members/:slug', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const parent = await getOwnSession(req.params.id, req.user!.userId);
+    if (!parent) return res.status(404).json({ detail: 'Session not found' });
+    const cfg = parseMaybeJson(parent.agent_config) || {};
+    const slug = req.params.slug;
+    const inline = (cfg.groupTempAgents || []).find((a: any) => a.slug === slug);
+    if (!cfg.groupChat || (!cfg.groupAgents?.includes(slug) && !inline)) return res.status(404).json({ detail: 'Team member not found' });
+    const member = inline || await getAgent(slug);
+    if (!member) return res.status(404).json({ detail: 'Agent not found' });
+    const a = {
+      teamSessionId: parent.id, userId: req.user!.userId, appId: parent.app_id, modelId: parent.model_id,
+      member, inlineDef: !!inline, teamRunId: '', delta: '', cycle: 0, roster: (cfg.groupAgents || []).join(', '),
+      execMode: cfg.execMode || 'host', cwd: cfg.cwd || parent.project_path || undefined, extraRoots: cfg.extraRoots,
+      wsProject: cfg.workspaceProject, approvalMode: cfg.approvalMode, signal: new AbortController().signal,
+    };
+    const id = await ensureMemberSession(a);
+    let session = await getOwnSession(id, req.user!.userId);
+    // Only initialize a new carrier. Never overwrite a running member's scope or user overrides.
+    if (!parseMaybeJson(session.agent_config)?.execMode) {
+      await query('UPDATE chat_sessions SET agent_config = ? WHERE id = ?', [JSON.stringify(memberRunConfig(a)), id]);
+      session = await getOwnSession(id, req.user!.userId);
+    }
+    res.json({ session: rowToSession(session) });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'Open team member failed' }); }
+});
+
+router.get('/agent/sessions/:id/detail', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const session = await getOwnSession(req.params.id, req.user!.userId);
+    if (!session) return res.status(404).json({ detail: 'Session not found' });
+    res.json({ session: { ...rowToSession(session), delegate_running: isDelegateActive(session.id) } });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'load session failed' }); }
 });
 
 router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res) => {
@@ -208,7 +252,8 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     if (typeof project_name === 'string' || project_name === null) { sets.push('project_name = ?'); params.push(project_name ? String(project_name).slice(0, 255) : null); }
     if (typeof projectless === 'boolean') { sets.push('projectless = ?'); params.push(projectless); }
     if (!sets.length) return res.status(400).json({ detail: 'nothing to update' });
-    sets.push(`updated_at = ${getNowSql()}`);
+    // `updated_at` 是会话列表的消息活动时间,不是通用行修改时间。改名、归档、换模型/项目
+    // 都不能把项目顶到最近活动首位;它只由消息落库路径刷新。
     params.push(req.params.id);
     await query(`UPDATE chat_sessions SET ${sets.join(', ')} WHERE id = ?`, params);
     const rows = await query<any[]>(`SELECT ${SESSION_COLS} FROM chat_sessions WHERE id = ?`, [req.params.id]);
@@ -230,6 +275,7 @@ router.delete('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, re
     await query(`DELETE FROM agent_runs WHERE session_id = ?`, [sid]);
     await query(`DELETE FROM chat_messages WHERE session_id = ?`, [sid]);
     await query(`DELETE FROM chat_sessions WHERE id = ?`, [sid]);
+    bumpHistoryRevision(sid); // 在飞的后台摘要落库前会复核版本 → 丢弃
     await removeSessionCheckpoints(sid); // 代码快照跟着走,否则 home 无界增长
     res.json({ ok: true });
   } catch (e: any) {
@@ -283,7 +329,7 @@ router.post('/agent/sessions/:id/messages/delete', authMiddleware, async (req: A
       `SELECT 1 FROM agent_runs WHERE session_id = ? AND status IN ('queued','running') LIMIT 1`,
       [sid],
     );
-    if (inflight.length) return res.status(409).json({ detail: 'run in progress' });
+    if (inflight.length || isDelegateActive(req.params.id)) return res.status(409).json({ detail: 'run in progress' });
     const placeholders = ids.map(() => '?').join(',');
     // 删前取被删消息的最早时间戳:若落在某压缩检查点覆盖区内,该检查点摘要会继续叙述已删轮次 → 连带失效。
     const tsRows = await query<any[]>(
@@ -299,6 +345,7 @@ router.post('/agent/sessions/:id/messages/delete', authMiddleware, async (req: A
     if (minTs) {
       await query(`DELETE FROM session_summaries WHERE session_id = ? AND through_timestamp >= ?`, [sid, minTs]).catch(() => {});
     }
+    bumpHistoryRevision(sid); // 正在跑的后台摘要(run 收尾后的惰性检查点)落库前复核版本 → 基于旧快照的结果作废
     res.json({ ok: true, deleted: ids.length });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'delete messages failed' });
@@ -472,7 +519,19 @@ router.post('/agent/sessions/:id/compact', authMiddleware, async (req: AuthReque
     if (!s) return res.status(404).json({ detail: 'Session not found' });
     const modelId = (typeof req.body?.model_id === 'string' && req.body.model_id) || s.model_id || '';
     if (!modelId) return res.status(400).json({ detail: '需要 model_id 才能压缩（会话未设模型）' });
-    const r = await compactSession(req.params.id, modelId, (s as any).app_id || 'tangu');
+    // 在途 run 正往 chat_messages 落段、也可能正落自己的检查点:手动压缩不与它并发(TUI 同款拒绝)
+    if (sessionHasActiveRun(req.params.id) || isDelegateActive(req.params.id)) return res.status(409).json({ detail: 'Session has an active run; compact after it finishes' });
+    // instructions = /compact <focus>:一次性的 Additional focus(pi 同款),不落配置
+    const focus = typeof req.body?.instructions === 'string' ? req.body.instructions.trim().slice(0, 2000) : '';
+    // 旋钮与自动压缩同一契约:会话 agent_config.compaction > 该会话 Agent 的 [compaction] > config.json > 缺省
+    let sessionCfg: any = (s as any).agent_config;
+    if (typeof sessionCfg === 'string') { try { sessionCfg = JSON.parse(sessionCfg); } catch { sessionCfg = null; } }
+    const agentSlug = typeof sessionCfg?.agentSlug === 'string' ? sessionCfg.agentSlug : '';
+    const def = agentSlug ? await getAgent(agentSlug).catch(() => null) : null;
+    const r = await compactSession(req.params.id, modelId, (s as any).app_id || 'tangu', undefined, {
+      focus: focus || undefined,
+      settings: resolveCompactionSettings(sessionCfg?.compaction, def?.compaction, globalCompactionLayer()),
+    });
     if (!r.ok) return res.json({ ok: false, reason: r.reason });
     res.json({ ok: true, summarizedCount: r.summarizedCount, throughTimestamp: r.throughTimestamp });
   } catch (e: any) {
@@ -539,7 +598,7 @@ router.post('/agent/sessions/:id/checkpoints/restore', authMiddleware, async (re
       `SELECT 1 FROM agent_runs WHERE session_id = ? AND status IN ('queued','running') LIMIT 1`,
       [req.params.id],
     );
-    if (inflight.length) return res.status(409).json({ detail: 'run in progress' });
+    if (inflight.length || isDelegateActive(req.params.id)) return res.status(409).json({ detail: 'run in progress' });
     res.json(await restoreCodeSince(req.params.id, at));
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'restore checkpoint failed' });
@@ -572,7 +631,8 @@ router.put('/agent/sessions/:id/config', authMiddleware, async (req: AuthRequest
     // 锁合并之后再校验一次:请求体单看合法(只带 soloEngineId),合并回存值的 soloAgentSlug 就成了双身份 —— 这种 PUT 整条拒绝(creview 09-16 P0)。
     const mergedErr = validSessionFacts(cfg);
     if (mergedErr) return res.status(400).json({ detail: mergedErr });
-    await query(`UPDATE chat_sessions SET agent_config = ?, updated_at = ${getNowSql()} WHERE id = ?`, [
+    // 配置变化不是消息活动:点击会话后的懒加载/补全也可能 PUT,绝不能因此刷新列表排序。
+    await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = ?`, [
       JSON.stringify(cfg), req.params.id,
     ]);
     res.json({ agent_config: cfg });

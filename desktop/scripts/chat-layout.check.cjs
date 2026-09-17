@@ -32,7 +32,13 @@ async function main() {
   fs.mkdirSync(vault)
   fs.writeFileSync(path.join(vault, 'Layout.md'), '# Layout verification\n')
   fs.writeFileSync(path.join(userdata, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
-  const stub = await startStubEngine({ agents, engines })
+  const stub = await startStubEngine({ agents, engines, override: ({ path: p, method }) => {
+    if (p === '/agent/runs' && method === 'GET') return { runs: [] }
+  } })
+  for (const dir of [userdata, `${userdata}-dev`]) {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'e2e' }))
+  }
   let app
   try {
     app = await electron.launch({
@@ -74,6 +80,8 @@ async function main() {
       }
       return {
         col: rect(col), empty: rect(empty), composer: rect(composer),
+        logo: rect(empty.querySelector('.t2-empty-mark') || empty),
+        input: rect(composer.querySelector('.t2c-inner')),
         emptyVisible: getComputedStyle(empty).visibility !== 'hidden',
         density: empty.dataset.density, zoom: el.currentCSSZoom || 1,
         composerMeasured: parseFloat(getComputedStyle(col).getPropertyValue('--t2-composer-h')),
@@ -89,6 +97,7 @@ async function main() {
       check(`${name}: 控件不超出聊天列`, g.controls.every((r) => r.left >= g.col.left - 1 && r.right <= g.col.right + 1), g)
       check(`${name}: 高度测量不重复缩放`, Math.abs(g.composerMeasured * g.zoom - g.composer.height) < 2, g)
       check(`${name}: 消息流保留输入区高度`, g.streamPadding * g.zoom >= g.composer.height, g)
+      check(`${name}: Logo 与输入框同轴居中`, !g.emptyVisible || Math.abs((g.logo.left + g.logo.right - g.input.left - g.input.right) / 2) < 2, g)
       return g
     }
 
@@ -177,6 +186,52 @@ async function main() {
     })
     await mini.screenshot({ path: path.join(home, 'mini.png') })
     check('Mini 卡片欢迎区可读且不重叠', miniGeometry.visible && miniGeometry.bottom <= miniGeometry.top - 23, miniGeometry)
+
+    // 已有空会话也有任务概览；与新会话不同，它会占用右侧车道。
+    // 经真实侧栏打开，防止只测「没有卡片的新会话」漏掉欢迎区偏右。
+    stub.state.sessions = [{ id: 'empty-with-summary', title: 'Empty with task summary', archived: false,
+      model_id: 'm1', created_at: '2026-09-17 00:00:00', updated_at: '2026-09-17 00:00:00',
+      projectless: false, project_path: vault, project_name: 'Layout',
+      agent_config: { execMode: 'host', cwd: vault, agentSlug: 'xyra' } }]
+    await win.reload({ waitUntil: 'domcontentloaded' })
+    await win.locator('.t2s-srow, .t2o-row').filter({ hasText: 'Empty with task summary' }).first().click()
+    await view.locator('.t2-empty-mark').waitFor()
+    await resize(1000, 820)
+    await win.waitForTimeout(550)
+    check('已有空会话显示任务概览', await view.locator('.t2-tsum.show').isVisible())
+    await view.screenshot({ path: path.join(home, 'empty-summary.png') })
+    await safe('任务概览在场')
+    for (const width of [760, 759, 620]) {
+      await resize(width, 720)
+      await win.waitForTimeout(550)
+      check(`${width}px: 任务概览按阈值显示`, await view.locator('.t2-tsum.show').isVisible() === (width >= 760))
+      await safe(`${width}px 任务概览响应式`)
+    }
+    await resize(1000, 640, 1.25)
+    await win.waitForTimeout(550)
+    await safe('任务概览与 125% 缩放')
+    await resize(1000, 820)
+    await win.waitForTimeout(550)
+    // 卡片内容出现/消失时，两条中线在整个让位动画中都要重合。
+    const shifts = await view.evaluate(async (el) => {
+      const card = el.querySelector('.t2-tsum')
+      const logo = el.querySelector('.t2-empty-mark')
+      const input = el.querySelector('.t2c-inner')
+      const errors = []
+      for (const show of [false, true]) {
+        card.classList.toggle('show', show)
+        const start = performance.now()
+        while (performance.now() - start < 550) {
+          await new Promise(requestAnimationFrame)
+          const a = logo.getBoundingClientRect(), b = input.getBoundingClientRect()
+          errors.push(Math.abs((a.left + a.right - b.left - b.right) / 2))
+        }
+      }
+      return { frames: errors.length, maxOffset: Math.max(...errors) }
+    })
+    check('任务概览进出动画中 Logo 与输入框同步', shifts.frames > 2 && shifts.maxOffset < 2, shifts)
+    await win.emulateMedia({ reducedMotion: 'reduce' })
+    await safe('减少动态效果')
     console.log(`${checks}/${checks} passed; screenshots: ${home}`)
   } catch (error) {
     const win = app?.windows()[0]

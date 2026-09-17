@@ -1,3 +1,4 @@
+import { useChildChat } from './childChatStore'
 import { PRODUCT } from '../product'
 /**
  * 应用状态 store —— App.tsx 的忠实搬迁(单 store)。
@@ -12,7 +13,7 @@ import type {
   AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, CtxInfo, ModelsResponse, NormalAgentDef,
   MsgSeg, SessionRecord, SkillInfo, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
   DefaultModelSlot, TeamDef } from '../types'
-import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
+import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isIndependentOrbitConfig, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
 import { effectiveSessionMode, type SessionMode } from '../views/sessionMode'
 import { abortRunAndWait, cancelSteer, currentPlatform, expediteSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
@@ -27,6 +28,7 @@ import { ONBOARDING_DISMISS_KEY, ONBOARDING_VERSION_KEY } from '../components/On
 import { track } from '../achievements/store'
 import { act } from '../activity/log'
 import { notifyApp } from './notificationStore'
+import { finishRunStats, stepRunStats, type RunStats } from './runStats'
 import { DESK_EDIT_TOOLS, DESK_PERSIST_KEY, deskItemFor, extractStreamingString, isDuplicateShow, packDeskMap, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from './deskPlan'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../i18n'
@@ -234,6 +236,23 @@ export function segmentsFromHistory(content: string, events: ToolEvent[] | undef
   }
   segs = pushTextSeg(segs, content.slice(cursor))
   return segs
+}
+
+/**
+ * done 时把直播顺序段收敛成「重开会话看到的样子」:引擎随 done 带 toolOffsets(同 ui_content_offset),按终稿走同一个
+ * segmentsFromHistory。直播段是逐 token 拼的 —— 引擎事后丢掉的正文(末轮手写成 DSML 的工具调用、文本兜底剔掉的标记)
+ * 会一直挂着,收尾才追加的停止说明/耗尽提示又不在段里(09-15 用户截图)。
+ * 去空白后正文与工具序列没出入 → undefined(正常 run 保留直播段,不白白重渲染);旧引擎无锚点 / 锚点不合法 → undefined。
+ */
+export function settleSegments(content: string, live: MsgSeg[] | undefined, events: ToolEvent[] | undefined, toolOffsets: unknown): MsgSeg[] | undefined {
+  if (!Array.isArray(toolOffsets)) return undefined
+  const at = new Map<unknown, unknown>(toolOffsets.map((o: any) => [o?.id, o?.offset]))
+  // 只排落库的调用:流出了参数却没执行的调用(末轮被丢弃),重载后同样没有卡片。
+  const anchored = (events || []).filter((ev) => at.has(ev.id)).map((ev) => ({ ...ev, contentOffset: at.get(ev.id) as number }))
+  const next = anchored.length ? segmentsFromHistory(content, anchored) : pushTextSeg([], content)
+  // 工具 id 前缀空格作分隔:正文已去掉全部空白,不会与之混淆;连续/被空白段隔开的工具块签名相同。
+  const sig = (segs: MsgSeg[] | undefined) => (segs || []).map((s) => (s.t === 'text' ? s.text.replace(/\s+/g, '') : s.ids.map((id) => ` ${id}`).join(''))).join('')
+  return next && sig(next) !== sig(live) ? next : undefined
 }
 
 // 非响应式跨事件状态(App.tsx 的 useRef Map/Set)。
@@ -476,6 +495,22 @@ function enterWorkspace(s: { openWorkspaceKeys: string[] }, key: string | null):
   const open = key && !s.openWorkspaceKeys.includes(key) ? [...s.openWorkspaceKeys, key] : s.openWorkspaceKeys
   return { activeWorkspaceKey: key, openWorkspaceKeys: open }
 }
+/** 会话列表的 `updated_at` 只表示消息活动。发送/收到消息时前端先乐观推进,让轨道排序即时响应;
+ *  点击、加载历史或改配置不走这里。后端消息落库会写入同一事实,下次刷新自然收敛。 */
+function touchSessionActivity(
+  s: { sessions: SessionRecord[]; archivedSessions: SessionRecord[] },
+  sessionId: string,
+  at = Date.now(),
+): Partial<Pick<AppState, 'sessions' | 'archivedSessions'>> {
+  const updated_at = new Date(at).toISOString()
+  if (s.sessions.some((x) => x.id === sessionId)) {
+    return { sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, updated_at } : x)) }
+  }
+  if (s.archivedSessions.some((x) => x.id === sessionId)) {
+    return { archivedSessions: s.archivedSessions.map((x) => (x.id === sessionId ? { ...x, updated_at } : x)) }
+  }
+  return {}
+}
 /** 单条正文超上限则截断 + 标注(后端仍完整落库;仅界面侧防 OOM)。 */
 function capContent(s: string): string {
   // 取词在调用时发生(不是模块加载时),切语言后新截断的消息立刻用新语言。
@@ -569,6 +604,8 @@ export interface AppState {
   teamWorkBySession: Record<string, Record<string, TeamWorkMember>>
   /** 打开 / 重载团队会话时从 /background?kind=teamwork 复原成员表(不覆盖已有实时状态)。 */
   hydrateTeamWork(sessionId: string): Promise<void>
+  /** 每会话最近一次 run 的等待统计(耗时 / tokens / 思考时长);run 结束后冻结保留到下一个 run。见 runStats.ts。 */
+  runStatsBySession: Record<string, RunStats | undefined>
   usageBySession: Record<string, { ctx: number; base: number; live: number; runCost?: number; costLimit?: number }>
   /** 引擎 context_info 事件(每 run 一条):窗口值+来源、注入段分解、指令文件、历史规模。ctx 环弹层消费。 */
   ctxInfoBySession: Record<string, CtxInfo>
@@ -581,6 +618,7 @@ export interface AppState {
   settingsOpen: boolean
   settingsTab: SettingsTab | null
   feedbackOpen: boolean
+  feedbackDraft: string
   marketOpen: boolean
   achievementsOpen: boolean
   onboarding: boolean
@@ -612,7 +650,8 @@ export interface AppState {
   historyLoading: Record<string, boolean>
   loadSessionHistory(sessionId: string): Promise<void>
   pollSession(sessionId: string): Promise<void>
-  setActiveId(id: string | null): void
+  /** 选择会话。Space 的被动账本恢复传 revealWorkspace:false,只恢复聊天、不替用户展开 Project。 */
+  setActiveId(id: string | null, opts?: { revealWorkspace?: boolean }): void
   setActiveWorkspaceKey(key: string | null): void
   /** 展开/收起一个工作区;open 省略 = 翻转。 */
   toggleOpenWorkspace(key: string, open?: boolean): void
@@ -639,7 +678,8 @@ export interface AppState {
   /** 回退到某条消息的时刻(借 Claude Code rewind):'code'=只回滚 agent 写工具改过的文件,
    *  'conversation'=只截断该消息及之后的对话(原文回填输入框,不自动重发),'both'=两者。 */
   rewindTo(messageId: string, mode: 'code' | 'conversation' | 'both', sessionId?: string | null): Promise<void>
-  compact(sessionId?: string | null): Promise<void>
+  /** instructions = `/compact <focus>`:本次摘要的一次性关注点(引擎 Additional focus),不落配置。 */
+  compact(sessionId?: string | null, instructions?: string): Promise<void>
   /** 记下「打开该会话后滚到这条消息」(内容级搜索的命中项);打开会话本身由调用方走既有 onSelect/openSession。
    *  ⚠️ 不在 store 里直接调 openSession:sessionNav 依赖 store,反向 import 会成环。 */
   setJumpTarget(sessionId: string, messageId?: string): void
@@ -719,7 +759,7 @@ export interface AppState {
   closeAchievements(): void
   /** 插件装好后:重扫(免重启出现)+ 启用 + 重启提示 + 跳转对应设置。 */
   onPluginInstalled(): Promise<void>
-  openFeedback(): void
+  openFeedback(description?: string): boolean
   closeFeedback(): void
   setOnboarding(on: boolean): void
   setUpdateAvailable(v: { version?: string } | null): void
@@ -823,12 +863,14 @@ export const useApp = create<AppState>((set, get) => ({
   compactingBySession: {},
   subChatsBySession: {},
   teamWorkBySession: {},
+  runStatsBySession: {},
   usageBySession: {},
   ctxInfoBySession: {},
   unread: loadUnread(),
   settingsOpen: false,
   settingsTab: null,
   feedbackOpen: false,
+  feedbackDraft: '',
   marketOpen: false,
   achievementsOpen: false,
   onboarding: false,
@@ -880,6 +922,11 @@ export const useApp = create<AppState>((set, get) => ({
     const t = get().tr
     const { patchMessage } = get()
     const pl = ev.payload || {}
+    const rs = get().runStatsBySession[sessionId]
+    if (rs?.runId === runId) {
+      const nextRs = stepRunStats(rs, ev, Date.now())
+      if (nextRs !== rs) set((s) => ({ runStatsBySession: { ...s.runStatsBySession, [sessionId]: nextRs } }))
+    }
     const assistantId = assistantRef.current
     const targetOf = targetOfFor(get, sessionId, () => assistantRef.current)
     // 团队成员的审批 / 询问在等 → Team Desk 与状态条上标「等待审批」;兑现后回到工作中(只动已登记的成员)。
@@ -1092,6 +1139,17 @@ export const useApp = create<AppState>((set, get) => ({
         if (pl.auto) planAutoStart.add(runId)
         if (pl.file) get().toast(t('app.planArchived', { file: pl.file }))
         break
+      case 'team_output': {
+        const row = pl.message
+        if (!row?.id || row.role !== 'model') break
+        const msg = recordToUi(row, () => ({ slug: row.agent_slug, color: groupColor(row.agent_slug) }))
+        set((s) => {
+          const list = s.messagesBySession[sessionId] || []
+          if (list.some((m) => m.id === msg.id)) return {}
+          return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...list, msg] } }
+        })
+        break
+      }
       case 'group_speaker': {
         const ref = assistantRef as GroupRef
         ref.group = true
@@ -1293,15 +1351,23 @@ export const useApp = create<AppState>((set, get) => ({
           if (newId && !have.has(newId)) additions.push({ id: newId, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now() + 1, agentId: prevSeg?.agentId, agentName: prevSeg?.agentName })
           return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...next, ...additions] } }
         })
+        if (users.length) set((s) => touchSessionActivity(s, sessionId))
         if (newId) assistantRef.current = newId
         break
       }
       case 'done':
-        patchMessage(sessionId, assistantId, (m) => ({
-          ...m, content: capContent(pl.content || m.content), status: 'done' as const, live: undefined,
-          approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
-          inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
-        }))
+        patchMessage(sessionId, assistantId, (m) => {
+          // 新引擎带 toolOffsets:终稿说了算(空串也算 —— 被丢弃的流式正文不许回填),顺序段一并收敛(见 settleSegments)。
+          const settled = Array.isArray(pl.toolOffsets) && typeof pl.content === 'string'
+          const content = capContent(settled ? pl.content : (pl.content || m.content))
+          return {
+            ...m, content, status: 'done' as const, live: undefined,
+            ...(settled ? { segments: settleSegments(content, m.segments, m.toolEvents, pl.toolOffsets) ?? m.segments } : {}),
+            approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
+            inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
+          }
+        })
+        set((s) => touchSessionActivity(s, sessionId))
         // 自动朗读:仅当前活跃会话的新完成回复(历史加载走 loadSessionHistory 不经本 reducer,无误触发)。
         // 每次 done 实时拉 config 而非用 store 缓存:设置模态开着改的开关/音色立即生效(store 副本只在关模态时刷新)。
         if (sessionId === get().activeId && window.tangu?.getConfig) {
@@ -1354,12 +1420,37 @@ export const useApp = create<AppState>((set, get) => ({
       case 'subchat': {
         const id = String(pl.id || '')
         const kind = pl.kind === 'discussion' ? 'discussion' : 'subagent'
-        if (id) upsertSubChat(id, (s) => ({ ...s, kind, title: pl.title || s.title, runId: pl.runId || s.runId }), { kind, title: pl.title, runId: pl.runId })
+        if (id) upsertSubChat(id, (s) => ({ ...s, kind, title: pl.title || s.title, runId: pl.runId || s.runId, sessionId: pl.sessionId || s.sessionId }), { kind, title: pl.title, runId: pl.runId, sessionId: pl.sessionId })
         break
       }
       case 'subagent': {
         const id = String(pl.subId || '')
         if (!id) break
+        const child = get().subChatsBySession[sessionId]?.find((x) => x.id === id)
+        const childId = String(pl.sessionId || child?.sessionId || '')
+        if (childId) {
+          const mid = `delegate:${childId}`
+          set((state) => {
+            const messages = state.messagesBySession[childId] || []
+            if (messages.some((m) => m.id === mid)) return {}
+            return { messagesBySession: { ...state.messagesBySession, [childId]: [...messages, { id: mid, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now(), agentName: pl.label || child?.title }] } }
+          })
+          // These events belong to the parent run; a child has no independent run until a follow-up.
+          if (pl.phase === 'token') patchMessage(childId, mid, (m) => ({ ...m, content: capContent(m.content + (pl.delta || '')), segments: pushTextSeg(m.segments, pl.delta || ''), status: 'streaming' }))
+          if (pl.phase === 'reasoning') patchMessage(childId, mid, (m) => ({ ...m, reasoning: (m.reasoning || '') + (pl.delta || ''), status: 'streaming' }))
+          if (pl.phase === 'tool_stream') patchMessage(childId, mid, (m) => {
+            const events = [...(m.toolEvents || [])]
+            const index = events.findIndex((tool) => tool.id === pl.id)
+            if (index >= 0) events[index] = { ...events[index], arguments: (events[index].arguments || '') + (pl.delta || '') }
+            else events.push({ id: pl.id, name: pl.name || 'tool', arguments: pl.delta || '', done: false })
+            return { ...m, toolEvents: events, segments: pushToolSeg(m.segments, pl.id) }
+          })
+          if (pl.phase === 'tool') {
+            const toolId = String(pl.id || `tool:${ev.seq}`)
+            patchMessage(childId, mid, (m) => ({ ...m, toolEvents: [...(m.toolEvents || []).filter((v) => v.id !== toolId), { id: toolId, name: String(pl.name), arguments: pl.args, result: pl.preview, isError: !!pl.isError, done: true }], segments: pushToolSeg(m.segments, toolId) }))
+          }
+          if (pl.phase === 'done') patchMessage(childId, mid, (m) => ({ ...m, status: pl.error ? 'error' : 'done', error: pl.error }))
+        }
         if (pl.phase === 'token' && pl.delta) upsertSubChat(id, (s) => appendSubText(s, String(pl.delta)))
         else if (pl.phase === 'tool') upsertSubChat(id, (s) => ({ ...s, segs: [...s.segs, { t: 'tool', name: String(pl.name || ''), args: pl.args, preview: pl.preview, error: !!pl.isError }] }))
         else if (pl.phase === 'start') upsertSubChat(id, (s) => ({ ...s, title: pl.label || s.title, streaming: true }), { kind: 'subagent', title: pl.label })
@@ -1383,6 +1474,8 @@ export const useApp = create<AppState>((set, get) => ({
             // 白名单:版本漂移下未知档位会在 ModelPill 渲染成原始 i18n 键,按本 reducer 的清洗纪律挡在入口
             ...(THINKING_LEVELS.includes(pl.thinkingRequested) ? { thinkingRequested: pl.thinkingRequested } : {}),
             ...(THINKING_LEVELS.includes(pl.thinkingEffective) ? { thinkingEffective: pl.thinkingEffective } : {}),
+            ...(Number(pl.maxIterations) > 0 ? { maxIterations: Number(pl.maxIterations) } : {}),
+            ...(['session', 'agent', 'default', 'automation', 'muse'].includes(pl.maxIterationsSource) ? { maxIterationsSource: pl.maxIterationsSource } : {}),
             ...(typeof pl.modelId === 'string' && pl.modelId ? { modelId: pl.modelId } : {}),
           } } }))
           break
@@ -1390,9 +1483,10 @@ export const useApp = create<AppState>((set, get) => ({
         // 自动压缩提示(H4):此前 ctx% 突然回落零提示,与手动 /compact 的明确回执反差。
         // 只认 'compacted'(forced 路径先发 'compacting' 再发 'compacted',避免一次压缩两条)。
         if (pl.phase === 'compacted') {
-          // forced+fallback = 摘要失败退回机械折叠 → 用机械折叠措辞,不许谎称「已生成摘要」
+          // forced+fallback = 摘要失败退回机械折叠 → 用机械折叠措辞,不许谎称「已生成摘要」;
+          // reason=overflow = 上游拒收超长输入后压缩重试(09-15),措辞说明这一轮重发过。
           const line = pl.forced && !pl.fallback
-            ? get().tr('ctx.compacted.forced')
+            ? get().tr(pl.reason === 'overflow' ? 'ctx.compacted.overflow' : 'ctx.compacted.forced')
             : get().tr('ctx.compacted.auto', { saved: (Number(pl.savedChars) || 0).toLocaleString() })
           set((s) => ({
             messagesBySession: { ...s.messagesBySession, [sessionId]: [...(s.messagesBySession[sessionId] || []), {
@@ -1439,7 +1533,21 @@ export const useApp = create<AppState>((set, get) => ({
     const ac = new AbortController()
     runAborts.set(runId, ac)
     const assistantRef = { current: assistantId }
-    set((s) => ({ runningBySession: { ...s.runningBySession, [sessionId]: runId } }))
+    set((s) => {
+      // 起点 = 紧挨着的触发用户消息时间:发送时就是此刻,刷新重挂时是库里那条的时间(否则会从重挂那一刻重新计时)。
+      // 前面不是用户消息(Muse/自动化触发)→ 退到助手消息自己的时间(库里那条 ≈ run 开始;新补的占位 = 此刻)。
+      // ponytail: 团队 run 的占位 id 不落库,重挂时只能从此刻算;引擎 runs 列表没有起始时间,要准得让引擎补字段。
+      const list = s.messagesBySession[sessionId] || []
+      const i = list.findIndex((m) => m.id === assistantId)
+      const prev = list[i - 1]
+      const now = Date.now()
+      const from = prev?.role === 'user' && prev.timestamp > 0 ? prev.timestamp : list[i]?.timestamp || now
+      const startedAt = Math.min(from, now)
+      return {
+        runningBySession: { ...s.runningBySession, [sessionId]: runId },
+        runStatsBySession: { ...s.runStatsBySession, [sessionId]: { runId, startedAt, tokens: 0, thinkMs: 0, thinkTracked: now - startedAt < 5000 } },
+      }
+    })
     // 看门狗:每 30s 查一次。仅当助手消息仍在 streaming、且后端活跃集已无此 run(终止帧丢失 / 被判失败)
     // 才兜底收尾——后端还在跑(慢模型/长任务)时 run 仍在活跃集,绝不误杀。
     runWatchdogs.set(runId, setInterval(() => { void (async () => {
@@ -1709,18 +1817,23 @@ export const useApp = create<AppState>((set, get) => ({
       loadedHistory.clear()
       Object.values(get().agentAvatars).forEach((url) => { try { URL.revokeObjectURL(url) } catch { /* ignore */ } })
       const managed = get().desktopMode === 'managed'
+      if (!managed) useChildChat.setState({ selected: {}, sessions: {} })
       set((s) => ({
         authInfo: null, modelsResp: null, skillsList: null, agentDefs: [], agentAvatars: {}, cloudProjects: [],
         connState: 'idle', connMessage: '', cfg: { ...s.cfg, token: '' }, historyLoading: {},
         ...(!managed ? {
           sessions: [], archivedSessions: [], activeId: null, messagesBySession: {}, configBySession: {},
           historyLoading: {}, deskBySession: {}, unread: new Set<string>(),
+          // 下面 abort 的订阅静默退出、不走 endRun:不清就永远「运行中」(防休眠跟着卡住不放)
+          runningBySession: {},
         } : {}),
       }))
       if (!managed) {
         runAborts.forEach((controller) => controller.abort())
         runAborts.clear()
         subscribedRuns.clear()
+        runWatchdogs.forEach((wd) => clearInterval(wd))
+        runWatchdogs.clear()
       }
       void window.tangu?.authStatus?.().then((a) => { if (generation === authGeneration) set({ authInfo: a }) }).catch(() => {})
       // Some transitions await the engine restart before emitting auth:changed, so
@@ -1843,9 +1956,11 @@ export const useApp = create<AppState>((set, get) => ({
     } catch { /* 轮询失败静默 */ }
   },
 
-  setActiveId: (id) => {
+  setActiveId: (id, opts) => {
     // 选/建会话 → 焦点回对话,清掉特殊视图高亮。
-    set({ activeId: id, activeSpecial: null })
+    // Space 的被动账本恢复不等于进入任何 Project:清空激活键,但不改 openWorkspaceKeys,
+    // 因而用户离开前手工展开/收起的集合原样保留。
+    set({ activeId: id, activeSpecial: null, ...(opts?.revealWorkspace === false ? { activeWorkspaceKey: null } : {}) })
     if (id) {
       // LRU:把当前会话提到最前;超出上限的旧会话淘汰其内存消息(非运行中),下次进入重新拉。
       const i = recentSessions.indexOf(id)
@@ -1865,7 +1980,12 @@ export const useApp = create<AppState>((set, get) => ({
       // 焦点回到会话 → 展开它所在工作区(文件面板 + 会话列表共享 activeWorkspaceKey;
       // 否则启动/恢复/从特殊视图跳回时无人设置,右栏文件面板全收起显得「空」)。
       const s = get().sessions.find((x) => x.id === id) || get().archivedSessions.find((x) => x.id === id)
-      if (s) set(enterWorkspace(get(), sessionWorkspaceKey(s, get().workspaces())))
+      const config = get().configBySession[id] || s?.agent_config
+      // 独立 Agent / 外部引擎 / TEAM 的 `projectless` 只是运行形态,它们本身就是一级轨道;
+      // 不能把焦点副作用映射进 ROOTLESS_WORKSPACE_KEY,否则每次点轨道都会误展开「不在项目中工作」。
+      if (opts?.revealWorkspace !== false && s && !isIndependentOrbitConfig(config)) {
+        set(enterWorkspace(get(), sessionWorkspaceKey(s, get().workspaces())))
+      }
     }
   },
   setActiveWorkspaceKey: (key) => set(enterWorkspace(get(), key)),
@@ -2323,18 +2443,22 @@ export const useApp = create<AppState>((set, get) => ({
     // 否则新会话(未显式选模型、cloud.defaultModel 又空)会发出空 model_id → 后端 400「model_id required」。
     const sessionModelId = wasNewChat
       ? newChatModelId(get())
-      : (get().sessions.find((s) => s.id === sessionId)?.model_id || get().cfg.modelId || get().modelsResp?.defaultModelId || undefined)
+      : (get().sessions.find((s) => s.id === sessionId)?.model_id || useChildChat.getState().sessions[sessionId]?.model_id || get().cfg.modelId || get().modelsResp?.defaultModelId || undefined)
     try {
       const r = await startRun(get().cfg, { sessionId, message: text, modelId: sessionModelId, attachments, agentConfig })
       uiActionOwnedRuns.add(r.runId) // G2:本窗口是这条 run 的发起者 → 只有本窗口执行它的界面动作
       if (seedFrom) set((st) => { const next = { ...st.seedOnceBySession }; delete next[sessionId]; return { seedOnceBySession: next } })
       // 助手身份盖章:外部引擎名 / Normal Agent / 群聊由 group_speaker 逐发言人盖(见 agentStamp)。
       const stamp = agentStamp(get(), agentConfig)
-      set((s) => ({ messagesBySession: { ...s.messagesBySession, [sessionId]: [
-        ...(s.messagesBySession[sessionId] || []),
-        { id: r.userMessageId, role: 'user', content: text, attachments, status: 'done', timestamp: Date.now() },
-        { id: r.assistantMessageId, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now() + 1, ...stamp },
-      ] } }))
+      const sentAt = Date.now()
+      set((s) => ({
+        ...touchSessionActivity(s, sessionId, sentAt),
+        messagesBySession: { ...s.messagesBySession, [sessionId]: [
+          ...(s.messagesBySession[sessionId] || []),
+          { id: r.userMessageId, role: 'user', content: text, attachments, status: 'done', timestamp: sentAt },
+          { id: r.assistantMessageId, role: 'assistant', content: '', status: 'streaming', timestamp: sentAt + 1, ...stamp },
+        ] },
+      }))
       get().subscribeRun(sessionId, r.runId, r.assistantMessageId)
       set((s) => ({ usageBySession: { ...s.usageBySession, [sessionId]: { ctx: s.usageBySession[sessionId]?.ctx || 0, base: s.usageBySession[sessionId]?.base || 0, live: 0 } } }))
       const sess = get().sessions.find((s) => s.id === sessionId)
@@ -2520,7 +2644,7 @@ export const useApp = create<AppState>((set, get) => ({
     } catch (e: any) { get().toast(t('app.branchFail', { e: e?.message || e }), true) }
   },
 
-  compact: async (targetSessionId) => {
+  compact: async (targetSessionId, instructions) => {
     const t = get().tr
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
@@ -2534,7 +2658,7 @@ export const useApp = create<AppState>((set, get) => ({
     const t0 = Date.now()
     const timer = setInterval(() => setPct(Math.round(90 * (1 - Math.exp(-(Date.now() - t0) / 8000)))), 120)
     try {
-      const r = await api.compactSession(get().cfg, sid, modelId)
+      const r = await api.compactSession(get().cfg, sid, modelId, instructions)
       get().pushNotice(r.ok ? t('input.compactDone', { n: r.summarizedCount || 0 }) : t('input.compactSkip', { reason: r.reason || '' }))
     } catch (e: any) { get().toast(t('input.compactFail', { e: e?.message || e }), true) }
     finally {
@@ -2592,6 +2716,8 @@ export const useApp = create<AppState>((set, get) => ({
     // 在会话里换模型 = 也换掉全局默认(新会话延续);cfg.modelId 本来就是「新会话用哪个模型」的真源。
     if (remember) set((s) => { void window.tangu?.setConfig?.({ modelId }); return { cfg: { ...s.cfg, modelId } } })
     if (!sid) { set({ newChatModel: modelId }); return }
+    const child = useChildChat.getState().sessions[sid]
+    if (child) useChildChat.getState().remember({ ...child, model_id: modelId })
     set((s) => {
       // 换模型即作废旧 context_info:窗口值/来源标注是按旧模型算的,留着会让 ctx 环分母错到下一次 run
       const { [sid]: _stale, ...ctxRest } = s.ctxInfoBySession
@@ -2725,12 +2851,20 @@ export const useApp = create<AppState>((set, get) => ({
 
   adoptSession: (session, opts) => {
     if (opts?.fresh) loadedHistory.add(session.id) // 冷启动打开既有私聊/团队会话:必须正常 loadSessionHistory(历史 + 活跃 run 订阅)
-    set((st) => ({
-      sessions: [session, ...st.sessions.filter((s) => s.id !== session.id)],
-      archivedSessions: st.archivedSessions.filter((s) => s.id !== session.id),
-      configBySession: { ...st.configBySession, [session.id]: session.agent_config || st.configBySession[session.id] || {} },
-      messagesBySession: st.messagesBySession[session.id] ? st.messagesBySession : { ...st.messagesBySession, [session.id]: [] },
-    }))
+    set((st) => {
+      const existing = st.sessions.findIndex((s) => s.id === session.id)
+      // `/open` 返回既有会话时只原位刷新数据。把它 unshift 到首位会让一次纯点击伪装成「最近活动」;
+      // 真正新建/rotate 的会话才在首位出现,后续活动排序只认消息带来的 updated_at。
+      const sessions = existing >= 0
+        ? st.sessions.map((s, i) => (i === existing ? session : s))
+        : [session, ...st.sessions]
+      return {
+        sessions,
+        archivedSessions: st.archivedSessions.filter((s) => s.id !== session.id),
+        configBySession: { ...st.configBySession, [session.id]: session.agent_config || st.configBySession[session.id] || {} },
+        messagesBySession: st.messagesBySession[session.id] ? st.messagesBySession : { ...st.messagesBySession, [session.id]: [] },
+      }
+    })
   },
 
   setSessionGroup: (patch, targetSessionId) => {
@@ -2882,12 +3016,14 @@ export const useApp = create<AppState>((set, get) => ({
     })()
   },
 
-  openFeedback: () => {
-    if (get().authInfo?.loggedIn) set({ feedbackOpen: true })
+  openFeedback: (description) => {
+    if (description) set({ feedbackDraft: description })
+    if (get().authInfo?.loggedIn) { set({ feedbackOpen: true }); return true }
     else {
       get().toast(get().tr('feedback.errNotLoggedIn'), true)
       set({ settingsOpen: true, settingsTab: 'forsion' })
     }
+    return false
   },
   closeFeedback: () => set({ feedbackOpen: false }),
 
@@ -2937,8 +3073,10 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
     const pending = s.steerPendingBySession[sessionId] || []
     const localDrafts = pending.filter((p) => p.localOnly)
     const leftover = pending.filter((p) => !p.localOnly)
+    const rs = s.runStatsBySession[sessionId]
     return {
       runningBySession: next,
+      ...(rs?.runId === runId ? { runStatsBySession: { ...s.runStatsBySession, [sessionId]: finishRunStats(rs, Date.now()) } } : {}),
       stoppingBySession: { ...s.stoppingBySession, [sessionId]: undefined },
       ...(leftover?.length ? {
         steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: localDrafts },

@@ -177,6 +177,27 @@ function appendToEnd(root: StackNode, id: BlockId): void {
   }
 }
 
+/** 从布局里一次性摘出一组块，返回原文档视觉顺序的 ref。
+ *  多选拖拽不能逐块调用 moveBlock：每次调用都会各自 clone/commit，既制造多步撤销，也会让后一次
+ *  按变化后的布局重新解释落点。单事务摘取后再落位，整组才不会只剩主动拖起的第一块。 */
+function takeBlockRefs(root: StackNode, ids: BlockId[]): Array<{ ref: BlockId }> {
+  const wanted = new Set(ids)
+  const taken: Array<{ ref: BlockId }> = []
+  for (const row of root.children) {
+    for (const col of row.columns) {
+      const keep: Array<{ ref: BlockId }> = []
+      for (const ref of col.children) {
+        if (wanted.has(ref.ref)) taken.push(ref)
+        else keep.push(ref)
+      }
+      col.children = keep
+    }
+  }
+  return taken
+}
+
+const blockIds = (ids: BlockId | BlockId[]): BlockId[] => [...new Set(Array.isArray(ids) ? ids : [ids])]
+
 /** 把 id 所在的「单列多子」行拆开,让 id 独占一行(前段留原行、后段成新行);
  *  多列行/已独占行原样不动。原地修改 root,返回 id 所在行的下标(找不到块返回 null)。
  *  这是分栏 Notion 化的关键:页面块常年堆在同一行同一列里,行级分栏会把整页劈两半。 */
@@ -327,20 +348,20 @@ interface PageState {
   insertEmbed(target: string): void
   duplicateBlock(id: BlockId): void
   deleteBlock(id: BlockId): Promise<void>
-  /** Move a block into a column, before `beforeId` (or to the end when null). */
-  moveBlock(id: BlockId, toColId: ColumnId, beforeId: BlockId | null): void
+  /** Move one block or a selected block group into a column, before `beforeId` (or to the end when null). */
+  moveBlock(id: BlockId | BlockId[], toColId: ColumnId, beforeId: BlockId | null): void
   /** Move a block up/down within its column (keyboard reorder). */
   moveBlockDir(id: BlockId, dir: 'up' | 'down'): void
   /** Transient drag feedback. */
   setDnd(activeId: string | null, overId: string | null): void
-  /** Split: pull a block into a new column on one side of a row (Notion-style columns). */
-  addColumnWithBlock(rowId: RowId, id: BlockId, side: 'left' | 'right'): void
+  /** Split: pull one block or a selected block group into a new column on one side of a row. */
+  addColumnWithBlock(rowId: RowId, id: BlockId | BlockId[], side: 'left' | 'right'): void
   /** 分栏(Notion 语义):本块独占一行后与新空块并排成两栏;焦点落新栏。 */
   splitToColumn(id: BlockId, side: 'left' | 'right'): void
-  /** 拖到某块左/右边缘:仅与那一块并排成行(自动把它从「大杂烩行」里拆出来)。 */
-  pairBlocks(dragId: BlockId, targetId: BlockId, side: 'left' | 'right'): void
-  /** Pull a block into a brand-new full-width row after the given row index. */
-  addRowWithBlock(afterRowIndex: number, id: BlockId): void
+  /** 拖到某块左/右边缘:所拖单块/多选组与目标块并排成行(多选组在新列内保持原顺序)。 */
+  pairBlocks(dragId: BlockId | BlockId[], targetId: BlockId, side: 'left' | 'right'): void
+  /** Pull one block or a selected block group into a brand-new full-width row. */
+  addRowWithBlock(afterRowIndex: number, id: BlockId | BlockId[]): void
   /** Resize the divider between two adjacent columns (leftFraction of their combined width). */
   resizeColumns(rowId: RowId, leftColId: ColumnId, rightColId: ColumnId, leftFraction: number): void
 
@@ -1263,9 +1284,10 @@ function makePageStore(opts: PageStoreOptions = {}) {
       const m = get().manifest
       if (!m) return
       const root = clone(m.root)
-      const loc = locate(root, id)
-      if (!loc) return
-      const [ref] = root.children[loc.rowIdx].columns[loc.colIdx].children.splice(loc.childIdx, 1)
+      const ids = blockIds(id)
+      if (beforeId && ids.includes(beforeId)) return
+      const refs = takeBlockRefs(root, ids)
+      if (!refs.length) return
       const target = findColumn(root, toColId)
       if (!target) return
       const idx = beforeId
@@ -1274,7 +1296,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
             return i >= 0 ? i : target.col.children.length
           })()
         : target.col.children.length
-      target.col.children.splice(idx, 0, ref)
+      target.col.children.splice(idx, 0, ...refs)
       cleanup(root)
       get()._commit({ ...m, root })
     },
@@ -1318,23 +1340,24 @@ function makePageStore(opts: PageStoreOptions = {}) {
     },
 
     pairBlocks(dragId, targetId, side) {
-      // 拖到某块左/右边缘 = 只与那一块并排(先隔离目标行,拖块进同行新列);4 列封顶时退回行尾。
+      // 拖到某块左/右边缘 = 与那一块并排(先隔离目标行,所拖多选组进同行同一新列);
+      // 4 列封顶时整组退回行尾。摘取/落位只 commit 一次 = 一步撤销。
       const m = get().manifest
-      if (!m || dragId === targetId) return
+      const ids = blockIds(dragId)
+      if (!m || ids.includes(targetId)) return
       const root = clone(m.root)
-      const dragLoc = locate(root, dragId)
-      if (!dragLoc) return
-      const [ref] = root.children[dragLoc.rowIdx].columns[dragLoc.colIdx].children.splice(dragLoc.childIdx, 1)
+      const refs = takeBlockRefs(root, ids)
+      if (!refs.length) return
       cleanup(root) // 拖空的列/行先清,防后续索引漂移
       const rowIdx = isolateBlockRow(root, targetId)
       if (rowIdx === null) {
-        appendToEnd(root, ref.ref) // 目标消失:兜底回页尾,绝不丢块
+        refs.forEach((ref) => appendToEnd(root, ref.ref)) // 目标消失:整组兜底回页尾,绝不丢块
       } else {
         const row = root.children[rowIdx]
         if (row.columns.length >= 4) {
-          appendToEnd(root, ref.ref)
+          refs.forEach((ref) => appendToEnd(root, ref.ref))
         } else {
-          const col: ColumnNode = { id: generateColumnId(), width: 1, children: [ref] }
+          const col: ColumnNode = { id: generateColumnId(), width: 1, children: refs }
           if (side === 'left') row.columns.unshift(col)
           else row.columns.push(col)
           const w = 1 / row.columns.length
@@ -1349,19 +1372,18 @@ function makePageStore(opts: PageStoreOptions = {}) {
       const m = get().manifest
       if (!m) return
       const root = clone(m.root)
-      const loc = locate(root, id)
-      if (!loc) return
-      const [ref] = root.children[loc.rowIdx].columns[loc.colIdx].children.splice(loc.childIdx, 1)
+      const refs = takeBlockRefs(root, blockIds(id))
+      if (!refs.length) return
       const row = root.children.find((r) => r.id === rowId)
       if (!row) {
         // target row vanished — fall back to a fresh row
         root.children.push({
           type: 'row',
           id: generateRowId(),
-          columns: [{ id: generateColumnId(), width: 1, children: [ref] }],
+          columns: [{ id: generateColumnId(), width: 1, children: refs }],
         })
       } else {
-        const col: ColumnNode = { id: generateColumnId(), width: 1, children: [ref] }
+        const col: ColumnNode = { id: generateColumnId(), width: 1, children: refs }
         if (side === 'left') row.columns.unshift(col)
         else row.columns.push(col)
         // equal split on structural change; user can fine-tune via the resizer
@@ -1376,17 +1398,19 @@ function makePageStore(opts: PageStoreOptions = {}) {
       const m = get().manifest
       if (!m) return
       const root = clone(m.root)
-      const loc = locate(root, id)
-      if (!loc) return
-      const [ref] = root.children[loc.rowIdx].columns[loc.colIdx].children.splice(loc.childIdx, 1)
+      // gap:index 是拖前布局的位置。若所拖组搬空了前面的行，直接用旧 index 会多偏一行；
+      // 先记“这个 gap 前有哪些原行”，摘取清理后按仍存活的原行数还原视觉落点。
+      const beforeRowIds = new Set(root.children.slice(0, Math.max(0, afterRowIndex + 1)).map((row) => row.id))
+      const refs = takeBlockRefs(root, blockIds(id))
+      if (!refs.length) return
+      cleanup(root)
       const newRow: RowNode = {
         type: 'row',
         id: generateRowId(),
-        columns: [{ id: generateColumnId(), width: 1, children: [ref] }],
+        columns: [{ id: generateColumnId(), width: 1, children: refs }],
       }
-      const insertAt = Math.min(afterRowIndex + 1, root.children.length)
+      const insertAt = root.children.filter((row) => beforeRowIds.has(row.id)).length
       root.children.splice(insertAt, 0, newRow)
-      cleanup(root)
       get()._commit({ ...m, root })
     },
 
