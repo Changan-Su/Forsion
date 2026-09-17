@@ -31,7 +31,7 @@
  *  12 自定义壁纸:图片进 IndexedDB、偏好进 localStorage;reload 后仍恢复,且设置面板三种来源齐全。
  *  13 壁纸材质:Chatbox 文本区与模型/模式等控件共用聚焦景深;玻璃总开关关掉时回到不透明材质。
  *  14 Bing 壁纸经固定目标 Electron IPC 暴露,不重新引入浏览器搜索或任意 URL 代理。
- *  15 主题背景:四个随 token 变化的 Forsion 图形预设;右键空白直达紧凑、无重叠的二级收纳层。
+ *  15 主题背景:四个预设(三个随 token 变化的图形 + Hack2Gate 随包海报,浅/深两版跟 html.dark);右键空白直达紧凑、无重叠的二级收纳层。
  *  16 ⚠️主页视角固定:.hp-root 压根不是滚动容器(壁纸 scale(1.001) 曾撑出 1px → 四边滚动条);
  *     clip 之后放不下就是裁掉,所以矮窗口(1100×420,须先放开 minimumSize)下时钟/输入区/Spaces 坞必须仍在 root 内;
  *     且右键空白这个手势**双向**可用 —— 收纳层面板内右键空白必须原路退回主页。
@@ -721,8 +721,21 @@ async function main() {
     await win.click('.hp-wallpaper-sources button[data-source="theme"]')
     const themePresets = await win.evaluate(`(() => ({
       ids: [...document.querySelectorAll('.hp-theme-presets button')].map((e) => e.getAttribute('data-preset')),
-      previews: [...document.querySelectorAll('.hp-theme-preview')].every((e) => getComputedStyle(e).backgroundImage.includes('gradient(')),
+      previews: [...document.querySelectorAll('.hp-theme-preview')].every((e) => { const b = getComputedStyle(e).backgroundImage; return b.includes('gradient(') || b.includes('url(') }),
     }))()`)
+    // Hack2Gate 是随包位图:走照片管线(data-wallpaper),浅/深两版跟 html.dark 走。
+    // 反向验证:删掉 homepage.css 里 html.dark 那条 → dark 仍是 light 图,必红。
+    await win.click('.hp-theme-presets button[data-preset="hack2gate"]')
+    await win.waitForTimeout(150)
+    const hack2gate = await win.evaluate(`(() => {
+      const html = document.documentElement
+      const paper = document.querySelector('.hp-wallpaper')
+      const wasDark = html.classList.contains('dark')
+      const read = (dark) => { html.classList.toggle('dark', dark); return getComputedStyle(paper).backgroundImage }
+      const out = { wallpaper: document.querySelector('.hp-root')?.getAttribute('data-wallpaper') || '', light: read(false), dark: read(true), size: getComputedStyle(paper).backgroundSize }
+      html.classList.toggle('dark', wasDark)
+      return out
+    })()`)
     await win.click('.hp-theme-presets button[data-preset="topography"]')
     await win.click('.hp-wallpaper-head > button')
     await win.waitForTimeout(350)
@@ -838,12 +851,13 @@ async function main() {
       '15 四套自适应主题图形可选,高密度收纳层紧凑且头部不重叠',
       themeStage.wallpaper === '' && themeStage.inlineImage === '' && themeStage.backgroundImage.includes('gradient(')
         && themeStage.preset === 'topography' && themeStage.art.includes('gradient(')
-        && JSON.stringify(themePresets.ids) === JSON.stringify(['rings', 'topography', 'weave', 'horizon']) && themePresets.previews
+        && JSON.stringify(themePresets.ids) === JSON.stringify(['rings', 'topography', 'weave', 'hack2gate']) && themePresets.previews
+        && hack2gate.wallpaper === 'true' && hack2gate.light.includes('hack2gate-light') && hack2gate.dark.includes('hack2gate-dark') && hack2gate.size === 'cover'
         && rightClickOrganizer.organizer === 1 && rightClickOrganizer.blur.includes('blur(')
         && rightClickOrganizer.panelWidth <= 600 && rightClickOrganizer.columns === 6
         && rightClickOrganizer.columnGap <= 8 && rightClickOrganizer.tileWidth <= 80
         && rightClickOrganizer.headGap >= 4 && rightClickOrganizer.gridHeight <= 414,
-      JSON.stringify({ themePresets, themeStage, rightClickOrganizer }),
+      JSON.stringify({ themePresets, hack2gate, themeStage, rightClickOrganizer }),
     )
     check(
       '16 ⚠️主页视角固定(不滚)、矮窗口不裁关键控件、右键空白能原路退出收纳层',
@@ -875,9 +889,17 @@ async function main() {
           await win.evaluate(`document.querySelector('.lucide-moon')?.closest('button')?.click()`)
           await win.waitForTimeout(900)
         }
-        const out = path.join(os.tmpdir(), `forsion-homepage.${mode}.png`)
-        await win.screenshot({ path: out })
-        console.log(`  截图 → ${out}`)
+        // Hack2Gate 是位图、浅/深两张,只能看图自查;最后切回 topography,后续用例状态不变。
+        for (const preset of ['hack2gate', 'topography']) {
+          await win.click('.hp-wallpaper-button')
+          await win.waitForSelector('.hp-wallpaper-sheet')
+          await win.click(`.hp-theme-presets button[data-preset="${preset}"]`)
+          await win.click('.hp-wallpaper-head > button')
+          await win.waitForTimeout(900)
+          const out = path.join(os.tmpdir(), `forsion-homepage.${mode}${preset === 'hack2gate' ? '.hack2gate' : ''}.png`)
+          await win.screenshot({ path: out })
+          console.log(`  截图 → ${out}`)
+        }
       }
     }
 

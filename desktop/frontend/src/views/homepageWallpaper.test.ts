@@ -13,7 +13,10 @@ describe('homepage wallpaper prefs', () => {
 
   it('keeps known theme presets and falls back from unknown ones', () => {
     expect(normalizeHomepageWallpaperPrefs({ themePreset: 'topography' }).themePreset).toBe('topography')
+    expect(normalizeHomepageWallpaperPrefs({ themePreset: 'hack2gate' }).themePreset).toBe('hack2gate')
     expect(normalizeHomepageWallpaperPrefs({ themePreset: 'something-else' }).themePreset).toBe('rings')
+    // 晨界已下线,旧偏好回落缺省扶桑环。
+    expect(normalizeHomepageWallpaperPrefs({ themePreset: 'horizon' }).themePreset).toBe('rings')
   })
 
   it('accepts only Bing https images from the archive', () => {

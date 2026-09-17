@@ -115,20 +115,15 @@
 }
 .hp-root[data-theme-preset='weave'] .hp-wallpaper-art { mask-image: radial-gradient(ellipse 68% 72% at 50% 48%, #000 8%, rgba(0, 0, 0, 0.74) 58%, transparent 100%); }
 
-/* 晨界:扶桑意象的日轮与地平线,用主题强调色而不是固定暖色。 */
-.hp-root[data-theme-preset='horizon'] .hp-wallpaper-art,
-.hp-theme-preview[data-preset='horizon'] {
-  background:
-    radial-gradient(circle at 68% 61%, color-mix(in srgb, var(--accent-ink) 16%, transparent) 0 12%, color-mix(in srgb, var(--accent-ink) 24%, transparent) 12.3% 12.7%, transparent 13%),
-    linear-gradient(to bottom, transparent 61%, color-mix(in srgb, var(--accent-ink) 18%, transparent) 61.2% 61.5%, transparent 61.8%);
-}
-.hp-root[data-theme-preset='horizon'] .hp-wallpaper-art::before,
-.hp-theme-preview[data-preset='horizon']::before {
-  width: 68%; height: 30%; right: -4%; top: 61%;
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: 50%;
-  transform: rotate(-3deg);
-}
+/* Hack2Gate:随包的 Forsion;Genesis 海报,浅/深两版随 html.dark 切换(同 .brand-logo 的处方)。
+ * 它是位图不是图形,所以 HomepageView 给它打 data-wallpaper='true',走照片那条管线(边缘模糊/暗角/聚焦虚化)。
+ * ⚠️ 只写 background-image 长写:简写会把 .hp-wallpaper 的 cover/center 重置成 auto/0 0。
+ * 跟不了主题色(位图),这是有意的。 */
+.hp-root[data-theme-preset='hack2gate'] .hp-wallpaper,
+.hp-theme-preview[data-preset='hack2gate'] { background-image: url('../assets/wallpapers/hack2gate-light.jpg'); }
+html.dark .hp-root[data-theme-preset='hack2gate'] .hp-wallpaper,
+html.dark .hp-theme-preview[data-preset='hack2gate'] { background-image: url('../assets/wallpapers/hack2gate-dark.jpg'); }
+.hp-theme-preview[data-preset='hack2gate'] { background-size: cover; background-position: center; }
 
 /* 真实图片在四边先被局部模糊,再与页面背景色渐变融合。mask 只保留边缘,
  * 所以中央壁纸仍清晰,不是整张套一个生硬的 blur。 */

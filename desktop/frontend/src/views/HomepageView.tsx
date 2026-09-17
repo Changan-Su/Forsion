@@ -64,7 +64,7 @@ const PINNED_SPACES_KEY = 'forsion.homepage.pinned-spaces.v1'
 const PINNED_DROP_ID = 'homepage:pinned-spaces'
 const PINNED_DRAG_PREFIX = 'homepage:pinned:'
 const FIXED_HOME_ACTIONS = ['rb-market', 'rb-achievements'] as const
-const THEME_PRESETS: HomepageThemePreset[] = ['rings', 'topography', 'weave', 'horizon']
+const THEME_PRESETS: HomepageThemePreset[] = ['rings', 'topography', 'weave', 'hack2gate']
 
 /** 指针拖放以「指针真正在谁里面」为准,避免 body zoom 下 active rect 中心偏移选错落点;
  * 键盘拖放没有 pointerCoordinates,回落 closestCenter 保留方向键可访问性。 */
@@ -781,7 +781,8 @@ export function HomepageView(_props: ViewProps) {
     <div
       ref={rootRef}
       className={`hp-root${reduceMotion ? ' hp-still' : ''}${composerFocused ? ' hp-composer-focused' : ''}${wallpaperOpen ? ' hp-layer-focused' : ''}${openFolder || organizerOpen ? ' hp-secondary-open' : ''}`}
-      data-wallpaper={wallpaperUrl ? 'true' : undefined}
+      // hack2gate 是随包位图,与 Bing/自定义同走照片管线;真有图片 URL 时内联 style 仍压过它。
+      data-wallpaper={wallpaperUrl || wallpaperPrefs.themePreset === 'hack2gate' ? 'true' : undefined}
       data-theme-preset={wallpaperPrefs.themePreset}
       data-focus-blur={wallpaperPrefs.focusBlur ? 'true' : 'false'}
       data-vignette={wallpaperPrefs.vignette ? 'true' : 'false'}

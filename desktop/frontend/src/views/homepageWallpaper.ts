@@ -6,7 +6,7 @@
  */
 
 export type HomepageWallpaperSource = 'theme' | 'bing' | 'custom'
-export type HomepageThemePreset = 'rings' | 'topography' | 'weave' | 'horizon'
+export type HomepageThemePreset = 'rings' | 'topography' | 'weave' | 'hack2gate'
 
 export interface BingWallpaper {
   id: string
@@ -72,7 +72,7 @@ export function normalizeHomepageWallpaperPrefs(value: unknown): HomepageWallpap
   if (!value || typeof value !== 'object') return { ...DEFAULT_HOMEPAGE_WALLPAPER_PREFS }
   const raw = value as Record<string, unknown>
   const source: HomepageWallpaperSource = raw.source === 'bing' || raw.source === 'custom' ? raw.source : 'theme'
-  const themePreset: HomepageThemePreset = raw.themePreset === 'topography' || raw.themePreset === 'weave' || raw.themePreset === 'horizon'
+  const themePreset: HomepageThemePreset = raw.themePreset === 'topography' || raw.themePreset === 'weave' || raw.themePreset === 'hack2gate'
     ? raw.themePreset
     : 'rings'
   return {

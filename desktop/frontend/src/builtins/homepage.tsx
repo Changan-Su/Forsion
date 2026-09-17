@@ -68,7 +68,7 @@ registerMessages({
   'home.wallpaper.preset.rings': { zh: '扶桑环', en: 'Forsion rings' },
   'home.wallpaper.preset.topography': { zh: '山海线', en: 'Contours' },
   'home.wallpaper.preset.weave': { zh: '经纬', en: 'Weave' },
-  'home.wallpaper.preset.horizon': { zh: '晨界', en: 'Horizon' },
+  'home.wallpaper.preset.hack2gate': { zh: 'Hack2Gate', en: 'Hack2Gate' },
   'home.wallpaper.daily': { zh: '每日自动更新', en: 'Update daily' },
   'home.wallpaper.refresh': { zh: '刷新', en: 'Refresh' },
   'home.wallpaper.loading': { zh: '正在获取必应壁纸…', en: 'Loading Bing wallpapers…' },
