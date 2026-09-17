@@ -1,0 +1,167 @@
+import { useEffect, useMemo, useState, type ReactNode, type CSSProperties } from 'react'
+import { ArrowDown, ArrowLeft, ArrowUp, Bot, ChevronRight, Loader2, Plus, Search, Settings2, Trash2, Users, X } from 'lucide-react'
+import { useShallow } from 'zustand/react/shallow'
+import { useApp } from '../stores/appStore'
+import { useI18n } from '../i18n'
+import { getTeam, patchTeam, putSessionConfig, updateSession } from '../services/backendService'
+import type { AgentConfig, NormalAgentDef, SessionRecord, TeamDef } from '../types'
+import { THINKING_LEVELS } from '../types'
+import { ProfileGroup, ProfileModelField, ProfileTextEditor } from './profileControls'
+import { moveTeamMember, teamDraft, teamSessionConfig, type TeamDraft } from './teamProfileState'
+import './teamProfileMessages'
+import './teamProfile.css'
+
+type Props = {
+  session?: SessionRecord
+  config: AgentConfig
+  renderMember: (agent: NormalAgentDef, sessionId?: string) => ReactNode
+}
+
+/** A TEAM edits its persistent definition; a project's party edits only this conversation. */
+export function TeamProfile({ session, config, renderMember }: Props) {
+  const { t } = useI18n()
+  const s = useApp(useShallow((a) => ({ cfg: a.cfg, agents: a.agentDefs, avatars: a.agentAvatars,
+    work: session ? a.teamWorkBySession[session.id] : undefined,
+    running: session ? !!a.runningBySession[session.id] : false, connected: a.connState === 'ok',
+  })))
+  const [team, setTeam] = useState<TeamDef>()
+  const [loaded, setLoaded] = useState(!config.teamSlug)
+  const [loadError, setLoadError] = useState('')
+  const [retry, setRetry] = useState(0)
+  const [tab, setTab] = useState<'lineup' | 'settings'>('lineup')
+  const [selected, setSelected] = useState('')
+  const [opened, setOpened] = useState<string[]>([])
+  const [picker, setPicker] = useState(false)
+  const [query, setQuery] = useState('')
+  const source = useMemo(() => teamDraft(config, session?.title || '', team), [config, session?.title, team])
+  const [draft, setDraft] = useState<TeamDraft>(source)
+  const [dirty, setDirty] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  useEffect(() => { if (!dirty) setDraft(source) }, [source, dirty])
+  useEffect(() => {
+    if (!config.teamSlug) return
+    let alive = true
+    setLoaded(false); setLoadError('')
+    void getTeam(s.cfg, config.teamSlug).then((value) => { if (alive) { setTeam(value); setLoaded(true) } })
+      .catch((e) => { if (alive) setLoadError(String(e.message || e)) })
+    return () => { alive = false }
+  }, [s.cfg, config.teamSlug, retry])
+  useEffect(() => { if (session) void useApp.getState().hydrateTeamWork(session.id) }, [session?.id])
+
+  const patch = (value: Partial<TeamDraft>) => { setDraft((d) => ({ ...d, ...value })); setDirty(true); setNotice(''); setError('') }
+  const agentFor = (slug: string) => draft.tempAgents.find((a) => a.slug === slug) || s.agents.find((a) => a.slug === slug)
+  const open = (slug: string) => { setSelected(slug); setOpened((ids) => ids.includes(slug) ? ids : [...ids, slug]) }
+  const add = (slug: string) => { patch({ members: [...draft.members, { slug, role: '' }] }); setPicker(false); setQuery('') }
+  const addTemp = () => {
+    const agent: NormalAgentDef = { slug: `temp-${crypto.randomUUID()}`, name: t('teamProfile.temp'), description: '', model: '', tools: [], thinkingLevel: '', maxIterations: null, approvalMode: '', createdBy: 'user', createdAt: '', systemPrompt: '' }
+    patch({ members: [...draft.members, { slug: agent.slug, role: '' }], tempAgents: [...draft.tempAgents, agent] })
+    setPicker(false); open(agent.slug)
+  }
+  const candidates = s.agents.filter((a) => a.createdBy !== 'system' && !draft.members.some((m) => m.slug === a.slug) && `${a.name} ${a.description} ${a.slug}`.toLowerCase().includes(query.toLowerCase()))
+  const missing = draft.members.some((m) => !agentFor(m.slug) || (config.teamSlug && !s.agents.some((a) => a.slug === m.slug)))
+  const invalidTemp = draft.tempAgents.some((a) => draft.members.some((m) => m.slug === a.slug) && (!a.name.trim() || !a.systemPrompt.trim()))
+  const valid = draft.members.length >= 2 && !missing && !invalidTemp && !!draft.name.trim()
+  const save = async () => {
+    if (busy || !valid || !loaded) return
+    setBusy(true); setError(''); setNotice('')
+    let definitionSaved = false
+    try {
+      let nextDraft = draft
+      if (config.teamSlug) {
+        const updated = await patchTeam(s.cfg, config.teamSlug, { name: draft.name.trim(), description: draft.description, avatar: draft.avatar, members: draft.members, doc: draft.doc })
+        definitionSaved = true
+        setTeam(updated)
+        useApp.setState((a) => ({ teams: a.teams.some((v) => v.slug === updated.slug) ? a.teams.map((v) => v.slug === updated.slug ? updated : v) : [...a.teams, updated] }))
+        nextDraft = { ...draft, name: updated.name, description: updated.description, avatar: updated.avatar, members: updated.members, doc: updated.doc }
+      }
+      if (session) {
+        const current = useApp.getState().configBySession[session.id] || session.agent_config || config
+        const savedConfig = await putSessionConfig(s.cfg, session.id, teamSessionConfig(current, nextDraft))
+        useApp.setState((a) => ({ configBySession: { ...a.configBySession, [session.id]: savedConfig }, sessions: a.sessions.map((v) => v.id === session.id ? { ...v, agent_config: savedConfig } : v) }))
+        if (!config.teamSlug && nextDraft.name.trim() !== session.title) {
+          const updated = await updateSession(s.cfg, session.id, { title: nextDraft.name.trim() })
+          useApp.setState((a) => ({ sessions: a.sessions.map((v) => v.id === session.id ? { ...v, title: updated.title } : v) }))
+        }
+      } else {
+        useApp.setState((a) => ({ newChatCfg: teamSessionConfig(a.newChatCfg, nextDraft) }))
+      }
+      setDraft(nextDraft); setDirty(false); setNotice(t('agentProfile.saved'))
+    } catch (e: any) {
+      setError(`${definitionSaved ? `${t('teamProfile.partialSave')} ` : ''}${String(e.message || e)}`)
+    } finally { setBusy(false) }
+  }
+
+  if (!loaded) return <section className="team-profile" data-team-profile><h3>{t('agentProfile.team')}</h3>{loadError ? <><p role="alert" className="agent-profile-error">{loadError}</p><button onClick={() => setRetry((n) => n + 1)}>{t('teamProfile.retry')}</button></> : <p className="agent-profile-muted"><Loader2 size={14} className="spin" /> {t('teamProfile.loading')}</p>}</section>
+
+  return <section className="team-profile" data-team-profile={config.teamSlug || session?.id || 'draft'}>
+    <div className="team-profile-main" hidden={!!selected}>
+      <header className="team-profile-hero">
+        <span className="team-profile-emblem">{draft.avatar || <Users size={26} strokeWidth={1.5} />}</span>
+        <div><h3>{t('agentProfile.team')}</h3><h2>{draft.name || t('teamProfile.untitled')}</h2><span className={`agent-state${s.running ? ' working' : ''}`}><i />{t(!s.connected ? 'agentProfile.offline' : s.running ? 'agentProfile.working' : 'agentProfile.standby')}<span>· {draft.members.length} {t('teamProfile.members')}</span></span></div>
+      </header>
+      {(session?.project_name || config.cwd) && <p className="team-profile-location" title={config.cwd}>{session?.project_name || (config.teamSlug ? t('teamProfile.library') : config.cwd?.replace(/\\/g, '/').split('/').filter(Boolean).pop() || config.cwd)}</p>}
+      <nav className="agent-section-nav" style={{ '--profile-tab-count': 2, '--profile-tab-index': tab === 'lineup' ? 0 : 1 } as CSSProperties} aria-label={t('teamProfile.navigation')}>
+        <button className={tab === 'lineup' ? 'selected' : ''} aria-pressed={tab === 'lineup'} onClick={() => setTab('lineup')}><Users size={14} />{t('teamProfile.lineup')}</button>
+        <button className={tab === 'settings' ? 'selected' : ''} aria-pressed={tab === 'settings'} onClick={() => setTab('settings')}><Settings2 size={14} />{t('teamProfile.settings')}</button>
+      </nav>
+      <fieldset disabled={busy} className="team-profile-fields" key={tab}>
+        {tab === 'lineup' ? <>
+          <div className="team-lineup-toolbar"><p className="team-profile-caption">{t('teamProfile.lineupHint')}</p><button className="team-member-add" onClick={() => setPicker(!picker)} aria-expanded={picker}><Plus size={24} strokeWidth={1.5} /><span>{t('teamProfile.add')}</span></button></div>
+          {picker && <div className="team-candidate-picker"><div className="team-candidate-heading"><label className="agents-search"><Search size={13} /><input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} aria-label={t('agentProfile.search')} placeholder={t('agentProfile.search')} /></label><button aria-label={t('teamProfile.closePicker')} onClick={() => setPicker(false)}><X size={14} /></button></div><div className="team-candidates">{candidates.map((a) => <button key={a.slug} onClick={() => add(a.slug)}><Bot size={16} /><span><strong>{a.name}</strong><small>{a.description}</small></span><Plus size={14} /></button>)}{!candidates.length && <p className="agent-profile-muted">{t('teamProfile.noCandidates')}</p>}</div>{!config.teamSlug && <button className="agent-profile-link" onClick={addTemp}>{t('teamProfile.addTemp')}<Plus size={14} /></button>}</div>}
+          <div className="team-lineup">{draft.members.map((m, index) => {
+            const agent = agentFor(m.slug), work = s.work?.[m.slug]
+            const status = work?.status || 'idle'
+            return <article className={`team-member${!agent ? ' unavailable' : ''}`} key={m.slug} data-team-member={m.slug}>
+              <button className="team-member-open" disabled={!agent} onClick={() => open(m.slug)} aria-label={`${t('teamProfile.inspect')} ${agent?.name || m.slug}`}>
+                <span className="team-member-portrait">{s.avatars[m.slug] ? <img src={s.avatars[m.slug]} alt="" /> : <Bot size={42} strokeWidth={1} />}</span>
+                <strong>{agent?.name || m.slug}</strong><small className="team-member-model">{agent?.model || t('agentProfile.default')}</small><span className={`team-member-status ${status}`}>{agent ? t(`teamProfile.status.${status}`) : t('teamProfile.missing')}</span><ChevronRight size={14} className="team-member-chevron" />
+              </button>
+              <label className="team-member-role"><span>{t('teamProfile.role')}</span><textarea rows={2} aria-label={`${agent?.name || m.slug} ${t('teamProfile.role')}`} value={m.role} maxLength={500} placeholder={t('teamProfile.rolePlaceholder')} onChange={(e) => patch({ members: draft.members.map((v) => v.slug === m.slug ? { ...v, role: e.target.value } : v) })} /></label>
+              <div className="team-member-actions">
+                <button disabled={index === 0} aria-label={t('teamProfile.moveUp')} title={t('teamProfile.moveUp')} onClick={() => patch({ members: moveTeamMember(draft.members, m.slug, -1) })}><ArrowUp size={13} /></button>
+                <button disabled={index === draft.members.length - 1} aria-label={t('teamProfile.moveDown')} title={t('teamProfile.moveDown')} onClick={() => patch({ members: moveTeamMember(draft.members, m.slug, 1) })}><ArrowDown size={13} /></button>
+                <button aria-label={t('teamProfile.remove')} title={t('teamProfile.remove')} onClick={() => patch({ members: draft.members.filter((v) => v.slug !== m.slug) })}><Trash2 size={13} /></button>
+              </div>
+            </article>
+          })}</div>
+
+          <p className="agent-profile-muted">{t('agentProfile.teamContext')}</p>
+        </> : <div className="agent-config-fields team-config-fields"><ProfileGroup title={t('agentProfile.identity')}>
+          <label className="agent-field">{t('teamProfile.name')}<input value={draft.name} maxLength={100} onChange={(e) => patch({ name: e.target.value })} /></label>
+          {config.teamSlug && <><label className="agent-field">{t('agentProfile.description')}<textarea rows={2} value={draft.description} maxLength={500} onChange={(e) => patch({ description: e.target.value })} /></label><label className="agent-field">{t('teamProfile.avatar')}<input value={draft.avatar} maxLength={16} placeholder="🧭" onChange={(e) => patch({ avatar: e.target.value })} /></label></>}
+          </ProfileGroup><ProfileTextEditor label={t('teamProfile.doc')} rows={12} value={draft.doc} maxLength={16384} placeholder={t('teamProfile.docPlaceholder')} onChange={(doc) => patch({ doc })} hint={t('teamProfile.docHint')} />
+        </div>}
+      </fieldset>
+      <footer className={`agent-profile-save${dirty ? ' is-dirty' : ''}`}>
+      {dirty && !valid && <p className="agent-profile-error" role="alert">{t(missing ? 'teamProfile.missingHint' : invalidTemp ? 'teamProfile.tempRequired' : !draft.name.trim() ? 'teamProfile.nameRequired' : 'teamProfile.minimum')}</p>}
+      {error && <p className="agent-profile-error" role="alert">{error}</p>}{notice && <p className="agent-profile-muted" role="status">{notice}</p>}
+      {dirty ? <><small>{t(config.teamSlug ? 'teamProfile.savedScope' : 'teamProfile.sessionScope')}</small><div><button className="btn" disabled={busy} onClick={() => { setDraft(source); setDirty(false); setError('') }}>{t('agentProfile.cancel')}</button><button className="btn primary" disabled={busy || !valid} onClick={() => void save()}>{busy && <Loader2 size={13} className="spin" />}{t(busy ? 'agentProfile.saving' : 'teamProfile.save')}</button></div></> : !notice && <small>{t(config.teamSlug ? 'teamProfile.savedScope' : 'teamProfile.sessionScope')}</small>}
+      </footer>
+    </div>
+    {selected && <div className="team-member-heading"><button aria-label={t('teamProfile.back')} onClick={() => setSelected('')}><ArrowLeft size={14} />{t('teamProfile.back')}{dirty && <span className="team-draft-dot" title={t('teamProfile.unsaved')} />}</button><small>{draft.members.find((m) => m.slug === selected)?.role || t('teamProfile.rolePlaceholder')}</small></div>}
+    {/* Keep visited profiles mounted so back-to-party navigation retains unsaved member edits. */}
+    {opened.map((slug) => {
+      const agent = agentFor(slug)
+      if (!agent) return null
+      const temp = draft.tempAgents.some((a) => a.slug === slug)
+      return <div className="team-detail-pane" key={slug} hidden={selected !== slug} data-team-member-detail={slug}>{temp ? <TempMember agent={agent} onChange={(value) => patch({ tempAgents: draft.tempAgents.map((a) => a.slug === slug ? { ...a, ...value } : a) })} onBack={() => setSelected('')} /> : renderMember(agent, s.work?.[slug]?.sessionId)}</div>
+    })}
+  </section>
+}
+
+/** Temporary members are session definitions; expose only fields the engine accepts for them. */
+function TempMember({ agent, onChange, onBack }: { agent: NormalAgentDef; onChange: (patch: Partial<NormalAgentDef>) => void; onBack: () => void }) {
+  const { t } = useI18n()
+  const models = useApp((s) => s.modelsResp?.models)
+  return <div className="team-temp-member"><header className="agent-character-hero"><div className="agent-portrait small"><Bot size={24} /></div><h2>{agent.name}</h2></header><p className="agent-profile-muted">{t('teamProfile.tempScope')}</p><div className="agent-config-fields">
+    {(['name', 'description'] as const).map((key) => <label className="agent-field" key={key}>{t(`agentProfile.${key}`)}<input value={agent[key]} maxLength={key === 'name' ? 120 : key === 'description' ? 300 : undefined} onChange={(e) => onChange({ [key]: e.target.value })} /></label>)}
+    <ProfileModelField models={models || []} value={agent.model} label={t('agentProfile.model')} onChange={(model) => onChange({ model })} />
+    <label className="agent-field">{t('agentProfile.thinking')}<select aria-label={t('agentProfile.thinking')} value={agent.thinkingLevel} onChange={(e) => onChange({ thinkingLevel: e.target.value as NormalAgentDef['thinkingLevel'] })}><option value="">{t('agentProfile.default')}</option>{THINKING_LEVELS.map((v) => <option key={v} value={v}>{v}</option>)}</select></label>
+    <label className="agent-field">{t('agentProfile.approval')}<select aria-label={t('agentProfile.approval')} value={agent.approvalMode} onChange={(e) => onChange({ approvalMode: e.target.value as NormalAgentDef['approvalMode'] })}>{[['', 'default'], ['readonly', 'readonly'], ['auto-edit', 'autoEdit'], ['full-auto', 'fullAuto'], ['custom', 'custom']].map(([v, k]) => <option key={v} value={v}>{t(`agentProfile.${k}`)}</option>)}</select></label>
+    <label className="agent-field">{t('agentProfile.maxIterations')}<input type="number" min={1} max={200} value={agent.maxIterations ?? ''} onChange={(e) => onChange({ maxIterations: e.target.value ? Math.min(200, Math.max(1, Math.floor(Number(e.target.value)))) : null })} /></label>
+    <ProfileTextEditor label={t('agentProfile.prompt')} rows={8} value={agent.systemPrompt} maxLength={100000} onChange={(systemPrompt) => onChange({ systemPrompt })} />
+    <button onClick={onBack}>{t('teamProfile.backToSave')}</button>
+  </div></div>
+}
