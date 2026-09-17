@@ -85,7 +85,7 @@ Follow-up clips can focus on editing AI memory, TEAM roles, Muse building a Spac
 | Muse | [Guide](../agents/muse.md), [runtime](../../tangu-agent/src/services/muse.ts), [defaults](../../tangu-agent/src/services/specialAgentsConfig.ts) |
 | 插件 / Plugins | [Guide](../customization/plugins.md), [bundle sample](../../tangu-agent/skills/forsion-plugin/samples/forsion-sample-bundle) |
 
-现已补齐六张 v2.11.0 真实界面截图：块编辑菜单、记忆面板、TEAM 概览、成员子会话、Muse 任务卡与项目笔记。中英文 README 直接展示，对话和状态为公开夹具；它们证明界面的组织方式，不证明真实模型执行。来源、哈希和复现脚本见素材清单；完整项目视频仍待实测与录制。分享封面保留此前 v2.10.4 笔记合成图。
+现已补齐中英文各六张 v2.11.0 真实界面截图：块编辑菜单、记忆面板、TEAM 概览、成员子会话、Muse 任务卡与项目笔记。中英文 README 分别展示对应语言的截图，界面与样例内容均已本地化；对话和状态为公开夹具；它们证明界面的组织方式，不证明真实模型执行。来源、哈希和复现脚本见素材清单；完整项目视频仍待实测与录制。分享封面保留此前 v2.10.4 笔记合成图。
 
 Six real v2.11.0 interface captures now show block insertion, editable memory, TEAM overview, a member conversation, a Muse task card, and the project note. Both READMEs display them directly. Conversations and states are public fixtures: they demonstrate interface organization, not live-model performance. See the asset guide for provenance, hashes, and reproduction; the full project video still awaits execution and recording. The social preview retains the earlier v2.10.4 note composition.
 

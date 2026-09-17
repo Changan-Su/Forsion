@@ -36,7 +36,7 @@ The screenshots below come from the v2.11.0 desktop build and use one public res
 **Notion-style block editing, built on local `.md` files.** In the Amadeus knowledge base, headings, paragraphs, to-dos, code, and embedded content become blocks you can organize. Write with Markdown shortcuts, insert content with `/`, arrange sources in columns, and inspect block source. Your notes remain files on disk that you can open, back up, and ask an Agent to read or update.
 
 <p align="center">
-  <img src="./.github/assets/showcase/markdown-blocks.png" alt="Insert blocks through the slash menu in a local Markdown note" width="920" />
+  <img src="./.github/assets/showcase/markdown-blocks-en.png" alt="Insert blocks through the slash menu in a local Markdown note" width="920" />
   <br><sub>Insert blocks through the slash menu in a local Markdown note · v2.11.0 interface · Public sample data</sub>
 </p>
 
@@ -66,7 +66,7 @@ Notes use local Markdown, with compatible formats for links, properties, and whi
 Try: “When helping me research, lead with conclusions, then sources, and call out uncertainty separately.” Check that it was saved, then start another conversation about the project and inspect how it uses that preference. Automatic Dream maintenance is off by default; forgetting removes active memory while retaining revision history.
 
 <p align="center">
-  <img src="./.github/assets/showcase/agent-memory.png" alt="Inspect project context and preferences in Arioso’s memory panel, with edit and forget controls" width="920" />
+  <img src="./.github/assets/showcase/agent-memory-en.png" alt="Inspect project context and preferences in Arioso’s memory panel, with edit and forget controls" width="920" />
   <br><sub>Inspect project context and preferences in Arioso’s memory panel, with edit and forget controls · v2.11.0 interface · Public sample data</sub>
 </p>
 
@@ -86,12 +86,12 @@ Try: “When helping me research, lead with conclusions, then sources, and call 
 You can also delegate independent subtasks from an ordinary conversation or connect installed Claude Code and Codex engines through ACP. Teams and these local execution features use local mode. Context is passed as needed; Agent memories and tool settings remain individually managed.
 
 <p align="center">
-  <img src="./.github/assets/showcase/team-desk.png" alt="Public discussion from Aria, Recita, and Arioso alongside member status in Team Desk" width="920" />
+  <img src="./.github/assets/showcase/team-desk-en.png" alt="Public discussion from Aria, Recita, and Arioso alongside member status in Team Desk" width="920" />
   <br><sub>Public discussion from Aria, Recita, and Arioso alongside member status in Team Desk · v2.11.0 interface · Public sample data</sub>
 </p>
 
 <p align="center">
-  <img src="./.github/assets/showcase/team-thread.png" alt="Open Recita’s child conversation to examine evidence and suggestions beside the main discussion" width="920" />
+  <img src="./.github/assets/showcase/team-thread-en.png" alt="Open Recita’s child conversation to examine evidence and suggestions beside the main discussion" width="920" />
   <br><sub>Open Recita’s child conversation to examine evidence and suggestions beside the main discussion · v2.11.0 interface · Public sample data</sub>
 </p>
 
@@ -108,7 +108,7 @@ You can also delegate independent subtasks from an ordinary conversation or conn
 Muse is off by default and currently runs in local mode, with the device and relevant processes available. You set active hours, frequency, budgets, and approval behavior. For defined processes, **Automation** connects time, events, or database changes to Agent actions, notifications, and table operations.
 
 <p align="center">
-  <img src="./.github/assets/showcase/muse-inbox.png" alt="Review a Muse follow-up in Inbox, inspect the task, execute it, start a new conversation, or dismiss it" width="920" />
+  <img src="./.github/assets/showcase/muse-inbox-en.png" alt="Review a Muse follow-up in Inbox, inspect the task, execute it, start a new conversation, or dismiss it" width="920" />
   <br><sub>Review a Muse follow-up in Inbox, inspect the task, execute it, start a new conversation, or dismiss it · v2.11.0 interface · Public sample data</sub>
 </p>
 
@@ -137,7 +137,7 @@ Try building up this workflow with a real project:
 This is a configurable example, dependent on the model, source access, and tools you choose. When you return, the project files and confirmed context give you a starting point.
 
 <p align="center">
-  <img src="./.github/assets/showcase/project-note.png" alt="Keep sources, team responsibilities, and next steps together in a local project note" width="920" />
+  <img src="./.github/assets/showcase/project-note-en.png" alt="Keep sources, team responsibilities, and next steps together in a local project note" width="920" />
   <br><sub>Keep sources, team responsibilities, and next steps together in a local project note · v2.11.0 interface · Public sample data</sub>
 </p>
 

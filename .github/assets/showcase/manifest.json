@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-17T19:04:03.874170+00:00",
+  "generatedAt": "2026-09-17T19:38:40.010218+00:00",
   "source": {
     "releaseTag": "v2.11.0",
     "commit": "5e2fe953cc86971f5d93312bd9cc71bb279592a8",
@@ -118,7 +118,8 @@
       "colorTreatment": false,
       "publicFixture": true,
       "liveModelCalls": 0,
-      "builtinAgentPortraits": true
+      "builtinAgentPortraits": true,
+      "locale": "zh-CN"
     },
     "agent-memory.png": {
       "width": 1600,
@@ -140,7 +141,8 @@
       "colorTreatment": false,
       "publicFixture": true,
       "liveModelCalls": 0,
-      "builtinAgentPortraits": true
+      "builtinAgentPortraits": true,
+      "locale": "zh-CN"
     },
     "team-desk.png": {
       "width": 1600,
@@ -162,7 +164,8 @@
       "colorTreatment": false,
       "publicFixture": true,
       "liveModelCalls": 0,
-      "builtinAgentPortraits": true
+      "builtinAgentPortraits": true,
+      "locale": "zh-CN"
     },
     "team-thread.png": {
       "width": 1600,
@@ -184,7 +187,8 @@
       "colorTreatment": false,
       "publicFixture": true,
       "liveModelCalls": 0,
-      "builtinAgentPortraits": true
+      "builtinAgentPortraits": true,
+      "locale": "zh-CN"
     },
     "muse-inbox.png": {
       "width": 1600,
@@ -206,7 +210,8 @@
       "colorTreatment": false,
       "publicFixture": true,
       "liveModelCalls": 0,
-      "builtinAgentPortraits": true
+      "builtinAgentPortraits": true,
+      "locale": "zh-CN"
     },
     "project-note.png": {
       "width": 1600,
@@ -228,9 +233,153 @@
       "colorTreatment": false,
       "publicFixture": true,
       "liveModelCalls": 0,
-      "builtinAgentPortraits": true
+      "builtinAgentPortraits": true,
+      "locale": "zh-CN"
+    },
+    "agent-memory-en.png": {
+      "width": 1600,
+      "height": 1000,
+      "colorType": "RGB",
+      "sha256": "5dcd64f182085a504fe61f5fb402b8f7bc60004d4b09b58923e2107bce209411",
+      "source": {
+        "releaseTag": "v2.11.0",
+        "commit": "aaccdd326e369e8228c77607ea607275a3bfdfef",
+        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
+        "packageVersion": "2.11.0",
+        "productTreeMatchesRelease": true
+      },
+      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
+      "scenario": "Arioso memory panel with three public context entries",
+      "generatedAt": "2026-09-17T19:38:40.010218+00:00",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false,
+      "publicFixture": true,
+      "liveModelCalls": 0,
+      "builtinAgentPortraits": true,
+      "locale": "en"
+    },
+    "team-thread-en.png": {
+      "width": 1600,
+      "height": 1000,
+      "colorType": "RGB",
+      "sha256": "d566465b1f762f66729e713a1b67c49de2b14f5c0eda82dcbe4c6bf0e1136887",
+      "source": {
+        "releaseTag": "v2.11.0",
+        "commit": "aaccdd326e369e8228c77607ea607275a3bfdfef",
+        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
+        "packageVersion": "2.11.0",
+        "productTreeMatchesRelease": true
+      },
+      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
+      "scenario": "Recita child conversation beside the public TEAM discussion",
+      "generatedAt": "2026-09-17T19:38:40.010218+00:00",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false,
+      "publicFixture": true,
+      "liveModelCalls": 0,
+      "builtinAgentPortraits": true,
+      "locale": "en"
+    },
+    "team-desk-en.png": {
+      "width": 1600,
+      "height": 1000,
+      "colorType": "RGB",
+      "sha256": "be453b1b5dd7efb14eaed91e9e814b9956b9e145ef42cb8eb5b2b0ed1b14cc66",
+      "source": {
+        "releaseTag": "v2.11.0",
+        "commit": "aaccdd326e369e8228c77607ea607275a3bfdfef",
+        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
+        "packageVersion": "2.11.0",
+        "productTreeMatchesRelease": true
+      },
+      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
+      "scenario": "TEAM public discussion and persisted member status",
+      "generatedAt": "2026-09-17T19:38:40.010218+00:00",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false,
+      "publicFixture": true,
+      "liveModelCalls": 0,
+      "builtinAgentPortraits": true,
+      "locale": "en"
+    },
+    "muse-inbox-en.png": {
+      "width": 1600,
+      "height": 1000,
+      "colorType": "RGB",
+      "sha256": "88987008ce8dda320fc97f0370a6a7abddb2ec0aee2c0dd9081f746188995fec",
+      "source": {
+        "releaseTag": "v2.11.0",
+        "commit": "aaccdd326e369e8228c77607ea607275a3bfdfef",
+        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
+        "packageVersion": "2.11.0",
+        "productTreeMatchesRelease": true
+      },
+      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
+      "scenario": "Muse Inbox follow-up with task details and action controls",
+      "generatedAt": "2026-09-17T19:38:40.010218+00:00",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false,
+      "publicFixture": true,
+      "liveModelCalls": 0,
+      "builtinAgentPortraits": true,
+      "locale": "en"
+    },
+    "project-note-en.png": {
+      "width": 1600,
+      "height": 1000,
+      "colorType": "RGB",
+      "sha256": "75f9f5f4667abf83edbc75d1951281bbceddd38b978d7cb4c62b8215b2eb196e",
+      "source": {
+        "releaseTag": "v2.11.0",
+        "commit": "aaccdd326e369e8228c77607ea607275a3bfdfef",
+        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
+        "packageVersion": "2.11.0",
+        "productTreeMatchesRelease": true
+      },
+      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
+      "scenario": "Local project note linking material, responsibilities and next steps",
+      "generatedAt": "2026-09-17T19:38:40.010218+00:00",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false,
+      "publicFixture": true,
+      "liveModelCalls": 0,
+      "builtinAgentPortraits": true,
+      "locale": "en"
+    },
+    "markdown-blocks-en.png": {
+      "width": 1600,
+      "height": 1000,
+      "colorType": "RGB",
+      "sha256": "6b801c510cc779cce8f6e74e8e9815bca1a9b97464615f057661391321083404",
+      "source": {
+        "releaseTag": "v2.11.0",
+        "commit": "aaccdd326e369e8228c77607ea607275a3bfdfef",
+        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
+        "packageVersion": "2.11.0",
+        "productTreeMatchesRelease": true
+      },
+      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
+      "scenario": "Markdown slash menu in the public research note",
+      "generatedAt": "2026-09-17T19:38:40.010218+00:00",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false,
+      "publicFixture": true,
+      "liveModelCalls": 0,
+      "builtinAgentPortraits": true,
+      "locale": "en"
     }
   },
   "captureScript": "docs/showcase/capture.cjs",
-  "captureScriptSha256": "ddf4dede000766fc92e07d0d660587ce314e01a50f389591365e5c8bccb10e1c"
+  "captureScriptSha256": "7fb5ebfda59eff03d6a505c641a13a9b3f04b86d613a495197d942212048f215",
+  "locales": [
+    "zh-CN",
+    "en"
+  ],
+  "englishFixtureSha256": "43039d43e7341581e1da2d5169691d72f8467fbe5841804acbaa3309cbe1dd0f"
 }
