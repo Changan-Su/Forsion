@@ -39,6 +39,7 @@ const KNOWN_DEBT: Record<string, { imports: string[]; reason: string }> = {
   'services/localHistorian.ts': { imports: ['core/db.js'], reason: 'P3:按轮 Historian 进 worker(done-run 计数与会话读改经 deps().state)' },
   'services/historian.ts': { imports: ['core/db.js'], reason: '网关空闲扫描版,持库进程专属;P3 落地后退役' },
   'services/historianConfig.ts': { imports: ['core/db.js'], reason: '网关扫描版的 admin 配置(global_settings),随 historian.ts 退役' },
+  'services/historianSession.ts': { imports: ['core/db.js'], reason: 'P3:固定 Historian 会话直读写 chat_sessions / chat_messages,随 localHistorian 进 worker 时改走 deps().state' },
 };
 
 function walk(dir: string): string[] {

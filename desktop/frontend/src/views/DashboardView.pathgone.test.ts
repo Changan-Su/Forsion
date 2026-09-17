@@ -10,10 +10,10 @@ import { createRoot, type Root } from 'react-dom/client'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
-const ws = vi.hoisted(() => ({ leafById: (_id: string): unknown => null }))
+const ws = vi.hoisted(() => ({ leafById: (_id: string): unknown => null, closeLeaf: (_id: string): void => {} }))
 vi.mock('@lcl/engine', () => ({
   Skeleton: () => createElement('div', { 'data-tag': 'skeleton' }),
-  useWorkspace: { getState: () => ({ leafById: (id: string) => ws.leafById(id) }) },
+  useWorkspace: { getState: () => ({ leafById: (id: string) => ws.leafById(id), closeLeaf: (id: string) => ws.closeLeaf(id) }) },
 }))
 vi.mock('framer-motion', () => ({
   AnimatePresence: ({ children }: { children: ReactNode }) => children,
@@ -73,6 +73,8 @@ async function mount(dashPath = DASH, { createOnLoad = false, params = {} as Rec
   const close = vi.fn(() => { panel.closed = true })
   const makeLeaf = () => ({ id: LEAF, type: 'dashboard', loc: 'main' as const, params: { ...panel.params }, setTitle: vi.fn(), setParams, close })
   ws.leafById = (id) => (id === LEAF && !panel.closed ? makeLeaf() : null)
+  // 删除走 store 的 closeLeaf(followPathGone),不走裸 leaf.close();桩里等价于关掉这个面板。
+  ws.closeLeaf = (id) => { if (id === LEAF) close() }
   const render = (): void => {
     const leaf = makeLeaf()
     root!.render(createElement(DashboardView, { leaf, params: leaf.params }))
