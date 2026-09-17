@@ -85,9 +85,9 @@ Follow-up clips can focus on editing AI memory, TEAM roles, Muse building a Spac
 | Muse | [Guide](../agents/muse.md), [runtime](../../tangu-agent/src/services/muse.ts), [defaults](../../tangu-agent/src/services/specialAgentsConfig.ts) |
 | 插件 / Plugins | [Guide](../customization/plugins.md), [bundle sample](../../tangu-agent/skills/forsion-plugin/samples/forsion-sample-bundle) |
 
-现有三张截图仍是注明版本的 v2.10.4 公开夹具，已放到 README 折叠区，不能证明 TEAM、记忆或 Muse 的实际执行。下一轮优先录制最新版本的块编辑、记忆面板、Team Desk 与 Muse 任务卡；来源与哈希记录在素材清单。当前分享封面仍来自 v2.10.4 笔记画面。
+现已补齐六张 v2.11.0 真实界面截图：块编辑菜单、记忆面板、TEAM 概览、成员子会话、Muse 任务卡与项目笔记。中英文 README 直接展示，对话和状态为公开夹具；它们证明界面的组织方式，不证明真实模型执行。来源、哈希和复现脚本见素材清单；完整项目视频仍待实测与录制。分享封面保留此前 v2.10.4 笔记合成图。
 
-The three existing screenshots remain versioned v2.10.4 public fixtures, now in the README disclosure. They do not prove live TEAM, memory, or Muse behavior. Next captures should prioritize current block editing, the memory panel, Team Desk, and Muse cards, with provenance and hashes. The existing social preview still uses the v2.10.4 note capture.
+Six real v2.11.0 interface captures now show block insertion, editable memory, TEAM overview, a member conversation, a Muse task card, and the project note. Both READMEs display them directly. Conversations and states are public fixtures: they demonstrate interface organization, not live-model performance. See the asset guide for provenance, hashes, and reproduction; the full project video still awaits execution and recording. The social preview retains the earlier v2.10.4 note composition.
 
 发布口径：块编辑是本地 Markdown 上的体验，不承诺完整 Notion 或 Obsidian 生态兼容；团队价值是分工、可见性与不同视角；Muse 默认关闭、依赖本地进程并受预算与权限约束；本地优先也允许云模型与同步。录制注明版本、模式、模型、必要的人为操作和时间跳转，完整保留真实结果。
 

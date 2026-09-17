@@ -29,9 +29,16 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**。用 Notion 风
 | **主动跟进** | Muse 按心跳、日程和规则行动，将结果与待决定事项送到收件箱。 |
 | **按需扩展** | 插件把工具、Agent、技能与专属工作空间接进同一条工作流。 |
 
+下面的截图来自 v2.11.0 桌面构建，使用同一套公开研究项目样例；展示真实界面，不代表一次真实模型执行。[截图来源与复现](./.github/assets/showcase/README.md)。
+
 ## Markdown 的自由，块编辑的直观
 
 **在本地 `.md` 文件上，获得 Notion 风格的块状编辑体验。** 在 Amadeus 知识库里，标题、段落、待办、代码、嵌入内容都是可组织的块：写作时直接输入 Markdown，用 `/` 插入内容，用分栏安排材料，随时查看块的源码。笔记仍是磁盘上的文件，能直接打开、备份和交给 Agent 读写。
+
+<p align="center">
+  <img src="./.github/assets/showcase/markdown-blocks.png" alt="在本地 Markdown 笔记中用斜杠菜单插入内容块" width="920" />
+  <br><sub>在本地 Markdown 笔记中用斜杠菜单插入内容块 · v2.11.0 真实界面 · 公开样例数据</sub>
+</p>
 
 - **把一页组织清楚。** Markdown 快捷输入、斜杠菜单、分栏、小节折叠、callout、页面图标与封面，让长笔记也有结构。
 - **让材料彼此连接。** 用 `[[双链]]`、反向链接与关系图连接想法；嵌入笔记、图片、多维表和白板，在聊天中直接引用笔记。
@@ -58,6 +65,11 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**。用 Notion 风
 
 例如：“做研究时先给结论，再列来源，单独标出不确定项。”确认它已进入记忆后，换一场会话继续同一项目，检查它如何使用这条偏好。自动 Dream 默认关闭；“遗忘”移出活跃记忆，版本历史仍保留。
 
+<p align="center">
+  <img src="./.github/assets/showcase/agent-memory.png" alt="打开 Arioso 的记忆面板，查看项目背景与偏好，逐条编辑或遗忘" width="920" />
+  <br><sub>打开 Arioso 的记忆面板，查看项目背景与偏好，逐条编辑或遗忘 · v2.11.0 真实界面 · 公开样例数据</sub>
+</p>
+
 [了解记忆](./docs/agents/memory.md) · [配置 Agent](./docs/agents/overview.md)
 
 ## TEAM：让灵感有人展开，也有人认真挑错
@@ -73,6 +85,16 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**。用 Notion 风
 
 也可以在普通会话中委派独立子任务，或通过 ACP 接入本机已安装的 Claude Code、Codex 等外部引擎。团队与这些本地执行能力使用本地模式；任务按需传递背景，各 Agent 的记忆与工具配置仍分别管理。
 
+<p align="center">
+  <img src="./.github/assets/showcase/team-desk.png" alt="Aria、Recita 与 Arioso 的公开讨论，以及 Team Desk 成员状态" width="920" />
+  <br><sub>Aria、Recita 与 Arioso 的公开讨论，以及 Team Desk 成员状态 · v2.11.0 真实界面 · 公开样例数据</sub>
+</p>
+
+<p align="center">
+  <img src="./.github/assets/showcase/team-thread.png" alt="点开 Recita 的子会话，在主讨论旁检查具体依据与建议" width="920" />
+  <br><sub>点开 Recita 的子会话，在主讨论旁检查具体依据与建议 · v2.11.0 真实界面 · 公开样例数据</sub>
+</p>
+
 [TEAM 与 Team Desk](./docs/chat/group-chat.md) · [Agent 与人格](./docs/agents/overview.md) · [外部引擎](./docs/agents/external-engines.md)
 
 ## Muse：交代之后，继续有人留意
@@ -84,6 +106,11 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**。用 Notion 风
 - **把持续工作组织起来。** Muse 积累自己的 Library 与日志，还能编写、逐步完善自己的 Space，把资料与工作组织成可浏览的界面。
 
 Muse 默认关闭，当前在本地模式运行，需要设备与相应进程保持可用。活跃时段、频率、预算和审批方式由你设置。固定流程可以交给**自动化**，用时间、事件或数据库变化串起 Agent、通知与表格操作。
+
+<p align="center">
+  <img src="./.github/assets/showcase/muse-inbox.png" alt="Muse 将跟进事项送入收件箱：查看任务书，执行、另开会话或忽略" width="920" />
+  <br><sub>Muse 将跟进事项送入收件箱：查看任务书，执行、另开会话或忽略 · v2.11.0 真实界面 · 公开样例数据</sub>
+</p>
 
 [主动式 Muse](./docs/agents/muse.md) · [自动化](./docs/spaces/automation.md) · [收件箱](./docs/spaces/inbox.md)
 
@@ -109,25 +136,10 @@ Muse 默认关闭，当前在本地模式运行，需要设备与相应进程保
 
 这是可按需配置的示例路径；实际执行取决于所选模型、资料访问与工具设置。下次回来，项目文件和确认过的背景就是新的起点。
 
-<details>
-<summary>工作区截图：Note、Coding Studio 与 Calendar（v2.10.4 公开样例）</summary>
-
-以下为真实 Electron 工作区截图，使用隔离的公开样例数据。画面来自 v2.10.4，用于展示笔记与产物的组织方式；不代表 v2.11 的 TEAM 界面或一次真实模型执行。
-
 <p align="center">
-  <img src="./.github/assets/showcase/notes.png" alt="v2.10.4 Note 工作区中的公开项目笔记" width="920" />
-  <br><sub>项目材料、想法与下一步放在同一篇笔记里。</sub>
+  <img src="./.github/assets/showcase/project-note.png" alt="把来源、团队分工与下一步保留在同一篇本地项目笔记里" width="920" />
+  <br><sub>把来源、团队分工与下一步保留在同一篇本地项目笔记里 · v2.11.0 真实界面 · 公开样例数据</sub>
 </p>
-<p align="center">
-  <img src="./.github/assets/showcase/workbench.png" alt="v2.10.4 Coding Studio 的公开 Reading room 网页样例" width="920" />
-  <br><sub>Coding Studio 把会话与网页产物放在一起。</sub>
-</p>
-<p align="center">
-  <img src="./.github/assets/showcase/calendar.png" alt="v2.10.4 Calendar 中的公开日期和任务数据" width="920" />
-  <br><sub>日历把多维表中的日期和任务带进日常安排。</sub>
-</p>
-
-</details>
 
 ## 在你自己的工作环境里
 

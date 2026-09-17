@@ -29,9 +29,16 @@ Forsion is a **local-first AI second brain**. Organize your own Markdown files i
 | **Follow through** | Muse wakes on heartbeats, schedules, and rules, bringing results and decisions to Inbox. |
 | **Extend your workflow** | Plugins bring tools, Agents, skills, and dedicated workspaces into the same flow. |
 
+The screenshots below come from the v2.11.0 desktop build and use one public research-project fixture. They show the real interface, not a live model run. [Capture provenance and reproduction](./.github/assets/showcase/README.md).
+
 ## Markdown files. A block editor you can think in.
 
 **Notion-style block editing, built on local `.md` files.** In the Amadeus knowledge base, headings, paragraphs, to-dos, code, and embedded content become blocks you can organize. Write with Markdown shortcuts, insert content with `/`, arrange sources in columns, and inspect block source. Your notes remain files on disk that you can open, back up, and ask an Agent to read or update.
+
+<p align="center">
+  <img src="./.github/assets/showcase/markdown-blocks.png" alt="Insert blocks through the slash menu in a local Markdown note" width="920" />
+  <br><sub>Insert blocks through the slash menu in a local Markdown note · v2.11.0 interface · Public sample data</sub>
+</p>
 
 - **Give a page structure.** Markdown shortcuts, slash commands, columns, section folding, callouts, page icons, and covers help organize longer notes.
 - **Connect your material.** Use `[[wikilinks]]`, backlinks, and a graph to connect ideas. Embed notes, images, databases, and whiteboards; reference notes directly in chat.
@@ -58,6 +65,11 @@ Notes use local Markdown, with compatible formats for links, properties, and whi
 
 Try: “When helping me research, lead with conclusions, then sources, and call out uncertainty separately.” Check that it was saved, then start another conversation about the project and inspect how it uses that preference. Automatic Dream maintenance is off by default; forgetting removes active memory while retaining revision history.
 
+<p align="center">
+  <img src="./.github/assets/showcase/agent-memory.png" alt="Inspect project context and preferences in Arioso’s memory panel, with edit and forget controls" width="920" />
+  <br><sub>Inspect project context and preferences in Arioso’s memory panel, with edit and forget controls · v2.11.0 interface · Public sample data</sub>
+</p>
+
 [Memory (中文)](./docs/agents/memory.md) · [Configure Agents (中文)](./docs/agents/overview.md)
 
 ## TEAM: room for imagination, scrutiny, and shared work
@@ -73,6 +85,16 @@ Try: “When helping me research, lead with conclusions, then sources, and call 
 
 You can also delegate independent subtasks from an ordinary conversation or connect installed Claude Code and Codex engines through ACP. Teams and these local execution features use local mode. Context is passed as needed; Agent memories and tool settings remain individually managed.
 
+<p align="center">
+  <img src="./.github/assets/showcase/team-desk.png" alt="Public discussion from Aria, Recita, and Arioso alongside member status in Team Desk" width="920" />
+  <br><sub>Public discussion from Aria, Recita, and Arioso alongside member status in Team Desk · v2.11.0 interface · Public sample data</sub>
+</p>
+
+<p align="center">
+  <img src="./.github/assets/showcase/team-thread.png" alt="Open Recita’s child conversation to examine evidence and suggestions beside the main discussion" width="920" />
+  <br><sub>Open Recita’s child conversation to examine evidence and suggestions beside the main discussion · v2.11.0 interface · Public sample data</sub>
+</p>
+
 [TEAM and Team Desk](./docs/chat/group-chat.en.md) · [Agents and personalities (中文)](./docs/agents/overview.md) · [External engines (中文)](./docs/agents/external-engines.md)
 
 ## Muse: keep the follow-up moving
@@ -84,6 +106,11 @@ You can also delegate independent subtasks from an ordinary conversation or conn
 - **Give ongoing work a place.** Muse builds its own Library and journals, and can write and gradually improve its own Space to make that work browsable.
 
 Muse is off by default and currently runs in local mode, with the device and relevant processes available. You set active hours, frequency, budgets, and approval behavior. For defined processes, **Automation** connects time, events, or database changes to Agent actions, notifications, and table operations.
+
+<p align="center">
+  <img src="./.github/assets/showcase/muse-inbox.png" alt="Review a Muse follow-up in Inbox, inspect the task, execute it, start a new conversation, or dismiss it" width="920" />
+  <br><sub>Review a Muse follow-up in Inbox, inspect the task, execute it, start a new conversation, or dismiss it · v2.11.0 interface · Public sample data</sub>
+</p>
 
 [Proactive Muse (中文)](./docs/agents/muse.md) · [Automation (中文)](./docs/spaces/automation.md) · [Inbox (中文)](./docs/spaces/inbox.md)
 
@@ -109,25 +136,10 @@ Try building up this workflow with a real project:
 
 This is a configurable example, dependent on the model, source access, and tools you choose. When you return, the project files and confirmed context give you a starting point.
 
-<details>
-<summary>Workspace screenshots: Note, Coding Studio, and Calendar (v2.10.4 public samples)</summary>
-
-These real Electron workspace captures use isolated public sample data. They show how notes and outputs are organized in v2.10.4; they do not depict the v2.11 TEAM interface or a live model run.
-
 <p align="center">
-  <img src="./.github/assets/showcase/notes.png" alt="Public project note in the v2.10.4 Note workspace" width="920" />
-  <br><sub>Project material, ideas, and next steps in one note.</sub>
+  <img src="./.github/assets/showcase/project-note.png" alt="Keep sources, team responsibilities, and next steps together in a local project note" width="920" />
+  <br><sub>Keep sources, team responsibilities, and next steps together in a local project note · v2.11.0 interface · Public sample data</sub>
 </p>
-<p align="center">
-  <img src="./.github/assets/showcase/workbench.png" alt="Public Reading room webpage sample in v2.10.4 Coding Studio" width="920" />
-  <br><sub>Coding Studio brings the conversation and webpage output together.</sub>
-</p>
-<p align="center">
-  <img src="./.github/assets/showcase/calendar.png" alt="Public dates and task data in v2.10.4 Calendar" width="920" />
-  <br><sub>Calendar brings dated database records into your day.</sub>
-</p>
-
-</details>
 
 ## Work in an environment you control
 

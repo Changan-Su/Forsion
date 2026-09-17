@@ -1,18 +1,19 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-09-15T15:24:49Z",
+  "generatedAt": "2026-09-17T15:28:41.718275+00:00",
   "source": {
-    "releaseTag": "v2.10.4",
-    "commit": "edfd128259535ad778fdc964ddcb049cca3603f1",
-    "desktopTree": "69c5c590ea4dbe8a7b5d4bdc682b41b5aa73ab93",
-    "packageVersion": "2.10.4",
+    "releaseTag": "v2.11.0",
+    "commit": "d3fc60f9525f6c97bf4ad42300c777abfda4bca4",
+    "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
+    "packageVersion": "2.11.0",
     "productTreeMatchesRelease": true
   },
   "fixture": {
     "isolated": true,
     "publicDataOnly": true,
     "personalWorkspaceData": false,
-    "liveModelCalls": 0
+    "liveModelCalls": 0,
+    "scriptedBackend": true
   },
   "assets": {
     "workbench.png": {
@@ -24,7 +25,14 @@
       "scenario": "Coding Studio with a public Reading room project and sample conversation",
       "crop": false,
       "matte": false,
-      "colorTreatment": false
+      "colorTreatment": false,
+      "source": {
+        "releaseTag": "v2.10.4",
+        "commit": "edfd128259535ad778fdc964ddcb049cca3603f1",
+        "desktopTree": "69c5c590ea4dbe8a7b5d4bdc682b41b5aa73ab93",
+        "packageVersion": "2.10.4",
+        "productTreeMatchesRelease": true
+      }
     },
     "notes.png": {
       "width": 1600,
@@ -35,7 +43,14 @@
       "scenario": "Note workspace with the public Product research Markdown fixture",
       "crop": false,
       "matte": false,
-      "colorTreatment": false
+      "colorTreatment": false,
+      "source": {
+        "releaseTag": "v2.10.4",
+        "commit": "edfd128259535ad778fdc964ddcb049cca3603f1",
+        "desktopTree": "69c5c590ea4dbe8a7b5d4bdc682b41b5aa73ab93",
+        "packageVersion": "2.10.4",
+        "productTreeMatchesRelease": true
+      }
     },
     "calendar.png": {
       "width": 1600,
@@ -46,7 +61,14 @@
       "scenario": "Calendar workspace with an isolated public date and database fixture",
       "crop": false,
       "matte": false,
-      "colorTreatment": false
+      "colorTreatment": false,
+      "source": {
+        "releaseTag": "v2.10.4",
+        "commit": "edfd128259535ad778fdc964ddcb049cca3603f1",
+        "desktopTree": "69c5c590ea4dbe8a7b5d4bdc682b41b5aa73ab93",
+        "packageVersion": "2.10.4",
+        "productTreeMatchesRelease": true
+      }
     },
     "social-preview.png": {
       "width": 1280,
@@ -55,11 +77,151 @@
       "sha256": "144d491cc003b11e563387c5e41247b8692e6ecfe796112725852297efbbff0c",
       "captureMethod": "Browser canvas export",
       "scenario": "Designed GitHub Second Brain composition generated from the current notes.png",
-      "generatedAt": "2026-09-15T16:17:01Z"
+      "generatedAt": "2026-09-15T16:17:01Z",
+      "source": {
+        "releaseTag": "v2.10.4",
+        "commit": "edfd128259535ad778fdc964ddcb049cca3603f1",
+        "desktopTree": "69c5c590ea4dbe8a7b5d4bdc682b41b5aa73ab93",
+        "packageVersion": "2.10.4",
+        "productTreeMatchesRelease": true
+      }
     },
     "logo.svg": {
       "sha256": "b63079a5adfaa70f94f2a8647df7e96e66a1c67eeaa3c54973c49433c58278fe",
-      "source": "desktop/frontend/public/Forsion-LOGO3.svg"
+      "source": {
+        "releaseTag": "v2.10.4",
+        "commit": "edfd128259535ad778fdc964ddcb049cca3603f1",
+        "desktopTree": "69c5c590ea4dbe8a7b5d4bdc682b41b5aa73ab93",
+        "packageVersion": "2.10.4",
+        "productTreeMatchesRelease": true
+      }
+    },
+    "markdown-blocks.png": {
+      "width": 1600,
+      "height": 1000,
+      "colorType": "RGB",
+      "sha256": "be5f965ddfc24903a8788138b8999566e08b5d413499f736f35a485bdc439a20",
+      "source": {
+        "releaseTag": "v2.11.0",
+        "commit": "d3fc60f9525f6c97bf4ad42300c777abfda4bca4",
+        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
+        "packageVersion": "2.11.0",
+        "productTreeMatchesRelease": true
+      },
+      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
+      "scenario": "Markdown slash menu in the public research note",
+      "generatedAt": "2026-09-17T15:28:41.718275+00:00",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false,
+      "publicFixture": true,
+      "liveModelCalls": 0
+    },
+    "agent-memory.png": {
+      "width": 1600,
+      "height": 1000,
+      "colorType": "RGB",
+      "sha256": "ef277bd3a24f07fedbcd83b43b2f34ed974e75f5b78a6e1aad15b31dc5751ea5",
+      "source": {
+        "releaseTag": "v2.11.0",
+        "commit": "d3fc60f9525f6c97bf4ad42300c777abfda4bca4",
+        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
+        "packageVersion": "2.11.0",
+        "productTreeMatchesRelease": true
+      },
+      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
+      "scenario": "Arioso memory panel with three public context entries",
+      "generatedAt": "2026-09-17T15:28:41.718275+00:00",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false,
+      "publicFixture": true,
+      "liveModelCalls": 0
+    },
+    "team-desk.png": {
+      "width": 1600,
+      "height": 1000,
+      "colorType": "RGB",
+      "sha256": "9cbfce5754512a43e4ff87067bb62fc4314300dfb7c55a88e7977bd5be17e104",
+      "source": {
+        "releaseTag": "v2.11.0",
+        "commit": "d3fc60f9525f6c97bf4ad42300c777abfda4bca4",
+        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
+        "packageVersion": "2.11.0",
+        "productTreeMatchesRelease": true
+      },
+      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
+      "scenario": "TEAM public discussion and persisted member status",
+      "generatedAt": "2026-09-17T15:28:41.718275+00:00",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false,
+      "publicFixture": true,
+      "liveModelCalls": 0
+    },
+    "team-thread.png": {
+      "width": 1600,
+      "height": 1000,
+      "colorType": "RGB",
+      "sha256": "7482c18077d81d8b54d2bfbffb740a73b25021d13f6ed8e9815c1bc939616cc2",
+      "source": {
+        "releaseTag": "v2.11.0",
+        "commit": "d3fc60f9525f6c97bf4ad42300c777abfda4bca4",
+        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
+        "packageVersion": "2.11.0",
+        "productTreeMatchesRelease": true
+      },
+      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
+      "scenario": "Recita child conversation beside the public TEAM discussion",
+      "generatedAt": "2026-09-17T15:28:41.718275+00:00",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false,
+      "publicFixture": true,
+      "liveModelCalls": 0
+    },
+    "muse-inbox.png": {
+      "width": 1600,
+      "height": 1000,
+      "colorType": "RGB",
+      "sha256": "2802d2b803f47a7e46786afdafc5916eaea326f7889cc711b35745d27cac7ef0",
+      "source": {
+        "releaseTag": "v2.11.0",
+        "commit": "d3fc60f9525f6c97bf4ad42300c777abfda4bca4",
+        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
+        "packageVersion": "2.11.0",
+        "productTreeMatchesRelease": true
+      },
+      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
+      "scenario": "Muse Inbox follow-up with task details and action controls",
+      "generatedAt": "2026-09-17T15:28:41.718275+00:00",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false,
+      "publicFixture": true,
+      "liveModelCalls": 0
+    },
+    "project-note.png": {
+      "width": 1600,
+      "height": 1000,
+      "colorType": "RGB",
+      "sha256": "611e3e999f79358fac98aa7a65a5bd41731886a83a8b3a888d46e1da44810a24",
+      "source": {
+        "releaseTag": "v2.11.0",
+        "commit": "d3fc60f9525f6c97bf4ad42300c777abfda4bca4",
+        "desktopTree": "876c4d0bf724d43584031a33e00ce13b8bad79bf",
+        "packageVersion": "2.11.0",
+        "productTreeMatchesRelease": true
+      },
+      "captureMethod": "Playwright Electron screenshot, full viewport, CSS pixel scale",
+      "scenario": "Local project note linking material, responsibilities and next steps",
+      "generatedAt": "2026-09-17T15:28:41.718275+00:00",
+      "crop": false,
+      "matte": false,
+      "colorTreatment": false,
+      "publicFixture": true,
+      "liveModelCalls": 0
     }
-  }
+  },
+  "captureScript": "docs/showcase/capture.cjs"
 }

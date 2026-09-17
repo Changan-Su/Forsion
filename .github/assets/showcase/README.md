@@ -1,32 +1,42 @@
 # Showcase assets / 展示素材
 
-These assets support the English and Chinese repository READMEs and GitHub repository presentation.
+The READMEs display six new **v2.11.0** screenshots directly in the relevant feature sections. Captured from the real Electron build at `d3fc60f9`, whose desktop tree matches the v2.11.0 release, they use one isolated public research-project fixture. The interface is real; conversation text, memory records, team status and Inbox tasks are seeded sample data. No model calls or personal workspace data were used.
 
-这些素材用于中英文 README 与 GitHub 仓库展示。
+中英文 README 在对应段落直接展示六张新 **v2.11.0** 截图。来源为 `d3fc60f9` 的真实 Electron 构建，其 desktop 源码树与 v2.11.0 发布版本一致；使用隔离的公开研究项目夹具。界面真实，对话、记忆、团队状态和收件箱任务为预置样例，不是模型实测，不包含个人数据。
 
-The three product screenshots were captured from a clean Forsion Desktop **v2.10.4** build at source commit [`edfd128259535ad778fdc964ddcb049cca3603f1`](https://github.com/Changan-Su/Forsion/commit/edfd128259535ad778fdc964ddcb049cca3603f1). Each capture ran the real Electron renderer against an isolated public fixture. No personal workspace data or live model call was used. The screenshots have no crop, frame, matte, or colour treatment.
+All six images are complete 1600 × 1000 content viewports, with no post-capture crop, frame, matte, recoloring, or UI modification. / 六张均为完整 1600 × 1000 内容视口，未做后期裁边、边框、铺底、调色或界面修改。
 
-三张产品截图均来自 Forsion Desktop **v2.10.4** 的干净构建，对应源码提交 [`edfd128259535ad778fdc964ddcb049cca3603f1`](https://github.com/Changan-Su/Forsion/commit/edfd128259535ad778fdc964ddcb049cca3603f1)。截图运行真实 Electron 渲染层并使用隔离的公开夹具，不含个人工作区数据，也没有调用线上模型。截图未裁边、加框、铺底或调色。
-
-| Asset / 素材 | Source / 来源 |
+| Asset / 素材 | What it shows / 展示内容 |
 | --- | --- |
-| `workbench.png` | v2.10.4 Coding Studio captured through Electron's native `BrowserWindow.capturePage()`, with a public Reading room project and sample conversation. / v2.10.4 编码工作室的 Electron 原生窗口截图，使用公开的 Reading room 项目与样例对话。 |
-| `notes.png` | v2.10.4 Note workspace captured in Electron with the public Product research Markdown fixture. / v2.10.4 Note 工作区的 Electron 截图，使用公开的 Product research Markdown 夹具。 |
-| `calendar.png` | v2.10.4 Calendar workspace captured in Electron with an isolated public date and database fixture. / v2.10.4 日历工作区的 Electron 截图，使用隔离的公开日期与多维表夹具。 |
-| `logo.svg` | Existing Forsion logo from this repository's `desktop/frontend/public/Forsion-LOGO3.svg`. / 复用本仓库已有的扶桑标志。 |
-| `social-preview.png` | 1280 × 640 designed browser-canvas composition from `docs/showcase/social-preview.html`, using the v2.10.4 `notes.png` and the Second Brain positioning. / `docs/showcase/social-preview.html` 生成的 1280 × 640 设计合成图，以 Second Brain 为主旨，产品画面来自 v2.10.4 `notes.png`。 |
+| `markdown-blocks.png` | Markdown note and actual slash-menu block insertion. / Markdown 笔记与真实斜杠菜单。 |
+| `agent-memory.png` | Three editable memory entries for Arioso. / Arioso 的三条可编辑记忆。 |
+| `team-desk.png` | Public TEAM discussion and member status. / TEAM 公开讨论与成员状态。 |
+| `team-thread.png` | Recita's full child conversation beside the main discussion. / 主讨论旁的 Recita 完整子会话。 |
+| `muse-inbox.png` | Follow-up task, expanded instructions and action controls. / 跟进任务、展开的任务书与处理按钮。 |
+| `project-note.png` | Sources, responsibilities and next steps in a local Markdown file. / 本地 Markdown 中的来源、职责与下一步。 |
 
-Machine-readable dimensions, hashes, capture methods, and source provenance are recorded in [`manifest.json`](./manifest.json).
+## Reproduce / 复现
 
-尺寸、哈希、截图方式与源码来源记录在可机器读取的 [`manifest.json`](./manifest.json) 中。
+Install the project's desktop dependencies, build the current source, then run from the repository root in a GUI session. Each command launches and closes its own isolated Electron instance. / 安装桌面依赖并构建后，在有图形界面的环境从仓库根执行；每次命令启动并关闭独立的隔离 Electron 实例。
 
-For GitHub Social Preview, upload `social-preview.png` in the repository settings.
+```bash
+npm --prefix desktop run build
+node docs/showcase/capture.cjs note
+node docs/showcase/capture.cjs blocks
+node docs/showcase/capture.cjs memory
+node docs/showcase/capture.cjs team
+node docs/showcase/capture.cjs muse
+```
 
-GitHub 的 Social Preview 可使用 `social-preview.png`。
+The `team` scene writes both team views. Output defaults to the OS temporary directory's `forsion-showcase-v211` folder; `SHOWCASE_OUT` can choose another output folder. Captures are not installed into the asset directory automatically: inspect them first, then copy and refresh the manifest. / `team` 场景输出两张团队图片；默认输出到系统临时目录的 `forsion-showcase-v211`，可用 `SHOWCASE_OUT` 指定路径。脚本不直接覆盖正式素材；先检查，再复制并更新清单。
 
-The proposed GitHub About text is: **A local-first AI second brain: Markdown block editing, editable memory, parallel AI teams, proactive follow-ups, and plugins.** Repository settings are not changed by this branch.
+[manifest.json](manifest.json) records dimensions, SHA-256 hashes, source trees and capture methods per asset. / 清单逐图记录尺寸、SHA-256、源码树与截图方式。
 
-建议 GitHub About 简介：**A local-first AI second brain: Markdown block editing, editable memory, parallel AI teams, proactive follow-ups, and plugins.** 本分支提供文案与素材，仓库设置未修改。
+## Earlier assets / 旧素材
+
+`notes.png`, `workbench.png`, and `calendar.png` remain archived v2.10.4 captures from `edfd1282`; the READMEs no longer use them. `social-preview.png` remains the existing designed 1280 × 640 composition using the old note image. Its source is recorded separately in the manifest. `logo.svg` is the repository's existing logo. / 三张旧图仍保留为 v2.10.4 历史素材，README 已全部替换。分享封面仍是旧笔记图生成的 1280 × 640 合成图，来源单独记录；标志沿用仓库原件。
+
+Proposed GitHub About / 建议简介：**A local-first AI second brain: Markdown block editing, editable memory, parallel AI teams, proactive follow-ups, and plugins.**
 
 Suggested topics / 建议 Topics：`second-brain`, `local-first`, `markdown`, `block-editor`, `ai-agents`, `multi-agent`, `knowledge-management`, `automation`, `plugins`.
 
@@ -36,9 +46,9 @@ The public story follows **capture and connect → remember context → think an
 
 展示主线为**记录与连接 → 记住背景 → 团队思考与执行 → 主动跟进 → 成果沉淀**，插件扩展整条工作流。README 的项目案例是建议配置的使用路径，并非一次模型执行记录。截图只展示标明的工作区与公开样例，不作为多 Agent 或 Muse 真实执行的证据。
 
-Feature copy was rechecked against **v2.11.0 / `ad3bbfba`** on 2026-09-17. Screenshot provenance remains **v2.10.4**; no new product captures or live-model demonstrations were made in this copy revision. See the [bilingual messaging guide](../../../docs/showcase/messaging.md) for reusable copy, source evidence, and the next recording brief.
+Feature copy was rechecked against **v2.11.0 / `ad3bbfba`** on 2026-09-17. README screenshot provenance is now **v2.11.0 / `d3fc60f9`**; six new product captures now accompany that copy; no live-model demonstration was run. See the [bilingual messaging guide](../../../docs/showcase/messaging.md) for reusable copy, source evidence, and the next recording brief.
 
-功能文案于 2026-09-17 按 **v2.11.0 / `ad3bbfba`** 重新核对；截图来源仍为 **v2.10.4**，本次文案修订未新增产品截图或真实模型演示。[双语宣传主线](../../../docs/showcase/messaging.md)提供可复用文案、源码依据与下一轮录制脚本。
+功能文案于 2026-09-17 按 **v2.11.0 / `ad3bbfba`** 重新核对；README 截图来源为 **v2.11.0 / `d3fc60f9`**，本次补齐六张新界面截图，未运行真实模型演示。[双语宣传主线](../../../docs/showcase/messaging.md)提供可复用文案、源码依据与下一轮录制脚本。
 
 | Capability / 能力 | Evidence / 依据 | Presentation boundary / 展示边界 |
 | --- | --- | --- |
