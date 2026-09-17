@@ -10,6 +10,7 @@ import type { Fragment, Node as ProseNode } from '@milkdown/kit/prose/model'
 import { assetKey, assetRefs, fromAssetUrl } from '@amadeus-shared/assets'
 import { amadeus } from '../api'
 import { askDeleteAssets } from '../components/askDeleteAssets'
+import { trashVaultFiles } from '../store/pageStore'
 
 /**
  * @param page  当前笔记的 vault 相对路径
@@ -32,12 +33,7 @@ export async function askDeleteRemovedAssets(page: string, removed: string, text
   const targets = (exclusive ?? []).filter((rel) => gone.some((r) => matches(r, rel)))
   if (!targets.length) return
   if ((await askDeleteAssets(page, targets, { block: true })) !== 'with') return
-  for (const rel of targets) {
-    try {
-      if (amadeus.trashEntry) await amadeus.trashEntry(rel)
-      else await amadeus.deletePage(rel)
-    } catch { /* 单个文件删不掉不该冒泡成错误 */ }
-  }
+  await trashVaultFiles(targets)
 }
 
 /** 这次删掉的引用 `ref` 指的是不是 vault 里的 `rel` 这个文件。

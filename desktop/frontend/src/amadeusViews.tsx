@@ -12,7 +12,7 @@ import {
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
-import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScope, flushAllScopes, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
+import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScope, flushAllScopes, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, trashVaultFiles, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { retireUnifiedPath, insertFilesForPath } from '@amadeus/unified/lifecycle'
 import { useUiOverlay } from './amadeusOverlayStore'
 import { useUiStore } from '@amadeus/store/uiStore'
@@ -277,12 +277,7 @@ async function deleteNoteFlow(p: string, store: typeof ps = ps): Promise<void> {
   useRecentViews.getState().remove(`note:${p}`)
   await store().deletePage(p)
   if (!withAssets) return
-  for (const a of assets) {
-    try {
-      if (amadeus.trashEntry) await amadeus.trashEntry(a)
-      else await amadeus.deletePage(a) // removeEntry:对任意 vault 文件通用(同左栏删文件)
-    } catch { /* 单个附件删不掉不该中断整个删除 */ }
-  }
+  await trashVaultFiles(assets)
   await store().refreshStructure()
 }
 

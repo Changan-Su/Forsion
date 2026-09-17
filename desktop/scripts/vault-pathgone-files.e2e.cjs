@@ -5,6 +5,7 @@
  * 单测(fileViews.pathgone.test.ts)桩掉了工作区句柄,真 dockview 的 leafById / 布局落盘只有这里验得到。
  *
  *   P0 夹具:资料/ 下五类文件各开一个标签(插件文件用自生成的探针插件 .probe.md)
+ *   P0b 删笔记时一并删独占附件(deleteNoteFlow → trashVaultFiles):开着的附件标签关掉,别的图片标签不动(09-17)
  *   P1 树上改多维表名(renameDb):标签跟到新名,且不把它抢到前台(旧实现逐个 navigateLeaf:清参数 + setActive)
  *   P2 树上改文件夹名(prefix 广播):五个标签的参数全部跟到新文件夹,插件视图按新路径重挂,图片 src 换新
  *   P3 树上删 PDF:PDF 标签关掉,其余不动,文件没被建回来
@@ -79,6 +80,8 @@ async function main() {
   fs.writeFileSync(path.join(dir, '表.db'), `${JSON.stringify(DB, null, 2)}\n`, 'utf8')
   fs.writeFileSync(path.join(dir, '书.pdf'), tinyPdf(['PATHGONE']))
   fs.writeFileSync(path.join(dir, '图.png'), PNG_1PX)
+  fs.writeFileSync(path.join(dir, '附图.png'), PNG_1PX)
+  fs.writeFileSync(path.join(vault, '引用.md'), '# 引用\n\n![](资料/附图.png)\n', 'utf8')
   const probeDir = path.join(home, 'plugins', 'pathprobe')
   fs.mkdirSync(probeDir, { recursive: true })
   fs.writeFileSync(path.join(probeDir, 'main.js'), PROBE_MAIN)
@@ -162,6 +165,18 @@ async function main() {
     check('P0 五类文件各开一个标签(主区只有这五个),布局里各攥着 资料/ 下的路径', TABS.every((t) => t0.includes(t.title)) && opened0,
       `${JSON.stringify(t0)} main=${JSON.stringify(await mainTypes())}`)
     await shot('p0-open')
+
+    // ── P0b 删笔记连带独占附件:树外入口删的文件也要广播,开着的附件标签跟着关 ─────────
+    await win.evaluate(() => localStorage.setItem('amadeus_delete_assets', 'yes')) // 记住「一并删除」,不弹询问
+    await row('附图.png').click({ modifiers: ['Meta'] })
+    // 落盘布局有防抖:等它记下这个新标签,再删(否则「关掉了」可能只是「从没记上」)
+    const opened = await until(async () => (await tabOpen('附图.png')) && (await paramOf('imagePath')).includes('资料/附图.png'))
+    const img0 = await paramOf('imagePath')
+    await menu(row('引用'), '删除')
+    const attClosed = await until(async () => !(await tabOpen('附图.png')) && (await paramOf('imagePath')).join() === '资料/图.png')
+    check('P0b 删笔记时一并删掉独占附件:附件标签关掉(布局里也没有了),别的图片标签不动', !!opened && attClosed,
+      `${JSON.stringify(img0)} → ${JSON.stringify(await paramOf('imagePath'))} tabs=${JSON.stringify(await tabTitles())}`)
+    check('P0c 笔记与附件都已移出库', !fs.existsSync(path.join(vault, '引用.md')) && !fs.existsSync(path.join(dir, '附图.png')))
 
     // ── P1 树上改多维表名(renameDb),图片标签在前台 ─────────────────────────
     await win.locator('.dv-tab', { hasText: /^图\.png$/ }).first().click()

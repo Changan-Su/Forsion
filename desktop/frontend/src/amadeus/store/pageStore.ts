@@ -1699,6 +1699,23 @@ amadeus?.onPathGone?.(({ from, kind, to, root }) => {
   }
 })
 
+/** 树外入口直接删库里的文件(删笔记连带独占附件、整块删除连带文件):逐个移入回收站(缺 trash 的端硬删),
+ *  删成功的走树上删除同一套收尾并广播 —— 开着它的图片 / PDF / 多维表标签才会关,多维表白板的待写也才不会
+ *  把它建回来(2026-09-17)。单个删不掉不中断其余。 */
+export async function trashVaultFiles(paths: string[]): Promise<void> {
+  if (!paths.length) return
+  await flushFileStores()
+  for (const p of paths) {
+    try {
+      if (amadeus.trashEntry) await amadeus.trashEntry(p)
+      else await amadeus.deletePage(p) // removeEntry:对任意 vault 文件通用(同左栏删文件)
+    } catch { continue }
+    retireUnifiedPath(p)
+    clearScopeNotePaths(p, 'file')
+    emitNotePathGone(p, 'file', null)
+  }
+}
+
 /** 删除后把各 scope 里指向该路径(或其子树)的 activeNotePath 清掉。
  *  v3 有 activeInside 那条善后分支兜底,v4 的 activePage 恒 null 走不到 —— 不清的话
  *  noteOf 会一直返回一个**已删掉的**路径,图谱/反链/在场/聊天引用全指着它(Codex 评审 high)。 */

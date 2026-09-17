@@ -17,6 +17,7 @@ vi.mock('@amadeus/blocks', () => ({}))
 vi.mock('@amadeus/pdf/PdfAnnotator', () => ({ PdfAnnotator: () => null }))
 vi.mock('@amadeus/components/MediaPlayer', () => ({ MediaPlayer: () => null }))
 vi.mock('../amadeusNav', () => ({ openFile: () => {} }))
+vi.mock('@amadeus/components/askDeleteAssets', () => ({ askDeleteAssets: async () => 'with' }))
 vi.mock('../amadeus/plugins/viewSurface', () => ({ createPluginViewSurface: () => ({ surface: {}, dispose: () => {} }) }))
 vi.mock('../amadeus/plugins/pluginStore', () => {
   const FT = { id: 'probe', extensions: ['.probe.md'], mount: () => () => {} }
@@ -257,6 +258,24 @@ describe('多维表:树上 / 标题改名走 renameDb', () => {
     const { renameDb } = await import('@amadeus/lib/dbFileOps')
     await act(async () => { await renameDb('资料/表.db', '新表') })
     expect(panels[1].params).toEqual({ dbPath: '资料/新表.db', view: '表格', __loc: 'main', __type: 'amadeus-db' })
+  })
+})
+
+describe('树外入口直接删文件:删块连带文件 / 删笔记连带独占附件(09-17)', () => {
+  it('删块时选「一并删除」:攥着那个文件的标签关掉,别的不动', async () => {
+    const { ws, disk } = await boot('dock', ['笔记.md', '图.png', '书.pdf'])
+    Object.assign((window as unknown as { amadeus: object }).amadeus, { exclusiveAssets: async () => ['图.png'] })
+    const { api, panels } = dockApi([
+      { id: 'front', type: 'x' },
+      { id: 'img', type: 'amadeus-image', params: { imagePath: '图.png' } },
+      { id: 'pdf', type: 'amadeus-pdf', params: { pdfPath: '书.pdf' } },
+    ])
+    ws.getState().setApi(api)
+    const { askDeleteRemovedAssets } = await import('@amadeus/unified/assetDelete')
+    await act(async () => { await askDeleteRemovedAssets('笔记.md', '![](图.png)', '') })
+    await settle()
+    expect(disk.has('图.png')).toBe(false)
+    expect(panels.map((p) => p.id)).toEqual(['front', 'pdf'])
   })
 })
 
