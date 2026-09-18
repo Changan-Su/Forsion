@@ -27,6 +27,7 @@ import { publish } from './eventBus.js';
 import { publishBackgroundUsage } from './backgroundUsage.js';
 import { assistantTurnOf } from './contextBudget.js';
 import { getAgent, resolveActiveSlug, resolveMemorySlug } from '../agents/agentRegistry.js';
+import { agentIdentitySection } from './agentActivation.js';
 import { runWithAgentSlug, currentAgentSlug } from '../seams/runContext.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { projectDocSection } from './projectDoc.js';
@@ -290,7 +291,8 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   // 无 def 但带 instructions → 主 agent「自建」的临时子代理:用内联指令当人设(无文件夹 → 不写记忆日志)。
   const def = p.agentSlug ? await getAgent(p.agentSlug).catch(() => null) : null;
   const persona = def
-    ? [def.systemPrompt, def.soul].map((s) => String(s || '').trim()).filter(Boolean).join('\n\n')
+    ? [def.systemPrompt, def.soul, def.name?.trim() ? agentIdentitySection({ name: def.name.trim(), description: String(def.description || '').trim() }) : '']
+      .map((s) => String(s || '').trim()).filter(Boolean).join('\n\n')
     : (p.instructions ? String(p.instructions).trim() : '');
   // 项目级指令(AGENTS.md/CLAUDE.md)必须跟着走:子代理拿的是**同一个 cwd 和同一套文件工具**,
   // 主 agent 一句「按项目约定来」不构成传递 —— 不注入的话「禁止改 generated/」这类约束委派后就失效(codex)。

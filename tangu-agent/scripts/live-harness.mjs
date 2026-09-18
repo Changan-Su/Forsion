@@ -7,6 +7,8 @@
  *
  *   npm run build && npm run live:harness                    # 全部场景(约 5-10 分钟,真烧订阅额度)
  *   npm run live:harness -- --only personas                 # 三位音乐人格的同题实测(身份自动验,表达读原话)
+ *   npm run live:harness -- --only rename                   # 改名即生效:同会话先答旧名,PATCH 改名+改简介后下一轮须用新名(改身份注入/人格组装后跑)
+ *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
  *   TANGU_LIVE_MODEL=codex/gpt-5.6-sol npm run live:harness  # 换模型
@@ -48,13 +50,13 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'chat', 'tool', 'loop', 'group', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'loop', 'group', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['personas', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft
+const OPT_IN = new Set(['personas', 'rename', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -495,6 +497,25 @@ try {
         output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
     });
   }
+
+  // 改名即生效(09-18 用户实报「改了 Agent 名字,它没反应过来」):名字 / 简介过去从不进系统提示词,模型只认
+  // 提示词正文里写死的旧名。同一会话里先问一次(须答旧名 = 人格确实生效),改名 + 改简介后再问(须答新名)。
+  await scenario('rename', 'rename 改名改简介后同会话下一轮即用新名', async () => {
+    const created = await api('/agent/agents', { method: 'POST', body: JSON.stringify({ name: 'Nova', description: 'General helper', systemPrompt: "You are Nova, a helpful assistant. Reply in the user's language." }) });
+    const slug = created?.agent?.slug;
+    if (!slug) throw new Error(`建 agent 失败:${JSON.stringify(created).slice(0, 200)}`);
+    const sess = `live-rename-${Date.now()}`;
+    const ask = '只用一句话回答:你叫什么名字、负责什么?不调用工具。';
+    const before = await run(sess, ask, 120_000, { agentSlug: slug });
+    await api(`/agent/agents/${slug}`, { method: 'PATCH', body: JSON.stringify({ name: 'Orion', description: 'Plans night-sky observation trips' }) });
+    const after = await run(sess, ask, 120_000, { agentSlug: slug });
+    const oldOk = before.content.includes('Nova');
+    const newOk = after.content.includes('Orion');
+    const roleOk = /星|夜空|观测|观星|night|sky|observ|astronom/i.test(after.content);
+    return { ok: !before.error && !after.error && oldOk && newOk, inconclusive: newOk && !roleOk,
+      detail: before.error || after.error || `改名前${oldOk ? '答 Nova' : '未答 Nova(人格未生效,本场景无效)'};改名后${newOk ? '答 Orion' : '仍未用新名'};新简介${roleOk ? '已体现' : '未体现(不计红)'}`,
+      output: `改名前:${before.content}\n改名后:${after.content}`, ttftMs: ttft(after), tokens: tokensOf(after), toolCalls: [...before.toolCalls, ...after.toolCalls] };
+  });
 
   const chat = await scenario('chat', 'chat 基础对话', async () => {
     const ev = await run(sessA, '用一句话介绍你自己,句末加上 OK。');

@@ -46,7 +46,7 @@ import { isContextOverflowError } from './contextWindowStore.js';
 import { getAgent, isValidSlug, DEFAULT_MAX_ITERATIONS, libDirOf, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { loadHarness, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
-import { applyAgentActivation } from './agentActivation.js';
+import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, type HistorianForkSeed } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
@@ -769,7 +769,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     else delete agentConfig.maxIterations;
   }
   const sessionMaxIterations: number | null = agentConfig.maxIterations ?? null;
-  const { activeAgentSlug, memScopeSlug } = await applyAgentActivation(
+  const { activeAgentSlug, memScopeSlug, profile: agentProfile } = await applyAgentActivation(
     agentConfig,
     userId,
     inlineMemberDef ? async (slug: string) => (slug === inlineMemberDef.slug ? inlineMemberDef : getAgent(slug)) : getAgent,
@@ -1083,6 +1083,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (agentConfig.soul && String(agentConfig.soul).trim() && !suppressCompanionPersona) {
       systemParts.push('## Persona\nThe following is your persona; act according to its tone and values, but do not recite it verbatim.\n\n' + String(agentConfig.soul).trim());
     }
+    // 2') 身份段(当前名字 / 简介):人格正文常写死旧名,不注入则改名后模型仍自称旧名(09-18)。随人格一起被 coding 预设抑制。
+    if (agentProfile && !suppressCompanionPersona) systemParts.push(agentIdentitySection(agentProfile));
     // 2a) 团队段(成员子 run;全员共识、逐字不变 → 稳定区)
     if (isTeamMember) {
       systemParts.push(teamMemberSection(

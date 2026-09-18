@@ -13,6 +13,22 @@ export interface AgentActivation {
   activeAgentSlug: string;
   /** 记忆/日志作用域 slug(shareDefaultMemory → DEFAULT,否则该 agent 自己)。 */
   memScopeSlug: string;
+  /** 当前显示名 / 简介(用户随时可改;无激活 agent → undefined)。经 agentIdentitySection 进系统提示词。 */
+  profile?: AgentProfile;
+}
+
+export interface AgentProfile { name: string; description: string }
+
+/**
+ * 身份段:名字 / 简介是用户随时可改的展示信息,人格正文里却常写死名字(内置 "You are Aria…"、引导建的
+ * "You are <name>…")—— 不注入的话改名后模型仍自称旧名(09-18 用户实报)。排在人格之后,声明以此为准。
+ * 只在改名 / 改简介时变,属稳定区(不破前缀缓存)。模型读的提示词一律英文。
+ */
+export function agentIdentitySection(profile: AgentProfile): string {
+  return '## Identity\n' +
+    `- Name: ${profile.name}\n` +
+    (profile.description ? `- Description (shown to the user): ${profile.description}\n` : '') +
+    'The user can change these in the app at any time; they are current. Introduce yourself by this name, and if the instructions above call you by a different name, treat that name as outdated.';
 }
 
 export interface AgentsBrainLike {
@@ -31,6 +47,7 @@ export async function applyAgentActivation(
 ): Promise<AgentActivation> {
   let activeAgentSlug = DEFAULT_AGENT_SLUG;
   let memScopeSlug = DEFAULT_AGENT_SLUG;
+  let profile: AgentProfile | undefined;
   if (!agentConfig || !agentConfig.agentSlug) return { activeAgentSlug, memScopeSlug };
   try {
     let def = await localGet(String(agentConfig.agentSlug));
@@ -47,6 +64,8 @@ export async function applyAgentActivation(
       def = upgradeAriosoPersona(def);
       activeAgentSlug = resolveActiveSlug(agentConfig.agentSlug);
       memScopeSlug = resolveMemorySlug(def);
+      const name = String(def.name || '').trim();
+      if (name) profile = { name, description: String(def.description || '').trim() };
       if (!agentConfig.systemPrompt && def.systemPrompt) agentConfig.systemPrompt = def.systemPrompt;
       if (!agentConfig.soul && def.soul) agentConfig.soul = def.soul;
       if (!agentConfig.libraryOrder && def.libraryOrder?.length) agentConfig.libraryOrder = def.libraryOrder;
@@ -78,5 +97,5 @@ export async function applyAgentActivation(
   } catch {
     /* 加载失败不阻断 run */
   }
-  return { activeAgentSlug, memScopeSlug };
+  return { activeAgentSlug, memScopeSlug, profile };
 }

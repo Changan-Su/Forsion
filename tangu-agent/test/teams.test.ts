@@ -174,6 +174,8 @@ describe('routes /agent/teams', () => {
     expect(arioSys).toContain('## Team Mode');
     expect(arioSys).toContain('## Team\n# Team abc\nAlpha owns API.');
     expect(arioSys).toContain('## Your role\nAPI');
+    // 09-18:当前名字 / 简介经身份段进 system(改名即生效的接线;agentLoop 删掉那一行注入这里就红)。
+    expect(arioSys).toContain('## Identity\n- Name: Ario\n- Description (shown to the user): x\n');
     const boSys = sysOf('Bo');
     expect(boSys).toContain('## Team\n');
     expect(boSys).not.toContain('## Your role');
