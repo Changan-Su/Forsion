@@ -35,6 +35,7 @@ import {
   linkSchema,
 } from '@milkdown/kit/preset/commonmark'
 import { toggleStrikethroughCommand } from '@milkdown/kit/preset/gfm'
+import { cjkFriendlyRemark } from './cjkFriendly'
 import {
   applyBgCommand,
   applyColorCommand,
@@ -760,6 +761,8 @@ export function MilkdownInner({
       .use(pluginEditorExtensions('high'))
       .use(commonmarkWithIndent)
       .use(gfm)
+      // `**注意：**后面` 这类 CJK 标点贴定界符的串按 CJK 友好规则解析(否则字面 + 保存转义)。须紧跟 gfm,见 ./cjkFriendly。
+      .use(cjkFriendlyRemark)
       // 自定义行内标记:下划线/文字色/背景色(schema mark + remark HTML 桥,见 ./marks)。
       // remark 桥须与 commonmark/gfm 同在,故紧随其后注册。
       .use(inlineHtmlMarksRemark)
