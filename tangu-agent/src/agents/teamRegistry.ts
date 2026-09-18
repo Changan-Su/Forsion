@@ -8,7 +8,7 @@ import { promises as fs, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { teamsDir } from '../core/tanguHome.js';
-import { isValidSlug, slugify } from './agentRegistry.js';
+import { AVATAR_EXT_MIME, AVATAR_MAX_BYTES, AVATAR_MIME_EXT, isValidSlug, slugify } from './agentRegistry.js';
 
 export interface TeamMember { slug: string; role: string }
 export interface TeamDef {
@@ -18,7 +18,7 @@ export interface TeamDef {
   /** 可选:起头发言人;缺省 = 第一位成员。调度不走它(被 @ 者优先 → 成员序轮转),只是元数据。
    *  09-16 起团队没有运行模式与轮数上限(旧 config.toml 里的 mode / max_rounds 读时忽略、写时不再落盘)。 */
   lead: string;
-  /** 可选 emoji;空 = 成员头像组合。 */
+  /** 可选 emoji 或 Library/avatar.* 文件名;空 = 成员头像组合。 */
   avatar: string;
   /** 数组顺序 = 发言顺序。 */
   members: TeamMember[];
@@ -188,4 +188,62 @@ export async function saveTeam(input: SaveTeamInput): Promise<TeamDef> {
 export async function deleteTeam(slug: string): Promise<boolean> {
   if (!isValidSlug(slug)) return false;
   try { await fs.rm(teamDirOf(slug), { recursive: true, force: true }); cache = null; return true; } catch { return false; }
+}
+
+const TEAM_AVATAR_FILE = /^avatar\.(png|jpe?g|gif|webp)$/i;
+
+/** 写团队头像进 Library/avatar.<ext> 并更新 config.avatar；校验类型/大小；返回文件名。 */
+export async function saveTeamAvatar(slug: string, base64: string, mimeType: string): Promise<string> {
+  if (!isValidSlug(slug)) throw new Error('invalid slug');
+  const ext = AVATAR_MIME_EXT[String(mimeType).toLowerCase()];
+  if (!ext) throw new Error('unsupported image type (png/jpeg/gif/webp only)');
+  const raw = base64.includes(',') && base64.trimStart().startsWith('data:') ? base64.slice(base64.indexOf(',') + 1) : base64;
+  const buf = Buffer.from(raw, 'base64');
+  if (!buf.length) throw new Error('empty image');
+  if (buf.length > AVATAR_MAX_BYTES) throw new Error('image too large (max 1MB)');
+  const cur = await getTeam(slug);
+  if (!cur) throw new Error('team not found');
+  const libDir = teamLibDirOf(slug);
+  mkdirSync(libDir, { recursive: true });
+  try {
+    for (const file of await fs.readdir(libDir)) {
+      if (TEAM_AVATAR_FILE.test(file)) await fs.rm(path.join(libDir, file), { force: true }).catch(() => { /* ignore */ });
+    }
+  } catch { /* ignore */ }
+  const filename = `avatar.${ext}`;
+  await fs.writeFile(path.join(libDir, filename), buf);
+  await saveTeam({
+    slug, name: cur.name, description: cur.description, lead: cur.lead, avatar: filename,
+    members: cur.members, doc: cur.doc,
+  });
+  return filename;
+}
+
+/** 读取团队头像二进制；emoji / 空头像返回 null。 */
+export async function readTeamAvatar(slug: string): Promise<{ data: Buffer; mimeType: string } | null> {
+  if (!isValidSlug(slug)) return null;
+  const cur = await getTeam(slug);
+  if (!cur?.avatar || !TEAM_AVATAR_FILE.test(cur.avatar)) return null;
+  const ext = (cur.avatar.split('.').pop() || '').toLowerCase();
+  try {
+    return { data: await fs.readFile(path.join(teamLibDirOf(slug), cur.avatar)), mimeType: AVATAR_EXT_MIME[ext] || 'application/octet-stream' };
+  } catch { return null; }
+}
+
+/** 删除图片头像并清空 config.avatar；无图片时也按成功返回。 */
+export async function deleteTeamAvatar(slug: string): Promise<boolean> {
+  if (!isValidSlug(slug)) throw new Error('invalid slug');
+  const cur = await getTeam(slug);
+  if (!cur) throw new Error('team not found');
+  const libDir = teamLibDirOf(slug);
+  try {
+    for (const file of await fs.readdir(libDir)) {
+      if (TEAM_AVATAR_FILE.test(file)) await fs.rm(path.join(libDir, file), { force: true }).catch(() => { /* ignore */ });
+    }
+  } catch { /* no files */ }
+  await saveTeam({
+    slug, name: cur.name, description: cur.description, lead: cur.lead, avatar: '',
+    members: cur.members, doc: cur.doc,
+  });
+  return true;
 }

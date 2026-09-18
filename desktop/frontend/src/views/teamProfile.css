@@ -3,10 +3,20 @@
 .team-profile [hidden] { display: none !important; }
 .team-profile-main { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .team-profile-hero { display: flex; align-items: center; gap: 12px; padding-block: 16px; flex-shrink: 0; }
-.team-profile-emblem { width: 48px; height: 54px; display: grid; place-items: center; flex-shrink: 0; font-size: 26px; color: var(--accent-ink); background: var(--overlay-light); border-radius: var(--radius-md, 12px); }
+.team-profile-emblem { width: 48px; height: 54px; display: grid; place-items: center; flex-shrink: 0; padding: 0; font-size: 26px; color: var(--accent-ink); background: var(--overlay-light); border: 0; border-radius: var(--radius-md, 12px); }
+.team-profile-emblem > img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+/* 头部即「基本信息」:徽章 / 原地编辑沿用 Agent 头部那套(agentProfile.css 的 .agent-portrait-* 与 .agent-character-name/-desc),
+ * 这里只调尺寸。选择器写成 (0,2,0),压过那边的 (0,1,0),不靠两份样式表的加载顺序。 */
+.team-profile-emblem.agent-portrait-edit { transition: background 160ms ease, color 160ms ease; }
+.team-profile-emblem.agent-portrait-edit:hover { color: var(--text); background: var(--overlay-medium); }
 .team-profile-hero > div { min-width: 0; }
+.team-profile-hero .team-profile-identity { flex: 1; }
 .team-profile-hero h3 { margin: 0 0 5px; font-size: 10px; font-weight: 400; color: var(--text-muted); }
-.team-profile-hero h2 { margin: 0 0 6px; font-size: 19px; font-weight: 600; overflow-wrap: anywhere; letter-spacing: -.02em; }
+.team-profile-hero .team-profile-name { margin-block: 0 3px; font-size: 19px; letter-spacing: -.02em; }
+.team-profile-hero .team-profile-desc { margin-bottom: 4px; font-size: 11px; }
+.team-profile-hero .agent-portrait-badge { right: 3px; bottom: 3px; width: 18px; height: 18px; }
+.team-profile-hero .agent-portrait-remove { top: -5px; right: -5px; width: 17px; height: 17px; }
+.team-emblem-emoji { width: 100%; height: 100%; padding: 0; font-size: 26px; line-height: 1; text-align: center; color: var(--text); background: var(--bg-card); border: 1px solid var(--accent-ink); border-radius: inherit; }
 .team-profile-hero .agent-state { flex-wrap: wrap; row-gap: 5px; }
 .team-profile-location { flex-shrink: 0; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; margin: 0 0 14px; }
 .team-profile .agent-section-nav { flex-shrink: 0; }
@@ -62,5 +72,5 @@
 .team-temp-member h2 { font-size: 20px; font-weight: 500; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) {
   .team-profile-fields, .team-candidate-picker { animation: none; }
-  .team-member-actions button { transition: none; }
+  .team-member-actions button, .team-profile-emblem.agent-portrait-edit { transition: none; }
 }

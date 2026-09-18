@@ -13,7 +13,7 @@ import type {
   AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, CtxInfo, ModelsResponse, NormalAgentDef,
   MsgSeg, SessionRecord, SkillInfo, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
   DefaultModelSlot, TeamDef } from '../types'
-import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isIndependentOrbitConfig, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
+import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
 import { effectiveSessionMode, type SessionMode } from '../views/sessionMode'
 import { abortRunAndWait, cancelSteer, currentPlatform, expediteSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
@@ -721,6 +721,8 @@ export interface AppState {
   patchSessionConfig(patch: Partial<AgentConfig>, sessionId?: string | null): void
   /** 独立团队(Agent 轨道):定义列表(host-only;云端恒空)。 */
   teams: TeamDef[]
+  /** 图片头像团队的 slug → objectURL(同 agentAvatars;refreshTeams 整表重拉)。 */
+  teamAvatars: Record<string, string>
   refreshTeams(): Promise<void>
   /** 拿到/建立该团队的活动会话并并进列表(导航由 sessionNav.openTeam 做)。 */
   ensureTeamSession(slug: string): Promise<SessionRecord | null>
@@ -2801,10 +2803,18 @@ export const useApp = create<AppState>((set, get) => ({
   seedOnceBySession: {},
   setSeedOnce: (sessionId, fromSessionId) => set((st) => ({ seedOnceBySession: { ...st.seedOnceBySession, [sessionId]: fromSessionId } })),
   teams: [],
+  teamAvatars: {},
   refreshTeams: async () => {
     const c = get().cfg
-    const teams = await api.listTeams(c)
-    set({ teams: Array.isArray(teams) ? teams : [] })
+    const listed = await api.listTeams(c)
+    const teams = Array.isArray(listed) ? listed : []
+    set({ teams })
+    // 图片头像要带鉴权拉成 objectURL(同 refreshAgents);整表替换,旧 URL 一并回收。
+    const pairs = await Promise.all(teams.filter((tm) => isTeamImageAvatar(tm.avatar)).map(async (tm) => [tm.slug, await api.fetchTeamAvatar(c, tm.slug)] as const))
+    set((s) => {
+      Object.values(s.teamAvatars).forEach((u) => { try { URL.revokeObjectURL(u) } catch { /* ignore */ } })
+      return { teamAvatars: Object.fromEntries(pairs.filter(([, u]) => u) as Array<[string, string]>) }
+    })
   },
   ensureTeamSession: async (slug) => {
     const t = get().tr

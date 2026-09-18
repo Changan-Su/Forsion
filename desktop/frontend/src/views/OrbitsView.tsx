@@ -28,7 +28,7 @@ import * as api from '../services/backendService'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { sessionsInMode, workspacesInMode } from './sessionMode'
 import { registerMessages, useI18n } from '../i18n'
-import { isIndependentOrbitConfig, sessionWorkspaceKey, type SessionRecord, type TeamDef } from '../types'
+import { isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, type SessionRecord, type TeamDef } from '../types'
 import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
 import './chat2/orbits.css'
 
@@ -126,6 +126,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     engines: state.engines,
     configBySession: state.configBySession,
     teams: state.teams,
+    teamAvatars: state.teamAvatars,
     refreshTeams: state.refreshTeams,
     refreshSessions: state.refreshSessions,
   })))
@@ -351,7 +352,8 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
           <span className="t2o-lead">
             <AvatarStack
               items={tm.members.map((m) => ({ slug: m.slug, name: s.agentDefs.find((a) => a.slug === m.slug)?.name || m.slug, avatarUrl: s.agentAvatars[m.slug] }))}
-              emoji={tm.avatar || undefined}
+              emoji={isTeamImageAvatar(tm.avatar) ? undefined : tm.avatar || undefined}
+              imageUrl={s.teamAvatars[tm.slug]}
               size={30}
             />
           </span>

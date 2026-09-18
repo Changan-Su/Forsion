@@ -20,8 +20,24 @@
 .agent-portrait.small { width: 36px; height: 40px; border-radius: var(--radius-sm, 8px); }
 .agent-character-id { font-size: 10px; color: var(--text-muted); overflow-wrap: anywhere; }
 .agent-character-identity { min-width: 0; flex: 1; }
-.agent-character-identity h1 { margin: 4px 0 6px; font-size: 28px; font-weight: 600; letter-spacing: -.025em; overflow-wrap: anywhere; }
-.agent-character-identity p { font-size: 12px; line-height: 1.6; color: var(--text-muted); margin: 0 0 8px; max-width: 540px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+/* 头部即「基本信息」(09-18 从配置页并入):头像点开即换,名称 / 简介原地编辑。
+ * 静息态与纯展示一致 —— 透明 1px 边 + 透明底(去边写 border-color,盒模型不变、状态切换不位移);悬停给一层底,
+ * 聚焦亮 accent 边。左移 7px 让文字与上方 slug 对齐;宽度只向左补、右缘贴齐容器,不制造横向溢出。 */
+.agent-portrait-slot { position: relative; flex-shrink: 0; }
+.agent-portrait-edit { position: relative; cursor: pointer; }
+.agent-portrait-edit input[type=file] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.agent-portrait-edit:has(input:focus-visible) { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+.agent-portrait-badge, .agent-portrait-remove { position: absolute; display: grid; place-items: center; padding: 0; color: var(--text); background: var(--bg-card); border: 1px solid var(--border); border-radius: 50%; opacity: 0; transition: opacity 160ms ease; }
+.agent-portrait-badge { right: 5px; bottom: 5px; width: 24px; height: 24px; pointer-events: none; }
+.agent-portrait-remove { top: -6px; right: -6px; width: 20px; height: 20px; color: var(--text-muted); cursor: pointer; }
+.agent-portrait-remove:hover { color: var(--text); }
+.agent-portrait-slot:hover .agent-portrait-badge, .agent-portrait-slot:hover .agent-portrait-remove, .agent-portrait-edit:has(input:focus-visible) .agent-portrait-badge, .agent-portrait-edit[aria-busy=true] .agent-portrait-badge, .agent-portrait-remove:focus-visible { opacity: 1; }
+@media (hover: none) { .agent-portrait-badge, .agent-portrait-remove { opacity: 1; } }
+.agent-character-name, .agent-character-desc { display: block; width: calc(100% + 7px); min-width: 0; margin-left: -7px; padding: 1px 6px; color: var(--text); background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm, 8px); transition: background 160ms ease, border-color 160ms ease; }
+.agent-character-name:hover, .agent-character-desc:hover { background: var(--overlay-light); }
+.agent-character-name:focus, .agent-character-desc:focus { color: var(--text); background: var(--bg-card); border-color: var(--accent-ink); }
+.agent-character-name { margin-block: 3px 4px; font-size: 28px; font-weight: 600; line-height: 1.25; letter-spacing: -.025em; text-overflow: ellipsis; }
+.agent-character-desc { max-width: 547px; margin-block: 0 6px; font-size: 12px; line-height: 1.6; color: var(--text-muted); resize: none; field-sizing: content; min-height: calc(1.6em + 4px); max-height: calc(4.8em + 4px); }
 .agent-state { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); }
 .agent-state i { width: 5px; height: 5px; border-radius: 50%; background: var(--text-muted); }
 .agent-state.working { color: var(--accent-ink); }
@@ -45,13 +61,6 @@
 .agent-current-session small, .agent-current-session > span { font-size: 11px; line-height: 1.6; color: var(--text-muted); }
 .agent-current-session > strong { font-size: 14px; font-weight: 600; }
 .agent-current-session .profile-model-field { margin-top: 6px; }
-.agent-equipment-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.agent-equipment-grid button { display: grid; grid-template-columns: 1fr auto; gap: 12px 8px; padding: 16px; text-align: left; color: var(--text); border: 1px solid transparent; background: var(--overlay-light); border-radius: var(--radius-md, 12px); cursor: pointer; transition: background 160ms ease, transform 160ms ease; }
-.agent-equipment-grid button:hover { background: var(--overlay-medium); transform: translateY(-2px); }
-.agent-equipment-grid button > svg:first-child { color: var(--accent-ink); grid-column: 1 / -1; }
-.agent-equipment-grid span { font-size: 13px; }
-.agent-equipment-grid strong { grid-column: 1; font-size: 11px; color: var(--text-muted); font-weight: 400; overflow-wrap: anywhere; }
-.agent-equipment-grid button > svg:last-child { grid-column: 2; grid-row: 2; }
 .agent-profile-link { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-top: 16px; min-height: 36px; padding: 8px 0; color: var(--text-muted); font-size: 12px; background: transparent; border: 0; cursor: pointer; text-align: left; }
 .agent-profile-link:hover { color: var(--accent-ink); }
 .agent-profile-link svg { flex-shrink: 0; }
@@ -65,6 +74,11 @@
 .agent-field input, .agent-field select, .agent-field textarea { width: 100%; min-width: 0; color: var(--text); font-size: 13px; }
 .agent-field input:not([type=checkbox]), .agent-field select { min-height: 36px; }
 .agent-field textarea { resize: vertical; line-height: 1.65; }
+.agent-avatar-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; min-width: 0; }
+.agent-avatar-actions label, .agent-avatar-actions button { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.agent-avatar-actions label[aria-disabled=true] { opacity: .55; cursor: default; }
+.agent-avatar-actions input[type=file] { display: none; }
+.agent-avatar-actions small { flex-basis: 100%; color: var(--text-muted); font-size: 10px; line-height: 1.5; }
 .profile-loadout-mode { display: grid; gap: 8px; margin-bottom: 16px; }
 .profile-loadout-mode > .agent-field { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
 .profile-loadout-mode select { flex: 1; width: 0; }
@@ -99,15 +113,13 @@
 .agent-profile.compact { padding: 0 16px; }
 .compact .agent-character-hero { gap: 12px; padding: 16px 0; align-items: center; }
 .compact .agent-portrait { width: 48px; height: 54px; border-radius: var(--radius-md, 12px); }
-.compact .agent-character-identity h1 { font-size: 18px; margin: 3px 0 5px; }
-.compact .agent-character-identity p { font-size: 11px; margin-bottom: 6px; }
+.compact .agent-character-name { font-size: 18px; margin-block: 2px 3px; }
+.compact .agent-character-desc { font-size: 11px; margin-bottom: 4px; }
+.compact .agent-portrait-badge { right: 3px; bottom: 3px; width: 18px; height: 18px; }
+.compact .agent-portrait-remove { top: -5px; right: -5px; width: 17px; height: 17px; }
 .compact .agent-section-nav { --profile-nav-gap: 2px; --profile-nav-padding: 4px; }
 .compact .agent-section-nav button { flex-direction: column; gap: 5px; font-size: 10px; padding: 7px 2px; }
 .compact .agent-profile-content { padding-block: 18px; }
-.compact .agent-equipment-grid { grid-template-columns: 1fr; gap: 7px; }
-.compact .agent-equipment-grid button { display: flex; align-items: center; gap: 10px; padding: 12px; }
-.compact .agent-equipment-grid button > svg:first-child { width: 17px; height: 17px; flex-shrink: 0; }
-.compact .agent-equipment-grid strong { margin-left: auto; text-align: right; max-width: 46%; }
 .compact .agent-current-session { padding: 12px; }
 .agent-profile-team { padding: 12px 18px; }
 .agent-profile-team h3 { display: flex; align-items: center; gap: 8px; font-size: 13px; }
@@ -150,12 +162,10 @@
   .agents-character .agent-profile { padding-inline: 16px; }
   .agents-character .agent-character-hero { gap: 12px; padding-block: 16px; }
   .agents-character .agent-portrait { width: 56px; height: 62px; }
-  .agents-character .agent-character-identity h1 { font-size: 22px; }
-  .agents-character .agent-equipment-grid { grid-template-columns: 1fr; }
+  .agents-character .agent-character-name { font-size: 22px; }
   .agents-character .agent-section-nav button { flex-direction: column; padding-inline: 2px; font-size: 10px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .profile-section-enter, .profile-model-options { animation: none; }
-  .agent-section-nav::before, .agent-section-nav button, .agent-equipment-item, .agent-equipment-grid button, .profile-model-trigger svg { transition: none; }
-  .agent-equipment-grid button:hover { transform: none; }
+  .agent-section-nav::before, .agent-section-nav button, .agent-equipment-item, .profile-model-trigger svg, .agent-portrait-badge, .agent-portrait-remove, .agent-character-name, .agent-character-desc { transition: none; }
 }

@@ -167,6 +167,17 @@ describe('<AvatarStack> 渲染', () => {
     expect(host.querySelector('img')).toBeNull()
   })
 
+  it('整体图片(团队上传头像)优先于 emoji 与成员头像:只画一张铺满外框的图,data-n 照旧', async () => {
+    await render(React.createElement(AvatarStack, { items: items(3, true), emoji: '✦', imageUrl: 'blob:team', size: 30 }))
+    const imgs = [...host.querySelectorAll('img')]
+    expect(imgs).toHaveLength(1)
+    expect(imgs[0].getAttribute('src')).toBe('blob:team')
+    expect(imgs[0].getAttribute('width')).toBe('30')
+    expect(imgs[0].getAttribute('height')).toBe('30')
+    expect(host.textContent).toBe('')
+    expect(host.querySelector('.t2o-avstack')?.getAttribute('data-n')).toBe('3')
+  })
+
   it('空成员表不崩,也不画假头像', async () => {
     await render(React.createElement(AvatarStack, { items: [] }))
     const box = host.querySelector('.t2o-avstack') as HTMLElement

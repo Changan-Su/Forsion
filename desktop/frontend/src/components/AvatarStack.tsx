@@ -126,7 +126,9 @@ export const AvatarStack: React.FC<{
   className?: string
   /** 整体 emoji(独立团队 config.toml 的 avatar):非空则整格显示 emoji、不合成成员头像(§3.3)。与成员数无关。 */
   emoji?: string
-}> = ({ items, size = AVATAR_STACK_SIZE, className, emoji }) => {
+  /** 整体图片(团队上传头像的 objectURL):优先于 emoji,铺满外框、同一 9 圆角。 */
+  imageUrl?: string
+}> = ({ items, size = AVATAR_STACK_SIZE, className, emoji, imageUrl }) => {
   const { t } = useI18n()
   const inner = size - AVATAR_STACK_PAD * 2
   const cells = avatarStackLayout(items.length, inner)
@@ -160,7 +162,7 @@ export const AvatarStack: React.FC<{
           ...(soloEmoji ? { display: 'flex', alignItems: 'center', justifyContent: 'center' } : null),
         }}
       >
-        {soloEmoji ? (
+        {imageUrl ? null : soloEmoji ? (
           <span style={{ fontSize: Math.round(inner * 0.62), lineHeight: 1 }}>{soloEmoji}</span>
         ) : (
           cells.map((cell, i) => {
@@ -236,6 +238,7 @@ export const AvatarStack: React.FC<{
           })
         )}
       </div>
+      {imageUrl && <img src={imageUrl} alt="" draggable={false} width={size} height={size} style={{ position: 'absolute', inset: 0, display: 'block', width: size, height: size, borderRadius: AVATAR_STACK_RADIUS, objectFit: 'cover' }} />}
     </div>
   )
 }

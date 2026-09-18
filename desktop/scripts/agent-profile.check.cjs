@@ -16,7 +16,7 @@ const text = 'Full child conversation detail. '.repeat(60) + 'END-OF-COMPLETE-RE
 const toolResult = 'Complete tool output '.repeat(100) + 'END-OF-TOOL-RESULT'
 const childMessages = [{ id: 'child-user', session_id: child.id, role: 'user', content: 'Research this thoroughly', timestamp: 1 }, { id: 'child-answer', session_id: child.id, role: 'model', content: text, reasoning: 'A detailed reasoning record.', agent_slug: 'research', timestamp: 2, tool_calls: [{ id: 'read-1', type: 'function', function: { name: 'read_file', arguments: '{"path":"evidence.md"}' } }], tool_results: [{ tool_call_id: 'read-1', content: toolResult, isError: false }] }]
 const solo = { ...base, id: 'profile-solo', title: 'Research notes', agent_config: { agentSlug: 'research', execMode: 'host', cwd: home } }
-let saved = null, sessionModelSaved = null
+let saved = null, sessionModelSaved = null, avatarWrites = 0, avatarDeletes = 0
 let app
 async function run() {
   const stub = await startStubEngine({ agents, sessions: [main, solo], messages: [{ id: 'main-user', role: 'user', content: 'Plan the research', timestamp: 1 }, { id: 'main-answer', role: 'model', content: 'The team is ready.', timestamp: 2 }], override: async ({ path: p, method, body }) => {
@@ -31,6 +31,8 @@ async function run() {
     if (p.endsWith('/config') && p.startsWith('/agent/sessions/')) return { agent_config: p.includes(child.id) ? child.agent_config : p.includes(solo.id) ? solo.agent_config : config }
     if (p === '/agent/skills') return { skills: [{ id: 'local:research', name: 'Research notebook', description: 'Gather and cite evidence' }, { id: 'local:writing', name: 'Writing', description: 'Write clear reports' }] }
     if (p === '/agent/tools') return { builtins: [], custom: [], mcp: [{ server: 'documents', status: 'connected', transport: 'stdio', tools: [{ name: 'read', description: 'Read documents' }] }] }
+    if (p === '/agent/agents/research/avatar' && method === 'POST') { avatarWrites++; agents.find((a) => a.slug === 'research').avatar = 'avatar.png'; return { ok: true, avatar: 'avatar.png' } }
+    if (p === '/agent/agents/research/avatar' && method === 'DELETE') { avatarDeletes++; delete agents.find((a) => a.slug === 'research').avatar; return { ok: true } }
     if (p.startsWith('/agent/agents/') && method === 'PATCH') { saved = await body(); const slug = p.split('/')[3]; const i = agents.findIndex((a) => a.slug === slug); agents[i] = { ...agents[i], ...saved }; return { agent: agents[i] } }
   } })
   try {
@@ -51,6 +53,7 @@ async function run() {
     await win.waitForSelector('.dv-groupview')
     await win.evaluate(() => localStorage.setItem('forsion_default_space', 'tangu'))
     await win.reload()
+    assert.equal(await win.getByTitle('Tangu', { exact: true }).count() > 0, true, 'Tangu Space must not collide with the Agents label')
     await win.locator('.t2s-srow, .t2o-row').filter({ hasText: 'Atlas team' }).first().click()
     await win.locator('[data-team-desk="status"] [data-slug="research"]').click()
     const panel = win.locator('.child-chat-panel')
@@ -131,16 +134,41 @@ async function run() {
     assert.ok(!(await compact.locator('.agent-profile-save').textContent()).includes('已保存'), 'An Agent save must not imply an unsaved memory draft was saved')
     await win.screenshot({ path: path.join(home, 'memory-editor.png') })
     await compact.getByRole('tab', { name: '配置', exact: true }).click()
+    // 基本信息并进头部:头像点开即换(立即保存),名称 / 简介原地编辑、与工作指令同走一个保存栏;配置页不再单列「基本信息」。
+    assert.equal(await compact.getByText('基本信息', { exact: true }).count(), 0)
+    const heroPortrait = compact.locator('.agent-character-hero .agent-portrait')
+    await compact.getByLabel('更换头像', { exact: true }).setInputFiles({ name: 'avatar.png', mimeType: 'image/png', buffer: Buffer.from('89504e470d0a1a0a', 'hex') })
+    await win.waitForTimeout(200)
+    assert.equal(avatarWrites, 1)
+    assert.equal(await heroPortrait.locator('img').count(), 1)
+    await compact.locator('.agent-portrait-slot').hover()
+    await win.waitForTimeout(220)
+    await compact.locator('.agent-character-hero').screenshot({ path: path.join(home, 'hero-hover.png') })
+    await compact.getByRole('button', { name: '移除头像', exact: true }).click()
+    await win.waitForTimeout(200)
+    assert.equal(avatarDeletes, 1)
+    assert.equal(await heroPortrait.locator('img').count(), 0)
+    await compact.getByLabel('名称', { exact: true }).fill('Research Lead')
+    await compact.getByLabel('简介', { exact: true }).fill('Finds and checks primary evidence.')
+    await win.waitForTimeout(220)
+    await compact.locator('.agent-character-hero').screenshot({ path: path.join(home, 'hero-edit.png') })
     await compact.getByLabel('工作指令', { exact: true }).fill('# Instructions\n\nKeep source citations.')
     await compact.locator('.profile-text-editor').first().getByRole('button', { name: '阅读预览', exact: true }).click()
     await compact.locator('.profile-text-preview h1').getByText('Instructions', { exact: true }).waitFor()
     await compact.getByRole('button', { name: '保存配置', exact: true }).click()
     await win.waitForTimeout(200)
     assert.equal(saved.systemPrompt, '# Instructions\n\nKeep source citations.')
+    assert.equal(saved.name, 'Research Lead')
+    assert.equal(saved.description, 'Finds and checks primary evidence.')
+    assert.equal(await compact.getByLabel('名称', { exact: true }).inputValue(), 'Research Lead')
     await win.waitForTimeout(220)
     await win.screenshot({ path: path.join(home, 'instructions-preview.png') })
     await compact.getByRole('tab', { name: '配置', exact: true }).press('Home')
-    assert.equal(await compact.getByRole('tab', { name: '概览', exact: true }).getAttribute('aria-selected'), 'true')
+    assert.equal(await compact.getByRole('tab', { name: '配置', exact: true }).getAttribute('aria-selected'), 'true')
+    assert.equal(await compact.getByText('能力装备', { exact: true }).count(), 0)
+    // 「能力装备」整块(跳技能 / MCP / 记忆的三张卡)与上方标签重复,已并掉:配置页正文里不该再有这类跳转卡。
+    // 只量当前标签的正文(.profile-section-enter):记忆面板保持挂载(hidden)也在 .agent-profile-content 里,会误数。
+    assert.equal(await compact.locator('.profile-section-enter button').filter({ hasText: /^(技能|MCP|记忆)/ }).count(), 0, 'Config tab must not repeat the Skills / MCP / Memory tabs as cards')
     console.log('PASS searchable memory, retained drafts, Markdown preview and keyboard tab navigation')
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1024, 720))
     await compact.getByRole('tab', { name: '技能', exact: true }).click()
@@ -154,7 +182,7 @@ async function run() {
     await win.screenshot({ path: path.join(home, 'compact-skills-unsaved.png') })
     await compact.getByRole('button', { name: '放弃修改', exact: true }).click()
     await win.emulateMedia({ reducedMotion: 'reduce' })
-    await compact.getByRole('tab', { name: '概览', exact: true }).click()
+    await compact.getByRole('tab', { name: '配置', exact: true }).click()
     assert.equal(await compact.locator('.profile-section-enter').evaluate((el) => getComputedStyle(el).animationName), 'none')
     assert.equal(await compact.locator('.agent-section-nav').evaluate((el) => getComputedStyle(el, '::before').transitionProperty), 'none')
     await win.emulateMedia({ reducedMotion: 'no-preference' })
@@ -179,7 +207,7 @@ async function run() {
     await profile.getByRole('button', { name: '保存配置', exact: true }).click()
     await win.waitForTimeout(300)
     assert.deepEqual(saved.enabledMcpServers, [])
-    await profile.locator('.agent-section-nav button').filter({ hasText: '概览' }).click()
+    await profile.locator('.agent-section-nav button').filter({ hasText: '配置' }).click()
     await win.waitForTimeout(220)
     await win.screenshot({ path: path.join(home, 'agents-light.png') })
     await win.evaluate(() => { document.documentElement.setAttribute('data-mode', 'dark'); document.documentElement.classList.add('dark') })

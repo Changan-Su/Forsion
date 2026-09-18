@@ -171,7 +171,7 @@ const zh: Dict = {
   'workbench.sessions': '工作会话',
   // ── Space(空间):ribbon 顶部成组、单选切换 ──
   'space.home': '主页',
-  'space.tangu': 'Agent',
+  'space.tangu': 'Tangu',
   'space.amadeus': 'Note',
   // ── Calendar Space(日历)──
   'space.calendar': '日历',
@@ -1902,7 +1902,7 @@ const en: Dict = {
   'workbench.noSession': 'Select or start a session to view',
   'workbench.sessions': 'Sessions',
   'space.home': 'Home',
-  'space.tangu': 'Agent',
+  'space.tangu': 'Tangu',
   'space.amadeus': 'Note',
   'space.calendar': 'Calendar',
   'view.todo': 'To-Do List',

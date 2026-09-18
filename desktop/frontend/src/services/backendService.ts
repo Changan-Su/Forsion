@@ -108,6 +108,17 @@ export const patchTeam = (cfg: TanguDesktopConfig, slug: string, patch: Partial<
   request<{ team: TeamDef }>(cfg, `/agent/teams/${encodeURIComponent(slug)}`, { method: 'PATCH', body: JSON.stringify(patch) }).then((r) => r.team)
 export const deleteTeam = (cfg: TanguDesktopConfig, slug: string) =>
   request<{ ok: boolean }>(cfg, `/agent/teams/${encodeURIComponent(slug)}`, { method: 'DELETE' })
+export const uploadTeamAvatar = (cfg: TanguDesktopConfig, slug: string, data: string, mimeType: string) =>
+  request<{ ok: boolean; avatar: string }>(cfg, `/agent/teams/${encodeURIComponent(slug)}/avatar`, { method: 'POST', body: JSON.stringify({ data, mimeType }) })
+export const deleteTeamAvatar = (cfg: TanguDesktopConfig, slug: string) =>
+  request<{ ok: boolean }>(cfg, `/agent/teams/${encodeURIComponent(slug)}/avatar`, { method: 'DELETE' })
+export async function fetchTeamAvatar(cfg: TanguDesktopConfig, slug: string): Promise<string | null> {
+  try {
+    const response = await authFetch(`${cfg.backendUrl}/agent/teams/${encodeURIComponent(slug)}/avatar`, { headers: headers(cfg.token) })
+    if (!response.ok) return null
+    return URL.createObjectURL(await response.blob())
+  } catch { return null }
+}
 /** 该团队的活动会话,没有就建(引擎侧单点)。 */
 export const teamSessionOpen = (cfg: TanguDesktopConfig, slug: string) =>
   request<{ session: SessionRecord; created: boolean }>(cfg, `/agent/teams/${encodeURIComponent(slug)}/session/open`, { method: 'POST', body: '{}' })

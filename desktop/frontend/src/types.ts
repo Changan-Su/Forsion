@@ -384,7 +384,7 @@ export interface TeamDef {
   description: string
   /** 可选起头人(元数据;调度不走它)。09-16 起没有运行模式与轮数上限。 */
   lead: string
-  /** 可选 emoji;空 = 成员头像组合。 */
+  /** 可选 emoji 或 TEAM Library 里的 avatar.* 文件名;空 = 成员头像组合。 */
   avatar: string
   /** 阵容显示顺序;成员独立并行工作,不限制发言顺序。 */
   members: Array<{ slug: string; role: string }>
@@ -394,6 +394,8 @@ export interface TeamDef {
   /** 团队会话的 cwd(团队自己的 Library)。 */
   libraryDir: string
 }
+/** avatar 是上传的图片文件名(引擎 teamRegistry 的 TEAM_AVATAR_FILE 同一口径)而非 emoji。 */
+export const isTeamImageAvatar = (avatar?: string): boolean => /^avatar\.(png|jpe?g|gif|webp)$/i.test(avatar || '')
 
 export interface NormalAgentDef {
   slug: string

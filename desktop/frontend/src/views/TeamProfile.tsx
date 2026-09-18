@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useState, type ReactNode, type CSSProperties } from 'react'
-import { ArrowDown, ArrowLeft, ArrowUp, Bot, ChevronRight, Loader2, Plus, Search, Settings2, Trash2, Users, X } from 'lucide-react'
+import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode, type CSSProperties } from 'react'
+import { ArrowDown, ArrowLeft, ArrowUp, Bot, ChevronRight, ImageUp, Loader2, Plus, Search, Settings2, Smile, Trash2, Users, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { getTeam, patchTeam, putSessionConfig, updateSession } from '../services/backendService'
+import { deleteTeamAvatar, getTeam, patchTeam, putSessionConfig, updateSession, uploadTeamAvatar } from '../services/backendService'
 import type { AgentConfig, NormalAgentDef, SessionRecord, TeamDef } from '../types'
-import { THINKING_LEVELS } from '../types'
-import { ProfileGroup, ProfileModelField, ProfileTextEditor } from './profileControls'
+import { isTeamImageAvatar, THINKING_LEVELS } from '../types'
+import { ProfileModelField, ProfileTextEditor } from './profileControls'
+import { AvatarStack } from '../components/AvatarStack'
 import { moveTeamMember, teamDraft, teamSessionConfig, type TeamDraft } from './teamProfileState'
 import './teamProfileMessages'
 import './teamProfile.css'
@@ -21,6 +22,7 @@ type Props = {
 export function TeamProfile({ session, config, renderMember }: Props) {
   const { t } = useI18n()
   const s = useApp(useShallow((a) => ({ cfg: a.cfg, agents: a.agentDefs, avatars: a.agentAvatars,
+    teamAvatarUrl: config.teamSlug ? a.teamAvatars[config.teamSlug] : undefined,
     work: session ? a.teamWorkBySession[session.id] : undefined,
     running: session ? !!a.runningBySession[session.id] : false, connected: a.connState === 'ok',
   })))
@@ -39,6 +41,8 @@ export function TeamProfile({ session, config, renderMember }: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  const [avatarBusy, setAvatarBusy] = useState(false)
+  const [emojiEdit, setEmojiEdit] = useState(false)
   useEffect(() => { if (!dirty) setDraft(source) }, [source, dirty])
   useEffect(() => {
     if (!config.teamSlug) return
@@ -59,7 +63,46 @@ export function TeamProfile({ session, config, renderMember }: Props) {
     patch({ members: [...draft.members, { slug: agent.slug, role: '' }], tempAgents: [...draft.tempAgents, agent] })
     setPicker(false); open(agent.slug)
   }
+  // 头像图只有 store.teamAvatars 一份 objectURL(侧栏行与本页共用):改完整表重拉,两处同时换新。
+  const syncSavedTeam = async (updated: TeamDef) => {
+    setTeam(updated)
+    setDraft((current) => ({ ...current, avatar: updated.avatar }))
+    await useApp.getState().refreshTeams().catch(() => { /* 头像已落盘;列表刷新失败留给下次 */ })
+  }
+  const pickTeamAvatar = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || !config.teamSlug) return
+    if (file.size > 1_048_576) { setError(t('agentProfile.avatarTooLarge')); return }
+    setAvatarBusy(true); setError(''); setNotice('')
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result))
+        reader.onerror = () => reject(new Error(t('agentProfile.avatarReadFailed')))
+        reader.readAsDataURL(file)
+      })
+      const uploaded = await uploadTeamAvatar(s.cfg, config.teamSlug, dataUrl, file.type)
+      await syncSavedTeam({ ...(team as TeamDef), avatar: uploaded.avatar })
+      setNotice(t('teamProfile.avatarSaved'))
+    } catch (e: any) { setError(String(e.message || e)) } finally { setAvatarBusy(false) }
+  }
+  const removeTeamAvatar = async () => {
+    if (!config.teamSlug || avatarBusy || !isTeamImageAvatar(draft.avatar)) return
+    setAvatarBusy(true); setError(''); setNotice('')
+    try {
+      await deleteTeamAvatar(s.cfg, config.teamSlug)
+      await syncSavedTeam({ ...(team as TeamDef), avatar: '' })
+      setNotice(t('teamProfile.avatarRemoved'))
+    } catch (e: any) { setError(String(e.message || e)) } finally { setAvatarBusy(false) }
+  }
   const candidates = s.agents.filter((a) => a.createdBy !== 'system' && !draft.members.some((m) => m.slug === a.slug) && `${a.name} ${a.description} ${a.slug}`.toLowerCase().includes(query.toLowerCase()))
+  const teamAvatar = s.teamAvatarUrl && isTeamImageAvatar(draft.avatar) ? <img src={s.teamAvatarUrl} alt="" /> : (!isTeamImageAvatar(draft.avatar) && draft.avatar) || (draft.members.length
+    ? <AvatarStack size={42} items={draft.members.map((member) => {
+        const definition = agentFor(member.slug)
+        return { slug: member.slug, name: definition?.name || member.slug, avatarUrl: s.avatars[member.slug] }
+      })} />
+    : <Users size={26} strokeWidth={1.5} />)
   const missing = draft.members.some((m) => !agentFor(m.slug) || (config.teamSlug && !s.agents.some((a) => a.slug === m.slug)))
   const invalidTemp = draft.tempAgents.some((a) => draft.members.some((m) => m.slug === a.slug) && (!a.name.trim() || !a.systemPrompt.trim()))
   const valid = draft.members.length >= 2 && !missing && !invalidTemp && !!draft.name.trim()
@@ -98,8 +141,24 @@ export function TeamProfile({ session, config, renderMember }: Props) {
   return <section className="team-profile" data-team-profile={config.teamSlug || session?.id || 'draft'}>
     <div className="team-profile-main" hidden={!!selected}>
       <header className="team-profile-hero">
-        <span className="team-profile-emblem">{draft.avatar || <Users size={26} strokeWidth={1.5} />}</span>
-        <div><h3>{t('agentProfile.team')}</h3><h2>{draft.name || t('teamProfile.untitled')}</h2><span className={`agent-state${s.running ? ' working' : ''}`}><i />{t(!s.connected ? 'agentProfile.offline' : s.running ? 'agentProfile.working' : 'agentProfile.standby')}<span>· {draft.members.length} {t('teamProfile.members')}</span></span></div>
+        {/* 头部即「基本信息」(与 Agent 头部同一套):头像点开即换图(立即保存),右上角次要动作 = 有图时移除、无图时设 Emoji;
+            名称 / 简介原地编辑,Emoji 与它们一起走下方保存栏。项目内的临时配队只有名称(存为会话标题)。 */}
+        {config.teamSlug ? <div className="agent-portrait-slot">
+          {emojiEdit
+            ? <span className="team-profile-emblem"><input className="team-emblem-emoji" autoFocus aria-label={t('teamProfile.avatarEmoji')} value={draft.avatar} maxLength={16} placeholder="🧭" onChange={(e) => patch({ avatar: e.target.value })} onBlur={() => setEmojiEdit(false)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur() }} /></span>
+            : <label className="team-profile-emblem agent-portrait-edit" title={t('teamProfile.avatarImageHint')} aria-busy={avatarBusy || undefined}>
+              {teamAvatar}
+              <span className="agent-portrait-badge" aria-hidden="true">{avatarBusy ? <Loader2 size={10} className="spin" /> : <ImageUp size={10} />}</span>
+              <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" aria-label={t('teamProfile.avatarChange')} disabled={avatarBusy} onChange={(event) => void pickTeamAvatar(event)} />
+            </label>}
+          {isTeamImageAvatar(draft.avatar)
+            ? <button type="button" className="agent-portrait-remove" title={t('teamProfile.avatarRemove')} aria-label={t('teamProfile.avatarRemove')} disabled={avatarBusy} onClick={() => void removeTeamAvatar()}><X size={10} /></button>
+            : !emojiEdit && <button type="button" className="agent-portrait-remove" title={t('teamProfile.avatarHint')} aria-label={t('teamProfile.avatarEmojiEdit')} disabled={busy} onClick={() => setEmojiEdit(true)}><Smile size={10} /></button>}
+        </div> : <span className="team-profile-emblem">{teamAvatar}</span>}
+        <div className="team-profile-identity"><h3>{t('agentProfile.team')}</h3>
+          <input className="agent-character-name team-profile-name" aria-label={t('teamProfile.name')} placeholder={t('teamProfile.untitled')} title={draft.name} value={draft.name} maxLength={100} disabled={busy} onChange={(e) => patch({ name: e.target.value })} />
+          {config.teamSlug && <textarea className="agent-character-desc team-profile-desc" aria-label={t('agentProfile.description')} placeholder={t('agentProfile.descriptionPlaceholder')} rows={1} value={draft.description} maxLength={500} disabled={busy} onChange={(e) => patch({ description: e.target.value })} />}
+          <span className={`agent-state${s.running ? ' working' : ''}`}><i />{t(!s.connected ? 'agentProfile.offline' : s.running ? 'agentProfile.working' : 'agentProfile.standby')}<span>· {draft.members.length} {t('teamProfile.members')}</span></span></div>
       </header>
       {(session?.project_name || config.cwd) && <p className="team-profile-location" title={config.cwd}>{session?.project_name || (config.teamSlug ? t('teamProfile.library') : config.cwd?.replace(/\\/g, '/').split('/').filter(Boolean).pop() || config.cwd)}</p>}
       <nav className="agent-section-nav" style={{ '--profile-tab-count': 2, '--profile-tab-index': tab === 'lineup' ? 0 : 1 } as CSSProperties} aria-label={t('teamProfile.navigation')}>
@@ -128,10 +187,7 @@ export function TeamProfile({ session, config, renderMember }: Props) {
           })}</div>
 
           <p className="agent-profile-muted">{t('agentProfile.teamContext')}</p>
-        </> : <div className="agent-config-fields team-config-fields"><ProfileGroup title={t('agentProfile.identity')}>
-          <label className="agent-field">{t('teamProfile.name')}<input value={draft.name} maxLength={100} onChange={(e) => patch({ name: e.target.value })} /></label>
-          {config.teamSlug && <><label className="agent-field">{t('agentProfile.description')}<textarea rows={2} value={draft.description} maxLength={500} onChange={(e) => patch({ description: e.target.value })} /></label><label className="agent-field">{t('teamProfile.avatar')}<input value={draft.avatar} maxLength={16} placeholder="🧭" onChange={(e) => patch({ avatar: e.target.value })} /></label></>}
-          </ProfileGroup><ProfileTextEditor label={t('teamProfile.doc')} rows={12} value={draft.doc} maxLength={16384} placeholder={t('teamProfile.docPlaceholder')} onChange={(doc) => patch({ doc })} hint={t('teamProfile.docHint')} />
+        </> : <div className="agent-config-fields team-config-fields"><ProfileTextEditor label={t('teamProfile.doc')} rows={12} value={draft.doc} maxLength={16384} placeholder={t('teamProfile.docPlaceholder')} onChange={(doc) => patch({ doc })} hint={t('teamProfile.docHint')} />
         </div>}
       </fieldset>
       <footer className={`agent-profile-save${dirty ? ' is-dirty' : ''}`}>

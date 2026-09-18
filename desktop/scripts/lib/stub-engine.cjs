@@ -59,6 +59,14 @@ async function startStubEngine(data = {}) {
       res.writeHead(code, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(body));
     };
+    const scripted = (result) => {
+      if (result && result.__buffer) {
+        res.writeHead(result.__code || 200, { 'Content-Type': result.contentType || 'application/octet-stream' });
+        res.end(result.__buffer);
+        return;
+      }
+      return json(result.__code ? result.body : result, result.__code || 200);
+    };
     const body = async () => {
       let raw = '';
       for await (const c of req) raw += c;
@@ -68,7 +76,7 @@ async function startStubEngine(data = {}) {
     // Per-scenario overrides for persisted child sessions and configuration round trips.
     if (typeof data.override === 'function') {
       const result = await data.override({ path: p, method: req.method, url: u, body });
-      if (result !== undefined) return json(result.__code ? result.body : result, result.__code || 200);
+      if (result !== undefined) return scripted(result);
     }
 
     // ── run 生命周期 ──
@@ -190,7 +198,7 @@ async function startStubEngine(data = {}) {
     // 给 Muse Space / 特殊视图这类「桩里没写过的端点」用,不必每加一个面就改一次桩。
     if (typeof data.handle === 'function') {
       const r = await data.handle({ path: p, method: req.method, url: u, body });
-      if (r !== undefined) return json(r.__code ? r.body : r, r.__code || 200);
+      if (r !== undefined) return scripted(r);
     }
 
 

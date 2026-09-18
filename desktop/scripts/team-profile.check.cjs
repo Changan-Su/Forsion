@@ -9,17 +9,23 @@ const ROOT = path.join(__dirname, '..')
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-team-profile-'))
 const agents = ['xyra', 'research', 'writer'].map((slug) => ({ slug, name: { xyra: 'Xyra', research: 'Research', writer: 'Writer' }[slug], description: { xyra: 'Project coordination', research: 'Evidence and analysis', writer: 'Clear, considered writing' }[slug], tools: [], model: '', thinkingLevel: '', maxIterations: null, approvalMode: '', systemPrompt: 'Be precise.', soul: '', createdBy: 'user', libraryDir: path.join(home, slug, 'Library') }))
 let team = { slug: 'atlas', name: 'Atlas Crew', description: 'Explore, verify and deliver.', avatar: '🧭', lead: 'xyra', members: [{ slug: 'xyra', role: '协调与规划' }, { slug: 'research', role: '证据与分析' }], doc: 'Cite primary evidence.', createdAt: '', libraryDir: path.join(home, 'team-library') }
+const teamAvatarPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
 const base = { archived: false, model_id: 'm1', created_at: '2026-09-16 10:00:00', updated_at: '2026-09-16 10:00:00' }
 const savedSession = { ...base, id: 'saved-party', title: 'Atlas work', projectless: true, project_path: null, project_name: null, agent_config: { teamSlug: team.slug, groupChat: true, groupAgents: ['xyra', 'research'], execMode: 'host', cwd: team.libraryDir, approvalMode: 'readonly', enabledMcpServers: [] } }
 const projectSession = { ...base, id: 'project-party', title: 'Project party', projectless: false, project_path: home, project_name: 'Atlas project', agent_config: { groupChat: true, groupAgents: ['xyra', 'research'], execMode: 'host', cwd: home, extraRoots: ['/tmp/evidence'] } }
 const sessions = [savedSession, projectSession]
-let app, failLoad = true, failPut = false, teamWrites = 0, agentWrites = 0
+let app, failLoad = true, failPut = false, teamWrites = 0, agentWrites = 0, teamAvatarWrites = 0
 async function run() {
   if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) throw new Error('Run npm run build first')
   const stub = await startStubEngine({ agents, sessions, override: async ({ path: p, method, body }) => {
     if (p === '/agent/runs' && method === 'GET') return { runs: [] }
     if (p === '/agent/teams') return { teams: [team] }
     if (p === '/agent/teams/atlas/session/open') return { session: savedSession, created: false }
+    if (p === '/agent/teams/atlas/avatar') {
+      if (method === 'GET') return team.avatar === 'avatar.png' ? { __buffer: teamAvatarPng, contentType: 'image/png' } : { __code: 404, body: { detail: 'no avatar' } }
+      if (method === 'POST') { teamAvatarWrites++; team.avatar = 'avatar.png'; return { ok: true, avatar: team.avatar } }
+      if (method === 'DELETE') { team.avatar = ''; return { ok: true } }
+    }
     if (p === '/agent/teams/atlas') {
       if (method === 'GET') return failLoad ? { __code: 503, body: { detail: 'Team load failed (fixture)' } } : { team }
       if (method === 'PATCH') { teamWrites++; team = { ...team, ...await body() }; return { team } }
@@ -71,8 +77,18 @@ async function run() {
     await party.getByRole('button', { name: '添加成员', exact: true }).click()
     await party.locator('.team-candidates button').filter({ hasText: 'Writer' }).click()
     await party.locator('[data-team-member="writer"]').getByRole('button', { name: '向前调整位置', exact: true }).click()
+    // 基本信息在头部原地编辑:名称 / 简介直接改,Emoji 从头像右上角「设置 Emoji」进入;「TEAM 配置」页只剩 TEAM.md。
+    const hero = party.locator('.team-profile-hero')
+    await hero.getByLabel('团队名称', { exact: true }).fill('Atlas Expedition')
+    await hero.getByLabel('简介', { exact: true }).fill('Explore, verify and deliver with evidence.')
+    await hero.getByRole('button', { name: '设置 Emoji', exact: true }).click()
+    await hero.getByLabel('Emoji 标识', { exact: true }).fill('🚀')
+    await hero.getByLabel('Emoji 标识', { exact: true }).press('Enter')
+    assert.equal((await hero.locator('.team-profile-emblem').textContent()).trim(), '🚀')
+    await win.waitForTimeout(220)
+    await hero.screenshot({ path: path.join(home, 'team-hero-edit.png') })
     await party.getByRole('button', { name: 'TEAM 配置', exact: true }).click()
-    await party.getByLabel('团队名称', { exact: true }).fill('Atlas Expedition')
+    assert.equal(await party.getByText('基本信息', { exact: true }).count(), 0)
     await party.getByLabel('团队指令 · TEAM', { exact: true }).fill('Verify primary sources and deliver an evidence-based report.')
     await party.getByRole('button', { name: '配队', exact: true }).click()
     await party.getByRole('button', { name: '查看成员 Research', exact: true }).click()
@@ -97,6 +113,8 @@ async function run() {
     await party.getByRole('button', { name: '保存团队', exact: true }).click()
     await party.getByRole('alert').filter({ hasText: 'TEAM 已保存' }).waitFor()
     assert.equal(team.name, 'Atlas Expedition')
+    assert.equal(team.description, 'Explore, verify and deliver with evidence.')
+    assert.equal(team.avatar, '🚀')
     assert.deepEqual(savedSession.agent_config.groupAgents, ['xyra', 'research'])
     failPut = false
     await party.getByRole('button', { name: '保存团队', exact: true }).click()
@@ -120,11 +138,34 @@ async function run() {
     await win.waitForTimeout(400)
     await win.waitForTimeout(220)
     await win.screenshot({ path: path.join(home, 'party-dark.png') })
+    assert.equal((await party.locator('.team-profile-hero .team-profile-emblem').textContent()).trim(), '🚀')
     await party.getByRole('button', { name: 'TEAM 配置', exact: true }).click()
     assert.equal(await party.getByLabel('团队指令 · TEAM', { exact: true }).inputValue(), team.doc)
+    await party.getByLabel('上传图片', { exact: true }).setInputFiles({ name: 'team.png', mimeType: 'image/png', buffer: teamAvatarPng })
+    await win.waitForTimeout(250)
+    assert.equal(teamAvatarWrites, 1)
+    assert.equal(team.avatar, 'avatar.png')
+    await party.locator('.team-profile-hero .team-profile-emblem img').waitFor()
+    // 侧栏团队行与详情页共用 store.teamAvatars:上传后当场换图,且绝不能把文件名 avatar.png 当 emoji 画出来。
+    const teamRow = win.locator('.t2o-row').filter({ hasText: 'Atlas Expedition' }).first()
+    const rowShowsImage = async () => {
+      await teamRow.locator('.t2o-avstack > img').waitFor()
+      assert.ok(!(await teamRow.textContent()).includes('avatar.png'), 'Team row must not render the avatar filename as an emoji')
+    }
+    await rowShowsImage()
     await win.waitForTimeout(220)
     await win.screenshot({ path: path.join(home, 'team-settings.png') })
-    console.log('PASS saved TEAM survives UI reload with its charter, roles and roster')
+    await win.reload()
+    await teamRow.click()
+    await party.locator('.team-profile-emblem img').waitFor()
+    await rowShowsImage()
+    await teamRow.screenshot({ path: path.join(home, 'team-row-image.png') })
+    await party.getByRole('button', { name: '移除图片', exact: true }).click()
+    await party.getByText('团队头像已移除', { exact: true }).waitFor()
+    assert.equal(team.avatar, '')
+    assert.equal(await teamRow.locator('.t2o-avstack > img').count(), 0)
+    assert.equal(await party.locator('.team-profile-emblem img').count(), 0)
+    console.log('PASS saved TEAM survives UI reload with its charter, roles, roster and custom image avatar (profile + sidebar row, upload + remove)')
 
     await win.locator('.t2s-srow').filter({ hasText: 'Project party' }).first().click()
     await party.locator('[data-team-member="research"]').waitFor()

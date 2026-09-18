@@ -1,20 +1,27 @@
 /**
  * 独立团队编辑器(Agent 轨道的持久团队实体;方案 §6.1 / P5c):名称(可空,缺省按成员名生成)+ 成员(勾选顺序 = 发言顺序,每人一行角色)
  * + TEAM.md 正文。09-16 起没有运行模式与轮数字段。保存走 /agent/teams(POST 新建 / PATCH 更新),成功后刷新 store.teams。
- * 与 GroupChatSetup 同一套浮层视觉;v1 不做拖拽排序、不做头像上传(方案 §10)。
+ * 与 GroupChatSetup 同一套浮层视觉；支持在创建/编辑时上传团队图片头像。
  */
-import React, { useMemo, useState } from 'react'
-import { Users, X } from 'lucide-react'
+import React, { useMemo, useState, type ChangeEvent } from 'react'
+import { ImageUp, Trash2, Users, X } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import * as api from '../services/backendService'
-import type { NormalAgentDef, TeamDef } from '../types'
+import { isTeamImageAvatar, type NormalAgentDef, type TeamDef } from '../types'
 
 registerMessages({
   'team.editor.titleNew': { zh: '新建团队', en: 'New team' },
   'team.editor.titleEdit': { zh: '编辑团队', en: 'Edit team' },
   'team.editor.name': { zh: '团队名称(可空)', en: 'Team name (optional)' },
   'team.editor.namePlaceholder': { zh: '留空 = 按成员名自动命名', en: 'Leave empty to name it after the members' },
+  'team.editor.avatar': { zh: '团队头像', en: 'Team avatar' },
+  'team.editor.avatarImage': { zh: '上传图片', en: 'Upload image' },
+  'team.editor.avatarRemove': { zh: '移除图片', en: 'Remove image' },
+  'team.editor.avatarEmoji': { zh: 'Emoji 标识', en: 'Emoji emblem' },
+  'team.editor.avatarHint': { zh: '支持 PNG、JPEG、GIF、WebP（不超过 1 MB）；也可使用 Emoji，留空显示成员组合头像。', en: 'PNG, JPEG, GIF or WebP up to 1 MB. You can also use an emoji, or leave it empty for the member avatar stack.' },
+  'team.editor.avatarTooLarge': { zh: '头像不能超过 1 MB', en: 'The avatar must be no larger than 1 MB' },
+  'team.editor.avatarReadFailed': { zh: '读取团队头像失败', en: 'Could not read the team avatar' },
   'team.editor.members': { zh: '成员(勾选顺序 = 发言顺序)', en: 'Members (pick order = speaking order)' },
   'team.editor.rolePlaceholder': { zh: '角色 / 分工(可选)', en: 'Role (optional)' },
   'team.editor.doc': { zh: 'TEAM.md(团队约定,模型读取,建议英文)', en: 'TEAM.md (team charter read by the models; English recommended)' },
@@ -41,6 +48,9 @@ export const TeamEditor: React.FC<{
   const candidates = useMemo(() => agents.filter((a) => a.createdBy !== 'system'), [agents])
   const candidateSlugs = useMemo(() => new Set(candidates.map((a) => a.slug)), [candidates])
   const [name, setName] = useState(team?.name || '')
+  const [avatar, setAvatar] = useState(team?.avatar || '')
+  const [avatarFile, setAvatarFile] = useState<File | null>(null)
+  const [removeImage, setRemoveImage] = useState(false)
   const [members, setMembers] = useState<Array<{ slug: string; role: string }>>(() =>
     team ? team.members.map((m) => ({ ...m })) : (initialMembers || []).filter((s) => candidates.some((a) => a.slug === s)).map((slug) => ({ slug, role: '' })))
   const [doc, setDoc] = useState(team?.doc || '')
@@ -56,14 +66,33 @@ export const TeamEditor: React.FC<{
   const toggle = (slug: string) =>
     setMembers((prev) => (prev.some((m) => m.slug === slug) ? prev.filter((m) => m.slug !== slug) : [...prev, { slug, role: '' }]))
   const setRole = (slug: string, role: string) => setMembers((prev) => prev.map((m) => (m.slug === slug ? { ...m, role } : m)))
+  const imageAvatar = isTeamImageAvatar(avatar)
+  const pickAvatar = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (file.size > 1_048_576) { useApp.getState().toast(t('team.editor.avatarTooLarge'), true); return }
+    setAvatarFile(file); setAvatar(''); setRemoveImage(false)
+  }
 
   const save = async () => {
     if (!canSave) return
     setBusy(true)
     const st = useApp.getState()
     try {
-      const input = { name: name.trim(), members, doc }
-      const saved = team ? await api.patchTeam(st.cfg, team.slug, input) : await api.createTeam(st.cfg, input)
+      const input = { name: name.trim(), avatar: removeImage ? '' : avatar.trim(), members, doc }
+      let saved = team ? await api.patchTeam(st.cfg, team.slug, input) : await api.createTeam(st.cfg, input)
+      if (removeImage && team) { await api.deleteTeamAvatar(st.cfg, saved.slug); saved = { ...saved, avatar: '' } }
+      if (avatarFile) {
+        const data = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve(String(reader.result))
+          reader.onerror = () => reject(new Error(t('team.editor.avatarReadFailed')))
+          reader.readAsDataURL(avatarFile)
+        })
+        const uploaded = await api.uploadTeamAvatar(st.cfg, saved.slug, data, avatarFile.type)
+        saved = { ...saved, avatar: uploaded.avatar }
+      }
       await st.refreshTeams()
       st.toast(t('team.editor.saved'))
       onSaved(saved)
@@ -89,6 +118,17 @@ export const TeamEditor: React.FC<{
         <div className="field">
           <label>{t('team.editor.name')}</label>
           <input type="text" value={name} placeholder={namePlaceholder} onChange={(e) => setName(e.target.value)} autoFocus />
+        </div>
+
+        <div className="field">
+          <label>{t('team.editor.avatar')}</label>
+          <div className="agent-avatar-actions">
+            <label className="btn sm"><ImageUp size={13} />{t('team.editor.avatarImage')}<input type="file" accept="image/png,image/jpeg,image/gif,image/webp" disabled={busy} onChange={pickAvatar} /></label>
+            {(imageAvatar || avatarFile) && <button type="button" className="btn ghost sm" disabled={busy} onClick={() => { setAvatarFile(null); setAvatar(''); setRemoveImage(!!team && imageAvatar) }}><Trash2 size={13} />{t('team.editor.avatarRemove')}</button>}
+            {avatarFile && <small>{avatarFile.name}</small>}
+          </div>
+          <input type="text" aria-label={t('team.editor.avatarEmoji')} value={imageAvatar ? '' : avatar} disabled={imageAvatar || !!avatarFile} maxLength={16} placeholder="🧭" onChange={(e) => { setAvatar(e.target.value); setRemoveImage(false) }} />
+          <small>{t('team.editor.avatarHint')}</small>
         </div>
 
         <div className="field">

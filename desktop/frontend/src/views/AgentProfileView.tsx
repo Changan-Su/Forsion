@@ -1,12 +1,12 @@
 import { agentDescription } from '../components/builtinAgentDescriptions'
-import { useEffect, useId, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { BookOpen, Bot, Check, ChevronRight, ExternalLink, Loader2, Plug, Search, Settings2, Sparkles } from 'lucide-react'
+import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from 'react'
+import { BookOpen, Bot, Check, ChevronRight, ExternalLink, ImageUp, Loader2, Plug, Search, Settings2, Sparkles, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { activeMainPanel, setActiveSpace, useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine/types'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { listSkills, listTools, saveAgentDef } from '../services/backendService'
+import { deleteAgentAvatar, fetchAgentAvatar, listSkills, listTools, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
 import { AgentMemoryPanel } from '../components/AgentMemoryPanel'
 import { AgentMemoryModal } from '../components/AgentMemoryModal'
 import type { AgentConfig, NormalAgentDef, SkillInfo, ToolsResponse } from '../types'
@@ -16,9 +16,9 @@ import { TeamProfile } from './TeamProfile'
 import './agentProfileMessages'
 import './agentProfile.css'
 
-type Section = 'overview' | 'skills' | 'mcp' | 'memory' | 'config'
+type Section = 'config' | 'skills' | 'mcp' | 'memory'
 const SECTIONS: Array<{ id: Section; icon: typeof Bot }> = [
-  { id: 'overview', icon: Bot }, { id: 'skills', icon: Sparkles }, { id: 'mcp', icon: Plug }, { id: 'memory', icon: BookOpen }, { id: 'config', icon: Settings2 },
+  { id: 'config', icon: Settings2 }, { id: 'skills', icon: Sparkles }, { id: 'mcp', icon: Plug }, { id: 'memory', icon: BookOpen },
 ]
 const EMPTY_CONFIG: AgentConfig = {}
 
@@ -84,11 +84,12 @@ function AgentProfile({ agent, compact = false, sessionId }: { agent: NormalAgen
     running: sessionId ? !!a.runningBySession[sessionId] : Object.entries(a.runningBySession).some(([id, run]) => !!run && a.configBySession[id]?.agentSlug === agent.slug),
     connected: a.connState === 'ok', usage: sessionId ? a.usageBySession[sessionId] : undefined,
   })))
-  const [section, setSection] = useState<Section>('overview')
+  const [section, setSection] = useState<Section>('config')
   const [visitedMemory, setVisitedMemory] = useState(false)
   const [draft, setDraft] = useState(agent)
   const [dirty, setDirty] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [avatarBusy, setAvatarBusy] = useState(false)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [skills, setSkills] = useState<SkillInfo[]>([])
@@ -122,6 +123,47 @@ function AgentProfile({ agent, compact = false, sessionId }: { agent: NormalAgen
     scrollRef.current?.scrollTo({ top: 0 })
   }
   const patch = (p: Partial<NormalAgentDef>) => { setDraft((d) => ({ ...d, ...p })); setDirty(true); setNotice(''); setError('') }
+  const replaceAvatarUrl = (url: string | null, avatar?: string): void => {
+    useApp.setState((a) => {
+      const previous = a.agentAvatars[agent.slug]
+      if (previous && previous !== url) { try { URL.revokeObjectURL(previous) } catch { /* ignore */ } }
+      const agentAvatars = { ...a.agentAvatars }
+      if (url) agentAvatars[agent.slug] = url
+      else delete agentAvatars[agent.slug]
+      return {
+        agentAvatars,
+        agentDefs: a.agentDefs.map((v) => v.slug === agent.slug ? { ...v, avatar } : v),
+      }
+    })
+    setDraft((d) => ({ ...d, avatar }))
+  }
+  const pickAvatar = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (file.size > 1_048_576) { setError(t('agentProfile.avatarTooLarge')); return }
+    setAvatarBusy(true); setError(''); setNotice('')
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result))
+        reader.onerror = () => reject(new Error(t('agentProfile.avatarReadFailed')))
+        reader.readAsDataURL(file)
+      })
+      const uploaded = await uploadAgentAvatar(s.cfg, agent.slug, dataUrl, file.type)
+      replaceAvatarUrl(await fetchAgentAvatar(s.cfg, agent.slug), uploaded.avatar)
+      setNotice(t('agentProfile.avatarSaved'))
+    } catch (e: any) { setError(String(e.message || e)) } finally { setAvatarBusy(false) }
+  }
+  const removeAvatar = async (): Promise<void> => {
+    if (avatarBusy || !s.avatar) return
+    setAvatarBusy(true); setError(''); setNotice('')
+    try {
+      await deleteAgentAvatar(s.cfg, agent.slug)
+      replaceAvatarUrl(null, undefined)
+      setNotice(t('agentProfile.avatarRemoved'))
+    } catch (e: any) { setError(String(e.message || e)) } finally { setAvatarBusy(false) }
+  }
   const save = async () => {
     if (busy || !draft.name.trim()) return
     setBusy(true); setError('')
@@ -160,10 +202,37 @@ function AgentProfile({ agent, compact = false, sessionId }: { agent: NormalAgen
     <label className="agent-field">{t('agentProfile.thinking')}<select aria-label={t('agentProfile.thinking')} value={draft.thinkingLevel} onChange={(e) => patch({ thinkingLevel: e.target.value as NormalAgentDef['thinkingLevel'] })}><option value="">{t('agentProfile.default')}</option>{THINKING_LEVELS.map((v) => <option key={v} value={v}>{v}</option>)}</select></label>
     <label className="agent-field">{t('agentProfile.approval')}<select aria-label={t('agentProfile.approval')} value={draft.approvalMode} onChange={(e) => patch({ approvalMode: e.target.value as NormalAgentDef['approvalMode'] })}>{[['', 'default'], ['readonly', 'readonly'], ['auto-edit', 'autoEdit'], ['full-auto', 'fullAuto'], ['custom', 'custom']].map(([v, k]) => <option key={v} value={v}>{t(`agentProfile.${k}`)}</option>)}</select></label>
   </>
+  const agentConfiguration = <>
+    <ProfileGroup title={t('agentProfile.instructions')} hint={t('agentProfile.instructionsHint')}>
+      <ProfileTextEditor label={t('agentProfile.prompt')} value={draft.systemPrompt} onChange={(systemPrompt) => patch({ systemPrompt })} />
+      <ProfileTextEditor label={t('agentProfile.soul')} value={draft.soul || ''} onChange={(soul) => patch({ soul })} />
+    </ProfileGroup>
+    <details className="profile-disclosure"><summary>{t('agentProfile.permissions')}</summary><div className="agent-config-fields">
+      <label className="agent-field">{t('agentProfile.tools')}<select aria-label={t('agentProfile.tools')} value={draft.toolsMode || ''} onChange={(e) => patch({ toolsMode: e.target.value as NormalAgentDef['toolsMode'] || undefined, toolsList: [] })}><option value="">{t('agentProfile.all')}</option><option value="deny">{t('agentProfile.denyTools')}</option><option value="allow">{t('agentProfile.allowTools')}</option></select></label>
+      {loadError && <p className="agent-profile-error">{loadError}<button onClick={() => setRetry((v) => v + 1)}>{t('agentProfile.retry')}</button></p>}
+      {draft.toolsMode && <div className="agent-equipment-list">{builtins.map((tool) => <label className="agent-equipment-item" key={tool.name}><input type="checkbox" checked={(draft.toolsList || []).includes(tool.name)} onChange={(e) => patch({ toolsList: e.target.checked ? [...(draft.toolsList || []), tool.name] : (draft.toolsList || []).filter((n) => n !== tool.name) })} /><span><strong>{tool.name}</strong><small>{tool.description}</small></span></label>)}</div>}
+      <label className="agent-equipment-item"><input type="checkbox" checked={!!draft.activityAccess} onChange={(e) => patch({ activityAccess: e.target.checked })} />{t('agentProfile.activityAccess')}</label>
+    </div></details>
+    <details className="profile-disclosure"><summary>{t('agentProfile.advanced')}</summary><div className="agent-config-fields">
+      <label className="agent-field">{t('agentProfile.maxIterations')}<input type="number" min="1" max="1000" placeholder={t('agentProfile.default')} value={draft.maxIterations ?? ''} onChange={(e) => patch({ maxIterations: e.target.value ? Math.min(1000, Math.max(1, Math.floor(Number(e.target.value)))) : null })} /></label>
+      <label className="agent-equipment-item"><input type="checkbox" checked={!!draft.cloudSync} onChange={(e) => patch({ cloudSync: e.target.checked })} />{t('agentProfile.cloudSync')}</label>
+    </div></details>
+  </>
   return <div className={`agent-profile${compact ? ' compact' : ''}`} data-agent-profile={agent.slug} onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); e.stopPropagation(); if (dirty) void save() } }}>
     <header className="agent-character-hero">
-      <div className="agent-portrait">{s.avatar ? <img src={s.avatar} alt={agent.name} /> : <Bot size={compact ? 30 : 56} strokeWidth={1.5} />}</div>
-      <div className="agent-character-identity"><span className="agent-character-id">{agent.slug}</span><h1>{agent.name}</h1><p>{agentDescription(agent, t)}</p><span className={`agent-state${s.running ? ' working' : ''}`}><i />{t(!s.connected ? 'agentProfile.offline' : s.running ? 'agentProfile.working' : 'agentProfile.standby')}</span></div>
+      {/* 头部即「基本信息」:头像点开即换(立即保存),名称 / 简介原地编辑、走下方同一保存栏。 */}
+      <div className="agent-portrait-slot">
+        <label className="agent-portrait agent-portrait-edit" title={t('agentProfile.avatarHint')} aria-busy={avatarBusy || undefined}>
+          {s.avatar ? <img src={s.avatar} alt="" /> : <Bot size={compact ? 30 : 56} strokeWidth={1.5} />}
+          <span className="agent-portrait-badge" aria-hidden="true">{avatarBusy ? <Loader2 size={12} className="spin" /> : <ImageUp size={12} />}</span>
+          <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" aria-label={t('agentProfile.avatarChange')} disabled={avatarBusy} onChange={(e) => void pickAvatar(e)} />
+        </label>
+        {s.avatar && <button type="button" className="agent-portrait-remove" title={t('agentProfile.avatarRemove')} aria-label={t('agentProfile.avatarRemove')} disabled={avatarBusy} onClick={() => void removeAvatar()}><X size={11} /></button>}
+      </div>
+      <div className="agent-character-identity"><span className="agent-character-id">{agent.slug}</span>
+        <input className="agent-character-name" aria-label={t('agentProfile.name')} placeholder={t('agentProfile.name')} title={draft.name} value={draft.name} maxLength={120} disabled={busy} onChange={(e) => patch({ name: e.target.value })} />
+        <textarea className="agent-character-desc" aria-label={t('agentProfile.description')} placeholder={t('agentProfile.descriptionPlaceholder')} rows={2} value={agentDescription({ slug: agent.slug, description: draft.description }, t)} disabled={busy} onChange={(e) => patch({ description: e.target.value })} />
+        <span className={`agent-state${s.running ? ' working' : ''}`}><i />{t(!s.connected ? 'agentProfile.offline' : s.running ? 'agentProfile.working' : 'agentProfile.standby')}</span></div>
       {compact && <button className="profile-expand" title={t('agentProfile.full')} aria-label={t('agentProfile.full')} onClick={() => openAgentProfile(agent.slug)}><ExternalLink size={15} /></button>}
     </header>
     <nav className="agent-section-nav" style={{ '--profile-tab-count': SECTIONS.length, '--profile-tab-index': SECTIONS.findIndex((item) => item.id === section) } as CSSProperties} aria-label={t('agentProfile.currentSection')} role="tablist" onKeyDown={(e) => {
@@ -176,40 +245,17 @@ function AgentProfile({ agent, compact = false, sessionId }: { agent: NormalAgen
     <div ref={scrollRef} className="agent-profile-content" id={`${id}-content`} role="tabpanel" aria-labelledby={`${id}-${section}`} tabIndex={0}>
       <fieldset className="profile-edit-fields" disabled={busy}>
       <div key={section} className="profile-section-enter">
-      {section === 'overview' && <>
+      {section === 'config' && <>
         {s.session && <section className="agent-current-session"><small>{t('agentProfile.session')}</small><strong>{s.session.title}</strong>{(s.session.project_name || s.config?.cwd) && <span>{s.session.project_name || s.config?.cwd}</span>}
           <ProfileModelField models={s.models || []} value={s.session.model_id || ''} label={t('agentProfile.sessionModel')} onChange={(model) => useApp.getState().setSessionModel(model, sessionId, false)} />
           <small>{t('agentProfile.sessionModelHint')}</small>
         </section>}
         <ProfileGroup title={t('agentProfile.quickSettings')} hint={t('agentProfile.defaultsHint')}>{runSettings}</ProfileGroup>
-        <h3>{t('agentProfile.equipment')}</h3>
-        <div className="agent-equipment-grid">{(['skills', 'mcp', 'memory'] as const).map((tab) => { const Icon = tab === 'skills' ? Sparkles : tab === 'mcp' ? Plug : BookOpen; return <button key={tab} onClick={() => navigate(tab)}><Icon size={22} /><span>{t(`agentProfile.${tab}`)}</span><strong>{tab === 'memory' ? t(draft.shareDefaultMemory ? 'agentProfile.sharedMemory' : 'agentProfile.privateMemory') : tab === 'skills' ? (draft.enabledSkillIds?.length ?? t('agentProfile.all')) : (draft.enabledMcpServers?.length ?? t('agentProfile.all'))}</strong><ChevronRight size={14} /></button> })}</div>
-        <button className="agent-profile-link" onClick={() => navigate('config')}>{t('agentProfile.moreConfig')}<ChevronRight size={14} /></button>
+        {agentConfiguration}
         {s.usage && <p className="agent-profile-muted">{t('agentProfile.context')} · {s.usage.ctx.toLocaleString()} tokens</p>}
       </>}
       {section === 'skills' && equipment('skills')}
       {section === 'mcp' && equipment('mcp')}
-      {section === 'config' && <>
-        <ProfileGroup title={t('agentProfile.identity')}>
-          <label className="agent-field">{t('agentProfile.name')}<input value={draft.name} maxLength={120} onChange={(e) => patch({ name: e.target.value })} /></label>
-          <label className="agent-field">{t('agentProfile.description')}<textarea rows={3} value={draft.description} onChange={(e) => patch({ description: e.target.value })} /></label>
-        </ProfileGroup>
-        <ProfileGroup title={t('agentProfile.instructions')} hint={t('agentProfile.instructionsHint')}>
-          <ProfileTextEditor label={t('agentProfile.prompt')} value={draft.systemPrompt} onChange={(systemPrompt) => patch({ systemPrompt })} />
-          <ProfileTextEditor label={t('agentProfile.soul')} value={draft.soul || ''} onChange={(soul) => patch({ soul })} />
-        </ProfileGroup>
-        <details className="profile-disclosure"><summary>{t('agentProfile.quickSettings')}</summary><div className="agent-config-fields">{runSettings}</div></details>
-        <details className="profile-disclosure"><summary>{t('agentProfile.permissions')}</summary><div className="agent-config-fields">
-          <label className="agent-field">{t('agentProfile.tools')}<select aria-label={t('agentProfile.tools')} value={draft.toolsMode || ''} onChange={(e) => patch({ toolsMode: e.target.value as NormalAgentDef['toolsMode'] || undefined, toolsList: [] })}><option value="">{t('agentProfile.all')}</option><option value="deny">{t('agentProfile.denyTools')}</option><option value="allow">{t('agentProfile.allowTools')}</option></select></label>
-          {loadError && <p className="agent-profile-error">{loadError}<button onClick={() => setRetry((v) => v + 1)}>{t('agentProfile.retry')}</button></p>}
-          {draft.toolsMode && <div className="agent-equipment-list">{builtins.map((tool) => <label className="agent-equipment-item" key={tool.name}><input type="checkbox" checked={(draft.toolsList || []).includes(tool.name)} onChange={(e) => patch({ toolsList: e.target.checked ? [...(draft.toolsList || []), tool.name] : (draft.toolsList || []).filter((n) => n !== tool.name) })} /><span><strong>{tool.name}</strong><small>{tool.description}</small></span></label>)}</div>}
-          <label className="agent-equipment-item"><input type="checkbox" checked={!!draft.activityAccess} onChange={(e) => patch({ activityAccess: e.target.checked })} />{t('agentProfile.activityAccess')}</label>
-        </div></details>
-        <details className="profile-disclosure"><summary>{t('agentProfile.advanced')}</summary><div className="agent-config-fields">
-          <label className="agent-field">{t('agentProfile.maxIterations')}<input type="number" min="1" max="1000" placeholder={t('agentProfile.default')} value={draft.maxIterations ?? ''} onChange={(e) => patch({ maxIterations: e.target.value ? Math.min(1000, Math.max(1, Math.floor(Number(e.target.value)))) : null })} /></label>
-          <label className="agent-equipment-item"><input type="checkbox" checked={!!draft.cloudSync} onChange={(e) => patch({ cloudSync: e.target.checked })} />{t('agentProfile.cloudSync')}</label>
-        </div></details>
-      </>}
       </div>
       {/* Memory owns independent drafts. Keep it mounted when switching the parent tabs. */}
       {visitedMemory && <div hidden={section !== 'memory'}>

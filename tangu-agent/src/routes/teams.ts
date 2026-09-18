@@ -15,7 +15,7 @@ import { authMiddleware, AuthRequest } from '../core/http.js';
 import { query, getDbType } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
 import { isValidSlug, slugify, getAgent } from '../agents/agentRegistry.js';
-import { listTeams, getTeam, saveTeam, deleteTeam, readTeamsMeta, writeTeamsMeta, type TeamDef } from '../agents/teamRegistry.js';
+import { listTeams, getTeam, saveTeam, deleteTeam, saveTeamAvatar, readTeamAvatar, deleteTeamAvatar, readTeamsMeta, writeTeamsMeta, type TeamDef } from '../agents/teamRegistry.js';
 import { SESSION_COLS, rowToSession } from './sessions.js';
 import { withKeyLock } from '../core/keyLock.js';
 
@@ -120,6 +120,33 @@ router.patch('/agent/teams/:slug', authMiddleware, async (req: AuthRequest, res)
   } catch (e: any) {
     res.status(400).json({ detail: e?.message || 'update team failed' });
   }
+});
+
+// 团队图片头像：base64 上传（≤1MB，写入 TEAM Library）/ 鉴权二进制读取 / 删除。
+router.post('/agent/teams/:slug/avatar', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const b = req.body || {};
+    if (!b.data || !b.mimeType) return res.status(400).json({ detail: 'data 与 mimeType 必填' });
+    res.json({ ok: true, avatar: await saveTeamAvatar(req.params.slug, String(b.data), String(b.mimeType)) });
+  } catch (e: any) { res.status(400).json({ detail: e?.message || 'upload team avatar failed' }); }
+});
+
+router.get('/agent/teams/:slug/avatar', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const avatar = await readTeamAvatar(req.params.slug);
+    if (!avatar) return res.status(404).json({ detail: 'no avatar' });
+    res.setHeader('Content-Type', avatar.mimeType);
+    res.setHeader('Cache-Control', 'no-cache');
+    res.send(avatar.data);
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'read team avatar failed' }); }
+});
+
+router.delete('/agent/teams/:slug/avatar', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try { res.json({ ok: await deleteTeamAvatar(req.params.slug) }); }
+  catch (e: any) { res.status(400).json({ detail: e?.message || 'delete team avatar failed' }); }
 });
 
 router.delete('/agent/teams/:slug', authMiddleware, async (req: AuthRequest, res) => {
