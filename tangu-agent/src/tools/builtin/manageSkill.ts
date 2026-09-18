@@ -30,12 +30,14 @@ async function fileExists(p: string): Promise<boolean> {
   try { await fs.access(p); return true; } catch { return false; }
 }
 
-/** 组装 SKILL.md:frontmatter(name + 可选 description)+ 正文。frontmatter 值强制单行(解析器按行读)。 */
+/** 组装 SKILL.md:frontmatter(name + 可选 description + origin)+ 正文。frontmatter 值强制单行(解析器按行读)。
+ *  `origin: agent` = 来源标识:这个工具只会被 agent 调用,create/update 一律打上(用户手写后被 agent 改过的也算「agent 动过」),
+ *  localSkills.toRecord 透传成 SkillRecord.origin → 桌面技能列表打「自建」徽标。没有它,用户级自建技能与手写技能无从分辨(09-18 取证)。 */
 function composeSkillMd(name: string, description: string, body: string): string {
   const lines = ['---', `name: ${oneLine(name)}`];
   const d = oneLine(description);
   if (d) lines.push(`description: ${d}`);
-  lines.push('---', '', String(body ?? '').trim(), '');
+  lines.push('origin: agent', '---', '', String(body ?? '').trim(), '');
   return lines.join('\n');
 }
 

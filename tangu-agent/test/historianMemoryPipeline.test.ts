@@ -190,9 +190,9 @@ describe('自进化自动档(harness_candidates,P3)', () => {
     });
     await updateRunStatus('R9', 'done');
   };
-  const enableHarnessTier = (): void => {
+  const enableHarnessTier = (on = true): void => {
     writeFileSync(join(home, 'config.json'), JSON.stringify({
-      specialAgents: { historian: { enabled: true, modelId: 'm1', everyRounds: 3, firstRoundTrigger: true, mode: 'independent', harnessCandidates: true } },
+      specialAgents: { historian: { enabled: true, modelId: 'm1', everyRounds: 3, firstRoundTrigger: true, mode: 'independent', harnessCandidates: on } },
     }), 'utf8');
   };
 
@@ -220,7 +220,9 @@ describe('自进化自动档(harness_candidates,P3)', () => {
     expect(act.length).toBe(1);
   });
 
-  it('默认关:judge 提示词无该字段;半服从模型硬给 harness_candidates 也被忽略', async () => {
+  // 09-18 起自动档默认开,「关」必须显式写出来 —— 这条钉的是「关着 → 零行为」,不是「默认值是关」。
+  it('关档:judge 提示词无该字段;半服从模型硬给 harness_candidates 也被忽略', async () => {
+    enableHarnessTier(false);
     llmScript = [JSON.stringify({ title: '标题', log: '', memory_candidates: [], harness_candidates: ['Sneaky lesson'] })];
     await onUserRunDone('S', USER);
     expect(String(llmPayloads[0].messages.at(-1).content)).not.toContain('harness_candidates');

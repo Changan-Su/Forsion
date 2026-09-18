@@ -113,6 +113,28 @@ describe('special-agent enable migration', () => {
     expect(again.muse.enabled).toBe(false);
   }));
 
+  it('自进化自动档:已过第一步的老配置只翻 harnessCandidates,不重开用户关掉的 Muse;之后手动关闭保留', () => isolated((home) => {
+    // 09-18 之前的真实形态:第一步标记已在、Muse 被用户手动关了、harnessCandidates 是当时归一化写回的 false。
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      specialAgents: { historian: { enabled: true, harnessCandidates: false }, muse: { enabled: false } },
+      specialAgentMigrations: { enableByDefaultVersion: 1 },
+    }));
+    const migrated = applySpecialAgentEnableMigration();
+    expect(migrated.historian.harnessCandidates).toBe(true);
+    expect(migrated.muse.enabled).toBe(false); // 两个标记互不牵连:第一步没有重跑
+    const raw = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'));
+    expect(raw.specialAgentMigrations).toEqual({ enableByDefaultVersion: 1, harnessCandidatesVersion: 1 });
+    saveSpecialAgentsConfig({ historian: { harnessCandidates: false } });
+    expect(applySpecialAgentEnableMigration().historian.harnessCandidates).toBe(false); // 迁移后手动关 = 永久
+  }));
+
+  it('全新安装:两步一次写完,自动档默认开', () => isolated((home) => {
+    expect(SPECIAL_AGENTS_DEFAULTS.historian.harnessCandidates).toBe(true);
+    expect(applySpecialAgentEnableMigration().historian.harnessCandidates).toBe(true);
+    const raw = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'));
+    expect(raw.specialAgentMigrations).toEqual({ enableByDefaultVersion: 1, harnessCandidatesVersion: 1 });
+  }));
+
   it('config.json 坏了不抛、不改写，引擎照常起（下次启动重试）', () => isolated((home) => {
     writeFileSync(join(home, 'config.json'), '{ broken');
     expect(applySpecialAgentEnableMigration().muse.enabled).toBe(false);

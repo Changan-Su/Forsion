@@ -19,7 +19,8 @@ import type { SkillRecord } from '../core/types.js';
 
 export const LOCAL_SKILL_PREFIX = 'local:';
 
-type SkillSource = 'builtin' | 'user' | 'agent' | 'project';
+// bundle = 共享域 plugins/<id>/skills(市场装的第三方包):装载优先级与 user 同档,但**不是** manage_skill 会写的根,origin 不认它。
+type SkillSource = 'builtin' | 'user' | 'bundle' | 'agent' | 'project';
 
 const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
@@ -109,7 +110,10 @@ function toRecord(id: string, fallbackName: string, raw: string, source: SkillSo
     is_builtin: source === 'builtin',
     // 非标准列:localAssetsBrain/路由透传给客户端打来源徽标
     source: 'local',
-  } as SkillRecord & { source: string };
+    // origin: 'agent' = manage_skill 写的(自建);包内置 / bundle / 用户手写的没有这一键。徽标只认它,别认 category(agent 桶里还混着包内置的专属技能)。
+    // 只在 manage_skill 会写的两个根(用户级 / agent 级)认这一键:项目里的 .tangu/skills 是随仓库来的第三方文件,写个 origin 就能冒充「自建」。
+    origin: (source === 'user' || source === 'agent') && meta.origin === 'agent' ? 'agent' : null,
+  } as SkillRecord & { source: string; origin: 'agent' | null };
 }
 
 async function scanDir(dir: string, source: SkillSource): Promise<SkillRecord[]> {
@@ -351,8 +355,9 @@ export async function listLocalSkills(): Promise<SkillRecord[]> {
   await seedBuiltinSkills(); // 首启把内置复制进 ~/.forsion/skills(幂等;覆盖 TUI 等不走 standalone 启动的入口)
   const roots: Array<[string, SkillSource]> = [
     [builtinSkillsDir(), 'builtin'],
-    // Forsion bundle 内嵌技能(共享域 plugins/<id>/skills/):内置 < bundle < 用户(同 id 用户改动胜)
-    ...bundleSkillRoots().map((d): [string, SkillSource] => [d, 'user']),
+    // Forsion bundle 内嵌技能(共享域 plugins/<id>/skills/):内置 < bundle < 用户(同 id 用户改动胜);
+    // 单独一档 source:装载与 user 同待遇,但 origin(自建徽标)只认 user / agent 两个根——第三方包写个 origin 就能冒充(评审实证)。
+    ...bundleSkillRoots().map((d): [string, SkillSource] => [d, 'bundle']),
     [userSkillsDir(), 'user'],
   ];
   const slug = currentDisplayAgentSlug();

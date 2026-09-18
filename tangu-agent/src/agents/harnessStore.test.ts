@@ -201,6 +201,17 @@ describe('候选收件箱(.harness-raw.md)', () => {
     expect(await appendHarnessCandidates(slug, 'sess-0003', ['先跑测试'])).toBe(1); // 消费后同文可再进
   });
 
+  it('peek 只读不消费(面板显示「N 条待复盘」);没有收件箱文件 = 空', async () => {
+    const { appendHarnessCandidates, consumeHarnessCandidates, peekHarnessCandidates } = await import('./harnessStore.js');
+    const slug = 'peekbot';
+    expect(await peekHarnessCandidates(slug)).toEqual([]);
+    await appendHarnessCandidates(slug, 'sess-0009', ['看一眼', '再看一眼']);
+    expect(await peekHarnessCandidates(slug)).toHaveLength(2);
+    expect(await peekHarnessCandidates(slug)).toHaveLength(2); // 连看两次不掉
+    expect(await consumeHarnessCandidates(slug)).toHaveLength(2); // 只有 /refine 才取走
+    expect(await peekHarnessCandidates(slug)).toEqual([]);
+  });
+
   it('边界自守:正文换行压平、批内去重、会话标签只留安全字符(防注入多占行数配额)', async () => {
     const { appendHarnessCandidates, consumeHarnessCandidates } = await import('./harnessStore.js');
     const slug = 'inboxguard';

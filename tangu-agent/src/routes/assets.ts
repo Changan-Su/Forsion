@@ -18,6 +18,21 @@ import { isValidSlug } from '../agents/agentRegistry.js';
 
 const router = Router();
 
+/** GET /agent/skills 每条的对外形状(单独导出好单测:桌面「自建」徽标只认这里透传的 origin)。 */
+export function skillSummary(s: any): { id: string; name: string; description: string; icon: string | null; category: string | null; source: string; origin: 'agent' | null } {
+  return {
+    id: s.id,
+    name: s.name,
+    description: s.description || '',
+    icon: s.icon || null,
+    category: s.category || null,
+    // 'local'=磁盘技能(包内置/~/.tangu/skills,localAssets overlay 标注);缺省 cloud
+    source: s.source || 'cloud',
+    // 'agent'=manage_skill 自建(SKILL.md frontmatter origin,localSkills 只在用户级/agent 级根认它);其余 null。客户端据此打「自建」徽标。
+    origin: s.origin === 'agent' ? 'agent' : null,
+  };
+}
+
 router.get('/agent/skills', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const listSkills = deps().brain.assets.listSkills;
@@ -28,17 +43,7 @@ router.get('/agent/skills', authMiddleware, async (req: AuthRequest, res) => {
       const load = () => listSkills({ visibleOnly: true, forUser: req.user!.userId });
       skills = (await (slug ? runWithAgentSlug(slug, load, slug) : load()).catch(() => [])) || [];
     }
-    res.json({
-      skills: skills.map((s: any) => ({
-        id: s.id,
-        name: s.name,
-        description: s.description || '',
-        icon: s.icon || null,
-        category: s.category || null,
-        // 'local'=磁盘技能(包内置/~/.tangu/skills,localAssets overlay 标注);缺省 cloud
-        source: s.source || 'cloud',
-      })),
-    });
+    res.json({ skills: skills.map(skillSummary) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list skills failed' });
   }

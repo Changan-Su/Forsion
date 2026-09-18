@@ -35,7 +35,7 @@ export interface HistorianConfig {
   /** memory 判断提示词（空=用默认）。标题总结用固定内部提示。 */
   prompt: string;
   /**
-   * 自进化自动档(默认关):judge 额外提名「工作笔记候选」→ 该 agent 的 .harness-raw.md 收件箱,
+   * 自进化自动档(09-18 起默认开;老配置里落盘的 false 由下方一次性迁移翻开):judge 额外提名「工作笔记候选」→ 该 agent 的 .harness-raw.md 收件箱,
    * 仅在下次 /refine 时注入供审阅,经 manage_harness(审批)采纳才落 HARNESS.md——自动采集、人工采纳。
    */
   harnessCandidates: boolean;
@@ -115,7 +115,9 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     firstRoundTrigger: true,
     mode: 'independent',
     prompt: '',
-    harnessCandidates: false,
+    // 默认开(09-18 用户拍板,推翻 08-13「自动档默认关」):关着时这层三个月零使用(正式库 713 个 run 里 /refine 与 manage_harness 全 0)。
+    // 它只提名、不写入——采纳仍要 /refine + 审批;代价是判官提示词每轮多一段字段说明。
+    harnessCandidates: true,
   },
   muse: {
     enabled: false,
@@ -235,26 +237,41 @@ export function saveSpecialAgentsConfig(patch: SpecialAgentsPatch): SpecialAgent
 }
 
 const ENABLE_BY_DEFAULT_MIGRATION = 1;
+const HARNESS_CANDIDATES_MIGRATION = 1;
 
 /**
- * 本版本的一次性默认迁移：不论旧值是 false 还是缺失，都把 Historian / Muse 开启一次，并原子写入
- * 独立的迁移标记。标记存在后本函数只读不写，因此迁移完成后用户手动关闭会永久保留。
+ * 一次性默认迁移(两步,**各自独立的标记**,同一把锁里一次写完):
+ *  ① enableByDefaultVersion:不论旧值是 false 还是缺失,把 Historian / Muse 开启一次;
+ *  ② harnessCandidatesVersion(09-18):把自进化自动档 historian.harnessCandidates 开启一次 —— 老配置里落盘的是归一化写回的
+ *     `false`(当时的默认值,不是用户的选择),只改静态默认值够不着它们。
+ * 标记存在后对应那一步只读不写,因此迁移完成后用户手动关闭会永久保留。
+ * ⚠️ 新增一步就加一个新标记,**别去抬已有标记的版本号**:抬 ① 会把「①之后手动关掉 Muse」的人重新打开。
  *
  * 放在引擎启动期而不是 renderer：CLI/TUI/desktop 共用同一语义，且不会依赖某个页面是否挂载。
- * 只翻两个 enabled，段内其余原始字段原样保留（含 normalize 不认识的旧键，如 legacyMusePrompt 要读的 muse.prompt）。
+ * 每步只翻自己那个键，段内其余原始字段原样保留（含 normalize 不认识的旧键，如 legacyMusePrompt 要读的 muse.prompt）。
  * updateConfigFile 对解析不了的 config.json / 锁超时按设计抛错 —— 这里吞掉：未迁移 = 下次启动再试，不能让引擎起不来。
  */
 export function applySpecialAgentEnableMigration(): SpecialAgentsConfig {
   try {
     updateConfigFile((config) => {
       const marker = config?.specialAgentMigrations;
-      if ((Number(marker?.enableByDefaultVersion) || 0) >= ENABLE_BY_DEFAULT_MIGRATION) return undefined;
+      const needEnable = (Number(marker?.enableByDefaultVersion) || 0) < ENABLE_BY_DEFAULT_MIGRATION;
+      const needHarness = (Number(marker?.harnessCandidatesVersion) || 0) < HARNESS_CANDIDATES_MIGRATION;
+      if (!needEnable && !needHarness) return undefined;
       const raw = config?.specialAgents;
       const sec: any = raw && typeof raw === 'object' ? raw : specialAgentsFrom(undefined); // 段缺失 → legacy 文件或默认值
       return {
         ...(config || {}),
-        specialAgents: { ...sec, historian: { ...sec.historian, enabled: true }, muse: { ...sec.muse, enabled: true } },
-        specialAgentMigrations: { ...(marker && typeof marker === 'object' ? marker : {}), enableByDefaultVersion: ENABLE_BY_DEFAULT_MIGRATION },
+        specialAgents: {
+          ...sec,
+          historian: { ...sec.historian, ...(needEnable ? { enabled: true } : {}), ...(needHarness ? { harnessCandidates: true } : {}) },
+          muse: { ...sec.muse, ...(needEnable ? { enabled: true } : {}) },
+        },
+        specialAgentMigrations: {
+          ...(marker && typeof marker === 'object' ? marker : {}),
+          ...(needEnable ? { enableByDefaultVersion: ENABLE_BY_DEFAULT_MIGRATION } : {}),
+          ...(needHarness ? { harnessCandidatesVersion: HARNESS_CANDIDATES_MIGRATION } : {}),
+        },
       };
     });
   } catch (e) {

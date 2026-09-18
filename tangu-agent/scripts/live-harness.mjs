@@ -22,6 +22,7 @@
  *   npm run live:harness -- --only grant                     # 改 delegate.grantTools / 子代理管理面闸后跑:授予时子代理用得上 manage_schedule,不授予时照旧被拒(正负两跑,均 action=list 无副作用)
  *   npm run live:harness -- --only churn                     # 同会话 6 连发的后续调用命中画像(不设命中率阈值,六个 run 须跑完)
  *   npm run live:harness -- --only ttft --ttft-rounds 5      # 首 token 延迟:preset(chat|work)× 思考档(off|medium)2×2,每格 N 会话 × 2 轮(冷/热缓存),交错跑
+ *   npm run live:harness -- --only refine                    # 自进化闭环(09-18):Historian 自动档提名 → 收件箱 → /refine 采纳写 HARNESS.md → 新会话系统提示带上;改 REFINE_DIRECTIVE / harnessStore / 判官 harness 字段 / 注入槽后跑
  *   node scripts/live-harness.mjs --selftest                 # 纯判据(done 锚点 / load_tools 措辞 / 子代理归属)的负对照;不起引擎、不需凭证
  *
  * 凭证:把 ~/.forsion-dev/provider-auth.json(--auth 可改)**软链**进隔离共享域 —— 引擎自己读,本脚本不读;
@@ -50,13 +51,13 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'loop', 'group', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'loop', 'group', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['personas', 'rename', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft
+const OPT_IN = new Set(['personas', 'rename', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -769,6 +770,45 @@ try {
     const twoCycles = advanced(second) && !blockedBy;
     const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0);
     return { ok, detail: `周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '420s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
+  });
+  // ── 自进化闭环(09-18):三个 run 串成一条链,每一环各自留证据,红了能看出断在哪。
+  //  ① 一次明确的工作方法纠正 → Historian 判官(harnessCandidates 开)应提名候选进 agents/<slug>/.harness-raw.md(自动档那半从未真机点验过);
+  //  ② 同会话 /refine → 模型须自己 load_tools 再 manage_harness(审批由台架代批)→ HARNESS.md 出条目、收件箱被消费清空、GET harness 回 entries+candidates;
+  //  ③ 同 agent **新**会话让它复述工作笔记标题 → 证注入槽真把 HARNESS 带进了系统提示(只有 ② 绿只证「文件写了」)。
+  // 会话必须显式 POST 创建并带 agent_config.agentSlug:判官归桶读的是会话行存档的 agent_config,run 自动建的会话没有它 → 候选会错落进 xyra 的收件箱。
+  // 模型不配合(没 load_tools / 没写)与引擎坏是两种红,detail 里分开写:工具序列原样记录。
+  await scenario('refine', 'refine 自进化闭环(自动档提名 → /refine 采纳 → 新会话带上)', async () => {
+    const slug = 'live-refiner';
+    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name: 'Refiner', systemPrompt: "You are Refiner, a careful assistant. Reply in the user's language." }) });
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'independent', harnessCandidates: true } }) });
+    const cfg = { ...AGENT_CONFIG, agentSlug: slug };
+    const sess = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'Refine loop', model_id: MODEL, agent_config: cfg }) })).session.id;
+    const inbox = join(home, 'agents', slug, '.harness-raw.md');
+    const harnessMd = join(home, 'agents', slug, 'HARNESS.md');
+    const ev1 = await run(sess, `请读 ${markerFile} 并告诉我 code 是什么。另外立一条长期规矩:以后凡是我让你读文件回答,你必须先原样引用文件里对应的那一行,再给结论——上次你没引用就直接下结论,我核对起来很费劲。`, 240_000, cfg);
+    if (ev1.error) return { ok: false, detail: `run① ${ev1.error}`, output: ev1.content, toolCalls: ev1.toolCalls };
+    const rows = () => api('/agent/special/historian/activity?limit=50').then((a) => (a.activity || []).filter((r) => r.session_ref === sess));
+    const act = await until(async () => { const r = await rows(); return r.some((x) => x.action === 'harness_candidates') ? r : null; }, 180_000, 3000);
+    // 红时分清两种情形:判官压根没跑(无任何活动)vs 跑了但提名为空(有 title / memory_candidates 等活动、独缺 harness_candidates)。
+    const seenActions = act ? [] : (await rows()).map((x) => x.action);
+    const inboxText = existsSync(inbox) ? readFileSync(inbox, 'utf8') : '';
+    const nominated = inboxText.split('\n').filter(Boolean).length;
+    const before = await api(`/agent/agents/${slug}/harness`);
+    const ev2 = await run(sess, '/refine', 300_000, cfg);
+    const harnessText = existsSync(harnessMd) ? readFileSync(harnessMd, 'utf8') : '';
+    const after = await api(`/agent/agents/${slug}/harness`);
+    const entries = after.entries || [];
+    const wrote = ev2.toolCalls.includes('manage_harness');
+    // run③ 的会话同样显式创建带 agentSlug:它也会触发判官,自动建的会话会把这一轮的提名错落进 xyra(正是上面那条注释禁止的事)。
+    const sess3 = entries.length ? (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'Refine recall', model_id: MODEL, agent_config: cfg }) })).session.id : null;
+    const ev3 = sess3 ? await run(sess3, '不要调用任何工具。你的「My Working Notes」里现在有哪些条目?逐条原样列出标题,不要解释。', 120_000, cfg) : null;
+    const recalled = !!ev3 && !ev3.error && entries.some((e) => ev3.content.includes(e.title));
+    const ok = !!act && nominated > 0 && !ev2.error && wrote && entries.length > 0 && (after.candidates || []).length === 0 && (before.candidates || []).length === nominated && recalled;
+    return { ok, detail: [
+      `① 提名 ${act ? `${nominated} 条进收件箱(GET candidates ${before.candidates?.length ?? '?'})` : seenActions.length ? `判官跑了(活动 ${seenActions.join('/')})但 180s 内没有 harness_candidates —— 模型没提名,不是引擎没跑` : '180s 无任何 Historian 活动 —— 判官没跑'}`,
+      `② refine ${ev2.error || `工具 ${ev2.toolCalls.join(',') || '无'}`}${ev2.approvals ? `;代批 ${ev2.approvals}` : ''};HARNESS ${entries.length} 条(之前 ${before.entries?.length ?? 0});收件箱剩 ${after.candidates?.length ?? '?'}`,
+      `③ 新会话复述标题 ${ev3 ? (recalled ? '命中' : `未命中:${ev3.error || ev3.content.slice(0, 80)}`) : '未跑(② 没写出条目)'}`,
+    ].join(';'), output: `【run① assistant】${ev1.content}\n\n【.harness-raw.md】\n${inboxText || '(空)'}\n\n【run② /refine assistant】${ev2.content}\n\n【HARNESS.md】\n${harnessText || '(空)'}\n\n【run③ 新会话】${ev3?.content ?? '(未跑)'}`, ttftMs: ttft(ev2), tokens: tokensOf(ev2), toolCalls: [...ev1.toolCalls, '|', ...ev2.toolCalls, '|', ...(ev3?.toolCalls || [])] };
   });
   // ── 缓存结构:A(新会话) / B(新会话·同文) / B′(新会话·异文) / C(S2 后续) / D(S1 后续)──
   // 台架**证不了 token 省了多少**(样本太小、上游路由不可控),它证的是「结构没塌」:同会话后续调用还命中得了吗?

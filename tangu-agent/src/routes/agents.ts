@@ -25,7 +25,7 @@ import { createMemoryRepository, MemoryRepositoryError } from '../services/memor
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
 import { agentSyncPermission, agentSyncScope, setAgentSyncPermission } from '../services/cloudSyncAccount.js';
-import { loadHarness, readJournal, applyHarnessEdit } from '../agents/harnessStore.js';
+import { loadHarness, readJournal, applyHarnessEdit, peekHarnessCandidates } from '../agents/harnessStore.js';
 
 const router = Router();
 
@@ -398,7 +398,10 @@ router.get('/agent/agents/:slug/harness', authMiddleware, async (req: AuthReques
   try {
     if (!(await getAgent(req.params.slug))) return res.status(404).json({ detail: 'Agent not found' });
     // journal 只回尾部 200 行:文件按次追加无上限,整份回传/渲染会随年头无界增长(Codex 评审 Minor)。
-    res.json({ entries: await loadHarness(req.params.slug), journal: (await readJournal(req.params.slug)).slice(-200) });
+    // candidates = Historian 自动档提名的待复盘候选(收件箱原始行,只读不消费;/refine 才取走)——面板上要能看见「有东西等着复盘」。
+    const slug = req.params.slug;
+    const [entries, journal, candidates] = await Promise.all([loadHarness(slug), readJournal(slug), peekHarnessCandidates(slug).catch(() => [])]);
+    res.json({ entries, journal: journal.slice(-200), candidates });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'read harness failed' });
   }

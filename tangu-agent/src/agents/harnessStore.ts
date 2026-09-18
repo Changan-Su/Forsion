@@ -419,6 +419,19 @@ export async function consumeHarnessCandidates(slug: string): Promise<string[]> 
   });
 }
 
+/** 只读看一眼收件箱(不消费):桌面「进化」标签显示「N 条待复盘候选」用。读失败只有 ENOENT 算空。
+ *  也进 per-slug 锁:append 是整文件重写(先截断后写),锁外读可能撞见半截文件、少显示几条。 */
+export async function peekHarnessCandidates(slug: string): Promise<string[]> {
+  return withSlugLock(slug, async () => {
+    try {
+      return (await fs.readFile(rawInboxPath(slug), 'utf-8')).split('\n').filter((l) => l.trim());
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return [];
+      throw e;
+    }
+  });
+}
+
 /** /refine 指令的候选附录(空清单返回 '')。 */
 export function renderPendingHarnessCandidates(lines: string[]): string {
   if (!lines.length) return '';
