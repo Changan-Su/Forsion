@@ -51,6 +51,8 @@ export const NOTIFY_EVENTS: Array<{ id: string; labelKey: string; defaultOn: boo
   { id: 'inbox.message', labelKey: 'ntf.event.inbox', defaultOn: true },
   // 笔记正文 `@remind:2026-09-01T09:00` 到点提醒(见 notificationWiring 的 E 段)。
   { id: 'note.reminder', labelKey: 'ntf.event.noteReminder', defaultOn: true },
+  // Historian 自动档提名了工作笔记候选(chat2/HistorianStatus 轮询处接线):点「复盘」就地发 /refine。自动档 09-18 起默认开,在设置 → 特殊 Agent 里可关。
+  { id: 'harness.candidates', labelKey: 'ntf.event.harnessCandidates', defaultOn: true },
 ]
 
 export function eventDefaultOn(event: string): boolean {

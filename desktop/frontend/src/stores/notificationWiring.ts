@@ -44,6 +44,17 @@ export function pendingReminders(marks: MdMark[], now: number, fired: Record<str
   })
 }
 
+/** 一轮活动轮询里,哪些 Historian 提名(action=harness_candidates)是「这轮才出现的」,以及轮询后的已见集合。
+ *  首轮(seen=null)一律不报 —— 打开一个旧会话不该被过去的提名轰炸;之后按活动 id 去重。
+ *  判定与记账放同一个函数:调用方只拿返回值,不可能先记后判(那会让首轮全部漏成「新」)。
+ *  接线在 chat2/HistorianStatus(它本来就每 2.5s 轮询会话活动),这里只放纯逻辑好单测。 */
+export function takeFreshNominations<T extends { id: string; action: string }>(activity: T[], seen: ReadonlySet<string> | null): { fresh: T[]; seen: Set<string> } {
+  const fresh = seen ? activity.filter((a) => a.action === 'harness_candidates' && !seen.has(a.id)) : []
+  const next = new Set(seen ?? [])
+  for (const a of activity) next.add(a.id)
+  return { fresh, seen: next }
+}
+
 const tr = (k: string, vars?: Record<string, string | number>): string => useApp.getState().tr(k, vars)
 
 let installed = false

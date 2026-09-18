@@ -3,16 +3,16 @@
  * 仅本地后端可用(端点在云端 404)。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { Loader2, X, Upload, Trash2, FileText, Image as ImageIcon, Undo2 } from 'lucide-react'
+import { Loader2, X, Upload, Trash2, FileText, Image as ImageIcon } from 'lucide-react'
 import {
   listAgentLogDates, getAgentLogSnapshot, putAgentLog,
   listAgentLibrary, getAgentLibraryFile, putAgentLibraryFile, deleteAgentLibraryFile,
-  getAgentHarness, rollbackHarnessEntry,
-  type AgentLibraryFile, type HarnessEntry, type HarnessJournalLine,
+  type AgentLibraryFile,
 } from '../services/backendService'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
 import { AgentMemoryPanel } from './AgentMemoryPanel'
+import { AgentHarnessPanel } from './AgentHarnessPanel'
 
 // 与后端 agentRegistry 的文本扩展名口径一致(决定上传走 content 还是 dataBase64)。
 const LIB_TEXT_EXTS = new Set(['md', 'markdown', 'txt', 'text', 'json', 'jsonl', 'toml', 'yaml', 'yml', 'csv', 'tsv', 'xml', 'html', 'htm', 'css', 'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'sh', 'log', 'ini', 'env', 'rs', 'go', 'java', 'c', 'cpp', 'h', 'rb', 'php', 'sql'])
@@ -71,22 +71,11 @@ const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name
   const [libErr, setLibErr] = useState('')
   const fileInput = useRef<HTMLInputElement>(null)
 
-  // 进化史(工作笔记 + 本机编辑史)
-  const [hEntries, setHEntries] = useState<HarnessEntry[]>([])
-  const [hJournal, setHJournal] = useState<HarnessJournalLine[]>([])
-  const [hErr, setHErr] = useState('')
-  const [hBusy, setHBusy] = useState(false)
-
   const reloadLib = async (): Promise<void> => { try { setLibFiles(await listAgentLibrary(cfg, slug)) } catch { /* ignore */ } }
-  const reloadHarness = async (): Promise<void> => {
-    try { const r = await getAgentHarness(cfg, slug); setHEntries(r.entries); setHJournal(r.journal); setHErr('') }
-    catch (e: any) { setHErr(e?.message || 'load failed') } // 吞掉会显示假「空」(Codex 评审 Minor)
-  }
 
   useEffect(() => {
     void listAgentLogDates(cfg, slug).then((ds) => { if (alive.current) { setDates(ds); if (ds.length) setLogDate(ds[ds.length - 1]) } }).catch((e) => { if (alive.current) setLogError(e.message) })
     void reloadLib()
-    void reloadHarness()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug])
 
@@ -152,14 +141,6 @@ const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name
       await reloadLib(); await openLib(file.name)
     } catch (e: any) { setLibErr(e?.message || 'upload failed') }
     finally { setLibBusy(false) }
-  }
-
-  const doRollback = async (id: string, title: string): Promise<void> => {
-    if (!window.confirm(t('settings.agents.harnessRollbackConfirm', { title }))) return
-    setHBusy(true); setHErr('')
-    try { await rollbackHarnessEntry(cfg, slug, id); await reloadHarness() }
-    catch (e: any) { setHErr(e?.message || 'rollback failed') }
-    finally { setHBusy(false) }
   }
 
   const tabBtn = (id: Tab, label: string): React.ReactNode => (
@@ -275,67 +256,7 @@ const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name
           </div>
         )}
 
-        {tab === 'harness' && (() => {
-          // 回滚=条目级「恢复上一版」(在最近两版间往返);journal 是本机编辑史,不跨设备同步。
-          const currentIds = new Set(hEntries.map((e) => e.id))
-          const rev = [...hJournal].reverse()
-          const latestIdx = new Map<string, number>()
-          rev.forEach((l, i) => { if (!latestIdx.has(l.entryId)) latestIdx.set(l.entryId, i) })
-          const actLabel = (l: HarnessJournalLine): string =>
-            l.action === 'delete' ? t('settings.agents.harnessActDelete')
-              : l.action === 'rollback' ? t('settings.agents.harnessActRollback')
-                : l.before === null ? t('settings.agents.harnessActCreate') : t('settings.agents.harnessActUpdate')
-          return (
-            <div className="field">
-              <div className="hint">{t('settings.agents.harnessHint')}</div>
-              {hErr && <div className="hint" style={{ color: 'var(--danger)' }}>{hErr}</div>}
-              {hEntries.length === 0
-                ? <div className="hint">{t('settings.agents.harnessEmpty')}</div>
-                : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    {hEntries.map((e) => (
-                      <div key={e.id} className="file-row" style={{ alignItems: 'flex-start' }}>
-                        <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
-                          <b>{e.title}</b>
-                          <span style={{ color: 'var(--text-muted)', marginLeft: 6, fontSize: 11 }}>{e.kind} · v{e.version} · {e.updatedAt}</span>
-                          <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>{e.body}</div>
-                          {e.evidence && <div style={{ color: 'var(--text-faint)', fontSize: 11 }}>{t('settings.agents.harnessEvidence')}: {e.evidence}</div>}
-                        </span>
-                        {latestIdx.has(e.id) && (
-                          <button className="icon-btn" disabled={hBusy} title={t('settings.agents.harnessRollback')} onClick={() => void doRollback(e.id, e.title)}>
-                            <Undo2 size={13} />
-                          </button>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              {rev.length > 0 && (
-                <div style={{ marginTop: 12, borderTop: 'var(--border-width) solid var(--border)', paddingTop: 10 }}>
-                  <label>{t('settings.agents.harnessHistory')}</label>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 4 }}>
-                    {rev.map((l, i) => {
-                      const title = l.after?.title || l.before?.title || l.entryId
-                      const restorable = latestIdx.get(l.entryId) === i && !currentIds.has(l.entryId) && !!l.before
-                      return (
-                        <div key={`${l.ts}-${i}`} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12 }}>
-                          <span style={{ color: 'var(--text-faint)', flexShrink: 0 }}>{String(l.ts).slice(0, 16).replace('T', ' ')}</span>
-                          <span style={{ color: 'var(--text-muted)', flexShrink: 0 }}>{actLabel(l)}</span>
-                          <span className="file-name" style={{ flex: 1 }}>{title}</span>
-                          {restorable && (
-                            <button className="btn ghost sm" disabled={hBusy} onClick={() => void doRollback(l.entryId, title)}>
-                              {t('settings.agents.harnessRestore')}
-                            </button>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          )
-        })()}
+        {tab === 'harness' && <AgentHarnessPanel cfg={cfg} slug={slug} />}
       </div>
     </div>
   )

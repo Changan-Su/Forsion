@@ -1,9 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronRight, History } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
+import { notifyApp } from '../../stores/notificationStore'
+import { takeFreshNominations } from '../../stores/notificationWiring'
 import { getSessionHistorian, type SessionHistorianStatus } from '../../services/backendService'
 import { registerMessages, useI18n } from '../../i18n'
 import { Markdown } from '../../components/Markdown'
+import { openAgentProfile } from '../agentProfileNav'
 
 registerMessages({
   'historian.status.ready': { zh: '待命', en: 'Ready' },
@@ -21,6 +24,29 @@ function readableRecord(content: string): string {
   } catch { return content }
 }
 
+/** 自进化自动档提名了工作笔记候选 → 右上角提醒,点「复盘」就地发 /refine。
+ *  /refine 只在 run 开头被引擎识别,运行中发会变成 steer 而不生效(Composer2 同判);此时改为打开详情「进化」标签让人看候选。
+ *  非 host 会话(云端 / sandbox)没有 manage_harness、plan 模式没有写工具(引擎不注入指令),同样只开详情。 */
+function nudgeRefine(sessionId: string, activityId: string): void {
+  const st = useApp.getState()
+  const slug = st.configBySession[sessionId]?.agentSlug || st.defaultAgentSlug
+  const name = st.sessions.find((x) => x.id === sessionId)?.title || slug
+  notifyApp({
+    event: 'harness.candidates', level: 'info', sticky: true, dedupeKey: `harness.candidates:${activityId}`,
+    text: st.tr('ntf.harnessCandidates', { name }),
+    action: {
+      label: st.tr('ntf.actionRefine'),
+      run: () => {
+        const now = useApp.getState()
+        const c = now.configBySession[sessionId]
+        const refinable = c?.execMode === 'host' && !c?.planMode
+        if (!refinable || now.runningBySession[sessionId]) openAgentProfile(slug, 'evolution')
+        else void now.send('/refine', [], undefined, undefined, undefined, sessionId)
+      },
+    },
+  })
+}
+
 export function HistorianStatus({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
@@ -28,7 +54,8 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
   const [open, setOpen] = useState(false)
   const [data, setData] = useState<SessionHistorianStatus | null>(null)
   const [failed, setFailed] = useState(false)
-  useEffect(() => { setOpen(false); setData(null); setFailed(false) }, [sessionId])
+  const seen = useRef<Set<string> | null>(null) // 本会话已见过的活动 id;null = 还没成功轮询过(首轮不提醒)
+  useEffect(() => { setOpen(false); setData(null); setFailed(false); seen.current = null }, [sessionId])
   useEffect(() => {
     if (!connected) return
     let disposed = false
@@ -36,7 +63,12 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
     const load = async (): Promise<void> => {
       try {
         const result = await getSessionHistorian(cfg, sessionId, open)
-        if (!disposed) { setData(result); setFailed(false) }
+        if (!disposed) {
+          setData(result); setFailed(false)
+          const { fresh, seen: next } = takeFreshNominations(result.activity || [], seen.current)
+          seen.current = next
+          for (const item of fresh) nudgeRefine(sessionId, item.id)
+        }
       } catch { if (!disposed) setFailed(true) }
       if (!disposed) timer = setTimeout(load, 2500)
     }

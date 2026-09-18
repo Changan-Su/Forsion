@@ -153,6 +153,52 @@
 .profile-memory summary { cursor: pointer; padding-block: 6px; font-size: 12px; }
 .profile-memory li { padding-bottom: 12px; }
 .profile-memory-document > summary, .profile-memory-history > summary { display: none; }
+/* 进化(HARNESS 工作笔记):条目与装备列表同一套「底色 + 圆角、不描边」;kind 是芯片,描边即形状。
+ * 编辑史是一条时间线:左侧细线 + 实心点(新建/修改 = accent,删除/回滚 = 灰),点盖在线上,不依赖纸面底色。 */
+.agent-harness { display: grid; gap: 14px; min-width: 0; }
+.agent-harness > p { margin: 0; }
+.harness-summary { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; line-height: 1.6; color: var(--text-muted); }
+.harness-summary time { white-space: nowrap; }
+.harness-summary .profile-text-action { display: inline-flex; align-items: center; gap: 6px; padding: 0; color: var(--accent-ink); }
+.harness-summary .profile-text-action:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; }
+.harness-entries { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.harness-entry { display: grid; gap: 6px; min-width: 0; padding: 12px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); }
+.harness-entry-head { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.harness-entry-head strong { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+/* --border 与卡底几乎同色,芯片轮廓会消失;半透明的 --overlay-strong 在任何底上都立得住 */
+.harness-kind { display: inline-block; margin-right: 8px; padding: 0 7px; vertical-align: 1px; font-size: 10px; font-weight: 500; line-height: 17px; white-space: nowrap; color: var(--text-muted); border: 1px solid var(--overlay-strong); border-radius: 999px; }
+.harness-kind.recipe { color: var(--accent-ink); }
+.harness-undo { flex-shrink: 0; display: grid; place-items: center; width: 24px; height: 24px; margin: -2px -4px 0 0; padding: 0; color: var(--text-muted); background: transparent; border: 0; border-radius: var(--radius-sm, 8px); cursor: pointer; }
+.harness-undo:hover { color: var(--text); background: var(--overlay-medium); }
+.harness-undo:disabled { opacity: .45; cursor: default; }
+.harness-entry > p { margin: 0; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap; }
+.harness-evidence, .harness-meta { font-size: 11px; line-height: 1.6; color: var(--text-muted); overflow-wrap: anywhere; }
+.harness-meta { color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums; }
+.harness-empty { display: grid; justify-items: center; gap: 10px; padding: 32px 16px; text-align: center; color: var(--text-muted); background: var(--overlay-light); border-radius: var(--radius-md, 12px); }
+.harness-empty > svg { color: var(--accent-ink); }
+.harness-empty > p { max-width: 34em; margin: 0; font-size: 12px; line-height: 1.65; }
+.harness-empty > .btn { display: inline-flex; align-items: center; gap: 6px; }
+/* 待复盘候选:Historian 的提名,还不是笔记 —— 同一套底色卡,标题用 accent 提示「有东西等你」,不加描边。 */
+.harness-candidates > h3 { margin: 10px 0 8px; font-size: 12px; font-weight: 500; color: var(--accent-ink); }
+.harness-candidates > ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.harness-candidate { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; padding: 8px 12px; font-size: 12px; line-height: 1.6; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); overflow-wrap: anywhere; }
+.harness-candidate > time { color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.harness-candidates > small { display: block; margin-top: 8px; font-size: 11px; line-height: 1.6; color: var(--text-muted); }
+/* 「进化」标签角标:待复盘候选数。绝对定位在按钮右上角 —— 紧凑模式下按钮是竖排(图标 / 文字),作为第三行会把整条标签栏撑高。 */
+.agent-section-nav button { position: relative; }
+.profile-tab-badge { position: absolute; top: 2px; right: 2px; display: inline-grid; place-items: center; min-width: 14px; height: 14px; padding: 0 3px; font-size: 9px; font-style: normal; font-weight: 600; line-height: 1; color: var(--accent-ink); background: var(--overlay-medium); border-radius: 999px; }
+/* 装备列表里 `.agent-equipment-item span` 把所有 span 都铺成 grid,自建芯片会被拉成整行 —— 提高特异性钉回 inline */
+.agent-equipment-item .harness-kind { display: inline-block; }
+.harness-history > h3 { margin: 10px 0 12px; font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.harness-history > ol { list-style: none; display: grid; gap: 12px; margin: 0 0 0 4px; padding: 0 0 0 14px; border-left: 1px solid var(--border); }
+.harness-event { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; font-size: 12px; line-height: 1.5; }
+.harness-event::before { content: ""; position: absolute; left: -18px; top: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
+.harness-event.upsert::before { background: var(--accent); }
+.harness-event > span { min-width: 0; overflow-wrap: anywhere; }
+.harness-event b { margin-right: 6px; font-weight: 500; color: var(--text-muted); }
+.harness-event > .profile-text-action { grid-column: 2; grid-row: 1 / span 2; align-self: center; padding: 0; }
+.harness-event > time { grid-column: 1; font-size: 11px; color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums; }
+.harness-history > .profile-text-action { margin-top: 8px; }
 .profile-section-enter { animation: profile-enter 180ms ease both; }
 @keyframes profile-enter { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 @container (max-width: 650px) {

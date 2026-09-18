@@ -16,20 +16,45 @@ const text = 'Full child conversation detail. '.repeat(60) + 'END-OF-COMPLETE-RE
 const toolResult = 'Complete tool output '.repeat(100) + 'END-OF-TOOL-RESULT'
 const childMessages = [{ id: 'child-user', session_id: child.id, role: 'user', content: 'Research this thoroughly', timestamp: 1 }, { id: 'child-answer', session_id: child.id, role: 'model', content: text, reasoning: 'A detailed reasoning record.', agent_slug: 'research', timestamp: 2, tool_calls: [{ id: 'read-1', type: 'function', function: { name: 'read_file', arguments: '{"path":"evidence.md"}' } }], tool_results: [{ tool_call_id: 'read-1', content: toolResult, isError: false }] }]
 const solo = { ...base, id: 'profile-solo', title: 'Research notes', agent_config: { agentSlug: 'research', execMode: 'host', cwd: home } }
+// 进化(HARNESS 工作笔记):一条现存、一条已删可恢复;第二条日期是手改出来的非 ISO 串,不许渲出 Invalid Date。
+const harnessEntries = [{ id: 'h-cite', kind: 'recipe', title: 'Cite before concluding', body: 'Quote the primary source before concluding.', evidence: 'corrected twice', createdAt: '2026-09-10', updatedAt: '2026-09-16', version: 2 }, { id: 'h-scope', kind: 'note', title: 'Confirm scope first', body: 'Ask for time range and region.', createdAt: '2026-09-12', updatedAt: 'last week', version: 1 }]
+const harnessOld = { id: 'h-old', kind: 'note', title: 'Prefer PDF over HTML', body: 'Superseded.', createdAt: '2026-09-01', updatedAt: '2026-09-01', version: 1 }
+const harnessJournal = [{ ts: '2026-09-01T10:00:00Z', action: 'upsert', entryId: 'h-old', before: null, after: harnessOld }, { ts: '2026-09-10T08:00:00Z', action: 'upsert', entryId: 'h-cite', before: null, after: { ...harnessEntries[0], version: 1 } }, { ts: '2026-09-14T15:00:00Z', action: 'delete', entryId: 'h-old', before: harnessOld, after: null }, { ts: '2026-09-16T09:30:00Z', action: 'upsert', entryId: 'h-cite', before: { ...harnessEntries[0], version: 1 }, after: harnessEntries[0] }]
+// Historian 自动档的提名(收件箱原始行):面板要显示「1 条待复盘候选」且不许把 `[日期 s:会话]` 内部记号渲出来;「进化」标签带角标。
+const harnessCandidates = ['- [2026-09-17 s:abcd1234] Check the marker file before answering']
+const harnessRollbacks = []
+let harnessReads = 0
+// 自进化自动档的提名 → 右上角提醒(HistorianStatus 在会话里每 2.5s 轮询活动):
+//  - 团队主会话 Atlas team 的活动流**从第一次轮询起就带**一条提名 → 那是历史,不许弹(负对照;弹了会盖住右栏,后面的点击全被拦);
+//  - Research notes 的活动流只在 nominate 置真后才出现提名 → 必须弹一张卡;点「复盘」就地往该会话发 /refine;同 id 不弹第二张。
+let nominate = false
+let harnessEmpty = false // 置真后 GET harness 回 entries: [] —— 「还没笔记但收件箱已有提名」这个首次用户的状态,候选段必须仍在
+const historianPolls = { main: 0, solo: 0 }
+const nomination = (id, sessionId) => ({ id, action: 'harness_candidates', detail: 'Check the marker file before answering', session_ref: sessionId, created_at: '2026-09-18 10:00:00' })
 let saved = null, sessionModelSaved = null, avatarWrites = 0, avatarDeletes = 0
 let app
 async function run() {
-  const stub = await startStubEngine({ agents, sessions: [main, solo], messages: [{ id: 'main-user', role: 'user', content: 'Plan the research', timestamp: 1 }, { id: 'main-answer', role: 'model', content: 'The team is ready.', timestamp: 2 }], override: async ({ path: p, method, body }) => {
+  const stub = await startStubEngine({ agents, sessions: [main, solo], messages: [{ id: 'main-user', role: 'user', content: 'Plan the research', timestamp: 1 }, { id: 'main-answer', role: 'model', content: 'The team is ready.', timestamp: 2 }], override: async ({ path: p, method, url: u, body }) => {
     if (p === `/agent/sessions/${solo.id}` && method === 'PATCH') { const patch = await body(); sessionModelSaved = patch.model_id; Object.assign(solo, patch); return { session: solo } }
     if (p.endsWith('/memory/dream')) return { config: { enabled: false, modelId: '', timeoutMs: 60000, maxOutputTokens: 4096, intervalHours: 6 }, status: { state: 'idle', running: false }, candidates: 0 }
     if (p.endsWith('/memory/revisions')) return { revisions: [] }
     if (p.endsWith('/memory') && method === 'GET') return { version: 'version-1', content: 'Cite primary sources.', entries: [{ id: 'memory-1', content: 'Cite primary sources.', source: { kind: 'manual' }, evidenceIds: [], createdAt: 1, updatedAt: 1 }], tombstones: [], updatedAt: 1 }
     if (p === '/agent/runs' && method === 'GET') return { runs: [] }
+    if (p === '/agent/agents/research/harness' && method === 'GET') { harnessReads++; return { entries: harnessEmpty ? [] : harnessEntries, journal: harnessJournal, candidates: harnessCandidates } }
+    if (p === '/agent/special/config' && method === 'GET') return { config: { historian: { enabled: true, modelId: 'm1', harnessCandidates: true }, muse: { enabled: false } } }
+    if (p.startsWith('/agent/special/historian/activity')) {
+      const sid = (typeof u === 'string' ? new URL(u, 'http://stub') : u).searchParams.get('sessionId')
+      if (sid === main.id) { historianPolls.main++; return { running: false, records: [], activity: [nomination('act-hc-main', main.id)] } }
+      if (sid === solo.id) { historianPolls.solo++; return { running: false, records: [], activity: nominate ? [nomination('act-hc-solo', solo.id)] : [] } }
+      return { running: false, records: [], activity: [] }
+    }
+    if (p === '/agent/agents/research/harness/rollback' && method === 'POST') { harnessRollbacks.push((await body()).id); return { ok: true, entry: harnessOld } }
     if (p.endsWith('/detail')) return { session: child }
     if (p.endsWith('/background')) return { background: [{ sessionId: child.id, kind: 'teamwork', title: child.title, agentSlug: 'research', runId: null, runStatus: null }] }
     if (p === `/agent/sessions/${child.id}/messages`) return { messages: childMessages }
     if (p.endsWith('/config') && p.startsWith('/agent/sessions/')) return { agent_config: p.includes(child.id) ? child.agent_config : p.includes(solo.id) ? solo.agent_config : config }
-    if (p === '/agent/skills') return { skills: [{ id: 'local:research', name: 'Research notebook', description: 'Gather and cite evidence' }, { id: 'local:writing', name: 'Writing', description: 'Write clear reports' }] }
+    // 「自建」徽标只认 origin:'agent'(manage_skill 写的);category:'agent' 的包内置专属技能(如 bluebird-video)没有徽标 —— 负对照。
+    if (p === '/agent/skills') return { skills: [{ id: 'local:research', name: 'Research notebook', description: 'Gather and cite evidence', category: 'agent' }, { id: 'local:writing', name: 'Writing', description: 'Write clear reports', origin: 'agent' }] }
     if (p === '/agent/tools') return { builtins: [], custom: [], mcp: [{ server: 'documents', status: 'connected', transport: 'stdio', tools: [{ name: 'read', description: 'Read documents' }] }] }
     if (p === '/agent/agents/research/avatar' && method === 'POST') { avatarWrites++; agents.find((a) => a.slug === 'research').avatar = 'avatar.png'; return { ok: true, avatar: 'avatar.png' } }
     if (p === '/agent/agents/research/avatar' && method === 'DELETE') { avatarDeletes++; delete agents.find((a) => a.slug === 'research').avatar; return { ok: true } }
@@ -70,6 +95,10 @@ async function run() {
     await win.waitForTimeout(220)
     await win.screenshot({ path: path.join(home, 'child-chat.png') })
     console.log('PASS child full history, isolated send and retained parent identity')
+    // 负对照:主会话的活动流从第一次轮询就带着一条提名 → 属于历史,不许弹卡。
+    for (let i = 0; i < 40 && historianPolls.main < 2; i++) await win.waitForTimeout(250)
+    assert.ok(historianPolls.main >= 2, `HistorianStatus polls the active session (polls=${historianPolls.main})`)
+    assert.equal(await win.locator('.ntf').filter({ hasText: '有新的工作笔记候选' }).count(), 0, 'A nomination already present on the first poll is history, not news')
     await panel.locator('.agent-desk-head button').click()
     await win.locator('.dv-edge-right').click()
     await win.locator('[data-tangu-details]').waitFor()
@@ -102,6 +131,8 @@ async function run() {
     await win.screenshot({ path: path.join(home, 'details-panel.png') })
     console.log('PASS overview model/thinking edits persist; session and Agent scopes remain independent')
     await win.locator('[data-tangu-details] .agent-section-nav button').filter({ hasText: '技能' }).click()
+    assert.equal(await compact.locator('.agent-equipment-item').filter({ hasText: 'Writing' }).locator('.harness-kind').textContent(), '自建', 'A skill the agent wrote with manage_skill is badged')
+    assert.equal(await compact.locator('.agent-equipment-item').filter({ hasText: 'Research notebook' }).locator('.harness-kind').count(), 0, 'A bundled agent-category skill without origin is not badged')
     await compact.getByLabel('搜索名称或描述', { exact: true }).fill('Writing')
     assert.equal(await compact.locator('.agent-equipment-item').count(), 1)
     await compact.getByLabel('Writing', { exact: false }).uncheck()
@@ -170,6 +201,53 @@ async function run() {
     // 只量当前标签的正文(.profile-section-enter):记忆面板保持挂载(hidden)也在 .agent-profile-content 里,会误数。
     assert.equal(await compact.locator('.profile-section-enter button').filter({ hasText: /^(技能|MCP|记忆)/ }).count(), 0, 'Config tab must not repeat the Skills / MCP / Memory tabs as cards')
     console.log('PASS searchable memory, retained drafts, Markdown preview and keyboard tab navigation')
+    // 进化是一级标签(原来藏在 记忆 → 资料库弹窗 → 第 4 个 tab):条目、芯片、时间线、撤销 / 恢复、就地发 /refine。
+    const evolutionTab = compact.getByRole('tab', { name: '进化', exact: true })
+    assert.equal(await evolutionTab.locator('.profile-tab-badge').textContent(), '1', 'The Evolution tab carries the count of candidates awaiting reflection before it is opened')
+    await evolutionTab.click()
+    const evolution = compact.locator('[data-agent-harness="research"]')
+    await evolution.locator('[data-harness-entry="h-cite"]').waitFor()
+    await evolution.locator('[data-harness-candidates="1"]').waitFor()
+    // 日期由渲染器的 Intl 排版(Node 与 Chromium 的 ICU 未必同款,不拿 Node 算期望串):只钉「有 17 号、正文原样、没有内部记号」。
+    const candidateText = await evolution.locator('.harness-candidate').textContent()
+    assert.ok(/17/.test(candidateText) && candidateText.endsWith('Check the marker file before answering') && !/2026|s:abcd/.test(candidateText), `A candidate shows its date and text only: ${candidateText}`)
+    assert.equal(await evolution.locator('.harness-kind').first().textContent(), '做法', 'Kinds render as localized chips, not raw ids')
+    assert.equal(await evolution.getByText(/Invalid Date|T\d\d:\d\d/).count(), 0, 'Dates are localized; a hand-edited date falls back to its raw text')
+    assert.equal(await evolution.locator('[data-harness-entry="h-scope"] .harness-meta').textContent(), 'v1 · last week')
+    assert.ok((await compact.locator('.agent-profile-save').textContent()).includes('写入要经审批'), 'The evolution tab explains working notes instead of the defaults hint')
+    win.once('dialog', (d) => d.accept())
+    await evolution.getByRole('button', { name: '恢复', exact: true }).click()
+    await win.waitForTimeout(200)
+    assert.deepEqual(harnessRollbacks, ['h-old'])
+    const readsBeforeRefine = harnessReads
+    await evolution.getByRole('button', { name: '复盘本次对话', exact: true }).click()
+    await evolution.getByText('已开始复盘，进度在对话里。', { exact: true }).waitFor()
+    assert.equal(stub.seen.runs.at(-1)?.message, '/refine')
+    assert.equal(stub.seen.runs.at(-1)?.sessionId, solo.id)
+    await win.waitForTimeout(600)
+    // 面板按 running 的两个沿各重读一次(起 run 一次、结束一次);只多一次 = 只在起跑时读,/refine 写完的笔记永远看不到。
+    assert.ok(harnessReads >= readsBeforeRefine + 2, `Working notes reload both when the refine run starts and when it settles (reads ${readsBeforeRefine} → ${harnessReads})`)
+    assert.equal(await compact.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false)
+    await win.waitForTimeout(220)
+    await win.locator('[data-tangu-details]').screenshot({ path: path.join(home, 'compact-evolution.png') })
+    console.log('PASS evolution tab: localized notes, restore, in-place /refine and reload after the run')
+    // 提名提醒:活动流第 3 次轮询才出现那条 harness_candidates → 弹一张卡(带会话名);点「复盘」发 /refine 到该会话;同一条不再弹第二张。
+    assert.ok(historianPolls.solo >= 1, `HistorianStatus already polled this session before the nomination lands (polls=${historianPolls.solo})`)
+    nominate = true
+    const nudge = win.locator('.ntf').filter({ hasText: '「Research notes」有新的工作笔记候选' })
+    await nudge.waitFor({ timeout: 20000 })
+    const runsBeforeNudge = stub.seen.runs.length
+    harnessEmpty = true // 这次 /refine 起止会让面板重读:模拟「笔记为空、收件箱有提名」的首次状态
+    await nudge.locator('.ntf-action').click()
+    await win.waitForTimeout(400)
+    assert.equal(stub.seen.runs.length, runsBeforeNudge + 1, 'Clicking the nudge action starts exactly one run')
+    assert.equal(stub.seen.runs.at(-1)?.message, '/refine')
+    assert.equal(stub.seen.runs.at(-1)?.sessionId, solo.id)
+    await evolution.locator('.harness-empty').waitFor()
+    assert.equal(await evolution.locator('[data-harness-candidates="1"]').count(), 1, 'The candidates section is still shown when there are no working notes yet')
+    await win.waitForTimeout(5500) // 再过两轮轮询:点过动作的卡已关掉,同一条提名(同 id)不许再弹出来
+    assert.equal(await win.locator('.ntf').filter({ hasText: '有新的工作笔记候选' }).count(), 0, 'The same nomination never comes back after the action dismissed it')
+    console.log('PASS nomination nudge: fires only for nominations that appear after the first poll, sends /refine to the session, no duplicates')
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1024, 720))
     await compact.getByRole('tab', { name: '技能', exact: true }).click()
     await compact.getByRole('button', { name: '全部停用', exact: true }).click()
@@ -222,7 +300,7 @@ async function run() {
     await win.reload()
     await win.locator('[data-agents-space]').waitFor()
     await win.locator('.agents-roster-item').filter({ hasText: 'Research' }).click()
-    await profile.getByRole('tab', { name: 'Configuration', exact: true }).click()
+    await profile.getByRole('tab', { name: 'Settings', exact: true }).click()
     await profile.getByRole('textbox', { name: 'Instructions', exact: true }).waitFor()
     assert.equal(await profile.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false)
     await win.waitForTimeout(220)

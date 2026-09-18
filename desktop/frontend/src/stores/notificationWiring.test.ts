@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { MdMark } from '@amadeus-shared/mdMarks'
-import { pendingReminders, remindKey } from './notificationWiring'
+import { pendingReminders, remindKey, takeFreshNominations } from './notificationWiring'
 
 vi.mock('./notificationStore', () => ({ notifyApp: vi.fn() }))
 vi.mock('../amadeus/store/mdMarkStore', () => ({
@@ -14,6 +14,22 @@ const at = (remind?: string, over: Partial<MdMark> = {}): MdMark => ({
 // 2026-09-01 10:00 本地时
 const NOW = new Date(2026, 8, 1, 10, 0).getTime()
 const V = '/Users/me/VaultA'
+
+describe('takeFreshNominations', () => {
+  const ev = (id: string, action = 'harness_candidates') => ({ id, action })
+  it('首轮一律不提醒(旧会话里的历史提名不是新消息),但全部记为已见', () => {
+    const r = takeFreshNominations([ev('a'), ev('b')], null)
+    expect(r.fresh).toEqual([])
+    expect([...r.seen].sort()).toEqual(['a', 'b'])
+  })
+  it('之后只报没见过的 harness_candidates;别的活动与已见 id 都不算;报过的进入已见', () => {
+    const first = takeFreshNominations([ev('a'), ev('m', 'memory_candidates')], null)
+    const second = takeFreshNominations([ev('a'), ev('m', 'memory_candidates'), ev('b'), ev('c', 'title')], first.seen)
+    expect(second.fresh).toEqual([ev('b')])
+    const third = takeFreshNominations([ev('b'), ev('c', 'title')], second.seen)
+    expect(third.fresh).toEqual([]) // 同一条不报第二次
+  })
+})
 
 describe('pendingReminders', () => {
   it('到点了才弹:未来的不弹,刚过的弹', () => {

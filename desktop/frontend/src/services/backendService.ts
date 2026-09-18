@@ -29,7 +29,7 @@ async function request<T>(cfg: TanguDesktopConfig, path: string, init?: RequestI
       detail = j?.detail || detail
       if (typeof j?.error === 'string') code = j.error // 机器可读错误码(如 claim_requirements_unmet),调用方据此本地化
     } catch { /* keep */ }
-    throw Object.assign(new Error(detail), code ? { code } : {})
+    throw Object.assign(new Error(detail), { status: r.status }, code ? { code } : {})
   }
   return r.json() as Promise<T>
 }
@@ -628,8 +628,9 @@ export const deleteAgentLibraryFile = (cfg: TanguDesktopConfig, slug: string, na
 // 某 agent 的工作笔记进化史(HARNESS.md 条目 + 本机编辑史;journal 不跨设备同步)。
 export type HarnessEntry = { id: string; kind: string; title: string; body: string; evidence?: string; createdAt: string; updatedAt: string; version: number }
 export type HarnessJournalLine = { ts: string; action: 'upsert' | 'delete' | 'rollback'; entryId: string; before: HarnessEntry | null; after: HarnessEntry | null }
+/** candidates = Historian 自动档提名的待复盘候选(收件箱原始行 `- [YYYY-MM-DD s:xxxx] 正文`,只读;/refine 才取走);旧引擎没有这一键。 */
 export const getAgentHarness = (cfg: TanguDesktopConfig, slug: string) =>
-  request<{ entries: HarnessEntry[]; journal: HarnessJournalLine[] }>(cfg, `/agent/agents/${encodeURIComponent(slug)}/harness`)
+  request<{ entries: HarnessEntry[]; journal: HarnessJournalLine[]; candidates?: string[] }>(cfg, `/agent/agents/${encodeURIComponent(slug)}/harness`)
 export const rollbackHarnessEntry = (cfg: TanguDesktopConfig, slug: string, id: string) =>
   request<{ ok: boolean; entry: HarnessEntry | null }>(cfg, `/agent/agents/${encodeURIComponent(slug)}/harness/rollback`, { method: 'POST', body: JSON.stringify({ id }) })
 

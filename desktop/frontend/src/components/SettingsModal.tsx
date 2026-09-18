@@ -2875,6 +2875,7 @@ export const SettingsModal: React.FC<{
                                 {groups.get(c.key)!.map((s) => (
                                   <div key={s.id} className="file-row" style={{ cursor: 'default' }}>
                                     <span className="file-name" style={{ flex: 1 }}>
+                                      {s.origin === 'agent' && <span className="harness-kind recipe">{t('settings.agents.selfAuthored')}</span>}
                                       <b>{s.name}</b>
                                       {s.description && (
                                         <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 12 }}>

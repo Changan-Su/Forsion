@@ -122,7 +122,7 @@ export interface HistorianConfig {
    *  fork=尾部分叉判官:用会话模型在全量上下文快照上一次补全出判断(缓存对齐),失败自动回落 independent。 */
   mode: 'independent' | 'assist' | 'fork'
   prompt: string
-  /** 自进化自动档:判官额外提名「工作笔记候选」进各 Agent 收件箱,/refine 时供其审阅采纳(默认关)。 */
+  /** 自进化自动档:判官额外提名「工作笔记候选」进各 Agent 收件箱,/refine 时供其审阅采纳(09-18 起默认开,引擎启动期一次性迁移翻开老配置)。 */
   harnessCandidates: boolean
 }
 export interface MuseConfig {
@@ -624,6 +624,8 @@ export interface SkillInfo {
   category: string | null
   /** local=Tangu 本地;claude/codex=实时识别的外部生态;user=本人已上云;cloud/缺省=全局云端。 */
   source?: 'local' | 'claude' | 'codex' | 'user' | 'cloud'
+  /** agent=Agent 用 manage_skill 自建(SKILL.md frontmatter origin);「自建」徽标只认它,不认 category(agent 桶里混着包内置专属技能)。 */
+  origin?: 'agent' | null
 }
 
 export interface ToolsResponse {

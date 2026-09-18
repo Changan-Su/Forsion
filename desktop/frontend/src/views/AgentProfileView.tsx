@@ -1,14 +1,16 @@
 import { agentDescription } from '../components/builtinAgentDescriptions'
 import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from 'react'
-import { BookOpen, Bot, Check, ChevronRight, ExternalLink, ImageUp, Loader2, Plug, Search, Settings2, Sparkles, X } from 'lucide-react'
+import { BookOpen, Bot, Check, ChevronRight, ExternalLink, ImageUp, Loader2, Plug, Search, Settings2, Sparkles, Sprout, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import { activeMainPanel, setActiveSpace, useWorkspace } from '@lcl/engine'
+import { activeMainPanel, useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine/types'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { deleteAgentAvatar, fetchAgentAvatar, listSkills, listTools, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
+import { deleteAgentAvatar, fetchAgentAvatar, getAgentHarness, listSkills, listTools, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
+import { openAgentProfile } from './agentProfileNav'
 import { AgentMemoryPanel } from '../components/AgentMemoryPanel'
 import { AgentMemoryModal } from '../components/AgentMemoryModal'
+import { AgentHarnessPanel } from '../components/AgentHarnessPanel'
 import type { AgentConfig, NormalAgentDef, SkillInfo, ToolsResponse } from '../types'
 import { THINKING_LEVELS } from '../types'
 import { ProfileGroup, ProfileModelField, ProfileTextEditor } from './profileControls'
@@ -16,16 +18,14 @@ import { TeamProfile } from './TeamProfile'
 import './agentProfileMessages'
 import './agentProfile.css'
 
-type Section = 'config' | 'skills' | 'mcp' | 'memory'
+type Section = 'config' | 'skills' | 'mcp' | 'memory' | 'evolution'
+// 进化 = HARNESS 工作笔记,与人格(配置)、记忆并列的第三层 —— Agent 唯一能自己改的那层,一级标签直达。
 const SECTIONS: Array<{ id: Section; icon: typeof Bot }> = [
-  { id: 'config', icon: Settings2 }, { id: 'skills', icon: Sparkles }, { id: 'mcp', icon: Plug }, { id: 'memory', icon: BookOpen },
+  { id: 'config', icon: Settings2 }, { id: 'skills', icon: Sparkles }, { id: 'mcp', icon: Plug }, { id: 'memory', icon: BookOpen }, { id: 'evolution', icon: Sprout },
 ]
 const EMPTY_CONFIG: AgentConfig = {}
 
-export function openAgentProfile(slug: string): void {
-  setActiveSpace('agents')
-  useWorkspace.getState().openView('agent-profile', { agentSlug: slug }, 'main')
-}
+export { openAgentProfile }
 
 /** Follow the focused MAIN chat. A child conversation or a right-panel tab must not replace the subject. */
 export function useMainSessionId(): string | null {
@@ -63,6 +63,10 @@ export function AgentsSpaceView({ leaf, params }: ViewProps) {
   const agent = agents.find((a) => a.slug === slug) || agents[0]
   const filtered = useMemo(() => agents.filter((a) => `${a.name} ${a.description} ${agentDescription(a, t)} ${a.slug}`.toLowerCase().includes(query.toLowerCase())), [agents, query, t])
   useEffect(() => { useApp.getState().refreshAgents() }, [])
+  // 带 section 打开(提醒点「复盘」→ 进化)是一次性的跳转:leaf.setParams 是合并语义,不清掉的话之后换 Agent 也会一直落在「进化」。
+  // 用 sectionAt 当令牌:子组件按令牌导航(不靠重挂),父组件随即把两个键清掉;清掉后令牌归 0,不会再触发。
+  const jumpAt = params.section === 'evolution' ? Number(params.sectionAt) || 1 : 0
+  useEffect(() => { if (jumpAt) leaf.setParams({ section: undefined, sectionAt: undefined }) }, [jumpAt, leaf])
   return <div className="agents-space" data-agents-space>
     <aside className="agents-roster">
       <div className="agents-roster-heading"><span>{t('agentProfile.roster')}</span><span>{agents.length}</span></div>
@@ -72,11 +76,12 @@ export function AgentsSpaceView({ leaf, params }: ViewProps) {
       </button>)}</div>
       <button className="agent-profile-link" onClick={() => useApp.getState().openSettings('agents')}>{t('agentProfile.create')}<ChevronRight size={14} /></button>
     </aside>
-    <main className="agents-character">{agent ? <AgentProfile key={agent.slug} agent={agent} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}</main>
+    <main className="agents-character">{agent ? <AgentProfile key={agent.slug} agent={agent} jumpTo={jumpAt ? 'evolution' : undefined} jumpAt={jumpAt} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}</main>
   </div>
 }
 
-function AgentProfile({ agent, compact = false, sessionId }: { agent: NormalAgentDef; compact?: boolean; sessionId?: string | null }) {
+/** jumpTo / jumpAt:一次性跳到某个标签(令牌变了才跳;首挂时也按它初始化,免得先闪一下「配置」)。 */
+function AgentProfile({ agent, compact = false, sessionId, jumpTo, jumpAt = 0 }: { agent: NormalAgentDef; compact?: boolean; sessionId?: string | null; jumpTo?: Section; jumpAt?: number }) {
   const { t } = useI18n()
   const id = useId()
   const s = useApp(useShallow((a) => ({ cfg: a.cfg, avatar: a.agentAvatars[agent.slug], models: a.modelsResp?.models,
@@ -84,7 +89,7 @@ function AgentProfile({ agent, compact = false, sessionId }: { agent: NormalAgen
     running: sessionId ? !!a.runningBySession[sessionId] : Object.entries(a.runningBySession).some(([id, run]) => !!run && a.configBySession[id]?.agentSlug === agent.slug),
     connected: a.connState === 'ok', usage: sessionId ? a.usageBySession[sessionId] : undefined,
   })))
-  const [section, setSection] = useState<Section>('config')
+  const [section, setSection] = useState<Section>(jumpTo ?? 'config')
   const [visitedMemory, setVisitedMemory] = useState(false)
   const [draft, setDraft] = useState(agent)
   const [dirty, setDirty] = useState(false)
@@ -101,6 +106,7 @@ function AgentProfile({ agent, compact = false, sessionId }: { agent: NormalAgen
   const [retry, setRetry] = useState(0)
   const [query, setQuery] = useState('')
   const [enabledOnly, setEnabledOnly] = useState(false)
+  const [candidates, setCandidates] = useState(0) // 待复盘候选数,只为「进化」标签角标;面板打开后自己再读完整数据
   const scrollRef = useRef<HTMLDivElement>(null)
   const alive = useRef(true)
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
@@ -117,11 +123,20 @@ function AgentProfile({ agent, compact = false, sessionId }: { agent: NormalAgen
     })
     return () => { active = false }
   }, [s.cfg, agent.slug, retry])
+  // run 起止时重读:Historian 在 run 结束后才提名,角标下一次挂载 / 下个 run 跟上;实时那一下由聊天区的通知负责。云端引擎 404 → 0。
+  // 「进化」标签开着时不读:面板自己在读同一个接口并经 onCandidates 报数,两边都读 = 每个沿两次同样的请求。
+  useEffect(() => {
+    if (section === 'evolution') return
+    let active = true
+    getAgentHarness(s.cfg, agent.slug).then((r) => { if (active) setCandidates(r.candidates?.length ?? 0) }).catch(() => { if (active) setCandidates(0) })
+    return () => { active = false }
+  }, [s.cfg, agent.slug, s.running, retry, section])
   const navigate = (next: Section) => {
     setSection(next); setQuery(''); setEnabledOnly(false)
     if (next === 'memory') setVisitedMemory(true)
     scrollRef.current?.scrollTo({ top: 0 })
   }
+  useEffect(() => { if (jumpTo && jumpAt) navigate(jumpTo) }, [jumpAt]) // eslint-disable-line react-hooks/exhaustive-deps
   const patch = (p: Partial<NormalAgentDef>) => { setDraft((d) => ({ ...d, ...p })); setDirty(true); setNotice(''); setError('') }
   const replaceAvatarUrl = (url: string | null, avatar?: string): void => {
     useApp.setState((a) => {
@@ -176,9 +191,9 @@ function AgentProfile({ agent, compact = false, sessionId }: { agent: NormalAgen
   const equipment = (kind: 'skills' | 'mcp') => {
     const key = kind === 'skills' ? 'enabledSkillIds' : 'enabledMcpServers'
     const selected = draft[key]
-    const entries = kind === 'skills' ? skills.map((x) => ({ id: x.id, name: x.name, description: x.description }))
-      : mcp.map((x) => ({ id: x.server, name: x.server, description: `${x.status} · ${x.tools.length}` }))
-    for (const item of selected || []) if (!entries.some((e) => e.id === item)) entries.push({ id: item, name: item, description: t('agentProfile.unavailable') })
+    const entries = kind === 'skills' ? skills.map((x) => ({ id: x.id, name: x.name, description: x.description, origin: x.origin ?? null }))
+      : mcp.map((x) => ({ id: x.server, name: x.server, description: `${x.status} · ${x.tools.length}`, origin: null }))
+    for (const item of selected || []) if (!entries.some((e) => e.id === item)) entries.push({ id: item, name: item, description: t('agentProfile.unavailable'), origin: null })
     const filtered = entries.filter((e) => (!enabledOnly || !selected || selected.includes(e.id)) && `${e.name} ${e.description}`.toLowerCase().includes(query.trim().toLowerCase()))
     return <>
       <div className="profile-loadout-mode">
@@ -192,7 +207,7 @@ function AgentProfile({ agent, compact = false, sessionId }: { agent: NormalAgen
       </div>
       {loading && <p className="agent-profile-muted" role="status"><Loader2 size={14} className="spin" /> {t('agentProfile.loading')}</p>}
       {loadError && <div className="agent-profile-error" role="alert">{loadError}<button onClick={() => setRetry((v) => v + 1)}>{t('agentProfile.retry')}</button></div>}
-      <div className="agent-equipment-list">{filtered.map((entry) => <label key={entry.id} className={`agent-equipment-item${!selected || selected.includes(entry.id) ? ' enabled' : ''}`}><input type="checkbox" checked={!selected || selected.includes(entry.id)} onChange={(ev) => { const ids = selected || entries.map((x) => x.id); patch({ [key]: ev.target.checked ? [...new Set([...ids, entry.id])] : ids.filter((x) => x !== entry.id) }) }} /><span><strong>{entry.name}</strong><small>{entry.description}</small></span></label>)}</div>
+      <div className="agent-equipment-list">{filtered.map((entry) => <label key={entry.id} className={`agent-equipment-item${!selected || selected.includes(entry.id) ? ' enabled' : ''}`}><input type="checkbox" checked={!selected || selected.includes(entry.id)} onChange={(ev) => { const ids = selected || entries.map((x) => x.id); patch({ [key]: ev.target.checked ? [...new Set([...ids, entry.id])] : ids.filter((x) => x !== entry.id) }) }} /><span><strong>{entry.origin === 'agent' && <span className="harness-kind recipe">{t('settings.agents.selfAuthored')}</span>}{entry.name}</strong><small>{entry.description}</small></span></label>)}</div>
       {!loading && !loadError && !filtered.length && <p className="profile-empty">{t(entries.length ? 'agentProfile.noResults' : 'agentProfile.none')}</p>}
       <button className="agent-profile-link" onClick={() => useApp.getState().openSettings(kind === 'skills' ? 'skills' : 'mcp')}>{t(kind === 'skills' ? 'agentProfile.manageSkills' : 'agentProfile.manageMcp')}<ExternalLink size={13} /></button>
     </>
@@ -241,7 +256,11 @@ function AgentProfile({ agent, compact = false, sessionId }: { agent: NormalAgen
       const index = SECTIONS.findIndex((x) => x.id === section)
       const next = e.key === 'Home' ? 0 : e.key === 'End' ? SECTIONS.length - 1 : (index + (e.key === 'ArrowRight' ? 1 : -1) + SECTIONS.length) % SECTIONS.length
       navigate(SECTIONS[next].id); (e.currentTarget.children[next] as HTMLElement).focus()
-    }}>{SECTIONS.map(({ id: tab, icon: Icon }) => <button key={tab} id={`${id}-${tab}`} role="tab" title={t(`agentProfile.${tab}`)} aria-selected={section === tab} aria-controls={`${id}-content`} tabIndex={section === tab ? 0 : -1} onClick={() => navigate(tab)} className={section === tab ? 'selected' : ''}><Icon size={15} /><span>{t(`agentProfile.${tab}`)}</span></button>)}</nav>
+    }}>{SECTIONS.map(({ id: tab, icon: Icon }) => {
+      // 待复盘候选角标:aria-hidden 不改标签的可访问名(台架与读屏都按「进化」找),数字进 title。
+      const badge = tab === 'evolution' && candidates > 0 ? t('settings.agents.harnessCandidates', { count: candidates }) : ''
+      return <button key={tab} id={`${id}-${tab}`} role="tab" title={badge ? `${t(`agentProfile.${tab}`)} · ${badge}` : t(`agentProfile.${tab}`)} aria-selected={section === tab} aria-controls={`${id}-content`} tabIndex={section === tab ? 0 : -1} onClick={() => navigate(tab)} className={section === tab ? 'selected' : ''}><Icon size={15} /><span>{t(`agentProfile.${tab}`)}</span>{badge && <i className="profile-tab-badge" aria-hidden="true">{candidates}</i>}</button>
+    })}</nav>
     <div ref={scrollRef} className="agent-profile-content" id={`${id}-content`} role="tabpanel" aria-labelledby={`${id}-${section}`} tabIndex={0}>
       <fieldset className="profile-edit-fields" disabled={busy}>
       <div key={section} className="profile-section-enter">
@@ -256,6 +275,8 @@ function AgentProfile({ agent, compact = false, sessionId }: { agent: NormalAgen
       </>}
       {section === 'skills' && equipment('skills')}
       {section === 'mcp' && equipment('mcp')}
+      {/* /refine 只有 host 且非 plan 模式的会话引擎才注入指令(agentLoop 注入门);其余会话不给按钮,发出去只是一条裸 /refine */}
+      {section === 'evolution' && <AgentHarnessPanel cfg={s.cfg} slug={agent.slug} running={s.running} onCandidates={setCandidates} onRefine={sessionId && s.config?.execMode === 'host' && !s.config?.planMode ? () => useApp.getState().send('/refine', [], undefined, undefined, undefined, sessionId) : undefined} />}
       </div>
       {/* Memory owns independent drafts. Keep it mounted when switching the parent tabs. */}
       {visitedMemory && <div hidden={section !== 'memory'}>
@@ -268,7 +289,7 @@ function AgentProfile({ agent, compact = false, sessionId }: { agent: NormalAgen
     <footer className={`agent-profile-save${dirty ? ' is-dirty' : ''}`}>
       {error && <p className="agent-profile-error" role="alert">{error}</p>}
       {dirty && !draft.name.trim() && <p className="agent-profile-error" role="alert">{t('agentProfile.nameRequired')}</p>}
-      {dirty ? <><small>{t('agentProfile.unsaved')} · {t('agentProfile.agentDefaults')}</small><div><button className="btn" disabled={busy} onClick={() => { setDraft(agent); setDirty(false); setError('') }}>{t('agentProfile.cancel')}</button><button className="btn primary" disabled={busy || !draft.name.trim()} onClick={() => void save()}>{busy ? <Loader2 size={13} className="spin" /> : <Check size={13} />}{t(busy ? 'agentProfile.saving' : 'agentProfile.save')}</button></div></> : section === 'memory' ? <small>{t('agentProfile.memorySaveHint')}</small> : notice ? <p className="profile-save-notice" role="status"><Check size={14} />{notice}</p> : <small>{t('agentProfile.scopeHint')}</small>}
+      {dirty ? <><small>{t('agentProfile.unsaved')} · {t('agentProfile.agentDefaults')}</small><div><button className="btn" disabled={busy} onClick={() => { setDraft(agent); setDirty(false); setError('') }}>{t('agentProfile.cancel')}</button><button className="btn primary" disabled={busy || !draft.name.trim()} onClick={() => void save()}>{busy ? <Loader2 size={13} className="spin" /> : <Check size={13} />}{t(busy ? 'agentProfile.saving' : 'agentProfile.save')}</button></div></> : section === 'memory' ? <small>{t('agentProfile.memorySaveHint')}</small> : section === 'evolution' ? <small>{t('settings.agents.harnessHint')}</small> : notice ? <p className="profile-save-notice" role="status"><Check size={14} />{notice}</p> : <small>{t('agentProfile.scopeHint')}</small>}
     </footer>
     {library && <AgentMemoryModal cfg={s.cfg} slug={agent.slug} name={agent.name} shareDefaultMemory={agent.shareDefaultMemory} onClose={() => setLibrary(false)} />}
   </div>
