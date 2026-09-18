@@ -24,6 +24,7 @@ import { parseTuiConfig, TUI_HELP } from './config.js';
 import { printBanner } from './components/Banner.js';
 import { App } from './app.js';
 import { dispatchPluginCommand, listPlugins, activateAllPlugins } from '../plugins/bootstrap.js';
+import { applySpecialAgentEnableMigration } from '../services/specialAgentsConfig.js';
 
 /** CLI 版本 = 包 package.json(dist/tui/main.js 的 ../../;打包态即 resources/tangu-server/package.json)。 */
 function pkgVersion(): string {
@@ -98,6 +99,7 @@ async function main(): Promise<void> {
   if (!cfg.token) cfg.token = creds.token || '';
   if (!cfg.cloudUrl) cfg.cloudUrl = creds.cloudUrl || '';
   if (!cfg.defaultModelId) cfg.defaultModelId = creds.model || ''; // 记住的模型；仍可空，进 TUI 后用 /model 选
+  applySpecialAgentEnableMigration();
   try {
     // oauthProviders 在 loadProviders 合并时优先级最低(显式 providers.json/CLI 配置覆盖订阅登录)。
     cfg.oauthProviders = await loadOAuthDirectProviders();

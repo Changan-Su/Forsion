@@ -1,7 +1,9 @@
 /**
  * Special Agent（Historian / Muse）配置 —— 本地 `~/.tangu/special-agents.json` 单一事实来源。
  *
- * 二者**默认全关**。modelId 空 ≠ 未就绪:经 resolveBackgroundModelId 跟随 admin 的
+ * 二者的静态默认仍为关闭；升级迁移会把当时尚未开启的 Historian / Muse 一次性改为开启，
+ * 并单独落迁移标记。迁移完成后用户再手动关闭会被保留，不会在重启时被强行打开。
+ * modelId 空 ≠ 未就绪:经 resolveBackgroundModelId 跟随 admin 的
  * app 级「后台 agent 默认」槽(其次对话默认);本地显式选过模型即脱离跟随。全无 → 服务 no-op。
  * 运行时（localHistorian / muse / supervisor）只读；桌面 Settings 与 TUI slash 经
  * `GET/POST /agent/special/config` 端点写。仅 standalone/managed（桌面+TUI）形态使用。
@@ -10,7 +12,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { specialAgentsConfigFile } from '../core/tanguHome.js';
-import { getRawSection, updateSection } from '../core/config.js';
+import { getRawSection, updateConfigFile, updateSection } from '../core/config.js';
 import { deps } from '../seams/runtime.js';
 
 export interface HistorianConfig {
@@ -85,6 +87,11 @@ export interface SpecialAgentsConfig {
   historian: HistorianConfig;
   muse: MuseConfig;
 }
+
+export type SpecialAgentsPatch = {
+  historian?: Partial<HistorianConfig>;
+  muse?: Partial<MuseConfig>;
+};
 
 export const DEFAULT_HISTORIAN_PROMPT =
   'You are the Historian, maintaining the user\'s "session title / daily log (LOG) / long-term memory (memory)" in the background. Strictly distinguish two kinds of content: ' +
@@ -217,7 +224,7 @@ function specialAgentsFrom(sec: unknown): SpecialAgentsConfig {
 }
 
 /** 深合并 patch（historian/muse 各自浅合并）后归一化并落 config.json 的 specialAgents 段；返回归一化全量。 */
-export function saveSpecialAgentsConfig(patch: Partial<SpecialAgentsConfig>): SpecialAgentsConfig {
+export function saveSpecialAgentsConfig(patch: SpecialAgentsPatch): SpecialAgentsConfig {
   return updateSection('specialAgents', (sec): SpecialAgentsConfig => { // 锁内读改写
     const cur = specialAgentsFrom(sec);
     return normalizeConfig({
@@ -225,6 +232,35 @@ export function saveSpecialAgentsConfig(patch: Partial<SpecialAgentsConfig>): Sp
       muse: { ...cur.muse, ...(patch.muse || {}) },
     });
   })!;
+}
+
+const ENABLE_BY_DEFAULT_MIGRATION = 1;
+
+/**
+ * 本版本的一次性默认迁移：不论旧值是 false 还是缺失，都把 Historian / Muse 开启一次，并原子写入
+ * 独立的迁移标记。标记存在后本函数只读不写，因此迁移完成后用户手动关闭会永久保留。
+ *
+ * 放在引擎启动期而不是 renderer：CLI/TUI/desktop 共用同一语义，且不会依赖某个页面是否挂载。
+ * 只翻两个 enabled，段内其余原始字段原样保留（含 normalize 不认识的旧键，如 legacyMusePrompt 要读的 muse.prompt）。
+ * updateConfigFile 对解析不了的 config.json / 锁超时按设计抛错 —— 这里吞掉：未迁移 = 下次启动再试，不能让引擎起不来。
+ */
+export function applySpecialAgentEnableMigration(): SpecialAgentsConfig {
+  try {
+    updateConfigFile((config) => {
+      const marker = config?.specialAgentMigrations;
+      if ((Number(marker?.enableByDefaultVersion) || 0) >= ENABLE_BY_DEFAULT_MIGRATION) return undefined;
+      const raw = config?.specialAgents;
+      const sec: any = raw && typeof raw === 'object' ? raw : specialAgentsFrom(undefined); // 段缺失 → legacy 文件或默认值
+      return {
+        ...(config || {}),
+        specialAgents: { ...sec, historian: { ...sec.historian, enabled: true }, muse: { ...sec.muse, enabled: true } },
+        specialAgentMigrations: { ...(marker && typeof marker === 'object' ? marker : {}), enableByDefaultVersion: ENABLE_BY_DEFAULT_MIGRATION },
+      };
+    });
+  } catch (e) {
+    console.warn(`[specialAgents] 默认开启迁移未执行，下次启动重试：${(e as Error)?.message || e}`);
+  }
+  return loadSpecialAgentsConfig();
 }
 
 /**

@@ -1485,7 +1485,7 @@ const zh: Dict = {
   // 设置 - Special Agents（Historian / Muse）
   'settings.tab.special': '后台智能体',
   'settings.special.title': 'Special Agents（后台特殊智能体）',
-  'settings.special.hint': '默认关闭。不选模型时跟随云端默认；其记录隔离存于本地，不进会话列表。',
+  'settings.special.hint': '默认开启；手动关闭后不会被自动打开。不选模型时跟随云端默认；其记录隔离存于本地，不进会话列表。',
   'settings.special.pickModelFirst': '请先选模型再开启',
   'settings.special.followCloudDefault': '跟随云端默认（{model}）',
   'settings.model.imageCloudDefaultTag': '云端默认',
@@ -3204,7 +3204,7 @@ const en: Dict = {
 
   'settings.tab.special': 'Background Agents',
   'settings.special.title': 'Special Agents (background)',
-  'settings.special.hint': 'Off by default. Leave the model empty to follow the cloud default; records are isolated locally and never appear in the session list.',
+  'settings.special.hint': 'On by default; once you turn one off, it stays off. Leave the model empty to follow the cloud default; records are isolated locally and never appear in the session list.',
   'settings.special.pickModelFirst': 'Pick a model before enabling',
   'settings.special.followCloudDefault': 'Follow cloud default ({model})',
   'settings.model.imageCloudDefaultTag': 'Cloud default',

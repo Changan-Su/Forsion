@@ -1,6 +1,6 @@
 import { useApp } from '../stores/appStore'
 /**
- * 设置 → 后台智能体（Special Agents：Historian / Muse）。默认关闭、开启需选模型。
+ * 设置 → 后台智能体（Special Agents：Historian / Muse）。默认开启(引擎启动期一次性迁移,之后手动关闭保留);不选模型跟随云端默认。
  * 改动即存（POST /agent/special/config 合并）。仅本地后端可用。
  * UI 对齐 Tangu 设计系统:卡片 + .seg 分段开关 + .field/.field-row;默认提示词预填进可改框。
  */

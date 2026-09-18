@@ -20,7 +20,7 @@ import { createMcpManager } from '../mcp/manager.js';
 import { createEngineManager } from '../engines/index.js';
 import { loadMcpConfig } from '../mcp/config.js';
 import { loadEngines, loadEnginePrefs } from '../engines/config.js';
-import { loadSpecialAgentsConfig } from '../services/specialAgentsConfig.js';
+import { applySpecialAgentEnableMigration, loadSpecialAgentsConfig } from '../services/specialAgentsConfig.js';
 import { loadTanguEnv, configFile } from '../core/tanguHome.js';
 import { migrateLegacyConfig } from '../core/config.js';
 import { activateAllPlugins } from '../plugins/bootstrap.js';
@@ -80,6 +80,8 @@ async function main(): Promise<void> {
   const creds = loadCreds();
   if (!cfg.token) cfg.token = creds.token || '';
   if (!cfg.cloudUrl) cfg.cloudUrl = creds.cloudUrl || '';
+  // 本版本一次性开启仍关闭的后台智能体；迁移标记写入后，用户手动关闭永远优先。
+  applySpecialAgentEnableMigration();
   // `tangu login <provider>`(xAI 等 OAuth 直连)的凭证同样接进 registry——与 TUI 对齐,
   // 桌面端 managed 后端登录 provider 后即可用 <providerId>/<model>。
   // 走 oauthProviders 字段(loadProviders 合并时优先级最低,显式配置覆盖订阅登录)。

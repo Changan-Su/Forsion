@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
-  normalizeConfig, isWithinActiveHours, buildTodoDedupHint, SPECIAL_AGENTS_DEFAULTS, type MuseConfig,
+  applySpecialAgentEnableMigration, legacyMusePrompt, normalizeConfig, isWithinActiveHours, buildTodoDedupHint, saveSpecialAgentsConfig, SPECIAL_AGENTS_DEFAULTS, type MuseConfig,
 } from './specialAgentsConfig.js';
 import { isRoundDue } from './localHistorian.js';
 
@@ -76,6 +79,45 @@ describe('normalizeConfig', () => {
     expect(c.muse.modelId).toBe('m');
     expect(c.muse.allowedFolders).toEqual(['/a', '/b']);
   });
+});
+
+describe('special-agent enable migration', () => {
+  const isolated = (run: (home: string) => void): void => {
+    const previous = process.env.TANGU_HOME;
+    const home = mkdtempSync(join(tmpdir(), 'tangu-special-defaults-'));
+    process.env.TANGU_HOME = home;
+    try { run(home); } finally {
+      if (previous === undefined) delete process.env.TANGU_HOME;
+      else process.env.TANGU_HOME = previous;
+      rmSync(home, { recursive: true, force: true });
+    }
+  };
+
+  it('首次启动时把 Historian 与 Muse 一次性开启并写入迁移标记', () => isolated((home) => {
+    const enabled = applySpecialAgentEnableMigration();
+    expect(enabled.historian.enabled).toBe(true);
+    expect(enabled.muse.enabled).toBe(true);
+    const raw = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'));
+    expect(raw.specialAgentMigrations.enableByDefaultVersion).toBe(1);
+  }));
+
+  it('升级时覆盖旧的关闭值，但迁移后手动关闭不会被重启改回', () => isolated((home) => {
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ specialAgents: { historian: { enabled: false }, muse: { enabled: false, prompt: 'legacy persona' } } }));
+    const enabled = applySpecialAgentEnableMigration();
+    expect(enabled.historian.enabled).toBe(true);
+    expect(enabled.muse.enabled).toBe(true);
+    expect(legacyMusePrompt()).toBe('legacy persona'); // 迁移只翻开关，旧键留给 ensureMuseAgent 一次性播种
+    saveSpecialAgentsConfig({ historian: { enabled: false }, muse: { enabled: false } });
+    const again = applySpecialAgentEnableMigration();
+    expect(again.historian.enabled).toBe(false);
+    expect(again.muse.enabled).toBe(false);
+  }));
+
+  it('config.json 坏了不抛、不改写，引擎照常起（下次启动重试）', () => isolated((home) => {
+    writeFileSync(join(home, 'config.json'), '{ broken');
+    expect(applySpecialAgentEnableMigration().muse.enabled).toBe(false);
+    expect(readFileSync(join(home, 'config.json'), 'utf8')).toBe('{ broken');
+  }));
 });
 
 describe('isWithinActiveHours', () => {
