@@ -78,7 +78,7 @@ Try: “When helping me research, lead with conclusions, then sources, and call 
 
 **TEAM in v2.11 makes collaboration something you can build on:**
 
-- **Shared expectations.** Select two or more Agents to start team mode. Persistent teams retain members and roles, have a Library, and use `TEAM.md` for common goals and working agreements.
+- **Shared expectations.** Select two or more Agents to start team mode. Persistent teams retain members, roles, and a custom avatar, have a Library, and use `TEAM.md` for common goals and working agreements.
 - **Parallel work.** Members research, write, or execute in their own child conversations, posting progress, questions, and handoffs to the main conversation. Interject or @ a member to keep the work focused.
 - **Visible progress and outputs.** Team Desk shows who is working, awaiting approval, or done. Open a member's full child conversation; review approval requests and public outputs in the main conversation.
 - **A home for each task.** Use `@project` in a private chat to dispatch work into a new conversation in that project. Agents Space manages Agents and teams; the Orbits sidebar brings private chats, teams, projects, and external engines together.
@@ -105,7 +105,7 @@ You can also delegate independent subtasks from an ordinary conversation or conn
 - **Bring decisions back to you.** Results arrive in Inbox. Execute a task with Muse, continue in a new conversation, or dismiss it; approve or reject pending actions.
 - **Give ongoing work a place.** Muse builds its own Library and journals, and can write and gradually improve its own Space to make that work browsable.
 
-Muse is off by default and currently runs in local mode, with the device and relevant processes available. You set active hours, frequency, budgets, and approval behavior. For defined processes, **Automation** connects time, events, or database changes to Agent actions, notifications, and table operations.
+This version turns on Muse and Historian once for anyone who has not enabled them. You can turn either off at any time, and that choice survives restarts. Muse currently runs in local mode, with the device and relevant processes available. You set active hours, frequency, budgets, and approval behavior. For defined processes, **Automation** connects time, events, or database changes to Agent actions, notifications, and table operations.
 
 <p align="center">
   <img src="./.github/assets/showcase/muse-inbox-en.png" alt="Review a Muse follow-up in Inbox, inspect the task, execute it, start a new conversation, or dismiss it" width="920" />

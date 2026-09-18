@@ -42,13 +42,13 @@ Keep project material in the knowledge base. Explicitly tell your Agent a workin
 
 Open that Agent's **memory panel** and check what it recorded. Revise memories, inspect history, or remove a fact from active memory. Start a new conversation about the project and check whether it uses the appropriate context.
 
-Agents have individually manageable personalities, Libraries, logs, and memory settings. You can enable Historian and Dream for further maintenance; automatic Dream maintenance is off by default. See [Agents](../agents/overview.md) and [memory](../agents/memory.md).
+Agents have individually manageable personalities, Libraries, logs, and memory settings. This version turns Historian on once for anyone who has not enabled it; if you turn it off afterwards, that choice is kept. Automatic Dream maintenance is still off by default. See [Agents](../agents/overview.md) and [memory](../agents/memory.md).
 
 ## 4. Move the project forward with TEAM
 
 Select two or more Agents above the composer to enter team mode. Try Aria for creative directions and Recita for checking evidence, or add a research partner of your own.
 
-- **Define responsibilities:** give members different outputs, such as a draft, source checks, and open questions. For repeated work, create a persistent team in Agents Space and save shared agreements in `TEAM.md`.
+- **Define responsibilities:** give members different outputs, such as a draft, source checks, and open questions. For repeated work, create a persistent team in Agents Space, upload a custom team avatar, and save shared agreements in `TEAM.md`.
 - **Inspect progress:** members work in parallel child conversations. Check their state and details in Team Desk; progress, public outputs, and approvals return to the main conversation.
 - **Give results a home:** review and save them to your project note. In private chat, `@project` can also dispatch a task into a new conversation in that project.
 
@@ -56,7 +56,7 @@ Ordinary conversations can delegate independent subtasks with context passed as 
 
 ## 5. Arrange a proactive follow-up
 
-Enable **Muse** in the background Agent settings. Set active hours, heartbeat frequency, budget, and permissions first. Muse is off by default. In its approval mode, actions that need your decision enter a pending queue; delegated approval and full-access modes are also available.
+Check **Muse**'s active hours, heartbeat frequency, budget, and permissions in the background Agent settings. This version turns Muse on once for anyone who has not enabled it; if you turn it off afterwards, a restart will not turn it back on. In its approval mode, actions that need your decision enter a pending queue; delegated approval and full-access modes are also available.
 
 Ask Muse to track a next step, such as reviewing the project note at an agreed time and collecting unresolved questions. Its schedules, heartbeats, and rules trigger follow-up work, with results delivered to **Inbox**.
 
