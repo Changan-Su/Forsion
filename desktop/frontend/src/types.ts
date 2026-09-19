@@ -969,7 +969,7 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
    *  在任意会话里改这三样都会写回这里 —— 用户的口径是「换过一次就一直是它」,不是每建一个会话重设一次。 */
   lastApprovalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'
   lastThinkingLevel?: ThinkingLevel
-  /** chat 会话上次用的思考档 —— 与 work 的 lastThinkingLevel **分槽**(D36):chat 缺省 off;在 chat 里调高不污染下一个 work 会话。 */
+  /** chat 会话上次用的思考档 —— 与 work 的 lastThinkingLevel **分槽**(D36):chat 缺省「中」(09-19 前是 off);在 chat 里改档不污染下一个 work 会话。 */
   lastChatThinkingLevel?: ThinkingLevel
   backendState?: BackendStatusInfo
   /** 主进程附带的用户主目录(本机模式 cwd 兜底)。 */

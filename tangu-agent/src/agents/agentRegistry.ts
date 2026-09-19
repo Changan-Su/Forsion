@@ -329,12 +329,14 @@ export const DEFAULT_AGENTS: BuiltinAgentPreset[] = [
   {
     slug: DEFAULT_AGENT_SLUG, name: 'Arioso', version: '1.1.0',
     description: 'Quiet warmth and clear judgment, with memory of what matters to you',
-    thinkingLevel: 'low', systemPrompt: ARIOSO_SYSTEM_PROMPT, soul: ARIOSO_SOUL,
+    // 思考档统一 medium(09-19 用户拍板):从前 Arioso / Aria 预设 low,而会话没指定档位时 agentActivation 用 Agent 的档位 ——
+    // 默认 Agent 实际跑 low,输入区药丸却按「未指定 = 中」显示。老装机由 migrateDefaultEffortOnce 翻一次。
+    thinkingLevel: 'medium', systemPrompt: ARIOSO_SYSTEM_PROMPT, soul: ARIOSO_SOUL,
   },
   {
     slug: 'aria', name: 'Aria',
     description: 'Emotional insight, expressive writing, and imaginative collaboration',
-    thinkingLevel: 'low', systemPrompt: ARIA_SYSTEM_PROMPT, soul: ARIA_SOUL,
+    thinkingLevel: 'medium', systemPrompt: ARIA_SYSTEM_PROMPT, soul: ARIA_SOUL,
   },
   {
     slug: 'recita', name: 'Recita',
@@ -494,6 +496,24 @@ async function ensureBuiltinAvatar(slug: string): Promise<void> {
   await saveAgentAvatar(slug, avatar.data.toString('base64'), avatar.mimeType);
 }
 
+/** 思考档默认值 low → medium 的一次性迁移(09-19):只碰播种时写过 low 的两个内置 Agent(Arioso / Aria),磁盘上仍是 low 才翻。
+ *  「用户特意选了 low」与「播种写下的 low」在磁盘上分不清,所以只翻这一次(独立标记文件);此后用户再调回 low 永久保留。
+ *  用户自建的 Agent 不碰。 */
+export async function migrateDefaultEffortOnce(): Promise<void> {
+  const marker = path.join(agentsDir(), '.effort-medium-v1');
+  if (existsSync(marker)) return;
+  for (const slug of [DEFAULT_AGENT_SLUG, 'aria']) {
+    const adir = path.join(agentsDir(), slug);
+    if (!existsSync(path.join(adir, 'config.toml'))) continue;
+    const cur = await parseAgentFolder(slug, adir);
+    if (cur.thinkingLevel === 'low') {
+      await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig({ ...cur, thinkingLevel: 'medium' }), 'utf-8');
+      cache = null;
+    }
+  }
+  await fs.writeFile(marker, new Date().toISOString(), 'utf-8');
+}
+
 /** Arioso/Coding 保持原来的补齐语义;Aria/Recita/Muse 独立播种标记让已有安装也能获得新名册,
  *  此后尊重用户删除。Muse 的身份可见不代表开启后台功能。 */
 async function seedDefaultAgentsOnce(): Promise<void> {
@@ -518,6 +538,7 @@ async function seedDefaultAgentsOnce(): Promise<void> {
     }
     await fs.writeFile(marker, new Date().toISOString(), 'utf-8');
   }
+  await migrateDefaultEffortOnce();
   for (const slug of [DEFAULT_AGENT_SLUG, 'aria', 'recita']) await ensureBuiltinAvatar(slug);
   const oldMarker = path.join(agentsDir(), '.seeded');
   if (!existsSync(oldMarker)) await fs.writeFile(oldMarker, new Date().toISOString(), 'utf-8');

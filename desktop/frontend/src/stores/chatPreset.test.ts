@@ -111,9 +111,13 @@ describe('applyPreset(唯一物化点,creview F1/F6)', () => {
 })
 
 describe('stickyDefaults 思考档分槽(D36)', () => {
-  it('chat 缺省 off,且 dc 为 null(web/mobile)时也是 off', () => {
-    expect(stickyDefaults(null, false, 'chat').thinkingLevel).toBe('off')
-    expect(stickyDefaults({ lastThinkingLevel: 'high' } as never, false, 'chat').thinkingLevel).toBe('off')
+  it('chat 缺省「中」(09-19 全端统一;此前是 off),dc 为 null(web/mobile)时同;work 槽的值不串进来', () => {
+    expect(stickyDefaults(null, false, 'chat').thinkingLevel).toBe('medium')
+    expect(stickyDefaults({ lastThinkingLevel: 'high' } as never, false, 'chat').thinkingLevel).toBe('medium')
+    // 用户在 chat 里特意关掉思考,记住的就是 off —— 缺省值不许盖掉它。
+    expect(stickyDefaults({ lastChatThinkingLevel: 'off' } as never, false, 'chat').thinkingLevel).toBe('off')
+    // work 没记过就不指定:交给 Agent 档位 → 引擎会话缺省。
+    expect(stickyDefaults(null, true).thinkingLevel).toBeUndefined()
   })
   it('chat 槽与 work 槽互不污染', () => {
     const dc = { lastThinkingLevel: 'high', lastChatThinkingLevel: 'low' } as never
@@ -230,7 +234,7 @@ describe('新建 chat 会话:恒 projectless + sandbox,初始配置随 POST 原�
     useApp.setState({ defaultAgentSlug: 'xyra' })
     await useApp.getState().createInWorkspace(rootless)
     expect(createdInit()).toMatchObject({ projectless: true })
-    expect(createdCfg()).toMatchObject({ execMode: 'sandbox', preset: 'chat', thinkingLevel: 'off', agentSlug: 'xyra' })
+    expect(createdCfg()).toMatchObject({ execMode: 'sandbox', preset: 'chat', thinkingLevel: 'medium', agentSlug: 'xyra' })
     expect(createdCfg()).not.toHaveProperty('workspaceProject')
     expect(putSessionConfigMock).not.toHaveBeenCalled()
 

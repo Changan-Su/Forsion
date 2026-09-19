@@ -340,6 +340,9 @@ const runWatchdogs = new Map<string, ReturnType<typeof setInterval>>()
 const loadedHistory = new Set<string>()
 /** 审批档缺省(全端统一「替我批准」);新会话没有记忆时的起步值。 */
 export const DEFAULT_APPROVAL = 'auto-edit' as const
+/** 思考档缺省(全端、两种模式统一「中」,09-19 用户拍板):与引擎的会话缺省(agentLoop `|| 'medium'`)、内置 Agent 预设同值。
+ *  从前 chat 缺省 off(方案 D36 为首字延迟定的);现在 chat 也起步于中,想要更快的人在药丸上调低即可,调过的值按槽记住。 */
+export const DEFAULT_THINKING = 'medium' as const
 /** 新会话的起步档位 = 上次用的那套(没记忆过就用全端默认「替我批准」+ 不指定思考档)。
  *  只吐 AgentConfig 的键,好让调用方直接展开进 init;模型不在此(走 cfg.modelId 老路)。
  *  **云沙箱会话不带审批档**:引擎那边 approvalMode 缺席才等于 full-auto,写死 auto-edit 会让
@@ -347,8 +350,9 @@ export const DEFAULT_APPROVAL = 'auto-edit' as const
 export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean, preset?: AgentConfig['preset']): Pick<AgentConfig, 'approvalMode' | 'thinkingLevel'> {
   const out: Pick<AgentConfig, 'approvalMode' | 'thinkingLevel'> = {}
   if (host) out.approvalMode = dc?.lastApprovalMode || DEFAULT_APPROVAL
-  // 思考档按 preset **分槽**(D36):chat 只读 chat 槽、缺省 off(dc 为 null 的 web/mobile 也是 off);work 沿用 lastThinkingLevel。
-  if (preset === 'chat') out.thinkingLevel = dc?.lastChatThinkingLevel || 'off'
+  // 思考档按 preset **分槽**(D36):chat 只读 chat 槽、缺省 DEFAULT_THINKING(dc 为 null 的 web/mobile 同);work 沿用 lastThinkingLevel,
+  // 没记过就不指定 —— 交给 Agent 自己的档位,再回落引擎的会话缺省(都是中)。
+  if (preset === 'chat') out.thinkingLevel = dc?.lastChatThinkingLevel || DEFAULT_THINKING
   else if (dc?.lastThinkingLevel) out.thinkingLevel = dc.lastThinkingLevel
   return out
 }
