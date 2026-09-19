@@ -71,7 +71,7 @@ async function main() {
   try {
     app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT,
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: url } })
-    const win = await app.firstWindow()
+    let win = await app.firstWindow()
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1280, 960))
     await win.waitForSelector('#root')
     await win.waitForTimeout(1600)
@@ -80,8 +80,23 @@ async function main() {
       if (await button.isVisible().catch(() => false)) { await button.click(); break }
     }
     await win.locator('.ob-hero-skip').waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {})
-    await win.keyboard.press('Meta+,')
-    await win.waitForTimeout(500)
+    // 设置已是独立窗口(不再是主窗里的弹层):快捷键 / 命令面板打在主窗上,设置里的元素去新开的那个窗口里找。
+    // 「返回应用」会关掉设置窗,所以每次开设置都重新取一次;仍是单窗口的构建下 at(-1) 就是主窗,两种都走得通。
+    const mainWin = win
+    const openSettings = async () => {
+      await mainWin.keyboard.press('Meta+,')
+      await mainWin.waitForTimeout(800)
+      win = app.windows().at(-1)
+      await win.waitForSelector('#root')
+    }
+    const palette = async (command) => {
+      win = mainWin
+      await win.keyboard.press('Meta+k')
+      await win.locator('.cmd-input:visible').fill(command)
+      await win.locator('.cmd-item', { hasText: command }).click()
+      await win.waitForTimeout(250)
+    }
+    await openSettings()
     const agentsNav = win.getByRole('button', { name: '智能体', exact: true }).first()
     await agentsNav.click({ timeout: 15000 })
     const openAgent = async (slug) => {
@@ -163,20 +178,15 @@ async function main() {
     await panel.locator('..').screenshot({ path: path.join(home, 'memory-modal-light.png') })
     await panel.locator('..').locator('button').filter({ has: win.locator('svg.lucide-x') }).first().click()
     await win.getByRole('button', { name: '返回应用', exact: true }).click()
-    await win.keyboard.press('Meta+k')
-    await win.locator('.cmd-input:visible').fill('切换明暗模式')
-    await win.locator('.cmd-item', { hasText: '切换明暗模式' }).click()
-    await win.waitForTimeout(250)
-    await win.keyboard.press('Meta+,')
+    await palette('切换明暗模式')
+    await openSettings()
     await win.locator('button[aria-controls="settings-nav-subitems-agents"]').click()
     panel = await openAgent('beta')
     await panel.locator('..').screenshot({ path: path.join(home, 'memory-modal-dark.png') })
     await panel.locator('..').locator('button').filter({ has: win.locator('svg.lucide-x') }).first().click()
     await win.getByRole('button', { name: '返回应用', exact: true }).click()
-    await win.keyboard.press('Meta+k')
-    await win.locator('.cmd-input:visible').fill('切换语言')
-    await win.locator('.cmd-item', { hasText: '切换语言' }).click()
-    await win.keyboard.press('Meta+,')
+    await palette('切换语言')
+    await openSettings()
     await win.locator('button[aria-controls="settings-nav-subitems-agents"]').click()
     panel = await openAgent('beta')
     await panel.getByText('Dream · Memory maintenance', { exact: true }).waitFor()

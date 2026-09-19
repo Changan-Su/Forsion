@@ -4,7 +4,8 @@
 .agents-roster-heading { display: flex; justify-content: space-between; padding-inline: 8px; color: var(--text-muted); font-size: 12px; }
 .agents-search, .profile-search { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); color: var(--text-muted); }
 .agents-search input, .profile-search input { width: 100%; min-width: 0; border: 0; background: transparent; outline: none; padding: 0; box-shadow: none; font-size: 12px; color: var(--text); }
-.profile-search:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* 环画在框内:正文滚动区左右只有 2px 内边距,外扩的环会被裁掉两条竖边 */
+.profile-search:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; }
 .agents-roster-list { overflow: auto; flex: 1; min-height: 0; }
 .agents-roster-item { width: 100%; display: flex; gap: 10px; align-items: center; border: 0; background: transparent; padding: 12px 8px; text-align: left; border-radius: var(--radius-sm, 8px); color: var(--text); cursor: pointer; }
 .agents-roster-item:hover, .agents-roster-item.selected { background: var(--overlay-medium); }
@@ -79,28 +80,47 @@
 .agent-avatar-actions label[aria-disabled=true] { opacity: .55; cursor: default; }
 .agent-avatar-actions input[type=file] { display: none; }
 .agent-avatar-actions small { flex-basis: 100%; color: var(--text-muted); font-size: 10px; line-height: 1.5; }
-.profile-loadout-mode { display: grid; gap: 8px; margin-bottom: 16px; }
-.profile-loadout-mode > .agent-field { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
-.profile-loadout-mode select { flex: 1; width: 0; }
-.profile-loadout-mode > small { color: var(--text-muted); font-size: 11px; line-height: 1.6; }
-.profile-list-toolbar { display: grid; gap: 10px; }
-.profile-list-summary, .profile-bulk-actions { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
-.profile-list-summary { color: var(--text-muted); font-size: 11px; }
-.profile-bulk-actions { justify-content: flex-start; gap: 16px; }
+/* 装备清单的工具条:两行。① 搜索 + 启用方式;② 计数 + 文字动作(整行可折行 —— 窄栏里右端的动作从前会被裁掉)。 */
+.profile-list-toolbar { display: grid; gap: 6px; }
+.profile-list-controls { display: flex; gap: 8px; min-width: 0; }
+.profile-list-controls > .profile-search { flex: 1 1 0; min-width: 0; }
+.profile-list-controls > select { flex: 0 1 auto; min-width: 0; max-width: 46%; min-height: 36px; font-size: 12px; color: var(--text); }
+.profile-list-summary { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 12px; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
+.profile-list-actions { display: flex; flex-wrap: wrap; gap: 0 12px; }
 .profile-text-action { color: var(--text-muted); font-size: 11px; background: transparent; border: 0; padding: 6px 0; cursor: pointer; }
 .profile-text-action:hover, .profile-text-action[aria-pressed=true] { color: var(--accent-ink); }
 .profile-text-action[aria-pressed=true] { text-decoration: underline; text-underline-offset: 4px; }
 .profile-text-action:disabled { opacity: .45; cursor: default; }
-.agent-equipment-list { margin-top: 12px; display: grid; gap: 5px; }
+.agent-equipment-list { margin-top: 10px; display: grid; gap: 3px; }
 .agent-equipment-item { display: flex; gap: 10px; align-items: flex-start; padding: 12px 10px; border-radius: var(--radius-sm, 8px); font-size: 12px; line-height: 1.6; cursor: pointer; transition: background 160ms ease; }
 .agent-equipment-item:hover, .agent-equipment-item.enabled { background: var(--overlay-light); }
-.agent-equipment-item:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* 只在键盘聚焦勾选框时圈整行;点开描述(按钮自己有焦点环)不该让整行套上一圈粗框 */
+.agent-equipment-item:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .agent-equipment-item input { flex-shrink: 0; margin-top: 3px; accent-color: var(--accent); }
-.agent-equipment-item span { display: grid; gap: 5px; min-width: 0; }
 .agent-equipment-item strong { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
-.agent-equipment-item small { font-size: 12px; line-height: 1.6; color: var(--text-muted); overflow-wrap: anywhere; }
+/* 清单行(EquipmentRow):勾选框 + 名称一行,描述另起一行、默认截成一行,点开才是全文。
+ * 单独一个勾选项的 label(允许读取活动日志…)仍是上面那条 flex 规则;这里的 div 变体特异性高一档,不靠源码顺序。 */
+div.agent-equipment-item { display: grid; gap: 1px; padding: 7px 10px; cursor: default; }
+div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 10px; min-width: 0; cursor: pointer; }
+.equipment-desc { display: block; width: calc(100% - 23px); min-width: 0; margin-left: 23px; padding: 0; text-align: left; font-size: 12px; line-height: 1.6; color: var(--text-muted); background: transparent; border: 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.equipment-desc:hover { color: var(--text); }
+.equipment-desc:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+.equipment-desc[aria-expanded=true] { white-space: normal; overflow-wrap: anywhere; }
+/* 内置技能组:默认合上。标题行 = 组名 + 已启用计数,不描边(内容卡纪律),靠底色与清单区分。 */
+.equipment-group { margin-top: 10px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); }
+.equipment-group > summary { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 10px 12px; font-size: 12px; font-weight: 500; cursor: pointer; border-radius: var(--radius-sm, 8px); }
+.equipment-group > summary:hover { background: var(--overlay-light); }
+.equipment-group > summary::before { content: ""; flex-shrink: 0; align-self: center; width: 0; height: 0; border-block: 4px solid transparent; border-left: 6px solid currentColor; opacity: .7; transition: transform 160ms ease; }
+.equipment-group[open] > summary::before { transform: rotate(90deg); }
+.equipment-group > summary::-webkit-details-marker { display: none; }
+.equipment-group > summary > span { flex: 1; min-width: 0; }
+.equipment-group > summary > small { font-size: 11px; font-weight: 400; color: var(--text-muted); white-space: nowrap; }
+.equipment-group > .agent-equipment-list { margin-top: 0; padding: 0 4px 6px; }
+.equipment-group .agent-equipment-item.enabled { background: transparent; }
+.equipment-group .agent-equipment-item:hover { background: var(--overlay-light); }
 .profile-empty { padding: 26px 12px; text-align: center; font-size: 12px; color: var(--text-muted); }
 .agent-profile-save { flex-shrink: 0; padding: 12px 0; border-top: 1px solid var(--border); display: grid; gap: 8px; min-width: 0; }
+.agent-profile-save:empty { display: none; }
 .agent-profile-save small { color: var(--text-muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
 .agent-profile-save.is-dirty > small { color: var(--accent-ink); }
 .agent-profile-save > div { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
@@ -146,13 +166,52 @@
 .profile-disclosure[open] > summary { margin-bottom: 14px; }
 .profile-memory { font-size: 13px; line-height: 1.7; }
 .profile-memory [hidden] { display: none !important; }
-.profile-memory-nav { display: flex; flex-wrap: wrap; gap: 4px; margin: 16px 0; }
-.profile-memory-nav button { flex: 1 1 auto; padding: 8px; border: 0; background: var(--overlay-light); border-radius: var(--radius-sm, 8px); font-size: 11px; color: var(--text-muted); cursor: pointer; }
-.profile-memory-nav button[aria-pressed=true] { background: var(--overlay-medium); color: var(--accent-ink); }
 .profile-memory textarea { width: 100%; min-width: 0; padding: 10px; font-size: 13px; line-height: 1.75; resize: vertical; }
 .profile-memory summary { cursor: pointer; padding-block: 6px; font-size: 12px; }
 .profile-memory li { padding-bottom: 12px; }
-.profile-memory-document > summary, .profile-memory-history > summary { display: none; }
+/* 成长 › 记忆:条目与工作笔记同一套卡(底色 + 圆角、不描边);动作是卡尾的图标钮,来源写在折叠标题上。 */
+.profile-memory { display: grid; gap: 10px; min-width: 0; }
+.memory-list { display: grid; gap: 10px; min-width: 0; }
+.profile-growth-memory { display: grid; gap: 10px; min-width: 0; }
+.profile-growth-memory > .agent-profile-link { margin-top: 0; }
+.profile-growth-memory .profile-disclosure, .agent-schedule .profile-disclosure { margin-bottom: 0; padding: 8px 12px; }
+.profile-growth-memory .profile-disclosure[open] > summary, .agent-schedule .profile-disclosure[open] > summary { margin-bottom: 10px; }
+.profile-disclosure > summary > small { float: right; margin-left: 10px; font-size: 11px; font-weight: 400; color: var(--text-muted); }
+.memory-add > summary { display: inline-flex; align-items: center; gap: 6px; padding-block: 2px; font-size: 12px; color: var(--accent-ink); list-style: none; }
+.memory-add > summary::-webkit-details-marker { display: none; }
+.memory-add > summary:hover { text-decoration: underline; text-underline-offset: 3px; }
+.memory-entry > p { margin: 0; font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.memory-entry-meta { display: flex; align-items: flex-start; gap: 2px; min-width: 0; margin-bottom: -4px; }
+.memory-entry-meta > details { flex: 1; min-width: 0; font-size: 11px; line-height: 1.6; color: var(--text-muted); overflow-wrap: anywhere; }
+.memory-entry-meta > details > summary { padding-block: 3px; font-size: 11px; }
+.memory-entry-meta > .harness-undo { margin: 0; }
+.memory-footnote { margin: 0; font-size: 11px; line-height: 1.6; color: var(--text-faint, var(--text-muted)); }
+/* 成长的两层分段:两张并排的卡(标题 + 一句话)。选中 = 有底色的卡 + accent 标题,未选 = 只有字。
+ * 不用「纸面底」当选中态:宽版里正文底就是纸面色,选中的那张会整个隐形、反倒是没选的像张卡(09-19 截图自查发现)。 */
+.profile-segment { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 16px; }
+.profile-segment > button { display: grid; gap: 2px; min-width: 0; padding: 10px 12px; text-align: left; color: var(--text-muted); background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm, 8px); cursor: pointer; transition: background 160ms ease, color 160ms ease; }
+.profile-segment > button:hover { background: var(--overlay-light); color: var(--text); }
+.profile-segment > button[aria-pressed=true] { color: var(--accent-ink); background: var(--overlay-medium); }
+.profile-segment strong { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+.profile-segment small { font-size: 11px; line-height: 1.5; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.profile-segment .profile-tab-badge { position: static; margin-left: auto; }
+/* 日程:条目沿用工作笔记的卡;时间行 = 芯片 + 下一次 + 间隔。已过期 / 停用的整卡降一档。 */
+.schedule-entry, .schedule-rule { display: grid; gap: 6px; min-width: 0; padding: 12px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); }
+.schedule-entry.is-past, .schedule-rule.is-past { opacity: .62; }
+.schedule-entry > p { margin: 0; font-size: 12px; line-height: 1.6; color: var(--text-muted); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.schedule-when { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-size: 12px; line-height: 1.6; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.schedule-when > .harness-kind { margin-right: 0; }
+.schedule-when > time { color: var(--text); }
+.schedule-rule { grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; align-items: start; }
+.schedule-rule > svg { margin-top: 3px; color: var(--text-muted); }
+.schedule-rule > span { display: grid; gap: 2px; min-width: 0; }
+.schedule-rule strong { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.schedule-rule small { font-size: 11px; line-height: 1.6; color: var(--text-muted); overflow-wrap: anywhere; }
+.schedule-rules > h3 { margin: 10px 0 8px; font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.schedule-past { margin-bottom: 0; }
+.schedule-past > .harness-entries { margin-top: 0; }
+.agent-schedule .harness-summary .profile-text-action, .profile-memory .harness-summary .profile-text-action { color: var(--text-muted); }
+.agent-schedule .harness-summary .profile-text-action:hover, .profile-memory .harness-summary .profile-text-action:hover { color: var(--accent-ink); }
 /* 进化(HARNESS 工作笔记):条目与装备列表同一套「底色 + 圆角、不描边」;kind 是芯片,描边即形状。
  * 编辑史是一条时间线:左侧细线 + 实心点(新建/修改 = accent,删除/回滚 = 灰),点盖在线上,不依赖纸面底色。 */
 .agent-harness { display: grid; gap: 14px; min-width: 0; }
@@ -187,8 +246,6 @@
 /* 「进化」标签角标:待复盘候选数。绝对定位在按钮右上角 —— 紧凑模式下按钮是竖排(图标 / 文字),作为第三行会把整条标签栏撑高。 */
 .agent-section-nav button { position: relative; }
 .profile-tab-badge { position: absolute; top: 2px; right: 2px; display: inline-grid; place-items: center; min-width: 14px; height: 14px; padding: 0 3px; font-size: 9px; font-style: normal; font-weight: 600; line-height: 1; color: var(--accent-ink); background: var(--overlay-medium); border-radius: 999px; }
-/* 装备列表里 `.agent-equipment-item span` 把所有 span 都铺成 grid,自建芯片会被拉成整行 —— 提高特异性钉回 inline */
-.agent-equipment-item .harness-kind { display: inline-block; }
 .harness-history > h3 { margin: 10px 0 12px; font-size: 12px; font-weight: 500; color: var(--text-muted); }
 .harness-history > ol { list-style: none; display: grid; gap: 12px; margin: 0 0 0 4px; padding: 0 0 0 14px; border-left: 1px solid var(--border); }
 .harness-event { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; font-size: 12px; line-height: 1.5; }
@@ -213,5 +270,5 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .profile-section-enter, .profile-model-options { animation: none; }
-  .agent-section-nav::before, .agent-section-nav button, .agent-equipment-item, .profile-model-trigger svg, .agent-portrait-badge, .agent-portrait-remove, .agent-character-name, .agent-character-desc { transition: none; }
+  .agent-section-nav::before, .agent-section-nav button, .agent-equipment-item, .profile-segment > button, .equipment-group > summary::before, .profile-model-trigger svg, .agent-portrait-badge, .agent-portrait-remove, .agent-character-name, .agent-character-desc { transition: none; }
 }

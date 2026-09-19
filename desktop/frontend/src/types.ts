@@ -626,6 +626,8 @@ export interface SkillInfo {
   source?: 'local' | 'claude' | 'codex' | 'user' | 'cloud'
   /** agent=Agent 用 manage_skill 自建(SKILL.md frontmatter origin);「自建」徽标只认它,不认 category(agent 桶里混着包内置专属技能)。 */
   origin?: 'agent' | null
+  /** 随包内置(含家目录里没被改过的镜像;用户改过的副本不算)。Agent 详情据此把内置技能收进折叠组;分类各写各的,不能当判据。 */
+  builtin?: boolean
 }
 
 export interface ToolsResponse {

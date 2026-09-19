@@ -27,6 +27,7 @@ let harnessReads = 0
 // 自进化自动档的提名 → 右上角提醒(HistorianStatus 在会话里每 2.5s 轮询活动):
 //  - 团队主会话 Atlas team 的活动流**从第一次轮询起就带**一条提名 → 那是历史,不许弹(负对照;弹了会盖住右栏,后面的点击全被拦);
 //  - Research notes 的活动流只在 nominate 置真后才出现提名 → 必须弹一张卡;点「复盘」就地往该会话发 /refine;同 id 不弹第二张。
+const LONG_DESC = 'Use when the task needs this capability. '.repeat(8).trim() // 真实内置技能的描述有两三百字:一行放不下才测得出截断
 let nominate = false
 let harnessEmpty = false // 置真后 GET harness 回 entries: [] —— 「还没笔记但收件箱已有提名」这个首次用户的状态,候选段必须仍在
 const historianPolls = { main: 0, solo: 0 }
@@ -54,7 +55,16 @@ async function run() {
     if (p === `/agent/sessions/${child.id}/messages`) return { messages: childMessages }
     if (p.endsWith('/config') && p.startsWith('/agent/sessions/')) return { agent_config: p.includes(child.id) ? child.agent_config : p.includes(solo.id) ? solo.agent_config : config }
     // 「自建」徽标只认 origin:'agent'(manage_skill 写的);category:'agent' 的包内置专属技能(如 bluebird-video)没有徽标 —— 负对照。
-    if (p === '/agent/skills') return { skills: [{ id: 'local:research', name: 'Research notebook', description: 'Gather and cite evidence', category: 'agent' }, { id: 'local:writing', name: 'Writing', description: 'Write clear reports', origin: 'agent' }] }
+    // builtin:true 的两条 = 随包内置技能(描述照真实内置的长度写):默认收在合上的「内置技能」组里,搜索命中才自动展开。
+    if (p === '/agent/skills') return { skills: [{ id: 'local:research', name: 'Research notebook', description: 'Gather and cite evidence', category: 'agent' }, { id: 'local:writing', name: 'Writing', description: 'Write clear reports', origin: 'agent' },
+      { id: 'local:git-workflow', name: 'Git workflow', description: LONG_DESC, category: '开发流程', builtin: true }, { id: 'local:web-research', name: 'Web research', description: LONG_DESC, category: '信息检索', builtin: true }] }
+    // 日程:一条每天自动执行(锚点在过去 → 下一次要滚到未来)、一条已过期的一次性计划;规则两条,只有一条的动作链会叫醒 research(另一条是负对照)。
+    if (p === '/agent/special/schedule' && method === 'GET') return { schedules: [{ slug: 'research', name: 'Research', db: { version: 1, name: 'Schedule', columns: [], rows: [] }, entries: [
+      { id: 'sch-daily', name: 'Morning digest', date: '2026-01-01T09:00', repeat: '1d', auto: true, prompt: 'Summarize new primary sources.', description: '', todo: false, lastRun: '2026-09-18T09:00:03.000Z' },
+      { id: 'sch-old', name: 'Kickoff review', date: '2026-02-01', repeat: '', auto: false, prompt: '', description: 'One-off planning note', todo: false, lastRun: '' }] }] }
+    if (p === '/agent/special/muse/triggers' && method === 'GET') return { triggers: [
+      { id: 'tr-mine', desc: 'Weekly source sweep', cond: { type: 'daily_at', time: '08:30' }, cooldownHours: 0, lastFiredAt: null, enabled: true, createdAt: '2026-09-01', actions: [{ type: 'agent_run', agentSlug: 'research', prompt: 'sweep' }], nextRunAt: null },
+      { id: 'tr-other', desc: 'Someone else rule', cond: { type: 'daily_at', time: '07:00' }, cooldownHours: 0, lastFiredAt: null, enabled: true, createdAt: '2026-09-01', actions: [{ type: 'agent_run', agentSlug: 'xyra', prompt: 'x' }], nextRunAt: null }] }
     if (p === '/agent/tools') return { builtins: [], custom: [], mcp: [{ server: 'documents', status: 'connected', transport: 'stdio', tools: [{ name: 'read', description: 'Read documents' }] }] }
     if (p === '/agent/agents/research/avatar' && method === 'POST') { avatarWrites++; agents.find((a) => a.slug === 'research').avatar = 'avatar.png'; return { ok: true, avatar: 'avatar.png' } }
     if (p === '/agent/agents/research/avatar' && method === 'DELETE') { avatarDeletes++; delete agents.find((a) => a.slug === 'research').avatar; return { ok: true } }
@@ -133,12 +143,34 @@ async function run() {
     await win.locator('[data-tangu-details] .agent-section-nav button').filter({ hasText: '技能' }).click()
     assert.equal(await compact.locator('.agent-equipment-item').filter({ hasText: 'Writing' }).locator('.harness-kind').textContent(), '自建', 'A skill the agent wrote with manage_skill is badged')
     assert.equal(await compact.locator('.agent-equipment-item').filter({ hasText: 'Research notebook' }).locator('.harness-kind').count(), 0, 'A bundled agent-category skill without origin is not badged')
+    // 内置技能收进默认合上的组:自己的两条在外面,内置两条在组里且不可见;组标题带已启用计数。
+    const ownRows = compact.locator('.profile-section-enter > .agent-equipment-list .agent-equipment-item')
+    const stockGroup = compact.locator('[data-equipment-group="builtin"]')
+    assert.equal(await ownRows.count(), 2, 'Only non-built-in skills sit in the main list')
+    assert.equal(await stockGroup.evaluate((el) => el.open), false, 'Built-in skills start collapsed')
+    assert.equal(await stockGroup.locator('.agent-equipment-item').first().isVisible(), false)
+    assert.ok((await stockGroup.locator('summary').textContent()).includes('2 / 2'), 'The collapsed group still reports how many built-in skills are enabled')
+    // 描述默认一行(长描述被截断),点一下展开全文。
+    await stockGroup.locator('summary').click()
+    const longDesc = stockGroup.locator('.equipment-desc').first()
+    assert.equal(await longDesc.evaluate((el) => el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).whiteSpace === 'nowrap'), true, 'A long description is clamped to one line')
+    const clampedHeight = await longDesc.evaluate((el) => el.getBoundingClientRect().height)
+    await longDesc.click()
+    assert.ok(await longDesc.evaluate((el, h) => el.getAttribute('aria-expanded') === 'true' && el.getBoundingClientRect().height > h * 2, clampedHeight), 'Clicking the description expands the full text')
+    await win.waitForTimeout(220)
+    await win.locator('[data-tangu-details]').screenshot({ path: path.join(home, 'compact-skills.png') })
+    await stockGroup.locator('summary').click()
+    // 搜索命中内置技能 → 组自动展开;清空搜索 → 合回去(过滤后的命中不许藏在合着的组里)。
+    await compact.getByLabel('搜索名称或描述', { exact: true }).fill('Git workflow')
+    assert.equal(await stockGroup.evaluate((el) => el.open), true, 'A search hit inside the built-in group opens it')
+    assert.equal(await compact.locator('.agent-equipment-item').count(), 1)
     await compact.getByLabel('搜索名称或描述', { exact: true }).fill('Writing')
     assert.equal(await compact.locator('.agent-equipment-item').count(), 1)
     await compact.getByLabel('Writing', { exact: false }).uncheck()
     await compact.getByLabel('搜索名称或描述', { exact: true }).fill('')
+    assert.equal(await stockGroup.evaluate((el) => el.open), false, 'Clearing the search collapses the built-in group again')
     await compact.getByRole('button', { name: '仅看已启用', exact: true }).click()
-    assert.equal(await compact.locator('.agent-equipment-item').count(), 1)
+    assert.equal(await ownRows.count(), 1)
     await compact.getByRole('button', { name: '仅看已启用', exact: true }).click()
     const geometry = await compact.evaluate((el) => {
       const body = el.querySelector('.agent-profile-content'), nav = el.querySelector('.agent-section-nav'), footer = el.querySelector('.agent-profile-save')
@@ -148,19 +180,31 @@ async function run() {
     assert.ok(geometry.footer <= geometry.panel + 1 && geometry.nav <= geometry.body + 1 && !geometry.overflow)
     await win.locator('[data-tangu-details]').getByRole('button', { name: '保存配置', exact: true }).click()
     await win.waitForTimeout(200)
-    assert.deepEqual(saved.enabledSkillIds, ['local:research'])
+    assert.deepEqual(saved.enabledSkillIds, ['local:research', 'local:git-workflow', 'local:web-research'], 'Unchecking one skill keeps the rest, including the collapsed built-in ones')
     console.log('PASS default right details follows main session; compact skill editing')
-    await compact.getByRole('tab', { name: '记忆', exact: true }).click()
+    // 记忆与进化并成一个「成长」标签(两张分段卡);原来的两个一级标签不该还在。
+    assert.equal(await compact.getByRole('tab', { name: '记忆', exact: true }).count() + await compact.getByRole('tab', { name: '进化', exact: true }).count(), 0)
+    const segment = (name) => compact.locator('.profile-segment button').filter({ hasText: name })
+    await compact.getByRole('tab', { name: '成长', exact: true }).click()
+    assert.equal(await segment('记忆').getAttribute('aria-pressed'), 'true', 'Growth opens on the Memory layer')
     const memory = compact.locator('[data-testid="agent-memory-panel"]')
     await memory.getByText('Cite primary sources.', { exact: true }).first().waitFor()
     await memory.getByLabel('搜索记忆', { exact: true }).fill('absent')
     await memory.getByText('没有匹配的记忆', { exact: true }).waitFor()
     await memory.getByLabel('搜索记忆', { exact: true }).fill('')
-    await memory.getByRole('button', { name: '编辑原文', exact: true }).click()
+    // 二级标签(条目 / 整理 / 原文 / 历史)已收成折叠块:条目始终在,原文点开才出现。
+    assert.equal(await memory.locator('.profile-memory-nav').count(), 0)
+    assert.equal(await memory.locator('[data-memory-entry-id="memory-1"]').getByRole('button', { name: '遗忘', exact: true }).count(), 1, 'Entry actions stay reachable by name as icon buttons')
+    await win.waitForTimeout(220)
+    await win.locator('[data-tangu-details]').screenshot({ path: path.join(home, 'compact-memory.png') })
+    await memory.locator('summary').filter({ hasText: '编辑原文' }).click()
     await memory.getByRole('textbox', { name: '记忆原文', exact: true }).fill('Unsaved memory draft')
     await compact.getByRole('tab', { name: '技能', exact: true }).click()
-    await compact.getByRole('tab', { name: '记忆', exact: true }).click()
+    await compact.getByRole('tab', { name: '成长', exact: true }).click()
     assert.equal(await memory.getByRole('textbox', { name: '记忆原文', exact: true }).inputValue(), 'Unsaved memory draft')
+    await segment('进化').click()
+    await segment('记忆').click()
+    assert.equal(await memory.getByRole('textbox', { name: '记忆原文', exact: true }).inputValue(), 'Unsaved memory draft', 'Switching between the two Growth layers keeps the memory draft')
     await win.waitForTimeout(220)
     assert.ok(!(await compact.locator('.agent-profile-save').textContent()).includes('已保存'), 'An Agent save must not imply an unsaved memory draft was saved')
     await win.screenshot({ path: path.join(home, 'memory-editor.png') })
@@ -202,9 +246,11 @@ async function run() {
     assert.equal(await compact.locator('.profile-section-enter button').filter({ hasText: /^(技能|MCP|记忆)/ }).count(), 0, 'Config tab must not repeat the Skills / MCP / Memory tabs as cards')
     console.log('PASS searchable memory, retained drafts, Markdown preview and keyboard tab navigation')
     // 进化是一级标签(原来藏在 记忆 → 资料库弹窗 → 第 4 个 tab):条目、芯片、时间线、撤销 / 恢复、就地发 /refine。
-    const evolutionTab = compact.getByRole('tab', { name: '进化', exact: true })
-    assert.equal(await evolutionTab.locator('.profile-tab-badge').textContent(), '1', 'The Evolution tab carries the count of candidates awaiting reflection before it is opened')
-    await evolutionTab.click()
+    const growthTab = compact.getByRole('tab', { name: '成长', exact: true })
+    assert.equal(await growthTab.locator('.profile-tab-badge').textContent(), '1', 'The Growth tab carries the count of candidates awaiting reflection before it is opened')
+    await growthTab.click()
+    assert.equal(await segment('进化').locator('.profile-tab-badge').textContent(), '1', 'Inside Growth the badge sits on the Evolution layer')
+    await segment('进化').click()
     const evolution = compact.locator('[data-agent-harness="research"]')
     await evolution.locator('[data-harness-entry="h-cite"]').waitFor()
     await evolution.locator('[data-harness-candidates="1"]').waitFor()
@@ -214,7 +260,8 @@ async function run() {
     assert.equal(await evolution.locator('.harness-kind').first().textContent(), '做法', 'Kinds render as localized chips, not raw ids')
     assert.equal(await evolution.getByText(/Invalid Date|T\d\d:\d\d/).count(), 0, 'Dates are localized; a hand-edited date falls back to its raw text')
     assert.equal(await evolution.locator('[data-harness-entry="h-scope"] .harness-meta').textContent(), 'v1 · last week')
-    assert.ok((await compact.locator('.agent-profile-save').textContent()).includes('写入要经审批'), 'The evolution tab explains working notes instead of the defaults hint')
+    assert.ok((await evolution.textContent()).includes('写入要经审批'), 'The panel itself explains that working notes need approval')
+    assert.equal(await compact.locator('.agent-profile-save').evaluate((el) => getComputedStyle(el).display), 'none', 'Growth has its own save paths: the empty save dock takes no space')
     win.once('dialog', (d) => d.accept())
     await evolution.getByRole('button', { name: '恢复', exact: true }).click()
     await win.waitForTimeout(200)
@@ -248,6 +295,27 @@ async function run() {
     await win.waitForTimeout(5500) // 再过两轮轮询:点过动作的卡已关掉,同一条提名(同 id)不许再弹出来
     assert.equal(await win.locator('.ntf').filter({ hasText: '有新的工作笔记候选' }).count(), 0, 'The same nomination never comes back after the action dismissed it')
     console.log('PASS nomination nudge: fires only for nominations that appear after the first poll, sends /refine to the session, no duplicates')
+    // 日程标签:这个 Agent 自己的 SCHEDULE.db 条目 + 会叫醒它的自动化规则(与 Calendar / 自动化 Space 同一份数据,按 Agent 收拢)。
+    await compact.getByRole('tab', { name: '日程', exact: true }).click()
+    const schedule = compact.locator('[data-agent-schedule="research"]')
+    const daily = schedule.locator('[data-schedule-entry="sch-daily"]')
+    await daily.waitFor()
+    // 每天一次、锚点在年初:显示的必须是滚到未来 24h 之内的「下一次」,不是锚点那天。
+    // 不钉具体钟点:引擎的 'd' 是固定 24h(agentSchedule.ts 头注),跨夏令时地区本地钟点会漂 1h —— 本机在 BST 上实测显示 10:00,那是对的。
+    const shown = (await daily.locator('time').textContent()).match(/^(\d+)\/(\d+) (\d\d):(\d\d)$/)
+    assert.ok(shown, 'The next occurrence renders as M/D HH:mm')
+    const nextAt = new Date(new Date().getFullYear(), Number(shown[1]) - 1, Number(shown[2]), Number(shown[3]), Number(shown[4])).getTime()
+    assert.ok(nextAt > Date.now() - 60_000 && nextAt <= Date.now() + 24 * 3600_000 + 60_000, `A repeating entry shows its next occurrence, not its anchor date (${shown[0]})`)
+    assert.equal(await daily.locator('.harness-kind').textContent(), '自动执行')
+    assert.ok((await daily.textContent()).includes('上次执行'), 'The last unattended run is shown')
+    assert.equal(await schedule.locator('.schedule-past').evaluate((el) => el.open), false, 'Past one-off entries are tucked into a collapsed group')
+    assert.equal(await schedule.locator('.schedule-past [data-schedule-entry="sch-old"]').count(), 1)
+    assert.equal(await schedule.locator('[data-schedule-rule="tr-mine"]').count(), 1, 'A rule whose action chain runs this agent is listed')
+    assert.equal(await schedule.locator('[data-schedule-rule="tr-other"]').count(), 0, "Another agent's rule is not")
+    assert.equal(await compact.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false)
+    await win.waitForTimeout(220)
+    await win.locator('[data-tangu-details]').screenshot({ path: path.join(home, 'compact-schedule.png') })
+    console.log('PASS schedule tab: next occurrence, auto chip, collapsed past entries, only the rules that wake this agent')
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1024, 720))
     await compact.getByRole('tab', { name: '技能', exact: true }).click()
     await compact.getByRole('button', { name: '全部停用', exact: true }).click()
@@ -279,7 +347,7 @@ async function run() {
     await profile.getByLabel('Writing', { exact: false }).uncheck()
     await profile.getByRole('button', { name: '保存配置', exact: true }).click()
     await win.waitForTimeout(300)
-    assert.deepEqual(saved.enabledSkillIds, ['local:research'])
+    assert.deepEqual(saved.enabledSkillIds, ['local:research', 'local:git-workflow', 'local:web-research'], 'Unchecking one skill keeps the rest, including the collapsed built-in ones')
     await profile.locator('.agent-section-nav button').filter({ hasText: 'MCP' }).click()
     await profile.getByLabel('documents', { exact: false }).uncheck()
     await profile.getByRole('button', { name: '保存配置', exact: true }).click()
@@ -291,6 +359,14 @@ async function run() {
     await win.evaluate(() => { document.documentElement.setAttribute('data-mode', 'dark'); document.documentElement.classList.add('dark') })
     await win.waitForTimeout(220)
     await win.screenshot({ path: path.join(home, 'agents-dark.png') })
+    // 观感自查用(DESIGN.md §8):宽版 × 暗色下的技能 / 成长 / 日程各一张。
+    for (const [tab, shot] of [['技能', 'agents-dark-skills.png'], ['成长', 'agents-dark-growth.png'], ['日程', 'agents-dark-schedule.png']]) {
+      await profile.getByRole('tab', { name: tab, exact: true }).click()
+      await win.waitForTimeout(260)
+      await win.screenshot({ path: path.join(home, shot) })
+      assert.equal(await profile.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false, `${tab} must not overflow the full-width profile`)
+    }
+    await profile.getByRole('tab', { name: '配置', exact: true }).click()
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(820, 900))
     await win.waitForTimeout(250)
     await win.waitForTimeout(220)
@@ -305,6 +381,13 @@ async function run() {
     assert.equal(await profile.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false)
     await win.waitForTimeout(220)
     await win.screenshot({ path: path.join(home, 'agents-english-config.png') })
+    // 英文文案更长:窄栏宽度下三个新页面都不许横向溢出(标签名、分段卡说明、日程芯片)。
+    for (const [tab, shot] of [['Skills', 'agents-english-skills.png'], ['Growth', 'agents-english-growth.png'], ['Schedule', 'agents-english-schedule.png']]) {
+      await profile.getByRole('tab', { name: tab, exact: true }).click()
+      await win.waitForTimeout(260)
+      await win.screenshot({ path: path.join(home, shot) })
+      assert.equal(await profile.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false, `${tab} must not overflow in English`)
+    }
     assert.deepEqual(errors, [])
     console.log('PASS Agent skill and MCP loadout save; screenshots:', home)
   } catch (e) { console.error('Artifacts:', home); try { await (await app?.firstWindow())?.screenshot({ path: path.join(home, 'failure.png') }) } catch {} throw e } finally { await app?.close(); await stub.close() }

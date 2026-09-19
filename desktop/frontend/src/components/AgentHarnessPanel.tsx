@@ -147,5 +147,7 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
       })}</ol>
       {!showAll && rev.length > HISTORY_PREVIEW && <button type="button" className="profile-text-action" onClick={() => setShowAll(true)}>{t('settings.agents.harnessShowAll', { count: rev.length })}</button>}
     </section>}
+    {/* 从详情页底栏挪进来(09-19):底栏常驻两行说明,窄栏里白占高度;放在面板末尾,读完笔记正好看到「写入要经审批」 */}
+    {entries !== null && <p className="memory-footnote">{t('settings.agents.harnessHint')}</p>}
   </div>
 }
