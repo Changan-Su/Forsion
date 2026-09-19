@@ -69,6 +69,24 @@ describe('cache-hit-report analyze', () => {
     expect(a.bucketSum).toBe(a.uncachedTotal);
   });
 
+  it('末轮剥 tools(上一发带、这一发 toolsBytes=0)单列,不混进「引擎无改写」的 later-full-miss', () => {
+    const a = analyze(load([
+      mkRun('r1', 's1', [
+        usage(T0, 19_000, 128, { toolsBytes: 55_000 }),
+        usage(T0 + 10_000, 47_000, 46_000, { toolsBytes: 55_000, iteration: 1 }),
+        usage(T0 + 20_000, 36_000, 128, { toolsBytes: 0, iteration: 2 }),        // 顶到迭代上限那一发
+      ]),
+      // 从来没带过 tools 的 run:toolsBytes 恒 0 不算「剥」,整次 miss 照旧归 later-full-miss
+      mkRun('r2', 's2', [
+        usage(T0, 5000, 0, { toolsBytes: 0 }),
+        usage(T0 + 10_000, 5100, 0, { toolsBytes: 0, iteration: 1 }),
+      ]),
+    ]));
+    expect(a.buckets['final-turn-no-tools']).toMatchObject({ n: 1, uncached: 36_000 - 128 });
+    expect(a.buckets['later-full-miss']).toMatchObject({ n: 1, uncached: 5100 });
+    expect(a.bucketSum).toBe(a.uncachedTotal);
+  });
+
   it('窗口前的边界态压住假冷启动;取不到边界态时首条标 window-first', () => {
     const events = [usage(T0 + 60_000, 1000, 800)];
     const withBoundary = analyze(load([mkRun('r1', 's1', events)], {

@@ -52,9 +52,12 @@ export interface MuseConfig {
   tokenBudgetWindowHours: number;
   /** token 预算：每窗口内本 Muse 会话最多累计的**计费** token = Σ(未缓存 prompt + completion)，缓存命中不计（默认 100000；0=关闭）。
    *  09-11 两次实测每周期 4.6–6.1 万 → 5h 内放行 2–3 个周期：典型周期下默认 2h 心跳不受限，重周期会被削到约 2.5h 一次。
+   *  ⚠️ 这个标定靠前缀缓存（codex）：不缓存 / 不上报缓存量的 provider 一周期计费≈毛量（30–48 万）→ 每窗口只起 1 个周期；
+   *  xai grok（cli-chat-proxy 路由不粘，续发约 1/3 整次 miss）09-19 实测 12 轮周期 10.5 万，其中 3.6 万是顶到迭代上限时
+   *  末轮剥 tools 的整段 miss（跨 provider，codex 同样）。归属用 scripts/cache-hit-report.mjs 看。
    *  ⚠️ 保存设置写回整份 normalize 后的配置 → 启用过 Muse 的用户这里已固化为 100000，改默认值只影响新启用（口径见 muse.ts tokensInWindow）。 */
   maxTokensPerWindow: number;
-  /** z：每个运行周期最多迭代轮数（默认 10；找 1-3 条 TODO 无需更多迭代）。 */
+  /** z：每个运行周期最多迭代轮数（默认 20；找 1-3 条 TODO 无需更多迭代）。 */
   maxIterationsPerCycle: number;
   /** t：每窗口最多新增 Muse TODO 条数。 */
   maxTodosPerWindow: number;

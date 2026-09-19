@@ -742,6 +742,9 @@ try {
     // lastCycleAt 只在 startCycle 里(createRun 成功之后)赋值,推进 = 第二个 agent_run 真建起来了。
     // 也不用 running 翻转:周期 1 终态 → kickMuse 一秒内就起周期 2,5s 轮询看不到空档。
     // 周期 2 一起即收:只证预算闸放行,finish 会杀引擎,不多烧一整个周期。
+    // 被计费闸挡 ≠ 命中又被全额计了:先 `node scripts/cache-hit-report.mjs <隔离 home>/state.db` 看未命中归属。
+    // 09-19 xai/grok-4.6 周期 1 计费 105.5k(各项含补全)= 冷启动 19.0k + final-turn-no-tools 36.5k(顶到 12 轮上限,
+    // 末轮剥 tools)+ later-full-miss 19.6k(cli-chat-proxy 路由不粘)+ 新内容 30.4k;codex 同场景 43.7k 且没顶到上限。
     const engineText = () => { try { return readFileSync(engineLog, 'utf8'); } catch { return ''; } };
     // 两道闸的措辞不同且互不为子串(muse.ts 计费闸 `token 预算用尽` / 毛量闸 `毛 prompt 预算用尽`):
     // 只 grep 计费那句,毛量闸挡住时下面会报成「420s 未起」—— 把「被预算挡住」误读成「起不来」。

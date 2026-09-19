@@ -161,10 +161,11 @@ const BUCKETS = [
   ['short-gap-structure', '首调,距上次调用 <3min —— 纯结构性(记忆块位置 + 回放形态)'],
   ['window-first', '窗口内该会话的首调,但窗口前的历史取不到(导出模式)—— 不敢当冷启动算'],
   ['compaction', '机械折叠 compactContext(status=compacted)后的调用'],
+  ['final-turn-no-tools', '末轮剥 tools(上一发带、这一发 toolsBytes=0:agentLoop 顶到迭代上限那一发)—— 工具定义在前缀里,整段作废;引擎所致,不是上游路由'],
   ['load_tools', 'load_tools 解锁后的调用(工具数组变 → 工具及其后全废)'],
   ['steer', 'steer 注入(turn_boundary / steering_applied)后的调用'],
   ['cache-unreported', '缓存量**未知**的调用(cacheReported=false,或老事件缺字段且 cached=0)—— 未命中记 0,不参与命中率与划分'],
-  ['later-full-miss', '后续调用整次未命中:hit<5% 且间隔 <60s 且引擎无任何改写事件'],
+  ['later-full-miss', '后续调用整次未命中:hit<5% 且间隔 <60s 且引擎无任何改写事件 —— 多为上游路由不粘(grok cli-chat-proxy 实测续发约 1/3,见 scripts/grok-cache.probe.mjs)'],
   ['later-low-hit-slow', '后续调用 hit<5% 但间隔 ≥60s(上游 TTL,不是结构问题)'],
   ['new-content', '后续调用·纯新内容(上一轮工具结果 / 参数 / 正文)'],
   ['group-chat', '群聊 run 的逐发言人用量(payload 带 agentId、无 iteration;不参与首/后续链)'],
@@ -294,12 +295,15 @@ export function analyze({ runs, full, boundary, boundaryKnown }) {
       } else {
         const gapS = prevTs == null ? Infinity : (e.t - prevTs) / 1000;
         const fullMiss = u.cached < 0.05 * (u.prompt || 1);
+        // toolsBytes 缺字段(老事件)→ 不判,照旧落后面的桶。
+        const toolsStripped = e.p.toolsBytes !== undefined && num(e.p.toolsBytes) === 0 && num(prev?.toolsBytes) > 0;
         key = flags.has('compaction') ? 'compaction'
-          : flags.has('load_tools') ? 'load_tools'
-            : flags.has('steer') ? 'steer'
-              : fullMiss && gapS < 60 ? 'later-full-miss'
-                : fullMiss ? 'later-low-hit-slow'
-                  : 'new-content';
+          : toolsStripped ? 'final-turn-no-tools'
+            : flags.has('load_tools') ? 'load_tools'
+              : flags.has('steer') ? 'steer'
+                : fullMiss && gapS < 60 ? 'later-full-miss'
+                  : fullMiss ? 'later-low-hit-slow'
+                    : 'new-content';
         if (known) hitAdd(m.later, u);
       }
       const b = put(key);
