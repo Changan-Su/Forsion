@@ -50,12 +50,14 @@ export interface MuseConfig {
   maxRestartsPerWindow: number;
   /** token 预算：滚动窗口（小时；默认 5）。与 restartWindowHours 相互独立。 */
   tokenBudgetWindowHours: number;
-  /** token 预算：每窗口内本 Muse 会话最多累计的**计费** token = Σ(未缓存 prompt + completion)，缓存命中不计（默认 100000；0=关闭）。
-   *  09-11 两次实测每周期 4.6–6.1 万 → 5h 内放行 2–3 个周期：典型周期下默认 2h 心跳不受限，重周期会被削到约 2.5h 一次。
+  /** token 预算：每窗口内本 Muse 会话最多累计的**计费** token = Σ(未缓存 prompt + completion)，缓存命中不计（默认 1000000，09-19 由 100000 上调；0=关闭）。
+   *  为什么上调：下面这些实测里 10 万经常一个周期就打穿（思考档缺省 09-19 又从 low 调到 medium，grok 一个周期 17.9 万），主动式 Agent 5h 只醒一次。
+   *  09-11 两次实测每周期 4.6–6.1 万（codex、low 档）→ 旧默认下 5h 内放行 2–3 个周期。
    *  ⚠️ 这个标定靠前缀缓存（codex）：不缓存 / 不上报缓存量的 provider 一周期计费≈毛量（30–48 万）→ 每窗口只起 1 个周期；
    *  xai grok（cli-chat-proxy 路由不粘，续发约 1/3 整次 miss）09-19 实测 12 轮周期 10.5 万，其中 3.6 万是顶到迭代上限时
    *  末轮剥 tools 的整段 miss（跨 provider，codex 同样）。归属用 scripts/cache-hit-report.mjs 看。
-   *  ⚠️ 保存设置写回整份 normalize 后的配置 → 启用过 Muse 的用户这里已固化为 100000，改默认值只影响新启用（口径见 muse.ts tokensInWindow）。 */
+   *  ⚠️ 保存设置写回整份 normalize 后的配置 → 启用过 Muse 的用户这里已固化为旧默认值，只改静态默认够不着他们；
+   *  所以 100000 → 1000000 配了一次性迁移（applySpecialAgentEnableMigration 的第 ③ 步，只翻恰好等于旧默认的落盘值）。口径见 muse.ts tokensInWindow。 */
   maxTokensPerWindow: number;
   /** z：每个运行周期最多迭代轮数（默认 20；找 1-3 条 TODO 无需更多迭代）。 */
   maxIterationsPerCycle: number;
@@ -128,7 +130,9 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     restartWindowHours: 1,
     maxRestartsPerWindow: 3,
     tokenBudgetWindowHours: 5,
-    maxTokensPerWindow: 100_000,
+    // 1M(09-19 用户拍板;此前 100k)。100k 在实测里一个周期就打穿:grok 4.6 一个 12 轮周期计费 105k(low)/ 179k(medium),
+    // 第二个周期恒被预算闸挡住 —— 主动式 Agent 5 小时只醒一次。毛量闸跟着它按 GROSS_TOKENS_FACTOR 走(6M)。老装机见下方迁移 ③。
+    maxTokensPerWindow: 1_000_000,
     maxIterationsPerCycle: 20,
     maxTodosPerWindow: 5,
     supervisorPollMinutes: 5,
@@ -241,12 +245,17 @@ export function saveSpecialAgentsConfig(patch: SpecialAgentsPatch): SpecialAgent
 
 const ENABLE_BY_DEFAULT_MIGRATION = 1;
 const HARNESS_CANDIDATES_MIGRATION = 1;
+const MUSE_BUDGET_MIGRATION = 1;
+/** 迁移 ③ 只认这个旧默认值:落盘的恰好是它 = 归一化写回的默认值;别的数字是用户自己填的,不碰。 */
+const LEGACY_MUSE_TOKEN_BUDGET = 100_000;
 
 /**
- * 一次性默认迁移(两步,**各自独立的标记**,同一把锁里一次写完):
+ * 一次性默认迁移(三步,**各自独立的标记**,同一把锁里一次写完):
  *  ① enableByDefaultVersion:不论旧值是 false 还是缺失,把 Historian / Muse 开启一次;
  *  ② harnessCandidatesVersion(09-18):把自进化自动档 historian.harnessCandidates 开启一次 —— 老配置里落盘的是归一化写回的
  *     `false`(当时的默认值,不是用户的选择),只改静态默认值够不着它们。
+ *  ③ museBudgetVersion(09-19):Muse 的 token 预算旧默认 100k → 1M。桌面保存设置时整段归一化写回,老配置里落盘的就是 100000;
+ *     **只在落盘值恰好等于旧默认时**才翻(用户填过别的数字 = 他的选择,原样保留;段里没这个键 = 本来就跟随新默认)。
  * 标记存在后对应那一步只读不写,因此迁移完成后用户手动关闭会永久保留。
  * ⚠️ 新增一步就加一个新标记,**别去抬已有标记的版本号**:抬 ① 会把「①之后手动关掉 Muse」的人重新打开。
  *
@@ -260,7 +269,8 @@ export function applySpecialAgentEnableMigration(): SpecialAgentsConfig {
       const marker = config?.specialAgentMigrations;
       const needEnable = (Number(marker?.enableByDefaultVersion) || 0) < ENABLE_BY_DEFAULT_MIGRATION;
       const needHarness = (Number(marker?.harnessCandidatesVersion) || 0) < HARNESS_CANDIDATES_MIGRATION;
-      if (!needEnable && !needHarness) return undefined;
+      const needBudget = (Number(marker?.museBudgetVersion) || 0) < MUSE_BUDGET_MIGRATION;
+      if (!needEnable && !needHarness && !needBudget) return undefined;
       const raw = config?.specialAgents;
       const sec: any = raw && typeof raw === 'object' ? raw : specialAgentsFrom(undefined); // 段缺失 → legacy 文件或默认值
       return {
@@ -268,12 +278,17 @@ export function applySpecialAgentEnableMigration(): SpecialAgentsConfig {
         specialAgents: {
           ...sec,
           historian: { ...sec.historian, ...(needEnable ? { enabled: true } : {}), ...(needHarness ? { harnessCandidates: true } : {}) },
-          muse: { ...sec.muse, ...(needEnable ? { enabled: true } : {}) },
+          muse: {
+            ...sec.muse,
+            ...(needEnable ? { enabled: true } : {}),
+            ...(needBudget && Number(sec.muse?.maxTokensPerWindow) === LEGACY_MUSE_TOKEN_BUDGET ? { maxTokensPerWindow: SPECIAL_AGENTS_DEFAULTS.muse.maxTokensPerWindow } : {}),
+          },
         },
         specialAgentMigrations: {
           ...(marker && typeof marker === 'object' ? marker : {}),
           ...(needEnable ? { enableByDefaultVersion: ENABLE_BY_DEFAULT_MIGRATION } : {}),
           ...(needHarness ? { harnessCandidatesVersion: HARNESS_CANDIDATES_MIGRATION } : {}),
+          ...(needBudget ? { museBudgetVersion: MUSE_BUDGET_MIGRATION } : {}),
         },
       };
     });

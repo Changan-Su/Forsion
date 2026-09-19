@@ -123,7 +123,7 @@ describe('special-agent enable migration', () => {
     expect(migrated.historian.harnessCandidates).toBe(true);
     expect(migrated.muse.enabled).toBe(false); // 两个标记互不牵连:第一步没有重跑
     const raw = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'));
-    expect(raw.specialAgentMigrations).toEqual({ enableByDefaultVersion: 1, harnessCandidatesVersion: 1 });
+    expect(raw.specialAgentMigrations).toEqual({ enableByDefaultVersion: 1, harnessCandidatesVersion: 1, museBudgetVersion: 1 });
     saveSpecialAgentsConfig({ historian: { harnessCandidates: false } });
     expect(applySpecialAgentEnableMigration().historian.harnessCandidates).toBe(false); // 迁移后手动关 = 永久
   }));
@@ -132,7 +132,27 @@ describe('special-agent enable migration', () => {
     expect(SPECIAL_AGENTS_DEFAULTS.historian.harnessCandidates).toBe(true);
     expect(applySpecialAgentEnableMigration().historian.harnessCandidates).toBe(true);
     const raw = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8'));
-    expect(raw.specialAgentMigrations).toEqual({ enableByDefaultVersion: 1, harnessCandidatesVersion: 1 });
+    expect(raw.specialAgentMigrations).toEqual({ enableByDefaultVersion: 1, harnessCandidatesVersion: 1, museBudgetVersion: 1 });
+  }));
+
+  it('Muse token 预算:落盘的旧默认 100k 翻成 1M 一次;用户填过的别的数字、迁移后的手动改动都保留', () => isolated((home) => {
+    expect(SPECIAL_AGENTS_DEFAULTS.muse.maxTokensPerWindow).toBe(1_000_000);
+    const prior = { enableByDefaultVersion: 1, harnessCandidatesVersion: 1 };
+    // 老配置的真实形态:桌面保存设置时整段归一化写回,100000 就这么落了盘;Muse 被用户手动关着。
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ specialAgents: { historian: { enabled: true }, muse: { enabled: false, maxTokensPerWindow: 100_000, maxIterationsPerCycle: 60 } }, specialAgentMigrations: prior }));
+    const migrated = applySpecialAgentEnableMigration();
+    expect(migrated.muse.maxTokensPerWindow).toBe(1_000_000);
+    expect(migrated.muse.enabled).toBe(false);              // 别的标记没被牵动
+    expect(migrated.muse.maxIterationsPerCycle).toBe(60);   // 段内其余字段原样
+    expect(JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')).specialAgentMigrations).toEqual({ ...prior, museBudgetVersion: 1 });
+    // 迁移之后用户特意调回 100k:不再翻。
+    saveSpecialAgentsConfig({ muse: { maxTokensPerWindow: 100_000 } });
+    expect(applySpecialAgentEnableMigration().muse.maxTokensPerWindow).toBe(100_000);
+  }));
+
+  it('Muse token 预算:用户自己填过的数字不是旧默认,迁移不碰', () => isolated((home) => {
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ specialAgents: { muse: { maxTokensPerWindow: 250_000 } }, specialAgentMigrations: { enableByDefaultVersion: 1, harnessCandidatesVersion: 1 } }));
+    expect(applySpecialAgentEnableMigration().muse.maxTokensPerWindow).toBe(250_000);
   }));
 
   it('config.json 坏了不抛、不改写，引擎照常起（下次启动重试）', () => isolated((home) => {
