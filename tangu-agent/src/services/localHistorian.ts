@@ -50,7 +50,7 @@ const MAX_TRANSCRIPT_CHARS = 8000;
 const CHARGE_USER = false;
 const MIN_NEW_CHARS = 120; // 自上次维护以来的新对话字符数地板;不足视为琐碎轮,跳过整次判断
 
-// Historian collects source-linked candidates. Per-Agent Dream is separately opt-in,
+// Historian collects source-linked candidates. Per-Agent Dream (on by default since 09-19, opt-out per Agent) is
 // versioned and bounded; no background whole-document rewrite is allowed here.
 const RAW_CONSOLIDATE_MIN = 5;
 const RAW_MAX_AGE_DAYS = 7;
@@ -142,7 +142,7 @@ function buildForkJudgeMessage(customPrompt: string, wantTitle: boolean, wantLog
 
 export { redactSecrets }; // 实现已挪 core/redact.ts(harnessStore 共用,免拖依赖树);此处 re-export 保住旧引用面
 
-/** Candidate collection stays cheap; opted-in Dream is scheduled outside the run. */
+/** Candidate collection stays cheap; Dream (default-on, per-Agent opt-out) is scheduled outside the run. */
 async function maybeConsolidate(userId: string, slug: string | undefined, modelId: string, _sessionRef: string): Promise<void> {
   historianSignal.getStore()?.throwIfAborted();
   const key = slug || currentAgentSlug() || DEFAULT_AGENT_SLUG;
@@ -383,8 +383,10 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
   let cfg;
   try { cfg = loadSpecialAgentsConfig().historian; } catch { return; }
   if (!cfg.enabled) {
-    // Explicit memories can still be maintained when transcript collection is off.
-    startMemoryDream(userId, effectiveSlug, { automatic: true });
+    // Historian 关着 = 用户不要后台模型开销。Dream 默认开之后(09-19),这里不能再无条件拉起它 —— 那会让关掉 Historian 的人
+    // 每个间隔白跑两次模型调用去重写没变过的记忆。只处理收件箱里攒够 / 放久了的旧候选(与开着时同一道阈值);
+    // 只有显式记忆、没有候选的整理交给面板上的「立即整理」。
+    await maybeConsolidate(userId, effectiveSlug, '', sessionId).catch(() => {});
     return;
   }
   // 模型解析:用户显式配置 > admin 后台默认槽 > 对话默认(未选模型=跟随云端)。
@@ -557,7 +559,9 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     }
 
     // 整固到期检查(每个到点轮跑一次;raw 空/未攒够即刻返回,开销一次文件读)。
-    if (!assistMode) await maybeConsolidate(userId, effectiveSlug, cfg.modelId, sessionId);
+    // 辅助模式也查(09-19 放开):辅助模式只是「本轮不由 Historian 采集候选」,收件箱里已有的候选(首轮独立采的、chat 会话采的、
+    // 切到辅助模式之前攒的)仍只有 Dream 这一条路进 MEMORY.md —— 从前这里跳过,辅助模式用户的候选就永远停在收件箱里。
+    await maybeConsolidate(userId, effectiveSlug, cfg.modelId, sessionId);
 
     // 辅助讨论只跟「记忆」周期(设置里的 每 Y 轮):此前挂在 logDue||memoryDue 上,而 logDue 跟随
     // 标题的高频周期(如 标题每2轮+记忆每3轮 → 讨论在 2,3,4,6,8,9… 轮触发),用户观感即「忽隔一轮

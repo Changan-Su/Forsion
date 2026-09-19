@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as realDelay } from 'node:timers/promises';
@@ -63,10 +63,37 @@ afterEach(() => {
 });
 
 describe('Agent-private, bounded Dream memory', () => {
-  it('is opt-in and does no provider work in automatic mode until enabled', async () => {
+  it('is on by default: an automatic run consolidates without anyone opting in', async () => {
     repo().add('已有事实'); seedCandidate();
+    expect(getMemoryDream('alpha').config.enabled).toBe(true);
+    expect(startMemoryDream('u', 'alpha', { automatic: true }).running).toBe(true);
+    expect((await settle()).state).toBe('completed');
+    expect(readCandidates('alpha')).toHaveLength(0);
+  });
+  it('an explicit opt-out sticks: automatic mode does no provider work', async () => {
+    repo().add('已有事实'); seedCandidate();
+    configureMemoryDream('alpha', { enabled: false });
     expect(startMemoryDream('u', 'alpha', { automatic: true }).running).toBe(false);
     await tick(); expect(calls).toHaveLength(0); expect(readCandidates('alpha')).toHaveLength(1);
+    expect(getMemoryDream('alpha').config.enabled).toBe(false); // survives re-reads: the file now carries v: 2
+  });
+  it('a pre-default-on file reads as enabled: its `enabled: false` was the old default written as a side effect, never a choice', async () => {
+    writeFileSync(join(home, 'agents', 'alpha', '.memory-dream.json'), JSON.stringify({ config: { enabled: false, modelId: 'test-model', timeoutMs: 60000, maxOutputTokens: 4096, intervalHours: 6 }, last: { state: 'cancelled', running: false } }));
+    expect(getMemoryDream('alpha').config.enabled).toBe(true);
+    configureMemoryDream('alpha', { enabled: false }); // the first explicit choice after the upgrade is kept
+    expect(getMemoryDream('alpha').config.enabled).toBe(false);
+  });
+  it('an automatic run with no new candidate and an unchanged memory version does no provider work', async () => {
+    repo().add('已有事实'); seedCandidate();
+    startMemoryDream('u', 'alpha', { automatic: true }); expect((await settle()).state).toBe('completed');
+    const spent = calls.length;
+    configureMemoryDream('alpha', { intervalHours: 1 });
+    vi.useFakeTimers({ now: Date.now() + 2 * 3_600_000, toFake: ['Date'] });
+    startMemoryDream('u', 'alpha', { automatic: true });
+    const status = await settle();
+    expect(status.state).toBe('skipped'); expect(calls).toHaveLength(spent);
+    // 手动整理不受这道闸管:用户点「立即整理」就是要它跑。
+    startMemoryDream('u', 'alpha'); expect((await settle()).state).toBe('completed'); expect(calls.length).toBeGreaterThan(spent);
   });
   it('verifies complete source coverage, commits a revision and consumes only its Agent inbox', async () => {
     const old = repo().add('已有事实'); seedCandidate(); seedCandidate('beta', 'Beta 私有秘密');

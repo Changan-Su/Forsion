@@ -45,7 +45,7 @@ registerMessages({
   'agentMemory.restore': { zh: '恢复此版本', en: 'Restore this version' },
   'agentMemory.restoreHint': { zh: '恢复也会检查当前版本；已遗忘的条目不会恢复。', en: 'Restore also checks the current version. Forgotten entries stay forgotten.' },
   'agentMemory.dream': { zh: 'Dream · 记忆整理', en: 'Dream · Memory maintenance' },
-  'agentMemory.dreamHint': { zh: '只整理此 Agent 的记忆和待审核候选，后台运行。自动整理默认关闭。', en: 'Consolidates this Agent’s memory and pending candidates in the background. Automatic maintenance is off by default.' },
+  'agentMemory.dreamHint': { zh: '把对话里提取的候选整理进此 Agent 的记忆，后台运行，每次整理都留有版本记录。自动整理默认开启，可在这里关闭。', en: 'Consolidates candidates extracted from conversations into this Agent’s memory in the background, keeping a revision for every run. Automatic maintenance is on by default; turn it off here.' },
   'agentMemory.auto': { zh: '自动整理', en: 'Automatic maintenance' },
   'agentMemory.run': { zh: '立即整理', en: 'Run now' },
   'agentMemory.stop': { zh: '取消整理', en: 'Cancel maintenance' },

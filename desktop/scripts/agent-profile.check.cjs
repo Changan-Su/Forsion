@@ -37,7 +37,7 @@ let app
 async function run() {
   const stub = await startStubEngine({ agents, sessions: [main, solo], messages: [{ id: 'main-user', role: 'user', content: 'Plan the research', timestamp: 1 }, { id: 'main-answer', role: 'model', content: 'The team is ready.', timestamp: 2 }], override: async ({ path: p, method, url: u, body }) => {
     if (p === `/agent/sessions/${solo.id}` && method === 'PATCH') { const patch = await body(); sessionModelSaved = patch.model_id; Object.assign(solo, patch); return { session: solo } }
-    if (p.endsWith('/memory/dream')) return { config: { enabled: false, modelId: '', timeoutMs: 60000, maxOutputTokens: 4096, intervalHours: 6 }, status: { state: 'idle', running: false }, candidates: 0 }
+    if (p.endsWith('/memory/dream')) return { config: { enabled: true, modelId: '', timeoutMs: 60000, maxOutputTokens: 4096, intervalHours: 6 }, status: { state: 'idle', running: false }, candidates: 0 }
     if (p.endsWith('/memory/revisions')) return { revisions: [] }
     if (p.endsWith('/memory') && method === 'GET') return { version: 'version-1', content: 'Cite primary sources.', entries: [{ id: 'memory-1', content: 'Cite primary sources.', source: { kind: 'manual' }, evidenceIds: [], createdAt: 1, updatedAt: 1 }], tombstones: [], updatedAt: 1 }
     if (p === '/agent/runs' && method === 'GET') return { runs: [] }

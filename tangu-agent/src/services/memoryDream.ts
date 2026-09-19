@@ -1,4 +1,7 @@
-/** Bounded, opt-in consolidation. The model proposes; a versioned repository commits. */
+/** Bounded consolidation, on by default since 2026-09-19 (per-Agent opt-out). The model proposes; a versioned repository commits.
+ *
+ *  Why default-on: Historian only ever writes *candidates*; this job is the single path that promotes them into
+ *  MEMORY.md. While it was opt-in, a stock install collected candidates forever and never remembered any of them. */
 import { deps } from '../seams/runtime.js';
 import { runWithUserAgentScope } from '../seams/runContext.js';
 import { query } from '../core/db.js';
@@ -11,20 +14,26 @@ import { getAgent, resolveMemorySlug } from '../agents/agentRegistry.js';
 
 export interface MemoryDreamConfig { enabled: boolean; modelId: string; timeoutMs: number; maxOutputTokens: number; intervalHours: number }
 export interface MemoryDreamStatus { state: 'idle' | 'running' | 'cancelling' | 'completed' | 'skipped' | 'failed' | 'cancelled'; running: boolean; startedAt?: string; finishedAt?: string; detail?: string; version?: number | string; calls?: number; candidateCursor?: string }
-interface DreamFile { config: MemoryDreamConfig; last?: MemoryDreamStatus }
+/** `v` is the default-on migration marker. A pre-v2 file's `enabled: false` was never a choice: every status write
+ *  (even a manual "Run now") serialised the then-default alongside it. So a file without `v: 2` reads as enabled,
+ *  and the first write stamps `v: 2`; from then on `enabled: false` means the user turned it off and it sticks. */
+const FILE_VERSION = 2;
+interface DreamFile { v?: number; config: MemoryDreamConfig; last?: MemoryDreamStatus }
 interface Source { id: string; fact: string; kind: 'memory' | 'candidate'; evidence?: string; sessionId?: string; anchorMessageId?: string }
 export interface DreamProposal { groups: Array<{ fact: string; sourceIds: string[] }>; discarded: Array<{ sourceId: string; reason: string }> }
-const DEFAULTS: MemoryDreamConfig = { enabled: false, modelId: '', timeoutMs: 60_000, maxOutputTokens: 4096, intervalHours: 6 };
+const DEFAULTS: MemoryDreamConfig = { enabled: true, modelId: '', timeoutMs: 60_000, maxOutputTokens: 4096, intervalHours: 6 };
 const jobs = new Map<string, { controller: AbortController; status: MemoryDreamStatus }>();
 const FILE = '.memory-dream.json';
 const clamp = (value: unknown, fallback: number, min: number, max: number): number => Number.isFinite(Number(value)) ? Math.max(min, Math.min(max, Math.floor(Number(value)))) : fallback;
 
 function readFile(slug: string): DreamFile {
   const raw = readPrivateText(slug, FILE);
-  if (!raw) return { config: { ...DEFAULTS } };
+  if (!raw) return { v: FILE_VERSION, config: { ...DEFAULTS } };
   const data = JSON.parse(raw);
   if (!data || typeof data !== 'object' || !data.config) throw new Error('Invalid Agent memory maintenance settings');
-  return { ...data, config: normalize(data.config) };
+  const config = normalize(data.config);
+  if (data.v !== FILE_VERSION) config.enabled = true;
+  return { ...data, v: FILE_VERSION, config };
 }
 function normalize(c: Partial<MemoryDreamConfig>): MemoryDreamConfig {
   return { enabled: c.enabled === true, modelId: typeof c.modelId === 'string' ? c.modelId.slice(0, 256) : '',
@@ -155,10 +164,17 @@ export function startMemoryDream(userId: string, slug: string, opts: { automatic
         sources.push({ id: candidate.id, fact: candidate.text, kind: 'candidate', evidence, sessionId: candidate.sessionId, anchorMessageId: candidate.anchorMessageId });
       }
       const pending = batch.length - raw.length;
+      // Default-on must not mean "rewrite unchanged memory every interval": an automatic run with no verified
+      // candidate and a memory version this job already produced has nothing to do. Manual runs are never skipped.
+      if (opts.automatic && !raw.length && data.last?.version !== undefined && data.last.version === snapshot.version) {
+        status.state = 'skipped'; status.version = snapshot.version; status.detail = 'Nothing new since the last maintenance.'; return;
+      }
       if (!sources.length) { status.state = 'skipped'; status.detail = pending ? `${pending} candidates retained for source review or blocked by explicit forgetting; no verified sources to consolidate.` : 'No memory or candidates to consolidate.'; return; }
       const input = JSON.stringify(sources);
       if (input.length > 32_000) throw new Error('Evidence exceeds this run’s input budget; split or review memory manually');
       const modelId = await resolveBackgroundModelId(data.config.modelId || opts.modelId || loadSpecialAgentsConfig().historian.modelId); check();
+      // An install with no background model is a normal default-on state, not a failure to show the user every interval.
+      if (!modelId && opts.automatic) { status.state = 'skipped'; status.detail = 'No background model is available; candidates retained.'; return; }
       if (!modelId) throw new Error('Choose a background model before running memory maintenance');
       const model = await brain.llm.resolveModelAndKey(modelId); check();
       const complete = async (system: string, content: string, maxTokens: number): Promise<unknown> => {

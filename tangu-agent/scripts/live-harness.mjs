@@ -645,7 +645,10 @@ try {
   });
 
   await scenario('dream', 'dream 记忆整固', async () => {
-    await api('/agent/agents/xyra/memory/dream', { method: 'PUT', body: JSON.stringify({ enabled: true, modelId: MODEL, timeoutMs: 120_000 }) });
+    // 09-19 起自动整理默认开:不再 PUT enabled —— 顺带证「原装状态下真路由读出来就是开着的」(从前这里要先手动打开)。
+    const dreamDefault = await api('/agent/agents/xyra/memory/dream');
+    if (dreamDefault?.config?.enabled !== true) return { ok: false, detail: `自动整理应默认开启,GET 读到 enabled=${JSON.stringify(dreamDefault?.config?.enabled)}` };
+    await api('/agent/agents/xyra/memory/dream', { method: 'PUT', body: JSON.stringify({ modelId: MODEL, timeoutMs: 120_000 }) });
     await api('/agent/agents/xyra/memory/dream', { method: 'POST', body: '{}' });
     const st = await until(async () => { const d = await api('/agent/agents/xyra/memory/dream'); return d.status && !d.status.running && d.status.state !== 'idle' ? d.status : null; }, 200_000, 3000);
     const mem = await api('/agent/memory');

@@ -134,14 +134,28 @@ describe('Historian 记忆两阶段流水线', () => {
     expect(setMemoryCalls).toEqual([]);
   });
 
-  it('攒够候选仍需当前 Agent 单独启用 Dream；旧全文重写路径不再执行', async () => {
+  it('攒够候选默认就交给 Dream(09-19 起默认开,不必逐个 Agent 启用);旧全文重写路径不再执行', async () => {
     seedRaw([1, 2, 3, 4].map((i) => `- [${today()} s:seed0000] 既有候选${i}`));
     llmScript = [judgeOut(['第五条候选内容']), '- 不应被调用的旧全文覆盖'];
     await onUserRunDone('S', USER);
+    await new Promise((resolve) => setImmediate(resolve));
     expect(llmPayloads).toHaveLength(1);
     expect(setMemoryCalls).toEqual([]);
+    expect(getMemoryDream(DEFAULT_AGENT_SLUG).config.enabled).toBe(true);
+    // Dream 确实被拉起来了:这个夹具的 brain 没有事务能力,所以它以「明确失败」收场(见下一条),不是 idle。
+    expect(getMemoryDream(DEFAULT_AGENT_SLUG).status.state).toBe('failed');
     expect(parseRawLines(readFileSync(rawFile(), 'utf8'))).toHaveLength(5);
-    expect(getMemoryDream(DEFAULT_AGENT_SLUG).config.enabled).toBe(false);
+  });
+
+  it('显式关掉的 Agent:攒够候选也不整固', async () => {
+    configureMemoryDream(DEFAULT_AGENT_SLUG, { enabled: false });
+    seedRaw([1, 2, 3, 4].map((i) => `- [${today()} s:seed0000] 既有候选${i}`));
+    llmScript = [judgeOut(['第五条候选内容'])];
+    await onUserRunDone('S', USER);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(llmPayloads).toHaveLength(1);
+    expect(getMemoryDream(DEFAULT_AGENT_SLUG).status.state).toBe('idle');
+    expect(parseRawLines(readFileSync(rawFile(), 'utf8'))).toHaveLength(5);
   });
 
   it('没有事务能力的旧 brain 明确失败，候选保留且不回退到无版本全文覆盖', async () => {
@@ -165,13 +179,34 @@ describe('Historian 记忆两阶段流水线', () => {
     expect(raw.map((r) => r.text)).toEqual(['喜欢喝茶', '项目统一用 pnpm 管包']);
   });
 
-  it('旧候选超过 7 天也不能绕过每 Agent 的 Dream 开关', async () => {
+  it('旧候选超过 7 天也不能绕过每 Agent 的 Dream 开关(显式关掉的)', async () => {
+    configureMemoryDream(DEFAULT_AGENT_SLUG, { enabled: false });
     seedRaw(['- [2020-01-01 s:seed0000] 过期候选']);
     llmScript = [judgeOut([])];
     await onUserRunDone('S', USER);
+    await new Promise((resolve) => setImmediate(resolve));
     expect(llmPayloads).toHaveLength(1);
     expect(setMemoryCalls).toEqual([]);
+    expect(getMemoryDream(DEFAULT_AGENT_SLUG).status.state).toBe('idle');
     expect(parseRawLines(readFileSync(rawFile(), 'utf8'))).toHaveLength(1);
+  });
+
+  it('辅助模式(assist)的到点轮也查整固:收件箱里已有的候选只有 Dream 一条路进记忆(09-19 前这里整个跳过)', async () => {
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      specialAgents: { historian: { enabled: true, modelId: 'm1', everyRounds: 3, firstRoundTrigger: true, mode: 'assist' } },
+    }), 'utf8');
+    // 首轮恒走独立判断;到第 3 轮(everyRounds=3 的下一个到点轮)才是辅助模式。
+    for (const n of [2, 3]) {
+      await createRun({ id: `R${n}`, sessionId: 'S', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: `A${n}`, input: { message: 'x', userMessageId: `U${n}`, attachments: [], agentConfig: {} } });
+      await updateRunStatus(`R${n}`, 'done');
+    }
+    seedRaw([1, 2, 3, 4, 5].map((i) => `- [${today()} s:seed0000] 候选${i}`));
+    llmScript = [judgeOut([])];
+    await onUserRunDone('S', USER);
+    await new Promise((resolve) => setImmediate(resolve));
+    // 被拉起了(夹具 brain 无事务能力 → 以「明确失败」收场),不是 idle;候选原样保留。
+    expect(getMemoryDream(DEFAULT_AGENT_SLUG).status.state).toBe('failed');
+    expect(parseRawLines(readFileSync(rawFile(), 'utf8'))).toHaveLength(5);
   });
 });
 
