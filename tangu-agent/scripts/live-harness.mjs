@@ -763,13 +763,16 @@ try {
     const journal = existsSync(journalDir) ? readdirSync(journalDir).map((f) => `## ${f}\n${readFileSync(join(journalDir, f), 'utf8')}`).join('\n') : '';
     const todos = asList(await api('/agent/special/muse/todos'), 'todos');
     const approvals = asList(await api('/agent/special/approvals'), 'approvals');
+    // 只观察、不断言:Muse 有没有给自己排日程(agents/muse/SCHEDULE.db → 桌面 Calendar 与详情「日程」的数据源)。
+    // 两个周期里没什么可排是正当结果;这一栏是为了跨次比对「现行指令下它到底用不用 manage_schedule」(09-19:老装机的原装旧指令写着「其余只读」,正式库 69 个周期 0 次)。
+    const museSchedule = (asList(await api('/agent/special/schedule').catch(() => []), 'schedules').find((x) => x.slug === 'muse')?.entries || []).map((e) => `${e.name} [${e.date || 'no date'}${e.repeat ? ` /${e.repeat}` : ''}${e.auto ? ' auto' : ''}]`);
     let museSays = '';
     const sid = second?.sessionId || started.sessionId;
     if (sid) { const list = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages'); museSays = list.filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n'); }
     const blockedBy = blocked();
     const twoCycles = advanced(second) && !blockedBy;
     const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0);
-    return { ok, detail: `周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '420s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
+    return { ok, detail: `周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '420s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length};自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
   });
   // ── 自进化闭环(09-18):三个 run 串成一条链,每一环各自留证据,红了能看出断在哪。
   //  ① 一次明确的工作方法纠正 → Historian 判官(harnessCandidates 开)应提名候选进 agents/<slug>/.harness-raw.md(自动档那半从未真机点验过);

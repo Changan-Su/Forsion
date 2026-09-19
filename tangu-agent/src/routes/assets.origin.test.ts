@@ -12,4 +12,10 @@ describe('skillSummary', () => {
     expect(skillSummary({ id: 'cloud:c', name: 'C', origin: 'user' }).origin).toBeNull();
     expect(skillSummary({ id: 'cloud:c', name: 'C' }).source).toBe('cloud');
   });
+
+  it('透传 builtin:只认 is_builtin === true(桌面据此折叠内置技能;category 各写各的,不能当判据)', () => {
+    expect(skillSummary({ id: 'local:a', name: 'A', is_builtin: true, category: '写作' }).builtin).toBe(true);
+    expect(skillSummary({ id: 'local:b', name: 'B', is_builtin: false, category: 'built-in' }).builtin).toBe(false);
+    expect(skillSummary({ id: 'local:c', name: 'C' }).builtin).toBe(false);
+  });
 });

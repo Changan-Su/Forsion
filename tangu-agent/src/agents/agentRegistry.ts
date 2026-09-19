@@ -19,7 +19,7 @@ import path from 'node:path';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { agentsDir, memoryDir, userMdFile, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { builtinAgentAvatar } from './builtinAvatars.js';
-import { LEGACY_PERSONAS } from './legacyPersonas.js';
+import { LEGACY_PERSONAS, LEGACY_MUSE_PROMPTS, LEGACY_MUSE_DESCRIPTION } from './legacyPersonas.js';
 import { ARIOSO_SYSTEM_PROMPT, ARIOSO_SOUL, ARIA_SYSTEM_PROMPT, ARIA_SOUL, RECITA_SYSTEM_PROMPT, RECITA_SOUL } from './personaPrompts.js';
 import { CODING_AGENT_VERSION, CODING_SYSTEM_PROMPT, CODING_SOUL } from './codingPrompt.js';
 import { loadSpecialAgentsConfig, legacyMusePrompt, DEFAULT_MUSE_PROMPT } from '../services/specialAgentsConfig.js';
@@ -413,11 +413,35 @@ async function refreshBuiltinAgent(a: (typeof DEFAULT_AGENTS)[number]): Promise<
  * legacyPrompt = 旧 specialAgents.muse.prompt 自定义值,仅首次创建时一次性迁移为 developer_instructions。
  */
 export async function ensureMuseAgent(legacyPrompt?: string): Promise<void> {
-  if (existsSync(path.join(agentsDir(), MUSE_AGENT_SLUG, 'config.toml'))) return;
+  const adir = path.join(agentsDir(), MUSE_AGENT_SLUG);
+  if (existsSync(path.join(adir, 'config.toml'))) {
+    // 已有文件夹:只把**原装旧指令**换成现行预设(见 upgradeMusePrompt),其余一个字段都不动。
+    const cur = await parseAgentFolder(MUSE_AGENT_SLUG, adir);
+    const upgraded = upgradeMusePrompt(cur);
+    if (upgraded !== cur) {
+      await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig(upgraded), 'utf-8');
+      cache = null;
+    }
+    return;
+  }
   const preset = { ...MUSE_AGENT_PRESET };
   if (legacyPrompt && legacyPrompt.trim()) preset.systemPrompt = legacyPrompt.trim();
   await writeAgentScaffold(preset);
   cache = null;
+}
+
+/** Muse 逐字段升级:工作指令 / 描述还是**一字未改的历史原装**才换成现行预设;用户写过的原样保留。
+ *  没变化时返回同一个对象(调用方按引用判断要不要写盘)。 */
+export function upgradeMusePrompt(cur: NormalAgentDef): NormalAgentDef {
+  if (cur.slug !== MUSE_AGENT_SLUG) return cur;
+  const stalePrompt = LEGACY_MUSE_PROMPTS.includes((cur.systemPrompt || '').trim());
+  const staleDescription = cur.description === LEGACY_MUSE_DESCRIPTION;
+  if (!stalePrompt && !staleDescription) return cur;
+  return {
+    ...cur,
+    systemPrompt: stalePrompt ? MUSE_AGENT_PRESET.systemPrompt : cur.systemPrompt,
+    description: staleDescription ? MUSE_AGENT_PRESET.description : cur.description,
+  };
 }
 
 /** 内置头像显式删除后不复活;自定义头像和独立的记忆保持原样。 */
