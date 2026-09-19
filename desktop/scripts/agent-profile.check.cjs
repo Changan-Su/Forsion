@@ -245,7 +245,7 @@ async function run() {
     // 只量当前标签的正文(.profile-section-enter):记忆面板保持挂载(hidden)也在 .agent-profile-content 里,会误数。
     assert.equal(await compact.locator('.profile-section-enter button').filter({ hasText: /^(技能|MCP|记忆)/ }).count(), 0, 'Config tab must not repeat the Skills / MCP / Memory tabs as cards')
     console.log('PASS searchable memory, retained drafts, Markdown preview and keyboard tab navigation')
-    // 进化是一级标签(原来藏在 记忆 → 资料库弹窗 → 第 4 个 tab):条目、芯片、时间线、撤销 / 恢复、就地发 /refine。
+    // 进化 = 成长标签里的第二张分段卡(09-18 是一级标签,09-19 与记忆并成「成长」):条目、芯片、时间线、撤销 / 恢复、就地发 /refine。
     const growthTab = compact.getByRole('tab', { name: '成长', exact: true })
     assert.equal(await growthTab.locator('.profile-tab-badge').textContent(), '1', 'The Growth tab carries the count of candidates awaiting reflection before it is opened')
     await growthTab.click()
@@ -388,6 +388,21 @@ async function run() {
       await win.screenshot({ path: path.join(home, shot) })
       assert.equal(await profile.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false, `${tab} must not overflow in English`)
     }
+    // 面板模式 × 英文:分段卡的说明最容易在 300px 的右栏里被截成「Methods it has lea…」。回到会话 Space 看右栏详情。
+    const tanguButton = win.locator('[data-ribbon-id="space:tangu"], [data-id="space:tangu"]').first()
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1500, 1000)) // 右栏回到常见宽度(上一步把窗口缩到了 820)
+    await tanguButton.click()
+    await win.locator('.t2s-srow, .t2o-row').filter({ hasText: 'Research notes' }).first().click() // reload 后落在默认 Agent 的新会话上,详情跟会话走
+    const compactEn = win.locator('[data-tangu-details] [data-agent-profile="research"]')
+    await compactEn.waitFor()
+    for (const [tab, shot] of [['Skills', 'compact-english-skills.png'], ['Growth', 'compact-english-growth.png'], ['Schedule', 'compact-english-schedule.png']]) {
+      await compactEn.getByRole('tab', { name: tab, exact: true }).click()
+      await win.waitForTimeout(260)
+      await win.locator('[data-tangu-details]').screenshot({ path: path.join(home, shot) })
+      assert.equal(await compactEn.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false, `${tab} must not overflow the docked panel in English`)
+    }
+    await compactEn.getByRole('tab', { name: 'Growth', exact: true }).click()
+    assert.deepEqual(await compactEn.locator('.profile-segment small').evaluateAll((els) => els.map((el) => el.scrollWidth <= el.clientWidth + 1)), [true, true], 'Segment captions fit the docked panel in English without truncation')
     assert.deepEqual(errors, [])
     console.log('PASS Agent skill and MCP loadout save; screenshots:', home)
   } catch (e) { console.error('Artifacts:', home); try { await (await app?.firstWindow())?.screenshot({ path: path.join(home, 'failure.png') }) } catch {} throw e } finally { await app?.close(); await stub.close() }

@@ -71,8 +71,12 @@ describe('manage_skill', () => {
   it('listLocalSkills 把 origin 带到记录上(用户级根认;包内置的没有)—— 桌面徽标的上游那一跳', async () => {
     expect(await run({ action: 'create', name: 'Origin probe', instructions: 'probe' })).toContain('已创建');
     const { listLocalSkills } = await import('../../skills/localSkills.js');
-    const recs = (await listLocalSkills()) as Array<{ id: string; origin?: 'agent' | null }>;
+    const recs = (await listLocalSkills()) as Array<{ id: string; origin?: 'agent' | null; is_builtin?: boolean }>;
     expect(recs.find((r) => r.id === 'local:origin-probe')?.origin).toBe('agent');
     expect(recs.find((r) => r.id === 'local:skill-creator')?.origin ?? null).toBeNull();
+    // is_builtin 走的是同一条链(包内置 → 家目录里没改过的镜像不覆盖它 → 记录):桌面详情页靠它折叠内置技能(routes/assets.ts skillSummary.builtin)。
+    // 镜像那一跳若把内置降成 user,折叠在生产里静默失效,而 skillSummary 的单测与台架(桩里手写 builtin)都还是绿的。
+    expect(recs.find((r) => r.id === 'local:skill-creator')?.is_builtin).toBe(true);
+    expect(recs.find((r) => r.id === 'local:origin-probe')?.is_builtin).toBe(false);
   });
 });

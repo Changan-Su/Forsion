@@ -215,7 +215,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
     const on = (e: Entry): boolean => !selected || selected.includes(e.id)
     const filtered = entries.filter((e) => (!enabledOnly || on(e)) && `${e.name} ${e.description}`.toLowerCase().includes(q))
     // 内置技能占了列表的大头(随包十来个,描述又长):收进一个默认合上的组,自建 / 自己装的排在上面。
-    // 搜索或「仅看已启用」时自动展开 —— 过滤后的命中不许藏在合着的组里。
+    // 搜索或「仅看已启用」时自动展开 —— 过滤后的命中不许藏在合着的组里。只有内置技能的 Agent 也保持合上:一行「内置技能 · 已启用 14 / 14」就是整洁态。
     const own = filtered.filter((e) => !e.builtin)
     const stock = filtered.filter((e) => e.builtin)
     const row = (entry: Entry) => <EquipmentRow key={entry.id} name={entry.name} description={entry.description} checked={on(entry)} tinted
@@ -239,7 +239,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
       {loading && <p className="agent-profile-muted" role="status"><Loader2 size={14} className="spin" /> {t('agentProfile.loading')}</p>}
       {loadError && <div className="agent-profile-error" role="alert">{loadError}<button onClick={() => setRetry((v) => v + 1)}>{t('agentProfile.retry')}</button></div>}
       {own.length > 0 && <div className="agent-equipment-list">{own.map(row)}</div>}
-      {stock.length > 0 && <details className="equipment-group" data-equipment-group="builtin" open={!!q || enabledOnly || !own.length || undefined}>
+      {stock.length > 0 && <details className="equipment-group" data-equipment-group="builtin" open={!!q || enabledOnly || undefined}>
         <summary><span>{t('agentProfile.builtinSkills')}</span><small>{t('agentProfile.selectedCount', { count: stock.filter(on).length, total: stock.length })}</small></summary>
         <div className="agent-equipment-list">{stock.map(row)}</div>
       </details>}

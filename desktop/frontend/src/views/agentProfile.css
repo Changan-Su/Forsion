@@ -193,7 +193,8 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 .profile-segment > button:hover { background: var(--overlay-light); color: var(--text); }
 .profile-segment > button[aria-pressed=true] { color: var(--accent-ink); background: var(--overlay-medium); }
 .profile-segment strong { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
-.profile-segment small { font-size: 11px; line-height: 1.5; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 说明允许折行,不截断:英文在 300px 的右栏里一行放不下(09-19 台架实测截成「Methods it has le…」) */
+.profile-segment small { font-size: 11px; line-height: 1.5; color: var(--text-muted); overflow-wrap: anywhere; }
 .profile-segment .profile-tab-badge { position: static; margin-left: auto; }
 /* 日程:条目沿用工作笔记的卡;时间行 = 芯片 + 下一次 + 间隔。已过期 / 停用的整卡降一档。 */
 .schedule-entry, .schedule-rule { display: grid; gap: 6px; min-width: 0; padding: 12px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); }
