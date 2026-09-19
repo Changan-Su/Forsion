@@ -35,7 +35,10 @@ import { createCloudClient, CloudHttpError, type CloudChange, type CloudClient, 
 import { startSse, type SseHandle } from './sseClient'
 import { createShadowSaver, loadShadow, type SyncShadow, type LocalMove } from './shadow'
 
-const MAX_FILE_BYTES = 5 * 1024 * 1024 // 与服务端 MAX_TEXT_BYTES 一致;二进制同限(P1 服务端补齐)
+const TEXT_MAX_BYTES = 5 * 1024 * 1024 // 与服务端 MAX_TEXT_BYTES 一致:.md/.db 不随会员档位放宽
+// 二进制上限随云 vault 属主的会员档位(Free 5MB / Plus 10MB / Pro 500MB,admin 可按方案改),由 tree.maxFileBytes
+// 下发、每次全量对账刷新。老服务端不下发 → 仍按 5MB,不当不限(否则反复上传注定 413 的大文件)。
+const DEFAULT_BINARY_MAX_BYTES = 5 * 1024 * 1024
 const RETRY_MS = 30_000
 const SCAN_DEBOUNCE_MS = 2_500
 const MERGE_MAX_BYTES = 1024 * 1024 // markdown 机会性三方合并的单侧上限(超限直接走冲突副本)
@@ -99,6 +102,8 @@ export interface SyncStatus {
   error: string | null
   /** 被删除保护拦下、等用户确认的删除条数(0 = 无)。confirmMassDeletions 放行。 */
   pendingDeletions: number
+  /** 服务端下发的二进制单文件上限(字节;null = 还没拉到 tree)。渲染端导入预检与跳过提示用。 */
+  maxFileBytes: number | null
 }
 
 interface EngineDeps {
@@ -193,6 +198,8 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   let boundRoot: string | null = null
   let conflicts = 0
   const skipped = new Map<string, string>()
+  /** 服务端下发的二进制单文件上限;null = 本次会话还没拉到 tree(推送按 DEFAULT_BINARY_MAX_BYTES)。 */
+  let binaryMaxBytes: number | null = null
   const saver = createShadowSaver(binding.shadowName)
   /** 删除保护:待确认的删除(serverPath → 哪一侧将被删)。shadow 保留 → 确认后 fullReconcile 重新推导执行。 */
   const pendingDeletions = new Map<string, 'local' | 'remote'>()
@@ -689,7 +696,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       enqueue({ key: serverPath, run: () => reconcileLocal(serverPath) })
       return
     }
-    if (local.size > MAX_FILE_BYTES) {
+    if (local.size > TEXT_MAX_BYTES) {
       skipped.set(serverPath, 'TOO_LARGE')
       emitStatus()
       return
@@ -715,7 +722,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       enqueue({ key: serverPath, run: () => reconcileLocal(serverPath) })
       return
     }
-    if (local.size > MAX_FILE_BYTES) {
+    if (local.size > (binaryMaxBytes ?? DEFAULT_BINARY_MAX_BYTES)) {
       skipped.set(serverPath, 'TOO_LARGE')
       emitStatus()
       return
@@ -1021,6 +1028,10 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     if (!client || !shadow || !boundRoot) return
     if (!(await rootAlive())) return
     const tree = await client.tree(shadow.vaultId)
+    if (tree.maxFileBytes !== undefined && tree.maxFileBytes !== binaryMaxBytes) {
+      binaryMaxBytes = tree.maxFileBytes // 开了 / 到期了会员:这一轮对账就按新上限推(TOO_LARGE 跳过的文件会被重新判定)
+      emitStatus()
+    }
     if (hasPendingMoves() || revision !== structuralRevision) return
     const remote = new Map<string, CloudTreeEntry>()
     for (const e of tree.entries) {
@@ -1355,6 +1366,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     boundRoot = null
     conflicts = 0
     skipped.clear()
+    binaryMaxBytes = null
     pendingDeletions.clear()
     allowMassDeleteOnce = false
     stormLatched = false
@@ -1396,6 +1408,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     skipped: [...skipped].map(([p, reason]) => ({ path: p, reason })),
     error,
     pendingDeletions: pendingDeletions.size,
+    maxFileBytes: binaryMaxBytes,
   })
 
   return {

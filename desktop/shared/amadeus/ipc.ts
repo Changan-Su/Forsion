@@ -19,6 +19,7 @@ export const IPC = {
   readVaultBytes: 'vault:read-bytes',
   saveAttachment: 'attachment:save',
   openAttachment: 'attachment:open',
+  copyAttachment: 'attachment:copy',
   openVaultFile: 'vault:open-file',
   exportPdf: 'page:export-pdf',
   exportCsv: 'db:export-csv',
@@ -439,6 +440,9 @@ export interface AmadeusApi {
   ): Promise<{ pageRel: string; base: string }>
   /** Open an attachment (ref = page-relative path or bare basename) with the OS default app. */
   openAttachment(pagePath: string, ref: string): Promise<void>
+  /** Copy an attachment with two clipboard flavours: Forsion gets `reference` markdown back, while
+   *  other apps receive the native image/file payload when the desktop platform supports it. */
+  copyAttachment?(pagePath: string, ref: string, reference: string): Promise<boolean>
   /** Open an EXACT vault-relative path with the OS default app(树/侧栏用:不做 URL 解码、不做 basename 兜底搜索). */
   openVaultFile(vaultRel: string): Promise<void>
   /** 把当前窗口按 @media print 样式打成 PDF(渲染端先挂好 #amx-print-root 克隆);

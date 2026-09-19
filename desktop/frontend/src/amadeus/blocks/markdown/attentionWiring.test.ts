@@ -5,6 +5,8 @@
 // 才 `ctx.get(remarkStringifyOptionsCtx)`)。这一环此前全靠读源码推理 —— 而同类接缝今天已经
 // 推错过两次(扩展 vs options.handlers 的优先级、裸 remark-stringify vs milkdown 管线),
 // 所以起一个**真的 Editor**,从 serializerCtx 拿真的落盘结果。
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { Editor, defaultValueCtx, rootCtx, serializerCtx, editorViewCtx } from '@milkdown/kit/core'
 import { commonmark } from '@milkdown/kit/preset/commonmark'
@@ -20,7 +22,7 @@ const boot = async (initial: string, withFix: boolean): Promise<string> => {
     ctx.set(defaultValueCtx, initial)
   })
   editor = editor.use(commonmark).use(gfm)
-  if (withFix) editor = editor.use(attentionSerializer) // ← UnifiedSpike 里那一行
+  if (withFix) editor = editor.use(attentionSerializer) // ← MarkdownBlock 里那一行
   const ed = await editor.create()
   const md = ed.action((ctx) => ctx.get(serializerCtx)(ctx.get(editorViewCtx).state.doc))
   await ed.destroy()
@@ -33,7 +35,8 @@ const boot = async (initial: string, withFix: boolean): Promise<string> => {
 // 两条选材约束,都是踩出来的:
 //  · 放**句尾**:后面跟汉字的话闭合定界符前是 `;` 后是汉字,按 flanking 本来就不成立,
 //    喂进去连 mark 都解析不出来。
-//  · 用 **NBSP** 不用 ASCII 空格:ProseMirror 解析时会把 mark 里的尾随 ASCII 空格吃掉,
+//  · 用 **NBSP** 不用 ASCII 空格:milkdown 序列化的 moveSpaces 会把以 ASCII 空格结尾的 mark
+//    尾随空白整段挪到定界符外(09-18 评审更正:不是 ProseMirror 解析时吃掉的),
 //    喂什么都测不到。用户实报那条本来就是输入法打的 U+00A0 —— 正因为它不被 trim,
 //    才能一路烂到磁盘上。
 const BOLD = '**abc&#xA0;**'
@@ -56,4 +59,11 @@ describe('装配链:.use(attentionSerializer) 真的赶在 init 烘焙处理器�
   it('删除线没挂时同样自毁(gfm 上游一条编码都不做)', async () => {
     expect(await boot(STRIKE, false)).toBe(`~~abc${NBSP}~~`)
   }, 30000)
+})
+
+// 09-18 复发:上面四条全绿,真编辑器却从没挂这一行(08-25 只挂进了 UnifiedSpike 台架)。
+// 装配管用 ≠ 生产装上了。MarkdownBlock 是唯一的生产编辑器,钉住它。真往返见 npm run check:attention。
+it('生产编辑器 MarkdownBlock 挂了 attentionSerializer', () => {
+  const src = readFileSync(join(__dirname, 'MarkdownBlock.tsx'), 'utf8') // happy-dom 下 import.meta.url 不是 file:
+  expect(src).toMatch(/^\s*\.use\(attentionSerializer\)/m)
 })

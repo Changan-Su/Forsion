@@ -76,6 +76,7 @@ const SKIP = {
   windowKind: '多窗分流(?window=detached/mini);移动端只有一个 WebView',
   DetachedRoot: '同上:拖出来的独立窗',
   MiniRoot: '同上:悬浮 mini 卡片',
+  FloatingRoot: '第六种 Panel 的 Electron 原生子窗口根;移动端按产品约定继续使用全屏二级页面,不模拟桌面窗口',
   ChatPreview: '#preview 设计预览页,截图评审用',
   resolveInitialEffectiveMode: '移动端用 resolveInitialMode(无「跟随系统」的 electron 通道)',
   // —— 根组件 ——
@@ -92,6 +93,8 @@ const SKIP = {
   installFileDropGuard: '移动端无 OS 文件拖放',
   HoverTip: '触屏无 hover 态',
   MobilePreviewFrame: '桌面/web 的「手机预览框」;真机走 MobileRoot 不经此处',
+  FloatingPanelFrame: 'Web 的固定居中 Floating 容器;移动端继续由 MobileRoot 渲染全屏二级页面',
+  FloatingViewSurface: 'Floating 插件视图宿主;移动端不注入 openFloatingPanel,插件 feature-detect 后回退 openView',
   UI_MODE: '预览框判定用,同上',
   PREVIEW_SIZES: '预览框常量',
   // —— 外壳替换边界(Shell.tsx ↔ SingleColumnHost + MobileRoot) ——

@@ -33,6 +33,18 @@ export const forsionHomeDir = (): string => {
 /** 引擎(tangu-agent)数据子目录:spawn 托管后端时 TANGU_HOME 指此,引擎私有数据全在其内。
  *  顶层 ~/.forsion 只留共享域文件(auth/provider-auth/config.json/activity)与 desktop 自有内容。 */
 export const tanguDataDir = (): string => join(forsionHomeDir(), 'tangu')
+
+/**
+ * Electron dev 主进程不会像托管后端那样天然带 `TANGU_HOME`，而 provider OAuth 模块又是从
+ * tangu-agent 的构建产物动态导入的。登录时不先把它绑定到 dev home，就会写入 ~/.tangu / 正式
+ * Forsion，而 dev 后端实际从 ~/.forsion-dev 读取，造成「已登录但 provider 不存在」的分脑。
+ *
+ * 必须在 migrateEngineData 之后调用；过早设置会让迁移把它误认成用户显式的目录重定向而跳过。
+ */
+export function bindDevTanguHome(): void {
+  if (devMode && !process.env.TANGU_HOME) process.env.TANGU_HOME = tanguDataDir()
+}
+
 /** 默认本机工作区(会话 host 执行 cwd 兜底)。 */
 export const defaultWorkspaceDir = (): string => join(homedir(), devMode ? 'Forsion-Dev' : 'Forsion')
 

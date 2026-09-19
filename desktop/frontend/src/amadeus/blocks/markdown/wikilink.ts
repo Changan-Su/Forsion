@@ -2,11 +2,11 @@
 //  · 光标**不在**该行 → 隐藏 [[ ]] 源码,就地渲染成异色双链;点渲染出的链接 → 跳转目标笔记。
 //  · 光标**回到**该行 → 整行露出字面 [[note]] 源码可编辑;此时点它**不跳转**(普通文本 / 只定位光标)。
 // 链接始终是 .md 里的字面文本(零 schema、零序列化改动,round-trip、Obsidian 可读)。
-// 图片嵌入 `![[pic.png|200]]` 多一档「选中态」:点一下 = 把 PM 选区精确铺在那段源码上,
-// 此时**不**让位给源码(照旧显示图片,加选中环 + 右缘缩放把手)。复制 / 剪切 / 删除 / 覆盖输入
-// 因此全是 PM 原生行为,一行剪贴板代码都不用写;双击才走 revealSource 露源码(与 `</>` 同一通道)。
+// 图片嵌入 `![[pic.png|200]]` 是“难源码编辑块”:点一下选中整体并保留渲染(独占段落提升为
+// paragraph NodeSelection,行内图片选精确文本范围),加选中环与右缘缩放把手;光标经过不露源码,
+// 只有悬停右上角 `</>` 显式打开。复制事件另补桌面原生附件 flavor,外部 App 能直接粘文件。
 import { $prose } from '@milkdown/kit/utils'
-import { Plugin, PluginKey, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
+import { NodeSelection, Plugin, PluginKey, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { WIKILINK_RE, linkTarget } from '@amadeus-shared/links'
 import { isPdfLinkInner, parseMediaLinkInner } from '@amadeus-shared/pdfLink'
@@ -27,7 +27,8 @@ function imageEmbed(inner: string, bang: boolean): { url: string; width?: number
   return { url: toAssetUrl(p), width: w && /^\d+$/.test(w) ? Number(w) : undefined, name: p }
 }
 
-const wikiKey = new PluginKey<{ focus: boolean }>('amadeus-wikilink-live')
+interface WikiState { focus: boolean; sourceFrom: number | null }
+const wikiKey = new PluginKey<WikiState>('amadeus-wikilink-live')
 
 /** [[Name|alias]] → 显示 alias;[[Name#heading]] / [[Name]] → 显示原样内文(仅去两端 [[ ]])。 */
 function displayLabel(inner: string): string {
@@ -43,6 +44,7 @@ function buildDecorations(
   iconOf?: (name: string) => string | undefined,
 ): DecorationSet {
   const focus = wikiKey.getState(state)?.focus ?? false
+  const sourceFrom = wikiKey.getState(state)?.sourceFrom ?? null
   const decos: Decoration[] = []
   const selFrom = state.selection.from
   const selTo = state.selection.to
@@ -75,9 +77,14 @@ function buildDecorations(
       const from = cs + spFrom
       const to = cs + spTo
       // 图片「被整段选中」(点一下图片就是这个选区)→ 保持渲染并进选中态,不让位给源码。
-      const picked = !!img && focus && selFrom === from && selTo === to
+      const standalone = !!img && spFrom === 0 && spTo === s.length
+      const picked = !!img && focus && (
+        (selFrom === from && selTo === to) ||
+        (standalone && state.selection instanceof NodeSelection && selFrom === pos && selTo === pos + node.nodeSize)
+      )
       const onActiveLine = lineFrom !== -1 && spFrom < lineTo && spTo > lineFrom
-      if (onActiveLine && !picked) continue // 本行 → 露源码可编辑,不渲染、点它不跳转
+      // 普通双链仍是「光标进入即源码」;图片是难源码编辑块,只有 `</>` 显式开门。
+      if ((!img && onActiveLine) || (img && onActiveLine && sourceFrom === from)) continue
       if (img) {
         decos.push(Decoration.inline(from, to, { class: 'wikilink-src-hidden' }))
         decos.push(
@@ -106,10 +113,18 @@ function buildDecorations(
                 if (e.button !== 0 || (e.target as HTMLElement).closest('.amx-img-resize, .amx-src-btn')) return
                 e.preventDefault()
                 e.stopPropagation()
-                view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, from, to)))
+                const tr = standalone
+                  ? view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos))
+                  : view.state.tr.setSelection(TextSelection.create(view.state.doc, from, to))
+                view.dispatch(tr)
                 view.focus()
               })
-              attachSourceButton(wrap, view, from) // 悬停 `</>` → 光标进 `![[…]]` 源码
+              attachSourceButton(wrap, view, () => {
+                const tr = view.state.tr.setSelection(TextSelection.create(view.state.doc, Math.min(from + 1, view.state.doc.content.size)))
+                tr.setMeta(wikiKey, { sourceFrom: from })
+                view.dispatch(tr)
+                view.focus()
+              }) // 悬停 `</>` → 显式进入 `![[…]]` 源码
               return wrap
             },
             // ⚠️ key **不带**选中位:同 key 的 widget DOM 会被 PM 复用,带上 picked 就等于
@@ -170,11 +185,17 @@ function syncPicked(view: EditorView): void {
   const { from, to } = view.state.selection
   const focus = wikiKey.getState(view.state)?.focus ?? false
   const prev = marked.get(view) ?? null
-  // 空选区(打字时的绝大多数 update)直接按属性选择器取 null,不扫整棵 DOM。
-  const want =
-    focus && from !== to
-      ? view.dom.querySelector<HTMLElement>(`.wiki-inline-img-wrap[data-src-from="${from}"][data-src-to="${to}"]`)
-      : null
+  // 独占段图片选中的是外层 paragraph NodeSelection(分栏/拖拽/Tab 子树都以块为单位);
+  // 行内图片仍精确选源码区间。两档最后都映射回同一枚 widget。
+  let pickFrom = from
+  let pickTo = to
+  if (view.state.selection instanceof NodeSelection && view.state.selection.node.type.name === 'paragraph') {
+    pickFrom = from + 1
+    pickTo = to - 1
+  }
+  const want = focus && pickFrom !== pickTo
+    ? view.dom.querySelector<HTMLElement>(`.wiki-inline-img-wrap[data-src-from="${pickFrom}"][data-src-to="${pickTo}"]`)
+    : null
   if (prev === want) return
   if (prev) {
     delete prev.dataset.selected
@@ -186,17 +207,46 @@ function syncPicked(view: EditorView): void {
     const img = want.querySelector('img')
     if (img && view.editable) {
       handles.set(want, attachResizeHandle(want, img, (w) => {
-        const name = (view.state.doc.textBetween(from, to).match(/^!\[\[([^\]\n|]+)/) ?? [])[1]
+        const name = (view.state.doc.textBetween(pickFrom, pickTo).match(/^!\[\[([^\]\n|]+)/) ?? [])[1]
         if (!name) return
         const next = `![[${name}|${w}]]`
-        const tr = view.state.tr.insertText(next, from, to)
-        tr.setSelection(TextSelection.create(tr.doc, from, from + next.length)) // 重建后仍选中
+        const tr = view.state.tr.insertText(next, pickFrom, pickTo)
+        if (view.state.selection instanceof NodeSelection) tr.setSelection(NodeSelection.create(tr.doc, from))
+        else tr.setSelection(TextSelection.create(tr.doc, pickFrom, pickFrom + next.length))
         view.dispatch(tr)
       }))
     }
   }
   if (want) marked.set(view, want)
   else marked.delete(view)
+}
+
+/** ↑↓ 进入一条独占段双链时,浏览器会因为源码被 display:none 而把整段跳过去。
+ *  在相邻文本块边界精确接住这一种形状,把光标送进 `[[…]]`;图片不在此列。 */
+function adjacentPlainWiki(view: EditorView, dir: 'up' | 'down'): number | null {
+  const sel = view.state.selection
+  if (!(sel instanceof TextSelection) || !sel.empty || !sel.$head.parent.isTextblock) return null
+  try {
+    const caret = view.coordsAtPos(sel.head)
+    const edge = view.coordsAtPos(dir === 'up' ? sel.$head.start() : sel.$head.end())
+    if (Math.abs(caret.top - edge.top) > Math.max(2, caret.bottom - caret.top)) return null
+  } catch {
+    if (dir === 'up' ? sel.$head.parentOffset !== 0 : sel.$head.parentOffset !== sel.$head.parent.content.size) return null
+  }
+  const blocks: Array<{ pos: number; size: number; sourceFrom: number | null }> = []
+  view.state.doc.descendants((node, pos) => {
+    if (!node.isTextblock) return true
+    const s = buildBlockString(node)
+    let sourceFrom: number | null = null
+    WIKILINK_RE.lastIndex = 0
+    const m = WIKILINK_RE.exec(s)
+    if (m && m.index === 0 && m[0].length === s.length) sourceFrom = pos + 1
+    blocks.push({ pos, size: node.nodeSize, sourceFrom })
+    return false
+  })
+  const cur = blocks.findIndex((b) => sel.head > b.pos && sel.head < b.pos + b.size)
+  const target = blocks[cur + (dir === 'up' ? -1 : 1)]
+  return target?.sourceFrom == null ? null : target.sourceFrom + 2
 }
 
 export function wikilinkPlugin(
@@ -206,16 +256,27 @@ export function wikilinkPlugin(
 ) {
   return $prose(
     () =>
-      new Plugin<{ focus: boolean }>({
+      new Plugin<WikiState>({
         key: wikiKey,
         // 选中态就地同步:widget 的 DOM 全程不换(见 key 处的注释),所以「选中环 + 缩放把手」
         // 只能在这里按当前选区打/摘。位置从 dataset 读 —— 位置一变 key 就变、DOM 本来就会重建。
         view: () => ({ update: syncPicked }),
         state: {
-          init: () => ({ focus: false }),
+          init: () => ({ focus: false, sourceFrom: null }),
           apply: (tr, value) => {
-            const m = tr.getMeta(wikiKey) as { focus?: boolean } | undefined
-            return m && typeof m.focus === 'boolean' ? { focus: m.focus } : value
+            const m = tr.getMeta(wikiKey) as { focus?: boolean; sourceFrom?: number } | undefined
+            let sourceFrom = value.sourceFrom
+            if (sourceFrom != null && tr.docChanged) sourceFrom = tr.mapping.map(sourceFrom)
+            if (m && typeof m.sourceFrom === 'number') sourceFrom = m.sourceFrom
+            else if (sourceFrom != null && tr.selectionSet) {
+              const node = tr.doc.nodeAt(Math.max(0, sourceFrom - 1))
+              const nodeFrom = Math.max(0, sourceFrom - 1)
+              if (!node || tr.selection.to <= nodeFrom || tr.selection.from >= nodeFrom + node.nodeSize) sourceFrom = null
+            }
+            return {
+              focus: m && typeof m.focus === 'boolean' ? m.focus : value.focus,
+              sourceFrom,
+            }
           },
         },
         props: {
@@ -223,6 +284,13 @@ export function wikilinkPlugin(
           handleDOMEvents: {
             focus: (view) => { if (!wikiKey.getState(view.state)?.focus) view.dispatch(view.state.tr.setMeta(wikiKey, { focus: true })); return false },
             blur: (view) => { if (wikiKey.getState(view.state)?.focus) view.dispatch(view.state.tr.setMeta(wikiKey, { focus: false })); return false },
+          },
+          handleKeyDown: (view, event) => {
+            if ((event.key !== 'ArrowUp' && event.key !== 'ArrowDown') || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false
+            const pos = adjacentPlainWiki(view, event.key === 'ArrowUp' ? 'up' : 'down')
+            if (pos == null) return false
+            view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)).scrollIntoView())
+            return true
           },
           decorations: (state) => buildDecorations(state, onOpen, isResolved, iconOf),
         },

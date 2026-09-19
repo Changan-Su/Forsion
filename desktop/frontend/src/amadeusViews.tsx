@@ -112,10 +112,10 @@ registerMessages({
   'amxv.pinned.hint': { zh: '拖入笔记置顶,或点编辑器右上角的图钉', en: 'Drag a note here to pin it, or use the pin button at the top right of the editor' },
   'amxv.cloudsync.hint': { zh: '拖入笔记/文件,或右键条目「开启云同步」', en: 'Drag notes or files here, or right-click an item and choose “Turn on cloud sync”' },
 
-  'amxv.skip.tooLarge': { zh: '超过 5MB,云端不收', en: 'Over 5 MB — the cloud will not accept it' },
+  'amxv.skip.tooLarge': { zh: '超过云端单文件上限,云端不收', en: 'Over the cloud file size limit — the cloud will not accept it' },
   'amxv.skip.assetMissing': { zh: '云端缺失', en: 'Missing in the cloud' },
   'amxv.skip.summary': { zh: '⚠ {n} 项未同步{extra},悬停看明细', en: '⚠ {n} item(s) not synced{extra} — hover for details' },
-  'amxv.skip.tooLargeNote': { zh: '(有文件超过 5MB,云端单文件上限)', en: ' (some files are over the 5 MB per-file cloud limit)' },
+  'amxv.skip.tooLargeNote': { zh: '(有文件超过云端单文件上限:笔记 5MB,附件随会员档位)', en: ' (some files are over the per-file cloud limit: 5 MB for notes, plan-based for attachments)' },
   'amxv.cloud.dotTitle': { zh: '云端「{name}」', en: 'Cloud “{name}”' },
   'amxv.cloud.skippedCount': { zh: '{n} 项跳过', en: '{n} skipped' },
   'amxv.cloud.notEnabled': { zh: '尚未开启云同步', en: 'Cloud sync is not on yet' },
@@ -643,7 +643,7 @@ function PinnedSection({ row, dragPath }: { row: (path: string) => ReactNode; dr
   )
 }
 
-/** 引擎跳过原因 → 人话(engine.ts 的 skipped reason;上限与服务端 MAX_TEXT/BINARY_BYTES=5MB 一致)。 */
+/** 引擎跳过原因 → 人话(engine.ts 的 skipped reason;文本上限 5MB,二进制上限随会员档位由服务端下发)。 */
 const skipLabel = (r: string): string => (r === 'TOO_LARGE' ? translate('amxv.skip.tooLarge') : r === 'ASSET_404' ? translate('amxv.skip.assetMissing') : r)
 
 const skipWarnRow = (skipped: Array<{ path: string; reason: string }>): ReactNode => (
@@ -658,7 +658,7 @@ const skipWarnRow = (skipped: Array<{ path: string; reason: string }>): ReactNod
   </div>
 )
 
-/** 云端侧镜像引擎的跳过警示(如 >5MB 拒收):amadeusSync.onStatus 推送。此前这些跳过只藏在
+/** 云端侧镜像引擎的跳过警示(如超单文件上限拒收):amadeusSync.onStatus 推送。此前这些跳过只藏在
  *  设置页与状态点 tooltip 里,用户放个大文件进云端文件夹毫无反馈 —— 在云端树顶明示。 */
 function CloudSkipWarn() {
   useI18n() // 订阅语言变更:下面的 skipWarnRow 走模块级 translate()

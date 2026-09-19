@@ -1,6 +1,9 @@
 import { promises as fs, readdirSync, readFileSync } from 'node:fs'
+import { execFile } from 'node:child_process'
 import path from 'node:path'
-import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
+import { pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
+import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, PLUGIN_CAPABILITIES, type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
 import { serializeDb, seedCalendarDb } from '@amadeus-shared/db/schema'
 import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
@@ -32,6 +35,37 @@ import { cloudVaultMarkerPath, coversPath, rewritePathList } from '@amadeus-shar
 import { deleteShadowFile } from './sync/shadow'
 import type { CloudChange } from './sync/cloudClient'
 import { readPluginIconDataUrl } from '../pluginIcon'
+
+const runFile = promisify(execFile)
+
+// Electron 的 clipboard.writeBuffer 每调用一次都会清掉之前的 flavor;依次写 text / file-url 的
+// 结果永远只剩最后一项。macOS 用 AppKit 的单枚 NSPasteboardItem 一次写齐所有表示,才能同时满足
+// 「Forsion 内粘引用」与「外部 App 粘真实文件/图片」。参数从 argv 传入,不拼脚本、不执行用户文本。
+const MAC_ATTACHMENT_CLIPBOARD_JXA = `ObjC.import('AppKit')
+function run(argv) {
+  const pb = $.NSPasteboard.generalPasteboard
+  pb.clearContents
+  const item = $.NSPasteboardItem.alloc.init
+  item.setStringForType($(argv[0]), $.NSPasteboardTypeString)
+  item.setStringForType($(argv[0]), $('application/x-forsion-attachment-reference'))
+  item.setStringForType($(argv[1]), $('public.file-url'))
+  item.setStringForType($(argv[1] + '\\r\\n'), $('text/uri-list'))
+  item.setStringForType($(argv[2]), $.NSPasteboardTypeHTML)
+  if (argv[3]) {
+    const image = $.NSImage.alloc.initWithContentsOfFile($(argv[3]))
+    if (image) item.setDataForType(image.TIFFRepresentation, $.NSPasteboardTypeTIFF)
+  }
+  pb.writeObjects($.NSArray.arrayWithObject(item))
+}`
+
+async function writeMacAttachmentClipboard(md: string, url: string, html: string, imagePath: string): Promise<boolean> {
+  try {
+    await runFile('/usr/bin/osascript', ['-l', 'JavaScript', '-e', MAC_ATTACHMENT_CLIPBOARD_JXA, '--', md, url, html, imagePath], { timeout: 5_000 })
+    return true
+  } catch {
+    return false
+  }
+}
 
 
 const SAMPLE_MANIFEST = `{
@@ -967,6 +1001,34 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   handle(IPC.openAttachment, async (_e, pagePath: string, ref: string) => {
     const abs = await vault.resolveAttachment(pagePath, ref)
     if (abs) await shell.openPath(abs)
+  })
+
+  // 附件复制是双口径:渲染层的 copy 事件先写 markdown 引用(库内粘贴无复制文件),随后主进程
+  // 把同一剪贴板补成原生图片 / 文件 URL(库外聊天、文档、Finder 等直接拿到附件本体)。
+  // `reference` 由当前 PM 选区序列化,绝不在主进程猜 `![[...]]` / `![](...)` 的磁盘形态。
+  handle(IPC.copyAttachment, async (_e, pagePath: string, ref: string, reference: string) => {
+    const abs = await vault.resolveAttachment(pagePath, ref)
+    const md = typeof reference === 'string' ? reference.trim() : ''
+    if (!abs || !md) return false
+    const stat = await fs.stat(abs).catch(() => null)
+    if (!stat?.isFile()) return false
+    const url = pathToFileURL(abs).toString()
+    const esc = (s: string): string => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+    const image = nativeImage.createFromPath(abs)
+    const html = image.isEmpty()
+      ? `<a href="${esc(url)}">${esc(path.basename(abs))}</a>`
+      : `<img src="${esc(url)}" alt="${esc(path.basename(abs))}">`
+    if (process.platform === 'darwin' && await writeMacAttachmentClipboard(md, url, html, image.isEmpty() ? '' : abs)) return true
+
+    // 非 macOS 先保证文本 + HTML + 原生图片能共存;Electron 没有跨平台的 file-list 写入 API。
+    // 不再追加 writeBuffer —— 它会把前面三种格式全部清掉。
+    clipboard.clear()
+    clipboard.write({
+      text: md,
+      html,
+      ...(image.isEmpty() ? {} : { image }),
+    })
+    return true
   })
 
   // 树/侧栏点开:路径已知且精确 → 直接钳制解析,不走 markdown ref 的 decode/basename 兜底

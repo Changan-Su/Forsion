@@ -10,6 +10,7 @@ import {
 } from './openaiCompat.js';
 import { openaiToResponsesBody } from './openaiResponses.js';
 import { createProviderRegistry } from './providerRegistry.js';
+import { GROK_BUILD_CLIENT_IDENTIFIER, GROK_BUILD_CLIENT_MODE, GROK_BUILD_CLIENT_VERSION } from './grokBuildCompat.js';
 
 // 直连面的档位下发契约。「哪个模型该发什么」的矩阵在 modelCapabilities.test.ts;
 // 这里只守 tune 这一层的职责:查表 → 写 payload → 需要时打改道标记。
@@ -347,5 +348,31 @@ describe('streamOpenAiCompat(usage 解析 / wire 面)', () => {
     expect(openai.body.messages[0].reasoning_content).toBeUndefined();
     const deepseek = await run({ prompt_tokens: 1, completion_tokens: 1 }, 'https://api.deepseek.com/v1', { model: 'deepseek-v4', messages });
     expect(deepseek.body.messages[0].reasoning_content).toBe('COT');
+  });
+
+  it('Grok Build 使用 CLI proxy 请求头并省略不兼容的 stream_options', async () => {
+    let calledInit: any;
+    vi.stubGlobal('fetch', (_u: any, init: any) => {
+      calledInit = init;
+      return Promise.resolve({
+        ok: true,
+        body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('data: [DONE]\n')); c.close(); } }),
+      });
+    });
+    await streamOpenAiCompat({
+      apiKey: 'grok-token',
+      baseUrl: 'https://cli-chat-proxy.grok.com/v1',
+      payload: { model: 'grok-build', messages: [], [PROTOCOL_MARK]: 'grok-build' },
+    } as any);
+    expect(calledInit.headers).toMatchObject({
+      Authorization: 'Bearer grok-token',
+      'X-XAI-Token-Auth': 'xai-grok-cli',
+      'x-grok-client-version': GROK_BUILD_CLIENT_VERSION,
+      'x-grok-client-identifier': GROK_BUILD_CLIENT_IDENTIFIER,
+      'x-grok-client-mode': GROK_BUILD_CLIENT_MODE,
+      'User-Agent': `grok-shell/${GROK_BUILD_CLIENT_VERSION}`,
+      'x-grok-model-override': 'grok-build',
+    });
+    expect(JSON.parse(calledInit.body)).not.toHaveProperty('stream_options');
   });
 });

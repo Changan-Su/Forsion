@@ -1,6 +1,6 @@
 // 移植自 desktop/electron/amadeus/fs/vaultIndex.ts。~100% 纯内存逻辑;唯一 IO(readEntry 的 fs.readFile)
 // 改走 vault.readTextAbs(Capacitor)。links/compiler 是 isomorphic 纯 JS,原样复用。
-import { linkTarget, pageKey, parseEmbeds, parseTags, parseWikiLinks, resolvePageName, stripForIndex } from '@amadeus-shared/links'
+import { decodeCharRefs, linkTarget, pageKey, parseEmbeds, parseTags, parseWikiLinks, resolvePageName, stripForIndex } from '@amadeus-shared/links'
 import { parseBody, stripFrontmatter } from '@amadeus-shared/compiler'
 import type { BacklinkRef, SearchHit, TagCount } from '@amadeus-shared/ipc'
 import type { VaultManager } from './vaultManager'
@@ -10,6 +10,8 @@ interface Entry {
   title: string
   key: string
   text: string
+  /** text 解开数字字符引用后的副本(逐行对齐):搜索 / 摘要 / 标签 / 双链读它(desktop vaultIndex 同款)。 */
+  plain: string
   lower: string
   links: string[]
   embeds: string[]
@@ -78,16 +80,17 @@ export class VaultIndex {
     let raw: string
     try { raw = await this.vault.readTextAbs(this.vault.absPath(p)) } catch { return null }
     const text = stripForIndex(raw)
+    const plain = decodeCharRefs(text)
     const blocks = parseBody(stripFrontmatter(raw))
       .filter((b) => b.id)
       .map((b) => ({ id: b.id!.toLowerCase(), content: b.content }))
     const title = (p.split(/[\\/]/).pop() ?? p).replace(/\.md$/i, '')
     return {
       path: p, title, key: pageKey(p),
-      text, lower: text.toLowerCase(),
-      links: parseWikiLinks(text),
+      text, plain, lower: plain.toLowerCase(),
+      links: parseWikiLinks(plain),
       embeds: parseEmbeds(raw),
-      tags: parseTags(text),
+      tags: parseTags(plain),
       blocks,
       icon: parseFmIcon(raw),
     }
@@ -143,12 +146,12 @@ export class VaultIndex {
       let score = 0
       if (bodyIdx >= 0) {
         const start = Math.max(0, bodyIdx - 40)
-        const end = Math.min(e.text.length, bodyIdx + q.length + 80)
+        const end = Math.min(e.plain.length, bodyIdx + q.length + 80)
         snippet =
           (start > 0 ? '…' : '') +
-          e.text.slice(start, end).replace(/\s+/g, ' ').trim() +
-          (end < e.text.length ? '…' : '')
-        line = countNewlines(e.text, bodyIdx) + 1
+          e.plain.slice(start, end).replace(/\s+/g, ' ').trim() +
+          (end < e.plain.length ? '…' : '')
+        line = countNewlines(e.plain, bodyIdx) + 1
         score += 5 - Math.min(4, bodyIdx / 200)
         let n = 0
         let from = 0
@@ -157,7 +160,7 @@ export class VaultIndex {
       }
       if (titleHit) {
         score += 12
-        if (!snippet) snippet = e.text.replace(/\s+/g, ' ').trim().slice(0, 120)
+        if (!snippet) snippet = e.plain.replace(/\s+/g, ' ').trim().slice(0, 120)
         if (e.title.toLowerCase() === q) score += 8
       }
       hits.push({ path: e.path, title: e.title, snippet, line, score })
@@ -175,7 +178,7 @@ export class VaultIndex {
       if (e.path === targetPath) continue
       const hits = (l: string): boolean => resolvePageName(l, pages, e.path) === targetPath
       if (!e.links.some(hits)) continue
-      out.push({ path: e.path, title: e.title, snippet: backlinkSnippet(e.text, hits) })
+      out.push({ path: e.path, title: e.title, snippet: backlinkSnippet(e.plain, hits) })
     }
     out.sort((a, b) => a.title.localeCompare(b.title))
     return out

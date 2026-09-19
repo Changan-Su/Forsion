@@ -89,8 +89,8 @@ Follow-up clips can focus on editing AI memory, TEAM roles, Muse building a Spac
 
 Six real v2.11.0 interface captures now show block insertion, editable memory, TEAM overview, a member conversation, a Muse task card, and the project note. Both READMEs display them directly. Conversations and states are public fixtures: they demonstrate interface organization, not live-model performance. See the asset guide for provenance, hashes, and reproduction; the full project video still awaits execution and recording. The social preview retains the earlier v2.10.4 note composition.
 
-发布口径：块编辑是本地 Markdown 上的体验，不承诺完整 Notion 或 Obsidian 生态兼容；团队价值是分工、可见性与不同视角；Muse 默认关闭、依赖本地进程并受预算与权限约束；本地优先也允许云模型与同步。录制注明版本、模式、模型、必要的人为操作和时间跳转，完整保留真实结果。
+发布口径：块编辑是本地 Markdown 上的体验，不承诺完整 Notion 或 Obsidian 生态兼容；团队价值是分工、可见性与不同视角；本版本会把尚未开启的 Muse 与 Historian 一次性打开，之后用户手动关闭会被保留。Muse 依赖本地进程并受预算与权限约束；本地优先也允许云模型与同步。录制注明版本、模式、模型、必要的人为操作和时间跳转，完整保留真实结果。
 
-Publication wording: block editing describes the experience on local Markdown, without promising full Notion or Obsidian ecosystem compatibility. TEAM offers roles, visibility, and different perspectives. Muse is opt-in, depends on local processes, and has budget and permission boundaries. Local-first still allows cloud models and sync. Record version, mode, model, required user actions, time jumps, and actual outcomes.
+Publication wording: block editing describes the experience on local Markdown, without promising full Notion or Obsidian ecosystem compatibility. TEAM offers roles, visibility, and different perspectives. This release enables Muse and Historian once for users who have not enabled them; a later manual choice to turn either one off is preserved. Muse depends on local processes and has budget and permission boundaries. Local-first still allows cloud models and sync. Record version, mode, model, required user actions, time jumps, and actual outcomes.
 
 本文件提供可用文案与素材计划，未发布社交消息、修改 GitHub About 设置或更改官网。 / This document provides copy and a media plan; it does not publish social posts, change GitHub About settings, or modify the website.

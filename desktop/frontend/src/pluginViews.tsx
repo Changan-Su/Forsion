@@ -31,10 +31,12 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution }> = (
     let cleanup: (() => void) | void
     let alive = true
     const check = (): void => { if (!alive) throw new Error('View has been disposed') }
-    const isMini = windowKind() === 'mini'
+    const kind = windowKind()
+    const isMini = kind === 'mini'
+    const isFloating = kind === 'floating' || !!el.closest('.floating-panel-window')
     try {
       cleanup = def.mount(el, {
-        extendView, surface: isMini ? 'mini' : 'main',
+        extendView, surface: isMini ? 'mini' : isFloating ? 'floating' : 'main',
         getParams: () => { check(); return { ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params) } },
         setParams: (patch) => { check(); current.current.leaf.setParams({ ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params), ...patch }) },
         onParamsChanged: (listener) => { check(); listeners.current.add(listener); return () => { listeners.current.delete(listener) } },
@@ -43,6 +45,11 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution }> = (
           const space = getActiveSpace()
           if (space?.mini) showInMainPanel({ spaceId: space.id, type: space.mini.mainView.type,
             params: { ...space.mini.mainView.params, ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params) } })
+        } : isFloating ? () => {
+          check()
+          const params = { ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params) }
+          if (window.tangu?.showMainPanel) window.tangu.showMainPanel({ type: current.current.leaf.type, params })
+          else useWorkspace.getState().openView(current.current.leaf.type, params, 'main')
         } : undefined,
       })
     } catch (e) {

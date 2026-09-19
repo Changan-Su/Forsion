@@ -10,7 +10,7 @@ export interface OAuthTokens {
   access_token: string;
   refresh_token?: string;
   expires_at?: number; // epoch ms
-  baseUrl: string; // OpenAI 兼容推理根(如 https://api.x.ai/v1)
+  baseUrl: string; // OpenAI 兼容推理根(如 https://cli-chat-proxy.grok.com/v1)
   tokenEndpoint: string; // 刷新用
   clientId: string;
   account_id?: string; // Codex 订阅:chatgpt-account-id(从 id_token JWT 解出)

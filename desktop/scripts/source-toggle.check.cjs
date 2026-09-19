@@ -40,7 +40,7 @@ async function main() {
     const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 900, height: 600 } })
     p.on('pageerror', (e) => console.log('[pageerror]', e.message))
     await p.goto(`${URL}?${query}`, { waitUntil: 'domcontentloaded' })
-    await p.waitForSelector('.md-block .ProseMirror, .block-host', { timeout: 20000 })
+    await p.waitForSelector('.md-block .ProseMirror, .block-host, .unified-body .ProseMirror', { timeout: 20000 })
     await p.waitForTimeout(600)
     return p
   }
@@ -117,6 +117,34 @@ async function main() {
   await p.keyboard.press('Escape')
   await p.waitForTimeout(350)
   check('S6 离开后退出源码态(复渲染)', (await p.locator('.embed-src-input').count()) === 0)
+  await p.close()
+
+  // ── v4 通用附件 = 难源码编辑块:光标进入不退源码,只有 `</>` 能开门 ──────────────
+  p = await open(`upage&useed=${encodeURIComponent('前一段\n\n![[archive.zip]]\n\n后一段\n')}`)
+  await p.waitForSelector('.unified-embed')
+  const hard = await p.evaluate(() => {
+    const view = window.__upage.probe.view()
+    let at = -1
+    view.state.doc.descendants((n, pos) => {
+      if (at < 0 && n.isTextblock && n.textContent === '![[archive.zip]]') at = pos
+      return at < 0
+    })
+    const Sel = view.state.selection.constructor
+    view.dispatch(view.state.tr.setSelection(Sel.create(view.state.doc, at + 3)))
+    view.focus()
+    return { at, embed: !!document.querySelector('.unified-embed'), src: document.querySelector('.unified-body .ProseMirror')?.innerText ?? '' }
+  })
+  check('S7 光标进入附件位置仍保持整体渲染(不自动露源码)', hard.at >= 0 && hard.embed && !hard.src.includes('![[archive.zip]]'), JSON.stringify(hard))
+  b = await btnState(p, '.unified-embed > .amx-src-btn')
+  check('S7 v4 通用附件挂了唯一源码入口 `</>`', !!b && b.text === '</>' && b.pe === 'none', JSON.stringify(b))
+  await p.hover('.unified-embed')
+  await p.click('.unified-embed > .amx-src-btn')
+  await p.waitForTimeout(350)
+  const opened = await p.evaluate(() => ({ embed: !!document.querySelector('.unified-embed'), text: document.querySelector('.unified-body .ProseMirror')?.innerText ?? '' }))
+  check('S7 只有点 `</>` 才露出附件源码', !opened.embed && opened.text.includes('![[archive.zip]]'), JSON.stringify(opened))
+  await p.locator('.unified-body .ProseMirror > p').last().click()
+  await p.waitForTimeout(350)
+  check('S7 光标离开源码后附件自动复渲染', (await p.locator('.unified-embed').count()) === 1)
   await p.close()
 
   const fails = results.filter((r) => !r).length

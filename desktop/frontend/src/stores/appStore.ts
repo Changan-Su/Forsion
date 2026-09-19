@@ -2960,11 +2960,29 @@ export const useApp = create<AppState>((set, get) => ({
     void api.getEngineCapabilities(get().cfg, engineId).then((caps) => set((s) => ({ engineCaps: { ...s.engineCaps, [engineId]: caps } })))
   },
 
-  openSettings: (tab) => set({ settingsTab: tab ?? null, settingsOpen: true }),
+  openSettings: (tab) => {
+    if (window.tangu?.openFloatingPanel) {
+      void window.tangu.openFloatingPanel({ id: 'settings', title: get().tr('settings.title'), builtin: 'settings', params: { tab: tab ?? null } })
+      return
+    }
+    set({ settingsTab: tab ?? null, settingsOpen: true })
+  },
 
-  openMarket: () => set({ marketOpen: true }),
+  openMarket: () => {
+    if (window.tangu?.openFloatingPanel) {
+      void window.tangu.openFloatingPanel({ id: 'market', title: get().tr('market.title'), builtin: 'market' })
+      return
+    }
+    set({ marketOpen: true })
+  },
 
-  openAchievements: () => set({ achievementsOpen: true }),
+  openAchievements: () => {
+    if (window.tangu?.openFloatingPanel) {
+      void window.tangu.openFloatingPanel({ id: 'achievements', title: get().tr('achievements.title'), builtin: 'achievements' })
+      return
+    }
+    set({ achievementsOpen: true })
+  },
   closeAchievements: () => set({ achievementsOpen: false }),
 
   closeMarket: () => {
@@ -3032,10 +3050,15 @@ export const useApp = create<AppState>((set, get) => ({
 
   openFeedback: (description) => {
     if (description) set({ feedbackDraft: description })
-    if (get().authInfo?.loggedIn) { set({ feedbackOpen: true }); return true }
+    if (get().authInfo?.loggedIn) {
+      if (window.tangu?.openFloatingPanel) {
+        void window.tangu.openFloatingPanel({ id: 'feedback', title: get().tr('feedback.title'), builtin: 'feedback', params: { description: description ?? get().feedbackDraft } })
+      } else set({ feedbackOpen: true })
+      return true
+    }
     else {
       get().toast(get().tr('feedback.errNotLoggedIn'), true)
-      set({ settingsOpen: true, settingsTab: 'forsion' })
+      get().openSettings('forsion')
     }
     return false
   },

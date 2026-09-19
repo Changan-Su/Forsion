@@ -131,6 +131,40 @@ async function main() {
     }
     await p.close()
   }
+  // v4 是整篇单实例,隐藏双链源码会让 Chromium 原生 ↑↓ 把整段跳过。两向都必须落进双链
+  // 并露出可编辑源码;图片/附件不走这条(它们是难源码编辑块)。
+  {
+    const p = await browser.newPage({ locale: 'zh-CN' })
+    await p.goto(`${URL}?upage&useed=${encodeURIComponent('正文甲\n\n[[某笔记]]\n\n正文乙\n')}`, { waitUntil: 'domcontentloaded' })
+    await p.waitForSelector('.unified-body .ProseMirror', { timeout: 20000 })
+    await p.waitForTimeout(700)
+    const place = async (which) => p.evaluate((w) => {
+      const view = window.__upage.probe.view()
+      const blocks = []
+      view.state.doc.forEach((n, pos) => blocks.push({ n, pos }))
+      const b = blocks[w === 'first-end' ? 0 : 2]
+      const at = w === 'first-end' ? b.pos + b.n.nodeSize - 1 : b.pos + 1
+      const Sel = view.state.selection.constructor
+      view.dispatch(view.state.tr.setSelection(Sel.create(view.state.doc, at)))
+      view.focus()
+    }, which)
+    const snapWiki = () => p.evaluate(() => {
+      const view = window.__upage.probe.view()
+      return { parent: view.state.selection.$head.parent.textContent, rendered: document.querySelectorAll('.unified-body .wikilink').length }
+    })
+    await place('first-end')
+    await p.keyboard.press('ArrowDown')
+    await p.waitForTimeout(250)
+    const down = await snapWiki()
+    await place('last-start')
+    await p.keyboard.press('ArrowUp')
+    await p.waitForTimeout(250)
+    const up = await snapWiki()
+    const ok = down.parent === '[[某笔记]]' && up.parent === '[[某笔记]]' && down.rendered === 0 && up.rendered === 0
+    results.push(ok)
+    console.log(`${ok ? 'PASS' : 'FAIL'}  v4 独占段双链        ↑ ${up.parent}   ↓ ${down.parent}`)
+    await p.close()
+  }
   await browser.close()
   const bad = results.filter((x) => !x).length
   console.log(`\n${results.length - bad}/${results.length} passed, ${bad} failed`)

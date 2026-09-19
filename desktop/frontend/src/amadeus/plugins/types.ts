@@ -406,15 +406,15 @@ export interface StatusItemHandle {
 /** Bound to this mounted instance, revoked on close/navigation/plugin disable.
  *  Available for Main Views; feature-detect view?.extendView on older hosts. Rules and opt-in agent commands can call open(). */
 export interface PluginViewContext {
-  /** Mount location. Mini receives no extendView/full workspace chrome. Feature-detect on older hosts. */
-  surface?: 'main' | 'mini'
+  /** Mount location. Mini/Floating receive no extendView/full workspace chrome. Feature-detect on older hosts. */
+  surface?: 'main' | 'mini' | 'floating'
   /** Current entity/filter params, live for this mount. Keep entity keys identical in mini/main views. */
   getParams?(): Readonly<Record<string, unknown>>
   /** Merge entity/filter changes into this leaf; also updates the host's main-panel target. */
   setParams?(patch: Record<string, unknown>): void
   /** Subscribe without remounting the DOM or losing in-progress input. Returns unsubscribe. */
   onParamsChanged?(listener: (params: Readonly<Record<string, unknown>>) => void): () => void
-  /** Mini only: opens the Space's mainView with the current params. Revoked after unmount. */
+  /** Mini/Floating: opens the corresponding full view in the main panel. Revoked after unmount. */
   showInMainPanel?(): void
   extendView?: ExtendViewController
 }
@@ -432,6 +432,23 @@ export interface ViewContribution {
   /** Id of one of THIS plugin's list sources (2026-08-25+): while this view is the active main
    *  view, the unified workspace sidebar auto-switches to that list. Old hosts ignore it. */
   workspaceSource?: string
+}
+
+export interface PluginFloatingPanelOptions {
+  title?: string
+  params?: Record<string, unknown>
+  width?: number
+  height?: number
+  minWidth?: number
+  minHeight?: number
+}
+
+export interface PluginMiniPanelOptions {
+  title?: string
+  params?: Record<string, unknown>
+  /** Relative id of this plugin's full-size destination; defaults to viewId. */
+  mainViewId?: string
+  mainViewParams?: Record<string, unknown>
 }
 
 /** One row in a plugin list source (kept deliberately flat — no tree). */
@@ -716,6 +733,12 @@ export interface PluginContext {
    *  pass { location: 'left' | 'right' } to dock it into a sidebar (2026-08-25+, older hosts
    *  ignore the option and open in main). No-op on hosts without a workbench. */
   openView(viewId: string, opts?: { location?: 'main' | 'left' | 'right' }): void
+  /** Open one of this plugin's registered views in the native Floating Panel window.
+   *  Desktop-only; feature-detect because Web intentionally has no plugin window bridge. */
+  openFloatingPanel?(viewId: string, opts?: PluginFloatingPanelOptions): void
+  /** Open one of this plugin's registered views in the compact native Mini Panel.
+   *  Desktop-only; feature-detect on older hosts and Web/mobile. */
+  openMiniPanel?(viewId: string, opts?: PluginMiniPanelOptions): void
   /** Contribute a list source to the unified workspace sidebar (2026-08-25+). Old hosts lack it:
    *  always call as `ctx.registerListSource?.(…)`. See ListSourceContribution. */
   registerListSource?(src: ListSourceContribution): void

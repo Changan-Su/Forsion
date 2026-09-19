@@ -3,7 +3,7 @@
  * 照 hermes 的 `_xai_oauth_loopback_login` 模板:OIDC discovery → PKCE → 本地 loopback 收 code →
  * 换 access_token(+refresh)→ 存 ~/.tangu/provider-auth.json → 接进 provider registry。
  *
- * 首发 xAI Grok:公开 client_id + 完全 OpenAI 兼容(api.x.ai/v1/chat/completions)→ 零适配,
+ * 首发 xAI Grok:公开 client_id + Grok Build 专用 CLI 代理(OpenAI chat-completions 形态),
  * 拿到的 token 直接当 DirectProvider.apiKey 用。其他 provider 加进 OAUTH_PROVIDERS 即可复用本流程。
  *
  * Codex/OpenAI 订阅在此登录,推理由 openaiResponses.ts 适配原生 Responses API。
@@ -12,6 +12,7 @@ import http from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import type { DirectProvider, DirectProviderProtocol } from './providerRegistry.js';
+import { buildGrokBuildHeaders } from './grokBuildCompat.js';
 import { loadProviderCreds, saveProviderCred, type OAuthTokens } from '../standalone/providerCreds.js';
 
 export interface OAuthProvider {
@@ -28,6 +29,7 @@ export interface OAuthProvider {
   protocol?: DirectProviderProtocol; // 缺省 'openai';订阅登录据此切原生端点
   modelIds?: string[]; // 模型选择器提示(实际可填任意 <id>/<model>)
   extraAuthParams?: Record<string, string>; // 追加到 authorize URL(如 Codex 的 id_token_add_organizations)
+  tokenTtlSeconds?: number; // token 响应缺 expires_in 时的官方默认有效期(仅作兜底)
 }
 
 // 2026-09-06 同账号实测:0.150.0 的目录隐藏 GPT-6 Astra,0.153.4 才返回。
@@ -43,9 +45,13 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
     redirectHost: '127.0.0.1',
     redirectPort: 56121,
     redirectPath: '/callback',
-    baseUrl: 'https://api.x.ai/v1',
-    // 仅兜底提示(实拉 /models 失败时才用),快照会过时——真实列表以 fetchProviderModels 实拉为准。
-    // 2026-08-20 实拉 https://api.x.ai/v1/models 的聊天模型集;grok-imagine-* 是生图/生视频,不列。
+    // Grok Build OAuth token 只应打到 CLI chat proxy;api.x.ai/v1 是 API key 端点,不接受这类订阅 token。
+    baseUrl: 'https://cli-chat-proxy.grok.com/v1',
+    protocol: 'grok-build',
+    tokenTtlSeconds: 7 * 24 * 3600,
+    extraAuthParams: { referrer: 'grok-build' },
+    // 仅兜底提示(实拉 /models 失败时才用),快照会过时——Grok Build 默认 slug 是 grok-build,
+    // 不是旧的 grok-build-0.1;真实列表以 fetchProviderModels 实拉为准。
     modelIds: [
       'grok-4.6',
       'grok-4.5',
@@ -53,7 +59,7 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
       'grok-4.20-0309-reasoning',
       'grok-4.20-0309-non-reasoning',
       'grok-4.20-multi-agent-0309',
-      'grok-build-0.1',
+      'grok-build',
     ],
   },
   // ⛔ 这里**没有** claude 条目,是有意的(2026-07-31 删除,勿再加回)。
@@ -139,6 +145,7 @@ export async function fetchProviderModels(p: OAuthProvider, accessToken: string,
   try {
     const base = p.baseUrl.replace(/\/+$/, '');
     const headers: Record<string, string> = { Authorization: `Bearer ${accessToken}` };
+    if (p.protocol === 'grok-build') Object.assign(headers, buildGrokBuildHeaders(accessToken));
     let url: string;
     if (p.protocol === 'openai-responses') {
       // Codex 后端强制要求 client_version query(缺=400),后端还按它 gate 新模型——太老的版本号看不到新 slug。
@@ -218,10 +225,11 @@ export async function providerOAuthLogin(p: OAuthProvider): Promise<OAuthTokens>
   }).then((r) => r.json());
   if (!tok.access_token) throw new Error('token 交换失败: ' + JSON.stringify(tok).slice(0, 200));
 
+  const expiresIn = Number(tok.expires_in ?? p.tokenTtlSeconds ?? 0);
   const creds: OAuthTokens = {
     access_token: tok.access_token,
     refresh_token: tok.refresh_token,
-    expires_at: tok.expires_in ? Date.now() + tok.expires_in * 1000 : undefined,
+    expires_at: Number.isFinite(expiresIn) && expiresIn > 0 ? Date.now() + expiresIn * 1000 : undefined,
     baseUrl: p.baseUrl,
     tokenEndpoint: token,
     clientId: p.clientId,
@@ -234,7 +242,7 @@ export async function providerOAuthLogin(p: OAuthProvider): Promise<OAuthTokens>
   // 登录即问 /models 拿真实模型列表(失败则后续 load 时再懒补;再不行回退硬编提示)。
   const models = await fetchProviderModels(p, creds.access_token, creds.account_id);
   if (models) {
-    creds.modelIds = models;
+    creds.modelIds = normalizeProviderModelIds(p.id, models);
     creds.modelIdsAt = Date.now();
     if (p.id === 'codex') creds.modelIdsClientVersion = CODEX_MODELS_CLIENT_VERSION;
   }
@@ -242,7 +250,7 @@ export async function providerOAuthLogin(p: OAuthProvider): Promise<OAuthTokens>
   return creds;
 }
 
-async function refresh(t: OAuthTokens): Promise<OAuthTokens> {
+async function refresh(t: OAuthTokens, p?: OAuthProvider): Promise<OAuthTokens> {
   if (!t.refresh_token) return t;
   const r: any = await fetch(t.tokenEndpoint, {
     method: 'POST',
@@ -254,8 +262,19 @@ async function refresh(t: OAuthTokens): Promise<OAuthTokens> {
     ...t,
     access_token: r.access_token,
     refresh_token: r.refresh_token || t.refresh_token,
-    expires_at: r.expires_in ? Date.now() + r.expires_in * 1000 : t.expires_at,
+    expires_at: r.expires_in
+      ? Date.now() + r.expires_in * 1000
+      : p?.tokenTtlSeconds
+        ? Date.now() + p.tokenTtlSeconds * 1000
+        : t.expires_at,
   };
+}
+
+/** 兼容 provider 端点/模型更名;旧凭证可能还记着 api.x.ai 和 grok-build-0.1。 */
+function normalizeProviderModelIds(providerId: string, modelIds?: string[]): string[] | undefined {
+  if (!modelIds?.length) return modelIds;
+  if (providerId !== 'xai') return modelIds;
+  return Array.from(new Set(modelIds.map((id) => id === 'grok-build-0.1' ? 'grok-build' : id)));
 }
 
 /** 读出所有已登录的 OAuth provider,过期(120s skew)则刷新并回写,转成 DirectProvider 接进 registry。 */
@@ -270,8 +289,21 @@ export async function loadOAuthDirectProviders(): Promise<DirectProvider[]> {
     if (!cfg) continue;
     let tok = t;
     if (tok.expires_at && tok.expires_at < Date.now() + 120_000) {
-      tok = await refresh(tok);
+      tok = await refresh(tok, cfg);
       saveProviderCred(id, tok);
+    }
+    let changed = false;
+    // 配置是端点协议的唯一真源,避免旧版本把 xAI OAuth token 继续发往 api.x.ai。
+    if (tok.baseUrl !== cfg.baseUrl) {
+      tok = { ...tok, baseUrl: cfg.baseUrl };
+      changed = true;
+    }
+    const normalizedModelIds = normalizeProviderModelIds(id, tok.modelIds);
+    const modelIdsChanged = normalizedModelIds?.length !== tok.modelIds?.length
+      || normalizedModelIds?.some((modelId, i) => modelId !== tok.modelIds?.[i]);
+    if (modelIdsChanged) {
+      tok = { ...tok, modelIds: normalizedModelIds };
+      changed = true;
     }
     // 模型列表懒刷:缓存为空或超过 24h(provider 会上新模型,冻结的缓存=用户「看不到最新模型」)→
     // 拉一次回写;失败保留旧缓存下次再试。
@@ -280,18 +312,20 @@ export async function loadOAuthDirectProviders(): Promise<DirectProvider[]> {
     if (stale) {
       const models = await fetchProviderModels(cfg, tok.access_token, tok.account_id);
       if (models) {
-        tok = { ...tok, modelIds: models, modelIdsAt: Date.now() };
+        tok = { ...tok, modelIds: normalizeProviderModelIds(id, models), modelIdsAt: Date.now() };
         if (id === 'codex') tok.modelIdsClientVersion = CODEX_MODELS_CLIENT_VERSION;
-        saveProviderCred(id, tok);
+        changed = true;
       }
     }
+    if (changed) saveProviderCred(id, tok);
+    const effectiveModelIds = normalizeProviderModelIds(id, tok.modelIds);
     out.push({
       providerId: id,
-      baseUrl: tok.baseUrl,
+      baseUrl: cfg.baseUrl,
       apiKey: tok.access_token,
       protocol: cfg.protocol,
       accountId: tok.account_id,
-      modelIds: tok.modelIds && tok.modelIds.length ? tok.modelIds : cfg.modelIds, // 实拉优先,回退提示
+      modelIds: effectiveModelIds?.length ? effectiveModelIds : cfg.modelIds, // 实拉优先,回退提示
     });
   }
   return out;

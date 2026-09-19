@@ -35,6 +35,7 @@ import {
   linkSchema,
 } from '@milkdown/kit/preset/commonmark'
 import { toggleStrikethroughCommand } from '@milkdown/kit/preset/gfm'
+import { attentionSerializer, withoutBoundaryRefs } from './attentionFlanking'
 import { cjkFriendlyRemark } from './cjkFriendly'
 import {
   applyBgCommand,
@@ -54,11 +55,12 @@ import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
 import { $prose } from '@milkdown/kit/utils'
 import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import type { Node as ProseNode, Slice } from '@milkdown/kit/prose/model'
-import { Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
+import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from '@milkdown/react'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown, fromAssetUrl } from '@amadeus-shared/assets'
+import { ATTACHMENT_CLIP_MIME, recentAttachmentCopy, rememberAttachmentCopy } from '../../lib/attachmentClipboard'
 import { tabsToEntities, entitiesToTabs } from '@amadeus-shared/indentIo'
 import { resolvePageName, unescapeWikiOutsideFences, normalizeUrlLiterals } from '@amadeus-shared/links'
 import { resolveFileName } from '../../lib/vaultFiles'
@@ -291,6 +293,56 @@ function imageFromTransfer(dt: DataTransfer | null): File | null {
   return null
 }
 
+/** 当前 PM 选区若正好是一份附件,返回「库内 markdown 引用 + 主进程解析用 ref」。 */
+function selectedAttachment(view: EditorView): { reference: string; ref: string } | null {
+  const sel = view.state.selection
+  let reference = ''
+  let image: ProseNode | null = null
+  if (sel instanceof NodeSelection) {
+    if (sel.node.type.name === 'image') image = sel.node
+    else if (sel.node.type.name === 'paragraph' && sel.node.childCount === 1 && sel.node.firstChild?.type.name === 'image') {
+      image = sel.node.firstChild
+    } else reference = sel.node.textContent.trim()
+  } else if (!sel.empty) {
+    reference = view.state.doc.textBetween(sel.from, sel.to).trim()
+  }
+  if (image) {
+    const src = String(image.attrs.src ?? '')
+    const ref = fromAssetUrl(src) ?? src
+    if (!ref || /^(?:https?:|data:|blob:)/i.test(ref)) return null
+    return { reference: `![${String(image.attrs.alt ?? '')}](${ref})`, ref }
+  }
+  const wiki = /^!\[\[([^\]\n]+)\]\]$/.exec(reference)
+  if (!wiki) return null
+  let ref = wiki[1].replace(/\|\d+\s*$/, '').trim()
+  // 媒体/PDF 定位片段不是文件名的一部分;真实含 # 文件名仍由 resolveAttachment 的精确路径兜底。
+  const hash = ref.indexOf('#')
+  if (hash > 0 && /\.[a-z0-9]{1,10}$/i.test(ref.slice(0, hash))) ref = ref.slice(0, hash)
+  return ref ? { reference, ref } : null
+}
+
+/** Forsion 自己写入的 attachment flavor 优先于同一剪贴板里的 native image/file。 */
+function internalAttachmentReference(dt: DataTransfer | null, raw: string): string | null {
+  if (!dt) return null
+  try {
+    const explicit = dt.getData(ATTACHMENT_CLIP_MIME).trim()
+    if (explicit && (!raw || explicit === raw)) return explicit
+  } catch { /* Chromium/平台未暴露自定义 flavor */ }
+  const recent = recentAttachmentCopy()
+  // macOS AppKit 会把同一 pasteboard item 暴露成 text/plain + Files/public.file-url,但 Chromium
+  // 不转发自定义 UTI;短时引用因此同时保存在同源 localStorage,跨窗口也能恢复。只要文本本身是
+  // 一整份附件引用且同时有原生文件 flavor,仍应优先贴引用,不能把库内文件再导入一份。
+  const types = Array.from(dt.types ?? [])
+  const nativeFile = dt.files.length > 0 || types.some((t) => /^(?:files|public\.file-url|text\/uri-list)$/i.test(t))
+  const recentFileMatches = !!recent && Array.from(dt.files).some((file) =>
+    file.name === recent.fileName || (/\.(?:png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(recent.fileName) && file.type.startsWith('image/')))
+  if (recent && (recent.reference === raw || (!raw && nativeFile && recentFileMatches))) return recent.reference
+  if (!raw) return null
+  const attachmentSyntax = /^!\[\[[^\]\n]+\]\]$/.test(raw)
+    || /^!\[[^\]\n]*\]\((?!https?:|data:|blob:)[^)\n]+\)$/i.test(raw)
+  return nativeFile && attachmentSyntax ? raw : null
+}
+
 // 光标是否在本块「首/末视觉行」——决定 ↑↓ 该在块内移行还是跳去邻块。
 // 不用 view.endOfTextblock('up'/'down'):Chromium ≥150 起它在多行文本块中段就返回 true(实测:
 // Electron 40=Chromium140 正常,网页端 Chrome 150 失灵),导致 ↑↓ 无法在块内上下行、只会跳块。
@@ -401,6 +453,7 @@ export function MilkdownInner({
   onSlashPick,
   readOnly = false,
   unified = false,
+  attachmentPagePath,
   extraPlugins,
 }: {
   initial: string
@@ -432,6 +485,8 @@ export function MilkdownInner({
   /** v4 统一实例模式(UnifiedPage):不挂 softBreakRemark(标准 md 分段落盘),Enter/Shift+Enter/
    *  方向键出块/块重排全部放行 PM 原生 —— 整篇一个实例,没有「邻块」可跳。 */
   unified?: boolean
+  /** 有值时,整份附件选区会同时写入 OS 原生图片/文件剪贴板。 */
+  attachmentPagePath?: string
   /** 宿主追加的 Milkdown 插件(UnifiedPage 的块交互层等)。⚠️ 须传稳定引用:编辑器只建一次。 */
   extraPlugins?: MilkdownPlugin[]
 }) {
@@ -620,9 +675,15 @@ export function MilkdownInner({
       // 路径取 vault 相对(fromAssetUrl 的原样),与 `![[base]]` 一样是「库里找得到」的口径;
       // ⚠️ 天花板:贴回子目录笔记时页相对解析可能不同,库内粘贴走的是 text/html 不受影响。
       const only = slice.content.childCount === 1 ? slice.content.firstChild : null
-      if (only?.type.name === 'image') {
-        const src = String(only.attrs.src ?? '')
-        return `![${String(only.attrs.alt ?? '')}](${fromAssetUrl(src) ?? src})`
+      // 块把手/右键可选中外层 paragraph;切片会多这一层,同样解出其中唯一的图片。
+      const onlyImage = only?.type.name === 'image'
+        ? only
+        : only?.type.name === 'paragraph' && only.childCount === 1 && only.firstChild?.type.name === 'image'
+          ? only.firstChild
+          : null
+      if (onlyImage) {
+        const src = String(onlyImage.attrs.src ?? '')
+        return `![${String(onlyImage.attrs.alt ?? '')}](${fromAssetUrl(src) ?? src})`
       }
       const { $from, $to } = view.state.selection
       const whole = $from.parentOffset === 0 && $to.parentOffset === $to.parent.content.size
@@ -647,7 +708,8 @@ export function MilkdownInner({
         if (/^amadeusCanvasCard$|^amadeusColumn/.test(n.type.name)) structural = true
         return !structural
       })
-      let out = serialize(doc)
+      // 纯文本给人看:关掉 attention 边界编码(`**注意：**&#x540E;面` 贴进微信就是乱码,见 withoutBoundaryRefs)。
+      let out = withoutBoundaryRefs(() => serialize(doc))
       if (structural) out = out.replace(/^<!--\s*\/?a\s+[A-Za-z0-9_-]+\s*-->[ \t]*\n?/gm, '')
       // entitiesToTabs:缩进段落序列化出的 &#9; 归一成字面制表符,外部应用不见实体垃圾(评审 P2)。
       const md = entitiesToTabs(out)
@@ -666,6 +728,16 @@ export function MilkdownInner({
       // 也是最常用的一条粘贴手感)。判据从严:单块内的非空选区 + 剪贴板正好是一条不含空白的地址。
       const sel = view.state.selection
       const raw = (event.clipboardData?.getData('text/plain') ?? '').trim()
+      // Forsion 自己复制的附件同时带「引用 + 原生文件」。库内只认引用并让 markdown clipboard
+      // 正常解析;否则下面先看到 image File 会误当成一次新上传,平白复制出第二份附件。
+      const internalAttachment = internalAttachmentReference(event.clipboardData, raw)
+      if (internalAttachment) {
+        if (raw) return false
+        // macOS 有时只给 paste 事件 Files,不给同 item 的 text/plain;用短时共享记忆补回引用并
+        // 重新走 PM 自己的 markdown paste parser,而不是 insertText(标准 ![] 图片也要成为 image node)。
+        event.preventDefault()
+        return view.pasteText(internalAttachment)
+      }
       const linkMark = view.state.schema.marks.link
       // ⚠️ 父节点必须收得下 link mark:代码块的 `marks: ""` 会让 addMark 静默 no-op ——
       //    而 preventDefault 已经把默认粘贴吃掉了,结果是「链接没加上、原文也没粘进去」。
@@ -720,6 +792,20 @@ export function MilkdownInner({
       }
       return false
     }
+    const handleAttachmentCopy = (view: EditorView, event: Event): boolean => {
+      if (!attachmentPagePath || !amadeus.copyAttachment) return false
+      const hit = selectedAttachment(view)
+      const e = event as ClipboardEvent
+      if (!hit || !e.clipboardData) return false
+      e.preventDefault()
+      e.clipboardData.clearData()
+      e.clipboardData.setData('text/plain', hit.reference)
+      try { e.clipboardData.setData(ATTACHMENT_CLIP_MIME, hit.reference) } catch { /* browser flavor limit */ }
+      // copy 事件必须同步返回;主进程随后把同一份剪贴板升级为原生 image/file flavor。
+      void amadeus.copyAttachment(attachmentPagePath, hit.ref, hit.reference)
+        .then((ok) => { if (ok) rememberAttachmentCopy(hit.reference, hit.ref) })
+      return true
+    }
     // 文件拖入(含图片)统一交给编辑器级附件处理(AmadeusEditorView.onDrop),按笔记设置存放 → 不在块内内联,
     // 故此处不设 handleDrop(ProseMirror 默认对文件拖放不作插入,事件冒泡到编辑器容器被 preventDefault)。
 
@@ -745,6 +831,10 @@ export function MilkdownInner({
           editable: () => !readOnly,
           handleKeyDown: readOnly ? undefined : handleKeyDown,
           handlePaste: readOnly ? undefined : handlePaste,
+          handleDOMEvents: readOnly ? prev.handleDOMEvents : {
+            ...prev.handleDOMEvents,
+            copy: handleAttachmentCopy,
+          },
           handleClick: handleLinkClick,
           clipboardTextSerializer,
         }))
@@ -766,6 +856,10 @@ export function MilkdownInner({
       // 自定义行内标记:下划线/文字色/背景色(schema mark + remark HTML 桥,见 ./marks)。
       // remark 桥须与 commonmark/gfm 同在,故紧随其后注册。
       .use(inlineHtmlMarksRemark)
+      // `~~`/`**`/`*` 落盘边界编码(尾随 NBSP 等 → `&#xA0;`),否则重开退成字面、再存转义成 `\~\~`。
+      // ⚠️ 这是**唯一**的生产编辑器,漏这行 = 09-18 复发(08-25 只挂到了 UnifiedSpike 台架)。
+      // 仪器:npm run check:attention;attentionWiring.test.ts 钉住这一行在不在。
+      .use(attentionSerializer)
       // 块内换行 = 单个 '\n'(Obsidian 语义),不再「空行分段」。必须晚于 inlineHtmlMarksRemark:
       // 折叠先跑完,跨行的 <u>…</u> 才不会被拆段撕成开合分家的两半(见 softBreak.ts 注释)。
       // unified(v4)不挂 softBreakRemark:标准 md 分段落盘,软换行由 Milkdown 原生 break 节点原样往返。
@@ -1631,6 +1725,7 @@ export function MarkdownBlock({
           focusGoalX={focusGoalX}
           focusAnchor={focusAnchor}
           onFocused={onFocused}
+          attachmentPagePath={pagePath}
           readOnly={readOnly}
         />
       </MilkdownProvider>

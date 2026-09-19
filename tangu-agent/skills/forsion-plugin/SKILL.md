@@ -1,9 +1,10 @@
 ---
-name: Forsion 扩展开发
+name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架市场的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
-version: 1.16.0
-author: Forsion
-category: Forsion
+metadata:
+  version: 1.17.0
+  author: Forsion
+  category: Forsion
 ---
 
 # Forsion 扩展开发
@@ -75,6 +76,17 @@ Computer Use 占用外部应用前台时，宿主可临时打开 Tangu Mini 观�
 - `mount` 返回清理函数，停止订阅/计时器并保存必要内容。旧实例的 context 在关闭、切换 Space 或禁用后失效，异步回调不得继续调用。
 - 按中英、亮暗、320×420、实体定位与插件启停验证。参考捆绑包模板的 `mini-counter` / `counter` 视图及 `spaces/sample-bundle-mini/space.json`；Genesis 回归命令为 `desktop` 下 `npm run check:minicard`。
 
+插件只有一块快捷视图、不值得为它建完整 Space 时，直接调用开放接口：
+
+```js
+ctx.openMiniPanel?.('mini-counter', {
+  title: 'Counter', params: { itemId: 'today' },
+  mainViewId: 'counter', mainViewParams: { section: 'inbox' },
+})
+```
+
+`viewId` / `mainViewId` 都写**本插件相对 id**，宿主自动加 `plugin:<pluginId>:`，省略 `mainViewId` 就把同一视图交回主面板。仍须先 `registerView`；Web/mobile 或旧宿主可能没有原生 Mini，务必可选链并保留 `ctx.openView()` 回退。
+
 ## 智能体(samples/forsion-sample-agent)
 
 文件夹式:`config.toml`(模型/工具/技能开关)+ `SOUL.md`(人设,英文写给模型)+ `Library/`(参考资料)+ 每-agent 记忆。装 `~/.forsion/agents/<slug>/`。
@@ -140,6 +152,8 @@ Computer Use 占用外部应用前台时，宿主可临时打开 Tangu Mini 观�
 | `registerCommand` | 命令面板(+ 可选 agent 面) | id 处于全局命名空间,裸名会互顶;默认只做导航,**动作性能力要么走引擎侧 agent/技能(通用纪律 5),要么给这条命令声明 `invoke`**(见下) |
 | `registerSlashItem` | 笔记里的 `/` | 静态 `scaffold`,或动态 `run()`(先建文件再返回嵌入语法) |
 | `registerView` | 独立标签页(`ctx.openView(id)` 打开) | **DOM 挂载**(`mount(el, view?)` 返 disposer;`view.extendView` 可开临时扩展),外置插件的主力;加 `workspaceSource` 可让左栏跟着它切到自家列表 |
+| `openFloatingPanel` | 第六种 Floating Panel | 先注册 view，再按相对 id 打开；桌面是真原生窗口，Web 是不可拖动居中面板；可选链兼容旧宿主 |
+| `openMiniPanel` | 320×420 Mini Panel | 不建 Space 也能直开紧凑 view；用 `mainViewId` 声明回主面板的目标；仅原生桌面宿主提供 |
 | `registerListSource` | **统一左栏**里的一条列表(收藏/任务/订阅…) | 宿主渲染,与会话/笔记行同一套 UI;⚠️`subscribe()` 里**必须重读一次数据**,见下 |
 | `registerFileType` | 自定义 `.x.md` 文件类型 | 撞内置后缀返回 **`false`** → 整体退让(判定写 `=== false`) |
 | `registerFileCreator` | 文件树右键 + 新建标签页启动器 | 与文件类型配套;**四条新建路径都要注册**,少一条用户就会问「为什么这儿没有」 |
@@ -512,11 +526,28 @@ ctx.calendar?.ensureMember(`${ctx.app.workFolder()}/任务表.db`, 'c-date' /* �
 - 列给的是**列 id**(不是列名);日期列用 `calendarDate` 类型。
 - 与 `ctx.automation` 不同,这条不需要 Tangu 宿主 —— 纯 Amadeus 壳也有;旧宿主没有,可选链。
 
-## 全屏浮层:三条纪律(没有 API,但踩了就静默出事)
+## Floating Panel:正式第六种面板(2026-09-17 起)
 
-插件跑在渲染进程主世界,`document.body.appendChild` 一个 `position:fixed; inset:0` 的层就能盖住整个界面 —— 不需要新接缝。但:
+设置、市场、成就、反馈这类独立工具页不再自己盖全屏，统一走 Floating Panel。插件也先 `registerView`，再开面板：
 
-1. **浮层根必须 `-webkit-app-region: no-drag`,且 append 到 body**(DOM 顺序须晚于 Shell)。mac 拖窗区按 **DOM 顺序**合成、**与 z-index 无关**;ribbon 与左侧栏是拖窗区,重叠矩形内的点击/hover/滚轮全被吞。**浏览器台架照不到,只有真 Electron 能验。**
+```js
+ctx.openFloatingPanel?.('inspector', {
+  title: 'Inspector', params: { source: 'command' },
+  width: 880, height: 640, minWidth: 560, minHeight: 420,
+})
+```
+
+- 桌面端是真 BrowserWindow：可拖、可缩放、可最小化/关闭，并保持在主窗口上方；相同插件 view id 复用窗口。
+- Web 是主界面上方固定居中的面板，**故意不可拖**；移动端不伪造桌面窗口，回退普通主视图。
+- `mount(el, view)` 收到 `view.surface === 'floating'`，没有 `extendView`；`getParams/setParams/onParamsChanged` 照常，`showInMainPanel?.()` 将当前参数交回主区。
+- 宿主自动命名空间，插件只写自己的相对 id；禁用插件或反注册 view 后，已开的原生窗口/Web 面板自动关闭。`mount` disposer 必须收订阅和计时器。
+- 详细契约见 `Forsion-Genesis/docs/customization/floating-panel-development.md`；桌面回归 `npm run build && npm run check:floatingpanel`。
+
+## 自绘浮层 / HUD:三条纪律
+
+整页工具优先用正式 Floating Panel。只有锚定菜单、短时 HUD、画布工具等不适合注册成独立 view 的小层，才在渲染进程自行挂 DOM。此时：
+
+1. **接鼠标的覆盖层根必须 `-webkit-app-region: no-drag`,且 append 到 body**(DOM 顺序须晚于 Shell)。mac 拖窗区按 **DOM 顺序**合成、**与 z-index 无关**;ribbon 与左侧栏是拖窗区,重叠矩形内的点击/hover/滚轮全被吞。**浏览器台架照不到,只有真 Electron 能验。**
 **⚠️反向纪律:不遮挡的「HUD 层」正相反,绝不能写 no-drag。** 全屏浮层要 no-drag 是因为它盖住了拖窗区
 还要能点;而一层**贴在角落、`pointer-events: none` 的装饰层**(游戏式 HUD、演出提示、角标)落在 ribbon
 的拖窗区上,写了 no-drag 等于把那块**从拖窗区抠掉** —— 用户从此拖不动窗口,而且这个 bug 与浮层本身

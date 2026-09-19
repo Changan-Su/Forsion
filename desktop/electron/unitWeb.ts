@@ -543,6 +543,10 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       if (!res.headersSent) json(res, 500, { detail: 'internal error' })
     })
   })
+  // 整段请求时限:云同步单文件随会员档位可到 500MB,生产反代对 /api/ 关了请求体缓冲(server/DEPLOYMENT.md),
+  // 慢速上传的全程都落在这一层;Node 缺省 requestTimeout 300s 会把它掐断(客户端按 ≈250KB/s 保底给到 ~37 分钟)。
+  // ponytail: 全局放宽到 1h;慢速拖请求头仍由 headersTimeout(缺省 60s)挡。
+  server.requestTimeout = 60 * 60 * 1000
 
   return new Promise((resolve, reject) => {
     if (deps.routeUpgrade) server.on('upgrade', (req, socket, head) => {

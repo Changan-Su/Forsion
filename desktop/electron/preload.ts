@@ -279,12 +279,21 @@ const api = {
     ipcRenderer.on('asr:localProgress', listener)
     return () => ipcRenderer.removeListener('asr:localProgress', listener)
   },
-  // ── 多窗口:独立窗(拖出的 dockview,无 ribbon)+ mini 悬浮卡片 ──
+  // ── 多窗口:独立窗(拖出的 dockview,无 ribbon)+ mini 悬浮卡片 + floating 面板 ──
   detachedReady: (id: string): Promise<Array<{ type: string; params?: Record<string, unknown> }>> =>
     ipcRenderer.invoke('window:detachedReady', id),
   openDetached: (views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }): Promise<{ id: string }> =>
     ipcRenderer.invoke('window:openDetached', views, at),
   openMini: (opts?: import('../shared/miniPanel').MiniOpenOptions): void => ipcRenderer.send('window:openMini', opts),
+  openFloatingPanel: (opts: import('../shared/floatingPanel').FloatingPanelOpenOptions): Promise<{ id: string } | undefined> =>
+    ipcRenderer.invoke('window:openFloating', opts),
+  floatingReady: (id: string): Promise<import('../shared/floatingPanel').FloatingPanelOpenOptions | undefined> =>
+    ipcRenderer.invoke('window:floatingReady', id),
+  onFloatingTarget: (cb: (opts: import('../shared/floatingPanel').FloatingPanelOpenOptions) => void): (() => void) => {
+    const listener = (_e: unknown, opts: import('../shared/floatingPanel').FloatingPanelOpenOptions): void => cb(opts)
+    ipcRenderer.on('window:floatingTarget', listener)
+    return () => ipcRenderer.removeListener('window:floatingTarget', listener)
+  },
   onMiniTarget: (cb: (opts: import('../shared/miniPanel').MiniOpenOptions) => void): (() => void) => {
     const listener = (_e: unknown, opts: import('../shared/miniPanel').MiniOpenOptions): void => cb(opts)
     ipcRenderer.on('window:miniTarget', listener)
@@ -300,6 +309,12 @@ const api = {
     return () => ipcRenderer.removeListener('window:mainPanelTarget', listener)
   },
   mainPanelReady: (): void => ipcRenderer.send('window:mainPanelReady'),
+  requestMainAction: (action: 'onboarding'): void => ipcRenderer.send('window:mainAction', action),
+  onMainAction: (cb: (action: 'onboarding') => void): (() => void) => {
+    const listener = (_e: unknown, action: 'onboarding'): void => cb(action)
+    ipcRenderer.on('window:mainAction', listener)
+    return () => ipcRenderer.removeListener('window:mainAction', listener)
+  },
   closeSelf: (): void => ipcRenderer.send('window:closeSelf'),
   // 跨窗撕拽:实时坐标(节流 send)+ 最终落点路由(invoke)+ 目标窗接收订阅(on)。
   dragUpdate: (screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void =>

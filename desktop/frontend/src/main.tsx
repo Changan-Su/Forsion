@@ -14,6 +14,7 @@ import { ChatPreview } from './views/chat2/ChatPreview'
 import { windowKind } from './windowKind'
 import { DetachedRoot } from './DetachedRoot'
 import { MiniRoot } from './MiniRoot'
+import { FloatingRoot } from './FloatingRoot'
 import { installMultiWindow } from './multiWindow'
 import { installKeepAwakeReport } from './keepAwakeReport'
 import { installSmoothCaret } from './smoothCaret'
@@ -34,6 +35,7 @@ window.addEventListener('unhandledrejection', (e) => { console.error('[tangu] un
 const isPreview = (() => { try { return location.hash === '#preview' } catch { return false } })()
 // 多窗口分流:主进程开卫星窗时经 ?window= 注入(detached=无 ribbon dockview / mini=悬浮卡片)。
 const kind = windowKind()
+try { document.documentElement.dataset.window = kind } catch { /* ignore */ }
 
 // 首屏即按持久化 locale 设 <html lang>(同 FOUC 主题)。
 try { document.documentElement.lang = resolveInitialLocale() === 'zh' ? 'zh-CN' : 'en' } catch { /* ignore */ }
@@ -83,7 +85,7 @@ try {
 createRoot(document.getElementById('root')!).render(
   <LocaleProvider>
     <ErrorBoundary>
-      {isPreview ? <ChatPreview /> : kind === 'mini' ? <MiniRoot /> : kind === 'detached' ? <DetachedRoot /> : <Root />}
+      {isPreview ? <ChatPreview /> : kind === 'mini' ? <MiniRoot /> : kind === 'floating' ? <FloatingRoot /> : kind === 'detached' ? <DetachedRoot /> : <Root />}
     </ErrorBoundary>
   </LocaleProvider>,
 )

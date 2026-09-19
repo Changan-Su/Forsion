@@ -1,6 +1,6 @@
 import { amadeusAvailable } from './features/runtime'
 /** App 根:启动副作用(连接/轮询/更新)+ 主题桥接给纯引擎 Shell + 设置/引导/更新横幅浮层。 */
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Shell, UI_MODE } from '@lcl/engine'
 import { useApp } from './stores/appStore'
@@ -26,6 +26,9 @@ import { UnitRemoteSurface } from './components/UnitSwitcher'
 import { installNotificationWiring } from './stores/notificationWiring'
 import { useShallow } from 'zustand/react/shallow'
 import { installFileDropGuard } from './fileDropGuard'
+import { FloatingPanelFrame } from './components/FloatingPanelFrame'
+import { FloatingViewSurface } from './components/FloatingViewSurface'
+import { closeWebFloatingPanel, getWebFloatingPanel, subscribeWebFloatingPanel } from './pluginPanelSeam'
 
 const PREVIEW_SIZES: Array<[number, string]> = [[390, 'iPhone'], [414, 'Max'], [768, 'iPad']]
 /** 桌面/web 移动预览「手机框」:套在整个 app 外(引擎壳 + 设置/商店/成就等 fixed 浮层),
@@ -53,6 +56,9 @@ export function Root() {
   useBootstrap()
   useEffect(() => installFileDropGuard(), []) // 全局 OS 文件拖放守卫:未被任何视图接手的拖放不再把 SPA 导航冲掉
   useEffect(() => { installStatusBarItems(); installNotificationWiring() }, []) // 状态栏内置项 + 通知事件接线(幂等)
+  useEffect(() => window.tangu?.onMainAction?.((action) => {
+    if (action === 'onboarding') useApp.getState().setOnboarding(true)
+  }), [])
   const theme = useTheme()
   const a = useApp(useShallow((s) => ({
     sessions: s.sessions,
@@ -75,6 +81,7 @@ export function Root() {
     closeFeedback: s.closeFeedback,
   })))
   const activeSession = a.sessions.find((s) => s.id === a.activeId) || a.archivedSessions.find((s) => s.id === a.activeId) || null
+  const pluginFloating = useSyncExternalStore(subscribeWebFloatingPanel, getWebFloatingPanel, getWebFloatingPanel)
 
   // 引导结束 → 主界面入场动画(一次性):onboarding true→false 时给外壳挂 .main-enter,放完即移除。
   const [revealMain, setRevealMain] = useState(false)
@@ -89,22 +96,14 @@ export function Root() {
     }
   }, [a.onboarding])
 
-  // 全屏二级界面(设置/市场/成就/引导)盖住主窗时,把主窗藏掉(visibility 保留布局不触发 dockview 重排)。
-  // 不透明主题下浮层本就遮死主窗,藏它零可见影响 + 省一次绘制;玻璃主题下浮层透明,藏主窗后其半透侧栏
-  // 才是叠在窗口原生玻璃(壁纸)上而非叠在主窗 UI 上 —— 与主窗侧栏同一套「半透染色 + 原生材质」机理。
-  // ⚠ 打开即藏,但**关闭要等浮层退场动画播完再显**(codex Medium-3):浮层退场那 220ms 仍挂在 DOM 上,
-  //   若跟着 open flag 立刻显主窗,玻璃侧栏会在这段里叠回刚露出的主窗 UI(正是要避免的浑浊)。
-  const overlayOpen = a.settingsOpen || a.marketOpen || a.achievementsOpen || a.onboarding
-  const overlayOpenRef = useRef(overlayOpen); overlayOpenRef.current = overlayOpen
-  const [shellHidden, setShellHidden] = useState(overlayOpen)
-  useEffect(() => { if (overlayOpen) setShellHidden(true) }, [overlayOpen])
-  const onOverlayExitComplete = (): void => { if (!overlayOpenRef.current) setShellHidden(false) }
+  // 只有首启引导仍是全屏任务空间。设置/市场/成就/反馈改为 Floating Panel 后主工作台保持可见。
+  const overlayOpen = a.settingsOpen || a.marketOpen || a.achievementsOpen || a.feedbackOpen || !!pluginFloating || a.onboarding
 
   return (
     <MobilePreviewFrame>
       <div
         className={`shell-host${revealMain ? ' main-enter' : ''}`}
-        style={shellHidden ? { visibility: 'hidden' } : undefined}
+        style={a.onboarding ? { visibility: 'hidden' } : undefined}
       >
         <Shell dark={theme.mode === 'dark'} soft={!!getLanguage(theme.lang)?.manifest.panelGap} buildDefault={buildDefaultLayout} header={<TopBar />} footer={<DesktopStatusBar />} />
       </div>
@@ -122,17 +121,9 @@ export function Root() {
 
       {/* 更新提示已改为检测到新版自动弹出「更新」标签页(见 stores/bootstrap.ts),不再用顶部横幅。 */}
 
-      <AnimatePresence onExitComplete={onOverlayExitComplete}>
+      <AnimatePresence>
         {a.settingsOpen && (
-        <motion.div
-          key="settings"
-          className="fs-overlay"
-          style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', minWidth: 0, minHeight: 0, overflow: 'hidden' }}
-          initial={{ opacity: 0, scale: 0.985 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.985 }}
-          transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
-        >
+        <FloatingPanelFrame key="settings" title={a.tr('settings.title')} onClose={() => a.closeSettings()}>
           <SettingsModal
             open
             initialTab={a.settingsTab ?? undefined}
@@ -159,11 +150,11 @@ export function Root() {
               a.setOnboarding(true)
             }}
           />
-        </motion.div>
+        </FloatingPanelFrame>
         )}
       </AnimatePresence>
 
-      <AnimatePresence onExitComplete={onOverlayExitComplete}>
+      <AnimatePresence>
         {a.onboarding && (
           <motion.div
             key="onboarding"
@@ -203,40 +194,33 @@ export function Root() {
         )}
       </AnimatePresence>
 
-      <AnimatePresence onExitComplete={onOverlayExitComplete}>
+      <AnimatePresence>
         {a.marketOpen && (
-        <motion.div
-          key="market"
-          className="fs-overlay"
-          style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', minWidth: 0, minHeight: 0, overflow: 'hidden' }}
-          initial={{ opacity: 0, scale: 0.985 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.985 }}
-          transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
-        >
-          <MarketModal />
-        </motion.div>
+        <FloatingPanelFrame key="market" title={a.tr('market.title')} onClose={() => a.closeMarket()}>
+          <MarketModal onClose={() => a.closeMarket()} />
+        </FloatingPanelFrame>
         )}
       </AnimatePresence>
 
-      <AnimatePresence onExitComplete={onOverlayExitComplete}>
+      <AnimatePresence>
         {a.achievementsOpen && (
-        <motion.div
-          key="achievements"
-          style={{ position: 'fixed', inset: 0, zIndex: 50, display: 'flex', minWidth: 0, minHeight: 0, overflow: 'hidden', background: 'var(--bg)' }}
-          initial={{ opacity: 0, scale: 0.985 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.985 }}
-          transition={{ duration: 0.22, ease: [0.2, 0.8, 0.2, 1] }}
-        >
-          <AchievementsModal />
-        </motion.div>
+        <FloatingPanelFrame key="achievements" title={a.tr('achievements.title')} onClose={() => useApp.getState().closeAchievements()}>
+          <AchievementsModal onClose={() => useApp.getState().closeAchievements()} />
+        </FloatingPanelFrame>
         )}
       </AnimatePresence>
 
-      {a.feedbackOpen && (
-        <FeedbackModal cfg={a.cfg} activeSession={activeSession} onClose={() => a.closeFeedback()} />
-      )}
+      <AnimatePresence>
+        {a.feedbackOpen && <FloatingPanelFrame key="feedback" compact title={a.tr('feedback.title')} onClose={() => a.closeFeedback()}>
+          <FeedbackModal surface="panel" cfg={a.cfg} activeSession={activeSession} onClose={() => a.closeFeedback()} />
+        </FloatingPanelFrame>}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {pluginFloating?.view && <FloatingPanelFrame key={pluginFloating.id} title={pluginFloating.title} onClose={closeWebFloatingPanel}>
+          <FloatingViewSurface target={pluginFloating.view} onUnavailable={closeWebFloatingPanel} />
+        </FloatingPanelFrame>}
+      </AnimatePresence>
 
       {/* 全屏二级界面是单任务空间:插件引导、成就与同步通知延后到回到主应用后再出现。 */}
       {!overlayOpen && <PluginOnboardingHost />}

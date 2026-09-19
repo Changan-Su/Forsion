@@ -1,9 +1,7 @@
 // 「查看源码」`</>` 小按钮(Obsidian 同款):挂在渲染出来的行内块右上角,悬停才浮现。
 //
-// ⚠️ 这里**没有**新建什么「源码模式」—— Amadeus 的公式 / 双链 / 图片嵌入本来就是
-// 「光标不在这一行 → 渲染;光标回到这一行 → 露出字面源码可编辑」(见 mathLivePreview.ts 的长注释)。
-// 这颗按钮只是给那条既有通道一个看得见的入口:点它 = 把光标塞进那段源码。
-// 「编辑光标离开这片区域才复渲染」因此是白拿的 —— 逐行显隐本来就这么判。
+// 普通双链 / 公式仍是「光标回到这一行 → 露源码」;附件类“难源码编辑块”则由这颗按钮
+// 显式打开自己的 source state,光标只是经过或整块选中都不让位。两类入口共用这一枚按钮。
 import { TextSelection } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { registerMessages, translate } from '../../../i18n'
@@ -25,9 +23,9 @@ export function revealSource(view: EditorView, srcFrom: number): void {
  * 免得盖住本来就很小的行内公式。只读视图不给编辑入口(和 renderMath 同一条约定)。
  *
  * `reveal` 两种口径:
- *  · **数字** = 源码在文档里的位置 → 把光标送进去(公式 / 双链 / `![[…]]` 图片,它们本来就是文本);
- *  · **函数** = 自定入口 —— `![](path)` 那种是 PM 的 image **节点**,文档里根本没有字面源码可露,
- *    由 mdImage.ts 自己弹一行源码输入框(见那边的注释)。
+ *  · **数字** = 源码在文档里的位置 → 把光标送进去(普通公式 / 双链);
+ *  · **函数** = 自定入口 —— 图片和通用附件要显式打开 hard-source state;`![](path)` 还是 PM 的
+ *    image 节点,文档里没有字面源码,由 mdImage.ts 自己弹一行输入框。
  */
 export function attachSourceButton(host: HTMLElement, view: EditorView, reveal: number | (() => void), inline = false): void {
   if (!view.editable) return

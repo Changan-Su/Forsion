@@ -477,7 +477,15 @@
   animation: amx-dropline-in 100ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 .am-app .block-host[data-dragging] {
-  opacity: 0.7; /* AFFiNE 值 */
+  animation: amx-drag-source-fade 85ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .am-app .block-host[data-dragging],
+  .am-app .unified-body .ProseMirror[data-dragging='true'] :is(.ProseMirror-selectednode, .amx-block-selected) {
+    animation: none;
+    opacity: 0.58;
+  }
 }
 
 /* 手柄悬浮在正文左侧的页边距里(落在 .row 的左 padding 中,不被 content-visibility 裁);hover 才现。
@@ -2808,6 +2816,10 @@ body.amx-marquee-active * {
   background: color-mix(in srgb, var(--primary) 14%, transparent);
   outline: none;
 }
+/* 独占段图片用 paragraph NodeSelection 承载块操作;图片自己已有精细描边,外层淡底会显得像两层选框。 */
+.am-app .unified-body .ProseMirror p.ProseMirror-selectednode:has(> .wiki-inline-img-wrap) {
+  background: transparent;
+}
 /* 多块选中(AFFiNE 对齐):整块淡底,原生那道参差的文字高亮让位。选区语义仍是 TextSelection,
    装饰由 blockLayer 的 blockSelDeco 给;data-blocksel 只在跨块时挂上,块内选字不受影响。 */
 .am-app .unified-body .ProseMirror .amx-block-selected {
@@ -2818,9 +2830,13 @@ body.amx-marquee-active * {
 .am-app .unified-body .ProseMirror[data-blocksel='true'] *::selection {
   background: transparent;
 }
-/* 拖拽中:源块淡显(AFFiNE 值)。 */
-.am-app .unified-body .ProseMirror[data-dragging='true'] .ProseMirror-selectednode {
-  opacity: 0.7;
+/* 拖拽源块:极短、轻微的渐出,让“已经拿起来”可感知但不闪烁。 */
+@keyframes amx-drag-source-fade {
+  from { opacity: 1; }
+  to { opacity: 0.58; }
+}
+.am-app .unified-body .ProseMirror[data-dragging='true'] :is(.ProseMirror-selectednode, .amx-block-selected) {
+  animation: amx-drag-source-fade 85ms cubic-bezier(0.2, 0, 0, 1) both;
 }
 /* 把手菜单的小节标签/分隔线(菜单壳与按钮吃 .ctx-menu 现成样式)。 */
 .am-app /* 分栏(v4 单实例列节点,columns.ts):行=flex,列宽走 flex-grow(cell attrs.width)。

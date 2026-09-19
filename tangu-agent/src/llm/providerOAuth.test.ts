@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { fetchProviderModels, loadOAuthDirectProviders, OAUTH_PROVIDERS, CODEX_MODELS_CLIENT_VERSION } from './providerOAuth.js';
+import { GROK_BUILD_CLIENT_IDENTIFIER, GROK_BUILD_CLIENT_MODE, GROK_BUILD_CLIENT_VERSION } from './grokBuildCompat.js';
 import { loadProviderCreds, saveProviderCred, type OAuthTokens } from '../standalone/providerCreds.js';
 
 vi.mock('../standalone/providerCreds.js', () => ({ loadProviderCreds: vi.fn(), saveProviderCred: vi.fn() }));
@@ -40,6 +41,27 @@ describe('fetchProviderModels', () => {
     vi.stubGlobal('fetch', () => Promise.resolve({ ok: false, json: () => Promise.resolve({}) }));
     const r = await fetchProviderModels({ protocol: 'openai', baseUrl: 'https://api.x.ai/v1' } as any, 'tok');
     expect(r).toBeNull();
+  });
+
+  it('Grok Build 模型目录走 CLI proxy 的 OAuth 请求头', async () => {
+    let calledUrl = '';
+    let calledInit: any;
+    vi.stubGlobal('fetch', (url: string, init: any) => {
+      calledUrl = url;
+      calledInit = init;
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ data: [{ id: 'grok-build' }] }) });
+    });
+    const r = await fetchProviderModels(OAUTH_PROVIDERS.xai, 'grok-token');
+    expect(r).toEqual(['grok-build']);
+    expect(calledUrl).toBe('https://cli-chat-proxy.grok.com/v1/models');
+    expect(calledInit.headers).toMatchObject({
+      Authorization: 'Bearer grok-token',
+      'X-XAI-Token-Auth': 'xai-grok-cli',
+      'x-grok-client-version': GROK_BUILD_CLIENT_VERSION,
+      'x-grok-client-identifier': GROK_BUILD_CLIENT_IDENTIFIER,
+      'x-grok-client-mode': GROK_BUILD_CLIENT_MODE,
+      'User-Agent': `grok-shell/${GROK_BUILD_CLIENT_VERSION}`,
+    });
   });
 });
 
@@ -93,6 +115,30 @@ describe('Codex 模型目录缓存升级', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     expect((await loadOAuthDirectProviders())[0].modelIds).toEqual(['grok-4.6']);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('旧 xAI 凭证迁移到 Grok Build proxy 并替换旧模型 slug', async () => {
+    vi.mocked(loadProviderCreds).mockReturnValue({ xai: {
+      access_token: 'grok-token',
+      baseUrl: 'https://api.x.ai/v1',
+      tokenEndpoint: 'https://auth.x.ai/oauth2/token',
+      clientId: OAUTH_PROVIDERS.xai.clientId,
+      modelIds: ['grok-build-0.1'],
+      modelIdsAt: Date.now(),
+    } });
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    const providers = await loadOAuthDirectProviders();
+    expect(providers[0]).toMatchObject({
+      baseUrl: 'https://cli-chat-proxy.grok.com/v1',
+      protocol: 'grok-build',
+      modelIds: ['grok-build'],
+    });
+    expect(saveProviderCred).toHaveBeenCalledWith('xai', expect.objectContaining({
+      baseUrl: 'https://cli-chat-proxy.grok.com/v1',
+      modelIds: ['grok-build'],
+    }));
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -15,6 +15,7 @@ import { learnFromUpstreamError } from '../services/contextWindowStore.js';
 import { LlmError, type AgentModel, type ThinkingLevel, type ToolCall } from '../core/types.js';
 import { parseTextToolCalls } from './textToolCalls.js';
 import { applyThinking, normalizeThinkingLevel, resolveModelCapability } from './modelCapabilities.js';
+import { buildGrokBuildHeaders } from './grokBuildCompat.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 
 /** 直连 payload 的私有标记:multiBrain 据此把 stream 分发到本实现而非 httpBrain。 */
@@ -243,13 +244,15 @@ function isOfficialOpenAiHost(baseUrl: string | undefined): boolean {
 
 async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): Promise<StreamResult> {
   const { apiKey, baseUrl, payload, onToken, onReasoning, onToolCallDelta } = opts;
+  const protocol = payload?.[PROTOCOL_MARK];
+  const isGrokBuild = protocol === 'grok-build';
   // 剥掉私有标记,再发给 provider。prompt_cache_key 一并摘下,只在官方 host 上补回(见下)。
   const { [DIRECT_MARK]: _omitDirect, __forsion_model_id: _omitFsn, [PROTOCOL_MARK]: _omitProto, [ACCOUNT_MARK]: _omitAcct, [RUN_MARK]: _omitRun, prompt_cache_key: cacheKeyField, ...clean } = payload as any;
   const streamPayload = {
     ...clean,
     messages: compatWireMessages(clean, { baseUrl, provider: opts.provider }),
     stream: true,
-    stream_options: { include_usage: true },
+    ...(isGrokBuild ? {} : { stream_options: { include_usage: true } }),
     // prompt_cache_key 只对官方 api.openai.com 上 wire:providerId 是用户可自定义字符串
     // (providerRegistry 不保证 'openai' == 官方端点),把任意严格网关注册成 'openai' 后,这个它
     // 没声明支持的字段会随每次请求发出去,可能直接 400 —— 未知端点绝不发未知字段。
@@ -260,6 +263,9 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (apiKey && apiKey !== '__cloud_proxy__') headers.Authorization = `Bearer ${apiKey}`;
+  if (isGrokBuild) {
+    Object.assign(headers, buildGrokBuildHeaders(apiKey, String(streamPayload.model || 'grok-build')));
+  }
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',

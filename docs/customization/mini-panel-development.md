@@ -21,13 +21,26 @@ Space 的 `mini` 是显式能力声明。`SpaceDefinition.mini` 与 `space.json.
 
 默认窗口为 320×420。适配器复用业务数据与编辑能力，专门设计快捷交互。使用语义主题变量，提供中英文本，避免品牌欢迎页、全局设置和重复导航占据面板。宿主负责 Space 切换、主面板定位和关闭。
 
+插件不必为了一个快捷卡片创建完整 Space。注册视图后可直接打开 Mini：
+
+```js
+ctx.openMiniPanel?.('quick', {
+  title: 'Quick capture',
+  params: { itemId: 'today' },
+  mainViewId: 'detail',
+  mainViewParams: { section: 'inbox' },
+})
+```
+
+`viewId` 和 `mainViewId` 都是当前插件内的相对 id；宿主自动补 `plugin:<pluginId>:`。省略 `mainViewId` 时，主面板打开同一个视图。旧版宿主和 Web/mobile 可能没有此原生窗口接口，必须使用可选调用并保留 `ctx.openView()` 回退。
+
 ## 插件上下文 / Plugin context
 
 `ctx.registerView({id, title, mount(el, view)})` 的第二个参数新增以下可选成员；旧宿主应先检测存在性。
 
 | 成员 | 行为 |
 | --- | --- |
-| `surface` | `mini` 或 `main`；Mini 不提供 `extendView` |
+| `surface` | `mini`、`floating` 或 `main`；Mini/Floating 不提供 `extendView` |
 | `getParams()` | 当前实例的实体或筛选参数 |
 | `setParams(patch)` | 合并参数，更新主面板定位目标 |
 | `onParamsChanged(fn)` | 参数变化通知；返回取消订阅，不重挂 DOM |

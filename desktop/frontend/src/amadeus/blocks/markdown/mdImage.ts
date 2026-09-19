@@ -36,6 +36,7 @@ class MdImageView implements NodeView {
     private node: ProseNode,
     private view: EditorView,
     private getPos: () => number | undefined,
+    private onDestroy: () => void,
   ) {
     // 包一层 span 的理由与行内嵌入同款:`<img>` 是空元素,挂不了把手,也没有定位父级。
     this.dom = document.createElement('span')
@@ -44,9 +45,11 @@ class MdImageView implements NodeView {
     this.img = document.createElement('img')
     this.img.className = 'wiki-inline-img'
     this.dom.appendChild(this.img)
-    // 点一下 = 选中这个节点。⚠️ 不靠 PM 的 handleClickOn:contentEditable 里点 <img>,PM 多半
-    // 只把光标落到节点旁边(实测 click 后既无 NodeSelection 也无选中环)。自己派 NodeSelection,
-    // 并在 stopEvent 里把 mousedown 拦下,免得 PM 随后又按坐标把选区改回去。
+    // 点一下 = 选中图片节点。块菜单/分栏在右键与 ⠿ 入口会继续把选区提升到顶层 paragraph;
+    // 左键若直接选 paragraph,Chromium 会在 contenteditable=false 图片尾部留下整段高的蓝色边界。
+    // ⚠️ 不靠 PM 的 handleClickOn:contentEditable 里点 <img>,PM 多半只把光标落到节点旁边
+    // (实测 click 后既无 NodeSelection 也无选中环)。自己派 NodeSelection,并在 stopEvent 里
+    // 把 mousedown 拦下,免得 PM 随后又按坐标把选区改回去。
     this.dom.addEventListener('mousedown', (e) => {
       if (e.button !== 0 || (e.target as HTMLElement).closest('.amx-img-resize, .amx-src-btn, .amx-img-srcline')) return
       e.preventDefault()
@@ -82,6 +85,15 @@ class MdImageView implements NodeView {
     delete this.dom.dataset.selected
     this.drop?.()
     this.drop = null
+  }
+  /** NodeView 选中态兜底同步:部分外部命令直接恢复 NodeSelection 时,仍要保证环与把手在。 */
+  syncSelection(): void {
+    const pos = this.getPos()
+    if (pos == null) return this.deselectNode()
+    const sel = this.view.state.selection
+    const picked = sel instanceof NodeSelection && sel.from === pos
+    if (picked && !this.dom.hasAttribute('data-selected')) this.selectNode()
+    else if (!picked && this.dom.hasAttribute('data-selected')) this.deselectNode()
   }
   /** 露源码(`</>` 与双击的共同出口):图片上方浮出一行可编辑的 `![说明|宽度](路径)`。
    *
@@ -156,18 +168,32 @@ class MdImageView implements NodeView {
   }
   destroy(): void {
     this.drop?.()
+    this.onDestroy()
   }
 }
 
 export function mdImagePlugin() {
   return $prose(
-    () =>
-      new Plugin({
+    () => {
+      const views = new Set<MdImageView>()
+      return new Plugin({
+        view: () => ({ update: () => { for (const image of views) image.syncSelection() } }),
         props: {
           nodeViews: {
-            image: (node, view, getPos) => new MdImageView(node as ProseNode, view as EditorView, getPos as () => number | undefined),
+            image: (node, view, getPos) => {
+              let image!: MdImageView
+              image = new MdImageView(
+                node as ProseNode,
+                view as EditorView,
+                getPos as () => number | undefined,
+                () => views.delete(image),
+              )
+              views.add(image)
+              return image
+            },
           },
         },
-      }),
+      })
+    },
   )
 }

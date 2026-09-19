@@ -34,6 +34,7 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**：把材料、�
 - [快速上手](getting-started/quickstart.md) — 从项目笔记到记忆、多 Agent、主动跟进与插件
 - [核心概念](getting-started/concepts.md) — Agent、会话、Space、审批档位这些词各指什么
 - [工作区与界面](getting-started/workspace.md) — Ribbon、标签页、状态栏、通知、内置浏览器与终端
+- [Floating Panel 开发](customization/floating-panel-development.md) — 第六种面板表面、跨端行为与插件 API
 
 ## 对话
 
@@ -76,6 +77,7 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**：把材料、�
 ## 个性化
 
 - [Mini Panel 开发](customization/mini-panel-development.md) — 插件适配、实体参数交接与自动前台面板契约
+- [Floating Panel 开发](customization/floating-panel-development.md) — 原生悬浮窗口、Web 浮层与插件开放接口
 
 - [外观与主题](customization/themes.md) — 设计语言、配色、玻璃、字体三档
 - [插件](customization/plugins.md) — 桌面插件与引擎插件、捆绑包、扩展点、安全模型

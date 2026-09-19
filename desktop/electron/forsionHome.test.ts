@@ -3,7 +3,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, lstatSync, realpathSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { migratePair, migrateEngineData, setDevMode, forsionHomeDir, tanguDataDir, defaultWorkspaceDir } from './forsionHome'
+import { bindDevTanguHome, migratePair, migrateEngineData, setDevMode, forsionHomeDir, tanguDataDir, defaultWorkspaceDir } from './forsionHome'
 // 故意跨包 import 引擎源码(只依赖 node:*):下面逐字比对两边的解析结果,任一侧改规则都会红,别当脏依赖清掉。
 import { authFile, configFile, providerAuthFile } from '../../tangu-agent/src/core/tanguHome'
 
@@ -132,6 +132,8 @@ describe('TANGU_HOME 与引擎同义:桌面与引擎 / CLI 解析出同一份共
 })
 
 describe('dev 态目录隔离', () => {
+  afterEach(() => { vi.unstubAllEnvs(); setDevMode(false) })
+
   it('setDevMode(true) → ~/.forsion-dev 与 ~/Forsion-Dev;关掉恢复', () => {
     setDevMode(true)
     expect(forsionHomeDir().endsWith('.forsion-dev')).toBe(true)
@@ -139,5 +141,13 @@ describe('dev 态目录隔离', () => {
     setDevMode(false)
     expect(forsionHomeDir().endsWith('.forsion')).toBe(true)
     expect(defaultWorkspaceDir().endsWith('Forsion')).toBe(true)
+  })
+
+  it('OAuth 动态模块在 dev 中绑定同一个引擎 home，不再写进正式目录', () => {
+    vi.stubEnv('TANGU_HOME', '')
+    setDevMode(true)
+    bindDevTanguHome()
+    expect(process.env.TANGU_HOME).toMatch(/\.forsion-dev\/tangu$/)
+    expect(join(forsionHomeDir(), 'provider-auth.json')).toBe(providerAuthFile())
   })
 })

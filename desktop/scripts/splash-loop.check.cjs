@@ -97,6 +97,17 @@ async function main() {
   const afterCeil = await page.evaluate(state)
   check('10s 天花板:首帧永远不来也会自己撤走', !!afterCeil.gone)
 
+  // ── ④ 卫星窗口由已运行的主窗口创建,不属于 Forsion 启动流程,首帧就不应挂 Splash ──
+  await page.route('https://splash.test/**', async (route) => {
+    const url = new URL(route.request().url())
+    if (url.pathname === '/') await route.fulfill({ contentType: 'text/html', body: HTML })
+    else await route.abort()
+  })
+  for (const kind of ['floating', 'detached', 'mini']) {
+    await page.goto(`https://splash.test/?window=${kind}`, { waitUntil: 'domcontentloaded' })
+    check(`${kind} 卫星窗口从未挂载启动闪屏`, await page.locator('#tangu-splash').count() === 0)
+  }
+
   await browser.close()
   const bad = results.filter((r) => !r.ok)
   console.log(`\n${results.length - bad.length}/${results.length} 通过`)

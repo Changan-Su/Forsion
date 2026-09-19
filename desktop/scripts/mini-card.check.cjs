@@ -21,7 +21,9 @@ async function main() {
       const content = document.createElement('div'); content.className = 'mini-probe-' + id;
       const render = () => content.textContent = 'Item: ' + (view.getParams().itemId || 'none');
       const button = document.createElement('button'); button.textContent = 'Choose item 42'; button.onclick = () => view.setParams({ itemId: '42' });
-      el.append(content, button); render(); const off = view.onParamsChanged(render);
+      el.append(content, button);
+      if (id === 'full') { const direct = document.createElement('button'); direct.textContent = 'Open direct Mini'; direct.onclick = () => ctx.openMiniPanel?.('mini', { title: 'Direct Mini', params: { itemId: '99' }, mainViewId: 'full' }); el.appendChild(direct); }
+      render(); const off = view.onParamsChanged(render);
       return () => { off(); window.__miniProbe.disposes++; };
     } });`)
   fs.writeFileSync(path.join(probe, 'spaces', 'mini-probe', 'space.json'), JSON.stringify({ id: 'mini-probe', name: { zh: 'Mini 探针', en: 'Mini probe' }, layout: { main: [{ type: 'plugin:mini-probe:full' }] },
@@ -46,7 +48,7 @@ async function main() {
     await mini.waitForSelector('.mini-tangu [data-session-id="mini-latest"]', { timeout: 30000 })
     check('latest session target in one Mini window', app.windows().filter((w) => w.url().includes('window=mini')).length === 1)
     check('independent of mobile UI', !mini.url().includes('ui=mobile'))
-    await mini.waitForSelector('#tangu-splash', { state: 'detached', timeout: 15000 })
+    check('Mini window never mounts the Forsion startup splash', await mini.locator('#tangu-splash').count() === 0)
     await mini.waitForTimeout(500)
     const geo = await mini.evaluate(() => {
       const root = document.querySelector('.mini-card-shell'), bar = document.querySelector('.mini-card-chrome')
@@ -94,6 +96,12 @@ async function main() {
     await mini.getByRole('button', { name: '在主面板显示', exact: true }).click()
     await win.waitForFunction(() => document.querySelector('.mini-probe-full')?.textContent === 'Item: 42')
     check('plugin handoff preserves entity params', true)
+    await win.getByRole('button', { name: 'Open direct Mini', exact: true }).click()
+    await mini.waitForSelector('.mini-card-shell[data-space="direct"]')
+    await mini.waitForFunction(() => document.querySelector('.mini-probe-mini')?.textContent === 'Item: 99')
+    check('plugin can open a direct Mini without a Space', await mini.locator('.mini-card-space', { hasText: 'Direct Mini' }).count() === 1)
+    await win.evaluate(() => window.tangu.openMini({ spaceId: 'calendar' }))
+    await mini.waitForSelector('.mini-card-shell[data-space="calendar"]')
     await switchTo('ToDo List')
     check('plugin disposal revokes context', await mini.evaluate(() => { try { window.__miniProbe.oldView.setParams({ itemId: 'stale' }); return false } catch { return window.__miniProbe.disposes === 1 } }))
     await switchTo('Mini 探针')
@@ -110,7 +118,7 @@ async function main() {
     await mini.keyboard.press('Escape')
     await mini.evaluate(() => localStorage.setItem('forsion_theme_pref', 'dark'))
     await mini.reload()
-    await mini.waitForSelector('.mini-card-shell[data-space="tangu"]')
+    await mini.waitForSelector('.mini-card-shell[data-space="calendar"]')
     await switchTo('ToDo List')
     await mini.waitForSelector('.mini-todo .amx-todo')
     await mini.waitForTimeout(500)

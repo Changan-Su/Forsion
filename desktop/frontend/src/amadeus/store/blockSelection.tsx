@@ -10,6 +10,8 @@ import { marqueeHits } from '../lib/marquee'
 import { isEmbedBlock, isWidgetBlock } from '../lib/blockKind'
 import { zoomOf } from '../lib/clampMenu'
 import { registerMessages, translate } from '../../i18n'
+import { amadeus } from '../api'
+import { rememberAttachmentCopy } from '../lib/attachmentClipboard'
 
 registerMessages({
   'blocksel.copiedN': { zh: '已复制 {n} 块', en: '{n} blocks copied' },
@@ -62,6 +64,25 @@ async function deleteSerial(ids: string[]): Promise<void> {
   for (const b of ids) await usePageStore.getState().deleteBlock(b)
 }
 
+async function copyBlocks(pagePath: string | null, contents: string[], joined: string): Promise<void> {
+  if (pagePath && contents.length === 1 && amadeus.copyAttachment) {
+    const reference = contents[0].trim()
+    const wiki = /^!\[\[([^\]\n]+)\]\]$/.exec(reference)
+    if (wiki) {
+      let ref = wiki[1].replace(/\|\d+\s*$/, '').trim()
+      const hash = ref.indexOf('#')
+      if (hash > 0 && /\.[a-z0-9]{1,10}$/i.test(ref.slice(0, hash))) ref = ref.slice(0, hash)
+      if (ref) {
+        if (await amadeus.copyAttachment(pagePath, ref, reference).catch(() => false)) {
+          rememberAttachmentCopy(reference, ref)
+          return
+        }
+      }
+    }
+  }
+  await navigator.clipboard.writeText(joined)
+}
+
 /** 挂在 PageView:选中态键盘处理 + 点旁处清除 + 空白框选(渲染框选矩形)。 */
 export function BlockSelectionKeys() {
   const [rect, setRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null)
@@ -85,6 +106,7 @@ export function BlockSelectionKeys() {
         e.stopPropagation()
       }
       const joined = (): string => ids.map((b) => ps.blocks[b]?.content ?? '').filter(Boolean).join('\n\n')
+      const contents = (): string[] => ids.map((b) => ps.blocks[b]?.content ?? '').filter(Boolean)
       if (e.key === 'Escape') {
         stop()
         useBlockSelection.getState().clear()
@@ -117,13 +139,13 @@ export function BlockSelectionKeys() {
         }
       } else if (mod && (e.key === 'c' || e.key === 'C')) {
         stop()
-        void navigator.clipboard.writeText(joined())
+        void copyBlocks(ps.activePage, contents(), joined())
         useUiStore
           .getState()
           .notify(ids.length > 1 ? translate('blocksel.copiedN', { n: ids.length }) : translate('blocksel.copiedOne'))
       } else if (mod && (e.key === 'x' || e.key === 'X')) {
         stop()
-        void navigator.clipboard.writeText(joined()).then(() => {
+        void copyBlocks(ps.activePage, contents(), joined()).then(() => {
           useBlockSelection.getState().clear()
           void deleteSerial(ids)
         })

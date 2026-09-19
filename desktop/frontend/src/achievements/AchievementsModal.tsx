@@ -12,9 +12,10 @@ import './achievements.css'
 
 const TIERS: MedalTier[] = ['bronze', 'silver', 'gold']
 
-export function AchievementsModal(): React.ReactElement {
+export function AchievementsModal({ onClose }: { onClose?: () => void } = {}): React.ReactElement {
   const { t } = useI18n()
-  const close = useApp((s) => s.closeAchievements)
+  const storeClose = useApp((s) => s.closeAchievements)
+  const close = onClose ?? storeClose
   const counters = useAchievements((s) => s.counters)
   const claimed = useAchievements((s) => s.claimed)
   const pluginSeries = useAchievements((s) => s.pluginSeries)

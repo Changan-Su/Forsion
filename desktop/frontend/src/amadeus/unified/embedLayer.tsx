@@ -5,14 +5,13 @@
 //   ```forsion-button``` 代码块(按钮块)。图片形态**不在本层**(wikilink.ts 行内 widget 已渲染,
 //   段落独占时由 CSS 放大成块级观感,见 styles.css)。
 // 交互契约(advisor 判别面):节点仍是普通段落/代码块 —— ⠿ 把手/拖拽/删除/撤销全部原生;
-// **光标进入该节点(方向键/点击缝隙)→ 装饰整体让位,露出源码可编辑**(math live preview 同款,
-// 这就是「编辑嵌入目标」的入口,无需 v3 的 EmbedSourceLine)。
+// 附件属于「难源码编辑块」:光标/方向键经过不让位,只有悬停右上角 `</>` 才显式露源码。
 // 规范偏离备案:spec §4 写的是「原子 nodeView」——PM nodeView 按节点类型挂,无法只对
 // 「恰好是嵌入的段落」生效;装饰 widget 语义等价(原子 UX)且保住把手/撤销,记入规范修订。
 import { Suspense, useEffect, useRef, useState, type ReactElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { $prose } from '@milkdown/kit/utils'
-import { Plugin, PluginKey, TextSelection } from '@milkdown/kit/prose/state'
+import { NodeSelection, Plugin, PluginKey, TextSelection } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import type { Node as ProseNode } from '@milkdown/kit/prose/model'
@@ -38,6 +37,7 @@ import { PluginEmbed } from '../blocks/plugin/PluginEmbed'
 import { amadeus } from '../api'
 import { resolveFileName, isAmbiguousFileRef } from '../lib/vaultFiles'
 import { attachResizeHandle } from '../lib/imageResize'
+import { attachSourceButton } from '../blocks/markdown/sourceToggle'
 import { getAttachmentPrefs } from '../lib/attachments'
 import { registerMessages, subscribeLocale, translate } from '../../i18n'
 
@@ -349,12 +349,17 @@ interface WidgetEntry {
   dom: HTMLElement
 }
 
+interface EmbedLayerState {
+  decos: DecorationSet
+  sourcePos: number | null
+}
+
 export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): MilkdownPlugin[] {
   const plugin = $prose(() => {
     const key = new PluginKey('UNIFIED_EMBED_LAYER')
     const roots = new Map<string, WidgetEntry>() // key → 活 widget(同 key 复用,PM 不重建 DOM)
 
-    const buildDecos = (doc: ProseNode, selFrom: number, selTo: number): DecorationSet => {
+    const buildDecos = (doc: ProseNode, selFrom: number, selTo: number, sourcePos: number | null): DecorationSet => {
       const decos: Decoration[] = []
       const seen = new Map<string, number>() // 同文嵌入按出现序号区分身份(Codex 终审 P1:同 key 共享 DOM 会互相拆台)
       const visit = (node: ProseNode, pos: number): void => {
@@ -363,8 +368,9 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
         const baseKey = `${kind.k}:${node.textContent}`
         const nth = seen.get(baseKey) ?? 0
         seen.set(baseKey, nth + 1)
-        // 光标在节点内 → 让位露源码(编辑入口;含选区跨节点的情形按重叠算)。
-        if (selTo > pos && selFrom < pos + node.nodeSize) return
+        // 只有 `</>` 写下的显式 sourcePos 才让位;方向键/普通点击即使把选区落进隐藏文本,
+        // 也继续呈现附件整体(难源码编辑块契约)。
+        if (sourcePos === pos && selTo > pos && selFrom < pos + node.nodeSize) return
         const dkey = `${baseKey}#${nth}`
         decos.push(Decoration.inline(pos + 1, pos + node.nodeSize - 1, { class: 'wikilink-src-hidden' }))
         // 本段已归块级嵌入 → 给段落打标,行内双链层渲出来的那条链接由 CSS 收掉(2026-08-22 实报:
@@ -375,7 +381,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
         decos.push(
           Decoration.widget(
             pos + 1,
-            () => {
+            (view) => {
               const cached = roots.get(dkey)
               if (cached && cached.dom.isConnected === false) {
                 // PM 复用 key 但 DOM 已摘除过:重挂同一棵
@@ -385,10 +391,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
               const dom = document.createElement('div')
               dom.className = 'unified-embed'
               dom.contentEditable = 'false'
-              // 双击 = 露源码编辑(v3 EmbedSourceLine 同款入口):把光标送进节点内,
-              // 装饰因「选区在内」整体让位。竖直方向键会跳过 display:none 的源码行(无行盒),
-              // 所以这是键盘外唯一的源码入口,别删。
-              // 同文嵌入按出现序号定位(与 dkey 同口径):双击第二个不许跳进第一个的源码。
+              // 同文嵌入按出现序号定位(与 dkey 同口径):第二个附件的源码钮不许改到第一个。
               const findNth = (v: EditorView): { at: number; size: number } | null => {
                 let i = 0
                 let hit: { at: number; size: number } | null = null
@@ -410,14 +413,20 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
                 })
                 return hit
               }
-              dom.addEventListener('dblclick', (e) => {
-                e.preventDefault()
-                e.stopPropagation()
+              // 外壳空白处 = 选中整块;真正的附件控件继续拿自己的点击。源码不再绑双击,
+              // 唯一入口是下面悬停出现的 `</>`。
+              dom.addEventListener('mousedown', (e) => {
+                if (e.button !== 0) return
+                const target = e.target as HTMLElement
+                if (target !== dom && target.parentElement !== dom) return
+                if (target.closest('.amx-src-btn, .amx-img-resize, button, a, input, textarea, select, iframe, webview, video, audio, [contenteditable="true"]')) return
                 const v = viewRef
                 if (!v) return
                 const hit = findNth(v)
                 if (!hit) return
-                v.dispatch(v.state.tr.setSelection(TextSelection.near(v.state.doc.resolve(hit.at + 1))))
+                e.preventDefault()
+                e.stopPropagation()
+                v.dispatch(v.state.tr.setSelection(NodeSelection.create(v.state.doc, hit.at)))
                 v.focus()
               })
               const replaceText = (next: string): void => {
@@ -435,10 +444,10 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
               if (w) dom.style.width = `${w}px`
               // ⚠️ React 的 createRoot 在首次提交时会清空容器 —— 把手若是 dom 的子节点会被一起抹掉。
               // 所以可缩放时多套一层:React 只管里层,把手留在外层(它也正是被量宽度的那个元素)。
-              let host: HTMLElement = dom
+              const host = document.createElement('div')
+              host.className = 'unified-embed-body'
+              dom.appendChild(host)
               if (resizable) {
-                host = document.createElement('div')
-                dom.appendChild(host)
                 const inner = EMBED_RE.exec(node.textContent.trim())?.[1]
                 if (inner !== undefined) {
                   // ponytail: 落盘即改块内文本 → dkey 变 → widget 重挂,拖完播放中的视频/网页会重载一次。
@@ -467,6 +476,17 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
                   replaceText={replaceText}
                 />,
               )
+              attachSourceButton(dom, view, () => {
+                const v = viewRef
+                if (!v) return
+                const hit = findNth(v)
+                if (!hit) return
+                const tr = v.state.tr.setSelection(TextSelection.near(v.state.doc.resolve(hit.at + 1)))
+                tr.setMeta(key, { sourcePos: hit.at })
+                v.dispatch(tr)
+                v.focus()
+              })
+              dom.querySelector('.amx-src-btn')?.classList.add('amx-src-btn--block')
               roots.set(dkey, { root, dom })
               return dom
             },
@@ -477,11 +497,12 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
               // ⚠️ 嵌入体里的输入控件(多维表公式框/单元格/搜索、插件表单、嵌入笔记的第二个编辑器)按键
               // **必须止步于此**:widget 装饰默认不拦事件,PM 的 eventBelongsToView 一路走到 view.dom,
               // 于是 baseKeymap 的 Backspace 拿**外层**选区跑 joinBackward —— 段落被合并、选区落进本节点,
-              // 上面那句「光标在节点内 → 让位露源码」随即生效:整个嵌入退化成 `![[…]]` 源文。
+              // 外层 PM 仍会收到按键并误做 joinBackward;hard-source 状态不会因此自动露源码,
+              // 但文档结构一样会被错误合并,所以仍必须把控件事件止在 widget 内。
               // (2026-09-01 用户实报「公式框里按删除键,整张多维表变源码」。这洞比 2.8 那批列型早,
               //  只是公式框是第一个让人连按删除键的地方。Enter 没事只因各控件自己 preventDefault 了,
               //  普通字母没事只因它压根没进 keymap —— 都不是防线。)
-              // 只拦键盘/输入/剪贴板族:鼠标族留给 PM(块拖拽、宽度把手、双击进源码都在这层附近)。
+              // 只拦键盘/输入/剪贴板族:鼠标族留给 PM(块拖拽、宽度把手、整块选中都在这层附近)。
               stopEvent: (e: Event) => /^(key|composition|beforeinput|input|paste|cut|copy)/.test(e.type),
               destroy: () => {
                 const entry = roots.get(dkey)
@@ -496,7 +517,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
       // 整棵树都走一遍,不再逐种容器特判:分栏 cell 与**画布卡片**里的嵌入同样照渲染
       // (2026-08-22 用户实报「画布上卡里的 ![[…]] 只剩一个 ! 加个链接」—— 旧版只扫顶层 +
       // amadeusColumnRow,卡内那份根本拿不到 widget,退化成 wikilink 行内层的兜底)。
-      // ⚠️ 枚举口径必须与 findNth 的 doc.descendants 逐字一致:两边错位 = 双击第 n 个嵌入
+      // ⚠️ 枚举口径必须与 findNth 的 doc.descendants 逐字一致:两边错位 = 点第 n 个嵌入的 `</>`
       // 会把光标送进第 m 个的源码。
       doc.descendants((node, pos) => {
         visit(node, pos)
@@ -506,7 +527,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
     }
 
     let viewRef: EditorView | null = null
-    return new Plugin({
+    return new Plugin<EmbedLayerState>({
       key,
       view: (v) => {
         viewRef = v
@@ -519,15 +540,26 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
         }
       },
       state: {
-        init: (_, state) => buildDecos(state.doc, state.selection.from, state.selection.to),
+        init: (_, state) => ({ decos: buildDecos(state.doc, state.selection.from, state.selection.to, null), sourcePos: null }),
         apply: (tr, old, _oldState, newState) => {
-          if (!tr.docChanged && !tr.selectionSet) return old.map(tr.mapping, tr.doc)
-          return buildDecos(newState.doc, newState.selection.from, newState.selection.to)
+          const meta = tr.getMeta(key) as { sourcePos?: number } | undefined
+          let sourcePos = old.sourcePos
+          if (sourcePos != null && tr.docChanged) sourcePos = tr.mapping.map(sourcePos)
+          if (meta && typeof meta.sourcePos === 'number') sourcePos = meta.sourcePos
+          else if (sourcePos != null && tr.selectionSet) {
+            const node = newState.doc.nodeAt(sourcePos)
+            if (!node || newState.selection.to <= sourcePos || newState.selection.from >= sourcePos + node.nodeSize) sourcePos = null
+          }
+          if (!tr.docChanged && !tr.selectionSet && !meta) return { sourcePos, decos: old.decos.map(tr.mapping, tr.doc) }
+          return {
+            sourcePos,
+            decos: buildDecos(newState.doc, newState.selection.from, newState.selection.to, sourcePos),
+          }
         },
       },
       props: {
         decorations(state) {
-          return key.getState(state) as DecorationSet
+          return key.getState(state)?.decos ?? null
         },
       },
     })

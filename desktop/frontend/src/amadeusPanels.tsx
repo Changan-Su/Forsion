@@ -4,7 +4,7 @@ import { Search } from 'lucide-react'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { amadeus } from '@amadeus/api'
 import type { SearchHit, TagCount } from '@amadeus-shared/ipc'
-import { parseWikiLinks, resolvePageName } from '@amadeus-shared/links'
+import { decodeCharRefs, parseWikiLinks, resolvePageName } from '@amadeus-shared/links'
 import { stripFrontmatter } from '@amadeus-shared/compiler'
 import { resolveFileName } from '@amadeus/lib/vaultFiles'
 import { openNote } from './amadeusNav'
@@ -12,6 +12,7 @@ import { create } from 'zustand'
 import { useAmadeusPrefs } from './amadeusPrefs'
 import { askString } from '@amadeus/components/askString'
 import { registerMessages, useI18n } from './i18n'
+import { graphTopology } from '@amadeus/lib/localGraph'
 
 registerMessages({
   'amxpanel.searchHead': { zh: '全文搜索', en: 'Full-text search' },
@@ -67,7 +68,8 @@ export function AmadeusSearchView() {
     const q = query.trim().toLowerCase()
     void openNote(h.path).then(() => {
       if (!q) return
-      const hit = Object.values(ps().blocks).find((b) => b.content.toLowerCase().includes(q))
+      // 与索引同口径解字符引用:`**注意：**&#x540E;面` 能被「后面」搜到,就也得能滚到。
+      const hit = Object.values(ps().blocks).find((b) => decodeCharRefs(b.content).toLowerCase().includes(q))
       if (!hit) return
       requestAnimationFrame(() => {
         const el = document.querySelector(`[data-block-id="${hit.id}"]`)
@@ -284,6 +286,11 @@ export function AmadeusLocalGraphView() {
   useEffect(() => {
     let live = true
     if (!activePage) { setGraph(null); graphRef.current = null; return }
+    // 换笔记立刻撤掉上一张图;同笔记仅版本变化时保留旧图直到新拓扑核对完,避免空白闪烁。
+    if (graphRef.current?.nodes[0]?.path !== activePage) {
+      graphRef.current = null
+      setGraph(null)
+    }
     void (async () => {
       const incoming = await amadeus.backlinks(activePage).catch(() => [])
       if (!live) return
@@ -293,7 +300,7 @@ export function AmadeusLocalGraphView() {
       // 且与主进程 vaultIndex 算反链用的是同一份文本(同样先剥 frontmatter,免得出链/反链对不上)。
       const raw = await amadeus.readTextFile(activePage).catch(() => null)
       if (!live) return
-      const contents = stripFrontmatter(raw ?? '')
+      const contents = decodeCharRefs(stripFrontmatter(raw ?? '')) // 与 vaultIndex 的反链同口径(它读解码副本)
       // 出链拆两桶:解析到的 → 实体节点;解析不到的 → ghost 节点(黯淡显示,点击询问创建)。
       const outs: string[] = []
       const ghosts: string[] = []
@@ -330,10 +337,25 @@ export function AmadeusLocalGraphView() {
       for (let i = 0; i < ghosts.length; i++) edges.push({ a: 0, b: 1 + others.length + i }) // ghost 恒连中心
       if (!live) return
       const g = { nodes, edges }
+      const previous = graphRef.current
+      // 自动保存 / 云同步会 bump linkGraphVersion。链接拓扑没变时绝不能重新铺圆环并给 alpha=1,
+      // 否则用户每停笔 800ms 关系图就“抽动”一轮。相同拓扑直接沿用当前稳定坐标。
+      if (previous && graphTopology(previous.nodes, previous.edges) === graphTopology(g.nodes, g.edges)) return
+      if (previous?.nodes[0]?.path === activePage) {
+        const old = new Map(previous.nodes.map((n) => [`${n.ghost ? 'g:' : ''}${n.path}`, n]))
+        for (const n of g.nodes) {
+          const same = old.get(`${n.ghost ? 'g:' : ''}${n.path}`)
+          if (!same) continue
+          n.x = same.x
+          n.y = same.y
+          n.vx = same.vx
+          n.vy = same.vy
+        }
+      }
       graphRef.current = g
       setGraph(g)
       setHover(null)
-      simRef.current.alpha = 1 // 从初始圆环动画展开
+      simRef.current.alpha = previous ? 0.38 : 1 // 真拓扑变化轻量重排;首次才从圆环完整展开
       ensureLoop()
     })()
     return () => { live = false }

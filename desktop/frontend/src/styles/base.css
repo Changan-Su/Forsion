@@ -2144,6 +2144,64 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 /* 全屏二级界面浮层(设置/市场)的底。默认实色遮住主窗;从内联样式挪到这里 =
  * 主题够得着(玻璃主题可把它连同 .settings-page 透到窗口做磨砂侧栏,见 genesis-glass)。 */
 .fs-overlay { background: var(--bg); }
+.floating-panel-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: var(--overlay-scrim);
+  -webkit-app-region: no-drag;
+}
+.floating-panel-window {
+  width: min(1040px, calc(100vw - 56px));
+  height: min(720px, calc(100dvh - 56px));
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  box-shadow: var(--card-shadow);
+}
+.floating-panel-window.compact { width: min(720px, calc(100vw - 56px)); }
+.floating-panel-chrome {
+  flex: 0 0 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px 0 42px;
+  border-bottom: var(--border-width) solid var(--border);
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+  -webkit-app-region: no-drag;
+}
+.floating-panel-chrome > span { flex: 1; text-align: center; }
+.floating-panel-content { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
+
+.floating-native-root { width: 100vw; height: 100dvh; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+.floating-native-chrome {
+  flex: 0 0 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: var(--border-width) solid var(--border);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 650;
+  -webkit-app-region: drag;
+}
+.floating-native-content { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
+.floating-native-root .settings-nav-top { padding-top: 14px; }
+.floating-plugin-view { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: auto; }
+.floating-panel-empty { margin: auto; color: var(--text-muted); font-size: 12px; }
+.feedback-panel-surface { width: 100%; height: 100%; min-width: 0; min-height: 0; display: flex; align-items: stretch; justify-content: stretch; overflow: hidden; }
+.feedback-panel-surface > .feedback-modal.modal { width: 100%; max-width: none; height: 100%; max-height: none; border: 0; border-radius: 0; box-shadow: none; }
 .settings-page {
   flex: 1;
   width: 100%;
@@ -4199,6 +4257,8 @@ html.dark .brand-logo--dark { display: inline-block; }
  * 因此全屏浮层必须自己整体 no-drag,才能压住底下 Shell 的 .rb / .t2s-side / tab 栏拖窗区
  * (且浮层必须晚于这些元素出现在 DOM,否则差集会被后来的 drag 并集覆盖回去)。 */
 .settings-page,
+.floating-panel-layer,
+.floating-native-root,
 .ob-hero-wrap,
 .ob-step-wrap,
 .memv-modal,
@@ -4209,6 +4269,12 @@ html.dark .brand-logo--dark { display: inline-block; }
 /* 设置/市场页顶部标题行补回拖窗条(交互子元素抠回,防止重蹈本 bug)。 */
 .settings-main-head { -webkit-app-region: drag; }
 .settings-main-head button, .settings-main-head input { -webkit-app-region: no-drag; }
+
+@media (max-width: 720px) {
+  .floating-panel-layer { padding: 12px; }
+  .floating-panel-window,
+  .floating-panel-window.compact { width: calc(100vw - 24px); height: calc(100dvh - 24px); }
+}
 /* ── 移动端设置:一级分组列表 → 二级详情 ────────────────────────────────
    SettingsModal 同时识别真机 / UI_MODE 手机框 / coarse 窄屏并挂本 class,所以不依赖 viewport。
    有子页面的总项在一级列表原地展开；点具体子项后才进入二级详情。 */
