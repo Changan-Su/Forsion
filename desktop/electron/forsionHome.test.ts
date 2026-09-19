@@ -147,7 +147,7 @@ describe('dev 态目录隔离', () => {
     vi.stubEnv('TANGU_HOME', '')
     setDevMode(true)
     bindDevTanguHome()
-    expect(process.env.TANGU_HOME).toMatch(/\.forsion-dev\/tangu$/)
+    expect(process.env.TANGU_HOME).toMatch(/\.forsion-dev[\\/]tangu$/) // Windows 是反斜杠(windows-2022 runner 实红过)
     expect(join(forsionHomeDir(), 'provider-auth.json')).toBe(providerAuthFile())
   })
 })
