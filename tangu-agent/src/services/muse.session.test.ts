@@ -141,10 +141,11 @@ describe('C1b kickoff 拆分', () => {
 });
 
 describe('D3 后台思考档', () => {
-  it('缺省 low;用户在 muse 的 config.toml 设过就尊重他的', () => {
-    expect(museAgentConfig(SPECIAL_AGENTS_DEFAULTS.muse).thinkingLevel).toBe('low');
+  it('缺省 medium(09-19 全端统一;此前 low);用户在 muse 的 config.toml 设过就尊重他的(含特意调回 low)', () => {
+    expect(museAgentConfig(SPECIAL_AGENTS_DEFAULTS.muse).thinkingLevel).toBe('medium');
     expect(museAgentConfig(SPECIAL_AGENTS_DEFAULTS.muse, 'high').thinkingLevel).toBe('high');
-    expect(museAgentConfig(SPECIAL_AGENTS_DEFAULTS.muse, '').thinkingLevel).toBe('low'); // 空串=没设
+    expect(museAgentConfig(SPECIAL_AGENTS_DEFAULTS.muse, 'low').thinkingLevel).toBe('low');
+    expect(museAgentConfig(SPECIAL_AGENTS_DEFAULTS.muse, '').thinkingLevel).toBe('medium'); // 空串=没设
   });
 });
 

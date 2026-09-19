@@ -433,8 +433,11 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     const forkMode = cfg.mode === 'fork' && !!forkSeed;
     const judgeLog = logDue && !assistMode;
     const judgeMemory = memoryDue && !assistMode;
-    // 自进化自动档(默认关):judge 额外提名工作笔记候选 → 展示身份 slug 的 .harness-raw.md 收件箱。
-    const judgeHarness = due && !assistMode && cfg.harnessCandidates;
+    // 自进化自动档(09-18 起默认开):judge 额外提名工作笔记候选 → 展示身份 slug 的 .harness-raw.md 收件箱。
+    // 辅助模式也提名(09-19 放开):辅助模式让出的是 LOG / 记忆的**写入**(交主 Agent 定夺);提名只进收件箱、不写 HARNESS.md,
+    // 采纳仍要 /refine + 审批,让出写入权的理由套不到它身上。判官这次调用在辅助模式下本来就为标题 / 摘要在跑,多的只是一个字段。
+    // 从前挡在 !assistMode 后面 → 辅助模式用户每个会话只有首轮(恒走独立判断)会提名。
+    const judgeHarness = due && cfg.harnessCandidates;
     log(`第 ${roundN} 轮触发(${assistMode ? '辅助模式,' : forkMode ? '分身判官,' : ''}模型 ${cfg.modelId})`);
 
     const transcriptSnapshot = await recentTranscript(sessionId);

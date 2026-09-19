@@ -127,10 +127,12 @@ export function museAgentConfig(cfg: MuseConfig, agentThinking?: string): Record
     execMode: 'host',
     agentSlug: MUSE_AGENT_SLUG,
     cwd: museLibraryDir(),
-    // D3(09-14):后台周期缺省思考·低 —— 「找 1-3 件值得做的事」是判断题不是推演题,medium 只是多烧推理 token。
+    // 后台周期缺省思考·中(09-19 用户拍板,全端档位缺省统一为中;此前 D3 09-14 定的是低,理由是「找 1-3 件值得做的事是判断题,
+    // medium 只是多烧推理 token」)。代价要知道:周期受 maxTokensPerWindow 的 5 小时预算约束,推理 token 计入其中 → 同样预算下
+    // 能起的周期变少;想省就在 Muse 的详情页把思考档调回低。
     // ⚠️ agentActivation 只在 agentConfig **没有**该字段时才用 def 的值,所以这里必须自己先合一次,
-    // 否则硬写 'low' = 静默压过用户在 config.toml 里的 model_reasoning_effort。
-    thinkingLevel: agentThinking || 'low',
+    // 否则硬写缺省值 = 静默压过用户在 config.toml 里的 model_reasoning_effort。
+    thinkingLevel: agentThinking || 'medium',
     maxIterations: cfg.maxIterationsPerCycle,
     maxIterationsSource: 'muse', // 收尾提示 / context_info 点名来源:Muse 每周期轮数,不是会话 /loop
     automationOrigin: MUSE_AGENT_SLUG, // 活动行 o=muse:自己写的 agent.edit 不唤醒盯自己的规则

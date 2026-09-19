@@ -255,6 +255,32 @@ describe('自进化自动档(harness_candidates,P3)', () => {
     expect(act.length).toBe(1);
   });
 
+  it('辅助模式(assist)的到点轮也提名:提名只进收件箱、不是写入,让出写入权的理由套不到它(09-19 前辅助模式只有首轮提名)', async () => {
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      specialAgents: { historian: { enabled: true, modelId: 'm1', everyRounds: 3, firstRoundTrigger: true, mode: 'assist', harnessCandidates: true } },
+    }), 'utf8');
+    const { saveAgent } = await import('../src/agents/agentRegistry.js');
+    await saveAgent({ slug: 'mybot', name: 'MyBot', systemPrompt: 'x' });
+    await seedSession();
+    // 首轮恒走独立判断;补到第 3 轮(everyRounds=3 的下一个到点轮)才是辅助模式。
+    for (const n of [2, 3]) {
+      await createRun({ id: `R9-${n}`, sessionId: 'S2', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: `A9-${n}`, input: { message: 'x', userMessageId: `U9-${n}`, attachments: [], agentConfig: {} } });
+      await updateRunStatus(`R9-${n}`, 'done');
+    }
+    llmScript = [JSON.stringify({ title: '标题', log: '不该被写', memory_candidates: ['不该被采'], harness_candidates: ['Quote the source line before concluding'] })];
+    await onUserRunDone('S2', USER);
+
+    const prompt = String(llmPayloads[0].messages.at(-1).content);
+    expect(prompt).toContain('harness_candidates');     // 辅助模式的判官提示词现在带提名字段
+    // 记忆 / LOG 仍然让给主 Agent(辅助模式的本意没动):判官不被要求产出记忆候选字段。
+    // (提名字段的说明里会提到 memory_candidates 这个词 ——「关于用户的事实归那边」—— 所以按字段规格的开头判,不按词判。)
+    expect(prompt).not.toContain('"memory_candidates": an array of NEW');
+    expect(readFileSync(join(agentsDir(), 'mybot', '.harness-raw.md'), 'utf8')).toContain('Quote the source line before concluding');
+    expect(existsSync(rawFile())).toBe(false);           // 半服从模型硬给的记忆候选不落盘
+    const act = await query<any[]>(`SELECT action FROM special_agent_log WHERE action = 'harness_candidates'`);
+    expect(act.length).toBe(1);
+  });
+
   // 09-18 起自动档默认开,「关」必须显式写出来 —— 这条钉的是「关着 → 零行为」,不是「默认值是关」。
   it('关档:judge 提示词无该字段;半服从模型硬给 harness_candidates 也被忽略', async () => {
     enableHarnessTier(false);

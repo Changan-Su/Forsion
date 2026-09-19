@@ -13,6 +13,7 @@
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
  *   TANGU_LIVE_MODEL=codex/gpt-5.6-sol npm run live:harness  # 换模型
  *   npm run live:harness -- --only historian,dream,muse --muse-mode auto   # Muse 三档:ask(缺省)|agent|auto
+ *   npm run live:harness -- --only refine --historian-mode assist          # 自进化闭环走辅助模式(提名在辅助模式轮里出)
  *   npm run live:harness -- --only chat,tool --exec-mode sandbox           # 负对照:sandbox 模式下工具走云工作区,未登录应报错而非假空目录
  *   npm run live:harness -- --only conflict                  # 改 skills/amadeus-note-format(同步冲突副本合并)后跑:技能装载 + 双向并集 + 画布对不动
  *   npm run live:harness -- --only autocompact --window 32000  # 自动压缩持久化(09-15):把该模型窗口钉到 32k 灌满 → run 内自动压缩落检查点 → 下个 run 从摘要接着答;改 compaction / hydrate 后跑
@@ -211,6 +212,9 @@ const TIMEOUT_MS = Number(opt('timeout', process.env.TANGU_LIVE_TIMEOUT_MS || 15
 const SANDBOX = opt('sandbox', process.env.TANGU_LIVE_SANDBOX || 'auto');
 const MUSE_MODE = opt('muse-mode', process.env.TANGU_LIVE_MUSE_MODE || 'ask'); // ask | agent | auto(三档权限阶梯,见 museAgentConfig)
 const EXEC_MODE = opt('exec-mode', process.env.TANGU_LIVE_EXEC_MODE || 'host'); // sandbox = 复现「未登录 + 云工作区工具」那条路(负对照用)
+// refine 场景的 Historian 模式:assist = 用户正式配置那一档。辅助模式到第 2 轮才生效,场景会先垫一轮(见下)。
+const HIST_MODE = opt('historian-mode', 'independent');
+if (!['independent', 'assist'].includes(HIST_MODE)) { console.error(`--historian-mode 只认 independent|assist,收到 ${HIST_MODE}`); process.exit(2); }
 if (!['ask', 'agent', 'auto'].includes(MUSE_MODE)) { console.error(`--muse-mode 只认 ask|agent|auto,收到 ${MUSE_MODE}`); process.exit(2); }
 if (!['host', 'sandbox'].includes(EXEC_MODE)) { console.error(`--exec-mode 只认 host|sandbox,收到 ${EXEC_MODE}`); process.exit(2); }
 if (!existsSync(AUTH)) { console.error(`凭证不存在:${AUTH}\n先在 Forsion Desktop(dev)登录 Codex 订阅,或 --auth 指向 provider-auth.json`); process.exit(2); }
@@ -789,11 +793,19 @@ try {
   await scenario('refine', 'refine 自进化闭环(自动档提名 → /refine 采纳 → 新会话带上)', async () => {
     const slug = 'live-refiner';
     await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name: 'Refiner', systemPrompt: "You are Refiner, a careful assistant. Reply in the user's language." }) });
-    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'independent', harnessCandidates: true } }) });
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: HIST_MODE, harnessCandidates: true } }) });
     const cfg = { ...AGENT_CONFIG, agentSlug: slug };
     const sess = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'Refine loop', model_id: MODEL, agent_config: cfg }) })).session.id;
     const inbox = join(home, 'agents', slug, '.harness-raw.md');
     const harnessMd = join(home, 'agents', slug, 'HARNESS.md');
+    // --historian-mode assist:首轮恒走独立判断,辅助模式从第 2 轮起才生效 —— 先垫一轮无关对话,并等它的判官收场
+    // (同会话上一轮维护还在飞,下一轮会被整轮跳过,那样红的是「撞车」不是「不提名」)。
+    if (HIST_MODE === 'assist') {
+      const warm = await run(sess, '先打个招呼:用两三句话介绍一下你能帮我做什么。', 120_000, cfg);
+      if (warm.error) return { ok: false, detail: `垫场轮 ${warm.error}`, output: warm.content };
+      await until(async () => ((await api('/agent/special/historian/activity?limit=50')).activity || []).some((r) => r.session_ref === sess) || null, 90_000, 2000);
+      await sleep(3000);
+    }
     const ev1 = await run(sess, `请读 ${markerFile} 并告诉我 code 是什么。另外立一条长期规矩:以后凡是我让你读文件回答,你必须先原样引用文件里对应的那一行,再给结论——上次你没引用就直接下结论,我核对起来很费劲。`, 240_000, cfg);
     if (ev1.error) return { ok: false, detail: `run① ${ev1.error}`, output: ev1.content, toolCalls: ev1.toolCalls };
     const rows = () => api('/agent/special/historian/activity?limit=50').then((a) => (a.activity || []).filter((r) => r.session_ref === sess));
@@ -812,8 +824,11 @@ try {
     const sess3 = entries.length ? (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'Refine recall', model_id: MODEL, agent_config: cfg }) })).session.id : null;
     const ev3 = sess3 ? await run(sess3, '不要调用任何工具。你的「My Working Notes」里现在有哪些条目?逐条原样列出标题,不要解释。', 120_000, cfg) : null;
     const recalled = !!ev3 && !ev3.error && entries.some((e) => ev3.content.includes(e.title));
-    const ok = !!act && nominated > 0 && !ev2.error && wrote && entries.length > 0 && (after.candidates || []).length === 0 && (before.candidates || []).length === nominated && recalled;
+    // 辅助模式那一档还要证「这一轮真的是辅助模式」:同会话出现 assist_discussion(与主 Agent 商议)活动。没有它,提名可能来自独立判断,绿得没意义。
+    const assistSeen = HIST_MODE !== 'assist' || (await rows()).some((x) => x.action === 'assist_discussion');
+    const ok = !!act && nominated > 0 && assistSeen && !ev2.error && wrote && entries.length > 0 && (after.candidates || []).length === 0 && (before.candidates || []).length === nominated && recalled;
     return { ok, detail: [
+      `模式 ${HIST_MODE}${HIST_MODE === 'assist' ? (assistSeen ? '(本轮确为辅助模式:有 assist_discussion)' : '(⚠ 没看到 assist_discussion,本轮未必是辅助模式)') : ''}`,
       `① 提名 ${act ? `${nominated} 条进收件箱(GET candidates ${before.candidates?.length ?? '?'})` : seenActions.length ? `判官跑了(活动 ${seenActions.join('/')})但 180s 内没有 harness_candidates —— 模型没提名,不是引擎没跑` : '180s 无任何 Historian 活动 —— 判官没跑'}`,
       `② refine ${ev2.error || `工具 ${ev2.toolCalls.join(',') || '无'}`}${ev2.approvals ? `;代批 ${ev2.approvals}` : ''};HARNESS ${entries.length} 条(之前 ${before.entries?.length ?? 0});收件箱剩 ${after.candidates?.length ?? '?'}`,
       `③ 新会话复述标题 ${ev3 ? (recalled ? '命中' : `未命中:${ev3.error || ev3.content.slice(0, 80)}`) : '未跑(② 没写出条目)'}`,
