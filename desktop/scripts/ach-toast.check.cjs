@@ -53,10 +53,19 @@ const atCenter = (win) => win.evaluate(() => {
   const paused = await win.evaluate(() => getComputedStyle(document.querySelector('.ach-toast')).animationPlayState)
   say('悬停时根动画 paused', paused === 'paused', paused)
 
+  // 成就面板是独立浮窗(Floating Panel 化 2026-09-20):点 toast 之前先 arm window 事件,面板断言打在浮窗上。
+  const achOpened = app.waitForEvent('window', { timeout: 20000 }).catch(() => null)
   await win.click('.ach-toast .ach-toast-hit'); await win.waitForTimeout(800)
-  say('点击 → 成就面板打开', await win.evaluate(() => !!document.querySelector('.fs-overlay, .settings-page')))
+  const ach = await achOpened
+  if (ach) await ach.waitForLoadState('domcontentloaded').catch(() => {})
+  say('点击 → 成就面板开在独立浮窗里', !!ach && await ach.evaluate(() => !!document.querySelector('.fs-overlay, .settings-page')).catch(() => false))
   say('点击 → toast 收掉', !(await win.$('.ach-toast')))
-  await win.click('.settings-back'); await win.waitForTimeout(700)
+  if (ach) {
+    const achClosed = ach.waitForEvent('close').catch(() => {})
+    await ach.click('.settings-back').catch(() => {})
+    await achClosed
+  }
+  await win.waitForTimeout(700)
 
   // 不悬停时照旧自行消失。theme.change 那条已被上面消耗(goal=1 只跨线一次),换 chat.send 触发另一条。
   await win.click('.hp-composer textarea')

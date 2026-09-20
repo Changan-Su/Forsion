@@ -94,15 +94,22 @@ function writeProbe(pluginsDir) {
   }, null, 2))
 }
 
-/** 进设置 → 插件栏。store 没挂 window,只能走真 UI。 */
-async function openPluginsTab(win) {
+/** 进设置 → 插件栏。store 没挂 window,只能走真 UI。
+ *  ⚠️ 设置画在独立浮窗里(Floating Panel 化 2026-09-20):**插件管理与插件自绘面板都住在那个窗口**,
+ *  开窗前要先 arm window 事件,后面所有插件 locator / `window.__seamprobe` 都得打在返回的这个 page 上。 */
+async function openPluginsTab(app, win) {
+  const opened = app.waitForEvent('window', { timeout: 20000 }).catch(() => null)
   await win.keyboard.press('Meta+Comma')          // addCommand('open-settings', hotkey mod+,)
-  await win.waitForTimeout(900)
-  if (!(await win.locator('.settings-main').first().count().catch(() => 0))) {
+  let sp = await opened
+  if (!sp) {                                      // 热键没命中就点 ribbon 的设置按钮再试一次
+    const retry = app.waitForEvent('window', { timeout: 20000 }).catch(() => null)
     await win.locator('#rb-settings, [data-ribbon-id="rb-settings"]').first().click({ timeout: 4000 }).catch(() => {})
-    await win.waitForTimeout(900)
+    sp = await retry
   }
-  const nav = win.locator('.settings-nav')
+  if (!sp) throw new Error('设置浮窗没开出来')
+  await sp.waitForLoadState('domcontentloaded').catch(() => {})
+  await sp.waitForSelector('.settings-main', { timeout: 20000 }).catch(() => {})
+  const nav = sp.locator('.settings-nav')
   for (const label of ['插件', 'Plugins']) {
     const b = nav.getByRole('button', { name: label, exact: true }).first()
     if (await b.count().catch(() => 0)) {
@@ -111,8 +118,9 @@ async function openPluginsTab(win) {
       break
     }
   }
-  await win.locator('.settings-sub--amadeus-plugins').first().waitFor({ timeout: 5000 }).catch(() => {})
-  await win.waitForTimeout(900)
+  await sp.locator('.settings-sub--amadeus-plugins').first().waitFor({ timeout: 5000 }).catch(() => {})
+  await sp.waitForTimeout(900)
+  return sp
 }
 
 /** 点开某张插件卡的详情页。 */
@@ -186,42 +194,42 @@ async function main() {
     else if (f !== 'CHANGELOG.md') haveLatex = false
   }
 
-  let app, win
+  let app, win, sp
   try {
     ;({ app, win } = await launch(home, stub.url))
-    await openPluginsTab(win)
+    sp = await openPluginsTab(app, win)
 
     // ── T1 从磁盘发现插件(harness 是直接喂代码,这条它测不到)
-    const probeCard = await win.locator('.plugin-card--link', { hasText: 'Seam Probe' }).first().count().catch(() => 0)
+    const probeCard = await sp.locator('.plugin-card--link', { hasText: 'Seam Probe' }).first().count().catch(() => 0)
     check('T1a 探针插件被磁盘发现', !!probeCard)
     if (haveLatex) {
-      const latexCard = win.locator('.plugin-card--link', { hasText: 'LaTeX' }).first()
+      const latexCard = sp.locator('.plugin-card--link', { hasText: 'LaTeX' }).first()
       const lx = await latexCard.count().catch(() => 0)
       check('T1b latex-suite 被磁盘发现且未标「版本过低」', !!lx)
       const iconReady = await latexCard.locator('.plugin-logo__img').evaluate((img) => (
         img instanceof HTMLImageElement && img.complete && img.naturalWidth > 0
       )).catch(() => false)
       check('T1c 插件卡读取包根 icon.png 并显示', iconReady)
-      await win.screenshot({ path: path.join(SHOT_DIR, 'seams-plugin-icons.png') }).catch(() => {})
+      await sp.screenshot({ path: path.join(SHOT_DIR, 'seams-plugin-icons.png') }).catch(() => {})
     } else {
       skip('T1b latex-suite 被磁盘发现', '插件源目录缺 main.js/manifest.json/icon.png')
       skip('T1c 插件卡显示 icon.png', '插件源目录不全')
     }
 
     // ── T2/T3 探针:settingsView 挂载 + loadData 首次为空 + saveData 落盘
-    if (!(await openDetail(win, 'Seam Probe'))) throw new Error('打不开探针详情页')
-    await setEnabled(win, true)
-    let st = await probeState(win)
+    if (!(await openDetail(sp, 'Seam Probe'))) throw new Error('打不开探针详情页')
+    await setEnabled(sp, true)
+    let st = await probeState(sp)
     check('T2 registerSettingsView 在真插件管理器里挂载', !!st && st.mounts >= 1,
       st ? `mounts=${st.mounts}` : 'window.__seamprobe 不存在')
     check('T2b 面板 DOM 真的进了详情页',
-      !!(await win.locator('.seamprobe-view').first().count().catch(() => 0)))
+      !!(await sp.locator('.seamprobe-view').first().count().catch(() => 0)))
     check('T3a loadData 走真 IPC 返回(首次应为空)', !!st && st.loaded === true && (st.data === null || st.data === undefined),
       st ? `loaded=${st.loaded} data=${JSON.stringify(st.data)}` : '-')
 
     const dataFile = path.join(home, 'plugins-data', 'seamprobe.json')
-    await win.evaluate(() => window.__seamprobeSave('hello-seam'))
-    await win.waitForTimeout(1200)
+    await sp.evaluate(() => window.__seamprobeSave('hello-seam'))
+    await sp.waitForTimeout(1200)
     const onDisk = fs.existsSync(dataFile) ? fs.readFileSync(dataFile, 'utf8') : ''
     check('T3b saveData 落到 <home>/plugins-data/<id>.json', onDisk.includes('hello-seam'),
       onDisk ? onDisk.replace(/\s+/g, ' ').slice(0, 80) : '文件不存在')
@@ -242,26 +250,26 @@ async function main() {
       fs.writeFileSync(target, 'one\n')
       await win.waitForTimeout(1500)
       fs.appendFileSync(target, 'two\n')
-      await win.waitForTimeout(2500)
-      st = await probeState(win)
+      await sp.waitForTimeout(2500)
+      st = await probeState(sp)
       check('T4 watchFile 收到外部改动', !!st && st.watch >= 1, st ? `watch=${st.watch}` : '-')
     }
 
     // ── T5 禁用要 dispose、重新启用要再挂载(且不重启应用)
-    const before = await probeState(win)
-    const viewsBefore = await win.locator('.seamprobe-view').count().catch(() => 0)
-    await setEnabled(win, false)
-    let after = await probeState(win)
+    const before = await probeState(sp)
+    const viewsBefore = await sp.locator('.seamprobe-view').count().catch(() => 0)
+    await setEnabled(sp, false)
+    let after = await probeState(sp)
     check('T5a 禁用后 settingsView 被 dispose',
       !!after && !!before && after.disposes > before.disposes,
       after ? `disposes=${before ? before.disposes : '?'}→${after.disposes}` : '-')
     // ⚠️ 必须带上「之前确实有」这一半 —— 只断言「现在没有」的话,面板从没挂上过也照样绿
     //    (--nc=noview 负对照就是这么放过去的,是负对照抓出来的同义反复)。
-    const viewsAfter = await win.locator('.seamprobe-view').count().catch(() => 1)
+    const viewsAfter = await sp.locator('.seamprobe-view').count().catch(() => 1)
     check('T5b 面板 DOM 先有后无', viewsBefore >= 1 && viewsAfter === 0,
       `禁用前=${viewsBefore} 禁用后=${viewsAfter}`)
-    await setEnabled(win, true)
-    after = await probeState(win)
+    await setEnabled(sp, true)
+    after = await probeState(sp)
     check('T5c 重新启用后重新挂载(未重启应用)',
       !!after && after.setups >= 2 && after.mounts >= 2, after ? `setups=${after.setups} mounts=${after.mounts}` : '-')
 
@@ -271,38 +279,40 @@ async function main() {
       //    「返回应用」(那是关掉设置),`.first()` 按 DOM 序恰好取到它 —— 于是设置被关掉、
       //    插件页的 detail 状态还留在上一个插件上,后面找卡片必然找不到。截图才看出来的。
       for (const label of ['返回列表', 'Back to list']) {
-        const b = win.locator(`button:text-is("${label}")`).first()
+        const b = sp.locator(`button:text-is("${label}")`).first()
         if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break }
       }
-      await win.waitForTimeout(900)
-      const gotLatex = await openDetail(win, 'LaTeX')
-      if (!gotLatex) await win.screenshot({ path: path.join(SHOT_DIR, 'seams-nolatex.png') }).catch(() => {})
+      await sp.waitForTimeout(900)
+      const gotLatex = await openDetail(sp, 'LaTeX')
+      if (!gotLatex) await sp.screenshot({ path: path.join(SHOT_DIR, 'seams-nolatex.png') }).catch(() => {})
       if (gotLatex) {
-        await setEnabled(win, true)
-        await win.waitForTimeout(1800)
-        const mdNodes = await win.locator('.md-body h1, .md-body h2, .md-body code, .md-body li').count().catch(() => 0)
+        await setEnabled(sp, true)
+        await sp.waitForTimeout(1800)
+        const mdNodes = await sp.locator('.md-body h1, .md-body h2, .md-body code, .md-body li').count().catch(() => 0)
         check('T6a README 渲染成 DOM(不是裸文本)', mdNodes > 0, `节点数=${mdNodes}`)
-        const cm = await win.locator('.cm-editor').count().catch(() => 0)
+        const cm = await sp.locator('.cm-editor').count().catch(() => 0)
         check('T6b 自绘面板里是真代码编辑器(CodeMirror)', cm > 0, `.cm-editor=${cm}`)
       } else skip('T6 latex-suite 自绘面板', '详情页打不开')
     } else skip('T6 latex-suite 自绘面板', '插件源目录不全')
 
     // ── T7 重启应用后 loadData 读回刚存的值(真 IPC 完整往返)
     await app.close().catch(() => {})
+    sp = null                                      // 老浮窗随应用一起关了
     ;({ app, win } = await launch(home, stub.url))
     await win.waitForTimeout(1500)
-    const st2 = await probeState(win)
+    const st2 = await probeState(win)              // 重启后主窗自己也会装载插件,不必再开设置
     check('T7 重启后 loadData 读回上次 saveData 的值',
       !!st2 && st2.loaded === true && st2.data && st2.data.v === 'hello-seam',
       st2 ? JSON.stringify(st2.data) : 'window.__seamprobe 不存在')
   } catch (e) {
     console.error('\n跑挂了:', e && e.message ? e.message : e)
-    if (win) await win.screenshot({ path: path.join(SHOT_DIR, 'seams-crash.png') }).catch(() => {})
+    if (sp && !sp.isClosed()) await sp.screenshot({ path: path.join(SHOT_DIR, 'seams-crash.png') }).catch(() => {})
+    else if (win) await win.screenshot({ path: path.join(SHOT_DIR, 'seams-crash.png') }).catch(() => {})
     check('脚本跑完', false, String(e && e.message ? e.message : e))
   } finally {
     if (win) {
       const bad = results.some((r) => r.ok === false)
-      if (bad) await win.screenshot({ path: path.join(SHOT_DIR, 'seams-fail.png') }).catch(() => {})
+      if (bad) await (sp && !sp.isClosed() ? sp : win).screenshot({ path: path.join(SHOT_DIR, 'seams-fail.png') }).catch(() => {})
       const errs = await win.evaluate(() => (window.__e2eConsoleErrors || []).slice(0, 5)).catch(() => [])
       if (errs.length) console.log('\n控制台错误:', JSON.stringify(errs))
     }

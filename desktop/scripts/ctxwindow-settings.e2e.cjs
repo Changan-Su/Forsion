@@ -45,14 +45,18 @@ async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-ctxwin-'))
   const app = await electron.launch({ args: ['--user-data-dir=' + path.join(home, 'userdata'), '--lang=zh-CN', ROOT], cwd: ROOT, env: Object.assign({}, process.env, { TANGU_HOME: home, TANGU_BACKEND_URL: stub.url }) })
   try {
-    const win = await app.firstWindow()
+    let win = await app.firstWindow()
     await win.waitForSelector('#root', { timeout: 40000 })
     await win.waitForTimeout(2500)
     for (const label of ['跳过引导', 'Skip']) { const b = win.locator('text=' + label).first(); if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break } }
     await win.waitForSelector('.dv-groupview', { timeout: 40000 })
     await win.waitForTimeout(1000)
+    // 设置开在独立浮窗里(Floating Panel 化 09-20):开窗前先 arm window 事件,面板 locator 一律走浮窗 page。
+    const settingsOpened = app.waitForEvent('window', { timeout: 20000 }).catch(() => null)
     await win.keyboard.press('Meta+Comma')
-    await win.waitForSelector('.settings-nav', { timeout: 10000 })
+    win = (await settingsOpened) || app.windows().at(-1) // 拿不到事件(单窗口构建)就退回主窗
+    await win.waitForLoadState('domcontentloaded').catch(() => {})
+    await win.waitForSelector('.settings-nav', { timeout: 30000 })
     const navText = await win.locator('.settings-nav-list').innerText().catch(() => '')
     const parent = win.locator('.settings-nav-parent > button', { hasText: /^\s*模型/ }).first()
     if (!(await parent.count())) throw new Error('nav has no 模型 parent; nav text=\n' + navText)
