@@ -12,6 +12,7 @@ import { ensureAmadeusReady } from './amadeusPlugins'
 import { installFileDropGuard } from './fileDropGuard'
 import { floatingId } from './windowKind'
 import type { FloatingPanelOpenOptions } from '../../shared/floatingPanel'
+import type { SessionRecord } from './types'
 import { FloatingViewSurface } from './components/FloatingViewSurface'
 
 export function FloatingRoot() {
@@ -19,13 +20,13 @@ export function FloatingRoot() {
   const theme = useTheme()
   const [target, setTarget] = useState<FloatingPanelOpenOptions | null>(null)
   const app = useApp(useShallow((s) => ({
-    sessions: s.sessions, archivedSessions: s.archivedSessions, activeId: s.activeId,
-    cfg: s.cfg, closeSettings: s.closeSettings, closeMarket: s.closeMarket,
+    cfg: s.cfg, cfgLoaded: s.cfgLoaded, closeSettings: s.closeSettings, closeMarket: s.closeMarket,
     closeAchievements: s.closeAchievements, closeFeedback: s.closeFeedback,
     patchConfig: s.patchConfig, connect: s.connect,
   })))
-  const activeSession = app.sessions.find((s) => s.id === app.activeId)
-    || app.archivedSessions.find((s) => s.id === app.activeId) || null
+  // 面板一律只认开窗方递来的那条会话:本窗口的 activeId 兜底是列表第一条,拿它当「当前会话」会挂错人
+  // (反馈会挂错会话、设置的「导出日志」会导错会话)。递不到就老实显示「未关联会话」/ 禁用导出。
+  const panelSession = (target?.params?.session as SessionRecord | undefined)?.id ? target!.params!.session as SessionRecord : null
   const close = (): void => window.tangu?.closeSelf?.()
 
   useEffect(() => { useApp.getState().setTr((k, vars) => t(k, vars as Record<string, string | number> | undefined)) }, [t])
@@ -56,7 +57,7 @@ export function FloatingRoot() {
     <main className="floating-native-content">
       {target.builtin === 'settings' && <SettingsModal key={JSON.stringify(target.params ?? {})}
         open initialTab={typeof target.params?.tab === 'string' ? target.params.tab as never : undefined}
-        cfg={app.cfg} activeSession={activeSession}
+        cfg={app.cfg} activeSession={panelSession}
         themeLang={theme.lang} themeSkin={theme.skin} themeMode={theme.mode} themeModePref={theme.modePref}
         glassOn={theme.glass} flatOn={theme.flat} themeSeed={theme.seed}
         onClose={onSettingsClose} onConfigChange={app.patchConfig}
@@ -71,7 +72,7 @@ export function FloatingRoot() {
       />}
       {target.builtin === 'market' && <MarketModal onClose={onMarketClose} />}
       {target.builtin === 'achievements' && <AchievementsModal onClose={onAchievementsClose} />}
-      {target.builtin === 'feedback' && <FeedbackModal surface="panel" cfg={app.cfg} activeSession={activeSession} onClose={onFeedbackClose} />}
+      {target.builtin === 'feedback' && app.cfgLoaded && <FeedbackModal key={panelSession?.id || ''} surface="panel" cfg={app.cfg} activeSession={panelSession} onClose={onFeedbackClose} />}
       {target.view && <FloatingViewSurface target={target.view} onUnavailable={close} />}
     </main>
   </div>

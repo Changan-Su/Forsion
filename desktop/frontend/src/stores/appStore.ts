@@ -19,6 +19,7 @@ import { effectiveSessionMode, type SessionMode } from '../views/sessionMode'
 import { abortRunAndWait, cancelSteer, currentPlatform, expediteSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
 import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
 import { recordUiAction } from '../diag'
+import { windowKind } from '../windowKind'
 import { splitSuggestions } from '../views/chat2/suggest'
 import type { ChatRef } from '../views/chat2/chatDragRef'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
@@ -811,6 +812,15 @@ async function rotateSoloImpl(get: () => AppState, set: (fn: (st: AppState) => P
       get().toast(busy ? t('solo.rotateBusy') : (e?.message || t('app.cannotCreateSession')), true)
       return null
     }
+}
+
+/** 开浮窗时随 params 递「用户正在看的那条会话」—— 浮窗自带一套 store,它首次 connect 的兜底是**列表第一条**,
+ *  让它自己猜要么「未关联会话」、要么挂错会话(比挂空更糟)。卫星窗(floating/mini/detached)的 activeId 同样不可信,
+ *  所以只有主窗才递;从浮窗里再开浮窗(如登录失效跳设置)就老实不带会话。 */
+function openerSession(s: Pick<AppState, 'sessions' | 'archivedSessions' | 'activeId'>): { session?: SessionRecord } {
+  if (typeof window === 'undefined' || windowKind() !== 'main') return {}
+  const found = s.sessions.find((x) => x.id === s.activeId) || s.archivedSessions.find((x) => x.id === s.activeId) || null
+  return found ? { session: found } : {}
 }
 
 export const useApp = create<AppState>((set, get) => ({
@@ -2962,7 +2972,7 @@ export const useApp = create<AppState>((set, get) => ({
 
   openSettings: (tab) => {
     if (window.tangu?.openFloatingPanel) {
-      void window.tangu.openFloatingPanel({ id: 'settings', title: get().tr('settings.title'), builtin: 'settings', params: { tab: tab ?? null } })
+      void window.tangu.openFloatingPanel({ id: 'settings', title: get().tr('settings.title'), builtin: 'settings', params: { tab: tab ?? null, ...openerSession(get()) } })
       return
     }
     set({ settingsTab: tab ?? null, settingsOpen: true })
@@ -3052,7 +3062,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (description) set({ feedbackDraft: description })
     if (get().authInfo?.loggedIn) {
       if (window.tangu?.openFloatingPanel) {
-        void window.tangu.openFloatingPanel({ id: 'feedback', title: get().tr('feedback.title'), builtin: 'feedback', params: { description: description ?? get().feedbackDraft } })
+        void window.tangu.openFloatingPanel({ id: 'feedback', title: get().tr('feedback.title'), builtin: 'feedback', params: { description: description ?? get().feedbackDraft, ...openerSession(get()) } })
       } else set({ feedbackOpen: true })
       return true
     }
