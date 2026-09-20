@@ -40,6 +40,7 @@ registerMessages({
   'solo.engineTooOld': { zh: '当前引擎版本不支持私聊/团队会话,请升级引擎', en: 'This engine version does not support direct or team sessions; please update the engine' },
   'solo.rotateBusy': { zh: '这条私聊还在运行中,等它结束再开新会话', en: 'This direct chat is still running; wait for it to finish before starting a new session' },
   'group.ended.done': { zh: '全员表示已完成', en: 'All members are done' },
+  'group.ended.settled': { zh: '没有新的发言了,讨论结束', en: 'No new remarks; the discussion ended' },
   'appstore.contentTruncated': { zh: '[输出过长,界面已截断显示]', en: '[Output too long, truncated for display]' },
   'appstore.stopping': { zh: '正在停止，等待任务退出…', en: 'Stopping; waiting for the run to exit…' },
   'appstore.stopFailed': { zh: '停止尚未确认：{e}', en: 'Stop not confirmed: {e}' },
@@ -1285,7 +1286,7 @@ export const useApp = create<AppState>((set, get) => ({
           return { teamWorkBySession: { ...s.teamWorkBySession, [sessionId]: next } }
         })
         const reasonMap: Record<string, string> = {
-          done: t('group.ended.done'), vote: t('group.ended.vote'), max_rounds: t('group.ended.maxRounds'), cost_limit: t('group.ended.costLimit'), quota: t('group.ended.quota'),
+          done: t('group.ended.done'), settled: t('group.ended.settled'), vote: t('group.ended.vote'), max_rounds: t('group.ended.maxRounds'), cost_limit: t('group.ended.costLimit'), quota: t('group.ended.quota'),
         }
         const reason = reasonMap[String(pl.reason)] || t('group.ended.default')
         set((s) => ({

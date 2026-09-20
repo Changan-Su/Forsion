@@ -182,9 +182,11 @@ describe('routes /agent/teams', () => {
     // 成员的工作会话:一人一条,隐藏(kind=teamwork),父链接 = 团队会话
     const work = await query<any[]>(`SELECT kind, agent_config FROM chat_sessions WHERE parent_session_id = ? ORDER BY created_at`, [s.id]);
     expect(work.map((w) => [w.kind, JSON.parse(w.agent_config).agentSlug])).toEqual([['teamwork', 'ario'], ['teamwork', 'bo']]);
-    // 会话里的发言归属:agent_slug 落列
+    // 会话里的发言归属:agent_slug 落列。**顺序不能钉**:两位成员并行跑,谁先落库是微秒级竞速的结果
+    // (与上面 speakers 同因)。09-20 A/B 实证:团队段提示词长度变一下、或 settle 里多一次 await,
+    // 稳定的 ario→bo 就翻成 bo→ario;改回任一处又翻回来 —— 钉顺序等于钉硬币。
     const msgs = await query<any[]>(`SELECT agent_slug FROM chat_messages WHERE session_id = ? AND role = 'model' ORDER BY timestamp`, [s.id]);
-    expect(msgs.map((m) => m.agent_slug)).toEqual(['ario', 'bo']);
+    expect([...msgs.map((m) => m.agent_slug)].sort()).toEqual(['ario', 'bo']);
   });
 
   it('DELETE:有活动 run → 409 不删;无活动 run → 删定义并归档该团队的历史会话', async () => {

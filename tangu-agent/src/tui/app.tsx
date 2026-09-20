@@ -43,7 +43,7 @@ const RUN_AFFECTING = new Set(['/new', '/resume', '/retry', '/compact', '/branch
 /** 群聊结束原因 → 中文。 */
 function groupReason(r: string): string {
   // 'vote' 只剩历史事件回放会遇到(09-16 起没有投票)。
-  return r === 'done' ? '全员表示已完成' : r === 'vote' ? '投票通过' : r === 'cost_limit' ? '达到花费上限' : r === 'quota' ? '额度不足' : '达到轮数上限';
+  return r === 'done' ? '全员表示已完成' : r === 'settled' ? '没有新的发言了' : r === 'vote' ? '投票通过' : r === 'cost_limit' ? '达到花费上限' : r === 'quota' ? '额度不足' : '达到轮数上限';
 }
 
 interface MutableConfig {
