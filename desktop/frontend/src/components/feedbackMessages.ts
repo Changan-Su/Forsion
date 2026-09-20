@@ -21,6 +21,7 @@ registerMessages({
   'feedback.withoutSession': { zh: '未关联会话，仍可提交应用问题。', en: 'No linked conversation. You can still report an app issue.' },
   'feedback.privacy': { zh: '已过滤常见凭据字段。日志仍可能包含路径或内容片段，请按需选择并预览。', en: 'Common credential fields are filtered. Logs may still contain paths or content excerpts; choose what to include and review the preview.' },
   'feedback.preview': { zh: '预览附件', en: 'Preview attachment' },
+  'feedback.export': { zh: '导出日志文件', en: 'Export log file' },
   'feedback.backToForm': { zh: '返回反馈', en: 'Back to feedback' },
   'feedback.preparing': { zh: '正在准备诊断信息…', en: 'Preparing diagnostics…' },
   'feedback.sending': { zh: '正在提交…', en: 'Sending…' },
