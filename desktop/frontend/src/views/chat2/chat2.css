@@ -889,3 +889,33 @@
   font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1.5;
   white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow-y: auto;
 }
+/* ====== 生图运行态：GPT 风格点阵波 + 点击后贪吃蛇彩蛋 =========================
+ * 画布自己消费三轴主题 token，不画第二张实底卡；它属于消息纸面上的过程反馈。
+ * 高度跟最终图片缩略图同档，结果回来时替换不会让对话列横向跳动。 */
+.image-generation-jobs {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start;
+  width: 100%; margin-top: 4px;
+}
+.image-generation-loader {
+  width: min(280px, 100%); min-width: 0;
+  display: flex; flex-direction: column; gap: 7px;
+}
+.image-generation-status {
+  color: var(--text-faint); font-family: var(--font-ui); font-size: 12px; line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+.image-generation-stage {
+  width: 100%; aspect-ratio: 1; display: block; overflow: hidden;
+  padding: 0; border: var(--border-width, 1px) solid transparent; border-radius: var(--radius-md);
+  background: transparent; cursor: pointer; touch-action: none;
+}
+.image-generation-stage:hover { background: var(--overlay-subtle); }
+.image-generation-stage:focus-visible {
+  outline: none; border-color: var(--sel-line, var(--accent-ink));
+  box-shadow: 0 0 0 2px var(--sel-fill, var(--accent-light));
+}
+.image-generation-canvas { width: 100%; height: 100%; display: block; }
+.image-generation-loader.playing .image-generation-stage { cursor: crosshair; }
+@media (prefers-reduced-motion: reduce) {
+  .image-generation-stage { transition: none; }
+}

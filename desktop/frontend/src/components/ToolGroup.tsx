@@ -11,6 +11,7 @@ import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
 import { useI18n } from '../i18n'
 import type { ToolEvent } from '../types'
+import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
 
 type Kind = 'write' | 'edit' | 'run' | 'read' | 'search' | 'browse' | 'other'
 interface Desc { kind: Kind; verbKey: string; target: string; adds?: number; dels?: number; isFile: boolean }
@@ -139,7 +140,11 @@ export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean }> = (
   const [open, setOpen] = useState(false)
   if (!events.length) return null
 
-  const descs = events.map(describeTool)
+  // generate_image gets a full-size dot field while the request is in flight. Completed calls return
+  // to the ordinary audit trail; only the active row is replaced, so mixed/parallel tool groups keep context.
+  const activeImageJobs = running ? events.filter((event) => event.name === 'generate_image' && !event.done) : []
+  const groupedEvents = activeImageJobs.length ? events.filter((event) => !activeImageJobs.includes(event)) : events
+  const descs = groupedEvents.map(describeTool)
   const counts = { write: 0, edit: 0, run: 0, read: 0, search: 0, browse: 0, other: 0 } as Record<Kind, number>
   descs.forEach((d) => { counts[d.kind]++ })
   const SUM: Record<Kind, string> = {
@@ -149,38 +154,47 @@ export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean }> = (
   const order: Kind[] = ['write', 'edit', 'run', 'read', 'search', 'browse', 'other']
   const summary = order.filter((k) => counts[k] > 0).map((k) => t(SUM[k], { n: counts[k] })).join(' · ')
 
-  const allDone = events.every((e) => e.done)
-  const anyErr = events.some((e) => e.isError)
-  const active = !!running && !allDone
+  const allDone = groupedEvents.every((e) => e.done)
+  const anyErr = groupedEvents.some((e) => e.isError)
+  const active = !!running && groupedEvents.length > 0 && !allDone
   // 运行中:展示第一个未完成的调用作为「当前」;都完成则无。
-  const curIdx = running ? events.findIndex((e) => !e.done) : -1
+  const curIdx = running ? groupedEvents.findIndex((e) => !e.done) : -1
   const curDesc = curIdx >= 0 ? descs[curIdx] : null
-  const curVerb = curDesc ? (curDesc.verbKey ? t(curDesc.verbKey) : events[curIdx].name) : ''
+  const curVerb = curDesc ? (curDesc.verbKey ? t(curDesc.verbKey) : groupedEvents[curIdx].name) : ''
 
   return (
-    <div className="tool-group">
-      <button className="tool-group-head" aria-busy={active} onClick={() => setOpen((o) => !o)}>
-        {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-        <Terminal size={12} className="tool-group-ic" />
-        {!open && curDesc ? (
-          <span className="tool-group-cur">
-            <span className="tool-group-cur-copy chat-run-shimmer-text">
-              {curVerb}{' '}
-              <span className={curDesc.isFile ? 'file' : undefined}>{curDesc.target}</span>…
+    <>
+      {!!groupedEvents.length && (
+        <div className="tool-group">
+          <button className="tool-group-head" aria-busy={active} onClick={() => setOpen((o) => !o)}>
+            {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            <Terminal size={12} className="tool-group-ic" />
+            {!open && curDesc ? (
+              <span className="tool-group-cur">
+                <span className="tool-group-cur-copy chat-run-shimmer-text">
+                  {curVerb}{' '}
+                  <span className={curDesc.isFile ? 'file' : undefined}>{curDesc.target}</span>…
+                </span>
+              </span>
+            ) : (
+              <span className={`tool-group-sum${active ? ' chat-run-shimmer-text' : ''}`}>{summary}</span>
+            )}
+            <span className="tool-group-status">
+              {allDone ? (anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} /> : <CheckCircle2 size={13} style={{ color: 'var(--green)' }} />) : null}
             </span>
-          </span>
-        ) : (
-          <span className={`tool-group-sum${active ? ' chat-run-shimmer-text' : ''}`}>{summary}</span>
-        )}
-        <span className="tool-group-status">
-          {allDone ? (anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} /> : <CheckCircle2 size={13} style={{ color: 'var(--green)' }} />) : null}
-        </span>
-      </button>
-      <AnimatedCollapse open={open}>
-        <div className="tool-group-list">
-          {events.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} running={!!running} />)}
+          </button>
+          <AnimatedCollapse open={open}>
+            <div className="tool-group-list">
+              {groupedEvents.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} running={!!running} />)}
+            </div>
+          </AnimatedCollapse>
         </div>
-      </AnimatedCollapse>
-    </div>
+      )}
+      {!!activeImageJobs.length && (
+        <div className="image-generation-jobs" aria-busy="true">
+          {activeImageJobs.map((event) => <ImageGenerationLoader key={event.id} />)}
+        </div>
+      )}
+    </>
   )
 }
