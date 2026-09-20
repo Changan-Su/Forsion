@@ -1263,8 +1263,8 @@ declare global {
       showMainPanel?(target: import('../../shared/miniPanel').MainPanelTarget): void
       onMainPanelTarget?(cb: (target: import('../../shared/miniPanel').MainPanelTarget) => void): () => void
       mainPanelReady?(): void
-      requestMainAction?(action: 'onboarding'): void
-      onMainAction?(cb: (action: 'onboarding') => void): () => void
+      requestMainAction?(action: 'onboarding' | 'dev-commands'): void
+      onMainAction?(cb: (action: 'onboarding' | 'dev-commands') => void): () => void
       closeSelf?(): void
       /** 跨窗撕拽:拖拽中实时上报屏幕坐标(主进程命中测试 → 给光标下窗口发落点预览)。节流后调。 */
       dragUpdate?(screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void

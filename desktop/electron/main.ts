@@ -1922,7 +1922,12 @@ app.whenReady().then(async () => {
     // before 与写入同一队位读出(见 saveConfig);下面的内存镜像紧跟本次落盘赋值,先于下一个排队的写 → 顺序与盘面一致。
     const before = await saveConfig(patch, accountCreds)
     if (patch.activityLogEnabled !== undefined) setActivityLogEnabled(patch.activityLogEnabled !== false)
-    if (patch.activeWindowEnabled !== undefined) activeWindowOn = patch.activeWindowEnabled === true
+    if (patch.activeWindowEnabled !== undefined) {
+      activeWindowOn = patch.activeWindowEnabled === true
+      // 它的 ⌘K 入口注册在**主窗**的命令表里,而开关多半是从设置浮窗拨的(命令表每个渲染进程各一份)。
+      // 落盘之后才推,主窗回读 config 时拿到的才是新值。
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:mainAction', 'dev-commands')
+    }
     if (patch.keepAwakeWhileRunning !== undefined) {
       keepAwakeOn = patch.keepAwakeWhileRunning === true
       keepAwake.refresh() // 运行中切开关:关要立刻放、开要立刻拦,不等下一次上报
@@ -3423,8 +3428,9 @@ app.whenReady().then(async () => {
     if (pendingMainPanelTarget) { e.sender.send('window:mainPanelTarget', pendingMainPanelTarget); pendingMainPanelTarget = null }
   })
   ipcMain.on('window:mainAction', (e, action: unknown) => {
-    if (!isTrustedSender(e) || action !== 'onboarding') return
-    showMainWindow()
+    if (!isTrustedSender(e) || (action !== 'onboarding' && action !== 'dev-commands')) return
+    // dev-commands 只是让主窗重算 ⌘K 入口:用户还在设置浮窗里,别把主窗抢到前面来。
+    if (action === 'onboarding') showMainWindow()
     const deliver = (): void => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:mainAction', action) }
     if (mainWindow?.webContents.isLoadingMainFrame()) mainWindow.webContents.once('did-finish-load', deliver)
     else deliver()

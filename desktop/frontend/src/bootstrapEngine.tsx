@@ -35,10 +35,8 @@ import { INBOX_WORKSPACE_MODE } from './views/workspaceMode'
 import { WsFileView } from './views/WsFileView'
 import { CodeStudioView } from './views/CodeStudioView'
 import { ChangelogView } from './views/ChangelogView'
-import { setMobileUiCommand, MOBILE_UI_KEY } from './mobileUiCommand'
 import { initUiZoom } from './uiZoom'
-import { setActivityViewCommand, ACTIVITY_VIEW_KEY } from './activityViewCommand'
-import { setActiveWindowCommand } from './activeWindowCommand'
+import { syncDevCommands } from './devCommands'
 import { isSmoothCaretOn, setSmoothCaretEnabled } from './smoothCaret'
 import { matchFileType, fileTypeBaseName } from './amadeus/plugins/pluginStore'
 import { SMOOTH_CARET_KEY } from './types'
@@ -544,13 +542,9 @@ export function installEngine(): void {
     const coarse = ((): boolean => { try { return window.matchMedia('(pointer: coarse) and (max-width: 820px)').matches } catch { return false } })()
     initUiZoom(w.tangu && !w.tangu.mobile ? 1 : coarse ? 1.15 : w.tangu?.mobile ? 1 : 1.1)
   }
-  // 开发者选项:移动端 UI 预览命令(开关持久化在 MOBILE_UI_KEY;已在移动模式则强制保留切回入口)。
-  try { setMobileUiCommand(localStorage.getItem(MOBILE_UI_KEY) === '1') } catch { /* ignore */ }
-  // 开发者选项:活动日志实时视图命令(同款模式)。
-  try { setActivityViewCommand(localStorage.getItem(ACTIVITY_VIEW_KEY) === '1') } catch { /* ignore */ }
-  // 开发者选项:前台窗口采样调试面板命令。开关真源在主进程配置(不是 localStorage),故异步读一次;
-  // window.tangu 缺位(web/mobile 无 host 进程)→ 整个能力不存在,命令自然不注册。
-  void window.tangu?.getConfig?.().then((c) => setActiveWindowCommand(c.activeWindowEnabled === true)).catch(() => {})
+  // 开发者选项那三个 ⌘K 入口:真源在 localStorage × 主进程 config,单源重算见 devCommands.ts
+  // (设置浮窗里拨开关时会请主窗再跑一次这个函数 —— 命令注册表每个渲染进程各一份)。
+  syncDevCommands()
 
   // forsion:// deep link(仅桌面主窗;内部自门控 window.tangu?.onDeepLink,web/mobile 各有通道)。
   installDeepLinks()

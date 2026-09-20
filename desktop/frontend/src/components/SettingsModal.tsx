@@ -73,6 +73,7 @@ import {
 } from '../appCompliance'
 import { setActivityViewCommand, ACTIVITY_VIEW_KEY } from '../activityViewCommand'
 import { setActiveWindowCommand } from '../activeWindowCommand'
+import { requestDevCommandsSync } from '../devCommands'
 import { setWikiFilesEnabled } from '@amadeus/lib/wikiFiles'
 import { setUpgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { deleteAssetsPref, setDeleteAssetsPref } from '@amadeus/components/askDeleteAssets'
@@ -3253,7 +3254,8 @@ export const SettingsModal: React.FC<{
                             const on = e.target.checked
                             setMobileUiCmd(on)
                             try { localStorage.setItem(MOBILE_UI_KEY, on ? '1' : '0') } catch { /* ignore */ }
-                            setMobileUiCommand(on)
+                            setMobileUiCommand(on)   // 设置画在主窗里的形态(web/mobile)
+                            requestDevCommandsSync() // 设置在浮窗里的形态:命令表各窗一份,得让主窗重算
                           }}
                         />
                         {t('settings.developer.mobileUiPreview')}
@@ -3313,6 +3315,7 @@ export const SettingsModal: React.FC<{
                             setActivityViewCmd(on)
                             try { localStorage.setItem(ACTIVITY_VIEW_KEY, on ? '1' : '0') } catch { /* ignore */ }
                             setActivityViewCommand(on)
+                            requestDevCommandsSync()
                           }}
                         />
                         {t('settings.developer.activityViewCmd')}
@@ -3327,6 +3330,8 @@ export const SettingsModal: React.FC<{
                           onChange={(e) => {
                             const on = e.target.checked
                             // 真源在主进程配置(默认拒的实现点就在那儿);⌘K 入口同步增删,免 reload。
+                            // 主窗那份由**主进程**在 config:set 落盘后推(见 main.ts):这里 .then 里通知的话,
+                            // 「拨完立刻关掉设置窗」会连同这个渲染进程一起没掉,主窗就永远不知道。
                             void window.tangu!.setConfig({ activeWindowEnabled: on }).then(setStored)
                             setActiveWindowCommand(on)
                           }}
@@ -3355,6 +3360,7 @@ export const SettingsModal: React.FC<{
                           // 留着开 = 用户看不见的地方一直在采样,默认拒的信任故事当场破。
                           void window.tangu?.setConfig?.({ activeWindowEnabled: false }).then(setStored)
                           setActiveWindowCommand(false)
+                          requestDevCommandsSync() // 两个 localStorage 开关已同步清掉;config 那条由主进程自己推
                           setDevMode(false)
                           setDevClicks(0)
                           goTab('about')

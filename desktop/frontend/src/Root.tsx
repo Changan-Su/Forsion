@@ -26,6 +26,7 @@ import { UnitRemoteSurface } from './components/UnitSwitcher'
 import { installNotificationWiring } from './stores/notificationWiring'
 import { useShallow } from 'zustand/react/shallow'
 import { installFileDropGuard } from './fileDropGuard'
+import { syncDevCommands } from './devCommands'
 import { FloatingPanelFrame } from './components/FloatingPanelFrame'
 import { FloatingViewSurface } from './components/FloatingViewSurface'
 import { closeWebFloatingPanel, getWebFloatingPanel, subscribeWebFloatingPanel } from './pluginPanelSeam'
@@ -58,6 +59,8 @@ export function Root() {
   useEffect(() => { installStatusBarItems(); installNotificationWiring() }, []) // 状态栏内置项 + 通知事件接线(幂等)
   useEffect(() => window.tangu?.onMainAction?.((action) => {
     if (action === 'onboarding') useApp.getState().setOnboarding(true)
+    // 设置浮窗里拨了开发者选项的 ⌘K 开关:命令注册表每个渲染进程各一份,得由主窗自己重算。
+    if (action === 'dev-commands') syncDevCommands()
   }), [])
   const theme = useTheme()
   const a = useApp(useShallow((s) => ({

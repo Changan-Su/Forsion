@@ -57,12 +57,17 @@ const panelText = (win) => win.evaluate(() => {
   return el ? el.textContent || '' : '(面板不在 DOM 里)'
 })
 
-/** 进设置某一页(store 没挂 window,只能走真 UI)。 */
-async function openSettings(win) {
+/** 进设置(store 没挂 window,只能走真 UI)。设置是独立浮窗(Floating Panel 化 2026-09-20):
+ *  开窗前先 arm window 事件,返回浮窗 page;开不出来返回 null(调用方按「这段跳过」处理)。 */
+async function openSettings(app, win) {
   // ribbon 按钮没有 id/data 属性(只有 title),热键 mod+, 是 addCommand 注册的,最稳。
+  const opened = app.waitForEvent('window', { timeout: 15000 }).catch(() => null)
   await win.keyboard.press('Meta+Comma').catch(() => {})
-  await win.waitForTimeout(1200)
-  return (await win.locator('.settings-main').first().count().catch(() => 0)) > 0
+  const sp = await opened
+  if (!sp) return null
+  await sp.waitForLoadState('domcontentloaded').catch(() => {})
+  await sp.waitForSelector('.settings-main', { timeout: 15000 }).catch(() => {})
+  return (await sp.locator('.settings-main').first().count().catch(() => 0)) > 0 ? sp : null
 }
 async function goTab(win, labels) {
   const nav = win.locator('.settings-nav')
@@ -170,28 +175,51 @@ async function main() {
     await setFlag(win, false)
     await win.waitForTimeout(300)
     let uiToggled = false
-    if (await openSettings(win)) {
-      await goTab(win, ['关于', 'About'])
-      const ver = win.locator('.settings-main .hint').filter({ hasText: /^(版本|Version)\s/ }).first()
+    let logToggled = false
+    const sp = await openSettings(app, win)
+    if (sp) {
+      await goTab(sp, ['关于', 'About'])
+      const ver = sp.locator('.settings-main .hint').filter({ hasText: /^(版本|Version)\s/ }).first()
       if (await ver.count().catch(() => 0)) {
-        for (let i = 0; i < 10; i++) { await ver.click().catch(() => {}); await win.waitForTimeout(60) }
+        for (let i = 0; i < 10; i++) { await ver.click().catch(() => {}); await sp.waitForTimeout(60) }
       }
-      await win.waitForTimeout(400)
-      if (await goTab(win, ['开发者选项', 'Developer options'])) {
-        const row = win.locator('.settings-main .field').filter({ hasText: /前台窗口采样|Active window sampling/ }).first()
+      await sp.waitForTimeout(400)
+      if (await goTab(sp, ['开发者选项', 'Developer options'])) {
+        const row = sp.locator('.settings-main .field').filter({ hasText: /前台窗口采样|Active window sampling/ }).first()
         const box = row.locator('input[type="checkbox"]').first()
         if (await box.count().catch(() => 0)) { await box.check().catch(() => {}); uiToggled = true }
+        // 顺带拨开「活动日志实时视图命令」:它走的是另一条同步路(真源在 localStorage,靠渲染层通知主窗),
+        // 而前台窗口采样那条走主进程 config:set 自推 —— 两条路都得有人盯。
+        const logRow = sp.locator('.settings-main .field').filter({ hasText: /活动日志实时视图命令|Activity log live view command/ }).first()
+        const logBox = logRow.locator('input[type="checkbox"]').first()
+        if (await logBox.count().catch(() => 0)) { await logBox.check().catch(() => {}); logToggled = true }
       }
-      await win.waitForTimeout(600)
+      await sp.waitForTimeout(600)
     }
     check('T5a 开发者选项里的「前台窗口采样」开关拨得动', uiToggled)
     const cfgUi = await win.evaluate(() => window.tangu.getConfig())
     check('T5b 拨开关真的写进了主进程配置', cfgUi.activeWindowEnabled === true, 'got=' + cfgUi.activeWindowEnabled)
 
-    // 关掉设置。⚠️按钮一律用精确文案:hasText 的正则会把别的「返回」也命中。
-    await win.locator('.settings-nav button:text-is("返回应用"), .settings-nav button:text-is("Back to app")').first().click({ timeout: 5000 }).catch(() => {})
+    // 关掉设置浮窗。⚠️按钮一律用精确文案:hasText 的正则会把别的「返回」也命中。
+    if (sp) {
+      const closed = sp.waitForEvent('close').catch(() => {})
+      await sp.locator('.settings-nav button:text-is("返回应用"), .settings-nav button:text-is("Back to app")').first().click({ timeout: 5000 }).catch(() => {})
+      await closed
+    }
     await win.waitForTimeout(800)
-    check('T5b2 设置面板已关闭(后面的面板断言不是隔着遮罩读的)', (await win.locator('.settings-main').count().catch(() => 1)) === 0)
+    check('T5b2 设置浮窗已关闭(后面的面板断言不是隔着它读的)', !!sp && sp.isClosed())
+    // T5e 另一条同步路:localStorage 开关(活动日志实时视图)也得当场出现在**主窗**的 ⌘K 里。
+    if (logToggled) {
+      await win.keyboard.press('Meta+k').catch(() => {})
+      await win.waitForTimeout(600)
+      await win.locator('.cmd-input').first().fill('活动日志').catch(() => {})
+      await win.waitForTimeout(400)
+      const logItem = await win.locator('.cmd-item', { hasText: '打开活动日志' }).count().catch(() => 0)
+      check('T5e 浮窗里拨的 localStorage 开关也当场进了主窗命令面板', logItem > 0, 'items=' + logItem)
+      await win.keyboard.press('Escape').catch(() => {})
+      await win.waitForTimeout(400)
+    } else skip('T5e localStorage 开关同步到主窗命令面板', '「活动日志实时视图命令」开关没拨到')
+
     let opened = false
     await win.keyboard.press('Meta+k').catch(() => {})
     await win.waitForTimeout(800)

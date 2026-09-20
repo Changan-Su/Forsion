@@ -309,9 +309,9 @@ const api = {
     return () => ipcRenderer.removeListener('window:mainPanelTarget', listener)
   },
   mainPanelReady: (): void => ipcRenderer.send('window:mainPanelReady'),
-  requestMainAction: (action: 'onboarding'): void => ipcRenderer.send('window:mainAction', action),
-  onMainAction: (cb: (action: 'onboarding') => void): (() => void) => {
-    const listener = (_e: unknown, action: 'onboarding'): void => cb(action)
+  requestMainAction: (action: 'onboarding' | 'dev-commands'): void => ipcRenderer.send('window:mainAction', action),
+  onMainAction: (cb: (action: 'onboarding' | 'dev-commands') => void): (() => void) => {
+    const listener = (_e: unknown, action: 'onboarding' | 'dev-commands'): void => cb(action)
     ipcRenderer.on('window:mainAction', listener)
     return () => ipcRenderer.removeListener('window:mainAction', listener)
   },
