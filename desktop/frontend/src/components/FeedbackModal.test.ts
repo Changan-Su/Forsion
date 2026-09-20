@@ -92,3 +92,15 @@ it('blocks oversize reports and permits an explicit text-only submission', async
   await click('feedback.submit')
   expect(submitFeedback.mock.calls[0][0].sessionLogJson).toBeUndefined()
 })
+
+it('exports the report to a file, oversize ones included', async () => {
+  const createObjectURL = vi.fn((_blob: Blob) => 'blob:report'), revokeObjectURL = vi.fn()
+  vi.stubGlobal('URL', Object.assign(Object.create(URL), { createObjectURL, revokeObjectURL }))
+  const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  vi.mocked(buildFeedbackReport).mockResolvedValue({ ...report, bytes: FEEDBACK_LOG_LIMIT + 1 })
+  await render()
+  await act(async () => button('feedback.export').click())
+  expect(createObjectURL.mock.calls[0][0]).toBeInstanceOf(Blob)
+  expect(click).toHaveBeenCalledTimes(1)
+  click.mockRestore()
+})

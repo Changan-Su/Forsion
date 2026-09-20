@@ -1,6 +1,6 @@
 /** Feedback keeps its draft, shows exactly which diagnostics will be sent, and never silently drops a large attachment. */
 import React, { useEffect, useRef, useState } from 'react'
-import { X, MessageSquare, Loader2, MessagesSquare, Bug, Lightbulb, Check, FileText, ArrowLeft, RefreshCw } from 'lucide-react'
+import { X, MessageSquare, Loader2, MessagesSquare, Bug, Lightbulb, Check, FileText, ArrowLeft, RefreshCw, Download } from 'lucide-react'
 import { useWorkspace } from '@lcl/engine'
 import { useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
@@ -104,6 +104,18 @@ export const FeedbackModal: React.FC<{
   }
   const size = report ? `${(report.bytes / 1024).toFixed(1)} KB` : ''
 
+  // 超限时 submit 被挡,本地导出是唯一出路,所以不按 tooLarge 门控
+  const exportReport = (): void => {
+    if (!report) return
+    const url = URL.createObjectURL(new Blob([report.json], { type: 'application/json;charset=utf-8' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = report.filename
+    a.click()
+    // ponytail: 锚点下载;revoke 押后免得下载还没开始就撤链接。Capacitor 安卓壳若渲染本模态可能静默失败,到时再走 IPC
+    setTimeout(() => URL.revokeObjectURL(url), 10_000)
+  }
+
   return (
     <div className={surface === 'panel' ? 'feedback-panel-surface' : 'memv-modal feedback-overlay'} onClick={(event) => { if (surface === 'modal' && event.target === event.currentTarget) close() }}>
       <div ref={dialog} className="modal feedback-modal" role="dialog" aria-modal="true" aria-labelledby="feedback-title" tabIndex={-1}
@@ -158,6 +170,7 @@ export const FeedbackModal: React.FC<{
               <div className="feedback-report-status" role="status">
                 <span>{preparing ? <><Loader2 size={13} className="spin" />{t('feedback.preparing')}</> : report ? <><FileText size={13} />{t('feedback.ready', { size })}</> : !wantsLog ? t('feedback.textOnly') : t('feedback.prepareFailed')}</span>
                 <div>{report && <button className="btn ghost sm" onClick={() => setPreview(true)} disabled={busy}>{t('feedback.preview')}</button>}
+                  {report && <button className="btn ghost sm" onClick={exportReport} disabled={busy}><Download size={13} />{t('feedback.export')}</button>}
                   {wantsLog && <button className="icon-btn" onClick={() => setRevision((n) => n + 1)} disabled={busy || preparing} aria-label={t('feedback.refresh')} title={t('feedback.refresh')}><RefreshCw size={13} /></button>}</div>
               </div>
               {!!report?.missing.length && <p className="feedback-warning">{t('feedback.partial', { sources: report.missing.map((source) => t(`feedback.source.${source}`)).join(', ') })}</p>}
