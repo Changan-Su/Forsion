@@ -139,12 +139,61 @@ export function parseMentions(text: string, participants: Array<{ slug: string; 
  * DONE 只看发言的最后一个非空行(约定:独占一行、写在末尾;正文中间 / 代码块里的 DONE 不算,Codex 09-16 r3 #1)。
  * 模型常把 DONE 缀在最后一句的句尾(live 09-16 第四轮实测:「@Alpha:确认,口号为“…”。 DONE」被判「没完」→ 两人互相点名跑满 60 步),
  * 所以行尾的 DONE 也认;「NOT DONE」「done」不算。宁可早停一位成员(被 @ / 用户开口即回来),不可整场空转到天花板。
+ * 09-20:中文句子和 DONE 之间没有空格(「…并行配合。DONE」),旧的 `(?:^|\s)` 前置判不出来 → 中文团队永远不收场,
+ * 成员被逐周期唤醒、每次把「我在待命」换个说法再说一遍(live 实测 20 轮)。改判据为「DONE 前不是拉丁字母 / 数字」,
+ * 这样 UNDONE / predone 仍不算,中英文的句尾 DONE 都算。
  */
 export const isDoneSpeech = (text: string): boolean => {
   const last = (text.trimEnd().split('\n').pop() || '').trim();
   if (last === 'DONE') return true;
-  return /(?:^|\s)DONE[.。!！]?$/.test(last) && !/\bNOT\s+DONE[.。!！]?$/.test(last);
+  return /(?<![A-Za-z0-9_-])DONE[.。!！]?$/.test(last) && !/(?:\bnot\s+|[未没不][^\p{L}\p{N}]*)DONE[.。!！]?$/iu.test(last);
 };
+
+/**
+ * 一次激活内「同一件事说两遍」的判据(09-20 修:成员先 team_say 广播一遍,最终答复又被抄回一遍 —— 提示词三处写了「别重复」仍每轮复发)。
+ * 问的不是「两段话像不像」,而是**这条新发言有没有带来新东西**:把文本归一化成「CJK 单字 + 拉丁词」的记号流
+ * (去代码块 / markdown 装饰 / 标点 / 末尾 DONE),看它的记号二元组有多少比例已经在本次激活已广播的内容里。
+ * 非对称是关键:`team_say("API 修复完成")` 之后最终答复写「API 修复完成;补丁在 x.diff,@Beta 请合入」覆盖率只有 0.11
+ * —— 对称的相似度(Dice / 包含即 1)会把这种「重复开头 + 真报告」整条吞掉(Codex 评审 #1)。
+ */
+export function speechTokens(text: string): string[] {
+  const flat = text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/(?:^|\s)DONE[.。!！]?\s*$/i, ' ')
+    .toLowerCase();
+  return flat.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]|[\p{L}\p{N}]+/gu) || [];
+}
+function speechGrams(t: readonly string[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (let i = 0; i + 1 < t.length; i++) { const g = t[i] + ' ' + t[i + 1]; m.set(g, (m.get(g) || 0) + 1); }
+  return m;
+}
+/**
+ * `text` 里有多大比例的内容已经在 `posted`(本次激活已广播的记号流,取并集)里说过。0 = 全是新的,1 = 一点新东西都没有。
+ * 切不出记号(纯代码块 / 纯 emoji / 一两个字)一律返回 0:宁可重复,不可把交付吞掉(Codex 评审 #6)。
+ */
+export function speechCoverage(posted: readonly (readonly string[])[], text: string): number {
+  const tn = speechTokens(text);
+  if (tn.length < 2 || !posted.length) return 0;
+  const prev = new Map<string, number>();
+  for (const p of posted) for (const [g, n] of speechGrams(p)) prev.set(g, Math.max(prev.get(g) || 0, n));
+  if (!prev.size) return 0;
+  let covered = 0, total = 0;
+  for (const [g, n] of speechGrams(tn)) { total += n; const m = prev.get(g); if (m) covered += Math.min(n, m); }
+  return total ? covered / total : 0;
+}
+/**
+ * 阈值按真实语料标定(生产会话 7d8ed746 的 6 对「先 team_say 再最终答复」重复,覆盖率 0.23–1.00;
+ * 「先报进度 / 重复开头,再交真报告」这类必须都发出去的负例实测 ≤0.12)。落在两者之间,宁可吞掉一点新东西都没有的那条
+ * —— 内容读者已经看过,且成员的完整答复照常留在它自己的工作会话里(Team Desk 可看)。
+ */
+const SPEECH_DEDUP = 0.2;
+/**
+ * 本次激活里已经广播过的内容有没有把这条说完。`posted` 存**记号数组**(广播时切一次)——
+ * 一次激活可能广播十几条、每条上限 16000 字,每次判重都重切一遍是白烧(Codex 评审 #7)。
+ */
+export const isRepeatSpeech = (text: string, posted: readonly (readonly string[])[]): boolean =>
+  speechCoverage(posted, text) >= SPEECH_DEDUP;
 
 /** 本次群聊 run 的真实 token 累计(usage 事件的 total + 终态 tokens_total 用)。 */
 // cost/limit 挂在 meter 上随处可达:usage 事件要带「本 run 累计成本+上限」(H3 成本闸可见,与 agentLoop 同口径)。
@@ -283,7 +332,7 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
       return steered.length;
     };
 
-    type Settled = { slug: string; cycle: number; messageId: string; outcome: MemberOutcome };
+    type Settled = { slug: string; cycle: number; messageId: string; outcome: MemberOutcome; posted: string[][] };
     const childRuns = new Map<string, string>(); // slug → 正在跑的子 runId(级联中止用)
     const abortInFlight = (): void => { for (const id of childRuns.values()) p.abortChild?.(id); };
     // 团队成本天花板是硬上限:用量事件一越线就停止新激活并级联中止在跑的成员(不等某个子 run 自然结束才在 settle 里判;Codex 09-16 r4 #7)。
@@ -319,12 +368,14 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
 
     // 子 run 事件转发:审批 / 询问带上子 runId 与本次发言的 messageId(桌面在主聊天里就地批,不必点开 Team Desk);
     // 工具活动压成一行 team_activity(卡片那一行动态);用量并进团队计量(团队天花板据此判)。
-    const forward = (agent: NormalAgentDef, messageId: string, cycle: number, childRunId: () => string | undefined) => (ev: AgentEvent): void => {
+    const forward = (agent: NormalAgentDef, messageId: string, cycle: number, childRunId: () => string | undefined, posted: string[][]) => (ev: AgentEvent): void => {
       const pl = ev.payload || {};
       const t = ev.type;
       const tag = { agentSlug: agent.slug, agentName: agent.name, messageId, runId: childRunId() };
       if (t === 'team_speech' && typeof pl.text === 'string' && pl.text.trim()) {
-        void postSpeech(agent, pl.text.trim().slice(0, SPEECH_CAP), cycle, undefined, pl.requestReply === true);
+        const said = pl.text.trim().slice(0, SPEECH_CAP);
+        // 同一次激活里把同一件事再广播一遍 = 噪音(模型偶尔 team_say 两次同样的话)。
+        if (!isRepeatSpeech(said, posted)) { posted.push(speechTokens(said)); void postSpeech(agent, said, cycle, undefined, pl.requestReply === true); }
       } else if (t === 'desk_capture_request') {
         void publish(runId, t, { ...pl, runId: childRunId() });
       } else if (t === 'desk_present') {
@@ -341,6 +392,13 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
       }
     };
 
+    /**
+     * 这位成员有没有「别人说的新话」要读。没有就不该被唤醒:成员的活只在一次激活里干完,两次激活之间它没有后台进展,
+     * 醒来只能把上一轮换个说法再说一遍(09-20 live 实证:中文团队里一位成员被逐周期唤醒 20 次,每次重述「我在待命」)。
+     * 「不写 DONE = 还想聊」照旧 —— 队友或用户一开口它就回来,只是不再被叫醒对着空气说话。
+     */
+    const hasNewsFor = (slug: string): boolean => transcript.slice(seen.get(slug) ?? 0).some((t) => t.slug !== slug);
+
     /** 起一次激活(不 await):算 delta、推进已读指针、起子 run。返回 settle 后的结果,绝不 reject。 */
     const launch = (slug: string, cycle: number): Promise<Settled> => {
       const agent = bySlug.get(slug)!;
@@ -352,7 +410,9 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
       const messageId = uuidv4();
       let childId: string | undefined;
       let collectOutput: ReturnType<typeof teamOutputCollector> | undefined;
-      const forwardEvent = forward(agent, messageId, cycle, () => childId);
+      // 本次激活已经广播出去的内容(team_say 逐条进,存记号):最终答复据此去重。
+      const posted: string[][] = [];
+      const forwardEvent = forward(agent, messageId, cycle, () => childId, posted);
       const task = unread.filter((t) => t.slug !== CONTEXT_SLUG).map((t) => t.text).join(' ').replace(/\s+/g, ' ').slice(0, 160);
       const run = activate({
         teamRunId: runId, teamSessionId: sessionId, userId, appId: p.appId, modelId,
@@ -373,25 +433,32 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
           forwardEvent(ev);
         },
       }).catch((err: any): MemberOutcome => ({ status: signal.aborted ? 'aborted' : 'failed', text: '', error: err?.message || String(err) }));
-      return run.then((outcome) => { childRuns.delete(slug); return { slug, cycle, messageId, outcome }; });
+      return run.then((outcome) => { childRuns.delete(slug); return { slug, cycle, messageId, outcome, posted }; });
     };
 
     /** 一次激活收场:发言抄回团队会话(消息 + 事件 + transcript),DONE / @ 记账。返回 true = 整场要停(成本)。 */
     const settle = async (r: Settled): Promise<boolean> => {
       const agent = bySlug.get(r.slug)!;
       steps++;
+      // 本次激活排队中的 team_say 必须先落定(它会往 transcript / st.pending 里写):否则失败 / 中止分支会在
+      // 「@某某 接手」还没入队时就按全员 DONE 收场,那条点名永远没人接(Codex 评审 #4)。
+      await speechQueue;
+      if (speechFailure) throw speechFailure;
       const base = { slug: r.slug, name: agent.name, round: r.cycle, step: steps, messageId: r.messageId };
       if (r.outcome.status === 'done') {
         const text = r.outcome.text.trim().slice(0, SPEECH_CAP);
         // A bare completion marker or empty turn has no public content. Keep it in the member status.
-        if (text && !/^DONE[.。!！]?$/.test(text)) await postSpeech(agent, text, r.cycle, r.messageId);
+        // 已经 team_say 过同一件事的最终答复同样不抄回(DONE 记账照常走,完整答复留在成员自己的工作会话里)。
+        const spoke = !!text && !/^DONE[.。!！]?$/.test(text) && !isRepeatSpeech(text, r.posted);
+        if (spoke) await postSpeech(agent, text, r.cycle, r.messageId);
         else await speechQueue;
         if (speechFailure) throw speechFailure;
         await publish(runId, 'team_member', { ...base, phase: 'end', reason: 'done', sessionId: r.outcome.sessionId, runId: r.outcome.runId });
         if (isDoneSpeech(text)) {
           // 写 DONE 的那条发言里的 @ 不再排队(收尾致谢式的「@某某 谢了,DONE」不该把对方重新拉回来 —— live 台架 09-16 实测两人互相致谢无限循环)。
           st.done.add(r.slug);
-        } else {
+        } else if (spoke) {
+          // 没广播出去的那份(与已发言重复)里的 @ 也不排队:被点名的人在 delta 里根本看不到这段话。
           for (const m of parseMentions(text, participants, r.slug)) if (!st.pending.includes(m)) st.pending.push(m);
         }
       } else if (r.outcome.status === 'aborted') {
@@ -417,6 +484,8 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
     }
     let cycle = 1;
     let activations = 0;
+    /** 本周期真正起了几次激活(整周期为 0 = 没人有新话可说 → 收场)。 */
+    let activatedThisCycle = 0;
     const inFlight = new Map<string, Promise<Settled>>();
     const quotaOk = async (): Promise<boolean> => {
       const can = await deps().billing.canConsumeTokenPoints(userId, 1).catch(() => ({ ok: true } as any));
@@ -440,19 +509,30 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
           // 正在跑的成员这次激活看不到这条插话:留队,跑完立刻再起一次(delta 里才有它)—— 否则两人都带着 DONE 收场,用户的话没人回。
           for (const s of st.running) if (!st.pending.includes(s)) st.pending.push(s);
         }
-        for (const slug of activations < maxActivations ? teamDue(st, cap) : []) {
-          if (activations >= maxActivations || costExceeded) break;
-          if (!(await quotaOk())) { await publish(runId, 'error', { error: 'token_quota_exceeded' }); stopReason = 'quota'; break; }
-          activations++;
-          st.running.add(slug); st.cycleSpoken.add(slug); st.done.delete(slug); // 被 @ 的 DONE 成员重新入场:这次激活重新表态
-          inFlight.set(slug, launch(slug, cycle));
+        // 被跳过的成员已进 cycleSpoken、teamDue 不会再返回它 → 循环着要人,直到要不出候选(或并发位满)。
+        // 只要一批就收手的话,cap 小于人数时可能整批都是「没有新话」的,而排在后面、手里有未读的成员永远起不来(Codex 评审 #2)。
+        while (activations < maxActivations && !costExceeded && stopReason !== 'quota') {
+          const due = teamDue(st, cap);
+          if (!due.length) break;
+          for (const slug of due) {
+            if (activations >= maxActivations || costExceeded) break;
+            // 没有新话可读 → 本周期跳过它(不计激活、不算发言);等谁开口再回来。
+            if (!hasNewsFor(slug)) { st.cycleSpoken.add(slug); continue; }
+            if (!(await quotaOk())) { await publish(runId, 'error', { error: 'token_quota_exceeded' }); stopReason = 'quota'; break; }
+            activations++; activatedThisCycle++;
+            st.running.add(slug); st.cycleSpoken.add(slug); st.done.delete(slug); // 被 @ 的 DONE 成员重新入场:这次激活重新表态
+            inFlight.set(slug, launch(slug, cycle));
+          }
         }
         if (stopReason === 'quota') { abortInFlight(); break; }
         if (costExceeded) { stopReason = 'cost_limit'; break; } // 用量事件里越线的:在跑的已级联中止,下面等它们收场
         if (!inFlight.size) {
           if (st.done.size === participants.length) { stopReason = 'done'; break; }
           if (activations >= maxActivations) { stopReason = 'max_rounds'; break; }
-          cycle++; roundsRun = cycle; st.cycleSpoken = new Set();
+          // 整整一个周期谁都没有新话可读 = 这场聊完了(没写 DONE 的成员也没什么可说了),不空转到天花板。
+          // 单列 'settled':不是「全员表示已完成」,桌面照原样显示这句会说谎;老客户端不认得这个值 → 回落中性文案。
+          if (!activatedThisCycle) { stopReason = 'settled'; break; }
+          cycle++; roundsRun = cycle; st.cycleSpoken = new Set(); activatedThisCycle = 0;
           await publish(runId, 'group_cycle', { cycle });
           continue;
         }
@@ -618,7 +698,7 @@ export function teamMemberSection(agentName: string, roster: string, teamDoc?: s
     roster +
     '\n\n' +
     `You are "${agentName}". How the team works:\n` +
-    '- Every member works in their own thread, in parallel. Use team_say whenever you have a useful progress update, finding, question or handoff to share in the main team chat, without waiting to finish your work. Each remark is posted in arrival order. Your final answer is also posted; do not repeat earlier remarks. Tool calls and private drafts stay in your thread.\n' +
+    '- Every member works in their own thread, in parallel. Your final answer is posted to the team chat automatically — that is your remark. Use team_say only for something the team needs BEFORE you finish: a blocking question, a heads-up during long work, or a handoff. After a team_say, end your turn with just DONE unless you have something genuinely new to add; never restate a remark you already posted. Tool calls and private drafts stay in your thread.\n' +
     '- Address a member with @<name>; quote their words with a markdown blockquote (starting with >). In team_say, set requestReply=true only for a question or new work that needs the mentioned member to act. Ordinary progress and completion acknowledgements do not reactivate teammates. A request in your final answer without DONE also activates the mentioned member. Do not ask teammates to confirm an already completed task.\n' +
     '- You are activated whenever the team chat has new remarks for you: a teammate @-mentioned you, the user spoke, or a new cycle started because someone still has work to do.\n' +
     '- If you are waiting on a teammate, @-mention them with exactly what you need and end WITHOUT DONE — you will be activated again when they report back or when the next cycle starts.\n' +
@@ -634,7 +714,7 @@ export function formatDelta(delta: TranscriptEntry[], selfName: string): string 
   const lines = delta
     .map((t) => (t.slug === CONTEXT_SLUG ? t.text : t.slug === USER_SLUG ? `[User] ${t.text}` : `@${t.name}:\n${t.text}`))
     .join('\n\n');
-  return `New remarks in the team chat:\n\n${lines}\n\n———\nYou are activated now (${selfName}). Do your part, then post your report to the team chat as your final message (you may @ a member, or quote their remark with >).`;
+  return `New remarks in the team chat:\n\n${lines}\n\n———\nYou are activated now (${selfName}). Do your part, then post your report to the team chat as your final message (you may @ a member, or quote their remark with >). If you already posted everything with team_say, end with just DONE — never say the same thing twice.`;
 }
 
 /**

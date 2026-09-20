@@ -52,7 +52,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'loop', 'group', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'loop', 'group', 'teamdup', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
@@ -582,13 +582,37 @@ try {
     const converged = reason === 'done';
     // A member may publish several team_say remarks per activation. Bound activations, not public remarks.
     const both = sp.includes('live-alpha') && sp.includes('live-beta');
+    // 09-20 回归:同一次激活里同一成员的发言不得是同一件事(先 team_say 再把最终答复重说一遍 = 用户看到的「重复发言」)。
+    // Alpha 的提示词刻意要求「先发进度条、再派活」—— 那两条内容不同,是本判据的负对照。
+    const dups = await dupSpeeches(ev, ['live-alpha', 'live-beta']);
     const msgs = await api(`/agent/sessions/${sessG}/messages?limit=50`).catch(() => null);
     const list = Array.isArray(msgs?.messages) ? msgs.messages : Array.isArray(msgs) ? msgs : [];
     const attributed = list.filter((m) => m.role === 'model' && /^\*\*🗣 (Alpha|Beta)\*\*/.test(String(m.content || ''))).length;
     return {
-      ok: !ev.error && both && overlap && converged && ev.group.starts.length <= 10 && early && hasSummary,
-      detail: ev.error || `发言序 ${sp.join('→') || '无'};并行${overlap ? '交叠' : '未交叠(串行!)'};收场 ${reason || '无'}(${ev.group.ended?.steps ?? '?'} 步 · ${ev.group.ended?.rounds ?? '?'} 周期);带发言人前缀的落库消息 ${attributed} 条;工作中发言 ${early};固定 Historian 摘要 ${hasSummary}`,
+      ok: !ev.error && both && overlap && converged && ev.group.starts.length <= 10 && early && hasSummary && !dups.length,
+      detail: ev.error || `发言序 ${sp.join('→') || '无'};并行${overlap ? '交叠' : '未交叠(串行!)'};收场 ${reason || '无'}(${ev.group.ended?.steps ?? '?'} 步 · ${ev.group.ended?.rounds ?? '?'} 周期);带发言人前缀的落库消息 ${attributed} 条;工作中发言 ${early};固定 Historian 摘要 ${hasSummary};重复发言 ${dups.length ? dups.join(',') : '无'}`,
       output: list.filter((m) => m.role === 'model').map((m) => String(m.content || '')).join('\n\n---\n\n'), ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
+    };
+  });
+
+  // 09-20 用户报「团队模式下总是有重复内容的发言」的复现:三人闲聊式团队(不派活、不用工具),每位成员都会
+  // 先 team_say 说一遍、最终答复再换个排版说一遍(生产会话 7d8ed746 实证)。判据 = 同一成员相邻两条发言不是同一件事。
+  // 与 group 场景的区别:那条是「先进度条再派活」的正常两条发言(负对照),这条专钉重复。
+  await scenario('teamdup', 'teamdup 闲聊式团队不重复发言(先 team_say 再重说一遍)', async () => {
+    const mk = (slug, name, systemPrompt) => api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name, description: 'live harness', systemPrompt }) }).catch(() => null);
+    await mk('live-one', 'Uno', 'You are Uno. You handle planning and judgement. Answer the user briefly, in their language. Do not use tools other than team_say.');
+    await mk('live-two', 'Duo', 'You are Duo. You handle writing and expression. Answer the user briefly, in their language. Do not use tools other than team_say.');
+    await mk('live-three', 'Tres', 'You are Tres. You handle code and debugging. Answer the user briefly, in their language. Do not use tools other than team_say.');
+    const sid = `live-teamdup-${Date.now()}`;
+    const ev = await run(sid, '各位,你们都是干什么的?', 300_000, {
+      groupChat: true, groupAgents: ['live-one', 'live-two', 'live-three'], groupSeedHistory: false, groupNoSummary: true,
+    });
+    const dups = await dupSpeeches(ev, ['live-one', 'live-two', 'live-three']);
+    const spoke = new Set(ev.group.remarks.map((r) => r.slug));
+    return {
+      ok: !ev.error && spoke.size === 3 && !dups.length && ['done', 'settled'].includes(ev.group.ended?.reason),
+      detail: ev.error || `发言 ${ev.group.remarks.length} 条 / ${spoke.size} 人;激活 ${ev.group.starts.length} 次;收场 ${ev.group.ended?.reason || '无'};重复发言 ${dups.length ? dups.join(',') : '无'}`,
+      output: ev.group.remarks.map((r) => `[${r.slug}] ${r.text}`).join('\n\n---\n\n'), ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
     };
   });
 
@@ -1182,4 +1206,29 @@ try {
 } catch (e) {
   console.error(String(e?.message || e));
   await finish(String(e?.message || e).split('\n')[0].slice(0, 120));
+}
+
+/**
+ * 09-20:同一次激活里「同一件事说两遍」的判据(先 team_say 广播、最终答复再换个排版重说 = 用户报的重复发言)。
+ * 按成员的 team_member start 时刻划出激活窗,只比同一窗内的发言 —— 跨激活地重提角色分工是模型表达问题,不是引擎重复。
+ */
+async function dupSpeeches(ev, slugs) {
+  const { speechCoverage, speechTokens } = await import(join(root, 'dist', 'services', 'groupChat.js'));
+  const out = [];
+  for (const slug of slugs) {
+    const starts = ev.group.starts.filter((s) => s.slug === slug).map((s) => s.at).sort((a, b) => a - b);
+    const buckets = new Map();
+    for (const r of ev.group.remarks.filter((r) => r.slug === slug)) {
+      const k = starts.filter((t) => t <= r.at).length;
+      buckets.set(k, [...(buckets.get(k) || []), String(r.text || '')]);
+    }
+    for (const [k, texts] of buckets) {
+      // 判据与引擎同一套:每条与本次激活**之前所有发言的并集**比覆盖率(不是只比相邻 —— X → 进度 Y → final 又说 X 会假绿;Codex 评审 #9)。
+      for (let i = 1; i < texts.length; i++) {
+        const cov = speechCoverage(texts.slice(0, i).map(speechTokens), texts[i]);
+        if (cov >= 0.2) out.push(`${slug}@${k}#${i} ${cov.toFixed(2)}`);
+      }
+    }
+  }
+  return out;
 }

@@ -54,16 +54,23 @@ describe('teamDue / parseMentions / isDoneSpeech / teamMemberSection(纯函数)'
     expect(isDoneSpeech('  DONE  ')).toBe(true);
     expect(isDoneSpeech('接口好了 DONE')).toBe(true); // 行尾 DONE 也认(live 09-16 第四轮:模型把 DONE 缀在末句,判「没完」就整场空转)
     expect(isDoneSpeech('@Alpha:确认,口号为“同心协作”。 DONE')).toBe(true);
+    // 09-20:中文句尾与 DONE 之间没有空格(live 实测「…并行配合。DONE」被判没完 → 中文团队永不收场,逐周期重述「我在待命」)
+    expect(isDoneSpeech('三位分别负责表达、规划协调、代码调试,遇到复杂任务会并行配合。DONE')).toBe(true);
+    expect(isDoneSpeech('工作完成DONE')).toBe(true);
     expect(isDoneSpeech('接口 NOT DONE')).toBe(false);
+    expect(isDoneSpeech('这块还 UNDONE')).toBe(false); // 前面是拉丁字母 → 不是收尾标记
     expect(isDoneSpeech('done')).toBe(false);
     expect(isDoneSpeech('DONE\n但还有后续:测试没写')).toBe(false); // 中间行不算(Codex r3 #1)
     expect(isDoneSpeech('脚本:\n```\necho ok\nDONE\n```')).toBe(false); // 代码块里的不算
   });
-  it('teamMemberSection:自己的线程 / 随时主动发言 / 等人就 @ 且不写 DONE / 完事 DONE / 同目录并行编辑纪律 / 无轮数无投票;teamDoc 拼在末尾', () => {
+  it('teamMemberSection:自己的线程 / team_say 只用于收尾前 / 等人就 @ 且不写 DONE / 完事 DONE / 同目录并行编辑纪律 / 无轮数无投票;teamDoc 拼在末尾', () => {
     const sys = teamMemberSection('Alpha', '- Alpha(alpha):——\n- Beta(beta):——', '## Team\nAlpha owns API; Beta owns tests.');
     expect(sys).toContain('You are "Alpha"');
     expect(sys).toContain('works in their own thread, in parallel');
-    expect(sys).toContain('Use team_say whenever');
+    // 09-20:最终答复才是发言,team_say 只用于「收尾前必须先说的话」—— 两个通道各说一遍是重复发言的根因。
+    expect(sys).toContain('Your final answer is posted to the team chat automatically');
+    expect(sys).toContain('Use team_say only for something the team needs BEFORE you finish');
+    expect(sys).toContain('never restate a remark you already posted');
     expect(sys).toContain('end WITHOUT DONE');
     expect(sys).toContain('end your final message with DONE on its own line');
     expect(sys).toContain('never rewrite files a teammate owns');
@@ -357,7 +364,8 @@ describe('统一调度:并行 + 全员起头 + 被 @ 者优先 + 成员各自以
     await runGroupChat(params());
     expect(finals).toHaveLength(0);
     expect(events.some((e) => e.type === 'group_speaker')).toBe(false);
-    expect(ended().reason).toBe('done');
+    // beta 交了空答复(没发言也没 DONE),而此后没有任何新发言 → 不再唤醒它对着空气说话,整场按 settled 收场。
+    expect(ended().reason).toBe('settled');
   });
 
   it.each([false, true])('public @remarks reactivate teammates only when requestReply=%s', async (requestReply) => {
@@ -388,6 +396,37 @@ describe('统一调度:并行 + 全员起头 + 被 @ 者优先 + 成员各自以
     expect(events.findIndex((e) => e.type === 'group_speaker')).toBeLessThan(events.findIndex((e) => e.type === 'team_member' && e.payload.phase === 'end'));
     expect(inflightMax).toBe(2);
     expect(finals.every((f, i) => i === 0 || f.timestamp! > finals[i - 1].timestamp!)).toBe(true);
+  });
+
+  // 09-20 live 实证(teamdup 负对照):一位成员没写 DONE,队友都收了场 → 它被逐周期唤醒,每次把「我在待命」换个说法再说一遍。
+  // 成员的活只在激活里干,两次激活之间没有后台进展 —— 没有新话就别叫醒它;整周期无人可起 = 这场聊完了。
+  it('没有新话可读就不再唤醒(不写 DONE 也不空转);整周期没人可起 → 收场 done', async () => {
+    script = { alpha: ['我在待命,随时配合。'], beta: ['我这边收工了\nDONE'] };
+    delayOf = () => 5;
+    await runGroupChat(params());
+    // alpha 第 2 次是去读 beta 的发言(有新话,该起);第 3 个周期谁都没新话 → 不再唤醒,整场收场。
+    // 修前:alpha 每周期被唤醒一次、一路空转到 maxActivations(reason=max_rounds)。
+    expect(acts.filter((x) => x.slug === 'alpha')).toHaveLength(2);
+    expect(acts.filter((x) => x.slug === 'beta')).toHaveLength(1);
+    expect(acts[acts.length - 1].delta).toContain('我这边收工了'); // 最后一次确实带着新话,不是对着空气说
+    expect(ended().reason).toBe('settled'); // 不是「全员表示已完成」——只是没人还有话说
+  });
+
+  // 09-20 生产回归(会话 7d8ed746):成员先 team_say 广播一遍,最终答复换个排版又说一遍 → 团队聊天里每人都说两遍。
+  it('最终答复重复本次激活已广播的内容 → 不再抄回;DONE / 收场照常', async () => {
+    const said = '目前没什么隐藏计划,也不会自作主张替你推进事情。我们打算按你的需求协作:Arioso 负责判断、查证和落地,Christina 负责技术拆解与排错,我负责情绪、表达和创意。';
+    const restated = '目前没什么隐藏计划,也不会自作主张替你推进事情。\n\n我们打算按你的需求协作:\n- **Arioso**:判断、查证、规划和落地执行\n- **Christina**:技术拆解、代码、文档和排错\n- **我**:情绪理解、表达润色和创意构思\n\nDONE';
+    script = { alpha: [restated], beta: ['我这边是另一件事:把台架跑绿了,报告在附件里。\nDONE'] };
+    delayOf = (slug) => slug === 'alpha' ? 10 : 30;
+    onActivate = (a) => {
+      if (a.member.slug === 'alpha') a.onEvent?.({ seq: 1, type: 'team_speech', payload: { text: said } });
+    };
+    await runGroupChat(params());
+    const speeches = events.filter((e) => e.type === 'group_speaker' && e.payload.phase === 'end').map((e) => e.payload.text);
+    expect(speeches).toEqual([said, '我这边是另一件事:把台架跑绿了,报告在附件里。\nDONE']); // alpha 只留 team_say 那条
+    expect(finals).toHaveLength(2);
+    expect(acts.filter((x) => x.slug === 'alpha')).toHaveLength(1); // 末行 DONE 照样认 → 不再起第二次
+    expect(ended().reason).toBe('done');
   });
 
   it('临时成员 inlineDef;teamDoc / role / roster 下发到每次激活;首条用户消息只在 delta 里', async () => {
