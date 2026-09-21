@@ -50,6 +50,8 @@ registerMessages({
   'appstore.steerQueued': { zh: '插话已请求，将在安全边界接入；原任务继续保留。', en: 'Steering requested at the next safe boundary; the original task is preserved.' },
   'appstore.steerFailed': { zh: '暂未加速插话，消息仍保留在等待区：{e}', en: 'Could not expedite steering; your message remains queued: {e}' },
   'appstore.steerDiscardedCall': { zh: '插话中断了此工具调用的生成；工具尚未执行。', en: 'Steering interrupted this tool call during generation; it was not executed.' },
+  // 审批档 PUT 失败:引擎按存值审批,没存上就不能停在新档上
+  'appstore.approvalSaveFailed': { zh: '审批档没能保存,已恢复为原来的档({e})', en: 'Couldn’t save the approval mode; restored the previous one ({e})' },
 })
 
 export type { SettingsTab }
@@ -472,6 +474,10 @@ function rememberDefaults(patch: Partial<StoredDesktopConfig>): void {
   useApp.setState((s) => ({ desktopConfig: { ...((s.desktopConfig || {}) as StoredDesktopConfig), ...patch } }))
   void window.tangu?.setConfig?.(patch).catch(() => {})
 }
+/** 审批档写入的在途状态(按会话)。引擎审批时现读会话**存值**(压过 run 快照),没存上 = 没改:失败要把药丸退回
+ *  base = 最近一次确认存上的档(不是「上一次点的」,那次可能也没存上)。只有最新一次写入的结果算数 ——
+ *  更早那次失败时后面还有一次在途,由后面那次定。 */
+const approvalWrites = new Map<string, { base: AgentConfig['approvalMode'] }>()
 let lastAuthExpiredAt = 0 // handleAuthExpired 去抖:轮询/SSE/models 可能同时多次 401
 /** boot 期 managed 重连:引擎已 ready 但 connState 没到 ok(testConnection 撞上引擎刚 listen / 偶发超时)→ 15s 一次
  *  **只 connect 不 restart**,上限 8 次;每次 ready 广播重新计数。 */
@@ -2736,10 +2742,25 @@ export const useApp = create<AppState>((set, get) => ({
     if (patch.approvalMode) rememberDefaults({ lastApprovalMode: patch.approvalMode })
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) { set((s) => ({ newChatCfg: { ...s.newChatCfg, ...patch } })); return } // 空态:落新会话草稿
-    set((s) => {
-      const next = { ...(s.configBySession[sid] || {}), ...patch }
-      void api.putSessionConfig(get().cfg, sid, next).catch(() => {})
-      return { configBySession: { ...s.configBySession, [sid]: next } }
+    const prev = get().configBySession[sid]
+    const next = { ...(prev || {}), ...patch }
+    set((s) => ({ configBySession: { ...s.configBySession, [sid]: next } }))
+    const put = api.putSessionConfig(get().cfg, sid, next)
+    const mode = patch.approvalMode
+    // 其余键随每个 run 的 agentConfig 下发,本地值当场就生效;只有审批档是引擎审批时现读存值 → 只它等结果、失败回滚
+    if (!mode || mode === prev?.approvalMode) { void put.catch(() => {}); return }
+    const inflight = approvalWrites.get(sid)
+    const w = { base: inflight ? inflight.base : prev?.approvalMode }
+    approvalWrites.set(sid, w)
+    put.then(() => {
+      const cur = approvalWrites.get(sid)
+      if (cur === w) approvalWrites.delete(sid)
+      else if (cur) cur.base = mode // 后面那次失败时,该退回的是这次已存上的档
+    }, (e) => {
+      if (approvalWrites.get(sid) !== w) return
+      approvalWrites.delete(sid)
+      set((s) => (s.configBySession[sid] ? { configBySession: { ...s.configBySession, [sid]: { ...s.configBySession[sid], approvalMode: w.base } } } : {}))
+      get().toast(translate('appstore.approvalSaveFailed', { e: e?.message || String(e) }), true)
     })
   },
 

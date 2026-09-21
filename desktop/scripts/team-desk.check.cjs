@@ -1,5 +1,5 @@
 /** Team UI regression: Pin Summary member rows, independent Agent Desk, chronological public remarks,
- * forwarded approvals, member child chat's approval pill = the team session's mode (5a-5f),
+ * forwarded approvals, member child chat's approval pill = the team session's mode (5a-5f), failed approval writes roll back (5g),
  * optional Historian attachment and light/dark screenshots.
  * Run after npm run build: npm run check:teamdesk (isolated Electron user data).
  */
@@ -17,6 +17,8 @@ function check(name, ok, detail) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 class StopEarly extends Error {}
+/** 故障注入(5g):置 configPut = true 时,桩对 PUT /agent/sessions/:id/config 回 500 —— 引擎重启 / 断网 / 409 的替身。 */
+const faults = { configPut: false, hits: 0 }
 
 const AGENTS = [
   { slug: 'xyra', name: 'Xyra', description: 'General assistant', createdBy: 'user', libraryDir: '/tmp/teamdesk-lib/xyra/Library' },
@@ -125,7 +127,7 @@ async function run(app, win, stub) {
   await win.reload({ waitUntil: 'domcontentloaded' })
   await win.waitForSelector('#root', { timeout: 30_000 })
   await openTeamSession(win)
-  const shots = { team: path.join(os.tmpdir(), `forsion-teamdesk-team-${process.pid}.png`), member: path.join(os.tmpdir(), `forsion-teamdesk-member-${process.pid}.png`), light: path.join(os.tmpdir(), `forsion-teamdesk-light-${process.pid}.png`), dark: path.join(os.tmpdir(), `forsion-teamdesk-dark-${process.pid}.png`) }
+  const shots = { team: path.join(os.tmpdir(), `forsion-teamdesk-team-${process.pid}.png`), member: path.join(os.tmpdir(), `forsion-teamdesk-member-${process.pid}.png`), rollback: path.join(os.tmpdir(), `forsion-teamdesk-rollback-${process.pid}.png`), light: path.join(os.tmpdir(), `forsion-teamdesk-light-${process.pid}.png`), dark: path.join(os.tmpdir(), `forsion-teamdesk-dark-${process.pid}.png`) }
 
   // ── 1 成员状态进入 Pin Summary,Agent Desk 保留 ─────────────────────
   await win.waitForSelector('[data-team-desk="status"]', { timeout: 15_000 }).catch(() => {})
@@ -249,6 +251,26 @@ async function run(app, win, stub) {
     branchLabel.includes('完全放行') && !branchMenuText.includes('团队审批档') && branchPuts.length === 1 && branchPuts[0].sessionId === BRANCH_ID && branchPuts[0].config.approvalMode === 'auto-edit',
     JSON.stringify({ branchLabel, branchPuts: branchPuts.map((p) => [p.sessionId, p.config.approvalMode]) }))
   await openTeamSession(win)
+  // 5g 审批档 PUT 失败 → 药丸退回存上的档并报错。引擎按存值审批:没存上还显示新档 = 以为收紧了,工具照样免审批跑。
+  // 先成功放宽到「完全放行」,再在 PUT 必失败时收紧到「询问我批准」—— 危险的那个方向。
+  await win.locator('[data-team-desk="status"] button[data-slug="xyra"]').click()
+  await childPill.waitFor()
+  await sleep(400)
+  await childPill.click()
+  await approvalItem(childMenu, 'full-auto').click()
+  await sleep(300)
+  faults.configPut = true
+  await childPill.click()
+  await approvalItem(childMenu, 'readonly').click()
+  await sleep(800)
+  const failToast = (await win.locator('.ntf-text').allInnerTexts().catch(() => [])).join(' | ')
+  check('5g 审批档 PUT 失败 → 药丸退回存上的「完全放行」并报错,不停在没生效的「询问我批准」',
+    faults.hits > 0 && (await childLabel()).includes('完全放行') && failToast.includes('审批档没能保存'),
+    `hits=${faults.hits} label=${await childLabel()} toast=${failToast}`)
+  await win.screenshot({ path: shots.rollback })
+  faults.configPut = false
+  await dismissToasts(win)
+  await win.locator('.child-chat-panel .agent-desk-head button').click()
   await win.locator('[data-historian-status] > button').click()
   await win.getByText('已保存该会话的工作约定', { exact: false }).first().waitFor()
   check('6 Historian 有独立可展开的状态行', await win.locator('.t2-tsum [data-historian-work]').count() === 1, '')
@@ -290,6 +312,7 @@ async function main() {
   const memberDir = path.join(home, 'Member Scope')
   for (const dir of [userData, `${userData}-dev`, vault, projectDir, memberDir]) fs.mkdirSync(dir, { recursive: true })
   const stub = await startStubEngine({ agents: AGENTS, sessions: sessionFixtures(projectDir), messages: MESSAGES, override: ({ path: route, method }) => {
+    if (faults.configPut && method === 'PUT' && /^\/agent\/sessions\/[^/]+\/config$/.test(route)) { faults.hits += 1; return { __code: 500, body: { detail: 'stub: config write failed' } } }
     if (route === '/agent/runs' && method === 'GET') return { runs: [] }
     if (route.endsWith('/detail')) { const id = route.split('/')[3]; return { session: { ...sessionFixtures(projectDir)[0], id, agent_config: { agentSlug: id === 'ws-x' ? 'xyra' : 'orbit-one', execMode: 'host', cwd: memberDir, teamMember: { teamSessionId: SESSION_ID } } } } }
   }, handle: ({ path: route, url }) => {
