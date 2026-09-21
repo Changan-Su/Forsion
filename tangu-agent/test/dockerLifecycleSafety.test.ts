@@ -85,12 +85,15 @@ describe('Startup inspection when Docker is not reachable', () => {
     } finally { warn.mockRestore(); }
   });
 
-  it('sandbox=none still reports failures that are not a missing Docker (daemon reachable, container uninspectable)', async () => {
-    fake.run.mockImplementation(async (_bin, args) => args[0] === 'ps' ? ok({ stdout: 'agent-run-x\n' }) : ok({ code: 124, reason: 'timeout' }));
+  it.each([
+    ['container uninspectable', (args: string[]) => args[0] === 'ps' ? ok({ stdout: 'agent-run-x\n' }) : ok({ code: 124, reason: 'timeout' })],
+    ['ps output over the cap', (args: string[]) => args[0] === 'ps' ? ok({ code: -1, reason: 'output-limit' }) : ok()],
+  ])('sandbox=none still reports failures where Docker answered: %s', async (_label, respond) => {
+    fake.run.mockImplementation(async (_bin, args) => respond(args));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       docker.reapOrphanRunContainers(false); sessions.reapOrphanSessions(false);
-      await expect(sessions.getSessionDir(key())).rejects.toThrow('Cannot inspect');
+      await expect(sessions.getSessionDir(key())).rejects.toThrow(/Cannot inspect|output-limit/);
       await flush();
       expect(warn).toHaveBeenCalledTimes(1);
     } finally { warn.mockRestore(); }

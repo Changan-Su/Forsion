@@ -57,7 +57,9 @@ export function scheduleDockerStartupInspection(prefixes: string[]): Promise<voi
     const result = await runDocker(['ps', '-aq', ...prefixes.flatMap((prefix) => ['--filter', `name=${prefix}`])]);
     if (result.code !== 0 || result.reason || result.cleanupTimedOut) {
       const detail = result.reason || (result.cleanupTimedOut ? 'timeout' : result.stderr.trim().split('\n')[0]?.slice(0, 200) || `docker exited ${result.code}`);
-      throw new DockerUnavailableError(`Cannot confirm orphan sandbox state during startup (docker ps: ${detail})`);
+      const message = `Cannot confirm orphan sandbox state during startup (docker ps: ${detail})`;
+      // Output over the cap means the daemon answered with more containers than fit: Docker is there, report it.
+      throw result.reason === 'output-limit' ? new Error(message) : new DockerUnavailableError(message);
     }
     for (const name of result.stdout.split(/\s+/).filter(Boolean)) {
       const inspected = await runDocker(['inspect', '--type', 'container', '--format', '{{json .Mounts}}', name]);
