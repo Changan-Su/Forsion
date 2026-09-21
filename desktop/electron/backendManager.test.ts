@@ -79,8 +79,8 @@ describe('BackendManager startup exits', () => {
     vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(entry)
     process.env.TANGU_NODE_BIN = process.execPath
     const m = new BackendManager()
-    // spawnOnce 置 starting 后紧接着就 await freePort():在这个通知里同步 stop(),正好落进那个窗口
-    const off = m.onStatus((st) => { if (st.state === 'starting') { off(); void m.stop() } })
+    // spawnOnce 置 starting 后同步调 freePort() 再挂起:微任务里 stop(),正好落在 freePort 已在途的窗口
+    const off = m.onStatus((st) => { if (st.state === 'starting') { off(); queueMicrotask(() => void m.stop()) } })
     await m.start({ cloudUrl: '', sandbox: 'none' })
     await new Promise((r) => setTimeout(r, 1000))
     expect(m.getLogs().filter((l) => l === 'boot')).toHaveLength(0)

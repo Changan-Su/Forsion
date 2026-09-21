@@ -40,7 +40,7 @@ import {
 import type { WhoamiResult } from './forsionAuth'
 import { waitForAccountRenderers } from './accountTransition'
 import { importMcp, importSkills, scanAll } from './discovery'
-import { checkForUpdates, downloadUpdate, installUpdate, betaChannelOn } from './updater'
+import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn } from './updater'
 import { createTray } from './tray'
 import { readThemesDir, seedDefaultThemes } from './themes'
 import { builtinBundleSources, seedBuiltinBundles } from './builtinPlugins'
@@ -2949,6 +2949,8 @@ app.whenReady().then(async () => {
   ipcMain.handle('updater:install', async () => {
     // 先优雅停后端 → 下方 before-quit 见 'stopped' 不再 preventDefault/app.exit(0),
     // electron-updater 的退出安装路径才不被硬退出截断。
+    // 真会退出去装时先置 isQuitting:排在 ensureChain 里的那次拉起就不会在 stop 之后又把引擎起回来。
+    if (canInstallUpdate()) isQuitting = true
     await backend.stop()
     installUpdate()
     return { ok: true }
@@ -2958,7 +2960,9 @@ app.whenReady().then(async () => {
   //   tangu:  ~/.forsion(账号/设置/Agent 数据/会话/state.db)+ ~/Forsion 工作区 + ~/.tangu、~/Tangu 兼容软链
   //   desktop:userData 里的壳层配置(窗口/Amadeus)
   ipcMain.handle('app:clearData', async (_e, opts: { desktop?: boolean; tangu?: boolean }) => {
+    isQuitting = true // 先封住排队中的拉起(ensureBackend 核对它):删库期间不能又被拉起来占住 state.db
     await backend.stop() // 释放 state.db 句柄,否则占用删不掉
+    await ensureChain // 在途那次收尾(它可能正要重建默认工作区目录)再删
     // 与配置写入同排一队:在途的写先落完再删;删完同一拍就退出,排在后面的写来不及把 config.json(含 apiKey)写回来
     await configQueue(async () => {
       if (opts?.tangu) {
@@ -2974,7 +2978,6 @@ app.whenReady().then(async () => {
         }
       }
     })
-    isQuitting = true
     app.relaunch()
     app.exit(0)
     return { ok: true }
