@@ -6,20 +6,21 @@
  *   loop 调 requestApproval → 发 `approval_request` 事件 + 登记 resolver，await Promise；
  *   TUI 收到事件、用户按键 → resolveApproval(approvalId, decision)，Promise 兑现，loop 继续。
  *
- * **安全边界**：gateToolCall 在 execMode!=='host' 时立即放行（无 await、无事件），
- * 故 microserver / standalone-server / worker 行为零变化——审批只在 host-exec（TUI）激活。
+ * **安全边界**：gateToolCall 在 execMode!=='host' 时只有 mcp__ 工具过闸，其余立即放行（无 await、无事件）；
+ * 会话档现读(modeSessionId)只在 hostExec 引擎形态由 agentLoop 给出 —— 云端形态(microserver / worker)一律用 run 快照。
  *
  * 远程 host-exec（跨进程）需要的是 HTTP「租赁」端点（见架构 v2.0 §3.3 Lease），不在此文件范围。
  */
 import path from 'node:path';
 import { publish } from './eventBus.js';
-import { isOutsideWorkspace } from '../tools/fsPolicy.js';
+import { isOutsideWorkspace, writableRoots } from '../tools/fsPolicy.js';
 import { writeTargetsOf } from '../tools/writeTargets.js';
 import type { ToolCall } from '../core/types.js';
 import { runHooks } from '../hooks/index.js';
 import { currentAgentSlug } from '../seams/runContext.js';
 import { canonicalToolName, declaredApproval, toolNameSpellings } from '../tools/toolRegistry.js';
 import { getRawSection } from '../core/config.js';
+import { deps } from '../seams/runtime.js';
 import type { AppProfile } from '../seams/appProfile.js';
 
 export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
@@ -218,6 +219,29 @@ export function isKnownSafeBash(command: string): boolean {
 
 // 路径抽取已迁 tools/writeTargets.ts(检查点快照共用同一口径,见该文件头注)。
 
+const APPROVAL_MODES = new Set(['readonly', 'auto-edit', 'full-auto', 'custom']);
+/** 会话此刻存着的审批档(输入区切档 = PUT 进 agent_config)。没存 → undefined;**读失败照抛**(调用方自己决定兜底方向)。 */
+export async function storedApprovalMode(sessionId: string): Promise<ApprovalMode | undefined> {
+  const raw = await deps().state.getAgentConfig(sessionId);
+  const mode = (typeof raw === 'string' ? JSON.parse(raw) : raw)?.approvalMode;
+  return APPROVAL_MODES.has(mode) ? mode : undefined;
+}
+
+
+/** 越界写诊断:同 run 同目录只记一次(反馈包带后端日志;09-21 那份只剩工具名,答不了「它到底写哪儿了」)。 */
+const loggedEscalations = new Set<string>();
+function logEscalation(runId: string, call: ToolCall, ctx: { cwd?: string; extraRoots?: string[] }): void {
+  const cwd = ctx.cwd || process.cwd();
+  for (const t of writeTargetsOf(call)) {
+    const dir = path.dirname(path.resolve(cwd, t));
+    const key = `${runId}|${dir}`;
+    if (loggedEscalations.has(key)) continue;
+    if (loggedEscalations.size > 500) loggedEscalations.clear(); // ponytail: 只防无界增长,清空后最多重复记一行
+    loggedEscalations.add(key);
+    console.warn(`[tangu] 越界写需审批 run=${runId.slice(0, 8)} dir=${dir} roots=${JSON.stringify(writableRoots({ cwd, extraRoots: ctx.extraRoots } as any))}`);
+  }
+}
+
 /** 写目标是否越界(工作区外,但非硬拒保护路径)→ 需升级审批。借 Codex writable-roots escalation。 */
 export function writeEscalationNeeded(call: ToolCall, ctx: { cwd?: string; extraRoots?: string[] }): boolean {
   const targets = writeTargetsOf(call);
@@ -342,6 +366,9 @@ export async function gateToolCall(
   call: ToolCall,
   ctx: {
     sessionId: string; execMode?: string; approvalMode?: ApprovalMode; cwd?: string; extraRoots?: string[]; profile?: AppProfile;
+    /** 审批档跟这个会话**此刻**存的设置走(run 中途在输入区切档当场生效;团队成员 = 团队会话);没存才用 approvalMode 快照。
+     *  只给「档位本就来自会话设置」的 run(见 agentLoop.approvalModeSessionId),通道 / Muse / 自动化各自定档,不给。 */
+    modeSessionId?: string;
     /** 无人值守 run(Muse ask/agent 档):需要人决定时不 await 订阅者,改走 pendingApprovals(排队 / 代批)。 */
     approvalDeferral?: 'queue' | 'agent'; userId?: string; agentSlug?: string;
     /** 本次调用**此刻真正的执行身份**(具名子代理的展示 slug),与 agentSlug(run 的归属 agent)不同时才给。
@@ -364,19 +391,26 @@ export async function gateToolCall(
 
   // custom 档先裁决:用户写下的规则**压过**下面的 known-safe 捷径(把 `run_bash:ls` 放进 ask
   // 就该真弹审批,否则规则形同虚设);未命中则降解成 base 档,后续逻辑与三档完全一致。
+  // 档位现读:团队 run 一跑几小时、成员子 run 各自冻着启动那刻的档 —— 只认快照,用户切到「完全通行」整场纹丝不动(09-21 反馈)。
+  // 读失败 fail-closed:回落快照可能正好放开用户刚收紧的档 → 按只读问,用户写的 deny / ask 规则照样生效、allow 不放行
+  // (只读档管不到 manage_automation 这类只靠 custom 规则把关的工具,光落 readonly 等于绕过 deny —— Codex 09-21 二轮)。
   let mode = ctx.approvalMode;
+  let readFailed = false;
+  if (ctx.modeSessionId) {
+    try { mode = (await storedApprovalMode(ctx.modeSessionId)) || mode; } catch { readFailed = true; }
+  }
   let forceAsk = false;
   let askRule = '';
-  if (mode === 'custom') {
+  if (mode === 'custom' || readFailed) {
     const rules = customRules();
-    const v = customVerdictDetailed(call, rules);
+    const v = customVerdictDetailed(call, readFailed ? { ...rules, allow: [] } : rules);
     // 拒绝时把规则串一并带出:否则用户写坏一条 deny 规则,只看到 agent 莫名失败,无从调起。
     // 模型面文本一律英文(项目约定:提示/工具结果英文,UI/日志中文)
     if (v?.verdict === 'deny') return { action: 'reject', rejectReason: `Denied by approval rule: ${v.rule}` };
     if (v?.verdict === 'allow') return { action: 'approve' };
     forceAsk = v?.verdict === 'ask';
     askRule = forceAsk ? v!.rule : '';
-    mode = rules.base;
+    mode = readFailed ? 'readonly' : rules.base;
   }
 
   // known-safe 只读 bash:免审批。
@@ -384,6 +418,7 @@ export async function gateToolCall(
 
   // 越界写升级:工作区外写一律要批(full-auto 例外:用户已全信任)。
   const escalate = ctx.execMode === 'host' && mode !== 'full-auto' && writeEscalationNeeded(call, ctx);
+  if (escalate) logEscalation(runId, call, ctx);
 
   if (!escalate && !forceAsk) {
     if (!toolNeedsApproval(name, mode)) return { action: 'approve' };

@@ -135,7 +135,8 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
       {error ? <div className="child-chat-placeholder" role="alert">{error}<button onClick={() => setRetry((v) => v + 1)}>{t('childchat.retry')}</button></div>
         : !sessionId ? <div className="child-chat-placeholder">{t(target.slug ? 'childchat.notStarted' : 'childchat.legacy')}</div>
           : ready !== sessionId ? <div className="child-chat-placeholder"><Loader2 className="spin" size={18} /></div>
-            : <ChatView key={sessionId} leaf={leaf} params={{ followActive: false, sessionId, childSurface: true, readOnly: delegateRunning || persistedBusy }} />}
+            // teamSessionId:Team Desk 成员行打开的就是本团队的成员工作会话(= 引擎核实成员身份用的父链接),ChatView 据此让审批药丸跟团队档
+            : <ChatView key={sessionId} leaf={leaf} params={{ followActive: false, sessionId, childSurface: true, readOnly: delegateRunning || persistedBusy, teamSessionId: target.slug ? parentId : undefined }} />}
     </div>
   </div>
 }

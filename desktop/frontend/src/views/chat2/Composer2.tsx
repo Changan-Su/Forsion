@@ -46,6 +46,8 @@ registerMessages({
   'input.presetChat': { zh: 'Chat', en: 'Chat' }, // 产品词,中英同形(与侧栏胶囊 sidebar.mode.* 同一套)
   'input.presetWork': { zh: 'Work', en: 'Work' },
   'input.presetLocked': { zh: '模式在创建会话时确定;换模式请新建会话', en: 'Mode is fixed when the session is created; start a new session to change it' },
+  // 团队成员子聊天:审批档读写的都是团队会话,选了对全队生效。
+  'input.approvalSection.team': { zh: '团队审批档 · 改动对全队生效', en: 'Approval mode for the whole team' },
   // /export 导出的 markdown 里,用户那一侧消息的小标题(助手侧固定是品牌名 Tangu,不翻译)。
   'composer2.exportRoleUser': { zh: '我', en: 'Me' },
   // 「跳过了哪些文件」提示里的列表分隔符 —— 中文用顿号,英文用逗号+空格。
@@ -232,6 +234,8 @@ export const Composer2: React.FC<{
   disabledPlaceholder?: string
   running: boolean
   execConfig: Pick<AgentConfig, 'execMode' | 'approvalMode' | 'cwd'>
+  /** 审批档是团队会话的(团队成员会话):显示值与写入由宿主换成团队会话,这里只把菜单标题改成「对全队生效」。 */
+  teamApproval?: boolean
   models?: ModelInfo[] | null
   /** 全量模型目录（含生图模型）+ app 级默认槽；主模型列表仍走上面的会话可见过滤。 */
   modelsResponse?: ModelsResponse | null
@@ -315,7 +319,7 @@ export const Composer2: React.FC<{
   /** 「立即插话」:打断当前 run,把等待区消息强发。 */
   onSteerNow?: () => void
 }> = ({
-  sessionId, advisory, autoFocus, disabled, disabledPlaceholder, running, execConfig,
+  sessionId, advisory, autoFocus, disabled, disabledPlaceholder, running, execConfig, teamApproval,
   models, modelsResponse, modelId, onModelChange, engines, engineId,
   engineModels, engineModelId, onEngineModelChange, engineCommands,
   thinkingLevel, onThinkingChange,
@@ -1587,7 +1591,7 @@ export const Composer2: React.FC<{
                     )}
                     {isHost && (
                       <>
-                        <div className="menu-section">{t('input.approvalSection')}</div>
+                        <div className="menu-section">{t(teamApproval ? 'input.approvalSection.team' : 'input.approvalSection')}</div>
                         {APPROVALS.map(({ id, Icon, key, desc, ...a }) => (
                           <button
                             key={id}

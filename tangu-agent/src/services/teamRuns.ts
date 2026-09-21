@@ -11,6 +11,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
 import { createRun, getRun, updateRunStatus } from './runStore.js';
 import { subscribe, type AgentEvent } from './eventBus.js';
+import { storedApprovalMode } from './approvals.js';
 import type { NormalAgentDef } from '../agents/agentRegistry.js';
 
 /** 成员工作会话的 kind(引擎内部隐藏种类,与 'discussion' 同列:不进会话列表,只经 /background 出现在 Team Desk)。 */
@@ -43,6 +44,8 @@ export interface MemberActivation {
   extraRoots?: string[];
   wsProject?: string | null;
   approvalMode?: string;
+  /** 团队 run 的审批档来自团队会话的设置(客户端发起):成员子 run 在审批时现读团队会话此刻的档(用户中途切档当场生效)。 */
+  followSessionMode?: boolean;
   signal: AbortSignal;
   /** 子会话 / 子 run 建好、入队之前回调(团队 run 据此发 team_member start,带上 id)。 */
   onStarted?: (ids: { sessionId: string; runId: string }) => void;
@@ -106,8 +109,9 @@ export function memberRunConfig(a: MemberActivation): Record<string, unknown> {
     cwd: a.cwd,
     extraRoots: a.extraRoots,
     workspaceProject: a.wsProject || undefined,
-    // 成员定义自带审批档优先(与旧 runGroupTurn 同口径),否则继承团队会话的;主循环再按 execMode 补缺省。禁 full-auto 的红线由团队会话侧守。
-    approvalMode: a.member.approvalMode || a.approvalMode || undefined,
+    // 团队会话的档优先,成员定义只在会话没设时由 applyAgentActivation 补(与主循环「会话显式值优先」同口径)。
+    // 反过来(旧 runGroupTurn 口径)= 会话选了完全通行、成员 config.toml 里一句 auto-edit 照样逐次弹;会话选自动编辑、成员写 full-auto 则被它自己提权。
+    approvalMode: a.approvalMode || undefined,
     thinkingLevel: a.member.thinkingLevel || undefined,
     preset: null,
     teamMember: {
@@ -118,6 +122,7 @@ export function memberRunConfig(a: MemberActivation): Record<string, unknown> {
       teamDoc: a.teamDoc,
       cycle: a.cycle,
       def: a.inlineDef ? a.member : undefined,
+      followSessionMode: a.followSessionMode || undefined,
     },
   };
 }
@@ -135,6 +140,9 @@ export const activateMember: ActivateMember = async (a) => {
   };
   try {
     sessionId = await ensureMemberSession(a);
+    // 团队 run 可能已跑了几小时:按团队会话此刻的档下发,子聊天里显示的档 / 成员会话里直接追问用的档才与实际一致(审批闸另外现读)。
+    // 只管显示与直接追问的快照,读失败就保留原值(审批闸另外现读、读失败按只读,安全兜底在那边)。
+    if (a.followSessionMode) a = { ...a, approvalMode: (await storedApprovalMode(a.teamSessionId).catch(() => undefined)) || a.approvalMode };
     // Direct follow-ups in the child Chat View retain its team identity and execution scope.
     // model_id 一起写穿:会话级调档(teamMemberConfigs)让成员模型逐次可变,只在建会话时写一次的话,
     // 子聊天里直接追问会退回上一个模型(建会话那次的值)。

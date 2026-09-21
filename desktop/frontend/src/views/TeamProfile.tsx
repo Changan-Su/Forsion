@@ -3,13 +3,13 @@ import { ArrowDown, ArrowLeft, ArrowUp, Bot, ChevronRight, ImageUp, Loader2, Plu
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { deleteTeamAvatar, getTeam, patchTeam, putSessionConfig, updateSession, uploadTeamAvatar } from '../services/backendService'
+import { deleteTeamAvatar, getTeam, patchSessionConfig, patchTeam, updateSession, uploadTeamAvatar } from '../services/backendService'
 import type { AgentConfig, ModelInfo, NormalAgentDef, SessionRecord, TeamDef, ThinkingLevel } from '../types'
 import { isTeamImageAvatar, THINKING_LEVELS } from '../types'
 import { ProfileModelField, ProfileTextEditor } from './profileControls'
 import { AvatarStack } from '../components/AvatarStack'
 import { ModelSelect } from '../components/ModelSelect'
-import { moveTeamMember, teamDraft, teamSessionConfig, type MemberTuning, type TeamDraft } from './teamProfileState'
+import { moveTeamMember, teamDraft, teamSessionConfig, teamSessionPatch, type MemberTuning, type TeamDraft } from './teamProfileState'
 import './teamProfileMessages'
 import './teamProfile.css'
 
@@ -128,8 +128,12 @@ export function TeamProfile({ session, config, renderMember }: Props) {
       }
       if (session) {
         const current = useApp.getState().configBySession[session.id] || session.agent_config || config
-        const savedConfig = await putSessionConfig(s.cfg, session.id, teamSessionConfig(current, nextDraft))
-        useApp.setState((a) => ({ configBySession: { ...a.configBySession, [session.id]: savedConfig }, sessions: a.sessions.map((v) => v.id === session.id ? { ...v, agent_config: savedConfig } : v) }))
+        // 只写团队这几个键(服务端按键合并);老引擎没有 PATCH 就回落整对象 PUT —— 整对象在回落那一刻按本地最新现拼,
+        // 等 404 的这一拍里别的 setter(如刚收紧的审批档)可能已经改过本地
+        const savedConfig = await patchSessionConfig(s.cfg, session.id, teamSessionPatch(nextDraft), () => teamSessionConfig(useApp.getState().configBySession[session.id] || current, nextDraft))
+        // 回来只把团队这几个键并进本地最新配置(会话配置与列表行两处):响应是保存那一刻的快照,整份盖回去会把保存途中别处改过的键
+        // (如刚移除的工作范围、刚切的审批档)退回旧值
+        useApp.setState((a) => ({ configBySession: { ...a.configBySession, [session.id]: teamSessionConfig(a.configBySession[session.id] || savedConfig, nextDraft) }, sessions: a.sessions.map((v) => v.id === session.id ? { ...v, agent_config: teamSessionConfig(v.agent_config || savedConfig, nextDraft) } : v) }))
         if (!config.teamSlug && nextDraft.name.trim() !== session.title) {
           const updated = await updateSession(s.cfg, session.id, { title: nextDraft.name.trim() })
           useApp.setState((a) => ({ sessions: a.sessions.map((v) => v.id === session.id ? { ...v, title: updated.title } : v) }))

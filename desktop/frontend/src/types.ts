@@ -467,6 +467,9 @@ export interface AgentConfig {
    *  cwd 仍是默认目录 —— 相对路径只相对 cwd 解析,这些一律绝对路径引用。引擎侧封顶 8 个。 */
   extraRoots?: string[]
   approvalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'
+  /** 团队成员会话的团队段(引擎 teamRuns 写,桌面只读):有 teamSessionId 的 host 会话,审批闸只听那个团队会话此刻的档
+   *  (tangu-agent agentLoop.approvalModeSessionId),本会话自己的 approvalMode 不算数。 */
+  teamMember?: { teamSessionId?: string }
   /** 验证回路(/verify,host-only):收尾前引擎自动跑的命令,失败回灌逼修到绿才许收尾;空/缺省=关闭。 */
   verifyCommand?: string
   /** 计划模式(类 Claude plan mode):只读工具集,agent 经 exit_plan_mode 提交计划求批准。 */

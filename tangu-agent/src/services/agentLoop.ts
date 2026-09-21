@@ -57,6 +57,7 @@ import { isRetryableLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
 import { query } from '../core/db.js';
+import { TEAMWORK_KIND } from './teamRuns.js';
 import { getTeam } from '../agents/teamRegistry.js';
 import { listPluginMetas } from '../plugins/registry.js';
 import { isPluginEnabledSync } from '../plugins/settingsStore.js';
@@ -309,6 +310,18 @@ export function bindSessionFacts(agentConfig: any, facts: SessionFacts): void {
   }
   // 独立团队:groupAgents 缺省由团队成员表填(teamRegistry,激活块里补);默认团队模式,显式 false 切回普通 Work;不委托引擎、host;cwd 随团队 Library 在激活块补。
   if (facts.teamSlug) { agentConfig.groupChat = agentConfig.groupChat !== false; agentConfig.engineId = undefined; agentConfig.execMode = 'host'; agentConfig.preset = null; }
+}
+
+/** 本 run 审批时现读哪个会话存着的档(gateToolCall.modeSessionId);undefined = 只用启动快照。
+ *  - 团队成员一律听**团队会话**(teamSessionId = 已核实的父团队,见 runLoop):客户端团队 run 起的激活(teamMember.followSessionMode
+ *    由团队 run 下发)、成员子聊天里直接追问(输入区发起)都算。成员会话里存的档只是上次激活抄过去的快照,不作数 —— 让它参与判定
+ *    就得处理「团队降档后它还是旧宽档」「激活回写与切档撞车」一串竞态(Codex 09-21 两轮)。TUI / 通道起的团队 run 不带标记 → 快照。
+ *  - 其余客户端输入区发起的(input.origin='client',只有 POST /agent/runs 会写):跟本会话,中途切档当场生效。
+ *    不分 execMode:沙箱会话的 MCP 工具照样过闸(Codex 09-21 三轮)。
+ *  - 通道(微信远程档)/ Muse / 自动化 / 讨论 / TUI:各自定档,绝不被会话存值改写 —— 桌面把会话切成完全通行,远程消息不该跟着放开。 */
+export function approvalModeSessionId(p: { fromClient: boolean; sessionId: string; teamSessionId?: string; followSessionMode?: boolean }): string | undefined {
+  if (p.teamSessionId) return p.fromClient || p.followSessionMode ? p.teamSessionId : undefined;
+  return p.fromClient ? p.sessionId : undefined;
 }
 
 function safeRealpath(p: string): string {
@@ -736,7 +749,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
     if (Object.keys(patch).length) {
       ac.signal.throwIfAborted();
-      await deps().state.setAgentConfig(sessionId, JSON.stringify({ ...(stored || {}), ...patch }));
+      // 写前现读再合:上面读存值到这儿隔着几次 await(团队会话的 getTeam 是真文件 I/O),期间用户在输入区切的档(PUT)不能被旧对象整份盖回去 —— 审批闸现读的就是它(Codex 09-21 P1)。
+      // 现读 → 写之间只剩微任务:本机形态是 better-sqlite3(同步 API 包 Promise),HTTP 处理器(宏任务)插不进来;
+      // PG / HTTP 状态层有真异步间隙,但那些形态(服务端 / 云 worker)没有 host 审批闸,不读这个档。
+      const freshRaw = await deps().state.getAgentConfig(sessionId);
+      const fresh = typeof freshRaw === 'string' ? JSON.parse(freshRaw) : freshRaw;
+      await deps().state.setAgentConfig(sessionId, JSON.stringify({ ...(fresh && typeof fresh === 'object' && !Array.isArray(fresh) ? fresh : stored || {}), ...patch }));
     }
   } catch (e: any) {
     // 兜底失败不阻断 run,但要留痕:此时按 run 值跑(客户端自己声明的 preset),不是静默的
@@ -849,6 +867,20 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       : [];
   const approvalMode: ApprovalMode =
     agentConfig.approvalMode || (execMode === 'host' ? 'auto-edit' : 'full-auto');
+  // 会话档现读只在本机引擎形态(hostExec;含本机的沙箱会话 —— 它们的 MCP 工具也过闸):云端形态的状态层是 HTTP,
+  // 每次 MCP 调用多一趟往返、瞬时失败还会落只读弹审批,而这次修的是本机的事 → 云端照旧用快照。
+  // 成员身份以库里的父链接为准:agentConfig 来自请求体,分支会话(branchSession)也会把 teamMember 原样抄走 —— 不核实,
+  // 审批就能被指到任意会话(Codex 09-21 三轮)。
+  let verifiedTeamSessionId: string | undefined;
+  if (isTeamMember && profile.capabilities.hostExec) {
+    try {
+      const [row] = await query<any[]>(`SELECT parent_session_id, kind FROM chat_sessions WHERE id = ?`, [sessionId]);
+      if (row?.kind === TEAMWORK_KIND && row.parent_session_id === teamMember.teamSessionId) verifiedTeamSessionId = String(row.parent_session_id);
+    } catch { /* 查不到就不认成员身份 */ }
+  }
+  const modeSessionId = profile.capabilities.hostExec
+    ? approvalModeSessionId({ fromClient: input.origin === 'client', sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true })
+    : undefined;
   // 无人值守的异步审批(Muse ask/agent 档):**只信引擎内部起的 run** —— input.background 由 muse.ts 直接写进
   // createRun 的 input,/agent/runs 路由按字段名组装 input、客户端塞不进来;agentConfig 是请求体可控的,
   // 单看它就能让普通 run 把同步审批改成排队甚至代批(Codex 09-10 P1)。普通 run 恒 undefined = 同步审批一字不变。
@@ -938,6 +970,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (agentConfig.groupChat && profile.capabilities.groupChat && ps.groupChat) {
       await runGroupChat({
         runId, sessionId, userId, appId, modelId, execMode, cwd, extraRoots, wsProject, profile, agentConfig,
+        followSessionMode: !!modeSessionId,
         message: input.message ? String(input.message) : '',
         userMessageId: input.userMessageId,
         attachments,
@@ -1230,7 +1263,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings,
       dispatchTargets,
       hostSandbox: runHostSandbox,
-      enabledSkillIds, execMode, cwd, extraRoots, approvalMode, profile, modelId, planMode, wsProject,
+      enabledSkillIds, execMode, cwd, extraRoots, approvalMode, approvalModeSessionId: modeSessionId, profile, modelId, planMode, wsProject,
       muse: !!agentConfig.muse,
       activityAccess: !!agentConfig.activityAccess,
       automationOrigin: typeof agentConfig.automationOrigin === 'string' ? agentConfig.automationOrigin : undefined,
@@ -1834,7 +1867,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
       // host-exec 审批闸门：execMode!=='host' 时立即放行（无 await、无事件）→ server/worker 零影响。
       const decision = await gateToolCall(runId, effCall, {
-        sessionId, execMode, approvalMode, cwd, extraRoots, profile,
+        sessionId, execMode, approvalMode, modeSessionId, cwd, extraRoots, profile,
         approvalDeferral, userId, agentSlug: activeAgentSlug,
       }, ac.signal);
 

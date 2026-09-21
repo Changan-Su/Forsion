@@ -25,7 +25,7 @@ function sseLines(events) {
 /**
  * 起一个桩后端。返回 { url, seen, queue, close }。
  *  - queue.push(events):给下一次 run 排一份剧本(不排=只回一条 done)
- *  - seen:UI 发来的请求记录(runs/inquiries/approvals/search/checkpoints/restore/messagesDeleted)
+ *  - seen:UI 发来的请求记录(runs/configs(带 method:PUT 整对象 / PATCH 按键)/inquiries/approvals/search/checkpoints/restore/messagesDeleted)
  *  - data:可改的静态数据(sessions/messages/models/searchHits/checkpoints)
  */
 async function startStubEngine(data = {}) {
@@ -48,6 +48,8 @@ async function startStubEngine(data = {}) {
     failRuns: false,
     /** 置 true 后检索端点回 500(测「失败 ≠ 无结果」)。 */
     failSearch: false,
+    /** 置 true = 扮没有 PATCH /agent/sessions/:id/config 的老引擎(回 404),测客户端回落整对象 PUT。 */
+    noConfigPatch: false,
   };
   const runs = new Map(); // runId -> events
   const open = new Map(); // runId -> 挂住的 SSE 响应(等审批/询问)
@@ -182,8 +184,17 @@ async function startStubEngine(data = {}) {
     }
     if (/^\/agent\/sessions\/[^/]+\/messages$/.test(p)) return json({ messages: state.messages });
     if (/^\/agent\/sessions\/[^/]+\/config$/.test(p)) {
-      if (req.method === 'PUT') seen.configs.push({ sessionId: p.split('/')[3], config: await body() });
-      return json({ agent_config: { execMode: 'host', approvalMode: 'auto-edit' } });
+      const fixed = { execMode: 'host', approvalMode: 'auto-edit' };
+      if (req.method === 'PUT' || req.method === 'PATCH') {
+        const config = await body();
+        seen.configs.push({ sessionId: p.split('/')[3], method: req.method, config });
+        // 扮老引擎:没有按键合并的 PATCH 路由 → 客户端该回落整对象 PUT
+        if (req.method === 'PATCH' && state.noConfigPatch) return json({ detail: `Cannot PATCH ${p}` }, 404);
+        // 应答同真引擎 = 落库后的整份配置(客户端按它认「存上的是哪一档」):PUT 整对象替换,PATCH 并进(null 删键)
+        const stored = req.method === 'PUT' ? config : { ...fixed, ...config };
+        return json({ agent_config: Object.fromEntries(Object.entries(stored).filter(([, v]) => v !== null)) });
+      }
+      return json({ agent_config: fixed });
     }
     if (/^\/agent\/sessions\/[^/]+\/background$/.test(p)) return json({ background: [] });
     if (p === '/agent/models') return json({ models: state.models, defaultModelId: state.models[0]?.id, directProviders: data.directProviders || [] });

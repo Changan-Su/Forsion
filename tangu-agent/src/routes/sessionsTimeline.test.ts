@@ -56,4 +56,12 @@ describe('timelineFields', () => {
     // ponytail: 逐段明细不进导出(一次迭代九条),要逐段对比走 scripts/cache-hit-report.mjs。
     expect(f).not.toHaveProperty('segments');
   });
+
+  it('approval_request 带「为什么问 / 生效档 / 哪位成员」,不带路径与参数', () => {
+    const f = timelineFields('approval_request', {
+      approvalId: 'a1', name: 'write_file', arguments: '{"path":"C:\\\\x"}', preview: 'write C:\\x',
+      reason: { kind: 'escalate', mode: 'auto-edit' }, agentSlug: 'xie', agentName: 'Xie', messageId: 'm1', runId: 'r1',
+    });
+    expect(f).toEqual({ name: 'write_file', reason: 'escalate', mode: 'auto-edit', agent: 'xie' });
+  });
 });

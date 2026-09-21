@@ -22,7 +22,7 @@ let home: string;
 let events: Array<{ type: string; payload: any }>;
 let finals: Array<{ content: string; modelId: string }>;
 let statuses: Array<{ status: string; extra: any }>;
-let acts: Array<{ slug: string; nth: number; delta: string }>;
+let acts: Array<{ slug: string; nth: number; delta: string; approvalMode?: string; followSessionMode?: boolean }>;
 /** 每位成员「说完这句要不要继续」:true = 这条发言以 DONE 收尾。 */
 let doneDecider: (slug: string, nth: number) => boolean;
 let inquiryAnswer: string;
@@ -30,7 +30,7 @@ let inquiryAnswer: string;
 const fakeActivate: ActivateMember = async (a) => {
   const slug = a.member.slug;
   const nth = acts.filter((x) => x.slug === slug).length + 1;
-  acts.push({ slug, nth, delta: a.delta });
+  acts.push({ slug, nth, delta: a.delta, approvalMode: a.approvalMode, followSessionMode: a.followSessionMode });
   a.onStarted?.({ sessionId: `ws-${slug}`, runId: `child-${slug}-${nth}` });
   await new Promise((r) => setTimeout(r, 3));
   return { status: 'done', text: `${slug}-speech-${nth}${doneDecider(slug, nth) ? '\nDONE' : ''}`, sessionId: `ws-${slug}`, runId: `child-${slug}-${nth}` };
@@ -108,6 +108,15 @@ describe('runGroupChat', () => {
     expect(alpha2.delta).not.toContain('alpha-speech-1'); // 自己的发言不回灌(住在自己的工作会话里)
     expect(events.some((e) => e.type === 'done')).toBe(true);
     expect(statuses.at(-1)?.status).toBe('done');
+  });
+
+  it('审批档随激活下发:团队会话的档 + followSessionMode(客户端团队 run)到每位成员;没标记就不带', async () => {
+    doneDecider = () => true;
+    await runGroupChat(params({ followSessionMode: true, agentConfig: { groupNoSummary: true, groupAgents: ['alpha', 'beta'], groupMaxRounds: 1, approvalMode: 'full-auto' } }));
+    expect(acts.map((a) => [a.approvalMode, a.followSessionMode])).toEqual([['full-auto', true], ['full-auto', true]]);
+    acts = [];
+    await runGroupChat(params({ agentConfig: { groupNoSummary: true, groupAgents: ['alpha', 'beta'], groupMaxRounds: 1 } }));
+    expect(acts.every((a) => a.approvalMode === undefined && !a.followSessionMode)).toBe(true);
   });
 
   it('every member ending with DONE stops the discussion (no vote step, no vote events)', async () => {

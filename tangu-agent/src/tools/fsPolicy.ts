@@ -24,8 +24,12 @@ export function writableRoots(ctx: ToolContext): string[] {
   const roots = [path.resolve(ctx.cwd || process.cwd())];
   // agent 的 ~/.tangu/agents/<slug>/ 是它自己的私有目录(Library/ 在此):系统提示承诺它能主动
   // 往 Library 存取资料,故须可写,否则每次写都触发「越界写」审批 → agent 放弃使用 Library。
+  // 两个 slug 都算:提示词按展示身份指路(agentLoop「Your Personal Folder」),共用默认记忆的 agent 记忆域却是 xyra ——
+  // 只认记忆域 slug,它自己的 Library 就成了「工作区外」。
   try {
-    roots.push(path.join(agentsDir(), currentAgentSlug() || DEFAULT_AGENT_SLUG));
+    for (const slug of new Set([currentAgentSlug() || DEFAULT_AGENT_SLUG, currentDisplayAgentSlug()])) {
+      if (slug) roots.push(path.join(agentsDir(), slug));
+    }
   } catch { /* ignore */ }
   // 用户在「工作范围」里显式加的目录:等同工作区,不再逐次弹越界写审批。
   // 仍受 isProtected 约束(.git 内部、~/.ssh 等一律硬拒),加进来也提不了权。

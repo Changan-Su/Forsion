@@ -204,6 +204,13 @@ export function ChatView({ leaf, params }: ViewProps) {
           ...s.newChatCfg,
         }, preset) as AgentConfig
       })(), amadeusRoot)
+  // 团队成员会话(子聊天里直接追问):审批闸只听团队会话此刻的档(引擎 agentLoop.approvalModeSessionId),
+  // 成员会话自己的存值不算数 → 药丸显示团队档、改也改团队会话(与团队主区药丸同一条写路径)。
+  // 成员身份同引擎按父链接核实:父会话 id 由 ChildChatPanel 的 Team Desk 成员行给,须等于配置里的 teamMember ——
+  // 分支会话会把 teamMember 原样抄走,引擎不认,这里也不认(否则在分支里改档会改到原团队)。
+  // 团队配置没在本地(理论上不会:子聊天只挂在团队会话的 ChatView 下)就不接管 —— 整对象 PUT 会冲掉团队配置。
+  const teamSid = typeof params.teamSessionId === 'string' && params.teamSessionId === mvCfg.teamMember?.teamSessionId ? params.teamSessionId : undefined
+  const teamCfg = useApp((state) => (teamSid ? state.configBySession[teamSid] : undefined))
   const mvModelId = activeChatModelId({ ...s, activeId }) // 与建会话落库、startRun、ctx.tangu.activeModel() 同源,勿就地展开回退链
   const visibleModels = !s.modelsResp?.models
     ? null
@@ -647,7 +654,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           disabled={!!params.readOnly || s.connState !== 'ok' || (studioChat && !studioRoot)}
           disabledPlaceholder={studioChat && !studioRoot ? t('studio.chooseProject') : undefined}
           running={running}
-          execConfig={mvCfg}
+          execConfig={teamCfg ? { ...mvCfg, approvalMode: teamCfg.approvalMode || mvCfg.approvalMode } : mvCfg}
+          teamApproval={!!teamCfg}
           models={visibleModels}
           modelsResponse={s.modelsResp}
           modelId={mvModelId}
@@ -684,7 +692,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           // Solo agents create a separate team from the add menu; project and team sessions edit their roster in place.
           onGroupChange={params.childSurface || mvCfg.soloAgentSlug || mvCfg.soloEngineId ? undefined : activeId ? (patch) => s.setSessionGroup(patch, activeId) : (patch) => s.setNewChatCfg((c) => ({ ...c, ...patch }))}
           onAddAgent={mvCfg.soloAgentSlug ? () => setRaiseTeam(true) : undefined}
-          onNormalWork={() => {
+          // 成员会话不给「普通模式」:它连带写的 auto-edit 落在成员会话上,对审批无效。
+          onNormalWork={teamCfg ? undefined : () => {
             const patch: Partial<AgentConfig> = { planMode: false, groupChat: false, approvalMode: 'auto-edit' }
             if (mvCfg.teamSlug && !mvCfg.agentSlug) patch.agentSlug = mvCfg.groupAgents?.[0] || s.defaultAgentSlug
             if (activeId) s.setExecConfig(patch, activeId)
@@ -704,7 +713,10 @@ export function ChatView({ leaf, params }: ViewProps) {
           }}
           onBranch={!params.childSurface && activeId ? () => void s.branchFromMessage(undefined, activeId) : undefined}
           onOpenSettings={() => s.openSettings('skills')}
-          onExecConfigChange={(patch) => s.setExecConfig(patch, activeId)}
+          // 成员会话只转 approvalMode:Composer2 顺手带的 cwd / execMode 是成员的,整对象 PUT 进团队会话会盖掉团队的。
+          onExecConfigChange={teamSid && teamCfg
+            ? (patch) => { if (patch.approvalMode) s.setExecConfig({ approvalMode: patch.approvalMode }, teamSid) }
+            : (patch) => s.setExecConfig(patch, activeId)}
           onSend={async (text, attachments, workspaceFiles, skillIds, mentions) => {
             if (studioChat) {
               const target = useCodeStudio.getState().prepareRun()

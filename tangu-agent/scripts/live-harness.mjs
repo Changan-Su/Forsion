@@ -24,6 +24,7 @@
  *   npm run live:harness -- --only grant                     # 改 delegate.grantTools / 子代理管理面闸后跑:授予时子代理用得上 manage_schedule,不授予时照旧被拒(正负两跑,均 action=list 无副作用)
  *   npm run live:harness -- --only churn                     # 同会话 6 连发的后续调用命中画像(不设命中率阈值,六个 run 须跑完)
  *   npm run live:harness -- --only ttft --ttft-rounds 5      # 首 token 延迟:preset(chat|work)× 思考档(off|medium)2×2,每格 N 会话 × 2 轮(冷/热缓存),交错跑
+ *   npm run live:harness -- --only teamapproval              # 团队 × 完全通行(09-21 反馈):成员 config 自带 auto-edit / run 启动后才切档,两条都须 0 次审批;改审批闸 / teamRuns 档位后跑
  *   npm run live:harness -- --only refine                    # 自进化闭环(09-18):Historian 自动档提名 → 收件箱 → /refine 采纳写 HARNESS.md → 新会话系统提示带上;改 REFINE_DIRECTIVE / harnessStore / 判官 harness 字段 / 注入槽后跑
  *   node scripts/live-harness.mjs --selftest                 # 纯判据(done 锚点 / load_tools 措辞 / 子代理归属 / 团队激活窗与真并行)的负对照;不起引擎、不需凭证
  *
@@ -39,7 +40,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, append
 import { createServer } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { tmpdir, homedir } from 'node:os';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fromDb, report as timelineReport } from './stall-timeline.mjs';
 
@@ -53,7 +54,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'loop', 'group', 'teamdup', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'loop', 'group', 'teamdup', 'teamapproval', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -62,7 +63,7 @@ const FILLER = Math.max(0, Math.floor(Number(opt('filler', 0)) || 0));
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['personas', 'rename', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -388,11 +389,12 @@ async function seedMemory() {
   console.log(`记忆已预置:填充行 ${SEED_PAD.length} 字(${PAD_TOKEN})+ 事实行(${SEED_TOKEN}),共 ${entries.length} 条`);
   memorySeeded = true;
 }
-/** 起 run 并消费 SSE 到 done/error;approval_request 一律代批(记数),单 run 超时算 error。 */
-async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client) {
+/** 起 run 并消费 SSE 到 done/error;approval_request 一律代批(记数),单 run 超时算 error。
+ *  onApproval(p):代批前先回调(teamapproval D 腿在第一张审批卡出现时切档,模拟用户在输入区中途切到完全通行)。 */
+async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client, onApproval) {
   const t0 = Date.now();
   const { runId } = await api('/agent/runs', { method: 'POST', body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, client, agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
-  const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], approvals: 0, usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, firstTokenMs: null, wallMs: 0 };
+  const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], approvals: 0, approvalList: [], usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, firstTokenMs: null, wallMs: 0 };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
@@ -428,6 +430,8 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'subagent' && p.phase === 'start') ev.subStarts.push({ subId: String(p.subId || ''), grants: Array.isArray(p.grants) ? p.grants.map(String) : null });
           else if (e.type === 'approval_request') {
             ev.approvals += 1;
+            ev.approvalList.push({ name: p.name, reason: p.reason?.kind, mode: p.reason?.mode, agent: p.agentSlug, args: String(p.arguments || '').slice(0, 300) });
+            if (onApproval) await onApproval(p);
             const id = p.approvalId || p.id || p.approval_id;
             if (id) await api(`/agent/runs/${runId}/approvals/${id}`, { method: 'POST', body: JSON.stringify({ action: 'approve' }) }).catch((err) => { ev.approveError = String(err.message); });
           }
@@ -665,6 +669,50 @@ try {
       detail: ev.error || `发言 ${ev.group.remarks.length} 条 / ${spoke.size} 人;激活 ${ev.group.starts.length} 次;收场 ${ev.group.ended?.reason || '无'};重复发言 ${dups.length ? dups.join(',') : '无'}`,
       output: ev.group.remarks.map((r) => `[${r.slug}] ${r.text}`).join('\n\n---\n\n'), ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
     };
+  });
+
+  // 09-21 Windows 反馈「完全通行依然需要审批,工作区内当成工作区外审批」的两种成因各跑一条(团队会话存值都是完全通行):
+  //   B = 成员 config 自带 approval_mode=auto-edit(模型照 manage-agents-guide 示例建成员就会这样),旧口径成员定义压过会话;
+  //   A = run 快照还是自动编辑(团队 run 启动后用户才切到完全通行 —— 一跑几小时,成员子 run 冻着启动那刻的档)。
+  // 判据:两条都 0 次审批,且两位成员真的把文件写到了工作区外(防「模型没调工具」的假绿)。负对照 = 用修复前的 dist 跑,须红。
+  // C = 自动编辑档下的「工作区内」:成员写默认目录与工作范围里加的目录,写入一次都不许问(run_bash 在这档本就要问,不计)。
+  // D = 真·中途切档:团队 run 以自动编辑起跑,第一张审批卡出现时 PATCH 团队会话 { approvalMode: 完全通行 }(桌面切档就是这个请求,只带这一个键);
+  //     成员随后那次写(-2.txt)不许再问。切档前已经排队的卡照常出现,不计。
+  await scenario('teamapproval', 'teamapproval 团队 × 完全通行:成员不再逐次弹审批', async () => {
+    const outside = join(OUT, 'outside-scope'); mkdirSync(outside, { recursive: true });
+    const scope = join(OUT, 'team-scope'); mkdirSync(scope, { recursive: true });
+    const mk = (slug, name) => api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name, description: 'live harness', approvalMode: 'auto-edit',
+      systemPrompt: `You are ${name}. Do exactly the file writes and shell commands the user assigns to you, in the given order, one tool call per turn: write_file for each file (content "${name} was here"), run_bash for each command. Then reply with the command output and DONE on its own line. Do not delegate, do not ask teammates, do not use other tools.` }) }).catch(() => null);
+    await mk('live-wren', 'Wren'); await mk('live-kite', 'Kite');
+    const legs = [];
+    for (const [leg, stored, snapshot] of [['B', 'full-auto', 'full-auto'], ['A', 'full-auto', 'auto-edit'], ['C', 'auto-edit', 'auto-edit'], ['D', 'auto-edit', 'auto-edit']]) {
+      const cfg = { ...AGENT_CONFIG, groupChat: true, groupAgents: ['live-wren', 'live-kite'], groupSeedHistory: false, groupNoSummary: true, ...(leg === 'C' ? { extraRoots: [scope] } : {}) };
+      const sid = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: `Team approval ${leg}`, model_id: MODEL, agent_config: { ...cfg, approvalMode: stored } }) })).session.id;
+      const files = leg === 'C'
+        ? { wren: join(scope, 'wren-C.txt'), kite: join(workspace, 'kite-C.txt') }
+        : { wren: join(outside, `wren-${leg}.txt`), kite: join(outside, `kite-${leg}.txt`) };
+      if (leg === 'D') { files.wren2 = join(outside, 'wren-D-2.txt'); files.kite2 = join(outside, 'kite-D-2.txt'); }
+      let switched = false;
+      const flip = leg === 'D' ? async () => {
+        if (switched) return; switched = true;
+        await api(`/agent/sessions/${sid}/config`, { method: 'PATCH', body: JSON.stringify({ approvalMode: 'full-auto' }) });
+      } : undefined;
+      // 路径给相对默认目录的短写法:模型抄长临时路径会抄错段(实测把 live-xxx/ 整段吞掉,文件落到别处 → 判据误红)。
+      const at = (f) => { const r = relative(workspace, f); return r.startsWith('..') ? r : `./${r}`; }; // 默认目录下的也带 ./,否则模型会照抄队友的 ../ 前缀
+      const task = leg === 'D'
+        ? `One tool call per turn, wait for each result before the next. Wren: write ${at(files.wren)}, then run \`node --version\`, then write ${at(files.wren2)}. Kite: write ${at(files.kite)}, then run \`node --version\`, then write ${at(files.kite2)}.`
+        : `Wren: write ${at(files.wren)} and run \`node --version\`. Kite: write ${at(files.kite)} and run \`node --version\`.`;
+      const ev = await run(sid, task, 300_000, { ...cfg, approvalMode: snapshot }, 'desktop/live-harness', flip);
+      const writeAsks = ev.approvalList.filter((x) => x.name !== 'run_bash').length;
+      const lateAsks = ev.approvalList.filter((x) => x.args.includes('-D-2.txt')).length;
+      legs.push({ leg, ev, writeAsks, lateAsks, switched, written: Object.values(files).filter((f) => existsSync(f)).length, expected: Object.keys(files).length });
+    }
+    const ok = legs.every((l) => !l.ev.error && l.written === l.expected && (l.leg === 'C' ? l.writeAsks === 0 : l.leg === 'D' ? (l.switched && l.lateAsks === 0) : l.ev.approvals === 0));
+    const ev = legs[0].ev;
+    return { ok,
+      detail: legs.map((l) => `${l.leg}: 审批 ${l.ev.approvals}(写入 ${l.writeAsks}${l.leg === 'D' ? `,切档后的第二次写 ${l.lateAsks}${l.switched ? '' : ',没等到审批卡没切档'}` : ''})${l.ev.approvalList.length ? ' ' + JSON.stringify(l.ev.approvalList.slice(0, 4).map(({ args, ...x }) => x)) : ''} · 文件 ${l.written}/${l.expected}${l.ev.error ? ' · ' + l.ev.error : ''}`).join(';'),
+      output: legs.map((l) => `[${l.leg}]\n` + l.ev.group.remarks.map((r) => `[${r.slug}] ${r.text}`).join('\n')).join('\n\n---\n\n'),
+      ttftMs: ttft(ev), tokens: legs.reduce((a, l) => a + (tokensOf(l.ev) || 0), 0), toolCalls: legs.flatMap((l) => l.ev.toolCalls) };
   });
 
   await scenario('teamoutputs', 'teamoutputs 成员 sketch 与文件交付到主会话', async () => {

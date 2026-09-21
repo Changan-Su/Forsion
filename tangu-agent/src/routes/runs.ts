@@ -195,6 +195,9 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
       input: {
         message, userMessageId, attachments: attachments || [], agentConfig: agent_config || {},
         ...(clientTag ? { client: clientTag } : {}),
+        // 直接来自客户端输入区(审批档据此在审批时现读会话设置,见 agentLoop.approvalModeSessionId)。
+        // 不能拿 client 标签判:createRun 会把它抄进派生 run(团队成员 / 讨论),那些 run 的档不归自己的会话管。
+        origin: 'client',
         // 界面面能力握手:字段在场(哪怕空数组)= 渲染端够新,会处理 ui_cmd 事件。缺席 → 工具不注册。
         ...(uiCommandsNorm ? { uiCommands: uiCommandsNorm } : {}),
         ...(uiSettingsNorm ? { uiSettings: uiSettingsNorm } : {}),
