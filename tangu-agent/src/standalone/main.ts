@@ -8,7 +8,7 @@
  * 终端交互前端见 tui/main.tsx(`tangu`);二者共用 standalone/assemble.ts 的装配。
  */
 import express from 'express';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeSync } from 'node:fs';
 import { createTanguModule } from '../index.js';
 import { createNoopBilling } from '../adapters/standalone/noopBilling.js';
 import { createTanguProfile } from '../profiles/index.js';
@@ -18,7 +18,7 @@ import { loadOAuthDirectProviders } from '../llm/providerOAuth.js';
 import { resolveSandboxMode, setupHost, buildBrain, fixLegacyAppIds, loadProviders } from './assemble.js';
 import { createMcpManager } from '../mcp/manager.js';
 import { createEngineManager } from '../engines/index.js';
-import { loadMcpConfig } from '../mcp/config.js';
+import { loadMcpConfig, enabledServers } from '../mcp/config.js';
 import { loadEngines, loadEnginePrefs } from '../engines/config.js';
 import { applySpecialAgentEnableMigration, loadSpecialAgentsConfig } from '../services/specialAgentsConfig.js';
 import { loadTanguEnv, configFile } from '../core/tanguHome.js';
@@ -69,6 +69,9 @@ function engineVersion(): string {
   return version;
 }
 
+/** 启动走到哪一步了(见 main 里的 exit 监听);listen 回调里置 'ready'。 */
+let bootPhase = 'config';
+
 async function main(): Promise<void> {
   loadTanguEnv(); // ~/.tangu/.env → process.env(不覆盖真实环境);须先于 parseConfig
   migrateLegacyConfig(); // 首启把散落 legacy 配置收进 ~/.tangu/config.json(旧文件→.bak);幂等,须先于 parseConfig
@@ -76,6 +79,18 @@ async function main(): Promise<void> {
   if (cfg.showHelp) { process.stdout.write(HELP); return; }
   if (cfg.showVersion) { process.stdout.write(`tangu-server ${engineVersion() || 'unknown'}\n`); return; }
   if (cfg.printConfig) { printEffectiveConfig(cfg); return; }
+  // 启动中途以 code 0 退出只有两种来路:某个 await 永远等不到结果、又没有活句柄(事件循环排空),
+  // 或有代码(第三方插件 / 依赖)自己调了 process.exit(0)。两种都不经过 main().catch,桌面只看到
+  // 「后端退出(code=0)」、日志一个字没有 —— 2.11.2 Windows 用户反馈就是这个形状,干净环境复现不出来。
+  // 所以退出前把停在哪一步说出来,并改成非 0。非 0 的退出(启动失败 / 配置错误)已自带原因,不重复。
+  let drained = false;
+  process.once('beforeExit', () => { drained = true; });
+  process.on('exit', (code) => {
+    if (code || bootPhase === 'ready') return;
+    const how = drained ? '事件循环空了(有 await 永远等不到结果)' : '有代码主动调了 process.exit(0)';
+    try { writeSync(2, `[tangu] 启动未完成就退出:停在「${bootPhase}」,${how}\n`); } catch { /* stderr 已断 */ }
+    process.exitCode = 1;
+  });
   // 未显式给 token / cloud-url → 复用 `tangu-chat login` 存的凭证。
   const creds = loadCreds();
   if (!cfg.token) cfg.token = creds.token || '';
@@ -85,6 +100,7 @@ async function main(): Promise<void> {
   // `tangu login <provider>`(xAI 等 OAuth 直连)的凭证同样接进 registry——与 TUI 对齐,
   // 桌面端 managed 后端登录 provider 后即可用 <providerId>/<model>。
   // 走 oauthProviders 字段(loadProviders 合并时优先级最低,显式配置覆盖订阅登录)。
+  bootPhase = 'oauth-providers';
   try {
     cfg.oauthProviders = await loadOAuthDirectProviders();
   } catch {
@@ -96,26 +112,31 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  bootPhase = 'sandbox-probe';
   const sandboxMode = await resolveSandboxMode(cfg);
+  bootPhase = 'sqlite';
   const { host, runBaseSchema, storage } = await setupHost(cfg);
   await runBaseSchema(); // base schema 先于 runMigration(后者对 chat_sessions 做 ALTER)
   const { brain, providers } = buildBrain(cfg);
 
   // MCP(~/.tangu/mcp.json):启动时连一次,server 集进程级冻结(prompt 缓存纪律,配置变更须重启)。
   const mcp = createMcpManager();
+  bootPhase = `mcp(${enabledServers(loadMcpConfig()).map(([name]) => name).join(', ') || '无'})`; // 唯一全由用户配置决定的启动步骤,点名是哪几个
   await mcp.start();
 
   // 外部 agent 引擎(~/.tangu/engines.json + 内置 claude-code):host-only,云端 microserver 不装配。
   const engines = createEngineManager();
 
   // 内置技能首启播种进 ~/.tangu/skills(像 Claude/Codex 落用户家目录,可见可改;已存在跳过,best-effort)。
+  bootPhase = 'seed-skills';
   await seedBuiltinSkills().catch(() => {});
   // 同理播种一条示例自定义命令进 ~/.tangu/commands/(目录已存在就跳过,不覆盖用户的)。
   seedExampleCommand();
 
   // 插件:激活全部（tool provider 全局注册 + 收集路由挂载器）。tool provider 注册无需 deps()，先于
   // createTanguModule 安全;路由挂载须**在 createTanguModule 之后**（彼时 configureTangu/deps() 才就绪）。
-  const mountPluginRoutes = await activateAllPlugins();
+  bootPhase = 'plugins';
+  const mountPluginRoutes = await activateAllPlugins((id) => { bootPhase = `plugin:${id}`; });
 
   const mod = createTanguModule({
     host,
@@ -127,6 +148,7 @@ async function main(): Promise<void> {
   });
   mountPluginRoutes({ userRouter: mod.userRouter, dataRouter: mod.dataRouter, adminRouter: mod.adminRouter });
 
+  bootPhase = 'migration';
   await mod.runMigration();
   await fixLegacyAppIds(); // 修正 runs.ts 硬编码时期误标 'ai-studio' 的本地会话(仅 standalone 本地库)
   mod.startBackgroundTasks();
@@ -149,7 +171,9 @@ async function main(): Promise<void> {
   app.use('/', mod.userRouter); // /agent/runs、/agent/runs/:id/events、/agent/workspace/*、审批
   app.use('/', mod.dataRouter); // /agent/sessions、/agent/models、/agent/memory、/agent/skills、/agent/tools
 
+  bootPhase = 'listen';
   const server = app.listen(cfg.port, cfg.host, () => {
+    bootPhase = 'ready';
     const address = server.address();
     const port = address && typeof address === 'object' ? address.port : cfg.port;
     // Embedded hosts use port 0 and IPC readiness, avoiding a probe/listen race.

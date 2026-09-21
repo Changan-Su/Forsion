@@ -335,6 +335,9 @@ export class BackendManager {
     }
     this.lastError = `后端退出(code=${code} signal=${signal})`
     this.pushLog(`[manager] ${this.lastError}`)
+    // 还在 spawnOnce 的就绪等待里:它自己会换端口重试。这里再排一次重启 = 两条 spawn 链并行,
+    // 后起的顶掉 this.child,先起的那个成了没人管的孤儿引擎(2.11.2 反馈日志里 5 行启动对 1 行退出就是它)。
+    if (this.state === 'starting') return
     // 意外退出:指数退避自动重启 ≤3 次(timer 记账,stop() 必清——否则快速 stop/start 后
     // 陈旧 timer 在 stopping 已复位时触发,产生第二个 spawnOnce 双进程)。
     if (this.restartCount < 3 && this.settings) {

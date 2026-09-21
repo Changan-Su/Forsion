@@ -28,6 +28,7 @@
     "sync:plugin-api": "node scripts/sync-plugin-api.mjs",
     "sync:db-shared": "node scripts/sync-db-shared.mjs",
     "test": "vitest run",
+    "boot:smoke": "node scripts/boot-smoke.mjs",
     "test:watch": "vitest",
     "e2e:direct": "node scripts/direct-offline.e2e.mjs",
     "prelive:harness": "npm run build",

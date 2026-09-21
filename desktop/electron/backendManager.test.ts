@@ -14,7 +14,7 @@ import { join } from 'node:path'
 const H = vi.hoisted(() => ({ dir: '' }))
 H.dir = mkdtempSync(join(tmpdir(), 'forsion-bm-'))
 
-vi.mock('electron', () => ({ app: { isPackaged: false } }))
+vi.mock('electron', () => ({ app: { isPackaged: false, getVersion: () => '0.0.0-test' } }))
 vi.mock('./forsionHome', () => ({
   forsionHomeDir: () => H.dir,
   tanguDataDir: () => H.dir,
@@ -55,4 +55,21 @@ describe('BackendManager channel client attribution', () => {
     // 通道 run 不经 renderer startRun(),只有这个 spawn 契约能把真实 App 版本交给引擎。
     expect(source).toContain('env.TANGU_HOST_CLIENT = `desktop/${app.getVersion()}`')
   })
+})
+
+describe('BackendManager startup exits', () => {
+  it('启动期早退只由 spawnOnce 换端口重试 3 次,不再叠一条重启链(否则后起的顶掉 this.child,先起的成孤儿)', async () => {
+    // 模拟 2.11.2 反馈:引擎每次都在就绪前以 code 0 静默退出
+    const entry = join(H.dir, 'silent-exit.js')
+    writeFileSync(entry, "process.stderr.write('boot\\n')", 'utf8')
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(entry)
+    process.env.TANGU_NODE_BIN = process.execPath
+    const m = new BackendManager()
+    await m.start({ cloudUrl: '', sandbox: 'none' })
+    await new Promise((r) => setTimeout(r, 2500)) // 越过旧实现 1s 的退避重启
+    const logs = m.getLogs()
+    expect(logs.filter((l) => l === 'boot')).toHaveLength(3)
+    expect(logs.filter((l) => l.startsWith('[manager] 后端退出(code=0'))).toHaveLength(3)
+    expect(m.getStatus().state).toBe('crashed')
+  }, 15_000)
 })
