@@ -15,15 +15,18 @@ beforeEach(() => { useCommandStore.setState({ commands: [] }); disposers = []; s
 afterEach(() => { disposers.forEach(dispose => dispose()); useCommandStore.setState({ commands: [] }); setLocaleGlobal('zh'); vi.unstubAllGlobals() })
 
 describe('Coding Studio presentation commands', () => {
-  it('exposes one explicit agent command and five human tool commands without mutation capabilities', () => {
+  it('exposes one explicit agent command and six human tool commands without mutation capabilities', () => {
     const open = vi.fn(() => true)
     const writes = vi.fn()
-    Object.defineProperty(window, 'tangu', { configurable: true, value: { writeFile: writes, codeStudioSnapshot: writes, codeStudioRestore: writes, connectPublish: writes } })
+    // codeStudioSnapshot 已经没有任何 UI 调用点(版本改由宿主的 git 产生),留着只会让这条断言看起来比实际覆盖得多。
+    Object.defineProperty(window, 'tangu', { configurable: true, value: { writeFile: writes, codeStudioRestore: writes, connectPublish: writes } })
     disposers.push(registerStudioCommands('/projects/a', open, () => true))
     const commands = useCommandStore.getState().commands
-    expect(commands).toHaveLength(6)
+    // 6 个人类命令(brief / history / checks / issues / setup / sandbox)+ 1 个 agent 显式命令。
+    // 2026-09-21 随 Sandbox(插件开发加载器)从 5 + 1 改成 6 + 1,是刻意的。
+    expect(commands).toHaveLength(7)
     expect(commands.filter(command => command.invoke).map(command => command.id)).toEqual([STUDIO_TOOL_COMMAND])
-    for (const tool of ['brief', 'history', 'checks', 'issues', 'setup']) {
+    for (const tool of ['brief', 'history', 'checks', 'issues', 'setup', 'sandbox']) {
       getCommand(`coding-studio.${tool}`).run()
       expect(open).toHaveBeenLastCalledWith(tool)
     }
@@ -117,7 +120,7 @@ describe('Coding Studio presentation commands', () => {
     const cleanupNext = registerStudioCommands('/projects/b', nextOpen, () => true)
     disposers.push(cleanupOld, cleanupNext)
     cleanupOld()
-    expect(useCommandStore.getState().commands).toHaveLength(6)
+    expect(useCommandStore.getState().commands).toHaveLength(7)
     invoke({ projectRoot: '/projects/b', tool: 'history', side: 'bottom' })
     expect(nextOpen).toHaveBeenCalledExactlyOnceWith('history', 'bottom')
     expect(oldOpen).not.toHaveBeenCalled()

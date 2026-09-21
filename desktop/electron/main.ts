@@ -47,6 +47,7 @@ import { builtinBundleSources, seedBuiltinBundles } from './builtinPlugins'
 import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs, marketItemDir } from './marketInstall'
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks } from './codePreview'
 import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudioSnapshots, restoreCodeStudioSnapshot } from './codeStudioProjects'
+import { installPreviewPersistence, previewOriginFor, registerProductsIpc } from './productsIpc'
 import { FORSION_CONNECT_LOCAL_SDK } from './forsionConnectLocal'
 import {
   collectProjectFiles, readConnectMeta, writeConnectMeta, cloudJson, makePreviewProxy, type CloudCreds,
@@ -2243,7 +2244,8 @@ app.whenReady().then(async () => {
     if (!rootDir || typeof rootDir !== 'string') throw new Error('非法的预览根目录')
     if (!(await stat(rootDir)).isDirectory()) throw new Error('Preview root is not a directory')
     // Each project gets its own origin: localStorage and simultaneous preview windows stay isolated.
-    return servePathRoot(realpathSync(rootDir))
+    // 托管根下的项目 = 产物 → 稳定源(跨重启同源,本地数据不丢);其余走一次性令牌根。
+    return previewOriginFor(join(forsionWorkspaceDir(), 'Project'), rootDir)
   })
   const studioWatchers = new Map<number, ReturnType<typeof createCodeStudioProjectWatcher>>()
   ipcMain.handle('codeStudio:watch', async (e, rootDir: string | null) => {
@@ -2304,6 +2306,19 @@ app.whenReady().then(async () => {
     return { base: (cfg.cloudUrl || DEFAULT_CLOUD_URL).replace(/\/+$/, ''), token: loadTanguCreds().token || '' }
   }
   setForsionPreviewHooks({ sdkJs: FORSION_CONNECT_LOCAL_SDK, proxy: makePreviewProxy(resolveConnectCloud) })
+  // 造物 Space + Coding Studio git 版本:逻辑在 productsIpc / 各纯模块里,这里只注入 Electron 依赖。
+  installPreviewPersistence(forsionHomeDir)
+  registerProductsIpc({
+    ipcMain, isTrustedSender,
+    projectsRoot: () => join(forsionWorkspaceDir(), 'Project'),
+    homeDir: forsionHomeDir,
+    env: () => envWithFullPath(),
+    isPackaged: app.isPackaged,
+    desktopDir: () => app.getPath('desktop'),
+    execPath: process.execPath,
+    trashItem: (p) => shell.trashItem(p),
+    writeShortcutLink: process.platform === 'win32' ? (p, o) => shell.writeShortcutLink(p, 'create', o) : undefined,
+  })
 
   ipcMain.handle('connect:meta', (_e, dir: string) => (typeof dir === 'string' && dir ? readConnectMeta(dir) : {}))
 

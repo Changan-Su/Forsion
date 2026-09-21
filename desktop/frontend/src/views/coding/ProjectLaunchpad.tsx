@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react'
-import { ArrowRight, Bot, Check, ChevronDown, Code2, Folder, FolderOpen, Image, LayoutDashboard, Lightbulb, Loader2, MessageSquare, Palette, Search, UserRound, WandSparkles, X, RotateCw } from 'lucide-react'
+import { ArrowRight, Bot, Check, ChevronDown, Code2, Folder, FolderOpen, Image, LayoutDashboard, Lightbulb, Loader2, MessageSquare, Palette, Puzzle, Search, UserRound, WandSparkles, X, RotateCw } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import { projectBasename, STUDIO_CAPABILITIES, STUDIO_TEMPLATES, validateProjectName, type StudioBrief, type StudioCapability, type StudioTemplate } from './projectBrief'
 import './launchpadMessages'
@@ -13,7 +13,8 @@ export interface ProjectLaunchpadProps {
 }
 
 const CAPABILITY_ICONS = { chat: MessageSquare, agent: Bot, images: Image, account: UserRound }
-const TEMPLATE_ICONS = { assistant: WandSparkles, dashboard: LayoutDashboard, portfolio: Palette, explainer: Lightbulb, image: Image, research: Bot }
+// 按模板 id 取图标,没有兜底 —— 新增模板必须同时在这里加一行,否则 <Icon> 是 undefined,整块启动页直接崩。
+const TEMPLATE_ICONS = { assistant: WandSparkles, dashboard: LayoutDashboard, portfolio: Palette, explainer: Lightbulb, image: Image, research: Bot, plugin: Puzzle }
 type Project = { name: string; path: string }
 
 export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: ProjectLaunchpadProps) {
@@ -41,6 +42,8 @@ export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: Pro
   const canList = !!window.tangu?.listDir
   const nameIssue = nameTouched ? validateProjectName(name, existingNames) : null
   const selectedTemplate = STUDIO_TEMPLATES.find((template) => template.id === templateId)
+  // 插件跑在 Forsion 宿主里,不经网页 SDK:这些能力对它无意义,所以整块收起来而不是留着让人勾。
+  const pluginProject = selectedTemplate?.kind === 'plugin'
 
   const refresh = useCallback(async () => {
     const request = ++listRequest.current
@@ -112,7 +115,7 @@ export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: Pro
       }
       const result = await window.tangu.mkdirHost(root, normalizedName)
       if (!result.path) throw new Error('Missing created project path')
-      onCreate(result.path, normalizedName, { idea: idea.trim(), audience: audience.trim(), constraints: constraints.trim(), capabilities: [...capabilities], templateId, locale })
+      onCreate(result.path, normalizedName, { idea: idea.trim(), audience: audience.trim(), constraints: constraints.trim(), capabilities: pluginProject ? [] : [...capabilities], templateId, ...(pluginProject ? { kind: 'plugin' as const } : {}), locale })
     } catch {
       setErrorKey('csl.createFailed')
       void refresh()
@@ -161,19 +164,21 @@ export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: Pro
                     maxLength={4000} placeholder={t('csl.constraintsPlaceholder')} disabled={!!busy} rows={3} />
                 </div>
               </details>
-              <fieldset className="csl-capabilities">
-                <legend>{t('csl.capabilities')}<span>{t('csl.optional')}</span></legend>
-                <div className="csl-capability-list">
-                  {STUDIO_CAPABILITIES.map((cap) => {
-                    const Icon = CAPABILITY_ICONS[cap]
-                    return <button key={cap} type="button" className="csl-capability" aria-pressed={capabilities.includes(cap)}
-                      title={t(`csl.cap.${cap}Hint`)} onClick={() => toggleCapability(cap)} disabled={!!busy}>
-                      <Icon size={14} /><span>{t(`csl.cap.${cap}`)}</span>{capabilities.includes(cap) && <Check size={12} />}
-                    </button>
-                  })}
-                </div>
-                {capabilities.length > 0 && <p className="csl-capability-hint">{t('csl.capabilitiesHint')}</p>}
-              </fieldset>
+              {pluginProject
+                ? <p className="csl-plugin-note" data-plugin-note>{t('csl.pluginProjectHint')}</p>
+                : <fieldset className="csl-capabilities">
+                  <legend>{t('csl.capabilities')}<span>{t('csl.optional')}</span></legend>
+                  <div className="csl-capability-list">
+                    {STUDIO_CAPABILITIES.map((cap) => {
+                      const Icon = CAPABILITY_ICONS[cap]
+                      return <button key={cap} type="button" className="csl-capability" aria-pressed={capabilities.includes(cap)}
+                        title={t(`csl.cap.${cap}Hint`)} onClick={() => toggleCapability(cap)} disabled={!!busy}>
+                        <Icon size={14} /><span>{t(`csl.cap.${cap}`)}</span>{capabilities.includes(cap) && <Check size={12} />}
+                      </button>
+                    })}
+                  </div>
+                  {capabilities.length > 0 && <p className="csl-capability-hint">{t('csl.capabilitiesHint')}</p>}
+                </fieldset>}
               <div className="csl-create-row">
                 <div className="csl-name-field">
                   <label htmlFor={`${id}-name`}>{t('csl.projectName')}</label>
@@ -201,7 +206,7 @@ export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: Pro
                 {STUDIO_TEMPLATES.map((template) => {
                   const Icon = TEMPLATE_ICONS[template.id as keyof typeof TEMPLATE_ICONS]
                   const selected = templateId === template.id
-                  return <button key={template.id} type="button" className="csl-template" onClick={() => chooseTemplate(template)}
+                  return <button key={template.id} type="button" className="csl-template" data-template-id={template.id} onClick={() => chooseTemplate(template)}
                     aria-pressed={selected} disabled={!!busy} title={selected ? t('csl.templateSelected') : undefined}>
                     <Icon size={18} /><span><strong>{t(template.nameKey)}</strong><small>{t(template.summaryKey)}</small></span>
                     {selected ? <Check size={14} /> : <ArrowRight size={14} className="csl-template-arrow" />}

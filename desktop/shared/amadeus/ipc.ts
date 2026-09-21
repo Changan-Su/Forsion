@@ -308,8 +308,10 @@ export interface ExternalPluginSource {
    *  (= corruption); the renderer's registerFileType supplies the matching icon/view/embed behaviour. */
   fileExtensions?: string[]
   /** Present → listed but not loadable: 'api' = apiVersion mismatch, 'minApp' = app too old,
-   *  'invalid' = agent-owned Space plugin whose manifest.json is missing/broken (reason in `blockedReason`). */
-  blocked?: 'api' | 'minApp' | 'invalid'
+   *  'invalid' = manifest.json missing/broken or main unreadable (agent Space / dev source; reason in `blockedReason`),
+   *  'dev-fileext' = dev source declaring `fileExtensions` (see `dev` — the vault's protection only covers the
+   *  installed plugins dir, so a dev copy must never mint files the compiler would later rewrite). */
+  blocked?: 'api' | 'minApp' | 'invalid' | 'dev-fileext'
   blockedReason?: string
   /** 捆绑包内嵌内容清单(缺省 = 纯 UI 插件)。 */
   bundle?: PluginBundleInfo
@@ -320,6 +322,16 @@ export interface ExternalPluginSource {
   /** Agent 自建 Space 插件(2026-09-11):来源 `<tangu>/agents/<slug>/Space/`,id 固定 `agent-<slug>`;不可卸载(关开关即可),
    *  capabilities / fileExtensions / requiresApp / onboarding / bundle 一律不带(没有「用户点安装」这一步授权)。值 = agent slug。 */
   agent?: string
+  /** Forsion Sandbox 的**开发态来源**(2026-09-21):托管根 `~/Forsion/Project/<项目>` 里一个开了 `devLoad` 的插件项目。
+   *  ⚠️不是隔离沙箱 —— 与已安装插件同权限、同一份真实笔记库,只是「不用装就能跑」;UI 必须如实说明。
+   *  只有桌面 IPC 的 listPlugins 带(`opts.dev`):unit 设备页那条自服面绝不能把开发机上的代码发给远端渲染器。 */
+  dev?: boolean
+  /** dev 来源的项目根(产物 root):Studio 面板显示 / 打开目录用。 */
+  devRoot?: string
+  /** dev 来源的产物 id(`p_<12hex>`):设置页「卸载开发副本」经 productsUpdate(id, { devLoad: false }) 撤下。 */
+  devProductId?: string
+  /** dev 来源正遮蔽全局 plugins 目录里的同 id 安装版(撤下开发副本后安装版会回来)。 */
+  shadowsInstalled?: boolean
 }
 
 /** Semver-ish comparator (copied from lcl/spaces/userSpaces.core.ts — main process has no @lcl alias). */

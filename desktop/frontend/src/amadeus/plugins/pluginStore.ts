@@ -64,6 +64,7 @@ import type {
   TableSpec,
 } from './types'
 import { validateTableSpec } from './tableSpec'
+import { clearDevRecords, devConsoleFor, dropDevRecords } from './devRecords'
 import { gatePluginManifest, type ExternalPluginSource } from '@amadeus-shared/ipc'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { openWebFloatingPanel } from '../../pluginPanelSeam'
@@ -423,6 +424,9 @@ const loadedCode = new Map<string, string>()
 /** Wrap an external source as a plugin whose setup() evaluates its code with `ctx`. */
 function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
   loadedCode.set(src.id, src.code)
+  // 每一次重新包装都是一次「重载」(loadExternal / reloadExternal / reloadOne 都经这里)——
+  // 开发态记账在这一刻归零,免得 Studio 把上一份代码的日志算到新代码头上。
+  if (src.dev) clearDevRecords(src.id)
   return {
     id: src.id,
     name: src.name,
@@ -445,10 +449,36 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
     agent: src.agent,
     bundle: src.bundle,
     events: src.events,
+    dev: src.dev,
+    devRoot: src.devRoot,
+    devProductId: src.devProductId,
+    shadowsInstalled: src.shadowsInstalled,
     setup: (ctx) => {
-      const fn = new Function('ctx', src.code) as (c: PluginContext) => unknown
-      const d = fn(ctx)
-      return typeof d === 'function' ? (d as () => void) : undefined
+      // 已安装插件:求值路径与从前**逐字相同**(一个形参、一个实参)。开发态那条多带一个 console ——
+      // new Function 的栈帧是 <anonymous>,不在求值时把按插件记账的 console 塞进作用域,
+      // 事后没有任何办法把一行输出归到是哪个插件说的(window.onerror 也归不了)。
+      if (!src.dev) {
+        const fn = new Function('ctx', src.code) as (c: PluginContext) => unknown
+        const d = fn(ctx)
+        return typeof d === 'function' ? (d as () => void) : undefined
+      }
+      const fn = new Function('ctx', 'console', src.code) as (c: PluginContext, console: Console) => unknown
+      const d = fn(ctx, devConsoleFor(src.id))
+      if (typeof d === 'function') return d as () => void
+      // async setup:抛在 promise 里的错没人接(宿主 try/catch 只罩同步那一段),开发者只会在控制台
+      // 看到一行 unhandled rejection,设置页与 Studio 都显示「已启用」。开发态把它接住记成 setup 错误。
+      if (d && typeof (d as PromiseLike<unknown>).then === 'function') {
+        void Promise.resolve(d).catch((e: unknown) => {
+          // 已经被拆掉 / 换了一份代码就别再回写(迟到的 reject 不该污染新一轮的状态)。
+          const st = usePluginStore.getState()
+          if (!st.activeIds.includes(src.id) || !st.plugins.find((p) => p.id === src.id)?.dev) return
+          console.error(`[amadeus] plugin "${src.id}" async setup rejected`, e)
+          usePluginStore.setState((s) => ({
+            lastSetupError: { ...s.lastSetupError, [src.id]: String((e as { message?: unknown } | null)?.message ?? e).slice(0, 600) },
+          }))
+        })
+      }
+      return undefined
     },
   }
 }
@@ -807,6 +837,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 旧宿主返回 undefined(≠ false),插件的 `if (ok === false) return` 判定天然兼容。
     registerFileType: (def) => {
       const exts = Array.isArray(def?.extensions) ? def.extensions : []
+      // ⚠️开发副本不给注册文件类型:主进程的毁档防线(collectPluginExts → listPages 排除)只扫已安装目录,
+      // dev 根不在其中。清单里声明 fileExtensions 会被判 'dev-fileext' 拒载 —— 但只拦清单等于只拦了无害的那半:
+      // 删掉那一行就能载入,setup 里照样调到这里,用户在真库里建出的 `.foo.md` 会被笔记管线改写(评审 MED)。
+      if (get().plugins.find((p) => p.id === pluginId)?.dev) {
+        console.warn(`[plugin:${pluginId}] registerFileType(${exts.join(',')}) 被拒:开发副本的自定义文件类型不受宿主扩展名保护,请先安装再测`)
+        return false
+      }
       // 形态闸:后缀必须 '.x' 起步;以 '.md' 收尾的必须是复合后缀('.X.md')。裸 '.md'、漏点 'md'、
       // 空串这类声明会让 viewSurface 的 loadPage 后缀闸(endsWith 判定)对**所有笔记**敞开 ——
       // 那道闸防的是「普通 v4/素 md 被拽进 v3 存储管线改写 = 毁档」(评审 P2,2026-08-14)。
@@ -1333,10 +1370,17 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const cur = get().plugins.find((p) => p.id === id)
       if (cur?.builtin) return // 内置插件不是磁盘来源,没有「重读」可言
       const src = sources.find((s) => s.id === id)
-      // 源码与 blocked 状态都没变 → 不拆装(戳只说明目录动过,不一定动了这个插件;也免掉应用刚起那次白重载的闪一下)
-      if (cur && src && loadedCode.get(id) === src.code && (cur.blocked ?? null) === (src.blocked ?? null)) return
+      // 源码与 blocked 状态都没变 → 不拆装(戳只说明目录动过,不一定动了这个插件;也免掉应用刚起那次白重载的闪一下)。
+      // ⚠️**来源身份**也得比:刚从安装版复制出来的开发副本,代码可以与安装版一字不差 —— 只比代码的话,
+      //   「在 Forsion 中加载」开了等于没开(dev 标志永远装不进来),撤下开发副本后它也永远拆不掉(卸载守卫因此永远拒)。
+      if (cur && src
+        && loadedCode.get(id) === src.code
+        && (cur.blocked ?? null) === (src.blocked ?? null)
+        && (cur.dev ?? false) === (src.dev ?? false)
+        && (cur.devRoot ?? null) === (src.devRoot ?? null)
+        && (cur.shadowsInstalled ?? false) === (src.shadowsInstalled ?? false)) return
       if (get().activeIds.includes(id)) teardown(id)
-      if (!src) loadedCode.delete(id)
+      if (!src) { loadedCode.delete(id); dropDevRecords(id) } // 来源整个没了 → 连开发态记账一起丢
       set((s) => ({
         plugins: [...s.plugins.filter((p) => p.id !== id), ...(src ? [toPlugin(src)] : [])],
         lastSetupError: { ...s.lastSetupError, [id]: undefined as unknown as string },

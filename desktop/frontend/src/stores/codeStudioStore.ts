@@ -26,6 +26,8 @@ function normalizePrefs(root: string, input: unknown): StudioProjectPrefs {
     idea: b.idea, audience: typeof b.audience === 'string' ? b.audience : '', constraints: typeof b.constraints === 'string' ? b.constraints : '',
     capabilities: STUDIO_CAPABILITIES.filter(id => Array.isArray(b.capabilities) && b.capabilities.includes(id)),
     locale: b.locale === 'zh' ? 'zh' : 'en', ...(typeof b.templateId === 'string' ? { templateId: b.templateId } : {}),
+    // 形态只认这两个值,别的一律丢掉(缺省 = web);留着一个垃圾值会让提示词走进插件分支。
+    ...(b.kind === 'web' || b.kind === 'plugin' ? { kind: b.kind } : {}),
   } : undefined
   return {
     entry: typeof v.entry === 'string' ? projectRelative(root, v.entry) : null,

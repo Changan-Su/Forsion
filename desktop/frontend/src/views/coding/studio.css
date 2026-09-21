@@ -162,3 +162,64 @@
 @media (prefers-reduced-motion: reduce) {
   .csu *, .csu *::before, .csu *::after { animation: none !important; transition-duration: 0s !important; transition-delay: 0s !important; }
 }
+
+/* —— 版本(git)——:安装引导、自动版本标签、旧快照折叠区。版本行本身复用 .csu-version / .csu-versions。 */
+.csu-git-install { display: flex; flex-direction: column; gap: 10px; }
+.csu-git-cmd { align-self: flex-start; max-width: 100%; padding: 7px 10px; border-radius: var(--radius-sm); background: var(--bg-input); color: var(--text); font-family: var(--font-mono); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.csu-git-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.csu-version-auto { margin-left: 8px; padding: 1px 6px; border-radius: var(--radius-sm); background: var(--bg-input); color: var(--text-muted); font-size: 9px; letter-spacing: 0.04em; }
+.csu-legacy > summary { cursor: pointer; padding: 6px 0; font-size: 12px; color: var(--text-muted); }
+.csu-history-foot { font-size: 11px; opacity: 0.85; }
+
+/* —— Sandbox(插件开发加载器)——:状态 → 免责说明 → 动作 → 证据 → 发回对话。
+ *  证据区自己滚(日志可能很长),所以这一块不复用 .csu-actions 那条 sticky 规则。 */
+.csu-sandbox { gap: 14px; }
+.csu-sandbox-head { display: flex; flex-direction: column; gap: 10px; flex-shrink: 0; }
+.csu-sandbox-status { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 0; font-size: 12px; line-height: 1.7; }
+.csu-sandbox-status strong { flex-shrink: 0; font-size: 12px; font-weight: 600; }
+.csu-sandbox-status span { color: var(--text-muted); }
+.csu-sandbox[data-sandbox-state='active'] .csu-sandbox-status strong { color: var(--green); }
+.csu-sandbox[data-sandbox-state='failed'] .csu-sandbox-status strong,
+.csu-sandbox[data-sandbox-state='blocked'] .csu-sandbox-status strong { color: var(--danger); }
+.csu-sandbox-trust { display: flex; align-items: flex-start; gap: 8px; margin: 0; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--overlay-light); color: var(--text-light); font-size: 11px; line-height: 1.7; }
+.csu-sandbox-trust > svg { flex-shrink: 0; margin-top: 2px; color: var(--danger); }
+.csu-sandbox-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.csu-sandbox-evidence { display: flex; flex: 1; flex-direction: column; gap: 12px; min-height: 0; }
+.csu-sandbox-block { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.csu-sandbox-block h3 { margin: 0; font-size: 11px; font-weight: 600; color: var(--text-muted); }
+.csu-sandbox-block pre { margin: 0; max-height: 180px; overflow: auto; padding: 10px 12px; border-radius: var(--radius-sm); background: var(--bg-input); color: var(--danger); font-family: var(--font-mono); font-size: 11px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.csu-sandbox-block ul { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.csu-sandbox-block ul li { display: flex; align-items: flex-start; gap: 7px; font-size: 11px; line-height: 1.6; color: var(--danger); overflow-wrap: anywhere; }
+.csu-sandbox-block ul li > svg { flex-shrink: 0; margin-top: 2px; }
+.csu-sandbox-block ul li code { flex-shrink: 0; font-family: var(--font-mono); }
+.csu-sandbox-logs { flex: 1; }
+.csu-sandbox-logs ol { flex: 1; min-height: 72px; max-height: 320px; overflow: auto; margin: 0; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--bg-input); list-style: none; font-family: var(--font-mono); font-size: 11px; line-height: 1.6; }
+.csu-sandbox-logs li { display: flex; gap: 8px; padding: 2px 0; overflow-wrap: anywhere; }
+.csu-sandbox-logs li > span:first-child { flex-shrink: 0; width: 38px; color: var(--text-ghost); text-transform: uppercase; font-size: 9px; letter-spacing: 0.04em; padding-top: 2px; }
+.csu-sandbox-logs li > span:last-child { flex: 1; min-width: 0; white-space: pre-wrap; }
+.csu-sandbox-logs li[data-level='error'] > span:last-child { color: var(--danger); }
+.csu-sandbox-logs li[data-level='warn'] > span:last-child { color: color-mix(in srgb, var(--danger) 55%, var(--text-muted)); }
+.csu-sandbox-logs li[data-level='debug'] > span:last-child { color: var(--text-muted); }
+.csu-sandbox-send { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex-shrink: 0; }
+.csu-sandbox-send input { flex: 1; min-width: 140px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--bg-input); color: var(--text); padding: 8px 10px; font: inherit; font-size: 12px; }
+/* ── Sandbox 面板的版式覆盖(放文件末尾:与上面同特异性,靠顺序取胜)────────────────────────
+ * 真机截图自查(09-21)抓到:底部面板只有 ~340px 高,head 就占掉 200px,而证据区是 `flex:1 + min-height:0`
+ * → 被压成 0 高、内容溢出到「发回对话」那一行**底下**,setup 抛错的原文看不见(DOM 里有,e2e 照样绿)。
+ * 单列(侧栏 / 窄面板):证据区按内容自然撑开,由面板整体滚动,谁也不盖谁。 */
+.csu-sandbox-evidence { flex: none; }
+/* 证据块不许被压扁:它们是 flex 子项且带 min-height:0,列一滚动就会缩成 0 高,两个小标题叠在一起、抛错原文消失(同一轮截图)。 */
+.csu-sandbox-evidence > .csu-sandbox-block { flex-shrink: 0; }
+.csu-sandbox-logs { flex: none; }
+.csu-sandbox-logs ol { flex: none; }
+/* 宽面板(底部停靠的常态):左 = 状态 / 须知 / 加载,右 = 证据 + 发回对话;两栏各自滚动,须知一直看得见。 */
+@container studio-tool (min-width: 620px) {
+  .csu-sandbox { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; column-gap: 24px; row-gap: 10px; overflow: hidden; }
+  .csu-sandbox-head { grid-column: 1; grid-row: 1 / span 2; min-height: 0; overflow: auto; }
+  /* 底部面板缺省只有 ~270px 可用高:收紧一点,让「状态 → 须知 → 加载」三样不滚动就全在眼前。 */
+  .csu-sandbox-head { gap: 7px; }
+  .csu-sandbox-head .csu-sandbox-trust { padding: 7px 11px; line-height: 1.6; }
+  .csu-tool-view[data-tool='sandbox'] .csu-panel-body { padding-top: 4px; padding-bottom: 8px; }
+  .csu-sandbox-head .csu-sandbox-status { line-height: 1.45; row-gap: 0; }
+  .csu-sandbox-evidence { grid-column: 2; grid-row: 1; min-height: 0; overflow: auto; }
+  .csu-sandbox-send { grid-column: 2; grid-row: 2; }
+}

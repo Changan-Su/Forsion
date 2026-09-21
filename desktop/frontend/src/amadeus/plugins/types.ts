@@ -1137,8 +1137,10 @@ export interface AmadeusPlugin {
   /** Declarative first-run setup card (manifest `onboarding`; sanitized by the host). */
   onboarding?: PluginOnboardingSpec
   /** Present → gated out by the host: 'api' = apiVersion mismatch, 'minApp' = app too old,
-   *  'invalid' = agent-owned Space plugin with a missing/broken manifest (`blockedReason`). Never activated. */
-  blocked?: 'api' | 'minApp' | 'invalid'
+   *  'invalid' = missing/broken manifest or unreadable main (agent Space / dev source, see `blockedReason`),
+   *  'dev-fileext' = dev source declaring `fileExtensions` (unprotected outside the installed plugins dir).
+   *  Never activated. */
+  blocked?: 'api' | 'minApp' | 'invalid' | 'dev-fileext'
   blockedReason?: string
   /** Agent 自建 Space 插件的 agent slug(external only;设置页标「<slug> 的 Space」、不给卸载)。 */
   agent?: string
@@ -1146,6 +1148,15 @@ export interface AmadeusPlugin {
   bundle?: import('@amadeus-shared/ipc').PluginBundleInfo
   /** 插件声明会发的活动事件(manifest `events`,宿主已消毒)——自动化构建器事件目录用。External plugins only. */
   events?: import('@amadeus-shared/ipc').PluginEventDecl[]
+  /** Forsion Sandbox 的开发态来源(托管项目 + devLoad):**不是隔离沙箱**,与已安装插件同权限、同一份真实库。
+   *  设置页按它标 DEV 徽章、把「卸载」换成「卸载开发副本」;devSandbox.ts 的 Studio 面按它取状态。 */
+  dev?: boolean
+  /** 开发态来源的项目根。 */
+  devRoot?: string
+  /** 开发态来源的产物 id(撤下开发副本 = productsUpdate(devProductId, { devLoad: false }))。 */
+  devProductId?: string
+  /** 开发副本正遮蔽同 id 的安装版(撤下后安装版会回来)。 */
+  shadowsInstalled?: boolean
   /** Wire up contributions; optionally return a disposer for teardown on disable. */
   setup(ctx: PluginContext): void | (() => void)
 }

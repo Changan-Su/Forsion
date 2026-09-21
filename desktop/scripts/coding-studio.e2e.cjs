@@ -4,7 +4,11 @@
  *
  * Only the model backend and native folder picker are fixtures. File reads/writes, preview
  * serving, guest inspection, change detection, snapshot and restore all use production paths.
- * All fixtures, vault, userData and TANGU_HOME are isolated. No process killing or real AI runs.
+ * All fixtures, vault, userData and TANGU_HOME are isolated, with one deliberate exception: the host
+ * only grants git writes to direct children of its OWN projects root, so the writable half of version
+ * history uses a `forsion-e2e-git-<pid>` fixture seeded there and deleted again in the finally block.
+ * Needs git on the machine; without it the two version blocks are recorded as named skips.
+ * No process killing or real AI runs.
  * Screenshots + JSON results go to ../outputs/coding-studio-*. Keep temp data on failure.
  */
 const fs = require('fs')
@@ -27,6 +31,12 @@ const SAMPLE = `<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta
 function check(name, ok, detail) {
   results.push({ name, ok: !!ok, ...(detail ? { detail } : {}) })
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` | ${detail}` : ''}`)
+}
+/** Environment-dependent block that cannot run here (e.g. git is not installed on this machine).
+ *  Recorded by name in results.json so it is neither a failure nor an invisible pass. */
+function skip(name, reason) {
+  results.push({ name, ok: true, skipped: true, detail: reason })
+  console.log(`SKIP  ${name} | ${reason}`)
 }
 async function until(read, timeout = 12000) {
   const end = Date.now() + timeout
@@ -215,6 +225,9 @@ async function main() {
   const stub = await startStubEngine({ sessions: [session] })
   let app
   let win
+  /** Seeded below, inside the host's own projects root — the one directory shape the host treats as
+   *  git-writable. It is outside testDir, so it is always removed again in the finally block. */
+  let gitProject = null
   try {
     app = await electron.launch({
       args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT,
@@ -234,9 +247,23 @@ async function main() {
       if (await skip.isVisible().catch(() => false)) { await skip.click(); break }
     }
     await win.waitForSelector('.dv-groupview', { timeout: 45000 })
+    // Host-side git writes are gated on the host's OWN projects root (productsIpc.managed()), which is
+    // derived from the real workspace directory and is NOT affected by the codeProjects:root override
+    // below — that override only keeps the launchpad from scanning the user's own projects. So the
+    // writable half of version history needs a fixture that really is a direct child of that root.
+    const hostProjectsRoot = await win.evaluate(() => window.tangu?.codeProjectsRoot?.() ?? null).catch(() => null)
+    if (hostProjectsRoot) {
+      gitProject = path.join(hostProjectsRoot, `forsion-e2e-git-${process.pid}`)
+      fs.mkdirSync(gitProject, { recursive: true })
+      fs.writeFileSync(path.join(gitProject, 'index.html'), SAMPLE)
+      fs.writeFileSync(path.join(gitProject, '.env'), 'TEST_SETTING=before\n')
+    }
     // Override only root selection so launchpad never scans the user's project directory.
+    // The folder picker answers whatever __studioPick currently holds, so a later block can import
+    // a second fixture without re-patching Electron.
     await app.evaluate(({ dialog, ipcMain }, fixture) => {
-      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [fixture.project] })
+      global.__studioPick = fixture.project
+      dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [global.__studioPick] })
       ipcMain.removeHandler('codeProjects:root')
       ipcMain.handle('codeProjects:root', () => fixture.managed)
     }, { project, managed })
@@ -245,7 +272,17 @@ async function main() {
     await shoot(app, win, 'launchpad')
     await traceMotion(win, 'Optional brief details expand through intermediate heights', '.csl-details', () => win.locator('.csl-details summary').click(), 'height')
     await traceMotion(win, 'Optional brief details collapse through intermediate heights', '.csl-details', () => win.locator('.csl-details summary').click(), 'height')
-    check('Launchpad has six editable templates and a real import action', await win.locator('.csl-template').count() === 6 && await win.locator('.csl-import').isEnabled())
+    // 模板数从 6 改成 7 是 2026-09-21「Forsion 插件」起点落地时刻意改的,不是漂移。
+    check('Launchpad has seven editable templates and a real import action', await win.locator('.csl-template').count() === 7 && await win.locator('.csl-import').isEnabled())
+    // 插件起点:选中它之后 Forsion Connect 能力块整块收起(插件不经网页 SDK),并给出理由。
+    await win.locator('.csl-template[data-template-id="plugin"]').click()
+    check('The Forsion plugin template replaces the Connect capability picker with its reason',
+      await win.locator('.csl-template[data-template-id="plugin"]').count() === 1
+      && await win.locator('.csl-capabilities').count() === 0
+      && await win.locator('[data-plugin-note]').isVisible()
+      && (await win.locator('.csl-idea').inputValue()).includes('manifest.json'))
+    await win.locator('.csl-template[data-template-id="assistant"]').click()
+    check('Choosing a web template again restores the Connect capability picker', await win.locator('.csl-capabilities').count() === 1)
     check('Studio requires a project before accepting a build request', await win.locator('.t2c-ta').first().isDisabled()
       && (await win.locator('.t2c-ta').first().getAttribute('placeholder')).includes('创建或打开'))
     await win.locator('.csl-import').click()
@@ -362,25 +399,93 @@ async function main() {
     check('Issues lives in a native bottom Temp View outside the preview', await win.locator('.wb-extend[data-side=bottom] .csu-tool-view[data-tool=issues]').count() === 1 && await win.locator('.csu-workspace .wb-extend').count() === 0)
     check('Actual guest console errors appear in the Issues panel', !!await until(async () => (await win.locator('.csu-issue').allTextContents()).some(text => text.includes('CODING_STUDIO_TEST_ERROR'))))
     await shoot(app, win, 'issues')
+    // 版本一律走宿主的 git,而宿主只把**它自己的项目根的直接子目录**当成可写项目。所以这一段分两半验:
+    // ① 随手导入的根外项目 = 只读,且要报出设计好的那条理由;② 托管根里的夹具 = 可写,存 / 改 / 恢复跑真。
+    // 本机没装 git 时两半都不成立 —— 那时按名记一条 SKIP,既不算失败也不静默放过,更不能把后面几十条检查带崩。
+    const historyBody = win.locator('.csu-panel-body[data-history-mode]')
+    const readHistoryMode = async () => {
+      const mode = await until(() => historyBody.getAttribute('data-history-mode'))
+      // 读不到属性(面板压根没挂上)也只能返回 null —— 在 until 之外裸等一个 getAttribute,
+      // 超时会直接抛到 main() 的 catch,把后面几十条检查一并带走,正是这里要避免的那种失败。
+      return { mode, reason: await historyBody.getAttribute('data-history-reason').catch(() => null) }
+    }
     await win.getByRole('button', { name: '版本', exact: true }).click()
-    await win.locator('.csu-version-create input').fill('Working baseline')
-    await win.getByRole('button', { name: '保存版本', exact: true }).click()
-    await win.locator('.csu-version').filter({ hasText: 'Working baseline' }).waitFor()
-    check('A named source snapshot is visible after a real save', await win.locator('.csu-version').filter({ hasText: 'Working baseline' }).count() === 1)
+    const imported = await readHistoryMode()
+    if (imported.mode === 'install') {
+      skip('An out-of-root project reports read-only version history with its designed reason', 'git is not installed on this machine; the panel shows the install guide')
+    } else {
+      check('An out-of-root project reports read-only version history with its designed reason',
+        imported.mode === 'readonly' && imported.reason === 'studio.history.readonlyOutside', JSON.stringify(imported))
+      check('Read-only version history offers no save box and no restore buttons',
+        await win.locator('.csu-version-create').count() === 0 && await win.locator('.csu-version button').count() === 0)
+    }
+    await closeStudioTool(win).catch(() => {})
 
-    const updated = SAMPLE.replace('A working first version', 'A changed version').replace('BASELINE', 'UPDATED')
-    fs.writeFileSync(path.join(project, 'index.html'), updated)
-    fs.writeFileSync(path.join(project, 'added.js'), 'console.log("added after snapshot")\n')
-    fs.writeFileSync(path.join(project, '.env'), 'TEST_SETTING=after\n')
-    check('External disk writes automatically refresh the actual guest preview', !!await until(() => guestEval(win, 'document.getElementById("version")?.textContent === "UPDATED"')))
-    await win.getByRole('button', { name: '恢复源码 Working baseline', exact: true }).click()
-    await win.locator('.csu-restore-confirm').getByRole('button', { name: '恢复源码', exact: true }).click()
-    const restored = await until(() => fs.readFileSync(path.join(project, 'index.html'), 'utf8') === SAMPLE && !fs.existsSync(path.join(project, 'added.js')))
-    check('Restore puts the exact source back and removes added source files', restored)
-    check('Restore preserves excluded environment configuration', fs.readFileSync(path.join(project, '.env'), 'utf8') === 'TEST_SETTING=after\n')
-    check('Restore refreshes the real preview back to the baseline', !!await until(() => guestEval(win, 'document.getElementById("version")?.textContent === "BASELINE"')))
-    check('Restore preserves a backup of the preceding version', !!await until(async () => await win.locator('.csu-version').count() >= 2))
-    await shoot(app, win, 'versions')
+    // 换到托管根里的夹具项目 —— 宿主判可写的唯一形态,保存 / 恢复整条链只能在这里跑真。
+    await win.locator('.csu-project').click()
+    await win.waitForSelector('.csl-launchpad')
+    let managedHistory = { mode: 'install', reason: null }
+    if (!gitProject) {
+      skip('Version history saves and restores a project inside the managed projects root', 'the host did not report a projects root, so no managed fixture was seeded')
+    } else {
+      // 打开夹具这几步任何一步崩了,也只记一条红 + 让写动作那段按 install 跳过,绝不把整条主线带走。
+      try {
+        await app.evaluate((_electron, next) => { global.__studioPick = next }, gitProject)
+        await win.locator('.csl-import').click()
+        await win.waitForSelector('.csu-workspace')
+        check('The managed fixture project renders in an Electron guest', !!await until(() => guestEval(win, 'document.getElementById("version")?.textContent === "BASELINE"')))
+        await win.getByRole('button', { name: '版本', exact: true }).click()
+        managedHistory = await readHistoryMode()
+        if (managedHistory.mode === 'install') {
+          skip('Version history saves and restores a project inside the managed projects root', 'git is not installed on this machine; the panel shows the install guide')
+        } else {
+          check('Version history reports a git-writable project inside the managed projects root',
+            managedHistory.mode === 'writable', JSON.stringify({ ...managedHistory, gitProject }))
+        }
+      } catch (error) {
+        managedHistory = { mode: 'install', reason: null }
+        check('The managed fixture project opens for the version history workflow', false, error.stack || String(error))
+      }
+    }
+    if (managedHistory.mode === 'writable') {
+      // 这一段自成一体地兜住异常:版本这条链断了也只记一条红,后面的启动页 / 深色 / 英文检查照跑。
+      try {
+        await win.locator('.csu-version-create input').fill('Working baseline')
+        await win.getByRole('button', { name: '保存版本', exact: true }).click()
+        check('A named git version is visible after a real save',
+          !!await until(async () => await win.locator('.csu-version').filter({ hasText: 'Working baseline' }).count() === 1))
+
+        const updated = SAMPLE.replace('A working first version', 'A changed version').replace('BASELINE', 'UPDATED')
+        const addedLater = path.join(gitProject, 'added-after-the-version.html')
+        fs.writeFileSync(path.join(gitProject, 'index.html'), updated)
+        fs.writeFileSync(path.join(gitProject, '.env'), 'TEST_SETTING=after\n')
+        fs.writeFileSync(addedLater, '<!doctype html><title>added after the version</title>')
+        check('External disk writes automatically refresh the actual guest preview', !!await until(() => guestEval(win, 'document.getElementById("version")?.textContent === "UPDATED"')))
+        await win.getByRole('button', { name: '恢复源码 Working baseline', exact: true }).click()
+        await win.locator('.csu-restore-confirm').getByRole('button', { name: '恢复源码', exact: true }).click()
+        check('Restoring a git version puts the exact source back', !!await until(() => fs.readFileSync(path.join(gitProject, 'index.html'), 'utf8') === SAMPLE))
+        // 恢复 = 回到那一刻,不是叠加:存版本之后才出现的文件必须消失,否则「恢复」就成了半个还原。
+        check('Restore removes a source file added after the version', !!await until(() => !fs.existsSync(addedLater)), addedLater)
+        check('Restore preserves ignored environment configuration', fs.readFileSync(path.join(gitProject, '.env'), 'utf8') === 'TEST_SETTING=after\n')
+        check('Restore refreshes the real preview back to the baseline', !!await until(() => guestEval(win, 'document.getElementById("version")?.textContent === "BASELINE"')))
+        // 恢复前先把现场提交成备份版本 → 列表至少两条,这次恢复本身也撤得回去。
+        check('Restore first saves the current state as a backup version', !!await until(async () => await win.locator('.csu-version').count() >= 2))
+        await shoot(app, win, 'versions')
+      } catch (error) {
+        check('Version history save and restore workflow completes', false, error.stack || String(error))
+      }
+    }
+    // 回到导入的那个项目:后面所有检查(离开项目、启动页、深色 / 英文、缩放、窄窗)都以它为主角。
+    // 按「现在是不是还在某个项目里」判,而不是按「有没有夹具」—— 上面任何一步半路失败时,两者会不一致。
+    if (await win.locator('.csu-project').count() > 0) {
+      await closeStudioTool(win).catch(() => {})
+      await win.locator('.csu-project').click()
+      await win.waitForSelector('.csl-launchpad')
+    }
+    await app.evaluate((_electron, next) => { global.__studioPick = next }, project)
+    await win.locator('.csl-project').filter({ hasText: 'Imported studio project' }).first().click()
+    await win.waitForSelector('.csu-workspace')
+    await until(() => guestEval(win, 'document.getElementById("version")?.textContent === "BASELINE"'))
 
     await win.locator('.csu-project').click()
     await win.waitForSelector('.csl-launchpad')
@@ -551,10 +656,13 @@ async function main() {
   } finally {
     if (app) await app.close().catch(() => {})
     stub.close()
+    // 这一个夹具住在宿主真实的项目根里(那是它能被判成可写的唯一位置),不在 testDir 里,所以无论成败都要删干净。
+    if (gitProject) { try { fs.rmSync(gitProject, { recursive: true, force: true }) } catch { /* 下次跑会换个 pid 名字 */ } }
     fs.writeFileSync(path.join(OUTPUT, 'coding-studio-results.json'), JSON.stringify({ testDir, results, rendererErrors, geometry, motion }, null, 2))
     fs.writeFileSync(path.join(OUTPUT, 'coding-studio-motion.json'), JSON.stringify(motion, null, 2))
     const failed = results.filter(result => !result.ok)
-    console.log(`\n${results.length - failed.length}/${results.length} passed; fixture: ${testDir}`)
+    const skipped = results.filter(result => result.skipped)
+    console.log(`\n${results.length - failed.length - skipped.length}/${results.length} passed, ${skipped.length} skipped; fixture: ${testDir}`)
     if (failed.length) process.exitCode = 1
   }
 }

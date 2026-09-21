@@ -4,7 +4,7 @@ import { translate } from '../../i18n'
 import { normPath } from './studioModel'
 import type { StudioTool } from './useStudioTools'
 
-const TITLES = { brief: 'studio.project', history: 'studio.history', checks: 'studio.checks', issues: 'studio.issues', setup: 'studio.setup' } as const
+const TITLES = { brief: 'studio.project', history: 'studio.history', checks: 'studio.checks', issues: 'studio.issues', setup: 'studio.setup', sandbox: 'studio.sandbox' } as const
 export const STUDIO_TOOL_COMMAND = 'coding-studio.open-tool'
 
 /** Presentation only. All entry points open explicit values; none save, restore or publish. */

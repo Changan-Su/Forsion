@@ -2,7 +2,7 @@
  *  分区:最近使用(会话/笔记/文件/视图)→ Forsion 原生 → 每个插件一组(按视图来源分类,不再按主/侧区)。
  *  卡片单击=在其默认位置打开(多数主区 Tab;侧栏类视图在侧栏);可拖入 tab bar / side bar「落点即开」。 */
 import { type ReactNode } from 'react'
-import { Plus, SquarePen, Bot, MessageCircle, FileText, CalendarDays, Mail, ListTodo, Code2, Workflow, Network, PenTool, Globe, TerminalSquare, LayoutDashboard, House } from 'lucide-react'
+import { Plus, SquarePen, Bot, MessageCircle, FileText, CalendarDays, Mail, ListTodo, Code2, Workflow, Network, PenTool, Globe, TerminalSquare, LayoutDashboard, House, Blocks } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { hasNativeFeature, amadeusAvailable, inboxAvailable } from '../features/runtime'
 import { openSpecial } from './SpecialViews'
@@ -76,6 +76,8 @@ export function NewTabView({ leaf }: ViewProps) {
     // Coding / Automation Space 的主视图(单例);仅其注册(产品档案 + 能力门控)后出现,drag 可拖入任意区。
     { key: 'code-studio', icon: <Code2 size={20} />, label: t('view.codeStudio'), run: () => ws().openView('code-studio', {}, 'main'), show: !!getView('code-studio'), drag: { type: 'code-studio' } },
     { key: 'automation-detail', icon: <Workflow size={20} />, label: t('view.automationDetail'), run: () => ws().openView('automation-detail', {}, 'main'), show: !!getView('automation-detail'), drag: { type: 'automation-detail' } },
+    // 造物栅格来自「造物」内置插件:插件页关掉即反注册 → getView 落空 → 这张卡自动消失(同上面的主页/日历)。
+    { key: 'artificial', icon: <Blocks size={20} />, label: t('view.artificial'), run: () => ws().openView('artificial', {}, 'main'), show: !!getView('artificial'), drag: { type: 'artificial' } },
     // 内置插件的两个视图:在插件页关掉即反注册 → getView 落空 → 这两块自动消失。
     { key: 'browser', icon: <Globe size={20} />, label: t('browser.title'), run: () => openBrowser(), show: !!getView('browser'), drag: { type: 'browser' } },
     { key: 'terminal', icon: <TerminalSquare size={20} />, label: t('terminal.title'), run: () => openTerminal(), show: !!getView('terminal'), drag: { type: 'terminal' } },

@@ -22,6 +22,16 @@ registerMessages({
 
 const VIEW_DENY = new Set(['browser', 'terminal'])
 
+/** view 专属的 deep link 落地方式(缺省 = 主区 openView)。注册方只拿到**已过形态闸**的 params,
+ *  且自己负责只取认识的键 —— deep link 是任意网页可达的输入,多余参数一律不往下传。
+ *  先例:造物的 `product` 视图用它改成开独立窗口(builtins/artificial)。 */
+type DeepLinkOpener = (params: Record<string, string>) => boolean | Promise<boolean>
+const openers = new Map<string, DeepLinkOpener>()
+export function registerDeepLinkOpener(viewType: string, open: DeepLinkOpener): () => void {
+  openers.set(viewType, open)
+  return () => { if (openers.get(viewType) === open) openers.delete(viewType) }
+}
+
 /**
  * 通用径 `open?view=…` 的身份参数安全闸(§4.3)。
  *
@@ -102,6 +112,10 @@ export async function resolveDeepLink(intent: DeepLinkIntent): Promise<boolean> 
       const def = getView(type)
       if (!def || def.kind === 'aux') return false
       if (!entityParamsSafe(def, intent.params)) return false
+      // 专属落地先于 space 切换:它不落在主区(造物开的是独立窗口),带 `&space=` 的链接不该顺手把用户的
+      // 主窗拽去别的 Space —— deep link 是任意网页可达的输入,这种「附带位移」白给骚扰面。
+      const custom = openers.get(type)
+      if (custom) return custom(intent.params)
       if (intent.space && !switchSpace(intent.space)) return false
       const go = (): void => { useWorkspace.getState().openView(type, intent.params, 'main') }
       // setActiveSpace 同步换整个布局(applyNamed/resetLayout);同 tick 开 view 会跟布局应用赛跑 → 推一帧。

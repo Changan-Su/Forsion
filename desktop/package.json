@@ -189,6 +189,8 @@
     "check:calendarplugin": "node scripts/builtin-calendar.check.cjs",
     "check:achtoast": "node scripts/ach-toast.check.cjs",
     "check:homepage": "node scripts/builtin-homepage.check.cjs",
+    "check:artificial": "node scripts/builtin-artificial.check.cjs",
+    "check:sandbox": "node scripts/sandbox.check.cjs",
     "check:homepageglass": "node scripts/homepage-glass.check.cjs",
     "check:homepagepinned": "node scripts/homepage-pinned-spaces.check.cjs",
     "check:homeslot": "node scripts/home-slot.check.cjs",

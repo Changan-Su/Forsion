@@ -106,6 +106,25 @@ describe('Coding Studio project state', () => {
     expect(store.getState().projects['../invalid']).toBeUndefined()
   })
 
+  // 简报的形态决定后续每一次「开始构建」发出去的提示词。丢了它 = 插件项目静默退回网页那套指令,
+  // 不报错也不崩,只是模型开始写 index.html —— 所以持久化这一条要单独钉。
+  it('persists only a known brief kind across reloads and drops anything else', async () => {
+    store.getState().openProject('/projects/a', 'A')
+    store.getState().updateProject({ brief: { idea: 'A ribbon clock', audience: '', constraints: '', capabilities: [], kind: 'plugin', locale: 'zh' } })
+    expect(JSON.parse(data.get('coding.studio.projects.v2')!)['/projects/a'].brief.kind).toBe('plugin')
+    await load()
+    store.getState().openProject('/projects/a', 'A')
+    expect(store.getState().projects['/projects/a'].brief).toMatchObject({ idea: 'A ribbon clock', kind: 'plugin' })
+    for (const kind of ['engine', 42, null, { kind: 'plugin' }, ['plugin']]) {
+      data.set('coding.studio.projects.v2', JSON.stringify({ '/projects/a': { brief: { idea: 'A ribbon clock', capabilities: [], locale: 'zh', kind } } }))
+      await load()
+      expect(store.getState().projects['/projects/a'].brief, JSON.stringify(kind)).not.toHaveProperty('kind')
+    }
+    data.set('coding.studio.projects.v2', JSON.stringify({ '/projects/a': { brief: { idea: 'A page', capabilities: [], locale: 'zh', kind: 'web' } } }))
+    await load()
+    expect(store.getState().projects['/projects/a'].brief).toMatchObject({ kind: 'web' })
+  })
+
   it('guards project preference patches and keeps mirrored UI state in sync', () => {
     store.getState().openProject('/projects/a', 'A')
     store.getState().updateProject({ mode: 'split', activeFile: '/projects/a/src/main.ts', entry: './index.html' })

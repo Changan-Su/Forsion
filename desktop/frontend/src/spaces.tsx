@@ -18,6 +18,7 @@ import { museAvailable, museSpace } from './builtins/muse'
 
 import { homepageAvailable, homepageSpace } from './builtins/homepage'
 import { imageStudioAvailable, imageStudioSpace } from './builtins/imageStudio'
+import { artificialAvailable, artificialSpace } from './builtins/artificial'
 import { homeSlotSpaceId, installHomeSlot } from './homeSlot'
 
 const ws = () => useWorkspace.getState()
@@ -244,6 +245,9 @@ const SPACES: SpaceDefinition[] = [
   ...(calendarAvailable() && builtinEnabled('calendar') ? [calendarSpace] : []),
   // Coding 依赖 host 文件桥 + 本地静态预览服务器(仅桌面 electron;Tangu Web 无 codePreviewServe → 不注册)。
   ...(PRODUCT.nativeFeatures === undefined && PRODUCT.spaces.includes('coding') && window.tangu?.codePreviewServe ? [codingSpace] : []),
+  // 造物也是**内置插件**(builtins/artificial:Space + artificial/product 两个视图随插件启停)。
+  // 紧跟编码之后 —— 它管的正是编码工作室的产出;插件页关掉后下次启动即整条不出现。
+  ...(artificialAvailable() && builtinEnabled('artificial') ? [artificialSpace] : []),
   ...(imageStudioAvailable() && builtinEnabled('image-studio') ? [imageStudioSpace] : []),
   // Automation 依赖本地 tangu 后端(triggers/automation 端点都是本地特性;Tangu Web 无 backendStatus → 不注册)。
   ...(hasNativeFeature('automation') && window.tangu?.backendStatus ? [automationSpace] : []),

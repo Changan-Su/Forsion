@@ -1,4 +1,5 @@
 import type { HostSandboxConfig } from '../../shared/hostSandboxConfig'
+import type { GitPanelStatus, GitRestoreSummary, GitVersion, ProductKind, ProductSummary, ShortcutResult } from '../../shared/products'
 /** standalone /agent 契约的前端类型(与包内 routes/eventBus 一致)。 */
 import type { ActiveWindowSample } from '../../shared/activeWindow'
 import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot } from '../../shared/desktopPermissions'
@@ -1153,6 +1154,20 @@ declare global {
       codeStudioVersions?(root: string): Promise<Array<{ id: string; name: string; createdAt: number; files: number }>>
       codeStudioSnapshot?(root: string, name: string): Promise<{ id: string; name: string; createdAt: number; files: number }>
       codeStudioRestore?(root: string, id: string): Promise<{ restored: string[]; deleted: string[]; conflicts: string[]; backupId: string }>
+      /** git 版本(只给有 git 的用户)。宿主驱动:每轮 agent 结束自动提交 + 手动命名版本;agent 自己不跑 git。 */
+      codeStudioGitStatus?(root: string): Promise<GitPanelStatus>
+      codeStudioGitVersions?(root: string): Promise<GitVersion[]>
+      codeStudioGitCommit?(root: string, input: { name: string; auto: boolean; untitled?: string }): Promise<GitVersion | null>
+      codeStudioGitRestore?(root: string, id: string, labels?: { backup?: string; restorePrefix?: string }): Promise<GitRestoreSummary>
+      /** 造物(Creations)Space:渲染层只传产物 id,目录由主进程回注册表重解。 */
+      productsList?(): Promise<ProductSummary[]>
+      productsGet?(id: string): Promise<ProductSummary | null>
+      productsEnsure?(dir: string): Promise<ProductSummary | null>
+      productsUpdate?(id: string, patch: { name?: string; entry?: string | null; kind?: ProductKind; devLoad?: boolean }): Promise<ProductSummary>
+      productsServe?(id: string): Promise<{ origin: string; url: string; product: ProductSummary }>
+      /** fallbackName:产物名清洗后为空时用的桌面文件名(落盘产物命名,跟随当前语言)。 */
+      productsShortcut?(id: string, fallbackName?: string): Promise<ShortcutResult>
+      productsTrash?(id: string): Promise<{ ok: boolean }>
       /** Forsion Connect:Coding Space 项目发布到云端托管(主进程持 token 转发)。 */
       connectMeta?(dir: string): Promise<{ slug?: string }>
       connectList?(): Promise<{ ok: boolean; code?: string; detail?: string; base?: string; handle?: string | null; apps?: Array<{ slug: string; name: string; entry: string; status: string; total_bytes: number; updated_at?: string; listing_status?: string | null; listing_summary?: string | null; listing_note?: string | null }>; used?: number; limit?: number; tier?: string }>

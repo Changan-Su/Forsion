@@ -31,6 +31,9 @@ async function mount() {
 async function useFirstTemplate() {
   await act(async () => { (host.querySelector('.csl-template') as HTMLButtonElement).click() })
 }
+async function useTemplate(id: string) {
+  await act(async () => { (host.querySelector(`.csl-template[data-template-id="${id}"]`) as HTMLButtonElement).click() })
+}
 async function submit() {
   await act(async () => { host.querySelector('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })) })
 }
@@ -81,6 +84,31 @@ describe('project launchpad', () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('项目未创建成功')
     expect(onCreate).not.toHaveBeenCalled()
   })
+  it('offers a Forsion plugin starting point that creates a plugin brief without Connect capabilities', async () => {
+    await mount()
+    expect(host.querySelectorAll('.csl-template[data-template-id="plugin"]')).toHaveLength(1)
+    await useTemplate('plugin')
+    // 能力块整块收起,并说清为什么 —— 留着让人勾却不生效,比不给更糟。
+    expect(host.querySelector('.csl-capabilities')).toBeNull()
+    expect(host.querySelector('[data-plugin-note]')?.textContent).toContain('Forsion Connect')
+    expect((host.querySelector('.csl-idea') as HTMLTextAreaElement).value).toContain('manifest.json')
+    await submit()
+    expect(mkdirHost).toHaveBeenCalledWith('/projects', 'my-forsion-plugin')
+    expect(onCreate).toHaveBeenCalledWith('/projects/my-forsion-plugin', 'my-forsion-plugin', expect.objectContaining({
+      kind: 'plugin', templateId: 'plugin', capabilities: [],
+    }))
+  })
+
+  it('returns to a web brief when a web template is chosen after the plugin one', async () => {
+    await mount()
+    await useTemplate('plugin')
+    await useTemplate('assistant')
+    expect(host.querySelector('.csl-capabilities')).not.toBeNull()
+    await submit()
+    expect(onCreate).toHaveBeenCalledWith('/projects/writing-assistant', 'writing-assistant', expect.objectContaining({ templateId: 'assistant', capabilities: ['chat'] }))
+    expect(onCreate.mock.calls[0][2]).not.toHaveProperty('kind')
+  })
+
   it('merges imported recent projects with managed folders without duplicates', async () => {
     listDir.mockResolvedValue([{ name: 'Managed', path: '/projects/Managed', isDir: true, size: 0 }])
     await act(async () => { reactRoot.render(createElement(ProjectLaunchpad, {

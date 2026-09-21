@@ -4,14 +4,15 @@ import { createExtendViewController, type ExtendViewController, type ExtendViewH
 import { translate, useI18n } from '../../i18n'
 import './studioMessages'
 
-export type StudioTool = 'brief' | 'history' | 'checks' | 'issues' | 'setup'
+export type StudioTool = 'brief' | 'history' | 'checks' | 'issues' | 'setup' | 'sandbox'
 export interface ActiveStudioTool { kind: StudioTool; side: ExtendViewSide; handle: ExtendViewHandle }
 
 const titles: Record<StudioTool, string> = {
-  brief: 'studio.project', history: 'studio.history', checks: 'studio.checks', issues: 'studio.issues', setup: 'studio.setup',
+  brief: 'studio.project', history: 'studio.history', checks: 'studio.checks', issues: 'studio.issues', setup: 'studio.setup', sandbox: 'studio.sandbox',
 }
 const defaultSides: Record<StudioTool, ExtendViewSide> = {
-  brief: 'right', history: 'bottom', checks: 'right', issues: 'bottom', setup: 'right',
+  // Sandbox 与 issues 同类:证据(日志 / 报错)是长列表,底部面板最宽,给得起。
+  brief: 'right', history: 'bottom', checks: 'right', issues: 'bottom', setup: 'right', sandbox: 'bottom',
 }
 interface Slot { kind: StudioTool; side: ExtendViewSide; element: HTMLDivElement }
 
@@ -49,7 +50,7 @@ function EmbeddedTool({ slot, handle, revision, close }: { slot: Slot; handle: E
 
 /** Native temporary Views own their chrome and placement; the project owns each tool's React tree.
  * Moving a stable portal container between leases preserves form drafts, subscriptions and context.
- * Closed tools stay detached until this project unmounts, with at most five lazily created trees. */
+ * Closed tools stay detached until this project unmounts, one lazily created tree per tool kind. */
 export function useStudioTools(controller: ExtendViewController | undefined, root: string, { embeddedFallback = false }: { embeddedFallback?: boolean } = {}) {
   const [, refresh] = useReducer((value: number) => value + 1, 0)
   const owner = useMemo(() => ({
