@@ -5,7 +5,8 @@
  *
  *   node scripts/boot-smoke.mjs --entry dist/standalone/main.js
  *   node scripts/boot-smoke.mjs --exe <Forsion.exe> --electron --entry <resources>/tangu-server/dist/standalone/main.js \
- *     --seed <resources>/bundled-plugins/tangu-computer-use --sandbox auto --hide-docker
+ *     --seed <resources>/bundled-plugins/tangu-computer-use --sandbox auto
+ * 模拟没装 Docker 的机器用 --sandbox none(只跳过 docker 探测这一步,之后的启动段相同)。
  *
  * 退出码:0 = 就绪;1 = 早退 / 超时。起因:2.11.2 Windows 用户「后端退出(code=0)」反复,CI 从没真起过打包版引擎。
  */
@@ -41,11 +42,6 @@ const port = await new Promise((resolve, reject) => {
 const env = { ...process.env, TANGU_HOME: tanguHome, TANGU_TOKEN: 'boot-smoke' };
 if (flag('electron')) env.ELECTRON_RUN_AS_NODE = '1';
 else delete env.ELECTRON_RUN_AS_NODE;
-if (flag('hide-docker')) { // 模拟没装 Docker 的机器(CI runner 自带 docker)
-  for (const k of Object.keys(env).filter((k) => k.toUpperCase() === 'PATH')) {
-    env[k] = env[k].split(path.delimiter).filter((d) => !/docker/i.test(d)).join(path.delimiter);
-  }
-}
 const args = [entry, '--port', String(port), '--host', '127.0.0.1', '--data-dir', path.join(tanguHome, 'state.db'),
   '--sandbox', opt('sandbox', 'auto'), '--cloud-url', opt('cloud-url', 'https://api.forsion.net')];
 
@@ -78,5 +74,5 @@ while (!result && Date.now() - t0 < timeoutMs) {
 result ??= { ok: false, why: `TIMEOUT ${timeoutMs}ms` };
 if (child.exitCode === null) { child.kill(); await exited; }
 await Promise.race([drained, new Promise((r) => setTimeout(r, 2000))]); // 输出收齐再下结论(孙进程可能占着管道)
-console.log(`[smoke] ${stamp()} ${result.why}`);
-process.exit(result.ok ? 0 : 1);
+// 写完再退:stdout 是管道时 console.log 后立刻 process.exit 可能截掉最后几行
+process.stdout.write(`[smoke] ${stamp()} ${result.why}\n`, () => process.exit(result.ok ? 0 : 1));

@@ -72,4 +72,18 @@ describe('BackendManager startup exits', () => {
     expect(logs.filter((l) => l.startsWith('[manager] 后端退出(code=0'))).toHaveLength(3)
     expect(m.getStatus().state).toBe('crashed')
   }, 15_000)
+
+  it('紧跟在 start() 后的 stop() 作废这次拉起:之后一个进程都不再起', async () => {
+    const entry = join(H.dir, 'silent-exit.js')
+    writeFileSync(entry, "process.stderr.write('boot\\n')", 'utf8')
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(entry)
+    process.env.TANGU_NODE_BIN = process.execPath
+    const m = new BackendManager()
+    const starting = m.start({ cloudUrl: '', sandbox: 'none' })
+    await m.stop() // 例:退出 App / 安装更新时,拉起链正卡在 freePort,手里还没有 child
+    await starting
+    await new Promise((r) => setTimeout(r, 1000))
+    expect(m.getLogs().filter((l) => l === 'boot')).toHaveLength(0)
+    expect(m.getStatus().state).toBe('stopped')
+  }, 15_000)
 })
