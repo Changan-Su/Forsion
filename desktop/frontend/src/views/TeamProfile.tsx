@@ -128,9 +128,11 @@ export function TeamProfile({ session, config, renderMember }: Props) {
       }
       if (session) {
         const current = useApp.getState().configBySession[session.id] || session.agent_config || config
-        // 只写团队这几个键(服务端按键合并);老引擎没有 PATCH 就回落整对象 PUT
-        const savedConfig = await patchSessionConfig(s.cfg, session.id, teamSessionPatch(nextDraft), () => teamSessionConfig(current, nextDraft))
-        useApp.setState((a) => ({ configBySession: { ...a.configBySession, [session.id]: savedConfig }, sessions: a.sessions.map((v) => v.id === session.id ? { ...v, agent_config: savedConfig } : v) }))
+        // 只写团队这几个键(服务端按键合并);老引擎没有 PATCH 就回落整对象 PUT —— 整对象在回落那一刻按本地最新现拼,
+        // 等 404 的这一拍里别的 setter(如刚收紧的审批档)可能已经改过本地
+        const savedConfig = await patchSessionConfig(s.cfg, session.id, teamSessionPatch(nextDraft), () => teamSessionConfig(useApp.getState().configBySession[session.id] || current, nextDraft))
+        // 回来只把团队这几个键并进本地最新配置:响应是保存那一刻的快照,整份盖回去会把保存途中别处改过的键(如刚移除的工作范围)退回旧值
+        useApp.setState((a) => ({ configBySession: { ...a.configBySession, [session.id]: teamSessionConfig(a.configBySession[session.id] || savedConfig, nextDraft) }, sessions: a.sessions.map((v) => v.id === session.id ? { ...v, agent_config: savedConfig } : v) }))
         if (!config.teamSlug && nextDraft.name.trim() !== session.title) {
           const updated = await updateSession(s.cfg, session.id, { title: nextDraft.name.trim() })
           useApp.setState((a) => ({ sessions: a.sessions.map((v) => v.id === session.id ? { ...v, title: updated.title } : v) }))

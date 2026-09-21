@@ -106,6 +106,18 @@ describe('setExecConfig 审批档写入', () => {
     expect(toast).toHaveBeenCalledTimes(1)
   })
 
+  it('存上的档按引擎应答认:老引擎回落 PUT 现拼的整对象带着后一次点的档 → 后一次失败也不回滚', async () => {
+    useApp.setState({ configBySession: { s1: { execMode: 'host', approvalMode: 'readonly' } } })
+    const a = deferred(); const b = deferred()
+    putMock.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise)
+    useApp.getState().setExecConfig({ approvalMode: 'auto-edit' }, 's1')
+    useApp.getState().setExecConfig({ approvalMode: 'full-auto' }, 's1')
+    a.resolve({ execMode: 'host', approvalMode: 'full-auto' }); await flush()
+    b.reject(new Error('boom')); await flush()
+    expect(mode('s1')).toBe('full-auto')
+    expect(toast).not.toHaveBeenCalled()
+  })
+
   it('前一次在途时同档再点一次:它是这批最新的,前一次失败不会把它退掉', async () => {
     useApp.setState({ configBySession: { s1: { execMode: 'host', approvalMode: 'readonly' } } })
     const a = deferred(); const b = deferred()

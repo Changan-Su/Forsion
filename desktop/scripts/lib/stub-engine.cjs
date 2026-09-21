@@ -184,12 +184,17 @@ async function startStubEngine(data = {}) {
     }
     if (/^\/agent\/sessions\/[^/]+\/messages$/.test(p)) return json({ messages: state.messages });
     if (/^\/agent\/sessions\/[^/]+\/config$/.test(p)) {
+      const fixed = { execMode: 'host', approvalMode: 'auto-edit' };
       if (req.method === 'PUT' || req.method === 'PATCH') {
-        seen.configs.push({ sessionId: p.split('/')[3], method: req.method, config: await body() });
+        const config = await body();
+        seen.configs.push({ sessionId: p.split('/')[3], method: req.method, config });
         // 扮老引擎:没有按键合并的 PATCH 路由 → 客户端该回落整对象 PUT
         if (req.method === 'PATCH' && state.noConfigPatch) return json({ detail: `Cannot PATCH ${p}` }, 404);
+        // 应答同真引擎 = 落库后的整份配置(客户端按它认「存上的是哪一档」):PUT 整对象替换,PATCH 并进(null 删键)
+        const stored = req.method === 'PUT' ? config : { ...fixed, ...config };
+        return json({ agent_config: Object.fromEntries(Object.entries(stored).filter(([, v]) => v !== null)) });
       }
-      return json({ agent_config: { execMode: 'host', approvalMode: 'auto-edit' } });
+      return json({ agent_config: fixed });
     }
     if (/^\/agent\/sessions\/[^/]+\/background$/.test(p)) return json({ background: [] });
     if (p === '/agent/models') return json({ models: state.models, defaultModelId: state.models[0]?.id, directProviders: data.directProviders || [] });

@@ -2766,7 +2766,8 @@ export const useApp = create<AppState>((set, get) => ({
     const n = ++b.issued
     b.pending += 1
     b.mode = mode
-    void put.then(() => { b.stored = mode; if (n === b.issued) b.err = null },
+    // 存上的档以响应为准(引擎回的是落库后的整份配置):老引擎回落 PUT 时 full() 在回落那一刻现拼,可能已带着后一次点的档
+    void put.then((res) => { b.stored = res && typeof res === 'object' && 'approvalMode' in res ? (res as AgentConfig).approvalMode : mode; if (n === b.issued) b.err = null },
       (e) => { if (n === b.issued) b.err = e instanceof Error ? e : new Error(String(e)) })
       .then(() => {
         if (--b.pending) return // 这批还有在途的:全部落定再判
