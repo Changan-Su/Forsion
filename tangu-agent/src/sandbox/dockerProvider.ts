@@ -24,7 +24,7 @@ import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { sandboxConfig } from './sandboxConfig.js';
 import { ExecutionQueue } from './executionQueue.js';
-import { assertDockerWorkspaceAvailable, dockerQuarantines, DockerCleanupError, removeDockerContainer, runDocker, scheduleDockerStartupInspection, startDockerContainer, waitDockerStartupCleanup } from './dockerLifecycle.js';
+import { assertDockerWorkspaceAvailable, dockerQuarantines, DockerCleanupError, removeDockerContainer, reportStartupInspectionFailure, runDocker, scheduleDockerStartupInspection, startDockerContainer, waitDockerStartupCleanup } from './dockerLifecycle.js';
 
 export interface ExecResult {
   stdout: string;
@@ -423,11 +423,11 @@ export async function releaseRunContainer(runId: string): Promise<void> {
   return rc.closing;
 }
 
-export function reapOrphanRunContainers(): void {
+export function reapOrphanRunContainers(dockerRequired = true): void {
   if (runContainers.size || activeExecs.size) return; // startup-only
   // Names do not establish ownership: Desktop and CLI instances may share the same Docker daemon.
-  void scheduleDockerStartupInspection(['agent-run-', 'agent-sbx-'])
-    .catch((e) => console.warn('[agent-core] existing sandbox inspection failed:', e));
+  void scheduleDockerStartupInspection(['agent-run-', 'agent-sbx-'], dockerRequired)
+    .catch(reportStartupInspectionFailure);
 }
 
 async function executeDocker(name: string, args: string[], input: string, opts: ExecOpts, ephemeral: boolean, writableDirs = opts.mountDir ? [opts.mountDir] : []): Promise<ExecResult> {

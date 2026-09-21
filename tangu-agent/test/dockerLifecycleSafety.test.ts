@@ -64,6 +64,54 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
+describe('Startup inspection when Docker is not reachable', () => {
+  const daemonDown = ok({ code: 1, stderr: 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n' });
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it.each([
+    ['daemon down', daemonDown],
+    ['no docker CLI', ok({ code: -1, reason: 'spawn-error' })],
+  ])('sandbox=none, %s: session directories stay usable and nothing is logged', async (_label, psResult) => {
+    fake.run.mockImplementation(async (_bin, args) => args[0] === 'ps' ? psResult : ok());
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      docker.reapOrphanRunContainers(false); sessions.reapOrphanSessions(false);
+      await expect(sessions.getSessionDir(key())).resolves.toContain('sessions');
+      await flush();
+      expect(warn).not.toHaveBeenCalled();
+    } finally { warn.mockRestore(); }
+  });
+
+  it('Docker in use, daemon down: every later mount stays blocked, reported once as a single line without a stack', async () => {
+    fake.run.mockImplementation(async (_bin, args) => args[0] === 'ps' ? daemonDown : ok());
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      docker.reapOrphanRunContainers(); sessions.reapOrphanSessions();
+      await expect(sessions.getSessionDir(key())).rejects.toThrow('Is the docker daemon running');
+      await expect(docker.runNode('never execute')).rejects.toThrow('Cannot confirm orphan sandbox state');
+      await flush();
+      expect(warn).toHaveBeenCalledTimes(1); // 两个 reaper 共用一条链,同一个错误
+      expect(warn.mock.calls[0]).toHaveLength(1); // 只交一个字符串:把 Error 对象交给 console 就会连栈打出来
+      expect(warn.mock.calls[0][0]).toContain('Is the docker daemon running');
+      expect(warn.mock.calls[0][0]).not.toContain('\n');
+      expect(fake.run.mock.calls.some(([, args]) => args[0] === 'run')).toBe(false);
+    } finally { warn.mockRestore(); }
+  });
+
+  it('sandbox=none still quarantines the writable mounts of containers it can see', async () => {
+    const occupied = path.join(dir, 'other-instance');
+    fake.run.mockImplementation(async (_bin, args) => {
+      if (args[0] === 'ps') return ok({ stdout: 'other-instance-container\n' });
+      if (args[0] === 'inspect') return ok({ stdout: JSON.stringify([{ Type: 'bind', RW: true, Source: occupied }]) });
+      return ok();
+    });
+    docker.reapOrphanRunContainers(false);
+    await lifecycle.waitDockerStartupCleanup();
+    expect(lifecycle.dockerQuarantines().map((q) => q.path)).toContain(path.resolve(occupied));
+    expect(fake.run.mock.calls.some(([, args]) => args[0] === 'rm')).toBe(false);
+  });
+});
+
 describe('Docker lifecycle acknowledgements', () => {
   it('keeps new sessions behind startup inspection while independently cancelling an admission waiter', async () => {
     let inspectionAck!: () => void;

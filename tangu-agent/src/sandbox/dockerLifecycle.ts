@@ -44,11 +44,19 @@ export function dockerQuarantines(): Array<{ path: string; name: string; reason:
   return [...quarantined].flatMap(([name, info]) => (info.paths.length ? info.paths : ['(mounts unknown)']).map((path) => ({ path, name, reason: info.reason })));
 }
 
-/** Other Tangu instances may own these containers. Inspect mounts and isolate conflicts; never kill by prefix. */
-export function scheduleDockerStartupInspection(prefixes: string[]): Promise<void> {
+/** Other Tangu instances may own these containers. Inspect mounts and isolate conflicts; never kill by prefix.
+ *  dockerRequired=false (this process runs with sandbox=none and never starts containers): an unreachable
+ *  Docker only means nothing is visible, so it must not block the non-Docker session directories. Containers
+ *  that are visible are still inspected and their writable mounts quarantined. With Docker in use, an
+ *  unreachable daemon is unknown state and still blocks every later mount. */
+export function scheduleDockerStartupInspection(prefixes: string[], dockerRequired = true): Promise<void> {
   startupCleanup = startupCleanup.then(async () => {
     const result = await runDocker(['ps', '-aq', ...prefixes.flatMap((prefix) => ['--filter', `name=${prefix}`])]);
-    if (result.code !== 0 || result.reason || result.cleanupTimedOut) throw new Error('Cannot confirm orphan sandbox state during startup');
+    if (result.code !== 0 || result.reason || result.cleanupTimedOut) {
+      if (!dockerRequired) return;
+      const detail = result.reason || (result.cleanupTimedOut ? 'timeout' : result.stderr.trim().split('\n')[0]?.slice(0, 200) || `docker exited ${result.code}`);
+      throw new Error(`Cannot confirm orphan sandbox state during startup (docker ps: ${detail})`);
+    }
     for (const name of result.stdout.split(/\s+/).filter(Boolean)) {
       const inspected = await runDocker(['inspect', '--type', 'container', '--format', '{{json .Mounts}}', name]);
       if (inspected.code !== 0 || inspected.reason || inspected.cleanupTimedOut) {
@@ -68,6 +76,17 @@ export function scheduleDockerStartupInspection(prefixes: string[]): Promise<voi
     }
   });
   return startupCleanup;
+}
+
+const reportedFailures = new WeakSet<object>();
+/** The run and session inspections share one chain, so a failure reaches both callers as the same error:
+ *  report it once, as one line without a stack (it lands in the Desktop log users attach to feedback). */
+export function reportStartupInspectionFailure(e: unknown): void {
+  if (e && typeof e === 'object') {
+    if (reportedFailures.has(e)) return;
+    reportedFailures.add(e);
+  }
+  console.warn(`[agent-core] 遗留沙箱检查失败,本进程不再接受新的沙箱挂载(重启引擎后重试):${(e as Error)?.message || e}`);
 }
 
 export async function waitDockerStartupCleanup(signal?: AbortSignal): Promise<void> {

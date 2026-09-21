@@ -120,8 +120,10 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     if (opts?.sandbox !== false) {
       loadSandboxConfig().catch(() => {});
       startCacheJanitor();
-      reapOrphanRunContainers();
-      reapOrphanSessions();
+      // sandbox=none 的进程不起容器:Docker 看不见(没装 / 没启动)不该拦住它的会话目录,也不该刷屏。
+      const dockerRequired = deps().profile.sandboxMode === 'docker';
+      reapOrphanRunContainers(dockerRequired);
+      reapOrphanSessions(dockerRequired);
       startSessionReaper();
     }
 
