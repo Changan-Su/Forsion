@@ -220,15 +220,25 @@ export function isKnownSafeBash(command: string): boolean {
 // 路径抽取已迁 tools/writeTargets.ts(检查点快照共用同一口径,见该文件头注)。
 
 const APPROVAL_MODES = new Set(['readonly', 'auto-edit', 'full-auto', 'custom']);
-/** 会话此刻存着的审批档(输入区切档 = PUT 进 agent_config)。没存 / 读失败 → undefined,调用方回落 run 启动时的快照。 */
+/** 会话此刻存着的审批档(输入区切档 = PUT 进 agent_config)。没存 → undefined;**读失败照抛**(调用方自己决定兜底方向)。 */
 export async function storedApprovalMode(sessionId: string): Promise<ApprovalMode | undefined> {
-  try {
-    const raw = await deps().state.getAgentConfig(sessionId);
-    const mode = (typeof raw === 'string' ? JSON.parse(raw) : raw)?.approvalMode;
-    return APPROVAL_MODES.has(mode) ? mode : undefined;
-  } catch {
-    return undefined;
+  const raw = await deps().state.getAgentConfig(sessionId);
+  const mode = (typeof raw === 'string' ? JSON.parse(raw) : raw)?.approvalMode;
+  return APPROVAL_MODES.has(mode) ? mode : undefined;
+}
+
+// 严格度:custom 与 auto-edit 同档(custom 的规则是用户自己的全局配置,平手按列表先后)。
+const STRICTNESS: Record<ApprovalMode, number> = { readonly: 0, 'auto-edit': 1, custom: 1, 'full-auto': 2 };
+/** 审批闸现读:几个会话存值里最严的那个(团队成员 = [团队会话, 成员会话]:团队档是上限,成员子聊天里只能调得更严)。
+ *  都没存 → undefined(回落启动快照);**读失败 → readonly**:读不到用户此刻的档时回落快照 = 可能正好放开用户刚收紧的档(Codex 09-21 P1)。 */
+export async function liveApprovalMode(sessionIds: string[]): Promise<ApprovalMode | undefined> {
+  let best: ApprovalMode | undefined;
+  for (const id of sessionIds) {
+    let m: ApprovalMode | undefined;
+    try { m = await storedApprovalMode(id); } catch { return 'readonly'; }
+    if (m && (best === undefined || STRICTNESS[m] < STRICTNESS[best])) best = m;
   }
+  return best;
 }
 
 /** 越界写诊断:同 run 同目录只记一次(反馈包带后端日志;09-21 那份只剩工具名,答不了「它到底写哪儿了」)。 */
@@ -369,9 +379,9 @@ export async function gateToolCall(
   call: ToolCall,
   ctx: {
     sessionId: string; execMode?: string; approvalMode?: ApprovalMode; cwd?: string; extraRoots?: string[]; profile?: AppProfile;
-    /** 审批档跟这个会话**此刻**存的设置走(run 中途在输入区切档当场生效;团队成员 = 团队会话);没存才用 approvalMode 快照。
-     *  只给「档位本就来自该会话设置」的 run(见 agentLoop.approvalModeSessionId),通道 / Muse / 自动化各自定档,不给。 */
-    modeSessionId?: string;
+    /** 审批档跟这些会话**此刻**存的设置走(取最严;run 中途在输入区切档当场生效;团队成员 = [团队会话, 成员会话]);都没存才用 approvalMode 快照。
+     *  只给「档位本就来自会话设置」的 run(见 agentLoop.approvalModeSessionIds),通道 / Muse / 自动化各自定档,不给。 */
+    modeSessionIds?: string[];
     /** 无人值守 run(Muse ask/agent 档):需要人决定时不 await 订阅者,改走 pendingApprovals(排队 / 代批)。 */
     approvalDeferral?: 'queue' | 'agent'; userId?: string; agentSlug?: string;
     /** 本次调用**此刻真正的执行身份**(具名子代理的展示 slug),与 agentSlug(run 的归属 agent)不同时才给。
@@ -395,7 +405,7 @@ export async function gateToolCall(
   // custom 档先裁决:用户写下的规则**压过**下面的 known-safe 捷径(把 `run_bash:ls` 放进 ask
   // 就该真弹审批,否则规则形同虚设);未命中则降解成 base 档,后续逻辑与三档完全一致。
   // 档位现读:团队 run 一跑几小时、成员子 run 各自冻着启动那刻的档 —— 只认快照,用户切到「完全通行」整场纹丝不动(09-21 反馈)。
-  let mode = (ctx.modeSessionId && (await storedApprovalMode(ctx.modeSessionId))) || ctx.approvalMode;
+  let mode = (ctx.modeSessionIds?.length && (await liveApprovalMode(ctx.modeSessionIds))) || ctx.approvalMode;
   let forceAsk = false;
   let askRule = '';
   if (mode === 'custom') {

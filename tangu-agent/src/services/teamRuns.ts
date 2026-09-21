@@ -141,7 +141,8 @@ export const activateMember: ActivateMember = async (a) => {
   try {
     sessionId = await ensureMemberSession(a);
     // 团队 run 可能已跑了几小时:按团队会话此刻的档下发,子聊天里显示的档 / 成员会话里直接追问用的档才与实际一致(审批闸另外现读)。
-    if (a.followSessionMode) a = { ...a, approvalMode: (await storedApprovalMode(a.teamSessionId)) || a.approvalMode };
+    // 只管显示与直接追问的快照,读失败就保留原值(审批闸另外现读、读失败按只读,安全兜底在那边)。
+    if (a.followSessionMode) a = { ...a, approvalMode: (await storedApprovalMode(a.teamSessionId).catch(() => undefined)) || a.approvalMode };
     // Direct follow-ups in the child Chat View retain its team identity and execution scope.
     // model_id 一起写穿:会话级调档(teamMemberConfigs)让成员模型逐次可变,只在建会话时写一次的话,
     // 子聊天里直接追问会退回上一个模型(建会话那次的值)。

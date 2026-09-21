@@ -40,7 +40,7 @@ import { mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, append
 import { createServer } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { tmpdir, homedir } from 'node:os';
-import { join, dirname, resolve } from 'node:path';
+import { join, dirname, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fromDb, report as timelineReport } from './stall-timeline.mjs';
 
@@ -350,8 +350,9 @@ async function seedMemory() {
   console.log(`记忆已预置:填充行 ${SEED_PAD.length} 字(${PAD_TOKEN})+ 事实行(${SEED_TOKEN}),共 ${entries.length} 条`);
   memorySeeded = true;
 }
-/** 起 run 并消费 SSE 到 done/error;approval_request 一律代批(记数),单 run 超时算 error。 */
-async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client) {
+/** 起 run 并消费 SSE 到 done/error;approval_request 一律代批(记数),单 run 超时算 error。
+ *  onApproval(p):代批前先回调(teamapproval D 腿在第一张审批卡出现时切档,模拟用户在输入区中途切到完全通行)。 */
+async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client, onApproval) {
   const t0 = Date.now();
   const { runId } = await api('/agent/runs', { method: 'POST', body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, client, agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
   const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], approvals: 0, approvalList: [], usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, firstTokenMs: null, wallMs: 0 };
@@ -390,7 +391,8 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'subagent' && p.phase === 'start') ev.subStarts.push({ subId: String(p.subId || ''), grants: Array.isArray(p.grants) ? p.grants.map(String) : null });
           else if (e.type === 'approval_request') {
             ev.approvals += 1;
-            ev.approvalList.push({ name: p.name, reason: p.reason?.kind, mode: p.reason?.mode, agent: p.agentSlug });
+            ev.approvalList.push({ name: p.name, reason: p.reason?.kind, mode: p.reason?.mode, agent: p.agentSlug, args: String(p.arguments || '').slice(0, 300) });
+            if (onApproval) await onApproval(p);
             const id = p.approvalId || p.id || p.approval_id;
             if (id) await api(`/agent/runs/${runId}/approvals/${id}`, { method: 'POST', body: JSON.stringify({ action: 'approve' }) }).catch((err) => { ev.approveError = String(err.message); });
           }
@@ -636,28 +638,41 @@ try {
   //   A = run 快照还是自动编辑(团队 run 启动后用户才切到完全通行 —— 一跑几小时,成员子 run 冻着启动那刻的档)。
   // 判据:两条都 0 次审批,且两位成员真的把文件写到了工作区外(防「模型没调工具」的假绿)。负对照 = 用修复前的 dist 跑,须红。
   // C = 自动编辑档下的「工作区内」:成员写默认目录与工作范围里加的目录,写入一次都不许问(run_bash 在这档本就要问,不计)。
+  // D = 真·中途切档:团队 run 以自动编辑起跑,第一张审批卡出现时 PUT 团队会话为完全通行(桌面切档就是这个请求);
+  //     成员随后那次写(-2.txt)不许再问。切档前已经排队的卡照常出现,不计。
   await scenario('teamapproval', 'teamapproval 团队 × 完全通行:成员不再逐次弹审批', async () => {
     const outside = join(OUT, 'outside-scope'); mkdirSync(outside, { recursive: true });
     const scope = join(OUT, 'team-scope'); mkdirSync(scope, { recursive: true });
     const mk = (slug, name) => api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name, description: 'live harness', approvalMode: 'auto-edit',
-      systemPrompt: `You are ${name}. The user will give you a file path and a shell command. Call write_file to create that exact file with content "${name} was here", then call run_bash with the exact command, then reply with the command output and DONE on its own line. Do not delegate, do not ask teammates, do not use other tools.` }) }).catch(() => null);
+      systemPrompt: `You are ${name}. Do exactly the file writes and shell commands the user assigns to you, in the given order, one tool call per turn: write_file for each file (content "${name} was here"), run_bash for each command. Then reply with the command output and DONE on its own line. Do not delegate, do not ask teammates, do not use other tools.` }) }).catch(() => null);
     await mk('live-wren', 'Wren'); await mk('live-kite', 'Kite');
     const legs = [];
-    for (const [leg, stored, snapshot] of [['B', 'full-auto', 'full-auto'], ['A', 'full-auto', 'auto-edit'], ['C', 'auto-edit', 'auto-edit']]) {
+    for (const [leg, stored, snapshot] of [['B', 'full-auto', 'full-auto'], ['A', 'full-auto', 'auto-edit'], ['C', 'auto-edit', 'auto-edit'], ['D', 'auto-edit', 'auto-edit']]) {
       const cfg = { ...AGENT_CONFIG, groupChat: true, groupAgents: ['live-wren', 'live-kite'], groupSeedHistory: false, groupNoSummary: true, ...(leg === 'C' ? { extraRoots: [scope] } : {}) };
       const sid = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: `Team approval ${leg}`, model_id: MODEL, agent_config: { ...cfg, approvalMode: stored } }) })).session.id;
       const files = leg === 'C'
         ? { wren: join(scope, 'wren-C.txt'), kite: join(workspace, 'kite-C.txt') }
         : { wren: join(outside, `wren-${leg}.txt`), kite: join(outside, `kite-${leg}.txt`) };
-      const ev = await run(sid, `Wren: write ${files.wren} and run \`node --version\`. Kite: write ${files.kite} and run \`node --version\`.`, 300_000,
-        { ...cfg, approvalMode: snapshot }, 'desktop/live-harness');
+      if (leg === 'D') { files.wren2 = join(outside, 'wren-D-2.txt'); files.kite2 = join(outside, 'kite-D-2.txt'); }
+      let switched = false;
+      const flip = leg === 'D' ? async () => {
+        if (switched) return; switched = true;
+        await api(`/agent/sessions/${sid}/config`, { method: 'PUT', body: JSON.stringify({ ...cfg, approvalMode: 'full-auto' }) });
+      } : undefined;
+      // 路径给相对默认目录的短写法:模型抄长临时路径会抄错段(实测把 live-xxx/ 整段吞掉,文件落到别处 → 判据误红)。
+      const at = (f) => relative(workspace, f);
+      const task = leg === 'D'
+        ? `One tool call per turn, wait for each result before the next. Wren: write ${at(files.wren)}, then run \`node --version\`, then write ${at(files.wren2)}. Kite: write ${at(files.kite)}, then run \`node --version\`, then write ${at(files.kite2)}.`
+        : `Wren: write ${at(files.wren)} and run \`node --version\`. Kite: write ${at(files.kite)} and run \`node --version\`.`;
+      const ev = await run(sid, task, 300_000, { ...cfg, approvalMode: snapshot }, 'desktop/live-harness', flip);
       const writeAsks = ev.approvalList.filter((x) => x.name !== 'run_bash').length;
-      legs.push({ leg, ev, writeAsks, written: Object.values(files).filter((f) => existsSync(f)).length });
+      const lateAsks = ev.approvalList.filter((x) => x.args.includes('-D-2.txt')).length;
+      legs.push({ leg, ev, writeAsks, lateAsks, switched, written: Object.values(files).filter((f) => existsSync(f)).length, expected: Object.keys(files).length });
     }
-    const ok = legs.every((l) => !l.ev.error && l.written === 2 && (l.leg === 'C' ? l.writeAsks === 0 : l.ev.approvals === 0));
+    const ok = legs.every((l) => !l.ev.error && l.written === l.expected && (l.leg === 'C' ? l.writeAsks === 0 : l.leg === 'D' ? (l.switched && l.lateAsks === 0) : l.ev.approvals === 0));
     const ev = legs[0].ev;
     return { ok,
-      detail: legs.map((l) => `${l.leg}: 审批 ${l.ev.approvals}(写入 ${l.writeAsks})${l.ev.approvalList.length ? ' ' + JSON.stringify(l.ev.approvalList.slice(0, 4)) : ''} · 文件 ${l.written}/2${l.ev.error ? ' · ' + l.ev.error : ''}`).join(';'),
+      detail: legs.map((l) => `${l.leg}: 审批 ${l.ev.approvals}(写入 ${l.writeAsks}${l.leg === 'D' ? `,切档后的第二次写 ${l.lateAsks}${l.switched ? '' : ',没等到审批卡没切档'}` : ''})${l.ev.approvalList.length ? ' ' + JSON.stringify(l.ev.approvalList.slice(0, 4).map(({ args, ...x }) => x)) : ''} · 文件 ${l.written}/${l.expected}${l.ev.error ? ' · ' + l.ev.error : ''}`).join(';'),
       output: legs.map((l) => `[${l.leg}]\n` + l.ev.group.remarks.map((r) => `[${r.slug}] ${r.text}`).join('\n')).join('\n\n---\n\n'),
       ttftMs: ttft(ev), tokens: legs.reduce((a, l) => a + (tokensOf(l.ev) || 0), 0), toolCalls: legs.flatMap((l) => l.ev.toolCalls) };
   });

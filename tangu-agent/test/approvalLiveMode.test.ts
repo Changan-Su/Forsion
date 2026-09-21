@@ -5,12 +5,15 @@
  *   ② run 中途把会话切到 full-auto → 下一次工具调用当场生效;
  *   ③ 不是输入区直接发起的 run(通道 / 自动化 / 带着继承来的 desktop 标签的派生 run)只认自己的快照,绝不被会话存值放开;
  *   ④ 团队成员子 run 带 followSessionMode → 跟团队会话;不带 → 快照。
+ *   ⑤ 团队成员取 [团队会话, 成员会话] 里最严的:团队降档压过成员会话里的旧宽档,成员子聊天单独调严也算数(Codex 09-21 P1);
+ *   ⑥ 现读失败 → 按只读问,绝不回落到可能更宽的启动快照(Codex 09-21 P1);
+ *   ⑦ run 起跑时补 preset / agentSlug 的那次回写不许把期间切的档整份盖回去(Codex 09-21 P1)。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { configureTangu } from '../src/seams/runtime.js';
+import { configureTangu, deps } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
 import { createSqliteHost } from '../src/adapters/standalone/sqliteHost.js';
 import { toSqliteDDL } from '../src/core/dialectDDL.js';
@@ -20,13 +23,13 @@ import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
 import { subscribe } from '../src/services/eventBus.js';
 import { resolveApproval } from '../src/services/approvals.js';
-import { enqueueRun, approvalModeSessionId } from '../src/services/agentLoop.js';
+import { enqueueRun, approvalModeSessionIds } from '../src/services/agentLoop.js';
 
 const USER = 'u1';
 let home: string;
 let ws: string;
 let outside: string;
-let script: Array<() => any>;
+let script: Array<() => any | Promise<any>>;
 
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'tangu-livemode-'));
@@ -141,14 +144,55 @@ describe('审批档现读会话存值', () => {
     expect((await run({ teamMember: { teamSessionId: 'T', name: 'Bo', roster: '- Bo' } }, false)).length).toBe(1);
   });
 
-  it('approvalModeSessionId:输入区发起的跟本会话、带标记的团队成员跟团队会话;其余与沙箱一律不跟', () => {
+  it('⑤ 团队成员取最严:团队已降到自动编辑、成员会话还是上次激活写进去的完全通行 → 照问;团队完全通行、成员子聊天调成只读 → 也照问', async () => {
+    const member = { teamMember: { teamSessionId: 'T', name: 'Bo', roster: '- Bo', followSessionMode: true } };
+    await setStoredMode('T', 'auto-edit'); await setStoredMode('S', 'full-auto');
+    script = [writeStep('a.txt'), finalStep()];
+    const asked = await run(member, true); // 成员子聊天里直接追问 = 输入区发起 + 带着成员标记
+    expect(asked.length).toBe(1);
+    expect(asked[0].reason).toMatchObject({ kind: 'escalate', mode: 'auto-edit' });
+    await setStoredMode('T', 'full-auto'); await setStoredMode('S', 'readonly');
+    script = [writeStep('b.txt'), finalStep()];
+    expect((await run(member, true))[0]?.reason?.mode).toBe('readonly');
+  });
+
+  it('⑥ 会话配置读不出来 → 按只读问,不回落到启动快照的完全通行', async () => {
+    // run 起跑时配置是好的(坏配置在起跑处另有闸);模型发出写调用的这一轮才把它弄坏,只打审批闸现读那一下。
+    await setStoredMode('S', 'full-auto');
+    script = [async () => { await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = 'S'`, ['{not json']); return writeStep('a.txt')(); }, finalStep()];
+    const asked = await run({ approvalMode: 'full-auto' }, true);
+    expect(asked.length).toBe(1);
+    expect(asked[0].reason?.mode).toBe('readonly');
+    expect(existsSync(join(outside, 'a.txt'))).toBe(false);
+  });
+
+  it('⑦ 起跑补 preset 的回写与用户切档撞车:切成只读的档不许被旧对象盖回完全通行', async () => {
+    // 老会话缺 preset 键 → runLoop 读存值、数消息(await)、再回写补丁;用户恰在数消息那一下切了档。
+    await setStoredMode('S', 'full-auto');
+    const state: any = deps().state;
+    const count = state.countSessionMessages.bind(state);
+    let fired = false; // 只撞第一次(起跑那次);之后 Historian 等也会数消息,别让桩反复写
+    state.countSessionMessages = async (sid: string) => {
+      if (!fired) {
+        fired = true;
+        const [r] = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = 'S'`);
+        await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = 'S'`, [JSON.stringify({ ...JSON.parse(r.agent_config), approvalMode: 'readonly' })]);
+      }
+      return count(sid);
+    };
+    script = [finalStep()];
+    try { await run({ approvalMode: 'full-auto' }, true); } finally { state.countSessionMessages = count; }
+    const [row] = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = 'S'`);
+    expect(JSON.parse(row.agent_config)).toMatchObject({ approvalMode: 'readonly', preset: null });
+  });
+
+  it('approvalModeSessionIds:带标记的团队成员 = [团队, 成员];其余输入区发起的跟本会话;非输入区与沙箱一律不跟', () => {
     const base = { execMode: 'host', sessionId: 'S', fromClient: false };
-    expect(approvalModeSessionId({ ...base, fromClient: true })).toBe('S');
-    expect(approvalModeSessionId(base)).toBeUndefined();
-    expect(approvalModeSessionId({ ...base, execMode: 'sandbox', fromClient: true })).toBeUndefined();
-    expect(approvalModeSessionId({ ...base, teamMember: { teamSessionId: 'T', followSessionMode: true } })).toBe('T');
-    expect(approvalModeSessionId({ ...base, teamMember: { teamSessionId: 'T' } })).toBeUndefined();
-    // 成员会话里直接追问(输入区发起):听这个输入区的
-    expect(approvalModeSessionId({ ...base, fromClient: true, teamMember: { teamSessionId: 'T', followSessionMode: true } })).toBe('S');
+    expect(approvalModeSessionIds({ ...base, fromClient: true })).toEqual(['S']);
+    expect(approvalModeSessionIds(base)).toBeUndefined();
+    expect(approvalModeSessionIds({ ...base, execMode: 'sandbox', fromClient: true })).toBeUndefined();
+    expect(approvalModeSessionIds({ ...base, teamMember: { teamSessionId: 'T', followSessionMode: true } })).toEqual(['T', 'S']);
+    expect(approvalModeSessionIds({ ...base, fromClient: true, teamMember: { teamSessionId: 'T', followSessionMode: true } })).toEqual(['T', 'S']);
+    expect(approvalModeSessionIds({ ...base, teamMember: { teamSessionId: 'T' } })).toBeUndefined();
   });
 });
