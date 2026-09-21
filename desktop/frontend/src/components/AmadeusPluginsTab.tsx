@@ -392,13 +392,13 @@ const PluginDetail: React.FC<{
     try {
       await window.tangu?.productsUpdate?.(p.devProductId, { devLoad: false })
     } catch (e: any) {
-      useApp.getState().toast(t('settings.amadeusPlugins.devUnloadFailed', { error: e?.message || String(e) }), true)
+      panelToast(t('settings.amadeusPlugins.devUnloadFailed', { error: ipcErrorText(e) }), true) // 设置是独立浮窗:全局 toast 在这里蒸发,走面板提示条
       return
     }
     onBack()
     await usePluginStore.getState().reloadOne(p.id)
     void loadUserSpaces()
-    useApp.getState().toast(t('settings.amadeusPlugins.devUnloaded', { name: pluginDisplayName(p, locale) }))
+    panelToast(t('settings.amadeusPlugins.devUnloaded', { name: pluginDisplayName(p, locale) }))
   }
 
   return (
