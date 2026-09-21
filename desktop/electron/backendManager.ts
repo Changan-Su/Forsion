@@ -107,6 +107,8 @@ export class BackendManager {
   private restartTimer: ReturnType<typeof setTimeout> | null = null
   /** 拉起链的代号:stop() 一律 +1,拉起链每个 await 之后核对,不一致就放弃 —— 被作废的链绝不再 spawn。 */
   private gen = 0
+  /** 正在收尾的子进程(stop() 已摘下 this.child、还没退干净)。每个 stop() 都等它:后来的 stop/start 不能越过。 */
+  private retiring: Promise<unknown> = Promise.resolve()
   private settings: ManagedBackendSettings | null = null
   private listeners = new Set<(st: BackendStatus) => void>()
   private spawnedEntry: string | null = null
@@ -369,32 +371,21 @@ export class BackendManager {
   }
 
   async stop(): Promise<void> {
-    this.gen++ // 先作废在途的拉起链(可能正卡在 freePort / waitHealthy,手里还没有 child)
+    const gen = ++this.gen // 先作废在途的拉起链(可能正卡在 freePort / waitHealthy,手里还没有 child)
     if (this.restartTimer) {
       clearTimeout(this.restartTimer)
       this.restartTimer = null
     }
     const child = this.child
-    if (!child) {
-      this.setState('stopped', null)
-      return
+    if (child) {
+      this.stopping = true
+      this.child = null
+      this.retiring = Promise.all([this.retiring, terminate(child)])
     }
-    this.stopping = true
-    this.child = null
-    await new Promise<void>((resolve) => {
-      const killTimer = setTimeout(() => {
-        try { child.kill('SIGKILL') } catch { /* ignore */ }
-      }, 3000)
-      child.once('exit', () => {
-        clearTimeout(killTimer)
-        resolve()
-      })
-      try { child.kill('SIGTERM') } catch {
-        clearTimeout(killTimer)
-        resolve()
-      }
-    })
-    this.setState('stopped', null)
+    // 屏障:哪怕这次手里没有 child,前一个 stop() 摘下的那个也要等它退干净 —— 装更新 / 删库 / 退出 App
+    // 都在 stop() 之后动手,提前放行 = 对着还活着的引擎做这些事。
+    await this.retiring
+    if (gen === this.gen) this.setState('stopped', null) // 等待期间已有新的 start():别盖掉它的状态
   }
 
   private pushLog(chunk: string): void {
@@ -412,6 +403,24 @@ export class BackendManager {
     const st = this.getStatus()
     for (const cb of this.listeners) cb(st)
   }
+}
+
+/** SIGTERM → 3s → SIGKILL,等 exit;SIGKILL 后 2s 仍没有 exit(僵尸 / 句柄卡死)也放行,别让屏障卡住之后所有 stop/start。 */
+function terminate(child: ChildProcess): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const killTimer = setTimeout(() => {
+      try { child.kill('SIGKILL') } catch { /* ignore */ }
+      setTimeout(resolve, 2000)
+    }, 3000)
+    child.once('exit', () => {
+      clearTimeout(killTimer)
+      resolve()
+    })
+    try { child.kill('SIGTERM') } catch {
+      clearTimeout(killTimer)
+      resolve()
+    }
+  })
 }
 
 function freePort(): Promise<number> {

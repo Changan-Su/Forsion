@@ -1157,6 +1157,10 @@ function ensureBackend(): Promise<void> {
       await backend.stop()
       return
     }
+    const defaultWorkspaceDir = await ensureDefaultWorkspaceDir(stored)
+    // 退出 / 清数据已开始(那边刚 stop 过):排在队里的这次若照常拉起,App 一退引擎就成了孤儿。
+    // backend.stop() 的代号只作废已进 start() 的链,拦不住还在上面两个 await 里的这一次。
+    if (isQuitting) return
     await backend.start({
       cloudUrl: stored.cloudUrl,
       modelId: stored.modelId || undefined,
@@ -1168,7 +1172,7 @@ function ensureBackend(): Promise<void> {
       browserSearchEngine: stored.browserSearchEngine,
       browserAllowPrivateUrls: stored.browserAllowPrivateUrls,
       browserCommandTimeoutMs: stored.browserCommandTimeoutMs,
-      defaultWorkspaceDir: await ensureDefaultWorkspaceDir(stored),
+      defaultWorkspaceDir,
     })
   }).catch((e) => {
     console.error('[tangu-desktop] ensureBackend failed:', e)
