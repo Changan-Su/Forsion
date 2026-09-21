@@ -43,7 +43,7 @@ async function main() {
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url },
   })
   try {
-    const win = await app.firstWindow()
+    let win = await app.firstWindow()
     await win.setViewportSize({ width: 1400, height: 1000 })
     await win.waitForSelector('#root', { timeout: 30_000 })
     await win.waitForTimeout(2500)
@@ -52,9 +52,13 @@ async function main() {
       if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break }
     }
     await win.locator('.ntf-close').evaluateAll((bs) => bs.forEach((b) => b.click())).catch(() => {})
+    // 设置画在独立浮窗里(Floating Panel 化 2026-09-20):开窗前先 arm window 事件,拿到后 win 换成浮窗 page。
+    const opened = app.waitForEvent('window')
     await win.keyboard.press('Meta+Comma')
-    await win.waitForTimeout(1200)
-    check('设置打开', (await win.locator('.settings-main').count()) > 0)
+    win = await opened
+    await win.waitForLoadState('domcontentloaded')
+    await win.waitForSelector('.settings-main', { timeout: 30_000 }).catch(() => {})
+    check('设置开在独立浮窗里', (await win.locator('.settings-main').count()) > 0)
     const nav = win.locator('.settings-nav')
     for (const l of ['智能体', '后台智能体']) {
       const b = nav.getByRole('button', { name: l, exact: true }).first()

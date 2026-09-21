@@ -2,7 +2,7 @@
 // 真浏览器裸挂 MarkdownBlock,给 Playwright 自动化实测 slash / markdown 触发层用。
 // window.__harness 暴露块状态供断言;不进产物(electron-vite build 只打 index.html)。
 import type React from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { setAssetUrlBuilder } from '@amadeus-shared/assets'
 import './harnessBridge' // ⚠️须早于任何拉到 amadeus/api 的 import(见该文件)
@@ -24,7 +24,9 @@ import { DatabaseEmbed } from './amadeus/blocks/database/DatabaseEmbed'
 import { useDbStore } from '@amadeus/store/dbStore'
 import type { DbFile } from '@amadeus-shared/db/schema'
 import { usePluginStore } from './amadeus/plugins/pluginStore'
-import { setTanguProbe } from '@amadeus/plugins/tanguSeam'
+import { idleAgentStatus, setTanguProbe, type TanguAgentPhase, type TanguAgentStatus, type TanguStartChatOptions } from '@amadeus/plugins/tanguSeam'
+import { activeDeskCompanion, useDeskCompanion, type DeskCompanionEntry, type DeskCompanionSurface } from '@amadeus/plugins/deskCompanion'
+import { DeskCompanionHost } from './views/chat2/DeskCompanionHost'
 import { applyTheme as applyRealTheme } from './theme/loader'
 import { useTheme } from './stores/themeStore'
 import { resolveInitialLang, resolveInitialSkin, resolveInitialBg } from './theme/registry'
@@ -35,6 +37,7 @@ import { ModelPill } from './components/ModelPill'
 import './views/chat2/composer2.css'
 import { Ribbon } from '@lcl/engine/Ribbon'
 import { WorkspaceHost } from '@lcl/engine/WorkspaceHost'
+import { presentDockedExtension } from '@lcl/engine/dockviewStore'
 import { addRibbonIcon, installHotkeys, recordNav, registerView, useNav, useRibbonStore, useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
@@ -249,12 +252,28 @@ function CanvasPlugHarness() {
 //    registry 里永不命中),挂上它等于把一整套**浅色** token 钉死在容器上 —— 深色档量到的低对比是假的。
 //    与 ?mindmap 的区别:那个专验块表面 seam,这个不认识任何具体插件 —— 任意插件的 main.js 注进来
 //    就能截图/点按/切语言,是「插件也要过真机 UIUX」这条纪律的仪器。见 scripts/plugin-view.e2e.cjs。
+/** plugview 伴随面挂载点的尺寸:卡片正文(车道 296 − 16 右内边距 − 2 描边,列高 900 时半格去头行)
+ *  与展开侧板(列宽 1400 × 0.46 左右)。卡片态照真卡片 pointer-events:none。 */
+const PV_COMPANION_BOX: Record<DeskCompanionSurface, { width: number; height: number }> = {
+  'desk-card': { width: 278, height: 394 },
+  'desk-panel': { width: 640, height: 820 },
+}
+let pvCompanionMounts = 0
+
 function PlugViewHarness() {
   const views = usePluginStore((s) => s.views)
   const [mode, setMode] = useState<'light' | 'dark'>('light')
   const [viewId, setViewId] = useState<string | null>(null)
   const [nonce, setNonce] = useState(0)
   const hostRef = useRef<HTMLDivElement | null>(null)
+  // 伴随面(ctx.desk.registerCompanion):经真 DeskCompanionHost 挂进一个卡片/侧板尺寸的盒子。
+  // mount 包一层计数(按 key+mount 记忆,不因 mode 变而换引用),e2e 用它断言「切会话不重挂」。
+  const comp = useDeskCompanion()
+  const [compAt, setCompAt] = useState<{ surface: DeskCompanionSurface; sessionId: string | null } | null>(null)
+  const counted = useMemo<DeskCompanionEntry | null>(
+    () => comp && { ...comp, mount: (el, host) => { pvCompanionMounts++; return comp.mount(el, host) } },
+    [comp?.key, comp?.mount], // eslint-disable-line react-hooks/exhaustive-deps
+  )
 
   useEffect(() => {
     applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), 'light')
@@ -288,6 +307,17 @@ function PlugViewHarness() {
         if (!c) throw new Error(`no such command: ${commandId}`)
         c.item.run()
       },
+      /** 当前生效的伴随面(栈顶);没有 → null。 */
+      companion: () => {
+        const c = activeDeskCompanion()
+        return c ? { key: c.key, mode: c.mode } : null
+      },
+      /** 把生效的伴随面挂进卡片/侧板尺寸的盒子。sessionId 缺省 'pv-session';null = 新对话草稿。
+       *  同一 surface 再调只换会话(不重挂),换 surface = 换挂载点(真宿主里卡片↔侧板也是两次 mount)。 */
+      mountCompanion: (surface: DeskCompanionSurface = 'desk-card', sessionId?: string | null) =>
+        setCompAt({ surface, sessionId: sessionId === undefined ? 'pv-session' : sessionId }),
+      unmountCompanion: () => setCompAt(null),
+      companionMounts: () => pvCompanionMounts,
     }
   }, [])
 
@@ -320,6 +350,20 @@ function PlugViewHarness() {
       style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', background: 'var(--bg)' }}
     >
       <div ref={hostRef} data-tag="pv-host" style={{ flex: 1, minHeight: 0, overflow: 'auto' }} />
+      {compAt && counted && (
+        <div
+          data-tag="pv-companion"
+          data-surface={compAt.surface}
+          style={{
+            position: 'fixed', left: 16, top: 16, zIndex: 50, display: 'flex', flexDirection: 'column',
+            ...PV_COMPANION_BOX[compAt.surface], overflow: 'hidden', background: 'var(--bg-card, var(--bg))',
+            borderRadius: compAt.surface === 'desk-card' ? 20 : 0,
+            pointerEvents: compAt.surface === 'desk-card' ? 'none' : undefined,
+          }}
+        >
+          <DeskCompanionHost key={`${counted.key}|${compAt.surface}`} entry={counted} surface={compAt.surface} sessionId={compAt.sessionId} />
+        </div>
+      )}
       <AskStringHost />
     </div>
   )
@@ -502,6 +546,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     mounts: {} as Record<string, number>,
     mainW: () => 0,
     toggle: (side: 'left' | 'right' | 'bottom') => useWorkspace.getState().toggleSidebar(side),
+    extend: (side: 'right' | 'bottom') => presentDockedExtension({ id: 'region-probe', title: 'Region probe', side, mount() {} }, () => {}),
     // 底部面板(scripts/bottom-panel.check.cjs):量的是**高**,且要能读到「主区那一列」的宽 ——
     // 底部只该落在主区下方,不能横跨左右栏,这条只有真 Dockview 的几何能证。
     bottomH: (): number => {
@@ -1129,8 +1174,45 @@ if (new URLSearchParams(location.search).has('dock')) {
     //   下面 T9 的 renderedRows 断言正是为了抓这种「onRender 早于数据落地」的静默错位。
     onRender: (el) => { w.__tableMount.rendered += 1; w.__tableMount.renderedRows.push(el.querySelectorAll('.amx-db-row:not(.amx-db-hrow):not(.amx-db-statsrow)').length) },
   })
+  // ?tablemount&tablefold:规则行折叠(TableSpec.fold)—— 形状照 API 用量表:每个用户每 30 分钟一条汇总行。
+  // 时刻按**本地时钟**造再转 ISO(带 Z),跑在哪个时区窗口都对齐到 :00 / :30。
+  const at = (h: number, m: number): string => new Date(2026, 8, 21, h, m).toISOString()
+  const USAGE: Array<[string, string, string, string, number, number, boolean]> = [
+    ['u1', at(14, 27), 'alice', 'gpt-5', 1200, 0.82, true],
+    ['u2', at(14, 10), 'alice', 'claude-fable', 800, 1.5, true],
+    ['u3', at(14, 3), 'alice', 'gpt-5', 500, 0.3, false],
+    ['u4', at(14, 5), 'bob', 'gpt-5', 90, 0.05, true],
+    ['u5', at(15, 2), 'alice', 'gpt-5', 60, 0.04, true],
+    ['u6', at(15, 1), 'alice', 'gpt-5', 40, 0.02, true],
+    ['u7', at(14, 59), 'carol', 'qwen3-max', 7000, 3.1, true],
+    ['u8', at(14, 40), 'carol', 'deepseek-v4', 9000, 4.2, true],
+  ]
+  const foldSpecOf = (minutes: number): TableSpec => ({
+    id: 'usage',
+    partial: true,
+    fold: {
+      by: ['user'], time: 'at', minutes,
+      // 只接管积分列(负号 + 两位小数 + 琥珀色,与成员行同款);其余列走通用汇总
+      summary: (rows) => ({ cost: { text: '-' + rows.reduce((a, r) => a + Number((r.cells.cost as { sortValue: number }).sortValue), 0).toFixed(2), tone: 'amber' } }),
+    },
+    columns: [
+      { key: 'at', label: '时间', kind: 'date' },
+      { key: 'user', label: '用户', kind: 'text' },
+      { key: 'model', label: '模型', kind: 'text' },
+      { key: 'tokens', label: 'Tokens', kind: 'number' },
+      { key: 'cost', label: '积分', kind: 'text' },
+      { key: 'ok', label: '状态', kind: 'select', options: [{ value: 'ok', label: '成功', color: 'green' }, { value: 'fail', label: '失败', color: 'red' }] },
+    ],
+    rows: USAGE.map(([id, t, user, model, tokens, cost, ok]) => ({
+      id, cells: { at: t, user, model, tokens, cost: { text: '-' + cost.toFixed(2), tone: 'amber', sortValue: cost }, ok: ok ? 'ok' : 'fail' },
+    })),
+    rowAttrs: (row) => ({ 'data-act': 'u-row', 'data-id': row.id }),
+    onSort: (sv) => { w.__tableMount.sorts.push(sv) },
+  })
+  const foldMode = new URLSearchParams(location.search).has('tablefold')
   void import('./amadeus/plugins/tableSurface').then((m) => {
-    const handle = m.mountPluginTable('harness-plugin', host, specOf(5))
+    const handle = m.mountPluginTable('harness-plugin', host, foldMode ? foldSpecOf(30) : specOf(5))
+    ;(w.__tableMount as unknown as { fold(minutes: number): void }).fold = (minutes) => handle.update(foldSpecOf(minutes))
     w.__tableMount.update = (n) => handle.update(specOf(n))
     w.__tableMount.dispose = () => handle.dispose()
     w.__tableMount.mounted = true
@@ -1141,10 +1223,11 @@ if (new URLSearchParams(location.search).has('dock')) {
   // 钉「编译出的文件在真 Dashboard 里长对样」:literal stat 卡有值、section 键名对
   // (title: 不是 label:,发错=恒「未命名分区」)。夹具形状=server-admin 插件的总览配方。
   const iso = new Date().toISOString()
-  // 与 server-admin 插件 0.3.x 的总览配方同形:KPI 六卡 w4(三列两整行)+ 排行两张表格文本卡并排 + 页脚
-  const table = (title: string, nameCol: string, rows: Array<[string, string, string]>) =>
-    `### ${title}\n\n| # | ${nameCol} | 调用 | Token |\n|--:|------|----:|------:|\n` +
-    rows.map((r, i) => `| ${i + 1} | ${r[0]} | ${r[1]} | ${r[2]} |`).join('\n')
+  // 与 server-admin 插件的总览配方同形:KPI 六卡 w4(三列两整行)+ 排行两张表格文本卡并排 + 页脚。
+  // 排行表 2026-09-21 起是五列(名称 / 积分 ↓ / 调用 / Token,缺省按积分排)—— 半宽卡里放不放得下要靠这里的真渲染截图看
+  const table = (title: string, nameCol: string, rows: Array<[string, string, string, string]>) =>
+    `### ${title}\n\n| # | ${nameCol} | 积分 ↓ | 调用 | Token |\n|--:|------|----:|----:|------:|\n` +
+    rows.map((r, i) => `| ${i + 1} | ${r[0]} | ${r[1]} | ${r[2]} | ${r[3]} |`).join('\n')
   const kpi = (id: string, label: string, value: string) => ({ kind: 'stat' as const, id, label, value, w: 4, h: 2 })
   const compiled = compileDashboardRecipe({
     cards: [
@@ -1156,8 +1239,8 @@ if (new URLSearchParams(location.search).has('dock')) {
       kpi('kpi-rate', '成功率(30天)', '98.6%'),
       kpi('kpi-pts', '积分消耗(30天)', '321.5'),
       { kind: 'section', id: 'sec-rank', label: '用量排行(30天)' },
-      { kind: 'text', id: 'tbl-models', w: 6, h: 5, md: table('模型 TOP 5', '模型', [['gpt-x', '3,000', '8,520 万'], ['claude-y', '2,000', '3,100 万'], ['deepseek-z', '500', '620 万'], ['qwen-w', '120', '88 万'], ['glm-v', '45', '12 万']]) },
-      { kind: 'text', id: 'tbl-users', w: 6, h: 5, md: table('用户 TOP 5', '用户', [['alice', '4,000', '9,000 万'], ['bob', '1,600', '2,900 万'], ['carol', '900', '400 万'], ['dave', '77', '30 万'], ['eve', '12', '2 万']]) },
+      { kind: 'text', id: 'tbl-models', w: 6, h: 5, md: table('模型 TOP 5', '模型', [['deepseek-v4-pro-thinking', '1,281.71', '500', '620 万'], ['claude-y', '840.25', '2,000', '3,100 万'], ['gpt-x', '101.5', '3,000', '8,520 万'], ['qwen-w', '12.08', '120', '88 万'], ['glm-v', '0.45', '45', '12 万']]) },
+      { kind: 'text', id: 'tbl-users', w: 6, h: 5, md: table('用户 TOP 5', '用户', [['bob', '1,100.06', '1,600', '2,900 万'], ['alice', '923.4', '4,000', '9,000 万'], ['carol', '88', '900', '400 万'], ['dave', '7.7', '77', '30 万'], ['eve', '0.12', '12', '2 万']]) },
       { kind: 'text', id: 'meta', w: 12, h: 1, md: '数字取自打开一刻;再点一次「总览」即刷新,手动排过的布局会保留。' },
     ],
   }, { pageId: 'harness-dashrecipe', now: iso })
@@ -1406,7 +1489,42 @@ if (new URLSearchParams(location.search).has('dock')) {
     },
     blocks: { b1: { id: 'b1', type: 'markdown', content: '台架页首块' } },
   })
+  // 假 Tangu 探针(opt-in,默认不装 → 既有插件基线里 ctx.tangu 仍不存在):`?plugview&tangu`,或在
+  // loadPlugin **之前**调 `__pv.fakeTangu()`(ctx.tangu 的有无在建 context 那一刻定,同生产)。
+  // agentStatus 不分会话:`__pv.setAgentStatus(phase, extra?)` 改的是全局那一份,并推给所有订阅者
+  // (真探针才做变更过滤;台架由 e2e 自己驱动,每调一次推一次)。startChat 只记账不开聊天。
+  const pvModel = { id: 'harness-model', name: 'Harness Model' }
+  let pvStatus: TanguAgentStatus = idleAgentStatus('pv-session')
+  const pvStatusSubs = new Set<(s: TanguAgentStatus) => void>()
+  const pvChats: TanguStartChatOptions[] = []
+  const withSid = (s: TanguAgentStatus, sid: string | null | undefined): TanguAgentStatus =>
+    (sid === undefined ? s : { ...s, sessionId: sid })
+  const installPvTangu = (): void => setTanguProbe({
+    activeModel: () => pvModel,
+    models: () => [pvModel],
+    activeSpace: () => 'tangu',
+    subscribe: () => () => {},
+    agentStatus: (sid) => withSid(pvStatus, sid),
+    subscribeAgentStatus: (cb, sid) => {
+      const f = (s: TanguAgentStatus): void => cb(withSid(s, sid))
+      pvStatusSubs.add(f)
+      return () => { pvStatusSubs.delete(f) }
+    },
+    startChat: (o) => {
+      pvChats.push(o)
+      return Promise.resolve({ ok: true })
+    },
+  })
+  if (new URLSearchParams(location.search).has('tangu')) installPvTangu()
   ;(window as unknown as { __pv: Record<string, unknown> }).__pv = {
+    fakeTangu: installPvTangu,
+    /** 驱动假探针的 agent 状态(phase + 可选 tool/waitingFor/textChars…),立刻推给订阅者。 */
+    setAgentStatus(phase: TanguAgentPhase, extra?: Partial<TanguAgentStatus>) {
+      pvStatus = { ...idleAgentStatus(pvStatus.sessionId), phase, since: Date.now(), ...extra }
+      for (const cb of [...pvStatusSubs]) cb(pvStatus)
+    },
+    /** 插件经 ctx.tangu.startChat 发起过的对话(台架不真开聊天)。 */
+    startChatCalls: () => pvChats.slice(),
     /** e2e 注入外置插件的构建产物(main.js 原文)。走的是真 setup 路径:new Function('ctx', code)。
      *  一次页面加载只装一个插件(pluginStore.init 有 initialized 闸)—— e2e 每个插件开一页。 */
     loadPlugin(code: string, meta?: { id?: string; name?: string }) {

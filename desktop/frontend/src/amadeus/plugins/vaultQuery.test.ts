@@ -102,4 +102,38 @@ describe('只读 vault 查询面', () => {
     await ctx.app.listPages!()
     expect(listPages).toHaveBeenCalledTimes(2)
   })
+
+  // 2026-09-19 评审:Live3D 导入 = 列清单 → 拷模型(writeBytes)→ 写 live3d.json(writeFile)→ 立刻重扫,
+  // 全程 < 1.5s → 重扫吃到拷贝前的缓存清单,新模型不显示。写盘落定后必须作废两种清单。
+  // 负对照(已实跑红):去掉 writeFile / writeBytes 上的 `.finally(dropListCache)` → 本用例红。
+  it('⚠️插件写盘之后清单缓存作废:列 → 写 → 列 必须真的再打一次盘(writeFile / writeBytes 都算)', async () => {
+    const disk = new Set(['Live3D/README.md'])
+    const listFiles = vi.fn(async () => [...disk])
+    const listPages = vi.fn(async () => [...disk].filter((p) => p.endsWith('.md')))
+    const writeTextFile = vi.fn(async (p: string) => { disk.add(p) })
+    const saveVaultBytes = vi.fn(async (p: string) => { disk.add(p) })
+    bridge.current = { listFiles, listPages, writeTextFile, saveVaultBytes }
+    const ctx = ctxOf('p-write-drop')
+
+    expect(await ctx.app.listFiles!()).toEqual(['Live3D/README.md'])
+    await ctx.app.writeBytes!('Live3D/models/a/a.glb', new Uint8Array([1]))
+    expect(await ctx.app.listFiles!()).toContain('Live3D/models/a/a.glb')
+    expect(listFiles).toHaveBeenCalledTimes(2)
+
+    await ctx.app.listPages!()
+    await ctx.app.writeFile('Live3D/models/a/notes.md', '# a')
+    expect(await ctx.app.listFiles!()).toContain('Live3D/models/a/notes.md')
+    expect(await ctx.app.listPages!()).toContain('Live3D/models/a/notes.md') // .md 也会被 writeFile 写出 → pages 也要作废
+    expect(listFiles).toHaveBeenCalledTimes(3)
+    expect(listPages).toHaveBeenCalledTimes(2)
+
+    // 写失败同样作废(finally):失败前可能已落了一半
+    writeTextFile.mockRejectedValueOnce(new Error('disk full'))
+    await expect(ctx.app.writeFile('Live3D/x.json', '{}')).rejects.toThrow('disk full')
+    await ctx.app.listFiles!()
+    expect(listFiles).toHaveBeenCalledTimes(4)
+    // 不写盘时照旧吃 1.5s 缓存(没把缓存整个拆掉)
+    await ctx.app.listFiles!()
+    expect(listFiles).toHaveBeenCalledTimes(4)
+  })
 })

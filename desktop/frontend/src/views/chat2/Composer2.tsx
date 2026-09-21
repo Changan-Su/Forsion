@@ -10,8 +10,9 @@ import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Folder, PanelsTopLeft, Users, Sparkles,
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, type LucideIcon, Bot } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
-import { useLiveVoice } from '../../hooks/useLiveVoice'
+import { useLiveVoice, useLiveVoiceEnabled } from '../../hooks/useLiveVoice'
 import { useCodeStudio } from '../../stores/codeStudioStore'
+import { useImageStudio } from '../../stores/imageStudioStore'
 import { normPath } from '../coding/studioModel'
 import { VoiceRecordingBar } from './VoiceRecordingBar'
 import { THINKING_LEVELS } from '../../types'
@@ -34,6 +35,7 @@ import { ApprovalRulesModal } from '../../components/ApprovalRulesModal'
 import { commandsFor } from '../../commandCatalog'
 import { getCustomCommands, expandCustomCommand, listMessages, type CustomCommandInfo } from '../../services/backendService'
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
+import { mainReferenceKey } from './mainReference'
 import './composer2.css'
 
 registerMessages({
@@ -222,6 +224,8 @@ export function slashTokenAt(text: string, cursor: number): { start: number; tok
 export const Composer2: React.FC<{
   /** 缺省 = 跟随 appStore.activeId;`null` = 明确按新对话语义跑(主页复用时用)。 */
   sessionId?: string | null
+  /** Chatbox 自身向上延伸的内联 header（如额度提醒）；必须留在卡内共享同一主题材质。 */
+  advisory?: React.ReactNode
   /** 只给桌面首页等高意图入口开;触屏不应自动弹软键盘。 */
   autoFocus?: boolean
   disabled: boolean
@@ -311,7 +315,7 @@ export const Composer2: React.FC<{
   /** 「立即插话」:打断当前 run,把等待区消息强发。 */
   onSteerNow?: () => void
 }> = ({
-  sessionId, autoFocus, disabled, disabledPlaceholder, running, execConfig,
+  sessionId, advisory, autoFocus, disabled, disabledPlaceholder, running, execConfig,
   models, modelsResponse, modelId, onModelChange, engines, engineId,
   engineModels, engineModelId, onEngineModelChange, engineCommands,
   thinkingLevel, onThinkingChange,
@@ -516,13 +520,15 @@ export const Composer2: React.FC<{
   draftRef.current = draft
   const appendToDraft = (text: string) => setDraft((d) => (d.trim() ? d.replace(/\s+$/, '') + ' ' + text : text))
   const liveOwnerResolved = liveOwner ?? sessionId === null // 缺省只有主页输入框是接收方;ChatView 显式传
+  const liveEnabled = useLiveVoiceEnabled() // 功能未完成:入口默认藏起来,只有开发者选项打开才画按钮
   const live = useLiveVoice((text) => {
     if (draftRef.current.trim()) { appendToDraft(text); return }
     const sent = sendMessage(text)
     if (!sent) appendToDraft(text)
     return sent
   }, {
-    paused: running || !!disabled, owner: liveOwnerResolved, handoffOnSend: sessionId === null,
+    // 开关关掉(或开发者模式退出)= 立刻不再是接收方:hook 的 owner 效果会收场,别让按钮没了麦克风还开着。
+    paused: running || !!disabled, owner: liveOwnerResolved && liveEnabled, handoffOnSend: sessionId === null,
     sessionKey: liveSessionKey !== undefined ? liveSessionKey : activeSessionId,
     onKeep: appendToDraft, // 没被接受的语音(连同排队句)由 hook 交还给**当前**接收方的草稿
   })
@@ -901,6 +907,14 @@ export const Composer2: React.FC<{
   const pageIcons = usePageStore((s) => s.icons)
   const chatSessions = useApp((s) => s.sessions)
   const studioPrompt = useCodeStudio(s => s.pendingPrompt)
+  const imagePrompt = useImageStudio(s => s.pending)
+  useEffect(() => {
+    if (!imagePrompt || imagePrompt.sessionId !== activeSessionId || !cardRef.current?.closest('[data-image-studio-chat]') || !cardRef.current.getClientRects().length) return
+    if (!useImageStudio.getState().consume(imagePrompt.seq)) return
+    setDraft(previous => previous.trim() ? `${previous}\n\n${imagePrompt.text}` : imagePrompt.text)
+    setAttachments(previous => [...previous, ...imagePrompt.attachments])
+    requestAnimationFrame(() => { taRef.current?.focus(); autoGrow() })
+  }, [imagePrompt, activeSessionId]) // eslint-disable-line react-hooks/exhaustive-deps
   // Studio references append to this project's visible composer. Claim once before updating:
   // hidden / secondary chat views must not consume another project's request or erase its draft.
   useEffect(() => {
@@ -964,20 +978,17 @@ export const Composer2: React.FC<{
    *  active 都没有,只看它必然恒空。故:主区有焦点就按焦点那个判,没焦点就在主区里挑一个带文件的
    *  (编辑器优先 —— 它的实时路径由 activePage 提供,比 tab 参数准)。 */
   const mainRefKey = useWorkspace((w) => {
-    const tabs = w.mainTabs
-    // 焦点在侧栏(本功能的常态)时主区一个 active 都没有 → 退到主区**自己的前台 tab**(front),
-    // 而不是「第一个类型对得上的」——后者在主区开着两个 tab 时会引用后台那篇(评审 M4)。
-    const cand = tabs.find((t) => t.active) ?? tabs.find((t) => t.front) ?? tabs.find((t) => t.type === 'amadeus-editor') ?? tabs.find((t) => t.filePath)
-    if (!cand) return ''
-    if (cand.type === 'amadeus-editor') return 'note' // 具体哪一篇由 activePage 说了算(就地换笔记也跟得上)
-    return cand.filePath ? `file:${cand.filePath}` : ''
+    return mainReferenceKey(w.mainTabs)
   }) // 选择器返回**字符串**:zustand v5 没有 equalityFn,返回新对象会每次都判「变了」→ 无限重渲
   const autoChip = useMemo<RefChip | null>(() => {
     // 仅 host 会话:引用是一条**本机绝对路径**,云端/沙箱会话的 agent 读不到 —— 挂上去就是
     // 「显示了路径但模型读不到」,与 [[ 候选、粘贴本机文件那两处的门控同一条理由。
     if (!isHost || !autoRefFromMain || !mainRefKey) return null
-    const chip = mainRefKey === 'note'
-      ? (mainNote && vaultRoot ? refChipOf({ kind: 'note', path: mainNote }, vaultRoot) : null)
+    const notePath = mainRefKey === 'note'
+      ? mainNote
+      : mainRefKey.startsWith('note:') ? mainRefKey.slice('note:'.length) : ''
+    const chip = notePath
+      ? (vaultRoot ? refChipOf({ kind: 'note', path: notePath }, vaultRoot) : null)
       : fileChip(mainRefKey.slice('file:'.length))
     if (!chip || autoRefOff === chip.token) return null
     if (refChips.some((c) => c.token === chip.token)) return null // 用户已显式引过同一个 → 不重复挂
@@ -1279,6 +1290,7 @@ export const Composer2: React.FC<{
           </div>
         )}
         <div ref={cardRef} className={`t2c-card${dragOver ? ' dragover' : ''}`}>
+          {advisory}
           {hint && <div className="t2c-hint">{hint}</div>}
           {quotedText && (
             <div className="t2c-quote">
@@ -1610,7 +1622,8 @@ export const Composer2: React.FC<{
             <span className="t2c-grow" />
             {!isChat && !!contextWindow && contextWindow > 0 && (() => {
               const pct = Math.min(100, Math.round(((ctxTokens || 0) / contextWindow) * 100))
-              const warn = pct >= 80
+              // 预警跟着压缩线走:设置里把自动压缩调到 30% 时,环永远到不了 80%,按窗口判就再也不亮了
+              const warn = ctxInfo?.compactAt ? (ctxTokens || 0) >= ctxInfo.compactAt * 0.8 : pct >= 80
               const R = 9
               const CIRC = 2 * Math.PI * R
               return (
@@ -1631,6 +1644,8 @@ export const Composer2: React.FC<{
                   <span ref={ctxPopFix.ref} className="t2c-ctxring-pop" style={ctxPopFix.style}>
                     <span className="t2c-ctxring-pct">{t('input.ctxLabel')} {pct}%</span>
                     <span>{fmtTokens(ctxTokens || 0)} / {fmtTokens(contextWindow)} tokens</span>
+                    {/* 触发线用引擎算好的 compactAt(窗口 − 预留,再被设置里的百分比往下拉),不在客户端另算一份 */}
+                    {!!ctxInfo?.compactAt && <span>{t('ctx.compactAt', { n: fmtTokens(ctxInfo.compactAt), pct: Math.round((ctxInfo.compactAt / contextWindow) * 100) })}</span>}
                     {!!sessionTokens && sessionTokens > 0 && <span>{t('input.sessionTokens', { n: fmtTokens(sessionTokens) })}</span>}
                     {runCost != null && costLimit != null && costLimit > 0 && (
                       <span data-warn={runCost >= costLimit * 0.8 || undefined}>{t('input.runCost', { used: Math.round(runCost).toLocaleString(), limit: costLimit.toLocaleString() })}</span>
@@ -1704,7 +1719,7 @@ export const Composer2: React.FC<{
             >
               {voice.busy ? <Loader2 size={14} className="spin" /> : <Mic size={14} />}
             </button>
-            {live.supported && liveOwnerResolved && (
+            {live.supported && liveEnabled && liveOwnerResolved && (
               <button
                 className={`t2c-iconbtn t2c-live-control t2c-collapse-on-capsule-open${live.active ? ' recording' : ''}`}
                 title={live.active ? t('livevoice.stop') : live.error || t('livevoice.start')}

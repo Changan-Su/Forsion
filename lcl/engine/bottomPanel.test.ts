@@ -18,6 +18,7 @@ type Con = { minimumWidth?: number; maximumWidth?: number; minimumHeight?: numbe
 
 /** 最小 Dockview 桩:group 的 width/height 可读写,panels 可增删。 */
 function mkApi(width: number, height: number) {
+  const positions: Array<unknown> = []
   const moves: Array<{ from: unknown; group: unknown; position?: string }> = []
   const mkGroup = () => {
     const g = {
@@ -59,9 +60,9 @@ function mkApi(width: number, height: number) {
       panels.length = 0 // 真 Dockview:整份换掉,按 blob 重建 panel
       for (const [id, p] of Object.entries(blob?.panels ?? {})) panels.push(mkP(id, p.params ?? {}))
     },
-    addPanel: (o: { id: string; params: Record<string, unknown> }) => { const p = mkP(o.id, o.params); panels.push(p); return p },
+    addPanel: (o: { id: string; params: Record<string, unknown>; position?: unknown }) => { positions.push(o.position); const p = mkP(o.id, o.params); panels.push(p); return p },
   } as unknown as DockviewApi
-  return { api, panels, moves }
+  return { api, panels, moves, positions }
 }
 
 const bottoms = (panels: { params: Record<string, unknown> }[]): { params: Record<string, unknown> }[] =>
@@ -287,36 +288,29 @@ describe('底部面板:反注册前的清场必须覆盖它', () => {
 })
 
 describe('底部面板:与右栏的对齐(与开合顺序无关)', () => {
-  // 用户实报:右栏与底部先开哪个,布局就不一样(Dockview 只在**引用 panel 那个槽位**里嵌套)。
-  // 目标布局恒定为 [左栏满高] | [ [主区|右栏] / 底部横跨这两者 ]。真几何在 check:bottompanel 量,
-  // 这里钉的是 store 侧的那一步补偿:底部诞生时把已在场的右栏挪到主区右边。
-  it('⚠️先右栏后底部:底部诞生时把右栏挪到主区右边', () => {
-    const { api, panels, moves } = mkApi(1600, 1000)
+  // 外区创建不能引用某个 Main leaf。完整拓扑、比例与两种顺序由真实 Dockview 的
+  // check:splitregions 覆盖;旧 moveTo 调用次数断言只钉住了单 Main 的错误假设。
+  it('先右栏后底部:两者都从外缘创建,不切进某个 Main 分屏', () => {
+    const { api, positions } = mkApi(1600, 1000)
     useWorkspace.getState().setApi(api)
     useWorkspace.getState().setSideProfile('sp', {}, {})
     useWorkspace.getState().openView('logv', {}, 'main')
     useWorkspace.getState().openView('logv', {}, 'right')
-    expect(moves).toHaveLength(0) // 右栏自己开出来时不该挪任何东西
     useWorkspace.getState().openView('termv', {}, 'bottom')
     vi.runAllTimers()
 
-    const mainGroup = panels.find((p) => p.params.__loc === 'main')!.group
-    const rightGroup = panels.find((p) => p.params.__loc === 'right')!.group
-    expect(moves).toHaveLength(1)
-    expect(moves[0].from).toBe(rightGroup)
-    expect(moves[0].group).toBe(mainGroup)
-    expect(moves[0].position).toBe('right')
+    expect(positions.slice(1)).toEqual([{ direction: 'right' }, { direction: 'below' }])
   })
 
-  it('先底部后右栏:右栏后开,Dockview 天然把它嵌进主区那一行 → 不挪组', () => {
-    const { api, moves } = mkApi(1600, 1000)
+  it('先底部后右栏:同样从外缘创建,由分区整理统一归位', () => {
+    const { api, positions } = mkApi(1600, 1000)
     useWorkspace.getState().setApi(api)
     useWorkspace.getState().setSideProfile('sp', {}, {})
     useWorkspace.getState().openView('logv', {}, 'main')
     useWorkspace.getState().openView('termv', {}, 'bottom')
     useWorkspace.getState().openView('logv', {}, 'right')
     vi.runAllTimers()
-    expect(moves).toHaveLength(0)
+    expect(positions.slice(1)).toEqual([{ direction: 'below' }, { direction: 'right' }])
   })
 
   it('没有右栏时不空挪(底部单独开)', () => {

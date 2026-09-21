@@ -17,6 +17,7 @@ import { calendarAvailable, calendarSpace } from './builtins/calendar'
 import { museAvailable, museSpace } from './builtins/muse'
 
 import { homepageAvailable, homepageSpace } from './builtins/homepage'
+import { imageStudioAvailable, imageStudioSpace } from './builtins/imageStudio'
 import { homeSlotSpaceId, installHomeSlot } from './homeSlot'
 
 const ws = () => useWorkspace.getState()
@@ -243,6 +244,7 @@ const SPACES: SpaceDefinition[] = [
   ...(calendarAvailable() && builtinEnabled('calendar') ? [calendarSpace] : []),
   // Coding 依赖 host 文件桥 + 本地静态预览服务器(仅桌面 electron;Tangu Web 无 codePreviewServe → 不注册)。
   ...(PRODUCT.nativeFeatures === undefined && PRODUCT.spaces.includes('coding') && window.tangu?.codePreviewServe ? [codingSpace] : []),
+  ...(imageStudioAvailable() && builtinEnabled('image-studio') ? [imageStudioSpace] : []),
   // Automation 依赖本地 tangu 后端(triggers/automation 端点都是本地特性;Tangu Web 无 backendStatus → 不注册)。
   ...(hasNativeFeature('automation') && window.tangu?.backendStatus ? [automationSpace] : []),
   // Muse 也是**内置插件**(builtins/muse:Space + 两个视图随插件启停;本地后端特性)。同 Calendar 的槽位纪律。

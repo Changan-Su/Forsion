@@ -889,3 +889,92 @@
   font-family: var(--font-mono, monospace); font-size: 12px; line-height: 1.5;
   white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow-y: auto;
 }
+
+/* ====== Agent Desk 伴随面(ctx.desk.registerCompanion)—— 必须留在文件最末 ======
+ * 卡片正文的 0.75 预览缩镜是给「文件缩略」用的;伴随面自绘(WebGL 画布),缩镜只会让它按 0.75 的
+ * 局部像素算尺寸、再被放大糊掉 → 伴随面那一格 zoom 归 1,画布按真实 CSS 像素铺满。
+ * 选择器比 .agent-desk-card-body(0,1,0)高一档,仍按 DESIGN.md §7 放文件末尾:同特异性的覆盖块
+ * 一旦被挪到中段就静默失效,这里不赌。pointer-events:none 照旧继承 —— 卡片态是预览,交互在侧板。 */
+.agent-desk-card-body.companion { zoom: 1; }
+
+/* ====== 生图运行态：GPT 风格点阵波 + 点击后贪吃蛇彩蛋 =========================
+ * 画布自己消费三轴主题 token，不画第二张实底卡；它属于消息纸面上的过程反馈。
+ * 高度跟最终图片缩略图同档，结果回来时替换不会让对话列横向跳动。 */
+.image-generation-jobs {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start;
+  width: 100%; margin-top: 4px;
+}
+.image-generation-loader {
+  width: min(280px, 100%); min-width: 0;
+  display: flex; flex-direction: column; gap: 7px;
+}
+.image-generation-status {
+  color: var(--text-faint); font-family: var(--font-ui); font-size: 12px; line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+.image-generation-stage {
+  width: 100%; aspect-ratio: 1; display: block; overflow: hidden;
+  padding: 0; border: var(--border-width, 1px) solid transparent; border-radius: var(--radius-md);
+  background: transparent; cursor: pointer; touch-action: none;
+}
+.image-generation-stage:hover { background: var(--overlay-subtle); }
+.image-generation-stage:focus-visible {
+  outline: none; border-color: var(--sel-line, var(--accent-ink));
+  box-shadow: 0 0 0 2px var(--sel-fill, var(--accent-light));
+}
+.image-generation-canvas { width: 100%; height: 100%; display: block; }
+.image-generation-loader.playing .image-generation-stage { cursor: crosshair; }
+@media (prefers-reduced-motion: reduce) {
+  .image-generation-stage { transition: none; }
+}
+
+/* ====== Quota advisory banner（Chatbox 向上延伸的内联情境提示条）======
+ * 它是 .t2c-card 的第一段内容，不是上方另摆的一张警告卡：共享 Chatbox 的实色 / 薄玻璃材质、
+ * 外轮廓和高程，只用背景轴的 overlay 做轻微分层。状态色限于 14px 图标，整面绝不染 warning/danger，
+ * 才能在任意语言 × skin × bg × 明暗组合下仍然像同一只 Chatbox。 */
+.t2-quota-advisory {
+  min-height: 34px; display: flex; align-items: center; gap: 9px;
+  margin: -12px -14px 10px; padding: 6px 7px 6px 12px; box-sizing: border-box;
+  border-bottom: var(--border-width, 1px) solid var(--border);
+  border-radius: calc(var(--radius-chat-surface, 20px) - var(--border-width, 1px)) calc(var(--radius-chat-surface, 20px) - var(--border-width, 1px)) 0 0;
+  background: var(--overlay-light);
+  color: var(--text); font-family: var(--font-ui); font-size: 11.5px; line-height: 1.35;
+}
+.t2-quota-advisory-copy {
+  min-width: 0; flex: 1 1 auto; display: inline-flex; align-items: center; gap: 7px;
+  font-weight: 550;
+}
+.t2-quota-advisory-copy > svg { flex: 0 0 auto; color: var(--warning); }
+.t2-quota-advisory[data-level='critical'] .t2-quota-advisory-copy > svg { color: var(--danger); }
+.t2-quota-advisory-actions { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 2px; }
+.t2-quota-action,
+.t2-quota-dismiss {
+  min-height: 24px; border: 0; border-radius: var(--radius-xs, 7px);
+  background: transparent; color: inherit; font: inherit; cursor: pointer;
+}
+.t2-quota-action {
+  display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px;
+  font-weight: 600; white-space: nowrap;
+}
+.t2-quota-action.upgrade { color: var(--accent-ink); }
+.t2-quota-action.reset { color: var(--text-muted); }
+.t2-quota-action:hover:not(:disabled), .t2-quota-dismiss:hover { background: var(--overlay-medium); }
+.t2-quota-action:disabled { color: var(--text-faint); cursor: default; }
+.t2-quota-dismiss {
+  width: 24px; flex: 0 0 24px; padding: 0; display: inline-flex; align-items: center; justify-content: center;
+  color: var(--text-muted);
+}
+.t2-quota-action:focus-visible, .t2-quota-dismiss:focus-visible {
+  outline: 2px solid var(--accent-ink); outline-offset: -2px;
+}
+@container (max-width: 520px) {
+  .t2-quota-advisory { align-items: flex-start; flex-wrap: wrap; gap: 3px 6px; padding-block: 7px; }
+  .t2-quota-advisory-copy { flex-basis: calc(100% - 30px); min-height: 24px; }
+  .t2-quota-advisory-actions { order: 2; flex: 1 1 auto; padding-left: 21px; }
+  .t2-quota-dismiss { order: 1; }
+}
+@container (max-width: 360px) {
+  .t2-quota-advisory-copy > svg { display: none; }
+  .t2-quota-advisory-actions { padding-left: 0; }
+  .t2-quota-action { padding-inline: 5px; }
+}

@@ -35,6 +35,18 @@ describe('party configuration', () => {
     expect(next.teamRoles).toEqual({ a: '', temp: 'Research' })
     expect(next.teamSlug).toBeUndefined()
   })
+  it('keeps per-member session tuning for present members and drops emptied or stale entries', () => {
+    const draft = teamDraft({ groupAgents: ['a', 'b'], teamMemberConfigs: { a: { model: 'gpt', thinkingLevel: 'high' }, b: { model: ' ' }, gone: { model: 'x' } } }, '', team)
+    expect(draft.memberConfigs.a).toEqual({ model: 'gpt', thinkingLevel: 'high' })
+    const next = teamSessionConfig({}, draft)
+    expect(next.teamMemberConfigs).toEqual({ a: { model: 'gpt', thinkingLevel: 'high' } })
+  })
+  it('omits the tuning map entirely when nothing is tuned, and never tunes temporary members through it', () => {
+    const temp = { slug: 'temp', name: 'Temp', systemPrompt: 'Verify' } as NormalAgentDef
+    expect(teamSessionConfig({}, teamDraft({ groupAgents: ['a', 'b'] }, '', team)).teamMemberConfigs).toBeUndefined()
+    const draft = teamDraft({ groupAgents: ['a', 'temp'], groupTempAgents: [temp], teamMemberConfigs: { temp: { model: 'gpt' } } }, 'Project party')
+    expect(teamSessionConfig({}, draft).teamMemberConfigs).toBeUndefined()
+  })
   it('moves a member without losing roles or mutating the source, and ignores invalid moves', () => {
     const moved = moveTeamMember(team.members, 'b', -1)
     expect(moved).toEqual([team.members[1], team.members[0]])

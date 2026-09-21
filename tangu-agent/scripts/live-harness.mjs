@@ -17,6 +17,7 @@
  *   npm run live:harness -- --only chat,tool --exec-mode sandbox           # 负对照:sandbox 模式下工具走云工作区,未登录应报错而非假空目录
  *   npm run live:harness -- --only conflict                  # 改 skills/amadeus-note-format(同步冲突副本合并)后跑:技能装载 + 双向并集 + 画布对不动
  *   npm run live:harness -- --only autocompact --window 32000  # 自动压缩持久化(09-15):把该模型窗口钉到 32k 灌满 → run 内自动压缩落检查点 → 下个 run 从摘要接着答;改 compaction / hydrate 后跑
+ *   npm run live:harness -- --only autocompact --window 100000 --compaction '{"thresholdPercent":25,"keepRecentTokens":500}'  # 百分比旋钮(09-20):大窗口下按 X% 压;负对照 = 同窗口 + --filler <正例灌的段数>、不带 --compaction(须红)
  *   npm run live:harness -- --only cache                     # 前缀缓存命中(A/B/B′/C/D + head hash 探针);token 节省看 scripts/cache-hit-report.mjs
  *   npm run live:harness -- --only recall-unprompted --ab-memory   # B1 行为闸:记忆易变段走 tail vs system 各跑一遍(两次引擎启动,顺序)
  *   npm run live:harness -- --only deferred                  # E2 按需装载:load_tools 先于 read_document + 子代理 read_document 直通 + 子代理自己 load_tools 解锁 browser_snapshot
@@ -55,6 +56,9 @@ const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), 
 const KEYS = ['personas', 'rename', 'chat', 'tool', 'loop', 'group', 'teamdup', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
+// --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
+const COMPACTION_CFG = (() => { const raw = opt('compaction', ''); if (!raw) return null; try { const o = JSON.parse(raw); if (o && typeof o === 'object' && !Array.isArray(o)) return o; } catch { /* 落到下面 */ } console.error(`--compaction 须为 JSON 对象,得到 ${raw}`); process.exit(2); })();
+const FILLER = Math.max(0, Math.floor(Number(opt('filler', 0)) || 0));
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
@@ -259,6 +263,7 @@ const workspace = join(OUT, 'workspace');
 mkdirSync(dirname(OUT), { recursive: true });
 try { mkdirSync(OUT); } catch (e) { console.error(e?.code === 'EEXIST' ? `产物目录已存在:${OUT}(旧 state.db/旧 MEMORY 会污染结论,换一个或删掉)` : String(e?.message || e)); process.exit(2); }
 mkdirSync(home, { recursive: true }); mkdirSync(workspace, { recursive: true });
+if (COMPACTION_CFG) writeFileSync(join(shared, 'config.json'), JSON.stringify({ compaction: COMPACTION_CFG }, null, 2)); // config.json 住共享域(home 的父目录,见 tanguHome.configFile),不在 home 里
 const authLink = join(shared, 'provider-auth.json');
 symlinkSync(AUTH, authLink); // 引擎起来装载完就 unlink(见下),产物目录里不留活凭证指针
 const MARKER = `LIVE-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
@@ -395,7 +400,7 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'group_summary') ev.group.summary = p;
           else if (e.type === 'group_ended') ev.group.ended = p;
           // 并行团队(09-16 第四轮):成员激活的起止时刻 —— 「真并行」的唯一观测点是两次激活的时间区间交叠。
-          else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), at: Date.now(), runId: p.runId || null, messageId: p.messageId });
+          else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), at: Date.now(), runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
           else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped'].includes(p.phase)) ev.statuses.push(p);
@@ -569,6 +574,9 @@ try {
     const sessG = `live-g-${Date.now()}`;
     const ev = await run(sessG, '请规划:写一句关于协作的口号,交给合适的人执行。', 300_000, {
       groupChat: true, groupAgents: ['live-alpha', 'live-beta'], groupSeedHistory: false,
+      // 会话级成员调档(配队面板那行):只给 Beta 显式写档、Alpha 不动 = 同一条 run 里的正负对照。
+      // 刻意取 medium(引擎缺省档):接线证得到,模型这一跑的行为与基线一致,不给本场景的其它判据添变量。
+      teamMemberConfigs: { 'live-beta': { thinkingLevel: 'medium' } },
     });
     const sp = ev.group.speakers;
     const early = ev.group.remarks.some((r) => r.slug === 'live-alpha' && r.duringActivation && !ev.group.starts.some((s) => s.messageId === r.messageId));
@@ -582,15 +590,20 @@ try {
     const converged = reason === 'done';
     // A member may publish several team_say remarks per activation. Bound activations, not public remarks.
     const both = sp.includes('live-alpha') && sp.includes('live-beta');
-    // 09-20 回归:同一次激活里同一成员的发言不得是同一件事(先 team_say 再把最终答复重说一遍 = 用户看到的「重复发言」)。
+    // 09-20 回归:同一成员相邻两条发言不得是同一件事(先 team_say 再把最终答复原样重说 = 用户看到的「重复发言」)。
     // Alpha 的提示词刻意要求「先发进度条、再派活」—— 那两条内容不同,是本判据的负对照。
     const dups = await dupSpeeches(ev, ['live-alpha', 'live-beta']);
+    // 调档要真的落到那位成员的子 run 上:读成员工作会话的 agent_config(子 run 与它同形),Alpha 必须仍是缺省。
+    const cfgOf = async (id) => id ? ((await api(`/agent/sessions/${id}/config`).catch(() => null))?.agent_config || {}) : {};
+    const betaCfg = await cfgOf(ev.group.starts.find((s) => s.slug === 'live-beta')?.sessionId);
+    const alphaCfg = await cfgOf(ev.group.starts.find((s) => s.slug === 'live-alpha')?.sessionId);
+    const tuned = betaCfg.thinkingLevel === 'medium' && !alphaCfg.thinkingLevel;
     const msgs = await api(`/agent/sessions/${sessG}/messages?limit=50`).catch(() => null);
     const list = Array.isArray(msgs?.messages) ? msgs.messages : Array.isArray(msgs) ? msgs : [];
     const attributed = list.filter((m) => m.role === 'model' && /^\*\*🗣 (Alpha|Beta)\*\*/.test(String(m.content || ''))).length;
     return {
-      ok: !ev.error && both && overlap && converged && ev.group.starts.length <= 10 && early && hasSummary && !dups.length,
-      detail: ev.error || `发言序 ${sp.join('→') || '无'};并行${overlap ? '交叠' : '未交叠(串行!)'};收场 ${reason || '无'}(${ev.group.ended?.steps ?? '?'} 步 · ${ev.group.ended?.rounds ?? '?'} 周期);带发言人前缀的落库消息 ${attributed} 条;工作中发言 ${early};固定 Historian 摘要 ${hasSummary};重复发言 ${dups.length ? dups.join(',') : '无'}`,
+      ok: !ev.error && both && overlap && converged && ev.group.starts.length <= 10 && early && hasSummary && !dups.length && tuned,
+      detail: ev.error || `发言序 ${sp.join('→') || '无'};并行${overlap ? '交叠' : '未交叠(串行!)'};收场 ${reason || '无'}(${ev.group.ended?.steps ?? '?'} 步 · ${ev.group.ended?.rounds ?? '?'} 周期);带发言人前缀的落库消息 ${attributed} 条;工作中发言 ${early};固定 Historian 摘要 ${hasSummary};重复发言 ${dups.length ? dups.join(',') : '无'};会话级调档 beta=${betaCfg.thinkingLevel || '缺省'} alpha=${alphaCfg.thinkingLevel || '缺省'}`,
       output: list.filter((m) => m.role === 'model').map((m) => String(m.content || '')).join('\n\n---\n\n'), ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
     };
   });
@@ -700,23 +713,55 @@ try {
     const pre = await run(sessD, `请用工具读取文件 ${markerFile},把文件里 code = 后面的值原样回复给我,不要多说。`);
     if (pre.error || !pre.content.includes(MARKER)) return { ok: false, detail: `前置读标记失败:${pre.error || '未命中'}`, output: pre.content, toolCalls: pre.toolCalls };
     const c = await api(`/agent/sessions/${sessD}/compact`, { method: 'POST', body: '{}' }).catch((e) => ({ error: e.message }));
+    // 09-20(二):重开应用时进度环走 GET /usage —— 压缩后、下个 run 之前它得报同一个压缩后的数,不是压缩前那条 usage;
+    // 下个 run 跑完则回到实测(粗估不许粘住)。
+    const lastMain = (r) => Number([...(r.usages || [])].reverse().find((u) => !u.phase)?.prompt) || 0;
+    const usageAfterCompact = Number((await api(`/agent/sessions/${sessD}/usage`).catch(() => ({}))).contextTokens) || 0;
+    // 设置页写口在真引擎上的接线(隔离 home 的 config.json):设 → 读回 → 清。
+    const knob = await (async () => {
+      const put = await api('/agent/compaction', { method: 'PUT', body: JSON.stringify({ thresholdPercent: 40 }) });
+      const got = await api('/agent/compaction');
+      const cleared = await api('/agent/compaction', { method: 'PUT', body: JSON.stringify({ thresholdPercent: null }) });
+      return put?.settings?.thresholdPercent === 40 && got?.settings?.thresholdPercent === 40 && got?.writable === true && got?.defaults?.thresholdPercent === 95 && cleared?.settings?.thresholdPercent === undefined;
+    })().catch(() => false);
     const ev = await run(sessD, '刚才那个文件里 code = 后面的值是什么?只回答值本身。');
     const kept = ev.content.includes(MARKER);
-    return { ok: !ev.error && c.ok === true && kept, detail: `压缩 ${JSON.stringify(c).slice(0, 90)};压缩后标记${kept ? '仍答对' : '丢失'}${ev.error ? ';' + ev.error : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: (tokensOf(pre) || 0) + (tokensOf(ev) || 0) || null, toolCalls: [...pre.toolCalls, ...ev.toolCalls] };
+    // 09-20:压缩响应带「压缩后的上下文占用」(进度环靠它就地回落 —— 手动压缩不产生 usage 事件)。拿下一个 run 的实测 prompt 当真值,
+    // 估算须落在 ±25% 内。别断「比压缩前小」:这个场景只有一轮工具调用,摘要本来就不比原文短(首跑就是这么红的)。
+    const nextPrompt = Number((ev.usages || []).find((u) => !u.phase)?.prompt) || 0;
+    const ringOk = Number(c.contextTokens) > 0 && nextPrompt > 0 && Math.abs(Number(c.contextTokens) - nextPrompt) / nextPrompt < 0.25;
+    const usageAfterRun = Number((await api(`/agent/sessions/${sessD}/usage`).catch(() => ({}))).contextTokens) || 0;
+    const usageOk = usageAfterCompact === Number(c.contextTokens) && usageAfterCompact !== lastMain(pre) && usageAfterRun === lastMain(ev);
+    return { ok: !ev.error && c.ok === true && kept && ringOk && usageOk && knob, detail: `压缩 ${JSON.stringify(c).slice(0, 140)};压缩后占用估 ${c.contextTokens} vs 下个 run 实测 ${nextPrompt}${ringOk ? '' : ' ✗'};GET /usage 压缩前实测 ${lastMain(pre)} → 压缩后 ${usageAfterCompact} → 下个 run 后 ${usageAfterRun}(该 run 实测 ${lastMain(ev)})${usageOk ? '' : ' ✗'};/agent/compaction 读写${knob ? '通' : '不通 ✗'};压缩后标记${kept ? '仍答对' : '丢失'}${ev.error ? ';' + ev.error : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: (tokensOf(pre) || 0) + (tokensOf(ev) || 0) || null, toolCalls: [...pre.toolCalls, ...ev.toolCalls] };
   });
 
   // 自动压缩持久化(09-15 对标 pi/Codex)。需要 --window(缺省 272k 窗灌不满):触发线 = 窗口 − max(16384, 5%) → 32k 窗 = 16k。
   // ① 读标记文件(小)② 一条 ~8k token 的大消息:首轮粗估(系统提示 + 工具头 + 历史 + 大消息)越线 → run 内自动压缩把①总结成
   //   **持久**检查点(已落库行,立刻落)③ 追问标记:首轮再越线 → 增量压缩把②总结进同一条链 → 标记只能从两次链式摘要里答。
   // 断言:两个 run 都发了 compacted(至少一次 persisted:true)、session_summaries 真有行、③ 的主循环 prompt 比 ② 小、③ 答中标记。
+  // 百分比旋钮(09-20,设置页「自动压缩」):大窗口 + thresholdPercent,三跑缺一不可 ——
+  //   回归    --only autocompact --window 32000
+  //   正例    --only autocompact --window 100000 --compaction '{"thresholdPercent":25,"keepRecentTokens":500}'
+  //           (线 = 100k × 25% = 25k;keepRecent 调小是为了让百分比线不低于它的地板 2 × keepRecent + 24k —— 缺省 keepRecent 的地板是 64k,
+  //            要灌 5 万 token;而单条消息超 100k 字符会被 hydrate 按硬帽截成 2.5k,灌不进去:09-20 首跑 836 段就是这么「② prompt 只有 13k」的)
+  //   负对照  --only autocompact --window 100000 --filler 636   ← 与正例同一份输入(段数抄正例 detail 里的「灌 N 段」)、不带旋钮,线在 83.6k → **必须红**(0 次压缩)
+  //   09-20 grok-4.6 实跑:正例 线 25000、②③ 各压一次且落库、prompt ②31649 → ③12722;负对照 线 83616、0 次压缩、②31524 → ③31553。
+  // 正例额外断言 context_info.compactAt === 窗口 × X%:只断「压了」证不了是旋钮压的。
   await scenario('autocompact', 'autocompact 自动压缩持久化(需 --window)', async () => {
     if (!WINDOW) return { ok: false, skipped: true, detail: '未指定 --window(缺省 272k 窗口灌不满);示例 --only autocompact --window 32000' };
     const sessE = `live-e-${Date.now()}`;
     const pre = await run(sessE, `请用工具读取文件 ${markerFile},把文件里 code = 后面的值原样回复给我,不要多说。`);
     if (pre.error || !pre.content.includes(MARKER)) return { ok: false, detail: `前置读标记失败:${pre.error || '未命中'}`, output: pre.content, toolCalls: pre.toolCalls };
-    const ctxWin = pre.statuses.find((s) => s.phase === 'context_info')?.ctxWindow;
+    const ctxInfo = pre.statuses.find((s) => s.phase === 'context_info');
+    const ctxWin = ctxInfo?.ctxWindow;
     if (ctxWin !== WINDOW) return { ok: false, detail: `窗口覆盖未生效:context_info.ctxWindow=${ctxWin},期望 ${WINDOW}(引擎读的是 TANGU_MODEL_CONTEXT_WINDOWS)` };
-    const filler = Array.from({ length: 220 }, (_, i) => `Paragraph ${i + 1}: The archive team catalogued ledgers, maps and correspondence from the northern warehouses, noting shelf, box and folio for each item.`).join('\n');
+    const pct = Number(COMPACTION_CFG?.thresholdPercent) || 0;
+    if (pct && ctxInfo?.compactAt !== Math.floor((WINDOW * pct) / 100)) return { ok: false, detail: `百分比旋钮未生效:context_info.compactAt=${ctxInfo?.compactAt},期望 ${Math.floor((WINDOW * pct) / 100)}(= ${WINDOW} × ${pct}%;低于地板 2 × keepRecentTokens + 24k 时生效的是地板,换一组参数)` };
+    // 灌多少:缺省 220 段(~6k token,32k 窗够越线);带百分比旋钮时按线自动放大(每段 ~25 token,多灌 3k 余量);--filler 显式指定(负对照用)。
+    const prePrompt = Number((pre.usages || []).find((u) => !u.phase)?.prompt) || 13_000;
+    const paragraphs = FILLER || (pct ? Math.max(220, Math.ceil((ctxInfo.compactAt - prePrompt + 3_000) / 25)) : 220);
+    if (paragraphs > 640) return { ok: false, detail: `要灌 ${paragraphs} 段 ≈ ${Math.round(paragraphs * 0.151)}k 字符,超过单条消息 100k 字符硬帽(hydrate 会截成 2.5k,等于没灌);把触发线压低(调小 thresholdPercent / keepRecentTokens / --window)` };
+    const filler = Array.from({ length: paragraphs }, (_, i) => `Paragraph ${i + 1}: The archive team catalogued ledgers, maps and correspondence from the northern warehouses, noting shelf, box and folio for each item.`).join('\n');
     const big = await run(sessE, `下面是一段资料,读完只回复「收到」两个字,不要总结。\n\n${filler}`);
     const ask = await run(sessE, '刚才那个 marker 文件里 code = 后面的值是什么?只回答值本身。');
     const compacted = (ev) => ev.statuses.filter((s) => s.phase === 'compacted' && !s.fallback);
@@ -728,7 +773,7 @@ try {
     const ok = !big.error && !ask.error && compacted(big).length >= 1 && compacted(ask).length >= 1
       && [...compacted(big), ...compacted(ask)].some((s) => s.persisted) && rows.length >= 1 && kept && shrank;
     const detail = big.error || ask.error || dbErr
-      || `②压缩 ${compacted(big).length} 次(persisted ${compacted(big).filter((s) => s.persisted).length});③压缩 ${compacted(ask).length} 次(persisted ${compacted(ask).filter((s) => s.persisted).length});检查点行 ${rows.length}(切点 ${rows.map((r) => r.through_tool_call_id ? '行内' : '整行').join('/') || '-'});主循环 prompt ②${mainPrompt(big)} → ③${mainPrompt(ask)}${shrank ? '(变小)' : '(未变小)'};标记${kept ? '仍答对' : '丢失'}`;
+      || `触发线 ${ctxInfo?.compactAt}${pct ? `(= 窗口 × ${pct}%)` : ''},灌 ${paragraphs} 段;②压缩 ${compacted(big).length} 次(persisted ${compacted(big).filter((s) => s.persisted).length});③压缩 ${compacted(ask).length} 次(persisted ${compacted(ask).filter((s) => s.persisted).length});检查点行 ${rows.length}(切点 ${rows.map((r) => r.through_tool_call_id ? '行内' : '整行').join('/') || '-'});主循环 prompt ②${mainPrompt(big)} → ③${mainPrompt(ask)}${shrank ? '(变小)' : '(未变小)'};标记${kept ? '仍答对' : '丢失'}`;
     return { ok, detail, output: `【②】${big.content}\n\n【③】${ask.content}\n\n【摘要链】\n${rows.map((r) => r.summary).join('\n---\n')}`, ttftMs: ttft(ask), tokens: (tokensOf(pre) || 0) + (tokensOf(big) || 0) + (tokensOf(ask) || 0) || null, toolCalls: [...pre.toolCalls, ...big.toolCalls, ...ask.toolCalls] };
   });
 

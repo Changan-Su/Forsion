@@ -33,7 +33,11 @@ Space 图标排在 Ribbon 上区,点一下即切换。
 
 ## 空间与界面
 
-Space 里的内容以标签页打开,支持拖拽分屏、拖出独立窗口、置顶 Mini 卡片。界面各部分怎么用,见[工作区与界面](../getting-started/workspace.md)。
+Space 里的内容以标签页打开,支持拖拽分屏、拖出独立窗口、置顶 Mini 卡片。Space 配方也可以直接声明主区原生分栏:在 `layout.main` 的第二项起写 `"split":"right"` 或 `"split":"down"`,宿主会建立真正的 Dockview 面板组；未写 `split` 的旧配方仍按同组标签页打开。界面各部分怎么用,见[工作区与界面](../getting-started/workspace.md)。
+
+默认分割上一项；`splitFrom` 可以指定前面某一项的索引（从 0 开始）。例如视频、右分的文档、`split:"down", splitFrom:0` 的 Chat，可得到左上视频、左下 Chat、右侧文档通高。Main 内部分屏不会改变外区边界：左栏通高，右栏在整个 Main 右边，底部横跨 Main 与右栏。旧的交错布局在恢复时按分区归位。回归仪器：`desktop` 下的 `npm run check:splitregions`（默认使用 5273 dev renderer）与 `npm run check:bluebirdspace`。
+
+**English:** `splitFrom` selects an earlier Main item by zero-based index; omitted means the previous item. Shell panels surround the entire Main subtree, preserving its internal splits. The left panel spans the window height; the right panel sits beside all Main views; the bottom panel spans Main and right. Saved interleaved layouts are repaired on restore.
 
 ## 下一步
 

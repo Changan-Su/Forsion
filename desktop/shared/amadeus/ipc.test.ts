@@ -1,6 +1,6 @@
 /** Amadeus 插件 manifest 门禁单测:cmpVersion 排序 + gatePluginManifest 四种情形 + sanitizeOnboarding 消毒。 */
 import { describe, it, expect } from 'vitest'
-import { cmpVersion, gatePluginManifest, sanitizeOnboarding, AMADEUS_PLUGIN_API } from './ipc'
+import { cmpVersion, gatePluginManifest, sanitizeOnboarding, requirementKey, AMADEUS_PLUGIN_API } from './ipc'
 
 describe('cmpVersion', () => {
   it('数值逐段比较,缺段=0,前导 v 忽略', () => {
@@ -59,5 +59,61 @@ describe('sanitizeOnboarding', () => {
   it('settings 数组:过滤非串、上限 16', () => {
     const spec = sanitizeOnboarding({ settings: ['a', 1, '', 'b'] })!
     expect(spec.settings).toEqual(['a', 'b'])
+  })
+})
+
+describe('sanitizeOnboarding · requires(2026-09-21:可实测的前置条件)', () => {
+  it('三类合法条件原样保留;只有 requires 的 onboarding 也算可渲染(它是一道闸)', () => {
+    const ob = sanitizeOnboarding({ requires: [
+      { kind: 'setting', key: 'events' },
+      { kind: 'permission', id: 'computerAccessibility' },
+      { kind: 'check', id: 'rtc' },
+    ] })
+    expect(ob?.requires).toEqual([
+      { kind: 'setting', key: 'events' },
+      { kind: 'permission', id: 'computerAccessibility' },
+      { kind: 'check', id: 'rtc' },
+    ])
+  })
+
+  it('未知 kind / 不认识的权限 id / 非法键名 / 附带文案 → 逐条丢弃(不因一条坏的拖垮整张卡)', () => {
+    const ob = sanitizeOnboarding({ intro: 'x', requires: [
+      { kind: 'env', tool: 'ffmpeg' },              // 不存在这一类:宿主不做「渲染层传工具名 → 主进程 spawn」
+      { kind: 'install', type: 'skill', slug: 'a' }, // 同上:市场上架的 space / skill 为 0,不是闸
+      { kind: 'permission', id: 'root' },
+      { kind: 'setting', key: '../../etc' },
+      { kind: 'check', id: '' },
+      { kind: 'setting', key: 'ok', label: '<b>文案不进契约</b>' },
+      null, 'setting', 42,
+    ] })
+    expect(ob?.requires).toEqual([{ kind: 'setting', key: 'ok' }])
+  })
+
+  it('⚠ 前面塞满重复 / 坏条目,后面的合法条件照样收得到(先砍前 8 条再挑会把真闸吃掉)', () => {
+    const noisy = [
+      ...Array.from({ length: 6 }, () => ({ kind: 'check', id: 'dup' })),
+      { kind: 'env', tool: 'ffmpeg' }, { kind: 'nope' },
+      { kind: 'setting', key: 'realOne' },
+    ]
+    expect(sanitizeOnboarding({ requires: noisy })?.requires).toEqual([
+      { kind: 'check', id: 'dup' }, { kind: 'setting', key: 'realOne' },
+    ])
+  })
+
+  it('同一条件重复声明只留一次;上限 8 条', () => {
+    const many = Array.from({ length: 12 }, (_, i) => ({ kind: 'check', id: `c${i}` }))
+    expect(sanitizeOnboarding({ requires: [{ kind: 'check', id: 'a' }, { kind: 'check', id: 'a' }] })?.requires).toHaveLength(1)
+    expect(sanitizeOnboarding({ requires: many })?.requires).toHaveLength(8)
+  })
+
+  it('requires 全坏 → 字段缺席;其余字段照常(降级成使用说明,不是整条丢)', () => {
+    const ob = sanitizeOnboarding({ intro: '说明', requires: [{ kind: 'nope' }] })
+    expect(ob).toEqual({ intro: '说明' })
+  })
+
+  it('requirementKey 稳定且按类区分(setting:x 与 check:x 不撞)', () => {
+    expect(requirementKey({ kind: 'setting', key: 'x' })).toBe('setting:x')
+    expect(requirementKey({ kind: 'check', id: 'x' })).toBe('check:x')
+    expect(requirementKey({ kind: 'permission', id: 'camera' })).toBe('permission:camera')
   })
 })

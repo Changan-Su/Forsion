@@ -14,6 +14,21 @@ export interface DeskShotResult {
   error?: string;
   /** 截到的形态:card=卡片小预览(缩略图),open=展开侧板。让模型知道自己看的是不是缩略图。 */
   mode?: 'card' | 'open';
+  /** 截到的是插件伴随面(桌面端 ctx.desk.registerCompanion,如 3D 形象)时它的 key(`plugin:<id>:<name>`)。
+   *  模型据此知道图里是插件画的东西,不是自己 desk_present 上去的。 */
+  companion?: string;
+}
+
+/** POST 体 → 兑现结果(路由用;纯函数单测钉住)。dataUrl 会回灌进模型上下文 → 只认 png/jpeg 的 data URL;
+ *  companion 同样进模型上下文 → 只收 `plugin:id:name` 这类短标识,别的一律丢掉(不让任意文本借道进提示词)。 */
+export function parseDeskShotBody(body: unknown): DeskShotResult {
+  const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+  const dataUrl = typeof b.dataUrl === 'string' ? b.dataUrl : '';
+  if (!/^data:image\/(png|jpeg);base64,/.test(dataUrl) || dataUrl.length > 12_000_000) {
+    return { error: String(b.error || 'capture failed').slice(0, 200) };
+  }
+  const companion = typeof b.companion === 'string' && /^[\w:.-]{1,80}$/.test(b.companion) ? b.companion : undefined;
+  return { dataUrl, mode: b.mode === 'card' ? 'card' : 'open', ...(companion ? { companion } : {}) };
 }
 
 const pending = new Map<string, (r: DeskShotResult) => void>(); // shotId -> resolver

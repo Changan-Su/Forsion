@@ -65,11 +65,21 @@ const RESERVE_MIN_RATIO = 0.05;
  * LLM 摘要压缩的触发线(token):窗口 − max(reserveTokens, 5% 窗口),且不低于窗口一半——
  * 小窗口(测试台架 4k / 台架故意设的 8k)下预留不能吃掉整个窗口,否则每轮都压。
  * 272k 窗 → 255.6k;200k → 183.6k;1M → 950k;4k → 2k。
+ *
+ * thresholdPercent(09-20,用户可调「上下文到窗口的 X% 就压」):只会把线往**下**拉 —— 取 min(上式, 窗口 × X%)。
+ * 缺省 95 对任何窗口都 ≥ 上式,行为不变。起因:1M 族(GLM-5.3 / Claude 5 / DeepSeek V4 …)按预留算要 950k 才压,
+ * 生产实报一条会话顶着 387k 逐轮重读、92% 点数烧在输入上,而压缩一次都没触发过。
+ * ponytail: 百分比线有个地板 = 2 × keepRecentTokens + 24k(缺省 64k):压缩后上下文 ≈ 固定头 ~16k + 摘要 ~6k +
+ * 保留的 keepRecent,线低于它就每轮都压(CompactionAttemptGuard 只是让它有界,不是不抖)。小窗口配低百分比时
+ * 实际生效的是地板而不是 X%;要按模型分别定,用 modelOverrides.contextWindow 调那个模型的窗口。
  */
-export function compactionThreshold(windowTokens: number, reserveTokens: number): number {
+export function compactionThreshold(windowTokens: number, reserveTokens: number, thresholdPercent?: number, keepRecentTokens = 20_000): number {
   const w = Math.max(0, Math.floor(windowTokens));
   const reserve = Math.min(Math.max(Math.floor(reserveTokens) || 0, Math.ceil(w * RESERVE_MIN_RATIO)), Math.floor(w / 2));
-  return w - reserve;
+  const base = w - reserve;
+  const pct = Number(thresholdPercent);
+  if (!(pct > 0 && pct < 100)) return base;
+  return Math.min(base, Math.max(Math.floor((w * pct) / 100), Math.max(0, Math.floor(keepRecentTokens)) * 2 + 24_000));
 }
 
 /**

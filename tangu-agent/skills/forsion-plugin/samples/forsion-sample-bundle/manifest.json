@@ -1,16 +1,30 @@
 {
   "id": "sample-bundle",
   "name": "示例捆绑包",
-  "version": "1.1.0",
+  "nameEn": "Sample bundle",
+  "version": "1.2.0",
   "apiVersion": 1,
   "description": "捆绑包(bundle)开发模板:一个 Forsion 插件目录内嵌引擎插件(tangu-plugins/)、Agent+技能(agents/)与 Space(spaces/),装一处全就位。",
+  "descriptionEn": "Bundle template: one Forsion plugin folder that ships an engine plugin (tangu-plugins/), an agent with its skills (agents/) and a Space (spaces/), all in place after a single install.",
   "main": "main.js",
   "onboarding": {
-    "intro": "这是捆绑包模板:UI 插件 + 内嵌引擎工具 + Agent(带 agent 级技能)+ Space,一个目录装完、随包就位。",
+    "intro": "「打个招呼」要先知道怎么称呼你,填上称呼才能用;引擎工具、Agent 与 Space 装完即就位。",
     "steps": [
       { "title": "看引擎侧", "description": "重启/重扫引擎后:设置 → 插件 的引擎区能看到 sample-bundle-tool 由本包捆绑提供(随本插件启停);Agents 页出现「示例捆绑助手」(播种一次,插件升级不覆盖、卸载也保留)。" },
       { "title": "看 Space", "description": "左侧 ribbon 出现「示例捆绑 Space」,随本插件启停显隐;禁用插件它就收起。" },
       { "title": "试一试", "description": "命令面板跑「示例捆绑包:打个招呼」;或让「示例捆绑助手」调 sample_bundle_echo 工具回显一句话。" }
-    ]
+    ],
+    "settings": ["nickname"],
+    "requires": [
+      { "kind": "setting", "key": "nickname" }
+    ],
+    "en": {
+      "intro": "Say hello needs to know what to call you, so fill in your name first. The engine tool, agent and Space are ready as soon as the bundle is installed.",
+      "steps": [
+        { "title": "Check the engine side", "description": "After restarting or rescanning the engine, the engine section of Settings → Plugins lists sample-bundle-tool as provided by this bundle (it turns on and off with this plugin). The Agents page shows the bundled sample assistant (seeded once: plugin updates never overwrite it and uninstalling keeps it)." },
+        { "title": "Check the Space", "description": "The left ribbon shows Sample Bundle Space, which appears and hides with this plugin. Disable the plugin and it folds away." },
+        { "title": "Try it", "description": "Run \"Sample bundle: say hello\" from the command palette, or ask the bundled sample assistant to echo a sentence with the sample_bundle_echo tool." }
+      ]
+    }
   }
 }

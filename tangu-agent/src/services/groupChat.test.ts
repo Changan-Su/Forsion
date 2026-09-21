@@ -14,7 +14,7 @@ vi.mock('../seams/runtime.js', async (importOriginal) => {
   return { ...orig, deps: () => ({ state: stateMock }) };
 });
 
-import { formatDelta, buildHistorySeed, speechTokens, speechCoverage, isRepeatSpeech, CONTEXT_SLUG, type TranscriptEntry } from './groupChat.js';
+import { formatDelta, buildHistorySeed, tuneMembers, speechTokens, speechCoverage, isRepeatSpeech, CONTEXT_SLUG, type TranscriptEntry } from './groupChat.js';
 
 describe('formatDelta (群聊 delta 注入格式)', () => {
   it('空 delta → 直接请它干活并汇报', () => {
@@ -86,6 +86,30 @@ describe('buildHistorySeed (群聊播种:先 Compact 再注入,压缩不可用�
     const text = e!.text;
     expect(text.indexOf('OLD-SUM')).toBeGreaterThan(-1);
     expect(text.indexOf('OLD-SUM')).toBeLessThan(text.indexOf('[User] new msg'));
+  });
+});
+
+describe('tuneMembers (会话级成员调档)', () => {
+  const member = (slug: string, model = '', thinkingLevel: any = '') => ({ slug, name: slug, model, thinkingLevel } as any);
+
+  it('给了 model / thinkingLevel 就按会话值跑,没给的那一项照成员定义', () => {
+    const [a, b] = tuneMembers([member('a', 'def-model', 'low'), member('b', 'def-model', 'low')], {
+      a: { model: 'session-model' }, b: { thinkingLevel: 'high' },
+    });
+    expect([a.model, a.thinkingLevel]).toEqual(['session-model', 'low']);
+    expect([b.model, b.thinkingLevel]).toEqual(['def-model', 'high']);
+  });
+
+  it('未知 slug / 非法档位 / 空值一律不动定义(原对象原样返回)', () => {
+    const src = [member('a', 'def-model', 'low')];
+    const out = tuneMembers(src, { ghost: { model: 'x' }, a: { thinkingLevel: 'turbo', model: '  ' } });
+    expect(out[0]).toBe(src[0]);
+  });
+
+  it('缺省 / 非对象 teamMemberConfigs → 原样返回(旧会话零行为变化)', () => {
+    const src = [member('a')];
+    expect(tuneMembers(src, undefined)).toBe(src);
+    expect(tuneMembers(src, ['a'])).toBe(src);
   });
 });
 

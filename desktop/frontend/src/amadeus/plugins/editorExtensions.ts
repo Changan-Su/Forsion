@@ -15,7 +15,7 @@ import { Slice, Fragment } from '@milkdown/kit/prose/model'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { InputRule, inputRules } from '@milkdown/kit/prose/inputrules'
 import type { Ctx, MilkdownPlugin } from '@milkdown/kit/ctx'
-import type { EditorExtensionFactory, EditorExtensionOptions, PmToolkit } from './types'
+import type { EditorExtensionContext, EditorExtensionFactory, EditorExtensionOptions, PmToolkit } from './types'
 
 const PM: PmToolkit = {
   Plugin,
@@ -107,13 +107,13 @@ function guardProps(p: Plugin, tag: string): Plugin {
  *  而工厂返回的是数组且个数事先不知道,所以照它的写法自己来一份(等 SchemaReady → 推进
  *  prosePluginsCtx → 卸载时按引用摘掉)。工厂**每个编辑器实例调一次**:一篇 v3 笔记是很多个
  *  小编辑器,各拿各的插件实例,免得插件把每编辑器状态挂在共享的 Plugin 对象上。 */
-export function pluginEditorExtensions(bucket: Bucket = 'normal'): MilkdownPlugin {
+export function pluginEditorExtensions(bucket: Bucket = 'normal', context: EditorExtensionContext = { pagePath: () => undefined }): MilkdownPlugin {
   const plugin = (ctx: Ctx) => async () => {
     await ctx.wait(SchemaReady)
     const made: Plugin[] = []
     for (const { pluginId, factory } of registry[bucket]) {
       try {
-        const out = factory(PM)
+        const out = factory(PM, context)
         if (Array.isArray(out)) {
           for (const p of out) if (p instanceof Plugin) made.push(guardProps(p, `插件 ${pluginId}`))
         }

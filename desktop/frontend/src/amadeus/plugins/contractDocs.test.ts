@@ -6,6 +6,7 @@
  * 规则(机械、可执行):
  *  ① types.ts 里 PluginContext 的每个顶层成员名,都必须在插件作者手册
  *     tangu-agent/skills/forsion-plugin/SKILL.md 里出现过 —— 加接缝不补手册,这里就红;
+ *     ①d 内联对象成员(ctx.tangu / ctx.desk 的方法)同样要露面(2026-09-19 补);
  *  ② PluginAppApi 里凡走库内路径的方法,手册必须有「无活动库」行为表(关键字锁定);
  *  ③ 手册与正典(docs/Function/生态内容制作指南.md)都得提到 ctx.dashboard。
  *     ⚠️ 正典住**外层 Forsion 目录**,不在本仓 —— CI 只 checkout 本仓,该文件必然缺席。
@@ -64,6 +65,21 @@ describe('插件契约 ↔ 作者手册漂移', () => {
     expect(members.length, '抽取失效自检:CommandContribution 至少 4 个字段').toBeGreaterThanOrEqual(4)
     const missing = members.filter((m) => !skill.includes(m))
     expect(missing, `手册没提这些字段:${missing.join(', ')}`).toEqual([])
+  })
+
+  it('①d ctx.tangu / ctx.desk 的嵌套方法都在 SKILL.md 露过面', () => {
+    // 规则 ① 只认两空格缩进的顶层成员,给 ctx.tangu 这类**内联对象**加方法是静默绿(2026-09-19 加
+    // agentStatus / startChat 时补的)。PluginAppApi 暂不纳入:getActivePage 等 6 个老方法手册本来就没写,
+    // 本规则只在「现有成员全绿」的面上立。负对照(已实跑红):往 desk 块里临时加一个手册没提的方法 → 红。
+    for (const member of ['tangu', 'desk']) {
+      const start = types.indexOf(`\n  ${member}?: {\n`)
+      expect(start, `找不到 PluginContext.${member}`).toBeGreaterThan(0)
+      const body = types.slice(start + 1)
+      const names = [...body.slice(0, body.indexOf('\n  }\n')).matchAll(/^ {4}([A-Za-z_]\w*)\??\s*[:(<]/gm)].map((m) => m[1])
+      expect(names.length, `抽取失效自检:${member}`).toBeGreaterThan(0)
+      const missing = names.filter((n) => !skill.includes(n))
+      expect(missing, `手册没提 ctx.${member} 的这些方法:${missing.join(', ')}`).toEqual([])
+    }
   })
 
   it('①c registerCommand 的「只做导航」旧规不许与 invoke 并存', () => {

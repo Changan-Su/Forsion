@@ -219,11 +219,12 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
     }
     // ① 载入参与者:groupAgents 是有序 slug 列表(已存 Normal Agent + 临时 Agent 混合);
     // 临时 Agent 定义随会话 agentConfig.groupTempAgents 传来(不落 ~/.tangu/agents,仅本会话用),按 slug 优先命中。
+    // 载入后套一层会话级调档(teamMemberConfigs):配队面板里给某成员换模型 / 调 Effort 只改本会话,不动 Agent 定义。
     // 保序去重:重复 slug(TUI `/groupchat a a`)会让 done.size 永远追不上 participants.length → 周期边界取不到发言人(Codex 09-16 r3 #2)。
     const slugs: string[] = [...new Set<string>(Array.isArray(p.agentConfig.groupAgents) ? p.agentConfig.groupAgents.map(String) : [])];
     const tempBySlug = new Map(sanitizeTempAgents(p.agentConfig.groupTempAgents).map((a) => [a.slug, a]));
     const loaded = await Promise.all(slugs.map(async (s) => tempBySlug.get(s) || (await getAgent(s).catch(() => null))));
-    const participants = loaded.filter((a): a is NormalAgentDef => !!a);
+    const participants = tuneMembers(loaded.filter((a): a is NormalAgentDef => !!a), p.agentConfig.teamMemberConfigs);
     if (participants.length < 2) {
       await publish(runId, 'error', { error: 'group_needs_2_agents', detail: '群聊至少需要选择 2 个有效的 Agent。' });
       await drain(runId);
@@ -657,6 +658,21 @@ function concurrencyCap(v: any, members: number): number {
 
 const THINK_LEVELS: readonly string[] = THINKING_LEVELS;
 const APPROVAL_MODES = ['readonly', 'auto-edit', 'full-auto'];
+
+/** 会话级成员调档(agentConfig.teamMemberConfigs:slug → { model, thinkingLevel }):
+ *  只覆盖显式给了值的那一项,其余照成员定义。model 走子 run 的 model_id、thinkingLevel 走子 run 的 agentConfig,
+ *  两者都不回写 Agent 定义 —— 本会话调档,别人的私聊不受影响。非法档位 / 未知 slug 一律忽略。 */
+export function tuneMembers(members: NormalAgentDef[], raw: any): NormalAgentDef[] {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return members;
+  return members.map((a) => {
+    const t = raw[a.slug];
+    if (!t || typeof t !== 'object') return a;
+    const model = typeof t.model === 'string' ? t.model.trim() : '';
+    const thinkingLevel = THINK_LEVELS.includes(t.thinkingLevel) ? t.thinkingLevel : '';
+    if (!model && !thinkingLevel) return a;
+    return { ...a, model: model || a.model, thinkingLevel: (thinkingLevel || a.thinkingLevel) as NormalAgentDef['thinkingLevel'] };
+  });
+}
 
 /** 临时 Agent 定义来自客户端(本会话用,不落盘):校验必填 + 钳制各字段,复刻 agentRegistry.saveAgent 的口径。 */
 export function sanitizeTempAgents(raw: any): NormalAgentDef[] {

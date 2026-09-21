@@ -143,6 +143,8 @@ export interface ToolContext {
    * 仅主 agentLoop 装配;子代理/群聊等旁路 loop 不装配,消费方须优雅降级。
    */
   getWorkingMessages?: () => any[];
+  /** Current user-provided image attachments, retained independently of vision/compaction. No history or disk fallback. */
+  getImageInputs?: () => ReadonlyArray<{ url: string }>;
 }
 
 /** Agent Desk 演出请求:views=从上到下的展示项(file=本地文件;view=已注册的桌面视图,含插件注册);

@@ -26,6 +26,9 @@ import path from 'node:path';
 import { agentsDir, forsionSharedDir } from '../core/tanguHome.js';
 
 const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
+/** 播种归属标记:agentsDir()/<slug>/.bundle-origin = 播种它的 bundle 目录名。桌面 electron/amadeus/ipc.ts
+ *  的 bundleAgentOwned 读同一个文件名,改一边必须改另一边。 */
+export const BUNDLE_ORIGIN_FILE = '.bundle-origin';
 
 /** 真目录(存在、是目录、且不是符号链接)。 */
 function isRealDir(p: string): boolean {
@@ -93,6 +96,8 @@ export function bundleSkillRoots(): string[] {
  * 判据:没改过的副本跟 bundle 更新,改过的/无指纹的保护并报告)——新播种的副本也立刻补指纹,
  * 否则它下一次更新就会被当成「无指纹老副本」永久停更。技能路径复用 seedSkillsInto 原样
  * (含其 cp 不解引用的既有语义;技能目录里放符号链接本就不受支持)。
+ * 新播种的 agent 带 BUNDLE_ORIGIN_FILE(= bundle 目录名);已存在而跳过的 slug 永远不写 —— 那是桌面判
+ * 「这个 Agent 是不是本插件播种的」的唯一依据(bundle 里有同名目录 ≠ 播种的是它)。
  * 返回本次新播种的 slug 列表(供日志/调用方感知)。
  */
 export async function seedBundleAgents(): Promise<string[]> {
@@ -153,6 +158,10 @@ export async function seedBundleAgents(): Promise<string[]> {
       try {
         await fs.mkdir(agentsDir(), { recursive: true });
         await fs.cp(src, staging, { recursive: true, dereference: true });
+        // 归属标记:只在**新播种**时写(在 cp 之后 → 插件自带的同名文件被真值盖掉;在 rename 之前 → 与人格一起原子落位)。
+        // 桌面 ctx.tangu.startChat 的 send:true 只认它 —— 同 slug 已存在(用户自建 / 默认 agent / 别家插件先播)时
+        // 上面的已存在分支永不写,那个插件就拿不到直发权。点开头的文件不进同步(validSyncPath)/名册/技能指纹。
+        await fs.writeFile(path.join(staging, BUNDLE_ORIGIN_FILE), path.basename(bundle), 'utf8');
         await fs.rename(staging, dest); // 目标同时被别的进程占下 → rename 抛错走 catch,保持不覆盖语义
         seeded.push(slug);
         console.log(`[tangu] 已从 bundle ${path.basename(bundle)} 播种 agent "${slug}"`);

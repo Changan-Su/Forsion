@@ -100,6 +100,15 @@ module.exports = {
           { from: '../tangu-agent/agent-skills', to: 'tangu-server/agent-skills' },
           { from: 'build/python', to: 'python' },
           { from: 'build/node', to: 'node' },
+          // ⚠️这一条不是多余的:electron-builder 的拷贝过滤器(app-builder-lib util/filter.js)对每个
+          // matcher **无条件丢弃 `from` 根下那一层 `node_modules`**(`relative === 'node_modules'` → false),
+          // 深一层的 `lib/node_modules` 才放行。Windows 的官方 Node 包是平铺的 —— npm 就住在根下
+          // `node_modules/npm` → 按此过滤器行为推断,上一条打出来的 Windows 包**有 node.exe 与 npx.cmd、
+          // 没有 npm 本体**(过滤器行为本机实测,已发布的安装包未拆开核对),
+          // `npx` 一跑就 MODULE_NOT_FOUND(2026-09-19 线上实报:codex 引擎空等 30s)。类 Unix 是
+          // `lib/node_modules` 不受影响,所以这条只在 Windows 上救命,但三平台都带着无副作用
+          // (fetch-node 保证目录恒在,非 Windows 为空)。删它之前先跑 desktop 的 bundled-node.test.ts。
+          { from: 'build/node/node_modules', to: 'node/node_modules' },
           // 设备页 web 构建(unitWeb 静态壳;webDistDir 读 resourcesPath/unit-web)
           { from: 'unit-web-dist', to: 'unit-web' },
           // 内置插件捆绑包(electron/builtinPlugins.ts 启动时播种进 <home>/plugins/):来源是 vendor/*.tgz 装进

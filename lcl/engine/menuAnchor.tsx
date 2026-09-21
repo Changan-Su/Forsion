@@ -162,6 +162,30 @@ export function nestedPanelPlacement(
   return 'stacked'
 }
 
+/**
+ * 二级面板在一级菜单内的纵向偏移（局部 CSS px）。优先让面板顶边贴住触发行；若会越过
+ * 一级菜单底边或 View 边界则向上夹住。这样靠上的入口不会把短面板甩到菜单最底部，
+ * 靠下的入口和长列表仍不会压住输入区。
+ */
+export function nestedPanelTop(
+  anchorTop: number,
+  panelHeight: number,
+  menuTop: number,
+  menuBottom: number,
+  boundaryTop: number,
+  boundaryBottom: number,
+  zoom = 1,
+  margin = 8,
+): number {
+  const safeZoom = zoom > 0 ? zoom : 1
+  const marginV = margin * safeZoom
+  const minTop = boundaryTop + marginV
+  const maxBottom = Math.min(menuBottom, boundaryBottom - marginV)
+  const maxTop = Math.max(minTop, maxBottom - panelHeight * safeZoom)
+  const top = Math.min(Math.max(anchorTop, minTop), maxTop)
+  return (top - menuTop) / safeZoom
+}
+
 interface EdgeNudgeOptions {
   margin?: number
   /** 除 viewport 外再收进最近的容器边界，例如 Chat View。找不到时自动回退 viewport。 */

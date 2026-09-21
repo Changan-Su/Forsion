@@ -10,10 +10,10 @@ import { ArrowLeft } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins } from '../amadeusPlugins'
-import { usePluginOnboarding, needsOnboarding, promptIfPending } from '../stores/pluginOnboardingStore'
+import { usePluginOnboarding, needsOnboarding, promptIfPending, isGate } from '../stores/pluginOnboardingStore'
 import { registerMessages, useI18n } from '../i18n'
 import { PRODUCT } from '../product'
-import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail } from '../amadeus/plugins/display'
+import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail, localizedOnboarding } from '../amadeus/plugins/display'
 import { Markdown } from './Markdown'
 import { KNOWN_APPS } from '../../../shared/knownApps'
 import { setPluginEnabled, type PluginInfo } from '../services/backendService'
@@ -114,6 +114,8 @@ export const SettingRow: React.FC<{ pluginId: string; def: SettingContribution }
       if (next === String(def.default)) localStorage.removeItem(lsKey) // 回到默认=清键,插件端 || default 兜底
       else localStorage.setItem(lsKey, next)
     } catch { /* 配额满等,忽略 */ }
+    // 前置条件里可能有这一项(setting 类):徽标 / 检查卡的对勾要跟着这一笔走。非闸插件 evaluate 直接返回。
+    void usePluginOnboarding.getState().evaluate(pluginId)
   }
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -262,6 +264,35 @@ const CompanionApp: React.FC<{ appId: string }> = ({ appId }) => {
   )
 }
 
+/**
+ * 使用说明:manifest onboarding 的 intro + steps,在详情页里**安静地**展示(折叠,不弹、不挂徽标)。
+ * 2026-09-21 起弹窗 / 徽标 / Inbox 只留给带 requires 的「闸」;没有前置条件的那些卡里写的多是用法说明,
+ * 它们不该伏击用户,但也不该丢 —— 有的只写在卡里(README 没有),有的是插件唯一的英文分步说明。
+ */
+const PluginGuide: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
+  const { t, locale } = useI18n()
+  const spec = localizedOnboarding(p.onboarding, locale)
+  if (!spec?.intro && !spec?.steps?.length) return null
+  return (
+    <details className="plugin-guide" style={{ borderTop: 'var(--border-width) solid var(--overlay-medium, rgba(127,127,127,.12))', paddingTop: 12 }}>
+      <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 12.5, userSelect: 'none' }}>{t('plugin.onboarding.guideTitle')}</summary>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 8 }}>
+        {spec.intro && <div style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>{spec.intro}</div>}
+        {!!spec.steps?.length && (
+          <ol style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {spec.steps.map((st, i) => (
+              <li key={i} style={{ fontSize: 12.5 }}>
+                {st.title}
+                {st.description && <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>{st.description}</div>}
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+    </details>
+  )
+}
+
 const PluginDetail: React.FC<{
   plugin: AmadeusPlugin
   onBack: () => void
@@ -275,13 +306,15 @@ const PluginDetail: React.FC<{
   const commands = usePluginStore((s) => s.commands).filter((o) => o.pluginId === p.id)
   const settings = usePluginStore((s) => s.settings).filter((o) => o.pluginId === p.id)
   const settingsViews = usePluginStore((s) => s.settingsViews).filter((o) => o.pluginId === p.id)
-  usePluginOnboarding((s) => s.version) // 完成引导后徽标即时消失
+  usePluginOnboarding((s) => s.version) // 实测结果一变,徽标即时跟上
   const on = activeIds.includes(p.id)
+  // 进详情页实测一次本地两类(设置 / 授权):徽标以「此刻」为准,不以上次打开设置页时为准。
+  useEffect(() => { if (on && isGate(p)) void usePluginOnboarding.getState().evaluate(p.id) }, [p, on])
   const dep = p.requiresApp && KNOWN_APPS[p.requiresApp] ? p.requiresApp : null
   const toggleHere = (): void => {
     const wasOff = !on
     toggle(p.id)
-    if (wasOff) promptIfPending(p.id) // 手动启用成功且引导未完成 → 弹就绪卡
+    if (wasOff) void promptIfPending(p.id) // 手动启用 = 注意力在场:实测(连 check),确有未满足才弹检查卡
     void cascadeAfterToggle(p, cfg, onEngineReload, enginePlugins)
   }
   const uninstall = async (): Promise<void> => {
@@ -312,9 +345,9 @@ const PluginDetail: React.FC<{
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div data-plugin-detail={p.id} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div>
-        <button className="btn ghost sm" onClick={onBack} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+        <button className="btn ghost sm" data-plugin-back onClick={onBack} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
           <ArrowLeft size={13} /> {t('settings.amadeusPlugins.back')}
         </button>
       </div>
@@ -329,14 +362,15 @@ const PluginDetail: React.FC<{
               <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{blockedLabel(t, p)}</span>
             )}
             {needsOnboarding(p) && (
-              <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{t('plugin.onboarding.badge')}</span>
+              <span data-onboarding-badge style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{t('plugin.onboarding.badge')}</span>
             )}
             <BundleChips p={p} />
           </div>
           {pluginDisplayDescription(p, locale) && <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 3 }}>{pluginDisplayDescription(p, locale)}</div>}
         </div>
-        {p.onboarding && !p.blocked && (
-          <button className="btn ghost sm" onClick={() => usePluginOnboarding.getState().open(p.id)}>{t('plugin.onboarding.run')}</button>
+        {/* 只有带 requires 的才是「闸」;没有前置条件的 onboarding 只是使用说明,在下面安静地展示,不给这个按钮。 */}
+        {isGate(p) && on && (
+          <button className="btn ghost sm" data-onboarding-run onClick={() => usePluginOnboarding.getState().open(p.id)}>{t('plugin.onboarding.run')}</button>
         )}
         {/* 设备页 uninstallPlugin 是 notSupported 桩(truthy)——按标志再挡一道,免得按钮点了才报不支持 */}
         {/* 随 App 播种的(preinstalled)同样不给卸载:删了下次启动会种回来,想不用就关开关 */}
@@ -389,6 +423,7 @@ const PluginDetail: React.FC<{
       {/* 自绘设置面板:排在声明式旋钮之后 —— 旋钮是宿主统一样式的小项,复杂面往下放才不打断阅读节奏。
           只在插件启用时挂:停用的插件其 setup 没跑过,面板里的按钮点了也没有后端。 */}
       {on && settingsViews.map((o) => <PluginSettingsView key={o.item.id} pluginId={p.id} def={o.item} />)}
+      <PluginGuide plugin={p} />
       {/* README / 更新日志:必须套 .md-body —— 裸 <Markdown> 吃的是浏览器默认样式(h1 2em、1em 段距),
           和设置页其余部分的行距对不上,观感就是「排版很乱」。同一个类也管着关于页的更新日志。 */}
       {p.readme && (
@@ -425,8 +460,12 @@ export const AmadeusPluginsTab: React.FC<{
   const openFolder = usePluginStore((s) => s.openPluginsFolder)
   const reload = usePluginStore((s) => s.reloadExternal)
   const scaffold = usePluginStore((s) => s.scaffoldSample)
-  usePluginOnboarding((s) => s.version) // 「待引导」徽标随完成态即时消失
+  usePluginOnboarding((s) => s.version) // 「待引导」徽标随实测结果即时变化
   const [detail, setDetail] = useState<string | null>(null)
+  // 列表里的「待引导」徽标以此刻实测为准:只测本地两类,不跑插件的 check(可能打远端)。
+  useEffect(() => {
+    for (const p of plugins) if (activeIds.includes(p.id) && isGate(p)) void usePluginOnboarding.getState().evaluate(p.id)
+  }, [plugins, activeIds])
 
   // 设置页可能先于 Amadeus Space 打开 → 兜底装载(幂等,installed 闸在 amadeusPlugins 内)。
   useEffect(() => { installAmadeusPlugins() }, [])
@@ -451,6 +490,7 @@ export const AmadeusPluginsTab: React.FC<{
       <div
         key={p.id}
         className={`plugin-card plugin-card--link${p.blocked ? ' plugin-card--blocked' : ''}`}
+        data-plugin-id={p.id}
         onClick={() => setDetail(p.id)}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -463,7 +503,7 @@ export const AmadeusPluginsTab: React.FC<{
                 <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{blockedLabel(t, p)}</span>
               )}
               {needsOnboarding(p) && (
-                <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{t('plugin.onboarding.badge')}</span>
+                <span data-onboarding-badge style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{t('plugin.onboarding.badge')}</span>
               )}
               <BundleChips p={p} />
             </div>
@@ -474,7 +514,7 @@ export const AmadeusPluginsTab: React.FC<{
             checked={on}
             disabled={!!p.blocked}
             onClick={(e) => e.stopPropagation()}
-            onChange={() => { const wasOff = !on; toggle(p.id); if (wasOff) promptIfPending(p.id); void cascadeAfterToggle(p, cfg, onEngineReload, enginePlugins) }}
+            onChange={() => { const wasOff = !on; toggle(p.id); if (wasOff) void promptIfPending(p.id); void cascadeAfterToggle(p, cfg, onEngineReload, enginePlugins) }}
             style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }}
           />
         </div>

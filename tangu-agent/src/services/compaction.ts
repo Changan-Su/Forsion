@@ -394,6 +394,8 @@ async function resolveSummaryTarget(ctx: SummarizeContext, runWindowTokens: numb
   const { model, apiKey, baseUrl, apiModelId } = await deps().brain.llm.resolveModelAndKey(modelId);
   signal?.throwIfAborted();
   const windowTokens = ctx.settings.model || !runWindowTokens ? modelContextWindow(modelId, model) : runWindowTokens;
+  // 刻意不传 thresholdPercent:这里算的是摘要模型**吃得下**多少转写,不是「何时触发」。按用户的百分比收紧只会让
+  // 转写从最旧处多丢内容(老会话首次越线时上下文可以远超那条线),换不来任何东西。
   const threshold = compactionThreshold(windowTokens, ctx.settings.reserveTokens);
   const effectiveReserve = Math.max(1, windowTokens - threshold);
   const maxTokens = Math.max(256, Math.min(ctx.settings.summaryMaxTokens, Math.floor(effectiveReserve / 2), Math.floor(windowTokens / 4)));

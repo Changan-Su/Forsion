@@ -148,6 +148,16 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  ⚠️需要活动库。没有活动库时**reject**(主进程 `vaultManager` 抛 `Error('No vault is open')`)——
    *  与只读侧的静默 null 不同形,启动期的写一律 try/catch。 */
   writeFile(path: string, text: string): Promise<void>
+  /** 二进制版 writeFile(2026-09-19+):把字节原子写进库内路径(自动建父目录,已存在即覆盖)。
+   *  用途:导入用户从磁盘选来的模型 / 图片 / 音频(`<input type=file>` 的 `File.arrayBuffer()`),
+   *  或把插件自己渲染的截图落盘给 Agent 看。
+   *  ⚠️需要活动库。没有活动库时**reject**('No vault is open'),同 writeFile。
+   *  ⚠️**不走自写账本**:同一路径上的 `watchFile` 会把这次写当成外部改动回调一次 —— 别 watch 自己写的二进制。
+   *  旧宿主 / 桥缺席:方法整个不存在 → `ctx.app.writeBytes?.(…)`。 */
+  writeBytes?(path: string, bytes: Uint8Array | ArrayBuffer): Promise<void>
+  /** 读库内文件的原始字节(2026-09-19+)。不存在 / 越界 / 没有活动库 → null(不抛,同 readFile 口径)。
+   *  旧宿主没有:`ctx.app.readBytes?.(…)`。 */
+  readBytes?(path: string): Promise<Uint8Array | null>
   /** 读-改-写一张多维表(2026-09-02+):**比对交换**,不是整文件覆盖。`fn` 拿到宿主校验过的 DbFile,
    *  返回新对象即写、返回 `null` 不写(幂等升级「已是最新」就该返 null);写入撞上别人的新版本会重读再套一次
    *  fn(≤3 次),所以 fn 必须是纯函数。宿主认为 corrupt 的文件**不进 fn**(`{ ok:false, corrupt:true }`)。
@@ -172,6 +182,10 @@ export interface PluginAppApi extends BlockSurfaceApi {
   /** Open a file into the view registered for its file type (post-create / cross-navigation). Refreshes
    *  the tree first if the path is newly created; falls back to the OS default app for non-plugin files. */
   openFile(path: string): void
+  /** Open a plain Markdown note in the native Amadeus editor. `reuseKey` addresses a dedicated editor
+   *  declared by a Space (for example a document companion beside a plugin view); `activate:false`
+   *  updates that pane without stealing focus from the source view. Older hosts lack this seam. */
+  openNote?(path: string, options?: { reuseKey?: string; activate?: boolean; newTab?: boolean }): void
 
   // ── 只读 vault 查询面(2026-08-14+)。纯透传主进程既有能力,**没有任何写口**。
   //    定位(codex 2026-08-14 评审的措辞,别写成「读写自然包含枚举」):这是把外置插件**本来就有的**
@@ -615,6 +629,26 @@ export interface SettingContribution {
   description?: string
 }
 
+/** 就绪检查的结果。`unknown` = 这一刻判断不了(离线、未登录、本端没有这个能力)——宿主**不会**把它当成
+ *  「没配好」去催用户,只显示灰色的「暂时无法检查」。拿不准就回 unknown,别回 unmet。 */
+export type ReadinessState = 'ok' | 'unmet' | 'unknown'
+
+/**
+ * 插件自报的就绪检查(2026-09-21+),对应 manifest `onboarding.requires` 里的 `{ kind: 'check', id }`。
+ * 宿主看不见的前置条件放这里:远端服务器配没配好、helper 支不支持这台机器的硬件、引擎解释器里有没有某个模块。
+ *
+ * 宿主只在「用户注意力在场」时调:打开引导卡、点「重新检查」、手动启用插件。**启动期不调** —— 检查可能
+ * 打远端(消耗频控配额)或拉起进程。超时(8 秒)按 unknown 处理。
+ */
+export interface ReadinessContribution {
+  /** 与 manifest requires 里的 check id 对应;同 id 重注册即覆盖。 */
+  id: string
+  /** 引导卡上这一行的文案(插件自己按 ctx.getLocale() 选语言;传函数则每次渲染求值,切语言即时跟上)。 */
+  label: string | (() => string)
+  /** 返回状态;可附一句 detail 解释为什么(如「服务端未配置 LIVEKIT_URL」)。抛错按 unknown 处理。 */
+  check(): Promise<ReadinessState | { state: ReadinessState; detail?: string }>
+}
+
 /** 插件自绘的设置面板(2026-08-15,Obsidian `PluginSettingTab` 的对位)。
  *  `registerSetting` 那套「一行一个 number/boolean/text」只够调旋钮;需要列表编辑、多标签页、
  *  内嵌代码编辑器的插件(片段库、规则表)装不下 —— 这里直接给一个裸 DOM 容器,插件自己画。
@@ -651,9 +685,15 @@ export interface PmToolkit {
   inputRules: typeof import('@milkdown/kit/prose/inputrules').inputRules
 }
 
-/** 每个编辑器实例调一次,返回要挂上去的 ProseMirror 插件。 */
+/** 当前编辑器的来源,不是工作台里最后聚焦的页面。getter 随该实例的 props 更新。 */
+export interface EditorExtensionContext {
+  pagePath(): string | undefined
+}
+
+/** 每个编辑器实例调一次,返回要挂上去的 ProseMirror 插件。旧宿主没有第二参数,插件需 feature-detect。 */
 export type EditorExtensionFactory = (
   pm: PmToolkit,
+  context: EditorExtensionContext,
 ) => import('@milkdown/kit/prose/state').Plugin[]
 
 export interface EditorExtensionOptions {
@@ -761,6 +801,9 @@ export interface PluginContext {
   /** 自绘设置面板(2026-08-15+)。声明式旋钮装不下的复杂设置走这里。见 SettingsViewContribution。
    *  旧宿主没有:`ctx.registerSettingsView?.(…)`。 */
   registerSettingsView?(def: SettingsViewContribution): void
+  /** 就绪检查(2026-09-21+),对应 manifest `onboarding.requires` 的 `{ kind: 'check', id }`。见 ReadinessContribution。
+   *  旧宿主没有:`ctx.registerReadiness?.(…)`。 */
+  registerReadiness?(def: ReadinessContribution): void
   /** 往笔记编辑器里注 ProseMirror 插件(2026-08-15+)。片段展开、按键拦截、行内装饰这类
    *  「必须住在编辑器里」的能力靠它 —— v3 块编辑器与 v4 统一编辑器共用同一个编辑器工厂,注一次两端到位。
    *
@@ -834,12 +877,15 @@ export interface PluginContext {
    *
    *  `activeModel()` = 输入栏药丸显示的那个(会话已选 → 会话的;空白新对话 → 记忆/后端默认),
    *  一个都没有时 null。`models()` 给全部对话模型(只含 llm;目录未就绪时空数组),供插件设置页做
-   *  逐模型绑定。`activeSpace()` 给 Space id(`'tangu'` / `'__home__'` / 用户 Space …)。
+   *  逐模型绑定。`activeSpace()` 给 Space id(`'tangu'` / `'home'` / 用户 Space …)。
    *  `subscribe()` **只在这两个值真的变了**时回调 —— 不是每次 store 变更(流式回答期间每个 SSE
    *  增量都会动 store)。退订宿主也会在插件禁用/重载时统一收掉,但自己也 dispose。 */
   tangu?: {
     activeModel(): import('./tanguSeam').TanguModelInfo | null
     models(): import('./tanguSeam').TanguModelInfo[]
+    /** 用户的 Agent 名册(2026-09-20+):给「把某个东西绑给某个 Agent」的选择器用(Live3D 的「这个 Agent 用哪个形象」)。
+     *  含系统 Agent(Muse 之类),与主区「选择 Agent」条同口径;旧宿主 / 非 Tangu 宿主 → 空数组。 */
+    agents?(): import('./tanguSeam').TanguAgentInfo[]
     activeSpace(): string | null
     subscribe(cb: () => void): () => void
     /** 主区聊天的用量/档位快照:上下文窗口、已用 tokens、生效思考档(2026-08-29+,旧宿主没有 →
@@ -847,6 +893,34 @@ export interface PluginContext {
      *  ⚠️**拉取式**:这些值在流式回答里每个 SSE 增量都在动,故意不进 `subscribe` 的变更键。
      *  要跟着动就自己 setInterval 拉,别指望订阅回调。 */
     session?(): import('./tanguSeam').TanguSessionInfo | null // 宿主装了探针但探针不给值时返回 null
+    /** Agent 此刻在干什么(2026-09-19+):idle / thinking / speaking / tool / waiting / error / done。
+     *  sessionId 省略 = 主区活动会话;null = 新对话草稿(恒 idle)。拉取式;要口型包络就按帧拉 textChars。
+     *  2026-09-20 起还带 `agentSlug` / `agentName`(这会话归哪个 Agent;外部引擎会话没有)。
+     *  旧宿主没有 → `ctx.tangu?.agentStatus?.()`,缺席按 idle 处理。 */
+    agentStatus?(sessionId?: string | null): import('./tanguSeam').TanguAgentStatus
+    /** 变更过滤订阅:只在 phase / tool / toolStage / waitingFor / sessionId / agentSlug 变了时回调
+     *  (每个 token 不回调,改 Agent 展示名也不回调),done/error 余韵到期时再回调一次(回 idle)。
+     *  返回退订;禁用/重载时宿主统一收掉。 */
+    subscribeAgentStatus?(cb: (s: import('./tanguSeam').TanguAgentStatus) => void, sessionId?: string | null): () => void
+    /** 用指定 Agent 开一个**可见的**新对话(2026-09-19+):离开主页 Space → 新对话 → 选 Agent → 预填或送出。
+     *  - `send:true` **只对本插件捆绑包真正播种出来的 Agent 生效**(`agents/<slug>/` 且引擎播种时写下了本插件的
+     *    `.bundle-origin` 来源标记;同名 slug 早已存在 = 不是你播的,一样降级);别家 Agent 一律降级为预填,
+     *    由用户按回车 —— 插件不能替用户花别人的 token、开别人的 host 工具。
+     *  - `folder`:新会话的工作目录,**库相对路径**(通常就是 `ctx.app.workFolder()`)。宿主解析成绝对路径并
+     *    钳在库内;库外 / 无库 / 非本机执行 → 忽略(用默认工作区)。设成工作文件夹后,Agent 往里写文件不会触发
+     *    「工作区外写入」的升级审批(仍按用户自己的审批档走)。
+     *  - 返回 `{ ok:false, error }` 而不抛:Agent 不存在、后端没连上、送出失败。
+     *  旧宿主没有:`ctx.tangu?.startChat?.(…)`,缺席时插件自己退化(把提示词复制到剪贴板之类)。 */
+    startChat?(o: { agent?: string; prompt: string; send?: boolean; folder?: string }): Promise<import('./tanguSeam').TanguStartChatResult>
+  }
+  /** Agent Desk 伴随面(2026-09-19+,**只在有 Agent Desk 的宿主上存在** —— 桌面 Tangu;web / 移动端 / 纯 Amadeus 壳
+   *  整个没有 `ctx.desk`)。往聊天右侧的 Agent Desk 挂一块自绘区域,典型用法是跟着 agent 状态做反应的形象。
+   *  模式:'idle' = Desk 没有任何展示条目时出现在卡片里(有条目时让位,卡片头出现「清空 Desk」);
+   *  'always' = 卡片与展开侧板都只显示伴随面,**Desk 的文件展示整体停用**(引用/概览入口走新标签页)。
+   *  同时只有最后注册的一个生效。返回 handle:`update({mode})` 就地切模式,`dispose()` 撤下;禁用/重载宿主统一收。
+   *  用户在设置里关掉了 Agent Desk 时伴随面也不出现(注册照常成功)。旧宿主:`ctx.desk?.registerCompanion(…)`。 */
+  desk?: {
+    registerCompanion(def: import('./deskCompanion').DeskCompanionContribution): import('./deskCompanion').DeskCompanionHandle
   }
   /** 前台窗口采样(host-only 接缝)——「现在焦点在哪个 app」。**两道闸都过了才有值**:
    *  ① 插件在 manifest `capabilities` 里声明了 'activeWindow'(没声明 → `ctx.system` 整个不存在);
@@ -900,6 +974,9 @@ export interface PluginContext {
    *  留了哑桩插件会走进原生分支然后什么都不画(与 `ctx.app.watchFile` / `reveal` 同一条纪律)。 */
   table?: {
     mount(el: HTMLElement, spec: TableSpec): { update(spec: TableSpec): void; dispose(): void }
+    /** 本宿主的原生表认得的**可选**规格能力(2026-09-21 起;更老的宿主整个成员缺席)。规格里不认识的字段宿主一律静默忽略,
+     *  所以「不折叠就没法看」的表先查 `ctx.table.caps?.fold`,没有就走自己的降级(panel-lib 的 `L.table` 已内置这条)。 */
+    caps?: { fold?: boolean }
   }
 }
 
@@ -935,6 +1012,12 @@ export interface TableSpec {
   /** Initial table grouping. `order` contains property values, not display labels.
    * User view changes survive update(); grouping never edits the plugin's rows. */
   groupBy?: { key: string; sort?: 'manual' | 'asc' | 'desc'; order?: string[]; hideEmpty?: boolean }
+  /** 规则行折叠(需要 `ctx.table.caps.fold`):`by` 各列值全等 + 落在同一个 `minutes` 分钟本地时钟窗口(`time` 列)的行
+   *  收成一条**汇总行**,点开展开成员行。通用汇总 = 数字求和 / 日期「最早 – 最晚」/ 其余列出包含的值与次数;
+   *  `summary(rows)` 可按成员行给部分列的汇总格(`text` 原样显示,不再按列类型格式化),没给的列走通用汇总。
+   *  排序作用在汇总值上;与 `update()` 的关系同 sort 相反:**宿主改了 fold 就跟宿主走**(面板的时间窗控件靠它)。
+   *  ⚠️`partial` 的表要自己按折叠单元分页(把整单元的成员行一起给),否则一个单元会被页边切成两半。 */
+  fold?: { by?: string[]; time?: string; minutes?: number; summary?: (rows: TableRow[]) => Record<string, TableCell> }
   /** 用户改排序时回调 —— 面板把它存进自己的状态,重渲染时姿态一致。 */
   onSort?: (s: { key: string; dir: 'asc' | 'desc' } | null) => void
 }

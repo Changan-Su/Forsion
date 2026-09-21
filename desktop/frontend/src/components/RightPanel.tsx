@@ -108,11 +108,13 @@ function useSelection(orderedPaths: string[]) {
   return { selected, onClick, only, clear }
 }
 
-export interface CtxItem { label: string; icon?: React.ReactNode; danger?: boolean; run: () => void }
+export interface CtxItem { label: string; icon?: React.ReactNode; danger?: boolean; disabled?: boolean; separatorBefore?: boolean; shortcut?: string; run: () => void }
 export type CtxMenu = { x: number; y: number; items: CtxItem[] } | null
 
 /** 右键浮层菜单(portal 到 body;任意点击/右键/Esc/失焦关闭)。 */
-export const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => void }> = ({ menu, onClose }) => {
+export const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => void; autoFocus?: boolean }> = ({ menu, onClose, autoFocus = false }) => {
+  const firstItem = useRef<HTMLButtonElement>(null)
+  useEffect(() => { if (autoFocus) firstItem.current?.focus({ preventScroll: true }) }, [autoFocus, menu.x, menu.y])
   useEffect(() => {
     const close = () => onClose()
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
@@ -130,15 +132,28 @@ export const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => 
   return createPortal(
     <OverlayAt
       className="ctx-menu"
+      role="menu"
       x={menu.x}
       y={menu.y}
       onPointerDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => { e.preventDefault(); e.stopPropagation() }}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' || e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); onClose(); return }
+        if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
+        e.preventDefault(); e.stopPropagation()
+        const buttons = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
+        const index = buttons.indexOf(document.activeElement as HTMLButtonElement)
+        const next = e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length - 1 : (index + (e.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
+        buttons[next]?.focus()
+      }}
     >
       {menu.items.map((it, i) => (
-        <button key={i} className={`ctx-item${it.danger ? ' danger' : ''}`} onClick={() => { onClose(); it.run() }}>
-          {it.icon}<span>{it.label}</span>
-        </button>
+        <React.Fragment key={i}>
+          {it.separatorBefore && <div className="ctx-separator" role="separator" />}
+          <button ref={i === menu.items.findIndex(item => !item.disabled) ? firstItem : undefined} role="menuitem" aria-label={it.label} disabled={it.disabled} className={`ctx-item${it.danger ? ' danger' : ''}`} onClick={() => { onClose(); it.run() }}>
+            {it.icon}<span>{it.label}</span>{it.shortcut && <kbd className="ctx-shortcut" aria-hidden="true">{it.shortcut}</kbd>}
+          </button>
+        </React.Fragment>
       ))}
     </OverlayAt>,
     document.body,

@@ -180,6 +180,9 @@ export interface ModelsBrain {
     imageModelId?: string | null;
     /** 辅助模型 · 图像识别槽(主模型无原生视觉时的兜底;空 = 不启用)。 */
     visionModelId?: string | null;
+    /** 这次目录是真读到了,还是被降级填的空?未实现此字段的实现留 undefined(调用方回落长度启发式)。
+     *  空列表有两种成因(未登录/断网 vs admin 真没授权),分不清就会把掉线用户支去设置页空等。 */
+    reachable?: boolean;
   }>;
 }
 
@@ -251,13 +254,33 @@ export interface ImageGenRequest {
   size?: string; // 规范尺寸 '1:1'|'2:3'|'3:2'|'16:9'|'9:16' 或 'WxH';缺省 '1:1'
   n?: number;
   transparentBackground?: boolean;
+  /** 渲染档位(OpenAI 图像 API 里这个字段就叫 quality,没有 effort):'low'|'medium'|'high'|'xhigh'|'max'|'auto'。
+   *  'xhigh'/'max' 仅 gpt-image-2.5+ 有,档位直接换算成 output_tokens(实测 low 425 → xhigh 1650)。
+   *  ⚠️不传就不发这个字段 —— 让上游用自己的缺省,别在这里替用户选贵档。 */
+  quality?: string;
   signal?: AbortSignal;
 }
 export interface ImageGenResult {
+  /** `mime` must describe the bytes: Seedream answers JPEG even when everything else is PNG, and edit_image
+   *  later re-validates attachment bytes against their declared type — a JPEG labelled PNG fails there. */
+  images: Array<{ b64: string; mime: string }>;
+}
+
+/** Image type from the first bytes of a base64 payload (PNG / JPEG / WebP / GIF); unknown → PNG, the old default. */
+export function imageMimeOf(b64: string): string {
+  const head = Buffer.from(b64.slice(0, 24), 'base64');
+  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return 'image/jpeg';
+  if (head.toString('ascii', 0, 4) === 'RIFF' && head.toString('ascii', 8, 12) === 'WEBP') return 'image/webp';
+  if (head.toString('ascii', 0, 4) === 'GIF8') return 'image/gif';
+  return 'image/png';
+}
+export interface ImageEditRequest extends ImageGenRequest {
+  /** Inline source images; never model-supplied file paths or fetched URLs. */
   images: Array<{ b64: string; mime: string }>;
 }
 export interface ImagesBrain {
   generate(req: ImageGenRequest): Promise<ImageGenResult>;
+  edit?(req: ImageEditRequest): Promise<ImageGenResult>;
 }
 
 /** 语音合成(朗读按钮/自动朗读用)。direct:调 provider 自有 OpenAI 兼容 /audio/speech。 */

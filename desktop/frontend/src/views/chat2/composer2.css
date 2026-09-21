@@ -3,6 +3,12 @@
  * 悬浮圆角卡(发送在卡内)+ 卡下药丸 chips 行。slash/@ 菜单与附件 chip 沿用 base.css 的 .composer-menu/.attach-chip。
  */
 .t2c { position: relative; width: 100%; }
+/* 主区纸面与侧栏面是两种不同底层：主区继续用标准卡面；侧栏 Chatbox 反向借用主区纸面色
+   --bg，在亮色下比 --sidebar-bg 亮、暗色下比它暗，避免同向提亮后发灰。
+   genesis-glass 仍由主题自己的 ::before 材质分档接管，不消费这个实色。 */
+.dv-groupview:has(.wb-tab--icon) .t2-chat-view {
+  --t2c-card-surface: var(--bg);
+}
 .t2c-inner { max-width: 880px; margin: 0 auto; width: 100%; box-sizing: border-box; padding: 8px 28px 16px; display: flex; flex-direction: column; gap: 8px; }
 
 /* 悬浮卡 —— 字面意义上的悬浮:输入区**不占布局**,正文铺满整列从它底下穿过去
@@ -14,7 +20,7 @@
   --t2c-font-meta: 11px;
   position: relative;
   container-type: inline-size; /* 卡宽驱动底排药丸收窄(容器查询,不看视口) */
-  background: var(--bg-card, var(--bg));
+  background: var(--t2c-card-surface, var(--bg-card, var(--bg)));
   /* 不描边(2026-08-14 用户要求,同 chat2.css 那批卡)。留着 1px transparent 而不是 border:none:
      盒模型不变 → 拖文件进来时 .dragover 换个 border-color 就能亮边,布局不位移。 */
   border: var(--border-width, 1px) solid transparent;
@@ -23,7 +29,7 @@
   padding: 12px 14px;
   transition: border-color var(--duration-fast, 0.15s);
 }
-.t2c-card.dragover { border-color: var(--accent-ink); background: color-mix(in srgb, var(--accent-ink) 6%, var(--bg-card, var(--bg))); }
+.t2c-card.dragover { border-color: var(--accent-ink); background: color-mix(in srgb, var(--accent-ink) 6%, var(--t2c-card-surface, var(--bg-card, var(--bg)))); }
 
 .t2c-ta {
   width: 100%; border: none; outline: none; background: transparent; resize: none;

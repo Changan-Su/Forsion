@@ -345,8 +345,8 @@ async function main() {
     await caretInNewParagraph(p)
     await pasteText(p, YT)
     await p.keyboard.press('Escape')
-    // ⚠️ 光标还在这一段里 = 装饰让位、只露源码,这是本层的交互契约不是 bug。
-    // 「忽略菜单」的观感要点开别处才看得到 —— 台架也得照做,不然量到的是 bm=0 的假红。
+    // 自「难源码编辑块」契约起光标在这一段里装饰也不让位了(只有 `</>` 才露源码),
+    // 但这里仍然点开别处:落盘防抖要失焦才赶得上,不然量到的是还没写盘的假红。
     await p.click(`${PM} > p`)
     await p.waitForTimeout(1600)
     const md = await vaultOf(p)
@@ -392,23 +392,24 @@ async function main() {
   }
 
   {
-    // 菜单摆位:必须锚**光标**(URL 末尾),不是段首 —— 长地址时锚段首会让菜单离手很远。
+    // 菜单摆位:锚**粘贴的那一段**。⚠️ 这一段粘完当场就被 embedLayer 认成书签卡、
+    // 源码 display:none,所以坐标只能在 dispatch **之前**量 —— 量晚了 coordsAtPos 全零,
+    // 菜单会被 clampMenu 夹回视口左上角(用户 2026-09-20 实报「菜单偏到左上角去了」)。
+    // 所以除了「贴着段落」还要直接钉「不在角上」—— 只比相对位置会把 (8,8) 一起判绿。
     const p = await open(browser, '开篇')
     if (await caretInNewParagraph(p)) {
       await pasteText(p, YT)
       const g = await p.evaluate((sel) => {
         const para = document.querySelectorAll(`${sel} > p`)[1]
-        const t = para?.firstChild
-        if (!t) return null
-        const r = document.createRange()
-        r.setStart(t, t.textContent.length)
-        r.setEnd(t, t.textContent.length)
         const menu = document.querySelector('.paste-as-menu')
-        if (!menu) return null
-        return { caret: r.getBoundingClientRect().left, menu: menu.getBoundingClientRect().left, paraLeft: para.getBoundingClientRect().left }
+        if (!para || !menu) return null
+        const pr = para.getBoundingClientRect()
+        const mr = menu.getBoundingClientRect()
+        return { menuLeft: mr.left, menuTop: mr.top, menuHeight: mr.height, paraLeft: pr.left, paraTop: pr.top }
       }, PM)
-      record('P8 菜单锚在光标处(不是段首)',
-        !!g && Math.abs(g.menu - g.caret) < 28 && g.menu - g.paraLeft > 100, JSON.stringify(g))
+      record('P8 菜单锚在粘贴的那一段(且不许被夹回视口左上角)',
+        !!g && Math.abs(g.menuLeft - g.paraLeft) < 40 && Math.abs(g.menuTop - g.paraTop) < g.menuHeight + 40 &&
+          g.menuLeft > 40 && g.menuTop > 40, JSON.stringify(g))
     }
     await p.close()
   }

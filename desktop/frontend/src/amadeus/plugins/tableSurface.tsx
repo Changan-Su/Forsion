@@ -25,7 +25,7 @@ import { DatabaseEmbed } from '../blocks/database/DatabaseEmbed'
 import type { DbRow } from '@amadeus-shared/db/schema'
 import { useTheme } from '../../stores/themeStore'
 import { mountHostReact } from './blockSurface'
-import { safeAttrs, specToDb, tableCellMeta, validateTableSpec } from './tableSpec'
+import { foldSummaryMeta, safeAttrs, specToDb, tableCellMeta, validateTableSpec } from './tableSpec'
 import type { TableRow, TableSpec } from './types'
 
 function PluginTable({ pluginId, spec, popHost }: { pluginId: string; spec: TableSpec; popHost: HTMLElement }) {
@@ -53,6 +53,11 @@ function PluginTable({ pluginId, spec, popHost }: { pluginId: string; spec: Tabl
   })
 
   const rowOf = (row: DbRow): TableRow | undefined => rowsById.get(row.id)
+  // 身份跟着 spec 走(不是每次渲染一个新闭包):DbTable 把它放进自适应列宽的 memo 依赖里
+  const foldMeta = useMemo(
+    () => (spec.fold?.summary ? (members: DbRow[]) => foldSummaryMeta(spec, members.flatMap((m) => rowsById.get(m.id) ?? [])) : undefined),
+    [spec, rowsById],
+  )
   return (
     <div className="amadeus-root am-app tangu-lovable amx-plugtable" data-mode={mode} data-flat={flat ? '1' : '0'} ref={rootRef}>
       {
@@ -69,6 +74,7 @@ function PluginTable({ pluginId, spec, popHost }: { pluginId: string; spec: Tabl
             selectedRowId={spec.selectedId ?? null}
             initialSort={initialSort.current}
             onSort={(s) => latest.current.onSort?.(s ? { key: s.colId, dir: s.dir } : null)}
+            foldMeta={foldMeta}
             onRowOpen={spec.onRowOpen ? (row) => {
               const r = rowOf(row)
               if (r) latest.current.onRowOpen?.(r)

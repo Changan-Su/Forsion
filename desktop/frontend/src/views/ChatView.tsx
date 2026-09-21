@@ -13,7 +13,8 @@ import { openNewChat, openSession, rotateSolo } from '../sessionNav'
 import { TeamEditor } from '../components/TeamEditor'
 import { postMuseFeedback, saveAgentScheduleEntry } from '../services/backendService'
 import { runTaskCard } from './chat2/taskLanding'
-import { resolveDeskPath } from '../stores/deskPlan'
+import { DESK_DRAFT_KEY, resolveDeskPath } from '../stores/deskPlan'
+import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage } from './chat2/EditorialMessage'
 import { RunStatsLine } from './chat2/RunStatsLine'
@@ -43,6 +44,7 @@ import { projectName } from './coding/studioModel'
 import './coding/studioMessages'
 import { selectableChatModels } from './chatModelCatalog'
 import { useChatWaitDetailsEnabled } from '../chatWaitDetails'
+import { QuotaAdvisoryBanner } from '../components/QuotaAdvisoryBanner'
 
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
@@ -419,6 +421,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   const hasMessages = activeMessages.length > 0
   // Agent Desk:桌面端默认开(移动端没有);用户可在设置→高级关掉,窄容器由 CSS 容器查询兜底隐藏。
   const deskEnabled = !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!s.desktopConfig?.agentDeskEnabled
+  // Desk 收不收文件(与 store 写入口、引用条同一判据):always 伴随面生效时 Desk 只演伴随面,点开文件一律走新标签页。
+  const deskTakesFiles = useDeskAcceptsFiles(deskEnabled)
   // 团队成员列表嵌入 Pin Summary 的运行状态,Agent Desk 保持独立。
   const teamDesk = !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!mvCfg.groupChat && (mvCfg.groupAgents?.length || 0) >= 2
 
@@ -630,6 +634,13 @@ export function ChatView({ leaf, params }: ViewProps) {
           )}
         </AnimatePresence>
         <Composer2
+          sessionId={activeId}
+          advisory={!params.childSurface ? (
+            <QuotaAdvisoryBanner
+              loggedIn={!!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false}
+              onToast={s.toast}
+            />
+          ) : undefined}
           // 实时语音:只有跟随侧栏的主区聊天接得住(固定会话的分屏/隐藏标签不许抢交接);发往的就是本视图的会话
           liveOwner={followActive && leaf.loc === 'main'}
           liveSessionKey={activeId}
@@ -716,8 +727,9 @@ export function ChatView({ leaf, params }: ViewProps) {
           seedText={s.steerRestore ?? (params.childSurface ? null : s.pendingDraft)}
           appendRefs={params.childSurface ? null : s.draftRefs}
           onAppendRefsConsumed={s.clearDraftRefs}
-          // 聊天开在侧栏(Amadeus 右栏等)→ 默认引用主区当前打开的那篇笔记;聊天自己就是主区时无从谈起
-          autoRefFromMain={!params.childSurface && leaf.loc !== 'main'}
+          // 侧栏聊天默认引用主区当前笔记；Space 的主区分栏可显式 opt-in，
+          // 让同屏 ChatView 也跟随旁边的 Amadeus 文档。
+          autoRefFromMain={!params.childSurface && (leaf.loc !== 'main' || params.autoRefFromMain === true)}
           onSeedConsumed={() => { if (s.steerRestore && activeId) s.clearSteerRestore(activeId); else if (!params.childSurface) s.setPendingDraft(null) }}
           sentHistory={sentHistory}
           pendingSteer={s.steerPending}
@@ -758,18 +770,21 @@ export function ChatView({ leaf, params }: ViewProps) {
             useApp.getState().setExecConfig({ extraRoots: cur.filter((x) => x !== p) }, activeId)
           } : undefined}
           onJumpToAttention={() => scrollToBottom(true)}
-          onShowEditing={deskEnabled && activeId ? (p) => useApp.getState().deskShowFile(activeId, p) : undefined}
+          // 「正在编辑」只在 Desk 收文件时出现(always 伴随面 = 走 Desk 关闭的老路:隐藏)。别退回开标签页:
+          // WsFileView 只读一次盘、没有 watcher,写到一半的新文件会「加载失败」、edit_file 显示改前内容。
+          onShowEditing={deskTakesFiles && activeId ? (p) => useApp.getState().deskShowFile(activeId, p) : undefined}
           onOpenFile={(f) => {
             // 设成「在 Agent Desk 展开」且 Desk 开着且这文件定位得到 → 上演出格;其余一律新标签页。
             const abs = f.path ? resolveDeskPath(f.path, mvCfg.cwd) : null
-            if (deskEnabled && activeId && abs && s.desktopConfig?.summaryOpenIn === 'desk') {
+            if (deskTakesFiles && activeId && abs && s.desktopConfig?.summaryOpenIn === 'desk') {
               useApp.getState().deskShowFile(activeId, abs)
               return
             }
             openWsFile(targetFor(f, s.cfg, activeId || '', mvCfg.execMode))
           }}
         />
-        {deskEnabled && activeId ? <DeskCard sessionId={activeId} /> : null}
+        {/* 草稿态(activeId=null)也在场:伴随面开聊前就要有;不挂 key → 首条消息发出不重挂 */}
+        {deskEnabled ? <DeskCard sessionId={activeId ?? DESK_DRAFT_KEY} /> : null}
       </div>}
       </div>
       {deskEnabled && activeId && !childSelections[activeId] ? <AgentDesk sessionId={activeId} /> : null}

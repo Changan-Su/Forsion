@@ -1,0 +1,14 @@
+.quota-harness-stage { min-height: 100vh; display: grid; place-items: center; padding: 32px; box-sizing: border-box; background: var(--bg); }
+.quota-harness-chat { width: min(820px, 100%); height: min(560px, calc(100vh - 64px)); display: flex; flex-direction: row; min-width: 0; overflow: hidden; background: var(--bg); }
+.quota-harness-conversation { padding: 52px 56px 180px; font: 13px/1.65 var(--font-ui); color: var(--text-muted); }
+.quota-harness-bubble { width: fit-content; margin-left: auto; padding: 9px 13px; border-radius: var(--radius-md); background: var(--user-bg); color: var(--text); }
+.quota-harness-model { color: var(--text-muted); font: 11px var(--font-ui); }
+.quota-harness-toast { position: fixed; top: 20px; left: 50%; translate: -50% 0; padding: 7px 12px; border-radius: var(--radius-sm); background: var(--bg-card); color: var(--text); box-shadow: var(--card-shadow); font: 12px var(--font-ui); }
+@media (min-width: 521px) {
+  .quota-harness-chat { border: var(--border-width) solid var(--border); border-radius: var(--radius-lg); }
+}
+@media (max-width: 520px) {
+  .quota-harness-stage { padding: 0; }
+  .quota-harness-chat { width: 100%; height: 100vh; }
+  .quota-harness-conversation { padding-inline: 20px; }
+}

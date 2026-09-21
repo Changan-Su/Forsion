@@ -22,8 +22,7 @@ import { listSkins, listLanguages } from './theme/registry'
 import { readFont, writeFont, applyUiFonts, type FontSlot } from './uiFont'
 import { listFonts } from './fontPresets'
 import { getUiZoom, setUiZoom, resetUiZoom } from './uiZoom'
-import { isSmoothCaretOn, setSmoothCaretEnabled } from './smoothCaret'
-import { SMOOTH_CARET_KEY } from './types'
+import { isSmoothCaretOn, setSmoothCaret } from './smoothCaret'
 import { useCommandStore } from '@lcl/engine/commandRegistry'
 
 export interface UiActionResult {
@@ -128,14 +127,9 @@ export const UI_SETTINGS: Record<string, SettingSpec> = {
   },
   smooth_caret: {
     values: () => ['on', 'off'],
-    // ⚠️ setSmoothCaretEnabled 只动模块态与 DOM,**不落盘**(设置页是另外单独写的 key)。
-    //    少了这一行:视觉上开了、state() 读盘仍报 off、重启又变回去(Codex 评审 P2-8)。
-    //    这是本文件唯一一处 setItem —— 因为这一项的 setter 天生只做一半。
-    apply: (v) => {
-      const on = v === 'on'
-      try { localStorage.setItem(SMOOTH_CARET_KEY, on ? '1' : '0') } catch { /* private mode */ }
-      setSmoothCaretEnabled(on)
-    },
+    // setSmoothCaret = 写盘 + 应用 + 跨窗广播(原来这里自己补了一行 setItem:setSmoothCaretEnabled
+    // 只动模块态与 DOM,不落盘 → 视觉上开了、state() 读盘仍报 off、重启又变回去,Codex 评审 P2-8)。
+    apply: (v) => setSmoothCaret(v === 'on'),
     state: () => (isSmoothCaretOn() ? 'on' : 'off'),
   },
 }

@@ -302,6 +302,17 @@ describe('db schema', () => {
     // 两字段缺 → 仍是合法视图(旧文件 / 平铺表格)
     expect(parseDb(serializeDb({ ...SAMPLE, views: [{ id: 'v', name: 'x', type: 'table' }] })).ok).toBe(true)
   })
+  it('views[].fold(规则行折叠)往返无损;minutes 只收正数;旧文件缺 fold 照常', () => {
+    const db: DbFile = { ...SAMPLE, views: [{ id: 'vf', name: '折叠', type: 'table', fold: { by: ['c1'], timeCol: 'c5', minutes: 30 } }] }
+    const r = parseDb(serializeDb(db))
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.data.views?.[0].fold).toEqual({ by: ['c1'], timeCol: 'c5', minutes: 30 }) // zod strip 漏一处 = 菜单一配保存即丢
+      expect(serializeDb(r.data)).toBe(serializeDb(db))
+    }
+    expect(parseDb(JSON.stringify({ ...SAMPLE, views: [{ id: 'v', name: 'x', type: 'table', fold: { minutes: 0 } }] })).ok).toBe(false)
+    expect(parseDb(JSON.stringify({ ...SAMPLE, views: [{ id: 'v', name: 'x', type: 'table', fold: { by: 'c1' } }] })).ok).toBe(false)
+  })
   it('precision / unitPrefix / unitSuffix(数字显示格式)往返无损;precision 只收 0-6 的整数(zod strip 漏一处 = 用户配的格式保存即丢)', () => {
     const db: DbFile = {
       ...SAMPLE,

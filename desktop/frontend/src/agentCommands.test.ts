@@ -50,12 +50,12 @@ describe('set_ui_setting 的键在引擎与渲染端之间不许漂', () => {
 describe('渲染端设置表的安全纪律', () => {
   const src = readFileSync(RENDERER, 'utf-8')
 
-  it('只允许一处裸写 localStorage(smooth_caret 的具名例外),其余一律走 setter', () => {
-    // 纪律仍在:每项设置都有 setter 之外的副作用(applyTheme / applyUiFonts / dispatch 事件),
-    // 裸写 = 重启才生效。唯一例外是 setSmoothCaretEnabled —— 它自己只动模块态与 DOM,不落盘,
-    // 所以这一项必须由调用方补写。收窄成「只此一处且必须是这个 key」,而不是把规则删掉。
+  it('一处裸写 localStorage 都不许有,全部走 setter', () => {
+    // 纪律:每项设置都有 setter 之外的副作用(applyTheme / applyUiFonts / dispatch 事件 / 跨窗广播),
+    // 裸写 = 重启才生效、且别的窗口永远跟不上。smooth_caret 原来是具名例外(setSmoothCaretEnabled
+    // 只动模块态与 DOM,不落盘),2026-09-20 已收成 setSmoothCaret(写盘+应用+广播),例外随之取消。
     const hits = [...src.matchAll(/localStorage\.setItem\(([^,]+),/g)].map((m) => m[1].trim())
-    expect(hits, '新增裸写要么改走 setter,要么在这里具名放行并写清理由').toEqual(['SMOOTH_CARET_KEY'])
+    expect(hits, '新增裸写要么改走 setter,要么在这里具名放行并写清理由').toEqual([])
   })
 
   it('配色两轴不许把 custom 开给 agent —— 它骑的是模型看不见的残留种子色', () => {

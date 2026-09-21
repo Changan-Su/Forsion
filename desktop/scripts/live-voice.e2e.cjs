@@ -7,6 +7,8 @@
  * 第三幕:草稿里先手打几个字 → 语音只追加不自动发;再切到另一个已有会话 → 挂断。
  * 第四幕:回主页开口,起 run 拖 14s → 交接途中第二句到达,必须排队进同一个新会话(评审 r2 #2)。
  * 第五幕:空白新对话开着通话点开已有会话 → 挂断。第六幕:起 run 回 500 → 那句回到草稿、通话结束(评审 r3)。
+ * 开场先钉 L0:功能未完成,入口默认藏在开发者选项后面(localStorage forsion_tangu_live_voice),台架自己拨开。
+ * 第七/八幕:通话中关掉那个开关 —— 按钮与录音条当场撤走(L15),发送在途那条路上麦克风也必须真停(L16)。
  * 无人值守、不花模型额度;要 macOS + 本地模型 ~/.forsion-dev/models/sensevoice(软链进隔离家目录,只读)。
  *
  * 需先 npm run build。用法:npm run e2e:livevoice   截图落在输出目录(观感自查用)。
@@ -86,10 +88,41 @@ async function main() {
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
     await win.waitForTimeout(1200)
     await win.waitForTimeout(1500)
+    // 功能未完成(还没逐句朗读/打断),入口藏在 设置 → 开发者选项 后面:先钉「缺省不画」,再拨开关。
+    const beforeOptIn = await win.locator('.t2c-live-control').count().catch(() => 0)
+    check('L0 缺省不画「实时对话」按钮(藏在开发者选项后)', beforeOptIn === 0, `实得 ${beforeOptIn} 枚`)
+    // 拨开关走**真 UI**:开关画在独立的设置浮窗里、按钮画在主窗,跨窗同步(storage 事件 + 切回主窗的 focus)
+    // 正是这次改动唯一的新线。抄近路直接 setItem 等于把要验的那根线换成桩。
+    await win.evaluate(() => localStorage.setItem('forsion_tangu_dev_mode', '1')) // 连点版本号解锁由 active-window T5 盯着
+    await win.keyboard.press('Meta+Comma').catch(() => {})
+    const sp = await until(async () => {
+      for (const ctx of browser.contexts()) for (const pg of ctx.pages()) {
+        if (await pg.locator('.settings-main').count().catch(() => 0)) return pg
+      }
+      return null
+    }, 15_000, 400)
+    let toggled = false
+    if (sp) {
+      const nav = sp.locator('.settings-nav')
+      for (const label of ['开发者选项', 'Developer options']) {
+        const b = nav.getByRole('button', { name: label, exact: true }).first()
+        if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); await sp.waitForTimeout(600); break }
+      }
+      const row = sp.locator('.settings-main .field').filter({ hasText: /实时语音对话|Live voice conversation/ }).first()
+      const box = row.locator('input[type="checkbox"]').first()
+      if (await box.count().catch(() => 0)) { await box.check().catch(() => {}); toggled = true }
+      await sp.waitForTimeout(400)
+      const closed = sp.waitForEvent('close').catch(() => {})
+      await sp.locator('.settings-nav button:text-is("返回应用"), .settings-nav button:text-is("Back to app")').first().click({ timeout: 5000 }).catch(() => {})
+      await closed
+    }
+    check('L0b 设置 → 开发者选项里拨得动「实时语音对话」', toggled)
+    await win.waitForTimeout(1000)
+
     // 刻意从**主页**输入框开始(最自然的入口):第一句发出后会切到会话视图、Composer 换实例 —— 实时对话必须跟过去。
     const onHome = await win.locator('.t2c-live-control').count().catch(() => 0)
     const liveBtn = win.locator('.t2c-live-control').first()
-    check('L1 主页输入框出现「实时对话」按钮', onHome > 0 && await liveBtn.isVisible().catch(() => false))
+    check('L1 拨开关后主页输入框当场出现「实时对话」按钮(跨窗生效,不用重启)', onHome > 0 && await liveBtn.isVisible().catch(() => false))
     await shot(win, '1-idle')
     if (!(await liveBtn.isVisible().catch(() => false))) throw new Error('没有实时对话按钮,后面不跑')
 
@@ -202,6 +235,62 @@ async function main() {
       `草稿「${kept}」 ${JSON.stringify(after6)} runs+${stub.seen.runs.length - runsBefore6}`)
     stub.state.failRuns = false
     await shot(win, '6-failed-kept')
+
+    // ── 第七幕:通话进行中把开发者开关关掉 —— 按钮没了、麦克风也不许还开着 ──
+    await win.locator('.t2c-ta').first().fill('').catch(() => {})
+    await win.locator('.t2c-live-control').first().click()
+    const live7 = await until(() => win.locator('.t2c-voicebar').first().isVisible().catch(() => false), 5000)
+    await win.evaluate(() => {
+      localStorage.setItem('forsion_tangu_live_voice', '0')
+      window.dispatchEvent(new StorageEvent('storage', { key: 'forsion_tangu_live_voice', newValue: '0' }))
+    })
+    await win.waitForTimeout(1200)
+    const off7 = await win.evaluate(() => ({
+      btn: document.querySelectorAll('.t2c-live-control').length,
+      bar: !!document.querySelector('.t2c-voicebar'),
+    }))
+    check('L15 通话中关掉开关:按钮撤走、录音条收起', !!live7 && off7.btn === 0 && !off7.bar,
+      `开着时 bar=${!!live7} → ${JSON.stringify(off7)}`)
+    await shot(win, '7-gate-off')
+
+    // ── 第八幕:空白新对话里「发送在途」时关掉开关 —— 这条路会走交接槽(只暂停不停采集),麦克风必须真的停,
+    //    不许留到 HANDOFF_MS 超时(评审确认:开关关掉时全窗 owner 皆假,槽没人接得走,白开 5s)。
+    //    断言看 MediaStream 轨道本身,不看 DOM:DOM 那半 L15 已经钉过,这里要钉的是麦克风。
+    await win.evaluate(() => {
+      const orig = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices)
+      window.__liveStreams = []
+      window.__trackEndAt = null
+      navigator.mediaDevices.getUserMedia = async (c) => { const st = await orig(c); window.__liveStreams.push(st); return st }
+      // 采样轨道何时真停:交接槽那条路要等 HANDOFF_MS=5000 才 kill,直接停则是即刻 —— 只有时刻能分辨两者。
+      setInterval(() => {
+        const st = (window.__liveStreams || []).at(-1)
+        if (st && !window.__trackEndAt && st.getAudioTracks().every((t) => t.readyState === 'ended')) window.__trackEndAt = performance.now()
+      }, 100)
+      localStorage.setItem('forsion_tangu_live_voice', '1')
+      window.dispatchEvent(new StorageEvent('storage', { key: 'forsion_tangu_live_voice', newValue: '1' }))
+    })
+    await win.locator('.rb-home').first().click().catch(() => {})
+    await win.waitForTimeout(600)
+    await win.locator('text=新对话').first().click().catch(() => {}) // 空白新对话:它自己的 sessionId===null → handoffOnSend
+    await until(() => win.locator('.t2c-live-control').first().isVisible().catch(() => false), 10_000)
+    const runsBefore8 = stub.seen.runs.length
+    stub.state.runDelayMs = 12_000 // 第一句发送途中(promise 未 resolve)= 交接槽那条分支的触发条件
+    stub.script(REPLY)
+    await win.locator('.t2c-live-control').first().click()
+    const inFlight8 = await until(() => stub.seen.runs.length > runsBefore8, 40_000, 200)
+    await win.evaluate(() => {
+      window.__flipAt = performance.now()
+      localStorage.setItem('forsion_tangu_live_voice', '0')
+      window.dispatchEvent(new StorageEvent('storage', { key: 'forsion_tangu_live_voice', newValue: '0' }))
+    })
+    await win.waitForTimeout(6500) // > HANDOFF_MS=5000:交接槽那条路到这会儿也停了,靠「停在什么时刻」分辨
+    const t8 = await win.evaluate(() => ({ end: window.__trackEndAt, flip: window.__flipAt }))
+    const delay8 = t8.end == null ? null : Math.round(t8.end - t8.flip)
+    check('L16 在途时关掉开关:麦克风当场停(不是留到交接超时 5s)',
+      !!inFlight8 && delay8 != null && delay8 >= 0 && delay8 < 1500,
+      `在途=${!!inFlight8} 关开关后 ${delay8}ms 轨道停(负数=关之前就停了,说明这条路没复现)`)
+    stub.state.runDelayMs = 0
+    await shot(win, '8-gate-off-inflight')
   } catch (e) {
     console.error('e2e 异常:', e?.stack || e)
     results.push(false)

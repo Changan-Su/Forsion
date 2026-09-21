@@ -99,6 +99,9 @@ export interface DbView {
    *  (纯逻辑 db/tree.ts buildTree —— 判据与理由以那份文件头为准,别在这儿各写一份)。
    *  与 groupBy 互斥,树优先(渲染端;菜单里分组区会灰掉)。 */
   treeCol?: string
+  /** table 规则行折叠:同一折叠键的多行收成一条**汇总行**(数字求和、混合值列出内容),可展开回成员行。
+   *  只改呈现,绝不动 rows;与层级树互斥(树优先),可与属性分组叠加(组内折叠)。纯逻辑 db/foldRows.ts。 */
+  fold?: DbViewFold
   /** chart:图形(bar/line/donut);未知值渲染端回退 bar,不丢配置。 */
   chartKind?: string
   /** chart:聚合方式(count/sum/avg);缺 = count。 */
@@ -134,6 +137,16 @@ export interface DbView {
   form?: DbViewForm
   /** gantt(甘特视图,type='gantt'):横条的起止列与缩放;只读 v1(无拖拽改期)。 */
   gantt?: DbViewGantt
+}
+
+/** 规则行折叠配置(DbView.fold)。键指列 id;指向不存在的列渲染端一律忽略,by 与 timeCol 都落空 = 不折叠(不报错)。 */
+export interface DbViewFold {
+  /** 折叠键列:这些列的值**全部相同**的行才折到一起;缺/空 = 只按时间窗折。 */
+  by?: string[]
+  /** 时间列 id(date / calendarDate / created 等日期系列):给了就再按时间窗切 —— 同一窗口内的才折到一起。 */
+  timeCol?: string
+  /** 时间窗长度(分钟,对齐本地时钟:30 = 每小时的 :00 / :30);缺 = 30。 */
+  minutes?: number
 }
 
 /** 甘特视图配置(DbView.gantt)。键指列 id,只认 calendarDate 列;指向不存在/非 calendarDate 列的项渲染端一律回落(不报错)。 */
@@ -233,6 +246,12 @@ const dbViewSchema = z.object({
   groupHidden: z.array(z.string()).optional(),
   groupHideEmpty: z.boolean().optional(),
   treeCol: z.string().optional(),
+  // 规则行折叠(接口 DbViewFold;strip 陷阱同上)。minutes 只拒非正数,上限由读端 foldMinutesOf 夹。
+  fold: z.object({
+    by: z.array(z.string()).optional(),
+    timeCol: z.string().optional(),
+    minutes: z.number().positive().optional(),
+  }).optional(),
   chartKind: z.string().optional(),
   agg: z.string().optional(),
   valueCol: z.string().optional(),

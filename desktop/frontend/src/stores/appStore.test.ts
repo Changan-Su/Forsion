@@ -290,6 +290,12 @@ describe('appStore.reduceEvent', () => {
       thinkingRequested: 'high', thinkingEffective: 'medium',
     })
     expect(useApp.getState().ctxInfoBySession.s1.sections[0]).toEqual({ k: 'skills', tokens: 1200 })
+    // 触发线(设置里的自动压缩百分比算进去之后的值)跟着存;关了 LLM 压缩 / 老引擎不发 → 不存,弹层那行不显示
+    expect(useApp.getState().ctxInfoBySession.s1.compactAt).toBeUndefined()
+    emit('status', { phase: 'context_info', ctxWindow: 1_000_000, ctxWindowSource: 'family', compactAt: 300_000, compactionEnabled: true })
+    expect(useApp.getState().ctxInfoBySession.s1.compactAt).toBe(300_000)
+    emit('status', { phase: 'context_info', ctxWindow: 1_000_000, ctxWindowSource: 'family', compactAt: 300_000, compactionEnabled: false })
+    expect(useApp.getState().ctxInfoBySession.s1.compactAt).toBeUndefined()
 
     // 自动压缩提示:机械档带 savedChars;compacting 阶段不落消息;forced+fallback 用机械措辞不谎称摘要
     emit('status', { phase: 'compacting', forced: true, iteration: 2 })
@@ -310,6 +316,15 @@ describe('appStore.reduceEvent', () => {
     emit('status', { phase: 'compacted', forced: true, reason: 'threshold', persisted: false, iteration: 6 })
     msgs = useApp.getState().messagesBySession.s1
     expect(msgs[msgs.length - 1].content).toBe('ctx.compacted.forced')
+
+    // 压缩后的占用当场落到进度环(09-20:此前要等压缩后那次模型调用跑完才来 usage,环停在压缩前);没变小 → 不动;下一条 usage 用实测值校正
+    emit('usage', { prompt: 36_956, total: 100 })
+    emit('status', { phase: 'compaction_budget', iteration: 6, beforeTokens: 36_956, afterTokens: 36_990, changed: false })
+    expect(useApp.getState().usageBySession.s1.ctx).toBe(36_956)
+    emit('status', { phase: 'compaction_budget', iteration: 6, beforeTokens: 36_956, afterTokens: 13_379, changed: true })
+    expect(useApp.getState().usageBySession.s1).toMatchObject({ ctx: 13_379, live: 100 })
+    emit('usage', { prompt: 12_722, total: 200 })
+    expect(useApp.getState().usageBySession.s1.ctx).toBe(12_722)
   })
 
   it('done 与 error 正确收尾并过期未决操作', () => {
@@ -582,6 +597,17 @@ describe('appStore.compact 进度', () => {
   afterEach(() => vi.useRealTimers())
 
   const pct = () => useApp.getState().compactingBySession.s1
+
+  it('压缩成功 → 进度环就地换成引擎报的压缩后占用(手动压缩不产生 usage 事件,不改就一直停在压缩前的值);跳过 / 没报数 → 不动', async () => {
+    useApp.setState({ usageBySession: { s1: { ctx: 387_668, base: 1000, live: 0 } } })
+    compactMock.mockResolvedValue({ ok: false, reason: 'nothing to compact' })
+    await useApp.getState().compact('s1')
+    expect(useApp.getState().usageBySession.s1.ctx).toBe(387_668)
+    await vi.advanceTimersByTimeAsync(1000)
+    compactMock.mockResolvedValue({ ok: true, summarizedCount: 12, contextTokens: 18_500 })
+    await useApp.getState().compact('s1')
+    expect(useApp.getState().usageBySession.s1).toMatchObject({ ctx: 18_500, base: 1000 })
+  })
 
   it('0 起步 → 缓动但永不自行到 100 → 完成冲 100 → 停一拍后撤', async () => {
     let finish: (v: unknown) => void = () => {}

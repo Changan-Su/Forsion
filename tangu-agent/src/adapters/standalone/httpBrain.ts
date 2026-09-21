@@ -9,6 +9,7 @@ import type {
   StreamOpts,
   StreamResult,
 } from '../../seams/cloudBrain.js';
+import { imageMimeOf } from '../../seams/cloudBrain.js';
 import {
   AMADEUS_MAX_FILE_BYTES,
   AgentFileConflictError,
@@ -388,30 +389,45 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       listModelsForProject: async (projectId: string) => {
         try {
           const r = await getJson<any>(`/api/brain/models?projectId=${encodeURIComponent(projectId)}`);
-          if (Array.isArray(r)) return { models: r, defaultModelId: null, backgroundModelId: null, imageModelId: null, visionModelId: null };
+          if (Array.isArray(r)) return { models: r, defaultModelId: null, backgroundModelId: null, imageModelId: null, visionModelId: null, reachable: true };
           return {
             models: Array.isArray(r?.models) ? r.models : [],
             defaultModelId: r?.defaultModelId ?? null,
             backgroundModelId: r?.backgroundModelId ?? null,
             imageModelId: r?.imageModelId ?? null,
             visionModelId: r?.visionModelId ?? null,
+            reachable: true,
           };
         } catch {
-          return { models: [], defaultModelId: null, backgroundModelId: null, imageModelId: null, visionModelId: null };
+          // 降级成空列表是为了不让 TUI 抛;reachable:false 让调用方知道「空 ≠ 没配」(401/断网也长这样)。
+          return { models: [], defaultModelId: null, backgroundModelId: null, imageModelId: null, visionModelId: null, reachable: false };
         }
       },
     },
     images: {
+      edit: async (req) => {
+        const r = await postJson<{ data?: Array<{ b64_json?: string }> }>(
+          '/v1/images/edits',
+          { model: req.model, prompt: req.prompt, image: req.images.map(i => `data:${i.mime};base64,${i.b64}`),
+            size: req.size || '1:1', n: req.n || 1, transparent_background: !!req.transparentBackground, output_format: 'png',
+            ...(req.quality ? { quality: req.quality } : {}) },
+          req.signal, IMG_TIMEOUT_MS,
+        );
+        const images = (r.data || []).filter(d => d.b64_json).map(d => ({ b64: d.b64_json!, mime: imageMimeOf(d.b64_json!) }));
+        if (!images.length) throw new Error('Image edit returned no images');
+        return { images };
+      },
       // 托管生图:复用云端现成 /v1/images/generations(optionalAuth 接受 bearer;配额/计费在云端)。
       // 尺寸传规范值('1:1' 等),云端自行换算成像素;返回 b64_json。
       generate: async (req) => {
         const r = await postJson<{ data?: Array<{ b64_json?: string }> }>(
           '/v1/images/generations',
-          { model: req.model, prompt: req.prompt, size: req.size || '1:1', n: req.n || 1, transparent_background: !!req.transparentBackground, output_format: 'png' },
+          { model: req.model, prompt: req.prompt, size: req.size || '1:1', n: req.n || 1, transparent_background: !!req.transparentBackground, output_format: 'png',
+            ...(req.quality ? { quality: req.quality } : {}) },
           req.signal,
           IMG_TIMEOUT_MS, // 生图比 LLM 慢:窗口下限单独放宽,不受通用 60s 基准截断
         );
-        const images = (r.data || []).filter((d) => d.b64_json).map((d) => ({ b64: d.b64_json as string, mime: 'image/png' }));
+        const images = (r.data || []).filter((d) => d.b64_json).map((d) => ({ b64: d.b64_json as string, mime: imageMimeOf(d.b64_json as string) }));
         if (!images.length) throw new Error('云端未返回图片');
         return { images };
       },

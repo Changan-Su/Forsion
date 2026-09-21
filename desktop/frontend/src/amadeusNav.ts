@@ -41,7 +41,7 @@ registerMessages({
 
 interface PanelLike { id: string; params?: Record<string, unknown> }
 
-export async function openNote(path: string, opts?: { newTab?: boolean }): Promise<void> {
+export async function openNote(path: string, opts?: { newTab?: boolean; reuseKey?: string; activate?: boolean }): Promise<void> {
   // 画板文件绝不进笔记编辑器(compiler 会把插件载荷改写成块 = 在 Obsidian 那边毁档)→ 一律改道白板视图。
   if (isDrawingPath(path)) {
     openDrawing(path)
@@ -62,6 +62,26 @@ export async function openNote(path: string, opts?: { newTab?: boolean }): Promi
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
   const editors = api?.panels.filter((p) => p.params?.__type === 'amadeus-editor') ?? []
+  // Space 声明的文档伴随栏:插件只给稳定 reuseKey 与 notePath,宿主负责找到真 Amadeus leaf 并原地换文档。
+  // activate:false 是联动的关键 —— 点视频/收藏条目时文档跟着换,焦点仍留在刚操作的来源面板。
+  if (opts?.reuseKey) {
+    const keyed = editors.find((p) => p.params?.reuseKey === opts.reuseKey)
+    if (keyed) {
+      ws.leafById(keyed.id)?.setParams({ notePath: path, reuseKey: opts.reuseKey })
+      if (opts.activate !== false) {
+        ws.activateLeaf(keyed.id)
+        await waitForActive(path)
+      }
+      return
+    }
+    // 配方被用户改掉 / 老保存布局里没有伴随栏:另开原生编辑器而不是把当前插件 leaf 顶掉。
+    // 若调用方要求后台联动,创建后恢复先前焦点;新 leaf 仍会按 notePath 自行加载。
+    const before = ws.getActiveLeaf()
+    ws.openView('amadeus-editor', { notePath: path, reuseKey: opts.reuseKey }, 'main', { newTab: true })
+    if (opts.activate === false && before) ws.activateLeaf(before.id)
+    else await waitForActive(path)
+    return
+  }
   const hit = editors.find((p) => p.params?.notePath === path)
   // ⚠️ newTab 要**先于**「已开着就激活」判定:⌘/Ctrl 点击的语义是「再开一个标签」,
   //    目标恰好已经开着时如果只是切过去,用户按了修饰键却什么新东西都没得到(Codex 评审实证)。

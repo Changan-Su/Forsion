@@ -10,9 +10,11 @@ import { track } from '../achievements/store'
 import { applyTheme, removeInjectedThemeStyles, syncWindowMaterial } from '../theme/loader'
 import {
   resolveInitialLang, resolveInitialSkin, resolveInitialBg, resolveInitialEffectiveMode, resolveInitialModePref, systemMode,
-  forcedSchemeForLanguage, listSkins, listLanguages, hasLanguage, mergeDiskThemes, clearDiskThemes,
+  forcedSchemeForLanguage, listSkins, listLanguages, hasLanguage, hasSkin, mergeDiskThemes, clearDiskThemes,
   DEFAULT_SEED, DEFAULT_LANG,
 } from '../theme/registry'
+import type { ThemeAxes, UiSyncPayload } from '../../../shared/uiSync'
+import { applyPrefs } from '../uiPrefsApply'
 
 type Mode = 'light' | 'dark'
 type ModePref = 'light' | 'dark' | 'system'
@@ -87,6 +89,8 @@ interface ThemeState {
   initThemes(persistedLang?: string | null): Promise<void>
   /** 用户拖入/编辑主题后重扫并重应用。 */
   reloadThemes(): Promise<void>
+  /** 收到别的窗口(通常是设置浮窗)的界面变更 → 校验后原样重放;**不回广播**。 */
+  syncFromWindow(payload: UiSyncPayload): void
 }
 
 function readSeed(): string {
@@ -112,17 +116,64 @@ export const useTheme = create<ThemeState>((set, get) => {
   // 纯「应用视觉 + 派生状态」:userPref 原样保留在 state;主题锁定 colorScheme 则**落地明暗**取强制值。
   // 只写派生的 forced_scheme hint(给 index.html 首屏脚本防闪);**不写 forsion_theme_pref**——
   // 那是用户偏好,仅由 setModePref/setTheme 经 persistPref 写(见 Medium-1)。
-  const apply = (lang: string, skin: string, bg: string, userPref: ModePref, seed: string): void => {
+  // customBg 只在跨窗重放时显式给(发方的值);本窗自己的动作一律缺省 → loader 回落 localStorage。
+  const apply = (lang: string, skin: string, bg: string, userPref: ModePref, seed: string, customBg?: string): void => {
     const forced = langForcedScheme(lang)
     const eff = forced ?? userPref
     const mode: Mode = eff === 'system' ? systemMode() : eff
-    applyTheme(lang, skin, bg, mode, { customColor: skin === 'custom' ? seed : undefined })
+    applyTheme(lang, skin, bg, mode, { customColor: skin === 'custom' ? seed : undefined, customBg })
     try {
       if (forced) localStorage.setItem('forsion_theme_forced_scheme', forced)
       else localStorage.removeItem('forsion_theme_forced_scheme')
     } catch { /* private mode */ }
     set({ lang, skin, bg, mode, modePref: userPref, modeLocked: forced !== undefined, seed })
   }
+  /**
+   * 把本窗的主题态吼给其余窗口。**只在用户显式动作里调**(与 persistPref / track 同一条线):
+   * 启动 / 磁盘主题重载 / 跟随系统明暗都是每个窗口各自会做的事,广播只会互相盖。
+   * 收方走 syncFromWindow(不回吼),故不会来回弹。web/移动无 host → 天然 no-op。
+   * 字体/缩放/光标/语言那半走 uiPrefsBus.broadcastPrefs(挂在各自的 setter 里)。
+   */
+  const notify = (): void => {
+    const s = get()
+    try {
+      window.tangu?.broadcastUi?.({ theme: { lang: s.lang, skin: s.skin, bg: s.bg, modePref: s.modePref,
+        seed: s.seed, bgSeed: s.bgSeed, glass: s.glass, flat: s.flat } })
+    } catch { /* 无 preload */ }
+  }
+  // glass/flat 只是 <html> 上的属性;抽出来给「本窗动作」和「跨窗重放」共用(后者不能带 notify)。
+  const applyGlass = (on: boolean): void => {
+    try { document.documentElement.dataset.glass = on ? 'on' : 'off' } catch { /* ignore */ }
+    try { localStorage.setItem('forsion_glass', on ? 'on' : 'off') } catch { /* ignore */ }
+    syncWindowMaterial()
+    set({ glass: on })
+  }
+  const applyFlat = (on: boolean): void => {
+    try { document.documentElement.dataset.flat = on ? '1' : '0' } catch { /* ignore */ }
+    try { localStorage.setItem('forsion_theme_flat', on ? '1' : '0') } catch { /* ignore */ }
+    set({ flat: on })
+  }
+  /** 重放别处的外观态。载荷已在主进程重建过八个字段,这里再按**本窗 registry** 查一遍(轴不认识就保留现状)。
+   *  明暗只同步**偏好**,落地值各窗自解析(system 要按本机系统值,主题强制优先)。持久化不用管——
+   *  发方已写进同源 localStorage。也不走 View Transition:那是本窗用户动作的观感,不是被动跟随的。 */
+  const replayFromWindow = (p: ThemeAxes): void => {
+    const s = get()
+    const lang = typeof p?.lang === 'string' && hasLanguage(p.lang) ? p.lang : s.lang
+    const skin = typeof p?.skin === 'string' && hasSkin(p.skin) ? p.skin : s.skin
+    const bg = typeof p?.bg === 'string' && hasSkin(p.bg) ? p.bg : s.bg
+    const pref: ModePref = p?.modePref === 'light' || p?.modePref === 'dark' || p?.modePref === 'system' ? p.modePref : s.modePref
+    // 空串 seed = 主进程判定非法后归零 → 保留本窗现值;bgSeed 的空串则是真语义(跟随主题色)。
+    const seed = typeof p?.seed === 'string' && p.seed ? p.seed : s.seed
+    const bgSeed = typeof p?.bgSeed === 'string' ? p.bgSeed : s.bgSeed
+    set({ bgSeed })
+    apply(lang, skin, bg, pref, seed, bgSeed)
+    if (typeof p?.glass === 'boolean') applyGlass(p.glass)
+    if (typeof p?.flat === 'boolean') applyFlat(p.flat)
+  }
+  // 设置面板自 2026-09-20 起住在独立浮窗(独立渲染进程 = 独立 store 与 DOM):没有这条订阅,
+  // 在设置里换肤只有设置窗自己变色(2.11.1 实报)。主进程只转给其余窗口,故收到的必是别处的改动。
+  // 订阅落在 store 工厂里 = 每个窗口开一次,三端自动继承(不碰 main.tsx / Root.tsx)。
+  try { window.tangu?.onUiChanged?.((payload) => get().syncFromWindow(payload)) } catch { /* 无 preload */ }
   // 偏好=system(或被主题强制 system)时,跟随 OS 明暗实时切换。监听器只装一次(store 工厂只跑一次)。
   try {
     const mq = window.matchMedia('(prefers-color-scheme: dark)')
@@ -154,26 +205,27 @@ export const useTheme = create<ThemeState>((set, get) => {
     glass: readGlass(),
     flat: readFlat(),
     themesVersion: 0,
-    setLang: (lang) => apply(lang, get().skin, get().bg, get().modePref, get().seed),
+    setLang: (lang) => { apply(lang, get().skin, get().bg, get().modePref, get().seed); notify() },
     // 成就打点只在用户显式换主题/配色的动作里(setTheme/setSkin/setBg);严禁挪进 apply——启动初始化也走 apply 会误计。
-    setSkin: (skin) => { track('theme.change'); apply(get().lang, skin, get().bg, get().modePref, get().seed) },
-    setBg: (bg) => { track('theme.change'); apply(get().lang, get().skin, bg, get().modePref, get().seed) },
+    setSkin: (skin) => { track('theme.change'); apply(get().lang, skin, get().bg, get().modePref, get().seed); notify() },
+    setBg: (bg) => { track('theme.change'); apply(get().lang, get().skin, bg, get().modePref, get().seed); notify() },
     // 主题锁定 colorScheme 时,用户改不动明暗(setModePref 忽略);过渡动画仅在真正切换时放。
     // 用户显式动作 → persistPref 写入偏好(apply 不写,见 Medium-1)。
     setModePref: (pref) => {
       if (langForcedScheme(get().lang)) return Promise.resolve()
       if (pref === get().modePref) return Promise.resolve()
       persistPref(pref)
-      return withModeTransition(() => apply(get().lang, get().skin, get().bg, pref, get().seed))
+      return withModeTransition(() => { apply(get().lang, get().skin, get().bg, pref, get().seed); notify() })
     },
-    setTheme: (lang, skin, bg, pref) => { track('theme.change'); persistPref(pref); apply(lang, skin, bg, pref, get().seed) },
-    setSeed: (seed) => apply(get().lang, 'custom', get().bg, get().modePref, seed),
+    setTheme: (lang, skin, bg, pref) => { track('theme.change'); persistPref(pref); apply(lang, skin, bg, pref, get().seed); notify() },
+    setSeed: (seed) => { apply(get().lang, 'custom', get().bg, get().modePref, seed); notify() },
     // 只更新 seed 值 + 持久化(若当前是 custom 则即时重应用);不强行切到 custom——对齐 App.tsx onSeedChange。
     setSeedValue: (seed) => {
       try { localStorage.setItem('forsion_theme_seed', seed) } catch { /* ignore */ }
       set({ seed })
       // 背景轴为 custom 且未单独设背景色时,背景「跟随主题色」—— 故换 seed 也要重跑背景一侧。
       if (get().skin === 'custom') applyTheme(get().lang, 'custom', get().bg, get().mode, { customColor: seed })
+      notify()
     },
     setBgSeedValue: (bg) => {
       set({ bgSeed: bg })
@@ -185,18 +237,10 @@ export const useTheme = create<ThemeState>((set, get) => {
           else localStorage.removeItem('forsion_theme_bg_seed')
         } catch { /* ignore */ }
       }
+      notify()
     },
-    setGlass: (on) => {
-      try { document.documentElement.dataset.glass = on ? 'on' : 'off' } catch { /* ignore */ }
-      try { localStorage.setItem('forsion_glass', on ? 'on' : 'off') } catch { /* ignore */ }
-      syncWindowMaterial()
-      set({ glass: on })
-    },
-    setFlat: (on) => {
-      try { document.documentElement.dataset.flat = on ? '1' : '0' } catch { /* ignore */ }
-      try { localStorage.setItem('forsion_theme_flat', on ? '1' : '0') } catch { /* ignore */ }
-      set({ flat: on })
-    },
+    setGlass: (on) => { applyGlass(on); notify() },
+    setFlat: (on) => { applyFlat(on); notify() },
     // 快捷明暗(ribbon/命令面板/插件):主题锁定时静默无效;否则翻到当前落地明暗的反面(显式覆盖 system)。
     toggleMode: () => { if (get().modeLocked) return Promise.resolve(); return get().setModePref(get().mode === 'dark' ? 'light' : 'dark') },
     cycleSkin: () => {
@@ -228,6 +272,23 @@ export const useTheme = create<ThemeState>((set, get) => {
       // 同样走 apply:用户编辑了 theme.json 的 colorScheme 后重载即生效。
       apply(target, get().skin, get().bg, get().modePref, get().seed)
       set({ themesVersion: get().themesVersion + 1 })
+      // 不 notify:别的窗口的 registry 里没有刚被编辑的磁盘主题,重放只会被 hasLanguage 回落成默认。
+    },
+    syncFromWindow: (payload) => {
+      // 字体 / 缩放 / 丝滑光标 / 界面语言 / 主题旋钮那半:与主题轴同一条广播,各自的 applier 重放。
+      applyPrefs(payload?.prefs)
+      const p = payload?.theme
+      if (!p) return
+      // 磁盘主题可能是**别的窗口刚装上 / 刚编辑**的,本窗 registry 里还没有它:直接重放会被 hasLanguage
+      // 判为非法而保留现状 —— 症状与本次修的 bug 一模一样(只有设置窗变色)。先重扫一遍磁盘再重放。
+      if (typeof p.lang === 'string' && !hasLanguage(p.lang)) {
+        void fetchDiskThemes().then((list) => {
+          if (list.length) { mergeDiskThemes(list); set({ themesVersion: get().themesVersion + 1 }) }
+          replayFromWindow(p)
+        })
+        return
+      }
+      replayFromWindow(p)
     },
   }
 })

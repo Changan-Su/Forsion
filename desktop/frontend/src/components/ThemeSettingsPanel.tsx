@@ -4,6 +4,7 @@ import React, { useState } from 'react'
 import { RotateCcw } from 'lucide-react'
 import type { ThemeEntry, ThemeSetting } from '../theme/manifest'
 import { applyThemeSettings, readRaw, writeRaw, resetAll, usableSettings } from '../theme/themeSettings'
+import { broadcastPrefs } from '../uiPrefsBus'
 import { useI18n } from '../i18n'
 
 const Row: React.FC<{ themeId: string; def: ThemeSetting; value: string; onChange: (v: string) => void }> = ({
@@ -49,11 +50,13 @@ export const ThemeSettingsPanel: React.FC<{ entry: ThemeEntry }> = ({ entry }) =
     writeRaw(themeId, def, raw)
     setVals((s) => ({ ...s, [def.key]: raw }))
     applyThemeSettings(entry)
+    broadcastPrefs() // 设置住在独立浮窗:不吼一嗓子,主窗的这套变量要重启才跟上
   }
   const reset = (): void => {
     resetAll(themeId, defs)
     setVals(Object.fromEntries(defs.map((d) => [d.key, String(d.default)])))
     applyThemeSettings(entry)
+    broadcastPrefs() // ⚠ 重置 = 删键,收方只覆盖写进来的键 → 那边要下次启动才回默认(见 uiPrefsApply)
   }
 
   return (

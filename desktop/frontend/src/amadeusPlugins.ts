@@ -13,7 +13,7 @@ import { addCommand, removeCommand } from '@lcl/engine'
 import { openSearchView } from './amadeusCommands'
 import { syncPluginViews } from './pluginViews'
 import { installPluginStatusBridge } from './pluginStatusBridge'
-import { nudgeOnboardingOnce } from './stores/pluginOnboardingStore'
+import { evaluateAndNudge } from './stores/pluginOnboardingStore'
 import { installAmadeusAutomationBridge } from './amadeusAutomation'
 
 let installed = false
@@ -29,7 +29,7 @@ export function installAmadeusPlugins(): void {
   window.addEventListener('storage', (event) => {
     if (event.key !== 'amadeus.plugins.disabled' && event.key !== null) return
     usePluginStore.getState().syncDisabledPreferences()
-    void import('./userSpaces').then((m) => m.loadUserSpaces())
+    void import('./userSpaces').then(async (m) => { await m.loadUserSpaces(); m.settleAsyncStartupSpace() })
   })
   const store = usePluginStore.getState()
   store.init(amadeusAvailable() ? [calloutBlocks, wordCount] : [])
@@ -39,10 +39,11 @@ export function installAmadeusPlugins(): void {
     // 补跑一次:装了带 Space 的插件,ribbon 顶部(Space 区)末尾即自动出现,无需进设置页或重启。
     // 动态 import:userSpaces → spaces.tsx 在模块顶层读 window,静态引会把它拖进 Composer2 的
     // node 环境单测(ReferenceError: window is not defined)。这里只在真装载完时才需要它。
-    void import('./userSpaces').then((m) => m.loadUserSpaces())
-    // 启动期自动激活的插件不弹就绪卡(不伏击),待引导的只投一次 Inbox 提醒;徽标常驻设置页。
+    void import('./userSpaces').then(async (m) => { await m.loadUserSpaces(); m.settleAsyncStartupSpace() })
+    // 启动期自动激活的插件不弹检查卡(不伏击):只实测本地两类前置(设置 / 授权),确有未满足才投一次 Inbox;
+    // 徽标常驻设置页。check 类(可能打远端)启动期不跑,见 pluginOnboardingStore 文件头。
     const s = usePluginStore.getState()
-    for (const p of s.plugins) if (s.activeIds.includes(p.id)) nudgeOnboardingOnce(p)
+    for (const p of s.plugins) if (s.activeIds.includes(p.id)) void evaluateAndNudge(p)
   })
 
   // 插件 commands → engine 命令面板(**全局可见**,2026-07-18 放开——插件视图可装进任意 Space,

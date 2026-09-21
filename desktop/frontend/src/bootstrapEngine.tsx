@@ -16,7 +16,7 @@ import { findSupported, openFindBar } from './findInPage'
 import { useRecentViews } from './recentViews'
 import { planChatRestore, planSpaceSwitch } from './sessionOpenPlan'
 import { registerSpaces, LAST_EXIT_SPACE, startupSpacePref, resolveStartupTarget } from './spaces'
-import { loadUserSpaces, saveCurrentAsSpace, createBlankSpace } from './userSpaces'
+import { loadUserSpaces, settleAsyncStartupSpace, saveCurrentAsSpace, createBlankSpace } from './userSpaces'
 import { installAmadeusPlugins } from './amadeusPlugins'
 import { installTanguProbe } from './tanguProbe'
 import { installBuiltins } from './builtins'
@@ -35,13 +35,10 @@ import { INBOX_WORKSPACE_MODE } from './views/workspaceMode'
 import { WsFileView } from './views/WsFileView'
 import { CodeStudioView } from './views/CodeStudioView'
 import { ChangelogView } from './views/ChangelogView'
-import { setMobileUiCommand, MOBILE_UI_KEY } from './mobileUiCommand'
 import { initUiZoom } from './uiZoom'
-import { setActivityViewCommand, ACTIVITY_VIEW_KEY } from './activityViewCommand'
-import { setActiveWindowCommand } from './activeWindowCommand'
-import { isSmoothCaretOn, setSmoothCaretEnabled } from './smoothCaret'
+import { syncDevCommands } from './devCommands'
+import { isSmoothCaretOn, setSmoothCaret } from './smoothCaret'
 import { matchFileType, fileTypeBaseName } from './amadeus/plugins/pluginStore'
-import { SMOOTH_CARET_KEY } from './types'
 import { ActivityLogView } from './views/ActivityLogView'
 import { ActiveWindowView } from './views/ActiveWindowView'
 import { ActivityDashboardCard, InboxDashboardCard } from './views/DashboardCompactViews'
@@ -195,23 +192,7 @@ export function installEngine(): void {
   //  · 上次退出的 Space:布局键里本来就是它的现场(tryRestoreLayout 已吃下),只是 registerSpaces() 把
   //    活动 id 归一成了产品默认 → **冷**定位回去(setActiveSpace 会把这份现场 saveNamed 进产品默认的槽
   //    = 归档到别人名下),顺手补该 Space 的侧栏默认/可拖宽画像。
-  if (window.tangu?.spacesList) void loadUserSpaces().then(() => {
-    if (windowKind() !== 'main' || UI_MODE === 'mobile') return
-    const pref = startupSpacePref()
-    const sp = useSpaceStore.getState()
-    const want = resolveStartupTarget(BOOT_ACTIVE_SPACE_ID)
-    if (sp.activeSpaceId === want || !sp.spaces.some((s) => s.id === want)) return // 已是它 / 仍未注册(已删)→ 不动
-    if (pref === LAST_EXIT_SPACE) {
-      setActiveSpaceCold(want)
-      const space = getActiveSpace()
-      if (space) {
-        ws().setSidebarDefaults(space.sidebarDefaults)
-        ws().setSideProfile(space.id, space.resizableSides ?? {}, space.sideDefaultScale)
-      }
-      return
-    }
-    setActiveSpace(want)
-  })
+  if (window.tangu?.spacesList) void loadUserSpaces().then(settleAsyncStartupSpace)
 
   // 「当前会话」按 Space 分账(2026-08-23):切 Space 时把老 Space 那条存进账本、还原新 Space 上次那条。
   // 不分账的话所有跟随档 chat leaf 共用一个 activeId —— Tangu 主 tab 开的会话会原样出现在 Amadeus 侧栏
@@ -406,9 +387,7 @@ export function installEngine(): void {
   // ⚠️别与上一条混:theme-lang = 主题的「语言层」(genesis/lovable/soft),这条才是界面中英文。
   addCommand({ id: 'toggle-locale', icon: Languages, title: () => app().tr('locale.toggleTitle'), keywords: 'locale language i18n 语言 中英文 chinese english', run: () => cycleLocale() })
   addCommand({ id: 'toggle-smooth-caret', title: () => app().tr('command.toggleSmoothCaret'), keywords: 'smooth caret cursor 光标 丝滑 word', run: () => {
-    const on = !isSmoothCaretOn()
-    try { localStorage.setItem(SMOOTH_CARET_KEY, on ? '1' : '0') } catch { /* ignore */ }
-    setSmoothCaretEnabled(on)
+    setSmoothCaret(!isSmoothCaretOn())
   } })
   if (hasNativeFeature('tangu')) addCommand({ id: 'split-right', title: () => app().tr('command.splitRight'), keywords: 'split 分屏', hotkey: 'mod+\\', run: splitChat })
   // per-tab 前进/后退(Ctrl/⌘+{ 与 }):只走当前活动主 leaf 的历史栈;与主区左上角箭头同源。
@@ -544,13 +523,9 @@ export function installEngine(): void {
     const coarse = ((): boolean => { try { return window.matchMedia('(pointer: coarse) and (max-width: 820px)').matches } catch { return false } })()
     initUiZoom(w.tangu && !w.tangu.mobile ? 1 : coarse ? 1.15 : w.tangu?.mobile ? 1 : 1.1)
   }
-  // 开发者选项:移动端 UI 预览命令(开关持久化在 MOBILE_UI_KEY;已在移动模式则强制保留切回入口)。
-  try { setMobileUiCommand(localStorage.getItem(MOBILE_UI_KEY) === '1') } catch { /* ignore */ }
-  // 开发者选项:活动日志实时视图命令(同款模式)。
-  try { setActivityViewCommand(localStorage.getItem(ACTIVITY_VIEW_KEY) === '1') } catch { /* ignore */ }
-  // 开发者选项:前台窗口采样调试面板命令。开关真源在主进程配置(不是 localStorage),故异步读一次;
-  // window.tangu 缺位(web/mobile 无 host 进程)→ 整个能力不存在,命令自然不注册。
-  void window.tangu?.getConfig?.().then((c) => setActiveWindowCommand(c.activeWindowEnabled === true)).catch(() => {})
+  // 开发者选项那三个 ⌘K 入口:真源在 localStorage × 主进程 config,单源重算见 devCommands.ts
+  // (设置浮窗里拨开关时会请主窗再跑一次这个函数 —— 命令注册表每个渲染进程各一份)。
+  syncDevCommands()
 
   // forsion:// deep link(仅桌面主窗;内部自门控 window.tangu?.onDeepLink,web/mobile 各有通道)。
   installDeepLinks()

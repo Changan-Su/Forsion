@@ -25,6 +25,7 @@ import { calendarAvailable, installCalendarSpace, installCalendarViews, removeCa
 import { museAvailable, installMuseSpace, installMuseViews, removeMuseSpace } from './muse'
 
 import { homepageAvailable, installHomepageSpace, installHomepageViews, removeHomepageSpace } from './homepage'
+import { imageStudioAvailable, installImageStudioSpace, installImageStudioViews, removeImageStudioSpace } from './imageStudio'
 
 // 懒载:xterm(约 300KB)只在真开终端时才解析;顺带让这个模块能被 node 环境的单测导入
 // (xterm 的 UMD 包在模块顶层就摸 `self`)。
@@ -90,6 +91,11 @@ interface BuiltinDef {
 }
 
 export const BUILTINS: BuiltinDef[] = [
+  {
+    id: 'image-studio', types: ['image-studio', 'image-studio-chat', 'image-studio-assets', 'image-studio-inspector'],
+    name: () => tr('imageStudio.title'), description: () => tr('imageStudio.desc'), available: imageStudioAvailable,
+    install: installImageStudioViews, installSpace: installImageStudioSpace, removeSpace: removeImageStudioSpace,
+  },
   {
     id: 'browser',
     types: ['browser'],

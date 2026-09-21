@@ -15,16 +15,20 @@ import { useI18n } from '../i18n'
 import { TierBadge } from './TierBadge'
 import { track } from '../achievements/store'
 import { AccountSwitcher } from './AccountSwitcher'
+import { publishAccountQuota } from '../services/accountQuota'
 
 /** /api/token-quota/my 透传里本菜单消费的字段(percent 是「已用」百分比,展示用 100-x)。 */
 interface QuotaJson {
   dailyLimit: number
+  dailyRemaining?: number
   dailyPercent: number
   weeklyLimit: number
+  weeklyRemaining?: number
   weeklyPercent: number
   weeklyResetAt?: string
   resetCards?: number
   resetCardsWeekly?: number
+  pointsAutoDeduct?: boolean
 }
 
 /** 重置卡两种粒度:全额(日+周)/ 仅周,与 server reset-card/use 的 type 一致。 */
@@ -152,7 +156,11 @@ export const AccountCard: React.FC<{
     void window.tangu?.accountQuota?.()
       .then((res) => {
         if (request !== quotaRequest.current) return
-        if (res?.status === 200 && res.json) setQuota(res.json as QuotaJson); else setQuotaErr(true)
+        if (res?.status === 200 && res.json) {
+          const next = res.json as QuotaJson
+          setQuota(next)
+          publishAccountQuota(next)
+        } else setQuotaErr(true)
       })
       .catch(() => { if (request === quotaRequest.current) setQuotaErr(true) })
   }
@@ -180,11 +188,13 @@ export const AccountCard: React.FC<{
       const r = await window.tangu?.accountUseResetCard?.(scope)
       if (request !== quotaRequest.current) return
       if (r?.status === 200 && r.json?.success) {
-        setQuota({
+        const next = {
           ...(r.json.quota || {}),
           resetCards: r.json.resetCards,
           resetCardsWeekly: r.json.resetCardsWeekly,
-        })
+        } as QuotaJson
+        setQuota(next)
+        publishAccountQuota(next)
         // 成功文案按卡型说实话:周卡别宣称恢复了今日(codex3#4)
         onToast?.(t(scope === 'weekly' ? 'sidebar.account.menu.resetDoneWeekly' : 'sidebar.account.menu.resetDone'))
       } else if (r?.json?.error === 'no_reset_card') {

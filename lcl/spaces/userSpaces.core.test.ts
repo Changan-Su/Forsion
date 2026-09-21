@@ -1,6 +1,6 @@
 /** parseSpaceJson / slug 工具:用户自定义 Space 配方的解析校验。 */
 import { describe, it, expect } from 'vitest'
-import { parseSpaceJson, slugifyId, uniqueId, cmpVersion, recipeBucketOf, type ParseOpts } from './userSpaces.core'
+import { parseSpaceJson, slugifyId, uniqueId, cmpVersion, planMainPanels, recipeBucketOf, type ParseOpts } from './userSpaces.core'
 
 const REGISTERED = new Set(['chat', 'workspace', 'outline'])
 const opts = (over?: Partial<ParseOpts>): ParseOpts => ({
@@ -43,6 +43,33 @@ describe('parseSpaceJson', () => {
     expect(parseSpaceJson(JSON.stringify({ ...VALID, minAppVersion: '99.0.0' }), opts()).ok).toBe(false)
     expect(parseSpaceJson(JSON.stringify({ ...VALID, minAppVersion: '99.0.0' }), opts({ appVersion: null })).ok).toBe(true)
     expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [] } }), opts()).ok).toBe(false)
+  })
+  it('main 的 split 透传为原生分栏计划;旧多项配方仍是同组标签', () => {
+    const split = parseSpaceJson(JSON.stringify({
+      ...VALID,
+      layout: { main: [{ type: 'chat' }, { type: 'outline', split: 'right' }, { type: 'workspace', split: 'down' }] },
+    }), opts())
+    expect(split.ok).toBe(true)
+    if (split.ok) expect(planMainPanels(split.spec.layout.main).map((s) => s.mode === 'split' ? s.direction : s.mode))
+      .toEqual(['first', 'right', 'down'])
+
+    const tabs = planMainPanels([{ type: 'chat' }, { type: 'outline' }])
+    expect(tabs.map((s) => s.mode)).toEqual(['first', 'tab'])
+  })
+  it('split 只允许 main 的第二项起使用,且方向必须合法', () => {
+    expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [{ type: 'chat', split: 'right' }] } }), opts()).ok).toBe(false)
+    expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [{ type: 'chat' }], left: [{ type: 'workspace', split: 'right' }] } }), opts()).ok).toBe(false)
+    expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [{ type: 'chat' }, { type: 'outline', split: 'left' }] } }), opts()).ok).toBe(false)
+  })
+  it('splitFrom 允许把第三项放回第一项下方,右侧文档保持通高', () => {
+    const main = [{ type: 'chat' }, { type: 'outline', split: 'right' }, { type: 'workspace', split: 'down', splitFrom: 0 }]
+    const r = parseSpaceJson(JSON.stringify({ ...VALID, layout: { main } }), opts())
+    expect(r.ok).toBe(true)
+    if (r.ok) expect(planMainPanels(r.spec.layout.main)[2]).toMatchObject({ mode: 'split', direction: 'down', from: 0 })
+    for (const splitFrom of [-1, 2, 0.5, '0', null]) {
+      expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [main[0], main[1], { ...main[2], splitFrom }] } }), opts()).ok).toBe(false)
+    }
+    expect(parseSpaceJson(JSON.stringify({ ...VALID, layout: { main: [main[0], { type: 'outline', splitFrom: 0 }] } }), opts()).ok).toBe(false)
   })
 })
 

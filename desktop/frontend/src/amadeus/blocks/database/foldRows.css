@@ -1,0 +1,48 @@
+/* 规则行折叠(DbView.fold):汇总行 + 成员行 + 设置弹层。
+   与 treeBody.css 同一条纪律:只在单元格**内部**加东西,不碰 .amx-db-row / .amx-db-cell 的网格轨道
+   (表头 / 数据行 / 页脚是三个独立 grid,动轨道会把列边界错开)。新样式独立成文件,不进 amadeus-host.css。 */
+
+/* 汇总行:比普通行重一档的底 + 手型(整行可点展开)。成员行靠缩进条区分,不另上色。 */
+.amx-db-row.amx-db-row--fold {
+  background: var(--overlay-light, rgba(127, 127, 127, 0.06));
+  cursor: pointer;
+}
+.amx-db-row.amx-db-row--fold:hover { background: color-mix(in srgb, var(--accent, #6c5ce7) 8%, transparent); }
+.amx-db-row.amx-db-row--fold:focus-visible { outline: 2px solid var(--accent, #6c5ce7); outline-offset: -2px; }
+.amx-db-row--fold .amx-db-roprimary { font-weight: 600; }
+
+/* 行数徽标:紧跟折叠钮,等宽数字,窄列时不许被压缩 */
+.amx-db-foldcount {
+  flex: none;
+  margin-left: 2px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--overlay-light, rgba(127, 127, 127, 0.12));
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 混合值格:列出包含的内容;超宽交给 .amx-db-roprimary 的省略号,全量在 title 里 */
+.amx-db-foldmixed .amx-db-roprimary { font-weight: 400; gap: 4px; }
+.amx-db-foldval { white-space: pre; }
+.amx-db-foldmore { color: var(--text-muted); font-size: 12px; }
+
+/* 设置弹层 */
+.amx-db-fold-hint { padding: 0 6px 8px; color: var(--text-muted); font-size: 11.5px; line-height: 1.5; }
+.amx-db-fold-menu label.amx-db-group-option { cursor: pointer; }
+.amx-db-fold-minutes {
+  width: 72px;
+  padding: 5px 7px;
+  font: inherit;
+  color: var(--text);
+  background: var(--overlay-light);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+/* 弹层缺省限高 300px(.amx-db-pop):键列一多,「时间窗 / 展开全部 / 关闭」就掉进滚动区下面看不见。
+   本菜单放宽到 420px,键列表自己限高滚动 —— 要紧的控件恒在视野里(2026-09-21 截图自查抓到的)。 */
+.amx-db-pop:has(> .amx-db-fold-menu) { max-height: 420px; }
+.amx-db-fold-menu .amx-db-group-options { max-height: 150px; }

@@ -31,8 +31,10 @@ import { act } from '../activity/log'
 import { notifyApp } from './notificationStore'
 import { finishRunStats, stepRunStats, type RunStats } from './runStats'
 import { DESK_EDIT_TOOLS, DESK_PERSIST_KEY, deskItemFor, extractStreamingString, isDuplicateShow, packDeskMap, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from './deskPlan'
+import { deskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../i18n'
+import { publishAccountQuota } from '../services/accountQuota'
 
 // 本文件自带的词条片段(命名空间 `appstore.*`,与其它文件不重叠)。
 // store 活在 React 之外,取词一律走模块级 `translate`,不能用 hook。
@@ -325,6 +327,8 @@ function checkQuotaExhausted(toast: (m: string, err?: boolean) => void, tr: (k: 
     if (generation !== authGeneration) return
     const j = r?.status === 200 ? r.json : null
     if (!j) return
+    // Chat View 的内联额度提示与 run 收尾共用这份刚拉到的真值，避免结束瞬间再打一遍额度请求。
+    publishAccountQuota(j)
     const weekly = j.weeklyLimit >= 0 && Number(j.weeklyRemaining) <= 0
     const daily = j.dailyLimit >= 0 && Number(j.dailyRemaining) <= 0
     const state = weekly ? 'weekly' : daily ? 'daily' : ''
@@ -1256,7 +1260,8 @@ export const useApp = create<AppState>((set, get) => ({
         // 成员子 run 的一次工具调用 → 占位气泡与 Team Desk 上的一行动态(过程 token 不进团队 run)。
         const slug = String(pl.slug || '')
         const activity = `${String(pl.tool || '')}${pl.argsPreview ? ' ' + String(pl.argsPreview).slice(0, 80) : ''}`
-        if (pl.messageId) patchMessage(sessionId, String(pl.messageId), (m) => (m.work ? { ...m, work: { ...m.work, activity } } : m))
+        // tool 单列:activity 在 start 时是任务句子,状态推导(agentStatus)不能从文案里猜工具名。
+        if (pl.messageId) patchMessage(sessionId, String(pl.messageId), (m) => (m.work ? { ...m, work: { ...m.work, activity, tool: String(pl.tool || '') || undefined } } : m))
         set((s) => {
           const cur = s.teamWorkBySession[sessionId] || {}
           if (!cur[slug]) return {}
@@ -1488,6 +1493,7 @@ export const useApp = create<AppState>((set, get) => ({
             filesTruncated: !!pl.filesTruncated,
             historyCount: Number(pl.historyCount) || 0,
             historyTokens: Number(pl.historyTokens) || 0,
+            ...(pl.compactionEnabled !== false && Number(pl.compactAt) > 0 ? { compactAt: Number(pl.compactAt) } : {}),
             // 白名单:版本漂移下未知档位会在 ModelPill 渲染成原始 i18n 键,按本 reducer 的清洗纪律挡在入口
             ...(THINKING_LEVELS.includes(pl.thinkingRequested) ? { thinkingRequested: pl.thinkingRequested } : {}),
             ...(THINKING_LEVELS.includes(pl.thinkingEffective) ? { thinkingEffective: pl.thinkingEffective } : {}),
@@ -1495,6 +1501,13 @@ export const useApp = create<AppState>((set, get) => ({
             ...(['session', 'agent', 'default', 'automation', 'muse'].includes(pl.maxIterationsSource) ? { maxIterationsSource: pl.maxIterationsSource } : {}),
             ...(typeof pl.modelId === 'string' && pl.modelId ? { modelId: pl.modelId } : {}),
           } } }))
+          break
+        }
+        // 压缩后的占用:引擎紧跟 'compacted' 发一条 compaction_budget(压缩后的估算)。不接它,进度环要等压缩后那次
+        // 模型调用**整轮跑完**才来 usage ——「已压缩」提示出来了、环还停在压缩前(09-20)。实测:估 13379,随后 usage 12722。
+        // changed=false = 摘要了但没变小(保留段本身就超线),环不动;下一条 usage 照常用实测值校正。
+        if (pl.phase === 'compaction_budget') {
+          if (pl.changed && Number(pl.afterTokens) > 0) set((s) => ({ usageBySession: { ...s.usageBySession, [sessionId]: { ...(s.usageBySession[sessionId] || { base: 0, live: 0 }), ctx: Number(pl.afterTokens) } } }))
           break
         }
         // 自动压缩提示(H4):此前 ctx% 突然回落零提示,与手动 /compact 的明确回执反差。
@@ -2216,7 +2229,7 @@ export const useApp = create<AppState>((set, get) => ({
   // ── Agent Desk:聊天右侧演出面板。会话级快照落 localStorage(persistDeskSoon),
   //    重开会话/重启应用时上次展示的内容复活;直播格是流式瞬态,不落快照。 ──
   deskPresent: (sessionId, spec) => {
-    if (!get().desktopConfig?.agentDeskEnabled) return
+    if (!deskAcceptsFiles(!!get().desktopConfig?.agentDeskEnabled)) return // always 伴随面 = Desk 不收文件
     const cur = get().deskBySession[sessionId]
     const views = (Array.isArray(spec?.views) ? spec.views : [])
       .filter((v: any) => v && ((v.type === 'file' && typeof v.path === 'string' && v.path)
@@ -2240,7 +2253,7 @@ export const useApp = create<AppState>((set, get) => ({
     persistDeskSoon()
   },
   deskAutoShow: (sessionId, toolId) => {
-    if (!get().desktopConfig?.agentDeskEnabled) return
+    if (!deskAcceptsFiles(!!get().desktopConfig?.agentDeskEnabled)) return
     const cur = get().deskBySession[sessionId]
     const cfg = get().configBySession[sessionId] || {}
     const session = get().sessions.find((x) => x.id === sessionId)
@@ -2267,7 +2280,7 @@ export const useApp = create<AppState>((set, get) => ({
     persistDeskSoon()
   },
   deskLiveSync: (sessionId, msgId, toolId, tool) => {
-    if (!get().desktopConfig?.agentDeskEnabled) return
+    if (!deskAcceptsFiles(!!get().desktopConfig?.agentDeskEnabled)) return
     const cur = get().deskBySession[sessionId]
     const cfg = get().configBySession[sessionId] || {}
     const session = get().sessions.find((x) => x.id === sessionId)
@@ -2309,7 +2322,7 @@ export const useApp = create<AppState>((set, get) => ({
     persistDeskSoon()
   },
   deskShowFile: (sessionId, path, view, name) => {
-    if (!get().desktopConfig?.agentDeskEnabled) return
+    if (!deskAcceptsFiles(!!get().desktopConfig?.agentDeskEnabled)) return
     set((s) => {
       const c = s.deskBySession[sessionId] ?? { items: [], size: 'half' as const }
       const top = c.items[0]
@@ -2676,6 +2689,8 @@ export const useApp = create<AppState>((set, get) => ({
     const timer = setInterval(() => setPct(Math.round(90 * (1 - Math.exp(-(Date.now() - t0) / 8000)))), 120)
     try {
       const r = await api.compactSession(get().cfg, sid, modelId, instructions)
+      // 进度环读的是「最近一条主循环 usage」,手动压缩不产生 usage:不就地改,环会停在压缩前的值上(看着像没压下去),下一条消息才自愈。
+      if (r.ok && Number(r.contextTokens) > 0) set((st) => ({ usageBySession: { ...st.usageBySession, [sid]: { ...(st.usageBySession[sid] || { base: 0, live: 0 }), ctx: Number(r.contextTokens) } } }))
       get().pushNotice(r.ok ? t('input.compactDone', { n: r.summarizedCount || 0 }) : t('input.compactSkip', { reason: r.reason || '' }))
     } catch (e: any) { get().toast(t('input.compactFail', { e: e?.message || e }), true) }
     finally {

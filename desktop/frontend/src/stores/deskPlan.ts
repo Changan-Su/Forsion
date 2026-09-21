@@ -89,6 +89,10 @@ export function extractLiveBody(args: string, tool: string): string {
 export const DESK_PERSIST_KEY = contentStorageKey('forsion.deskBySession')
 export const DESK_PERSIST_CAP = 40
 
+/** 新对话草稿(activeId === null)的 Desk 卡片用的会话键:卡片开聊前就在场(伴随面住这里)。
+ *  草稿态没有侧板、也没有任何写入路径往这个键落内容;落盘时一律剔除,别让它进快照。 */
+export const DESK_DRAFT_KEY = '__draft__'
+
 export interface DeskSnapshot {
   items: DeskItem[]
   size: 'half' | 'wide'
@@ -104,7 +108,7 @@ const snapAt = (s: DeskSnapshot): number => Math.max(0, ...s.items.map((it) => i
 export function packDeskMap(map: Record<string, DeskSnapshot>, cap = DESK_PERSIST_CAP): string {
   const entries = Object.entries(map)
     .map(([sid, s]) => [sid, { ...s, items: (s.items || []).filter((it) => !it.live && (it.path || it.view)) }] as const)
-    .filter(([, s]) => s.items.length || s.fraction !== undefined || s.userResized || s.mode || s.note)
+    .filter(([sid, s]) => sid !== DESK_DRAFT_KEY && (s.items.length || s.fraction !== undefined || s.userResized || s.mode || s.note))
     .sort((a, b) => snapAt(b[1]) - snapAt(a[1]))
     .slice(0, cap)
   return JSON.stringify(Object.fromEntries(entries))

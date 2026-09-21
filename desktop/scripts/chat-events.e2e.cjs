@@ -104,6 +104,7 @@ async function main() {
     stub.script([
       { type: 'status', payload: {
         phase: 'context_info', ctxWindow: 272_000, ctxWindowSource: 'family',
+        compactAt: 81_600, compactionEnabled: true, // 设置里把自动压缩阈值调到 30% 时引擎发的线(A4b)
         sections: [{ k: 'persona', tokens: 900 }, { k: 'skills', tokens: 1200 }],
         files: ['/tmp/demo/AGENTS.md'], filesTruncated: false, historyCount: 4, historyTokens: 2200,
         thinkingRequested: 'medium', thinkingEffective: 'low', modelId: 'm1', // 请求档须等于会话当前档,降档提示才显示(刻意的防陈旧闸)
@@ -117,8 +118,10 @@ async function main() {
         patch: '*** Begin Patch\n*** Update File: a.txt\n@@\n baseline\n+MULTI-A\n*** Add File: c.txt\n+MULTI-C\n*** End Patch',
       }) } },
       { type: 'tool_result', payload: { id: 't9', result: 'ok', elapsedMs: 9 } },
-      { type: 'usage', payload: { prompt: 1000, total: 200, costTotal: 16_500, costLimit: 20_000 } },
+      { type: 'usage', payload: { prompt: 60_000, total: 200, costTotal: 16_500, costLimit: 20_000 } },
       { type: 'status', payload: { phase: 'compacted', savedChars: 4321, iteration: 2 } },
+      // 真引擎紧跟 compacted 发的「压缩后占用」(A4c):其后本轮再没有 usage,环上的数只能来自它。
+      { type: 'status', payload: { phase: 'compaction_budget', iteration: 2, beforeTokens: 60_000, afterTokens: 13_600, changed: true } },
       { type: 'token', payload: { delta: '改好了。' } },
     ])
     await send(win, '改一下 app.ts')
@@ -187,6 +190,16 @@ async function main() {
     }
     check('A4 上下文浮层给出分解(装载文件/分段/窗口来源)',
       /AGENTS\.md|skills|persona|272|窗口/.test(ctxText || ''), `pop=${JSON.stringify((ctxText || '').slice(0, 120))}`)
+    // A4b(09-20):浮层标出自动压缩线 —— 用引擎发的 compactAt(81.6k = 272k × 30%),点开后截图自查(CTXRING_SHOT)。
+    await win.locator('.t2c-ctxring-btn').first().click().catch(() => {})
+    await win.waitForTimeout(500)
+    const popOpen = await win.locator('.t2c-ctxring.is-open .t2c-ctxring-pop').first().innerText().catch(() => '')
+    check('A4b 浮层点开后有「到 81.6k tokens(30%)时自动压缩」一行', /自动压缩/.test(popOpen) && /30%/.test(popOpen) && /81\.6/.test(popOpen), `pop=${JSON.stringify(popOpen.slice(0, 160))}`)
+    // A4c(09-20「压缩完进度圈不更新,发新消息才更新」):压缩后的占用当场上环,不等下一条 usage。
+    check('A4c 压缩后进度环当场回落(13.6k,不是压缩前的 60.0k)', /13\.6k/.test(popOpen) && !/60\.0k/.test(popOpen), `pop=${JSON.stringify(popOpen.slice(0, 80))}`)
+    await win.screenshot({ path: process.env.CTXRING_SHOT || '/tmp/ctxring-compactat.png' }).catch(() => {})
+    await win.locator('.t2c-ctxring-btn').first().click().catch(() => {}) // 收起,别挡后面的场景
+    await win.waitForTimeout(300)
 
     // 思考档降档标在模型药丸菜单的 Effort 当前值上(→ 生效档),得把菜单点开才看得到
     await win.locator('.model-pill-btn').first().click().catch(() => {})

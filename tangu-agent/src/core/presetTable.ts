@@ -80,13 +80,13 @@ export const CHAT_PRESET_RESIDENT: ReadonlySet<string> = new Set([
 export const CHAT_PRESET_DEFERRED: ReadonlySet<string> = new Set([
   'search_sessions', 'read_session', 'todo_write', 'todo_read', 'search_files', 'glob_files',
   'amadeus_list_notes', 'amadeus_read_note', 'amadeus_list_calendars', 'amadeus_list_events',
-  'calculator', 'generate_image', 'read_log', 'log_event',
+  'calculator', 'generate_image', 'edit_image', 'read_log', 'log_event',
 ]);
 
 /** D11 形态:chat 落在 host execMode 时(桌面 standalone 的 rootless 会话仍是 sandbox,这里是纵深防御),
  *  search_files/glob_files 按 cwd 爬用户真实磁盘且由模型发起 → 一并拒;generate_image 是 mode:'both' 却在 host 下
  *  往 cwd/generated/ 写真实磁盘(creview 二轮 #2)→ 同拒。display_file 不入列(交付原语)。 */
-export const CHAT_HOST_DISK_HIDDEN: ReadonlySet<string> = new Set(['search_files', 'glob_files', 'generate_image']);
+export const CHAT_HOST_DISK_HIDDEN: ReadonlySet<string> = new Set(['search_files', 'glob_files', 'generate_image', 'edit_image']);
 
 const EMPTY: ReadonlySet<string> = new Set();
 

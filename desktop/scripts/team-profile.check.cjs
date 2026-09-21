@@ -10,14 +10,15 @@ const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-team-profile-'))
 const agents = ['xyra', 'research', 'writer'].map((slug) => ({ slug, name: { xyra: 'Xyra', research: 'Research', writer: 'Writer' }[slug], description: { xyra: 'Project coordination', research: 'Evidence and analysis', writer: 'Clear, considered writing' }[slug], tools: [], model: '', thinkingLevel: '', maxIterations: null, approvalMode: '', systemPrompt: 'Be precise.', soul: '', createdBy: 'user', libraryDir: path.join(home, slug, 'Library') }))
 let team = { slug: 'atlas', name: 'Atlas Crew', description: 'Explore, verify and deliver.', avatar: '🧭', lead: 'xyra', members: [{ slug: 'xyra', role: '协调与规划' }, { slug: 'research', role: '证据与分析' }], doc: 'Cite primary evidence.', createdAt: '', libraryDir: path.join(home, 'team-library') }
 const teamAvatarPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+const models = [{ id: 'm1', name: 'Stub Base', provider: 'stub', contextWindow: 128_000 }, { id: 'm2', name: 'Stub Sonnet', provider: 'stub', contextWindow: 200_000 }, { id: 'm3', name: 'Stub Opus', provider: 'stub', contextWindow: 200_000 }]
 const base = { archived: false, model_id: 'm1', created_at: '2026-09-16 10:00:00', updated_at: '2026-09-16 10:00:00' }
 const savedSession = { ...base, id: 'saved-party', title: 'Atlas work', projectless: true, project_path: null, project_name: null, agent_config: { teamSlug: team.slug, groupChat: true, groupAgents: ['xyra', 'research'], execMode: 'host', cwd: team.libraryDir, approvalMode: 'readonly', enabledMcpServers: [] } }
 const projectSession = { ...base, id: 'project-party', title: 'Project party', projectless: false, project_path: home, project_name: 'Atlas project', agent_config: { groupChat: true, groupAgents: ['xyra', 'research'], execMode: 'host', cwd: home, extraRoots: ['/tmp/evidence'] } }
 const sessions = [savedSession, projectSession]
-let app, failLoad = true, failPut = false, teamWrites = 0, agentWrites = 0, teamAvatarWrites = 0
+let app, failLoad = true, failPut = false, teamWrites = 0, agentWrites = 0, teamAvatarWrites = 0, lastTeamPatch = null
 async function run() {
   if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) throw new Error('Run npm run build first')
-  const stub = await startStubEngine({ agents, sessions, override: async ({ path: p, method, body }) => {
+  const stub = await startStubEngine({ agents, sessions, models, override: async ({ path: p, method, body }) => {
     if (p === '/agent/runs' && method === 'GET') return { runs: [] }
     if (p === '/agent/teams') return { teams: [team] }
     if (p === '/agent/teams/atlas/session/open') return { session: savedSession, created: false }
@@ -28,7 +29,7 @@ async function run() {
     }
     if (p === '/agent/teams/atlas') {
       if (method === 'GET') return failLoad ? { __code: 503, body: { detail: 'Team load failed (fixture)' } } : { team }
-      if (method === 'PATCH') { teamWrites++; team = { ...team, ...await body() }; return { team } }
+      if (method === 'PATCH') { teamWrites++; lastTeamPatch = await body(); team = { ...team, ...lastTeamPatch }; return { team } }
     }
     if (p.endsWith('/background')) return { background: [] }
     if (p === '/agent/skills') return { skills: [{ id: 'local:research', name: 'Research notebook', description: 'Gather evidence' }, { id: 'local:writing', name: 'Writing', description: 'Write clear reports' }] }
@@ -74,6 +75,11 @@ async function run() {
     assert.equal(await party.getByRole('button', { name: '保存团队', exact: true }).isDisabled(), true)
     await party.getByRole('button', { name: '放弃修改', exact: true }).click()
     await party.getByLabel('Research 职责', { exact: true }).fill('事实核查与交叉验证')
+    // 会话级调档(模型 / Effort):改的是本会话,Agent 定义与 TEAM 定义都不许跟着动。
+    const researchCard = party.locator('[data-team-member="research"]')
+    await researchCard.getByRole('button', { name: 'Research 本会话模型', exact: true }).click()
+    await researchCard.locator('.composer-menu .menu-item').filter({ hasText: 'Stub Sonnet' }).click()
+    await researchCard.getByLabel('Research 本会话 Effort', { exact: true }).selectOption('high')
     await party.getByRole('button', { name: '添加成员', exact: true }).click()
     await party.locator('.team-candidates button').filter({ hasText: 'Writer' }).click()
     await party.locator('[data-team-member="writer"]').getByRole('button', { name: '向前调整位置', exact: true }).click()
@@ -120,6 +126,11 @@ async function run() {
     await party.getByRole('button', { name: '保存团队', exact: true }).click()
     await party.getByRole('status').filter({ hasText: '已保存' }).waitFor()
     assert.deepEqual(savedSession.agent_config.groupAgents, ['xyra', 'writer', 'research'])
+    assert.deepEqual(savedSession.agent_config.teamMemberConfigs, { research: { model: 'm2', thinkingLevel: 'high' } })
+    // 负对照:调档只进会话配置 —— TEAM 定义的 PATCH 体里不许出现它,别的成员也不许凭空长出一条空调档。
+    assert.equal('teamMemberConfigs' in lastTeamPatch, false)
+    assert.equal(team.teamMemberConfigs, undefined)
+    assert.equal(agents.find((a) => a.slug === 'research').model, '')
     assert.equal(savedSession.agent_config.teamSlug, 'atlas')
     assert.equal(savedSession.agent_config.approvalMode, 'readonly')
     assert.deepEqual(savedSession.agent_config.enabledMcpServers, [])
@@ -131,8 +142,22 @@ async function run() {
     await win.locator('.t2o-row').filter({ hasText: 'Atlas Expedition' }).first().click()
     await party.locator('[data-team-member="writer"]').waitFor()
     assert.deepEqual(await party.locator('[data-team-member]').evaluateAll((els) => els.map((e) => e.dataset.teamMember)), ['xyra', 'writer', 'research'])
+    // 调档从会话配置读回来;没调过的成员显示「沿用」而不是某个具体模型。
+    const researchTuning = party.locator('[data-team-member="research"]')
+    assert.equal(await researchTuning.getByLabel('Research 本会话 Effort', { exact: true }).inputValue(), 'high')
+    assert.match(await researchTuning.getByRole('button', { name: 'Research 本会话模型', exact: true }).textContent(), /Stub Sonnet/)
+    assert.match(await party.locator('[data-team-member="xyra"]').getByRole('button', { name: 'Xyra 本会话模型', exact: true }).textContent(), /默认模型/)
+    const tuningBox = async (sel) => party.locator(`[data-team-member="xyra"] ${sel}`).boundingBox()
+    const [modelBox, effortBox] = [await tuningBox('.model-select-btn'), await tuningBox('.team-member-effort')]
+    assert.ok(modelBox.width >= 96, `模型格被挤窄到 ${modelBox.width}px(详情面板窄,三格一行会把它压成一个图标)`)
+    assert.equal(Math.abs(modelBox.y - effortBox.y) < 2, true, '模型与 Effort 必须同排')
     await win.waitForTimeout(220)
     await win.screenshot({ path: path.join(home, 'party-light.png') })
+    await party.locator('[data-team-member="xyra"]').getByRole('button', { name: 'Xyra 本会话模型', exact: true }).click()
+    await party.locator('[data-team-member="xyra"] .composer-menu').waitFor()
+    await win.waitForTimeout(160)
+    await party.locator('.team-lineup').screenshot({ path: path.join(home, 'party-tuning-open.png') })
+    await win.keyboard.press('Escape')
     await win.getByTitle('切换明暗模式', { exact: true }).click()
     await win.waitForFunction(() => document.documentElement.getAttribute('data-mode') === 'dark')
     await win.waitForTimeout(400)
@@ -177,6 +202,10 @@ async function run() {
     await temp.getByLabel('工作指令', { exact: true }).fill('Cross-check claims against the cited sources.')
     await temp.getByRole('button', { name: '返回配队并检查修改', exact: true }).click()
     await party.getByLabel('Fact checker 职责', { exact: true }).fill('核查')
+    await party.locator('[data-team-member="xyra"]').getByRole('button', { name: 'Xyra 本会话模型', exact: true }).click()
+    await party.locator('[data-team-member="xyra"] .composer-menu .menu-item').filter({ hasText: 'Stub Opus' }).click()
+    // 临时成员的模型 / Effort 就住在它自己的定义里:卡上这两个控件必须写 groupTempAgents,不许再往调档表里存第二份。
+    await party.getByLabel('Fact checker 本会话 Effort', { exact: true }).selectOption('low')
     await party.getByRole('button', { name: 'TEAM 配置', exact: true }).click()
     await party.getByLabel('团队名称', { exact: true }).fill('Project expedition')
     await party.getByLabel('团队指令 · TEAM', { exact: true }).fill('Work only on this project.')
@@ -187,6 +216,8 @@ async function run() {
     assert.equal(projectSession.agent_config.teamDoc, 'Work only on this project.')
     assert.equal(projectSession.agent_config.groupTempAgents[0].name, 'Fact checker')
     assert.equal(projectSession.agent_config.teamRoles[projectSession.agent_config.groupTempAgents[0].slug], '核查')
+    assert.deepEqual(projectSession.agent_config.teamMemberConfigs, { xyra: { model: 'm3' } })
+    assert.equal(projectSession.agent_config.groupTempAgents[0].thinkingLevel, 'low')
     assert.deepEqual(projectSession.agent_config.extraRoots, ['/tmp/evidence'])
     assert.equal(projectSession.agent_config.teamSlug, undefined)
     assert.equal(projectSession.project_path, home)
@@ -194,6 +225,8 @@ async function run() {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1000, 900))
     await win.waitForTimeout(250)
     assert.equal(await panel.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false)
+    const narrowModel = await party.locator('[data-team-member="xyra"] .model-select-btn').boundingBox()
+    assert.ok(narrowModel.width >= 96, `窄窗下模型格只剩 ${narrowModel.width}px —— Effort 该换行让位`)
     await win.waitForTimeout(220)
     await win.screenshot({ path: path.join(home, 'project-party-narrow.png') })
     await win.reload()
@@ -208,6 +241,8 @@ async function run() {
     assert.equal(sent?.agentConfig.teamDoc, 'Work only on this project.')
     assert.equal(sent?.agentConfig.groupTempAgents[0].systemPrompt, 'Cross-check claims against the cited sources.')
     assert.equal(sent?.agentConfig.teamRoles[sent.agentConfig.groupTempAgents[0].slug], '核查')
+    assert.deepEqual(sent?.agentConfig.teamMemberConfigs, { xyra: { model: 'm3' } })
+    assert.equal(sent?.agentConfig.groupTempAgents[0].thinkingLevel, 'low')
     assert.deepEqual(errors, [])
     console.log('PASS project-only team charter and temporary member configuration persist and reach the next run without touching saved TEAM or Agent defaults')
     console.log('Screenshots:', home)

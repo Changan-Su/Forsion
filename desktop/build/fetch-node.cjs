@@ -66,7 +66,7 @@ function prune(dest) {
 function degrade(dest, reason) {
   console.warn(`[fetch-node] ⚠ 未打包内置 Node(运行时回落系统 Node):${reason}`);
   rmSync(dest, { recursive: true, force: true });
-  mkdirSync(dest, { recursive: true });
+  mkdirSync(path.join(dest, 'node_modules'), { recursive: true }); // extraResources 的源目录占位(见 fetchNode 末尾)
   writeFileSync(path.join(dest, '.skipped'), `node bundle skipped: ${reason}\n`);
   return dest;
 }
@@ -107,7 +107,13 @@ async function fetchNode({ platformName, archName }) {
     }
     const bin = platformName === 'win32' ? path.join(dest, 'node.exe') : path.join(dest, 'bin', 'node');
     if (!existsSync(bin)) throw new Error(`解压后 ${dest} 无 node 可执行文件`);
+    // npm 本体也要在:没有它 npx 只是个会报 MODULE_NOT_FOUND 的 shim(Windows 平铺在根下,类 Unix 在 lib/)。
+    const npmDir = path.join(dest, ...(platformName === 'win32' ? ['node_modules'] : ['lib', 'node_modules']), 'npm');
+    if (!existsSync(path.join(npmDir, 'bin', 'npx-cli.js'))) throw new Error(`解压后 ${npmDir} 缺 npm(npx 会失效)`);
     prune(dest);
+    // extraResources 的 `build/node/node_modules` 那条要求源目录恒在(非 Windows 上没有 → 建个空的,
+    // 免得每次 mac/linux 打包都刷一行 "file source doesn't exist" 警告)。见 electron-builder.config.cjs。
+    mkdirSync(path.join(dest, 'node_modules'), { recursive: true });
     console.log(`[fetch-node] ✓ ${dest} (${version})`);
     return dest;
   } catch (e) {

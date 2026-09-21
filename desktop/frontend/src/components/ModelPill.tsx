@@ -9,7 +9,7 @@ import { ModelMetadata } from './ModelMetadata'
  */
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Bot, Search } from 'lucide-react'
-import { nestedPanelPlacement, UI_ZOOM_EVENT, zoomOf, useEdgeNudge } from '@lcl/engine'
+import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge } from '@lcl/engine'
 import type { NestedPanelPlacement } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'
@@ -105,6 +105,7 @@ export const ModelPill: React.FC<{
   const [advanced, setAdvanced] = useState(false)
   const [pane, setPane] = useState<Pane | null>(null)
   const [placement, setPlacement] = useState<NestedPanelPlacement>('right')
+  const [subTop, setSubTop] = useState(0)
   const wrapRef = useRef<HTMLSpanElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const subRef = useRef<HTMLDivElement>(null)
@@ -127,10 +128,25 @@ export const ModelPill: React.FC<{
     const update = (): void => {
       const menuRect = menu.getBoundingClientRect()
       const boundaryRect = (menu.closest('.t2c-card') || menu.closest('.t2-chat-view'))?.getBoundingClientRect()
+      const viewRect = menu.closest('.t2-chat-view')?.getBoundingClientRect()
+      const triggerRect = menu.querySelector<HTMLElement>(`[data-pane-trigger="${pane}"]`)?.getBoundingClientRect()
+      const zoom = zoomOf(sub)
       const next = boundaryRect
-        ? nestedPanelPlacement(menuRect.left, menuRect.right, sub.offsetWidth, boundaryRect.left, boundaryRect.right, zoomOf(sub))
+        ? nestedPanelPlacement(menuRect.left, menuRect.right, sub.offsetWidth, boundaryRect.left, boundaryRect.right, zoom)
         : 'right'
       setPlacement((prev) => prev === next ? prev : next)
+      if (triggerRect) {
+        const nextTop = nestedPanelTop(
+          triggerRect.top,
+          sub.offsetHeight,
+          menuRect.top,
+          menuRect.bottom,
+          viewRect?.top ?? 0,
+          viewRect?.bottom ?? window.innerHeight,
+          zoom,
+        )
+        setSubTop((prev) => Math.abs(prev - nextTop) < 0.5 ? prev : nextTop)
+      }
     }
     update()
     window.addEventListener('resize', update)
@@ -236,6 +252,7 @@ export const ModelPill: React.FC<{
                       <button
                         key={slot}
                         className={`cm-row${pane === slot ? ' is-open' : ''}`}
+                        data-pane-trigger={slot}
                         tabIndex={advanced ? 0 : -1}
                         onFocus={showPane(slot)}
                         onClick={showPane(slot)}
@@ -264,6 +281,7 @@ export const ModelPill: React.FC<{
           {/* 第二行：保留原有按 provider 分组的模型选择器。 */}
           <button
             className={`cm-row cm-model-row${pane === 'model' ? ' is-open' : ''}`}
+            data-pane-trigger="model"
             onMouseEnter={showPane('model')}
             onFocus={showPane('model')}
             onClick={showPane('model')}
@@ -322,7 +340,7 @@ export const ModelPill: React.FC<{
               ref={(el) => { subRef.current = el; subFix.ref.current = el }}
               className={`cm-sub ${placement}`}
               data-pane={pane}
-              style={subFix.style}
+              style={{ ...subFix.style, '--cm-sub-top': `${subTop}px` } as React.CSSProperties}
             >
               {rawPaneGroups.reduce((n, g) => n + g.options.length, 0) >= 8 && <label className="model-picker-search"><Search size={12} /><input aria-label={t('model.searchPlaceholder')} placeholder={t('model.searchPlaceholder')} value={query} onChange={(e) => setQuery(e.target.value)} /></label>}
               {pane !== 'model' && (

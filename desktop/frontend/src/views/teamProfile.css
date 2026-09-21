@@ -30,14 +30,22 @@
 .team-member-open { display: grid; grid-template-columns: 40px minmax(0, 1fr) 14px; gap: 3px 10px; align-items: center; width: 100%; padding: 0; text-align: left; border: 0; background: transparent; color: var(--text); cursor: pointer; }
 .team-member-open:hover { color: var(--accent-ink); }
 .team-member-open > strong { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
-.team-member-portrait { position: relative; display: flex; align-items: center; justify-content: center; width: 40px; height: 46px; grid-row: 1 / 4; color: var(--accent-ink); background: var(--overlay-light); border-radius: var(--radius-sm, 8px); overflow: hidden; }
+.team-member-portrait { position: relative; display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; grid-row: 1 / 3; color: var(--accent-ink); background: var(--overlay-light); border-radius: var(--radius-sm, 8px); overflow: hidden; }
 .team-member-portrait > svg:first-child { width: 26px; height: 26px; }
 .team-member-portrait img { width: 100%; height: 100%; object-fit: cover; }
-.team-member-chevron { grid-column: 3; grid-row: 1 / 4; color: var(--text-muted); }
-.team-member-model { font-size: 10px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-member-chevron { grid-column: 3; grid-row: 1 / 3; color: var(--text-muted); }
 .team-member-status { color: var(--text-muted); font-size: 10px; }
 .team-member-status.working, .team-member-status.waiting { color: var(--accent-ink); }
 .team-member-status.failed, .team-member.unavailable .team-member-status { color: var(--danger); }
+/* 会话级调档行:「本会话」标签 + 模型选择器 + Effort;它改的是这场会话,Agent 自身配置在成员详情页里改。
+ * 详情面板可用宽只有 ~215px:标签独占一行,两个控件并排;Effort 是原生 select(输入控件,按 §5 保留描边),
+ * 关着的 select 不给省略号,所以列宽钉死、选项文案要短。 */
+.team-member-tuning { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding-top: 10px; }
+.team-member-tuning-k { flex: 0 0 100%; color: var(--text-muted); font-size: 11px; }
+/* 并排放不下就让 Effort 换行:面板窄到 1000px 窗口时,两格硬挤会把模型名截成「Stub O…」(09-20 截图实见)。 */
+.team-member-tuning .model-select { flex: 1 1 104px; min-width: 0; }
+.team-member-tuning .model-select-btn { padding: 5px 8px; font-size: 12px; }
+.team-member-effort { flex: 0 1 88px; min-width: 0; padding: 5px 6px; font-size: 12px; }
 .team-member-role { display: grid; gap: 6px; padding-top: 12px; color: var(--text-muted); font-size: 11px; }
 .team-member-role textarea { min-width: 0; width: 100%; padding: 8px; font-size: 12px; line-height: 1.6; resize: vertical; }
 .team-member-actions { display: flex; gap: 4px; padding-top: 8px; }

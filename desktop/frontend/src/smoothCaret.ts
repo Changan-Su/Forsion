@@ -3,6 +3,7 @@
  * 作用范围:Amadeus 编辑器(.milkdown .ProseMirror)+ Tangu 聊天输入框(textarea.t2c-ta)。
  * 开关:设置 → 外观(localStorage SMOOTH_CARET_KEY);样式在 styles/base.css 的 .sc-caret / html.sc-on。
  */
+import { broadcastPrefs } from './uiPrefsBus'
 import { SMOOTH_CARET_KEY } from './types'
 
 /**
@@ -334,6 +335,14 @@ export function installSmoothCaret(): void {
 }
 
 /** 设置开关即时生效(SettingsModal 写完 localStorage 后调)。 */
+/** 用户开关:写盘 + 应用 + 跨窗广播。设置页与 ⌘K 命令共用这一个入口(别再各写一份写盘)。 */
+export function setSmoothCaret(on: boolean): void {
+  try { localStorage.setItem(SMOOTH_CARET_KEY, on ? '1' : '0') } catch { /* ignore */ }
+  setSmoothCaretEnabled(on)
+  broadcastPrefs()
+}
+
+/** 只应用不写盘(启动与跨窗重放走这条)。 */
 export function setSmoothCaretEnabled(on: boolean): void {
   enabled = on
   document.documentElement.classList.toggle('sc-on', on)

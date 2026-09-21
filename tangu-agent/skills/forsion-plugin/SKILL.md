@@ -240,6 +240,7 @@ ctx.registerCommand({
    出现在手机的目录里 —— 这是正确行为,不是 bug,别为此写特例。
 
 | `registerSettingsView` | 详情页里自己画的面板 | 会被反复挂载卸载,状态别放模块级单例 |
+| `registerReadiness` | onboarding 检查卡上的一行 `check` | 2026-09-21 起;**必须 `ctx.registerReadiness?.(…)`**;拿不准回 `'unknown'`,见下「前置条件」 |
 | `registerEditorExtension` | 笔记编辑器的按键 / 装饰 | `'high'` 档不处理**必须 `return false`** |
 | `registerStatusItem` | 全局状态栏 | 返回 handle,可原位 `update({text,title})` |
 | `registerTheme` | 强调色主题 | 与磁盘主题包(`~/.forsion/themes/`)是两件事 |
@@ -252,17 +253,18 @@ ctx.registerCommand({
 | `ctx.loadData() / saveData()` | 每插件一份 JSON blob | 大块数据走这条(见下「编辑器」节) |
 | `ctx.dashboard` | 原生仪表盘(网格/卡片/排版台) | 2026-09-01 起;**两条路线**(视图内 `mount` 不依赖库 / `source` 生成 `.dashboard.md` 需要库)见下节;一律 `ctx.dashboard?.` |
 | `ctx.getLocale / subscribeLocale` | 跟随宿主中英切换 | 见下「双语」 |
-| `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量(只读) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;见下「当前模型」 |
+| `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量 / **agent 此刻在干什么**(只读)+ `agents()` 用户的 Agent 名册 + `startChat` 用指定 Agent 开一个可见的新对话 | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;`agentStatus` / `subscribeAgentStatus` / `startChat` 是 2026-09-19 起、`agents` 是 2026-09-20 起的可选方法 → `ctx.tangu?.startChat?.(…)`;见下「当前模型」「Agent 状态」「Agent 名册」「开新对话」 |
+| `ctx.desk` | Tangu 聊天右侧 **Agent Desk** 里挂一块自绘区(`registerCompanion`,典型:跟着 agent 状态做反应的 3D 形象) | 2026-09-19 起;⚠️**只在桌面 Tangu 上存在**(web / 移动端 / 纯 Amadeus 壳整个没有)→ `ctx.desk?.`;两种模式 `idle` / `always`,见下「Agent Desk 伴随面」 |
 | `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
 | `ctx.calendar` | 把插件种的表登记进 Calendar Space(`ensureMember`) | 2026-09-02 起;显式成员制,不登记就不在日历里;旧宿主没有 → `ctx.calendar?.` |
 | manifest `events[]` | 自动化(Automation)可订阅的事件 | 纯声明无代码;⚠️目前只有中文 `label`,英文界面下也显示中文 |
-| manifest `onboarding` | 装完的首启引导卡 | **别 recommends 自家已内嵌的 agent/skill**(会引导去市场重复装) |
+| manifest `onboarding` | 有 `requires` = **闸**(宿主实测,未满足才弹检查卡);没有 = 详情页里折叠的使用说明 | 见下「前置条件:onboarding.requires」;**别 recommends 自家已内嵌的 agent/skill**(会引导去市场重复装);⚠ `recommends` 只在闸的检查卡里渲染,没有 `requires` 就一个字都不显示 |
 
 `ctx.app` 上另有三组:**整库文件读写**、**只读全库查询**、**块表面** —— 各占下面一节。
 
 ### ⚠️「没有活动库」时的统一行为(2026-09-02 立规)
 
-上面三组里**凡走库内路径**的方法(`readFile / writeFile / watchFile / openFile / loadPage /
+上面三组里**凡走库内路径**的方法(`readFile / writeFile / readBytes / writeBytes / watchFile / openFile / loadPage /
 createPage / listPages / listFiles / searchVault / reveal`)都要求一个**已打开**的笔记库。
 没有活动库时它们**各自失败得不一样**,而且大半是静默的:
 
@@ -270,6 +272,7 @@ createPage / listPages / listFiles / searchVault / reveal`)都要求一个**已�
 |---|---|
 | `readFile(p)` | **静默返回 `null`**(与「文件不存在」同形,try/catch 照不到) |
 | `writeFile(p, t)` | **reject** —— 主进程抛 `Error('No vault is open')` |
+| `readBytes(p)` / `writeBytes(p, bytes)`(2026-09-19+) | 同上两行:`readBytes` 给 `null` 不抛,`writeBytes` **reject** `'No vault is open'`。旧宿主 / 桥缺席时方法整个不存在 → `ctx.app.writeBytes?.(…)` |
 | `mutateDb(p, fn)`(2026-09-02+) | `{ ok:false, error }`,**不抛**;云端/移动端桥没有 CAS 写口时同样 `{ ok:false }`。⚠️**改活表(补列属性、加视图)一律走它**:比对交换 + 冲突重读重放,`fn` 返 `null` 不写;`readFile`+`writeFile` 整文件覆盖会盖掉读写之间自动化/用户刚写的行且零报错。旧宿主没有 → `ctx.app.mutateDb?.(…)` 再走自己的回落路 |
 | `listPages()` / `listFiles()` / `searchVault(q)` | 一律**给空数组、不 reject** |
 | `vaultRoot()` | `null` —— **唯一的可用性探针** |
@@ -412,6 +415,13 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
 - 列的 `align` / `nowrap` 只有降级路径认(原生表有自己的列宽 / 对齐语汇);`row.className` 两条路径都认(原生路径并进行的 className)。
 - 行只是分页 / 截断的一片(服务端分页、按页切)就标 `partial: true`:原生表整条工具栏(筛选 / 搜索 / 导出 / 视图设置)不给 —— 它们只会看到本页并给出错误的数据视图;表头排序照留(本页内)。
 - 规格里的 `attrs`(行 / 格 / 头像 / 动作)只放行 `data-*` / `aria-*` / `title` / `id` / `role` / `tabindex` / `lang` / `dir` / `hidden` / `class`;`on*` / `style` / `src` / `href` 一律丢弃,`data-act` / `type` / `disabled` 这类固定属性不可被 attrs 覆盖。
+- **规则行折叠 `fold`(2026-09-21 起,先查 `ctx.table.caps?.fold`)**:`fold: { by: ['user'], time: 'at', minutes: 30 }` =
+  `by` 各列值全等、且 `time` 列落在同一个 30 分钟**本地时钟**窗口(:00 / :30)的行收成一条**汇总行**,点开展开成员行
+  (`by` / `time` 至少给一个;`minutes` 缺省 30)。通用汇总:数字求和、日期画「最早 – 最晚」、其余列出包含的值与次数;
+  想自己定某几列的汇总格就给 `fold.summary = (rows) => ({ cost: { text: '-2.62', tone: 'amber' } })`(`text` 原样显示,
+  没给的列走通用汇总;回调在渲染期被调,别做重活)。表头排序作用在**汇总值**上。`update()` 里改了 `fold` 会立即重折
+  (与 `sort` 相反:折叠规则跟宿主走,面板的时间窗控件靠它)。`partial` 的表要**按折叠单元分页**、把整单元的成员行一起给,
+  否则一个单元会被页边切成两半。宿主不认 `fold`(没有 `caps.fold`)时字段被静默忽略 = 成员行平铺。
 - 旧宿主没有:`if (ctx.table && ctx.table.mount) { … } else { 画自己的经典表格 }`。整个 `ctx.table` 会**不存在**
   (不是空壳),抛出来的错也当「宿主不收」处理 —— 两种情况都走降级 UI。
 
@@ -444,6 +454,29 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
 - `drop` 不声明就完全没有拖放;声明了也是宿主判形点亮、插件决定接不接。
 - 细节与全部字段语义见正典文档同名小节 + `amadeus/plugins/types.ts` 的 `ListSourceContribution`。
 
+### 前置条件:onboarding.requires(2026-09-21 起)
+
+1. **只为「不做就不工作」的东西写 `requires`**:没填的地址 / 令牌、没给的系统授权、服务端没配的依赖。
+   用法说明写 `steps` / README。**不写励志句、营销句**;`intro` 一句话说清要做什么才能用,没有就不写。
+2. 有 `requires` = **闸**:宿主实测,有 `unmet` 才弹检查卡 / 挂「待引导」/ 投一次 Inbox。没有 `requires` =
+   **使用说明**:只在详情页里折叠展示,不弹不挂不提醒。**没有「完成设置」按钮,`__setupDone` 已废**,别读写它。
+3. 只有三类,**里面不放文案**:
+   - `{ "kind": "setting", "key": "serverUrl" }` —— key 必须 `registerSetting` 过(否则永远「无法检查」);
+     判据 = localStorage `plugin.<id>.<key>` trim 后非空**且 ≠ `default`**,所以必填项 `default` 写 `''`,别写能用的默认值或示例值。
+   - `{ "kind": "permission", "id": "microphone" }` —— id 只能是 `computerAccessibility` / `computerScreen` / `microphone` / `camera` / `screen`。
+   - `{ "kind": "check", "id": "server-ready" }` —— 配套 `ctx.registerReadiness?.({ id, label, check })`,**必须可选链**(旧宿主没有这个方法)。
+     `label` 是字符串或 `() => string`,按 `ctx.getLocale?.()` 给中英。
+4. `check()` 返回 `'ok' | 'unmet' | 'unknown'` 或 `{ state, detail }`(`detail` 用户可见 → 中英两份)。
+   **拿不准一律 `'unknown'`**:离线、未登录、本端没有 `window.tangu`、探测出错、HTTP 失败说不清原因。
+   只有**确认**没配才回 `'unmet'` —— unknown 永远不算未满足,宿主不拿它催用户。
+5. `check` 只在用户打开检查卡 / 点「重新检查」/ 手动启用 / 市场装完时被调,**启动期不调**,8 秒超时按 unknown。
+   别在里面做重活,也别指望它在后台跑。
+6. key / id 须匹配 `^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$`,≤8 条;坏条目被 `sanitizeOnboarding` **静默丢弃**
+   (全丢光闸就退化成说明,不报错)。英文走 `onboarding.en.intro` / `onboarding.en.steps`(与 `steps` 按下标对齐)。
+   在 Forsion 仓里时,改完 manifest 用宿主真消毒器验一遍(命令见正典文档「前置条件与使用说明」节)。
+
+范例:`samples/forsion-sample-bundle/`(setting 类 + `check.mjs` 断言 requires 的 key 都注册过)。
+
 ### 双语与图标
 
 - `ctx.getLocale()` 取初值 + `ctx.subscribeLocale(cb)` 只报变化。判定 = **切语言时视图不重挂也要变**;
@@ -463,7 +496,7 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
 
 ```js
 const m = ctx.tangu?.activeModel()        // {id, name} | null —— 输入栏药丸显示的那个
-const sp = ctx.tangu?.activeSpace()       // 'tangu' / '__home__' / 用户 Space id | null
+const sp = ctx.tangu?.activeSpace()       // 'tangu' / 'home'(主页)/ 用户 Space id | null
 const off = ctx.tangu?.subscribe(() => rerender())   // 只在这两个值**真变了**时回调,不是每次 store 变更
 ```
 
@@ -475,7 +508,125 @@ const s = ctx.tangu?.session?.()       // {contextWindow, contextTokens, session
 - ⚠️**`ctx.tangu` 在非 Tangu 宿主上整个不存在**(纯 Amadeus 壳 / unit 设备页 / 云端)—— 一律可选链 + 降级路径。
 - `session()` **拉取式**:这几个值流式回答里每帧都在动,**故意不进 `subscribe` 的变更键**(进去 = 把订阅插件按帧敲一遍)。要跟着动就自己定时拉,或"开面板那一刻读一次"。`contextWindow` 未知给 **0**、`effort` 未知给 **null** —— 别把 0/空串当档位画出来。
 - **能力探测,不是权限闸**:模型名不敏感,**不用**写 manifest `capabilities`(那道双闸给 `system.activeWindow` 那类)。
-- 只读。要换模型 / 发消息,走引擎侧 agent(通用纪律 5),别指望这里。
+- 只读。要换模型,走引擎侧 agent(通用纪律 5),别指望这里;要**开一个对话**见下「开新对话」。
+
+### Agent 状态:agentStatus / subscribeAgentStatus(2026-09-19 起)
+
+「跟着 agent 做反应」的插件(Desk 伴随形象、状态栏小宠物)用这一对:
+
+```js
+const st = ctx.tangu?.agentStatus?.()   // 省略参数 = 主区活动会话;传 null = 新对话草稿(恒 idle);传 id = 那个会话
+// → { phase, sessionId, runId, tool?, toolStage?, waitingFor?, since, until?, messageId?, textChars, reasoningChars,
+//     agentSlug?, agentName? }
+const off = ctx.tangu?.subscribeAgentStatus?.((s) => avatar.play(s.phase), /* sessionId? */)
+```
+
+| phase | 含义 |
+|---|---|
+| `idle` | 没在跑(草稿 / 空会话 / 用户已点停止 / done·error 的余韵过期) |
+| `thinking` | 在跑,但在推理 / 等模型首帧 / LLM 重试 / 工具结果回来等下一轮 |
+| `speaking` | 正在流式输出正文 |
+| `tool` | 有工具在跑:`tool` = 工具名,`toolStage` = `'args'`(模型还在写参数)/ `'exec'`(执行中) |
+| `waiting` | 等用户:`waitingFor` = `'approval'`(`tool` = 待批的工具名)/ `'inquiry'`(`tool` = `'ask_user'` / `'exit_plan_mode'`)。**优先级最高** |
+| `done` / `error` | 刚结束 / 刚失败;带 `until`,到点自动回 `idle`(约 4s / 6s) |
+
+- **订阅是变更过滤的**:只在 `phase / tool / toolStage / waitingFor / sessionId / agentSlug` 变了时回调,done/error 余韵到期再回调一次;
+  **每个 token 不回调**(流式期间 store 每个增量都在动,裸转发 = 把你按帧敲一遍)。宿主在禁用/重载时统一退订,你自己也 dispose。
+- **口型 / 说话量**:`speaking` 期间自己按帧(或 ~15Hz)拉 `agentStatus()`,对 `textChars` 做差分 + ~150ms 平滑;
+  `messageId` 变了(换了一条气泡)重置基线,负增量钳 0。这是 token 速率包络,不是语音响度 —— TTS 响度目前拿不到。
+- 已知空档(宿主没有状态可给,别当 bug 报):按下发送到 run 真正开始之间是 `idle`(新对话的 `sessionId` 会先从 null 变成新 id);
+  发送失败只有一个 toast、没有状态;委派出去的子代理子会话读出来是 `idle`。
+- Desk 伴随面里**别用这两个方法**,用 `mount` 递给你的 `host.status()` / `host.onStatus()` —— 那一份绑的是这张 Desk 所属的会话
+  (被钉住的分屏聊天,会话 ≠ 主区活动会话)。
+- 旧宿主 / 台架假探针没有 → 方法不存在或恒 `idle`;按 idle 处理即可。
+
+**这个会话归哪个 Agent(`agentSlug` / `agentName`,2026-09-20 起)** —— 给「每个 Agent 一套设置」的插件用(Live3D 让每个 Agent 有自己的形象):
+
+- `agentSlug` = 这个会话的 Agent。没显式选过 → 用户的默认 Agent;草稿会话(`sessionId: null`)→ 新对话界面上选中的那个。**外部引擎会话**(Claude Code 等 ACP 引擎,根本没有 Tangu agent)与推导不出来时**整条不给** —— 退回通用外观,别自己编一个 slug。
+- `agentName` 是展示名,名册还没拉回来 / Agent 已删时**省略**。别把 `agentSlug` 当名字画出去,用你自己的兜底文案。
+- 团队(群聊)会话报的是会话**配置的** Agent,不是当前发言的成员 —— 有意做成稳定的,免得形象在成员之间忽闪。
+- `agentSlug` **进**变更过滤:用户换会话的 Agent 时 `subscribeAgentStatus` 正好醒一次;改 Agent 的展示名**不会**(要新名字就自己拉一次 `agentStatus()`)。
+
+### Agent 名册:agents(2026-09-20 起)
+
+要做「每个 Agent 用哪个形象」这类选择器,光有当前会话不够,得要名册:
+
+```js
+const list = ctx.tangu?.agents?.() ?? []   // → [{ slug, name }, …];旧宿主给 [] —— 退化成「只认当前会话的 Agent」
+```
+
+- 是快照不是订阅:打开设置页时读一次即可。含 Muse 这类系统 Agent(与主界面「选择 Agent」条同一份名单);Agent 没有展示名时 `name` 回落成 `slug`。
+- 你自己存的 per-Agent 设置一律**按 `slug`** 建索引 —— 它就是 `agentStatus().agentSlug` 会还给你的那个稳定 id。名册里查不到的 slug = Agent 被删了(或名册还没拉回来):**留着那条设置**,只是别在选择器里列出来。
+
+### 开新对话:startChat(2026-09-19 起)
+
+插件的某个流程需要 **agent 接手**(例:「让 Agent 帮我导入这个模型」)时,用它开一个**用户看得见**的新对话,而不是后台偷跑:
+
+```js
+const r = await ctx.tangu?.startChat?.({
+  agent: 'live3d-importer',            // 你捆绑包 agents/<slug>/ 里的 slug;不给 = 用户默认 Agent
+  prompt: `Import the model at ${ctx.app.workFolder()}/incoming/a.vrm …`,   // 英文:模型读的
+  send: true,                          // 直接送出 —— ⚠️只对你**自家捆绑包**的 Agent 生效
+  folder: ctx.app.workFolder(),        // 库相对路径 → 新会话的工作目录(可选)
+})
+if (!r) copyToClipboard(prompt)        // 旧宿主 / 非 Tangu 宿主:没有这个方法,自己退化
+else if (!r.ok) ctx.notify(r.error)    // 'unknown agent: x' / 'send failed' / 'prompt is required' …
+```
+
+- 宿主做的事 = 用户点「新对话」同一套:离开主页 Space → 主区聊天清成空白草稿 → 选 Agent → 打开聊天 → 送出或预填。
+  `send:true` 成功时返回新会话 `sessionId`;**预填**(`send` 为假,或被降级)返回 `{ ok:true }` 不带 `sessionId`,由用户按回车。
+- **`send:true` 只放行本插件捆绑包真正播种的 Agent**;别家 Agent / 不指定 Agent 一律**静默降级为预填** —— 插件不能替用户花
+  别人 Agent 的 token、开别人的 host 工具。判据 = 清单里有(`agents/<slug>/config.toml`)**且**引擎当初是从你这个包播种的它
+  (新播种时引擎写 `agents/<slug>/.bundle-origin` = 你的插件目录名)。⚠️**撞名拿不到直发权**:同 slug 在装你之前就已存在
+  (用户自建的、默认 `xyra`、`muse`、别家插件先播的)时引擎永不覆盖,那个 Agent 不是你的 → 只预填。slug 起得独特些
+  (带上插件名前缀,如 `live3d-importer`);非本机桌面宿主(web / 移动端)问不到播种标记,一律预填。
+- `folder` 是**库相对**路径,宿主经与 `ctx.app.hostPath` 同一个函数解析成本机绝对路径;没有库 / 引擎不在本机
+  (云端、web)/ 路径带 `..`、以 `/` 开头、带盘符 → **忽略**(用默认工作区),不报错。目录首写即现 —— 先把文件
+  `writeBytes` 进去再开对话。工作区内的写入不会触发「工作区外写入」的升级审批(仍按用户自己的审批档)。
+- Agent 名册里没有这个 slug 时,宿主会先刷一次名册再等最多 3s(插件刚装、捆绑 Agent 刚播种进引擎的情况),仍没有才回
+  `unknown agent`。提示词上限 20000 字符,超了直接拒(不截断)。
+- **别在 `setup` 里调**,只在用户点了按钮之后调 —— 它会切走用户当前的主区聊天。
+
+## Agent Desk 伴随面:ctx.desk(2026-09-19 起)
+
+往 Tangu 聊天右侧的 **Agent Desk**(右栏那张卡片 + 展开后的侧板)里挂一块自绘区域,典型用法是会跟着 agent 状态做反应的 3D 形象:
+
+```js
+const h = ctx.desk?.registerCompanion({
+  id: 'avatar',                          // 宿主拼成 plugin:<pluginId>:avatar
+  mode: 'idle',                          // 'idle' | 'always',见下表;之后可 h.update({ mode }) 就地切,不重挂
+  mount(el, host) {                      // el 已撑满可用区域、position:relative;返回卸载函数
+    // host.surface: 'desk-card'(卡片,只读预览)| 'desk-panel'(展开侧板,可交互)
+    // host.sessionId(): 这张 Desk 的会话;新对话草稿 = null。首条消息发出(null → 真 id)与切会话都**不重挂**
+    // host.status() / host.onStatus(cb): 这张 Desk 所属会话的 agent 状态(同 ctx.tangu.agentStatus 的形状与变更过滤)
+    const off = host.onStatus((s) => avatar.play(s.phase))
+    return () => { off(); avatar.detach() }
+  },
+})
+// 设置页切模式:h?.update({ mode: 'always' });撤下:h?.dispose()。禁用/重载时宿主统一收。
+```
+
+| 模式 | 卡片 | 展开侧板 | Desk 的文件展示 |
+|---|---|---|---|
+| `idle` | Desk **没有任何展示条目**时(草稿 / 空会话 / 清空后)显示伴随面;agent 一往 Desk 上放东西就让位,卡片与侧板头部出现「清空 Desk」把它请回来 | 照旧显示文件 | 照旧 |
+| `always` | 永远只显示伴随面 | 只显示伴随面 | **整体停用**:`desk_present` / 编辑自动上台 / 直播格不再落状态,聊天里点引用、概览里点「正在编辑」一律走新标签页 |
+
+- **同一时刻只有一个生效者**:最后注册的那个(栈顶),它 `dispose` 后退回前一个。用户在设置里关掉了 Agent Desk 时伴随面也不出现(注册照常成功)。
+- 伴随面在场时(`always` 下,以及 idle 模式 Desk 为空)agent 的 `desk_screenshot` **照截你画出来的形象**,工具结果会写明「这是插件伴随面 `plugin:<你的 id>:<id>`,不是你放上来的内容」—— 所以别画会被误读成「agent 的产出」的东西(比如仿文件预览)。想让 agent 判读形象,在你的技能里写明它能 `load_tools(["desk_screenshot"])` 自己看。
+- ⚠️**两个挂载点、可能同时多份**:卡片与侧板是两次独立的 `mount`,收起/展开在两者间切换;主区、右侧 chat-panel、分屏钉住的
+  会话各有一张卡片。重资源(解析好的模型、贴图)**缓存在模块级**,每次 mount 只建自己的 renderer;卸载时
+  `renderer.dispose()` + `renderer.forceContextLoss()` —— Chromium 同时存活的 WebGL 上下文上限约 16 个。
+- **卡片正文是 `zoom: 0.75` + `pointer-events: none`**:卡片里收不到任何指针事件(只有整卡点击展开),旋转视角 / 戳模型这类交互只能
+  放在 `desk-panel`。卡片宽约 280px、高约「聊天列高的一半」,圆角裁切。
+- **WebGL 尺寸(zoom 下最容易错)**:canvas 的 CSS 保持 `width/height:100%`,绘图缓冲按**视觉尺寸**设:
+  `renderer.setPixelRatio(devicePixelRatio); renderer.setSize(rect.width, rect.height, false)`,`rect = el.getBoundingClientRect()`。
+  ⚠️第三个参数 **必须 `false`**:three 默认会把 278 这种视觉像素写回 style,在 zoom 0.75 里只铺满约 75%;用 `clientWidth`
+  (局部像素 371)能铺满但多渲染约 1.33 倍像素。别信 ResizeObserver 的 `devicePixelContentBoxSize`(zoom 下给错值)。
+- **resize 合并到 rAF**:侧板有 0.45s 的宽度过渡,拖宽把手逐帧改尺寸。指针换 NDC 一律用 `getBoundingClientRect()` 的比例(对 zoom 免疫),
+  别把 `offsetX` 局部像素和视口 `clientX` 混用。
+- **隐身但仍挂载**:聊天列窄于 760px 时卡片 `display:none`,组件却还在 —— canvas 变 0×0 而 rAF 照跑。尺寸为 0 / IntersectionObserver
+  不相交 / `document.hidden` 时暂停渲染循环;`prefers-reduced-motion` 下减弱待机动画。
+- 贴图 / glTF 的 CSP 注意事项见下「库内二进制资源」。
 
 ## 自动化规则播种:ctx.automation(2026-09-02 起)
 
@@ -570,6 +721,32 @@ const buf = await fetch(`amadeus-asset://v/${encodeURIComponent(vaultRel)}`).the
 ```
 
 按 vault 夹紧(越界 403)、支持 Range、`<img>`/`<video>` 也能当 `src`。⚠️**需要 Forsion ≥ 2.9.0**(CSP 的 connect-src 放行它是 2.9.0 才进的,2.8.1 及更早没有)—— 更早版本 CSP 的 `connect-src` 没放行它,症状是「`<img>` 能显示、fetch 一律 `Failed to fetch`」。文件让用户放进 `ctx.app.workFolder()`,`ctx.app.listFiles?.()` 列出来;**别随包分发大资产或有版权的第三方资产**。仪器:desktop 的 `npm run check:assetfetch`。
+
+**写/读字节(2026-09-19 起)**:`ctx.app.writeBytes?.(path, bytes)` / `ctx.app.readBytes?.(path)`。导入用户选的文件
+不需要宿主的文件对话框 —— 在自己的 DOM 里放 `<input type="file" accept=".vrm,.glb" multiple>`(或拖放区),
+`File.arrayBuffer()` 没有大小上限:
+
+```js
+const bytes = new Uint8Array(await file.arrayBuffer())
+await ctx.app.writeBytes?.(`${ctx.app.workFolder()}/models/${file.name}`, bytes)   // 原子写、父目录自动建、已存在即覆盖
+const back = await ctx.app.readBytes?.(`${ctx.app.workFolder()}/models/${file.name}`)  // Uint8Array | null
+```
+
+- 路径口径同 `writeFile`(库相对、越界由宿主钳死);收 `Uint8Array` / `ArrayBuffer` / 任意 TypedArray 视图(按字节原样)。
+  没有活动库 → `writeBytes` reject `'No vault is open'`,`readBytes` 给 `null`(见上「没有活动库」表)。
+- ⚠️**不走自写账本**:同一路径上的 `watchFile` 会把你自己这次写当成外部改动回调一次 —— 别 watch 自己写的二进制。
+- 多文件模型(`.gltf` + `.bin` + 贴图)要保留相对目录:`<input webkitdirectory>` 给每个 `File` 带 `webkitRelativePath`,逐个写到
+  `${dest}/${f.webkitRelativePath}`。
+
+**three.js 模型的两个坑**(`.glb` / `.vrm` / `.gltf`):
+- **内嵌贴图**:GLTFLoader 在 Chromium 上用 `ImageBitmapLoader`,对内嵌图片走 `fetch(blob:)`;`.gltf` 里 base64 的 buffer 走 `fetch(data:)`。
+  2026-09-19 起宿主 CSP 的 `connect-src` 放行了 `blob: data:`,原生 loader 直接能用;**更早的宿主**上贴图加载失败会被 loader 吞掉,
+  症状是「模型出来了但一片白、只有一行 console.error」。兼容写法(贴图改走 `<img>`,`img-src` 一直放行 blob:):
+  `loader.register((p) => { p.textureLoader = new THREE.TextureLoader(p.options.manager); return { name: 'forsion_csp_texture_fallback' } })`
+  —— 旧宿主上 `.gltf` 的 base64 buffer 仍然不行。仪器:desktop 的 `npm run check:assetfetch`(T5–T7)。
+- **相对 URI**:`amadeus-asset://v/<encodeURIComponent(整条路径)>` 把 `/` 编成了 `%2F`,`.gltf` 里 `tex/a.png` 这种相对引用按它解析会 404。
+  用 `parse(buf, '')` + `manager.setURLModifier((u) => /^(blob:|data:|amadeus-asset:|https?:)/.test(u) ? u : ctx.app.assetUrl(join(dirOf(modelPath), decodeURI(u))))`,
+  每端都对(web / unit 的资源 URL 是 `?ref=` 形,拼 base URL 那条路只在桌面成立)。
 
 CSP 是 `default-src 'self'`(没有 CDN),依赖一律 esbuild `bundle: true` 打进单文件。`main.js` **没有大小上限**。需要 disposer 时:
 

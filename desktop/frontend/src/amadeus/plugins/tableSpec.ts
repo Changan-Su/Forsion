@@ -17,7 +17,7 @@
  */
 import { DB_VERSION, DEFAULT_DB_VIEW, type DbColumn, type DbFile, type DbRow, type CellValue } from '@amadeus-shared/db/schema'
 import { groupValueKey } from '@amadeus-shared/db/groupRows'
-import type { TableCell, TableColumn, TableSpec } from './types'
+import type { TableCell, TableColumn, TableRow, TableSpec } from './types'
 
 /** 操作列的保留列 id(渲染端按它画按钮)。 */
 export const TABLE_ACTIONS_COL = '__actions'
@@ -77,6 +77,16 @@ export function validateTableSpec(spec: TableSpec): void {
     if (spec.groupBy.sort && !['manual', 'asc', 'desc'].includes(spec.groupBy.sort)) bad('分组排序无效', 'invalid group sort')
     if (spec.groupBy.order && (!Array.isArray(spec.groupBy.order) || spec.groupBy.order.some((v) => typeof v !== 'string'))) bad('分组顺序无效', 'invalid group order')
     if (spec.groupBy.hideEmpty !== undefined && typeof spec.groupBy.hideEmpty !== 'boolean') bad('隐藏空组须为布尔值', 'hideEmpty must be boolean')
+  }
+  if (spec.fold) {
+    if (!isObj(spec.fold)) bad('fold 必须是对象', 'fold must be an object')
+    const by = spec.fold.by
+    if (by !== undefined && (!Array.isArray(by) || by.some((k) => !keys.has(k)))) bad('折叠键列不存在', 'fold key column does not exist')
+    if (spec.fold.time !== undefined && !keys.has(spec.fold.time)) bad('折叠时间列不存在', 'fold time column does not exist')
+    if (!by?.length && !spec.fold.time) bad('fold 至少要给 by 或 time', 'fold needs by or time')
+    const m = spec.fold.minutes
+    if (m !== undefined && !(typeof m === 'number' && Number.isFinite(m) && m > 0)) bad('折叠时间窗须为正数', 'fold minutes must be a positive number')
+    if (spec.fold.summary !== undefined && typeof spec.fold.summary !== 'function') bad('fold.summary 必须是函数', 'fold.summary must be a function')
   }
   for (const r of spec.rows) {
     if (!isObj(r) || typeof r.id !== 'string' || !r.id) bad('每行都要有非空 id', 'every row needs a non-empty id')
@@ -194,52 +204,67 @@ export function specToDb(spec: TableSpec): DbFile {
     if (spec.actions) cells[TABLE_ACTIONS_COL] = ''
     return { id: r.id, cells }
   })
-  return { version: DB_VERSION, name: spec.id, columns, rows, ...(spec.groupBy ? { views: [{
-    ...DEFAULT_DB_VIEW, groupBy: spec.groupBy.key, groupSort: spec.groupBy.sort,
-    groupOrder: spec.groupBy.order?.map(groupValueKey), groupHideEmpty: spec.groupBy.hideEmpty,
+  return { version: DB_VERSION, name: spec.id, columns, rows, ...(spec.groupBy || spec.fold ? { views: [{
+    ...DEFAULT_DB_VIEW,
+    ...(spec.groupBy ? {
+      groupBy: spec.groupBy.key, groupSort: spec.groupBy.sort,
+      groupOrder: spec.groupBy.order?.map(groupValueKey), groupHideEmpty: spec.groupBy.hideEmpty,
+    } : {}),
+    ...(spec.fold ? { fold: { by: spec.fold.by, timeCol: spec.fold.time, minutes: spec.fold.minutes } } : {}),
   }] } : {}) }
+}
+
+type OptionMap = Map<string, Map<string, { value: string; label?: string; color?: string }>>
+function optionMapOf(spec: TableSpec): OptionMap {
+  const optionOf: OptionMap = new Map()
+  for (const c of spec.columns) {
+    if (c.kind !== 'select' || !Array.isArray(c.options)) continue
+    optionOf.set(c.key, new Map(c.options.map((o) => [o.value, o])))
+  }
+  return optionOf
+}
+
+/** 一格的边料。`literal` = 汇总格:给了 text 就原样显示(汇总行的基元是宿主算不到的通用汇总值,显示只能听插件的)。 */
+function cellMetaOf(c: TableColumn, cell: TableCell, optionOf: OptionMap, literal = false): TableCellMeta {
+  const o = cellObj(cell)
+  const meta: TableCellMeta = {}
+  // meta.text 只当「显示覆盖」:复合格(给了 sortValue,基元存的是排序键)与「该列类型消化不了的文案」
+  // (number 列的「—」、date 列的「永不」)才需要;普通格的基元值本身就是要显示的 —— 再塞 meta.text 会短路掉
+  // 渲染层的 date/number 格式化(日期渲成裸 ISO、数字丢千分位),两条路径就对不上了。
+  {
+    const t = textOf(cell)
+    const s = t === null || t === undefined ? '' : String(t)
+    const unparsable = s !== '' && ((c.kind === 'number' && !Number.isFinite(Number(s))) || (c.kind === 'date' && Number.isNaN(Date.parse(s))))
+    if (sortValueOf(cell) !== undefined || unparsable || (literal && s !== '')) meta.text = s
+  }
+  const opt = optionOf.get(c.key)?.get(String(cellValue(c.kind, cell)))
+  if (opt?.label !== undefined && meta.text === undefined) meta.text = opt.label
+  const tone = (o as { tone?: TableCellMeta['tone'] }).tone ?? toneOfColor(opt?.color)
+  if (tone) meta.tone = tone
+  for (const k of ['sub', 'dot', 'title', 'href'] as const) {
+    const v = (o as Record<string, unknown>)[k]
+    if (typeof v === 'string' && v) (meta as Record<string, unknown>)[k] = v
+  }
+  if ((o as { mono?: boolean }).mono || c.mono) meta.mono = true
+  if (c.kind === 'date') meta.format = c.format ?? 'datetime' // 契约默认 datetime;不给的话渲染层拿裸 ISO 没法格式化
+  if (isObj((o as { avatar?: unknown }).avatar)) {
+    const av = (o as { avatar: NonNullable<TableCellMeta['avatar']> }).avatar
+    meta.avatar = { ...av, attrs: safeAttrs(av.attrs) }
+  }
+  const attrs = safeAttrs((o as { attrs?: unknown }).attrs)
+  if (attrs) meta.attrs = attrs
+  return meta
 }
 
 /** TableSpec → cellMeta 边料(rowId → colId → 装饰)。空装饰的格不占位。 */
 export function tableCellMeta(spec: TableSpec): TableCellMetaMap {
   validateTableSpec(spec)
-  const optionOf = new Map<string, Map<string, { value: string; label?: string; color?: string }>>()
-  for (const c of spec.columns) {
-    if (c.kind !== 'select' || !Array.isArray(c.options)) continue
-    optionOf.set(c.key, new Map(c.options.map((o) => [o.value, o])))
-  }
+  const optionOf = optionMapOf(spec)
   const out: TableCellMetaMap = {}
   for (const r of spec.rows) {
     const row: Record<string, TableCellMeta> = {}
     for (const c of spec.columns) {
-      const cell = (r.cells ?? {})[c.key]
-      const o = cellObj(cell)
-      const meta: TableCellMeta = {}
-      // meta.text 只当「显示覆盖」:复合格(给了 sortValue,基元存的是排序键)与「该列类型消化不了的文案」
-      // (number 列的「—」、date 列的「永不」)才需要;普通格的基元值本身就是要显示的 —— 再塞 meta.text 会短路掉
-      // 渲染层的 date/number 格式化(日期渲成裸 ISO、数字丢千分位),两条路径就对不上了。
-      {
-        const t = textOf(cell)
-        const s = t === null || t === undefined ? '' : String(t)
-        const unparsable = s !== '' && ((c.kind === 'number' && !Number.isFinite(Number(s))) || (c.kind === 'date' && Number.isNaN(Date.parse(s))))
-        if (sortValueOf(cell) !== undefined || unparsable) meta.text = s
-      }
-      const opt = optionOf.get(c.key)?.get(String(cellValue(c.kind, cell)))
-      if (opt?.label !== undefined && meta.text === undefined) meta.text = opt.label
-      const tone = (o as { tone?: TableCellMeta['tone'] }).tone ?? toneOfColor(opt?.color)
-      if (tone) meta.tone = tone
-      for (const k of ['sub', 'dot', 'title', 'href'] as const) {
-        const v = (o as Record<string, unknown>)[k]
-        if (typeof v === 'string' && v) (meta as Record<string, unknown>)[k] = v
-      }
-      if ((o as { mono?: boolean }).mono || c.mono) meta.mono = true
-      if (c.kind === 'date') meta.format = c.format ?? 'datetime' // 契约默认 datetime;不给的话渲染层拿裸 ISO 没法格式化
-      if (isObj((o as { avatar?: unknown }).avatar)) {
-        const av = (o as { avatar: NonNullable<TableCellMeta['avatar']> }).avatar
-        meta.avatar = { ...av, attrs: safeAttrs(av.attrs) }
-      }
-      const attrs = safeAttrs((o as { attrs?: unknown }).attrs)
-      if (attrs) meta.attrs = attrs
+      const meta = cellMetaOf(c, (r.cells ?? {})[c.key], optionOf)
       if (Object.keys(meta).length) row[c.key] = meta
     }
     if (spec.actions) {
@@ -247,6 +272,25 @@ export function tableCellMeta(spec: TableSpec): TableCellMetaMap {
       if (Array.isArray(acts) && acts.length) row[TABLE_ACTIONS_COL] = { actions: acts.map((a) => ({ ...a, attrs: safeAttrs(a.attrs) })) }
     }
     if (Object.keys(row).length) out[r.id] = row
+  }
+  return out
+}
+
+/** 折叠单元的汇总行边料:调插件的 `fold.summary(成员行)`,只收规格里有的列、形状合法的格;没给的列交回通用汇总。
+ *  插件回调抛错 = 这一条汇总行退回通用汇总并记一条 console.error —— 它在 React 渲染期被调,抛出去会把整张表卸掉。 */
+export function foldSummaryMeta(spec: TableSpec, rows: TableRow[]): Record<string, TableCellMeta> {
+  const summary = spec.fold?.summary
+  if (typeof summary !== 'function') return {}
+  let cells: unknown
+  try { cells = summary(rows) } catch (e) { console.error('[amadeus] table fold.summary threw', e); return {} }
+  if (!isObj(cells)) return {}
+  const optionOf = optionMapOf(spec)
+  const out: Record<string, TableCellMeta> = {}
+  for (const c of spec.columns) {
+    if (!(c.key in cells)) continue
+    const cell = cells[c.key] as TableCell
+    if (!isPrimitive(cell) && !(isObj(cell) && isPrimitive((cell as { text?: unknown }).text))) continue
+    out[c.key] = cellMetaOf(c, cell, optionOf, true)
   }
   return out
 }

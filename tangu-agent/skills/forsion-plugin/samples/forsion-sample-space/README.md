@@ -16,6 +16,7 @@ Space 是纯数据的布局配方（L0）：把**已注册的视图**组合成�
 - `name`：字符串 或 `{ "zh": "…", "en": "…" }`。
 - `icon`（可选）：白名单 26 个——`bot, inbox, mail, notebook-text, book-open, briefcase, calendar-days, message-circle, folder, folder-open, file-text, star, heart, home, target, zap, globe, music, image, video, code, terminal, layout-grid, sparkles, boxes, list-tree`；不认识的名字静默回落方块图标。
 - `layout.main / left / right`：`{ "type": "<视图>", "params": {…} }` 数组；**main 至少一个视图**。
+- `layout.main` 第二项起可加 `"split":"right"` 或 `"split":"down"`，建立宿主原生 Dockview 分栏；省略时仍与旧配方一样开成同组标签页。`split` 不可用于第一项或左右侧栏。
 - 可用视图（随产品能力门禁）：通用 `workspace`（params.mode: sessions/files/notes/auto）、`outline`、`changelog`、`activity-log`；Tangu 对话档案 `chat`（params: followActive/reuseKey）、`memory`、`subchats`、`wechat`；Amadeus 档案 `amadeus-editor/-backlinks/-search/-tags/-graph`、`todo-list`、`calendar`；收件箱 `inbox-list`、`inbox-reader`；自动化档案 `automation-list`、`automation-runs`。绑定具体文件/会话的视图（`wsfile`、`amadeus-db/-drawing/-pdf`）是机器态，不进配方。引用了目标安装上未注册的视图会整包拒载（报「引用了未注册的视图」）。
 - **插件视图也能组合**：桌面插件经 `ctx.registerView` 注册的视图，类型名固定为 `plugin:<插件id>:<视图id>`——配方可直接引用，记得在 `requires.views` 里声明，让没装该插件的安装尽早报清晰错误。
 - 有意义的 params 只有 `workspace.mode` 与 `chat.followActive/reuseKey`——其余（sessionId、notePath 等）都是机器特定的，别写。
@@ -31,6 +32,6 @@ Space 是纯数据的布局配方（L0）：把**已注册的视图**组合成�
 
 ## English (short)
 
-A Forsion Desktop custom Space is a single data file: `space.json` composing already-registered views into main/left/right panes. Easiest authoring path: arrange the layout in-app, then Command Palette → "Save current layout as Space", and hand-tune the emitted file. `layout.main` needs ≥1 view; ids are kebab-case (`tangu`/`inbox`/`amadeus` reserved); include a top-level `version` so market update checks work.
+A Forsion Desktop custom Space is a single data file: `space.json` composing already-registered views into main/left/right panes. Easiest authoring path: arrange the layout in-app, then Command Palette → "Save current layout as Space", and hand-tune the emitted file. `layout.main` needs ≥1 view; later items may declare `"split":"right"` or `"split":"down"` for native Dockview splits (omission keeps tab behavior). Ids are kebab-case (`tangu`/`inbox`/`amadeus` reserved); include a top-level `version` so market update checks work.
 
 MIT © Changan Su

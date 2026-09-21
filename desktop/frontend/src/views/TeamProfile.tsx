@@ -4,11 +4,12 @@ import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
 import { deleteTeamAvatar, getTeam, patchTeam, putSessionConfig, updateSession, uploadTeamAvatar } from '../services/backendService'
-import type { AgentConfig, NormalAgentDef, SessionRecord, TeamDef } from '../types'
+import type { AgentConfig, ModelInfo, NormalAgentDef, SessionRecord, TeamDef, ThinkingLevel } from '../types'
 import { isTeamImageAvatar, THINKING_LEVELS } from '../types'
 import { ProfileModelField, ProfileTextEditor } from './profileControls'
 import { AvatarStack } from '../components/AvatarStack'
-import { moveTeamMember, teamDraft, teamSessionConfig, type TeamDraft } from './teamProfileState'
+import { ModelSelect } from '../components/ModelSelect'
+import { moveTeamMember, teamDraft, teamSessionConfig, type MemberTuning, type TeamDraft } from './teamProfileState'
 import './teamProfileMessages'
 import './teamProfile.css'
 
@@ -21,7 +22,7 @@ type Props = {
 /** A TEAM edits its persistent definition; a project's party edits only this conversation. */
 export function TeamProfile({ session, config, renderMember }: Props) {
   const { t } = useI18n()
-  const s = useApp(useShallow((a) => ({ cfg: a.cfg, agents: a.agentDefs, avatars: a.agentAvatars,
+  const s = useApp(useShallow((a) => ({ cfg: a.cfg, agents: a.agentDefs, avatars: a.agentAvatars, models: a.modelsResp?.models,
     teamAvatarUrl: config.teamSlug ? a.teamAvatars[config.teamSlug] : undefined,
     work: session ? a.teamWorkBySession[session.id] : undefined,
     running: session ? !!a.runningBySession[session.id] : false, connected: a.connState === 'ok',
@@ -58,6 +59,12 @@ export function TeamProfile({ session, config, renderMember }: Props) {
   const agentFor = (slug: string) => draft.tempAgents.find((a) => a.slug === slug) || s.agents.find((a) => a.slug === slug)
   const open = (slug: string) => { setSelected(slug); setOpened((ids) => ids.includes(slug) ? ids : [...ids, slug]) }
   const add = (slug: string) => { patch({ members: [...draft.members, { slug, role: '' }] }); setPicker(false); setQuery('') }
+  // 会话级调档:已存成员写 memberConfigs(只影响本会话),临时成员的模型 / Effort 本就住在它自己的定义里 —— 两处只此一个写点。
+  const tuneMember = (slug: string, value: { model?: string; thinkingLevel?: ThinkingLevel | '' }) => {
+    if (draft.tempAgents.some((a) => a.slug === slug)) { patch({ tempAgents: draft.tempAgents.map((a) => a.slug === slug ? { ...a, ...value } : a) }); return }
+    const merged = { ...draft.memberConfigs[slug], ...value }
+    patch({ memberConfigs: { ...draft.memberConfigs, [slug]: { model: merged.model || undefined, thinkingLevel: merged.thinkingLevel || undefined } } })
+  }
   const addTemp = () => {
     const agent: NormalAgentDef = { slug: `temp-${crypto.randomUUID()}`, name: t('teamProfile.temp'), description: '', model: '', tools: [], thinkingLevel: '', maxIterations: null, approvalMode: '', createdBy: 'user', createdAt: '', systemPrompt: '' }
     patch({ members: [...draft.members, { slug: agent.slug, role: '' }], tempAgents: [...draft.tempAgents, agent] })
@@ -175,8 +182,10 @@ export function TeamProfile({ session, config, renderMember }: Props) {
             return <article className={`team-member${!agent ? ' unavailable' : ''}`} key={m.slug} data-team-member={m.slug}>
               <button className="team-member-open" disabled={!agent} onClick={() => open(m.slug)} aria-label={`${t('teamProfile.inspect')} ${agent?.name || m.slug}`}>
                 <span className="team-member-portrait">{s.avatars[m.slug] ? <img src={s.avatars[m.slug]} alt="" /> : <Bot size={42} strokeWidth={1} />}</span>
-                <strong>{agent?.name || m.slug}</strong><small className="team-member-model">{agent?.model || t('agentProfile.default')}</small><span className={`team-member-status ${status}`}>{agent ? t(`teamProfile.status.${status}`) : t('teamProfile.missing')}</span><ChevronRight size={14} className="team-member-chevron" />
+                <strong>{agent?.name || m.slug}</strong><span className={`team-member-status ${status}`}>{agent ? t(`teamProfile.status.${status}`) : t('teamProfile.missing')}</span><ChevronRight size={14} className="team-member-chevron" />
               </button>
+              {agent && <MemberTuning agent={agent} models={s.models || []} temp={draft.tempAgents.some((a) => a.slug === m.slug)}
+                tuning={draft.memberConfigs[m.slug]} onChange={(value) => tuneMember(m.slug, value)} />}
               <label className="team-member-role"><span>{t('teamProfile.role')}</span><textarea rows={2} aria-label={`${agent?.name || m.slug} ${t('teamProfile.role')}`} value={m.role} maxLength={500} placeholder={t('teamProfile.rolePlaceholder')} onChange={(e) => patch({ members: draft.members.map((v) => v.slug === m.slug ? { ...v, role: e.target.value } : v) })} /></label>
               <div className="team-member-actions">
                 <button disabled={index === 0} aria-label={t('teamProfile.moveUp')} title={t('teamProfile.moveUp')} onClick={() => patch({ members: moveTeamMember(draft.members, m.slug, -1) })}><ArrowUp size={13} /></button>
@@ -205,6 +214,38 @@ export function TeamProfile({ session, config, renderMember }: Props) {
       return <div className="team-detail-pane" key={slug} hidden={selected !== slug} data-team-member-detail={slug}>{temp ? <TempMember agent={agent} onChange={(value) => patch({ tempAgents: draft.tempAgents.map((a) => a.slug === slug ? { ...a, ...value } : a) })} onBack={() => setSelected('')} /> : renderMember(agent, s.work?.[slug]?.sessionId)}</div>
     })}
   </section>
+}
+
+/** 成员卡上的会话级调档:模型 + Effort 各一个控件,留空 = 沿用该成员自己的设置(saved)或会话模型(临时成员)。
+ *  真值来源分两处:已存成员在 draft.memberConfigs(本会话),临时成员就在它的定义里 —— 由 temp 决定读哪边,写点统一在 tuneMember。 */
+function MemberTuning({ agent, models, temp, tuning, onChange }: {
+  agent: NormalAgentDef
+  models: ModelInfo[]
+  temp: boolean
+  tuning?: MemberTuning
+  onChange: (value: { model?: string; thinkingLevel?: ThinkingLevel | '' }) => void
+}) {
+  const { t } = useI18n()
+  const model = (temp ? agent.model : tuning?.model) || ''
+  const level = (temp ? agent.thinkingLevel : tuning?.thinkingLevel) || ''
+  // 沿用的是谁:已存成员留空 = 用它自己的设置;临时成员的定义就是这里,留空 = 会话模型 / 引擎缺省档。
+  const inherited = temp ? { model: '', level: '' } : { model: agent.model || '', level: agent.thinkingLevel || '' }
+  // 两格都窄:前缀用短的「默认」,别用整句 —— 模型那格会省略号吃掉名字,Effort 那格(原生 select)直接硬截。
+  const follow = (value: string) => value ? `${t('teamProfile.tuneDefault')} · ${value}` : t('teamProfile.tuneModelDefault')
+  return <div className="team-member-tuning">
+    <span className="team-member-tuning-k" title={t('teamProfile.tuneHint')}>{t('teamProfile.tuneScope')}</span>
+    <ModelSelect
+      models={models.filter((m) => (m.modelType || 'llm') === 'llm')}
+      value={model}
+      onChange={(id) => onChange({ model: id })}
+      defaultLabel={inherited.model ? follow(models.find((m) => m.id === inherited.model)?.name || inherited.model) : t('teamProfile.tuneModelDefault')}
+      ariaLabel={`${agent.name} ${t('teamProfile.tuneModel')}`}
+    />
+    <select className="team-member-effort" aria-label={`${agent.name} ${t('teamProfile.tuneEffort')}`} value={level} onChange={(e) => onChange({ thinkingLevel: e.target.value as ThinkingLevel | '' })}>
+      <option value="">{inherited.level ? `${t('teamProfile.tuneDefault')} · ${t(`input.thinkingShort.${inherited.level}`)}` : t('teamProfile.tuneDefault')}</option>
+      {THINKING_LEVELS.map((lv) => <option key={lv} value={lv}>{t(`input.thinkingShort.${lv}`)}</option>)}
+    </select>
+  </div>
 }
 
 /** Temporary members are session definitions; expose only fields the engine accepts for them. */

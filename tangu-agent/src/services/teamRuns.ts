@@ -136,7 +136,9 @@ export const activateMember: ActivateMember = async (a) => {
   try {
     sessionId = await ensureMemberSession(a);
     // Direct follow-ups in the child Chat View retain its team identity and execution scope.
-    await query('UPDATE chat_sessions SET agent_config = ? WHERE id = ?', [JSON.stringify(memberRunConfig(a)), sessionId]);
+    // model_id 一起写穿:会话级调档(teamMemberConfigs)让成员模型逐次可变,只在建会话时写一次的话,
+    // 子聊天里直接追问会退回上一个模型(建会话那次的值)。
+    await query('UPDATE chat_sessions SET agent_config = ?, model_id = ? WHERE id = ?', [JSON.stringify(memberRunConfig(a)), a.member.model || a.modelId || null, sessionId]);
     runId = uuidv4();
     await createRun({
       id: runId,

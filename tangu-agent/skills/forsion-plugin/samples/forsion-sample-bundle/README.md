@@ -55,6 +55,18 @@ sample-bundle/
 自动化 `agent_run` 三个入口共用同一条管线,零通道基建。详见内置技能「Forsion 扩展开发」的**通用纪律 5** 与
 `docs/Function/生态内容制作指南.md` 的「动作性能力住引擎侧」一节;真实范例见下面「发布」一节的青鸟。
 
+## 前置条件示范(onboarding.requires,2026-09-21 起)
+
+manifest 的 `onboarding.requires` 写了一条 `{ "kind": "setting", "key": "nickname" }`:「打个招呼」不知道怎么称呼你就不工作,
+所以它是**闸** —— 宿主实测 `plugin.sample-bundle.nickname` 是否非空且 ≠ 声明的默认值(`main.js` 里 `registerSetting` 的
+`default: ''`),没填才弹检查卡、挂「待引导」徽标;填了徽标自己消失,没有「完成设置」按钮。
+
+- 只为「不做就不工作」的东西写 `requires`;用法说明留在 `steps` 与本 README,不写励志句。
+- 另两类:`{ "kind": "permission", "id": "microphone" }`(系统授权)与 `{ "kind": "check", "id": "…" }`
+  (配 `ctx.registerReadiness?.({ id, label, check })`,拿不准回 `'unknown'`)。完整契约见
+  `docs/Function/生态内容制作指南.md`「前置条件与使用说明」节。
+- `check.mjs` 断言 requires 里的 setting key 都注册过、default 为空串 —— 漏注册宿主会永远显示「暂时无法检查」。
+
 ## 开发循环
 
 1. 改代码。内嵌引擎插件构建:`cd tangu-plugins/sample-bundle-tool && npm i && npm run build`;

@@ -4,8 +4,14 @@
 //
 // 用法:
 //   node scripts/plugin-view.e2e.cjs <插件目录|main.js 路径> [--view <viewId>] [--id <pluginId>]
-//                                    [--expect-views a,b] [--expect-commands x,y] [--shots <dir>]
+//                                    [--expect-views a,b] [--expect-commands x,y] [--shots <dir>] [--companion]
 // 例:node scripts/plugin-view.e2e.cjs ../../Forsion-Instrumentality-Project/forsion-plugin-memoflow
+//
+// --companion(opt-in,2026-09-19+):验 Agent Desk 伴随面(ctx.desk.registerCompanion)。装插件**之前**先装台架的
+// 假 Tangu 探针(__pv.fakeTangu,agent 状态由 __pv.setAgentStatus 驱动),然后断言:注册了伴随面;经真
+// DeskCompanionHost 挂进卡片(278×394)与侧板(640×820)两种盒子都画出了非零尺寸的 <canvas>;7 个 phase
+// 轮一遍不抛页面错误、宿主不报 [desk-companion] 回调失败;切会话(草稿 null → 真 id → 另一个)不重挂。
+// 每个 phase 一张截图:<shots>/companion-<surface>-<phase>.png。插件没注册视图时跳过视图那组(伴随面插件可以只有伴随面)。
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -45,6 +51,15 @@ if (!fs.existsSync(mainPath)) { console.error(`找不到 ${mainPath}`); process.
 let manifest = {}
 try { manifest = JSON.parse(fs.readFileSync(path.join(pluginDir, 'manifest.json'), 'utf8')) } catch { /* 允许无 manifest */ }
 const pluginId = arg('id', manifest.id || path.basename(pluginDir))
+const COMPANION = process.argv.includes('--companion')
+const PHASES = ['idle', 'thinking', 'speaking', 'tool', 'waiting', 'error', 'done']
+/** 每个 phase 配一份像样的附加字段(tool 名、等什么),插件按真宿主的口径拿得到。 */
+const PHASE_EXTRA = {
+  thinking: { reasoningChars: 120 },
+  speaking: { textChars: 240, messageId: 'pv-msg-1' },
+  tool: { tool: 'read_file', toolStage: 'exec' },
+  waiting: { tool: 'run_bash', waitingFor: 'approval' },
+}
 const SHOTS = arg('shots', path.join(os.tmpdir(), 'plugview-shots', pluginId))
 
 function ping() {
@@ -103,6 +118,98 @@ const CONTRAST_PROBE = `(() => {
 
 const CJK = /[一-鿿]/g
 
+async function viewChecks(page, contrib) {
+  const viewId = arg('view', contrib.views[0] && contrib.views[0].id)
+  if (!viewId) { throw new Error('插件没有视图可开') }
+  await page.evaluate((v) => window.__pv.open(v), viewId)
+  await page.waitForTimeout(900)
+
+  const shot = async (tag) => { await page.screenshot({ path: path.join(SHOTS, `${tag}.png`) }) }
+  const probe = async () => page.evaluate(CONTRAST_PROBE)
+  const bodyText = async () => page.locator('[data-tag="pv-host"]').innerText().catch(() => '')
+
+  // ① 中文 + 浅色:视图真的画出东西了
+  const zhLight = await bodyText()
+  check('视图挂载后有可见内容', zhLight.trim().length > 0, `${zhLight.replace(/\s+/g, ' ').slice(0, 80)}`)
+  const c1 = await probe()
+  check('浅色模式无低对比文字', c1.bad.length === 0, JSON.stringify(c1.bad))
+  await shot('zh-light')
+
+  // ② 深色
+  await page.evaluate(() => window.__pv.setMode('dark'))
+  await page.waitForTimeout(500)
+  const c2 = await probe()
+  check('深色模式无低对比文字', c2.bad.length === 0, JSON.stringify(c2.bad))
+  const darkText = await bodyText()
+  check('深色模式内容仍在', darkText.trim().length > 0)
+  await shot('zh-dark')
+
+  // ③ 英文(仍深色 → 再回浅色)
+  await page.evaluate(() => window.__pv.setLocale('en'))
+  await page.waitForTimeout(800)
+  const enDark = await bodyText()
+  await shot('en-dark')
+  await page.evaluate(() => window.__pv.setMode('light'))
+  await page.waitForTimeout(400)
+  const enLight = await bodyText()
+  await shot('en-light')
+  check('切英文后界面文案变了(真读了 locale)', enDark.trim() !== zhLight.trim() && enDark.trim().length > 0,
+    `zh="${zhLight.replace(/\s+/g, ' ').slice(0, 40)}" en="${enDark.replace(/\s+/g, ' ').slice(0, 40)}"`)
+  const cjk = (enLight.match(CJK) || []).length
+  const ratio = enLight.length ? cjk / enLight.length : 0
+  check('英文界面基本无残留中文 (<5%)', ratio < 0.05, `${cjk}/${enLight.length} 个中文字符`)
+  const c3 = await probe()
+  check('英文+浅色无低对比文字', c3.bad.length === 0, JSON.stringify(c3.bad))
+}
+
+/** --companion:伴随面两种挂载点 × 7 个 phase。 */
+async function companionChecks(page, errors, consoleErrors) {
+  const comp = await page.evaluate(() => window.__pv.companion())
+  check('注册了 Desk 伴随面(ctx.desk.registerCompanion)', !!comp, JSON.stringify(comp))
+  if (!comp) return
+  const box = page.locator('[data-tag="pv-companion"]')
+  const canvasOf = () => page.evaluate(() => {
+    const host = document.querySelector('[data-tag="pv-companion"] .agent-desk-companion-slot')
+    const cv = host && host.querySelector('canvas')
+    const r = cv ? cv.getBoundingClientRect() : null
+    return {
+      children: host ? host.childElementCount : -1,
+      canvas: cv ? { w: r.width, h: r.height, bw: cv.width, bh: cv.height } : null,
+    }
+  })
+  const hostErrors = () => consoleErrors.filter((t) => t.includes('[desk-companion]'))
+  for (const surface of ['desk-card', 'desk-panel']) {
+    const errBefore = errors.length
+    await page.evaluate(() => window.__pv.setAgentStatus('idle'))
+    await page.evaluate((s) => window.__pv.mountCompanion(s), surface)
+    await page.waitForTimeout(1200)
+    const m = await canvasOf()
+    check(`[${surface}] 挂载后有 DOM`, m.children > 0, JSON.stringify(m))
+    check(`[${surface}] 画出非零尺寸的 <canvas>`, !!m.canvas && m.canvas.w > 0 && m.canvas.h > 0 && m.canvas.bw > 0 && m.canvas.bh > 0,
+      JSON.stringify(m.canvas))
+    for (const phase of PHASES) {
+      // done / error 带余韵到期时刻(真探针的口径),到点回 idle 由插件自己不管 —— 台架只验它画得出来
+      const extra = { ...(PHASE_EXTRA[phase] || {}), ...(phase === 'done' || phase === 'error' ? { until: Date.now() + 5000 } : {}) }
+      await page.evaluate(([ph, ex]) => window.__pv.setAgentStatus(ph, ex), [phase, extra])
+      await page.waitForTimeout(450)
+      await box.screenshot({ path: path.join(SHOTS, `companion-${surface}-${phase}.png`) })
+    }
+    check(`[${surface}] 7 个 phase 轮一遍无页面错误`, errors.length === errBefore, errors.slice(errBefore, errBefore + 3).join(' | '))
+    // 切会话:草稿(null)→ 真 id → 另一个会话,伴随面只换状态不重挂
+    const before = await page.evaluate(() => window.__pv.companionMounts())
+    for (const sid of [null, 'pv-session-a', 'pv-session-b']) {
+      await page.evaluate(([s, id]) => window.__pv.mountCompanion(s, id), [surface, sid])
+      await page.waitForTimeout(250)
+    }
+    const after = await page.evaluate(() => window.__pv.companionMounts())
+    check(`[${surface}] 切会话(草稿→真 id→另一个)不重挂`, after === before, `mount 次数 ${before} → ${after}`)
+    await page.evaluate(() => window.__pv.unmountCompanion())
+    await page.waitForTimeout(300)
+    check(`[${surface}] 卸载后挂载盒清空`, (await box.count()) === 0)
+  }
+  check('宿主没报伴随面回调失败([desk-companion])', hostErrors().length === 0, hostErrors().slice(0, 3).join(' | '))
+}
+
 async function main() {
   let vite = null
   if (!(await ping())) {
@@ -125,6 +232,8 @@ async function main() {
     await page.waitForFunction(() => !!window.__pv, null, { timeout: 20000 })
     // 语言先钉成中文,免得上一轮跑剩的 localStorage 污染
     await page.evaluate(() => window.__pv.setLocale('zh'))
+    // 伴随面要 ctx.tangu 的 agent 状态:假探针必须早于 loadPlugin(ctx.tangu 的有无在建 context 那一刻定)
+    if (COMPANION) await page.evaluate(() => window.__pv.fakeTangu())
     let setupErr = null
     try {
       await page.evaluate(([c, id, name]) => window.__pv.loadPlugin(c, { id, name }), [code, pluginId, manifest.name || pluginId])
@@ -134,7 +243,9 @@ async function main() {
     await page.waitForTimeout(300)
     const contrib = await page.evaluate(() => window.__pv.contributions())
     console.log('   贡献点:', JSON.stringify(contrib))
-    check('至少注册一个视图', contrib.views.length > 0, JSON.stringify(contrib.views))
+    const skipViews = COMPANION && contrib.views.length === 0 && !arg('view', '')
+    if (skipViews) console.log('   (--companion 且插件没注册视图:跳过视图那组)')
+    else check('至少注册一个视图', contrib.views.length > 0, JSON.stringify(contrib.views))
 
     const expectViews = arg('expect-views', '')
     if (expectViews) {
@@ -151,47 +262,8 @@ async function main() {
       check(`SPEC 点名的命令齐全 (${want.join(',')})`, miss.length === 0, `缺 ${miss.join(',')}`)
     }
 
-    const viewId = arg('view', contrib.views[0] && contrib.views[0].id)
-    if (!viewId) { throw new Error('插件没有视图可开') }
-    await page.evaluate((v) => window.__pv.open(v), viewId)
-    await page.waitForTimeout(900)
-
-    const shot = async (tag) => { await page.screenshot({ path: path.join(SHOTS, `${tag}.png`) }) }
-    const probe = async () => page.evaluate(CONTRAST_PROBE)
-    const bodyText = async () => page.locator('[data-tag="pv-host"]').innerText().catch(() => '')
-
-    // ① 中文 + 浅色:视图真的画出东西了
-    const zhLight = await bodyText()
-    check('视图挂载后有可见内容', zhLight.trim().length > 0, `${zhLight.replace(/\s+/g, ' ').slice(0, 80)}`)
-    const c1 = await probe()
-    check('浅色模式无低对比文字', c1.bad.length === 0, JSON.stringify(c1.bad))
-    await shot('zh-light')
-
-    // ② 深色
-    await page.evaluate(() => window.__pv.setMode('dark'))
-    await page.waitForTimeout(500)
-    const c2 = await probe()
-    check('深色模式无低对比文字', c2.bad.length === 0, JSON.stringify(c2.bad))
-    const darkText = await bodyText()
-    check('深色模式内容仍在', darkText.trim().length > 0)
-    await shot('zh-dark')
-
-    // ③ 英文(仍深色 → 再回浅色)
-    await page.evaluate(() => window.__pv.setLocale('en'))
-    await page.waitForTimeout(800)
-    const enDark = await bodyText()
-    await shot('en-dark')
-    await page.evaluate(() => window.__pv.setMode('light'))
-    await page.waitForTimeout(400)
-    const enLight = await bodyText()
-    await shot('en-light')
-    check('切英文后界面文案变了(真读了 locale)', enDark.trim() !== zhLight.trim() && enDark.trim().length > 0,
-      `zh="${zhLight.replace(/\s+/g, ' ').slice(0, 40)}" en="${enDark.replace(/\s+/g, ' ').slice(0, 40)}"`)
-    const cjk = (enLight.match(CJK) || []).length
-    const ratio = enLight.length ? cjk / enLight.length : 0
-    check('英文界面基本无残留中文 (<5%)', ratio < 0.05, `${cjk}/${enLight.length} 个中文字符`)
-    const c3 = await probe()
-    check('英文+浅色无低对比文字', c3.bad.length === 0, JSON.stringify(c3.bad))
+    if (!skipViews) await viewChecks(page, contrib)
+    if (COMPANION) await companionChecks(page, errors, consoleErrors)
 
     // ④ 页面级错误
     check('无未捕获页面错误', errors.length === 0, errors.slice(0, 3).join(' | '))

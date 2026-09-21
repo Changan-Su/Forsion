@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { clampMenu, edgeNudge, nestedPanelPlacement } from './menuAnchor'
+import { clampMenu, edgeNudge, nestedPanelPlacement, nestedPanelTop } from './menuAnchor'
 
 // 视口 1000x800,菜单 200x300,margin 8
 describe('clampMenu', () => {
@@ -81,5 +81,20 @@ describe('nestedPanelPlacement', () => {
   it('zoom≠1 时 panel / gap / margin 都换成视口 px 后再判断', () => {
     expect(nestedPanelPlacement(300, 524, 200, 100, 860, 1)).toBe('right')
     expect(nestedPanelPlacement(300, 524, 200, 100, 860, 1.6)).toBe('stacked')
+  })
+})
+
+describe('nestedPanelTop', () => {
+  it('优先把二级面板顶边贴住触发行，而不是固定沉到一级菜单底部', () => {
+    expect(nestedPanelTop(360, 100, 300, 650, 0, 700)).toBe(60)
+  })
+
+  it('触发行太靠下时向上夹住，不越过一级菜单底边', () => {
+    expect(nestedPanelTop(560, 180, 300, 650, 0, 700)).toBe(170)
+  })
+
+  it('同时尊重 View 顶边与累计 zoom，并返回局部 CSS px', () => {
+    expect(nestedPanelTop(90, 100, 100, 500, 120, 700)).toBe(28)
+    expect(nestedPanelTop(360, 100, 300, 650, 0, 700, 1.5)).toBe(40)
   })
 })

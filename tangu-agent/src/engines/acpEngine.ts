@@ -9,7 +9,7 @@
  *
  * 纯翻译逻辑抽成 createAcpClient(无进程)，单测直接喂伪造通知即可，见 acpEngine.test.ts。
  */
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { Writable, Readable } from 'node:stream';
 import {
   ClientSideConnection,
@@ -53,6 +53,57 @@ export function spawnEngine(def: EngineDef, opts?: { cwd?: string; detached?: bo
     windowsHide: true,
     detached: opts?.detached ?? false,
   });
+}
+
+/** 起不来的子进程要立刻让握手失败,别让用户干等 30s。两种形态都得盯:
+ *  ① spawn 报错(命令不存在 / Windows 无 shell);
+ *  ② **进程起来了,但握手前自己退了** —— 2026-09-19 线上实报:Windows 安装包里的内置 Node 缺 npm
+ *     (electron-builder 的 extraResources 过滤器无条件丢掉 `from` 根下那层 `node_modules`),
+ *     `npx.cmd` 找不到 npm-prefix.js 直接 MODULE_NOT_FOUND 退出 → 没有 'error' 事件 → 只能等超时,
+ *     日志里三坨栈 + 一句 `timed out after 30000ms`,读不出病因。
+ *  顺手留 stderr 末尾几行进错误信息,让「起不来」自带现场。
+ *  ⚠️报错要等 stderr 排空:'exit' 只保证进程没了,**不保证 stdio 读完**('close' 才保证)——
+ *  在 'exit' 上直接 reject 会拿到空 tail(最后一段 MODULE_NOT_FOUND 还在管道里)。但 detached 的
+ *  npx 会把 stderr 传给孙进程,'close' 可能迟迟不来,所以两边都听:'close' 先到就立刻报,
+ *  否则 'exit' 后给 EXIT_FLUSH_MS 的排空宽限再报。
+ *  disarm():子进程的死活不再关我们事时撤表(run 收尾主动 kill、探测完 kill)—— 那不是失败。 */
+const STDERR_TAIL = 4;
+const EXIT_FLUSH_MS = 200;
+export function watchEngineStartup(child: ChildProcess, engineId: string, tag = ''): { failed: Promise<never>; disarm: () => void } {
+  const tail: string[] = [];
+  child.stderr?.on('data', (d: Buffer) => {
+    const s = d.toString().trim();
+    if (!s) return;
+    console.warn(`[engine:${engineId}]${tag} ${s}`);
+    tail.push(s);
+    if (tail.length > STDERR_TAIL) tail.shift();
+  });
+  let armed = true;
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  const failed = new Promise<never>((_, reject) => {
+    const die = (code: number | null, signal: NodeJS.Signals | null): void => {
+      if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+      if (!armed) return;
+      armed = false;
+      const why = tail.length ? `:${tail.join(' / ')}` : '';
+      reject(new Error(`engine ${engineId} 握手前就退出了(code=${code ?? signal})${why}`));
+    };
+    child.on('error', (e) => {
+      if (!armed) return;
+      armed = false;
+      reject(new Error(`engine spawn failed: ${e.message}(请确认已安装 Node/npx)`));
+    });
+    child.on('exit', (code, signal) => {
+      if (!armed || flushTimer) return;
+      flushTimer = setTimeout(() => die(code, signal), EXIT_FLUSH_MS);
+      flushTimer.unref?.(); // 宽限期不该吊住进程退出
+    });
+    child.on('close', (code, signal) => die(code, signal));
+  });
+  return {
+    failed,
+    disarm: () => { armed = false; if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; } },
+  };
 }
 
 /** 给 promise 加超时闸(到点 reject);用于外部引擎握手兜底,防子进程不回包时无限 await。 */
@@ -203,18 +254,11 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
   // detached:true → 子进程自成进程组(pgid=child.pid);kill 时杀「整组」，连带 npx 衍生的真子进程(claude-code-acp)，
   // 否则只杀外层 npx、孙进程残留成孤儿。范本 ../tools/hostExec.ts。
   const child = spawnEngine(def, { cwd, detached: true });
-  // spawn 失败(Windows 上 shell 缺失/Node 未装/命令不存在)必须让握手立刻失败,否则 initialize 会永久 await。
-  let onSpawnError: (e: Error) => void = () => {};
-  const spawnFailed = new Promise<never>((_, reject) => { onSpawnError = reject; });
-  child.on('error', (e) => {
-    ctx.publish('status', { detail: `engine spawn error: ${e.message}` });
-    onSpawnError(new Error(`engine spawn failed: ${e.message}（请确认已安装 Node/npx）`));
-  });
-  // 适配器把日志写 stderr；只做诊断，不进协议流。
-  child.stderr?.on('data', (d: Buffer) => {
-    const s = d.toString().trim();
-    if (s) console.warn(`[engine:${def.id}] ${s}`);
-  });
+  // 起不来必须让握手立刻失败(spawn 报错 / 握手前自退),否则 initialize 会一路 await 到 30s 超时。
+  // 适配器的 stderr 只做诊断,不进协议流;watchEngineStartup 顺带留末尾几行进错误信息。
+  const startup = watchEngineStartup(child, def.id);
+  const spawnFailed = startup.failed;
+  child.on('error', (e) => ctx.publish('status', { detail: `engine spawn error: ${e.message}` }));
 
   // 进程组 kill + SIGTERM→2s→SIGKILL 升级:先给 ACP 子进程优雅退出(flush)的机会，仍不退就强杀整组。
   // 负 pid = 杀整组；非 POSIX/拿不到 pid 时退回杀 child 本身(Windows 无 setsid/负 pid)。
@@ -295,9 +339,15 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
       }
     }
     armEngineIdle(); // turn 开始起表
-    const res = await conn.prompt({ sessionId, prompt: [{ type: 'text', text: ctx.message }] });
+    // prompt 不设握手超时(一轮可以跑很久),但**子进程半路死掉要立刻知道** —— 否则只能等 5 分钟的
+    // idle 看门狗,而 ACP 连接未必会因 stdio EOF 自己 reject(这正是本轮那个 bug 的形态)。
+    const res = await Promise.race([
+      conn.prompt({ sessionId, prompt: [{ type: 'text', text: ctx.message }] }),
+      spawnFailed,
+    ]);
     return { ...result(), stopReason: res.stopReason };
   } finally {
+    startup.disarm(); // 到此子进程的死活不再是「起不来」:下面 killNow() 是我们自己杀的
     if (engineIdle) clearTimeout(engineIdle);
     ctx.signal.removeEventListener('abort', onAbort);
     killNow();
@@ -311,13 +361,8 @@ export async function runAcpEngine(def: EngineDef, ctx: EngineRunCtx): Promise<E
 export async function probeAcpEngine(def: EngineDef): Promise<EngineCapabilities> {
   const child = spawnEngine(def);
   // 原本空 error 处理器吞掉了 Windows 上的 spawn 失败 → initialize 永久 await → /capabilities 永不返回 → UI 卡死。
-  let onSpawnError: (e: Error) => void = () => {};
-  const spawnFailed = new Promise<never>((_, reject) => { onSpawnError = reject; });
-  child.on('error', (e) => onSpawnError(new Error(`engine spawn failed: ${e.message}（请确认已安装 Node/npx）`)));
-  child.stderr?.on('data', (d: Buffer) => {
-    const s = d.toString().trim();
-    if (s) console.warn(`[engine:${def.id}] (probe) ${s}`);
-  });
+  const startup = watchEngineStartup(child, def.id, ' (probe)');
+  const spawnFailed = startup.failed;
 
   let commands: EngineCapabilities['commands'] = [];
   let resolveCommands: () => void = () => {};
@@ -357,6 +402,7 @@ export async function probeAcpEngine(def: EngineDef): Promise<EngineCapabilities
     await Promise.race([commandsReceived, new Promise<void>((r) => setTimeout(r, 1500))]);
     return { models, currentModelId, commands };
   } finally {
+    startup.disarm(); // 下面这刀是我们自己捅的,不算「起不来」
     child.kill();
   }
 }

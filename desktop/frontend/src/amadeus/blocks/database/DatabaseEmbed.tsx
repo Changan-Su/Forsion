@@ -34,7 +34,9 @@ import './cellFormat.css'
 import './readOnlyCells.css'
 import { buildTree } from '@amadeus-shared/db/tree'
 import { GROUP_TYPES, groupRows, visibleGroups, type RowGroup } from '@amadeus-shared/db/groupRows'
+import { foldRows, foldSummary, resolveFold, type FoldUnit } from '@amadeus-shared/db/foldRows'
 import { GroupMenu } from './GroupMenu'
+import { FoldMenu, FoldMixedCell, foldMixedParts } from './FoldMenu'
 import { TableSearch } from './TableSearch'
 import { joinRel, toAssetUrl } from '@amadeus-shared/assets'
 import { useShallow } from 'zustand/react/shallow'
@@ -49,7 +51,7 @@ import { renameDb } from '../../lib/dbFileOps'
 import { useNoteViewStore } from '../../store/noteViewStore'
 import { usePageStore, useScopedPageStore } from '../../store/pageStore'
 import { amadeus } from '../../api'
-import { Settings2, ExternalLink, Plus, Paperclip, Sigma, Link2, ArrowRightLeft, ClipboardList, ChartGantt, ChevronRight, Columns3, Download } from 'lucide-react'
+import { Settings2, ExternalLink, Plus, Paperclip, Sigma, Link2, ArrowRightLeft, ClipboardList, ChartGantt, ChevronRight, Columns3, Download, FoldVertical } from 'lucide-react'
 import { openDb } from '../../../amadeusNav'
 import { registerMessages, useI18n } from '../../../i18n'
 import { useCalendarConfig, memberOf } from '../../store/calendarConfigStore'
@@ -429,7 +431,7 @@ function PopLayer({ children }: { children: ReactNode }): ReactNode {
 }
 
 interface Pop {
-  kind: 'options' | 'colmenu' | 'folder' | 'viewmenu' | 'addview' | 'row' | 'filters' | 'stat' | 'calendar' | 'groups'
+  kind: 'options' | 'colmenu' | 'folder' | 'viewmenu' | 'addview' | 'row' | 'filters' | 'stat' | 'calendar' | 'groups' | 'fold'
   colId?: string
   rowId?: string
   viewId?: string
@@ -488,6 +490,9 @@ interface DbSurfaceProps {
   initialSort?: { colId: string; dir: 'asc' | 'desc' } | null
   /** 排序变化回调(宿主要跟着记状态,免得它自己重渲一次就把排序丢了)。 */
   onSort?: (s: { colId: string; dir: 'asc' | 'desc' } | null) => void
+  /** 规则行折叠的汇总行装饰:宿主按成员行给(colId → 装饰),给了的列压过通用汇总的显示(排序键仍是通用汇总值)。
+   *  渲染期按**当前**成员调 —— 筛选会改成员,预先算好的一份会对不上。 */
+  foldMeta?: (rows: DbRow[]) => Record<string, CellMeta>
 }
 
 /** 分发器:内存源直挂 DbTable,其余走 store 四态分支。
@@ -554,13 +559,17 @@ const applyInitialSort = (d: DbFile, s?: { colId: string; dir: 'asc' | 'desc' } 
 }
 /** props 换了新数据时的合流:**行列来自 props、视图态与列宽来自本地** —— 唯一不会二选一出事的切法
  *  (整份 db 塞本地 → 轮询回来要么冲掉用户排序、要么冲不掉新数据)。 */
-const mergeIncoming = (next: DbFile, prev: DbFile): DbFile => ({
+const hostFoldOf = (d: DbFile): string => JSON.stringify(viewsOf(d)[0]?.fold ?? null)
+const mergeIncoming = (next: DbFile, prev: DbFile, prevProp: DbFile): DbFile => ({
   ...next,
-  views: prev.views,
+  // 视图态归本地,**唯一例外是折叠规则**:宿主(面板工具条上的时间窗)改了它就跟宿主走 —— 否则 update() 永远
+  // 换不了窗口;宿主没改则本地的照留(用户在表里自己调的折叠不被一次数据刷新冲掉)。
+  views: hostFoldOf(next) === hostFoldOf(prevProp) ? prev.views
+    : viewsOf(prev).map((v, i) => (i === 0 ? { ...v, fold: viewsOf(next)[0]?.fold } : v)),
   columns: next.columns.map((c) => ({ ...c, width: prev.columns.find((p) => p.id === c.id)?.width ?? c.width })),
 })
 
-function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memory, readOnly, onRowOpen, rowAttrs, cellMeta, popHost, hideHead, hideTools, selectedRowId, initialSort, onSort }: {
+function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memory, readOnly, onRowOpen, rowAttrs, cellMeta, popHost, hideHead, hideTools, selectedRowId, initialSort, onSort, foldMeta }: {
   dbRef: string
   db: DbFile
   pagePath: string
@@ -576,8 +585,9 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   const [local, setLocal] = useState<DbFile>(() => applyInitialSort(dbProp, initialSort))
   const lastProp = useRef(dbProp)
   if (lastProp.current !== dbProp) {
+    const prevProp = lastProp.current
     lastProp.current = dbProp
-    if (localMode) setLocal((prev) => mergeIncoming(dbProp, prev))
+    if (localMode) setLocal((prev) => mergeIncoming(dbProp, prev, prevProp))
   }
   const db = localMode ? local : dbProp
   const [pop, setPop] = useState<Pop | null>(null)
@@ -687,6 +697,14 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   // ponytail: 树节点折叠态只存内存(与分组折叠同款),**不落盘** —— 它是「我现在想看哪块」的临时视线,
   // 不是视图配置;落盘会让同一视图的多处嵌入/多标签互相抢折叠状态。键带 view.id:切视图自动复位。
   const [collapsedNodes, setCollapsedNodes] = useState<Set<string>>(new Set())
+  // 规则行折叠:与层级树互斥(树优先,同分组那条的理由:树序是一条链,折进汇总行父子就散了);可与属性分组叠加(组内折叠)。
+  // 展开态同样只存内存、键带 view.id;**缺省全折** —— 折叠就是为了先看汇总。
+  const foldRule = useMemo(
+    () => (isTableLike && !treeCol ? resolveFold(view.fold, db.columns) : null),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 只读 view.fold 与列集
+    [isTableLike, treeCol, view.fold, db.columns],
+  )
+  const [expandedFolds, setExpandedFolds] = useState<Set<string>>(new Set())
 
   // 行数据源:笔记视图从 store 合成(cell key = 列 id = frontmatter 键;page 列 = 笔记标题)。
   const baseRows: DbRow[] = useMemo(() => {
@@ -1014,7 +1032,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   // 树序更是如此(父子交错),把落点当数组下标会把整棵树打散。
   // 笔记视图的行是文件夹里的笔记,没有数组序可言,一并排除。
   const [drag, setDrag] = useState<{ id: string; overId: string; after: boolean } | null>(null)
-  const canReorder = !readOnly && !isNoteView && !sorts.length && !q.trim() && !(view.filters ?? []).length && !tableGroupCol && !treeCol
+  const canReorder = !readOnly && !isNoteView && !sorts.length && !q.trim() && !(view.filters ?? []).length && !tableGroupCol && !treeCol && !foldRule
   // 列拖拽:与行不同,**不受排序/筛选/分组影响** —— 列序是 db.columns 的数组序,和呈现出来的行没关系。
   const [colDrag, setColDrag] = useState<{ id: string; overId: string; after: boolean } | null>(null)
 
@@ -1022,7 +1040,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
     const af = applyFilters(compRows, view.filters, kindOf, view.filterMode)
     const needle = q.trim().toLowerCase()
     const filtered = needle ? af.filter((r) => rowTitle(r).toLowerCase().includes(needle)) : af
-    if (!sorts.length) return filtered
+    if (!sorts.length && !foldRule) return filtered
     const keyOf = (r: DbRow, colId: string): string | number => {
       const col = db.columns.find((c) => c.id === colId)
       if (!col) return ''
@@ -1044,9 +1062,20 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
       if (base === 'checkbox') return v === true ? 1 : 0
       return Array.isArray(v) ? v.join(', ') : String(v ?? '')
     }
-    return applySorts(filtered, sorts, keyOf)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- kindOf/rowTitle 只依赖 db.columns,targetOf 只依赖 refPaths/refDbs(都已在列)
-  }, [compRows, db.columns, sorts, view.filters, view.filterMode, q, refDbs, refPaths])
+    if (!foldRule) return applySorts(filtered, sorts, keyOf)
+    // 行折叠:排序作用在**折叠单元**上(汇总行的值:数字 = 求和、日期 = 最晚),成员在单元内部按同一排序 ——
+    // 逐行排再折会把「这半小时一共花了多少」排成「这半小时里最贵的那一条」。产出仍是平铺的成员行(单元相邻),
+    // 分组 / 统计 / 导出照旧吃 rows,渲染处再按同一规则折一遍。
+    const units = foldRows(filtered, foldRule)
+    const unitOf = new Map<string, FoldUnit>()
+    const heads = units.map((u) => {
+      const head = u.rows.length > 1 ? foldSummary(u, db.columns, groupKind).row : u.rows[0]
+      unitOf.set(head.id, u)
+      return head
+    })
+    return applySorts(heads, sorts, keyOf).flatMap((h) => applySorts(unitOf.get(h.id)!.rows, sorts, keyOf))
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- kindOf/rowTitle/groupKind 只依赖 db.columns,targetOf 只依赖 refPaths/refDbs(都已在列)
+  }, [compRows, db.columns, sorts, view.filters, view.filterMode, q, refDbs, refPaths, foldRule])
 
   const tableGroups = tableGroupCol ? groupRows(rows, tableGroupCol, groupKind(tableGroupCol), view, compRows) : []
   const shownGroups = visibleGroups(tableGroups, view)
@@ -1083,6 +1112,34 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
     return !!el && el !== e.currentTarget // rowAttrs 可能就把 data-act 挂在行上 —— 命中行自己不算「点了控件」
   }
 
+  /** 汇总行「混合值」格里的一个成员值 → 文案。样本成员行的宿主装饰(meta)优先:复合格的显示文案 / 选项 label / 日期档
+   *  都在那儿,这里再按列类型格式化一遍就和成员行对不上了。 */
+  const fmtFoldValue = (col: DbColumn, v: CellValue, meta?: CellMeta): string => {
+    if (meta?.text !== undefined) return String(meta.text)
+    if (v === null || v === '') return ''
+    if (typeof v === 'boolean') return v ? '✓' : '✗'
+    if (isDateish(col)) {
+      if (meta?.format) return fmtMetaDate(v, meta.format)
+      return col.type === 'calendarDate' ? fmtCalDateL(parseCalDate(typeof v === 'string' ? v : '')) : String(v)
+    }
+    if (col.type === 'rowlink' || isLinksProjection(col)) {
+      const tgt = targetOf(col)
+      return rowLinkIds(v).map((id) => { const hit = tgt?.db.rows.find((x) => x.id === id); return hit ? linkLabel(tgt!.db, hit, col.titleCol) : id }).join(', ')
+    }
+    if (Array.isArray(v)) return v.join(', ')
+    if (typeof v === 'number') return formatNumber(v, col)
+    return col.optionLabels?.[v] ?? v
+  }
+  /** 汇总行里**单一值**的格:借首个成员行的装饰(头像 / 色调 / label / 日期档),看起来与成员行同款。
+   *  两处必须剥:① 数字(求和)与多选(并集)的值已不是样本行的值,显示类字段不能跟;② attrs 是宿主的测试钩子 / 懒加载探针,
+   *  照抄会让同一个 data-hook 在 DOM 里出现两次。 */
+  const foldSingleMeta = (meta: CellMeta | undefined, kind: string): CellMeta | undefined => {
+    if (!meta) return undefined
+    const { attrs: _a, actions: _b, ...rest } = meta
+    if (kind === 'number' || kind === 'multiselect') return { tone: rest.tone, mono: rest.mono, format: rest.format }
+    return { ...rest, avatar: rest.avatar ? { src: rest.avatar.src, letter: rest.avatar.letter } : undefined }
+  }
+
   const openPop = (e: ReactMouseEvent, p: Omit<Pop, 'x' | 'y' | 'anchorTop'>): void => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
     setPop({ ...p, x: r.left, y: r.bottom + 4, anchorTop: r.top })
@@ -1103,13 +1160,13 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   /** 自适应宽只保护表头与主内容。这里刻意不读取 meta.sub：第二行说明可以省略号，不能反客为主撑宽整列。 */
   const autoWidths = useMemo(() => {
     const depthByRow = new Map((treeNodes ?? []).map((node) => [node.row.id, node.depth]))
-    return autoColumnWidths(db.columns, rows, (row, col): AutoWidthSample => {
-      const meta = cellMeta?.[row.id]?.[col.id]
+    // 行折叠:成员行展开后在首列缩进一级(与树的 depth=1 同款占位);汇总行另算一遍(见下),两者取大
+    const sampleOf = (row: DbRow, col: DbColumn, meta: CellMeta | undefined): AutoWidthSample => {
       const common = {
         mono: !!meta?.mono,
         avatar: !!meta?.avatar,
         dot: !!meta?.dot,
-        leading: col.id === identityId && treeNodes ? (depthByRow.get(row.id) ?? 0) * 14 + 20 : 0,
+        leading: col.id !== identityId ? 0 : treeNodes ? (depthByRow.get(row.id) ?? 0) * 14 + 20 : foldRule ? 34 : 0,
       }
       if (col.id === ACTIONS_COL_ID) {
         return { ...common, kind: 'actions', pieces: (meta?.actions ?? []).map((action) => action.label) }
@@ -1153,9 +1210,30 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
         return { ...common, text }
       }
       return { ...common, text: Array.isArray(value) ? value.join(', ') : String(value ?? '') }
+    }
+    const base = autoColumnWidths(db.columns, rows, (row, col) => sampleOf(row, col, cellMeta?.[row.id]?.[col.id]))
+    if (!foldRule) return base
+    // 汇总行的主内容比任何成员行都宽(「最早 – 最晚」、列出的混合值、首列的折叠钮 + 行数徽标):不算进来,
+    // 自适应列宽就按成员行估 —— 汇总行恰恰是折叠态下**唯一**上屏的行,整行都会被截成省略号(2026-09-21 截图自查抓到的)。
+    const sums = foldRows(rows, foldRule).filter((u) => u.rows.length > 1)
+      .map((u) => ({ u, sum: foldSummary(u, db.columns, groupKind), host: foldMeta?.(u.rows) ?? {} }))
+    const extra = autoColumnWidths(db.columns, sums, ({ u, sum, host }, col): AutoWidthSample => {
+      const lead = col.id === identityId ? 56 : 0 // 折叠钮 16 + 行数徽标 ~30 + 间距
+      const mixed = host[col.id] ? undefined : sum.mixed[col.id]
+      if (!mixed) {
+        const one = sampleOf(sum.row, col, host[col.id] ?? foldSingleMeta(cellMeta?.[u.rows[0].id]?.[col.id], groupKind(col)))
+        return { ...one, leading: lead }
+      }
+      const kind = groupKind(col)
+      const { range, parts, rest } = foldMixedParts(kind, mixed, (x) => fmtFoldValue(col, x.value, cellMeta?.[x.rowId]?.[col.id]) || t('dbgroup.empty'))
+      const more = rest > 0 ? [t('dbfold.more', { n: rest })] : []
+      if (kind === 'select' || kind === 'checkbox') return { kind: 'chips', pieces: [...parts, ...more], leading: lead }
+      // 各值是并排的 flex 子项(gap 4px,分隔点两侧留白按 pre 渲染):逐段补 6px,否则估宽恰好短一个字
+      return { text: range ? range.text : [...parts, ...more].join(' · '), leading: lead + (parts.length + more.length) * 6 }
     })
+    return Object.fromEntries(db.columns.map((c) => [c.id, Math.max(base[c.id] ?? 0, extra[c.id] ?? 0)]))
     // eslint-disable-next-line react-hooks/exhaustive-deps -- targetOf 只依赖 refPaths/refDbs；其余格式化函数是模块级纯函数
-  }, [db.columns, rows, cellMeta, identityId, treeNodes, refDbs, refPaths])
+  }, [db.columns, rows, cellMeta, identityId, treeNodes, refDbs, refPaths, foldRule, foldMeta])
   /** 缺省即开启，让既有 .db 与插件内存表无需迁移就修正旧的等分列宽。 */
   const autoSize = view.autoSize !== false
 
@@ -1291,6 +1369,10 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
         {isTableLike && <button className="amx-db-filterbtn amx-db-groupbtn" data-on={!!tableGroupCol || undefined}
           aria-label={t('dbgroup.title')} onClick={(e) => openPop(e, { kind: 'groups' })}>
           <Columns3 size={14} />{t('dbgroup.title')}{tableGroupCol ? ` · ${tableGroupCol.name}` : ''}
+        </button>}
+        {isTableLike && <button className="amx-db-filterbtn amx-db-foldbtn" data-on={!!foldRule || undefined}
+          aria-label={t('dbfold.title')} onClick={(e) => openPop(e, { kind: 'fold' })}>
+          <FoldVertical size={14} />{t('dbfold.title')}
         </button>}
         <button
           className="amx-db-filterbtn"
@@ -1519,6 +1601,63 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
               </div>
               )
             }
+            /** 规则行折叠:一个单元 = 一条汇总行(点整行 / 折叠钮展开)+ 展开后的成员行(借树的缩进条,depth=1)。
+             *  汇总行是合成的:恒只读(可编辑表里也是)、不给拖柄 / 删除 / rowAttrs / 开行;单成员的单元照常渲染成普通行。 */
+            const renderFolded = (list: DbRow[]): ReactNode[] => {
+              if (!foldRule) return list.map((r) => renderRow(r))
+              return foldRows(list, foldRule).flatMap((u) => {
+                if (u.rows.length === 1) return [renderRow(u.rows[0])]
+                const fKey = `${view.id}|${u.key}`
+                const open = expandedFolds.has(fKey)
+                const toggle = (): void => setExpandedFolds((prev) => {
+                  const n = new Set(prev)
+                  if (n.has(fKey)) n.delete(fKey)
+                  else n.add(fKey)
+                  return n
+                })
+                const sum = foldSummary(u, db.columns, groupKind)
+                const hostMeta = foldMeta?.(u.rows) ?? {}
+                const head = (
+                  <div
+                    className="amx-db-row amx-db-row--fold"
+                    key={sum.row.id}
+                    data-fold={u.key}
+                    data-foldcount={u.rows.length}
+                    style={{ gridTemplateColumns: gridCols }}
+                    role="button"
+                    tabIndex={0}
+                    aria-expanded={open}
+                    title={t('dbfold.toggle', { n: u.rows.length })}
+                    onClick={(e) => { if (!hitInteractive(e)) toggle() }}
+                    onKeyDown={(e: ReactKeyboardEvent<HTMLDivElement>) => { if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) { e.preventDefault(); toggle() } }}
+                  >
+                    <div className="amx-db-rowgutter" />
+                    {visCols.map((col, ci) => {
+                      const meta = hostMeta[col.id]
+                      const mixed = meta ? undefined : sum.mixed[col.id]
+                      const kind = groupKind(col)
+                      return (
+                        <div className="amx-db-cell" key={col.id} data-coltype={resolveBaseType(col.type)}>
+                          {ci === 0 && (
+                            <span className="amx-db-treelead">
+                              <button className="amx-db-treecaret" data-open={open || undefined} aria-expanded={open} title={t('dbfold.toggle', { n: u.rows.length })} onClick={toggle}>
+                                <ChevronRight size={13} strokeWidth={2.5} aria-hidden />
+                              </button>
+                              <span className="amx-db-foldcount" title={t('dbfold.count', { n: u.rows.length })}>{u.rows.length}</span>
+                            </span>
+                          )}
+                          {mixed
+                            ? <FoldMixedCell kind={kind} values={mixed} fmt={(v, rowId) => fmtFoldValue(col, v, cellMeta?.[rowId]?.[col.id])} toneOf={(rowId) => cellMeta?.[rowId]?.[col.id]?.tone} />
+                            : <ReadOnlyCell row={sum.row} col={col} env={cellEnv} meta={meta ?? foldSingleMeta(cellMeta?.[u.rows[0].id]?.[col.id], kind)} pagePath={pagePath} />}
+                        </div>
+                      )
+                    })}
+                    <div />
+                  </div>
+                )
+                return open ? [head, ...u.rows.map((r) => renderRow(r, { depth: 1, hasKids: false }))] : [head]
+              })
+            }
             // 层级树:按树序渲染(父在前、子紧随、折叠隐藏后代)。treeNodes=null 即 buildTree 判了平铺 —— 走下面的老路。
             if (treeNodes) {
               return (
@@ -1531,7 +1670,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
             if (!tableGroupCol) {
               return (
                 <>
-                  {rows.map((r) => renderRow(r))}
+                  {renderFolded(rows)}
                   {!readOnly && <button className="amx-db-addrow" onClick={() => addRow()}>{t('dbembed.addRow')}</button>}
                 </>
               )
@@ -1558,7 +1697,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
                     <span className={g.value === null ? 'amx-db-lane-none' : `amx-db-chip ${chipClass(groupLabel(g))}`}>{groupLabel(g)}</span>
                     <span className="amx-db-lane-count">{g.rows.length}</span>
                   </button>
-                  {!collapsed && g.rows.map((r) => renderRow(r))}
+                  {!collapsed && renderFolded(g.rows)}
                   {!collapsed && !readOnly && (
                     <button className="amx-db-addrow" onClick={() => addRow(add)}>{t('dbembed.addRow')}</button>
                   )}
@@ -1655,6 +1794,14 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
           onPatch={(patch) => patchView(view.id, patch)} onCollapse={(collapse) => setCollapsedGroups((prev) => {
             const next = new Set(prev)
             for (const g of tableGroups) { const key = `${view.id}|${tableGroupCol?.id}|${g.key}`; if (collapse) next.add(key); else next.delete(key) }
+            return next
+          })} />
+      </PopShell>}
+      {pop?.kind === 'fold' && <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
+        <FoldMenu view={view} keyCols={groupColumns.filter((c) => !isDateish(c))} timeCols={db.columns.filter(isDateish)} blocked={!!treeCol}
+          onPatch={(patch) => patchView(view.id, patch)} onExpandAll={(expand) => setExpandedFolds((prev) => {
+            const next = new Set(prev)
+            if (foldRule) for (const u of foldRows(rows, foldRule)) { const key = `${view.id}|${u.key}`; if (expand) next.add(key); else next.delete(key) }
             return next
           })} />
       </PopShell>}

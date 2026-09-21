@@ -451,6 +451,36 @@ async function main() {
       passed(`${a.appId}: ${tabs.length} tabs render on the native host without classic tables`)
     }
     assert.ok(nativeTables >= 8 && nativeRows >= 10, `native tables across the other four panels: ${nativeTables} tables / ${nativeRows} rows`)
+    // API usage = the one table that folds rows by rule (user x 30 min). Real panel bytes + real panel-lib + the real DbTable:
+    // the plugin e2e only ever sees the classic fallback, and ?tablemount only sees a harness spec, so this is the single place
+    // where the panel's unit paging, its fold.summary callback and the host's caps.fold handshake meet the native renderer.
+    activeApp = 'core-models'
+    // The fixture's deliberate `users down` 500 (it drives the plugin e2e's degraded-dropdown case) would raise an error toast here,
+    // and that toast sits on top of the Extend View close button the next step clicks. Serve a healthy roster instead.
+    { const m = fixtures['core-models'].mocks; const i = m.findIndex((x) => x.path === '/api/admin/users' && x.status === 500); if (i >= 0) m.splice(i, 1, { path: '/api/admin/users', body: [{ id: 'u2', username: 'alice' }, { id: 'u3', username: 'bob' }] }) }
+    await win.evaluate((id) => window.__serverExtend.open(id), 'core-models')
+    await win.waitForSelector('.fsa-adm [data-act="tab"][data-tab="usage"]', { timeout: 15000 })
+    await win.locator('.fsa-adm [data-act="tab"][data-tab="usage"]').click()
+    await win.waitForSelector('.fsa-adm [data-hook="utbl"] .amx-db-row--fold', { timeout: 15000 })
+    const folded = await win.evaluate(() => ({
+      classic: document.querySelectorAll('.fsa-adm [data-hook="utbl"] .data-table').length,
+      heads: [...document.querySelectorAll('.fsa-adm [data-hook="utbl"] .amx-db-row--fold')].map((r) => ({ n: r.getAttribute('data-foldcount'), text: r.innerText.replace(/\s+/g, ' ') })),
+      members: document.querySelectorAll('.fsa-adm [data-hook="utbl"] .amx-db-row[data-act="u-row"]').length,
+    }))
+    // Fixture: 25 calls inside one half-hour window, alice x13 (one failure) and bob x12. Most recent activity first -> alice.
+    assert.equal(folded.classic, 0, 'a host that declares caps.fold must keep the folded usage table native')
+    assert.deepEqual(folded.heads.map((h) => h.n), ['13', '12'], JSON.stringify(folded))
+    assert.equal(folded.members, 0, 'member rows stay folded until a summary row is opened')
+    const head = folded.heads[0].text
+    for (const bit of ['alice', '18,590', '-42.25', '13', 'GPT X']) assert.ok(head.includes(bit), `usage summary row must show ${bit}: ${head}`)
+    await win.locator('.fsa-adm [data-hook="utbl"] .amx-db-row--fold').first().click()
+    await win.waitForFunction(() => document.querySelectorAll('.fsa-adm [data-hook="utbl"] .amx-db-row[data-act="u-row"]').length === 13, null, { timeout: 8000 })
+    await win.screenshot({ path: path.join(SHOTS, 'core-models-usage-folded.png') })
+    // The window control drives the host's fold rule through update(): 0 = flat rows, paged by 20 again.
+    await win.locator('.fsa-adm [data-act="u-fold"]').fill('0')
+    await win.locator('.fsa-adm [data-act="u-fold"]').press('Enter')
+    await win.waitForFunction(() => document.querySelectorAll('.fsa-adm [data-hook="utbl"] .amx-db-row--fold').length === 0 && document.querySelectorAll('.fsa-adm [data-hook="utbl"] .amx-db-row[data-act="u-row"]').length === 20, null, { timeout: 8000 })
+    passed('API usage folds by user x 30 min on the native table: summed summary rows, expandable members, window control re-folds through update()')
     // Billing's key pool table lives inside the Extend View card and must be native there as well.
     activeApp = 'core-billing'
     await win.evaluate((id) => window.__serverExtend.open(id), 'core-billing')

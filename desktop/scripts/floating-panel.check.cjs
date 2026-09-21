@@ -91,6 +91,64 @@ async function main() {
     await main.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'plugins' } }))
     await pause(300)
     check('opening the same panel id reuses its native window', app.windows().filter((page) => page.url().includes('window=floating')).length === 1)
+    // 外观跨窗同步:设置住在独立渲染进程里,换肤必须传到主窗(2.11.1 实报:只有设置窗自己变色)。
+    // 走真 UI 点击 —— 内置包里没有 vite,import('/src/...') 那套只在 web 分支成立。
+    await main.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'theme' } }))
+    await floating.locator('.settings-theme-palette .skin-row').first().waitFor({ timeout: 15000 })
+    const skinOf = (page) => page.evaluate(() => document.documentElement.dataset.skin)
+    const before = await skinOf(main)
+    const chips = floating.locator('.settings-theme-palette .skin-row').first().locator('.skin-chip')
+    // 主题色轴的第三格(teal);挑一个铁定不同于缺省 cream 的目标,免得「本来就对」混成假绿。
+    await chips.nth(2).click()
+    let after = before
+    for (let i = 0; i < 60; i++) {
+      after = await skinOf(main)
+      if (after !== before) break
+      await pause(50)
+    }
+    check('changing the accent in the Floating settings window repaints the main window',
+      before === 'cream' && after === 'teal', `main ${before} -> ${after}`)
+    check('the settings window itself followed the click', await skinOf(floating) === 'teal')
+
+    // 同一条广播的另一半(prefs):字体 / 缩放 / 丝滑光标 / 界面语言。各自有自己的 applier,
+    // 所以要一个一个真点过去 —— 只验主题色会漏掉它们(用户 09-20 的原话:你只修一个算什么)。
+    const uiOf = (page) => page.evaluate(() => ({
+      font: (document.getElementById('forsion-ui-font')?.textContent || '').length,
+      caret: document.documentElement.classList.contains('sc-on'),
+      zoom: document.documentElement.style.getPropertyValue('--uiz') || '',
+      lang: document.documentElement.lang,
+    }))
+    const settled = async (page, want) => {
+      for (let i = 0; i < 60; i++) {
+        const now = await uiOf(page)
+        if (want(now)) return now
+        await pause(50)
+      }
+      return uiOf(page)
+    }
+    const baseline = await uiOf(main)
+    await floating.locator('.settings-theme-fonts select').first().selectOption({ index: 1 })
+    const afterFont = await settled(main, (v) => v.font > 0)
+    check('界面字体跟到主窗', baseline.font === 0 && afterFont.font > 0, JSON.stringify({ before: baseline.font, after: afterFont.font }))
+
+    await floating.locator('.settings-theme-behavior button[role="switch"]').first().click()
+    const afterCaret = await settled(main, (v) => v.caret !== baseline.caret)
+    check('丝滑光标跟到主窗', afterCaret.caret !== baseline.caret, `${baseline.caret} -> ${afterCaret.caret}`)
+
+    await floating.locator('.settings-zoom-presets button').nth(2).click()
+    const afterZoom = await settled(main, (v) => v.zoom === '1.2')
+    check('界面缩放跟到主窗', baseline.zoom === '' && afterZoom.zoom === '1.2', `'${baseline.zoom}' -> '${afterZoom.zoom}'`)
+    // 调回 100%:既验反向(删键→回端默认),也让浮窗恢复原尺寸再去点语言开关。
+    await floating.locator('.settings-zoom-presets button').nth(1).click()
+    const backZoom = await settled(main, (v) => v.zoom === '')
+    check('缩放调回 100% 也跟得到(删键回默认)', afterZoom.zoom === '1.2' && backZoom.zoom === '', `'1.2' -> '${backZoom.zoom}'`)
+
+    await main.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'about' } }))
+    await floating.locator('.locale-seg button').first().waitFor({ timeout: 15000 })
+    await floating.locator('.locale-seg button').first().click() // 中文
+    const afterLocale = await settled(main, (v) => v.lang === 'zh-CN')
+    check('界面语言跟到主窗', baseline.lang === 'en' && afterLocale.lang === 'zh-CN', `${baseline.lang} -> ${afterLocale.lang}`)
+
     const shot = path.join(temp, 'floating-settings.png')
     await floating.screenshot({ path: shot })
     check('panel has no viewport overflow', await floating.evaluate(() => document.documentElement.scrollWidth === document.documentElement.clientWidth && document.documentElement.scrollHeight === document.documentElement.clientHeight))

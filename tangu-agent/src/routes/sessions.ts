@@ -14,8 +14,10 @@ import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { query } from '../core/db.js';
 import { resolveProfile } from '../seams/appProfile.js';
-import { compactSession } from '../services/compaction.js';
-import { resolveCompactionSettings, globalCompactionLayer } from '../services/compactionSettings.js';
+import { compactSession, getLatestSummary, rowCoverage, type Checkpoint } from '../services/compaction.js';
+import { resolveCompactionSettings, globalCompactionLayer, updateGlobalCompaction, normalizeCompactionLayer, DEFAULT_COMPACTION_SETTINGS } from '../services/compactionSettings.js';
+import { estimateTokensRough } from '../services/contextBudget.js';
+import { deps } from '../seams/runtime.js';
 import { bumpHistoryRevision } from '../services/historyRevision.js';
 import { sessionHasActiveRun } from '../services/agentLoop.js';
 import { getAgent } from '../agents/agentRegistry.js';
@@ -411,6 +413,30 @@ export async function findMainLoopUsage(
   return {};
 }
 
+/** 该会话最近一条主循环 usage 事件的 payload(没有 → {})。 */
+function lastMainLoopUsage(sessionId: string): Promise<any> {
+  return findMainLoopUsage(async (cursor) => query<any[]>(
+    `SELECT e.id, e.payload FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id
+     WHERE r.session_id = ? AND e.type = 'usage'${cursor === null ? '' : ' AND e.id < ?'}
+     ORDER BY e.id DESC LIMIT 20`,
+    cursor === null ? [sessionId] : [sessionId, cursor],
+  ));
+}
+
+const compactedContextTokens = (summary: string, lastUsage: any): number =>
+  estimateTokensRough(summary) + Math.round(((Number(lastUsage?.systemBytes) || 0) + (Number(lastUsage?.toolsBytes) || 0)) / 4);
+/**
+ * 会话「当前上下文占用」:缺省 = 最近一条主循环 usage 的 prompt(实测)。例外:检查点已经**整行覆盖到最后一行**
+ * ——只有手动 /compact 会这样(run 内压缩留着最近一段、惰性检查点只管 hydrate 窗口之外),且其后还没跑过新 run——
+ * 那条 usage 是压缩前的,下个 run 回放的只剩 摘要 + 固定头(系统提示 + 工具定义,取上次实测的字节数),改报这个粗估。
+ * 别把判据放宽成「检查点比 usage 新」:惰性检查点也满足,而它之后整个窗口照样回放,粗估会把 30 万报成 1 万。
+ * ponytail: 手动压缩后紧跟一个没产生 usage 的失败 run(配额拒收)→ 多出的行让判据落空,退回压缩前的实测值,下一次成功调用自愈。
+ */
+export function sessionContextTokens(lastUsage: any, cp: Checkpoint | null, lastRow: { id: string; timestamp?: number | null } | undefined): number {
+  if (!cp || !lastRow || rowCoverage(lastRow, cp) !== 'covered') return Number(lastUsage?.prompt) || 0;
+  return compactedContextTokens(cp.summary, lastUsage);
+}
+
 // 本会话累计 token 消耗（跨 run 求和），供客户端「本会话 token」显示。
 // contextTokens = 最近一次 usage 事件的 prompt（当前上下文占用）：客户端只在流式期间收到 usage 事件，
 // 重载/重开会话后没有它，上下文圈只能显示 0%（连「该不该压缩」都判断不了）。事件本就落库，这里回放最后一条主循环的（见 pickMainLoopUsage）。
@@ -426,13 +452,10 @@ router.get('/agent/sessions/:id/usage', authMiddleware, async (req: AuthRequest,
     // e.id 单调递增（PG BIGSERIAL / SQLite AUTOINCREMENT），跨 run 取真正的最后一条。
     // 每页 20 条再在 JS 里挑主循环那条(不写 SQL 的 JSON 谓词——PG jsonb 与 SQLite text 两套语法);
     // 整页都是后台事件就按游标继续往回翻(见 findMainLoopUsage 的上限说明)。
-    const last = await findMainLoopUsage(async (cursor) => query<any[]>(
-      `SELECT e.id, e.payload FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id
-       WHERE r.session_id = ? AND e.type = 'usage'${cursor === null ? '' : ' AND e.id < ?'}
-       ORDER BY e.id DESC LIMIT 20`,
-      cursor === null ? [req.params.id] : [req.params.id, cursor],
-    ));
-    res.json({ tokensTotal: Number(rows[0]?.total) || 0, contextTokens: Number(last.prompt) || 0 });
+    const last = await lastMainLoopUsage(req.params.id);
+    // 手动 /compact 不产生 usage:不看检查点的话,重开应用后环又回到压缩前那个数(09-20)。thin worker 没有本地库 → 查不到就照旧。
+    const lastRow = (await query<any[]>(`SELECT id, timestamp FROM chat_messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT 1`, [req.params.id]).catch(() => []))[0];
+    res.json({ tokensTotal: Number(rows[0]?.total) || 0, contextTokens: sessionContextTokens(last, await getLatestSummary(req.params.id), lastRow) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'usage failed' });
   }
@@ -447,7 +470,13 @@ export function timelineFields(type: string, p: any): Record<string, unknown> {
   switch (type) {
     case 'tool_call': return { name: p?.name };
     case 'tool_result': return { name: p?.name, elapsedMs: p?.elapsedMs, isError: !!p?.isError, outputChars: p?.outputChars };
-    case 'status': return { phase: p?.phase ?? p?.state, stage: p?.stage, bytes: p?.bytes, uploadMs: p?.uploadMs, attempt: p?.attempt, waitMs: p?.waitMs, iteration: p?.iteration };
+    // context_info 的窗口 / 触发线与压缩事件的结果字段一并透传:09-19 那份反馈包(prompt 顶到 387k、零压缩事件)
+    // 答不了「引擎当时认的窗口是多少、线在哪」,只能回生产后台反推。非这几类 status 上它们是 undefined,res.json 丢掉。
+    case 'status': return {
+      phase: p?.phase ?? p?.state, stage: p?.stage, bytes: p?.bytes, uploadMs: p?.uploadMs, attempt: p?.attempt, waitMs: p?.waitMs, iteration: p?.iteration,
+      ctxWindow: p?.ctxWindow, ctxWindowSource: p?.ctxWindowSource, compactAt: p?.compactAt, compactionEnabled: p?.compactionEnabled,
+      reason: p?.reason, persisted: p?.persisted, fallback: p?.fallback, summarized: p?.summarized, beforeTokens: p?.beforeTokens, afterTokens: p?.afterTokens,
+    };
     // phase 分辨「后台调用(compaction/historian/brainstorm/muse-judge/delegate)」与主循环调用(无 phase);
     // 缺了它导出的时间线两者混在一起,stall-timeline.mjs 也分不开。主循环侧 undefined,res.json 直接丢掉,不占体积。
     // A4/C-2 的仪器字段一并透传:cacheReported 分「上游没报缓存」与「真 0 命中」,systemBytes/toolsBytes
@@ -533,10 +562,37 @@ router.post('/agent/sessions/:id/compact', authMiddleware, async (req: AuthReque
       settings: resolveCompactionSettings(sessionCfg?.compaction, def?.compaction, globalCompactionLayer()),
     });
     if (!r.ok) return res.json({ ok: false, reason: r.reason });
-    res.json({ ok: true, summarizedCount: r.summarizedCount, throughTimestamp: r.throughTimestamp });
+    // 压缩后的上下文占用(粗估,见 sessionContextTokens):客户端的进度环读的是「最近一条主循环 usage」,手动压缩不产生
+    // usage → 不给这个数,环会停在压缩前的值上,看起来像「压不下去」,直到下一条消息才自愈。重开应用走 /usage,同一个函数。
+    const lastUsage = await lastMainLoopUsage(req.params.id).catch(() => ({}));
+    res.json({ ok: true, summarizedCount: r.summarizedCount, throughTimestamp: r.throughTimestamp, contextTokens: compactedContextTokens(r.summary || '', lastUsage) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'compact failed' });
   }
+});
+
+/**
+ * 全局压缩旋钮(config.json `compaction` 段)的读写口,供设置页用:
+ *   GET /agent/compaction → { settings(全局层,只含已设字段), defaults, writable }
+ *   PUT /agent/compaction { thresholdPercent: 30 } → { settings };某键给 null = 删掉交还缺省
+ * 对下一个 run 生效(run 开头现读,不用重启)。⚠️ 写的是本进程的 config.json → 云端 worker(hostExec=false)
+ * 一律 404,与 modelOverrides / providers 同门:那里一个进程服务所有用户。
+ */
+export function applyCompactionUpdate(body: any, hostExec: boolean): { code: number; body: any } {
+  if (!hostExec) return { code: 404, body: { detail: 'Compaction settings are only available on a local engine (desktop / TUI)' } };
+  if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.keys(body).length) return { code: 400, body: { detail: 'compaction fields required' } };
+  try {
+    return { code: 200, body: { settings: updateGlobalCompaction(body) } };
+  } catch (e: any) {
+    return { code: 400, body: { detail: e?.message || 'invalid compaction settings' } };
+  }
+}
+router.get('/agent/compaction', authMiddleware, (_req, res) => {
+  res.json({ settings: normalizeCompactionLayer(globalCompactionLayer()), defaults: DEFAULT_COMPACTION_SETTINGS, writable: deps().profile.capabilities.hostExec });
+});
+router.put('/agent/compaction', authMiddleware, (req, res) => {
+  const r = applyCompactionUpdate(req.body, deps().profile.capabilities.hostExec);
+  res.status(r.code).json(r.body);
 });
 
 // 会话内容级检索(P3):标题/摘要/**消息正文**。与模型侧 search_sessions 共用

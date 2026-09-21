@@ -4,6 +4,13 @@
  * 不需要 web 端的 query-token 变体。所有写请求带 X-Amadeus-Client(回声抑制)。
  */
 
+import { gzip } from 'node:zlib'
+import { promisify } from 'node:util'
+
+const gzipAsync = promisify(gzip)
+/** JSON 请求体达到这个长度才 gzip:move/rename 之类的小体压了反而变大。 */
+const GZIP_MIN_CHARS = 1024
+
 export interface CloudVaultInfo {
   id: string
   name: string
@@ -71,6 +78,14 @@ export function createCloudClient(cfg: CloudClientConfig) {
     if (init?.json !== undefined) {
       headers['Content-Type'] = 'application/json'
       body = JSON.stringify(init.json)
+      // 文本整份 PUT 是上行大头,而全站 gzip 中间件只压响应 → 上行自己压(markdown ≈ 1/3~1/4)。
+      // 服务端零改:express.json 缺省 inflate。multipart 二进制不压(图片/PDF 本就是压缩格式)。
+      // ponytail: 不做 identity 回退 —— 真链路(dev Express / 生产 nginx)已用 scripts/gzip-upload.probe.cjs 实测放行。
+      // 若将来某个自建反代/WAF 拒压缩请求体,症状 = 文本推送 400/415 全进 skipped;到时在这里加「4xx → 裸发重试一次」。
+      if (body.length >= GZIP_MIN_CHARS) {
+        headers['Content-Encoding'] = 'gzip'
+        body = await gzipAsync(body)
+      }
     } else if (init?.form) {
       body = init.form // fetch 自带 multipart boundary
     }

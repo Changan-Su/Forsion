@@ -66,6 +66,18 @@ describe('compactionThreshold — 窗口 − 预留(借 pi reserveTokens 的绝�
     expect(compactionThreshold(8_000, 16_384)).toBe(4_000);
     expect(compactionThreshold(40_000, 2_048)).toBe(40_000 - 2_048);
   });
+  it('thresholdPercent 只会把线往下拉:缺省 95 对任何窗口都不改行为;1M 窗调到 30 → 300k', () => {
+    for (const w of [4_000, 32_000, 200_000, 272_000, 1_000_000]) expect(compactionThreshold(w, 16_384, 95)).toBe(compactionThreshold(w, 16_384));
+    expect(compactionThreshold(1_000_000, 16_384, 30)).toBe(300_000);
+    expect(compactionThreshold(1_000_000, 16_384, 25.9)).toBe(259_000);
+    for (const bad of [0, 100, -5, NaN, undefined]) expect(compactionThreshold(1_000_000, 16_384, bad as any)).toBe(950_000);
+  });
+  it('百分比线的地板 = 2 × keepRecent + 24k(压缩后的体量之上留出余量),且永不高于「窗口 − 预留」', () => {
+    expect(compactionThreshold(272_000, 16_384, 10)).toBe(64_000); // 27.2k 低于压缩后体量 → 抬到地板
+    expect(compactionThreshold(128_000, 16_384, 10)).toBe(64_000);
+    expect(compactionThreshold(32_000, 16_384, 25)).toBe(16_000); // 地板高过旧线 → 旧线说了算,小窗口不受百分比影响
+    expect(compactionThreshold(100_000, 16_384, 30, 2_000)).toBe(30_000); // keepRecent 小 → 地板 28k,百分比生效(live 台架用这组)
+  });
   it('CompactionAttemptGuard 按触发线判「压缩后仍在高位」', () => {
     const guard = new CompactionAttemptGuard();
     guard.record(97_000, 100_000, undefined, 90_000);

@@ -9,7 +9,7 @@
  * 纯逻辑没必要为此进 happy-dom,也不该被隔壁正在改的渲染层带红。
  */
 import { describe, expect, it } from 'vitest'
-import { TABLE_ACTIONS_COL, specToDb, tableCellMeta, validateTableSpec } from './tableSpec'
+import { TABLE_ACTIONS_COL, foldSummaryMeta, specToDb, tableCellMeta, validateTableSpec } from './tableSpec'
 import type { TableSpec } from './types'
 
 const spec = (over: Partial<TableSpec> = {}): TableSpec => ({
@@ -180,5 +180,37 @@ describe('tableCellMeta:meta.text 只当显示覆盖(评审 09-05)', () => {
     const m = tableCellMeta(s)
     expect(m.r.st.text).toBe('成功')
     expect(m.r.st.tone).toBe('green')
+  })
+})
+
+describe('fold:规则行折叠经接缝进视图(2026-09-21)', () => {
+  const folded = (fold: TableSpec['fold']): TableSpec => spec({ fold })
+  it('specToDb:fold 落进首个视图(time → timeCol),与 groupBy 并存互不冲掉', () => {
+    const v = specToDb(spec({ fold: { by: ['name'], time: 'day', minutes: 30 }, groupBy: { key: 'state' } })).views?.[0]
+    expect(v?.fold).toEqual({ by: ['name'], timeCol: 'day', minutes: 30 })
+    expect(v?.groupBy).toBe('state')
+    expect(specToDb(spec()).views).toBeUndefined() // 不折不分组 = 不物化视图(老行为逐字不变)
+  })
+  it('校验:键列 / 时间列必须在列里,by 与 time 至少一个,minutes 正数,summary 是函数', () => {
+    expect(() => validateTableSpec(folded({ by: ['nope'] }))).toThrow(/fold key column/)
+    expect(() => validateTableSpec(folded({ time: 'nope' }))).toThrow(/fold time column/)
+    expect(() => validateTableSpec(folded({}))).toThrow(/fold needs by or time/)
+    expect(() => validateTableSpec(folded({ by: ['name'], minutes: 0 }))).toThrow(/positive number/)
+    expect(() => validateTableSpec(folded({ by: ['name'], summary: 'x' as never }))).toThrow(/must be a function/)
+    expect(() => validateTableSpec(folded({ by: ['name'], time: 'day' }))).not.toThrow()
+  })
+  it('foldSummaryMeta:插件给的汇总格 text 原样显示(number 列也不再交给渲染层格式化);没给的列不占位;坏形状丢弃', () => {
+    const s = folded({ by: ['name'], summary: (rows) => ({ calls: { text: `共 ${rows.length} 次`, tone: 'amber' }, day: '09-05 – 09-01', state: { text: [] as never }, ghost: 'x' }) })
+    const m = foldSummaryMeta(s, s.rows)
+    expect(m.calls).toMatchObject({ text: '共 2 次', tone: 'amber' })
+    expect(m.day.text).toBe('09-05 – 09-01')
+    expect(m.name).toBeUndefined()
+    expect(m.state).toBeUndefined() // text 不是基元 = HTML 走私入口,同主表校验一条线
+    expect('ghost' in m).toBe(false) // 规格里没有的列
+  })
+  it('foldSummaryMeta:插件回调抛错 → 空(退回通用汇总),绝不把异常带进 React 渲染期', () => {
+    const s = folded({ by: ['name'], summary: () => { throw new Error('boom') } })
+    expect(foldSummaryMeta(s, s.rows)).toEqual({})
+    expect(foldSummaryMeta(spec(), spec().rows)).toEqual({})
   })
 })

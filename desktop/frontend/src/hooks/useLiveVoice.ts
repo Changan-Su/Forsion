@@ -18,6 +18,23 @@ registerMessages({
   'livevoice.asrTimeout': { zh: '语音识别超时', en: 'Speech recognition timed out' },
 })
 
+/** 实时对话还没做完(逐句朗读、打断都没上),入口先藏进 设置 → 开发者选项。缺席 = 关。 */
+export const LIVE_VOICE_KEY = 'forsion_tangu_live_voice'
+
+/** 开关在设置浮窗里拨、按钮画在主窗:storage 事件跨 renderer 送达(实测同 partition 同源、收方不取焦也到),
+ *  focus 兜底那次错过的(投递时机竞态、或从别处回到主窗时值已变)。 */
+export function useLiveVoiceEnabled(): boolean {
+  const [on, setOn] = useState(false)
+  useEffect(() => {
+    const read = (): void => { try { setOn(localStorage.getItem(LIVE_VOICE_KEY) === '1') } catch { /* ignore */ } }
+    read()
+    window.addEventListener('storage', read)
+    window.addEventListener('focus', read)
+    return () => { window.removeEventListener('storage', read); window.removeEventListener('focus', read) }
+  }, [])
+  return on
+}
+
 export type LivePhase = 'off' | 'starting' | 'listening' | 'speaking' | 'transcribing'
 
 export interface LiveVoiceState {

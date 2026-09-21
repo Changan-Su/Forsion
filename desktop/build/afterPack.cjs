@@ -20,6 +20,12 @@ exports.default = async function afterPack(context) {
   const productId = process.env.FORSION_PRODUCT || 'forsion';
   const product = JSON.parse(require('fs').readFileSync(path.join(__dirname, '..', 'products', `${productId}.json`), 'utf8'));
 
+  /** 打包后的 resources 目录(mac 在 .app/Contents/Resources,其余在 resources/)。 */
+  const resourcesDir = () =>
+    electronPlatformName === 'darwin'
+      ? path.join(appOutDir, `${packager.appInfo.productFilename}.app`, 'Contents', 'Resources')
+      : path.join(appOutDir, 'resources');
+
   // ① better-sqlite3 → Electron ABI 重建(仅捆 agent 后端的变体需要 —— 它随 tangu-server/node_modules 进包)
   if (!product.agentBackend) {
     console.log('[afterPack] 产品档案无 agent 后端 → 跳过 better-sqlite3 重建');
@@ -28,12 +34,7 @@ exports.default = async function afterPack(context) {
   } else {
     const { rebuild } = require('@electron/rebuild');
     const { Arch } = require('electron-builder');
-    // 定位打包后的 resources 目录(mac 在 .app/Contents/Resources,其余在 resources/)。
-    const resourcesDir =
-      electronPlatformName === 'darwin'
-        ? path.join(appOutDir, `${packager.appInfo.productFilename}.app`, 'Contents', 'Resources')
-        : path.join(appOutDir, 'resources');
-    const buildPath = path.join(resourcesDir, 'tangu-server'); // extraResources 落点(含 node_modules)
+    const buildPath = path.join(resourcesDir(), 'tangu-server'); // extraResources 落点(含 node_modules)
     // electron-builder 24 的 AfterPackContext:Electron 版本逐级兜底取。
     const electronVersion =
       packager.info?.framework?.version ||
@@ -44,6 +45,25 @@ exports.default = async function afterPack(context) {
     console.log(`[afterPack] electron-rebuild better-sqlite3 → Electron ${electronVersion} (${archName}) @ ${buildPath}`);
     await rebuild({ buildPath, electronVersion, arch: archName, onlyModules: ['better-sqlite3'], force: true });
     console.log('[afterPack] better-sqlite3 已为 Electron ABI 重建');
+  }
+
+  // ③ 内置 Node 完整性闸:**npm 本体必须在包里**。没有它,`npx` 只是个会 MODULE_NOT_FOUND 的 shim,
+  //    所有走 `npx` 拉起的外部引擎(codex / claude-code / pi)在没装系统 Node 的机器上必挂,
+  //    而且症状是「空等 30 秒」,极难归因(2026-09-19 Windows 线上实报)。曾经真丢过:electron-builder
+  //    的拷贝过滤器无条件丢掉 extraResources `from` 根下那层 `node_modules`,而 Windows 版 Node 的 npm
+  //    正好住在那儿 —— 这个闸盯的是**结果**,不管将来是过滤器、长路径还是别的原因导致的丢失。
+  if (product.agentBackend) {
+    const nodeRoot = path.join(resourcesDir(), 'node');
+    const { existsSync } = require('fs');
+    if (existsSync(path.join(nodeRoot, '.skipped'))) {
+      console.log('[afterPack] 内置 Node 已降级(.skipped)→ 跳过 npm 完整性检查');
+    } else {
+      const npx = electronPlatformName === 'darwin' || electronPlatformName === 'linux'
+        ? path.join(nodeRoot, 'lib', 'node_modules', 'npm', 'bin', 'npx-cli.js')
+        : path.join(nodeRoot, 'node_modules', 'npm', 'bin', 'npx-cli.js');
+      if (!existsSync(npx)) throw new Error(`[afterPack] 内置 Node 缺 npm:${npx} 不存在(npx 会失效,外部引擎必挂)`);
+      console.log('[afterPack] 内置 Node 带着 npm ✓');
+    }
   }
 
   // ② macOS ad-hoc 自签 —— 必须放在 native rebuild 之后(重建改动了 bundle,签名要最后做,

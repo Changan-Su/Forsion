@@ -12,17 +12,19 @@ import {
 import type { LucideIcon } from 'lucide-react'
 import {
   registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon, setActiveSpace, useSpaceStore,
-  useWorkspace, deleteNamedLayout, getActiveSpace, getView, label, spaceLayoutName,
+  useWorkspace, deleteNamedLayout, clearLayout, getActiveSpace, getView, label, spaceLayoutName,
+  setActiveSpaceCold, BOOT_ACTIVE_SPACE_ID, UI_MODE,
 } from '@lcl/engine'
-import type { SpaceDefinition, PersistedPanel } from '@lcl/engine'
+import type { Leaf, SpaceDefinition, PersistedPanel } from '@lcl/engine'
 import { SpaceButton } from './components/SpaceButton'
-import { parseSpaceJson, slugifyId, uniqueId, recipeBucketOf, type SpaceSpec, type SpacePanelSpec } from '@lcl/spaces/userSpaces.core'
+import { parseSpaceJson, planMainPanels, slugifyId, uniqueId, recipeBucketOf, type SpaceSpec, type SpacePanelSpec } from '@lcl/spaces/userSpaces.core'
 import { useApp } from './stores/appStore'
 import { currentLocale } from './i18n'
 import { track } from './achievements/store'
 import { act } from './activity/log'
 import { readDisabledPluginIds } from '@amadeus/plugins/pluginStore'
 import { PRODUCT } from './product'
+import { LAST_EXIT_SPACE, resolveStartupTarget, startupSpacePref } from './spaces'
 
 // 保留 id:用户/市场的 space.json 不许占用宿主 Space 的 id。calendar 现在是内置插件(关掉即不注册),
 // 更要留着 —— 否则关掉期间被别人占了 id,重新启用时两份 Space 撞车。
@@ -47,6 +49,11 @@ const pluginSpaceOwner = new Map<string, string>()
 /** 已注册插件 Space 的原始 space.json:配方变了(插件更新)才注销重注册,不变则不动(防 ribbon 无谓抖动)。 */
 const pluginSpaceJson = new Map<string, string>()
 let pluginOnlyStartupResolved = false
+/** Recipe migrations can happen after WorkspaceHost has already restored the previous run's current layout:
+ * plugin views and their bundled Spaces are loaded asynchronously. Keep the migration pending until the
+ * startup target is actually registered, then clear/rebuild the live workbench in one step. */
+const pendingRecipeLayouts = new Set<string>()
+let asyncStartupSpaceResolved = false
 
 export const isUserSpace = (id: string): boolean => userIds.has(id)
 
@@ -74,12 +81,13 @@ function migrateRecipeLayout(spec: SpaceSpec): void {
   const prev = map[spec.id]
   if (prev === spec.version) return
   // 首见(prev === undefined)也算「换过」:这份配方此前从没按版本记过,可能正是升级前装的那版。
-  // 但只有**确实存在保存布局**时才需要丢——否则下次进入本来就会 build()。
-  if (useWorkspace.getState().namedLayouts().includes(spaceLayoutName(spec.id))) {
-    deleteNamedLayout(spaceLayoutName(spec.id))
-    // 正在这个 Space 里 → 立刻按新配方重建,不必等用户切走再切回。
-    if (useSpaceStore.getState().activeSpaceId === spec.id) useWorkspace.getState().resetLayout()
-  }
+  // deleteNamedLayout 对空槽幂等；无论有没有命名槽都记 pending，因为上次退出的 Space 还可能只剩
+  // 一份「当前布局」并已在插件异步注册前被 WorkspaceHost 恢复。
+  deleteNamedLayout(spaceLayoutName(spec.id))
+  pendingRecipeLayouts.add(spec.id)
+  // 已经完整注册且正在使用的普通热更新仍可当场重建。启动期异步 Space 此时通常被暂时
+  // 归一到了产品默认 Space，交给 settleAsyncStartupSpace() 在冷定位后再重建。
+  if (useSpaceStore.getState().activeSpaceId === spec.id) useWorkspace.getState().resetLayout()
   map[spec.id] = spec.version
   try { localStorage.setItem(RECIPE_VER_KEY, JSON.stringify(map)) } catch { /* 配额满:下次再试 */ }
 }
@@ -94,10 +102,24 @@ function specToDefinition(spec: SpaceSpec): SpaceDefinition {
     sidebarDefaults: sides,
     build() {
       ws().setSidebarDefaults(sides)
-      // 主区多面板:openView 在主区默认是「替换活动面板」(浏览器式,dockviewStore.openView 的 !newTab 分支),
-      // 逐个 openView 只会剩配方最后一项 —— pc-erp 的三面板配方真机实测只开出「库存表」(e2e:erp S4b)。
-      // 第 2 项起显式 newTab;开完把第 1 项激活:配方第一项 = 进 Space 的默认落点。
-      const opened = spec.layout.main.map((p, i) => ws().openView(p.type, p.params ?? {}, 'main', { newTab: i > 0 }))
+      // 主区默认仍是兼容旧配方的「同组标签」。条目显式写 split:right/down 时,先复制上一项的原生
+      // Dockview 组,再把复制出的 leaf 就地导航成目标视图 —— 这样分栏、拖宽、标签与持久化全走宿主原语,
+      // 不在插件 DOM 里再造一套假分栏。splitFrom 可指定前面某一项,表达「左侧上下、右侧通高」。
+      const opened: Leaf[] = []
+      for (const step of planMainPanels(spec.layout.main)) {
+        let leaf = null
+        if (step.mode === 'first') leaf = ws().openView(step.panel.type, step.panel.params ?? {}, 'main')
+        else if (step.mode === 'tab') leaf = ws().openView(step.panel.type, step.panel.params ?? {}, 'main', { newTab: true })
+        else {
+          const anchor = opened[step.from]
+          if (anchor) ws().activateLeaf(anchor.id)
+          const shell = anchor ? ws().splitActive(step.direction) : null
+          leaf = shell
+            ? ws().navigateLeaf(shell.id, step.panel.type, step.panel.params ?? {})
+            : ws().openView(step.panel.type, step.panel.params ?? {}, 'main', { newTab: true })
+        }
+        if (leaf) opened.push(leaf)
+      }
       if (opened.length > 1 && opened[0]) ws().activateLeaf(opened[0].id)
       for (const side of ['left', 'right'] as const) {
         for (const p of sides[side]) ws().openView(p.type, p.params, side)
@@ -160,6 +182,47 @@ export function loadUserSpaces(): Promise<void> {
   // removePluginSpace 顺手把活动 Space 打回 tangu,用户会看到闪一下。排队跑即无此窗口。
   loadChain = loadChain.catch(() => {}).then(loadUserSpacesOnce)
   return loadChain
+}
+
+/** Finish startup after an asynchronous user/plugin Space becomes available.
+ *
+ * This used to live only in bootstrapEngine's first `loadUserSpaces()` callback. A bundled Space whose
+ * required plugin view registered later missed that callback: its id was cold-restored afterwards while
+ * Dockview kept the already-restored legacy layout. Recipe version had nevertheless been stamped, so the
+ * stale UI survived every restart. Both bootstrap and the external-plugin completion path call this helper;
+ * it resolves exactly once, and a pending recipe migration clears persistence before rebuilding. */
+export function settleAsyncStartupSpace(): void {
+  if (asyncStartupSpaceResolved || windowKind() !== 'main' || UI_MODE === 'mobile') return
+  const want = resolveStartupTarget(BOOT_ACTIVE_SPACE_ID)
+  const state = useSpaceStore.getState()
+  if (!state.spaces.some((space) => space.id === want)) return
+
+  const migrated = pendingRecipeLayouts.delete(want)
+  const configure = (): void => {
+    const space = getActiveSpace()
+    if (!space) return
+    ws().setSidebarDefaults(space.sidebarDefaults)
+    ws().setSideProfile(space.id, space.resizableSides ?? {}, space.sideDefaultScale)
+  }
+
+  if (migrated) {
+    // Clear the current-layout blob too, not only `space:<id>`. If Dockview is already mounted resetLayout
+    // replaces the live legacy tree; if it is not, onReady sees the cleared blob and builds the new recipe.
+    clearLayout()
+    if (state.activeSpaceId !== want) setActiveSpaceCold(want)
+    configure()
+    ws().resetLayout()
+    asyncStartupSpaceResolved = true
+    return
+  }
+
+  if (state.activeSpaceId !== want) {
+    if (startupSpacePref() === LAST_EXIT_SPACE) {
+      setActiveSpaceCold(want)
+      configure()
+    } else setActiveSpace(want)
+  }
+  asyncStartupSpaceResolved = true
 }
 async function loadUserSpacesOnce(): Promise<void> {
   const list = await window.tangu?.spacesList?.().catch(() => null)

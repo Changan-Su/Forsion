@@ -18,6 +18,7 @@
  */
 import { FONT_UI_KEY, FONT_BODY_KEY, FONT_MONO_KEY } from './types'
 import { getFont, migrateLegacyValue, subscribeFonts } from './fontPresets'
+import { broadcastPrefs } from './uiPrefsBus'
 
 export type FontSlot = 'ui' | 'body' | 'mono'
 
@@ -68,6 +69,7 @@ export function writeFont(slot: FontSlot, id: string): void {
     if (v) localStorage.setItem(STORAGE_KEY[slot], v)
     else localStorage.removeItem(STORAGE_KEY[slot]) // 清空 = 回到跟随主题
   } catch { /* private mode */ }
+  broadcastPrefs() // 设置住在独立浮窗里:不吼一嗓子,主窗要重启才换字体
 }
 
 /** 三档当前值(预设 id) → 要注入的 CSS。全部跟随主题时返回 ''(不留空规则)。纯函数,单测入口。 */

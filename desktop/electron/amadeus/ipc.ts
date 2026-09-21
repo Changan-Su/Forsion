@@ -1415,6 +1415,45 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     vault.setPluginFileExtensions(collectPluginExts()) // 重算(含墓碑):保护不随卸载失效
   })
 
+  // ctx.tangu.startChat 的 send:true 归属判定(2026-09-19)。bundle.agents 只说明「插件目录里有 agents/<slug>/」,
+  // 不说明引擎播种的是它 —— 同 slug 已存在(用户自建 / 默认 xyra / 别家插件先播)时 seedBundleAgents 永不覆盖,
+  // 插件却照样能对别人的 Agent 直发。引擎只在**新播种**时写 agents/<slug>/.bundle-origin = bundle 目录名
+  // (tangu-agent/src/plugins/bundles.ts 的 BUNDLE_ORIGIN_FILE,改一边必须改另一边),这里拿它比本插件的目录名。
+  // 目录按 readExternalPlugins 同一口径定位(manifest 可解析 + pluginIdOf,先扫先赢;manifest id 可与目录名不同,
+  // 两侧都用目录名)。agents 根 = tanguDataDir()/agents(= backendManager 传给引擎的 TANGU_HOME)。
+  // 任何异常 / 缺标记(含本修复之前播种的老 agent)→ false,渲染层降级为预填(fail closed)。
+  const BUNDLE_AGENT_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/ // = 引擎 bundles.ts 的 SAFE_SLUG
+  const pluginDirNameOf = async (id: string): Promise<string | null> => {
+    let entries: import('node:fs').Dirent[]
+    try {
+      entries = await fs.readdir(globalPluginsDir(), { withFileTypes: true })
+    } catch {
+      return null
+    }
+    for (const e of entries) {
+      if (!e.isDirectory() || e.name.startsWith('.')) continue
+      try {
+        const m = JSON.parse(await fs.readFile(path.join(globalPluginsDir(), e.name, 'manifest.json'), 'utf8')) as { id?: unknown }
+        if (pluginIdOf(e.name, m?.id) === id) return e.name
+      } catch { /* manifest 坏/缺:readExternalPlugins 同样不列 */ }
+    }
+    return null
+  }
+  handle(IPC.bundleAgentOwned, async (_e, pluginId: unknown, slug: unknown): Promise<boolean> => {
+    if (typeof pluginId !== 'string' || !SAFE_PLUGIN_ID.test(pluginId)) return false
+    if (typeof slug !== 'string' || !BUNDLE_AGENT_SLUG.test(slug)) return false
+    try {
+      const dirName = await pluginDirNameOf(pluginId)
+      if (!dirName) return false
+      const marker = path.join(tanguDataDir(), 'agents', slug, '.bundle-origin')
+      const st = await fs.lstat(marker)
+      if (!st.isFile() || st.size > 256) return false
+      return (await fs.readFile(marker, 'utf8')).trim() === dirName
+    } catch {
+      return false
+    }
+  })
+
   // 启动即同步预扫插件扩展名 → 早于渲染端 restoreVault→listPages,关掉「.mindmap.md 被当页面加载」的启动竞态(Codex #2)。
   vault.setPluginFileExtensions(collectPluginExts())
 

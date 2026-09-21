@@ -7,7 +7,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, realpathSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, lstatSync, readdirSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { bundleDirs, bundleEnginePluginRoots, bundleSkillRoots, seedBundleAgents } from './bundles.js';
+import { BUNDLE_ORIGIN_FILE, bundleDirs, bundleEnginePluginRoots, bundleSkillRoots, seedBundleAgents } from './bundles.js';
+import { parseAgentFolder } from '../agents/agentRegistry.js';
+import { validSyncPath } from '../services/agentSyncPaths.js';
 import { discoverPlugins, resolvePluginsDirs } from './loader.js';
 import { TANGU_PLUGIN_API } from './types.js';
 import { agentsDir, pluginsDir } from '../core/tanguHome.js';
@@ -229,6 +231,37 @@ describe('seedBundleAgents', () => {
     writeFileSync(path.join(src, 'skills', 'sk-new', 'SKILL.md'), 'v1-new');
     await seedBundleAgents();
     expect(readFileSync(path.join(destSkills, 'sk-new', 'SKILL.md'), 'utf8')).toBe('v1-new');
+  });
+
+  it('归属标记:新播种写 .bundle-origin = bundle 目录名;已存在的同名 agent 永不写(桌面 send:true 的依据)', async () => {
+    // 用户自己的 xyra 先在(默认 agent / 用户自建 / 别家插件先播都是这一形态)
+    const userXyra = path.join(agentsDir(), 'xyra');
+    mkdirSync(userXyra, { recursive: true });
+    writeFileSync(path.join(userXyra, 'config.toml'), 'name = "USER xyra"\n');
+    // bundle 目录名 ≠ manifest id(桌面按目录名比对,两侧口径一致)
+    const bundle = makeBundle('dir-name');
+    writeJson(path.join(bundle, 'manifest.json'), { id: 'manifest-id', name: 'x', version: '1.0.0' });
+    for (const slug of ['xyra', 'fresh-one']) {
+      mkdirSync(path.join(bundle, 'agents', slug), { recursive: true });
+      writeFileSync(path.join(bundle, 'agents', slug, 'config.toml'), `name = "bundle ${slug}"\n`);
+      // 插件自带一份伪造标记:新播种必须被真值盖掉,已存在分支必须一个字节都不带过去
+      writeFileSync(path.join(bundle, 'agents', slug, BUNDLE_ORIGIN_FILE), 'someone-else');
+    }
+    expect(await seedBundleAgents()).toEqual(['fresh-one']);
+    expect(readFileSync(path.join(agentsDir(), 'fresh-one', BUNDLE_ORIGIN_FILE), 'utf8')).toBe('dir-name');
+    expect(existsSync(path.join(userXyra, BUNDLE_ORIGIN_FILE))).toBe(false);
+    expect(readFileSync(path.join(userXyra, 'config.toml'), 'utf8')).toBe('name = "USER xyra"\n');
+
+    // 第二个 bundle 也带 fresh-one:先播者赢,标记不被改写(跨插件撞名拿不到直发权)
+    const other = makeBundle('other-bundle');
+    mkdirSync(path.join(other, 'agents', 'fresh-one'), { recursive: true });
+    writeFileSync(path.join(other, 'agents', 'fresh-one', 'config.toml'), 'name = "other"\n');
+    expect(await seedBundleAgents()).toEqual([]);
+    expect(readFileSync(path.join(agentsDir(), 'fresh-one', BUNDLE_ORIGIN_FILE), 'utf8')).toBe('dir-name');
+
+    // 标记是点文件:不进云同步路径白名单;agent 照常解析
+    expect(validSyncPath(BUNDLE_ORIGIN_FILE)).toBe(false);
+    expect((await parseAgentFolder('fresh-one', path.join(agentsDir(), 'fresh-one'))).name).toBe('bundle fresh-one');
   });
 
   it('跳过非法 slug 与无 config.toml 的目录', async () => {

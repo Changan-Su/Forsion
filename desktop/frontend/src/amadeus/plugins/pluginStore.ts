@@ -27,7 +27,11 @@ import { registerPluginSeries, track, unregisterPluginAchievements } from '../..
 import { act } from '../../activity/log'
 import { notifyApp } from '../../stores/notificationStore'
 import { currentLocale, registerMessages, subscribeLocale, translate } from '../../i18n'
-import { readTangu } from './tanguSeam'
+import { idleAgentStatus, readTangu, type TanguAgentStatus, type TanguStartChatResult } from './tanguSeam'
+import { registerDeskCompanion, revokeDeskCompanions, type DeskCompanionContribution, type DeskCompanionHandle } from './deskCompanion'
+// ctx.desk 的宿主闸:端判定单源(currentPlatform)+ UI 模式(叶子模块,不经 @lcl/engine barrel)。
+import { currentPlatform } from '../../services/agentRunService'
+import { UI_MODE } from '@lcl/engine/uiMode'
 import { AUTO_WORK_FOLDER_KEY } from './display'
 // 自动化播种 / 禁用即关规则:backendService 依赖图干净(http / agentRunService / localInbox,均不引 appStore),
 // 可静态 import;cfg 必须经 tanguSeam 探针的 waitBackend 拿(appStore 与本模块有 import 环)。
@@ -50,6 +54,7 @@ import type {
   PropertyTypeContribution,
   SettingContribution,
   SettingsViewContribution,
+  ReadinessContribution,
   SlashContribution,
   StatusItemContribution,
   ThemeContribution,
@@ -124,6 +129,8 @@ interface PluginState {
   propertyTypes: Owned<PropertyTypeContribution>[]
   settings: Owned<SettingContribution>[]
   settingsViews: Owned<SettingsViewContribution>[]
+  /** 插件自报的就绪检查(manifest onboarding.requires 的 check 那类)。 */
+  readiness: Owned<ReadinessContribution>[]
   views: Owned<ViewContribution>[]
   listSources: Owned<ListSourceContribution>[]
   fileTypes: Owned<FileTypeContribution>[]
@@ -206,6 +213,13 @@ function listCached(kind: 'pages' | 'files'): Promise<string[]> {
   listCache[kind] = { at: Date.now(), root, p }
   return p
 }
+/** 插件经 ctx.app 写盘**落定之后**作废清单缓存(两种都清:writeFile / writeBytes 也能写 .md)。
+ *  必须在写完之后清:写之前清的话,写的途中进来的 listFiles 会把写前清单再缓存 1.5s ——
+ *  Live3D 导入完立刻重扫,拿到的正是拷贝前的清单,新模型不显示(2026-09-19 评审)。 */
+const dropListCache = (): void => {
+  listCache.files = undefined
+  listCache.pages = undefined
+}
 
 // ── ctx.app.watchFile 的分发器(2026-08-15)。主进程一条广播(非 .md/.db 文件的外部内容改动),
 //    渲染端按路径分给订阅者。**接线是懒的**:第一个订阅者出现才挂 IPC 监听,最后一个走了就摘掉 ——
@@ -270,7 +284,31 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     readFile: (p) => amadeus.readTextFile(p),
     assetUrl: (p) => toAssetUrl(p),
     hostPath: (p) => pluginHostPath(usePageStore.getState().vaultRoot, p, { executionCapabilities: { host: readTangu()?.hostExecution?.() ?? hostTangu()?.executionCapabilities?.host ?? false } }),
-    writeFile: (p, text) => (ok() ? amadeus.writeTextFile(p, text) : Promise.resolve()),
+    writeFile: (p, text) => (ok() ? amadeus.writeTextFile(p, text).finally(dropListCache) : Promise.resolve()),
+    // 二进制读写(2026-09-19):路径口径与 writeFile 相同 —— 原样透传,越界由主进程 resolveInVault 钳死。
+    // 桥缺席时整条方法不挂(同 watchFile 纪律)。⚠️saveVaultBytes 不记自写账本:同路径 watchFile 会收到回声。
+    ...(amadeus?.saveVaultBytes
+      ? {
+          writeBytes: (p: string, b: Uint8Array | ArrayBuffer): Promise<void> => {
+            if (!ok()) return Promise.resolve()
+            // 任何 TypedArray / DataView 按字节视图取(new Uint8Array(float32Arr) 会逐元素截断成 0-255,静默写坏);
+            // 既不是视图也不是 ArrayBuffer(传了字符串之类)→ 拒,别写出一个 0 字节文件。
+            const view = ArrayBuffer.isView(b) ? new Uint8Array(b.buffer, b.byteOffset, b.byteLength)
+              : b instanceof ArrayBuffer ? new Uint8Array(b) : null
+            if (!view) return Promise.reject(new TypeError('writeBytes expects a Uint8Array or ArrayBuffer'))
+            // 子视图(subarray)过 IPC 会把**整块**底层 buffer 结构化克隆过去 → 只拷自己那一段。
+            return amadeus.saveVaultBytes(p, view.byteLength === view.buffer.byteLength ? view : view.slice()).finally(dropListCache)
+          },
+        }
+      : {}),
+    ...(amadeus?.readVaultBytes
+      ? {
+          readBytes: async (p: string): Promise<Uint8Array | null> => {
+            // 与 readFile 同口径:不存在 / 越界 / 没有活动库一律 null,不抛。
+            try { return (await amadeus.readVaultBytes(p)) ?? null } catch { return null }
+          },
+        }
+      : {}),
     // 多维表比对交换写口(2026-09-02):与 dbStore 同一条 db:write-cas 路。写成功后让渲染端已加载的
     // 那份热重载(否则表格要等 VaultWatcher 一拍),并踢一下引擎(让盯这张表的 db_changed 规则 ~2s 内看到)。
     // ⚠️活性判两处:入口一次挡住「已禁用还来调」,`isLive` 闭包挡住「调用中途被禁用」——
@@ -307,6 +345,9 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     },
     // 打开文件类型视图在 amadeusNav(它引 pluginStore 的 matchFileType)→ 动态 import 破静态环。
     openFile: (p) => { if (ok()) void import('../../amadeusNav').then((m) => m.openFile(p)) },
+    // 裸 Markdown 必须显式走 Amadeus editor,不能借 openFile(后者对未认领后缀会交给系统默认程序)。
+    // reuseKey 让插件 Space 能稳定更新自己声明的文档伴随栏,activate:false 不抢回源视图焦点。
+    openNote: (p, options) => { if (ok()) void import('../../amadeusNav').then((m) => m.openNote(p, options)) },
     // 只读 vault 查询面(2026-08-14,codex 评审后的口径):纯透传主进程既有 IPC,没有写口。
     // 三条统一语义 —— **桥缺席(web/台架未垫)或没有活动库都给空数组,绝不 reject**:
     // 插件侧的可选链只挡得住「宿主没这个方法」,挡不住「方法在但 window.amadeus 是 undefined」,
@@ -655,7 +696,12 @@ export const usePluginStore = create<PluginState>((set, get) => {
     const tableMounts = new Set<() => void>()
     // 插件宿主原生 UI(ctx.ui.*):插件没接 disposer 时也由 disable/reload 统一收掉。
     const uiMounts = new Set<() => void>()
+    // ctx 级活性闸(ctx.app 的 alive 管不到 ctx.tangu / ctx.desk):吊销后 startChat 不再开对话、
+    // registerCompanion 不再挂新伴随面、旧 handle 变哑。
+    let ctxAlive = true
     revokers[pluginId] = () => {
+      ctxAlive = false
+      revokeDeskCompanions(pluginId)
       revokeSurface()
       for (const d of Array.from(dashMounts)) {
         try { d() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" dashboard dispose failed`, e) }
@@ -828,6 +874,16 @@ export const usePluginStore = create<PluginState>((set, get) => {
         ],
       }))
     },
+    // 就绪检查:同 id 重注册即覆盖。宿主只在注意力在场时调(引导卡 / 重新检查 / 手动启用),见 pluginOnboardingStore。
+    registerReadiness: (def) => {
+      if (!def?.id || typeof def.check !== 'function') {
+        console.warn(`[plugin:${pluginId}] registerReadiness 需要 { id, label, check }`)
+        return
+      }
+      set((s) => ({
+        readiness: [...s.readiness.filter((o) => !(o.pluginId === pluginId && o.item.id === def.id)), { pluginId, item: def }],
+      }))
+    },
     // 编辑器扩展:注册表在 editorExtensions.ts(叶子模块,破 store↔MarkdownBlock 的 import 环)。
     registerEditorExtension: (factory, opts) => addEditorExtension(pluginId, factory, opts),
     // 插件私有 JSON blob(~/.forsion/plugins-data/<id>.json)。宿主缺位 → 读 null / 写 no-op,
@@ -911,6 +967,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 永远收不到,容器空着还没有报错)。import 落地前来的 update 只换 pending 规格。
     // 宿主没有 DOM(SSR / 台架式 node 环境)时整条省略 —— 哑桩会让插件走进原生分支然后什么都不画。
     ...(typeof document !== 'undefined' ? { table: {
+      caps: { fold: true },
       mount: (el: HTMLElement, spec: TableSpec) => {
         validateTableSpec(spec)
         let handle: { update(s: TableSpec): void; dispose(): void } | null = null
@@ -987,6 +1044,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
           tangu: {
             activeModel: () => readTangu()?.activeModel() ?? null,
             models: () => readTangu()?.models() ?? [],
+            // Agent 名册(2026-09-20):同 agentStatus 的姿势 —— 调用时才读探针,探针缺这条(旧宿主 /
+            // 台架假探针)给空数组,插件据此退回「只认当前会话的 Agent」。
+            agents: () => readTangu()?.agents?.() ?? [],
             activeSpace: () => readTangu()?.activeSpace() ?? null,
             session: () => readTangu()?.session?.() ?? null,
             subscribe: (cb: () => void) => {
@@ -994,6 +1054,73 @@ export const usePluginStore = create<PluginState>((set, get) => {
               const wrapped = (): void => { off(); tanguUnsubs.delete(wrapped) }
               tanguUnsubs.add(wrapped)
               return wrapped
+            },
+            // Agent 状态(2026-09-19):调用时才读探针(台架可以事后换探针)。探针缺这条(旧台架)→ 恒 idle,
+            // 与契约「缺席按 idle 处理」同口径;省略 sessionId 时此处拿不到 activeId(appStore 有 import 环),报 null。
+            agentStatus: (sid?: string | null): TanguAgentStatus => readTangu()?.agentStatus?.(sid) ?? idleAgentStatus(sid ?? null),
+            subscribeAgentStatus: (cb: (s: TanguAgentStatus) => void, sid?: string | null): (() => void) => {
+              if (!ctxAlive) return () => {}
+              const off = readTangu()?.subscribeAgentStatus?.(cb, sid) ?? (() => {})
+              const wrapped = (): void => { off(); tanguUnsubs.delete(wrapped) }
+              tanguUnsubs.add(wrapped)
+              return wrapped
+            },
+            // 开一个可见的新对话:探针给得出才注入(同 automation 的闸)。放行规则都在这一层:
+            //  ① send:true 只对**本插件捆绑包播种的** Agent 生效(清单有 + 播种标记是本插件),别家 Agent /
+            //     撞名没播成的 slug 降级为预填、由用户按回车 —— 插件不能替用户花别人的 token、开别家 Agent 的 host 工具;
+            //  ② folder(库相对)→ 本机绝对路径走**与 ctx.app.hostPath 同一个函数**:无库 / 非本机执行 /
+            //     `..` / 绝对路径 / 盘符 → null → 不带 cwd(用默认工作区),契约是「忽略」而不是报错;
+            //  ③ 活性:入口判一次;问归属的 IPC 之后再判一次;探针里等 Agent 名册那一拍由 alive 回调复查(之后才动界面)。
+            //     探针返回之后不再有副作用,不需要再判。
+            ...(readTangu()?.startChat
+              ? {
+                  startChat: async (o: { agent?: string; prompt: string; send?: boolean; folder?: string }): Promise<TanguStartChatResult> => {
+                    if (!ctxAlive) return { ok: false, error: 'plugin disabled' }
+                    const probe = readTangu()
+                    if (!probe?.startChat) return { ok: false, error: 'startChat is not available on this host' }
+                    const agent = typeof o?.agent === 'string' ? o.agent.trim() : ''
+                    // 「本插件的 Agent」= 清单里有 **且** 引擎当初是从本插件播种的它(主进程比 .bundle-origin 标记)。
+                    // 只看清单会放行撞名:同 slug 已存在(用户自建 / xyra / 别家插件先播)时引擎永不覆盖,
+                    // 插件却能对别人的 Agent 直发。桥缺这条(web / 移动 / Unit / 台架)或缺标记 → 降级为预填。
+                    const listed = !!agent && (get().plugins.find((p) => p.id === pluginId)?.bundle?.agents ?? []).includes(agent)
+                    let own = false
+                    if (listed && o?.send) {
+                      try { own = (await amadeus?.bundleAgentOwned?.(pluginId, agent)) === true } catch { own = false }
+                      if (!ctxAlive) return { ok: false, error: 'plugin disabled' } // 等 IPC 那一拍里被禁用
+                    }
+                    const folder = typeof o?.folder === 'string' ? o.folder.trim().replace(/[\\/]+$/, '') : ''
+                    const cwd = (folder && appApi.hostPath?.(folder)) || undefined
+                    return probe.startChat({
+                      ...(agent ? { agent } : {}),
+                      prompt: String(o?.prompt ?? ''),
+                      send: !!o?.send && own,
+                      ...(cwd ? { cwd } : {}),
+                      alive: () => ctxAlive,
+                    })
+                  },
+                }
+              : {}),
+          },
+        }
+      : {}),
+    // Agent Desk 伴随面(2026-09-19):**只在有 Agent Desk 的宿主上注入** —— 桌面 Tangu。判据与 ChatView 的
+    // deskEnabled 同源:探针在(Tangu 宿主)+ 端判定单源 currentPlatform() === 'desktop'(web 的 getConfig 没有
+    // agentDeskEnabled,Desk 永不出现)+ 不是单列移动壳。用户在设置里关了 Desk 不影响注入(注册照常成功,只是不显示)。
+    // 生效者与模式由 deskCompanion 注册表管;吊销(禁用/重载/setup 抛错)经 revokers 统一 revokeDeskCompanions。
+    ...(readTangu() && currentPlatform() === 'desktop' && UI_MODE !== 'mobile'
+      ? {
+          desk: {
+            registerCompanion: (def: DeskCompanionContribution): DeskCompanionHandle => {
+              if (!ctxAlive) {
+                console.warn(`[amadeus] 插件 ${pluginId} 已停用,ctx.desk.registerCompanion 被忽略`)
+                return { update: () => {}, dispose: () => {} }
+              }
+              const h = registerDeskCompanion(pluginId, def)
+              // 旧一代 handle 变哑:同 key 重新启用后注册的是新条目,残留的异步回调不许改它的模式或把它撤掉。
+              return {
+                update: (patch) => { if (ctxAlive) h.update(patch) },
+                dispose: () => { if (ctxAlive) h.dispose() },
+              }
             },
           },
         }
@@ -1051,6 +1178,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       propertyTypes: s.propertyTypes.filter((o) => o.pluginId !== id),
       settings: s.settings.filter((o) => o.pluginId !== id),
       settingsViews: s.settingsViews.filter((o) => o.pluginId !== id),
+      readiness: s.readiness.filter((o) => o.pluginId !== id),
       views: s.views.filter((o) => o.pluginId !== id),
       listSources: s.listSources.filter((o) => o.pluginId !== id),
       fileTypes: s.fileTypes.filter((o) => o.pluginId !== id),
@@ -1076,6 +1204,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     propertyTypes: [],
     settings: [],
     settingsViews: [],
+    readiness: [],
     views: [],
     listSources: [],
     fileTypes: [],
@@ -1132,6 +1261,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
           propertyTypes: s.propertyTypes.filter((o) => o.pluginId !== id),
           settings: s.settings.filter((o) => o.pluginId !== id),
       settingsViews: s.settingsViews.filter((o) => o.pluginId !== id),
+      readiness: s.readiness.filter((o) => o.pluginId !== id),
           views: s.views.filter((o) => o.pluginId !== id),
       listSources: s.listSources.filter((o) => o.pluginId !== id),
           fileTypes: s.fileTypes.filter((o) => o.pluginId !== id),

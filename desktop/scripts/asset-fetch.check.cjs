@@ -8,6 +8,11 @@
  * (普通 Chromium 里根本没有这个 scheme)。2026-08-29 为此把 `amadeus-asset:` 加进了
  * connect-src,本脚本就是那条改动的看门狗。
  *
+ * 2026-09-19 同理补了 `blob: data:`:three 的 GLTFLoader 在 Chromium 上用 ImageBitmapLoader,它对
+ * `URL.createObjectURL(blob)` 出来的内嵌贴图走 **fetch(blob:)**;`.gltf` 里 base64 的 buffer 走 fetch(data:)。
+ * connect-src 不放行这两个 scheme 时,贴图加载失败被 GLTFLoader 吞掉 → 模型**无贴图**只留一行 console.error。
+ * T5–T7 守这条(含把两个 scheme 从 connect-src 抠掉必须变红的负对照)。
+ *
  * 不依赖 app 构建产物,裸 Electron + 内存夹具,几秒出结果。
  * 用法:npm run check:assetfetch
  */
@@ -31,6 +36,8 @@ const CSP = (/http-equiv="Content-Security-Policy"\s+content="([^"]+)"/.exec(ind
 const connectSrc = (/connect-src ([^;]+)/.exec(CSP) || [])[1] || ''
 check('S1 frontend/index.html 的 connect-src 放行 amadeus-asset:(插件读二进制资源的唯一闸)',
   connectSrc.includes(`${SCHEME}:`), `connect-src ${connectSrc.trim()}`)
+check('S1b connect-src 放行 blob: 与 data:(GLTFLoader 内嵌贴图 / base64 buffer 走 fetch)',
+  /(^|\s)blob:(\s|$)/.test(connectSrc) && /(^|\s)data:(\s|$)/.test(connectSrc), `connect-src ${connectSrc.trim()}`)
 
 const protoSrc = readFileSync(path.join(ROOT, 'electron/amadeus/assetProtocol.ts'), 'utf8')
 const privLine = (/privileges:\s*\{([^}]+)\}/.exec(protoSrc) || [])[1] || ''
@@ -55,11 +62,29 @@ protocol.registerSchemesAsPrivileged([
 const page = (csp) =>
   `<!doctype html><meta charset=utf-8><meta http-equiv="Content-Security-Policy" content="${csp}"><body>ok`
 const CSP_WITHOUT = CSP.replace(`connect-src 'self' ${SCHEME}:`, "connect-src 'self'")
+/** C = 只从 **connect-src** 里抠掉 blob: / data: 的「改动前」CSP(img-src / media-src 里的 blob: data: 原样保留,
+ *  否则负对照证明的就是别的指令)。 */
+const CSP_WITHOUT_BLOB = CSP.replace(/connect-src [^;]+/, (d) => d.replace(/\s(?:blob|data):(?=\s|$)/g, ''))
 
 const srv = http.createServer((req, res) => {
   res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-  res.end(page(req.url.startsWith('/without') ? CSP_WITHOUT : CSP))
+  res.end(page(req.url.startsWith('/noblob') ? CSP_WITHOUT_BLOB : req.url.startsWith('/without') ? CSP_WITHOUT : CSP))
 })
+
+/** 页内:fetch 一段内存 blob: 与一段 data: URL,读回 ArrayBuffer(8 字节假 glTF 头)。 */
+const FETCH_BLOB_DATA = `(async () => {
+  const head = (b) => ({ ok: true, n: b.byteLength, magic: new TextDecoder().decode(new Uint8Array(b, 0, 4)) })
+  const out = {}
+  try {
+    const u = URL.createObjectURL(new Blob([new Uint8Array([0x67, 0x6c, 0x54, 0x46, 2, 0, 0, 0])]))
+    out.blob = head(await fetch(u).then((r) => r.arrayBuffer()))
+    URL.revokeObjectURL(u)
+  } catch (e) { out.blob = { ok: false, err: String(e) } }
+  try {
+    out.data = head(await fetch('data:application/octet-stream;base64,Z2xURgIAAAA=').then((r) => r.arrayBuffer()))
+  } catch (e) { out.data = { ok: false, err: String(e) } }
+  return out
+})()`
 
 const load = (win, url) => win.loadURL(url)
 
@@ -114,6 +139,19 @@ app.whenReady().then(() => {
         .then(r => ({ status: r.status }))
         .catch(e => ({ status: 'throw', err: String(e) }))`)
     check('T4 越界路径仍 403(connect-src 放行的是 scheme,不是路径)', d.status === 403, JSON.stringify(d))
+
+    // ── E:线上 CSP 下 fetch(blob:) / fetch(data:) —— three 的贴图与 base64 buffer 走的就是这两条 ──────
+    const e = await win.webContents.executeJavaScript(FETCH_BLOB_DATA)
+    check('T5 线上 CSP 下 fetch(blob:) 读得回 ArrayBuffer(GLB/VRM 内嵌贴图 → ImageBitmapLoader)',
+      e.blob.ok && e.blob.n === 8 && e.blob.magic === 'glTF', JSON.stringify(e.blob))
+    check('T6 线上 CSP 下 fetch(data:) 读得回 ArrayBuffer(.gltf 里 base64 的 buffer)',
+      e.data.ok && e.data.n === 8 && e.data.magic === 'glTF', JSON.stringify(e.data))
+
+    // ── F:负对照。只从 connect-src 抠掉 blob: data:,两条都必须当场失败 ─────────────────────────
+    await load(win, `http://127.0.0.1:${port}/noblob`)
+    const f = await win.webContents.executeJavaScript(FETCH_BLOB_DATA)
+    check('T7 负对照:connect-src 去掉 blob: data: 后两条 fetch 都失败(证明 T5/T6 不是恒绿)',
+      CSP_WITHOUT_BLOB !== CSP && !f.blob.ok && !f.data.ok, JSON.stringify(f))
 
     finish()
   })

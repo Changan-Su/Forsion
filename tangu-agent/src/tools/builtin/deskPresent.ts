@@ -13,10 +13,25 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { DeskPresentSpec } from '../toolTypes.js';
-import { requestDeskShot } from '../../services/deskCapture.js';
+import { requestDeskShot, type DeskShotResult } from '../../services/deskCapture.js';
 import { amadeusVaultPath } from './amadeus.js';
 
 const MAX_VIEWS = 2;
+
+/** desk_screenshot 拿到图之后给模型的那句话(纯函数,单测钉住)。伴随面(插件画的形象)单列:09-19 用户实测
+ *  agent 截不到 Live3D 形象、只好说「看不到你眼前的画面」;能截之后又得防它把形象当成自己放上去的产物。 */
+export function deskShotReply(shot: Pick<DeskShotResult, 'mode' | 'companion'>): string {
+  if (shot.companion) {
+    return `Screenshot of the Agent Desk is attached. It shows a plugin companion (${shot.companion}): something that plugin draws there, such as an avatar, not content you presented. ` +
+      (shot.mode === 'card' ? 'It is the small preview card, the size the user sees it. ' : '') +
+      'Look at it and judge what it shows yourself; do not ask the user for a screenshot. ' +
+      'If it is still there after you present something, the plugin has replaced the Desk and presented files do not show there.';
+  }
+  return shot.mode === 'card'
+    ? 'Screenshot attached — but the Desk is collapsed to its small preview card, so this is a thumbnail. ' +
+      'If you need detail, call desk_present with size:"half" (or "wide") and screenshot again.'
+    : 'Screenshot of the Agent Desk is attached as an image. Look at it and judge the result yourself; do not ask the user to describe it.';
+}
 
 export const deskPresentProvider: ToolProvider = {
   id: 'builtin:desk-present',
@@ -108,7 +123,7 @@ export const deskPresentProvider: ToolProvider = {
       mode: 'host',
       isEnabledFor: (profile) => !!profile.capabilities.hostExec,
       deferred: true, // 低频「回看」动作 → 只在目录留一行,用时 load_tools 解锁(省常驻 defs 预算)
-      deferHint: 'Screenshot the Agent Desk panel to see how what you presented actually renders.',
+      deferHint: 'Screenshot the Agent Desk panel to see how what you presented (or a plugin avatar there) actually renders.',
       // 超时给 20s:桌面端自己 8s 内必答(deskCapture),留出截图/缩放/回传的余量。
       capabilities: { sideEffect: 'read', parallel: false, defaultTimeoutMs: 20_000 },
       definition: {
@@ -116,10 +131,10 @@ export const deskPresentProvider: ToolProvider = {
         function: {
           name: 'desk_screenshot',
           description:
-            'Take a screenshot of the Agent Desk panel and look at it yourself — the rendered pixels of whatever is currently on the Desk (HTML preview, mindmap, whiteboard, note editor, chart, any view). ' +
+            'Take a screenshot of the Agent Desk panel and look at it yourself — the rendered pixels of whatever is currently on the Desk (HTML preview, mindmap, whiteboard, note editor, chart, any view, or a plugin companion such as a 3D avatar). ' +
             'Use it to CHECK YOUR OWN WORK visually: after building a page/diagram/layout, present it with desk_present and then screenshot it to verify it actually looks right, then fix what you see. ' +
             'The image comes back as an image you can see (needs a vision-capable model). ' +
-            'Only what is on screen is captured — present something first, and prefer size:"half"/"wide" so the capture is big enough to read.',
+            'Only what is on screen is captured — present something first (not needed to look at what is already there, such as a companion), and prefer size:"half"/"wide" so the capture is big enough to read.',
           parameters: { type: 'object', properties: {}, required: [] },
         },
       },
@@ -132,10 +147,7 @@ export const deskPresentProvider: ToolProvider = {
             'The panel may be turned off, hidden, or the window too narrow — carry on without the screenshot.';
         }
         ctx.collectImage({ url: shot.dataUrl, name: 'agent-desk.png' });
-        return shot.mode === 'card'
-          ? 'Screenshot attached — but the Desk is collapsed to its small preview card, so this is a thumbnail. ' +
-            'If you need detail, call desk_present with size:"half" (or "wide") and screenshot again.'
-          : 'Screenshot of the Agent Desk is attached as an image. Look at it and judge the result yourself; do not ask the user to describe it.';
+        return deskShotReply(shot);
       },
     },
   ],

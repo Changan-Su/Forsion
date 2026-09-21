@@ -7,7 +7,7 @@
  *
  * 「Forsion 只是其中一个 provider」即在此体现:Forsion 是兜底的托管面,直连 provider 与其平级。
  */
-import type { CloudBrainServices, BuildPayloadOpts, StreamOpts, ImageGenRequest, ImageGenResult, SpeechRequest, SpeechResult } from '../../seams/cloudBrain.js';
+import { imageMimeOf, type CloudBrainServices, type BuildPayloadOpts, type StreamOpts, type ImageGenRequest, type ImageEditRequest, type ImageGenResult, type SpeechRequest, type SpeechResult } from '../../seams/cloudBrain.js';
 import type { ProviderRegistry } from '../../llm/providerRegistry.js';
 import { loadLocalWebSearchConfig, hasLocalSearchProvider, runLocalSearch } from './localSearch.js';
 import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, streamOpenAiCompat, DIRECT_MARK, PROTOCOL_MARK } from '../../llm/openaiCompat.js';
@@ -28,13 +28,40 @@ async function generateDirectImage(baseUrl: string, apiKey: string | undefined, 
   const r = await fetch(`${baseUrl}/images/generations`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey || ''}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: apiModelId, prompt: req.prompt, n: req.n || 1, size, response_format: 'b64_json' }),
+    body: JSON.stringify({ model: apiModelId, prompt: req.prompt, n: req.n || 1, size,
+      ...(req.quality ? { quality: req.quality } : {}),
+      // gpt-image-* 拒收 response_format(且恒返回 b64);其余 OpenAI 兼容端点需要它才给字节。
+      ...(/^(gpt-image|chatgpt-image)/i.test(apiModelId) ? {} : { response_format: 'b64_json' }) }),
     signal: req.signal ?? AbortSignal.timeout(180_000),
   });
   if (!r.ok) throw new Error(`image gen ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
   const j: any = await r.json();
-  const images = (j?.data || []).filter((d: any) => d?.b64_json).map((d: any) => ({ b64: d.b64_json as string, mime: 'image/png' }));
+  const images = (j?.data || []).filter((d: any) => d?.b64_json).map((d: any) => ({ b64: d.b64_json as string, mime: imageMimeOf(d.b64_json) }));
   if (!images.length) throw new Error('provider 未返回图片');
+  return { images };
+}
+
+/** Multipart edit requests use the same provider routing as generation. */
+async function editDirectImage(baseUrl: string, apiKey: string | undefined, model: string, req: ImageEditRequest): Promise<ImageGenResult> {
+  const form = new FormData();
+  form.append('model', model); form.append('prompt', req.prompt); form.append('n', String(req.n || 1));
+  const sizes: Record<string, string> = { '1:1': '1024x1024', '3:2': '1536x1024', '16:9': '1536x1024', '2:3': '1024x1536', '9:16': '1024x1536' };
+  form.append('size', sizes[req.size || '1:1'] || req.size || '1024x1024');
+  form.append('output_format', 'png');
+  if (req.quality) form.append('quality', req.quality);
+  if (req.transparentBackground) form.append('background', 'transparent');
+  req.images.forEach((image, index) => {
+    const extension = image.mime === 'image/jpeg' ? 'jpg' : image.mime === 'image/webp' ? 'webp' : 'png';
+    form.append(req.images.length > 1 ? 'image[]' : 'image', new Blob([new Uint8Array(Buffer.from(image.b64, 'base64'))], { type: image.mime }), `reference-${index + 1}.${extension}`);
+  });
+  const r = await fetch(`${baseUrl.replace(/\/+$/, '')}/images/edits`, {
+    method: 'POST', headers: { Authorization: `Bearer ${apiKey || ''}` }, body: form,
+    signal: req.signal ? AbortSignal.any([req.signal, AbortSignal.timeout(180_000)]) : AbortSignal.timeout(180_000),
+  });
+  if (!r.ok) throw new Error(`image edit ${r.status}: ${(await r.text().catch(() => '')).slice(0, 200)}`);
+  const j: any = await r.json();
+  const images = (j?.data || []).filter((d: any) => d?.b64_json).map((d: any) => ({ b64: d.b64_json as string, mime: imageMimeOf(d.b64_json) }));
+  if (!images.length) throw new Error('Image edit returned no images');
   return { images };
 }
 
@@ -185,6 +212,15 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
       hasDirectModel: (modelId: string) => registry.has(modelId),
     },
     images: {
+      edit: async (req: ImageEditRequest) => {
+        for (const p of registry.list()) {
+          const slash = req.model.startsWith(p.providerId + '/');
+          const apiModelId = slash ? req.model.slice(p.providerId.length + 1) : ((p.imageModelIds || []).includes(req.model) ? req.model : null);
+          if (apiModelId) return editDirectImage(p.baseUrl, p.apiKey, apiModelId, req);
+        }
+        if (!httpBrain.images?.edit) throw new Error('Image editing is unavailable in this environment');
+        return httpBrain.images.edit(req);
+      },
       // 生图分发:命中直连 provider 的图像模型(imageModelIds 或 <providerId>/<model>)→ 直连用户端点;
       // 否则委托 httpBrain(Forsion 托管 /v1/images)。
       generate: async (req: ImageGenRequest) => {

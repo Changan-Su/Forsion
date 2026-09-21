@@ -309,11 +309,18 @@ const api = {
     return () => ipcRenderer.removeListener('window:mainPanelTarget', listener)
   },
   mainPanelReady: (): void => ipcRenderer.send('window:mainPanelReady'),
-  requestMainAction: (action: 'onboarding'): void => ipcRenderer.send('window:mainAction', action),
-  onMainAction: (cb: (action: 'onboarding') => void): (() => void) => {
-    const listener = (_e: unknown, action: 'onboarding'): void => cb(action)
+  requestMainAction: (action: 'onboarding' | 'dev-commands'): void => ipcRenderer.send('window:mainAction', action),
+  onMainAction: (cb: (action: 'onboarding' | 'dev-commands') => void): (() => void) => {
+    const listener = (_e: unknown, action: 'onboarding' | 'dev-commands'): void => cb(action)
     ipcRenderer.on('window:mainAction', listener)
     return () => ipcRenderer.removeListener('window:mainAction', listener)
+  },
+  /** 界面变更广播:设置浮窗改完主题 / 字体 / 缩放 / 光标 / 语言,其余窗口(主窗/独立窗/mini)按这份载荷重放。 */
+  broadcastUi: (state: import('../shared/uiSync').UiSyncPayload): void => ipcRenderer.send('ui:sync', state),
+  onUiChanged: (cb: (state: import('../shared/uiSync').UiSyncPayload) => void): (() => void) => {
+    const listener = (_e: unknown, state: import('../shared/uiSync').UiSyncPayload): void => cb(state)
+    ipcRenderer.on('ui:sync', listener)
+    return () => ipcRenderer.removeListener('ui:sync', listener)
   },
   closeSelf: (): void => ipcRenderer.send('window:closeSelf'),
   // 跨窗撕拽:实时坐标(节流 send)+ 最终落点路由(invoke)+ 目标窗接收订阅(on)。

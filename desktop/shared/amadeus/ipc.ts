@@ -2,6 +2,7 @@
 import type { LoadedPage, PageManifest } from './compiler/types'
 import type { DbFile } from './db/schema'
 import type { MdMark } from './mdMarks'
+import { isDesktopPermissionId, type DesktopPermissionId } from '../desktopPermissions'
 
 export const IPC = {
   openVault: 'vault:open',
@@ -56,6 +57,7 @@ export const IPC = {
   openPluginsFolder: 'plugins:open-folder',
   scaffoldPlugin: 'plugins:scaffold',
   uninstallPlugin: 'plugins:uninstall-forsion',
+  bundleAgentOwned: 'plugins:bundle-agent-owned',
   revealInFileManager: 'shell:reveal',
   dbRead: 'db:read',
   dbWrite: 'db:write',
@@ -96,8 +98,28 @@ export interface PluginOnboardingRecommend {
   reason?: string
 }
 
-/** Declarative first-run onboarding a plugin ships in its manifest (`onboarding` key).
- *  Rendered by the host as a setup card on first enable; skipping leaves a badge + one inbox nudge. */
+/**
+ * A precondition the host can **measure** (2026-09-21+). Only these three kinds exist, on purpose:
+ *  - `setting`    — the plugin setting `key` holds a user value (≠ its declared default, not blank).
+ *                   Defaults are often placeholders (「示例大日子」「每日习惯」), so "non-empty" would always pass.
+ *  - `permission` — an OS grant the host already tracks (see shared/desktopPermissions).
+ *  - `check`      — the plugin registers `ctx.registerReadiness({ id, label, check })` and the host calls it.
+ *                   Anything the host can't see by itself (a remote server's config, a helper's hardware
+ *                   support, a Python module inside the engine's interpreter) goes here — the plugin knows
+ *                   its own dependency shape; the host does not learn every plugin's topology.
+ * No user-visible text lives here: labels come from the setting's own label, the host's permission
+ * names, or the readiness registration — so there is no zh/en pairing to get wrong.
+ */
+export type PluginRequirement =
+  | { kind: 'setting'; key: string }
+  | { kind: 'permission'; id: DesktopPermissionId }
+  | { kind: 'check'; id: string }
+
+/** Declarative onboarding a plugin ships in its manifest (`onboarding` key).
+ *  With `requires`, it is a **gate**: the host measures each requirement, pops the setup card while any
+ *  is unmet, badges the plugin, and nudges once via inbox. Without `requires` it is only a **guide**:
+ *  shown quietly on the plugin's detail page — no popup, no badge, no nudge (2026-09-21: cards that
+ *  gated nothing were read as decoration). */
 export interface PluginOnboardingSpec {
   /** One-liner shown at the top of the setup card. */
   intro?: string
@@ -105,6 +127,8 @@ export interface PluginOnboardingSpec {
   /** true = embed all of the plugin's registered settings in the card; or a list of setting keys. */
   settings?: boolean | string[]
   recommends?: PluginOnboardingRecommend[]
+  /** Measurable preconditions; present ⇒ this onboarding is a gate (see PluginRequirement). */
+  requires?: PluginRequirement[]
   /** English mirror of the translatable half (2026-08-14+). Chinese stays canonical: anything missing
    *  or malformed here falls back to it field by field, and `steps` is index-aligned with `steps` above
    *  (sanitised in lockstep) so a missing translation can never shift the wrong text onto a step.
@@ -113,6 +137,21 @@ export interface PluginOnboardingSpec {
 }
 
 const REC_TYPES = new Set(['skill', 'agent', 'plugin', 'space', 'theme', 'amadeus-plugin'])
+/** Setting keys and readiness ids share the plugin-id alphabet; anything else is dropped, not coerced. */
+const REQ_ID = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/
+
+/** Stable key for one requirement (results map / React key). */
+export const requirementKey = (req: PluginRequirement): string =>
+  `${req.kind}:${req.kind === 'setting' ? req.key : req.id}`
+
+function sanitizeRequirement(raw: unknown): PluginRequirement | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const r = raw as Record<string, unknown>
+  if (r.kind === 'setting' && typeof r.key === 'string' && REQ_ID.test(r.key)) return { kind: 'setting', key: r.key }
+  if (r.kind === 'permission' && isDesktopPermissionId(r.id)) return { kind: 'permission', id: r.id }
+  if (r.kind === 'check' && typeof r.id === 'string' && REQ_ID.test(r.id)) return { kind: 'check', id: r.id }
+  return undefined
+}
 const str = (v: unknown, cap: number): string | undefined =>
   typeof v === 'string' && v.trim() ? v.trim().slice(0, cap) : undefined
 
@@ -167,7 +206,27 @@ export function sanitizeOnboarding(raw: unknown): PluginOnboardingSpec | undefin
     }
     if (recs.length) out.recommends = recs
   }
-  return out.intro || out.steps || out.settings || out.recommends ? out : undefined
+  if (Array.isArray(r.requires)) {
+    const seen = new Set<string>()
+    const reqs: PluginRequirement[] = []
+    // ⚠ 数到 8 条**合法且不重复**的为止,不是「先砍前 8 条再挑」—— 前面塞了重复或坏条目时,
+    //   后面真正的前置条件会被静默吃掉,甚至 8 条坏的就把一道闸降级成使用说明。扫描本身有上限,
+    //   免得一个超大数组在这里空转。
+    for (const it of r.requires.slice(0, 64)) {
+      if (reqs.length >= 8) break
+      const req = sanitizeRequirement(it)
+      if (!req) continue
+      const key = requirementKey(req)
+      if (seen.has(key)) continue
+      seen.add(key)
+      reqs.push(req)
+    }
+    if (reqs.length) out.requires = reqs
+  }
+  // ⚠ 这里不因「没有 requires」丢弃整条 —— 没有闸的 onboarding 仍是一份使用说明,由渲染层降级成详情页里的
+  //   安静区块。判「是不是闸」只看 requires,且只在渲染层看(Unit 设备页的清单是对端消毒的,老对端永远没有
+  //   requires,在这里丢会让跨版本设备页整片失去说明)。
+  return out.intro || out.steps || out.settings || out.recommends || out.requires ? out : undefined
 }
 
 /** An activity event a plugin declares it emits (manifest `events`), for the automation builder's
@@ -529,6 +588,9 @@ export interface AmadeusApi {
   scaffoldSamplePlugin(): Promise<void>
   /** 卸载 ~/.forsion/plugins 下的一个 Forsion 插件(按 manifest id 定位目录整删;可选:桌面实现)。 */
   uninstallPlugin?(id: string): Promise<void>
+  /** 该 Agent 是不是**这个插件的捆绑包播种的**(引擎新播种时写 agents/<slug>/.bundle-origin = bundle 目录名)。
+   *  ctx.tangu.startChat 的 send:true 只认它;可选:只有本机桌面实现,缺席(web / 移动 / Unit / 台架)= 一律降级为预填。 */
+  bundleAgentOwned?(pluginId: string, slug: string): Promise<boolean>
   /** Reveal a vault-relative file/folder in the OS file manager (Finder/Explorer), selecting it. */
   revealInFileManager(targetPath: string): Promise<void>
   /** 解析 `![[xxx.db]]` 目标(basename 或页相对路径,与附件同一解析语义)并读取数据库。 */

@@ -17,6 +17,7 @@
  *       曾把 calc 抹掉,末条被卡压住 178px
  *  27   16 的推广:用户原话是「不管宽度多少,一行内容过长就超出」——长单词/URL/行内 code/宽表/
  *       思考块/工具卡/用户气泡逐个量,都不许顶出横滚(只钉代码块会漏掉表格那类另有溢出路子的)
+ *  31   非玻璃主题的侧栏 Chatbox 借用主区纸面色，不再与主区 Chatbox 共用同一底色（亮/暗）
  * (15-17、27 在流程里跑在 3 之后、Amadeus 那段之前;编号按加入顺序,不按执行顺序)
  *
  * 为什么必须打真 Electron:Amadeus Space 只在有 window.amadeus(文件系统桥)时注册,浏览器里根本
@@ -50,6 +51,7 @@ async function main() {
   }
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-chatside-'))
   const sideShot = path.join(os.tmpdir(), `forsion-chat-panel-${process.pid}.png`)
+  const sideDarkShot = path.join(os.tmpdir(), `forsion-chat-panel-dark-${process.pid}.png`)
   const selectionMenuShot = path.join(os.tmpdir(), `forsion-chat-selection-menu-${process.pid}.png`)
   const selectionPanelShot = path.join(os.tmpdir(), `forsion-chat-selection-panel-${process.pid}.png`)
   let app
@@ -121,6 +123,15 @@ async function main() {
     wideAv.length > 0 && wideAv.every((a) => a.ratio >= 9 / 16 && a.display !== 'none'),
     JSON.stringify(wideAv),
   )
+  const mainSurfaceColors = await win.evaluate(`(() => {
+    const view = document.querySelector('.t2-chat-view')
+    const card = view && view.querySelector('.t2c-card')
+    const paper = view && view.closest('.dv-react-part')
+    return {
+      chatbox: card ? getComputedStyle(card).backgroundColor : '',
+      paper: paper ? getComputedStyle(paper).backgroundColor : getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(),
+    }
+  })()`)
 
   // ── 15 空草稿的输入框必须是一行高 ───────────────────────────────────────────
   // 用户报「明明 chat box 内容为空,size 却异常(被撑到最高档 200px)」。触发路径说不清,
@@ -390,7 +401,67 @@ async function main() {
     !!side.chat && !!side.am && side.chat.left > side.am.left + side.am.w * 0.5,
     side.chat && side.am ? `chat.left=${Math.round(side.chat.left)} vs am.left=${Math.round(side.am.left)} w=${Math.round(side.am.w)}` : '缺 .am-app 或 .t2-chat-view',
   )
+  const sideCardTone = await win.evaluate(`((mainColors) => {
+    const view = [...document.querySelectorAll('.t2-chat-view')].find((e) => e.getBoundingClientRect().width > 0)
+    const card = view && view.querySelector('.t2c-card')
+    const group = view && view.closest('.dv-groupview')
+    if (!card || !group) return null
+    const rgb = (color) => {
+      const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })
+      ctx.clearRect(0, 0, 1, 1); ctx.fillStyle = color; ctx.fillRect(0, 0, 1, 1)
+      return [...ctx.getImageData(0, 0, 1, 1).data.slice(0, 3)]
+    }
+    const sideColor = getComputedStyle(card).backgroundColor
+    const paneColor = getComputedStyle(group).backgroundColor
+    const distance = (a, b) => Math.hypot(...a.map((v, i) => v - b[i]))
+    return {
+      mainChatboxColor: mainColors.chatbox, mainPaperColor: mainColors.paper, sideColor, paneColor,
+      sideVsMainChatbox: distance(rgb(mainColors.chatbox), rgb(sideColor)),
+      sideVsMainPaper: distance(rgb(mainColors.paper), rgb(sideColor)),
+      sideVsPane: distance(rgb(sideColor), rgb(paneColor)),
+    }
+  })(${JSON.stringify(mainSurfaceColors)})`)
+  check(
+    '31 非玻璃主题:侧栏 Chatbox 反向取主区纸面色,与侧栏底和主区输入卡都清楚分层',
+    !!sideCardTone && sideCardTone.sideVsMainPaper <= 1
+      && sideCardTone.sideVsMainChatbox >= 8 && sideCardTone.sideVsPane >= 8,
+    JSON.stringify(sideCardTone),
+  )
   await win.screenshot({ path: sideShot })
+  await win.evaluate(`(() => { document.documentElement.classList.add('dark'); document.documentElement.dataset.mode = 'dark' })()`)
+  await win.waitForTimeout(500)
+  const darkSideTone = await win.evaluate(`(() => {
+    const root = getComputedStyle(document.documentElement)
+    const view = [...document.querySelectorAll('.t2-chat-view')].find((e) => e.getBoundingClientRect().width > 0)
+    const card = view && view.querySelector('.t2c-card')
+    const group = view && view.closest('.dv-groupview')
+    if (!card || !group) return null
+    const rgb = (color) => {
+      const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })
+      ctx.fillStyle = color; ctx.fillRect(0, 0, 1, 1)
+      return [...ctx.getImageData(0, 0, 1, 1).data.slice(0, 3)]
+    }
+    const mainPaperColor = root.getPropertyValue('--bg').trim()
+    const mainChatboxColor = root.getPropertyValue('--bg-card').trim()
+    const sideColor = getComputedStyle(card).backgroundColor
+    const paneColor = getComputedStyle(group).backgroundColor
+    const distance = (a, b) => Math.hypot(...a.map((v, i) => v - b[i]))
+    return {
+      mainPaperColor, mainChatboxColor, sideColor, paneColor,
+      sideVsMainPaper: distance(rgb(mainPaperColor), rgb(sideColor)),
+      sideVsMainChatbox: distance(rgb(mainChatboxColor), rgb(sideColor)),
+      sideVsPane: distance(rgb(sideColor), rgb(paneColor)),
+    }
+  })()`)
+  check(
+    '31b 暗色侧栏 Chatbox 同样反向取主区纸面色,不再额外提亮',
+    !!darkSideTone && darkSideTone.sideVsMainPaper <= 1
+      && darkSideTone.sideVsMainChatbox >= 10 && darkSideTone.sideVsPane >= 10,
+    JSON.stringify(darkSideTone),
+  )
+  await win.screenshot({ path: sideDarkShot })
 
   // ── 3 侧栏对话默认引用主区当前这篇 ──────────────────────────────────────────
   const row = win.locator('.t2s-srow').first()
@@ -718,6 +789,7 @@ async function main() {
   await app2.close()
 
   console.log(`SCREENSHOT  chat-panel ${sideShot}`)
+  console.log(`SCREENSHOT  chat-panel-dark ${sideDarkShot}`)
   console.log(`SCREENSHOT  selection-menu ${selectionMenuShot}`)
   console.log(`SCREENSHOT  selection-panel ${selectionPanelShot}`)
 

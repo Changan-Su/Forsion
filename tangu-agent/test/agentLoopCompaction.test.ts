@@ -262,6 +262,19 @@ describe('触发线与兜底', () => {
     expect(await checkpoints()).toEqual([]);
   });
 
+  it('thresholdPercent:同样 25k / 40k,缺省不压;调到 50 → 线降到 24.6k(百分比线的地板),第 2 轮越线压一次', async () => {
+    await seedHistory(30, 7);
+    script = [reply('TURN1', [call('t1')], 25_000), reply('FINAL')];
+    expect((await launch('R0', 'A0', 'U0', 'go')).status).toBe('done');
+    expect(summaries).toHaveLength(0); // 负对照:同一份输入,没有旋钮就不压
+    expect((await statusEvents('R0', 'context_info'))[0].compactAt).toBe(WINDOW - 2_048);
+
+    script = [reply('TURN1', [call('t2')], 25_000), reply('FINAL')];
+    expect((await launch('R1', 'A1', 'U1', 'go again', { ...COMPACTION, thresholdPercent: 50 })).status).toBe('done');
+    expect((await statusEvents('R1', 'context_info'))[0].compactAt).toBe(24_600); // max(40k × 50%, 2 × 300 + 24k)
+    expect(summaries).toHaveLength(1);
+    expect((await statusEvents('R1', 'compacted')).map((e: any) => e.reason)).toEqual(['threshold']);
+  });
   it('摘要调用失败 → 只机械折叠一次(如实标 fallback),不落检查点,不重复尝试', async () => {
     await seedHistory(30, 7);
     summaryFailOnce = true;

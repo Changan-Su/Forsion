@@ -9,6 +9,7 @@
  * - 引擎自己的写盘不走 VaultManager(绕开自写台账)→ watcher 照常发外部变更事件 →
  *   渲染端刷新/索引更新全部白拿;回推环由「reconcile 按 hash 幂等」消解(拉完 shadow 已更新,
  *   watcher 触发的 reconcile 发现 hash 一致 → no-op);
+ * - 推送合并:本地「写」per-path 防抖后才推(schedulePush,整份 PUT 不跟着每次存盘走);删除/移动即时;
  * - 回声抑制:推送带 X-Amadeus-Client=deviceId,SSE 里自己的事件只推游标不应用;
  * - 冲突 = LWW + 冲突副本(见 reconcile.ts);
  * - 断线/长离线:SSE 断 → 退避重连;追赶窗口不够(reset / changes 有缺口)→ 全量对账,
@@ -41,6 +42,13 @@ const TEXT_MAX_BYTES = 5 * 1024 * 1024 // 与服务端 MAX_TEXT_BYTES 一致:.md
 const DEFAULT_BINARY_MAX_BYTES = 5 * 1024 * 1024
 const RETRY_MS = 30_000
 const SCAN_DEBOUNCE_MS = 2_500
+// 推送合并:编辑器每个 400ms 停顿就存一次盘,而推送是整份 PUT —— 逐次推是上行大头(一篇 25KB 笔记实测被整份重传 3119 次)。
+// 本地写入先静默 PUSH_QUIET_MS 再推;连续输入最迟 ×PUSH_MAX_WAIT_FACTOR 也推一次(协作方/其他设备不至于一直看不到)。
+// 大文件(PDF 批注整份重写、内嵌图片的白板)每推一次都是整份,窗口再 ×PUSH_BIG_FACTOR。
+const PUSH_QUIET_MS = 3_000
+const PUSH_MAX_WAIT_FACTOR = 5
+const PUSH_BIG_BYTES = 256 * 1024
+const PUSH_BIG_FACTOR = 5
 const MERGE_MAX_BYTES = 1024 * 1024 // markdown 机会性三方合并的单侧上限(超限直接走冲突副本)
 // 删除保护:全量对账计划级(绝对 200 条 / 已跟踪文件的半数且 ≥5)+ 增量 60s 滑窗(防 watcher 风暴级联清空)。
 const MASS_DELETE_ABS = 200
@@ -144,6 +152,8 @@ export interface EngineBinding {
   /** 目录名黑名单(如 .git/node_modules/.trash):遍历不下钻、事件不入队。
    *  防止同步一个代码文件夹时 node_modules 洪水上传;own 镜像不设,行为不变。 */
   ignoreNames?: string[]
+  /** 推送合并的静默窗口(缺省 PUSH_QUIET_MS)。生产不设;测试注入小值,免得每条用例真等 3s。 */
+  pushQuietMs?: number
 }
 
 const sha256 = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex')
@@ -269,6 +279,31 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     void pump()
   }
 
+  /** 本地「写」→ 合并推送:per-path 尾沿防抖 + 最长等待。两个入口(VaultManager 写钩子 / chokidar)都走这里。
+   *  只管写:删除、移动照旧即时 —— 删除防线(scanLater / deleteStorm / 待确认)全在那条路上,不经过这里。
+   *  防抖期间 stop / 退出 = 定时器直接丢:本地盘已落,下次启动的全量对账按 hash≠shadow 补推,不丢稿。 */
+  const pushTimers = new Map<string, { timer: ReturnType<typeof setTimeout>; since: number }>()
+  const schedulePush = (sp: string): void => {
+    if (!accepting) return
+    const big = (shadow?.files[sp]?.size ?? 0) > PUSH_BIG_BYTES // 用基线里的体积,不为此多 stat 一次
+    const quiet = (binding.pushQuietMs ?? PUSH_QUIET_MS) * (big ? PUSH_BIG_FACTOR : 1)
+    const now = Date.now()
+    const prev = pushTimers.get(sp)
+    if (prev) clearTimeout(prev.timer)
+    const since = prev?.since ?? now
+    const wait = Math.max(0, Math.min(quiet, since + quiet * PUSH_MAX_WAIT_FACTOR - now)) // 等满最长等待就不再顺延
+    const timer = setTimeout(() => {
+      pushTimers.delete(sp)
+      enqueue({ key: sp, run: () => reconcileLocal(sp, true) })
+    }, wait)
+    pushTimers.set(sp, { timer, since })
+    emitStatus()
+  }
+  const clearPushTimers = (): void => {
+    for (const { timer } of pushTimers.values()) clearTimeout(timer)
+    pushTimers.clear()
+  }
+
   const isNetworkErr = (e: unknown): boolean =>
     !(e instanceof CloudHttpError) || e.status >= 500 || e.status === 0
 
@@ -340,24 +375,34 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     return abs
   }
 
-  let tmpCounter = 0
-  const atomicWrite = async (abs: string, data: string | Buffer, current: () => boolean = () => true): Promise<boolean> => {
-    await fs.mkdir(path.dirname(abs), { recursive: true })
-    // 后缀模式对齐 vaultManager.atomicWrite —— watcher 的 ignored 规则会滤掉这些临时文件。
-    const tmp = `${abs}.tmp-${process.pid}-${Date.now()}-${tmpCounter++}`
-    await fs.writeFile(tmp, data as any)
-    if (!current()) { await fs.rm(tmp, { force: true }); return false }
-    await fs.rename(tmp, abs)
-    return true
-  }
+  type FileStat = { size: number; mtimeMs: number }
+  /** mtimeMs = -1 → 这份 stat 不可信(明知本地内容 ≠ 基线 hash,或没取到 stat):永远对不上快路径,逼下一轮重算 hash。
+   *  size 照实记 —— 它还被体积上限、大文件窗口用着,不能跟着变 -1。 */
+  const staleStat = (size: number): FileStat => ({ size, mtimeMs: -1 })
 
-  const statOf = async (abs: string): Promise<{ size: number; mtimeMs: number } | null> => {
+  const statOf = async (abs: string): Promise<FileStat | null> => {
     try {
       const st = await fs.stat(abs)
       return st.isFile() ? { size: st.size, mtimeMs: Math.floor(st.mtimeMs) } : null
     } catch {
       return null
     }
+  }
+
+  let tmpCounter = 0
+  /** 落地成功 → 返回**写下的那份字节**的 stat(rename 不改 mtime,所以在 rename 之前对临时文件取);
+   *  落地后再 stat 拿到的可能已经是编辑器紧跟着存进来的另一版。current() 不成立 → null,没写。 */
+  const atomicWrite = async (abs: string, data: string | Buffer, current: () => boolean = () => true): Promise<FileStat | null> => {
+    await fs.mkdir(path.dirname(abs), { recursive: true })
+    // 后缀模式对齐 vaultManager.atomicWrite —— watcher 的 ignored 规则会滤掉这些临时文件。
+    const tmp = `${abs}.tmp-${process.pid}-${Date.now()}-${tmpCounter++}`
+    await fs.writeFile(tmp, data as any)
+    // 先取 stat、再验 current():current() 必须是 rename 前的最后一道闸,两者之间不能再有 await ——
+    // 否则结构性移动趁这个窗口换掉目标文件,rename 照样把它盖掉。
+    const written = (await statOf(tmp)) ?? staleStat(Buffer.byteLength(data))
+    if (!current()) { await fs.rm(tmp, { force: true }); return null }
+    await fs.rename(tmp, abs)
+    return written
   }
 
   /** 自底向上只删**空**目录(rmdir 非递归,构造上安全);非空/失败即保留。 */
@@ -378,24 +423,29 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     }
   }
 
-  /** 读本地文件内容 hash;不存在返回 null。文本按 utf8 字符串哈希(与服务端 sha256(content) 对齐)。 */
+  /** 读本地文件内容 hash;不存在返回 null。文本按 utf8 字符串哈希(与服务端 sha256(content) 对齐)。
+   *  **先 stat 后读**:两步之间文件被改,得到的是「旧 stat + 新内容 hash」,下次快路径对不上 → 只会多算一次;
+   *  反过来(先读后 stat)是「旧内容 hash + 新 stat」,快路径会把没推过的新内容当成已同步。 */
   const localHashOf = async (serverPath: string): Promise<{ hash: string; size: number; mtimeMs: number; buf: Buffer } | null> => {
     const abs = localAbs(serverPath)
+    const st = await statOf(abs)
     let buf: Buffer
     try {
       buf = await fs.readFile(abs)
     } catch {
       return null
     }
-    const st = await statOf(abs)
     const hash = isTextKind(kindForServerPath(serverPath)) ? sha256(buf.toString('utf8')) : sha256(buf)
-    return { hash, size: st?.size ?? buf.length, mtimeMs: st?.mtimeMs ?? 0, buf }
+    return { hash, size: st?.size ?? buf.length, mtimeMs: st?.mtimeMs ?? -1, buf }
   }
 
-  const setShadowEntry = async (serverPath: string, seq: number, hash: string): Promise<void> => {
+  /** 基线不变式:(size, mtimeMs) 必须描述 hash 对应的**那份字节** —— scanJob / fullReconcile 的快路径凭 stat 相等就
+   *  直接信 hash、不读文件。所以 stat 由调用方给(读内容那一刻的 / 自己写下那份的),**不在网络往返之后现取**:
+   *  推送在途时编辑器又存了一版,现取到的就是新版的 stat 配旧版的 hash;那一版的推送(防抖定时器 / 排队 job)
+   *  若随 stop / 重启 / 崩溃丢了,重启后的全量对账信了 stat → 它永远不上云,状态还显示已同步。 */
+  const setShadowEntry = async (serverPath: string, seq: number, hash: string, stat: FileStat): Promise<void> => {
     if (!shadow) return
-    const st = await statOf(localAbs(serverPath))
-    shadow.files[serverPath] = { seq, hash, size: st?.size ?? 0, mtimeMs: st?.mtimeMs ?? 0 }
+    shadow.files[serverPath] = { seq, hash, size: stat.size, mtimeMs: stat.mtimeMs }
     saver.save(shadow)
   }
 
@@ -452,7 +502,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     const local = await localHashOf(serverPath)
     if (revision !== structuralRevision || pendingMovePath(serverPath)) return
     if (local && local.hash === hash) {
-      await setShadowEntry(serverPath, seq, hash) // 内容已一致,只记账
+      await setShadowEntry(serverPath, seq, hash, local) // 内容已一致,只记账
       return
     }
     const entry = shadow.files[serverPath]
@@ -465,8 +515,9 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       if (revision !== structuralRevision || pendingMovePath(serverPath)) return
       await materializeConflictCopy(serverPath)
     }
-    if (!(await atomicWrite(localAbs(serverPath), content, () => revision === structuralRevision && !pendingMovePath(serverPath)))) return
-    await setShadowEntry(serverPath, seq, hash)
+    const written = await atomicWrite(localAbs(serverPath), content, () => revision === structuralRevision && !pendingMovePath(serverPath))
+    if (!written) return
+    await setShadowEntry(serverPath, seq, hash, written)
   }
 
   /** markdown 冲突的机会性合并:base = 服务端版本快照里 seq === shadow.seq 且 hash 对得上的那份。
@@ -491,7 +542,8 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       const merged = mergeText3(local.buf.toString('utf8'), base, serverContent)
       if (merged === null) return false
       if (!(await atomicWrite(localAbs(serverPath), merged, current))) return true
-      await setShadowEntry(serverPath, serverSeq, serverHash) // shadow=服务端态 → 下面这单对账把合并稿推回
+      // shadow=服务端态、本地=合并稿 → 下面这单对账把合并稿推回。stat 故意记不可信:那单 job 若随 stop 丢了,重启后仍会重算 hash 把合并稿推上去。
+      await setShadowEntry(serverPath, serverSeq, serverHash, staleStat(Buffer.byteLength(merged)))
       enqueue({ key: serverPath, run: () => reconcileLocal(serverPath) })
       return true
     } catch {
@@ -666,11 +718,11 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   }
 
   // ── 推(本地 → 服务端)─────────────────────────────────────────────────────
-  const handlePut409 = async (serverPath: string, body: any, localHash: string): Promise<void> => {
+  const handlePut409 = async (serverPath: string, body: any, local: FileStat & { hash: string }): Promise<void> => {
     const srvSeq = Number(body?.seq ?? 0)
     const srvContent: string | null = body?.content ?? null
-    if (srvContent !== null && sha256(srvContent) === localHash) {
-      await setShadowEntry(serverPath, srvSeq, localHash) // 两端各自写了相同内容
+    if (srvContent !== null && sha256(srvContent) === local.hash) {
+      await setShadowEntry(serverPath, srvSeq, local.hash, local) // 两端各自写了相同内容
       return
     }
     if (srvContent === null && srvSeq === 0) {
@@ -705,10 +757,10 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     try {
       const r = await client.putFile(shadow.vaultId, serverPath, content, baseSeq)
       skipped.delete(serverPath)
-      await setShadowEntry(serverPath, r.seq, r.hash ?? local.hash)
+      await setShadowEntry(serverPath, r.seq, r.hash ?? local.hash, local)
     } catch (e) {
       if (e instanceof CloudHttpError && e.status === 409) {
-        await handlePut409(serverPath, e.body, local.hash)
+        await handlePut409(serverPath, e.body, local)
         return
       }
       throw e
@@ -730,13 +782,13 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     try {
       const r = await client.putBinary(shadow.vaultId, serverPath, local.buf, { baseSeq })
       skipped.delete(serverPath)
-      await setShadowEntry(serverPath, r.seq, local.hash)
+      await setShadowEntry(serverPath, r.seq, local.hash, local)
     } catch (e) {
       if (e instanceof CloudHttpError && e.status === 409) {
         const srvSeq = Number(e.body?.seq ?? 0)
         const srvHash: string | null = e.body?.hash ?? null
         if (srvHash !== null && srvHash === local.hash) {
-          await setShadowEntry(serverPath, srvSeq, local.hash) // 两端写了相同字节
+          await setShadowEntry(serverPath, srvSeq, local.hash, local) // 两端写了相同字节
           return
         }
         if (srvSeq === 0) {
@@ -892,8 +944,9 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     }
   }
 
-  /** 本地触发的单路径对账(远端视角用 shadow 基线近似;真变更由 PUT 409 兜住)。 */
-  const reconcileLocal = async (serverPath: string): Promise<void> => {
+  /** 本地触发的单路径对账(远端视角用 shadow 基线近似;真变更由 PUT 409 兜住)。
+   *  viaWrite = 由「写」事件触发(schedulePush):这条路绝不自己发删除,见 pushDelete 分支。 */
+  const reconcileLocal = async (serverPath: string, viaWrite = false): Promise<void> => {
     if (!shadow || pendingMovePath(serverPath)) return
     // scope 缩小(按条目同步剔除子页面/关闭条目)后 shadow 里还留着旧路径,而 scanJob 会按 shadow
     // 键补队到这里 —— 不复查范围的话:本地改过=push 把已排除内容推上云,本地删了=pushDelete 抹掉
@@ -917,6 +970,12 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
         else await pushBinary(serverPath, 0)
         break
       case 'pushDelete':
+        if (viaWrite) {
+          // 写事件等防抖(或排队)的工夫文件没了 → 这已是「删」不是「写」:交回扫描路径,让缺失集整体过计划级
+          // 删除保护。逐条 pushDelete 只受 50/分钟限流 —— 批量改写后整目录消失时恰好放掉 50 条(09-06 的洞)。
+          scanLater()
+          break
+        }
         if (!allowMassDeleteOnce && (pendingDeletions.has(serverPath) || deleteStorm())) {
           // 本地删除风暴(误删镜像目录/watcher 级联)或已在待确认名单:暂不删云端,等确认。
           pendingDeletions.set(serverPath, 'remote')
@@ -931,7 +990,12 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
         dropShadowEntry(serverPath)
         break
       default:
-        break // none/adopt:无事
+        // none/adopt:无事。顺手自愈 —— 内容与基线一致、只是 stat 对不上(被 touch 过 / 基线里记的是不可信 stat):
+        // 刷新成这次读内容时的 stat,否则此后每轮扫描 / 全量对账都要为它重算 hash。只在 hash 相等时刷,不变式不破。
+        if (local && entry && local.hash === entry.hash && local.mtimeMs >= 0 && (entry.size !== local.size || entry.mtimeMs !== local.mtimeMs)) {
+          await setShadowEntry(serverPath, entry.seq, entry.hash, local)
+        }
+        break
     }
   }
 
@@ -1046,7 +1110,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     // 先出全量计划(纯判定),过删除保护阈值,再执行——否则级联删除(空根/坏 tree/误删镜像)
     // 一路执行到底,发现时已清空。tracked 用对账前的 shadow 条数。
     const tracked = Object.keys(shadow.files).length
-    const plan: Array<{ sp: string; d: ReturnType<typeof decide>; rSeq: number | null; localHash: string | null }> = []
+    const plan: Array<{ sp: string; d: ReturnType<typeof decide>; rSeq: number | null; localHash: string | null; localStat: FileStat }> = []
     for (const sp of paths) {
       if (hasPendingMoves() || revision !== structuralRevision) return
       const entry = shadow.files[sp] ?? null
@@ -1054,11 +1118,17 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       const st = localStats.get(sp) ?? null
       // 本地 hash:stat 与 shadow 一致 → 直接用基线 hash,免读文件。
       let localHash: string | null = null
+      let localStat: FileStat = staleStat(st?.size ?? 0) // 与 localHash 配对的那份字节的 stat(adopt 记基线用,见 setShadowEntry 的不变式)
       if (st) {
-        if (entry && entry.size === st.size && entry.mtimeMs === st.mtimeMs) localHash = entry.hash
-        else localHash = (await localHashOf(sp))?.hash ?? null
+        if (entry && entry.size === st.size && entry.mtimeMs === st.mtimeMs) {
+          localHash = entry.hash
+          localStat = st
+        } else {
+          const l = await localHashOf(sp)
+          if (l) { localHash = l.hash; localStat = l }
+        }
       }
-      plan.push({ sp, d: decide(localHash, entry, r ? { seq: r.seq, hash: r.hash } : null), rSeq: r?.seq ?? null, localHash })
+      plan.push({ sp, d: decide(localHash, entry, r ? { seq: r.seq, hash: r.hash } : null), rSeq: r?.seq ?? null, localHash, localStat })
     }
     if (hasPendingMoves() || revision !== structuralRevision) return
     const delCount = plan.filter((p) => p.d.kind === 'deleteLocal' || p.d.kind === 'pushDelete').length
@@ -1066,7 +1136,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     if (tripped && delCount) stormLatched = true
     pendingDeletions.clear()
 
-    for (const { sp, d, rSeq, localHash } of plan) {
+    for (const { sp, d, rSeq, localHash, localStat } of plan) {
       if (hasPendingMoves() || revision !== structuralRevision) return
       if (tripped && (d.kind === 'deleteLocal' || d.kind === 'pushDelete')) {
         pendingDeletions.set(sp, d.kind === 'deleteLocal' ? 'local' : 'remote')
@@ -1084,7 +1154,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       if (hasPendingMoves() || revision !== structuralRevision) return
       switch (d.kind) {
         case 'adopt':
-          await setShadowEntry(sp, rSeq!, localHash!)
+          await setShadowEntry(sp, rSeq!, localHash!, localStat)
           break
         case 'pull':
           await pullPath(sp, rSeq)
@@ -1178,7 +1248,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       if (!rel || rel.startsWith('..')) return
       const sp = toServer(rel)
       if (!sp) return
-      enqueue({ key: sp, run: () => reconcileLocal(sp) })
+      schedulePush(sp)
     }
     watcher.on('change', onPath)
     watcher.on('add', onPath)
@@ -1353,6 +1423,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     stopWatcher()
     jobs.length = 0
     queuedKeys.clear()
+    clearPushTimers()
     for (const timer of [retryTimer, scanTimer, statusTimer]) if (timer) clearTimeout(timer)
     retryTimer = scanTimer = statusTimer = null
   }
@@ -1401,9 +1472,10 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
   // ── 对外 API ───────────────────────────────────────────────────────────────
   const getStatus = (): SyncStatus => ({
     enabled: state !== 'disabled',
-    state,
+    // 防抖中的推送对外也算「同步中」:状态栏是用户判断「这次改动传上去没」的唯一依据,不能静默 3s 还显示已同步。
+    state: state === 'idle' && pushTimers.size ? 'syncing' : state,
     lastSyncAt: shadow?.lastSyncAt ?? null,
-    pending: jobs.length,
+    pending: jobs.length + pushTimers.size,
     conflicts,
     skipped: [...skipped].map(([p, reason]) => ({ path: p, reason })),
     error,
@@ -1425,7 +1497,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       const src = toServer(vaultRel)
       const dst = dstVaultRel ? toServer(dstVaultRel) : null
       if (kind === 'write' && src) {
-        if (!isIgnoredName(src.split('/').pop() || '')) enqueue({ key: src, run: () => reconcileLocal(src) })
+        if (!isIgnoredName(src.split('/').pop() || '')) schedulePush(src)
         return
       }
       if (kind === 'remove') {

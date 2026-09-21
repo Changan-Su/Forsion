@@ -93,13 +93,23 @@ async function main() {
       && initial.geometry.dividerRight <= initial.geometry.dockLeft + 1
       && initial.geometry.dividerHeight >= 40, initial.geometry)
 
-    await win.click('.hp-pinned-zone [data-fixed-id="rb-market"]')
-    const marketOpened = await win.locator('.settings-page .mk-nav-brand').waitFor({ state: 'visible', timeout: 4000 }).then(() => true).catch(() => false)
-    if (marketOpened) await win.click('.settings-page .settings-back')
+    // 市场/成就都开在独立浮窗里(Floating Panel 化 2026-09-20):点之前先 arm window 事件,面板断言打在浮窗上;
+    // 「返回应用」= closeSelf(),窗口真关掉,所以下一个面板要重新等一次 window 事件。
+    const openPinned = async (fixedId, marker) => {
+      const opened = app.waitForEvent('window', { timeout: 20000 }).catch(() => null)
+      await win.click(`.hp-pinned-zone [data-fixed-id="${fixedId}"]`)
+      const page = await opened
+      if (!page) return false
+      await page.waitForLoadState('domcontentloaded').catch(() => {})
+      const ok = await page.locator(marker).waitFor({ state: 'visible', timeout: 8000 }).then(() => true).catch(() => false)
+      const closed = page.waitForEvent('close').catch(() => {})
+      await page.click('.settings-back').catch(() => {})
+      await closed
+      return ok
+    }
+    const marketOpened = await openPinned('rb-market', '.settings-page .mk-nav-brand')
     await win.waitForSelector('.hp-spaces')
-    await win.click('.hp-pinned-zone [data-fixed-id="rb-achievements"]')
-    const achievementsOpened = await win.locator('.settings-page .ach-serieshead').waitFor({ state: 'visible', timeout: 4000 }).then(() => true).catch(() => false)
-    if (achievementsOpened) await win.click('.settings-page .settings-back')
+    const achievementsOpened = await openPinned('rb-achievements', '.settings-page .ach-serieshead')
     await win.waitForSelector('.hp-spaces')
     check('应用市场与成就固定入口复用原操作并可正常打开', marketOpened && achievementsOpened, { marketOpened, achievementsOpened })
 

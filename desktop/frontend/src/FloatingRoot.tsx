@@ -14,6 +14,7 @@ import { floatingId } from './windowKind'
 import type { FloatingPanelOpenOptions } from '../../shared/floatingPanel'
 import type { SessionRecord } from './types'
 import { FloatingViewSurface } from './components/FloatingViewSurface'
+import { PluginOnboardingHost } from './components/PluginOnboardingModal'
 
 export function FloatingRoot() {
   const { t } = useI18n()
@@ -75,5 +76,8 @@ export function FloatingRoot() {
       {target.builtin === 'feedback' && app.cfgLoaded && <FeedbackModal key={panelSession?.id || ''} surface="panel" cfg={app.cfg} activeSession={panelSession} onClose={onFeedbackClose} />}
       {target.view && <FloatingViewSurface target={target.view} onUnavailable={close} />}
     </main>
+    {/* 插件检查卡:设置 / 市场自 2026-09-20 住在这个独立窗口里,「运行引导」、手动启用、市场装完都在这里
+        触发 —— 检查卡的 store 每个渲染进程一份,只挂在主窗 Root 里的话,这边点了什么都不会出现。 */}
+    {(target.builtin === 'settings' || target.builtin === 'market') && <PluginOnboardingHost />}
   </div>
 }

@@ -797,6 +797,9 @@ a:hover { color: var(--accent-ink); }
 .ctx-menu button:hover { background: var(--menu-hover); color: var(--text); }
 .ctx-menu button.danger { color: var(--danger); }
 .ctx-menu button.danger:hover { background: var(--danger-light); }
+.ctx-menu button:disabled { opacity: .4; cursor: default; background: transparent; }
+.ctx-menu .ctx-separator { height: 1px; background: var(--border); margin: 4px; }
+.ctx-menu .ctx-shortcut { margin-left: auto; padding-left: 12px; color: var(--text-faint); font: inherit; font-size: 11px; }
 /* 菜单小节标题(说明这一串选项是干什么的);`.ctx-menu` 是右键菜单外壳的唯一正典,变体写在它旁边。 */
 .ctx-menu .ctx-head { padding: 4px 8px 5px; font-size: 11px; color: var(--text-faint); }
 
@@ -1910,10 +1913,11 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .cm-foot { white-space: normal; letter-spacing: 0; margin-top: 4px; border-top: var(--border-width) solid var(--border); }
 .composer-menu--model .menu-item { font-size: var(--t2c-font-control, 12px); }
 /* 所有模型类二级面板(主模型 / 辅助 / 生图 / 识图)共用一套 View 感知落位:
-   右 → 左 → 一级菜单上方。正常宽度与一级菜单/工作区 item 同为 224px;极窄 Chat View 下
-   以输入卡容器为硬边界收缩。禁止 width:max-content —— 长模型名只能省略,不能把整块撑回 260px。 */
+   横向右 → 左 → 一级菜单上方；纵向优先贴住触发行，空间不足才向上夹住。正常宽度与一级菜单/
+   工作区 item 同为 224px;极窄 Chat View 下以输入卡容器为硬边界收缩。禁止 width:max-content ——
+   长模型名只能省略,不能把整块撑回 260px。 */
 .cm-sub {
-  position: absolute; bottom: 0; left: calc(100% + 6px);
+  position: absolute; top: var(--cm-sub-top, 0px); bottom: auto; left: calc(100% + 6px);
   width: min(var(--menu-select-width), calc(100cqw - 16px));
   min-width: 0;
   max-width: none;
@@ -1926,7 +1930,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   animation: pop 0.16s var(--ease-spring);
 }
 .cm-sub.left { left: auto; right: calc(100% + 6px); }
-.cm-sub.stacked { bottom: calc(100% + 6px); left: auto; right: 0; }
+.cm-sub.stacked { top: auto; bottom: calc(100% + 6px); left: auto; right: 0; }
 .cm-sub .menu-item { white-space: nowrap; }
 .cm-sub .menu-item .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 

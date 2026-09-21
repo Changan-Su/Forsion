@@ -823,6 +823,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 未显式设置的会话默认思考·中(2026-07-16 产品拍板);显式 'off' 仍关。UI 显示默认须同步(ModelPill)。
   const thinkingLevel: ThinkingLevel = agentConfig.thinkingLevel || 'medium';
   const attachments = input.attachments || [];
+  let imageInputs = normalizeImageAttachments(attachments);
   // host-exec（TUI/桌面本机模式）注入：execMode/cwd/approvalMode 只经 per-run agentConfig 传入。
   // 缺省 sandbox + full-auto → microserver/standalone-server/worker 行为零变化（审批仅 host 激活）。
   // 能力闸门(红线②/④):未声明 hostExec 的 profile(云端形态)一律强制回 sandbox,杜绝云端拿到真实 FS/shell。
@@ -1438,8 +1439,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       phase: 'context_info',
       ctxWindow: ctxWindowTokens,
       ctxWindowSource,
-      // 压缩触发线(窗口 − 预留)与本 run 生效的压缩旋钮来源:客户端进度环据此画「到这就会压」的刻度
-      compactAt: compactionThreshold(ctxWindowTokens, compactionCfg.reserveTokens),
+      // 压缩触发线(窗口 − 预留,再被 thresholdPercent 往下拉)与本 run 生效的压缩旋钮来源:客户端进度环据此画「到这就会压」的刻度
+      compactAt: compactionThreshold(ctxWindowTokens, compactionCfg.reserveTokens, compactionCfg.thresholdPercent, compactionCfg.keepRecentTokens),
       compactionEnabled: compactionCfg.enabled,
       sections: ctxMarks,
       files: projectDocInfo?.sources ?? [],
@@ -1649,6 +1650,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           attachments: Array.isArray(m.attachments) && m.attachments.length ? m.attachments : null,
         });
         const images = normalizeImageAttachments(m.attachments);
+        if (images.length) imageInputs = images;
         const described = images.length ? await describeUserImages(images) : null;
         const pushed = { role: 'user', content: described
           ? `${m.content}\n\n[Attached images transcribed by the vision assistant]\n${described}`
@@ -1753,6 +1755,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       },
       // self_brainstorm 的共享前缀真源:执行时取 workingMessages 当刻浅拷贝(逐消息拷,防分身侧误改)。
       getWorkingMessages: () => workingMessages.map((m) => ({ ...m })),
+      getImageInputs: () => imageInputs,
       thinkingLevel,
     };
     let toolDefs = getToolDefinitions(toolCtx);
@@ -1953,8 +1956,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
     const contextUsage = new ContextUsageTracker();
     const compactionGuard = new CompactionAttemptGuard();
-    // 压缩触发线 = 窗口 − 预留(借 pi reserveTokens 的绝对余量;272k 窗缺省 255.6k)。
-    const compactAt = compactionThreshold(ctxWindowTokens, compactionCfg.reserveTokens);
+    // 压缩触发线 = 窗口 − 预留(借 pi reserveTokens 的绝对余量;272k 窗缺省 255.6k),用户的 thresholdPercent 只会把它往下拉。
+    const compactAt = compactionThreshold(ctxWindowTokens, compactionCfg.reserveTokens, compactionCfg.thresholdPercent, compactionCfg.keepRecentTokens);
     let hookVetoedCompaction = false; // PreCompact hook 否决过 → 不再按估算拦请求,交给 provider 裁决
     let overflowRecovered = false; // 上游报「输入超窗口」后压缩重试:每 run 一次
     let toolsOverhead = 0; // 本轮工具定义头的粗估 token(只在没有实测基准时计入,见 ContextUsageTracker.estimate)

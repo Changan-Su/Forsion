@@ -256,7 +256,7 @@ export async function sendDeskCapture(
   cfg: TanguDesktopConfig,
   runId: string,
   shotId: string,
-  body: { dataUrl?: string; mode?: 'card' | 'open'; error?: string },
+  body: { dataUrl?: string; mode?: 'card' | 'open'; companion?: string; error?: string },
 ): Promise<void> {
   await authFetch(
     `${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/captures/${encodeURIComponent(shotId)}`,

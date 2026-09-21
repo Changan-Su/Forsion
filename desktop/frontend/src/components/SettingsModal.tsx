@@ -1,5 +1,6 @@
 import { PRODUCT } from '../product'
 import { ModelPickerSettings } from './ModelPickerSettings'
+import { AutoCompactSetting } from './AutoCompactSetting'
 import { HostSandboxSettings } from './HostSandboxSettings'
 /**
  * 设置页:连接 / 模型 / MCP / Browser / WeChat / 主题 / 高级。
@@ -27,8 +28,9 @@ import type {
   AmadeusSyncStatus, AuthStatusInfo, BackendStatusInfo, DirectProviderConfig, DiscoveryResult, McpServerConfigEntry, MirrorTestResult, ModelsResponse,
   NormalAgentDef, SessionRecord, SkillInfo, StoredDesktopConfig, TanguDesktopConfig, ToolsResponse, UpdaterStatusInfo,
 } from '../types'
-import { SHOW_SYSTEM_PROMPT_KEY, SMOOTH_CARET_KEY } from '../types'
-import { isSmoothCaretOn, setSmoothCaretEnabled } from '../smoothCaret'
+import { SHOW_SYSTEM_PROMPT_KEY } from '../types'
+// 本组件已有同名的 useState setter,故取个别名。persist* = 写盘 + 应用 + 跨窗广播。
+import { isSmoothCaretOn, setSmoothCaret as persistSmoothCaret } from '../smoothCaret'
 import { applyUiFonts, readFont, writeFont, type FontSlot } from '../uiFont'
 import { getUiZoom, setUiZoom } from '../uiZoom'
 import { listFonts, getFont } from '../fontPresets'
@@ -65,6 +67,7 @@ import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import { debugFireToast } from '../achievements/store'
 import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
+import { LIVE_VOICE_KEY } from '../hooks/useLiveVoice'
 import {
   FORSION_PRIVACY_URL,
   FORSION_TERMS_URL,
@@ -73,6 +76,7 @@ import {
 } from '../appCompliance'
 import { setActivityViewCommand, ACTIVITY_VIEW_KEY } from '../activityViewCommand'
 import { setActiveWindowCommand } from '../activeWindowCommand'
+import { requestDevCommandsSync } from '../devCommands'
 import { setWikiFilesEnabled } from '@amadeus/lib/wikiFiles'
 import { setUpgradeV4Enabled } from '@amadeus/lib/upgradeV4'
 import { deleteAssetsPref, setDeleteAssetsPref } from '@amadeus/components/askDeleteAssets'
@@ -315,6 +319,10 @@ export const SettingsModal: React.FC<{
   // 开发者「移动端 UI 预览命令」开关(localStorage;bootstrapEngine 启动时据此注册 switch-ui-mode 命令)。
   const [mobileUiCmd, setMobileUiCmd] = useState<boolean>(() => {
     try { return localStorage.getItem(MOBILE_UI_KEY) === '1' } catch { return false }
+  })
+  // 开发者「实时语音对话」开关(功能未完成:逐句朗读/打断还没做,入口先藏在这里;Composer2 读同一个 key)。
+  const [liveVoice, setLiveVoice] = useState<boolean>(() => {
+    try { return localStorage.getItem(LIVE_VOICE_KEY) === '1' } catch { return false }
   })
   // 开发者「活动日志实时视图命令」开关(同款模式;bootstrapEngine 据此注册 open-activity-log 命令)。
   const [activityViewCmd, setActivityViewCmd] = useState<boolean>(() => {
@@ -1787,6 +1795,8 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
+                {/* 自动压缩阈值挨着每个模型的窗口输入框(同一套「窗口」心智);写的是本机引擎的 config.json,与 onContextWindow 同门。 */}
+                {tab === 'model' && activeSub === 'm-display' && isDesktop && <AutoCompactSetting cfg={p.cfg} />}
                 {tab === 'model' && activeSub === 'm-display' && <ModelPickerSettings models={models?.models || []} onContextWindow={isDesktop ? async (modelId, tokens) => {
                   // 只在本机引擎下露出(与「提供方」同门):写的是引擎进程的 config.json,云端 worker 是多用户共用的,引擎侧也 404。
                   await setModelContextWindow(p.cfg, modelId, tokens)
@@ -2779,8 +2789,7 @@ export const SettingsModal: React.FC<{
                             onClick={() => {
                               const on = !smoothCaret
                               setSmoothCaret(on)
-                              try { localStorage.setItem(SMOOTH_CARET_KEY, on ? '1' : '0') } catch { /* ignore */ }
-                              setSmoothCaretEnabled(on)
+                              persistSmoothCaret(on)
                             }}
                           />
                         </div>
@@ -3253,12 +3262,28 @@ export const SettingsModal: React.FC<{
                             const on = e.target.checked
                             setMobileUiCmd(on)
                             try { localStorage.setItem(MOBILE_UI_KEY, on ? '1' : '0') } catch { /* ignore */ }
-                            setMobileUiCommand(on)
+                            setMobileUiCommand(on)   // 设置画在主窗里的形态(web/mobile)
+                            requestDevCommandsSync() // 设置在浮窗里的形态:命令表各窗一份,得让主窗重算
                           }}
                         />
                         {t('settings.developer.mobileUiPreview')}
                       </label>
                       <div className="hint">{t('settings.developer.mobileUiPreviewHint')}</div>
+                    </div>
+                    <div className="field">
+                      <label className="inline-check">
+                        <input
+                          type="checkbox"
+                          checked={liveVoice}
+                          onChange={(e) => {
+                            const on = e.target.checked
+                            setLiveVoice(on)
+                            try { localStorage.setItem(LIVE_VOICE_KEY, on ? '1' : '0') } catch { /* ignore */ }
+                          }}
+                        />
+                        {t('settings.developer.liveVoice')}
+                      </label>
+                      <div className="hint">{t('settings.developer.liveVoiceHint')}</div>
                     </div>
                     <div className="field">
                       <label>{t('settings.developer.testUpdateLabel')}</label>
@@ -3313,6 +3338,7 @@ export const SettingsModal: React.FC<{
                             setActivityViewCmd(on)
                             try { localStorage.setItem(ACTIVITY_VIEW_KEY, on ? '1' : '0') } catch { /* ignore */ }
                             setActivityViewCommand(on)
+                            requestDevCommandsSync()
                           }}
                         />
                         {t('settings.developer.activityViewCmd')}
@@ -3327,6 +3353,8 @@ export const SettingsModal: React.FC<{
                           onChange={(e) => {
                             const on = e.target.checked
                             // 真源在主进程配置(默认拒的实现点就在那儿);⌘K 入口同步增删,免 reload。
+                            // 主窗那份由**主进程**在 config:set 落盘后推(见 main.ts):这里 .then 里通知的话,
+                            // 「拨完立刻关掉设置窗」会连同这个渲染进程一起没掉,主窗就永远不知道。
                             void window.tangu!.setConfig({ activeWindowEnabled: on }).then(setStored)
                             setActiveWindowCommand(on)
                           }}
@@ -3347,6 +3375,9 @@ export const SettingsModal: React.FC<{
                           try { localStorage.removeItem(MOBILE_UI_KEY) } catch { /* ignore */ }
                           setMobileUiCmd(false)
                           setMobileUiCommand(false)
+                          // 一并收回实时语音对话入口(功能没做完,不该留在开发者模式之外)。
+                          try { localStorage.removeItem(LIVE_VOICE_KEY) } catch { /* ignore */ }
+                          setLiveVoice(false)
                           // 一并撤掉活动日志实时视图命令。
                           try { localStorage.removeItem(ACTIVITY_VIEW_KEY) } catch { /* ignore */ }
                           setActivityViewCmd(false)
@@ -3355,6 +3386,7 @@ export const SettingsModal: React.FC<{
                           // 留着开 = 用户看不见的地方一直在采样,默认拒的信任故事当场破。
                           void window.tangu?.setConfig?.({ activeWindowEnabled: false }).then(setStored)
                           setActiveWindowCommand(false)
+                          requestDevCommandsSync() // 两个 localStorage 开关已同步清掉;config 那条由主进程自己推
                           setDevMode(false)
                           setDevClicks(0)
                           goTab('about')

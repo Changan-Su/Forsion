@@ -211,10 +211,10 @@ const DATABASE_SENTINEL = '\u0000__amadeus_database__'
 const DRAWING_SENTINEL = '\u0000__amadeus_drawing__'
 const CARD_SENTINEL = '\u0000__amadeus_card__'
 
-const NOTEVIEW_SENTINEL = ' __amadeus_noteview__'
+const NOTEVIEW_SENTINEL = '\u0000__amadeus_noteview__'
 
 // Notion /page:在当前笔记的 .fd 子文件夹里新建子页面(触发动作,同族 sentinel)。
-const PAGE_SENTINEL = ' __amadeus_page__'
+const PAGE_SENTINEL = '\u0000__amadeus_page__'
 
 interface BlockKeys {
   insertAfter(content?: string): void
@@ -491,6 +491,8 @@ export function MilkdownInner({
   extraPlugins?: MilkdownPlugin[]
 }) {
   const ready = useRef(false)
+  const pagePathRef = useRef(attachmentPagePath)
+  pagePathRef.current = attachmentPagePath
   const keysRef = useRef(keys)
   keysRef.current = keys
   const saveImageRef = useRef(saveImage)
@@ -779,15 +781,20 @@ export function MilkdownInner({
         event.preventDefault()
         const from = sel.from
         const to = from + raw.length
-        view.dispatch(view.state.tr.insertText(raw, from, sel.to))
-        let coords: { left: number; top: number; bottom: number }
+        let coords: { left: number; top: number; bottom: number } | null = null
         try {
-          // 锚**光标**(粘完光标就在 URL 末尾),不是段首 —— 锚段首时长地址会让菜单离手很远。
-          coords = view.coordsAtPos(to)
+          // ⚠️ 坐标必须在 dispatch **之前**量。粘完这一段当场被 embedLayer 认成书签卡,
+          // 源码整段 `display: none`(wikilink-src-hidden)—— 而自「难源码编辑块」契约起
+          // 光标在里面也不再让位，于是 coordsAtPos(to) 量到全零,菜单被夹到视口左上角
+          // (用户 2026-09-20 实报)。空段落里的光标 = 段首 = 卡片左上角,正是要的锚点;
+          // 原先「锚 URL 末尾」的理由(长地址时段首离手远)随「源码不再露出」一起失效。
+          coords = view.coordsAtPos(from)
         } catch {
-          return true // 坐标拿不到就只是没菜单,链接已经粘进去了
+          // 量不到就只是没菜单。⚠️ 不许在这里 return：preventDefault 已经调过,
+          // 提前返回 = 默认粘贴被拦下、URL 也没插进去,用户那一下粘贴直接蒸发了。
         }
-        setPasteAs({ url: raw, from, to, left: coords.left, top: coords.bottom, anchorTop: coords.top })
+        view.dispatch(view.state.tr.insertText(raw, from, sel.to))
+        if (coords) setPasteAs({ url: raw, from, to, left: coords.left, top: coords.bottom, anchorTop: coords.top })
         return true
       }
       return false
@@ -848,7 +855,7 @@ export function MilkdownInner({
       // 插件编辑器扩展的**高优先级**桶:排在宿主全部插件之前 —— 插件要接管 Tab 这类宿主已占用的键
       // 只能在这儿(ProseMirror 按插件顺序问 handleKeyDown,排在后面永远够不着)。
       // 契约:high 桶的插件不该自己处理的必须返回 false,否则内置行为在它手里静默消失。
-      .use(pluginEditorExtensions('high'))
+      .use(pluginEditorExtensions('high', { pagePath: () => pagePathRef.current }))
       .use(commonmarkWithIndent)
       .use(gfm)
       // `**注意：**后面` 这类 CJK 标点贴定界符的串按 CJK 友好规则解析(否则字面 + 保存转义)。须紧跟 gfm,见 ./cjkFriendly。
@@ -938,7 +945,7 @@ export function MilkdownInner({
       .use(fullWidthWikiRule) // 全角【【→ 半角 [[(中文输入法不必切键盘)
       // 插件贡献的编辑器扩展(ctx.registerEditorExtension)。**放在宿主全部插件之后**:
       // ProseMirror 按注册序问 handleKeyDown/handleTextInput,内置行为先说了算,插件只捡没人处理的。
-      .use(pluginEditorExtensions())
+      .use(pluginEditorExtensions('normal', { pagePath: () => pagePathRef.current }))
       .use(extraPlugins ?? [])
   }, [extGen])
 
@@ -2007,7 +2014,9 @@ function PasteAsMenu({ left, top, anchorTop, url, onPick, onClose }: {
   return (
     <>
       <div className="slash-backdrop" onMouseDown={onClose} />
-      <OverlayAt className="paste-as-menu" role="menu" x={left} y={top} anchorTop={anchorTop}>
+      {/* prefer="above":粘完这一段当场就渲成书签卡,菜单向下开会把封面与标题盖住 ——
+          而那正是「书签卡 vs 内嵌」要看的东西。上方放不下时 clampMenu 会自己翻回下方。 */}
+      <OverlayAt className="paste-as-menu" role="menu" x={left} y={top} anchorTop={anchorTop} prefer="above">
         <div className="paste-as-label">{t('mdblock.pasteAs.title')}</div>
         {items.map((it, i) => (
           <button

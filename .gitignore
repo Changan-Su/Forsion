@@ -51,3 +51,4 @@ Thumbs.db
 
 # Isolated Coding Studio Electron acceptance artifacts
 /outputs/coding-studio-*
+/outputs/image-studio*

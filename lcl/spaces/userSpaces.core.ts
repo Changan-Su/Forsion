@@ -5,7 +5,17 @@
 export interface SpacePanelSpec {
   type: string
   params?: Record<string, unknown>
+  /** Main area only: start a native Dockview split relative to the previous main item.
+   *  Omitted keeps the legacy behaviour and opens the item as a tab in the current group. */
+  split?: 'right' | 'down'
+  /** Zero-based index of an earlier main item to split. Defaults to the previous item. */
+  splitFrom?: number
 }
+
+export type MainPanelOpenStep =
+  | { panel: SpacePanelSpec; mode: 'first' }
+  | { panel: SpacePanelSpec; mode: 'tab' }
+  | { panel: SpacePanelSpec; mode: 'split'; direction: 'right' | 'down'; from: number }
 
 export interface SpaceSpec {
   id: string
@@ -57,9 +67,33 @@ function panelList(v: unknown, field: string): SpacePanelSpec[] | string {
     if (params !== undefined && (typeof params !== 'object' || params === null || Array.isArray(params))) {
       return `layout.${field} 的 params 必须是对象`
     }
-    out.push(params ? { type: (it as { type: string }).type, params: params as Record<string, unknown> } : { type: (it as { type: string }).type })
+    const split = (it as { split?: unknown }).split
+    const splitFrom = (it as { splitFrom?: unknown }).splitFrom
+    if (split !== undefined && split !== 'right' && split !== 'down') {
+      return `layout.${field} 的 split 必须是 right 或 down`
+    }
+    if (splitFrom !== undefined && (field !== 'main' || !split || !Number.isInteger(splitFrom) || (splitFrom as number) < 0 || (splitFrom as number) >= out.length)) {
+      return `layout.${field} 的 splitFrom 必须指向此前的 main 条目(从 0 开始),且同时声明 split`
+    }
+    out.push({
+      type: (it as { type: string }).type,
+      ...(params ? { params: params as Record<string, unknown> } : {}),
+      ...(split ? { split } : {}),
+      ...(splitFrom !== undefined ? { splitFrom: splitFrom as number } : {}),
+    })
   }
   return out
+}
+
+/** Turn the declarative main list into the exact host operations used by userSpaces.tsx.
+ *  Keeping this pure makes the backwards-compatibility rule executable in tests: old recipes remain tabs,
+ *  while `split` opts a subsequent item into a native Dockview group. */
+export function planMainPanels(list: SpacePanelSpec[]): MainPanelOpenStep[] {
+  return list.map((panel, index) => index === 0
+    ? { panel, mode: 'first' }
+    : panel.split
+      ? { panel, mode: 'split', direction: panel.split, from: panel.splitFrom ?? index - 1 }
+      : { panel, mode: 'tab' })
 }
 
 export function parseSpaceJson(raw: string, opts: ParseOpts): ParseResult {
@@ -91,6 +125,10 @@ export function parseSpaceJson(raw: string, opts: ParseOpts): ParseResult {
   const right = panelList(lay.right, 'right')
   for (const r of [main, left, right]) if (typeof r === 'string') return { ok: false, error: r }
   if (!(main as SpacePanelSpec[]).length) return { ok: false, error: 'layout.main 至少要有一个视图' }
+  if ((main as SpacePanelSpec[])[0].split) return { ok: false, error: 'layout.main 第一项不能声明 split' }
+  if ((left as SpacePanelSpec[]).some((p) => p.split) || (right as SpacePanelSpec[]).some((p) => p.split)) {
+    return { ok: false, error: 'split 只适用于 layout.main' }
+  }
 
   let mini: SpaceSpec['mini']
   if (d.mini !== undefined) {

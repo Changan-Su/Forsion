@@ -81,6 +81,7 @@ const SKIP = {
   resolveInitialEffectiveMode: '移动端用 resolveInitialMode(无「跟随系统」的 electron 通道)',
   // —— 根组件 ——
   Root: '移动端的对位物就是 MobileRoot 自己',
+  syncDevCommands: '开发者选项三个 ⌘K 入口的**跨窗重算**(设置浮窗拨开关 → 主窗重新注册,09-20 Floating Panel 化后的回归修复)。移动端没有卫星窗、也没有 onMainAction 通道,不存在「命令注册到了另一个窗口」这个问题;启动时那次 syncDevCommands() 在 bootstrapEngine 里,两端共用(移动端三个开关均未开 → 三条命令都不注册)',
   getLanguage: 'soft 主题的 panelGap 只喂给 Dockview Shell;单列壳不消费',
   MarketModal: '入口 rb-market 门控在 window.tangu?.marketList,移动 shim 无此方法 → 该 ribbon 项根本不注册,没有可点入口',
   FeedbackModal: '同上:入口(rb-feedback 图标 + open-feedback 命令;图标 2026-08-31 撤下、09-17 放回)门控在 window.tangu?.submitFeedback,移动 shim 无 → 不注册。(组件本身有可选桥检查并显示 unavailable,不会崩;此前这条理由写的「点了就崩」是错的)',
@@ -113,7 +114,6 @@ const KNOWN_GATES = {
   'window.tangu?.cloudWeb': 'web 云壳标志(cloudWeb shim 注入)— 端判定单源 services/agentRunService.ts 的 currentPlatform();web 有、desktop/mobile 天然无。新会话现已全端默认 Work，此标志用于工作区落点等端差异，不是功能门控',
   'window.tangu?.spacesList': '用户自定义 Space 读盘 — 仅桌面',
   'window.tangu?.spacesSave': '用户自定义 Space 写盘 — 仅桌面',
-  'window.tangu?.getConfig': '前台窗口采样调试面板的 ⌘K 入口 — 开关真源是主进程配置(默认关,只在开发者选项里能开);移动端/web 没有 host 进程,这个能力整体不存在,命令不注册是对的',
   'window.tangu?.marketList': '应用市场入口(ribbon 图标 + open-market 命令)— 仅桌面',
   'window.tangu?.submitFeedback': '反馈入口(ribbon 图标 rb-feedback + 命令面板 open-feedback)— 仅桌面',
   'window.tangu?.openMini': 'Mini 卡片命令 — 仅桌面',

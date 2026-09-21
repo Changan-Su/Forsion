@@ -9,6 +9,7 @@ import { usePageStore } from '../amadeus/store/pageStore'
 import { registerMessages, useI18n } from '../i18n'
 import { splitWiki, wikiLabel } from './wikiChat'
 import { sessionIdOfTarget } from '../views/chat2/chatDragRef'
+import { deskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 
 registerMessages({
   'chatwiki.mediaTipBadAnchor': { zh: '{path}(时刻锚点无效,从头播放)', en: '{path} (invalid time anchor — playing from the start)' },
@@ -194,7 +195,8 @@ async function openPdfCitation(path: string, page?: number, quote?: string): Pro
   const { activeId, desktopConfig } = useApp.getState()
   // 闸门必须与 ChatView 的 deskEnabled 逐字同源:移动端根本不挂 AgentDesk,
   // 只按 agentDeskEnabled 判会把状态写进一个不存在的面板 = 点了没反应。
-  if (UI_MODE !== 'mobile' && desktopConfig?.agentDeskEnabled && activeId) {
+  // deskAcceptsFiles:always 伴随面把 Desk 整体替换了,文件不进 Desk,照 Desk 关闭时走主区 tab。
+  if (UI_MODE !== 'mobile' && deskAcceptsFiles(!!desktopConfig?.agentDeskEnabled) && activeId) {
     const top = useApp.getState().deskBySession[activeId]?.items?.[0]
     const same = top?.view?.type === 'amadeus-pdf' && top.view.params?.pdfPath === path
     // 落状态:deskShowFile 对同一份 PDF 复用原 key(不 remount 重下),params 的新页码供**下次冷挂载**
@@ -218,7 +220,7 @@ async function openPdfCitation(path: string, page?: number, quote?: string): Pro
 async function openFileCitation(path: string, name: string, line: LineLoc | null): Promise<void> {
   const { useApp } = await import('../stores/appStore')
   const { activeId, desktopConfig } = useApp.getState()
-  if (UI_MODE !== 'mobile' && desktopConfig?.agentDeskEnabled && activeId) {
+  if (UI_MODE !== 'mobile' && deskAcceptsFiles(!!desktopConfig?.agentDeskEnabled) && activeId) {
     const top = useApp.getState().deskBySession[activeId]?.items?.[0]
     const same = top?.view?.type === 'wsfile' && top.view.params?.path === path
     const params: Record<string, unknown> = { path, name }
@@ -247,7 +249,7 @@ async function openFileCitation(path: string, name: string, line: LineLoc | null
 async function openMediaCitation(m: { abs: string; vaultRel: string | null; name: string; loc: MediaLoc | null }): Promise<void> {
   const { useApp } = await import('../stores/appStore')
   const { activeId, desktopConfig } = useApp.getState()
-  const desk = UI_MODE !== 'mobile' && desktopConfig?.agentDeskEnabled && activeId ? activeId : null
+  const desk = UI_MODE !== 'mobile' && deskAcceptsFiles(!!desktopConfig?.agentDeskEnabled) && activeId ? activeId : null
   if (m.vaultRel) {
     if (desk) {
       const top = useApp.getState().deskBySession[desk]?.items?.[0]
@@ -326,11 +328,12 @@ async function openWebCitation(href: string, quote: string): Promise<boolean> {
   if (UI_MODE === 'mobile') return false
   const { useApp } = await import('../stores/appStore')
   const { activeId, desktopConfig } = useApp.getState()
-  if (!desktopConfig?.agentDeskEnabled || !activeId) return false
+  if (!deskAcceptsFiles(!!desktopConfig?.agentDeskEnabled) || !activeId) return false
   // ⚠️ Markdown 组件不只聊天在用(更新日志/设置/市场/收件箱/右栏/WsFileView…共 14 处调用点),
   // 而 activeId 在别的标签页上照样有值 —— 只按它判,会把非聊天面里的链接写进一块**看不见的 Desk**,
   // 观感 = 点了没反应。判据取「这个会话的 Desk 真挂在 DOM 上」:AgentDesk 与常驻的 DeskCard
   // 都带 data-desk-session(卡片不可关,聊天视图在场就必有一个)。
+  // ⚠️ always 伴随面下卡片照样挂在 DOM 上 —— 这道 DOM 判据拦不住,上面 deskAcceptsFiles 那道才拦得住。
   if (!document.querySelector(`[data-desk-session="${CSS.escape(activeId)}"]`)) return false
   const url = withTextFragment(href, quote)
   const key = webCiteKey(href)

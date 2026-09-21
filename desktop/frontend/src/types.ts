@@ -367,6 +367,10 @@ export const SHOW_SYSTEM_PROMPT_KEY = 'forsion_tangu_show_system_prompt'
 
 /** 丝滑光标开关(localStorage,**缺席=关**;smoothCaret.ts 全局模块 + 设置→外观)。 */
 export const SMOOTH_CARET_KEY = 'forsion_tangu_smooth_caret'
+/** UI 缩放(uiZoom.ts 真源;放这儿是为了让跨窗同步的白名单不必反向依赖 uiZoom)。 */
+export const UI_ZOOM_KEY = 'forsion_ui_zoom'
+/** 界面语言(i18n.tsx 真源;同上)。 */
+export const LOCALE_KEY = 'tangu_locale'
 
 /** 界面字体三档(localStorage,**缺席=跟随主题**;uiFont.ts + 设置→外观)。 */
 export const FONT_UI_KEY = 'forsion_tangu_font_ui'
@@ -489,6 +493,9 @@ export interface AgentConfig {
   /** 会话团队的共同指令与成员职责;独立 TEAM 在运行时以持久定义为准。 */
   teamDoc?: string
   teamRoles?: Record<string, string>
+  /** 会话级成员调档(配队面板「本会话」那行):slug → 本会话用的模型 / Effort;空值 = 沿用该 Agent 自己的设置。
+   *  只写会话配置,绝不回写 Agent 定义;引擎侧 groupChat.tuneMembers 落地。临时成员直接改 groupTempAgents,不进这张表。 */
+  teamMemberConfigs?: Record<string, { model?: string; thinkingLevel?: ThinkingLevel }>
   /** 本条消息 @ 的 agent slug(群聊:该 agent 本场优先发言;per-message,发送后清空,不持久化)。 */
   priorityAgent?: string
   /** 本条消息 @ 的 agent slug 列表(单聊:提示主 agent 用 delegate 把子任务交给这些 Normal Agent 作 subagent;per-message,不持久化)。 */
@@ -734,6 +741,8 @@ export interface CtxInfo {
   filesTruncated: boolean
   historyCount: number
   historyTokens: number
+  /** 自动压缩触发线(token):引擎按「窗口 − 预留」与用户的 thresholdPercent 算好的,客户端只展示、不另算一份。 */
+  compactAt?: number
   /** 思考档:请求档 vs 实际生效档(能力表 clamp;不同=被自动降档,H6 降档可见)。 */
   thinkingRequested?: string
   thinkingEffective?: string
@@ -820,7 +829,10 @@ export interface TodoItem {
 /** 等模型期间的实况(status:llm_call 事件;仅内存不持久化)。since=本次调用起点(重试续用),bytes=上传字节。 */
 /** 团队成员本次激活的过程状态(主聊天气泡上的一行;详情在 Team Desk)。 */
 export interface TeamWork {
+  /** 展示文案:start 时 = 成员这次的任务,team_activity 后 = `tool + ' ' + argsPreview`。别从它反推工具名。 */
   activity?: string
+  /** 成员最近一次工具调用的工具名(只由 team_activity 写;agentStatus 的 tool 阶段只认它)。 */
+  tool?: string
   waiting?: boolean
 }
 
@@ -1263,8 +1275,12 @@ declare global {
       showMainPanel?(target: import('../../shared/miniPanel').MainPanelTarget): void
       onMainPanelTarget?(cb: (target: import('../../shared/miniPanel').MainPanelTarget) => void): () => void
       mainPanelReady?(): void
-      requestMainAction?(action: 'onboarding'): void
-      onMainAction?(cb: (action: 'onboarding') => void): () => void
+      requestMainAction?(action: 'onboarding' | 'dev-commands'): void
+      onMainAction?(cb: (action: 'onboarding' | 'dev-commands') => void): () => void
+      /** 界面变更广播给其余窗口(主题/字体/缩放/光标/语言;主进程转发,不回发自己)。 */
+      broadcastUi?(state: import('../../shared/uiSync').UiSyncPayload): void
+      /** 本窗收到别处的界面变更 → 原样重放。返回取消订阅。 */
+      onUiChanged?(cb: (state: import('../../shared/uiSync').UiSyncPayload) => void): () => void
       closeSelf?(): void
       /** 跨窗撕拽:拖拽中实时上报屏幕坐标(主进程命中测试 → 给光标下窗口发落点预览)。节流后调。 */
       dragUpdate?(screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void

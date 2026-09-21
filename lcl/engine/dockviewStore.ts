@@ -2,13 +2,14 @@
  * Workspace store(≈ Obsidian workspace)。在已集成的 Dockview 之上建薄 API:
  * openView / getActiveLeaf / splitActive / toggleSidebar / saveLayout↔restore / 命名布局。
  * 单个 Dockview 实例托管四区:左侧栏 / 主区 / 右侧栏 / 底部面板,由 panel.params.__loc 标记区分。
- * 左右按**宽**折叠(黄金分割钉宽 pinSides);底部只在主区那一列下方,按**高**折叠且恒 free(见 toggleSidebar)。
+ * 左右按**宽**折叠(黄金分割钉宽 pinSides);底部横跨 Main 与右栏,按**高**折叠且恒 free。
  * 视图「参数驱动可重建」:panel 存 {component:type, params} → 刷新/恢复时 Dockview 据此重建。
  */
 import { create } from 'zustand'
 import type { ExtendViewPresenter } from './extendView'
 import { nativeExtendTargets } from './nativeExtendView'
 import { withoutTransientPanels } from './transientLayout'
+import { alignWorkspaceRegions, captureRegionTree, restoreRegionProportions, type RegionTree } from './regionLayout'
 import type { DockviewApi, IDockviewPanel } from 'dockview-react'
 import type { DockSide, Leaf, SidebarDefaults, ViewLocation } from './types'
 import { getView } from './viewRegistry'
@@ -177,9 +178,6 @@ export function captureSideWidths(api: DockviewApi): void {
   }
 }
 
-/** 可在网格里换位的组(dockview 7 的 group api;跨版本可能没有 → 调用点先探 typeof)。 */
-type MovableGroup = { api: { moveTo?: (o: { group: unknown; position: string; skipSetActive?: boolean }) => void } }
-
 type SizableGroup = { api: { setSize: (s: { width?: number; height?: number }) => void; width?: number; height?: number; setConstraints?: (c: { minimumWidth?: number; maximumWidth?: number; minimumHeight?: number; maximumHeight?: number }) => void } }
 
 /** 临时锁住指定侧栏的宽度(min=max=目标宽),让 close 释放的空白只被中间主区吸收 ——
@@ -293,38 +291,28 @@ export function activeMainPanel(api: DockviewApi): IDockviewPanel | null {
   return fronts.find((p) => groupOf(p)?.id === lastMainGroupId) ?? fronts[0] ?? mains[0] ?? null
 }
 
-/** 给某 location 计算新 panel 的放置位置。
- *  ⚠️Dockview 的「按方向开」是**在引用 panel 所在的那个槽位里嵌套**,所以先开谁会决定长成什么样
- *  (用户实报:右栏与底部的开合顺序不同 → 两种布局)。目标布局恒定为
- *      [左栏满高] | [ [主区 | 右栏] / 底部横跨这两者 ]
- *  三处协同保证它与顺序无关:① 左栏不给引用 panel,直接开在**根一级最左**(orthogonalize)→ 永远满高,
- *  哪怕底部已经在场;② 右栏锚在主区上 —— 底部已在场时它会自动嵌进主区那一行(= 坐在底部之上);
- *  ③ 反序(先右栏后底部)由 alignRightAboveBottom 在底部诞生时把右栏挪进来补上这次嵌套。 */
+/** New shell groups start at the outer edge, then alignRegions places them around the entire
+ * Main subtree. Referencing a Main leaf here would cut a sidebar into that one split. */
 function positionFor(api: DockviewApi, loc: ViewLocation): Record<string, unknown> | undefined {
   const sameLoc = panelsAt(api, loc)
   if (sameLoc.length) return { referencePanel: sameLoc[0].id, direction: 'within' }
   if (loc === 'main') return undefined // 首个主区 panel
-  if (loc === 'left') return { direction: 'left' } // 无引用 = 根一级最左,满高(见上 ①)
-  const main = panelsAt(api, 'main')[0] ?? api.panels[0]
-  // ponytail: 底部锚在 panelsAt('main')[0] 上向下开 → 主区若已左右分屏成两列,底部只落在**第一列**下方
-  //   (而非横跨整个主区)。真需要「跨整个主区」时再换成锚到主区那一支的 gridview 分支。
-  if (main) return { referencePanel: main.id, direction: loc === 'right' ? 'right' : 'below' }
-  return undefined
+  return { direction: loc === 'bottom' ? 'below' : loc }
 }
 
-/** 底部刚诞生时,把已在场的右栏挪到主区右边 —— 补上「先右栏后底部」这个顺序缺的那次嵌套,
- *  使底部横跨「主区 + 右栏」(见 positionFor 的目标布局)。反序天然就是这样,故只在建底部时做一次。
- *  ⚠️挪组 = 右栏子树被摘下重挂(滚动位置 / 入场动画),故照收起路径的先例包 preserveAcrossRestructure;
- *  ⚠️pinSides 必须**先**调:moveTo 同步触发布局事件,而右栏此刻是 Dockview 默认的 ~50% 宽,
- *    captureSideWidths 会把这个过渡宽当成用户拖出来的记进 localStorage(= 侧栏抽风根因 R1)。 */
-function alignRightAboveBottom(api: DockviewApi): void {
-  const right = (panelsAt(api, 'right')[0] as { group?: MovableGroup } | undefined)?.group
-  const main = (panelsAt(api, 'main')[0] as { group?: MovableGroup } | undefined)?.group
-  if (!right || !main || typeof right.api.moveTo !== 'function') return
+/** Repair region boundaries without reloading any View. The snapshot before insertion keeps
+ * Main proportions intact; the same path also heals old persisted, interleaved layouts. */
+function alignRegions(api: DockviewApi, before?: RegionTree | null): void {
+  const snapshot = before ?? captureRegionTree(api)
   const restore = preserveAcrossRestructure()
   pinSides(api)
-  try { right.api.moveTo({ group: main, position: 'right', skipSetActive: true }) } catch { /* 跨版本兜底 */ }
-  restore()
+  try {
+    alignWorkspaceRegions(api, snapshot)
+    if (panelsAt(api, 'bottom').length) settleBottomHeight(api)
+    setTimeout(() => {
+      if (useWorkspace.getState().api === api && !Object.values(sidebarAnimating).some(Boolean)) restoreRegionProportions(api, snapshot)
+    }, 80)
+  } finally { restore() }
 }
 
 type Stashed = PersistedPanel
@@ -798,6 +786,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const id = def?.singleton && !opts?.newTab ? type : nextId(api, type)
     const title = def ? label(def.displayName) : type
     const firstOfSide = loc !== 'main' && panelsAt(api, loc).length === 0
+    const before = firstOfSide ? captureRegionTree(api) : null
+    const restore = firstOfSide ? preserveAcrossRestructure() : () => {}
     const panel = api.addPanel({
       id,
       // 主区 panel 一律挂 __frame 宿主(就地切视图靠 updateParameters 换 __type);侧栏保持 per-type 组件。
@@ -806,11 +796,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       params: { ...params, __loc: loc, __type: type },
       position: positionFor(api, loc) as never,
     })
-    // 侧栏首个 panel 创建了新组 → Dockview 默认 ~50/50 太宽,按黄金分割钉两侧 0.191×容器宽。
-    // 底部走纵向的那一版(settleBottomHeight):**不能借 pinSides** —— 它只管横向,还会开 pinPending
-    // 窗口白白冻住 60ms 的侧栏宽记忆。两者都在补间动画期自动让位(sidebarAnimating)。
-    // (alignRightAboveBottom 内部**确实**调 pinSides:那是给被它挪过位的右栏重新钉宽,不是给底部。)
-    if (firstOfSide) { if (loc === 'bottom') { alignRightAboveBottom(api); settleBottomHeight(api) } else pinSides(api) }
+    if (firstOfSide) {
+      alignRegions(api, before)
+      if (loc === 'bottom') settleBottomHeight(api)
+      restore()
+    }
     if (loc !== 'main') set({ [visKeyOf(loc)]: true } as Partial<WorkspaceState>)
     if (type === 'chat') set({ focusedChatLeafId: panel.id })
     scheduleWorkspaceSave()
@@ -880,6 +870,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   toggleSidebar(side) {
     const api = get().api
     if (!api) return
+    const beforeToggle = captureRegionTree(api)
     // 唯一的轴向差异集中在这几行:左右量宽 / 底部量高。其余(暂存、还原、补间、沉降)两轴共用一份。
     const vert = side === 'bottom'
     const sizeKey = vert ? 'height' : 'width'
@@ -887,7 +878,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const targetSize = (): number => (vert ? bottomTargetHeight(api) : sideTargetWidth(api, side))
     const setSize = (g: SizableGroup, v: number): void => { try { g.api.setSize({ [sizeKey]: v }) } catch { /* 跨版本兜底 */ } }
     // 沉降后重钉:只有横向有「黄金分割钉宽」这回事;底部恒 free,拖多高就是多高,钉了反而把用户的高抹掉。
-    const settleSizes = (): void => { if (!vert) pinSides(api) }
+    const settleSizes = (): void => {
+      if (!vert) pinSides(api)
+      setTimeout(() => { if (!stale()) restoreRegionProportions(api, beforeToggle) }, 80)
+    }
     // 收起/展开期锁死**对侧**只对横向有意义:底部吞吐的高只在主区那一列内部流动,左右栏宽度纹丝不动。
     const lockNeighbour = (): (() => void) => (vert ? () => {} : lockOtherSide(api, side))
     const visKey = visKeyOf(side)
@@ -1020,6 +1014,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       migrateLayoutBlob(blob)
       dismissExtensions()
       api.fromJSON(blob.dockview as never)
+      alignRegions(api)
       // 布局整体更换,旧 leaf id 全失效。⚠️ 放在 fromJSON **之后**:拆旧建新途中的激活事件也会让订阅方记账,
       // 挪到前面的话,途中记下的条目会留在新布局复用的 leaf id(如 launcher#1)上。
       useNav.getState().reset()
@@ -1118,6 +1113,7 @@ export function tryRestoreLayout(api: DockviewApi): boolean {
   const known = (v: PersistedPanel): boolean => !!getView(v.type) // 收起态 stash 也剔除未注册视图,防展开时重开死视图
   try {
     api.fromJSON(layout.dockview as never)
+    alignRegions(api)
     useWorkspace.setState({
       leftVisible: layout.sidebars.left.visible,
       rightVisible: layout.sidebars.right.visible,
@@ -1148,6 +1144,7 @@ let extensionSerial = 0
 export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) => {
   const api = useWorkspace.getState().api
   if (!api) throw new Error('Workbench is not ready')
+  const beforeExtension = captureRegionTree(api)
   const side = options.side ?? 'right'
   extensions[side]?.dismiss()
   extensions[side]?.dispose(true) // replacing: swap in place, never a collapse/expand pair
@@ -1202,6 +1199,7 @@ export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) =>
         useWorkspace.getState().syncPanelState()
         useWorkspace.getState().refreshTabs()
         pinSides(api)
+        setTimeout(() => restoreRegionProportions(api, beforeExtension), 80)
         scheduleWorkspaceSave()
       }
       // Only a group about to vanish collapses with a tween; a tab leaving a shared group just closes.
@@ -1235,6 +1233,7 @@ export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) =>
   nativeExtendTargets.set(id, element)
   const restore = preserveAcrossRestructure()
   release = holdNeighbour()
+  const before = !existing.length ? captureRegionTree(api) : null
   try {
     // A real leaf in the ordinary native tab group, even when that group already has other Views.
     panel = api.addPanel({ id, component: '__extend',
@@ -1243,8 +1242,8 @@ export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) =>
     if (!existing.length) {
       // Born at Dockview's default (~50%): start near 0 and tween to the target, exactly like toggleSidebar's expand
       // (min size released first, or setSize(1) is clamped to 100 and the main area jumps by that much in one frame).
+      alignRegions(api, before)
       const group = panel.group as unknown as SizableGroup
-      if (vert) alignRightAboveBottom(api)
       const gen = toggleGen[side]
       const stale = (): boolean => gen !== toggleGen[side] || disposed
       const target = vert ? bottomTargetHeight(api) : sideTargetWidth(api, side)
@@ -1258,6 +1257,7 @@ export const presentDockedExtension: ExtendViewPresenter = (options, dismiss) =>
         sidebarAnimating[side] = false
         try { group.api.setConstraints?.(minOn) } catch { /* 跨版本兜底 */ }
         if (vert) settleBottomHeight(api); else pinSides(api)
+        setTimeout(() => { if (!disposed) restoreRegionProportions(api, beforeExtension) }, 80)
         setTimeout(() => release?.(), 180)
         scheduleWorkspaceSave()
       }, stale)

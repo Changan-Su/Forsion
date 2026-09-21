@@ -3,6 +3,7 @@
  *   npm run e2e:ctxwindow [-- <截图目录>]     需先 npm run build(读 out/main/main.js)
  * 断言:云端/本地行都有输入框;占位符=引擎解析值、悬浮标出来源;填值 → PUT /agent/models/overrides →
  * 刷新后持有值;填 272(把 K 当 token)只报行内错不打后端;清空 → PUT null 回自动;直连模型按完整 id 覆盖;无横向溢出。
+ * 同页顶部的「自动压缩阈值」滑块(09-20):缺省 95%;拖动不打后端、松手一次 PUT /agent/compaction;恢复默认 = PUT null。
  * 截图落到 <截图目录>(缺省 os.tmpdir()/forsion-ctxwindow-shots),交付前看一眼 ctxwindow-1-initial.png。
  */
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -25,10 +26,21 @@ async function main() {
   const direct = { ...mk('codex/gpt-5.6-sol', 'gpt-5.6-sol', 'codex', 272000, 'family'), source: 'direct' }
   models.push(direct)
   const puts = []
+  const compaction = {} // config.json 的 compaction 段(桩):设置页的自动压缩阈值读写它
+  const compactionPuts = []
   const stub = await startStubEngine({
     sessions: [], messages: [], models,
     directProviders: [{ providerId: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', modelIds: ['gpt-5.6-sol'] }],
     handle: async ({ path: p, method, body }) => {
+      if (p === '/agent/compaction' && method === 'GET') return { settings: { ...compaction }, defaults: { thresholdPercent: 95 }, writable: true }
+      if (p === '/agent/compaction' && method === 'PUT') {
+        body = typeof body === 'function' ? await body() : body
+        if (typeof body === 'string') body = JSON.parse(body || '{}')
+        compactionPuts.push(body)
+        if (body.thresholdPercent == null) delete compaction.thresholdPercent
+        else compaction.thresholdPercent = body.thresholdPercent
+        return { settings: { ...compaction } }
+      }
       if (p === '/agent/models/overrides' && method === 'PUT') {
         body = typeof body === 'function' ? await body() : body
         if (typeof body === 'string') body = JSON.parse(body || '{}')
@@ -45,14 +57,18 @@ async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-ctxwin-'))
   const app = await electron.launch({ args: ['--user-data-dir=' + path.join(home, 'userdata'), '--lang=zh-CN', ROOT], cwd: ROOT, env: Object.assign({}, process.env, { TANGU_HOME: home, TANGU_BACKEND_URL: stub.url }) })
   try {
-    const win = await app.firstWindow()
+    let win = await app.firstWindow()
     await win.waitForSelector('#root', { timeout: 40000 })
     await win.waitForTimeout(2500)
     for (const label of ['跳过引导', 'Skip']) { const b = win.locator('text=' + label).first(); if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break } }
     await win.waitForSelector('.dv-groupview', { timeout: 40000 })
     await win.waitForTimeout(1000)
+    // 设置开在独立浮窗里(Floating Panel 化 09-20):开窗前先 arm window 事件,别靠「睡一会儿再取最后一个窗口」。
+    const settingsOpened = app.waitForEvent('window', { timeout: 20000 }).catch(() => null)
     await win.keyboard.press('Meta+Comma')
-    await win.waitForSelector('.settings-nav', { timeout: 10000 })
+    win = (await settingsOpened) || app.windows().at(-1) // 拿不到事件(单窗口构建)就退回原来的取法
+    await win.waitForLoadState('domcontentloaded').catch(() => {})
+    await win.waitForSelector('.settings-nav', { timeout: 30000 })
     const navText = await win.locator('.settings-nav-list').innerText().catch(() => '')
     const parent = win.locator('.settings-nav-parent > button', { hasText: /^\s*模型/ }).first()
     if (!(await parent.count())) throw new Error('nav has no 模型 parent; nav text=\n' + navText)
@@ -87,6 +103,21 @@ async function main() {
     const sol = win.locator('.model-catalog-ctx input[aria-label*="gpt-5.6-sol"]').first()
     await sol.fill('1050000'); await sol.press('Enter'); await win.waitForTimeout(1200)
     check('T8 直连模型按完整 id 覆盖', puts.length === 3 && puts[2].modelId === 'codex/gpt-5.6-sol' && puts[2].contextWindow === 1050000, JSON.stringify(puts[2]))
+    // 自动压缩阈值(09-20):同页顶部的滑块。缺省 95 且「恢复默认」不可点;拖到 30 松手 → 恰好一次 PUT;恢复默认 → PUT null。
+    const slider = win.locator('.auto-compact-setting input[type="range"]').first()
+    const sliderVal = () => win.locator('.auto-compact-setting .theme-opt-val').first().innerText()
+    const resetBtn = win.locator('.auto-compact-setting button').first()
+    check('T10 自动压缩滑块:缺省 95%、恢复默认不可点', (await slider.count()) === 1 && (await sliderVal()) === '95%' && (await resetBtn.isDisabled()), 'val=' + (await sliderVal().catch(() => '?')))
+    await slider.evaluate((el, v) => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(el, String(v)); el.dispatchEvent(new Event('input', { bubbles: true })) }, 30)
+    check('T11 拖动中只改显示、不打后端', (await sliderVal()) === '30%' && compactionPuts.length === 0, 'puts=' + compactionPuts.length)
+    await slider.focus(); await slider.blur(); await win.waitForTimeout(800)
+    check('T12 松手(失焦)→ 恰好一次 PUT {thresholdPercent:30},恢复默认可点', compactionPuts.length === 1 && compactionPuts[0].thresholdPercent === 30 && !(await resetBtn.isDisabled()), JSON.stringify(compactionPuts))
+    await win.locator('.auto-compact-setting').first().scrollIntoViewIfNeeded()
+    await win.screenshot({ path: path.join(OUT, 'ctxwindow-4-autocompact.png') })
+    await resetBtn.click(); await win.waitForTimeout(800)
+    check('T13 恢复默认 → PUT thresholdPercent:null → 回到 95%', compactionPuts.length === 2 && compactionPuts[1].thresholdPercent === null && (await sliderVal()) === '95%', JSON.stringify(compactionPuts[1]))
+    const acw = await win.evaluate(() => { const el = document.querySelector('.auto-compact-setting'); return el ? el.scrollWidth - el.clientWidth : -1 })
+    check('T14 自动压缩区无横向溢出', acw <= 0, 'overflow=' + acw)
     // 视觉:输入框不把行撑破(行高、无横向溢出)
     const box = await win.locator('.model-catalog-settings').first().boundingBox()
     const sw = await win.evaluate(() => { const el = document.querySelector('.model-catalog-settings'); return el ? el.scrollWidth - el.clientWidth : -1 })

@@ -24,7 +24,19 @@ const permissionIcons = { computerAccessibility: MousePointer2, computerScreen: 
 const errorMessage = (error: unknown): string =>
   (error instanceof Error ? error.message : String(error)).replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '')
 
-export function DesktopPermissions({ mode }: { mode: 'light' | 'dark' }): React.ReactNode {
+const COMPUTER_ROWS: DesktopPermissionId[] = ['computerAccessibility', 'computerScreen']
+const MEDIA_ROWS: DesktopPermissionId[] = ['microphone', 'camera', 'screen']
+
+/**
+ * @param only     只画这几项(插件检查卡用:它的前置条件只含其中一两项)。缺省画全部。给了 only 时不显示
+ *                 「以下权限都是可选的」那句 —— 在检查卡里它们正是必需项。
+ * @param onSnapshot 每次拿到新快照(3 秒轮询 / 授权动作之后)回调一次;检查卡借它刷新对勾,不必自己再轮询。
+ */
+export function DesktopPermissions({ mode, only, onSnapshot }: {
+  mode: 'light' | 'dark'
+  only?: DesktopPermissionId[]
+  onSnapshot?: (snapshot: DesktopPermissionsSnapshot) => void
+}): React.ReactNode {
   const { t, locale } = useI18n()
   const headingId = useId()
   const [snapshot, setSnapshot] = useState<DesktopPermissionsSnapshot | null>(null)
@@ -33,6 +45,10 @@ export function DesktopPermissions({ mode }: { mode: 'light' | 'dark' }): React.
   const [readError, setReadError] = useState<string | null>(null)
   const [actionError, setActionError] = useState<{ action: Action; message: string } | null>(null)
   const session = useRef<Session | null>(null)
+  const onSnapshotRef = useRef(onSnapshot)
+  onSnapshotRef.current = onSnapshot
+  useEffect(() => { if (snapshot) onSnapshotRef.current?.(snapshot) }, [snapshot])
+  const shown = (id: DesktopPermissionId): boolean => !only || only.includes(id)
   const api = hasDesktopPermissions() ? window.tangu : undefined
   const canVerify = snapshot?.platform === 'darwin' && snapshot.computerUseAvailable
     && snapshot.helperInstalled && snapshot.helperRunning && !snapshot.helperError
@@ -106,7 +122,8 @@ export function DesktopPermissions({ mode }: { mode: 'light' | 'dark' }): React.
   }
 
   if (!api) return null
-  const showComputer = snapshot?.computerUseAvailable && ['darwin', 'win32'].includes(snapshot.platform)
+  const showComputer = snapshot?.computerUseAvailable && ['darwin', 'win32'].includes(snapshot.platform) && COMPUTER_ROWS.some(shown)
+  const showMedia = MEDIA_ROWS.some(shown)
   const helperError = snapshot?.helperError
   const helperFault = helperError && !['not-installed', 'not-running'].includes(helperError)
   const app = snapshot?.appName || 'Forsion'
@@ -145,7 +162,7 @@ export function DesktopPermissions({ mode }: { mode: 'light' | 'dark' }): React.
   return (
     <div className="desktop-permissions">
       <div className="desktop-permissions-toolbar">
-        <p>{t('desktopPermissions.optional')}</p>
+        {!only && <p>{t('desktopPermissions.optional')}</p>}
         <button type="button" className="btn ghost sm" disabled={refreshing || !!busy} onClick={() => void refresh()}>
           <RefreshCw size={13} className={refreshing ? 'spin' : undefined} aria-hidden="true" />{t('desktopPermissions.refresh')}
         </button>
@@ -170,8 +187,8 @@ export function DesktopPermissions({ mode }: { mode: 'light' | 'dark' }): React.
             : !snapshot.helperInstalled || helperError === 'not-installed' ? <p className="desktop-permissions-note">{t('desktopPermissions.helperMissing')}</p>
               : !snapshot.helperRunning || helperError === 'not-running' ? <p className="desktop-permissions-note">{t('desktopPermissions.helperStopped')}</p> : null)}
           {snapshot.platform === 'darwin' ? <ul className="desktop-permissions-list">
-            {row('computerAccessibility')}
-            {row('computerScreen')}
+            {shown('computerAccessibility') && row('computerAccessibility')}
+            {shown('computerScreen') && row('computerScreen')}
           </ul> : <p className="desktop-permissions-note">{t('desktopPermissions.windowsLimit')}</p>}
           {snapshot.platform === 'darwin' && api.desktopPermissionsVerify && <div className="desktop-permissions-verify">
             <p id={`${headingId}-verify-hint`}>{t(canVerify ? 'desktopPermissions.verifyHint' : 'desktopPermissions.verifySetupFirst')}</p>
@@ -180,14 +197,14 @@ export function DesktopPermissions({ mode }: { mode: 'light' | 'dark' }): React.
             </button>
           </div>}
         </section>}
-        <section className="desktop-permissions-section" aria-labelledby={`${headingId}-media`}>
+        {showMedia && <section className="desktop-permissions-section" aria-labelledby={`${headingId}-media`}>
           <header>
             <h2 id={`${headingId}-media`}><ShieldCheck size={16} aria-hidden="true" />{t('desktopPermissions.mediaTitle', { app })}</h2>
             <p>{t('desktopPermissions.mediaDescription', { app })}</p>
             <p>{t(snapshot.platform === 'darwin' ? 'desktopPermissions.mediaMac' : snapshot.platform === 'win32' ? 'desktopPermissions.mediaWindows' : 'desktopPermissions.mediaOther', { app })}</p>
           </header>
-          <ul className="desktop-permissions-list">{row('microphone')}{row('camera')}{row('screen')}</ul>
-        </section>
+          <ul className="desktop-permissions-list">{MEDIA_ROWS.filter(shown).map(row)}</ul>
+        </section>}
       </>}
     </div>
   )

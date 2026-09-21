@@ -267,7 +267,7 @@ export const getSessionTimeline = (cfg: TanguDesktopConfig, sessionId: string) =
 
 /** 手动压缩上下文(生成并持久化总结检查点;后续 run 起步即精简)。 */
 export const compactSession = (cfg: TanguDesktopConfig, sessionId: string, modelId?: string, instructions?: string) =>
-  request<{ ok: boolean; reason?: string; summarizedCount?: number }>(
+  request<{ ok: boolean; reason?: string; summarizedCount?: number; contextTokens?: number }>(
     cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/compact`,
     { method: 'POST', body: JSON.stringify({ ...(modelId ? { model_id: modelId } : {}), ...(instructions ? { instructions } : {}) }) },
   )
@@ -284,6 +284,13 @@ export const setModelContextWindow = (cfg: TanguDesktopConfig, modelId: string, 
     method: 'PUT',
     body: JSON.stringify({ modelId, contextWindow }),
   })
+
+/** 全局压缩旋钮(引擎 config.json 的 compaction 段)。settings 只含已设字段;writable=false(云端 worker)时设置页不露。 */
+export const getCompactionSettings = (cfg: TanguDesktopConfig) =>
+  request<{ settings: { thresholdPercent?: number }; defaults: { thresholdPercent: number }; writable: boolean }>(cfg, '/agent/compaction')
+/** thresholdPercent:上下文占到窗口的 X% 就自动压缩(10–95;null = 交还缺省)。对下一条消息生效。 */
+export const setCompactionSettings = (cfg: TanguDesktopConfig, patch: { thresholdPercent: number | null }) =>
+  request<{ settings: { thresholdPercent?: number } }>(cfg, '/agent/compaction', { method: 'PUT', body: JSON.stringify(patch) })
 
 /** host 端外部 agent 引擎清单(含 available 检测 + 每引擎默认模型;云端/非 host → 抛或空 → 调用方回退 [])。 */
 export const listEngines = (cfg: TanguDesktopConfig) =>

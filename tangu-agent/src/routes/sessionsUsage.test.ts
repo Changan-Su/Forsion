@@ -4,7 +4,7 @@
  * 现在 run 中途、或在 delegate/脑暴上中断的 run,最后一条会是子代理自己的小上下文。
  */
 import { describe, it, expect } from 'vitest';
-import { findMainLoopUsage, pickMainLoopUsage } from './sessions.js';
+import { findMainLoopUsage, pickMainLoopUsage, sessionContextTokens } from './sessions.js';
 
 describe('pickMainLoopUsage', () => {
   it('跳过带 phase 的事件,取最近一条主循环用量(SQLite:payload 是 JSON 字符串)', () => {
@@ -84,5 +84,34 @@ describe('findMainLoopUsage 向后翻页', () => {
     const fetch = async () => { n++; return Array.from({ length: 20 }, () => ({ payload: { phase: 'delegate', prompt: 1 } })); };
     expect(await findMainLoopUsage(fetch)).toEqual({});
     expect(n).toBe(1);
+  });
+});
+
+/**
+ * 手动 /compact 不产生 usage(09-20「压缩完进度圈不动,发新消息才更新」):检查点整行覆盖到最后一行 → 报 摘要 + 固定头,
+ * 不再报压缩前那条 usage。惰性检查点 / run 内压缩之后还有要回放的行 → 仍报实测,绝不拿粗估顶替。
+ */
+describe('sessionContextTokens', () => {
+  const usage = { prompt: 387_668, systemBytes: 20_000, toolsBytes: 28_000 };
+  const cp = { id: 'c', summary: 'x'.repeat(4000), throughTimestamp: 1000, throughMessageId: 'm9' };
+
+  it('没有检查点 / 没有行 → 最近主循环 usage 的 prompt', () => {
+    expect(sessionContextTokens(usage, null, { id: 'm9', timestamp: 1000 })).toBe(387_668);
+    expect(sessionContextTokens(usage, cp, undefined)).toBe(387_668);
+    expect(sessionContextTokens({}, null, undefined)).toBe(0);
+  });
+
+  it('检查点整行覆盖到最后一行(手动 /compact 之后)→ 摘要 + 固定头,远小于压缩前', () => {
+    const n = sessionContextTokens(usage, cp, { id: 'm9', timestamp: 1000 });
+    expect(n).toBeGreaterThan(12_000); // 固定头 (20000+28000)/4
+    expect(n).toBeLessThan(20_000);
+  });
+
+  it('检查点之后还有行(惰性检查点只盖窗口外 / 压缩后又聊过)→ 实测值', () => {
+    expect(sessionContextTokens(usage, cp, { id: 'm10', timestamp: 2000 })).toBe(387_668);
+  });
+
+  it('行内切点(run 内压缩只盖到最后一行的半截)→ 实测值', () => {
+    expect(sessionContextTokens(usage, { ...cp, throughToolCallId: 't3' }, { id: 'm9', timestamp: 1000 })).toBe(387_668);
   });
 });

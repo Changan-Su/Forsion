@@ -6,8 +6,9 @@
  */
 import { addCommand, UI_ZOOM_EVENT } from '@lcl/engine'
 import { useApp } from './stores/appStore'
+import { broadcastPrefs } from './uiPrefsBus'
+import { UI_ZOOM_KEY as KEY } from './types'
 
-const KEY = 'forsion_ui_zoom'
 // 2.10.0 默认缩放回归:升级/重装可能保留旧 WebStorage,按发布批次只清一次历史值。
 const DEFAULT_MIGRATION_KEY = 'forsion_ui_zoom_default_2_10_0'
 const STEP = 0.1
@@ -53,6 +54,7 @@ export function setUiZoom(v: number): void {
     /* ignore */
   }
   apply(clamped)
+  broadcastPrefs() // 缩放是全端偏好:设置浮窗 / ⌘K / ⌘+- / agent 命令改的都要传给其余窗口
 }
 
 export function bumpUiZoom(delta: number): void {
@@ -66,6 +68,12 @@ export function resetUiZoom(): void {
     /* ignore */
   }
   apply(endpointDefault)
+  broadcastPrefs()
+}
+
+/** 跨窗重放用:按**本窗**当前存值(无值=本端默认)重新应用,不写盘、不广播。 */
+export function applyStoredUiZoom(): void {
+  apply(getUiZoom())
 }
 
 /** 首次进入本发布批次时回到端默认；迁移后用户再调的比例继续正常持久化。 */

@@ -4,6 +4,7 @@ import { startMiniCursorFollow, readComputerUseForeground, cursorPanelTarget } f
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
 import { normalizeFloatingPanelOpenOptions, type FloatingPanelOpenOptions } from '../shared/floatingPanel'
+import { normalizeUiSync } from '../shared/uiSync'
 /**
  * Tangu 桌面 GUI — Electron 主进程。
  * 负责:建窗 + 配置持久化(IPC)+ 托管内置 tangu-server(managed 模式,backendManager)。
@@ -1922,7 +1923,12 @@ app.whenReady().then(async () => {
     // before 与写入同一队位读出(见 saveConfig);下面的内存镜像紧跟本次落盘赋值,先于下一个排队的写 → 顺序与盘面一致。
     const before = await saveConfig(patch, accountCreds)
     if (patch.activityLogEnabled !== undefined) setActivityLogEnabled(patch.activityLogEnabled !== false)
-    if (patch.activeWindowEnabled !== undefined) activeWindowOn = patch.activeWindowEnabled === true
+    if (patch.activeWindowEnabled !== undefined) {
+      activeWindowOn = patch.activeWindowEnabled === true
+      // 它的 ⌘K 入口注册在**主窗**的命令表里,而开关多半是从设置浮窗拨的(命令表每个渲染进程各一份)。
+      // 落盘之后才推,主窗回读 config 时拿到的才是新值。
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:mainAction', 'dev-commands')
+    }
     if (patch.keepAwakeWhileRunning !== undefined) {
       keepAwakeOn = patch.keepAwakeWhileRunning === true
       keepAwake.refresh() // 运行中切开关:关要立刻放、开要立刻拦,不等下一次上报
@@ -3423,11 +3429,23 @@ app.whenReady().then(async () => {
     if (pendingMainPanelTarget) { e.sender.send('window:mainPanelTarget', pendingMainPanelTarget); pendingMainPanelTarget = null }
   })
   ipcMain.on('window:mainAction', (e, action: unknown) => {
-    if (!isTrustedSender(e) || action !== 'onboarding') return
-    showMainWindow()
+    if (!isTrustedSender(e) || (action !== 'onboarding' && action !== 'dev-commands')) return
+    // dev-commands 只是让主窗重算 ⌘K 入口:用户还在设置浮窗里,别把主窗抢到前面来。
+    if (action === 'onboarding') showMainWindow()
     const deliver = (): void => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:mainAction', action) }
     if (mainWindow?.webContents.isLoadingMainFrame()) mainWindow.webContents.once('did-finish-load', deliver)
     else deliver()
+  })
+  // 界面跨窗同步:设置是独立浮窗(各窗一份 store 与 DOM),在那儿改主题/字体/缩放/光标/语言只改得动
+  // 它自己。发方带值,本进程**重建**成已知字段后转给其余窗口(这条缝插件也够得着,原样转发等于让它
+  // 把任意对象放大到所有窗口);不回发发方 —— 它已经是最新的,回放只会跟自己在飞的操作抢。
+  ipcMain.on('ui:sync', (e, raw: unknown) => {
+    if (!isTrustedSender(e)) return
+    const state = normalizeUiSync(raw)
+    if (!state) return
+    for (const w of BrowserWindow.getAllWindows()) {
+      if (w.webContents !== e.sender && !w.webContents.isDestroyed()) w.webContents.send('ui:sync', state)
+    }
   })
   ipcMain.on('window:closeSelf', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
   // 系统浏览器兜底(内置浏览器关掉 / mini 窗 / 用户点「用系统浏览器打开」);只放 http(s),

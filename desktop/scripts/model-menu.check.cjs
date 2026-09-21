@@ -8,7 +8,8 @@
  *    否则子面板整块被裁 → 表现为「点了行没反应」。用 elementFromPoint 打命中,裁切会漏出来。
  *  D 主面板固定为「高级 → 模型 → Effort」且 Effort 是可拖动 range；Max 有独立渐变 / 星点层。
  *  E 高级内容从高级行上方向上展开，卡片有高度过渡且高级 / 模型 / Effort 三行不位移。
- *  F 模型 / 辅助 / 生图 / 识图共用 View 感知的右 → 左 → 上方落位；极窄 View 下仍不得越界。
+ *  F 模型 / 辅助 / 生图 / 识图共用 View 感知的右 → 左 → 上方落位；侧放时贴住触发行，
+ *    极窄 View 下仍不得越界。
  *  G 一级/二级选择面板同为 224px,菜单行密度与工作区 item 的约 28px 节奏一致。
  *
  * 改 .model-pill-btn / .composer-menu--model / .cm-sub 任何一条样式后必跑。
@@ -66,12 +67,12 @@ button { font: inherit; background: none; border: 0; cursor: pointer; }
     <div class="composer-menu composer-menu--model">
       <div class="cm-advanced-reveal" aria-hidden="true"><div class="cm-advanced-reveal-inner"><div class="cm-advanced-list">
         <div class="cm-row cm-row--static"><span class="cm-row-k">推理强度</span><span class="cm-row-v is-max">Max</span></div>
-        <button class="cm-row"><span class="cm-row-k">默认辅助模型</span><span class="cm-row-v">GLM-4.7</span>${ic(13)}</button>
-        <button class="cm-row"><span class="cm-row-k">生图模型</span><span class="cm-row-v">Imagen 4</span>${ic(13)}</button>
-        <button class="cm-row"><span class="cm-row-k">识图辅助模型</span><span class="cm-row-v">Gemini 2.5</span>${ic(13)}</button>
+        <button class="cm-row" data-pane-trigger="backgroundModelId"><span class="cm-row-k">默认辅助模型</span><span class="cm-row-v">GLM-4.7</span>${ic(13)}</button>
+        <button class="cm-row" data-pane-trigger="imageModelId"><span class="cm-row-k">生图模型</span><span class="cm-row-v">Imagen 4</span>${ic(13)}</button>
+        <button class="cm-row" data-pane-trigger="visionModelId"><span class="cm-row-k">识图辅助模型</span><span class="cm-row-v">Gemini 2.5</span>${ic(13)}</button>
       </div></div></div>
       <button class="cm-row cm-advanced-toggle"><span class="cm-row-k">高级</span><span class="cm-row-v"></span>${ic(13)}</button>
-      <button class="cm-row cm-model-row is-open"><span class="cm-row-k">模型</span><span class="cm-row-v">GLM-4.7</span>${ic(13)}</button>
+      <button class="cm-row cm-model-row is-open" data-pane-trigger="model"><span class="cm-row-k">模型</span><span class="cm-row-v">GLM-4.7</span>${ic(13)}</button>
       <div class="cm-effort is-max" data-effort="max">
         <div class="cm-effort-head"><span>Effort</span><span class="cm-effort-value">Max</span></div>
         <div class="cm-effort-ends"><span>更快</span><span>更智能</span></div>
@@ -140,6 +141,15 @@ const box = (sel) => {
   })
   // 菜单/子面板的入场 pop 动画会 scale,跑着的时候量 rect 全是缩过的:先一律推到终态。
   await p.evaluate(() => document.querySelectorAll('.model-pill-btn,.composer-menu--model,.cm-sub').forEach((el) => el.getAnimations().forEach((a) => a.finish())))
+  // ModelPill 的 layout effect:优先贴触发行，放不下才向上夹到菜单底边。
+  await p.evaluate(() => {
+    const menu = document.querySelector('.composer-menu--model')
+    const sub = document.querySelector('.cm-sub')
+    const trigger = menu.querySelector('[data-pane-trigger="model"]')
+    const mr = menu.getBoundingClientRect(), tr = trigger.getBoundingClientRect()
+    const top = Math.min(tr.top, mr.bottom - sub.offsetHeight)
+    sub.style.setProperty('--cm-sub-top', `${top - mr.top}px`)
+  })
 
   // ── A:打开后药丸与菜单等宽 + 右缘对齐 ──
   const btn = await p.evaluate(box, '.model-pill-btn')
@@ -239,6 +249,33 @@ const box = (sel) => {
   check('高级卡片展开有连续高度动画', heightMids >= 3, `${advancedMotion.before.height.toFixed(1)} → ${advancedMotion.after.height.toFixed(1)},中间帧 ${heightMids}`)
   check('高级内容从高级行上方展开', advancedMotion.list.bottom <= advancedMotion.toggle.top + 1, `content.bottom=${advancedMotion.list.bottom.toFixed(1)} advanced.top=${advancedMotion.toggle.top.toFixed(1)}`)
   check('高级 / 模型 / Effort 三行展开时保持原位', ['advancedTop', 'modelTop', 'effortTop'].every((k) => Math.abs(advancedMotion.before[k] - advancedMotion.after[k]) < 1.5), JSON.stringify({ before: advancedMotion.before, after: advancedMotion.after }))
+
+  // 短列表从靠上的高级行打开时，应直接贴在该行旁边；旧版 bottom:0 会把它甩到整张菜单底部。
+  const rowAnchored = await p.evaluate(() => {
+    const menu = document.querySelector('.composer-menu--model')
+    const sub = document.querySelector('.cm-sub')
+    const model = menu.querySelector('[data-pane-trigger="model"]')
+    const trigger = menu.querySelector('[data-pane-trigger="imageModelId"]')
+    model.classList.remove('is-open')
+    trigger.classList.add('is-open')
+    sub.dataset.pane = 'imageModelId'
+    sub.innerHTML = '<button class="menu-item"><span class="grow">跟随云端默认</span></button><div class="menu-section">Forsion 云端</div><button class="menu-item"><span class="grow">Imagen 4</span></button>'
+    const mr = menu.getBoundingClientRect(), tr = trigger.getBoundingClientRect()
+    const top = Math.min(tr.top, mr.bottom - sub.offsetHeight)
+    sub.style.setProperty('--cm-sub-top', `${top - mr.top}px`)
+    const sr = sub.getBoundingClientRect()
+    return { rowTop: tr.top, subTop: sr.top, subBottom: sr.bottom, menuBottom: mr.bottom }
+  })
+  check('高级里的短模型面板贴着触发行，不再固定沉到菜单底部',
+    Math.abs(rowAnchored.subTop - rowAnchored.rowTop) <= 2 && rowAnchored.subBottom < rowAnchored.menuBottom - 8,
+    JSON.stringify(rowAnchored))
+  if (process.argv.includes('--shot') || process.env.MODEL_MENU_SHOT) {
+    const first = process.env.MODEL_MENU_SHOT || path.join(os.tmpdir(), 'forsion-model-menu.png')
+    const ext = path.extname(first)
+    const anchoredShot = first.slice(0, -ext.length) + '-row-anchored' + ext
+    await p.screenshot({ path: anchoredShot })
+    console.log(`screenshot → ${anchoredShot}`)
+  }
 
   // 档位变化时自绘滑块与填充都应在中途出现可见中间态，而不是从一档瞬跳到下一档。
   const effortMotion = await p.evaluate(() => new Promise((resolve) => {

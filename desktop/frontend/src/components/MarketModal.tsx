@@ -17,7 +17,7 @@ import { loadUserSpaces } from '../userSpaces'
 import { useTheme } from '../stores/themeStore'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { installAmadeusPlugins } from '../amadeusPlugins'
-import { usePluginOnboarding, needsOnboarding } from '../stores/pluginOnboardingStore'
+import { isGate, promptIfPending } from '../stores/pluginOnboardingStore'
 import { track } from '../achievements/store'
 import { act } from '../activity/log'
 import { openBrowser } from '../builtins'
@@ -189,8 +189,8 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
           const freshAll = state.plugins.filter((p) => !before.has(p.id))
           if (state.plugins.some((p) => p.bundle?.enginePlugins?.length)) await useApp.getState().onPluginInstalled()
           await loadUserSpaces()
-          const fresh = freshAll.find((p) => state.activeIds.includes(p.id) && needsOnboarding(p))
-          if (fresh) usePluginOnboarding.getState().open(fresh.id)
+          // 装完 = 注意力在场:逐个实测新插件(连 check),第一个确有未满足的才弹检查卡。
+          for (const p of freshAll) if (state.activeIds.includes(p.id) && isGate(p) && await promptIfPending(p.id)) break
         }
         toast(t('market.amadeusPluginInstalled', { name: c.name }))
       } else {

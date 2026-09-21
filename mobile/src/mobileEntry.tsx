@@ -21,6 +21,7 @@ import { applyUiFonts } from '@/uiFont'
 import { recordError } from '@/diag'
 import { installSpaceShortcuts } from './spaceShortcuts'
 import { installUnitsEntry } from './UnitsSheet'
+import { installLiveIsland } from './liveIsland'
 
 window.addEventListener('error', (e) => { console.error('[tangu-mobile] window error:', e.error || e.message) })
 window.addEventListener('unhandledrejection', (e) => { console.error('[tangu-mobile] unhandledrejection:', e.reason) })
@@ -59,6 +60,8 @@ try {
   // 互联设备入口(⋯ 菜单,Forsion Unit):数据桥在才上架 —— App(mobileShim)有 unitsList,
   // 设备页(unitShim)没有(设备页里不套设备页),自然隐藏。
   installUnitsEntry()
+  // 灵动岛:agent 在跑时把进度 / 待审批贴到各家的岛上(Android 16 Live Updates),点岛回到那个会话。
+  installLiveIsland()
 } catch (err) {
   console.error('[tangu-mobile] init failed, continue to mount:', err)
   recordError('init', err) // 同 desktop main.tsx:被 catch 吞掉的启动错误不派发 window 'error'

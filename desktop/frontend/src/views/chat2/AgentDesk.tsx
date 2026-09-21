@@ -4,16 +4,18 @@
  *  通用预览。状态在 appStore.deskBySession(会话级快照落 localStorage)。宽度=size 档位或用户
  *  拖出的 fraction —— 一律比例制,对 body 端级 zoom 免疫(px 会被 zoom 缩放,% 不会)。 */
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { Loader2, Maximize2, Minimize2, Sparkles } from 'lucide-react'
+import { Eraser, Loader2, Maximize2, Minimize2, Sparkles } from 'lucide-react'
 import { getView, subscribeViews } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { useApp, type DeskItem } from '../../stores/appStore'
-import { extractLiveBody } from '../../stores/deskPlan'
+import { DESK_DRAFT_KEY, extractLiveBody } from '../../stores/deskPlan'
 import { WsFileView } from '../WsFileView'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { findFileType, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { ensureAmadeusReady } from '../../amadeusPlugins'
+import { useDeskCompanion } from '@amadeus/plugins/deskCompanion'
+import { DeskCompanionHost } from './DeskCompanionHost'
 import { registerMessages, useI18n } from '../../i18n'
 
 registerMessages({
@@ -22,7 +24,12 @@ registerMessages({
   'desk.expand': { zh: '展开', en: 'Expand' },
   'desk.collapse': { zh: '收起为卡片', en: 'Collapse to card' },
   'desk.empty': { zh: 'Agent 会在这里展示成果', en: 'Agent will present work here' },
+  'desk.clear': { zh: '清空 Desk', en: 'Clear Desk' },
 })
+
+/** 「清空 Desk」(idle 伴随面的回场键):条目清掉、侧板收回、说明一并作废 —— 卡片空态位交还伴随面。 */
+const clearDesk = (sessionId: string): void =>
+  useApp.getState().patchDesk(sessionId, { items: [], mode: undefined, note: undefined })
 
 /** 所有格子共用的 shim leaf(不进 Dockview,不碰布局持久化;setTitle/close 演出区无意义,noop)。 */
 const shimLeaf = (id: string, type: string, params: Record<string, unknown>): ViewProps['leaf'] => ({
@@ -204,11 +211,15 @@ export function AgentDesk({ sessionId }: { sessionId: string }) {
   const claimKey = useClaimKey(desk?.items?.slice(0, 2) ?? [])
   const rootRef = useRef<HTMLDivElement>(null)
   const onGrip = useDeskGrip(sessionId, rootRef)
+  const comp = useDeskCompanion()
+  // always 伴随面 = 完全替换:侧板只演伴随面(没有任何条目也要能展开)
+  const always = comp?.mode === 'always'
 
-  if (!desk || !desk.items.length) return null
-  const open = desk.mode === 'open'
-  const frac = desk.fraction ?? (desk.size === 'wide' ? 0.62 : 0.46)
-  const items = desk.items.slice(0, 2)
+  if (!desk?.items.length && !always) return null
+  const open = desk?.mode === 'open'
+  const frac = desk?.fraction ?? (desk?.size === 'wide' ? 0.62 : 0.46)
+  const items = desk?.items.slice(0, 2) ?? []
+  const clearable = comp?.mode === 'idle' && items.length > 0
 
   return (
     // 壳常驻(有内容即挂):open 才有宽度与内容,flex-basis 过渡负责丝滑进出(见 chat2.css)
@@ -221,7 +232,12 @@ export function AgentDesk({ sessionId }: { sessionId: string }) {
             <div className="agent-desk-head">
               <Sparkles size={13} className="agent-desk-spark" />
               <span className="agent-desk-title">{t('desk.title')}</span>
-              {desk.note ? <span className="agent-desk-note" title={desk.note}>{desk.note}</span> : <span className="agent-desk-note" />}
+              {!always && desk?.note ? <span className="agent-desk-note" title={desk.note}>{desk.note}</span> : <span className="agent-desk-note" />}
+              {clearable && (
+                <button className="icon-btn" title={t('desk.clear')} onClick={() => clearDesk(sessionId)}>
+                  <Eraser size={14} />
+                </button>
+              )}
               <button
                 className="icon-btn"
                 title={t('desk.collapse')}
@@ -231,7 +247,11 @@ export function AgentDesk({ sessionId }: { sessionId: string }) {
               </button>
             </div>
             <div className="agent-desk-body">
-              {items.map((it) => (
+              {always && comp ? (
+                <div className="agent-desk-pane agent-desk-companion">
+                  <DeskCompanionHost key={comp.key} entry={comp} surface="desk-panel" sessionId={sessionId} />
+                </div>
+              ) : items.map((it) => (
                 <div className="agent-desk-pane" key={it.key}>
                   {it.live ? <DeskLivePane sessionId={sessionId} item={it} />
                     : it.view ? <DeskShimView type={it.view.type} params={it.view.params ?? {}} k={`desk-view:${it.key}`} />
@@ -246,31 +266,59 @@ export function AgentDesk({ sessionId }: { sessionId: string }) {
   )
 }
 
-/** 卡片是否退场(.gone = 隐身但常驻,借 display allow-discrete 做进出动画):
- *  ① 侧板在演 —— 但 open 时内容已散(直播失败清场)就让卡片兜底,别双双消失;
- *  ② 还没开聊的空会话 —— 车道一占位,`.newchat-pickers`(Agent 选择器)拿不到让位
- *     (让位只挂 .t2-stream/.composer-anchor)就会歪出中线、还被空卡压住。
- *  「卡片不可关」的用户裁决只管**聊起来之后**:那时空态卡照常在场当预览位。 */
-export const deskCardGone = (mode: string | undefined, itemCount: number, hasMessages: boolean): boolean =>
-  (mode === 'open' && itemCount > 0) || (!hasMessages && itemCount === 0)
+/** 卡片是否退场(.gone = 隐身但常驻,借 display allow-discrete 做进出动画):只有一条 ——
+ *  侧板在演(open)且侧板真有东西可演;open 时内容已散(直播失败清场)就让卡片兜底,别双双消失。
+ *  开聊前(新对话草稿 / 空会话 / 历史还在加载)卡片**照常在场**:07-27 那条「空会话不上场」的理由
+ *  (`.newchat-pickers` 拿不到让位、歪出中线)已随 08-14 把 pickers 收进 `.composer-anchor` 失效,
+ *  让位规则一并覆盖到它 —— 由 desk-rail check 的草稿态用例钉住。 */
+export const deskCardGone = (mode: string | undefined, panelHasContent: boolean): boolean =>
+  mode === 'open' && panelHasContent
+
+/** 卡片的四个决策(纯函数,单测钉住 always / idle 两种伴随面与无伴随面三套口径):
+ *  - showCompanion:always 恒显示;idle 只在 Desk **零条目**时显示(草稿 / 空会话 / 清空后)。
+ *  - panelHasContent:always 下侧板恒有东西可演(伴随面),但草稿没有侧板;否则看条目。
+ *  - expandable:草稿永不展开(侧板要真会话)。
+ *  - clearable:「清空 Desk」只给 idle 伴随面用 —— 条目让它退了场,清掉才能请回来。 */
+export function deskCardPlan(o: { mode: string | undefined; itemCount: number; companion: 'always' | 'idle' | null; draft: boolean }): {
+  gone: boolean; showCompanion: boolean; expandable: boolean; clearable: boolean
+} {
+  const always = o.companion === 'always'
+  const gone = deskCardGone(o.mode, always ? !o.draft : o.itemCount > 0)
+  return {
+    gone,
+    showCompanion: always || (o.companion === 'idle' && o.itemCount === 0),
+    expandable: !gone && !o.draft && (always || o.itemCount > 0),
+    clearable: o.companion === 'idle' && o.itemCount > 0,
+  }
+}
 
 /** 卡片态(默认态):Pin Summary 下方的常驻预览小卡,上下各占右侧车道一半(严格 50/50)。
  *  正文 pointer-events:none —— 卡片是"预览",点整卡=放大成侧板;交互(编辑/按钮)只在 open 态。
- *  卡片不可关闭(用户裁决):空态也常驻当预览位,收/放只在卡片↔侧板之间切。 */
+ *  卡片不可关闭(用户裁决):空态也常驻当预览位,收/放只在卡片↔侧板之间切。
+ *  新对话草稿用 DESK_DRAFT_KEY 当会话键;ChatView 不给本组件挂 key,首条消息发出(草稿 → 真 id)
+ *  是同一个实例,伴随面只按自己的 key 挂载 → 不重挂。 */
 export function DeskCard({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const desk = useApp((s) => s.deskBySession[sessionId])
-  const hasMessages = useApp((s) => !!s.messagesBySession[sessionId]?.length)
+  const comp = useDeskCompanion()
   const items = desk?.items?.slice(0, 2) ?? []
   const claimKey = useClaimKey(items)
-  const gone = deskCardGone(desk?.mode, items.length, hasMessages)
-  const expand = !gone && items.length ? () => useApp.getState().patchDesk(sessionId, { mode: 'open' }) : undefined
+  const draft = sessionId === DESK_DRAFT_KEY
+  const plan = deskCardPlan({ mode: desk?.mode, itemCount: items.length, companion: comp?.mode ?? null, draft })
+  const gone = plan.gone
+  const expand = plan.expandable ? () => useApp.getState().patchDesk(sessionId, { mode: 'open' }) : undefined
+  const companion = plan.showCompanion ? comp : null
 
   return (
     <div data-desk-session={sessionId} className={`agent-desk-card${expand ? ' act' : ''}${gone ? ' gone' : ''}`} onClick={expand} title={expand ? t('desk.expand') : undefined}>
       <div className="agent-desk-card-head">
         <Sparkles size={12} className="agent-desk-spark" />
-        <span className="agent-desk-card-title">{items[0]?.name || t('desk.title')}</span>
+        <span className="agent-desk-card-title">{companion ? t('desk.title') : items[0]?.name || t('desk.title')}</span>
+        {plan.clearable && (
+          <button className="icon-btn" title={t('desk.clear')} onClick={(e) => { e.stopPropagation(); clearDesk(sessionId) }}>
+            <Eraser size={13} />
+          </button>
+        )}
         {/* 键盘可达的放大入口(整卡 onClick 只服务鼠标) */}
         {expand && (
           <button className="icon-btn" title={t('desk.expand')} onClick={(e) => { e.stopPropagation(); expand() }}>
@@ -278,8 +326,12 @@ export function DeskCard({ sessionId }: { sessionId: string }) {
           </button>
         )}
       </div>
-      <div className="agent-desk-card-body">
-        {gone ? null : items.length ? (
+      <div className={`agent-desk-card-body${companion ? ' companion' : ''}`}>
+        {gone ? null : companion ? (
+          <div className="agent-desk-pane agent-desk-companion">
+            <DeskCompanionHost key={companion.key} entry={companion} surface="desk-card" sessionId={draft ? null : sessionId} />
+          </div>
+        ) : items.length ? (
           items.map((it) => (
             <div className="agent-desk-pane" key={it.key}>
               {it.live ? <DeskLivePane sessionId={sessionId} item={it} />

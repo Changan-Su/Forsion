@@ -7,10 +7,11 @@
  * about.* / onboarding.* / approval.* / tool.* / inquiry.* / thinking.* / toc.* / common.*)。
  */
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import { broadcastPrefs } from './uiPrefsBus'
+import { LOCALE_KEY as LS_KEY } from './types'
 
 export type Locale = 'zh' | 'en'
 
-const LS_KEY = 'tangu_locale'
 /** IP 区域缓存(ISO 国家码)。探到就存,之后开机不再外呼。 */
 const LS_REGION = 'forsion_region'
 
@@ -976,12 +977,23 @@ const zh: Dict = {
   'plugin.onboarding.installing': '安装中…',
   'plugin.onboarding.notFound': '未在市场上架',
   'plugin.onboarding.later': '稍后',
-  'plugin.onboarding.done': '完成设置',
-  'plugin.onboarding.laterHint': '跳过后随时可回 设置 → Forsion 插件,点该插件的「运行引导」继续;完成前插件卡片保留「待引导」标记。',
+  'plugin.onboarding.done': '完成',
+  'plugin.onboarding.laterHint': '跳过后随时可回 设置 → Forsion 插件,点该插件的「运行引导」继续;前置条件全部满足后「待引导」标记会自己消失。',
+  'plugin.onboarding.requiresTitle': '开始前需要',
+  'plugin.onboarding.req.ok': '已就绪',
+  'plugin.onboarding.req.unmet': '未完成',
+  'plugin.onboarding.req.unknown': '暂时无法检查',
+  'plugin.onboarding.req.timeout': '检查超时,稍后再试一次。',
+  'plugin.onboarding.req.inactive': '启用插件后才能检查这一项。',
+  'plugin.onboarding.recheck': '重新检查',
+  'plugin.onboarding.checking': '检查中…',
+  'plugin.onboarding.allReady': '全部就绪,可以开始用了。',
+  'plugin.onboarding.someUnknown': '没有发现未完成的项;另有 {n} 项此刻无法检查。',
+  'plugin.onboarding.guideTitle': '使用说明',
   'plugin.onboarding.badge': '待引导',
   'plugin.onboarding.run': '运行引导',
   'plugin.onboarding.nudgeTitle': '「{name}」插件还差几步就绪',
-  'plugin.onboarding.nudgeBody': '打开 设置 → Forsion 插件 → {name},点「运行引导」完成初始化、必要设置与配套安装。',
+  'plugin.onboarding.nudgeBody': '「{name}」还有前置条件没满足。打开 设置 → Forsion 插件 → {name},点「运行引导」查看缺哪一项。',
   'settings.plugins.npmInstallTitle': '从 npm 安装引擎插件',
   'settings.plugins.npmInstallHint': '输入包名(如 npm:@forsion/tangu-computer-use)。插件以你的完整系统权限运行,只安装信任的来源。',
   'settings.plugins.npmInstallConfirm': '即将从 npm 安装「{spec}」。插件以你的完整系统权限运行,装前请确认来源可信。继续?',
@@ -1033,6 +1045,8 @@ const zh: Dict = {
   'settings.developer.showSystemPromptHint': '开启后,每条 AI 回复前会显示本条消息发送给模型的完整 system prompt(可展开检查内容与结构);仅本机调试,关闭开发者模式时自动一并关闭。',
   'settings.developer.activeWindow': '前台窗口采样(接缝)',
   'settings.developer.activeWindowHint': '开启后,声明了 activeWindow 能力的插件可以读到「现在焦点在哪个应用」——用来替掉 ActivityWatch 这类外部依赖。数据只留本机。命令面板(⌘K)会多一条「前台窗口采样」调试面板。默认关闭,关闭开发者模式时自动一并关闭。',
+  'settings.developer.liveVoice': '实时语音对话(未完成)',
+  'settings.developer.liveVoiceHint': '开启后聊天输入框多一枚「实时对话」按钮:一直听,说完停顿一下自动发送。功能只做到自动发送这一步——Agent 的回复还不会朗读、也不能说话打断,所以默认藏起来。仅本机调试,关闭开发者模式时自动一并关闭。',
   'settings.developer.mobileUiPreview': '移动端 UI 预览命令',
   'settings.developer.mobileUiPreviewHint': '开启后命令面板(⌘K)多一条「切换到移动端 UI」,运行时把桌面壳换成单列移动壳预览(会刷新页面);web 端同样可用。仅本机调试,关闭开发者模式时自动一并关闭。',
   'command.switchToMobileUi': '切换到移动端 UI',
@@ -1286,7 +1300,8 @@ const zh: Dict = {
   'input.runCost': '本 run 成本 {used}/{limit} 点',
   'cost.nearCap': '⚠ 本 run 成本已达 {used} 点（上限 {limit}，TANGU_MAX_RUN_COST 可调），越过上限将自动停止',
   'ctx.compacted.auto': '上下文已自动压缩（节省约 {saved} 字符）',
-  'ctx.compacted.forced': '上下文接近满载，已生成摘要压缩',
+  'ctx.compacted.forced': '上下文到达自动压缩阈值，已生成摘要压缩',
+  'ctx.compactAt': '到 {n} tokens（{pct}%）时自动压缩',
   'ctx.compacted.overflow': '上下文超出模型上限，已生成摘要压缩并重试本轮',
   'ctx.windowSource.override': '窗口值：手动覆盖表',
   'ctx.windowSource.model': '窗口值：模型自报',
@@ -2716,11 +2731,22 @@ const en: Dict = {
   'plugin.onboarding.notFound': 'Not in market',
   'plugin.onboarding.later': 'Later',
   'plugin.onboarding.done': 'Done',
-  'plugin.onboarding.laterHint': 'You can resume anytime from Settings → Forsion plugins → this plugin → "Run setup"; the card keeps a "Setup pending" badge until finished.',
+  'plugin.onboarding.laterHint': 'You can come back anytime from Settings → Forsion plugins → this plugin → "Run setup". The "Setup pending" badge clears on its own once every requirement is met.',
+  'plugin.onboarding.requiresTitle': 'Before you start',
+  'plugin.onboarding.req.ok': 'Ready',
+  'plugin.onboarding.req.unmet': 'Not done yet',
+  'plugin.onboarding.req.unknown': "Can't check right now",
+  'plugin.onboarding.req.timeout': 'The check timed out. Try again in a moment.',
+  'plugin.onboarding.req.inactive': 'Enable the plugin to check this.',
+  'plugin.onboarding.recheck': 'Check again',
+  'plugin.onboarding.checking': 'Checking…',
+  'plugin.onboarding.allReady': "All set — you're ready to go.",
+  'plugin.onboarding.someUnknown': "Nothing is missing; {n} item(s) can't be checked right now.",
+  'plugin.onboarding.guideTitle': 'How to use',
   'plugin.onboarding.badge': 'Setup pending',
   'plugin.onboarding.run': 'Run setup',
   'plugin.onboarding.nudgeTitle': 'Plugin "{name}" needs a quick setup',
-  'plugin.onboarding.nudgeBody': 'Open Settings → Forsion plugins → {name} and click "Run setup" to finish initialization, required settings and companion installs.',
+  'plugin.onboarding.nudgeBody': '"{name}" still has unmet requirements. Open Settings → Forsion plugins → {name} and click "Run setup" to see what\'s missing.',
   'settings.plugins.npmInstallTitle': 'Install engine plugin from npm',
   'settings.plugins.npmInstallHint': 'Enter a package spec (e.g. npm:@forsion/tangu-computer-use). Plugins run with your full system permissions — only install sources you trust.',
   'settings.plugins.npmInstallConfirm': 'Install "{spec}" from npm? Plugins run with your full system permissions; confirm the source is trustworthy before continuing.',
@@ -2772,6 +2798,8 @@ const en: Dict = {
   'settings.developer.showSystemPromptHint': 'When on, each AI reply is preceded by the full system prompt sent to the model for that message (expand to inspect its content and structure). Local debugging only; cleared automatically when you disable developer mode.',
   'settings.developer.activeWindow': 'Active window sampling (seam)',
   'settings.developer.activeWindowHint': 'Lets plugins that declare the activeWindow capability read which app you are focused on — so they can drop external dependencies like ActivityWatch. Data never leaves this machine. Adds an "Active window sampling" debug panel to the command palette (⌘K). Off by default; turned off automatically when you leave developer mode.',
+  'settings.developer.liveVoice': 'Live voice conversation (unfinished)',
+  'settings.developer.liveVoiceHint': 'Adds a "Live conversation" button to the chat composer: it keeps listening and sends automatically once you pause. Only that half is built — replies are not read aloud yet and you cannot interrupt by speaking — so it stays hidden by default. Local debugging only; cleared when you disable developer mode.',
   'settings.developer.mobileUiPreview': 'Mobile UI preview command',
   'settings.developer.mobileUiPreviewHint': 'Adds a "Switch to mobile UI" entry to the command palette (⌘K) that swaps the desktop shell for the single-column mobile shell at runtime (reloads the page). Works on web too. Local debugging only; cleared when you disable developer mode.',
   'command.switchToMobileUi': 'Switch to mobile UI',
@@ -3022,7 +3050,8 @@ const en: Dict = {
   'input.runCost': 'Run cost {used}/{limit} pts',
   'cost.nearCap': '⚠ Run cost reached {used} pts (limit {limit}, tune TANGU_MAX_RUN_COST); the run stops once the cap is exceeded',
   'ctx.compacted.auto': 'Context auto-compacted (~{saved} chars saved)',
-  'ctx.compacted.forced': 'Context near limit; summarized and compacted',
+  'ctx.compacted.forced': 'Context reached the auto-compact threshold; summarized and compacted',
+  'ctx.compactAt': 'Auto-compacts at {n} tokens ({pct}%)',
   'ctx.compacted.overflow': 'Context exceeded the model limit; summarized, compacted and retried this turn',
   'ctx.windowSource.override': 'Window: manual override table',
   'ctx.windowSource.model': 'Window: model-reported',
@@ -3645,6 +3674,7 @@ export function subscribeLocale(cb: (l: Locale) => void): () => void {
 function broadcastLocale(l: Locale): void {
   if (_locale === l) return
   _locale = l
+  broadcastPrefs() // 跨窗:设置浮窗切了语言,主窗不能等到重启才跟上
   for (const cb of Array.from(localeSubs)) {
     try { cb(l) } catch (e) { console.error('[i18n] locale subscriber failed', e) }
   }

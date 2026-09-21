@@ -16,6 +16,8 @@
 //   T11 dispose:表体与 body 级弹层宿主都收干净
 //   T12 暗色:外层与弹层宿主都拿到 data-mode="dark"(暗色芯片色板挂在这个属性上)
 //   T13 无未捕获页面错误
+//   T18 用户在视图条「行折叠」弹层里自己配折叠键 / 时间窗
+//   T17 规则行折叠(TableSpec.fold):折叠单元数 / 汇总口径 / 展开 / 按汇总值排序 / 宿主换时间窗
 // ⚠️ 交互口径跟着 DatabaseEmbed 的只读分支走(readOnly 下表头**左键就地排序**、右键才开列菜单)。
 //    那边若改成「左键开菜单、菜单里排序」,T7/T8 这两处的动作要跟着改,别改断言。
 // 用法:npm run check:tablemount(经 e2e-editor.cjs 起停 vite;worktree 里设 HARNESS_URL 指独立端口);--shot 存截图
@@ -260,6 +262,79 @@ async function shot(page, name) {
     await page.waitForSelector('.amx-db-group')
     check('T16 插件初始分组规格生效', await page.locator('.amx-db-group').count() === 2 && (await page.locator('.amx-db-grouphead').first().innerText()).includes('停用'))
     await shot(page, 'tablemount-6-grouped-light')
+
+    // T18:用户自己在表里配折叠(视图条「行折叠」弹层)—— 与插件规格无关的那一半:多维表的视图能力
+    await page.goto(`${BASE}?tablemount`)
+    await page.waitForSelector(ROWS)
+    await page.locator('.amx-db-foldbtn').click()
+    const fm = page.locator('.amx-db-fold-menu')
+    await fm.locator('[data-fold-key="state"] input').check()
+    await page.waitForSelector('.amx-db-row--fold')
+    const s18 = await page.evaluate(({ rowsSel }) => ({
+      rows: document.querySelectorAll(rowsSel).length,
+      folds: [...document.querySelectorAll('.amx-db-row--fold')].map((r) => r.getAttribute('data-foldcount')).join(),
+      on: document.querySelector('.amx-db-foldbtn')?.getAttribute('data-on'),
+      calls: document.querySelector('.amx-db-row--fold [data-coltype="number"]')?.textContent,
+    }), { rowsSel: ROWS })
+    check('T18 弹层里勾「状态」当折叠键:5 行 → 启用 ×3 / 停用 ×2 两条汇总行,按钮点亮,数字列求和(585000+12000+3)',
+      s18.rows === 2 && s18.folds === '3,2' && s18.on === 'true' && s18.calls === '597,003', JSON.stringify(s18))
+    check('T18b 折叠菜单控件没有被弹层裁切', await fm.evaluate((el) => {
+      const r = el.closest('.amx-db-pop').getBoundingClientRect()
+      return [...el.querySelectorAll('select,input,button')].every((c) => { const b = c.getBoundingClientRect(); return b.left >= r.left && b.right <= r.right + 1 })
+    }))
+    await shot(page, 'tablemount-10-fold-menu')
+    await fm.getByRole('button', { name: '展开全部', exact: true }).click()
+    check('T18c 展开全部:两条汇总 + 五条成员', await page.locator(ROWS).count() === 7)
+    await fm.getByLabel('时间窗列', { exact: true }).selectOption('day')
+    const minutes = fm.getByLabel('时间窗(分钟)', { exact: true })
+    check('T18d 选了时间列才出时间窗输入,缺省 30;五行各在不同的日子 → 全部退回普通行', await minutes.inputValue() === '30' && await page.locator('.amx-db-row--fold').count() === 0 && await page.locator(ROWS).count() === 5)
+    await minutes.fill('45')
+    await minutes.press('Enter')
+    check('T18e 时间窗改 45 后留在输入框里(blur 提交,不被回落值顶回去)', await fm.getByLabel('时间窗(分钟)', { exact: true }).inputValue() === '45')
+    await fm.getByRole('button', { name: '关闭行折叠', exact: true }).click()
+    check('T18f 关闭行折叠:按钮熄灭、五行平铺', await page.locator('.amx-db-foldbtn').getAttribute('data-on') === null && await page.locator(ROWS).count() === 5)
+    await page.mouse.click(6, 6)
+
+    // T17:规则行折叠(TableSpec.fold)—— 8 行用量 → alice 14:00 窗 3 行 / bob 1 行 / alice 15:00 窗 2 行 / carol 14:30 窗 2 行
+    await page.goto(`${BASE}?tablemount&tablefold`)
+    await page.waitForSelector('.amx-db-row--fold')
+    const FOLD = '.amx-plugtable .amx-db-row--fold'
+    const s17 = await page.evaluate(({ rowsSel, foldSel }) => ({
+      rows: document.querySelectorAll(rowsSel).length,
+      folds: [...document.querySelectorAll(foldSel)].map((r) => ({ n: r.getAttribute('data-foldcount'), text: r.innerText.replace(/\s+/g, ' '), attr: r.getAttribute('data-act') })),
+    }), { rowsSel: ROWS, foldSel: FOLD })
+    check('T17 同用户同 30 分钟窗折成一条:8 行 → 3 条汇总 + 1 条普通行,汇总行不带 rowAttrs',
+      s17.rows === 4 && s17.folds.length === 3 && s17.folds.map((f) => f.n).join() === '3,2,2' && s17.folds.every((f) => f.attr === null), JSON.stringify(s17))
+    const alice = s17.folds[0].text
+    check('T17b 汇总行:数字求和(2,500)、混合值列出内容与次数、日期画「最早 – 最晚」、单一值原样、插件 summary 接管积分列',
+      alice.includes('2,500') && alice.includes('gpt-5 ×2') && alice.includes('claude-fable') && /14:03 – 14:27/.test(alice) && alice.includes('alice') && alice.includes('-2.62') && alice.includes('成功 ×2') && alice.includes('失败'), alice)
+    await page.locator(FOLD).first().click()
+    const s17c = await page.evaluate(({ rowsSel }) => ({
+      rows: document.querySelectorAll(rowsSel).length,
+      members: [...document.querySelectorAll(rowsSel + '[data-depth="1"]')].map((r) => r.getAttribute('data-id')),
+      expanded: document.querySelector('.amx-db-row--fold')?.getAttribute('aria-expanded'),
+    }), { rowsSel: ROWS })
+    check('T17c 点汇总行展开:成员行缩进上屏、带着各自的 rowAttrs(面板的点行委托照旧)', s17c.rows === 7 && s17c.members.join() === 'u1,u2,u3' && s17c.expanded === 'true', JSON.stringify(s17c))
+    await shot(page, 'tablemount-7-fold-expanded')
+    await page.locator(FOLD).first().click()
+    // 排序作用在汇总值上:carol 的窗 16,000 > alice 14:00 窗 2,500 > alice 15:00 窗 100 > bob 90(首击升序,再击降序)
+    await page.locator('.amx-plugtable .amx-db-thbtn', { hasText: 'Tokens' }).click()
+    await page.locator('.amx-plugtable .amx-db-thbtn', { hasText: 'Tokens' }).click()
+    const s17d = await page.evaluate(({ rowsSel }) => [...document.querySelectorAll(rowsSel)].map((r) => r.getAttribute('data-foldcount') || r.getAttribute('data-id')), { rowsSel: ROWS })
+    check('T17d 表头排序按**汇总值**排折叠单元(逐行排再折 = 只看得到窗里最大的那一条)', s17d.join() === '2,3,2,u4', s17d.join())
+    // 宿主改时间窗(面板工具条上的控件):120 分钟 → alice 的 5 行落进同一个 14:00–16:00 窗
+    await page.evaluate(() => window.__tableMount.fold(120))
+    await page.waitForFunction((sel) => document.querySelectorAll(sel).length === 2, FOLD)
+    const s17e = await page.evaluate(({ foldSel }) => [...document.querySelectorAll(foldSel)].map((r) => r.getAttribute('data-foldcount')).sort().join(), { foldSel: FOLD })
+    check('T17e update() 改 fold.minutes 立即重折(视图态归本地,唯独折叠规则跟宿主走)', s17e === '2,5', s17e)
+    check('T17f 用户的排序在换窗之后仍在', await page.locator('.amx-plugtable .amx-db-th-sort').count() === 1)
+    await shot(page, 'tablemount-8-fold-120min')
+    await page.goto(`${BASE}?tablemount&tablefold&dark`)
+    await page.waitForSelector('.amx-db-row--fold')
+    await page.locator(FOLD).first().click()
+    const clipped = await page.evaluate(({ foldSel }) => [...document.querySelectorAll(foldSel + ' .amx-db-roprimary')].filter((el) => el.scrollWidth > el.clientWidth + 1).length, { foldSel: FOLD })
+    check('T17g 自适应列宽把汇总行算进去:汇总行没有一格被截成省略号(折叠态下它是唯一上屏的行)', clipped === 0, `clipped=${clipped}`)
+    await shot(page, 'tablemount-9-fold-dark')
 
     check('T13 无未捕获页面错误', errors.length === 0, errors.slice(0, 2).join(' | '))
   } catch (e) {

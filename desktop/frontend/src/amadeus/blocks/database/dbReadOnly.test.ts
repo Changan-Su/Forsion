@@ -231,7 +231,7 @@ describe('内存源 / 只读 / 开行接缝', () => {
     expect(h.querySelectorAll('.amx-db-name')).toHaveLength(0)
     expect(h.querySelectorAll('[aria-label="open as page"]')).toHaveLength(0)
     expect(h.querySelectorAll('.amx-db-viewtab')).toHaveLength(0) // 只有一个视图,tab 条不占行
-    expect(h.querySelectorAll('.amx-db-filterbtn')).toHaveLength(3) // 分组 + 筛选 + 默认开启的自适应列宽
+    expect(h.querySelectorAll('.amx-db-filterbtn')).toHaveLength(4) // 分组 + 行折叠 + 筛选 + 默认开启的自适应列宽
     expect(h.querySelector('.amx-db-autosize')?.getAttribute('aria-pressed')).toBe('true')
     expect(h.querySelectorAll('.amx-db-search')).toHaveLength(1)
     expect(h.querySelectorAll('[aria-label="view settings"]')).toHaveLength(1)
