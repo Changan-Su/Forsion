@@ -423,11 +423,11 @@ export async function releaseRunContainer(runId: string): Promise<void> {
   return rc.closing;
 }
 
-export function reapOrphanRunContainers(dockerRequired = true): void {
+export function reapOrphanRunContainers(dockerInUse = true): void {
   if (runContainers.size || activeExecs.size) return; // startup-only
   // Names do not establish ownership: Desktop and CLI instances may share the same Docker daemon.
-  void scheduleDockerStartupInspection(['agent-run-', 'agent-sbx-'], dockerRequired)
-    .catch(reportStartupInspectionFailure);
+  void scheduleDockerStartupInspection(['agent-run-', 'agent-sbx-'])
+    .catch((e) => reportStartupInspectionFailure(e, dockerInUse));
 }
 
 async function executeDocker(name: string, args: string[], input: string, opts: ExecOpts, ephemeral: boolean, writableDirs = opts.mountDir ? [opts.mountDir] : []): Promise<ExecResult> {

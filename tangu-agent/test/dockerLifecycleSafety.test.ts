@@ -71,14 +71,28 @@ describe('Startup inspection when Docker is not reachable', () => {
   it.each([
     ['daemon down', daemonDown],
     ['no docker CLI', ok({ code: -1, reason: 'spawn-error' })],
-  ])('sandbox=none, %s: session directories stay usable and nothing is logged', async (_label, psResult) => {
-    fake.run.mockImplementation(async (_bin, args) => args[0] === 'ps' ? psResult : ok());
+  ])('sandbox=none, %s: stays silent but still fails closed, even if a later scan succeeds', async (_label, psResult) => {
+    let scans = 0;
+    // 第一次 ps 失败、之后恢复:另一个实例可能连得上本进程连不上的守护进程,看不见 ≠ 没有写者
+    fake.run.mockImplementation(async (_bin, args) => args[0] === 'ps' ? (scans++ ? ok({ stdout: 'agent-sess-live\n' }) : psResult) : ok());
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       docker.reapOrphanRunContainers(false); sessions.reapOrphanSessions(false);
-      await expect(sessions.getSessionDir(key())).resolves.toContain('sessions');
+      await expect(sessions.getSessionDir(key())).rejects.toThrow('Cannot confirm orphan sandbox state');
       await flush();
       expect(warn).not.toHaveBeenCalled();
+      expect(fake.hydrate).not.toHaveBeenCalled();
+    } finally { warn.mockRestore(); }
+  });
+
+  it('sandbox=none still reports failures that are not a missing Docker (daemon reachable, container uninspectable)', async () => {
+    fake.run.mockImplementation(async (_bin, args) => args[0] === 'ps' ? ok({ stdout: 'agent-run-x\n' }) : ok({ code: 124, reason: 'timeout' }));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      docker.reapOrphanRunContainers(false); sessions.reapOrphanSessions(false);
+      await expect(sessions.getSessionDir(key())).rejects.toThrow('Cannot inspect');
+      await flush();
+      expect(warn).toHaveBeenCalledTimes(1);
     } finally { warn.mockRestore(); }
   });
 
@@ -96,19 +110,6 @@ describe('Startup inspection when Docker is not reachable', () => {
       expect(warn.mock.calls[0][0]).not.toContain('\n');
       expect(fake.run.mock.calls.some(([, args]) => args[0] === 'run')).toBe(false);
     } finally { warn.mockRestore(); }
-  });
-
-  it('sandbox=none still quarantines the writable mounts of containers it can see', async () => {
-    const occupied = path.join(dir, 'other-instance');
-    fake.run.mockImplementation(async (_bin, args) => {
-      if (args[0] === 'ps') return ok({ stdout: 'other-instance-container\n' });
-      if (args[0] === 'inspect') return ok({ stdout: JSON.stringify([{ Type: 'bind', RW: true, Source: occupied }]) });
-      return ok();
-    });
-    docker.reapOrphanRunContainers(false);
-    await lifecycle.waitDockerStartupCleanup();
-    expect(lifecycle.dockerQuarantines().map((q) => q.path)).toContain(path.resolve(occupied));
-    expect(fake.run.mock.calls.some(([, args]) => args[0] === 'rm')).toBe(false);
   });
 });
 

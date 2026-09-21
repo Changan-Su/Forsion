@@ -484,11 +484,11 @@ export function stopSessionReaper(): void {
 }
 
 /** 启动只读检查已有 agent-sess-* 的挂载；无法确认属主的冲突目录隔离，绝不按前缀杀其它实例。 */
-export function reapOrphanSessions(dockerRequired = true): void {
+export function reapOrphanSessions(dockerInUse = true): void {
   // Old directories remain recoverable. A matching name alone cannot establish orphan ownership.
   if (sessions.size) return; // startup-only; never reap this process's live sessions
-  void scheduleDockerStartupInspection(['agent-sess-'], dockerRequired)
-    .catch(reportStartupInspectionFailure);
+  void scheduleDockerStartupInspection(['agent-sess-'])
+    .catch((e) => reportStartupInspectionFailure(e, dockerInUse));
 }
 
 /** 进程内会话沙箱快照（供 admin 面板观测）。 */

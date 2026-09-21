@@ -7,6 +7,11 @@ const CLEANUP_MS = 5_000;
 const quarantined = new Map<string, { paths: string[]; reason: string; unconfirmedCreation?: boolean }>();
 let startupCleanup: Promise<void> = Promise.resolve();
 
+/** `docker ps` itself failed (no CLI, daemon not running, timeout): nothing is visible, so ownership is unknown. */
+export class DockerUnavailableError extends Error {
+  constructor(message: string) { super(message); this.name = 'DockerUnavailableError'; }
+}
+
 export class DockerCleanupError extends Error {
   constructor(readonly containerName: string, detail: string) {
     super(`Docker cleanup for ${containerName} was not confirmed; its workspace is quarantined and may still be changing. ${detail}`);
@@ -45,17 +50,14 @@ export function dockerQuarantines(): Array<{ path: string; name: string; reason:
 }
 
 /** Other Tangu instances may own these containers. Inspect mounts and isolate conflicts; never kill by prefix.
- *  dockerRequired=false (this process runs with sandbox=none and never starts containers): an unreachable
- *  Docker only means nothing is visible, so it must not block the non-Docker session directories. Containers
- *  that are visible are still inspected and their writable mounts quarantined. With Docker in use, an
- *  unreachable daemon is unknown state and still blocks every later mount. */
-export function scheduleDockerStartupInspection(prefixes: string[], dockerRequired = true): Promise<void> {
+ *  Fails closed in every sandbox mode: sandbox=none only means this process starts no containers, not that
+ *  another instance (with a daemon this process cannot reach) has none writing the shared directories. */
+export function scheduleDockerStartupInspection(prefixes: string[]): Promise<void> {
   startupCleanup = startupCleanup.then(async () => {
     const result = await runDocker(['ps', '-aq', ...prefixes.flatMap((prefix) => ['--filter', `name=${prefix}`])]);
     if (result.code !== 0 || result.reason || result.cleanupTimedOut) {
-      if (!dockerRequired) return;
       const detail = result.reason || (result.cleanupTimedOut ? 'timeout' : result.stderr.trim().split('\n')[0]?.slice(0, 200) || `docker exited ${result.code}`);
-      throw new Error(`Cannot confirm orphan sandbox state during startup (docker ps: ${detail})`);
+      throw new DockerUnavailableError(`Cannot confirm orphan sandbox state during startup (docker ps: ${detail})`);
     }
     for (const name of result.stdout.split(/\s+/).filter(Boolean)) {
       const inspected = await runDocker(['inspect', '--type', 'container', '--format', '{{json .Mounts}}', name]);
@@ -79,9 +81,12 @@ export function scheduleDockerStartupInspection(prefixes: string[], dockerRequir
 }
 
 const reportedFailures = new WeakSet<object>();
-/** The run and session inspections share one chain, so a failure reaches both callers as the same error:
- *  report it once, as one line without a stack (it lands in the Desktop log users attach to feedback). */
-export function reportStartupInspectionFailure(e: unknown): void {
+/** Logging only; admission stays blocked either way. With sandbox=none an unreachable Docker is the normal
+ *  state of a machine without it, not news. Otherwise report once (the run and session inspections share one
+ *  chain, so both callers get the same error) as one line without a stack: it lands in the Desktop log that
+ *  users attach to feedback, where a stack trace reads as a crash. */
+export function reportStartupInspectionFailure(e: unknown, dockerInUse: boolean): void {
+  if (!dockerInUse && e instanceof DockerUnavailableError) return;
   if (e && typeof e === 'object') {
     if (reportedFailures.has(e)) return;
     reportedFailures.add(e);
