@@ -1,5 +1,6 @@
 /** Team UI regression: Pin Summary member rows, independent Agent Desk, chronological public remarks,
- * forwarded approvals, optional Historian attachment and light/dark screenshots.
+ * forwarded approvals, member child chat's approval pill = the team session's mode (5a-5e),
+ * optional Historian attachment and light/dark screenshots.
  * Run after npm run build: npm run check:teamdesk (isolated Electron user data).
  */
 const fs = require('fs')
@@ -120,7 +121,7 @@ async function run(app, win, stub) {
   await win.reload({ waitUntil: 'domcontentloaded' })
   await win.waitForSelector('#root', { timeout: 30_000 })
   await openTeamSession(win)
-  const shots = { team: path.join(os.tmpdir(), `forsion-teamdesk-team-${process.pid}.png`), light: path.join(os.tmpdir(), `forsion-teamdesk-light-${process.pid}.png`), dark: path.join(os.tmpdir(), `forsion-teamdesk-dark-${process.pid}.png`) }
+  const shots = { team: path.join(os.tmpdir(), `forsion-teamdesk-team-${process.pid}.png`), member: path.join(os.tmpdir(), `forsion-teamdesk-member-${process.pid}.png`), light: path.join(os.tmpdir(), `forsion-teamdesk-light-${process.pid}.png`), dark: path.join(os.tmpdir(), `forsion-teamdesk-dark-${process.pid}.png`) }
 
   // ── 1 成员状态进入 Pin Summary,Agent Desk 保留 ─────────────────────
   await win.waitForSelector('[data-team-desk="status"]', { timeout: 15_000 }).catch(() => {})
@@ -186,6 +187,47 @@ async function run(app, win, stub) {
     check(`5 点击 ${slug} 打开成员工作记录`, await win.locator(`[data-team-desk="status"] button[data-slug="${slug}"]`).getAttribute('aria-pressed') === 'true' && await win.locator('.child-chat-panel [data-chat-surface="child-chat"]').count() === 1, '')
     await win.locator('.child-chat-panel .agent-desk-head button').click()
   }
+  // ── 5a-5e 成员子聊天的审批药丸 = 团队会话此刻的档(引擎审批闸只听团队会话,agentLoop.approvalModeSessionId)──
+  // 团队主区先切到「完全放行」;成员会话自己的存值停在桩给的 auto-edit —— 修复前子聊天药丸显示的就是这个过期值(09-21 反馈)。
+  const teamMenu = '.composer-menu--mode:not(.child-chat-panel .composer-menu--mode)'
+  const childMenu = '.child-chat-panel .composer-menu--mode'
+  const approvalItem = (menu, id) => win.locator(`${menu} button[aria-describedby="approval-mode-desc-${id}"]`)
+  await win.locator('.mode-pill-btn:not(.child-chat-panel .mode-pill-btn)').click()
+  await approvalItem(teamMenu, 'full-auto').click()
+  await sleep(300)
+  check('5a 团队主区切到完全放行 → PUT 团队会话', stub.seen.configs.at(-1)?.sessionId === SESSION_ID && stub.seen.configs.at(-1)?.config?.approvalMode === 'full-auto', JSON.stringify(stub.seen.configs.at(-1)))
+  await win.locator('[data-team-desk="status"] button[data-slug="xyra"]').click()
+  const childPill = win.locator('.child-chat-panel .mode-pill-btn')
+  // 窄面板里收起的药丸只剩图标(文字 display:none,innerText 为空),读 textContent
+  const childLabel = () => childPill.locator('.t2c-pill-label').textContent()
+  await childPill.waitFor()
+  await sleep(500)
+  check('5b 成员子聊天药丸显示团队档「完全放行」,不是成员会话自己的 auto-edit', (await childLabel()).includes('完全放行'), await childLabel())
+  await childPill.click()
+  await sleep(400) // 等胶囊展开 + 菜单弹出动画走完再读、再截图
+  const childMenuText = await win.locator(childMenu).innerText()
+  check('5c 子聊天菜单标题写明对全队生效、勾在团队档上,且不给「普通模式」(它连带写的 auto-edit 对成员无效)',
+    childMenuText.includes('团队审批档 · 改动对全队生效') && /\bactive\b/.test(await approvalItem(childMenu, 'full-auto').getAttribute('class') || '') && await win.locator(`${childMenu} [data-normal-work]`).count() === 0,
+    childMenuText.replace(/\n/g, ' / '))
+  await dismissToasts(win)
+  await win.locator('.child-chat-panel').screenshot({ path: shots.member })
+  // 整对象 PUT:带过去的必须是团队自己的配置、只换了档 —— 成员的 teamMember / cwd 串进来 = 把成员配置写进了团队会话。
+  const teamBefore = [...stub.seen.configs].reverse().find((c) => c.sessionId === SESSION_ID)?.config || {}
+  const putsBefore = stub.seen.configs.length
+  await approvalItem(childMenu, 'readonly').click()
+  await sleep(300)
+  const puts = stub.seen.configs.slice(putsBefore)
+  const put = puts[0]?.config || {}
+  const sorted = (o) => JSON.stringify(Object.keys(o).sort().map((k) => [k, o[k]]))
+  check('5d 子聊天里改档 → 只 PUT 团队会话一次,内容 = 团队原配置只换了档',
+    puts.length === 1 && puts[0].sessionId === SESSION_ID && put.approvalMode === 'readonly' && put.teamMember === undefined
+      && sorted({ ...put, approvalMode: null }) === sorted({ ...teamBefore, approvalMode: null }),
+    JSON.stringify({ puts, teamBefore }))
+  await win.locator('.mode-pill-btn:not(.child-chat-panel .mode-pill-btn)').click()
+  const teamNow = /\bactive\b/.test(await approvalItem(teamMenu, 'readonly').getAttribute('class') || '')
+  await win.keyboard.press('Escape')
+  check('5e 改完子聊天与团队主区同显「询问我批准」', (await childLabel()).includes('询问我批准') && teamNow, `${await childLabel()} / team active=${teamNow}`)
+  await win.locator('.child-chat-panel .agent-desk-head button').click()
   await win.locator('[data-historian-status] > button').click()
   await win.getByText('已保存该会话的工作约定', { exact: false }).first().waitFor()
   check('6 Historian 有独立可展开的状态行', await win.locator('.t2-tsum [data-historian-work]').count() === 1, '')
