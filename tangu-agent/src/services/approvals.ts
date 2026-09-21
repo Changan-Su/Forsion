@@ -6,8 +6,8 @@
  *   loop 调 requestApproval → 发 `approval_request` 事件 + 登记 resolver，await Promise；
  *   TUI 收到事件、用户按键 → resolveApproval(approvalId, decision)，Promise 兑现，loop 继续。
  *
- * **安全边界**：gateToolCall 在 execMode!=='host' 时立即放行（无 await、无事件），
- * 故 microserver / standalone-server / worker 行为零变化——审批只在 host-exec（TUI）激活。
+ * **安全边界**：gateToolCall 在 execMode!=='host' 时只有 mcp__ 工具过闸，其余立即放行（无 await、无事件）；
+ * 会话档现读(modeSessionId)只在 hostExec 引擎形态由 agentLoop 给出 —— 云端形态(microserver / worker)一律用 run 快照。
  *
  * 远程 host-exec（跨进程）需要的是 HTTP「租赁」端点（见架构 v2.0 §3.3 Lease），不在此文件范围。
  */

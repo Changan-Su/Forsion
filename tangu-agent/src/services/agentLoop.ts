@@ -867,16 +867,20 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       : [];
   const approvalMode: ApprovalMode =
     agentConfig.approvalMode || (execMode === 'host' ? 'auto-edit' : 'full-auto');
+  // 会话档现读只在本机引擎形态(hostExec;含本机的沙箱会话 —— 它们的 MCP 工具也过闸):云端形态的状态层是 HTTP,
+  // 每次 MCP 调用多一趟往返、瞬时失败还会落只读弹审批,而这次修的是本机的事 → 云端照旧用快照。
   // 成员身份以库里的父链接为准:agentConfig 来自请求体,分支会话(branchSession)也会把 teamMember 原样抄走 —— 不核实,
-  // 审批就能被指到任意会话(Codex 09-21 三轮)。只在本机形态查库(云 worker 没有直连库,那边的成员 run 按快照走)。
+  // 审批就能被指到任意会话(Codex 09-21 三轮)。
   let verifiedTeamSessionId: string | undefined;
-  if (isTeamMember && execMode === 'host') {
+  if (isTeamMember && profile.capabilities.hostExec) {
     try {
       const [row] = await query<any[]>(`SELECT parent_session_id, kind FROM chat_sessions WHERE id = ?`, [sessionId]);
       if (row?.kind === TEAMWORK_KIND && row.parent_session_id === teamMember.teamSessionId) verifiedTeamSessionId = String(row.parent_session_id);
     } catch { /* 查不到就不认成员身份 */ }
   }
-  const modeSessionId = approvalModeSessionId({ fromClient: input.origin === 'client', sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true });
+  const modeSessionId = profile.capabilities.hostExec
+    ? approvalModeSessionId({ fromClient: input.origin === 'client', sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true })
+    : undefined;
   // 无人值守的异步审批(Muse ask/agent 档):**只信引擎内部起的 run** —— input.background 由 muse.ts 直接写进
   // createRun 的 input,/agent/runs 路由按字段名组装 input、客户端塞不进来;agentConfig 是请求体可控的,
   // 单看它就能让普通 run 把同步审批改成排队甚至代批(Codex 09-10 P1)。普通 run 恒 undefined = 同步审批一字不变。
