@@ -311,6 +311,17 @@ export function bindSessionFacts(agentConfig: any, facts: SessionFacts): void {
   if (facts.teamSlug) { agentConfig.groupChat = agentConfig.groupChat !== false; agentConfig.engineId = undefined; agentConfig.execMode = 'host'; agentConfig.preset = null; }
 }
 
+/** 本 run 审批时现读哪个会话存着的档(gateToolCall.modeSessionId);undefined = 只用启动快照。
+ *  - 客户端输入区发起(input.origin='client',只有 POST /agent/runs 会写):档位就是该会话的设置 → 跟本会话,中途切档当场生效。
+ *  - 客户端团队 run 起的成员子 run:跟团队会话(teamMember.followSessionMode 由团队 run 下发)。
+ *  - 通道(微信远程档)/ Muse / 自动化 / 讨论 / TUI:各自定档,绝不被会话存值改写 —— 桌面把会话切成完全通行,远程消息不该跟着放开。 */
+export function approvalModeSessionId(p: { execMode: string; fromClient: boolean; sessionId: string; teamMember?: any }): string | undefined {
+  if (p.execMode !== 'host') return undefined;
+  if (p.fromClient) return p.sessionId;
+  const tm = p.teamMember;
+  return tm?.followSessionMode === true && typeof tm.teamSessionId === 'string' && tm.teamSessionId ? tm.teamSessionId : undefined;
+}
+
 function safeRealpath(p: string): string {
   try { return realpathSync(p); } catch { return ''; }
 }
@@ -849,6 +860,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       : [];
   const approvalMode: ApprovalMode =
     agentConfig.approvalMode || (execMode === 'host' ? 'auto-edit' : 'full-auto');
+  const modeSessionId = approvalModeSessionId({ execMode, fromClient: input.origin === 'client', sessionId, teamMember: isTeamMember ? teamMember : undefined });
   // 无人值守的异步审批(Muse ask/agent 档):**只信引擎内部起的 run** —— input.background 由 muse.ts 直接写进
   // createRun 的 input,/agent/runs 路由按字段名组装 input、客户端塞不进来;agentConfig 是请求体可控的,
   // 单看它就能让普通 run 把同步审批改成排队甚至代批(Codex 09-10 P1)。普通 run 恒 undefined = 同步审批一字不变。
@@ -938,6 +950,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (agentConfig.groupChat && profile.capabilities.groupChat && ps.groupChat) {
       await runGroupChat({
         runId, sessionId, userId, appId, modelId, execMode, cwd, extraRoots, wsProject, profile, agentConfig,
+        followSessionMode: !!modeSessionId,
         message: input.message ? String(input.message) : '',
         userMessageId: input.userMessageId,
         attachments,
@@ -1230,7 +1243,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings,
       dispatchTargets,
       hostSandbox: runHostSandbox,
-      enabledSkillIds, execMode, cwd, extraRoots, approvalMode, profile, modelId, planMode, wsProject,
+      enabledSkillIds, execMode, cwd, extraRoots, approvalMode, approvalModeSessionId: modeSessionId, profile, modelId, planMode, wsProject,
       muse: !!agentConfig.muse,
       activityAccess: !!agentConfig.activityAccess,
       automationOrigin: typeof agentConfig.automationOrigin === 'string' ? agentConfig.automationOrigin : undefined,
@@ -1834,7 +1847,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
       // host-exec 审批闸门：execMode!=='host' 时立即放行（无 await、无事件）→ server/worker 零影响。
       const decision = await gateToolCall(runId, effCall, {
-        sessionId, execMode, approvalMode, cwd, extraRoots, profile,
+        sessionId, execMode, approvalMode, modeSessionId, cwd, extraRoots, profile,
         approvalDeferral, userId, agentSlug: activeAgentSlug,
       }, ac.signal);
 

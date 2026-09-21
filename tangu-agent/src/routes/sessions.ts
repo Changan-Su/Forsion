@@ -493,7 +493,9 @@ export function timelineFields(type: string, p: any): Record<string, unknown> {
     // 要逐段对比走 scripts/cache-hit-report.mjs,它直接读 agent_run_events。
     case 'cache_probe': return { probeSeq: p?.probeSeq, headHash: p?.headHash, changedSegments: p?.changedSegments, headHashSameAsAgentModel: p?.headHashSameAsAgentModel };
     case 'error': return { error: String(p?.error ?? '').slice(0, 200), aborted: !!p?.aborted };
-    case 'approval_request': return { name: p?.name };
+    // 为什么问(escalate / mode / custom-ask)、引擎当时生效的档、团队转发的是哪位成员 —— 09-21 那份反馈只剩工具名,
+    // 分不清「成员没跟上完全通行」和「越界写」。三者都不含路径 / 参数,可以进导出。
+    case 'approval_request': return { name: p?.name, reason: p?.reason?.kind, mode: p?.reason?.mode, agent: p?.agentSlug };
     case 'approval_result': return { action: p?.action };
     default: return {};
   }

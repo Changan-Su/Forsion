@@ -77,18 +77,27 @@ describe('teamRuns', () => {
     expect(all.length).toBe(1);
   });
 
-  it('子 run 输入形状:teamMember 段(会话 / roster / teamDoc / cycle)、preset 显式 null、成员定义的审批档优先于团队的、临时定义随 def 下发', async () => {
+  it('子 run 输入形状:teamMember 段(会话 / roster / teamDoc / cycle)、preset 显式 null、团队会话的审批档优先于成员定义、临时定义随 def 下发', async () => {
     const a = await base({ member: { ...(await getAgent('bo'))!, approvalMode: 'full-auto' } });
     const cfg: any = memberRunConfig(a);
     expect(cfg.agentSlug).toBe('bo');
     expect(cfg.preset).toBeNull();
-    expect(cfg.approvalMode).toBe('full-auto'); // Bo 的定义写了 full-auto → 优先于团队会话的 auto-edit
+    expect(cfg.approvalMode).toBe('auto-edit'); // 团队会话选了自动编辑 → Bo 定义里的 full-auto 不得借团队提权
     expect(cfg.teamMember).toMatchObject({ teamSessionId: 'team-1', teamRunId: 'team-run-1', name: 'Bo', roster: '- Bo(bo):——', teamDoc: '## Team\nx', cycle: 1 });
     expect(cfg.teamMember.def).toBeUndefined();
+    expect(cfg.teamMember.followSessionMode).toBeUndefined();
     const temp: any = { slug: 'peer-1', name: 'Peer', systemPrompt: 'be a peer', approvalMode: '' };
     const cfg2: any = memberRunConfig(await base({ member: temp, inlineDef: true }));
     expect(cfg2.teamMember.def).toBe(temp);
     expect(cfg2.approvalMode).toBe('auto-edit'); // 临时成员没写 → 继承团队的
+  });
+
+  it('09-21 反馈:团队会话选了完全通行,成员 config.toml 写着 auto-edit → 子 run 仍是 full-auto;会话没设档才轮到成员定义(子 run 的 applyAgentActivation 补)', async () => {
+    const member = { ...(await getAgent('bo'))!, approvalMode: 'auto-edit' as const };
+    expect((memberRunConfig(await base({ member, approvalMode: 'full-auto' })) as any).approvalMode).toBe('full-auto');
+    expect((memberRunConfig(await base({ member, approvalMode: undefined })) as any).approvalMode).toBeUndefined();
+    // 客户端团队 run 下发「跟团队会话现读档位」的标记
+    expect((memberRunConfig(await base({ followSessionMode: true })) as any).teamMember.followSessionMode).toBe(true);
   });
 
   it('activateMember:建会话 → createRun(输入含 delta 与 teamMember)→ onStarted 带 id → 先订阅再入队(子 run 事件转发)→ 终态 done 读回 result.content', async () => {
@@ -114,6 +123,24 @@ describe('teamRuns', () => {
     expect(out2.sessionId).toBe(out.sessionId);
     expect(out2.runId).not.toBe(out.runId);
     expect(out2.text).toBe('second');
+  });
+
+  it('followSessionMode:激活时按团队会话此刻的档写成员会话与子 run(团队 run 启动后才切的「完全通行」也跟上)', async () => {
+    await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = 'team-1'`, [JSON.stringify({ approvalMode: 'full-auto' })]);
+    childFinishes('ok');
+    const started: any[] = [];
+    await activateMember(await base({ approvalMode: 'auto-edit', followSessionMode: true, onStarted: (ids) => started.push(ids) }));
+    const run = await getRun(started[0].runId);
+    const input = typeof run!.input === 'string' ? JSON.parse(run!.input) : run!.input;
+    expect(input.agentConfig.approvalMode).toBe('full-auto');
+    const [row] = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = ?`, [started[0].sessionId]);
+    expect(JSON.parse(row.agent_config).approvalMode).toBe('full-auto');
+    // 没有标记(TUI / 通道起的团队 run):照快照,不读团队会话存值
+    childFinishes('ok');
+    const started2: any[] = [];
+    await activateMember(await base({ approvalMode: 'auto-edit', onStarted: (ids) => started2.push(ids) }));
+    const run2 = await getRun(started2[0].runId);
+    expect((typeof run2!.input === 'string' ? JSON.parse(run2!.input) : run2!.input).agentConfig.approvalMode).toBe('auto-edit');
   });
 
   it('子 run 失败 → failed + error(绝不 reject)', async () => {

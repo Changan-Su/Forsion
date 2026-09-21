@@ -62,6 +62,8 @@ export interface GroupChatParams {
   wsProject?: string | null;
   profile: AppProfile;
   agentConfig: any;
+  /** 本团队 run 的审批档来自团队会话设置(agentLoop 判定):成员子 run 审批时现读团队会话此刻的档。 */
+  followSessionMode?: boolean;
   message: string;
   userMessageId?: string;
   attachments?: any[];
@@ -418,7 +420,7 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
       const run = activate({
         teamRunId: runId, teamSessionId: sessionId, userId, appId: p.appId, modelId,
         member: agent, inlineDef: inlineSlugs.has(slug), delta, cycle, roster, teamDoc: teamDocFor(agent),
-        execMode: p.execMode, cwd: p.cwd, extraRoots: p.extraRoots, wsProject: p.wsProject, approvalMode, signal,
+        execMode: p.execMode, cwd: p.cwd, extraRoots: p.extraRoots, wsProject: p.wsProject, approvalMode, followSessionMode: p.followSessionMode, signal,
         onStarted: (ids) => {
           childId = ids.runId; childRuns.set(slug, ids.runId);
           collectOutput = teamOutputCollector({ ...ids, slug, name: agent.name, modelId: agent.model || modelId });

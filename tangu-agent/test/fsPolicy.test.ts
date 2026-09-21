@@ -68,6 +68,12 @@ describe('agent 身份/自进化文件硬拒(Codex 评审 #1 + 复核软链绕�
     expect(checkWritePath(ctx(ws), path.join(agentsDir(), 'someone-else', 'SOUL.md')).hardDeny).toBe(false);
   });
 
+  it('共用默认记忆的 agent:提示词指路的是展示身份的 Library,它也得是可写根(否则每次写自己的 Library 都弹「工作区外」)', () => {
+    enterRunContext('u1', 'r1', DEFAULT_AGENT_SLUG, 'testbot');
+    expect(checkWritePath(ctx(ws), path.join(agentsDir(), 'testbot', 'Library', 'n.md')).ok).toBe(true);
+    expect(isOutsideWorkspace(ctx(ws), path.join(agentsDir(), 'someone-else', 'Library', 'n.md'))).toBe(true);
+  });
+
   it('软链绕不过:Library 里指向 SOUL.md 的 symlink 照样硬拒', () => {
     const agentDir = path.join(tmp, 'agents', 'linky');
     mkdirSync(path.join(agentDir, 'Library'), { recursive: true });

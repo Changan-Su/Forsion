@@ -13,13 +13,14 @@
  */
 import path from 'node:path';
 import { publish } from './eventBus.js';
-import { isOutsideWorkspace } from '../tools/fsPolicy.js';
+import { isOutsideWorkspace, writableRoots } from '../tools/fsPolicy.js';
 import { writeTargetsOf } from '../tools/writeTargets.js';
 import type { ToolCall } from '../core/types.js';
 import { runHooks } from '../hooks/index.js';
 import { currentAgentSlug } from '../seams/runContext.js';
 import { canonicalToolName, declaredApproval, toolNameSpellings } from '../tools/toolRegistry.js';
 import { getRawSection } from '../core/config.js';
+import { deps } from '../seams/runtime.js';
 import type { AppProfile } from '../seams/appProfile.js';
 
 export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
@@ -218,6 +219,32 @@ export function isKnownSafeBash(command: string): boolean {
 
 // 路径抽取已迁 tools/writeTargets.ts(检查点快照共用同一口径,见该文件头注)。
 
+const APPROVAL_MODES = new Set(['readonly', 'auto-edit', 'full-auto', 'custom']);
+/** 会话此刻存着的审批档(输入区切档 = PUT 进 agent_config)。没存 / 读失败 → undefined,调用方回落 run 启动时的快照。 */
+export async function storedApprovalMode(sessionId: string): Promise<ApprovalMode | undefined> {
+  try {
+    const raw = await deps().state.getAgentConfig(sessionId);
+    const mode = (typeof raw === 'string' ? JSON.parse(raw) : raw)?.approvalMode;
+    return APPROVAL_MODES.has(mode) ? mode : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 越界写诊断:同 run 同目录只记一次(反馈包带后端日志;09-21 那份只剩工具名,答不了「它到底写哪儿了」)。 */
+const loggedEscalations = new Set<string>();
+function logEscalation(runId: string, call: ToolCall, ctx: { cwd?: string; extraRoots?: string[] }): void {
+  const cwd = ctx.cwd || process.cwd();
+  for (const t of writeTargetsOf(call)) {
+    const dir = path.dirname(path.resolve(cwd, t));
+    const key = `${runId}|${dir}`;
+    if (loggedEscalations.has(key)) continue;
+    if (loggedEscalations.size > 500) loggedEscalations.clear(); // ponytail: 只防无界增长,清空后最多重复记一行
+    loggedEscalations.add(key);
+    console.warn(`[tangu] 越界写需审批 run=${runId.slice(0, 8)} dir=${dir} roots=${JSON.stringify(writableRoots({ cwd, extraRoots: ctx.extraRoots } as any))}`);
+  }
+}
+
 /** 写目标是否越界(工作区外,但非硬拒保护路径)→ 需升级审批。借 Codex writable-roots escalation。 */
 export function writeEscalationNeeded(call: ToolCall, ctx: { cwd?: string; extraRoots?: string[] }): boolean {
   const targets = writeTargetsOf(call);
@@ -342,6 +369,9 @@ export async function gateToolCall(
   call: ToolCall,
   ctx: {
     sessionId: string; execMode?: string; approvalMode?: ApprovalMode; cwd?: string; extraRoots?: string[]; profile?: AppProfile;
+    /** 审批档跟这个会话**此刻**存的设置走(run 中途在输入区切档当场生效;团队成员 = 团队会话);没存才用 approvalMode 快照。
+     *  只给「档位本就来自该会话设置」的 run(见 agentLoop.approvalModeSessionId),通道 / Muse / 自动化各自定档,不给。 */
+    modeSessionId?: string;
     /** 无人值守 run(Muse ask/agent 档):需要人决定时不 await 订阅者,改走 pendingApprovals(排队 / 代批)。 */
     approvalDeferral?: 'queue' | 'agent'; userId?: string; agentSlug?: string;
     /** 本次调用**此刻真正的执行身份**(具名子代理的展示 slug),与 agentSlug(run 的归属 agent)不同时才给。
@@ -364,7 +394,8 @@ export async function gateToolCall(
 
   // custom 档先裁决:用户写下的规则**压过**下面的 known-safe 捷径(把 `run_bash:ls` 放进 ask
   // 就该真弹审批,否则规则形同虚设);未命中则降解成 base 档,后续逻辑与三档完全一致。
-  let mode = ctx.approvalMode;
+  // 档位现读:团队 run 一跑几小时、成员子 run 各自冻着启动那刻的档 —— 只认快照,用户切到「完全通行」整场纹丝不动(09-21 反馈)。
+  let mode = (ctx.modeSessionId && (await storedApprovalMode(ctx.modeSessionId))) || ctx.approvalMode;
   let forceAsk = false;
   let askRule = '';
   if (mode === 'custom') {
@@ -384,6 +415,7 @@ export async function gateToolCall(
 
   // 越界写升级:工作区外写一律要批(full-auto 例外:用户已全信任)。
   const escalate = ctx.execMode === 'host' && mode !== 'full-auto' && writeEscalationNeeded(call, ctx);
+  if (escalate) logEscalation(runId, call, ctx);
 
   if (!escalate && !forceAsk) {
     if (!toolNeedsApproval(name, mode)) return { action: 'approve' };

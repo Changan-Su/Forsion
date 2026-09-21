@@ -36,6 +36,8 @@ export interface ToolContext {
   wsProject?: string | null;
   /** host 模式的审批档（loop 据此决定哪些破坏性工具执行前需用户批准）。 */
   approvalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
+  /** 审批时现读这个会话存着的档(gateToolCall.modeSessionId;子代理随父 run 走同一个)。缺省 = 只用 approvalMode 快照。 */
+  approvalModeSessionId?: string;
   /** 本次 run 的 AppProfile(接缝①):工具门禁 isEnabledFor 据此过滤。缺省回退 deps().profile。 */
   profile?: AppProfile;
   /** delegate 子代理深度(0/缺省=主 loop,1=子代理内)。深度 ≥1 时 delegate 工具不可见,防递归裂变。 */
