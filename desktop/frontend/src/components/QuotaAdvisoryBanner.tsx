@@ -99,7 +99,7 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
         : 'quota.banner.low'
   const resetCards = Math.max(0, Number(quota.resetCards) || 0)
 
-  const useResetCard = async (): Promise<void> => {
+  const redeemResetCard = async (): Promise<void> => {
     if (!resetCards || resetting || !window.tangu?.accountUseResetCard) return
     if (!confirmReset) {
       setConfirmReset(true)
@@ -153,7 +153,7 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
             className="t2-quota-action reset"
             disabled={!resetCards || resetting}
             title={!resetCards ? t('quota.banner.noReset') : undefined}
-            onClick={() => void useResetCard()}
+            onClick={() => void redeemResetCard()}
           >
             <RotateCcw size={12} className={resetting ? 'spin' : undefined} aria-hidden="true" />
             {confirmReset ? t('quota.banner.confirmReset') : resetCards ? t('quota.banner.useReset', { n: String(resetCards) }) : t('quota.banner.noReset')}

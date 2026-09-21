@@ -9,6 +9,11 @@
  * spaceShortcuts 只用两样:`isNativePlatform()`(浏览器恒 false,整个模块随即早退)、
  * `registerPlugin` 拿原生插件句柄(浏览器里永远调不到,给个恒 reject 的壳即可)。
  */
+/** 灵动岛(mobile/src/liveIsland.ts)只把它当句柄类型用;浏览器里那条路整段早退,给个结构相同的空壳即可。 */
+export interface PluginListenerHandle {
+  remove: () => Promise<void>
+}
+
 export const Capacitor = {
   isNativePlatform: (): boolean => false,
   getPlatform: (): string => 'web',
