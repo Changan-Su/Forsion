@@ -184,9 +184,10 @@ const activationBuckets = (group, slug) => {
  * group 场景「真并行」:成员 a、b 是否有一对激活区间交叠。端点同样用**事件 seq**、严格 `<`(seq 唯一,不会相等):
  * 调度是「A end → 起下一位 → B start」连发,边界两帧常同一毫秒到达,旧版按毫秒 `<=` 比会把严格串行的调度
  * (退化成 groupMaxConcurrent=1)也判成交叠 —— 恰好放过这条判据要抓的回归。没收到 end 的激活按 +∞(仍在跑)。
+ * start / end 按 runId 配对,不按下标:onStarted 之前就失败的激活只发 end(settle 照发 reason=failed),按下标会整体错位(Codex 评审)。
  */
 const activationsOverlap = (group, a, b) => {
-  const spans = (slug) => group.starts.filter((s) => s.slug === slug).map((s, i) => ({ start: s.seq, end: group.ends.filter((x) => x.slug === slug)[i]?.seq ?? Infinity }));
+  const spans = (slug) => group.starts.filter((s) => s.slug === slug).map((s) => ({ start: s.seq, end: group.ends.find((x) => x.runId && x.runId === s.runId)?.seq ?? Infinity }));
   return spans(a).some((x) => spans(b).some((y) => x.start < y.end && y.start < x.end));
 };
 
@@ -238,9 +239,12 @@ if (argv.includes('--selftest')) {
   check('激活窗 两次激活各一条(同毫秒到达)', sizes(grp([[15, 'x'], [21, 'y']], [4, 17])), '1,1');
   check('激活窗 同一激活 team_say + 最终答复(负对照:必须同窗才比得到)', sizes(grp([[9, 'x'], [15, 'y']], [4, 17])), '2');
   // 真并行:[start, end] 按 seq;四帧收到时刻全同一毫秒 —— 旧的按毫秒 `<=` 会把串行那条也判成交叠
-  const spansOf = ([a0, a1], [b0, b1]) => ({ starts: [{ slug: 'a', seq: a0, at: 7 }, { slug: 'b', seq: b0, at: 7 }], ends: [{ slug: 'a', seq: a1, at: 7 }, { slug: 'b', seq: b1, at: 7 }] });
+  const mem = (slug, seq, runId) => ({ slug, seq, runId, at: 7 });
+  const spansOf = ([a0, a1], [b0, b1]) => ({ starts: [mem('a', a0, 'ra'), mem('b', b0, 'rb')], ends: [mem('a', a1, 'ra'), mem('b', b1, 'rb')] });
   check('真并行 两名成员区间交叠', activationsOverlap(spansOf([3, 11], [4, 16]), 'a', 'b'), true);
   check('真并行 严格串行、边界帧同毫秒(负对照)', activationsOverlap(spansOf([3, 11], [12, 16]), 'a', 'b'), false);
+  // A 首次激活在 onStarted 前就失败(只有 end 3),被 @ 后再起 [8,16] 与 B [4,11] 交叠 —— 按下标配对会配成 [8,3] 判串行
+  check('真并行 孤立 end 不错位', activationsOverlap({ starts: [mem('b', 4, 'rb'), mem('a', 8, 'ra2')], ends: [mem('a', 3, 'ra1'), mem('b', 11, 'rb'), mem('a', 16, 'ra2')] }, 'a', 'b'), true);
   if (fails.length) { console.error(`--selftest 失败 ${fails.length} 条:\n  ${fails.join('\n  ')}`); process.exit(1); }
   console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict / activationBuckets / activationsOverlap,含负对照)');
   process.exit(0);
