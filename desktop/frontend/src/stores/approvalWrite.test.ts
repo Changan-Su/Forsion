@@ -1,6 +1,6 @@
 /**
  * 审批档写入失败要回滚(setExecConfig):引擎审批时现读会话**存值**,PUT 没成功 = 档没改 → 药丸不能停在新档上。
- * 只有最新一次写入的结果算数;回滚退到「最近一次确认存上的档」,不是「上一次点的」(那次可能也没存上)。
+ * 在途的一批全部落定再判:最新一次存上了就信它,没存上就退到「最后一次存上的档」(不是「上一次点的」);中途不回滚。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useApp } from './appStore'
@@ -79,6 +79,41 @@ describe('setExecConfig 审批档写入', () => {
     a.resolve({}); await flush()
     b.reject(new Error('boom')); await flush()
     expect(mode('s1')).toBe('readonly')
+  })
+
+  it('最新一次先失败、更早那次后存上 → 退到更早那次存上的档(中途不回滚)', async () => {
+    const a = deferred(); const b = deferred()
+    putMock.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise)
+    useApp.getState().setExecConfig({ approvalMode: 'readonly' }, 's1')
+    useApp.getState().setExecConfig({ approvalMode: 'auto-edit' }, 's1')
+    b.reject(new Error('boom')); await flush()
+    expect(mode('s1')).toBe('auto-edit') // 还有一次在途,先不判
+    a.resolve({}); await flush()
+    expect(mode('s1')).toBe('readonly')
+    expect(toast).toHaveBeenCalledTimes(1)
+  })
+
+  it('前一次在途时同档再点一次:它是这批最新的,前一次失败不会把它退掉', async () => {
+    useApp.setState({ configBySession: { s1: { execMode: 'host', approvalMode: 'readonly' } } })
+    const a = deferred(); const b = deferred()
+    putMock.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise)
+    useApp.getState().setExecConfig({ approvalMode: 'full-auto' }, 's1')
+    useApp.getState().setExecConfig({ approvalMode: 'full-auto' }, 's1')
+    a.reject(new Error('boom')); b.resolve({}); await flush()
+    expect(mode('s1')).toBe('full-auto')
+    expect(toast).not.toHaveBeenCalled()
+  })
+
+  it('同档再点那次先失败、前一次后存上 → 停在已存上的新档,不报错', async () => {
+    useApp.setState({ configBySession: { s1: { execMode: 'host', approvalMode: 'readonly' } } })
+    const a = deferred(); const b = deferred()
+    putMock.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise)
+    useApp.getState().setExecConfig({ approvalMode: 'full-auto' }, 's1')
+    useApp.getState().setExecConfig({ approvalMode: 'full-auto' }, 's1')
+    b.reject(new Error('boom')); await flush()
+    a.resolve({}); await flush()
+    expect(mode('s1')).toBe('full-auto')
+    expect(toast).not.toHaveBeenCalled()
   })
 
   it('非审批档的 PUT 失败 → 不回滚、不报错(这些键随 run 的 agentConfig 下发,本地值当场生效)', async () => {

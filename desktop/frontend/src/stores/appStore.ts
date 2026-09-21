@@ -474,10 +474,12 @@ function rememberDefaults(patch: Partial<StoredDesktopConfig>): void {
   useApp.setState((s) => ({ desktopConfig: { ...((s.desktopConfig || {}) as StoredDesktopConfig), ...patch } }))
   void window.tangu?.setConfig?.(patch).catch(() => {})
 }
-/** 审批档写入的在途状态(按会话)。引擎审批时现读会话**存值**(压过 run 快照),没存上 = 没改:失败要把药丸退回
- *  base = 最近一次确认存上的档(不是「上一次点的」,那次可能也没存上)。只有最新一次写入的结果算数 ——
- *  更早那次失败时后面还有一次在途,由后面那次定。 */
-const approvalWrites = new Map<string, { base: AgentConfig['approvalMode'] }>()
+/** 审批档写入(按会话,把在途的一批攒在一起)。引擎审批时现读会话**存值**(压过 run 快照),没存上 = 没改。
+ *  全部落定再判:最新一次存上了就信它;没存上就把药丸退回最后一次存上的档(一个都没存上 = 这批之前的档)。
+ *  中途不回滚 —— 更早那次可能在后一次失败之后才存上。
+ *  ponytail: 拿「落定顺序」近似服务端落库顺序;整对象 PUT 的真顺序(含同窗口其它 setter 晚到的 PUT 把审批档盖回去)
+ *  只有服务端按键合并才管得住,另开。 */
+const approvalWrites = new Map<string, { issued: number; pending: number; mode: AgentConfig['approvalMode']; stored: AgentConfig['approvalMode']; err: Error | null }>()
 let lastAuthExpiredAt = 0 // handleAuthExpired 去抖:轮询/SSE/models 可能同时多次 401
 /** boot 期 managed 重连:引擎已 ready 但 connState 没到 ok(testConnection 撞上引擎刚 listen / 偶发超时)→ 15s 一次
  *  **只 connect 不 restart**,上限 8 次;每次 ready 广播重新计数。 */
@@ -2747,21 +2749,24 @@ export const useApp = create<AppState>((set, get) => ({
     set((s) => ({ configBySession: { ...s.configBySession, [sid]: next } }))
     const put = api.putSessionConfig(get().cfg, sid, next)
     const mode = patch.approvalMode
-    // 其余键随每个 run 的 agentConfig 下发,本地值当场就生效;只有审批档是引擎审批时现读存值 → 只它等结果、失败回滚
-    if (!mode || mode === prev?.approvalMode) { void put.catch(() => {}); return }
-    const inflight = approvalWrites.get(sid)
-    const w = { base: inflight ? inflight.base : prev?.approvalMode }
-    approvalWrites.set(sid, w)
-    put.then(() => {
-      const cur = approvalWrites.get(sid)
-      if (cur === w) approvalWrites.delete(sid)
-      else if (cur) cur.base = mode // 后面那次失败时,该退回的是这次已存上的档
-    }, (e) => {
-      if (approvalWrites.get(sid) !== w) return
-      approvalWrites.delete(sid)
-      set((s) => (s.configBySession[sid] ? { configBySession: { ...s.configBySession, [sid]: { ...s.configBySession[sid], approvalMode: w.base } } } : {}))
-      get().toast(translate('appstore.approvalSaveFailed', { e: e?.message || String(e) }), true)
-    })
+    // 其余键随每个 run 的 agentConfig 下发,本地值当场就生效;只有审批档是引擎审批时现读存值 → 只它等结果、失败回滚。
+    // 同档重点也算:前一次还在途时,它就是这批里最新的一次。
+    if (!mode || (mode === prev?.approvalMode && !approvalWrites.has(sid))) { void put.catch(() => {}); return }
+    const b = approvalWrites.get(sid) ?? { issued: 0, pending: 0, mode, stored: prev?.approvalMode, err: null }
+    approvalWrites.set(sid, b)
+    const n = ++b.issued
+    b.pending += 1
+    b.mode = mode
+    void put.then(() => { b.stored = mode; if (n === b.issued) b.err = null },
+      (e) => { if (n === b.issued) b.err = e instanceof Error ? e : new Error(String(e)) })
+      .then(() => {
+        if (--b.pending) return // 这批还有在途的:全部落定再判
+        approvalWrites.delete(sid)
+        if (!b.err) return
+        const back = b.stored
+        set((s) => (s.configBySession[sid] ? { configBySession: { ...s.configBySession, [sid]: { ...s.configBySession[sid], approvalMode: back } } } : {}))
+        if (back !== b.mode) get().toast(translate('appstore.approvalSaveFailed', { e: b.err.message }), true)
+      })
   },
 
   setSessionModel: (modelId, targetSessionId, remember = true) => {
