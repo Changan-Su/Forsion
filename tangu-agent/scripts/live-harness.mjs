@@ -635,24 +635,29 @@ try {
   //   B = 成员 config 自带 approval_mode=auto-edit(模型照 manage-agents-guide 示例建成员就会这样),旧口径成员定义压过会话;
   //   A = run 快照还是自动编辑(团队 run 启动后用户才切到完全通行 —— 一跑几小时,成员子 run 冻着启动那刻的档)。
   // 判据:两条都 0 次审批,且两位成员真的把文件写到了工作区外(防「模型没调工具」的假绿)。负对照 = 用修复前的 dist 跑,须红。
+  // C = 自动编辑档下的「工作区内」:成员写默认目录与工作范围里加的目录,写入一次都不许问(run_bash 在这档本就要问,不计)。
   await scenario('teamapproval', 'teamapproval 团队 × 完全通行:成员不再逐次弹审批', async () => {
     const outside = join(OUT, 'outside-scope'); mkdirSync(outside, { recursive: true });
+    const scope = join(OUT, 'team-scope'); mkdirSync(scope, { recursive: true });
     const mk = (slug, name) => api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name, description: 'live harness', approvalMode: 'auto-edit',
       systemPrompt: `You are ${name}. The user will give you a file path and a shell command. Call write_file to create that exact file with content "${name} was here", then call run_bash with the exact command, then reply with the command output and DONE on its own line. Do not delegate, do not ask teammates, do not use other tools.` }) }).catch(() => null);
     await mk('live-wren', 'Wren'); await mk('live-kite', 'Kite');
     const legs = [];
-    for (const [leg, snapshot] of [['B', 'full-auto'], ['A', 'auto-edit']]) {
-      const cfg = { ...AGENT_CONFIG, groupChat: true, groupAgents: ['live-wren', 'live-kite'], groupSeedHistory: false, groupNoSummary: true };
-      const sid = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: `Team approval ${leg}`, model_id: MODEL, agent_config: { ...cfg, approvalMode: 'full-auto' } }) })).session.id;
-      const files = { wren: join(outside, `wren-${leg}.txt`), kite: join(outside, `kite-${leg}.txt`) };
+    for (const [leg, stored, snapshot] of [['B', 'full-auto', 'full-auto'], ['A', 'full-auto', 'auto-edit'], ['C', 'auto-edit', 'auto-edit']]) {
+      const cfg = { ...AGENT_CONFIG, groupChat: true, groupAgents: ['live-wren', 'live-kite'], groupSeedHistory: false, groupNoSummary: true, ...(leg === 'C' ? { extraRoots: [scope] } : {}) };
+      const sid = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: `Team approval ${leg}`, model_id: MODEL, agent_config: { ...cfg, approvalMode: stored } }) })).session.id;
+      const files = leg === 'C'
+        ? { wren: join(scope, 'wren-C.txt'), kite: join(workspace, 'kite-C.txt') }
+        : { wren: join(outside, `wren-${leg}.txt`), kite: join(outside, `kite-${leg}.txt`) };
       const ev = await run(sid, `Wren: write ${files.wren} and run \`node --version\`. Kite: write ${files.kite} and run \`node --version\`.`, 300_000,
         { ...cfg, approvalMode: snapshot }, 'desktop/live-harness');
-      legs.push({ leg, ev, written: Object.values(files).filter((f) => existsSync(f)).length });
+      const writeAsks = ev.approvalList.filter((x) => x.name !== 'run_bash').length;
+      legs.push({ leg, ev, writeAsks, written: Object.values(files).filter((f) => existsSync(f)).length });
     }
-    const ok = legs.every((l) => !l.ev.error && l.ev.approvals === 0 && l.written === 2);
+    const ok = legs.every((l) => !l.ev.error && l.written === 2 && (l.leg === 'C' ? l.writeAsks === 0 : l.ev.approvals === 0));
     const ev = legs[0].ev;
     return { ok,
-      detail: legs.map((l) => `${l.leg}: 审批 ${l.ev.approvals}${l.ev.approvalList.length ? ' ' + JSON.stringify(l.ev.approvalList.slice(0, 4)) : ''} · 工作区外文件 ${l.written}/2${l.ev.error ? ' · ' + l.ev.error : ''}`).join(';'),
+      detail: legs.map((l) => `${l.leg}: 审批 ${l.ev.approvals}(写入 ${l.writeAsks})${l.ev.approvalList.length ? ' ' + JSON.stringify(l.ev.approvalList.slice(0, 4)) : ''} · 文件 ${l.written}/2${l.ev.error ? ' · ' + l.ev.error : ''}`).join(';'),
       output: legs.map((l) => `[${l.leg}]\n` + l.ev.group.remarks.map((r) => `[${r.slug}] ${r.text}`).join('\n')).join('\n\n---\n\n'),
       ttftMs: ttft(ev), tokens: legs.reduce((a, l) => a + (tokensOf(l.ev) || 0), 0), toolCalls: legs.flatMap((l) => l.ev.toolCalls) };
   });
