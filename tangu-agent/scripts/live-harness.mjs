@@ -660,7 +660,7 @@ try {
         await api(`/agent/sessions/${sid}/config`, { method: 'PUT', body: JSON.stringify({ ...cfg, approvalMode: 'full-auto' }) });
       } : undefined;
       // 路径给相对默认目录的短写法:模型抄长临时路径会抄错段(实测把 live-xxx/ 整段吞掉,文件落到别处 → 判据误红)。
-      const at = (f) => relative(workspace, f);
+      const at = (f) => { const r = relative(workspace, f); return r.startsWith('..') ? r : `./${r}`; }; // 默认目录下的也带 ./,否则模型会照抄队友的 ../ 前缀
       const task = leg === 'D'
         ? `One tool call per turn, wait for each result before the next. Wren: write ${at(files.wren)}, then run \`node --version\`, then write ${at(files.wren2)}. Kite: write ${at(files.kite)}, then run \`node --version\`, then write ${at(files.kite2)}.`
         : `Wren: write ${at(files.wren)} and run \`node --version\`. Kite: write ${at(files.kite)} and run \`node --version\`.`;

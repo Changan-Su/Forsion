@@ -509,7 +509,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
           // 而排队行只存得下 agentSlug。ALS 作用域的工具(manage_harness/…)因此不能排队等事后重放,
           // 否则同一笔会写到父代理头上 —— 判定在 pendingApprovals,这里只把真实身份如实报上去。
           ...(skillSlug ? { execAgentSlug: skillSlug } : {}),
-          sessionId: parentCtx.sessionId, execMode: parentCtx.execMode, approvalMode: parentCtx.approvalMode, modeSessionIds: parentCtx.approvalModeSessionIds,
+          sessionId: parentCtx.sessionId, execMode: parentCtx.execMode, approvalMode: parentCtx.approvalMode, modeSessionId: parentCtx.approvalModeSessionId,
           // 越界写升级按真实工作区判定、PermissionRequest hook 需要 profile(Codex 评审 #3)
           cwd: parentCtx.cwd, extraRoots: parentCtx.extraRoots, profile: parentCtx.profile,
         },

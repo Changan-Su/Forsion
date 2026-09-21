@@ -227,23 +227,6 @@ export async function storedApprovalMode(sessionId: string): Promise<ApprovalMod
   return APPROVAL_MODES.has(mode) ? mode : undefined;
 }
 
-const STRICTNESS: Record<Exclude<ApprovalMode, 'custom'>, number> = { readonly: 0, 'auto-edit': 1, 'full-auto': 2 };
-/** custom 有多宽看它的 base(config.json 里可以是 full-auto),不能钉成自动编辑那一档。 */
-const strictnessOf = (m: ApprovalMode): number => STRICTNESS[m === 'custom' ? customRules().base : m];
-/** 审批闸现读:几个会话存值里最严的那个(团队成员 = [团队会话, 成员会话]:团队档是上限,成员子聊天里只能调得更严)。
- *  平手留 custom(同样宽的基础上还叠着用户的 deny / ask 规则),再平手按列表先后。
- *  都没存 → undefined(回落启动快照);**读失败 → readonly**:读不到用户此刻的档时回落快照 = 可能正好放开用户刚收紧的档(Codex 09-21 P1)。 */
-export async function liveApprovalMode(sessionIds: string[]): Promise<ApprovalMode | undefined> {
-  let best: ApprovalMode | undefined;
-  for (const id of sessionIds) {
-    let m: ApprovalMode | undefined;
-    try { m = await storedApprovalMode(id); } catch { return 'readonly'; }
-    if (!m) continue;
-    const d = best === undefined ? -1 : strictnessOf(m) - strictnessOf(best);
-    if (d < 0 || (d === 0 && m === 'custom')) best = m;
-  }
-  return best;
-}
 
 /** 越界写诊断:同 run 同目录只记一次(反馈包带后端日志;09-21 那份只剩工具名,答不了「它到底写哪儿了」)。 */
 const loggedEscalations = new Set<string>();
@@ -383,9 +366,9 @@ export async function gateToolCall(
   call: ToolCall,
   ctx: {
     sessionId: string; execMode?: string; approvalMode?: ApprovalMode; cwd?: string; extraRoots?: string[]; profile?: AppProfile;
-    /** 审批档跟这些会话**此刻**存的设置走(取最严;run 中途在输入区切档当场生效;团队成员 = [团队会话, 成员会话]);都没存才用 approvalMode 快照。
-     *  只给「档位本就来自会话设置」的 run(见 agentLoop.approvalModeSessionIds),通道 / Muse / 自动化各自定档,不给。 */
-    modeSessionIds?: string[];
+    /** 审批档跟这个会话**此刻**存的设置走(run 中途在输入区切档当场生效;团队成员 = 团队会话);没存才用 approvalMode 快照。
+     *  只给「档位本就来自会话设置」的 run(见 agentLoop.approvalModeSessionId),通道 / Muse / 自动化各自定档,不给。 */
+    modeSessionId?: string;
     /** 无人值守 run(Muse ask/agent 档):需要人决定时不 await 订阅者,改走 pendingApprovals(排队 / 代批)。 */
     approvalDeferral?: 'queue' | 'agent'; userId?: string; agentSlug?: string;
     /** 本次调用**此刻真正的执行身份**(具名子代理的展示 slug),与 agentSlug(run 的归属 agent)不同时才给。
@@ -409,19 +392,25 @@ export async function gateToolCall(
   // custom 档先裁决:用户写下的规则**压过**下面的 known-safe 捷径(把 `run_bash:ls` 放进 ask
   // 就该真弹审批,否则规则形同虚设);未命中则降解成 base 档,后续逻辑与三档完全一致。
   // 档位现读:团队 run 一跑几小时、成员子 run 各自冻着启动那刻的档 —— 只认快照,用户切到「完全通行」整场纹丝不动(09-21 反馈)。
-  let mode = (ctx.modeSessionIds?.length && (await liveApprovalMode(ctx.modeSessionIds))) || ctx.approvalMode;
+  // 读失败 fail-closed:回落快照可能正好放开用户刚收紧的档 → 按只读问,用户写的 deny / ask 规则照样生效、allow 不放行
+  // (只读档管不到 manage_automation 这类只靠 custom 规则把关的工具,光落 readonly 等于绕过 deny —— Codex 09-21 二轮)。
+  let mode = ctx.approvalMode;
+  let readFailed = false;
+  if (ctx.modeSessionId) {
+    try { mode = (await storedApprovalMode(ctx.modeSessionId)) || mode; } catch { readFailed = true; }
+  }
   let forceAsk = false;
   let askRule = '';
-  if (mode === 'custom') {
+  if (mode === 'custom' || readFailed) {
     const rules = customRules();
-    const v = customVerdictDetailed(call, rules);
+    const v = customVerdictDetailed(call, readFailed ? { ...rules, allow: [] } : rules);
     // 拒绝时把规则串一并带出:否则用户写坏一条 deny 规则,只看到 agent 莫名失败,无从调起。
     // 模型面文本一律英文(项目约定:提示/工具结果英文,UI/日志中文)
     if (v?.verdict === 'deny') return { action: 'reject', rejectReason: `Denied by approval rule: ${v.rule}` };
     if (v?.verdict === 'allow') return { action: 'approve' };
     forceAsk = v?.verdict === 'ask';
     askRule = forceAsk ? v!.rule : '';
-    mode = rules.base;
+    mode = readFailed ? 'readonly' : rules.base;
   }
 
   // known-safe 只读 bash:免审批。

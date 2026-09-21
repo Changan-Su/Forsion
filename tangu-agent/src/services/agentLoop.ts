@@ -311,16 +311,17 @@ export function bindSessionFacts(agentConfig: any, facts: SessionFacts): void {
   if (facts.teamSlug) { agentConfig.groupChat = agentConfig.groupChat !== false; agentConfig.engineId = undefined; agentConfig.execMode = 'host'; agentConfig.preset = null; }
 }
 
-/** 本 run 审批时现读哪些会话存着的档(gateToolCall.modeSessionIds,取最严);undefined = 只用启动快照。
- *  - 客户端团队 run 起的成员(teamMember.followSessionMode 由团队 run 下发,子聊天里直接追问也带着):[团队会话, 成员会话] ——
- *    团队档是上限,成员子聊天里单独调的档只能更严;团队降档不被成员会话里上次激活写进去的旧宽档顶掉。
+/** 本 run 审批时现读哪个会话存着的档(gateToolCall.modeSessionId);undefined = 只用启动快照。
+ *  - 团队成员一律听**团队会话**:客户端团队 run 起的激活(teamMember.followSessionMode 由团队 run 下发)、成员子聊天里直接追问
+ *    (输入区发起)都算。成员会话里存的档只是上次激活抄过去的快照,不作数 —— 让它参与判定就得处理「团队降档后它还是旧宽档」
+ *    「激活回写与切档撞车」一串竞态(Codex 09-21 两轮)。TUI / 通道起的团队 run 不带标记 → 快照。
  *  - 其余客户端输入区发起的(input.origin='client',只有 POST /agent/runs 会写):跟本会话,中途切档当场生效。
  *  - 通道(微信远程档)/ Muse / 自动化 / 讨论 / TUI:各自定档,绝不被会话存值改写 —— 桌面把会话切成完全通行,远程消息不该跟着放开。 */
-export function approvalModeSessionIds(p: { execMode: string; fromClient: boolean; sessionId: string; teamMember?: any }): string[] | undefined {
+export function approvalModeSessionId(p: { execMode: string; fromClient: boolean; sessionId: string; teamMember?: any }): string | undefined {
   if (p.execMode !== 'host') return undefined;
   const tm = p.teamMember;
-  if (tm?.followSessionMode === true && typeof tm.teamSessionId === 'string' && tm.teamSessionId) return [tm.teamSessionId, p.sessionId];
-  return p.fromClient ? [p.sessionId] : undefined;
+  if (typeof tm?.teamSessionId === 'string' && tm.teamSessionId) return p.fromClient || tm.followSessionMode === true ? tm.teamSessionId : undefined;
+  return p.fromClient ? p.sessionId : undefined;
 }
 
 function safeRealpath(p: string): string {
@@ -866,7 +867,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       : [];
   const approvalMode: ApprovalMode =
     agentConfig.approvalMode || (execMode === 'host' ? 'auto-edit' : 'full-auto');
-  const modeSessionIds = approvalModeSessionIds({ execMode, fromClient: input.origin === 'client', sessionId, teamMember: isTeamMember ? teamMember : undefined });
+  const modeSessionId = approvalModeSessionId({ execMode, fromClient: input.origin === 'client', sessionId, teamMember: isTeamMember ? teamMember : undefined });
   // 无人值守的异步审批(Muse ask/agent 档):**只信引擎内部起的 run** —— input.background 由 muse.ts 直接写进
   // createRun 的 input,/agent/runs 路由按字段名组装 input、客户端塞不进来;agentConfig 是请求体可控的,
   // 单看它就能让普通 run 把同步审批改成排队甚至代批(Codex 09-10 P1)。普通 run 恒 undefined = 同步审批一字不变。
@@ -956,7 +957,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     if (agentConfig.groupChat && profile.capabilities.groupChat && ps.groupChat) {
       await runGroupChat({
         runId, sessionId, userId, appId, modelId, execMode, cwd, extraRoots, wsProject, profile, agentConfig,
-        followSessionMode: !!modeSessionIds,
+        followSessionMode: !!modeSessionId,
         message: input.message ? String(input.message) : '',
         userMessageId: input.userMessageId,
         attachments,
@@ -1249,7 +1250,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings,
       dispatchTargets,
       hostSandbox: runHostSandbox,
-      enabledSkillIds, execMode, cwd, extraRoots, approvalMode, approvalModeSessionIds: modeSessionIds, profile, modelId, planMode, wsProject,
+      enabledSkillIds, execMode, cwd, extraRoots, approvalMode, approvalModeSessionId: modeSessionId, profile, modelId, planMode, wsProject,
       muse: !!agentConfig.muse,
       activityAccess: !!agentConfig.activityAccess,
       automationOrigin: typeof agentConfig.automationOrigin === 'string' ? agentConfig.automationOrigin : undefined,
@@ -1853,7 +1854,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
       // host-exec 审批闸门：execMode!=='host' 时立即放行（无 await、无事件）→ server/worker 零影响。
       const decision = await gateToolCall(runId, effCall, {
-        sessionId, execMode, approvalMode, modeSessionIds, cwd, extraRoots, profile,
+        sessionId, execMode, approvalMode, modeSessionId, cwd, extraRoots, profile,
         approvalDeferral, userId, agentSlug: activeAgentSlug,
       }, ac.signal);
 

@@ -26,7 +26,7 @@ import { listCheckpoints, restoreCodeSince, removeSessionCheckpoints } from '../
 import { searchSessions, splitTerms, dayArg, fmtDate } from '../services/sessionSearch.js';
 import { isValidSlug } from '../agents/agentRegistry.js';
 import { isDelegateActive } from '../services/delegateTranscript.js';
-import { ensureMemberSession, memberRunConfig, TEAMWORK_KIND } from '../services/teamRuns.js';
+import { ensureMemberSession, memberRunConfig } from '../services/teamRuns.js';
 import { recoverTeamOutputs } from '../services/teamOutputs.js';
 
 const router = Router();
@@ -693,15 +693,6 @@ router.put('/agent/sessions/:id/config', authMiddleware, async (req: AuthRequest
     await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = ?`, [
       JSON.stringify(cfg), req.params.id,
     ]);
-    // 团队会话改审批档 → 级联进成员工作会话:子聊天里直接追问按成员会话自己的档走(所见即所得),
-    // 不级联的话团队降到自动编辑后,成员子聊天还停在上次激活写进去的完全通行。只在档位变了才写 —— 子聊天里单独调的档留到团队下次改档 / 下次激活。
-    if (typeof cfg.approvalMode === 'string' && cfg.approvalMode !== stored?.approvalMode) {
-      const members = await query<any[]>(`SELECT id, agent_config FROM chat_sessions WHERE parent_session_id = ? AND user_id = ? AND kind = ?`, [req.params.id, userId, TEAMWORK_KIND]);
-      for (const m of members || []) {
-        const mc = parseMaybeJson(m.agent_config);
-        if (mc && typeof mc === 'object') await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = ?`, [JSON.stringify({ ...mc, approvalMode: cfg.approvalMode }), m.id]);
-      }
-    }
     res.json({ agent_config: cfg });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'put config failed' });

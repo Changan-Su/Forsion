@@ -59,17 +59,3 @@ describe('PUT /agent/sessions/:id/config 与轨道身份锁', () => {
     expect((await put('B', { thinkingLevel: 'low' })).status).toBe(200); // 非身份键照改
   });
 });
-
-describe('PUT /agent/sessions/:id/config 审批档级联进团队成员会话', () => {
-  it('团队会话改档 → 成员工作会话同步(子聊天直接追问按成员会话的档);档位没变的 PUT 不碰成员会话里单独调的档', async () => {
-    await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, agent_config) VALUES ('T', 'u1', 'tangu', 't', 'm1', 'user', ?)`, [JSON.stringify({ groupChat: true, approvalMode: 'full-auto' })]);
-    await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, parent_session_id, agent_config) VALUES ('W', 'u1', 'tangu', 'w', 'm1', 'teamwork', 'T', ?)`, [JSON.stringify({ agentSlug: 'bo', approvalMode: 'full-auto', teamMember: { teamSessionId: 'T' } })]);
-    await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, parent_session_id, agent_config) VALUES ('D', 'u1', 'tangu', 'd', 'm1', 'discussion', 'T', ?)`, [JSON.stringify({ approvalMode: 'full-auto' })]);
-    expect((await put('T', { groupChat: true, approvalMode: 'auto-edit' })).status).toBe(200);
-    expect(await cfgOf('W')).toMatchObject({ agentSlug: 'bo', approvalMode: 'auto-edit', teamMember: { teamSessionId: 'T' } });
-    expect((await cfgOf('D')).approvalMode).toBe('full-auto'); // 只动 teamwork,不碰讨论等别的子会话
-    await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = 'W'`, [JSON.stringify({ agentSlug: 'bo', approvalMode: 'readonly' })]);
-    expect((await put('T', { groupChat: true, approvalMode: 'auto-edit', thinkingLevel: 'high' })).status).toBe(200);
-    expect((await cfgOf('W')).approvalMode).toBe('readonly');
-  });
-});
