@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { allowExternalLaunch, gitOwners, isExternalLaunchAllowed, revokeExternalLaunch } from './productTrust'
@@ -8,7 +8,8 @@ let home: string
 beforeEach(() => { home = mkdtempSync(path.join(os.tmpdir(), 'product-trust-')) })
 afterEach(() => rmSync(home, { recursive: true, force: true }))
 
-const A = { id: 'p_aaaaaaaaaaaa', root: '/projects/a' }
+let A: { id: string; root: string }
+beforeEach(() => { A = { id: 'p_aaaaaaaaaaaa', root: path.join(home, 'projects', 'a') }; mkdirSync(A.root, { recursive: true }) })
 const NONCE = 'ab'.repeat(16)
 
 describe('productTrust', () => {
@@ -26,7 +27,13 @@ describe('productTrust', () => {
     expect(isExternalLaunchAllowed(home, A)).toBe(false)
     allowExternalLaunch(home, A)
     expect(isExternalLaunchAllowed(home, A)).toBe(true)
-    expect(isExternalLaunchAllowed(home, { ...A, root: '/projects/impostor' })).toBe(false) // 同 id 的 sidecar 被搬进别的目录
+    const impostor = path.join(home, 'projects', 'impostor'); mkdirSync(impostor)
+    expect(isExternalLaunchAllowed(home, { ...A, root: impostor })).toBe(false) // 同 id 的 sidecar 被搬进别的文件夹(另一个 inode)
+    // ⚠️改名不丢:桌面快捷方式里只有产物 id,用户给项目文件夹改了名它照样得打得开(更新日志里写明的承诺)。
+    const renamed = path.join(home, 'projects', 'a-renamed')
+    renameSync(A.root, renamed)
+    expect(isExternalLaunchAllowed(home, { id: A.id, root: renamed })).toBe(true)
+    renameSync(renamed, A.root)
     expect(isExternalLaunchAllowed(home, { ...A, id: 'p_bbbbbbbbbbbb' })).toBe(false)
     revokeExternalLaunch(home, A.id)
     expect(isExternalLaunchAllowed(home, A)).toBe(false)

@@ -154,6 +154,19 @@ describe('loading and unloading', () => {
     expect(productsUpdate).toHaveBeenCalledExactlyOnceWith('p_0123456789ab', { devLoad: false })
     expect(calls).toEqual(['update:false', 'reload', 'changed'])
   })
+  it('still lets a granted plugin be unloaded after its manifest stopped parsing', async () => {
+    // 清单写坏 → kind 退成 unknown;授权还在,宿主把当时的 pluginId 随 devLoad 一起带回来。看不到卸载按钮 = 这份授权永远撤不掉。
+    Object.assign(devState, { loaded: true, blocked: 'invalid', blockedReason: 'manifest.json is not valid JSON' })
+    await mount(product({ kind: 'unknown', devLoad: true }))
+    expect(state()).toBe('blocked')
+    expect(panel().getAttribute('data-plugin-id')).toBe('my-plugin')
+    expect(button('sandbox-load')).toBeNull()
+    await click('sandbox-unload')
+    expect(calls).toEqual(['update:false', 'reload', 'changed'])
+    // 没有授权的非插件项目照旧不给入口
+    await mount(product({ kind: 'unknown', devLoad: false }))
+    expect(state()).toBe('unavailable')
+  })
   it('reloads on demand without touching the flag', async () => {
     Object.assign(devState, { loaded: true, active: true })
     await mount(product({ devLoad: true }))

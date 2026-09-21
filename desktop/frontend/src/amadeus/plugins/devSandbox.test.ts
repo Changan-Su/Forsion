@@ -371,4 +371,30 @@ describe('async setup 的代次', () => {
     await Promise.resolve(); await Promise.resolve()
     expect(g.__late.disposed).toBe(1)
   })
+
+  it('⚠️过期的续体醒来再 register* 一律作废:重载后不出现两份命令,卸载后不留幽灵', async () => {
+    const g = globalThis as unknown as { __wake: Array<() => void> }
+    g.__wake = []
+    // 常见写法:await 之后才登记。解构 ctx 是为了钉住「闸装在成员上,不是装在 ctx 外面的一层壳上」。
+    const CODE = (title: string): string => `const { registerCommand, registerStatusItem } = ctx
+      return new Promise((resolve) => { globalThis.__wake.push(() => {
+        registerCommand({ id: 'late', title: ${JSON.stringify(title)}, run() {} })
+        registerStatusItem({ id: 's', text: 'x' }).update({ text: 'y' }) // 作废之后交回来的 handle 也不许抛
+        resolve(undefined)
+      }) })`
+    const mk = (title: string): ExternalPluginSource => source({ id: 'ghost', code: CODE(title), dev: true, devRoot: '/p/ghost', devProductId: 'p_00000000000c' })
+    const mine = (): string[] => usePluginStore.getState().commands.filter((c) => c.pluginId === 'ghost').map((c) => String(c.item.title))
+    env.sources = [mk('v1')]
+    await usePluginStore.getState().loadExternal()
+    env.sources = [mk('v2')]
+    await reloadDevPlugin('ghost')
+    g.__wake[1]!() // 第 2 版(现役)正常登记
+    g.__wake[0]!() // 第 1 版迟到
+    expect(mine()).toEqual(['v2'])
+    env.sources = [] // 卸载:来源没了
+    await reloadDevPlugin('ghost')
+    g.__wake[0]!(); g.__wake[1]!()
+    expect(mine()).toEqual([])
+    expect(usePluginStore.getState().statusItems.filter((o) => o.pluginId === 'ghost')).toEqual([])
+  })
 })

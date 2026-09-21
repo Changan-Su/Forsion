@@ -16,7 +16,7 @@ import { adoptLegacyCloudState, cloudAccountNamespace, currentCloudAccountId, re
 import { defaultWorkspaceDir, forsionHomeDir, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
 import { effectivePluginId } from '../../shared/products'
-import { readDevLoads } from '../devLoadStore'
+import { isDevLoaded, readDevLoads } from '../devLoadStore'
 import { builtinPluginIds } from '../builtinPlugins'
 import { logActivity, logNoteEdit } from '../activityLog'
 import { loadTanguCreds } from '../forsionAuth'
@@ -1255,9 +1255,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     //   授权按「产物 id + 授权当时的真实根」双钥匙核对;复制出来的项目(id 被重铸)与搬了家的 sidecar 都对不上。
     const products: NonNullable<Awaited<ReturnType<typeof getProduct>>>[] = []
     const authorizedPluginId = new Map<string, string | null>() // 产物 id → 授权当时的生效插件 id(清单写坏期间沿用)
-    for (const [pid, grant] of Object.entries(readDevLoads(forsionHomeDir()))) {
+    const loads = readDevLoads(forsionHomeDir())
+    for (const [pid, grant] of Object.entries(loads)) {
       const product = await getProduct(projectsRootDir(), pid).catch(() => null) // 托管根不存在 / 扫不动 → 当没有
-      if (product && product.root === grant.root) { products.push(product); authorizedPluginId.set(product.id, grant.pluginId) }
+      // 按目录身份(dev+ino)核,不比路径:项目文件夹改了名授权照旧;同 id 的 sidecar 搬进别的文件夹不算。
+      if (product && isDevLoaded(loads, product)) { products.push(product); authorizedPluginId.set(product.id, grant.pluginId) }
     }
     products.sort((a, b) => b.updatedAt - a.updatedAt) // 两个项目声明同一个插件 id 时先到先得,顺序得确定
     type DevManifest = {

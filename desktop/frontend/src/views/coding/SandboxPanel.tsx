@@ -25,7 +25,10 @@ export interface SandboxPanelProps {
 
 export function SandboxPanel({ root, product, onPrompt, onProductChanged }: SandboxPanelProps) {
   const { t } = useI18n()
-  const pluginId = product?.kind === 'plugin' ? product.pluginId ?? null : null
+  const devLoad = product?.devLoad === true
+  // 清单被写坏(kind 退成 unknown)而授权还在:照样要看得到报错、卸得掉 —— pluginId 取宿主随授权存下的那个。
+  // **开启**仍只认真插件项目:devLoad 为 false 时这里只剩 kind === 'plugin' 一条路(主进程也再拒一次)。
+  const pluginId = product && (product.kind === 'plugin' || devLoad) ? product.pluginId ?? null : null
   const dev = useDevPluginState(pluginId)
   const [busy, setBusy] = useState<Busy>(null)
   const [error, setError] = useState('')
@@ -49,12 +52,11 @@ export function SandboxPanel({ root, product, onPrompt, onProductChanged }: Sand
   }, [])
 
   const bridge = window.tangu
-  const canLoad = !!bridge?.productsUpdate && !!product && product.kind === 'plugin' && !!pluginId
+  const canLoad = !!bridge?.productsUpdate && !!product && !!pluginId
   const state: SandboxState = !canLoad ? 'unavailable'
     : dev.blocked ? 'blocked'
       : dev.setupError ? 'failed'
         : dev.loaded && dev.active ? 'active' : 'unloaded'
-  const devLoad = product?.devLoad === true
   // 这个面板可以在项目切走之后还活着(命令面板开的临时面板)。落盘动作回来之后一律先确认还是同一个项目。
   const current = () => mounted.current && normPath(useCodeStudio.getState().activeProject || '') === normPath(root)
 

@@ -57,7 +57,10 @@ const DEFAULT_RESTORE_PREFIX = 'Restore:'
 /** 一次 log 同时拿元数据与改动文件数:%s 放最后,万一 subject 里混进分隔符也只会污染它自己。 */
 const LOG_FORMAT = '--format=%x1e%H%x1f%ct%x1f%(trailers:key=Forsion-Version,valueonly)%x1f%s'
 /** 固定前缀:不分页、不跑 fsmonitor / 钩子 / 外部 diff、不把 CJK 路径转义成八进制、不给提交签名(全局开了 gpgsign 也不许卡住)。 */
-const PREFIX = ['--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'diff.external=', '-c', 'core.quotepath=false', '-c', 'commit.gpgsign=false']
+//  ⚠️log.showSignature=false + gpg.program 置空:外来仓的 `.git/config` 写上 `log.showSignature=true` 与 `gpg.program=<任意程序>`,
+//    只读展示用的那条 `git log` 就会去执行它 —— 与 clean filter 同一类(读路径照样能执行仓里的配置)。
+const PREFIX = ['--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null', '-c', 'diff.external=', '-c', 'core.quotepath=false',
+  '-c', 'commit.gpgsign=false', '-c', 'log.showSignature=false', '-c', 'gpg.program=', '-c', 'gpg.ssh.program=', '-c', 'gpg.x509.program=']
 
 /** 这几个环境变量会把 git 整个指到别的仓去 —— GIT_DIR 泄进来时 `init` 会**重新初始化那个外部仓**,
  *  随后 marker 落盘就 ENOENT,报错面也不再是文档承诺的那几条。本模块的仓永远只由 `-C <root>` 决定,所以一律删掉。 */
@@ -83,7 +86,11 @@ const TOKEN_CREDENTIAL = /^(?:(?:access|refresh|auth|oauth|api)[._-])?tokens?(?:
 /** 单文件体积闸:自动版本每轮都跑,一个几 GB 的缓存 / 素材进了 `add -A` = 每轮哈希一遍,30s 超时还会留下一地松散对象。 */
 const MAX_TRACKED_BYTES = 10 * 1024 * 1024
 const NONCE = /^[0-9a-f]{32}$/
-const REQUIRED_IGNORES = ['node_modules/', 'dist/', 'build/', 'out/', '.next/', 'coverage/', '.DS_Store', '.env', '.env.*', '!.env.example', '*.pem', '*.key', PRODUCT_SIDECAR, CONNECT_SIDECAR]
+/** 每次写之前都要在的**安全项**:密钥、环境变量、两个边车。用户 / agent 删了也补回来 —— 这几条是宿主对「不把秘密提交进历史」的兜底。 */
+const SAFETY_IGNORES = ['.env', '.env.*', '!.env.example', '*.pem', '*.key', PRODUCT_SIDECAR, CONNECT_SIDECAR]
+/** 只在 init 那一刻播一次的**便利项**。之后用户怎么改都尊重:比如插件项目要把 `dist/` 提交进仓(市场安装从不构建),
+ *  把这一行删掉是正当需求 —— 每次写之前都补回来就是宿主在和用户抢 .gitignore(收尾检查抓到的)。 */
+const CONVENIENCE_IGNORES = ['node_modules/', 'dist/', 'build/', 'out/', '.next/', 'coverage/', '.DS_Store']
 
 /**
  * git 可执行文件的候选表。**纯函数、不碰磁盘** —— 顺序本身就是契约,单测直接钉它
@@ -242,19 +249,29 @@ function parseVersions(stdout: string): GitVersion[] {
  *  空仓(还没有任何提交)的 log 退出 128 → 空列表,不当错误。
  *  ponytail: 读命令统一 5s 超时;超大外来仓的 log 若超时就退化成空列表(界面显示「暂无版本」),不做分页续读。 */
 async function versions(c: Ctx, args: string[]): Promise<GitVersion[]> {
-  const r = await read(c, 'log', '--root', '--shortstat', '--no-renames', '--no-color', LOG_FORMAT, ...args)
+  // --no-textconv / --no-ext-diff:实测 --shortstat 本来就不跑 textconv / 外部 diff 驱动(只有补丁输出才跑),
+  // 这两个旗是给「哪天有人往这条命令上加 -p」兜底的 —— 外来仓的 `.gitattributes` + `diff.<driver>.textconv` 那时就是任意执行。
+  const r = await read(c, 'log', '--root', '--shortstat', '--no-renames', '--no-color', '--no-textconv', '--no-ext-diff', LOG_FORMAT, ...args)
   return r.code === 0 ? parseVersions(r.stdout) : []
+}
+
+/** 项目目录不可信:下载来的文件夹可以自带 `.gitignore -> ~/.zshrc`,我们一「补几行」就写到了仓外的宿主文件里。
+ *  软链接 / 目录 / 设备一律拒(lstat,不跟随),宁可不给这个项目做版本。 */
+async function assertRegularOrAbsent(file: string): Promise<void> {
+  const st = await fs.lstat(file).catch((e) => { if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return null; throw e })
+  if (st && !st.isFile()) throw new Error(`${path.basename(file)} is not a regular file`)
 }
 
 /**
  * 只发生在我们自己 init 的仓里:没有 .gitignore 就整份写,已有就**只补缺的几行**并挂在 `# Forsion` 标题下,
  * 绝不改写 / 重排用户(或 agent)已经写下的行 —— 那是他们的文件,我们只是搭个便车。
  */
-async function seedIgnore(root: string): Promise<void> {
+async function seedIgnore(root: string, required: readonly string[]): Promise<void> {
   const file = path.join(root, '.gitignore')
+  await assertRegularOrAbsent(file)
   const current = await fs.readFile(file, 'utf8').catch((e) => { if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return ''; throw e })
   const have = new Set(current.split(/\r?\n/).map((line) => line.trim()))
-  const missing = REQUIRED_IGNORES.filter((line) => !have.has(line))
+  const missing = required.filter((line) => !have.has(line))
   if (!missing.length) return
   const head = current ? `${current}${current.endsWith('\n') ? '' : '\n'}\n` : ''
   await fs.writeFile(file, `${head}# Forsion\n${missing.join('\n')}\n`, 'utf8')
@@ -265,29 +282,42 @@ async function seedIgnore(root: string): Promise<void> {
  *  配置那几步是幂等的,每次写之前都会再确保一遍(ensureSetup),不会因为上次死在半路就带着缺口提交。 */
 async function initRepo(c: Ctx): Promise<void> {
   if (!c.owners) throw new Error('read-only repository') // 没有宿主侧登记处就不建仓:建了也认不回来
+  await assertRegularOrAbsent(path.join(c.root, '.gitignore')) // 先于 init:注定要拒的项目别留下一个空仓
   must(await write(c, 'init'), 'git init failed')
-  const nonce = randomBytes(16).toString('hex')
-  await fs.writeFile(path.join(c.root, '.git', MARKER), `${nonce}\n`, 'utf8')
-  c.owners.add(nonce)
-  must(await write(c, 'symbolic-ref', 'HEAD', 'refs/heads/main'), 'git could not set the default branch')
+  try {
+    const nonce = randomBytes(16).toString('hex')
+    await fs.writeFile(path.join(c.root, '.git', MARKER), `${nonce}\n`, 'utf8')
+    c.owners.add(nonce)
+    must(await write(c, 'symbolic-ref', 'HEAD', 'refs/heads/main'), 'git could not set the default branch')
+    await seedIgnore(c.root, CONVENIENCE_IGNORES) // 便利项只播这一次;安全项由 ensureSetup 每次写之前确保
+  } catch (e) {
+    // 登记没成(家目录只读 / 磁盘满)却留下 `.git` = 下一次看到的是「nonce 没登记的仓」→ 永久判成外来、只读,重试也救不回来。
+    // 一刻之前这里还是 'none'、里面一个提交都没有,整个删掉是安全的;删完下一次从头再来。
+    await fs.rm(path.join(c.root, '.git'), { recursive: true, force: true }).catch(() => {})
+    throw e
+  }
 }
 
 /** 每次往我方仓里写之前都跑一遍,全部幂等:上一次 init 死在半路(标记已落、`.gitignore` 没写成)时,
  *  下一次不能因为「已经是 owned」就跳过 —— 那样 `add -A` 会把 `.env`、密钥、两个边车一起提交进去。 */
 async function ensureSetup(c: Ctx): Promise<void> {
   must(await write(c, 'config', 'core.autocrlf', 'false'), 'git could not write the repository config')
-  await seedIgnore(c.root)
+  await seedIgnore(c.root, SAFETY_IGNORES)
   // 边车若已被跟踪(有人 add -f 过):从索引里摘掉、磁盘上留着。之后它们既被忽略又不在 pathspec 里,恢复再也碰不到。
-  await write(c, 'rm', '--cached', '--ignore-unmatch', '-q', '--', PRODUCT_SIDECAR, CONNECT_SIDECAR)
+  // -f:索引里那份与 HEAD、与磁盘都不一样时(add -f 之后又改过)git 缺省拒绝摘除;失败必须点名 ——
+  // 已跟踪的文件不吃 .gitignore,悄悄放过 = 紧接着的 `add -A` 把边车提交进去。
+  must(await write(c, 'rm', '--cached', '-f', '--ignore-unmatch', '-q', '--', PRODUCT_SIDECAR, CONNECT_SIDECAR), 'git could not untrack the project sidecars')
   await excludeRisky(c)
 }
 
 /** 未跟踪文件里名字像凭据的、单个超过体积闸的,写进 `.git/info/exclude`(精确路径、逐字转义)后 `add -A` 自然跳过。
  *  放 info/exclude 而不是 .gitignore:那是宿主的兜底策略,不该出现在用户的项目文件里,也不该被 agent 顺手改掉。
- *  ponytail: 已经被跟踪的文件不回头追(它们进历史时是干净的名字 / 体积);只看新冒出来的。 */
+ *  ponytail: 已经被跟踪的文件不回头追(它们进历史时是干净的名字 / 体积);只看新冒出来的。
+ *  ponytail: 排除行只增不减 —— 11MB 的素材后来压到 1MB 也不会自动回到版本里,临时文件名多了 exclude 会变长。
+ *    要治就改成「Forsion 自有分节、每次整节重算」;在那之前用户删掉 `.git/info/exclude` 里对应那行即可。 */
 async function excludeRisky(c: Ctx): Promise<void> {
-  const listed = await read(c, 'ls-files', '--others', '--exclude-standard', '-z')
-  if (listed.code !== 0) return
+  // 扫不出来(路径多到撑爆输出上限 / 超时)就**不提交**:这是凭据那条路上的闸,fail open = 把它要拦的东西原样提交进历史。
+  const listed = must(await write(c, 'ls-files', '--others', '--exclude-standard', '-z'), 'git could not list the untracked files')
   const risky: string[] = []
   for (const rel of listed.stdout.split('\0')) {
     if (!rel) continue
@@ -299,6 +329,7 @@ async function excludeRisky(c: Ctx): Promise<void> {
   if (!risky.length) return
   const file = path.join(c.root, '.git', 'info', 'exclude')
   await fs.mkdir(path.dirname(file), { recursive: true })
+  await assertRegularOrAbsent(file) // appendFile 会跟着软链接写出去
   // gitignore 语法里的通配符与前导 `!` / `#` 都要转义;前缀 `/` 钉在仓根,只匹配这一条路径。
   const lines = risky.map((rel) => `/${rel.replace(/[\\*?\[\]!# ]/g, (ch) => `\\${ch}`)}`)
   await fs.appendFile(file, `${lines.join('\n')}\n`, 'utf8')

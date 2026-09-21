@@ -192,11 +192,13 @@ async function main() {
       JSON.stringify({ state: await win.locator('[data-sandbox-state]').getAttribute('data-sandbox-state') }))
 
     await win.locator('[data-action="sandbox-unload"]').click()
-    const unloaded = await until(async () => await win.locator('[data-sandbox-state]').getAttribute('data-sandbox-state') === 'unloaded', 30_000)
-    check('5 卸载之后回到「未加载」,并重新给出加载按钮',
-      unloaded && await win.locator('[data-action="sandbox-load"]').count() === 1
-      && await win.locator('[data-action="sandbox-unload"]').count() === 0,
-      JSON.stringify({ unloaded }))
+    // 状态来自插件 store(重载一落定就翻),按钮来自产物的 devLoad(还要等上层重新读一次产物,多一趟 IPC)——
+    // 两者一起等;状态翻了立刻数按钮会撞进这一趟 IPC 的空窗(实测 1/7 红)。
+    const unloaded = await until(async () => await win.locator('[data-sandbox-state]').getAttribute('data-sandbox-state') === 'unloaded'
+      && await win.locator('[data-action="sandbox-load"]').count() === 1
+      && await win.locator('[data-action="sandbox-unload"]').count() === 0, 30_000)
+    check('5 卸载之后回到「未加载」,并重新给出加载按钮', unloaded,
+      JSON.stringify({ state: await win.locator('[data-sandbox-state]').getAttribute('data-sandbox-state'), load: await win.locator('[data-action="sandbox-load"]').count(), unload: await win.locator('[data-action="sandbox-unload"]').count() }))
 
     // 6 真实主线:启动页只建空文件夹,manifest.json 是后写的。判型必须跟着 manifest 的出现改口。
     await win.locator('.csu-project').click()

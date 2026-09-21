@@ -249,6 +249,45 @@ describe.skipIf(!GIT)('git version history', () => {
     expect(existsSync(proof)).toBe(false)
   })
 
+  it('⚠️read-only display of a foreign repository never executes its gpg.program', async () => {
+    // 只读展示也会跑 `git log`。外来仓配上 log.showSignature=true + gpg.program=<任意程序>,log 就去执行它 ——
+    // 与 clean filter 同一类(读路径照样能执行仓里的配置)。PREFIX 里把这几项压住。
+    const proof = path.join(home, 'gpg-ran')
+    const evil = path.join(home, 'evil-gpg.sh')
+    await fs.writeFile(evil, `#!/bin/sh\ntouch ${proof}\nexit 1\n`, { mode: 0o755 })
+    await put('index.html', 'x')
+    raw(root, 'init')
+    raw(root, 'add', '-A')
+    // ⚠️提交必须**带签名头**:git 只对有 gpgsig 的提交才去调 gpg.program,拿一个没签名的提交来测是假绿
+    //   (负对照实跑过:把 PREFIX 里那几项删掉,没签名的版本照样绿)。手工拼一个带 gpgsig 的提交对象写进去。
+    const tree = raw(root, 'write-tree')
+    const body = [`tree ${tree}`, 'author T <t@example.com> 1700000000 +0000', 'committer T <t@example.com> 1700000000 +0000',
+      'gpgsig -----BEGIN PGP SIGNATURE-----', ' ', ' iQFAKEFAKEFAKE', ' -----END PGP SIGNATURE-----', '', 'theirs', ''].join('\n')
+    const sha = execFileSync(String(GIT), ['-C', root, 'hash-object', '-t', 'commit', '-w', '--stdin'], { env, input: body, encoding: 'utf8' }).trim()
+    raw(root, 'update-ref', 'HEAD', sha)
+    raw(root, 'config', 'log.showSignature', 'true')
+    raw(root, 'config', 'gpg.program', evil)
+    expect(await gitHistoryStatus(root, g)).toMatchObject({ state: 'foreign' })
+    expect((await listGitVersions(root, g)).map((v) => v.name)).toEqual(['theirs'])
+    expect(existsSync(proof)).toBe(false)
+  })
+
+  it('re-ensures only the safety ignores; a convenience line the user removed stays removed', async () => {
+    await put('index.html', 'one')
+    await commitGitVersion(root, { name: 'v1', auto: false }, g)
+    // 插件项目要把 dist/ 提交进仓(市场安装从不构建):用户删掉这一行是正当需求,宿主不许每次写之前再补回来。
+    await put('.gitignore', lines(await text('.gitignore')).filter((line) => line !== 'dist/' && line !== '.env').join('\n'))
+    await put('dist/main.js', 'built')
+    await put('.env', 'SECRET=1')
+    await commitGitVersion(root, { name: 'v2', auto: true }, g)
+    const ignore = lines(await text('.gitignore'))
+    expect(ignore).not.toContain('dist/') // 便利项:只在 init 播一次
+    expect(ignore).toContain('.env') // 安全项:删了也补回来
+    const tracked = raw(root, 'ls-files').split('\n')
+    expect(tracked).toContain('dist/main.js')
+    expect(tracked).not.toContain('.env')
+  })
+
   it('never creates or claims a repository without a host-side owners registry (fail closed)', async () => {
     await put('index.html', 'x')
     await expect(commitGitVersion(root, { name: 'x', auto: false }, { env })).rejects.toThrow(/read-only repository/)
@@ -296,6 +335,49 @@ describe.skipIf(!GIT)('git version history', () => {
     await commitGitVersion(root, { name: 'v1', auto: true }, g)
     expect(raw(root, 'ls-files').split('\n')).not.toContain('.env')
     expect(lines(await text('.gitignore'))).toContain('.env')
+  })
+
+  it.skipIf(process.platform === 'win32')('⚠️refuses to commit when the untracked-file scan fails (the credential gate fails closed)', async () => {
+    await put('index.html', 'one')
+    await commitGitVersion(root, { name: 'v1', auto: false }, g)
+    await put('credentials.json', '{"k":1}')
+    const gitPath = await gitShim('git-no-lsfiles', 'case " $* " in *" ls-files "*) exit 1;; esac')
+    await expect(commitGitVersion(root, { name: 'v2', auto: false }, { ...g, gitPath })).rejects.toThrow(/untracked files/)
+    expect(raw(root, 'ls-files').split('\n')).not.toContain('credentials.json')
+    expect(raw(root, 'rev-list', '--count', 'HEAD')).toBe('1')
+  })
+
+  it('untracks a sidecar even when its staged content differs from both HEAD and the working tree', async () => {
+    await put('index.html', 'one')
+    await commitGitVersion(root, { name: 'v1', auto: false }, g)
+    await put(PRODUCT, '{"id":"p_one"}')
+    raw(root, 'add', '-f', PRODUCT)
+    raw(root, 'commit', '-m', 'tracked the sidecar by force')
+    await put(PRODUCT, '{"id":"p_two"}')
+    raw(root, 'add', '-f', PRODUCT) // 索引 ≠ HEAD
+    await put(PRODUCT, '{"id":"p_three"}') // 磁盘 ≠ 索引:不带 -f 的 `rm --cached` 到这里会拒绝
+    await commitGitVersion(root, { name: 'v2', auto: false }, g)
+    expect(raw(root, 'ls-files').split('\n')).not.toContain(PRODUCT)
+    expect(await text(PRODUCT)).toBe('{"id":"p_three"}')
+  })
+
+  it('rolls back a fresh init when the host-side registration fails, so the retry is not stranded as foreign', async () => {
+    await put('index.html', 'x')
+    const failing: GitEnv = { env, owners: { has: (n) => owned.has(n), add: () => { throw new Error('EROFS: read-only home') } } }
+    await expect(commitGitVersion(root, { name: 'v1', auto: false }, failing)).rejects.toThrow(/EROFS/)
+    expect(existsSync(path.join(root, '.git'))).toBe(false)
+    expect((await commitGitVersion(root, { name: 'v1', auto: false }, g))?.name).toBe('v1')
+    expect((await gitHistoryStatus(root, g)).state).toBe('owned')
+  })
+
+  it.skipIf(process.platform === 'win32')('⚠️never writes through a .gitignore symlink planted by the project', async () => {
+    const outside = path.join(home, 'host-rc')
+    await fs.writeFile(outside, 'export PATH=/usr/bin\n')
+    await put('index.html', 'x')
+    await fs.symlink(outside, path.join(root, '.gitignore'))
+    await expect(commitGitVersion(root, { name: 'v1', auto: false }, g)).rejects.toThrow(/\.gitignore is not a regular file/)
+    expect(await fs.readFile(outside, 'utf8')).toBe('export PATH=/usr/bin\n')
+    expect(existsSync(path.join(root, '.git'))).toBe(false) // 注定要拒的项目不留空仓
   })
 
   it('treats a repository without the marker as the user own and read-only', async () => {

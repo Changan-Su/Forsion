@@ -421,6 +421,10 @@ export function readDisabledPluginIds(): string[] {
   return readDisabled()
 }
 
+/** 已吊销的 ctx 上 register* 的返回值:既能当 disposer 调,也能当 `{ update, dispose }` handle 用,全是空操作 ——
+ *  过期的续体拿着它继续跑不会再抛一个与真因无关的 TypeError。 */
+const DEAD_HANDLE: (() => void) & { update(): void; dispose(): void } = Object.assign(() => {}, { update: () => {}, dispose: () => {} })
+
 /** reloadOne 的按 id 串行链。 */
 const reloadChains = new Map<string, Promise<void>>()
 
@@ -778,7 +782,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       }
       fontDisposers.clear()
     }
-    return {
+    const ctx: PluginContext = {
     app: appApi,
     account: hostTangu()?.account ? {
       ...hostTangu()!.account!,
@@ -1196,6 +1200,21 @@ export const usePluginStore = create<PluginState>((set, get) => {
         }
       : {}),
     }
+    // 吊销之后的 register* 一律作废。`async setup` 在 await 之后才登记命令 / 视图是常见写法,而 Sandbox 让
+    // 「setup 还没跑完就被重载 / 卸载」成了家常便饭(每次保存一次):上一代的续体醒来照样往 store 里塞贡献 ——
+    // 重载时同一条命令出现两份(旧的那份跑的还是旧代码),卸载后则成了没人收的幽灵,直到重启窗口。
+    // 就地换掉成员而不是套 Proxy:插件在 setup 开头解构 ctx,拿到的也是这一层。
+    const members = ctx as unknown as Record<string, unknown>
+    for (const key of Object.keys(members)) {
+      const fn = members[key]
+      if (!key.startsWith('register') || typeof fn !== 'function') continue
+      members[key] = (...args: unknown[]): unknown => {
+        if (ctxAlive) return (fn as (...a: unknown[]) => unknown)(...args)
+        console.warn(`[amadeus] 插件 ${pluginId} 已停用 / 已重载,ctx.${key} 被忽略`)
+        return DEAD_HANDLE
+      }
+    }
+    return ctx
   }
 
   /** Run disposer + drop contributions + mark inactive, WITHOUT touching the preference. */
@@ -1360,6 +1379,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       else get().enable(id)
     },
 
+    // ponytail: 与 reloadOne 不串行。窗口启动这一拍恰逢别的窗口撤掉开发态授权时,这里晚到的旧名单会把刚撤的开发副本
+    //   再装回本窗口(到它下一次重载为止;主进程那边授权已撤,重启 / 重载后不会再回来)。要治就给来源变更加 epoch、过期名单重读。
     async loadExternal() {
       let sources: ExternalPluginSource[] = []
       try {
