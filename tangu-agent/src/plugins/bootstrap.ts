@@ -132,10 +132,11 @@ export async function dispatchPluginCommand(name: string, argv: string[]): Promi
  * 三组 router 的函数——**须在 `createTanguModule` 之后调用**（彼时 `configureTangu`/`deps()` 才就绪;
  * 路由挂载器内部可能读 `deps()`）。tool provider 注册是无状态的静态写入，先于 createTanguModule 也安全。
  */
-export async function activateAllPlugins(): Promise<(r: PluginRouters) => void> {
+export async function activateAllPlugins(onActivate?: (id: string) => void): Promise<(r: PluginRouters) => void> {
   await seedBundleAgents().catch(() => {}); // bundle 内嵌 agent 播种(幂等,永不覆盖已有)
   const state = newState();
   for (const d of discoverPlugins()) {
+    onActivate?.(d.manifest.id); // 启动阶段标记:某个插件的 import/activate 吊死时,standalone 能说出是谁
     try {
       await activatePlugin(d, makeContext(d, state));
     } catch (e: any) {

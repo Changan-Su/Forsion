@@ -14,7 +14,7 @@ import { join } from 'node:path'
 const H = vi.hoisted(() => ({ dir: '' }))
 H.dir = mkdtempSync(join(tmpdir(), 'forsion-bm-'))
 
-vi.mock('electron', () => ({ app: { isPackaged: false } }))
+vi.mock('electron', () => ({ app: { isPackaged: false, getVersion: () => '0.0.0-test' } }))
 vi.mock('./forsionHome', () => ({
   forsionHomeDir: () => H.dir,
   tanguDataDir: () => H.dir,
@@ -55,4 +55,56 @@ describe('BackendManager channel client attribution', () => {
     // 通道 run 不经 renderer startRun(),只有这个 spawn 契约能把真实 App 版本交给引擎。
     expect(source).toContain('env.TANGU_HOST_CLIENT = `desktop/${app.getVersion()}`')
   })
+})
+
+describe('BackendManager startup exits', () => {
+  it('启动期早退只由 spawnOnce 换端口重试 3 次,不再叠一条重启链(否则后起的顶掉 this.child,先起的成孤儿)', async () => {
+    // 模拟 2.11.2 反馈:引擎每次都在就绪前以 code 0 静默退出
+    const entry = join(H.dir, 'silent-exit.js')
+    writeFileSync(entry, "process.stderr.write('boot\\n')", 'utf8')
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(entry)
+    process.env.TANGU_NODE_BIN = process.execPath
+    const m = new BackendManager()
+    await m.start({ cloudUrl: '', sandbox: 'none' })
+    await new Promise((r) => setTimeout(r, 2500)) // 越过旧实现 1s 的退避重启
+    const logs = m.getLogs()
+    expect(logs.filter((l) => l === 'boot')).toHaveLength(3)
+    expect(logs.filter((l) => l.startsWith('[manager] 后端退出(code=0'))).toHaveLength(3)
+    expect(m.getStatus().state).toBe('crashed')
+  }, 15_000)
+
+  it('拉起链正卡在 freePort、手里还没有 child 时 stop():这条链作废,之后一个进程都不再起', async () => {
+    const entry = join(H.dir, 'silent-exit.js')
+    writeFileSync(entry, "process.stderr.write('boot\\n')", 'utf8')
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(entry)
+    process.env.TANGU_NODE_BIN = process.execPath
+    const m = new BackendManager()
+    // spawnOnce 置 starting 后同步调 freePort() 再挂起:微任务里 stop(),正好落在 freePort 已在途的窗口
+    const off = m.onStatus((st) => { if (st.state === 'starting') { off(); queueMicrotask(() => void m.stop()) } })
+    await m.start({ cloudUrl: '', sandbox: 'none' })
+    await new Promise((r) => setTimeout(r, 1000))
+    expect(m.getLogs().filter((l) => l === 'boot')).toHaveLength(0)
+    expect(m.getStatus().state).toBe('stopped')
+  }, 15_000)
+
+  it('两个并发 stop() 都要等同一个 child 真退出(装更新 / 退出 App 前不能提前放行)', async () => {
+    // 能答 /health 的假引擎;收到 SIGTERM 400ms 后才退(Windows 上 kill = TerminateProcess,立即退,本例退化为平凡通过)
+    const entry = join(H.dir, 'slow-exit.cjs')
+    writeFileSync(entry, [
+      "const port = Number(process.argv[process.argv.indexOf('--port') + 1])",
+      "require('node:http').createServer((_q, s) => s.end('{}')).listen(port, '127.0.0.1')",
+      "process.on('SIGTERM', () => setTimeout(() => process.exit(0), 400))",
+    ].join('\n'), 'utf8')
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(entry)
+    process.env.TANGU_NODE_BIN = process.execPath
+    const m = new BackendManager()
+    await m.start({ cloudUrl: '', sandbox: 'none' })
+    expect(m.getStatus().state).toBe('ready')
+    const pid = m.getStatus().pid!
+    const first = m.stop()
+    await m.stop() // 旧写法:第一个 stop() 已把 this.child 置空,这里看到「没有 child」立即返回
+    expect(() => process.kill(pid, 0)).toThrow() // 放行时引擎必须已经退了
+    await first
+    expect(m.getStatus().state).toBe('stopped')
+  }, 15_000)
 })

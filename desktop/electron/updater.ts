@@ -212,7 +212,12 @@ export async function downloadUpdate(): Promise<void> {
  * 调用方(main 的 updater:install 处理器)须先优雅停后端,避免 before-quit 的 app.exit(0)
  * 截断 electron-updater 的退出安装路径。
  */
+/** installUpdate() 会不会真的退出去装(mac / 未打包是 no-op)。调用方据此决定要不要先封住后端拉起。 */
+export function canInstallUpdate(): boolean {
+  return !unsupported() && process.platform !== 'darwin'
+}
+
 export function installUpdate(): void {
-  if (unsupported() || process.platform === 'darwin') return
+  if (!canInstallUpdate()) return
   autoUpdater.quitAndInstall(process.platform !== 'win32', true)
 }

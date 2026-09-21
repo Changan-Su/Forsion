@@ -105,6 +105,10 @@ export class BackendManager {
   private restartCount = 0
   private stopping = false
   private restartTimer: ReturnType<typeof setTimeout> | null = null
+  /** 拉起链的代号:stop() 一律 +1,拉起链每个 await 之后核对,不一致就放弃 —— 被作废的链绝不再 spawn。 */
+  private gen = 0
+  /** 正在收尾的子进程(stop() 已摘下 this.child、还没退干净)。每个 stop() 都等它:后来的 stop/start 不能越过。 */
+  private retiring: Promise<unknown> = Promise.resolve()
   private settings: ManagedBackendSettings | null = null
   private listeners = new Set<(st: BackendStatus) => void>()
   private spawnedEntry: string | null = null
@@ -197,15 +201,18 @@ export class BackendManager {
   }
 
   async start(settings: ManagedBackendSettings): Promise<BackendStatus> {
-    await this.stop()
+    const stopped = this.stop()
+    const gen = this.gen // stop() 同步 +1 之后取;同一 tick 里紧跟的 stop() 会再 +1,作废本次拉起
+    await stopped
+    if (gen !== this.gen) return this.getStatus()
     this.settings = settings
     this.stopping = false
     this.restartCount = 0
-    await this.spawnOnce()
+    await this.spawnOnce(gen)
     return this.getStatus()
   }
 
-  private async spawnOnce(): Promise<void> {
+  private async spawnOnce(gen: number): Promise<void> {
     const entry = BackendManager.resolveEntry()
     if (!entry) {
       this.setState('crashed', '找不到 tangu-server(dev 下请先在包根执行 npm run build)')
@@ -216,6 +223,7 @@ export class BackendManager {
 
     for (let attempt = 0; attempt < 3; attempt++) {
       this.port = await freePort()
+      if (gen !== this.gen) return
       const args = [
         entry,
         '--port', String(this.port),
@@ -299,23 +307,27 @@ export class BackendManager {
       child.stderr?.on('data', (d) => this.pushLog(String(d)))
       child.on('exit', (code, signal) => this.onExit(child, code, signal))
 
-      const ok = await this.waitHealthy(child)
-      if (ok) {
+      const ok = await this.waitHealthy(child, gen)
+      if (gen !== this.gen) return // 等待期间被 stop() 作废:子进程已归 stop() 收尾
+      // 答过 /health 又在这之前退了(onExit 在 starting 期不排重启)→ 不能标 ready,按失败换端口重来
+      if (ok && this.child === child && child.exitCode === null && child.signalCode === null) {
         this.restartCount = 0
         this.setState('ready', null)
         return
       }
       // 启动失败(端口被抢/早退):杀掉重试换端口。
       try { child.kill('SIGKILL') } catch { /* ignore */ }
-      this.child = null
+      if (this.child === child) this.child = null
     }
-    this.setState('crashed', this.lastError || '后端启动失败(连续 3 次)')
+    // 三次都没起来:这轮若是就绪后崩溃引出的重启,退避额度还在就接着排;否则判 crashed
+    if (this.restartCount > 0) this.scheduleRestart()
+    else this.setState('crashed', this.lastError || '后端启动失败(连续 3 次)')
   }
 
-  private async waitHealthy(child: ChildProcess): Promise<boolean> {
+  private async waitHealthy(child: ChildProcess, gen: number): Promise<boolean> {
     const deadline = Date.now() + 20_000
     while (Date.now() < deadline) {
-      if (child.exitCode !== null || this.stopping) return false
+      if (child.exitCode !== null || child.signalCode !== null || gen !== this.gen) return false
       try {
         const r = await fetch(`http://127.0.0.1:${this.port}/health`, { signal: AbortSignal.timeout(1000) })
         if (r.ok) return true
@@ -335,47 +347,45 @@ export class BackendManager {
     }
     this.lastError = `后端退出(code=${code} signal=${signal})`
     this.pushLog(`[manager] ${this.lastError}`)
-    // 意外退出:指数退避自动重启 ≤3 次(timer 记账,stop() 必清——否则快速 stop/start 后
-    // 陈旧 timer 在 stopping 已复位时触发,产生第二个 spawnOnce 双进程)。
-    if (this.restartCount < 3 && this.settings) {
-      const wait = 1000 * 2 ** this.restartCount
-      this.restartCount++
-      this.setState('starting', this.lastError)
-      this.restartTimer = setTimeout(() => {
-        this.restartTimer = null
-        if (!this.stopping && this.settings) void this.spawnOnce()
-      }, wait)
-    } else {
+    // 还在 spawnOnce 的就绪等待里:它自己会换端口重试。这里再排一次重启 = 两条 spawn 链并行,
+    // 后起的顶掉 this.child,先起的那个成了没人管的孤儿引擎(2.11.2 反馈日志里 5 行启动对 1 行退出就是它)。
+    if (this.state === 'starting') return
+    this.scheduleRestart()
+  }
+
+  /** 意外退出:指数退避自动重启 ≤3 次。只有这一处排重启(onExit 与 spawnOnce 收尾共用);
+   *  timer 记账、stop() 必清,且带着排它那一刻的代号 —— 作废后触发也不会再起一条拉起链。 */
+  private scheduleRestart(): void {
+    if (this.restartCount >= 3 || !this.settings) {
       this.setState('crashed', this.lastError)
+      return
     }
+    const wait = 1000 * 2 ** this.restartCount
+    const gen = this.gen
+    this.restartCount++
+    this.setState('starting', this.lastError)
+    this.restartTimer = setTimeout(() => {
+      this.restartTimer = null
+      if (gen === this.gen) void this.spawnOnce(gen)
+    }, wait)
   }
 
   async stop(): Promise<void> {
+    const gen = ++this.gen // 先作废在途的拉起链(可能正卡在 freePort / waitHealthy,手里还没有 child)
     if (this.restartTimer) {
       clearTimeout(this.restartTimer)
       this.restartTimer = null
     }
     const child = this.child
-    if (!child) {
-      this.setState('stopped', null)
-      return
+    if (child) {
+      this.stopping = true
+      this.child = null
+      this.retiring = Promise.all([this.retiring, terminate(child)])
     }
-    this.stopping = true
-    this.child = null
-    await new Promise<void>((resolve) => {
-      const killTimer = setTimeout(() => {
-        try { child.kill('SIGKILL') } catch { /* ignore */ }
-      }, 3000)
-      child.once('exit', () => {
-        clearTimeout(killTimer)
-        resolve()
-      })
-      try { child.kill('SIGTERM') } catch {
-        clearTimeout(killTimer)
-        resolve()
-      }
-    })
-    this.setState('stopped', null)
+    // 屏障:哪怕这次手里没有 child,前一个 stop() 摘下的那个也要等它退干净 —— 装更新 / 删库 / 退出 App
+    // 都在 stop() 之后动手,提前放行 = 对着还活着的引擎做这些事。
+    await this.retiring
+    if (gen === this.gen) this.setState('stopped', null) // 等待期间已有新的 start():别盖掉它的状态
   }
 
   private pushLog(chunk: string): void {
@@ -393,6 +403,24 @@ export class BackendManager {
     const st = this.getStatus()
     for (const cb of this.listeners) cb(st)
   }
+}
+
+/** SIGTERM → 3s → SIGKILL,等 exit;SIGKILL 后 2s 仍没有 exit(僵尸 / 句柄卡死)也放行,别让屏障卡住之后所有 stop/start。 */
+function terminate(child: ChildProcess): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const killTimer = setTimeout(() => {
+      try { child.kill('SIGKILL') } catch { /* ignore */ }
+      setTimeout(resolve, 2000)
+    }, 3000)
+    child.once('exit', () => {
+      clearTimeout(killTimer)
+      resolve()
+    })
+    try { child.kill('SIGTERM') } catch {
+      clearTimeout(killTimer)
+      resolve()
+    }
+  })
 }
 
 function freePort(): Promise<number> {
