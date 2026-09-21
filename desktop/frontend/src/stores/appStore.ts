@@ -52,6 +52,7 @@ registerMessages({
   'appstore.steerDiscardedCall': { zh: '插话中断了此工具调用的生成；工具尚未执行。', en: 'Steering interrupted this tool call during generation; it was not executed.' },
   // 审批档 PUT 失败:引擎按存值审批,没存上就不能停在新档上
   'appstore.approvalSaveFailed': { zh: '审批档没能保存,已恢复为原来的档({e})', en: 'Couldn’t save the approval mode; restored the previous one ({e})' },
+  'appstore.approvalSaveRaced': { zh: '审批档被更早的一次保存覆盖,已改为实际生效的档', en: 'An earlier save overwrote the approval mode; now showing the one in effect' },
 })
 
 export type { SettingsTab }
@@ -475,8 +476,8 @@ function rememberDefaults(patch: Partial<StoredDesktopConfig>): void {
   void window.tangu?.setConfig?.(patch).catch(() => {})
 }
 /** 审批档写入(按会话,把在途的一批攒在一起)。引擎审批时现读会话**存值**(压过 run 快照),没存上 = 没改。
- *  全部落定再判:最新一次存上了就信它;没存上就把药丸退回最后一次存上的档(一个都没存上 = 这批之前的档)。
- *  中途不回滚 —— 更早那次可能在后一次失败之后才存上。
+ *  全部落定再判:药丸对齐「最后一次存上的档」(一个都没存上 = 这批之前的档),与最新点的不同就报一声。
+ *  中途不回滚 —— 更早那次可能在后一次失败之后才存上,也可能比后一次晚落库。
  *  ponytail: 拿「落定顺序」近似服务端落库顺序;整对象 PUT 的真顺序(含同窗口其它 setter 晚到的 PUT 把审批档盖回去)
  *  只有服务端按键合并才管得住,另开。 */
 const approvalWrites = new Map<string, { issued: number; pending: number; mode: AgentConfig['approvalMode']; stored: AgentConfig['approvalMode']; err: Error | null }>()
@@ -2762,10 +2763,11 @@ export const useApp = create<AppState>((set, get) => ({
       .then(() => {
         if (--b.pending) return // 这批还有在途的:全部落定再判
         approvalWrites.delete(sid)
-        if (!b.err) return
+        if (b.stored === b.mode) return // 最后落库的就是最新点的
         const back = b.stored
         set((s) => (s.configBySession[sid] ? { configBySession: { ...s.configBySession, [sid]: { ...s.configBySession[sid], approvalMode: back } } } : {}))
-        if (back !== b.mode) get().toast(translate('appstore.approvalSaveFailed', { e: b.err.message }), true)
+        // 没报错也可能分叉:更早那次比最新那次晚落库(按落定顺序)
+        get().toast(b.err ? translate('appstore.approvalSaveFailed', { e: b.err.message }) : translate('appstore.approvalSaveRaced'), true)
       })
   },
 

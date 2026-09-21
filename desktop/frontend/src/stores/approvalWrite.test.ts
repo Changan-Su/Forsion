@@ -93,6 +93,18 @@ describe('setExecConfig 审批档写入', () => {
     expect(toast).toHaveBeenCalledTimes(1)
   })
 
+  it('两次都存上、但更早那次后落定 → 药丸对齐后落库的档并提示(不停在更严的最新档)', async () => {
+    const a = deferred(); const b = deferred()
+    putMock.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise)
+    useApp.getState().setExecConfig({ approvalMode: 'auto-edit' }, 's1')
+    useApp.getState().setExecConfig({ approvalMode: 'readonly' }, 's1')
+    b.resolve({}); await flush()
+    expect(mode('s1')).toBe('readonly')
+    a.resolve({}); await flush()
+    expect(mode('s1')).toBe('auto-edit')
+    expect(toast).toHaveBeenCalledTimes(1)
+  })
+
   it('前一次在途时同档再点一次:它是这批最新的,前一次失败不会把它退掉', async () => {
     useApp.setState({ configBySession: { s1: { execMode: 'host', approvalMode: 'readonly' } } })
     const a = deferred(); const b = deferred()
