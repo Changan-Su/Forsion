@@ -1,5 +1,5 @@
 /** Team UI regression: Pin Summary member rows, independent Agent Desk, chronological public remarks,
- * forwarded approvals, member child chat's approval pill = the team session's mode (5a-5e),
+ * forwarded approvals, member child chat's approval pill = the team session's mode (5a-5f),
  * optional Historian attachment and light/dark screenshots.
  * Run after npm run build: npm run check:teamdesk (isolated Electron user data).
  */
@@ -23,11 +23,15 @@ const AGENTS = [
   { slug: 'orbit-one', name: 'Orbit One', description: 'Team desk instrument agent', createdBy: 'user', libraryDir: '/tmp/teamdesk-lib/orbit-one/Library' },
 ]
 const SESSION_ID = 'td-team'
+const BRANCH_ID = 'td-branch'
 const sessionFixtures = (projectDir) => {
   const base = { summary: '', archived: false, model_id: 'm1', created_at: '2026-09-16 09:00:00', updated_at: '2026-09-16 11:00:00' }
   return [
     { ...base, id: SESSION_ID, title: '团队模式会话', project_path: projectDir, project_name: 'Orbit Project', projectless: false,
       agent_config: { groupChat: true, groupAgents: ['xyra', 'orbit-one'], execMode: 'host', cwd: projectDir } },
+    // 成员会话的分支:branchSession 把 teamMember 原样抄走,但它是普通会话 —— 引擎按父链接不认成员身份,审批跟它自己的档(5f)
+    { ...base, id: BRANCH_ID, title: '成员会话分支', updated_at: '2026-09-16 10:30:00', project_path: projectDir, project_name: 'Orbit Project', projectless: false,
+      agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: projectDir, approvalMode: 'full-auto', teamMember: { teamSessionId: SESSION_ID } } },
   ]
 }
 /** 会话里已有两条消息:验证 Pin Summary 与 Agent Desk 同时可见。 */
@@ -187,13 +191,14 @@ async function run(app, win, stub) {
     check(`5 点击 ${slug} 打开成员工作记录`, await win.locator(`[data-team-desk="status"] button[data-slug="${slug}"]`).getAttribute('aria-pressed') === 'true' && await win.locator('.child-chat-panel [data-chat-surface="child-chat"]').count() === 1, '')
     await win.locator('.child-chat-panel .agent-desk-head button').click()
   }
-  // ── 5a-5e 成员子聊天的审批药丸 = 团队会话此刻的档(引擎审批闸只听团队会话,agentLoop.approvalModeSessionId)──
+  // ── 5a-5f 成员子聊天的审批药丸 = 团队会话此刻的档(引擎审批闸只听团队会话,agentLoop.approvalModeSessionId)──
   // 团队主区先切到「完全放行」;成员会话自己的存值停在桩给的 auto-edit —— 修复前子聊天药丸显示的就是这个过期值(09-21 反馈)。
-  const teamMenu = '.composer-menu--mode:not(.child-chat-panel .composer-menu--mode)'
+  const mainPill = '.mode-pill-btn:not(.child-chat-panel .mode-pill-btn)'
+  const mainMenu = '.composer-menu--mode:not(.child-chat-panel .composer-menu--mode)'
   const childMenu = '.child-chat-panel .composer-menu--mode'
   const approvalItem = (menu, id) => win.locator(`${menu} button[aria-describedby="approval-mode-desc-${id}"]`)
-  await win.locator('.mode-pill-btn:not(.child-chat-panel .mode-pill-btn)').click()
-  await approvalItem(teamMenu, 'full-auto').click()
+  await win.locator(mainPill).click()
+  await approvalItem(mainMenu, 'full-auto').click()
   await sleep(300)
   check('5a 团队主区切到完全放行 → PUT 团队会话', stub.seen.configs.at(-1)?.sessionId === SESSION_ID && stub.seen.configs.at(-1)?.config?.approvalMode === 'full-auto', JSON.stringify(stub.seen.configs.at(-1)))
   await win.locator('[data-team-desk="status"] button[data-slug="xyra"]').click()
@@ -223,11 +228,27 @@ async function run(app, win, stub) {
     puts.length === 1 && puts[0].sessionId === SESSION_ID && put.approvalMode === 'readonly' && put.teamMember === undefined
       && sorted({ ...put, approvalMode: null }) === sorted({ ...teamBefore, approvalMode: null }),
     JSON.stringify({ puts, teamBefore }))
-  await win.locator('.mode-pill-btn:not(.child-chat-panel .mode-pill-btn)').click()
-  const teamNow = /\bactive\b/.test(await approvalItem(teamMenu, 'readonly').getAttribute('class') || '')
+  await win.locator(mainPill).click()
+  const teamNow = /\bactive\b/.test(await approvalItem(mainMenu, 'readonly').getAttribute('class') || '')
   await win.keyboard.press('Escape')
   check('5e 改完子聊天与团队主区同显「询问我批准」', (await childLabel()).includes('询问我批准') && teamNow, `${await childLabel()} / team active=${teamNow}`)
   await win.locator('.child-chat-panel .agent-desk-head button').click()
+  // 5f 负对照:成员会话的分支带着抄来的 teamMember,但不是成员(引擎按父链接不认)—— 药丸跟它自己的「完全放行」,改档只写它自己。
+  await win.locator('.t2s-srow, .t2o-row').filter({ hasText: '成员会话分支' }).first().click()
+  await win.waitForSelector(`[data-chat-surface="chat"][data-session-id="${BRANCH_ID}"] .mode-pill-btn`)
+  await sleep(500)
+  const branchLabel = await win.locator(`${mainPill} .t2c-pill-label`).textContent()
+  await win.locator(mainPill).click()
+  await sleep(400)
+  const branchMenuText = await win.locator(mainMenu).innerText()
+  const branchPutsBefore = stub.seen.configs.length
+  await approvalItem(mainMenu, 'auto-edit').click()
+  await sleep(300)
+  const branchPuts = stub.seen.configs.slice(branchPutsBefore)
+  check('5f 分支会话(抄来的 teamMember)不当成员:药丸是它自己的档、默认标题、改档只写它自己',
+    branchLabel.includes('完全放行') && !branchMenuText.includes('团队审批档') && branchPuts.length === 1 && branchPuts[0].sessionId === BRANCH_ID && branchPuts[0].config.approvalMode === 'auto-edit',
+    JSON.stringify({ branchLabel, branchPuts: branchPuts.map((p) => [p.sessionId, p.config.approvalMode]) }))
+  await openTeamSession(win)
   await win.locator('[data-historian-status] > button').click()
   await win.getByText('已保存该会话的工作约定', { exact: false }).first().waitFor()
   check('6 Historian 有独立可展开的状态行', await win.locator('.t2-tsum [data-historian-work]').count() === 1, '')
@@ -265,10 +286,12 @@ async function main() {
   const userData = path.join(home, 'userData')
   const vault = path.join(home, 'vault')
   const projectDir = path.join(home, 'Orbit Project')
-  for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
+  // 成员的 cwd 故意与团队不同:子聊天改档若把成员的 cwd / execMode 一并转进团队会话,5d 才看得出来
+  const memberDir = path.join(home, 'Member Scope')
+  for (const dir of [userData, `${userData}-dev`, vault, projectDir, memberDir]) fs.mkdirSync(dir, { recursive: true })
   const stub = await startStubEngine({ agents: AGENTS, sessions: sessionFixtures(projectDir), messages: MESSAGES, override: ({ path: route, method }) => {
     if (route === '/agent/runs' && method === 'GET') return { runs: [] }
-    if (route.endsWith('/detail')) { const id = route.split('/')[3]; return { session: { ...sessionFixtures(projectDir)[0], id, agent_config: { agentSlug: id === 'ws-x' ? 'xyra' : 'orbit-one', execMode: 'host', cwd: projectDir, teamMember: { teamSessionId: SESSION_ID } } } } }
+    if (route.endsWith('/detail')) { const id = route.split('/')[3]; return { session: { ...sessionFixtures(projectDir)[0], id, agent_config: { agentSlug: id === 'ws-x' ? 'xyra' : 'orbit-one', execMode: 'host', cwd: memberDir, teamMember: { teamSessionId: SESSION_ID } } } } }
   }, handle: ({ path: route, url }) => {
     if (route === '/agent/special/config') return { config: { historian: { enabled: true }, muse: { enabled: false } } }
     if (route === '/agent/special/historian/activity') return { running: false, activity: [{ id: 'hist-action', detail: '已保存该会话的工作约定', session_ref: SESSION_ID }], records: url.searchParams.get('detail') === '1' ? [{ id: 'hist-record', content: '团队接口与测试的分工已记录。' }] : [] }
