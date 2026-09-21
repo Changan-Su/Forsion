@@ -240,6 +240,18 @@ export const putSessionConfig = (cfg: TanguDesktopConfig, sessionId: string, con
     body: JSON.stringify(config),
   }).then((r) => r.agent_config)
 
+/** 按键合并写会话配置:只带要改的键(undefined 上线为 null = 删这个键),服务端并进存值。整对象 PUT 会把本地缓存里
+ *  别的键的旧值一起写回去(另一窗口的陈旧缓存、同窗口先发后到的请求)—— 审批档是引擎审批时现读的存值,被盖回去 = 悄悄放宽。
+ *  老引擎没有这个路由(404/405)→ 回落整对象 PUT,full() 给本地最新的整对象(旧行为)。会话不存在时 PUT 照样 404,不碍事。 */
+export const patchSessionConfig = (cfg: TanguDesktopConfig, sessionId: string, patch: Partial<AgentConfig>, full: () => AgentConfig) =>
+  request<{ agent_config: AgentConfig }>(cfg, `/agent/sessions/${encodeURIComponent(sessionId)}/config`, {
+    method: 'PATCH',
+    body: JSON.stringify(Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, v === undefined ? null : v]))),
+  }).then((r) => r.agent_config, (e) => {
+    if (e?.status !== 404 && e?.status !== 405) throw e
+    return putSessionConfig(cfg, sessionId, full())
+  })
+
 // ── custom 审批档规则(H2:此前只能手写 ~/.tangu/config.json)。规则是**全局**的(跨会话),
 //    档位才是按会话;引擎每次工具调用现读 config.json → 保存后下一次调用即生效。
 export interface ApprovalRules {

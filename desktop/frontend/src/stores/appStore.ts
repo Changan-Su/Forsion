@@ -481,6 +481,10 @@ function rememberDefaults(patch: Partial<StoredDesktopConfig>): void {
  *  ponytail: 拿「落定顺序」近似服务端落库顺序;整对象 PUT 的真顺序(含同窗口其它 setter 晚到的 PUT 把审批档盖回去)
  *  只有服务端按键合并才管得住,另开。 */
 const approvalWrites = new Map<string, { issued: number; pending: number; mode: AgentConfig['approvalMode']; stored: AgentConfig['approvalMode']; err: Error | null }>()
+/** 会话配置落库一律按键合并:只发这次改的键(api.patchSessionConfig);老引擎没有 PATCH → 回落整对象 PUT(本地最新整对象)。 */
+function saveSessionConfig(sid: string, patch: Partial<AgentConfig>): Promise<unknown> {
+  return api.patchSessionConfig(useApp.getState().cfg, sid, patch, () => useApp.getState().configBySession[sid] || {})
+}
 let lastAuthExpiredAt = 0 // handleAuthExpired 去抖:轮询/SSE/models 可能同时多次 401
 /** boot 期 managed 重连:引擎已 ready 但 connState 没到 ok(testConnection 撞上引擎刚 listen / 偶发超时)→ 15s 一次
  *  **只 connect 不 restart**,上限 8 次;每次 ready 广播重新计数。 */
@@ -2431,7 +2435,7 @@ export const useApp = create<AppState>((set, get) => ({
     // 存量本机会话第一次发送时补齐系统 Vault 根:不仅本轮权限生效,后续 UI/重启也保持同一工作范围。
     if (!implicitInit && scopedAgentConfig !== storedAgentConfig) {
       set((st) => ({ configBySession: { ...st.configBySession, [sessionId]: scopedAgentConfig } }))
-      void api.putSessionConfig(get().cfg, sessionId, scopedAgentConfig).catch(() => {})
+      void saveSessionConfig(sessionId, { extraRoots: scopedAgentConfig.extraRoots }).catch(() => {})
     }
     if (!agentConfig.agentSlug && get().defaultAgentSlug) {
       // 会话没有显式选 agent → 用全局默认兜底,并**固化进会话配置**(本地 + 后端)。
@@ -2440,7 +2444,7 @@ export const useApp = create<AppState>((set, get) => ({
       agentConfig.agentSlug = get().defaultAgentSlug
       const pinned = { ...(get().configBySession[sessionId] || {}), agentSlug: agentConfig.agentSlug }
       set((st) => ({ configBySession: { ...st.configBySession, [sessionId]: pinned } }))
-      void api.putSessionConfig(get().cfg, sessionId, pinned).catch(() => {})
+      void saveSessionConfig(sessionId, { agentSlug: pinned.agentSlug }).catch(() => {})
     }
     if (skillIds?.length) agentConfig.requestedSkillIds = skillIds
     const seedFrom = get().seedOnceBySession[sessionId]
@@ -2748,7 +2752,11 @@ export const useApp = create<AppState>((set, get) => ({
     const prev = get().configBySession[sid]
     const next = { ...(prev || {}), ...patch }
     set((s) => ({ configBySession: { ...s.configBySession, [sid]: next } }))
-    const put = api.putSessionConfig(get().cfg, sid, next)
+    // 只发变了的键:Composer2 的 setApproval 顺手带着没变的 execMode / cwd,原样发出去会把别的窗口改过的值写回去。
+    // 审批档照发 —— 同档重点在有在途写入时也是这批里的一次写入(见 approvalWrites)。
+    const changed = Object.fromEntries(Object.entries(patch).filter(([k, v]) => k === 'approvalMode' || v !== (prev as Record<string, unknown> | undefined)?.[k]))
+    if (!Object.keys(changed).length) return
+    const put = saveSessionConfig(sid, changed)
     const mode = patch.approvalMode
     // 其余键随每个 run 的 agentConfig 下发,本地值当场就生效;只有审批档是引擎审批时现读存值 → 只它等结果、失败回滚。
     // 同档重点也算:前一次还在途时,它就是这批里最新的一次。
@@ -2796,19 +2804,19 @@ export const useApp = create<AppState>((set, get) => ({
     const preset = sid ? get().configBySession[sid]?.preset : newSessionPreset(get().sessionMode, get().newChatWs, currentPlatform())
     if (remember) rememberDefaults(preset === 'chat' ? { lastChatThinkingLevel: level } : { lastThinkingLevel: level })
     if (!sid) { set((s) => ({ newChatCfg: { ...s.newChatCfg, thinkingLevel: level } })); return }
-    set((s) => { const next = { ...(s.configBySession[sid] || {}), thinkingLevel: level }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
+    get().patchSessionConfig({ thinkingLevel: level }, sid)
   },
 
   setSessionMaxIterations: (n, targetSessionId) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
-    set((s) => { const next = { ...(s.configBySession[sid] || {}), maxIterations: n }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
+    get().patchSessionConfig({ maxIterations: n }, sid)
   },
 
   setSessionPlanMode: (on, targetSessionId) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
-    set((s) => { const next = { ...(s.configBySession[sid] || {}), planMode: on }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
+    get().patchSessionConfig({ planMode: on }, sid)
   },
 
   refreshVoiceMode: async (slug) => {
@@ -2845,17 +2853,13 @@ export const useApp = create<AppState>((set, get) => ({
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
     if (get().configBySession[sid]?.preset === 'chat') return // chat 会话不委托外部引擎(引擎侧 chatPresetLocked 同样拒)
-    set((s) => {
-      const next = { ...(s.configBySession[sid] || {}), engineId: engineId || undefined, engineModelId: undefined, ...(engineId ? { groupChat: false, groupAgents: undefined, agentSlug: undefined } : {}) }
-      void api.putSessionConfig(get().cfg, sid, next).catch(() => {})
-      return { configBySession: { ...s.configBySession, [sid]: next } }
-    })
+    get().patchSessionConfig({ engineId: engineId || undefined, engineModelId: undefined, ...(engineId ? { groupChat: false, groupAgents: undefined, agentSlug: undefined } : {}) }, sid)
   },
 
   setSessionEngineModel: (engineModelId, targetSessionId) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
-    set((s) => { const next = { ...(s.configBySession[sid] || {}), engineModelId: engineModelId || undefined }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
+    get().patchSessionConfig({ engineModelId: engineModelId || undefined }, sid)
   },
 
   seedOnceBySession: {},
@@ -2914,7 +2918,8 @@ export const useApp = create<AppState>((set, get) => ({
   patchSessionConfig: (patch, targetSessionId) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
-    set((s) => { const next = { ...(s.configBySession[sid] || {}), ...patch }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
+    set((s) => ({ configBySession: { ...s.configBySession, [sid]: { ...(s.configBySession[sid] || {}), ...patch } } }))
+    void saveSessionConfig(sid, patch).catch(() => {})
   },
 
   adoptSession: (session, opts) => {
@@ -2941,7 +2946,7 @@ export const useApp = create<AppState>((set, get) => ({
     // 轨道身份锁在 store 层也守一道:私聊永不进团队模式;团队的工作区身份固定,运行模式可切换。
     const cur = get().configBySession[sid]
     if ((cur?.soloAgentSlug || cur?.soloEngineId) && patch.groupChat) return
-    set((s) => { const next = { ...(s.configBySession[sid] || {}), ...patch }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
+    get().patchSessionConfig(patch, sid)
   },
 
   selectSessionAgent: (slug, targetSessionId, extraPatch) => {
@@ -2950,7 +2955,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (!sid) return
     const def = slug ? get().agentDefs.find((a) => a.slug === slug) : null
     // extraPatch 与 agentSlug 同一笔 PUT(选择条降回单人时要连团队字段一起写,拆成两笔会互相冲掉)。
-    set((s) => { const next = { ...(s.configBySession[sid] || {}), ...(extraPatch || {}), agentSlug: slug || undefined }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
+    get().patchSessionConfig({ ...(extraPatch || {}), agentSlug: slug || undefined }, sid)
     // remember=false:这是 agent 预设强加的,不该把用户的「新会话默认模型/思考档」也一并改掉。
     if (def?.model) get().setSessionModel(def.model, sid, false)
     if (def?.thinkingLevel) get().setSessionThinking(def.thinkingLevel, sid, false)

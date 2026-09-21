@@ -638,7 +638,7 @@ try {
   //   A = run 快照还是自动编辑(团队 run 启动后用户才切到完全通行 —— 一跑几小时,成员子 run 冻着启动那刻的档)。
   // 判据:两条都 0 次审批,且两位成员真的把文件写到了工作区外(防「模型没调工具」的假绿)。负对照 = 用修复前的 dist 跑,须红。
   // C = 自动编辑档下的「工作区内」:成员写默认目录与工作范围里加的目录,写入一次都不许问(run_bash 在这档本就要问,不计)。
-  // D = 真·中途切档:团队 run 以自动编辑起跑,第一张审批卡出现时 PUT 团队会话为完全通行(桌面切档就是这个请求);
+  // D = 真·中途切档:团队 run 以自动编辑起跑,第一张审批卡出现时 PATCH 团队会话 { approvalMode: 完全通行 }(桌面切档就是这个请求,只带这一个键);
   //     成员随后那次写(-2.txt)不许再问。切档前已经排队的卡照常出现,不计。
   await scenario('teamapproval', 'teamapproval 团队 × 完全通行:成员不再逐次弹审批', async () => {
     const outside = join(OUT, 'outside-scope'); mkdirSync(outside, { recursive: true });
@@ -657,7 +657,7 @@ try {
       let switched = false;
       const flip = leg === 'D' ? async () => {
         if (switched) return; switched = true;
-        await api(`/agent/sessions/${sid}/config`, { method: 'PUT', body: JSON.stringify({ ...cfg, approvalMode: 'full-auto' }) });
+        await api(`/agent/sessions/${sid}/config`, { method: 'PATCH', body: JSON.stringify({ approvalMode: 'full-auto' }) });
       } : undefined;
       // 路径给相对默认目录的短写法:模型抄长临时路径会抄错段(实测把 live-xxx/ 整段吞掉,文件落到别处 → 判据误红)。
       const at = (f) => { const r = relative(workspace, f); return r.startsWith('..') ? r : `./${r}`; }; // 默认目录下的也带 ./,否则模型会照抄队友的 ../ 前缀

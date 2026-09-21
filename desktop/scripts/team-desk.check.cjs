@@ -1,5 +1,6 @@
 /** Team UI regression: Pin Summary member rows, independent Agent Desk, chronological public remarks,
  * forwarded approvals, member child chat's approval pill = the team session's mode (5a-5f), failed approval writes roll back (5g),
+ * config setters PATCH only their own keys with an old-engine PUT fallback (5d/5h/5i),
  * optional Historian attachment and light/dark screenshots.
  * Run after npm run build: npm run check:teamdesk (isolated Electron user data).
  */
@@ -17,7 +18,7 @@ function check(name, ok, detail) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 class StopEarly extends Error {}
-/** 故障注入(5g):置 configPut = true 时,桩对 PUT /agent/sessions/:id/config 回 500 —— 引擎重启 / 断网 / 409 的替身。 */
+/** 故障注入(5g):置 configPut = true 时,桩对 PUT / PATCH /agent/sessions/:id/config 回 500 —— 引擎重启 / 断网 / 409 的替身。 */
 const faults = { configPut: false, hits: 0 }
 
 const AGENTS = [
@@ -218,18 +219,15 @@ async function run(app, win, stub) {
     childMenuText.replace(/\n/g, ' / '))
   await dismissToasts(win)
   await win.locator('.child-chat-panel').screenshot({ path: shots.member })
-  // 整对象 PUT:带过去的必须是团队自己的配置、只换了档 —— 成员的 teamMember / cwd 串进来 = 把成员配置写进了团队会话。
-  const teamBefore = [...stub.seen.configs].reverse().find((c) => c.sessionId === SESSION_ID)?.config || {}
+  // 按键合并写:发给团队会话的只能是 { approvalMode } —— 成员的 cwd(故意与团队不同)/ execMode 串进来 = 把成员配置写进了团队会话;
+  // 整对象 PUT 则会把本地缓存里别的键的旧值一起写回去。
   const putsBefore = stub.seen.configs.length
   await approvalItem(childMenu, 'readonly').click()
   await sleep(300)
   const puts = stub.seen.configs.slice(putsBefore)
-  const put = puts[0]?.config || {}
-  const sorted = (o) => JSON.stringify(Object.keys(o).sort().map((k) => [k, o[k]]))
-  check('5d 子聊天里改档 → 只 PUT 团队会话一次,内容 = 团队原配置只换了档',
-    puts.length === 1 && puts[0].sessionId === SESSION_ID && put.approvalMode === 'readonly' && put.teamMember === undefined
-      && sorted({ ...put, approvalMode: null }) === sorted({ ...teamBefore, approvalMode: null }),
-    JSON.stringify({ puts, teamBefore }))
+  check('5d 子聊天里改档 → 只 PATCH 团队会话一次,请求体恰好是 { approvalMode: readonly }',
+    puts.length === 1 && puts[0].sessionId === SESSION_ID && puts[0].method === 'PATCH' && JSON.stringify(puts[0].config) === JSON.stringify({ approvalMode: 'readonly' }),
+    JSON.stringify(puts))
   await win.locator(mainPill).click()
   const teamNow = /\bactive\b/.test(await approvalItem(mainMenu, 'readonly').getAttribute('class') || '')
   await win.keyboard.press('Escape')
@@ -271,6 +269,33 @@ async function run(app, win, stub) {
   faults.configPut = false
   await dismissToasts(win)
   await win.locator('.child-chat-panel .agent-desk-head button').click()
+  // 5h 别的 setter 也只写自己的键:团队主区开计划模式 → PATCH 恰好 { planMode: true }。整对象 PUT 会把本地缓存里的审批档一起写回去 ——
+  // 另一个窗口刚收紧的档,这里点一下计划模式就被悄悄放宽(引擎审批时现读存值)。
+  const planBefore = stub.seen.configs.length
+  await win.locator(mainPill).click()
+  await win.locator(`${mainMenu} .menu-item`, { hasText: '开启计划模式' }).click()
+  await sleep(300)
+  const planWrites = stub.seen.configs.slice(planBefore)
+  check('5h 开计划模式 → 只 PATCH { planMode: true },不带审批档等别的键',
+    planWrites.length === 1 && planWrites[0].sessionId === SESSION_ID && planWrites[0].method === 'PATCH' && JSON.stringify(planWrites[0].config) === JSON.stringify({ planMode: true }),
+    JSON.stringify(planWrites))
+  // 5i 老引擎没有 PATCH(404)→ 回落整对象 PUT,改档照样生效、不回滚不报错(云端经 npm 包单独部署,版本会错开)
+  stub.state.noConfigPatch = true
+  const legacyBefore = stub.seen.configs.length
+  await win.locator(mainPill).click()
+  await approvalItem(mainMenu, 'auto-edit').click()
+  await sleep(600)
+  const legacy = stub.seen.configs.slice(legacyBefore)
+  const legacyToast = (await win.locator('.ntf-text').allInnerTexts().catch(() => [])).join(' | ')
+  await win.locator(mainPill).click()
+  const legacyActive = /\bactive\b/.test(await approvalItem(mainMenu, 'auto-edit').getAttribute('class') || '')
+  await win.keyboard.press('Escape')
+  check('5i 老引擎(PATCH 404)→ 回落整对象 PUT(带着团队配置与新档),药丸停在新档、不报错',
+    legacy.length === 2 && legacy[0].method === 'PATCH' && legacy[1].method === 'PUT' && legacy[1].sessionId === SESSION_ID
+      && legacy[1].config.approvalMode === 'auto-edit' && legacy[1].config.groupChat === true && Array.isArray(legacy[1].config.groupAgents)
+      && legacyActive && !legacyToast.includes('审批档'),
+    JSON.stringify({ legacy: legacy.map((c) => [c.method, c.config]), legacyActive, legacyToast }))
+  stub.state.noConfigPatch = false
   await win.locator('[data-historian-status] > button').click()
   await win.getByText('已保存该会话的工作约定', { exact: false }).first().waitFor()
   check('6 Historian 有独立可展开的状态行', await win.locator('.t2-tsum [data-historian-work]').count() === 1, '')
@@ -312,7 +337,7 @@ async function main() {
   const memberDir = path.join(home, 'Member Scope')
   for (const dir of [userData, `${userData}-dev`, vault, projectDir, memberDir]) fs.mkdirSync(dir, { recursive: true })
   const stub = await startStubEngine({ agents: AGENTS, sessions: sessionFixtures(projectDir), messages: MESSAGES, override: ({ path: route, method }) => {
-    if (faults.configPut && method === 'PUT' && /^\/agent\/sessions\/[^/]+\/config$/.test(route)) { faults.hits += 1; return { __code: 500, body: { detail: 'stub: config write failed' } } }
+    if (faults.configPut && (method === 'PUT' || method === 'PATCH') && /^\/agent\/sessions\/[^/]+\/config$/.test(route)) { faults.hits += 1; return { __code: 500, body: { detail: 'stub: config write failed' } } }
     if (route === '/agent/runs' && method === 'GET') return { runs: [] }
     if (route.endsWith('/detail')) { const id = route.split('/')[3]; return { session: { ...sessionFixtures(projectDir)[0], id, agent_config: { agentSlug: id === 'ws-x' ? 'xyra' : 'orbit-one', execMode: 'host', cwd: memberDir, teamMember: { teamSessionId: SESSION_ID } } } } }
   }, handle: ({ path: route, url }) => {

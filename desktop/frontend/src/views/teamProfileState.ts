@@ -27,9 +27,14 @@ export function teamDraft(config: AgentConfig, title: string, team?: TeamDef): T
 
 /** Merge into the latest session config: identity, grants, cwd and unrelated controls must survive. */
 export function teamSessionConfig(current: AgentConfig, draft: TeamDraft): AgentConfig {
+  return { ...current, ...teamSessionPatch(draft) }
+}
+
+/** 团队编辑写回会话的只有这几个键(PATCH 只带它们,别处刚改的审批档等不会被整对象盖回去);
+ *  teamMemberConfigs 空 = undefined → 上线为 null 删键。 */
+export function teamSessionPatch(draft: TeamDraft): Partial<AgentConfig> {
   const slugs = new Set(draft.members.map((m) => m.slug))
   return {
-    ...current,
     groupAgents: draft.members.map((m) => m.slug),
     groupTempAgents: draft.tempAgents.filter((a) => slugs.has(a.slug)),
     teamDoc: draft.doc,

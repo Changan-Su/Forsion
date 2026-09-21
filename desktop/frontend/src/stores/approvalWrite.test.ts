@@ -6,9 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useApp } from './appStore'
 
 const putMock = vi.hoisted(() => vi.fn())
+// 审批档走按键合并写(PATCH);老引擎回落 PUT 在 backendService 里,另有单测
 vi.mock('../services/backendService', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
-  putSessionConfig: (...a: unknown[]) => putMock(...a),
+  patchSessionConfig: (...a: unknown[]) => putMock(...a),
 }))
 
 const g = globalThis as any

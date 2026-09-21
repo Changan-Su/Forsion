@@ -9,7 +9,7 @@
  *   GET    /agent/sessions/:id/config              读 agent_config(enabledSkillIds/execMode/approvalMode/…)
  *   PUT    /agent/sessions/:id/config              整体替换 agent_config
  */
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { query } from '../core/db.js';
@@ -28,6 +28,7 @@ import { isValidSlug } from '../agents/agentRegistry.js';
 import { isDelegateActive } from '../services/delegateTranscript.js';
 import { ensureMemberSession, memberRunConfig } from '../services/teamRuns.js';
 import { recoverTeamOutputs } from '../services/teamOutputs.js';
+import { withKeyLock } from '../core/keyLock.js';
 
 const router = Router();
 
@@ -663,39 +664,61 @@ router.post('/agent/sessions/:id/checkpoints/restore', authMiddleware, async (re
   }
 });
 
-router.put('/agent/sessions/:id/config', authMiddleware, async (req: AuthRequest, res) => {
-  try {
-    const userId = req.user!.userId;
-    const s = await getOwnSession(req.params.id, userId);
-    if (!s) return res.status(404).json({ detail: 'Session not found' });
-    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+/** PATCH 体并进存值:null = 删这个键,其余逐键覆盖;没提到的键原样保留。 */
+export function mergeConfigPatch(stored: unknown, patch: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = stored && typeof stored === 'object' && !Array.isArray(stored) ? { ...(stored as Record<string, unknown>) } : {};
+  for (const [k, v] of Object.entries(patch)) { if (v === null) delete out[k]; else out[k] = v; }
+  return out;
+}
+
+/** 会话配置两个写口共用一条路径:PUT = 整对象替换(老客户端 / 新会话初始配置),PATCH = 只带要改的键、并进存值。
+ *  客户端拿本地缓存整对象写回,会把别的窗口改过的、或同窗口先发后到的旧值一起盖回去 —— 审批档是引擎审批时现读的存值,
+ *  被盖回去 = 悄悄放宽,所以桌面各 setter 走 PATCH。同会话的两种写都按会话串行:读存值 → 合并 → 落库之间不许别的写插进来。 */
+async function writeSessionConfig(req: AuthRequest, res: Response, body: Record<string, any>, merge: boolean): Promise<void> {
+  const id = req.params.id;
+  await withKeyLock(`session:config:${id}`, async () => {
+    const s = await getOwnSession(id, req.user!.userId);
+    if (!s) return void res.status(404).json({ detail: 'Session not found' });
     const factErr = validSessionFacts(body);
-    if (factErr) return res.status(400).json({ detail: factErr });
+    if (factErr) return void res.status(400).json({ detail: factErr });
     const stored = parseMaybeJson(s.agent_config);
     const msgCount = hasLockedFactKey(stored)
-      ? Number((await query<any[]>(`SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ?`, [req.params.id]))[0]?.n || 0)
+      ? Number((await query<any[]>(`SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ?`, [id]))[0]?.n || 0)
       : 0;
     // 轨道身份键要改(存值里有、请求里不同)时,活动 run 期间一律 409:首轮 run 刚提交、用户消息还没落库(COUNT=0)那一瞬,
     // 锁按消息数是不生效的,而 dispatchRun 可能已按旧身份分了流(creview 09-16 P1)。
-    // 漏传身份键不算「改」(锁会补回);只有请求里显式带了不同的值才算。
+    // 漏传身份键不算「改」(锁会补回);只有请求里显式带了不同的值才算(PATCH 的 null = 删,也算)。
     const identityChange = hasLockedFactKey(stored) && LOCKED_SESSION_FACT_KEYS.some((k) => k !== 'preset'
       && Object.prototype.hasOwnProperty.call(stored, k) && (stored as any)[k] != null
       && Object.prototype.hasOwnProperty.call(body, k) && (body as any)[k] !== (stored as any)[k]);
     if (identityChange) {
-      const active = await query<any[]>(`SELECT 1 FROM agent_runs WHERE session_id = ? AND status IN ('queued','running') LIMIT 1`, [req.params.id]);
-      if (active.length) return res.status(409).json({ detail: 'session identity is locked while a run is active' });
+      const active = await query<any[]>(`SELECT 1 FROM agent_runs WHERE session_id = ? AND status IN ('queued','running') LIMIT 1`, [id]);
+      if (active.length) return void res.status(409).json({ detail: 'session identity is locked while a run is active' });
     }
-    const cfg = applySessionFactLock(stored, body, msgCount);
-    // 锁合并之后再校验一次:请求体单看合法(只带 soloEngineId),合并回存值的 soloAgentSlug 就成了双身份 —— 这种 PUT 整条拒绝(creview 09-16 P0)。
+    const cfg = applySessionFactLock(stored, merge ? mergeConfigPatch(stored, body) : body, msgCount);
+    // 锁合并之后再校验一次:请求体单看合法(只带 soloEngineId),合并回存值的 soloAgentSlug 就成了双身份 —— 这种写整条拒绝(creview 09-16 P0)。
     const mergedErr = validSessionFacts(cfg);
-    if (mergedErr) return res.status(400).json({ detail: mergedErr });
-    // 配置变化不是消息活动:点击会话后的懒加载/补全也可能 PUT,绝不能因此刷新列表排序。
-    await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = ?`, [
-      JSON.stringify(cfg), req.params.id,
-    ]);
+    if (mergedErr) return void res.status(400).json({ detail: mergedErr });
+    // 配置变化不是消息活动:点击会话后的懒加载/补全也可能写配置,绝不能因此刷新列表排序。
+    await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = ?`, [JSON.stringify(cfg), id]);
     res.json({ agent_config: cfg });
+  });
+}
+
+router.put('/agent/sessions/:id/config', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    await writeSessionConfig(req, res, req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {}, false);
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'put config failed' });
+  }
+});
+
+router.patch('/agent/sessions/:id/config', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) return res.status(400).json({ detail: 'config patch must be an object' });
+    await writeSessionConfig(req, res, req.body, true);
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'patch config failed' });
   }
 });
 

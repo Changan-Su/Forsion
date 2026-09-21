@@ -38,9 +38,11 @@ async function run() {
     if (p.startsWith('/agent/sessions/')) {
       const session = sessions.find((s) => s.id === p.split('/')[3])
       if (session && p.endsWith('/config')) {
-        if (method === 'PUT') {
+        if (method === 'PUT' || method === 'PATCH') {
           if (failPut) return { __code: 503, body: { detail: 'Session save failed (fixture)' } }
-          session.agent_config = await body()
+          const b = await body()
+          // 与真引擎同语义:PUT 整对象替换,PATCH 按键合并(null = 删键)
+          session.agent_config = method === 'PUT' ? b : Object.fromEntries(Object.entries({ ...session.agent_config, ...b }).filter(([, v]) => v !== null))
         }
         return { agent_config: session.agent_config }
       }
