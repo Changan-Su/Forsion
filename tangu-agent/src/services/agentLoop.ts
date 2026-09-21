@@ -748,7 +748,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
     if (Object.keys(patch).length) {
       ac.signal.throwIfAborted();
-      // 写前现读再合:上面读存值到这儿隔着几次 await,期间用户在输入区切的档(PUT)不能被旧对象整份盖回去 —— 审批闸现读的就是它(Codex 09-21 P1)。
+      // 写前现读再合:上面读存值到这儿隔着几次 await(团队会话的 getTeam 是真文件 I/O),期间用户在输入区切的档(PUT)不能被旧对象整份盖回去 —— 审批闸现读的就是它(Codex 09-21 P1)。
+      // 现读 → 写之间只剩微任务:本机形态是 better-sqlite3(同步 API 包 Promise),HTTP 处理器(宏任务)插不进来;
+      // PG / HTTP 状态层有真异步间隙,但那些形态(服务端 / 云 worker)没有 host 审批闸,不读这个档。
       const freshRaw = await deps().state.getAgentConfig(sessionId);
       const fresh = typeof freshRaw === 'string' ? JSON.parse(freshRaw) : freshRaw;
       await deps().state.setAgentConfig(sessionId, JSON.stringify({ ...(fresh && typeof fresh === 'object' && !Array.isArray(fresh) ? fresh : stored || {}), ...patch }));
