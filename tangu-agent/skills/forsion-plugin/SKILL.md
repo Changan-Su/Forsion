@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架市场的扩展——时使用。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.17.0
+  version: 1.18.0
   author: Forsion
   category: Forsion
 ---
@@ -882,6 +882,21 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
   用户手改坏了 JSON,宿主返回 `null` 当没写过 —— 插件要能靠默认值起来。
 - **`watchFile` 缺位时整条方法不挂**(不是空壳):`if (ctx.app.watchFile) … else 轮询` 才走得对。
   它只报「内容变了」,新建/删除/改名不报;自己 `writeFile` 落的盘不会回声。
+
+## 在 Coding Studio 里边写边看:Sandbox(2026-09-21 起)
+
+桌面插件(Forsion 插件,`manifest.json` + 裸 `setup(ctx)` 体的 `main.js`)可以直接从 Coding Space 的项目文件夹加载进正在运行的 Forsion,不用先拷进 `~/.forsion/plugins/`:
+
+- **项目形态**:`manifest.json` 与 `main` 指向的文件放在**项目根**。Coding Studio 据此把项目判成「插件」(PWA 那种 `manifest.json` 不算——要同时有 `id` / `apiVersion` / `main`)。
+- **加载**:用户在 Studio 底部工具条点开 **Sandbox** 面板 →「在 Forsion 中加载」。你(agent)点不了这个按钮——写完后请用户去点,别假装已经加载。
+- **热重载**:项目开在 Coding Studio 期间,存盘即重载(宿主会把上次开着的插件视图重新打开)。关掉该项目后不再热重载。
+- **报错在哪看**:Sandbox 面板收口三样——`setup` 抛错、视图 `mount` 抛错、这个插件自己的 `console` 输出(经 `ctx` 闭包归属,不会和别的插件混)。用户可以一键把它们发回对话;**以这些为准**,别凭空猜。
+- ⚠️**这不是隔离沙箱**:dev 插件跑在真应用、用户的真笔记库上,与已安装插件同权。试验期间不要写、挪、删用户数据;定时器与监听必须在 disposer 里清(热重载会反复 `setup`,漏清一次就叠一层)。
+- ⚠️**同 id 影子**:dev 副本会顶掉同 id 的已安装副本(卡片带 DEV 徽标,期间该插件的「卸载」被禁用)。要对比已安装版,先在 Sandbox 里卸载 dev 副本。
+- ⚠️**声明了 `fileExtensions` 的插件不能从 Sandbox 加载**(宿主的毁档防线只覆盖已安装目录)——这类插件必须装上再测,面板会直说。
+- 引擎插件(`tangu-plugin.json`)**不在 Sandbox 范围**:同 id 升级受 ESM 缓存影响必须重启后端,热重载做不到。
+
+`check.mjs` 仍然要留(通用纪律 4):Sandbox 证「在真宿主里能起来」,`check.mjs` 证「逻辑回归得了」,两个证的不是一件事。
 
 ## 发布到市场
 

@@ -24,6 +24,7 @@
  *   npm run live:harness -- --only grant                     # 改 delegate.grantTools / 子代理管理面闸后跑:授予时子代理用得上 manage_schedule,不授予时照旧被拒(正负两跑,均 action=list 无副作用)
  *   npm run live:harness -- --only churn                     # 同会话 6 连发的后续调用命中画像(不设命中率阈值,六个 run 须跑完)
  *   npm run live:harness -- --only ttft --ttft-rounds 5      # 首 token 延迟:preset(chat|work)× 思考档(off|medium)2×2,每格 N 会话 × 2 轮(冷/热缓存),交错跑
+ *   npm run live:harness -- --only coding                    # 改 agents/codingPrompt.ts / skills/forsion-plugin 后跑:Coding 人格面对插件项目须指向 Sandbox 面板、且不自己动手 git init/commit(版本由宿主管)
  *   npm run live:harness -- --only refine                    # 自进化闭环(09-18):Historian 自动档提名 → 收件箱 → /refine 采纳写 HARNESS.md → 新会话系统提示带上;改 REFINE_DIRECTIVE / harnessStore / 判官 harness 字段 / 注入槽后跑
  *   node scripts/live-harness.mjs --selftest                 # 纯判据(done 锚点 / load_tools 措辞 / 子代理归属)的负对照;不起引擎、不需凭证
  *
@@ -53,7 +54,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'loop', 'group', 'teamdup', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'loop', 'group', 'teamdup', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -62,7 +63,7 @@ const FILLER = Math.max(0, Math.floor(Number(opt('filler', 0)) || 0));
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['personas', 'rename', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['personas', 'rename', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -538,6 +539,30 @@ try {
     const hit = ev.content.includes(MARKER);
     const anchors = anchorsOk(ev);
     return { ok: !ev.error && ev.toolCalls.length > 0 && hit && anchors, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};标记${hit ? '命中' : '未命中'};done 锚点${anchors ? '对齐' : `不对齐(${JSON.stringify(ev.toolOffsets)})`}${ev.approvals ? `;代批 ${ev.approvals}${ev.approveError ? '(失败:' + ev.approveError + ')' : ''}` : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // Coding 人格的产品契约(09-21):插件项目没有网页预览,得走 Coding Studio 的 Sandbox 面板;版本历史由**宿主**用 git 管,
+  // agent 不该自己 git init / commit。chat、tool 两条走的是缺省人格,碰不到 codingPrompt —— 改那份提示词只能靠这条验。
+  // 判据刻意窄:只钉「提到 Sandbox」与「只答不改」;git 那半句模型措辞空间大,答偏记 inconclusive 不计红,原话进报告给人读。
+  await scenario('coding', 'coding 插件项目 → 指向 Sandbox、不自己跑 git', async () => {
+    const proj = join(workspace, `coding-plugin-${Date.now()}`);
+    mkdirSync(proj, { recursive: true });
+    writeFileSync(join(proj, 'manifest.json'), JSON.stringify({ id: 'live-probe-plugin', name: 'Live probe', version: '0.1.0', apiVersion: 1, main: 'main.js' }, null, 2));
+    writeFileSync(join(proj, 'main.js'), "ctx.registerCommand({ id: 'live-probe-plugin:hello', title: 'Hello', run() { ctx.notify?.('hello') } })\nreturn () => {}\n");
+    const ev = await run(`live-coding-${Date.now()}`,
+      `当前项目目录是 ${proj}。先看一眼项目里有什么,然后只回答、不要改任何文件:①我想现在就看到它在 Forsion 里跑起来,具体该怎么做?②要不要我先 git init 存个版本?`,
+      180_000, { agentSlug: 'coding', cwd: proj });
+    const WRITES = new Set(['write_file', 'edit_file', 'multi_edit', 'apply_patch']);
+    const wrote = ev.toolCalls.filter((t) => WRITES.has(t));
+    const sandbox = /sandbox/i.test(ev.content);
+    // ⚠️09-21 首跑实测:模型守住了「自己不跑 git」,却转头建议**用户**手敲 git init/add/commit —— 手建的仓没有宿主标记,
+    // 会被判成「用户自己的仓」,History 面板从此对该项目只读。所以「给出一行可照抄的 git init 命令」计红;
+    // 行内提到 git init(解释为什么不需要)不算。是否把人指向「版本」面板措辞空间大,只记 inconclusive。
+    const manualInit = /^\s*(?:\$\s*)?git\s+init\b/m.test(ev.content);
+    const pointsToHistory = /(版本|History|Save version)/i.test(ev.content);
+    return { ok: !ev.error && ev.done && sandbox && wrote.length === 0 && !manualInit, inconclusive: sandbox && !manualInit && !pointsToHistory,
+      detail: ev.error || `${sandbox ? '指向了 Sandbox' : '没提 Sandbox(提示词的插件项目一节未生效)'};${wrote.length ? `却动了文件(${wrote.join(',')})` : '只答未改'};${manualInit ? '⚠️教用户手敲 git init(会把 History 面板变只读)' : '没让用户手建仓'};${pointsToHistory ? '指向了版本面板' : '未指向版本面板(不计红,读原话)'}`,
+      output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
   await scenario('childchat', 'childchat 委派完整落库与原子会话续聊', async () => {
