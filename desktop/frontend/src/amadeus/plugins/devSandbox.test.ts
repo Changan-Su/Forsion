@@ -28,6 +28,7 @@ vi.mock('../api', () => ({
 }))
 
 const { usePluginStore } = await import('./pluginStore')
+const { useAchievements } = await import('../../achievements/store')
 const { useDevRecords, devConsoleFor, recordDevMountError, formatDevLogArgs } = await import('./devRecords')
 const { useDevPluginState, getDevPluginState, reloadDevPlugin, clearDevPluginLogs, setDevViewBridge } = await import('./devSandbox')
 type DevPluginState = import('./devSandbox').DevPluginState
@@ -380,6 +381,7 @@ describe('async setup 的代次', () => {
       return new Promise((resolve) => { globalThis.__wake.push(() => {
         registerCommand({ id: 'late', title: ${JSON.stringify(title)}, run() {} })
         registerStatusItem({ id: 's', text: 'x' }).update({ text: 'y' }) // 作废之后交回来的 handle 也不许抛
+        ctx.achievements.registerSeries({ id: 'late', title: 'late', achievements: [{ id: 'a', title: 'a', desc: '', event: 'e', goal: 1, points: 1 }] })
         resolve(undefined)
       }) })`
     const mk = (title: string): ExternalPluginSource => source({ id: 'ghost', code: CODE(title), dev: true, devRoot: '/p/ghost', devProductId: 'p_00000000000c' })
@@ -396,5 +398,6 @@ describe('async setup 的代次', () => {
     g.__wake[0]!(); g.__wake[1]!()
     expect(mine()).toEqual([])
     expect(usePluginStore.getState().statusItems.filter((o) => o.pluginId === 'ghost')).toEqual([])
+    expect(useAchievements.getState().pluginSeries.filter((x) => x.pluginId === 'ghost')).toEqual([]) // 嵌在 ctx.achievements 里的那条登记同一道闸
   })
 })

@@ -1062,7 +1062,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
     },
     // 成就:注册/计数都在 achievements/store 内强制 plugin:<id>: 前缀(防撞官方 id/伪造官方计数)。
     achievements: {
-      registerSeries: (def) => registerPluginSeries(pluginId, def),
+      // 同 register* 那道闸(这一条嵌在 ctx.achievements 里,末尾那个按成员名的循环够不着):teardown 会清掉系列,过期续体不许再塞回来。
+      registerSeries: (def) => { if (ctxAlive) registerPluginSeries(pluginId, def) },
       track: (event, n) => track(`plugin:${pluginId}:${event}`, n),
     },
     // 活动日志:同款前缀纪律(插件伪造不了官方事件);拼行/消毒在 main 侧 activityLog.ts。
