@@ -120,8 +120,10 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     if (opts?.sandbox !== false) {
       loadSandboxConfig().catch(() => {});
       startCacheJanitor();
-      reapOrphanRunContainers();
-      reapOrphanSessions();
+      // 只影响日志:sandbox=none 时 Docker 不可达是常态,不刷屏;准入照旧按「状态未知即拒绝」。
+      const dockerInUse = deps().profile.sandboxMode === 'docker';
+      reapOrphanRunContainers(dockerInUse);
+      reapOrphanSessions(dockerInUse);
       startSessionReaper();
     }
 

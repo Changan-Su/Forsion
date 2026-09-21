@@ -20,7 +20,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { createHash, randomUUID } from 'crypto';
 import { ExecutionQueue } from './executionQueue.js';
-import { assertDockerWorkspaceAvailable, DockerCleanupError, removeDockerContainer, scheduleDockerStartupInspection, startDockerContainer, waitDockerStartupCleanup } from './dockerLifecycle.js';
+import { assertDockerWorkspaceAvailable, DockerCleanupError, removeDockerContainer, reportStartupInspectionFailure, scheduleDockerStartupInspection, startDockerContainer, waitDockerStartupCleanup } from './dockerLifecycle.js';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -484,11 +484,11 @@ export function stopSessionReaper(): void {
 }
 
 /** 启动只读检查已有 agent-sess-* 的挂载；无法确认属主的冲突目录隔离，绝不按前缀杀其它实例。 */
-export function reapOrphanSessions(): void {
+export function reapOrphanSessions(dockerInUse = true): void {
   // Old directories remain recoverable. A matching name alone cannot establish orphan ownership.
   if (sessions.size) return; // startup-only; never reap this process's live sessions
   void scheduleDockerStartupInspection(['agent-sess-'])
-    .catch((e) => console.warn('[agent-core] existing session sandbox inspection failed:', e));
+    .catch((e) => reportStartupInspectionFailure(e, dockerInUse));
 }
 
 /** 进程内会话沙箱快照（供 admin 面板观测）。 */

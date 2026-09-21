@@ -64,6 +64,58 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
+describe('Startup inspection when Docker is not reachable', () => {
+  const daemonDown = ok({ code: 1, stderr: 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n' });
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it.each([
+    ['daemon down', daemonDown],
+    ['no docker CLI', ok({ code: -1, reason: 'spawn-error' })],
+  ])('sandbox=none, %s: stays silent but still fails closed, even if a later scan succeeds', async (_label, psResult) => {
+    let scans = 0;
+    // 第一次 ps 失败、之后恢复:另一个实例可能连得上本进程连不上的守护进程,看不见 ≠ 没有写者
+    fake.run.mockImplementation(async (_bin, args) => args[0] === 'ps' ? (scans++ ? ok({ stdout: 'agent-sess-live\n' }) : psResult) : ok());
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      docker.reapOrphanRunContainers(false); sessions.reapOrphanSessions(false);
+      await expect(sessions.getSessionDir(key())).rejects.toThrow('Cannot confirm orphan sandbox state');
+      await flush();
+      expect(warn).not.toHaveBeenCalled();
+      expect(fake.hydrate).not.toHaveBeenCalled();
+    } finally { warn.mockRestore(); }
+  });
+
+  it.each([
+    ['container uninspectable', (args: string[]) => args[0] === 'ps' ? ok({ stdout: 'agent-run-x\n' }) : ok({ code: 124, reason: 'timeout' })],
+    ['ps output over the cap', (args: string[]) => args[0] === 'ps' ? ok({ code: -1, reason: 'output-limit' }) : ok()],
+  ])('sandbox=none still reports failures where Docker answered: %s', async (_label, respond) => {
+    fake.run.mockImplementation(async (_bin, args) => respond(args));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      docker.reapOrphanRunContainers(false); sessions.reapOrphanSessions(false);
+      await expect(sessions.getSessionDir(key())).rejects.toThrow(/Cannot inspect|output-limit/);
+      await flush();
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally { warn.mockRestore(); }
+  });
+
+  it('Docker in use, daemon down: every later mount stays blocked, reported once as a single line without a stack', async () => {
+    fake.run.mockImplementation(async (_bin, args) => args[0] === 'ps' ? daemonDown : ok());
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      docker.reapOrphanRunContainers(); sessions.reapOrphanSessions();
+      await expect(sessions.getSessionDir(key())).rejects.toThrow('Is the docker daemon running');
+      await expect(docker.runNode('never execute')).rejects.toThrow('Cannot confirm orphan sandbox state');
+      await flush();
+      expect(warn).toHaveBeenCalledTimes(1); // 两个 reaper 共用一条链,同一个错误
+      expect(warn.mock.calls[0]).toHaveLength(1); // 只交一个字符串:把 Error 对象交给 console 就会连栈打出来
+      expect(warn.mock.calls[0][0]).toContain('Is the docker daemon running');
+      expect(warn.mock.calls[0][0]).not.toContain('\n');
+      expect(fake.run.mock.calls.some(([, args]) => args[0] === 'run')).toBe(false);
+    } finally { warn.mockRestore(); }
+  });
+});
+
 describe('Docker lifecycle acknowledgements', () => {
   it('keeps new sessions behind startup inspection while independently cancelling an admission waiter', async () => {
     let inspectionAck!: () => void;
