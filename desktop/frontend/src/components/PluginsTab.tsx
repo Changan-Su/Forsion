@@ -5,7 +5,8 @@
  */
 import React, { useEffect, useMemo, useState } from 'react'
 import { setPluginEnabled, uninstallPlugin, installPluginFromNpm, rescanPlugins, type PluginInfo } from '../services/backendService'
-import { useApp } from '../stores/appStore'
+import { panelToast } from './PanelNotice'
+import { ipcErrorText } from '../ipcError'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
@@ -56,10 +57,10 @@ export const PluginsTab: React.FC<{
       const msg = r.addedIds.length
         ? t('settings.plugins.rescanAdded', { n: String(r.addedIds.length) })
         : t('settings.plugins.rescanNone')
-      useApp.getState().toast(r.needsRestart ? `${msg} · ${t('settings.plugins.needsRestartHint')}` : msg)
+      panelToast(r.needsRestart ? `${msg} · ${t('settings.plugins.needsRestartHint')}` : msg)
       onReload()
     } catch (e: any) {
-      useApp.getState().toast(e?.message || String(e), true)
+      panelToast(e?.message || String(e), true)
     } finally { setRescanning(false) }
   }
 
@@ -69,10 +70,10 @@ export const PluginsTab: React.FC<{
       await uninstallPlugin(cfg, p.id).catch(() => {}) // 后端不在也继续:剩孤儿设置好过卸不掉
       await window.tangu?.pluginsUninstall?.(p.id)
       await window.tangu?.backendRestart?.() // 工具/路由无法运行期反注册,重启后 discoverPlugins 不再发现它
-      useApp.getState().toast(t('settings.plugins.uninstalled', { name: nm(p) }))
+      panelToast(t('settings.plugins.uninstalled', { name: nm(p) }))
       onReload()
     } catch (e: any) {
-      useApp.getState().toast(e?.message || String(e), true)
+      panelToast(ipcErrorText(e), true)
     }
   }
 
@@ -84,11 +85,11 @@ export const PluginsTab: React.FC<{
     setInstalling(true)
     try {
       const r = await installPluginFromNpm(cfg, norm, preferMirror)
-      useApp.getState().toast(t('settings.plugins.installed', { id: r.id, version: r.version }))
+      panelToast(t('settings.plugins.installed', { id: r.id, version: r.version }))
       setSpec('')
       onReload()
     } catch (e: any) {
-      useApp.getState().toast(e?.message || String(e), true)
+      panelToast(e?.message || String(e), true)
     } finally { setInstalling(false) }
   }
 

@@ -9,6 +9,13 @@ import type { SessionRecord, TanguDesktopConfig } from '../types'
 import './feedbackMessages'
 import './feedback.css'
 
+/** 「让 Tangu 帮我诊断」的落点:草稿预填进主区聊天(不自动发)。Electron 下反馈是独立浮窗,那边的 store 与工作台
+ *  都不是主窗的(以前在浮窗里调这两句,窗一关就什么都没了)→ 浮窗经 requestMainAction('chat-draft') 请主窗 Root 来调。 */
+export function draftInMainChat(draft: string): void {
+  useApp.getState().setPendingDraft(draft)
+  useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
+}
+
 export const FeedbackModal: React.FC<{
   cfg: TanguDesktopConfig
   activeSession: SessionRecord | null
@@ -98,8 +105,9 @@ export const FeedbackModal: React.FC<{
 
   const diagnoseViaChat = (): void => {
     if (!text.trim() || busy) return
-    useApp.getState().setPendingDraft(t('feedback.diagnosePrompt', { description: text.trim() }))
-    useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
+    const draft = t('feedback.diagnosePrompt', { description: text.trim() })
+    if (window.tangu?.requestMainAction) window.tangu.requestMainAction('chat-draft', draft)
+    else draftInMainChat(draft)
     close()
   }
   const size = report ? `${(report.bytes / 1024).toFixed(1)} KB` : ''
@@ -132,9 +140,11 @@ export const FeedbackModal: React.FC<{
             <h3>{t('feedback.successTitle')}</h3><p>{t('feedback.successHint')}</p>
             {result.id && <code>{t('feedback.ticket', { id: result.id })}</code>}
             {result.attachmentSkipped && <p className="feedback-warning">{t('feedback.okNoLog')}</p>}
+            {/* 反馈住在独立浮窗里,全局 toast 在这儿不渲染 → 「查看反馈」打不开的原因就地写。 */}
+            {error && <p className="feedback-warning" role="alert">{error}</p>}
           </div>
           <div className="feedback-footer">
-            {window.tangu?.openAccountCenter && <button className="btn ghost" onClick={() => { void window.tangu!.openAccountCenter!('feedback').catch(() => useApp.getState().toast(t('feedback.errUnavailable'), true)) }}>{t('feedback.viewFeedback')}</button>}
+            {window.tangu?.openAccountCenter && <button className="btn ghost" onClick={() => { setError(''); void window.tangu!.openAccountCenter!('feedback').catch(() => setError(t('feedback.errUnavailable'))) }}>{t('feedback.viewFeedback')}</button>}
             <span className="grow" /><button autoFocus className="btn primary" onClick={close}>{t('feedback.done')}</button>
           </div>
         </> : <>

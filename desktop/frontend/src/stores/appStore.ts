@@ -783,7 +783,8 @@ export interface AppState {
   openAchievements(): void
   closeAchievements(): void
   /** 插件装好后:重扫(免重启出现)+ 启用 + 重启提示 + 跳转对应设置。 */
-  onPluginInstalled(): Promise<void>
+  /** notify:调用方自己的提示出口(市场在浮窗 / 覆盖层里,全局 toast 看不见);缺省走全局 toast。 */
+  onPluginInstalled(notify?: (text: string, error?: boolean) => void): Promise<void>
   openFeedback(description?: string): boolean
   closeFeedback(): void
   setOnboarding(on: boolean): void
@@ -3053,16 +3054,17 @@ export const useApp = create<AppState>((set, get) => ({
     void api.listSkills(get().cfg).then((s) => set({ skillsList: s })).catch(() => { /* ignore */ })
   },
 
-  onPluginInstalled: async () => {
+  onPluginInstalled: async (notify) => {
     const t = get().tr
+    const say = notify ?? get().toast
     try {
       // 重扫让后端立刻发现新插件(免重启);装即启用;提示可能需重启。
       // 不再自动关市场 / 跳设置:装完只 toast「已安装」,用户在插件详情里自行「打开设置」。
       const r = await api.rescanPlugins(get().cfg)
       for (const id of r.addedIds) await api.setPluginEnabled(get().cfg, id, true).catch(() => {})
-      get().toast(r.needsRestart ? t('market.pluginInstalledRestartHint') : t('market.pluginInstalledOk'))
+      say(r.needsRestart ? t('market.pluginInstalledRestartHint') : t('market.pluginInstalledOk'))
     } catch (e: any) {
-      get().toast(t('market.installFail', { e: e?.message || String(e) }), true)
+      say(t('market.installFail', { e: e?.message || String(e) }), true)
     }
   },
 

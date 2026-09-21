@@ -27,6 +27,7 @@ import { askString } from '../amadeus/components/askString'
 import { Webview } from '../builtins/browserView'
 import { BROWSER_PARTITION } from '../../../shared/browser'
 import { registerMessages, useI18n } from '../i18n'
+import { ipcErrorText } from '../ipcError'
 import type { UnitInfo, UnitPairedDevice } from '../types'
 import '../styles/unitSwitcher.css'
 
@@ -221,7 +222,7 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
           const r = await window.tangu!.unitsP2pOpen!(u.id)
           to(r.url)
         } catch (e) {
-          say(t('unit.p2pFallback', { why: String((e as Error)?.message || e) }))
+          say(t('unit.p2pFallback', { why: ipcErrorText(e) }))
           to(tunnelPageUrl(cloudUrl, u.id), `${u.id}:tunnel`) // 回落即中转:key 归中转行,勾选态如实
         }
       })

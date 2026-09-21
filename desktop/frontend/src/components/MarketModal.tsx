@@ -4,15 +4,15 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  ArrowLeft, ArrowRight, Bot, Check, Clock, Compass, Download, ExternalLink,
+  AlertCircle, ArrowLeft, ArrowRight, Bot, Check, Clock, Compass, Download, ExternalLink,
   GitBranch, Globe, LayoutGrid, Library, Loader2, Package, PackageOpen, Palette, Puzzle,
-  RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, Wrench,
+  RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, Wrench, X,
 } from 'lucide-react'
 import { Skeleton } from '@lcl/engine'
 import { useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { Markdown } from './Markdown'
-import { listMarket, getMarketDetail, installMarket, listInstalled, type InstalledItem } from '../services/marketService'
+import { listMarket, getMarketDetail, installMarket, listInstalled, onInstallProgress, type InstalledItem } from '../services/marketService'
 import { loadUserSpaces } from '../userSpaces'
 import { useTheme } from '../stores/themeStore'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
@@ -21,7 +21,7 @@ import { isGate, promptIfPending } from '../stores/pluginOnboardingStore'
 import { track } from '../achievements/store'
 import { act } from '../activity/log'
 import { openBrowser } from '../builtins'
-import type { MarketCard, MarketDetail } from '../types'
+import type { MarketCard, MarketDetail, MarketInstallProgress } from '../types'
 
 type MarketType = MarketCard['type']
 type Tab = 'discover' | MarketType | 'webapp' | 'installed' | 'updates' | 'submit'
@@ -72,6 +72,17 @@ function timeValue(value?: string | null): number {
   return Number.isFinite(n) ? n : 0
 }
 
+/** 去掉 map 里的一个 id(按 id 记账的「安装中 / 进度」各自收尾,互不清掉别人的)。 */
+function omit<T>(map: Record<string, T>, id: string): Record<string, T> {
+  const next = { ...map }
+  delete next[id]
+  return next
+}
+
+function formatBytes(n: number): string {
+  return n >= 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`
+}
+
 function formatDate(value?: string | null): string {
   if (!value) return ''
   const date = new Date(value)
@@ -83,7 +94,16 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
   const { t } = useI18n()
   const storeClose = useApp((s) => s.closeMarket)
   const close = onClose ?? storeClose
-  const toast = useApp((s) => s.toast)
+  // 市场住在独立浮窗(桌面)或全屏覆盖层(主窗)里:全局通知在浮窗不渲染、在主窗被 overlayOpen 挡住,
+  // 所以安装/卸载的结果只能由市场自己说 —— 这条提示条就是那个出口(09-21 用户实报「点安装只转圈没反馈」)。
+  const [notice, setNotice] = useState<{ text: string; error: boolean; hint?: string } | null>(null)
+  // 普通提示不覆盖还挂着的错误(并发安装时,后完成的「已安装」会在几百毫秒内把前一个的失败原因顶掉)。
+  const toast = useCallback((text: string, error = false, hint?: string) => setNotice((cur) => (cur?.error && !error ? cur : { text, error, hint })), [])
+  useEffect(() => {
+    if (!notice || notice.error) return // 错误常驻到手动关 / 下一条提示
+    const timer = setTimeout(() => setNotice(null), 4000)
+    return () => clearTimeout(timer)
+  }, [notice])
   const [tab, setTab] = useState<Tab>('discover')
   const [catalog, setCatalog] = useState<MarketCard[]>([])
   const [catalogError, setCatalogError] = useState('')
@@ -91,7 +111,11 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
   const [updatable, setUpdatable] = useState<MarketCard[]>([])
   const [detail, setDetail] = useState<MarketDetail | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
-  const [installing, setInstalling] = useState<string | null>(null)
+  // 按 id 记账:下载现在最长要等几十秒,先后点两个安装时,先完成的那个不能把另一个的「安装中」清掉(清掉 = 可以再点一次同一项、两路并发解压进同一目录)。
+  const [installing, setInstalling] = useState<Record<string, true>>({})
+  const [progress, setProgress] = useState<Record<string, MarketInstallProgress>>({})
+  const [failed, setFailed] = useState<Record<string, true>>({})
+  useEffect(() => onInstallProgress((p) => setProgress((m) => ({ ...m, [p.id]: p }))), [])
   const [uninstalling, setUninstalling] = useState<string | null>(null)
   const [webApps, setWebApps] = useState<{ base: string; items: WebApp[] } | null>(null)
   const [webLoading, setWebLoading] = useState(false)
@@ -166,14 +190,17 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
   }
 
   const onInstall = async (c: MarketCard): Promise<void> => {
-    setInstalling(c.id)
+    setInstalling((m) => ({ ...m, [c.id]: true }))
+    setProgress((m) => omit(m, c.id))
+    setFailed((m) => omit(m, c.id))
+    setNotice(null) // 新一轮安装 = 用户已看过上一条(失败的那项按钮仍是「重试」)
     try {
       const res = await installMarket(c.id)
       const effectiveType = ((res?.type as MarketType) || c.type)
       track('market.install')
       act('market.install', { id: c.id })
       if (effectiveType === 'plugin') {
-        await useApp.getState().onPluginInstalled()
+        await useApp.getState().onPluginInstalled(toast)
       } else if (effectiveType === 'space') {
         await loadUserSpaces()
         toast(t('market.spaceInstalled', { name: c.name }))
@@ -187,7 +214,7 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
           await usePluginStore.getState().reloadExternal()
           const state = usePluginStore.getState()
           const freshAll = state.plugins.filter((p) => !before.has(p.id))
-          if (state.plugins.some((p) => p.bundle?.enginePlugins?.length)) await useApp.getState().onPluginInstalled()
+          if (state.plugins.some((p) => p.bundle?.enginePlugins?.length)) await useApp.getState().onPluginInstalled(toast)
           await loadUserSpaces()
           // 装完 = 注意力在场:逐个实测新插件(连 check),第一个确有未满足的才弹检查卡。
           for (const p of freshAll) if (state.activeIds.includes(p.id) && isGate(p) && await promptIfPending(p.id)) break
@@ -198,9 +225,11 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
       }
       await scanCatalog()
     } catch (e: any) {
-      toast(t('market.installFail', { e: e?.message || String(e) }), true)
+      setFailed((m) => ({ ...m, [c.id]: true }))
+      toast(t('market.installFailNamed', { name: c.name, e: e?.message || String(e) }), true, c.source === 'github' && e?.stage !== 'resolve' ? t('market.installHintGithub') : undefined)
     } finally {
-      setInstalling(null)
+      setInstalling((m) => omit(m, c.id))
+      setProgress((m) => omit(m, c.id))
     }
   }
 
@@ -250,20 +279,31 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
     setQuery('')
   }
 
+  /** 按钮上的进度:准备 → 连接(第 n/m 个地址)→ 百分比或已收字节(多数 github 响应不给长度)→ 解压。 */
+  const busyLabel = (p: MarketInstallProgress | undefined): string => {
+    if (!p || p.phase === 'resolve') return t('market.phase.resolve')
+    if (p.phase === 'install') return t('market.installing')
+    if (p.received) return p.total ? t('market.phase.percent', { n: Math.min(99, Math.floor((p.received / p.total) * 100)) }) : t('market.phase.bytes', { size: formatBytes(p.received) })
+    return (p.attempts ?? 1) > 1 ? t('market.phase.connectN', { n: p.attempt ?? 1, m: p.attempts ?? 1 }) : t('market.phase.connect')
+  }
+
   const installBtn = (c: MarketCard, extraClass = '') => {
-    const busy = installing === c.id
+    const busy = !!installing[c.id]
     const done = isInstalled(c)
     const update = hasUpdate(c)
     const inst = installedEntry(c)
+    const retry = !busy && !!failed[c.id]
+    const p = busy ? progress[c.id] : undefined
     return (
       <button
         className={`btn sm ${update || !done ? 'primary' : ''} ${extraClass}`.trim()}
         disabled={busy}
-        title={update ? t('market.updateTitle', { from: inst?.version || '?', to: c.latestVersion || '?' }) : undefined}
+        data-install-state={busy ? (p?.phase || 'resolve') : retry ? 'failed' : undefined}
+        title={p?.host || (update ? t('market.updateTitle', { from: inst?.version || '?', to: c.latestVersion || '?' }) : undefined)}
         onClick={(e) => { e.stopPropagation(); void onInstall(c) }}
       >
-        {busy ? <Loader2 size={13} className="mk-spin" /> : update ? <RefreshCw size={13} /> : done ? <Check size={13} /> : <Download size={13} />}
-        {busy ? t('market.installing') : update ? t('market.update') : done ? t('market.reinstall') : t('market.install')}
+        {busy ? <Loader2 size={13} className="mk-spin" /> : retry || update ? <RefreshCw size={13} /> : done ? <Check size={13} /> : <Download size={13} />}
+        {busy ? busyLabel(p) : retry ? t('market.installRetry') : update ? t('market.update') : done ? t('market.reinstall') : t('market.install')}
       </button>
     )
   }
@@ -275,7 +315,7 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
     return (
       <button
         className={`btn sm ghost ${extraClass}`.trim()}
-        disabled={busy || installing === c.id}
+        disabled={busy || !!installing[c.id]}
         title={t('market.uninstall')}
         aria-label={t('market.uninstall')}
         onClick={(e) => { e.stopPropagation(); void onUninstall(c) }}
@@ -408,6 +448,14 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
           {showSearch && <label className="mk-search"><Search size={16} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('market.searchPlaceholder')} />{query && <button onClick={() => setQuery('')} aria-label={t('market.clearSearch')}>×</button>}</label>}
           {showSort && <label className="mk-sort"><span>{t('market.sort.label')}</span><select value={sort} onChange={(e) => setSort(e.target.value as SortMode)}><option value="popular">{t('market.sort.popular')}</option><option value="latest">{t('market.sort.latest')}</option><option value="name">{t('market.sort.name')}</option></select></label>}
         </div>
+
+        {notice && (
+          <div className={`mk-notice${notice.error ? ' is-error' : ''}`} role={notice.error ? 'alert' : 'status'}>
+            {notice.error ? <AlertCircle size={15} /> : <Check size={15} />}
+            <div className="mk-notice-body"><span>{notice.text}</span>{notice.hint && <small>{notice.hint}</small>}</div>
+            <button className="mk-notice-close" onClick={() => setNotice(null)} aria-label={t('common.close')}><X size={13} /></button>
+          </div>
+        )}
 
         <div className="settings-body mk-body">
           {detail ? (

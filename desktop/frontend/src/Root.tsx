@@ -2,7 +2,7 @@ import { amadeusAvailable } from './features/runtime'
 /** App 根:启动副作用(连接/轮询/更新)+ 主题桥接给纯引擎 Shell + 设置/引导/更新横幅浮层。 */
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { Shell, UI_MODE } from '@lcl/engine'
+import { Shell, UI_MODE, useWorkspace } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
 import { getLanguage } from './theme/registry'
@@ -10,6 +10,7 @@ import { useBootstrap } from './stores/bootstrap'
 import { buildDefaultLayout } from './bootstrapEngine'
 import { TopBar } from './views/TopBar'
 import { SettingsModal } from './components/SettingsModal'
+import { sendTestNotification } from './components/NotificationsTab'
 import { AmadeusOverlays } from './amadeusOverlays'
 import { QuickFind } from './quickFind'
 import { FindBar } from './findInPage'
@@ -17,9 +18,11 @@ import { HoverTip } from './hoverTip'
 import { MarketModal } from './components/MarketModal'
 import { PluginOnboardingHost } from './components/PluginOnboardingModal'
 import { OnboardingWizard, ONBOARDING_DISMISS_KEY } from './components/OnboardingWizard'
-import { FeedbackModal } from './components/FeedbackModal'
+import { FeedbackModal, draftInMainChat } from './components/FeedbackModal'
 import { AchievementsModal } from './achievements/AchievementsModal'
 import { AchievementToast } from './achievements/AchievementToast'
+import { debugFireToast } from './achievements/store'
+import { forgetUserSpace } from './userSpaces'
 import { NotificationHost } from './components/NotificationHost'
 import { DesktopStatusBar, installStatusBarItems } from './statusbar/items'
 import { UnitRemoteSurface } from './components/UnitSwitcher'
@@ -57,10 +60,17 @@ export function Root() {
   useBootstrap()
   useEffect(() => installFileDropGuard(), []) // 全局 OS 文件拖放守卫:未被任何视图接手的拖放不再把 SPA 导航冲掉
   useEffect(() => { installStatusBarItems(); installNotificationWiring() }, []) // 状态栏内置项 + 通知事件接线(幂等)
-  useEffect(() => window.tangu?.onMainAction?.((action) => {
+  useEffect(() => window.tangu?.onMainAction?.((action, payload) => {
     if (action === 'onboarding') useApp.getState().setOnboarding(true)
     // 设置浮窗里拨了开发者选项的 ⌘K 开关:命令注册表每个渲染进程各一份,得由主窗自己重算。
     if (action === 'dev-commands') syncDevCommands()
+    // 设置浮窗里点「发送测试通知」:通知卡只有主窗渲染,由主窗来弹才是真预览。
+    if (action === 'test-notification') sendTestNotification()
+    // 以下同理:浮窗 = 独立渲染进程 + 独立 store,作用在工作台上的动作由主窗自己做(09-21)。
+    if (action === 'reset-layout') useWorkspace.getState().resetLayout()
+    if (action === 'achievement-toast') debugFireToast()
+    if (action === 'space-removed' && payload) forgetUserSpace(payload)
+    if (action === 'chat-draft' && payload) draftInMainChat(payload)
   }), [])
   const theme = useTheme()
   const a = useApp(useShallow((s) => ({
@@ -225,12 +235,15 @@ export function Root() {
         </FloatingPanelFrame>}
       </AnimatePresence>
 
-      {/* 全屏二级界面是单任务空间:插件引导、成就与同步通知延后到回到主应用后再出现。 */}
+      {/* 全屏二级界面是单任务空间:插件引导、成就延后到回到主应用后再出现(通知见下)。 */}
       {!overlayOpen && <PluginOnboardingHost />}
 
       {!overlayOpen && <AchievementToast onOpen={() => useApp.getState().openAchievements()} />}
 
-      {!overlayOpen && <NotificationHost />}
+      {/* 通知只在首启引导(仍是全屏)时让位:设置 / 市场 / 成就 / 反馈在 web 上是居中浮层、主工作台可见,
+          卡片(z 100)压在浮层(z 55)上正常弹 —— 否则浮层开着时「发送测试通知」等于没按(Codex 评审 P1)。
+          web 只有一个渲染进程,不存在与别的窗口重复;面板自己的操作结果照旧走面板提示条(panelToast)。 */}
+      {!a.onboarding && <NotificationHost />}
     </MobilePreviewFrame>
   )
 }

@@ -20,6 +20,9 @@ import { setPluginEnabled, type PluginInfo } from '../services/backendService'
 import { loadUserSpaces } from '../userSpaces'
 import { BuiltinPluginsSection } from '../builtins'
 import { useApp } from '../stores/appStore'
+import { panelToast } from './PanelNotice'
+import { ipcErrorText } from '../ipcError'
+import { windowKind } from '../windowKind'
 import type { TanguDesktopConfig } from '../types'
 import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } from '@amadeus/plugins/types'
 import { PluginLogo } from './PluginLogo'
@@ -86,7 +89,7 @@ function cascadeAfterToggle(
         failed += 1
       }
     }
-    if (failed) useApp.getState().toast(useApp.getState().tr('settings.amadeusPlugins.cascadeFail', { n: String(failed) }), true)
+    if (failed) panelToast(useApp.getState().tr('settings.amadeusPlugins.cascadeFail', { n: String(failed) }), true)
     onEngineReload?.()
   }
   const prev = cascadeChain.get(p.id) ?? Promise.resolve()
@@ -345,6 +348,9 @@ const PluginDetail: React.FC<{
   const toggleHere = (): void => {
     const wasOff = !on
     toggle(p.id)
+    // setup 抛错时宿主只发 Amadeus 吐司(只有主窗渲染)→ 在设置浮窗里拨开关就像没反应,这里就地报。
+    const st = usePluginStore.getState()
+    if (wasOff && !st.isActive(p.id) && st.lastSetupError[p.id]) panelToast(t('pluginhost.setupFailed', { name: pluginDisplayName(p, locale) }), true)
     if (wasOff) void promptIfPending(p.id) // 手动启用 = 注意力在场:实测(连 check),确有未满足才弹检查卡
     void cascadeAfterToggle(p, cfg, onEngineReload, enginePlugins)
   }
@@ -357,9 +363,10 @@ const PluginDetail: React.FC<{
       await amadeus.uninstallPlugin?.(p.id)
     } catch (e: any) {
       // 主进程的开发副本守卫用机器码开头(见 electron/amadeus/ipc.ts 的 uninstallPlugin):
-      // 这条是用户真会撞上的(开发副本可能是别的窗口/上一次会话开的),按当前语言说人话。
-      const raw = e?.message || String(e)
-      useApp.getState().toast(String(raw).startsWith('dev-shadowed') ? t('settings.amadeusPlugins.devShadowedUninstall') : raw, true)
+      // 这条是用户真会撞上的(开发副本可能是别的窗口/上一次会话开的),按当前语言说人话;其余原因码交给 ipcErrorText。
+      // ipcErrorText 已剥掉 Electron invoke 前缀,不认识的码原样透传,所以在它的结果上认前缀。
+      const text = ipcErrorText(e)
+      panelToast(text.startsWith('dev-shadowed') ? t('settings.amadeusPlugins.devShadowedUninstall') : text, true)
       return
     }
     onBack()
@@ -371,11 +378,11 @@ const PluginDetail: React.FC<{
       const st = await window.tangu?.backendRestart?.().catch(() => null)
       onEngineReload?.()
       if (!st || st.state === 'crashed') {
-        useApp.getState().toast(t('settings.amadeusPlugins.uninstalledRestartPending', { name: pluginDisplayName(p, locale) }), true)
+        panelToast(t('settings.amadeusPlugins.uninstalledRestartPending', { name: pluginDisplayName(p, locale) }), true)
         return
       }
     }
-    useApp.getState().toast(t('settings.amadeusPlugins.uninstalled', { name: pluginDisplayName(p, locale) }))
+    panelToast(t('settings.amadeusPlugins.uninstalled', { name: pluginDisplayName(p, locale) }))
   }
 
   /** 撤下开发副本:关掉产物的 devLoad 开关,再只重载这一个 id —— 有安装版的话它会在同一拍回来。
@@ -466,7 +473,9 @@ const PluginDetail: React.FC<{
           <CompanionApp appId={dep} />
         </>
       )}
-      {commands.length > 0 && (
+      {/* 命令跑在调用它的渲染进程里:设置在 Electron 下是独立浮窗,在这里点「统计字数」数的是浮窗的(空)当前页,
+          结果吐司也只有主窗渲染 → 点了什么都看不见。卫星窗里不给这排按钮,命令照旧在主窗 ⌘K 里;web 仍同窗,保留。 */}
+      {commands.length > 0 && windowKind() === 'main' && (
         <>
           <div className="hint">{t('settings.amadeusPlugins.commands')}</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

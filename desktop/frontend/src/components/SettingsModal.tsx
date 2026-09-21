@@ -56,6 +56,7 @@ import { AmadeusPluginsTab } from './AmadeusPluginsTab'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { pluginDisplayName, pluginsWithSettingsPanel } from '../amadeus/plugins/display'
 import { SpacesTab } from './SpacesTab'
+import { PanelNotice } from './PanelNotice'
 import { NotificationsTab, StatusBarTab } from './NotificationsTab'
 import { HooksTab } from './HooksTab'
 import { PluginSettingsPage } from './PluginSettingsPage'
@@ -83,6 +84,7 @@ import { deleteAssetsPref, setDeleteAssetsPref } from '@amadeus/components/askDe
 import { canvasDoubleClickFocusEnabled, canvasOverviewZoom, setCanvasDoubleClickFocusEnabled, setCanvasOverviewZoom } from '@amadeus/unified/canvasPrefs'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWaitDetails'
+import { ipcErrorText } from '../ipcError'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
@@ -1232,6 +1234,8 @@ export const SettingsModal: React.FC<{
             {tab === 'model' ? <p>{t(modelSubDescriptions[activeSub] || 'settings.page.modelDescription')}</p> : activeTabDescription && <p>{activeTabDescription}</p>}
           </div>
         </div>
+        {/* 设置住在独立浮窗(桌面)/ 覆盖层(web)里,全局通知两处都看不见 —— 插件装卸、重扫、Space 卸载等结果画在这条上。 */}
+        <PanelNotice />
         <div className="settings-body">
           {/* key 变 → 重挂 → CSS 入场动画重跑(方向由 data-dir 给);正文块自己按 activeSub 取舍。 */}
           <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} data-dir={subDir}>
@@ -1715,7 +1719,7 @@ export const SettingsModal: React.FC<{
                                 })}
                               </span>
                             </div>
-                            {noteSync.error && <div className="hint" style={{ color: 'var(--danger, #c00)' }}>{noteSync.error}</div>}
+                            {noteSync.error && <div className="hint" style={{ color: 'var(--danger, #c00)' }}>{ipcErrorText(noteSync.error)}</div>}
                             {(noteSync.pendingDeletions ?? 0) > 0 && (
                               <div className="hint" style={{ color: 'var(--danger, #c00)' }}>
                                 {t('settings.notes.cloudSyncPendingDel', { n: String(noteSync.pendingDeletions) })}{' '}
@@ -3132,7 +3136,8 @@ export const SettingsModal: React.FC<{
                       <div className="hint" style={{ marginBottom: 8 }}>{t('settingsmodal.advanced.resetLayoutHint')}</div>
                       <button
                         className="btn ghost sm"
-                        onClick={() => { useWorkspace.getState().resetLayout(); p.onClose() }}
+                        // 设置是独立浮窗(自己没有 Dockview,resetLayout 在这边第一句就退了):请主窗恢复。web 仍在同一渲染进程。
+                        onClick={() => { if (window.tangu?.requestMainAction) window.tangu.requestMainAction('reset-layout'); else useWorkspace.getState().resetLayout(); p.onClose() }}
                       >
                         <RotateCcw size={13} />
                         {t('settingsmodal.advanced.resetLayout')}
@@ -3297,7 +3302,8 @@ export const SettingsModal: React.FC<{
                     <div className="field">
                       <label>{t('settings.developer.achToastLabel')}</label>
                       <div>
-                        <button className="btn ghost sm" onClick={() => debugFireToast()}>
+                        {/* 成就弹窗只挂在主窗:设置浮窗里触发要请主窗来播(同「发送测试通知」)。 */}
+                        <button className="btn ghost sm" onClick={() => window.tangu?.requestMainAction ? window.tangu.requestMainAction('achievement-toast') : debugFireToast()}>
                           <Trophy size={12} /> {t('settings.developer.achToast')}
                         </button>
                       </div>

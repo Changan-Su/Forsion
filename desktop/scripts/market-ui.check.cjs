@@ -15,6 +15,7 @@ const SHOTS = {
   dark: '/tmp/forsion-market-discover-dark.png',
   detail: '/tmp/forsion-market-detail.png',
   installed: '/tmp/forsion-market-installed.png',
+  installFail: '/tmp/forsion-market-install-fail.png',
 }
 
 function findChromium() {
@@ -137,7 +138,51 @@ async function main() {
     await page.waitForFunction((n) => document.querySelectorAll('.mk-grid .mk-card').length === n - 1, beforeCount - 0, { timeout: 5000 })
     check('卸载后该项从已安装区消失', await page.locator('.mk-grid .mk-card').count() === beforeCount - 1)
 
+    // 安装反馈(2026-09-21 用户实报:中国用户点 GitHub 插件「安装」只转圈、失败也不吭声)。市场住在浮窗 /
+    // 覆盖层里,全局通知在那儿不渲染 → 进度与失败都必须由市场自己画。剧本见 marketHarnessBridge 的 calendar-tools / mindmap。
     await page.locator('.settings-nav-list button', { hasText: '商店首页' }).click()
+    await page.locator('.mk-featured').waitFor({ state: 'visible' })
+    const footBtn = (name) => page.locator('.mk-card', { hasText: name }).first().locator('.mk-card-foot button').first()
+    const labelSeen = (text) => page.waitForFunction((t) => [...document.querySelectorAll('.mk-card-foot button')].some((b) => b.textContent?.includes(t)), text, { timeout: 4000 }).then(() => true, () => false)
+    await footBtn('Calendar Tools').click()
+    check('安装中按钮显示正在试第几个下载地址', await labelSeen('连接中 2/4'))
+    await page.locator('.mk-notice.is-error').waitFor({ timeout: 4000 })
+    const fail = await page.evaluate(() => {
+      const n = document.querySelector('.mk-notice.is-error')
+      const r = n.getBoundingClientRect()
+      return { text: n.textContent || '', inView: r.top >= 0 && r.bottom <= innerHeight, role: n.getAttribute('role') }
+    })
+    check('安装失败在市场内出提示条且在视野内', fail.inView && fail.role === 'alert', JSON.stringify({ inView: fail.inView, role: fail.role }))
+    check('失败提示点名条目并列出各地址原因', fail.text.includes('Calendar Tools') && fail.text.includes('github.com: timeout') && fail.text.includes('gh-proxy.com: not a zip'), fail.text.slice(0, 120))
+    check('失败提示剥掉了 Electron 的 IPC 包装前缀', !fail.text.includes('Error invoking remote method'))
+    check('GitHub 源失败附带网络指引', fail.text.includes('使用中国大陆镜像源'))
+    check('失败后按钮变为「重试」', (await footBtn('Calendar Tools').getAttribute('data-install-state')) === 'failed' && (await footBtn('Calendar Tools').textContent()).includes('重试'))
+    await page.screenshot({ path: SHOTS.installFail })
+    await page.locator('.mk-notice-close').click()
+    check('提示条可手动关闭', await page.locator('.mk-notice').count() === 0)
+
+    // 并发:先点 Mindmap(约 1.35s 成功)再点 Calendar Tools 重试(约 0.9s 失败)——先结束的那个不能清掉另一个的「安装中」,
+    // 后到的「已安装」也不能把失败原因顶掉。
+    // 同一拍里点两下:Playwright 的第二次 click 要等元素「稳定」,第一个按钮的文案一变整排就重排,那一等可能拖过 Mindmap 装完 → 断言测的就不是并发了。
+    await page.evaluate(() => {
+      const btn = (name) => [...document.querySelectorAll('.mk-card')].find((c) => c.querySelector('.mk-card-title')?.textContent === name)?.querySelector('.mk-card-foot button')
+      btn('Mindmap').click()
+      btn('Calendar Tools').click()
+    })
+    await page.locator('.mk-notice.is-error').waitFor({ timeout: 4000 })
+    check('一项失败时另一项仍显示安装中', ['resolve', 'download', 'install'].includes(await footBtn('Mindmap').getAttribute('data-install-state')), String(await footBtn('Mindmap').getAttribute('data-install-state')))
+    await page.waitForFunction(() => [...document.querySelectorAll('.mk-card')].some((c) => c.textContent?.includes('Mindmap') && c.textContent?.includes('重新安装')), null, { timeout: 5000 }).catch(() => {})
+    check('后完成的成功提示没有顶掉失败提示', await page.locator('.mk-notice.is-error').count() === 1)
+    await page.locator('.mk-notice-close').click()
+
+    await footBtn('Mindmap').click()
+    check('下载中显示已收字节(无总长时)', await labelSeen('已下载 340 KB'))
+    await page.locator('.mk-notice:not(.is-error)').waitFor({ timeout: 4000 })
+    check('安装成功在市场内出提示条', (await page.locator('.mk-notice').textContent()).includes('Mindmap'))
+    await page.locator('.mk-featured').waitFor({ state: 'visible' })
+    await page.waitForFunction(() => !document.querySelector('.mk-notice'), null, { timeout: 6000 }).catch(() => {})
+    check('成功提示数秒后自动收起', await page.locator('.mk-notice').count() === 0)
+
     await page.evaluate(() => {
       document.documentElement.classList.add('dark')
       document.documentElement.dataset.mode = 'dark'
@@ -162,6 +207,7 @@ async function main() {
     console.log(`SHOT  ${SHOTS.light}`)
     console.log(`SHOT  ${SHOTS.dark}`)
     console.log(`SHOT  ${SHOTS.detail}`)
+    console.log(`SHOT  ${SHOTS.installFail}`)
   } finally {
     if (browser) await browser.close()
     vite.kill('SIGTERM')

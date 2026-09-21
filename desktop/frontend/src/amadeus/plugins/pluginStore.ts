@@ -26,6 +26,7 @@ import { addEditorExtension, clearEditorExtensions } from './editorExtensions'
 import { registerPluginSeries, track, unregisterPluginAchievements } from '../../achievements/store'
 import { act } from '../../activity/log'
 import { notifyApp } from '../../stores/notificationStore'
+import { panelToast } from '../../components/PanelNotice'
 import { currentLocale, registerMessages, subscribeLocale, translate } from '../../i18n'
 import { idleAgentStatus, readTangu, type TanguAgentStatus, type TanguStartChatResult } from './tanguSeam'
 import { registerDeskCompanion, revokeDeskCompanions, type DeskCompanionContribution, type DeskCompanionHandle } from './deskCompanion'
@@ -1447,15 +1448,16 @@ export const usePluginStore = create<PluginState>((set, get) => {
       void amadeus.openPluginsFolder()
     },
 
+    // 只有设置页「新建示例插件」按钮调它:结果走设置页提示条(Amadeus 吐司只有主窗渲染,设置住在独立浮窗)。
     async scaffoldSample() {
       try {
         await amadeus.scaffoldSamplePlugin()
       } catch (e) {
-        useUiStore.getState().notify(String(e))
+        panelToast(String(e), true)
         return
       }
       await get().reloadExternal()
-      useUiStore.getState().notify(translate('pluginhost.sampleCreated'))
+      panelToast(translate('pluginhost.sampleCreated'))
     },
   }
 })

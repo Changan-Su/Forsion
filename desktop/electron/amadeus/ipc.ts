@@ -1508,7 +1508,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   // 只动 ~/.forsion/plugins;内嵌 agent 已播种进引擎的按「播种一次」语义保留(活体),
   // 内嵌引擎插件需重启引擎后消失(调用方负责提示/重启)。
   handle(IPC.uninstallPlugin, async (_e, id: string) => {
-    if (typeof id !== 'string' || !SAFE_PLUGIN_ID.test(id)) throw new Error('非法的插件标识')
+    if (typeof id !== 'string' || !SAFE_PLUGIN_ID.test(id)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
     // ⚠️开发副本正遮蔽同 id 的安装版时必须拒绝:这里只扫全局目录,删掉的是**安装版**,而跑着的是开发副本 ——
     // 用户看到「已卸载」,插件却还在;等哪天撤下开发副本,它才凭空消失(且没有任何提示)。先撤开发副本再卸载。
     // 消息前缀 `dev-shadowed:` 是给渲染层认的机器码(用户可见文案在设置页按当前语言渲染)。
@@ -1529,7 +1529,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       } catch { /* manifest 坏/缺:按目录名兜底 */ }
       if (pluginIdOf(e.name, manifestId) === id) { target = path.join(root, e.name); break }
     }
-    if (!target) throw new Error('插件不存在')
+    if (!target) throw new Error('plugin-not-found')
     // 墓碑:声明过的扩展名永久保留豁免(库里数据文件还在,掉回笔记=毁档),再删目录。
     try {
       const m = JSON.parse(await fs.readFile(path.join(target, 'manifest.json'), 'utf8')) as { fileExtensions?: unknown }

@@ -69,6 +69,23 @@ export const useAchievements = create<AchievementsState>((set, get) => ({
   },
 }))
 
+/** 别的窗口写了成就(设置 / 市场是独立浮窗,换主题、装插件、登录都在那边 track):按磁盘合并计数与领取,
+ *  在本窗新跨线且未领取的入队 —— 成就弹窗只挂在主窗,以前那些解锁排进浮窗自己的队列永远不播(09-21)。
+ *  storage 事件只发给「别的」同源窗口,且在写入可见之后发,读 localStorage 拿到的就是那次写入;
+ *  也顺带修掉本窗计数陈旧(否则本窗之后再 track 同一事件会按旧值二次跨线、重播一次)。 */
+export function syncAchievementsFromDisk(): void {
+  const s = useAchievements.getState()
+  const disk = load()
+  const counters = { ...s.counters }
+  for (const [k, v] of Object.entries(disk.counters)) counters[k] = Math.max(counters[k] || 0, v)
+  const claimed = { ...s.claimed, ...disk.claimed }
+  const crossed = allSeries(s).flatMap((x) => x.achievements)
+    .filter((a) => (s.counters[a.event] || 0) < a.goal && (counters[a.event] || 0) >= a.goal && !claimed[a.id] && !s.queue.includes(a.id))
+    .map((a) => a.id)
+  useAchievements.setState({ counters, claimed, queue: crossed.length ? [...s.queue, ...crossed] : s.queue })
+}
+if (typeof window !== 'undefined') window.addEventListener('storage', (e) => { if (e.key === KEY) syncAchievementsFromDisk() })
+
 /** 官方 + 插件系列(传 state 避免组件里重复 getState;不传则取当前)。 */
 export function allSeries(s?: Pick<AchievementsState, 'pluginSeries'>): SeriesDef[] {
   const ps = (s || useAchievements.getState()).pluginSeries

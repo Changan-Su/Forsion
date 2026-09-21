@@ -29,6 +29,8 @@ const RecommendRow: React.FC<{ rec: PluginOnboardingRecommend; preInstalled: boo
   const { t } = useI18n()
   const [card, setCard] = useState<MarketCard | null>(null)
   const [state, setState] = useState<'loading' | 'ready' | 'missing' | 'installing' | 'done'>(preInstalled ? 'done' : 'loading')
+  // 失败原因就地显示:这张卡住在设置 / 市场浮窗里,全局 toast 在那儿不渲染(按钮只会默默变回「安装」)。
+  const [err, setErr] = useState('')
 
   useEffect(() => {
     if (preInstalled) return
@@ -46,21 +48,24 @@ const RecommendRow: React.FC<{ rec: PluginOnboardingRecommend; preInstalled: boo
   const install = async (): Promise<void> => {
     if (!card) return
     setState('installing')
+    setErr('')
     try {
       const res = await installMarket(card.id)
       // 真类型以主进程实测为准(后端 category 可能把 Forsion 插件误标成引擎 'plugin');据此走对应装后流程。
       const effType = res?.type || rec.type
+      // onPluginInstalled 自己吞异常:装后重扫失败只会走 notify 的 error 分支 —— 那时不能标「已安装」,留着按钮可重试(重装幂等)。
+      let postFailed = false
       if (effType === 'space') await loadUserSpaces() // 热注册,ribbon 实时出现
       else if (effType === 'theme') await useTheme.getState().reloadThemes()
-      else if (effType === 'plugin') await useApp.getState().onPluginInstalled()
+      else if (effType === 'plugin') await useApp.getState().onPluginInstalled((text, error) => { if (error) { postFailed = true; setErr(text) } else useApp.getState().toast(text) })
       else if (effType === 'amadeus-plugin' && window.amadeus) {
         installAmadeusPlugins()
         await usePluginStore.getState().reloadExternal()
         await loadUserSpaces() // 捆绑包内嵌 Space → 热注册(此前只有 market 路径补了这步,引导卡装的会漏)
       }
-      setState('done')
+      setState(postFailed ? 'ready' : 'done')
     } catch (e: any) {
-      useApp.getState().toast(e?.message || String(e), true)
+      setErr(t('market.installFail', { e: e?.message || String(e) }))
       setState('ready')
     }
   }
@@ -70,6 +75,7 @@ const RecommendRow: React.FC<{ rec: PluginOnboardingRecommend; preInstalled: boo
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ fontSize: 12.5 }}>{card?.name || rec.name || rec.slug}</div>
         {rec.reason && <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>{rec.reason}</div>}
+        {err && <div role="alert" style={{ fontSize: 11, color: 'var(--danger)', overflowWrap: 'anywhere' }}>{err}</div>}
       </div>
       {state === 'done' ? (
         <span style={{ fontSize: 11.5, color: 'var(--ok, #3aa675)', whiteSpace: 'nowrap' }}>{t('plugin.onboarding.installed')}</span>

@@ -4089,7 +4089,11 @@ html.dark .brand-logo--dark { display: inline-block; }
 
 /* ── diff2html(隐藏文件头、字号微调;暗色由 d2h-dark-color-scheme 接管)── */
 .wsfile-diff { padding: 0; font-size: 12px; }
-.wsfile-diff .d2h-file-wrapper { border-color: var(--border); margin: 0; }
+/* position:relative 是**承重**的:d2h 行号格 `.d2h-code-linenumber` 是 position:absolute,包含块取最近定位祖先。
+   宿主滚动盒(.approval-diff / .tool-card-body / 预览面 .wsfile-doc)都没定位 → 行号逃出裁剪、不随纵滚,
+   带底色压在卡下方的「批准」上吞点击(2026-09-21 实报)。放 wrapper 这层:在所有纵滚盒之内、
+   在横滚盒 .d2h-file-diff 之外 —— 横滚时行号照旧冻结。仪器 check:diffmulti 的 G 组。 */
+.wsfile-diff .d2h-file-wrapper { border-color: var(--border); margin: 0; position: relative; }
 .wsfile-diff .d2h-file-header { display: none; }
 /* 单文件才隐:工具行标题已经写了文件名。多文件 patch(一次 apply_patch 改多个文件)必须每块自带
    文件名,否则第二块看着像第一块的续篇——2026-08-18 真机走查报的正是这个。flex 是 d2h 的原生值。 */
@@ -4691,3 +4695,16 @@ body[data-file-drag] .shell-work::after {
 /* chat / work 模式位:会话创建后只读(disabled),悬浮 title 解释「换模式请新建会话」。 */
 .composer-menu .menu-item:disabled { opacity: 0.55; cursor: default; }
 .composer-menu .menu-item:disabled:hover { background: none; }
+
+/* 市场自己的提示条(安装 / 卸载结果):市场住在浮窗或全屏覆盖层里,全局通知在那儿看不见(09-21 实报
+   「点安装只转圈没反馈」)。夹在标题区与滚动区之间(flex 列里不收缩),正文怎么滚都在视野内。
+   报错态的红边是语义边(DESIGN.md §5 保留),成功态照内容卡口径不描边。 */
+.mk-notice { flex-shrink: 0; width: calc(100% - 76px); max-width: 1120px; margin: 0 auto 4px; padding: 9px 8px 9px 12px; display: flex; align-items: flex-start; gap: 9px; border: var(--border-width) solid transparent; border-radius: var(--radius-md); background: var(--bg-card); box-shadow: var(--card-shadow); color: var(--text); font-size: 12px; line-height: 1.5; }
+.mk-notice > svg { flex: 0 0 auto; margin-top: 2px; color: var(--accent-ink); }
+.mk-notice.is-error { border-color: var(--danger); background: var(--danger-light); box-shadow: none; }
+.mk-notice.is-error > svg { color: var(--danger); }
+.mk-notice-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; overflow-wrap: anywhere; }
+.mk-notice-body small { color: var(--text-muted); font-size: 11.5px; }
+.mk-notice-close { flex: 0 0 auto; width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); cursor: pointer; }
+.mk-notice-close:hover { background: var(--bg-hover); color: var(--text); }
+@media (max-width: 820px) { .mk-notice { width: calc(100% - 32px); } } /* 与 .settings-body 的 16px 内边距对齐(宽度与卡片区同为 max 1120 居中) */

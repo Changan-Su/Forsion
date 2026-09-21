@@ -7,7 +7,7 @@
 import { useMemo, useState } from 'react'
 import { Bell, GripVertical, ListChecks, MonitorUp, PanelBottom, Plug } from 'lucide-react'
 import { useStatusStore } from '@lcl/engine'
-import { useI18n } from '../i18n'
+import { translate, useI18n } from '../i18n'
 import { NOTIFY_EVENTS, eventDefaultOn, notifyApp, useNotifications } from '../stores/notificationStore'
 import { BUILTIN_STATUS_ITEMS } from '../statusbar/items'
 import { useSbPrefs } from '../statusbar/prefs'
@@ -23,6 +23,12 @@ const switchRow = (checked: boolean, onChange: (on: boolean) => void, name: stri
     control={<SettingsSwitch checked={checked} onChange={onChange} label={name} disabled={disabled} />}
   />
 )
+
+/** 「发送测试通知」预览的是主窗右上角那张真卡片:设置住在独立浮窗时由主窗来弹(浮窗不挂 NotificationHost,
+ *  在这儿 notify 等于石沉大海);没有这条 IPC(web 覆盖层)就原地发。 */
+export function sendTestNotification(): void {
+  notifyApp({ text: translate('ntf.testBody'), level: 'info', force: true })
+}
 
 export function NotificationsTab() {
   const { t } = useI18n()
@@ -40,7 +46,7 @@ export function NotificationsTab() {
         icon={<Bell size={16} />}
         title={t('ntf.delivery')}
         description={t('ntf.enableHint')}
-        actions={<button className="btn ghost sm" onClick={() => notifyApp({ text: t('ntf.testBody'), level: 'info', force: true })}>{t('ntf.sendTest')}</button>}
+        actions={<button className="btn ghost sm" onClick={() => window.tangu?.requestMainAction ? window.tangu.requestMainAction('test-notification') : sendTestNotification()}>{t('ntf.sendTest')}</button>}
       >
         <div className="settings-control-list">
           {switchRow(prefs.enabled, setEnabled, t('ntf.enable'))}

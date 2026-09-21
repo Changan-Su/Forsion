@@ -1261,6 +1261,8 @@ declare global {
       marketList?(type?: string): Promise<{ items: MarketCard[] }>
       marketDetail?(id: string): Promise<MarketDetail>
       marketInstall?(id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }>
+      /** 安装进度订阅(主进程只推给发起窗口);返回退订函数。 */
+      onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null }>>>
       marketUninstall?(type: string, slug: string): Promise<{ ok: boolean; path: string; type: string }>
       /** 后端插件卸载:列用户目录已装(manifest id→目录名)/ 按 id 删目录(仅 ~/.tangu/plugins,首方插件删不到)。 */
@@ -1296,8 +1298,8 @@ declare global {
       showMainPanel?(target: import('../../shared/miniPanel').MainPanelTarget): void
       onMainPanelTarget?(cb: (target: import('../../shared/miniPanel').MainPanelTarget) => void): () => void
       mainPanelReady?(): void
-      requestMainAction?(action: 'onboarding' | 'dev-commands'): void
-      onMainAction?(cb: (action: 'onboarding' | 'dev-commands') => void): () => void
+      requestMainAction?(action: import('../../shared/floatingPanel').MainAction, payload?: string): void
+      onMainAction?(cb: (action: import('../../shared/floatingPanel').MainAction, payload?: string) => void): () => void
       /** 界面变更广播给其余窗口(主题/字体/缩放/光标/语言;主进程转发,不回发自己)。 */
       broadcastUi?(state: import('../../shared/uiSync').UiSyncPayload): void
       /** 本窗收到别处的界面变更 → 原样重放。返回取消订阅。 */
@@ -1527,6 +1529,18 @@ export interface MarketCard {
   /** 用于商店「最近上架」和详情元信息；兼容旧服务端，均可缺省。 */
   createdAt?: string | null
   updatedAt?: string | null
+}
+
+/** market:installProgress:resolve=向服务端要下载地址;download=在试第 attempt/attempts 个地址、已收 received 字节
+ *  (total 常为 null:codeload / 代理站多不给长度);install=解压落盘。 */
+export interface MarketInstallProgress {
+  id: string
+  phase: 'resolve' | 'download' | 'install'
+  attempt?: number
+  attempts?: number
+  host?: string
+  received?: number
+  total?: number | null
 }
 
 /** 市场详情(含 README 正文)。 */

@@ -16,6 +16,7 @@ import { usePageStore } from '@amadeus/store/pageStore'
 import { useNoteChars } from '@amadeus/lib/activeNote'
 import { amadeus } from '@amadeus/api'
 import { useSbPrefs } from './prefs'
+import { ipcErrorText } from '../ipcError'
 import type { AmadeusSyncStatus, RemoteSyncProgress, RemoteSyncReport } from '../types'
 
 /** 当前主区激活视图类型(同 WorkspaceView.useActiveMainType:订阅 mainTabs 驱动重算)。 */
@@ -103,7 +104,7 @@ function SyncItem() {
   return (
     <span
       className="sb-click"
-      title={(err && (mirror?.error || undefined)) || (rp?.key ? `${text} · ${rp.key}` : text)}
+      title={(err && mirror?.error ? ipcErrorText(mirror.error) : undefined) || (rp?.key ? `${text} · ${rp.key}` : text)}
       onClick={() => {
         if (mirrorOn) void window.amadeusSync?.syncNow?.().catch(() => {})
         if (remote?.configured && !remote.running) void window.remoteSync?.run?.().catch(() => {})

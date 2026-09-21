@@ -1,12 +1,12 @@
 /**
  * Market 安装解压单测:重点是**安全边界**(路径穿越拒绝)+ GitHub source zip 的剥顶层。
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { mkdtempSync, readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
-import { isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, extractZipToDir, readInstalledVersion, readUserPluginDirs, detectMarketType, marketItemDir } from './marketInstall'
+import { isSafeSlug, isJunkPath, computeStripPrefix, safeEntryPath, extractZipToDir, readInstalledVersion, readUserPluginDirs, detectMarketType, marketItemDir, toArchiveUrl, downloadCandidates, downloadZip, DownloadFailed, type DownloadProgress } from './marketInstall'
 
 async function zipOf(names: string[]): Promise<Buffer> {
   const z = new JSZip()
@@ -212,5 +212,90 @@ describe('marketItemDir', () => {
 
   it('拒绝时返回 null 而不是抛 —— 调用方靠 null 判定,不能靠 catch', () => {
     expect(() => marketItemDir(HOME, 'nope', '../x')).not.toThrow()
+  })
+})
+
+// ── 下载(2026-09-21 用户实报:中国用户点 GitHub 插件「安装」只转圈、失败也不吭声)──
+describe('toArchiveUrl(api.github.com 的 zipball → 代理站前置得了的 archive)', () => {
+  it('无 ref(无 release 的仓)→ archive/HEAD.zip', () => {
+    expect(toArchiveUrl('https://api.github.com/repos/o/r/zipball')).toBe('https://github.com/o/r/archive/HEAD.zip')
+  })
+  it('release 的 zipball_url(裸 tag)与锁版兜底(refs/tags/…)都保留 ref', () => {
+    expect(toArchiveUrl('https://api.github.com/repos/o/r/zipball/v0.1.0')).toBe('https://github.com/o/r/archive/v0.1.0.zip')
+    expect(toArchiveUrl('https://api.github.com/repos/o/r/zipball/refs/tags/v1.2.0')).toBe('https://github.com/o/r/archive/refs/tags/v1.2.0.zip')
+  })
+  it('release 资产 / 已是 archive / 对象存储地址原样不动', () => {
+    for (const u of ['https://github.com/o/r/releases/download/v1/p.zip', 'https://github.com/o/r/archive/HEAD.zip', 'https://oss.example.com/a.zip?sig=1']) expect(toArchiveUrl(u)).toBe(u)
+  })
+})
+
+describe('downloadCandidates(中国大陆镜像 = 多代理站 + 直连兜底;默认只直连)', () => {
+  const U = 'https://github.com/o/r/archive/HEAD.zip'
+  it('默认:只直连 —— 第三方代理站回来的字节未经校验就当插件执行,这份信任得用户自己开「中国大陆镜像」', () => {
+    expect(downloadCandidates(U, 'default')).toEqual([U])
+  })
+  it('中国大陆:先代理站,最后直连', () => {
+    expect(downloadCandidates(U, 'china')).toEqual([`https://ghfast.top/${U}`, `https://ghproxy.net/${U}`, `https://gh-proxy.com/${U}`, U])
+  })
+  it('TANGU_GITHUB_PROXY 排代理之首且不重复', () => {
+    expect(downloadCandidates(U, 'china', 'https://ghproxy.net/')).toEqual([`https://ghproxy.net/${U}`, `https://ghfast.top/${U}`, `https://gh-proxy.com/${U}`, U])
+  })
+  it('老服务端回的 api.github.com zipball 先转 archive 再进代理(09-21 前镜像对它一次都没试过)', () => {
+    expect(downloadCandidates('https://api.github.com/repos/o/r/zipball/v0.1.0', 'china')[0]).toBe('https://ghfast.top/https://github.com/o/r/archive/v0.1.0.zip')
+  })
+  it('非 github 地址(Forsion 对象存储)单发', () => {
+    expect(downloadCandidates('https://oss.example.com/a.zip?sig=1', 'china')).toEqual(['https://oss.example.com/a.zip?sig=1'])
+  })
+})
+
+describe('downloadZip(每个候选有超时,失败带逐个原因)', () => {
+  const ZIP = Buffer.from('PK\x03\x04 fake zip bytes')
+  const body = (chunks: Uint8Array[], close = true): ReadableStream<Uint8Array> => new ReadableStream({
+    start(c) { for (const x of chunks) c.enqueue(x); if (close) c.close() },
+  })
+  const ok = (): Promise<Response> => Promise.resolve(new Response(body([ZIP.subarray(0, 6), ZIP.subarray(6)]), { status: 200 }))
+  const hang = (): Promise<Response> => new Promise(() => {}) // 被墙时的真实形态:不报错,永远不回
+  const env = { c: process.env.FORSION_MARKET_CONNECT_TIMEOUT_MS, s: process.env.FORSION_MARKET_STALL_TIMEOUT_MS }
+  beforeAll(() => { process.env.FORSION_MARKET_CONNECT_TIMEOUT_MS = '60'; process.env.FORSION_MARKET_STALL_TIMEOUT_MS = '60' })
+  afterAll(() => {
+    for (const [k, v] of [['FORSION_MARKET_CONNECT_TIMEOUT_MS', env.c], ['FORSION_MARKET_STALL_TIMEOUT_MS', env.s]] as const) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v
+    }
+  })
+
+  it('第一个地址挂起 → 连接超时后换下一个;进度报出在试第几个、收了多少', async () => {
+    const seen: DownloadProgress[] = []
+    const fetchFn = (u: string) => (u.includes('a.test') ? hang() : ok())
+    const buf = await downloadZip(['https://a.test/x.zip', 'https://b.test/x.zip'], fetchFn, (p) => seen.push(p))
+    expect(buf.equals(ZIP)).toBe(true)
+    expect(seen[0]).toMatchObject({ attempt: 1, attempts: 2, host: 'a.test', received: 0 })
+    expect(seen.at(-1)).toMatchObject({ attempt: 2, host: 'b.test', received: ZIP.length, total: null })
+  })
+
+  it('下载到一半断流 → stalled,换下一个', async () => {
+    const stall = (): Promise<Response> => Promise.resolve(new Response(body([ZIP.subarray(0, 4)], false), { status: 200 }))
+    const buf = await downloadZip(['https://a.test/x.zip', 'https://b.test/x.zip'], (u) => (u.includes('a.test') ? stall() : ok()))
+    expect(buf.equals(ZIP)).toBe(true)
+  })
+
+  it('全部失败 → DownloadFailed 逐个列出 主机: 原因(HTTP 码 / 超时 / 断流 / 非 zip / 网络错误)', async () => {
+    const fetchFn = (u: string): Promise<Response> => {
+      if (u.includes('h404')) return Promise.resolve(new Response('nope', { status: 404 }))
+      if (u.includes('hang')) return hang()
+      if (u.includes('html')) return Promise.resolve(new Response('<html>rate limited</html>', { status: 200 }))
+      if (u.includes('stall')) return Promise.resolve(new Response(body([ZIP.subarray(0, 4)], false), { status: 200 }))
+      return Promise.reject(Object.assign(new TypeError('fetch failed'), { cause: { code: 'ECONNRESET' } }))
+    }
+    const urls = ['https://h404.test/x', 'https://hang.test/x', 'https://html.test/x', 'https://stall.test/x', 'https://reset.test/x']
+    const err = await downloadZip(urls, fetchFn).catch((e) => e)
+    expect(err).toBeInstanceOf(DownloadFailed)
+    expect((err as DownloadFailed).attempts).toEqual([
+      { host: 'h404.test', reason: 'HTTP 404' },
+      { host: 'hang.test', reason: 'timeout' },
+      { host: 'html.test', reason: 'not a zip' },
+      { host: 'stall.test', reason: 'stalled' },
+      { host: 'reset.test', reason: 'ECONNRESET' },
+    ])
+    expect(err.message).toBe('h404.test: HTTP 404 · hang.test: timeout · html.test: not a zip · stall.test: stalled · reset.test: ECONNRESET')
   })
 })

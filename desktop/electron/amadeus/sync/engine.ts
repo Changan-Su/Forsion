@@ -262,6 +262,8 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     }, 200)
   }
 
+  // err 会原样上屏(通知 / 设置 / 状态栏):写语言中立的原因码 `code` 或 `code: 细节`,文案在渲染层
+  // frontend/src/ipcError.ts 套(中英);别在这里写中文句子。离线那条是底层网络报错,透传。
   const setState = (s: SyncState, err?: string | null): void => {
     state = s
     if (err !== undefined) error = err
@@ -325,7 +327,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
             jobs.length = 0
             queuedKeys.clear()
             stopSse()
-            setState('auth-required', '登录已失效,请重新登录 Forsion 账号')
+            setState('auth-required', 'login-expired')
             return
           }
           if (isNetworkErr(e)) {
@@ -863,7 +865,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     // 镜像根(own 引擎)不要求预先存在;但 shadow 已跟踪过文件时根却不见了 = 目录被人挪走/清空,
     // 绝不能解读成「本地全删」推给服务端(2026-09-06 另一台设备就是这样把云端删掉 50 个文件的)。
     if (!binding.requireRootExists && !Object.keys(shadow?.files ?? {}).length) return true
-    setState('error', `vault 目录不存在: ${boundRoot}`)
+    setState('error', `vault-missing: ${boundRoot}`)
     scheduleRetry()
     return false
   }
@@ -1041,7 +1043,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     }
     await walk(rootAbs)
     if (failed) {
-      setState('error', `本地目录读取失败,本轮不推断删除: ${failed}`)
+      setState('error', `scan-failed: ${failed}`) // EIO/EACCES:本轮不推断删除
       scheduleRetry()
       return null
     }
@@ -1324,7 +1326,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       return
     }
     if (!accountId || accountId !== currentCloudAccountId()) {
-      setState('auth-required', '未登录 Forsion 账号')
+      setState('auth-required', 'not-logged-in')
       return
     }
     boundRoot = binding.localRoot
@@ -1334,7 +1336,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       const alive = await fs.stat(boundRoot).then((s) => s.isDirectory()).catch(() => false)
       if (gen !== generation) return
       if (!alive) {
-        setState('error', `vault 目录不存在: ${boundRoot}`)
+        setState('error', `vault-missing: ${boundRoot}`)
         scheduleRetry()
         return
       }
@@ -1345,7 +1347,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
     const creds = deps.loadCreds()
     if (!creds.cloudUrl || !creds.token) {
       client = null // 丢弃旧账号的 client:登出后绝不能拿旧 token 继续同步
-      setState('auth-required', '未登录 Forsion 账号')
+      setState('auth-required', 'not-logged-in')
       return
     }
     setState('starting', null)
@@ -1388,7 +1390,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
         if (gen !== generation) return
         if (!alive) {
           if (Object.keys(shadow.files).length) {
-            setState('error', `镜像目录不存在(已跟踪 ${Object.keys(shadow.files).length} 个文件,不造空根): ${boundRoot}`)
+            setState('error', `mirror-missing: ${boundRoot}`) // 已跟踪过文件:不造空根
             scheduleRetry()
             return
           }
@@ -1406,7 +1408,7 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       })
     } catch (e) {
       if (gen !== generation) return
-      if (isAuthErr(e)) setState('auth-required', '登录已失效,请重新登录 Forsion 账号')
+      if (isAuthErr(e)) setState('auth-required', 'login-expired')
       else {
         setState('offline', (e as Error)?.message || String(e))
         scheduleRetry()

@@ -9,6 +9,9 @@ import { PRODUCT } from './product'
 import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
 import './remotesyncPreload' // 本地库远程同步:暴露 window.remoteSync,副作用导入
 
+/** market:installProgress 事件载荷(主进程 market:install 推送;字段见 marketInstall.ts 的 DownloadProgress)。 */
+type MarketInstallProgress = { id: string; phase: 'resolve' | 'download' | 'install'; attempt?: number; attempts?: number; host?: string; received?: number; total?: number | null }
+
 export interface BackendStatus {
   state: 'stopped' | 'starting' | 'ready' | 'crashed'
   url: string | null
@@ -243,6 +246,12 @@ const api = {
   marketDetail: (id: string): Promise<any> => ipcRenderer.invoke('market:detail', id),
   marketInstall: (id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }> =>
     ipcRenderer.invoke('market:install', id),
+  // 安装进度(阶段 + 当前在试第几个下载地址 + 字节):主进程只推给发起窗口,渲染层按 id 过滤。
+  onMarketInstallProgress: (cb: (ev: MarketInstallProgress) => void): (() => void) => {
+    const listener = (_e: unknown, ev: MarketInstallProgress): void => cb(ev)
+    ipcRenderer.on('market:installProgress', listener)
+    return () => ipcRenderer.removeListener('market:installProgress', listener)
+  },
   marketInstalled: (): Promise<Record<string, string[]>> => ipcRenderer.invoke('market:installed'),
   marketUninstall: (type: string, slug: string): Promise<{ ok: boolean; path: string; type: string }> =>
     ipcRenderer.invoke('market:uninstall', type, slug),
@@ -330,9 +339,9 @@ const api = {
     return () => ipcRenderer.removeListener('window:mainPanelTarget', listener)
   },
   mainPanelReady: (): void => ipcRenderer.send('window:mainPanelReady'),
-  requestMainAction: (action: 'onboarding' | 'dev-commands'): void => ipcRenderer.send('window:mainAction', action),
-  onMainAction: (cb: (action: 'onboarding' | 'dev-commands') => void): (() => void) => {
-    const listener = (_e: unknown, action: 'onboarding' | 'dev-commands'): void => cb(action)
+  requestMainAction: (action: import('../shared/floatingPanel').MainAction, payload?: string): void => ipcRenderer.send('window:mainAction', action, payload),
+  onMainAction: (cb: (action: import('../shared/floatingPanel').MainAction, payload?: string) => void): (() => void) => {
+    const listener = (_e: unknown, action: import('../shared/floatingPanel').MainAction, payload?: string): void => cb(action, payload)
     ipcRenderer.on('window:mainAction', listener)
     return () => ipcRenderer.removeListener('window:mainAction', listener)
   },
@@ -443,6 +452,6 @@ const AGENT_KEYS = [
   'reportRunningSessions', // 无 agent 后端就没有 run
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
-if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'marketInstalled', 'marketUninstall'] as const) delete (api as Record<string, unknown>)[k]
+if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall'] as const) delete (api as Record<string, unknown>)[k]
 
 contextBridge.exposeInMainWorld('tangu', api)
