@@ -184,6 +184,10 @@ const zh: Dict = {
   // ── Coding Space(编码工作室)──
   'space.coding': '编码工作室',
   'view.codeStudio': '代码工作台',
+  // ── Creations Space(造物):编码工作室做出来的东西 ──
+  'space.artificial': '造物',
+  'view.artificial': '造物',
+  'view.product': '作品',
   'space.public': '发布',
   'view.publicHub': '发布管理',
   'public.title': '发布管理',
@@ -1943,6 +1947,10 @@ const en: Dict = {
   // ── Coding Space ──
   'space.coding': 'Coding Studio',
   'view.codeStudio': 'Code Studio',
+  // ── Creations Space ──
+  'space.artificial': 'Creations',
+  'view.artificial': 'Creations',
+  'view.product': 'Creation',
   'space.public': 'Publish',
   'view.publicHub': 'Published',
   'public.title': 'Published',

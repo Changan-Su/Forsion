@@ -82,6 +82,9 @@ async function startStubEngine(data = {}) {
     }
 
     // ── run 生命周期 ──
+    // 会话的运行状态查询(agentRunService.listSessionRuns):剧本回放没有「还在跑的 run」,恒空表。
+    // 缺了它应用会弹「历史加载失败:Invalid run status response」—— 那条通知浮在右上角,能盖住被测按钮(coding-studio.e2e 实测)。
+    if (p === '/agent/runs' && req.method === 'GET') return json({ runs: [] });
     if (p === '/agent/runs' && req.method === 'POST') {
       const b = await body();
       const id = `r${seen.runs.length + 1}`;

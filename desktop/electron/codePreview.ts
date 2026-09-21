@@ -9,7 +9,7 @@
  * ponytail: 仅绑 127.0.0.1 + 穿越守卫 + 只服务当前 root;不是通用文件服务器,不做目录列表/上传。
  */
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
-import { createReadStream, statSync, readFileSync, realpathSync } from 'node:fs'
+import { createReadStream, lstatSync, statSync, readFileSync, realpathSync } from 'node:fs'
 import { randomBytes, createHash } from 'node:crypto'
 import { resolve, join, sep, extname } from 'node:path'
 import { transform, type Transform } from 'sucrase'
@@ -71,9 +71,24 @@ let root: string | null = null
 // 摸不到被挂出的目录,且每个 token 一个源(详见下方 ensurePreviewServer 的三条理由)。
 // 按目录 memo(同一目录反复预览复用同一 token,不产生垃圾)。上限只是防病态循环的兜底,**故意设得很高**:
 // 一条记录就一个路径串,而淘汰掉还开着的预览会让它刷新即 404(没有租约/引用计数,只能靠留得够久)。
-const TOKEN_CAP = 1024
+export const TOKEN_CAP = 1024
 const tokenToRoot = new Map<string, string>()
 const rootToToken = new Map<string, string>()
+/** 产物令牌(serveProductRoot 发的)**钉死**,不参与 LRU:淘汰它 = 已启动的 web 产物刷新即 404,
+ *  而且下次拿到的是新 token = 新源 = localStorage/IndexedDB 全丢。跨 stop 保留(见 stopCodePreview)。 */
+const pinnedTokens = new Set<string>()
+
+/** 淘汰最旧的**非钉死**令牌。全钉死(病态)就不淘汰——超限也比掀翻产物的源强。 */
+function evictOldestToken(): void {
+  for (const old of tokenToRoot.keys()) {
+    if (pinnedTokens.has(old)) continue
+    const dir = tokenToRoot.get(old)!
+    tokenToRoot.delete(old)
+    // 该目录的 rootToToken 可能已被产物令牌接管(serveProductRoot 覆盖过),别把新映射误删。
+    if (rootToToken.get(dir) === old) rootToToken.delete(dir)
+    return
+  }
+}
 
 /** 取(或首次发放)某目录的预览令牌。命中即刷新到队尾:淘汰按 **LRU**,别把还开着的预览挤掉。 */
 export function previewToken(dir: string): string {
@@ -81,12 +96,110 @@ export function previewToken(dir: string): string {
   const hit = rootToToken.get(abs)
   if (hit) { tokenToRoot.delete(hit); tokenToRoot.set(hit, abs); return hit }
   const token = randomBytes(16).toString('hex')
-  if (tokenToRoot.size >= TOKEN_CAP) {
-    const oldest = tokenToRoot.keys().next().value as string | undefined
-    if (oldest) { rootToToken.delete(tokenToRoot.get(oldest)!); tokenToRoot.delete(oldest) }
-  }
+  if (tokenToRoot.size >= TOKEN_CAP) evictOldestToken()
   tokenToRoot.set(token, abs)
+  rememberRoot(abs)
   rootToToken.set(abs, token)
+  return token
+}
+
+// ── 稳定源:产物令牌 + 粘性端口 ───────────────────────────────────────────────
+// 令牌是随机的、端口是 listen(0) 的 → 每次开机都是**新源**,被「启动」的 web 产物每次重启都丢
+// localStorage/IndexedDB(对用户就是每次打开都失忆)。所以产物按 productId 记一个固定令牌,端口也记一个。
+// 怎么落盘由宿主注入(本文件不许碰 Electron / forsionHomeDir);注入缺席 / 读写抛异常一律退化回今天的
+// 行为(随机源),**但绝不反过来破坏盘上已有的东西** —— load() 抛过就整轮只读,详见 loadFailed。
+// ⚠️落盘的是令牌本身 → 那个文件的可读性就是被挂出目录的可读性(能读它的进程本来也读得到项目文件),
+//   宿主把它放进用户家目录即可,别写到共享/世界可读的位置。
+// ponytail: 只记不删 —— 产物删了它那条令牌还留在文件里(几十字节),没有 GC;端口全产物共一个
+//   (本来就一台服务器),被占的那次所有产物一起换源。真出问题再做,不为此加租约/引用计数。
+
+export interface PreviewPersistedState {
+  /** 上次实际监听到的端口,下次优先复用。 */
+  port?: number
+  /** productId → 32 hex 令牌。 */
+  tokens?: Record<string, string>
+}
+export interface PreviewPersistence {
+  load(): PreviewPersistedState | null
+  save(state: PreviewPersistedState): void
+}
+
+let persistence: PreviewPersistence | null = null
+/** load() 的结果缓存(也是后续 save 的那个对象);null = 还没加载过。 */
+let persisted: PreviewPersistedState | null = null
+/** load() **抛过** → 这一轮启动对持久化降级成**只读**,一次 save 都不再发。
+ *  为什么必须这么绝:读盘失败(EACCES / EMFILE / 断电后剩半截文件…)时缓存只是个空壳,而 save 收到的是
+ *  **整份状态** —— 写回去就等于把盘上所有产物的令牌与端口一次抹光,全程无报错,所有已启动产物的
+ *  localStorage/IndexedDB 当场永久孤儿化(正是这套稳定源要挡的事)。
+ *  ⚠️load() **返回 null 不算失败**:那是「还没有这个文件」的正常空状态,照常写回。
+ *  配套口径在宿主那半:productsIpc 的 load() 只吞 ENOENT,坏 JSON 挪到一旁留证后返回 null,其余原样抛。 */
+let loadFailed = false
+
+/** 注入落盘钩子。换钩子即丢缓存(连同只读标志),下次按新钩子重新 load。 */
+export function setPreviewPersistence(p: PreviewPersistence | null): void {
+  persistence = p
+  persisted = null
+  loadFailed = false
+}
+
+/** 落盘文件可能被手改 / 损坏成任何形状,当字典用之前先验形状。数组尤其阴:`typeof [] === 'object'`
+ *  能过闸,而往数组上写字符串键会被 `JSON.stringify` **原样丢弃** —— 盘上永远是 `[]`,每次启动都换源,
+ *  且不报错不崩溃,人工基本抓不到。 */
+function isPlainObject(v: unknown): boolean {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
+}
+
+/** 懒加载 + 兜底:钩子没装、load 抛了、或返回的不是对象,一律当作「没有持久化」,预览照常起。
+ *  抛的那一种额外记 loadFailed(见上),此后只读。 */
+function persistedState(): PreviewPersistedState {
+  if (!persisted) {
+    let loaded: PreviewPersistedState | null = null
+    try { loaded = persistence ? persistence.load() : null } catch { loaded = null; loadFailed = true }
+    persisted = loaded && isPlainObject(loaded) ? loaded : {}
+  }
+  return persisted
+}
+
+/** 写盘失败就失败:源退化成不稳定,但预览不能因此开不出来。读盘失败过则**压根不写**。 */
+function persistSave(state: PreviewPersistedState): void {
+  if (loadFailed) return
+  try { persistence?.save(state) } catch { /* ignore */ }
+}
+
+const PRODUCT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
+/** 原型链保留字:`_` 在 PRODUCT_ID_RE 的字符类里,`__proto__` 能过闸,而 `({})['__proto__'] = '<hex 串>'`
+ *  是**静默 no-op** —— 写不进去也读不出来,那个产物于是每次启动都换一个源。在信任边界直接拒掉,
+ *  下方 tokens 容器的 null 原型是第二道。 */
+const RESERVED_PRODUCT_IDS = new Set(['__proto__', 'constructor', 'prototype'])
+const TOKEN_RE = /^[0-9a-f]{32}$/
+/** productId → 令牌。**跨 stopCodePreview 保留**:它只是身份不是内容(内容映射照常清空),
+ *  没装持久化时也得靠它保证「停了再开还是同一个源」。 */
+const productToToken = new Map<string, string>()
+
+/** 取(或首次发放并落盘)某产物的稳定令牌。 */
+function productToken(productId: string): string {
+  const live = productToToken.get(productId)
+  if (live) return live
+  const state = persistedState()
+  const table = isPlainObject(state.tokens) ? (state.tokens as Record<string, string>) : null // 形状不对就当没有
+  const stored = table ? table[productId] : undefined
+  // 撞上在用的令牌(随机撞是天文数字,但持久化文件被手改 / 两个 id 抄成同一串就不是)→ 重发一个:
+  // 两个产物共源 = 互相读得到对方的 localStorage,正是令牌源隔离要挡的事。
+  // ⚠️pinnedTokens 那一项不是冗余:stopCodePreview() 之后 tokenToRoot 清空、钉死集保留,只有它还认得出
+  //   「这个令牌正被另一个产物占着」。缺了它,停了再开的第二个产物会拿到第一个产物**正在用**的令牌。
+  const ok = typeof stored === 'string' && TOKEN_RE.test(stored)
+    && !tokenToRoot.has(stored) && !tokenToInline.has(stored) && !pinnedTokens.has(stored)
+  const token = ok ? stored : randomBytes(16).toString('hex')
+  productToToken.set(productId, token)
+  pinnedTokens.add(token)
+  if (!ok) {
+    let tokens = table
+    // 容器形状不对(数组 / null / 字符串)就整个换掉,否则这次写入会被 JSON.stringify 静默丢掉。
+    // 新建的用 null 原型:`__proto__` 之类的键在它上面只是普通字符串键,没有特殊含义。
+    if (!tokens) { tokens = Object.create(null) as Record<string, string>; state.tokens = tokens }
+    tokens[productId] = token
+    persistSave(state)
+  }
   return token
 }
 
@@ -152,7 +265,21 @@ function serveForsionEndpoint(urlPath: string, req: IncomingMessage, res: Server
  *  `deref`=令牌根专用:`resolveSafe` 只做路径算术,拦不住**根内的软链指到根外**(有人往被预览的
  *  目录里塞一条 `x -> ~/.ssh`,页面 fetch 它就读到了)。Coding Space 不开这条 —— 用户自己的项目里
  *  `node_modules` 之类软链是常态,按真实落点判会误伤。 */
+/** 令牌根登记时记下目录的身份(dev+ino)。之后每个请求都核一遍:根必须还是**同一个真目录**,不是软链。
+ *  不核的话,产物已经在页面里跑着的时候把它的目录换成一条指向 ~/.ssh 的软链,页面 `fetch('/id_rsa')` 就读到了 ——
+ *  下面的 realpath 包含性检查是相对「此刻的根」做的,根自己被调了包它看不出来(Codex 评审)。 */
+const rootIdentity = new Map<string, { dev: number; ino: number }>()
+function rememberRoot(abs: string): void {
+  try { const st = lstatSync(abs); if (st.isDirectory()) rootIdentity.set(abs, { dev: st.dev, ino: st.ino }) } catch { /* 目录不在:请求时自然 404 */ }
+}
+function sameRoot(abs: string): boolean {
+  const want = rootIdentity.get(abs)
+  if (!want) return true // 没登记过身份的根(登记那一刻目录还不存在)沿用原有检查
+  try { const st = lstatSync(abs); return st.isDirectory() && st.dev === want.dev && st.ino === want.ino } catch { return false }
+}
+
 function serveFrom(rootDir: string, urlPath: string, res: ServerResponse, deref = false): void {
+  if (deref && !sameRoot(rootDir)) { res.statusCode = 404; res.end('not found'); return }
   const target = resolveSafe(rootDir, urlPath)
   if (!target) { res.statusCode = 403; res.end('forbidden'); return }
   let st
@@ -208,6 +335,30 @@ export function tokenFromHost(host: string | undefined): string | null {
   return m ? m[1] : null
 }
 
+/** 上次记下的端口;不合法就当没记(特权端口 <1024 一律不试:失败一次多一次重试成本)。 */
+function stickyPort(): number {
+  const p = persistedState().port
+  return typeof p === 'number' && Number.isInteger(p) && p >= 1024 && p <= 65535 ? p : 0
+}
+
+/** listen 成功后**常驻**的 error 兜底。为什么不能摘光:监听数归零后 server 再 emit 'error',
+ *  EventEmitter 会直接把它 throw 出去 —— 在 Electron 主进程里就是 uncaughtException,整个应用跟着倒。
+ *  而 net.Server 在 accept 阶段(EMFILE / ENFILE / ECONNABORTED…)本来就还会发 'error'。
+ *  这里只记日志:预览服务器出点事最多预览打不开,不值得掀翻主进程。 */
+function guardServerErrors(srv: Server, label: string): void {
+  srv.on('error', (e: Error) => { console.error(`[preview] ${label}服务器运行期出错(已兜底,不崩主进程):`, e) })
+}
+
+/** 一次 listen 尝试。失败(EADDRINUSE/EACCES…)收口成 reject,且把这次的 error 监听摘干净 —— 同一个
+ *  server 还能再 listen 一次(Node 的标准重试姿势);成功则换上常驻兜底(见 guardServerErrors)。 */
+function listenOn(srv: Server, port: number, label: string): Promise<void> {
+  return new Promise<void>((res, rej) => {
+    const fail = (e: Error): void => rej(e)
+    srv.once('error', fail)
+    srv.listen(port, '127.0.0.1', () => { srv.removeListener('error', fail); guardServerErrors(srv, label); res() })
+  })
+}
+
 function ensurePreviewServer(): Promise<string> {
   // ⚠️必须 memo 整个「启动中」的 Promise:先赋值 previewServer 再 await listen 的话,
   //   并发的第二个调用会看到非 null 的 server 直接读 address() → 拿到 port 0(codex Medium-4)。
@@ -231,13 +382,23 @@ function ensurePreviewServer(): Promise<string> {
       serveFrom(tRoot!, req.url || '/', res, true)
     })
     const gen = stopGen
-    await new Promise<void>((r, j) => { srv.once('error', j); srv.listen(0, '127.0.0.1', () => r()) })
+    // 粘性端口:先试上次那个(源里带端口,换端口=换源=数据丢)。被别的进程占了 / 没权限一律退回
+    // listen(0) —— 宁可这次换源,也不能开不出预览。
+    const want = stickyPort()
+    if (want) await listenOn(srv, want, '令牌根').catch(() => listenOn(srv, 0, '令牌根'))
+    else await listenOn(srv, 0, '令牌根')
     // 启动期间有人调过 stopCodePreview:那次 stop 看到的 previewServer 还是 null,什么都没关掉。
     // 这里补关,别把一台服务器连同它的令牌留在身后(codex Low-8)。
     if (gen !== stopGen) { srv.close(); throw new Error('preview server stopped') }
     previewServer = srv
     const addr = srv.address()
-    return `${typeof addr === 'object' && addr ? addr.port : 0}`
+    const port = typeof addr === 'object' && addr ? addr.port : 0
+    // ⚠️只在**还没有**首选端口时才落盘。首选端口这次被别的进程占了 → 本次会话用临时端口,**盘上的首选不动**,
+    //   下次启动再试它。原先这里会把临时端口写回去:一次偶然的占用就让所有产物永久搬到新源,旧源里的
+    //   localStorage / IndexedDB 再也够不着(Codex 评审)。代价:首选端口若被长期霸占,每次启动都是临时源 ——
+    //   数据还在原地等着,比一次性丢光强。
+    if (port && !want) { const state = persistedState(); state.port = port; persistSave(state) }
+    return `${port}`
   })().catch((e) => { previewStarting = null; throw e })
   return previewStarting
 }
@@ -246,6 +407,28 @@ function ensurePreviewServer(): Promise<string> {
 export async function servePathRoot(dir: string): Promise<{ origin: string; token: string; base: string }> {
   const port = await ensurePreviewServer()
   const token = previewToken(dir)
+  const origin = `http://${token}.localhost:${port}`
+  return { origin, token, base: origin }
+}
+
+/** 把某个**产物**的目录挂到它的稳定令牌源下 —— 与 servePathRoot 同形,区别只在 token 不随机、不淘汰。
+ *  产物根也是令牌根 → serveFrom 的 deref 照常开着(根内软链指到根外一律拒)。 */
+export async function serveProductRoot(productId: string, dir: string): Promise<{ origin: string; token: string; base: string }> {
+  // 令牌源的主机名形如 <token>.localhost,productId 只进 key 不进 URL,但仍是信任边界:
+  // 来自 renderer/IPC 的串不设限,持久化文件里就能塞进任意键。
+  if (!PRODUCT_ID_RE.test(productId) || RESERVED_PRODUCT_IDS.has(productId)) throw new Error(`invalid productId: ${productId}`)
+  const port = await ensurePreviewServer()
+  const abs = resolve(dir)
+  const token = productToken(productId)
+  // 项目被挪走 / 改名:令牌不动,只把它重新指到新目录(源不变 = 产物数据不丢)。
+  const prev = tokenToRoot.get(token)
+  if (prev && prev !== abs && rootToToken.get(prev) === token) rootToToken.delete(prev)
+  tokenToRoot.set(token, abs)
+  rememberRoot(abs)
+  // 让 servePathRoot(同一目录) 也落到这个令牌上:Coding Studio 里编辑时的预览与「启动」后的产物
+  // 同源 → 调试时写进 localStorage 的东西启动后还在。原来那个随机令牌不回收(可能正开着,回收了
+  // 刷新就 404),它自己会 LRU 掉。
+  rootToToken.set(abs, token)
   const origin = `http://${token}.localhost:${port}`
   return { origin, token, base: origin }
 }
@@ -270,7 +453,9 @@ async function ensureListening(): Promise<string> {
       serveFrom(root, req.url || '/', res)
     })
     const gen = stopGen
-    await new Promise<void>((r, j) => { srv.once('error', j); srv.listen(0, '127.0.0.1', () => r()) })
+    // 与令牌根共用 listenOn:失败收口成 reject,成功后换上常驻 error 兜底(原来那个 once('error', j)
+    // 在 listen 成功后就是个已 settle 的空转 reject,晚到的 server error 等于没人接)。
+    await listenOn(srv, 0, 'Coding Space 主根')
     if (gen !== stopGen) { srv.close(); throw new Error('preview server stopped') } // 同令牌根:启动期间被 stop 过 → 补关
     server = srv
     const addr = srv.address()
@@ -279,6 +464,8 @@ async function ensureListening(): Promise<string> {
   return starting
 }
 
+/** 全停:服务器关掉,所有令牌不再服务任何内容。**不动**落盘的令牌/端口,也不动 productToToken ——
+ *  那是产物的身份(停了再开还得是同一个源),不是内容。 */
 export function stopCodePreview(): void {
   stopGen++
   server?.close()
@@ -289,6 +476,7 @@ export function stopCodePreview(): void {
   previewServer = null
   previewStarting = null
   tokenToRoot.clear()
+  rootIdentity.clear()
   rootToToken.clear()
   tokenToInline.clear()
   inlineToToken.clear()

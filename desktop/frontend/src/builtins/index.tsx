@@ -26,6 +26,7 @@ import { museAvailable, installMuseSpace, installMuseViews, removeMuseSpace } fr
 
 import { homepageAvailable, installHomepageSpace, installHomepageViews, removeHomepageSpace } from './homepage'
 import { imageStudioAvailable, installImageStudioSpace, installImageStudioViews, removeImageStudioSpace } from './imageStudio'
+import { artificialAvailable, installArtificialSpace, installArtificialViews, removeArtificialSpace } from './artificial'
 
 // 懒载:xterm(约 300KB)只在真开终端时才解析;顺带让这个模块能被 node 环境的单测导入
 // (xterm 的 UMD 包在模块顶层就摸 `self`)。
@@ -137,6 +138,16 @@ export const BUILTINS: BuiltinDef[] = [
     install: installCalendarViews,
     installSpace: installCalendarSpace,
     removeSpace: removeCalendarSpace,
+  },
+  {
+    id: 'artificial',
+    types: ['artificial', 'product'],
+    name: () => tr('space.artificial'),
+    description: () => tr('artificial.builtinDesc'),
+    available: artificialAvailable,
+    install: installArtificialViews,
+    installSpace: installArtificialSpace,
+    removeSpace: removeArtificialSpace,
   },
   {
     id: 'muse',

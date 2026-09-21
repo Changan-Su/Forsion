@@ -162,6 +162,27 @@ const api = {
   codeStudioVersions: (root: string) => ipcRenderer.invoke('codeStudio:versions', root),
   codeStudioSnapshot: (root: string, name: string) => ipcRenderer.invoke('codeStudio:snapshot', root, name),
   codeStudioRestore: (root: string, id: string) => ipcRenderer.invoke('codeStudio:restore', root, id),
+  // git 版本(只给有 git 的用户;没有 → History 面板显示安装建议)
+  codeStudioGitStatus: (root: string) => ipcRenderer.invoke('codeStudio:gitStatus', root),
+  codeStudioGitVersions: (root: string) => ipcRenderer.invoke('codeStudio:gitVersions', root),
+  // 提交标题写下就不可变、且直接显示在 History 面板 → 兜底名 / 备份名 / 「恢复到」前缀由渲染层按当前语言传入。
+  codeStudioGitCommit: (root: string, input: { name: string; auto: boolean; untitled?: string }) => ipcRenderer.invoke('codeStudio:gitCommit', root, input),
+  codeStudioGitRestore: (root: string, id: string, labels?: { backup?: string; restorePrefix?: string }) => ipcRenderer.invoke('codeStudio:gitRestore', root, id, labels),
+  // ── 造物(Creations)Space:本机做出来的产物(id 在项目目录的 sidecar 里,渲染层永远只传 id)──
+  productsList: () => ipcRenderer.invoke('products:list'),
+  productsGet: (id: string) => ipcRenderer.invoke('products:get', id),
+  productsEnsure: (dir: string) => ipcRenderer.invoke('products:ensure', dir),
+  productsUpdate: (id: string, patch: Record<string, unknown>) => ipcRenderer.invoke('products:update', id, patch),
+  productsServe: (id: string) => ipcRenderer.invoke('products:serve', id),
+  productsShortcut: (id: string, fallbackName?: string) => ipcRenderer.invoke('products:shortcut', id, fallbackName),
+  productsTrash: (id: string) => ipcRenderer.invoke('products:trash', id),
+  productsExternalLaunchAllowed: (id: string): Promise<boolean> => ipcRenderer.invoke('products:externalLaunchAllowed', id),
+  /** 开发态插件的加载 / 卸载由主进程向**每个窗口**广播:收到就重载这些插件 id(卸载 = 来源没了 → 拆掉)。 */
+  onDevPluginsChanged: (cb: (change: { pluginIds: string[] }) => void) => {
+    const listener = (_e: unknown, change: { pluginIds: string[] }) => cb(change)
+    ipcRenderer.on('plugins:devChanged', listener)
+    return () => ipcRenderer.removeListener('plugins:devChanged', listener)
+  },
   // ── Forsion Connect:Coding Space 项目发布到云端托管(token 留主进程) ──
   connectMeta: (dir: string): Promise<{ slug?: string }> => ipcRenderer.invoke('connect:meta', dir),
   connectList: (): Promise<any> => ipcRenderer.invoke('connect:list'),

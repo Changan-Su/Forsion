@@ -1,9 +1,10 @@
 /** deep link 通用径的身份参数安全闸(Codex 评审 F1)。
  *  这层是无鉴权 OS 级入口的最后一道:URL 语法测试(deepLinkPlan.test)拦不住「语法合法但打开了
  *  不该打开的东西」——主机绝对路径注入 wsfile、后缀错配把白板塞进笔记编辑器,都在这里判。 */
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { registerView, useSpaceStore, useWorkspace } from '@lcl/engine'
 import type { ViewDefinition } from '@lcl/engine'
-import { entityParamsSafe } from './deepLinkInstall'
+import { entityParamsSafe, registerDeepLinkOpener, resolveDeepLink } from './deepLinkInstall'
 import { VIEW_FILE_MATCH } from './viewFileMatch'
 
 /** 造一个只带元数据的 ViewDefinition(factory 不会被调用)。 */
@@ -51,5 +52,39 @@ describe('entityParamsSafe', () => {
     expect(entityParamsSafe(WSFILE, {})).toBe(true)
     expect(entityParamsSafe(EDITOR, {})).toBe(true)
     expect(entityParamsSafe(CALENDAR, { date: '2026-08-25' })).toBe(true)
+  })
+})
+
+/** view 专属落地(registerDeepLinkOpener):造物的 product 靠它改开独立窗口。这层同样是任意网页可达的入口。 */
+describe('registerDeepLinkOpener', () => {
+  const TYPE = 'dl-opener-probe'
+  const intent = (extra: Record<string, unknown> = {}) =>
+    ({ kind: 'view', view: TYPE, params: { id: 'p_0123456789ab' }, ...extra }) as unknown as Parameters<typeof resolveDeepLink>[0]
+
+  it('注册后接管落地:不走主区 openView、不因 &space= 切走主窗;反注册后回到缺省路径', async () => {
+    registerView({ type: TYPE, kind: 'entity', idParam: 'id', displayName: TYPE, factory: () => null })
+    const openView = vi.spyOn(useWorkspace.getState(), 'openView').mockReturnValue(null as never)
+    const before = useSpaceStore.getState().activeSpaceId
+    const seen: Array<Record<string, string>> = []
+    const off = registerDeepLinkOpener(TYPE, (params) => { seen.push(params); return true })
+
+    // `space` 指向一个不存在的 Space:若先切 Space 再问 opener,这里会直接 false(也就证明了顺序)。
+    expect(await resolveDeepLink(intent({ space: 'no-such-space' }))).toBe(true)
+    expect(seen).toEqual([{ id: 'p_0123456789ab' }])
+    expect(openView).not.toHaveBeenCalled()
+    expect(useSpaceStore.getState().activeSpaceId).toBe(before)
+
+    off()
+    expect(await resolveDeepLink(intent())).toBe(true)
+    expect(openView).toHaveBeenCalledWith(TYPE, { id: 'p_0123456789ab' }, 'main')
+    openView.mockRestore()
+  })
+
+  it('⚠️形态闸仍在 opener 之前:带斜杠的 id 到不了 opener', async () => {
+    const open = vi.fn(() => true)
+    const off = registerDeepLinkOpener(TYPE, open)
+    expect(await resolveDeepLink({ kind: 'view', view: TYPE, params: { id: '../../etc' } } as never)).toBe(false)
+    expect(open).not.toHaveBeenCalled()
+    off()
   })
 })

@@ -64,6 +64,7 @@ import type {
   TableSpec,
 } from './types'
 import { validateTableSpec } from './tableSpec'
+import { clearDevRecords, devConsoleFor, dropDevRecords } from './devRecords'
 import { gatePluginManifest, type ExternalPluginSource } from '@amadeus-shared/ipc'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { openWebFloatingPanel } from '../../pluginPanelSeam'
@@ -153,7 +154,10 @@ interface PluginState {
   reloadExternal(): Promise<void>
   /** 只重载一个外置插件(拆它一个、重读来源、装回它一个);别的插件与它们开着的标签页不动。
    *  Agent 自建 Space 每个周期都可能变,走 reloadExternal 会把所有插件拆装一遍(codex 09-11 勘察)。 */
-  reloadOne(id: string): Promise<void>
+  /** force = 跳过「源码没变就不拆装」的快路(开发态显式重载用:setup 因瞬时原因抛过错时要能重试,只改了 manifest 的
+   *  name / capabilities / events 时旧实例也得换掉)。strict = 来源列表读不出来时**不许装作成功**:当前若是开发副本就先拆掉
+   *  (撤权优先于一切 —— 授权已经撤了而实例还握着笔记库权限,界面却报「已卸载」,这是最坏的组合),再把错误抛给调用方。 */
+  reloadOne(id: string, opts?: { force?: boolean; strict?: boolean }): Promise<void>
   /** 最近一次 setup 抛错的信息(按插件 id;成功激活即清)。Agent 自建 Space 的加载失败靠它回写给 agent。 */
   lastSetupError: Record<string, string>
   openPluginsFolder(): void
@@ -417,12 +421,25 @@ export function readDisabledPluginIds(): string[] {
   return readDisabled()
 }
 
+/** 已吊销的 ctx 上 register* 的返回值:既能当 disposer 调,也能当 `{ update, dispose }` handle 用,全是空操作 ——
+ *  过期的续体拿着它继续跑不会再抛一个与真因无关的 TypeError。 */
+const DEAD_HANDLE: (() => void) & { update(): void; dispose(): void } = Object.assign(() => {}, { update: () => {}, dispose: () => {} })
+
+/** reloadOne 的按 id 串行链。 */
+const reloadChains = new Map<string, Promise<void>>()
+
+/** 开发副本的 setup 代次(按插件 id):见 toPlugin 的开发态分支。 */
+const setupGeneration = new Map<string, number>()
+
 /** 外置插件最近装入的源码(按 id):reloadOne 用来跳过「磁盘内容没变」的重载(应用刚起第一次看到戳就不用拆装一遍)。 */
 const loadedCode = new Map<string, string>()
 
 /** Wrap an external source as a plugin whose setup() evaluates its code with `ctx`. */
 function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
   loadedCode.set(src.id, src.code)
+  // 每一次重新包装都是一次「重载」(loadExternal / reloadExternal / reloadOne 都经这里)——
+  // 开发态记账在这一刻归零,免得 Studio 把上一份代码的日志算到新代码头上。
+  if (src.dev) clearDevRecords(src.id)
   return {
     id: src.id,
     name: src.name,
@@ -445,10 +462,45 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
     agent: src.agent,
     bundle: src.bundle,
     events: src.events,
+    dev: src.dev,
+    devRoot: src.devRoot,
+    devProductId: src.devProductId,
+    shadowsInstalled: src.shadowsInstalled,
     setup: (ctx) => {
-      const fn = new Function('ctx', src.code) as (c: PluginContext) => unknown
-      const d = fn(ctx)
-      return typeof d === 'function' ? (d as () => void) : undefined
+      // 已安装插件:求值路径与从前**逐字相同**(一个形参、一个实参)。开发态那条多带一个 console ——
+      // new Function 的栈帧是 <anonymous>,不在求值时把按插件记账的 console 塞进作用域,
+      // 事后没有任何办法把一行输出归到是哪个插件说的(window.onerror 也归不了)。
+      if (!src.dev) {
+        const fn = new Function('ctx', src.code) as (c: PluginContext) => unknown
+        const d = fn(ctx)
+        return typeof d === 'function' ? (d as () => void) : undefined
+      }
+      const fn = new Function('ctx', 'console', src.code) as (c: PluginContext, console: Console) => unknown
+      // 每次 setup 一个代次:热重载下「上一版的 async setup 还没落定,新一版已经装好」是常态,迟到的结果必须认得出自己过期了。
+      const generation = (setupGeneration.get(src.id) ?? 0) + 1
+      setupGeneration.set(src.id, generation)
+      const current = (): boolean => setupGeneration.get(src.id) === generation
+        && usePluginStore.getState().activeIds.includes(src.id) && !!usePluginStore.getState().plugins.find((p) => p.id === src.id)?.dev
+      const d = fn(ctx, devConsoleFor(src.id))
+      if (typeof d === 'function') return d as () => void
+      // async setup:抛在 promise 里的错没人接(宿主 try/catch 只罩同步那一段),开发者只会在控制台
+      // 看到一行 unhandled rejection,设置页与 Studio 都显示「已启用」。开发态把它接住记成 setup 错误。
+      if (d && typeof (d as PromiseLike<unknown>).then === 'function') {
+        void Promise.resolve(d).then((resolved: unknown) => {
+          if (typeof resolved !== 'function') return
+          // async setup 交回来的 disposer:这一代还活着 → 装上(否则定时器 / 监听跨重载一层层叠);已经过期 → 当场调用收掉。
+          if (current()) usePluginStore.setState((s) => ({ disposers: { ...s.disposers, [src.id]: resolved as () => void } }))
+          else { try { (resolved as () => void)() } catch (err) { console.error(`[amadeus] plugin "${src.id}" stale disposer failed`, err) } }
+        }, (e: unknown) => {
+          // 过期那一代的 reject 不许回写:第 1 版的失败迟到,不能把已经装好的第 2 版标成「加载失败」。
+          if (!current()) return
+          console.error(`[amadeus] plugin "${src.id}" async setup rejected`, e)
+          usePluginStore.setState((s) => ({
+            lastSetupError: { ...s.lastSetupError, [src.id]: String((e as { message?: unknown } | null)?.message ?? e).slice(0, 600) },
+          }))
+        })
+      }
+      return undefined
     },
   }
 }
@@ -730,7 +782,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       }
       fontDisposers.clear()
     }
-    return {
+    const ctx: PluginContext = {
     app: appApi,
     account: hostTangu()?.account ? {
       ...hostTangu()!.account!,
@@ -807,6 +859,13 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 旧宿主返回 undefined(≠ false),插件的 `if (ok === false) return` 判定天然兼容。
     registerFileType: (def) => {
       const exts = Array.isArray(def?.extensions) ? def.extensions : []
+      // ⚠️开发副本不给注册文件类型:主进程的毁档防线(collectPluginExts → listPages 排除)只扫已安装目录,
+      // dev 根不在其中。清单里声明 fileExtensions 会被判 'dev-fileext' 拒载 —— 但只拦清单等于只拦了无害的那半:
+      // 删掉那一行就能载入,setup 里照样调到这里,用户在真库里建出的 `.foo.md` 会被笔记管线改写(评审 MED)。
+      if (get().plugins.find((p) => p.id === pluginId)?.dev) {
+        console.warn(`[plugin:${pluginId}] registerFileType(${exts.join(',')}) 被拒:开发副本的自定义文件类型不受宿主扩展名保护,请先安装再测`)
+        return false
+      }
       // 形态闸:后缀必须 '.x' 起步;以 '.md' 收尾的必须是复合后缀('.X.md')。裸 '.md'、漏点 'md'、
       // 空串这类声明会让 viewSurface 的 loadPage 后缀闸(endsWith 判定)对**所有笔记**敞开 ——
       // 那道闸防的是「普通 v4/素 md 被拽进 v3 存储管线改写 = 毁档」(评审 P2,2026-08-14)。
@@ -1003,7 +1062,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
     },
     // 成就:注册/计数都在 achievements/store 内强制 plugin:<id>: 前缀(防撞官方 id/伪造官方计数)。
     achievements: {
-      registerSeries: (def) => registerPluginSeries(pluginId, def),
+      // 同 register* 那道闸(这一条嵌在 ctx.achievements 里,末尾那个按成员名的循环够不着):teardown 会清掉系列,过期续体不许再塞回来。
+      registerSeries: (def) => { if (ctxAlive) registerPluginSeries(pluginId, def) },
       track: (event, n) => track(`plugin:${pluginId}:${event}`, n),
     },
     // 活动日志:同款前缀纪律(插件伪造不了官方事件);拼行/消毒在 main 侧 activityLog.ts。
@@ -1141,6 +1201,21 @@ export const usePluginStore = create<PluginState>((set, get) => {
         }
       : {}),
     }
+    // 吊销之后的 register* 一律作废。`async setup` 在 await 之后才登记命令 / 视图是常见写法,而 Sandbox 让
+    // 「setup 还没跑完就被重载 / 卸载」成了家常便饭(每次保存一次):上一代的续体醒来照样往 store 里塞贡献 ——
+    // 重载时同一条命令出现两份(旧的那份跑的还是旧代码),卸载后则成了没人收的幽灵,直到重启窗口。
+    // 就地换掉成员而不是套 Proxy:插件在 setup 开头解构 ctx,拿到的也是这一层。
+    const members = ctx as unknown as Record<string, unknown>
+    for (const key of Object.keys(members)) {
+      const fn = members[key]
+      if (!key.startsWith('register') || typeof fn !== 'function') continue
+      members[key] = (...args: unknown[]): unknown => {
+        if (ctxAlive) return (fn as (...a: unknown[]) => unknown)(...args)
+        console.warn(`[amadeus] 插件 ${pluginId} 已停用 / 已重载,ctx.${key} 被忽略`)
+        return DEAD_HANDLE
+      }
+    }
+    return ctx
   }
 
   /** Run disposer + drop contributions + mark inactive, WITHOUT touching the preference. */
@@ -1305,6 +1380,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       else get().enable(id)
     },
 
+    // ponytail: 与 reloadOne 不串行。窗口启动这一拍恰逢别的窗口撤掉开发态授权时,这里晚到的旧名单会把刚撤的开发副本
+    //   再装回本窗口(到它下一次重载为止;主进程那边授权已撤,重启 / 重载后不会再回来)。要治就给来源变更加 epoch、过期名单重读。
     async loadExternal() {
       let sources: ExternalPluginSource[] = []
       try {
@@ -1323,25 +1400,47 @@ export const usePluginStore = create<PluginState>((set, get) => {
       await get().loadExternal()
     },
 
-    async reloadOne(id) {
-      let sources: ExternalPluginSource[] = []
-      try {
-        sources = await resolveExternalSources()
-      } catch {
-        return
+    reloadOne(id, opts) {
+      // 同一个 id 的重载**串行**:发起加载的窗口会同时收到「自己那次显式重载」与「主进程的全窗广播」,两个并发的
+      // reloadOne 各自 teardown + 装载,谁后落定谁赢,setup 还会白跑两遍(check:sandbox 五跑一红就是它)。
+      const run = async (): Promise<void> => {
+        let sources: ExternalPluginSource[] = []
+        try {
+          sources = await resolveExternalSources()
+        } catch (e) {
+          if (!opts?.strict) return
+          const stale = get().plugins.find((p) => p.id === id)
+          if (stale?.dev) { // fail closed:读不到来源 ≠ 来源还在
+            if (get().activeIds.includes(id)) teardown(id)
+            loadedCode.delete(id)
+            set((s) => ({ plugins: s.plugins.filter((p) => p.id !== id) }))
+          }
+          throw e
+        }
+        const cur = get().plugins.find((p) => p.id === id)
+        if (cur?.builtin) return // 内置插件不是磁盘来源,没有「重读」可言
+        const src = sources.find((s) => s.id === id)
+        // 源码与 blocked 状态都没变 → 不拆装(戳只说明目录动过,不一定动了这个插件;也免掉应用刚起那次白重载的闪一下)。
+        // ⚠️**来源身份**也得比:刚从安装版复制出来的开发副本,代码可以与安装版一字不差 —— 只比代码的话,
+        //   「在 Forsion 中加载」开了等于没开(dev 标志永远装不进来),撤下开发副本后它也永远拆不掉(卸载守卫因此永远拒)。
+        if (!opts?.force && cur && src
+          && loadedCode.get(id) === src.code
+          && (cur.blocked ?? null) === (src.blocked ?? null)
+          && (cur.dev ?? false) === (src.dev ?? false)
+          && (cur.devRoot ?? null) === (src.devRoot ?? null)
+          && (cur.shadowsInstalled ?? false) === (src.shadowsInstalled ?? false)) return
+        if (get().activeIds.includes(id)) teardown(id)
+        if (!src) { loadedCode.delete(id); dropDevRecords(id) } // 来源整个没了 → 连开发态记账一起丢
+        set((s) => ({
+          plugins: [...s.plugins.filter((p) => p.id !== id), ...(src ? [toPlugin(src)] : [])],
+          lastSetupError: { ...s.lastSetupError, [id]: undefined as unknown as string },
+        }))
+        if (src) applyPref(id)
       }
-      const cur = get().plugins.find((p) => p.id === id)
-      if (cur?.builtin) return // 内置插件不是磁盘来源,没有「重读」可言
-      const src = sources.find((s) => s.id === id)
-      // 源码与 blocked 状态都没变 → 不拆装(戳只说明目录动过,不一定动了这个插件;也免掉应用刚起那次白重载的闪一下)
-      if (cur && src && loadedCode.get(id) === src.code && (cur.blocked ?? null) === (src.blocked ?? null)) return
-      if (get().activeIds.includes(id)) teardown(id)
-      if (!src) loadedCode.delete(id)
-      set((s) => ({
-        plugins: [...s.plugins.filter((p) => p.id !== id), ...(src ? [toPlugin(src)] : [])],
-        lastSetupError: { ...s.lastSetupError, [id]: undefined as unknown as string },
-      }))
-      if (src) applyPref(id)
+      const next = (reloadChains.get(id) ?? Promise.resolve()).then(run, run)
+      const guard = next.catch(() => {}).then(() => { if (reloadChains.get(id) === guard) reloadChains.delete(id) })
+      reloadChains.set(id, guard)
+      return next
     },
 
     openPluginsFolder() {

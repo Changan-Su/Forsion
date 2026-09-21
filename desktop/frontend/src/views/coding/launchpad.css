@@ -149,3 +149,8 @@
   .csl-launchpad *, .csl-launchpad *::before, .csl-launchpad *::after,
   .csl-details::details-content, .csl-save-location::details-content { animation: none; transition: none; }
 }
+
+/* —— Forsion 插件模板:能力选择块换成一句说明(插件不经网页 SDK)。—— */
+.csl-plugin-note { margin: 13px 0 0; color: var(--text-faint); font-size: 10px; line-height: 1.6; animation: csl-enter var(--duration-fast) var(--ease-out); }
+/* 同特异性覆盖必须在文件末尾:上面那块 reduced-motion 总闸排在 .csl-plugin-note 之前,压不住它。 */
+@media (prefers-reduced-motion: reduce) { .csl-plugin-note { animation: none; } }

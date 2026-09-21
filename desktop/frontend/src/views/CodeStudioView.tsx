@@ -1,26 +1,31 @@
 /** Coding Studio: project brief → build → real preview → evidence-based iteration → source versions. */
 import { createPortal } from 'react-dom'
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Code2, Eye, Columns2, Folder, Globe, Loader2, ExternalLink, RotateCw, Monitor, Tablet, Smartphone, MousePointer2, TerminalSquare, FileText, History, CheckSquare, AlertCircle, Settings2, Square, X, ArrowLeft, PanelLeft, PanelRight, PanelBottom, FolderTree } from 'lucide-react'
+import { Code2, Eye, Columns2, Folder, Globe, Loader2, ExternalLink, RotateCw, Monitor, Tablet, Smartphone, MousePointer2, Puzzle, TerminalSquare, FileText, History, CheckSquare, AlertCircle, Settings2, Square, X, ArrowLeft, PanelLeft, PanelRight, PanelBottom, FolderTree } from 'lucide-react'
 import { getView, useWorkspace, type ViewProps, type ExtendViewController } from '@lcl/engine'
 import { lazyRetry } from '../lazyRetry'
 import { ConnectPublishDialog } from '../components/ConnectPublishDialog'
 import { useApp } from '../stores/appStore'
 import { useCodeStudio, type StudioMode } from '../stores/codeStudioStore'
-import { useI18n } from '../i18n'
+import { translate, useI18n } from '../i18n'
 import { parseStreamingWrite } from './streamingWrite'
 import { ProjectLaunchpad } from './coding/ProjectLaunchpad'
 import { buildStudioDraft, type StudioBrief } from './coding/projectBrief'
 import { saveStudioBriefFile } from './coding/briefFile'
 import { StudioEditor } from './coding/StudioEditor'
 import { flushStudioEditors, getUnsavedStudioEditorPaths } from './coding/editorSession'
+import { autoVersionName, runEnded, sameProject } from './coding/gitHistory'
 import { StudioPreview } from './coding/StudioPreview'
 import { BriefPanel, ChecksPanel, HistoryPanel } from './coding/StudioPanels'
+import { SandboxPanel } from './coding/SandboxPanel'
+import { createReloadScheduler, shouldHotReload, type ReloadScheduler } from './coding/sandboxModel'
+import { reloadDevPlugin } from '@amadeus/plugins/devSandbox'
 import { collectStudioWrites, inflightStudioWrite, issuePrompt, elementPrompt, joinProjectPath, projectName, projectRelative, normPath, normalizeDevUrl, type StudioIssue, type SelectedElement, type PreviewDevice } from './coding/studioModel'
 import { useStudioTools } from './coding/useStudioTools'
 import { StudioReveal } from './coding/StudioReveal'
 import { registerStudioCommands } from './coding/studioCommands'
 import type { UiMessage } from '../types'
+import type { ProductSummary } from '../../../shared/products'
 import './coding/studioMessages'
 import './coding/studio.css'
 const CodeView = lazyRetry(() => import('../components/CodeView'))
@@ -130,8 +135,52 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
   const [scanNonce, setScanNonce] = useState(0)
   const [serveNonce, setServeNonce] = useState(0)
   const [watchNonce, setWatchNonce] = useState(0)
+  const [historyNonce, setHistoryNonce] = useState(0)
+  const [product, setProduct] = useState<ProductSummary | null>(null)
+  const [productNonce, setProductNonce] = useState(0)
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+  // 产物判型(网页 / 插件)决定整块工作台的形态。托管根以外的项目、老宿主都拿不到 → 一律按网页走。
+  useEffect(() => {
+    let live = true
+    if (!window.tangu?.productsEnsure) { setProduct(null); return }
+    void window.tangu.productsEnsure(root)
+      .then(next => { if (live) setProduct(next) })
+      .catch(() => { if (live) setProduct(null) }) // 判不出型不是错误屏:这个项目照网页处理就好
+    return () => { live = false }
+  }, [root, productNonce])
+  // devLoad 也算:授权过的插件项目把 manifest.json 写坏的那一刻会被判成 web / unknown,但宿主那边授权还在、
+  // 开发副本以「清单无效」挂着 —— 这时把 Sandbox 入口收起来,用户既看不到报错也卸不掉它。
+  const isPlugin = product?.kind === 'plugin' || product?.devLoad === true
+  // 网页项目在这里选定的入口同步进产物身份文件:否则「造物」与桌面快捷方式只会按磁盘猜(根 index.html),
+  // 用户明明选的是 demo/index.html,启动出来却是另一页(Codex 评审)。只在两边不一致时写,幂等。
+  useEffect(() => {
+    if (!product || product.kind !== 'web' || !entry || entry === product.entry || prefs.devUrl) return
+    const update = window.tangu?.productsUpdate
+    if (!update) return
+    let live = true
+    void update(product.id, { entry }).then(next => { if (live && mounted.current) setProduct(next) }).catch(e => console.warn('[studio] 同步产物入口失败', e))
+    return () => { live = false }
+  }, [product, entry, prefs.devUrl])
+  const canSandbox = isPlugin && !!window.tangu?.productsEnsure && !!window.tangu?.productsUpdate
+  // 监听回调与热重载调度器都在 effect 闭包里跑,读的必须是**当下**的产物,不是挂载那一刻的。
+  const productRef = useRef(product)
+  productRef.current = product
+  const manifestTouched = useRef(false)
+  const hotReload = useRef<ReloadScheduler | null>(null)
+  // dev 插件的热重载:存盘即重载,一阵密集保存只重载一次,项目切走后一次都不再发。
+  useEffect(() => {
+    const scheduler = createReloadScheduler({
+      run: async () => {
+        const pluginId = productRef.current?.pluginId
+        if (!pluginId || !mounted.current || useCodeStudio.getState().activeProject !== root) return
+        await reloadDevPlugin(pluginId)
+      },
+      onError: e => console.warn('[studio] 插件热重载失败', e),
+    })
+    hotReload.current = scheduler
+    return () => { scheduler.dispose(); hotReload.current = null }
+  }, [root])
 
   useEffect(() => registerStudioCommands(root, openTool, () => mounted.current && useCodeStudio.getState().activeProject === root), [root, openTool])
   useEffect(() => { useCodeStudio.getState().bindChatToProject(root, projectName(root)) }, [root, activeId])
@@ -155,6 +204,9 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
   const refreshForChange = useCallback(() => {
     if (!mounted.current) return
     setFileRevision(n => n + 1); setScanNonce(n => n + 1)
+    // manifest.json 动过就重判一次型(新写出 manifest 的项目要当场变成插件项目)。没有监听路径信息的
+    // 宿主拿不到这条线索,那就每次刷新都重判 —— 漏判的代价是整块工作台停在网页形态。
+    if (manifestTouched.current || !window.tangu?.codeStudioWatch) { manifestTouched.current = false; setProductNonce(n => n + 1) }
     const studio = useCodeStudio.getState()
     if (studio.activeProject !== root) return
     studio.updateProject({ checks: {} })
@@ -171,6 +223,9 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
       if (!live || normPath(event.root) !== normPath(canonicalRoot || root)) return
       if (event.error) { setWatchError(event.error); return }
       setWatchError('')
+      if (event.path === null || /(^|\/)manifest\.json$/i.test(event.path)) manifestTouched.current = true
+      // 热重载走自己的节拍(更短的去抖 + 单飞),与预览刷新互不等待。
+      if (shouldHotReload(event, productRef.current)) hotReload.current?.schedule()
       clearTimeout(timer); timer = setTimeout(refreshForChange, 400)
     })
     void window.tangu.codeStudioWatch(root).then(r => { if (live) canonicalRoot = r.root }).catch(e => { if (live) setWatchError(String(e.message || e)) })
@@ -185,6 +240,26 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
     // The filesystem watcher also covers shell tools / external editors. Tool events are a fallback for old hosts.
     if (!window.tangu?.codeStudioWatch) refreshForChange()
   }, [writeSig, refreshForChange])
+  // 版本由宿主产生:一轮 agent 跑完就自动存一版(AI 自己永远不跑 git)。ProjectStudio 带 key={root},
+  // 切项目会整块重挂,所以 ref 里的「上一次 running」不会把别的项目的 true→false 记到这个项目头上。
+  const wasRunning = useRef(running)
+  useEffect(() => {
+    const previous = wasRunning.current
+    wasRunning.current = running
+    if (!runEnded(previous, running)) return // 沿判在 gitHistory.ts 里单测:挂载不补、只认 true→false、一轮只发一次
+    const label = autoVersionName(messages)
+    const untitled = translate('studio.history.untitled') // 提交标题落盘即不可变 → 按写入时的界面语言求值
+    // 背景动作:绝不阻塞渲染,也不把失败弹给用户(没装 git / 只读仓都会走到这里,属正常)。
+    void (async () => {
+      try {
+        const status = await window.tangu?.codeStudioGitStatus?.(root)
+        if (!status?.writable || !window.tangu?.codeStudioGitCommit) return
+        const version = await window.tangu.codeStudioGitCommit(root, { name: label, auto: true, untitled })
+        if (!version || !mounted.current || !sameProject(root, useCodeStudio.getState().activeProject)) return
+        setHistoryNonce(value => value + 1) // 开着的版本面板顺手刷新一下
+      } catch (e) { console.warn('[studio] 自动保存版本失败', e) }
+    })()
+  }, [running, root, messages])
   const inflight = useMemo(() => inflightStudioWrite(messages), [messages])
   const streamArgs = useThrottled(inflight?.arguments || '')
   const streaming = useMemo(() => {
@@ -195,7 +270,8 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
     return relative ? { file: relative, content: parsed.content.slice(-500_000) } : null
   }, [inflight, streamArgs, root])
   const htmlFiles = files.filter(path => /\.html?$/i.test(path))
-  const previewUrl = prefs.devUrl || (origin && entry ? `${origin}/${entry.split('/').map(encodeURIComponent).join('/')}` : null)
+  // 插件项目没有页面预览(StudioPreview 从不挂载):目录里碰巧有个 html 也别算出 previewUrl,否则状态栏永远停在「加载中」。
+  const previewUrl = isPlugin ? null : prefs.devUrl || (origin && entry ? `${origin}/${entry.split('/').map(encodeURIComponent).join('/')}` : null)
   const codeFile = activeFile || (entry ? joinProjectPath(root, entry) : files[0] ? joinProjectPath(root, files[0]) : null)
   const waiting = messages.some(m => m.approvals?.some(a => a.status === 'pending') || m.inquiries?.some(q => q.status === 'pending'))
   const addIssue = useCallback((issue: StudioIssue) => setIssues(old => {
@@ -240,15 +316,20 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
         {([['preview', Eye, 'coding.preview'], ['code', Code2, 'coding.code'], ['split', Columns2, 'studio.split']] as const).map(([value, Icon, key]) => <button key={value} aria-pressed={mode === value} onClick={() => { useCodeStudio.getState().setMode(value as StudioMode); if (value === 'code') setInspecting(false) }}><Icon size={14} /><span>{t(key)}</span></button>)}
       </div>
       <div className="csu-head-actions">
-        {!!window.tangu?.connectPublish && <button className="csu-primary" disabled={running || !entry || !!prefs.devUrl} onClick={() => void publish()}><Globe size={14} /><span>{t('coding.publish')}</span></button>}
+        {/* 插件不是网页:发布(Forsion Connect 托管静态页)对它没有意义,整颗按钮不出现。 */}
+        {!!window.tangu?.connectPublish && !isPlugin && <button className="csu-primary" disabled={running || !entry || !!prefs.devUrl} onClick={() => void publish()}><Globe size={14} /><span>{t('coding.publish')}</span></button>}
       </div>
     </header>
-    <div className="csu-tools">
-      <div className="csu-device" role="group" aria-label={t('coding.preview')}>{([['desktop', Monitor], ['tablet', Tablet], ['phone', Smartphone]] as const).map(([device, Icon]) => <button key={device} aria-label={t(`studio.${device}`)} title={t(`studio.${device}`)} aria-pressed={prefs.device === device} onClick={() => useCodeStudio.getState().updateProject({ device: device as PreviewDevice })}><Icon size={15} /></button>)}</div>
-      <button className="csu-address" title={previewUrl || t('studio.setup')} onClick={() => openTool('setup')}><span>{prefs.devUrl || entry || t('studio.staticPreview')}</span><Settings2 size={13} /></button>
+    {/* 设备宽度 / 点选元素 / 浏览器打开 / 预览设置这一排全是「这个项目是网页」的前提。插件项目里它们
+        没有对象可指,留着只会让人以为插件也有页面 —— 整排收起,只留刷新(重扫文件、刷新编辑器)。 */}
+    <div className="csu-tools" data-project-kind={isPlugin ? 'plugin' : 'web'}>
+      {!isPlugin && <div className="csu-device" role="group" aria-label={t('coding.preview')}>{([['desktop', Monitor], ['tablet', Tablet], ['phone', Smartphone]] as const).map(([device, Icon]) => <button key={device} aria-label={t(`studio.${device}`)} title={t(`studio.${device}`)} aria-pressed={prefs.device === device} onClick={() => useCodeStudio.getState().updateProject({ device: device as PreviewDevice })}><Icon size={15} /></button>)}</div>}
+      {isPlugin
+        ? <button className="csu-address" data-action="sandbox-open" title={t('studio.sandbox')} onClick={() => openTool('sandbox')}><span>{t('studio.sandbox')}</span><Puzzle size={13} /></button>
+        : <button className="csu-address" title={previewUrl || t('studio.setup')} onClick={() => openTool('setup')}><span>{prefs.devUrl || entry || t('studio.staticPreview')}</span><Settings2 size={13} /></button>}
       <button title={t('coding.reload')} aria-label={t('coding.reload')} onClick={reload}><RotateCw size={15} /></button>
-      <button className="csu-inspect" title={t('studio.inspect')} aria-label={t('studio.inspect')} disabled={!previewUrl || mode === 'code' || previewStatus !== 'ready'} aria-pressed={inspecting} onClick={() => setInspecting(value => !value)}><MousePointer2 size={15} /><span>{t('studio.inspectShort')}</span></button>
-      {!!window.tangu?.openExternal && <button title={t('preview.openInBrowser')} aria-label={t('preview.openInBrowser')} disabled={!previewUrl} onClick={() => { if (previewUrl) void window.tangu!.openExternal!(previewUrl) }}><ExternalLink size={15} /></button>}
+      {!isPlugin && <button className="csu-inspect" title={t('studio.inspect')} aria-label={t('studio.inspect')} disabled={!previewUrl || mode === 'code' || previewStatus !== 'ready'} aria-pressed={inspecting} onClick={() => setInspecting(value => !value)}><MousePointer2 size={15} /><span>{t('studio.inspectShort')}</span></button>}
+      {!!window.tangu?.openExternal && !isPlugin && <button title={t('preview.openInBrowser')} aria-label={t('preview.openInBrowser')} disabled={!previewUrl} onClick={() => { if (previewUrl) void window.tangu!.openExternal!(previewUrl) }}><ExternalLink size={15} /></button>}
     </div>
     {(serveError || scanError || watchError) && <div role="alert" className="csu-error">{serveError || scanError ? t('studio.loadError', { error: [serveError, scanError].filter(Boolean).join('\n') }) : t('studio.watchError', { error: watchError })}<button onClick={() => { setScanNonce(n => n + 1); setServeNonce(n => n + 1); setWatchNonce(n => n + 1) }}>{t('studio.retry')}</button></div>}
     {briefSaveError && <div role="alert" className="csu-error">{t('studio.loadError', { error: briefSaveError })}<button onClick={retryBrief}>{t('studio.retry')}</button></div>}
@@ -259,7 +340,9 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
           {streaming && (!activeFile || projectRelative(root, activeFile) === streaming.file) ? <><div className="csu-writing"><Loader2 size={13} className="csx-spin" />{t('studio.streaming', { file: streaming.file })}</div><Suspense fallback={<div className="csx-empty">…</div>}><CodeView value={streaming.content} fileName={streaming.file} autoScroll /></Suspense></> : codeFile ? <StudioEditor path={codeFile} reloadNonce={fileRevision} onSaved={refreshForChange} /> : <div className="csx-empty">{t('coding.pickFile')}</div>}
         </section>
         <section className="csu-preview-pane" aria-hidden={mode === 'code'} inert={mode === 'code'} aria-label={t('coding.preview')}>
-          {previewUrl ? <StudioPreview key={previewUrl} url={previewUrl} nonce={reloadNonce} device={prefs.device} visible={!showPublish && (!!extendView || !tools.active)} onActivate={onActivate} inspecting={inspecting} onInspectEnd={() => setInspecting(false)} onSelect={setSelected} onIssue={addIssue} onStatus={setPreviewStatus} /> : <div className="csu-first-page"><div className="csu-first-icon"><Code2 size={28} /></div><h2>{t('studio.firstPage')}</h2><p>{t('studio.firstPageHint')}</p><div className="csu-actions"><button className="csu-primary" onClick={() => openTool('brief')}><FileText size={14} />{t('studio.project')}</button></div></div>}
+          {/* 插件项目永远不进 StudioPreview:哪怕目录里恰好有个 index.html,它也不是这个插件的样子。 */}
+          {isPlugin ? <div className="csu-first-page" data-sandbox-placeholder><div className="csu-first-icon"><Puzzle size={28} /></div><h2>{t('studio.pluginPreview')}</h2><p>{t('studio.pluginPreviewHint')}</p><div className="csu-actions"><button className="csu-primary" data-action="sandbox-open" onClick={() => openTool('sandbox')}><Puzzle size={14} />{t('studio.openSandbox')}</button></div></div>
+            : previewUrl ? <StudioPreview key={previewUrl} url={previewUrl} nonce={reloadNonce} device={prefs.device} visible={!showPublish && (!!extendView || !tools.active)} onActivate={onActivate} inspecting={inspecting} onInspectEnd={() => setInspecting(false)} onSelect={setSelected} onIssue={addIssue} onStatus={setPreviewStatus} /> : <div className="csu-first-page"><div className="csu-first-icon"><Code2 size={28} /></div><h2>{t('studio.firstPage')}</h2><p>{t('studio.firstPageHint')}</p><div className="csu-actions"><button className="csu-primary" onClick={() => openTool('brief')}><FileText size={14} />{t('studio.project')}</button></div></div>}
         </section>
       </div>
 
@@ -267,13 +350,16 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
     <StudioReveal open={!!selected}>{selected && <div className="csu-selection"><div className="csu-selection-head"><MousePointer2 size={15} /><strong>{t('studio.selection')}</strong><code>{selected.selector}</code><button title={t('studio.close')} aria-label={t('studio.close')} onClick={() => { setSelected(null); setChange('') }}><X size={15} /></button></div>{selected.text && <p>{selected.text.slice(0, 180)}</p>}<div className="csu-actions"><input aria-label={t('studio.changePlaceholder')} placeholder={t('studio.changePlaceholder')} value={change} onChange={e => setChange(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && change.trim()) { onPrompt(elementPrompt(selected, change), false); setSelected(null); setChange('') } }} /><button className="csu-primary" disabled={!change.trim()} onClick={() => { onPrompt(elementPrompt(selected, change), false); setSelected(null); setChange('') }}>{t('studio.addToChat')}</button></div></div>}</StudioReveal>
     <footer className="csu-footer">
       <nav className="csu-tool-nav" aria-label={t('studio.projectTools')}>
-        {([['brief', FileText, 'studio.project'], ['history', History, 'studio.history'], ['checks', CheckSquare, 'studio.checks']] as const).filter(([kind]) => kind !== 'history' || !!window.tangu?.codeStudioVersions).map(([kind, Icon, key]) => <button key={kind} aria-label={t(key)} title={t(key)} aria-pressed={panel === kind} onClick={() => openTool(kind)}><Icon size={14} /><span>{t(key)}</span></button>)}
+        {/* 宿主门控与 history 同一套写法:桥不在(或这个项目不是插件)就整颗按钮不出现,而不是点了没反应。 */}
+        {([['brief', FileText, 'studio.project'], ['history', History, 'studio.history'], ['sandbox', Puzzle, 'studio.sandbox'], ['checks', CheckSquare, 'studio.checks']] as const)
+          .filter(([kind]) => (kind !== 'history' || !!window.tangu?.codeStudioGitStatus || !!window.tangu?.codeStudioVersions) && (kind !== 'sandbox' || canSandbox))
+          .map(([kind, Icon, key]) => <button key={kind} data-studio-tool={kind} aria-label={t(key)} title={t(key)} aria-pressed={panel === kind} onClick={() => openTool(kind)}><Icon size={14} /><span>{t(key)}</span></button>)}
         <span className="csu-tool-divider" />
         <button title={t('studio.files')} aria-label={t('studio.files')} onClick={openFiles}><FolderTree size={14} /><span>{t('studio.filesShort')}</span></button>
         {!!getView('terminal') && <button title={t('studio.terminal')} aria-label={t('studio.terminal')} onClick={openTerminal}><TerminalSquare size={14} /></button>}
         {!!window.tangu?.revealHostPath && <button title={t('studio.reveal')} aria-label={t('studio.reveal')} onClick={() => void window.tangu!.revealHostPath!(root)}><Folder size={14} /></button>}
       </nav>
-    <div className="csu-status" role="status"><span className={running ? 'csu-status-running' : ''}>{running ? <Loader2 size={13} className="csx-spin" /> : <Eye size={13} />}{waiting ? t('studio.waiting') : running ? t('studio.building') : previewUrl ? t(previewStatus === 'ready' ? 'studio.previewReady' : previewStatus === 'error' ? 'studio.previewFailed' : 'studio.loading') : t('studio.previewIdle')}</span>
+    <div className="csu-status" role="status"><span className={running ? 'csu-status-running' : ''}>{running ? <Loader2 size={13} className="csx-spin" /> : <Eye size={13} />}{waiting ? t('studio.waiting') : running ? t('studio.building') : previewUrl ? t(previewStatus === 'ready' ? 'studio.previewReady' : previewStatus === 'error' ? 'studio.previewFailed' : 'studio.loading') : t(isPlugin ? 'studio.sandbox.statusIdle' : 'studio.previewIdle')}</span>
       {changedFiles.length > 0 && <span className="csu-changed">{t('studio.filesChanged', { count: changedFiles.length })}</span>}
       <span className="csu-grow" />{pendingChanges && <button onClick={reload}>{t('studio.pendingChanges')}</button>}
       <label className="csu-live"><input type="checkbox" checked={prefs.autoRefresh} onChange={e => { useCodeStudio.getState().updateProject({ autoRefresh: e.target.checked }); if (e.target.checked && pendingChanges) reload() }} />{t('studio.autoRefresh')}</label>
@@ -287,7 +373,8 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
       </div></div>
         {tool === 'brief' && <BriefPanel root={root} onPrompt={onPrompt} />}
         {tool === 'checks' && <ChecksPanel root={root} onPrompt={text => onPrompt(text, true)} />}
-        {tool === 'history' && <HistoryPanel root={root} running={running} onRestored={refreshForChange} />}
+        {tool === 'history' && <HistoryPanel root={root} running={running} onRestored={refreshForChange} refreshNonce={historyNonce} />}
+        {tool === 'sandbox' && <SandboxPanel root={root} product={product} onPrompt={onPrompt} onProductChanged={() => setProductNonce(n => n + 1)} />}
         {tool === 'issues' && <div className="csu-panel-body csu-issues-layout"><section className="csu-issue-evidence"><p className="csu-hint">{issues.length ? t('studio.errorCount', { count: issues.length }) : t('studio.noIssues')}</p>{issues.map(issue => <div className="csu-issue" key={issue.id}><AlertCircle size={14} /><div><pre>{issue.message}</pre>{issue.source && <small>{issue.source}</small>}</div></div>)}</section><section className="csu-issue-request"><label className="csu-field"><span>{t('studio.issueDescription')}</span><textarea rows={4} value={description} onChange={e => setDescription(e.target.value)} /></label><div className="csu-actions"><button className="csu-primary" onClick={() => onPrompt(issuePrompt(issues, description, previewUrl), false)}>{t('studio.diagnose')}</button><button onClick={() => setIssues([])}>{t('studio.clearIssues')}</button></div></section></div>}
         {tool === 'setup' && <div className="csu-panel-body"><label className="csu-field"><span>{t('studio.entry')}</span><select value={entry || ''} onChange={e => { useCodeStudio.getState().setEntry(e.target.value); useCodeStudio.getState().updateProject({ devUrl: '' }); setUrlDraft('') }}><option value="" disabled>{t('coding.noEntry')}</option>{htmlFiles.map(file => <option key={file}>{file}</option>)}</select></label><h3>{t('studio.devServer')}</h3><p className="csu-hint">{t('studio.devHint')}</p><label className="csu-field"><span>{t('studio.devUrl')}</span><input placeholder="http://localhost:5173" value={urlDraft} onChange={e => { setUrlDraft(e.target.value); setUrlError('') }} /></label>{urlError && <p className="csu-error">{urlError}</p>}<div className="csu-actions"><button className="csu-primary" onClick={() => { const url = normalizeDevUrl(urlDraft); if (url === null) { setUrlError(t('studio.invalidUrl')); return } useCodeStudio.getState().updateProject({ devUrl: url }); setIssues([]); tools.close() }}>{t('studio.apply')}</button><button onClick={() => { setUrlDraft(''); useCodeStudio.getState().updateProject({ devUrl: '' }); setIssues([]) }}>{t('studio.useStatic')}</button></div>{!!getView('terminal') && <button onClick={openTerminal}><TerminalSquare size={14} />{t('studio.terminal')}</button>}</div>}
     </div>)}

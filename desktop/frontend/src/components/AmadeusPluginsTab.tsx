@@ -31,6 +31,28 @@ registerMessages({
   'settings.amadeusPlugins.unitExternalTitle': { zh: '额外插件', en: 'Additional plugins' },
   'settings.amadeusPlugins.unitHint': { zh: '由当前 Unit 发布的额外插件，点击可查看详情。', en: 'Additional plugins published by this Unit. Click a plugin for details.' },
   'settings.amadeusPlugins.unitEmpty': { zh: '此 Unit 暂未发布额外插件。', en: 'No additional plugins published.' },
+  // Forsion Sandbox(开发态加载)。**不是隔离沙箱** —— 文案必须把这件事说明白,别让用户以为开发副本被关在笼子里。
+  'settings.amadeusPlugins.devBadge': { zh: 'DEV', en: 'DEV' },
+  'settings.amadeusPlugins.devHint': {
+    zh: '开发态加载：直接运行在当前应用与真实笔记库中，权限与已安装插件完全相同。',
+    en: 'Development load: runs in this app on your real vault, with the same privileges as an installed plugin.',
+  },
+  'settings.amadeusPlugins.devProject': { zh: '项目：{path}', en: 'Project: {path}' },
+  'settings.amadeusPlugins.devShadows': {
+    zh: '正遮蔽同名的已安装插件；撤下开发副本后，安装版会回来。',
+    en: 'Shadowing the installed plugin with the same id; unload this dev copy and the installed one comes back.',
+  },
+  'settings.amadeusPlugins.devUnload': { zh: '卸载开发副本', en: 'Unload dev copy' },
+  'settings.amadeusPlugins.devUnloaded': { zh: '已撤下「{name}」的开发副本', en: 'Unloaded the dev copy of "{name}"' },
+  'settings.amadeusPlugins.devUnloadFailed': { zh: '撤下开发副本失败：{error}', en: 'Could not unload the dev copy: {error}' },
+  'settings.amadeusPlugins.devShadowedUninstall': {
+    zh: '请先撤下开发副本，再卸载已安装的版本。',
+    en: 'Unload the dev copy first, then uninstall the installed version.',
+  },
+  'settings.amadeusPlugins.blockedDevFileExt': {
+    zh: '开发副本不能声明自定义文件类型（fileExtensions）',
+    en: 'A dev copy cannot claim custom file types (fileExtensions)',
+  },
 })
 
 /** 同一插件的级联串行链:快速连点按序执行,防两批 PUT 乱序落成「父关子开」(codex P1-4)。 */
@@ -182,7 +204,16 @@ const blockedLabel = (t: (k: string, v?: Record<string, string>) => string, p: A
     ? t('settings.amadeusPlugins.blockedApi', { v: String(p.apiVersion ?? '?') })
     : p.blocked === 'invalid'
       ? t('settings.amadeusPlugins.blockedInvalid', { reason: p.blockedReason || '' })
-      : t('settings.amadeusPlugins.blockedMinApp', { v: p.minAppVersion || '?' })
+      : p.blocked === 'dev-fileext'
+        ? t('settings.amadeusPlugins.blockedDevFileExt')
+        : t('settings.amadeusPlugins.blockedMinApp', { v: p.minAppVersion || '?' })
+
+/** DEV 徽章:开发态加载的来源。卡片与详情页同款。 */
+const DevBadge: React.FC<{ t: (k: string) => string }> = ({ t }) => (
+  <span style={{ ...badge, color: 'var(--accent-ink, var(--accent, var(--text-faint)))', borderColor: 'var(--accent-ink, var(--accent, var(--border)))' }}>
+    {t('settings.amadeusPlugins.devBadge')}
+  </span>
+)
 
 /** 依赖应用区:探测 → 已连接/未检测到;一键安装(宿主白名单命令,envRun 执行) → 装完自动复测。 */
 const CompanionApp: React.FC<{ appId: string }> = ({ appId }) => {
@@ -325,7 +356,10 @@ const PluginDetail: React.FC<{
     try {
       await amadeus.uninstallPlugin?.(p.id)
     } catch (e: any) {
-      useApp.getState().toast(e?.message || String(e), true)
+      // 主进程的开发副本守卫用机器码开头(见 electron/amadeus/ipc.ts 的 uninstallPlugin):
+      // 这条是用户真会撞上的(开发副本可能是别的窗口/上一次会话开的),按当前语言说人话。
+      const raw = e?.message || String(e)
+      useApp.getState().toast(String(raw).startsWith('dev-shadowed') ? t('settings.amadeusPlugins.devShadowedUninstall') : raw, true)
       return
     }
     onBack()
@@ -344,6 +378,22 @@ const PluginDetail: React.FC<{
     useApp.getState().toast(t('settings.amadeusPlugins.uninstalled', { name: pluginDisplayName(p, locale) }))
   }
 
+  /** 撤下开发副本:关掉产物的 devLoad 开关,再只重载这一个 id —— 有安装版的话它会在同一拍回来。
+   *  刻意不走 amadeus.uninstallPlugin:开发副本在用户自己的项目目录里,宿主绝不去删它。 */
+  const unloadDev = async (): Promise<void> => {
+    if (!p.devProductId) return
+    try {
+      await window.tangu?.productsUpdate?.(p.devProductId, { devLoad: false })
+    } catch (e: any) {
+      useApp.getState().toast(t('settings.amadeusPlugins.devUnloadFailed', { error: e?.message || String(e) }), true)
+      return
+    }
+    onBack()
+    await usePluginStore.getState().reloadOne(p.id)
+    void loadUserSpaces()
+    useApp.getState().toast(t('settings.amadeusPlugins.devUnloaded', { name: pluginDisplayName(p, locale) }))
+  }
+
   return (
     <div data-plugin-detail={p.id} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
       <div>
@@ -358,6 +408,7 @@ const PluginDetail: React.FC<{
             <b style={{ fontSize: 15 }}>{pluginDisplayName(p, locale)}</b>
             <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>v{p.version}</span>
             <span style={badge}>{p.builtin || p.preinstalled ? t('settings.amadeusPlugins.builtin') : p.agent ? t('settings.amadeusPlugins.agentOwned', { agent: p.agent }) : t('settings.amadeusPlugins.external')}</span>
+            {p.dev && <DevBadge t={t} />}
             {p.blocked && (
               <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{blockedLabel(t, p)}</span>
             )}
@@ -375,13 +426,28 @@ const PluginDetail: React.FC<{
         {/* 设备页 uninstallPlugin 是 notSupported 桩(truthy)——按标志再挡一道,免得按钮点了才报不支持 */}
         {/* 随 App 播种的(preinstalled)同样不给卸载:删了下次启动会种回来,想不用就关开关 */}
         {/* agent 自建 Space 同样不给卸载:那是 agent 目录里的活文件,想不用就关开关 */}
-        {!p.builtin && !p.preinstalled && !p.agent && !!amadeus?.uninstallPlugin && !window.tangu?.unitPage && (
+        {/* 开发副本走「撤下」而不是「卸载」:文件是用户自己项目里的源码,宿主一个字节都不删 */}
+        {p.dev ? (
+          // 没有 productsUpdate 桥(旧壳 / 设备页)就别给按钮:await undefined 会一路走到「已撤下」的提示,
+          // 而其实什么都没做 —— 谎报成功比没有按钮糟得多。
+          !!p.devProductId && !!window.tangu?.productsUpdate && !window.tangu?.unitPage && (
+            <button className="btn ghost sm" onClick={() => void unloadDev()}>{t('settings.amadeusPlugins.devUnload')}</button>
+          )
+        ) : !p.builtin && !p.preinstalled && !p.agent && !!amadeus?.uninstallPlugin && !window.tangu?.unitPage && (
           <button className="btn ghost sm" style={{ color: 'var(--danger, #c0392b)' }} onClick={() => void uninstall()}>
             {t('settings.amadeusPlugins.uninstall')}
           </button>
         )}
         <input type="checkbox" checked={on} disabled={!!p.blocked} onChange={toggleHere} style={{ cursor: p.blocked ? 'not-allowed' : 'pointer' }} />
       </div>
+      {/* 开发态说明:它**不是**隔离沙箱,用户有权在启用它之前知道这件事 */}
+      {p.dev && (
+        <div className="plugin-card" style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+          <div>{t('settings.amadeusPlugins.devHint')}</div>
+          {p.devRoot && <div style={{ color: 'var(--text-faint)', fontSize: 11 }}>{t('settings.amadeusPlugins.devProject', { path: p.devRoot })}</div>}
+          {p.shadowsInstalled && <div style={{ color: 'var(--warn, #b8860b)', fontSize: 11 }}>{t('settings.amadeusPlugins.devShadows')}</div>}
+        </div>
+      )}
       {p.bundle && (
         <>
           <div className="hint">{t('settings.amadeusPlugins.bundleTitle')}</div>
@@ -499,6 +565,7 @@ export const AmadeusPluginsTab: React.FC<{
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
               <b style={{ fontSize: 13 }}>{pluginDisplayName(p, locale)}</b>
               <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>v{p.version}</span>
+              {p.dev && <DevBadge t={t} />}
               {p.blocked && (
                 <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{blockedLabel(t, p)}</span>
               )}

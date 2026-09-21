@@ -1,0 +1,52 @@
+/* 造物 Space。栅格本体复用启动器的 .newtab-grid / .newtab-card(base.css),
+   这里只补它没有的:左对齐的卡片内容、徽标、动作行,以及产物视图的 guest 几何。
+   纪律:只吃 token;新写的容器一律 border-color: transparent(不写 border: none);
+   本文件无 box-shadow(高程一律交给被复用的既有类)。 */
+
+.art-root { flex: 1; min-height: 0; display: flex; justify-content: center; overflow: auto; color: var(--text); }
+.art-inner { width: min(760px, 92%); margin: 0 auto; padding: 28px 0 40px; }
+.art-head { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
+.art-head > svg { color: var(--accent-ink); flex-shrink: 0; }
+.art-titles { flex: 1; min-width: 0; }
+.art-title { font-size: 17px; font-weight: 600; line-height: 1.35; }
+.art-sub { margin-top: 3px; color: var(--text-muted); font-size: 11.5px; line-height: 1.6; }
+
+/* 卡片比启动器那排「图标 + 一行字」宽:要装下名字、时间、徽标与动作行。 */
+.newtab-grid.art-grid { grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); }
+.newtab-card.art-card { align-items: stretch; justify-content: flex-start; gap: 7px; padding: 12px; text-align: left; cursor: default; }
+/* 卡片本身不再是按钮 —— 按下去的是里面那颗 data-action=open,别整张卡跟着塌。 */
+.newtab-card.art-card:active { transform: none; }
+
+.art-card-main { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0; background: none; border: var(--border-width) solid transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.art-card-main:disabled { cursor: default; }
+.art-card-name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.art-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; color: var(--text-faint); font-size: 11px; }
+.art-badge { padding: 1px 6px; border-radius: 999px; background: var(--overlay-light); color: var(--text-faint); font-size: 10px; }
+
+/* 动作行常显(压暗),hover / 键盘聚焦时拉满 —— 藏到 hover 里触屏就永远摸不到。 */
+.art-actions { display: flex; align-items: center; gap: 2px; margin-top: auto; opacity: .62; transition: opacity var(--duration-fast, .15s); }
+.newtab-card.art-card:hover .art-actions, .newtab-card.art-card:focus-within .art-actions { opacity: 1; }
+.art-actions .icon-btn { width: 26px; height: 26px; }
+
+.art-state { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 40px 16px; text-align: center; color: var(--text-muted); font-size: 12.5px; line-height: 1.7; }
+.art-state-title { color: var(--text); font-size: 14px; font-weight: 600; }
+.art-state p { margin: 0; max-width: 420px; }
+
+/* ── 产物视图(一个产物 = 一个 <webview>)────────────────────────────────── */
+.art-product { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.art-bar { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-bottom: var(--border-width, 1px) solid var(--border); background: var(--bg-card, var(--bg)); }
+.art-bar-name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 空锚点:guest 经 StudioGuestSurface 传送到壳上,只按这块矩形跟随几何(见该组件注释)。 */
+.art-anchor { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.art-guest { display: flex; flex: 1; min-width: 0; min-height: 0; height: 100%; overflow: hidden; background: #fff; }
+.art-guest .art-frame { flex: 1; width: 100%; height: 100%; min-width: 0; min-height: 0; border: 0; }
+/* 作品还没起来时,状态块自己占满这一列(栅格那边的状态块在普通块流里,不受影响)。 */
+.art-product .art-state { flex: 1; justify-content: center; }
+
+/* ── 覆盖块:必须留在文件末尾(DESIGN.md §7)───────────────────────────────
+   base.css 的 .newtab-card:hover 会描边 + 抬起整张卡 —— 那是给「整张卡就是一颗按钮」的启动器写的。
+   造物的卡是**容器**:能点的只有里面那颗 data-action=open(种类不能启动又没有工作室可去时它还是灰的),
+   整张卡跟着抬 = 悬浮反馈在说谎,而且给内容卡描了边(DESIGN.md §5「内容卡不描边」)。
+   这里把继承来的那三条按原值还原,悬浮反馈只留给真正能点的那颗主按钮。 */
+.newtab-card.art-card:hover { border-color: var(--border); background: var(--bg-card); transform: none; }
+.art-card-main:hover:not(:disabled) .art-card-name { color: var(--accent-ink); }

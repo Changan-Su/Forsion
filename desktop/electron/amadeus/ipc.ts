@@ -14,6 +14,9 @@ import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { adoptLegacyCloudState, cloudAccountNamespace, currentCloudAccountId, readConfig, updateConfig, writeConfig } from './settings'
 import { defaultWorkspaceDir, forsionHomeDir, tanguDataDir } from '../forsionHome'
+import { getProduct } from '../productsRegistry'
+import { effectivePluginId } from '../../shared/products'
+import { isDevLoaded, readDevLoads } from '../devLoadStore'
 import { builtinPluginIds } from '../builtinPlugins'
 import { logActivity, logNoteEdit } from '../activityLog'
 import { loadTanguCreds } from '../forsionAuth'
@@ -1082,10 +1085,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   // 规则,否则会出现「能列出/能运行、点卸载却被 id 校验拒绝」的卸不掉插件(codex P1-9);
   // 该 id 还进 localStorage 键与 Space 归属,必须先掐住。
   const SAFE_PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
-  const pluginIdOf = (dirName: string, manifestId: unknown): string | null => {
-    if (typeof manifestId === 'string' && SAFE_PLUGIN_ID.test(manifestId)) return manifestId
-    return SAFE_PLUGIN_ID.test(dirName) ? dirName : null
-  }
+  const pluginIdOf = effectivePluginId // 单源:与产物注册表同一条规则(shared/products.ts)
 
   // 卸载墓碑:被卸载插件声明过的文件扩展名**永久**留在 listPages 排除集(毁档防线不随卸载失效——
   // 库里的数据文件还在,掉回笔记被 compiler 改写=毁档,codex P1-1)。文件在共享域顶层,
@@ -1108,7 +1108,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     try {
       entries = readdirSync(globalPluginsDir(), { withFileTypes: true })
     } catch {
-      return []
+      return [...exts] // 插件目录没了,墓碑(已卸载插件的后缀豁免)照样要生效 —— 返回 [] 会让那些文件掉回笔记管线
     }
     for (const e of entries) {
       if (!e.isDirectory() || e.name.startsWith('.')) continue
@@ -1232,17 +1232,137 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     return out
   }
 
+  /** Coding Space 的托管项目根(~/Forsion/Project;dev 家 = ~/Forsion-Dev/Project)。与 main.ts 的
+   *  `projectsRoot` 同一推导(defaultWorkspaceDir() + 'Project'),别在这里硬编码 ~。 */
+  const projectsRootDir = (): string => path.join(defaultWorkspaceDir(), 'Project')
+
+  /**
+   * Forsion Sandbox 的**开发态插件来源**(2026-09-21):托管根下开了 `devLoad` 的插件项目,免安装直接进插件宿主。
+   * 纪律:
+   *  · **不是隔离沙箱** —— 跑在真应用、真笔记库,权限与已安装插件完全相同(所以 capabilities / onboarding / events
+   *    一律照发,开发者才测得出自己声明的能力);「安全」由「用户自己在自己的项目上开了这个开关」承担,UI 如实写明。
+   *  · 判据是**磁盘上有没有 manifest.json**,不是 product.kind:清单写坏的那一刻 detectKind 会把项目判回 web/unknown,
+   *    按 kind 过滤等于「JSON 打错一个逗号,插件从列表里凭空消失、安装版还悄悄顶上来」。没有 manifest.json 才算不是插件。
+   *  · 清单坏 / main 读不到 → 列出为 blocked:'invalid' 带原因(与 agent Space 同款),绝不静默消失。
+   *  · 声明了 fileExtensions → blocked:'dev-fileext' 且**不读代码**:扩展名保护(collectPluginExts → listPages 排除)
+   *    只扫全局 plugins 目录,开发副本造出来的自定义类型文件没人护着,会被笔记 compiler 改写 = 毁档。
+   *  · bundle 一律不收:内嵌 agent/技能/引擎插件是「安装」这一步的播种动作,开发态加载不该往引擎里种东西。
+   */
+  const readDevPlugins = async (seen: Set<string>): Promise<ExternalPluginSource[]> => {
+    const out: ExternalPluginSource[] = []
+    // ⚠️来源名单 = **宿主家目录里的授权**(devLoadStore),不是项目 sidecar 里的标志:项目目录不可信,
+    //   克隆 / 解压来的文件夹自带一个 `devLoad:true` 就能零点击以插件权限执行 —— 第一版就是这么漏的(评审 HIGH)。
+    //   授权按「产物 id + 授权当时的真实根」双钥匙核对;复制出来的项目(id 被重铸)与搬了家的 sidecar 都对不上。
+    const products: NonNullable<Awaited<ReturnType<typeof getProduct>>>[] = []
+    const authorizedPluginId = new Map<string, string | null>() // 产物 id → 授权当时的生效插件 id(清单写坏期间沿用)
+    const loads = readDevLoads(forsionHomeDir())
+    for (const [pid, grant] of Object.entries(loads)) {
+      const product = await getProduct(projectsRootDir(), pid).catch(() => null) // 托管根不存在 / 扫不动 → 当没有
+      // 按目录身份(dev+ino)核,不比路径:项目文件夹改了名授权照旧;同 id 的 sidecar 搬进别的文件夹不算。
+      if (product && isDevLoaded(loads, product)) { products.push(product); authorizedPluginId.set(product.id, grant.pluginId) }
+    }
+    products.sort((a, b) => b.updatedAt - a.updatedAt) // 两个项目声明同一个插件 id 时先到先得,顺序得确定
+    type DevManifest = {
+      id?: unknown; name?: unknown; nameEn?: unknown; version?: unknown; description?: unknown; descriptionEn?: unknown
+      main?: unknown; apiVersion?: unknown; minAppVersion?: unknown; requiresApp?: unknown
+      capabilities?: unknown; onboarding?: unknown; events?: unknown; fileExtensions?: unknown
+    }
+    for (const product of products) {
+      const pdir = product.root
+      let m: DevManifest | null = null
+      let invalid = ''
+      let raw: string
+      try {
+        raw = await fs.readFile(path.join(pdir, 'manifest.json'), 'utf8')
+      } catch {
+        continue // 没有清单 = 这个项目压根不是 Forsion 插件(web 项目误开了开关)→ 不列
+      }
+      try {
+        const parsed: unknown = JSON.parse(raw)
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) invalid = 'manifest.json must be a JSON object'
+        else m = parsed as DevManifest
+      } catch (err) {
+        invalid = `manifest.json unparsable: ${err instanceof Error ? err.message : String(err)}`
+      }
+      // 清单读不出来时**沿用授权当时的 id**:否则少一个逗号,身份就从 `my-plugin` 漂成目录名 `cool-project`,
+      // 被影子住的安装版悄悄回来、开发副本的报错挂到一个没人看的 id 上(Codex 评审)。
+      const id = (m ? pluginIdOf(path.basename(pdir), m.id) : null) ?? authorizedPluginId.get(product.id) ?? pluginIdOf(path.basename(pdir), undefined)
+      if (!id) {
+        console.warn(`[amadeus] 开发态项目 "${path.basename(pdir)}" 的 manifest id 与目录名均非法(须 kebab-case),拒载`)
+        continue
+      }
+      if (seen.has(id)) continue // 两个项目声明同一个插件 id:先扫到的赢(scanProducts 按 updatedAt 倒序,确定)
+      const str = (v: unknown, max: number): string | undefined => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined)
+      const declaresExts = Array.isArray(m?.fileExtensions) && m.fileExtensions.some((x) => typeof x === 'string' && !!x)
+      let blocked: ExternalPluginSource['blocked'] | null = invalid
+        ? 'invalid'
+        : gatePluginManifest({ apiVersion: m?.apiVersion, minAppVersion: m?.minAppVersion }, app.getVersion())
+          ?? (declaresExts ? 'dev-fileext' : null)
+      let code = ''
+      if (!blocked) {
+        const mainName = str(m?.main, 120) || 'main.js'
+        const rel = !mainName.includes('..') && !path.isAbsolute(mainName) ? mainName : 'main.js'
+        try {
+          code = await fs.readFile(path.join(pdir, rel), 'utf8')
+        } catch (err) {
+          invalid = `${rel} unreadable: ${err instanceof Error ? err.message : String(err)}`
+          blocked = 'invalid'
+        }
+      }
+      const [readme, changelog, iconUrl] = await Promise.all([
+        fs.readFile(path.join(pdir, 'README.md'), 'utf8').then((s) => s.slice(0, 65536), () => undefined),
+        fs.readFile(path.join(pdir, 'CHANGELOG.md'), 'utf8').then((s) => s.slice(0, 65536), () => undefined),
+        readPluginIconDataUrl(pdir),
+      ])
+      seen.add(id)
+      out.push({
+        id,
+        name: str(m?.name, 120) || product.name,
+        version: str(m?.version, 40) || '0.0.0',
+        description: str(m?.description, 2000),
+        nameEn: str(m?.nameEn, 120),
+        descriptionEn: str(m?.descriptionEn, 2000),
+        iconUrl,
+        code: blocked ? '' : code,
+        apiVersion: typeof m?.apiVersion === 'number' ? m.apiVersion : 1,
+        minAppVersion: str(m?.minAppVersion, 40),
+        requiresApp: str(m?.requiresApp, 120),
+        capabilities: Array.isArray(m?.capabilities)
+          ? PLUGIN_CAPABILITIES.filter((c) => (m.capabilities as unknown[]).includes(c))
+          : undefined,
+        readme,
+        changelog,
+        onboarding: sanitizeOnboarding(m?.onboarding),
+        events: sanitizeEvents(m?.events),
+        // fileExtensions 刻意不透出:声明了就已经 blocked,再把它传下去只会让下游误以为这套后缀受保护。
+        blocked: blocked ?? undefined,
+        blockedReason: invalid || (blocked === 'dev-fileext'
+          ? 'fileExtensions are only protected for installed plugins; install this plugin to claim custom file types'
+          : undefined),
+        dev: true,
+        devRoot: pdir,
+        devProductId: product.id,
+        // preinstalled 一律不给:开发副本哪怕与随 App 播种的插件同 id,也不是那份内置包(标了就没有任何按钮可点)。
+      })
+    }
+    return out
+  }
+
   /** 外置插件全量读取(manifest 门禁 + bundle 收集 + 代码/文档)。IPC listPlugins 与
    *  unitHost 的 /__unit/plugins 自服面共用 —— 设备互联把同一份插件面分发给远端渲染器。
-   *  opts.agents:附带 agent 自建 Space 插件(只有桌面 IPC 传 true)。 */
-  const readExternalPlugins = async (opts: { agents?: boolean } = {}): Promise<ExternalPluginSource[]> => {
+   *  opts.agents:附带 agent 自建 Space 插件;opts.dev:附带开发态来源(**只有桌面 IPC 传 true**)。 */
+  const readExternalPlugins = async (opts: { agents?: boolean; dev?: boolean } = {}): Promise<ExternalPluginSource[]> => {
     const seen = new Set<string>()
     const out: ExternalPluginSource[] = []
-    let entries: import('node:fs').Dirent[]
+    // 开发态来源**先扫**:同 id 时先扫先赢(seen),于是开发副本遮蔽安装版 —— 这正是「改完立刻看到自己的版本」。
+    const devSources = opts.dev ? await readDevPlugins(seen) : []
+    const devById = new Map(devSources.map((s) => [s.id, s]))
+    out.push(...devSources)
+    let entries: import('node:fs').Dirent[] = []
     try {
       entries = await fs.readdir(globalPluginsDir(), { withFileTypes: true })
     } catch {
-      return out
+      // 全局插件目录还不存在(一个插件都没装):开发态来源照样要发出去,不能在这里整条返回。
     }
     for (const e of entries) {
       if (!e.isDirectory() || e.name.startsWith('.')) continue
@@ -1269,6 +1389,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
           console.warn(`[amadeus] 插件目录 "${e.name}" 的 manifest id 与目录名均非法(须 kebab-case),拒载`)
           continue
         }
+        // 开发副本正顶着这个 id:告诉渲染层「你遮住了一份安装版」(Studio 要显示,卸载也要据此拒绝),
+        // 必须赶在下面那句 seen 去重之前 —— 开发态 id 已经在 seen 里了,晚一行就永远标不上。
+        const shadowed = devById.get(id)
+        if (shadowed) { shadowed.shadowsInstalled = true; continue }
         if (seen.has(id)) continue
         // 门禁:apiVersion 不匹配 / 应用太旧 → 列出但不可加载(blocked 徽章),code 不读不发。
         const blocked = gatePluginManifest(m, app.getVersion())
@@ -1328,7 +1452,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     if (opts.agents) out.push(...(await readAgentSpacePlugins(seen))) // 主根之后:同 id 主根先赢
     return out
   }
-  handle(IPC.listPlugins, () => readExternalPlugins({ agents: true }))
+  handle(IPC.listPlugins, () => readExternalPlugins({ agents: true, dev: true }))
 
   handle(IPC.openPluginsFolder, async () => {
     const dir = globalPluginsDir()
@@ -1385,6 +1509,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   // 内嵌引擎插件需重启引擎后消失(调用方负责提示/重启)。
   handle(IPC.uninstallPlugin, async (_e, id: string) => {
     if (typeof id !== 'string' || !SAFE_PLUGIN_ID.test(id)) throw new Error('非法的插件标识')
+    // ⚠️开发副本正遮蔽同 id 的安装版时必须拒绝:这里只扫全局目录,删掉的是**安装版**,而跑着的是开发副本 ——
+    // 用户看到「已卸载」,插件却还在;等哪天撤下开发副本,它才凭空消失(且没有任何提示)。先撤开发副本再卸载。
+    // 消息前缀 `dev-shadowed:` 是给渲染层认的机器码(用户可见文案在设置页按当前语言渲染)。
+    if ((await readDevPlugins(new Set())).some((s) => s.id === id)) {
+      throw new Error(`dev-shadowed: unload the development copy of "${id}" before uninstalling the installed one`)
+    }
     const root = globalPluginsDir()
     let target: string | null = null
     let entries: import('node:fs').Dirent[] = []

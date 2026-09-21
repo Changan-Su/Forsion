@@ -59,7 +59,8 @@ function MuseHome(props: ViewProps) {
     void tick()
     return () => { alive = false; if (timer) clearTimeout(timer) }
   }, [cfg])
-  if (def) return <div data-muse-space="plugin" style={{ height: '100%', minHeight: 0 }}><PluginViewHost def={def} {...props} /></div>
+  // pluginId 要带:Muse 主槽是另一条挂载路径(不经 pluginViews 的 factory),不带的话它挂失败就归不了属。
+  if (def) return <div data-muse-space="plugin" style={{ height: '100%', minHeight: 0 }}><PluginViewHost def={def} pluginId={agentPluginId('muse')} {...props} /></div>
   return (
     <div data-muse-space="empty" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div className="hint" style={{ padding: '8px 14px 0', flex: 'none' }}>{tr('muse.spaceEmpty')}</div>
