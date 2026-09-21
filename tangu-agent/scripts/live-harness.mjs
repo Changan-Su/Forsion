@@ -25,7 +25,7 @@
  *   npm run live:harness -- --only churn                     # 同会话 6 连发的后续调用命中画像(不设命中率阈值,六个 run 须跑完)
  *   npm run live:harness -- --only ttft --ttft-rounds 5      # 首 token 延迟:preset(chat|work)× 思考档(off|medium)2×2,每格 N 会话 × 2 轮(冷/热缓存),交错跑
  *   npm run live:harness -- --only refine                    # 自进化闭环(09-18):Historian 自动档提名 → 收件箱 → /refine 采纳写 HARNESS.md → 新会话系统提示带上;改 REFINE_DIRECTIVE / harnessStore / 判官 harness 字段 / 注入槽后跑
- *   node scripts/live-harness.mjs --selftest                 # 纯判据(done 锚点 / load_tools 措辞 / 子代理归属)的负对照;不起引擎、不需凭证
+ *   node scripts/live-harness.mjs --selftest                 # 纯判据(done 锚点 / load_tools 措辞 / 子代理归属 / 团队激活窗与真并行)的负对照;不起引擎、不需凭证
  *
  * 凭证:把 ~/.forsion-dev/provider-auth.json(--auth 可改)**软链**进隔离共享域 —— 引擎自己读,本脚本不读;
  * 到期刷新写回同一文件,和开第二个桌面实例的行为一致。绝不碰 ~/.forsion-dev/tangu 的 state.db。
@@ -180,6 +180,16 @@ const activationBuckets = (group, slug) => {
   return buckets;
 };
 
+/**
+ * group 场景「真并行」:成员 a、b 是否有一对激活区间交叠。端点同样用**事件 seq**、严格 `<`(seq 唯一,不会相等):
+ * 调度是「A end → 起下一位 → B start」连发,边界两帧常同一毫秒到达,旧版按毫秒 `<=` 比会把严格串行的调度
+ * (退化成 groupMaxConcurrent=1)也判成交叠 —— 恰好放过这条判据要抓的回归。没收到 end 的激活按 +∞(仍在跑)。
+ */
+const activationsOverlap = (group, a, b) => {
+  const spans = (slug) => group.starts.filter((s) => s.slug === slug).map((s, i) => ({ start: s.seq, end: group.ends.filter((x) => x.slug === slug)[i]?.seq ?? Infinity }));
+  return spans(a).some((x) => spans(b).some((y) => x.start < y.end && y.start < x.end));
+};
+
 // ── --selftest:上面几个纯判据的负对照(不起引擎、不烧额度、不需要凭证)。每条都配一个**该红的**输入。──
 if (argv.includes('--selftest')) {
   const fails = [];
@@ -227,8 +237,12 @@ if (argv.includes('--selftest')) {
   const sizes = (g) => [...activationBuckets(g, 'b').values()].map((t) => t.length).join(',');
   check('激活窗 两次激活各一条(同毫秒到达)', sizes(grp([[15, 'x'], [21, 'y']], [4, 17])), '1,1');
   check('激活窗 同一激活 team_say + 最终答复(负对照:必须同窗才比得到)', sizes(grp([[9, 'x'], [15, 'y']], [4, 17])), '2');
+  // 真并行:[start, end] 按 seq;四帧收到时刻全同一毫秒 —— 旧的按毫秒 `<=` 会把串行那条也判成交叠
+  const spansOf = ([a0, a1], [b0, b1]) => ({ starts: [{ slug: 'a', seq: a0, at: 7 }, { slug: 'b', seq: b0, at: 7 }], ends: [{ slug: 'a', seq: a1, at: 7 }, { slug: 'b', seq: b1, at: 7 }] });
+  check('真并行 两名成员区间交叠', activationsOverlap(spansOf([3, 11], [4, 16]), 'a', 'b'), true);
+  check('真并行 严格串行、边界帧同毫秒(负对照)', activationsOverlap(spansOf([3, 11], [12, 16]), 'a', 'b'), false);
   if (fails.length) { console.error(`--selftest 失败 ${fails.length} 条:\n  ${fails.join('\n  ')}`); process.exit(1); }
-  console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict / activationBuckets,含负对照)');
+  console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict / activationBuckets / activationsOverlap,含负对照)');
   process.exit(0);
 }
 
@@ -416,12 +430,12 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'usage') ev.usages.push(p);
           // 团队运行模式(群聊分叉):发言序 + 收场原因是 group 场景的唯一观测点;done 的 content 恒空,靠 ev.done 判链路走通。
           else if (e.type === 'group_speaker' && p.phase === 'start') ev.group.speakers.push(String(p.slug || '?'));
-          else if (e.type === 'group_speaker' && p.phase === 'end') ev.group.remarks.push({ ...p, at: Date.now(), seq: e.seq, duringActivation: ev.group.starts.some((s) => s.slug === p.slug && !ev.group.ends.some((x) => x.runId === s.runId)) });
+          else if (e.type === 'group_speaker' && p.phase === 'end') ev.group.remarks.push({ ...p, seq: e.seq, duringActivation: ev.group.starts.some((s) => s.slug === p.slug && !ev.group.ends.some((x) => x.runId === s.runId)) });
           else if (e.type === 'team_output') ev.group.outputs.push(p.message);
           else if (e.type === 'group_summary') ev.group.summary = p;
           else if (e.type === 'group_ended') ev.group.ended = p;
           // 并行团队(09-16 第四轮):成员激活的起止时刻 —— 「真并行」的唯一观测点是两次激活的时间区间交叠。
-          else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), at: Date.now(), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
+          else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
           else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped'].includes(p.phase)) ev.statuses.push(p);
@@ -585,7 +599,7 @@ try {
   });
 
   // 并行团队(新工作区 × 轨道体系,09-16 第四轮:成员各自在自己的工作会话里并行干活、全员起头、被 @ 者优先、成员各自以 DONE 表态,
-  // 没有会议/协作之分、没有投票、没有缺省轮数上限)。判三件事:① **真并行** —— 两名成员的激活时间区间交叠(team_member start/end);
+  // 没有会议/协作之分、没有投票、没有缺省轮数上限)。判三件事:① **真并行** —— 两名成员的激活区间交叠(team_member start/end 的事件 seq,见 activationsOverlap);
   // ② 模型配合团队规则 —— Beta 等 Alpha 派活时 @Alpha 且不写 DONE(等人规则),派到活后完成并写 DONE(自己的提示词里没写 DONE);
   // ③ 全员 DONE 收场(done)且总激活数有界。刻意不传 groupMaxRounds:兜底天花板 30 周期 + 300s 超时,模型不守约定就会在这里失败。
   await scenario('group', 'group 并行团队(两名 agent 同时起、互相 @ 后收敛)', async () => {
@@ -605,9 +619,7 @@ try {
     const historian = backgrounds.background || [];
     const hasSummary = !!ev.group.summary?.text && historian.length === 1 && ev.group.summary.historianSessionId === historian[0].sessionId;
     const reason = ev.group.ended?.reason || null;
-    // 交叠:某次 start 落在另一位成员的某次 [start, end] 区间里
-    const spans = (slug) => ev.group.starts.filter((s) => s.slug === slug).map((s, i) => ({ start: s.at, end: ev.group.ends.filter((x) => x.slug === slug)[i]?.at ?? Infinity }));
-    const overlap = spans('live-alpha').some((a) => spans('live-beta').some((b) => a.start <= b.end && b.start <= a.end));
+    const overlap = activationsOverlap(ev.group, 'live-alpha', 'live-beta');
     const converged = reason === 'done';
     // A member may publish several team_say remarks per activation. Bound activations, not public remarks.
     const both = sp.includes('live-alpha') && sp.includes('live-beta');
