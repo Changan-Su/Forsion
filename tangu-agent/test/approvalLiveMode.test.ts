@@ -7,10 +7,11 @@
  *   ④ 团队成员子 run 带 followSessionMode → 跟团队会话;不带 → 快照。
  *   ⑤ 团队成员取 [团队会话, 成员会话] 里最严的:团队降档压过成员会话里的旧宽档,成员子聊天单独调严也算数(Codex 09-21 P1);
  *   ⑥ 现读失败 → 按只读问,绝不回落到可能更宽的启动快照(Codex 09-21 P1);
- *   ⑦ run 起跑时补 preset / agentSlug 的那次回写不许把期间切的档整份盖回去(Codex 09-21 P1)。
+ *   ⑦ run 起跑时补 preset / agentSlug 的那次回写不许把期间切的档整份盖回去(Codex 09-21 P1);
+ *   ⑧ 最严比较里 custom 按它的 base 算:团队 custom(base=full-auto)压不过成员子聊天里的自动编辑。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configureTangu, deps } from '../src/seams/runtime.js';
@@ -184,6 +185,20 @@ describe('审批档现读会话存值', () => {
     try { await run({ approvalMode: 'full-auto' }, true); } finally { state.countSessionMessages = count; }
     const [row] = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = 'S'`);
     expect(JSON.parse(row.agent_config)).toMatchObject({ approvalMode: 'readonly', preset: null });
+  });
+
+  it('⑧ 团队选 custom 且 base 是 full-auto、成员子聊天调成自动编辑 → 按自动编辑问(custom 按 base 算宽度)', async () => {
+    writeFileSync(join(home, 'config.json'), JSON.stringify({ approval: { base: 'full-auto', allow: [], ask: [], deny: [] } }));
+    const member = { teamMember: { teamSessionId: 'T', name: 'Bo', roster: '- Bo', followSessionMode: true } };
+    await setStoredMode('T', 'custom'); await setStoredMode('S', 'auto-edit');
+    script = [writeStep('a.txt'), finalStep()];
+    const asked = await run(member, true);
+    expect(asked.length).toBe(1);
+    expect(asked[0].reason).toMatchObject({ kind: 'escalate', mode: 'auto-edit' });
+    // 反过来:成员子聊天也是 custom → 平手留 custom(base full-auto)→ 不问
+    await setStoredMode('S', 'custom');
+    script = [writeStep('b.txt'), finalStep()];
+    expect(await run(member, true)).toEqual([]);
   });
 
   it('approvalModeSessionIds:带标记的团队成员 = [团队, 成员];其余输入区发起的跟本会话;非输入区与沙箱一律不跟', () => {

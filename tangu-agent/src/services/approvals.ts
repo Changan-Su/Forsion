@@ -227,16 +227,20 @@ export async function storedApprovalMode(sessionId: string): Promise<ApprovalMod
   return APPROVAL_MODES.has(mode) ? mode : undefined;
 }
 
-// 严格度:custom 与 auto-edit 同档(custom 的规则是用户自己的全局配置,平手按列表先后)。
-const STRICTNESS: Record<ApprovalMode, number> = { readonly: 0, 'auto-edit': 1, custom: 1, 'full-auto': 2 };
+const STRICTNESS: Record<Exclude<ApprovalMode, 'custom'>, number> = { readonly: 0, 'auto-edit': 1, 'full-auto': 2 };
+/** custom 有多宽看它的 base(config.json 里可以是 full-auto),不能钉成自动编辑那一档。 */
+const strictnessOf = (m: ApprovalMode): number => STRICTNESS[m === 'custom' ? customRules().base : m];
 /** 审批闸现读:几个会话存值里最严的那个(团队成员 = [团队会话, 成员会话]:团队档是上限,成员子聊天里只能调得更严)。
+ *  平手留 custom(同样宽的基础上还叠着用户的 deny / ask 规则),再平手按列表先后。
  *  都没存 → undefined(回落启动快照);**读失败 → readonly**:读不到用户此刻的档时回落快照 = 可能正好放开用户刚收紧的档(Codex 09-21 P1)。 */
 export async function liveApprovalMode(sessionIds: string[]): Promise<ApprovalMode | undefined> {
   let best: ApprovalMode | undefined;
   for (const id of sessionIds) {
     let m: ApprovalMode | undefined;
     try { m = await storedApprovalMode(id); } catch { return 'readonly'; }
-    if (m && (best === undefined || STRICTNESS[m] < STRICTNESS[best])) best = m;
+    if (!m) continue;
+    const d = best === undefined ? -1 : strictnessOf(m) - strictnessOf(best);
+    if (d < 0 || (d === 0 && m === 'custom')) best = m;
   }
   return best;
 }
