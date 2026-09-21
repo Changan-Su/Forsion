@@ -164,7 +164,23 @@ const ttftVerdict = (samples, expected) => {
   return { ok: expected > 0 && samples.length === expected && !errors && !noToken && !noUsage, errors, noToken, noUsage };
 };
 
-// ── --selftest:上面三个纯判据的负对照(不起引擎、不烧额度、不需要凭证)。每条都配一个**该红的**输入。──
+/**
+ * dupSpeeches 的激活窗:一位成员的发言按「它之前有几次该成员的 team_member start」分桶(Map 窗号 → 发言文本)。
+ * 窗界必须用**事件 seq**,不能用收到时刻:一次激活收场时引擎连发「最终发言 → end → 下一次激活 start」,常在同一个 SSE 包里、
+ * Date.now() 同一毫秒 —— 旧版按毫秒 `<=` 划窗,把上一次激活的最终发言算进下一次激活,两次激活各一条的正常发言被判成
+ * 「一次激活说两遍」(09-21 group 场景 4 跑 2 红;隔离库 agent_run_events 实证:发言 seq 15 < end 16 < 下一次 start 17)。
+ */
+const activationBuckets = (group, slug) => {
+  const starts = group.starts.filter((s) => s.slug === slug).map((s) => s.seq);
+  const buckets = new Map();
+  for (const r of group.remarks.filter((r) => r.slug === slug)) {
+    const k = starts.filter((q) => q < r.seq).length;
+    buckets.set(k, [...(buckets.get(k) || []), String(r.text || '')]);
+  }
+  return buckets;
+};
+
+// ── --selftest:上面几个纯判据的负对照(不起引擎、不烧额度、不需要凭证)。每条都配一个**该红的**输入。──
 if (argv.includes('--selftest')) {
   const fails = [];
   const check = (name, got, want) => { if (got !== want) fails.push(`${name}:得到 ${got},应为 ${want}`); };
@@ -206,8 +222,13 @@ if (argv.includes('--selftest')) {
   check('ttft 条数不足(负对照)', ttftVerdict([ts()], 2).ok, false);
   check('ttft 零轮(负对照)', ttftVerdict([], 0).ok, false);
   check('ttft run 报错(负对照)', ttftVerdict([ts({ error: 'boom' }), ts()], 2).ok, false);
+  // 激活窗:取 09-21 失败跑的真实 seq(start 4 / 发言 15 / 下一次 start 17 / 发言 21),收到时刻全同一毫秒 —— 旧的按毫秒划窗会得 '2'
+  const grp = (remarks, starts) => ({ remarks: remarks.map(([seq, text]) => ({ slug: 'b', seq, at: 7, text })), starts: starts.map((seq) => ({ slug: 'b', seq, at: 7 })) });
+  const sizes = (g) => [...activationBuckets(g, 'b').values()].map((t) => t.length).join(',');
+  check('激活窗 两次激活各一条(同毫秒到达)', sizes(grp([[15, 'x'], [21, 'y']], [4, 17])), '1,1');
+  check('激活窗 同一激活 team_say + 最终答复(负对照:必须同窗才比得到)', sizes(grp([[9, 'x'], [15, 'y']], [4, 17])), '2');
   if (fails.length) { console.error(`--selftest 失败 ${fails.length} 条:\n  ${fails.join('\n  ')}`); process.exit(1); }
-  console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict,含负对照)');
+  console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict / activationBuckets,含负对照)');
   process.exit(0);
 }
 
@@ -395,12 +416,12 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'usage') ev.usages.push(p);
           // 团队运行模式(群聊分叉):发言序 + 收场原因是 group 场景的唯一观测点;done 的 content 恒空,靠 ev.done 判链路走通。
           else if (e.type === 'group_speaker' && p.phase === 'start') ev.group.speakers.push(String(p.slug || '?'));
-          else if (e.type === 'group_speaker' && p.phase === 'end') ev.group.remarks.push({ ...p, at: Date.now(), duringActivation: ev.group.starts.some((s) => s.slug === p.slug && !ev.group.ends.some((x) => x.runId === s.runId)) });
+          else if (e.type === 'group_speaker' && p.phase === 'end') ev.group.remarks.push({ ...p, at: Date.now(), seq: e.seq, duringActivation: ev.group.starts.some((s) => s.slug === p.slug && !ev.group.ends.some((x) => x.runId === s.runId)) });
           else if (e.type === 'team_output') ev.group.outputs.push(p.message);
           else if (e.type === 'group_summary') ev.group.summary = p;
           else if (e.type === 'group_ended') ev.group.ended = p;
           // 并行团队(09-16 第四轮):成员激活的起止时刻 —— 「真并行」的唯一观测点是两次激活的时间区间交叠。
-          else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), at: Date.now(), runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
+          else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), at: Date.now(), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
           else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped'].includes(p.phase)) ev.statuses.push(p);
@@ -592,6 +613,7 @@ try {
     const both = sp.includes('live-alpha') && sp.includes('live-beta');
     // 09-20 回归:同一成员相邻两条发言不得是同一件事(先 team_say 再把最终答复原样重说 = 用户看到的「重复发言」)。
     // Alpha 的提示词刻意要求「先发进度条、再派活」—— 那两条内容不同,是本判据的负对照。
+    // Beta 常在全员起头那次抢答一版口号 + DONE,被 Alpha 的 @ 拉回后再交一版:两次激活各一条,不归本判据管(09-21 实测 7/7 跑都这样)。
     const dups = await dupSpeeches(ev, ['live-alpha', 'live-beta']);
     // 调档要真的落到那位成员的子 run 上:读成员工作会话的 agent_config(子 run 与它同形),Alpha 必须仍是缺省。
     const cfgOf = async (id) => id ? ((await api(`/agent/sessions/${id}/config`).catch(() => null))?.agent_config || {}) : {};
@@ -1255,19 +1277,13 @@ try {
 
 /**
  * 09-20:同一次激活里「同一件事说两遍」的判据(先 team_say 广播、最终答复再换个排版重说 = 用户报的重复发言)。
- * 按成员的 team_member start 时刻划出激活窗,只比同一窗内的发言 —— 跨激活地重提角色分工是模型表达问题,不是引擎重复。
+ * 按成员的 team_member start 划出激活窗(activationBuckets,按事件 seq),只比同一窗内的发言 —— 跨激活地重提角色分工是模型表达问题,不是引擎重复。
  */
 async function dupSpeeches(ev, slugs) {
   const { speechCoverage, speechTokens } = await import(join(root, 'dist', 'services', 'groupChat.js'));
   const out = [];
   for (const slug of slugs) {
-    const starts = ev.group.starts.filter((s) => s.slug === slug).map((s) => s.at).sort((a, b) => a - b);
-    const buckets = new Map();
-    for (const r of ev.group.remarks.filter((r) => r.slug === slug)) {
-      const k = starts.filter((t) => t <= r.at).length;
-      buckets.set(k, [...(buckets.get(k) || []), String(r.text || '')]);
-    }
-    for (const [k, texts] of buckets) {
+    for (const [k, texts] of activationBuckets(ev.group, slug)) {
       // 判据与引擎同一套:每条与本次激活**之前所有发言的并集**比覆盖率(不是只比相邻 —— X → 进度 Y → final 又说 X 会假绿;Codex 评审 #9)。
       for (let i = 1; i < texts.length; i++) {
         const cov = speechCoverage(texts.slice(0, i).map(speechTokens), texts[i]);
