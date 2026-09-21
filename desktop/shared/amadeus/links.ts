@@ -124,6 +124,44 @@ export function resolvePageName(name: string, pages: string[], sourcePath?: stri
   return pages.find((p) => pageKey(p) === target) ?? null
 }
 
+// ── 围栏代码块(存盘还原 / 改名重写 / 搜索解码共用一套配对)───────────────────────────────
+// 围栏行:可带列表 / 引用前缀(`* ```js`、`> ```` —— 编辑器把列表项首个代码块写成前一种);容 CRLF。
+const FENCE_LINE = /^(?:[ \t]*(?:[-*+]|\d{1,9}[.)])[ \t]+|[ \t]*>[ \t]?)*[ \t]*(`{3,}|~{3,})([^\r\n]*)\r?$/
+
+/** 开围栏:反引号围栏的信息串里不许再有反引号(否则是行内代码,如 ```` ```a``` 前 ````)。 */
+function fenceOpen(line: string): { ch: string; n: number } | null {
+  const m = FENCE_LINE.exec(line)
+  if (!m || (m[1][0] === '`' && m[2].includes('`'))) return null
+  return { ch: m[1][0], n: m[1].length }
+}
+/** 收尾:同字符、不短于开头、后面只许空白(```` ```js ```` 不是收尾)。 */
+const fenceCloses = (line: string, open: { ch: string; n: number }): boolean => {
+  const m = FENCE_LINE.exec(line)
+  return !!m && m[1][0] === open.ch && m[1].length >= open.n && !m[2].trim()
+}
+
+/**
+ * 围栏代码块之外的每一行交给 fn;整块围栏(含开、收两行)逐字留着。按行切 `\n`,CRLF 的 `\r` 留在行尾。
+ * **只有找得到配对收尾的才算围栏**:编辑器序列化出来的围栏永远成对(且外层比块内任何反引号串都长),
+ * 配不上对的「开围栏」只可能是误判。旧写法「见到像围栏的行就翻转」在编辑器自己写出的形态上错位 ——
+ * ````` ```` `````-里套-```` ``` ````、列表项里的 `* ```js` + 缩进收尾 —— 于是后文整段被当成围栏内跳过:
+ * 新打的 `[[链接]]` 按 `\[\[` 落盘成死链、URL 转义留着、改名不跟、搜索不解(09-18 评审实测)。
+ * ponytail: 一堆没收尾的开围栏各扫到文末是 O(行²),真实笔记碰不到。
+ */
+export function mapOutsideFences(md: string, fn: (line: string) => string): string {
+  const lines = md.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const open = fenceOpen(lines[i])
+    if (open) {
+      let j = i + 1
+      while (j < lines.length && !fenceCloses(lines[j], open)) j++
+      if (j < lines.length) { i = j; continue }
+    }
+    lines[i] = fn(lines[i])
+  }
+  return lines.join('\n')
+}
+
 /**
  * Undo remark-stringify's escaping of plain-text `[[` (it emits `\[\[` for wikilinks that were
  * typed but not yet re-parsed into nodes — the index regex above then never matches, so freshly
@@ -134,19 +172,7 @@ export function resolvePageName(name: string, pages: string[], sourcePath?: stri
  */
 export function unescapeWikiOutsideFences(md: string): string {
   if (!md.includes('\\[\\[')) return md
-  const lines = md.split('\n')
-  let fence: '`' | '~' | null = null
-  for (let i = 0; i < lines.length; i++) {
-    const m = /^ {0,3}(`{3,}|~{3,})/.exec(lines[i])
-    if (m) {
-      const mark = m[1][0] as '`' | '~'
-      if (!fence) fence = mark
-      else if (mark === fence) fence = null
-      continue
-    }
-    if (!fence) lines[i] = lines[i].replace(/\\\[\\\[/g, '[[')
-  }
-  return lines.join('\n')
+  return mapOutsideFences(md, (line) => line.replace(/\\\[\\\[/g, '[['))
 }
 
 /**
@@ -176,21 +202,11 @@ export function unescapeWikiOutsideFences(md: string): string {
  */
 export function normalizeUrlLiterals(md: string): string {
   if (!md.includes('\\') && !md.includes('<')) return md
-  const lines = md.split('\n')
-  let fence: '`' | '~' | null = null
-  for (let i = 0; i < lines.length; i++) {
-    const m = /^ {0,3}(`{3,}|~{3,})/.exec(lines[i])
-    if (m) {
-      const mark = m[1][0] as '`' | '~'
-      if (!fence) fence = mark
-      else if (mark === fence) fence = null
-      continue
-    }
-    if (fence) continue
+  return mapOutsideFences(md, (line) =>
     // ⚠️ **行内代码逐字保留**:``\`https\\://host\`` 是用户真写的字节(转义示例/正则示例),
     // 序列化器根本不碰反引号里的内容,所以那里出现的反斜杠不是它加的,不许还原
     // (Codex 2026-08-29)。按反引号切段,只处理段外。
-    lines[i] = lines[i]
+    line
       .split(/(`+[^`]*`+)/)
       .map((seg, k) => (k % 2 === 1 ? seg : seg
         .replace(/(?<=[ps])\\:(?=\/)/g, ':')
@@ -198,9 +214,75 @@ export function normalizeUrlLiterals(md: string): string {
         .replace(/(?<=[+\-.\w])\\@(?=[-.\w])/g, '@')
         .replace(/(\[\[)<(https?:\/\/[^>\s\]]+)>/g, '$1$2')))
       .join('')
-      .replace(/^<(https?:\/\/[^>\s]+)>$/, '$1')
+      .replace(/^<(https?:\/\/[^>\s]+)>$/, '$1'),
+  )
+}
+
+/**
+ * 这个码点写成数字字符引用(`&#x..;`)能不能原样读回来。照抄 micromark-util-decode-numeric-character-reference
+ * 的拒收表:C0 控制符(除 HT/LF/FF/CR)、DEL 与 C1 控制符、代理项、非字符、越界 —— 这些一律解成 U+FFFD。
+ * 编码侧(attentionFlanking:能不能编)与解码侧(decodeCharRefs:能不能解)共用这一张表。
+ */
+export function refDecodable(cp: number): boolean {
+  return !(
+    cp < 0x09 || cp === 0x0b || (cp > 0x0d && cp < 0x20) || (cp > 0x7e && cp < 0xa0) ||
+    (cp > 0xd7ff && cp < 0xe000) || (cp > 0xfdcf && cp < 0xfdf0) ||
+    (cp & 0xffff) === 0xffff || (cp & 0xffff) === 0xfffe || cp > 0x10ffff
+  )
+}
+
+// micromark 的长度上限:十六进制 ≤6 位、十进制 ≤7 位,超了就不是字符引用。
+const NUMERIC_REF = /&#(?:[xX]([0-9a-fA-F]{1,6})|([0-9]{1,7}));/g
+
+/** 一行里行内代码(`` ` `` 串到同长 `` ` `` 串)之外的段交给 fn;没配上对的反引号按字面处理。 */
+function outsideCodeSpans(line: string, fn: (seg: string) => string): string {
+  let out = ''
+  let last = 0
+  let i = 0
+  while ((i = line.indexOf('`', i)) >= 0) {
+    let bs = 0
+    while (line[i - 1 - bs] === '\\') bs++
+    if (bs % 2) { i++; continue } // `\`` 是字面反引号,开不了行内代码(剩下的反引号照常)
+    let n = 0
+    while (line[i + n] === '`') n++
+    let j = i + n
+    let close = -1
+    while ((j = line.indexOf('`', j)) >= 0) {
+      let k = 0
+      while (line[j + k] === '`') k++
+      if (k === n) { close = j; break }
+      j += k
+    }
+    if (close < 0) { i += n; continue }
+    out += fn(line.slice(last, i)) + line.slice(i, close + n)
+    last = i = close + n
   }
-  return lines.join('\n')
+  return out + fn(line.slice(last))
+}
+
+/**
+ * 正文里的数字字符引用解回字符 —— **只给搜索 / 标签 / 双链 / 摘要用的副本**。编辑器为了让 `**`/`~~` 往返,
+ * 会把定界符旁的字写成 `&#x540E;` 这类引用(attentionFlanking);索引读原文就会「后面」搜不到
+ * `**注意：**&#x540E;面`、`#项&#x76EE;` 被截成标签 `#项`。
+ * ⚠️ 别拿它去改 stripForIndex 的输出:`@` 时间标记按「清洗文本的第 occ 条同文行」回写磁盘,要的是原文。
+ * 口径:只解 micromark 认的(refDecodable);换行类(LF/CR)解成空格,保证解码副本与原文逐行对齐
+ * (搜索命中行号靠它);反斜杠转义的 `\&#x41;`、行内代码与围栏代码块里的一律不动;单趟替换不会二次解。
+ * ponytail: 跨行的行内代码、缩进代码块、`$` 数学不认(按行处理),里头的引用会被解 —— 只多几条搜索命中,不落盘。
+ *   未配对的「开围栏」同理当普通行。最坏情况是一堆没收尾的开围栏各扫到文末(O(行²)),真实笔记里碰不到。
+ */
+export function decodeCharRefs(md: string): string {
+  if (!md.includes('&#')) return md
+  const decode = (seg: string): string =>
+    seg.replace(NUMERIC_REF, (m: string, hex: string | undefined, dec: string | undefined, off: number, str: string) => {
+      let bs = 0
+      while (str[off - 1 - bs] === '\\') bs++
+      if (bs % 2) return m
+      const cp = hex ? parseInt(hex, 16) : parseInt(dec as string, 10)
+      if (!refDecodable(cp)) return m
+      return cp === 0x0a || cp === 0x0d ? ' ' : String.fromCodePoint(cp)
+    })
+  // 围栏见 mapOutsideFences(只认配对的:在代码里多解几个只多几条搜索命中,状态错位则后文全不解)。
+  return mapOutsideFences(md, (line) => (line.includes('&#') ? outsideCodeSpans(line, decode) : line))
 }
 
 /**

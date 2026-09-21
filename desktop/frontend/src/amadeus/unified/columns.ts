@@ -301,7 +301,8 @@ export const columnsNormalizer = $prose(() =>
     key: new PluginKey('AMX_COLUMNS_NORMALIZE'),
     appendTransaction: (trs, _old, state) => {
       if (!trs.some((t) => t.docChanged)) return null
-      const structural = trs.some((t) => t.getMeta('uiEvent') === 'drop' || t.getMeta('amxColumns'))
+      const structural = trs.some((t) =>
+        (t.getMeta('uiEvent') === 'drop' || t.getMeta('amxColumns')) && !t.getMeta('amxColumnsKeepEmpty'))
       const { paragraph, html } = state.schema.nodes
       // 空锚不发标记(PM createAndFill 自动补出的 cell anchor='',发出去就是 `<!-- a  -->` 毁格式)。
       const markerParas = (anchor: string): ProseNode[] =>
@@ -487,6 +488,9 @@ export function splitToColumn(view: EditorView, from: number, to: number, node: 
   // 落点=右列那个空段的内部(行尾 -3 = 跳过 段闭合/cell 闭合/row 闭合 三个位置)。
   tr = tr.setSelection(TextSelection.near(tr.doc.resolve(from + rowNode.nodeSize - 3)))
   tr.setMeta('amxColumns', true)
+  // 这枚空 cell 是“移到新列”刻意创建的可输入落点,不是拖拽后遗留的空列。普通结构清理会
+  // 当场删掉它并因只剩一列而解散整行(用户看到的就是图片/附件“无法分栏”)。
+  tr.setMeta('amxColumnsKeepEmpty', true)
   view.dispatch(tr.scrollIntoView())
   return true
 }

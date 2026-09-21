@@ -8,7 +8,7 @@
 // 外部回灌:等打字静默 → 重读 → fm 侧直接换状态,正文侧走**同实例最小差异事务**;回灌期间冻结保存。
 // 本编辑器刻意不写 pageStore(陈旧快照经 reconcilePage 回写会复活旧内容,数据安全优先);
 // 只读它的标题聚焦请求(新建流)与 pages(wiki 补全),写侧仅 refreshPages(纯刷新)。
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
 import { MilkdownProvider, useInstance } from '@milkdown/react'
 import { editorViewCtx, parserCtx, serializerCtx } from '@milkdown/kit/core'
 import { NodeSelection, TextSelection } from '@milkdown/kit/prose/state'
@@ -695,6 +695,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         focusPlace={focusPlace}
         onFocused={onFocused}
         unified
+        attachmentPagePath={path}
         extraPlugins={extraPlugins}
         readOnly={readOnly}
       />
@@ -1508,7 +1509,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
 
   // 生命周期登记(Codex P0):换库前 flushAllScopes 要等我们落盘;删除/改名/移动要能叫停本实例
   // (防抖写复活刚删/刚移走的文件)。
-  useEffect(() => {
+  useLayoutEffect(() => {
     return registerUnifiedPipe({
       path,
       flush: (strict = false) => {

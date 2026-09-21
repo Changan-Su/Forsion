@@ -12,8 +12,8 @@
 import type { ResolvedModel } from '../core/types.js';
 import { makeDirectModel } from './openaiCompat.js';
 
-/** 直连推理协议。'openai' = OpenAI 兼容 /chat/completions(默认);其余为订阅登录的原生端点。 */
-export type DirectProviderProtocol = 'openai' | 'anthropic-messages' | 'openai-responses';
+/** 直连推理协议。'openai' = OpenAI 兼容 /chat/completions(默认);其余为订阅登录的专用端点。 */
+export type DirectProviderProtocol = 'openai' | 'anthropic-messages' | 'openai-responses' | 'grok-build';
 
 export interface DirectProvider {
   providerId: string; // 'openai' / 'ollama' / 'anthropic-compat' …(也用作 modelId 前缀)

@@ -81,3 +81,17 @@ describe('rewriteNoteRefs — 移动', () => {
     expect(rewriteNoteRefs('[[Foo.fd/X]]', 'S.md', 'S.md', P)).toBe('[[Bar.fd/X]]')
   })
 })
+
+// 09-18:围栏判断换成 links.ts 的配对版(mapOutsideFences)。旧判断已认「同字符 + 不短于开栏」,但不认
+// 列表前缀、也把带信息串的 ```js 当收尾 —— 列表里的代码块之后,整篇的 [[链接]] 改名都不跟。
+describe('rewriteNoteRefs — 围栏配对(09-18)', () => {
+  const P = plan({ 'Foo.md': 'Bar.md' }, ['Foo.md', 'S.md'])
+  it('列表项首个子块是代码块(`* ```js` + 缩进收尾):块内不动,块后照改', () => {
+    const src = ['* ```js', '  [[Foo]]', '  ```', '见 [[Foo]]'].join('\n')
+    expect(rewriteNoteRefs(src, 'S.md', 'S.md', P)).toBe(['* ```js', '  [[Foo]]', '  ```', '见 [[Bar]]'].join('\n'))
+  })
+  it('块里一行 ```js 不是收尾', () => {
+    const src = ['```', '```js', '[[Foo]]', '```', '见 [[Foo]]'].join('\n')
+    expect(rewriteNoteRefs(src, 'S.md', 'S.md', P)).toBe(['```', '```js', '[[Foo]]', '```', '见 [[Bar]]'].join('\n'))
+  })
+})

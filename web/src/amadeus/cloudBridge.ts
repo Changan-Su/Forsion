@@ -65,7 +65,7 @@ import {
 // ---------------------------------------------------------------------------
 
 interface VaultDto { id: string; name: string; lastChangeSeq: number; sizeBytes: number; createdAt: string }
-interface TreeDto { pages: string[]; files: Array<{ path: string; size: number }>; folders: string[]; seq: number }
+interface TreeDto { pages: string[]; files: Array<{ path: string; size: number }>; folders: string[]; seq: number; maxFileBytes?: number }
 interface FileDto { path: string; kind: string; content: string; seq: number; hash: string; updatedAt: string }
 interface PutResultDto { seq: number; hash: string }
 interface MoveResultDto { path: string; seq: number }
@@ -308,7 +308,12 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     }
     treeState = entry
     entry.promise.then(
-      (t) => { entry.settled = true; saveTreeSnap(v, t) }, // 顺手落快照:冷启动 SWR 的数据源
+      (t) => {
+        entry.settled = true
+        saveTreeSnap(v, t) // 顺手落快照:冷启动 SWR 的数据源
+        // 本库二进制单文件上限(属主会员档位):amadeusImport 的上传预检读它,省一趟注定 413 的大上传
+        ;(window as unknown as { amadeusCloudMaxFileBytes?: number }).amadeusCloudMaxFileBytes = t.maxFileBytes
+      },
       () => { if (treeState === entry) treeState = null }, // 失败不缓存
     )
     return entry.promise

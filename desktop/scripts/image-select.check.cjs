@@ -1,6 +1,7 @@
 // 图片选中 / 缩放 / 复制剪切 / 双击看源码(2026-08-27 用户实报「点击图片应该能选中、能改尺寸」)。
 // 契约:
-//   · 单击图片 → 图片**不让位给源码**,进选中态(PM 选区精确铺在 `![[…]]` 那段上,wrap 带 data-selected)。
+//   · 单击图片 → 图片**不让位给源码**,进选中态;标准图片选 image NodeSelection,
+//     独占行的 `![[…]]` 提升为 paragraph NodeSelection,行内 `![[…]]` 选精确源码范围。
 //   · 选中态挂右缘缩放把手,拖它 → 松手一次性把 `|宽度` 写回源码并落盘。
 //   · 复制 / 剪切 = PM 原生:剪贴板拿到的必须是**字面** `![[pic.png|200]]`(remark 转义过就废了)。
 //   · **双击 = 看大图**(UnifiedPage 的灯箱,既存功能;用户 2026-08-28 拍板),源码入口只留悬停的 `</>`。
@@ -32,6 +33,7 @@ function findChromium() {
 }
 
 const URL = process.env.HARNESS_URL || 'http://localhost:5173/harness.html'
+const SHOT_DIR = (process.argv.find((a) => a.startsWith('--shot=')) || '').slice('--shot='.length)
 /** 台架里必须用**能真加载**的图:`amadeus-asset://` 在浏览器解析不了,坏图 + 空 alt 会塌成
  *  0×0,点击压根落不到元素上(排查时被它骗过一次)。120×80 的 SVG data URL,isExternal 放行。 */
 const IMG = 'data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMjAiIGhlaWdodD0iODAiPjxyZWN0IHdpZHRoPSIxMjAiIGhlaWdodD0iODAiIGZpbGw9IiM2YzVjZTciLz48L3N2Zz4='
@@ -121,6 +123,10 @@ async function main() {
   }), UBODY)
   check('I1 单击进选中态,图片仍在(没让位给源码)', st.sel === true && st.imgs === 1 && !st.text.includes('[['), JSON.stringify(st))
   check('I1 选中态挂出缩放把手', st.handle === true, JSON.stringify(st))
+  if (SHOT_DIR) {
+    fs.mkdirSync(SHOT_DIR, { recursive: true })
+    await p.screenshot({ path: path.join(SHOT_DIR, 'image-selected.png'), fullPage: true })
+  }
 
   // ── I2 v4:复制 = 字面源码 ────────────────────────────────────────────────
   check('I2 Cmd+C 拿到字面 `![[pic.png|200]]`', (await clip(p, UBODY, 'copy')) === '![[pic.png|200]]', JSON.stringify(await clip(p, UBODY, 'copy')))
@@ -280,8 +286,11 @@ async function main() {
   st = await p.evaluate(() => ({
     sel: document.querySelector('.wiki-inline-img-wrap')?.hasAttribute('data-selected') ?? null,
     handle: !!document.querySelector('.amx-img-resize'),
+    nodeTag: document.querySelector('.ProseMirror-selectednode')?.tagName ?? null,
   }))
   check('I11 单击进选中态并挂出把手', st.sel === true && st.handle === true, JSON.stringify(st))
+  check('I11 标准图片选 image 节点,不残留整段高的原生选区边界', st.nodeTag !== 'P', JSON.stringify(st))
+  if (SHOT_DIR) await p.screenshot({ path: path.join(SHOT_DIR, 'image-selected-real.png'), fullPage: true })
   const plainCopy = await clip(p, UBODY, 'copy')
   check('I11 复制的纯文本 = 字面 markdown(默认 textBetween 对图片给空串)', plainCopy === `![](${IMG})`, JSON.stringify(plainCopy.slice(0, 40)))
 
@@ -396,6 +405,23 @@ async function main() {
     await p.close()
     }
   }
+
+  // ── I17 独占段图片是顶层块选区,可直接走通用「移到新列」 ──────────────────────
+  p = await open(U4, '.unified-body')
+  r = await rectOf(p, '.wiki-inline-img-wrap')
+  if (!r) {
+    skipRest(['I17 图片右键菜单可分栏', 'I17 分栏后图片仍渲染'])
+  } else {
+    await p.mouse.click(r.x + 30, r.cy, { button: 'right' })
+    await p.waitForSelector('.unified-block-menu')
+    const col = p.locator('.unified-block-menu button').filter({ hasText: '移到新列' })
+    check('I17 图片整块选中后提供通用分栏操作', (await col.count()) === 1)
+    await col.click()
+    await p.waitForTimeout(500)
+    const shaped = await p.evaluate(() => ({ rows: document.querySelectorAll('.amx-ucolrow').length, imgs: document.querySelectorAll('.amx-ucolrow .wiki-inline-img').length }))
+    check('I17 图片可移入新列且仍保持附件渲染', shaped.rows === 1 && shaped.imgs === 1, JSON.stringify(shaped))
+  }
+  await p.close()
 
   const fails = results.filter((x) => !x).length
   console.log(`\n${results.length - fails}/${results.length} passed, ${fails} failed`)

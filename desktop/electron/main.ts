@@ -3,6 +3,7 @@ import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/ho
 import { startMiniCursorFollow, readComputerUseForeground, cursorPanelTarget } from './miniCursorFollow'
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
+import { normalizeFloatingPanelOpenOptions, type FloatingPanelOpenOptions } from '../shared/floatingPanel'
 /**
  * Tangu 桌面 GUI — Electron 主进程。
  * 负责:建窗 + 配置持久化(IPC)+ 托管内置 tangu-server(managed 模式,backendManager)。
@@ -18,7 +19,7 @@ import { createSerialQueue, lockedUpdateJson, writePrivateJson } from './configW
 import { existsSync, mkdirSync, realpathSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
-import { forsionHomeDir, tanguDataDir, migrateForsionHome, migrateEngineData, migratePair, setDevMode, defaultWorkspaceDir as forsionWorkspaceDir } from './forsionHome'
+import { bindDevTanguHome, forsionHomeDir, tanguDataDir, migrateForsionHome, migrateEngineData, migratePair, setDevMode, defaultWorkspaceDir as forsionWorkspaceDir } from './forsionHome'
 import { privateHostReason } from './netGuard'
 import { execFile, execFileSync, spawn } from 'child_process'
 import { homedir, hostname, networkInterfaces } from 'os'
@@ -1174,7 +1175,7 @@ function ensureBackend(): Promise<void> {
   return ensureChain
 }
 
-/** 所有窗口(主窗 + 独立窗 + mini)共用的 webPreferences:同一份 preload → 同一 window.tangu 暴露面。 */
+/** 所有窗口(主窗 + 独立窗 + mini + floating)共用的 webPreferences:同一份 preload → 同一 window.tangu 暴露面。 */
 function satelliteWebPreferences(): Electron.WebPreferences {
   return {
     preload: join(__dirname, '../preload/preload.mjs'),
@@ -1352,7 +1353,7 @@ function showMainWindow(): void {
   mainWindow.focus()
 }
 
-// ══ 卫星窗口:独立窗(拖出的 dockview,无 ribbon)+ mini 悬浮卡片 ═══════════════════════
+// ══ 卫星窗口:独立窗(拖出的 dockview,无 ribbon)+ mini 悬浮卡片 + floating 面板 ════════
 interface ViewDesc { type: string; params?: Record<string, unknown> }
 
 const detachedWindows = new Map<string, BrowserWindow>()
@@ -1423,6 +1424,53 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
 async function restoreDetachedWindows(): Promise<void> {
   await loadDetachedState()
   for (const { id, bounds } of [...persistedDetached]) createDetachedWindow({ id, bounds })
+}
+
+const floatingWindows = new Map<string, BrowserWindow>()
+const floatingTargets = new Map<string, FloatingPanelOpenOptions>()
+
+/** Floating Panel is a normal child window: movable/minimizable/closable, but kept above its main window. */
+function openFloatingPanel(raw: unknown): { id: string } | undefined {
+  const target = normalizeFloatingPanelOpenOptions(raw)
+  if (!target) return undefined
+  floatingTargets.set(target.id, target)
+  const existing = floatingWindows.get(target.id)
+  if (existing && !existing.isDestroyed()) {
+    existing.setTitle(target.title)
+    if (existing.isMinimized()) existing.restore()
+    existing.show()
+    existing.focus()
+    if (!existing.webContents.isLoadingMainFrame()) existing.webContents.send('window:floatingTarget', target)
+    return { id: target.id }
+  }
+  const win = new BrowserWindow({
+    parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
+    modal: false,
+    show: false,
+    width: target.width,
+    height: target.height,
+    minWidth: target.minWidth,
+    minHeight: target.minHeight,
+    title: target.title,
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
+    autoHideMenuBar: true,
+    minimizable: true,
+    closable: true,
+    resizable: true,
+    transparent: process.platform === 'darwin',
+    backgroundColor: process.platform === 'darwin' ? '#00000000' : '#fbf8f5',
+    webPreferences: satelliteWebPreferences(),
+  })
+  floatingWindows.set(target.id, win)
+  win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
+  hardenNav(win.webContents)
+  win.once('ready-to-show', () => { if (!win.isDestroyed()) { win.show(); win.focus() } })
+  win.on('closed', () => {
+    if (floatingWindows.get(target.id) === win) floatingWindows.delete(target.id)
+    floatingTargets.delete(target.id)
+  })
+  loadRendererWith(win, { window: 'floating', id: target.id, ui: 'desktop' })
+  return { id: target.id }
 }
 
 let pendingMainPanelTarget: MainPanelTarget | null = null
@@ -1545,7 +1593,7 @@ function toggleMiniWindow(opts?: MiniOpenOptions): void {
   miniAutoPanel?.dismiss()
   if (miniWindow && !miniWindow.isDestroyed()) {
     // 带目标是「把这条正式会话拿到 Mini 继续」:已显示也只更新+聚焦,不能反而把窗口藏掉。
-    if (opts?.sessionId || opts?.spaceId) {
+    if (opts?.sessionId || opts?.spaceId || opts?.view) {
       miniTarget = opts
       if (!miniWindow.webContents.isLoadingMainFrame()) miniWindow.webContents.send('window:miniTarget', opts)
       miniWindow.show()
@@ -3240,6 +3288,10 @@ app.whenReady().then(async () => {
   // provider OAuth(xAI 等):动态 import 包 dist 的 providerOAuth(dev=包根 dist,打包=resources/tangu-server/dist),
   // 与 `tangu login <provider>` 同一实现、同一份 ~/.tangu/provider-auth.json。
   const providerOAuthModule = async (): Promise<any> => {
+    // dev 后端从 ~/.forsion-dev/tangu 起，但 Electron 主进程本身不经 BackendManager.spawn，
+    // 因此须在动态导入前补同一 TANGU_HOME；否则 OAuth 会静默写到正式 ~/.forsion，dev 引擎永远读不到。
+    // 此处在启动迁移之后才绑定，避免把 dev 迁移路径误判成用户手动重定向。
+    bindDevTanguHome()
     const entry = BackendManager.resolveEntry()
     if (!entry) throw new Error('找不到 tangu-server dist(dev 下请先在包根 npm run build)')
     const distRoot = dirname(dirname(entry)) // …/dist/standalone/main.js → …/dist
@@ -3314,7 +3366,7 @@ app.whenReady().then(async () => {
     console.error('[auth] auth.json watcher 注册失败(外部登录变化需重启 App 才生效):', e)
   }
 
-  // ── 多窗口 IPC:独立窗 + mini 卡片 ──
+  // ── 多窗口 IPC:独立窗 + mini 卡片 + floating 面板 ──
   ipcMain.handle('window:detachedReady', (_e, id: string) => {
     const v = pendingDetachedViews.get(String(id)) || []
     pendingDetachedViews.delete(String(id))
@@ -3328,6 +3380,16 @@ app.whenReady().then(async () => {
   ipcMain.on('window:openMini', (e, raw: unknown) => {
     if (!isTrustedSender(e)) return
     toggleMiniWindow(normalizeMiniOpenOptions(raw))
+  })
+  ipcMain.handle('window:openFloating', (e, raw: unknown) => {
+    if (!isTrustedSender(e)) return undefined
+    return openFloatingPanel(raw)
+  })
+  ipcMain.handle('window:floatingReady', (e, rawId: unknown) => {
+    if (!isTrustedSender(e) || typeof rawId !== 'string') return undefined
+    const id = rawId.slice(0, 256)
+    const win = floatingWindows.get(id)
+    return win?.webContents === e.sender ? floatingTargets.get(id) : undefined
   })
   ipcMain.on('window:miniReady', (e) => {
     if (isTrustedSender(e) && e.sender === miniWindow?.webContents && miniTarget) e.sender.send('window:miniTarget', miniTarget)
@@ -3359,6 +3421,13 @@ app.whenReady().then(async () => {
     if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return
     mainPanelReady = true
     if (pendingMainPanelTarget) { e.sender.send('window:mainPanelTarget', pendingMainPanelTarget); pendingMainPanelTarget = null }
+  })
+  ipcMain.on('window:mainAction', (e, action: unknown) => {
+    if (!isTrustedSender(e) || action !== 'onboarding') return
+    showMainWindow()
+    const deliver = (): void => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:mainAction', action) }
+    if (mainWindow?.webContents.isLoadingMainFrame()) mainWindow.webContents.once('did-finish-load', deliver)
+    else deliver()
   })
   ipcMain.on('window:closeSelf', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
   // 系统浏览器兜底(内置浏览器关掉 / mini 窗 / 用户点「用系统浏览器打开」);只放 http(s),

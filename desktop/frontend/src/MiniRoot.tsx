@@ -1,13 +1,15 @@
 import { flushAllScopes } from './amadeus/store/pageStore'
 /** Mini boot connects shared data and a single opt-in Space surface. */
-import { useEffect } from 'react'
-import { MiniColumnHost, getActiveSpace, setActiveSpace, setMiniMainHandler, setMiniViewRouter, showInMainPanel, supportsMiniPanel, subscribeViews, useSpaceStore, useWorkspace } from '@lcl/engine'
+import { useEffect, useState } from 'react'
+import { MiniColumnHost, getActiveSpace, getView, setActiveSpace, setMiniMainHandler, setMiniViewRouter, showInMainPanel, supportsMiniPanel, subscribeViews, useSpaceStore, useWorkspace } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { useI18n } from './i18n'
 import { installFileDropGuard } from './fileDropGuard'
 import { ensureAmadeusReady } from './amadeusPlugins'
 import { windowKind } from './windowKind'
 import type { MiniOpenOptions } from '../../shared/miniPanel'
+
+let directMini: MiniOpenOptions | null = null
 
 if (windowKind() === 'mini') {
   setMiniMainHandler(async (target) => {
@@ -21,6 +23,12 @@ if (windowKind() === 'mini') {
     window.tangu?.showMainPanel?.({ ...target, params })
   })
   setMiniViewRouter((target) => {
+    if (directMini?.view) {
+      if (target.type === directMini.view.type) return target
+      if (target.type === (directMini.mainView?.type || directMini.view.type)) return { type: directMini.view.type, params: { ...directMini.view.params, ...target.params } }
+      showInMainPanel({ ...target })
+      return null
+    }
     const space = getActiveSpace()
     if (!space || !supportsMiniPanel(space)) return null
     const mini = space.mini!
@@ -39,18 +47,36 @@ function buildMiniPanel(): void {
 
 export function MiniRoot() {
   const { t } = useI18n()
+  const [direct, setDirect] = useState<MiniOpenOptions | null>(null)
   useEffect(() => { useApp.getState().setTr((k, vars) => t(k, vars as Record<string, string | number> | undefined)) }, [t])
   useEffect(() => {
     let ready = false
+    let directSeen = false
     const query = new URLSearchParams(location.search)
     let pending: MiniOpenOptions | null = query.get('sessionId') ? { sessionId: query.get('sessionId')! } : null
     const apply = (): void => {
       if (!ready || !pending) return
+      if (pending.view) {
+        const directView = pending.view
+        if (!getView(directView.type)) {
+          if (directSeen) window.tangu?.closeSelf?.()
+          return
+        }
+        directSeen = true
+        const target = pending
+        pending = null
+        directMini = target
+        setDirect(target)
+        useWorkspace.getState().openView(directView.type, { ...directView.params, ...target.params }, 'main')
+        return
+      }
       const spaceId = pending.spaceId || (pending.sessionId ? 'tangu' : undefined)
       const space = useSpaceStore.getState().spaces.find((s) => s.id === spaceId)
       if (!space || !supportsMiniPanel(space)) return // async plugin registration can fulfill the target later
       const target = pending
       pending = null
+      directMini = null
+      setDirect(null)
       setActiveSpace(space.id)
       const params = { ...space.mini!.view.params, ...target.params,
         ...(target.sessionId ? { sessionId: target.sessionId, followActive: false } : {}) }
@@ -62,9 +88,13 @@ export function MiniRoot() {
     const offSpaces = useSpaceStore.subscribe(apply)
     const offViews = subscribeViews(apply)
     void useApp.getState().boot().finally(() => { ready = true; apply() })
-    return () => { off?.(); offSpaces(); offViews(); ready = false }
+    return () => { off?.(); offSpaces(); offViews(); ready = false; directMini = null }
   }, [])
   useEffect(() => { if (window.amadeus) ensureAmadeusReady() }, [])
   useEffect(() => installFileDropGuard(), [])
-  return <MiniColumnHost buildDefault={buildMiniPanel} />
+  return <MiniColumnHost buildDefault={buildMiniPanel} direct={direct?.view ? {
+    title: direct.title,
+    view: direct.view,
+    mainView: direct.mainView ?? direct.view,
+  } : null} />
 }

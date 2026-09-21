@@ -16,6 +16,7 @@ vi.mock('./cloudClient', () => ({
   CloudHttpError: class extends Error {},
   createCloudClient: () => ({ clientId: 'dev', tree: () => env.tree!(),
     putFile: async (_vault: string, file: string) => { env.writes.push(file); return { seq: 1, hash: 'written' } },
+    putBinary: async (_vault: string, file: string) => { env.writes.push(file); return { path: file, size: 0, seq: 1 } },
     listVaults: async () => [{ id: 'vault-a' }],
   }),
 }))
@@ -55,4 +56,28 @@ it('stop waits for an active reconcile and discards queued work before another a
   expect(env.writes).toEqual(completed)
   expect(engine.getStatus().pending).toBe(0)
   expect(engine.getStatus().lastSyncAt).toBeNull()
+})
+
+it('binary pushes follow tree.maxFileBytes (tier limit); an old server without the field keeps the 5MB cap', async () => {
+  const MB = 1024 * 1024
+  const limit: { bytes?: number } = {}
+  env.tree = async () => ({ entries: [], folders: [], seq: 0, maxFileBytes: limit.bytes })
+  const mirror = path.join(env.root, 'mirror') // 与 shadow json(落在 userData = env.root)分开,免得 shadow 被当库文件推
+  await fs.mkdir(mirror)
+  await fs.writeFile(path.join(mirror, 'big.bin'), Buffer.alloc(6 * MB))
+  const { createSyncEngine } = await import('./engine')
+  const engine = createSyncEngine({ loadCreds: () => ({ cloudUrl: 'https://cloud.example', token: 'a' }), onStatus: () => {} }, {
+    localRoot: mirror, shadowName: 'limit-shadow', vaultId: 'first', serverDir: '',
+  })
+  stop = () => engine.stop()
+  await engine.restart()
+  await vi.waitFor(() => expect(engine.getStatus().skipped).toEqual([{ path: 'big.bin', reason: 'TOO_LARGE' }]))
+  expect(engine.getStatus().maxFileBytes).toBeNull()
+  expect(env.writes).toEqual([])
+
+  limit.bytes = 10 * MB // 开了 Plus:下一轮全量对账就按新上限推,之前 TOO_LARGE 跳过的文件重新判定
+  await engine.syncNow()
+  await vi.waitFor(() => expect(env.writes).toEqual(['big.bin']))
+  expect(engine.getStatus().maxFileBytes).toBe(10 * MB)
+  expect(engine.getStatus().skipped).toEqual([])
 })

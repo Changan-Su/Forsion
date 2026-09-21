@@ -79,9 +79,10 @@ function formatDate(value?: string | null): string {
   return new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric' }).format(date)
 }
 
-export function MarketModal() {
+export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
   const { t } = useI18n()
-  const close = useApp((s) => s.closeMarket)
+  const storeClose = useApp((s) => s.closeMarket)
+  const close = onClose ?? storeClose
   const toast = useApp((s) => s.toast)
   const [tab, setTab] = useState<Tab>('discover')
   const [catalog, setCatalog] = useState<MarketCard[]>([])

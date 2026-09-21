@@ -456,8 +456,9 @@
    `--accent`,裸写 `var(--primary)` 会整条声明作废 —— 环和把手当场隐形(截图才发现)。 */
 .am-app .wiki-inline-img-wrap[data-selected] > img,
 .am-app .wiki-inline-img-wrap[data-resizing] > img {
-  outline: 2px solid var(--primary, var(--accent, #6c5ce7));
-  outline-offset: 1px;
+  outline: 1px solid color-mix(in srgb, var(--primary, var(--accent, #6c5ce7)) 82%, transparent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--primary, var(--accent, #6c5ce7)) 58%, transparent);
 }
 /* `![](path)` 图片的源码行(mdImage.ts:`</>` / 双击弹出):浮在图片上方一行。
    wrap 是 inline-block + line-height:0,输入框得自己把行高要回来。 */
@@ -471,18 +472,31 @@
 .am-app .amx-img-resize {
   position: absolute;
   top: 50%;
-  right: 5px;
+  right: -7px;
   z-index: 3;
-  width: 7px;
-  height: 40px;
-  max-height: 55%;
-  min-height: 16px;
+  width: 14px;
+  height: 36px;
+  max-height: 58%;
+  min-height: 18px;
   transform: translateY(-50%);
-  border-radius: 4px;
-  background: var(--primary, var(--accent, #6c5ce7));
-  box-shadow: 0 0 0 1.5px var(--bg-card, var(--bg));
+  background: transparent;
   cursor: ew-resize;
   touch-action: none;
+}
+.am-app .amx-img-resize::before {
+  content: '';
+  position: absolute;
+  left: 5px;
+  top: 20%;
+  bottom: 20%;
+  width: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--primary, var(--accent, #6c5ce7)) 72%, var(--bg-card, var(--bg)));
+  transition: background var(--duration-fast, 0.14s) ease, transform var(--duration-fast, 0.14s) ease;
+}
+.am-app .amx-img-resize:hover::before {
+  background: var(--primary, var(--accent, #6c5ce7));
+  transform: scaleY(1.08);
 }
 
 /* 折叠块 `[!fold]`(`>` 空格触发):Notion 手感 —— 不做成有色标注框,只留 chevron + 标题,

@@ -22,6 +22,8 @@ export interface CloudTree {
   folders: string[]
   entries: CloudTreeEntry[]
   seq: number
+  /** 本库二进制单文件上限(属主会员档位);老服务端不下发 = undefined。 */
+  maxFileBytes?: number
 }
 
 export interface CloudChange {
@@ -51,6 +53,9 @@ export interface CloudClientConfig {
 }
 
 export type CloudClient = ReturnType<typeof createCloudClient>
+
+/** 大文件传输时限按体积放宽(按 ≥256 字节/毫秒 ≈ 250KB/s 估)。固定 120s 在 Pro 500MB 下必被掐断 → 引擎当断网重排 → 每轮重传整份。 */
+export const transferTimeoutMs = (bytes: number): number => 120_000 + Math.ceil(bytes / 256)
 
 export function createCloudClient(cfg: CloudClientConfig) {
   const api = `${cfg.baseUrl.replace(/\/+$/, '')}/api/amadeus`
@@ -110,6 +115,7 @@ export function createCloudClient(cfg: CloudClientConfig) {
       return {
         folders: j.folders ?? [],
         seq: Number(j.seq ?? 0),
+        maxFileBytes: Number.isInteger(j.maxFileBytes) && j.maxFileBytes > 0 ? j.maxFileBytes : undefined,
         entries: j.entries.map((e: any) => ({
           path: String(e.path),
           kind: e.kind,
@@ -169,7 +175,7 @@ export function createCloudClient(cfg: CloudClientConfig) {
       if (opts?.ifAbsent) form.set('ifAbsent', 'true')
       if (opts?.baseSeq !== undefined) form.set('baseSeq', String(opts.baseSeq))
       form.set('file', new Blob([new Uint8Array(bytes)]), path.split('/').pop() || 'file')
-      return request('POST', `${api}/vaults/${vaultId}/binary`, { form, timeoutMs: 120_000 })
+      return request('POST', `${api}/vaults/${vaultId}/binary`, { form, timeoutMs: transferTimeoutMs(bytes.length) })
     },
 
     /** 文本版本快照列表(新→旧)。冲突合并用它按 seq 找 base。 */
@@ -185,12 +191,21 @@ export function createCloudClient(cfg: CloudClientConfig) {
 
     /** 精确路径取资产字节(ref=vault 相对路径,不传 page → 命中 exact 候选)。 */
     async getAsset(vaultId: string, path: string): Promise<Buffer> {
-      const res = await fetch(`${api}/vaults/${vaultId}/asset?${q({ ref: path })}`, {
-        headers: { Authorization: `Bearer ${cfg.token}` },
-        signal: AbortSignal.timeout(120_000),
-      })
-      if (!res.ok) throw new CloudHttpError(res.status, null, 'asset:' + path)
-      return Buffer.from(await res.arrayBuffer())
+      const ctrl = new AbortController()
+      let timer = setTimeout(() => ctrl.abort(), 120_000)
+      try {
+        const res = await fetch(`${api}/vaults/${vaultId}/asset?${q({ ref: path })}`, {
+          headers: { Authorization: `Bearer ${cfg.token}` },
+          signal: ctrl.signal,
+        })
+        if (!res.ok) throw new CloudHttpError(res.status, null, 'asset:' + path)
+        // 头到了再按体积重设读体时限(同 putBinary:大文件固定 120s 会被掐断后无限重拉)
+        clearTimeout(timer)
+        timer = setTimeout(() => ctrl.abort(), transferTimeoutMs(Number(res.headers.get('content-length')) || 0))
+        return Buffer.from(await res.arrayBuffer())
+      } finally {
+        clearTimeout(timer)
+      }
     },
 
     async changes(vaultId: string, since: number): Promise<{ changes: CloudChange[]; seq: number }> {

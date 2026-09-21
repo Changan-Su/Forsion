@@ -13,7 +13,8 @@ export const FeedbackModal: React.FC<{
   cfg: TanguDesktopConfig
   activeSession: SessionRecord | null
   onClose: () => void
-}> = ({ cfg, activeSession, onClose }) => {
+  surface?: 'modal' | 'panel'
+}> = ({ cfg, activeSession, onClose, surface = 'modal' }) => {
   const { t } = useI18n()
   // Freeze the originating session: changing the active tab must not attach a different conversation.
   const [context] = useState(() => ({ cfg, session: activeSession }))
@@ -116,7 +117,7 @@ export const FeedbackModal: React.FC<{
   }
 
   return (
-    <div className="memv-modal feedback-overlay" onClick={(event) => { if (event.target === event.currentTarget) close() }}>
+    <div className={surface === 'panel' ? 'feedback-panel-surface' : 'memv-modal feedback-overlay'} onClick={(event) => { if (surface === 'modal' && event.target === event.currentTarget) close() }}>
       <div ref={dialog} className="modal feedback-modal" role="dialog" aria-modal="true" aria-labelledby="feedback-title" tabIndex={-1}
         onKeyDown={(event) => {
           if ((event.metaKey || event.ctrlKey) && event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); void submit() }

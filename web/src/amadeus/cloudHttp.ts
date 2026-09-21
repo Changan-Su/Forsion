@@ -42,6 +42,13 @@ export interface CloudHttp {
   del<T>(path: string, query?: Record<string, string>): Promise<T>
 }
 
+// 上传时限按体积放宽(按 ≥256 字节/毫秒 ≈ 250KB/s 估):云同步单文件随会员档位可到 500MB,固定 120s 必被掐断。
+const formTimeoutMs = (form: FormData): number => {
+  let bytes = 0
+  form.forEach((v) => { if (typeof v !== 'string') bytes += v.size })
+  return 120_000 + Math.ceil(bytes / 256)
+}
+
 export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
   const initialToken = cfg.getToken()
   const owner = cloudAccountIdentity(cfg.apiBase, initialToken)
@@ -68,8 +75,8 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
       body = JSON.stringify(opts.json)
     }
     // 超时闸:无超时的 fetch 一旦挂死,页面 loading 态永不落地(移动端弱网实报「卡很久」根因之一)。
-    // 上传(multipart form)放宽到 120s;普通请求 30s。
-    const timeoutMs = opts?.form ? 120_000 : 30_000
+    // 上传(multipart form)至少 120s、按体积再放宽;普通请求 30s。
+    const timeoutMs = opts?.form ? formTimeoutMs(opts.form) : 30_000
     const ctrl = new AbortController()
     const cancel = () => ctrl.abort(cfg.signal?.reason)
     cfg.signal?.addEventListener('abort', cancel, { once: true })
@@ -79,7 +86,7 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
       res = await (cfg.request ?? fetch)(`${cfg.apiBase}${path}${qs}`, { method, headers, body, signal: ctrl.signal })
     } catch (e) {
       throw new HttpError(0, null, ctrl.signal.aborted
-        ? `请求超时(${timeoutMs / 1000}s),请检查网络后重试`
+        ? `请求超时(${Math.round(timeoutMs / 1000)}s),请检查网络后重试`
         : `网络错误:${e instanceof Error ? e.message : String(e)}`)
     } finally {
       clearTimeout(timer)
@@ -125,7 +132,7 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
       xhr.onerror = () => { cleanup(); reject(new HttpError(0, null, 'network error')) }
       xhr.ontimeout = () => { cleanup(); reject(new HttpError(0, null, 'timeout')) }
       xhr.onabort = () => { cleanup(); reject(new HttpError(409, { code: 'ACCOUNT_CHANGED' }, 'Cloud request cancelled')) }
-      xhr.timeout = 120_000
+      xhr.timeout = formTimeoutMs(form)
       cfg.signal?.addEventListener('abort', cancel, { once: true })
       xhr.send(form)
     })

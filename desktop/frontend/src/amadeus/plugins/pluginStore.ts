@@ -61,6 +61,7 @@ import type {
 import { validateTableSpec } from './tableSpec'
 import { gatePluginManifest, type ExternalPluginSource } from '@amadeus-shared/ipc'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
+import { openWebFloatingPanel } from '../../pluginPanelSeam'
 
 // 宿主自己产出的用户可见文案(插件贡献的文案由插件自己带双语,见 display.ts 的语言解析单点)。
 // 命名空间 `pluginhost.*` 是本文件专属,别处不要复用。
@@ -784,6 +785,25 @@ export const usePluginStore = create<PluginState>((set, get) => {
       set((s) => ({ fileCreators: [...s.fileCreators, { pluginId, item: def }] })),
     // 打开自己的视图:类型名由宿主统一命名空间(plugin:<id>:<viewId>),防跨插件顶替。
     openView: (viewId, opts) => get().viewOpener?.(`plugin:${pluginId}:${viewId}`, opts?.location),
+    ...(!hostTangu()?.mobile ? { openFloatingPanel: (viewId: string, opts?: import('./types').PluginFloatingPanelOptions) => {
+      const type = `plugin:${pluginId}:${viewId}`
+      const def = get().views.find((item) => item.pluginId === pluginId && item.item.id === viewId)?.item
+      if (!def) return
+      const target = { id: type, title: opts?.title || def.title, view: { type, params: opts?.params },
+        width: opts?.width, height: opts?.height, minWidth: opts?.minWidth, minHeight: opts?.minHeight }
+      if (hostTangu()?.openFloatingPanel) void hostTangu()?.openFloatingPanel?.(target)
+      else openWebFloatingPanel(target)
+    } } : {}),
+    ...(hostTangu()?.openMini ? {
+      openMiniPanel: (viewId: string, opts?: import('./types').PluginMiniPanelOptions) => {
+        const type = `plugin:${pluginId}:${viewId}`
+        const def = get().views.find((item) => item.pluginId === pluginId && item.item.id === viewId)?.item
+        if (!def) return
+        const mainType = `plugin:${pluginId}:${opts?.mainViewId || viewId}`
+        hostTangu()?.openMini?.({ title: opts?.title || def.title, params: opts?.params,
+          view: { type, params: opts?.params }, mainView: { type: mainType, params: opts?.mainViewParams } })
+      },
+    } : {}),
     // 宿主 UI 当前语言(2026-08-14 起):插件自带双语词表,用它挑。只报变化,初值走 getLocale()。
     getLocale: () => currentLocale(),
     subscribeLocale: (cb) => {

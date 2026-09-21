@@ -26,6 +26,7 @@ const api: AmadeusApi = {
   saveAttachment: (pagePath, fileName, bytes, opts) =>
     ipcRenderer.invoke(IPC.saveAttachment, pagePath, fileName, bytes, opts),
   openAttachment: (pagePath, ref) => ipcRenderer.invoke(IPC.openAttachment, pagePath, ref),
+  copyAttachment: (pagePath, ref, reference) => ipcRenderer.invoke(IPC.copyAttachment, pagePath, ref, reference),
   openVaultFile: (vaultRel) => ipcRenderer.invoke(IPC.openVaultFile, vaultRel),
   exportPdf: (defaultName) => ipcRenderer.invoke(IPC.exportPdf, defaultName),
   exportCsv: (defaultName, csv) => ipcRenderer.invoke(IPC.exportCsv, defaultName, csv),

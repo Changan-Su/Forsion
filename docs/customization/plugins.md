@@ -21,6 +21,7 @@ Forsion 的插件分两类,设置里统一成一页管理,**内置**与**外置*
 内置插件与外置插件的唯一区别是「内置的已经装好了」,能力完全对等。扩展点包括:
 
 - **自定义视图** — 在工作区里开出一个属于插件的面板或标签页;
+- **Floating / Mini Panel** — 把已注册视图开成独立悬浮窗口或紧凑快捷卡片;
 - **块表面** — 把**真正的笔记块**渲染进插件自己的界面,编辑、双链、嵌入都照常;
 - **自定义文件类型** — 认领某种扩展名,由插件负责打开与渲染;
 - **右上角通知** 与**状态栏项** — 把进度、结果推到你眼前;
@@ -60,3 +61,5 @@ Forsion 的插件分两类,设置里统一成一页管理,**内置**与**外置*
 插件内的 Space 可以声明专用 Mini 视图，只提供当前能力的快捷操作；宿主的“在主面板显示”会携带当前实体参数。未适配的 Space 不出现在 Mini 中，随插件禁用的适配会自动撤下。见 [Mini Panel 开发](./mini-panel-development.md)。
 
 Plugin Spaces can opt into Mini Panel with a dedicated compact view. The host preserves current entity parameters when opening the main panel. See [the development contract](./mini-panel-development.md).
+
+插件也可以不创建完整 Space，直接用 `ctx.openMiniPanel?.(viewId, options)` 打开已注册的紧凑视图；`mainViewId` 指定“在主面板显示”的去向。需要宽屏独立工具页时用 `ctx.openFloatingPanel?.(viewId, options)`。宿主自动添加插件命名空间并负责窗口生命周期。见 [Floating Panel 开发](./floating-panel-development.md)。

@@ -1932,7 +1932,7 @@ registerMessages({
   "settings.tts.testOk": { "zh": "合成成功,正在播放", "en": "Synthesized, playing" },
   "settings.tts.testText": { "zh": "你好呀,我是 Tangu。今天过得怎么样?", "en": "Hi, I'm Tangu. How is your day going?" },
   "settings.notes.cloudSyncLabel": { "zh": "在线同步(Cloud Vault)", "en": "Online sync (Cloud Vault)" },
-  "settings.notes.cloudSyncHint": { "zh": "工作区顶部「本地 | 云端」滑块的云端侧即云端库:与你的云端 vault 双向持续同步(需登录 Forsion 账号),网页端与云端 agent 实时可见。本地侧的笔记永不上云。单文件上限 5MB。", "en": "The Cloud side of the Local | Cloud switch at the top of the workspace is your cloud vault — continuously two-way synced (Forsion login required) and live-visible to the web app and cloud agents. Notes on the Local side never leave this device. 5MB per-file limit." },
+  "settings.notes.cloudSyncHint": { "zh": "工作区顶部「本地 | 云端」滑块的云端侧即云端库:与你的云端 vault 双向持续同步(需登录 Forsion 账号),网页端与云端 agent 实时可见。本地侧的笔记永不上云。单文件上限:笔记 5MB,附件随会员档位(免费版 5MB)。", "en": "The Cloud side of the Local | Cloud switch at the top of the workspace is your cloud vault — continuously two-way synced (Forsion login required) and live-visible to the web app and cloud agents. Notes on the Local side never leave this device. Per-file limit: 5 MB for notes; attachments depend on your plan (5 MB on Free)." },
   "notes.cloud.loginHint": { "zh": "登录 Forsion 账号后,这里会与你的云端 vault 自动双向同步。", "en": "Sign in to Forsion and this vault will two-way sync with your cloud vault automatically." },
   "notes.cloud.loginBtn": { "zh": "登录", "en": "Sign in" },
   "notes.cloud.local": { "zh": "本地", "en": "Local" },

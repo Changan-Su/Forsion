@@ -7,7 +7,7 @@
 
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { linkTarget, pageKey, parseEmbeds, parseTags, parseWikiLinks, resolvePageName, stripForIndex } from '@amadeus-shared/links'
+import { decodeCharRefs, linkTarget, pageKey, parseEmbeds, parseTags, parseWikiLinks, resolvePageName, stripForIndex } from '@amadeus-shared/links'
 import { parseBody, stripFrontmatter } from '@amadeus-shared/compiler'
 import { assetKey, assetRefs } from '@amadeus-shared/assets'
 import type { BacklinkRef, SearchHit, TagCount } from '@amadeus-shared/ipc'
@@ -18,7 +18,10 @@ interface Entry {
   path: string
   title: string
   key: string
+  /** 剥 frontmatter / 注释后的**原文**:`@` 标记(按原文 raw+occ 回写)、嵌入转写、附件引用读它。 */
   text: string
+  /** text 解开数字字符引用后的副本(与 text 逐行对齐):搜索 / 摘要 / 标签 / 双链读它,见 decodeCharRefs。 */
+  plain: string
   lower: string
   links: string[] // distinct outgoing [[link]] targets
   embeds: string[] // distinct raw `![[note#id]]` targets this note embeds
@@ -152,6 +155,7 @@ export class VaultIndex {
       return null
     }
     const text = stripForIndex(raw) // frontmatter + marker comments stripped → clean content
+    const plain = decodeCharRefs(text) // `**注意：**&#x540E;面` → 能搜到「后面」、`#项&#x76EE;` → 标签 `#项目`
     const blocks = parseBody(stripFrontmatter(raw))
       .filter((b) => b.id)
       .map((b) => ({ id: b.id!.toLowerCase(), content: b.content }))
@@ -161,10 +165,11 @@ export class VaultIndex {
       title,
       key: pageKey(p),
       text,
-      lower: text.toLowerCase(),
-      links: parseWikiLinks(text),
+      plain,
+      lower: plain.toLowerCase(),
+      links: parseWikiLinks(plain),
       embeds: parseEmbeds(raw), // raw `note#id` targets (matched note-scoped on demand)
-      tags: parseTags(text),
+      tags: parseTags(plain),
       blocks,
       icon: parseFmIcon(raw),
     }
@@ -320,12 +325,12 @@ export class VaultIndex {
       if (bodyIdx >= 0) {
         const anchor = e.lower.startsWith(q, bodyIdx) ? q : (terms.find((t) => e.lower.startsWith(t, bodyIdx)) ?? q)
         const start = Math.max(0, bodyIdx - 40)
-        const end = Math.min(e.text.length, bodyIdx + anchor.length + 80)
+        const end = Math.min(e.plain.length, bodyIdx + anchor.length + 80)
         snippet =
           (start > 0 ? '…' : '') +
-          e.text.slice(start, end).replace(/\s+/g, ' ').trim() +
-          (end < e.text.length ? '…' : '')
-        line = countNewlines(e.text, bodyIdx) + 1
+          e.plain.slice(start, end).replace(/\s+/g, ' ').trim() +
+          (end < e.plain.length ? '…' : '')
+        line = countNewlines(e.plain, bodyIdx) + 1
         score += 5 - Math.min(4, bodyIdx / 200)
         let n = 0
         let from = 0
@@ -339,7 +344,7 @@ export class VaultIndex {
       if (titleHit) {
         score += 12
         if (terms.length > 1 && !title.includes(q)) score -= 4 // 分词命中不如整串命中
-        if (!snippet) snippet = e.text.replace(/\s+/g, ' ').trim().slice(0, 120)
+        if (!snippet) snippet = e.plain.replace(/\s+/g, ' ').trim().slice(0, 120)
         if (e.title.toLowerCase() === q) score += 8
       }
       hits.push({ path: e.path, title: e.title, snippet, line, score })
@@ -359,7 +364,7 @@ export class VaultIndex {
       if (e.path === targetPath) continue
       const hits = (l: string): boolean => resolvePageName(l, pages, e.path) === targetPath
       if (!e.links.some(hits)) continue
-      out.push({ path: e.path, title: e.title, snippet: backlinkSnippet(e.text, hits) })
+      out.push({ path: e.path, title: e.title, snippet: backlinkSnippet(e.plain, hits) })
     }
     out.sort((a, b) => a.title.localeCompare(b.title))
     return out

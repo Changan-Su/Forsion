@@ -1243,13 +1243,17 @@ declare global {
       notify?(title: string, body: string): Promise<void>
       setInboxBadge?(count: number): Promise<void>
       onInboxOpen?(cb: () => void): () => void
-      // ── 多窗口:独立窗(拖出的 dockview,无 ribbon)+ mini 悬浮卡片 ──
+      // ── 多窗口:独立窗(拖出的 dockview,无 ribbon)+ mini 悬浮卡片 + floating 面板 ──
       /** 独立窗启动握手:pull 本窗待打开的初始视图(拖出时登记的 {type,params}[];重启已恢复布局则返回空)。 */
       detachedReady?(id: string): Promise<Array<{ type: string; params?: Record<string, unknown> }>>
       /** 开一个独立窗承载给定视图(右键「移到新窗口」/拖到空桌面);screen 坐标可选(拖出落点)。 */
       openDetached?(views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }): Promise<{ id: string }>
       /** 开/切换 mini 悬浮卡片。带 sessionId 时定向显示该正式会话,不另建临时会话。 */
       openMini?(opts?: import('../../shared/miniPanel').MiniOpenOptions): void
+      /** Open/focus a native Floating Panel window. Undefined on Web/mobile. */
+      openFloatingPanel?(opts: import('../../shared/floatingPanel').FloatingPanelOpenOptions): Promise<{ id: string } | undefined>
+      floatingReady?(id: string): Promise<import('../../shared/floatingPanel').FloatingPanelOpenOptions | undefined>
+      onFloatingTarget?(cb: (opts: import('../../shared/floatingPanel').FloatingPanelOpenOptions) => void): () => void
       /** 已存在的 Mini 窗收到新的会话定向。返回取消订阅。 */
       onMiniTarget?(cb: (opts: import('../../shared/miniPanel').MiniOpenOptions) => void): () => void
       /** 关闭当前(卫星)窗口。 */
@@ -1259,6 +1263,8 @@ declare global {
       showMainPanel?(target: import('../../shared/miniPanel').MainPanelTarget): void
       onMainPanelTarget?(cb: (target: import('../../shared/miniPanel').MainPanelTarget) => void): () => void
       mainPanelReady?(): void
+      requestMainAction?(action: 'onboarding'): void
+      onMainAction?(cb: (action: 'onboarding') => void): () => void
       closeSelf?(): void
       /** 跨窗撕拽:拖拽中实时上报屏幕坐标(主进程命中测试 → 给光标下窗口发落点预览)。节流后调。 */
       dragUpdate?(screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void
@@ -1456,6 +1462,8 @@ export interface AmadeusSyncStatus {
   error: string | null
   /** 被删除保护拦下、等确认的删除条数(旧 preload 无此字段 → undefined 按 0 处理)。 */
   pendingDeletions?: number
+  /** 服务端下发的二进制单文件上限(字节,随会员档位);null / 缺 = 还没拉到(或旧引擎)。 */
+  maxFileBytes?: number | null
   /** 仅 get() 响应携带:当前活动 vault 在哪一侧。 */
   side?: 'local' | 'cloud'
   /** 按条目同步绑定的状态事件携带:该绑定的本地 vault 根(区分多引擎,防互相覆盖)。 */

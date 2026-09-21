@@ -1,5 +1,5 @@
 // 拖入 / 粘贴 / 上传的统一文件导入。三端多态:直接调 window.amadeus.saveAttachment/saveAsset
-// (本地磁盘 / 云端 HTTP / 移动 FS 各自实现),调用方不分本地云端。云端直写才预检 5MB 上限。
+// (本地磁盘 / 云端 HTTP / 移动 FS 各自实现),调用方不分本地云端。云端直写才预检单文件上限(随会员档位)。
 import { amadeus } from '@amadeus/api'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { getAttachmentPrefs } from '@amadeus/lib/attachments'
@@ -8,10 +8,10 @@ import { b64ToBytes } from './services/fileKinds'
 import { registerMessages, translate } from './i18n'
 
 registerMessages({
-  'fileimport.tooLargeCloud': { zh: '超过云端单文件上限 5MB', en: 'Over the 5 MB cloud file limit' },
+  'fileimport.tooLargeCloud': { zh: '超过云端单文件上限', en: 'Over the cloud file size limit' },
   'fileimport.vaultFull': { zh: '云端库容量已满', en: 'The cloud vault is full' },
   'fileimport.unknownError': { zh: '未知错误', en: 'Unknown error' },
-  'fileimport.over5mb': { zh: '超 5MB', en: 'over 5 MB' },
+  'fileimport.overCloudLimit': { zh: '超过云端单文件上限 {limit}', en: 'over the {limit} cloud file limit' },
   'fileimport.over50mb': { zh: '超 50MB', en: 'over 50 MB' },
   'fileimport.unreadable': { zh: '读不到', en: 'unreadable' },
   'fileimport.withReason': { zh: '{name}({reason})', en: '{name} ({reason})' },
@@ -30,21 +30,19 @@ registerMessages({
   'fileimport.importedToMany': { zh: '已导入 {n} 个文件到「{where}」', en: 'Imported {n} files to “{where}”' },
   'fileimport.unreadableOne': { zh: '{n} 个文件读不了:{first}', en: 'Could not read {n} file: {first}' },
   'fileimport.unreadableMany': { zh: '{n} 个文件读不了:{first}', en: 'Could not read {n} files: {first}' },
-  'fileimport.imageOver5mb': { zh: '图片超 5MB', en: 'Image is over 5 MB' },
+  'fileimport.imageOverCloudLimit': { zh: '图片超过云端单文件上限 {limit}', en: 'Image is over the {limit} cloud file limit' },
   'fileimport.pasteFailed': { zh: '粘贴图片:{first}', en: 'Could not paste image: {first}' },
 })
 
 /** `名字(原因)` 的统一拼法(中文用全角括号,英文用半角+空格)。 */
 const withReason = (name: string, reason: string): string => translate('fileimport.withReason', { name, reason })
 
-// 云 vault 单文件上限(server vaultService MAX_BINARY_BYTES = 5MiB);本地磁盘库无此限,不预检。
-const CLOUD_MAX_BYTES = 5 * 1024 * 1024
 
 const ps = () => usePageStore.getState()
 // amadeus 语境吐司走 uiStore(AmadeusOverlays 在主窗与独立窗都渲染;单条即时替换,多文件不刷屏)。
 const notify = (text: string): void => useUiStore.getState().notify(text)
 
-/** 当前 saveAttachment/saveAsset 是否直接写云端 HTTP(服务端 5MB 闸即时生效)。
+/** 当前 saveAttachment/saveAsset 是否直接写云端 HTTP(服务端单文件上限闸即时生效)。
  *  桌面(有 amadeusSync):仅云侧——本地侧先落盘、由同步引擎稍后推,不在此刻受限;
  *  web / 移动云端(cloudBridge 设了 amadeusCloudVaults):直连受限;移动本地(无该对象):不受限。 */
 function isCloudDirectWrite(): boolean {
@@ -71,9 +69,21 @@ function explain(e: unknown): string {
   return s || translate('fileimport.unknownError')
 }
 
-/** 云端直写才卡 5MB(本地/移动本地无限)。返回被跳过的原因串,或 null=放行。 */
-function overLimit(f: File): string | null {
-  return isCloudDirectWrite() && f.size > CLOUD_MAX_BYTES ? translate('fileimport.over5mb') : null
+/** 云端单文件上限随会员档位(服务端 tree.maxFileBytes 下发):桌面取同步引擎状态,web / 移动取云桥缓存。
+ *  还没拿到 → 不预检,交服务端 413 兜底(预检只为省一趟注定失败的上传)。 */
+async function cloudMaxBytes(): Promise<number | null> {
+  const n = window.amadeusSync
+    ? (await window.amadeusSync.get().catch(() => null))?.maxFileBytes
+    : (window as { amadeusCloudMaxFileBytes?: number }).amadeusCloudMaxFileBytes
+  return typeof n === 'number' && n > 0 ? n : null
+}
+const fmtMB = (bytes: number): string => `${+(bytes / 1048576).toFixed(1)} MB`
+
+/** 云端直写才预检(本地/移动本地无限)。超了返回上限的展示串,否则 null=放行。 */
+async function overLimit(f: File): Promise<string | null> {
+  if (!isCloudDirectWrite()) return null
+  const max = await cloudMaxBytes()
+  return max !== null && f.size > max ? fmtMB(max) : null
 }
 
 async function refreshTree(): Promise<void> {
@@ -117,8 +127,8 @@ export async function importToPage(files: File[], page: string): Promise<void> {
   let movedAway = 0 // 上传期间用户切了笔记:文件已存入原页,但不误插到当前别的笔记
   const fails: string[] = []
   for (const f of files) {
-    const over = overLimit(f)
-    if (over) { fails.push(withReason(f.name, over)); continue }
+    const over = await overLimit(f)
+    if (over) { fails.push(withReason(f.name, translate('fileimport.overCloudLimit', { limit: over }))); continue }
     const ph = placeholder(page, f.name)
     try {
       const bytes = new Uint8Array(await f.arrayBuffer())
@@ -141,8 +151,8 @@ export async function importToFolder(files: File[], folder: string): Promise<voi
   let ok = 0
   const fails: string[] = []
   for (const f of files) {
-    const over = overLimit(f)
-    if (over) { fails.push(withReason(f.name, over)); continue }
+    const over = await overLimit(f)
+    if (over) { fails.push(withReason(f.name, translate('fileimport.overCloudLimit', { limit: over }))); continue }
     try {
       const bytes = new Uint8Array(await f.arrayBuffer())
       await amadeus.saveAttachment('', f.name, bytes, { mode: 'vault', folder }, progressNotifier(f.name))
@@ -182,7 +192,8 @@ export async function pasteImagesToPage(imgs: File[], page: string): Promise<voi
   let movedAway = 0
   const fails: string[] = []
   for (const f of imgs) {
-    if (overLimit(f)) { fails.push(translate('fileimport.imageOver5mb')); continue }
+    const over = await overLimit(f)
+    if (over) { fails.push(translate('fileimport.imageOverCloudLimit', { limit: over })); continue }
     const name = (f.name || 'pasted.png').replace(/\s+/g, '_')
     const ph = placeholder(page, name)
     try {
