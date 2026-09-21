@@ -25,7 +25,7 @@
  *   npm run live:harness -- --only churn                     # 同会话 6 连发的后续调用命中画像(不设命中率阈值,六个 run 须跑完)
  *   npm run live:harness -- --only ttft --ttft-rounds 5      # 首 token 延迟:preset(chat|work)× 思考档(off|medium)2×2,每格 N 会话 × 2 轮(冷/热缓存),交错跑
  *   npm run live:harness -- --only refine                    # 自进化闭环(09-18):Historian 自动档提名 → 收件箱 → /refine 采纳写 HARNESS.md → 新会话系统提示带上;改 REFINE_DIRECTIVE / harnessStore / 判官 harness 字段 / 注入槽后跑
- *   node scripts/live-harness.mjs --selftest                 # 纯判据(done 锚点 / load_tools 措辞 / 子代理归属)的负对照;不起引擎、不需凭证
+ *   node scripts/live-harness.mjs --selftest                 # 纯判据(done 锚点 / load_tools 措辞 / 子代理归属 / 团队激活窗与真并行)的负对照;不起引擎、不需凭证
  *
  * 凭证:把 ~/.forsion-dev/provider-auth.json(--auth 可改)**软链**进隔离共享域 —— 引擎自己读,本脚本不读;
  * 到期刷新写回同一文件,和开第二个桌面实例的行为一致。绝不碰 ~/.forsion-dev/tangu 的 state.db。
@@ -164,7 +164,34 @@ const ttftVerdict = (samples, expected) => {
   return { ok: expected > 0 && samples.length === expected && !errors && !noToken && !noUsage, errors, noToken, noUsage };
 };
 
-// ── --selftest:上面三个纯判据的负对照(不起引擎、不烧额度、不需要凭证)。每条都配一个**该红的**输入。──
+/**
+ * dupSpeeches 的激活窗:一位成员的发言按「它之前有几次该成员的 team_member start」分桶(Map 窗号 → 发言文本)。
+ * 窗界必须用**事件 seq**,不能用收到时刻:一次激活收场时引擎连发「最终发言 → end → 下一次激活 start」,常在同一个 SSE 包里、
+ * Date.now() 同一毫秒 —— 旧版按毫秒 `<=` 划窗,把上一次激活的最终发言算进下一次激活,两次激活各一条的正常发言被判成
+ * 「一次激活说两遍」(09-21 group 场景 4 跑 2 红;隔离库 agent_run_events 实证:发言 seq 15 < end 16 < 下一次 start 17)。
+ */
+const activationBuckets = (group, slug) => {
+  const starts = group.starts.filter((s) => s.slug === slug).map((s) => s.seq);
+  const buckets = new Map();
+  for (const r of group.remarks.filter((r) => r.slug === slug)) {
+    const k = starts.filter((q) => q < r.seq).length;
+    buckets.set(k, [...(buckets.get(k) || []), String(r.text || '')]);
+  }
+  return buckets;
+};
+
+/**
+ * group 场景「真并行」:成员 a、b 是否有一对激活区间交叠。端点同样用**事件 seq**、严格 `<`(seq 唯一,不会相等):
+ * 调度是「A end → 起下一位 → B start」连发,边界两帧常同一毫秒到达,旧版按毫秒 `<=` 比会把严格串行的调度
+ * (退化成 groupMaxConcurrent=1)也判成交叠 —— 恰好放过这条判据要抓的回归。没收到 end 的激活按 +∞(仍在跑)。
+ * start / end 按 runId 配对,不按下标:onStarted 之前就失败的激活只发 end(settle 照发 reason=failed),按下标会整体错位(Codex 评审)。
+ */
+const activationsOverlap = (group, a, b) => {
+  const spans = (slug) => group.starts.filter((s) => s.slug === slug).map((s) => ({ start: s.seq, end: group.ends.find((x) => x.runId && x.runId === s.runId)?.seq ?? Infinity }));
+  return spans(a).some((x) => spans(b).some((y) => x.start < y.end && y.start < x.end));
+};
+
+// ── --selftest:上面几个纯判据的负对照(不起引擎、不烧额度、不需要凭证)。每条都配一个**该红的**输入。──
 if (argv.includes('--selftest')) {
   const fails = [];
   const check = (name, got, want) => { if (got !== want) fails.push(`${name}:得到 ${got},应为 ${want}`); };
@@ -206,8 +233,20 @@ if (argv.includes('--selftest')) {
   check('ttft 条数不足(负对照)', ttftVerdict([ts()], 2).ok, false);
   check('ttft 零轮(负对照)', ttftVerdict([], 0).ok, false);
   check('ttft run 报错(负对照)', ttftVerdict([ts({ error: 'boom' }), ts()], 2).ok, false);
+  // 激活窗:取 09-21 失败跑的真实 seq(start 4 / 发言 15 / 下一次 start 17 / 发言 21),收到时刻全同一毫秒 —— 旧的按毫秒划窗会得 '2'
+  const grp = (remarks, starts) => ({ remarks: remarks.map(([seq, text]) => ({ slug: 'b', seq, at: 7, text })), starts: starts.map((seq) => ({ slug: 'b', seq, at: 7 })) });
+  const sizes = (g) => [...activationBuckets(g, 'b').values()].map((t) => t.length).join(',');
+  check('激活窗 两次激活各一条(同毫秒到达)', sizes(grp([[15, 'x'], [21, 'y']], [4, 17])), '1,1');
+  check('激活窗 同一激活 team_say + 最终答复(负对照:必须同窗才比得到)', sizes(grp([[9, 'x'], [15, 'y']], [4, 17])), '2');
+  // 真并行:[start, end] 按 seq;四帧收到时刻全同一毫秒 —— 旧的按毫秒 `<=` 会把串行那条也判成交叠
+  const mem = (slug, seq, runId) => ({ slug, seq, runId, at: 7 });
+  const spansOf = ([a0, a1], [b0, b1]) => ({ starts: [mem('a', a0, 'ra'), mem('b', b0, 'rb')], ends: [mem('a', a1, 'ra'), mem('b', b1, 'rb')] });
+  check('真并行 两名成员区间交叠', activationsOverlap(spansOf([3, 11], [4, 16]), 'a', 'b'), true);
+  check('真并行 严格串行、边界帧同毫秒(负对照)', activationsOverlap(spansOf([3, 11], [12, 16]), 'a', 'b'), false);
+  // A 首次激活在 onStarted 前就失败(只有 end 3),被 @ 后再起 [8,16] 与 B [4,11] 交叠 —— 按下标配对会配成 [8,3] 判串行
+  check('真并行 孤立 end 不错位', activationsOverlap({ starts: [mem('b', 4, 'rb'), mem('a', 8, 'ra2')], ends: [mem('a', 3, 'ra1'), mem('b', 11, 'rb'), mem('a', 16, 'ra2')] }, 'a', 'b'), true);
   if (fails.length) { console.error(`--selftest 失败 ${fails.length} 条:\n  ${fails.join('\n  ')}`); process.exit(1); }
-  console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict,含负对照)');
+  console.log('--selftest 全过(anchorsOk / acceptsSnapshotText / findSubUnlock / run3Verdict / ttftVerdict / activationBuckets / activationsOverlap,含负对照)');
   process.exit(0);
 }
 
@@ -395,12 +434,12 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           else if (e.type === 'usage') ev.usages.push(p);
           // 团队运行模式(群聊分叉):发言序 + 收场原因是 group 场景的唯一观测点;done 的 content 恒空,靠 ev.done 判链路走通。
           else if (e.type === 'group_speaker' && p.phase === 'start') ev.group.speakers.push(String(p.slug || '?'));
-          else if (e.type === 'group_speaker' && p.phase === 'end') ev.group.remarks.push({ ...p, at: Date.now(), duringActivation: ev.group.starts.some((s) => s.slug === p.slug && !ev.group.ends.some((x) => x.runId === s.runId)) });
+          else if (e.type === 'group_speaker' && p.phase === 'end') ev.group.remarks.push({ ...p, seq: e.seq, duringActivation: ev.group.starts.some((s) => s.slug === p.slug && !ev.group.ends.some((x) => x.runId === s.runId)) });
           else if (e.type === 'team_output') ev.group.outputs.push(p.message);
           else if (e.type === 'group_summary') ev.group.summary = p;
           else if (e.type === 'group_ended') ev.group.ended = p;
           // 并行团队(09-16 第四轮):成员激活的起止时刻 —— 「真并行」的唯一观测点是两次激活的时间区间交叠。
-          else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), at: Date.now(), runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
+          else if (e.type === 'team_member') (p.phase === 'start' ? ev.group.starts : ev.group.ends).push({ slug: String(p.slug || '?'), seq: e.seq, runId: p.runId || null, sessionId: p.sessionId || null, messageId: p.messageId });
           else if (e.type === 'cache_probe') ev.probes.push(p); // 双闸开着才有(TANGU_CACHE_PROBE=1 + agentConfig.cacheProbe)
           // 只收压缩相关的 status(llm_call/generating 每帧都发,全收会把 ev 撑大);autocompact 场景据此判「压了、落库了」
           else if (e.type === 'status' && ['context_info', 'compacting', 'compacted', 'compaction_budget', 'compaction_skipped'].includes(p.phase)) ev.statuses.push(p);
@@ -564,7 +603,7 @@ try {
   });
 
   // 并行团队(新工作区 × 轨道体系,09-16 第四轮:成员各自在自己的工作会话里并行干活、全员起头、被 @ 者优先、成员各自以 DONE 表态,
-  // 没有会议/协作之分、没有投票、没有缺省轮数上限)。判三件事:① **真并行** —— 两名成员的激活时间区间交叠(team_member start/end);
+  // 没有会议/协作之分、没有投票、没有缺省轮数上限)。判三件事:① **真并行** —— 两名成员的激活区间交叠(team_member start/end 的事件 seq,见 activationsOverlap);
   // ② 模型配合团队规则 —— Beta 等 Alpha 派活时 @Alpha 且不写 DONE(等人规则),派到活后完成并写 DONE(自己的提示词里没写 DONE);
   // ③ 全员 DONE 收场(done)且总激活数有界。刻意不传 groupMaxRounds:兜底天花板 30 周期 + 300s 超时,模型不守约定就会在这里失败。
   await scenario('group', 'group 并行团队(两名 agent 同时起、互相 @ 后收敛)', async () => {
@@ -584,14 +623,13 @@ try {
     const historian = backgrounds.background || [];
     const hasSummary = !!ev.group.summary?.text && historian.length === 1 && ev.group.summary.historianSessionId === historian[0].sessionId;
     const reason = ev.group.ended?.reason || null;
-    // 交叠:某次 start 落在另一位成员的某次 [start, end] 区间里
-    const spans = (slug) => ev.group.starts.filter((s) => s.slug === slug).map((s, i) => ({ start: s.at, end: ev.group.ends.filter((x) => x.slug === slug)[i]?.at ?? Infinity }));
-    const overlap = spans('live-alpha').some((a) => spans('live-beta').some((b) => a.start <= b.end && b.start <= a.end));
+    const overlap = activationsOverlap(ev.group, 'live-alpha', 'live-beta');
     const converged = reason === 'done';
     // A member may publish several team_say remarks per activation. Bound activations, not public remarks.
     const both = sp.includes('live-alpha') && sp.includes('live-beta');
     // 09-20 回归:同一成员相邻两条发言不得是同一件事(先 team_say 再把最终答复原样重说 = 用户看到的「重复发言」)。
     // Alpha 的提示词刻意要求「先发进度条、再派活」—— 那两条内容不同,是本判据的负对照。
+    // Beta 常在全员起头那次抢答一版口号 + DONE,被 Alpha 的 @ 拉回后再交一版:两次激活各一条,不归本判据管(09-21 实测 7/7 跑都这样)。
     const dups = await dupSpeeches(ev, ['live-alpha', 'live-beta']);
     // 调档要真的落到那位成员的子 run 上:读成员工作会话的 agent_config(子 run 与它同形),Alpha 必须仍是缺省。
     const cfgOf = async (id) => id ? ((await api(`/agent/sessions/${id}/config`).catch(() => null))?.agent_config || {}) : {};
@@ -1255,19 +1293,13 @@ try {
 
 /**
  * 09-20:同一次激活里「同一件事说两遍」的判据(先 team_say 广播、最终答复再换个排版重说 = 用户报的重复发言)。
- * 按成员的 team_member start 时刻划出激活窗,只比同一窗内的发言 —— 跨激活地重提角色分工是模型表达问题,不是引擎重复。
+ * 按成员的 team_member start 划出激活窗(activationBuckets,按事件 seq),只比同一窗内的发言 —— 跨激活地重提角色分工是模型表达问题,不是引擎重复。
  */
 async function dupSpeeches(ev, slugs) {
   const { speechCoverage, speechTokens } = await import(join(root, 'dist', 'services', 'groupChat.js'));
   const out = [];
   for (const slug of slugs) {
-    const starts = ev.group.starts.filter((s) => s.slug === slug).map((s) => s.at).sort((a, b) => a - b);
-    const buckets = new Map();
-    for (const r of ev.group.remarks.filter((r) => r.slug === slug)) {
-      const k = starts.filter((t) => t <= r.at).length;
-      buckets.set(k, [...(buckets.get(k) || []), String(r.text || '')]);
-    }
-    for (const [k, texts] of buckets) {
+    for (const [k, texts] of activationBuckets(ev.group, slug)) {
       // 判据与引擎同一套:每条与本次激活**之前所有发言的并集**比覆盖率(不是只比相邻 —— X → 进度 Y → final 又说 X 会假绿;Codex 评审 #9)。
       for (let i = 1; i < texts.length; i++) {
         const cov = speechCoverage(texts.slice(0, i).map(speechTokens), texts[i]);
