@@ -844,3 +844,39 @@ describe('recordToUi 计划回填', () => {
     expect(recordToUi({ id: 'a11', role: 'model', content: '', tool_calls: [{ id: 'c2', function: { name: 'read_file', arguments: '{"path":"a"}' } }] }).planProposal).toBeUndefined()
   })
 })
+
+// 反馈浮窗自带一套 store,它的 activeId 兜底会落到列表第一条 —— 会话记录必须随 params 递过去。
+describe('openFeedback 带上当前会话', () => {
+  const session = (id: string): SessionRecord => ({ id, title: id, model_id: null, archived: false, emoji: null, agent_config: null, created_at: '', updated_at: '' })
+  const openFloatingPanel = vi.fn()
+  beforeEach(() => {
+    openFloatingPanel.mockReset()
+    vi.stubGlobal('window', { tangu: { openFloatingPanel } }) // 本文件跑 node 环境,没有真 window
+    useApp.setState({ authInfo: { loggedIn: true } as never, feedbackDraft: '', sessions: [session('s1'), session('s2')], archivedSessions: [session('old')], activeId: 's2' })
+  })
+  afterEach(() => { vi.unstubAllGlobals() })
+
+  it('递当前会话记录,而不是让浮窗自己猜', () => {
+    expect(useApp.getState().openFeedback()).toBe(true)
+    expect(openFloatingPanel.mock.calls[0][0].params.session.id).toBe('s2')
+  })
+
+  it('归档会话也认', () => {
+    useApp.setState({ activeId: 'old' })
+    useApp.getState().openFeedback()
+    expect(openFloatingPanel.mock.calls[0][0].params.session.id).toBe('old')
+  })
+
+  it('空白新对话不塞 session(挂错会话比不挂更糟)', () => {
+    useApp.setState({ activeId: null })
+    useApp.getState().openFeedback()
+    expect(openFloatingPanel.mock.calls[0][0].params.session).toBeUndefined()
+  })
+
+  // 设置浮窗同理:「高级 → 导出会话日志」导错会话是静默的,人眼看不出
+  it('设置浮窗也带上当前会话', () => {
+    useApp.getState().openSettings('advanced')
+    expect(openFloatingPanel.mock.calls[0][0].params).toMatchObject({ tab: 'advanced' })
+    expect(openFloatingPanel.mock.calls[0][0].params.session.id).toBe('s2')
+  })
+})
