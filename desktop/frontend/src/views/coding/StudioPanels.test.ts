@@ -97,6 +97,12 @@ describe('HistoryPanel 四态', () => {
     expect(body().dataset.historyMode).toBe('install')
     expect(text()).toContain('编码工作室用 Git 记录项目版本')
     expect(host.querySelector('.csu-version-create')).toBeNull()
+    // ⚠️面板只是被打开,**不许自己去探测环境**:通用探针会跑 `git --version`,没装命令行工具的 Mac 上那是
+    //   /usr/bin/git 垫片,一跑就弹系统的「安装开发者工具」对话框。要等用户点「查看安装方式」。
+    expect(api.envCheck).not.toHaveBeenCalled()
+    expect(host.querySelector('.csu-git-cmd')).toBeNull()
+    await click(host.querySelector('[data-action="git-show-install"]'))
+    expect(api.envCheck).toHaveBeenCalledTimes(1)
     expect(host.querySelector('.csu-git-cmd')?.textContent).toBe('brew install git')
     // 没装 git 时不去读提交列表 —— 那一定失败,只会把引导屏变成报错屏。
     expect(api.codeStudioGitVersions).not.toHaveBeenCalled()
@@ -125,6 +131,7 @@ describe('HistoryPanel 四态', () => {
     })
     answerConfirm(false)
     await mountHistory()
+    await click(host.querySelector('[data-action="git-show-install"]')) // 先让用户自己把安装方式点出来
     await click(host.querySelector('.csu-git-actions .csu-primary'))
     expect(confirmSpy).toHaveBeenCalledTimes(1)
     expect(envRun).not.toHaveBeenCalled()

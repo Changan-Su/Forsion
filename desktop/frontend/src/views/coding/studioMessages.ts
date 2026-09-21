@@ -125,6 +125,7 @@ registerMessages({
   'studio.streaming': { zh: '正在写入 · {file}', en: 'Writing · {file}' },
   'studio.watchError': { zh: '文件监听不可用，可手动刷新。{error}', en: 'File watching is unavailable. Reload manually. {error}' },
   // —— 版本（git）——：版本由宿主产生，AI 从不跑 git；本机没装 git 就整块换成安装引导。
+  'studio.history.showInstall': { zh: '查看安装方式', en: 'Show how to install' },
   'studio.history.gitWhy': { zh: '编码工作室用 Git 记录项目版本：装好之后，每轮 AI 改动都会自动存一版，你也可以随时保存命名版本。编码工作室的其他功能都不需要它。', en: 'Coding Studio uses git to keep project versions: once it is installed, every agent run is saved automatically and you can save named versions yourself. Nothing else in Coding Studio needs it.' },
   'studio.history.firstVersionNote': { zh: '保存第一个版本会在项目文件夹里创建 Git 仓库（.git）。', en: 'Saving the first version creates a git repository (.git) in the project folder.' },
   'studio.history.readonlyForeign': { zh: '这个项目用的是它自己的 Git 仓库；Forsion 只展示历史，不做任何改动。', en: 'This project uses its own git repository; Forsion shows its history but does not change it.' },

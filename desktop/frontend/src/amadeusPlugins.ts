@@ -31,6 +31,14 @@ export function installAmadeusPlugins(): void {
     usePluginStore.getState().syncDisabledPreferences()
     void import('./userSpaces').then(async (m) => { await m.loadUserSpaces(); m.settleAsyncStartupSpace() })
   })
+  // 开发态插件的加载 / 卸载 / 产物进回收站由主进程向**每个窗口**广播:各窗各自重载这些 id(来源没了 = 拆掉)。
+  // 只重载发起的那个窗口的话,分离窗 / mini 里那份实例照旧握着笔记库与账号权限。
+  window.tangu?.onDevPluginsChanged?.((change) => {
+    for (const id of Array.isArray(change?.pluginIds) ? change.pluginIds : []) {
+      // 不带 force:来源身份(dev 标志 / 根 / 代码)变了 reloadOne 自己认得出;发起的那个窗口已经显式重载过,这里应当是空转。
+      if (typeof id === 'string') void usePluginStore.getState().reloadOne(id, { strict: true }).catch((e) => console.warn(`[amadeus] 开发态插件 ${id} 重载失败`, e))
+    }
+  })
   const store = usePluginStore.getState()
   store.init(amadeusAvailable() ? [calloutBlocks, wordCount] : [])
   void store.loadExternal().then(() => {

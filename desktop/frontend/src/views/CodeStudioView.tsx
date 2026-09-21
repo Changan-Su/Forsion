@@ -149,7 +149,19 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
       .catch(() => { if (live) setProduct(null) }) // 判不出型不是错误屏:这个项目照网页处理就好
     return () => { live = false }
   }, [root, productNonce])
-  const isPlugin = product?.kind === 'plugin'
+  // devLoad 也算:授权过的插件项目把 manifest.json 写坏的那一刻会被判成 web / unknown,但宿主那边授权还在、
+  // 开发副本以「清单无效」挂着 —— 这时把 Sandbox 入口收起来,用户既看不到报错也卸不掉它。
+  const isPlugin = product?.kind === 'plugin' || product?.devLoad === true
+  // 网页项目在这里选定的入口同步进产物身份文件:否则「造物」与桌面快捷方式只会按磁盘猜(根 index.html),
+  // 用户明明选的是 demo/index.html,启动出来却是另一页(Codex 评审)。只在两边不一致时写,幂等。
+  useEffect(() => {
+    if (!product || product.kind !== 'web' || !entry || entry === product.entry || prefs.devUrl) return
+    const update = window.tangu?.productsUpdate
+    if (!update) return
+    let live = true
+    void update(product.id, { entry }).then(next => { if (live && mounted.current) setProduct(next) }).catch(e => console.warn('[studio] 同步产物入口失败', e))
+    return () => { live = false }
+  }, [product, entry, prefs.devUrl])
   const canSandbox = isPlugin && !!window.tangu?.productsEnsure && !!window.tangu?.productsUpdate
   // 监听回调与热重载调度器都在 effect 闭包里跑,读的必须是**当下**的产物,不是挂载那一刻的。
   const productRef = useRef(product)

@@ -890,6 +890,7 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
 - **项目形态**:`manifest.json` 与 `main` 指向的文件放在**项目根**。Coding Studio 据此把项目判成「插件」(PWA 那种 `manifest.json` 不算——要同时有 `id` / `apiVersion` / `main`)。
 - **加载**:用户在 Studio 底部工具条点开 **Sandbox** 面板 →「在 Forsion 中加载」。你(agent)点不了这个按钮——写完后请用户去点,别假装已经加载。
 - **热重载**:项目开在 Coding Studio 期间,存盘即重载(宿主会把上次开着的插件视图重新打开)。关掉该项目后不再热重载。
+  ⚠️监听器不看 `dist/` / `build/` / `node_modules/` 与点目录:`main` 指向构建产物(如 `dist/main.js`)的插件,改源码不会自动重载到新包 —— 构建完点面板里的「立即重载」(显式重载一律真拆真装)。桌面插件本来就建议 `main.js` 直接放项目根、不走构建。
 - **报错在哪看**:Sandbox 面板收口三样——`setup` 抛错、视图 `mount` 抛错、这个插件自己的 `console` 输出(经 `ctx` 闭包归属,不会和别的插件混)。用户可以一键把它们发回对话;**以这些为准**,别凭空猜。
 - ⚠️**这不是隔离沙箱**:dev 插件跑在真应用、用户的真笔记库上,与已安装插件同权。试验期间不要写、挪、删用户数据;定时器与监听必须在 disposer 里清(热重载会反复 `setup`,漏清一次就叠一层)。
 - ⚠️**同 id 影子**:dev 副本会顶掉同 id 的已安装副本(卡片带 DEV 徽标,期间该插件的「卸载」被禁用)。要对比已安装版,先在 Sandbox 里卸载 dev 副本。

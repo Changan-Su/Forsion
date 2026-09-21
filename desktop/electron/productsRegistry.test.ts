@@ -114,11 +114,18 @@ describe('产物身份(sidecar)', () => {
 describe('判型', () => {
   it('插件三项齐全才算插件,PWA 的 manifest.json 不算', async () => {
     const plugin = await project('my-plugin', {
-      'manifest.json': JSON.stringify({ id: 'com.demo.plugin', version: '1.0.0', apiVersion: 1, main: 'main.js' }),
+      'manifest.json': JSON.stringify({ id: 'demo-plugin', version: '1.0.0', apiVersion: 1, main: 'main.js' }),
       'main.js': 'exports.activate = () => {}',
     })
-    expect(await detectKind(plugin)).toEqual({ kind: 'plugin', entry: null, pluginId: 'com.demo.plugin' })
-    expect(await ensureProduct(root, plugin)).toMatchObject({ kind: 'plugin', entry: null, pluginId: 'com.demo.plugin' })
+    expect(await detectKind(plugin)).toEqual({ kind: 'plugin', entry: null, pluginId: 'demo-plugin' })
+    expect(await ensureProduct(root, plugin)).toMatchObject({ kind: 'plugin', entry: null, pluginId: 'demo-plugin' })
+
+    // ⚠️生效 id 与装载器同一条规则(shared effectivePluginId):清单 id 不合 kebab-case 时退回目录名 —— 两边各判各的话,
+    //   「在 Forsion 中加载」重载的是一个装载器压根不认识的 id。
+    const dotted = await project('dotted-plugin', {
+      'manifest.json': JSON.stringify({ id: 'com.demo.plugin', apiVersion: 1, main: 'main.js' }), 'main.js': '',
+    })
+    expect((await detectKind(dotted)).pluginId).toBe('dotted-plugin')
 
     // PWA 清单:有 name/icons/start_url,没有 main/apiVersion —— 判成 web,别当插件加载。
     const pwa = await project('pwa-app', {
@@ -187,16 +194,16 @@ describe('判型', () => {
 
   it('pluginId 跟生效后的 kind 走;没有清单不许标成 plugin', async () => {
     const plugin = await project('kind-plugin', {
-      'manifest.json': JSON.stringify({ id: 'com.demo.kind', apiVersion: 1, main: 'main.js' }),
+      'manifest.json': JSON.stringify({ id: 'demo-kind', apiVersion: 1, main: 'main.js' }),
       'main.js': 'x',
     })
     const p = await ensureProduct(root, plugin)
-    expect(p.pluginId).toBe('com.demo.kind')
+    expect(p.pluginId).toBe('demo-kind')
     const asWeb = await updateProduct(root, p.id, { kind: 'web' })
     expect(asWeb.kind).toBe('web')
     expect(asWeb.pluginId).toBeUndefined() // 已经不是插件了,别再挂着插件 id
     expect((await getProduct(root, p.id))?.pluginId).toBeUndefined()
-    expect((await updateProduct(root, p.id, { kind: 'plugin' })).pluginId).toBe('com.demo.kind') // 改回去就回来
+    expect((await updateProduct(root, p.id, { kind: 'plugin' })).pluginId).toBe('demo-kind') // 改回去就回来
 
     // 没有 manifest.json 的目录标成 plugin = 造出一个没有 pluginId 的「插件」,下游全拿 undefined
     const web = await project('kind-web', { 'index.html': 'x' })

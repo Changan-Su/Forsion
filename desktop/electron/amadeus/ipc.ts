@@ -15,6 +15,7 @@ import { VaultIndex } from './fs/vaultIndex'
 import { adoptLegacyCloudState, cloudAccountNamespace, currentCloudAccountId, readConfig, updateConfig, writeConfig } from './settings'
 import { defaultWorkspaceDir, forsionHomeDir, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
+import { effectivePluginId } from '../../shared/products'
 import { readDevLoads } from '../devLoadStore'
 import { builtinPluginIds } from '../builtinPlugins'
 import { logActivity, logNoteEdit } from '../activityLog'
@@ -1084,10 +1085,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   // 规则,否则会出现「能列出/能运行、点卸载却被 id 校验拒绝」的卸不掉插件(codex P1-9);
   // 该 id 还进 localStorage 键与 Space 归属,必须先掐住。
   const SAFE_PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
-  const pluginIdOf = (dirName: string, manifestId: unknown): string | null => {
-    if (typeof manifestId === 'string' && SAFE_PLUGIN_ID.test(manifestId)) return manifestId
-    return SAFE_PLUGIN_ID.test(dirName) ? dirName : null
-  }
+  const pluginIdOf = effectivePluginId // 单源:与产物注册表同一条规则(shared/products.ts)
 
   // 卸载墓碑:被卸载插件声明过的文件扩展名**永久**留在 listPages 排除集(毁档防线不随卸载失效——
   // 库里的数据文件还在,掉回笔记被 compiler 改写=毁档,codex P1-1)。文件在共享域顶层,
@@ -1256,9 +1254,10 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     //   克隆 / 解压来的文件夹自带一个 `devLoad:true` 就能零点击以插件权限执行 —— 第一版就是这么漏的(评审 HIGH)。
     //   授权按「产物 id + 授权当时的真实根」双钥匙核对;复制出来的项目(id 被重铸)与搬了家的 sidecar 都对不上。
     const products: NonNullable<Awaited<ReturnType<typeof getProduct>>>[] = []
-    for (const [pid, root] of Object.entries(readDevLoads(forsionHomeDir()))) {
+    const authorizedPluginId = new Map<string, string | null>() // 产物 id → 授权当时的生效插件 id(清单写坏期间沿用)
+    for (const [pid, grant] of Object.entries(readDevLoads(forsionHomeDir()))) {
       const product = await getProduct(projectsRootDir(), pid).catch(() => null) // 托管根不存在 / 扫不动 → 当没有
-      if (product && product.root === root) products.push(product)
+      if (product && product.root === grant.root) { products.push(product); authorizedPluginId.set(product.id, grant.pluginId) }
     }
     products.sort((a, b) => b.updatedAt - a.updatedAt) // 两个项目声明同一个插件 id 时先到先得,顺序得确定
     type DevManifest = {
@@ -1283,7 +1282,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       } catch (err) {
         invalid = `manifest.json unparsable: ${err instanceof Error ? err.message : String(err)}`
       }
-      const id = pluginIdOf(path.basename(pdir), m?.id)
+      // 清单读不出来时**沿用授权当时的 id**:否则少一个逗号,身份就从 `my-plugin` 漂成目录名 `cool-project`,
+      // 被影子住的安装版悄悄回来、开发副本的报错挂到一个没人看的 id 上(Codex 评审)。
+      const id = (m ? pluginIdOf(path.basename(pdir), m.id) : null) ?? authorizedPluginId.get(product.id) ?? pluginIdOf(path.basename(pdir), undefined)
       if (!id) {
         console.warn(`[amadeus] 开发态项目 "${path.basename(pdir)}" 的 manifest id 与目录名均非法(须 kebab-case),拒载`)
         continue

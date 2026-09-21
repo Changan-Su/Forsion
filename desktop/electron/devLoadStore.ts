@@ -16,8 +16,13 @@ import { dirname, isAbsolute, join } from 'node:path'
 
 const FILE = 'dev-plugins.json'
 const ID_RE = /^p_[0-9a-f]{12}$/
+const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{0,63}$/
 
-export type DevLoads = Record<string, string>
+/** root = 授权当时的真实项目根;pluginId = 授权当时的**生效插件 id**。后者是为了清单写坏的那一刻:
+ *  manifest.json 少个逗号,装载器读不出 id 就会退回目录名 —— 插件的身份凭空变了,被它影子住的安装版悄悄回来,
+ *  开发副本的报错也没人接得住。记住授权时的 id,清单坏掉期间沿用它(以 blocked:'invalid' 留在原位)。 */
+export interface DevLoad { root: string; pluginId: string | null }
+export type DevLoads = Record<string, DevLoad>
 
 export function readDevLoads(homeDir: string): DevLoads {
   const out: DevLoads = Object.create(null) as DevLoads
@@ -25,21 +30,23 @@ export function readDevLoads(homeDir: string): DevLoads {
   try { parsed = JSON.parse(readFileSync(join(homeDir, FILE), 'utf8')) } catch { return out }
   const products = (parsed as { products?: unknown } | null)?.products
   if (!products || typeof products !== 'object' || Array.isArray(products)) return out
-  for (const [id, root] of Object.entries(products as Record<string, unknown>)) {
-    if (ID_RE.test(id) && typeof root === 'string' && isAbsolute(root)) out[id] = root
+  for (const [id, value] of Object.entries(products as Record<string, unknown>)) {
+    const entry = value as { root?: unknown; pluginId?: unknown } | null
+    if (!ID_RE.test(id) || !entry || typeof entry !== 'object' || typeof entry.root !== 'string' || !isAbsolute(entry.root)) continue
+    out[id] = { root: entry.root, pluginId: typeof entry.pluginId === 'string' && PLUGIN_ID_RE.test(entry.pluginId) ? entry.pluginId : null }
   }
   return out
 }
 
 /** 这份产物此刻是否被授权开发态加载(id 与真实根都要对上)。 */
 export function isDevLoaded(loads: DevLoads, product: { id: string; root: string }): boolean {
-  return loads[product.id] === product.root
+  return loads[product.id]?.root === product.root
 }
 
-export function setDevLoad(homeDir: string, product: { id: string; root: string }, on: boolean): void {
+export function setDevLoad(homeDir: string, product: { id: string; root: string; pluginId?: string | null }, on: boolean): void {
   if (!ID_RE.test(product.id) || !isAbsolute(product.root)) throw new Error('invalid product')
   const loads = readDevLoads(homeDir)
-  if (on) loads[product.id] = product.root
+  if (on) loads[product.id] = { root: product.root, pluginId: product.pluginId && PLUGIN_ID_RE.test(product.pluginId) ? product.pluginId : null }
   else delete loads[product.id]
   const target = join(homeDir, FILE)
   mkdirSync(dirname(target), { recursive: true })

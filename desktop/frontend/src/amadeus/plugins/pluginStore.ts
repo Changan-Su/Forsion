@@ -154,7 +154,10 @@ interface PluginState {
   reloadExternal(): Promise<void>
   /** 只重载一个外置插件(拆它一个、重读来源、装回它一个);别的插件与它们开着的标签页不动。
    *  Agent 自建 Space 每个周期都可能变,走 reloadExternal 会把所有插件拆装一遍(codex 09-11 勘察)。 */
-  reloadOne(id: string): Promise<void>
+  /** force = 跳过「源码没变就不拆装」的快路(开发态显式重载用:setup 因瞬时原因抛过错时要能重试,只改了 manifest 的
+   *  name / capabilities / events 时旧实例也得换掉)。strict = 来源列表读不出来时**不许装作成功**:当前若是开发副本就先拆掉
+   *  (撤权优先于一切 —— 授权已经撤了而实例还握着笔记库权限,界面却报「已卸载」,这是最坏的组合),再把错误抛给调用方。 */
+  reloadOne(id: string, opts?: { force?: boolean; strict?: boolean }): Promise<void>
   /** 最近一次 setup 抛错的信息(按插件 id;成功激活即清)。Agent 自建 Space 的加载失败靠它回写给 agent。 */
   lastSetupError: Record<string, string>
   openPluginsFolder(): void
@@ -418,6 +421,12 @@ export function readDisabledPluginIds(): string[] {
   return readDisabled()
 }
 
+/** reloadOne 的按 id 串行链。 */
+const reloadChains = new Map<string, Promise<void>>()
+
+/** 开发副本的 setup 代次(按插件 id):见 toPlugin 的开发态分支。 */
+const setupGeneration = new Map<string, number>()
+
 /** 外置插件最近装入的源码(按 id):reloadOne 用来跳过「磁盘内容没变」的重载(应用刚起第一次看到戳就不用拆装一遍)。 */
 const loadedCode = new Map<string, string>()
 
@@ -463,15 +472,24 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
         return typeof d === 'function' ? (d as () => void) : undefined
       }
       const fn = new Function('ctx', 'console', src.code) as (c: PluginContext, console: Console) => unknown
+      // 每次 setup 一个代次:热重载下「上一版的 async setup 还没落定,新一版已经装好」是常态,迟到的结果必须认得出自己过期了。
+      const generation = (setupGeneration.get(src.id) ?? 0) + 1
+      setupGeneration.set(src.id, generation)
+      const current = (): boolean => setupGeneration.get(src.id) === generation
+        && usePluginStore.getState().activeIds.includes(src.id) && !!usePluginStore.getState().plugins.find((p) => p.id === src.id)?.dev
       const d = fn(ctx, devConsoleFor(src.id))
       if (typeof d === 'function') return d as () => void
       // async setup:抛在 promise 里的错没人接(宿主 try/catch 只罩同步那一段),开发者只会在控制台
       // 看到一行 unhandled rejection,设置页与 Studio 都显示「已启用」。开发态把它接住记成 setup 错误。
       if (d && typeof (d as PromiseLike<unknown>).then === 'function') {
-        void Promise.resolve(d).catch((e: unknown) => {
-          // 已经被拆掉 / 换了一份代码就别再回写(迟到的 reject 不该污染新一轮的状态)。
-          const st = usePluginStore.getState()
-          if (!st.activeIds.includes(src.id) || !st.plugins.find((p) => p.id === src.id)?.dev) return
+        void Promise.resolve(d).then((resolved: unknown) => {
+          if (typeof resolved !== 'function') return
+          // async setup 交回来的 disposer:这一代还活着 → 装上(否则定时器 / 监听跨重载一层层叠);已经过期 → 当场调用收掉。
+          if (current()) usePluginStore.setState((s) => ({ disposers: { ...s.disposers, [src.id]: resolved as () => void } }))
+          else { try { (resolved as () => void)() } catch (err) { console.error(`[amadeus] plugin "${src.id}" stale disposer failed`, err) } }
+        }, (e: unknown) => {
+          // 过期那一代的 reject 不许回写:第 1 版的失败迟到,不能把已经装好的第 2 版标成「加载失败」。
+          if (!current()) return
           console.error(`[amadeus] plugin "${src.id}" async setup rejected`, e)
           usePluginStore.setState((s) => ({
             lastSetupError: { ...s.lastSetupError, [src.id]: String((e as { message?: unknown } | null)?.message ?? e).slice(0, 600) },
@@ -1360,32 +1378,47 @@ export const usePluginStore = create<PluginState>((set, get) => {
       await get().loadExternal()
     },
 
-    async reloadOne(id) {
-      let sources: ExternalPluginSource[] = []
-      try {
-        sources = await resolveExternalSources()
-      } catch {
-        return
+    reloadOne(id, opts) {
+      // 同一个 id 的重载**串行**:发起加载的窗口会同时收到「自己那次显式重载」与「主进程的全窗广播」,两个并发的
+      // reloadOne 各自 teardown + 装载,谁后落定谁赢,setup 还会白跑两遍(check:sandbox 五跑一红就是它)。
+      const run = async (): Promise<void> => {
+        let sources: ExternalPluginSource[] = []
+        try {
+          sources = await resolveExternalSources()
+        } catch (e) {
+          if (!opts?.strict) return
+          const stale = get().plugins.find((p) => p.id === id)
+          if (stale?.dev) { // fail closed:读不到来源 ≠ 来源还在
+            if (get().activeIds.includes(id)) teardown(id)
+            loadedCode.delete(id)
+            set((s) => ({ plugins: s.plugins.filter((p) => p.id !== id) }))
+          }
+          throw e
+        }
+        const cur = get().plugins.find((p) => p.id === id)
+        if (cur?.builtin) return // 内置插件不是磁盘来源,没有「重读」可言
+        const src = sources.find((s) => s.id === id)
+        // 源码与 blocked 状态都没变 → 不拆装(戳只说明目录动过,不一定动了这个插件;也免掉应用刚起那次白重载的闪一下)。
+        // ⚠️**来源身份**也得比:刚从安装版复制出来的开发副本,代码可以与安装版一字不差 —— 只比代码的话,
+        //   「在 Forsion 中加载」开了等于没开(dev 标志永远装不进来),撤下开发副本后它也永远拆不掉(卸载守卫因此永远拒)。
+        if (!opts?.force && cur && src
+          && loadedCode.get(id) === src.code
+          && (cur.blocked ?? null) === (src.blocked ?? null)
+          && (cur.dev ?? false) === (src.dev ?? false)
+          && (cur.devRoot ?? null) === (src.devRoot ?? null)
+          && (cur.shadowsInstalled ?? false) === (src.shadowsInstalled ?? false)) return
+        if (get().activeIds.includes(id)) teardown(id)
+        if (!src) { loadedCode.delete(id); dropDevRecords(id) } // 来源整个没了 → 连开发态记账一起丢
+        set((s) => ({
+          plugins: [...s.plugins.filter((p) => p.id !== id), ...(src ? [toPlugin(src)] : [])],
+          lastSetupError: { ...s.lastSetupError, [id]: undefined as unknown as string },
+        }))
+        if (src) applyPref(id)
       }
-      const cur = get().plugins.find((p) => p.id === id)
-      if (cur?.builtin) return // 内置插件不是磁盘来源,没有「重读」可言
-      const src = sources.find((s) => s.id === id)
-      // 源码与 blocked 状态都没变 → 不拆装(戳只说明目录动过,不一定动了这个插件;也免掉应用刚起那次白重载的闪一下)。
-      // ⚠️**来源身份**也得比:刚从安装版复制出来的开发副本,代码可以与安装版一字不差 —— 只比代码的话,
-      //   「在 Forsion 中加载」开了等于没开(dev 标志永远装不进来),撤下开发副本后它也永远拆不掉(卸载守卫因此永远拒)。
-      if (cur && src
-        && loadedCode.get(id) === src.code
-        && (cur.blocked ?? null) === (src.blocked ?? null)
-        && (cur.dev ?? false) === (src.dev ?? false)
-        && (cur.devRoot ?? null) === (src.devRoot ?? null)
-        && (cur.shadowsInstalled ?? false) === (src.shadowsInstalled ?? false)) return
-      if (get().activeIds.includes(id)) teardown(id)
-      if (!src) { loadedCode.delete(id); dropDevRecords(id) } // 来源整个没了 → 连开发态记账一起丢
-      set((s) => ({
-        plugins: [...s.plugins.filter((p) => p.id !== id), ...(src ? [toPlugin(src)] : [])],
-        lastSetupError: { ...s.lastSetupError, [id]: undefined as unknown as string },
-      }))
-      if (src) applyPref(id)
+      const next = (reloadChains.get(id) ?? Promise.resolve()).then(run, run)
+      const guard = next.catch(() => {}).then(() => { if (reloadChains.get(id) === guard) reloadChains.delete(id) })
+      reloadChains.set(id, guard)
+      return next
     },
 
     openPluginsFolder() {

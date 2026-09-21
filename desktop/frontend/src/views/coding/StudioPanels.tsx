@@ -82,7 +82,8 @@ function GitInstall({ onRecheck }: { onRecheck(): void }) {
     } catch { return null /* 探测不到就只留说明文字:这一屏是引导,不该变成报错屏 */ }
     finally { if (mounted.current) setChecking(false) }
   }, [])
-  useEffect(() => { void probeGit() }, [probeGit])
+  // ⚠️**不在挂载时探测**:通用环境探针是 `git --version` 走 PATH —— 没装命令行工具的 Mac 上那是 /usr/bin/git 垫片,
+  //   一跑就弹系统的「安装开发者工具」对话框。面板只是被打开,不该替用户触发它;等用户自己点「查看安装方式」(Codex 评审)。
   const sudo = /^sudo\b/.test(probe?.installCommand || '')
   const install = async () => {
     if (!probe?.installId || !window.tangu?.envRun) return
@@ -111,9 +112,10 @@ function GitInstall({ onRecheck }: { onRecheck(): void }) {
     {!!window.tangu?.envCheck && <>
       {!!probe?.installCommand && <code className="csu-git-cmd">{probe.installCommand}</code>}
       <div className="csu-git-actions">
+        {!probe && <button className="csu-primary" data-action="git-show-install" disabled={checking} onClick={() => void probeGit()}>{checking ? <Loader2 size={14} className="csx-spin" /> : <Play size={14} />}{t('studio.history.showInstall')}</button>}
         {!!probe?.installId && <button className="csu-primary" disabled={installing || checking} onClick={() => void install()}>{installing ? <Loader2 size={14} className="csx-spin" /> : <Play size={14} />}{sudo ? t('onboarding.env.copyCmd') : t('onboarding.env.install')}</button>}
         {/* 「重新检测」两侧都刷:探测行(装没装上)与宿主的 git 判定(面板该不该换形态)。 */}
-        <button disabled={installing} onClick={() => { void probeGit(); onRecheck() }}><RefreshCw size={14} className={checking ? 'csx-spin' : ''} />{t('onboarding.env.recheck')}</button>
+        <button disabled={installing} onClick={() => { if (probe) void probeGit(); onRecheck() }}><RefreshCw size={14} className={checking ? 'csx-spin' : ''} />{t('onboarding.env.recheck')}</button>
       </div>
       {!!note && <p className="csu-hint" role="status">{note}</p>}
       {!!error && <p className="csu-error" role="alert">{error}</p>}

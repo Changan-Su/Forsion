@@ -9,7 +9,7 @@
 import { existsSync, promises as fs, type Dirent, type Stats } from 'node:fs'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { PRODUCT_SIDECAR, type ProductKind, type ProductSummary } from '../shared/products'
+import { PRODUCT_SIDECAR, effectivePluginId, type ProductKind, type ProductSummary } from '../shared/products'
 
 /** 存在即「经 Forsion Connect 发布过」。 */
 const CONNECT_MARKER = '.forsion-connect.json'
@@ -166,7 +166,9 @@ export async function detectKind(dir: string): Promise<{ kind: ProductKind; entr
     && typeof manifest.main === 'string' && manifest.main
     && typeof manifest.apiVersion === 'number' && Number.isFinite(manifest.apiVersion)
     && typeof manifest.id === 'string' && manifest.id) {
-    return { kind: 'plugin', entry: null, pluginId: manifest.id }
+    // 生效 id 与装载器同源(清单 id 不合 kebab-case 时退回目录名);两个都不合法 = 装载器会拒载,这里也不当它是插件。
+    const pluginId = effectivePluginId(path.basename(dir), manifest.id)
+    if (pluginId) return { kind: 'plugin', entry: null, pluginId }
   }
   const entry = await findHtml(dir)
   return entry ? { kind: 'web', entry } : { kind: 'unknown', entry: null }

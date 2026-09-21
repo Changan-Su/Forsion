@@ -21,6 +21,8 @@ let home: string
 let root: string
 let env: NodeJS.ProcessEnv
 let g: GitEnv
+/** 宿主侧的 nonce 登记处(生产里落在 forsionHome/product-trust.json;这里放内存)。 */
+let owned: Set<string>
 
 beforeEach(async () => {
   home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'git-history-')))
@@ -30,7 +32,8 @@ beforeEach(async () => {
   // 否则「身份兜底」那条用例在配过 git 的机器上恒绿(假绿),在 CI 上才暴露。
   env = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'xdg'), GIT_CONFIG_GLOBAL: path.join(home, 'absent-gitconfig'), GIT_CONFIG_NOSYSTEM: '1' }
   for (const key of ['EMAIL', 'GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_CONFIG', 'GIT_CONFIG_SYSTEM', 'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL']) delete env[key]
-  g = { env }
+  owned = new Set<string>()
+  g = { env, owners: { has: (n) => owned.has(n), add: (n) => { owned.add(n) } } }
 })
 afterEach(async () => {
   await fs.rm(home, { recursive: true, force: true })
@@ -120,7 +123,10 @@ describe.skipIf(!GIT)('git version history', () => {
     const version = await commitGitVersion(root, { name: 'First version', auto: false }, g)
     expect(version).not.toBeNull()
     expect(version!.id).toMatch(/^[0-9a-f]{40}$/)
-    expect(await fs.readFile(path.join(root, '.git', MARKER), 'utf8')).toContain('Forsion')
+    // 标记文件里是一个随机 nonce,且**同一个 nonce 登记进了宿主侧**(两边对得上才算我方仓)。
+    const nonce = (await fs.readFile(path.join(root, '.git', MARKER), 'utf8')).trim()
+    expect(nonce).toMatch(/^[0-9a-f]{32}$/)
+    expect(owned.has(nonce)).toBe(true)
     const ignore = lines(await text('.gitignore'))
     for (const line of ['node_modules/', 'dist/', '.DS_Store', '.env', '.env.*', '!.env.example', '*.pem', '*.key', PRODUCT, CONNECT]) expect(ignore).toContain(line)
     const tracked = lines(raw(root, 'ls-files'))
@@ -226,6 +232,72 @@ describe.skipIf(!GIT)('git version history', () => {
     expect((await listGitVersions(root, g))[0].name).toBe('中文文件')
   })
 
+  it('⚠️a forged in-repo marker does not make a repository ours, and its clean filter never runs', async () => {
+    // Codex 三份评审一致打回的那条:解压 / 克隆来的文件夹自带 `.git/forsion-history` + 恶意 clean filter。
+    // 只认仓里的标记 = 它被判成「我方仓」→ 下一轮自动 `git add -A` 执行 filter 里的任意命令。
+    // 现在归属 = 标记里的 nonce **且**宿主侧登记过;伪造的(哪怕形态完全合法)一律是用户自己的仓,只读,且不跑 status。
+    const proof = path.join(home, 'filter-ran')
+    await put('index.html', '<h1>hi</h1>')
+    raw(root, 'init')
+    raw(root, 'config', 'filter.evil.clean', `sh -c 'touch ${proof}; cat'`)
+    await put('.gitattributes', '* filter=evil\n')
+    for (const forged of ['Forsion Coding Studio version history\n', `${'a'.repeat(32)}\n`]) {
+      await fs.writeFile(path.join(root, '.git', MARKER), forged)
+      expect(await gitHistoryStatus(root, g)).toMatchObject({ state: 'foreign', dirty: false })
+      await expect(commitGitVersion(root, { name: 'x', auto: true }, g)).rejects.toThrow(/read-only repository/)
+    }
+    expect(existsSync(proof)).toBe(false)
+  })
+
+  it('never creates or claims a repository without a host-side owners registry (fail closed)', async () => {
+    await put('index.html', 'x')
+    await expect(commitGitVersion(root, { name: 'x', auto: false }, { env })).rejects.toThrow(/read-only repository/)
+    expect(existsSync(path.join(root, '.git'))).toBe(false)
+  })
+
+  it('keeps credential-looking and oversized files out of history (host policy, not the project .gitignore)', async () => {
+    await put('index.html', 'x')
+    await put('secretSanta.ts', 'export {}') // 不是凭据:按分隔符成词才算
+    await put('credentials.json', '{"k":1}')
+    await put('config/service-account.json', '{"k":1}')
+    await put('auth.json', '{}')
+    await put('api-tokens.yml', 'a: b')
+    await fs.writeFile(path.join(root, 'huge.bin'), Buffer.alloc(10 * 1024 * 1024 + 1))
+    await commitGitVersion(root, { name: 'v1', auto: false }, g)
+    const tracked = raw(root, 'ls-files').split('\n')
+    expect(tracked).toEqual(expect.arrayContaining(['index.html', 'secretSanta.ts']))
+    for (const leaked of ['credentials.json', 'config/service-account.json', 'auth.json', 'api-tokens.yml', 'huge.bin']) expect(tracked).not.toContain(leaked)
+    expect(await text('.gitignore')).not.toContain('credentials.json') // 宿主策略住在 .git/info/exclude,不往用户文件里写
+  })
+
+  it('restore never touches the product sidecars even if an old commit tracked them', async () => {
+    await put('index.html', 'one')
+    const first = await commitGitVersion(root, { name: 'v1', auto: false }, g)
+    // 有人(agent / 用户)曾经 add -f 过边车:下一次我方写入前会把它从索引里摘掉,磁盘上原样留着。
+    await put(PRODUCT, '{"id":"p_keep"}')
+    raw(root, 'add', '-f', PRODUCT)
+    raw(root, 'commit', '-m', 'tracked the sidecar by force')
+    await put('index.html', 'two')
+    await commitGitVersion(root, { name: 'v2', auto: false }, g)
+    expect(raw(root, 'ls-files')).not.toContain(PRODUCT)
+    await restoreGitVersion(root, first!.id, g)
+    expect(await text(PRODUCT)).toBe('{"id":"p_keep"}') // 目标版本里没有它 —— 也不许被删
+    expect(await text('index.html')).toBe('one')
+  })
+
+  it('finishes a half-done initialisation before the next write instead of committing secrets', async () => {
+    // 上次 init 死在半路:标记与登记都在,`.gitignore` 没写成。下一次不能因为「已经是 owned」就带着缺口 add -A。
+    await put('index.html', 'x')
+    await put('.env', 'SECRET=1')
+    raw(root, 'init')
+    const nonce = 'c'.repeat(32)
+    await fs.writeFile(path.join(root, '.git', MARKER), `${nonce}\n`)
+    owned.add(nonce)
+    await commitGitVersion(root, { name: 'v1', auto: true }, g)
+    expect(raw(root, 'ls-files').split('\n')).not.toContain('.env')
+    expect(lines(await text('.gitignore'))).toContain('.env')
+  })
+
   it('treats a repository without the marker as the user own and read-only', async () => {
     raw(root, 'init', '-q')
     raw(root, 'symbolic-ref', 'HEAD', 'refs/heads/main')
@@ -241,7 +313,7 @@ describe.skipIf(!GIT)('git version history', () => {
     await expect(restoreGitVersion(root, list[0].id, g)).rejects.toThrow('read-only repository')
     expect(raw(root, 'rev-list', '--count', 'HEAD')).toBe('1')
     await put('b.txt', 'b')
-    expect(await gitHistoryStatus(root, g)).toMatchObject({ state: 'foreign', dirty: true })
+    expect(await gitHistoryStatus(root, g)).toMatchObject({ state: 'foreign', dirty: false }) // 不是我方的仓不跑 status(会过 clean filter = 执行外来配置),dirty 恒 false
   })
 
   it('treats a project inside another repository as nested and never inits inside it', async () => {
@@ -384,7 +456,7 @@ describe.skipIf(!GIT)('git version history', () => {
     // 调用方 env 里的 GIT_DIR 会让 `init` 去重新初始化那个外部仓,marker 随后 ENOENT —— 一律就地清洗。
     const outside = path.join(home, 'outside')
     await fs.mkdir(outside)
-    const poisoned: GitEnv = { env: { ...env, GIT_DIR: outside, GIT_WORK_TREE: outside } }
+    const poisoned: GitEnv = { ...g, env: { ...env, GIT_DIR: outside, GIT_WORK_TREE: outside } }
     await put('a.txt', 'a')
     expect(await commitGitVersion(root, { name: 'v1', auto: true }, poisoned)).not.toBeNull()
     expect(existsSync(path.join(root, '.git', MARKER))).toBe(true)
@@ -396,7 +468,7 @@ describe.skipIf(!GIT)('git version history', () => {
     // 回执 null 的契约含义是「没东西可提」;restore 那边 backupId:null 更被读成「现场本来就干净,没做备份」。
     // 大仓 / 冷盘上详情那条 log 会撞 5s 读超时 —— 这里用 shim 把带 --shortstat 的读全部打掉来等价复现。
     const shim = await gitShim('git-no-shortstat', 'for a in "$@"; do\n  if [ "$a" = "--shortstat" ]; then exit 128; fi\ndone')
-    const broken: GitEnv = { env, gitPath: shim }
+    const broken: GitEnv = { ...g, gitPath: shim }
     await put('a.txt', 'v1')
     const first = await commitGitVersion(root, { name: 'v1', auto: false }, broken)
     expect(first).not.toBeNull()
@@ -425,7 +497,7 @@ describe.skipIf(!GIT)('git version history', () => {
     const before = Number(raw(root, 'rev-list', '--count', 'HEAD'))
 
     const shim = await gitShim('git-no-subject', 'for a in "$@"; do\n  if [ "$a" = "--format=%s" ]; then exit 128; fi\ndone')
-    await expect(restoreGitVersion(root, first!.id, { env, gitPath: shim })).rejects.toThrow(/could not read the version/)
+    await expect(restoreGitVersion(root, first!.id, { ...g, gitPath: shim })).rejects.toThrow(/could not read the version/)
     expect(Number(raw(root, 'rev-list', '--count', 'HEAD'))).toBe(before) // 一个提交都没落
     expect(await text('a.txt')).toBe('v2') // 工作区也没被动过
   })

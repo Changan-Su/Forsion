@@ -176,6 +176,13 @@ const api = {
   productsServe: (id: string) => ipcRenderer.invoke('products:serve', id),
   productsShortcut: (id: string, fallbackName?: string) => ipcRenderer.invoke('products:shortcut', id, fallbackName),
   productsTrash: (id: string) => ipcRenderer.invoke('products:trash', id),
+  productsExternalLaunchAllowed: (id: string): Promise<boolean> => ipcRenderer.invoke('products:externalLaunchAllowed', id),
+  /** 开发态插件的加载 / 卸载由主进程向**每个窗口**广播:收到就重载这些插件 id(卸载 = 来源没了 → 拆掉)。 */
+  onDevPluginsChanged: (cb: (change: { pluginIds: string[] }) => void) => {
+    const listener = (_e: unknown, change: { pluginIds: string[] }) => cb(change)
+    ipcRenderer.on('plugins:devChanged', listener)
+    return () => ipcRenderer.removeListener('plugins:devChanged', listener)
+  },
   // ── Forsion Connect:Coding Space 项目发布到云端托管(token 留主进程) ──
   connectMeta: (dir: string): Promise<{ slug?: string }> => ipcRenderer.invoke('connect:meta', dir),
   connectList: (): Promise<any> => ipcRenderer.invoke('connect:list'),

@@ -85,10 +85,15 @@ export function installArtificialViews(): void {
   // 独立窗里的 `product` 视图确实存在:main.tsx 在分流 DetachedRoot 之前就调了 installEngine()
   //(→ installBuiltins → 本函数),卫星窗与主窗跑的是同一份注册表。
   if (windowKind() === 'main' && !unregisterProductLink) {
-    unregisterProductLink = registerDeepLinkOpener('product', (params) => {
+    // ⚠️外部拉起要先过宿主那一问(productsExternalLaunchAllowed):产物在、且用户在本机为它建过桌面快捷方式。
+    // 深链是任意网页可达的输入,而作品页面握着 Forsion Connect 代理(读账号、花额度)—— 一个下载来的文件夹
+    // 配一条链接不该零点击跑起来;一串不存在的 id 也不该各开一个空窗口(Codex 评审)。应用内点开不走这条路。
+    unregisterProductLink = registerDeepLinkOpener('product', async (params) => {
       const id = productIdFromParams(params)
       const open = window.tangu?.openDetached
-      if (!id || !open) return false // 形态不合 / 没有开窗能力 → 交回调用方去提示「链接目标不可用」
+      const allowed = window.tangu?.productsExternalLaunchAllowed
+      if (!id || !open || !allowed) return false // 形态不合 / 没有开窗能力 / 老宿主没有这道闸 → 「链接目标不可用」
+      if (!(await allowed(id).catch(() => false))) return false
       void open([{ type: 'product', params: { id } }])
       return true
     })

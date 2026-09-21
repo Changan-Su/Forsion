@@ -221,3 +221,22 @@ it('⚠️授权按「id + 真实根」双钥匙:同 id 的 sidecar 被搬进另
   await boot()
   expect((await list()).some((s) => s.dev)).toBe(false)
 })
+
+it('⚠️清单写坏期间沿用授权当时的插件 id:身份不漂到目录名,被影子的安装版也不会悄悄回来', async () => {
+  // 目录叫 cool-project、清单 id 是 demo。少一个逗号 → 装载器读不出 id;若退回目录名,开发副本的报错就挂到
+  // `cool-project` 上没人看,而安装版 `demo` 不再被影子、自己跑了起来(Codex 评审)。
+  await installed('demo', { id: 'demo', name: '安装版', version: '1.0.0', apiVersion: 1, main: 'main.js' })
+  const pdir = path.join(env.root, 'workspace', 'Project', 'cool-project')
+  await fs.mkdir(pdir, { recursive: true })
+  const id = 'p_00000000beef'
+  await fs.writeFile(path.join(pdir, '.forsion-product.json'), JSON.stringify({ version: 1, id, createdAt: Date.now() }))
+  await fs.writeFile(path.join(pdir, 'manifest.json'), '{ "id": "demo", broken')
+  await fs.writeFile(path.join(pdir, 'main.js'), 'ctx.dev = 1')
+  const { setDevLoad } = await import('../devLoadStore')
+  setDevLoad(path.join(env.root, 'app-data'), { id, root: await fs.realpath(pdir), pluginId: 'demo' }, true)
+  await boot()
+  const sources = await list()
+  expect(sources.filter((s) => s.id === 'demo')).toHaveLength(1)
+  expect(sources.find((s) => s.id === 'demo')).toMatchObject({ dev: true, blocked: 'invalid', code: '' })
+  expect(sources.some((s) => s.id === 'cool-project')).toBe(false)
+})

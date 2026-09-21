@@ -160,8 +160,18 @@ describe('standalone local Amadeus capability', () => {
     expect(await vault.call(IPC.dbWriteCas, ['Calendar.db', saved.data, saved.version], 'stale-tab')).toMatchObject({ ok: false })
     expect(events.filter((e) => e.channel === IPC.dbChange)).toHaveLength(beforeConflict)
     await writeFile(join(options().root, 'Observed.md'), 'Changed by a local task #engine')
-    await expect.poll(() => events.some((event) => event.channel === IPC.externalChange && event.payload === 'Observed.md' && event.origin === null)).toBe(true)
-    await expect.poll(async () => (await vault.call(IPC.search, ['Changed by a local task']) as unknown[]).length).toBe(1)
+    // 等的是**操作系统的文件监听事件**(chokidar,ignoreInitial)。⚠️本用例打开库之后立刻外部写盘,并不等监听器 ready:
+    // 全量并行、别的套件在起进程时初始扫描变慢,这次写入会落在 ready **之前** —— 被当成初始内容吞掉,事件永远不来
+    // (把预算放到 5s 照样红,说明不是「慢」而是「没有」;2026-09-21 新增的 git / 预览服务器套件把这条竞态压成了可复现)。
+    // 断言不动(要的仍是一条 origin 为 null 的 externalChange);事件没到就再外部写一次,让已经 ready 的监听器看得到。
+    const externalChange = (): boolean => events.some((event) => event.channel === IPC.externalChange && event.payload === 'Observed.md' && event.origin === null)
+    let rewrites = 0
+    await expect.poll(async () => {
+      if (externalChange()) return true
+      await writeFile(join(options().root, 'Observed.md'), `Changed by a local task #engine${' '.repeat(++rewrites)}`)
+      return false
+    }, { timeout: 8000, interval: 300 }).toBe(true)
+    await expect.poll(async () => (await vault.call(IPC.search, ['Changed by a local task']) as unknown[]).length, { timeout: 5000 }).toBe(1)
     await close(vault)
     expect(vault.root()).toBeNull()
     await expect(vault.call(IPC.writeTextFile, ['AfterClose.md', 'bad'])).rejects.toThrow('closed')

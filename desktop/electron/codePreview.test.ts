@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, beforeEach, vi } from 'vitest'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { get as httpGet, type Server } from 'node:http'
@@ -261,7 +261,7 @@ describe('产物稳定源(令牌持久化 + 粘性端口)', () => {
     expect((await get(new URL(a.origin).port, '/index.html', hostOf(a))).body).toBe('hi')
   })
 
-  it('粘性端口:空闲就复用;被占则退回随机口并记下新端口', async () => {
+  it('粘性端口:空闲就复用;⚠️被占只是这一次用临时口,盘上的首选端口不许动(下次还回得去)', async () => {
     const want = await freePort()
     let state: PreviewPersistedState = { port: want }
     setPreviewPersistence({ load: () => state, save: (s) => { state = JSON.parse(JSON.stringify(s)) } })
@@ -275,11 +275,31 @@ describe('产物稳定源(令牌持久化 + 粘性端口)', () => {
     try {
       const b = await serveProductRoot('p_port', mkdir())
       expect(new URL(b.origin).port).not.toBe(String(want)) // EADDRINUSE → listen(0)
-      expect(state.port).toBe(Number(new URL(b.origin).port)) // 且记下来,下次从新端口开始粘
+      // 一次偶然的占用不许让所有产物永久搬家:首选端口原样留在盘上(旧源里的 localStorage / IndexedDB 还够得着)。
+      expect(state.port).toBe(want)
       expect(b.token).toBe(a.token) // 端口换了令牌不换
     } finally {
       await new Promise<void>((r) => squatter.close(() => r()))
     }
+    // 占用者走了 → 下一次启动回到原来的源。
+    stopCodePreview()
+    const c = await serveProductRoot('p_port', mkdir())
+    expect(c.origin).toBe(a.origin)
+  })
+
+  it('⚠️已经挂出去的根被调包(换成软链 / 另一个目录)→ 一律 404,不跟着新目标走', async () => {
+    const dir = mkdir()
+    writeFileSync(join(dir, 'index.html'), 'ORIGINAL')
+    const secret = mkdir()
+    writeFileSync(join(secret, 'id_rsa'), 'PRIVATE KEY')
+    const { origin } = await serveProductRoot('p_swap', dir)
+    expect(await (await fetch(`${origin}/index.html`)).text()).toBe('ORIGINAL')
+    renameSync(dir, `${dir}.moved`)
+    symlinkSync(secret, dir, 'dir') // 页面还开着,目录被换成一条指向别处的软链
+    expect((await fetch(`${origin}/id_rsa`)).status).toBe(404)
+    rmSync(dir)
+    mkdirSync(dir); writeFileSync(join(dir, 'index.html'), 'IMPOSTOR') // 换成另一个真目录同样不认(身份 = dev+ino)
+    expect((await fetch(`${origin}/index.html`)).status).toBe(404)
   })
 
   it('产物令牌不参与 LRU:发满 TOKEN_CAP 个路径令牌也挤不掉它', async () => {

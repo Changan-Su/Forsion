@@ -319,3 +319,56 @@ describe('桌面壳接线(静态探针 —— 这几行在 tsx 里,单测的 imp
 //  · reloadDevPlugin 去掉重载后的第二次快照 → 「stash 不许重复开」那条红;
 //  · toPlugin 里去掉 clearDevRecords / reloadOne 里去掉 dropDevRecords → 「重载即清账」那条红;
 //  · devRecords 的 push 去掉封顶 → 200/20 两条红。
+
+describe('撤权优先:重载不许「装作成功」(Codex 评审)', () => {
+  const DEV = (id: string, code: string): ExternalPluginSource => source({ id, code, dev: true, devRoot: `/p/${id}`, devProductId: 'p_00000000000a' })
+
+  it('⚠️来源列表读不出来:开发副本当场拆掉,并把错误抛给调用方(绝不出现「授权已撤、实例还在、界面报成功」)', async () => {
+    env.sources = [DEV('devx', PROBE_CODE('devx'))]
+    await usePluginStore.getState().loadExternal()
+    expect(usePluginStore.getState().activeIds).toContain('devx')
+    env.onList = () => { throw new Error('ipc down') }
+    await expect(reloadDevPlugin('devx')).rejects.toThrow(/ipc down/)
+    expect(usePluginStore.getState().activeIds).not.toContain('devx')
+    expect(usePluginStore.getState().plugins.some((p) => p.id === 'devx')).toBe(false)
+  })
+
+  it('显式重载是 force:源码一字没变也真拆真装(setup 因瞬时原因抛过错要能重试;只改 manifest 时旧实例也得换)', async () => {
+    env.sources = [DEV('devf', PROBE_CODE('devf'))]
+    await usePluginStore.getState().loadExternal()
+    expect(probe().filter((p) => p.id === 'devf')).toHaveLength(1)
+    await reloadDevPlugin('devf')
+    expect(probe().filter((p) => p.id === 'devf')).toHaveLength(2)
+  })
+
+  it('同一个项目改了 manifest.id:旧 id 名下那份实例一并拆掉,新旧不并存', async () => {
+    env.sources = [DEV('old-id', PROBE_CODE('old-id'))]
+    await usePluginStore.getState().loadExternal()
+    env.sources = [DEV('new-id', PROBE_CODE('new-id'))]
+    await reloadDevPlugin('new-id')
+    expect(usePluginStore.getState().activeIds).toContain('new-id')
+    expect(usePluginStore.getState().plugins.some((p) => p.id === 'old-id')).toBe(false)
+  })
+})
+
+describe('async setup 的代次', () => {
+  it('⚠️上一版迟到的 reject 不许把已经装好的新一版标成失败;迟到交回的 disposer 当场收掉', async () => {
+    const g = globalThis as unknown as { __late: { reject?: (e: Error) => void; resolve?: (d: () => void) => void; disposed: number } }
+    g.__late = { disposed: 0 }
+    const V1 = 'return new Promise((resolve, reject) => { globalThis.__late.reject = reject })'
+    const V1b = 'return new Promise((resolve) => { globalThis.__late.resolve = resolve })'
+    const mk = (code: string): ExternalPluginSource => source({ id: 'gen', code, dev: true, devRoot: '/p/gen', devProductId: 'p_00000000000b' })
+    env.sources = [mk(V1)]
+    await usePluginStore.getState().loadExternal()
+    env.sources = [mk(V1b)] // 第 2 版装好
+    await reloadDevPlugin('gen')
+    g.__late.reject?.(new Error('v1 exploded late'))
+    await Promise.resolve(); await Promise.resolve()
+    expect(getDevPluginState('gen').setupError).toBeNull()
+    env.sources = [mk('return () => {}')] // 第 3 版装好之后,第 2 版才交回它的 disposer
+    await reloadDevPlugin('gen')
+    g.__late.resolve?.(() => { g.__late.disposed++ })
+    await Promise.resolve(); await Promise.resolve()
+    expect(g.__late.disposed).toBe(1)
+  })
+})

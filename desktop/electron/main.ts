@@ -2317,6 +2317,7 @@ app.whenReady().then(async () => {
     desktopDir: () => app.getPath('desktop'),
     execPath: process.execPath,
     trashItem: (p) => shell.trashItem(p),
+    broadcast: (channel, payload) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send(channel, payload) },
     writeShortcutLink: process.platform === 'win32' ? (p, o) => shell.writeShortcutLink(p, 'create', o) : undefined,
   })
 

@@ -6,6 +6,16 @@ export type ProductKind = 'web' | 'plugin' | 'unknown'
 /** 项目目录里的身份文件名。id 在文件里不在路径里 → 改文件夹名 / 挪位置,快捷方式与稳定源都不死。 */
 export const PRODUCT_SIDECAR = '.forsion-product.json'
 
+/** 插件的**生效 id**:清单里的 id 合法(kebab-case)就用它,否则退回目录名,两者都不合法 → null。
+ *  产物注册表与插件装载器(electron/amadeus/ipc.ts 的 pluginIdOf)**必须是同一条规则** —— 两边各判各的时,
+ *  清单写 `com.demo.plugin`、目录叫 `my-plugin`,注册表报前者、装载器用后者:「在 Forsion 中加载」重载的是一个不存在的 id,
+ *  Sandbox 面板永远看不到它(Codex 评审)。 */
+const SAFE_PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
+export function effectivePluginId(dirName: string, manifestId: unknown): string | null {
+  if (typeof manifestId === 'string' && SAFE_PLUGIN_ID.test(manifestId)) return manifestId
+  return SAFE_PLUGIN_ID.test(dirName) ? dirName : null
+}
+
 export interface ProductSummary {
   /** `p_<12hex>`;过得了 deepLinkPlan.isSafeId。 */
   id: string

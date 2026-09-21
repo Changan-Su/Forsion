@@ -123,7 +123,18 @@ export async function reloadDevPlugin(pluginId: string): Promise<void> {
   const prefix = `plugin:${pluginId}:`
   const before = bridge ? bridge.snapshot(prefix) : []
   const restoreFocus = bridge?.captureFocus?.() ?? null
-  await usePluginStore.getState().reloadOne(pluginId)
+  // force:显式的开发态重载一律真拆真装 —— setup 因瞬时原因抛过错要能重试,只动了 manifest(name / capabilities / events)
+  //        而 main.js 一字没改时旧实例也得换掉。strict:来源列表读不出来时拆掉开发副本并**把错误抛给调用方**,
+  //        绝不让「授权已撤、实例还在、界面报成功」这种组合发生。
+  await usePluginStore.getState().reloadOne(pluginId, { force: true, strict: true })
+  // 重载**之后**再读产物 id:新 id 是第一次装进来,重载前仓里还没有它这一条。
+  const productId = usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.devProductId
+  // 同一个项目改过 manifest.id:旧 id 名下那份实例的来源已经没了,一并重载(= 拆掉),否则新旧两份同时活着。
+  if (productId) {
+    for (const p of usePluginStore.getState().plugins) {
+      if (p.dev && p.devProductId === productId && p.id !== pluginId) await usePluginStore.getState().reloadOne(p.id, { strict: true })
+    }
+  }
   if (!bridge || !before.length) return
   const stillOpen = new Set(bridge.snapshot(prefix).map((v) => v.type))
   for (const view of before) {

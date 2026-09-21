@@ -5,13 +5,14 @@
  * 信任口径:每个 handler 都要 isTrustedSender(webview / 子 frame 出局);渲染层给的只有**产物 id 或目录**,
  * id → 目录一律回注册表重解(containment 在 productsRegistry 里),落盘值与参数都不直接当路径用。
  */
-import { promises as fs, realpathSync, readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs'
+import { promises as fs, realpathSync, readFileSync, writeFileSync, renameSync, mkdirSync, statSync } from 'node:fs'
 import { dirname, join, sep } from 'node:path'
 import type { IpcMain, IpcMainInvokeEvent } from 'electron'
 import { PRODUCT_NO_WEB_ENTRY, type GitPanelStatus, type ProductKind, type ProductSummary, type ShortcutResult } from '../shared/products'
 import { ensureProduct, getProduct, isProductId, scanProducts, updateProduct } from './productsRegistry'
 import { createProductShortcut } from './productShortcut'
 import { isDevLoaded, readDevLoads, setDevLoad } from './devLoadStore'
+import { allowExternalLaunch, gitOwners, isExternalLaunchAllowed, revokeExternalLaunch } from './productTrust'
 import { commitGitVersion, gitHistoryStatus, listGitVersions, restoreGitVersion } from './gitHistory'
 import { serveProductRoot, servePathRoot, setPreviewPersistence, type PreviewPersistedState } from './codePreview'
 
@@ -28,6 +29,9 @@ export interface ProductsIpcDeps {
   desktopDir(): string
   execPath: string
   trashItem(path: string): Promise<void>
+  /** 向**每一个**可信窗口广播(主窗 / 分离窗 / mini)。开发态插件的加载 / 卸载必须全窗生效:只重载发起的那个渲染层,
+   *  别的窗口里那份插件实例照旧握着笔记库与账号权限(Codex HIGH)。 */
+  broadcast(channel: string, payload: unknown): void
   writeShortcutLink?: (path: string, options: { target: string; args: string; description?: string; icon?: string; iconIndex?: number }) => boolean
 }
 
@@ -61,11 +65,19 @@ export function installPreviewPersistence(homeDir: () => string): void {
 
 /** dir 是托管根的**直接子目录**(realpath 后)→ 它是产物,预览走产物的稳定源;否则走一次性令牌根。
  *  Coding Studio 预览与「造物」里启动同一个项目因此是**同一个源**:编辑时存的本地数据,启动后还在。 */
+/** real 是不是托管根的**直接子目录**。按 dev+ino 认父目录,不比字符串:APFS / NTFS 大小写不敏感,同一个目录换个大小写
+ *  传进来就会被判成「根外」→ git 只读、预览退回一次性源(本地数据不再跨重启),而且全程不报错。 */
+export function isDirectChild(projectsRoot: string, real: string): boolean {
+  try {
+    const parent = statSync(dirname(real)), root = statSync(realpathSync(projectsRoot))
+    return parent.ino === root.ino && parent.dev === root.dev && dirname(real) !== real
+  } catch { return false }
+}
+
 export async function previewOriginFor(projectsRoot: string, dir: string): Promise<{ origin: string; token: string; base: string }> {
   const real = realpathSync(dir)
   try {
-    const root = realpathSync(projectsRoot)
-    if (real.startsWith(root + sep) && !real.slice(root.length + 1).includes(sep)) {
+    if (isDirectChild(projectsRoot, real)) {
       const product = await ensureProduct(projectsRoot, real)
       return await serveProductRoot(product.id, product.root)
     }
@@ -91,16 +103,18 @@ export function registerProductsIpc(d: ProductsIpcDeps): void {
     return real
   }
   /** 托管根的直接子目录才允许宿主写 git(init / add -A / restore);根外导入的目录只读。 */
-  const managed = (real: string): boolean => {
-    try {
-      const root = realpathSync(d.projectsRoot())
-      return real.startsWith(root + sep) && !real.slice(root.length + 1).includes(sep)
-    } catch { return false }
-  }
-  const git = () => ({ env: d.env() })
+  const managed = (real: string): boolean => isDirectChild(d.projectsRoot(), real)
+  // owners = 「这个仓是 Forsion 建的」的宿主侧登记处(nonce);只看 .git 里的标记文件是可伪造的(见 gitHistory.GitOwners)。
+  const git = () => ({ env: d.env(), owners: gitOwners(d.homeDir()) })
   /** devLoad 叠加:授权住在宿主家目录(devLoadStore),不在不可信的项目 sidecar 里。只有插件产物才可能为 true。 */
-  const withDevLoad = <T extends ProductSummary | null>(p: T, loads = readDevLoads(d.homeDir())): T =>
-    (p && p.kind === 'plugin' ? { ...p, devLoad: isDevLoaded(loads, p) } : p)
+  //  ⚠️**不看当前判型**:授权过的插件项目把 manifest.json 写坏(少个逗号)的那一刻会被判成 web / unknown ——
+  //  若这时 devLoad 跟着消失,Studio 就把 Sandbox 入口收起来,而宿主那边授权还在、开发副本以 blocked:'invalid' 挂着,
+  //  用户既看不到报错也卸不掉它。授权在 → devLoad 恒 true,pluginId 沿用授权当时的那个。
+  const withDevLoad = <T extends ProductSummary | null>(p: T, loads = readDevLoads(d.homeDir())): T => {
+    if (!p) return p
+    if (!isDevLoaded(loads, p)) return (p.kind === 'plugin' ? { ...p, devLoad: false } : p)
+    return { ...p, devLoad: true, pluginId: p.pluginId ?? loads[p.id]?.pluginId ?? undefined }
+  }
   /** 渲染层传来的本地化标签:只收短字符串,其余当没传(各模块有英文兜底)。 */
   const label = (v: unknown): string | undefined => (typeof v === 'string' && v.length <= 120 ? v : undefined)
 
@@ -122,7 +136,10 @@ export function registerProductsIpc(d: ProductsIpcDeps): void {
     if (devLoad !== undefined) {
       if (typeof devLoad !== 'boolean') throw new Error('Product devLoad must be a boolean')
       if (devLoad && next.kind !== 'plugin') throw new Error('Only plugin projects can be loaded into Forsion')
+      const previous = readDevLoads(d.homeDir())[next.id]?.pluginId ?? null
       setDevLoad(d.homeDir(), next, devLoad)
+      // 全窗重载:新旧两个 id 都要(改过 manifest.id 时旧实例得拆掉)。
+      d.broadcast('plugins:devChanged', { pluginIds: [...new Set([next.pluginId, previous].filter((x): x is string => !!x))] })
     }
     return withDevLoad(next)
   }))
@@ -137,14 +154,34 @@ export function registerProductsIpc(d: ProductsIpcDeps): void {
   d.ipcMain.handle('products:shortcut', guard(async (id: unknown, fallbackName?: unknown): Promise<ShortcutResult> => {
     let p
     try { p = await product(id) } catch { return { ok: false, code: 'not_found' } }
-    return createProductShortcut({ id: p.id, name: p.name }, {
+    const result = await createProductShortcut({ id: p.id, name: p.name }, {
       isPackaged: d.isPackaged, desktopDir: d.desktopDir(), execPath: d.execPath,
       appImage: process.env.APPIMAGE, writeShortcutLink: d.writeShortcutLink,
       fallbackName: label(fallbackName),
     })
+    // 「添加到桌面」是用户在应用内亲手点的 —— 只有这一步才把该产物登记成「允许从应用外拉起」(见 productTrust)。
+    if (result.ok) allowExternalLaunch(d.homeDir(), p)
+    return result
+  }))
+  // 深链 / 快捷方式落地前问这一句:产物在、且用户为它建过快捷方式。深链是任意网页可达的输入,而产物页面握着
+  // Forsion Connect 代理(读账号、花额度)—— 一个下载来的文件夹配一条链接,不该零点击跑起来;也顺带挡掉
+  // 「一串形态合法但不存在的 id 各开一个空窗口」。应用内点开不走这里。
+  d.ipcMain.handle('products:externalLaunchAllowed', guard(async (id: unknown) => {
+    if (!isProductId(id)) return false
+    const p = await getProduct(d.projectsRoot(), id).catch(() => null)
+    return !!p && p.kind === 'web' && !!p.entry && isExternalLaunchAllowed(d.homeDir(), p)
   }))
   // 删除 = 移入系统回收站(可恢复)。目录来自注册表重解,不吃渲染层路径。
-  d.ipcMain.handle('products:trash', guard(async (id: unknown) => { await d.trashItem((await product(id)).root); return { ok: true } }))
+  d.ipcMain.handle('products:trash', guard(async (id: unknown) => {
+    const p = await product(id)
+    // 先撤权再删:开发副本的授权不撤,回收站里的代码下次启动照样以插件权限加载(目录被「放回原处」就更是了);
+    // 已加载的实例也得当场全窗拆掉。
+    const grant = readDevLoads(d.homeDir())[p.id]
+    if (grant) { setDevLoad(d.homeDir(), p, false); d.broadcast('plugins:devChanged', { pluginIds: [grant.pluginId, p.pluginId].filter((x): x is string => !!x) }) }
+    revokeExternalLaunch(d.homeDir(), p.id)
+    await d.trashItem(p.root)
+    return { ok: true }
+  }))
 
   // ── Coding Studio 的 git 版本(只给有 git 的用户;没有 → 面板显示安装建议)──
   d.ipcMain.handle('codeStudio:gitStatus', guard(async (root: unknown): Promise<GitPanelStatus> => {

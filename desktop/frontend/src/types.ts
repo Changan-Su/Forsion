@@ -1168,6 +1168,9 @@ declare global {
       /** fallbackName:产物名清洗后为空时用的桌面文件名(落盘产物命名,跟随当前语言)。 */
       productsShortcut?(id: string, fallbackName?: string): Promise<ShortcutResult>
       productsTrash?(id: string): Promise<{ ok: boolean }>
+      /** 这件产物能否**从应用外**(桌面快捷方式 / forsion:// 深链)拉起:存在、是网页、且用户为它建过快捷方式。 */
+      productsExternalLaunchAllowed?(id: string): Promise<boolean>
+      onDevPluginsChanged?(cb: (change: { pluginIds: string[] }) => void): () => void
       /** Forsion Connect:Coding Space 项目发布到云端托管(主进程持 token 转发)。 */
       connectMeta?(dir: string): Promise<{ slug?: string }>
       connectList?(): Promise<{ ok: boolean; code?: string; detail?: string; base?: string; handle?: string | null; apps?: Array<{ slug: string; name: string; entry: string; status: string; total_bytes: number; updated_at?: string; listing_status?: string | null; listing_summary?: string | null; listing_note?: string | null }>; used?: number; limit?: number; tier?: string }>

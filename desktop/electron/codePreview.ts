@@ -9,7 +9,7 @@
  * ponytail: 仅绑 127.0.0.1 + 穿越守卫 + 只服务当前 root;不是通用文件服务器,不做目录列表/上传。
  */
 import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http'
-import { createReadStream, statSync, readFileSync, realpathSync } from 'node:fs'
+import { createReadStream, lstatSync, statSync, readFileSync, realpathSync } from 'node:fs'
 import { randomBytes, createHash } from 'node:crypto'
 import { resolve, join, sep, extname } from 'node:path'
 import { transform, type Transform } from 'sucrase'
@@ -98,6 +98,7 @@ export function previewToken(dir: string): string {
   const token = randomBytes(16).toString('hex')
   if (tokenToRoot.size >= TOKEN_CAP) evictOldestToken()
   tokenToRoot.set(token, abs)
+  rememberRoot(abs)
   rootToToken.set(abs, token)
   return token
 }
@@ -264,7 +265,21 @@ function serveForsionEndpoint(urlPath: string, req: IncomingMessage, res: Server
  *  `deref`=令牌根专用:`resolveSafe` 只做路径算术,拦不住**根内的软链指到根外**(有人往被预览的
  *  目录里塞一条 `x -> ~/.ssh`,页面 fetch 它就读到了)。Coding Space 不开这条 —— 用户自己的项目里
  *  `node_modules` 之类软链是常态,按真实落点判会误伤。 */
+/** 令牌根登记时记下目录的身份(dev+ino)。之后每个请求都核一遍:根必须还是**同一个真目录**,不是软链。
+ *  不核的话,产物已经在页面里跑着的时候把它的目录换成一条指向 ~/.ssh 的软链,页面 `fetch('/id_rsa')` 就读到了 ——
+ *  下面的 realpath 包含性检查是相对「此刻的根」做的,根自己被调了包它看不出来(Codex 评审)。 */
+const rootIdentity = new Map<string, { dev: number; ino: number }>()
+function rememberRoot(abs: string): void {
+  try { const st = lstatSync(abs); if (st.isDirectory()) rootIdentity.set(abs, { dev: st.dev, ino: st.ino }) } catch { /* 目录不在:请求时自然 404 */ }
+}
+function sameRoot(abs: string): boolean {
+  const want = rootIdentity.get(abs)
+  if (!want) return true // 没登记过身份的根(登记那一刻目录还不存在)沿用原有检查
+  try { const st = lstatSync(abs); return st.isDirectory() && st.dev === want.dev && st.ino === want.ino } catch { return false }
+}
+
 function serveFrom(rootDir: string, urlPath: string, res: ServerResponse, deref = false): void {
+  if (deref && !sameRoot(rootDir)) { res.statusCode = 404; res.end('not found'); return }
   const target = resolveSafe(rootDir, urlPath)
   if (!target) { res.statusCode = 403; res.end('forbidden'); return }
   let st
@@ -378,7 +393,11 @@ function ensurePreviewServer(): Promise<string> {
     previewServer = srv
     const addr = srv.address()
     const port = typeof addr === 'object' && addr ? addr.port : 0
-    if (port && port !== want) { const state = persistedState(); state.port = port; persistSave(state) }
+    // ⚠️只在**还没有**首选端口时才落盘。首选端口这次被别的进程占了 → 本次会话用临时端口,**盘上的首选不动**,
+    //   下次启动再试它。原先这里会把临时端口写回去:一次偶然的占用就让所有产物永久搬到新源,旧源里的
+    //   localStorage / IndexedDB 再也够不着(Codex 评审)。代价:首选端口若被长期霸占,每次启动都是临时源 ——
+    //   数据还在原地等着,比一次性丢光强。
+    if (port && !want) { const state = persistedState(); state.port = port; persistSave(state) }
     return `${port}`
   })().catch((e) => { previewStarting = null; throw e })
   return previewStarting
@@ -405,6 +424,7 @@ export async function serveProductRoot(productId: string, dir: string): Promise<
   const prev = tokenToRoot.get(token)
   if (prev && prev !== abs && rootToToken.get(prev) === token) rootToToken.delete(prev)
   tokenToRoot.set(token, abs)
+  rememberRoot(abs)
   // 让 servePathRoot(同一目录) 也落到这个令牌上:Coding Studio 里编辑时的预览与「启动」后的产物
   // 同源 → 调试时写进 localStorage 的东西启动后还在。原来那个随机令牌不回收(可能正开着,回收了
   // 刷新就 404),它自己会 LRU 掉。
@@ -456,6 +476,7 @@ export function stopCodePreview(): void {
   previewServer = null
   previewStarting = null
   tokenToRoot.clear()
+  rootIdentity.clear()
   rootToToken.clear()
   tokenToInline.clear()
   inlineToToken.clear()

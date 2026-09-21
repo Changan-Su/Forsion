@@ -9,13 +9,24 @@
  * 只读边界:用户自己的仓(foreign)和「项目落在别人仓里」(nested)只列日志,绝不写。
  */
 import { execFile } from 'node:child_process'
-import { existsSync, promises as fs } from 'node:fs'
+import { accessSync, constants as fsConstants, existsSync, promises as fs, statSync } from 'node:fs'
 import path from 'node:path'
+import { randomBytes } from 'node:crypto'
 import { PRODUCT_SIDECAR } from '../shared/products'
 import type { GitHistoryStatus, GitRepoState, GitRestoreSummary, GitVersion } from '../shared/products'
 
 /** env = 调用方补全过 PATH 的环境(主进程的 envWithFullPath);gitPath 是测试/宿主的显式覆盖,null = 假装本机没有 git。 */
-export interface GitEnv { env?: NodeJS.ProcessEnv; gitPath?: string | null }
+export interface GitEnv { env?: NodeJS.ProcessEnv; gitPath?: string | null; owners?: GitOwners }
+
+/**
+ * 「这个仓是 Forsion 建的」的**宿主侧**凭据。为什么不能只看 `.git/` 里的标记文件(第一版就是那么干的,Codex 三份评审一致打回):
+ * 项目目录不可信 —— 一个解压 / 克隆来的文件夹可以自带标记文件,再配上 `.git/config` 里的 clean filter 与 `.gitattributes`;
+ * 标记一认,它就是「我方仓」,下一轮自动 `git add -A` 便执行 filter 里的任意命令(关掉 hooks 管不到 filter)。
+ * 现在标记文件里是 init 时发的随机 nonce,**nonce 同时登记在宿主家目录**(由 IPC 层注入的 owners 负责落盘):
+ * 两边对得上才算我方仓。外来文件夹猜不出一个登记过的 nonce;项目改名 / 挪位置 nonce 跟着 .git 走,照样认。
+ * 没注入 owners = 一律不认(fail closed):只读,也不 init。
+ */
+export interface GitOwners { has(nonce: string): boolean; add(nonce: string): void }
 
 /**
  * 提交标题里那几个**落盘产物命名**的当前语言文案,由调用方(IPC 层按界面语言)传进来。
@@ -62,6 +73,16 @@ const DARWIN_EXTRA = [
 
 /** 两个 .forsion-* 边车存着项目身份 / 发布 slug:必须永不被跟踪,否则恢复到早期版本会连它们一起删掉。 */
 const CONNECT_SIDECAR = '.forsion-connect.json'
+/** 暂存与恢复一律把两个边车排除在 pathspec 之外:`.gitignore` 护不住**已经被跟踪**的文件(agent / 用户 `add -f` 过一次就算),
+ *  而恢复到一个没有它的旧提交会把它从磁盘上删掉 —— 产物 id、快捷方式、稳定源一起断。 */
+const SIDECAR_EXCLUDES = [`:(exclude,top)${PRODUCT_SIDECAR}`, `:(exclude,top)${CONNECT_SIDECAR}`]
+/** 旧快照(codeStudioProjects)由宿主兜底排除的那几类文件名,git 这条路不能反而放行:提交是永久的,之后一 push 就泄露。
+ *  判据与那边逐字同源(按分隔符成词,`secretSanta.tsx` 不算,`secrets.json` / `my-credentials.yml` 算)。 */
+const SENSITIVE_NAME = /(^|[._-])(secrets?|credentials?|private[-_]?key|service[-_]?account)([._-]|$)/i
+const TOKEN_CREDENTIAL = /^(?:(?:access|refresh|auth|oauth|api)[._-])?tokens?(?:[._-](?:cache|credentials|store))?\.(?:jsonc?|ya?ml|toml|txt|ini|conf)$/i
+/** 单文件体积闸:自动版本每轮都跑,一个几 GB 的缓存 / 素材进了 `add -A` = 每轮哈希一遍,30s 超时还会留下一地松散对象。 */
+const MAX_TRACKED_BYTES = 10 * 1024 * 1024
+const NONCE = /^[0-9a-f]{32}$/
 const REQUIRED_IGNORES = ['node_modules/', 'dist/', 'build/', 'out/', '.next/', 'coverage/', '.DS_Store', '.env', '.env.*', '!.env.example', '*.pem', '*.key', PRODUCT_SIDECAR, CONNECT_SIDECAR]
 
 /**
@@ -85,11 +106,18 @@ export function gitCandidates(env: NodeJS.ProcessEnv = process.env, platform: No
 
 /** 找 git 可执行文件。**绝不 spawn** —— 只 existsSync 查文件在不在。 */
 export function findGit(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string | null {
-  return gitCandidates(env, platform).find((file) => existsSync(file)) ?? null
+  // 光「路径存在」不够:PATH 里一个叫 git 的目录 / 不可执行文件会让界面报「有 git、可写」,一保存才失败,安装建议也永远不出现。
+  return gitCandidates(env, platform).find((file) => {
+    try {
+      if (!statSync(file).isFile()) return false
+      if (platform !== 'win32') accessSync(file, fsConstants.X_OK)
+      return true
+    } catch { return false }
+  }) ?? null
 }
 
 interface Run { code: number; stdout: string; stderr: string }
-interface Ctx { bin: string; root: string; env?: NodeJS.ProcessEnv }
+interface Ctx { bin: string; root: string; env?: NodeJS.ProcessEnv; owners?: GitOwners }
 
 /** 非零退出不抛 —— 仓库状态天生靠退出码判(rev-parse / config / cat-file / merge-base)。真失败由调用点用 must() 点名。 */
 function run(c: Ctx, timeout: number, args: string[]): Promise<Run> {
@@ -125,7 +153,7 @@ async function resolveRoot(root: string): Promise<string> {
 async function context(root: string, g?: GitEnv): Promise<Ctx | null> {
   const real = await resolveRoot(root)
   const bin = g?.gitPath !== undefined ? g.gitPath : findGit(g?.env)
-  return bin ? { bin, root: real, env: g?.env } : null
+  return bin ? { bin, root: real, env: g?.env, owners: g?.owners } : null
 }
 
 async function requireGit(root: string, g?: GitEnv): Promise<Ctx> {
@@ -173,7 +201,14 @@ async function repoState(c: Ctx): Promise<GitRepoState> {
   if (top.code !== 0) return scanForRepo(c.root)
   const real = await fs.realpath(out(top)).catch(() => '')
   if (!(await sameDir(real, c.root))) return 'nested'
-  return existsSync(path.join(c.root, '.git', MARKER)) ? 'owned' : 'foreign'
+  return (await ownedNonce(c)) ? 'owned' : 'foreign'
+}
+
+/** 标记文件里的 nonce 且宿主登记过 → 返回它;否则 null。读不到 / 形状不对 / 没注入 owners 一律 null(= 按用户自己的仓,只读)。 */
+async function ownedNonce(c: Ctx): Promise<string | null> {
+  if (!c.owners) return null
+  const nonce = (await fs.readFile(path.join(c.root, '.git', MARKER), 'utf8').catch(() => '')).trim()
+  return NONCE.test(nonce) && c.owners.has(nonce) ? nonce : null
 }
 
 /** 提交标题必须是单行:控制字符(含换行)折成空格再压空白,超长截断,空标题给缺省名。
@@ -225,15 +260,48 @@ async function seedIgnore(root: string): Promise<void> {
   await fs.writeFile(file, `${head}# Forsion\n${missing.join('\n')}\n`, 'utf8')
 }
 
-/** 标记文件住在 .git 里(永不被跟踪),它是「这个仓是 Forsion 开的」的唯一判据 —— 没有它就是用户的仓,只读。
- *  所以标记**紧跟 init 落盘**:万一后面哪一步失败(磁盘满 / 怪文件系统),留下的是一个「我们的仓,分支名没改成 main」
- *  (下次重试即可),而不是一个没有标记的 .git —— 那会被判成 foreign,此后永远拒绝提交,用户无路可走。 */
+/** 标记文件住在 .git 里(永不被跟踪),内容是一个随机 nonce;**同一个 nonce 登记进宿主家目录**才算数(见 GitOwners)。
+ *  标记紧跟 init 落盘、随即登记:万一后面哪一步失败(磁盘满 / 怪文件系统),留下的是「我方仓,配置还没补齐」——
+ *  配置那几步是幂等的,每次写之前都会再确保一遍(ensureSetup),不会因为上次死在半路就带着缺口提交。 */
 async function initRepo(c: Ctx): Promise<void> {
+  if (!c.owners) throw new Error('read-only repository') // 没有宿主侧登记处就不建仓:建了也认不回来
   must(await write(c, 'init'), 'git init failed')
-  await fs.writeFile(path.join(c.root, '.git', MARKER), 'Forsion Coding Studio version history\n', 'utf8')
+  const nonce = randomBytes(16).toString('hex')
+  await fs.writeFile(path.join(c.root, '.git', MARKER), `${nonce}\n`, 'utf8')
+  c.owners.add(nonce)
   must(await write(c, 'symbolic-ref', 'HEAD', 'refs/heads/main'), 'git could not set the default branch')
+}
+
+/** 每次往我方仓里写之前都跑一遍,全部幂等:上一次 init 死在半路(标记已落、`.gitignore` 没写成)时,
+ *  下一次不能因为「已经是 owned」就跳过 —— 那样 `add -A` 会把 `.env`、密钥、两个边车一起提交进去。 */
+async function ensureSetup(c: Ctx): Promise<void> {
   must(await write(c, 'config', 'core.autocrlf', 'false'), 'git could not write the repository config')
   await seedIgnore(c.root)
+  // 边车若已被跟踪(有人 add -f 过):从索引里摘掉、磁盘上留着。之后它们既被忽略又不在 pathspec 里,恢复再也碰不到。
+  await write(c, 'rm', '--cached', '--ignore-unmatch', '-q', '--', PRODUCT_SIDECAR, CONNECT_SIDECAR)
+  await excludeRisky(c)
+}
+
+/** 未跟踪文件里名字像凭据的、单个超过体积闸的,写进 `.git/info/exclude`(精确路径、逐字转义)后 `add -A` 自然跳过。
+ *  放 info/exclude 而不是 .gitignore:那是宿主的兜底策略,不该出现在用户的项目文件里,也不该被 agent 顺手改掉。
+ *  ponytail: 已经被跟踪的文件不回头追(它们进历史时是干净的名字 / 体积);只看新冒出来的。 */
+async function excludeRisky(c: Ctx): Promise<void> {
+  const listed = await read(c, 'ls-files', '--others', '--exclude-standard', '-z')
+  if (listed.code !== 0) return
+  const risky: string[] = []
+  for (const rel of listed.stdout.split('\0')) {
+    if (!rel) continue
+    const name = path.posix.basename(rel).toLowerCase()
+    let drop = rel.split('/').some((part) => SENSITIVE_NAME.test(part)) || TOKEN_CREDENTIAL.test(name) || name === 'auth.json' || name === 'auth.toml'
+    if (!drop) drop = await fs.stat(path.join(c.root, rel)).then((st) => st.size > MAX_TRACKED_BYTES, () => false)
+    if (drop) risky.push(rel)
+  }
+  if (!risky.length) return
+  const file = path.join(c.root, '.git', 'info', 'exclude')
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  // gitignore 语法里的通配符与前导 `!` / `#` 都要转义;前缀 `/` 钉在仓根,只匹配这一条路径。
+  const lines = risky.map((rel) => `/${rel.replace(/[\\*?\[\]!# ]/g, (ch) => `\\${ch}`)}`)
+  await fs.appendFile(file, `${lines.join('\n')}\n`, 'utf8')
 }
 
 /** 用户自己的身份优先;一条都没配过时(git 会直接拒绝提交)才临时补,且 -c 只作用于这一条命令,不写进仓配置。 */
@@ -250,6 +318,9 @@ async function doCommit(c: Ctx, input: { name: string; auto: boolean; labels?: G
   const state = await repoState(c)
   if (state !== 'none' && state !== 'owned') throw new Error('read-only repository')
   if (state === 'none') await initRepo(c)
+  await ensureSetup(c)
+  // 暂存不用给边车写排除 pathspec:ensureSetup 刚确保过它们「被忽略 + 不在索引里」,`add -A` 本来就碰不到
+  // (而且 pathspec 里点名一个被忽略的路径,git 会直接报错拒绝)。排除 pathspec 留给 restore 用。
   must(await write(c, 'add', '-A'), 'git could not stage the project files')
   // add 之后仍然干净 = 真没东西可提(新 init 的仓只要有文件,这里必然非空)。
   if (out(must(await read(c, 'status', '--porcelain'), 'git could not read the working tree')) === '') return null
@@ -277,7 +348,8 @@ async function doRestore(c: Ctx, id: string, labels?: GitLabels): Promise<GitRes
   // ① 先把现场(含未提交改动)封成一个自动版本 —— 恢复之后用户还能原路退回来。
   const backup = await doCommit(c, { name: labelOr(labels?.backup, DEFAULT_BACKUP), auto: true, labels })
   // ② no-overlay(缺省):目标里没有的**已跟踪**文件会被删掉;被忽略的 .env / 边车是未跟踪的,动不到。
-  must(await write(c, 'restore', `--source=${id}`, '--staged', '--worktree', '--', '.'), 'git restore failed')
+  //    两个边车不在 pathspec 里:即便某个旧提交跟踪过它们,恢复也不许把产物身份换掉 / 删掉。
+  must(await write(c, 'restore', `--source=${id}`, '--staged', '--worktree', '--', '.', ...SIDECAR_EXCLUDES), 'git restore failed')
   // ③ 恢复动作本身也是一个提交:历史只增不改,永远线性。
   const restored = await doCommit(c, { name: `${labelOr(labels?.restorePrefix, DEFAULT_RESTORE_PREFIX)} ${subject}`, auto: false, labels })
   return { backupId: backup?.id ?? null, restoreId: restored?.id ?? null }
@@ -298,7 +370,9 @@ export async function gitHistoryStatus(root: string, g?: GitEnv): Promise<GitHis
   if (!c) return { available: false, state: 'none', dirty: false }
   const state = await repoState(c)
   if (state === 'none') return { available: true, state, dirty: false }
-  // ponytail: nested 时 status 报的是宿主仓全局的脏,不按项目子目录收窄 —— 那一档只读,不值得为文案再跑一次。
+  // ⚠️不是我方的仓就**不跑 status**:status 要拿工作区文件跟索引比内容,比之前会先过 clean filter ——
+  // 外来仓的 `.git/config` + `.gitattributes` 能借这一步执行任意命令。只读档本来也用不上 dirty(界面不给保存)。
+  if (state !== 'owned') return { available: true, state, dirty: false }
   const status = await read(c, 'status', '--porcelain')
   return { available: true, state, dirty: status.code === 0 && out(status) !== '' }
 }
