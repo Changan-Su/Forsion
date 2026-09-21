@@ -57,6 +57,7 @@ import { isRetryableLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
 import { query } from '../core/db.js';
+import { TEAMWORK_KIND } from './teamRuns.js';
 import { getTeam } from '../agents/teamRegistry.js';
 import { listPluginMetas } from '../plugins/registry.js';
 import { isPluginEnabledSync } from '../plugins/settingsStore.js';
@@ -312,15 +313,14 @@ export function bindSessionFacts(agentConfig: any, facts: SessionFacts): void {
 }
 
 /** 本 run 审批时现读哪个会话存着的档(gateToolCall.modeSessionId);undefined = 只用启动快照。
- *  - 团队成员一律听**团队会话**:客户端团队 run 起的激活(teamMember.followSessionMode 由团队 run 下发)、成员子聊天里直接追问
- *    (输入区发起)都算。成员会话里存的档只是上次激活抄过去的快照,不作数 —— 让它参与判定就得处理「团队降档后它还是旧宽档」
- *    「激活回写与切档撞车」一串竞态(Codex 09-21 两轮)。TUI / 通道起的团队 run 不带标记 → 快照。
+ *  - 团队成员一律听**团队会话**(teamSessionId = 已核实的父团队,见 runLoop):客户端团队 run 起的激活(teamMember.followSessionMode
+ *    由团队 run 下发)、成员子聊天里直接追问(输入区发起)都算。成员会话里存的档只是上次激活抄过去的快照,不作数 —— 让它参与判定
+ *    就得处理「团队降档后它还是旧宽档」「激活回写与切档撞车」一串竞态(Codex 09-21 两轮)。TUI / 通道起的团队 run 不带标记 → 快照。
  *  - 其余客户端输入区发起的(input.origin='client',只有 POST /agent/runs 会写):跟本会话,中途切档当场生效。
+ *    不分 execMode:沙箱会话的 MCP 工具照样过闸(Codex 09-21 三轮)。
  *  - 通道(微信远程档)/ Muse / 自动化 / 讨论 / TUI:各自定档,绝不被会话存值改写 —— 桌面把会话切成完全通行,远程消息不该跟着放开。 */
-export function approvalModeSessionId(p: { execMode: string; fromClient: boolean; sessionId: string; teamMember?: any }): string | undefined {
-  if (p.execMode !== 'host') return undefined;
-  const tm = p.teamMember;
-  if (typeof tm?.teamSessionId === 'string' && tm.teamSessionId) return p.fromClient || tm.followSessionMode === true ? tm.teamSessionId : undefined;
+export function approvalModeSessionId(p: { fromClient: boolean; sessionId: string; teamSessionId?: string; followSessionMode?: boolean }): string | undefined {
+  if (p.teamSessionId) return p.fromClient || p.followSessionMode ? p.teamSessionId : undefined;
   return p.fromClient ? p.sessionId : undefined;
 }
 
@@ -867,7 +867,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       : [];
   const approvalMode: ApprovalMode =
     agentConfig.approvalMode || (execMode === 'host' ? 'auto-edit' : 'full-auto');
-  const modeSessionId = approvalModeSessionId({ execMode, fromClient: input.origin === 'client', sessionId, teamMember: isTeamMember ? teamMember : undefined });
+  // 成员身份以库里的父链接为准:agentConfig 来自请求体,分支会话(branchSession)也会把 teamMember 原样抄走 —— 不核实,
+  // 审批就能被指到任意会话(Codex 09-21 三轮)。只在本机形态查库(云 worker 没有直连库,那边的成员 run 按快照走)。
+  let verifiedTeamSessionId: string | undefined;
+  if (isTeamMember && execMode === 'host') {
+    try {
+      const [row] = await query<any[]>(`SELECT parent_session_id, kind FROM chat_sessions WHERE id = ?`, [sessionId]);
+      if (row?.kind === TEAMWORK_KIND && row.parent_session_id === teamMember.teamSessionId) verifiedTeamSessionId = String(row.parent_session_id);
+    } catch { /* 查不到就不认成员身份 */ }
+  }
+  const modeSessionId = approvalModeSessionId({ fromClient: input.origin === 'client', sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true });
   // 无人值守的异步审批(Muse ask/agent 档):**只信引擎内部起的 run** —— input.background 由 muse.ts 直接写进
   // createRun 的 input,/agent/runs 路由按字段名组装 input、客户端塞不进来;agentConfig 是请求体可控的,
   // 单看它就能让普通 run 把同步审批改成排队甚至代批(Codex 09-10 P1)。普通 run 恒 undefined = 同步审批一字不变。

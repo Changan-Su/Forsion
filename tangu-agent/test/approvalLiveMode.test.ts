@@ -7,7 +7,9 @@
  *   ④ 团队成员子 run 带 followSessionMode → 跟团队会话;不带 → 快照。
  *   ⑤ 团队成员一律听团队会话(子聊天里直接追问也算,老成员会话没标记也算):成员会话里上次激活抄过去的旧档不作数(Codex 09-21 P1);
  *   ⑥ 现读失败 → 按只读问,绝不回落到可能更宽的启动快照;custom 的 deny 照样生效(Codex 09-21 两轮);
- *   ⑦ run 起跑时补 preset / agentSlug 的那次回写不许把期间切的档整份盖回去(Codex 09-21 P1)。
+ *   ⑦ run 起跑时补 preset / agentSlug 的那次回写不许把期间切的档整份盖回去(Codex 09-21 P1);
+ *   ⑧ 成员身份以库里的父链接为准:普通会话(或分支抄来的 agent_config)声称 teamMember 也只跟自己的会话(Codex 09-21 三轮);
+ *   ⑨ 沙箱会话的 MCP 工具同样跟随会话此刻的档(Codex 09-21 三轮)。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, existsSync, writeFileSync } from 'node:fs';
@@ -22,7 +24,7 @@ import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
 import { subscribe } from '../src/services/eventBus.js';
-import { resolveApproval } from '../src/services/approvals.js';
+import { resolveApproval, gateToolCall } from '../src/services/approvals.js';
 import { enqueueRun, approvalModeSessionId } from '../src/services/agentLoop.js';
 
 const USER = 'u1';
@@ -70,6 +72,8 @@ afterEach(() => {
   try { rmSync(home, { recursive: true, force: true }); } catch { /* ignore */ }
 });
 
+/** 把 S 挂成 T 的团队成员工作会话(成员身份按库里的父链接认,光在 agentConfig 里写 teamMember 不算)。 */
+const makeMember = (): Promise<unknown> => query(`UPDATE chat_sessions SET kind = 'teamwork', parent_session_id = 'T' WHERE id = 'S'`);
 const setStoredMode = (sessionId: string, approvalMode: string): Promise<unknown> =>
   query(`UPDATE chat_sessions SET agent_config = ? WHERE id = ?`, [JSON.stringify({ approvalMode }), sessionId]);
 const writeStep = (file: string) => () => ({
@@ -140,7 +144,7 @@ describe('审批档现读会话存值', () => {
   });
 
   it('④ 团队成员子 run:followSessionMode → 跟团队会话 T 的 full-auto;不带标记 → 快照 auto-edit 照问', async () => {
-    await setStoredMode('T', 'full-auto');
+    await makeMember(); await setStoredMode('T', 'full-auto');
     script = [writeStep('a.txt'), finalStep()];
     expect(await run({ teamMember: { teamSessionId: 'T', name: 'Bo', roster: '- Bo', followSessionMode: true } }, false)).toEqual([]);
     script = [writeStep('b.txt'), finalStep()];
@@ -148,7 +152,7 @@ describe('审批档现读会话存值', () => {
   });
 
   it('⑤ 团队成员只听团队会话:团队已降到自动编辑、成员会话还存着上次激活抄过去的完全通行 → 照问;老成员会话没标记、子聊天里直接追问也听团队', async () => {
-    await setStoredMode('T', 'auto-edit'); await setStoredMode('S', 'full-auto');
+    await makeMember(); await setStoredMode('T', 'auto-edit'); await setStoredMode('S', 'full-auto');
     script = [writeStep('a.txt'), finalStep()];
     const asked = await run({ teamMember: { teamSessionId: 'T', name: 'Bo', roster: '- Bo', followSessionMode: true } }, true);
     expect(asked.length).toBe(1);
@@ -204,14 +208,37 @@ describe('审批档现读会话存值', () => {
     expect(JSON.parse(row.agent_config)).toMatchObject({ approvalMode: 'readonly', preset: null });
   });
 
-  it('approvalModeSessionId:团队成员听团队(引擎起的要带标记,子聊天里直接追问不必);其余输入区发起的跟本会话;非输入区与沙箱不跟', () => {
-    const base = { execMode: 'host', sessionId: 'S', fromClient: false };
+  it('⑧ 普通会话在 agentConfig 里声称 teamMember(或分支抄来的):父链接对不上 → 只跟自己的会话', async () => {
+    await setStoredMode('T', 'full-auto'); await setStoredMode('S', 'auto-edit');
+    script = [writeStep('a.txt'), finalStep()];
+    const asked = await run({ teamMember: { teamSessionId: 'T', name: 'Bo', roster: '- Bo', followSessionMode: true } }, true);
+    expect(asked.length).toBe(1);
+    expect(asked[0].reason).toMatchObject({ kind: 'escalate', mode: 'auto-edit' });
+  });
+
+  it('⑨ 沙箱会话的 MCP 工具也跟随会话此刻的档:快照 full-auto、会话已改自动编辑 → 照问', async () => {
+    await setStoredMode('S', 'auto-edit');
+    const asked: any[] = [];
+    const off = subscribe('mcp-run', (ev) => {
+      if (ev.type !== 'approval_request') return;
+      asked.push(ev.payload);
+      resolveApproval(ev.payload.approvalId, { action: 'reject' });
+    });
+    const call: any = { id: 'm1', type: 'function', function: { name: 'mcp__srv__do', arguments: '{}' } };
+    try {
+      await expect(gateToolCall('mcp-run', call, { sessionId: 'S', execMode: 'sandbox', approvalMode: 'full-auto', modeSessionId: 'S' })).resolves.toMatchObject({ action: 'reject' });
+      await expect(gateToolCall('mcp-run', call, { sessionId: 'S', execMode: 'sandbox', approvalMode: 'full-auto' })).resolves.toEqual({ action: 'approve' }); // 不跟会话 = 快照
+    } finally { off(); }
+    expect(asked.map((x) => x.reason?.mode)).toEqual(['auto-edit']);
+  });
+
+  it('approvalModeSessionId:核实过的团队成员听团队(引擎起的要带标记,子聊天里直接追问不必);其余输入区发起的跟本会话(不分 execMode);非输入区不跟', () => {
+    const base = { sessionId: 'S', fromClient: false };
     expect(approvalModeSessionId({ ...base, fromClient: true })).toBe('S');
     expect(approvalModeSessionId(base)).toBeUndefined();
-    expect(approvalModeSessionId({ ...base, execMode: 'sandbox', fromClient: true })).toBeUndefined();
-    expect(approvalModeSessionId({ ...base, teamMember: { teamSessionId: 'T', followSessionMode: true } })).toBe('T');
-    expect(approvalModeSessionId({ ...base, teamMember: { teamSessionId: 'T' } })).toBeUndefined(); // TUI / 通道起的团队 run
-    expect(approvalModeSessionId({ ...base, fromClient: true, teamMember: { teamSessionId: 'T' } })).toBe('T');
-    expect(approvalModeSessionId({ ...base, fromClient: true, teamMember: { teamSessionId: 'T', followSessionMode: true } })).toBe('T');
+    expect(approvalModeSessionId({ ...base, teamSessionId: 'T', followSessionMode: true })).toBe('T');
+    expect(approvalModeSessionId({ ...base, teamSessionId: 'T' })).toBeUndefined(); // TUI / 通道起的团队 run
+    expect(approvalModeSessionId({ ...base, fromClient: true, teamSessionId: 'T' })).toBe('T');
+    expect(approvalModeSessionId({ ...base, fromClient: true, teamSessionId: 'T', followSessionMode: true })).toBe('T');
   });
 });
