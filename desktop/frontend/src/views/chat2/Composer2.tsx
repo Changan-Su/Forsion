@@ -725,7 +725,8 @@ export const Composer2: React.FC<{
             `${t('input.slash.status')}`,
             `model=${modelId || '-'}`,
             `think=${thinkingLevel || 'medium'}${ctxInfo?.thinkingRequested === (thinkingLevel || 'medium') && ctxInfo.thinkingEffective && ctxInfo.thinkingEffective !== ctxInfo.thinkingRequested ? `→${ctxInfo.thinkingEffective}` : ''}`,
-            `approval=${approval} (${execConfig.approvalMode ? 'session' : agentDef?.approvalMode ? 'agent' : 'default'})`,
+            // 与引擎同一公式(agentLoop:会话 → Agent 定义 → host 替我批准 / 沙箱完全放行);药丸的 approval 只画 host,沙箱缺省不在它里面
+            `approval=${execConfig.approvalMode || agentDef?.approvalMode || (execConfig.execMode === 'host' ? 'auto-edit' : 'full-auto')} (${execConfig.approvalMode ? 'session' : agentDef?.approvalMode ? 'agent' : 'default'})`,
             `cwd=${execConfig.cwd || '-'}`,
             // 会话值(下一 run 必用)优先;没有再看引擎报的生效值(Agent 定义 / 默认),别把 Agent 定义的 3 显示成 90。
             `loop=${maxIterations || ctxInfo?.maxIterations || 90} (${maxIterations ? 'session' : ctxInfo?.maxIterationsSource || 'default'})`,
@@ -798,7 +799,7 @@ export const Composer2: React.FC<{
     }
     return items
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, isChat, onPresetChange, engineId, engineCommands, customCommands, describe, execConfig, approval, agentDef, sessionTokens, ctxTokens, contextWindow, runCost, costLimit, ctxInfo])
+  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, isChat, onPresetChange, engineId, engineCommands, customCommands, describe, execConfig, agentDef, sessionTokens, ctxTokens, contextWindow, runCost, costLimit, ctxInfo])
 
   const slash = useMemo(() => {
     if (disabled || slashDismissed) return null

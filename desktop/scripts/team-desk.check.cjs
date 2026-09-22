@@ -315,6 +315,11 @@ async function run(app, win, stub) {
   const soloLabel = () => win.locator(`${mainPill} .t2c-pill-label`).textContent()
   const soloModel = await win.locator('.model-pill-btn:not(.child-chat-panel .model-pill-btn)').textContent()
   check('5j 私聊会话没存档 → 药丸显示 Agent 缺省:审批「询问我批准」、思考「深」', (await soloLabel()).includes('询问我批准') && soloModel.includes('深'), JSON.stringify({ label: await soloLabel(), model: soloModel }))
+  await win.locator('.t2c-ta').fill('/status')
+  await win.locator('.t2c-ta').press('Enter')
+  await sleep(500)
+  const soloStatus = (await win.locator('.t2-stream').innerText()).split('\n').filter((l) => /approval=|think=/.test(l)).join(' | ')
+  check('5j2 /status 与药丸同一条链,并标来源:approval=readonly (agent)、think=high', soloStatus.includes('approval=readonly (agent)') && soloStatus.includes('think=high'), soloStatus)
   const soloBefore = stub.seen.configs.length
   await win.locator(mainPill).click()
   await approvalItem(mainMenu, 'auto-edit').click()
