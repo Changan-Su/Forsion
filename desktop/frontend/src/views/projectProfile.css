@@ -1,0 +1,59 @@
+/* PROJECT 详情:骨架整份复用 TEAM 详情(teamProfile.css 的头部 / 导航 / 滚动体 / 成员卡 / 保存栏),
+ * 这里只加项目专有的卡片、列表与 git 摘要。同特异性的覆盖块放文件末尾(DESIGN §7.2)。 */
+.project-profile-path { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.project-profile-path > button { min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; transition: color 160ms ease; }
+.project-profile-path > button:hover { color: var(--accent-ink); }
+.project-branch { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; }
+.project-branch > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-section { display: grid; gap: 10px; padding-top: 16px; }
+.project-card { display: grid; gap: 10px; padding: 12px; background: var(--overlay-light); border-radius: var(--radius-md, 12px); min-width: 0; }
+.project-card-head { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.project-card-head > div { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.project-card-head h3 { margin: 0; font-size: var(--ui-font-body, 13px); font-weight: 600; }
+.project-card-head small { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); overflow-wrap: anywhere; }
+.project-card-head > button { flex-shrink: 0; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); cursor: pointer; }
+.project-card-head > button:hover { background: var(--overlay-medium); color: var(--text); }
+.project-card-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.project-card-actions .btn { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; }
+.project-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.project-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 999px; background: var(--overlay-medium); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.5; }
+.project-chip.ok { color: var(--accent-ink); }
+.project-chip.warn { color: var(--danger); }
+.project-list { display: grid; gap: 2px; }
+.project-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; align-items: center; width: 100%; padding: 7px 8px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text); text-align: left; cursor: pointer; font: inherit; transition: background 160ms ease; }
+.project-row:hover { background: var(--overlay-medium); }
+.project-row strong { font-size: var(--ui-font-meta, 12px); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-row span, .project-row small { min-width: 0; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-row code { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
+.project-row-static { cursor: default; }
+.project-row-static:hover { background: transparent; }
+.project-git-change { grid-template-columns: 22px minmax(0, 1fr); }
+.project-git-change code.staged { color: var(--accent-ink); }
+.project-git-change code.untracked { color: var(--text-faint); }
+.project-git-commit strong { grid-column: 1; }
+.project-git-commit small { grid-column: 2; grid-row: 1; }
+.project-git-commit code { grid-column: 1 / -1; grid-row: 2; }
+.project-git-summary { display: grid; gap: 6px; }
+.project-git-summary > div { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--ui-font-meta, 12px); }
+.project-git-summary > div > span:first-child { flex: 0 0 44px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.project-git-summary > div > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.project-executor .team-member-open > strong { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.project-executor .team-member-open > strong > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-executor-tag { flex-shrink: 0; padding: 1px 6px; border-radius: 999px; background: var(--overlay-medium); color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); font-weight: 400; }
+.project-executor-actions { display: flex; gap: 2px; justify-content: flex-end; padding-top: 6px; }
+.project-executor-actions button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); cursor: pointer; transition: background 160ms ease, color 160ms ease; }
+.project-executor-actions button:hover:not(:disabled) { background: var(--overlay-medium); color: var(--text); }
+.project-executor-actions button:disabled { opacity: .45; cursor: default; }
+.project-executor-actions button.is-default { color: var(--accent-ink); }
+.project-field { display: grid; gap: 6px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.project-field select { width: 100%; min-width: 0; padding: 6px 8px; font-size: var(--ui-font-meta, 12px); color: var(--text); }
+.project-card .profile-model-field { margin: 0; }
+.project-skill-form { display: grid; gap: 8px; animation: profile-enter 160ms ease both; }
+.project-skill-form label { display: grid; gap: 4px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.project-skill-form input, .project-skill-form textarea { width: 100%; min-width: 0; padding: 7px 8px; font-size: var(--ui-font-meta, 12px); }
+.project-skill-form > div { display: flex; justify-content: flex-end; gap: 6px; }
+.project-candidates optgroup, .project-field optgroup { color: var(--text-muted); }
+@media (prefers-reduced-motion: reduce) {
+  .project-skill-form { animation: none; }
+  .project-row, .project-executor-actions button, .project-profile-path > button { transition: none; }
+}

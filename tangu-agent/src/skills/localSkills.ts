@@ -49,6 +49,18 @@ function projectSkillsDirs(cwd: string): string[] {
   ];
 }
 
+/** 项目级技能清单(桌面「PROJECT 详情」用,不经 run 上下文):两个项目目录都扫,同 id 让新位置(.tangu)赢;
+ *  legacy = 来自旧位置 .forsion/skills(只读兼容,面板据此提示用户搬家)。dir = 该技能的文件夹绝对路径。 */
+export async function listProjectSkills(cwd: string): Promise<Array<{ skill: SkillRecord; dir: string; legacy: boolean }>> {
+  const dirs = projectSkillsDirs(cwd);
+  const scanned = await Promise.all(dirs.map((d) => scanDir(d, 'project')));
+  const byId = new Map<string, { skill: SkillRecord; dir: string; legacy: boolean }>();
+  scanned.forEach((skills, i) => {
+    for (const s of skills) byId.set(s.id, { skill: s, dir: path.join(dirs[i], s.id.slice(LOCAL_SKILL_PREFIX.length)), legacy: i === 0 });
+  });
+  return [...byId.values()];
+}
+
 /** 极简 frontmatter 解析:--- 包围块内的顶层 `key: value` 单行标量(带引号可)。 */
 export function parseFrontmatter(raw: string): { meta: Record<string, string>; body: string } {
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);

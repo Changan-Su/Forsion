@@ -9,12 +9,13 @@ import { PRODUCT } from '../product'
  */
 import { create } from 'zustand'
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
-import type {
+import type { ProjectSettings,
   AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, CtxInfo, ModelsResponse, NormalAgentDef,
   MsgSeg, SessionRecord, SkillInfo, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
   DefaultModelSlot, TeamDef } from '../types'
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
+import { fillProjectDefaults, isProjectWorkspace, projectDefaultsForNewSession } from './projectSettings'
 import { effectiveSessionMode, type SessionMode } from '../views/sessionMode'
 import { abortRunAndWait, cancelSteer, currentPlatform, expediteSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
 import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
@@ -616,6 +617,11 @@ export interface AppState {
   messagesBySession: Record<string, UiMessage[]>
   configBySession: Record<string, AgentConfig>
   runningBySession: Record<string, string>
+  /** 项目默认项缓存(按 project_path;null = 查过、没有)。建该项目会话时**同步**读,不在 send() 里等网络。 */
+  projectSettingsByPath: Record<string, ProjectSettings | null>
+  rememberProjectSettings(path: string, settings: ProjectSettings | null): void
+  /** 缓存缺席时借该项目任一会话拉一次(本地引擎,毫秒级);没有会话可借 / 老引擎没有这个接口 → null 且不缓存。 */
+  ensureProjectSettings(path: string): Promise<ProjectSettings | null>
   stoppingBySession: Record<string, string | undefined>
   groupVoting: Record<string, boolean>
   /** LLM 瞬时失败重试中(引擎 status/llm_retry 事件):渲染「第 N/M 次重试,Xs 后」。任何后续非 status 事件即清除。 */
@@ -892,6 +898,7 @@ export const useApp = create<AppState>((set, get) => ({
   deskBySession: typeof localStorage !== 'undefined' ? unpackDeskMap(localStorage.getItem(DESK_PERSIST_KEY)) : {},
   voiceOnByAgent: {},
   runningBySession: {},
+  projectSettingsByPath: {},
   stoppingBySession: {},
   groupVoting: {},
   llmRetryBySession: {},
@@ -1692,6 +1699,18 @@ export const useApp = create<AppState>((set, get) => ({
     }
   },
 
+  rememberProjectSettings: (path, settings) => set((st) => ({ projectSettingsByPath: { ...st.projectSettingsByPath, [path]: settings } })),
+  ensureProjectSettings: async (path) => {
+    const cached = get().projectSettingsByPath
+    if (path in cached) return cached[path]
+    const carrier = [...get().sessions, ...get().archivedSessions].find((x) => x.project_path === path && !x.projectless)
+    if (!carrier || !isHostCapable(get())) return null
+    try {
+      const settings = await api.getProjectSettings(get().cfg, carrier.id, { timeoutMs: 1500 })
+      get().rememberProjectSettings(path, settings)
+      return settings
+    } catch { return null }
+  },
   hydrateTeamWork: async (sessionId) => {
     // 打开 / 重载团队会话:成员的工作会话与最近一次 run 从持久端点复原(实时事件只覆盖本客户端订阅着的团队 run)。已有实时状态的成员不覆盖。
     let rows: api.BackgroundSessionInfo[] = []
@@ -2005,6 +2024,9 @@ export const useApp = create<AppState>((set, get) => ({
     // Space 的被动账本恢复不等于进入任何 Project:清空激活键,但不改 openWorkspaceKeys,
     // 因而用户离开前手工展开/收起的集合原样保留。
     set({ activeId: id, activeSpecial: null, ...(opts?.revealWorkspace === false ? { activeWorkspaceKey: null } : {}) })
+    // 进了某个本地项目的会话 → 顺手预取它的项目默认项(本地 GET,毫秒级),之后在这个项目里「新对话」直接同步读缓存。
+    const entered = id ? get().sessions.find((x) => x.id === id) : undefined
+    if (entered?.project_path && !entered.projectless) void get().ensureProjectSettings(entered.project_path)
     if (id) {
       // LRU:把当前会话提到最前;超出上限的旧会话淘汰其内存消息(非运行中),下次进入重新拉。
       const i = recentSessions.indexOf(id)
@@ -2124,8 +2146,10 @@ export const useApp = create<AppState>((set, get) => ({
       // (引擎 ≥ 本版 POST 接 agent_config;老引擎忽略该字段 → 回来的 agent_config 为空,再补一次 PUT):
       // 补 PUT 失败会留下没有 preset/execMode 的 chat 会话,重载后被当 work 初始化(creview 09-07 F2)。
       const sticky = stickyDefaults(get().desktopConfig, !!path, preset)
+      // 项目默认项(PROJECT 详情里定的,本机):只对用户自己添加的本地项目生效,夹在「上次用的档位」之上;等一次本地 GET 无妨,这里是按钮点击。
+      const projectDefaults = path && isProjectWorkspace(ws) ? projectDefaultsForNewSession(await get().ensureProjectSettings(path).catch(() => null), get().teams) : { config: {} }
       const init: AgentConfig = withAmadeusWorkspace(applyPreset(path
-        ? { ...sticky, execMode: 'host', cwd: path }
+        ? { ...fillProjectDefaults(sticky, projectDefaults.config), execMode: 'host', cwd: path }
         : { ...sticky, execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot())
       // Chat 不提供 Agent 选择器：创建时就把当下默认 Agent 固化为会话事实，避免空会话期间
       // 全局默认异步刷新后首轮“换人”。Work 仍保留空态选择器，按原逻辑到发送时固化。
@@ -2135,6 +2159,7 @@ export const useApp = create<AppState>((set, get) => ({
           ? { project_path: path, project_name: ws.name }
           : cloudProject ? { project_name: cloudProject }
           : (ws.kind === 'rootless' || chat) ? { projectless: true } : {}),
+        ...(projectDefaults.model ? { model_id: projectDefaults.model } : {}),
         agent_config: init,
       })
       act('chat.new', { s: s.id.slice(0, 6) })
@@ -2394,9 +2419,12 @@ export const useApp = create<AppState>((set, get) => ({
       const cloudProject = rootless ? null : path ? null : (ws?.kind === 'cloud' ? (ws.project || DEFAULT_CLOUD_PROJECT) : DEFAULT_CLOUD_PROJECT)
       // 模型**当场固化**(记忆兜底也算,同下面的 agentSlug):不传的话引擎按 profile.defaultModelId
       // 落库,而输入栏显示的是 newChatModelId() —— 两边一错开就是「发送后药丸跳回默认模型」。
-      const model_id = newChatModelId(get())
+      // 项目默认项只读同步缓存(setActiveId / setNewChatWs 已预取;冷缓存 = 不预填):send() 里不等网络。
+      const projectDefaults = path && ws && isProjectWorkspace(ws) ? projectDefaultsForNewSession(get().projectSettingsByPath[path] ?? null, get().teams) : { config: {} }
+      const model_id = get().newChatModel || projectDefaults.model || newChatModelId(get())
       // 初始配置先算好、随建会话请求原子落库(老引擎忽略 agent_config → 回来为空 → 补 PUT;同 createInWorkspace)。
-      const draft = { ...stickyDefaults(get().desktopConfig, !!path, preset), ...get().newChatCfg }
+      // 显式选择(newChatCfg)> 项目默认 > 上次用的档位:fillProjectDefaults 只补 undefined 的键。
+      const draft = fillProjectDefaults({ ...stickyDefaults(get().desktopConfig, !!path, preset), ...get().newChatCfg }, projectDefaults.config)
       const init: AgentConfig = withAmadeusWorkspace(applyPreset(path
         ? { ...draft, execMode: 'host', cwd: path }
         : { ...draft, execMode: 'sandbox', cwd: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot())
@@ -2970,7 +2998,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (def?.model) set({ newChatModel: def.model })
   },
 
-  setNewChatWs: (ws) => set({ newChatWs: ws }),
+  setNewChatWs: (ws) => { set({ newChatWs: ws }); if (isProjectWorkspace(ws)) void get().ensureProjectSettings(ws.path) },
   setNewChatCfg: (fn) => set((s) => ({ newChatCfg: fn(s.newChatCfg) })),
   setSessionMode: (p) => set((s) => {
     // 持久模式(不是「下一个会话用一次」):侧栏胶囊 / 空态模式节 / /chat /work 三个入口都改它。

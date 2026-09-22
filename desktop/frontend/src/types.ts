@@ -627,6 +627,60 @@ export interface DirectProviderConfig {
   noVisionModelIds?: string[]
 }
 
+// ── 项目上下文(本地项目会话的项目级内容;与引擎 services/projectContext.ts 同形)──
+/** 用户侧的项目默认项(引擎家目录 project-settings.json,按 realpath 索引;不进仓库)。Agent 与 Team 二选一。 */
+export interface ProjectSettings {
+  defaultAgent?: string
+  defaultTeam?: string
+  model?: string
+  thinkingLevel?: ThinkingLevel
+  approvalMode?: NonNullable<AgentConfig['approvalMode']>
+}
+export interface ProjectDocInfo {
+  /** 「这个项目的指令文件」:cwd 层首个命中的候选名;一个都没有时 = 待创建的 `<cwd>/.tangu/AGENTS.md`。 */
+  path: string
+  exists: boolean
+  content: string | null
+  mtimeMs: number | null
+  bytes: number
+  tooLarge: boolean
+  /** 引擎本轮实际会拼进系统提示的全部文件(根→cwd)。 */
+  sources: string[]
+  truncated: boolean
+  candidates: string[]
+}
+export interface ProjectSkillInfo { id: string; name: string; description: string; path: string; legacy: boolean }
+export interface ProjectPlanInfo { name: string; path: string; mtimeMs: number; size: number; title: string }
+export interface GitCommitInfo { sha: string; short: string; at: number; subject: string }
+export interface GitChangeInfo { code: string; path: string }
+export interface GitSummary {
+  available: boolean
+  repo: boolean
+  nested?: boolean
+  branch?: string
+  detached?: boolean
+  upstream?: string | null
+  ahead?: number
+  behind?: number
+  staged?: number
+  unstaged?: number
+  untracked?: number
+  changes?: GitChangeInfo[]
+  changesTotal?: number
+  commits?: GitCommitInfo[]
+  remote?: string | null
+}
+export interface ProjectContext {
+  cwd: string
+  workspaceDir: string
+  workspaceDirName: string
+  doc: ProjectDocInfo
+  skills: ProjectSkillInfo[]
+  plans: ProjectPlanInfo[]
+  settings: ProjectSettings | null
+  git: GitSummary
+}
+
 export interface SkillInfo {
   id: string
   name: string

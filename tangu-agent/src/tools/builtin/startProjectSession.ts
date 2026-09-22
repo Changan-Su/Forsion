@@ -9,6 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { statSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+import { readProjectSettings } from '../../services/projectContext.js';
 import { query } from '../../core/db.js';
 import { createRun } from '../../services/runStore.js';
 import { publish } from '../../services/eventBus.js';
@@ -40,15 +41,25 @@ export async function dispatchProjectSession(p: DispatchInput): Promise<{ sessio
   const sessionId = uuidv4();
   const projectName = (p.projectName || path.basename(p.projectPath) || 'Project').slice(0, 255);
   const title = (p.title || p.message).replace(/\s+/g, ' ').trim().slice(0, 80) || 'New Chat';
-  const agentConfig: Record<string, unknown> = { execMode: 'host', cwd: p.projectPath, preset: null, ...(p.agentSlug ? { agentSlug: p.agentSlug } : {}) };
+  // 用户在「PROJECT 详情」里给这个项目定的默认项(用户侧文件):派遣方没点名 Agent 就用项目默认;模型 / 思考档 / 审批档
+  // 是项目级偏好,压过从派遣会话继承来的值(那不是用户为这个项目做的选择)。读不到 → 全部按原样。
+  const defaults = await readProjectSettings(p.projectPath).catch(() => null);
+  const agentSlug = p.agentSlug || defaults?.defaultAgent;
+  const modelId = defaults?.model || p.modelId;
+  const agentConfig: Record<string, unknown> = {
+    execMode: 'host', cwd: p.projectPath, preset: null,
+    ...(agentSlug ? { agentSlug } : {}),
+    ...(defaults?.thinkingLevel ? { thinkingLevel: defaults.thinkingLevel } : {}),
+    ...(defaults?.approvalMode ? { approvalMode: defaults.approvalMode } : {}),
+  };
   await query(
     `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, project_path, project_name, projectless, agent_config, parent_session_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [sessionId, p.userId, p.appId, title, p.modelId || null, p.projectPath.slice(0, 1000), projectName, false, JSON.stringify(agentConfig), p.parentSessionId || null],
+    [sessionId, p.userId, p.appId, title, modelId || null, p.projectPath.slice(0, 1000), projectName, false, JSON.stringify(agentConfig), p.parentSessionId || null],
   );
   const runId = uuidv4();
   await createRun({
-    id: runId, sessionId, userId: p.userId, appId: p.appId, modelId: p.modelId, assistantMessageId: uuidv4(),
+    id: runId, sessionId, userId: p.userId, appId: p.appId, modelId, assistantMessageId: uuidv4(),
     input: { message: p.message, userMessageId: uuidv4(), attachments: [], agentConfig },
   });
   const { enqueueRun } = await import('../../services/agentLoop.js');
