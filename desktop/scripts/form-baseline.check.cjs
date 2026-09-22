@@ -47,7 +47,7 @@ const read = (p) => fs.readFileSync(path.join(SRC, p), 'utf8')
 const FILES = [
   'styles/base.css', 'amadeus-host.css', 'quickFind.css', 'findInPage.css', 'amadeus/styles.css',
   'amadeus/theme/lcl/tangu.css', 'amadeus/theme/lcl/tanguSoft.css',
-  'views/chat2/chat2.css', 'views/chat2/composer2.css', 'views/chat2/sidebar2.css',
+  'views/chat2/chat2.css', 'views/chat2/composer2.css', 'views/chat2/sidebar2.css', 'views/chat2/btw.css',
   'views/automation/automation.css', 'views/dashData.css', 'views/homepage.css',
 ]
 const BASE = read('styles/base.css')
