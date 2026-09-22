@@ -55,7 +55,10 @@ export const ASIDE_SYSTEM_PROMPT = [
 const asked = (question: string, quote?: string): string =>
   quote ? `About this excerpt:\n${quote.split('\n').map((l) => `> ${l}`).join('\n')}\n\n${question}` : question;
 
-/** 系统提示(规则 + 主会话转写)→ 旁聊往返 → 本次问题。纯函数,导出供测试。 */
+/** 系统提示(规则 + 主会话转写)→ 旁聊往返 → 本次问题。纯函数,导出供测试。
+ *  ponytail: 转写塞进系统提示 = 与主 run 的前缀缓存零共享,每问一次整份上下文重进一遍(同一旁聊线程的追问之间
+ *  system + 转写前缀不变,能命中)。长会话每问 ≈ 主会话上下文那么多输入 token。要省就改成回放主 run 的原始消息数组、
+ *  旁问作尾部 user 轮(Claude Code 的做法),但得逐字节复刻主 agent 的系统提示与工具头才吃得到它的缓存。 */
 export function buildAsideMessages(transcript: string, input: AsideInput): ChatMessage[] {
   return [
     { role: 'system', content: `${ASIDE_SYSTEM_PROMPT}\n\n<main_conversation>\n${transcript.trim() || '(no messages yet)'}\n</main_conversation>` },

@@ -6,7 +6,7 @@ import { useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { Markdown } from '../../components/Markdown'
 import { FloatingPanelFrame } from '../../components/FloatingPanelFrame'
-import { consumeSeed, quoteInMainChat, useBtw, type BtwSeed, type BtwTurn } from './btwStore'
+import { btwWebVisible, consumeSeed, quoteInMainChat, useBtw, type BtwSeed, type BtwTurn } from './btwStore'
 import './btw.css'
 
 const EMPTY: BtwTurn[] = []
@@ -144,11 +144,10 @@ export function BtwHost({ page = false }: { page?: boolean }) {
   const seed = useBtw((s) => s.webOpen)
   const activeId = useApp((s) => s.activeId)
   const close = useBtw((s) => s.closeWeb)
-  const visible = !!seed && (!seed.scope || seed.scope === activeId)
   const title = t('btw.windowTitle', { title: seed?.title || t('btw.title') })
   return (
     <AnimatePresence>
-      {visible && seed && (page
+      {btwWebVisible(seed, activeId) && (page
         ? (
           <motion.div key="btw" className="btw-page" initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 12 }} transition={{ duration: 0.2 }}>
             <header className="btw-page-head">

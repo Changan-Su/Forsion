@@ -150,6 +150,28 @@ async function main() {
     await panel2.locator('.btw-panel .btw-empty').waitFor({ timeout: 30000 })
     check('⌘; 开出当前会话的旁聊(新窗、空线程)', panel2.url().includes(encodeURIComponent('btw:sess-main')))
     await panel2.screenshot({ path: path.join(shots, 'btw-empty.png') })
+
+    // ── 观感自查(DESIGN §8):英文界面 + 深色各截一张,人看 ──
+    await panel2.evaluate(() => localStorage.setItem('tangu_locale', 'en'))
+    await panel2.reload({ waitUntil: 'domcontentloaded' })
+    const btw2 = panel2.locator('.btw-panel')
+    await btw2.waitFor({ timeout: 30000 })
+    await btw2.locator('.btw-input textarea').fill('What is the codename?')
+    await btw2.locator('.btw-input textarea').press('Enter')
+    await btw2.locator('.btw-turn-a', { hasText: 'AZURE-FALCON' }).waitFor({ timeout: 15000 })
+    check('英文界面文案到位(不是 key、不是中文)', (await btw2.locator('.btw-hint').textContent()).startsWith('Uses this conversation as context'))
+    await panel2.screenshot({ path: path.join(shots, 'btw-en.png') })
+    // 深色走真主题管线:写模式偏好(loader 的 forsion_theme)后重载;只改 <html data-mode> 不会重算 token(实测截出来仍是浅色)
+    await panel2.evaluate(() => localStorage.setItem('forsion_theme', 'dark'))
+    await panel2.reload({ waitUntil: 'domcontentloaded' })
+    await panel2.locator('.btw-panel').waitFor({ timeout: 30000 })
+    await panel2.locator('.btw-panel .btw-input textarea').fill('What is the codename?')
+    await panel2.locator('.btw-panel .btw-input textarea').press('Enter')
+    await panel2.locator('.btw-turn-a', { hasText: 'AZURE-FALCON' }).waitFor({ timeout: 15000 })
+    const bg = await panel2.evaluate(() => getComputedStyle(document.querySelector('.btw-panel')).backgroundColor)
+    const lum = (bg.match(/\d+(\.\d+)?/g) || []).slice(0, 3).map(Number).reduce((a, b) => a + b, 0) / 3
+    check('深色模式下面板底色是暗的(token 生效,不是写死的浅色)', lum < 90, bg)
+    await panel2.screenshot({ path: path.join(shots, 'btw-en-dark.png') })
     console.log(`${checks} checks passed. Screenshots: ${shots}`)
   } catch (error) {
     if (app) { for (const [i, w] of app.windows().entries()) await w.screenshot({ path: path.join(shots, `failure-${i}.png`) }).catch(() => {}) }

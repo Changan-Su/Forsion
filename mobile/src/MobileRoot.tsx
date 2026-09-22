@@ -23,7 +23,7 @@ import { AmadeusOverlays } from '@/amadeusOverlays'
 import { AchievementToast } from '@/achievements/AchievementToast'
 import { AchievementsModal } from '@/achievements/AchievementsModal'
 import { BtwHost } from '@/views/chat2/BtwPanel'
-import { useBtw } from '@/views/chat2/btwStore'
+import { btwWebVisible, useBtw } from '@/views/chat2/btwStore'
 import { QuickFind } from '@/quickFind'
 import { FindBar } from '@/findInPage'
 import { installNotificationWiring } from '@/stores/notificationWiring'
@@ -72,7 +72,8 @@ function useAndroidBack(): void {
       // 引导是全屏浮层(zIndex 60):不在这儿吃掉返回,它下面的 leaf 会被 closeLeaf 关掉/直接挂起 app。
       // 不自动关引导 —— 退出引导只走里面的「跳过」(那条会记 dismiss),否则下次启动又弹一遍。
       if (app.onboarding) return
-      if (useBtw.getState().webOpen) { useBtw.getState().closeWeb(); return } // 旁聊全屏页在最上层:返回先关它
+      // 旁聊全屏页在最上层:返回先关它。判据与 BtwHost 同一条 —— 它因切了会话而隐着时不能白吞一次返回
+      if (btwWebVisible(useBtw.getState().webOpen, app.activeId)) { useBtw.getState().closeWeb(); return }
       if (app.settingsOpen) { app.closeSettings(); return }
       const ws = useWorkspace.getState()
       if (ws.leftVisible) { ws.toggleSidebar('left'); return }

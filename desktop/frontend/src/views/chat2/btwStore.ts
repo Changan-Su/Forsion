@@ -70,6 +70,11 @@ export function consumeSeed(seed: BtwSeed): boolean {
   return true
 }
 
+/** Web / 手机的旁聊此刻该不该露面:只在它归属的会话仍是当前会话时。BtwHost 渲染与安卓返回键共用这一条。 */
+export function btwWebVisible(seed: BtwSeed | null, activeId: string | null): seed is BtwSeed {
+  return !!seed && (!seed.scope || seed.scope === activeId)
+}
+
 /** 浮窗收到的 params(跨 IPC 的普通对象)→ 指令;缺会话或 nonce 就不是旁聊。 */
 export function btwSeedOf(params: Record<string, unknown> | undefined): BtwSeed | null {
   const s = (k: string): string | undefined => (typeof params?.[k] === 'string' && (params[k] as string) ? params[k] as string : undefined)
