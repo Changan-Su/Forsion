@@ -579,13 +579,19 @@ router.post('/agent/sessions/:id/compact', authMiddleware, async (req: AuthReque
 
 // 旁聊(/btw):带着本会话上下文问一句题外话(services/aside.ts)。SSE:delta* → done | error。
 // 不落库、不进 run 队列 —— 主 run 在飞也能问,且互不打断;客户端断开即中止上游请求。
+// 每用户在飞上限:客户端一个会话一次一问,这道闸挡的是绕过客户端的并发刷(额度预检在请求前,并发时都能过预检)。
+const ASIDE_MAX_IN_FLIGHT = 3;
+const asideInFlight = new Map<string, number>();
 router.post('/agent/sessions/:id/aside', authMiddleware, async (req: AuthRequest, res) => {
-  const s = await getOwnSession(req.params.id, req.user!.userId).catch(() => null);
+  const userId = req.user!.userId;
+  const s = await getOwnSession(req.params.id, userId).catch(() => null);
   if (!s) return res.status(404).json({ detail: 'Session not found' });
   const input = normalizeAsideInput(req.body);
   if (!input) return res.status(400).json({ detail: 'question required' });
   const modelId = (typeof req.body?.model_id === 'string' && req.body.model_id) || s.model_id || resolveProfile(s.app_id)?.defaultModelId || '';
   if (!modelId) return res.status(400).json({ detail: 'model_id required' });
+  const inFlight = asideInFlight.get(userId) || 0;
+  if (inFlight >= ASIDE_MAX_IN_FLIGHT) return res.status(429).json({ detail: 'Too many side questions in flight' });
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -600,9 +606,10 @@ router.post('/agent/sessions/:id/aside', authMiddleware, async (req: AuthRequest
     (res as any).flush?.();
   };
   const heartbeat = setInterval(() => { if (!res.writableEnded) res.write(': hb\n\n'); }, 15_000);
+  asideInFlight.set(userId, inFlight + 1);
   try {
     const answer = await answerAside({
-      sessionId: s.id, modelId, appId: s.app_id, client: normalizeClientTag(req.body?.client),
+      sessionId: s.id, userId, modelId, appId: s.app_id, client: normalizeClientTag(req.body?.client),
       input, signal: ac.signal, onToken: (text) => write({ type: 'delta', text }),
     });
     write({ type: 'done', ...answer, modelId });
@@ -610,6 +617,8 @@ router.post('/agent/sessions/:id/aside', authMiddleware, async (req: AuthRequest
     if (!ac.signal.aborted) write({ type: 'error', error: e?.message || 'side question failed' });
   } finally {
     clearInterval(heartbeat);
+    const left = (asideInFlight.get(userId) || 1) - 1;
+    if (left > 0) asideInFlight.set(userId, left); else asideInFlight.delete(userId);
     res.end();
   }
 });

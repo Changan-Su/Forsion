@@ -113,11 +113,11 @@ export const useBtw = create<BtwState>((set, get) => ({
       await streamAside(sessionId, { question, quote, thread, model_id: modelId || undefined }, (ev) => {
         if (ev.type === 'delta') patch((t) => ({ answer: t.answer + String(ev.text ?? '') }))
         else if (ev.type === 'done') patch((t) => ({ answer: String(ev.content || t.answer), status: 'done', toolCallText: !!ev.toolCallText }))
-        else if (ev.type === 'error') patch(() => ({ status: 'error', error: String(ev.error || '') }))
+        else if (ev.type === 'error') patch(() => ({ status: 'error', error: readableError(String(ev.error || '')) }))
       }, ac.signal)
       patch((t) => (t.status === 'streaming' ? { status: 'error', error: translate('btw.errCut') } : {}))
     } catch (e: any) {
-      patch((t) => (t.status !== 'streaming' ? {} : ac.signal.aborted ? { status: 'stopped' } : { status: 'error', error: String(e?.message || e) }))
+      patch((t) => (t.status !== 'streaming' ? {} : ac.signal.aborted ? { status: 'stopped' } : { status: 'error', error: readableError(String(e?.message || e)) }))
     } finally {
       if (controllers.get(sessionId) === ac) controllers.delete(sessionId)
     }
@@ -133,6 +133,9 @@ export const useBtw = create<BtwState>((set, get) => ({
 
   closeWeb: () => set({ webOpen: null }),
 }))
+
+/** 引擎的机器码 → 人话:额度用尽与主聊天同一句(chat.err.quota)。 */
+const readableError = (raw: string): string => (/token_quota_exceeded/i.test(raw) ? translate('chat.err.quota') : raw)
 
 type AsideEvent = { type: 'delta'; text?: string } | { type: 'done'; content?: string; toolCallText?: boolean } | { type: 'error'; error?: string }
 

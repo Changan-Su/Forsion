@@ -24,11 +24,12 @@ const MESSAGES = [
   { id: 'a1', role: 'model', content: '好的,代号 AZURE-FALCON 已记下。接下来重构解析器的词法阶段。', timestamp: now - 400 },
 ]
 const sse = (events) => ({ __buffer: Buffer.from(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join('')), contentType: 'text/event-stream' })
-/** 找旁聊浮窗的 BrowserWindow(按 URL 里的 id)并读它的可见性。 */
-const btwVisible = (app, id) => app.evaluate(({ BrowserWindow }, wid) => {
+/** 找旁聊浮窗的 BrowserWindow(按 URL 里的 id)并读它的可见性 / 能否最小化。 */
+const btwWin = (app, id) => app.evaluate(({ BrowserWindow }, wid) => {
   const w = BrowserWindow.getAllWindows().find((x) => x.webContents.getURL().includes(`id=${encodeURIComponent(wid)}`))
-  return w ? w.isVisible() : null
+  return w ? { visible: w.isVisible(), minimizable: w.isMinimizable() } : null
 }, id)
+const btwVisible = async (app, id) => (await btwWin(app, id))?.visible ?? null
 async function until(fn, ms = 8000) { const end = Date.now() + ms; for (;;) { const v = await fn(); if (v) return v; if (Date.now() > end) return v; await new Promise((r) => setTimeout(r, 150)) } }
 
 async function main() {
@@ -48,6 +49,7 @@ async function main() {
       if (m && method === 'POST') {
         const b = await body()
         asides.push({ sessionId: m[1], ...b })
+        if (String(b.question).includes('慢')) await new Promise((r) => setTimeout(r, 2500)) // 让这一问在流里多待一会儿
         const answer = b.thread?.length ? '倒过来是 **NOCLAF-ERUZA**。' : b.quote ? `这段在说代号:\`${b.quote.slice(0, 12)}\`。` : '项目代号是 **AZURE-FALCON**。'
         return sse([...answer.match(/.{1,6}/g).map((text) => ({ type: 'delta', text })), { type: 'done', content: answer, toolCallText: false }])
       }
@@ -132,6 +134,27 @@ async function main() {
     await btw.locator('.btw-turn').nth(1).locator('[data-testid="btw-quote-to-chat"]').click()
     await win.locator('.t2c-quote-text', { hasText: 'NOCLAF-ERUZA' }).first().waitFor({ timeout: 10000 })
     check('「引用到对话」挂成主窗引用且草稿没被覆盖', (await input.inputValue()) === '我的草稿')
+
+    // ── 上一问还在流时主窗又来一条 /btw:不能被吞(主窗输入框已清空),进旁聊输入框等着 ──
+    await input.fill('/btw 慢一点的问题')
+    await input.press('Enter')
+    await btw.locator('.btw-turn[data-status="streaming"]').waitFor({ timeout: 10000 })
+    await input.fill('/btw 第二问')
+    await input.press('Enter')
+    await until(async () => (await box.inputValue()) === '第二问', 5000)
+    check('流式中再来的 /btw 进了旁聊输入框,没有被吞', (await box.inputValue()) === '第二问' && (await input.inputValue()) === '')
+    await btw.locator('.btw-turn[data-status="streaming"]').waitFor({ state: 'detached', timeout: 15000 })
+    await box.fill('')
+
+    // ── 卫星窗(不带会话归属)再次打开同一扇旁聊窗:归属得保留,否则它从此不跟会话显隐 ──
+    await panel.evaluate(() => window.tangu.openFloatingPanel({ id: 'btw:sess-main', title: 'btw', builtin: 'btw', params: { sessionId: 'sess-main', nonce: `sat-${Date.now()}` } }))
+    await win.locator('text=另一条会话').first().click()
+    check('卫星窗复用过的旁聊窗切走会话仍会隐藏(归属没被抹掉)', (await until(async () => (await btwVisible(app, 'btw:sess-main')) === false)) === true)
+    await win.locator('text=Parser 重构').first().click()
+    await until(async () => (await btwVisible(app, 'btw:sess-main')) === true)
+
+    // ── 会话级面板不给最小化:进了 Dock 的窗在别的会话里也点得出来(Codex 评审 P2),干脆不让它进 Dock ──
+    check('旁聊窗不可最小化(收起 = 切走会话)', (await btwWin(app, 'btw:sess-main'))?.minimizable === false)
 
     // ── Esc 关窗(关了线程就丢:与 Claude 一样只在内存) ──
     const closed = panel.waitForEvent('close')

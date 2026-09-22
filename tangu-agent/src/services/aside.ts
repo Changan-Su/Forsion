@@ -13,7 +13,7 @@ import { deps } from '../seams/runtime.js';
 import type { ChatMessage } from '../core/types.js';
 import { hydrateHistory } from './agentLoop.js';
 import { buildTranscript } from './compaction.js';
-import { estimateTokensRough, modelContextWindow } from './contextBudget.js';
+import { estimateMessagesTokens, estimateTokensRough, modelContextWindow } from './contextBudget.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 
 /** 每次带上的旁聊往返上限(Claude Code 同为 20)。 */
@@ -74,6 +74,7 @@ export interface AsideAnswer { content: string; toolCallText: boolean }
 
 export async function answerAside(opts: {
   sessionId: string
+  userId: string
   modelId: string
   appId: string
   client?: string
@@ -82,6 +83,7 @@ export async function answerAside(opts: {
   onToken: (delta: string) => void
 }): Promise<AsideAnswer> {
   const llm = deps().brain.llm;
+  const billing = deps().billing;
   const { model, apiKey, baseUrl, apiModelId } = await llm.resolveModelAndKey(opts.modelId);
   opts.signal.throwIfAborted();
   const { messages } = await hydrateHistory(opts.sessionId, '', undefined, undefined, undefined, false);
@@ -90,14 +92,28 @@ export async function answerAside(opts: {
   const maxTokens = Math.max(512, Math.min(ANSWER_MAX_TOKENS, Math.floor(windowTokens / 4)));
   const budget = windowTokens - maxTokens - PROMPT_OVERHEAD_TOKENS - estimateTokensRough(JSON.stringify(opts.input));
   const { text: transcript } = buildTranscript(messages, { read: new Set(), modified: new Set() }, budget);
+  const asideMessages = buildAsideMessages(transcript, opts.input);
+  // 额度与记账同主循环 / 图像识别一个口径:先按估算预检(额度用尽不许绕道旁聊),完了按实际 usage 扣费、记用量。
+  // standalone 的 billing 是 no-op;直连(BYOK / 订阅)模型取不到云端用户时降级成本地桩用户(同 visionService)。
+  const user = (await deps().brain.users.getUserById(opts.userId).catch(() => null)) ?? { id: opts.userId, username: 'local' };
+  const estCost = await billing.calculateCost(opts.modelId, estimateMessagesTokens(asideMessages), maxTokens, model);
+  if (!(await billing.canConsumeTokenPoints(user.id, estCost)).ok) throw new Error('token_quota_exceeded');
   const payload = await llm.buildProviderPayload({
-    model, apiModelId, messages: buildAsideMessages(transcript, opts.input),
+    model, apiModelId, messages: asideMessages,
     projectSource: '', usageSource: opts.appId, client: opts.client,
     maxTokens, stream: true, signal: opts.signal,
     cacheKey: `btw:${opts.sessionId}`, // 同一条旁聊线程的连续追问共用 system+转写前缀
   });
   opts.signal.throwIfAborted();
   const res = await llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal: opts.signal, onToken: opts.onToken });
+  const usage: any = res?.usage || {};
+  const cached = Number(usage.cached_tokens) || 0;
+  const cost = await billing.calculateCost(opts.modelId, Number(usage.prompt_tokens) || 0, Number(usage.completion_tokens) || 0, model, cached);
+  await billing.consumeTokenPoints(user.id, cost).catch(() => {});
+  await (billing.logApiUsage as any)(
+    (user as any).username || 'local', opts.modelId, (model as any)?.name, (model as any)?.provider,
+    Number(usage.prompt_tokens) || 0, Number(usage.completion_tokens) || 0, true, undefined, opts.appId, cost, cached, opts.client,
+  ).catch(() => {});
   const content = String(res?.content || '').trim();
   return { content, toolCallText: looksLikeToolCallText(content) };
 }

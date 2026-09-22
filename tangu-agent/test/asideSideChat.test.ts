@@ -3,7 +3,7 @@
  * 钉四件事:①主会话内容进了系统提示的转写 ②payload 不带工具 ③旁聊往返按序接在后面 ④主会话一行都不多。
  * 跑:cd Forsion-Genesis/tangu-agent && npx vitest run test/asideSideChat.test.ts
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -18,6 +18,12 @@ import { answerAside, normalizeAsideInput, ASIDE_MAX_TURNS } from '../src/servic
 
 let home = '';
 let payloads: any[] = [];
+const billing = {
+  canConsumeTokenPoints: vi.fn(async () => ({ ok: true })),
+  consumeTokenPoints: vi.fn(async () => ({ ok: true })),
+  calculateCost: vi.fn(async () => 7),
+  logApiUsage: vi.fn(async () => {}),
+};
 let reply = 'The codename is AZURE-FALCON.';
 
 beforeAll(async () => {
@@ -41,7 +47,7 @@ beforeAll(async () => {
       memory: { getMemory: async () => ({ content: '' }) },
       models: { hasDirectModel: () => false },
     } as any,
-    billing: { canConsumeTokenPoints: async () => ({ ok: true }), consumeTokenPoints: async () => ({ ok: true }), calculateCost: async () => 0, logApiUsage: async () => {} } as any,
+    billing: billing as any,
     profile: createTanguProfile({ sandboxMode: 'none' }),
   });
   await runMigration();
@@ -62,7 +68,7 @@ afterAll(() => {
 });
 
 const ask = (body: any, onToken: (d: string) => void = () => {}) =>
-  answerAside({ sessionId: 'S', modelId: 'm1', appId: 'tangu', input: normalizeAsideInput(body)!, signal: new AbortController().signal, onToken });
+  answerAside({ sessionId: 'S', userId: 'u1', modelId: 'm1', appId: 'tangu', input: normalizeAsideInput(body)!, signal: new AbortController().signal, onToken });
 
 describe('旁聊 /btw:带主会话上下文、不带工具、不写回', () => {
   it('转写进系统提示,旁聊往返按序接在后面,本次问题(带引用)收尾;payload 无工具', async () => {
@@ -93,6 +99,17 @@ describe('旁聊 /btw:带主会话上下文、不带工具、不写回', () => {
     reply = 'Let me check.\n<invoke name="read_file">\n<parameter name="path">a.ts</parameter>\n</invoke>';
     try { expect((await ask({ question: 'read a.ts' })).toolCallText).toBe(true); }
     finally { reply = 'The codename is AZURE-FALCON.'; }
+  });
+
+  it('额度:预检不过 → token_quota_exceeded 且不调模型;过了 → 按实际 usage 扣费并记用量(与主循环同口径)', async () => {
+    payloads = [];
+    billing.canConsumeTokenPoints.mockResolvedValueOnce({ ok: false } as any);
+    await expect(ask({ question: 'blocked?' })).rejects.toThrow('token_quota_exceeded');
+    expect(payloads).toHaveLength(0);
+    billing.consumeTokenPoints.mockClear(); billing.logApiUsage.mockClear();
+    await ask({ question: 'allowed?' });
+    expect(billing.consumeTokenPoints).toHaveBeenCalledWith('u1', 7);
+    expect(billing.logApiUsage).toHaveBeenCalledWith('u', 'm1', 'test', 'test', 5, 5, true, undefined, 'tangu', 7, 0, undefined);
   });
 
   it('输入消毒:没有问题 → null;往返封顶最近 N 轮且丢掉残缺的', () => {

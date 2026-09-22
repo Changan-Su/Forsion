@@ -1458,11 +1458,12 @@ function inSessionScope(id: string): boolean {
 }
 
 /** 主窗换会话 → 会话级面板跟着显隐。隐藏不销毁:切回来原样还在(旁聊线程住在面板自己的渲染进程里)。
- *  showInactive:焦点留在刚点了会话的主窗。没到 ready-to-show 的窗不碰(提前 show 会闪一块白),
- *  最小化的也不碰(用户自己收进 Dock 的,别每切一次会话就弹出来)。 */
+ *  showInactive:焦点留在刚点了会话的主窗。没到 ready-to-show 的窗不碰(提前 show 会闪一块白)。
+ *  会话级面板不给最小化(见 openFloatingPanel):进了 Dock 的窗在别的会话里也点得出来(Codex 评审 P2),
+ *  而 macOS 上被 hide() 的最小化窗 isMinimized 仍为真、Dock 状态又读不到 —— 与其补一条观测不到的路径,不如不让它进 Dock。 */
 function syncSessionPanels(): void {
   for (const [id, win] of floatingWindows) {
-    if (win.isDestroyed() || !floatingTargets.get(id)?.sessionId || !readyFloating.has(win) || win.isMinimized()) continue
+    if (win.isDestroyed() || !floatingTargets.get(id)?.sessionId || !readyFloating.has(win)) continue
     if (inSessionScope(id)) { if (!win.isVisible()) win.showInactive() }
     else if (win.isVisible()) win.hide()
   }
@@ -1472,13 +1473,20 @@ function syncSessionPanels(): void {
 function openFloatingPanel(raw: unknown): { id: string } | undefined {
   const target = normalizeFloatingPanelOpenOptions(raw)
   if (!target) return undefined
+  // 已绑会话的面板被卫星窗(独立窗 / Mini,不带归属)再次打开:保留原归属,否则它从此不再跟着主窗会话显隐
+  const prev = floatingTargets.get(target.id)
+  if (prev?.sessionId && !target.sessionId) target.sessionId = prev.sessionId
   floatingTargets.set(target.id, target)
   const existing = floatingWindows.get(target.id)
   if (existing && !existing.isDestroyed()) {
     existing.setTitle(target.title)
+    existing.setMinimizable(!target.sessionId) // 先以普通面板开过、后被主窗绑上会话的,也收回最小化
     if (existing.isMinimized()) existing.restore()
     present(existing)
-    if (!existing.webContents.isLoadingMainFrame()) existing.webContents.send('window:floatingTarget', target)
+    // 还在载入:渲染层可能已经 floatingReady 拿走了上一份 target,这份得等载入完补发(发最新的;重复到达由面板按 nonce 去重)
+    const deliver = (): void => { if (!existing.isDestroyed()) existing.webContents.send('window:floatingTarget', floatingTargets.get(target.id) ?? target) }
+    if (existing.webContents.isLoadingMainFrame()) existing.webContents.once('did-finish-load', deliver)
+    else deliver()
     return { id: target.id }
   }
   const win = new BrowserWindow({
@@ -1492,7 +1500,8 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
     title: target.title,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     autoHideMenuBar: true,
-    minimizable: true,
+    // 会话级面板(旁聊)不给最小化:收起 = 切走会话,关掉 = 清空;进了 Dock 就能在别的会话里被点出来
+    minimizable: !target.sessionId,
     closable: true,
     resizable: true,
     transparent: process.platform === 'darwin',

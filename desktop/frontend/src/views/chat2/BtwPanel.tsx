@@ -58,12 +58,17 @@ export function BtwPanel({ seed, onClose, onQuoted }: { seed: BtwSeed; onClose?:
   const ask = (question: string, excerpt?: string): void => { void useBtw.getState().ask(sessionId, question, excerpt, seed.modelId) }
 
   // 一次性指令:带问题直接问;只带引用就挂上,等用户打字(空着回车 = 「解释一下这段」)。
+  // 上一问还在流(一次一问)→ 不能直接问,也不能丢(主窗输入框已经清空了):填进本面板输入框,答完再发。
   useEffect(() => {
     if (consumeSeed(seed)) {
-      if (seed.question) ask(seed.question, seed.quote)
-      else if (seed.quote) setQuote(seed.quote)
+      const streaming = (useBtw.getState().threads[sessionId] || []).some((turn) => turn.status === 'streaming')
+      if (seed.question && !streaming) ask(seed.question, seed.quote)
+      else {
+        if (seed.question) setDraft(seed.question)
+        if (seed.quote) setQuote(seed.quote)
+      }
     }
-    requestAnimationFrame(() => taRef.current?.focus())
+    requestAnimationFrame(() => { taRef.current?.focus(); grow() })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [seed.nonce])
 
