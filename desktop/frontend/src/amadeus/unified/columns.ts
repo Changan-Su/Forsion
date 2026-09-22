@@ -459,6 +459,29 @@ export function executeMoveBelowRow(view: EditorView, rowPos: number, copy = fal
   return true
 }
 
+/** 拖到某列内容**之下**的行内空白(短列底下那片)→ 块落到该列末尾(Notion 同款,2026-09-22 录屏:
+ *  那片空白的最近块边是高列/行的下沿,块被丢进别的列、行外,或无线落地)。与 executeMoveBelowRow
+ *  同规:删+插一个事务、list_item 包回完整列表、amxColumns 结构门(拖空的原 cell 由 normalizer 收)。 */
+export function executeMoveIntoCellTail(view: EditorView, cellPos: number, copy = false): boolean {
+  const { state } = view
+  const sel = state.selection
+  if (!(sel instanceof NodeSelection)) return false
+  const dragged = sel.node
+  if (dragged.type.name === 'amadeusColumnRow' || dragged.type.name === 'amadeusColumnCell') return false
+  const cell = state.doc.nodeAt(cellPos)
+  if (!cell || cell.type.name !== 'amadeusColumnCell') return false
+  const end = cellPos + cell.nodeSize - 1
+  if (!copy && sel.to === end) return true // 本就是该列末块:落回原处,吞掉,不造空撤销步
+  const moved =
+    dragged.type.name === 'list_item' ? sel.$from.parent.type.create(sel.$from.parent.attrs, dragged) : dragged
+  let tr = state.tr
+  if (!copy) tr = tr.delete(sel.from, sel.to)
+  tr = tr.insert(tr.mapping.map(end), moved)
+  tr.setMeta('amxColumns', true)
+  view.dispatch(tr.scrollIntoView())
+  return true
+}
+
 /** 「移到新列」(v3 splitToColumn 语义):把顶层块 [from,to) 换成「左列=它 + 右列空段」的两列行,
  *  光标落右列。⠿ 菜单与 slash「分栏」共用这一份 —— 别在调用处各写一遍建行代码。
  *  目标不在顶层(已在列内 / li 内)返回 false:行只允许顶级,列内块靠拖拽调整(与 executePair 同规)。 */
