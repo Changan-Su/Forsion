@@ -1,17 +1,12 @@
-/**
- * 首启引导向导:① 连接(Forsion 账号登录 / 自定义 provider)→ ② 默认模型 → ③ 环境检测(缺失项
- * 给平台安装命令,用户确认后内置日志面板执行——绝不静默自动装)→ ④ 完成(指路导入/设置)。
- * 触发条件见 App.tsx(managed 从未配置:无 cloudUrl/token/provider);「跳过」永久记 localStorage。
- */
-import React, { useEffect, useState } from 'react'
+/** First-run decisions, one screen at a time. Advanced configuration stays in its owning space. */
+import React, { useEffect, useRef, useState } from 'react'
 import {
-  ArrowRight, ArrowLeft, Bot, Check, Cloud, History, KeyRound, Loader2, LogIn, ExternalLink,
-  MonitorCog, Plus, SkipForward, Sparkles, Palette, FolderOpen, Sun, Moon, X, FileText, RefreshCw,
+  ArrowRight, ArrowLeft, Bot, Check, Cloud, KeyRound, Loader2, LogIn, ExternalLink,
+  MonitorCog, FolderOpen, Sun, Moon, X, FileText, RefreshCw, Palette, ShieldCheck, Sparkles,
 } from 'lucide-react'
-import { listModels, testProviderConnection, listAgents, saveAgentDef, getSpecialConfig, saveSpecialConfig } from '../services/backendService'
-import { EnvProbeSection } from './EnvProbeSection'
+import { listModels, testProviderConnection } from '../services/backendService'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
-import type { MirrorTestResult, ModelsResponse, NormalAgentDef, SpecialAgentsConfig, TanguDesktopConfig } from '../types'
+import type { DesktopPermissionId, ModelsResponse } from '../types'
 import { useI18n } from '../i18n'
 import { PRODUCT, PRODUCT_DISPLAY_NAME } from '../product'
 import { listLanguages, listSkins, skinSwatch, backgroundSwatch, forcedSchemeForLanguage } from '../theme/registry'
@@ -20,69 +15,51 @@ import { ThemeCard } from './ThemeCard'
 import { ThemePreview } from './ThemePreview'
 import { BrandLogo } from './BrandLogo'
 import { LocaleToggle } from './LocaleToggle'
-import { AsrModelChoice } from './AsrModelChoice'
 import { listFonts } from '../fontPresets'
-import { AuxModelChoice } from './AuxModelChoice'
 import { Markdown } from './Markdown'
 import { APP_VERSION, CHANGELOG } from '../changelog'
 import { track } from '../achievements/store'
 import { applyUiFonts, readFont, writeFont } from '../uiFont'
+import { OnboardingModelChoice } from './OnboardingModelChoice'
+import './onboardingMessages'
+import './onboarding.css'
 
-/** 系统语言/时区疑似中国大陆 → 引导/设置里推荐开镜像(仅推荐,不代选)。 */
 export const likelyMainlandChina = (): boolean => {
   try {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''
     return navigator.language.toLowerCase() === 'zh-cn' || /^Asia\/(Shanghai|Chongqing|Harbin|Urumqi)$/.test(tz)
-  } catch {
-    return false
-  }
+  } catch { return false }
 }
-
 export const ONBOARDING_DISMISS_KEY = 'forsion_tangu_onboarding_done'
-/** 上次完成引导时的应用版本号;与当前版本不同 → 版本更新后再进一次引导(展示 What's New)。 */
 export const ONBOARDING_VERSION_KEY = 'forsion_tangu_onboarding_version'
-
-type Step = 'welcome' | 'connect' | 'theme' | 'model' | 'permissions' | 'speech' | 'agents' | 'workspace' | 'env' | 'done'
-/** 基础步骤序。两种收缩到通用步(welcome/theme/done)的情形(宿主权限能力另行插入):
- *  · 无 agent 后端的单品变体(connect/model/agents/workspace/env 均属 agent);
- *  · 非 host 宿主(web / 移动端)—— 这几步的落盘全走 window.tangu 的 setConfig / envCheck /
- *    pickDirectory,shim 里没有这些方法,留着就是「选了不保存」的死步骤;登录也早在挂载前
- *    由 webShim / mobileShim 完成(无 token 直接跳 /auth)。判定信号与 appStore.boot 的引导
- *    触发同一个(envCheck 在不在),别另起一个 flag。 */
+export const SUB_PROVIDER_LABELS: Record<string, string> = { codex: 'Codex', xai: 'xAI · Grok' }
+type Step = 'welcome' | 'connect' | 'model' | 'theme' | 'workspace' | 'permissions' | 'done'
+const permissionSets: Record<'computer' | 'media', DesktopPermissionId[]> = {
+  computer: ['computerAccessibility', 'computerScreen'], media: ['microphone', 'camera', 'screen'],
+}
 const stepOrder = (): Step[] => {
   const steps: Step[] = PRODUCT.agentBackend && !!window.tangu?.envCheck
-    ? ['welcome', 'connect', 'theme', 'model', 'speech', 'agents', 'workspace', 'env', 'done']
-    : ['welcome', 'theme', 'done']
-  // 权限属于宿主能力,不依赖 Agent 后端。Web/mobile 保留原通用流程。
-  if (hasDesktopPermissions()) steps.splice(steps.includes('speech') ? steps.indexOf('speech') : steps.indexOf('done'), 0, 'permissions')
+    ? ['welcome', 'connect', 'model', 'theme', 'workspace', 'done'] : ['welcome', 'theme', 'done']
+  if (hasDesktopPermissions()) steps.splice(steps.indexOf('done'), 0, 'permissions')
   return steps
 }
-
-/** 订阅 provider 的友好名(id 见 src/llm/providerOAuth.ts OAUTH_PROVIDERS);未知 id 回退原值。 */
-// Claude 不在此列:订阅登录已删,走「运行引擎」直接跑本机 Claude Code(见 tangu-agent/src/engines/)。
-export const SUB_PROVIDER_LABELS: Record<string, string> = { codex: 'Codex', xai: 'xAI · Grok' }
-
 export const OnboardingWizard: React.FC<{
-  /** 当前主题/明暗(与 App 同步;主题步骤即时应用 + 持久化)。 */
-  themeLang: string
-  themeSkin: string
-  themeMode: 'light' | 'dark'
-  /** 用户明暗偏好(可 system);换语言/配色时透传它,不能传落地 mode 否则会把 system 抹成明/暗(codex High-2)。 */
-  themeModePref: 'light' | 'dark' | 'system'
-  themeSeed: string
+  themeLang: string; themeSkin: string; themeMode: 'light' | 'dark'; themeModePref: 'light' | 'dark' | 'system'; themeSeed: string
   onThemeChange: (lang: string, skin: string, pref: 'light' | 'dark' | 'system') => void
-  onSeedChange: (hex: string) => void
-  /** 向导内动作改变了主配置(登录成功/保存 provider)→ App 重连。 */
-  onReconnect: () => void
-  onFinish: () => void
+  onSeedChange: (hex: string) => void; onReconnect: () => void; onFinish: () => void
 }> = ({ themeLang, themeSkin, themeMode, themeModePref, themeSeed, onThemeChange, onSeedChange, onReconnect, onFinish }) => {
   const { t } = useI18n()
   const [step, setStep] = useState<Step>('welcome')
   const STEP_ORDER = stepOrder()
   const stepIdx = STEP_ORDER.indexOf(step)
-  /** host(桌面)完整流程 vs web/移动端的通用流程 —— 从步骤序推,不另立信号。 */
-  const isHost = STEP_ORDER.includes('env')
-
+  const isHost = STEP_ORDER.includes('connect')
+  const [appearanceTab, setAppearanceTab] = useState<'style' | 'colors' | 'font'>('style')
+  const [permissionTab, setPermissionTab] = useState<'computer' | 'media'>('computer')
+  const [computerAvailable, setComputerAvailable] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+  const titleRef = useRef<HTMLHeadingElement>(null)
+  const changelogRef = useRef<HTMLDialogElement>(null)
   // 背景色轴直接读写 themeStore(与设置→外观同一条路径);主题色轴仍走 props 的 onThemeChange。
   const themeBg = useTheme((s) => s.bg)
   const setBg = useTheme((s) => s.setBg)
@@ -92,7 +69,7 @@ export const OnboardingWizard: React.FC<{
   // 界面字体(存的是预设 id;与设置→外观同一份 localStorage,写完立刻注入生效)
   const [uiFont, setUiFont] = useState(() => readFont('ui'))
 
-  // ── ⓪ 欢迎(开机式动画 + What's New 抽屉)──
+  // ── 欢迎与更新日志对话框 ──
   const [appVer, setAppVer] = useState('')
   const [showChangelog, setShowChangelog] = useState(false)
   useEffect(() => { void window.tangu?.appVersion?.().then((v) => setAppVer(v || '')).catch(() => {}) }, [])
@@ -112,7 +89,7 @@ export const OnboardingWizard: React.FC<{
   const [pmodels, setPmodels] = useState('')
   const [byokSaved, setByokSaved] = useState(false)
   const [byokTesting, setByokTesting] = useState(false)
-  // 订阅登录(Claude/Codex/xAI 官方 OAuth,跑各自订阅额度;仅桌面端,凭证存本机)
+  // 订阅登录(Codex/xAI 官方 OAuth,跑各自订阅额度;仅桌面端,凭证存本机)
   const [providers, setProviders] = useState<Array<{ id: string; loggedIn: boolean }> | null>(null)
   const [providerBusy, setProviderBusy] = useState<string | null>(null)
   const canSubLogin = !!window.tangu?.providerLogin
@@ -125,7 +102,7 @@ export const OnboardingWizard: React.FC<{
     void window.tangu?.authStatus?.().then((a) => {
       setCloudUrl((u) => u || a.cloudUrl || '')
       setLoggedIn(a.loggedIn)
-    })
+    }).catch(() => {})
     refreshProviders()
     const off = window.tangu?.onAuthDevice?.((info) => setDevice(info))
     return () => off?.()
@@ -192,259 +169,117 @@ export const OnboardingWizard: React.FC<{
     }
   }
 
-  // ── ③ 默认模型 ──
+
   const [models, setModels] = useState<ModelsResponse | null>(null)
   const [modelsLoading, setModelsLoading] = useState(false)
-  const [chosenModel, setChosenModel] = useState('')
-
-  // ── ④ 默认本地工作区目录 + 网络镜像(环境步骤)──
-  const [workspaceDir, setWorkspaceDir] = useState('')
-  const [mirror, setMirror] = useState<'default' | 'china'>('default')
-  const [mirrorTesting, setMirrorTesting] = useState(false)
-  const [mirrorTest, setMirrorTest] = useState<MirrorTestResult | null>(null)
+  const [modelError, setModelError] = useState(false)
+  const [chosenModel, setChosenModel] = useState<string | null>(null)
+  const modelRequest = useRef(0)
+  const [workspaceDir, setWorkspaceDir] = useState<string | null>(null)
   useEffect(() => {
     void window.tangu?.getConfig?.().then((c) => {
-      setWorkspaceDir(c.defaultWorkspaceDir || '')
+      setWorkspaceDir((draft) => draft ?? c.defaultWorkspaceDir ?? '')
       setSyncEnabled(!!c.forsionSyncEnabled)
-      setMirror(c.mirror === 'china' ? 'china' : 'default')
     }).catch(() => {})
+    void window.tangu?.listProviders?.().then((items) => setByokSaved(items.length > 0)).catch(() => {})
+    return () => { modelRequest.current++ }
   }, [])
-
-  const loadStepModels = (): void => {
-    setModelsLoading(true)
-    void window.tangu?.getConfig().then((c) =>
-      listModels({ backendUrl: c.backendUrl, token: c.token, modelId: '' })
-        .then((m) => {
-          setModels(m)
-          setChosenModel((cur) => cur || m.defaultModelId || m.models[0]?.id || '')
-        })
-        .catch(() => setModels(null))
-        .finally(() => setModelsLoading(false)),
-    )
-  }
-
-  // ── ④ 智能体(名册速览 + 快速新建 + Historian 后台智能体开关)──
-  const [agents, setAgents] = useState<NormalAgentDef[] | null>(null)
-  const [agName, setAgName] = useState('')
-  const [agPersona, setAgPersona] = useState('')
-  const [agBusy, setAgBusy] = useState(false)
-  const [agMsg, setAgMsg] = useState('')
-  const [special, setSpecial] = useState<SpecialAgentsConfig | null>(null)
-
-  const apiCfg = async (): Promise<TanguDesktopConfig> => {
-    const c = await window.tangu!.getConfig()
-    return { backendUrl: c.backendUrl, token: c.token, modelId: '' }
-  }
-  const loadAgentsStep = (): void => {
-    void apiCfg().then((cfg) => {
-      void listAgents(cfg).then(setAgents)
-      // 老/external 后端无 special 路由 → 静默隐藏 Historian 卡片。
-      void getSpecialConfig(cfg).then((r) => setSpecial(r.config)).catch(() => setSpecial(null))
-    }).catch(() => {})
-  }
-
-  const createQuickAgent = async (): Promise<void> => {
-    const name = agName.trim()
-    if (!name) return
-    setAgBusy(true)
-    setAgMsg('')
+  const loadStepModels = async (): Promise<void> => {
+    const request = ++modelRequest.current
+    setModelsLoading(true); setModelError(false)
     try {
-      const cfg = await apiCfg()
-      // systemPrompt 新建必填(后端拒空):不填人格时给一句中性默认(硬编码提示词按项目纪律用英文),
-      // 兑现「只需名字即可创建」;之后在「智能体」页随时可改。
-      const persona = agPersona.trim() || `You are ${name}, a helpful assistant. Reply in the user's language.`
-      await saveAgentDef(cfg, { name, systemPrompt: persona })
-      setAgName('')
-      setAgPersona('')
-      setAgMsg(t('onboarding.agents.created', { name }))
-      void listAgents(cfg).then(setAgents)
-    } catch (e: any) {
-      setAgMsg(t('onboarding.agents.createFail', { e: e?.message || e }))
+      if (!window.tangu?.getConfig) throw new Error('Host unavailable')
+      const c = await window.tangu.getConfig()
+      const result = await listModels({ backendUrl: c.backendUrl, token: c.token, modelId: '' })
+      if (request !== modelRequest.current) return
+      setModels(result)
+      setChosenModel((draft) => draft ?? c.modelId ?? '')
+    } catch {
+      if (request === modelRequest.current) setModelError(true)
     } finally {
-      setAgBusy(false)
+      if (request === modelRequest.current) setModelsLoading(false)
     }
   }
-
-  const saveHistorian = (patch: Partial<SpecialAgentsConfig['historian']>): void => {
-    if (!special) return
-    const h = { ...special.historian, ...patch }
-    // modelId 留空=跟随 admin 的「后台 agent 默认」槽(其次对话默认);不再强制选模型,
-    // 也不把引导选的对话模型写死进来(写了就脱离跟随)。
-    setSpecial({ ...special, historian: h })
-    // 保存失败绝不静默:提示 + 回读服务端真值(否则乐观 UI 显示已开而后端没存上)。
-    void apiCfg().then((cfg) =>
-      saveSpecialConfig(cfg, { historian: h }).then(setSpecial).catch((e) => {
-        setAgMsg(t('onboarding.agents.historianSaveFail', { e: e?.message || e }))
-        void getSpecialConfig(cfg).then((r) => setSpecial(r.config)).catch(() => {})
-      }),
-    ).catch(() => {})
-  }
-
   useEffect(() => {
-    if (step === 'model') loadStepModels()
-    if (step === 'agents') loadAgentsStep()
-    // env 步的检测由 EnvProbeSection 自己 mount 时跑(它只在该步渲染)。
+    setSaveError('')
+    titleRef.current?.focus({ preventScroll: true })
+    if (step === 'model') void loadStepModels()
+    // Models are refreshed on entry; an existing draft is preserved.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step])
-
-  // ── ③ 环境检测:整块搬进 EnvProbeSection(设置页共用) ──
-
+  useEffect(() => {
+    const dialog = changelogRef.current
+    if (showChangelog && dialog && !dialog.open) dialog.showModal()
+    else if (!showChangelog && dialog?.open) dialog.close()
+  }, [showChangelog])
   const finish = (): void => {
     try {
       localStorage.setItem(ONBOARDING_DISMISS_KEY, '1')
-      // 记下完成时的版本 → 下次同版本不再弹,版本升级后再进一次。
-      if (appVer) localStorage.setItem(ONBOARDING_VERSION_KEY, appVer)
-      else void window.tangu?.appVersion?.().then((v) => { if (v) try { localStorage.setItem(ONBOARDING_VERSION_KEY, v) } catch { /* ignore */ } })
-    } catch { /* ignore */ }
+      localStorage.setItem(ONBOARDING_VERSION_KEY, appVer || APP_VERSION)
+    } catch { /* Storage may be unavailable in private sessions. */ }
     onFinish()
   }
-
+  const advance = async (): Promise<void> => {
+    if (saving) return
+    setSaving(true); setSaveError('')
+    try {
+      if (step === 'model' && chosenModel !== null) await window.tangu?.setConfig({ modelId: chosenModel })
+      if (step === 'workspace' && workspaceDir !== null) await window.tangu?.setConfig({ defaultWorkspaceDir: workspaceDir.trim() })
+      if (step === 'model' && chosenModel !== null) onReconnect()
+      setStep(STEP_ORDER[stepIdx + 1])
+    } catch (error) {
+      setSaveError(t('onboarding.guide.saveFail', { error: error instanceof Error ? error.message : String(error) }))
+    } finally { setSaving(false) }
+  }
   const connectReady = loggedIn || byokSaved || subLoggedIn
+  const iconFor = { connect: Cloud, model: Bot, theme: Palette, workspace: FolderOpen, permissions: ShieldCheck, done: Check }
+  const title = step === 'welcome' ? t('onboarding.guide.intro') : step === 'done' ? t('onboarding.guide.doneTitle')
+    : step === 'permissions' ? t('desktopPermissions.title') : t(`onboarding.step.${step}.title`)
+  const description = step === 'welcome' ? t('onboarding.guide.welcome') : step === 'done' ? t('onboarding.guide.doneBody')
+    : step === 'permissions' ? t('desktopPermissions.optional') : step === 'theme' ? t('onboarding.guide.appearanceDescription') : t(`onboarding.step.${step}.description`)
 
-  // 引导仍保留每个独立配置步骤,但左侧把它们组织成四个用户能理解的阶段。
-  // 这是视觉与认知分组,不改现有保存时机、跳过语义或步骤顺序。
-  const phaseItems = [
-    { id: 'connect', label: t('onboarding.phase.connect'), icon: Cloud, steps: ['connect'] as Step[] },
-    { id: 'appearance', label: t('onboarding.phase.appearance'), icon: Palette, steps: ['theme'] as Step[] },
-    { id: 'capabilities', label: t('onboarding.phase.capabilities'), icon: Sparkles, steps: ['model', 'permissions', 'speech', 'agents'] as Step[] },
-    { id: 'workspace', label: t('onboarding.phase.workspace'), icon: FolderOpen, steps: ['workspace', 'env', 'done'] as Step[] },
-  ].filter((phase) => phase.steps.some((s) => STEP_ORDER.includes(s)))
-  const activePhaseIdx = Math.max(0, phaseItems.findIndex((phase) => phase.steps.includes(step)))
-  const stepMeta: Record<Exclude<Step, 'welcome'>, { title: string; description: string }> = {
-    connect: { title: t('onboarding.step.connect.title'), description: t('onboarding.step.connect.description') },
-    theme: { title: t('onboarding.step.theme.title'), description: t('onboarding.step.theme.description') },
-    model: { title: t('onboarding.step.model.title'), description: t('onboarding.step.model.description') },
-    permissions: { title: t('desktopPermissions.title'), description: t('desktopPermissions.description') },
-    speech: { title: t('onboarding.step.speech.title'), description: t('onboarding.step.speech.description') },
-    agents: { title: t('onboarding.step.agents.title'), description: t('onboarding.step.agents.description') },
-    workspace: { title: t('onboarding.step.workspace.title'), description: t('onboarding.step.workspace.description') },
-    env: { title: t('onboarding.step.env.title'), description: t('onboarding.step.env.description') },
-    done: { title: t('onboarding.step.done.title'), description: t('onboarding.step.done.description') },
-  }
-
-  const rail = (showProgress: boolean): React.ReactNode => (
+  return <div className="ob-shell ob-flow" data-step={step}>
     <aside className="ob-rail">
-      <div className="ob-brand">
-        <BrandLogo size={42} />
-        <div>
-          <div className="ob-brand-name">{PRODUCT_DISPLAY_NAME}</div>
-          <div className="ob-brand-caption">{t('onboarding.brand.caption')}</div>
-        </div>
-      </div>
-
-      {showProgress ? (
-        <nav className="ob-phases" aria-label={t('onboarding.progress.label')}>
-          <div className="ob-rail-label">{t('onboarding.progress.label')}</div>
-          {phaseItems.map((phase, index) => {
-            const Icon = phase.icon
-            const active = index === activePhaseIdx
-            const complete = index < activePhaseIdx || step === 'done'
-            return (
-              <div key={phase.id} className={`ob-phase${active ? ' active' : ''}${complete ? ' complete' : ''}`}>
-                <span className="ob-phase-icon">{complete ? <Check size={14} /> : <Icon size={15} />}</span>
-                <span>{phase.label}</span>
-              </div>
-            )
-          })}
-        </nav>
-      ) : (
-        <div className="ob-promise">
-          <div className="ob-rail-label">{t('onboarding.welcome.railLabel')}</div>
-          <h2>{t('onboarding.welcome.railTitle')}</h2>
-          <p>{t('onboarding.welcome.railBody')}</p>
-          <div className="ob-promise-list">
-            <span><Cloud size={15} />{t('onboarding.welcome.promiseModels')}</span>
-            <span><Bot size={15} />{t('onboarding.welcome.promiseAgents')}</span>
-            <span><FolderOpen size={15} />{t('onboarding.welcome.promiseLocal')}</span>
+      <div className="ob-brand"><BrandLogo size={30} /><strong>{PRODUCT_DISPLAY_NAME}</strong></div>
+      <nav className="ob-progress" aria-label={t('onboarding.progress.label')}>
+        {STEP_ORDER.filter((s): s is Exclude<Step, 'welcome'> => s !== 'welcome').map((s, i) => {
+          const Icon = iconFor[s]
+          return <div key={s} className={`ob-progress-item${step === s ? ' active' : ''}`} aria-label={t(`onboarding.guide.${s}`)} aria-current={step === s ? 'step' : undefined}>
+            <span className="ob-progress-icon">{stepIdx > i + 1 ? <Check size={16} /> : <Icon size={16} />}</span>
+            <span>{t(`onboarding.guide.${s}`)}</span>
           </div>
-        </div>
-      )}
-
-      <div className="ob-rail-foot">
-        <LocaleToggle />
-      </div>
+        })}
+      </nav>
+      <div className="ob-rail-foot"><LocaleToggle /><span>{appVer || APP_VERSION}</span></div>
     </aside>
-  )
-
-  // ── ⓪ 欢迎页:开机式入场动画(标题/版本/按钮错峰淡入)+ 侧边丝滑展开的更新日志(markdown)。 ──
-  if (step === 'welcome') {
-    return (
-      <div className="ob-shell ob-shell--welcome">
-        {rail(false)}
-        <main className="ob-stage">
-          <div className="ob-hero">
-            <div className="ob-hero-kicker">{t('onboarding.welcome.kicker')}</div>
-            <h1 className="ob-hero-title">{t('onboarding.welcome.title', { name: PRODUCT_DISPLAY_NAME })}</h1>
-            <p className="ob-hero-subtitle">{t('onboarding.welcome.subtitle')}</p>
-            <div className="ob-hero-actions">
-              <button className="btn primary" onClick={() => setStep(STEP_ORDER[1])}>
-                {t('onboarding.welcome.continue')} <ArrowRight size={15} />
-              </button>
-              <button className={`btn ghost${showChangelog ? ' active' : ''}`} onClick={() => setShowChangelog((v) => !v)}>
-                <FileText size={14} /> {t('onboarding.welcome.viewChangelog')}
-              </button>
+    <main className="ob-stage">
+      <header className="ob-step-head">
+        <div><div className="ob-step-kicker">{t('onboarding.guide.essentials')}</div>
+          <h1 ref={titleRef} tabIndex={-1}>{title}</h1><p>{description}</p>
+        </div>
+        {step !== 'welcome' && <span className="ob-step-count">{stepIdx} / {STEP_ORDER.length - 1}</span>}
+      </header>
+      <div className="ob-content" key={step}>
+        {step === 'welcome' && <div className="ob-welcome-layout">
+          <div className="ob-welcome-story"><BrandLogo size={64} />
+            <h2>{PRODUCT_DISPLAY_NAME}</h2><p>{t('onboarding.welcome.railBody')}</p>
+            <div className="ob-welcome-points">
+              <span><Bot size={18} />{t('onboarding.welcome.promiseModels')}</span>
+              <span><FolderOpen size={18} />{t('onboarding.welcome.promiseLocal')}</span>
             </div>
-            <div className="ob-hero-foot">
-              <span>{t('onboarding.welcome.version', { v: appVer || APP_VERSION || '' })}</span>
-              <button className="ob-hero-skip" onClick={finish}>{t('onboarding.nav.skip')}</button>
-            </div>
-          </div>
-        </main>
-
-        <div className={`ob-drawer-scrim${showChangelog ? ' open' : ''}`} onClick={() => setShowChangelog(false)} />
-        <aside className={`ob-drawer${showChangelog ? ' open' : ''}`} aria-hidden={!showChangelog}>
-          <div className="ob-drawer-head">
-            <RefreshCw size={14} /> <span className="grow">{t('onboarding.welcome.changelogTitle')}</span>
-            <button className="icon-btn" title={t('common.close')} onClick={() => setShowChangelog(false)}><X size={16} /></button>
-          </div>
-          <div className="ob-drawer-body changelog">
-            {CHANGELOG.length === 0 && <div className="hint">{t('onboarding.welcome.noChangelog')}</div>}
-            {CHANGELOG.map((c) => (
-              <div key={c.version} className="changelog-entry md-body">
-                <div className="changelog-ver">{c.version} <span className="changelog-date">{c.date}</span></div>
-                <Markdown content={c.lines.map((l) => `- ${l}`).join('\n')} />
-              </div>
-            ))}
-          </div>
-        </aside>
-      </div>
-    )
-  }
-
-  return (
-    <div className="ob-shell ob-shell--steps">
-      {rail(true)}
-      <main className="ob-stage">
-        <div className="ob-step-wrap">
-          {/* key={step} 让每步重新触发一次克制的入场动画。 */}
-          <div className="ob-step" key={step}>
-            <header className="ob-step-head">
-              <div>
-                <div className="ob-step-kicker">{phaseItems[activePhaseIdx]?.label}</div>
-                <h1>{stepMeta[step].title}</h1>
-                <p>{stepMeta[step].description}</p>
-              </div>
-              <span className="ob-step-count">{stepIdx} / {STEP_ORDER.length - 1}</span>
-            </header>
-            <div className="ob-step-body">
-          {step === 'connect' && (
-            <>
-              <div className="field">
-                <label>{t('onboarding.connect.modeLabel')}</label>
-                <div className="seg">
-                  <button className={connectMode === 'forsion' ? 'active' : ''} onClick={() => setConnectMode('forsion')}>
-                    <Cloud size={12} style={{ verticalAlign: -2, marginRight: 4 }} />{t('onboarding.connect.modeForsion')}
-                  </button>
-                  {canSubLogin && (
-                    <button className={connectMode === 'sub' ? 'active' : ''} onClick={() => setConnectMode('sub')}>
-                      <LogIn size={12} style={{ verticalAlign: -2, marginRight: 4 }} />{t('onboarding.connect.modeSub')}
-                    </button>
-                  )}
-                  <button className={connectMode === 'byok' ? 'active' : ''} onClick={() => setConnectMode('byok')}>
-                    <KeyRound size={12} style={{ verticalAlign: -2, marginRight: 4 }} />{t('onboarding.connect.modeByok')}
-                  </button>
-                </div>
-              </div>
+          </div><ThemePreview tabLabel={t('onboarding.phase.appearance')} />
+        </div>}
+        {step === 'connect' && <div className="ob-connect-layout">
+          <div className="ob-connect-options">
+            {(['forsion', ...(canSubLogin ? ['sub'] : []), 'byok'] as const).map((mode) => {
+              const Icon = mode === 'forsion' ? Cloud : mode === 'sub' ? LogIn : KeyRound
+              return <button key={mode} aria-pressed={connectMode === mode} className={`ob-connect-option${connectMode === mode ? ' selected' : ''}`}
+                onClick={() => { setConnectMode(mode as 'forsion' | 'sub' | 'byok'); setConnectMsg('') }}>
+                <Icon size={20} /><span><strong>{t(mode === 'forsion' ? 'onboarding.connect.modeForsion' : mode === 'sub' ? 'onboarding.connect.modeSub' : 'onboarding.connect.modeByok')}</strong>
+                  <small>{t(mode === 'forsion' ? 'onboarding.guide.forsion' : mode === 'sub' ? 'onboarding.guide.subscription' : 'onboarding.guide.byok')}</small></span>
+              </button>
+            })}
+          </div><div className="ob-connect-detail">
               {connectMode === 'forsion' ? (
                 <>
                   {/* 云端地址只由环境变量 TANGU_CLOUD_URL / 内置默认决定,引导界面不再展示/编辑(与设置一致)。 */}
@@ -456,9 +291,8 @@ export const OnboardingWizard: React.FC<{
                       <li>{t('onboarding.connect.benefitModels')}</li>
                     </ul>
                   </div>
-                  <div className="hint" style={{ marginBottom: 8 }}>{t('onboarding.connect.forsionHint')}</div>
-                  <button className="btn primary sm" disabled={loggingIn} onClick={() => void doLogin()}>
-                    {loggingIn ? <Loader2 size={12} className="spin" /> : <LogIn size={12} />} {t('onboarding.connect.loginViaBrowser')}
+                  <button className="btn primary sm" disabled={loggingIn || loggedIn} onClick={() => void doLogin()}>
+                    {loggingIn ? <Loader2 size={12} className="spin" /> : <LogIn size={12} />} {t(loggedIn ? 'onboarding.guide.connected' : 'onboarding.connect.loginViaBrowser')}
                   </button>
                   {device && (
                     <div className="hint" style={{ marginTop: 6 }}>
@@ -511,21 +345,21 @@ export const OnboardingWizard: React.FC<{
                 <>
                   <div className="field-row">
                     <div className="field">
-                      <label>{t('onboarding.connect.providerIdLabel')}</label>
-                      <input type="text" value={pid} onChange={(e) => setPid(e.target.value.trim())} placeholder={t('onboarding.connect.providerIdPlaceholder')} />
+                      <label htmlFor="ob-provider">{t('onboarding.connect.providerIdLabel')}</label>
+                      <input id="ob-provider" type="text" value={pid} onChange={(e) => setPid(e.target.value.trim())} placeholder={t('onboarding.connect.providerIdPlaceholder')} />
                     </div>
                     <div className="field">
-                      <label>{t('onboarding.connect.apiKeyLabel')}</label>
-                      <input type="password" value={pkey} onChange={(e) => setPkey(e.target.value)} placeholder="sk-…" />
+                      <label htmlFor="ob-api-key">{t('onboarding.connect.apiKeyLabel')}</label>
+                      <input id="ob-api-key" type="password" autoComplete="off" value={pkey} onChange={(e) => setPkey(e.target.value)} placeholder="sk-…" />
                     </div>
                   </div>
                   <div className="field">
-                    <label>{t('onboarding.connect.baseUrlLabel')}</label>
-                    <input type="text" value={purl} onChange={(e) => setPurl(e.target.value.trim())} placeholder="http://localhost:11434/v1" />
+                    <label htmlFor="ob-base-url">{t('onboarding.connect.baseUrlLabel')}</label>
+                    <input id="ob-base-url" type="text" value={purl} onChange={(e) => setPurl(e.target.value.trim())} placeholder="http://localhost:11434/v1" />
                   </div>
                   <div className="field">
-                    <label>{t('onboarding.connect.modelWhitelistLabel')}</label>
-                    <input type="text" value={pmodels} onChange={(e) => setPmodels(e.target.value)} placeholder="llama3, qwen2.5-coder" />
+                    <label htmlFor="ob-model-ids">{t('onboarding.connect.modelWhitelistLabel')}</label>
+                    <input id="ob-model-ids" type="text" value={pmodels} onChange={(e) => setPmodels(e.target.value)} placeholder="llama3, qwen2.5-coder" />
                   </div>
                   <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                     <button className="btn primary sm" disabled={byokTesting || !pid || !purl} onClick={() => void saveByok()}>
@@ -549,17 +383,27 @@ export const OnboardingWizard: React.FC<{
                   </div>
                 </>
               )}
-              {connectMsg && <div className="hint" style={{ marginTop: 8 }}>{connectMsg}</div>}
-            </>
-          )}
+              {connectMsg && <div className="ob-feedback" role="status">{connectMsg}</div>}
 
-          {step === 'theme' && (
-            <>
-              {/* 预览与设置→外观同一块(ThemePreview):首启还没进过应用,不给这块就是闭着眼选皮肤。 */}
-              <ThemePreview tabLabel={t('onboarding.phase.appearance')} />
-              <div className="field" style={{ marginTop: 14 }}>
+          </div></div>}
+        {step === 'model' && <>
+          {modelsLoading && <div className="ob-loading" role="status"><Loader2 size={20} className="spin" />{t('onboarding.model.loading')}</div>}
+          {!modelsLoading && (modelError || !models?.models.some((m) => !m.modelType || m.modelType === 'llm')) ? <div className="ob-empty">
+            <Bot size={32} /><h2>{t(modelError ? 'onboarding.guide.modelError' : 'onboarding.guide.modelEmpty')}</h2>
+            <div className="ob-inline"><button className="btn ghost" onClick={() => setStep('connect')}>{t('onboarding.guide.connect')}</button>
+              <button className="btn ghost" onClick={() => void loadStepModels()}><RefreshCw size={14} />{t('onboarding.model.refresh')}</button></div>
+          </div> : !modelsLoading && models && <OnboardingModelChoice models={models} value={chosenModel || ''} onChange={setChosenModel} />}
+        </>}
+        {step === 'theme' && <div className="ob-appearance-layout">
+          <div className="ob-appearance-controls">
+            <div className="seg ob-sections" aria-label={t('onboarding.guide.theme')}>
+              {(['style', 'colors', 'font'] as const).map((tab) => <button key={tab} aria-pressed={appearanceTab === tab}
+                className={appearanceTab === tab ? 'active' : ''} onClick={() => setAppearanceTab(tab)}>{t(`onboarding.guide.${tab}`)}</button>)}
+            </div>
+            <div className="ob-appearance-options">
+              {appearanceTab === 'style' && <>              <div className="field" >
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Palette size={13} /> {t('settings.theme.langLabel')}
+                  <Palette size={13} /> {t('onboarding.guide.styleLabel')}
                 </label>
                 <div className="theme-grid">
                   {listLanguages().map((th) => (
@@ -572,7 +416,37 @@ export const OnboardingWizard: React.FC<{
                   ))}
                 </div>
               </div>
-              <div className="field">
+              {(() => {
+                // 与设置页同款三态 + 锁定(主题 colorScheme 强制时禁用)。透传偏好,绝不把 system 抹成明/暗。
+                const forced = forcedSchemeForLanguage(themeLang)
+                const active = forced ?? themeModePref
+                const opts: Array<{ id: 'light' | 'dark' | 'system'; icon: typeof Sun; label: string }> = [
+                  { id: 'light', icon: Sun, label: t('onboarding.theme.light') },
+                  { id: 'dark', icon: Moon, label: t('onboarding.theme.dark') },
+                  { id: 'system', icon: MonitorCog, label: t('settings.theme.system') },
+                ]
+                return (
+                  <div className="field">
+                    <label>{t('onboarding.theme.modeLabel')}</label>
+                    <div className="seg">
+                      {opts.map(({ id, icon: Ic, label }) => (
+                        <button
+                          key={id}
+                          className={active === id ? 'active' : ''}
+                          disabled={!!forced}
+                          title={forced ? t('settings.theme.modeLocked') : undefined}
+                          onClick={() => onThemeChange(themeLang, themeSkin, id)}
+                        >
+                          <Ic size={13} style={{ verticalAlign: -2, marginRight: 4 }} />{label}
+                        </button>
+                      ))}
+                    </div>
+                    <div className="hint" style={{ marginTop: 6 }}>{forced ? t('settings.theme.modeLockedHint') : t('onboarding.theme.hint')}</div>
+                  </div>
+                )
+              })()}
+</>}
+              {appearanceTab === 'colors' && <>              <div className="field">
                 {/* 颜色**两根独立的轴**,与设置→外观逐字同款(2026-08-30 用户拍板:引导里也要都露出来)。
                     主题色只换 accent 家族,背景色只换底/文字/边线族(见 theme/skins.css)。
                     ⚠️ 别退回 2026-08-29 前的耦合写法 —— 那时同一个 id 被同时写进两根轴,引导选珊瑚
@@ -645,355 +519,76 @@ export const OnboardingWizard: React.FC<{
                   </div>
                 </div>
               )}
-              {(() => {
-                // 与设置页同款三态 + 锁定(主题 colorScheme 强制时禁用)。透传偏好,绝不把 system 抹成明/暗。
-                const forced = forcedSchemeForLanguage(themeLang)
-                const active = forced ?? themeModePref
-                const opts: Array<{ id: 'light' | 'dark' | 'system'; icon: typeof Sun; label: string }> = [
-                  { id: 'light', icon: Sun, label: t('onboarding.theme.light') },
-                  { id: 'dark', icon: Moon, label: t('onboarding.theme.dark') },
-                  { id: 'system', icon: MonitorCog, label: t('settings.theme.system') },
-                ]
-                return (
-                  <div className="field">
-                    <label>{t('onboarding.theme.modeLabel')}</label>
-                    <div className="seg">
-                      {opts.map(({ id, icon: Ic, label }) => (
-                        <button
-                          key={id}
-                          className={active === id ? 'active' : ''}
-                          disabled={!!forced}
-                          title={forced ? t('settings.theme.modeLocked') : undefined}
-                          onClick={() => onThemeChange(themeLang, themeSkin, id)}
-                        >
-                          <Ic size={13} style={{ verticalAlign: -2, marginRight: 4 }} />{label}
-                        </button>
-                      ))}
-                    </div>
-                    <div className="hint" style={{ marginTop: 6 }}>{forced ? t('settings.theme.modeLockedHint') : t('onboarding.theme.hint')}</div>
-                  </div>
-                )
-              })()}
-              <div className="field">
-                {/* 只给「界面字体」一档:首启一眼能看出差别的就是它。正文 / 等宽仍留在设置→外观。
-                    与上面「配色」同款一排 chip(不是下拉):每颗按自己的字体渲染,即选即预览。 */}
-                <label>{t('settings.theme.fontUi')}</label>
-                <div className="skin-row">
-                  {[{ id: '', label: t('settings.theme.fontFollow'), stack: '' },
-                    ...listFonts('ui').map((f) => ({
-                      id: f.id,
-                      label: f.labelKey ? t(f.labelKey as Parameters<typeof t>[0]) : (f.label ?? f.id),
-                      stack: f.stack,
-                    }))].map((f) => (
-                    <button
-                      key={f.id}
-                      type="button"
-                      className={`skin-chip${f.id === uiFont ? ' active' : ''}`}
-                      // paddingLeft:.skin-chip 的左内距是给色点留的,这里没有点。
-                      style={{ paddingLeft: 11, fontFamily: f.stack || undefined }}
-                      onClick={() => { setUiFont(f.id); writeFont('ui', f.id); applyUiFonts() }}
-                    >
-                      {f.label}
-                    </button>
-                  ))}
-                </div>
-                <div className="hint">{t('settings.theme.fontHint')}</div>
-              </div>
-            </>
-          )}
-
-          {step === 'model' && (
-            <>
-              <div className="field">
-                <label>{t('onboarding.model.choiceLabel')}</label>
-                {modelsLoading && <div className="hint">{t('onboarding.model.loading')}</div>}
-                {!modelsLoading && !models?.models.length && (
-                  <div className="hint">
-                    {t('onboarding.model.empty')}
-                    <button className="btn ghost sm" style={{ marginLeft: 8 }} onClick={loadStepModels}>{t('onboarding.model.refresh')}</button>
-                  </div>
-                )}
-                {!!models?.models.length && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                    {models.models.map((m) => (
-                      <button key={`${m.source}-${m.id}`} className="file-row" onClick={() => setChosenModel(m.id)}>
-                        <span className="file-name" style={{ color: m.id === chosenModel ? 'var(--accent-ink)' : undefined }}>
-                          {m.id === chosenModel ? '● ' : ''}{m.name}
-                        </span>
-                        <span className="file-size">{m.source === 'direct' ? t('onboarding.model.directSource', { provider: m.provider }) : m.provider}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              {/* 辅助模型(可选):留空即跟随云端默认,不拦引导流程,所以不单开一步。 */}
-              <div className="field">
-                <label>{t('onboarding.aux.stepLabel')}</label>
-                <div className="hint">{t('onboarding.aux.intro')}</div>
-              </div>
-              <AuxModelChoice models={models} />
-            </>
-          )}
-
-          {step === 'permissions' && <DesktopPermissions mode={themeMode} />}
-
-          {step === 'speech' && (
-            <div className="field">
-              <label>{t('onboarding.speech.choiceLabel')}</label>
-              <div className="hint" style={{ marginBottom: 10 }}>{t('onboarding.speech.intro')}</div>
-              <AsrModelChoice models={models} />
+</>}
+              {appearanceTab === 'font' && <><div className="field"><label htmlFor="ob-font">{t('settings.theme.fontUi')}</label>
+  <select id="ob-font" value={uiFont} onChange={(e) => { setUiFont(e.target.value); writeFont('ui', e.target.value); applyUiFonts() }}>
+    <option value="">{t('settings.theme.fontFollow')}</option>
+    {listFonts('ui').map((f) => <option key={f.id} value={f.id}>{f.labelKey ? t(f.labelKey) : f.label || f.id}</option>)}
+  </select><p className="hint">{t('settings.theme.fontHint')}</p>
+  <div className="ob-font-sample">Aa / 你好<br /><span>Forsion Genesis</span></div>
+</div></>}
             </div>
-          )}
-
-          {step === 'agents' && (
-            <>
-              <div className="field">
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Bot size={13} /> {t('onboarding.agents.stepLabel')}
-                </label>
-                <div className="hint">{t('onboarding.agents.intro')}</div>
-              </div>
-
-              {/* 名册速览(头像字母 chip;完整管理在主界面「智能体」页) */}
-              <div className="field">
-                <label>{t('onboarding.agents.rosterLabel')}</label>
-                {agents === null ? (
-                  <div className="hint">{t('common.loading')}</div>
-                ) : (
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {agents.map((a) => (
-                      <span
-                        key={a.slug}
-                        title={a.description || a.slug}
-                        style={{
-                          display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px 3px 4px',
-                          border: 'var(--border-width, 1px) solid var(--border)', borderRadius: 999, fontSize: 12,
-                        }}
-                      >
-                        <i style={{
-                          fontStyle: 'normal', width: 18, height: 18, borderRadius: '50%', display: 'inline-flex',
-                          alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700,
-                          color: 'var(--accent-ink)', background: 'color-mix(in srgb, var(--accent-ink) 14%, transparent)',
-                        }}>{(a.name || '?').slice(0, 1).toUpperCase()}</i>
-                        {a.name}
-                        {a.createdBy === 'system' && (
-                          <em style={{ fontStyle: 'normal', fontSize: 10, color: 'var(--text-faint)' }}>{t('onboarding.agents.systemBadge')}</em>
-                        )}
-                      </span>
-                    ))}
-                    {!agents.length && <div className="hint">{t('onboarding.agents.rosterEmpty')}</div>}
-                  </div>
-                )}
-              </div>
-
-              {/* 快速新建(可选):名字 + 一句话人格 → 立即入名册 */}
-              <div className="field">
-                <label>{t('onboarding.agents.createLabel')}</label>
-                <div className="field-row">
-                  <div className="field">
-                    <input
-                      type="text"
-                      value={agName}
-                      onChange={(e) => setAgName(e.target.value)}
-                      placeholder={t('onboarding.agents.namePlaceholder')}
-                    />
-                  </div>
-                  <div className="field" style={{ flex: 2 }}>
-                    <input
-                      type="text"
-                      value={agPersona}
-                      onChange={(e) => setAgPersona(e.target.value)}
-                      placeholder={t('onboarding.agents.personaPlaceholder')}
-                    />
-                  </div>
-                  <button className="btn ghost sm" disabled={agBusy || !agName.trim()} onClick={() => void createQuickAgent()}>
-                    {agBusy ? <Loader2 size={12} className="spin" /> : <Plus size={12} />} {t('onboarding.agents.createBtn')}
-                  </button>
-                </div>
-                <div className="hint">{t('onboarding.agents.createHint')}</div>
-              </div>
-
-              {/* 后台智能体:Historian(老/external 后端不支持则整卡隐藏) */}
-              {special && (
-                <div className="field">
-                  <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <History size={13} /> {t('onboarding.agents.historianTitle')}
-                  </label>
-                  <div className="hint" style={{ marginBottom: 6 }}>{t('onboarding.agents.historianDesc')}</div>
-                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                    <div className="seg seg-sm">
-                      <button className={!special.historian.enabled ? 'active' : ''} onClick={() => saveHistorian({ enabled: false })}>
-                        {t('settings.special.off')}
-                      </button>
-                      <button className={special.historian.enabled ? 'active' : ''} onClick={() => saveHistorian({ enabled: true })}>
-                        {t('settings.special.on')}
-                      </button>
-                    </div>
-                    {special.historian.enabled && (
-                      <div className="seg seg-sm">
-                        <button
-                          className={special.historian.mode !== 'assist' ? 'active' : ''}
-                          onClick={() => saveHistorian({ mode: 'independent' })}
-                        >
-                          {t('settings.special.h.modeIndependent')}
-                        </button>
-                        <button
-                          className={special.historian.mode === 'assist' ? 'active' : ''}
-                          onClick={() => saveHistorian({ mode: 'assist' })}
-                        >
-                          {t('settings.special.h.modeAssist')}
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                  <div className="hint" style={{ marginTop: 6 }}>{t('onboarding.agents.moreHint')}</div>
-                </div>
-              )}
-              {agMsg && <div className="hint" style={{ marginTop: 4 }}>{agMsg}</div>}
-            </>
-          )}
-
-          {step === 'workspace' && (
-            <>
-              <div className="field">
-                <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <FolderOpen size={13} /> {t('onboarding.workspace.choiceLabel')}
-                </label>
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <input
-                    type="text"
-                    value={workspaceDir}
-                    onChange={(e) => setWorkspaceDir(e.target.value)}
-                    placeholder={t('onboarding.workspace.placeholder')}
-                  />
-                  <button
-                    className="btn ghost sm"
-                    onClick={() => void window.tangu?.pickDirectory?.().then((d) => { if (d) setWorkspaceDir(d) })}
-                  >
-                    <FolderOpen size={12} /> {t('onboarding.workspace.pick')}
-                  </button>
-                  {workspaceDir && (
-                    <button className="btn ghost sm" onClick={() => setWorkspaceDir('')}>
-                      <X size={12} /> {t('onboarding.workspace.clear')}
-                    </button>
-                  )}
-                </div>
-                <div className="hint" style={{ marginTop: 6 }}>{t('onboarding.workspace.hint')}</div>
-              </div>
-            </>
-          )}
-
-          {step === 'env' && (
-            <>
-              {/* 网络环境:开关式换源(仅注入 Forsion 发起的子进程与下载,不改系统配置),即时落配置。 */}
-              <div className="field">
-                <label>{t('onboarding.env.mirrorLabel')}</label>
-                <div className="switch-row">
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={mirror === 'china'}
-                    className={`switch${mirror === 'china' ? ' on' : ''}`}
-                    onClick={() => {
-                      const v = mirror === 'china' ? 'default' : 'china'
-                      setMirror(v)
-                      void window.tangu?.setConfig?.({ mirror: v })
-                    }}
-                  />
-                  <span>{t('settings.mirror.toggle')}</span>
-                </div>
-                {likelyMainlandChina() && mirror !== 'china' && (
-                  <div className="hint" style={{ marginTop: 6, color: 'var(--accent-ink)' }}>{t('settings.mirror.recommend')}</div>
-                )}
-                <div className="hint" style={{ marginTop: 6 }}>{t('settings.mirror.hint')}</div>
-                <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
-                  <button
-                    className="btn ghost sm"
-                    disabled={mirrorTesting || !window.tangu?.envTestMirror}
-                    onClick={() => {
-                      if (!window.tangu?.envTestMirror) return
-                      setMirrorTesting(true); setMirrorTest(null)
-                      void window.tangu.envTestMirror(mirror)
-                        .then((r) => setMirrorTest(r))
-                        .catch(() => setMirrorTest(null))
-                        .finally(() => setMirrorTesting(false))
-                    }}
-                  >
-                    {mirrorTesting ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />} {t('settings.mirror.test')}
-                  </button>
-                  {mirrorTest?.targets.map((tg) => (
-                    <span key={tg.name} style={{ fontSize: 12.5, color: tg.ok ? 'var(--text-muted)' : 'var(--danger, #e5484d)' }}>
-                      {tg.ok ? '✓' : '✗'} {tg.name} · {tg.ok ? `${tg.latencyMs}ms` : (tg.error || t('settings.mirror.unreachable'))}
-                    </span>
-                  ))}
-                </div>
-              </div>
-              {/* 交给 Tangu 装 = 开新会话并自动发送 → 得先离开向导才看得见对话。走 finish 而非裸
-                  onFinish:env 之后只剩「完成」页,记下已引导免得下次启动又弹一遍。 */}
-              <EnvProbeSection onLeave={finish} />
-            </>
-          )}
-
-          {step === 'done' && (
-            <div className="field">
-              <label>{t('onboarding.done.label')}</label>
-              {/* 收尾指路要跟着宿主走:导入其他 Agent、Provider/MCP、「本机」执行都是桌面能力,
-                  在 web/移动端照抄会指向根本打不开的入口。 */}
-              <div className="panel-note" style={{ lineHeight: 1.8 }}>
-                {isHost ? (
-                  <>
-                    {t('onboarding.done.line1')}<br />
-                    {t('onboarding.done.line2')}<br />
-                    {t('onboarding.done.line3')}
-                  </>
-                ) : (
-                  <>
-                    {t('onboarding.done.cloudLine1')}<br />
-                    {t('onboarding.done.cloudLine2')}
-                  </>
-                )}
-              </div>
-            </div>
-          )}
-
-          <div className="ob-step-actions">
-            {stepIdx > 0 && step !== 'done' && (
-              <button className="btn ghost sm" onClick={() => setStep(STEP_ORDER[stepIdx - 1])}>
-                <ArrowLeft size={12} /> {t('onboarding.nav.prev')}
-              </button>
-            )}
-            <span className="grow" />
-            <button className="btn ghost sm" onClick={step === 'permissions' ? () => setStep(STEP_ORDER[stepIdx + 1]) : finish}>
-              <SkipForward size={12} /> {t(step === 'permissions' ? 'desktopPermissions.later' : 'onboarding.nav.skip')}
-            </button>
-            {step !== 'done' ? (
-              <button
-                className="btn primary sm"
-                onClick={() => {
-                  // 只有用户改选了非云端默认的模型才写 cfg(显式设置=脱离跟随);保持预选默认
-                  // 直接下一步 → cfg.modelId 留空,持续跟随 admin 的 app 级默认。
-                  if (step === 'model' && chosenModel && chosenModel !== (models?.defaultModelId || '')) {
-                    void window.tangu?.setConfig({ modelId: chosenModel })
-                  }
-                  if (step === 'workspace') {
-                    void window.tangu?.setConfig({ defaultWorkspaceDir: workspaceDir.trim() })
-                  }
-                  setStep(STEP_ORDER[stepIdx + 1])
-                }}
-              >
-                {/* 连接步不再强制:未连接也可「暂时跳过」进下一步(登录/连 provider 之后随时能在设置里补)。 */}
-                {step === 'connect' && !connectReady ? t('onboarding.connect.skipForNow') : t('onboarding.nav.next')} <ArrowRight size={12} />
-              </button>
-            ) : (
-              <button className="btn primary sm" onClick={finish}>
-                {t('onboarding.nav.start')} <Check size={12} />
-              </button>
-            )}
+          </div><div className="ob-preview"><ThemePreview tabLabel={t('onboarding.guide.theme')} />
+            <h2>{t('onboarding.guide.preview')}</h2><p>{t('onboarding.guide.previewHint')}</p>
           </div>
-            </div>
+        </div>}
+        {step === 'workspace' && <div className="ob-workspace-layout">
+          <div className="ob-workspace-story"><FolderOpen size={42} /><h2>{t('onboarding.guide.workspaceTitle')}</h2><p>{t('onboarding.guide.workspaceBody')}</p></div>
+          <div className="ob-workspace-choice"><label htmlFor="ob-directory">{t('onboarding.workspace.choiceLabel')}</label>
+            <input id="ob-directory" value={workspaceDir ?? ''} placeholder={t('onboarding.workspace.placeholder')} onChange={(e) => setWorkspaceDir(e.target.value)} />
+            <div className="ob-inline"><button className="btn ghost" onClick={() => {
+              void window.tangu?.pickDirectory?.().then((d) => { if (d) setWorkspaceDir(d) }).catch((e) => setSaveError(String(e)))
+            }}><FolderOpen size={15} />{t('onboarding.workspace.pick')}</button>
+            {workspaceDir && <button className="btn ghost" onClick={() => setWorkspaceDir('')}>{t('onboarding.workspace.clear')}</button>}</div>
+            <p className="ob-muted">{t('onboarding.guide.workspaceLater')}</p>
           </div>
-        </div>
-      </main>
+        </div>}
+        {step === 'permissions' && <div className="ob-permission-layout">
+          <div className="seg ob-sections">
+            {(['computer', 'media'] as const).filter((tab) => tab !== 'computer' || computerAvailable).map((tab) => <button key={tab} aria-pressed={permissionTab === tab} className={permissionTab === tab ? 'active' : ''}
+              onClick={() => setPermissionTab(tab)}>{t(`onboarding.guide.${tab}`)}</button>)}
+          </div>
+          <DesktopPermissions mode={themeMode} only={permissionSets[permissionTab]} onSnapshot={(snapshot) => {
+            const available = snapshot.computerUseAvailable && ['darwin', 'win32'].includes(snapshot.platform)
+            setComputerAvailable(available)
+            if (!available) setPermissionTab('media')
+          }} />
+        </div>}
+        {step === 'done' && <div className="ob-done-layout">
+          <div className="ob-done-summary"><span className="ob-done-mark"><Check size={28} /></span>
+            <dl>
+              {isHost && <><dt>{t('onboarding.guide.model')}</dt><dd>{chosenModel ? models?.models.find((m) => m.id === chosenModel)?.name || chosenModel : t('onboarding.guide.followDefault')}</dd></>}
+              <dt>{t('onboarding.guide.theme')}</dt><dd>{listLanguages().find((th) => th.manifest.id === themeLang)?.manifest.name || themeLang}</dd>
+              {isHost && <><dt>{t('onboarding.guide.workspace')}</dt><dd>{workspaceDir || t('onboarding.guide.workspaceLater')}</dd></>}
+            </dl>
+          </div><div className="ob-next-steps"><h2>{t('onboarding.guide.more')}</h2>
+            {isHost ? <>
+              <div><Bot size={18} /><span>{t('onboarding.guide.moreAgents')}<small>{t('onboarding.guide.moreAgentsPath')}</small></span></div>
+              <div><Sparkles size={18} /><span>{t('onboarding.guide.moreModels')}<small>{t('onboarding.guide.moreModelsPath')}</small></span></div>
+              <div><MonitorCog size={18} /><span>{t('onboarding.guide.moreTools')}<small>{t('onboarding.guide.moreToolsPath')}</small></span></div>
+            </> : <p>{t('onboarding.done.cloudLine1')}<br />{t('onboarding.done.cloudLine2')}</p>}
+          </div>
+        </div>}
       </div>
-  )
+      <footer className="ob-footer">
+        {saveError && <div className="ob-save-error" role="alert">{saveError}</div>}
+        <div className="ob-footer-row">
+          {stepIdx > 0 ? <button className="btn ghost" disabled={saving} onClick={() => setStep(STEP_ORDER[stepIdx - 1])}><ArrowLeft size={14} />{t('onboarding.nav.prev')}</button>
+            : <button className="btn ghost" onClick={() => setShowChangelog(true)}><FileText size={14} />{t('onboarding.welcome.viewChangelog')}</button>}
+          <span className="ob-footer-hint">{t('onboarding.guide.changeLater')}</span>
+          {step !== 'done' && <button className="btn ghost" disabled={saving} onClick={step === 'permissions' ? () => void advance() : finish}>{t(step === 'permissions' ? 'desktopPermissions.later' : 'onboarding.nav.skip')}</button>}
+          <button className="btn primary" disabled={saving || (step === 'model' && modelsLoading)} onClick={step === 'done' ? finish : () => void advance()}>
+            {t(step === 'welcome' ? 'onboarding.welcome.continue' : step === 'done' ? 'onboarding.nav.start' : step === 'connect' && !connectReady ? 'onboarding.connect.skipForNow' : 'onboarding.nav.next')}
+            {saving ? <Loader2 size={15} className="spin" /> : <ArrowRight size={15} />}
+          </button>
+        </div>
+      </footer>
+    </main>
+    <dialog ref={changelogRef} className="ob-changelog" onCancel={() => setShowChangelog(false)} onClick={(event) => { if (event.target === event.currentTarget) setShowChangelog(false) }}>
+      <div className="ob-changelog-head"><h2>{t('onboarding.welcome.changelogTitle')}</h2><button className="icon-btn" aria-label={t('common.close')} onClick={() => setShowChangelog(false)}><X size={18} /></button></div>
+      <div className="ob-changelog-body changelog">
+        {CHANGELOG.map((c) => <div key={c.version} className="changelog-entry md-body"><div className="changelog-ver">{c.version} <span className="changelog-date">{c.date}</span></div><Markdown content={c.lines.map((l) => `- ${l}`).join('\n')} /></div>)}
+      </div>
+    </dialog>
+  </div>
 }

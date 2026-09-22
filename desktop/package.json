@@ -123,6 +123,7 @@
     "check:floatingpanel": "node scripts/floating-panel.check.cjs",
     "check:quietfocus": "node scripts/quiet-focus.check.cjs",
     "check:onboarding": "node scripts/plugin-onboarding.check.cjs",
+    "check:first-run": "node scripts/onboarding.check.cjs",
     "check:miniauto": "node scripts/mini-auto.check.cjs",
     "check:board": "node scripts/board-paper.check.cjs",
     "check:boardlive": "node scripts/e2e-editor.cjs --check=board-live",

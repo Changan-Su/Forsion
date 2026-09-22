@@ -45,7 +45,7 @@ const SRC = path.join(__dirname, '../frontend/src')
 const read = (p) => fs.readFileSync(path.join(SRC, p), 'utf8')
 // 真源:base.css + 所有会给表单控件上样式的视图/主题 CSS(壳画框那批散在这些文件里)。
 const FILES = [
-  'styles/base.css', 'amadeus-host.css', 'quickFind.css', 'findInPage.css', 'amadeus/styles.css',
+  'styles/base.css', 'components/onboarding.css', 'amadeus-host.css', 'quickFind.css', 'findInPage.css', 'amadeus/styles.css',
   'amadeus/theme/lcl/tangu.css', 'amadeus/theme/lcl/tanguSoft.css',
   'views/chat2/chat2.css', 'views/chat2/composer2.css', 'views/chat2/sidebar2.css', 'views/chat2/btw.css',
   'views/automation/automation.css', 'views/dashData.css', 'views/homepage.css',

@@ -60,6 +60,7 @@ vi.mock('./AgentClisTab', () => ({ AgentClisTab: () => null }))
 vi.mock('./QrImage', () => ({ QrImage: () => null }))
 
 const { OnboardingWizard } = await import('./OnboardingWizard')
+const { listModels } = await import('../services/backendService')
 const { SettingsModal } = await import('./SettingsModal')
 const { PRODUCT } = await import('../product')
 let host: HTMLDivElement
@@ -108,20 +109,21 @@ const settings = (initialTab?: 'permissions', open = true) => React.createElemen
   ...props, open, initialTab, cfg, glassOn: true, flatOn: false, onClose: vi.fn(), onConfigChange: vi.fn(), onGlassChange: vi.fn(), onFlatChange: vi.fn(),
 })
 
-it('inserts permissions immediately before speech in the full desktop capability phase and allows skipping during a request', async () => {
+it('offers optional permissions after the essential desktop choices and allows skipping during a request', async () => {
   window.tangu!.envCheck = vi.fn()
   await render(wizard())
   await click('onboarding.welcome.continue')
   await click('onboarding.connect.skipForNow')
   await click('onboarding.nav.next')
   await click('onboarding.nav.next')
+  await click('onboarding.nav.next')
   expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('desktopPermissions.title'))
-  expect(host.querySelector('.ob-step-kicker')?.textContent).toBe(translate('onboarding.phase.capabilities'))
+  expect(host.querySelector('[aria-current="step"]')?.textContent).toBe(translate('onboarding.guide.permissions'))
   let resolve!: (value: DesktopPermissionsSnapshot) => void
   request.mockImplementationOnce(() => new Promise((r) => { resolve = r }))
   await click('desktopPermissions.install', host.querySelector('[data-permission="computerAccessibility"]')!)
   await click('desktopPermissions.later')
-  expect(host.querySelector('[data-speech-step]')).not.toBeNull()
+  expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('onboarding.guide.doneTitle'))
   expect(closeGuide).toHaveBeenCalledTimes(1)
   expect(props.onFinish).not.toHaveBeenCalled()
   await act(async () => resolve(permissions))
@@ -133,9 +135,10 @@ it('offers permissions to non-Agent desktop products and continues with no permi
   await render(wizard())
   await click('onboarding.welcome.continue')
   await click('onboarding.nav.next')
+  await click('onboarding.guide.media')
   expect(host.querySelector('[data-permission="microphone"]')).not.toBeNull()
   await click('onboarding.nav.next')
-  expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('onboarding.step.done.title'))
+  expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('onboarding.guide.doneTitle'))
   expect(request).not.toHaveBeenCalled()
 })
 
@@ -146,7 +149,7 @@ it.each(['missing', 'cloudWeb', 'mobile'] as const)('keeps the original web/mobi
   await click('onboarding.welcome.continue')
   expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('onboarding.step.theme.title'))
   await click('onboarding.nav.next')
-  expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('onboarding.step.done.title'))
+  expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('onboarding.guide.doneTitle'))
   expect(status).not.toHaveBeenCalled()
 })
 
@@ -182,4 +185,37 @@ it('opens the supported settings permission deep link directly', async () => {
   await render(settings('permissions'))
   expect(host.querySelector('.settings-sub--permissions .desktop-permissions')).not.toBeNull()
   expect(status).toHaveBeenCalledTimes(1)
+})
+
+it('preserves an existing model override, waits for saving, and allows clearing it to follow the service default', async () => {
+  window.tangu!.envCheck = vi.fn()
+  window.tangu!.getConfig = vi.fn().mockResolvedValue({ ...cfg, modelId: 'saved' })
+  vi.mocked(listModels).mockResolvedValueOnce({ models: [{ id: 'saved', name: 'Saved model', provider: 'Local', source: 'direct' }], defaultModelId: 'saved', directProviders: [] })
+  let resolve!: () => void
+  const save = vi.fn().mockImplementationOnce(() => new Promise<void>((r) => { resolve = r }))
+  window.tangu!.setConfig = save
+  await render(wizard()); await click('onboarding.welcome.continue'); await click('onboarding.connect.skipForNow')
+  expect(host.querySelector('.ob-model-option[aria-pressed="true"]')?.textContent).toContain('Saved model')
+  await act(async () => host.querySelector<HTMLButtonElement>('.ob-model-default')!.click())
+  await click('onboarding.nav.next')
+  expect(save).toHaveBeenLastCalledWith({ modelId: '' })
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('model')
+  expect(host.querySelector<HTMLButtonElement>('.ob-footer .primary')?.disabled).toBe(true)
+  await act(async () => resolve())
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('theme')
+  expect(props.onReconnect).toHaveBeenCalledTimes(1)
+})
+
+it('keeps the model draft and current step after a save failure, then retries', async () => {
+  window.tangu!.envCheck = vi.fn()
+  vi.mocked(listModels).mockResolvedValueOnce({ models: [{ id: 'm', name: 'My model', provider: 'Local', source: 'direct' }], defaultModelId: 'm', directProviders: [] })
+  window.tangu!.setConfig = vi.fn().mockRejectedValueOnce(new Error('disk unavailable')).mockResolvedValue(cfg)
+  await render(wizard()); await click('onboarding.welcome.continue'); await click('onboarding.connect.skipForNow')
+  await act(async () => host.querySelector<HTMLButtonElement>('.ob-model-option')!.click())
+  await click('onboarding.nav.next')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('model')
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('disk unavailable')
+  expect(host.querySelector('.ob-model-option[aria-pressed="true"]')?.textContent).toContain('My model')
+  await click('onboarding.nav.next')
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('theme')
 })
