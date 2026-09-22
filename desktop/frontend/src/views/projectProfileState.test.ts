@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { executorOf, projectExecutors, relativeTimeOf, shortenPath } from './projectProfileState'
-import { fillProjectDefaults, isProjectWorkspace, projectDefaultsForNewSession } from '../stores/projectSettings'
+import { fillProjectDefaults, isProjectWorkspace, newSessionConfig, projectDefaultsForNewSession } from '../stores/projectSettings'
 import type { SessionRecord, TeamDef } from '../types'
 
 const session = (id: string, over: Partial<SessionRecord> = {}): SessionRecord => ({
@@ -56,6 +56,14 @@ describe('project defaults', () => {
   it('fillProjectDefaults 只补缺席的键:用户显式选过的(含空串)优先', () => {
     expect(fillProjectDefaults({ agentSlug: undefined, approvalMode: 'readonly' }, { agentSlug: 'coder', approvalMode: 'full-auto', thinkingLevel: 'low' }))
       .toEqual({ agentSlug: 'coder', approvalMode: 'readonly', thinkingLevel: 'low' })
+  })
+
+  it('newSessionConfig 三层次序:显式选择 > 项目默认 > 上次用的档位(sticky 恒带审批档也压不住项目默认)', () => {
+    const sticky = { approvalMode: 'auto-edit' as const, thinkingLevel: 'low' as const }
+    const project = { agentSlug: 'coder', approvalMode: 'full-auto' as const }
+    expect(newSessionConfig(sticky, project)).toEqual({ agentSlug: 'coder', approvalMode: 'full-auto', thinkingLevel: 'low' })
+    expect(newSessionConfig(sticky, project, { approvalMode: 'readonly', agentSlug: undefined })).toEqual({ agentSlug: 'coder', approvalMode: 'readonly', thinkingLevel: 'low' })
+    expect(newSessionConfig(sticky, {}, {})).toEqual(sticky)
   })
 
   it('isProjectWorkspace:只认非系统的本地目录', () => {

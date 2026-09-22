@@ -3,7 +3,7 @@
  *   GET  /agent/project-context?sessionId=      → ProjectContext(指令文件 / 项目技能 / 计划 / 默认项 / git)
  *   POST /agent/project-context/init            { sessionId }                              → 建 .tangu/ + 骨架
  *   PUT  /agent/project-context/doc             { sessionId, content, expectedMtimeMs? }   → 写指令文件(409 = 别处改过)
- *   GET  /agent/project-context/settings?sessionId= → { settings }(桌面建会话前的轻量预取)
+ *   GET  /agent/project-context/settings?sessionId=|cwd= → { settings }(桌面建会话前的轻量预取;cwd 形态给没有会话可借的项目)
  *   PUT  /agent/project-context/settings        { sessionId, settings }                    → 用户侧项目默认项
  *   POST /agent/project-context/skills          { sessionId, slug, name, description, content } → 建项目技能
  *
@@ -72,11 +72,19 @@ router.put('/agent/project-context/doc', authMiddleware, async (req: AuthRequest
   }
 });
 
-/** 轻量读:桌面建会话前预取项目默认项用(全量 context 会跑 git,预取不值得)。 */
+/** 轻量读:桌面建会话前预取项目默认项用(全量 context 会跑 git,预取不值得)。
+ *  也接 `?cwd=`(只此一个端点):项目里的会话全删光再添加回来时没有会话可借,而用户侧的默认项记录还在 —— 这条只读用户家目录里
+ *  自己的记录,不碰项目目录(canonicalProjectPath 仍要求真实目录且非禁区)。 */
 router.get('/agent/project-context/settings', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const cwd = await projectDirOf(req, res, req.query.sessionId);
-    if (!cwd) return;
+    let cwd: string | null;
+    if (typeof req.query.cwd === 'string' && req.query.cwd && !req.query.sessionId) {
+      if (!deps().profile.capabilities.hostExec) return res.status(404).json({ detail: 'Project context is only available on a local engine' });
+      try { cwd = await canonicalProjectPath(req.query.cwd); } catch (e: any) { return res.status(400).json({ detail: e?.message || 'invalid project path' }); }
+    } else {
+      cwd = await projectDirOf(req, res, req.query.sessionId);
+      if (!cwd) return;
+    }
     res.json({ settings: await readProjectSettings(cwd) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'read project settings failed' });

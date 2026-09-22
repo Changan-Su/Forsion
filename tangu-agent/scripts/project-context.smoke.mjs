@@ -63,6 +63,9 @@ try {
   const st = await api('/agent/project-context/settings', { method: 'PUT', body: JSON.stringify({ sessionId: sid, settings: { defaultAgent: 'xyra', approvalMode: 'full-auto', thinkingLevel: 'bogus' } }) });
   const stGet = await api(`/agent/project-context/settings?sessionId=${sid}`);
   check('PUT settings 白名单收窄 → GET 回同值;落在用户侧 project-settings.json 而不是仓库里', st.status === 200 && JSON.stringify(stGet.body.settings) === JSON.stringify({ defaultAgent: 'xyra', approvalMode: 'full-auto' }) && existsSync(join(home, 'project-settings.json')) && !existsSync(join(proj, '.tangu', 'settings.json')), JSON.stringify(stGet.body));
+  const byCwd = await api(`/agent/project-context/settings?cwd=${encodeURIComponent(proj)}`);
+  const byBadCwd = await api(`/agent/project-context/settings?cwd=${encodeURIComponent(join(OUT, 'nope'))}`);
+  check('GET settings?cwd=(没有会话可借的项目)→ 同一份记录;不存在的目录 → 400', byCwd.status === 200 && JSON.stringify(byCwd.body.settings) === JSON.stringify(stGet.body.settings) && byBadCwd.status === 400, `${byCwd.status} ${byBadCwd.status}`);
   const sk = await api('/agent/project-context/skills', { method: 'POST', body: JSON.stringify({ sessionId: sid, slug: 'ship', name: 'Ship it', description: 'release: steps', content: 'Do the steps.' }) });
   const ctx2 = await api(`/agent/project-context?sessionId=${sid}`);
   check('POST skills → .tangu/skills/ship/SKILL.md 落盘,context 再拉能看见两条技能', sk.status === 200 && existsSync(join(proj, '.tangu', 'skills', 'ship', 'SKILL.md')) && ctx2.body.skills.length === 2, JSON.stringify(ctx2.body.skills?.map((s) => [s.id, s.legacy])));

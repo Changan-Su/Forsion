@@ -254,19 +254,31 @@ export async function readProjectSettings(cwd: string): Promise<ProjectSettings 
   return sanitizeProjectSettings(file.projects[key]);
 }
 
-/** 写默认项(整份读改写 + 临时文件 rename 原子落盘);settings 为 null / 无有效键 = 删除该项目的记录。返回落盘后的值。 */
-export async function writeProjectSettings(cwd: string, settings: unknown): Promise<ProjectSettings | null> {
-  const key = await fs.realpath(cwd).catch(() => path.resolve(cwd));
-  const clean = sanitizeProjectSettings(settings);
-  const file = await readSettingsFile();
-  if (clean) file.projects[key] = clean;
-  else delete file.projects[key];
-  const target = projectSettingsFile();
-  await fs.mkdir(path.dirname(target), { recursive: true });
-  const tmp = `${target}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(file, null, 2) + '\n', 'utf8');
-  await fs.rename(tmp, target);
-  return clean;
+/** 同一把键上的写操作串行化(settings 文件 / 某份指令文件):两个窗口同时保存时,读-改-写不能交错 —— 后写的会把先写的整份盖掉,
+ *  指令文件的 mtime 校验也只有在「检查 + 写入」不被别人插队时才守得住 409 的承诺。跨进程(两个引擎)不在此列:一个 home 只有一个引擎。 */
+const writeQueues = new Map<string, Promise<unknown>>();
+function serialized<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const result = (writeQueues.get(key) ?? Promise.resolve()).then(task, task);
+  const guard: Promise<unknown> = result.catch(() => {}).then(() => { if (writeQueues.get(key) === guard) writeQueues.delete(key); });
+  writeQueues.set(key, guard);
+  return result;
+}
+
+/** 写默认项(整份读改写 + 临时文件 rename 原子落盘,整个 RMW 串行);settings 为 null / 无有效键 = 删除该项目的记录。返回落盘后的值。 */
+export function writeProjectSettings(cwd: string, settings: unknown): Promise<ProjectSettings | null> {
+  return serialized(projectSettingsFile(), async () => {
+    const key = await fs.realpath(cwd).catch(() => path.resolve(cwd));
+    const clean = sanitizeProjectSettings(settings);
+    const file = await readSettingsFile();
+    if (clean) file.projects[key] = clean;
+    else delete file.projects[key];
+    const target = projectSettingsFile();
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    const tmp = `${target}.${process.pid}.${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}.tmp`; // 每笔各写各的临时文件,rename 才是原子点
+    await fs.writeFile(tmp, JSON.stringify(file, null, 2) + '\n', 'utf8');
+    await fs.rename(tmp, target);
+    return clean;
+  });
 }
 
 // ── 写路径 ─────────────────────────────────────────────────────────────────
@@ -292,20 +304,23 @@ export async function initProjectWorkspace(cwd: string): Promise<{ createdDir: b
 export async function writeProjectDoc(cwd: string, content: string, expectedMtimeMs?: number | null): Promise<{ path: string; mtimeMs: number; conflict?: true }> {
   if (typeof content !== 'string') throw new Error('content must be a string');
   if (Buffer.byteLength(content, 'utf8') > DOC_READ_LIMIT) throw new Error(`instruction file must stay under ${DOC_READ_LIMIT} bytes`);
-  const target = resolveDocTarget(cwd);
-  const rel = path.relative(cwd, target.path).split(path.sep).join('/');
-  await assertSafeChain(cwd, rel, true);
-  if (target.exists) {
-    const before = await fs.lstat(target.path);
-    if (expectedMtimeMs != null && Math.abs(before.mtimeMs - expectedMtimeMs) > 1) return { path: target.path, mtimeMs: before.mtimeMs, conflict: true };
-    const fd = await fs.open(target.path, fsConstants.O_WRONLY | fsConstants.O_TRUNC | (fsConstants.O_NOFOLLOW ?? 0));
-    try { await fd.writeFile(content, 'utf8'); } finally { await fd.close(); }
-  } else {
-    await fs.mkdir(path.dirname(target.path), { recursive: true });
-    await writeNew(target.path, content);
-  }
-  const after = await fs.stat(target.path);
-  return { path: target.path, mtimeMs: after.mtimeMs };
+  // 同一份文件的「校验 mtime + 写入」串行:两个窗口几乎同时保存时,后到的那笔看到的是前一笔写完后的 mtime → 老实拿 409,而不是两笔都过、后写盖前写。
+  return serialized(`doc:${path.resolve(cwd)}`, async () => {
+    const target = resolveDocTarget(cwd);
+    const rel = path.relative(cwd, target.path).split(path.sep).join('/');
+    await assertSafeChain(cwd, rel, true);
+    if (target.exists) {
+      const before = await fs.lstat(target.path);
+      if (expectedMtimeMs != null && Math.abs(before.mtimeMs - expectedMtimeMs) > 1) return { path: target.path, mtimeMs: before.mtimeMs, conflict: true as const };
+      const fd = await fs.open(target.path, fsConstants.O_WRONLY | fsConstants.O_TRUNC | (fsConstants.O_NOFOLLOW ?? 0));
+      try { await fd.writeFile(content, 'utf8'); } finally { await fd.close(); }
+    } else {
+      await fs.mkdir(path.dirname(target.path), { recursive: true });
+      await writeNew(target.path, content);
+    }
+    const after = await fs.stat(target.path);
+    return { path: target.path, mtimeMs: after.mtimeMs };
+  });
 }
 
 const oneLine = (v: unknown, max: number): string => String(v ?? '').replace(/[\r\n\t\0]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max);

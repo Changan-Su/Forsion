@@ -15,7 +15,7 @@ import type { ProjectSettings,
   DefaultModelSlot, TeamDef } from '../types'
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
-import { fillProjectDefaults, isProjectWorkspace, projectDefaultsForNewSession } from './projectSettings'
+import { isProjectWorkspace, newSessionConfig, projectDefaultsForNewSession } from './projectSettings'
 import { effectiveSessionMode, type SessionMode } from '../views/sessionMode'
 import { abortRunAndWait, cancelSteer, currentPlatform, expediteSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
 import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
@@ -1703,10 +1703,11 @@ export const useApp = create<AppState>((set, get) => ({
   ensureProjectSettings: async (path) => {
     const cached = get().projectSettingsByPath
     if (path in cached) return cached[path]
+    if (!isHostCapable(get())) return null
+    // 优先借该项目的任一会话(按 sessionId 绑定);一个会话都没有(会话删光后又添加回来)就按路径读用户侧记录
     const carrier = [...get().sessions, ...get().archivedSessions].find((x) => x.project_path === path && !x.projectless)
-    if (!carrier || !isHostCapable(get())) return null
     try {
-      const settings = await api.getProjectSettings(get().cfg, carrier.id, { timeoutMs: 1500 })
+      const settings = await api.getProjectSettings(get().cfg, carrier ? { sessionId: carrier.id } : { cwd: path }, { timeoutMs: 1500 })
       get().rememberProjectSettings(path, settings)
       return settings
     } catch { return null }
@@ -2149,7 +2150,7 @@ export const useApp = create<AppState>((set, get) => ({
       // 项目默认项(PROJECT 详情里定的,本机):只对用户自己添加的本地项目生效,夹在「上次用的档位」之上;等一次本地 GET 无妨,这里是按钮点击。
       const projectDefaults = path && isProjectWorkspace(ws) ? projectDefaultsForNewSession(await get().ensureProjectSettings(path).catch(() => null), get().teams) : { config: {} }
       const init: AgentConfig = withAmadeusWorkspace(applyPreset(path
-        ? { ...fillProjectDefaults(sticky, projectDefaults.config), execMode: 'host', cwd: path }
+        ? { ...newSessionConfig(sticky, projectDefaults.config), execMode: 'host', cwd: path }
         : { ...sticky, execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot())
       // Chat 不提供 Agent 选择器：创建时就把当下默认 Agent 固化为会话事实，避免空会话期间
       // 全局默认异步刷新后首轮“换人”。Work 仍保留空态选择器，按原逻辑到发送时固化。
@@ -2400,6 +2401,7 @@ export const useApp = create<AppState>((set, get) => ({
     if (stopping && !(await stopRequests.get(stopping))) return false
     const wasNewChat = !sid
     let implicitInit: AgentConfig | null = null
+    let implicitModelId: string | undefined // 隐式建会话时定下的模型(含项目默认):首轮 run 必须用同一个,否则「会话记的是项目模型、第一句却跑在全局模型上」
     if (!sid) {
       const ws = resolveNewSessionWorkspace(get(), currentPlatform())
       // 设备页(unitPage)与 managed 同判:引擎是对方的 managed 引擎,有真实 host FS(defaultWsDir/homeDir
@@ -2423,8 +2425,8 @@ export const useApp = create<AppState>((set, get) => ({
       const projectDefaults = path && ws && isProjectWorkspace(ws) ? projectDefaultsForNewSession(get().projectSettingsByPath[path] ?? null, get().teams) : { config: {} }
       const model_id = get().newChatModel || projectDefaults.model || newChatModelId(get())
       // 初始配置先算好、随建会话请求原子落库(老引擎忽略 agent_config → 回来为空 → 补 PUT;同 createInWorkspace)。
-      // 显式选择(newChatCfg)> 项目默认 > 上次用的档位:fillProjectDefaults 只补 undefined 的键。
-      const draft = fillProjectDefaults({ ...stickyDefaults(get().desktopConfig, !!path, preset), ...get().newChatCfg }, projectDefaults.config)
+      // 显式选择(newChatCfg)> 项目默认 > 上次用的档位(newSessionConfig)。
+      const draft = newSessionConfig(stickyDefaults(get().desktopConfig, !!path, preset), projectDefaults.config, get().newChatCfg)
       const init: AgentConfig = withAmadeusWorkspace(applyPreset(path
         ? { ...draft, execMode: 'host', cwd: path }
         : { ...draft, execMode: 'sandbox', cwd: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot())
@@ -2448,6 +2450,7 @@ export const useApp = create<AppState>((set, get) => ({
       get().setActiveId(s.id)
       sid = s.id
       implicitInit = init
+      implicitModelId = model_id
       set((st) => ({ configBySession: { ...st.configBySession, [s.id]: init } }))
       if (!s.agent_config) void api.putSessionConfig(get().cfg, s.id, init).catch(() => {})
     }
@@ -2514,7 +2517,7 @@ export const useApp = create<AppState>((set, get) => ({
     // 与输入栏「显示的模型」(mvModelId)同一回退链:newChat/会话模型 → 全局 cfg.modelId → 后端默认模型。
     // 否则新会话(未显式选模型、cloud.defaultModel 又空)会发出空 model_id → 后端 400「model_id required」。
     const sessionModelId = wasNewChat
-      ? newChatModelId(get())
+      ? (implicitModelId || newChatModelId(get()))
       : (get().sessions.find((s) => s.id === sessionId)?.model_id || useChildChat.getState().sessions[sessionId]?.model_id || get().cfg.modelId || get().modelsResp?.defaultModelId || undefined)
     try {
       const r = await startRun(get().cfg, { sessionId, message: text, modelId: sessionModelId, attachments, agentConfig })

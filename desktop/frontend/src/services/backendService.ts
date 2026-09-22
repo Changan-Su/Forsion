@@ -1025,8 +1025,9 @@ const projectContextShape = (r: ProjectContext): ProjectContext => {
 }
 export const getProjectContext = (cfg: TanguDesktopConfig, sessionId: string) =>
   request<ProjectContext>(cfg, `/agent/project-context?sessionId=${encodeURIComponent(sessionId)}`).then(projectContextShape)
-export const getProjectSettings = (cfg: TanguDesktopConfig, sessionId: string, opts?: { timeoutMs?: number }) =>
-  request<{ settings: ProjectSettings | null }>(cfg, `/agent/project-context/settings?sessionId=${encodeURIComponent(sessionId)}`, undefined, opts).then((r) => r.settings ?? null)
+/** 有会话就按 sessionId 绑定;没有会话可借的项目(全删光又加回来)按路径读用户侧记录 —— 只有这个只读端点收 cwd。 */
+export const getProjectSettings = (cfg: TanguDesktopConfig, ref: { sessionId: string } | { cwd: string }, opts?: { timeoutMs?: number }) =>
+  request<{ settings: ProjectSettings | null }>(cfg, `/agent/project-context/settings?${'sessionId' in ref ? `sessionId=${encodeURIComponent(ref.sessionId)}` : `cwd=${encodeURIComponent(ref.cwd)}`}`, undefined, opts).then((r) => r.settings ?? null)
 export const initProjectContext = (cfg: TanguDesktopConfig, sessionId: string) =>
   request<{ createdDir: boolean; createdDoc: boolean; context: ProjectContext }>(cfg, '/agent/project-context/init', { method: 'POST', body: JSON.stringify({ sessionId }) }).then((r) => ({ ...r, context: projectContextShape(r.context) }))
 /** 409 = 文件在读出之后被别处改过(没有写入);调用方提示用户重载。 */

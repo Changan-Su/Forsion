@@ -123,12 +123,15 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     }
     setPicker(false); setQuery('')
   }
+  /** 行内星标立即落盘。默认项是**一条**记录:配置页里还没保存的草稿一并带上(分开写会互相盖掉 —— 星标写完再点保存,旧草稿会把星标写回去),
+   *  写完草稿即与落盘一致,保存栏收起。 */
   const saveDefaultExecutor = async (value: Pick<ProjectSettings, 'defaultAgent' | 'defaultTeam'>) => {
     if (busy) return
     setBusy('default'); clear()
     try {
-      const saved = await putProjectSettings(s.cfg, session.id, { ...(ctx?.settings || {}), defaultAgent: undefined, defaultTeam: undefined, ...value })
+      const saved = await putProjectSettings(s.cfg, session.id, { ...(settingsDirty ? settingsDraft : ctx?.settings || {}), defaultAgent: undefined, defaultTeam: undefined, ...value })
       setCtx((c) => (c ? { ...c, settings: saved } : c))
+      setSettingsDraft(saved ?? {}); setSettingsDirty(false)
       useApp.getState().rememberProjectSettings(workspace.path, saved)
       setNotice(t('projectProfile.saved'))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }

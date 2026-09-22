@@ -97,6 +97,30 @@ describe('writeProjectDoc', () => {
   });
 });
 
+describe('并发写', () => {
+  it('两笔几乎同时的指令文件保存(同一个读出 mtime)→ 恰好一笔成功、另一笔 409,不会两笔都过', async () => {
+    const cwd = mk('doc-race');
+    const created = await writeProjectDoc(cwd, '# v1\n');
+    // 两笔都拿着「读出时」的 mtime:把文件 mtime 拨到 10 秒前当作那次读出(紧挨着的两次写会落在同一毫秒里,1ms 容差分不出来 —— 真实场景里
+    // 用户读出与保存之间总隔着几秒,测试要造的是这个形状,不是同毫秒双写)
+    const past = new Date(created.mtimeMs - 10_000);
+    utimesSync(created.path, past, past);
+    const base = past.getTime();
+    const [a, b] = await Promise.all([writeProjectDoc(cwd, '# from A\n', base), writeProjectDoc(cwd, '# from B\n', base)]);
+    const outcomes = [a.conflict, b.conflict].map((c) => !!c).sort();
+    expect(outcomes).toEqual([false, true]);
+    expect(readFileSync(created.path, 'utf8')).toBe(a.conflict ? '# from B\n' : '# from A\n');
+  });
+
+  it('两个项目同时写默认项 → 两条记录都在(读-改-写串行,不互相盖掉)', async () => {
+    const a = mk('race-a');
+    const b = mk('race-b');
+    await Promise.all([writeProjectSettings(a, { model: 'ma' }), writeProjectSettings(b, { model: 'mb' })]);
+    expect(await readProjectSettings(a)).toEqual({ model: 'ma' });
+    expect(await readProjectSettings(b)).toEqual({ model: 'mb' });
+  });
+});
+
 describe('createProjectSkill + listProjectSkills', () => {
   it('落 .tangu/skills/<slug>/SKILL.md(frontmatter 带 name / description),加载器按 local:<slug> 看见;同名不覆盖;坏 slug 拒', async () => {
     const cwd = mk('skills');

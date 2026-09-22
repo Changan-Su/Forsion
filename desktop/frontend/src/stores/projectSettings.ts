@@ -36,3 +36,9 @@ export function fillProjectDefaults(draft: AgentConfig, defaults: Partial<AgentC
   }
   return out
 }
+
+/** 新会话初始配置的三层次序:**显式选择(picks,新对话草稿里用户点过的)> 项目默认 > 上次用的档位(sticky)**。
+ *  sticky 在 host 会话里恒带 approvalMode,所以不能把它当底再「只补缺席键」—— 那样项目的审批档永远轮不到(codex 评审抓的)。 */
+export function newSessionConfig(sticky: Partial<AgentConfig>, project: Partial<AgentConfig>, picks: AgentConfig = {}): AgentConfig {
+  return fillProjectDefaults(picks, { ...sticky, ...project })
+}
