@@ -11,6 +11,7 @@
 //  T5 OS 文件拖到「前面也是 hr」的 hr 上 → 同上(修前:光标被吸成 hr 的 NodeSelection,文件落到文末)
 //  ② 折叠小节:落点在隐藏区里 = 块一落下就被 display:none 吞掉(「线在明处、块进暗处」)。
 //  T6 文末是折叠小节,⠿ 拖到折叠标题下半(落点插件那条路)→ 小节展开、块紧跟标题且看得见
+//  T6b 外部拖入两条 hr(PM 默认 drop)到折叠标题行尾 → 展开(落下全是原子块时选区会退回标题,落点要取插入 step)
 //  T7 嵌套折叠(## 甲 ⊃ ### 乙 都折着)+ 下一节 ## 丙也折着,拖到 ## 丙上缘 → 甲乙都展开、丙仍折着、块看得见
 //  T8 多块选区拖到折叠标题下半(executeMoveBlocks 那条路)→ 展开,块看得见
 //  T8b 多块选区拖到嵌套折叠之后的下一节标题上缘 → 逐层展开(只展开外层,块仍在内层小节里看不见)
@@ -136,26 +137,25 @@ const selectAcross = (p, a, b) => p.evaluate(([a, b]) => {
   return `${s.constructor.name}(${s.from},${s.to}) want (${from},${to})`
 }, [a, b])
 
-/** 折起一枚标题:悬停它 → gutter 的折叠钮。返回该标题是否真的进了折叠态(看它下一块是否 rect 全 0)。 */
+/** 此刻处于折叠态的标题(标题上的 `.amx-heading-folded` 装饰;被外层折叠藏起来的内层标题照样带着它)。 */
+const foldedSet = (p) => p.evaluate(() => [...document.querySelectorAll('.amx-heading-folded')].map((e) => e.textContent.replace('▸', '')).sort())
+/** 折起一枚标题:悬停它 → **等 gutter 真挂到这一块上**再点折叠钮。别用固定等待:负载重时 80ms 节流的
+ *  后沿 + 渲染会超过它(负对照轮里见过两回前置没摆出来);gutter 还挂在上一块时点下去,折的是别人。 */
 async function foldHeading(p, text) {
   const h = await elRect(p, 'h2, h3', text)
   if (!h) return false
   await p.mouse.move(h.x + 30, h.y + h.h / 2, { steps: 3 })
-  await p.waitForTimeout(300)
-  const btn = await p.evaluate(() => {
-    const b = document.querySelector('.unified-gutter .block-fold')
-    if (!b || getComputedStyle(b).display === 'none') return null
+  const btn = await p.waitForFunction((top) => {
+    const g = document.querySelector('.unified-gutter')
+    const b = g?.querySelector('.block-fold')
+    if (!b || g.dataset.show !== 'true' || getComputedStyle(b).display === 'none') return null
     const r = b.getBoundingClientRect()
-    return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
-  })
+    return Math.abs(r.top - top) <= 10 ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null
+  }, h.y, { timeout: 3000 }).then((j) => j.jsonValue()).catch(() => null)
   if (!btn) return false
   await p.mouse.click(btn.x, btn.y)
   await p.waitForTimeout(350)
-  return p.evaluate((t) => {
-    const el = [...document.querySelectorAll('.unified-body .ProseMirror > h2, .unified-body .ProseMirror > h3')].find((x) => x.textContent.replace('▸', '').startsWith(t))
-    const next = el?.nextElementSibling
-    return !!next && next.getClientRects().length === 0
-  }, text)
+  return (await foldedSet(p)).includes(text)
 }
 
 /** OS 文件拖入(合成 DragEvent,Playwright 摆不出 OS 文件拖拽):可选先经过 via → 停在 at → 读线 → drop;
@@ -270,18 +270,40 @@ async function main() {
     await p.close()
   }
 
+  // ── T6b 外部拖入两条 hr(PM 默认 drop)→ 折叠标题行尾 ─────────────────────────────────────────
+  // 落下的全是原子块:库/PM 的 selectionBetween 找不到文字位置,选区退回标题里 —— 拿选区当落点就漏展开
+  // (Codex 评审 P2)。外部 HTML 拖入 Playwright 摆不出真拖,走合成 drop(PM 自己的 drop 处理照常跑)。
+  {
+    const p = await openPage(browser, SEED_TAIL, 'Tail.md', READY_H)
+    const folded = await foldHeading(p, '末节')
+    const head = await elRect(p, 'h2', '末节')
+    await p.evaluate((at) => {
+      const dt = new DataTransfer()
+      dt.setData('text/html', '<hr><hr>')
+      dt.setData('text/plain', '---')
+      const el = document.elementFromPoint(at.x, at.y)
+      for (const type of ['dragenter', 'dragover', 'drop']) el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt, clientX: at.x, clientY: at.y }))
+    }, { x: head.r - 12, y: head.y + head.h * 0.5 })
+    await p.waitForTimeout(400)
+    const doc = await shape(p)
+    check('T6b 外部拖入两条 hr 到折叠标题行尾 → 小节展开、两条 hr 看得见',
+      folded && JSON.stringify(doc) === JSON.stringify(['开头段。', '被拖段。', '#末节', '—', '—', '末节正文一。', '末节正文二。']), JSON.stringify({ folded, doc }))
+    await p.close()
+  }
+
   // ── T7 嵌套折叠 → 拖到下一节标题上缘 ───────────────────────────────────────────────────────
   {
     const p = await openPage(browser, SEED_NEST, 'Nest.md', READY_H)
     const f1 = await foldHeading(p, '乙节') // 先折内层,再折外层(外层折起后内层看不见,顺序反了折不到)
     const f2 = await foldHeading(p, '甲节')
     const f3 = await foldHeading(p, '丙节')
+    const pre = await foldedSet(p) // 拖之前恰好这三节折着(嵌套那层被藏起来也要在)
     const src = await elRect(p, 'p', '被拖段')
     const h = src ? await handleAt(p, src.x + 30, src.y + src.h / 2) : null
     const next = await elRect(p, 'h2', '丙节')
     const r = h && next ? await drag(p, h, { x: next.x + next.w * 0.5, y: next.y + next.h * 0.2 }) : null
     const doc = await shape(p)
-    check('T7 前置:乙、甲、丙三节都折起来了', f1 && f2 && f3, JSON.stringify({ f1, f2, f3 }))
+    check('T7 前置:拖之前恰好乙、甲、丙三节折着', JSON.stringify(pre) === JSON.stringify(['丙节', '乙节', '甲节'].sort()), JSON.stringify({ f1, f2, f3, pre }))
     check('T7 松手 → 甲乙逐层展开、块在丙节之前且看得见;丙节仍折着',
       JSON.stringify(doc) === JSON.stringify(['开头段。', '#甲节', '#乙节', '乙节正文。', '被拖段。', '#丙节', '~丙节正文。']), JSON.stringify({ doc, during: r?.during }))
     await p.close()
@@ -304,7 +326,11 @@ async function main() {
   // ── T8b 多块选区 → 嵌套折叠下一节标题上缘(unfoldOver 要逐层展开;只展开一层块仍在乙节里看不见)──────
   {
     const p = await openPage(browser, SEED_NEST, 'Nest.md', READY_H)
-    const f = (await foldHeading(p, '乙节')) && (await foldHeading(p, '甲节')) && (await foldHeading(p, '丙节'))
+    await foldHeading(p, '乙节')
+    await foldHeading(p, '甲节')
+    await foldHeading(p, '丙节')
+    const pre = await foldedSet(p)
+    const f = JSON.stringify(pre) === JSON.stringify(['丙节', '乙节', '甲节'].sort())
     await selectAcross(p, '开头段', '被拖段')
     const src = await elRect(p, 'p', '开头段')
     const h = src ? await handleAt(p, src.x + 30, src.y + src.h / 2) : null
@@ -312,7 +338,7 @@ async function main() {
     if (h && next) await drag(p, h, { x: next.x + next.w * 0.5, y: next.y + next.h * 0.25 })
     const doc = await shape(p)
     check('T8b 多块选区拖到嵌套折叠后的下一节上缘 → 甲乙逐层展开、两块看得见;丙节仍折着',
-      f && JSON.stringify(doc) === JSON.stringify(['#甲节', '#乙节', '乙节正文。', '开头段。', '被拖段。', '#丙节', '~丙节正文。']), JSON.stringify({ f, doc }))
+      f && JSON.stringify(doc) === JSON.stringify(['#甲节', '#乙节', '乙节正文。', '开头段。', '被拖段。', '#丙节', '~丙节正文。']), JSON.stringify({ pre, doc }))
     await p.close()
   }
 

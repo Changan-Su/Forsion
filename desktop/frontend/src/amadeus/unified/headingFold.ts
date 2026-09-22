@@ -183,11 +183,13 @@ export const headingFoldPlugins: MilkdownPlugin[] = [
                 .filter((r) => !r.deleted || headingSiteAt(tr.doc, r.pos) != null)
                 .map((r) => r.pos)
             // 拖放落进折叠小节 = 展开盖住落点的每一层(嵌套一起),否则块一落下就被 display:none 吞掉:
-            // 落点插件把块插到折叠标题下缘 / 下一节标题上缘,那两处都在小节结构之内。落点插件与 PM 默认
-            // drop 都给落下的内容设选区,选区起点就是落点 —— 插件在 handleDrop 里才定最终落点,这里是唯一
-            // 拿得到真落点的地方。blockLayer 自己的整批/分栏/文件落点不走这条,各自先展开再插(unfoldOver)。
+            // 落点插件把块插到折叠标题下缘 / 下一节标题上缘,那两处都在小节结构之内。插件(与 PM 默认 drop)
+            // 在自己的 handleDrop 里才定最终落点,这里是唯一拿得到真落点的地方:取**插入那一步**的新区间起点。
+            // 别用 tr.selection —— 落下的全是原子块(两条 hr)时 selectionBetween 找不到文字位置,选区会退回
+            // 标题里(Codex 评审 P2)。blockLayer 自己的整批/分栏/文件落点不走这条,各自先展开再插(unfoldOver)。
             if (tr.docChanged && tr.getMeta('uiEvent') === 'drop') {
-              const at = tr.selection.from
+              let at = -1
+              tr.mapping.maps[tr.mapping.maps.length - 1].forEach((_from, _to, newFrom) => { if (at < 0) at = newFrom })
               folded = folded.filter((p) => !hiddenRanges(tr.doc, [p]).some((rg) => at >= rg.start && at < rg.after))
             }
             const meta = tr.getMeta(headingFoldKey) as { toggle?: number } | undefined

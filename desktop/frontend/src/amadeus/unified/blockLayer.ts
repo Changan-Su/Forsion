@@ -1551,11 +1551,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             } else if (ctr) {
               const at = cellDropPos(view, ctr)
               if (at != null) {
-                // 先展开,否则块插进隐藏区 = 当场看不见。嵌套折叠要逐层展开(外层展开后内层仍折着);
-                // 同一枚标题再次出现 = 没展开成,别空转。落回自身是 no-op,不动折叠态(评审二 P3)。
-                if (!ctr.self) {
-                  for (let f = foldedHeadingOver(view, at), last = -1; f != null && f !== last; last = f, f = foldedHeadingOver(view, at)) toggleFoldAt(view, f)
-                }
+                // 先展开,否则块插进隐藏区 = 当场看不见(嵌套逐层,见 unfoldOver)。
+                // 落回自身是 no-op,不动折叠态(评审二 P3)。
+                if (!ctr.self) unfoldOver(view, at)
                 done = executeMoveIntoCell(view, at, copy)
               }
             } else if (pr) {
