@@ -250,10 +250,10 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
   const equipment = (kind: 'skills' | 'mcp') => {
     const key = kind === 'skills' ? 'enabledSkillIds' : 'enabledMcpServers'
     const selected = draft[key]
-    type Entry = { id: string; name: string; description: string; origin: 'agent' | null; builtin: boolean }
-    const entries: Entry[] = kind === 'skills' ? skills.map((x) => ({ id: x.id, name: x.name, description: x.description, origin: x.origin ?? null, builtin: !!x.builtin }))
-      : mcp.map((x) => ({ id: x.server, name: x.server, description: `${x.status} · ${x.tools.length}`, origin: null, builtin: false }))
-    for (const item of selected || []) if (!entries.some((e) => e.id === item)) entries.push({ id: item, name: item, description: t('agentProfile.unavailable'), origin: null, builtin: false })
+    type Entry = { id: string; name: string; description: string; origin: 'agent' | null; builtin: boolean; shared: boolean }
+    const entries: Entry[] = kind === 'skills' ? skills.map((x) => ({ id: x.id, name: x.name, description: x.description, origin: x.origin ?? null, builtin: !!x.builtin, shared: !!x.shared }))
+      : mcp.map((x) => ({ id: x.server, name: x.server, description: `${x.status} · ${x.tools.length}`, origin: null, builtin: false, shared: false }))
+    for (const item of selected || []) if (!entries.some((e) => e.id === item)) entries.push({ id: item, name: item, description: t('agentProfile.unavailable'), origin: null, builtin: false, shared: false })
     const q = query.trim().toLowerCase()
     const on = (e: Entry): boolean => !selected || selected.includes(e.id)
     const filtered = entries.filter((e) => (!enabledOnly || on(e)) && `${e.name} ${e.description}`.toLowerCase().includes(q))
@@ -262,7 +262,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
     const own = filtered.filter((e) => !e.builtin)
     const stock = filtered.filter((e) => e.builtin)
     const row = (entry: Entry) => <EquipmentRow key={entry.id} name={entry.name} description={entry.description} checked={on(entry)} tinted
-      chip={entry.origin === 'agent' ? t('settings.agents.selfAuthored') : undefined}
+      chip={entry.origin === 'agent' ? t('settings.agents.selfAuthored') : entry.shared ? t('settings.agents.sharedSkill') : undefined}
       onChange={(checked) => { const ids = selected || entries.map((x) => x.id); patch({ [key]: checked ? [...new Set([...ids, entry.id])] : ids.filter((x) => x !== entry.id) }) }} />
     return <>
       <div className="profile-list-toolbar">

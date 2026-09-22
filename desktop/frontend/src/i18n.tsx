@@ -1519,6 +1519,7 @@ const zh: Dict = {
   'settings.agents.harnessCandidates': '{count} 条待复盘候选',
   'settings.agents.harnessCandidatesHint': 'Historian 从过往会话里提名的做法。复盘时 Agent 会逐条审阅，采纳的写入工作笔记，其余丢弃。',
   'settings.agents.selfAuthored': '自建',
+  'settings.agents.sharedSkill': '共享',
   'agent.pickTitle': '选择 Agent',
 
   // 设置 - Special Agents（Historian / Muse）
@@ -3290,6 +3291,7 @@ const en: Dict = {
   'settings.agents.harnessCandidates': 'Awaiting reflection: {count}',
   'settings.agents.harnessCandidatesHint': 'Methods the Historian nominated from past conversations. During reflection the agent reviews each one, keeps the durable ones as working notes and drops the rest.',
   'settings.agents.selfAuthored': 'Self-authored',
+  'settings.agents.sharedSkill': 'Shared',
   'agent.pickTitle': 'Choose agent',
 
   'settings.tab.special': 'Background Agents',

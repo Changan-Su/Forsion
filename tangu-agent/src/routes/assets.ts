@@ -19,7 +19,7 @@ import { isValidSlug } from '../agents/agentRegistry.js';
 const router = Router();
 
 /** GET /agent/skills 每条的对外形状(单独导出好单测:桌面「自建」徽标只认这里透传的 origin)。 */
-export function skillSummary(s: any): { id: string; name: string; description: string; icon: string | null; category: string | null; source: string; origin: 'agent' | null; builtin: boolean } {
+export function skillSummary(s: any): { id: string; name: string; description: string; icon: string | null; category: string | null; source: string; origin: 'agent' | null; builtin: boolean; shared: boolean } {
   return {
     id: s.id,
     name: s.name,
@@ -30,6 +30,8 @@ export function skillSummary(s: any): { id: string; name: string; description: s
     source: s.source || 'cloud',
     // 'agent'=manage_skill 自建(SKILL.md frontmatter origin,localSkills 只在用户级/agent 级根认它);其余 null。客户端据此打「自建」徽标。
     origin: s.origin === 'agent' ? 'agent' : null,
+    // agent 级技能 frontmatter `shared: true`:借给别的 agent(桌面详情页打「共享」徽标)。
+    shared: s.shared === true,
     // 随包内置(含家目录里没被改过的镜像;用户改过的副本升格为 user 层,不算)。桌面详情页据此把内置技能收进折叠组。
     // category 不能当判据:内置技能的 frontmatter 各写各的分类(写作 / Forsion / 开发流程…)。
     builtin: s.is_builtin === true,

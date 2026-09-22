@@ -60,7 +60,7 @@ async function run() {
     // 「自建」徽标只认 origin:'agent'(manage_skill 写的);category:'agent' 的包内置专属技能(如 bluebird-video)没有徽标 —— 负对照。
     // builtin:true 的两条 = 随包内置技能(描述照真实内置的长度写):默认收在合上的「内置技能」组里,搜索命中才自动展开。
     if (p === '/agent/skills') return { skills: [{ id: 'local:research', name: 'Research notebook', description: 'Gather and cite evidence', category: 'agent' }, { id: 'local:writing', name: 'Writing', description: 'Write clear reports', origin: 'agent' },
-      { id: 'local:git-workflow', name: 'Git workflow', description: LONG_DESC, category: '开发流程', builtin: true }, { id: 'local:web-research', name: 'Web research', description: LONG_DESC, category: '信息检索', builtin: true }] }
+      { id: 'local:git-workflow', name: 'Git workflow', description: LONG_DESC, category: '开发流程', builtin: true, shared: true }, { id: 'local:web-research', name: 'Web research', description: LONG_DESC, category: '信息检索', builtin: true }] }
     // 日程:一条每天自动执行(锚点在过去 → 下一次要滚到未来)、一条已过期的一次性计划;规则两条,只有一条的动作链会叫醒 research(另一条是负对照)。
     if (p === '/agent/special/schedule' && method === 'GET') return { schedules: [{ slug: 'research', name: 'Research', db: { version: 1, name: 'Schedule', columns: [], rows: [] }, entries: [
       { id: 'sch-daily', name: 'Morning digest', date: '2026-01-01T09:00', repeat: '1d', auto: true, prompt: 'Summarize new primary sources.', description: '', todo: false, lastRun: '2026-09-18T09:00:03.000Z' },
@@ -346,6 +346,15 @@ async function run() {
     const profile = win.locator('[data-agent-profile="research"]')
     await profile.locator('.agent-section-nav button').filter({ hasText: '技能' }).click()
     assert.equal(await profile.getByLabel('Writing', { exact: false }).isChecked(), false)
+    // 开了共享(SKILL.md frontmatter shared: true)的技能打「共享」徽标;同组没开的不打。自建徽标优先(Writing 那条仍是「自建」)。
+    const fullStock = profile.locator('[data-equipment-group="builtin"]')
+    await fullStock.locator('summary').click()
+    const sharedRow = fullStock.locator('.agent-equipment-item').filter({ hasText: 'Git workflow' })
+    assert.equal(await sharedRow.locator('.harness-kind').innerText(), '共享', 'A shared skill is badged')
+    assert.equal(await fullStock.locator('.agent-equipment-item').filter({ hasText: 'Web research' }).locator('.harness-kind').count(), 0, 'An unshared skill in the same group is not badged')
+    assert.equal(await profile.locator('.agent-equipment-item').filter({ hasText: 'Writing' }).locator('.harness-kind').innerText(), '自建')
+    await sharedRow.screenshot({ path: path.join(home, 'skill-shared-chip.png') })
+    await fullStock.locator('summary').click()
     await profile.getByLabel('Writing', { exact: false }).check()
     await profile.getByLabel('Writing', { exact: false }).uncheck()
     await profile.getByRole('button', { name: '保存配置', exact: true }).click()

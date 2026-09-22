@@ -16,6 +16,7 @@ import { skillsDir as userSkillsDir, agentsDir, WORKSPACE_DIR_NAME, LEGACY_WORKS
 import { bundleSkillRoots } from '../plugins/bundles.js';
 import { currentDisplayAgentSlug, currentRunCwd } from '../seams/runContext.js';
 import type { SkillRecord } from '../core/types.js';
+import { listAgents } from '../agents/agentRegistry.js';
 
 export const LOCAL_SKILL_PREFIX = 'local:';
 
@@ -113,7 +114,10 @@ function toRecord(id: string, fallbackName: string, raw: string, source: SkillSo
     // origin: 'agent' = manage_skill 写的(自建);包内置 / bundle / 用户手写的没有这一键。徽标只认它,别认 category(agent 桶里还混着包内置的专属技能)。
     // 只在 manage_skill 会写的两个根(用户级 / agent 级)认这一键:项目里的 .tangu/skills 是随仓库来的第三方文件,写个 origin 就能冒充「自建」。
     origin: (source === 'user' || source === 'agent') && meta.origin === 'agent' ? 'agent' : null,
-  } as SkillRecord & { source: string; origin: 'agent' | null };
+    // shared: SKILL.md frontmatter `shared: true` —— 该 agent 愿意把这个技能借给别的 agent(listSharedAgentSkills 只认这一位)。
+    // 只对 agent 级技能有意义;用户级 / 项目级写了也不生效(它们本来就人人可见)。
+    shared: source === 'agent' && /^(true|yes|1)$/i.test(meta.shared || ''),
+  } as SkillRecord & { source: string; origin: 'agent' | null; shared: boolean };
 }
 
 async function scanDir(dir: string, source: SkillSource): Promise<SkillRecord[]> {
@@ -403,8 +407,31 @@ export async function listLocalSkills(): Promise<SkillRecord[]> {
 
 export async function getLocalSkill(id: string): Promise<SkillRecord | null> {
   if (!id.startsWith(LOCAL_SKILL_PREFIX)) return null;
+  if (SHARED_SKILL_ID_RE.test(id)) return (await listSharedAgentSkills(null)).find((s) => s.id === id) || null;
   const all = await listLocalSkills();
   return all.find((s) => s.id === id) || null;
+}
+
+// ── 跨 Agent 共享技能(09-22):Agent 级技能在 SKILL.md 里写 `shared: true`,别的 agent 就能在目录里看到并 use_skill 借用。──
+// id 形状 `local:@<owner>/<name>`:主人写在 id 里,取正文时不依赖当前 ALS 作用域,也不会和借用方自己的同名技能撞车。
+export const SHARED_SKILL_ID_RE = /^local:@([a-z0-9][a-z0-9-]{0,63})\/([^/]+)$/;
+export const sharedSkillId = (owner: string, name: string): string => `${LOCAL_SKILL_PREFIX}@${owner}/${name}`;
+
+export type SharedSkill = SkillRecord & { ownerSlug: string; ownerName: string };
+
+/** 其他 agent 开了共享的技能(excludeSlug = 借用方自己,不列自己的)。主人 = 名册里的 agent(系统 agent 如 Muse 不借出)。
+ *  同 id 用户目录覆盖包内置(与 listLocalSkills 的 agent 级同规)。ponytail: 每次 run 扫 N 个 agent 的两个目录,scanDir 按 mtime 缓存,够快;agent 上百再考虑总缓存。 */
+export async function listSharedAgentSkills(excludeSlug: string | null): Promise<SharedSkill[]> {
+  const owners = (await listAgents()).filter((a) => a.slug !== excludeSlug && a.createdBy !== 'system' && SAFE_SLUG.test(a.slug));
+  const out: SharedSkill[] = [];
+  for (const owner of owners) {
+    const byId = new Map<string, SkillRecord>();
+    for (const dir of [builtinAgentSkillsDir(owner.slug), agentSkillsDir(owner.slug)]) {
+      for (const s of await scanDir(dir, 'agent')) if ((s as { shared?: boolean }).shared) byId.set(s.id, s);
+    }
+    for (const s of byId.values()) out.push({ ...s, id: sharedSkillId(owner.slug, s.id.slice(LOCAL_SKILL_PREFIX.length)), ownerSlug: owner.slug, ownerName: owner.name });
+  }
+  return out;
 }
 
 /** 该 slug 是否为包内置技能(受保护:manage_skill 不得 create 覆盖 / update / delete)。 */

@@ -3,7 +3,10 @@ name: 前端代码审查
 description: 当被要求 review/审查/检查前端或 React 代码、找 UI 隐患、把关组件质量时使用，提供浏览器端专项审查清单：安全（XSS、dangerouslySetInnerHTML、不可信 href/URL、target=_blank、innerHTML 注入、eval）、无障碍（语义标签、alt、label、键盘可达、focus 管理）、性能（重渲染、key、N+1 请求、图片、大依赖）、React 正确性（hooks 依赖、副作用清理、内存泄漏、Rules of Hooks、受控输入）与可维护性，并校验 Forsion 无构建/importmap 环境铁律，按 Critical/Suggestion/Nit 分级输出，每条附最小修复。
 version: 1.0.0
 category: 前端 / 代码质量
+shared: true
 ---
+
+> Scope: written for Forsion Coding Space's static preview runtime (files served as-is, .ts/.tsx transpiled on the fly, bare imports through an importmap to esm.sh, no bundler, no npm install). In a repository that has its own build system, follow that build system instead of these rules.
 
 # 前端代码审查
 
