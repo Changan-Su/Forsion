@@ -93,12 +93,38 @@ describe('versioned Agent memory management', () => {
     expect((tool.definition as any).function.parameters.properties.agentSlug).toBeUndefined();
     const ctx = { userId: 'fixture-user', sessionId: 'source-session', runId: 'source-run', appId: 'tangu' };
     const added = JSON.parse(await runWithAgentSlug('second', () => tool.execute({ fact: 'second private fact', agentSlug: 'first' }, ctx)) as string);
-    expect(added.entries[0].source).toMatchObject({ sessionId: 'source-session', runId: 'source-run' });
+    // 回执只回受影响的条目(不再整份 entries 回灌上下文);来源仍落库,从读取面核。
+    expect(added).toMatchObject({ ok: true, action: 'add', count: 1, limit: 20_000, entry: { content: 'second private fact' } });
+    expect(added.entries).toBeUndefined();
+    expect((await api('/agent/agents/second/memory')).body.entries[0]).toMatchObject({ id: added.entry.id, source: { sessionId: 'source-session', runId: 'source-run' } });
     expect((await api('/agent/agents/first/memory')).body.content).toBe('');
-    const missingVersion = await runWithAgentSlug('second', () => tool.execute({ action: 'forget', id: added.entries[0].id }, ctx));
+    const again = JSON.parse(await runWithAgentSlug('second', () => tool.execute({ fact: 'second private fact' }, ctx)) as string);
+    expect(again).toMatchObject({ ok: true, duplicate: true, version: added.version, count: 1 });
+    const missingVersion = await runWithAgentSlug('second', () => tool.execute({ action: 'forget', id: added.entry.id }, ctx));
     expect(missingVersion).toContain('expectedVersion is required');
-    const forgotten = JSON.parse(await runWithAgentSlug('second', () => tool.execute({ action: 'forget', id: added.entries[0].id, expectedVersion: added.version }, ctx)) as string);
-    expect(forgotten.entries).toEqual([]);
+    const forgotten = JSON.parse(await runWithAgentSlug('second', () => tool.execute({ action: 'forget', id: added.entry.id, expectedVersion: added.version }, ctx)) as string);
+    expect(forgotten).toMatchObject({ ok: true, action: 'forget', id: added.entry.id, count: 0 });
+  });
+
+  it('remember rejects paragraph-sized facts, updates in place, and shows current entries when memory is full', async () => {
+    const tool = memoryLogProvider.tools().find(t => t.name === 'remember')!;
+    const ctx = { userId: 'fixture-user', sessionId: 'shape-session', runId: 'shape-run', appId: 'tangu' };
+    const run = (args: any) => runWithAgentSlug('second', () => tool.execute(args, ctx)) as Promise<string>;
+    // 09-22 终端用户导出里的典型条目:带日期的部署总结,1,477 字 —— 形状闸把它挡在门外并指向 log_event。
+    const long = await run({ fact: '【2026-09-19 Forsion CAD 0.3.0 已部署】'.padEnd(301, '细') });
+    expect(long).toMatch(/^Error: fact is 301 characters/); expect(long).toContain('log_event');
+    expect((await api('/agent/agents/second/memory')).body.entries).toEqual([]);
+    const ok = JSON.parse(await run({ fact: '用户机器是 Windows'.padEnd(300, '。') }));
+    expect(ok.ok).toBe(true); expect(ok.entry.content).toHaveLength(300);
+    // 新事实取代旧条目:update 原地替换,id 不变、条数不涨(从前的描述让模型改成再加一条「更正」)。
+    const updated = JSON.parse(await run({ action: 'update', id: ok.entry.id, expectedVersion: ok.version, fact: '用户机器是 Windows 11' }));
+    expect(updated).toMatchObject({ ok: true, action: 'update', entry: { id: ok.entry.id, content: '用户机器是 Windows 11' }, count: 1 });
+    // 满了:回显现有条目与版本,让模型一次删旧加新,而不是只丢一句「超预算」。
+    const stored = (await api('/agent/agents/second/memory')).body;
+    expect((await api('/agent/agents/second/memory', 'PUT', { content: 'x'.repeat(19_990), expectedVersion: stored.version })).status).toBe(200);
+    const full = await run({ fact: 'one more durable fact that no longer fits' });
+    expect(full).toMatch(/^Error: long-term memory is full \(19990\/20000 characters\)/);
+    expect(full).toContain('Current entries:'); expect(full).toContain('expectedVersion');
   });
 
   it('propagates log cancellation while reporting a confirmed remote write truthfully', async () => {

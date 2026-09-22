@@ -16,7 +16,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information, not temporary tasks. action defaults to add; list returns entry IDs, update corrects a listed entry, forget removes a listed entry and prevents automatic replay. Use update/forget only when the user requests that correction or forgetting. Memory belongs only to the current Agent. Never choose another Agent.",
+        "description": "Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -32,7 +32,7 @@
             },
             "fact": {
               "type": "string",
-              "description": "A one-sentence fact; required for add/update."
+              "description": "One durable sentence, at most 300 characters; required for add/update."
             },
             "id": {
               "type": "string",
@@ -543,7 +543,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information, not temporary tasks. action defaults to add; list returns entry IDs, update corrects a listed entry, forget removes a listed entry and prevents automatic replay. Use update/forget only when the user requests that correction or forgetting. Memory belongs only to the current Agent. Never choose another Agent.",
+        "description": "Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -559,7 +559,7 @@
             },
             "fact": {
               "type": "string",
-              "description": "A one-sentence fact; required for add/update."
+              "description": "One durable sentence, at most 300 characters; required for add/update."
             },
             "id": {
               "type": "string",
@@ -1089,7 +1089,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information, not temporary tasks. action defaults to add; list returns entry IDs, update corrects a listed entry, forget removes a listed entry and prevents automatic replay. Use update/forget only when the user requests that correction or forgetting. Memory belongs only to the current Agent. Never choose another Agent.",
+        "description": "Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1105,7 +1105,7 @@
             },
             "fact": {
               "type": "string",
-              "description": "A one-sentence fact; required for add/update."
+              "description": "One durable sentence, at most 300 characters; required for add/update."
             },
             "id": {
               "type": "string",
@@ -1447,7 +1447,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information, not temporary tasks. action defaults to add; list returns entry IDs, update corrects a listed entry, forget removes a listed entry and prevents automatic replay. Use update/forget only when the user requests that correction or forgetting. Memory belongs only to the current Agent. Never choose another Agent.",
+        "description": "Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1463,7 +1463,7 @@
             },
             "fact": {
               "type": "string",
-              "description": "A one-sentence fact; required for add/update."
+              "description": "One durable sentence, at most 300 characters; required for add/update."
             },
             "id": {
               "type": "string",
@@ -1824,7 +1824,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information, not temporary tasks. action defaults to add; list returns entry IDs, update corrects a listed entry, forget removes a listed entry and prevents automatic replay. Use update/forget only when the user requests that correction or forgetting. Memory belongs only to the current Agent. Never choose another Agent.",
+        "description": "Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -1840,7 +1840,7 @@
             },
             "fact": {
               "type": "string",
-              "description": "A one-sentence fact; required for add/update."
+              "description": "One durable sentence, at most 300 characters; required for add/update."
             },
             "id": {
               "type": "string",
@@ -2453,7 +2453,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information, not temporary tasks. action defaults to add; list returns entry IDs, update corrects a listed entry, forget removes a listed entry and prevents automatic replay. Use update/forget only when the user requests that correction or forgetting. Memory belongs only to the current Agent. Never choose another Agent.",
+        "description": "Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2469,7 +2469,7 @@
             },
             "fact": {
               "type": "string",
-              "description": "A one-sentence fact; required for add/update."
+              "description": "One durable sentence, at most 300 characters; required for add/update."
             },
             "id": {
               "type": "string",
@@ -3101,7 +3101,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information, not temporary tasks. action defaults to add; list returns entry IDs, update corrects a listed entry, forget removes a listed entry and prevents automatic replay. Use update/forget only when the user requests that correction or forgetting. Memory belongs only to the current Agent. Never choose another Agent.",
+        "description": "Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3117,7 +3117,7 @@
             },
             "fact": {
               "type": "string",
-              "description": "A one-sentence fact; required for add/update."
+              "description": "One durable sentence, at most 300 characters; required for add/update."
             },
             "id": {
               "type": "string",
@@ -4000,7 +4000,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information, not temporary tasks. action defaults to add; list returns entry IDs, update corrects a listed entry, forget removes a listed entry and prevents automatic replay. Use update/forget only when the user requests that correction or forgetting. Memory belongs only to the current Agent. Never choose another Agent.",
+        "description": "Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4016,7 +4016,7 @@
             },
             "fact": {
               "type": "string",
-              "description": "A one-sentence fact; required for add/update."
+              "description": "One durable sentence, at most 300 characters; required for add/update."
             },
             "id": {
               "type": "string",
@@ -4918,7 +4918,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information, not temporary tasks. action defaults to add; list returns entry IDs, update corrects a listed entry, forget removes a listed entry and prevents automatic replay. Use update/forget only when the user requests that correction or forgetting. Memory belongs only to the current Agent. Never choose another Agent.",
+        "description": "Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4934,7 +4934,7 @@
             },
             "fact": {
               "type": "string",
-              "description": "A one-sentence fact; required for add/update."
+              "description": "One durable sentence, at most 300 characters; required for add/update."
             },
             "id": {
               "type": "string",
@@ -5506,7 +5506,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information, not temporary tasks. action defaults to add; list returns entry IDs, update corrects a listed entry, forget removes a listed entry and prevents automatic replay. Use update/forget only when the user requests that correction or forgetting. Memory belongs only to the current Agent. Never choose another Agent.",
+        "description": "Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5522,7 +5522,7 @@
             },
             "fact": {
               "type": "string",
-              "description": "A one-sentence fact; required for add/update."
+              "description": "One durable sentence, at most 300 characters; required for add/update."
             },
             "id": {
               "type": "string",
@@ -6113,7 +6113,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information, not temporary tasks. action defaults to add; list returns entry IDs, update corrects a listed entry, forget removes a listed entry and prevents automatic replay. Use update/forget only when the user requests that correction or forgetting. Memory belongs only to the current Agent. Never choose another Agent.",
+        "description": "Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6129,7 +6129,7 @@
             },
             "fact": {
               "type": "string",
-              "description": "A one-sentence fact; required for add/update."
+              "description": "One durable sentence, at most 300 characters; required for add/update."
             },
             "id": {
               "type": "string",
@@ -7012,7 +7012,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information, not temporary tasks. action defaults to add; list returns entry IDs, update corrects a listed entry, forget removes a listed entry and prevents automatic replay. Use update/forget only when the user requests that correction or forgetting. Memory belongs only to the current Agent. Never choose another Agent.",
+        "description": "Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7028,7 +7028,7 @@
             },
             "fact": {
               "type": "string",
-              "description": "A one-sentence fact; required for add/update."
+              "description": "One durable sentence, at most 300 characters; required for add/update."
             },
             "id": {
               "type": "string",
@@ -7930,7 +7930,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information, not temporary tasks. action defaults to add; list returns entry IDs, update corrects a listed entry, forget removes a listed entry and prevents automatic replay. Use update/forget only when the user requests that correction or forgetting. Memory belongs only to the current Agent. Never choose another Agent.",
+        "description": "Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7946,7 +7946,7 @@
             },
             "fact": {
               "type": "string",
-              "description": "A one-sentence fact; required for add/update."
+              "description": "One durable sentence, at most 300 characters; required for add/update."
             },
             "id": {
               "type": "string",
@@ -8887,7 +8887,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information, not temporary tasks. action defaults to add; list returns entry IDs, update corrects a listed entry, forget removes a listed entry and prevents automatic replay. Use update/forget only when the user requests that correction or forgetting. Memory belongs only to the current Agent. Never choose another Agent.",
+        "description": "Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8903,7 +8903,7 @@
             },
             "fact": {
               "type": "string",
-              "description": "A one-sentence fact; required for add/update."
+              "description": "One durable sentence, at most 300 characters; required for add/update."
             },
             "id": {
               "type": "string",
@@ -9132,7 +9132,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information, not temporary tasks. action defaults to add; list returns entry IDs, update corrects a listed entry, forget removes a listed entry and prevents automatic replay. Use update/forget only when the user requests that correction or forgetting. Memory belongs only to the current Agent. Never choose another Agent.",
+        "description": "Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9148,7 +9148,7 @@
             },
             "fact": {
               "type": "string",
-              "description": "A one-sentence fact; required for add/update."
+              "description": "One durable sentence, at most 300 characters; required for add/update."
             },
             "id": {
               "type": "string",
@@ -9682,7 +9682,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Write a stable, durably useful fact/preference about the user into long-term memory (kept across sessions, injected into later conversations). Use only for persistent information, not temporary tasks. action defaults to add; list returns entry IDs, update corrects a listed entry, forget removes a listed entry and prevents automatic replay. Use update/forget only when the user requests that correction or forgetting. Memory belongs only to the current Agent. Never choose another Agent.",
+        "description": "Save one durable fact to this Agent’s long-term memory; it is injected into every future session, so keep it small and high-signal. WHEN: only what stays true beyond the current task — who the user is and how they want to work, stable environment facts (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: task progress, completed work, deliverables, versions, dated status and one-off requests — those go to log_event; a dated progress report (done, deployed or delivered on some date; a version shipped) is a log entry, not a fact. FORMAT: one sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add (default); list returns IDs and version; update replaces a listed entry; forget removes one and blocks automatic replay. A fact that supersedes an existing entry: list, then update it — never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first. Memory belongs only to the current Agent.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9698,7 +9698,7 @@
             },
             "fact": {
               "type": "string",
-              "description": "A one-sentence fact; required for add/update."
+              "description": "One durable sentence, at most 300 characters; required for add/update."
             },
             "id": {
               "type": "string",
