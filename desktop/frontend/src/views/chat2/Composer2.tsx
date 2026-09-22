@@ -322,7 +322,7 @@ export const Composer2: React.FC<{
   sessionId, advisory, autoFocus, disabled, disabledPlaceholder, running, execConfig, teamApproval,
   models, modelsResponse, modelId, onModelChange, engines, engineId,
   engineModels, engineModelId, onEngineModelChange, engineCommands,
-  thinkingLevel, onThinkingChange,
+  thinkingLevel: sessionThinkingLevel, onThinkingChange,
   defaultModelIds, onDefaultModelChange,
   maxIterations, onMaxIterationsChange,
   verifyCommand, onVerifyCommandChange,
@@ -540,7 +540,12 @@ export const Composer2: React.FC<{
 
   const isHost = execConfig.execMode === 'host'
   const isChat = preset === 'chat'
-  const approval = execConfig.approvalMode || 'auto-edit'
+  // 会话没存档时引擎按当前 Agent 定义的档跑(applyAgentActivation 补会话缺省的键,团队 run 再下发给成员),药丸照同一条链显示:
+  // 私聊 / 团队会话由引擎建、不带审批档与思考档,兜底成「替我批准」「中」就是谎报(09-22 反馈:药丸替我批准,实际按 Agent 的只读逐次弹)。
+  // 引擎侧口径钉在 tangu-agent test/agentDefaultApproval.test.ts,改一边必须改另一边。
+  const agentDef = engineId ? undefined : agents?.find((a) => a.slug === currentAgentSlug)
+  const approval = execConfig.approvalMode || agentDef?.approvalMode || 'auto-edit'
+  const thinkingLevel = sessionThinkingLevel || agentDef?.thinkingLevel || undefined
   // 视口兜底:这些菜单是 absolute-in-relative + 固定宽度,窄屏时仍可能被边缘夹住。
   // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
   const modeFix = useEdgeNudge(openMenu === 'mode', { boundary: '.t2-chat-view' })

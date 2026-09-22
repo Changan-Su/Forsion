@@ -1,6 +1,7 @@
 /** Team UI regression: Pin Summary member rows, independent Agent Desk, chronological public remarks,
  * forwarded approvals, member child chat's approval pill = the team session's mode (5a-5f), failed approval writes roll back (5g),
  * config setters PATCH only their own keys with an old-engine PUT fallback (5d/5h/5i),
+ * a direct (solo) chat without stored modes shows the agent's defaults the engine actually uses (5j/5k),
  * optional Historian attachment and light/dark screenshots.
  * Run after npm run build: npm run check:teamdesk (isolated Electron user data).
  */
@@ -24,9 +25,18 @@ const faults = { configPut: false, hits: 0 }
 const AGENTS = [
   { slug: 'xyra', name: 'Xyra', description: 'General assistant', createdBy: 'user', libraryDir: '/tmp/teamdesk-lib/xyra/Library' },
   { slug: 'orbit-one', name: 'Orbit One', description: 'Team desk instrument agent', createdBy: 'user', libraryDir: '/tmp/teamdesk-lib/orbit-one/Library' },
+  // 5j/5k:Agent 定义里设了只读 + 思考深
+  { slug: 'solo-ro', name: 'Solo RO', description: 'Read-only by default', createdBy: 'user', libraryDir: '/tmp/teamdesk-lib/solo-ro/Library', approvalMode: 'readonly', thinkingLevel: 'high' },
 ]
 const SESSION_ID = 'td-team'
 const BRANCH_ID = 'td-branch'
+const SOLO_ID = 'td-solo'
+/** 与引擎 routes/solo.ts 建的私聊同形:agent_config 不带 approvalMode / thinkingLevel(引擎按 Agent 定义补)。 */
+const SOLO_SESSION = {
+  id: SOLO_ID, title: 'Solo RO', summary: '', archived: false, model_id: 'm1', created_at: '2026-09-16 08:00:00', updated_at: '2026-09-16 08:00:00',
+  project_path: null, project_name: null, projectless: true,
+  agent_config: { soloAgentSlug: 'solo-ro', agentSlug: 'solo-ro', execMode: 'host', cwd: '/tmp/teamdesk-lib/solo-ro/Library', preset: null },
+}
 const sessionFixtures = (projectDir) => {
   const base = { summary: '', archived: false, model_id: 'm1', created_at: '2026-09-16 09:00:00', updated_at: '2026-09-16 11:00:00' }
   return [
@@ -296,6 +306,24 @@ async function run(app, win, stub) {
       && legacyActive && !legacyToast.includes('审批档'),
     JSON.stringify({ legacy: legacy.map((c) => [c.method, c.config]), legacyActive, legacyToast }))
   stub.state.noConfigPatch = false
+  // ── 5j/5k 私聊:会话没存档时引擎按 Agent 定义的档跑(tangu-agent test/agentDefaultApproval),药丸照同一条链显示 ──
+  // 修复前:药丸兜底「替我批准」「中」,引擎按该 Agent 的只读逐次弹审批(09-22 反馈)。
+  await win.locator('.t2o-row[title="Solo RO"]').or(win.locator('.t2s-srow').filter({ hasText: 'Solo RO' })).first().click()
+  await win.waitForSelector(`[data-chat-surface="chat"][data-session-id="${SOLO_ID}"] .mode-pill-btn`)
+  await sleep(600)
+  const soloLabel = () => win.locator(`${mainPill} .t2c-pill-label`).textContent()
+  const soloModel = await win.locator('.model-pill-btn:not(.child-chat-panel .model-pill-btn)').textContent()
+  check('5j 私聊会话没存档 → 药丸显示 Agent 缺省:审批「询问我批准」、思考「深」', (await soloLabel()).includes('询问我批准') && soloModel.includes('深'), JSON.stringify({ label: await soloLabel(), model: soloModel }))
+  const soloBefore = stub.seen.configs.length
+  await win.locator(mainPill).click()
+  await approvalItem(mainMenu, 'auto-edit').click()
+  await sleep(400)
+  const soloWrites = stub.seen.configs.slice(soloBefore)
+  check('5k 私聊里点「替我批准」→ 只 PATCH 该会话 { approvalMode: auto-edit },药丸跟上(会话档压过 Agent 缺省)',
+    soloWrites.length === 1 && soloWrites[0].sessionId === SOLO_ID && soloWrites[0].method === 'PATCH' && JSON.stringify(soloWrites[0].config) === JSON.stringify({ approvalMode: 'auto-edit' })
+      && (await soloLabel()).includes('替我批准'),
+    JSON.stringify({ soloWrites, label: await soloLabel() }))
+  await openTeamSession(win)
   await win.locator('[data-historian-status] > button').click()
   await win.getByText('已保存该会话的工作约定', { exact: false }).first().waitFor()
   check('6 Historian 有独立可展开的状态行', await win.locator('.t2-tsum [data-historian-work]').count() === 1, '')
@@ -339,11 +367,13 @@ async function main() {
   const stub = await startStubEngine({ agents: AGENTS, sessions: sessionFixtures(projectDir), messages: MESSAGES, override: ({ path: route, method }) => {
     if (faults.configPut && (method === 'PUT' || method === 'PATCH') && /^\/agent\/sessions\/[^/]+\/config$/.test(route)) { faults.hits += 1; return { __code: 500, body: { detail: 'stub: config write failed' } } }
     if (route === '/agent/runs' && method === 'GET') return { runs: [] }
+    if (route === `/agent/sessions/${SOLO_ID}/config` && method === 'GET') return { agent_config: SOLO_SESSION.agent_config } // 桩缺省回 auto-edit,会盖掉「没存档」
     if (route.endsWith('/detail')) { const id = route.split('/')[3]; return { session: { ...sessionFixtures(projectDir)[0], id, agent_config: { agentSlug: id === 'ws-x' ? 'xyra' : 'orbit-one', execMode: 'host', cwd: memberDir, teamMember: { teamSessionId: SESSION_ID } } } } }
   }, handle: ({ path: route, url }) => {
     if (route === '/agent/special/config') return { config: { historian: { enabled: true }, muse: { enabled: false } } }
     if (route === '/agent/special/historian/activity') return { running: false, activity: [{ id: 'hist-action', detail: '已保存该会话的工作约定', session_ref: SESSION_ID }], records: url.searchParams.get('detail') === '1' ? [{ id: 'hist-record', content: '团队接口与测试的分工已记录。' }] : [] }
     if (route === '/agent/runs' && url.searchParams.has('sessionId')) return { runs: [] }
+    if (route === '/agent/solo/agent/solo-ro/open') return { session: SOLO_SESSION, created: false }
   } })
   for (const dir of [userData, `${userData}-dev`]) {
     fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'e2e' }), 'utf8')

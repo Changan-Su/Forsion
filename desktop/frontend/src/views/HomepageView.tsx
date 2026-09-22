@@ -233,6 +233,7 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
         onGroupChange={(patch) => s.setNewChatCfg((c) => ({ ...c, ...patch }))}
         skills={s.skillsList}
         agents={s.agentDefs}
+        currentAgentSlug={agentSlug} // 草稿没设思考档时药丸显示该 Agent 的缺省(与引擎同源)
         onOpenSettings={() => s.openSettings('skills')}
         onExecConfigChange={(patch) => s.setExecConfig(patch, null)}
         // 返回**真实发送**的结果(退场动效 + 建会话 + 起 run 之后):实时语音靠它判断「上一句还在途中」。
