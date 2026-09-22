@@ -33,9 +33,12 @@ let harnessEmpty = false // 置真后 GET harness 回 entries: [] —— 「还�
 const historianPolls = { main: 0, solo: 0 }
 const nomination = (id, sessionId) => ({ id, action: 'harness_candidates', detail: 'Check the marker file before answering', session_ref: sessionId, created_at: '2026-09-18 10:00:00' })
 let saved = null, sessionModelSaved = null, avatarWrites = 0, avatarDeletes = 0
+const renamed = [] // POST /rename 收到的目标 slug,按序
 let app
 async function run() {
   const stub = await startStubEngine({ agents, sessions: [main, solo], messages: [{ id: 'main-user', role: 'user', content: 'Plan the research', timestamp: 1 }, { id: 'main-answer', role: 'model', content: 'The team is ready.', timestamp: 2 }], override: async ({ path: p, method, url: u, body }) => {
+    // 改文件夹名(slug):引擎搬目录后回新定义;这里只回显,前端要自己把 store 里的 slug 换掉。
+    if (p.startsWith('/agent/agents/') && p.endsWith('/rename') && method === 'POST') { const next = (await body()).slug; renamed.push(next); return { agent: { ...agents[1], slug: next }, warnings: [] } }
     if (p === `/agent/sessions/${solo.id}` && method === 'PATCH') { const patch = await body(); sessionModelSaved = patch.model_id; Object.assign(solo, patch); return { session: solo } }
     if (p.endsWith('/memory/dream')) return { config: { enabled: true, modelId: '', timeoutMs: 60000, maxOutputTokens: 4096, intervalHours: 6 }, status: { state: 'idle', running: false }, candidates: 0 }
     if (p.endsWith('/memory/revisions')) return { revisions: [] }
@@ -356,6 +359,25 @@ async function run() {
     await profile.locator('.agent-section-nav button').filter({ hasText: '配置' }).click()
     await win.waitForTimeout(220)
     await win.screenshot({ path: path.join(home, 'agents-light.png') })
+    // 文件夹名(slug)原地改名:内置 xyra 只读;非法串本地拦下不发请求;合法 → POST /rename,视图与名册按新 slug 重挂;改回去让后面的定位器继续有效。
+    await win.locator('.agents-roster-item').filter({ hasText: 'Xyra' }).click()
+    assert.equal(await win.locator('[data-agent-profile="xyra"] .agent-character-id').getAttribute('readonly'), '', 'built-in agent keeps its folder name')
+    await win.locator('.agents-roster-item').filter({ hasText: 'Research' }).click()
+    const folder = profile.getByLabel('文件夹名', { exact: true })
+    assert.equal(await folder.getAttribute('readonly'), null)
+    await folder.fill('Bad Slug'); await folder.press('Enter')
+    await profile.locator('.agent-profile-error').filter({ hasText: '只能用小写字母' }).waitFor()
+    assert.deepEqual(renamed, [], 'invalid slug never reaches the engine')
+    await folder.fill('research-2'); await folder.press('Enter')
+    const profile2 = win.locator('[data-agent-profile="research-2"]')
+    await profile2.waitFor()
+    assert.deepEqual(renamed, ['research-2'])
+    assert.equal(await win.locator('.agents-roster-item.selected').filter({ hasText: 'Research' }).count(), 1, 'roster keeps the renamed agent selected')
+    assert.equal(await win.locator('.agents-roster-item').count(), 2, 'no duplicate roster row after rename')
+    await profile2.locator('.agent-character-hero').screenshot({ path: path.join(home, 'hero-rename.png') })
+    await profile2.getByLabel('文件夹名', { exact: true }).fill('research'); await profile2.getByLabel('文件夹名', { exact: true }).press('Enter')
+    await profile.waitFor()
+    assert.deepEqual(renamed, ['research-2', 'research'])
     await win.evaluate(() => { document.documentElement.setAttribute('data-mode', 'dark'); document.documentElement.classList.add('dark') })
     await win.waitForTimeout(220)
     await win.screenshot({ path: path.join(home, 'agents-dark.png') })

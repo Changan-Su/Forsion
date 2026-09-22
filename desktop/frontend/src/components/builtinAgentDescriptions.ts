@@ -28,6 +28,9 @@ const keys: Record<string, string> = {
   coding: 'agent.builtin.coding', muse: 'agent.builtin.muse',
 }
 
+/** 内置 agent(引擎按 slug 认,不能改文件夹名)。 */
+export const isStockAgent = (slug: string): boolean => Object.hasOwn(keys, slug)
+
 /** Translate only stock copy at render time; user-authored descriptions stay verbatim. */
 export function agentDescription(agent: { slug: string; description: string }, t: (key: string) => string): string {
   const key = keys[agent.slug]

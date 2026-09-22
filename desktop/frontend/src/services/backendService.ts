@@ -561,6 +561,10 @@ export const saveAgentDef = (cfg: TanguDesktopConfig, def: Omit<Partial<NormalAg
 export const deleteAgentDef = (cfg: TanguDesktopConfig, slug: string) =>
   request<{ ok: boolean }>(cfg, `/agent/agents/${encodeURIComponent(slug)}`, { method: 'DELETE' })
 
+/** 改 slug(= 文件夹名)。拒绝时 err.code = 引擎 agentRename.ts 的原因(builtin / exists / cloud_synced / plugin_seeded / busy …)。 */
+export const renameAgentDef = (cfg: TanguDesktopConfig, slug: string, next: string) =>
+  request<{ agent: NormalAgentDef; warnings: string[] }>(cfg, `/agent/agents/${encodeURIComponent(slug)}/rename`, { method: 'POST', body: JSON.stringify({ slug: next }) })
+
 /** 工具目录:agent 编辑「工具黑白名单」的可勾选项(名单只约束这批无门禁内置工具)。 */
 export const fetchToolCatalog = (cfg: TanguDesktopConfig) =>
   request<{ tools: { name: string; description: string }[] }>(cfg, '/agent/tool-catalog')
