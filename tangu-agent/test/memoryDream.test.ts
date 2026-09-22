@@ -240,6 +240,103 @@ describe('Agent-private, bounded Dream memory', () => {
     expect(calls).toHaveLength(0); expect(repo().snapshot().entries).toEqual([]); expect(readCandidates('alpha')).toHaveLength(2);
   });
 
+  it('keeps unchanged facts by id: the proposal carries only what changed, kept facts stay first in stored order', async () => {
+    repo().add('事实甲'); repo().add('事实乙'); seedCandidate();
+    provider = async (p) => {
+      if (!p.messages[0].content.startsWith('Consolidate')) return result({ ok: true });
+      const sources = JSON.parse(p.messages[1].content);
+      return result({ keep: sources.filter((s: any) => s.kind === 'memory').map((s: any) => s.id), groups: sources.filter((s: any) => s.kind === 'candidate').map((s: any) => ({ fact: s.fact, sourceIds: [s.id] })), discarded: [] });
+    };
+    startMemoryDream('u', 'alpha'); expect((await settle()).state).toBe('completed');
+    expect(repo().snapshot().content).toBe('- 事实甲\n- 事实乙\n- 用户偏好中文回复');
+    expect(calls[0].payload.messages[0].content).toContain('"keep"');
+    // 模型看到的是短别名(UUID 一个 ~25 token,几百个 keep 就撑爆输出预算);核验只拿 keep 的 id + 改动组,原文不重复灌一遍。
+    expect(JSON.parse(calls[0].payload.messages[1].content).map((s: any) => s.id)).toEqual(['m1', 'm2', 'c1']);
+    const verify = JSON.parse(calls[1].payload.messages[1].content);
+    expect(verify.proposal).toEqual({ keep: ['m1', 'm2'], groups: [{ fact: '用户偏好中文回复', sourceIds: ['c1'] }], discarded: [] });
+    expect((calls[1].payload.messages[1].content.match(/事实甲/g) || []).length).toBe(1);
+    expect(calls[1].payload.messages[0].content).toContain('preserved verbatim');
+    expect(readCandidates('alpha')).toHaveLength(0);
+  });
+  it('rejects keeping a candidate, or keeping and re-emitting the same fact', () => {
+    const sources: any[] = [{ id: 'a', kind: 'memory', fact: 'A' }, { id: 'c', kind: 'candidate', fact: 'C', evidence: 'user: C' }];
+    expect(() => validateDreamProposal({ keep: ['c'], groups: [{ fact: 'A', sourceIds: ['a'] }], discarded: [] }, sources)).toThrow(/kept verbatim/);
+    expect(() => validateDreamProposal({ keep: ['a'], groups: [{ fact: 'A', sourceIds: ['a'] }, { fact: 'C', sourceIds: ['c'] }], discarded: [] }, sources)).toThrow();
+    expect(validateDreamProposal({ keep: ['a'], groups: [{ fact: 'C', sourceIds: ['c'] }], discarded: [] }, sources).groups).toEqual([{ fact: 'A', sourceIds: ['a'] }, { fact: 'C', sourceIds: ['c'] }]);
+  });
+  const bigMemory = (lines: number, width = 950) => {
+    const snap = repo().snapshot();
+    repo().commit({ expectedVersion: snap.version, content: Array.from({ length: lines }, (_, i) => `- ${String(i).padStart(3, '0')}${'长'.repeat(width)}`).join('\n'), source: { kind: 'sync' } });
+  };
+  const seedWindow = (sid: string, fact: string) => {
+    db.prepare('INSERT OR IGNORE INTO chat_sessions (id,user_id,app_id,title,agent_config) VALUES (?,?,?,?,?)').run(sid, 'u', 'tangu', 'test', JSON.stringify({ agentSlug: 'alpha' }));
+    // 填充要像自然语言:redactSecrets 会把长串字母数字当密钥打成 [REDACTED],证据就缩没了。
+    for (let n = 0; n < 20; n++) db.prepare('INSERT INTO chat_messages (id,session_id,role,content,timestamp) VALUES (?,?,?,?,?)').run(`${sid}-fill-${n}`, sid, 'user', `filler ${n} ${'lorem ipsum dolor sit amet '.repeat(22)}`, n + 1);
+    db.prepare('INSERT INTO chat_messages (id,session_id,role,content,timestamp) VALUES (?,?,?,?,?)').run(`${sid}-anchor`, sid, 'user', fact, 100);
+    appendCandidates('alpha', sid, [fact], { anchorMessageId: `${sid}-anchor` });
+  };
+  it('fits candidate evidence to the input budget instead of failing: the 09-22 export shape (17k memory + several 8k windows)', async () => {
+    // 从前 12 条 × 8k 证据不看余量:21k 记忆 + 3 × 8k = 45k → failed/calls 0,每 6 小时原样重演、收件箱永不排空。
+    bigMemory(58, 295);
+    seedWindow('sess-one', '长期偏好：无糖绿茶'); seedWindow('sess-two', '长期偏好：晚间不喝咖啡'); seedWindow('sess-three', '长期偏好：周三不开会');
+    startMemoryDream('u', 'alpha'); const status = await settle();
+    const input = calls[0].payload.messages[1].content;
+    expect(status.state).toBe('completed'); expect(status.detail).toContain('1 deferred by the input budget');
+    expect(input.length).toBeLessThanOrEqual(32_000);
+    const cands = JSON.parse(input).filter((s: any) => s.kind === 'candidate');
+    expect(cands.map((c: any) => c.fact)).toEqual(['长期偏好：无糖绿茶', '长期偏好：晚间不喝咖啡']);
+    expect(cands[0].evidence.length).toBe(8_000); // 第一条余量充足,原窗照发
+    expect(cands[1].evidence.length).toBeLessThan(8_000); expect(cands[1].evidence.length).toBeGreaterThanOrEqual(1_000);
+    expect(cands[1].evidence).toContain('长期偏好：晚间不喝咖啡'); // 裁的是头:锚点消息在窗口末尾
+    const content = repo().snapshot().content;
+    expect(content).toContain('无糖绿茶'); expect(content).toContain('晚间不喝咖啡'); expect(content).not.toContain('周三不开会');
+    expect(readCandidates('alpha').map((c) => c.text)).toEqual(['长期偏好：周三不开会']);
+    expect(status.candidateCursor).toBe(readCandidates('alpha')[0].id); // 游标越过被推迟的第三条:它转到队尾,而不是每轮堵在最前
+    // 下一轮轮转回到被推迟的那条
+    calls = [];
+    startMemoryDream('u', 'alpha'); expect((await settle()).state).toBe('completed');
+    expect(repo().snapshot().content).toContain('周三不开会'); expect(readCandidates('alpha')).toHaveLength(0);
+  });
+  it('a candidate that cannot fit even the evidence floor is skipped, not a wall: a shorter one behind it still lands', async () => {
+    // Codex 评审 09-22:从前塞不下就 break,游标停在它前面,后面本来塞得下的短候选永远轮不到。
+    bigMemory(385, 40); // 别名空间 JSON ≈ 31.6k → 余量只剩几百字
+    seedWindow('sess-big', '长期偏好：无糖绿茶'); seedCandidate();
+    const ids = readCandidates('alpha').map((c) => c.id);
+    // 385 条既有事实靠 keep 引用(逐条重发会撞校验器 250 组上限——真模型按提示词也该这么答)。
+    provider = async (p) => {
+      if (!p.messages[0].content.startsWith('Consolidate')) return result({ ok: true });
+      const sources = JSON.parse(p.messages[1].content);
+      return result({ keep: sources.filter((s: any) => s.kind === 'memory').map((s: any) => s.id), groups: sources.filter((s: any) => s.kind === 'candidate').map((s: any) => ({ fact: s.fact, sourceIds: [s.id] })), discarded: [] });
+    };
+    startMemoryDream('u', 'alpha'); const status = await settle();
+    expect(status.state).toBe('completed'); expect(status.detail).toContain('1 deferred by the input budget');
+    const input = calls[0].payload.messages[1].content;
+    expect(input.length).toBeLessThanOrEqual(32_000);
+    expect(JSON.parse(input).filter((s: any) => s.kind === 'candidate').map((s: any) => s.fact)).toEqual(['用户偏好中文回复']);
+    expect(repo().snapshot().content).toContain('用户偏好中文回复');
+    expect(readCandidates('alpha').map((c) => c.text)).toEqual(['长期偏好：无糖绿茶']);
+    expect(status.candidateCursor).toBe(ids[1]);
+  });
+  it('treats a candidate whose source lookup throws as unverifiable: the run goes on and the cursor moves past it', async () => {
+    // 旧代码游标在循环前就越过整批,抛错的候选下一轮不再排头;按余量裁证据后游标只越过已处理的,抛错若不吞就会让同一条毒候选每轮排第一、Dream 永远 failed。
+    repo().add('已有事实');
+    db.prepare('INSERT INTO chat_sessions (id,user_id,app_id,title,agent_config) VALUES (?,?,?,?,?)').run('session-poison', 'u', 'tangu', 'poison', 'not json');
+    appendCandidates('alpha', 'session-poison', ['poison candidate'], { anchorMessageId: 'm-none' });
+    seedCandidate();
+    const ids = readCandidates('alpha').map((c) => c.id);
+    startMemoryDream('u', 'alpha'); const status = await settle();
+    expect(status.state).toBe('completed'); expect(status.detail).toContain('pending source review');
+    expect(repo().snapshot().content).toContain('用户偏好中文回复');
+    expect(readCandidates('alpha').map((c) => c.text)).toEqual(['poison candidate']);
+    expect(status.candidateCursor).toBe(ids[1]);
+  });
+  it('fails fast with a clear detail when existing memory alone exceeds the input budget', async () => {
+    bigMemory(40); seedCandidate();
+    startMemoryDream('u', 'alpha'); const status = await settle();
+    expect(status.state).toBe('failed'); expect(status.detail).toContain('input budget');
+    expect(calls).toHaveLength(0); expect(readCandidates('alpha')).toHaveLength(1);
+  });
+
   it('rotates the bounded source window so an unverifiable head does not starve later valid facts', async () => {
     appendCandidates('alpha', 'missing-session', Array.from({ length: 12 }, (_, n) => `unverifiable pending ${n}`));
     seedCandidate('alpha', 'valid fact behind pending candidates');

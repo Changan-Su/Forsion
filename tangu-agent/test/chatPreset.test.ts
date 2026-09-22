@@ -56,10 +56,11 @@ describe('registry 级:chat 正向工具面', () => {
     configureTangu({ host: stub, brain: stub, billing: stub, profile: cloud });
     const chat = names({ ...base, preset: 'chat' });
     expect(chat).toEqual(['get_datetime', 'remember', 'web_search', 'list_files', 'read_file', 'write_file', 'pip_install', 'run_python', 'web_fetch', 'display_file', 'load_tools']);
-    expect(bytes({ ...base, preset: 'chat' })).toBeLessThanOrEqual(8_500);
+    // 09-22:remember 描述带上形状规则(何时记 / 何时不记 / 取代旧条目用 update)+136 B,预算 8,500 → 8,600、11,900 → 12,000。
+    expect(bytes({ ...base, preset: 'chat' })).toBeLessThanOrEqual(8_600);
     const gui = names({ ...base, preset: 'chat', client: 'web/1.0.0' });
     expect(gui).toEqual([...chat, 'sketch']);
-    expect(bytes({ ...base, preset: 'chat', client: 'web/1.0.0' })).toBeLessThanOrEqual(11_900);
+    expect(bytes({ ...base, preset: 'chat', client: 'web/1.0.0' })).toBeLessThanOrEqual(12_000);
     // 对照:work 面(23 个),chat 是过滤出来的子集,不是重排
     // 28 → 23:E2(§五「延迟候选」)把 amadeus 日历 CRUD ×5 转成静态 deferred,云端 sandbox 面同受影响。
     // chat 面本身逐字未变(上面那条 toEqual 仍绿):两个日历读工具本就在 CHAT_PRESET_DEFERRED 里。

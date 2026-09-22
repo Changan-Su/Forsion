@@ -80,6 +80,8 @@ export function memoryVersionConflict(): never {
 export function memoryContentVersion(content: string | null): string {
   return createHash('sha256').update(content === null ? '\x00missing' : '\x01' + content).digest('hex');
 }
+/** One Agent's whole memory, as written through the explicit tools (characters). Dream commits are bounded separately. */
+export const MEMORY_CHAR_BUDGET = 20_000;
 export function normalizeMemoryFact(fact: string): string {
   return fact.trim().replace(/^[-*+]\s+/, '').replace(/\s+/g, ' ').toLowerCase();
 }
@@ -338,7 +340,7 @@ export function createMemoryRepository(baseDir: string) {
         content = filterForgottenMemory(content, s.tombstones);
       }
       if (input.action !== 'forget') {
-        const cap = input.cap === undefined ? 20_000 : input.cap > 0 ? Math.min(input.cap, 200_000) : 200_000;
+        const cap = input.cap === undefined ? MEMORY_CHAR_BUDGET : input.cap > 0 ? Math.min(input.cap, 200_000) : 200_000;
         if (fact!.length > cap || content.length + fact!.length + (content ? 1 : 0) > cap) throw new MemoryRepositoryError('MEMORY_FULL', `Long-term memory exceeds its ${cap} character budget.`);
         // Only an explicit user-facing add/update can deliberately remember the same fact again.
         s.tombstones = s.tombstones.map(t => t.fingerprint === memoryFactFingerprint(fact!) ? { ...t, restoredAt: Math.max(Date.now(), t.forgottenAt + 1, (t.restoredAt ?? 0) + 1) } : t);

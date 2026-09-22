@@ -18,9 +18,9 @@ import { agentsDir, DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { currentAgentSlug } from '../../seams/runContext.js';
 import { getDeviceId } from '../../core/deviceId.js';
 import type { MemoryBrain } from '../../seams/cloudBrain.js';
-import { createMemoryRepository, withMemoryDirectoryLock, readMemoryFile, atomicWriteMemoryFile, safeMemoryPath, memoryContentVersion, memoryVersionConflict, MemoryRepositoryError, normalizeMemoryFact, type MemorySnapshot } from '../../services/memoryRepository.js';
+import { createMemoryRepository, withMemoryDirectoryLock, readMemoryFile, atomicWriteMemoryFile, safeMemoryPath, memoryContentVersion, memoryVersionConflict, MemoryRepositoryError, normalizeMemoryFact, MEMORY_CHAR_BUDGET, type MemorySnapshot } from '../../services/memoryRepository.js';
 
-export const MEMORY_SOFT_CAP = 20_000;
+export const MEMORY_SOFT_CAP = MEMORY_CHAR_BUDGET;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function todayLocal(): string {
