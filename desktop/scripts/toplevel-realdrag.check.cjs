@@ -12,6 +12,7 @@
 //  ② 折叠小节:落点在隐藏区里 = 块一落下就被 display:none 吞掉(「线在明处、块进暗处」)。
 //  T6 文末是折叠小节,⠿ 拖到折叠标题下半(落点插件那条路)→ 小节展开、块紧跟标题且看得见
 //  T6b 外部拖入两条 hr(PM 默认 drop)到折叠标题行尾 → 展开(落下全是原子块时选区会退回标题,落点要取插入 step)
+//  T6c 外部拖入「一段文字 + hr」到折叠标题行尾 → 文字并进标题、hr 落在标题后,插入区间起点在标题里也得展开
 //  T7 嵌套折叠(## 甲 ⊃ ### 乙 都折着)+ 下一节 ## 丙也折着,拖到 ## 丙上缘 → 甲乙都展开、丙仍折着、块看得见
 //  T8 多块选区拖到折叠标题下半(executeMoveBlocks 那条路)→ 展开,块看得见
 //  T8b 多块选区拖到嵌套折叠之后的下一节标题上缘 → 逐层展开(只展开外层,块仍在内层小节里看不见)
@@ -177,6 +178,19 @@ const fileDrop = (p, file, at, via) => p.evaluate(async ([file, at, via]) => {
   return { line, handed }
 }, [file, at, via ?? null])
 
+/** 外部 HTML 拖入(合成 DragEvent:Playwright 摆不出跨应用的真拖)。⠿ 没起拖,落点插件与 dropGuard 都让路,
+ *  走的是 PM 自己的默认 drop(parseFromClipboard → dropPoint → replaceRange)。 */
+const htmlDrop = async (p, html, at) => {
+  await p.evaluate(([html, at]) => {
+    const dt = new DataTransfer()
+    dt.setData('text/html', html)
+    dt.setData('text/plain', 'x')
+    const el = document.elementFromPoint(at.x, at.y)
+    for (const type of ['dragenter', 'dragover', 'drop']) el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt, clientX: at.x, clientY: at.y }))
+  }, [html, at])
+  await p.waitForTimeout(400)
+}
+
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const shot = async (p, name) => { if (SHOT_DIR) { fs.mkdirSync(SHOT_DIR, { recursive: true }); await p.screenshot({ path: path.join(SHOT_DIR, `${name}.png`) }) } }
@@ -277,17 +291,26 @@ async function main() {
     const p = await openPage(browser, SEED_TAIL, 'Tail.md', READY_H)
     const folded = await foldHeading(p, '末节')
     const head = await elRect(p, 'h2', '末节')
-    await p.evaluate((at) => {
-      const dt = new DataTransfer()
-      dt.setData('text/html', '<hr><hr>')
-      dt.setData('text/plain', '---')
-      const el = document.elementFromPoint(at.x, at.y)
-      for (const type of ['dragenter', 'dragover', 'drop']) el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, dataTransfer: dt, clientX: at.x, clientY: at.y }))
-    }, { x: head.r - 12, y: head.y + head.h * 0.5 })
-    await p.waitForTimeout(400)
+    await htmlDrop(p, '<hr><hr>', { x: head.r - 12, y: head.y + head.h * 0.5 })
     const doc = await shape(p)
     check('T6b 外部拖入两条 hr 到折叠标题行尾 → 小节展开、两条 hr 看得见',
       folded && JSON.stringify(doc) === JSON.stringify(['开头段。', '被拖段。', '#末节', '—', '—', '末节正文一。', '末节正文二。']), JSON.stringify({ folded, doc }))
+    await p.close()
+  }
+
+  // ── T6c 外部拖入「一段文字 + hr」(混合开片)→ 折叠标题行尾 ──────────────────────────────────────
+  // dropPoint 留在标题文字末尾,文字并进标题、hr 插在标题之后:插入 step 的区间**起点在标题里**,
+  // 只看起点就漏展开(Codex 二轮 P2)—— 要看整个插入区间与隐藏区相交。
+  {
+    const p = await openPage(browser, SEED_TAIL, 'Tail.md', READY_H)
+    const folded = await foldHeading(p, '末节')
+    const head = await elRect(p, 'h2', '末节')
+    await htmlDrop(p, '<p>X</p><hr>', { x: head.r - 12, y: head.y + head.h * 0.5 })
+    const doc = await shape(p)
+    // 断言整份形状:`#末节X` 证明文字确实并进了标题(插入区间起点在标题里),hr 紧跟其后 —— 只断言
+    // 「hr 看得见」的话,换成单个 <hr> 或 PM 改了 dropPoint 也照绿,就测不到起点在标题里这一情形(Codex 三轮 P3)。
+    check('T6c 外部拖入「文字 + hr」到折叠标题行尾 → 文字并进标题、hr 紧跟其后且看得见(小节展开)',
+      folded && JSON.stringify(doc) === JSON.stringify(['开头段。', '被拖段。', '#末节X', '—', '末节正文一。', '末节正文二。']), JSON.stringify({ folded, doc }))
     await p.close()
   }
 
