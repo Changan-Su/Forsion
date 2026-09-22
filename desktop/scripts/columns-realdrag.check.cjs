@@ -24,6 +24,12 @@
 //  R12 折叠列(末块 rect 全 0)不画零宽线、不把块塞进隐藏区(评审 P1)
 //  R13 配对竖线只出在 executePair 接得住的目标上(评审 P1:列表第 2 项起恒 false)
 //  R14 拖进「移到新列」造出的空列,不留占位空段(评审 P3)
+//  R15 列内分割线(叶子块)上缘的线 → 松手真落在 hr 之前(评审二 P1:drop 侧曾从 DOM 反推位置,叶子块少 1)
+//  R16 嵌套折叠(先折 ### 再折 ##)拖到列末 → 两层都展开,块不掉进内层隐藏区(评审二 P2)
+//  R17 列内 callout 里面悬停 → 交回落点插件,块能落进 callout(评审二 P3:列内曾整块接管容器)
+//  R18 列内落回自身 → 不出线,也不顺手展开上方的折叠小节(评审二 P3)
+//  ⚠️ R7/R18 从**右栏**块拖起:「不出线 / 文档不变」在拖拽根本没起来时也成立,所以先断言 view.dragging。
+//     右栏块的 ⠿ 画在前一列上方,指针一靠近,把手曾被重新锚到左栏块 → R7 自第一版起恒绿(09-22 第二轮)。
 // 用法:node scripts/e2e-editor.cjs --check=columns-realdrag(或 npm run check:coldrag)
 //      5173 被别的检出占着时:HARNESS_URL=http://localhost:<port>/harness.html
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -101,6 +107,38 @@ const SEED_EMPTY = [
   '---', '开头段。', '', '<!-- a e0 -->', '', '![[tall.png|185]]', '', '<!-- a e1 -->', '', '<!-- a e2 -->', '', '行后段。', '',
 ].join('\n')
 
+/** 列内分割线:右栏 = 段甲 / hr / 段乙(hr 是叶子块,没有 contentDOM)。 */
+const SEED_HR = [
+  '---', 'amadeus_schema: amadeus.page/4',
+  'amadeus_layout: {"v":4,"rows":[{"columns":[{"refs":["h0"],"width":1},{"refs":["h1"],"width":1}],"tail":"h2"}]}',
+  '---', '开头段。', '', '<!-- a h0 -->', '', '![[tall.png|185]]', '',
+  '<!-- a h1 -->', '', '段甲。', '', '---', '', '段乙。', '', '<!-- a h2 -->', '', '行后段。', '',
+].join('\n')
+
+/** 嵌套折叠:右栏 = ## 甲 / 甲一 / ### 乙 / 乙一。 */
+const SEED_NFOLD = [
+  '---', 'amadeus_schema: amadeus.page/4',
+  'amadeus_layout: {"v":4,"rows":[{"columns":[{"refs":["n0"],"width":1},{"refs":["n1"],"width":1}],"tail":"n2"}]}',
+  '---', '开头段。', '', '<!-- a n0 -->', '', '![[tall.png|185]]', '',
+  '<!-- a n1 -->', '', '## 甲', '', '甲一。', '', '### 乙', '', '乙一。', '', '<!-- a n2 -->', '', '行后段。', '',
+].join('\n')
+
+/** 列内 callout:右栏 = 一只 callout(标注 / 内一 / 内二)。 */
+const SEED_CALLOUT = [
+  '---', 'amadeus_schema: amadeus.page/4',
+  'amadeus_layout: {"v":4,"rows":[{"columns":[{"refs":["q0"],"width":1},{"refs":["q1"],"width":1}],"tail":"q2"}]}',
+  '---', '开头段。', '', '<!-- a q0 -->', '', '![[tall.png|185]]', '',
+  '<!-- a q1 -->', '', '> [!note] 标注', '>', '> 内一。', '>', '> 内二。', '', '<!-- a q2 -->', '', '行后段。', '',
+].join('\n')
+
+/** 落回自身:右栏 = ## 甲(将折起) / 甲一 / ## 乙(被拖的就是它)。 */
+const SEED_SELF = [
+  '---', 'amadeus_schema: amadeus.page/4',
+  'amadeus_layout: {"v":4,"rows":[{"columns":[{"refs":["s0"],"width":1},{"refs":["s1"],"width":1}],"tail":"s2"}]}',
+  '---', '开头段。', '', '<!-- a s0 -->', '', '![[tall.png|185]]', '',
+  '<!-- a s1 -->', '', '## 甲', '', '甲一。', '', '## 乙', '', '<!-- a s2 -->', '', '行后段。', '',
+].join('\n')
+
 /** 顶层列表:配对判据的负面目标(第 2 项起 executePair 必 false)。 */
 const SEED_LIST = ['开头段。', '', '- 甲', '- 乙', '- 丙', '', '末段。', ''].join('\n')
 
@@ -175,14 +213,40 @@ async function handleAt(p, x, y) {
     return { x: r.x + r.width / 2, y: r.y + Math.min(10, r.height / 2) }
   })
 }
+/** 悬停标题 → 点 gutter 的折叠钮;点到返回 true。 */
+async function foldHeading(p, tag, text) {
+  const head = await p.evaluate(([t, s]) => {
+    const el = [...document.querySelectorAll(`.unified-body .ProseMirror ${t}`)].find((x) => x.textContent.includes(s))
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    return { x: r.x, y: r.y, h: r.height }
+  }, [tag, text])
+  if (!head) return false
+  await p.mouse.move(head.x + 30, head.y + head.h / 2, { steps: 3 })
+  await p.waitForTimeout(300)
+  const fold = await p.evaluate(() => {
+    const b = document.querySelector('.unified-gutter .block-fold')
+    if (!b || getComputedStyle(b).display === 'none') return null
+    const r = b.getBoundingClientRect()
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+  })
+  if (!fold) return false
+  await p.mouse.click(fold.x, fold.y)
+  await p.waitForTimeout(350)
+  return true
+}
 /** 静止期:同坐标反复 move = OS 周期补发的 dragover(真机指针不动时 Chromium 仍在派发)。 */
 const idle = async (p, x, y, ms = 240) => { for (let t = 0; t < ms; t += 15) { await p.mouse.move(x, y); await p.waitForTimeout(15) } }
 /** 从 ⠿ 按下 → 沿途经过 via(可空)→ 停在 to 静止 → 读线 → 松手 → 读线。 */
 async function drag(p, from, via, to) {
-  await p.mouse.move(from.x, from.y)
+  // 真人路径:从块上分步移到把手、停一下再按(> hover 的 80ms 节流,让节流的末次 move 在按下前落地)。
+  // 瞬移 + 立刻按下会赶在节流之前,把手「被重新锚走」这类 bug 就只在一部分轮次里现形。
+  await p.mouse.move(from.x, from.y, { steps: 6 })
+  await p.waitForTimeout(150)
   await p.mouse.down()
   await p.mouse.move(from.x + 5, from.y + 5, { steps: 2 })
   if (via) { await p.mouse.move(via.x, via.y, { steps: 8 }); await idle(p, via.x, via.y, 120) }
+  const viaLines = via ? await lines(p) : null
   await p.mouse.move(to.x, to.y, { steps: 10 })
   await idle(p, to.x, to.y)
   const during = await lines(p)
@@ -190,7 +254,7 @@ async function drag(p, from, via, to) {
   const vdrag = await p.evaluate(() => !!window.__upage.probe.view().dragging)
   await p.mouse.up()
   await p.waitForTimeout(450)
-  return { during, duringAll, after: await lines(p), vdrag, allowed: await p.evaluate(() => window.__dnd.allowed) }
+  return { during, duringAll, viaLines, after: await lines(p), vdrag, allowed: await p.evaluate(() => window.__dnd.allowed) }
 }
 
 async function main() {
@@ -288,17 +352,22 @@ async function main() {
 
   // ── R5b 顶层配对:先让**落点插件**画出横线,再进配对区 → 只剩竖线;松手成行后零残留 ────────
   // (R5 的列内路径如今整支由 planCellDrop 自解析,插件根本不出线 —— 那条测不到「同步收敛」。
-  //  这里的 via 停在分栏之外的顶层段落下缘,线由插件画,才真正钉住微任务收敛 + 各收尾口的藏。)
+  //  这里的 via 停在分栏之外的顶层段落下缘,线由插件画,才真正钉住微任务收敛 + 各收尾口的藏。
+  //  ⚠️ via 要贴段落**左端**:插件按「到线段端点」的距离只问最近 8 个候选,停在段落横向中点时最近的
+  //  全是下方分栏行在列缝附近的端点(行内位置 / 列缝都被否掉)→ 那里本来就不出线,前置态摆不出来;
+  //  也别进左缘 EDGE(28px)以内,那是配对区,出的是竖线。)
   {
     const p = await openPage(browser)
     const img = await rect(p, '.wiki-inline-img-wrap', 1)
     const h = await handleAt(p, img.x + 30, img.y + 30)
     const top = await blockRect(p, '热力图等内容')
     const target = await blockRect(p, 'Forsion Extend')
-    const r = h && top && target ? await drag(p, h, { x: top.x + top.w * 0.5, y: top.b - 2 }, { x: target.x + 6, y: target.y + target.h / 2 }) : null
+    const r = h && top && target ? await drag(p, h, { x: top.x + 40, y: top.b - 2 }, { x: target.x + 6, y: target.y + target.h / 2 }) : null
+    check('R5b 前置:经过点上落点插件真画出了横线', !!r && (r.viaLines ?? []).some((l) => !l.v), JSON.stringify(r?.viaLines))
     check('R5b 顶层配对区静止:只有竖线(插件那条横线已收敛)', !!r && r.during.length === 1 && r.during[0].v, JSON.stringify(r?.during))
     const doc = await shape(p)
-    check('R5b 松手成行(顶层两块并成两列)', !!doc.find((n) => n && n.row)?.row?.length, JSON.stringify(doc))
+    const rows = doc.filter((n) => n && n.row)
+    check('R5b 松手成行(Forsion 段与图并成新的一行,原来那行还在)', rows.length === 2 && rows[0].row.some((c) => c.some((k) => k.startsWith('Forsion'))), JSON.stringify(doc))
     check('R5b 松手后零指示线', !!r && r.after.length === 0, JSON.stringify(r?.after))
     await p.close()
   }
@@ -359,6 +428,7 @@ async function main() {
     const rowR = await rect(p, '.amx-ucolrow')
     const cell2 = await rect(p, '.amx-ucolcell', 1)
     const r = h ? await drag(p, h, null, { x: cell2.x + cell2.w * 0.5, y: cell2.b + (rowR.b - cell2.b) * 0.5 }) : null
+    check('R7 前置:右栏块的 ⠿ 真拖起来了(view.dragging 在)', !!r && r.vdrag, JSON.stringify({ vdrag: r?.vdrag, allowed: r?.allowed }))
     check('R7 落回自身:不出线', !!r && r.during.length === 0, JSON.stringify(r?.during))
     check('R7 落回自身:文档不变', JSON.stringify(await shape(p)) === before, JSON.stringify(await shape(p)))
     await p.close()
@@ -425,6 +495,10 @@ async function main() {
     const r = h ? await drag(p, h, null, { x: cell2.x + cell2.w * 0.6, y: cell2.b + (rowR.b - cell2.b) * 0.5 }) : null
     const zero = (r?.duringAll ?? []).filter((l) => l.w <= 1)
     check('R12 折叠列里不画零宽线', !!r && zero.length === 0, JSON.stringify(r?.duringAll))
+    const inCol12 = (r?.during ?? []).filter((l) => !l.v && l.x >= cell2.x - 2 && l.x + l.w <= cell2.r + 2)
+    check('R12 折叠列末悬停:恰好一条线且在右栏', !!r && r.during.length === 1 && inCol12.length === 1, JSON.stringify(r?.during))
+    const row12 = rowOf(await shape(p))
+    check('R12 松手后落进右栏末尾', !!row12 && row12[1].at(-1) === '行后段。', JSON.stringify(row12))
     const hidden = await p.evaluate(() => [...document.querySelectorAll('.unified-body .ProseMirror p')].some((el) => el.textContent.startsWith('行后段') && el.getClientRects().length === 0))
     check('R12 松手后被拖的块仍在画面上(没掉进隐藏区)', !hidden, JSON.stringify({ hidden, doc: await shape(p) }))
     await p.close()
@@ -461,6 +535,95 @@ async function main() {
     const row = rowOf(await shape(p))
     check('R14 前置:右栏是空列', !!before && before[1].length === 1 && before[1][0] === '', JSON.stringify(before))
     check('R14 拖进空列:列里只剩那个块(没留占位空段)', !!row && row[1].length === 1 && row[1][0] === '行后段。', JSON.stringify({ row, during: r?.during }))
+    await p.close()
+  }
+
+  // ── R15 列内分割线:线画在 hr 上缘 → 松手就落在 hr 之前 ────────────────────────────
+  // (评审二 P1:drop 侧曾用 posAtDOM(lineEl,0)-1 反推位置 —— 有内容的块 posAtDOM 给内容起点,减 1
+  //  正好是块前位;hr 这类叶子块没有 contentDOM,给的就是块前位,再减 1 就错位 → 解析失败被吞 = 线在、
+  //  松手零反应。)
+  {
+    const p = await openPage(browser, SEED_HR, 'Hr.md')
+    const src = await blockRect(p, '行后段')
+    const h = src ? await handleAt(p, src.x + 30, src.y + src.h / 2) : null
+    const cell2 = await rect(p, '.amx-ucolcell', 1)
+    const a = await blockRect(p, '段甲')
+    const hr = await rect(p, '.amx-ucolcell hr')
+    check('R15 前置:右栏里有 hr,且它与段甲之间有缝', !!a && !!hr && hr.y - a.b >= 4, JSON.stringify({ a, hr }))
+    const r = h && a && hr ? await drag(p, h, null, { x: cell2.x + cell2.w * 0.5, y: (a.b + hr.y) / 2 }) : null
+    const inCol = (r?.during ?? []).filter((l) => !l.v && l.x >= cell2.x - 2 && l.x + l.w <= cell2.r + 2)
+    check('R15 段甲与 hr 之间悬停:恰好一条线在右栏', !!r && r.during.length === 1 && inCol.length === 1, JSON.stringify(r?.during))
+    const row = rowOf(await shape(p))
+    check('R15 松手 → 落在 hr 之前', !!row && JSON.stringify(row[1]) === JSON.stringify(['段甲。', '行后段。', 'hr', '段乙。']), JSON.stringify(row))
+    await p.close()
+  }
+
+  // ── R16 嵌套折叠:先折乙(###)再折甲(##),拖到列末 → 两层都得展开 ─────────────────────
+  // (评审二 P2:只展开最外层的话,块插在乙一之后,仍在乙的隐藏小节里 = 当场看不见。)
+  {
+    const p = await openPage(browser, SEED_NFOLD, 'NFold.md')
+    const f1 = await foldHeading(p, 'h3', '乙')
+    const f2 = await foldHeading(p, 'h2', '甲')
+    const hid = await p.evaluate(() => ['甲一', '乙一'].map((t) => [...document.querySelectorAll('.unified-body .amx-ucolcell p')].some((el) => el.textContent.startsWith(t) && el.getClientRects().length === 0)))
+    check('R16 前置:甲、乙两层都折起(甲一、乙一都不可见)', f1 && f2 && hid[0] && hid[1], JSON.stringify({ f1, f2, hid }))
+    const src = await blockRect(p, '行后段')
+    const h = src ? await handleAt(p, src.x + 30, src.y + src.h / 2) : null
+    const cell2 = await rect(p, '.amx-ucolcell', 1)
+    const rowR = await rect(p, '.amx-ucolrow')
+    const r = h ? await drag(p, h, null, { x: cell2.x + cell2.w * 0.6, y: cell2.b + (rowR.b - cell2.b) * 0.5 }) : null
+    const vis = await p.evaluate(() => [...document.querySelectorAll('.unified-body .ProseMirror p')].some((el) => el.textContent.startsWith('行后段') && el.getClientRects().length > 0))
+    const row = rowOf(await shape(p))
+    check('R16 松手后块落进右栏末尾且看得见(两层折叠都展开了)', !!r && vis && !!row && row[1].at(-1) === '行后段。', JSON.stringify({ vis, row }))
+    await p.close()
+  }
+
+  // ── R17 列内 callout:指针在它里面 → 交回落点插件,块落进 callout 里 ──────────────────
+  // (评审二 P3:列内曾把容器块整块接管,只能落在 callout 前后;v1 与顶层都能拖进去。)
+  {
+    const p = await openPage(browser, SEED_CALLOUT, 'Callout.md')
+    const src = await blockRect(p, '行后段')
+    const h = src ? await handleAt(p, src.x + 30, src.y + src.h / 2) : null
+    const a = await blockRect(p, '内一')
+    const b = await blockRect(p, '内二')
+    const cell2 = await rect(p, '.amx-ucolcell', 1)
+    check('R17 前置:callout 里两段都渲染出来了', !!a && !!b && b.y > a.b, JSON.stringify({ a, b }))
+    const r = h && a && b ? await drag(p, h, null, { x: cell2.x + cell2.w * 0.5, y: (a.b + b.y) / 2 }) : null
+    const inner = await p.evaluate(() => {
+      let out = null
+      window.__upage.probe.view().state.doc.descendants((n) => {
+        if (out) return false
+        if (n.type.name !== 'blockquote') return true
+        out = []
+        n.forEach((k) => out.push(k.textContent.slice(0, 8)))
+        return false
+      })
+      return out
+    })
+    check('R17 callout 内两段之间悬停:恰好一条横线', !!r && r.during.length === 1 && !r.during[0].v, JSON.stringify(r?.during))
+    check('R17 松手 → 落进 callout(内一、行后段、内二)', !!inner && inner.indexOf('行后段。') > 0 && inner.indexOf('行后段。') === inner.indexOf('内一。') + 1, JSON.stringify(inner))
+    await p.close()
+  }
+
+  // ── R18 列内落回自身:不出线,也不顺手展开上方的折叠小节 ─────────────────────────────
+  // (评审二 P3:展开曾排在「落回自身」判定之前 —— no-op 的 drop 把甲展开了。)
+  {
+    const p = await openPage(browser, SEED_SELF, 'Self.md')
+    const hiddenP = (pre) => p.evaluate((t) => [...document.querySelectorAll('.unified-body .ProseMirror p')].some((el) => el.textContent.startsWith(t) && el.getClientRects().length === 0), pre)
+    const f = await foldHeading(p, 'h2', '甲')
+    const hid0 = await hiddenP('甲一')
+    check('R18 前置:甲折起(甲一不可见)', f && hid0, JSON.stringify({ f, hid0 }))
+    const hb = await p.evaluate(() => {
+      const el = [...document.querySelectorAll('.unified-body .ProseMirror h2')].find((x) => x.textContent.includes('乙'))
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: r.x, y: r.y, w: r.width, h: r.height }
+    })
+    const h = hb ? await handleAt(p, hb.x + 30, hb.y + hb.h / 2) : null
+    const r = h ? await drag(p, h, null, { x: hb.x + hb.w * 0.5, y: hb.y + hb.h * 0.3 }) : null
+    const hid1 = await hiddenP('甲一')
+    const row = rowOf(await shape(p))
+    check('R18 前置:右栏块的 ⠿ 真拖起来了(view.dragging 在)', !!r && r.vdrag, JSON.stringify({ vdrag: r?.vdrag, allowed: r?.allowed }))
+    check('R18 落回自身:不出线、文档不变、甲仍折着', !!r && r.during.length === 0 && hid1 && !!row && row[1].length === 3, JSON.stringify({ during: r?.during, hid1, row }))
     await p.close()
   }
 

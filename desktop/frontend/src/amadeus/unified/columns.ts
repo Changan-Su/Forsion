@@ -382,6 +382,9 @@ export function executePair(view: EditorView, targetPos: number, side: 'left' | 
   if (!(sel instanceof NodeSelection)) return false
   const dragged = sel.node
   if (dragged.type.name === 'amadeusColumnRow' || dragged.type.name === 'amadeusColumnCell') return false
+  // 画布卡既不入列也不当配对目标(同 splitToColumn 的 P0 闸:卡进 cell 被 canvasIntegrityGuard 整笔拒,
+  // 这里却已 return true = 竖线在、松手零反应)。判据与 blockLayer.pairable 同源。
+  if (dragged.type.name === 'amadeusCanvasCard' || state.doc.nodeAt(targetPos)?.type.name === 'amadeusCanvasCard') return false
   if (targetPos >= sel.from && targetPos < sel.to) return false // 拖到自己身上
   const row = state.schema.nodes.amadeusColumnRow
   const cellT = state.schema.nodes.amadeusColumnCell

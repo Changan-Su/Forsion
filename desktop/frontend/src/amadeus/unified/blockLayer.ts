@@ -670,7 +670,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   let childRef: { targetPos: number; el: HTMLElement } | null = null
   let belowRef: { rowEl: HTMLElement } | null = null
   /** 分栏行内的落点(见 planCellDrop)。存 DOM 元素而非裸 pos:drop 时现场解析,理由同 belowRef。 */
-  let cellDropRef: { cellEl: HTMLElement; lineEl: HTMLElement; edge: 'top' | 'bottom'; tail: boolean } | null = null
+  let cellDropRef: { cellEl: HTMLElement; lineEl: HTMLElement; pos: number; edge: 'top' | 'bottom'; tail: boolean; self: boolean } | null = null
   /** 末块之下 = 顶层文末落点(2026-08-19 闭合锚:末块是卡时这里成了合法且常用的落点,
    *  此前无人认领 → 拖到末卡之下静默没反应)。 */
   let tailRef = false
@@ -702,7 +702,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
    *  而竖线只看 EDGE 距离 —— 不同源就会「竖线明晃晃地在、松手零反应」(dropGuard 之后更明显)。 */
   const pairable = (view: EditorView, pos: number): boolean => {
     const $t = view.state.doc.resolve(pos)
-    if ($t.depth === 0) return true
+    if ($t.depth === 0) return view.state.doc.nodeAt(pos)?.type.name !== 'amadeusCanvasCard' // 卡进 cell 被完整性闸整笔拒
     for (let d = $t.depth; d >= 1; d--) if ($t.node(d).type.name === 'amadeusColumnRow') return d === 1
     return false
   }
@@ -716,9 +716,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
    *  ②它按「到线段两端点」的距离排序,窄列的短线端点更近 —— 指针在这一列下方却被另一列抢走;
    *  ③它只问最近 8 个候选,另一列若有一串短块会把本列的候选整个挤出去 = 不出线也不落。
    *  dragover 画线与 drop 执行共用这一份判定(线说真话)。三种情况交回插件/原路:
-   *  列缝(不归任何列)、指针压在更深的结构里(列表项 / callout 内,插件对嵌套边沿更细)、
+   *  列缝(不归任何列)、指针在容器块里面(列表 / callout / 表格:插件能落进容器,嵌套边沿也更细)、
    *  块左右缘 ≤EDGE 的配对区(那是「成新列」)。 */
-  interface CellDrop { cellEl: HTMLElement; lineEl: HTMLElement; edge: 'top' | 'bottom'; tail: boolean; self: boolean }
+  interface CellDrop { cellEl: HTMLElement; lineEl: HTMLElement; pos: number; edge: 'top' | 'bottom'; tail: boolean; self: boolean }
   const planCellDrop = (view: EditorView, e: DragEvent): CellDrop | null => {
     const sel = view.state.selection
     const copy = dragCopies(e)
@@ -735,7 +735,6 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           const cellPos = view.posAtDOM(cellEl, 0) - 1
           const cell = view.state.doc.nodeAt(cellPos)
           if (cell?.type.name !== 'amadeusColumnCell') return null
-          const hit = pickBlockAt(view, { x: e.clientX, y: e.clientY })
           let pos = cellPos + 1
           let lastEl: HTMLElement | null = null
           for (let i = 0; i < cell.childCount; i++) {
@@ -744,11 +743,16 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             if (boxed(el)) {
               const r = el.getBoundingClientRect()
               if (e.clientY <= r.bottom) {
-                if (hit && hit.pos !== pos) return null // 更深的结构(列表项/callout 内):插件更细
-                if (e.clientY >= r.top && (e.clientX <= r.left + EDGE || e.clientX >= r.right - EDGE)) return null // 配对区
+                if (e.clientY >= r.top) {
+                  // 容器块里面交回插件(评审二:pickBlockAt 从 callout/表格内部一路爬到外壳,拿「命中
+                  // 更深节点」当判据永远不成立 —— 列内拖不进 callout,列表的线还忽整只忽逐项地跳)。
+                  // 文本块与原子块(段落、标题、代码块、图片段、分割线)整块接管:高块中段的死区在这类块上。
+                  if (!child.isTextblock && !child.isAtom) return null
+                  if (e.clientX <= r.left + EDGE || e.clientX >= r.right - EDGE) return null // 配对区
+                }
                 const before = e.clientY <= r.top + r.height / 2
                 const at = before ? pos : pos + child.nodeSize
-                return { cellEl, lineEl: el, edge: before ? 'top' : 'bottom', tail: false, self: selfAt(at) }
+                return { cellEl, lineEl: el, pos, edge: before ? 'top' : 'bottom', tail: false, self: selfAt(at) }
               }
               lastEl = el
             }
@@ -757,7 +761,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           if (!lastEl) return null // 整列都不可见(折叠):不接管
           // 末块之下 = 列末(不是「末个**可见**块之后」:那个位置可能在折叠小节内部,块插进去当场
           // 从画面消失 —— 隐藏区的落点由 drop 侧先展开再插,见 foldedHeadingOver)。
-          return { cellEl, lineEl: lastEl, edge: 'bottom', tail: true, self: selfAt(cellPos + cell.nodeSize - 1) }
+          return { cellEl, lineEl: lastEl, pos: cellPos, edge: 'bottom', tail: true, self: selfAt(cellPos + cell.nodeSize - 1) }
         } catch {
           return null // 元素刚被换掉
         }
@@ -767,8 +771,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     return null
   }
 
-  /** 把 CellDrop 在 drop 那一刻现场解析成插入位(元素断连/刚被换掉 → null,放行默认落点)。 */
-  const cellDropPos = (view: EditorView, ref: { cellEl: HTMLElement; lineEl: HTMLElement; edge: 'top' | 'bottom'; tail: boolean }): number | null => {
+  /** 把 CellDrop 在 drop 那一刻解析成插入位(元素断连/刚被换掉 → null,吞掉:没线不落)。 */
+  const cellDropPos = (view: EditorView, ref: { cellEl: HTMLElement; lineEl: HTMLElement; pos: number; edge: 'top' | 'bottom'; tail: boolean }): number | null => {
     if (!ref.cellEl.isConnected || !ref.lineEl.isConnected) return null
     try {
       if (ref.tail) {
@@ -776,10 +780,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         const cell = view.state.doc.nodeAt(cellPos)
         return cell?.type.name === 'amadeusColumnCell' ? cellPos + cell.nodeSize - 1 : null
       }
-      const at = view.posAtDOM(ref.lineEl, 0) - 1
-      const node = view.state.doc.nodeAt(at)
-      if (!node) return null
-      const to = ref.edge === 'top' ? at : at + node.nodeSize
+      // 块位用 planCellDrop 算好的 pos,只拿 DOM 核对它还是画线的那个块。别用 posAtDOM(lineEl,0)-1 反推:
+      // 有内容的块 posAtDOM 给内容起点(减 1 恰是块前位),hr 这类叶子块没有 contentDOM,给的就是块前位,
+      // 再减 1 就错位 —— 线画在 hr 上缘、松手零反应(评审二 P1)。
+      const node = view.state.doc.nodeAt(ref.pos)
+      if (!node || view.nodeDOM(ref.pos) !== ref.lineEl) return null
+      const to = ref.edge === 'top' ? ref.pos : ref.pos + node.nodeSize
       return view.state.doc.resolve(to).parent.type.name === 'amadeusColumnCell' ? to : null
     } catch {
       return null
@@ -1268,6 +1274,14 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         //    先 hover 乙、再 hover 甲,折叠钮不出现 —— 因为生效的是中途那一格。
         let trailTimer: ReturnType<typeof setTimeout> | null = null
         const onMouseMove = (e: MouseEvent): void => {
+          // 指针在把手上 = 正要去抓它,不换目标。非首列块的把手画在块左侧 w+8,压在前一列上方:
+          // 这里再按坐标 pickBlockAt,PM 的 posAtCoords 会按几何落进前一列的块,把手当场跳走 ——
+          // 右栏块的 ⠿ 永远够不着(2026-09-22 探针:块 → 列缝(row,不重锚)→ 把手,中间没有裸露带)。
+          if (content.contains(e.target as Node)) {
+            if (trailTimer) clearTimeout(trailTimer)
+            trailTimer = null
+            return
+          }
           const now = Date.now()
           if (now - lastMove < 80) {
             const { clientX, clientY } = e
@@ -1425,7 +1439,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           //    (drop 路由 cr/pr 排在 ctr 之前),库那条旧线也会与本层的线同时在屏。
           const ct = planCellDrop(view, e)
           if (ct) {
-            cellDropRef = { cellEl: ct.cellEl, lineEl: ct.lineEl, edge: ct.edge, tail: ct.tail }
+            cellDropRef = { cellEl: ct.cellEl, lineEl: ct.lineEl, pos: ct.pos, edge: ct.edge, tail: ct.tail, self: ct.self }
             belowRef = null
             pairRef = null
             childRef = null
@@ -1530,8 +1544,11 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             } else if (ctr) {
               const at = cellDropPos(view, ctr)
               if (at != null) {
-                const fold = foldedHeadingOver(view, at)
-                if (fold != null) toggleFoldAt(view, fold) // 先展开,否则块插进隐藏区 = 当场看不见
+                // 先展开,否则块插进隐藏区 = 当场看不见。嵌套折叠要逐层展开(外层展开后内层仍折着);
+                // 同一枚标题再次出现 = 没展开成,别空转。落回自身是 no-op,不动折叠态(评审二 P3)。
+                if (!ctr.self) {
+                  for (let f = foldedHeadingOver(view, at), last = -1; f != null && f !== last; last = f, f = foldedHeadingOver(view, at)) toggleFoldAt(view, f)
+                }
                 done = executeMoveIntoCell(view, at, copy)
               }
             } else if (pr) {
@@ -1773,7 +1790,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   // (dataset.dragging),PM 自己的文字拖拽 / 外部拖入照旧;排在 dropIndicator 之后,它接了就轮不到这里。
   const dropGuard = $prose(() => new Plugin({
     key: new PluginKey('UNIFIED_DROP_GUARD'),
-    props: { handleDrop: (view) => view.dom.dataset.dragging === 'true' },
+    // dataset 万一残留 'true'(dragend 没收到),view.dragging 也在才算 ⠿ 拖拽 —— 否则外部文本拖入被静默吞掉。
+    props: { handleDrop: (view) => view.dom.dataset.dragging === 'true' && !!view.dragging },
   }))
 
   // ── 卡缝插入口(2026-08-19 用户拍板「悬停卡缝出 + 行」,AFFiNE 同款)。──────────────────
