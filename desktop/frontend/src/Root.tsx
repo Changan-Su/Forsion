@@ -31,6 +31,8 @@ import { useShallow } from 'zustand/react/shallow'
 import { installFileDropGuard } from './fileDropGuard'
 import { syncDevCommands } from './devCommands'
 import { FloatingPanelFrame } from './components/FloatingPanelFrame'
+import { BtwHost } from './views/chat2/BtwPanel'
+import { quoteInMainChat } from './views/chat2/btwStore'
 import { FloatingViewSurface } from './components/FloatingViewSurface'
 import { closeWebFloatingPanel, getWebFloatingPanel, subscribeWebFloatingPanel } from './pluginPanelSeam'
 
@@ -71,6 +73,8 @@ export function Root() {
     if (action === 'achievement-toast') debugFireToast()
     if (action === 'space-removed' && payload) forgetUserSpace(payload)
     if (action === 'chat-draft' && payload) draftInMainChat(payload)
+    // 旁聊浮窗「引用到对话」:回答挂成主窗输入框的引用,不动草稿
+    if (action === 'chat-quote' && payload) quoteInMainChat(payload)
   }), [])
   const theme = useTheme()
   const a = useApp(useShallow((s) => ({
@@ -228,6 +232,9 @@ export function Root() {
           <FeedbackModal surface="panel" cfg={a.cfg} activeSession={activeSession} onClose={() => a.closeFeedback()} />
         </FloatingPanelFrame>}
       </AnimatePresence>
+
+      {/* 旁聊(/btw)在 Web 上的居中窄浮层;桌面走原生 Floating Panel,这里恒为空 */}
+      <BtwHost />
 
       <AnimatePresence>
         {pluginFloating?.view && <FloatingPanelFrame key={pluginFloating.id} title={pluginFloating.title} onClose={closeWebFloatingPanel}>

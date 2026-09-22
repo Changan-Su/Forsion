@@ -1,0 +1,89 @@
+/* 旁聊(/btw)面板。宿主:桌面原生 Floating Panel(.floating-native-content)、Web 居中窄浮层
+   (.floating-panel-window.narrow)、手机全屏页(.btw-page)。三处都是纵向 flex,面板自己铺满。
+   内容卡不描边(DESIGN §5):输入卡靠底色 + 圆角 + 淡阴影分层,1px 透明边留给聚焦态。 */
+.btw-panel { flex: 1; width: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
+
+.btw-bar {
+  display: flex; align-items: center; gap: 8px;
+  /* min-height 按带「清空」钮的高度留足:空态没有那颗钮,出第一条回答时提示行不该往下跳 */
+  box-sizing: border-box; min-height: 42px; /* 8 + .icon-btn 30 + 4 */
+  padding: 8px 10px 4px 14px;
+  color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.45;
+}
+.btw-hint { flex: 1; min-width: 0; }
+
+.btw-body { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 14px 12px; display: flex; flex-direction: column; gap: 18px; }
+.btw-empty { margin: auto 12px; text-align: center; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.6; }
+
+.btw-turn { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.btw-turn-quote {
+  margin: 0; padding: 1px 0 1px 10px;
+  border-left: 2px solid var(--border);
+  color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.55; white-space: pre-wrap;
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden;
+}
+.btw-turn-q {
+  align-self: flex-end; max-width: 88%;
+  padding: 6px 11px; border-radius: var(--radius-md, 10px);
+  background: var(--overlay-light); color: var(--text);
+  font-size: var(--ui-font-body, 13px); line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+/* 回答复用聊天正文排版(.t2-content:代码块在自己的框里横滚),只放开正文列宽 */
+.btw-turn .btw-turn-a { max-width: none; }
+.btw-note { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.5; }
+.btw-error { color: var(--danger, #e0564b); font-size: var(--ui-font-meta, 12px); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.btw-turn-actions { display: flex; flex-wrap: wrap; gap: 2px; margin-left: -6px; }
+.btw-act {
+  display: inline-flex; align-items: center; gap: 4px;
+  height: 24px; padding: 0 6px;
+  border: var(--border-width, 1px) solid transparent; border-radius: var(--radius-sm, 6px);
+  background: transparent; color: var(--text-muted);
+  font-size: var(--ui-font-caption, 11px); cursor: pointer;
+}
+.btw-act:hover { background: var(--overlay-light); color: var(--text); }
+.btw-act:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
+
+.btw-compose { padding: 6px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
+.btw-quote-chip {
+  display: flex; align-items: flex-start; gap: 6px;
+  padding: 6px 8px; border-radius: var(--radius-sm, 6px);
+  background: var(--overlay-light); color: var(--text-muted);
+  font-size: var(--ui-font-meta, 12px); line-height: 1.5;
+}
+.btw-quote-chip > svg { flex: none; margin-top: 3px; }
+.btw-quote-chip > span { flex: 1; min-width: 0; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.btw-quote-chip > button { flex: none; display: inline-flex; padding: 2px; border: 0; background: transparent; color: inherit; cursor: pointer; }
+.btw-input {
+  display: flex; align-items: flex-end; gap: 8px;
+  padding: 8px 8px 8px 12px;
+  background: var(--bg-card, var(--bg));
+  border: var(--border-width, 1px) solid transparent; border-radius: var(--radius-lg, 14px);
+  box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.08));
+}
+.btw-input:focus-within { border-color: var(--border); }
+/* 壳画框、内部裸输入:padding / 圆角显式写死,不吃表单基线的 7px 10px */
+.btw-input textarea {
+  flex: 1; min-width: 0; max-height: 160px;
+  padding: 4px 0; border: 0; border-radius: 0; outline: none; resize: none;
+  background: transparent; color: var(--text);
+  font-family: var(--font-ui); font-size: var(--ui-font-body, 13px); line-height: 1.55;
+}
+/* 发送 / 停止与聊天输入卡同一套配色(.t2c-send / .t2c-stop) */
+.btw-send {
+  flex: none; width: 28px; height: 28px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; border-radius: var(--radius-pill, 999px);
+  background: var(--action-fill); color: var(--on-action, #fff); cursor: pointer;
+}
+.btw-send:disabled { opacity: 0.35; cursor: default; background: var(--overlay-medium, var(--overlay-light, rgba(127, 127, 127, 0.25))); color: var(--text-faint, var(--text-muted)); }
+.btw-send.stop { background: color-mix(in srgb, var(--danger, #e0564b) 14%, transparent); color: var(--danger, #e0564b); }
+
+/* 手机:全屏二级页(同设置 / 成就那套 z 50) */
+.btw-page { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
+.btw-page-head {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 8px;
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) 10px 8px 16px;
+  border-bottom: var(--border-width, 1px) solid var(--border);
+  font-size: var(--ui-font-heading, 14px); font-weight: 600; color: var(--text);
+}
+.btw-page-head > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

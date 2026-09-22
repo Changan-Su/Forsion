@@ -1449,6 +1449,24 @@ async function restoreDetachedWindows(): Promise<void> {
 
 const floatingWindows = new Map<string, BrowserWindow>()
 const floatingTargets = new Map<string, FloatingPanelOpenOptions>()
+const readyFloating = new WeakSet<BrowserWindow>()
+
+/** 会话级面板(旁聊 btw,target.sessionId)只在主窗当前会话 = 它的归属会话时露面;普通面板恒为 true。 */
+function inSessionScope(id: string): boolean {
+  const owner = floatingTargets.get(id)?.sessionId
+  return !owner || owner === miniSession.sessionId
+}
+
+/** 主窗换会话 → 会话级面板跟着显隐。隐藏不销毁:切回来原样还在(旁聊线程住在面板自己的渲染进程里)。
+ *  showInactive:焦点留在刚点了会话的主窗。没到 ready-to-show 的窗不碰(提前 show 会闪一块白),
+ *  最小化的也不碰(用户自己收进 Dock 的,别每切一次会话就弹出来)。 */
+function syncSessionPanels(): void {
+  for (const [id, win] of floatingWindows) {
+    if (win.isDestroyed() || !floatingTargets.get(id)?.sessionId || !readyFloating.has(win) || win.isMinimized()) continue
+    if (inSessionScope(id)) { if (!win.isVisible()) win.showInactive() }
+    else if (win.isVisible()) win.hide()
+  }
+}
 
 /** Floating Panel is a normal child window: movable/minimizable/closable, but kept above its main window. */
 function openFloatingPanel(raw: unknown): { id: string } | undefined {
@@ -1484,7 +1502,12 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
   floatingWindows.set(target.id, win)
   win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
   hardenNav(win.webContents)
-  win.once('ready-to-show', () => { if (!win.isDestroyed()) present(win) })
+  win.once('ready-to-show', () => {
+    if (win.isDestroyed()) return
+    readyFloating.add(win)
+    // 载入期间主窗已换会话:会话级面板先不露面,等主窗切回它的会话再由 syncSessionPanels 显示
+    if (inSessionScope(target.id)) present(win)
+  })
   win.on('closed', () => {
     if (floatingWindows.get(target.id) === win) floatingWindows.delete(target.id)
     floatingTargets.delete(target.id)
@@ -3434,8 +3457,10 @@ app.whenReady().then(async () => {
   })
   ipcMain.on('window:miniSession', (e, raw: unknown) => {
     if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return
+    const prevSession = miniSession.sessionId
     miniSession = normalizeMiniSessionContext(raw)
     miniAutoPanel?.refresh()
+    if (miniSession.sessionId !== prevSession) syncSessionPanels()
   })
   ipcMain.on('window:miniSessionReady', (e, sessionId: unknown) => {
     if (!isTrustedSender(e) || e.sender !== autoMiniWindow?.webContents || typeof sessionId !== 'string') return
@@ -3462,9 +3487,9 @@ app.whenReady().then(async () => {
   ipcMain.on('window:mainAction', (e, rawAction: unknown, rawPayload: unknown) => {
     const req = isTrustedSender(e) ? normalizeMainAction(rawAction, rawPayload) : undefined
     if (!req) return
-    // 只有要用户回主窗看结果的才把主窗抢到前面:重开引导、带着草稿去聊天。其余(⌘K 重算、测试通知卡、恢复布局、
+    // 只有要用户回主窗看结果的才把主窗抢到前面:重开引导、带着草稿 / 引用去聊天。其余(⌘K 重算、测试通知卡、恢复布局、
     // 成就弹窗、撤 Space)用户还在设置浮窗里,别打断。
-    if (req.action === 'onboarding' || req.action === 'chat-draft') showMainWindow()
+    if (req.action === 'onboarding' || req.action === 'chat-draft' || req.action === 'chat-quote') showMainWindow()
     const deliver = (): void => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:mainAction', req.action, req.payload) }
     if (mainWindow?.webContents.isLoadingMainFrame()) mainWindow.webContents.once('did-finish-load', deliver)
     else deliver()

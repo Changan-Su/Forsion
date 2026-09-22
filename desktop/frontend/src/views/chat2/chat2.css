@@ -330,7 +330,9 @@
 .t2-jump.jump-bottom { bottom: calc(var(--t2-composer-h, 96px) + 16px); }
 .t2-quote-menu {
   position: absolute;
-  transform: translateX(-100%);
+  /* 右缘贴住选区末尾向左展开;选区靠左(窄侧栏)时夹住左缘 ≥ 12px,别把最左的「引用」裁出视图。
+     --quote-x = 锚点 left(ChatView 内联写入,同一个局部 px)。 */
+  transform: translateX(max(-100%, calc(12px - var(--quote-x, 100vw))));
   z-index: 20;
   display: inline-flex;
   align-items: center;

@@ -15,6 +15,8 @@ import type { FloatingPanelOpenOptions } from '../../shared/floatingPanel'
 import type { SessionRecord } from './types'
 import { FloatingViewSurface } from './components/FloatingViewSurface'
 import { PluginOnboardingHost } from './components/PluginOnboardingModal'
+import { BtwPanel } from './views/chat2/BtwPanel'
+import { btwSeedOf } from './views/chat2/btwStore'
 
 export function FloatingRoot() {
   const { t } = useI18n()
@@ -29,6 +31,7 @@ export function FloatingRoot() {
   // (反馈会挂错会话、设置的「导出日志」会导错会话)。递不到就老实显示「未关联会话」/ 禁用导出。
   const panelSession = (target?.params?.session as SessionRecord | undefined)?.id ? target!.params!.session as SessionRecord : null
   const close = (): void => window.tangu?.closeSelf?.()
+  const btwSeed = target?.builtin === 'btw' ? btwSeedOf(target.params) : null
 
   useEffect(() => { useApp.getState().setTr((k, vars) => t(k, vars as Record<string, string | number> | undefined)) }, [t])
   useEffect(() => { void useApp.getState().boot() }, [])
@@ -74,6 +77,8 @@ export function FloatingRoot() {
       {target.builtin === 'market' && <MarketModal onClose={onMarketClose} />}
       {target.builtin === 'achievements' && <AchievementsModal onClose={onAchievementsClose} />}
       {target.builtin === 'feedback' && app.cfgLoaded && <FeedbackModal key={panelSession?.id || ''} surface="panel" cfg={app.cfg} activeSession={panelSession} onClose={onFeedbackClose} />}
+      {/* 旁聊:不按 params 挂 key —— 同一扇窗再收到定向(新的引用 / 问题)只是往线程里追加,重挂会把线程丢了 */}
+      {target.builtin === 'btw' && app.cfgLoaded && btwSeed && <BtwPanel seed={btwSeed} onClose={close} />}
       {target.view && <FloatingViewSurface target={target.view} onUnavailable={close} />}
     </main>
     {/* 插件检查卡:设置 / 市场自 2026-09-20 住在这个独立窗口里,「运行引导」、手动启用、市场装完都在这里

@@ -22,6 +22,8 @@ import { NotificationHost } from '@/components/NotificationHost'
 import { AmadeusOverlays } from '@/amadeusOverlays'
 import { AchievementToast } from '@/achievements/AchievementToast'
 import { AchievementsModal } from '@/achievements/AchievementsModal'
+import { BtwHost } from '@/views/chat2/BtwPanel'
+import { useBtw } from '@/views/chat2/btwStore'
 import { QuickFind } from '@/quickFind'
 import { FindBar } from '@/findInPage'
 import { installNotificationWiring } from '@/stores/notificationWiring'
@@ -70,6 +72,7 @@ function useAndroidBack(): void {
       // 引导是全屏浮层(zIndex 60):不在这儿吃掉返回,它下面的 leaf 会被 closeLeaf 关掉/直接挂起 app。
       // 不自动关引导 —— 退出引导只走里面的「跳过」(那条会记 dismiss),否则下次启动又弹一遍。
       if (app.onboarding) return
+      if (useBtw.getState().webOpen) { useBtw.getState().closeWeb(); return } // 旁聊全屏页在最上层:返回先关它
       if (app.settingsOpen) { app.closeSettings(); return }
       const ws = useWorkspace.getState()
       if (ws.leftVisible) { ws.toggleSidebar('left'); return }
@@ -228,6 +231,9 @@ export function MobileRoot() {
 
       {/* 成就解锁提示:埋点(track)与存档(localStorage)在移动端本就照跑,缺的只是这块弹层。
           点它开成就总览 —— AchievementsModal 上面已挂(⋯ 菜单里的 rb-achievements 也进得去)。 */}
+      {/* 旁聊(/btw):手机没有浮窗语义,走全屏二级页;只在它归属的会话仍是当前会话时显示 */}
+      <BtwHost page />
+
       <AchievementToast onOpen={() => useApp.getState().openAchievements()} />
 
       {/* 旧 .toast-wrap 已随 appStore.toasts 一起下线;通知统一走 notificationStore + NotificationHost。 */}

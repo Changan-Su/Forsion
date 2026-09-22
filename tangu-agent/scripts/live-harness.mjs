@@ -11,6 +11,7 @@
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
+ *   npm run live:harness -- --only btw                       # 旁聊 /btw(09-22):带主会话上下文答题外话、追问带前轮、不写回、主 run 在飞也能问;改 services/aside.ts 提示词后跑
  *   TANGU_LIVE_MODEL=codex/gpt-5.6-sol npm run live:harness  # 换模型
  *   npm run live:harness -- --only historian,dream,muse --muse-mode auto   # Muse 三档:ask(缺省)|agent|auto
  *   npm run live:harness -- --only refine --historian-mode assist          # 自进化闭环走辅助模式(提名在辅助模式轮里出)
@@ -55,7 +56,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'loop', 'group', 'teamdup', 'teamapproval', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'loop', 'group', 'teamdup', 'teamapproval', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -64,7 +65,7 @@ const FILLER = Math.max(0, Math.floor(Number(opt('filler', 0)) || 0));
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -606,6 +607,55 @@ try {
     return { ok: !ev.error && ev.done && sandbox && wrote.length === 0 && !manualInit, inconclusive: sandbox && !manualInit && !pointsToHistory,
       detail: ev.error || `${sandbox ? '指向了 Sandbox' : '没提 Sandbox(提示词的插件项目一节未生效)'};${wrote.length ? `却动了文件(${wrote.join(',')})` : '只答未改'};${manualInit ? '⚠️教用户手敲 git init(会把 History 面板变只读)' : '没让用户手建仓'};${pointsToHistory ? '指向了版本面板' : '未指向版本面板(不计红,读原话)'}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // 旁聊(/btw,services/aside.ts):真模型才证得了「提示词让它只答题外话」。判据只钉事实命中 + 链路:
+  // ①上下文继承(答得出主会话里种的代号)②追问吃得到前一轮 ③主会话一行不多 ④主 run 在飞时照样答、且答的是旁问
+  // 不是在飞的那条主问题(Claude Code 2.1.79 栽过)⑤诱导它「列目录」时不写假工具调用(2.1.269)。
+  await scenario('btw', 'btw 旁聊:带主会话上下文、追问、不写回、主 run 在飞也能问', async () => {
+    const sid = `live-btw-${Date.now()}`;
+    const CODE = 'AZURE-FALCON-7';
+    const seed = await run(sid, `Remember this for later: the project codename is ${CODE}. Reply with just "noted".`);
+    if (seed.error) return { ok: false, detail: `主会话首轮失败:${seed.error}` };
+    const aside = async (body) => {
+      const t0 = Date.now();
+      const r = await fetch(`${base}/agent/sessions/${sid}/aside`, { method: 'POST', headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ model_id: MODEL, ...body }), signal: AbortSignal.timeout(180_000) });
+      if (!r.ok || !r.body) return { error: `HTTP ${r.status} ${(await r.text()).slice(0, 200)}`, content: '', ms: Date.now() - t0 };
+      let text = ''; let firstMs = null;
+      for await (const chunk of r.body) { text += Buffer.from(chunk).toString('utf8'); if (firstMs == null && text.includes('"type":"delta"')) firstMs = Date.now() - t0; }
+      const evs = text.split('\n').filter((l) => l.startsWith('data:')).map((l) => { try { return JSON.parse(l.slice(5)); } catch { return null; } }).filter(Boolean);
+      const done = evs.find((e) => e.type === 'done');
+      return { content: String(done?.content || ''), deltas: evs.filter((e) => e.type === 'delta').length, toolCallText: !!done?.toolCallText, error: evs.find((e) => e.type === 'error')?.error || (done ? null : 'SSE 无 done'), ms: Date.now() - t0, firstMs };
+    };
+    const count = async () => asList(await api(`/agent/sessions/${sid}/messages`), 'messages').length;
+    const before = await count();
+    const a1 = await aside({ question: 'What is the project codename? Reply with just the codename.' });
+    const a2 = await aside({ question: 'Now write that codename backwards, character by character.', thread: [{ question: 'What is the project codename? Reply with just the codename.', answer: a1.content }] });
+    const a3 = await aside({ question: 'List the files in the current working directory.' });
+    const after = await count();
+    // 主 run 在飞:先起一个慢一点的主任务,稍等再问 —— 旁聊不排主 run 的队,也不该去答那条主问题
+    const main = run(sid, 'Count from 1 to 300, one number per line, and nothing else.');
+    await sleep(2500);
+    // 并发的证据取「发问那一刻主 run 还在跑」:答完再看,主任务可能早收尾了
+    const mainBusy = asList(await api(`/agent/runs?session_id=${sid}`).catch(() => []), 'runs').some((r) => r.status === 'running' || r.status === 'queued');
+    const a4 = await aside({ question: 'Quick side question: what was the project codename again?' });
+    const mainEv = await main;
+    const back = (x) => x.replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+    const reversed = back(CODE).split('').reverse().join('');
+    const checks = {
+      inherit: a1.content.includes(CODE),
+      followUp: back(a2.content).includes(reversed),
+      noWrite: after === before,
+      noFakeTool: !a3.error && !a3.toolCallText,
+      inFlight: !a4.error && a4.content.includes(CODE) && !/\b1\s*\n\s*2\s*\n\s*3\b/.test(a4.content),
+    };
+    const ok = Object.values(checks).every(Boolean) && !a1.error && !a2.error && !mainEv.error;
+    return {
+      ok,
+      detail: `${Object.entries(checks).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')};主会话 ${before}→${after} 行;发问时主 run ${mainBusy ? '在跑' : '已结束(未判到并发)'};流式 ${a1.deltas} 帧;首帧/总 ${[a1, a2, a3, a4].map((a) => `${a.firstMs == null ? '-' : (a.firstMs / 1000).toFixed(1)}/${(a.ms / 1000).toFixed(1)}s`).join(' ')}${a1.error ? `;a1 错:${a1.error}` : ''}`,
+      inconclusive: ok && !mainBusy,
+      output: [a1, a2, a3, a4].map((a, i) => `[${i + 1}] ${a.error ? `ERROR ${a.error}` : a.content}`).join('\n\n'),
+    };
   });
 
   await scenario('childchat', 'childchat 委派完整落库与原子会话续聊', async () => {

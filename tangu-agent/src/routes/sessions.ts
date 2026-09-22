@@ -8,6 +8,7 @@
  *   POST   /agent/sessions/:id/messages/delete { ids }  按 id 截断消息(编辑重发 / 重新生成前清掉该点及之后)
  *   GET    /agent/sessions/:id/config              读 agent_config(enabledSkillIds/execMode/approvalMode/…)
  *   PUT    /agent/sessions/:id/config              整体替换 agent_config
+ *   POST   /agent/sessions/:id/aside { question, quote?, thread?, model_id? }  旁聊 /btw(SSE,不落库)
  */
 import { Router, type Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
@@ -29,6 +30,8 @@ import { isDelegateActive } from '../services/delegateTranscript.js';
 import { ensureMemberSession, memberRunConfig } from '../services/teamRuns.js';
 import { recoverTeamOutputs } from '../services/teamOutputs.js';
 import { withKeyLock } from '../core/keyLock.js';
+import { answerAside, normalizeAsideInput } from '../services/aside.js';
+import { normalizeClientTag } from './runs.js';
 
 const router = Router();
 
@@ -571,6 +574,43 @@ router.post('/agent/sessions/:id/compact', authMiddleware, async (req: AuthReque
     res.json({ ok: true, summarizedCount: r.summarizedCount, throughTimestamp: r.throughTimestamp, contextTokens: compactedContextTokens(r.summary || '', lastUsage) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'compact failed' });
+  }
+});
+
+// 旁聊(/btw):带着本会话上下文问一句题外话(services/aside.ts)。SSE:delta* → done | error。
+// 不落库、不进 run 队列 —— 主 run 在飞也能问,且互不打断;客户端断开即中止上游请求。
+router.post('/agent/sessions/:id/aside', authMiddleware, async (req: AuthRequest, res) => {
+  const s = await getOwnSession(req.params.id, req.user!.userId).catch(() => null);
+  if (!s) return res.status(404).json({ detail: 'Session not found' });
+  const input = normalizeAsideInput(req.body);
+  if (!input) return res.status(400).json({ detail: 'question required' });
+  const modelId = (typeof req.body?.model_id === 'string' && req.body.model_id) || s.model_id || resolveProfile(s.app_id)?.defaultModelId || '';
+  if (!modelId) return res.status(400).json({ detail: 'model_id required' });
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.write(': open\n\n');
+  const ac = new AbortController();
+  // res 的 close 才是「连接没了」;req 的 close 在读完请求体时就会触发。
+  res.on('close', () => { if (!res.writableEnded) ac.abort(); });
+  const write = (event: object): void => {
+    if (res.writableEnded) return;
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+    (res as any).flush?.();
+  };
+  const heartbeat = setInterval(() => { if (!res.writableEnded) res.write(': hb\n\n'); }, 15_000);
+  try {
+    const answer = await answerAside({
+      sessionId: s.id, modelId, appId: s.app_id, client: normalizeClientTag(req.body?.client),
+      input, signal: ac.signal, onToken: (text) => write({ type: 'delta', text }),
+    });
+    write({ type: 'done', ...answer, modelId });
+  } catch (e: any) {
+    if (!ac.signal.aborted) write({ type: 'error', error: e?.message || 'side question failed' });
+  } finally {
+    clearInterval(heartbeat);
+    res.end();
   }
 });
 

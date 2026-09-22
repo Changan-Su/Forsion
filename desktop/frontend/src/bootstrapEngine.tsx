@@ -22,7 +22,8 @@ import { installTanguProbe } from './tanguProbe'
 import { installBuiltins } from './builtins'
 import { AccountCard } from './components/AccountCard'
 import { UnitSwitcher } from './components/UnitSwitcher'
-import { useApp } from './stores/appStore'
+import { useApp, activeChatModelId } from './stores/appStore'
+import { openBtw } from './views/chat2/btwStore'
 import { PRODUCT } from './product'
 import { useTheme } from './stores/themeStore'
 import { cycleLocale, registerMessages, translate, useI18n } from './i18n'
@@ -351,6 +352,14 @@ export function installEngine(): void {
   // commands
   if (hasNativeFeature('tangu')) addCommand({ id: 'new-chat', title: () => app().tr('sidebar.newChat'), keywords: 'new chat 新对话', hotkey: 'mod+n', run: blankNewChat , invoke: {
     description: 'Start a new, empty chat in the window the user is talking to you from. Use it when the user asks to start over or open a fresh conversation.',
+  } })
+  // 旁聊(/btw;⌘; 同 Claude Desktop):带当前会话上下文问一句题外话,开在会话级 Floating Panel 里。
+  // 新对话草稿(activeId=null)没有上下文可带 → 不开。不给 invoke:这是用户自己的旁路,不是 agent 能替用户点的动作。
+  if (hasNativeFeature('tangu')) addCommand({ id: 'chat-btw', title: () => translate('btw.cmd'), keywords: 'btw by the way side question aside 顺便问 旁聊', hotkey: 'mod+;', run: () => {
+    const s = app()
+    if (!s.activeId) return
+    const activeSession = s.sessions.find((x) => x.id === s.activeId) || s.archivedSessions.find((x) => x.id === s.activeId) || null
+    openBtw({ sessionId: s.activeId, title: activeSession?.title, modelId: activeChatModelId({ ...s, activeSession }) || undefined })
   } })
   // hotkey 从 mod+b 改到 mod+/:mod+b 与 Amadeus 编辑器的加粗(commonmark Mod-b)冲突,编辑时会同时切侧栏。
   // 换 mod+/ 是因为 mod+shift+b 也被编辑器占(blockquote),mod+\ 被 split-right 占;mod+/ app 命令表与编辑器 keymap 皆空闲。

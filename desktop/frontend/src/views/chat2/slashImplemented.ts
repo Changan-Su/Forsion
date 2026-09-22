@@ -12,6 +12,7 @@ export const DESKTOP_IMPLEMENTED: string[] = [
   '/stop',
   '/new',
   '/branch',
+  '/btw',
   '/compact',
   '/plan',
   '/chat', '/work', // 下一个新会话的模式(只在空态露出;创建后锁定)

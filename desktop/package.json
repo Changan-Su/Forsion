@@ -53,6 +53,7 @@
     "check:pillbar": "node scripts/pillbar-overflow.check.cjs",
     "check:feedback": "node scripts/feedback.check.cjs",
     "check:floatingsession": "node scripts/floating-session.check.cjs",
+    "check:btw": "node scripts/btw.check.cjs",
     "check:chatlayout": "node scripts/chat-layout.check.cjs",
     "check:messageactions": "node scripts/chat-message-actions.check.cjs",
     "check:approval": "node scripts/approval-menu.check.cjs",
