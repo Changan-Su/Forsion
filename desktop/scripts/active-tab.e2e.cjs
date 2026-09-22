@@ -8,7 +8,7 @@
  *  T  点左侧栏**自己的标签头**:dockview activePanel 挪进侧栏 → mainTabs[].active 全 false → 树行回落 activePage。
  *
  *   S0 夹具:Alpha-note 占第一个标签,新标签页里从树上开 pic.png
- *   S1 切到 Agent 再切回 Note,pic.png 标签还原且在前台
+ *   S1 切到 Tangu 再切回 Note,pic.png 标签还原且在前台
  *   S2 树上亮的仍是 pic.png(守卫)                        S2b 还原后后退灰(没有从旧布局串来的条目)
  *   S3 ⚠️ 快速查找就地开 Beta-note → 后退可点              S4 ⚠️ 后退回到 pic.png
  *      高亮用图片验:仪表盘自己往 pageStore 里 loadPage,facade 的 activePage 碰巧就是它,回落也亮对行(测不出)。
@@ -106,7 +106,7 @@ async function main() {
     const shows = (name) => (s) => s.active.some((x) => x.includes(name))
     const rowIs = (name) => (s) => s.row.length === 1 && s.row[0].includes(name)
 
-    const roundTrip = async () => { await space('Agent'); await win.waitForTimeout(2500); await space('Note') }
+    const roundTrip = async () => { await space('Tangu'); await win.waitForTimeout(2500); await space('Note') }
     const quickOpen = async (q) => {
       await win.keyboard.press(process.platform === 'darwin' ? 'Meta+P' : 'Control+P')
       await win.waitForSelector('.amx-qf-input', { timeout: 8000 })
@@ -127,7 +127,7 @@ async function main() {
 
     await roundTrip()
     const s1 = await until(shows('pic'), 15_000)
-    check('S1 切到 Agent 再切回 Note:pic.png 标签还原且在前台', shows('pic')(s1), JSON.stringify(s1))
+    check('S1 切到 Tangu 再切回 Note:pic.png 标签还原且在前台', shows('pic')(s1), JSON.stringify(s1))
     await win.waitForTimeout(1500)
     const s2 = await state()
     await shot('s2-after-roundtrip')

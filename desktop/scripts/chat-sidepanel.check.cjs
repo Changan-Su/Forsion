@@ -5,6 +5,7 @@
  *  3,11 细长列(宽:高 < 9:16)不画头像,宽列照常 —— 量的是 container-type: size 有没有生效
  *  4-5  Amadeus 右栏默认 = 对话视图(展开右栏,活动 tab 必须是对话,且主区仍是编辑器)
  *  6-7  侧栏对话默认引用**主区当前打开的文件**(开 Alpha 再换 Beta:引用必须跟过去,不许残留)
+ *  7b   左栏树高亮同样跟到 Beta(编辑器没拿过焦点时,门面页作用域曾停在启动那篇)
  *  8-10 拖笔记进聊天区 → 「已选择」芯片、不塞草稿、且只挂引用也能发
  *  12-13 侧栏拖宽之后,折叠再展开必须还是那个宽(此前被 pinSides 打回黄金分割)
  *  14   切 Space 时清 stashActive:上个空间停在哪个 tab 不许顶掉下个空间配方的首项
@@ -500,13 +501,17 @@ async function main() {
     ref.chips.length === 1 && ref.chips[0].replace(/\.md$/i, '') === 'Beta',
     `Alpha 时 ${JSON.stringify(first.chips)} → 换到 Beta 后 ${JSON.stringify(ref.chips)}`,
   )
+  // 7b 左栏树高亮读的是 pageStore 门面(活动页作用域)。这一路只点左栏、编辑器从没拿过 Dockview 焦点,
+  // 作用域曾停在启动时装载的那篇 → 编辑器已是 Beta,高亮还钉在 Alpha(09-22)。
+  const hl = await win.evaluate(`Array.from(document.querySelectorAll('.t2s-srow.active')).map((e) => e.textContent.trim())`)
+  check('7b 左栏树高亮跟到主区那一篇(编辑器没拿过焦点也一样)', hl.length === 1 && hl[0] === 'Beta', `高亮行=${JSON.stringify(hl)}`)
 
   // ── 拖引用进聊天区 → 芯片(结构化通道,不再拼文本再解析)────────────────────────────
   // 合成 DragEvent + DataTransfer:HTML5 拖放没法用 mouse.down/move 驱动(浏览器不给合成 drag)。
   // 代价:绕过了 Dockview 自己的拖放层。真机上若「拖得动但没反应」,先怀疑那一层截了 drop。
   const drag = await win.evaluate(`(() => {
-    // 拖主区**没开着**的那篇(Alpha):拖已自动引用的那篇会被去重吞掉,芯片数不涨。按名字挑,不按 .active ——
-    // 树行高亮读的是门面页作用域,编辑器没拿过焦点时它还停在启动那篇,挑出来的恰是 Beta。
+    // 拖主区**没开着**的那篇(Alpha):拖已自动引用的那篇会被去重吞掉,芯片数不涨。按名字挑,不靠 .active 反推
+    // (高亮错位时反推出来的恰是已引用那篇 —— 7b 修前就是这样)。
     const src = Array.from(document.querySelectorAll('.t2s-srow')).find((e) => e.textContent.trim() === 'Alpha')
     const target = document.querySelector('.t2-chat-view')
     if (!src || !target) return { err: 'no src/target' }
