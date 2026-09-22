@@ -33,6 +33,7 @@
     "e2e:direct": "node scripts/direct-offline.e2e.mjs",
     "prelive:harness": "npm run build",
     "live:harness": "node scripts/live-harness.mjs",
+    "smoke:projectctx": "node scripts/project-context.smoke.mjs",
     "stall:timeline": "node scripts/stall-timeline.mjs",
     "cache:report": "node scripts/cache-hit-report.mjs",
     "check:skilldesc": "node scripts/check-skill-descriptions.mjs",

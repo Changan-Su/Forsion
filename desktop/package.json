@@ -167,6 +167,7 @@
     "check:sessionmode": "node scripts/session-mode.check.cjs",
     "check:orbitside": "node scripts/orbitside.check.cjs",
     "check:agentprofile": "node scripts/agent-profile.check.cjs",
+    "check:projectdetails": "node scripts/project-details.check.cjs",
     "check:teamoutputs": "node scripts/team-outputs.check.cjs",
     "check:teamprofile": "node scripts/team-profile.check.cjs",
     "check:teamdesk": "node scripts/team-desk.check.cjs",

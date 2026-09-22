@@ -3,7 +3,11 @@
 .project-profile-path { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .project-profile-path > button { min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; transition: color 160ms ease; }
 .project-profile-path > button:hover { color: var(--accent-ink); }
-.project-branch { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; }
+/* 三个标签在 215–300px 的右栏里排不下「图标 + 文字」一行(Agents 会被截成 Agen…):照紧凑 Agent 详情(.compact)的做法,图标上、文字下。 */
+.project-profile .agent-section-nav { --profile-nav-gap: 2px; --profile-nav-padding: 4px; }
+.project-profile .agent-section-nav button { flex-direction: column; gap: 5px; font-size: var(--ui-font-caption, 11px); padding: 7px 2px; }
+/* 分支是状态行里的一枚芯片:换行时自成一段,不靠前面的「·」分隔。 */
+.project-branch { display: inline-flex; align-items: center; gap: 3px; min-width: 0; max-width: 100%; padding: 1px 7px; border-radius: 999px; background: var(--overlay-medium); }
 .project-branch > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-section { display: grid; gap: 10px; padding-top: 16px; }
 .project-card { display: grid; gap: 10px; padding: 12px; background: var(--overlay-light); border-radius: var(--radius-md, 12px); min-width: 0; }
@@ -40,11 +44,13 @@
 .project-executor .team-member-open > strong { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .project-executor .team-member-open > strong > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-executor-tag { flex-shrink: 0; padding: 1px 6px; border-radius: 999px; background: var(--overlay-medium); color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); font-weight: 400; }
-.project-executor-actions { display: flex; gap: 2px; justify-content: flex-end; padding-top: 6px; }
-.project-executor-actions button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); cursor: pointer; transition: background 160ms ease, color 160ms ease; }
-.project-executor-actions button:hover:not(:disabled) { background: var(--overlay-medium); color: var(--text); }
-.project-executor-actions button:disabled { opacity: .45; cursor: default; }
-.project-executor-actions button.is-default { color: var(--accent-ink); }
+/* 行内动作(执行者卡的两个动作 / Git 卡的四个动作):无边框小字按钮,窄栏里换行也不显重。 */
+.project-inline-actions { display: flex; flex-wrap: wrap; gap: 2px; justify-content: flex-end; padding-top: 6px; }
+.project-inline-actions.start { justify-content: flex-start; padding-top: 0; margin: 0 -7px; }
+.project-inline-actions button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); cursor: pointer; transition: background 160ms ease, color 160ms ease; }
+.project-inline-actions button:hover:not(:disabled) { background: var(--overlay-medium); color: var(--text); }
+.project-inline-actions button:disabled { opacity: .45; cursor: default; }
+.project-inline-actions button.is-default { color: var(--accent-ink); }
 .project-field { display: grid; gap: 6px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .project-field select { width: 100%; min-width: 0; padding: 6px 8px; font-size: var(--ui-font-meta, 12px); color: var(--text); }
 .project-card .profile-model-field { margin: 0; }
@@ -55,5 +61,5 @@
 .project-candidates optgroup, .project-field optgroup { color: var(--text-muted); }
 @media (prefers-reduced-motion: reduce) {
   .project-skill-form { animation: none; }
-  .project-row, .project-executor-actions button, .project-profile-path > button { transition: none; }
+  .project-row, .project-inline-actions button, .project-profile-path > button { transition: none; }
 }

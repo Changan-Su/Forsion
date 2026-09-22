@@ -222,7 +222,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
             onChange={(e) => setNameDraft(e.target.value)} onBlur={() => void commitName()} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') { setNameDraft(workspace.name); e.currentTarget.blur() } }} />
           <span className={`agent-state${running ? ' working' : ''}`}><i />{t(!s.connected ? 'agentProfile.offline' : running ? 'projectProfile.status.working' : 'projectProfile.status.idle')}
             <span>· {t('projectProfile.sessions', { count: executors.reduce((n, ex) => n + ex.sessions.length, 0) })}</span>
-            {git?.repo && <span className="project-branch" title={git.detached ? t('projectProfile.git.detached') : git.branch}>· <GitBranch size={10} /><span>{git.branch}</span>{changeCount > 0 && <span>*</span>}</span>}
+            {git?.repo && <span className="project-branch" title={git.detached ? t('projectProfile.git.detached') : git.branch}><GitBranch size={10} /><span>{git.branch}</span>{changeCount > 0 && <span>*</span>}</span>}
           </span></div>
         <button className="profile-expand" title={t('projectProfile.open')} aria-label={t('projectProfile.open')} onClick={() => openSpecial('workspace', workspace.key)}><ExternalLink size={15} /></button>
       </header>
@@ -255,7 +255,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
                 <span className={`team-member-status ${ex.running ? 'working' : 'idle'}`}>{t(ex.running ? 'projectProfile.status.working' : ex.kind === 'party' ? 'projectProfile.party' : ex.kind === 'engine' ? 'projectProfile.engine' : 'projectProfile.status.idle')} · {t('projectProfile.sessions', { count: ex.sessions.length })}{ex.lastActive ? ` · ${t('projectProfile.lastActive', { time: relativeTimeOf(ex.lastActive, now, locale) })}` : ''}</span>
                 {canOpen && <ChevronRight size={14} className="team-member-chevron" />}
               </button>
-              {(ex.kind === 'agent' || (ex.kind === 'team' && team)) && <div className="project-executor-actions">
+              {(ex.kind === 'agent' || (ex.kind === 'team' && team)) && <div className="project-inline-actions">
                 <button type="button" onClick={() => (ex.kind === 'agent' ? startWith({ kind: 'agent', slug: ex.id }) : team && startWith({ kind: 'team', team }))}><MessageSquarePlus size={13} />{t('projectProfile.startWith')}</button>
                 <button type="button" className={isDefault(ex) ? 'is-default' : ''} aria-pressed={isDefault(ex)} disabled={!ctx} onClick={() => void saveDefaultExecutor(isDefault(ex) ? {} : ex.kind === 'agent' ? { defaultAgent: ex.id } : { defaultTeam: ex.id })}><Star size={13} />{t(isDefault(ex) ? 'projectProfile.isDefault' : 'projectProfile.setDefault')}</button>
               </div>}
@@ -323,11 +323,11 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
                 {git.remote && <div><span>{t('projectProfile.git.remote')}</span><strong title={git.remote}>{git.remote}</strong></div>}
                 {git.nested && <p className="agent-profile-muted">{t('projectProfile.git.nested')}</p>}
               </div>}
-            <div className="project-card-actions">
-              <button type="button" className="btn ghost sm" onClick={() => openTerminal(workspace.path)}><TerminalSquare size={13} />{t('projectProfile.terminal')}</button>
-              <button type="button" className="btn ghost sm" onClick={() => reveal(workspace.path)}><FolderOpen size={13} />{t('projectProfile.reveal')}</button>
-              <button type="button" className="btn ghost sm" onClick={copyPath}><Copy size={13} />{t('projectProfile.copyPath')}</button>
-              <button type="button" className="btn ghost sm" onClick={() => setReloadAt((n) => n + 1)}><RefreshCw size={13} />{t('projectProfile.refresh')}</button>
+            <div className="project-inline-actions start" data-project-git-actions>
+              <button type="button" onClick={() => openTerminal(workspace.path)}><TerminalSquare size={13} />{t('projectProfile.terminal')}</button>
+              <button type="button" onClick={() => reveal(workspace.path)}><FolderOpen size={13} />{t('projectProfile.reveal')}</button>
+              <button type="button" onClick={copyPath}><Copy size={13} />{t('projectProfile.copyPath')}</button>
+              <button type="button" onClick={() => setReloadAt((n) => n + 1)}><RefreshCw size={13} />{t('projectProfile.refresh')}</button>
             </div>
           </section>
           {git.repo && !!git.changes?.length && <section className="project-card" data-project-git-changes>
