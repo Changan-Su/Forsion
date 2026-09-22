@@ -14,11 +14,16 @@
 //  R3 文末段 → 右栏深处空白 → 落进右栏末尾(修前:线画在整行底,落到行外)
 //  R4 单块被选满(一次没落成的 drop 留下的选区 / 选中的图片)→ ⠿ 仍能拖(修前:dragstart 不序列化,裸拖绿 +)
 //  R5 配对区静止 → 只剩竖线;松手成列后零残留(修前:旧横线与竖线同现,松手后横线还在)
+//  R5b 顶层配对:先由落点插件画线再进配对区 → 只剩竖线、松手零残留(钉微任务收敛)
 //  R6 行下沿正下方静止 → 只有一条线、落到行后
 //  R7 落回自身(右栏末块拖回右栏空白)→ 不出线、文档不变
 //  R8 文末之下(tail 路由)松手 → 零残留
 //  R9 两栏之间的缝(深处)松手 → 不进任何一列(修前:线画在左列、块进左列)
 //  R10 右栏首段上缘 → 落进右栏首位,仍是两列
+//  R11 另一列一串短段挤满候选表时,高块中段仍出线且落进本列(评审 P2:库只问最近 8 个候选)
+//  R12 折叠列(末块 rect 全 0)不画零宽线、不把块塞进隐藏区(评审 P1)
+//  R13 配对竖线只出在 executePair 接得住的目标上(评审 P1:列表第 2 项起恒 false)
+//  R14 拖进「移到新列」造出的空列,不留占位空段(评审 P3)
 // 用法:node scripts/e2e-editor.cjs --check=columns-realdrag(或 npm run check:coldrag)
 //      5173 被别的检出占着时:HARNESS_URL=http://localhost:<port>/harness.html
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -72,7 +77,34 @@ const SEED = [
   '',
 ].join('\n')
 
-async function openPage(browser) {
+/** 死区布局:左栏一串短段(把落点插件的 8 个候选挤满),右栏一张高图。 */
+const SEED_DEAD = [
+  '---', 'amadeus_schema: amadeus.page/4',
+  'amadeus_layout: {"v":4,"rows":[{"columns":[{"refs":["d0"],"width":1},{"refs":["d1"],"width":1}],"tail":"d2"}]}',
+  '---', '开头段。', '', '<!-- a d0 -->', '',
+  ...Array.from({ length: 6 }, (_, i) => `短段 ${i + 1}。\n`),
+  '<!-- a d1 -->', '', '![[tall.png|300]]', '', '<!-- a d2 -->', '', '行后段。', '',
+].join('\n')
+
+/** 折叠列:右栏是「标题 + 段落」,折起标题后末块 display:none(rect 全 0)。 */
+const SEED_FOLD = [
+  '---', 'amadeus_schema: amadeus.page/4',
+  'amadeus_layout: {"v":4,"rows":[{"columns":[{"refs":["f0"],"width":1},{"refs":["f1"],"width":1}],"tail":"f2"}]}',
+  '---', '开头段。', '', '<!-- a f0 -->', '', '![[tall.png|185]]', '',
+  '<!-- a f1 -->', '', '## 小节标题', '', '小节正文。', '', '<!-- a f2 -->', '', '行后段。', '',
+].join('\n')
+
+/** 空列(「移到新列」造出来的形态:两个锚之间没有内容)。 */
+const SEED_EMPTY = [
+  '---', 'amadeus_schema: amadeus.page/4',
+  'amadeus_layout: {"v":4,"rows":[{"columns":[{"refs":["e0"],"width":1},{"refs":["e1"],"width":1}],"tail":"e2"}]}',
+  '---', '开头段。', '', '<!-- a e0 -->', '', '![[tall.png|185]]', '', '<!-- a e1 -->', '', '<!-- a e2 -->', '', '行后段。', '',
+].join('\n')
+
+/** 顶层列表:配对判据的负面目标(第 2 项起 executePair 必 false)。 */
+const SEED_LIST = ['开头段。', '', '- 甲', '- 乙', '- 丙', '', '末段。', ''].join('\n')
+
+async function openPage(browser, seed = SEED, file = 'Cols.md', ready = '.unified-body .amx-ucolrow') {
   const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1100, height: 1300 } })
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
   // &upane = 生产壳镜像(.am-app.tangu-lovable[data-mode]):--primary 才有值,--shot 截图里的线才看得见
@@ -85,8 +117,8 @@ async function openPage(browser) {
     window.__assets.setUrlBuilder((ref) => (/tall/.test(ref) ? svg(185, 417, '#556') : svg(282, 200, '#8a6')))
   })
   // 换一篇 = UnifiedPage 按新 key 重挂载,图片按上面的构建器重新出 URL。
-  await p.evaluate((seed) => window.__upage.switchFile('Cols.md', seed), SEED)
-  await p.waitForSelector('.unified-body .amx-ucolrow .wiki-inline-img-wrap img', { timeout: 20000 })
+  await p.evaluate(([f, seed]) => window.__upage.switchFile(f, seed), [file, seed])
+  await p.waitForSelector(ready, { timeout: 20000 })
   await p.waitForTimeout(700)
   await p.evaluate(() => {
     window.__dnd = { allowed: null, vdrag: null }
@@ -96,10 +128,12 @@ async function openPage(browser) {
   return p
 }
 
-/** 可见的指示线:横线(.unified-drop-line,blockLayer 自己的与落点插件的各一枚)+ 竖线(.unified-drop-vline)。 */
-const lines = (p) => p.evaluate(() => [...document.querySelectorAll('.unified-drop-line, .unified-drop-vline')]
-  .filter((el) => getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0)
-  .map((el) => { const r = el.getBoundingClientRect(); return { v: el.classList.contains('unified-drop-vline'), x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width) } }))
+/** 可见的指示线:横线(.unified-drop-line,blockLayer 自己的与落点插件的各一枚)+ 竖线(.unified-drop-vline)。
+ *  all=true 连零宽的也算:拿折叠块(rect 全 0)当落点画出的线就是 display:block + 宽 0,默认过滤会把它
+ *  滤掉 —— R12「不画零宽线」曾因此恒绿(负对照 NC8 实跑才现形)。 */
+const lines = (p, all = false) => p.evaluate((all) => [...document.querySelectorAll('.unified-drop-line, .unified-drop-vline')]
+  .filter((el) => getComputedStyle(el).display !== 'none' && (all || el.getBoundingClientRect().width > 0))
+  .map((el) => { const r = el.getBoundingClientRect(); return { v: el.classList.contains('unified-drop-vline'), x: Math.round(r.x), y: Math.round(r.y), w: Math.round(r.width) } }), all)
 
 /** 文档速写:顶层节点 + 行内各列子节点(段落取前 8 字)。 */
 const shape = (p) => p.evaluate(() => {
@@ -152,10 +186,11 @@ async function drag(p, from, via, to) {
   await p.mouse.move(to.x, to.y, { steps: 10 })
   await idle(p, to.x, to.y)
   const during = await lines(p)
+  const duringAll = await lines(p, true)
   const vdrag = await p.evaluate(() => !!window.__upage.probe.view().dragging)
   await p.mouse.up()
   await p.waitForTimeout(450)
-  return { during, after: await lines(p), vdrag, allowed: await p.evaluate(() => window.__dnd.allowed) }
+  return { during, duringAll, after: await lines(p), vdrag, allowed: await p.evaluate(() => window.__dnd.allowed) }
 }
 
 async function main() {
@@ -251,6 +286,23 @@ async function main() {
     await p.close()
   }
 
+  // ── R5b 顶层配对:先让**落点插件**画出横线,再进配对区 → 只剩竖线;松手成行后零残留 ────────
+  // (R5 的列内路径如今整支由 planCellDrop 自解析,插件根本不出线 —— 那条测不到「同步收敛」。
+  //  这里的 via 停在分栏之外的顶层段落下缘,线由插件画,才真正钉住微任务收敛 + 各收尾口的藏。)
+  {
+    const p = await openPage(browser)
+    const img = await rect(p, '.wiki-inline-img-wrap', 1)
+    const h = await handleAt(p, img.x + 30, img.y + 30)
+    const top = await blockRect(p, '热力图等内容')
+    const target = await blockRect(p, 'Forsion Extend')
+    const r = h && top && target ? await drag(p, h, { x: top.x + top.w * 0.5, y: top.b - 2 }, { x: target.x + 6, y: target.y + target.h / 2 }) : null
+    check('R5b 顶层配对区静止:只有竖线(插件那条横线已收敛)', !!r && r.during.length === 1 && r.during[0].v, JSON.stringify(r?.during))
+    const doc = await shape(p)
+    check('R5b 松手成行(顶层两块并成两列)', !!doc.find((n) => n && n.row)?.row?.length, JSON.stringify(doc))
+    check('R5b 松手后零指示线', !!r && r.after.length === 0, JSON.stringify(r?.after))
+    await p.close()
+  }
+
   // ── R6 行下沿正下方静止 → 只有一条线,落到行后 ─────────────────────────────────────
   // (行与下一块之间只有 ~4.5px 段距,belowRef 的判定带几乎为零;这里由落点插件按行下沿给出「行后」,
   //  验的是:接管/插件两套线互斥、线与落点一致、松手零残留。)
@@ -322,6 +374,93 @@ async function main() {
     const doc = await shape(p)
     check('R8 文末之下松手 → 搬到文末', doc.at(-1)?.startsWith('![[wide'), JSON.stringify(doc))
     check('R8 松手后零指示线', !!r && r.after.length === 0, JSON.stringify(r?.after))
+    await p.close()
+  }
+
+  // ── R11 死区:左栏一串短段挤满候选表 → 右栏高图中段仍要出线、落进右栏 ────────────────
+  // (库只问最近 8 个候选;左栏短段的块边全在前 8 里,两道新拒绝把它们拒光就会「不出线也不落」。
+  //  修法不是继续跟库讨价还价,而是列内落点整支由 planCellDrop 自解析。)
+  {
+    const p = await openPage(browser, SEED_DEAD, 'Dead.md')
+    const src = await blockRect(p, '行后段')
+    const h = src ? await handleAt(p, src.x + 30, src.y + src.h / 2) : null
+    const img = await rect(p, '.amx-ucolcell:nth-of-type(2) .wiki-inline-img-wrap')
+    const cell2 = await rect(p, '.amx-ucolcell', 1)
+    const r = h && img ? await drag(p, h, null, { x: img.x + img.w * 0.5, y: img.y + img.h * 0.5 }) : null
+    const row = rowOf(await shape(p))
+    const inCol = (r?.during ?? []).filter((l) => !l.v && l.x >= cell2.x - 2 && l.x + l.w <= cell2.r + 2)
+    check('R11 高图中段悬停:出线且线在右栏', !!r && r.during.length === 1 && inCol.length === 1, JSON.stringify(r?.during))
+    check('R11 松手 → 落进右栏(不留在行后、不进左栏)', !!row && row[1].some((k) => k === '行后段。') && !row[0].some((k) => k === '行后段。'), JSON.stringify(row))
+    await p.close()
+  }
+
+  // ── R12 折叠列:末块被折叠藏起来(rect 全 0)→ 不许出零宽线、不许把块塞进隐藏区 ────────
+  {
+    const p = await openPage(browser, SEED_FOLD, 'Fold.md')
+    // 折起右栏的标题:悬停它 → gutter 的折叠钮
+    const head = await blockRect(p, '## 小节标题') ?? await p.evaluate(() => {
+      const el = [...document.querySelectorAll('.unified-body .ProseMirror h2')].find((x) => x.textContent.includes('小节标题'))
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: r.x, y: r.y, w: r.width, h: r.height, r: r.right, b: r.bottom }
+    })
+    let folded = false
+    if (head) {
+      await p.mouse.move(head.x + 30, head.y + head.h / 2, { steps: 3 })
+      await p.waitForTimeout(300)
+      const fold = await p.evaluate(() => {
+        const b = document.querySelector('.unified-gutter .block-fold')
+        if (!b || getComputedStyle(b).display === 'none') return null
+        const r = b.getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      })
+      if (fold) { await p.mouse.click(fold.x, fold.y); await p.waitForTimeout(350) }
+      folded = await p.evaluate(() => [...document.querySelectorAll('.unified-body .amx-ucolcell p')].some((el) => el.textContent.startsWith('小节正文') && el.getClientRects().length === 0))
+    }
+    check('R12 前置:右栏末块真被折叠藏起来(rect 全 0)', folded, JSON.stringify({ head: !!head, folded }))
+    const src = await blockRect(p, '行后段')
+    const h = src ? await handleAt(p, src.x + 30, src.y + src.h / 2) : null
+    const cell2 = await rect(p, '.amx-ucolcell', 1)
+    const rowR = await rect(p, '.amx-ucolrow')
+    const r = h ? await drag(p, h, null, { x: cell2.x + cell2.w * 0.6, y: cell2.b + (rowR.b - cell2.b) * 0.5 }) : null
+    const zero = (r?.duringAll ?? []).filter((l) => l.w <= 1)
+    check('R12 折叠列里不画零宽线', !!r && zero.length === 0, JSON.stringify(r?.duringAll))
+    const hidden = await p.evaluate(() => [...document.querySelectorAll('.unified-body .ProseMirror p')].some((el) => el.textContent.startsWith('行后段') && el.getClientRects().length === 0))
+    check('R12 松手后被拖的块仍在画面上(没掉进隐藏区)', !hidden, JSON.stringify({ hidden, doc: await shape(p) }))
+    await p.close()
+  }
+
+  // ── R13 配对判据与 executePair 同源:列表第 2 项左缘不许出竖线 ──────────────────────
+  // (executePair 对「非顶层、且祖先没有顶级行」的目标恒 false;竖线只看 EDGE 距离 → 修前是
+  //  「竖线明晃晃地在、松手零反应」,加了 dropGuard 之后更明显。)
+  {
+    const p = await openPage(browser, SEED_LIST, 'List.md', '.unified-body .ProseMirror li')
+    const src = await blockRect(p, '末段')
+    const h = src ? await handleAt(p, src.x + 30, src.y + src.h / 2) : null
+    const li = await p.evaluate(() => {
+      const el = [...document.querySelectorAll('.unified-body .ProseMirror li')][1]
+      if (!el) return null
+      const r = el.getBoundingClientRect()
+      return { x: r.x, y: r.y, h: r.height }
+    })
+    const r = h && li ? await drag(p, h, null, { x: li.x + 6, y: li.y + li.h / 2 }) : null
+    check('R13 列表第 2 项左缘:不出竖线', !!r && r.during.every((l) => !l.v), JSON.stringify(r?.during))
+    const doc = await shape(p)
+    check('R13 松手后没有凭空多出列', !doc.some((n) => n && n.row), JSON.stringify(doc))
+    await p.close()
+  }
+
+  // ── R14 空列(「移到新列」造出来的形态):拖进去不留占位空段 ──────────────────────────
+  {
+    const p = await openPage(browser, SEED_EMPTY, 'Empty.md')
+    const before = rowOf(await shape(p))
+    const src = await blockRect(p, '行后段')
+    const h = src ? await handleAt(p, src.x + 30, src.y + src.h / 2) : null
+    const cell2 = await rect(p, '.amx-ucolcell', 1)
+    const r = h ? await drag(p, h, null, { x: cell2.x + cell2.w * 0.5, y: cell2.y + 12 }) : null
+    const row = rowOf(await shape(p))
+    check('R14 前置:右栏是空列', !!before && before[1].length === 1 && before[1][0] === '', JSON.stringify(before))
+    check('R14 拖进空列:列里只剩那个块(没留占位空段)', !!row && row[1].length === 1 && row[1][0] === '行后段。', JSON.stringify({ row, during: r?.during }))
     await p.close()
   }
 
