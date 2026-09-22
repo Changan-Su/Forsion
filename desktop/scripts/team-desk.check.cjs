@@ -1,7 +1,7 @@
 /** Team UI regression: Pin Summary member rows, independent Agent Desk, chronological public remarks,
  * forwarded approvals, member child chat's approval pill = the team session's mode (5a-5f), failed approval writes roll back (5g),
  * config setters PATCH only their own keys with an old-engine PUT fallback (5d/5h/5i),
- * a direct (solo) chat without stored modes shows the agent's defaults the engine actually uses (5j/5k),
+ * a direct (solo) chat without stored modes shows the agent's defaults the engine actually uses (5j/5k; team thinking stays unmapped, 5l),
  * optional Historian attachment and light/dark screenshots.
  * Run after npm run build: npm run check:teamdesk (isolated Electron user data).
  */
@@ -23,7 +23,8 @@ class StopEarly extends Error {}
 const faults = { configPut: false, hits: 0 }
 
 const AGENTS = [
-  { slug: 'xyra', name: 'Xyra', description: 'General assistant', createdBy: 'user', libraryDir: '/tmp/teamdesk-lib/xyra/Library' },
+  // thinkingLevel:5l —— 团队会话钉住的就是默认 Agent xyra,它的思考缺省不该冒充成员的
+  { slug: 'xyra', name: 'Xyra', description: 'General assistant', createdBy: 'user', libraryDir: '/tmp/teamdesk-lib/xyra/Library', thinkingLevel: 'high' },
   { slug: 'orbit-one', name: 'Orbit One', description: 'Team desk instrument agent', createdBy: 'user', libraryDir: '/tmp/teamdesk-lib/orbit-one/Library' },
   // 5j/5k:Agent 定义里设了只读 + 思考深
   { slug: 'solo-ro', name: 'Solo RO', description: 'Read-only by default', createdBy: 'user', libraryDir: '/tmp/teamdesk-lib/solo-ro/Library', approvalMode: 'readonly', thinkingLevel: 'high' },
@@ -324,6 +325,8 @@ async function run(app, win, stub) {
       && (await soloLabel()).includes('替我批准'),
     JSON.stringify({ soloWrites, label: await soloLabel() }))
   await openTeamSession(win)
+  const teamModel = await win.locator('.model-pill-btn:not(.child-chat-panel .model-pill-btn)').textContent()
+  check('5l 团队主会话没存思考档:不套钉住的 Agent(xyra 设了深)的缺省 —— 成员各用自己的思考档', teamModel.includes('中') && !teamModel.includes('深'), teamModel)
   await win.locator('[data-historian-status] > button').click()
   await win.getByText('已保存该会话的工作约定', { exact: false }).first().waitFor()
   check('6 Historian 有独立可展开的状态行', await win.locator('.t2-tsum [data-historian-work]').count() === 1, '')
