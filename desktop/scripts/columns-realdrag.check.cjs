@@ -28,6 +28,17 @@
 //  R16 嵌套折叠(先折 ### 再折 ##)拖到列末 → 两层都展开,块不掉进内层隐藏区(评审二 P2)
 //  R17 列内 callout 里面悬停 → 交回落点插件,块能落进 callout(评审二 P3:列内曾整块接管容器)
 //  R18 列内落回自身 → 不出线,也不顺手展开上方的折叠小节(评审二 P3)
+//  R19 按住图片本体(不经 ⠿)拖进右栏深处 → 线在右栏、落进右栏末尾、拖拽状态清零(用户 09-22 拍板:图片能直接拖)
+//  R20 单击图片不移动 → 仍是选中态、文档不变;隔一会儿在已选中的图片上再点 → 仍选中(按下不再 preventDefault 的代价)
+//  R21 混在文字里的行内图片按住拖 → 不起整块拖、文档不变
+//  R22 `![](…)` 形态(mdImage NodeView)独占一段也能直接拖进右栏
+//  R23 图片拖到顶层两段之间(落点插件那条路)→ 落地,且拖拽状态清零(原段落被删掉重建,dragend 发在已脱离文档的
+//      节点上、冒泡不到 root —— 收尾只能挂在来源元素上)
+//  R24 图片带着缩进子段:按住图片拖 → 整棵缩进子树一起走(与 ⠿ 同一个拖动单位;Codex 评审 09-22)
+//  R25 跨块选区盖住图片:按住图片拖 → 整批一起走(按下不许把选区收成单图;Codex 评审 09-22)
+//  R26 md 图的 `</>` 源码行里用鼠标拖选文字 → 选中文字,不被当成整块拖(draggable 只活一次按下;Codex 评审 09-22)
+//  R27 在图片上按下后窗口失焦(mouseup / dragend 都不会来)→ 可拖要收回(Codex 复审 09-22)
+//  R19/R22/R23/R24/R25 都断言「源处没了、只剩一份」:落点出现图片不等于移动,复制也会出现(Codex 评审)
 //  ⚠️ R7/R18 从**右栏**块拖起:「不出线 / 文档不变」在拖拽根本没起来时也成立,所以先断言 view.dragging。
 //     右栏块的 ⠿ 画在前一列上方,指针一靠近,把手曾被重新锚到左栏块 → R7 自第一版起恒绿(09-22 第二轮)。
 // 用法:node scripts/e2e-editor.cjs --check=columns-realdrag(或 npm run check:coldrag)
@@ -139,6 +150,21 @@ const SEED_SELF = [
   '<!-- a s1 -->', '', '## 甲', '', '甲一。', '', '## 乙', '', '<!-- a s2 -->', '', '行后段。', '',
 ].join('\n')
 
+/** 图片段落带两段缩进子段(tab 缩进子树)。 */
+const SEED_INDENT = ['开头段。', '', '![[wide.png|282]]', '', '\t子段一。', '', '\t子段二。', '', '末段。', ''].join('\n')
+
+/** 行内图片:混在一句话里(不独占一段)。 */
+const SEED_INLINE = ['开头段。', '', '看这张 ![[wide.png|120]] 图。', '', '末段。', ''].join('\n')
+
+/** `![](…)` 形态的图片独占一段、放在分栏行之后(台架里 amadeus-asset:// 解析不了,src 用 data URI)。 */
+const MD_IMG_URI = ''
+const SEED_MDROW = [
+  '---', 'amadeus_schema: amadeus.page/4',
+  'amadeus_layout: {"v":4,"rows":[{"columns":[{"refs":["m0"],"width":1},{"refs":["m1"],"width":1}],"tail":"m2"}]}',
+  '---', '开头段。', '', '<!-- a m0 -->', '', '![[tall.png|185]]', '',
+  '<!-- a m1 -->', '', '右栏一。', '', '右栏二。', '', '<!-- a m2 -->', '', '![说明|200](' + MD_IMG_URI + ')', '', '末段。', '',
+].join('\n')
+
 /** 顶层列表:配对判据的负面目标(第 2 项起 executePair 必 false)。 */
 const SEED_LIST = ['开头段。', '', '- 甲', '- 乙', '- 丙', '', '末段。', ''].join('\n')
 
@@ -187,6 +213,8 @@ const shape = (p) => p.evaluate(() => {
   return doc
 })
 const rowOf = (doc) => doc.find((n) => n && n.row)?.row ?? null
+/** 速写里以 prefix 开头的块共几个(顶层 + 各列);移动后必须恰好 1 个,复制会变 2 个。 */
+const countOf = (doc, prefix) => doc.flatMap((n) => (n && n.row ? n.row.flat() : [n])).filter((t) => typeof t === 'string' && t.startsWith(prefix)).length
 const rect = (p, sel, i = 0) => p.evaluate(([s, k]) => {
   const el = document.querySelectorAll(s)[k]
   if (!el) return null
@@ -201,12 +229,13 @@ const blockRect = (p, prefix) => p.evaluate((pre) => {
   return { x: r.x, y: r.y, w: r.width, h: r.height, r: r.right, b: r.bottom }
 }, prefix)
 
-/** 等 gutter 真锚到指针下的这一块、且位置稳住(连读两次相同),返回 ⠿ 与折叠钮的中心;2s 等不到 → null。
+/** 等 gutter 真锚到指针下的这一块、且位置稳住(连读两次相同),返回 ⠿ 与折叠钮的中心;5s 等不到 → null
+ *  (09-23 机器 load 60–75 时 2s 不够:R12/R16 拿不到把手,拖拽没起)。
  *  hover 有 80ms 节流 + 后沿:固定等 250ms 在高负载(load 30+)下不够,读到的是指针途经那一块的把手 ——
  *  09-22 实测拖错块两次(行后段拖成左栏大图 → 左列拖空、整行解散)。 */
 async function anchoredGutter(p, x, y) {
   let prev = null
-  for (let t = 0; t < 2000; t += 50) {
+  for (let t = 0; t < 5000; t += 50) {
     const cur = await p.evaluate(([x, y]) => {
       const g = document.querySelector('.unified-gutter')
       if (!g || g.dataset.show !== 'true') return null
@@ -619,6 +648,194 @@ async function main() {
     const row = rowOf(await shape(p))
     check('R18 前置:右栏块的 ⠿ 真拖起来了(view.dragging 在)', !!r && r.vdrag, JSON.stringify({ vdrag: r?.vdrag, allowed: r?.allowed }))
     check('R18 落回自身:不出线、文档不变、甲仍折着', !!r && r.during.length === 0 && hid1 && !!row && row[1].length === 3, JSON.stringify({ during: r?.during, hid1, row }))
+    await p.close()
+  }
+
+  // ── R19 图片本体直接拖:按住行后图(不经 ⠿)拖进右栏深处 ───────────────────────────
+  {
+    const p = await openPage(browser)
+    const img = await rect(p, '.wiki-inline-img-wrap', 1)
+    const cell2 = await rect(p, '.amx-ucolcell', 1)
+    const rowR = await rect(p, '.amx-ucolrow')
+    const r = img ? await drag(p, { x: img.x + img.w / 2, y: img.y + img.h / 2 }, null, { x: cell2.x + cell2.w * 0.5, y: cell2.b + (rowR.b - cell2.b) * 0.6 }) : null
+    check('R19 前置:按住图片本体真拖起来了(view.dragging 在)', !!r && r.vdrag, JSON.stringify({ vdrag: r?.vdrag }))
+    const inCol = (r?.duringAll ?? []).filter((l) => !l.v && l.x >= cell2.x - 2 && l.x + l.w <= cell2.r + 2)
+    check('R19 右栏深处悬停:恰好一条线且在右栏(零宽的也算数)', !!r && r.duringAll.length === 1 && inCol.length === 1, JSON.stringify(r?.duringAll))
+    const row = rowOf(await shape(p))
+    const ds = await p.evaluate(() => window.__upage.probe.view().dom.dataset.dragging)
+    const n19 = countOf(await shape(p), '![[wide')
+    check('R19 松手 → 图落进右栏末尾(源处没了、只剩一份)、零残留、拖拽状态清零', !!row && !!row[1].at(-1)?.startsWith('![[wide') && n19 === 1 && r.after.length === 0 && ds === 'false', JSON.stringify({ row, n19, after: r?.after, ds }))
+    await p.close()
+  }
+
+  // ── R20 单击图片不移动:仍是选中态;隔一会儿再点已选中的图片 → 仍选中 ────────────────────
+  // (能起拖的那次按下不再 preventDefault:浏览器若在松手时按坐标落光标,选中态就被冲掉。)
+  {
+    const p = await openPage(browser)
+    const before = JSON.stringify(await shape(p))
+    const img = await rect(p, '.wiki-inline-img-wrap', 1)
+    const picked = () => p.evaluate(() => {
+      const s = window.__upage.probe.view().state.selection
+      const w = document.querySelectorAll('.wiki-inline-img-wrap')[1]
+      return !!s.node && s.node.type.name === 'paragraph' && s.node.textContent.startsWith('![[wide') && !!w && 'selected' in w.dataset
+    })
+    let ok1 = false
+    let ok2 = false
+    if (img) {
+      await p.mouse.move(img.x + img.w / 2, img.y + img.h / 2, { steps: 4 })
+      await p.waitForTimeout(150)
+      await p.mouse.down(); await p.mouse.up(); await p.waitForTimeout(800) // 800ms:不连成双击
+      ok1 = await picked() && !(await p.evaluate(() => document.querySelectorAll('.wiki-inline-img-wrap')[1]?.hasAttribute('draggable')))
+      await p.mouse.down(); await p.mouse.up(); await p.waitForTimeout(300)
+      ok2 = await picked()
+    }
+    check('R20 单击图片:选中该图(段落节点选区 + 选中环),且不留 draggable', ok1, JSON.stringify({ ok1 }))
+    check('R20 再点已选中的图片:仍选中、文档不变', ok2 && JSON.stringify(await shape(p)) === before, JSON.stringify({ ok2 }))
+    await p.close()
+  }
+
+  // ── R21 行内图片(混在文字里)按住拖 → 不起整块拖 ─────────────────────────────────────
+  {
+    const p = await openPage(browser, SEED_INLINE, 'Inline.md', '.unified-body .ProseMirror .wiki-inline-img-wrap')
+    const before = JSON.stringify(await shape(p))
+    const img = await rect(p, '.wiki-inline-img-wrap', 0)
+    const end = await blockRect(p, '末段')
+    const r = img && end ? await drag(p, { x: img.x + img.w / 2, y: img.y + img.h / 2 }, null, { x: end.x + 60, y: end.b + 20 }) : null
+    check('R21 行内图片:不起整块拖、文档不变', !!r && !r.vdrag && JSON.stringify(await shape(p)) === before, JSON.stringify({ vdrag: r?.vdrag, doc: await shape(p) }))
+    await p.close()
+  }
+
+  // ── R22 `![](…)` 形态(mdImage NodeView)独占一段:按住直接拖进右栏 ─────────────────────
+  {
+    const p = await openPage(browser, SEED_MDROW, 'MdRow.md')
+    const img = await rect(p, '.wiki-inline-img-wrap', 1)
+    const cell2 = await rect(p, '.amx-ucolcell', 1)
+    const rowR = await rect(p, '.amx-ucolrow')
+    const r = img ? await drag(p, { x: img.x + img.w / 2, y: img.y + img.h / 2 }, null, { x: cell2.x + cell2.w * 0.5, y: cell2.b + (rowR.b - cell2.b) * 0.6 }) : null
+    const last = await p.evaluate(() => {
+      let out = null
+      let images = 0
+      const doc = window.__upage.probe.view().state.doc
+      doc.descendants((n) => { if (n.type.name === 'image') images++ })
+      doc.forEach((n) => { if (n.type.name === 'amadeusColumnRow') out = n.child(1).lastChild?.firstChild?.type.name ?? null })
+      return images === 1 ? out : `images=${images}`
+    })
+    check('R22 前置:md 图真拖起来了', !!r && r.vdrag, JSON.stringify({ vdrag: r?.vdrag }))
+    check('R22 松手 → md 图落进右栏末尾(全文只剩这一张)', last === 'image', JSON.stringify({ last, doc: await shape(p) }))
+    await p.close()
+  }
+
+  // ── R23 图片拖到顶层两段之间(落点插件那条路)→ 落地 + 拖拽状态清零 ─────────────────────
+  {
+    const p = await openPage(browser)
+    const img = await rect(p, '.wiki-inline-img-wrap', 1)
+    const top = await blockRect(p, '热力图等内容')
+    const next = await blockRect(p, 'Forsion Extend')
+    // 贴段落左端 40px:段落横向中点正对下方分栏的列缝,插件最近 8 个候选全被否,那里不出线(见 R5b)
+    const r = img && top && next ? await drag(p, { x: img.x + img.w / 2, y: img.y + img.h / 2 }, null, { x: top.x + 40, y: (top.b + next.y) / 2 }) : null
+    const doc = await shape(p)
+    const ds = await p.evaluate(() => window.__upage.probe.view().dom.dataset.dragging)
+    check('R23 前置:拖起来了,且顶层缝上恰好一条线(零宽的也算数)', !!r && r.vdrag && r.duringAll.length === 1 && !r.duringAll[0].v && r.duringAll[0].w > 1, JSON.stringify({ vdrag: r?.vdrag, duringAll: r?.duringAll }))
+    check('R23 松手 → 图落在两段之间(只剩一份)、拖拽状态清零', typeof doc[1] === 'string' && doc[1].startsWith('![[wide') && countOf(doc, '![[wide') === 1 && ds === 'false', JSON.stringify({ doc: doc.slice(0, 3), n: countOf(doc, '![[wide'), ds }))
+    await p.close()
+  }
+
+  // ── R24 图片带着缩进子段:按住图片拖到首段之前 → 整棵子树一起走 ─────────────────────────
+  {
+    const p = await openPage(browser, SEED_INDENT, 'Indent.md', '.unified-body .ProseMirror .wiki-inline-img-wrap')
+    const img = await rect(p, '.wiki-inline-img-wrap', 0)
+    const first = await blockRect(p, '开头段')
+    const r = img && first ? await drag(p, { x: img.x + img.w / 2, y: img.y + img.h / 2 }, null, { x: first.x + 40, y: first.y + 3 }) : null
+    const doc = await shape(p)
+    check('R24 前置:拖起来了', !!r && r.vdrag, JSON.stringify({ vdrag: r?.vdrag }))
+    check('R24 松手 → 图与两段缩进子段整体挪到首段之前(源处没了)', JSON.stringify(doc) === JSON.stringify(['![[wide.', '子段一。', '子段二。', '开头段。', '末段。']), JSON.stringify(doc))
+    await p.close()
+  }
+
+  // ── R25 跨块选区盖住图片:按住图片拖到顶层两段之间 → 整批一起走 ───────────────────────────
+  {
+    const p = await openPage(browser)
+    // 选区:行后图那段 → 下一段「Prompts…」(两块);用编辑器自己的选区类建,等同键盘 Shift 扩选的结果
+    const sel = await p.evaluate(() => {
+      const v = window.__upage.probe.view()
+      const TS = v.state.selection.constructor
+      if (!/TextSelection/.test(TS.name)) return null
+      let a = -1
+      let b = -1
+      v.state.doc.forEach((n, off) => {
+        if (n.type.name === 'paragraph' && n.textContent.startsWith('![[wide')) a = off + 1
+        if (n.type.name === 'paragraph' && n.textContent.startsWith('Prompts')) b = off + n.nodeSize - 1
+      })
+      if (a < 0 || b < 0) return null
+      v.dispatch(v.state.tr.setSelection(TS.create(v.state.doc, a, b)))
+      return [a, b]
+    })
+    const img = await rect(p, '.wiki-inline-img-wrap', 1)
+    const top = await blockRect(p, '热力图等内容')
+    const next = await blockRect(p, 'Forsion Extend')
+    // 落点压在「热力图」段落下半 = 落在它之后:多块拖拽走 executeMoveBlocks,只认指针压在某个顶层块上,
+    // 段与段之间 4.5px 的缝不接(既有局限,从 ⠿ 拖同样如此,探针 09-22 对照过)。
+    const r = sel && img && top && next ? await drag(p, { x: img.x + img.w / 2, y: img.y + img.h / 2 }, null, { x: top.x + 40, y: top.y + top.h * 0.75 }) : null
+    const doc = await shape(p)
+    check('R25 前置:跨块选区已建好、拖起来了', !!sel && !!r && r.vdrag, JSON.stringify({ sel, vdrag: r?.vdrag }))
+    check('R25 松手 → 图与「Prompts…」整批挪到两段之间(源处没了)', doc[1]?.startsWith?.('![[wide') && doc[2]?.startsWith?.('Prompts') && countOf(doc, '![[wide') === 1 && countOf(doc, 'Prompts') === 1, JSON.stringify(doc))
+    await p.close()
+  }
+
+  // ── R26 md 图的 `</>` 源码行:鼠标拖选文字 → 选中文字,不是整块拖 ─────────────────────────
+  {
+    const p = await openPage(browser, SEED_MDROW, 'MdRow.md')
+    const before = JSON.stringify(await shape(p))
+    const img = await rect(p, '.wiki-inline-img-wrap', 1)
+    // 先单击一次图片(这次按下会把 wrap 标成可拖),再悬停点 `</>` 开源码行
+    if (img) {
+      await p.mouse.move(img.x + img.w / 2, img.y + img.h / 2, { steps: 4 })
+      await p.waitForTimeout(150)
+      await p.mouse.down(); await p.mouse.up(); await p.waitForTimeout(400)
+    }
+    const btn = await p.evaluate(() => {
+      const b = document.querySelectorAll('.wiki-inline-img-wrap')[1]?.querySelector('.amx-src-btn')
+      if (!b) return null
+      const r = b.getBoundingClientRect()
+      return r.width ? { x: r.x + r.width / 2, y: r.y + r.height / 2 } : null
+    })
+    if (btn) { await p.mouse.move(btn.x, btn.y, { steps: 3 }); await p.waitForTimeout(150); await p.mouse.click(btn.x, btn.y); await p.waitForTimeout(300) }
+    const inp = await rect(p, '.amx-img-srcline')
+    let r = null
+    if (inp) {
+      // 先在行首单击一下,把 openSource 的全选折叠掉(在全选文字上按住拖是「拖走选中文字」,不是拖选)
+      await p.mouse.move(inp.x + 6, inp.y + inp.h / 2, { steps: 3 })
+      await p.mouse.click(inp.x + 6, inp.y + inp.h / 2)
+      await p.waitForTimeout(150)
+      await p.mouse.down()
+      await p.mouse.move(inp.x + inp.w * 0.4, inp.y + inp.h / 2, { steps: 8 })
+      const vdrag = await p.evaluate(() => !!window.__upage.probe.view().dragging)
+      await p.mouse.up()
+      await p.waitForTimeout(200)
+      const selLen = await p.evaluate(() => { const i = document.querySelector('.amx-img-srcline'); return i ? [i.selectionStart, i.selectionEnd, i.value.length] : null })
+      r = { vdrag, selLen }
+    }
+    check('R26 前置:`</>` 打开了源码行', !!inp, JSON.stringify({ btn, inp: !!inp }))
+    check('R26 源码行里拖选 → 选中一段文字、没起整块拖、文档不变', !!r && !r.vdrag && !!r.selLen && r.selLen[1] - r.selLen[0] > 0 && r.selLen[1] - r.selLen[0] < r.selLen[2] && JSON.stringify(await shape(p)) === before, JSON.stringify(r))
+    await p.close()
+  }
+
+  // ── R27 在图片上按下后窗口失焦 → 可拖收回 ──────────────────────────────────────────────
+  {
+    const p = await openPage(browser)
+    const img = await rect(p, '.wiki-inline-img-wrap', 1)
+    let armed = null
+    let after = null
+    if (img) {
+      await p.mouse.move(img.x + img.w / 2, img.y + img.h / 2, { steps: 4 })
+      await p.waitForTimeout(150)
+      await p.mouse.down()
+      armed = await p.evaluate(() => document.querySelectorAll('.wiki-inline-img-wrap')[1]?.hasAttribute('draggable') ?? null)
+      await p.evaluate(() => window.dispatchEvent(new Event('blur'))) // 切走窗口:页面只收到 blur
+      after = await p.evaluate(() => document.querySelectorAll('.wiki-inline-img-wrap')[1]?.hasAttribute('draggable') ?? null)
+      await p.mouse.up()
+    }
+    check('R27 按下即标可拖;窗口失焦 → 收回(不留 draggable)', armed === true && after === false, JSON.stringify({ armed, after }))
     await p.close()
   }
 

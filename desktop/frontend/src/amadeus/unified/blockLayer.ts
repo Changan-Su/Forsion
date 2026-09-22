@@ -26,6 +26,7 @@ import { createDropIndicatorPlugin } from 'prosemirror-drop-indicator'
 import { zoomOf } from '@lcl/engine'
 import { runEndOf } from './canvasEdit'
 import { tabIndent, tabOutdent, type TabFoldHooks } from '../blocks/markdown/tabIndent'
+import { blockDragViews, imageDragParagraph, visualBlockElement } from '../blocks/markdown/imageDrag'
 import { executeMoveBelowRow, executeMoveIntoCell, executePair, mintCardCopies } from './columns'
 import { foldStateAt, foldedSectionAfter, toggleFoldAt } from './headingFold'
 import { isListFolded, listFoldStateAt, toggleListFoldAt } from './listFold'
@@ -139,24 +140,6 @@ export interface ActiveBlock {
   node: ProseNode
   pos: number // 节点前位置(NodeSelection 落点)
   el: HTMLElement
-}
-
-/** 单独成块的图片/嵌入以可见媒体盒作为交互几何。它们的 PM 段落壳还可能带隐藏源码、基线行盒，
- *  高度会比画面多出一截；拿壳去拉长抓手/画按压框，就会在图片底下多垂几十像素。 */
-function visualBlockElement(el: HTMLElement): HTMLElement {
-  if (el.tagName !== 'P') return el
-  const media = el.querySelector<HTMLElement>(
-    ':scope > img:not(.ProseMirror-separator), :scope > .wiki-inline-img-wrap, :scope > .unified-embed',
-  )
-  if (!media) return el
-  // PM 会在叶子图片后补 separator img + trailingBreak；wiki/embed 的源码则留在隐藏 span 里。
-  // 它们都不是用户可见的同排内容，不能让 `:only-child` 判据失效。真正混有文字/其它元素时仍用段落壳。
-  const visibleSibling = [...el.children].some((child) =>
-    child !== media
-    && !child.matches('.ProseMirror-separator, .ProseMirror-trailingBreak, .wikilink-src-hidden'),
-  )
-  const visibleText = [...el.childNodes].some((child) => child.nodeType === Node.TEXT_NODE && !!child.textContent?.trim())
-  return visibleSibling || visibleText ? el : media
 }
 
 /** hover 命中(取代 plugin-block 的列盲中线版):按**真指针坐标** posAtCoords,爬升规则沿用
@@ -840,6 +823,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
       key: new PluginKey('UNIFIED_BLOCK_HANDLE'),
       view: (editorView) => {
         viewRef = editorView
+        blockDragViews.add(editorView)
         const container = editorView.dom.parentElement ?? document.body // .milkdown(position:relative,见 CSS)
         // hover 追踪挂 pane 级 .unified-body:把手悬在 .milkdown 左缘**之外**(实测 rect 整个在容器
         // 左侧),挂 container 的话指针一穿越容器边界 mouseleave 就藏把手——真机「一移过去就消失」。
@@ -916,9 +900,10 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         // mousedown = 选中所在块;三个拖拽事件都挂 gutter 整体(plugin-block 同款:真实拖动
         // 从 ⠿ 冒泡上来,仪器合成事件也直接打在 gutter 上)。
         content.addEventListener('mousedown', () => {
-          const view = viewRef
-          const a = activeRef
-          if (!view || !a) return
+          if (viewRef && activeRef) selectDragUnit(viewRef, activeRef)
+        })
+        /** 这次拖走的单位 → 落成选区(⠿ 按下、图片本体起拖共用,别抄第二份)。 */
+        const selectDragUnit = (view: EditorView, a: ActiveBlock): void => {
           // 已有跨块选区且本块就在里面 → 保留它(整批拖走,AFFiNE 同);否则收敛成这一块。
           // ⚠️ 比的是**内容边界**不是节点边界:文字选区永远落在节点内部([pos+1, pos+size-1]),
           //    拿节点前位去比会恒不成立,多选一按下就被收敛成单块(M2 首红即此)。
@@ -944,7 +929,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           if (!NodeSelection.isSelectable(a.node)) return
           view.dispatch(view.state.tr.setSelection(NodeSelection.create(view.state.doc, a.pos)))
           view.focus()
-        })
+        }
         // 按下把手(还没开拖)= 在块上盖一层外扩 4px 的圆角高亮(AFFiNE 的 hover-rect)。
         // 走独立浮层而不是给节点加 class:多块选中时它要能盖住整个选区的并集矩形。
         let hoverRect: HTMLDivElement | null = null
@@ -984,9 +969,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         window.addEventListener('mouseup', hideHoverRect)
 
         // dragstart 序列化照抄 plugin-block:slice 进 DataTransfer + view.dragging={slice,move}。
-        content.addEventListener('dragstart', (event) => {
-          const view = viewRef
-          if (!view) return
+        // ⠿ 与图片本体两个起拖口共用;dragImage 空 = 用浏览器自己的拖影(图片本体起拖时就是那张图)。
+        const beginBlockDrag = (view: EditorView, event: DragEvent, dragImage: HTMLElement | null): void => {
           view.dom.dataset.dragging = 'true'
           const sel = view.state.selection
           // 拖折叠标题:先展开(否则只拖走标题本身,隐藏小节留在原地、落点处还会错吸新范围)。
@@ -1002,13 +986,43 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             event.dataTransfer.clearData()
             event.dataTransfer.setData('text/html', dom.innerHTML)
             event.dataTransfer.setData('text/plain', text)
-            if (activeRef?.el) event.dataTransfer.setDragImage(activeRef.el, 0, 0)
+            if (dragImage) event.dataTransfer.setDragImage(dragImage, 0, 0)
             view.dragging = { slice, move: true } as EditorView['dragging']
           }
+        }
+        content.addEventListener('dragstart', (event) => {
+          if (viewRef) beginBlockDrag(viewRef, event, activeRef?.el ?? null)
         })
-        content.addEventListener('dragend', () => {
+        // 图片本体起拖(imageDrag.ts 开的门):拖动单位按 ⠿ 同一套规则定 —— 在图片中心取 pickBlockAt
+        // (缩进子树整棵、列表首项归外壳、callout 整只、盖住它的跨块选区整批),再走同一套序列化。
+        // 只按图片所在段落拖会把缩进子段 / 同批选区留在原地(Codex 评审 09-22)。
+        // stopPropagation:PM 自己的 dragstart 在 view.dom 冒泡期,会按当前选区另起一份 view.dragging。
+        // dragend 挂在来源上:落点执行会删掉原段落重建,已脱离文档的节点上发的 dragend 冒泡不到这里。
+        const onImageDragStart = (e: DragEvent): void => {
+          const view = viewRef
+          if (!view || !(e.target instanceof Node) || !view.dom.contains(e.target)) return
+          if (!(e.target as HTMLElement).closest?.('.wiki-inline-img-wrap')) return
+          const p = imageDragParagraph(e.target)
+          let pos = -1
+          try {
+            if (p) pos = view.posAtDOM(p, 0) - 1 // 段落有 contentDOM,posAtDOM 给内容起点,减 1 = 段前位
+          } catch { /* 元素刚被换掉 */ }
+          const wr = p?.querySelector(':scope > .wiki-inline-img-wrap')?.getBoundingClientRect()
+          const a = wr ? pickBlockAt(view, { x: wr.left + wr.width / 2, y: wr.top + wr.height / 2 }) : null
+          if (!p || !e.dataTransfer || view.nodeDOM(pos) !== p || !a || pos < a.pos || pos >= a.pos + a.node.nodeSize) {
+            e.preventDefault() // 行内图片 / 把手上 / 解析不出段落:不起拖(原生图片拖拽会把 URL 当文字丢进来)
+            return
+          }
+          e.stopPropagation()
+          selectDragUnit(view, a)
+          beginBlockDrag(view, e, null)
+          e.target.addEventListener('dragend', endBlockDrag, { once: true })
+        }
+        root.addEventListener('dragstart', onImageDragStart, true)
+        const endBlockDrag = (): void => {
           const view = viewRef
           hideHoverRect()
+          markDropCard(null) // Esc 取消若没触发 root 的 dragleave,画布目标卡的描边会留到下一次拖拽(Codex 评审)
           pairRef = null
           belowRef = null
           cellDropRef = null
@@ -1021,7 +1035,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             view.dom.dataset.dragging = 'false'
             view.dragging = null
           }
-        })
+        }
+        content.addEventListener('dragend', endBlockDrag)
 
         // 标题小节折叠钮(AFFiNE 对齐,2026-08-14):active 块是「小节非空的标题」才显示;
         // 三态与常驻展开 widget 由 headingFold.ts 单源提供。
@@ -1654,6 +1669,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             root.removeEventListener('dragover', onRootDragOver, true)
             root.removeEventListener('dragleave', onRootDragLeave, true)
             root.removeEventListener('drop', onDropCapture, true)
+            root.removeEventListener('dragstart', onImageDragStart, true)
+            blockDragViews.delete(editorView)
             root.removeEventListener('mouseleave', onLeave)
             container.removeEventListener('pointerdown', onPointerDown)
             offLocale()
