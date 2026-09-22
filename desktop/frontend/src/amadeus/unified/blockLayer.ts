@@ -360,24 +360,10 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   const executeMoveBlocks = (view: EditorView, e: DragEvent, copy: boolean): boolean => {
     const range = topRangeOf(view)
     if (!range) return false
-    let el: HTMLElement | null = null
-    for (const cand of Array.from(view.dom.children) as HTMLElement[]) {
-      const r = cand.getBoundingClientRect()
-      if (e.clientY >= r.top && e.clientY <= r.bottom) { el = cand; break }
-    }
-    if (!el) return false
-    let before = 0
-    let node: ProseNode | null = null
-    try {
-      const p = view.posAtDOM(el, 0)
-      before = p - 1
-      node = view.state.doc.nodeAt(before)
-    } catch {
-      return false
-    }
-    if (!node) return false
-    const r = el.getBoundingClientRect()
-    const at = e.clientY > r.top + r.height / 2 ? before + node.nodeSize : before
+    const hit = topBlockAtY(view, e.clientY)
+    if (!hit) return false
+    const r = hit.el.getBoundingClientRect()
+    const at = e.clientY > r.top + r.height / 2 ? hit.pos + hit.node.nodeSize : hit.pos
     if (at >= range.from && at <= range.to) return true // 落回自己身上:吞掉,什么都不做
     let content = view.state.doc.slice(range.from, range.to).content
     if (copy) {
@@ -387,6 +373,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
       content = r2.content
       if (r2.minted.length) hooks.onCardsMinted?.(r2.minted)
     }
+    unfoldOver(view, at) // 折叠标题下缘 = 隐藏小节之内:先展开,否则整批块一落下就看不见
     let tr = view.state.tr
     if (!copy) tr = tr.delete(range.from, range.to)
     tr = tr.insert(tr.mapping.map(at), content)
@@ -666,7 +653,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   //    ② 祖先一有 transform,`position: fixed` 的包含块就从视口变成那个祖先 → 直接写视口 px 整体
   //       偏一个卡片位(实测 k=1 也偏 245px)。
   //    两者都退化成老行为(无 transform 时 ①=zoomOf、②={0,0}),所以普通笔记路径零变化。
-  let fileDropRef: { pos: number } | null = null
+  /** 命中的顶层块(块位 + 画线的元素 + 指针在下半)。drop 时核对 nodeDOM(pos) 仍是 el 再解析,理由同 belowRef。 */
+  let fileDropRef: { pos: number; el: HTMLElement; lower: boolean } | null = null
   let childRef: { targetPos: number; el: HTMLElement } | null = null
   let belowRef: { rowEl: HTMLElement } | null = null
   /** 分栏行内的落点(见 planCellDrop)。存 DOM 元素而非裸 pos:drop 时现场解析,理由同 belowRef。 */
@@ -710,6 +698,21 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   /** 元素在画面上真有盒子(折叠小节里的块是 display:none,rect 全 0 —— 拿它当落点 = 零宽的
    *  不可见线 + 块掉进隐藏区,「线画在明处、块掉进暗处」那条老账的同款)。 */
   const boxed = (el: unknown): el is HTMLElement => el instanceof HTMLElement && el.getClientRects().length > 0
+
+  /** 纵坐标 y 落在哪个**顶层块**的矩形里(看不见的折叠块不算)。块位从 doc 正着数,DOM 只拿来量矩形 ——
+   *  别从 DOM 反推(`posAtDOM(el, 0) - 1`):有 contentDOM 的块 posAtDOM 给内容起点,减 1 恰是块前位;
+   *  hr 这类叶子块给的就是块前位,再减 1 要么落进上一块里解析成 null(松手零反应),要么落到相邻的
+   *  上一条 hr 上(错一格)。 */
+  const topBlockAtY = (view: EditorView, y: number): { pos: number; node: ProseNode; el: HTMLElement } | null => {
+    const doc = view.state.doc
+    for (let i = 0, pos = 0; i < doc.childCount; pos += doc.child(i).nodeSize, i++) {
+      const el = view.nodeDOM(pos)
+      if (!boxed(el)) continue
+      const r = el.getBoundingClientRect()
+      if (y >= r.top && y <= r.bottom) return { pos, node: doc.child(i), el }
+    }
+    return null
+  }
 
   /** 分栏行内的落点:指针落在某列的横向范围里 → 落点就在**那一列**内(直接子块之间的缝,末块
    *  之下 = 列末)。为什么不交给落点插件:①它把 cell 的上下沿(行内位置)也当候选,那里放不下块;
@@ -810,6 +813,10 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
       }
     } catch { /* 位置刚失效 */ }
     return null
+  }
+  /** 展开盖住 at 的全部折叠标题:外层展开后内层仍折着,逐层来;同一枚再次出现 = 没展开成,别空转。 */
+  const unfoldOver = (view: EditorView, at: number): void => {
+    for (let f = foldedHeadingOver(view, at), last = -1; f != null && f !== last; last = f, f = foldedHeadingOver(view, at)) toggleFoldAt(view, f)
   }
   // 落点插件(prosemirror-drop-indicator)那条横线。显隐原本全归库自己:它只在 view.dom 的
   // drop/dragleave/dragend 上排一次 30ms 延时隐藏,期间任一 dragover(含指针静止时 OS 周期补发的)
@@ -1362,20 +1369,11 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           // 画一条横线,并在 drop 时把光标先送到线所在处,否则文件恒插在原光标位置、线在撒谎。
           if (types.includes('Files')) {
             if (!view) return
-            let hit: HTMLElement | null = null
-            for (const el of Array.from(view.dom.children) as HTMLElement[]) {
-              const r = el.getBoundingClientRect()
-              if (e.clientY >= r.top && e.clientY <= r.bottom) { hit = el; break }
-            }
+            const hit = topBlockAtY(view, e.clientY)
             if (!hit) return
-            try {
-              const p = view.posAtDOM(hit, 0)
-              const node = view.state.doc.nodeAt(p - 1)
-              if (!node) return
-              const r = hit.getBoundingClientRect()
-              fileDropRef = { pos: e.clientY > r.top + r.height / 2 ? p + node.content.size : p }
-              showHline(view, hit)
-            } catch { /* 元素刚被换掉 */ }
+            const r = hit.el.getBoundingClientRect()
+            fileDropRef = { pos: hit.pos, el: hit.el, lower: e.clientY > r.top + r.height / 2 }
+            showHline(view, hit.el)
             return
           }
           if (!view || view.dom.dataset.dragging !== 'true') return
@@ -1514,9 +1512,18 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           markDropCard(null)
           if (!view) return
           // OS 文件:只把光标送到落点(内容插入归 importToPage 那条链),不 preventDefault。
+          // 文件恒插在命中块**之后**(线画在它下沿;UnifiedPage.saveFiles 插在选区所在顶层块之后):
+          // 有内容的块 = 光标进块首/块尾;原子块(hr)里没有光标位 = 选中它本身,saveFiles 按选区末端插在它后面。
           if (fd) {
             try {
-              view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(Math.min(fd.pos, view.state.doc.content.size)))))
+              const node = view.nodeDOM(fd.pos) === fd.el ? view.state.doc.nodeAt(fd.pos) : null
+              if (node) {
+                unfoldOver(view, fd.pos + node.nodeSize) // 命中折叠标题:它的下缘在隐藏小节里,先展开
+                const doc = view.state.doc
+                view.dispatch(view.state.tr.setSelection(node.isAtom
+                  ? NodeSelection.create(doc, fd.pos)
+                  : TextSelection.near(doc.resolve(fd.lower ? fd.pos + 1 + node.content.size : fd.pos + 1))))
+              }
             } catch { /* 位置已失效 */ }
             return
           }

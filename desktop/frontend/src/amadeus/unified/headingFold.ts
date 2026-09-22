@@ -182,6 +182,14 @@ export const headingFoldPlugins: MilkdownPlugin[] = [
                 .map((p) => tr.mapping.mapResult(p))
                 .filter((r) => !r.deleted || headingSiteAt(tr.doc, r.pos) != null)
                 .map((r) => r.pos)
+            // 拖放落进折叠小节 = 展开盖住落点的每一层(嵌套一起),否则块一落下就被 display:none 吞掉:
+            // 落点插件把块插到折叠标题下缘 / 下一节标题上缘,那两处都在小节结构之内。落点插件与 PM 默认
+            // drop 都给落下的内容设选区,选区起点就是落点 —— 插件在 handleDrop 里才定最终落点,这里是唯一
+            // 拿得到真落点的地方。blockLayer 自己的整批/分栏/文件落点不走这条,各自先展开再插(unfoldOver)。
+            if (tr.docChanged && tr.getMeta('uiEvent') === 'drop') {
+              const at = tr.selection.from
+              folded = folded.filter((p) => !hiddenRanges(tr.doc, [p]).some((rg) => at >= rg.start && at < rg.after))
+            }
             const meta = tr.getMeta(headingFoldKey) as { toggle?: number } | undefined
             if (meta?.toggle != null) {
               const p = meta.toggle

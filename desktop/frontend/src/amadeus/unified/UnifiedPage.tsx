@@ -419,7 +419,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
       const paragraph = view.state.schema.nodes.paragraph
       if (!paragraph) return
       const { $to } = view.state.selection
-      let pos = $to.depth >= 1 ? $to.after(1) : view.state.doc.content.size
+      // 选区末端在 doc 顶层(选中的顶层块 —— 文件拖到 hr 上就是这样,见 blockLayer 的文件落点)= 紧跟其后。
+      let pos = $to.depth >= 1 ? $to.after(1) : $to.pos
       let tr = view.state.tr
       for (const m of marks) {
         const node = paragraph.create(null, view.state.schema.text(m))
