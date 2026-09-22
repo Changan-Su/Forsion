@@ -201,17 +201,35 @@ const blockRect = (p, prefix) => p.evaluate((pre) => {
   return { x: r.x, y: r.y, w: r.width, h: r.height, r: r.right, b: r.bottom }
 }, prefix)
 
-/** hover 到块 → 等 gutter 挂出 → ⠿ 中心。 */
+/** 等 gutter 真锚到指针下的这一块、且位置稳住(连读两次相同),返回 ⠿ 与折叠钮的中心;2s 等不到 → null。
+ *  hover 有 80ms 节流 + 后沿:固定等 250ms 在高负载(load 30+)下不够,读到的是指针途经那一块的把手 ——
+ *  09-22 实测拖错块两次(行后段拖成左栏大图 → 左列拖空、整行解散)。 */
+async function anchoredGutter(p, x, y) {
+  let prev = null
+  for (let t = 0; t < 2000; t += 50) {
+    const cur = await p.evaluate(([x, y]) => {
+      const g = document.querySelector('.unified-gutter')
+      if (!g || g.dataset.show !== 'true') return null
+      const el = document.elementFromPoint(x, y)?.closest('.ProseMirror > *, .amx-ucolcell > *')
+      if (!el || Math.abs(g.getBoundingClientRect().top - el.getBoundingClientRect().top) > 20) return null
+      const at = (sel) => {
+        const b = g.querySelector(sel)
+        if (!b || getComputedStyle(b).display === 'none') return null
+        const r = b.getBoundingClientRect()
+        return { x: r.x + r.width / 2, y: r.y + Math.min(10, r.height / 2) }
+      }
+      return { handle: at('.drag-handle'), fold: at('.block-fold') }
+    }, [x, y])
+    if (cur && prev && JSON.stringify(cur) === JSON.stringify(prev)) return cur
+    prev = cur
+    await p.waitForTimeout(50)
+  }
+  return null
+}
+/** hover 到块 → 等 gutter 锚稳 → ⠿ 中心。 */
 async function handleAt(p, x, y) {
   await p.mouse.move(x, y, { steps: 4 })
-  await p.waitForTimeout(250)
-  return p.evaluate(() => {
-    const g = document.querySelector('.unified-gutter')
-    const h = g?.querySelector('.drag-handle')
-    if (!h || g.dataset.show !== 'true') return null
-    const r = h.getBoundingClientRect()
-    return { x: r.x + r.width / 2, y: r.y + Math.min(10, r.height / 2) }
-  })
+  return (await anchoredGutter(p, x, y))?.handle ?? null
 }
 /** 悬停标题 → 点 gutter 的折叠钮;点到返回 true。 */
 async function foldHeading(p, tag, text) {
@@ -223,13 +241,7 @@ async function foldHeading(p, tag, text) {
   }, [tag, text])
   if (!head) return false
   await p.mouse.move(head.x + 30, head.y + head.h / 2, { steps: 3 })
-  await p.waitForTimeout(300)
-  const fold = await p.evaluate(() => {
-    const b = document.querySelector('.unified-gutter .block-fold')
-    if (!b || getComputedStyle(b).display === 'none') return null
-    const r = b.getBoundingClientRect()
-    return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
-  })
+  const fold = (await anchoredGutter(p, head.x + 30, head.y + head.h / 2))?.fold
   if (!fold) return false
   await p.mouse.click(fold.x, fold.y)
   await p.waitForTimeout(350)
@@ -468,26 +480,9 @@ async function main() {
   {
     const p = await openPage(browser, SEED_FOLD, 'Fold.md')
     // 折起右栏的标题:悬停它 → gutter 的折叠钮
-    const head = await blockRect(p, '## 小节标题') ?? await p.evaluate(() => {
-      const el = [...document.querySelectorAll('.unified-body .ProseMirror h2')].find((x) => x.textContent.includes('小节标题'))
-      if (!el) return null
-      const r = el.getBoundingClientRect()
-      return { x: r.x, y: r.y, w: r.width, h: r.height, r: r.right, b: r.bottom }
-    })
-    let folded = false
-    if (head) {
-      await p.mouse.move(head.x + 30, head.y + head.h / 2, { steps: 3 })
-      await p.waitForTimeout(300)
-      const fold = await p.evaluate(() => {
-        const b = document.querySelector('.unified-gutter .block-fold')
-        if (!b || getComputedStyle(b).display === 'none') return null
-        const r = b.getBoundingClientRect()
-        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
-      })
-      if (fold) { await p.mouse.click(fold.x, fold.y); await p.waitForTimeout(350) }
-      folded = await p.evaluate(() => [...document.querySelectorAll('.unified-body .amx-ucolcell p')].some((el) => el.textContent.startsWith('小节正文') && el.getClientRects().length === 0))
-    }
-    check('R12 前置:右栏末块真被折叠藏起来(rect 全 0)', folded, JSON.stringify({ head: !!head, folded }))
+    const head = await foldHeading(p, 'h2', '小节标题')
+    const folded = head && await p.evaluate(() => [...document.querySelectorAll('.unified-body .amx-ucolcell p')].some((el) => el.textContent.startsWith('小节正文') && el.getClientRects().length === 0))
+    check('R12 前置:右栏末块真被折叠藏起来(rect 全 0)', folded, JSON.stringify({ head, folded }))
     const src = await blockRect(p, '行后段')
     const h = src ? await handleAt(p, src.x + 30, src.y + src.h / 2) : null
     const cell2 = await rect(p, '.amx-ucolcell', 1)
