@@ -45,6 +45,12 @@ export const COMMAND_CATALOG: CommandSpec[] = [
     surfaces: ['tui', 'desktop'],
   },
   {
+    name: '/btw', key: 'btw', arg: '[问题]', aliases: ['/side'],
+    zh: '顺便问一句：带着本会话上下文旁聊，不进主对话、不打断正在跑的任务',
+    en: 'Ask a side question with this session as context; not added to the conversation and never interrupts a running task',
+    surfaces: ['desktop'],
+  },
+  {
     name: '/compact', key: 'compact', arg: '[关注点]',
     zh: '压缩上下文：总结后精简续接（同会话；可附本次摘要的关注点）',
     en: 'Compact context: summarize, then continue compactly (optional focus for this summary)',

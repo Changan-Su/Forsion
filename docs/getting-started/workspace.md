@@ -35,6 +35,10 @@ Ribbon 分上下两区:**上区是 Space**,点图标切换空间;**下区是命�
 
 设置、应用市场、成就和反馈不再占满主界面，而是打开在 **Floating Panel** 中。桌面端它是位于主窗口上方的原生窗口，可以拖动、调整大小、最小化和关闭，打开时直接显示面板内容，不重播 Forsion 启动动画；浏览器端是固定在页面上方的居中面板，不可拖动。主工作台保留在后方，关闭面板即可继续原来的工作。
 
+### 旁聊（/btw）
+
+想顺便问一句、又不想打断正在跑的任务时：在输入框敲 `/btw 你的问题`，或在消息里划选一段文字点「顺便问」，或按 ⌘;（Windows / Linux 为 Ctrl+;）。回答开在**这条会话专属**的 Floating Panel 里：带着会话上下文作答，但不会写进对话、不使用工具、也不打断主任务。切到别的会话它会隐藏，切回来原样还在；关掉即清空。回答可以复制，或点「引用到对话」挂进主输入框。浏览器端是居中面板，手机端是全屏页面。
+
 Floating Panel 与 Mini Panel 都向插件开放。插件可以把已注册的视图开进独立 Floating 窗口，或提供适合 320×420 的 Mini 快捷面；详见 [Floating Panel 开发](../customization/floating-panel-development.md) 与 [Mini Panel 开发](../customization/mini-panel-development.md)。
 
 ## 状态栏

@@ -2172,6 +2172,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   box-shadow: var(--card-shadow);
 }
 .floating-panel-window.compact { width: min(720px, calc(100vw - 56px)); }
+.floating-panel-window.narrow { width: min(460px, calc(100vw - 56px)); height: min(680px, calc(100dvh - 56px)); }
 .floating-panel-chrome {
   flex: 0 0 42px;
   display: flex;

@@ -564,7 +564,7 @@ async function checkpointRowsOutsideWindow(
  *    strip_historical_media:旧图不重发,避免多 MB base64 每轮搭车),loop 不再单独注入附件。
  *  - `describe` 在场时,那批图先交给它转成文字(主模型无原生视觉 / 用户选了「总是转写」)。
  */
-async function hydrateHistory(
+export async function hydrateHistory(
   sessionId: string,
   excludeMessageId: string,
   describe?: (images: ReturnType<typeof normalizeImageAttachments>) => Promise<string | null>,
@@ -574,10 +574,12 @@ async function hydrateHistory(
    *  (historyReplay 文件头 ①)。protocol 只能取模型上的**静态**标记 —— hydrate 发生在 buildProviderPayload
    *  之前,动态改道(思考开 → Responses)那一档此时还没定,故只会判「不匹配」,不会误判匹配。 */
   replayFor?: { apiModelId?: string; protocol?: string },
+  /** false = 不等在飞的惰性检查点(旁聊 /btw:一句题外话不值得最多 45s 的等待,窗口外老行少一截可接受)。 */
+  waitCheckpoint = true,
 ): Promise<{ messages: ChatMessage[]; currentUserIndex: number; checkpointThrough: { ts: number; rowId?: string; partial: boolean } }> {
   // 上一个 run 收尾后起的惰性检查点还在跑 → 等它(有界):否则这一轮的窗口起点已经越过那批老行,
   // 而检查点还没落,老行既没摘要也没回放(Codex 09-15 评审 #2)。等的是已经在飞的任务,不是新起摘要。
-  const inflight = lazyCheckpoints.get(sessionId);
+  const inflight = waitCheckpoint ? lazyCheckpoints.get(sessionId) : undefined;
   if (inflight) await Promise.race([inflight, sleepMs(LAZY_CHECKPOINT_WAIT_MS)]);
   // 压缩检查点先读:窗口起点要照着它定 —— 见 session_summaries 则丢弃被覆盖的行、开头注入一条摘要;
   // 行内切点的那一行只回放切点之后的工具轮(rowCoverage / dropCoveredCalls)。每条回放消息打上来源行标记,

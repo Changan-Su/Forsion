@@ -19,6 +19,13 @@ describe('normalizeFloatingPanelOpenOptions', () => {
     expect(normalizeFloatingPanelOpenOptions({ id: 'x', title: 'X', builtin: 'market', view: { type: 'x' } })).toBeUndefined()
     expect(normalizeFloatingPanelOpenOptions({ id: 'x', title: 'X' })).toBeUndefined()
   })
+
+  it('旁聊 btw:窄面板缺省几何 + 会话归属只收非空字符串', () => {
+    const btw = normalizeFloatingPanelOpenOptions({ id: 'btw:s1', title: 'BTW', builtin: 'btw', sessionId: ' s1 ' })
+    expect(btw).toEqual(expect.objectContaining({ builtin: 'btw', sessionId: 's1', width: 440, height: 640, minWidth: 360, minHeight: 420 }))
+    expect(normalizeFloatingPanelOpenOptions({ id: 'btw:s1', title: 'BTW', builtin: 'btw', sessionId: '  ' })).not.toHaveProperty('sessionId')
+    expect(normalizeFloatingPanelOpenOptions({ id: 'settings', title: 'S', builtin: 'settings', sessionId: 42 })).not.toHaveProperty('sessionId')
+  })
 })
 
 describe('normalizeMainAction', () => {
@@ -27,6 +34,8 @@ describe('normalizeMainAction', () => {
     expect(normalizeMainAction('space-removed', 'probe-space')).toEqual({ action: 'space-removed', payload: 'probe-space' })
     expect(normalizeMainAction('chat-draft', 'x'.repeat(20000))?.payload).toHaveLength(20000)
     expect(normalizeMainAction('chat-draft', 'x'.repeat(20001))).toBeUndefined()
+    expect(normalizeMainAction('chat-quote', 'answer')).toEqual({ action: 'chat-quote', payload: 'answer' })
+    expect(normalizeMainAction('chat-quote', '')).toBeUndefined()
     expect(normalizeMainAction('space-removed', '')).toBeUndefined()
     expect(normalizeMainAction('space-removed', { id: 'x' })).toBeUndefined()
     expect(normalizeMainAction('quit', undefined)).toBeUndefined()

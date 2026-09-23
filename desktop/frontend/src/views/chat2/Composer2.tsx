@@ -288,6 +288,8 @@ export const Composer2: React.FC<{
   onStop: () => void
   quotedText?: string
   onClearQuote?: () => void
+  /** /btw [问题]:旁聊(会话级浮窗,主对话里什么都不发);quote = 输入框此刻挂着的引用。无会话时不给 = 命令不露出。 */
+  onBtw?: (question?: string, quote?: string) => void
   contextWindow?: number
   ctxTokens?: number
   sessionTokens?: number
@@ -330,7 +332,7 @@ export const Composer2: React.FC<{
   groupChat, groupAgents, groupTempAgents, onGroupChange, onAddAgent, onNormalWork,
   agents, onAgentSwitch, currentAgentSlug, mentionProjects, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
-  quotedText, onClearQuote,
+  quotedText, onClearQuote, onBtw,
   contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact,
   seedText, onSeedConsumed, appendRefs, onAppendRefsConsumed, autoRefFromMain, sentHistory,
   pendingSteer, onCancelSteer, onWithdrawSteer, onSteerNow,
@@ -688,6 +690,8 @@ export const Composer2: React.FC<{
       // 下面这些在桌面端等价于「打开对应面板」——TUI 里是打印一段文本,GUI 里就该跳过去。
       '/help': () => { app().openSettings('about'); close() },
       '/feedback': window.tangu?.submitFeedback ? () => { if (app().openFeedback()) close() } : undefined,
+      // /btw:点选 = 补成「/btw 」等用户打问题;回车由 sendMessage 派给旁聊(裸 /btw 回车 = 只开面板)。
+      '/btw': onBtw ? () => { replaceSlash('/btw '); setSlashIndex(0) } : undefined,
       '/skills': () => { app().openSettings('skills'); close() },
       '/tools': () => { app().openSettings('agents'); close() },
       '/agents': () => { app().openSettings('agents'); close() },
@@ -792,7 +796,7 @@ export const Composer2: React.FC<{
     }
     return items
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, isChat, onPresetChange, engineId, engineCommands, customCommands, describe, execConfig, sessionTokens, ctxTokens, contextWindow, runCost, costLimit, ctxInfo])
+  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, isChat, onPresetChange, engineId, engineCommands, customCommands, describe, execConfig, sessionTokens, ctxTokens, contextWindow, runCost, costLimit, ctxInfo, !!onBtw])
 
   const slash = useMemo(() => {
     if (disabled || slashDismissed) return null
@@ -1011,6 +1015,15 @@ export const Composer2: React.FC<{
         setDraft('')
         requestAnimationFrame(autoGrow)
       }
+      return
+    }
+    // /btw [问题](别名 /side):旁聊。运行中也走这里,不会变成 steer;输入框挂着的引用一并交给旁聊并摘掉。
+    const btwMatch = /^\/(?:btw|side)(?:\s+([\s\S]*))?$/i.exec(cmd)
+    if (btwMatch && onBtw) {
+      onBtw(btwMatch[1]?.trim() || undefined, quotedText || undefined)
+      if (quotedText) onClearQuote?.()
+      setDraft('')
+      requestAnimationFrame(autoGrow)
       return
     }
     // 只挂引用不写字也算一条消息:芯片化之前拖引用会往草稿塞文本,所以「拖完直接回车」是能发的;

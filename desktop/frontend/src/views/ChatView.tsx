@@ -1,7 +1,7 @@
 /** 主区聊天 leaf：followActive 跟随侧栏；分屏 leaf 用 sessionId 固定会话。 */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence } from 'framer-motion'
-import { ArrowDown, Folder, MessageSquarePlus, Quote } from 'lucide-react'
+import { ArrowDown, Folder, MessageCircleQuestion, MessageSquarePlus, Quote } from 'lucide-react'
 import type { AgentConfig, UiMessage } from '../types'
 import { Composer2 } from './chat2/Composer2'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
@@ -30,6 +30,7 @@ import { AgentDesk, DeskCard } from './chat2/AgentDesk'
 import { HistorianStatus } from './chat2/HistorianStatus'
 import { TeamStatus } from './chat2/TeamDesk'
 import { ChildChatPanel, SubChatStatus } from './chat2/ChildChatPanel'
+import { openBtw } from './chat2/btwStore'
 import { useChildChat } from '../stores/childChatStore'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
@@ -567,7 +568,7 @@ export function ChatView({ leaf, params }: ViewProps) {
               role="toolbar"
               aria-label={t('chat.selection.actions')}
               onMouseDown={(e) => e.preventDefault()}
-              style={{ left: quoteButton.x, top: quoteButton.y }}
+              style={{ left: quoteButton.x, top: quoteButton.y, '--quote-x': `${quoteButton.x}px` } as React.CSSProperties}
             >
               <button
                 className="t2-quote-action"
@@ -597,6 +598,20 @@ export function ChatView({ leaf, params }: ViewProps) {
                   }}
                 >
                   <MessageSquarePlus size={13} /> {t('chat.action.askInPanel')}
+                </button>
+              )}
+              {/* 划线旁聊:选中的那段作为引用开进本会话的旁聊浮窗,主对话里什么都不发 */}
+              {activeId && (
+                <button
+                  className="t2-quote-action"
+                  data-testid="selection-btw"
+                  onClick={() => {
+                    openBtw({ sessionId: activeId, title: activeSession?.title, quote: quoteButton.text, modelId: mvModelId || undefined })
+                    setQuoteButton(null)
+                    window.getSelection()?.removeAllRanges()
+                  }}
+                >
+                  <MessageCircleQuestion size={13} /> {t('btw.selectionAction')}
                 </button>
               )}
             </div>
@@ -728,6 +743,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           onStop={() => s.stop(activeId)}
           quotedText={quotedText}
           onClearQuote={() => setQuotedText('')}
+          // /btw [问题]:带本会话上下文旁聊(会话级浮窗);输入框挂着的引用一并带过去
+          onBtw={activeId ? (question, quote) => openBtw({ sessionId: activeId, title: activeSession?.title, question, quote, modelId: mvModelId || undefined }) : undefined}
           // 引擎 context_info 报的窗口是真实预算口径(覆盖表/族兜底),优先于模型列表值——两边可能不一致
           contextWindow={activeCtxInfo?.ctxWindow || activeModel?.contextWindow || 0}
           ctxInfo={activeCtxInfo}
