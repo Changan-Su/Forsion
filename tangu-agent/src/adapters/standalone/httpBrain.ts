@@ -438,7 +438,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       listBroadcasts: async (since?: string) => {
         const r = await getJson<{ broadcasts: Array<{
           id: string; title: string; body: string | null; created_at: string;
-          attachments?: string | null; expires_at?: string | null; claimed?: boolean; claim_requirements?: string | null;
+          attachments?: string | null; expires_at?: string | null; claimed?: boolean; claim_requirements?: string | null; thread?: string | null;
         }> }>(
           `/api/brain/inbox/broadcasts${since ? `?since=${encodeURIComponent(since)}` : ''}`,
         );

@@ -1,3 +1,4 @@
+import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
 // ── v4 统一实例编辑器(生产路径,spec §9 step 3 绞杀者)────────────────────────────
 // 服务对象:v4 素文件(含一切外来 md)与 v4 结构化文件;v3 标记文件不进这里(router.ts 分流)。
 //
@@ -82,8 +83,8 @@ registerMessages({
   'unipage.embed.label': { zh: '形如 笔记名#块ID(块菜单「复制嵌入引用」可得);也可只填笔记名嵌整篇首块。', en: 'Looks like NoteName#blockId — the block menu item "Copy embed reference" gives you one. A note name on its own embeds the first block of that note.' },
   'unipage.embed.confirm': { zh: '嵌入', en: 'Embed' },
   'unipage.title.iconAction': { zh: '更换/移除页面图标', en: 'Change or remove the page icon' },
-  'unipage.title.addIcon': { zh: '☺ 添加图标', en: '☺ Add icon' },
-  'unipage.title.addCover': { zh: '🖼 添加封面', en: '🖼 Add cover' },
+  'unipage.title.addIcon': { zh: '添加图标', en: 'Add icon' },
+  'unipage.title.addCover': { zh: '添加封面', en: 'Add cover' },
   'unipage.toast.canvasElementsFailed': { zh: '画布改动没能保存:这篇笔记的 amadeus_canvas 行无法解析,请在源码模式检查', en: 'Canvas changes were not saved: the amadeus_canvas line in this note cannot be parsed — check it in source mode.' },
   'unipage.toast.canvasTreeFailed': { zh: '层级改动没能保存:这篇笔记的 amadeus_canvas 行无法解析,请在源码模式检查', en: 'Hierarchy changes were not saved: the amadeus_canvas line in this note cannot be parsed — check it in source mode.' },
   'unipage.toast.canvasMainFailed': { zh: '主卡改动没能保存:这篇笔记的 amadeus_canvas 行无法解析,请在源码模式检查', en: 'Main card changes were not saved: the amadeus_canvas line in this note cannot be parsed — check it in source mode.' },
@@ -785,9 +786,9 @@ function UnifiedTitle({ path, icon, cover, onSetIcon, onSetCover, onRename, onEn
       )}
       {!compact && (!icon || !cover) && (
         <div className="amx-title-actions">
-          {!icon && <button onClick={() => onSetIcon(randomEmoji())}>{t('unipage.title.addIcon')}</button>}
+          {!icon && <button onClick={() => onSetIcon(randomEmoji())}><PageSmileIcon size={14} strokeWidth={1.7} aria-hidden="true" />{t('unipage.title.addIcon')}</button>}
           {!cover && (
-            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCoverPick({ x: r.right, y: r.bottom + 6 }) }}>{t('unipage.title.addCover')}</button>
+            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCoverPick({ x: r.right, y: r.bottom + 6 }) }}><CoverImageIcon size={14} strokeWidth={1.7} aria-hidden="true" />{t('unipage.title.addCover')}</button>
           )}
         </div>
       )}

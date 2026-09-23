@@ -18,7 +18,7 @@
 //   N1-N5 数字显示格式 / 多附件 / 导出 CSV(W2-F3):N1 按 precision+单位显示、N2 进编辑态回原始值、
 //      N3 CSV 表头=可见列 + 注入/引号/中文转义 + BOM、N4 筛选后只导筛剩的行、N5 附件两形态各自的 chip 数;负对照见 N 段注释
 //   负对照经 window.__erp.load 注入改坏的夹具:多选格改成单值 → chip <2;反向列去掉 lookupBackCol → –(两条必须翻红);
-//   x4 备注加长到 38 字(拼接后 44 字)→ E9c/E9d 翻红
+//   x4 备注加长到 38 字(拼接后 44 字)→ E9c 翻红；全列配置超宽 → E9d 翻红
 //   T1-T5 层级树 + 日期分组(夹具 任务表.db 的「层级」/「按日」/「按月」视图):缩进层级 / 折叠 / 环仍渲全行不卡死 / **孤儿当根(T3b)** / 日期组头与空组落位 / 缩进条随首列铁律恒在 0 格;负对照见 T 段注释
 // 用法:npm run check:erp(经 e2e-editor.cjs 起停 vite);`npm run check:erp -- --shot[=目录]` 存明暗两张截图
 const fs = require('fs')
@@ -192,7 +192,7 @@ const WIDTH_SNAPSHOT = () => {
       const out = {}
       for (const r of rows) {
         const cells = r.querySelectorAll('.amx-db-cell')
-        const key = cells[heads.indexOf('备注')]?.querySelector('input')?.value
+        const key = (cells[heads.indexOf('备注')]?.querySelector('input')?.value ?? cells[heads.indexOf('备注')]?.querySelector('.amx-db-value-text')?.textContent)
         out[key] = [...cells[heads.indexOf('订单总表')].querySelectorAll('.amx-db-chip')].map((c) => c.textContent.trim()).join(',')
       }
       return out
@@ -201,7 +201,7 @@ const WIDTH_SNAPSHOT = () => {
     const OPEN_PICKER = ([customer, colName]) => {
       const heads = [...document.querySelectorAll('.amx-db-hrow .amx-db-th-name')].map((e) => e.textContent.trim())
       const rows = [...document.querySelectorAll('.amx-db-row:not(.amx-db-hrow)')].filter((r) => r.querySelectorAll('.amx-db-cell').length === heads.length)
-      const row = rows.find((r) => r.querySelectorAll('.amx-db-cell')[heads.indexOf('客户')]?.querySelector('input')?.value === customer)
+      const row = rows.find((r) => (r.querySelectorAll('.amx-db-cell')[heads.indexOf('客户')]?.querySelector('input')?.value ?? r.querySelectorAll('.amx-db-cell')[heads.indexOf('客户')]?.querySelector('.amx-db-value-text')?.textContent) === customer)
       const btn = row?.querySelectorAll('.amx-db-cell')[heads.indexOf(colName)]?.querySelector('.amx-db-cellbtn')
       if (!btn) return false
       btn.click()
@@ -256,7 +256,7 @@ const WIDTH_SNAPSHOT = () => {
       const out = {}
       for (const r of rows) {
         const cells = r.querySelectorAll('.amx-db-cell')
-        const key = cells[heads.indexOf('货物名称')]?.querySelector('input')?.value
+        const key = (cells[heads.indexOf('货物名称')]?.querySelector('input')?.value ?? cells[heads.indexOf('货物名称')]?.querySelector('.amx-db-value-text')?.textContent)
         const c = cells[heads.indexOf('出库(投影)')]
         out[key] = { chips: c ? [...c.querySelectorAll('.amx-db-chip')].map((x) => x.textContent.trim()) : null, btn: !!c?.querySelector('[data-backlink] .amx-db-cellbtn') }
       }
@@ -270,7 +270,7 @@ const WIDTH_SNAPSHOT = () => {
     const OPEN_STOCK_PICKER = (name) => {
       const heads = [...document.querySelectorAll('.amx-db-hrow .amx-db-th-name')].map((e) => e.textContent.trim())
       const rows = [...document.querySelectorAll('.amx-db-row:not(.amx-db-hrow)')].filter((r) => r.querySelectorAll('.amx-db-cell').length === heads.length)
-      const row = rows.find((r) => r.querySelectorAll('.amx-db-cell')[heads.indexOf('货物名称')]?.querySelector('input')?.value === name)
+      const row = rows.find((r) => (r.querySelectorAll('.amx-db-cell')[heads.indexOf('货物名称')]?.querySelector('input')?.value ?? r.querySelectorAll('.amx-db-cell')[heads.indexOf('货物名称')]?.querySelector('.amx-db-value-text')?.textContent) === name)
       const btn = row?.querySelectorAll('.amx-db-cell')[heads.indexOf('出库(投影)')]?.querySelector('[data-backlink] .amx-db-cellbtn')
       if (!btn) return false
       btn.click()
@@ -308,7 +308,7 @@ const WIDTH_SNAPSHOT = () => {
     const wd = await page.evaluate(WIDTH_SNAPSHOT)
     check(`E9c 任一列宽 ≤ ${COL_W_MAX}px(夹具含 25 字 nowrap lookup 值)`, wd.overflow > 0 && wd.maxW <= COL_W_MAX, `maxW=${wd.maxW} widest=${wd.widest} n=${wd.n}`)
     check(`E9d 表总宽 ≤ 64 + ${COL_W_MAX}×列数`, wd.overflow > 0 && wd.scrollWidth <= 64 + COL_W_MAX * wd.n, `scrollWidth=${wd.scrollWidth} bound=${64 + COL_W_MAX * wd.n}`)
-    // 负对照:x3 备注加长到 38 字 → 全表列宽被拉过上界(E9c/E9d 的断言真会翻红)
+    // 单个长值仍能校验单列上界；按内容自适应后它不再把其余列一起撑宽。
     const wn = await page.evaluate(async () => {
       const fx = window.__erp.fixture()
       fx['出库记录.db'].rows[3].cells.x_title = '李四-内存 DDR5 32G 6000MHz 套条(含散热马甲,白色限定版)'
@@ -320,7 +320,15 @@ const WIDTH_SNAPSHOT = () => {
       return { n: ws.length, maxW: Math.round(Math.max(...ws)), scrollWidth: sc.scrollWidth }
     })
     check('负对照 注入 38 字 lookup 值(拼接后 44 字)→ E9c 翻红(maxW > 上界)', wn.maxW > COL_W_MAX, `maxW=${wn.maxW}`)
-    check('负对照 注入 38 字 lookup 值(拼接后 44 字)→ E9d 翻红(总宽 > 上界)', wn.scrollWidth > 64 + COL_W_MAX * wn.n, `scrollWidth=${wn.scrollWidth} bound=${64 + COL_W_MAX * wn.n}`)
+    check('单个长 lookup 只扩大相关列，不把整表撑过总宽上界', wn.scrollWidth <= 64 + COL_W_MAX * wn.n, `scrollWidth=${wn.scrollWidth} bound=${64 + COL_W_MAX * wn.n}`)
+    // Keep E9d's negative control independent of the old all-columns-stretch CSS behavior.
+    // Deliberately give every column an oversized manual width, then apply the identical total-width bound.
+    await page.evaluate((width) => window.__dbStore.getState().mutate('订单总表.db', (db) => ({
+      ...db, views: db.views.map((view) => ({ ...view, autoSize: false, widths: Object.fromEntries(db.columns.map((col) => [col.id, width])) })),
+    })), COL_W_MAX + 100)
+    await page.waitForTimeout(150)
+    const wide = await page.evaluate(WIDTH_SNAPSHOT)
+    check('负对照 全列配置超宽 → E9d 翻红(总宽 > 相同上界)', wide.scrollWidth > 64 + COL_W_MAX * wide.n, `scrollWidth=${wide.scrollWidth} bound=${64 + COL_W_MAX * wide.n}`)
 
     // ── F 系列(P1-4 表单视图 view.type='form'):夹具订单总表第 3 个视图「下单表单」(required=o_customer,defaults o_status=未确认) ──
     //   F1 字段集 = 列序 − 计算列 − 盖章列:含 客户/订单状态/运费/CPU…,不含 订单号/创建日期/CPU单价/硬件总额/月份/出库行;默认 订单状态 = 未确认
@@ -336,7 +344,10 @@ const WIDTH_SNAPSHOT = () => {
         fields: [...document.querySelectorAll('.amx-db-form-field')].map((f) => f.querySelector('.amx-db-form-label').textContent.replace('*', '').trim()),
         required: [...document.querySelectorAll('.amx-db-form-field[data-required]')].map((f) => f.dataset.col),
         desc: document.querySelector('.amx-db-form-field[data-col="o_customer"] .amx-db-form-desc')?.textContent.trim() ?? '',
-        customer: document.querySelector('.amx-db-form-field[data-col="o_customer"] input')?.value ?? null,
+        customer: (() => {
+          const field = document.querySelector('.amx-db-form-field[data-col="o_customer"]')
+          return field?.querySelector('input')?.value ?? (field?.querySelector('.amx-db-blank') ? '' : field?.querySelector('.amx-db-value-text')?.textContent ?? null)
+        })(),
         status: document.querySelector('.amx-db-form-field[data-col="o_status"] .amx-db-cellbtn')?.textContent.trim() ?? '',
         errs: [...document.querySelectorAll('.amx-db-form-field[data-err]')].map((f) => f.dataset.col),
         submit: document.querySelector('.amx-db-form-submit')?.textContent.trim() ?? '',
@@ -355,6 +366,10 @@ const WIDTH_SNAPSHOT = () => {
     }
     const FORM_URL = `${BASE}?erp&view=${encodeURIComponent('下单表单')}`
     const CUSTOMER_INPUT = '.amx-db-form-field[data-col="o_customer"] input'
+    const fillCustomer = async (name) => {
+      if (!await page.locator(CUSTOMER_INPUT).count()) await page.click('.amx-db-form-field[data-col="o_customer"] .amx-db-value-display')
+      await page.fill(CUSTOMER_INPUT, name)
+    }
     const settle = () => page.waitForTimeout(300)
     await page.goto(FORM_URL)
     await page.waitForSelector('.amx-db-form-submit', { timeout: 15000 })
@@ -364,7 +379,7 @@ const WIDTH_SNAPSHOT = () => {
     check('F1b 必填星标 = 客户;默认值 订单状态=未确认 已预填;说明 / 提交文案上屏', f1.required.join() === 'o_customer' && f1.status === '未确认' && f1.desc === '客户姓名' && f1.submit === '提交订单', JSON.stringify({ req: f1.required, status: f1.status, desc: f1.desc, submit: f1.submit }))
     await shot(page, 'erp-form-light')
 
-    await page.fill(CUSTOMER_INPUT, '赵六')
+    await fillCustomer('赵六')
     await page.evaluate(COUNT_MUTATE)
     await page.click('.amx-db-form-submit')
     await settle()
@@ -397,7 +412,7 @@ const WIDTH_SNAPSHOT = () => {
     check('负对照 注入去掉 required → F3 翻红(空提交也加行 rows=4,无 data-err)', na.rows === 4 && na.errs.length === 0, `rows=${na.rows} errs=${na.errs}`)
     // 负对照 b:defaults 塞盖章列 o_no=999 → 新行 o_no 仍是盖章的 4(defaults 改不了盖章列)
     await loadForm('v.form.defaults.o_no = 999')
-    await page.fill(CUSTOMER_INPUT, '钱七')
+    await fillCustomer('钱七')
     await page.click('.amx-db-form-submit')
     await settle()
     const nb = await page.evaluate(FORM_SNAPSHOT)
@@ -408,7 +423,7 @@ const WIDTH_SNAPSHOT = () => {
     check('负对照 注入 hidden=[o_ship] → F1 翻红(运费字段消失)', !nc.fields.includes('运费') && nc.fields.includes('客户'), JSON.stringify(nc.fields))
     // F4 after='table':提交后跳到表格视图
     await loadForm("v.form.after = 'table'")
-    await page.fill(CUSTOMER_INPUT, '孙八')
+    await fillCustomer('孙八')
     await page.click('.amx-db-form-submit')
     await settle()
     const f4 = await page.evaluate(FORM_SNAPSHOT)
@@ -517,7 +532,8 @@ const WIDTH_SNAPSHOT = () => {
         // 缩进的观感量:首个数据格里缩进条的实际宽(每级 14px),用来证明 depth 真的画出来了而不只是个属性
         leads: [...document.querySelectorAll('.amx-db-row:not(.amx-db-hrow) .amx-db-treelead')].map((e) => Math.round(e.getBoundingClientRect().width)),
         groups: [...document.querySelectorAll('.amx-db-group')].map((g) => ({
-          key: g.dataset.group,
+          // DOM group keys now namespace typed values to avoid collisions with real option labels.
+          key: g.dataset.group === 'empty:' ? '__none' : g.dataset.group?.startsWith('value:') ? JSON.parse(g.dataset.group.slice(6)) : g.dataset.group,
           count: Number(g.querySelector('.amx-db-lane-count')?.textContent ?? -1),
           none: !!g.querySelector('.amx-db-lane-none'),
         })),
@@ -681,8 +697,8 @@ const WIDTH_SNAPSHOT = () => {
         const c = cellOf(r, name)
         if (!c) return null
         const inp = c.querySelector('input')
-        // fmt = 走了格式化只读 span(而不是裸 input);input = 编辑态里的原始值
-        return { text: c.innerText.trim(), fmt: !!c.querySelector('.amx-db-numfmt'), input: inp ? inp.value : null }
+        // 展示态和草稿 input 分开；格式正确性由下方精确显示值与原始值断言验证。
+        return { text: c.innerText.trim(), fmt: !!c.querySelector('.amx-db-value-display'), input: inp ? inp.value : null }
       }
       const pick = (name) => rows.find((r) => custOf(r) === name)
       const z = pick('张三')
@@ -729,7 +745,7 @@ const WIDTH_SNAPSHOT = () => {
     await page.goto(`${BASE}?erp`)
     await page.waitForSelector('.amx-db-row', { timeout: 15000 })
     await page.evaluate(LOAD_NUM_FIXTURE, true)
-    await page.waitForSelector('.amx-db-numfmt', { timeout: 15000 })
+    await page.waitForSelector('.amx-db-value-display', { timeout: 15000 })
     const n1 = await page.evaluate(NUM_SNAPSHOT)
     check('N1 数字列按 precision/unit 显示:运费 ¥1,500.00元、公式列 总计 ¥125,196.00;没配格式的 硬件总额 仍是裸 112000;空值不显示成 ¥0.00元',
       n1.ship && n1.ship.fmt && n1.ship.text === '¥1,500.00元' &&
@@ -751,7 +767,7 @@ const WIDTH_SNAPSHOT = () => {
       const heads = [...document.querySelectorAll('.amx-db-hrow .amx-db-th-name')].map((e) => e.textContent.trim())
       const i = heads.indexOf('运费')
       const rows = [...document.querySelectorAll('.amx-db-row:not(.amx-db-hrow)')].filter((r) => r.querySelectorAll('.amx-db-cell').length === heads.length)
-      const el = rows[0].querySelectorAll('.amx-db-cell')[i].querySelector('.amx-db-numfmt')
+      const el = rows[0].querySelectorAll('.amx-db-cell')[i].querySelector('.amx-db-value-display')
       if (!el) return false
       el.click()
       return true
@@ -791,6 +807,7 @@ const WIDTH_SNAPSHOT = () => {
       Object.values(n3f).every(Boolean),
       JSON.stringify({ ...n3f, head3: cap && cap.head, n: lines.filter((l) => l !== '').length, want: n1.rowCount + 1, last: lines[lines.length - 2] }))
     // N4:搜索过滤后再导出 —— 导的是当前视图筛剩的行,不是整表
+    await page.click('.amx-db-search')
     await page.fill('.amx-db-search', '张三')
     await page.waitForTimeout(300)
     // ⚠️ 必须与 NUM_SNAPSHOT 同一套数法(按 .amx-db-cell 数过滤):裸选择器会把表尾的「＋ 新建」行也数进来
@@ -806,21 +823,21 @@ const WIDTH_SNAPSHOT = () => {
     check('N4 筛选后导出只含筛剩的行(2 行「张三」),且没把 李四/王五 带出去',
       lines2.length === n4rows + 1 && n4rows === 2 && !csv2.includes('李四') && !csv2.includes('王五') && csv2.includes('"张三, ""VIP"""'),
       JSON.stringify({ csvRows: lines2.length - 1, screenRows: n4rows }))
-    // 负对照:同一份夹具**不配**格式 → 数字格子回到裸 input,N1 翻红
+    // 负对照:同一份夹具不配格式 → 展示原始数字 1500,N1 格式化结果翻红
     await page.goto(`${BASE}?erp`)
     await page.waitForSelector('.amx-db-row', { timeout: 15000 })
     await page.evaluate(LOAD_NUM_FIXTURE, false)
     await page.waitForTimeout(300)
     const nn = await page.evaluate(NUM_SNAPSHOT)
-    check('负对照 去掉 precision/unitPrefix/unitSuffix → N1 翻红(运费回到裸 input、text 空、value=1500;总计裸 125196)',
-      nn.ship && !nn.ship.fmt && nn.ship.input === '1500' && nn.ship.text !== '¥1,500.00元' &&
+    check('负对照 去掉 precision/unitPrefix/unitSuffix → N1 翻红(运费展示原始 1500、未开启编辑;总计裸 125196)',
+      nn.ship && nn.ship.fmt && nn.ship.input === null && nn.ship.text === '1500' &&
       nn.total && nn.total.text === '125196',
       JSON.stringify([nn.ship, nn.total]))
     // 观感自查③:暗色档(新样式只用既有 token,这张是「真没写死颜色」的证据)
     await page.goto(`${BASE}?erp&dark`)
     await page.waitForSelector('.amx-db-row', { timeout: 15000 })
     await page.evaluate(LOAD_NUM_FIXTURE, true)
-    await page.waitForSelector('.amx-db-numfmt', { timeout: 15000 })
+    await page.waitForSelector('.amx-db-value-display', { timeout: 15000 })
     await shot(page, 'erp-numfmt-dark')
 
     check('E8 无未捕获页面错误', errors.length === 0, errors.slice(0, 2).join(' | '))

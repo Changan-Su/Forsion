@@ -7,5 +7,5 @@ import { setActiveSpace, useWorkspace } from '@lcl/engine'
  *  没有它,「Agents 已经开着看 A,再点 B 的详情」只是聚焦回 A。 */
 export function openAgentProfile(slug: string, section?: 'evolution'): void {
   setActiveSpace('agents')
-  useWorkspace.getState().openView('agent-profile', { reuseKey: 'primary', agentSlug: slug, ...(section ? { section, sectionAt: Date.now() } : {}) }, 'main')
+  useWorkspace.getState().openView('agent-profile', { reuseKey: 'primary', agentSlug: slug, creating: false, ...(section ? { section, sectionAt: Date.now() } : {}) }, 'main')
 }

@@ -12,7 +12,6 @@ const imgBase = (p: string): string => p.split(/[\\/]/).pop() || p
 export function AmadeusImageView({ leaf }: ViewProps) {
   const imagePath = typeof leaf.params.imagePath === 'string' ? leaf.params.imagePath : ''
   const mode = useTheme((s) => s.mode)
-  const flat = useTheme((s) => s.flat)
   // 同 PDF:asset:// 协议按「当前打开的 vault」解析,启动恢复 tab 时 vault 可能还没 open →
   // 先不挂 <img>(否则碎图,且 vault 就绪后 src 不变不会自愈)。vaultRoot 落地即重渲挂载。
   const vaultReady = usePageStore((s) => !!s.vaultRoot)
@@ -24,7 +23,7 @@ export function AmadeusImageView({ leaf }: ViewProps) {
   }, [imagePath]) // eslint-disable-line react-hooks/exhaustive-deps
   if (!imagePath) return <div className="amx-db amx-db-state">未指定图片文件。</div>
   return (
-    <div className="am-app tangu-lovable amx-pane amx-imgview" data-mode={mode} data-flat={flat ? '1' : '0'}>
+    <div className="am-app tangu-lovable amx-pane amx-imgview" data-mode={mode}>
       {vaultReady ? (
         <div className={`amx-imgview-scroll${actual ? ' actual' : ''}`}>
           <img

@@ -6,6 +6,7 @@
  *  收件箱新消息在 inboxStore 轮询处就地接线(检测逻辑在那边)。文案走 appStore.tr(bootstrap 注入)。 */
 import { useApp } from './appStore'
 import { notifyApp } from './notificationStore'
+import { ipcErrorText } from '../ipcError'
 import { useMdMarkStore } from '../amadeus/store/mdMarkStore'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { openNoteAtHeading } from '../amadeusNav'
@@ -73,7 +74,7 @@ export function installNotificationWiring(): void {
     if (s.state === 'error' || s.state === 'auth-required') {
       notifyApp({
         event: 'sync.error', level: 'error',
-        text: tr('ntf.syncError', { e: s.error || s.state }),
+        text: tr('ntf.syncError', { e: s.error ? ipcErrorText(s.error) : s.state }),
         dedupeKey: `sync.error:${key}`,
       })
     } else if (prev === 'syncing' && s.state === 'idle') {

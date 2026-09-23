@@ -118,6 +118,7 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
     setNewChatCfg: state.setNewChatCfg,
     setSessionThinking: state.setSessionThinking,
     setDefaultModel: state.setDefaultModel,
+    setModelContextWindow: state.setModelContextWindow,
     setVoiceMode: state.setVoiceMode,
     setExecConfig: state.setExecConfig,
     openSettings: state.openSettings,
@@ -217,6 +218,7 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
           visionModelId: s.cfg.visionModelId || '',
         }}
         onDefaultModelChange={s.setDefaultModel}
+        onContextWindowChange={(id, n) => void s.setModelContextWindow(id, n)}
         maxIterations={config.maxIterations}
         onMaxIterationsChange={(n) => s.setNewChatCfg((c) => ({ ...c, maxIterations: n }))}
         verifyCommand={config.verifyCommand}

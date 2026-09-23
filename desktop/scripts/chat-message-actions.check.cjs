@@ -58,6 +58,26 @@ async function main() {
       check(`${width}px: 动作行与气泡右边缘对齐`, Math.abs(g.actions.right - g.bubble.right) < 1, g)
       check(`${width}px: 短动作行不占正文横向空间`, g.actions.width < g.bubble.width, g)
       if (width <= 420) check(`${width}px: 长消息利用窄栏可读宽度`, g.bubble.width >= g.width - 1, g)
+      if (width === 320) {
+        const spacing = await view.evaluate((el) => {
+          const last = el.querySelector('#tocmsg-assistant-layout').getBoundingClientRect()
+          const composer = el.querySelector('.composer-anchor').getBoundingClientRect()
+          return composer.top - last.bottom
+        })
+        check('细长短会话末条贴近输入区且不被遮挡', spacing >= 0 && spacing < 40, spacing)
+        const overflow = await view.evaluate((el) => {
+          const stream = el.querySelector('.t2-stream')
+          const inner = el.querySelector('.t2-stream-inner')
+          const filler = document.createElement('div')
+          filler.style.height = '1600px'
+          filler.style.flex = 'none'
+          inner.appendChild(filler)
+          const result = { margin: parseFloat(getComputedStyle(inner.firstElementChild).marginTop), scrollable: stream.scrollHeight > stream.clientHeight + 100 }
+          filler.remove()
+          return result
+        })
+        check('细长长会话仍可从顶部滚动', overflow.margin === 0 && overflow.scrollable, overflow)
+      }
       await row.screenshot({ path: path.join(home, `user-${width}.png`) })
     }
 
@@ -94,6 +114,30 @@ async function main() {
     await row.hover()
     await win.waitForTimeout(400)
     await view.screenshot({ path: path.join(home, 'chat-dark.png') })
+
+    // 窄输入卡在运行中只显示短提示，停止保留可点击的图标；放宽后恢复完整提示与文字。
+    stub.script([{ type: '__hold' }])
+    await view.evaluate((el) => { el.style.width = '320px'; el.style.height = '820px' })
+    await view.locator('.t2c-ta').fill('检查窄输入卡')
+    await view.locator('.t2c-ta').press('Enter')
+    await view.locator('.t2c-stop').waitFor()
+    await win.waitForTimeout(150)
+    const narrowComposer = await view.locator('.t2c-card').evaluate((card) => ({
+      width: card.getBoundingClientRect().width,
+      placeholder: card.querySelector('.t2c-ta').getAttribute('placeholder'),
+      stopLabel: getComputedStyle(card.querySelector('.t2c-stop-label')).display,
+      stopWidth: card.querySelector('.t2c-stop').getBoundingClientRect().width,
+    }))
+    check('320px: 运行提示保持单行且停止为图标', narrowComposer.placeholder.includes('可继续输入') && narrowComposer.stopLabel === 'none' && narrowComposer.stopWidth <= 34, narrowComposer)
+    await view.screenshot({ path: path.join(home, 'composer-running-320.png') })
+    await view.evaluate((el) => { el.style.width = '420px' })
+    await win.waitForTimeout(150)
+    const wideComposer = await view.locator('.t2c-card').evaluate((card) => ({
+      placeholder: card.querySelector('.t2c-ta').getAttribute('placeholder'),
+      stopLabel: getComputedStyle(card.querySelector('.t2c-stop-label')).display,
+    }))
+    check('420px: 完整小贴士和停止文字恢复', wideComposer.placeholder.startsWith('小贴士:') && wideComposer.stopLabel !== 'none', wideComposer)
+    await view.locator('.t2c-stop').click()
     console.log(`${count}/${count} passed; screenshots: ${home}`)
   } catch (error) {
     const win = app?.windows()[0]

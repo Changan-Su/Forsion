@@ -13,6 +13,7 @@
  *
  * 模型上下文窗口:见 modelContextWindowInfo 的优先级链 —— 人填的(env 覆盖 / 用户本机 modelOverrides /
  *    admin 在模型上填的 context_window)> 上游实测的(contextWindowStore 从超长报错里回学)> 手写族表 > 272k 兜底。
+ *    run 实际用的是 effectiveContextWindowInfo:自动识别出的窗口再大也封顶 272k,只有人填的覆盖能开更大(09-22)。
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -49,6 +50,7 @@ export function isLossy(m: unknown): boolean {
 /**
  * 未知模型的窗口兜底。2026-09-11 起 272k(原 128k):主流模型都到 200k+ 了,128k 让每个族表没收录的模型
  * 在 64k 就开始机械折叠。报大了的那一头由 contextWindowStore 兜:撞一次上游溢出就回学到真实上限,只调小。
+ * 09-22 起它同时是**缺省上限**(见 effectiveContextWindowInfo):env 一个旋钮同调兜底与上限。
  */
 export const CONTEXT_WINDOW_TOKENS = (() => {
   const v = Number(process.env.TANGU_CONTEXT_WINDOW_TOKENS);
@@ -91,7 +93,7 @@ export function compactionThreshold(windowTokens: number, reserveTokens: number,
  */
 const FAMILY_WINDOWS: Array<[RegExp, number]> = [
   [/codex-mini/i, 200_000], // 先于 gpt-5|codex:codex-mini 是 o4-mini 底,272k 会溢出
-  [/(^|\/)gpt-6-astra$/i, 272_000], // Codex 2026-09-06 目录的默认输入预算;长上下文仍由显式覆盖启用
+  [/(^|\/)gpt-6-(astra|sol|luna)$/i, 272_000], // Codex 目录的默认输入预算(09-06 Astra / 09-22 Sol·Luna 同值);长上下文仍由显式覆盖启用
   [/gpt-5|codex/i, 272_000], // GPT-5 家族 400k 总窗,input 上限 272k(codex 模型目录同值)
   [/gpt-4\.1/i, 1_000_000],
   // Claude 5 家族(Sonnet/Opus/Fable)与 Opus 4.7 起是 1M(官方模型表);必须排在下面那条
@@ -142,9 +144,33 @@ export type CtxWindowSource = 'override' | 'model' | 'learned' | 'family' | 'def
 
 /** modelContextWindow 的带来源版本:值与来源一起给,供 context 视图如实标注。 */
 export function modelContextWindowInfo(modelId?: string | null, modelObj?: any): { tokens: number; source: CtxWindowSource } {
-  if (modelId && MODEL_WINDOW_OVERRIDES[modelId]) return { tokens: MODEL_WINDOW_OVERRIDES[modelId], source: 'override' };
-  const user = modelId ? modelOverrides()[modelId]?.contextWindow : undefined;
-  if (user) return { tokens: user, source: 'override' };
+  const override = overrideWindow(modelId);
+  return override ? { tokens: override, source: 'override' } : autoContextWindowInfo(modelId, modelObj);
+}
+
+/** 人填的窗口:env 覆盖表 > 用户本机 modelOverrides。 */
+function overrideWindow(modelId?: string | null): number | undefined {
+  if (!modelId) return undefined;
+  return MODEL_WINDOW_OVERRIDES[modelId] || modelOverrides()[modelId]?.contextWindow;
+}
+
+/**
+ * run 实际用的窗口(09-22 用户拍板,对标 Codex 模型目录的 context_window 272k / max_context_window 分离):
+ * 自动识别出的窗口(模型自报 / 回学 / 族表 / 兜底)一律封顶 CONTEXT_WINDOW_TOKENS —— 1M 族按「窗口 − 预留」
+ * 要到 950k 才压缩,生产实报一条会话顶着 387k 逐轮重读(09-20)。人填的覆盖不封顶:那就是「开启更高上下文」的开关
+ * (聊天框模型菜单与设置页写的都是 modelOverrides)。max = 自动识别出的窗口(封顶前、不看覆盖),界面据此判断能开多大。
+ * 摘要目标仍用 modelContextWindow(未封顶):它问的是摘要模型吃得下多少,不是会话预算。
+ */
+export function effectiveContextWindowInfo(modelId?: string | null, modelObj?: any): { tokens: number; source: CtxWindowSource; max: number } {
+  const auto = autoContextWindowInfo(modelId, modelObj);
+  const override = overrideWindow(modelId);
+  return override
+    ? { tokens: override, source: 'override', max: auto.tokens }
+    : { tokens: Math.min(auto.tokens, CONTEXT_WINDOW_TOKENS), source: auto.source, max: auto.tokens };
+}
+
+/** 覆盖之外的自动识别链:模型自报 > 回学 > 族表 > 兜底。 */
+function autoContextWindowInfo(modelId?: string | null, modelObj?: any): { tokens: number; source: CtxWindowSource } {
   const fromObj = Number(modelObj?.context_window ?? modelObj?.contextWindow);
   if (Number.isFinite(fromObj) && fromObj >= 4_000) return { tokens: Math.floor(fromObj), source: 'model' };
   const learned = modelId ? learnedWindow(modelId) : undefined;

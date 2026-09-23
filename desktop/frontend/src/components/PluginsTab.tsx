@@ -5,7 +5,8 @@
  */
 import React, { useEffect, useMemo, useState } from 'react'
 import { setPluginEnabled, uninstallPlugin, installPluginFromNpm, rescanPlugins, type PluginInfo } from '../services/backendService'
-import { useApp } from '../stores/appStore'
+import { panelToast } from './PanelNotice'
+import { ipcErrorText } from '../ipcError'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
@@ -56,10 +57,10 @@ export const PluginsTab: React.FC<{
       const msg = r.addedIds.length
         ? t('settings.plugins.rescanAdded', { n: String(r.addedIds.length) })
         : t('settings.plugins.rescanNone')
-      useApp.getState().toast(r.needsRestart ? `${msg} · ${t('settings.plugins.needsRestartHint')}` : msg)
+      panelToast(r.needsRestart ? `${msg} · ${t('settings.plugins.needsRestartHint')}` : msg)
       onReload()
     } catch (e: any) {
-      useApp.getState().toast(e?.message || String(e), true)
+      panelToast(e?.message || String(e), true)
     } finally { setRescanning(false) }
   }
 
@@ -69,10 +70,10 @@ export const PluginsTab: React.FC<{
       await uninstallPlugin(cfg, p.id).catch(() => {}) // 后端不在也继续:剩孤儿设置好过卸不掉
       await window.tangu?.pluginsUninstall?.(p.id)
       await window.tangu?.backendRestart?.() // 工具/路由无法运行期反注册,重启后 discoverPlugins 不再发现它
-      useApp.getState().toast(t('settings.plugins.uninstalled', { name: nm(p) }))
+      panelToast(t('settings.plugins.uninstalled', { name: nm(p) }))
       onReload()
     } catch (e: any) {
-      useApp.getState().toast(e?.message || String(e), true)
+      panelToast(ipcErrorText(e), true)
     }
   }
 
@@ -84,11 +85,11 @@ export const PluginsTab: React.FC<{
     setInstalling(true)
     try {
       const r = await installPluginFromNpm(cfg, norm, preferMirror)
-      useApp.getState().toast(t('settings.plugins.installed', { id: r.id, version: r.version }))
+      panelToast(t('settings.plugins.installed', { id: r.id, version: r.version }))
       setSpec('')
       onReload()
     } catch (e: any) {
-      useApp.getState().toast(e?.message || String(e), true)
+      panelToast(e?.message || String(e), true)
     } finally { setInstalling(false) }
   }
 
@@ -103,7 +104,7 @@ export const PluginsTab: React.FC<{
         </button>
       </div>
       <div style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <div style={{ fontSize: 12, fontWeight: 600 }}>{t('settings.plugins.npmInstallTitle')}</div>
+        <div style={{ fontSize: 'var(--ui-font-meta, 12px)', fontWeight: 600 }}>{t('settings.plugins.npmInstallTitle')}</div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <input
             className="input"
@@ -114,7 +115,7 @@ export const PluginsTab: React.FC<{
             onKeyDown={(e) => { if (e.key === 'Enter') void doInstall() }}
             style={{ flex: 1, minWidth: 200 }}
           />
-          <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+          <label style={{ fontSize: 'var(--ui-font-caption, 11px)', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
             <input type="checkbox" checked={preferMirror} onChange={(e) => setPreferMirror(e.target.checked)} />
             {t('settings.plugins.preferMirror')}
           </label>
@@ -122,7 +123,7 @@ export const PluginsTab: React.FC<{
             {installing ? t('settings.plugins.installing') : t('settings.plugins.installBtn')}
           </button>
         </div>
-        <div style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>{t('settings.plugins.npmInstallHint')}</div>
+        <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{t('settings.plugins.npmInstallHint')}</div>
       </div>
       {hiddenCount > 0 && <div className="hint">{t('settings.plugins.bundleOwnedHint', { n: String(hiddenCount) })}</div>}
       {!shown
@@ -135,17 +136,17 @@ export const PluginsTab: React.FC<{
             <PluginLogo url={p.iconUrl} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <b style={{ fontSize: 13 }}>{nm(p)}</b>
-                <span style={{ fontSize: 10.5, color: 'var(--text-faint)', border: 'var(--border-width) solid var(--border)', borderRadius: 4, padding: '0 4px' }}>
+                <b style={{ fontSize: 'var(--ui-font-body, 13px)' }}>{nm(p)}</b>
+                <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', border: 'var(--border-width) solid var(--border)', borderRadius: 4, padding: '0 4px' }}>
                   {p.source === 'folder' ? t('settings.plugins.folder') : t('settings.plugins.builtin')}
                 </span>
                 {p.needsRestart && (
-                  <span title={t('settings.plugins.needsRestartHint')} style={{ fontSize: 10.5, color: 'var(--warn, #b8860b)', border: 'var(--border-width) solid var(--warn, #b8860b)', borderRadius: 4, padding: '0 4px' }}>
+                  <span title={t('settings.plugins.needsRestartHint')} style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--warn, #b8860b)', border: 'var(--border-width) solid var(--warn, #b8860b)', borderRadius: 4, padding: '0 4px' }}>
                     {t('settings.plugins.needsRestart')}
                   </span>
                 )}
               </div>
-              <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{ds(p)}</div>
+              <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{ds(p)}</div>
             </div>
             {p.settings && p.enabled && (
               <button className="btn ghost sm" onClick={() => onOpenSettings(p.id)}>{t('settings.plugins.openSettings')}</button>

@@ -2,7 +2,7 @@
  * Agent 面:模型能看见/能执行的那一小块界面能力。三端共用(desktop / web / mobile 同一份渲染层)。
  *
  * 两条独立的面,刻意不合并:
- * - **设置面**(`applyUiSetting`)—— 闭集 11 项,值域在此校验。设置项比命令更需要严格值域,
+ * - **设置面**(`applyUiSetting`)—— 闭集设置项,值域在此校验。设置项比命令更需要严格值域,
  *   而命令表里的设置类命令又全是 toggle/cycle(见 lcl `CommandInvoke` 头注),所以走独立通道。
  * - **命令面**(`buildCommandCatalog` / `runAgentCommand`)—— 开放式,靠命令自己声明 `invoke` opt-in。
  *
@@ -115,7 +115,7 @@ export const UI_SETTINGS: Record<string, SettingSpec> = {
   flat: {
     values: () => ['on', 'off'],
     apply: (v) => useTheme.getState().setFlat(v === 'on'),
-    state: () => (useTheme.getState().flat ? 'on' : 'off'),
+    state: () => useTheme.getState().flat ? 'on' : 'off',
   },
   font_ui: fontSpec('font_ui'),
   font_body: fontSpec('font_body'),

@@ -44,12 +44,36 @@ describe('manage_skill', () => {
     expect(await run({ action: 'delete', slug: 'skill-creator' })).toContain('内置');
   });
 
+  it('cannot edit or delete an untouched package-seeded mirror', async () => {
+    const source = path.join(home, 'package-source');
+    await fs.mkdir(path.join(source, 'seeded-example'), { recursive: true });
+    await fs.writeFile(path.join(source, 'seeded-example', 'SKILL.md'), '---\nname: Seeded example\n---\nKeep this\n');
+    const { seedSkillsInto } = await import('../../skills/localSkills.js');
+    await seedSkillsInto(source, path.join(home, 'skills'));
+    expect(await run({ action: 'update', slug: 'seeded-example', instructions: 'overwrite' })).toContain('只读');
+    expect(await run({ action: 'delete', slug: 'seeded-example' })).toContain('只读');
+    expect(await fs.readFile(skillMd('seeded-example'), 'utf8')).toContain('Keep this');
+    await fs.rm(path.join(home, 'skills', 'seeded-example'), { recursive: true });
+  });
+
   it('update preserves name when omitted, rewrites body', async () => {
     const r = await run({ action: 'update', slug: 'deploy-web', instructions: 'new steps' });
     expect(r).toContain('已更新');
     const raw = await fs.readFile(skillMd('deploy-web'), 'utf-8');
     expect(raw).toContain('name: Deploy Web'); // preserved from existing frontmatter
     expect(raw).toContain('new steps');
+  });
+
+  it('update keeps a hand-added shared flag; create never adds one', async () => {
+    await fs.mkdir(path.join(home, 'skills', 'lendable'), { recursive: true });
+    await fs.writeFile(skillMd('lendable'), '---\nname: Lendable\ndescription: d\nshared: true\n---\nold body\n');
+    expect(await run({ action: 'update', slug: 'lendable', instructions: 'new body' })).toContain('已更新');
+    const raw = await fs.readFile(skillMd('lendable'), 'utf-8');
+    expect(raw).toContain('shared: true');
+    expect(raw).toContain('new body');
+    await run({ action: 'create', name: 'Plain One', instructions: 'x' });
+    expect(await fs.readFile(skillMd('plain-one'), 'utf-8')).not.toContain('shared');
+    for (const slug of ['lendable', 'plain-one']) await run({ action: 'delete', slug }); // 末尾用例要看到「no user skills」
   });
 
   it('rejects path-traversal slugs', async () => {

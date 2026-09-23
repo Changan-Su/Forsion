@@ -36,7 +36,7 @@ export const QrImage: React.FC<{
 
   if (failed) {
     return (
-      <div className={className} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: size, height: size, fontSize: 11, color: 'var(--danger)', textAlign: 'center', padding: 6 }}>
+      <div className={className} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: size, height: size, fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--danger)', textAlign: 'center', padding: 6 }}>
         {t('qr.failed')}
       </div>
     )

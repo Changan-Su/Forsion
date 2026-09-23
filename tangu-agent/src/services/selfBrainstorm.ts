@@ -17,7 +17,7 @@ import { deps } from '../seams/runtime.js';
 import { publish } from './eventBus.js';
 import { publishBackgroundUsage } from './backgroundUsage.js';
 import { getToolDefinitions } from '../tools/registry.js';
-import { modelContextWindow, estimateMessageTokens } from './contextBudget.js';
+import { effectiveContextWindowInfo, estimateMessageTokens } from './contextBudget.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 import type { ChatMessage } from '../core/types.js';
 
@@ -179,7 +179,7 @@ export async function runSelfBrainstorm(p: BrainstormParams): Promise<string> {
   const { model, apiKey, baseUrl, apiModelId } = await llm.resolveModelAndKey(ctx.modelId || '');
   // token 护栏:与 loop 同款估算器(CJK≈1字符1token),按模型窗口留余量(尾注+二轮材料+输出)。
   const estTokens = prefix.reduce((n, m) => n + estimateMessageTokens(m), 0);
-  const win = modelContextWindow(ctx.modelId, model);
+  const win = effectiveContextWindowInfo(ctx.modelId, model).tokens; // 与主 loop 同一分母(自动识别的封顶 272k)
   if (estTokens > win * CONTEXT_HEADROOM_RATIO) {
     return `Error: context too large to fork (~${estTokens} tokens > ${Math.floor(win * CONTEXT_HEADROOM_RATIO)} of the ${win}-token window). Compact the session first, or brainstorm earlier next time.`;
   }

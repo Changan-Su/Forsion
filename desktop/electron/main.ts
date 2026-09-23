@@ -3,14 +3,14 @@ import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/ho
 import { startMiniCursorFollow, readComputerUseForeground, cursorPanelTarget } from './miniCursorFollow'
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
-import { normalizeFloatingPanelOpenOptions, type FloatingPanelOpenOptions } from '../shared/floatingPanel'
+import { normalizeFloatingPanelOpenOptions, normalizeMainAction, type FloatingPanelOpenOptions } from '../shared/floatingPanel'
 import { normalizeUiSync } from '../shared/uiSync'
 /**
  * Tangu 桌面 GUI — Electron 主进程。
  * 负责:建窗 + 配置持久化(IPC)+ 托管内置 tangu-server(managed 模式,backendManager)。
  * agent 调用由 renderer 直连 HTTP/SSE(localhost),不经主进程代理。
  */
-import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, powerMonitor, powerSaveBlocker, screen, globalShortcut, session, shell, nativeImage, Notification, systemPreferences, webContents } from 'electron'
+import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, net, powerMonitor, powerSaveBlocker, screen, globalShortcut, session, shell, nativeImage, Notification, systemPreferences, webContents } from 'electron'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'path'
 import { pathToFileURL } from 'url'
 import { resolveCloudApiUrl } from './cloudApiPath.js'
@@ -44,7 +44,7 @@ import { checkForUpdates, downloadUpdate, installUpdate, betaChannelOn } from '.
 import { createTray } from './tray'
 import { readThemesDir, seedDefaultThemes } from './themes'
 import { builtinBundleSources, seedBuiltinBundles } from './builtinPlugins'
-import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs, marketItemDir } from './marketInstall'
+import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, type DownloadProgress } from './marketInstall'
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks } from './codePreview'
 import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudioSnapshots, restoreCodeStudioSnapshot } from './codeStudioProjects'
 import { FORSION_CONNECT_LOCAL_SDK } from './forsionConnectLocal'
@@ -1177,6 +1177,18 @@ function ensureBackend(): Promise<void> {
 }
 
 /** 所有窗口(主窗 + 独立窗 + mini + floating)共用的 webPreferences:同一份 preload → 同一 window.tangu 暴露面。 */
+/** 台架静默:Playwright 起的实例(或 TANGU_HARNESS_QUIET=1)窗口一律 showInactive —— 不激活 App、不抢用户前台焦点。
+ *  TANGU_HARNESS_QUIET=0 强制关(测聚焦语义的台架 / 负对照用);人起的 dev / 安装版不受影响。
+ *  ponytail: 只管「弹出时不抢焦点」,窗口仍可见;要全隐藏得先证实隐藏窗 page.screenshot 不挂。 */
+const QUIET_WINDOWS = process.env.TANGU_HARNESS_QUIET
+  ? process.env.TANGU_HARNESS_QUIET === '1'
+  : typeof (globalThis as { __playwright_run?: unknown }).__playwright_run === 'function'
+
+function present(win: BrowserWindow): void {
+  if (QUIET_WINDOWS) win.showInactive()
+  else { win.show(); win.focus() }
+}
+
 function satelliteWebPreferences(): Electron.WebPreferences {
   return {
     preload: join(__dirname, '../preload/preload.mjs'),
@@ -1298,8 +1310,10 @@ function createWindow(): void {
     // 其他平台保持原来的实色窗口,不改变稳定性/窗口行为。
     transparent: process.platform === 'darwin',
     backgroundColor: process.platform === 'darwin' ? '#00000000' : '#fbf8f5',
+    show: !QUIET_WINDOWS,
     webPreferences: satelliteWebPreferences(),
   })
+  if (QUIET_WINDOWS) mainWindow.showInactive()
 
   mainWindow.webContents.setWindowOpenHandler(openUrlHandler(mainWindow.webContents))
   hardenNav(mainWindow.webContents)
@@ -1350,8 +1364,7 @@ function loadRendererWith(win: BrowserWindow, params: Record<string, string>): v
 function showMainWindow(): void {
   if (!mainWindow || mainWindow.isDestroyed()) { createWindow(); return }
   if (mainWindow.isMinimized()) mainWindow.restore()
-  mainWindow.show()
-  mainWindow.focus()
+  present(mainWindow)
 }
 
 // ══ 卫星窗口:独立窗(拖出的 dockview,无 ribbon)+ mini 悬浮卡片 + floating 面板 ════════
@@ -1402,8 +1415,10 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
     autoHideMenuBar: true,
     transparent: process.platform === 'darwin',
     backgroundColor: process.platform === 'darwin' ? '#00000000' : '#fbf8f5',
+    show: !QUIET_WINDOWS,
     webPreferences: satelliteWebPreferences(),
   })
+  if (QUIET_WINDOWS) win.showInactive()
   detachedWindows.set(id, win)
   win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
   hardenNav(win.webContents)
@@ -1439,8 +1454,7 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
   if (existing && !existing.isDestroyed()) {
     existing.setTitle(target.title)
     if (existing.isMinimized()) existing.restore()
-    existing.show()
-    existing.focus()
+    present(existing)
     if (!existing.webContents.isLoadingMainFrame()) existing.webContents.send('window:floatingTarget', target)
     return { id: target.id }
   }
@@ -1465,7 +1479,7 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
   floatingWindows.set(target.id, win)
   win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
   hardenNav(win.webContents)
-  win.once('ready-to-show', () => { if (!win.isDestroyed()) { win.show(); win.focus() } })
+  win.once('ready-to-show', () => { if (!win.isDestroyed()) present(win) })
   win.on('closed', () => {
     if (floatingWindows.get(target.id) === win) floatingWindows.delete(target.id)
     floatingTargets.delete(target.id)
@@ -1559,8 +1573,10 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
     skipTaskbar: true,
     hasShadow: true,
     backgroundColor: '#00000000',
+    show: !QUIET_WINDOWS,
     webPreferences: satelliteWebPreferences(),
   })
+  if (QUIET_WINDOWS) miniWindow.showInactive()
   miniWindow.setAlwaysOnTop(true, 'floating')
   miniWindow.webContents.setWindowOpenHandler(openUrlHandler(miniWindow.webContents))
   hardenNav(miniWindow.webContents)
@@ -1597,10 +1613,9 @@ function toggleMiniWindow(opts?: MiniOpenOptions): void {
     if (opts?.sessionId || opts?.spaceId || opts?.view) {
       miniTarget = opts
       if (!miniWindow.webContents.isLoadingMainFrame()) miniWindow.webContents.send('window:miniTarget', opts)
-      miniWindow.show()
-      miniWindow.focus()
+      present(miniWindow)
     } else if (miniWindow.isVisible()) miniWindow.hide()
-    else { miniWindow.show(); miniWindow.focus() }
+    else present(miniWindow)
   } else createMiniWindow(opts)
 }
 
@@ -1989,8 +2004,10 @@ app.whenReady().then(async () => {
    */
   ipcMain.handle('cloud:fetch', async (e, raw: unknown) => {
     if (!isTrustedSender(e)) return { status: 0, error: 'untrusted' }
-    const req = (raw ?? {}) as { path?: unknown; method?: unknown; body?: unknown }
+    const req = (raw ?? {}) as { path?: unknown; method?: unknown; body?: unknown; timeoutMs?: unknown }
     const path = typeof req.path === 'string' ? req.path : ''
+    // 调用方可延长超时(带 base64 附件的反馈回复在慢网上 15s 不够),封顶 120s 防止挂死。
+    const timeoutMs = Math.min(120_000, Math.max(1_000, Number(req.timeoutMs) || 15_000))
     const method = typeof req.method === 'string' ? req.method.toUpperCase() : 'GET'
     if (!/^(GET|POST|PUT|PATCH|DELETE)$/.test(method)) return { status: 0, error: 'bad_method' }
     if (!path.startsWith('/')) return { status: 0, error: 'bad_path' }
@@ -2005,7 +2022,7 @@ app.whenReady().then(async () => {
 
     const hasBody = req.body !== undefined && method !== 'GET' && method !== 'DELETE'
     const ctl = new AbortController()
-    const timer = setTimeout(() => ctl.abort(), 15_000)
+    const timer = setTimeout(() => ctl.abort(), timeoutMs)
     try {
       const r = await fetch(target, {
         method,
@@ -2042,7 +2059,7 @@ app.whenReady().then(async () => {
     if (live && !live.dead) return { url: live.proxy.url }
     if (live) { p2pProxySecrets.delete(live.proxy.url); p2pOutgoing.delete(unitId); void live.proxy.close().catch(() => {}) }
     const token = loadTanguCreds().token
-    if (!token) throw new Error('未登录 Forsion 账号')
+    if (!token) throw new Error('not-logged-in') // 原因码:UnitSwitcher 回落中转时经 ipcErrorText 上屏
     const stored = await loadConfig()
     const mgr = getP2p()
     const { peerId, sdp } = await mgr.makeOffer()
@@ -3034,15 +3051,6 @@ app.whenReady().then(async () => {
     return base
   }
   const MARKET_UA = 'Forsion-Tangu'
-  /** 中国大陆镜像:github release/raw 下载的候选地址序列——多代理站依次回退,最后直连兜底
-   *  (gh 代理站点更迭频繁,单点必然间歇性失效;TANGU_GITHUB_PROXY 可指定首选)。非 github 地址原样单发。 */
-  const GH_PROXIES = ['https://ghfast.top', 'https://ghproxy.net', 'https://gh-proxy.com']
-  const githubMirrorCandidates = (url: string): string[] => {
-    if (!/^https:\/\/(github\.com|[^/]*\.githubusercontent\.com)\//.test(url)) return [url]
-    const custom = (process.env.TANGU_GITHUB_PROXY || '').replace(/\/+$/, '')
-    const proxies = custom ? [custom, ...GH_PROXIES.filter((p) => p !== custom)] : GH_PROXIES
-    return [...proxies.map((p) => `${p}/${url}`), url]
-  }
 
   /** 服务端给的 iconUrl 是相对路径(它不知道自己的公网地址);渲染层的 <img> 直连,所以在这里拼成绝对地址。
    *  base 无尾斜杠、iconUrl 以 /api 开头,直接相接即可。图标是公开端点,不带 token。 */
@@ -3068,30 +3076,32 @@ app.whenReady().then(async () => {
     return absIcon(base, (await r.json()) as { iconUrl?: string | null })
   })
 
-  ipcMain.handle('market:install', async (_e, id: string) => {
-    const base = await marketBase()
-    const infoRes = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}/install`, { headers: { 'User-Agent': MARKET_UA } })
-    if (!infoRes.ok) throw new Error(`解析下载地址失败 HTTP ${infoRes.status}`)
-    const info = (await infoRes.json()) as { type: string; installSlug: string; downloadUrl: string; source: string }
-    if (!MARKET_SUBDIR[info.type] || !isSafeSlug(info.installSlug)) throw new Error('非法的安装目标')
-    // 中国大陆镜像:github 源(release 资产)按「多代理 → 直连」序列依次尝试;zip 源(Forsion 对象存储)本就可达,不改。
-    const stored = await loadConfig()
-    const candidates = stored.mirror === 'china' && info.source === 'github'
-      ? githubMirrorCandidates(info.downloadUrl)
-      : [info.downloadUrl]
-    let zipRes: Response | null = null
-    let lastErr = ''
-    for (const dl of candidates) {
-      try {
-        const r = await fetch(dl, { headers: { 'User-Agent': MARKET_UA } })
-        if (r.ok) { zipRes = r; break }
-        lastErr = `HTTP ${r.status}`
-      } catch (e: any) {
-        lastErr = e?.message || String(e)
-      }
+  // 安装进度推回发起窗口('market:installProgress',同 asr:localProgress 口径):市场住在独立浮窗里,
+  // 全局通知在那里不渲染,按钮上的阶段/字节 + 市场自己的提示条是用户唯一看得见的反馈。
+  ipcMain.handle('market:install', async (e, id: string) => {
+    let lastSent = 0
+    const report = (phase: 'resolve' | 'download' | 'install', p?: DownloadProgress): void => {
+      const now = Date.now()
+      if (phase === 'download' && p && p.received > 0 && now - lastSent < 120) return // 字节进度限流,换阶段/换候选必发
+      lastSent = now
+      if (!e.sender.isDestroyed()) e.sender.send('market:installProgress', { id, phase, ...p })
     }
-    if (!zipRes) throw new Error(`下载失败(${candidates.length} 个地址均不可达:${lastErr})`)
-    const buf = Buffer.from(await zipRes.arrayBuffer())
+    report('resolve')
+    const base = await marketBase()
+    // 服务端解析 github 源时要问 api.github.com(服务端在大陆,也会慢);没有超时 = 按钮一直转。
+    // 错误消息只放语言中立的原因码(`resolve: …`),界面层自己套中英文案(frontend/src/services/marketService.ts 的 unwrapIpcError)。
+    const infoRes = await fetch(`${base}/api/market/items/${encodeURIComponent(id)}/install`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
+      .catch((err: any) => { throw new Error(`resolve: ${err?.name === 'TimeoutError' ? 'timeout' : err?.cause?.code || err?.message || err}`) })
+    if (!infoRes.ok) throw new Error(`resolve: HTTP ${infoRes.status}`)
+    const info = (await infoRes.json()) as { type: string; installSlug: string; downloadUrl: string; source: string }
+    if (!MARKET_SUBDIR[info.type] || !isSafeSlug(info.installSlug)) throw new Error('resolve: invalid target')
+    // github 源走 net.fetch(认系统代理);开了「中国大陆镜像」才加第三方代理站(见 downloadCandidates 的 ⚠️)。
+    // zip 源(Forsion 对象存储)一直能通,照旧 Node fetch 单发 —— 不让一个失效的系统代理设置拖累它。
+    const stored = await loadConfig()
+    const github = info.source === 'github'
+    const candidates = github ? downloadCandidates(info.downloadUrl, stored.mirror, process.env.TANGU_GITHUB_PROXY || '') : [info.downloadUrl]
+    const buf = await downloadZip(candidates, github ? (u, init) => net.fetch(u, init) : (u, init) => fetch(u, init), (p) => report('download', p))
+    report('install')
     // 后端 category 对插件家族可能误标(Forsion 插件标成引擎 'plugin')→ 按包内 manifest 实测重定,
     // 否则装进错误目录后两边加载器都不认。返回 effType 让渲染层走对应的装后流程(引擎重扫 / amadeus 重载)。
     const effType = await detectMarketType(buf, info.type)
@@ -3147,7 +3157,7 @@ app.whenReady().then(async () => {
   // 用户目录条目在前(同 spec id 先到先得,用户版本胜);渲染层按插件启停显隐、不提供单独删除。
   ipcMain.handle('spaces:list', () => readSpacesList())
   ipcMain.handle('spaces:save', async (_e, slug: string, json: string) => {
-    if (!isSafeSlug(slug)) throw new Error('非法的 Space 标识')
+    if (!isSafeSlug(slug)) throw new Error('invalid-space-id') // 原因码,渲染层 ipcErrorText 译
     JSON.parse(json) // 落盘前校验合法 JSON,防写入损坏配方
     const dir = join(tanguHomeDir(), 'spaces', slug)
     await mkdir(dir, { recursive: true })
@@ -3155,7 +3165,7 @@ app.whenReady().then(async () => {
     return { ok: true }
   })
   ipcMain.handle('spaces:delete', async (_e, slug: string) => {
-    if (!isSafeSlug(slug)) throw new Error('非法的 Space 标识')
+    if (!isSafeSlug(slug)) throw new Error('invalid-space-id') // 原因码,渲染层 ipcErrorText 译
     await rm(join(tanguHomeDir(), 'spaces', slug), { recursive: true, force: true })
     return { ok: true }
   })
@@ -3164,9 +3174,9 @@ app.whenReady().then(async () => {
   // manifest id 可能 ≠ 目录名,须读 manifest 映射。设置清理走后端 DELETE /agent/plugins/:id,重启由前端触发。
   ipcMain.handle('plugins:userInstalled', () => readUserPluginDirs(join(tanguDataDir(), 'plugins')))
   ipcMain.handle('plugins:uninstall', async (_e, id: string) => {
-    if (!isSafeSlug(id)) throw new Error('非法的插件标识')
+    if (!isSafeSlug(id)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
     const hit = (await readUserPluginDirs(join(tanguDataDir(), 'plugins'))).find((p) => p.id === id)
-    if (!hit) throw new Error('插件不在用户目录(内置/首方插件不可卸载)')
+    if (!hit) throw new Error('not-user-plugin') // 内置/首方插件不可卸载
     await rm(join(tanguDataDir(), 'plugins', hit.slug), { recursive: true, force: true })
     return { ok: true }
   })
@@ -3428,11 +3438,20 @@ app.whenReady().then(async () => {
     mainPanelReady = true
     if (pendingMainPanelTarget) { e.sender.send('window:mainPanelTarget', pendingMainPanelTarget); pendingMainPanelTarget = null }
   })
-  ipcMain.on('window:mainAction', (e, action: unknown) => {
-    if (!isTrustedSender(e) || (action !== 'onboarding' && action !== 'dev-commands')) return
-    // dev-commands 只是让主窗重算 ⌘K 入口:用户还在设置浮窗里,别把主窗抢到前面来。
-    if (action === 'onboarding') showMainWindow()
-    const deliver = (): void => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:mainAction', action) }
+  ipcMain.on('window:mainAction', (e, rawAction: unknown, rawPayload: unknown) => {
+    const req = isTrustedSender(e) ? normalizeMainAction(rawAction, rawPayload) : undefined
+    if (!req) return
+    // 只有要用户回主窗看结果的才把主窗抢到前面:重开引导、带着草稿去聊天。其余(⌘K 重算、测试通知卡、恢复布局、
+    // 成就弹窗、撤 Space)用户还在设置浮窗里,别打断。
+    if (req.action === 'onboarding' || req.action === 'chat-draft' || req.action === 'open-agents' || req.action === 'open-agent') showMainWindow()
+    const deliver = (): void => {
+      const recipients = req.action === 'skills-changed' || req.action === 'agents-changed'
+        ? [mainWindow, ...detachedWindows.values(), ...floatingWindows.values()]
+        : [mainWindow]
+      for (const win of recipients) if (win && !win.isDestroyed() && !win.webContents.isDestroyed() && win.webContents !== e.sender) {
+        win.webContents.send('window:mainAction', req.action, req.payload)
+      }
+    }
     if (mainWindow?.webContents.isLoadingMainFrame()) mainWindow.webContents.once('did-finish-load', deliver)
     else deliver()
   })

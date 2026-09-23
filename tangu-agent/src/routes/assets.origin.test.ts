@@ -18,4 +18,9 @@ describe('skillSummary', () => {
     expect(skillSummary({ id: 'local:b', name: 'B', is_builtin: false, category: 'built-in' }).builtin).toBe(false);
     expect(skillSummary({ id: 'local:c', name: 'C' }).builtin).toBe(false);
   });
+
+  it('共享徽标只在 Agent 技能显式 shared=true 时出现', () => {
+    expect(skillSummary({ id: 'local:@coding/pub', name: 'Pub', shared: true }).shared).toBe(true);
+    expect(skillSummary({ id: 'local:private', name: 'Private' }).shared).toBe(false);
+  });
 });

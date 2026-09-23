@@ -3,9 +3,22 @@
 .wb-native-extend, .wb-extend-target { display: flex; flex: 1; width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .wb-extend { display: flex; flex: 1; flex-direction: column; width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: hidden; color: var(--text); outline: none; }
 .wb-extend-head { display: flex; align-items: center; gap: 8px; flex: none; min-height: 36px; padding: 0 8px 0 14px; border-bottom: 1px solid var(--border); }
-.wb-extend-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 600; color: var(--text); }
+.wb-extend-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-body, 13px); font-weight: 600; color: var(--text); }
 .wb-extend-close { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); cursor: pointer; }
 .wb-extend-close:hover { background: var(--bg-hover); color: var(--text); }
 .wb-extend-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .wb-extend-body { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; }
 .wb-extend-mount { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
+
+/* Side Views (side / bottom panel, mobile drawer): the temporary View covers its own owner, never a neighbour, and Back
+   returns to it. Pane material is translucent, so the owner is hidden rather than painted over; the cover stays as
+   transparent as the pane. opacity keeps the whole subtree unpainted: a descendant that sets `visibility: visible`
+   itself (e.g. an open reveal row) would otherwise show through. Kept at the end of the file: it overrides
+   .wb-extend-target's 100% size. */
+.wb-extend-owner:has(> .wb-extend-inline) { position: relative; }
+.wb-extend-owner:has(> .wb-extend-inline) > :not(.wb-extend-inline) { visibility: hidden; opacity: 0; }
+.wb-extend-inline { position: absolute; inset: 0; z-index: 1; width: auto; height: auto; animation: wb-extend-push var(--menu-enter-duration, 180ms) var(--menu-enter-ease, ease-out); }
+.wb-extend-owner:has(> .wb-view--right) > .wb-extend-inline { bottom: var(--sb-h, 0px); }
+.wb-extend-head--back { gap: 4px; padding: 0 14px 0 6px; }
+@keyframes wb-extend-push { from { opacity: 0; translate: 8px 0; } }
+@media (prefers-reduced-motion: reduce) { .wb-extend-inline { animation: none; } }

@@ -57,7 +57,7 @@
   /* 编辑卡的表面与生产 Canvas `.amx-ucard` 逐项同款。别换成 `--bg-card`:
      Canvas 故意用 `--bg`，画布内的纸面和常规弹层是两个不同的表面层级。 */
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-md, 12px);
   background: var(--bg);
   box-shadow: var(--card-shadow);
 }
@@ -91,7 +91,7 @@
   position: absolute; top: 4px; right: 4px; z-index: 2;
   border: none; background: var(--overlay-light, rgba(127, 127, 127, 0.10));
   color: var(--text-faint, var(--text-muted));
-  cursor: pointer; padding: 2px 4px; border-radius: 6px; display: inline-flex;
+  cursor: pointer; padding: 2px 4px; border-radius: var(--radius-sm, 6px); display: inline-flex;
   opacity: 0;
 }
 .dash2-card:hover .dash2-del { opacity: 1; }
@@ -102,7 +102,7 @@
    这里只补一条本地的:把手不能被卡片的 overflow:hidden 剪掉(它骑在描边上,有半个在外面)。 */
 .dash2-card .amx-card-size-grip { touch-action: none; }
 
-.dash2-empty { color: var(--text-faint, var(--text-muted)); font-size: 13px; padding: 24px; }
+.dash2-empty { color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-body, 13px); padding: 24px; }
 .dash2-empty-stage { position: absolute; left: 24px; top: 24px; white-space: nowrap; }
 
 /* 窄屏降级:卡片流(按 y,x 线性化;内容直接可交互)。 */

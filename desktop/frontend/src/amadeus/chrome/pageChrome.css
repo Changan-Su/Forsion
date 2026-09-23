@@ -1,0 +1,71 @@
+/* Page cover is a media picker, with the same type and surface contract as other UI popovers. */
+.am-app .amx-coverpick {
+  width: min(336px, calc(100vw / var(--uiz, 1) - 24px));
+  max-height: min(380px, calc(100vh / var(--uiz, 1) - 24px));
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.amx-coverpick-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 8px 8px 2px 12px; flex: none; font-weight: 600;
+}
+.am-app .amx-coverpick-close {
+  display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px;
+  border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); cursor: pointer;
+}
+.amx-coverpick-tabs { display: flex; gap: 4px; padding: 2px 8px 6px; border-bottom: var(--border-width) solid var(--border); flex: none; }
+.am-app .amx-coverpick-tabs button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: var(--ui-control-height); padding: 4px 8px; border: 0; border-radius: var(--radius-sm);
+  font: inherit; font-weight: 500; color: var(--text-muted); background: transparent; cursor: pointer;
+}
+.am-app .amx-coverpick-tabs button[aria-selected='true'] { color: var(--text); background: var(--menu-hover); }
+.amx-coverpick-tabs svg, .amx-coverpick-search svg { flex: none; color: var(--text-muted); }
+.amx-coverpick-panel { min-height: 0; overflow: auto; overscroll-behavior: contain; }
+.amx-coverpick-body { padding: 10px 12px 12px; }
+.amx-coverpick-search {
+  display: flex; align-items: center; gap: 8px; min-height: 30px; margin-bottom: 10px;
+  padding: 3px 4px 3px 10px; border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); background: var(--bg-input);
+}
+.am-app .amx-coverpick-search input {
+  flex: 1; min-width: 0; padding: 0; border: 0; border-radius: 0; outline: none; background: transparent; box-shadow: none;
+  color: var(--text); font: inherit;
+}
+.amx-coverpick-search:focus-within { border-color: var(--sel-line); }
+.am-app .amx-coverpick-search input:focus-visible { outline: none; box-shadow: none; }
+.am-app .amx-coverpick-go {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: var(--ui-control-height);
+  padding: 4px 10px; border: 0; border-radius: var(--radius-sm); background: var(--action-fill); color: var(--on-action);
+  font: inherit; font-weight: 500; white-space: nowrap; cursor: pointer;
+}
+.am-app .amx-coverpick-search .amx-coverpick-go { color: var(--text-muted); background: transparent; }
+.am-app .amx-coverpick-go:disabled { opacity: .45; cursor: default; }
+.amx-coverpick-section { margin-bottom: 8px; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
+.amx-coverpick-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.am-app .amx-coverpick-item { min-width: 0; display: flex; flex-direction: column; gap: 4px; border: 0; padding: 0; border-radius: var(--radius-sm); background: none; color: var(--text); text-align: left; cursor: pointer; }
+.amx-coverpick-thumb { position: relative; display: grid; place-items: center; width: 100%; aspect-ratio: 3 / 2; border-radius: var(--radius-sm); overflow: hidden; background: var(--overlay-light); color: var(--text-faint); }
+.amx-coverpick-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.amx-coverpick-thumb img[hidden] { display: none; }
+.amx-coverpick-item[aria-pressed='true'] .amx-coverpick-thumb { outline: var(--focus-ring) solid var(--sel-line); outline-offset: calc(-1 * var(--focus-ring)); }
+.amx-coverpick-selected { position: absolute; right: 6px; bottom: 6px; display: grid; place-items: center; width: 20px; height: 20px; border-radius: var(--radius-sm); color: var(--on-action); background: var(--action-fill); }
+.amx-coverpick-cap { max-width: 100%; font-size: var(--ui-font-caption); line-height: var(--ui-line-caption); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.amx-coverpick-url { display: flex; flex-direction: column; align-items: stretch; gap: 8px; }
+.amx-coverpick-url label { font-size: var(--ui-font-meta); color: var(--text-muted); }
+.am-app .amx-coverpick-url input { min-width: 0; width: 100%; min-height: 30px; padding: 4px 8px; border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); background: var(--bg-input); color: var(--text); font: inherit; outline: none; }
+.am-app .amx-coverpick-url input:is(:focus, :focus-visible) { border-color: var(--sel-line); outline: none; box-shadow: none; }
+.amx-coverpick-url .amx-coverpick-go { align-self: flex-end; margin-top: 6px; }
+.amx-coverpick-hint { color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
+.amx-coverpick-upload { display: flex; flex-direction: column; align-items: center; gap: 8px; padding-block: 16px; text-align: center; }
+.amx-coverpick-upload > svg { color: var(--text-muted); }
+.amx-coverpick-upload-title { font-weight: 500; }
+.amx-coverpick-upload .amx-coverpick-go { margin-top: 6px; }
+.am-app .amx-coverpick :is(.amx-coverpick-tabs button, .amx-coverpick-close, .amx-coverpick-search .amx-coverpick-go):hover { background: var(--menu-hover); color: var(--text); }
+.am-app .amx-coverpick button:focus-visible { outline: var(--focus-ring) solid var(--sel-line); outline-offset: 2px; box-shadow: none; }
+.am-app .amx-coverpick-search input:focus-visible { outline: none; }
+@media (max-width: 380px) {
+  .amx-coverpick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .amx-coverpick-tabs { gap: 2px; }
+  .am-app .amx-coverpick-tabs button { padding-inline: 8px; }
+}

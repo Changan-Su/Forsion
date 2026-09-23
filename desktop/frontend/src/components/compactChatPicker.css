@@ -9,11 +9,11 @@
     position: relative; display: flex; align-items: center; gap: 7px;
     width: 100%; min-width: 0; min-height: 38px; padding: 8px 10px; box-sizing: border-box;
     border-radius: var(--radius-md, 12px); background: var(--bg-card); color: var(--text);
-    font-size: 13px; line-height: 1.4; cursor: pointer;
+    font-size: var(--ui-font-body, 13px); line-height: 1.4; cursor: pointer;
   }
   .compact-chat-picker:hover { background: var(--overlay-medium); }
   .compact-chat-picker:focus-within { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
-  .compact-chat-picker-kind { flex: none; color: var(--text-muted); font-size: 12px; }
+  .compact-chat-picker-kind { flex: none; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
   .compact-chat-picker-icon { display: inline-flex; flex: none; }
   .compact-chat-picker-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
   .compact-chat-picker > svg { flex: none; color: var(--text-muted); }

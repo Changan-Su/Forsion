@@ -1,5 +1,5 @@
 /**
- * 侧栏(编辑式)样式。全 token 驱动 → 随换肤/明暗/扁平自动流动。t2s- 前缀,自含,不依赖 base.css/chat2.css。
+ * 侧栏(编辑式)样式。全 token 驱动 → 随换肤/明暗自动流动。t2s- 前缀,自含,不依赖 base.css/chat2.css。
  * 右键菜单复用 base.css 的 .ctx-menu。
  * 度量:字号与间距全表以「工作区-笔记 view」(.t2s-srow 一族)为准统一,间距再一律 ×0.765
  * (= 用户先 ×0.85 再 ×0.9;新值一律由原始值一次算出,不在 0.85 的结果上二次取整)。字号只统一、不缩放。图标/按钮命中区(24/20/14px)不是间距,不动。
@@ -31,7 +31,7 @@
   align-items: center;
   gap: 8px;
   padding: 14px 14px 10px;
-  font-size: 15px;
+  font-size: var(--ui-font-heading, 14px);
   font-weight: 600;
   color: var(--text);
 }
@@ -44,7 +44,7 @@
   gap: 5.5px;
   margin: 4px 7.5px 6px; /* 同 .t2s-vaultseg:与主区纸卡 32 对齐,首元素落 36 */
   padding: 5.5px 8.5px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   background: var(--overlay-light, rgba(127, 127, 127, 0.08));
   color: var(--text-muted);
 }
@@ -56,7 +56,7 @@
   outline: none;
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: var(--ui-font-body, 13px);
 }
 .t2s-dim { opacity: 0.7; flex-shrink: 0; }
 
@@ -107,7 +107,7 @@
 .t2s-side .t2s-folder-row {
   gap: 5.5px;
   padding: 4.5px;
-  font-size: 13px;
+  font-size: var(--ui-font-body, 13px);
   font-weight: 600;
   letter-spacing: normal;
   text-transform: none;
@@ -125,7 +125,7 @@
   /* 顶 4:主区纸卡上边界已提到 32(见 engine.css tab 栏 32 + 纸卡贴顶),12 会让侧栏首元素掉到 44 显得矮一截。 */
   margin: 4px 10px 8px;
   padding: 2px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   /* 明暗关系(2026-08-13 用户拍板反转):**轨道恒比所在面板暗一档(凹),选中态用 --accent 实底反色**。
    * --accent 深色是近白 / 浅色是近黑,所以一套规则同时满足「深色选中浅、浅色选中深」。
    * ⚠️ 轨道不能用 --overlay-light:它在深色下是**提亮**叠层(rgba(242,239,232,.05)),轨道会比面板更亮
@@ -145,7 +145,7 @@
      时 translateX(0) 也与原来一致 —— 两个老消费者(本地|云端 / 文档|画布)一个字节都没变,
      它们照旧靠下面的 `[data-side=…]` 规则平移(属性选择器特异性更高,盖得住这条)。 */
   width: calc((100% - 4px) / var(--seg-n, 2));
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   /* 次强调色(= 桌面 ribbon `.rb-space.on` 那一档),不是纯 --accent 实底 —— 用户拍板 2026-08-13。
    * 半透明叠在上面的黑色轨道上:深色下往亮里走、浅色下往暗里走,明暗方向照旧成立,只是更克制。 */
   background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.12)));
@@ -170,9 +170,9 @@
   min-width: 0;
   border: none;
   background: none;
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: var(--ui-font-meta, 12px);
   font-weight: 500;
   letter-spacing: 0.02em;
   color: var(--text-faint, var(--text-muted));
@@ -184,7 +184,7 @@
 .t2s-vaultseg[data-busy] button { cursor: default; }
 .t2s-vaultseg-hint {
   margin: 0 12px 8px;
-  font-size: 11.5px;
+  font-size: var(--ui-font-caption, 11px);
   line-height: 1.5;
   color: var(--text-muted);
 }
@@ -193,10 +193,10 @@
   margin-left: 6px;
   padding: 1px 8px;
   border: var(--border-width, 1px) solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   background: var(--surface, transparent);
   color: var(--accent-ink, var(--accent));
-  font-size: 11px;
+  font-size: var(--ui-font-caption, 11px);
   cursor: pointer;
   -webkit-app-region: no-drag;
 }
@@ -216,7 +216,7 @@
   text-align: left;
   border-radius: var(--radius-sm, 8px);
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--ui-font-body, 13px);
   cursor: pointer;
   transition: background var(--duration-fast, 0.15s);
 }
@@ -224,17 +224,17 @@
 .t2sf-fic { flex-shrink: 0; color: var(--text-muted); }
 .t2sf-file .t2sf-fic { color: var(--text-faint, var(--text-muted)); }
 .t2sf-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.t2sf-size { flex-shrink: 0; font-size: 10.5px; color: var(--text-faint, var(--text-muted)); }
-.t2sf-loading { font-size: 12.5px; color: var(--text-faint, var(--text-muted)); padding: 2.5px 6px; }
+.t2sf-size { flex-shrink: 0; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
+.t2sf-loading { font-size: var(--ui-font-meta, 12px); color: var(--text-faint, var(--text-muted)); padding: 2.5px 6px; }
 /* 左 30px 不是间距而是对齐常量(= 缩进基准 14 + 图标列偏移 16),与同槽 .t2sf-loading 的内联值一致。 */
-.t2sf-empty { font-size: 12.5px; color: var(--text-faint, var(--text-muted)); padding: 3px 6px 3px 30px; }
+.t2sf-empty { font-size: var(--ui-font-meta, 12px); color: var(--text-faint, var(--text-muted)); padding: 3px 6px 3px 30px; }
 /* 「显示全部工作区」:非置顶的工作区都收在它下面。做成弱化的普通行,别抢置顶那棵树的注意力。 */
 .t2sf-showall {
   display: flex; align-items: center; gap: 4px; width: 100%;
   margin-top: 6px; padding: 3.5px 6px;
   border: none; background: transparent; cursor: pointer;
-  font: inherit; font-size: 12.5px; text-align: left;
-  color: var(--text-faint, var(--text-muted)); border-radius: 8px;
+  font: inherit; font-size: var(--ui-font-meta, 12px); text-align: left;
+  color: var(--text-faint, var(--text-muted)); border-radius: var(--radius-sm, 6px);
 }
 .t2sf-showall:hover { background: var(--overlay-light); color: var(--text); }
 .t2sf-showall-n { margin-left: auto; font-variant-numeric: tabular-nums; opacity: 0.8; }
@@ -242,7 +242,7 @@
 .t2sf-row.drop, .t2s-group.drop { background: var(--accent-light); box-shadow: inset 0 0 0 1px var(--accent-ink); border-radius: var(--radius-sm, 8px); }
 .t2sf-input {
   display: block; width: calc(100% - 32px); margin: 1.5px 6px 1.5px 0;
-  padding: 1.5px 4.5px; font-size: 13px; color: var(--text);
+  padding: 1.5px 4.5px; font-size: var(--ui-font-body, 13px); color: var(--text);
   background: var(--bg-card); border: 1px solid var(--accent-ink); border-radius: var(--radius-sm, 8px);
   outline: none;
 }
@@ -253,7 +253,7 @@
 /* 常驻底部区(sticky footer):笔记的回收站 / 会话的添加本地工作区+已归档 —— 不随列表滚走。
  * 归档展开可能很长 → 自身 max-height + 滚动,绝不无限撑高把列表挤没。 */
 .t2s-foot { flex: 0 0 auto; -webkit-app-region: no-drag; border-top: var(--border-width, 1px) solid var(--border); padding: 3px 6px 6px; max-height: 45vh; overflow-y: auto; }
-.t2s-hint { padding: 7.5px; font-size: 12.5px; color: var(--text-muted); }
+.t2s-hint { padding: 7.5px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
 
 /* 顶部入口行 */
 .t2s-special-group { display: flex; flex-direction: column; gap: 1px; margin-bottom: 6px; }
@@ -267,9 +267,9 @@
   background: transparent;
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: var(--ui-font-body, 13px);
   text-align: left;
-  border-radius: 10px;
+  border-radius: var(--radius-md, 12px);
   cursor: pointer;
   transition: background var(--duration-fast, 0.15s);
 }
@@ -281,7 +281,7 @@
 .t2s-side .t2s-special-ic > svg { width: var(--t2s-icon, 13px); height: var(--t2s-icon, 13px); }
 .t2s-special.active .t2s-special-ic { color: var(--accent-ink); }
 .t2s-special-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.t2s-special-go { display: inline-flex; color: var(--text-faint, var(--text-muted)); opacity: 0.6; border-radius: 6px; }
+.t2s-special-go { display: inline-flex; color: var(--text-faint, var(--text-muted)); opacity: 0.6; border-radius: var(--radius-sm, 6px); }
 .t2s-special-go:hover { opacity: 1; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
 
 /* 工作区组头 */
@@ -290,7 +290,7 @@
   align-items: center;
   gap: 1.5px;
   margin-top: 4.5px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm, 6px);
   position: relative;
 }
 /* 落点提示:目标上方间隙里一道醒目插入线(拖动的组将落到此处之前) */
@@ -301,7 +301,7 @@
   right: 4px;
   top: -4px;
   height: 3px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   background: var(--accent-ink);
   z-index: 3;
 }
@@ -315,7 +315,7 @@
   right: 4px;
   bottom: -2px;
   height: 3px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   background: var(--accent-ink);
   z-index: 3;
 }
@@ -331,13 +331,13 @@
   background: transparent;
   color: var(--text-muted);
   font-family: var(--font-ui);
-  font-size: 11.5px;
+  font-size: var(--ui-font-caption, 11px);
   font-weight: 600;
   letter-spacing: 0.03em;
   text-transform: uppercase;
   text-align: left;
   cursor: pointer;
-  border-radius: 8px;
+  border-radius: var(--radius-sm, 6px);
 }
 .t2s-group-toggle:hover { color: var(--text); }
 .t2s-group-toggle.active { color: var(--accent-ink); }
@@ -347,11 +347,11 @@
 .t2s-group-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2s-count {
   flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: var(--ui-font-caption, 11px);
   font-weight: 600;
   color: var(--text-faint, var(--text-muted));
   background: var(--overlay-light, rgba(127, 127, 127, 0.1));
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   padding: 0 4.5px;
   line-height: 16px;
 }
@@ -361,7 +361,7 @@
   width: 24px; height: 24px;
   display: inline-flex; align-items: center; justify-content: center;
   border: none; background: transparent; color: var(--text-faint, var(--text-muted));
-  border-radius: 6px; cursor: pointer; flex-shrink: 0; opacity: 0;
+  border-radius: var(--radius-sm, 6px); cursor: pointer; flex-shrink: 0; opacity: 0;
   transition: opacity var(--duration-fast, 0.15s), background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
 }
 .t2s-group:hover .t2s-group-add { opacity: 0.7; }
@@ -380,9 +380,9 @@
   background: transparent;
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: var(--ui-font-body, 13px);
   text-align: left;
-  border-radius: 8px;
+  border-radius: var(--radius-sm, 6px);
   cursor: pointer;
   transition: background var(--duration-fast, 0.15s);
 }
@@ -409,7 +409,7 @@
 @keyframes t2s-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.7); } }
 .t2s-srow-menu {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 20px; height: 20px; border-radius: 5px; flex-shrink: 0;
+  width: 20px; height: 20px; border-radius: var(--radius-sm, 6px); flex-shrink: 0;
   color: var(--text-faint, var(--text-muted)); opacity: 0;
   transition: opacity var(--duration-fast, 0.15s), background var(--duration-fast, 0.15s);
 }
@@ -421,7 +421,7 @@
   flex: 1; min-width: 0;
   background: var(--bg-card, var(--bg));
   color: var(--text);
-  font-family: var(--font-ui); font-size: 13px;
+  font-family: var(--font-ui); font-size: var(--ui-font-body, 13px);
   border: var(--border-width, 1px) solid var(--accent-ink);
   border-radius: var(--radius-sm, 8px);
   padding: 1.5px 4.5px; outline: none;
@@ -431,8 +431,8 @@
   margin: 1.5px 0 0 14px;
   padding: 3px 6px;
   border: none; background: transparent;
-  color: var(--text-muted); font-family: var(--font-ui); font-size: 13px;
-  text-align: left; cursor: pointer; border-radius: 6px;
+  color: var(--text-muted); font-family: var(--font-ui); font-size: var(--ui-font-body, 13px);
+  text-align: left; cursor: pointer; border-radius: var(--radius-sm, 6px);
 }
 .t2s-viewmore:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text); }
 
@@ -440,8 +440,8 @@
   display: flex; align-items: center; gap: 5.5px;
   width: 100%; margin-top: 6px; padding: 6px 7.5px;
   border: 1px dashed var(--border); background: transparent;
-  color: var(--text-muted); font-family: var(--font-ui); font-size: 13px;
-  border-radius: 10px; cursor: pointer;
+  color: var(--text-muted); font-family: var(--font-ui); font-size: var(--ui-font-body, 13px);
+  border-radius: var(--radius-md, 12px); cursor: pointer;
   transition: border-color var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
 }
 .t2s-add-ws:hover { border-color: var(--accent-ink); color: var(--text); }
@@ -471,7 +471,7 @@
   padding: var(--menu-item-pad-block, 4px) var(--menu-item-pad-inline, 8px);
   border: var(--border-width, 1px) solid transparent; border-radius: inherit;
   outline: none; background: transparent;
-  color: var(--text-light, var(--text)); font-family: var(--font-ui); font-size: 12px; text-align: left;
+  color: var(--text-light, var(--text)); font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); text-align: left;
   transition: background 0.18s var(--ease-out, ease-out), color 0.18s var(--ease-out, ease-out);
 }
 .t2sw-mode-trigger:hover,
@@ -511,7 +511,7 @@
   padding: var(--menu-item-pad-block, 4px) var(--menu-item-pad-inline, 8px);
   border: none; border-radius: var(--radius-md, 8px);
   outline: none; background: transparent;
-  color: var(--text); font-family: var(--font-ui); font-size: 12px; text-align: left;
+  color: var(--text); font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); text-align: left;
   cursor: pointer;
 }
 .t2sw-mode-item:hover { background: var(--menu-hover, rgba(127, 127, 127, 0.12)); }
@@ -530,7 +530,7 @@
 .t2sw-body > * { flex: 1; min-height: 0; }
 /* 子视图(会话/文件/笔记)不自带底色 —— 直接用工作区视图所在面板的背景,切换时无「另一层」。 */
 .t2sw .t2s-side { background: transparent; }
-.t2sw-empty { padding: 18px 12px; color: var(--text-muted); font-size: 12.5px; }
+.t2sw-empty { padding: 18px 12px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 /* 观感(用户指定):工作区视图整体加粗 + 前导图标放大到字号的 1.3 倍。
  * `*` 兜住 button/input(不继承 font)与子视图自带的 500/600;.t2s-vaultseg button 特异性(0,1,1)更高故单列。
  * ponytail: 图标只调笔记树的前导槽(.t2s-lead);标题正文里手打的 emoji 不跟(要跟得上
@@ -540,11 +540,11 @@
 /* 图标放大档 = 本文件上方的 `.t2sw .t2s-side { --t2s-icon }`(三个 view 共用的那一个旋钮)。 */
 
 /* 内容级搜索命中(P3):两行行高 —— 标题 + 命中片段;右侧日期。 */
-.t2s-deep-head { padding-top: 10px; font-size: 11px; letter-spacing: 0.04em; color: var(--text-faint); }
+.t2s-deep-head { padding-top: 10px; font-size: var(--ui-font-caption, 11px); letter-spacing: 0.04em; color: var(--text-faint); }
 .t2s-srow.t2s-deep { align-items: flex-start; height: auto; padding-top: 6px; padding-bottom: 6px; }
 .t2s-deep-col { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .t2s-deep-snip {
-  font-size: 11.5px;
+  font-size: var(--ui-font-caption, 11px);
   line-height: 1.45;
   color: var(--text-muted);
   display: -webkit-box;
@@ -552,29 +552,29 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.t2s-deep-date { font-size: 11px; color: var(--text-faint); flex-shrink: 0; margin-left: 6px; }
+.t2s-deep-date { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); flex-shrink: 0; margin-left: 6px; }
 
 /* ══ 插件列表源(View 基座 P2):统一左栏承载插件数据 ══
  * 行/搜索框复用上面的 .t2s-srow / .t2s-search;这里只补顶部动作、分区头与右键菜单。 */
 .t2sw-plug { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 .t2sw-plug-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 /* 插件列表的落区高亮:与笔记树同一套描边(.amx-drop-into),行级的那条在 amadeus-host.css。 */
-.t2sw-plug-list.amx-drop-into { box-shadow: inset 0 0 0 1.5px var(--accent, #6c5ce7); border-radius: 8px; }
+.t2sw-plug-list.amx-drop-into { box-shadow: inset 0 0 0 1.5px var(--accent, #6c5ce7); border-radius: var(--radius-sm, 6px); }
 .t2sw-plug-acts { display: flex; gap: 6px; padding: 8px 7.5px 4px; }
 .t2sw-plug-btn {
-  flex: 1; padding: 6px 10px; border-radius: 8px; cursor: pointer;
+  flex: 1; padding: 6px 10px; border-radius: var(--radius-sm, 6px); cursor: pointer;
   border: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.18));
   background: var(--overlay-light, rgba(127, 127, 127, 0.08));
-  color: var(--text); font-family: var(--font-ui); font-size: 12.5px;
+  color: var(--text); font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px);
 }
 .t2sw-plug-btn:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.16)); }
 .t2sw-plug-sec {
   display: flex; align-items: center; gap: 6px;
-  margin: 10px 9.5px 2px; font-size: 11.5px; color: var(--text-faint, var(--text-muted));
+  margin: 10px 9.5px 2px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted));
 }
 .t2sw-plug-mini {
   margin-left: auto; border: none; background: transparent; cursor: pointer;
-  color: inherit; padding: 0 4px; border-radius: 5px; font-size: 12px;
+  color: inherit; padding: 0 4px; border-radius: var(--radius-sm, 6px); font-size: var(--ui-font-meta, 12px);
 }
 .t2sw-plug-mini:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); }
 .t2sw-plug-scrim { position: fixed; inset: 0; z-index: 40; }
@@ -583,14 +583,14 @@
   min-width: var(--menu-action-min, 168px);
   max-width: min(var(--menu-action-max, 184px), calc(100vw - 16px));
   padding: var(--menu-shell-padding, 4px);
-  border-radius: 10px; background: var(--bg-elevated, var(--bg-card, var(--bg)));
+  border-radius: var(--radius-md, 12px); background: var(--bg-elevated, var(--bg-card, var(--bg)));
   border: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.18));
   box-shadow: var(--card-shadow);
 }
 .t2sw-plug-menu div {
   min-height: var(--menu-item-min-height, 28px);
   padding: var(--menu-item-pad-block, 4px) var(--menu-item-pad-inline, 8px);
-  border-radius: var(--radius-sm, 8px); cursor: pointer; font-size: 12.5px; line-height: 1.4; color: var(--text);
+  border-radius: var(--radius-sm, 8px); cursor: pointer; font-size: var(--ui-font-meta, 12px); line-height: 1.4; color: var(--text);
 }
 .t2sw-plug-menu div:hover { background: var(--menu-hover, rgba(127, 127, 127, 0.12)); }
 
@@ -615,6 +615,6 @@
   flex-shrink: 0;
   margin: 0 4px 0 0;
 }
-.t2s-side .t2s-vaultseg.t2s-mode button { padding: 0; font-size: 11.5px; line-height: 16px; }
+.t2s-side .t2s-vaultseg.t2s-mode button { padding: 0; font-size: var(--ui-font-caption, 11px); line-height: 16px; }
 /* 平铺(Chat 模式)的会话列表:没有组头,与新对话行之间留一口气。 */
 .t2s-flat { padding-top: 2px; }

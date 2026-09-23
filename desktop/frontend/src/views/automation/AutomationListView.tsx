@@ -168,7 +168,7 @@ export const AutomationListView: React.FC = () => {
             )}
             <div className="auto-grouphead">{t('automation.group.watches')}</div>
             {st.loaded && active.length === 0 && (
-              <div style={{ fontSize: 12, color: 'var(--text-faint)', padding: '4px 8px' }}>{t('automation.watches.empty')}</div>
+              <div style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-faint)', padding: '4px 8px' }}>{t('automation.watches.empty')}</div>
             )}
             {active.map((tr) => row(tr, false))}
             {finished.length > 0 && (

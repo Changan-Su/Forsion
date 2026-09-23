@@ -1,25 +1,51 @@
 /* Profiles have one content scroller. Navigation and the save dock never scroll away. */
 .agents-space { display: flex; width: 100%; height: 100%; min-height: 0; color: var(--text); container-type: inline-size; }
 .agents-roster { width: 216px; flex-shrink: 0; display: flex; flex-direction: column; padding: 22px 12px; gap: 18px; background: var(--overlay-light); }
-.agents-roster-heading { display: flex; justify-content: space-between; padding-inline: 8px; color: var(--text-muted); font-size: 12px; }
+.agents-roster-heading { display: flex; justify-content: space-between; padding-inline: 8px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.agents-roster-heading > span { display: inline-flex; align-items: baseline; gap: 6px; }
+.agents-roster-heading small { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
+.agents-roster-heading > button { display: grid; place-items: center; width: 24px; height: 24px; margin: -4px 0; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); cursor: pointer; }
+.agents-roster-heading > button:hover { background: var(--overlay-medium); color: var(--text); }
 .agents-search, .profile-search { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); color: var(--text-muted); }
-.agents-search input, .profile-search input { width: 100%; min-width: 0; border: 0; background: transparent; outline: none; padding: 0; box-shadow: none; font-size: 12px; color: var(--text); }
+.agents-search input, .profile-search input { width: 100%; min-width: 0; border: 0; background: transparent; outline: none; padding: 0; box-shadow: none; font-size: var(--ui-font-meta, 12px); color: var(--text); }
 /* 环画在框内:正文滚动区左右只有 2px 内边距,外扩的环会被裁掉两条竖边 */
 .profile-search:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; }
 .agents-roster-list { overflow: auto; flex: 1; min-height: 0; }
+.agents-roster-row { position: relative; }
+.agents-roster-row.dragging { opacity: .5; }
 .agents-roster-item { width: 100%; display: flex; gap: 10px; align-items: center; border: 0; background: transparent; padding: 12px 8px; text-align: left; border-radius: var(--radius-sm, 8px); color: var(--text); cursor: pointer; }
 .agents-roster-item:hover, .agents-roster-item.selected { background: var(--overlay-medium); }
-.agents-roster-item > span:last-child { min-width: 0; display: grid; gap: 4px; }
-.agents-roster-item strong { font-size: 13px; font-weight: 600; }
-.agents-roster-item small { color: var(--text-muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agents-roster-item > span:last-child { min-width: 0; display: grid; gap: 4px; padding-right: 16px; }
+.agents-roster-item strong { font-size: var(--ui-font-body, 13px); font-weight: 600; }
+.agents-roster-item strong svg { display: inline; margin-left: 5px; vertical-align: -1px; color: var(--accent-ink); }
+.agents-roster-item small { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agents-roster-more { position: absolute; right: 3px; top: 16px; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); cursor: pointer; opacity: 0; }
+.agents-roster-row:hover .agents-roster-more, .agents-roster-more:focus-visible, .agents-roster-more[aria-expanded=true] { opacity: 1; }
+.agents-roster-more:hover { background: var(--overlay-medium); color: var(--text); }
+.agents-roster-actions { display: flex; flex-wrap: wrap; gap: 2px 8px; margin: 2px 4px 8px; padding: 7px; border-radius: var(--radius-sm, 8px); background: var(--overlay-medium); }
+.agents-roster-actions > span { display: inline-flex; align-items: center; gap: 4px; width: 100%; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.agents-roster-actions > button { display: inline-flex; align-items: center; gap: 5px; padding: 5px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text); font-size: var(--ui-font-caption, 11px); cursor: pointer; }
+.agents-roster-actions > button:hover { background: var(--overlay-strong); }
+.agents-roster-actions > button.danger { color: var(--danger); }
+.agents-roster-actions > button:disabled { opacity: .45; cursor: default; }
+.agents-roster-create { justify-content: flex-start; gap: 8px; padding-inline: 8px; margin-top: 0; }
 .agents-character { flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.agent-create-form { display: grid; align-content: start; gap: 20px; width: min(100% - 48px, 590px); height: 100%; overflow: auto; margin: 0 auto; padding: 48px 0; }
+.agent-create-form > header { display: flex; align-items: flex-start; gap: 14px; }
+.agent-create-form > header > svg { color: var(--accent-ink); margin-top: 5px; }
+.agent-create-form h2 { margin: 0 0 5px; color: var(--text); font-size: var(--ui-font-title, 16px); }
+.agent-create-form p { margin: 0; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.6; }
+.agent-create-form > div:last-child { display: flex; justify-content: flex-end; gap: 8px; }
 .agent-profile { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; width: 100%; height: 100%; min-height: 0; max-width: 1000px; margin: 0 auto; padding: 0 32px; color: var(--text); }
 .agent-profile [hidden] { display: none !important; }
 .agent-character-hero { display: flex; align-items: center; gap: 22px; padding: 24px 0; min-width: 0; }
-.agent-portrait { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 96px; height: 104px; color: var(--accent); border-radius: var(--radius-lg, 20px); background: var(--overlay-light); overflow: hidden; }
+.agent-portrait { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 96px; height: 104px; color: var(--accent-ink); border-radius: var(--radius-lg, 20px); background: var(--overlay-light); overflow: hidden; }
 .agent-portrait img { width: 100%; height: 100%; object-fit: cover; }
 .agent-portrait.small { width: 36px; height: 40px; border-radius: var(--radius-sm, 8px); }
-.agent-character-id { font-size: 10px; color: var(--text-muted); overflow-wrap: anywhere; }
+.agent-character-id { display: block; width: calc(100% + 7px); min-width: 0; margin-left: -7px; padding: 1px 6px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm, 8px); text-overflow: ellipsis; transition: background 160ms ease, border-color 160ms ease; }
+.agent-character-id:not([readonly]):hover { background: var(--overlay-light); }
+.agent-character-id:not([readonly]):focus { color: var(--text); background: var(--bg-card); border-color: var(--accent-ink); }
+.agent-character-id[readonly] { cursor: default; }
 .agent-character-identity { min-width: 0; flex: 1; }
 /* 头部即「基本信息」(09-18 从配置页并入):头像点开即换,名称 / 简介原地编辑。
  * 静息态与纯展示一致 —— 透明 1px 边 + 透明底(去边写 border-color,盒模型不变、状态切换不位移);悬停给一层底,
@@ -37,9 +63,9 @@
 .agent-character-name, .agent-character-desc { display: block; width: calc(100% + 7px); min-width: 0; margin-left: -7px; padding: 1px 6px; color: var(--text); background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm, 8px); transition: background 160ms ease, border-color 160ms ease; }
 .agent-character-name:hover, .agent-character-desc:hover { background: var(--overlay-light); }
 .agent-character-name:focus, .agent-character-desc:focus { color: var(--text); background: var(--bg-card); border-color: var(--accent-ink); }
-.agent-character-name { margin-block: 3px 4px; font-size: 28px; font-weight: 600; line-height: 1.25; letter-spacing: -.025em; text-overflow: ellipsis; }
-.agent-character-desc { max-width: 547px; margin-block: 0 6px; font-size: 12px; line-height: 1.6; color: var(--text-muted); resize: none; field-sizing: content; min-height: calc(1.6em + 4px); max-height: calc(4.8em + 4px); }
-.agent-state { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-muted); }
+.agent-character-name { margin-block: 3px 4px; font-size: var(--ui-font-display, 20px); font-weight: 600; line-height: 1.25; letter-spacing: -.025em; text-overflow: ellipsis; }
+.agent-character-desc { max-width: 547px; margin-block: 0 6px; font-size: var(--ui-font-meta, 12px); line-height: 1.6; color: var(--text-muted); resize: none; field-sizing: content; min-height: calc(1.6em + 4px); max-height: calc(4.8em + 4px); }
+.agent-state { display: inline-flex; align-items: center; gap: 6px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
 .agent-state i { width: 5px; height: 5px; border-radius: 50%; background: var(--text-muted); }
 .agent-state.working { color: var(--accent-ink); }
 .agent-state.working i { background: var(--accent); }
@@ -47,7 +73,7 @@
 .profile-expand:hover { background: var(--overlay-medium); color: var(--text); }
 .agent-section-nav { --profile-nav-gap: 4px; --profile-nav-padding: 5px; position: relative; isolation: isolate; display: flex; gap: var(--profile-nav-gap); padding: var(--profile-nav-padding); background: var(--overlay-light); border-radius: var(--radius-md, 12px); min-width: 0; }
 .agent-section-nav::before { content: ""; position: absolute; z-index: -1; pointer-events: none; inset-block: var(--profile-nav-padding); left: var(--profile-nav-padding); width: calc((100% - 2 * var(--profile-nav-padding) - (var(--profile-tab-count, 5) - 1) * var(--profile-nav-gap)) / var(--profile-tab-count, 5)); border-radius: var(--radius-sm, 8px); background: var(--bg); box-shadow: var(--btn-shadow); transform: translateX(calc(var(--profile-tab-index, 0) * (100% + var(--profile-nav-gap)))); transition: transform 200ms cubic-bezier(.2,.8,.2,1); }
-.agent-section-nav button { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 8px 10px; border: 0; background: transparent; color: var(--text-muted); border-radius: var(--radius-sm, 8px); cursor: pointer; white-space: nowrap; font-size: 12px; transition: background 160ms ease, color 160ms ease; }
+.agent-section-nav button { flex: 1; min-width: 0; display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 8px 10px; border: 0; background: transparent; color: var(--text-muted); border-radius: var(--radius-sm, 8px); cursor: pointer; white-space: nowrap; font-size: var(--ui-font-meta, 12px); transition: background 160ms ease, color 160ms ease; }
 .agent-section-nav button svg { flex-shrink: 0; }
 .agent-section-nav button span { overflow: hidden; text-overflow: ellipsis; }
 .agent-section-nav button:hover { color: var(--text); background: var(--overlay-medium); }
@@ -57,22 +83,22 @@
 .agent-profile-content:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .profile-edit-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
 .profile-edit-fields:disabled { opacity: .7; }
-.agent-profile-content h3 { font-size: 12px; color: var(--text-muted); font-weight: 500; margin: 24px 0 12px; }
+.agent-profile-content h3 { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); font-weight: 500; margin: 24px 0 12px; }
 .agent-current-session { display: grid; gap: 8px; margin-bottom: 24px; padding: 16px; background: var(--overlay-light); border-radius: var(--radius-md, 12px); overflow-wrap: anywhere; }
-.agent-current-session small, .agent-current-session > span { font-size: 11px; line-height: 1.6; color: var(--text-muted); }
-.agent-current-session > strong { font-size: 14px; font-weight: 600; }
+.agent-current-session small, .agent-current-session > span { font-size: var(--ui-font-caption, 11px); line-height: 1.6; color: var(--text-muted); }
+.agent-current-session > strong { font-size: var(--ui-font-body, 13px); font-weight: 600; }
 .agent-current-session .profile-model-field { margin-top: 6px; }
-.agent-profile-link { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-top: 16px; min-height: 36px; padding: 8px 0; color: var(--text-muted); font-size: 12px; background: transparent; border: 0; cursor: pointer; text-align: left; }
+.agent-profile-link { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; margin-top: 16px; min-height: 36px; padding: 8px 0; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); background: transparent; border: 0; cursor: pointer; text-align: left; }
 .agent-profile-link:hover { color: var(--accent-ink); }
 .agent-profile-link svg { flex-shrink: 0; }
-.agent-profile-muted { color: var(--text-muted); font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
-.agent-profile-error { color: var(--danger); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; margin: 0; }
+.agent-profile-muted { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.65; overflow-wrap: anywhere; }
+.agent-profile-error { color: var(--danger); font-size: var(--ui-font-meta, 12px); line-height: 1.6; overflow-wrap: anywhere; margin: 0; }
 .profile-config-group { margin-bottom: 26px; }
-.profile-config-group > h2 { font-size: 14px; font-weight: 600; margin: 0 0 10px; }
+.profile-config-group > h2 { font-size: var(--ui-font-body, 13px); font-weight: 600; margin: 0 0 10px; }
 .profile-config-group > p { margin: 0 0 16px; }
 .agent-config-fields { display: grid; gap: 18px; }
-.agent-field { display: grid; gap: 8px; color: var(--text-muted); font-size: 12px; min-width: 0; }
-.agent-field input, .agent-field select, .agent-field textarea { width: 100%; min-width: 0; color: var(--text); font-size: 13px; }
+.agent-field { display: grid; gap: 8px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); min-width: 0; }
+.agent-field input, .agent-field select, .agent-field textarea { width: 100%; min-width: 0; color: var(--text); font-size: var(--ui-font-body, 13px); }
 .agent-field input:not([type=checkbox]), .agent-field select { min-height: 36px; }
 .agent-field textarea { resize: vertical; line-height: 1.65; }
 .agent-avatar-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; min-width: 0; }
@@ -84,90 +110,129 @@
 .profile-list-toolbar { display: grid; gap: 6px; }
 .profile-list-controls { display: flex; gap: 8px; min-width: 0; }
 .profile-list-controls > .profile-search { flex: 1 1 0; min-width: 0; }
-.profile-list-controls > select { flex: 0 1 auto; min-width: 0; max-width: 46%; min-height: 36px; font-size: 12px; color: var(--text); }
-.profile-list-summary { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 12px; color: var(--text-muted); font-size: 11px; line-height: 1.6; }
+.profile-list-controls > select { flex: 0 1 auto; min-width: 0; max-width: 46%; min-height: 36px; font-size: var(--ui-font-meta, 12px); color: var(--text); }
+.profile-list-summary { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0 12px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.6; }
 .profile-list-actions { display: flex; flex-wrap: wrap; gap: 0 12px; }
-.profile-text-action { color: var(--text-muted); font-size: 11px; background: transparent; border: 0; padding: 6px 0; cursor: pointer; }
+.agent-skills-panel { display: grid; gap: 8px; min-width: 0; }
+.agent-skills-panel .profile-save-notice { overflow-wrap: anywhere; }
+.agent-skills-panel .profile-list-toolbar { margin-bottom: 4px; }
+.agent-skills-policy-hint { margin: 0; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.55; }
+.agent-skill-section-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; margin-top: 20px; min-width: 0; }
+.agent-skill-section-head:first-of-type { margin-top: 8px; }
+.agent-skill-section-head > div { min-width: 0; }
+.agent-skill-section-head h3 { margin: 0 0 3px; color: var(--text); font-size: var(--ui-font-body, 13px); font-weight: 600; }
+.agent-skill-section-head p { margin: 0; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.5; }
+.agent-skill-section-head .btn { flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px; }
+.agent-skill-list { display: grid; gap: 4px; min-width: 0; }
+.agent-skill-row { display: flex; align-items: flex-start; gap: 9px; min-width: 0; padding: 10px 11px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); }
+.agent-skill-row.enabled { background: var(--overlay-medium); }
+.agent-skill-row > label { display: grid; place-items: center; width: 20px; height: 22px; flex-shrink: 0; cursor: pointer; }
+.agent-skill-row input { accent-color: var(--accent); }
+.agent-skill-row > svg { flex-shrink: 0; align-self: center; color: var(--text-muted); transition: transform 160ms ease; }
+.agent-skill-row > svg.open { transform: rotate(90deg); }
+.agent-skill-summary { display: grid; gap: 2px; flex: 1; min-width: 0; padding: 0; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; }
+.agent-skill-summary strong { font-size: var(--ui-font-body, 13px); font-weight: 500; overflow-wrap: anywhere; }
+.agent-skill-summary span { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-skill-summary small { color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-caption, 11px); }
+.agent-skill-summary:hover strong { color: var(--accent-ink); }
+.agent-skill-editor { display: grid; gap: 10px; min-width: 0; padding: 14px; border-radius: var(--radius-md, 12px); background: var(--overlay-light); }
+.agent-skill-editor > label { display: grid; gap: 5px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.agent-skill-editor input, .agent-skill-editor textarea { width: 100%; min-width: 0; color: var(--text); font-size: var(--ui-font-body, 13px); }
+.agent-skill-editor textarea { line-height: 1.6; resize: vertical; }
+.agent-skill-editor > div { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 7px; }
+.agent-skill-detail { display: grid; gap: 10px; min-width: 0; margin-top: 12px; padding: 14px; border-radius: var(--radius-md, 12px); background: var(--overlay-light); }
+.agent-skill-detail-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.agent-skill-detail-head strong { font-size: var(--ui-font-body, 13px); }
+.agent-skill-detail > p { margin: 0; font-size: var(--ui-font-meta, 12px); line-height: 1.6; color: var(--text-muted); }
+.agent-skill-detail > small { font-size: var(--ui-font-caption, 11px); line-height: 1.5; color: var(--text-faint, var(--text-muted)); overflow-wrap: anywhere; }
+.agent-skill-detail > pre { max-height: 320px; overflow: auto; margin: 0; padding: 12px; border-radius: var(--radius-sm, 8px); background: var(--bg); font-size: var(--ui-font-meta, 12px); line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-skill-detail details { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.agent-skill-detail details > summary { cursor: pointer; }
+.agent-skill-detail ul { margin: 8px 0 0; padding-left: 20px; overflow-wrap: anywhere; }
+.agent-skill-detail-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
+.agent-skill-detail-actions .btn { display: inline-flex; align-items: center; gap: 5px; }
+.agent-skill-detail-actions .danger { color: var(--danger); }
+.profile-text-action { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); background: transparent; border: 0; padding: 6px 0; cursor: pointer; }
 .profile-text-action:hover, .profile-text-action[aria-pressed=true] { color: var(--accent-ink); }
 .profile-text-action[aria-pressed=true] { text-decoration: underline; text-underline-offset: 4px; }
 .profile-text-action:disabled { opacity: .45; cursor: default; }
 .agent-equipment-list { margin-top: 10px; display: grid; gap: 3px; }
-.agent-equipment-item { display: flex; gap: 10px; align-items: flex-start; padding: 12px 10px; border-radius: var(--radius-sm, 8px); font-size: 12px; line-height: 1.6; cursor: pointer; transition: background 160ms ease; }
+.agent-equipment-item { display: flex; gap: 10px; align-items: flex-start; padding: 12px 10px; border-radius: var(--radius-sm, 8px); font-size: var(--ui-font-meta, 12px); line-height: 1.6; cursor: pointer; transition: background 160ms ease; }
 .agent-equipment-item:hover, .agent-equipment-item.enabled { background: var(--overlay-light); }
 /* 只在键盘聚焦勾选框时圈整行;点开描述(按钮自己有焦点环)不该让整行套上一圈粗框 */
 .agent-equipment-item:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
 .agent-equipment-item input { flex-shrink: 0; margin-top: 3px; accent-color: var(--accent); }
-.agent-equipment-item strong { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
+.agent-equipment-item strong { font-size: var(--ui-font-body, 13px); font-weight: 500; overflow-wrap: anywhere; }
 /* 清单行(EquipmentRow):勾选框 + 名称一行,描述另起一行、默认截成一行,点开才是全文。
  * 单独一个勾选项的 label(允许读取活动日志…)仍是上面那条 flex 规则;这里的 div 变体特异性高一档,不靠源码顺序。 */
 div.agent-equipment-item { display: grid; gap: 1px; padding: 7px 10px; cursor: default; }
 div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 10px; min-width: 0; cursor: pointer; }
-.equipment-desc { display: block; width: calc(100% - 23px); min-width: 0; margin-left: 23px; padding: 0; text-align: left; font-size: 12px; line-height: 1.6; color: var(--text-muted); background: transparent; border: 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.equipment-desc { display: block; width: calc(100% - 23px); min-width: 0; margin-left: 23px; padding: 0; text-align: left; font-size: var(--ui-font-meta, 12px); line-height: 1.6; color: var(--text-muted); background: transparent; border: 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .equipment-desc:hover { color: var(--text); }
 .equipment-desc:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
 .equipment-desc[aria-expanded=true] { white-space: normal; overflow-wrap: anywhere; }
 /* 内置技能组:默认合上。标题行 = 组名 + 已启用计数,不描边(内容卡纪律),靠底色与清单区分。 */
 .equipment-group { margin-top: 10px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); }
-.equipment-group > summary { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 10px 12px; font-size: 12px; font-weight: 500; cursor: pointer; border-radius: var(--radius-sm, 8px); }
+.equipment-group > summary { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 10px 12px; font-size: var(--ui-font-meta, 12px); font-weight: 500; cursor: pointer; border-radius: var(--radius-sm, 8px); }
 .equipment-group > summary:hover { background: var(--overlay-light); }
 .equipment-group > summary::before { content: ""; flex-shrink: 0; align-self: center; width: 0; height: 0; border-block: 4px solid transparent; border-left: 6px solid currentColor; opacity: .7; transition: transform 160ms ease; }
 .equipment-group[open] > summary::before { transform: rotate(90deg); }
 .equipment-group > summary::-webkit-details-marker { display: none; }
 .equipment-group > summary > span { flex: 1; min-width: 0; }
-.equipment-group > summary > small { font-size: 11px; font-weight: 400; color: var(--text-muted); white-space: nowrap; }
+.equipment-group > summary > small { font-size: var(--ui-font-caption, 11px); font-weight: 400; color: var(--text-muted); white-space: nowrap; }
 .equipment-group > .agent-equipment-list { margin-top: 0; padding: 0 4px 6px; }
 .equipment-group .agent-equipment-item.enabled { background: transparent; }
 .equipment-group .agent-equipment-item:hover { background: var(--overlay-light); }
-.profile-empty { padding: 26px 12px; text-align: center; font-size: 12px; color: var(--text-muted); }
+.profile-empty { padding: 26px 12px; text-align: center; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
 .agent-profile-save { flex-shrink: 0; padding: 12px 0; border-top: 1px solid var(--border); display: grid; gap: 8px; min-width: 0; }
 .agent-profile-save:empty { display: none; }
-.agent-profile-save small { color: var(--text-muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.agent-profile-save small { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.6; overflow-wrap: anywhere; }
 .agent-profile-save.is-dirty > small { color: var(--accent-ink); }
 .agent-profile-save > div { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
-.agent-profile-save button { display: inline-flex; justify-content: center; align-items: center; gap: 6px; min-height: 34px; font-size: 12px; }
-.profile-save-notice { margin: 0; display: flex; align-items: center; gap: 7px; font-size: 11px; color: var(--accent-ink); line-height: 1.6; }
+.agent-profile-save button { display: inline-flex; justify-content: center; align-items: center; gap: 6px; min-height: 34px; font-size: var(--ui-font-meta, 12px); }
+.profile-save-notice { margin: 0; display: flex; align-items: center; gap: 7px; font-size: var(--ui-font-caption, 11px); color: var(--accent-ink); line-height: 1.6; }
 .profile-save-notice svg { flex-shrink: 0; }
 .agent-profile-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; overflow: hidden; color: var(--text); }
-.agent-profile-panel-title { padding: 12px 16px 0; font-size: 11px; color: var(--text-muted); flex-shrink: 0; }
+.agent-profile-panel-title { padding: 12px 16px 0; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); flex-shrink: 0; }
 .agent-profile-panel > .agent-profile { flex: 1; height: auto; }
 .agent-profile.compact { padding: 0 16px; }
 .compact .agent-character-hero { gap: 12px; padding: 16px 0; align-items: center; }
 .compact .agent-portrait { width: 48px; height: 54px; border-radius: var(--radius-md, 12px); }
-.compact .agent-character-name { font-size: 18px; margin-block: 2px 3px; }
-.compact .agent-character-desc { font-size: 11px; margin-bottom: 4px; }
+.compact .agent-character-name { font-size: var(--ui-font-title, 16px); margin-block: 2px 3px; }
+.compact .agent-character-desc { font-size: var(--ui-font-caption, 11px); margin-bottom: 4px; }
 .compact .agent-portrait-badge { right: 3px; bottom: 3px; width: 18px; height: 18px; }
 .compact .agent-portrait-remove { top: -5px; right: -5px; width: 17px; height: 17px; }
 .compact .agent-section-nav { --profile-nav-gap: 2px; --profile-nav-padding: 4px; }
-.compact .agent-section-nav button { flex-direction: column; gap: 5px; font-size: 10px; padding: 7px 2px; }
+.compact .agent-section-nav button { flex-direction: column; gap: 5px; font-size: var(--ui-font-caption, 11px); padding: 7px 2px; }
 .compact .agent-profile-content { padding-block: 18px; }
 .compact .agent-current-session { padding: 12px; }
 .agent-profile-team { padding: 12px 18px; }
-.agent-profile-team h3 { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.agent-profile-team h3 { display: flex; align-items: center; gap: 8px; font-size: var(--ui-font-body, 13px); }
 .profile-model-trigger { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; min-height: 38px; padding: 9px 11px; text-align: left; border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); background: var(--bg); color: var(--text); cursor: pointer; }
 .profile-model-trigger > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .profile-model-trigger svg { flex-shrink: 0; transition: transform 160ms ease; }
 .profile-model-trigger[aria-expanded=true] svg { transform: rotate(180deg); }
 .profile-model-options { padding: 8px; background: var(--overlay-light); border-radius: var(--radius-sm, 8px); animation: profile-enter 160ms ease both; }
 .profile-model-results { max-height: 220px; overflow: auto; margin-top: 6px; }
-.profile-model-results button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 9px 8px; color: var(--text); background: transparent; border: 0; border-radius: var(--radius-sm, 8px); text-align: left; cursor: pointer; font-size: 12px; overflow-wrap: anywhere; }
+.profile-model-results button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 9px 8px; color: var(--text); background: transparent; border: 0; border-radius: var(--radius-sm, 8px); text-align: left; cursor: pointer; font-size: var(--ui-font-meta, 12px); overflow-wrap: anywhere; }
 .profile-model-results button:hover, .profile-model-results button[aria-pressed=true] { background: var(--overlay-medium); }
 .profile-model-results button > span { flex: 1; min-width: 0; display: grid; gap: 3px; }
-.profile-model-results strong { font-size: 12px; font-weight: 500; }
-.profile-model-results small { color: var(--text-muted); font-size: 10px; }
+.profile-model-results strong { font-size: var(--ui-font-meta, 12px); font-weight: 500; }
+.profile-model-results small { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .profile-model-results svg { flex-shrink: 0; color: var(--accent-ink); }
 .profile-text-editor { display: grid; gap: 8px; min-width: 0; }
-.profile-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; color: var(--text-muted); }
-.profile-text-editor > textarea { width: 100%; min-width: 0; min-height: 150px; padding: 12px; resize: vertical; font-size: 13px; line-height: 1.75; tab-size: 2; }
+.profile-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.profile-text-editor > textarea { width: 100%; min-width: 0; min-height: 150px; padding: 12px; resize: vertical; font-size: var(--ui-font-body, 13px); line-height: 1.75; tab-size: 2; }
 .profile-text-preview { min-height: 150px; padding: 12px; background: var(--overlay-light); border-radius: var(--radius-sm, 8px); overflow-wrap: anywhere; }
-.profile-editor-hint { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: 11px; line-height: 1.6; color: var(--text-muted); }
+.profile-editor-hint { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; font-size: var(--ui-font-caption, 11px); line-height: 1.6; color: var(--text-muted); }
 .profile-editor-hint > span { margin-left: auto; font-variant-numeric: tabular-nums; }
 .profile-disclosure { margin-bottom: 16px; padding: 12px; background: var(--overlay-light); border-radius: var(--radius-sm, 8px); }
-.profile-disclosure > summary { cursor: pointer; padding-block: 3px; color: var(--text); font-size: 12px; font-weight: 500; }
+.profile-disclosure > summary { cursor: pointer; padding-block: 3px; color: var(--text); font-size: var(--ui-font-meta, 12px); font-weight: 500; }
 .profile-disclosure[open] > summary { margin-bottom: 14px; }
-.profile-memory { font-size: 13px; line-height: 1.7; }
+.profile-memory { font-size: var(--ui-font-body, 13px); line-height: 1.7; }
 .profile-memory [hidden] { display: none !important; }
-.profile-memory textarea { width: 100%; min-width: 0; padding: 10px; font-size: 13px; line-height: 1.75; resize: vertical; }
-.profile-memory summary { cursor: pointer; padding-block: 6px; font-size: 12px; }
+.profile-memory textarea { width: 100%; min-width: 0; padding: 10px; font-size: var(--ui-font-body, 13px); line-height: 1.75; resize: vertical; }
+.profile-memory summary { cursor: pointer; padding-block: 6px; font-size: var(--ui-font-meta, 12px); }
 .profile-memory li { padding-bottom: 12px; }
 /* 成长 › 记忆:条目与工作笔记同一套卡(底色 + 圆角、不描边);动作是卡尾的图标钮,来源写在折叠标题上。 */
 .profile-memory { display: grid; gap: 10px; min-width: 0; }
@@ -176,39 +241,39 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 .profile-growth-memory > .agent-profile-link { margin-top: 0; }
 .profile-growth-memory .profile-disclosure, .agent-schedule .profile-disclosure { margin-bottom: 0; padding: 8px 12px; }
 .profile-growth-memory .profile-disclosure[open] > summary, .agent-schedule .profile-disclosure[open] > summary { margin-bottom: 10px; }
-.profile-disclosure > summary > small { float: right; margin-left: 10px; font-size: 11px; font-weight: 400; color: var(--text-muted); }
-.memory-add > summary { display: inline-flex; align-items: center; gap: 6px; padding-block: 2px; font-size: 12px; color: var(--accent-ink); list-style: none; }
+.profile-disclosure > summary > small { float: right; margin-left: 10px; font-size: var(--ui-font-caption, 11px); font-weight: 400; color: var(--text-muted); }
+.memory-add > summary { display: inline-flex; align-items: center; gap: 6px; padding-block: 2px; font-size: var(--ui-font-meta, 12px); color: var(--accent-ink); list-style: none; }
 .memory-add > summary::-webkit-details-marker { display: none; }
 .memory-add > summary:hover { text-decoration: underline; text-underline-offset: 3px; }
-.memory-entry > p { margin: 0; font-size: 13px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.memory-entry > p { margin: 0; font-size: var(--ui-font-body, 13px); line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
 .memory-entry-meta { display: flex; align-items: flex-start; gap: 2px; min-width: 0; margin-bottom: -4px; }
-.memory-entry-meta > details { flex: 1; min-width: 0; font-size: 11px; line-height: 1.6; color: var(--text-muted); overflow-wrap: anywhere; }
-.memory-entry-meta > details > summary { padding-block: 3px; font-size: 11px; }
+.memory-entry-meta > details { flex: 1; min-width: 0; font-size: var(--ui-font-caption, 11px); line-height: 1.6; color: var(--text-muted); overflow-wrap: anywhere; }
+.memory-entry-meta > details > summary { padding-block: 3px; font-size: var(--ui-font-caption, 11px); }
 .memory-entry-meta > .harness-undo { margin: 0; }
-.memory-footnote { margin: 0; font-size: 11px; line-height: 1.6; color: var(--text-faint, var(--text-muted)); }
+.memory-footnote { margin: 0; font-size: var(--ui-font-caption, 11px); line-height: 1.6; color: var(--text-faint, var(--text-muted)); }
 /* 成长的两层分段:两张并排的卡(标题 + 一句话)。选中 = 有底色的卡 + accent 标题,未选 = 只有字。
  * 不用「纸面底」当选中态:宽版里正文底就是纸面色,选中的那张会整个隐形、反倒是没选的像张卡(09-19 截图自查发现)。 */
 .profile-segment { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 16px; }
 .profile-segment > button { display: grid; gap: 2px; min-width: 0; padding: 10px 12px; text-align: left; color: var(--text-muted); background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm, 8px); cursor: pointer; transition: background 160ms ease, color 160ms ease; }
 .profile-segment > button:hover { background: var(--overlay-light); color: var(--text); }
 .profile-segment > button[aria-pressed=true] { color: var(--accent-ink); background: var(--overlay-medium); }
-.profile-segment strong { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; }
+.profile-segment strong { display: flex; align-items: center; gap: 6px; font-size: var(--ui-font-body, 13px); font-weight: 600; }
 /* 说明允许折行,不截断:英文在 300px 的右栏里一行放不下(09-19 台架实测截成「Methods it has le…」) */
-.profile-segment small { font-size: 11px; line-height: 1.5; color: var(--text-muted); overflow-wrap: anywhere; }
+.profile-segment small { font-size: var(--ui-font-caption, 11px); line-height: 1.5; color: var(--text-muted); overflow-wrap: anywhere; }
 .profile-segment .profile-tab-badge { position: static; margin-left: auto; }
 /* 日程:条目沿用工作笔记的卡;时间行 = 芯片 + 下一次 + 间隔。已过期 / 停用的整卡降一档。 */
 .schedule-entry, .schedule-rule { display: grid; gap: 6px; min-width: 0; padding: 12px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); }
 .schedule-entry.is-past, .schedule-rule.is-past { opacity: .62; }
-.schedule-entry > p { margin: 0; font-size: 12px; line-height: 1.6; color: var(--text-muted); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.schedule-when { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-size: 12px; line-height: 1.6; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.schedule-entry > p { margin: 0; font-size: var(--ui-font-meta, 12px); line-height: 1.6; color: var(--text-muted); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.schedule-when { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-size: var(--ui-font-meta, 12px); line-height: 1.6; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .schedule-when > .harness-kind { margin-right: 0; }
 .schedule-when > time { color: var(--text); }
 .schedule-rule { grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; align-items: start; }
 .schedule-rule > svg { margin-top: 3px; color: var(--text-muted); }
 .schedule-rule > span { display: grid; gap: 2px; min-width: 0; }
-.schedule-rule strong { font-size: 13px; font-weight: 500; overflow-wrap: anywhere; }
-.schedule-rule small { font-size: 11px; line-height: 1.6; color: var(--text-muted); overflow-wrap: anywhere; }
-.schedule-rules > h3 { margin: 10px 0 8px; font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.schedule-rule strong { font-size: var(--ui-font-body, 13px); font-weight: 500; overflow-wrap: anywhere; }
+.schedule-rule small { font-size: var(--ui-font-caption, 11px); line-height: 1.6; color: var(--text-muted); overflow-wrap: anywhere; }
+.schedule-rules > h3 { margin: 10px 0 8px; font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--text-muted); }
 .schedule-past { margin-bottom: 0; }
 .schedule-past > .harness-entries { margin-top: 0; }
 .agent-schedule .harness-summary .profile-text-action, .profile-memory .harness-summary .profile-text-action { color: var(--text-muted); }
@@ -217,59 +282,93 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
  * 编辑史是一条时间线:左侧细线 + 实心点(新建/修改 = accent,删除/回滚 = 灰),点盖在线上,不依赖纸面底色。 */
 .agent-harness { display: grid; gap: 14px; min-width: 0; }
 .agent-harness > p { margin: 0; }
-.harness-summary { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; font-size: 12px; line-height: 1.6; color: var(--text-muted); }
+.harness-summary { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; font-size: var(--ui-font-meta, 12px); line-height: 1.6; color: var(--text-muted); }
 .harness-summary time { white-space: nowrap; }
 .harness-summary .profile-text-action { display: inline-flex; align-items: center; gap: 6px; padding: 0; color: var(--accent-ink); }
 .harness-summary .profile-text-action:hover:not(:disabled) { text-decoration: underline; text-underline-offset: 3px; }
 .harness-entries { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .harness-entry { display: grid; gap: 6px; min-width: 0; padding: 12px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); }
 .harness-entry-head { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
-.harness-entry-head strong { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.harness-entry-head strong { flex: 1; min-width: 0; font-size: var(--ui-font-body, 13px); font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
 /* --border 与卡底几乎同色,芯片轮廓会消失;半透明的 --overlay-strong 在任何底上都立得住 */
-.harness-kind { display: inline-block; margin-right: 8px; padding: 0 7px; vertical-align: 1px; font-size: 10px; font-weight: 500; line-height: 17px; white-space: nowrap; color: var(--text-muted); border: 1px solid var(--overlay-strong); border-radius: 999px; }
+.harness-kind { display: inline-block; margin-right: 8px; padding: 0 7px; vertical-align: 1px; font-size: var(--ui-font-caption, 11px); font-weight: 500; line-height: 17px; white-space: nowrap; color: var(--text-muted); border: 1px solid var(--overlay-strong); border-radius: var(--radius-pill, 999px); }
 .harness-kind.recipe { color: var(--accent-ink); }
 .harness-undo { flex-shrink: 0; display: grid; place-items: center; width: 24px; height: 24px; margin: -2px -4px 0 0; padding: 0; color: var(--text-muted); background: transparent; border: 0; border-radius: var(--radius-sm, 8px); cursor: pointer; }
 .harness-undo:hover { color: var(--text); background: var(--overlay-medium); }
 .harness-undo:disabled { opacity: .45; cursor: default; }
-.harness-entry > p { margin: 0; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap; }
-.harness-evidence, .harness-meta { font-size: 11px; line-height: 1.6; color: var(--text-muted); overflow-wrap: anywhere; }
+.harness-entry > p { margin: 0; font-size: var(--ui-font-meta, 12px); line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap; }
+.harness-evidence, .harness-meta { font-size: var(--ui-font-caption, 11px); line-height: 1.6; color: var(--text-muted); overflow-wrap: anywhere; }
 .harness-meta { color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums; }
 .harness-empty { display: grid; justify-items: center; gap: 10px; padding: 32px 16px; text-align: center; color: var(--text-muted); background: var(--overlay-light); border-radius: var(--radius-md, 12px); }
 .harness-empty > svg { color: var(--accent-ink); }
-.harness-empty > p { max-width: 34em; margin: 0; font-size: 12px; line-height: 1.65; }
+.harness-empty > p { max-width: 34em; margin: 0; font-size: var(--ui-font-meta, 12px); line-height: 1.65; }
 .harness-empty > .btn { display: inline-flex; align-items: center; gap: 6px; }
 /* 待复盘候选:Historian 的提名,还不是笔记 —— 同一套底色卡,标题用 accent 提示「有东西等你」,不加描边。 */
-.harness-candidates > h3 { margin: 10px 0 8px; font-size: 12px; font-weight: 500; color: var(--accent-ink); }
+.harness-candidates > h3 { margin: 10px 0 8px; font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--accent-ink); }
 .harness-candidates > ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.harness-candidate { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; padding: 8px 12px; font-size: 12px; line-height: 1.6; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); overflow-wrap: anywhere; }
+.harness-candidate { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 10px; padding: 8px 12px; font-size: var(--ui-font-meta, 12px); line-height: 1.6; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); overflow-wrap: anywhere; }
 .harness-candidate > time { color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.harness-candidates > small { display: block; margin-top: 8px; font-size: 11px; line-height: 1.6; color: var(--text-muted); }
+.harness-candidates > small { display: block; margin-top: 8px; font-size: var(--ui-font-caption, 11px); line-height: 1.6; color: var(--text-muted); }
 /* 「进化」标签角标:待复盘候选数。绝对定位在按钮右上角 —— 紧凑模式下按钮是竖排(图标 / 文字),作为第三行会把整条标签栏撑高。 */
 .agent-section-nav button { position: relative; }
-.profile-tab-badge { position: absolute; top: 2px; right: 2px; display: inline-grid; place-items: center; min-width: 14px; height: 14px; padding: 0 3px; font-size: 9px; font-style: normal; font-weight: 600; line-height: 1; color: var(--accent-ink); background: var(--overlay-medium); border-radius: 999px; }
-.harness-history > h3 { margin: 10px 0 12px; font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.profile-tab-badge { position: absolute; top: 2px; right: 2px; display: inline-grid; place-items: center; min-width: 14px; height: 14px; padding: 0 3px; font-size: var(--ui-font-caption, 11px); font-style: normal; font-weight: 600; line-height: 1; color: var(--accent-ink); background: var(--overlay-medium); border-radius: var(--radius-pill, 999px); }
+.harness-history > h3 { margin: 10px 0 12px; font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--text-muted); }
 .harness-history > ol { list-style: none; display: grid; gap: 12px; margin: 0 0 0 4px; padding: 0 0 0 14px; border-left: 1px solid var(--border); }
-.harness-event { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; font-size: 12px; line-height: 1.5; }
+.harness-event { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; font-size: var(--ui-font-meta, 12px); line-height: 1.5; }
 .harness-event::before { content: ""; position: absolute; left: -18px; top: 6px; width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); }
 .harness-event.upsert::before { background: var(--accent); }
 .harness-event > span { min-width: 0; overflow-wrap: anywhere; }
 .harness-event b { margin-right: 6px; font-weight: 500; color: var(--text-muted); }
 .harness-event > .profile-text-action { grid-column: 2; grid-row: 1 / span 2; align-self: center; padding: 0; }
-.harness-event > time { grid-column: 1; font-size: 11px; color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums; }
+.harness-event > time { grid-column: 1; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums; }
 .harness-history > .profile-text-action { margin-top: 8px; }
 .profile-section-enter { animation: profile-enter 180ms ease both; }
 @keyframes profile-enter { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
-@container (max-width: 650px) {
-  .agents-roster { width: 68px; padding-inline: 6px; }
-  .agents-roster-heading, .agents-search, .agents-roster-item > span:last-child, .agents-roster > .agent-profile-link { display: none; }
-  .agents-roster-item { justify-content: center; }
-  .agents-character .agent-profile { padding-inline: 16px; }
-  .agents-character .agent-character-hero { gap: 12px; padding-block: 16px; }
-  .agents-character .agent-portrait { width: 56px; height: 62px; }
-  .agents-character .agent-character-name { font-size: 22px; }
-  .agents-character .agent-section-nav button { flex-direction: column; padding-inline: 2px; font-size: 10px; }
-}
+@media (hover: none) { .agents-roster-more { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
   .profile-section-enter, .profile-model-options { animation: none; }
   .agent-section-nav::before, .agent-section-nav button, .agent-equipment-item, .profile-segment > button, .equipment-group > summary::before, .profile-model-trigger svg, .agent-portrait-badge, .agent-portrait-remove, .agent-character-name, .agent-character-desc { transition: none; }
 }
+
+/* The roster is a native docked panel. Detail width follows its own host, never the window. */
+.agents-roster { width: 100%; height: 100%; min-width: 0; min-height: 0; padding: 16px 12px 10px; gap: 12px; background: transparent; }
+.agents-roster-heading { align-items: center; min-height: 24px; }
+.agents-roster-item { padding-block: 10px; transition: background 140ms ease; }
+.agents-roster-item strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agents-roster-item > span:last-child { flex: 1; }
+.agents-roster-more { right: 3px; top: 15px; }
+.agents-roster-create { flex-shrink: 0; }
+.agents-character { container: agent-detail / inline-size; }
+.agent-profile-panel { container: agent-detail / inline-size; }
+.agent-profile { max-width: 760px; padding-inline: 28px; }
+.agent-character-hero { gap: 18px; padding-block: 22px; }
+.agent-portrait { width: 68px; height: 76px; border-radius: var(--radius-md); }
+.agent-profile-content { padding-block: 20px; }
+.agent-profile .agent-field > input:not([type=checkbox]), .agent-profile .agent-field > select { max-width: 460px; }
+.agent-skill-summary, .agent-skill-row, .profile-model-trigger { transition: background 140ms ease, color 140ms ease; }
+.agent-skill-detail, .agent-skill-editor { animation: profile-enter 160ms ease; }
+@container agent-detail (max-width: 540px) {
+  .agent-profile { padding-inline: 16px; }
+  .agent-character-hero { gap: 12px; padding-block: 16px; }
+  .agent-portrait { width: 48px; height: 54px; }
+  .agent-character-name { font-size: var(--ui-font-title); }
+  .agent-section-nav { --profile-nav-gap: 2px; --profile-nav-padding: 4px; }
+  .agent-section-nav button { flex-direction: column; gap: 5px; padding: 7px 2px; font-size: var(--ui-font-meta); }
+  .agent-profile-content { padding-block: 18px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agent-skill-detail, .agent-skill-editor { animation: none; }
+  .agents-roster-item, .agent-skill-summary, .agent-skill-row, .profile-model-trigger { transition: none; }
+}
+
+.profile-list-controls > .capability-menu-trigger { flex: 0 1 auto; max-width: 46%; font-size: var(--ui-font-meta); }
+.profile-model-results button { font-size: var(--menu-text-size); line-height: var(--menu-line-height); }
+.agents-roster .agents-roster-create { justify-content: flex-start; }
+.agent-profile .profile-model-field { max-width: 460px; }
+
+/* Skill detail in the host's temporary View: beside the Main View, or covering the side panel behind a Back header. */
+.agent-skill-extend { padding: 14px 16px 20px; }
+.agent-skill-extend > .agent-skill-detail { margin: 0; padding: 0; border-radius: 0; background: none; }
+.agent-skill-extend .agent-skill-detail > pre { max-height: none; }
+.agent-skill-row.current { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 0.5px var(--accent); } /* DESIGN 选中态强调带 */
+.agent-skill-row.current > svg { color: var(--accent-ink); }

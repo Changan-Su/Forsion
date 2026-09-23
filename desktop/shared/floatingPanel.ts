@@ -45,3 +45,17 @@ export function normalizeFloatingPanelOpenOptions(raw: unknown): FloatingPanelOp
     minHeight: size(value.minHeight, builtin === 'feedback' ? 480 : 520, 280, height),
   }
 }
+
+/** 卫星窗(设置 / 反馈等浮窗)请主窗代办的动作:每个窗口一份 store,作用在工作台上的事必须由主窗自己做。
+ *  带载荷的:space-removed = 已从磁盘删掉的 Space id(主窗撤注册 / ribbon);chat-draft = 预填进主窗聊天输入框的草稿。 */
+export type MainAction = 'onboarding' | 'dev-commands' | 'test-notification' | 'reset-layout' | 'achievement-toast' | 'space-removed' | 'chat-draft' | 'skills-changed' | 'agents-changed' | 'open-agents' | 'open-agent'
+const MAIN_ACTIONS = new Set<MainAction>(['onboarding', 'dev-commands', 'test-notification', 'reset-layout', 'achievement-toast', 'space-removed', 'chat-draft', 'skills-changed', 'agents-changed', 'open-agents', 'open-agent'])
+const MAIN_ACTION_PAYLOAD_MAX: Partial<Record<MainAction, number>> = { 'space-removed': 256, 'chat-draft': 20000, 'open-agent': 64 }
+
+/** 主进程转发前的闸:动作在白名单里;带载荷的要求非空字符串且不超长,不带载荷的动作丢掉载荷。 */
+export function normalizeMainAction(action: unknown, payload: unknown): { action: MainAction; payload?: string } | undefined {
+  if (!MAIN_ACTIONS.has(action as MainAction)) return undefined
+  const max = MAIN_ACTION_PAYLOAD_MAX[action as MainAction]
+  if (!max) return { action: action as MainAction }
+  return typeof payload === 'string' && payload && payload.length <= max ? { action: action as MainAction, payload } : undefined
+}

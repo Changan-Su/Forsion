@@ -11,7 +11,7 @@
   min-width: 0;
   width: 100%;
   padding: 6px;
-  font-size: 13.5px;
+  font-size: var(--ui-font-body, 13px);
   line-height: 22px;
   color: var(--text);
 }
@@ -35,7 +35,7 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-muted);
-  font-size: 11.5px;
+  font-size: var(--ui-font-caption, 11px);
   line-height: 16px;
 }
 .amx-db-romono .amx-db-roprimary,
@@ -103,7 +103,7 @@
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--ui-font-meta, 12px);
   line-height: 18px;
   padding: 2px 8px;
   cursor: pointer;

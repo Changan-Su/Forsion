@@ -7,6 +7,7 @@ import {
   subscribeAccountQuota,
   type AccountQuotaView,
 } from '../services/accountQuota'
+import { ResetCardCeremony, type ResetCardResult } from './ResetCardCeremony'
 
 registerMessages({
   'quota.banner.period.daily': { zh: '今日托管 AI 额度', en: "Today's managed AI quota" },
@@ -36,6 +37,7 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
   const [dismissedKey, setDismissedKey] = useState<string | null>(null)
   const [confirmReset, setConfirmReset] = useState(false)
   const [resetting, setResetting] = useState(false)
+  const [ceremony, setCeremony] = useState<ResetCardResult | null>(null)
   const quotaRequest = useRef(0)
   const resetRequest = useRef(0)
 
@@ -62,6 +64,7 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
       setQuota(null)
       setResetting(false)
       setConfirmReset(false)
+      setCeremony(null)
       return
     }
     refresh()
@@ -85,8 +88,9 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
     if (!advisoryKey) setDismissedKey(null)
   }, [advisoryKey])
 
-  if (!loggedIn || !quota || !advisory) return null
-  if (dismissedKey === advisoryKey) return null
+  const ceremonyEl = ceremony && <ResetCardCeremony result={ceremony} onClose={() => setCeremony(null)} returnFocusSelector=".t2c-ta" />
+  if (!loggedIn || !quota || !advisory) return ceremonyEl
+  if (dismissedKey === advisoryKey) return ceremonyEl
 
   const period = t(`quota.banner.period.${advisory.period}`)
   const percent = advisory.remainingPercent > 0 && advisory.remainingPercent < 1
@@ -117,7 +121,7 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
         } as AccountQuotaView
         setQuota(next)
         publishAccountQuota(next)
-        onToast?.(t('quota.banner.resetDone'))
+        setCeremony({ scope: 'both', before: quota, after: next, remainingCards: response.json.resetCards })
       } else {
         onToast?.(String(response?.json?.detail || t('quota.banner.resetFail')), true)
       }
@@ -131,7 +135,8 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
     }
   }
 
-  return (
+  return <>
+    {ceremonyEl}
     <div
       className="t2-quota-advisory"
       data-level={advisory.critical ? 'critical' : advisory.threshold === 10 ? 'near' : 'low'}
@@ -164,5 +169,5 @@ export function QuotaAdvisoryBanner({ loggedIn, onToast }: Props) {
         <X size={13} aria-hidden="true" />
       </button>
     </div>
-  )
+  </>
 }

@@ -1,5 +1,5 @@
 /** 商店 UI 专项台架:只提供 MarketModal 用到的桌面桥,不读真实账号、网络或用户目录。 */
-import type { MarketCard, MarketDetail } from './types'
+import type { MarketCard, MarketDetail, MarketInstallProgress } from './types'
 
 // 卡片图标:两枚内联 PNG(投稿包 icon.png 的替身)+ 一个必然 404 的地址,
 // 台架里同时覆盖「有图 / 无图 / 图挂了要回落字形」三态。
@@ -26,13 +26,28 @@ const installed: Record<string, Array<{ slug: string; version: string | null }>>
   skill: [{ slug: 'daily-review', version: '1.1.0' }],
 }
 
+// 安装剧本(check:marketui 用):github 源两条走真实的「逐个地址尝试」进度 —— calendar-tools 每个地址都失败
+// (错误带上 Electron 的 IPC 包装前缀,验渲染层剥得掉),mindmap 换到第 2 个地址后下载成功;其余即刻成功。
+const progressListeners = new Set<(p: MarketInstallProgress) => void>()
+const emit = (p: MarketInstallProgress): void => progressListeners.forEach((cb) => cb(p))
+const tick = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
 const bridge = {
   platform: 'darwin',
+  onMarketInstallProgress: (cb: (p: MarketInstallProgress) => void) => { progressListeners.add(cb); return () => { progressListeners.delete(cb) } },
   marketList: async (type?: string): Promise<{ items: MarketCard[] }> => ({ items: rows.filter((row) => !type || row.type === type).map(({ readme: _readme, githubRepoUrl: _repo, ...card }) => card) }),
   marketDetail: async (id: string): Promise<MarketDetail> => rows.find((row) => row.id === id)!,
   marketInstalled: async () => installed,
   marketInstall: async (id: string) => {
     const row = rows.find((item) => item.id === id)!
+    if (id === 'calendar-tools' || id === 'mindmap') {
+      emit({ id, phase: 'resolve' }); await tick(300)
+      emit({ id, phase: 'download', attempt: 1, attempts: 4, host: 'github.com', received: 0, total: null }); await tick(300)
+      emit({ id, phase: 'download', attempt: 2, attempts: 4, host: 'ghfast.top', received: 0, total: null }); await tick(300)
+      if (id === 'calendar-tools') throw new Error("Error invoking remote method 'market:install': Error: github.com: timeout · ghfast.top: HTTP 502 · ghproxy.net: stalled · gh-proxy.com: not a zip")
+      emit({ id, phase: 'download', attempt: 2, attempts: 4, host: 'ghfast.top', received: 340 * 1024, total: null }); await tick(300)
+      emit({ id, phase: 'install' }); await tick(150)
+    }
     const pool = installed[row.type] ||= []
     const hit = pool.find((item) => item.slug === row.installSlug)
     if (hit) hit.version = row.latestVersion || null

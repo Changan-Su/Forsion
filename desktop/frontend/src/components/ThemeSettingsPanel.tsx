@@ -6,14 +6,15 @@ import type { ThemeEntry, ThemeSetting } from '../theme/manifest'
 import { applyThemeSettings, readRaw, writeRaw, resetAll, usableSettings } from '../theme/themeSettings'
 import { broadcastPrefs } from '../uiPrefsBus'
 import { useI18n } from '../i18n'
+import type { Locale } from '../i18n'
 
-const Row: React.FC<{ themeId: string; def: ThemeSetting; value: string; onChange: (v: string) => void }> = ({
-  def, value, onChange,
+const Row: React.FC<{ def: ThemeSetting; value: string; locale: Locale; onChange: (v: string) => void }> = ({
+  def, value, locale, onChange,
 }) => (
   <div className="theme-opt-row">
     <div className="theme-opt-label">
-      <div>{def.label}</div>
-      {def.description && <div className="theme-opt-desc">{def.description}</div>}
+      <div>{locale === 'en' && def.labelEn ? def.labelEn : def.label}</div>
+      {(locale === 'en' ? (def.descriptionEn || def.description) : def.description) && <div className="theme-opt-desc">{locale === 'en' && def.descriptionEn ? def.descriptionEn : def.description}</div>}
     </div>
     {def.type === 'number' ? (
       <>
@@ -26,7 +27,7 @@ const Row: React.FC<{ themeId: string; def: ThemeSetting; value: string; onChang
       </>
     ) : def.type === 'select' ? (
       <select value={value} onChange={(e) => onChange(e.target.value)}>
-        {def.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        {def.options.map((o) => <option key={o.value} value={o.value}>{locale === 'en' && o.labelEn ? o.labelEn : o.label}</option>)}
       </select>
     ) : def.type === 'boolean' ? (
       <input type="checkbox" checked={value === 'true'} onChange={(e) => onChange(String(e.target.checked))} />
@@ -37,7 +38,7 @@ const Row: React.FC<{ themeId: string; def: ThemeSetting; value: string; onChang
 )
 
 export const ThemeSettingsPanel: React.FC<{ entry: ThemeEntry }> = ({ entry }) => {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const themeId = entry.manifest.id
   const defs = usableSettings(entry)
   // 存值副本:改一次刷一次 :root,顺带触发重渲让滑块数字跟上。
@@ -62,14 +63,14 @@ export const ThemeSettingsPanel: React.FC<{ entry: ThemeEntry }> = ({ entry }) =
   return (
     <div className="theme-opts">
       <div className="theme-opts-head">
-        <span>{t('settings.theme.options', { name: entry.manifest.preview.title?.text || entry.manifest.name })}</span>
+        <span>{t('settings.theme.options', { name: entry.manifest.preview.title?.text || (locale === 'en' && entry.manifest.nameEn ? entry.manifest.nameEn : entry.manifest.name) })}</span>
         <button type="button" className="btn sm ghost" onClick={reset}>
           <RotateCcw size={12} style={{ verticalAlign: -1, marginRight: 4 }} />
           {t('settings.theme.optionsReset')}
         </button>
       </div>
       {defs.map((d) => (
-        <Row key={d.key} themeId={themeId} def={d} value={vals[d.key] ?? String(d.default)} onChange={(v) => set(d, v)} />
+        <Row key={d.key} def={d} locale={locale} value={vals[d.key] ?? String(d.default)} onChange={(v) => set(d, v)} />
       ))}
     </div>
   )

@@ -21,6 +21,32 @@ const SAMPLE: DbFile = {
 }
 
 describe('db schema', () => {
+  it('record pages and peek preferences survive the read/write schema without changing legacy rows', () => {
+    const db: DbFile = {
+      ...SAMPLE,
+      version: 2,
+      rows: [{ ...SAMPLE.rows[0], body: '# Brief\n\nA **rich** description.\n\n- [ ] Review\n' }, SAMPLE.rows[1]],
+      views: [
+        { id: 'list', name: 'List', type: 'list', openMode: 'side' },
+        { id: 'cards', name: 'Cards', type: 'gallery', openMode: 'center' },
+        { id: 'full', name: 'Expanded', type: 'table', openMode: 'full' },
+      ],
+    }
+    const parsed = parseDb(serializeDb(db))
+    expect(parsed.ok).toBe(true)
+    if (parsed.ok) {
+      expect(parsed.data).toEqual(db)
+      expect(parsed.data.rows[1]).not.toHaveProperty('body')
+    }
+    expect(parseDb(JSON.stringify({ ...SAMPLE, rows: [{ id: 'r', cells: {}, body: 42 }] })).ok).toBe(false)
+    expect(parseDb(JSON.stringify({ ...SAMPLE, views: [{ id: 'v', name: 'V', type: 'table', openMode: 'invalid' }] })).ok).toBe(false)
+    const upgraded = JSON.parse(serializeDb({ ...db, version: 1 })) as DbFile
+    expect(upgraded.version).toBe(2)
+    // This is the old client's existing forward-version guard: a page cannot be silently rewritten as v1.
+    expect(upgraded.version > 1).toBe(true)
+    expect(JSON.parse(serializeDb(SAMPLE)).version).toBe(1)
+  })
+
   it('serialize ↔ parse 往返无损,两空格缩进 + 尾换行(git 友好)', () => {
     const text = serializeDb(SAMPLE)
     expect(text.endsWith('\n')).toBe(true)

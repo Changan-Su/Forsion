@@ -1,0 +1,267 @@
+/* Database menus share the approved More menu reading scale; controls use compact spacing. */
+.amx-db-pop:not(.amx-coverpick) {
+  box-sizing: border-box;
+  width: var(--menu-select-width);
+  max-width: calc(100vw / var(--uiz, 1) - var(--menu-item-pad-inline) * 2);
+  max-height: min(calc(var(--db-control-height) * 16), calc(100vh / var(--uiz, 1) - var(--menu-item-pad-inline) * 2));
+  padding: var(--menu-shell-padding);
+  gap: 0;
+  border-radius: var(--radius-md);
+  outline: var(--focus-ring) solid var(--border);
+  outline-offset: calc(-1 * var(--focus-ring));
+  box-shadow: var(--card-shadow);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--menu-text-size);
+  font-weight: 400;
+  line-height: var(--menu-line-height);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: var(--menu-shell-padding);
+}
+
+.amx-db-pop:not(.amx-coverpick) > * { flex-shrink: 0; }
+
+/* A plain action list is compact; input and configuration menus keep the
+   room for labels and fields. Never let a long property name expand the floating panel. */
+.amx-db-pop:not(.amx-coverpick, .amx-db-personpop):has(> .amx-db-pop-list):not(:has(input, select, textarea, .amx-db-opt-check, .amx-db-chip, .amx-db-fltrow)) {
+  width: var(--menu-action-max);
+  min-width: min(var(--menu-action-min), calc(100vw / var(--uiz, 1) - var(--menu-item-pad-inline) * 2));
+}
+
+.amx-db-pop.amx-db-personpop { width: var(--menu-select-width); }
+
+/* Multiple controls share each row in these editors. The extra space follows
+   the same menu spacing scale instead of introducing another menu width. */
+.amx-db-pop:not(.amx-coverpick):has(.amx-db-fltrow) {
+  width: calc(var(--menu-select-width) + var(--menu-item-pad-inline) * 10);
+}
+
+.amx-db-pop.amx-cal-pop {
+  width: calc(var(--menu-select-width) + var(--menu-item-pad-inline) * 8);
+  gap: var(--menu-shell-padding);
+  padding: var(--menu-item-pad-inline);
+}
+
+.amx-db-pop:not(.amx-coverpick) .amx-db-pop-sec {
+  padding: var(--db-control-pad-block) var(--menu-item-pad-inline);
+  color: var(--text-muted);
+  font-size: var(--db-meta-size);
+  font-weight: 500;
+  line-height: var(--menu-line-height);
+  text-transform: none;
+  letter-spacing: normal;
+  overflow-wrap: anywhere;
+}
+
+.amx-db-pop:not(.amx-coverpick) > .amx-db-pop-list + .amx-db-pop-sec {
+  margin-top: var(--menu-shell-padding);
+  padding-top: var(--db-control-pad-block);
+  border-top: var(--border-width) solid var(--border);
+}
+
+.amx-db-pop:not(.amx-coverpick) .amx-db-pop-list { gap: 0; min-width: 0; }
+
+.amx-db-pop:not(.amx-coverpick) .amx-db-opt {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: var(--db-control-height);
+  gap: var(--menu-item-pad-inline);
+  padding: var(--db-control-pad-block) var(--menu-item-pad-inline);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  text-align: start;
+  line-height: var(--menu-line-height);
+  overflow-wrap: anywhere;
+  transition: background-color var(--duration-instant) var(--ease-out), color var(--duration-instant) var(--ease-out);
+}
+
+.amx-db-pop:not(.amx-coverpick) .amx-db-opt > svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin-inline: 1px;
+  color: var(--text-muted);
+}
+
+.amx-db-pop:not(.amx-coverpick) .amx-db-opt:is(:hover, :focus-visible, [data-active]) {
+  background: var(--menu-hover);
+}
+
+.amx-db-pop:not(.amx-coverpick) .amx-db-opt:focus-visible {
+  outline: var(--focus-ring) solid var(--sel-line);
+  outline-offset: calc(-1 * var(--focus-ring));
+  border-radius: var(--radius-sm);
+}
+
+/* Person suggestions carry an old inline active color; keep the keyboard
+   cursor visually identical to every other menu without altering its logic. */
+.amx-db-pop.amx-db-personpop .amx-db-opt[data-active] { background: var(--menu-hover) !important; }
+
+.amx-db-pop:not(.amx-coverpick) .amx-db-opt[data-dim] { opacity: 1; color: var(--text-muted); }
+.amx-db-pop:not(.amx-coverpick) .amx-db-opt:disabled { opacity: 0.45; background: transparent; }
+.amx-db-pop:not(.amx-coverpick) .amx-db-opt-clear { color: var(--text-muted); }
+.amx-db-pop:not(.amx-coverpick) .amx-db-opt-danger { color: var(--danger); }
+.amx-db-pop:not(.amx-coverpick) .amx-db-opt-danger:is(:hover, :focus-visible) { background: var(--danger-light); }
+
+.amx-db-pop:not(.amx-coverpick) > :is(.amx-db-opt-clear, .amx-db-opt-danger) {
+  position: relative;
+  margin-top: calc(var(--menu-shell-padding) * 2);
+}
+
+.amx-db-pop:not(.amx-coverpick) > :is(.amx-db-opt-clear, .amx-db-opt-danger)::before {
+  content: '';
+  position: absolute;
+  top: calc(-1 * var(--menu-shell-padding));
+  inset-inline: var(--menu-shell-padding);
+  height: var(--border-width);
+  background: var(--border);
+  pointer-events: none;
+}
+
+.amx-db-pop:not(.amx-coverpick) .amx-db-opt-check {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-width: 16px;
+  margin-inline-start: auto;
+  color: var(--text-muted);
+  font-size: var(--db-text-size);
+  line-height: 1;
+}
+
+.amx-db-pop:not(.amx-coverpick) [aria-multiselectable='true'] .amx-db-opt-check {
+  margin-inline-start: 0;
+  color: var(--text-faint);
+}
+
+.amx-db-pop:not(.amx-coverpick) [aria-multiselectable='true'] [aria-selected='true'] .amx-db-opt-check { color: var(--text); }
+.amx-db-pop:not(.amx-coverpick) input[type='checkbox'] { accent-color: var(--text-muted); }
+
+.amx-db-pop:not(.amx-coverpick) .amx-db-pop-row { gap: var(--menu-shell-padding); }
+.amx-db-pop:not(.amx-coverpick) .amx-db-pop-row .amx-db-opt { gap: var(--menu-shell-padding); }
+.amx-db-pop:not(.amx-coverpick) .amx-db-pop-row .amx-db-opt-check { margin-inline-start: 0; }
+
+.amx-db-pop:not(.amx-coverpick) .amx-db-chip {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.amx-db-pop:not(.amx-coverpick) .amx-db-pop-list[role='listbox'] {
+  min-height: 0;
+  max-height: calc(var(--db-control-height) * 9);
+  flex-shrink: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: var(--menu-shell-padding);
+}
+
+.amx-db-pop:not(.amx-coverpick) .amx-db-pop-list > .amx-db-blank {
+  padding: var(--db-control-pad-block) var(--menu-item-pad-inline);
+  color: var(--text-faint);
+  font-size: var(--db-meta-size);
+}
+
+.amx-db-pop:not(.amx-coverpick) :is(.amx-db-pop-input, .amx-db-fltsel, .amx-db-fltin, .amx-db-fold-minutes, .amx-db-group-setting select, .amx-cal-row input) {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: var(--db-control-height);
+  padding: var(--db-control-pad-block) var(--menu-item-pad-inline);
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: var(--bg-input);
+  color: var(--text);
+  font: inherit;
+  line-height: var(--menu-line-height);
+  transition: border-color var(--duration-instant) var(--ease-out);
+}
+
+.amx-db-pop:not(.amx-coverpick) .amx-db-pop-input { margin: var(--menu-shell-padding); }
+.amx-db-pop:not(.amx-coverpick) .amx-db-pop-input::placeholder { color: var(--text-faint); }
+
+/* Inputs draw one subdued border. This also overrides .am-app :focus-visible,
+   whose inherited accent outline otherwise creates a second, heavier ring. */
+.amx-db-pop:not(.amx-coverpick) :is(.amx-db-pop-input, .amx-db-fltsel, .amx-db-fltin, .amx-db-fold-minutes, .amx-db-group-setting select, .amx-cal-row input):is(:focus, :focus-visible) {
+  border-color: var(--sel-line);
+  border-radius: var(--radius-sm);
+  outline: none;
+  box-shadow: none;
+}
+
+.amx-db-pop:not(.amx-coverpick) .amx-db-formula-in { font-family: var(--font-mono); font-size: var(--db-meta-size); line-height: var(--menu-line-height); }
+.amx-db-pop:not(.amx-coverpick) .amx-db-numfmt-cfg { padding-inline: var(--menu-item-pad-inline); }
+.amx-db-pop:not(.amx-coverpick) .amx-db-numfmt-cfg label { gap: var(--menu-item-pad-inline); padding-block: var(--menu-shell-padding); }
+.amx-db-pop:not(.amx-coverpick) .amx-db-numfmt-cfg label > span { color: var(--text-muted); }
+.amx-db-pop:not(.amx-coverpick) .amx-db-numfmt-cfg .amx-db-pop-input { margin: 0; }
+
+.amx-db-pop:not(.amx-coverpick) .amx-db-fltrow { gap: var(--menu-shell-padding); padding: var(--menu-shell-padding); }
+.amx-db-pop:not(.amx-coverpick) .amx-db-fltdel {
+  width: var(--db-control-height);
+  height: var(--db-control-height);
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+.amx-db-pop:not(.amx-coverpick) .amx-db-fltdel:hover { color: var(--danger); background: var(--danger-light); }
+
+.amx-db-pop:not(.amx-coverpick) .amx-db-group-menu { padding: 0; font: inherit; }
+.amx-db-pop:not(.amx-coverpick) .amx-db-group-menu > strong { padding: var(--db-control-pad-block) var(--menu-item-pad-inline); font-size: inherit; font-weight: 600; }
+.amx-db-pop:not(.amx-coverpick) .amx-db-group-setting { gap: var(--menu-item-pad-inline); padding: var(--db-control-pad-block) var(--menu-item-pad-inline); font-size: var(--db-meta-size); }
+.amx-db-pop:not(.amx-coverpick) .amx-db-group-option {
+  min-height: var(--db-control-height);
+  gap: var(--menu-item-pad-inline);
+  padding: var(--db-control-pad-block) var(--menu-item-pad-inline);
+  border-radius: var(--radius-sm);
+  font-size: inherit;
+}
+.amx-db-pop:not(.amx-coverpick) .amx-db-group-option:hover { background: var(--menu-hover); }
+.amx-db-pop:not(.amx-coverpick) .amx-db-group-options { overscroll-behavior: contain; }
+.amx-db-pop:not(.amx-coverpick) .amx-db-fold-hint { padding: var(--db-control-pad-block) var(--menu-item-pad-inline); color: var(--text-muted); }
+.amx-db-pop:not(.amx-coverpick) .amx-db-group-bulk { gap: var(--menu-shell-padding); padding: var(--menu-shell-padding); }
+.amx-db-pop:not(.amx-coverpick) .amx-db-group-bulk button { min-height: var(--db-control-height); padding: var(--db-control-pad-block); font-size: var(--db-meta-size); background: transparent; }
+.amx-db-pop:not(.amx-coverpick) :is(.amx-db-group-bulk button, .amx-db-group-option button):hover { background: var(--menu-hover); }
+
+.amx-db-pop:not(.amx-coverpick) :is(.amx-db-fltdel, .amx-db-group-bulk button, .amx-db-group-option button, input[type='checkbox']):focus-visible {
+  outline: var(--focus-ring) solid var(--sel-line);
+  outline-offset: calc(-1 * var(--focus-ring));
+  border-radius: var(--radius-sm);
+}
+
+.amx-db-pop.amx-cal-pop .amx-cal-row { gap: var(--menu-shell-padding); font-size: var(--db-meta-size); }
+.amx-db-pop.amx-cal-pop .amx-cal-check { min-height: var(--db-control-height); color: var(--text-muted); font-size: var(--db-meta-size); }
+
+@media (prefers-reduced-motion: reduce) {
+  .amx-db-pop:not(.amx-coverpick),
+  .amx-db-pop:not(.amx-coverpick) .amx-db-opt { transition: none; }
+}
+
+/* Configuration panels need room for labels and fields; action/selection menus retain §3 widths. */
+.amx-db-pop:not(.amx-coverpick, .amx-cal-pop, .amx-db-personpop):has(> .amx-db-pop-input):not(:has(> .amx-db-option-search)) {
+  width: calc(var(--menu-select-width) + var(--menu-item-pad-inline) * 3);
+}
+/* A stable icon column: no font glyphs, tiny inherited 1em marks, or double opacity. */
+.amx-db-pop:not(.amx-coverpick) .amx-db-th-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 16px;
+  width: 16px;
+  height: 20px;
+  color: var(--text-muted);
+  opacity: 1;
+}
+.amx-db-pop:not(.amx-coverpick) :is(.amx-db-th-icon > svg, .amx-db-opt > .amx-db-glyph) {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+}
+.amx-db-pop:not(.amx-coverpick) .amx-db-opt-check { gap: 4px; }
+.amx-db-pop:not(.amx-coverpick) .amx-db-opt-check > svg { width: 14px; height: 14px; }
+.amx-db-pop:not(.amx-coverpick) .amx-db-opt-danger > .amx-db-glyph { color: inherit; }

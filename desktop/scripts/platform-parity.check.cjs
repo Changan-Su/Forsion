@@ -82,6 +82,12 @@ const SKIP = {
   // —— 根组件 ——
   Root: '移动端的对位物就是 MobileRoot 自己',
   syncDevCommands: '开发者选项三个 ⌘K 入口的**跨窗重算**(设置浮窗拨开关 → 主窗重新注册,09-20 Floating Panel 化后的回归修复)。移动端没有卫星窗、也没有 onMainAction 通道,不存在「命令注册到了另一个窗口」这个问题;启动时那次 syncDevCommands() 在 bootstrapEngine 里,两端共用(移动端三个开关均未开 → 三条命令都不注册)',
+  sendTestNotification: '设置浮窗「发送测试通知」经 onMainAction 转给主窗弹(通知卡只有主窗渲染,09-21)。移动端没有卫星窗、也没有 onMainAction 通道,设置页里那个按钮原地发,本来就看得见',
+  debugFireToast: '设置浮窗(开发者选项)「触发成就弹窗」经 onMainAction 转给主窗播(成就弹窗只有主窗挂,09-21)。移动端没有卫星窗 / onMainAction,按钮原地调',
+  draftInMainChat: '反馈浮窗「让 Tangu 帮我诊断」经 onMainAction 把草稿交给主窗聊天(09-21)。移动端反馈与聊天同一渲染进程,按钮原地调',
+  forgetUserSpace: '设置浮窗卸载用户 Space 后经 onMainAction 让主窗撤注册 / ribbon(09-21)。移动端没有用户 Space 目录桥(spacesList)、也没有卫星窗',
+  listSkills: 'Root 里仅用于接收设置浮窗的 skills-changed 广播后重读主窗技能清单；移动端设置与 Agent 档案共用一个渲染进程，改动后在原窗口刷新',
+  openAgentProfile: 'Root 里仅用于接收设置浮窗的 open-agent 请求并切回主窗 Agent Space；移动端没有卫星窗，设置内直接导航到 Agent 档案',
   getLanguage: 'soft 主题的 panelGap 只喂给 Dockview Shell;单列壳不消费',
   MarketModal: '入口 rb-market 门控在 window.tangu?.marketList,移动 shim 无此方法 → 该 ribbon 项根本不注册,没有可点入口',
   FeedbackModal: '同上:入口(rb-feedback 图标 + open-feedback 命令;图标 2026-08-31 撤下、09-17 放回)门控在 window.tangu?.submitFeedback,移动 shim 无 → 不注册。(组件本身有可选桥检查并显示 unavailable,不会崩;此前这条理由写的「点了就崩」是错的)',

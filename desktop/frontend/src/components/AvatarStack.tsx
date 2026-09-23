@@ -116,7 +116,7 @@ function initialFontSize(size: number): number {
 
 // 0 模糊的分隔环:n=2 时第二枚压在第一枚上,靠一圈 sidebar-bg 把两枚分开。
 // 手法镜像 `.t2s-lead .t2s-dot`(sidebar2.css)—— 那里的状态点也是这么从图标上「抠」出来的。
-// 零模糊描边不是空间高程,`data-flat` 不该清掉它;闸门的标注必须与 boxShadow 同行(见下)。
+// 零模糊描边不是空间高程,统一阴影调整不该改写它;闸门的标注必须与 boxShadow 同行(见下)。
 const SEPARATOR_RING: React.CSSProperties = { boxShadow: '0 0 0 1.5px var(--sidebar-bg)' } // shadow-contract: effect
 
 export const AvatarStack: React.FC<{
@@ -191,7 +191,7 @@ export const AvatarStack: React.FC<{
                     justifyContent: 'center',
                     background: 'var(--overlay-medium)',
                     color: 'var(--text)',
-                    fontSize: 8,
+                    fontSize: 'var(--ui-font-caption, 11px)',
                     fontWeight: 600,
                     lineHeight: 1,
                   }}

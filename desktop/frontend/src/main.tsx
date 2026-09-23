@@ -54,7 +54,6 @@ try { persistedLang = localStorage.getItem('forsion_theme_lang') } catch { /* pr
 // 包 try/catch:即便初始化失败也继续挂载(退化样式总好过白屏)。
 try {
   applyTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), resolveInitialEffectiveMode(), { customColor: initSeed })
-  try { document.documentElement.dataset.flat = localStorage.getItem('forsion_theme_flat') !== '0' ? '1' : '0' } catch { /* private mode */ }
   preloadAllThemes()
   document.documentElement.style.removeProperty('background') // 交还给主题 CSS
   // 合并 ~/.tangu/themes 的磁盘主题(soft 也在其中),并把首屏被回退的磁盘语言接回来。

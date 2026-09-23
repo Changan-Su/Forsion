@@ -26,6 +26,7 @@ import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.
 import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
 import { agentSyncPermission, agentSyncScope, setAgentSyncPermission } from '../services/cloudSyncAccount.js';
 import { loadHarness, readJournal, applyHarnessEdit, peekHarnessCandidates } from '../agents/harnessStore.js';
+import { renameAgent, AgentRenameError } from '../agents/agentRename.js';
 
 const router = Router();
 
@@ -170,6 +171,19 @@ router.delete('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, re
     res.json({ ok });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'delete agent failed' });
+  }
+});
+
+/** 改 slug(= 文件夹名)。只对本地、用户自建、从未云同步、非插件播种的 agent 开放,拒绝原因见 body.error(agentRename.ts 的 code;桌面 request() 按 error 字段本地化)。 */
+router.post('/agent/agents/:slug/rename', authMiddleware, async (req: AuthRequest, res) => {
+  if (cloudAgentsEnabled()) return res.status(400).json({ detail: 'Renaming is not available for cloud agents', error: 'cloud_agents' });
+  if (!ensureLocal(res)) return;
+  try {
+    const { agent, warnings } = await renameAgent(req.params.slug, String(req.body?.slug || ''));
+    res.json({ agent, warnings });
+  } catch (e: any) {
+    if (e instanceof AgentRenameError) return res.status(e.status).json({ detail: e.message, error: e.code });
+    res.status(500).json({ detail: e?.message || 'rename agent failed' });
   }
 });
 

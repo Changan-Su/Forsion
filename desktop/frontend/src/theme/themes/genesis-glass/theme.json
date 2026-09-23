@@ -2,6 +2,7 @@
   "id": "genesis-glass",
   "name": "Genesis Glass · 琉璃",
   "description": "Genesis 结构 × macOS 原生玻璃。外壳(ribbon/标签栏/侧栏)溶进窗后景深,主视图纸卡保持全实色 —— 正文永远不透背景。不定义任何颜色,任意配色/明暗都成立。",
+  "descriptionEn": "Native macOS glass around a fully opaque reading surface. Follows your accent and background palette.",
   "version": "1.0.0",
   "author": "Forsion",
   "supportsDarkMode": true,
@@ -13,7 +14,9 @@
     {
       "key": "--gl-chrome-pct",
       "label": "外壳浓度",
+      "labelEn": "Shell opacity",
       "description": "ribbon 与主区外框。越小越透，壁纸看得越清",
+      "descriptionEn": "Ribbon and main frame. Lower values show more wallpaper.",
       "type": "number",
       "default": 46,
       "min": 20,
@@ -24,7 +27,9 @@
     {
       "key": "--gl-pane-pct",
       "label": "侧栏浓度",
+      "labelEn": "Sidebar opacity",
       "description": "侧栏文字密度高，通常要比外壳厚一档才压得住",
+      "descriptionEn": "Keep the sidebar more opaque than the shell for legibility.",
       "type": "number",
       "default": 58,
       "min": 20,
@@ -35,7 +40,9 @@
     {
       "key": "--gl-float-pct",
       "label": "浮层浓度",
+      "labelEn": "Overlay opacity",
       "description": "大型弹窗的基准浓度；菜单自动薄一档，侧栏浮层自动厚一档",
+      "descriptionEn": "Base level for dialogs; menus are lighter and sidebar overlays are stronger.",
       "type": "number",
       "default": 72,
       "min": 50,
@@ -46,7 +53,9 @@
     {
       "key": "--gl-blur-radius",
       "label": "局部模糊",
+      "labelEn": "Overlay blur",
       "description": "影响输入卡、菜单和弹窗；外壳模糊仍由窗口原生材质提供",
+      "descriptionEn": "Affects the composer, menus and dialogs. The shell uses native blur.",
       "type": "number",
       "default": 40,
       "min": 0,
@@ -57,20 +66,24 @@
     {
       "key": "--gl-saturate",
       "label": "透色鲜艳度",
+      "labelEn": "Backdrop saturation",
       "description": "不提饱和度，透过来的东西就是一层脏灰",
+      "descriptionEn": "Sets how vivid the content behind glass appears.",
       "type": "select",
       "default": "160%",
       "options": [
-        { "value": "120%", "label": "克制" },
-        { "value": "160%", "label": "标准" },
-        { "value": "190%", "label": "鲜明" },
-        { "value": "240%", "label": "浓郁" }
+        { "value": "120%", "label": "克制", "labelEn": "Subtle" },
+        { "value": "160%", "label": "标准", "labelEn": "Standard" },
+        { "value": "190%", "label": "鲜明", "labelEn": "Vivid" },
+        { "value": "240%", "label": "浓郁", "labelEn": "Rich" }
       ]
     },
     {
       "key": "--gl-hairline-width",
       "label": "浮层描边",
+      "labelEn": "Overlay border",
       "description": "浮层压在壁纸上时，边缘靠这根发丝线交代",
+      "descriptionEn": "A fine edge helps overlays stand out against wallpaper.",
       "type": "boolean",
       "default": true,
       "on": "1px",
@@ -86,6 +99,7 @@
     "accent": "#1c1c1c",
     "title": { "text": "Glass" },
     "tagline": "原生玻璃 · 纸面可读",
+    "taglineEn": "Native glass · readable paper",
     "swatches": ["#1c1c1c", "#dbe4ee", "#5f5f5d", "#f2f4f7"]
   }
 }

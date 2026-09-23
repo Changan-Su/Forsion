@@ -3,11 +3,11 @@
 
 .auto-list { display: flex; flex-direction: column; height: 100%; overflow-y: auto; padding: 10px; gap: 4px; }
 .auto-list .auto-grouphead {
-  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  font-size: var(--ui-font-caption, 11px); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
   color: var(--text-faint); margin: 10px 4px 4px;
 }
 .auto-item {
-  display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 8px;
+  display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: var(--radius-sm, 6px);
   cursor: pointer; border: var(--border-width) solid transparent; min-width: 0;
 }
 .auto-item:hover { background: var(--bg-hover, rgba(128, 128, 128, 0.08)); }
@@ -16,10 +16,10 @@
 .auto-item.active .auto-ic { color: var(--accent-ink, var(--accent)); }
 .auto-item .auto-item-main { flex: 1; min-width: 0; }
 .auto-item .auto-item-title {
-  font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: var(--ui-font-meta, 12px); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .auto-item .auto-item-sub {
-  font-size: 11px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: var(--ui-font-caption, 11px); color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .auto-dot { width: 7px; height: 7px; border-radius: 4px; flex-shrink: 0; }
 .auto-dot.on { background: var(--ok, #3aa675); }
@@ -29,8 +29,8 @@
 
 .auto-newbtn {
   margin: 10px 4px 4px; display: flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 7px; border-radius: 8px; border: var(--border-width) dashed var(--border);
-  background: none; color: var(--text-light); font-size: 12.5px; cursor: pointer;
+  padding: 7px; border-radius: var(--radius-sm, 6px); border: var(--border-width) dashed var(--border);
+  background: none; color: var(--text-light); font-size: var(--ui-font-meta, 12px); cursor: pointer;
 }
 .auto-newbtn:hover { border-color: var(--accent-ink, var(--accent)); color: var(--accent-ink, var(--accent)); }
 
@@ -38,50 +38,50 @@
 .auto-detail { height: 100%; overflow-y: auto; padding: 18px 22px; }
 .auto-detail-empty {
   height: 100%; display: flex; align-items: center; justify-content: center;
-  color: var(--text-faint); font-size: 13px;
+  color: var(--text-faint); font-size: var(--ui-font-body, 13px);
 }
 .auto-card {
-  border: var(--border-width) solid var(--border); border-radius: 12px; padding: 14px 16px;
+  border: var(--border-width) solid var(--border); border-radius: var(--radius-md, 12px); padding: 14px 16px;
   display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px;
 }
 .auto-card .auto-card-head { display: flex; align-items: center; gap: 10px; }
-.auto-card .auto-card-title { font-size: 15px; font-weight: 600; flex: 1; min-width: 0; }
-.auto-facts { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: var(--text-light); }
+.auto-card .auto-card-title { font-size: var(--ui-font-heading, 14px); font-weight: 600; flex: 1; min-width: 0; }
+.auto-facts { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: var(--ui-font-meta, 12px); color: var(--text-light); }
 .auto-facts .auto-fact { display: flex; align-items: center; gap: 5px; min-width: 0; }
 .auto-facts .auto-fact b { font-weight: 500; color: var(--text-faint); }
 /* 引擎自动停用(断环 / 工具不可用)的原因行:用警示色,别混在普通 fact 里被扫过去 */
 .auto-facts .auto-fact-warn { color: var(--warning); }
 .auto-transcript-head {
-  font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+  font-size: var(--ui-font-caption, 11px); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
   color: var(--text-faint); margin: 4px 0 10px;
 }
 .auto-msg { margin-bottom: 14px; }
-.auto-msg .auto-msg-role { font-size: 11px; font-weight: 600; color: var(--text-faint); margin-bottom: 3px; }
-.auto-msg .auto-msg-body { font-size: 13px; line-height: 1.6; }
+.auto-msg .auto-msg-role { font-size: var(--ui-font-caption, 11px); font-weight: 600; color: var(--text-faint); margin-bottom: 3px; }
+.auto-msg .auto-msg-body { font-size: var(--ui-font-body, 13px); line-height: 1.6; }
 .auto-msg .auto-msg-body.user {
-  background: var(--bg-hover, rgba(128, 128, 128, 0.08)); border-radius: 10px; padding: 8px 12px;
+  background: var(--bg-hover, rgba(128, 128, 128, 0.08)); border-radius: var(--radius-md, 12px); padding: 8px 12px;
 }
-.auto-msg .auto-msg-tools { font-size: 11.5px; color: var(--text-faint); margin-top: 4px; }
+.auto-msg .auto-msg-tools { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); margin-top: 4px; }
 
 /* ── 右栏运行记录 ── */
 .auto-runs { display: flex; flex-direction: column; height: 100%; overflow-y: auto; padding: 10px; gap: 2px; }
 .auto-run-row {
-  display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; cursor: default;
-  font-size: 12px; min-width: 0;
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm, 6px); cursor: default;
+  font-size: var(--ui-font-meta, 12px); min-width: 0;
 }
 .auto-run-row:hover { background: var(--bg-hover, rgba(128, 128, 128, 0.08)); }
 .auto-run-row .auto-run-time { color: var(--text-light); flex-shrink: 0; }
 .auto-run-row .auto-run-meta {
-  flex: 1; min-width: 0; color: var(--text-faint); font-size: 11px;
+  flex: 1; min-width: 0; color: var(--text-faint); font-size: var(--ui-font-caption, 11px);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right;
 }
-.auto-runs-empty { color: var(--text-faint); font-size: 12px; padding: 14px 8px; text-align: center; }
+.auto-runs-empty { color: var(--text-faint); font-size: var(--ui-font-meta, 12px); padding: 14px 8px; text-align: center; }
 
 /* ── 构建器(线性流:触发 → 对象 → 动作) ── */
 .auto-builder { max-width: 560px; margin: 0 auto; padding-bottom: 30px; }
-.auto-builder-title { font-size: 16px; font-weight: 600; margin-bottom: 18px; display: flex; align-items: center; gap: 8px; }
+.auto-builder-title { font-size: var(--ui-font-heading, 14px); font-weight: 600; margin-bottom: 18px; display: flex; align-items: center; gap: 8px; }
 .auto-node {
-  position: relative; border: var(--border-width) solid var(--border); border-radius: 12px;
+  position: relative; border: var(--border-width) solid var(--border); border-radius: var(--radius-md, 12px);
   padding: 13px 16px; background: var(--bg, transparent);
 }
 .auto-node + .auto-node { margin-top: 34px; }
@@ -95,23 +95,23 @@
   border-radius: 4px; background: var(--accent); transform: translateX(-50%);
 }
 .auto-node .auto-node-head {
-  display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; margin-bottom: 10px;
+  display: flex; align-items: center; gap: 8px; font-size: var(--ui-font-body, 13px); font-weight: 600; margin-bottom: 10px;
 }
 .auto-node .auto-node-head .auto-ic { color: var(--accent-ink, var(--accent)); display: flex; }
 .auto-node .field { margin-bottom: 10px; }
 .auto-node .field:last-child { margin-bottom: 0; }
-.auto-node label { display: block; font-size: 11.5px; color: var(--text-faint); margin-bottom: 4px; }
+.auto-node label { display: block; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); margin-bottom: 4px; }
 .auto-node input[type='text'], .auto-node input[type='number'], .auto-node input[type='time'],
 .auto-node select, .auto-node textarea {
-  width: 100%; box-sizing: border-box; font-size: 12.5px; padding: 6px 9px;
-  border: var(--border-width) solid var(--border); border-radius: 7px;
+  width: 100%; box-sizing: border-box; font-size: var(--ui-font-meta, 12px); padding: 6px 9px;
+  border: var(--border-width) solid var(--border); border-radius: var(--radius-sm, 6px);
   background: var(--bg-input, transparent); color: var(--text);
 }
 .auto-node textarea { min-height: 68px; resize: vertical; font-family: inherit; }
 .auto-seg { display: flex; gap: 6px; }
 .auto-seg button {
-  flex: 1; padding: 6px 4px; border-radius: 7px; border: var(--border-width) solid var(--border);
-  background: none; color: var(--text-light); font-size: 12px; cursor: pointer;
+  flex: 1; padding: 6px 4px; border-radius: var(--radius-sm, 6px); border: var(--border-width) solid var(--border);
+  background: none; color: var(--text-light); font-size: var(--ui-font-meta, 12px); cursor: pointer;
 }
 .auto-seg button.active {
   border-color: var(--accent-ink, var(--accent)); color: var(--accent-ink, var(--accent)); font-weight: 500;
@@ -120,14 +120,14 @@
 
 /* ── 构建器 v2:步骤链/加步/护栏/提示 ── */
 .auto-node input[type='datetime-local'] {
-  width: 100%; box-sizing: border-box; font-size: 12.5px; padding: 6px 9px;
-  border: var(--border-width) solid var(--border); border-radius: 7px;
+  width: 100%; box-sizing: border-box; font-size: var(--ui-font-meta, 12px); padding: 6px 9px;
+  border: var(--border-width) solid var(--border); border-radius: var(--radius-sm, 6px);
   background: var(--bg-input, transparent); color: var(--text);
 }
-.auto-hint { font-size: 11px; color: var(--text-faint); margin-top: 4px; line-height: 1.5; }
+.auto-hint { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); margin-top: 4px; line-height: 1.5; }
 .auto-inline { display: flex; gap: 6px; align-items: center; }
 .auto-inline select { width: auto; }
-.auto-check { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-light); }
+.auto-check { display: flex; align-items: center; gap: 6px; font-size: var(--ui-font-meta, 12px); color: var(--text-light); }
 .auto-check input[type='checkbox'] { width: auto; }
 .auto-node-head .auto-step-tools { margin-left: auto; display: flex; gap: 2px; }
 .auto-node-head .auto-step-tools .icon-btn { opacity: 0.55; }
@@ -135,28 +135,28 @@
 .auto-node-muse { border-style: dashed; }
 .auto-addstep { display: flex; gap: 8px; justify-content: center; margin-top: 16px; }
 .auto-addstep button {
-  display: flex; align-items: center; gap: 5px; padding: 6px 12px; border-radius: 8px;
+  display: flex; align-items: center; gap: 5px; padding: 6px 12px; border-radius: var(--radius-sm, 6px);
   border: var(--border-width) dashed var(--border); background: none;
-  color: var(--text-light); font-size: 12px; cursor: pointer;
+  color: var(--text-light); font-size: var(--ui-font-meta, 12px); cursor: pointer;
 }
 .auto-addstep button:hover:not(:disabled) { border-color: var(--accent-ink, var(--accent)); color: var(--accent-ink, var(--accent)); }
 .auto-addstep button:disabled { opacity: 0.45; cursor: default; }
 .auto-guard {
-  display: flex; align-items: center; gap: 8px; margin-top: 16px; font-size: 12px; color: var(--text-light);
+  display: flex; align-items: center; gap: 8px; margin-top: 16px; font-size: var(--ui-font-meta, 12px); color: var(--text-light);
 }
-.auto-guard label { font-size: 11.5px; color: var(--text-faint); }
+.auto-guard label { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
 .auto-guard input[type='number'] {
-  width: 80px; font-size: 12.5px; padding: 5px 8px; border: var(--border-width) solid var(--border);
-  border-radius: 7px; background: var(--bg-input, transparent); color: var(--text);
+  width: 80px; font-size: var(--ui-font-meta, 12px); padding: 5px 8px; border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-sm, 6px); background: var(--bg-input, transparent); color: var(--text);
 }
-.auto-fire-result { font-size: 11.5px; color: var(--text-faint); }
+.auto-fire-result { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
 
 /* ── 已结束归档组:淡显行 + 状态徽标 + 可折叠组头 ── */
 .auto-item.finished { opacity: 0.62; }
 .auto-item.finished:hover, .auto-item.finished.active { opacity: 0.85; }
 .auto-badge-done {
-  font-size: 10.5px; color: var(--text-faint); white-space: nowrap;
-  border: var(--border-width) solid var(--border); border-radius: 20px; padding: 1px 8px;
+  font-size: var(--ui-font-caption, 11px); color: var(--text-faint); white-space: nowrap;
+  border: var(--border-width) solid var(--border); border-radius: var(--radius-lg, 16px); padding: 1px 8px;
 }
 .auto-grouphead.clickable { display: flex; align-items: center; gap: 3px; cursor: pointer; user-select: none; }
 .auto-grouphead.clickable:hover { color: var(--text); }

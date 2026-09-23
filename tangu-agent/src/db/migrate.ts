@@ -230,6 +230,9 @@ export async function runMigration(): Promise<void> {
   // expires_at = 过期后读端自动归档、附件不可领。
   await addColumnIfMissing('inbox_messages', 'attachments TEXT');
   await addColumnIfMissing('inbox_messages', 'expires_at TIMESTAMP');
+  // thread = 服务端按业务事件投递的定向消息的判别 JSON(2026-09-22,目前只有反馈中心 {kind:'feedback',ticketId,event});
+  // 阅读面板据此挂回复框。普通广播 / agent 信 / 系统消息一律 NULL。
+  await addColumnIfMissing('inbox_messages', 'thread TEXT');
 
   // 自动化动作链执行账本(本地特性,同 inbox 纪律直连 query())。真源在此;常驻 automation 会话里的
   // role='model' 合成消息只是它的人读投影。steps=JSON 数组 [{type,tool?,ok,summary}](TEXT,方言无关)。

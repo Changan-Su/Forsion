@@ -121,6 +121,18 @@ describe('底部面板:折叠 / 展开', () => {
     vi.runAllTimers()
   })
 
+  it('同侧同类型默认复用;显式 newTab 才再开一个(代码块「运行」每次一个新终端 tab)', () => {
+    const { api, panels } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('sp', {}, {})
+    useWorkspace.getState().openView('termv', {}, 'bottom')
+    useWorkspace.getState().openView('termv', {}, 'bottom')
+    expect(bottoms(panels)).toHaveLength(1)
+    useWorkspace.getState().openView('termv', { runToken: 'x' }, 'bottom', { newTab: true })
+    expect(bottoms(panels)).toHaveLength(2)
+    vi.runAllTimers()
+  })
+
   it('折叠暂存 → 展开原样还原(占位不入 stash)', () => {
     const { api, panels } = mkApi(1600, 1000)
     useWorkspace.getState().setApi(api)

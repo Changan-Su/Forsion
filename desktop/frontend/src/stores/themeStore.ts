@@ -2,7 +2,7 @@
  * 主题 store(语言 lovable|<磁盘主题> × 主题色 × 背景色 × 明暗 + glass/flat;两根颜色轴共用
  * cream/coral/teal/lavender/zhi/custom 这张表,各取一半 token)。
  * 包 theme/loader.applyTheme(已 FOUC 安全 + 自持久化)。Shell 据 mode/lang 派生 dark/soft。
- * glass/flat 只是 documentElement 上的 data 属性(+localStorage),对齐 App.tsx 的 onGlassChange/onFlatChange。
+ * glass 只是 documentElement 上的 data 属性(+localStorage),对齐 App.tsx 的 onGlassChange。
  * 磁盘主题(~/.tangu/themes)经 initThemes/reloadThemes 异步合并进 registry,themesVersion 触发 UI 重渲染。
  */
 import { create } from 'zustand'
@@ -103,8 +103,7 @@ function readGlass(): boolean {
   try { return localStorage.getItem('forsion_glass') !== 'off' } catch { return true }
 }
 function readFlat(): boolean {
-  // 默认扁平(2026-07-19 用户拍板):未显式设过 → on;存 '0'(用户关过)才 off。
-  try { return localStorage.getItem('forsion_theme_flat') !== '0' } catch { return true }
+  try { return localStorage.getItem('forsion_theme_flat') === '1' } catch { return false }
 }
 
 /** 读 ~/.tangu/themes(无 preload/出错 → 空,渲染端纯 bundle 运行)。 */
@@ -141,7 +140,7 @@ export const useTheme = create<ThemeState>((set, get) => {
         seed: s.seed, bgSeed: s.bgSeed, glass: s.glass, flat: s.flat } })
     } catch { /* 无 preload */ }
   }
-  // glass/flat 只是 <html> 上的属性;抽出来给「本窗动作」和「跨窗重放」共用(后者不能带 notify)。
+  // glass 只是 <html> 上的属性;抽出来给「本窗动作」和「跨窗重放」共用(后者不能带 notify)。
   const applyGlass = (on: boolean): void => {
     try { document.documentElement.dataset.glass = on ? 'on' : 'off' } catch { /* ignore */ }
     try { localStorage.setItem('forsion_glass', on ? 'on' : 'off') } catch { /* ignore */ }
@@ -153,7 +152,7 @@ export const useTheme = create<ThemeState>((set, get) => {
     try { localStorage.setItem('forsion_theme_flat', on ? '1' : '0') } catch { /* ignore */ }
     set({ flat: on })
   }
-  /** 重放别处的外观态。载荷已在主进程重建过八个字段,这里再按**本窗 registry** 查一遍(轴不认识就保留现状)。
+  /** 重放别处的外观态。载荷已在主进程重建,这里再按**本窗 registry** 查一遍(轴不认识就保留现状)。
    *  明暗只同步**偏好**,落地值各窗自解析(system 要按本机系统值,主题强制优先)。持久化不用管——
    *  发方已写进同源 localStorage。也不走 View Transition:那是本窗用户动作的观感,不是被动跟随的。 */
   const replayFromWindow = (p: ThemeAxes): void => {

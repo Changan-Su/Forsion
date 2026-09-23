@@ -109,3 +109,25 @@ it('keeps usage, invite, and account-center actions when the host provides those
   await click('邀请好友')
   expect(window.tangu!.openAccountCenter).toHaveBeenCalledWith('points-exchange')
 })
+
+it('shows the reset ceremony only after the card has been consumed', async () => {
+  window.tangu!.accountQuota = vi.fn().mockResolvedValue({
+    status: 200,
+    json: { dailyLimit: 100, dailyRemaining: 42, dailyPercent: 58, weeklyLimit: 100, weeklyRemaining: 8, weeklyPercent: 92, resetCards: 2 },
+  }) as any
+  window.tangu!.accountUseResetCard = vi.fn().mockResolvedValue({
+    status: 200,
+    json: { success: true, quota: { dailyLimit: 100, dailyRemaining: 100, dailyPercent: 0, weeklyLimit: 100, weeklyRemaining: 100, weeklyPercent: 0 }, resetCards: 1 },
+  }) as any
+  await mount()
+  await click('Alice')
+  await tick()
+  await click('额度剩余')
+  await click('2 张重置卡可用')
+  expect(window.tangu!.accountUseResetCard).not.toHaveBeenCalled()
+  await click('再点一次确认使用')
+  await tick()
+  expect(window.tangu!.accountUseResetCard).toHaveBeenCalledWith('both')
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('额度已焕新')
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain('重置卡剩余 1 张')
+})

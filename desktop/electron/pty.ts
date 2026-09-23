@@ -45,6 +45,15 @@ export function defaultShell(platform: string, env: Record<string, string | unde
   return { file: env.SHELL || '/bin/bash', args: ['-l'] }
 }
 
+/** 「带命令启动」的参数:不往交互 shell 里打字,而是 `shell -l -c "<cmd>"` 起一个专用进程 ——
+ *  进程退出 = 干净的退出码(pty:exit),不需要哨兵行/shell integration;仍是 PTY,sudo 输密码照常。
+ *  cmd 缺省 = 原来的登录 shell。 */
+export function shellArgsFor(platform: string, file: string, base: string[], cmd?: string): string[] {
+  if (!cmd) return base
+  if (platform === 'win32') return /cmd\.exe$/i.test(file) ? ['/d', '/c', cmd] : ['-NoLogo', '-Command', cmd]
+  return [...base, '-c', cmd]
+}
+
 /** cwd 落点:目录确实存在才用,否则回家目录(cwd 不存在会让 spawn 直接失败)。 */
 export function resolveCwd(cwd?: string): string {
   if (cwd) {
@@ -88,13 +97,14 @@ function watchOwner(wc: WebContents): void {
 type TrustCheck = (e: Pick<Electron.IpcMainInvokeEvent, 'sender' | 'senderFrame'>) => boolean
 
 export function registerPtyIpc(isTrusted: TrustCheck): void {
-  ipcMain.handle('pty:spawn', (e, opts: { cols?: number; rows?: number; cwd?: string } = {}) => {
+  ipcMain.handle('pty:spawn', (e, opts: { cols?: number; rows?: number; cwd?: string; cmd?: string } = {}) => {
     // ⚠️创建也要鉴权,不能只在 write/resize 上按会话归属校验:归属只防「偷别人的会话」,
     // 防不住「任何拿到 ipcRenderer 的上下文自己开一个登录 shell」。
     if (!isTrusted(e)) return { error: 'forbidden' }
     const pty = loadPty()
     if (!pty) return { error: '终端不可用:node-pty 未安装成功(Linux 需 python3 + make + g++ 后重装依赖)' }
-    const { file, args } = defaultShell(process.platform, process.env)
+    const { file, args: base } = defaultShell(process.platform, process.env)
+    const args = shellArgsFor(process.platform, file, base, typeof opts.cmd === 'string' && opts.cmd ? opts.cmd : undefined)
     const { cols, rows } = saneSize(opts.cols, opts.rows)
     const wc = e.sender
     let proc: PtyProc

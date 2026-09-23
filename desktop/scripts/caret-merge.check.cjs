@@ -176,6 +176,42 @@ async function main() {
     await page.close()
   }
 
+  // C4 v4 空行叠空行:末个空段行首退格(用户实报 09-22,待办列表下两个空行)。joinBackward 删的是
+  // **前面**那个空段,光标所在的 <p> DOM 节点被 PM 原样复用 → DOM 选区同节点同 offset,
+  // selectionchange / input 一个都不发,轮询签名(宿主矩形)也不变 —— 覆盖层钉在原处。
+  {
+    const UPM = '.unified-body .ProseMirror'
+    const page = await browser.newPage({ locale: 'zh-CN' })
+    page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    const seed = '第一行文字。\n\n- [ ] 优化工作流\n- [ ] Shower\n'
+    await page.goto(`${BASE}?upage&caret&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector(UPM, { timeout: 20000 })
+    await page.waitForTimeout(600)
+    await page.locator(`${UPM} > :last-child li:last-child`).click()
+    await page.keyboard.press('End')
+    for (const k of ['Enter', 'Enter', 'Enter']) await page.keyboard.press(k) // 退出列表 + 两个空段
+    await settle(page)
+    const before = await geom(page)
+    await page.keyboard.press('Backspace')
+    await settle(page)
+    const after = await geom(page)
+    const lastP = await page.evaluate((s) => {
+      const pm = document.querySelector(s)
+      const el = pm.lastElementChild
+      return {
+        top: el.tagName === 'P' && el.textContent === '' ? Math.round(el.getBoundingClientRect().top) : null,
+        kids: [...pm.children].map((c) => c.tagName + JSON.stringify(c.textContent.slice(0, 6))).join(' '),
+      }
+    }, UPM).then((r) => (r.top === null && console.log('  C4 结构:', r.kids), r.top))
+    check('C4 v4 空行叠空行:只剩一个空段', lastP !== null, `lastP=${lastP}`)
+    check(
+      'C4 v4 空行叠空行:覆盖层跟到上一个空段',
+      !!after.overlay && lastP !== null && Math.abs(after.overlay.top - lastP) <= 6 && after.overlay.top < before.overlay.top - 5,
+      JSON.stringify({ before: before.overlay, after: after.overlay, lastP }),
+    )
+    await page.close()
+  }
+
   await browser.close()
   const bad = results.filter((r) => !r.ok)
   console.log(`\n${results.length - bad.length}/${results.length} 通过`)

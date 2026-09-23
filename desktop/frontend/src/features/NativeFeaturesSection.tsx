@@ -18,7 +18,7 @@ export function NativeFeaturesSection() {
     {features.map((feature) => <div className="plugin-card" key={feature}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <PluginLogo />
-        <b style={{ fontSize: 13 }}>{t(`space.${feature}`)}</b>
+        <b style={{ fontSize: 'var(--ui-font-body, 13px)' }}>{t(`space.${feature}`)}</b>
       </div>
     </div>)}
   </>

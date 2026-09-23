@@ -1,24 +1,24 @@
 /* 全局快速查找面板(居中悬浮) —— app 级,主题变量驱动,深浅自适应。 */
 .amx-qf-scrim { position: fixed; inset: 0; z-index: 200; background: rgba(0, 0, 0, 0.4); display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; }
-.amx-qf { width: min(680px, 92vw); max-height: 66vh; display: flex; flex-direction: column; background: var(--bg-card, var(--bg, #1e1e1e)); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--card-shadow); overflow: hidden; }
+.amx-qf { width: min(680px, 92vw); max-height: 66vh; display: flex; flex-direction: column; background: var(--bg-card, var(--bg, #1e1e1e)); border: 1px solid var(--border); border-radius: var(--radius-lg, 16px); box-shadow: var(--card-shadow); overflow: hidden; }
 .amx-qf-head { display: flex; align-items: center; gap: 10px; padding: 13px 16px; border-bottom: 1px solid var(--border); }
 .amx-qf-searchicon { color: var(--text-muted); flex: none; }
-.amx-qf-input { flex: 1; min-width: 0; border: none; background: transparent; color: var(--text); font-size: 16px; outline: none; }
+.amx-qf-input { flex: 1; min-width: 0; border: none; background: transparent; color: var(--text); font-size: var(--ui-font-heading, 14px); outline: none; }
 .amx-qf-list { flex: 1; overflow-y: auto; padding: 6px; }
-.amx-qf-sec { font-size: 11px; color: var(--text-faint, var(--text-muted)); padding: 6px 10px 4px; letter-spacing: 0.04em; }
-.amx-qf-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: none; background: transparent; color: var(--text); border-radius: 8px; cursor: pointer; text-align: left; }
+.amx-qf-sec { font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); padding: 6px 10px 4px; letter-spacing: 0.04em; }
+.amx-qf-row { width: 100%; display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: none; background: transparent; color: var(--text); border-radius: var(--radius-sm, 6px); cursor: pointer; text-align: left; }
 .amx-qf-row.sel { background: var(--overlay-light, rgba(127, 127, 127, 0.14)); }
 .amx-qf-icon { flex: none; color: var(--text-muted); display: inline-flex; }
 .amx-qf-emoji { font-size: 15px; line-height: 1; }
-.amx-qf-title { flex: none; max-width: 56%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 14px; }
-.amx-qf-sub { flex: 1; min-width: 0; color: var(--text-faint, var(--text-muted)); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
-.amx-qf-empty { padding: 28px; text-align: center; color: var(--text-muted); font-size: 13px; }
-.amx-qf-foot { padding: 8px 14px; border-top: 1px solid var(--border); color: var(--text-faint, var(--text-muted)); font-size: 11px; }
+.amx-qf-title { flex: none; max-width: 56%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: var(--ui-font-body, 13px); }
+.amx-qf-sub { flex: 1; min-width: 0; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-meta, 12px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: right; }
+.amx-qf-empty { padding: 28px; text-align: center; color: var(--text-muted); font-size: var(--ui-font-body, 13px); }
+.amx-qf-foot { padding: 8px 14px; border-top: 1px solid var(--border); color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-caption, 11px); }
 .amx-qf-foot kbd { background: var(--overlay-light, rgba(127, 127, 127, 0.14)); border-radius: 4px; padding: 1px 5px; font-family: inherit; }
 /* 居中小卡片(加库第二步:选日期/勾选列),复用同款悬浮 chrome */
-.amx-qf-card { width: min(340px, 92vw); background: var(--bg-card, var(--bg, #1e1e1e)); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--card-shadow); padding: 12px; }
+.amx-qf-card { width: min(340px, 92vw); background: var(--bg-card, var(--bg, #1e1e1e)); border: 1px solid var(--border); border-radius: var(--radius-lg, 16px); box-shadow: var(--card-shadow); padding: 12px; }
 /* 分类胶囊:复用 `.t2s-vaultseg`(sidebar2.css),这里只补面板里的尺寸与间距。
    选中态的字色/滑块色一律由那颗组件出,别在这儿另调一套 —— 第一版自己写 chip 时就是在这里
    写死了 color:#fff,深色皮肤下 --accent 近白 = 白字白底(截图自查才发现)。 */
 .amx-qf-seg { margin: 8px 14px; height: 28px; }
-.amx-qf-seg button { font-size: 12px; }
+.amx-qf-seg button { font-size: var(--ui-font-meta, 12px); }

@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ArrowDown, ArrowUp, Eye, EyeOff, GripVertical } from 'lucide-react'
+import { dbIcon } from './databaseIcons'
 import type { DbColumn, DbView } from '@amadeus-shared/db/schema'
 import type { RowGroup } from '@amadeus-shared/db/groupRows'
 import { registerMessages, useI18n } from '../../../i18n'
@@ -68,12 +68,12 @@ export function GroupMenu({ columns, view, groups, labelOf, onPatch, onCollapse,
         return <div key={g.key} className="amx-db-group-option" data-hidden={hidden || undefined} data-group-key={g.key}
           draggable onDragStart={(e) => { setDrag(g.key); e.dataTransfer.setData('text/plain', g.key); e.dataTransfer.effectAllowed = 'move' }}
           onDragEnd={() => setDrag(null)} onDragOver={(e) => { if (drag) e.preventDefault() }} onDrop={(e) => { e.preventDefault(); if (drag) move(drag, g.key); setDrag(null) }}>
-          <GripVertical size={12} aria-hidden /><span className="amx-db-group-option-name" title={name}>{name}</span><small>{g.rows.length}</small>
-          <button disabled={i === 0} aria-label={t('dbgroup.up', { name })} onClick={() => move(g.key, groups[i - 1].key)}><ArrowUp size={12} /></button>
-          <button disabled={i === groups.length - 1} aria-label={t('dbgroup.down', { name })} onClick={() => move(g.key, groups[i + 1].key)}><ArrowDown size={12} /></button>
+          {dbIcon('grip')}<span className="amx-db-group-option-name" title={name}>{name}</span><small>{g.rows.length}</small>
+          <button disabled={i === 0} aria-label={t('dbgroup.up', { name })} onClick={() => move(g.key, groups[i - 1].key)}>{dbIcon('moveUp')}</button>
+          <button disabled={i === groups.length - 1} aria-label={t('dbgroup.down', { name })} onClick={() => move(g.key, groups[i + 1].key)}>{dbIcon('moveDown')}</button>
           <button aria-label={t(hidden ? 'dbgroup.show' : 'dbgroup.hide', { name })} aria-pressed={!hidden}
             onClick={() => onPatch({ groupHidden: hidden ? view.groupHidden!.filter((k) => k !== g.key) : [...(view.groupHidden ?? []), g.key] })}>
-            {hidden ? <EyeOff size={13} /> : <Eye size={13} />}
+            {dbIcon(hidden ? 'hidden' : 'visible')}
           </button>
         </div>
       })}</div>

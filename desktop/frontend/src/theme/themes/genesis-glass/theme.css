@@ -25,17 +25,17 @@
  *   · 设置里的性能开关 data-glass='off' → 全部材质回落实色(见文件末尾)。
  *   · 非 macOS 无原生 vibrancy，loader 会把当前 skin 解析后的 --bg 同步给原生窗口底；
  *     CSS 同时把舞台钉回 var(--bg)，两层不会再透出写死的 cream 底色。
- *   · 扁平开关 data-flat='1' 由 base.css 清空三个阴影 token,顶部高光随之消失(符合扁平语义)。
+ *   · 空间高程遵循 base.css 的统一淡阴影，玻璃材质仍由本主题控制。
  */
 
 /* ═══ 结构层:Genesis 的纸感骨架,半径放大到贴近 macOS 面板,字体走系统(mac 即 SF Pro) ═══ */
 [data-theme='genesis-glass'] {
   --border-width: 1px;
-  --radius-sm: 8px;
-  --radius-md: 11px;
+  --radius-sm: 6px;
+  --radius-md: 12px;
   --radius-lg: 16px;
-  --radius-chat-surface: 20px;
-  --radius-chat-card: 14px;
+  --radius-chat-surface: var(--radius-lg);
+  --radius-chat-card: var(--radius-md);
   --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'Hanken Grotesk',
     ui-sans-serif, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
 
@@ -246,6 +246,7 @@
 [data-theme='genesis-glass'] .t2-quote-menu,
 [data-theme='genesis-glass'] .amx-tip,
 [data-theme='genesis-glass'] .amx-db-pop,
+[data-theme='genesis-glass'] .ui-popover,
 [data-theme='genesis-glass'] .amx-bpick,
 [data-theme='genesis-glass'] .amx-mbar,
 [data-theme='genesis-glass'] .amx-cal-agenda,

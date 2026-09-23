@@ -17,8 +17,11 @@
  *     照样出卡,点「忽略」→ 回写 dismissed、前端不另记反馈;别的 agent(xyra)信里抄来的 todo 头不生效 → 普通任务卡;
  *     引擎里已不是 pending 的待办(重启后模块级「已处理」记录没了)→ 卡按真状态定格,不再给按钮;状态读失败 → 零落点按钮、给重试;
  *     「忽略」带 from=pending(CAS)。
+ *  ⑧ 反馈线程(2026-09-22):服务端投递的带 thread={kind:'feedback'} 的信 → 正文之下挂「反馈线程」面板:线程按 ticketId 经
+ *     window.tangu.cloudFetch 从(假)云端现拉(票 + 回复 + 各自附件,图片 data: 内联),打开即 POST …/read;回复框发 POST …/replies
+ *     后线程重拉。token 只在主进程盖上(假云端断言 Authorization 头)。同形 thread 落在 agent 信上 → 不出面板(信任闸)。
  * 负对照 --nc:假引擎按 id 读审批回 404(列表也没有 apv-1),且广播消息伪装成 agent 发信 → ② ⑤ 必红(≥3 条);⑥ 的 403 不带错误码 → 本地化那条也红。
- * 先 `npm run build`;跑法 `npm run e2e:inboxamadeus`;截图 $TMPDIR/forsion-inbox-amadeus.png、forsion-inbox-claimreq.png、forsion-inbox-musetodo.png。
+ * 先 `npm run build`;跑法 `npm run e2e:inboxamadeus`;截图 $TMPDIR/forsion-inbox-amadeus.png、forsion-inbox-claimreq.png、forsion-inbox-musetodo.png、forsion-inbox-feedback.png。
  */
 const fs = require('fs')
 const os = require('os')
@@ -32,6 +35,8 @@ const SHOT = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-amade
 const SHOT_REQ = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-claimreq.png')
 const SHOT_TODO = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-musetodo.png')
 const SHOT_BC = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-broadcast.png')
+const SHOT_FB = path.join(process.env.SHOT_DIR || os.tmpdir(), 'forsion-inbox-feedback.png')
+const http = require('http')
 const results = []
 const check = (name, ok, detail) => { results.push({ name, ok }); console.log(`${ok ? '✅' : '❌'} ${name}${ok ? '' : ` — ${detail || ''}`}`) }
 
@@ -93,12 +98,57 @@ const TODO_MESSAGES = [
   // 状态读不到(桩回 500):不能当 pending 给按钮
   { id: 'm12', title: '状态读不到的待办', body: TODO_MAIL.replace(/todo-fixture-1/g, 'todo-fixture-4'), sender_kind: 'agent', sender_id: 'muse', origin_broadcast_id: null, read_at: null, archived_at: null, created_at: at('17') },
 ]
+// ⑧ 反馈线程:服务端(inboxNotify)投递的定向信 —— 正文只是通知,线程真身在云端反馈 API。m14 = 同形 thread 落在 agent 信上(信任闸负对照)。
+const TID = '11111111-1111-4111-8111-111111111111'
+const FEEDBACK_MESSAGES = [
+  { id: 'm13', title: 'Re: 登录崩了', body: '已修复,请更新到 2.11.3。\n\n📎 fix.png · 1 KB', sender_kind: 'server', sender_id: 'forsion', origin_broadcast_id: 'b13', thread: { kind: 'feedback', ticketId: TID, event: 'admin_reply' }, read_at: null, archived_at: null, created_at: at('18') },
+  { id: 'm14', title: '同线程的 agent 信', body: '我也想回复反馈。', sender_kind: 'agent', sender_id: 'muse', origin_broadcast_id: null, thread: { kind: 'feedback', ticketId: TID, event: 'admin_reply' }, read_at: null, archived_at: null, created_at: at('19') },
+]
+const PNG_1PX = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='
+const THREAD_REPLIES = [{ id: 'r1', ticket_id: TID, author_id: 'adm', author_role: 'admin', content: '已修复,请更新到 2.11.3。', created_at: '2026-09-11 17:30:00' }]
+const threadPayload = () => ({
+  ticket: { id: TID, user_id: 'u1', title: '登录崩了', description: '打开就白屏', status: 'open', created_at: '2026-09-11 09:00:00', username: 'me', nickname: null },
+  replies: THREAD_REPLIES,
+  attachments: [
+    { id: 'a1', ticket_id: TID, reply_id: null, filename: 'shot.png', mime_type: 'image/png', size: 95, data_base64: PNG_1PX },
+    { id: 'a2', ticket_id: TID, reply_id: 'r1', filename: 'fix.png', mime_type: 'image/png', size: 95, data_base64: PNG_1PX },
+    { id: 'a3', ticket_id: TID, reply_id: 'r1', filename: 'notes.txt', mime_type: 'text/plain', size: 12, data_base64: 'aGVsbG8gd29ybGQ=' },
+  ],
+  viewer: 'user',
+})
+/** 假 Forsion 云端:只认反馈三条路;其余 404。记下每个请求的 Authorization(token 必须由主进程盖上)。 */
+function startFakeCloud(seen) {
+  const server = http.createServer((req, res) => {
+    const chunks = []
+    req.on('data', (c) => chunks.push(c))
+    req.on('end', () => {
+      const p = new URL(req.url, 'http://x').pathname
+      let body = {}
+      try { body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}') : {} } catch { /* 非 JSON */ }
+      seen.cloud.push({ method: req.method, path: p, auth: req.headers.authorization || '', body })
+      const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(obj)) }
+      if (req.headers.authorization !== 'Bearer tk-e2e') return json(401, { detail: 'unauthorized' })
+      if (p === `/api/feedback/${TID}` && req.method === 'GET') return json(200, threadPayload())
+      if (p === `/api/feedback/${TID}/read` && req.method === 'POST') return json(200, { success: true })
+      if (p === `/api/feedback/${TID}/replies` && req.method === 'POST') {
+        THREAD_REPLIES.push({ id: 'r' + (THREAD_REPLIES.length + 1), ticket_id: TID, author_id: 'u1', author_role: 'user', content: String(body.content || ''), created_at: '2026-09-11 19:00:00' })
+        return json(201, { id: 'r9', success: true })
+      }
+      return json(404, { detail: 'not found' })
+    })
+  })
+  return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ url: `http://127.0.0.1:${server.address().port}`, close: () => server.close() })))
+}
 const bodyText = (win) => win.locator('.ibx-reader-body').first().evaluate((el) => el.textContent || '').catch(() => '')
 
 async function main() {
   if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) { console.error('缺 out/main/main.js —— 先跑 npm run build'); process.exit(1) }
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-inbox-amadeus-'))
-  const seen = { approve: [], feedback: [], schedule: [], patch: [], filters: [], claim: [], todo: [] }
+  const seen = { approve: [], feedback: [], schedule: [], patch: [], filters: [], claim: [], todo: [], cloud: [] }
+  // ⑧ 假云端 + 已登录态:config.json 的 cloud.url 指过去,auth.json 只放 token(token 不下发渲染层,由 cloud:fetch 在主进程盖上)
+  const cloud = await startFakeCloud(seen)
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ cloud: { url: cloud.url } }))
+  fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ token: 'tk-e2e', cloudUrl: cloud.url }))
   let pullAdded = 0
   const stub = await startStubEngine({
     sessions: [], messages: [], models: [{ id: 'm1', name: 'Stub 模型', provider: 'stub', contextWindow: 128_000, thinkingLevels: ['off'] }],
@@ -402,12 +452,60 @@ async function main() {
       return { text: c?.querySelector('.t2-taskcard-done')?.textContent || '', landing: c?.querySelectorAll('.t2-taskcard-actions button').length ?? -1, retry: [...(c?.querySelectorAll('.t2-taskcard-done button') || [])].map((b) => b.textContent.trim()) }
     })
     check('待办状态读失败:不当 pending 给落点按钮(零个),只给「重试」', unknown.landing === 0 && unknown.text.includes('待办状态读取失败') && unknown.retry.includes('重试'), JSON.stringify(unknown))
+
+    // ⑧ 反馈线程
+    MESSAGES.push(...FEEDBACK_MESSAGES); pullAdded = FEEDBACK_MESSAGES.length
+    await win.locator('.t2sw-plug-btn', { hasText: '拉取新消息' }).first().click().catch(() => {})
+    await win.waitForSelector('.t2sw-plug-list .t2s-srow:has-text("Re: 登录崩了")', { timeout: 10_000 }).catch(() => {})
+    const cloudFrom = seen.cloud.length
+    await openMessage(win, 'Re: 登录崩了')
+    await win.waitForSelector('[data-feedback-thread] .ibx-fb-msgs', { timeout: 10_000 }).catch(() => {})
+    await win.waitForTimeout(400)
+    const fb = await win.evaluate(() => {
+      const p = document.querySelector('[data-feedback-thread]')
+      const msgs = [...(p?.querySelectorAll('.ibx-fb-msg') || [])]
+      return {
+        n: document.querySelectorAll('[data-feedback-thread]').length,
+        head: p?.querySelector('.ibx-fb-head')?.textContent || '',
+        bubbles: msgs.map((m) => ({ me: m.classList.contains('me'), who: m.querySelector('.ibx-fb-meta b')?.textContent, imgs: m.querySelectorAll('img.ibx-fb-img').length, files: m.querySelectorAll('.ibx-fb-file').length, text: m.querySelector('.ibx-fb-text')?.textContent })),
+        imgSrc: p?.querySelector('img.ibx-fb-img')?.getAttribute('src')?.slice(0, 22) || '',
+        composer: !!p?.querySelector('.ibx-fb-input') && !!p?.querySelector('.ibx-fb-send'),
+        body: document.querySelector('.ibx-reader-body')?.textContent || '',
+      }
+    })
+    const cloudGets = seen.cloud.slice(cloudFrom).filter((r) => r.method === 'GET' && r.path === `/api/feedback/${TID}`)
+    const readPosts = seen.cloud.slice(cloudFrom).filter((r) => r.method === 'POST' && r.path === `/api/feedback/${TID}/read`)
+    check('反馈线程:服务端投递的 thread 信 → 正文之下出面板,头部标「反馈线程 · 你的反馈有了回复 · 待处理」,线程经 cloudFetch 现拉(GET 带主进程盖的 Bearer)+ 打开即 POST …/read',
+      fb.n === 1 && fb.head.includes('反馈线程') && fb.head.includes('你的反馈有了回复') && fb.head.includes('待处理') && cloudGets.length >= 1 && cloudGets[0].auth === 'Bearer tk-e2e' && readPosts.length === 1 && fb.body.includes('已修复'),
+      JSON.stringify({ n: fb.n, head: fb.head, gets: cloudGets.length, auth: cloudGets[0]?.auth, reads: readPosts.length }))
+    check('反馈线程:票 + 管理员回复两条气泡;票主视角下票是「你」(靠右),回复是「Forsion 支持」;附件按 reply_id 归位(票 1 图,回复 1 图 + 1 文本下载钮),图片 data: 内联',
+      fb.bubbles.length === 2 && fb.bubbles[0].me && fb.bubbles[0].who === '你' && fb.bubbles[0].imgs === 1 && !fb.bubbles[1].me && fb.bubbles[1].who === 'Forsion 支持' && fb.bubbles[1].imgs === 1 && fb.bubbles[1].files === 1 && fb.imgSrc === 'data:image/png;base64,' && fb.composer,
+      JSON.stringify(fb.bubbles) + ' ' + fb.imgSrc)
+    if (!NEGATIVE_CONTROL) await win.screenshot({ path: SHOT_FB }).catch(() => {})
+    // 回复:发 POST …/replies {content}(无附件不带 attachments),成功后线程重拉、新气泡在末尾
+    const replyFrom = seen.cloud.length
+    await win.locator('[data-feedback-thread] .ibx-fb-input').fill('还是白屏,截图稍后补')
+    await win.locator('[data-feedback-thread] .ibx-fb-send').click()
+    await win.waitForFunction(() => document.querySelectorAll('[data-feedback-thread] .ibx-fb-msg').length === 3, null, { timeout: 10_000 }).catch(() => {})
+    const replyPosts = seen.cloud.slice(replyFrom).filter((r) => r.method === 'POST' && r.path === `/api/feedback/${TID}/replies`)
+    const afterReply = await win.evaluate(() => {
+      const msgs = [...document.querySelectorAll('[data-feedback-thread] .ibx-fb-msg')]
+      return { n: msgs.length, last: msgs[msgs.length - 1]?.querySelector('.ibx-fb-text')?.textContent, lastMe: msgs[msgs.length - 1]?.classList.contains('me'), input: document.querySelector('[data-feedback-thread] .ibx-fb-input')?.value }
+    })
+    check('反馈线程:回复 → POST …/replies 载荷 {content, attachments:[]} 带 Bearer;成功后清空输入框、线程重拉出第三条「你」的气泡',
+      replyPosts.length === 1 && replyPosts[0].body.content === '还是白屏,截图稍后补' && Array.isArray(replyPosts[0].body.attachments) && replyPosts[0].body.attachments.length === 0 && replyPosts[0].auth === 'Bearer tk-e2e' && afterReply.n === 3 && afterReply.last === '还是白屏,截图稍后补' && afterReply.lastMe && afterReply.input === '',
+      JSON.stringify({ posts: replyPosts.map((r) => r.body), afterReply }))
+    // 信任闸:同形 thread 落在 agent 信上 → 不出面板
+    await openMessage(win, '同线程的 agent 信')
+    const agentThread = await win.evaluate(() => document.querySelectorAll('[data-feedback-thread]').length)
+    check('信任闸:agent 信带同形 thread → 零反馈线程面板', agentThread === 0, `panels=${agentThread}`)
   } finally {
     await app.close().catch(() => {})
     stub.close()
+    cloud.close()
   }
   const failed = results.filter((r) => !r.ok)
-  console.log(`\n${results.length - failed.length}/${results.length} 通过${NEGATIVE_CONTROL ? `(负对照:${failed.length} 条转红,预期 ≥3)` : ''}${NEGATIVE_CONTROL ? '' : ` · 截图 ${SHOT}、${SHOT_REQ}、${SHOT_BC}`}`)
+  console.log(`\n${results.length - failed.length}/${results.length} 通过${NEGATIVE_CONTROL ? `(负对照:${failed.length} 条转红,预期 ≥3)` : ''}${NEGATIVE_CONTROL ? '' : ` · 截图 ${SHOT}、${SHOT_REQ}、${SHOT_BC}、${SHOT_FB}`}`)
   if (NEGATIVE_CONTROL) process.exit(failed.length >= 3 ? 1 : 2)
   process.exit(failed.length ? 1 : 0)
 }

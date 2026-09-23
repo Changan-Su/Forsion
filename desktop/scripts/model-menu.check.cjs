@@ -192,7 +192,7 @@ const box = (sel) => {
     const row = document.querySelector('.cm-model-row')
     return { item: item?.getBoundingClientRect().height ?? 0, row: row?.getBoundingClientRect().height ?? 0 }
   })
-  check('选择菜单行统一为约 28px 的工作区密度', [itemDensity.item, itemDensity.row].every((h) => h >= 27 && h <= 29),
+  check('选择菜单行对齐已认可的 32px 更多菜单密度', [itemDensity.item, itemDensity.row].every((h) => h >= 31 && h <= 33),
     JSON.stringify(itemDensity))
 
   if (process.argv.includes('--shot') || process.env.MODEL_MENU_SHOT) {
@@ -326,8 +326,7 @@ const box = (sel) => {
   check('极窄 Chat View 下模型类二级面板收缩且完整留在 View 内', stackedSub.left >= narrowStage.left && stackedSub.right <= narrowStage.right,
     `View ${narrowStage.left.toFixed(1)}..${narrowStage.right.toFixed(1)} sub ${stackedSub.left.toFixed(1)}..${stackedSub.right.toFixed(1)}`)
 
-  // ── F:扁平/立体开关。阴影必须走 --card-shadow 这类高程 token —— 写死 `0 10px 32px var(--shadow)`
-  //    在扁平模式下照样投影(用户实报)。立体态那半边同样要钉,否则「全都写死 none」也能骗过去。 ──
+  // ── F:立体淡阴影与扁平清零。 ──
   const shadows = (flat) => p.evaluate((f) => {
     document.documentElement.dataset.mode = 'light'
     document.documentElement.dataset.flat = f
@@ -335,8 +334,8 @@ const box = (sel) => {
   }, flat)
   const raised = await shadows('0')
   const flat = await shadows('1')
-  check('立体态(data-flat=0)菜单与子面板都有阴影', raised.every((s) => s && s !== 'none'), raised.join(' / '))
-  check('⚠️扁平态(data-flat=1)菜单与子面板阴影一并消失', flat.every((s) => s === 'none'), flat.join(' / '))
+  check('菜单与子面板都有统一淡阴影', raised.every((s) => s && s !== 'none'), raised.join(' / '))
+  check('扁平清除菜单与子面板阴影', flat.every((s) => s === 'none'), flat.join(' / '))
 
   await browser.close()
   const failed = results.filter((r) => !r.ok)

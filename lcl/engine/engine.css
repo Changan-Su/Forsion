@@ -92,11 +92,11 @@
   min-width: 15px;
   height: 15px;
   padding: 0 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   background: var(--danger, #e5484d);
   color: var(--on-danger, #fff);
-  font-size: 9.5px;
-  font-weight: 700;
+  font-size: var(--ui-font-caption, 11px);
+  font-weight: 600;
   line-height: 15px;
   text-align: center;
   border: 1.5px solid var(--sidebar-bg);
@@ -137,9 +137,9 @@
 /* 被拖项不在本条上(从收纳夹/「…」浮层拖回来)→ 没得让位,画插入线标落点。 */
 .rb-slot.drag-over::before {
   content: ''; position: absolute; left: 4px; right: 4px; top: -3px;
-  height: 3px; border-radius: 999px; background: var(--accent-ink); z-index: 3;
+  height: 3px; border-radius: var(--radius-pill, 999px); background: var(--accent-ink); z-index: 3;
 }
-.rb-label { font-size: 13px; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rb-label { font-size: var(--ui-font-body, 13px); line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rb { transition: width var(--duration-fast, 0.15s) ease; }
 /* ribbon 内可交互元素一律 no-drag(否则落在 -webkit-app-region:drag 的 .rb 上会被当成拖窗)。 */
 .rb-btn, .rb-group .account-card, .rb-group .ribbon-account { -webkit-app-region: no-drag; }
@@ -158,7 +158,7 @@
    pointer-events:none 让点击照旧落在按钮上;名称给它让出右边距,长名省略号不会压上来。 */
 .rb-expanded .rb-top .rb-slot .rb-key {
   position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
-  pointer-events: none; font-size: 11px; line-height: 1; letter-spacing: 0.02em;
+  pointer-events: none; font-size: var(--ui-font-caption, 11px); line-height: 1; letter-spacing: 0.02em;
   color: var(--text-muted, var(--text-light, #8a8a8a)); opacity: 0.55;
   font-variant-numeric: tabular-nums;
 }
@@ -181,19 +181,19 @@
   box-shadow: var(--card-shadow, 0 12px 40px rgba(0, 0, 0, 0.25));
   -webkit-app-region: no-drag;
 }
-.rb-fly-head { font-size: 11px; color: var(--text-faint, var(--text-muted)); padding: 2px 8px 6px; font-weight: 600; }
-.rb-fly-sub { font-size: 10.5px; color: var(--text-faint, var(--text-muted)); padding: 6px 8px 2px; text-transform: uppercase; letter-spacing: 0.04em; }
+.rb-fly-head { font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); padding: 2px 8px 6px; font-weight: 600; }
+.rb-fly-sub { font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); padding: 6px 8px 2px; text-transform: uppercase; letter-spacing: 0.04em; }
 /* 「…」里溢出的收纳夹标题:可拖出重排 + 可放入(codex#6)。 */
 .rb-fly-folderhead { display: flex; align-items: center; gap: 6px; border-radius: var(--radius-sm, 8px); cursor: grab; }
 .rb-fly-folderhead.dragging { opacity: 0.4; }
 .rb-fly-folderhead.drag-into { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.18))); box-shadow: inset 0 0 0 1.5px var(--accent-ink); color: var(--accent-ink, var(--accent, var(--text))); }
-.rb-fly-empty { font-size: 12px; color: var(--text-muted); padding: 4px 8px 8px; }
+.rb-fly-empty { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); padding: 4px 8px 8px; }
 .rb-fly-row { position: relative; border-radius: var(--radius-sm, 8px); }
 .rb-fly-row .rb-btn { width: 100%; justify-content: flex-start; gap: 10px; padding: 0 10px; height: 32px; }
 .rb-fly-row.dragging { opacity: 0.4; }
 .rb-fly-row.drag-over::before {
   content: ''; position: absolute; left: 4px; right: 4px; top: -3px;
-  height: 3px; border-radius: 999px; background: var(--accent-ink); z-index: 3;
+  height: 3px; border-radius: var(--radius-pill, 999px); background: var(--accent-ink); z-index: 3;
 }
 /* 下移:落点在该行之下,线画下沿(悬停谁就顶掉谁 → 线必须画在真正的落点上)。 */
 .rb-fly-row.drag-over.below::before { top: auto; bottom: -3px; }
@@ -221,7 +221,7 @@
   background: transparent;
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: var(--ui-font-body, 13px);
   line-height: 1.4;
   border-radius: var(--radius-sm, 8px);
   cursor: pointer;
@@ -243,7 +243,7 @@
 .rb-iconpick-reset {
   display: block; width: 100%; text-align: left; margin-bottom: 4px;
   padding: 6px 8px; border: none; background: transparent; color: var(--text-muted);
-  font-family: var(--font-ui); font-size: 12px; border-radius: var(--radius-sm, 8px); cursor: pointer;
+  font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); border-radius: var(--radius-sm, 8px); cursor: pointer;
 }
 .rb-iconpick-reset:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); }
 .rb-iconpick-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 2px; max-height: 200px; overflow-y: auto; }
@@ -274,7 +274,7 @@
   align-items: center;
   padding: 0 10px;
   gap: 12px;
-  font-size: 11px;
+  font-size: var(--ui-font-caption, 11px);
   line-height: 1;
   color: var(--text-muted);
   pointer-events: none;
@@ -332,7 +332,7 @@
   background: transparent;
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 15px;
+  font-size: var(--ui-font-heading, 14px);
   padding: 14px 16px;
   border-bottom: var(--border-width, 1px) solid var(--border);
 }
@@ -348,7 +348,7 @@
   background: transparent;
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: var(--ui-font-body, 13px);
   text-align: left;
   border-radius: var(--radius-sm, 8px);
   cursor: pointer;
@@ -356,20 +356,20 @@
 .cmd-item[data-active] { background: var(--menu-hover, rgba(127, 127, 127, 0.12)); }
 .cmd-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cmd-hotkey, .cmd-foot kbd {
-  font-size: 11px;
+  font-size: var(--ui-font-caption, 11px);
   color: var(--text-faint, var(--text-muted));
   background: var(--overlay-light, rgba(127, 127, 127, 0.12));
   border-radius: 4px;
   padding: 1px 5px;
 }
-.cmd-empty { padding: 16px; text-align: center; color: var(--text-muted); font-size: 13px; }
+.cmd-empty { padding: 16px; text-align: center; color: var(--text-muted); font-size: var(--ui-font-body, 13px); }
 .cmd-foot {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 7px 12px;
   border-top: var(--border-width, 1px) solid var(--border);
-  font-size: 11px;
+  font-size: var(--ui-font-caption, 11px);
   color: var(--text-muted);
 }
 .cmd-foot kbd { margin: 0 1px; }
@@ -508,7 +508,7 @@
  * 与正文之间刻意无底线(用户拍板):主区靠「浮卡圆角 + --bg 纸面」自分界,侧栏则与正文连成一片。 */
 .dockview-theme-lcl .dv-tabs-and-actions-container {
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: var(--ui-font-meta, 12px);
   height: 32px;
   min-height: 32px;
   align-items: center;
@@ -550,7 +550,7 @@
   padding: 0 2px;
   max-width: 100%;
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: var(--ui-font-meta, 12px);
   color: inherit;
 }
 .wb-tab-ic { flex-shrink: 0; opacity: 0.85; }
@@ -684,7 +684,7 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
   height: 28px;
   padding: 0;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: var(--radius-sm, 6px);
   transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
 }
 .dockview-theme-lcl .dv-tab:hover .wb-tab--icon {
@@ -706,7 +706,7 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
 .dockview-theme-lcl .dv-groupview:has(.wb-tab--icon.wb-tab--empty):not(:has(.wb-tab:not(.wb-tab--empty))) .dv-tabs-and-actions-container { display: none; }
 .wb-sidebar-empty {
   height: 100%; display: flex; align-items: center; justify-content: center;
-  padding: 24px; text-align: center; font-size: 12.5px; line-height: 1.6;
+  padding: 24px; text-align: center; font-size: var(--ui-font-meta, 12px); line-height: 1.6;
   color: var(--text-faint, var(--text-muted)); user-select: none;
 }
 
@@ -719,8 +719,8 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
 .wb-home-mark { display: inline-flex; align-items: center; justify-content: center; opacity: .95; }
 .wb-home-new {
   display: inline-flex; align-items: center; gap: 7px; padding: 8px 16px;
-  border: var(--border-width, 1px) solid var(--border); border-radius: 999px;
-  background: var(--bg-card); color: var(--text); font: inherit; font-size: 13px; cursor: pointer;
+  border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-pill, 999px);
+  background: var(--bg-card); color: var(--text); font: inherit; font-size: var(--ui-font-body, 13px); cursor: pointer;
   transition: border-color var(--duration-fast, .15s), background var(--duration-fast, .15s), transform var(--duration-fast, .15s);
 }
 .wb-home-new:hover { border-color: var(--accent-ink); background: var(--overlay-light); transform: translateY(-1px); }

@@ -3,6 +3,7 @@
 const fs = require('fs'), os = require('os'), path = require('path')
 const { _electron: electron } = require('playwright-core')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
+const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 const ROOT = path.resolve(__dirname, '..'), temp = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-mini-panel-'))
 const shots = path.join(temp, 'screenshots'), results = []
 const pause = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -40,7 +41,7 @@ async function main() {
     const win = await app.firstWindow(), errors = []
     win.on('pageerror', (e) => errors.push(`main: ${e.message}`))
     await win.waitForSelector('.dv-groupview', { timeout: 30000, state: 'attached' })
-    for (const name of ['跳过引导', 'Skip']) { const b = win.getByRole('button', { name, exact: true }); if (await b.count()) { await b.click(); break } }
+    check('main window left onboarding', await skipOnboarding(win))
     await win.evaluate(() => { window.tangu.openMini({ sessionId: 'mini-first' }); window.tangu.openMini({ sessionId: 'mini-latest' }) })
     for (let i = 0; i < 200; i++) { mini = app.windows().find((w) => w.url().includes('window=mini')); if (mini) break; await pause(50) }
     if (!mini) throw new Error('Mini window missing')

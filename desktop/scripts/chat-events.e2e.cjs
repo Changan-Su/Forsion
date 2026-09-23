@@ -506,6 +506,12 @@ async function main() {
     // 还必须**藏掉「总允许」**——引擎对这两种情形是静默降级为单次批准的(approvals.ts 明写),
     // 按钮照常显示就又是一处「界面说一套引擎做一套」。
     stub.script([
+      // 排最前:D1-D5 取的是末三张;这张只给 D6-D8(长 diff 撑破 .approval-diff 的 320px 滚动盒)
+      { type: 'approval_request', payload: {
+        approvalId: 'a0', name: 'write_file',
+        arguments: JSON.stringify({ path: '/tmp/demo/tall.txt', content: Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join('\n') }),
+        preview: 'write /tmp/demo/tall.txt (60 lines)', reason: { kind: 'mode', mode: 'auto-edit' },
+      } },
       { type: 'approval_request', payload: {
         approvalId: 'a1', name: 'run_bash', arguments: JSON.stringify({ command: 'npm publish' }),
         preview: '$ npm publish', reason: { kind: 'custom-ask', rule: 'run_bash:npm publish', mode: 'auto-edit' },
@@ -539,6 +545,34 @@ async function main() {
     check('D5 ⚠️escalate/custom-ask 不给「总允许」(引擎对这两种就是不记),普通档给',
       !!ask && ask.btns.length === 2 && !!esc && esc.btns.length === 2 && !!mode && mode.btns.length === 3,
       JSON.stringify(apv.slice(-3).map((x) => x.btns)))
+
+    // D6-D8(2026-09-21 实报「审批卡代码区异常显示、点不了批准」):d2h 行号格是 position:absolute,
+    // 宿主不给定位祖先时它的包含块落到 .t2-chat-body —— 逃出 .approval-diff 与 .t2-stream 两层滚动盒,
+    // 冻在未滚动的位置上压住别处的按钮。D6 是判别式(修前 gutter=0);D7/D8 是症状面。
+    const tall = win.locator('.approval-card', { hasText: 'tall.txt' }).first()
+    await tall.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' })).catch(() => {})
+    await win.waitForTimeout(400)
+    const gut = await tall.evaluate((card) => {
+      const box = card.querySelector('.approval-diff')
+      const tr = card.querySelectorAll('.d2h-diff-tbody tr')[5]
+      const ln = tr.querySelector('.d2h-code-linenumber')
+      box.scrollTop = 0
+      const r0 = tr.getBoundingClientRect().top, g0 = ln.getBoundingClientRect().top
+      box.scrollTop = 150
+      const out = { scrolled: box.scrollTop, row: Math.round(tr.getBoundingClientRect().top - r0), gutter: Math.round(ln.getBoundingClientRect().top - g0) }
+      box.scrollTop = 0
+      const btn = card.querySelector('.approval-actions .btn.primary'), b = btn.getBoundingClientRect()
+      const hit = document.elementFromPoint(b.left + b.width / 2, b.top + b.height / 2)
+      return { ...out, hitOk: btn.contains(hit), hit: hit ? `${hit.tagName}.${hit.className}` : null }
+    }).catch((e) => ({ err: String(e) }))
+    check('D6 ⚠️长 diff 审批卡:纵滚时行号格跟着行走(不逃出 .approval-diff)',
+      gut.scrolled === 150 && gut.row === -150 && gut.gutter === gut.row, JSON.stringify(gut))
+    check('D7 「批准」命中测试落在按钮上(没被行号格盖住)', !!gut.hitOk, JSON.stringify(gut))
+    await tall.screenshot({ path: process.env.APPROVAL_SHOT || '/tmp/approval-tall-diff.png' }).catch(() => {})
+    await tall.locator('.approval-actions .btn.primary').click({ timeout: 3000 }).catch(() => {})
+    await win.waitForTimeout(500)
+    check('D8 真鼠标点得到「批准」且送达引擎', stub.seen.approvals.some((a) => a.approvalId === 'a0' && a.action === 'approve'),
+      JSON.stringify(stub.seen.approvals))
 
     // ── 场景 E:custom 规则编辑器(H2)。此前这套规则只能手写 config.json。
     // 钉三件:入口只在选了 custom 时出现 / 打开时把服务端已有规则读进来 / 保存发出的 PUT 是编辑后的内容。

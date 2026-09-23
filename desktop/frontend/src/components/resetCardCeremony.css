@@ -1,0 +1,130 @@
+.reset-ceremony-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1600;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(8px);
+  animation: reset-ceremony-fade 300ms ease-out both;
+}
+
+.reset-ceremony {
+  position: relative;
+  width: min(100%, 420px);
+  padding: 24px 28px 26px;
+  max-height: calc(100dvh - 40px);
+  overflow: auto;
+  border: var(--border-width) solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  box-shadow: var(--card-shadow);
+  color: var(--text);
+  font-family: var(--font-ui);
+  text-align: center;
+  animation: reset-ceremony-enter 480ms cubic-bezier(.2,.75,.15,1) both;
+}
+
+.reset-ceremony-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+}
+.reset-ceremony-close:hover { background: var(--menu-hover); color: var(--text); }
+
+.reset-ceremony-scene { position: relative; display: grid; place-items: center; height: 166px; margin-bottom: 2px; }
+.reset-ceremony-halo {
+  position: absolute;
+  width: 226px;
+  height: 142px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, color-mix(in srgb, var(--accent) 20%, transparent) 0%, transparent 68%);
+  animation: reset-ceremony-halo 1100ms 700ms ease-out both;
+}
+.reset-ceremony-card {
+  position: relative;
+  width: 158px;
+  height: 100px;
+  padding: 13px 15px;
+  overflow: hidden;
+  border: var(--border-width) solid color-mix(in srgb, var(--accent) 38%, var(--border));
+  border-radius: var(--radius-md);
+  background: linear-gradient(130deg, color-mix(in srgb, var(--accent) 18%, var(--bg-card)), var(--bg-card) 60%, color-mix(in srgb, var(--accent) 12%, var(--bg-card)));
+  color: var(--accent-ink);
+  text-align: left;
+  transform: rotate(-9deg);
+  animation: reset-ceremony-card 1000ms 150ms cubic-bezier(.16,.8,.2,1) both;
+}
+.reset-ceremony-card-top { display: flex; align-items: center; justify-content: space-between; font-size: var(--ui-font-caption); font-weight: 700; letter-spacing: .12em; }
+.reset-ceremony-card-mark { position: absolute; top: 31px; left: 14px; font-family: var(--font-ui); font-size: var(--ui-font-display); font-weight: 750; line-height: 1; opacity: .72; transform: scale(2.1); transform-origin: top left; }
+.reset-ceremony-card-bottom { position: absolute; right: 14px; bottom: 12px; font-size: var(--ui-font-caption); font-weight: 650; letter-spacing: .09em; }
+.reset-ceremony-card-sheen { position: absolute; inset: -30% auto -30% -60%; width: 38%; transform: rotate(24deg); background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--accent-light) 80%, transparent), transparent); animation: reset-ceremony-sheen 850ms 950ms ease-out both; }
+.reset-ceremony-seal {
+  position: absolute;
+  top: 100px;
+  left: calc(50% + 57px);
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border: var(--border-width) solid var(--border);
+  border-radius: 50%;
+  background: var(--action-fill);
+  color: var(--on-action);
+  animation: reset-ceremony-seal 500ms 1400ms cubic-bezier(.2,1.3,.4,1) both;
+}
+.reset-ceremony-eyebrow { color: var(--accent-ink); font-size: var(--ui-font-caption); font-weight: 680; letter-spacing: .08em; animation: reset-ceremony-reveal 450ms 1350ms ease-out both; }
+.reset-ceremony h2 { margin: 8px 0 4px; font-size: var(--ui-font-display); line-height: var(--ui-line-display); font-weight: 700; animation: reset-ceremony-reveal 450ms 1450ms ease-out both; }
+.reset-ceremony p { margin: 0; color: var(--text-muted); font-size: var(--ui-font-body); line-height: var(--ui-line-body); animation: reset-ceremony-reveal 450ms 1550ms ease-out both; }
+.reset-ceremony-quotas { display: grid; gap: 16px; margin-top: 26px; text-align: left; }
+.reset-ceremony-quota { animation: reset-ceremony-reveal 400ms 1750ms ease-out both; }
+.reset-ceremony-quota:nth-child(2) { animation-delay: 1950ms; }
+.reset-ceremony-quota-copy { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 7px; font-size: var(--ui-font-meta); }
+.reset-ceremony-values { display: flex; gap: 8px; align-items: baseline; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.reset-ceremony-values strong { color: var(--accent-ink); font-size: var(--ui-font-body); font-weight: 700; animation: reset-ceremony-reveal 350ms 2650ms ease-out both; }
+.reset-ceremony-quota:nth-child(2) .reset-ceremony-values strong { animation-delay: 2850ms; }
+.reset-ceremony-track { height: 6px; overflow: hidden; border-radius: var(--radius-pill); background: var(--overlay-medium); }
+.reset-ceremony-track span { display: block; height: 100%; border-radius: inherit; background: var(--accent); animation: reset-ceremony-fill 1000ms 2050ms cubic-bezier(.18,.78,.2,1) both; }
+.reset-ceremony-quota:nth-child(2) .reset-ceremony-track span { animation-delay: 2250ms; }
+.reset-ceremony-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 27px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.reset-ceremony-footer > span { animation: reset-ceremony-reveal 350ms 2850ms ease-out both; }
+.reset-ceremony-continue { min-height: 34px; padding: 0 15px; border-radius: var(--radius-sm); background: var(--action-fill); color: var(--on-action); font-size: var(--ui-font-meta); font-weight: 650; animation: reset-ceremony-finish 350ms 2800ms ease-out both; }
+.reset-ceremony-continue:hover { background: var(--action-fill-hover); }
+
+html[data-glass='off'] .reset-ceremony-backdrop { backdrop-filter: none; background: var(--bg); }
+
+@keyframes reset-ceremony-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes reset-ceremony-enter { from { opacity: 0; translate: 0 12px; scale: .97; } to { opacity: 1; translate: 0 0; scale: 1; } }
+@keyframes reset-ceremony-card { from { opacity: 0; transform: translateY(24px) rotate(-18deg) scale(.84); } to { opacity: 1; transform: translateY(0) rotate(-9deg) scale(1); } }
+@keyframes reset-ceremony-halo { from { opacity: 0; scale: .6; } to { opacity: 1; scale: 1; } }
+@keyframes reset-ceremony-sheen { from { translate: 0 0; opacity: 0; } 25% { opacity: .7; } to { translate: 340px 0; opacity: 0; } }
+@keyframes reset-ceremony-seal { from { opacity: 0; scale: .45; } to { opacity: 1; scale: 1; } }
+@keyframes reset-ceremony-reveal { from { opacity: 0; translate: 0 6px; } to { opacity: 1; translate: 0 0; } }
+@keyframes reset-ceremony-finish { from { visibility: hidden; opacity: 0; translate: 0 6px; } to { visibility: visible; opacity: 1; translate: 0 0; } }
+@keyframes reset-ceremony-fill { from { width: var(--reset-before); } to { width: var(--reset-after); } }
+
+@media (max-width: 440px) {
+  .reset-ceremony { padding-inline: 20px; }
+  .reset-ceremony-footer { flex-wrap: wrap; }
+  .reset-ceremony-continue { margin-left: auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reset-ceremony-backdrop, .reset-ceremony, .reset-ceremony-halo, .reset-ceremony-card,
+  .reset-ceremony-card-sheen, .reset-ceremony-seal, .reset-ceremony-eyebrow,
+  .reset-ceremony h2, .reset-ceremony p, .reset-ceremony-quota,
+  .reset-ceremony-values strong, .reset-ceremony-track span, .reset-ceremony-footer > span,
+  .reset-ceremony-continue { animation: none; }
+  .reset-ceremony-continue { visibility: visible; }
+  .reset-ceremony-card { transform: rotate(-9deg); }
+  .reset-ceremony-card-sheen { display: none; }
+  .reset-ceremony-track span { width: var(--reset-after); }
+}

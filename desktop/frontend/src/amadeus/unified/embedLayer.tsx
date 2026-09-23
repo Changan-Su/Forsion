@@ -347,7 +347,14 @@ function codeBody(fence: string): string {
 interface WidgetEntry {
   root: Root
   dom: HTMLElement
+  text: string
+  render: (kind: EmbedKind) => void
 }
+
+// 数据库视图名是配置,不是组件身份。把 |视图名 放进 key 会让每次切视图卸载整张表,
+// 连搜索、焦点、滚动和弹层一起丢掉。同路径的多个嵌入仍用出现序号区分各自的局部状态。
+const widgetIdentity = (kind: EmbedKind, text: string): string =>
+  kind.k === 'db' ? `db:${kind.name}` : `${kind.k}:${text}`
 
 interface EmbedLayerState {
   decos: DecorationSet
@@ -365,13 +372,18 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
       const visit = (node: ProseNode, pos: number): void => {
         const kind = classifyEmbed(node)
         if (!kind) return
-        const baseKey = `${kind.k}:${node.textContent}`
+        const baseKey = widgetIdentity(kind, node.textContent)
         const nth = seen.get(baseKey) ?? 0
         seen.set(baseKey, nth + 1)
         // 只有 `</>` 写下的显式 sourcePos 才让位;方向键/普通点击即使把选区落进隐藏文本,
         // 也继续呈现附件整体(难源码编辑块契约)。
         if (sourcePos === pos && selTo > pos && selFrom < pos + node.nodeSize) return
         const dkey = `${baseKey}#${nth}`
+        const entry = roots.get(dkey)
+        if (entry && entry.text !== node.textContent) {
+          entry.text = node.textContent
+          entry.render(kind) // 包括撤销/外部回灌:更新 initialView,保留 React 组件身份。
+        }
         decos.push(Decoration.inline(pos + 1, pos + node.nodeSize - 1, { class: 'wikilink-src-hidden' }))
         // 本段已归块级嵌入 → 给段落打标,行内双链层渲出来的那条链接由 CSS 收掉(2026-08-22 实报:
         // 嵌入体底下多挂一条下划线的笔记名)。inline 装饰只藏得住**文本**,藏不住 wikilink.ts 的
@@ -397,11 +409,10 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
                 let hit: { at: number; size: number } | null = null
                 v.state.doc.descendants((n, p) => {
                   if (hit) return false
-                  // ⚠️ 口径必须与 buildDecos 的 `seen` **逐字一致**:那边的 key 是
-                  // `${kind.k}:${textContent}`,只按 textContent 数会把**同文但类别不同**的节点
-                  // 也数进来(最典型:一个 ```forsion-button 代码块的正文恰好与某段落同文)——
-                  // 序号一错位,双击进错源码、replaceText 改错对象、insertAfter 插到别人后面。
-                  if (classifyEmbed(n)?.k === kind.k && n.textContent === node.textContent) {
+                  // 定位与组件 key 共用判据,切 DB 视图后闭包仍能定位原来的嵌入;
+                  // 非数据库照旧按类别 + 全文区分,避免同文代码块与段落互相误认。
+                  const candidate = classifyEmbed(n)
+                  if (candidate && widgetIdentity(candidate, n.textContent) === baseKey) {
                     if (i === nth) {
                       hit = { at: p, size: n.nodeSize }
                       return false
@@ -456,9 +467,9 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
                 }
               }
               const root = createRoot(host)
-              root.render(
+              const render = (nextKind: EmbedKind): void => root.render(
                 <EmbedBody
-                  kind={kind}
+                  kind={nextKind}
                   pagePath={opts.path}
                   readOnly={!!opts.readOnly}
                   insertAfter={(md) => {
@@ -476,6 +487,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
                   replaceText={replaceText}
                 />,
               )
+              render(kind)
               attachSourceButton(dom, view, () => {
                 const v = viewRef
                 if (!v) return
@@ -487,7 +499,7 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean }): Mi
                 v.focus()
               })
               dom.querySelector('.amx-src-btn')?.classList.add('amx-src-btn--block')
-              roots.set(dkey, { root, dom })
+              roots.set(dkey, { root, dom, text: node.textContent, render })
               return dom
             },
             {

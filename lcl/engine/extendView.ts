@@ -75,13 +75,34 @@ export function createExtendViewController() {
   }
 }
 
-/** The platform creates a native transient leaf, retaining ordinary panel tabs and sizing. */
-export type ExtendViewPresenter = (options: ExtendViewOptions, dismiss: () => void) => {
+/** The platform creates a native transient leaf, retaining ordinary panel tabs and sizing.
+ *  `host` is the owner's own frame, for presenters that stay inside the owner (side Views). */
+export type ExtendViewPresenter = (options: ExtendViewOptions, dismiss: () => void, host?: HTMLElement) => {
   element: HTMLElement
   /** The platform surface already shows the title and a close control (named tabs, drawer bar). Otherwise the extension draws its own header. */
   titled?: boolean
+  /** The extension replaces its owner in place: its header shows Back instead of Close. */
+  back?: boolean
   activate?(): void
   /** `instant` = replaced by another extension (swap in place). Otherwise the platform may collapse the panel with a
    *  tween; when it returns a promise, the host keeps the content mounted until it resolves. */
   dispose(instant?: boolean): void | Promise<void>
+}
+
+/** Side Views (side panels, bottom panel, mobile drawer): the temporary View covers its owner — never a neighbour —
+ *  and Back returns to it. The owner stays mounted underneath (hidden + inert), so its scroll and drafts survive. */
+export const presentInlineExtension: ExtendViewPresenter = (_options, _dismiss, host) => {
+  if (!host) throw new Error('Inline extend view requires its owner frame')
+  const covered = [...host.children] // hidden by CSS (:has); inert keeps focus and screen readers out
+  for (const el of covered) el.toggleAttribute('inert', true)
+  const element = document.createElement('div')
+  element.className = 'wb-extend-target wb-extend-inline'
+  host.appendChild(element)
+  return {
+    element, back: true,
+    dispose() { // ponytail: instant, no close tween; the owner reappears exactly as it was left
+      for (const el of covered) el.removeAttribute('inert')
+      element.remove()
+    },
+  }
 }

@@ -5,6 +5,7 @@
 const fs = require('fs'), os = require('os'), path = require('path'), http = require('http')
 const { _electron: electron } = require('playwright-core')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
+const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 const nativeArg = process.argv.indexOf('--native-helper')
 const nativeExecutable = nativeArg < 0 ? null : (process.argv[nativeArg + 1] || '/Applications/tangu-computer-use.app/Contents/MacOS/bridge')
 const ROOT = path.resolve(__dirname, '..'), temp = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-mini-auto-'))
@@ -76,7 +77,7 @@ async function main() {
     app.on('window', (page) => page.on('pageerror', (e) => errors.push(e.message)))
     win.on('pageerror', (e) => errors.push(e.message))
     await win.waitForSelector('.dv-groupview', { timeout: 30000, state: 'attached' })
-    for (const name of ['跳过引导', 'Skip']) { const b = win.getByRole('button', { name, exact: true }); if (await b.count()) { await b.click(); break } }
+    check('main window left onboarding', await skipOnboarding(win))
     await win.waitForSelector('.t2c-ta')
     const send = async () => {
       await win.locator('.t2c-ta').first().fill('Continue Computer Use')

@@ -122,6 +122,48 @@ async function main() {
     const box = await win.locator('.model-catalog-settings').first().boundingBox()
     const sw = await win.evaluate(() => { const el = document.querySelector('.model-catalog-settings'); return el ? el.scrollWidth - el.clientWidth : -1 })
     check('T9 设置区无横向溢出', sw <= 0, 'overflow=' + sw + ' box=' + JSON.stringify(box))
+    await win.locator('.settings-nav-list button').filter({ hasText: '外观' }).click()
+    await win.locator('.settings-theme-behavior').waitFor()
+    const raised = () => win.getByRole('button', { name: '立体', exact: true })
+    const flat = () => win.getByRole('button', { name: '扁平', exact: true })
+    const mainWindow = app.windows()[0]
+    const readAppearance = (page) => page.evaluate(() => ({
+      flat: document.documentElement.dataset.flat,
+      saved: localStorage.getItem('forsion_theme_flat'),
+      shadow: getComputedStyle(document.documentElement).getPropertyValue('--card-shadow').trim(),
+    }))
+    check('T15 首次打开默认立体', await raised().getAttribute('aria-pressed') === 'true' &&
+      (await readAppearance(win)).flat === '0' && (await readAppearance(win)).saved === null)
+    await win.locator('.settings-theme-behavior').scrollIntoViewIfNeeded()
+    await win.waitForTimeout(250)
+    await win.screenshot({ path: path.join(OUT, 'appearance-raised.png') })
+    await flat().click()
+    await mainWindow.waitForFunction(() => document.documentElement.dataset.flat === '1')
+    const flatState = await readAppearance(win)
+    check('T16 扁平即时清除阴影并保存，同步主窗口', flatState.shadow === 'none' && flatState.saved === '1' &&
+      (await readAppearance(mainWindow)).shadow === 'none')
+    await win.screenshot({ path: path.join(OUT, 'appearance-flat.png') })
+    await win.reload({ waitUntil: 'domcontentloaded' })
+    await win.locator('.settings-nav-list button').filter({ hasText: '外观' }).click()
+    await flat().waitFor()
+    check('T17 重载设置浮窗保留扁平选择', await flat().getAttribute('aria-pressed') === 'true' &&
+      (await readAppearance(win)).flat === '1' && (await readAppearance(win)).shadow === 'none')
+    await raised().click()
+    await mainWindow.waitForFunction(() => document.documentElement.dataset.flat === '0')
+    check('T18 恢复立体后两窗重新显示淡阴影', (await readAppearance(win)).shadow !== 'none' &&
+      (await readAppearance(mainWindow)).shadow !== 'none' && (await readAppearance(win)).saved === '0')
+    await win.getByRole('button', { name: '暗色', exact: true }).click()
+    await mainWindow.waitForFunction(() => document.documentElement.dataset.mode === 'dark')
+    check('T19 明暗继续跨窗同步，深色立体也有淡阴影', (await readAppearance(mainWindow)).shadow !== 'none')
+    await flat().click()
+    await mainWindow.waitForFunction(() => document.documentElement.dataset.flat === '1')
+    check('T20 深色扁平也清除装饰阴影', (await readAppearance(mainWindow)).shadow === 'none')
+    await raised().click()
+    await mainWindow.waitForFunction(() => document.documentElement.dataset.flat === '0')
+    await win.screenshot({ path: path.join(OUT, 'appearance-raised-dark.png') })
+
+
+
   } catch (e) {
     console.error('BODY ERROR:', e && e.stack || e); fails.push('body threw')
   } finally {

@@ -40,6 +40,7 @@ import { publishAccountQuota } from '../services/accountQuota'
 // store 活在 React 之外,取词一律走模块级 `translate`,不能用 hook。
 registerMessages({
   'appstore.dispatchStarted': { zh: '已在 {name} 新建会话开工', en: 'Started a session in {name}' },
+  'app.ctxWindowSaveFail': { zh: '上下文上限没保存：{e}', en: 'Could not save the context limit: {e}' },
   'solo.engineTooOld': { zh: '当前引擎版本不支持私聊/团队会话,请升级引擎', en: 'This engine version does not support direct or team sessions; please update the engine' },
   'solo.rotateBusy': { zh: '这条私聊还在运行中,等它结束再开新会话', en: 'This direct chat is still running; wait for it to finish before starting a new session' },
   'group.ended.done': { zh: '全员表示已完成', en: 'All members are done' },
@@ -627,6 +628,7 @@ export interface AppState {
   // Phase 2: 设置 / 引导 / 更新
   settingsOpen: boolean
   settingsTab: SettingsTab | null
+  settingsSkillKey: string | null
   feedbackOpen: boolean
   feedbackDraft: string
   marketOpen: boolean
@@ -713,6 +715,10 @@ export interface AppState {
   /** remember=false:本次切换是「跟随 agent 预设」而非用户主动挑,不动新会话的起步默认。 */
   setSessionModel(modelId: string, sessionId?: string | null, remember?: boolean): void
   setSessionThinking(level: NonNullable<AgentConfig['thinkingLevel']>, sessionId?: string | null, remember?: boolean): void
+  /** 本机某模型的上下文窗口覆盖(tokens;null = 交还自动识别,即缺省上限 272k)。模型菜单「上下文上限」写这里,与设置页
+   *  输入框是同一份 modelOverrides;只在本机引擎可用(云端 worker 404)。写完重拉模型列表并作废该模型的 context_info,
+   *  进度环当场换分母。失败只 toast。 */
+  setModelContextWindow(modelId: string, tokens: number | null): Promise<void>
   setSessionMaxIterations(n: number, sessionId?: string | null): void
   setSessionPlanMode(on: boolean, sessionId?: string | null): void
   /** 语音消息(按 agent,单一真源=voice-message 插件设置)。 */
@@ -761,7 +767,7 @@ export interface AppState {
   /** Chat View「高级」的默认辅助 / 生图 / 识图模型；先乐观更新，再写入 config.json。 */
   setDefaultModel(slot: DefaultModelSlot, modelId: string): void
   ensureEngineCaps(engineId: string | undefined): void
-  openSettings(tab?: SettingsTab): void
+  openSettings(tab?: SettingsTab, skillKey?: string): void
   closeSettings(): void
   /** 检测到 Forsion 登录过期(401/凭证失效):清登录态 + 提示 + 引导重登录。幂等;standalone/未登录不触发。 */
   handleAuthExpired(): void
@@ -770,7 +776,8 @@ export interface AppState {
   openAchievements(): void
   closeAchievements(): void
   /** 插件装好后:重扫(免重启出现)+ 启用 + 重启提示 + 跳转对应设置。 */
-  onPluginInstalled(): Promise<void>
+  /** notify:调用方自己的提示出口(市场在浮窗 / 覆盖层里,全局 toast 看不见);缺省走全局 toast。 */
+  onPluginInstalled(notify?: (text: string, error?: boolean) => void): Promise<void>
   openFeedback(description?: string): boolean
   closeFeedback(): void
   setOnboarding(on: boolean): void
@@ -890,6 +897,7 @@ export const useApp = create<AppState>((set, get) => ({
   unread: loadUnread(),
   settingsOpen: false,
   settingsTab: null,
+  settingsSkillKey: null,
   feedbackOpen: false,
   feedbackDraft: '',
   marketOpen: false,
@@ -1107,6 +1115,10 @@ export const useApp = create<AppState>((set, get) => ({
           approvals: (m.approvals || []).map((a) => a.approvalId === pl.approvalId ? { ...a, status: pl.action === 'reject' ? ('rejected' as const) : ('approved' as const) } : a),
         }))
         if (typeof pl.agentSlug === 'string') setTeamStatus(sessionId, pl.agentSlug, 'working')
+        break
+      case 'session_title':
+        // Historian 在 run 起点只凭用户消息出了标题 → 不等 done 后 6s 那次刷新。
+        void get().refreshSessions(get().cfg).catch(() => {})
         break
       case 'session_created': {
         // 私聊里 @项目派遣(start_project_session):引擎在项目里建了一条可见会话 → 刷新列表 + 提示(侧栏没有轮询)。
@@ -1485,6 +1497,7 @@ export const useApp = create<AppState>((set, get) => ({
           set((s) => ({ ctxInfoBySession: { ...s.ctxInfoBySession, [sessionId]: {
             ctxWindow: Number(pl.ctxWindow) || 0,
             ctxWindowSource: String(pl.ctxWindowSource || 'default'),
+            ...(Number(pl.ctxWindowMax) > 0 ? { ctxWindowMax: Number(pl.ctxWindowMax) } : {}),
             // 元素级清洗:事件会持久化重放,一条畸形 payload 不清洗=每次渲染都炸(弹层在 ErrorBoundary 外)
             sections: (Array.isArray(pl.sections) ? pl.sections : [])
               .filter((it: any) => it && typeof it === 'object')
@@ -2771,6 +2784,18 @@ export const useApp = create<AppState>((set, get) => ({
     set((s) => { const next = { ...(s.configBySession[sid] || {}), thinkingLevel: level }; void api.putSessionConfig(get().cfg, sid, next).catch(() => {}); return { configBySession: { ...s.configBySession, [sid]: next } } })
   },
 
+  setModelContextWindow: async (modelId, tokens) => {
+    try {
+      await api.setModelContextWindow(get().cfg, modelId, tokens)
+      const next = await api.listModels(get().cfg)
+      // 进度环优先读上一轮 run 的 context_info(只在切模型时清):不一并作废,改完还显示旧分母直到下一条消息。
+      // 在飞的会话留着:这一轮开跑时定的窗口 / 压缩线不会变,换了分母环就和真在用的预算对不上(Codex 09-22 #2)。
+      set((s) => ({ modelsResp: next, ctxInfoBySession: Object.fromEntries(Object.entries(s.ctxInfoBySession).filter(([sid, v]) => v.modelId !== modelId || !!s.runningBySession[sid])) }))
+    } catch (e: any) {
+      get().toast(get().tr('app.ctxWindowSaveFail', { e: e?.message || e }), true)
+    }
+  },
+
   setSessionMaxIterations: (n, targetSessionId) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
@@ -2986,12 +3011,12 @@ export const useApp = create<AppState>((set, get) => ({
     void api.getEngineCapabilities(get().cfg, engineId).then((caps) => set((s) => ({ engineCaps: { ...s.engineCaps, [engineId]: caps } })))
   },
 
-  openSettings: (tab) => {
+  openSettings: (tab, skillKey) => {
     if (window.tangu?.openFloatingPanel) {
-      void window.tangu.openFloatingPanel({ id: 'settings', title: get().tr('settings.title'), builtin: 'settings', params: { tab: tab ?? null, ...openerSession(get()) } })
+      void window.tangu.openFloatingPanel({ id: 'settings', title: get().tr('settings.title'), builtin: 'settings', params: { tab: tab ?? null, skillKey: skillKey ?? null, ...openerSession(get()) } })
       return
     }
-    set({ settingsTab: tab ?? null, settingsOpen: true })
+    set({ settingsTab: tab ?? null, settingsSkillKey: skillKey ?? null, settingsOpen: true })
   },
 
   openMarket: () => {
@@ -3019,16 +3044,17 @@ export const useApp = create<AppState>((set, get) => ({
     void api.listSkills(get().cfg).then((s) => set({ skillsList: s })).catch(() => { /* ignore */ })
   },
 
-  onPluginInstalled: async () => {
+  onPluginInstalled: async (notify) => {
     const t = get().tr
+    const say = notify ?? get().toast
     try {
       // 重扫让后端立刻发现新插件(免重启);装即启用;提示可能需重启。
       // 不再自动关市场 / 跳设置:装完只 toast「已安装」,用户在插件详情里自行「打开设置」。
       const r = await api.rescanPlugins(get().cfg)
       for (const id of r.addedIds) await api.setPluginEnabled(get().cfg, id, true).catch(() => {})
-      get().toast(r.needsRestart ? t('market.pluginInstalledRestartHint') : t('market.pluginInstalledOk'))
+      say(r.needsRestart ? t('market.pluginInstalledRestartHint') : t('market.pluginInstalledOk'))
     } catch (e: any) {
-      get().toast(t('market.installFail', { e: e?.message || String(e) }), true)
+      say(t('market.installFail', { e: e?.message || String(e) }), true)
     }
   },
 

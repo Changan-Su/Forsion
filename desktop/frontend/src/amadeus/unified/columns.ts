@@ -382,6 +382,9 @@ export function executePair(view: EditorView, targetPos: number, side: 'left' | 
   if (!(sel instanceof NodeSelection)) return false
   const dragged = sel.node
   if (dragged.type.name === 'amadeusColumnRow' || dragged.type.name === 'amadeusColumnCell') return false
+  // 画布卡既不入列也不当配对目标(同 splitToColumn 的 P0 闸:卡进 cell 被 canvasIntegrityGuard 整笔拒,
+  // 这里却已 return true = 竖线在、松手零反应)。判据与 blockLayer.pairable 同源。
+  if (dragged.type.name === 'amadeusCanvasCard' || state.doc.nodeAt(targetPos)?.type.name === 'amadeusCanvasCard') return false
   if (targetPos >= sel.from && targetPos < sel.to) return false // 拖到自己身上
   const row = state.schema.nodes.amadeusColumnRow
   const cellT = state.schema.nodes.amadeusColumnCell
@@ -454,6 +457,41 @@ export function executeMoveBelowRow(view: EditorView, rowPos: number, copy = fal
   let tr = state.tr
   if (!copy) tr = tr.delete(sel.from, sel.to) // Alt(mac)/Ctrl 拖 = 复制
   tr = tr.insert(tr.mapping.map(rowPos + rowNode.nodeSize), moved)
+  tr.setMeta('amxColumns', true)
+  view.dispatch(tr.scrollIntoView())
+  return true
+}
+
+/** 拖到分栏某列**之内**的落点(blockLayer.planCellDrop 解析出的位置:列内块之间的缝 / 列末)。
+ *  2026-09-22 录屏:这片区域原先交给落点插件,它把 cell 上下沿当候选(块放不进行内)、按线段端点
+ *  距离偏向窄列、还只问最近 8 个候选 —— 块被丢进别的列、行外,或干脆不落。
+ *  与 executeMoveBelowRow 同规:删+插一个事务、list_item 包回完整列表、amxColumns 结构门
+ *  (拖空的原 cell 由 normalizer 收)。 */
+export function executeMoveIntoCell(view: EditorView, at: number, copy = false): boolean {
+  const { state } = view
+  const sel = state.selection
+  if (!(sel instanceof NodeSelection)) return false
+  const dragged = sel.node
+  if (dragged.type.name === 'amadeusColumnRow' || dragged.type.name === 'amadeusColumnCell') return false
+  // 画布卡不给入列(同 splitToColumn 的 P0 闸:卡进 cell → 空列解散 + 卡被拆壳,锚与几何一起没)。
+  // 今天够不到(卡拖拽整支归 executeCardDropInDoc),留着防以后有人把它接进这条路由。
+  if (dragged.type.name === 'amadeusCanvasCard') return false
+  const $at = state.doc.resolve(at)
+  const cell = $at.parent
+  if (cell.type.name !== 'amadeusColumnCell') return false
+  if (!copy && at >= sel.from && at <= sel.to) return true // 落回自身:吞掉,不造空撤销步
+  const moved =
+    dragged.type.name === 'list_item' ? sel.$from.parent.type.create(sel.$from.parent.attrs, dragged) : dragged
+  // 空列(「移到新列」造出来的可输入落点就是这形态):连那枚占位空段一起换掉 —— 只插不换的话
+  // 列里留着空段,normalizer 的 isEmpty(childCount===1)也清不掉,空行永久留在列首。
+  const onlyEmpty = cell.childCount === 1 && cell.firstChild!.type.name === 'paragraph' && cell.firstChild!.content.size === 0
+  let tr = state.tr
+  if (!copy) tr = tr.delete(sel.from, sel.to)
+  if (onlyEmpty) {
+    tr = tr.replaceWith(tr.mapping.map($at.start()), tr.mapping.map($at.end()), moved)
+  } else {
+    tr = tr.insert(tr.mapping.map(at), moved)
+  }
   tr.setMeta('amxColumns', true)
   view.dispatch(tr.scrollIntoView())
   return true

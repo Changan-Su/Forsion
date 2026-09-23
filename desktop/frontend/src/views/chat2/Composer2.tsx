@@ -8,7 +8,7 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Folder, PanelsTopLeft, Users, Sparkles,
-  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, type LucideIcon, Bot } from 'lucide-react'
+  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { useLiveVoice, useLiveVoiceEnabled } from '../../hooks/useLiveVoice'
 import { useCodeStudio } from '../../stores/codeStudioStore'
@@ -35,6 +35,7 @@ import { ApprovalRulesModal } from '../../components/ApprovalRulesModal'
 import { commandsFor } from '../../commandCatalog'
 import { getCustomCommands, expandCustomCommand, listMessages, type CustomCommandInfo } from '../../services/backendService'
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
+import { NormalModeItem } from './NormalModeItem'
 import { mainReferenceKey } from './mainReference'
 import './composer2.css'
 
@@ -64,6 +65,7 @@ const WAIT_TIP_KEYS = [
 const TOUCH_TIP_KEYS = [STEER_TIP, 'input.tip.wikiRef']
 registerMessages({
   'input.tip': { zh: '小贴士:{tip}', en: 'Tip: {tip}' },
+  'input.runningPlaceholder': { zh: '运行中，可继续输入…', en: 'Working… You can keep typing' },
   'input.tip.steer': { zh: '运行中也能继续发消息,会在下一步交给 Agent', en: 'You can send while it runs: the agent reads it at the next step' },
   'input.tip.switchChat': { zh: '可以先切去别的会话,运行不会中断,侧栏圆点标出运行中', en: 'Switch chats meanwhile; this run keeps going, marked by a sidebar dot' },
   'input.tip.quote': { zh: '划选回复里的文字,点「引用」即可带进下一条消息', en: 'Select text in a reply and click Quote to cite it in your next message' },
@@ -247,6 +249,8 @@ export const Composer2: React.FC<{
   onThinkingChange?: (level: NonNullable<AgentConfig['thinkingLevel']>) => void
   defaultModelIds?: Partial<Record<DefaultModelSlot, string>>
   onDefaultModelChange?: (slot: DefaultModelSlot, modelId: string) => void
+  /** 模型菜单「上下文上限」:写本机该模型的窗口覆盖(null = 交还默认 272k)。只在本机引擎下传。 */
+  onContextWindowChange?: (modelId: string, tokens: number | null) => void
   maxIterations?: number
   onMaxIterationsChange?: (n: number) => void
   /** 验证回路(/verify,host-only):收尾前引擎自动跑的命令;空=未配置。 */
@@ -271,7 +275,7 @@ export const Composer2: React.FC<{
   onGroupChange?: (patch: Pick<AgentConfig, 'groupChat' | 'groupAgents' | 'groupTempAgents'>) => void
   skills?: SkillInfo[] | null
   agents?: NormalAgentDef[]
-  /** 对话中切换 Agent(拍板 ⑪:入口先放模式切换菜单)。给了才渲染;群聊态 / 引擎会话 / chat 预设不渲染。 */
+  /** 对话中切换 Agent(拍板 ⑪:入口 = 模式菜单「普通模式 ›」的二级面板,见 NormalModeItem)。给了才渲染;团队模式 / 引擎会话 / chat 预设不渲染。 */
   onAgentSwitch?: (slug: string) => void
   currentAgentSlug?: string
   onNewSession?: () => void
@@ -319,7 +323,7 @@ export const Composer2: React.FC<{
   models, modelsResponse, modelId, onModelChange, engines, engineId,
   engineModels, engineModelId, onEngineModelChange, engineCommands,
   thinkingLevel, onThinkingChange,
-  defaultModelIds, onDefaultModelChange,
+  defaultModelIds, onDefaultModelChange, onContextWindowChange,
   maxIterations, onMaxIterationsChange,
   verifyCommand, onVerifyCommandChange,
   preset, onPresetChange, planMode, onPlanModeChange, voiceMode, onVoiceModeChange, liveOwner, liveSessionKey, skills,
@@ -333,16 +337,17 @@ export const Composer2: React.FC<{
 }) => {
   const { t, locale } = useI18n()
   const [draft, setDraft] = useState('')
-  // 等待期间占位轮播使用小贴士:每个 run 从随机一条起,换条前先淡出。只在草稿为空时看得见(占位语义本身)。
+  // 等待期间宽卡轮播小贴士；窄卡固定短提示，避免文案闪烁与输入区高度跳动。
   const [tipIdx, setTipIdx] = useState(0)
   // 触屏(Android 壳 / 手机浏览器)没有 ⌘、悬停和拖拽,只留与指针无关的几条。
   const [touchUi] = useState(() => !!window.tangu?.mobile || !!window.matchMedia?.('(hover: none)').matches)
   const waitTips = (touchUi ? TOUCH_TIP_KEYS : WAIT_TIP_KEYS).filter((k) => !engineId || k !== STEER_TIP)
   const [tipFade, setTipFade] = useState(false)
+  const [compactCard, setCompactCard] = useState(false)
   // 窄输入框里小贴士折成两行会被一行高裁掉后半句 → 这个 run 里一旦折行就撑到两行并保持到 run 结束(不随每条贴士跳高度)。
   const [tipTall, setTipTall] = useState(false)
   useEffect(() => {
-    if (!running) return
+    if (!running || compactCard) return
     setTipIdx(Math.floor(Math.random() * WAIT_TIP_KEYS.length))
     let swap = 0
     const id = window.setInterval(() => {
@@ -350,7 +355,7 @@ export const Composer2: React.FC<{
       swap = window.setTimeout(() => { setTipIdx((i) => i + 1); setTipFade(false) }, 300)
     }, WAIT_TIP_MS)
     return () => { window.clearInterval(id); window.clearTimeout(swap); setTipFade(false); setTipTall(false) }
-  }, [running])
+  }, [running, compactCard])
   /** 自定义命令(~/.tangu/commands/*.md);拉不到就是空表,输入框照常可用。 */
   const [customCommands, setCustomCommands] = useState<CustomCommandInfo[]>([])
   const [attachments, setAttachments] = useState<Attachment[]>([])
@@ -393,6 +398,13 @@ export const Composer2: React.FC<{
   const histStash = useRef('') // 进入召回时暂存的草稿(↓ 回到 0 时原样取回)
   const taRef = useRef<HTMLTextAreaElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const card = cardRef.current
+    if (!card) return
+    const observer = new ResizeObserver(([entry]) => setCompactCard(entry.contentRect.width <= 360))
+    observer.observe(card)
+    return () => observer.disconnect()
+  }, [])
 
 
   /** 命令描述直接取 catalog 的 zh/en —— 不再另建一套 input.slash.* key(那正是两端文案漂移的来源)。 */
@@ -592,8 +604,8 @@ export const Composer2: React.FC<{
   // 换条 / 换语言后重量;宽度中途变了等下一条换上时再量。
   useLayoutEffect(() => {
     const ta = taRef.current
-    if (running && !tipTall && ta && !ta.value && ta.scrollHeight > ta.clientHeight + 2) setTipTall(true)
-  }, [running, tipIdx, locale, tipTall, draft])
+    if (running && !compactCard && !tipTall && ta && !ta.value && ta.scrollHeight > ta.clientHeight + 2) setTipTall(true)
+  }, [running, tipIdx, locale, tipTall, draft, compactCard])
 
   // 历史召回:older=true→↑ 取更旧、false→↓ 取更新;越过最新回到暂存草稿。光标置末尾。
   const recallHistory = (older: boolean) => {
@@ -1299,7 +1311,7 @@ export const Composer2: React.FC<{
             </div>
           )}
           {allRefChips.length > 0 && (
-            <div className="t2c-chiprow t2c-refrow">
+            <div className="t2c-chiprow t2c-refrow" role="group" aria-label={t('input.ref.selected')}>
               <span className="t2c-reflabel">{t('input.ref.selected')}</span>
               {allRefChips.map((c) => (
                 <span className="attach-chip" key={c.token} title={c.token}>
@@ -1342,7 +1354,7 @@ export const Composer2: React.FC<{
                     ? <img src={`data:${a.mimeType};base64,${a.data}`} alt={a.name} />
                     : <FileText size={14} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />}
                   <span>{a.name}</span>
-                  <span style={{ fontSize: 10, color: 'var(--text-faint)', flexShrink: 0 }}>{t('input.toWorkspace')}</span>
+                  <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', flexShrink: 0 }}>{t('input.toWorkspace')}</span>
                   <button title={t('input.remove')} onClick={() => setWsFiles(wsFiles.filter((_, j) => j !== i))}><X size={12} /></button>
                 </span>
               ))}
@@ -1365,9 +1377,9 @@ export const Composer2: React.FC<{
             rows={1}
             autoFocus={autoFocus}
             value={draft}
-            placeholder={disabled ? disabledPlaceholder || t('input.placeholderDisabled') : running ? t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t('input.placeholder')}
-            data-tip-fade={(running && tipFade) || undefined}
-            data-tip-tall={(running && tipTall) || undefined}
+            placeholder={disabled ? disabledPlaceholder || t('input.placeholderDisabled') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t('input.placeholder')}
+            data-tip-fade={(running && !compactCard && tipFade) || undefined}
+            data-tip-tall={(running && !compactCard && tipTall) || undefined}
             disabled={disabled}
             onChange={(e) => {
               setDraft(e.target.value)
@@ -1548,11 +1560,17 @@ export const Composer2: React.FC<{
                 </button>
                 {openMenu === 'mode' && (
                   <div ref={modeFix.ref} className="composer-menu composer-menu--mode" style={modeFix.style}>
-                    {onNormalWork && !isChat && <button className={`menu-item${!planMode && !groupActive && approval === 'auto-edit' ? ' active' : ''}`} data-normal-work
-                      disabled={running} onClick={() => { onNormalWork(); setOpenMenu(null) }}>
-                      <Bot size={14} /><span className="grow">{t('input.normalWork')}</span>
-                      {!planMode && !groupActive && approval === 'auto-edit' && <Check size={13} />}
-                    </button>}
+                    {onNormalWork && !isChat && (
+                      <NormalModeItem
+                        active={!planMode && !groupActive && approval === 'auto-edit'}
+                        disabled={running}
+                        agents={agents || []}
+                        currentAgentSlug={currentAgentSlug}
+                        onNormalWork={onNormalWork}
+                        onAgentSwitch={!isEngine && !groupActive ? onAgentSwitch : undefined}
+                        onClose={() => setOpenMenu(null)}
+                      />
+                    )}
                     {onPlanModeChange && !isChat && (
                       <>
                         <div className="menu-section">{t('input.planMode')}</div>
@@ -1561,18 +1579,6 @@ export const Composer2: React.FC<{
                           <span className="grow">{planMode ? t('input.planModeOn') : t('input.planModeEnable')}</span>
                           {planMode && <Check size={13} />}
                         </button>
-                      </>
-                    )}
-                    {onAgentSwitch && !isEngine && !isChat && !groupActive && !!agents?.length && (
-                      <>
-                        <div className="menu-section">{t('input.agentSwitch.section')}</div>
-                        {agents.filter((a) => a.createdBy !== 'system').map((a) => (
-                          <button key={a.slug} className={`menu-item${currentAgentSlug === a.slug ? ' active' : ''}`} onClick={() => { onAgentSwitch(a.slug); setOpenMenu(null) }}>
-                            <Bot size={14} />
-                            <span className="grow">{a.name}</span>
-                            {currentAgentSlug === a.slug && <Check size={13} />}
-                          </button>
-                        ))}
                       </>
                     )}
                     {onGroupChange && !isEngine && !isChat && (
@@ -1656,6 +1662,10 @@ export const Composer2: React.FC<{
                         <span className="t2c-ctxinfo-src">
                           {t(`ctx.windowSource.${['override', 'model', 'learned', 'family', 'default'].includes(ctxInfo.ctxWindowSource) ? ctxInfo.ctxWindowSource : 'default'}`)}
                         </span>
+                        {/* 被缺省上限封了顶(模型本身更大、没手动覆盖):说清楚分母为什么不是模型窗口 */}
+                        {ctxInfo.ctxWindowSource !== 'override' && (ctxInfo.ctxWindowMax ?? 0) > ctxInfo.ctxWindow && (
+                          <span className="t2c-ctxinfo-src">{t('ctx.windowCapped', { max: fmtTokens(ctxInfo.ctxWindowMax!), n: fmtTokens(ctxInfo.ctxWindow) })}</span>
+                        )}
                         {(ctxInfo.sections.length > 0 || ctxInfo.historyTokens > 0) && (
                           <div className="t2c-ctxinfo-secs">
                             {[...ctxInfo.sections].sort((a, b) => b.tokens - a.tokens).map((sec) => (
@@ -1707,6 +1717,7 @@ export const Composer2: React.FC<{
                 modelsResponse={isEngine ? undefined : modelsResponse}
                 defaultModelIds={isEngine ? undefined : defaultModelIds}
                 onDefaultModelChange={isEngine ? undefined : onDefaultModelChange}
+                onContextWindowChange={isEngine ? undefined : onContextWindowChange}
                 emptyLabel={isEngine ? t('input.engineModelDefault') : undefined}
                 footnote={!isEngine && !isHost && !models?.some((m) => m.source === 'direct') ? t('input.cloudModelHint') : undefined}
               />
@@ -1734,7 +1745,7 @@ export const Composer2: React.FC<{
                 {(!!draft.trim() || allRefChips.length > 0) && (
                   <button className="t2c-send" onClick={send} disabled={disabled} title={t('input.send')}><ArrowUp size={16} /></button>
                 )}
-                <button className="t2c-stop" onClick={onStop}><Square size={10} /> {t('input.stop')}</button>
+                <button className="t2c-stop" onClick={onStop} title={t('input.stop')} aria-label={t('input.stop')}><Square size={10} /><span className="t2c-stop-label">{t('input.stop')}</span></button>
               </>
             ) : (
               // 只挂了引用、一个字没写也可发(与 send() 的放行条件同源;不同步的话按钮灰着 = 哑火)

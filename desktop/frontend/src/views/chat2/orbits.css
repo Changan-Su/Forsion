@@ -51,7 +51,7 @@
   margin-block: 0;
   margin-inline: 0 4px;
 }
-.t2o .t2s-vaultseg.t2s-mode button { padding: 0; font-size: 11.5px; line-height: 16px; }
+.t2o .t2s-vaultseg.t2s-mode button { padding: 0; font-size: var(--ui-font-caption, 11px); line-height: 16px; }
 /* 操作菜单档的 24×24 触发钮(§3.6)。 */
 .t2o-plus {
   display: inline-flex;
@@ -61,7 +61,7 @@
   height: 24px;
   flex-shrink: 0;
   border: none;
-  border-radius: 7px;
+  border-radius: var(--radius-sm, 6px);
   background: transparent;
   color: var(--text-muted);
   cursor: pointer;
@@ -80,11 +80,11 @@
   padding-block: 5px;
   padding-inline: 14px 6px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm, 6px);
   background: transparent;
   color: var(--text);
   font-family: var(--font-ui);
-  font-size: 13px;
+  font-size: var(--ui-font-body, 13px);
   text-align: left;
   cursor: pointer;
   transition: background var(--duration-fast, 0.15s);
@@ -111,7 +111,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--ui-font-body, 13px);
   font-weight: 600;
   line-height: 1.4;
 }
@@ -179,7 +179,7 @@
   width: 24px;
   height: 24px;
   flex-shrink: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-sm, 6px);
   color: var(--text-faint, var(--text-muted));
   cursor: pointer;
   opacity: 1;
@@ -200,9 +200,9 @@
   padding-block: 1px;
   padding-inline: 6px;
   border: var(--border-width, 1px) solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   color: var(--text-faint, var(--text-muted));
-  font-size: 11px;
+  font-size: var(--ui-font-caption, 11px);
   line-height: 1.5;
   white-space: nowrap;
 }
@@ -234,7 +234,7 @@
 .t2o .t2s-group .t2s-folder-row .t2s-lead {
   width: 30px;
   height: 30px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm, 6px);
   background: var(--overlay-light, rgba(127, 127, 127, 0.08));
 }
 /* hover 换出的箭头是 JSX 硬写的 `size={12}`(表现属性,CSS 压得过):30px 槽里 12px 太细,
@@ -254,10 +254,10 @@
   min-height: 32px; padding: 4px 10px;
   background: var(--overlay-light, rgba(127, 127, 127, 0.08));
   border-radius: inherit; border-bottom-left-radius: 0; border-bottom-right-radius: 0;
-  font-size: 11.5px; color: var(--text-muted);
+  font-size: var(--ui-font-caption, 11px); color: var(--text-muted);
 }
 .t2o-bar-lead { display: inline-flex; align-items: center; width: 18px; height: 18px; flex-shrink: 0; }
-.t2o-bar-title { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; }
+.t2o-bar-title { font-size: var(--ui-font-body, 13px); font-weight: 600; color: var(--text); white-space: nowrap; }
 .t2o-bar-sub { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 auto; }
 .t2o-bar-avatars { display: inline-flex; align-items: center; gap: 2px; }
 .t2o-bar-avatar { width: 18px; height: 18px; border-radius: 50%; object-fit: cover; display: inline-flex; align-items: center; justify-content: center; }
@@ -266,12 +266,12 @@
 /* 按钮·药丸·芯片不去边(DESIGN.md §5)。 */
 .t2o-bar-chip {
   display: inline-flex; align-items: center; gap: 4px;
-  font: inherit; font-size: 11.5px; font-weight: 600; line-height: 1; color: var(--text);
-  padding: 4px 9px; border-radius: 999px; border: 1px solid var(--border); background: transparent; cursor: pointer;
+  font: inherit; font-size: var(--ui-font-caption, 11px); font-weight: 600; line-height: 1; color: var(--text);
+  padding: 4px 9px; border-radius: var(--radius-pill, 999px); border: 1px solid var(--border); background: transparent; cursor: pointer;
 }
 .t2o-bar-chip:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
 .t2o-bar-chip:disabled { opacity: 0.5; cursor: default; }
-.t2o-bar-note { flex-basis: 100%; font-size: 11px; color: var(--text-faint, var(--text-muted)); }
+.t2o-bar-note { flex-basis: 100%; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
 @media (max-width: 360px) { .t2o-bar-sub, .t2o-bar-title { display: none; } }
 /* 墓碑行(实体已删/已卸载,只剩历史会话):名字变淡,不给 hover 尾部操作。 */
 .t2o-row-gone .t2o-name { color: var(--text-muted); font-weight: 500; }
@@ -279,7 +279,7 @@
 /* ── Team Desk(方案 §6.4 B;09-16 第四轮):团队会话里替换 Agent Desk 的成员工作台。壳复用 .agent-desk-card / .agent-desk,内容用 .t2o-desk-* ──
  * 状态点:工作中 = accent 脉动;等审批 = warning;已完成 = 静态 accent;失败 = danger。状态条头像同一套(is-working / is-waiting)。 */
 .t2o-desk-rows { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 2px; padding: 4px 6px 6px; pointer-events: none; }
-.t2o-desk-row { display: flex; align-items: center; gap: 8px; min-height: 26px; font-size: 12px; color: var(--text); }
+.t2o-desk-row { display: flex; align-items: center; gap: 8px; min-height: 26px; font-size: var(--ui-font-meta, 12px); color: var(--text); }
 .t2o-desk-row > .t2o-bar-avatar { flex-shrink: 0; }
 .t2o-desk-name { flex-shrink: 0; max-width: 42%; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2o-desk-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: var(--text-muted); opacity: 0.45; }
@@ -287,16 +287,16 @@
 .t2o-desk-dot[data-status="waiting"] { background: var(--warning); opacity: 1; }
 .t2o-desk-dot[data-status="done"] { background: var(--accent-ink); opacity: 0.9; }
 .t2o-desk-dot[data-status="failed"] { background: var(--danger); opacity: 1; }
-.t2o-desk-activity { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11.5px; }
+.t2o-desk-activity { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .t2o-desk-strip { display: flex; gap: 4px; padding: 6px 8px; border-bottom: var(--border-width) solid var(--border); overflow: auto; flex-shrink: 0; }
-.t2o-desk-tab { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 5px; border-radius: 999px; border: 1px solid var(--border); background: transparent; color: var(--text); font-size: 12px; cursor: pointer; white-space: nowrap; }
+.t2o-desk-tab { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 5px; border-radius: var(--radius-pill, 999px); border: 1px solid var(--border); background: transparent; color: var(--text); font-size: var(--ui-font-meta, 12px); cursor: pointer; white-space: nowrap; }
 .t2o-desk-tab[aria-selected="true"] { border-color: var(--accent-ink); background: color-mix(in srgb, var(--accent-ink) 10%, transparent); }
-.t2o-desk-work { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px; font-size: 12.5px; }
-.t2o-desk-task { font-size: 11.5px; color: var(--text-muted); margin-bottom: 8px; }
-.t2o-desk-empty { color: var(--text-muted); font-size: 12px; padding: 12px 10px; }
+.t2o-desk-work { flex: 1; min-height: 0; overflow: auto; padding: 8px 10px; font-size: var(--ui-font-meta, 12px); }
+.t2o-desk-task { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); margin-bottom: 8px; }
+.t2o-desk-empty { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); padding: 12px 10px; }
 .t2o-bar-avatar.is-working { box-shadow: 0 0 0 1.5px var(--accent-ink); animation: t2o-pulse 1.2s ease-in-out infinite; }
 .t2o-bar-avatar.is-waiting { box-shadow: 0 0 0 1.5px var(--warning); }
-.t2-team-done { font-size: 11.5px; margin-top: 4px; color: var(--accent-ink); opacity: 0.85; }
+.t2-team-done { font-size: var(--ui-font-caption, 11px); margin-top: 4px; color: var(--accent-ink); opacity: 0.85; }
 @keyframes t2o-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 @media (prefers-reduced-motion: reduce) { .t2o-desk-dot, .t2o-bar-avatar.is-working { animation: none; } }
 
@@ -305,7 +305,7 @@
 .t2o-team-status .t2o-desk-row { width: 100%; text-align: left; border: 0; background: transparent; padding: 5px 0; cursor: pointer; }
 .t2o-team-status .t2o-desk-row:hover { color: var(--accent-ink); }
 .t2o-team-status .t2o-desk-work { max-height: 280px; padding: 8px 0; }
-.t2-team-summary { margin: 16px 0; padding: 12px 16px; border-radius: 12px; background: var(--overlay-light, rgba(127,127,127,.06)); color: var(--text-muted); font-size: 12px; }
+.t2-team-summary { margin: 16px 0; padding: 12px 16px; border-radius: var(--radius-md, 12px); background: var(--overlay-light, rgba(127,127,127,.06)); color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .t2-team-summary > summary { cursor: pointer; font-weight: 600; }
 .t2-team-summary .md-body { margin-top: 12px; color: var(--text); }
 
@@ -315,9 +315,9 @@
 /* 胶囊自身没有前导图标,所以外边线对齐 New Session / 一级 item 的 30px 图标左缘(20px),
  * 而不是按钮 hover 面的 6px 外框；视觉上不会再向两侧突出。 */
 .t2o-filters.t2s-vaultseg { width: auto; height: 28px; margin: 0 20px 8px; flex-shrink: 0; }
-.t2o-filters.t2s-vaultseg button { flex: 1; min-width: 0; padding-inline: 3px; font-size: 11.5px; }
+.t2o-filters.t2s-vaultseg button { flex: 1; min-width: 0; padding-inline: 3px; font-size: var(--ui-font-caption, 11px); }
 .t2o-filters .t2s-vaultseg-thumb { width: calc((100% - 4px) / 4); }
 
-.t2o-historian-event { margin-block: 6px; color: var(--text-muted); font-size: 11.5px; overflow-wrap: anywhere; }
+.t2o-historian-event { margin-block: 6px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); overflow-wrap: anywhere; }
 .historian-working { animation: t2o-pulse 1.2s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .historian-working { animation: none; } }

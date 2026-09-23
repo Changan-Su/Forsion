@@ -206,9 +206,26 @@ function softKeyboardUp(): boolean {
   return window.innerHeight - vv.height > 120
 }
 
+/**
+ * 文档变了、DOM 选区却一字未变的路径:空段叠空段时行首退格,joinBackward 删的是**前面**那个空段,
+ * 光标所在的 <p> 被 PM 原样复用 → 同节点同 offset,selectionchange 不发;keydown 被 PM 吃掉,input
+ * 也不发;宿主矩形不变,轮询也不动 —— 覆盖层钉在原处(用户实报 09-22)。盯住编辑宿主的子树增删兜住
+ * 这一整类「内容挪了、选区没变」。仪器:npm run check:caretmerge 的 C4。
+ */
+let mo: MutationObserver | null = null
+let watched: Element | null = null
+function watchHost(host: Element | null): void {
+  if (host === watched) return
+  mo?.disconnect()
+  watched = host
+  if (!host) return
+  mo ??= new MutationObserver(() => schedule())
+  mo.observe(host, { childList: true, subtree: true })
+}
+
 function update(): void {
-  if (!enabled || !document.hasFocus()) return hide()
-  const info = caretInfo()
+  const info = enabled && document.hasFocus() ? caretInfo() : null
+  watchHost(info && info.host instanceof HTMLElement && info.host.isContentEditable ? info.host : null)
   if (!info) return hide()
   // caret 滚出真实裁剪范围时藏起(覆盖层 fixed,不然会浮到工具栏上)。Canvas 卡片可能位于
   // ProseMirror 自身 border-box 之外，故不能把编辑宿主本身一概当作裁剪容器。
@@ -347,5 +364,8 @@ export function setSmoothCaretEnabled(on: boolean): void {
   enabled = on
   document.documentElement.classList.toggle('sc-on', on)
   if (on) schedule(false)
-  else hide()
+  else {
+    watchHost(null)
+    hide()
+  }
 }

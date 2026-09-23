@@ -24,7 +24,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
       // CHANGELOG 渲进 DOM,里面就有历史版本引用过的「界面渲染出错」字样(2026-09-06 假红)。
       <div data-error-boundary style={{ padding: 24, maxWidth: 720, margin: '0 auto', overflow: 'auto', height: '100%', boxSizing: 'border-box' }}>
         <h3 style={{ margin: '8px 0' }}>{zh ? '界面渲染出错' : 'Something broke while rendering'}</h3>
-        <p style={{ opacity: 0.8, fontSize: 13, margin: '4px 0 12px' }}>
+        <p style={{ opacity: 0.8, fontSize: 'var(--ui-font-body, 13px)', margin: '4px 0 12px' }}>
           {zh ? '这一部分崩溃了。可重试、或切换/新建会话避开它;请把下面的错误发给开发者。'
               : 'This view crashed. Retry, or switch/start a new chat to avoid it; send the error below to the developer.'}
         </p>

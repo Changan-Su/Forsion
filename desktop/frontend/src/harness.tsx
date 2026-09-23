@@ -747,17 +747,20 @@ if (new URLSearchParams(location.search).has('dock')) {
     const [id, setId] = useState('glm-4.7')
     const [lv, setLv] = useState<'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>(new URLSearchParams(location.search).has('max') ? 'max' : 'high')
     const [defaults, setDefaults] = useState({ backgroundModelId: '', imageModelId: '', visionModelId: '' })
+    // 「上下文上限」行:GLM-4.7 扮 1M 模型(缺省封在 272k);选「最大」= 本机覆盖成 1M(与真 store 同形)
+    const [ctxOverride, setCtxOverride] = useState<number | null>(new URLSearchParams(location.search).has('ctxmax') ? 1_000_000 : null)
     const modelsResponse = {
       models: [
-        { id: 'glm-4.7', name: 'GLM-4.7', provider: 'zhipu', source: 'direct' as const, modelType: 'llm' as const, supportsVision: true },
+        { id: 'glm-4.7', name: 'GLM-4.7', provider: 'zhipu', source: 'direct' as const, modelType: 'llm' as const, supportsVision: true, contextWindow: ctxOverride ?? 272_000, contextWindowSource: ctxOverride ? 'override' as const : 'family' as const, maxContextWindow: 1_000_000 },
         { id: 'glm-4.6', name: 'GLM-4.6', provider: 'zhipu', source: 'direct' as const, modelType: 'llm' as const, supportsVision: false },
         { id: 'ds-v32', name: 'DeepSeek-V3.2-Exp', provider: 'deepseek', source: 'forsion' as const, modelType: 'llm' as const },
         { id: 'gpt-image-1', name: 'GPT Image 1', provider: 'openai', source: 'forsion' as const, modelType: 'image_gen' as const },
       ],
-      directProviders: [], defaultModelId: 'glm-4.7', backgroundModelId: 'ds-v32', imageModelId: 'gpt-image-1', visionModelId: 'glm-4.7',
+      directProviders: [], defaultModelId: 'glm-4.7', backgroundModelId: 'ds-v32', imageModelId: 'gpt-image-1', visionModelId: 'glm-4.7', contextWindowCap: 272_000, modelOverridesWritable: true,
     }
     return (
-      <div className="am-app tangu-lovable" style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end', padding: 24 }}>
+      // t2-chat-view = 子面板落位的边界(nestedPanelPlacement / useEdgeNudge 都认它);缺了子面板一律压在菜单上
+      <div className="am-app tangu-lovable t2-chat-view" style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end', padding: 24 }}>
         <div className="t2c-row" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <button className="t2c-pill">模式</button>
           <ModelPill
@@ -769,6 +772,7 @@ if (new URLSearchParams(location.search).has('dock')) {
             modelsResponse={modelsResponse}
             defaultModelIds={defaults}
             onDefaultModelChange={(slot, modelId) => setDefaults((d) => ({ ...d, [slot]: modelId }))}
+            onContextWindowChange={(_id, tokens) => setCtxOverride(tokens)}
           />
         </div>
       </div>

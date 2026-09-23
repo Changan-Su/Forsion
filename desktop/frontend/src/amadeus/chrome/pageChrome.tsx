@@ -2,8 +2,10 @@
  *  emoji 图标选择器。搬家动机:UnifiedPage(v4 统一编辑器)也要用,而 amadeusViews 渲染
  *  UnifiedPage —— 留在原处就是模块环。v3 路径(NoteTitle/编辑器)行为不变:所有新 props 均可缺省,
  *  缺省即原来的 pageStore 写法;unified 传显式 props 走自己的 fm 管线(绝不碰 pageStore)。 */
-import { Fragment, useMemo, useState } from 'react'
-import { Search } from 'lucide-react'
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { Search, Images, Image, Link2, Upload, X, Check } from 'lucide-react'
+import './pageChrome.css'
 import { OverlayAt } from '@lcl/engine'
 import { amadeus } from '@amadeus/api'
 import { getAttachmentPrefs } from '@amadeus/lib/attachments'
@@ -19,17 +21,25 @@ registerMessages({
   'pgchrome.coverChange': { zh: '更换封面', en: 'Change cover' },
   'pgchrome.coverReposition': { zh: '调整位置', en: 'Reposition' },
   'pgchrome.coverRemove': { zh: '移除', en: 'Remove' },
+  'pgchrome.coverTitle': { zh: '封面', en: 'Cover' },
+  'pgchrome.close': { zh: '关闭封面选择器', en: 'Close cover picker' },
+  'pgchrome.featured': { zh: '精选图片', en: 'Featured images' },
+  'pgchrome.results': { zh: '搜索结果', en: 'Search results' },
+  'pgchrome.chooseCover': { zh: '选择封面 {index}', en: 'Choose cover {index}' },
+  'pgchrome.imageUrl': { zh: '图片链接', en: 'Image URL' },
+  'pgchrome.urlHint': { zh: '使用公开可访问的图片链接。', en: 'Use a publicly accessible image URL.' },
+  'pgchrome.uploadTitle': { zh: '上传封面图片', en: 'Upload a cover image' },
   'pgchrome.tabGallery': { zh: '图库', en: 'Gallery' },
   'pgchrome.tabUrl': { zh: '链接', en: 'Link' },
   'pgchrome.tabUpload': { zh: '上传', en: 'Upload' },
-  'pgchrome.searchPlaceholder': { zh: '搜索在线图库(Openverse),或从下方精选挑…', en: 'Search the online image library (Openverse), or pick a featured cover below…' },
+  'pgchrome.searchPlaceholder': { zh: '搜索图片…', en: 'Search images…' },
   'pgchrome.search': { zh: '搜索', en: 'Search' },
   'pgchrome.searchUnavailable': { zh: '图库接口暂不可达,可从上方精选挑,或用「链接/上传」。', en: 'The image library is unreachable right now — pick a featured cover above, or use Link or Upload.' },
   'pgchrome.searchEmpty': { zh: '没搜到结果,上方为精选封面。', en: 'No results — the covers above are our featured picks.' },
   'pgchrome.urlPlaceholder': { zh: '粘贴图片地址(https://…)', en: 'Paste an image URL (https://…)' },
   'pgchrome.setCover': { zh: '设为封面', en: 'Set as cover' },
   'pgchrome.chooseLocal': { zh: '选择本地图片…', en: 'Choose a local image…' },
-  'pgchrome.uploadHint': { zh: '按「设置 → 笔记」的附件位置存入 vault。', en: 'Saved to the vault at the attachment location set in Settings → Notes.' },
+  'pgchrome.uploadHint': { zh: '图片会保存到当前笔记库的附件位置。', en: 'Images are saved with attachments in this vault.' },
   'pgchrome.emojiPlaceholder': { zh: '搜索 emoji(中/英),或粘贴任意字符后回车…', en: 'Search emoji (Chinese or English), or paste any character and press Enter…' },
   'pgchrome.emojiEmpty': { zh: '没有匹配的 emoji —— 回车可直接用你输入的字符', en: 'No matching emoji — press Enter to use what you typed' },
   'pgchrome.removeIcon': { zh: '移除图标', en: 'Remove icon' },
@@ -137,7 +147,7 @@ const FEATURED_COVERS: Array<{ thumb: string; full: string; author?: string; sou
   'aurora', 'forest', 'ocean', 'alpine', 'metro', 'night', 'coast', 'mist', 'valley', 'dune', 'lake', 'bloom',
 ].map((s) => ({ thumb: `https://picsum.photos/seed/${s}/320/180`, full: `https://picsum.photos/seed/${s}/1600/900`, source: 'Picsum' }))
 
-/** 封面选择器:锚定 popover(骑 amx-db-pop 壳,融入页面非全屏模态)。
+/** 封面选择器:独立的媒体 popover,共享应用浮层材质与字号。
  *  tab = 图库(打开即精选,可搜 Openverse)/ 链接 / 上传;点缩略图即换封面但**不关闭**(可连选),点浮层外关闭。 */
 export function CoverPicker({ page, x, y, onClose, onApply }: {
   page: string
@@ -156,7 +166,31 @@ export function CoverPicker({ page, x, y, onClose, onApply }: {
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState(false)
   const [url, setUrl] = useState('')
+  const [picked, setPicked] = useState<string | null>(null)
+  const panelId = useId()
+  const tabButtons = useRef<Array<HTMLButtonElement | null>>([])
+  const closeRef = useRef(onClose)
+  closeRef.current = onClose
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const escape = (event: KeyboardEvent): void => {
+      if (event.key !== 'Escape') return
+      event.preventDefault(); event.stopPropagation(); closeRef.current()
+    }
+    document.addEventListener('keydown', escape, true)
+    return () => {
+      document.removeEventListener('keydown', escape, true)
+      if (opener?.isConnected) opener.focus({ preventScroll: true })
+    }
+  }, [])
+  const tabs = [
+    { id: 'gallery' as const, label: 'pgchrome.tabGallery', icon: Images },
+    { id: 'url' as const, label: 'pgchrome.tabUrl', icon: Link2 },
+    { id: 'upload' as const, label: 'pgchrome.tabUpload', icon: Upload },
+  ]
+
   const apply = (cover: string): void => {
+    setPicked(cover)
     if (onApply) onApply(cover)
     else void scoped.getState().setPageCover(page, cover) // 不自动关闭:用户可连选换图,点浮层外才关
   }
@@ -187,41 +221,57 @@ export function CoverPicker({ page, x, y, onClose, onApply }: {
     }
     input.click()
   }
-  // 缩略图网格:统一 3:2 比例 + 小圆角,图下方一行作者/来源;点击即用即关。
+  // 缩略图网格:选择后保留浮层,作者有信息时才显示,避免每张图重复同一来源标签。
   const grid = (items: Array<{ thumb: string; full: string; author?: string; source?: string }>) => (
     <div className="amx-coverpick-grid">
-      {items.map((h) => (
-        <button key={h.full} className="amx-coverpick-item" onClick={() => apply(h.full)}>
+      {items.map((h, index) => (
+        <button key={h.full} className="amx-coverpick-item" aria-label={t('pgchrome.chooseCover', { index: index + 1 })} aria-pressed={picked === h.full} onClick={() => apply(h.full)}>
           <span className="amx-coverpick-thumb">
-            <img src={h.thumb} alt="" loading="lazy" onError={(e) => { const b = e.currentTarget.closest('.amx-coverpick-item') as HTMLElement | null; if (b) b.style.display = 'none' }} />
+            <Image size={20} strokeWidth={1.7} aria-hidden="true" />
+            <img src={h.thumb} alt="" loading="lazy" onError={(e) => { e.currentTarget.hidden = true }} />
+            {picked === h.full && <span className="amx-coverpick-selected"><Check size={14} aria-hidden="true" /></span>}
           </span>
-          <span className="amx-coverpick-cap">{h.author ? `by ${h.author}` : (h.source ?? '')}</span>
+          {h.author && <span className="amx-coverpick-cap">{h.author}</span>}
         </button>
       ))}
     </div>
   )
-  return (
-    <div className="amx-db-popwrap am-app" onMouseDown={onClose}>
+  return createPortal(
+    <div className="ui-popover-backdrop am-app" onMouseDown={onClose}>
       <OverlayAt
-        className="amx-db-pop amx-coverpick"
-        x={x - 420}
+        className="ui-popover amx-coverpick"
+        role="dialog" aria-label={t('pgchrome.coverTitle')}
+        x={x - 336}
         y={y}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="amx-coverpick-tabs">
-          <button data-on={tab === 'gallery' || undefined} onClick={() => setTab('gallery')}>{t('pgchrome.tabGallery')}</button>
-          <button data-on={tab === 'url' || undefined} onClick={() => setTab('url')}>{t('pgchrome.tabUrl')}</button>
-          <button data-on={tab === 'upload' || undefined} onClick={() => setTab('upload')}>{t('pgchrome.tabUpload')}</button>
+        <div className="amx-coverpick-header">
+          <span>{t('pgchrome.coverTitle')}</span>
+          <button className="amx-coverpick-close" onClick={onClose} aria-label={t('pgchrome.close')}><X size={14} strokeWidth={1.7} aria-hidden="true" /></button>
         </div>
+        <div className="amx-coverpick-tabs" role="tablist" aria-label={t('pgchrome.coverTitle')}>
+          {tabs.map(({ id, label, icon: Icon }, index) => <button key={id} ref={(el) => { tabButtons.current[index] = el }}
+            id={`${panelId}-${id}`} role="tab" aria-selected={tab === id} aria-controls={panelId} tabIndex={tab === id ? 0 : -1}
+            onClick={() => setTab(id)} onKeyDown={(event) => {
+              const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length
+                : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : -1
+              if (next < 0) return
+              event.preventDefault(); setTab(tabs[next].id); tabButtons.current[next]?.focus()
+            }}>
+            <Icon size={14} strokeWidth={1.7} aria-hidden="true" />{t(label)}
+          </button>)}
+        </div>
+        <div id={panelId} role="tabpanel" aria-labelledby={`${panelId}-${tab}`} className="amx-coverpick-panel">
         {tab === 'gallery' && (
           <div className="amx-coverpick-body">
             {hasSearch && (
               <div className="amx-coverpick-search">
-                <Search size={13} className="t2s-dim" />
-                <input autoFocus placeholder={t('pgchrome.searchPlaceholder')} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') search() }} />
-                <button className="amx-coverpick-go" onClick={search}>{busy ? '…' : t('pgchrome.search')}</button>
+                <Search size={14} strokeWidth={1.7} aria-hidden="true" />
+                <input aria-label={t('pgchrome.searchPlaceholder')} placeholder={t('pgchrome.searchPlaceholder')} value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') search() }} />
+                <button className="amx-coverpick-go" disabled={busy || !q.trim()} onClick={search}>{busy ? '…' : t('pgchrome.search')}</button>
               </div>
             )}
+            <div className="amx-coverpick-section">{t(hits?.length ? 'pgchrome.results' : 'pgchrome.featured')}</div>
             {grid(hits && hits.length > 0 ? hits : FEATURED_COVERS)}
             {!busy && err && <div className="amx-coverpick-hint">{t('pgchrome.searchUnavailable')}</div>}
             {!busy && !err && hits?.length === 0 && <div className="amx-coverpick-hint">{t('pgchrome.searchEmpty')}</div>}
@@ -229,18 +279,24 @@ export function CoverPicker({ page, x, y, onClose, onApply }: {
         )}
         {tab === 'url' && (
           <div className="amx-coverpick-body amx-coverpick-url">
-            <input autoFocus placeholder={t('pgchrome.urlPlaceholder')} value={url} onChange={(e) => setUrl(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter' && /^https?:\/\//i.test(url.trim())) apply(url.trim()) }} />
-            <button className="amx-coverpick-go" onClick={() => { if (/^https?:\/\//i.test(url.trim())) apply(url.trim()) }}>{t('pgchrome.setCover')}</button>
+            <label htmlFor={`${panelId}-url-input`}>{t('pgchrome.imageUrl')}</label>
+            <input id={`${panelId}-url-input`} placeholder={t('pgchrome.urlPlaceholder')} value={url} onChange={(e) => setUrl(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && /^https?:\/\//i.test(url.trim())) apply(url.trim()) }} />
+            <div className="amx-coverpick-hint">{t('pgchrome.urlHint')}</div>
+            <button className="amx-coverpick-go" disabled={!/^https?:\/\//i.test(url.trim())} onClick={() => { if (/^https?:\/\//i.test(url.trim())) apply(url.trim()) }}>{t('pgchrome.setCover')}</button>
           </div>
         )}
         {tab === 'upload' && (
-          <div className="amx-coverpick-body">
-            <button className="amx-coverpick-go amx-coverpick-upload" onClick={upload}>{t('pgchrome.chooseLocal')}</button>
+          <div className="amx-coverpick-body amx-coverpick-upload">
+            <Upload size={24} strokeWidth={1.5} aria-hidden="true" />
+            <div className="amx-coverpick-upload-title">{t('pgchrome.uploadTitle')}</div>
             <div className="amx-coverpick-hint">{t('pgchrome.uploadHint')}</div>
+            <button className="amx-coverpick-go" onClick={upload}>{t('pgchrome.chooseLocal')}</button>
           </div>
         )}
+        </div>
       </OverlayAt>
-    </div>
+    </div>, document.body
   )
 }
 

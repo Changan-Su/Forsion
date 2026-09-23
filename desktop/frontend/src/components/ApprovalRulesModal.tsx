@@ -85,7 +85,7 @@ export const ApprovalRulesModal: React.FC<{ cfg: TanguDesktopConfig; onClose: ()
         rows={3}
         spellCheck={false}
         placeholder={t(`approvalRules.${k}Ph` as any)}
-        style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: 12.5 }}
+        style={{ width: '100%', fontFamily: 'var(--font-mono)', fontSize: 'var(--ui-font-meta, 12px)' }}
       />
     </div>
   )

@@ -190,3 +190,98 @@ export async function extractZipToDir(zipBuffer: Buffer, destRoot: string, manif
   if (n === 0) throw new Error('压缩包为空或无有效文件')
   return n
 }
+
+// ── 下载:候选地址 + 每个候选的连接/断流超时 + 字节进度 ──
+// 中国大陆直连 GitHub 的典型失败不是「快速报错」而是 SYN 挂起 / 慢到断流:没有超时,「换下一个地址」永远轮不到。
+// fetch 由调用方注入:主进程给 github 源传 electron `net.fetch`(Chromium 网络栈,认系统代理),
+// Node 的全局 fetch 不认系统代理 —— 挂着 VPN(系统代理模式)也照样直连被墙。
+
+const GH_PROXIES = ['https://ghfast.top', 'https://ghproxy.net', 'https://gh-proxy.com']
+
+/** api.github.com 的 zipball 地址 → github.com 的 archive 地址(同一份源码 zip,同样套一层顶级目录)。
+ *  gh 代理站只前置 github.com / *.githubusercontent.com,不前置 API 域名;老服务端对「release 没挂 zip 资产」
+ *  与「无 release」的条目回的恰恰是 zipball,于是镜像对它们一次都没被试过。其余地址原样返回。 */
+export function toArchiveUrl(url: string): string {
+  const m = /^https:\/\/api\.github\.com\/repos\/([^/]+)\/([^/]+)\/zipball(?:\/(.+))?$/.exec(url)
+  return m ? `https://github.com/${m[1]}/${m[2]}/archive/${m[3] || 'HEAD'}.zip` : url
+}
+
+/**
+ * 下载候选序列。开了「中国大陆镜像」(mirror=china):多代理站(站点更迭频繁,单点必然间歇失效)→ 直连兜底,
+ * customProxy(TANGU_GITHUB_PROXY)排最前;没开:只直连。
+ * ⚠️ 代理站不能默认给所有人兜底(Codex 09-21):那是第三方,回来的字节未经校验就当插件代码执行 —— 这份信任得用户自己开。
+ * 根治 = 服务端把包镜像进自家对象存储(待拍板)。非 github 地址(Forsion 对象存储等)原样单发。
+ */
+export function downloadCandidates(url: string, mirror: string, customProxy = ''): string[] {
+  const u = toArchiveUrl(url)
+  if (!/^https:\/\/(github\.com|[^/]*\.githubusercontent\.com)\//.test(u)) return [u]
+  const custom = customProxy.replace(/\/+$/, '')
+  const proxied = (custom ? [custom, ...GH_PROXIES.filter((p) => p !== custom)] : GH_PROXIES).map((p) => `${p}/${u}`)
+  return mirror === 'china' ? [...proxied, u] : [u]
+}
+
+export interface DownloadProgress { attempt: number; attempts: number; host: string; received: number; total: number | null }
+
+/** 全部候选都失败:message 只含主机名与原因码(语言中立),界面层自己套中英文案。 */
+export class DownloadFailed extends Error {
+  constructor(readonly attempts: Array<{ host: string; reason: string }>) {
+    super(attempts.map((a) => `${a.host}: ${a.reason}`).join(' · '))
+  }
+}
+
+type FetchFn = (url: string, init: { signal: AbortSignal }) => Promise<Response>
+
+// 两个 env 既是单测把超时压到毫秒级的旋钮,也是现场排障(极慢网络)调宽的旋钮。
+const connectMs = (): number => Number(process.env.FORSION_MARKET_CONNECT_TIMEOUT_MS) || 15_000 // 到响应头为止
+const stallMs = (): number => Number(process.env.FORSION_MARKET_STALL_TIMEOUT_MS) || 20_000 // 下载中多久没新字节算断流
+const MAX_ZIP_BYTES = 200 * 1024 * 1024
+
+function hostOf(url: string): string {
+  try { return new URL(url).host } catch { return url.slice(0, 60) }
+}
+
+/** 依次尝试候选,返回第一个完整下载到的 zip。每个候选:响应头超时 + 断流超时 + 大小上限 + zip 魔数
+ *  (代理站被限流时常回 200 的 HTML 页面,不认魔数就会拿它去解压、把能用的下一个候选错过)。 */
+export async function downloadZip(urls: string[], fetchFn: FetchFn, onProgress: (p: DownloadProgress) => void = () => {}): Promise<Buffer> {
+  const failed: Array<{ host: string; reason: string }> = []
+  for (const [i, url] of urls.entries()) {
+    const host = hostOf(url)
+    const ac = new AbortController()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    // 超时既让 race 落败、又 abort 请求:不指望 fetch 实现把 abort 传进 body 流(net.fetch 与 Node fetch 行为不一)。
+    // 先 reject 再 abort —— 反过来 fetch 的 AbortError 可能先落定,原因码就成了 aborted 而不是 timeout。
+    const deadline = (ms: number, reason: string): Promise<never> => new Promise((_, reject) => {
+      clearTimeout(timer)
+      timer = setTimeout(() => { reject(new Error(reason)); ac.abort() }, ms)
+    })
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined
+    try {
+      onProgress({ attempt: i + 1, attempts: urls.length, host, received: 0, total: null })
+      const res = await Promise.race([fetchFn(url, { signal: ac.signal }), deadline(connectMs(), 'timeout')])
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`)
+      const total = Number(res.headers.get('content-length')) || null // codeload / 代理站常不给长度 → 界面显示已收字节
+      reader = res.body.getReader()
+      const chunks: Uint8Array[] = []
+      let received = 0
+      for (;;) {
+        const { done, value } = await Promise.race([reader.read(), deadline(stallMs(), 'stalled')])
+        if (done) break
+        received += value.byteLength
+        if (received > MAX_ZIP_BYTES) throw new Error('too large')
+        chunks.push(value)
+        onProgress({ attempt: i + 1, attempts: urls.length, host, received, total })
+      }
+      const buf = Buffer.concat(chunks)
+      if (buf.length < 4 || buf[0] !== 0x50 || buf[1] !== 0x4b) throw new Error('not a zip')
+      return buf
+    } catch (e) {
+      const cause = (e as { cause?: { code?: string; message?: string } })?.cause // Node fetch 把真原因(ECONNRESET 等)藏在 cause 里
+      failed.push({ host, reason: cause?.code || cause?.message || (e as Error)?.message || String(e) })
+      reader?.cancel().catch(() => {})
+      ac.abort()
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+  throw new DownloadFailed(failed)
+}

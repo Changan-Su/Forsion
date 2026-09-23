@@ -229,7 +229,6 @@ function CanvasInner({ leaf }: ViewProps) {
   const dashPath = typeof leaf.params.dashPath === 'string' ? leaf.params.dashPath : ''
   const locked = leaf.params.locked !== false // 缺席即锁(旧版同款):锁上=不能拖/加/删,双击看内容照旧
   const mode = useTheme((s) => s.mode)
-  const flat = useTheme((s) => s.flat)
   const manifest = usePageStore((s) => s.manifest)
   const blocks = usePageStore((s) => s.blocks)
   const activePage = usePageStore((s) => s.activePage)
@@ -636,7 +635,6 @@ function CanvasInner({ leaf }: ViewProps) {
     <div
       className={`am-app tangu-lovable amx-pane amx-editor dash2${dragOver ? ' amx-dragover' : ''}`}
       data-mode={mode}
-      data-flat={flat ? '1' : '0'}
       onDragOver={(e) => {
         if (locked || !Array.from(e.dataTransfer?.types ?? []).includes('Files')) return
         e.preventDefault()

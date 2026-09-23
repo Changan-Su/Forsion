@@ -24,10 +24,16 @@ const apply = (q: Parameters<typeof resolveModelCapability>[0], level: ThinkingL
 describe('resolveModelCapability — 路由矩阵', () => {
   const cases: Array<[string, Parameters<typeof resolveModelCapability>[0], string]> = [
     ['OpenAI GPT-6 Astra', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6-astra' }, 'openai-astra'],
+    ['OpenAI GPT-6 Sol', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6-sol' }, 'openai-gpt6'],
+    ['OpenAI GPT-6 Luna', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6-luna' }, 'openai-gpt6'],
     ['Codex GPT-6 Astra 请求', { protocol: 'openai-responses', modelId: 'gpt-6-astra' }, 'codex-astra'],
+    // ⚠️ 判别式:改前 Sol / Luna 落 codex-subscription 的通用档表,minimal 原样上 wire(后端 400)
+    ['Codex GPT-6 Sol 请求', { protocol: 'openai-responses', modelId: 'gpt-6-sol' }, 'codex-gpt6'],
+    ['Codex GPT-6 Luna 请求', { protocol: 'openai-responses', modelId: 'gpt-6-luna' }, 'codex-gpt6'],
     ['Codex GPT-6 Astra 目录(无协议标记)', { provider: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', modelId: 'gpt-6-astra' }, 'codex-astra'],
+    ['Codex GPT-6 Sol 目录(无协议标记)', { provider: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', modelId: 'gpt-6-sol' }, 'codex-gpt6'],
     ['未知网关不预支 Astra 协议', { baseUrl: 'https://proxy.example/v1', modelId: 'gpt-6-astra' }, 'default'],
-    ['未知 GPT-6 变体不预支 Astra 档位', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6-other' }, 'openai-nonreasoning'],
+    ['未知 GPT-6 变体不预支 GPT-6 档位', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6-other' }, 'openai-nonreasoning'],
     ['OpenAI gpt-5.6+', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-5.6-luna' }, 'openai-gpt5-latest'],
     ['OpenAI gpt-5.5', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-5.5' }, 'openai-gpt5'],
     ['OpenAI gpt-5.5-pro', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-5.5-pro' }, 'openai-gpt5-pro'],
@@ -38,6 +44,12 @@ describe('resolveModelCapability — 路由矩阵', () => {
     ['Claude Opus 4.7(连字符真 id)', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-4-7' }, 'anthropic-adaptive'],
     ['Claude Opus 5', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-5' }, 'anthropic-adaptive'],
     ['Claude Fable 5(思考常开)', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-fable-5' }, 'anthropic-always-on'],
+    // ⚠️ 判别式:Opus 5.5 是 Adaptive (always on),disabled 直接 400;改前它落 anthropic-adaptive(可关)
+    ['Claude Opus 5.5(思考常开)', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-5-5' }, 'anthropic-always-on'],
+    ['Anthropic API key(Opus 5.5)', { protocol: 'anthropic-messages', modelId: 'claude-opus-5-5' }, 'anthropic-messages-always-on'],
+    ['Claude 托管 provider(Opus 5.5)', { provider: 'anthropic', modelId: 'claude-opus-5-5' }, 'anthropic-provider-always-on'],
+    // 反例:Opus 5 仍能关;它的日期快照不许被常开规则的两位小版本口子吞掉
+    ['Claude Opus 5 日期快照', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-5-20260601' }, 'anthropic-adaptive'],
     // 4.6 及更早仍是手动扩展思考,不许被自适应族吞掉
     ['Claude Sonnet 4.6', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-sonnet-4-6' }, 'anthropic-budget'],
     ['Claude Opus 4.5 快照', { baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-4-5-20251101' }, 'anthropic-budget'],
@@ -168,6 +180,28 @@ describe('applyThinking — 各家线上形态', () => {
     }
   });
 
+  // 后端 400 原文(09-22 实测):Sol/Luna 合法值 = none/low/medium/high/xhigh/max —— 能关、没有 minimal,
+  // 与 Astra(没有 none)不同,别合表。
+  it.each(['gpt-6-sol', 'gpt-6-luna'])('%s:off 发 none(官方路径留在 chat/completions),minimal 折到 low,max 真档', (modelId) => {
+    for (const q of [
+      { baseUrl: 'https://api.openai.com/v1', modelId },
+      { protocol: 'openai-responses', modelId },
+      { provider: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', modelId },
+    ]) {
+      expect(supportedThinkingLevels(cap(q))).toEqual(['off', 'low', 'medium', 'high', 'xhigh', 'max']);
+      const off = apply(q, 'off', { temperature: 0.7 });
+      expect(off.effective).toBe('off');
+      expect(off.payload.reasoning_effort).toBe('none');
+      expect(off.payload.temperature).toBeUndefined();
+      expect(off.viaResponses).toBe(false);
+      const minimal = apply(q, 'minimal');
+      expect(minimal.effective).toBe('low');
+      expect(minimal.payload.reasoning_effort).toBe('low');
+      expect(minimal.viaResponses).toBe(true);
+      expect(apply(q, 'max').payload.reasoning_effort).toBe('max');
+    }
+  });
+
   it('Codex 订阅拿得到档位(改造前这里永远是空的)', () => {
     const { payload, effective } = apply({ protocol: 'openai-responses', modelId: 'gpt-5.6-codex' }, 'xhigh');
     expect(payload.reasoning_effort).toBe('xhigh');
@@ -187,20 +221,28 @@ describe('applyThinking — 各家线上形态', () => {
       { provider: 'claude-proxy', modelId: 'claude-fable-5' },
     ]) {
       const { payload } = apply(q, 'high', { temperature: 0.7 });
-      expect(payload.thinking).toEqual({ type: 'adaptive' });
+      expect(payload.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
       expect(payload.output_config).toEqual({ effort: 'high' });
       expect(payload.thinking.budget_tokens).toBeUndefined();
       expect(payload.temperature).toBeUndefined(); // 非默认 temperature 在 Sonnet 5 上同样是 400
     }
   });
 
-  it('Claude 自适应:能关思考;Fable 5 常开只能夹到最弱档', () => {
+  it('Claude 自适应:能关思考;Fable 5 / Opus 5.5 常开只能夹到最弱档', () => {
     const off = apply({ baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-5' }, 'off');
-    expect(off.payload).toEqual({ thinking: { type: 'disabled' } }); // 不带 effort:disabled+xhigh/max 是 400
+    expect(off.payload).toEqual({ thinking: { type: 'disabled' } }); // 不带 effort / display:disabled+xhigh/max 与 disabled+display 都是 400
     expect(off.effective).toBe('off');
-    const fable = apply({ baseUrl: 'https://api.anthropic.com', modelId: 'claude-fable-5' }, 'off');
-    expect(fable.payload.thinking).toEqual({ type: 'adaptive' });
-    expect(fable.effective).toBe('minimal');
+    for (const q of [
+      { baseUrl: 'https://api.anthropic.com', modelId: 'claude-fable-5' },
+      { baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-5-5' },
+      { protocol: 'anthropic-messages', modelId: 'claude-opus-5-5' },
+      { provider: 'anthropic', modelId: 'claude-opus-5-5' },
+    ]) {
+      const on = apply(q, 'off');
+      expect(on.payload.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+      expect(on.payload.output_config).toEqual({ effort: 'low' });
+      expect(on.effective).toBe('minimal');
+    }
   });
 
   it('Claude 预算:未给 max_tokens 时自动补到大于预算', () => {
@@ -227,7 +269,7 @@ describe('applyThinking — 各家线上形态', () => {
 
   it('Claude 自适应:thinking:adaptive + output_config.effort(max 是真档,别再折成 xhigh)', () => {
     const { payload } = apply({ baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-4.8' }, 'max');
-    expect(payload.thinking).toEqual({ type: 'adaptive' });
+    expect(payload.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
     expect(payload.output_config).toEqual({ effort: 'max' });
   });
 

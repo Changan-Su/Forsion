@@ -29,7 +29,7 @@
   position: relative;
   display: block;
   overflow: hidden;
-  border-radius: 6px;
+  border-radius: var(--radius-sm, 6px);
   background: var(--sk-base);
   height: 12px;
   flex: none;
@@ -44,7 +44,7 @@
 }
 @keyframes sk-shimmer { to { transform: translateX(100%); } }
 
-.sk-title { height: 26px; border-radius: 8px; margin-bottom: 8px; }
+.sk-title { height: 26px; border-radius: var(--radius-sm, 6px); margin-bottom: 8px; }
 .sk-thin { height: 9px; }
 .sk-gap { height: 10px; flex: none; }
 .sk-dot { width: 26px; height: 26px; border-radius: 50%; }
@@ -56,7 +56,7 @@
 .sk-msg { display: flex; gap: 10px; align-items: flex-start; flex: none; }
 .sk-msg .sk-col { padding-top: 4px; }
 .sk-msg-user { justify-content: flex-end; }
-.sk-bubble { height: 34px; border-radius: 14px; }
+.sk-bubble { height: 34px; border-radius: var(--radius-lg, 16px); }
 .sk-document { max-width: 720px; margin: 0 auto; }
 
 /* 数据就绪后的渐显替换:骨架分支卸载、真实内容分支挂载时,内容根挂这个类平滑淡入。 */
@@ -75,16 +75,16 @@
   padding: 24px;
   text-align: center;
 }
-.sk-error-title { font-size: 14px; font-weight: 600; color: var(--text, #333); }
-.sk-error-msg { font-size: 12px; color: var(--text-muted, #888); max-width: 420px; word-break: break-all; }
+.sk-error-title { font-size: var(--ui-font-body, 13px); font-weight: 600; color: var(--text, #333); }
+.sk-error-msg { font-size: var(--ui-font-meta, 12px); color: var(--text-muted, #888); max-width: 420px; word-break: break-all; }
 .sk-error-btn {
   margin-top: 6px;
   padding: 5px 14px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm, 6px);
   border: 1px solid var(--border, #ddd);
   background: var(--bg-card, #fff);
   color: var(--text, #333);
-  font-size: 12px;
+  font-size: var(--ui-font-meta, 12px);
   cursor: pointer;
 }
 .sk-error-btn:hover { background: var(--bg-hover, rgba(0, 0, 0, 0.04)); }

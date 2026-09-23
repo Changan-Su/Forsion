@@ -9,7 +9,7 @@ import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'
 
 registerMessages({
-  'group.setup.selfPacedHint': { zh: '成员被 @ 时优先发言;每位成员说完自己决定还要不要继续,全员表示完成即结束,没有轮数上限。', en: 'Members who get @-mentioned speak next; after each remark a member decides whether to continue, and the chat ends once everyone is done — no round limit.' },
+  'group.setup.selfPacedHint': { zh: '发消息后成员同时开工,可相互 @ 交接;每位成员自己决定何时收尾,全员完成即结束,没有轮数上限。', en: 'After you send, members work in parallel and can @-mention each other; each decides when they are done, and the team stops once everyone is — no round limit.' },
 })
 import type { ModelInfo, NormalAgentDef, ThinkingLevel } from '../types'
 
@@ -84,14 +84,14 @@ export const GroupChatSetup: React.FC<{
 
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'var(--overlay-scrim)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{
-        width: 480, maxWidth: '92vw', maxHeight: '86vh', overflow: 'auto', borderRadius: 12,
+      <div data-team-setup onClick={(e) => e.stopPropagation()} style={{
+        width: 480, maxWidth: '92vw', maxHeight: '86vh', overflow: 'auto', borderRadius: 'var(--radius-md, 12px)',
         background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)',
         boxShadow: 'var(--card-shadow)', padding: 18,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
           <Users size={18} />
-          <strong style={{ fontSize: 15, flex: 1 }}>{t('group.setup.title')}</strong>
+          <strong style={{ fontSize: 'var(--ui-font-heading, 14px)', flex: 1 }}>{t('group.setup.title')}</strong>
           <button className="icon-btn" onClick={onClose} title={t('group.setup.close')}><X size={16} /></button>
         </div>
 
@@ -155,18 +155,16 @@ export const GroupChatSetup: React.FC<{
           </div>
         ) : (
           <>
-            <p style={{ fontSize: 12, color: 'var(--text-dim)', margin: '0 0 12px' }}>{t('group.setup.hint')}</p>
-
             {/* 已有 Agent 多选 */}
             {agents.length > 0 && (
               <>
-                <div style={{ fontSize: 12, fontWeight: 600, margin: '8px 0 6px', color: 'var(--text-dim)' }}>{t('group.setup.savedAgents')}</div>
+                <div style={{ fontSize: 'var(--ui-font-meta, 12px)', fontWeight: 600, margin: '8px 0 6px', color: 'var(--text-dim)' }}>{t('group.setup.savedAgents')}</div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 }}>
                   {agents.map((a) => {
                     const on = selectedSaved.includes(a.slug)
                     return (
                       <button key={a.slug} onClick={() => toggleSaved(a.slug)} style={{
-                        display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', padding: '8px 10px', borderRadius: 8,
+                        display: 'flex', alignItems: 'center', gap: 10, textAlign: 'left', padding: '8px 10px', borderRadius: 'var(--radius-sm, 6px)',
                         border: `1px solid ${on ? 'var(--accent-ink)' : 'var(--border)'}`,
                         background: on ? 'var(--accent-soft)' : 'transparent', color: 'inherit', cursor: 'pointer',
                       }}>
@@ -174,8 +172,8 @@ export const GroupChatSetup: React.FC<{
                           {on && <Check size={12} color="var(--on-accent-ink, var(--on-accent))" />}
                         </span>
                         <span style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 13, fontWeight: 600 }}>{a.name}</div>
-                          {a.description && <div style={{ fontSize: 11, color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.description}</div>}
+                          <div style={{ fontSize: 'var(--ui-font-body, 13px)', fontWeight: 600 }}>{a.name}</div>
+                          {a.description && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.description}</div>}
                         </span>
                       </button>
                     )
@@ -185,15 +183,15 @@ export const GroupChatSetup: React.FC<{
             )}
 
             {/* 临时 Agent(本会话用,不保存) */}
-            <div style={{ fontSize: 12, fontWeight: 600, margin: '8px 0 6px', color: 'var(--text-dim)' }}>{t('group.setup.tempAgents')}</div>
+            <div style={{ fontSize: 'var(--ui-font-meta, 12px)', fontWeight: 600, margin: '8px 0 6px', color: 'var(--text-dim)' }}>{t('group.setup.tempAgents')}</div>
             {tempAgents.length > 0 && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 8 }}>
                 {tempAgents.map((a) => (
-                  <div key={a.slug} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 8, border: '1px solid var(--accent-ink)', background: 'var(--accent-soft)' }}>
+                  <div key={a.slug} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 'var(--radius-sm, 6px)', border: '1px solid var(--accent-ink)', background: 'var(--accent-soft)' }}>
                     <UserPlus size={14} style={{ flexShrink: 0, opacity: 0.8 }} />
                     <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600 }}>{a.name}</span>
-                      <span style={{ fontSize: 11, color: 'var(--text-dim)', marginLeft: 6 }}>{t('group.setup.tempBadge')}</span>
+                      <span style={{ fontSize: 'var(--ui-font-body, 13px)', fontWeight: 600 }}>{a.name}</span>
+                      <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-dim)', marginLeft: 6 }}>{t('group.setup.tempBadge')}</span>
                     </span>
                     <button className="icon-btn" title={t('common.edit')} onClick={() => setEditingTemp({ slug: a.slug, name: a.name, description: a.description, model: a.model, systemPrompt: a.systemPrompt, thinkingLevel: a.thinkingLevel, maxIterations: a.maxIterations != null ? String(a.maxIterations) : '', approvalMode: a.approvalMode })}><Pencil size={13} /></button>
                     <button className="icon-btn" title={t('common.delete')} onClick={() => setTempAgents((prev) => prev.filter((x) => x.slug !== a.slug))}><Trash2 size={13} /></button>
@@ -205,13 +203,13 @@ export const GroupChatSetup: React.FC<{
               <Plus size={13} /> {t('group.setup.addTemp')}
             </button>
 
-            <div style={{ fontSize: 12, color: 'var(--text-dim)', margin: '6px 0 14px' }}>{t('group.setup.selfPacedHint')}</div>
+            <div style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-dim)', margin: '6px 0 14px' }}>{t('group.setup.selfPacedHint')}</div>
 
             <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
               {active && !hideDisable && <button className="btn sm" onClick={() => { onDisable(); onClose() }}>{t('group.setup.disable')}</button>}
               <button className="btn primary sm" onClick={confirm} disabled={!canStart}>{active ? t('group.setup.update') : t('group.setup.start')}</button>
             </div>
-            {!canStart && <div style={{ fontSize: 11, color: 'var(--danger)', textAlign: 'right', marginTop: 6 }}>{t('group.setup.needTwo')}</div>}
+            {!canStart && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--danger)', textAlign: 'right', marginTop: 6 }}>{t('group.setup.needTwo')}</div>}
           </>
         )}
       </div>

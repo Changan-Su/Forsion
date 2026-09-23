@@ -191,7 +191,7 @@ const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name
                       {logBusy ? <Loader2 size={13} className="spin" /> : null} {t('common.save')}
                     </button>
                     <button className="btn sm" disabled={logBusy} onClick={() => setLogReload((n) => n + 1)}>{t('agentMemory.reload')}</button>
-                    {logSaved && <span style={{ fontSize: 12, color: 'var(--accent-ink)' }}>{t('settings.agents.memSaved')}</span>}
+                    {logSaved && <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--accent-ink)' }}>{t('settings.agents.memSaved')}</span>}
                   </div>
                 </>
               )}
@@ -232,12 +232,12 @@ const AgentMemoryModalBody: React.FC<AgentMemoryModalProps> = ({ cfg, slug, name
 
             {libSel && (
               <div style={{ marginTop: 12, borderTop: 'var(--border-width) solid var(--border)', paddingTop: 12 }}>
-                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 6 }}>{libSel}</div>
+                <div style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)', marginBottom: 6 }}>{libSel}</div>
                 {libBinary
                   ? (
                     <>
                       {libPreview
-                        ? <img src={libPreview} alt={libSel} style={{ maxWidth: '100%', maxHeight: 260, borderRadius: 8, display: 'block' }} />
+                        ? <img src={libPreview} alt={libSel} style={{ maxWidth: '100%', maxHeight: 260, borderRadius: 'var(--radius-sm, 6px)', display: 'block' }} />
                         : <div className="hint">{t('settings.agents.libraryBinaryHint')}</div>}
                     </>
                   )

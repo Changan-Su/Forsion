@@ -1,3 +1,4 @@
+import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
 /** Amadeus Space 的引擎视图 —— 外壳用 Tangu 原生 UI 重建(复刻侧栏 t2s- 视觉 + base.css 的 .ctx-menu),
  *  只复用 Amadeus 的数据层(pageStore)与块编辑器内核(PageView/Milkdown)。
  *  左 笔记库 / 主 编辑器 / 右 大纲·反链。除编辑器(块组件用 Amadeus 契约 token,需 .am-app+bridge)外,
@@ -170,8 +171,8 @@ registerMessages({
   'amxv.mbar.hideKeyboard': { zh: '收起键盘', en: 'Hide keyboard' },
 
   'amxv.title.changeIcon': { zh: '更换/移除页面图标', en: 'Change or remove the page icon' },
-  'amxv.title.addIcon': { zh: '☺ 添加图标', en: '☺ Add icon' },
-  'amxv.title.addCover': { zh: '🖼 添加封面', en: '🖼 Add cover' },
+  'amxv.title.addIcon': { zh: '添加图标', en: 'Add icon' },
+  'amxv.title.addCover': { zh: '添加封面', en: 'Add cover' },
 
   'amxv.pdf.exported': { zh: '已导出 PDF:{path}', en: 'PDF exported: {path}' },
   'amxv.pdf.exportFailed': { zh: '导出 PDF 失败:{e}', en: 'PDF export failed: {e}' },
@@ -550,7 +551,7 @@ function SharedWithMeSection() {
   if (!collab || items.length === 0) return null
   return (
     <div className="t2s-special-group" style={{ marginTop: 6 }}>
-      <div className="t2s-hint amx-sec-grab" style={{ padding: '2px 10px 2px', fontSize: 11.5 }}>{t('amxv.sec.sharedWithMe')}</div>
+      <div className="t2s-hint amx-sec-grab" style={{ padding: '2px 10px 2px', fontSize: 'var(--ui-font-caption, 11px)' }}>{t('amxv.sec.sharedWithMe')}</div>
       {items.map((s) => (
         <button
           key={`${s.vaultId}:${s.path}`}
@@ -1840,13 +1841,11 @@ function EditorScope({
   onPaste?: (e: RClipboardEvent<HTMLDivElement>) => void
 }) {
   const mode = useTheme((s) => s.mode)
-  const flat = useTheme((s) => s.flat)
   return (
     <div
       ref={(el) => { if (rootRef) rootRef.current = el }}
       className={`am-app tangu-lovable amx-pane amx-editor${dragging ? ' amx-dragover' : ''}`}
       data-mode={mode}
-      data-flat={flat ? '1' : '0'}
       onDrop={onDrop}
       onDragOver={onDragOver}
       onDragLeave={onDragLeave}
@@ -1928,10 +1927,10 @@ export function NoteTitle() {
       {activePage && (!icon || !cover) && (
         <div className="amx-title-actions">
           {!icon && (
-            <button onClick={() => void sps().setPageIcon(activePage, randomEmoji())}>{t('amxv.title.addIcon')}</button>
+            <button onClick={() => void sps().setPageIcon(activePage, randomEmoji())}><PageSmileIcon size={14} strokeWidth={1.7} aria-hidden="true" />{t('amxv.title.addIcon')}</button>
           )}
           {!cover && (
-            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCoverPick({ x: r.right, y: r.bottom + 6 }) }}>{t('amxv.title.addCover')}</button>
+            <button onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); setCoverPick({ x: r.right, y: r.bottom + 6 }) }}><CoverImageIcon size={14} strokeWidth={1.7} aria-hidden="true" />{t('amxv.title.addCover')}</button>
           )}
         </div>
       )}

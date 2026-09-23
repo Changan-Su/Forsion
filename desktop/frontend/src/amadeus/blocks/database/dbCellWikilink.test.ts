@@ -60,17 +60,18 @@ describe('text 单元格的 [[双链]]', () => {
   it('非编辑态渲染成可点链接(不是纯文本)', async () => {
     await mount('见 [[我的笔记]]')
     expect(host().querySelector('.amx-db-wikilink')?.textContent).toBe('我的笔记')
-    expect(host().querySelector('.amx-db-richtext')?.textContent).toBe('见 我的笔记')
+    expect(host().querySelector('.amx-db-value-text')?.textContent).toBe('见 我的笔记')
   })
 
   it('点单元格进编辑态 → 变回带方括号的输入框', async () => {
     await mount('见 [[我的笔记]]')
-    await act(async () => { host().querySelector<HTMLElement>('.amx-db-urlcell')!.click() })
+    await act(async () => { host().querySelector<HTMLElement>('.amx-db-value-display')!.click() })
     expect(input().value).toBe('见 [[我的笔记]]')
   })
 
   it('打 [[ 弹笔记候选,选中即写成 [[名字]] 并渲染成链接', async () => {
     await mount('')
+    await act(async () => { host().querySelector<HTMLElement>('.amx-db-value-display')!.click() })
     await type(input(), '见 [[')
     expect(host().querySelector('.amx-db-pop')).toBeTruthy() // 补全弹层
     const opt = host().querySelectorAll<HTMLElement>('.amx-db-opt')[0]
@@ -82,6 +83,7 @@ describe('text 单元格的 [[双链]]', () => {
 
   it('Esc 关掉候选层后焦点回到单元格(不然接着打字打进虚空)', async () => {
     await mount('')
+    await act(async () => { host().querySelector<HTMLElement>('.amx-db-value-display')!.click() })
     await act(async () => { input().focus() })
     await type(input(), '[[')
     const search = host().querySelector<HTMLInputElement>('.amx-db-pop-input')!
@@ -92,6 +94,7 @@ describe('text 单元格的 [[双链]]', () => {
 
   it('Enter 就提交 —— 不必点别处链接才现形', async () => {
     await mount('')
+    await act(async () => { host().querySelector<HTMLElement>('.amx-db-value-display')!.click() })
     const el = input()
     await act(async () => { el.focus() })
     await type(el, '[[我的笔记]]')
@@ -103,6 +106,7 @@ describe('text 单元格的 [[双链]]', () => {
   // ── 以下四条来自 Codex 评审(2 Medium + 2 Low) ──
   it('拼音选词的 Enter 不当提交(组合态里按 Enter = 确认候选词,不是「打完了」)', async () => {
     await mount('')
+    await act(async () => { host().querySelector<HTMLElement>('.amx-db-value-display')!.click() })
     const el = input()
     await act(async () => { el.focus() })
     await type(el, '[[我的笔记]]')
@@ -115,6 +119,7 @@ describe('text 单元格的 [[双链]]', () => {
 
   it('在已有文字中间插 [[ 也弹候选,选中后只替换光标前那段、保留后文', async () => {
     await mount('')
+    await act(async () => { host().querySelector<HTMLElement>('.amx-db-value-display')!.click() })
     const el = input()
     await act(async () => { el.focus() })
     await type(el, '前缀 后缀')
@@ -126,6 +131,7 @@ describe('text 单元格的 [[双链]]', () => {
 
   it('中文输入法的全角【【】】失焦时归一成双链', async () => {
     await mount('')
+    await act(async () => { host().querySelector<HTMLElement>('.amx-db-value-display')!.click() })
     const el = input()
     await act(async () => { el.focus() })
     await type(el, '见 【【我的笔记】】')

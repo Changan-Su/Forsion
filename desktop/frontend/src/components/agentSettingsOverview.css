@@ -1,0 +1,18 @@
+.settings-body .agso-overview { width: 100%; max-width: 840px; margin-inline: auto; }
+.agso-overview { display: flex; flex-direction: column; gap: 10px; }
+.agso-panel { margin: 0; }
+.agso-default { display: flex; align-items: center; gap: 14px; padding: 12px 15px; border-top: var(--border-width) solid var(--overlay-medium); }
+.agso-default > span { flex: 0 0 120px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.agso-default > button { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; padding: 6px 9px; border: var(--border-width) solid var(--overlay-medium); border-radius: var(--radius-sm); background: var(--overlay-subtle); color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.agso-default > button:hover { border-color: var(--accent-ink); }
+.agso-default > button strong { font-size: var(--ui-font-body); font-weight: 600; }
+.agso-default > button small { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.agso-default > p { margin: 0; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.agso-actions { padding: 0 15px 13px; }
+.agso-actions .btn { gap: 6px; }
+.agso-profile { padding: 13px 15px; border-top: var(--border-width) solid var(--overlay-medium); }
+.agso-profile textarea { width: 100%; padding: 10px; border: var(--border-width) solid var(--overlay-medium); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font-family: var(--font-mono); font-size: var(--ui-font-body); line-height: 1.55; resize: vertical; }
+.agso-profile textarea:focus { outline: 2px solid var(--accent-ink); outline-offset: 0; }
+.agso-profile > div { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 9px; }
+.agso-profile > div span { color: var(--text-muted); font-size: var(--ui-font-meta); }
+@media (max-width: 620px) { .agso-default { align-items: flex-start; flex-direction: column; } .agso-default > span { flex-basis: auto; } .agso-default > button { width: 100%; } }

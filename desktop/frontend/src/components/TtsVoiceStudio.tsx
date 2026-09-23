@@ -103,12 +103,12 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
 
       {/* 复刻:上传 10-20s 干净人声样本 → voice id,创建成功即自动采用 */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
-        <b style={{ fontSize: 12.5 }}>{t('settings.tts.studio.cloneTitle')}</b>
+        <b style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{t('settings.tts.studio.cloneTitle')}</b>
         <div className="hint">{t('settings.tts.studio.cloneHint')}</div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           {/* 选中即清 input.value:File 存 state,同一文件可重选(Chromium 同名重选不触发 onChange);文件名由下方 span 显示 */}
           <input type="file" accept="audio/*" onChange={(e) => { setCloneFile(e.target.files?.[0] || null); e.target.value = '' }} />
-          {cloneFile && <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{cloneFile.name}</span>}
+          {cloneFile && <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{cloneFile.name}</span>}
           <input type="text" style={{ width: 140 }} value={cloneName} placeholder={t('settings.tts.studio.namePlaceholder')}
             onChange={(e) => setCloneName(e.target.value)} />
           <button className="btn primary sm" disabled={!cloneFile || busy !== ''} onClick={doClone}>
@@ -119,7 +119,7 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
 
       {/* CosyVoice 复刻:百炼要求公网音频 URL(不收文件上传);成功即自动采用,合成走 cosyvoice-* WS */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
-        <b style={{ fontSize: 12.5 }}>{t('settings.tts.studio.cosyTitle')}</b>
+        <b style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{t('settings.tts.studio.cosyTitle')}</b>
         <div className="hint">{t('settings.tts.studio.cosyHint')}</div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <input type="url" style={{ flex: 1, minWidth: 200 }} value={cosyUrl} placeholder={t('settings.tts.studio.cosyUrlPlaceholder')}
@@ -134,7 +134,7 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
 
       {/* 设计:文字描述捏音色 → 试听 → 采用 */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 12 }}>
-        <b style={{ fontSize: 12.5 }}>{t('settings.tts.studio.designTitle')}</b>
+        <b style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{t('settings.tts.studio.designTitle')}</b>
         <textarea rows={2} value={designPrompt} placeholder={t('settings.tts.studio.designPromptPlaceholder')}
           onChange={(e) => setDesignPrompt(e.target.value)} />
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -152,14 +152,14 @@ export function TtsVoiceStudio({ cfg, provider, onApplied }: { cfg: TanguDesktop
             <button className="btn primary sm" onClick={() => { apply(preview.voice, preview.targetModel); setPreview(null) }}>
               <Check size={12} /> {t('settings.tts.studio.adopt')}
             </button>
-            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{preview.voice}</span>
+            <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{preview.voice}</span>
           </div>
         )}
       </div>
 
       {/* 已有音色列表(懒加载) */}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
-        <b style={{ fontSize: 12.5 }}>{t('settings.tts.studio.voices')}</b>
+        <b style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{t('settings.tts.studio.voices')}</b>
         <button className="icon-btn" title={t('settings.tts.studio.refresh')} onClick={refresh}>
           {busy === 'list' ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />}
         </button>

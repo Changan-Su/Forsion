@@ -76,7 +76,6 @@ const MediaSeek: React.FC<{ src: string; kind: 'video' | 'audio'; seek: { t: num
 const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; view: 'edit' | 'source'; onReload: () => void; focusLine?: { line: number; end?: number; nonce: number } | null }> = ({ path, text, mtimeMs, view, onReload, focusLine }) => {
   const { t } = useI18n()
   const mode = useTheme((s) => s.mode)
-  const flat = useTheme((s) => s.flat)
   const fm = useMemo(() => splitFrontmatter(text).fm, [text])
   const bodyRef = useRef(text.slice(fm.length))
   const mtimeRef = useRef(mtimeMs)
@@ -139,7 +138,7 @@ const MdFileEditor: React.FC<{ path: string; text: string; mtimeMs?: number; vie
         cm({ value: fm + bodyRef.current, fileName: path, wrap: false, focusLine })
       ) : (
         /* Amadeus 契约 token 域(bridge 取色)+ 整篇 Milkdown 宿主 */
-        <div className="am-app tangu-lovable wsmd-scope" data-mode={mode} data-flat={flat ? '1' : '0'}>
+        <div className="am-app tangu-lovable wsmd-scope" data-mode={mode}>
           <PlainMarkdownEditor initial={bodyRef.current} onChange={onChange} />
         </div>
       )}

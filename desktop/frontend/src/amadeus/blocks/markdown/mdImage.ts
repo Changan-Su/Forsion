@@ -15,6 +15,7 @@ import type { Node as ProseNode } from '@milkdown/kit/prose/model'
 import { fromAssetUrl, toAssetUrl } from '@amadeus-shared/assets'
 import { attachResizeHandle } from '../../lib/imageResize'
 import { attachSourceButton } from './sourceToggle'
+import { armImageDrag } from './imageDrag'
 
 /** `![|200](x)` / `![说明|200](x)` 的 alt → 说明文字 + 宽度;没有 `|数字` 尾巴 → 整串都是说明。 */
 export function parseAlt(alt: string): { label: string; width?: number } {
@@ -52,13 +53,18 @@ class MdImageView implements NodeView {
     // 把 mousedown 拦下,免得 PM 随后又按坐标把选区改回去。
     this.dom.addEventListener('mousedown', (e) => {
       if (e.button !== 0 || (e.target as HTMLElement).closest('.amx-img-resize, .amx-src-btn, .amx-img-srcline')) return
-      e.preventDefault()
       // 双击**不**在这里拦:用户 2026-08-28 拍板「双击 = 看大图」,交给 UnifiedPage 的灯箱。
       // 源码入口只有一个 —— 悬停的 `</>`(见 openSource)。
-      const pos = this.getPos()
-      if (pos == null) return
-      this.view.dispatch(this.view.state.tr.setSelection(NodeSelection.create(this.view.state.doc, pos)))
-      this.view.focus()
+      const select = (): void => {
+        const pos = this.getPos()
+        if (pos == null) return
+        this.view.dispatch(this.view.state.tr.setSelection(NodeSelection.create(this.view.state.doc, pos)))
+        this.view.focus()
+      }
+      // 独占一段时可以按住直接拖走整块:那次按下不能 preventDefault,选中也挪到 click(见 imageDrag.ts)。
+      if (armImageDrag(this.view, this.dom, e, select)) return
+      e.preventDefault()
+      select()
     })
     attachSourceButton(this.dom, view, () => this.openSource()) // 悬停浮现的 `</>`,与其它图片一致
     this.apply(node)

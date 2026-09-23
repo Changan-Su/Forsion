@@ -186,7 +186,8 @@ async function startStubEngine(data = {}) {
       return json({ agent_config: { execMode: 'host', approvalMode: 'auto-edit' } });
     }
     if (/^\/agent\/sessions\/[^/]+\/background$/.test(p)) return json({ background: [] });
-    if (p === '/agent/models') return json({ models: state.models, defaultModelId: state.models[0]?.id, directProviders: data.directProviders || [] });
+    // modelsMeta:/agent/models 的其它顶层字段(contextWindowCap / modelOverridesWritable …),用例按需给
+    if (p === '/agent/models') return json({ models: state.models, defaultModelId: state.models[0]?.id, directProviders: data.directProviders || [], ...(data.modelsMeta || {}) });
     if (p === '/agent/agents') return json({ agents: data.agents || [] });
     if (p === '/agent/agents-meta') return json({ defaultSlug: 'xyra', order: [] });
     if (p === '/agent/engines') return json({ engines: data.engines || [] });
@@ -205,7 +206,7 @@ async function startStubEngine(data = {}) {
     // 其余给「空但结构正确」的应答:桌面启动会摸不少端点,少一个就卡在加载态。
     return json({
       ok: true, items: [], list: [], data: [], skills: [], agents: [], tools: [], commands: [],
-      engines: [], providers: [], background: [], messages: [], sessions: [], checkpoints: [], hits: [],
+      engines: [], providers: [], background: [], messages: [], sessions: [], checkpoints: [], hits: [], runs: [], // runs:GET /agent/runs?session_id= 的在飞列表(缺了桌面报「历史加载失败」)
     });
   });
 

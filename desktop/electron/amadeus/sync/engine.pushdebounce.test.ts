@@ -13,6 +13,10 @@
  *  7. 拉取落地:current() 必须是 rename 前的最后一道闸 —— 引擎给临时文件取 stat 的工夫来了结构性移动,不许再覆盖目标
  *     (Codex 二轮钉出:我把取 stat 的 await 插在了 current() 与 rename 之间);
  *  8. 自愈:内容与基线一致、只是 stat 对不上(被 touch / 基线记的是不可信 stat)→ 对账顺手刷新,不再每轮重算 hash。
+ *  9. 基线回声:别的设备把我们的基线**原样**重写(seq 动了、字节没动)而本机正在改 → 不出冲突副本、不盖本地,
+ *     只把基线 seq 跟上、按新 seq 推本地(09-22 实报:另一台桌面端两次回写同一篇笔记,打字这台多出两份副本);
+ * 10. 回声后的基线 stat 必须记成不可信:那次推送若没成(网络错)随后 stop,重启的全量对账不许信 stat 走快路径,
+ *     得重算 hash 把本地这版补推上去(记成本地新字节的 stat 配基线 hash = 本地这版永不上云)。
  * 负对照(09-20/21 本地逐条实跑,改完用 cp 备份复原)见 docs/Log 同日条目。
  * 时序口径:真定时器(同目录其余台架同款)。QUIET 远大于相邻两步之间可能的卡顿,断言只依赖「定时器按到期先后触发」。
  */
@@ -30,6 +34,8 @@ const env = vi.hoisted(() => ({
   puts: [] as Array<{ path: string; content: string }>,
   putsStarted: 0,
   putGate: null as null | Promise<void>, // 非空:putFile 卡在这里(模拟在途请求)
+  putSeqs: [] as number[], // 每次 PUT 带的 baseSeq(CAS 语义:mock 与真服务端一样按它 409)
+  putError: null as null | Error, // 非空:putFile 抛它(模拟网络错,直到清空)
   deleted: [] as string[],
   watch: {} as Record<string, (p: string) => void>,
   remoteContent: {} as Record<string, string>,
@@ -81,13 +87,21 @@ vi.mock('./cloudClient', async () => {
         return { content: env.remoteContent[p] ?? '', seq: e.seq, hash: e.hash }
       },
       deleteFile: async (_v: string, p: string) => { env.deleted.push(p); env.remote = env.remote.filter((e) => e.path !== p) },
-      putFile: async (_v: string, p: string, content: string) => {
+      putFile: async (_v: string, p: string, content: string, baseSeq: number) => {
         env.putsStarted++
         if (env.putGate) await env.putGate
+        if (env.putError) throw env.putError
+        // CAS 与真服务端同款(Codex 09-22 评审:mock 丢掉 baseSeq 的话,错用旧 seq 推也能绿)
+        const cur = env.remote.find((e) => e.path === p)
+        if (cur && baseSeq === 0) throw new CloudHttpError(409, { code: 'EXISTS', seq: cur.seq, content: env.remoteContent[p] ?? null })
+        if (cur && baseSeq !== cur.seq) throw new CloudHttpError(409, { code: 'CONFLICT', seq: cur.seq, content: env.remoteContent[p] ?? null })
+        if (!cur && baseSeq !== 0) throw new CloudHttpError(409, { code: 'CONFLICT', seq: 0, content: null })
         env.puts.push({ path: p, content })
-        const seq = (env.remote.find((e) => e.path === p)?.seq ?? 0) + 1
+        env.putSeqs.push(baseSeq)
+        const seq = (cur?.seq ?? 0) + 1
         const hash = createHash('sha256').update(content).digest('hex')
         env.remote = [...env.remote.filter((e) => e.path !== p), { path: p, kind: 'page', seq, hash, size: Buffer.byteLength(content) }]
+        env.remoteContent[p] = content
         return { seq, hash }
       },
     }),
@@ -104,6 +118,8 @@ beforeEach(async () => {
   env.puts = []
   env.putsStarted = 0
   env.putGate = null
+  env.putSeqs = []
+  env.putError = null
   env.deleted = []
   env.watch = {}
   env.remoteContent = {}
@@ -267,4 +283,38 @@ it('自愈:内容没变只是 mtime 变了(touch)→ 对账顺手刷新基线的
   const shadow = JSON.parse(await fs.readFile(path.join(env.root, 'push-shadow.json'), 'utf8'))
   expect(shadow.files['A.md'].mtimeMs).toBe(Math.floor((await fs.stat(file)).mtimeMs))
   expect(env.puts).toHaveLength(1)
+})
+
+it('基线回声:远端 seq 动了但字节仍是基线、本地正在改 → 不另存冲突副本、不盖本地,按新 seq 推本地', async () => {
+  const { engine, mirror } = await boot()
+  const file = path.join(mirror, 'A.md')
+  await pushed(engine, file, 'A.md', 'v1')
+  await fs.writeFile(file, 'v1 + 本机新打的字') // 本地改了、还没推(没进防抖)
+  // 另一台设备把 v1 原样又写了一遍:seq 2,hash 与我们的基线相同
+  env.remoteContent['A.md'] = 'v1'
+  env.remote = [{ path: 'A.md', kind: 'page', seq: 2, hash: createHash('sha256').update('v1').digest('hex'), size: 2 }]
+  env.sse!.onChange({ seq: 50, type: 'page', op: 'write', path: 'A.md', newPath: null, fileSeq: 2, origin: { client: 'other-device', actor: 'user' } })
+  await vi.waitFor(() => expect(env.puts.at(-1)).toEqual({ path: 'A.md', content: 'v1 + 本机新打的字' }), { timeout: 3000 })
+  expect(await fs.readFile(file, 'utf8')).toBe('v1 + 本机新打的字') // 没被 v1 盖掉
+  expect((await fs.readdir(mirror)).filter((n) => n.includes('(conflict'))).toEqual([]) // 老逻辑:另存副本再用 v1 覆盖
+  expect(env.puts).toHaveLength(2)
+  expect(env.putSeqs).toEqual([0, 2]) // 第二次 PUT 带的是回声后的新 seq,不是旧基线 1(mock 按 CAS 409,带 1 推不上去)
+})
+
+it('回声后基线的 stat 不可信:推送网络失败 + stop,重启的全量对账重算 hash 把本地这版补推', async () => {
+  const { engine, mirror } = await boot()
+  const file = path.join(mirror, 'A.md')
+  await pushed(engine, file, 'A.md', 'v1')
+  await fs.writeFile(file, 'v1 + 本机新打的字')
+  env.remoteContent['A.md'] = 'v1'
+  env.remote = [{ path: 'A.md', kind: 'page', seq: 2, hash: createHash('sha256').update('v1').digest('hex'), size: 2 }]
+  env.putError = new Error('fetch failed') // 回声触发的那次推送撞网络错
+  env.sse!.onChange({ seq: 50, type: 'page', op: 'write', path: 'A.md', newPath: null, fileSeq: 2, origin: { client: 'other-device', actor: 'user' } })
+  await vi.waitFor(() => expect(env.putsStarted).toBe(2), { timeout: 3000 }) // 确实试推过一次(被网络错打回)
+  await engine.stop()
+  expect(env.puts).toHaveLength(1)
+  env.putError = null
+  await engine.restart()
+  await vi.waitFor(() => expect(env.puts.at(-1)).toEqual({ path: 'A.md', content: 'v1 + 本机新打的字' }), { timeout: 3000 })
+  expect(env.putSeqs.at(-1)).toBe(2)
 })

@@ -1,0 +1,57 @@
+/* One selection surface per cell. Theme selection tokens stay quiet in monochrome skins. */
+.amx-db .amx-db-cell[data-db-cell] {
+  position: relative;
+  outline: none;
+  border-radius: 0;
+  transition: background-color var(--duration-instant, 0.1s) ease;
+}
+.amx-db .amx-db-cell[data-db-cell]:is(:focus, :focus-within) {
+  z-index: 1;
+  outline: none;
+  border-radius: 0;
+  background: var(--sel-fill, var(--overlay-light));
+  box-shadow: inset 0 0 0 var(--focus-ring, 1px) var(--sel-line, var(--border));
+}
+/* The cell owns focus feedback; old input rules must not draw a second box inside it. */
+.amx-db .amx-db-cell[data-db-cell] :focus-visible,
+.amx-db .amx-db-cell[data-db-cell] .amx-db-input:focus {
+  outline: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.amx-db-value { width: 100%; min-width: 0; flex: 1; }
+.amx-db-value-display { display: flex; align-items: center; gap: 6px; min-height: var(--db-cell-height); padding: var(--db-cell-pad-block) var(--db-cell-pad-inline); cursor: text; font-size: var(--db-text-size); line-height: var(--db-line-height); }
+.amx-db-value-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.amx-db-cell[data-coltype='number'] .amx-db-value-text { text-align: right; }
+.amx-db-value-link { display: flex; flex: none; color: var(--text-muted); }
+.amx-db .amx-db-cell .amx-db-rowopen {
+  position: absolute;
+  right: 5px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-card, var(--bg));
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--duration-instant, 0.1s), background-color var(--duration-instant, 0.1s);
+}
+.amx-db .amx-db-cell:hover .amx-db-rowopen,
+.amx-db .amx-db-cell:focus-within .amx-db-rowopen { opacity: 1; }
+.amx-db .amx-db-cell:has(.amx-db-value[data-editing]) .amx-db-rowopen { display: none; }
+.amx-db .amx-db-rowopen:hover { color: var(--text); background: var(--menu-hover); }
+.amx-db-opt[data-active] { background: var(--menu-hover); }
+.amx-db-option-search { margin-bottom: 4px; }
+.amx-db-rowed-cell[data-db-cell]:focus-visible { outline: var(--focus-ring, 1px) solid var(--sel-line, var(--border)); outline-offset: -1px; }
+@media (hover: none) { .amx-db .amx-db-cell .amx-db-rowopen { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .amx-db .amx-db-cell[data-db-cell], .amx-db .amx-db-cell .amx-db-rowopen { transition: none; }
+}

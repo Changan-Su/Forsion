@@ -231,7 +231,9 @@ describe('内存源 / 只读 / 开行接缝', () => {
     expect(h.querySelectorAll('.amx-db-name')).toHaveLength(0)
     expect(h.querySelectorAll('[aria-label="open as page"]')).toHaveLength(0)
     expect(h.querySelectorAll('.amx-db-viewtab')).toHaveLength(0) // 只有一个视图,tab 条不占行
-    expect(h.querySelectorAll('.amx-db-filterbtn')).toHaveLength(4) // 分组 + 行折叠 + 筛选 + 默认开启的自适应列宽
+    expect(h.querySelectorAll('.amx-db-filterbtn')).toHaveLength(2) // 筛选 + 排序；布局收进设置
+    expect(h.querySelector('.amx-db-autosize, .amx-db-groupbtn, .amx-db-foldbtn')).toBeNull()
+    await click(h.querySelector('[aria-label="view settings"]')!)
     expect(h.querySelector('.amx-db-autosize')?.getAttribute('aria-pressed')).toBe('true')
     expect(h.querySelectorAll('.amx-db-search')).toHaveLength(1)
     expect(h.querySelectorAll('[aria-label="view settings"]')).toHaveLength(1)
@@ -336,6 +338,7 @@ describe('自适应列宽', () => {
     const cellMeta: DbCellMeta = { u1: { user: { sub: '副内容'.repeat(500) } } }
     await mount({ db, readOnly: true, cellMeta })
 
+    await click(host().querySelector('[aria-label="view settings"]')!)
     const button = host().querySelector<HTMLButtonElement>('.amx-db-autosize')!
     const header = host().querySelector<HTMLElement>('.amx-db-hrow')!
     expect(button.getAttribute('aria-pressed')).toBe('true')

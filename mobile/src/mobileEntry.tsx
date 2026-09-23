@@ -34,7 +34,6 @@ try { initSeed = localStorage.getItem('forsion_theme_seed') || undefined } catch
 try { persistedLang = localStorage.getItem('forsion_theme_lang') } catch { /* ignore */ }
 try {
   applyTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), resolveInitialMode(), { customColor: initSeed })
-  try { document.documentElement.dataset.flat = localStorage.getItem('forsion_theme_flat') !== '0' ? '1' : '0' } catch { /* ignore */ }
   preloadAllThemes()
   document.documentElement.style.removeProperty('background')
   void useTheme.getState().initThemes(persistedLang)

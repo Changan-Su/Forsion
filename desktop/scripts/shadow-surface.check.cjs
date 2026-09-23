@@ -1,11 +1,5 @@
-/**
- * Genesis raised / flat 运行态契约。
- *
- * 用生产 CSS 复刻一组代表性真实 DOM，逐项读取 computed box-shadow：空间高程在
- * data-flat=0 时存在、data-flat=1 时必须为 none；拖拽/编辑/特效反馈则必须保留。
- *
- * 跑：npm run check:shadowflat
- * 截图：npm run check:shadowflat -- --shot
+/** Shared subtle elevation: production themes, raised/flat preferences and menu motion.
+ * Run: npm run check:shadowsurface -- --shot
  */
 const fs = require('fs')
 const os = require('os')
@@ -14,6 +8,10 @@ const { chromium } = require('playwright-core')
 
 const DESKTOP = path.resolve(__dirname, '..')
 const SHOT_DIR = process.env.SHADOW_SHOT_DIR || path.join(os.tmpdir(), 'forsion-shadow-audit')
+require('sucrase/register/ts')
+const { SEED_THEMES } = require(path.join(DESKTOP, 'electron/seedThemes.ts'))
+const softCss = SEED_THEMES.find((theme) => theme.id === 'soft')?.css
+if (!softCss) throw new Error('缺少第一方 soft 磁盘种子主题')
 
 function findChromium() {
   if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
@@ -40,7 +38,12 @@ const cssFiles = [
   'frontend/src/styles/base.css',
   'frontend/src/amadeus/styles.css',
   'frontend/src/amadeus-host.css',
+  'frontend/src/amadeus/blocks/database/menuSurface.css',
+  'frontend/src/amadeus/chrome/pageChrome.css',
+  'frontend/src/theme/themes/lovable/theme.css',
+  'frontend/src/theme/themes/genesis-glass/theme.css',
   'frontend/src/quickFind.css',
+  'frontend/src/findInPage.css',
   'frontend/src/hoverTip.css',
   'frontend/src/styles/unitSwitcher.css',
   'frontend/src/amadeus/pdf/pdfAnnotator.css',
@@ -48,12 +51,15 @@ const cssFiles = [
   'frontend/src/views/dashCanvas.css',
   '../lcl/engine/singleColumn.css',
 ]
-const CSS = cssFiles.map((file) => fs.readFileSync(path.join(DESKTOP, file), 'utf8').replace(/@import\s+[^;]+;/g, '')).join('\n')
+const CSS = cssFiles.map((file) => fs.readFileSync(path.join(DESKTOP, file), 'utf8').replace(/@import\s+[^;]+;/g, '')).concat(softCss).join('\n')
 
 const surfaces = [
-  ['project-menu', '项目菜单', 'project-menu'],
+  ['project-menu', '项目菜单', 'composer-menu project-menu'],
   ['memory-modal', '记忆弹窗', 'memv-modal-box'],
   ['context-menu', '右键菜单', 'ctx-menu'],
+  ['db-menu', '数据库菜单', 'amx-db-pop'],
+  ['cover-menu', '封面菜单', 'ui-popover amx-coverpick'],
+  ['slash-menu', '斜杠菜单', 'slash-menu'],
   ['quick-find', '快速查找', 'amx-qf'],
   ['find-bar', '编辑器查找', 'amx-findbar'],
   ['link-card', '链接预览', 'amx-linkcard'],
@@ -99,7 +105,7 @@ body { margin: 0; background: var(--bg); color: var(--text); overflow: auto; }
 @media (max-width: 850px) { .audit-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 </style></head><body>
 <main class="audit-shell am-app tangu-lovable pdfa-container" data-mode="light">
-  <header class="audit-head"><div><h1>Genesis 阴影契约</h1><p>同一批生产组件 · Raised / Flat 计算样式对照</p></div><strong class="audit-badge">RAISED</strong></header>
+  <header class="audit-head"><div><h1>Genesis 阴影契约</h1><p>立体 / 扁平 · 深浅色材质</p></div><strong class="audit-badge">LIGHT</strong></header>
   <div class="audit-grid">${surfaceHtml}</div>
   <div class="audit-exceptions" aria-label="保留的交互反馈">
     <div id="editing-feedback" class="amx-el-selbox is-editing"></div>
@@ -125,35 +131,66 @@ async function readShadows(page, ids) {
   await page.setContent(PAGE, { waitUntil: 'load' })
 
   const ids = surfaces.map(([id]) => id)
-  const raised = await readShadows(page, ids)
-  for (const [id, label] of surfaces) check(`Raised：${label} 有高程`, raised[id] !== 'none', raised[id])
-
-  if (process.argv.includes('--shot')) {
-    fs.mkdirSync(SHOT_DIR, { recursive: true })
-    await page.screenshot({ path: path.join(SHOT_DIR, 'raised.png'), fullPage: true })
+  for (const theme of ['lovable', 'soft', 'genesis-glass']) {
+    for (const mode of ['light', 'dark']) {
+      await page.evaluate(({ theme, mode }) => {
+        const root = document.documentElement
+        root.dataset.theme = theme
+        root.dataset.flat = '0'
+        root.dataset.mode = mode
+        root.classList.toggle('dark', mode === 'dark')
+        document.querySelector('.audit-shell').dataset.mode = mode
+        document.querySelector('.audit-badge').textContent = `${theme} / ${mode}`
+      }, { theme, mode })
+      const baseline = await readShadows(page, ids)
+      for (const [id, label] of surfaces) check(`${theme}/${mode}：${label} 有淡阴影`, baseline[id] !== 'none', baseline[id])
+      await page.evaluate(() => { document.documentElement.dataset.flat = '1' })
+      const flat = await readShadows(page, ids)
+      check(`${theme}/${mode}：扁平清除全部装饰阴影`, ids.every(id => flat[id] === 'none'), JSON.stringify(flat))
+      if (process.argv.includes('--shot')) {
+        fs.mkdirSync(SHOT_DIR, { recursive: true })
+        await page.screenshot({ path: path.join(SHOT_DIR, `${theme}-${mode}-flat.png`), fullPage: true })
+      }
+    }
   }
+  const exceptions = await readShadows(page, ['editing-feedback', 'max-feedback'])
+  for (const [id, value] of Object.entries(exceptions)) check(`保留交互反馈 ${id}`, value !== 'none', value)
 
-  await page.evaluate(() => {
-    document.documentElement.dataset.flat = '1'
-    document.querySelector('.audit-badge').textContent = 'FLAT'
+  const dragOpacity = await page.locator('#drag-feedback').evaluate(el => getComputedStyle(el).opacity)
+  check('扁平保留拖动透明度反馈', Number(dragOpacity) < 1 && Number(dragOpacity) > 0)
+
+  // Re-open actual menu classes, then sample the browser's animation timeline deterministically.
+  // No test-only animation or layout values: these come from the production CSS.
+  for (const cls of ['ctx-menu', 'amx-db-pop', 'ui-popover', 'slash-menu', 'composer-menu', 'cm-sub']) {
+    const frames = await page.evaluate(async (cls) => {
+      const el = document.createElement('div')
+      el.className = cls
+      el.textContent = '菜单 Menu'
+      document.body.append(el)
+      const animation = el.getAnimations()[0]
+      if (!animation) { el.remove(); return null }
+      animation.pause()
+      const duration = Number(animation.effect.getTiming().duration)
+      const samples = [0, duration / 2, duration].map(time => {
+        animation.currentTime = time
+        const style = getComputedStyle(el)
+        return { opacity: Number(style.opacity), scale: style.scale === 'none' ? 1 : Number(style.scale), transform: style.transform }
+      })
+      el.remove()
+      return { duration, samples }
+    }, cls)
+    check(`${cls}：淡入递增、轻微展开、结束无位移残留`, !!frames && frames.duration <= 220 &&
+      frames.samples[0].opacity === 0 && frames.samples[1].opacity > 0 && frames.samples[1].opacity < 1 &&
+      frames.samples[2].opacity === 1 && frames.samples[2].scale === 1 && frames.samples[0].scale >= 0.98 &&
+      frames.samples.every(f => f.transform === 'none'), JSON.stringify(frames))
+  }
+  await page.emulateMedia({ reducedMotion: 'reduce' })
+  const reduced = await page.evaluate(() => {
+    const el = document.createElement('div'); el.className = 'ctx-menu'; document.body.append(el)
+    const result = { count: el.getAnimations().length, opacity: getComputedStyle(el).opacity }
+    el.remove(); return result
   })
-  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))))
-
-  const flat = await readShadows(page, ids)
-  for (const [id, label] of surfaces) check(`Flat：${label} 清除高程`, flat[id] === 'none', flat[id])
-
-  const tokenState = await page.evaluate(() => {
-    const style = getComputedStyle(document.documentElement)
-    return ['--card-shadow', '--btn-shadow', '--icon-shadow', '--shadow-panel'].map((token) => [token, style.getPropertyValue(token).trim()])
-  })
-  for (const [token, value] of tokenState) check(`Flat 契约清空 ${token}`, value === 'none', value)
-
-  const exceptions = await readShadows(page, ['editing-feedback', 'drag-feedback', 'max-feedback'])
-  check('Flat 保留画布编辑反馈', exceptions['editing-feedback'] !== 'none', exceptions['editing-feedback'])
-  check('Flat 保留拖拽反馈', exceptions['drag-feedback'] !== 'none', exceptions['drag-feedback'])
-  check('Flat 保留 Max 语义辉光', exceptions['max-feedback'] !== 'none', exceptions['max-feedback'])
-
-  if (process.argv.includes('--shot')) await page.screenshot({ path: path.join(SHOT_DIR, 'flat.png'), fullPage: true })
+  check('减少动态效果：菜单立即清晰呈现', reduced.count === 0 && reduced.opacity === '1', JSON.stringify(reduced))
   await browser.close()
 
   const failed = results.filter((result) => !result.ok)
@@ -161,7 +198,7 @@ async function readShadows(page, ids) {
     console.error(`\n${failed.length} 项阴影运行态契约失败`)
     process.exitCode = 1
   } else {
-    console.log(`\nPASS  shadow flat runtime | ${surfaces.length} 个空间组件 + 3 个语义反馈${process.argv.includes('--shot') ? ` | ${SHOT_DIR}` : ''}`)
+    console.log(`\nPASS  shadow surface runtime | ${surfaces.length} 个空间组件 + 3 个语义反馈${process.argv.includes('--shot') ? ` | ${SHOT_DIR}` : ''}`)
   }
 })().catch((error) => {
   console.error(error)

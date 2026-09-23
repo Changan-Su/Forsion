@@ -5,6 +5,7 @@ import {
   INPUT_WARN_RATIO,
   compactionThreshold,
   CompactionAttemptGuard,
+  effectiveContextWindowInfo,
   modelContextWindow,
   modelContextWindowInfo,
   estimateTokensRough,
@@ -52,6 +53,23 @@ describe('modelContextWindowInfo 来源标注', () => {
     expect(modelContextWindowInfo('codex/gpt-5.6-sol')).toEqual({ tokens: 1_050_000, source: 'override' })
     expect(modelContextWindowInfo('dirty')).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'default' })
     expect(modelContextWindowInfo('untouched', { contextWindow: 200_000 })).toEqual({ tokens: 200_000, source: 'model' })
+  })
+})
+
+describe('effectiveContextWindowInfo — 自动识别的窗口封顶 272k,人填的覆盖才开更大(09-22,对标 Codex)', () => {
+  it('族表 / admin 自报的大窗口封顶到缺省上限,max 留住模型本身的窗口;小于上限的原样', () => {
+    expect(effectiveContextWindowInfo('claude-opus-5')).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'family', max: 1_000_000 })
+    expect(effectiveContextWindowInfo('pr-glm', { context_window: 1_000_000 })).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'model', max: 1_000_000 })
+    expect(effectiveContextWindowInfo('claude-haiku-4-5')).toEqual({ tokens: 200_000, source: 'family', max: 200_000 })
+    expect(effectiveContextWindowInfo('whatever')).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'default', max: CONTEXT_WINDOW_TOKENS })
+  })
+  it('用户本机覆盖不封顶(模型菜单「开启更高上下文」写的就是它),往小改也照听;max 仍是自动识别值', () => {
+    resetModelOverridesForTest({ 'claude-opus-5': { contextWindow: 1_000_000 }, 'kimi-k3': { contextWindow: 128_000 } })
+    expect(effectiveContextWindowInfo('claude-opus-5')).toEqual({ tokens: 1_000_000, source: 'override', max: 1_000_000 })
+    expect(effectiveContextWindowInfo('kimi-k3')).toEqual({ tokens: 128_000, source: 'override', max: 1_000_000 })
+  })
+  it('摘要目标用的 modelContextWindow 不封顶:它问的是摘要模型吃得下多少', () => {
+    expect(modelContextWindow('claude-opus-5')).toBe(1_000_000)
   })
 })
 
@@ -107,12 +125,15 @@ describe('modelContextWindow', () => {
     expect(modelContextWindow('codex/gpt-6-astra')).toBe(272_000);
     expect(modelContextWindow('openai/gpt-6-astra')).toBe(272_000);
     expect(modelContextWindow('gpt-6-astra', { context_window: 922_000 })).toBe(922_000);
+    expect(modelContextWindowInfo('codex/gpt-6-sol')).toEqual({ tokens: 272_000, source: 'family' });
+    expect(modelContextWindowInfo('gpt-6-luna')).toEqual({ tokens: 272_000, source: 'family' });
     expect(modelContextWindow('codex-mini-latest')).toBe(200_000); // o4-mini 底,272k 会溢出
     expect(modelContextWindow('claude-sonnet-4-5')).toBe(200_000);
     // Claude 5 家族 / Opus 4.7 起是 1M;4.6 及更早、Haiku 4.5 仍 200k(族表首命中,顺序即契约)
     expect(modelContextWindow('claude-sonnet-5')).toBe(1_000_000);
     expect(modelContextWindow('claude-fable-5')).toBe(1_000_000);
     expect(modelContextWindow('claude-opus-4-7')).toBe(1_000_000);
+    expect(modelContextWindowInfo('claude-opus-5-5')).toEqual({ tokens: 1_000_000, source: 'family' }); // 官方 1M,无需 beta 头
     expect(modelContextWindow('claude-opus-4-6')).toBe(200_000);
     expect(modelContextWindow('claude-haiku-4-5-20251001')).toBe(200_000);
     expect(modelContextWindow('kimi-k3')).toBe(1_000_000);

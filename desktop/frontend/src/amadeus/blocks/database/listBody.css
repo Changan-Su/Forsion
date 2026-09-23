@@ -1,0 +1,14 @@
+.amx-db-list { padding: 4px 0 8px; }
+.amx-db-list-row { display: flex; align-items: center; gap: 9px; width: 100%; min-height: var(--db-cell-height); padding: 6px 8px; border: 1px solid transparent; border-radius: var(--radius-xs, var(--radius-sm)); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.amx-db-list-row:hover, .amx-db-list-new:hover { background: var(--overlay-light); }
+/* Scoped above the vendored .am-app :focus-visible rule: one restrained ring. */
+.amx-db-list .amx-db-list-row:focus-visible,
+.amx-db-list .amx-db-list-new:focus-visible { outline: none; background: var(--sel-fill); box-shadow: inset 0 0 0 var(--focus-ring) var(--sel-line); }
+.amx-db-list-icon { flex: none; color: var(--text-faint, var(--text-muted)); }
+.amx-db-list-title { min-width: 80px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--db-text-size); font-weight: 400; line-height: var(--db-line-height); }
+.amx-db-list-properties { display: flex; align-items: center; gap: 14px; min-width: 0; max-width: 60%; overflow: hidden; color: var(--text-muted); font-size: var(--db-meta-size); line-height: var(--db-meta-line-height); }
+.amx-db-list-property { display: inline-flex; align-items: center; gap: 4px; max-width: 160px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.amx-db-list-property:empty { display: none; }
+.amx-db-list-new { display: flex; align-items: center; gap: 9px; width: 100%; min-height: 34px; border: 1px solid transparent; border-radius: var(--radius-xs, var(--radius-sm)); background: transparent; color: var(--text-muted); font: inherit; font-size: var(--db-meta-size); padding: 6px 8px; cursor: pointer; }
+.amx-db-list-empty { color: var(--text-muted); padding: 24px 9px; font-size: var(--db-text-size); }
+@media (max-width: 600px) { .amx-db-list-properties { max-width: 45%; gap: 8px; } }

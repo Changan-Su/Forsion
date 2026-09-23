@@ -20,6 +20,9 @@ import { setPluginEnabled, type PluginInfo } from '../services/backendService'
 import { loadUserSpaces } from '../userSpaces'
 import { BuiltinPluginsSection } from '../builtins'
 import { useApp } from '../stores/appStore'
+import { panelToast } from './PanelNotice'
+import { ipcErrorText } from '../ipcError'
+import { windowKind } from '../windowKind'
 import type { TanguDesktopConfig } from '../types'
 import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } from '@amadeus/plugins/types'
 import { PluginLogo } from './PluginLogo'
@@ -64,7 +67,7 @@ function cascadeAfterToggle(
         failed += 1
       }
     }
-    if (failed) useApp.getState().toast(useApp.getState().tr('settings.amadeusPlugins.cascadeFail', { n: String(failed) }), true)
+    if (failed) panelToast(useApp.getState().tr('settings.amadeusPlugins.cascadeFail', { n: String(failed) }), true)
     onEngineReload?.()
   }
   const prev = cascadeChain.get(p.id) ?? Promise.resolve()
@@ -120,8 +123,8 @@ export const SettingRow: React.FC<{ pluginId: string; def: SettingContribution }
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12.5 }}>{def.label}</div>
-        {def.description && <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>{def.description}</div>}
+        <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{def.label}</div>
+        {def.description && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{def.description}</div>}
       </div>
       {def.type === 'boolean' ? (
         <input type="checkbox" checked={val === 'true'} onChange={(e) => write(e.target.checked ? 'true' : 'false')} />
@@ -243,11 +246,11 @@ const CompanionApp: React.FC<{ appId: string }> = ({ appId }) => {
     <div className="plugin-card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ width: 8, height: 8, borderRadius: 4, background: dot, flexShrink: 0 }} />
-        <b style={{ fontSize: 12.5 }}>{app.name}</b>
-        <span style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{statusText}</span>
+        <b style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{app.name}</b>
+        <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{statusText}</span>
       </div>
       {state === 'installing' && info && (
-        <div style={{ fontSize: 11, fontFamily: 'var(--font-mono, monospace)', color: 'var(--text-faint)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{info}</div>
+        <div style={{ fontSize: 'var(--ui-font-caption, 11px)', fontFamily: 'var(--font-mono, monospace)', color: 'var(--text-faint)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{info}</div>
       )}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         <button className="btn ghost sm" disabled={state === 'probing' || state === 'installing'} onClick={() => void probe()}>
@@ -275,15 +278,15 @@ const PluginGuide: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
   if (!spec?.intro && !spec?.steps?.length) return null
   return (
     <details className="plugin-guide" style={{ borderTop: 'var(--border-width) solid var(--overlay-medium, rgba(127,127,127,.12))', paddingTop: 12 }}>
-      <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 12.5, userSelect: 'none' }}>{t('plugin.onboarding.guideTitle')}</summary>
+      <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 'var(--ui-font-meta, 12px)', userSelect: 'none' }}>{t('plugin.onboarding.guideTitle')}</summary>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, paddingTop: 8 }}>
-        {spec.intro && <div style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>{spec.intro}</div>}
+        {spec.intro && <div style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-faint)' }}>{spec.intro}</div>}
         {!!spec.steps?.length && (
           <ol style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
             {spec.steps.map((st, i) => (
-              <li key={i} style={{ fontSize: 12.5 }}>
+              <li key={i} style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>
                 {st.title}
-                {st.description && <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>{st.description}</div>}
+                {st.description && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{st.description}</div>}
               </li>
             ))}
           </ol>
@@ -314,6 +317,9 @@ const PluginDetail: React.FC<{
   const toggleHere = (): void => {
     const wasOff = !on
     toggle(p.id)
+    // setup 抛错时宿主只发 Amadeus 吐司(只有主窗渲染)→ 在设置浮窗里拨开关就像没反应,这里就地报。
+    const st = usePluginStore.getState()
+    if (wasOff && !st.isActive(p.id) && st.lastSetupError[p.id]) panelToast(t('pluginhost.setupFailed', { name: pluginDisplayName(p, locale) }), true)
     if (wasOff) void promptIfPending(p.id) // 手动启用 = 注意力在场:实测(连 check),确有未满足才弹检查卡
     void cascadeAfterToggle(p, cfg, onEngineReload, enginePlugins)
   }
@@ -325,7 +331,7 @@ const PluginDetail: React.FC<{
     try {
       await amadeus.uninstallPlugin?.(p.id)
     } catch (e: any) {
-      useApp.getState().toast(e?.message || String(e), true)
+      panelToast(ipcErrorText(e), true)
       return
     }
     onBack()
@@ -337,11 +343,11 @@ const PluginDetail: React.FC<{
       const st = await window.tangu?.backendRestart?.().catch(() => null)
       onEngineReload?.()
       if (!st || st.state === 'crashed') {
-        useApp.getState().toast(t('settings.amadeusPlugins.uninstalledRestartPending', { name: pluginDisplayName(p, locale) }), true)
+        panelToast(t('settings.amadeusPlugins.uninstalledRestartPending', { name: pluginDisplayName(p, locale) }), true)
         return
       }
     }
-    useApp.getState().toast(t('settings.amadeusPlugins.uninstalled', { name: pluginDisplayName(p, locale) }))
+    panelToast(t('settings.amadeusPlugins.uninstalled', { name: pluginDisplayName(p, locale) }))
   }
 
   return (
@@ -355,8 +361,8 @@ const PluginDetail: React.FC<{
         <PluginLogo url={p.iconUrl} size={52} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-            <b style={{ fontSize: 15 }}>{pluginDisplayName(p, locale)}</b>
-            <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>v{p.version}</span>
+            <b style={{ fontSize: 'var(--ui-font-heading, 14px)' }}>{pluginDisplayName(p, locale)}</b>
+            <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>v{p.version}</span>
             <span style={badge}>{p.builtin || p.preinstalled ? t('settings.amadeusPlugins.builtin') : p.agent ? t('settings.amadeusPlugins.agentOwned', { agent: p.agent }) : t('settings.amadeusPlugins.external')}</span>
             {p.blocked && (
               <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{blockedLabel(t, p)}</span>
@@ -366,7 +372,7 @@ const PluginDetail: React.FC<{
             )}
             <BundleChips p={p} />
           </div>
-          {pluginDisplayDescription(p, locale) && <div style={{ fontSize: 12, color: 'var(--text-faint)', marginTop: 3 }}>{pluginDisplayDescription(p, locale)}</div>}
+          {pluginDisplayDescription(p, locale) && <div style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-faint)', marginTop: 3 }}>{pluginDisplayDescription(p, locale)}</div>}
         </div>
         {/* 只有带 requires 的才是「闸」;没有前置条件的 onboarding 只是使用说明,在下面安静地展示,不给这个按钮。 */}
         {isGate(p) && on && (
@@ -385,12 +391,12 @@ const PluginDetail: React.FC<{
       {p.bundle && (
         <>
           <div className="hint">{t('settings.amadeusPlugins.bundleTitle')}</div>
-          <div className="plugin-card" style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+          <div className="plugin-card" style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--ui-font-meta, 12px)' }}>
             {p.bundle.enginePlugins.length > 0 && <div>{t('settings.amadeusPlugins.bundleEngineList', { list: p.bundle.enginePlugins.join(', ') })}</div>}
             {p.bundle.agents.length > 0 && <div>{t('settings.amadeusPlugins.bundleAgentsList', { list: p.bundle.agents.join(', ') })}</div>}
             {p.bundle.skills.length > 0 && <div>{t('settings.amadeusPlugins.bundleSkillsList', { list: p.bundle.skills.join(', ') })}</div>}
             {p.bundle.spaces.length > 0 && <div>{t('settings.amadeusPlugins.bundleSpacesList', { list: p.bundle.spaces.join(', ') })}</div>}
-            <div style={{ color: 'var(--text-faint)', fontSize: 11 }}>{t('settings.amadeusPlugins.bundleHint')}</div>
+            <div style={{ color: 'var(--text-faint)', fontSize: 'var(--ui-font-caption, 11px)' }}>{t('settings.amadeusPlugins.bundleHint')}</div>
           </div>
         </>
       )}
@@ -400,7 +406,9 @@ const PluginDetail: React.FC<{
           <CompanionApp appId={dep} />
         </>
       )}
-      {commands.length > 0 && (
+      {/* 命令跑在调用它的渲染进程里:设置在 Electron 下是独立浮窗,在这里点「统计字数」数的是浮窗的(空)当前页,
+          结果吐司也只有主窗渲染 → 点了什么都看不见。卫星窗里不给这排按钮,命令照旧在主窗 ⌘K 里;web 仍同窗,保留。 */}
+      {commands.length > 0 && windowKind() === 'main' && (
         <>
           <div className="hint">{t('settings.amadeusPlugins.commands')}</div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
@@ -433,7 +441,7 @@ const PluginDetail: React.FC<{
       )}
       {p.changelog && (
         <details style={{ borderTop: 'var(--border-width) solid var(--overlay-medium, rgba(127,127,127,.12))', paddingTop: 12 }}>
-          <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 12.5, userSelect: 'none' }}>{t('settings.amadeusPlugins.changelog')}</summary>
+          <summary style={{ cursor: 'pointer', fontWeight: 600, fontSize: 'var(--ui-font-meta, 12px)', userSelect: 'none' }}>{t('settings.amadeusPlugins.changelog')}</summary>
           <div className="md-body" style={{ paddingTop: 8 }}><Markdown content={p.changelog} /></div>
         </details>
       )}
@@ -497,8 +505,8 @@ export const AmadeusPluginsTab: React.FC<{
           <PluginLogo url={p.iconUrl} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <b style={{ fontSize: 13 }}>{pluginDisplayName(p, locale)}</b>
-              <span style={{ fontSize: 11, color: 'var(--text-faint)' }}>v{p.version}</span>
+              <b style={{ fontSize: 'var(--ui-font-body, 13px)' }}>{pluginDisplayName(p, locale)}</b>
+              <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>v{p.version}</span>
               {p.blocked && (
                 <span style={{ ...badge, color: 'var(--warn, #b8860b)', borderColor: 'var(--warn, #b8860b)' }}>{blockedLabel(t, p)}</span>
               )}
@@ -507,7 +515,7 @@ export const AmadeusPluginsTab: React.FC<{
               )}
               <BundleChips p={p} />
             </div>
-            {pluginDisplayDescription(p, locale) && <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{pluginDisplayDescription(p, locale)}</div>}
+            {pluginDisplayDescription(p, locale) && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{pluginDisplayDescription(p, locale)}</div>}
           </div>
           <input
             type="checkbox"

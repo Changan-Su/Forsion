@@ -58,13 +58,13 @@
   pointer-events: auto;
   padding: 2px;
   border: 1px solid var(--border, rgba(0, 0, 0, 0.08));
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   background: var(--bg-card, var(--bg, #fff));
   box-shadow: var(--card-shadow);
 }
 /* 空胶囊(没有右抽屉且只剩幽灵钮时)不画药丸,免得屏幕上杵个空壳。 */
 .mb-shell:not(.mini-shell) .mb-cap:has(> .mb-icon-btn--ghost:only-child) { border-color: transparent; background: none; box-shadow: none; }
-.mb-shell:not(.mini-shell) .mb-topbar .mb-icon-btn { width: 40px; height: 40px; border-radius: 999px; }
+.mb-shell:not(.mini-shell) .mb-topbar .mb-icon-btn { width: 40px; height: 40px; border-radius: var(--radius-pill, 999px); }
 
 /* ── 下滑收起 / 上滑召回(2026-08-13 用户拍板):扩大阅读区,同时保证操作入口一抬手就回来。
    判定在 SingleColumnHost 的 useChromeAutoHide(scroll 捕获阶段,一处吃下所有子滚动器)。
@@ -94,9 +94,9 @@
   width: 21px;
   height: 21px;
   border: 1.8px solid currentColor;
-  border-radius: 6px;
-  font-size: 11.5px;
-  font-weight: 700;
+  border-radius: var(--radius-sm, 6px);
+  font-size: var(--ui-font-caption, 11px);
+  font-weight: 600;
   line-height: 1;
 }
 .mb-icon-btn {
@@ -109,7 +109,7 @@
   border: none;
   background: transparent;
   color: inherit;
-  border-radius: 12px;
+  border-radius: var(--radius-md, 12px);
   cursor: pointer;
   transition: background 0.12s ease, transform 0.08s ease;
 }
@@ -221,14 +221,14 @@
   height: 36px;
   padding: 0 8px;
   border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
-  border-radius: 10px;
+  border-radius: var(--radius-md, 12px);
   background: var(--bg-card, var(--bg, #fff));
   color: var(--text, #111);
-  font-size: 14px;
+  font-size: var(--ui-font-body, 13px);
   font-weight: 600;
   cursor: pointer;
 }
-.mb-drawer-title { flex: 1 1 auto; min-width: 0; padding-left: 6px; font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mb-drawer-title { flex: 1 1 auto; min-width: 0; padding-left: 6px; font-size: var(--ui-font-heading, 14px); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mb-drawer-body { flex: 1 1 auto; min-height: 0; position: relative; overflow: hidden; }
 /* 手机端抽屉内容再放大一档(2026-08-13 用户实报「字号好小」)。
    侧栏那套 .t2s-* 是**桌面鼠标尺度**(13px 字 / 28px 行,sidebar2.css 开头写明「字号只统一、不缩放」),
@@ -272,8 +272,8 @@
   border: none;
   background: transparent;
   color: inherit;
-  border-radius: 12px;
-  font-size: 15px;
+  border-radius: var(--radius-md, 12px);
+  font-size: var(--ui-font-heading, 14px);
   text-align: left;
   cursor: pointer;
   transition: background 0.12s ease;
@@ -284,7 +284,7 @@
 /* ── 标签页切换 sheet 的行(骑 .mb-sheet-row 壳) ── */
 .mb-tabrow.on { background: var(--bg-hover, rgba(0, 0, 0, 0.06)); font-weight: 600; }
 .mb-tabrow-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mb-tabrow-x { flex: 0 0 auto; display: inline-flex; align-items: center; padding: 4px; border-radius: 8px; opacity: 0.5; }
+.mb-tabrow-x { flex: 0 0 auto; display: inline-flex; align-items: center; padding: 4px; border-radius: var(--radius-sm, 6px); opacity: 0.5; }
 .mb-tabrow-x:active { opacity: 1; background: var(--bg-active, rgba(0, 0, 0, 0.12)); }
 .mb-tabrow-new { color: var(--accent-ink, var(--accent, #4d8794)); font-weight: 600; }
 
@@ -338,7 +338,7 @@
   background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.12)));
   color: var(--accent-ink, var(--accent, #4d8794));
 }
-.mb-tab-label { font-size: 11px; line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.mb-tab-label { font-size: var(--ui-font-caption, 11px); line-height: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .mb-foot-row {
   display: flex;
   align-items: center;
@@ -364,9 +364,9 @@
 }
 .sc-bar { display: flex; gap: 6px; }
 .sc-size {
-  font-size: 12px;
+  font-size: var(--ui-font-meta, 12px);
   padding: 5px 12px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   border: 1px solid var(--border, rgba(0, 0, 0, 0.14));
   background: var(--bg-card, #fff);
   color: var(--text-muted, rgba(0, 0, 0, 0.6));
@@ -381,7 +381,7 @@
   width: 390px;
   max-width: 100%;
   height: min(844px, 90vh);
-  border-radius: 30px;
+  border-radius: var(--radius-lg, 16px);
   border: 1px solid var(--border, rgba(0, 0, 0, 0.12));
   box-shadow: var(--card-shadow);
   overflow: hidden;

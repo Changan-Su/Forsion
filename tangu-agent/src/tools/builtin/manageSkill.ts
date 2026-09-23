@@ -13,7 +13,7 @@ import type { ToolProvider } from '../toolRegistry.js';
 import { skillsDir, agentsDir, DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { slugify } from '../../agents/agentRegistry.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
-import { parseFrontmatter, isBuiltinSkillName } from '../../skills/localSkills.js';
+import { parseFrontmatter, isBuiltinSkillName, isUntouchedSeedMirror } from '../../skills/localSkills.js';
 
 const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const oneLine = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -33,10 +33,11 @@ async function fileExists(p: string): Promise<boolean> {
 /** 组装 SKILL.md:frontmatter(name + 可选 description + origin)+ 正文。frontmatter 值强制单行(解析器按行读)。
  *  `origin: agent` = 来源标识:这个工具只会被 agent 调用,create/update 一律打上(用户手写后被 agent 改过的也算「agent 动过」),
  *  localSkills.toRecord 透传成 SkillRecord.origin → 桌面技能列表打「自建」徽标。没有它,用户级自建技能与手写技能无从分辨(09-18 取证)。 */
-function composeSkillMd(name: string, description: string, body: string): string {
+function composeSkillMd(name: string, description: string, body: string, shared = false): string {
   const lines = ['---', `name: ${oneLine(name)}`];
   const d = oneLine(description);
   if (d) lines.push(`description: ${d}`);
+  if (shared) lines.push('shared: true'); // 用户手加的共享开关(跨 agent 借用,09-22):update 重写 frontmatter 时保留,别静默抹掉
   lines.push('origin: agent', '---', '', String(body ?? '').trim(), '');
   return lines.join('\n');
 }
@@ -108,6 +109,7 @@ export const manageSkillProvider: ToolProvider = {
             const slug = oneLine(args.slug);
             if (!SAFE_SLUG.test(slug)) return 'Error: delete 需要合法 slug(小写字母/数字/连字符)';
             if (await isBuiltinSkillName(slug)) return `Error: 「${slug}」是内置技能,受保护不可删除`;
+            if (await isUntouchedSeedMirror(path.join(root, slug))) return `Error: 「${slug}」是随包提供的只读技能,请先复制成自有版本`;
             if (!(await fileExists(skillMdPath(root, slug)))) return `未找到技能: ${slug}${scopeTag}`;
             await fs.rm(path.join(root, slug), { recursive: true, force: true });
             return `已删除技能: ${slug}${scopeTag}`;
@@ -128,20 +130,23 @@ export const manageSkillProvider: ToolProvider = {
               slug = oneLine(args.slug);
               if (!SAFE_SLUG.test(slug)) return 'Error: update 需要合法 slug';
               if (await isBuiltinSkillName(slug)) return `Error: 「${slug}」是内置技能,受保护不可改`;
+              if (await isUntouchedSeedMirror(path.join(root, slug))) return `Error: 「${slug}」是随包提供的只读技能,请先复制成自有版本`;
               if (!(await fileExists(skillMdPath(root, slug)))) return `Error: 未找到要更新的技能: ${slug}${scopeTag}(列表里带 [agent] 标记的技能须传 scope:"agent";create 与 update 的 scope 须一致)`;
             }
 
             // name/description:create 用给定值;update 缺省沿用现有 frontmatter(免得每次都重报)。
             let name = args.name != null ? String(args.name) : '';
             let description = args.description != null ? String(args.description) : '';
-            if (action === 'update' && (!name || args.description == null)) {
+            let shared = false;
+            if (action === 'update') {
               const prev = parseFrontmatter(await fs.readFile(skillMdPath(root, slug), 'utf-8').catch(() => '')).meta;
               if (!name) name = prev.name || slug;
               if (args.description == null) description = prev.description || '';
+              shared = /^(true|yes|1)$/i.test(prev.shared || '');
             }
 
             await fs.mkdir(path.join(root, slug), { recursive: true });
-            await fs.writeFile(skillMdPath(root, slug), composeSkillMd(name || slug, description, body), 'utf-8');
+            await fs.writeFile(skillMdPath(root, slug), composeSkillMd(name || slug, description, body, shared), 'utf-8');
             return `已${action === 'create' ? '创建' : '更新'}技能: ${slug}(${name || slug})${scopeTag}。将经 use_skill 按需加载。`;
           }
 

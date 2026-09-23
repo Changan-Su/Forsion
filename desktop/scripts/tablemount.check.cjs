@@ -101,13 +101,15 @@ async function shot(page, name) {
     }))
     check('T4 select 芯片(显示 option.label,按 option.color 取色)/ 头像 / 第二行 / 操作按钮都上屏', s4.chips >= 5 && s4.toneChips >= 5 && s4.avatars >= 1 && s4.subs >= 2 && s4.acts === 5, JSON.stringify(s4))
 
+    check('T4a 布局操作收进设置，工具栏只保留高频操作', await page.locator('.amx-db-viewtools .amx-db-autosize, .amx-db-viewtools .amx-db-groupbtn, .amx-db-viewtools .amx-db-foldbtn').count() === 0)
+    await page.locator('.amx-plugtable [aria-label="view settings"]').click()
     const s4b = await page.evaluate(() => {
       const heads = [...document.querySelectorAll('.amx-plugtable .amx-db-hrow .amx-db-th')]
       const widths = heads.map((head) => Math.round(head.getBoundingClientRect().width))
       const first = document.querySelector('.amx-plugtable .amx-db-row:not(.amx-db-hrow) .amx-db-cell')
       const primary = first?.querySelector('.amx-db-roprimary')
       const secondary = first?.querySelector('.amx-db-rosub')
-      const button = document.querySelector('.amx-plugtable .amx-db-autosize')
+      const button = document.querySelector('.amx-db-pop .amx-db-autosize')
       return {
         pressed: button?.getAttribute('aria-pressed'),
         widths,
@@ -118,13 +120,14 @@ async function shot(page, name) {
     check('T4b 自适应默认开:主内容完整、副内容超长仍截断，短枚举列不再平分剩余宽度',
       s4b.pressed === 'true' && s4b.primaryFits && s4b.secondaryClips && s4b.widths[0] < 240 && s4b.widths[3] <= 110 && s4b.widths[4] <= 110,
       JSON.stringify(s4b))
-    const autoButton = page.locator('.amx-plugtable .amx-db-autosize')
+    const autoButton = page.locator('.amx-db-pop .amx-db-autosize')
     await autoButton.click()
     const autoOff = await autoButton.getAttribute('aria-pressed')
     await autoButton.click()
     const autoOn = await autoButton.getAttribute('aria-pressed')
     check('T4c 自适应按钮可关闭并再次开启', autoOff === 'false' && autoOn === 'true', `off=${autoOff} on=${autoOn}`)
 
+    await page.mouse.click(6, 6)
     await shot(page, 'tablemount-1-light')
 
     // T5:点一格非交互区(日期列)= 开行
@@ -233,6 +236,7 @@ async function shot(page, name) {
     await page.mouse.click(6, 6)
     check('T14c 手动输入与清空正常', await page.locator(ROWS).count() === 5)
 
+    await page.locator('.amx-plugtable [aria-label="view settings"]').click()
     await page.locator('.amx-db-groupbtn').click()
     const gm = page.locator('.amx-db-group-menu')
     await gm.getByLabel('按属性分组', { exact: true }).selectOption('state')
@@ -266,6 +270,7 @@ async function shot(page, name) {
     // T18:用户自己在表里配折叠(视图条「行折叠」弹层)—— 与插件规格无关的那一半:多维表的视图能力
     await page.goto(`${BASE}?tablemount`)
     await page.waitForSelector(ROWS)
+    await page.locator('.amx-plugtable [aria-label="view settings"]').click()
     await page.locator('.amx-db-foldbtn').click()
     const fm = page.locator('.amx-db-fold-menu')
     await fm.locator('[data-fold-key="state"] input').check()
@@ -273,11 +278,11 @@ async function shot(page, name) {
     const s18 = await page.evaluate(({ rowsSel }) => ({
       rows: document.querySelectorAll(rowsSel).length,
       folds: [...document.querySelectorAll('.amx-db-row--fold')].map((r) => r.getAttribute('data-foldcount')).join(),
-      on: document.querySelector('.amx-db-foldbtn')?.getAttribute('data-on'),
+      on: document.querySelector('[data-fold-key="state"] input')?.checked,
       calls: document.querySelector('.amx-db-row--fold [data-coltype="number"]')?.textContent,
     }), { rowsSel: ROWS })
     check('T18 弹层里勾「状态」当折叠键:5 行 → 启用 ×3 / 停用 ×2 两条汇总行,按钮点亮,数字列求和(585000+12000+3)',
-      s18.rows === 2 && s18.folds === '3,2' && s18.on === 'true' && s18.calls === '597,003', JSON.stringify(s18))
+      s18.rows === 2 && s18.folds === '3,2' && s18.on === true && s18.calls === '597,003', JSON.stringify(s18))
     check('T18b 折叠菜单控件没有被弹层裁切', await fm.evaluate((el) => {
       const r = el.closest('.amx-db-pop').getBoundingClientRect()
       return [...el.querySelectorAll('select,input,button')].every((c) => { const b = c.getBoundingClientRect(); return b.left >= r.left && b.right <= r.right + 1 })
@@ -292,7 +297,7 @@ async function shot(page, name) {
     await minutes.press('Enter')
     check('T18e 时间窗改 45 后留在输入框里(blur 提交,不被回落值顶回去)', await fm.getByLabel('时间窗(分钟)', { exact: true }).inputValue() === '45')
     await fm.getByRole('button', { name: '关闭行折叠', exact: true }).click()
-    check('T18f 关闭行折叠:按钮熄灭、五行平铺', await page.locator('.amx-db-foldbtn').getAttribute('data-on') === null && await page.locator(ROWS).count() === 5)
+    check('T18f 关闭行折叠:按钮熄灭、五行平铺', !(await fm.locator('[data-fold-key="state"] input').isChecked()) && await page.locator(ROWS).count() === 5)
     await page.mouse.click(6, 6)
 
     // T17:规则行折叠(TableSpec.fold)—— 8 行用量 → alice 14:00 窗 3 行 / bob 1 行 / alice 15:00 窗 2 行 / carol 14:30 窗 2 行

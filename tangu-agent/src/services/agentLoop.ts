@@ -22,6 +22,7 @@ import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery } from 
 import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, type ToolContext } from '../tools/registry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
+import { buildAgentRoster } from './agentRoster.js';
 import { AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
 import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
 import { SKETCH_SECTION, sketchEnabledFor, sketchTurnSignalFor } from '../tools/builtin/sketch.js';
@@ -33,7 +34,7 @@ import { DockerCleanupError } from '../sandbox/dockerLifecycle.js';
 import { resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { listFilesLocal, sanitizeProjectName } from '../tools/fileWorkspace.js';
 import {
-  modelContextWindowInfo, INPUT_HARD_RATIO, INPUT_WARN_RATIO, compactionThreshold,
+  effectiveContextWindowInfo, INPUT_HARD_RATIO, INPUT_WARN_RATIO, compactionThreshold,
   estimateTokensRough, estimateMessagesTokens, compactContext, capToolResult, capHistoryContent, pinMessage,
   ContextUsageTracker, CompactionAttemptGuard, assistantTurnOf, markLossy, HISTORY_MSG_MAX_CHARS,
 } from './contextBudget.js';
@@ -48,7 +49,7 @@ import { loadHarness, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
-import { onUserRunDone, type HistorianForkSeed } from './localHistorian.js';
+import { onUserRunDone, onUserRunStart, type HistorianForkSeed } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
 import { describeImages, resolveVisionModelId, shouldDescribeImages } from './visionService.js';
 import { replayAssistantHistory, stepLlmResponse, loadReplaySteps, dropCoveredCalls } from './historyReplay.js';
@@ -928,6 +929,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     runHostSandbox = execMode === 'host' ? resolveHostSandboxPolicy() : undefined;
     await updateRunStatus(runId, 'running');
     await publish(runId, 'status', { state: 'running' });
+    // Historian 首帧标题:只看用户消息,与模型回复并行;放在群聊分支前,两条路都覆盖。落库后推事件让侧栏立刻刷新。
+    onUserRunStart(sessionId, userId, String(input.message || ''), input.userMessageId,
+      (title) => { void publish(runId, 'session_title', { sessionId, title }).catch(() => {}); });
 
     // 群聊模式(Group Chat):≥2 个 Normal Agent 轮流发言 —— 走独立编排,不进下方单 agent 装载。
     // gate 在 capabilities.groupChat(host baseline 恒 true;云端 app 经 manifest opt-in)—— 纯编排无 host
@@ -977,7 +981,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       (typeof p?.[PROTOCOL_MARK] === 'string' ? p[PROTOCOL_MARK] : undefined);
     // 本 run 的上下文预算基数:真实模型窗口(覆盖表/模型对象/族兜底),不再用 128k 全局常量——
     // 400k 族在 64k 就机械折叠会绞碎上下文+打断前缀缓存,长任务正确率与 token 双输(WB-Bench 取证)。
-    const { tokens: ctxWindowTokens, source: ctxWindowSource } = modelContextWindowInfo(modelId, model);
+    // 09-22 起自动识别的窗口封顶 272k,更大的窗口只由人填的覆盖打开(effectiveContextWindowInfo)。
+    const { tokens: ctxWindowTokens, source: ctxWindowSource, max: ctxWindowMax } = effectiveContextWindowInfo(modelId, model);
 
     // 入站预算闸门(Hermes 式窗口相对预算;2026-06-10 的 77 万 token 事故防线):
     // 估算超窗口 50% 直接失败(消息不落库,会话不被毒化),超 25% 放行但发警告事件。
@@ -1181,6 +1186,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           if (parts.length) systemParts.push('## Your Library (reference)\nLong-term reference material you maintain; use it as context.\n\n' + parts.join('\n\n'));
         } catch (e) { console.warn('[agent-core] cloud library inject failed:', e); }
       }
+    }
+    // 5c) 其他 Agent 名册(仅 host、非子代理、非团队成员 —— delegate / start_discussion 在那些 run 里本就不可见)。
+    if (execMode === 'host' && ps.hostExtras && !isTeamMember && !agentConfig.delegatedFrom) {
+      try { const roster = await buildAgentRoster(activeAgentSlug); if (roster) systemParts.push(roster); }
+      catch (e) { console.warn('[agent-core] agent roster skipped:', (e as Error)?.message || e); }
     }
     ctxMark('agentFolder');
     // Freeze a bounded Agent-scoped recall snapshot for this run (no embedding/network index).
@@ -1439,6 +1449,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       phase: 'context_info',
       ctxWindow: ctxWindowTokens,
       ctxWindowSource,
+      ctxWindowMax, // 模型本身的窗口(封顶前):> ctxWindow 且非 override = 被缺省上限封了顶,环弹层据此说明
       // 压缩触发线(窗口 − 预留,再被 thresholdPercent 往下拉)与本 run 生效的压缩旋钮来源:客户端进度环据此画「到这就会压」的刻度
       compactAt: compactionThreshold(ctxWindowTokens, compactionCfg.reserveTokens, compactionCfg.thresholdPercent, compactionCfg.keepRecentTokens),
       compactionEnabled: compactionCfg.enabled,
@@ -1674,8 +1685,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
     // 自定义工具（HTTP/JS）：从 custom_tools 表 + 启用技能自带工具加载，喂给 LLM 并在云端执行。
     // 计划模式下整体跳过(外部副作用不可知,不属于只读集);chat 同(PRESET_TABLE.externalTools=false)。
+    // profile.features.customTools=false 的 app(Connect manifest / admin 覆盖)同样整体跳过:此前该开关无人读。
     let customTools: Map<string, LoadedCustomTool> | undefined;
-    if (!planMode && ps.externalTools) {
+    if (!planMode && ps.externalTools && profile.features.customTools) {
       try {
         const loaded = await loadCustomTools(appId, agentConfig);
         if (loaded.length) {

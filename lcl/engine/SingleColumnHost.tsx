@@ -17,6 +17,7 @@ import { useRibbonStore } from './ribbonRegistry'
 import { getView } from './viewRegistry'
 import { label, identitySig } from './types'
 import { ExtendViewHost } from './ExtendViewHost'
+import { presentInlineExtension } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
 import { useWorkspace, restoreSingleColumnLayout, presentDrawerExtension } from './singleColumnStore'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
@@ -166,7 +167,10 @@ function Drawer({ side, docked, showFoot }: { side: 'left' | 'right'; docked?: b
           <div className="mb-view" key={`${active.id}:${active.type}`}>
             <ViewErrorBoundary>
               <Suspense fallback={<Skeleton variant="list" />}>
-                {def.factory({ leaf: active, params: active.params })}
+                {/* 与桌面侧栏同一契约:临时 View 盖住本视图 + 返回。.mb-view 自己不滚,盖层住在里面即可。 */}
+                <ExtendViewHost present={presentInlineExtension} ownerKey={identitySig(active.params)}>
+                  {(extendView) => def.factory({ leaf: active, params: active.params, extendView })}
+                </ExtendViewHost>
               </Suspense>
             </ViewErrorBoundary>
           </div>

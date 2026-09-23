@@ -82,7 +82,7 @@ export const WorkspaceDetailView: React.FC<{
           }}
           onClick={(e) => e.stopPropagation()}
           style={{
-            width: '100%', minWidth: 0, background: 'var(--bg-card)', fontSize: 13, color: 'var(--text)',
+            width: '100%', minWidth: 0, background: 'var(--bg-card)', fontSize: 'var(--ui-font-body, 13px)', color: 'var(--text)',
             border: 'var(--border-width) solid var(--accent-ink)', borderRadius: 'var(--radius-sm)',
             padding: '1px 5px', outline: 'none',
           }}
@@ -127,7 +127,7 @@ export const WorkspaceDetailView: React.FC<{
               onClick={() => setShowArchived((v) => !v)}
               style={{
                 display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none',
-                cursor: 'pointer', color: 'var(--text-faint)', fontSize: 13, padding: '4px 2px',
+                cursor: 'pointer', color: 'var(--text-faint)', fontSize: 'var(--ui-font-body, 13px)', padding: '4px 2px',
               }}
             >
               {showArchived ? <ChevronDown size={13} /> : <ChevronRight size={13} />}

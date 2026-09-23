@@ -29,7 +29,7 @@ export interface AutoWidthSample {
 
 const clamp = (width: number): number => Math.min(AUTO_COLUMN_MAX, Math.max(AUTO_COLUMN_MIN, Math.ceil(width)))
 
-/** 13.5px 正文字号下的保守字宽；按字符类别估算比用字符数能更好覆盖中英混排。 */
+/** 13px 界面字号下的保守字宽；按字符类别估算比用字符数能更好覆盖中英混排。 */
 export function estimatedTextWidth(value: string, mono = false): number {
   let width = 0
   const chars = Array.from(value)
@@ -37,18 +37,18 @@ export function estimatedTextWidth(value: string, mono = false): number {
   for (let i = 0; i < limit; i++) {
     const char = chars[i]
     const cp = char.codePointAt(0) ?? 0
-    if (mono) width += cp > 0x7f ? 13.5 : 8
-    else if (cp > 0xffff || (cp >= 0x2e80 && cp <= 0x9fff) || (cp >= 0xac00 && cp <= 0xd7af)) width += 13.5
+    if (mono) width += cp > 0x7f ? 14 : 8.5
+    else if (cp > 0xffff || (cp >= 0x2e80 && cp <= 0x9fff) || (cp >= 0xac00 && cp <= 0xd7af)) width += 14
     else if (/\s/.test(char)) width += 4
-    else if (/[ilI1.,:;|'`]/.test(char)) width += 4.2
-    else if (/[MW@#%&]/.test(char)) width += 9
-    else if (/[A-Z]/.test(char)) width += 7.7
-    else if (/[0-9]/.test(char)) width += 7.1
-    else width += 6.8
+    else if (/[ilI1.,:;|'`]/.test(char)) width += 4.5
+    else if (/[MW@#%&]/.test(char)) width += 10
+    else if (/[A-Z]/.test(char)) width += 8.2
+    else if (/[0-9]/.test(char)) width += 7.5
+    else width += 7.2
   }
   // 极长主内容不逐字遍历；宽度最终也会被 AUTO_COLUMN_MAX 截住。
   if (chars.length > limit) width += AUTO_COLUMN_MAX
-  return width
+  return width * (13 / 14)
 }
 
 function sampleWidth(sample: AutoWidthSample): number {
@@ -61,7 +61,7 @@ function sampleWidth(sample: AutoWidthSample): number {
     content = pieces.reduce((sum, piece) => sum + estimatedTextWidth(piece, !!sample.mono) + 18, 0) + (pieces.length - 1) * 4
   }
   return content
-    + 20 // 12px 单元格 padding + 8px 字体抗锯齿/字重安全余量，主内容宁可稍松也不能被截断
+    + 24 // 16px 单元格 padding + 8px 字体抗锯齿/字重安全余量，主内容宁可稍松也不能被截断
     + (sample.avatar ? 28 : 0) // 22px 头像 + 6px gap
     + (sample.dot ? 13 : 0) // 7px 状态点 + 6px gap
     + (sample.leading ?? 0)

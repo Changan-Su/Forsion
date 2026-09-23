@@ -9,6 +9,8 @@
 import { presetOf } from '../core/presetTable.js';
 import { deps } from '../seams/runtime.js';
 import { materializeSkill } from '../tools/fileWorkspace.js';
+import { listSharedAgentSkills } from '../skills/localSkills.js';
+import { currentDisplayAgentSlug } from '../seams/runContext.js';
 
 const getSkill = (id: string) => deps().brain.assets.getSkill(id);
 
@@ -65,7 +67,10 @@ export async function loadSkillLoadout(
     ).filter(Boolean) as any[];
     for (const s of skills) {
       const body = String(s.content || '').trim();
-      if (body && body.length <= INLINE_SKILL_MAX_CHARS) {
+      // 共享技能即使被显式选中也保持按需加载；切换装备策略不应让别的 Agent 的指令每轮内联。
+      if (String(s.id || '').startsWith('local:@') && (body || String(s.description || '').trim())) {
+        deferredSkills.push({ id: s.id, name: s.name, description: String(s.description || '').trim() });
+      } else if (body && body.length <= INLINE_SKILL_MAX_CHARS) {
         inlineSkills.push({ name: s.name, body });
       } else if (body) {
         deferredSkills.push({ id: s.id, name: s.name, description: String(s.description || '').trim() });
@@ -121,5 +126,24 @@ export async function loadSkillLoadout(
         lines,
     );
   }
+  // 其他 agent 共享的技能(09-22):只在本地形态(agent 目录在本机)列;一行一条、正文照样 use_skill 按需取。
+  // 借用方的 enabledSkillIds 追加这些 id → use_skill 放行。谁都没开共享时这一段不出现,前面各段字节不变。
+  // 用户为该 agent **显式**配过装备(含显式卸空)= 「就这些」,借用池也不塞——委派路径的「卸空全部技能」同样要成立。
+  if (!explicit && agentConfig.execMode !== 'sandbox' && hostExecEnabled()) {
+    const shared = await listSharedAgentSkills(currentDisplayAgentSlug() || null).catch(() => []);
+    if (shared.length) {
+      const lines = shared.map((s) => `- ${s.name} (id: \`${s.id}\`, from ${s.ownerName})${s.description ? ` — ${s.description}` : ''}`).join('\n');
+      sections.push(
+        '## Skills shared by other agents (load on demand)\n' +
+          'These belong to other agents and were written for their environment. When a task matches one, borrow it: **call `use_skill` with its id** to get the full instructions, then follow its stated scope. Leave them alone for unrelated tasks.\n\n' +
+          lines,
+      );
+      enabledSkillIds = [...enabledSkillIds, ...shared.map((s) => s.id)];
+    }
+  }
   return { enabledSkillIds, sections, requested };
+}
+
+function hostExecEnabled(): boolean {
+  try { return !!deps().profile.capabilities.hostExec; } catch { return false; }
 }

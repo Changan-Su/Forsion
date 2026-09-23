@@ -5,6 +5,8 @@
  *  复制来的编号);restoreAggRow 不盖章(撤销 = 原行原样回来)。外加一条 CAS 冲突重放:编号必须按重读后的
  *  最新行算(在 mutate 回调内),否则与引擎刚加的那行撞号。假磁盘/CAS 桩照抄 dbStore.test。 */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { act, createElement } from 'react'
+import { createRoot } from 'react-dom/client'
 import type { DbFile } from '@amadeus-shared/db/schema'
 
 let disk: DbFile
@@ -30,7 +32,8 @@ vi.mock('./automationKick', () => ({ kickAutomation: () => {}, setAutomationKick
 vi.mock('../../amadeusPlugins', () => ({ ensureAmadeusReady: () => {} }))
 
 const { useDbStore } = await import('./dbStore')
-const { createAggEvent, deleteAggRow, duplicateAggRow, restoreAggRow, setAggCell, firstDateCol, isDateCol } = await import('./dbAggregateStore')
+const { createAggEvent, deleteAggRow, duplicateAggRow, restoreAggRow, setAggCell, firstDateCol, isDateCol, useAllDatabases } = await import('./dbAggregateStore')
+const { usePageStore } = await import('./pageStore')
 type AggDb = import('./dbAggregateStore').AggDb
 
 const base = (): DbFile => ({
@@ -46,7 +49,7 @@ const base = (): DbFile => ({
 })
 const agg = (): AggDb => {
   const d = useDbStore.getState().entries['T.db'].data as DbFile
-  return { path: 'T.db', name: 'T', isNoteView: false, columns: d.columns, rows: d.rows.map((r) => ({ rowId: r.id, name: String(r.cells.c1 ?? ''), cells: r.cells })) }
+  return { path: 'T.db', name: 'T', isNoteView: false, columns: d.columns, rows: d.rows.map((r) => ({ rowId: r.id, name: String(r.cells.c1 ?? ''), cells: r.cells, ...(r.body !== undefined ? { body: r.body } : {}) })) }
 }
 const rowsNow = (): DbFile['rows'] => (useDbStore.getState().entries['T.db'].data as DbFile).rows
 const STAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/
@@ -92,6 +95,50 @@ describe('聚合层建行的盖章', () => {
     useDbStore.getState().mutate('T.db', (d) => ({ ...d, rows: [] }))
     restoreAggRow(agg(), src)
     expect(rowsNow()).toEqual([{ id: 'r1', cells: { c1: '甲', d1: '2026-09-01', no: 3, at: '2020-01-01T00:00' } }])
+  })
+
+  it('useAllDatabases:日历聚合保留记录正文,供删除撤销和复制使用', async () => {
+    const body = '# 项目纪要\n\n保留 **正文** 和 [资料](https://example.com)。\n'
+    disk.rows[0].body = body
+    await useDbStore.getState().reload('T.db', 'T.db')
+    const previousFiles = usePageStore.getState().files
+    usePageStore.setState({ files: ['T.db'] })
+    vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    let observed: AggDb[] = []
+    function Probe() { observed = useAllDatabases(); return null }
+    try {
+      await act(async () => { root.render(createElement(Probe)) })
+      expect(observed.find((d) => d.path === 'T.db')?.rows[0]).toMatchObject({ body })
+    } finally {
+      await act(async () => { root.unmount() })
+      host.remove()
+      usePageStore.setState({ files: previousFiles })
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('删除再撤销:记录正文和属性一起恢复并落盘', async () => {
+    const body = '# 原始正文\n\n- 第一条\n- 第二条\n'
+    disk.rows[0].body = body
+    await useDbStore.getState().reload('T.db', 'T.db')
+    const db = agg(), source = db.rows[0]
+    const removed = deleteAggRow(db, source.rowId)
+    restoreAggRow(agg(), source, removed)
+    await useDbStore.getState().flushAll()
+    expect(disk.rows[0]).toEqual({ ...base().rows[0], body })
+  })
+
+  it('复制记录:正文无损复制,编号仍然重新分配', async () => {
+    const body = '> 这段正文也属于记录\n\n`代码` 与段落。\n'
+    disk.rows[0].body = body
+    await useDbStore.getState().reload('T.db', 'T.db')
+    const id = await duplicateAggRow(agg(), 'r1')
+    await useDbStore.getState().flushAll()
+    expect(disk.rows.find((r) => r.id === id)).toMatchObject({ body, cells: { no: 4 } })
+    expect(disk.rows.find((r) => r.id === 'r1')).toEqual({ ...base().rows[0], body })
   })
 
   it('CAS 冲突重放:编号按重读后的最新行算 —— 引擎在防抖窗口里加了 5 号,用户的新行落盘后是 6 号不是 4 号', async () => {

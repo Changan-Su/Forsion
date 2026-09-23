@@ -49,15 +49,14 @@ const mobileConfig = { mode: 'external', backendUrl: `${location.origin}/api`, t
   setConfig: async (patch: Record<string, unknown>) => Object.assign(mobileConfig, patch),
 }
 applyTheme(initialLang, initialSkin, initialBg, initialMode)
-document.documentElement.dataset.flat = '1'
 
 function SettingsHarness() {
   const [cfg, setCfg] = useState<TanguDesktopConfig>({ backendUrl: `${location.origin}/api`, token: 'harness', modelId: '' })
   const [lang, setLang] = useState(initialLang)
   const [skin, setSkin] = useState(initialSkin)
   const [mode, setMode] = useState<'light' | 'dark'>(initialMode)
+  const [flat, setFlat] = useState(false)
   const [glass, setGlass] = useState(true)
-  const [flat, setFlat] = useState(true)
   const [seed, setSeed] = useState('#8b7fd6')
 
   const onTheme = (nextLang: string, nextSkin: string, nextMode: 'light' | 'dark' | 'system'): void => {
@@ -94,19 +93,19 @@ function SettingsHarness() {
       themeSkin={skin}
       themeMode={mode}
       themeModePref={mode}
-      glassOn={glass}
       flatOn={flat}
+      glassOn={glass}
       themeSeed={seed}
       onClose={() => undefined}
       onConfigChange={(patch) => setCfg((value) => ({ ...value, ...patch }))}
       onThemeChange={onTheme}
-      onGlassChange={(on) => {
-        setGlass(on)
-        document.documentElement.dataset.glass = on ? 'on' : 'off'
-      }}
       onFlatChange={(on) => {
         setFlat(on)
         document.documentElement.dataset.flat = on ? '1' : '0'
+      }}
+      onGlassChange={(on) => {
+        setGlass(on)
+        document.documentElement.dataset.glass = on ? 'on' : 'off'
       }}
       onSeedChange={setSeed}
       onReconnect={() => undefined}

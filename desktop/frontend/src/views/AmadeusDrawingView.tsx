@@ -11,7 +11,6 @@ const drawBase = (p: string): string => (p.split(/[\\/]/).pop() || p).replace(/\
 export function AmadeusDrawingView({ leaf }: ViewProps) {
   const drawingPath = typeof leaf.params.drawingPath === 'string' ? leaf.params.drawingPath : ''
   const mode = useTheme((s) => s.mode)
-  const flat = useTheme((s) => s.flat)
   // navigateLeaf 会把标题重置为 displayName,挂载/参数变化后设回文件名(AmadeusDbView 同款)。
   useEffect(() => {
     if (drawingPath) leaf.setTitle(drawBase(drawingPath))
@@ -19,7 +18,7 @@ export function AmadeusDrawingView({ leaf }: ViewProps) {
   if (!drawingPath) return <div className="amx-draw-state">未指定白板文件。</div>
   return (
     /* 编辑器同款契约域(.am-app+bridge 取色,镜像 mode/flat);.amx-drawview 让画布铺满 leaf */
-    <div className="am-app tangu-lovable amx-pane amx-drawview" data-mode={mode} data-flat={flat ? '1' : '0'}>
+    <div className="am-app tangu-lovable amx-pane amx-drawview" data-mode={mode}>
       <ExcalidrawEmbed target={drawingPath} pagePath={drawingPath} />
     </div>
   )

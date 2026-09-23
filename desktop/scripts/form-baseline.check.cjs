@@ -49,6 +49,7 @@ const FILES = [
   'amadeus/theme/lcl/tangu.css', 'amadeus/theme/lcl/tanguSoft.css',
   'views/chat2/chat2.css', 'views/chat2/composer2.css', 'views/chat2/sidebar2.css',
   'views/automation/automation.css', 'views/dashData.css', 'views/homepage.css',
+  'components/modelCatalog.css', 'amadeus/chrome/pageChrome.css',
 ]
 const BASE = read('styles/base.css')
 // 基线两块合起来抽出来 —— A/B 就是「把这段插进去 / 拿掉」。
@@ -93,7 +94,11 @@ const BUILD = (sels) => {
     const comps = sel.split(/\s*>\s*|\s+/).filter(Boolean)
     let root = null, cur = null
     comps.forEach((c, i) => { const el = mk(c, i === comps.length - 1); if (!root) { root = el; cur = el } else { cur.appendChild(el); cur = el } })
-    document.body.appendChild(root)
+    // Amadeus controls live inside its scope in the real app; do not measure UA defaults outside it.
+    if (sel.startsWith('.amx-')) {
+      const scope = document.createElement('div'); scope.className = 'am-app'
+      scope.appendChild(root); document.body.appendChild(scope)
+    } else document.body.appendChild(root)
     window.__probes[sel] = cur
   }
 }

@@ -6,7 +6,9 @@ export interface ThemeManifest {
   /** 稳定 id,kebab-case,必须等于目录名。 */
   id: string;
   name: string;
+  nameEn?: string;
   description: string;
+  descriptionEn?: string;
   version: string;
   author?: string;
   /** 是否提供独立暗色样式(.dark[data-theme=…])。 */
@@ -42,7 +44,7 @@ export interface ThemeManifest {
  */
 export type ThemeSetting =
   | ThemeSettingBase & { type: 'number'; default: number; min: number; max: number; step?: number; unit?: string }
-  | ThemeSettingBase & { type: 'select'; default: string; options: Array<{ value: string; label: string }> }
+  | ThemeSettingBase & { type: 'select'; default: string; options: Array<{ value: string; label: string; labelEn?: string }> }
   /** on/off 是写进 CSS 的两个值(如 '1px' / '0px'),不是 true/false。 */
   | ThemeSettingBase & { type: 'boolean'; default: boolean; on: string; off: string }
   | ThemeSettingBase & { type: 'color'; default: string };
@@ -51,7 +53,9 @@ interface ThemeSettingBase {
   /** = CSS 自定义属性名,`--kebab-case`。 */
   key: string;
   label: string;
+  labelEn?: string;
   description?: string;
+  descriptionEn?: string;
 }
 
 export interface ThemePreview {
@@ -61,6 +65,7 @@ export interface ThemePreview {
   accent: string;
   label?: string;
   title?: { text?: string };
+  taglineEn?: string;
   swatches?: string[];
   tagline?: string;
 }

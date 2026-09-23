@@ -7,7 +7,7 @@ import { create } from 'zustand'
 import { usePageStore } from './pageStore'
 import { useUiStore } from './uiStore'
 import { marqueeHits } from '../lib/marquee'
-import { isEmbedBlock, isWidgetBlock } from '../lib/blockKind'
+import { isDatabaseEmbedBlock, isEmbedBlock, isWidgetBlock } from '../lib/blockKind'
 import { zoomOf } from '../lib/clampMenu'
 import { registerMessages, translate } from '../../i18n'
 import { amadeus } from '../api'
@@ -46,7 +46,7 @@ usePageStore.subscribe((s, prev) => {
 const isTypingTarget = (t: EventTarget | null): boolean => {
   const el = t as HTMLElement | null
   if (!el) return false
-  return !!el.closest?.('input, textarea, select, [contenteditable="true"], .ProseMirror')
+  return !!el.closest?.('input, textarea, select, [contenteditable="true"], .ProseMirror, .amx-db, .amx-db-pop, .amx-db-peek-shade')
 }
 
 // 空白处才起框选:排除块内容/手柄/菜单/交互控件(含列宽拖杆),且须在编辑器内。
@@ -117,7 +117,12 @@ export function BlockSelectionKeys() {
       } else if (e.key === 'Enter' && ids.length === 1) {
         stop()
         const content = ps.blocks[id]?.content ?? ''
-        if (isEmbedBlock(content)) {
+        if (isDatabaseEmbedBlock(content)) {
+          useBlockSelection.getState().clear()
+          const host = document.querySelector(`[data-block-id="${CSS.escape(id)}"] .amx-db`)
+          const cell = host?.querySelector<HTMLElement>('.amx-db-cell input, .amx-db-cell button, .amx-db-name')
+          cell?.focus()
+        } else if (isEmbedBlock(content)) {
           useBlockSelection.getState().setActiveEmbed(id) // 只读嵌入块:回车进源码编辑(= 双击同款)
         } else if (!isWidgetBlock(content)) {
           useBlockSelection.getState().clear()
@@ -181,6 +186,7 @@ export function BlockSelectionKeys() {
       if (!e.shiftKey || e.button !== 0) return
       const el = e.target as HTMLElement | null
       if (el?.closest?.('.block-gutter')) return
+      if (el?.closest?.('.amx-db, .amx-db-pop, .amx-db-peek-shade')) return // 数据库自行处理 Shift 选字/范围选择。
       const host = el?.closest?.('[data-block-id]') as HTMLElement | null
       const id = host?.dataset.blockId
       if (!id || host!.contains(document.activeElement)) return
@@ -209,6 +215,7 @@ export function BlockSelectionKeys() {
       // 否则会存下一个不显示任何 UI 的僵尸 activeEmbed(Codex L4)。
       const content = (usePageStore.getState().blocks[id]?.content ?? '').trim()
       if (!/^!\[\[[^\]\n]+\]\]$/.test(content)) return
+      if (isDatabaseEmbedBlock(content)) return // 只有显式 </> 可以打开数据库引用源码。
       e.preventDefault()
       useBlockSelection.getState().setActiveEmbed(id)
     }

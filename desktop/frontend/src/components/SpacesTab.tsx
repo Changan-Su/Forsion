@@ -8,7 +8,7 @@ import { useSpaceStore, label } from '@lcl/engine'
 import { isUserSpace, deleteUserSpace } from '../userSpaces'
 import { DEFAULT_SPACE_KEY, LAST_EXIT_SPACE, HOME_SLOT_SPACE, startupSpacePref } from '../spaces'
 import { homeSlotSpaceId, setHomeSlotSpace } from '../homeSlot'
-import { useApp } from '../stores/appStore'
+import { panelToast } from './PanelNotice'
 import { useI18n } from '../i18n'
 import { LayoutGrid, Rocket } from 'lucide-react'
 import { SettingsPanel, SettingsRow } from './SettingsPrimitives'
@@ -29,8 +29,7 @@ export const SpacesTab: React.FC = () => {
 
   const uninstall = async (id: string, name: string): Promise<void> => {
     if (!window.confirm(t('spaces.deleteConfirm', { name }))) return
-    await deleteUserSpace(id)
-    useApp.getState().toast(t('settings.spaces.uninstalled', { name }))
+    if (await deleteUserSpace(id)) panelToast(t('settings.spaces.uninstalled', { name }))
   }
 
   return (

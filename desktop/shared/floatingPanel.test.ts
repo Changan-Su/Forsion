@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeFloatingPanelOpenOptions } from './floatingPanel'
+import { normalizeFloatingPanelOpenOptions, normalizeMainAction } from './floatingPanel'
 
 describe('normalizeFloatingPanelOpenOptions', () => {
   it('accepts one builtin target and clamps unsafe geometry', () => {
@@ -18,5 +18,22 @@ describe('normalizeFloatingPanelOpenOptions', () => {
     })?.view).toEqual({ type: 'plugin:clock:face', params: { zone: 'UTC' } })
     expect(normalizeFloatingPanelOpenOptions({ id: 'x', title: 'X', builtin: 'market', view: { type: 'x' } })).toBeUndefined()
     expect(normalizeFloatingPanelOpenOptions({ id: 'x', title: 'X' })).toBeUndefined()
+  })
+})
+
+describe('normalizeMainAction', () => {
+  it('只放行白名单动作;载荷只给声明过的动作,且须是不超长的非空字符串', () => {
+    expect(normalizeMainAction('reset-layout', 'junk')).toEqual({ action: 'reset-layout' })
+    expect(normalizeMainAction('space-removed', 'probe-space')).toEqual({ action: 'space-removed', payload: 'probe-space' })
+    expect(normalizeMainAction('chat-draft', 'x'.repeat(20000))?.payload).toHaveLength(20000)
+    expect(normalizeMainAction('chat-draft', 'x'.repeat(20001))).toBeUndefined()
+    expect(normalizeMainAction('skills-changed', 'ignored')).toEqual({ action: 'skills-changed' })
+    expect(normalizeMainAction('agents-changed', undefined)).toEqual({ action: 'agents-changed' })
+    expect(normalizeMainAction('open-agents', undefined)).toEqual({ action: 'open-agents' })
+    expect(normalizeMainAction('open-agent', 'my-agent')).toEqual({ action: 'open-agent', payload: 'my-agent' })
+    expect(normalizeMainAction('open-agent', 'x'.repeat(65))).toBeUndefined()
+    expect(normalizeMainAction('space-removed', '')).toBeUndefined()
+    expect(normalizeMainAction('space-removed', { id: 'x' })).toBeUndefined()
+    expect(normalizeMainAction('quit', undefined)).toBeUndefined()
   })
 })

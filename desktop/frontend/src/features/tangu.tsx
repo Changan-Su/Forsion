@@ -5,7 +5,7 @@ import { translate } from '../i18n'
 import { ChatView } from '../views/ChatView'
 import { MemoryPanelView, SubchatsView, SessionFilesView } from '../views/RightViews'
 import { AgentsDetailSpecialView, WorkspaceDetailSpecialView } from '../views/SpecialViews'
-import { AgentsSpaceView, TanguDetailsView } from '../views/AgentProfileView'
+import { AgentsSpaceView, AgentsRosterView, TanguDetailsView } from '../views/AgentProfileView'
 import { hasNativeFeature } from './runtime'
 const app = () => useApp.getState()
 
@@ -19,7 +19,8 @@ export function registerTanguViews(): void {
   // 侧栏对话只是 ChatView 的另一个停靠身份:绕开 `chat` singleton 与主区实例冲突,但仍跟随同一
   // activeId / messagesBySession / runningBySession,不创建所谓「Side Chat」会话或第二套 runtime。
   registerView({ type: 'chat-panel', kind: 'aux', displayName: () => translate('bootengine.view.chatPanel'), icon: MessageCircle, factory: (props) => <ChatView {...props} />, singleton: true })
-  registerView({ type: 'tangu-details', kind: 'aux', displayName: () => translate('agentProfile.title'), icon: Bot, factory: () => <TanguDetailsView />, singleton: true })
+  registerView({ type: 'tangu-details', kind: 'aux', displayName: () => translate('agentProfile.title'), icon: Bot, factory: (props) => <TanguDetailsView {...props} />, singleton: true })
+  registerView({ type: 'agents-roster', kind: 'aux', displayName: () => translate('agentProfile.roster'), icon: Bot, factory: () => <AgentsRosterView />, singleton: true })
   registerView({ type: 'agent-profile', kind: 'page', displayName: () => translate('agentProfile.space'), icon: Bot, factory: (props) => <AgentsSpaceView {...props} />, singleton: true })
   // 右栏视图(可关,可重开)
   registerView({ type: 'memory', kind: 'aux', displayName: () => app().tr('panel.tab.memory'), icon: BookOpen, factory: () => <MemoryPanelView />, singleton: true })

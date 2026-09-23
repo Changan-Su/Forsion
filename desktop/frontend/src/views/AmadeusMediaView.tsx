@@ -25,7 +25,6 @@ export function AmadeusMediaView({ leaf }: ViewProps) {
   const at = typeof leaf.params.at === 'number' ? leaf.params.at : null
   const to = typeof leaf.params.to === 'number' ? leaf.params.to : undefined
   const mode = useTheme((s) => s.mode)
-  const flat = useTheme((s) => s.flat)
   // 同 PDF/图片:asset:// 按「当前打开的 vault」解析,启动恢复 tab 时 vault 可能还没 open →
   // 先不挂播放器(否则加载失败,且 vault 就绪后 src 不变不会自愈)。vaultRoot 落地即重渲。
   const vaultReady = usePageStore((s) => !!s.vaultRoot)
@@ -35,7 +34,7 @@ export function AmadeusMediaView({ leaf }: ViewProps) {
   //    冷挂载走这里,已挂载后的第二条引语走 amadeus:media-goto(params 到不了已挂载的视图)。
   const loc: MediaLoc | null = at != null ? { at, ...(to ? { to } : {}) } : null
   return (
-    <div className="am-app tangu-lovable amx-pane amx-mediaview" data-mode={mode} data-flat={flat ? '1' : '0'}>
+    <div className="am-app tangu-lovable amx-pane amx-mediaview" data-mode={mode}>
       {vaultReady ? (
         <div className="amx-mediaview-box">
           {/* 音频档给一行文件名:一条 40px 的控制条独自浮在整格中央,看着像界面没加载出来

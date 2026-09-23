@@ -105,7 +105,7 @@ async function click(key: string, container: ParentNode = host) {
 }
 const wizard = () => React.createElement(OnboardingWizard, props)
 const settings = (initialTab?: 'permissions', open = true) => React.createElement(SettingsModal, {
-  ...props, open, initialTab, cfg, glassOn: true, flatOn: false, onClose: vi.fn(), onConfigChange: vi.fn(), onGlassChange: vi.fn(), onFlatChange: vi.fn(),
+  ...props, open, initialTab, cfg, flatOn: false, onFlatChange: vi.fn(), glassOn: true, onClose: vi.fn(), onConfigChange: vi.fn(), onGlassChange: vi.fn(),
 })
 
 it('inserts permissions immediately before speech in the full desktop capability phase and allows skipping during a request', async () => {

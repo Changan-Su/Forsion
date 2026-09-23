@@ -767,17 +767,17 @@ export const OnboardingWizard: React.FC<{
                         title={a.description || a.slug}
                         style={{
                           display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px 3px 4px',
-                          border: 'var(--border-width, 1px) solid var(--border)', borderRadius: 999, fontSize: 12,
+                          border: 'var(--border-width, 1px) solid var(--border)', borderRadius: 'var(--radius-pill, 999px)', fontSize: 'var(--ui-font-meta, 12px)',
                         }}
                       >
                         <i style={{
                           fontStyle: 'normal', width: 18, height: 18, borderRadius: '50%', display: 'inline-flex',
-                          alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700,
+                          alignItems: 'center', justifyContent: 'center', fontSize: 'var(--ui-font-caption, 11px)', fontWeight: 700,
                           color: 'var(--accent-ink)', background: 'color-mix(in srgb, var(--accent-ink) 14%, transparent)',
                         }}>{(a.name || '?').slice(0, 1).toUpperCase()}</i>
                         {a.name}
                         {a.createdBy === 'system' && (
-                          <em style={{ fontStyle: 'normal', fontSize: 10, color: 'var(--text-faint)' }}>{t('onboarding.agents.systemBadge')}</em>
+                          <em style={{ fontStyle: 'normal', fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{t('onboarding.agents.systemBadge')}</em>
                         )}
                       </span>
                     ))}
@@ -922,7 +922,7 @@ export const OnboardingWizard: React.FC<{
                     {mirrorTesting ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />} {t('settings.mirror.test')}
                   </button>
                   {mirrorTest?.targets.map((tg) => (
-                    <span key={tg.name} style={{ fontSize: 12.5, color: tg.ok ? 'var(--text-muted)' : 'var(--danger, #e5484d)' }}>
+                    <span key={tg.name} style={{ fontSize: 'var(--ui-font-meta, 12px)', color: tg.ok ? 'var(--text-muted)' : 'var(--danger, #e5484d)' }}>
                       {tg.ok ? '✓' : '✗'} {tg.name} · {tg.ok ? `${tg.latencyMs}ms` : (tg.error || t('settings.mirror.unreachable'))}
                     </span>
                   ))}

@@ -1384,7 +1384,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
   // 只动 ~/.forsion/plugins;内嵌 agent 已播种进引擎的按「播种一次」语义保留(活体),
   // 内嵌引擎插件需重启引擎后消失(调用方负责提示/重启)。
   handle(IPC.uninstallPlugin, async (_e, id: string) => {
-    if (typeof id !== 'string' || !SAFE_PLUGIN_ID.test(id)) throw new Error('非法的插件标识')
+    if (typeof id !== 'string' || !SAFE_PLUGIN_ID.test(id)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
     const root = globalPluginsDir()
     let target: string | null = null
     let entries: import('node:fs').Dirent[] = []
@@ -1399,7 +1399,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
       } catch { /* manifest 坏/缺:按目录名兜底 */ }
       if (pluginIdOf(e.name, manifestId) === id) { target = path.join(root, e.name); break }
     }
-    if (!target) throw new Error('插件不存在')
+    if (!target) throw new Error('plugin-not-found')
     // 墓碑:声明过的扩展名永久保留豁免(库里数据文件还在,掉回笔记=毁档),再删目录。
     try {
       const m = JSON.parse(await fs.readFile(path.join(target, 'manifest.json'), 'utf8')) as { fileExtensions?: unknown }

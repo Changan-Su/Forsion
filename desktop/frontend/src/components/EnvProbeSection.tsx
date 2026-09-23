@@ -156,7 +156,7 @@ export const EnvProbeSection: React.FC<{
           <div className="file-row" style={{ cursor: 'default' }}>
             <span className="file-name">
               {pr.found ? '✅' : '⚠️'} <b>{pr.tool}</b>
-              <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 12 }}>
+              <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>
                 {pr.found ? pr.version : pr.tool === 'docker' ? t('onboarding.env.missingDocker') : pr.tool === 'npm' ? t('onboarding.env.missingNpm') : t('onboarding.env.missing')}
               </span>
             </span>
@@ -199,7 +199,7 @@ export const EnvProbeSection: React.FC<{
         <pre
           ref={logRef}
           style={{
-            marginTop: 8, fontSize: 11, fontFamily: 'var(--font-mono)', maxHeight: 160,
+            marginTop: 8, fontSize: 'var(--ui-font-caption, 11px)', fontFamily: 'var(--font-mono)', maxHeight: 160,
             overflowY: 'auto', background: 'var(--bg-card)', padding: 8,
             border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-sm)',
             whiteSpace: 'pre-wrap', wordBreak: 'break-all',

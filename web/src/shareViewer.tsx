@@ -113,7 +113,6 @@ type NoteState =
 function ShareApp({ base, meta, tree, onCurrentChange }: ShareViewerProps): React.ReactElement {
   const { t } = useI18n()
   const mode = useTheme((s) => s.mode)
-  const flat = useTheme((s) => s.flat)
   const [current, setCurrent] = useState<string>(() => initialPage(meta, tree))
   const [note, setNote] = useState<NoteState | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -230,7 +229,7 @@ function ShareApp({ base, meta, tree, onCurrentChange }: ShareViewerProps): Reac
     <div className="shv">
       {showSide && <nav className="shv-side">{treeRoot.children.map((n) => renderRow(n, 0))}</nav>}
       <main className="shv-main">
-        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor shv-pane" data-mode={mode} data-flat={flat ? '1' : '0'}>
+        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor shv-pane" data-mode={mode}>
           {/* 顶栏:与桌面 .amx-toolbar 同一条(sticky、画布满铺压不住它);胶囊插槽由 UnifiedPage 的 CanvasSegPortal
               投「文档 | 画布」进来。移动端也画这条 —— 应用里手机没顶栏是因为底栏胶囊接管了,这里没有底栏。 */}
           <div className="amx-toolbar shv-toolbar">

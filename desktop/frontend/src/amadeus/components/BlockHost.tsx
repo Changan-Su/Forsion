@@ -440,7 +440,7 @@ export const BlockHost = memo(function BlockHost({
           onCommit={(v) => setBlockContent(blockId, v)}
           onDone={() => useBlockSelection.getState().setActiveEmbed(null)}
         />
-      ) : selected && embedTarget ? (
+      ) : selected && embedTarget && !embedDb ? (
         <div className="block-body embed-src-line embed-src-readonly" aria-hidden>
           {`![[${embedTarget}]]`}
         </div>

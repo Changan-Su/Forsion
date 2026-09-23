@@ -112,7 +112,7 @@
   padding-inline: 12px 8px;
   border-bottom: var(--border-width, 1px) solid transparent;
   background: transparent;
-  font-size: 12px;
+  font-size: var(--ui-font-meta, 12px);
   font-weight: 600;
   color: var(--text-muted);
   min-width: 0;
@@ -161,8 +161,8 @@
   padding: 10px 2px 2px;
   text-align: left;
 }
-.dash-section-title { color: var(--text); font-size: 13px; font-weight: 650; letter-spacing: 0.02em; }
-.dash-section-note { overflow: hidden; color: var(--text-muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.dash-section-title { color: var(--text); font-size: var(--ui-font-body, 13px); font-weight: 650; letter-spacing: 0.02em; }
+.dash-section-note { overflow: hidden; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); text-overflow: ellipsis; white-space: nowrap; }
 
 /* 尺寸感知的 built-in 卡片面：保留同一数据源与关键动作，去掉整页工具栏和嵌套滚动。 */
 .dash-viewcard--compact { overflow: hidden; }
@@ -170,8 +170,8 @@
 .dash-viewcard--interactive > .am-app { width: 100%; height: 100%; min-height: 0; }
 .dash-compact { height: 100%; min-height: 0; display: flex; flex-direction: column; padding: 0 12px 12px; color: var(--text); }
 .dash-compact-kpi { min-height: 40px; display: flex; align-items: baseline; gap: 6px; flex: 0 0 auto; }
-.dash-compact-kpi strong { font-size: clamp(22px, 7cqw, 34px); line-height: 1; font-weight: 640; font-variant-numeric: tabular-nums; }
-.dash-compact-kpi span { color: var(--text-muted); font-size: 11.5px; }
+.dash-compact-kpi strong { font-size: var(--ui-font-display, 20px); line-height: 1; font-weight: 640; font-variant-numeric: tabular-nums; }
+.dash-compact-kpi span { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .dash-compact-kpi button { margin-left: auto; width: 24px; height: 24px; display: grid; place-items: center; border: var(--border-width, 1px) solid transparent; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text-muted); cursor: pointer; }
 .dash-compact-kpi button:hover { background: var(--overlay-light); color: var(--text); }
 .dash-compact-rows { min-height: 0; display: flex; flex: 1 1 auto; flex-direction: column; overflow: hidden; }
@@ -184,17 +184,17 @@ button.dash-compact-row {
     background-color var(--dur-fast, 180ms) var(--ease-apple, cubic-bezier(0.25, 0.1, 0.25, 1));
 }
 button.dash-compact-row:hover { color: var(--primary); background: color-mix(in srgb, var(--primary) 4%, transparent); }
-.dash-compact-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.dash-compact-row > span b { display: block; overflow: hidden; color: var(--text-muted); font-size: 10.5px; font-weight: 550; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.dash-compact-row > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-meta, 12px); }
+.dash-compact-row > span b { display: block; overflow: hidden; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); font-weight: 550; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
 .dash-compact-row > span.is-done { color: var(--text-faint, var(--text-muted)); text-decoration: line-through; }
-.dash-compact-row > em { color: var(--text-faint, var(--text-muted)); font-size: 10.5px; font-style: normal; white-space: nowrap; }
+.dash-compact-row > em { color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-caption, 11px); font-style: normal; white-space: nowrap; }
 .dash-compact-row > em.overdue { color: var(--danger); }
-.dash-compact-more { padding-top: 6px; flex: 0 0 auto; color: var(--text-faint, var(--text-muted)); font-size: 10.5px; }
-.dash-compact-empty { min-height: 80px; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
-.dash-agenda-row > i { width: 7px; height: 7px; border-radius: 999px; }
-.dash-inbox-dot { width: 6px; height: 6px; border-radius: 999px; background: color-mix(in srgb, var(--text-muted) 28%, transparent); }
+.dash-compact-more { padding-top: 6px; flex: 0 0 auto; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-caption, 11px); }
+.dash-compact-empty { min-height: 80px; display: flex; align-items: center; justify-content: center; gap: 6px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.dash-agenda-row > i { width: 7px; height: 7px; border-radius: var(--radius-pill, 999px); }
+.dash-inbox-dot { width: 6px; height: 6px; border-radius: var(--radius-pill, 999px); background: color-mix(in srgb, var(--text-muted) 28%, transparent); }
 .dash-inbox-dot.is-unread { background: var(--primary); }
-.dash-activity-lines { min-height: 0; overflow: hidden; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10.5px; line-height: 1.55; }
+.dash-activity-lines { min-height: 0; overflow: hidden; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: var(--ui-font-caption, 11px); line-height: 1.55; }
 .dash-activity-lines > div { display: grid; grid-template-columns: 3.4em minmax(3em, auto) minmax(0, 1fr); gap: 6px; }
 .dash-activity-lines time { color: var(--text-faint, var(--text-muted)); }
 .dash-activity-lines b { overflow: hidden; color: var(--primary); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
@@ -338,8 +338,8 @@ button.dash-compact-row:hover { color: var(--primary); background: color-mix(in 
   color: var(--primary);
 }
 .dash3-empty-copy { margin-top: 16px; }
-.dash3-empty-title { font-size: 17px; line-height: 1.3; font-weight: 650; color: var(--text); }
-.dash3-empty-sub { margin-top: 6px; max-width: 38ch; font-size: 13px; line-height: 1.55; color: var(--text-muted); }
+.dash3-empty-title { font-size: var(--ui-font-heading, 14px); line-height: 1.3; font-weight: 650; color: var(--text); }
+.dash3-empty-sub { margin-top: 6px; max-width: 38ch; font-size: var(--ui-font-body, 13px); line-height: 1.55; color: var(--text-muted); }
 .dash3-templates {
   margin-top: 20px;
   display: grid;
@@ -380,14 +380,14 @@ button.dash-compact-row:hover { color: var(--primary); background: color-mix(in 
   color: var(--primary);
 }
 .dash3-template-copy { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.dash3-template-name { font-size: 13px; line-height: 1.25; font-weight: 650; color: var(--text); }
-.dash3-template-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11.5px; color: var(--text-muted); }
+.dash3-template-name { font-size: var(--ui-font-body, 13px); line-height: 1.25; font-weight: 650; color: var(--text); }
+.dash3-template-hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
 
 .dash3-size-dim { margin-left: auto; color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums; }
 
 /* 分区标题属于页面层,用更稳的字号与留白建立组别,但仍然不画卡片外壳。 */
 .dash3-card--chrome .dash-section { padding-inline: 4px; }
-.dash3-card--chrome .dash-section-title { font-size: 14px; line-height: 1.35; font-weight: 650; letter-spacing: 0; }
+.dash3-card--chrome .dash-section-title { font-size: var(--ui-font-body, 13px); line-height: 1.35; font-weight: 650; letter-spacing: 0; }
 
 @media (max-width: 560px) {
   .dash3-empty { padding-inline: 16px; }

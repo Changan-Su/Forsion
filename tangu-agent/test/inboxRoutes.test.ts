@@ -143,6 +143,25 @@ describe('/agent/inbox 领取条件', () => {
     expect((await c1()).attachments).toEqual({ items: ITEMS, claimed: false, requires: REQ });
   });
 
+  it('thread 判别列:服务端广播行解析成 {kind,ticketId,event};agent 信带同形 JSON / 坏 id / 坏 JSON 一律 null(信任闸)', async () => {
+    const TID = '11111111-1111-4111-8111-111111111111';
+    const ins = (id: string, kind: string, thread: string | null) => query(
+      `INSERT INTO inbox_messages (id, user_id, title, body, sender_kind, sender_id, origin_broadcast_id, thread, created_at) VALUES (?, ?, ?, '', ?, 'forsion', ?, ?, ?)`,
+      [id, USER, `t-${id}`, kind, kind === 'server' ? `b-${id}` : null, thread, utc(1_000)],
+    );
+    await ins('th1', 'server', JSON.stringify({ kind: 'feedback', ticketId: TID, event: 'admin_reply' }));
+    await ins('th2', 'agent', JSON.stringify({ kind: 'feedback', ticketId: TID, event: 'admin_reply' }));
+    await ins('th3', 'server', JSON.stringify({ kind: 'feedback', ticketId: '../etc' }));
+    await ins('th4', 'server', '{oops');
+    const r = await api('/agent/inbox?filter=all');
+    const by = (id: string) => r.messages.find((m: any) => m.id === id);
+    expect(by('th1').thread).toEqual({ kind: 'feedback', ticketId: TID, event: 'admin_reply' });
+    expect(by('th2').thread).toBeNull();
+    expect(by('th3').thread).toBeNull();
+    expect(by('th4').thread).toBeNull();
+    for (const id of ['th1', 'th2', 'th3', 'th4']) await query(`DELETE FROM inbox_messages WHERE id = ?`, [id]);
+  });
+
   it('领取:body.client 原样转发;服务端 403 claim_requirements_unmet 透传错误码且本地不翻 claimed;满足后再领才翻', async () => {
     const claimBroadcast = vi.fn()
       .mockRejectedValueOnce(Object.assign(

@@ -3,7 +3,10 @@ name: React 组件与状态模式
 description: 当在 Forsion Coding Space 里编写 React/前端组件、hooks、状态管理,或排查重渲染、数据获取、内存泄漏、陈旧闭包类 bug 时使用。提供 hooks 依赖数组、useEffect 竞态与清理、组件组合、状态选型(useState/Context/zustand)、数据获取三态(loading/error/取消)、列表 key、受控/非受控、memo/useMemo/useCallback 的可复制正反例(均适配 importmap+esm.sh 无构建环境)。
 version: 1.0.0
 category: 前端
+shared: true
 ---
+
+> Scope: written for Forsion Coding Space's static preview runtime (files served as-is, .ts/.tsx transpiled on the fly, bare imports through an importmap to esm.sh, no bundler, no npm install). In a repository that has its own build system, follow that build system instead of these rules.
 
 # React 组件与状态模式
 

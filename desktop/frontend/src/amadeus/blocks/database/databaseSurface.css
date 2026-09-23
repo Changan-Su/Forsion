@@ -1,0 +1,68 @@
+/* Shared database rhythm. The type scale lives in base.css; settings still own font families. */
+.am-app .amx-db,
+.amx-db-peek {
+  font-family: var(--font-ui);
+  font-size: var(--db-text-size);
+  font-weight: 400;
+  line-height: var(--db-line-height);
+  letter-spacing: normal;
+  font-kerning: normal;
+}
+.amx-db .amx-db-head { gap: 8px; padding: 4px 2px 6px; }
+.amx-db .amx-db-name { font-size: var(--db-title-size); font-weight: 600; line-height: var(--db-title-line-height); padding: 2px 4px; }
+.amx-db .amx-db-name:focus-visible { outline: none; box-shadow: inset 0 -1px 0 0 var(--sel-line, var(--border)); }
+.amx-db .amx-db-count { font-size: var(--db-meta-size); font-variant-numeric: tabular-nums; }
+.amx-db .amx-db-viewbar { gap: 8px; flex-wrap: wrap; padding: 0 2px 6px; overflow: visible; }
+.amx-db-viewtabs { display: flex; align-items: center; gap: 3px; flex: 1 1 auto; min-width: 0; max-width: 100%; overflow-x: auto; }
+.amx-db-viewtools { display: flex; align-items: center; justify-content: flex-end; gap: 3px; flex: 0 1 auto; min-width: 0; max-width: 100%; flex-wrap: wrap; margin-left: auto; }
+.amx-db .amx-db-viewtab { min-height: var(--db-control-height); padding: 4px 9px; border-radius: var(--radius-sm, 6px); font-size: var(--db-text-size); line-height: var(--db-meta-line-height); font-weight: 500; }
+.amx-db .amx-db-viewtab[data-active] { background: var(--menu-hover); font-weight: 500; }
+.amx-db .amx-db-viewtab:hover { background: var(--menu-hover); color: var(--text); }
+.amx-db .amx-db-viewtab svg { width: 14px; height: 14px; opacity: .8; }
+.amx-db .amx-db-viewadd { flex: none; width: var(--db-control-height); height: var(--db-control-height); border-radius: var(--radius-sm, 6px); }
+.amx-db .amx-db-filterbtn { height: var(--db-control-height); padding: 4px 7px; gap: 5px; font-size: var(--db-meta-size); line-height: var(--db-meta-line-height); border-radius: var(--radius-sm, 6px); }
+.amx-db .amx-db-filterbtn[data-on] { background: var(--sel-fill, var(--overlay-light)); color: var(--text); }
+.amx-db .amx-db-filterbtn:hover { background: var(--menu-hover); }
+.amx-db .amx-db-iconbtn { width: var(--db-control-height); height: var(--db-control-height); border-radius: var(--radius-sm, 6px); padding: 7px; color: var(--text-muted); }
+.amx-db .amx-db-iconbtn:hover, .amx-db .amx-db-viewadd:hover { background: var(--menu-hover); color: var(--text); }
+.amx-db .amx-db-newbtn { min-height: var(--db-control-height); padding: 4px 10px; margin-left: 4px; gap: 4px; font-size: var(--db-meta-size); line-height: var(--db-meta-line-height); font-weight: 500; border-radius: var(--radius-sm, 6px); }
+.amx-db .amx-db-newbtn:hover { filter: none; background: var(--action-fill-hover, var(--action-fill)); }
+.amx-db .amx-db-search { box-sizing: border-box; height: var(--db-control-height); width: 128px; padding: 4px 8px; border-color: transparent; border-radius: var(--radius-sm, 6px); background: var(--overlay-light); font: inherit; font-size: var(--db-meta-size); transition: background-color var(--duration-instant, 0.1s); }
+.amx-db .amx-db-search::placeholder { color: var(--text-faint, var(--text-muted)); }
+.amx-db .amx-db-search:focus { width: 128px; border-color: var(--sel-line, var(--border)); outline: none; box-shadow: none; background: var(--bg); }
+.amx-db .amx-db-viewbar button:focus-visible { outline: var(--focus-ring, 1px) solid var(--sel-line, var(--border)); outline-offset: 1px; }
+.amx-db .amx-db-row { border-top-color: color-mix(in srgb, var(--border) 78%, transparent); }
+.amx-db .amx-db-th, .amx-db .amx-db-cell, .amx-db .amx-db-rowgutter { border-right-color: color-mix(in srgb, var(--border) 50%, transparent); }
+.amx-db .amx-db-thbtn { min-height: var(--db-cell-height); padding: var(--db-cell-pad-block) var(--db-cell-pad-inline); font-size: var(--db-text-size); font-weight: 400; line-height: var(--db-line-height); gap: 7px; border-radius: 0; }
+.amx-db .amx-db-th-icon { display: inline-flex; align-items: center; opacity: .65; }
+.amx-db .amx-db-cell { min-height: var(--db-cell-height); }
+.amx-db .amx-db-value-display, .amx-db .amx-db-input, .amx-db .amx-db-numfmt, .amx-db .amx-db-rocell { min-height: var(--db-cell-height); padding: var(--db-cell-pad-block) var(--db-cell-pad-inline); line-height: var(--db-line-height); font-size: var(--db-text-size); box-sizing: border-box; }
+.amx-db .amx-db-cellbtn { min-height: var(--db-cell-height); padding: var(--db-cell-pad-block) var(--db-cell-pad-inline); gap: 5px; line-height: var(--db-line-height); font-size: var(--db-text-size); color: var(--text); }
+.amx-db .amx-db-urlcell { padding: 0; gap: 2px; }
+.amx-db .amx-db-cellbtn:hover { background: var(--overlay-subtle, var(--overlay-light)); }
+:is(.amx-db, .amx-db-pop, .amx-db-peek) .amx-db-chip { display: inline-block; min-width: 0; max-width: 100%; height: var(--db-chip-height); line-height: var(--db-meta-line-height); padding: 0 6px; border-color: transparent; border-radius: 4px; font-size: var(--db-meta-size); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+:is(.amx-db, .amx-db-pop, .amx-db-peek) .amx-db-chip.amx-chip-c9 { background: var(--overlay-medium); }
+.amx-db .amx-db-addrow { min-height: var(--db-cell-height); padding: var(--db-cell-pad-block) var(--db-cell-pad-inline); border-top-color: color-mix(in srgb, var(--border) 78%, transparent); font-size: var(--db-meta-size); }
+.amx-db .amx-db-row.amx-db-row--selected { background: var(--sel-fill, var(--overlay-light)); }
+.amx-db .amx-db-row.amx-db-row--selected:hover { background: var(--sel-fill, var(--overlay-light)); }
+.amx-db .amx-db-rowdel:focus-visible, .amx-db .amx-db-edit:focus-visible { opacity: 1; }
+@media (hover: none) {
+  .amx-db .amx-db-rowdel, .amx-db .amx-db-edit { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .amx-db .amx-db-search { transition: none; } }
+
+/* Embedded source controls share the title line. Reserve their space at rest,
+   so hovering never covers the count or moves the database title. */
+.am-app .unified-embed.amx-has-src-btn > .unified-embed-body > .amx-db > .amx-db-head { padding-inline-end: 48px; }
+.am-app .unified-embed:has(> .unified-embed-body > .amx-db) > .amx-src-btn--block { top: 10px; }
+.am-app .block-host[data-embed]:has(> .amx-src-btn) > .block-body > .amx-db > .amx-db-head { padding-inline-end: 80px; }
+.amx-db .amx-db-thbtn:focus-visible { outline: var(--focus-ring, 1px) solid var(--sel-line, var(--border)); outline-offset: -1px; }
+
+/* Secondary labels remain readable; computed/read-only values use the same body scale. */
+.amx-db :is(.amx-db-computed, .amx-db-richtext, .amx-db-grouphead) { font-size: var(--db-text-size); line-height: var(--db-line-height); }
+:is(.amx-db, .amx-db-peek, .amx-db-pop) :is(.amx-db-blank, .amx-db-rosub) { font-size: var(--db-meta-size); line-height: var(--db-meta-line-height); }
+.amx-db [data-coltype='number'] { font-variant-numeric: tabular-nums; }
+
+:is(.amx-db, .amx-db-peek) .amx-cal-chip { font-size: var(--db-text-size); line-height: var(--db-line-height); padding: 0; background: transparent; border-radius: 0; font-variant-numeric: tabular-nums; }
+:is(.amx-db, .amx-db-peek) .amx-db-wikilink { font-size: var(--db-text-size); line-height: var(--db-line-height); }
+.amx-db-pop:not(.amx-coverpick) .amx-db-numfmt-cfg label > span { font-size: var(--db-meta-size); }

@@ -6,7 +6,7 @@
 
 | 环节 | 做法 |
 |---|---|
-| 触发线 | `窗口 − max(reserveTokens, 5% 窗口)`,且不低于窗口一半。272k 窗缺省 255.6k;200k → 183.6k;1M → 950k。每轮调用模型前按「上次实测 prompt_tokens + 新增消息粗估」判;run 首轮没有实测时把工具定义头也粗估进去。**`thresholdPercent`(09-20)只会把线往下拉**:`min(上式, max(窗口 × X%, 2 × keepRecentTokens + 24k))` —— 缺省 95 对任何窗口都 ≥ 上式(行为不变);1M 窗调到 30 → 300k。地板(缺省 64k)= 压缩后的体量(固定头 ~16k + 摘要 ~6k + keepRecent)之上留一段余量,线低于它就每轮都压。 |
+| 触发线 | `窗口 − max(reserveTokens, 5% 窗口)`,且不低于窗口一半。272k 窗缺省 255.6k;200k → 183.6k;1M(手动开启后)→ 950k。窗口指 run 实际用的窗口:09-22 起自动识别的一律封顶 272k(见下「窗口」)。每轮调用模型前按「上次实测 prompt_tokens + 新增消息粗估」判;run 首轮没有实测时把工具定义头也粗估进去。**`thresholdPercent`(09-20)只会把线往下拉**:`min(上式, max(窗口 × X%, 2 × keepRecentTokens + 24k))` —— 缺省 95 对任何窗口都 ≥ 上式(行为不变);1M 窗调到 30 → 300k。地板(缺省 64k)= 压缩后的体量(固定头 ~16k + 摘要 ~6k + keepRecent)之上留一段余量,线低于它就每轮都压。 |
 | 压什么 | 从最新往回累计到 `keepRecentTokens`(缺省 20k)原样保留,其余总结成一条 system 摘要;工具调用与结果批次绝不拆开;对话以一批工具结果收尾时退到发起它们的 assistant。有 provider 实测时按 实测/(粗估+工具头) 的比例换算预算(截图按定额估、实测十几万那类;纯粗估不冒充实测);越线已成立,按估算全装得下也强制压一次 → 只保留最后一条(或最后一批)。 |
 | 摘要请求 | 先 resolve 摘要模型(可换便宜模型),按它**自己**的窗口算预算:输出上限 = min(summaryMaxTokens, 有效预留/2, 窗口/4),输入预算 = 触发线 − 输出上限 − 开销。结构化交接(Goal 段逐字引用用户当前请求 / Done / In progress·Next steps / Facts)+ 增量 PRESERVE/UPDATE 附注;转写为 pi 式行格式(`[User]` / `[Assistant]` / `[Assistant tool calls] name(args…)` / `[Tool result: name]` 头 3000 尾 1000 字符),`[Existing Summary]` 永不截,超预算从最旧条目丢并留标记(最后一条自己超预算则按头尾截)。文件操作清单机械提取、跨压缩单调累积。 |
 | 持久化 | 摘要落 `session_summaries`:`through_timestamp` + `through_message_id` = 边界行(**按 id 认**:严格早于它的行被覆盖;与它同一毫秒的邻行原样回放 —— 时间戳不是全序,重复安全、吞掉才丢数据;时间戳缺失的行一律回放);`through_tool_call_id` 表示**行内切点**(该行只覆盖到这个调用,其后的工具轮原样回放)。run 内总结覆盖到尚未落库的助手段 → 等该段 finalize(收尾 / 中止落半截 / steer 拆段)后读回时间戳再落。切点 id 在行里对不上或出现 ≠1 次 → 该行整体回放。边界只前进:整行 > 靠后的切点 > 靠前的切点。范围里有**有损消息**(机械折叠过 / hydrate 按 100k 硬帽截过)→ 摘要只留 run 内存,不落检查点。 |
@@ -48,6 +48,7 @@ instructions = "always keep ticket ids and the failing test names"
 ```
 
 窗口本身另有一套:`modelOverrides.<id>.contextWindow` / 环境变量 `TANGU_MODEL_CONTEXT_WINDOWS` / 上游回学 / 族表(见 `contextBudget.ts` 头注)。
+09-22 起 run 用 `effectiveContextWindowInfo`(对标 Codex 目录的 `context_window` 272k / `max_context_window` 分离):**自动识别**出的窗口(模型自报 / 回学 / 族表 / 兜底)封顶 `CONTEXT_WINDOW_TOKENS`(272k,env `TANGU_CONTEXT_WINDOW_TOKENS` 同调兜底与上限);**人填的覆盖**(`modelOverrides` / env 表)不封顶 —— 桌面聊天框模型菜单的「上下文上限」与设置页窗口输入框写的都是 `modelOverrides`。`context_info` 多带 `ctxWindowMax`(封顶前的模型窗口),`/agent/models` 多带 `maxContextWindow` 与顶层 `contextWindowCap` / `modelOverridesWritable`(= PUT 覆盖的 hostExec 门,模型菜单据此露不露开关)。Historian fork 判官与自我脑暴分身的超窗护栏也按会话实际窗口算(它们是本会话的请求)。摘要目标(`resolveSummaryTarget` 换了摘要模型时)仍按未封顶的 `modelContextWindow` 算:它问的是摘要模型吃得下多少。
 
 ## 事件
 
@@ -67,13 +68,16 @@ instructions = "always keep ticket ids and the failing test names"
 - 真模型:`npm run live:harness -- --only compact`(手动;连带钉 `GET /usage` 压缩前实测 → 压缩后粗估 → 下个 run 后回到实测)与 `--only autocompact --window 32000`(把台架模型窗口钉小灌满:两个 run 各压一次并落库、第三个 run 从两次链式摘要里答出标记、主循环 prompt 变小)。
 - 百分比旋钮的真模型三跑(缺一不可):上面那条回归;正例 `--only autocompact --window 100000 --compaction '{"thresholdPercent":25,"keepRecentTokens":500}'`(`--compaction` 把 JSON 写进隔离共享域的 config.json;场景额外断言 `context_info.compactAt === 窗口 × X%`);负对照 `--only autocompact --window 100000 --filler <正例灌的段数>`(同一份输入、不带旋钮,线在 83.6k → **必须红**,0 次压缩)。09-20 grok-4.6:正例 ②31649 → ③12722,负对照 ②31524 → ③31553。⚠️ 单条消息超 100k 字符会被 hydrate 按硬帽截成 2.5k,灌不进上下文 —— 场景对段数有上限守卫。
 - 导出的时间线(`GET /agent/sessions/:id/timeline`,反馈包里那份)的 status 行带 `ctxWindow / ctxWindowSource / compactAt / compactionEnabled` 与压缩事件的 `reason / persisted / fallback / summarized / beforeTokens / afterTokens`:「引擎当时认的窗口是多少、线在哪、压没压」直接读包,不用回后台反推。
-- 桌面:`npm run e2e:ctxwindow`(真 Electron + 桩引擎;T10–T14 是设置页的自动压缩滑块,截图 `ctxwindow-4-autocompact.png`)。
+- 桌面:`npm run e2e:ctxwindow`(真 Electron + 桩引擎;T10–T14 是设置页的自动压缩滑块,截图 `ctxwindow-4-autocompact.png`);`npm run e2e:ctxlimit`(聊天框模型菜单「上下文上限」:行位置 / PUT / 环弹层封顶说明 / 开到最大后环分母当场换)。
+- 窗口封顶的真模型两跑(09-22,读隔离 state.db 的 `agent_run_events` 里 context_info):`TANGU_CONTEXT_WINDOW_TOKENS=100000 npm run live:harness -- --only chat`(台架模型族表 272k 被压到 100k:`100000 / family / max 272000 / compactAt 83616`);`--only chat --window 500000`(人填的覆盖不封顶:`500000 / override`)。
 
 ## 为什么有 thresholdPercent(09-20 生产反馈)
 
 一条 GLM-5.3 会话的反馈包:主循环 prompt 一路涨到 387k、逐轮重读,40 个 run 里**零**压缩事件,7 次 `token_quota_exceeded`。取证:后台该模型 `context_window` 留空 → 族表 1M → 触发线 950k,按设计永远够不着;而跨 run 回放「最近 50 行」**按行不按 token**(一个 80 次工具调用的 run 只算一两行),惰性检查点只盖窗口外的行 —— 「50 行」与「950k」之间没有任何 token 界,一天就从 31k 涨回 387k。该会话 92% 的点数烧在输入上(缓存命中按 0.2 计仍占 76%,未命中 16%,输出 8%)。机制本身没坏(grok live 两场景全过),缺的是一个用户够得着的线。用户拍板做成设置里的百分比,缺省不变。
 
 没做:hydrate 窗口改 token 预算(结构修);缺省值没有下调 —— 1M 模型的用户要自己把阈值调到 20–35,或由 admin 在模型上填实际窗口。
+
+> 修订 09-22:缺省窗口已封顶 272k(用户拍板,对标 Codex),1M 族缺省触发线回到 255.6k,上面这条病根按缺省已解;「要自己调阈值」只对手动开到 1M 的用户还成立。反过来,之前把阈值调到 25–35% 的用户,分母从 1M 变成 272k 后线会落到地板附近(~64–95k),需要的话调回 95。
 
 ## 已知边界
 

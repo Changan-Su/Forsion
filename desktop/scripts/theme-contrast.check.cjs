@@ -28,7 +28,9 @@ require('sucrase/register/ts')
 const { SEED_THEMES } = require(path.join(__dirname, '../electron/seedThemes.ts'))
 const SOFT_CSS = SEED_THEMES.find((theme) => theme.id === 'soft')?.css
 if (!SOFT_CSS) throw new Error('缺少第一方 soft 磁盘种子主题')
-const LANGS = ['lovable', 'genesis-glass', 'soft', 'zhi']
+const zhiCandidate = path.resolve(__dirname, '../../../Forsion-Instrumentality-Project/forsion-theme-zhi/theme.css')
+const hasZhiCandidate = fs.existsSync(zhiCandidate)
+const LANGS = ['lovable', 'genesis-glass', 'soft', ...(hasZhiCandidate ? ['zhi'] : [])]
 const SKINS = ['cream', 'coral', 'teal', 'lavender', 'zhi']
 const COLOR_TOKENS = [
   'bg', 'bg-card', 'bg-glass', 'sidebar-bg', 'text', 'text-light', 'text-muted', 'text-faint', 'text-ghost',
@@ -41,7 +43,7 @@ const COLOR_TOKENS = [
 const CSS = [
   read('styles/base.css'),
   read('theme/skins.css'),
-  ...LANGS.map((id) => id === 'soft' ? SOFT_CSS : read(`theme/themes/${id}/theme.css`)),
+  ...LANGS.map((id) => id === 'soft' ? SOFT_CSS : id === 'zhi' ? fs.readFileSync(zhiCandidate, 'utf8') : read(`theme/themes/${id}/theme.css`)),
   read('views/chat2/chat2.css'),
   fs.readFileSync(path.join(__dirname, '../../lcl/engine/singleColumn.css'), 'utf8'),
   read('amadeus-host.css'),
@@ -189,10 +191,10 @@ function filesUnder(dir, out = []) {
 }
 
 ;(async () => {
-  // lovable/soft/zhi 是纯结构语言。genesis-glass 另有从 skin token 派生的材质别名(--bg-glass),故在浏览器矩阵验。
+  // Genesis/Soft 是纯结构语言。Genesis Glass 另有从 skin token 派生的材质别名(--bg-glass),故在浏览器矩阵验。
   const axisLeaks = []
-  for (const lang of ['lovable', 'soft', 'zhi']) {
-    const source = (lang === 'soft' ? SOFT_CSS : read(`theme/themes/${lang}/theme.css`)).replace(/\/\*[\s\S]*?\*\//g, '')
+  for (const lang of ['lovable', 'soft', ...(hasZhiCandidate ? ['zhi'] : [])]) {
+    const source = (lang === 'soft' ? SOFT_CSS : lang === 'zhi' ? fs.readFileSync(zhiCandidate, 'utf8') : read(`theme/themes/${lang}/theme.css`)).replace(/\/\*[\s\S]*?\*\//g, '')
     for (const token of COLOR_TOKENS) {
       if (new RegExp(`--${token.replace(/-/g, '\\-')}\\s*:`).test(source)) axisLeaks.push(`${lang}/--${token}`)
     }

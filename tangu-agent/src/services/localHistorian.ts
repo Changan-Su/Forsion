@@ -6,6 +6,7 @@
  *     (chat_sessions.summary,人读:列表预览 / [[session:]] 引用第一跳) + 判断是否更新用户
  *     LOG/memory（经 brain.memory），有则写入；
  *   - 首轮（roundN===1 且 firstRoundTrigger）必触发。
+ *   - 标题例外(09-22):到点轮在 run **起点**只凭用户消息出标题(onUserRunStart),不等回复;done 判官只在起点那一路没成时兜底。
  *
  * 三种工作模式（cfg.mode）：
  *   - independent（默认）：每个父会话复用固定隐藏 Historian Session,与团队总结共享,24k 字符触发压缩;Historian 结构化判断并写 title/summary/LOG；memory 走两阶段(借 Codex
@@ -38,7 +39,7 @@ import { branchSession } from './sessionBranch.js';
 import { createRun } from './runStore.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { buildSharedPrefix } from './selfBrainstorm.js';
-import { modelContextWindow, estimateMessageTokens } from './contextBudget.js';
+import { effectiveContextWindowInfo, estimateMessageTokens } from './contextBudget.js';
 import { redactSecrets } from '../core/redact.js';
 import { appendHarnessCandidates } from '../agents/harnessStore.js';
 import { appendCandidates as appendRawCandidates, readCandidates as readRaw } from './memoryCandidates.js';
@@ -103,8 +104,8 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
     );
   }
   const example =
-    `{"title":"Gradient visualization"${wantSummary ? ',"summary":"Debugging the gradient page; settled on SVG rendering, axis scaling still open."' : ''}` +
-    `,"log":"Finished first draft of donk_intro.docx"${wantMemory ? ',"memory_candidates":["Prefers concise, direct answers"]' : ''}${wantHarness ? ',"harness_candidates":[]' : ''}}`;
+    `{${wantTitle ? '"title":"Gradient visualization",' : ''}${wantSummary ? '"summary":"Debugging the gradient page; settled on SVG rendering, axis scaling still open.",' : ''}` +
+    `"log":"Finished first draft of donk_intro.docx"${wantMemory ? ',"memory_candidates":["Prefers concise, direct answers"]' : ''}${wantHarness ? ',"harness_candidates":[]' : ''}}`;
   return { fields, example };
 }
 
@@ -182,7 +183,8 @@ export function isRoundDue(roundN: number, every: number, firstRoundTrigger: boo
 async function enoughNewSinceLastAction(sessionId: string): Promise<boolean> {
   try {
     const last = await query<any[]>(
-      `SELECT created_at FROM special_agent_log WHERE session_ref = ? AND agent = 'historian'
+      // 标题在 run 起点写(onUserRunStart),落在本轮用户消息之后:算它做游标,done 时只剩助手回复可数,短回复会把整轮判断跳掉。
+      `SELECT created_at FROM special_agent_log WHERE session_ref = ? AND agent = 'historian' AND action <> 'title_updated'
        ORDER BY created_at DESC LIMIT 1`,
       [sessionId],
     );
@@ -199,10 +201,10 @@ async function enoughNewSinceLastAction(sessionId: string): Promise<boolean> {
   }
 }
 
-async function recentTranscript(sessionId: string, limit = 30): Promise<{ text: string; anchorMessageId?: string }> {
+async function recentTranscript(sessionId: string, limit = 30, excludeId = ''): Promise<{ text: string; anchorMessageId?: string }> {
   const rows = await query<any[]>(
-    `SELECT id, role, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?`,
-    [sessionId, limit],
+    `SELECT id, role, content FROM chat_messages WHERE session_id = ? AND id <> ? ORDER BY timestamp DESC LIMIT ?`,
+    [sessionId, excludeId, limit],
   );
   const anchorMessageId = rows[0]?.id ? String(rows[0].id) : undefined;
   rows.reverse();
@@ -256,7 +258,8 @@ async function forkJudge(
     if (!prefix.length) return '';
     const { model, apiKey, baseUrl, apiModelId } = await deps().brain.llm.resolveModelAndKey(seed.modelId);
     const est = prefix.reduce((n, m) => n + estimateMessageTokens(m), 0);
-    const win = modelContextWindow(seed.modelId, model);
+    // 按会话实际用的窗口(自动识别的封顶 272k):fork 是本会话的请求,护栏与主 loop 同一分母,不按模型能到的 1M 放行
+    const win = effectiveContextWindowInfo(seed.modelId, model).tokens;
     if (est > win * FORK_CONTEXT_HEADROOM) {
       log(`fork 判官:上下文超窗(~${est} > ${Math.floor(win * FORK_CONTEXT_HEADROOM)}/${win}),回落独立判断`);
       return '';
@@ -313,6 +316,66 @@ function log(msg: string): void {
 /** 是否本地形态(host-exec profile)。云端 baseline 无 hostExec → Historian 整体 no-op。 */
 function isLocal(): boolean {
   try { return !!deps().profile.capabilities.hostExec; } catch { return false; }
+}
+
+// ── 首帧标题(09-22):标题只看用户消息,不等本轮回复。到点轮在 run 起点就出标题;done 判官只管摘要/LOG/记忆,
+// 起点那一路没成才兜底要 title。键 = `${sessionId}:${round}`(下一 run 可能在上一轮 done 判官读表前就起跑)。
+// ponytail: 失败 run 的条目留到同轮下一 run 覆盖,每会话至多一条。
+// ponytail: 标题请求与主 run 首请求并发打同一 provider;单槽订阅端若拖慢首帧,改成等首 token 后再发。
+const earlyTitles = new Map<string, Promise<boolean>>();
+const TITLE_SYSTEM =
+  'Write a title for the chat session below: a phrase of at most 16 characters in the user\'s language capturing its topic. ' +
+  'The latest user message has no reply yet — title from what the user is asking. ' +
+  'If [Current title] already fits, repeat it unchanged. Output the title only: no quotes, no trailing punctuation, no explanation.';
+const cleanTitle = (s: unknown): string => String(s || '').trim().replace(/^["'《「]+|["'》」]+$/g, '').slice(0, 60);
+
+/**
+ * run 起点钩子:用户消息一确定(尚未落库、模型尚未开口)就按到点轮出标题。fire-and-forget,绝不抛。
+ * 不占 historianBusySessions:占了锁 done 判官会整轮自跳。onTitle = 标题落库后通知客户端刷新。
+ */
+export function onUserRunStart(sessionId: string, userId: string, message: string, userMessageId: string | undefined, onTitle: (title: string) => void): void {
+  if (!isLocal() || !message.trim()) return;
+  void (async () => {
+    const cfg = loadSpecialAgentsConfig().historian;
+    if (!cfg.enabled) return;
+    const s = (await query<any[]>(`SELECT kind, title FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [sessionId, userId]))[0];
+    if (!s || (s.kind && s.kind !== 'user')) return;
+    const n = await query<any[]>(`SELECT COUNT(*) AS n FROM agent_runs WHERE session_id = ? AND status = 'done'`, [sessionId]);
+    const round = (Number(n[0]?.n) || 0) + 1;
+    if (!isRoundDue(round, cfg.everyRounds, cfg.firstRoundTrigger)) return;
+    const key = `${sessionId}:${round}`;
+    const p = (async () => {
+      const modelId = await resolveBackgroundModelId(cfg.modelId).catch(() => '');
+      if (!modelId) return false;
+      const prior = (await recentTranscript(sessionId, 30, userMessageId)).text;
+      const transcript = `${prior}\n用户：${message.trim()}`.trim().slice(-MAX_TRANSCRIPT_CHARS);
+      const current = String(s.title || '');
+      const signal = AbortSignal.timeout(30_000);
+      const { model, apiKey, baseUrl, apiModelId } = await deps().brain.llm.resolveModelAndKey(modelId);
+      const payload = await deps().brain.llm.buildProviderPayload({
+        model, apiModelId,
+        messages: [
+          { role: 'system', content: TITLE_SYSTEM },
+          { role: 'user', content: `[Current title]\n${current}\n\n[Conversation]\n${transcript}` },
+        ] as ChatMessage[],
+        projectSource: '', usageSource: 'tangu', temperature: 0.3, maxTokens: 600, stream: true, signal,
+        thinkingLevel: 'low', // 抢首帧的小活:缺省档在 DeepSeek 类端点 = high(同代批判官)
+      } as any);
+      const res = await deps().brain.llm.streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal });
+      await recordJudgeUsage(userId, modelId, model, res);
+      const title = cleanTitle(res?.content);
+      if (title.length < 2 || title.length > 40 || title.toUpperCase() === 'NOTHING') return false;
+      if (title === current) return true;
+      // CAS:用户这期间手改过标题就不覆盖,也不报「已更新」(query 无 affectedRows,靠 RETURNING 判命中)。
+      const hit = await query<any[]>(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') = ? RETURNING id`, [title, sessionId, current]);
+      if (!hit.length) return true;
+      await logActivity(userId, 'title_updated', title, sessionId);
+      log(`首帧标题(第 ${round} 轮,只看用户消息): ${title}`);
+      onTitle(title);
+      return true;
+    })().catch((e: any) => { log(`首帧标题失败,交 done 判官兜底: ${e?.message || e}`); return false; });
+    earlyTitles.set(key, p);
+  })().catch((e: any) => log(`首帧标题跳过: ${e?.message || e}`));
 }
 
 /**
@@ -415,7 +478,11 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // force(私聊 rotate):不看到点轮与增量地板,本次一定采;其余闸(kind/roundN≥1/模型/预算)照旧。
     const due = !!opts?.force || isRoundDue(roundN, cfg.everyRounds, cfg.firstRoundTrigger);
     if (!due) return;
-    const titleDue = due;
+    // 标题已由 run 起点那一路(只看用户消息)接手 → 判官不再要 title;起点失败/没跑才兜底。
+    const earlyKey = `${sessionId}:${roundN}`;
+    const early = opts?.force ? undefined : earlyTitles.get(earlyKey);
+    earlyTitles.delete(earlyKey);
+    const titleDue = due && !(early && (await early));
     const memoryDue = due;
     const logDue = due;
     const summaryDue = due; // 摘要与标题同属 Historian 自有资产(非记忆资产):三种模式都由 judge 维护
@@ -446,7 +513,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     const transcript = transcriptSnapshot.text;
     if (!transcript.trim()) { log('无可用对话内容,跳过'); return; }
 
-    if (titleDue || judgeLog || judgeMemory) {
+    if (titleDue || summaryDue || judgeLog || judgeMemory) { // 标题归起点后,辅助模式轮只剩摘要/提名要判
       // 一次结构化判断:title / summary / log / memory_candidates 各自独立(到期才要、不需要则空)。
       // 采集刻意不看现有记忆(与 Codex Phase 1 同构:采集盲写、去重归整固),省下每轮 ~20K 字输入。
       const prevSummary = String((sk as any).summary || '').trim().replace(/\s+/g, ' ').slice(0, 600);
@@ -474,7 +541,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
       if (!j) {
         log(`判断输出无法解析为 JSON: "${raw.slice(0, 80)}"`); // 不 return:辅助讨论仍应发起
       } else {
-        const title = String(j.title || '').trim().replace(/^["'《「]+|["'》」]+$/g, '').slice(0, 60);
+        const title = cleanTitle(j.title);
         const logText = String(j.log || '').trim();
         // 候选条目:数组为正道;旧格式/半服从模型给了 memory 字符串 → 按行拆成多条候选兜底
         // (整文是 bullet 列表;当一条塞进行式 raw 会丢首行之外的全部内容——Codex #5)。

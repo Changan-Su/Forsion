@@ -22,7 +22,7 @@ registerMessages({
   'picker.moveDown': { zh: '下移分组', en: 'Move group down' },
   'picker.deleteGroup': { zh: '删除分组（模型返回提供方分组）', en: 'Delete group (models return to their provider group)' },
   'picker.emptyLocal': { zh: '添加提供方并拉取模型后，可在这里筛选和分组。', en: 'Add a provider and fetch its models to filter and group them here.' },
-  'picker.ctxWindowHint': { zh: '右侧数字是上下文窗口，按 token 填（272K = 272000）；灰色为自动识别值，填了即本机覆盖，留空恢复自动。对之后的新消息生效。', en: 'The number on the right is the context window in tokens (272K = 272000). Grey means auto-detected; typing a value overrides it on this device, clearing restores auto-detect. Applies to new messages.' },
+  'picker.ctxWindowHint': { zh: '右侧数字是上下文窗口，按 token 填（272K = 272000）；灰色为自动值：模型本身更大时默认也只用到 272K，填更大的数（或在聊天框模型菜单里选「最大」）即本机开启长上下文，留空恢复默认。对之后的新消息生效。', en: 'The number on the right is the context window in tokens (272K = 272000). Grey is the automatic value: models with larger windows still use 272K by default. Enter a larger number (or pick Maximum in the chat model menu) to turn on long context on this device; clear it to restore the default. Applies to new messages.' },
   'picker.ctxWindowFor': { zh: '{name} 的上下文窗口（tokens）', en: 'Context window for {name} (tokens)' },
   'picker.ctxWindowInvalid': { zh: '按 token 填，最小 4000（272K 请填 272000）', en: 'Enter tokens, minimum 4000 (for 272K enter 272000)' },
 })
@@ -39,7 +39,10 @@ function CtxWindowInput({ model, onSave }: { model: ModelInfo; onSave: (modelId:
     if (tokens === null ? !overridden : (overridden && tokens === model.contextWindow)) return // 没变化不打后端
     try { await onSave(model.id, tokens); setError('') } catch (e: any) { setError(e?.message || String(e)) }
   }
-  return <span className="model-catalog-ctx" title={t(`ctx.windowSource.${model.contextWindowSource || 'default'}`)}>
+  const capped = !overridden && (model.maxContextWindow ?? 0) > (model.contextWindow ?? 0)
+  const title = t(`ctx.windowSource.${model.contextWindowSource || 'default'}`) +
+    (capped ? ` · ${t('ctx.windowCapped', { max: model.maxContextWindow!.toLocaleString(), n: (model.contextWindow ?? 0).toLocaleString() })}` : '')
+  return <span className="model-catalog-ctx" title={title}>
     <input type="number" min={4000} step={1000} inputMode="numeric"
       key={`${model.id}:${overridden ? model.contextWindow : ''}`} // 保存后列表刷新 → 用新值重挂,defaultValue 才会跟上
       defaultValue={overridden ? model.contextWindow : ''} placeholder={String(model.contextWindow || '')}

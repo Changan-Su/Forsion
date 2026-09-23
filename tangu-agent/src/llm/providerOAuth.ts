@@ -32,9 +32,10 @@ export interface OAuthProvider {
   tokenTtlSeconds?: number; // token 响应缺 expires_in 时的官方默认有效期(仅作兜底)
 }
 
-// 2026-09-06 同账号实测:0.150.0 的目录隐藏 GPT-6 Astra,0.153.4 才返回。
+// 后端按版本号 gate 新模型:0.150.0 的目录隐藏 GPT-6 Astra、0.153.4 才返回(09-06 同账号实测);
+// GPT-6 Sol / Luna 同理:0.153.4 拉到的目录没有,0.155.1 才返回(09-22 同账号实测)。
 // 与缓存版本一起推进,升级后立即重拉,不能复用旧客户端过滤过的 24h 缓存。
-export const CODEX_MODELS_CLIENT_VERSION = '0.153.4';
+export const CODEX_MODELS_CLIENT_VERSION = '0.155.1';
 
 export const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
   xai: {
@@ -82,8 +83,8 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProvider> = {
     baseUrl: 'https://chatgpt.com/backend-api/codex',
     protocol: 'openai-responses',
     // 仅兜底提示(实拉 /models 失败时才用),快照会过时——真实列表以 fetchProviderModels 实拉为准。
-    // 2026-09-06 实测 list 集;真实目录仍按当前账号返回,不把兜底提示合并进成功的响应。
-    modelIds: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4-mini', 'gpt-5.3-codex-spark'],
+    // 2026-09-22 实测 list 集(gpt-5.4-mini / gpt-5.3-codex-spark 已下架);真实目录仍按当前账号返回,不把兜底提示合并进成功的响应。
+    modelIds: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'],
     extraAuthParams: { id_token_add_organizations: 'true', codex_cli_simplified_flow: 'true' },
   },
 };

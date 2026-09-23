@@ -39,7 +39,8 @@ export interface Leaf {
 
 /** 视图渲染时拿到的 props。 */
 export interface ViewProps {
-  /** Temporary native panel View owned by this Main View. Absent in side views, embedded cards and mini windows. */
+  /** Temporary View owned by this View: a Main View's opens as a native side-panel tab; a side / bottom / drawer View's
+   *  covers that View itself behind Back. Absent in embedded cards and mini windows. */
   extendView?: ExtendViewController
   leaf: Leaf
   params: Record<string, unknown>

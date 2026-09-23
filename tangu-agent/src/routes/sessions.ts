@@ -474,7 +474,7 @@ export function timelineFields(type: string, p: any): Record<string, unknown> {
     // 答不了「引擎当时认的窗口是多少、线在哪」,只能回生产后台反推。非这几类 status 上它们是 undefined,res.json 丢掉。
     case 'status': return {
       phase: p?.phase ?? p?.state, stage: p?.stage, bytes: p?.bytes, uploadMs: p?.uploadMs, attempt: p?.attempt, waitMs: p?.waitMs, iteration: p?.iteration,
-      ctxWindow: p?.ctxWindow, ctxWindowSource: p?.ctxWindowSource, compactAt: p?.compactAt, compactionEnabled: p?.compactionEnabled,
+      ctxWindow: p?.ctxWindow, ctxWindowSource: p?.ctxWindowSource, ctxWindowMax: p?.ctxWindowMax, compactAt: p?.compactAt, compactionEnabled: p?.compactionEnabled,
       reason: p?.reason, persisted: p?.persisted, fallback: p?.fallback, summarized: p?.summarized, beforeTokens: p?.beforeTokens, afterTokens: p?.afterTokens,
     };
     // phase 分辨「后台调用(compaction/historian/brainstorm/muse-judge/delegate)」与主循环调用(无 phase);

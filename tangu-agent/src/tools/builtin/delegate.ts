@@ -96,7 +96,7 @@ export const delegateProvider: ToolProvider = {
                 task: { type: 'string', description: 'Subtask description (self-contained, clear goal, stating what to return)' },
                 context: { type: 'string', description: 'Optional: background information the subagent needs (relevant paths, known conclusions, etc.)' },
                 forkContext: { type: 'boolean', description: 'Optional: give the subagent a read-only transcript of this conversation so far (user and assistant messages only — no tool calls/results). Use when the subtask refers to things discussed above; default false starts clean.' },
-                agentSlug: { type: 'string', description: 'Optional: delegate to a specific named agent by its slug (runs with that agent\'s persona). Use the slug of an agent the user @-mentioned; omit for a generic or ad-hoc subagent.' },
+                agentSlug: { type: 'string', description: 'Optional: delegate to a specific named agent by its slug (runs with that agent\'s persona). Pick a slug from the "Other Agents" list in the system prompt or one the user @-mentioned; omit for a generic or ad-hoc subagent.' },
                 instructions: { type: 'string', description: 'Optional: inline instructions/role for an ad-hoc subagent you create on the fly (used when no agentSlug is given) — define its focus and how to work.' },
                 name: { type: 'string', description: 'Optional: a short display name for the ad-hoc subagent.' },
                 // 位置铁律:追加在 name 之后、engineProp 之前 —— 没装引擎的机器上 engineProp 为空,

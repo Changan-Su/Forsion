@@ -150,10 +150,10 @@ export const MuseView: React.FC<{
         <Sparkles size={16} /> {t('special.muse.title')}
         <span style={{ flex: 1 }} />
         {status?.enabled && status.mode && (
-          <span className="conn-pill" style={{ fontSize: 12, fontWeight: 400 }} title={t('special.muse.modeLabel')}>{modeLabel(status.mode).split(/[（(]/)[0]}</span>
+          <span className="conn-pill" style={{ fontSize: 'var(--ui-font-meta, 12px)', fontWeight: 400 }} title={t('special.muse.modeLabel')}>{modeLabel(status.mode).split(/[（(]/)[0]}</span>
         )}
-        {pendingN > 0 && <span className="conn-pill" style={{ fontSize: 12, fontWeight: 400, color: 'var(--accent-ink)' }}>{t('special.muse.pending', { n: pendingN })}</span>}
-        <span className="conn-pill" style={{ fontSize: 12 }}>
+        {pendingN > 0 && <span className="conn-pill" style={{ fontSize: 'var(--ui-font-meta, 12px)', fontWeight: 400, color: 'var(--accent-ink)' }}>{t('special.muse.pending', { n: pendingN })}</span>}
+        <span className="conn-pill" style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>
           <span className="dot" style={{ background: running ? 'var(--accent-ink)' : 'var(--text-muted)' }} />
           {!status?.enabled ? t('special.muse.disabled') : running ? t('special.muse.running') : t('special.muse.idle')}
         </span>
@@ -169,8 +169,8 @@ export const MuseView: React.FC<{
           {approvals.map((a) => (
             <div key={a.id} className="file-row" style={{ cursor: 'default', alignItems: 'flex-start' }}>
               <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
-                <b style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }}>{a.preview}</b>
-                <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>
+                <b style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--ui-font-meta, 12px)' }}>{a.preview}</b>
+                <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
                   {a.tool}{a.cwd ? ` · ${a.cwd}` : ''} · {String(a.created_at).replace('T', ' ').slice(5, 16)}
                   {a.note && <div>{t('special.muse.approvalNote', { note: a.note })}</div>}
                 </div>
@@ -188,7 +188,7 @@ export const MuseView: React.FC<{
       <div className="field">
         <label>{t('special.muse.thinking')}</label>
         <div style={{
-          fontSize: 13, lineHeight: 1.6, whiteSpace: 'pre-wrap', maxHeight: 220, overflowY: 'auto',
+          fontSize: 'var(--ui-font-body, 13px)', lineHeight: 1.6, whiteSpace: 'pre-wrap', maxHeight: 220, overflowY: 'auto',
           background: 'var(--bg-card)', border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-sm)', padding: 10,
         }}>
           {thinking || <span className="hint">{status?.enabled ? '…' : t('special.muse.disabled')}</span>}
@@ -203,7 +203,7 @@ export const MuseView: React.FC<{
           <div key={e.id} className="file-row" style={{ cursor: 'default', alignItems: 'flex-start' }}>
             <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
               <b>{e.name}</b>
-              <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>
+              <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
                 {e.date.replace('T', ' ')}{e.repeat ? ` · every ${e.repeat}` : ''}{e.lastRun ? ` · ${t('special.muse.trigFired', { t: new Date(e.lastRun).toLocaleString() })}` : ''}
                 {e.description && <div>{e.description}</div>}
               </div>
@@ -219,7 +219,7 @@ export const MuseView: React.FC<{
           <Crosshair size={13} /> {t('special.muse.watches')}
           <span style={{ flex: 1 }} />
           <a
-            style={{ cursor: 'pointer', fontSize: 11.5, fontWeight: 400, color: 'var(--accent-ink, var(--accent))' }}
+            style={{ cursor: 'pointer', fontSize: 'var(--ui-font-caption, 11px)', fontWeight: 400, color: 'var(--accent-ink, var(--accent))' }}
             onClick={() => { useApp.getState().closeSettings(); setActiveSpace('automation') }}
           >
             {t('special.muse.watchesAll')}
@@ -230,7 +230,7 @@ export const MuseView: React.FC<{
           <div key={tg.id} className="file-row" style={{ cursor: 'default', alignItems: 'flex-start' }}>
             <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
               <b>{tg.desc}</b>
-              <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>
+              <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
                 {condText(tg)}{tg.lastFiredAt ? ` · ${t('special.muse.trigFired', { t: new Date(tg.lastFiredAt).toLocaleString() })}` : ''}
               </div>
             </span>
@@ -256,7 +256,7 @@ export const MuseView: React.FC<{
             <input type="checkbox" checked={sel.has(td.id)} onChange={() => toggle(td.id)} style={{ marginTop: 3 }} />
             <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
               <b>{td.title}</b>
-              {td.detail && <div style={{ color: 'var(--text-muted)', fontSize: 12, marginTop: 2 }}>{td.detail}</div>}
+              {td.detail && <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>{td.detail}</div>}
             </span>
             <button className="icon-btn" title={t('special.muse.markDone')} onClick={() => void setTodoStatus(td.id, 'done')}><Check size={13} /></button>
             <button className="icon-btn" title={t('special.muse.dismiss')} onClick={() => void setTodoStatus(td.id, 'dismissed')}><XCircle size={13} /></button>
@@ -277,7 +277,7 @@ export const MuseView: React.FC<{
           <button className="btn ghost sm" disabled={!sel.size} onClick={() => void runInNew()}>
             <MessageSquarePlus size={12} /> {t('special.muse.runNew')}
           </button>
-          {msg && <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>{msg}</span>}
+          {msg && <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{msg}</span>}
         </div>
       )}
     </div>

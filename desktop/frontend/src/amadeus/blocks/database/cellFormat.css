@@ -9,7 +9,7 @@
   width: 100%;
   min-width: 0;
   padding: 6px;
-  font-size: 13.5px;
+  font-size: var(--ui-font-body, 13px);
   line-height: 22px;
   color: var(--text);
   cursor: text;
@@ -38,7 +38,7 @@
   border-radius: 4px;
   border: 1px dashed var(--border, rgba(127, 127, 127, 0.35));
   color: var(--text-faint, var(--text-muted));
-  font-size: 12px;
+  font-size: var(--ui-font-meta, 12px);
   line-height: 1;
   cursor: pointer;
   opacity: 0;
@@ -49,5 +49,5 @@
 
 /* 列菜单里的「数字显示」三个输入:标签 + 输入框一行一条 */
 .amx-db-numfmt-cfg label { display: flex; align-items: center; gap: 8px; padding: 2px 0; }
-.amx-db-numfmt-cfg label > span { flex: none; width: 44px; font-size: 12px; color: var(--text-faint, var(--text-muted)); }
+.amx-db-numfmt-cfg label > span { flex: none; width: 44px; font-size: var(--ui-font-meta, 12px); color: var(--text-faint, var(--text-muted)); }
 .amx-db-numfmt-cfg .amx-db-pop-input { flex: 1; min-width: 0; margin: 0; }

@@ -38,7 +38,20 @@ const nowUtc = (): string => new Date().toISOString().slice(0, 19).replace('T', 
 const ts = (v: any): string | null =>
   v == null ? null : v instanceof Date ? v.toISOString().slice(0, 19).replace('T', ' ') : String(v).slice(0, 19);
 
-const COLS = 'id, title, body, sender_kind, sender_id, origin_broadcast_id, read_at, archived_at, attachments, expires_at, created_at';
+const COLS = 'id, title, body, sender_kind, sender_id, origin_broadcast_id, read_at, archived_at, attachments, expires_at, thread, created_at';
+
+/** thread 只认服务端广播落下来的行(sender_kind='server'):本地 POST /agent/inbox 与 agent 信永远没有它;
+ *  形状只认 {kind:'feedback', ticketId:<uuid>}(客户端据此挂回复框、按 ticketId 打反馈 API),别的一律当无线程。 */
+function parseThread(r: any): { kind: 'feedback'; ticketId: string; event?: string } | null {
+  if (r.sender_kind !== 'server' || !r.thread) return null;
+  try {
+    const p = JSON.parse(String(r.thread));
+    if (p?.kind === 'feedback' && typeof p.ticketId === 'string' && /^[0-9a-fA-F-]{36}$/.test(p.ticketId)) {
+      return { kind: 'feedback', ticketId: p.ticketId, ...(typeof p.event === 'string' ? { event: p.event } : {}) };
+    }
+  } catch { /* 脏行按无线程 */ }
+  return null;
+}
 
 function serialize(r: any) {
   // attachments 落库形态 {items:[...], claimed:bool, requires?}(inboxPull 包装);脏 JSON 按无附件。
@@ -58,6 +71,7 @@ function serialize(r: any) {
     sender_kind: r.sender_kind,
     sender_id: r.sender_id,
     origin_broadcast_id: r.origin_broadcast_id ?? null,
+    thread: parseThread(r),
     read_at: ts(r.read_at),
     archived_at: ts(r.archived_at),
     attachments,

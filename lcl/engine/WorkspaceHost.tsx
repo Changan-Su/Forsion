@@ -18,6 +18,7 @@ import 'dockview-react/dist/styles/dockview.css'
 import type { Leaf, ViewDefinition } from './types'
 import { label, identitySig } from './types'
 import { ExtendViewHost } from './ExtendViewHost'
+import { presentInlineExtension, type ExtendViewController } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
 import { allViews, getView, subscribeViews } from './viewRegistry'
 import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension } from './dockviewStore'
@@ -70,8 +71,9 @@ function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
       lastMainViewType = def.type
       return changed
     })
+    const ownerKey = `${leaf.id}:${leaf.type}:${identitySig(leaf.params)}`
     // 面板级兜底:懒视图挂起 → 骨架屏(替代空白);渲染/chunk 失败 → 本面板错误面,不再冒到根边界。
-    return (
+    const view = (sideExtend?: ExtendViewController) => (
       <div
         className={`wb-view wb-view--${loc}${enter ? ' wb-view-enter' : ''}`}
         // ⚠️淡入类**播完必须摘**。CSS 动画是绑在元素上的:类只要还留着,元素每次被重新挂进 DOM 就会
@@ -87,13 +89,17 @@ function makeComponent(def: ViewDefinition): React.FC<IDockviewPanelProps> {
       >
         <ViewErrorBoundary>
           <Suspense fallback={<Skeleton variant={skeletonVariantOf(def.type, loc)} />}>
-            {loc === 'main' ? <ExtendViewHost present={presentDockedExtension} owner={props.api} ownerKey={`${leaf.id}:${leaf.type}:${identitySig(leaf.params)}`}>
+            {loc === 'main' ? <ExtendViewHost present={presentDockedExtension} owner={props.api} ownerKey={ownerKey}>
               {(extendView) => def.factory({ leaf, params: leaf.params, extendView })}
-            </ExtendViewHost> : def.factory({ leaf, params: leaf.params })}
+            </ExtendViewHost> : def.factory({ leaf, params: leaf.params, extendView: sideExtend })}
           </Suspense>
         </ViewErrorBoundary>
       </div>
     )
+    // 侧栏 / 底部 View 的临时 View 只盖住自己(不占邻居),返回即回原处。宿主框在滚动容器 .wb-view **外面**:
+    // 盖层若住在 .wb-view 里,会随它的滚动一起挪走。不传 owner:盖层就在本 View 的 DOM 里,隐藏时一起藏,
+    // 不会像停靠式那样悬空,所以不必随可见性关闭。
+    return loc === 'main' ? view() : <ExtendViewHost present={presentInlineExtension} ownerKey={ownerKey}>{view}</ExtendViewHost>
   }
 }
 

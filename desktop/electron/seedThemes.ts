@@ -15,7 +15,9 @@ export interface SeedTheme {
 const SOFT_MANIFEST = {
   id: 'soft',
   name: 'Soft · 柔影',
+  nameEn: 'Soft',
   description: '柔影浮卡 · 大圆角(LCL soft 结构语言)。渐变舞台 + 角落辉光 + 圆角浮卡,Plus Jakarta Sans。颜色由「配色」决定。',
+  descriptionEn: 'Rounded floating panels, a softly lit stage and a clear reading surface. Colors follow your selected palette.',
   version: '1.0.0',
   author: 'Forsion',
   supportsDarkMode: true,
@@ -26,13 +28,14 @@ const SOFT_MANIFEST = {
   preview: {
     shape: 'soft' as const,
     background: {
-      light: 'linear-gradient(158deg, #fceee4 0%, #f6edf9 52%, #edeefc 100%)',
-      dark: 'linear-gradient(158deg, #221c2e 0%, #1d1a28 55%, #181a2a 100%)',
+      light: 'linear-gradient(158deg, #f8f7f6 0%, #f2f1ef 52%, #fdfdfc 100%)',
+      dark: 'linear-gradient(158deg, #2a292b 0%, #323235 55%, #353538 100%)',
     },
-    accent: '#8b7fd6',
+    accent: '#1c1c1c',
     title: { text: 'Soft' },
     tagline: '柔影浮卡 · 大圆角',
-    swatches: ['#8b7fd6', '#f6edf9', '#6b6675', '#c3b8ee'],
+    taglineEn: 'Softly raised panels · rounded',
+    swatches: ['#1c1c1c', '#f8f7f6', '#5f5f5d', '#eae9e7'],
   },
 }
 
@@ -46,22 +49,14 @@ const SOFT_CSS = `/**
   --radius-sm: 10px;
   --radius-md: 14px;
   --radius-lg: 18px;
-  --radius-chat-surface: 20px;
-  --radius-chat-card: 14px;
+  --radius-chat-surface: var(--radius-lg);
+  --radius-chat-card: var(--radius-md);
   --font-ui: 'Plus Jakarta Sans', 'Nunito', ui-rounded, 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   --panel-blur: none;
-  /* 阴影形态归 soft，阴影色归当前 skin：旧值写死薰衣草紫，soft × coral/teal 会无故泛紫。 */
+  /* 阴影随背景配色的中性 --shadow；不能混入强调色，否则珊瑚/柔青会投出彩色边。 */
   --card-shadow: 0 1px 2px var(--shadow), 0 12px 30px -10px var(--shadow);
   --btn-shadow: 0 3px 12px var(--shadow);
   --icon-shadow: 0 1px 5px var(--shadow);
-}
-
-@supports (color: color-mix(in srgb, red 50%, transparent)) {
-  [data-theme='soft'] {
-    --card-shadow: 0 1px 2px var(--shadow), 0 12px 30px -10px color-mix(in srgb, var(--accent-ink) 16%, transparent);
-    --btn-shadow: 0 3px 12px color-mix(in srgb, var(--accent-ink) 22%, transparent);
-    --icon-shadow: 0 1px 5px color-mix(in srgb, var(--accent-ink) 14%, transparent);
-  }
 }
 
 .dark[data-theme='soft'] {
@@ -108,7 +103,7 @@ const SOFT_CSS = `/**
   background: color-mix(in srgb, var(--bg-card) 90%, transparent);
   border-bottom-color: color-mix(in srgb, var(--border) 70%, transparent);
 }
-[data-theme='soft'] .t2c-card { border-radius: 22px; }
+[data-theme='soft'] .t2c-card { border-radius: var(--radius-lg); }
 [data-theme='soft'] .composer-anchor {
   background: linear-gradient(to top, color-mix(in srgb, var(--bg-card) 78%, transparent), transparent);
 }

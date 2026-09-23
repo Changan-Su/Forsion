@@ -16,6 +16,7 @@ import { TierBadge } from './TierBadge'
 import { track } from '../achievements/store'
 import { AccountSwitcher } from './AccountSwitcher'
 import { publishAccountQuota } from '../services/accountQuota'
+import { ResetCardCeremony, type ResetCardResult } from './ResetCardCeremony'
 
 /** /api/token-quota/my 透传里本菜单消费的字段(percent 是「已用」百分比,展示用 100-x)。 */
 interface QuotaJson {
@@ -50,6 +51,7 @@ export const AccountCard: React.FC<{
   const [usageOpen, setUsageOpen] = useState(false)
   const [confirmReset, setConfirmReset] = useState<ResetScope | ''>('')
   const [busyReset, setBusyReset] = useState(false)
+  const [ceremony, setCeremony] = useState<ResetCardResult | null>(null)
   const authRequest = useRef(0)
   const authAction = useRef(0)
   const actionBusy = useRef(false)
@@ -78,6 +80,7 @@ export const AccountCard: React.FC<{
       setQuota(null)
       setConfirmReset('')
       setBusyReset(false)
+      setCeremony(null)
       refresh()
     })
     // 引擎进程态变化(启动/就绪/崩溃)→ 重拉:authStatus.backendState 是本卡「引擎未运行」轴的数据源。
@@ -195,8 +198,8 @@ export const AccountCard: React.FC<{
         } as QuotaJson
         setQuota(next)
         publishAccountQuota(next)
-        // 成功文案按卡型说实话:周卡别宣称恢复了今日(codex3#4)
-        onToast?.(t(scope === 'weekly' ? 'sidebar.account.menu.resetDoneWeekly' : 'sidebar.account.menu.resetDone'))
+        if (quota) setCeremony({ scope, before: quota, after: next, remainingCards: scope === 'weekly' ? r.json.resetCardsWeekly : r.json.resetCards })
+        setMenu(null)
       } else if (r?.json?.error === 'no_reset_card') {
         onToast?.(t('sidebar.account.menu.noCard'), true)
       } else {
@@ -325,6 +328,8 @@ export const AccountCard: React.FC<{
     document.body,
   ) : null
 
+  const ceremonyEl = ceremony && <ResetCardCeremony result={ceremony} onClose={() => setCeremony(null)} returnFocusSelector=".ribbon-account, .account-card" />
+
   if (compact) {
     return (
       <>
@@ -336,6 +341,7 @@ export const AccountCard: React.FC<{
           {avatarEl}
         </button>
         {menuEl}
+        {ceremonyEl}
       </>
     )
   }
@@ -369,6 +375,7 @@ export const AccountCard: React.FC<{
         )}
       </div>
       {menuEl}
+      {ceremonyEl}
     </>
   )
 }

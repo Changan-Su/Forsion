@@ -3,7 +3,10 @@ name: 网页应用调试
 description: 当网页应用出现 bug、白屏、报错、行为不符预期时使用；提供系统化调试流程(复现→隔离→假设→验证)、浏览器 DevTools(Console/Network/Elements/断点/source map)用法、React 常见 bug(无限重渲染、陈旧状态、重复请求、key 警告、事件未绑定)排查、二分定位、读报错栈,以及 Forsion 预览白屏/importmap 缺依赖的症状→动作对照。触发词:调试、debug、白屏、报错栈、无限重渲染、Network 4xx、CORS、importmap、断点、source map、页面不刷新、点击没反应。
 version: 1.0.0
 category: 前端
+shared: true
 ---
+
+> Scope: written for Forsion Coding Space's static preview runtime (files served as-is, .ts/.tsx transpiled on the fly, bare imports through an importmap to esm.sh, no bundler, no npm install). In a repository that has its own build system, follow that build system instead of these rules.
 
 # 网页应用调试
 

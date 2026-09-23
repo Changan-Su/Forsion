@@ -118,7 +118,10 @@ async function main() {
       content: el.scrollWidth, viewport: el.clientWidth, bar: el.parentElement.clientWidth,
       col: el.closest('.t2-chat-col').clientWidth, padding: getComputedStyle(el.parentElement).padding,
     }))
-    check('刚好容纳全部选项时收起更多按钮', await view.locator('.agent-select-strip .engine-picker-more').count() === 0, { fitsWidth, ...fit })
+    // Composer has a reading-width cap: expanding the column does not necessarily expand its option bar.
+    // Judge overflow against the actual scroll viewport, not the outer column width.
+    check('加宽后更多按钮与实际溢出一致（包含输入区宽度上限）',
+      (await view.locator('.agent-select-strip .engine-picker-more').count() > 0) === (fit.content > fit.viewport + 1), { fitsWidth, ...fit })
 
     await resize(420, 720)
     const narrow = await safe('窄栏')

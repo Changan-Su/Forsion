@@ -2167,7 +2167,7 @@
             },
             "agentSlug": {
               "type": "string",
-              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Use the slug of an agent the user @-mentioned; omit for a generic or ad-hoc subagent."
+              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Pick a slug from the \"Other Agents\" list in the system prompt or one the user @-mentioned; omit for a generic or ad-hoc subagent."
             },
             "instructions": {
               "type": "string",
@@ -2815,7 +2815,7 @@
             },
             "agentSlug": {
               "type": "string",
-              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Use the slug of an agent the user @-mentioned; omit for a generic or ad-hoc subagent."
+              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Pick a slug from the \"Other Agents\" list in the system prompt or one the user @-mentioned; omit for a generic or ad-hoc subagent."
             },
             "instructions": {
               "type": "string",
@@ -3636,7 +3636,7 @@
             },
             "agentSlug": {
               "type": "string",
-              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Use the slug of an agent the user @-mentioned; omit for a generic or ad-hoc subagent."
+              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Pick a slug from the \"Other Agents\" list in the system prompt or one the user @-mentioned; omit for a generic or ad-hoc subagent."
             },
             "instructions": {
               "type": "string",
@@ -4554,7 +4554,7 @@
             },
             "agentSlug": {
               "type": "string",
-              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Use the slug of an agent the user @-mentioned; omit for a generic or ad-hoc subagent."
+              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Pick a slug from the \"Other Agents\" list in the system prompt or one the user @-mentioned; omit for a generic or ad-hoc subagent."
             },
             "instructions": {
               "type": "string",
@@ -5220,7 +5220,7 @@
             },
             "agentSlug": {
               "type": "string",
-              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Use the slug of an agent the user @-mentioned; omit for a generic or ad-hoc subagent."
+              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Pick a slug from the \"Other Agents\" list in the system prompt or one the user @-mentioned; omit for a generic or ad-hoc subagent."
             },
             "instructions": {
               "type": "string",
@@ -5827,7 +5827,7 @@
             },
             "agentSlug": {
               "type": "string",
-              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Use the slug of an agent the user @-mentioned; omit for a generic or ad-hoc subagent."
+              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Pick a slug from the \"Other Agents\" list in the system prompt or one the user @-mentioned; omit for a generic or ad-hoc subagent."
             },
             "instructions": {
               "type": "string",
@@ -6648,7 +6648,7 @@
             },
             "agentSlug": {
               "type": "string",
-              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Use the slug of an agent the user @-mentioned; omit for a generic or ad-hoc subagent."
+              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Pick a slug from the \"Other Agents\" list in the system prompt or one the user @-mentioned; omit for a generic or ad-hoc subagent."
             },
             "instructions": {
               "type": "string",
@@ -7566,7 +7566,7 @@
             },
             "agentSlug": {
               "type": "string",
-              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Use the slug of an agent the user @-mentioned; omit for a generic or ad-hoc subagent."
+              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Pick a slug from the \"Other Agents\" list in the system prompt or one the user @-mentioned; omit for a generic or ad-hoc subagent."
             },
             "instructions": {
               "type": "string",
@@ -8465,7 +8465,7 @@
             },
             "agentSlug": {
               "type": "string",
-              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Use the slug of an agent the user @-mentioned; omit for a generic or ad-hoc subagent."
+              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Pick a slug from the \"Other Agents\" list in the system prompt or one the user @-mentioned; omit for a generic or ad-hoc subagent."
             },
             "instructions": {
               "type": "string",

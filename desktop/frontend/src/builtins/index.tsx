@@ -292,13 +292,13 @@ export const BuiltinPluginsSection: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <PluginLogo />
             <div style={{ flex: 1, minWidth: 0 }}>
-              <b style={{ fontSize: 13 }}>{b.name()}</b>
-              <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{b.description()}</div>
+              <b style={{ fontSize: 'var(--ui-font-body, 13px)' }}>{b.name()}</b>
+              <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{b.description()}</div>
             </div>
             <input type="checkbox" checked={!!enabled[b.id]} onChange={(e) => toggle(b.id, e.target.checked)} style={{ cursor: 'pointer' }} />
           </div>
           {b.id === 'browser' && enabled.browser && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: 12, cursor: 'pointer' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: 'var(--ui-font-meta, 12px)', cursor: 'pointer' }}>
               <input type="checkbox" checked={inAppLinks} onChange={(e) => setInAppLinks(e.target.checked)} />
               {t('browser.inAppLinks')}
             </label>

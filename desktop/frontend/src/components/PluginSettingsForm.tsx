@@ -82,8 +82,8 @@ export const PluginSettingsForm: React.FC<{
     if (f.type === 'section') {
       return (
         <div className="field" key={f.key} style={{ marginTop: 18 }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.06em', paddingBottom: 6, borderBottom: 'var(--border-width) solid var(--border)' }}>{lbl(f)}</div>
-          {f.help && <div style={{ fontSize: 11.5, color: 'var(--text-muted)', marginTop: 6 }}>{lbl({ label: f.help, labelEn: f.helpEn })}</div>}
+          <div style={{ fontSize: 'var(--ui-font-caption, 11px)', fontWeight: 700, color: 'var(--text-faint)', textTransform: 'uppercase', letterSpacing: '0.06em', paddingBottom: 6, borderBottom: 'var(--border-width) solid var(--border)' }}>{lbl(f)}</div>
+          {f.help && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-muted)', marginTop: 6 }}>{lbl({ label: f.help, labelEn: f.helpEn })}</div>}
         </div>
       )
     }
@@ -95,7 +95,7 @@ export const PluginSettingsForm: React.FC<{
       const fg = tone === 'warn' ? 'var(--danger)' : tone === 'success' ? 'var(--green)' : 'var(--text-muted)'
       return (
         <div className="field" key={f.key}>
-          <div style={{ background: bg, color: fg, borderRadius: 'var(--radius-md, 8px)', padding: '10px 12px', fontSize: 12.5, lineHeight: 1.6 }}>{lbl(f)}</div>
+          <div style={{ background: bg, color: fg, borderRadius: 'var(--radius-md, 8px)', padding: '10px 12px', fontSize: 'var(--ui-font-meta, 12px)', lineHeight: 1.6 }}>{lbl(f)}</div>
         </div>
       )
     }
@@ -113,7 +113,7 @@ export const PluginSettingsForm: React.FC<{
             <input type="checkbox" checked={!!values[f.key]} onChange={(e) => void persist({ ...values, [f.key]: e.target.checked })} />
             {lbl(f)}
           </label>
-          {f.help && <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{lbl({ label: f.help, labelEn: f.helpEn })}</div>}
+          {f.help && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{lbl({ label: f.help, labelEn: f.helpEn })}</div>}
         </div>
       )
     }
@@ -159,19 +159,19 @@ export const PluginSettingsForm: React.FC<{
             {busy ? <Loader2 size={13} className="spin" /> : <Upload size={13} />} {t('settings.plugins.import')}
           </button>
         </div>
-        {f.help && <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginBottom: 6 }}>{lbl({ label: f.help, labelEn: f.helpEn })}</div>}
+        {f.help && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginBottom: 6 }}>{lbl({ label: f.help, labelEn: f.helpEn })}</div>}
         {items.length === 0 ? <div className="hint">{t('settings.plugins.empty')}</div> : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {items.map((it) => {
               const blob = fileByName(it.file)
               return (
-                <div key={it.file} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', border: 'var(--border-width) solid var(--border)', borderRadius: 8, padding: 8 }}>
+                <div key={it.file} style={{ display: 'flex', gap: 10, alignItems: 'flex-start', border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-sm, 6px)', padding: 8 }}>
                   {blob?.dataBase64
-                    ? <img src={`data:${blob.mimeType};base64,${blob.dataBase64}`} alt={it.file} style={{ width: 52, height: 52, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />
-                    : <div style={{ width: 52, height: 52, borderRadius: 6, background: 'var(--overlay-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><ImageIcon size={16} /></div>}
+                    ? <img src={`data:${blob.mimeType};base64,${blob.dataBase64}`} alt={it.file} style={{ width: 52, height: 52, objectFit: 'cover', borderRadius: 'var(--radius-sm, 6px)', flexShrink: 0 }} />
+                    : <div style={{ width: 52, height: 52, borderRadius: 'var(--radius-sm, 6px)', background: 'var(--overlay-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><ImageIcon size={16} /></div>}
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <span className="file-name" style={{ flex: 1, fontSize: 12 }}>{it.file}</span>
+                      <span className="file-name" style={{ flex: 1, fontSize: 'var(--ui-font-meta, 12px)' }}>{it.file}</span>
                       <button className="icon-btn" title={t('common.delete')} onClick={() => void onDelItem(f.key, it.file)}><Trash2 size={13} /></button>
                     </div>
                     {f.itemFields.map((itf) => (
@@ -194,8 +194,8 @@ export const PluginSettingsForm: React.FC<{
       {fields.map(renderField)}
       <input ref={upRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => void onUpload(e)} />
       <div style={{ display: 'flex', gap: 8, alignItems: 'center', minHeight: 18 }}>
-        {err && <span style={{ fontSize: 12, color: 'var(--danger)' }}>{err}</span>}
-        {saved && <span style={{ fontSize: 12, color: 'var(--accent-ink)' }}>{t('settings.plugins.saved')}</span>}
+        {err && <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--danger)' }}>{err}</span>}
+        {saved && <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--accent-ink)' }}>{t('settings.plugins.saved')}</span>}
       </div>
     </div>
   )

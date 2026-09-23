@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { medalTier, seriesPoints, OFFICIAL_SERIES } from './definitions'
-import { registerPluginSeries, track, unregisterPluginAchievements, useAchievements } from './store'
+import { registerPluginSeries, syncAchievementsFromDisk, track, unregisterPluginAchievements, useAchievements } from './store'
 
 const KEY = 'forsion_tangu_achievements'
 const mem = new Map<string, string>()
@@ -107,5 +107,19 @@ describe('插件系列', () => {
     registerPluginSeries('bad', { id: 'x', title: 'x', achievements: [] })
     registerPluginSeries('bad', { id: 'y', title: 'y', achievements: [{ id: 'a', title: '', desc: '', event: 'e', goal: 0, points: 1 }] })
     expect(useAchievements.getState().pluginSeries).toEqual([])
+  })
+})
+
+describe('别的窗口写入的解锁(syncAchievementsFromDisk)', () => {
+  it('本窗新跨线且未领取的入队一次;已领取的不入队;计数合并后本窗再 track 不二次跨线', () => {
+    // 另一窗口(设置浮窗)换了主题 + 早先领过 first-message:只写了磁盘,本窗 store 还是旧的
+    mem.set(KEY, JSON.stringify({ v: 1, counters: { 'theme.change': 1, 'chat.send': 1 }, claimed: ['first-message'] }))
+    syncAchievementsFromDisk()
+    expect(useAchievements.getState().queue).toEqual(['theme-change'])
+    syncAchievementsFromDisk() // 同一次写入的重复事件:幂等
+    expect(useAchievements.getState().queue).toEqual(['theme-change'])
+    track('theme.change')
+    expect(useAchievements.getState().queue).toEqual(['theme-change'])
+    expect(useAchievements.getState().counters['theme.change']).toBe(2)
   })
 })

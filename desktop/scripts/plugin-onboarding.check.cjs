@@ -25,6 +25,7 @@
 const fs = require('fs'), os = require('os'), path = require('path')
 const { _electron: electron } = require('playwright-core')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
+const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 
 const ROOT = path.resolve(__dirname, '..')
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-plugin-onboarding-'))
@@ -107,7 +108,8 @@ async function main() {
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, PI_CU_SOCKET_PATH: path.join(temp, 'bridge.sock') } })
     const main = await app.firstWindow()
     await main.waitForSelector('.shell-host', { timeout: 30000, state: 'attached' })
-    for (const name of ['跳过引导', 'Skip']) { const b = main.getByRole('button', { name, exact: true }); if (await b.count()) { await b.click(); break } }
+    // 断言全在浮窗(它自挂 PluginOnboardingHost),主窗引导与否不影响;按真实使用形态先离开引导,并记一条 check。
+    check('主窗已离开首启引导', await skipOnboarding(main))
 
     await main.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'amadeus-plugins' } }))
     let fl

@@ -9,7 +9,7 @@
 .amx-plugtable-empty,
 .amx-plugtable-error {
   padding: 14px 10px;
-  font-size: 13px;
+  font-size: var(--ui-font-body, 13px);
   text-align: center;
   color: var(--text-muted);
 }

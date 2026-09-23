@@ -72,6 +72,7 @@ beforeEach(async () => {
         // m-small:小窗模型(≥4000 才被 modelContextWindow 认),钉超窗回落。
         const model: any = { provider: 'test', name: 'test' };
         if (id === 'm-small') model.contextWindow = 4000;
+        if (id === 'm-big') model.contextWindow = 1_000_000; // 自报 1M:会话窗口按缺省上限封顶 272k(09-22)
         return { model, apiKey: 'k', baseUrl: 'b', apiModelId: id };
       },
       buildProviderPayload: async (o: any) => {
@@ -238,6 +239,21 @@ describe('Historian fork 判官', () => {
     expect(builds[0].cacheKey).toMatch(/:historian$/);
     expect(resolveCalls).toEqual(['m-small', 'm1']); // fork 只解析了模型(算窗口),判断走 cfg 模型
     expect((await sessionRow()).title).toBe('超窗回落');
+  });
+
+  it('护栏按会话实际窗口算:自报 1M 但没开长上下文 → 按 272k 的 75% 判超窗(不按 1M 放行)', async () => {
+    const { seed } = makeSeed({
+      modelId: 'm-big',
+      getMessages: () => [
+        { role: 'system', content: '长'.repeat(220_000) } as any, // ≈22 万 token:> 272k×75%(204k),< 1M×75%
+        { role: 'user', content: '问题' } as any,
+      ],
+    });
+    llmScript = [judgeJson({ title: '封顶回落' })];
+    await onUserRunDone('S', USER, undefined, seed);
+    expect(builds.length).toBe(1); // 按 1M 算会放行去 fork(2 次请求)
+    expect(builds[0].cacheKey).toMatch(/:historian$/);
+    expect((await sessionRow()).title).toBe('封顶回落');
   });
 });
 

@@ -1,7 +1,7 @@
 .child-chat-panel .agent-desk-inner { padding: 0; overflow: hidden; }
 .child-chat-panel .agent-desk-head { padding: 12px 16px; flex-shrink: 0; }
-.child-chat-hint { padding: 0 16px 10px; color: var(--text-muted); font-size: 11px; line-height: 1.5; }
-.child-chat-placeholder { padding: 24px; color: var(--text-muted); font-size: 13px; overflow-wrap: anywhere; }
+.child-chat-hint { padding: 0 16px 10px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.5; }
+.child-chat-placeholder { padding: 24px; color: var(--text-muted); font-size: var(--ui-font-body, 13px); overflow-wrap: anywhere; }
 .child-chat-panel .t2-chat-view { width: 100%; }
 .child-chat-panel .t2-rail { display: none; }
 .child-chat-panel .t2-stream { padding-inline: 18px; }

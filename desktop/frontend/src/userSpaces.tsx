@@ -17,6 +17,8 @@ import {
 } from '@lcl/engine'
 import type { Leaf, SpaceDefinition, PersistedPanel } from '@lcl/engine'
 import { SpaceButton } from './components/SpaceButton'
+import { panelToast } from './components/PanelNotice'
+import { ipcErrorText } from './ipcError'
 import { parseSpaceJson, planMainPanels, slugifyId, uniqueId, recipeBucketOf, type SpaceSpec, type SpacePanelSpec } from '@lcl/spaces/userSpaces.core'
 import { useApp } from './stores/appStore'
 import { currentLocale } from './i18n'
@@ -318,14 +320,25 @@ export async function createBlankSpace(name: string): Promise<void> {
   app().toast(app().tr('spaces.saved', { name }))
 }
 
-/** 删除用户 Space:活动中则先切回 tangu,再 注销+撤 ribbon+清命名布局+删磁盘目录(按 id→目录映射)。 */
-export async function deleteUserSpace(id: string): Promise<void> {
+/** 删除用户 Space:先删磁盘目录(按 id→目录映射),成功后再 活动中则切回 tangu + 注销 + 撤 ribbon + 清命名布局。
+ *  磁盘先行:删失败(权限 / 占用)时 Space 原样留着、可以重试 —— 反过来先撤界面的话,目录还在、
+ *  入口却没了,要重启才冒回来(Codex 评审)。返回是否删成,设置页据此决定报不报「已卸载」。 */
+export async function deleteUserSpace(id: string): Promise<boolean> {
   const dirSlug = userIds.get(id)
-  if (!dirSlug) return
+  if (!dirSlug) return false
+  try { await window.tangu?.spacesDelete?.(dirSlug) } catch (e) { panelToast(ipcErrorText(e), true); return false }
+  forgetUserSpace(id)
+  // 设置是独立浮窗(每窗一份注册表 / ribbon):主窗那份由主窗自己撤。主窗自己删时这条会回到自己,forget 幂等。
+  window.tangu?.requestMainAction?.('space-removed', id)
+  return true
+}
+
+/** 撤掉本窗口里已删用户 Space 的痕迹(活动中则切回 tangu + 注销 + 撤 ribbon + 清命名布局);不认识的 id 不动。 */
+export function forgetUserSpace(id: string): void {
+  if (!userIds.has(id)) return
   if (useSpaceStore.getState().activeSpaceId === id) setActiveSpace('tangu')
   unregisterSpace(id)
   removeRibbonIcon(`space:${id}`)
   deleteNamedLayout(spaceLayoutName(id))
   userIds.delete(id)
-  try { await window.tangu?.spacesDelete?.(dirSlug) } catch (e) { app().toast(String(e)) }
 }

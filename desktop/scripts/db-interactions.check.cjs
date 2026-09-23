@@ -1,0 +1,106 @@
+// Real keyboard/draft/record regression: node scripts/e2e-editor.cjs --check=db-interactions
+const fs = require('fs'), os = require('os'), path = require('path')
+const { chromium } = require('playwright-core')
+function chromiumPath() {
+  if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
+  const root = path.join(os.homedir(), 'Library/Caches/ms-playwright')
+  for (const d of fs.readdirSync(root).filter(x => x.startsWith('chromium-')).sort().reverse())
+    for (const app of ['Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing', 'Chromium.app/Contents/MacOS/Chromium']) {
+      const p = path.join(root, d, 'chrome-mac-arm64', app); if (fs.existsSync(p)) return p
+    }
+  throw Error('Chromium missing; set CHROMIUM_EXE')
+}
+const URL = process.env.HARNESS_URL || 'http://localhost:5173/harness.html'
+const check = (name, ok) => { if (!ok) throw Error(name); console.log(`PASS ${name}`) }
+const db = p => p.evaluate(() => window.__dbStore.getState().entries['任务.db'].data)
+const cell = (p, r, c) => p.locator(`[data-row="${r}"] [data-db-cell="${c}"]`)
+const pause = p => p.waitForTimeout(90)
+async function main() {
+ const browser = await chromium.launch({ executablePath: chromiumPath(), headless: true })
+ const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1440, height: 960 } })
+ const errors = []; p.on('pageerror', e => errors.push(e.message))
+ try {
+  await p.goto(`${URL}?dbdemo`, { waitUntil: 'domcontentloaded' }); await p.waitForSelector('[data-db-cell]')
+  await p.evaluate(() => window.__dbStore.getState().mutate('任务.db', d => ({ ...d, columns: [
+   { id:'name', name:'名称', type:'text' }, { id:'note', name:'说明', type:'text' }, { id:'num', name:'数量', type:'number' },
+   { id:'status', name:'状态', type:'select', options:['Todo','Doing','Done'] },
+   { id:'tags', name:'标签', type:'multiselect', options:['Alpha','Beta','Gamma'] },
+   { id:'rel', name:'关联记录', type:'rowlink', refDb:'任务.db' }],
+   rows:[{id:'a',cells:{name:'A',note:'First',num:1,status:'Todo',tags:['Alpha']}},{id:'b',cells:{name:'B',note:'Second',num:2,status:'Doing'}},{id:'c',cells:{name:'C',note:'Third',num:3,status:'Done'}}],
+   views:[{id:'v1',name:'表格',type:'table',sorts:[{colId:'name',dir:'asc'}],sort:{colId:'name',dir:'asc'}}]
+  })))
+  await cell(p,'a','name').locator('.amx-db-value-display').click()
+  await cell(p,'a','name').locator('input').fill('Z draft')
+  check('Draft stays local and sorted row stays put', (await db(p)).rows[0].cells.name === 'A' && await p.locator('.amx-db-row[data-row]').first().getAttribute('data-row') === 'a')
+  await p.keyboard.press('Escape'); await pause(p)
+  check('Escape cancels and selects same cell', (await db(p)).rows[0].cells.name === 'A' && await cell(p,'a','name').evaluate(e => e === document.activeElement))
+  await p.keyboard.press('Enter'); await cell(p,'a','name').locator('input').fill('Z'); await p.keyboard.press('Enter'); await pause(p)
+  check('Enter commits and focuses pre-sort adjacent row', (await db(p)).rows.find(r=>r.id==='a').cells.name === 'Z' && await cell(p,'b','name').evaluate(e=>e===document.activeElement))
+  await cell(p,'b','name').locator('.amx-db-value-display').click(); await p.keyboard.press('Tab'); await pause(p)
+  check('Tab edits next property', await cell(p,'b','note').locator('input').evaluate(e=>e===document.activeElement))
+  await cell(p,'b','note').locator('input').fill('Edited'); await p.keyboard.press('Shift+Tab'); await pause(p)
+  check('Shift Tab commits and edits previous property', (await db(p)).rows.find(r=>r.id==='b').cells.note === 'Edited' && await cell(p,'b','name').locator('input').evaluate(e=>e===document.activeElement))
+  await p.keyboard.press('Escape'); await pause(p); await p.keyboard.press('ArrowDown'); await pause(p)
+  check('Arrow navigation follows visible sorted rows', await cell(p,'c','name').evaluate(e=>e===document.activeElement))
+  await p.keyboard.type('X'); await pause(p)
+  check('Typing replaces a selected cell as a draft', await cell(p,'c','name').locator('input').inputValue()==='X')
+  await cell(p,'c','name').locator('input').evaluate(el=>el.dispatchEvent(new KeyboardEvent('keydown',{bubbles:true,key:'Enter',isComposing:true})))
+  check('IME Enter retains editing and original stored value', await cell(p,'c','name').locator('input').count()===1 && (await db(p)).rows.find(r=>r.id==='c').cells.name==='C')
+  await p.keyboard.press('Escape')
+  await cell(p,'a','num').locator('.amx-db-value-display').click(); await cell(p,'a','num').locator('input').fill('-12.5'); await p.keyboard.press('Enter'); await pause(p)
+  check('Numeric draft commits complete negative decimal', (await db(p)).rows.find(r=>r.id==='a').cells.num===-12.5)
+  await cell(p,'a','status').locator('.amx-db-cellbtn').click(); await p.locator('.amx-db-option-search').fill('Do'); await p.keyboard.press('ArrowDown'); await p.keyboard.press('Enter'); await pause(p)
+  check('Search and keyboard choose existing option', (await db(p)).rows.find(r=>r.id==='a').cells.status==='Doing')
+  await cell(p,'a','status').locator('.amx-db-cellbtn').click(); await p.locator('.amx-db-option-search').fill('Review'); await p.keyboard.press('Enter'); await pause(p)
+  const created=await db(p); check('Enter creates and selects option', created.rows.find(r=>r.id==='a').cells.status==='Review' && created.columns.find(c=>c.id==='status').options.includes('Review'))
+  await cell(p,'a','tags').locator('.amx-db-cellbtn').click(); await p.locator('.amx-db-option-search').fill('Beta'); await p.keyboard.press('Enter'); await pause(p)
+  check('Multi-select stays open for successive choices', await p.locator('.amx-db-option-search').count()===1 && (await db(p)).rows.find(r=>r.id==='a').cells.tags.join(',')==='Alpha,Beta')
+  await p.keyboard.press('Escape'); await pause(p)
+  check('Escape closes picker and restores cell focus', !await p.locator('.amx-db-option-search').count() && await cell(p,'a','tags').evaluate(e=>e===document.activeElement))
+  await p.locator('.amx-db-search').click(); await p.locator('.amx-db-search').fill('Edited'); await pause(p)
+  check('Search matches property values beyond record titles', await p.locator('.amx-db-row[data-row]').count()===1 && await cell(p,'b','name').count()===1)
+  await p.locator('.amx-db-search').fill(''); await pause(p)
+  await cell(p,'b','name').hover(); await cell(p,'b','name').locator('.amx-db-rowopen').click(); await p.waitForSelector('.amx-db-peek')
+  check('Open button opens side peek while table remains visible', await p.locator('.amx-db-peek-shade').getAttribute('data-mode')==='side' && await p.locator('.amx-db-scroll').count()===1)
+  const field = id => p.locator(`.amx-db-peek [data-db-cell="${id}"]`)
+  await field('name').locator('.amx-db-value-display').click()
+  await p.keyboard.press('Tab'); await pause(p)
+  check('Peek Tab moves into next property editor', await field('note').locator('input').evaluate(e=>e===document.activeElement))
+  await field('note').locator('input').fill('Peek committed')
+  await p.keyboard.press('Tab'); await pause(p)
+  check('Peek Tab saves draft and edits number property', (await db(p)).rows.find(r=>r.id==='b').cells.note==='Peek committed' && await field('num').locator('input').evaluate(e=>e===document.activeElement))
+  await field('num').locator('input').fill('999')
+  await p.keyboard.press('Escape'); await pause(p)
+  check('Peek Escape cancels current edit and keeps record open', (await db(p)).rows.find(r=>r.id==='b').cells.num===2 && await field('num').evaluate(e=>e===document.activeElement) && await p.locator('.amx-db-peek').count()===1)
+  await p.keyboard.press('ArrowUp'); await pause(p)
+  check('Peek arrow navigation stays inside record properties', await field('note').evaluate(e=>e===document.activeElement))
+  await field('rel').locator('.amx-db-cellbtn').click()
+  await p.locator('.amx-db-pop-input').fill('C'); await p.keyboard.press('Escape'); await pause(p)
+  check('Escape in record relation picker closes only picker and restores its trigger', !await p.locator('.amx-db-pop-input').count() && await p.locator('.amx-db-peek').count()===1 && await field('rel').locator('.amx-db-cellbtn').evaluate(e=>e===document.activeElement))
+  await p.getByRole('button',{name:'居中预览',exact:true}).click()
+  await field('note').locator('.amx-db-value-display').click()
+  await field('note').locator('input').fill('Backdrop commit')
+  await p.locator('.amx-db-peek-shade').click({position:{x:8,y:8}}); await pause(p)
+  check('Clicking center backdrop saves pending property before closing', !await p.locator('.amx-db-peek').count() && (await db(p)).rows.find(r=>r.id==='b').cells.note==='Backdrop commit')
+  await cell(p,'b','name').locator('.amx-db-rowopen').click(); await p.waitForSelector('.amx-db-peek')
+  await p.getByRole('button',{name:'侧边预览',exact:true}).click()
+  await p.locator('.amx-db-peek-body .ProseMirror').fill('记录正文：可以直接编辑。')
+  await p.getByRole('button',{name:'关闭记录',exact:true}).click()
+  const withBody=await db(p)
+  check('Record body saves before immediate close and upgrades file version', withBody.rows.find(r=>r.id==='b').body.includes('记录正文') && withBody.version>=2)
+  await cell(p,'b','name').hover(); await cell(p,'b','name').locator('.amx-db-rowopen').click(); await p.waitForSelector('.amx-db-peek')
+  await p.screenshot({path:path.join(os.tmpdir(),'forsion-db-side-peek.png'),fullPage:true})
+  await p.evaluate(()=>window.__dbStore.getState().mutate('任务.db',d=>({...d,views:d.views.map(v=>({...v,filters:[{colId:'status',op:'eq',value:'Doing'}]}))})))
+  await p.locator('.amx-db-peek [data-coltype="select"] .amx-db-cellbtn').click(); await p.locator('.amx-db-option-search').fill('Done'); await p.keyboard.press('Enter'); await pause(p)
+  check('Filtering edited record out leaves its peek open', await p.locator('.amx-db-peek').count()===1 && !await cell(p,'b','name').count())
+  await p.getByRole('button',{name:'关闭记录',exact:true}).click()
+  await p.evaluate(()=>window.__dbStore.getState().mutate('任务.db',d=>({...d,views:d.views.map(v=>({...v,filters:undefined}))})))
+  await p.locator('[aria-label="view settings"]').click(); await p.getByRole('button',{name:'复制视图',exact:true}).click(); await pause(p)
+  const copied=await db(p); check('Copy view preserves sorting with independent identity',copied.views.length===2 && copied.views[0].id!==copied.views[1].id && copied.views[1].sorts[0].colId==='name')
+  await p.locator('[aria-label="add view"]').click(); await p.getByRole('button',{name:'列表',exact:true}).click(); await pause(p)
+  check('List view contains same records',await p.locator('.amx-db-list-row').count()===3)
+  const shot=process.env.DB_INTERACTION_SHOT || path.join(os.tmpdir(),'forsion-db-interactions.png'); await p.screenshot({path:shot,fullPage:true}); console.log(`Screenshot: ${shot}`)
+  check(`No runtime errors (${errors.join('; ')})`,errors.length===0)
+ } finally { await browser.close() }
+}
+main().catch(e=>{console.error(e.stack||e);process.exit(1)})

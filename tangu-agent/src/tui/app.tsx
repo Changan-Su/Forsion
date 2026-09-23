@@ -13,7 +13,7 @@ import { subscribe } from '../services/eventBus.js';
 import { compactSession } from '../services/compaction.js';
 import { resolveCompactionSettings, globalCompactionLayer } from '../services/compactionSettings.js';
 import { branchSession } from '../services/sessionBranch.js';
-import { modelContextWindow } from '../services/contextBudget.js';
+import { effectiveContextWindowInfo } from '../services/contextBudget.js';
 import { listAgents, getAgent, saveAgent, deleteAgent } from '../agents/agentRegistry.js';
 import { agentsDir } from '../core/tanguHome.js';
 import { discoverPlugins } from '../plugins/loader.js';
@@ -276,7 +276,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
       }
       case 'group_ended':
         flushNow();
-        dispatch({ type: 'GROUP_NOTE', text: `🏁 群聊结束（${p.rounds} 轮 · ${groupReason(String(p.reason || ''))}）`, tone: 'success' });
+        dispatch({ type: 'GROUP_NOTE', text: `🏁 团队工作结束（${p.rounds} 轮 · ${groupReason(String(p.reason || ''))}）`, tone: 'success' });
         break;
       case 'done':
         flushNow();
@@ -687,14 +687,14 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
       }
       case '/groupchat': {
         const arg = rest.trim();
-        if (arg === 'off') { groupAgentsRef.current = null; notice('已退出群聊模式', 'success'); return; }
+        if (arg === 'off') { groupAgentsRef.current = null; notice('已退出团队模式', 'success'); return; }
         const slugs = arg.split(/\s+/).filter(Boolean);
         if (slugs.length < 2) { notice('用法：/groupchat <slug1> <slug2> […]（≥2 个 Normal Agent；/agents 查看；/groupchat off 退出）', 'warn'); return; }
         const defs = await Promise.all(slugs.map((s) => getAgent(s).catch(() => null)));
         const missing = slugs.filter((_, i) => !defs[i]);
         if (missing.length) { notice(`未找到 agent：${missing.join(', ')}（/agents 查看）`, 'error'); return; }
         groupAgentsRef.current = slugs;
-        notice(`群聊已就绪：${slugs.join(' / ')}。直接发消息即开始多 Agent 讨论（/groupchat off 退出）`, 'success');
+        notice(`团队模式已就绪：${slugs.join(' / ')}。直接发消息即开始多 Agent 协作（/groupchat off 退出）`, 'success');
         return;
       }
       case '/edit': {
@@ -807,7 +807,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
             `  思考      ${c.thinkingLevel}${c.planMode ? ' · 计划模式开' : ''}`,
             `  审批      ${c.approvalMode} · 执行 ${c.execMode}`,
             `  工作目录  ${c.cwd}`,
-            `  Agent     ${agent} · 群聊 ${group}`,
+            `  Agent     ${agent} · 团队 ${group}`,
             `  循环上限  ${c.maxIterations ?? 90} 轮 · 预算 ${c.tokenBudget ?? '无'}`,
             `  用量      ${u.total.toLocaleString()} tokens · 约 ${u.cost.toFixed(4)} 费用单位`,
           ].join('\n'),
@@ -937,7 +937,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         approvalMode={cfg.approvalMode}
         status={state.status}
         tokens={state.usage.total}
-        ctxPct={cfg.model ? (state.usage.lastPrompt / modelContextWindow(cfg.model)) * 100 : 0}
+        ctxPct={cfg.model ? (state.usage.lastPrompt / effectiveContextWindowInfo(cfg.model).tokens) * 100 : 0}
         busy={state.busy}
       />
       {state.approval ? (

@@ -72,10 +72,12 @@ export async function pullBroadcastsOnce(userId: string): Promise<{ added: numbe
       }
       // 无 conflict target 的 ON CONFLICT DO NOTHING:SQLite/PGlite/PG 同一写法合法,兜并发重复。
       const rowId = uuidv4();
+      // thread 原文照抄(服务端已是 JSON 串;非串 / 脏值按无线程)——解析与信任裁决在读端 routes/inbox.ts。
+      const thread = typeof b.thread === 'string' && b.thread ? b.thread : null;
       await query(
-        `INSERT INTO inbox_messages (id, user_id, title, body, sender_kind, sender_id, origin_broadcast_id, attachments, expires_at, created_at)
-         VALUES (?, ?, ?, ?, 'server', 'forsion', ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
-        [rowId, userId, String(b.title || '').slice(0, 500), String(b.body || ''), b.id, attachments, b.expires_at ? String(b.expires_at) : null, String(b.created_at)],
+        `INSERT INTO inbox_messages (id, user_id, title, body, sender_kind, sender_id, origin_broadcast_id, attachments, expires_at, thread, created_at)
+         VALUES (?, ?, ?, ?, 'server', 'forsion', ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING`,
+        [rowId, userId, String(b.title || '').slice(0, 500), String(b.body || ''), b.id, attachments, b.expires_at ? String(b.expires_at) : null, thread, String(b.created_at)],
       );
       // codex#12:定时 tick 与手动 pull 并发时两边都过了前置 dup 查——落库赢家才计数/转发,
       // 输家的 ON CONFLICT 静默吞掉,不能再 added++/二次推通道。

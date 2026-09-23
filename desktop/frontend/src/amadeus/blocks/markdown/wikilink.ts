@@ -14,6 +14,7 @@ import { toAssetUrl } from '@amadeus-shared/assets'
 import { buildBlockString } from './mathLivePreview'
 import { attachSourceButton } from './sourceToggle'
 import { attachResizeHandle } from '../../lib/imageResize'
+import { armImageDrag } from './imageDrag'
 
 const IMG_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i
 
@@ -109,15 +110,21 @@ function buildDecorations(
               // 交给 UnifiedPage 的灯箱;源码入口只有悬停的 `</>` 一个。
               // preventDefault + stopPropagation 缺一不可:前者拦浏览器落焦点,后者拦 PM 自己的
               // 按坐标定位 / 双击选词 —— 任何一条漏了,图片都会当场让位给源码。
-              wrap.addEventListener('mousedown', (e) => {
-                if (e.button !== 0 || (e.target as HTMLElement).closest('.amx-img-resize, .amx-src-btn')) return
-                e.preventDefault()
-                e.stopPropagation()
+              // 例外:独占一段的图片在统一编辑器里可以按住直接拖走整块,那次按下不能 preventDefault
+              // (否则原生拖拽起不来),选中也挪到 click(见 imageDrag.ts)。
+              const select = (): void => {
                 const tr = standalone
                   ? view.state.tr.setSelection(NodeSelection.create(view.state.doc, pos))
                   : view.state.tr.setSelection(TextSelection.create(view.state.doc, from, to))
                 view.dispatch(tr)
                 view.focus()
+              }
+              wrap.addEventListener('mousedown', (e) => {
+                if (e.button !== 0 || (e.target as HTMLElement).closest('.amx-img-resize, .amx-src-btn')) return
+                e.stopPropagation()
+                if (armImageDrag(view, wrap, e, select)) return
+                e.preventDefault()
+                select()
               })
               attachSourceButton(wrap, view, () => {
                 const tr = view.state.tr.setSelection(TextSelection.create(view.state.doc, Math.min(from + 1, view.state.doc.content.size)))

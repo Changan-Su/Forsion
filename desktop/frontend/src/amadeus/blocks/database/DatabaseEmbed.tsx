@@ -32,6 +32,13 @@ import { addFileRefs, fileRefs, removeFileAt } from '@amadeus-shared/db/fileCell
 import { buildDbCsv, csvExportMode, exportCsvFile } from './csvExport'
 import './cellFormat.css'
 import './readOnlyCells.css'
+import './cellInteraction.css'
+import './menuSurface.css'
+import { dbIcon } from './databaseIcons'
+import './databaseSurface.css'
+import { RowPeek } from './RowPeek'
+import { ListBody } from './ListBody'
+import { cellDraftValue, nextGridCellIndex, type GridMove } from './cellInteraction'
 import { buildTree } from '@amadeus-shared/db/tree'
 import { GROUP_TYPES, groupRows, visibleGroups, type RowGroup } from '@amadeus-shared/db/groupRows'
 import { foldRows, foldSummary, resolveFold, type FoldUnit } from '@amadeus-shared/db/foldRows'
@@ -51,7 +58,7 @@ import { renameDb } from '../../lib/dbFileOps'
 import { useNoteViewStore } from '../../store/noteViewStore'
 import { usePageStore, useScopedPageStore } from '../../store/pageStore'
 import { amadeus } from '../../api'
-import { Settings2, ExternalLink, Plus, Paperclip, Sigma, Link2, ArrowRightLeft, ClipboardList, ChartGantt, ChevronRight, Columns3, Download, FoldVertical } from 'lucide-react'
+import { Settings2, ExternalLink, Plus, Paperclip, ArrowRightLeft, ChevronRight, Download } from 'lucide-react'
 import { openDb } from '../../../amadeusNav'
 import { registerMessages, useI18n } from '../../../i18n'
 import { useCalendarConfig, memberOf } from '../../store/calendarConfigStore'
@@ -62,9 +69,8 @@ import { dropAfter, dropAfterX, moveColumn, moveRow, sameOrder } from './rowOrde
 import { detachLookups, dropSelfRefs, isComputedCol, linkLabel, normDbPath, resolveTreeCol, rowLinkIds, titleColOf, treeColsOf } from './rowLink'
 import './treeBody.css'
 import {
-  ChartPanelIcon, CheckBoxCheckLinearIcon, DatabaseKanbanViewIcon, DatabaseListViewIcon, DatabaseTableViewIcon,
-  DateTimeIcon, FilterIcon, FolderIcon, ImageIcon, LinkIcon, MultiSelectIcon, NumberIcon, PageIcon,
-  PlusIcon, SingleSelectIcon, TextIcon, TodayIcon,
+  DatabaseListViewIcon, DatabaseTableViewIcon,
+  FilterIcon, FolderIcon, PlusIcon,
 } from '../../components/icons'
 import { ChartViewBody, resolveChartGroupCol } from './ChartBody'
 import { FormBody, FormDefaultInput } from './FormBody'
@@ -88,6 +94,7 @@ registerMessages({
   'dbembed.type.formula': { zh: '公式', en: 'Formula' },
   'dbembed.type.rowlink': { zh: '关联表', en: 'Relation' },
   'dbembed.type.lookup': { zh: '引用', en: 'Lookup' },
+  'dbembed.view.list': { zh: '列表', en: 'List' },
   'dbembed.view.table': { zh: '表格', en: 'Table' },
   'dbembed.view.kanban': { zh: '看板', en: 'Board' },
   'dbembed.view.calendar': { zh: '日历', en: 'Calendar' },
@@ -123,6 +130,8 @@ registerMessages({
   'dbembed.addView': { zh: '添加视图', en: 'Add view' },
   'dbembed.filter': { zh: '筛选', en: 'Filter' },
   'dbembed.filterThisView': { zh: '筛选(本视图)', en: 'Filter (this view)' },
+  'dbembed.layout': { zh: '布局', en: 'Layout' },
+  'dbembed.backToSettings': { zh: '返回表格设置', en: 'Back to view settings' },
   'dbembed.autoSize': { zh: '自适应', en: 'Auto size' },
   'dbembed.autoSizeOn': { zh: '自适应列宽已开启:按表头与主内容计算,副内容不参与', en: 'Auto-size is on: widths follow headers and primary content; secondary text is ignored' },
   'dbembed.autoSizeOff': { zh: '自适应列宽已关闭:使用手动列宽', en: 'Auto-size is off: use manual column widths' },
@@ -155,6 +164,12 @@ registerMessages({
   'dbembed.statSec': { zh: '页脚统计 · {col}', en: 'Footer summary · {col}' },
   'dbembed.statNone': { zh: '无', en: 'None' },
   // 单元格
+  'dbembed.openRow': { zh: '打开详情', en: 'Open details' },
+  'dbembed.searchOptions': { zh: '搜索或创建选项…', en: 'Search or create an option…' },
+  'dbembed.createOption': { zh: '创建「{name}」', en: 'Create “{name}”' },
+  'dbembed.duplicateView': { zh: '复制视图', en: 'Duplicate view' },
+  'dbembed.viewCopyName': { zh: '{name} 副本', en: '{name} copy' },
+  'dbembed.sort': { zh: '排序', en: 'Sort' },
   'dbembed.edit': { zh: '编辑', en: 'Edit' },
   'dbembed.clickToEdit': { zh: '点击编辑', en: 'Click to edit' },
   'dbembed.blank': { zh: '空', en: 'Empty' },
@@ -187,18 +202,19 @@ registerMessages({
   'dbembed.clear': { zh: '清空', en: 'Clear' },
   'dbembed.optNewPlaceholder': { zh: '回车新增选项…', en: 'Press Enter to add an option…' },
   // 列菜单
-  'dbembed.sortSec': { zh: '排序(仅视图,不改文件顺序;多列排序在视图设置里)', en: 'Sorting (view only, the file order stays; multi-column sorting lives in view settings)' },
-  'dbembed.sortAsc': { zh: '↑ 升序', en: '↑ Ascending' },
-  'dbembed.sortDesc': { zh: '↓ 降序', en: '↓ Descending' },
+  'dbembed.sortSec': { zh: '排序', en: 'Sort' },
+  'dbembed.sortAsc': { zh: '升序', en: 'Ascending' },
+  'dbembed.sortDesc': { zh: '降序', en: 'Descending' },
   'dbembed.clearSort': { zh: '清除排序', en: 'Clear sorting' },
-  'dbembed.colOrderFixed': { zh: '列顺序(首列是标题列,位置固定)', en: 'Column order (the first column is the title column and stays put)' },
-  'dbembed.colOrder': { zh: '列顺序(也可直接拖表头)', en: 'Column order (you can also drag the header)' },
-  'dbembed.moveLeft': { zh: '← 左移', en: '← Move left' },
-  'dbembed.moveRight': { zh: '右移 →', en: 'Move right →' },
-  'dbembed.formulaSec': { zh: '公式(列引用写 {列名})', en: 'Formula (reference a column as {column name})' },
+  'dbembed.colOrderFixed': { zh: '标题列 · 位置固定', en: 'Title column · fixed position' },
+  'dbembed.colOrder': { zh: '列顺序', en: 'Column order' },
+  'dbembed.moveLeft': { zh: '左移', en: 'Move left' },
+  'dbembed.moveRight': { zh: '右移', en: 'Move right' },
+  'dbembed.formulaSec': { zh: '公式', en: 'Formula' },
+  'dbembed.formulaSecHint': { zh: '公式(列引用写 {列名})', en: 'Formula (reference a column as {column name})' },
   'dbembed.formulaPlaceholder': { zh: '如 {单价}*{数量} 或 if({完成},"✓","…")', en: 'e.g. {unit price}*{item count} or if({is done},"✓","…")' },
   'dbembed.formulaHelp': { zh: '支持 + - * / % 比较逻辑与 if / round / len / concat / contains / days / today 等', en: 'Supports + - * / %, comparisons and logic, plus if / round / len / concat / contains / days / today and more' },
-  'dbembed.numFmtSec': { zh: '数字显示(只改显示,不动数据)', en: 'Number display (formatting only — the stored value never changes)' },
+  'dbembed.numFmtSec': { zh: '数字格式', en: 'Number format' },
   'dbembed.precision': { zh: '小数位', en: 'Decimals' },
   'dbembed.precisionPlaceholder': { zh: '跟随原值', en: 'Match the value' },
   'dbembed.prefix': { zh: '前缀', en: 'Prefix' },
@@ -206,46 +222,60 @@ registerMessages({
   'dbembed.suffix': { zh: '后缀', en: 'Suffix' },
   'dbembed.suffixPlaceholder': { zh: '如 元 / % / 台', en: 'e.g. kg / % / pcs' },
   'dbembed.numFmtSample': { zh: '示例:{sample}', en: 'Example: {sample}' },
-  'dbembed.numFmtNone': { zh: '未设置 = 原样显示(点进单元格编辑的永远是原始值)', en: 'Unset = shown as stored (editing a cell always shows the raw value)' },
-  'dbembed.relTargetSec': { zh: '目标表(单元格关联它的行)', en: 'Target table (cells link to its rows)' },
-  'dbembed.relSelf': { zh: '本表(自指 · 可做层级树的父列)', en: 'This table (self-reference · can be the parent column of a hierarchy)' },
+  'dbembed.numFmtNone': { zh: '仅改变显示格式，编辑时保留原值。', en: 'Formatting changes appearance. Editing keeps the raw value.' },
+  'dbembed.relTargetSec': { zh: '目标数据库', en: 'Target database' },
+  'dbembed.relTargetSecHint': { zh: '目标表(单元格关联它的行)', en: 'Target table (cells link to its rows)' },
+  'dbembed.relSelf': { zh: '本表', en: 'This table' },
+  'dbembed.relSelfHint': { zh: '本表(自指 · 可做层级树的父列)', en: 'This table (self-reference · can be the parent column of a hierarchy)' },
   'dbembed.noOtherDb': { zh: '库里没有其他多维表', en: 'No other databases in this vault' },
   'dbembed.multiSec': { zh: '多选', en: 'Multiple' },
-  'dbembed.allowMulti': { zh: '允许多选(一格关联多行)', en: 'Allow multiple (link several rows in one cell)' },
-  'dbembed.chipColSec': { zh: '芯片显示列(目标表的哪一列当文案;缺省首列)', en: 'Chip label column (which target column to show; the first column by default)' },
-  'dbembed.refFilterSec': { zh: '限定候选(选择器只列满足条件的目标行)', en: 'Limit candidates (the picker only lists target rows that match)' },
-  'dbembed.lookupDirSec': { zh: '方向(正向 = 沿本表关联列取值;反向 = 汇总目标表里指回本表的行)', en: 'Direction (forward = pull values along a relation on this table; reverse = roll up rows in the target table that point back here)' },
+  'dbembed.allowMulti': { zh: '允许关联多条记录', en: 'Allow multiple records' },
+  'dbembed.allowMultiHint': { zh: '允许多选(一格关联多行)', en: 'Allow multiple (link several rows in one cell)' },
+  'dbembed.chipColSec': { zh: '显示名称', en: 'Display name' },
+  'dbembed.chipColSecHint': { zh: '芯片显示列(目标表的哪一列当文案;缺省首列)', en: 'Chip label column (which target column to show; the first column by default)' },
+  'dbembed.refFilterSec': { zh: '筛选关联记录', en: 'Filter linked records' },
+  'dbembed.refFilterSecHint': { zh: '限定候选(选择器只列满足条件的目标行)', en: 'Limit candidates (the picker only lists target rows that match)' },
+  'dbembed.lookupDirSec': { zh: '引用方向', en: 'Lookup direction' },
   'dbembed.forward': { zh: '正向', en: 'Forward' },
   'dbembed.backward': { zh: '反向', en: 'Reverse' },
-  'dbembed.lookupRelSec': { zh: '沿哪个关联列(本表的关联表列)', en: 'Along which relation (a relation column on this table)' },
+  'dbembed.lookupRelSec': { zh: '关联属性', en: 'Relation property' },
+  'dbembed.lookupRelSecHint': { zh: '沿哪个关联列(本表的关联表列)', en: 'Along which relation (a relation column on this table)' },
   'dbembed.lookupPending': { zh: '待重新配置:请选一个关联列', en: 'Needs reconfiguring: pick a relation column' },
   'dbembed.lookupPendingStale': { zh: '待重新配置:原关联列已失效(改回关联表类型即恢复),请选一个关联列', en: 'Needs reconfiguring: the original relation column is no longer valid (switch it back to the relation type to restore it) — pick a relation column' },
   'dbembed.needRelCol': { zh: '先建一个「关联表」列', en: 'Create a Relation column first' },
-  'dbembed.backTargetSec': { zh: '目标表(扫它的行)', en: 'Target table (its rows get scanned)' },
-  'dbembed.backColSec': { zh: '目标表的哪一列指回本表(它的关联表列)', en: 'Which target column points back here (a relation column on it)' },
+  'dbembed.backTargetSec': { zh: '目标数据库', en: 'Target database' },
+  'dbembed.backTargetSecHint': { zh: '目标表(扫它的行)', en: 'Target table (its rows get scanned)' },
+  'dbembed.backColSec': { zh: '指回本表的属性', en: 'Relation to this table' },
+  'dbembed.backColSecHint': { zh: '目标表的哪一列指回本表(它的关联表列)', en: 'Which target column points back here (a relation column on it)' },
   'dbembed.backColBad': { zh: '这一列不指回本表,不能作反向引用', en: 'This column does not point back here, so it cannot drive a reverse lookup' },
   'dbembed.backHere': { zh: '→ 本表', en: '→ this table' },
   'dbembed.noBackCols': { zh: '目标表里还没有「关联表」列(或还没读取完)', en: 'The target table has no Relation column yet (or it is still loading)' },
-  'dbembed.projSec': { zh: '用途(投影 = 关联本身,可点开增删;普通引用 = 沿关联取值 / 聚合)', en: 'Purpose (projection = the link itself, editable in place; plain lookup = pull values or aggregate along the link)' },
-  'dbembed.projToggle': { zh: '作为可编辑关联(投影):显示指回本行的目标行,真值只存目标表', en: 'Use as an editable link (projection): shows target rows pointing back here; the real value lives only in the target table' },
-  'dbembed.lookupColSec': { zh: '引用目标表的哪一列', en: 'Which target column to pull' },
+  'dbembed.projSec': { zh: '引用方式', en: 'Lookup mode' },
+  'dbembed.projSecHint': { zh: '用途(投影 = 关联本身,可点开增删;普通引用 = 沿关联取值 / 聚合)', en: 'Purpose (projection = the link itself, editable in place; plain lookup = pull values or aggregate along the link)' },
+  'dbembed.projToggle': { zh: '作为可编辑关联', en: 'Use as an editable relation' },
+  'dbembed.projToggleHint': { zh: '作为可编辑关联(投影):显示指回本行的目标行,真值只存目标表', en: 'Use as an editable link (projection): shows target rows pointing back here; the real value lives only in the target table' },
+  'dbembed.lookupColSec': { zh: '引用属性', en: 'Property to look up' },
+  'dbembed.lookupColSecHint': { zh: '引用目标表的哪一列', en: 'Which target column to pull' },
   'dbembed.targetNotReady': { zh: '目标表还没就绪(先给关联列选目标表)', en: 'The target table is not ready yet (give the relation column a target table first)' },
   'dbembed.aggSec': { zh: '聚合', en: 'Aggregate' },
   'dbembed.identityLocked': { zh: '首列(Name)不可删除 · 不可改类型', en: 'The first column (Name) cannot be deleted or retyped' },
   'dbembed.typeSec': { zh: '类型', en: 'Type' },
+  'dbembed.changeType': { zh: '更改类型', en: 'Change type' },
+  'dbembed.backToProperty': { zh: '返回属性设置', en: 'Back to property settings' },
   'dbembed.deleteCol': { zh: '删除列', en: 'Delete column' },
   // 数据来源文件夹
-  'dbembed.folderSec': { zh: '数据来源文件夹(行 = 其中的笔记)', en: 'Source folder (rows are the notes inside it)' },
+  'dbembed.folderSec': { zh: '数据来源文件夹', en: 'Source folder' },
+  'dbembed.folderSecHint': { zh: '数据来源文件夹(行 = 其中的笔记)', en: 'Source folder (rows are the notes inside it)' },
   'dbembed.loadingShort': { zh: '读取中…', en: 'Loading…' },
   'dbembed.vaultRoot': { zh: '整库(顶层笔记)', en: 'Whole vault (top-level notes)' },
   // 视图菜单
   'dbembed.kanbanGroupSec': { zh: '分组列(单选)', en: 'Group by (a select column)' },
   'dbembed.noSelectCol': { zh: '还没有单选列', en: 'No select column yet' },
-  'dbembed.treeSec': { zh: '层级(表格,按指向本表的关联列)', en: 'Hierarchy (table view, by a relation column pointing at this table)' },
-  'dbembed.noTreeCol': { zh: '还没有指向本表的关联列(先加一个「关联表」列并把目标表选成本表)', en: 'No relation column points at this table yet (add a Relation column and set its target to this table)' },
+  'dbembed.treeSec': { zh: '层级', en: 'Hierarchy' },
+  'dbembed.noTreeCol': { zh: '添加指向本表的关联属性后可启用。', en: 'Add a relation to this table to enable hierarchy.' },
   'dbembed.treeOff': { zh: '关闭层级', en: 'Turn off hierarchy' },
-  'dbembed.groupSecBlocked': { zh: '分组(层级开启时不生效 —— 先关掉层级)', en: 'Grouping (inactive while hierarchy is on — turn hierarchy off first)' },
-  'dbembed.groupSec': { zh: '分组(表格,按单选列 / 日期列)', en: 'Grouping (table view, by a select or date column)' },
+  'dbembed.groupSecBlocked': { zh: '分组 · 请先关闭层级', en: 'Group · turn off hierarchy first' },
+  'dbembed.groupSec': { zh: '分组', en: 'Group' },
   'dbembed.noGroupCol': { zh: '还没有单选列或日期列', en: 'No select or date column yet' },
   'dbembed.groupOff': { zh: '关闭分组', en: 'Turn off grouping' },
   'dbembed.groupUnitSec': { zh: '日期分组档位', en: 'Date grouping unit' },
@@ -253,9 +283,9 @@ registerMessages({
   'dbembed.byMonth': { zh: '按月', en: 'By month' },
   'dbembed.dateColSec': { zh: '日期列', en: 'Date column' },
   'dbembed.noDateCol': { zh: '还没有日期列', en: 'No date column yet' },
-  'dbembed.ganttStartSec': { zh: '开始列(日历日期)', en: 'Start column (calendar date)' },
+  'dbembed.ganttStartSec': { zh: '开始日期', en: 'Start date' },
   'dbembed.noCalDateCol': { zh: '还没有日历日期列', en: 'No calendar-date column yet' },
-  'dbembed.ganttEndSec': { zh: '结束列(缺 = 开始列;单元格是区间时取其末侧)', en: 'End column (unset = the start column; for a range cell the end side wins)' },
+  'dbembed.ganttEndSec': { zh: '结束日期', en: 'End date' },
   'dbembed.ganttEndSame': { zh: '结束列同开始列', en: 'End column same as start' },
   'dbembed.ganttScaleSec': { zh: '刻度', en: 'Scale' },
   'dbembed.scaleDay': { zh: '日', en: 'Day' },
@@ -272,19 +302,21 @@ registerMessages({
   'dbembed.formAfterSec': { zh: '提交后', en: 'After submitting' },
   'dbembed.formStay': { zh: '留在表单', en: 'Stay on the form' },
   'dbembed.formGoTable': { zh: '跳到表格', en: 'Go to the table' },
-  'dbembed.formFieldsSec': { zh: '字段(点名字切换必填;默认值 / 说明随填随存;计算列与盖章列不进表单)', en: 'Fields (click a name to toggle required; defaults and hints save as you type; computed and stamped columns stay out of the form)' },
+  'dbembed.formFieldsSec': { zh: '表单字段', en: 'Form fields' },
+  'dbembed.formFieldsSecHint': { zh: '字段(点名字切换必填;默认值 / 说明随填随存;计算列与盖章列不进表单)', en: 'Fields (click a name to toggle required; defaults and hints save as you type; computed and stamped columns stay out of the form)' },
   'dbembed.required': { zh: '必填', en: 'Required' },
   'dbembed.descPlaceholder': { zh: '说明', en: 'Hint' },
   'dbembed.noFormFields': { zh: '没有可填写的字段', en: 'No fillable fields' },
   'dbembed.ownColsSec': { zh: '列序 / 列宽', en: 'Column order / width' },
   'dbembed.ownColsOn': { zh: '关:本视图回到跟全局列序/列宽', en: 'Turn off: this view goes back to the global column order and widths' },
   'dbembed.ownColsOff': { zh: '开:把当前列序/列宽拷成本视图专属,之后拖列拖宽只改本视图', en: 'Turn on: copy the current order and widths into this view; dragging then changes this view only' },
-  'dbembed.ownCols': { zh: '本视图独立列序/列宽', en: 'Per-view column order and width' },
-  'dbembed.colVisSec': { zh: '列显示(本视图)', en: 'Column visibility (this view)' },
-  'dbembed.sortViewSec': { zh: '排序(本视图;点击循环 升→降→移除,可多列)', en: 'Sorting (this view; click to cycle ascending → descending → off, several columns allowed)' },
+  'dbembed.ownCols': { zh: '独立列布局', en: 'Independent column layout' },
+  'dbembed.colVisSec': { zh: '显示属性', en: 'Visible properties' },
+  'dbembed.sortViewSec': { zh: '排序优先级', en: 'Sort order' },
+  'dbembed.sortViewHint': { zh: '点击属性依次切换升序、降序和取消；支持多列排序。', en: 'Click a property to cycle through ascending, descending and off. Multiple sorts are supported.' },
   'dbembed.filterMore': { zh: '筛选…', en: 'Filter…' },
-  'dbembed.calendarSettings': { zh: 'Calendar 设置', en: 'Calendar settings' },
-  'dbembed.addToCalendar': { zh: '＋ 添加到 Calendar Space', en: '＋ Add to Calendar Space' },
+  'dbembed.calendarSettings': { zh: '日历设置', en: 'Calendar settings' },
+  'dbembed.addToCalendar': { zh: '添加到日历空间', en: 'Add to Calendar Space' },
   'dbembed.deleteView': { zh: '删除视图', en: 'Delete view' },
   'dbembed.lastViewLocked': { zh: '最后一个视图不可删除', en: 'The last view cannot be deleted' },
   // 条件行编辑器
@@ -293,7 +325,7 @@ registerMessages({
   'dbembed.valuePlaceholder': { zh: '值…', en: 'Value…' },
   'dbembed.removeCondition': { zh: '移除条件', en: 'Remove condition' },
   'dbembed.noConditions': { zh: '还没有条件。', en: 'No conditions yet.' },
-  'dbembed.addCondition': { zh: '＋ 添加条件', en: '＋ Add condition' },
+  'dbembed.addCondition': { zh: '添加条件', en: 'Add condition' },
   'dbembed.clearAll': { zh: '清除全部', en: 'Clear all' },
   // 看板 / 日历 / 画廊
   'dbembed.kanbanNeedSelect': { zh: '看板按单选列分组,这张表还没有单选列。', en: 'Board view groups by a select column, and this table has none yet.' },
@@ -316,24 +348,24 @@ registerMessages({
 
 /** ⚠️ 模块级表只存**键**:文案在渲染时 t(labelKey) 求值。写字面量会冻在模块加载那一刻,切语言不跟。 */
 const TYPE_META: Record<ColumnType, { icon: ReactNode; labelKey: string }> = {
-  text: { icon: <TextIcon />, labelKey: 'dbembed.type.text' },
-  number: { icon: <NumberIcon />, labelKey: 'dbembed.type.number' },
-  checkbox: { icon: <CheckBoxCheckLinearIcon />, labelKey: 'dbembed.type.checkbox' },
-  date: { icon: <DateTimeIcon />, labelKey: 'dbembed.type.date' },
-  select: { icon: <SingleSelectIcon />, labelKey: 'dbembed.type.select' },
-  multiselect: { icon: <MultiSelectIcon />, labelKey: 'dbembed.type.multiselect' },
-  url: { icon: <LinkIcon />, labelKey: 'dbembed.type.url' },
-  page: { icon: <PageIcon />, labelKey: 'dbembed.type.page' },
+  text: { icon: dbIcon('text'), labelKey: 'dbembed.type.text' },
+  number: { icon: dbIcon('number'), labelKey: 'dbembed.type.number' },
+  checkbox: { icon: dbIcon('checkbox'), labelKey: 'dbembed.type.checkbox' },
+  date: { icon: dbIcon('date'), labelKey: 'dbembed.type.date' },
+  select: { icon: dbIcon('select'), labelKey: 'dbembed.type.select' },
+  multiselect: { icon: dbIcon('multiselect'), labelKey: 'dbembed.type.multiselect' },
+  url: { icon: dbIcon('url'), labelKey: 'dbembed.type.url' },
+  page: { icon: dbIcon('page'), labelKey: 'dbembed.type.page' },
 }
 
 /** 内置扩展类型(住嵌入层不进插件注册表:公式/关联/引用需要整表与跨表上下文,PropCellProps 给不了)。
  *  file=附件(cell 存相对 .db 的路径或 URL);formula/lookup=计算列只读;rowlink=关联另一张 .db 的行。 */
 const EXTRA_TYPES = ['file', 'formula', 'rowlink', 'lookup'] as const
 const EXTRA_META: Record<string, { icon: ReactNode; labelKey: string }> = {
-  file: { icon: <Paperclip size={14} />, labelKey: 'dbembed.type.file' },
-  formula: { icon: <Sigma size={14} />, labelKey: 'dbembed.type.formula' },
-  rowlink: { icon: <Link2 size={14} />, labelKey: 'dbembed.type.rowlink' },
-  lookup: { icon: <ArrowRightLeft size={14} />, labelKey: 'dbembed.type.lookup' },
+  file: { icon: dbIcon('file'), labelKey: 'dbembed.type.file' },
+  formula: { icon: dbIcon('formula'), labelKey: 'dbembed.type.formula' },
+  rowlink: { icon: dbIcon('rowlink'), labelKey: 'dbembed.type.rowlink' },
+  lookup: { icon: dbIcon('lookup'), labelKey: 'dbembed.type.lookup' },
 }
 /** 计算列(公式/引用):单元格只读,值由渲染管道物化,不落盘(判据单源在 rowLink.ts,芯片显示列禁选也用它)。 */
 const isComputed = isComputedCol
@@ -346,19 +378,20 @@ const colMeta = (type: string): { icon: ReactNode; labelKey: string } => {
   const custom = getPropertyType(type)
   // 插件注册类型 / 未知类型:labelKey 位置直接放成品文案 —— t() 查不到的键原样返回,正好当兜底。
   if (custom) return { icon: custom.icon, labelKey: custom.label }
-  return EXTRA_META[type] ?? TYPE_META[type as ColumnType] ?? { icon: '·', labelKey: type }
+  return EXTRA_META[type] ?? TYPE_META[type as ColumnType] ?? { icon: dbIcon('page'), labelKey: type }
 }
 
 // ── 多视图(AFFiNE/Notion 式):views 存 .db;缺 = 单「表格」默认视图(旧文件零迁移;
 //    viewsOf/DEFAULT_DB_VIEW 单源在 shared/db/schema —— 仪表盘快捷加卡也要物化默认视图) ──
 const VIEW_META: Record<DbViewType, { icon: ReactNode; labelKey: string }> = {
-  table: { icon: <DatabaseTableViewIcon />, labelKey: 'dbembed.view.table' },
-  kanban: { icon: <DatabaseKanbanViewIcon />, labelKey: 'dbembed.view.kanban' },
-  calendar: { icon: <TodayIcon />, labelKey: 'dbembed.view.calendar' },
-  gallery: { icon: <ImageIcon />, labelKey: 'dbembed.view.gallery' },
-  chart: { icon: <ChartPanelIcon />, labelKey: 'dbembed.view.chart' },
-  form: { icon: <ClipboardList size={14} />, labelKey: 'dbembed.view.form' },
-  gantt: { icon: <ChartGantt size={14} />, labelKey: 'dbembed.view.gantt' },
+  table: { icon: dbIcon('table'), labelKey: 'dbembed.view.table' },
+  list: { icon: dbIcon('list'), labelKey: 'dbembed.view.list' },
+  kanban: { icon: dbIcon('kanban'), labelKey: 'dbembed.view.kanban' },
+  calendar: { icon: dbIcon('calendar'), labelKey: 'dbembed.view.calendar' },
+  gallery: { icon: dbIcon('gallery'), labelKey: 'dbembed.view.gallery' },
+  chart: { icon: dbIcon('chart'), labelKey: 'dbembed.view.chart' },
+  form: { icon: dbIcon('form'), labelKey: 'dbembed.view.form' },
+  gantt: { icon: dbIcon('gantt'), labelKey: 'dbembed.view.gantt' },
 }
 /** 未知视图类型(前向兼容)回退表格观感的元数据。 */
 const viewMeta = (type: string): { icon: ReactNode; labelKey: string } => VIEW_META[type as DbViewType] ?? VIEW_META.table
@@ -431,7 +464,7 @@ function PopLayer({ children }: { children: ReactNode }): ReactNode {
 }
 
 interface Pop {
-  kind: 'options' | 'colmenu' | 'folder' | 'viewmenu' | 'addview' | 'row' | 'filters' | 'stat' | 'calendar' | 'groups' | 'fold'
+  kind: 'options' | 'colmenu' | 'folder' | 'viewmenu' | 'addview' | 'row' | 'filters' | 'stat' | 'calendar' | 'groups' | 'fold' | 'sorts'
   colId?: string
   rowId?: string
   viewId?: string
@@ -591,6 +624,8 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   }
   const db = localMode ? local : dbProp
   const [pop, setPop] = useState<Pop | null>(null)
+  const tableRef = useRef<HTMLDivElement>(null)
+  const scopedPages = useScopedPageStore()
   const [q, setQ] = useState('') // 工具栏搜索:按行标题过滤
   // 拖拽改宽的过程态:pointermove 只写这里驱动 gridTemplateColumns 即时反馈,pointerup 才落进 column。
   const [liveWidths, setLiveWidths] = useState<Record<string, number>>({})
@@ -621,6 +656,12 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   // 视图:激活项是本嵌入的局部态(同 db 多处嵌入各看各的,切 tab 不写盘);视图定义存 .db。
   // 激活视图初值:从嵌入语法的视图名(initialView)按名字解析;找不到=null(回退首个视图)。
   const [viewId, setViewId] = useState<string | null>(() => viewsOf(db).find((v) => v.name === initialView)?.id ?? null)
+  // External embed changes (including undo) update the view without remounting its React root.
+  useEffect(() => {
+    setViewId(viewsOf(db).find((candidate) => candidate.name === initialView)?.id ?? null)
+    // View/data edits must not reset a local tab selection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialView])
   const views = viewsOf(db)
   const view = views.find((v) => v.id === viewId) ?? views[0]
   // 用户显式切/建视图:置激活 + 把视图名回写进笔记的嵌入块 md(持久化,每处嵌入各记各的)。
@@ -632,9 +673,20 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
     pickView(v)
     setPop(null)
   }
+  const duplicateView = (source: DbView): void => {
+    if (readOnly) return
+    const baseName = t('dbembed.viewCopyName', { name: source.name })
+    let name = baseName
+    let suffix = 2
+    while (views.some((candidate) => candidate.name === name)) name = `${baseName} ${suffix++}`
+    const copy: DbView = { ...structuredClone(source), id: dbId(), name }
+    m((d) => ({ ...d, views: [...viewsOf(d), copy] }))
+    pickView(copy)
+    setPop(null)
+  }
   const patchView = (id: string, patch: Partial<DbView>): void => {
     m((d) => ({ ...d, views: viewsOf(d).map((v) => (v.id === id ? { ...v, ...patch } : v)) }))
-    if (id === viewId && patch.name) onViewChange?.(patch.name) // 改名活动视图 → 同步嵌入引用,免下次重挂失配
+    if (id === view.id && patch.name) onViewChange?.(patch.name) // 改名活动视图 → 同步嵌入引用,免下次重挂失配
   }
   const delView = (id: string): void => {
     if (readOnly) return
@@ -681,7 +733,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
     return i < 0 ? null : (refDbs[i] ?? null)
   }
 
-  const isTableLike = !['kanban', 'calendar', 'gallery', 'chart', 'form', 'gantt'].includes(view.type)
+  const isTableLike = !['list', 'kanban', 'calendar', 'gallery', 'chart', 'form', 'gantt'].includes(view.type)
   // 层级树(2.9):view.treeCol 指本表的自指关联列时,表格体按父子缩进渲染。判据单源在 rowLink.resolveTreeCol
   // (列还在且仍是 rowlink+refDb 指回本表);按 db.columns 解析而不是 visCols —— 把父列隐藏只看缩进是常见用法。
   const treeCol = isTableLike ? resolveTreeCol(db.columns, view.treeCol, [dbPath, dbRef]) : null
@@ -789,6 +841,11 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
     // 盖章压在**最后**(与 dbAggregateStore.createAggEvent 同序):看板/日历给的 initial 只会是分组列或日期列,
     // 与盖章键不重叠时照常保留;若用户把日历锚在 created 列上,点击日不得伪造创建时间(codex 抓的)。
     m((d) => ({ ...d, rows: [...d.rows, { id: rowId, cells: { ...(initial ?? {}), ...newRowCells(d) } }] }))
+    if (view.type !== 'form') requestAnimationFrame(() => {
+      const cell = tableRef.current?.querySelector<HTMLElement>(`[data-row="${rowId}"] [data-db-cell]`)
+      if (cell) focusGridCell(cell, true)
+      else setPop({ kind: 'row', rowId, x: 0, y: 0 })
+    })
   }
   /** 拖拽重排:把 dragId 挪到 targetId 之前/之后。顺序就是 db.rows 的数组序,直接落盘。 */
   const reorderRow = (dragId: string, targetId: string, after: boolean): void => {
@@ -994,15 +1051,16 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
     setColSort(colId, cur === null ? 'asc' : cur.dir === 'asc' ? 'desc' : null)
   }
   /** 视图菜单多列排序:点击循环 升→降→移除;新列追加末位。sort 恒 = sorts[0] 镜像。 */
-  const cycleSort = (colId: string): void => {
+  const cycleSort = (colId: string, targetView = view): void => {
+    const sorts = sortsOf(targetView)
     const i = sorts.findIndex((s) => s.colId === colId)
     const next =
       i < 0 ? [...sorts, { colId, dir: 'asc' as const }]
       : sorts[i].dir === 'asc' ? sorts.map((s, j) => (j === i ? { ...s, dir: 'desc' as const } : s))
       : sorts.filter((_, j) => j !== i)
-    patchView(view.id, { sorts: next.length ? next : undefined, sort: next[0] })
+    patchView(targetView.id, { sorts: next.length ? next : undefined, sort: next[0] })
   }
-  const clearSorts = (): void => patchView(view.id, { sorts: undefined, sort: undefined })
+  const clearSorts = (targetView = view): void => patchView(targetView.id, { sorts: undefined, sort: undefined })
 
   // today() 的换日键:跨午夜后计算列不该继续显示昨天的结果 —— 到点换键,memo 随之重算。
   const [dayKey, setDayKey] = useState(todayStr)
@@ -1039,7 +1097,17 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   const rows = useMemo(() => {
     const af = applyFilters(compRows, view.filters, kindOf, view.filterMode)
     const needle = q.trim().toLowerCase()
-    const filtered = needle ? af.filter((r) => rowTitle(r).toLowerCase().includes(needle)) : af
+    const filtered = needle ? af.filter((row) => db.columns.some((col) => {
+      if (col.type === 'rowlink' || isLinksProjection(col)) {
+        const target = targetOf(col)
+        return rowLinkIds(row.cells[col.id]).some((id) => {
+          const related = target?.db.rows.find((candidate) => candidate.id === id)
+          return related && linkLabel(target!.db, related, col.titleCol).toLocaleLowerCase().includes(needle)
+        })
+      }
+      const value = row.cells[col.id]
+      return (Array.isArray(value) ? value.join(' ') : String(value ?? '')).toLocaleLowerCase().includes(needle)
+    })) : af
     if (!sorts.length && !foldRule) return filtered
     const keyOf = (r: DbRow, colId: string): string | number => {
       const col = db.columns.find((c) => c.id === colId)
@@ -1314,12 +1382,12 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
   const popCol = pop ? db.columns.find((c) => c.id === pop.colId) : undefined
   // 从合成后的 rows 找(而非 db.rows):笔记视图的行 id = 笔记路径,db.rows 恒空,
   // 旧写法让笔记视图的 select 选项弹层永远开不出来。
-  const popRow = pop?.rowId ? rows.find((r) => r.id === pop.rowId) : undefined
+  const popRow = pop?.rowId ? compRows.find((r) => r.id === pop.rowId) : undefined
   const popView = pop?.viewId ? views.find((v) => v.id === pop.viewId) : undefined
 
   return (
     <PopHostCtx.Provider value={popHost ?? null}>
-    <div className="amx-db">
+    <div className="amx-db" ref={tableRef}>
       {/* hideHead:插件面板自己有标题栏,再顶一行库名 + 行数只是重复(筛选/搜索/视图菜单照留,那才是用原生表的理由)。 */}
       {!hideHead && (
       <div className="amx-db-head">
@@ -1343,7 +1411,8 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
       )}
 
       {!hideTools && (
-      <div className="amx-db-viewbar" role="tablist">
+      <div className="amx-db-viewbar">
+        <div className="amx-db-viewtabs" role="tablist">
         {/* 只读且只有一个视图:tab 条只剩一枚假 tab,不如不占一行 */}
         {!(readOnly && views.length === 1) && views.map((v) => (
           <button
@@ -1353,7 +1422,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
             aria-selected={v.id === view.id}
             data-active={v.id === view.id || undefined}
             onClick={(e) => { if (v.id === view.id) openPop(e, { kind: 'viewmenu', viewId: v.id }); else pickView(v) }}
-            onContextMenu={(e) => { e.preventDefault(); openPop(e, { kind: 'viewmenu', viewId: v.id }) }}
+            onContextMenu={(e) => { e.preventDefault(); pickView(v); openPop(e, { kind: 'viewmenu', viewId: v.id }) }}
             title={v.id === view.id ? t('dbembed.viewTabHint') : v.name}
           >
             {viewMeta(v.type).icon}
@@ -1365,15 +1434,8 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
             <PlusIcon />
           </button>
         )}
-        <span className="amx-db-viewbar-sp" />
-        {isTableLike && <button className="amx-db-filterbtn amx-db-groupbtn" data-on={!!tableGroupCol || undefined}
-          aria-label={t('dbgroup.title')} onClick={(e) => openPop(e, { kind: 'groups' })}>
-          <Columns3 size={14} />{t('dbgroup.title')}{tableGroupCol ? ` · ${tableGroupCol.name}` : ''}
-        </button>}
-        {isTableLike && <button className="amx-db-filterbtn amx-db-foldbtn" data-on={!!foldRule || undefined}
-          aria-label={t('dbfold.title')} onClick={(e) => openPop(e, { kind: 'fold' })}>
-          <FoldVertical size={14} />{t('dbfold.title')}
-        </button>}
+        </div>
+        <div className="amx-db-viewtools">
         <button
           className="amx-db-filterbtn"
           data-on={(view.filters?.length ?? 0) > 0 || undefined}
@@ -1383,18 +1445,10 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
           <FilterIcon />
           {t('dbembed.filter')}{(view.filters?.length ?? 0) > 0 && ` ${view.filters!.length}`}
         </button>
-        {isTableLike && (
-          <button
-            className="amx-db-filterbtn amx-db-autosize"
-            data-on={autoSize || undefined}
-            aria-pressed={autoSize}
-            onClick={() => setAutoSizing(!autoSize)}
-            title={t(autoSize ? 'dbembed.autoSizeOn' : 'dbembed.autoSizeOff')}
-          >
-            <Columns3 size={14} />
-            {t('dbembed.autoSize')}
-          </button>
-        )}
+        <button className="amx-db-filterbtn amx-db-sortbtn" data-on={sorts.length > 0 || undefined}
+          onClick={(event) => openPop(event, { kind: 'sorts' })} title={t('dbembed.sort')}>
+          <ArrowRightLeft size={14} />{t('dbembed.sort')}{sorts.length > 0 ? ` ${sorts.length}` : ''}
+        </button>
         <TableSearch value={q} onChange={setQ} />
         {/* 内存源没有 dbPath 可开;插件面板里这颗按钮也只会把用户弹去别处 */}
         {!memory && !hideHead && (
@@ -1414,6 +1468,7 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
         <button className="amx-db-iconbtn" onClick={(e) => openPop(e, { kind: 'viewmenu', viewId: view.id })} title={t('dbembed.viewSettings')} aria-label="view settings"><Settings2 size={15} /></button>
         {/* 表单视图没有通用「新建」:直接 addRow() 会绕过表单的必填与默认值,建行只走 FormBody 的提交(Codex 评审抓的) */}
         {view.type !== 'form' && !readOnly && <button className="amx-db-newbtn" onClick={() => addRow()} title={t('dbembed.new')}><Plus size={14} /> {t('dbembed.new')}</button>}
+        </div>
       </div>
       )}
 
@@ -1422,6 +1477,9 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
           {t('dbembed.noColumns')}
           {!readOnly && <button className="amx-db-linkbtn" onClick={addCol}>{t('dbembed.addColumn')}</button>}
         </div>
+      ) : view.type === 'list' ? (
+        <ListBody rows={rows} columns={visCols} titleOf={rowTitle} onOpen={openRow} onAdd={readOnly ? undefined : () => addRow()}
+          renderProperty={(row, col) => cellPreview(col, row.cells[col.id])} rowAttrs={rowAttrs} />
       ) : view.type === 'kanban' ? (
         <KanbanBody db={db} rows={rows} view={view} visCols={visCols} setCell={setCell} addRow={addRow} openRow={openRow} rowTitle={rowTitle} addStatusCol={addStatusCol} readOnly={readOnly} rowAttrs={rowAttrs} />
       ) : view.type === 'calendar' ? (
@@ -1562,7 +1620,10 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
                 {visCols.map((col, ci) => {
                   const meta = cellMeta?.[row.id]?.[col.id]
                   return (
-                  <div className="amx-db-cell" key={col.id} data-coltype={resolveBaseType(col.type)} {...(meta?.attrs ?? {})}>
+                  <div className="amx-db-cell" key={col.id} data-coltype={resolveBaseType(col.type)} {...(meta?.attrs ?? {})}
+                    data-db-cell={readOnly ? undefined : col.id} tabIndex={readOnly ? undefined : 0}
+                    onKeyDown={readOnly ? undefined : gridCellKeyDown}>
+
                     {/* 缩进条 + 折叠钮只挂在**首个数据格**(标题列):行首 28px 那格已被拖柄/删除占满,
                         再塞东西会让表头/统计行与数据行的网格轨道对不上(E9 那条对齐断言守的就是它)。 */}
                     {node && ci === 0 && (
@@ -1594,6 +1655,11 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
                     {readOnly
                       ? <ReadOnlyCell row={row} col={col} env={cellEnv} meta={meta} pagePath={pagePath} />
                       : <Cell row={row} col={col} pagePath={pagePath} env={cellEnv} setCell={setCell} openOptions={(e) => openPop(e, { kind: 'options', colId: col.id, rowId: row.id })} />}
+                    {ci === 0 && !readOnly && <button className="amx-db-rowopen" title={t('dbembed.openRow')} aria-label={t('dbembed.openRow')} onClick={(event) => {
+                      event.stopPropagation()
+                      if (isNoteView) void scopedPages.getState().loadPage(row.id)
+                      else openRow(event, row.id)
+                    }}><ExternalLink size={13} /></button>}
                   </div>
                   )
                 })}
@@ -1765,11 +1831,11 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
           <ViewMenu
             view={popView}
             columns={db.columns}
-            sorts={sorts}
+            sorts={sortsOf(popView)}
             chartGroupCol={popView.type === 'chart' ? resolveChartGroupCol(db, popView)?.id : undefined}
             treeCols={treeColsOf(db.columns, [dbPath, dbRef])}
-            onCycleSort={cycleSort}
-            onClearSorts={clearSorts}
+            onCycleSort={(colId) => cycleSort(colId, popView)}
+            onClearSorts={() => clearSorts(popView)}
             onRename={(name) => patchView(popView.id, { name })}
             onPatch={(patch) => patchView(popView.id, patch)}
             onPickGroupBy={(id) => patchView(popView.id, { groupBy: id })}
@@ -1781,15 +1847,21 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
             }}
             onToggleOwnCols={() => toggleOwnCols(popView.id)}
             onOpenFilters={() => setPop({ kind: 'filters', x: pop.x, y: pop.y })}
-            onOpenGroups={() => { pickView(popView); setPop({ kind: 'groups', x: pop.x, y: pop.y }) }}
+            onOpenGroups={() => { pickView(popView); setPop({ kind: 'groups', x: pop.x, y: pop.y, anchorTop: pop.anchorTop }) }}
+            onOpenFold={() => { pickView(popView); setPop({ kind: 'fold', x: pop.x, y: pop.y, anchorTop: pop.anchorTop }) }}
+            onAutoSizingChange={setAutoSizing}
             onOpenCalendar={() => setPop({ kind: 'calendar', x: pop.x, y: pop.y })}
             calendarActive={!!memberOf(vault, calByVault, dbPath)}
             readOnly={readOnly}
+            onDuplicate={() => duplicateView(popView)}
             onDelete={views.length > 1 && !readOnly ? () => delView(popView.id) : undefined}
           />
         </PopShell>
       )}
       {pop?.kind === 'groups' && <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
+        <button className="amx-db-opt amx-db-menu-back" onClick={() => setPop({ kind: 'viewmenu', viewId: view.id, x: pop.x, y: pop.y, anchorTop: pop.anchorTop })}>
+          {dbIcon('moveLeft')}{t('dbembed.backToSettings')}
+        </button>
         <GroupMenu columns={groupColumns} view={view} groups={tableGroups} labelOf={groupLabel} blocked={!!treeCol} dateGroup={!!tableGroupCol && isDateish(tableGroupCol)}
           onPatch={(patch) => patchView(view.id, patch)} onCollapse={(collapse) => setCollapsedGroups((prev) => {
             const next = new Set(prev)
@@ -1798,6 +1870,9 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
           })} />
       </PopShell>}
       {pop?.kind === 'fold' && <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
+        <button className="amx-db-opt amx-db-menu-back" onClick={() => setPop({ kind: 'viewmenu', viewId: view.id, x: pop.x, y: pop.y, anchorTop: pop.anchorTop })}>
+          {dbIcon('moveLeft')}{t('dbembed.backToSettings')}
+        </button>
         <FoldMenu view={view} keyCols={groupColumns.filter((c) => !isDateish(c))} timeCols={db.columns.filter(isDateish)} blocked={!!treeCol}
           onPatch={(patch) => patchView(view.id, patch)} onExpandAll={(expand) => setExpandedFolds((prev) => {
             const next = new Set(prev)
@@ -1816,6 +1891,17 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
           />
         </PopShell>
       )}
+      {pop?.kind === 'sorts' && <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
+        <div className="amx-db-pop-sec" title={t('dbembed.sortViewHint')}>{t('dbembed.sortViewSec')}</div>
+        <div className="amx-db-pop-list">{db.columns.map((col) => {
+          const selected = sortOf(col.id)
+          return <button className="amx-db-opt" key={col.id} onClick={() => cycleSort(col.id)}>
+            <span className="amx-db-th-icon">{colMeta(col.type).icon}</span>{col.name}
+            {selected && <span className="amx-db-opt-check">{dbIcon(selected.dir === 'asc' ? 'sortAsc' : 'sortDesc')} {selected.idx + 1}</span>}
+          </button>
+        })}</div>
+        {sorts.length > 0 && <button className="amx-db-opt amx-db-opt-clear" onClick={() => clearSorts()}>{dbIcon('clear')}{t('dbembed.clearSort')}</button>}
+      </PopShell>}
       {pop && pop.kind === 'filters' && (
         <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
           <FiltersPop
@@ -1842,12 +1928,12 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
               }}
             >
               {t('dbembed.statNone')}
-              {!view.stats?.[popCol.id] && <span className="amx-db-opt-check">✓</span>}
+              {!view.stats?.[popCol.id] && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
             </button>
             {statOptionsFor(kindOf(popCol.id) ?? 'text').map((s) => (
               <button key={s} className="amx-db-opt" onClick={() => { patchView(view.id, { stats: { ...view.stats, [popCol.id]: s } }); setPop(null) }}>
                 {STAT_LABEL[s]}
-                {view.stats?.[popCol.id] === s && <span className="amx-db-opt-check">✓</span>}
+                {view.stats?.[popCol.id] === s && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
               </button>
             ))}
           </div>
@@ -1867,18 +1953,23 @@ function DbTable({ dbRef, db: dbProp, pagePath, initialView, onViewChange, memor
         </PopShell>
       )}
       {pop && pop.kind === 'row' && popRow && (
-        <PopShell x={pop.x} y={pop.y} anchorTop={pop.anchorTop} onClose={() => setPop(null)}>
-          <RowEditor
-            db={db}
-            row={popRow}
-            pagePath={pagePath}
-            env={cellEnv}
-            setCell={setCell}
-            createOption={createOption}
-            readOnly={readOnly}
+        <RowPeek
+          title={rowTitle(popRow)} databaseName={db.name} bodyKey={popRow.id}
+          mode={view.openMode ?? (['gallery', 'calendar'].includes(view.type) ? 'center' : 'side')}
+          onModeChange={(openMode) => patchView(view.id, { openMode })}
+          onClose={() => setPop(null)}
+          onPrevious={rows.findIndex((r) => r.id === popRow.id) > 0 ? () => setPop({ ...pop, rowId: rows[rows.findIndex((r) => r.id === popRow.id) - 1].id }) : undefined}
+          onNext={rows.findIndex((r) => r.id === popRow.id) >= 0 && rows.findIndex((r) => r.id === popRow.id) < rows.length - 1 ? () => setPop({ ...pop, rowId: rows[rows.findIndex((r) => r.id === popRow.id) + 1].id }) : undefined}
+          body={isNoteView ? undefined : popRow.body}
+          onBodyChange={isNoteView || readOnly ? undefined : (body) => m((d) => ({ ...d, version: Math.max(d.version, 2), rows: d.rows.map((r) => r.id === popRow.id ? { ...r, body } : r) }))}
+          readOnly={readOnly}
+        >
+          <RowEditor key={popRow.id}
+            db={db} row={popRow} pagePath={pagePath} env={cellEnv} setCell={setCell}
+            createOption={createOption} readOnly={readOnly}
             onDelete={() => { delRow(popRow.id); setPop(null) }}
           />
-        </PopShell>
+        </RowPeek>
       )}
     </div>
     </PopHostCtx.Provider>
@@ -1914,6 +2005,137 @@ const openCellLink = (ps: ReturnType<typeof useScopedPageStore>, pagePath: strin
 /** 光标处一对**未闭合**的 [[(中文输入法打出的【【同收):补全触发判据 + 选中后被替换的那一段。 */
 const WIKI_OPEN_RE = /(?:\[\[|【【)([^[\]【】\n]*)$/
 
+/** Navigation follows the rendered grid, including collapsed groups and per-view column order.
+ * Capture the destination BEFORE commit: sorting/filtering may move or remove the source row. */
+function gridDestination(cell: HTMLElement, move: GridMove): HTMLElement | null {
+  const properties = cell.closest('.amx-db-roweditor')
+  const grid = properties ?? cell.closest('.amx-db-scroll') ?? cell.closest('.amx-db')
+  if (!grid) return null
+  const cells = Array.from(grid.querySelectorAll<HTMLElement>('[data-db-cell]'))
+  const row = cell.closest('[data-row]')
+  const width = properties ? 1 : row?.querySelectorAll('[data-db-cell]').length ?? 0
+  const index = nextGridCellIndex(cells.indexOf(cell), cells.length, width, move)
+  return index < 0 ? null : cells[index]
+}
+function focusGridCell(cell: HTMLElement | null, edit = false, seed?: string): void {
+  if (!cell?.isConnected) return
+  cell.focus({ preventScroll: true })
+  cell.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  if (edit) {
+    const value = cell.querySelector<HTMLElement>('[data-db-value]')
+    if (value) value.dispatchEvent(new CustomEvent('db-cell-edit', { detail: seed }))
+    else cell.querySelector<HTMLButtonElement | HTMLInputElement>('button.amx-db-cellbtn, input.amx-db-checkbox')?.focus()
+  }
+}
+
+function gridCellKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+  if (event.target !== event.currentTarget || event.nativeEvent.isComposing || event.keyCode === 229) return
+  const moves: Record<string, GridMove> = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down', Tab: event.shiftKey ? 'previous' : 'next' }
+  const move = moves[event.key]
+  if (move) {
+    const target = gridDestination(event.currentTarget, move)
+    if (target) { event.preventDefault(); event.stopPropagation(); focusGridCell(target) }
+  } else if (event.key === 'Enter' || event.key === 'F2') {
+    event.preventDefault(); event.stopPropagation()
+    if (event.metaKey || event.ctrlKey) event.currentTarget.closest('[data-row]')?.querySelector<HTMLButtonElement>('.amx-db-rowopen')?.click()
+    else if (event.currentTarget.querySelector('[data-db-value]')) focusGridCell(event.currentTarget, true)
+    else event.currentTarget.querySelector<HTMLButtonElement | HTMLInputElement>('button.amx-db-cellbtn, input.amx-db-checkbox')?.click()
+  } else if (event.key.length === 1 && !event.metaKey && !event.ctrlKey && !event.altKey && event.currentTarget.querySelector('[data-db-value]')) {
+    event.preventDefault(); event.stopPropagation(); focusGridCell(event.currentTarget, true, event.key)
+  }
+}
+
+/** Values stay as a local draft until commit. This keeps sorted/filtered rows stable while typing,
+ * gives Escape a real cancel operation, and writes only one change to undo/history. */
+function ValueCell({ row, col, pagePath, setCell }: {
+  row: DbRow; col: DbColumn; pagePath: string
+  setCell: (rowId: string, colId: string, value: CellValue | undefined) => void
+}) {
+  const { t } = useI18n()
+  const ps = useScopedPageStore()
+  const value = coerceForDisplay(row.cells[col.id], resolveBaseType(col.type))
+  const textValue = value == null ? '' : String(value)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(textValue)
+  const [wikiPick, setWikiPick] = useState<{ x: number; y: number; anchorTop: number; caret: number } | null>(null)
+  const host = useRef<HTMLDivElement>(null)
+  const input = useRef<HTMLInputElement>(null)
+  const finished = useRef(false)
+  const begin = (seed?: string): void => {
+    finished.current = false
+    setDraft(seed ?? textValue)
+    setEditing(true)
+  }
+  useEffect(() => {
+    const el = host.current
+    const edit = (event: Event): void => begin((event as CustomEvent<string | undefined>).detail)
+    el?.addEventListener('db-cell-edit', edit)
+    return () => el?.removeEventListener('db-cell-edit', edit)
+  }, [textValue])
+  const commit = (cancel = false, raw = draft): void => {
+    if (finished.current) return
+    finished.current = true
+    setEditing(false)
+    setWikiPick(null)
+    if (cancel) return
+    const next = cellDraftValue(col.type, raw, row.cells[col.id])
+    if (next !== row.cells[col.id]) setCell(row.id, col.id, next)
+  }
+  const keyDown = (event: ReactKeyboardEvent<HTMLInputElement>): void => {
+    event.stopPropagation()
+    if (event.nativeEvent.isComposing || event.keyCode === 229) return
+    if (!['Enter', 'Tab', 'Escape'].includes(event.key)) return
+    event.preventDefault()
+    const cell = host.current?.closest<HTMLElement>('[data-db-cell]') ?? null
+    const target = cell && event.key !== 'Escape'
+      ? gridDestination(cell, event.key === 'Tab' ? (event.shiftKey ? 'previous' : 'next') : (event.shiftKey ? 'up' : 'down'))
+      : cell
+    commit(event.key === 'Escape')
+    requestAnimationFrame(() => focusGridCell(target ?? cell, event.key === 'Tab'))
+  }
+  const isText = !['number', 'date', 'url', 'page'].includes(col.type)
+  const shown = col.type === 'number' && typeof value === 'number' ? formatNumber(value, col) : textValue
+  return (
+    <div className="amx-db-value" data-db-value="" data-editing={editing || undefined} ref={host}>
+      {editing ? <input
+        ref={input}
+        className="amx-db-input"
+        type={col.type === 'date' ? 'date' : 'text'}
+        inputMode={col.type === 'number' ? 'decimal' : undefined}
+        aria-label={col.name}
+        autoFocus
+        value={draft}
+        onChange={(event) => {
+          const next = event.target.value
+          setDraft(next)
+          const caret = event.target.selectionStart ?? next.length
+          if (isText && WIKI_OPEN_RE.test(next.slice(0, caret))) {
+            const rect = event.target.getBoundingClientRect()
+            setWikiPick({ x: rect.left, y: rect.bottom + 4, anchorTop: rect.top, caret })
+          } else setWikiPick(null)
+        }}
+        onBlur={() => { if (!wikiPick) commit() }}
+        onKeyDown={keyDown}
+      /> : <div className="amx-db-value-display" onClick={() => begin()} title={t('dbembed.clickToEdit')}>
+        <span className="amx-db-value-text">
+          {shown ? (isText ? wikiSegments(shown, (raw) => openCellLink(ps, pagePath, raw)) : shown) : <span className="amx-db-blank">{t('dbembed.blank')}</span>}
+        </span>
+        {col.type === 'url' && /^https?:\/\//i.test(textValue) && <a
+          className="amx-db-value-link" href={textValue} target="_blank" rel="noreferrer"
+          title={textValue} onClick={(event) => event.stopPropagation()}><ExternalLink size={13} /></a>}
+      </div>}
+      {wikiPick && <RelationPicker
+        x={wikiPick.x} y={wikiPick.y} anchorTop={wikiPick.anchorTop}
+        onClose={() => { setWikiPick(null); input.current?.focus() }}
+        onPick={(inner) => {
+          const head = draft.slice(0, wikiPick.caret).replace(WIKI_OPEN_RE, inner ? `[[${inner}]]` : '')
+          commit(false, head + draft.slice(wikiPick.caret))
+          requestAnimationFrame(() => focusGridCell(host.current?.closest<HTMLElement>('[data-db-cell]') ?? null))
+        }} />}
+    </div>
+  )
+}
+
 function Cell({
   row,
   col,
@@ -1930,16 +2152,8 @@ function Cell({
   openOptions: (e: ReactMouseEvent) => void
 }) {
   const { t } = useI18n()
-  const [editing, setEditing] = useState(false) // text 含 [[ ]] 时的展示/编辑切换 + url 编辑态
-  // [[ 补全弹层;caret = 触发时的光标位置(替换只作用于它之前那段未闭合的 [[…)。
-  const [wikiPick, setWikiPick] = useState<{ x: number; y: number; anchorTop: number; caret: number } | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null) // 关掉补全弹层后把焦点还给单元格(autoFocus 只在挂载时生效)
-  const ps = useScopedPageStore() // 单元格里点双链要落在自己这半屏
-  const cancelRef = useRef(false)
   const custom = getPropertyType(col.type)
   const v = coerceForDisplay(row.cells[col.id], resolveBaseType(col.type))
-
-  const openLink = (raw: string): void => openCellLink(ps, pagePath, raw)
 
   // 自定义注册类型:交给注册表的 Cell(value 已按 baseType 折算)。
   if (custom) {
@@ -1968,98 +2182,12 @@ function Cell({
     case 'file':
       return <FileCell row={row} col={col} env={env} setCell={setCell} />
 
-    case 'text': {
-      const s = v as string
-      // 含 [[链接]] 且非编辑态 → 富文本展示(链接可点);点击其余区域 / ✎ 进入编辑。
-      // 补全弹层开着时不切:弹层里的搜索框会抢焦点 → 输入框失焦 → 整支换成展示态,弹层跟着被卸掉。
-      if (!editing && !wikiPick && CELL_WIKI_RE.test(s)) {
-        return (
-          <div className="amx-db-urlcell" onClick={() => setEditing(true)}>
-            <span className="amx-db-richtext">{wikiSegments(s, openLink)}</span>
-            <button className="amx-db-edit" onClick={(e) => { e.stopPropagation(); setEditing(true) }} title={t('dbembed.edit')} aria-label="edit cell">✎</button>
-          </div>
-        )
-      }
-      const put = (next: string): void => setCell(row.id, col.id, next === '' ? undefined : next)
-      return (
-        <>
-          <input
-            ref={inputRef}
-            className="amx-db-input"
-            autoFocus={editing || undefined}
-            value={s}
-            onChange={(e) => {
-              const next = e.target.value
-              put(next)
-              // 判据只看**光标之前**那一段:在已有文字中间插 [[ 也得弹(整串结尾还有后文,拿全串判会漏)。
-              const caret = e.target.selectionStart ?? next.length
-              if (WIKI_OPEN_RE.test(next.slice(0, caret))) {
-                const r = e.target.getBoundingClientRect()
-                setWikiPick({ x: r.left, y: r.bottom + 4, anchorTop: r.top, caret })
-              } else setWikiPick(null)
-            }}
-            onFocus={() => setEditing(true)}
-            onBlur={() => {
-              setEditing(false)
-              // 中文输入法打出来的是全角【】,归一成半角才是双链(否则用户「打了却不成链接」)。
-              const fixed = s.replace(/【【([^】\n]+)】】/g, '[[$1]]')
-              if (fixed !== s) put(fixed)
-            }}
-            // Enter/Esc = 提交并离开:没有这一步,链接只在「点了别处」之后才现形。
-            // ⚠️ 组合态(拼音选词)的 Enter 是「确认候选词」,吞掉它 = 中文用户打一半就被踢出单元格。
-            onKeyDown={(e) => {
-              if (e.nativeEvent.isComposing) return
-              if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur()
-            }}
-          />
-          {wikiPick && (
-            <RelationPicker
-              x={wikiPick.x}
-              y={wikiPick.y}
-              anchorTop={wikiPick.anchorTop} // 下方放不下时翻到输入框**上沿之上**,别盖住正在打字的格子
-              onClose={() => { setWikiPick(null); inputRef.current?.focus() }}
-              onPick={(inner) => {
-                setWikiPick(null)
-                setEditing(false) // 直接回展示态,选完立刻看见链接
-                // 只替换光标前那段未闭合的 [[…,光标之后的原文原样保留。
-                const head = s.slice(0, wikiPick.caret).replace(WIKI_OPEN_RE, inner ? `[[${inner}]]` : '')
-                put(head + s.slice(wikiPick.caret))
-              }}
-            />
-          )}
-        </>
-      )
-    }
-    case 'number': {
-      const n = v as number | null
-      // 配过显示格式(小数位/单位)的列:只读态显示格式化后的串,**点一下才进编辑态并回到原始值**。
-      // ⚠️ 这一条是正确性不是观感 —— 编辑态若显示「¥1,234.00元」,用户一点就把这串当新值存回去了
-      //(number input 甚至解析不出来 → 整格被清空)。没配格式的列走原路径,观感与落地前逐字相同。
-      if (hasNumberFormat(col) && !editing) {
-        return (
-          <span className="amx-db-numfmt" onClick={() => setEditing(true)} title={t('dbembed.clickToEdit')}>
-            {n === null ? <span className="amx-db-blank">{t('dbembed.blank')}</span> : formatNumber(n, col)}
-          </span>
-        )
-      }
-      return (
-        <input
-          className="amx-db-input"
-          type="number"
-          inputMode="decimal"
-          autoFocus={editing || undefined}
-          value={n ?? ''}
-          onChange={(e) => {
-            const s = e.target.value
-            if (s === '') return setCell(row.id, col.id, undefined)
-            const num = Number(s)
-            if (Number.isFinite(num)) setCell(row.id, col.id, num)
-          }}
-          onBlur={() => setEditing(false)}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') e.currentTarget.blur() }}
-        />
-      )
-    }
+    case 'text':
+    case 'number':
+    case 'date':
+    case 'url':
+    case 'page':
+      return <ValueCell row={row} col={col} pagePath={pagePath} setCell={setCell} />
     case 'checkbox':
       return (
         <input
@@ -2067,15 +2195,6 @@ function Cell({
           type="checkbox"
           checked={v === true}
           onChange={(e) => setCell(row.id, col.id, e.target.checked ? true : undefined)}
-        />
-      )
-    case 'date':
-      return (
-        <input
-          className="amx-db-input"
-          type="date"
-          value={v as string}
-          onChange={(e) => setCell(row.id, col.id, e.target.value === '' ? undefined : e.target.value)}
         />
       )
     case 'select': {
@@ -2094,84 +2213,8 @@ function Cell({
         </button>
       )
     }
-    case 'url': {
-      const s = v as string
-      if (editing) {
-        const commit = (raw: string): void => {
-          setEditing(false)
-          if (cancelRef.current) { cancelRef.current = false; return }
-          let url = raw.trim()
-          // 形如域名(a.b)且无 scheme → 便利补 https://
-          if (url && !/^[a-z][a-z0-9+.-]*:/i.test(url) && /^[\w-]+(\.[\w-]+)+/.test(url)) url = `https://${url}`
-          setCell(row.id, col.id, url === '' ? undefined : url)
-        }
-        return (
-          <input
-            className="amx-db-input"
-            autoFocus
-            defaultValue={s}
-            onBlur={(e) => commit(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-              else if (e.key === 'Escape') { cancelRef.current = true; (e.target as HTMLInputElement).blur() }
-            }}
-          />
-        )
-      }
-      // 只 linkify http(s)(恶意 scheme 双保险:这里不放行 + 主进程 windowOpenHandler 只放 http/https)
-      const href = /^https?:\/\//i.test(s) ? s : ''
-      return (
-        <div className="amx-db-urlcell">
-          {href ? (
-            <a className="amx-db-url" href={href} target="_blank" rel="noreferrer" title={s}>{s}</a>
-          ) : (
-            <span className="amx-db-urltext">{s}</span>
-          )}
-          <button className="amx-db-edit" onClick={() => setEditing(true)} title={t('dbembed.editUrl')} aria-label="edit url">✎</button>
-        </div>
-      )
-    }
-    case 'page': {
-      // 笔记视图身份列:显示 = 笔记名(点开笔记);✎ 进入编辑 → 提交即重命名文件。
-      const s = v as string
-      if (editing) {
-        const commit = (raw: string): void => {
-          setEditing(false)
-          if (cancelRef.current) { cancelRef.current = false; return }
-          const name = raw.trim()
-          if (name && name !== s) setCell(row.id, col.id, name)
-        }
-        return (
-          <input
-            className="amx-db-input"
-            autoFocus
-            defaultValue={s}
-            onBlur={(e) => commit(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
-              else if (e.key === 'Escape') { cancelRef.current = true; (e.target as HTMLInputElement).blur() }
-            }}
-          />
-        )
-      }
-      return (
-        <div className="amx-db-urlcell">
-          <button className="amx-db-wikilink amx-db-pagename" onClick={() => void ps.getState().loadPage(row.id)} title={t('dbembed.openNote', { name: s })}>
-            {s || t('dbembed.untitled')}
-          </button>
-          <button className="amx-db-edit" onClick={() => setEditing(true)} title={t('dbembed.renameNote')} aria-label="rename note">✎</button>
-        </div>
-      )
-    }
     default:
-      // 未知类型(无注册项 + 非 primitive):按文本兜底,永不空白/丢数据。
-      return (
-        <input
-          className="amx-db-input"
-          value={typeof v === 'string' ? v : v == null ? '' : String(v)}
-          onChange={(e) => setCell(row.id, col.id, e.target.value === '' ? undefined : e.target.value)}
-        />
-      )
+      return <ValueCell row={row} col={col} pagePath={pagePath} setCell={setCell} />
   }
 }
 
@@ -2329,11 +2372,17 @@ function RowLinkCell({ row, col, env, setCell }: {
   setCell: (rowId: string, colId: string, v: CellValue | undefined) => void
 }) {
   const { t } = useI18n()
+  const trigger = useRef<HTMLElement | null>(null)
+  const closePicker = (): void => {
+    setPos(null)
+    requestAnimationFrame(() => { if (trigger.current?.isConnected) trigger.current.focus({ preventScroll: true }) })
+  }
   const [pos, setPos] = useState<{ x: number; y: number; anchorTop: number } | null>(null)
   const tgt = env.targetOf(col)
   if (!col.refDb) return <span className="amx-db-blank" title={t('dbembed.pickTargetDb')}>{t('dbembed.noTargetDb')}</span>
   const ids = rowLinkIds(row.cells[col.id])
   const open = (e: ReactMouseEvent): void => {
+    trigger.current = e.currentTarget as HTMLElement
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
     setPos({ x: r.left, y: r.bottom + 4, anchorTop: r.top })
   }
@@ -2369,15 +2418,15 @@ function RowLinkCell({ row, col, env, setCell }: {
           refFilter={col.refFilter}
           refFilterMode={col.refFilterMode}
           selected={ids}
-          onClose={() => setPos(null)}
+          onClose={closePicker}
           onPick={(id) => {
             if (col.multiple) {
-              if (id === null) { setCell(row.id, col.id, undefined); setPos(null) } // 清空关联
+              if (id === null) { setCell(row.id, col.id, undefined); closePicker() } // 清空关联
               else toggle(id)
               return
             }
             setCell(row.id, col.id, id ?? undefined)
-            setPos(null)
+            closePicker()
           }}
         />
       )}
@@ -2396,12 +2445,18 @@ function BackLinkCell({ row, col, env, setCell }: {
   setCell: (rowId: string, colId: string, v: CellValue | undefined) => void
 }) {
   const { t } = useI18n()
+  const trigger = useRef<HTMLElement | null>(null)
+  const closePicker = (): void => {
+    setPos(null)
+    requestAnimationFrame(() => { if (trigger.current?.isConnected) trigger.current.focus({ preventScroll: true }) })
+  }
   const [pos, setPos] = useState<{ x: number; y: number; anchorTop: number } | null>(null)
   const issue = env.projectionIssue(col)
   if (issue) return <span className="amx-db-blank" title={issue}>{t('dbembed.projectionPending')}</span>
   const tgt = env.targetOf(col)
   const ids = rowLinkIds(row.cells[col.id])
   const open = (e: ReactMouseEvent): void => {
+    trigger.current = e.currentTarget as HTMLElement
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
     setPos({ x: r.left, y: r.bottom + 4, anchorTop: r.top })
   }
@@ -2431,9 +2486,9 @@ function BackLinkCell({ row, col, env, setCell }: {
           refFilter={col.refFilter}
           refFilterMode={col.refFilterMode}
           selected={ids}
-          onClose={() => setPos(null)}
+          onClose={closePicker}
           onPick={(id) => {
-            if (id === null) { setCell(row.id, col.id, undefined); setPos(null); return } // 清空:全部目标行不再指回本行
+            if (id === null) { setCell(row.id, col.id, undefined); closePicker(); return } // 清空:全部目标行不再指回本行
             env.backLinkEdit(col, row.id, id, !ids.includes(id)) // 切换一行:对侧表一次 mutate,不关弹层
           }}
         />
@@ -2473,7 +2528,9 @@ function RowLinkPicker({ x, y, anchorTop, target, multi, titleCol, refFilter, re
     .slice(0, 12)
   return (
     <PopLayer>
-    <div className="amx-db-popwrap" onMouseDown={onClose}>
+    <div className="amx-db-popwrap" onMouseDown={onClose} onKeyDown={(e) => {
+      if (e.key === 'Escape' && !e.nativeEvent.isComposing) { e.preventDefault(); e.stopPropagation(); onClose() }
+    }}>
       <OverlayAt className="amx-db-pop" x={x} y={y} anchorTop={anchorTop} onMouseDown={(e) => e.stopPropagation()}>
         <input
           className="amx-db-pop-input"
@@ -2482,20 +2539,20 @@ function RowLinkPicker({ x, y, anchorTop, target, multi, titleCol, refFilter, re
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Escape') onClose()
-            else if (e.key === 'Enter' && items[0]) onPick(items[0].id)
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return
+            if (e.key === 'Enter' && items[0]) { e.preventDefault(); e.stopPropagation(); onPick(items[0].id) }
           }}
         />
         <div className="amx-db-pop-list">
           {items.map((it) => (
             <button key={it.id} className="amx-db-opt" aria-pressed={multi ? it.on : undefined} onClick={() => onPick(it.id)}>
               {it.title}
-              {it.on && <span className="amx-db-opt-check">✓</span>}
+              {it.on && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
             </button>
           ))}
           {items.length === 0 && <div className="amx-db-blank">{t('dbembed.noMatchingRows')}</div>}
         </div>
-        <button className="amx-db-opt amx-db-opt-clear" onClick={() => onPick(null)}>{t('dbembed.clearRelation')}</button>
+        <button className="amx-db-opt amx-db-opt-clear" onClick={() => onPick(null)}>{dbIcon('clear')}{t('dbembed.clearRelation')}</button>
       </OverlayAt>
     </div>
     </PopLayer>
@@ -2562,6 +2619,11 @@ function FileCell({ row, col, env, setCell }: {
 // ── 弹层(fixed;点外关闭) ────────────────────────────────────────────────────
 
 function PopShell({ x, y, anchorTop, onClose, children }: { x: number; y: number; anchorTop?: number; onClose: () => void; children: ReactNode }) {
+  const trigger = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null)
+  useEffect(() => () => {
+    const target = trigger.current?.closest<HTMLElement>('[data-db-cell]') ?? trigger.current
+    if (target?.isConnected) target.focus({ preventScroll: true })
+  }, [])
   // 关闭前先 blur 聚焦元素:React 同步卸载会赶在浏览器焦点转移前,被卸载的 input 不派发 blur,
   // ColMenu 重命名这类「onBlur 提交」的草稿会静默丢失——手动 blur 让 focusout 在卸载前发出。
   const close = (): void => {
@@ -2570,7 +2632,20 @@ function PopShell({ x, y, anchorTop, onClose, children }: { x: number; y: number
   }
   return (
     <PopLayer>
-      <div className="amx-db-popwrap" onMouseDown={close}>
+      <div className="amx-db-popwrap" onMouseDown={close} onKeyDown={(event) => {
+        event.stopPropagation()
+        if (event.nativeEvent.isComposing || event.keyCode === 229 || event.defaultPrevented) return
+        if (event.key === 'Escape') { event.preventDefault(); close() }
+        if (event.key === 'Tab') {
+          const cell = trigger.current?.closest<HTMLElement>('[data-db-cell]')
+          if (cell) {
+            event.preventDefault()
+            const next = gridDestination(cell, event.shiftKey ? 'previous' : 'next')
+            close()
+            requestAnimationFrame(() => focusGridCell(next, true))
+          }
+        }
+      }}>
         <OverlayAt className="amx-db-pop" x={x} y={y} anchorTop={anchorTop} onMouseDown={(e) => e.stopPropagation()}>
           {children}
         </OverlayAt>
@@ -2597,43 +2672,49 @@ function OptionPopover({
 }) {
   const { t } = useI18n()
   const [draft, setDraft] = useState('')
-  const opts = col.options ?? []
-  const selected = multi ? (value as string[]) : []
+  const [active, setActive] = useState(0)
+  const list = useRef<HTMLDivElement>(null)
+  const selected = multi ? (value as string[]) : typeof value === 'string' && value ? [value] : []
+  const opts = [...new Set([...(col.options ?? []), ...selected])]
+  const needle = draft.trim()
+  const filtered = opts.filter((option) => option.toLocaleLowerCase().includes(needle.toLocaleLowerCase()))
+  const canCreate = !!needle && !opts.some((option) => option.toLocaleLowerCase() === needle.toLocaleLowerCase())
+  const choices = filtered.length + (canCreate ? 1 : 0)
+  const choose = (index: number): void => {
+    if (index === filtered.length && canCreate) { onCreate(needle); setDraft(''); setActive(0); return }
+    const option = filtered[index]
+    if (option !== undefined) { if (multi) onToggle(option); else onPick(option) }
+  }
+  useEffect(() => { list.current?.querySelector('[data-active]')?.scrollIntoView({ block: 'nearest' }) }, [active])
   return (
     <>
-      <div className="amx-db-pop-sec">{multi ? t('dbembed.optMulti') : t('dbembed.optSingle')}</div>
-      <div className="amx-db-pop-list">
-        {opts.map((o) =>
-          multi ? (
-            <label key={o} className="amx-db-opt">
-              <input type="checkbox" checked={selected.includes(o)} onChange={() => onToggle(o)} />
-              <span className={`amx-db-chip ${chipClass(o)}`}>{o}</span>
-            </label>
-          ) : (
-            <button key={o} className="amx-db-opt" onClick={() => onPick(o)}>
-              <span className={`amx-db-chip ${chipClass(o)}`}>{o}</span>
-              {value === o && <span className="amx-db-opt-check">✓</span>}
-            </button>
-          ),
-        )}
-        {opts.length === 0 && <div className="amx-db-blank">{t('dbembed.optEmpty')}</div>}
-        {!multi && typeof value === 'string' && value !== '' && (
-          <button className="amx-db-opt amx-db-opt-clear" onClick={() => onPick('')}>{t('dbembed.clear')}</button>
-        )}
-      </div>
       <input
-        className="amx-db-pop-input"
-        autoFocus
-        placeholder={t('dbembed.optNewPlaceholder')}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && draft.trim()) {
-            onCreate(draft.trim())
-            setDraft('')
-          }
-        }}
-      />
+        className="amx-db-pop-input amx-db-option-search" autoFocus
+        aria-label={t('dbembed.searchOptions')} placeholder={t('dbembed.searchOptions')}
+        value={draft} onChange={(event) => { setDraft(event.target.value); setActive(0) }}
+        onKeyDown={(event) => {
+          if (event.nativeEvent.isComposing || event.keyCode === 229) return
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault()
+            setActive((current) => choices ? (current + (event.key === 'ArrowDown' ? 1 : choices - 1)) % choices : 0)
+          } else if (event.key === 'Enter') { event.preventDefault(); choose(active) }
+        }} />
+      <div className="amx-db-pop-sec">{multi ? t('dbembed.optMulti') : t('dbembed.optSingle')}</div>
+      <div className="amx-db-pop-list" ref={list} role="listbox" aria-multiselectable={multi}>
+        {filtered.map((option, index) => <button type="button" key={option} className="amx-db-opt" role="option"
+          aria-selected={selected.includes(option)} data-active={active === index || undefined}
+          onMouseEnter={() => setActive(index)} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(index)}>
+          {multi && <span className="amx-db-opt-check" aria-hidden>{dbIcon(selected.includes(option) ? 'checked' : 'unchecked')}</span>}
+          <span className={`amx-db-chip ${chipClass(option)}`}>{option}</span>
+          {!multi && selected.includes(option) && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
+        </button>)}
+        {canCreate && <button className="amx-db-opt" data-active={active === filtered.length || undefined}
+          onMouseEnter={() => setActive(filtered.length)} onMouseDown={(event) => event.preventDefault()} onClick={() => choose(filtered.length)}>
+          <Plus size={14} />{t('dbembed.createOption', { name: needle })}
+        </button>}
+        {opts.length === 0 && !needle && <div className="amx-db-blank">{t('dbembed.optEmpty')}</div>}
+      </div>
+      {!multi && selected.length > 0 && <button className="amx-db-opt amx-db-opt-clear" onClick={() => onPick('')}>{t('dbembed.clear')}</button>}
     </>
   )
 }
@@ -2684,6 +2765,31 @@ function ColMenu({
   readOnly?: boolean
 }) {
   const { t } = useI18n()
+  const [typesOpen, setTypesOpen] = useState(false)
+  // Keep the unfinished lookup direction when visiting the type submenu and returning.
+  const [lookupBack, setLookupBack] = useState(() => isBackLookup(col) || (!!col.refDb && !col.lookupRel))
+  const typeTrigger = useRef<HTMLButtonElement>(null)
+  const typeBack = useRef<HTMLButtonElement>(null)
+  const closeTypes = (): void => {
+    setTypesOpen(false)
+    requestAnimationFrame(() => typeTrigger.current?.focus())
+  }
+  useEffect(() => { if (typesOpen) typeBack.current?.focus() }, [typesOpen])
+  if (typesOpen && !readOnly && !locked) return <div className="amx-db-type-menu" onKeyDown={(event) => {
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeTypes() }
+  }}>
+    <button ref={typeBack} className="amx-db-opt amx-db-menu-back" onClick={closeTypes}>
+      {dbIcon('moveLeft')}{t('dbembed.backToProperty')}
+    </button>
+    <div className="amx-db-pop-list">
+      {[...COLUMN_TYPES, ...EXTRA_TYPES, ...allPropertyTypes().map((p) => p.type)].filter((ty) => ty !== 'date' && ty !== 'todo').map((ty) => (
+        <button key={ty} className="amx-db-opt" aria-pressed={col.type === ty} onClick={() => { onSetType(ty); closeTypes() }}>
+          <span className="amx-db-th-icon" aria-hidden>{colMeta(ty).icon}</span>{t(colMeta(ty).labelKey)}
+          {col.type === ty && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
+        </button>
+      ))}
+    </div>
+  </div>
   return (
     <>
       {!readOnly && (
@@ -2695,21 +2801,26 @@ function ColMenu({
         onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
       />
       )}
+      {!readOnly && !locked && <button ref={typeTrigger} className="amx-db-opt amx-db-type-trigger" aria-expanded={typesOpen} onClick={() => setTypesOpen(true)}>
+        <span className="amx-db-th-icon" aria-hidden>{colMeta(col.type).icon}</span>{t('dbembed.changeType')}
+        <span className="amx-db-opt-check">{dbIcon('submenu')}</span>
+      </button>}
       <div className="amx-db-pop-sec">{t('dbembed.sortSec')}</div>
       <div className="amx-db-pop-list">
         <button className="amx-db-opt" onClick={() => onSort('asc')}>
-          {t('dbembed.sortAsc')}{sort === 'asc' && <span className="amx-db-opt-check">✓</span>}
+          {dbIcon('sortAsc')}{t('dbembed.sortAsc')}{sort === 'asc' && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
         </button>
         <button className="amx-db-opt" onClick={() => onSort('desc')}>
-          {t('dbembed.sortDesc')}{sort === 'desc' && <span className="amx-db-opt-check">✓</span>}
+          {dbIcon('sortDesc')}{t('dbembed.sortDesc')}{sort === 'desc' && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
         </button>
         {sort !== null && (
-          <button className="amx-db-opt amx-db-opt-clear" onClick={() => onSort(null)}>{t('dbembed.clearSort')}</button>
+          <button className="amx-db-opt amx-db-opt-clear" onClick={() => onSort(null)}>{dbIcon('clear')}{t('dbembed.clearSort')}</button>
         )}
       </div>
       {readOnly ? null : (
         <ColMenuConfig
-          col={col} locked={locked} onRename={onRename} onSetType={onSetType} onDelete={onDelete}
+          col={col} locked={locked} onRename={onRename} onDelete={onDelete}
+          back={lookupBack} setBack={setLookupBack}
           onMove={onMove} canMoveLeft={canMoveLeft} canMoveRight={canMoveRight}
           columns={columns} dbPath={dbPath} dbFiles={dbFiles} targetColsOf={targetColsOf} targetDbOf={targetDbOf} onPatchCol={onPatchCol}
         />
@@ -2719,11 +2830,10 @@ function ColMenu({
 }
 
 /** ColMenu 的配置区(改名之外的一切:列序/公式/数字格式/关联/引用/类型/删除)。只读表整段不渲染。 */
-function ColMenuConfig({ col, locked, onSetType, onDelete, onMove, canMoveLeft, canMoveRight, columns, dbPath, dbFiles, targetColsOf, targetDbOf, onPatchCol }: {
+function ColMenuConfig({ col, locked, onDelete, onMove, canMoveLeft, canMoveRight, columns, dbPath, dbFiles, targetColsOf, targetDbOf, onPatchCol, back, setBack }: {
   col: DbColumn
   locked?: boolean
   onRename: (name: string) => void
-  onSetType: (type: string) => void
   onDelete: () => void
   onMove: (dir: -1 | 1) => void
   canMoveLeft: boolean
@@ -2734,12 +2844,13 @@ function ColMenuConfig({ col, locked, onSetType, onDelete, onMove, canMoveLeft, 
   targetColsOf: (refDb: string) => DbColumn[]
   targetDbOf: (refDb: string) => DbFile | null
   onPatchCol: (patch: Partial<DbColumn>) => void
+  back: boolean
+  setBack: (back: boolean) => void
 }) {
   const { t } = useI18n()
   const relCols = columns.filter((c) => c.type === 'rowlink')
   // 引用列的正向/反向模式。isBackLookup 只认「配完了」的列(refDb+lookupBackCol 同在);半配置态(点了反向、
-  // 还没选指回列)得靠本地 state 记住,初值:配完的反向列 / 有 refDb 没 lookupRel 的都算反向。
-  const [back, setBack] = useState<boolean>(() => isBackLookup(col) || (!!col.refDb && !col.lookupRel))
+  // 还没选指回列)由 ColMenu 的 state 记住,切换类型子菜单再返回也不丢失。
   // 正向关联列**显式未选态**:不回落 relCols[0](回落只在菜单里装作选了、盘上没有 → 物化侧照样空)。
   const lookupRelCol = col.type === 'lookup' && !back ? relCols.find((c) => c.id === col.lookupRel) : undefined
   // 目标列不给嵌套 lookup(跨库链会引出环,物化侧也按 null 处理);公式列可选(读取时物化目标行)。
@@ -2763,13 +2874,13 @@ function ColMenuConfig({ col, locked, onSetType, onDelete, onMove, canMoveLeft, 
       <div className="amx-db-pop-sec">{locked ? t('dbembed.colOrderFixed') : t('dbembed.colOrder')}</div>
       {!locked && (
         <div className="amx-db-pop-list amx-db-pop-row">
-          <button className="amx-db-opt" disabled={!canMoveLeft} onClick={() => onMove(-1)}>{t('dbembed.moveLeft')}</button>
-          <button className="amx-db-opt" disabled={!canMoveRight} onClick={() => onMove(1)}>{t('dbembed.moveRight')}</button>
+          <button className="amx-db-opt" disabled={!canMoveLeft} onClick={() => onMove(-1)}>{dbIcon('moveLeft')}{t('dbembed.moveLeft')}</button>
+          <button className="amx-db-opt" disabled={!canMoveRight} onClick={() => onMove(1)}>{dbIcon('moveRight')}{t('dbembed.moveRight')}</button>
         </div>
       )}
       {col.type === 'formula' && (
         <>
-          <div className="amx-db-pop-sec">{t('dbembed.formulaSec')}</div>
+          <div className="amx-db-pop-sec" title={t('dbembed.formulaSecHint')}>{t('dbembed.formulaSec')}</div>
           <textarea
             className="amx-db-pop-input amx-db-formula-in"
             rows={3}
@@ -2837,18 +2948,18 @@ function ColMenuConfig({ col, locked, onSetType, onDelete, onMove, canMoveLeft, 
       )}
       {col.type === 'rowlink' && (
         <>
-          <div className="amx-db-pop-sec">{t('dbembed.relTargetSec')}</div>
+          <div className="amx-db-pop-sec" title={t('dbembed.relTargetSecHint')}>{t('dbembed.relTargetSec')}</div>
           <div className="amx-db-pop-list">
             {/* 「本表(自指)」置顶:dbFiles 刻意排掉了本表,没有这一项就**没有任何入口**能建出
                 父任务/子任务那种自指关联列,视图菜单的「层级」也就永远无列可选(判据 rowLink.isSelfRefCol)。 */}
-            <button className="amx-db-opt" data-selfref onClick={() => onPatchCol({ refDb: dbPath })}>
+            <button className="amx-db-opt" title={t('dbembed.relSelfHint')} data-selfref onClick={() => onPatchCol({ refDb: dbPath })}>
               {t('dbembed.relSelf')}
-              {col.refDb && normDbPath(col.refDb) === normDbPath(dbPath) && <span className="amx-db-opt-check">✓</span>}
+              {col.refDb && normDbPath(col.refDb) === normDbPath(dbPath) && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
             </button>
             {dbFiles.map((f) => (
               <button key={f} className="amx-db-opt" onClick={() => onPatchCol({ refDb: f })}>
                 {f.replace(/\.db$/i, '')}
-                {col.refDb === f && <span className="amx-db-opt-check">✓</span>}
+                {col.refDb === f && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
               </button>
             ))}
             {dbFiles.length === 0 && <div className="amx-db-blank">{t('dbembed.noOtherDb')}</div>}
@@ -2856,9 +2967,9 @@ function ColMenuConfig({ col, locked, onSetType, onDelete, onMove, canMoveLeft, 
           <div className="amx-db-pop-sec">{t('dbembed.multiSec')}</div>
           <div className="amx-db-pop-list">
             {/* 切回单选不动已有数组数据(只改后续编辑/筛选口径),避免破坏性塌值 */}
-            <button className="amx-db-opt" role="switch" aria-checked={!!col.multiple} onClick={() => onPatchCol({ multiple: col.multiple ? undefined : true })}>
+            <button className="amx-db-opt" title={t('dbembed.allowMultiHint')} role="switch" aria-checked={!!col.multiple} onClick={() => onPatchCol({ multiple: col.multiple ? undefined : true })}>
               {t('dbembed.allowMulti')}
-              {col.multiple && <span className="amx-db-opt-check">✓</span>}
+              {col.multiple && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
             </button>
           </div>
           {col.refDb && (() => {
@@ -2869,17 +2980,17 @@ function ColMenuConfig({ col, locked, onSetType, onDelete, onMove, canMoveLeft, 
             const eff = titleColOf(tdb, col.titleCol)?.id
             return (
               <>
-                <div className="amx-db-pop-sec">{t('dbembed.chipColSec')}</div>
+                <div className="amx-db-pop-sec" title={t('dbembed.chipColSecHint')}>{t('dbembed.chipColSec')}</div>
                 <div className="amx-db-pop-list" data-sec="titlecol">
                   {tcols.map((c) => (
-                    <button key={c.id} className="amx-db-opt" onClick={() => onPatchCol({ titleCol: c.id })}>
+                    <button key={c.id} className="amx-db-opt" aria-pressed={eff === c.id} onClick={() => onPatchCol({ titleCol: c.id })}>
                       <span className="amx-db-th-icon" aria-hidden>{colMeta(c.type).icon}</span>
                       {c.name}
-                      {eff === c.id && <span className="amx-db-opt-check">✓</span>}
+                      {eff === c.id && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
                     </button>
                   ))}
                 </div>
-                <div className="amx-db-pop-sec">{t('dbembed.refFilterSec')}</div>
+                <div className="amx-db-pop-sec" title={t('dbembed.refFilterSecHint')}>{t('dbembed.refFilterSec')}</div>
                 <FilterRowsEditor
                   filters={col.refFilter ?? []}
                   mode={col.refFilterMode ?? 'and'}
@@ -2900,15 +3011,15 @@ function ColMenuConfig({ col, locked, onSetType, onDelete, onMove, canMoveLeft, 
           <div className="amx-db-pop-sec">{t('dbembed.lookupDirSec')}</div>
           <div className="amx-db-pop-list amx-db-pop-row">
             <button className="amx-db-opt" data-dim={back || undefined} onClick={() => switchMode(false)}>
-              {t('dbembed.forward')}{!back && <span className="amx-db-opt-check">✓</span>}
+              {t('dbembed.forward')}{!back && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
             </button>
             <button className="amx-db-opt" data-dim={!back || undefined} onClick={() => switchMode(true)}>
-              {t('dbembed.backward')}{back && <span className="amx-db-opt-check">✓</span>}
+              {t('dbembed.backward')}{back && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
             </button>
           </div>
           {!back && (
             <>
-              <div className="amx-db-pop-sec">{t('dbembed.lookupRelSec')}</div>
+              <div className="amx-db-pop-sec" title={t('dbembed.lookupRelSecHint')}>{t('dbembed.lookupRelSec')}</div>
               {/* 有 lookupRel 却解析不到关联列 = 休眠/悬空(原关联列被改了类型或删了):就算本表已没有关联列也要说明白,别只剩「先建一个关联表列」 */}
               {!lookupRelCol && (relCols.length > 0 || col.lookupRel) && (
                 <div className="amx-db-blank" data-pending>{col.lookupRel ? t('dbembed.lookupPendingStale') : t('dbembed.lookupPending')}</div>
@@ -2917,7 +3028,7 @@ function ColMenuConfig({ col, locked, onSetType, onDelete, onMove, canMoveLeft, 
                 {relCols.map((c) => (
                   <button key={c.id} className="amx-db-opt" onClick={() => onPatchCol({ lookupRel: c.id })}>
                     {c.name}
-                    {lookupRelCol?.id === c.id && <span className="amx-db-opt-check">✓</span>}
+                    {lookupRelCol?.id === c.id && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
                   </button>
                 ))}
                 {relCols.length === 0 && <div className="amx-db-blank">{t('dbembed.needRelCol')}</div>}
@@ -2926,19 +3037,19 @@ function ColMenuConfig({ col, locked, onSetType, onDelete, onMove, canMoveLeft, 
           )}
           {back && (
             <>
-              <div className="amx-db-pop-sec">{t('dbembed.backTargetSec')}</div>
+              <div className="amx-db-pop-sec" title={t('dbembed.backTargetSecHint')}>{t('dbembed.backTargetSec')}</div>
               <div className="amx-db-pop-list">
                 {dbFiles.map((f) => (
                   <button key={f} className="amx-db-opt" onClick={() => onPatchCol({ refDb: f, lookupBackCol: undefined, lookupCol: undefined })}>
                     {f.replace(/\.db$/i, '')}
-                    {col.refDb === f && <span className="amx-db-opt-check">✓</span>}
+                    {col.refDb === f && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
                   </button>
                 ))}
                 {dbFiles.length === 0 && <div className="amx-db-blank">{t('dbembed.noOtherDb')}</div>}
               </div>
               {col.refDb && (
                 <>
-                  <div className="amx-db-pop-sec">{t('dbembed.backColSec')}</div>
+                  <div className="amx-db-pop-sec" title={t('dbembed.backColSecHint')}>{t('dbembed.backColSec')}</div>
                   <div className="amx-db-pop-list">
                     {backCols.map((c) => {
                       // 不指回本表的关联列**禁用**(不是灰显可点):选了它 rollup 永远空,还会被 check:rowlink 报成悬空
@@ -2947,7 +3058,7 @@ function ColMenuConfig({ col, locked, onSetType, onDelete, onMove, canMoveLeft, 
                         <button key={c.id} className="amx-db-opt" disabled={!ok} title={ok ? undefined : t('dbembed.backColBad')} onClick={() => onPatchCol({ lookupBackCol: c.id })}>
                           {c.name}
                           {ok && <span className="amx-db-relpath">{t('dbembed.backHere')}</span>}
-                          {col.lookupBackCol === c.id && <span className="amx-db-opt-check">✓</span>}
+                          {col.lookupBackCol === c.id && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
                         </button>
                       )
                     })}
@@ -2956,11 +3067,11 @@ function ColMenuConfig({ col, locked, onSetType, onDelete, onMove, canMoveLeft, 
                   {col.lookupBackCol && (
                     <>
                       {/* 语义分工:投影列 = 关联本身(可编辑,真值只存目标表的关联列);普通引用 = 沿关联取值/聚合 */}
-                      <div className="amx-db-pop-sec">{t('dbembed.projSec')}</div>
+                      <div className="amx-db-pop-sec" title={t('dbembed.projSecHint')}>{t('dbembed.projSec')}</div>
                       <div className="amx-db-pop-list" data-sec="projection">
                         <button className="amx-db-opt" role="switch" aria-checked={isProj} onClick={() => onPatchCol({ lookupKind: isProj ? undefined : 'links' })}>
-                          {t('dbembed.projToggle')}
-                          {isProj && <span className="amx-db-opt-check">✓</span>}
+                          <span title={t('dbembed.projToggleHint')}>{t('dbembed.projToggle')}</span>
+                          {isProj && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
                         </button>
                       </div>
                     </>
@@ -2971,12 +3082,12 @@ function ColMenuConfig({ col, locked, onSetType, onDelete, onMove, canMoveLeft, 
           )}
           {(lookupRelCol || (back && col.refDb && col.lookupBackCol && !isProj)) && (
             <>
-              <div className="amx-db-pop-sec">{t('dbembed.lookupColSec')}</div>
+              <div className="amx-db-pop-sec" title={t('dbembed.lookupColSecHint')}>{t('dbembed.lookupColSec')}</div>
               <div className="amx-db-pop-list">
                 {lookupTargets.map((c) => (
                   <button key={c.id} className="amx-db-opt" onClick={() => onPatchCol(back ? { lookupCol: c.id } : { lookupRel: lookupRelCol!.id, lookupCol: c.id })}>
                     {c.name}
-                    {col.lookupCol === c.id && <span className="amx-db-opt-check">✓</span>}
+                    {col.lookupCol === c.id && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
                   </button>
                 ))}
                 {lookupTargets.length === 0 && <div className="amx-db-blank">{t('dbembed.targetNotReady')}</div>}
@@ -2986,7 +3097,7 @@ function ColMenuConfig({ col, locked, onSetType, onDelete, onMove, canMoveLeft, 
                 {LOOKUP_AGGS.map((a) => (
                   <button key={a} className="amx-db-opt" data-dim={(col.lookupAgg ?? 'first') !== a || undefined} onClick={() => onPatchCol({ lookupAgg: a === 'first' ? undefined : a })}>
                     {t(LOOKUP_AGG_KEY[a])}
-                    {(col.lookupAgg ?? 'first') === a && <span className="amx-db-opt-check">✓</span>}
+                    {(col.lookupAgg ?? 'first') === a && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
                   </button>
                 ))}
               </div>
@@ -2998,18 +3109,7 @@ function ColMenuConfig({ col, locked, onSetType, onDelete, onMove, canMoveLeft, 
         <div className="amx-db-pop-sec">{t('dbembed.identityLocked')}</div>
       ) : (
         <>
-          <div className="amx-db-pop-sec">{t('dbembed.typeSec')}</div>
-          <div className="amx-db-pop-list">
-            {/* 撤下 primitive date 与 todo:日期统一走富类型 calendarDate(标签「日期」),完成标记用普通 checkbox */}
-            {[...COLUMN_TYPES, ...EXTRA_TYPES, ...allPropertyTypes().map((p) => p.type)].filter((ty) => ty !== 'date' && ty !== 'todo').map((ty) => (
-              <button key={ty} className="amx-db-opt" onClick={() => onSetType(ty)}>
-                <span className="amx-db-th-icon" aria-hidden>{colMeta(ty).icon}</span>
-                {t(colMeta(ty).labelKey)}
-                {col.type === ty && <span className="amx-db-opt-check">✓</span>}
-              </button>
-            ))}
-          </div>
-          <button className="amx-db-opt amx-db-opt-danger" onClick={onDelete}>{t('dbembed.deleteCol')}</button>
+          <button className="amx-db-opt amx-db-opt-danger" onClick={onDelete}>{dbIcon('delete')}{t('dbembed.deleteCol')}</button>
         </>
       )}
     </>
@@ -3025,13 +3125,13 @@ function FolderPopover({ current, onPick }: { current: string; onPick: (f: strin
   }, [])
   return (
     <>
-      <div className="amx-db-pop-sec">{t('dbembed.folderSec')}</div>
+      <div className="amx-db-pop-sec" title={t('dbembed.folderSecHint')}>{t('dbembed.folderSec')}</div>
       <div className="amx-db-pop-list">
         {folders === null && <div className="amx-db-blank">{t('dbembed.loadingShort')}</div>}
         {folders?.map((f) => (
           <button key={f || '__root'} className="amx-db-opt" onClick={() => onPick(f)}>
             <span className="amx-db-th-icon" aria-hidden><FolderIcon /></span> {f || t('dbembed.vaultRoot')}
-            {f === current && <span className="amx-db-opt-check">✓</span>}
+            {f === current && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
           </button>
         ))}
       </div>
@@ -3083,7 +3183,7 @@ function OptionsPop({ x, y, col, row, setCell, createOption, onClose }: {
 }
 
 /** 视图 tab 菜单:改名 + 按类型的配置(看板/表格分组列/日历日期列)+ 列显隐 + 多列排序 + 删除。 */
-function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, onClearSorts, onRename, onPatch, onPickGroupBy, onPickDateCol, onToggleHidden, onToggleOwnCols, onOpenFilters, onOpenGroups, onOpenCalendar, calendarActive, readOnly, onDelete }: {
+function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, onClearSorts, onRename, onPatch, onPickGroupBy, onPickDateCol, onToggleHidden, onToggleOwnCols, onOpenFilters, onOpenGroups, onOpenFold, onAutoSizingChange, onOpenCalendar, calendarActive, readOnly, onDelete, onDuplicate }: {
   view: DbView
   columns: DbColumn[]
   sorts: Array<{ colId: string; dir: 'asc' | 'desc' }>
@@ -3103,11 +3203,14 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
   onToggleOwnCols: () => void
   onOpenFilters: () => void
   onOpenGroups: () => void
+  onOpenFold: () => void
+  onAutoSizingChange: (enabled: boolean) => void
   onOpenCalendar: () => void
   calendarActive: boolean
   /** 只读表:砍改名 / 「本视图独立列序」/「加入日历」/ 删除;分组、隐藏列、排序、筛选照留(纯视图态)。 */
   readOnly?: boolean
   onDelete?: () => void
+  onDuplicate: () => void
 }) {
   const { t } = useI18n()
   const selectCols = columns.filter((c) => resolveBaseType(c.type) === 'select')
@@ -3122,7 +3225,7 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
         <button key={c.id} className="amx-db-opt" disabled={disabled} data-dim={disabled || undefined} onClick={() => onPick(c.id)}>
           <span className="amx-db-th-icon" aria-hidden>{colMeta(c.type).icon}</span>
           {c.name}
-          {picked === c.id && <span className="amx-db-opt-check">✓</span>}
+          {picked === c.id && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
         </button>
       ))}
       {cands.length === 0 && <div className="amx-db-blank">{empty}</div>}
@@ -3139,6 +3242,25 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
         onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
       />
       )}
+      {['table', 'list'].includes(view.type) && <>
+        <div className="amx-db-pop-sec">{t('dbembed.layout')}</div>
+        <div className="amx-db-pop-list">
+          <button className="amx-db-opt amx-db-autosize" aria-pressed={view.autoSize !== false}
+            title={t(view.autoSize !== false ? 'dbembed.autoSizeOn' : 'dbembed.autoSizeOff')}
+            onClick={() => onAutoSizingChange(view.autoSize === false)}>
+            {dbIcon('columns')}{t('dbembed.autoSize')}
+            {view.autoSize !== false && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
+          </button>
+          <button className="amx-db-opt amx-db-groupbtn" data-on={!!view.groupBy || undefined} aria-label={t('dbgroup.title')}
+            onClick={onOpenGroups}>
+            {dbIcon('columns')}{t('dbgroup.title')}<span className="amx-db-opt-check">{dbIcon('submenu')}</span>
+          </button>
+          <button className="amx-db-opt amx-db-foldbtn" data-on={!!(view.fold?.by?.length || view.fold?.timeCol) || undefined}
+            aria-label={t('dbfold.title')} onClick={onOpenFold}>
+            {dbIcon('fold')}{t('dbfold.title')}<span className="amx-db-opt-check">{dbIcon('submenu')}</span>
+          </button>
+        </div>
+      </>}
       {view.type === 'kanban' && (
         <>
           <div className="amx-db-pop-sec">{t('dbembed.kanbanGroupSec')}</div>
@@ -3147,20 +3269,13 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
       )}
       {!['kanban', 'calendar', 'gallery', 'chart', 'form', 'gantt'].includes(view.type) && (() => {
         const tCols = treeCols ?? []
-        // 树与分组互斥、树优先(渲染端同一条);这里只把分组区灰掉并写清理由,**不悄悄清掉 groupBy** ——
-        // 关掉层级后用户原来的分组该原样回来。
-        const treeOn = !!view.treeCol && tCols.some((c) => c.id === view.treeCol)
+        // 树优先于分组；GroupMenu 禁用分组选择并说明原因，保留 groupBy 供关闭层级后恢复。
         return (
           <>
             <div className="amx-db-pop-sec">{t('dbembed.treeSec')}</div>
             {pickList(tCols, view.treeCol, (id) => onPatch({ treeCol: id }), t('dbembed.noTreeCol'))}
             {view.treeCol && (
               <button className="amx-db-opt amx-db-opt-clear" onClick={() => onPatch({ treeCol: undefined })}>{t('dbembed.treeOff')}</button>
-            )}
-            <div className="amx-db-pop-sec">{treeOn ? t('dbembed.groupSecBlocked') : t('dbembed.groupSec')}</div>
-            <button className="amx-db-opt" disabled={treeOn} onClick={onOpenGroups}>{t('dbgroup.by')}<span className="amx-db-opt-check">›</span></button>
-            {view.groupBy && !treeOn && (
-              <button className="amx-db-opt amx-db-opt-clear" onClick={() => onPatch({ groupBy: undefined })}>{t('dbembed.groupOff')}</button>
             )}
           </>
         )
@@ -3190,7 +3305,7 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
               {(['day', 'week'] as const).map((s) => (
                 <button key={s} className="amx-db-opt" data-dim={scale !== s || undefined} onClick={() => patchGantt({ scale: s })}>
                   {s === 'day' ? t('dbembed.scaleDay') : t('dbembed.scaleWeek')}
-                  {scale === s && <span className="amx-db-opt-check">✓</span>}
+                  {scale === s && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
                 </button>
               ))}
             </div>
@@ -3204,7 +3319,7 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
             {CHART_KINDS.map((k) => (
               <button key={k} className="amx-db-opt" data-dim={chartKindOf(view.chartKind) !== k || undefined} onClick={() => onPatch({ chartKind: k })}>
                 {t(CHART_KIND_KEY[k])}
-                {chartKindOf(view.chartKind) === k && <span className="amx-db-opt-check">✓</span>}
+                {chartKindOf(view.chartKind) === k && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
               </button>
             ))}
           </div>
@@ -3222,7 +3337,7 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
                 onClick={() => onPatch(a === 'count' ? { agg: a } : { agg: a, valueCol: view.valueCol ?? numberCols[0]?.id })}
               >
                 {t(CHART_AGG_KEY[a])}
-                {chartAggOf(view.agg) === a && <span className="amx-db-opt-check">✓</span>}
+                {chartAggOf(view.agg) === a && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
               </button>
             ))}
           </div>
@@ -3252,11 +3367,11 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
               {(['stay', 'table'] as const).map((a) => (
                 <button key={a} className="amx-db-opt" data-dim={after !== a || undefined} onClick={() => patchForm({ after: a === 'stay' ? undefined : a })}>
                   {a === 'stay' ? t('dbembed.formStay') : t('dbembed.formGoTable')}
-                  {after === a && <span className="amx-db-opt-check">✓</span>}
+                  {after === a && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
                 </button>
               ))}
             </div>
-            <div className="amx-db-pop-sec">{t('dbembed.formFieldsSec')}</div>
+            <div className="amx-db-pop-sec" title={t('dbembed.formFieldsSecHint')}>{t('dbembed.formFieldsSec')}</div>
             <div className="amx-db-pop-list">
               {fields.map((c) => {
                 const req = required.includes(c.id)
@@ -3302,8 +3417,8 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
             <div className="amx-db-pop-sec">{t('dbembed.ownColsSec')}</div>
             <button className="amx-db-opt" data-owncols={own ? 'on' : 'off'} data-dim={!own || undefined} onClick={onToggleOwnCols}
               title={own ? t('dbembed.ownColsOn') : t('dbembed.ownColsOff')}>
-              {t('dbembed.ownCols')}
-              {own && <span className="amx-db-opt-check">✓</span>}
+              {dbIcon('columns')}{t('dbembed.ownCols')}
+              {own && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
             </button>
           </>
         )
@@ -3318,14 +3433,14 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
                 <button key={c.id} className="amx-db-opt" onClick={() => onToggleHidden(c.id)} data-dim={hidden || undefined}>
                   <span className="amx-db-th-icon" aria-hidden>{colMeta(c.type).icon}</span>
                   {c.name}
-                  {!hidden && <span className="amx-db-opt-check">✓</span>}
+                  {!hidden && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
                 </button>
               )
             })}
           </div>
         </>
       )}
-      <div className="amx-db-pop-sec">{t('dbembed.sortViewSec')}</div>
+      <div className="amx-db-pop-sec" title={t('dbembed.sortViewHint')}>{t('dbembed.sortViewSec')}</div>
       <div className="amx-db-pop-list">
         {columns.map((c) => {
           const i = sorts.findIndex((s) => s.colId === c.id)
@@ -3334,16 +3449,17 @@ function ViewMenu({ view, columns, sorts, chartGroupCol, treeCols, onCycleSort, 
             <button key={c.id} className="amx-db-opt" data-dim={!on || undefined} onClick={() => onCycleSort(c.id)}>
               <span className="amx-db-th-icon" aria-hidden>{colMeta(c.type).icon}</span>
               {c.name}
-              {on && <span className="amx-db-opt-check">{sorts[i].dir === 'asc' ? '↑' : '↓'}{sorts.length > 1 ? ` ${i + 1}` : ''}</span>}
+              {on && <span className="amx-db-opt-check">{dbIcon(sorts[i].dir === 'asc' ? 'sortAsc' : 'sortDesc')}{sorts.length > 1 ? ` ${i + 1}` : ''}</span>}
             </button>
           )
         })}
-        {sorts.length > 0 && <button className="amx-db-opt amx-db-opt-clear" onClick={onClearSorts}>{t('dbembed.clearSort')}</button>}
+        {sorts.length > 0 && <button className="amx-db-opt amx-db-opt-clear" onClick={onClearSorts}>{dbIcon('clear')}{t('dbembed.clearSort')}</button>}
       </div>
-      <button className="amx-db-opt" onClick={onOpenFilters}>{t('dbembed.filterMore')}{(view.filters?.length ?? 0) > 0 && <span className="amx-db-opt-check">{view.filters!.length}</span>}</button>
-      {!readOnly && <button className="amx-db-opt" onClick={onOpenCalendar}>{calendarActive ? t('dbembed.calendarSettings') : t('dbembed.addToCalendar')}</button>}
+      <button className="amx-db-opt" onClick={onOpenFilters}>{dbIcon('filter')}{t('dbembed.filterMore')}{(view.filters?.length ?? 0) > 0 && <span className="amx-db-opt-check">{view.filters!.length}</span>}</button>
+      {!readOnly && <button className="amx-db-opt" onClick={onOpenCalendar}>{dbIcon('calendar')}{calendarActive ? t('dbembed.calendarSettings') : t('dbembed.addToCalendar')}</button>}
+      {!readOnly && <button className="amx-db-opt" onClick={onDuplicate}>{dbIcon('duplicate')}{t('dbembed.duplicateView')}</button>}
       {onDelete ? (
-        <button className="amx-db-opt amx-db-opt-danger" onClick={onDelete}>{t('dbembed.deleteView')}</button>
+        <button className="amx-db-opt amx-db-opt-danger" onClick={onDelete}>{dbIcon('delete')}{t('dbembed.deleteView')}</button>
       ) : (
         !readOnly && <div className="amx-db-pop-sec">{t('dbembed.lastViewLocked')}</div>
       )}
@@ -3391,10 +3507,10 @@ function FilterRowsEditor({ filters, mode, columns, kindOf, targetOf, onChange, 
       {filters.length >= 2 && (
         <div className="amx-db-pop-list amx-db-pop-row">
           <button className="amx-db-opt" data-dim={mode !== 'and' || undefined} onClick={() => onMode('and')}>
-            {t('dbembed.filterAll')}{mode === 'and' && <span className="amx-db-opt-check">✓</span>}
+            {t('dbembed.filterAll')}{mode === 'and' && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
           </button>
           <button className="amx-db-opt" data-dim={mode !== 'or' || undefined} onClick={() => onMode('or')}>
-            {t('dbembed.filterAny')}{mode === 'or' && <span className="amx-db-opt-check">✓</span>}
+            {t('dbembed.filterAny')}{mode === 'or' && <span className="amx-db-opt-check">{dbIcon('check')}</span>}
           </button>
         </div>
       )}
@@ -3474,10 +3590,10 @@ function FilterRowsEditor({ filters, mode, columns, kindOf, targetOf, onChange, 
           if (c) onChange([...filters, { colId: c.id, op: opsFor(c.id)[0] }])
         }}
       >
-        {t('dbembed.addCondition')}
+        {dbIcon('add')}{t('dbembed.addCondition')}
       </button>
       {filters.length > 0 && (
-        <button className="amx-db-opt amx-db-opt-clear" onClick={() => onChange([])}>{t('dbembed.clearAll')}</button>
+        <button className="amx-db-opt amx-db-opt-clear" onClick={() => onChange([])}>{dbIcon('clear')}{t('dbembed.clearAll')}</button>
       )}
     </>
   )
@@ -3506,7 +3622,8 @@ function RowEditor({ db, row, pagePath, env, setCell, createOption, readOnly, on
             <span className="amx-db-th-icon" aria-hidden>{colMeta(col.type).icon}</span>
             {col.name}
           </span>
-          <div className="amx-db-rowed-cell">
+          <div className="amx-db-rowed-cell" data-db-cell={readOnly ? undefined : col.id}
+            tabIndex={readOnly ? undefined : 0} onKeyDown={readOnly ? undefined : gridCellKeyDown}>
             {readOnly ? <ReadOnlyCell row={row} col={col} env={env} pagePath={pagePath} /> : (
             <Cell
               row={row}

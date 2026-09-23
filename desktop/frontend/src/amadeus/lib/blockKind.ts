@@ -9,6 +9,11 @@ export function isEmbedBlock(content: string): boolean {
   return EMBED_RE.test(content.trim())
 }
 
+/** 数据库是可交互内容,选中/回车/双击都不代表编辑它的 Markdown 引用。 */
+export function isDatabaseEmbedBlock(content: string): boolean {
+  return /^!\[\[[^\]\n#|]+\.db[ \t]*(?:\|[^\]\n]*)?\]\]$/i.test(content.trim())
+}
+
 /** 只读控件块(嵌入 或 裸 URL 书签)= 无文本光标,方向键须「选中穿过」而非落光标。 */
 export function isWidgetBlock(content: string): boolean {
   const t = content.trim()
