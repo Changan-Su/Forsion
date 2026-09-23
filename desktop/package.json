@@ -200,6 +200,8 @@
     "e2e:attachment-clipboard": "node scripts/attachment-clipboard.e2e.cjs",
     "e2e:seams": "node scripts/plugin-seams.e2e.cjs",
     "check:imgsel": "node scripts/image-select.check.cjs",
+    "check:coldrag": "node scripts/e2e-editor.cjs --check=columns-realdrag",
+    "check:topdrag": "node scripts/e2e-editor.cjs --check=toplevel-realdrag",
     "check:formbase": "node scripts/form-baseline.check.cjs",
     "e2e:mediaembed": "node scripts/media-embed.e2e.cjs",
     "check:mediaembed": "node scripts/e2e-editor.cjs --check=media-embed",

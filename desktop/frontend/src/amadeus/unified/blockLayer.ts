@@ -26,7 +26,7 @@ import { createDropIndicatorPlugin } from 'prosemirror-drop-indicator'
 import { zoomOf } from '@lcl/engine'
 import { runEndOf } from './canvasEdit'
 import { tabIndent, tabOutdent, type TabFoldHooks } from '../blocks/markdown/tabIndent'
-import { executeMoveBelowRow, executePair, mintCardCopies } from './columns'
+import { executeMoveBelowRow, executeMoveIntoCell, executePair, mintCardCopies } from './columns'
 import { foldStateAt, foldedSectionAfter, toggleFoldAt } from './headingFold'
 import { isListFolded, listFoldStateAt, toggleListFoldAt } from './listFold'
 import { keyboardPlugins } from './keyboard'
@@ -360,24 +360,10 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   const executeMoveBlocks = (view: EditorView, e: DragEvent, copy: boolean): boolean => {
     const range = topRangeOf(view)
     if (!range) return false
-    let el: HTMLElement | null = null
-    for (const cand of Array.from(view.dom.children) as HTMLElement[]) {
-      const r = cand.getBoundingClientRect()
-      if (e.clientY >= r.top && e.clientY <= r.bottom) { el = cand; break }
-    }
-    if (!el) return false
-    let before = 0
-    let node: ProseNode | null = null
-    try {
-      const p = view.posAtDOM(el, 0)
-      before = p - 1
-      node = view.state.doc.nodeAt(before)
-    } catch {
-      return false
-    }
-    if (!node) return false
-    const r = el.getBoundingClientRect()
-    const at = e.clientY > r.top + r.height / 2 ? before + node.nodeSize : before
+    const hit = topBlockAtY(view, e.clientY)
+    if (!hit) return false
+    const r = hit.el.getBoundingClientRect()
+    const at = e.clientY > r.top + r.height / 2 ? hit.pos + hit.node.nodeSize : hit.pos
     if (at >= range.from && at <= range.to) return true // 落回自己身上:吞掉,什么都不做
     let content = view.state.doc.slice(range.from, range.to).content
     if (copy) {
@@ -387,6 +373,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
       content = r2.content
       if (r2.minted.length) hooks.onCardsMinted?.(r2.minted)
     }
+    unfoldOver(view, at) // 折叠标题下缘 = 隐藏小节之内:先展开,否则整批块一落下就看不见
     let tr = view.state.tr
     if (!copy) tr = tr.delete(range.from, range.to)
     tr = tr.insert(tr.mapping.map(at), content)
@@ -666,9 +653,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   //    ② 祖先一有 transform,`position: fixed` 的包含块就从视口变成那个祖先 → 直接写视口 px 整体
   //       偏一个卡片位(实测 k=1 也偏 245px)。
   //    两者都退化成老行为(无 transform 时 ①=zoomOf、②={0,0}),所以普通笔记路径零变化。
-  let fileDropRef: { pos: number } | null = null
+  /** 命中的顶层块(块位 + 画线的元素 + 指针在下半)。drop 时核对 nodeDOM(pos) 仍是 el 再解析,理由同 belowRef。 */
+  let fileDropRef: { pos: number; el: HTMLElement; lower: boolean } | null = null
   let childRef: { targetPos: number; el: HTMLElement } | null = null
   let belowRef: { rowEl: HTMLElement } | null = null
+  /** 分栏行内的落点(见 planCellDrop)。存 DOM 元素而非裸 pos:drop 时现场解析,理由同 belowRef。 */
+  let cellDropRef: { cellEl: HTMLElement; lineEl: HTMLElement; pos: number; edge: 'top' | 'bottom'; tail: boolean; self: boolean } | null = null
   /** 末块之下 = 顶层文末落点(2026-08-19 闭合锚:末块是卡时这里成了合法且常用的落点,
    *  此前无人认领 → 拖到末卡之下静默没反应)。 */
   let tailRef = false
@@ -694,6 +684,161 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   }
   const hideHline = (): void => {
     if (hline) hline.style.display = 'none'
+  }
+  /** 这个块能不能当「拖到左右缘成列」的配对目标 —— **判据必须与 executePair 逐字同源**:
+   *  行只允许顶级,所以目标要么在 doc 顶层,要么在顶级行的 cell 里。列表第 2 项起、卡内块都不满足,
+   *  而竖线只看 EDGE 距离 —— 不同源就会「竖线明晃晃地在、松手零反应」(dropGuard 之后更明显)。 */
+  const pairable = (view: EditorView, pos: number): boolean => {
+    const $t = view.state.doc.resolve(pos)
+    if ($t.depth === 0) return view.state.doc.nodeAt(pos)?.type.name !== 'amadeusCanvasCard' // 卡进 cell 被完整性闸整笔拒
+    for (let d = $t.depth; d >= 1; d--) if ($t.node(d).type.name === 'amadeusColumnRow') return d === 1
+    return false
+  }
+
+  /** 元素在画面上真有盒子(折叠小节里的块是 display:none,rect 全 0 —— 拿它当落点 = 零宽的
+   *  不可见线 + 块掉进隐藏区,「线画在明处、块掉进暗处」那条老账的同款)。 */
+  const boxed = (el: unknown): el is HTMLElement => el instanceof HTMLElement && el.getClientRects().length > 0
+
+  /** 纵坐标 y 落在哪个**顶层块**的矩形里(看不见的折叠块不算)。块位从 doc 正着数,DOM 只拿来量矩形 ——
+   *  别从 DOM 反推(`posAtDOM(el, 0) - 1`):有 contentDOM 的块 posAtDOM 给内容起点,减 1 恰是块前位;
+   *  hr 这类叶子块给的就是块前位,再减 1 要么落进上一块里解析成 null(松手零反应),要么落到相邻的
+   *  上一条 hr 上(错一格)。 */
+  const topBlockAtY = (view: EditorView, y: number): { pos: number; node: ProseNode; el: HTMLElement } | null => {
+    const doc = view.state.doc
+    for (let i = 0, pos = 0; i < doc.childCount; pos += doc.child(i).nodeSize, i++) {
+      const el = view.nodeDOM(pos)
+      if (!boxed(el)) continue
+      const r = el.getBoundingClientRect()
+      if (y >= r.top && y <= r.bottom) return { pos, node: doc.child(i), el }
+    }
+    return null
+  }
+
+  /** 分栏行内的落点:指针落在某列的横向范围里 → 落点就在**那一列**内(直接子块之间的缝,末块
+   *  之下 = 列末)。为什么不交给落点插件:①它把 cell 的上下沿(行内位置)也当候选,那里放不下块;
+   *  ②它按「到线段两端点」的距离排序,窄列的短线端点更近 —— 指针在这一列下方却被另一列抢走;
+   *  ③它只问最近 8 个候选,另一列若有一串短块会把本列的候选整个挤出去 = 不出线也不落。
+   *  dragover 画线与 drop 执行共用这一份判定(线说真话)。三种情况交回插件/原路:
+   *  列缝(不归任何列)、指针在容器块里面(列表 / callout / 表格:插件能落进容器,嵌套边沿也更细)、
+   *  块左右缘 ≤EDGE 的配对区(那是「成新列」)。 */
+  interface CellDrop { cellEl: HTMLElement; lineEl: HTMLElement; pos: number; edge: 'top' | 'bottom'; tail: boolean; self: boolean }
+  const planCellDrop = (view: EditorView, e: DragEvent): CellDrop | null => {
+    const sel = view.state.selection
+    const copy = dragCopies(e)
+    /** 落回自身 = 不出线、drop 吞成 no-op(与落点插件的 isDraggingToItself 同义)。 */
+    const selfAt = (at: number): boolean => !copy && sel instanceof NodeSelection && at >= sel.from && at <= sel.to
+    for (const rowEl of view.dom.querySelectorAll<HTMLElement>(':scope > .amx-ucolrow')) {
+      const rr = rowEl.getBoundingClientRect()
+      if (e.clientY < rr.top || e.clientY > rr.bottom || e.clientX < rr.left || e.clientX > rr.right) continue
+      for (const cellEl of Array.from(rowEl.children)) {
+        if (!boxed(cellEl) || !('amxColcell' in cellEl.dataset)) continue
+        const cr = cellEl.getBoundingClientRect()
+        if (e.clientX < cr.left || e.clientX > cr.right) continue
+        try {
+          const cellPos = view.posAtDOM(cellEl, 0) - 1
+          const cell = view.state.doc.nodeAt(cellPos)
+          if (cell?.type.name !== 'amadeusColumnCell') return null
+          let pos = cellPos + 1
+          let lastEl: HTMLElement | null = null
+          for (let i = 0; i < cell.childCount; i++) {
+            const child = cell.child(i)
+            const el = view.nodeDOM(pos)
+            if (boxed(el)) {
+              const r = el.getBoundingClientRect()
+              if (e.clientY <= r.bottom) {
+                if (e.clientY >= r.top) {
+                  // 容器块里面交回插件(评审二:pickBlockAt 从 callout/表格内部一路爬到外壳,拿「命中
+                  // 更深节点」当判据永远不成立 —— 列内拖不进 callout,列表的线还忽整只忽逐项地跳)。
+                  // 文本块与原子块(段落、标题、代码块、图片段、分割线)整块接管:高块中段的死区在这类块上。
+                  if (!child.isTextblock && !child.isAtom) return null
+                  if (e.clientX <= r.left + EDGE || e.clientX >= r.right - EDGE) return null // 配对区
+                }
+                const before = e.clientY <= r.top + r.height / 2
+                const at = before ? pos : pos + child.nodeSize
+                return { cellEl, lineEl: el, pos, edge: before ? 'top' : 'bottom', tail: false, self: selfAt(at) }
+              }
+              lastEl = el
+            }
+            pos += child.nodeSize
+          }
+          if (!lastEl) return null // 整列都不可见(折叠):不接管
+          // 末块之下 = 列末(不是「末个**可见**块之后」:那个位置可能在折叠小节内部,块插进去当场
+          // 从画面消失 —— 隐藏区的落点由 drop 侧先展开再插,见 foldedHeadingOver)。
+          return { cellEl, lineEl: lastEl, pos: cellPos, edge: 'bottom', tail: true, self: selfAt(cellPos + cell.nodeSize - 1) }
+        } catch {
+          return null // 元素刚被换掉
+        }
+      }
+      return null
+    }
+    return null
+  }
+
+  /** 把 CellDrop 在 drop 那一刻解析成插入位(元素断连/刚被换掉 → null,吞掉:没线不落)。 */
+  const cellDropPos = (view: EditorView, ref: { cellEl: HTMLElement; lineEl: HTMLElement; pos: number; edge: 'top' | 'bottom'; tail: boolean }): number | null => {
+    if (!ref.cellEl.isConnected || !ref.lineEl.isConnected) return null
+    try {
+      if (ref.tail) {
+        const cellPos = view.posAtDOM(ref.cellEl, 0) - 1
+        const cell = view.state.doc.nodeAt(cellPos)
+        return cell?.type.name === 'amadeusColumnCell' ? cellPos + cell.nodeSize - 1 : null
+      }
+      // 块位用 planCellDrop 算好的 pos,只拿 DOM 核对它还是画线的那个块。别用 posAtDOM(lineEl,0)-1 反推:
+      // 有内容的块 posAtDOM 给内容起点(减 1 恰是块前位),hr 这类叶子块没有 contentDOM,给的就是块前位,
+      // 再减 1 就错位 —— 线画在 hr 上缘、松手零反应(评审二 P1)。
+      const node = view.state.doc.nodeAt(ref.pos)
+      if (!node || view.nodeDOM(ref.pos) !== ref.lineEl) return null
+      const to = ref.edge === 'top' ? ref.pos : ref.pos + node.nodeSize
+      return view.state.doc.resolve(to).parent.type.name === 'amadeusColumnCell' ? to : null
+    } catch {
+      return null
+    }
+  }
+
+  /** 落点落在某枚**折叠标题**的隐藏小节里 → 返回那枚标题的位置。不先展开的话块插进 display:none
+   *  的区段 = 画面上当场消失(与 resolveCardDocDrop 的 expandFold 同规;toggleFoldAt 只动会话态
+   *  装饰、不产生 doc step,所以展开后落点不用重算)。 */
+  const foldedHeadingOver = (view: EditorView, at: number): number | null => {
+    try {
+      const $at = view.state.doc.resolve(at)
+      const parent = $at.parent
+      let pos = $at.start()
+      for (let i = 0; i < parent.childCount && pos < at; i++) {
+        const child = parent.child(i)
+        if (child.type.name === 'heading' && foldStateAt(view, pos) === 'folded') {
+          const end = foldedSectionAfter(view.state, pos)
+          if (end != null && at > pos && at <= end) return pos
+        }
+        pos += child.nodeSize
+      }
+    } catch { /* 位置刚失效 */ }
+    return null
+  }
+  /** 展开盖住 at 的全部折叠标题:外层展开后内层仍折着,逐层来;同一枚再次出现 = 没展开成,别空转。 */
+  const unfoldOver = (view: EditorView, at: number): void => {
+    for (let f = foldedHeadingOver(view, at), last = -1; f != null && f !== last; last = f, f = foldedHeadingOver(view, at)) toggleFoldAt(view, f)
+  }
+  // 落点插件(prosemirror-drop-indicator)那条横线。显隐原本全归库自己:它只在 view.dom 的
+  // drop/dragleave/dragend 上排一次 30ms 延时隐藏,期间任一 dragover(含指针静止时 OS 周期补发的)
+  // 都会把这次隐藏作废。三处叠加 = 松手后横线残留、横竖线同现(2026-09-22 录屏):配对/行下/文末
+  // 由捕获期路由消费 drop 并 stopPropagation,库收不到;dragend 发在 gutter 的 ⠿ 上,不在 view.dom。
+  // 所以提到这里:库每轮判定后同步收敛(settlePmLine),各收尾口直接藏。
+  let pmLine: HTMLDivElement | null = null
+  const hidePmLine = (): void => {
+    if (pmLine) pmLine.style.display = 'none'
+  }
+  let pmShown = false
+  let pmSettling = false
+  /** onDrag 首次被问到时挂一个微任务:本轮 dragover 的库判定跑完仍没 onShow(接管分支 / 无合法
+   *  目标 / 落回自身)→ 当场藏,不等那个会被作废的 30ms。 */
+  const settlePmLine = (): void => {
+    if (pmSettling) return
+    pmSettling = true
+    pmShown = false
+    queueMicrotask(() => {
+      pmSettling = false
+      if (!pmShown) hidePmLine()
+    })
   }
 
   // ── 浮动把手(⠿ + ＋):命中/定位/拖起全自写(见文件头:plugin-block 的中线命中对分栏列盲)。──
@@ -784,10 +929,13 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           // 已有跨块选区且本块就在里面 → 保留它(整批拖走,AFFiNE 同);否则收敛成这一块。
           // ⚠️ 比的是**内容边界**不是节点边界:文字选区永远落在节点内部([pos+1, pos+size-1]),
           //    拿节点前位去比会恒不成立,多选一按下就被收敛成单块(M2 首红即此)。
+          // ⚠️ 必须真跨块(与 dragstart 的 multi 同一判据):单块被选满(整段全选 / 选中的图片 /
+          //    一次没落成的 drop 留下的选区)不是多选,留着它 dragstart 什么都不序列化 —— 浏览器裸拖
+          //    空数据(macOS 绿色 +),不出线、松手无事(2026-09-22 录屏第二拖)。
           const cur = view.state.selection
           const cStart = a.pos + 1
           const cEnd = a.pos + a.node.nodeSize - 1
-          if (cur instanceof TextSelection && !cur.empty && cur.from <= cStart && cur.to >= cEnd) {
+          if (cur instanceof TextSelection && !cur.empty && !cur.$from.sameParent(cur.$to) && cur.from <= cStart && cur.to >= cEnd) {
             view.focus()
             return
           }
@@ -870,10 +1018,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           hideHoverRect()
           pairRef = null
           belowRef = null
+          cellDropRef = null
           childRef = null
           tailRef = false
           hideVline()
           hideHline()
+          hidePmLine()
           if (view) {
             view.dom.dataset.dragging = 'false'
             view.dragging = null
@@ -1131,6 +1281,14 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         //    先 hover 乙、再 hover 甲,折叠钮不出现 —— 因为生效的是中途那一格。
         let trailTimer: ReturnType<typeof setTimeout> | null = null
         const onMouseMove = (e: MouseEvent): void => {
+          // 指针在把手上 = 正要去抓它,不换目标。非首列块的把手画在块左侧 w+8,压在前一列上方:
+          // 这里再按坐标 pickBlockAt,PM 的 posAtCoords 会按几何落进前一列的块,把手当场跳走 ——
+          // 右栏块的 ⠿ 永远够不着(2026-09-22 探针:块 → 列缝(row,不重锚)→ 把手,中间没有裸露带)。
+          if (content.contains(e.target as Node)) {
+            if (trailTimer) clearTimeout(trailTimer)
+            trailTimer = null
+            return
+          }
           const now = Date.now()
           if (now - lastMove < 80) {
             const { clientX, clientY } = e
@@ -1211,20 +1369,11 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           // 画一条横线,并在 drop 时把光标先送到线所在处,否则文件恒插在原光标位置、线在撒谎。
           if (types.includes('Files')) {
             if (!view) return
-            let hit: HTMLElement | null = null
-            for (const el of Array.from(view.dom.children) as HTMLElement[]) {
-              const r = el.getBoundingClientRect()
-              if (e.clientY >= r.top && e.clientY <= r.bottom) { hit = el; break }
-            }
+            const hit = topBlockAtY(view, e.clientY)
             if (!hit) return
-            try {
-              const p = view.posAtDOM(hit, 0)
-              const node = view.state.doc.nodeAt(p - 1)
-              if (!node) return
-              const r = hit.getBoundingClientRect()
-              fileDropRef = { pos: e.clientY > r.top + r.height / 2 ? p + node.content.size : p }
-              showHline(view, hit)
-            } catch { /* 元素刚被换掉 */ }
+            const r = hit.el.getBoundingClientRect()
+            fileDropRef = { pos: hit.pos, el: hit.el, lower: e.clientY > r.top + r.height / 2 }
+            showHline(view, hit.el)
             return
           }
           if (!view || view.dom.dataset.dragging !== 'true') return
@@ -1238,6 +1387,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
               pairRef = null
               childRef = null
               belowRef = null
+              cellDropRef = null
               hideVline()
               const plan = planCardDocDrop(view, e)
               if (plan && !plan.self) {
@@ -1249,11 +1399,14 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           }
           // 末块之下(NodeSelection 与跨块选区都收;画布模式不适用,卡是绝对定位):
           tailRef = false
+          cellDropRef = null
           if (!inCanvas(view)) {
             const selNow = view.state.selection
             const blocksDrag = selNow instanceof NodeSelection || !!topRangeOf(view)
-            const lastEl = view.dom.lastElementChild as HTMLElement | null
-            if (blocksDrag && lastEl) {
+            // ⚠️ 末块可能是折叠小节里的块(display:none,rect 全 0)—— 不挡的话 `clientY > 0 + 2`
+            //    恒真,整个编辑器区域都变成「拖到文末」,线还是零宽的(评审 2026-09-22)。
+            const lastEl = view.dom.lastElementChild
+            if (blocksDrag && boxed(lastEl)) {
               const lr = lastEl.getBoundingClientRect()
               const vr = view.dom.getBoundingClientRect()
               if (e.clientY > lr.bottom + 2 && e.clientX >= vr.left && e.clientX <= vr.right) {
@@ -1275,6 +1428,23 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             markDropCard((e.target as HTMLElement | null)?.closest?.('.amx-ucard') as HTMLElement | null)
             belowRef = null
             hideHline()
+            e.preventDefault()
+            return
+          }
+          // 分栏行内:落点归指针所在的那一列(见 planCellDrop)。落回自身 = 不出线,drop 吞成 no-op。
+          // ⚠️ 三个让路态都要在这里清干净:指针不动时落点插件因坐标未变**不再调 onDrag**,而 onDrag
+          //    是 pairRef/childRef 的唯一清点 —— 不清的话「画的是列内、执行的却是塞进列表项」
+          //    (drop 路由 cr/pr 排在 ctr 之前),库那条旧线也会与本层的线同时在屏。
+          const ct = planCellDrop(view, e)
+          if (ct) {
+            cellDropRef = { cellEl: ct.cellEl, lineEl: ct.lineEl, pos: ct.pos, edge: ct.edge, tail: ct.tail, self: ct.self }
+            belowRef = null
+            pairRef = null
+            childRef = null
+            hideVline()
+            hidePmLine()
+            if (ct.self) hideHline()
+            else showHline(view, ct.lineEl, 0, ct.edge)
             e.preventDefault()
             return
           }
@@ -1309,11 +1479,13 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           const to = e.relatedTarget as HTMLElement | null
           if (to && root.contains(to)) return
           belowRef = null
+          cellDropRef = null
           fileDropRef = null
           childRef = null
           pairRef = null
           hideVline()
           hideHline()
+          hidePmLine()
           markDropCard(null)
         }
         root.addEventListener('dragleave', onRootDragLeave, true)
@@ -1324,22 +1496,34 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           const view = viewRef
           const pr = pairRef
           const br = belowRef
+          const ctr = cellDropRef
           const cr = childRef
           const fd = fileDropRef
           const tl = tailRef
           pairRef = null
           belowRef = null
+          cellDropRef = null
           childRef = null
           fileDropRef = null
           tailRef = false
           hideVline()
           hideHline()
+          hidePmLine()
           markDropCard(null)
           if (!view) return
           // OS 文件:只把光标送到落点(内容插入归 importToPage 那条链),不 preventDefault。
+          // 文件恒插在命中块**之后**(线画在它下沿;UnifiedPage.saveFiles 插在选区所在顶层块之后):
+          // 有内容的块 = 光标进块首/块尾;原子块(hr)里没有光标位 = 选中它本身,saveFiles 按选区末端插在它后面。
           if (fd) {
             try {
-              view.dispatch(view.state.tr.setSelection(TextSelection.near(view.state.doc.resolve(Math.min(fd.pos, view.state.doc.content.size)))))
+              const node = view.nodeDOM(fd.pos) === fd.el ? view.state.doc.nodeAt(fd.pos) : null
+              if (node) {
+                unfoldOver(view, fd.pos + node.nodeSize) // 命中折叠标题:它的下缘在隐藏小节里,先展开
+                const doc = view.state.doc
+                view.dispatch(view.state.tr.setSelection(node.isAtom
+                  ? NodeSelection.create(doc, fd.pos)
+                  : TextSelection.near(doc.resolve(fd.lower ? fd.pos + 1 + node.content.size : fd.pos + 1))))
+              }
             } catch { /* 位置已失效 */ }
             return
           }
@@ -1363,6 +1547,14 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
                 if (br.rowEl.isConnected) done = executeMoveBelowRow(view, view.posAtDOM(br.rowEl, 0) - 1, copy)
               } catch {
                 done = false
+              }
+            } else if (ctr) {
+              const at = cellDropPos(view, ctr)
+              if (at != null) {
+                // 先展开,否则块插进隐藏区 = 当场看不见(嵌套逐层,见 unfoldOver)。
+                // 落回自身是 no-op,不动折叠态(评审二 P3)。
+                if (!ctr.self) unfoldOver(view, at)
+                done = executeMoveIntoCell(view, at, copy)
               }
             } else if (pr) {
               done = executePair(view, pr.targetPos, pr.side, copy)
@@ -1478,8 +1670,11 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             vline = null
             hline?.remove()
             hline = null
+            pmLine?.remove()
+            pmLine = null
             pairRef = null
             belowRef = null
+            cellDropRef = null
             activeRef = null
             if (viewRef === editorView) viewRef = null
           },
@@ -1492,10 +1687,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   // 自绘指示线(不用 @milkdown/plugin-cursor 的 DOM 件):要做 zoomOf 反补偿——
   // position:fixed 元素在 CSS zoom 祖先里,视口 px 直接写 translate 会按 zoom 放大(镜像老坑)。
   const dropIndicator = $prose(() => {
-    let dom: HTMLDivElement | null = null
     const ensureDom = (view: EditorView): HTMLDivElement => {
-      if (dom && dom.isConnected) return dom
-      dom = document.createElement('div')
+      if (pmLine && pmLine.isConnected) return pmLine
+      const dom = document.createElement('div')
       dom.className = 'unified-drop-line'
       dom.style.display = 'none'
       // ⚠️ 与 ensureHline 同款:关掉入场动画。`amx-dropline-in` 的 from 里写了 `transform: scaleX(.3)`,
@@ -1503,10 +1697,12 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
       //    容器原点再弹回来(2026-08-15 spike 探针实锤:量到的 transform 与代码写的对不上)。
       dom.style.animation = 'none'
       ;(view.dom.parentElement ?? document.body).appendChild(dom)
+      pmLine = dom
       return dom
     }
     const plugin = createDropIndicatorPlugin({
-      onDrag: ({ view, event }) => {
+      onDrag: ({ view, event, pos }) => {
+        settlePmLine()
         // OS 文件拖入不归本层(fileDropGuard/importToPage 链路),不出指示线不抢 drop。
         const types = event.dataTransfer ? Array.from(event.dataTransfer.types) : []
         if (types.includes('Files')) return false
@@ -1524,9 +1720,10 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         // 「最近块边」对卡是撒谎源(相邻卡缝几 px,最近边常在卡内 → 完整性闸整笔拒),
         // 这里全让路,线由那边画在合法顶层缝上。
         if (view.state.selection.node.type === view.state.schema.nodes.amadeusCanvasCard) return false
-        // 行下方落点归 root 级捕获期 dragover 检测(handlePlugin 的 onRootDragOver:指针多半在
-        // view.dom **之外**的 pane 空白区,本插件只挂 view.dom 收不到)——命中期本层全让路。
-        if (belowRef) {
+        // 行下方 / 末块之下的落点归 root 级捕获期 dragover 检测(handlePlugin 的 onRootDragOver:指针
+        // 多半在 view.dom **之外**的 pane 空白区,本插件只挂 view.dom 收不到)——命中期本层全让路。
+        // tailRef / cellDropRef 同理:指针在 view.dom 之内时两边都会出线,drop 却被捕获期路由吞掉。
+        if (belowRef || tailRef || cellDropRef) {
           pairRef = null
           childRef = null // ⚠️ 漏清它 = 画的是「落到行后」、执行的却是「塞进列表项当子项」(drop 路由 cr 在 br 之前)
           hideVline()
@@ -1547,7 +1744,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           }
         }
         childRef = null
-        if (a && !(a.pos >= sel.from && a.pos < sel.to)) {
+        if (a && !(a.pos >= sel.from && a.pos < sel.to) && pairable(view, a.pos)) {
           const r = a.el.getBoundingClientRect()
           const side = event.clientX <= r.left + EDGE ? 'left' : event.clientX >= r.right - EDGE ? 'right' : null
           if (side) {
@@ -1558,9 +1755,26 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         }
         pairRef = null
         hideVline()
+        // 分栏行的直接子位置(cell 之间 / 行首行尾 = cell 的上下沿)只能放 cell。接受它 = 线画在列底,
+        // replaceRangeWith 却把块挪到行外:短列下方松手恰是被拖块原位 → 删了又插回(录屏第一拖),
+        // 列之间还会被 Fitter 包成一枚新 cell。拒掉,库自动取下一个候选(列内末块下沿)。
+        const $t = view.state.doc.resolve(pos)
+        if ($t.parent.type.name === 'amadeusColumnRow') return false
+        // 列内位置只在指针横向落在**该列**时才算。库按「到线段两端点」的 Manhattan 距离排序,窄列的短线
+        // 端点离指针更近:指针在右列下方,左列末块下沿照样抢到(线画在左列、块进左列)。列缝不归任何列。
+        for (let d = $t.depth; d >= 1; d--) {
+          if ($t.node(d).type.name !== 'amadeusColumnCell') continue
+          const cellEl = view.nodeDOM($t.before(d))
+          if (cellEl instanceof HTMLElement) {
+            const r = cellEl.getBoundingClientRect()
+            if (event.clientX < r.left || event.clientX > r.right) return false
+          }
+          break
+        }
         return true
       },
       onShow: ({ view, line }) => {
+        pmShown = true
         const el = ensureDom(view)
         // 与 showHline 同一套补偿(见那两个 helper 的注释):累计视觉缩放 + fixed 包含块原点。
         const z = visualScale(view.dom)
@@ -1572,12 +1786,18 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
         el.style.width = `${Math.max(0, x2 - x1)}px`
         el.style.transform = `translate(${Math.round(x1)}px, ${Math.round(y - 1.5)}px)`
       },
-      onHide: () => {
-        if (dom) dom.style.display = 'none'
-      },
+      onHide: hidePmLine,
     })
     return plugin
   })
+  // 没线就不落:⠿ 起的块拖拽,落点插件没给出目标(= 没画线)时 PM 会退回默认 dropPoint 按指针猜一个
+  // 位置 —— 2026-09-22 探针:短列深处无线松手,图片进了另一列。只拦 gutter 起的块拖拽
+  // (dataset.dragging),PM 自己的文字拖拽 / 外部拖入照旧;排在 dropIndicator 之后,它接了就轮不到这里。
+  const dropGuard = $prose(() => new Plugin({
+    key: new PluginKey('UNIFIED_DROP_GUARD'),
+    // dataset 万一残留 'true'(dragend 没收到),view.dragging 也在才算 ⠿ 拖拽 —— 否则外部文本拖入被静默吞掉。
+    props: { handleDrop: (view) => view.dom.dataset.dragging === 'true' && !!view.dragging },
+  }))
 
   // ── 卡缝插入口(2026-08-19 用户拍板「悬停卡缝出 + 行」,AFFiNE 同款)。──────────────────
   // 闭合锚让「两卡之间的顶层正文」成为合法位置,但两卡相邻时中间没有可点击的光标位 ——
@@ -1909,7 +2129,7 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   )
 
   return {
-    plugins: [handlePlugin, dropIndicator, gapInsert, blockSelDeco, placeholderDeco, escKeymap, tabKeymap, selectAllKeymap, blockDeleteKeymap, blockCutPlugin, moveBlockKeymap, keyboardPlugins].flat(),
+    plugins: [handlePlugin, dropIndicator, dropGuard, gapInsert, blockSelDeco, placeholderDeco, escKeymap, tabKeymap, selectAllKeymap, blockDeleteKeymap, blockCutPlugin, moveBlockKeymap, keyboardPlugins].flat(),
     getView: () => viewRef,
     topRangeOf,
   }
