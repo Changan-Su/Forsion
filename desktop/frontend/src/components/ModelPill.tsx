@@ -4,6 +4,7 @@ import { ModelMetadata } from './ModelMetadata'
  * Chat View 模型 / Effort 控制器。
  *
  * 展开层固定为三段：①「高级」折叠区；②主模型选择器；③ ChatGPT 式可拖拽 Effort 条。
+ * 高级与模型之间按需多一行「上下文上限」：模型本身窗口超过引擎缺省上限(272k)时才露，选的是本机该模型的窗口覆盖。
  * 高级区复用 config.json 的默认辅助 / 生图 / 识图模型槽；Effort 与模型一样由 store 记住，
  * 在后续会话继续继承。外部 ACP 引擎没有 Tangu 推理档与辅助模型时，保留单独的模型选择行。
  */
@@ -27,16 +28,37 @@ registerMessages({
   'pill.noModels': { zh: '暂无可用模型', en: 'No available models' },
   'pill.faster': { zh: '更快', en: 'Faster' },
   'pill.smarter': { zh: '更智能', en: 'Smarter' },
+  'pill.rowContext': { zh: '上下文上限', en: 'Context limit' },
+  'pill.ctxDefault': { zh: '默认 · {n}', en: 'Default · {n}' },
+  'pill.ctxMax': { zh: '最大 · {n}', en: 'Maximum · {n}' },
+  'pill.ctxHint': { zh: '对本机这个模型的所有会话生效。超过 {n} 后每轮都要重发更多上下文，额度消耗随之上升。', en: 'Applies to every conversation with this model on this device. Past {n}, each turn resends more context, so usage rises with it.' },
 })
 
 export interface ModelPillOption extends Pick<ModelInfo, 'id' | 'name' | 'tags' | 'multiplier'> { description?: string; source?: ModelInfo['source'] }
 export interface ModelPillGroup { key?: string; label: string; source?: ModelInfo['source']; options: ModelPillOption[] }
 type Thinking = NonNullable<AgentConfig['thinkingLevel']>
-type Pane = 'model' | DefaultModelSlot
+type Pane = 'model' | 'context' | DefaultModelSlot
 
 const thinkingLabelKey = (lv: Thinking): string => `input.thinking.${lv}`
 const thinkingShortKey = (lv: Thinking): string => `input.thinkingShort.${lv}`
 const effortDisplay = (lv: Thinking, t: (key: string) => string): string => lv === 'max' ? 'Max' : t(thinkingShortKey(lv))
+/** 与输入框进度环同一写法(272k / 1M);环在 Composer2 里,这边反向 import 会成环。 */
+const fmtWindow = (n: number): string => n >= 1e6 ? `${Math.floor(n / 1e5) / 10}M` : `${Math.floor(n / 100) / 10}k`
+
+/** 「上下文上限」行:模型本身窗口 > 缺省上限才有得开;已手动覆盖过的也露(好改回默认)。老引擎不下发 max/cap → null。 */
+export function contextLimitOptions(model: ModelInfo | undefined, cap: number | undefined): { current: number; defaultTokens: number; maxTokens?: number; selected: 'default' | 'max' | null } | null {
+  const max = model?.maxContextWindow
+  if (!model?.contextWindow || !max || !cap) return null
+  const overridden = model.contextWindowSource === 'override'
+  if (max <= cap && !overridden) return null
+  return {
+    current: model.contextWindow,
+    defaultTokens: Math.min(max, cap),
+    ...(max > cap ? { maxTokens: max } : {}),
+    // 设置页手填的其它值(如 500000)两档都不打勾,行上照实显示当前值
+    selected: !overridden ? 'default' : max > cap && model.contextWindow === max ? 'max' : null,
+  }
+}
 
 /** 原生 range 的 index ↔ 七档映射集中在这里，避免视图和键盘路径各算一套。 */
 export function effortAt(index: number): Thinking {
@@ -84,6 +106,8 @@ export const ModelPill: React.FC<{
   modelsResponse?: ModelsResponse | null
   defaultModelIds?: Partial<Record<DefaultModelSlot, string>>
   onDefaultModelChange?: (slot: DefaultModelSlot, modelId: string) => void
+  /** 写本机该模型的窗口覆盖(null = 交还默认)。不传、或引擎报 modelOverridesWritable 不为 true,就不露「上下文上限」行。 */
+  onContextWindowChange?: (modelId: string, tokens: number | null) => void
   /** 无可选模型时的只读标签（外部引擎：用引擎默认）。 */
   emptyLabel?: string
   footnote?: string
@@ -91,7 +115,7 @@ export const ModelPill: React.FC<{
 }> = ({
   className, open: controlledOpen, onOpenChange,
   disabled, modelId, groups, onSelect, thinkingLevel, onThinkingChange, supportedThinking, effectiveThinking,
-  modelsResponse, defaultModelIds, onDefaultModelChange, emptyLabel, footnote, title,
+  modelsResponse, defaultModelIds, onDefaultModelChange, onContextWindowChange, emptyLabel, footnote, title,
 }) => {
   const { t } = useI18n()
   const pickerPrefs = useModelPickerPreferences()
@@ -178,6 +202,14 @@ export const ModelPill: React.FC<{
     ? ` → ${effortDisplay(effectiveThinking as Thinking, t)}`
     : ''
   const isMax = effLevel === 'max'
+  // 能不能写由引擎说了算(桌面连外部 / 云端 worker 那边 PUT 404):别按宿主猜
+  const ctx = onContextWindowChange && modelId && modelsResponse?.modelOverridesWritable
+    ? contextLimitOptions(modelsResponse.models.find((m) => m.id === modelId), modelsResponse.contextWindowCap)
+    : null
+  const pickContext = (tokens: number | null): void => {
+    setPane(null)
+    if (modelId) onContextWindowChange?.(modelId, tokens)
+  }
 
   const groupCatalog = (models: ModelInfo[]): ModelPillGroup[] => groupPickerModels(models, pickerPrefs).map((g) => ({
     key: g.key, source: g.source, label: g.provider, options: g.models.map((m) => ({ ...m, description: `${m.provider} · ${m.id}` })),
@@ -201,10 +233,11 @@ export const ModelPill: React.FC<{
     { slot: 'visionModelId', label: t('pill.defaultVisionModel') },
   ]
 
-  const rawPaneGroups = pane === 'model' ? groups : pane ? groupCatalog(slotModels(pane)) : []
+  const slot: DefaultModelSlot | null = pane && pane !== 'model' && pane !== 'context' ? pane : null
+  const rawPaneGroups = pane === 'model' ? groups : slot ? groupCatalog(slotModels(slot)) : []
   const q = query.trim().toLowerCase()
   const paneGroups = rawPaneGroups.map((g) => ({ ...g, options: g.options.filter((m) => `${g.label} ${m.name} ${m.id} ${m.tags?.map((tag) => tag.text).join(' ') || ''}`.toLowerCase().includes(q)) })).filter((g) => g.options.length)
-  const paneValue = pane === 'model' ? modelId : pane ? (defaultModelIds?.[pane] || '') : ''
+  const paneValue = pane === 'model' ? modelId : slot ? (defaultModelIds?.[slot] || '') : ''
   const selectDefault = (slot: DefaultModelSlot, id: string): void => {
     onDefaultModelChange?.(slot, id)
     setPane(null)
@@ -278,6 +311,21 @@ export const ModelPill: React.FC<{
             </>
           )}
 
+          {/* 高级与模型之间：上下文上限(只对窗口超过缺省上限的模型露出)。 */}
+          {ctx && (
+            <button
+              className={`cm-row${pane === 'context' ? ' is-open' : ''}`}
+              data-pane-trigger="context"
+              onMouseEnter={showPane('context')}
+              onFocus={showPane('context')}
+              onClick={showPane('context')}
+            >
+              <span className="cm-row-k">{t('pill.rowContext')}</span>
+              <span className="cm-row-v">{fmtWindow(ctx.current)}</span>
+              <ChevronRight size={13} />
+            </button>
+          )}
+
           {/* 第二行：保留原有按 provider 分组的模型选择器。 */}
           <button
             className={`cm-row cm-model-row${pane === 'model' ? ' is-open' : ''}`}
@@ -335,45 +383,63 @@ export const ModelPill: React.FC<{
           )}
 
           {footnote && <div className="menu-section cm-foot">{footnote}</div>}
-          {pane && (
+          {pane && (pane !== 'context' || ctx) && (
             <div
               ref={(el) => { subRef.current = el; subFix.ref.current = el }}
               className={`cm-sub ${placement}`}
               data-pane={pane}
               style={{ ...subFix.style, '--cm-sub-top': `${subTop}px` } as React.CSSProperties}
             >
-              {rawPaneGroups.reduce((n, g) => n + g.options.length, 0) >= 8 && <label className="model-picker-search"><Search size={12} /><input aria-label={t('model.searchPlaceholder')} placeholder={t('model.searchPlaceholder')} value={query} onChange={(e) => setQuery(e.target.value)} /></label>}
-              {pane !== 'model' && (
-                <button
-                  className={`menu-item${paneValue ? '' : ' active'}`}
-                  onClick={() => selectDefault(pane, '')}
-                >
-                  <span className="grow">{slotLabel(pane)}</span>
-                  <span className="mi-check">{paneValue ? '' : '✓'}</span>
-                </button>
-              )}
-              {paneGroups.map((g, index) => (
-                <React.Fragment key={g.key || g.label}>
-                  {g.source && paneGroups[index - 1]?.source !== g.source && <div className="menu-source">{t(g.source === 'forsion' ? 'model.group.forsion' : 'model.group.direct')}</div>}
-                  {g.label && <div className="menu-section">{g.label}</div>}
-                  {g.options.map((m) => (
-                    <button
-                      key={m.id}
-                      className={`menu-item${m.id === paneValue ? ' active' : ''}`}
-                      title={m.description}
-                      onClick={() => {
-                        if (pane === 'model') { onSelect(m.id); setPillOpen(false) }
-                        else selectDefault(pane, m.id)
-                      }}
-                    >
-                      <span className="grow">{m.name}</span>
-                      {m.source && <ModelMetadata model={{ source: m.source, tags: m.tags, multiplier: m.multiplier }} />}
-                      <span className="mi-check">{m.id === paneValue ? '✓' : ''}</span>
+              {pane === 'context' && ctx ? (
+                <>
+                  <button className={`menu-item${ctx.selected === 'default' ? ' active' : ''}`} onClick={() => pickContext(null)}>
+                    <span className="grow">{t('pill.ctxDefault', { n: fmtWindow(ctx.defaultTokens) })}</span>
+                    <span className="mi-check">{ctx.selected === 'default' ? '✓' : ''}</span>
+                  </button>
+                  {ctx.maxTokens && (
+                    <button className={`menu-item${ctx.selected === 'max' ? ' active' : ''}`} onClick={() => pickContext(ctx.maxTokens!)}>
+                      <span className="grow">{t('pill.ctxMax', { n: fmtWindow(ctx.maxTokens) })}</span>
+                      <span className="mi-check">{ctx.selected === 'max' ? '✓' : ''}</span>
                     </button>
+                  )}
+                  <div className="menu-section cm-foot">{t('pill.ctxHint', { n: fmtWindow(ctx.defaultTokens) })}</div>
+                </>
+              ) : (
+                <>
+                  {rawPaneGroups.reduce((n, g) => n + g.options.length, 0) >= 8 && <label className="model-picker-search"><Search size={12} /><input aria-label={t('model.searchPlaceholder')} placeholder={t('model.searchPlaceholder')} value={query} onChange={(e) => setQuery(e.target.value)} /></label>}
+                  {slot && (
+                    <button
+                      className={`menu-item${paneValue ? '' : ' active'}`}
+                      onClick={() => selectDefault(slot, '')}
+                    >
+                      <span className="grow">{slotLabel(slot)}</span>
+                      <span className="mi-check">{paneValue ? '' : '✓'}</span>
+                    </button>
+                  )}
+                  {paneGroups.map((g, index) => (
+                    <React.Fragment key={g.key || g.label}>
+                      {g.source && paneGroups[index - 1]?.source !== g.source && <div className="menu-source">{t(g.source === 'forsion' ? 'model.group.forsion' : 'model.group.direct')}</div>}
+                      {g.label && <div className="menu-section">{g.label}</div>}
+                      {g.options.map((m) => (
+                        <button
+                          key={m.id}
+                          className={`menu-item${m.id === paneValue ? ' active' : ''}`}
+                          title={m.description}
+                          onClick={() => {
+                            if (pane === 'model') { onSelect(m.id); setPillOpen(false) }
+                            else if (slot) selectDefault(slot, m.id)
+                          }}
+                        >
+                          <span className="grow">{m.name}</span>
+                          {m.source && <ModelMetadata model={{ source: m.source, tags: m.tags, multiplier: m.multiplier }} />}
+                          <span className="mi-check">{m.id === paneValue ? '✓' : ''}</span>
+                        </button>
+                      ))}
+                    </React.Fragment>
                   ))}
-                </React.Fragment>
-              ))}
-              {!paneGroups.length && <div className="menu-section">{t('pill.noModels')}</div>}
+                  {!paneGroups.length && <div className="menu-section">{t('pill.noModels')}</div>}
+                </>
+              )}
             </div>
           )}
         </div>

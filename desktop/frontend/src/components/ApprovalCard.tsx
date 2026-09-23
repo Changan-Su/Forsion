@@ -54,7 +54,7 @@ export const ApprovalCard: React.FC<{
         <ShieldQuestion size={15} style={{ color: 'var(--accent-ink)' }} />
         {t('approval.requestExec', { name: req.name })}
         {resolved && (
-          <span style={{ fontWeight: 400, fontSize: 12, color: 'var(--text-faint)' }}>
+          <span style={{ fontWeight: 400, fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-faint)' }}>
             {req.status === 'approved' ? t('approval.statusApproved') : req.status === 'rejected' ? t('approval.statusRejected') : t('approval.statusExpired')}
           </span>
         )}

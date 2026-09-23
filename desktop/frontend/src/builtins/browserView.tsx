@@ -198,13 +198,13 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
           placeholder={t('browser.placeholder')}
           spellCheck={false}
           style={{
-            flex: 1, minWidth: 0, fontSize: 12, padding: '4px 8px', borderRadius: 6,
+            flex: 1, minWidth: 0, fontSize: 'var(--ui-font-meta, 12px)', padding: '4px 8px', borderRadius: 'var(--radius-sm, 6px)',
             border: 'var(--border-width, 1px) solid var(--border)', background: 'var(--bg)', color: 'inherit',
           }}
         />
         <button className="btn ghost sm" onClick={() => window.tangu?.openExternal?.(url)} title={t('browser.openExternal')}><ExternalLink size={14} /></button>
       </div>
-      {err && <div style={{ padding: '6px 10px', fontSize: 12, color: 'var(--danger, #c0392b)' }}>{t('browser.failed', { msg: err })}</div>}
+      {err && <div style={{ padding: '6px 10px', fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--danger, #c0392b)' }}>{t('browser.failed', { msg: err })}</div>}
       <Webview
         ref={ref as unknown as React.Ref<HTMLElement>}
         src={initial.current}

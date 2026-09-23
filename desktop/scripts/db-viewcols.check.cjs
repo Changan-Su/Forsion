@@ -10,7 +10,7 @@
 //   V5 无 order 的视图里拖列 → 写全局 columns(现状不退),视图 order 不动;切到自定列仍是视图序
 //   V6 拖宽同款两向:带 widths 的视图写 view.widths、全局 column.width 仍空;无 widths 的视图写 column.width
 //   V7 视图菜单开关:开 = 拷全局序 + 全局宽进视图;关 = 两字段清掉
-//   V8 带 widths 的视图里双击复位 → 只删视图条目,该列回弹性
+//   V8 带 widths 的视图里双击复位 → 恢复自适应，手动宽度保留、全局宽不变
 //   V9 全程无未捕获页面错误
 // 负对照(手工,日志有记录):visCols 忽略 view.order → V1/V3/V4 红;colW 忽略 view.widths → V2/V6 红。
 // 用法:npm run check:viewcols(= node scripts/e2e-editor.cjs --check=db-viewcols)
@@ -53,7 +53,9 @@ async function fresh(browser, opts = {}) {
     const fx = window.__erp.fixture()
     const t = fx[stock]
     t.columns.find((c) => c.id === 's_price').width = 200
-    const v3 = { id: 'v3', name: '自定列', type: 'table', widths: { s_qty: 300 } }
+    // These cases exercise manual-width ownership; auto-size (the default) intentionally ignores saved widths.
+    for (const view of t.views) view.autoSize = false
+    const v3 = { id: 'v3', name: '自定列', type: 'table', autoSize: false, widths: { s_qty: 300 } }
     if (!o.noOrder) v3.order = o.headLate ? [order[1], order[2], order[0], ...order.slice(3)] : order
     t.views.push(v3)
     window.__erp.load(fx)
@@ -74,7 +76,7 @@ const store = (p) => p.evaluate((stock) => {
   return {
     cols: d.columns.map((c) => c.id),
     widths: Object.fromEntries(d.columns.filter((c) => c.width !== undefined).map((c) => [c.id, c.width])),
-    views: Object.fromEntries((d.views ?? []).map((v) => [v.id, { order: v.order, widths: v.widths }])),
+    views: Object.fromEntries((d.views ?? []).map((v) => [v.id, { order: v.order, widths: v.widths, autoSize: v.autoSize }])),
   }
 }, STOCK)
 const tab = async (p, name) => { await p.click(`.amx-db-viewtab:has-text("${name}")`); await p.waitForTimeout(250) }
@@ -251,7 +253,7 @@ async function main() {
     await p.close()
   }
 
-  // ── V8:带 widths 的视图里双击复位 → 只删视图条目,该列回弹性(不回落全局,全局本来也没给 s_qty)
+  // ── V8:双击拖杆恢复本视图自适应；保留手动宽度与独立列配置，不改其他视图/全局宽。
   {
     const p = await fresh(browser)
     await tab(p, '自定列')
@@ -259,8 +261,8 @@ async function main() {
     await p.waitForTimeout(250)
     const s = await store(p)
     const w = await thW(p, '数量')
-    record('V8 带 widths 视图双击拖杆 → 删视图条目、列回弹性;widths 对象仍在(开关不掉)',
-      s.views.v3.widths !== undefined && s.views.v3.widths.s_qty === undefined && !near(w, 300, 5) && s.widths.s_qty === undefined,
+    record('V8 带 widths 视图双击拖杆 → 恢复本视图自适应，手动宽度300保留；全局不变',
+      s.views.v3.autoSize === true && s.views.v3.widths?.s_qty === 300 && !near(w, 300, 5) && s.widths.s_qty === undefined && s.views.v1.autoSize === false,
       `v3.widths=${JSON.stringify(s.views.v3.widths)} th=${w}`)
     await p.close()
   }

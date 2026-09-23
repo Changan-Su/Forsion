@@ -143,6 +143,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     setSessionEngineModel: state.setSessionEngineModel,
     setSessionThinking: state.setSessionThinking,
     setDefaultModel: state.setDefaultModel,
+    setModelContextWindow: state.setModelContextWindow,
     setSessionMaxIterations: state.setSessionMaxIterations,
     setSessionPlanMode: state.setSessionPlanMode,
     voiceOnByAgent: state.voiceOnByAgent,
@@ -689,6 +690,8 @@ export function ChatView({ leaf, params }: ViewProps) {
             visionModelId: s.cfg.visionModelId || '',
           }}
           onDefaultModelChange={s.setDefaultModel}
+          // 写的是引擎 config.json 的 modelOverrides;露不露由引擎的 modelOverridesWritable 决定(ModelPill 里判)
+          onContextWindowChange={(id, n) => void s.setModelContextWindow(id, n)}
           maxIterations={mvCfg.maxIterations}
           onMaxIterationsChange={activeId ? (n) => s.setSessionMaxIterations(n, activeId) : (n) => s.setNewChatCfg((c) => ({ ...c, maxIterations: n }))}
           verifyCommand={mvCfg.verifyCommand}

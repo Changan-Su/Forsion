@@ -14,6 +14,12 @@ describe('normalizeUiSync', () => {
     expect(normalizeUiSync({ theme: { ...axes, payload: 'x'.repeat(4096) }, junk: 1 })).toEqual({ theme: axes, prefs: undefined })
   })
 
+  it('同步阴影选择，兼容不带 flat 字段的旧窗口', () => {
+    expect(normalizeUiSync({ theme: { ...axes, flat: true } })?.theme?.flat).toBe(true)
+    const { flat: _flat, ...legacy } = axes
+    expect(normalizeUiSync({ theme: legacy })?.theme).toEqual(legacy)
+  })
+
   it('非法颜色归成空串(收方读作「保留本窗现值」),不让任意串进 CSS 变量与 localStorage', () => {
     expect(normalizeUiSync({ theme: { ...axes, seed: 'red; content: url(x)', bgSeed: 'x'.repeat(9999) } })?.theme)
       .toEqual({ ...axes, seed: '', bgSeed: '' })
@@ -24,6 +30,7 @@ describe('normalizeUiSync', () => {
     expect(normalizeUiSync({ theme: { ...axes, skin: 'a'.repeat(65) } })).toBeNull()
     expect(normalizeUiSync({ theme: { ...axes, modePref: 'auto' } })).toBeNull()
     expect(normalizeUiSync({ theme: { ...axes, glass: 'on' } })).toBeNull()
+    expect(normalizeUiSync({ theme: { ...axes, flat: 'on' } })).toBeNull()
     expect(normalizeUiSync(null)).toBeNull()
     expect(normalizeUiSync([axes])).toBeNull()
   })

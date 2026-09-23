@@ -44,6 +44,18 @@ describe('manage_skill', () => {
     expect(await run({ action: 'delete', slug: 'skill-creator' })).toContain('内置');
   });
 
+  it('cannot edit or delete an untouched package-seeded mirror', async () => {
+    const source = path.join(home, 'package-source');
+    await fs.mkdir(path.join(source, 'seeded-example'), { recursive: true });
+    await fs.writeFile(path.join(source, 'seeded-example', 'SKILL.md'), '---\nname: Seeded example\n---\nKeep this\n');
+    const { seedSkillsInto } = await import('../../skills/localSkills.js');
+    await seedSkillsInto(source, path.join(home, 'skills'));
+    expect(await run({ action: 'update', slug: 'seeded-example', instructions: 'overwrite' })).toContain('只读');
+    expect(await run({ action: 'delete', slug: 'seeded-example' })).toContain('只读');
+    expect(await fs.readFile(skillMd('seeded-example'), 'utf8')).toContain('Keep this');
+    await fs.rm(path.join(home, 'skills', 'seeded-example'), { recursive: true });
+  });
+
   it('update preserves name when omitted, rewrites body', async () => {
     const r = await run({ action: 'update', slug: 'deploy-web', instructions: 'new steps' });
     expect(r).toContain('已更新');

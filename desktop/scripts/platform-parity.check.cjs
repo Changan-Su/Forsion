@@ -87,6 +87,8 @@ const SKIP = {
   draftInMainChat: '反馈浮窗「让 Tangu 帮我诊断」经 onMainAction 把草稿交给主窗聊天(09-21)。移动端反馈与聊天同一渲染进程,按钮原地调',
   forgetUserSpace: '设置浮窗卸载用户 Space 后经 onMainAction 让主窗撤注册 / ribbon(09-21)。移动端没有用户 Space 目录桥(spacesList)、也没有卫星窗',
   quoteInMainChat: '旁聊浮窗「引用到对话」经 onMainAction(chat-quote)把回答挂成主窗输入框的引用(09-22)。移动端旁聊是本页全屏页(<BtwHost page />),按钮原地调 quoteInMainChat,没有卫星窗通道',
+  listSkills: 'Root 里仅用于接收设置浮窗的 skills-changed 广播后重读主窗技能清单；移动端设置与 Agent 档案共用一个渲染进程，改动后在原窗口刷新',
+  openAgentProfile: 'Root 里仅用于接收设置浮窗的 open-agent 请求并切回主窗 Agent Space；移动端没有卫星窗，设置内直接导航到 Agent 档案',
   getLanguage: 'soft 主题的 panelGap 只喂给 Dockview Shell;单列壳不消费',
   MarketModal: '入口 rb-market 门控在 window.tangu?.marketList,移动 shim 无此方法 → 该 ribbon 项根本不注册,没有可点入口',
   FeedbackModal: '同上:入口(rb-feedback 图标 + open-feedback 命令;图标 2026-08-31 撤下、09-17 放回)门控在 window.tangu?.submitFeedback,移动 shim 无 → 不注册。(组件本身有可选桥检查并显示 unavailable,不会崩;此前这条理由写的「点了就崩」是错的)',

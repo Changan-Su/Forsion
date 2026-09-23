@@ -175,7 +175,8 @@ export function PersonCell({ value, onChange }: PropCellProps) {
    *  —— 走 personCountOf 的备忘,与下拉那次共用同一份计数,不会每敲一下方向键就重扫全库。 */
   const onKey = (e: ReactKeyboardEvent<HTMLInputElement>): void => {
     if (!pos) return
-    if (e.key === 'Escape') return close()
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); return close() }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter') return
     const names = topByCount(personCountOf(useDbStore.getState().entries), query).filter((n) => n !== s)
     if (e.key === 'Enter') {

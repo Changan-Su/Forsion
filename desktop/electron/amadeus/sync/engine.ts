@@ -508,6 +508,17 @@ export function createSyncEngine(deps: EngineDeps, binding: EngineBinding = {
       return
     }
     const entry = shadow.files[serverPath]
+    if (local && entry && hash === entry.hash && local.hash !== entry.hash) {
+      // 服务端这版的字节等于我们的基线(别的设备原样重写、或改过又改回;语义见 reconcile.decide 同名分支):
+      // 本地改动是唯一真变化,不是冲突。不落服务端内容(那会先把本地改动另存冲突副本再覆盖),只把基线
+      // seq 跟上,排队按新 seq 推本地。stat 记不可信:基线 hash 对应的那份字节已不在盘上(不变式:stat 只能
+      // 描述 hash 那份字节;记成本地新字节的 stat → 推送若丢了,重启后快路径信 stat,本地这版永不上云)。
+      // 对端连续原样重写时这里每次各推一回,推送次数 = 对端写入次数,与老逻辑(GET+副本+推副本)相比只少不多;
+      // 刻意不加次数预算 —— 预算触顶回落到冲突副本,等于把要避免的副本又造回来。
+      await setShadowEntry(serverPath, seq, hash, staleStat(entry.size))
+      enqueue({ key: serverPath, run: () => reconcileLocal(serverPath) })
+      return
+    }
     if (local && (!entry || local.hash !== entry.hash)) {
       // 本地有未同步改动。markdown 先试机会性三方合并(base 按 shadow 基线从服务端版本快照找);
       // 干净合并 → 本地落合并稿、shadow 记服务端态、排队推回(竞态由 PUT 409 兜);否则冲突副本。

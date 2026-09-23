@@ -378,7 +378,7 @@ const api = {
    * 并盖上 forsion_token —— token 不下发渲染层,所以渲染层自己拼 URL 打云端一定 401。
    * 返回 { status, json } 或 { status: 0, error }(status 0 = 没发出去:未登录/地址非法/网络断)。
    */
-  cloudFetch: (req: { path: string; method?: string; body?: unknown }): Promise<{ status: number; json?: any; error?: string }> =>
+  cloudFetch: (req: { path: string; method?: string; body?: unknown; timeoutMs?: number }): Promise<{ status: number; json?: any; error?: string }> =>
     ipcRenderer.invoke('cloud:fetch', req),
 
   // ── 屏幕共享 ────────────────────────────────────────────────────────────────
@@ -414,7 +414,7 @@ const api = {
   drainDeepLinks: (): Promise<string[]> => ipcRenderer.invoke('deeplink:drain'),
   /** 内置终端的 PTY:spawn 失败(原生模块未就绪)返回 {error},不抛。 */
   pty: {
-    spawn: (opts: { cols?: number; rows?: number; cwd?: string }): Promise<{ id?: string; shell?: string; error?: string }> =>
+    spawn: (opts: { cols?: number; rows?: number; cwd?: string; cmd?: string }): Promise<{ id?: string; shell?: string; error?: string }> =>
       ipcRenderer.invoke('pty:spawn', opts),
     write: (id: string, data: string): void => ipcRenderer.send('pty:write', id, data),
     resize: (id: string, cols: number, rows: number): void => ipcRenderer.send('pty:resize', id, cols, rows),

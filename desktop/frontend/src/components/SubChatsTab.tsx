@@ -23,11 +23,11 @@ export const SegList: React.FC<{ segs: SubChatSeg[] }> = ({ segs }) => (
   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
     {segs.map((seg, i) => {
       if (seg.t === 'tool') return (
-        <div key={i} className="panel-note" style={{ fontSize: 11.5, opacity: seg.error ? 0.95 : 0.7 }}>
+        <div key={i} className="panel-note" style={{ fontSize: 'var(--ui-font-caption, 11px)', opacity: seg.error ? 0.95 : 0.7 }}>
           🔧 <b>{seg.name}</b>{seg.preview ? ` — ${seg.preview.slice(0, 200)}` : ''}
         </div>
       )
-      if (seg.t === 'vote') return <div key={i} className="panel-note" style={{ fontSize: 11.5 }}>🗳 {seg.text}</div>
+      if (seg.t === 'vote') return <div key={i} className="panel-note" style={{ fontSize: 'var(--ui-font-caption, 11px)' }}>🗳 {seg.text}</div>
       return (
         <div key={i}>
           {seg.speaker && (
@@ -36,7 +36,7 @@ export const SegList: React.FC<{ segs: SubChatSeg[] }> = ({ segs }) => (
               <span>{seg.speaker}</span>
             </div>
           )}
-          <div className="msg-content" style={{ fontSize: 12.5 }}><Markdown content={seg.text || ''} /></div>
+          <div className="msg-content" style={{ fontSize: 'var(--ui-font-meta, 12px)' }}><Markdown content={seg.text || ''} /></div>
         </div>
       )
     })}
@@ -110,7 +110,7 @@ export const SubChatsTab: React.FC<{ cfg: TanguDesktopConfig; subChats?: SubChat
             : (
               <>
                 <SegList segs={sel.segs} />
-                {sel.segs.length === 0 && <div className="panel-note" style={{ fontSize: 11.5 }}>{t('panel.subchats.starting')}</div>}
+                {sel.segs.length === 0 && <div className="panel-note" style={{ fontSize: 'var(--ui-font-caption, 11px)' }}>{t('panel.subchats.starting')}</div>}
                 {sel.streaming && sel.segs.length > 0 && <div className="panel-note" style={{ fontSize: 11.5, marginTop: 6 }}><Loader2 size={12} className="spin" /> {t('panel.subchats.live')}</div>}
               </>
             )}

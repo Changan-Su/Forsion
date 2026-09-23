@@ -85,8 +85,8 @@
 /* ── embed block (cross-note, read-only): LCL accent badge + muted source, flat accent-left body ── */
 .am-app .embed-body { border: none; border-left: 2px solid var(--primary); border-radius: 0; background: transparent; padding: 0 0 0 12px; }
 .am-app .embed-head { margin-bottom: 6px; }
-.am-app .embed-badge { font-size: 11px; font-weight: 700; color: var(--primary); background: var(--primary-soft); padding: 2px 8px; border-radius: 999px; }
-.am-app .embed-src { font-size: 11px; color: var(--text-muted); }
+.am-app .embed-badge { font-size: var(--ui-font-caption, 11px); font-weight: 600; color: var(--primary); background: var(--primary-soft); padding: 2px 8px; border-radius: var(--radius-pill, 999px); }
+.am-app .embed-src { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
 .am-app .embed-src:hover { color: var(--primary); }
 
 /* no visible add-block buttons (用户: 移除「＋新块」; press Enter to add a block) */
@@ -110,7 +110,7 @@
 .tangu-soft .ts-nav-item:hover { background: var(--card-2); }
 .tangu-soft .ts-nav-item.on { background: var(--accent-soft); }
 .am-nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.am-app .am-empty { font-size: 12.5px; color: var(--text-muted); padding: 8px 10px; }
+.am-app .am-empty { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); padding: 8px 10px; }
 
 /* tags strip (.am-tags/.am-tag styled by the vendored recipes.css per base) */
 .am-app .am-tags { cursor: default; }
@@ -127,7 +127,7 @@
   font-family: inherit;
   padding: 6px 9px;
   border-radius: var(--radius-sm);
-  font-size: 12.5px;
+  font-size: var(--ui-font-meta, 12px);
   color: var(--text-sec);
   cursor: pointer;
   overflow: hidden;
@@ -136,16 +136,11 @@
 }
 .am-app .outline-item:hover { background: var(--surface-2); color: var(--text); }
 .am-app .outline-item[data-level='1'] { font-weight: 600; color: var(--text); }
-.am-app .panel-empty { font-size: 12.5px; color: var(--text-muted); padding: 10px; }
+.am-app .panel-empty { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); padding: 10px; }
 
 /* rail: word-count tab */
 .am-words { padding: 18px 8px; text-align: center; }
 .am-words-n { font-size: 30px; font-weight: 700; color: var(--text); }
-.am-words-l { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+.am-words-l { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); margin-top: 4px; }
 .am-app .ts-ws-body, .am-app .right-panel-body { flex: 1; overflow-y: auto; }
 .am-app .ts-ws-body { padding: 6px; }
-
-/* ── dark-mode flat (shadow toggle): specificity fix — [data-flat] (0,2,0) was out-specified
- * by the dark theme block [data-theme/skin][data-mode] (0,3,0); match it so flat zeros shadow. ── */
-.tangu-soft[data-flat='1'][data-mode='dark'] { --shadow: none; --shadow-sm: none; }
-.tangu-lovable[data-flat='1'][data-mode='dark'] { --card-shadow: none; --btn-shadow: none; --icon-shadow: none; }

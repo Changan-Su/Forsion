@@ -33,13 +33,15 @@ const { customSkinVars } = require(path.join(SRC, 'theme/lcl/lovableData.ts'))
 const softCss = SEED_THEMES.find((theme) => theme.id === 'soft')?.css
 if (!softCss) throw new Error('缺少第一方 soft 磁盘种子主题')
 
-const LANGS = ['lovable', 'genesis-glass', 'soft', 'zhi']
+const zhiCandidate = path.resolve(__dirname, '../../../Forsion-Instrumentality-Project/forsion-theme-zhi/theme.css')
+const hasZhiCandidate = fs.existsSync(zhiCandidate)
+const LANGS = ['lovable', 'genesis-glass', 'soft', ...(hasZhiCandidate ? ['zhi'] : [])]
 const COMBOS = [
   { id: 'cream', label: '经典' },
   { id: 'coral', label: '珊瑚' },
   { id: 'teal', label: '柔青' },
   { id: 'lavender', label: '薰衣草' },
-  { id: 'zhi', label: '知蓝' },
+  { id: 'zhi', label: '晴蓝' },
   { id: 'custom', label: '自定紫', accent: '#8b7fd6' },
   { id: 'custom', label: '敌意色', accent: '#ffffff', bg: '#000000' },
 ]
@@ -50,7 +52,7 @@ const css = [
   read('theme/themes/lovable/theme.css'),
   read('theme/themes/genesis-glass/theme.css'),
   softCss,
-  read('theme/themes/zhi/theme.css'),
+  ...(hasZhiCandidate ? [fs.readFileSync(zhiCandidate, 'utf8')] : []),
   read('views/chat2/chat2.css'),
   fs.readFileSync(path.join(__dirname, '../../lcl/engine/engine.css'), 'utf8'),
 ].join('\n')

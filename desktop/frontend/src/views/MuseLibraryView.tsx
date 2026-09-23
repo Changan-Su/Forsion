@@ -130,7 +130,7 @@ export const MuseLibraryView: React.FC<ViewProps> = () => {
   return (
     <div style={{ display: 'flex', height: '100%', minHeight: 0, minWidth: 0 }}>
       <div style={{ width: 240, flex: 'none', borderRight: 'var(--border-width, 1px) solid var(--border)', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 12px', fontWeight: 600, fontSize: 13 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 12px', fontWeight: 600, fontSize: 'var(--ui-font-body, 13px)' }}>
           <Sparkles size={14} /> {t('view.museLibrary')}
           <span style={{ flex: 1 }} />
           <button className="icon-btn" title={t('muse.lib.refresh')} onClick={() => void load()}><RefreshCw size={13} /></button>
@@ -145,13 +145,13 @@ export const MuseLibraryView: React.FC<ViewProps> = () => {
               style={{ alignItems: 'center', background: f.path === sel ? 'var(--overlay-light, rgba(127,127,127,.1))' : undefined, borderRadius: 'var(--radius-sm)' }}
             >
               {f.path.startsWith('Journal/') ? <FileText size={13} /> : <FolderOpen size={13} />}
-              <span className="file-name" style={{ flex: 1, fontSize: 12.5 }}>{f.path}</span>
+              <span className="file-name" style={{ flex: 1, fontSize: 'var(--ui-font-meta, 12px)' }}>{f.path}</span>
             </div>
           ))}
         </div>
       </div>
       <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderBottom: 'var(--border-width, 1px) solid var(--border)', fontSize: 12.5, color: 'var(--text-muted)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 14px', borderBottom: 'var(--border-width, 1px) solid var(--border)', fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>
           <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={sel ? `${root}/${sel}` : ''}>{sel}</span>
           {sel && <button className="btn ghost sm" onClick={openInEditor}><ExternalLink size={12} /> {t('muse.lib.openEditor')}</button>}
         </div>

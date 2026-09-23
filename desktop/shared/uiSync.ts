@@ -17,7 +17,8 @@ export interface ThemeAxes {
   seed: string
   bgSeed: string
   glass: boolean
-  flat: boolean
+  /** Optional for older windows that do not yet expose the shadow preference. */
+  flat?: boolean
 }
 
 export interface UiSyncPayload {
@@ -42,11 +43,13 @@ function theme(raw: unknown): ThemeAxes | undefined {
   const v = raw as Record<string, unknown>
   if (!AXIS.test(String(v.lang)) || !AXIS.test(String(v.skin)) || !AXIS.test(String(v.bg))) return undefined
   if (!PREFS.has(v.modePref as string)) return undefined
-  if (typeof v.glass !== 'boolean' || typeof v.flat !== 'boolean') return undefined
+  if (typeof v.glass !== 'boolean') return undefined
+  if (v.flat !== undefined && typeof v.flat !== 'boolean') return undefined
   return {
     lang: v.lang as string, skin: v.skin as string, bg: v.bg as string,
     modePref: v.modePref as ThemeAxes['modePref'],
-    seed: color(v.seed), bgSeed: color(v.bgSeed), glass: v.glass, flat: v.flat,
+    seed: color(v.seed), bgSeed: color(v.bgSeed), glass: v.glass,
+    ...(typeof v.flat === 'boolean' ? { flat: v.flat } : {}),
   }
 }
 

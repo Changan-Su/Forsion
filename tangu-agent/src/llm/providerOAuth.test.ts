@@ -34,7 +34,7 @@ describe('fetchProviderModels', () => {
     const r = await fetchProviderModels({ protocol: 'openai-responses', baseUrl: 'https://chatgpt.com/backend-api/codex' } as any, 'tok', 'acct');
     expect(r).toEqual(['gpt-6-astra', 'gpt-5.6-sol']);
     // 回归:Codex 后端缺 client_version query 直接 400 → 实拉永远失败,用户被冻结在硬编快照上看不到新模型。
-    expect(new URL(calledUrl).searchParams.get('client_version')).toBe('0.153.4');
+    expect(new URL(calledUrl).searchParams.get('client_version')).toBe('0.155.1'); // <0.155 的目录里没有 gpt-6-sol / gpt-6-luna
   });
 
   it('returns null on http error (→ caller falls back to curated hints)', async () => {
@@ -74,7 +74,7 @@ describe('Codex 模型目录缓存升级', () => {
     account_id: 'test-account', modelIds: ['gpt-5.6-sol'], modelIdsAt: Date.now(), ...extra,
   });
 
-  it.each([undefined, '0.150.0'])('刚缓存的旧目录(version=%s)也立即刷新并记录版本', async (version) => {
+  it.each([undefined, '0.150.0', '0.153.4'])('刚缓存的旧目录(version=%s)也立即刷新并记录版本', async (version) => {
     vi.mocked(loadProviderCreds).mockReturnValue({ codex: credential({ modelIdsClientVersion: version }) });
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ models: [{ slug: 'gpt-6-astra', visibility: 'list' }] }) });
     vi.stubGlobal('fetch', fetchMock);

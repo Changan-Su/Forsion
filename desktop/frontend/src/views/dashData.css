@@ -4,7 +4,7 @@
 /* ── 数字卡 ─────────────────────────────────────────────────────────────── */
 .dash-stat { gap: 4px; }
 .dash-stat-value {
-  font-size: clamp(26px, 7cqw, 56px);
+  font-size: var(--ui-font-display, 20px);
   font-weight: 620;
   line-height: 1.02;
   color: var(--text);
@@ -12,14 +12,14 @@
   display: flex; align-items: baseline; gap: 4px;
 }
 .dash-stat-unit { font-size: 0.42em; font-weight: 500; color: var(--text-muted); }
-.dash-stat-label { font-size: 12px; color: var(--text-muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.dash-stat-sub { font-size: 11px; color: var(--text-faint, var(--text-muted)); }
+.dash-stat-label { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-stat-sub { font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
 
 /* ── 图表卡 ───────────────────────────────────────────────────────────────
    卡壳(标题 + 弹性体)在这;三种图形(.dash-bars/.dash-line/.dash-donut)随组件
    下沉渲染层 amadeus/blocks/database/chartBody.css(多维表 chart 视图共用),勿在此复写。 */
 .dash-chart { height: 100%; display: flex; flex-direction: column; min-height: 0; padding: 10px 12px; gap: 8px; }
-.dash-chart-title { flex: 0 0 auto; font-size: 12px; font-weight: 550; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dash-chart-title { flex: 0 0 auto; font-size: var(--ui-font-meta, 12px); font-weight: 550; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dash-chart-body { flex: 1 1 auto; min-height: 0; display: flex; }
 
 /* ── 页面级筛选栏 ───────────────────────────────────────────────────────
@@ -31,14 +31,14 @@
   padding: 6px 12px;
   border-bottom: var(--border-width, 1px) solid var(--border);
   background: var(--bg-card, var(--bg));
-  font-size: 12px;
+  font-size: var(--ui-font-meta, 12px);
 }
 .dash-filterbar-label { color: var(--text-faint, var(--text-muted)); margin-right: 2px; }
 .dash-filter-chip {
   display: inline-flex; align-items: center; gap: 5px;
   padding: 2px 6px 2px 8px;
   border: var(--border-width, 1px) solid color-mix(in srgb, var(--primary) 32%, var(--border));
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   background: color-mix(in srgb, var(--primary) 8%, transparent);
   color: var(--text);
 }
@@ -50,7 +50,7 @@
 .dash-filter-chip button:hover { color: var(--danger, #e5484d); }
 .dash-filter-add {
   display: inline-flex; align-items: center; gap: 4px;
-  padding: 2px 8px; border-radius: 999px; cursor: pointer;
+  padding: 2px 8px; border-radius: var(--radius-pill, 999px); cursor: pointer;
   border: var(--border-width, 1px) dashed var(--border);
   background: transparent; color: var(--text-muted);
 }
@@ -61,7 +61,7 @@
 .dash-filter-editor select,
 .dash-filter-editor input {
   width: 100%;
-  font: inherit; font-size: 12px;
+  font: inherit; font-size: var(--ui-font-meta, 12px);
   padding: 4px 6px;
   border: var(--border-width, 1px) solid var(--border);
   border-radius: var(--radius-sm, 6px);
@@ -72,6 +72,6 @@
 .dash-filter-editor input:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 .dash-filter-commit {
   border: none; border-radius: var(--radius-sm, 6px); cursor: pointer;
-  padding: 5px 8px; font-size: 12px; font-weight: 550;
+  padding: 5px 8px; font-size: var(--ui-font-meta, 12px); font-weight: 550;
   background: var(--primary); color: var(--bg);
 }

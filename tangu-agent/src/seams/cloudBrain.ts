@@ -371,6 +371,8 @@ export interface InboxBrain {
     attachments?: string | null; expires_at?: string | null; claimed?: boolean;
     /** 领取条件 JSON 原文({minVersion?, tiers?},服务端 claimRequirements.ts);只拿来展示,裁决在服务端。 */
     claim_requirements?: string | null;
+    /** 线程判别 JSON 原文(服务端 inboxNotify.ts:{kind:'feedback',ticketId,event});普通广播为空。原样落进 inbox_messages.thread。 */
+    thread?: string | null;
   }>>;
   /** 领取广播附件(对端 POST /api/brain/inbox/broadcasts/:id/claim;发放全在服务端)。
    *  client=领取端自报的 `desktop/2.10.1`(服务端按它判最低版本)。

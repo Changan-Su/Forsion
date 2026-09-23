@@ -16,9 +16,9 @@ import { UI_MODE, UI_ZOOM_EVENT, useWorkspace } from '@lcl/engine' // 工作区�
 import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
 import {
-  deleteUserCloudSkill, fetchProviderModels,
-  listModels, listSkills, listTools, setModelContextWindow,
-  testProviderConnection, uploadSkillToCloud, syncNow as backendSyncNow, getSyncStatus as backendGetSyncStatus,
+  fetchProviderModels,
+  listModels, listTools, setModelContextWindow,
+  testProviderConnection, syncNow as backendSyncNow, getSyncStatus as backendGetSyncStatus,
   listPlugins, listAgents, type PluginInfo, type SyncStatusResult,
   getLocalWebSearch, saveLocalWebSearch, testLocalWebSearch, type LocalWebSearchRedacted,
 } from '../services/backendService'
@@ -26,7 +26,7 @@ import { ChannelsTab } from './ChannelsTab'
 import { buildSessionLogPayload, sessionLogFilename } from '../services/sessionLog'
 import type {
   AmadeusSyncStatus, AuthStatusInfo, BackendStatusInfo, DirectProviderConfig, DiscoveryResult, McpServerConfigEntry, MirrorTestResult, ModelsResponse,
-  NormalAgentDef, SessionRecord, SkillInfo, StoredDesktopConfig, TanguDesktopConfig, ToolsResponse, UpdaterStatusInfo,
+  NormalAgentDef, SessionRecord, StoredDesktopConfig, TanguDesktopConfig, ToolsResponse, UpdaterStatusInfo,
 } from '../types'
 import { SHOW_SYSTEM_PROMPT_KEY } from '../types'
 // 本组件已有同名的 useState setter,故取个别名。persist* = 写盘 + 应用 + 跨窗广播。
@@ -46,7 +46,9 @@ import { openChangelogTab } from '../views/ChangelogView'
 import { ModelSelect } from './ModelSelect'
 import { AsrModelChoice } from './AsrModelChoice'
 import { AuxModelChoice } from './AuxModelChoice'
-import { AgentsTab } from './AgentsTab'
+import { AgentSettingsOverview } from './AgentSettingsOverview'
+import { GlobalSkillsLibrary } from './GlobalSkillsLibrary'
+import { openAgentProfile } from '../views/agentProfileNav'
 import { SpecialAgentsTab } from './SpecialAgentsTab'
 import { TtsVoiceStudio } from './TtsVoiceStudio'
 import { previewTts } from '../services/ttsService'
@@ -207,17 +209,6 @@ const ECO_LABEL: Record<string, string> = {
   hermes: 'Hermes',
 }
 
-// 技能渠道(agent 文件夹)分组顺序;可扩展:新增渠道(如 opencode 后端扫描接上后)只加一行,
-// 空渠道自动不渲染。未知 source 落入「其他」兜底组。
-const SKILL_CHANNELS: Array<{ key: NonNullable<SkillInfo['source']> | 'opencode'; labelKey: string }> = [
-  { key: 'local', labelKey: 'settings.skills.channel.local' },
-  { key: 'claude', labelKey: 'settings.skills.channel.claude' },
-  { key: 'codex', labelKey: 'settings.skills.channel.codex' },
-  { key: 'opencode', labelKey: 'settings.skills.channel.opencode' },
-  { key: 'user', labelKey: 'settings.skills.channel.user' },
-  { key: 'cloud', labelKey: 'settings.skills.channel.cloud' },
-]
-
 const BACKEND_STATE_LABEL: Record<string, string> = {
   stopped: 'settings.backend.state.stopped',
   starting: 'settings.backend.state.starting',
@@ -254,6 +245,8 @@ export const SettingsModal: React.FC<{
   activeSession?: SessionRecord | null
   /** 打开时直接定位到的 tab(如 /skills→'skills';旧深链 'wechat' 归一到 'channels');缺省落 connection。 */
   initialTab?: Tab
+  /** Open a physical global skill copy when navigating here from an Agent profile. */
+  initialSkillKey?: string
 }> = (p) => {
   const { t, locale } = useI18n()
   const showWaitDetails = useChatWaitDetailsEnabled()
@@ -544,49 +537,6 @@ export const SettingsModal: React.FC<{
     }).catch((e) => setMcpMsg(`${t('settings.toast.saveFailed')}${e?.message || e}`))
   }
 
-  // 技能库(设置→技能 tab):列表 + 本地→云端上传 + 删除本人云端技能
-  const [allSkills, setAllSkills] = useState<SkillInfo[] | null>(null)
-  const [allSkillsLoading, setAllSkillsLoading] = useState(false)
-  const [skillBusy, setSkillBusy] = useState<string | null>(null)
-  const [skillMsg, setSkillMsg] = useState('')
-
-  const loadAllSkills = (): void => {
-    setAllSkillsLoading(true)
-    void listSkills(p.cfg)
-      .then(setAllSkills)
-      .catch((e) => setSkillMsg(`${t('settings.skills.loadFailed')}${e?.message || e}`))
-      .finally(() => setAllSkillsLoading(false))
-  }
-
-  const doUploadSkill = async (id: string): Promise<void> => {
-    setSkillBusy(id)
-    setSkillMsg('')
-    try {
-      const r = await uploadSkillToCloud(p.cfg, id)
-      setSkillMsg(t('settings.skills.uploadOk', { name: r.name, id: r.id }))
-      loadAllSkills()
-    } catch (e: any) {
-      setSkillMsg(`${t('settings.skills.uploadFailed')}${e?.message || e}`)
-    } finally {
-      setSkillBusy(null)
-    }
-  }
-
-  const doDeleteUserSkill = async (id: string): Promise<void> => {
-    if (!window.confirm(t('settings.skills.deleteConfirm', { id }))) return
-    setSkillBusy(id)
-    setSkillMsg('')
-    try {
-      await deleteUserCloudSkill(p.cfg, id)
-      setSkillMsg(t('settings.skills.deleteOk'))
-      loadAllSkills()
-    } catch (e: any) {
-      setSkillMsg(`${t('settings.skills.deleteFailed')}${e?.message || e}`)
-    } finally {
-      setSkillBusy(null)
-    }
-  }
-
   const refreshAuth = (): void => {
     if (!window.tangu?.authStatus) return
     const request = ++authRequest.current
@@ -711,6 +661,10 @@ export const SettingsModal: React.FC<{
       const r2 = mcpNames.length ? await window.tangu!.discoveryImportMcp!(mcpNames) : { imported: [] }
       setDiscSelSkills(new Set())
       setDiscSelMcp(new Set())
+      if (r1.imported.length) {
+        window.dispatchEvent(new Event('forsion:skills-changed'))
+        window.tangu?.requestMainAction?.('skills-changed')
+      }
       if (r2.imported.length) refreshMcp() // MCP 页同步看到导入项(未启用)
       setDiscMsg(t('settings.discovery.importOk', { skills: r1.imported.length, mcp: r2.imported.length }))
     } catch (e: any) {
@@ -866,7 +820,6 @@ export const SettingsModal: React.FC<{
   useEffect(() => {
     if (p.open && tab === 'model' && !models && !modelsLoading) void loadModels()
     if (p.open && tab === 'mcp') refreshMcp()
-    if (p.open && tab === 'skills' && !allSkills && !allSkillsLoading) loadAllSkills()
     // appVersion 一打开就取(不只 about tab):高级→导出日志也要带版本号,否则导出里恒为 null。
     if (p.open && !appVersion) void window.tangu?.appVersion?.().then((v) => setAppVersion(v || '')).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -905,7 +858,7 @@ export const SettingsModal: React.FC<{
     statusbar: 'settings.page.statusbarDescription',
     model: 'settings.page.modelDescription',
     agents: 'settings.page.agentsDescription',
-    skills: 'settings.page.skillsDescription',
+    skills: 'globalSkills.intro',
     mcp: 'settings.page.mcpDescription',
     hooks: 'settings.page.hooksDescription',
     channels: 'settings.page.channelsDescription',
@@ -948,7 +901,7 @@ export const SettingsModal: React.FC<{
     // 主题**刻意不设中分类**(用户拍板):设计语言/配色/明暗/界面大小/阴影/玻璃/光标 各自一张小卡就够,
     // 硬分成三栏反而把「换个主题顺手调下明暗」拆成两次点击。别再加回来。
     agents: [
-      ['ag-roster', t('settings.tab.agents')],
+      ['ag-roster', t('agentSettings.rosterTitle')],
       ['ag-special', t('settings.sub.specialAgents')],
       ['ag-clis', t('settings.tab.agentClis')],
     ],
@@ -965,7 +918,7 @@ export const SettingsModal: React.FC<{
       ...(window.tangu?.clearAppData ? [['a-data', t('settings.sub.data')] as [string, string]] : []),
     ],
     skills: [
-      ['k-library', t('settings.sub.skillLibrary')],
+      ['k-library', t('globalSkills.title')],
       ...(isDesktop && !!window.tangu?.discoveryScan ? [['k-discovery', t('settings.discovery.label')] as [string, string]] : []),
     ],
     sync: [
@@ -1230,7 +1183,7 @@ export const SettingsModal: React.FC<{
         </div>
         <div className="settings-main-head">
           <div className="settings-main-copy">
-            <div className="settings-main-title">{tab === 'model' ? activeSubLabel || activeTabLabel : activeTabLabel}</div>
+            <div className="settings-main-title">{tab === 'model' || (tab === 'skills' && activeSub === 'k-library') ? activeSubLabel || activeTabLabel : activeTabLabel}</div>
             {tab === 'model' ? <p>{t(modelSubDescriptions[activeSub] || 'settings.page.modelDescription')}</p> : activeTabDescription && <p>{activeTabDescription}</p>}
           </div>
         </div>
@@ -1398,7 +1351,7 @@ export const SettingsModal: React.FC<{
                             {mirrorTesting ? <Loader2 size={12} className="spin" /> : <Plug size={12} />} {t('settings.mirror.test')}
                           </button>
                           {mirrorTest?.targets.map((tg) => (
-                            <span key={tg.name} style={{ fontSize: 12.5, color: tg.ok ? 'var(--text-muted)' : 'var(--danger, #e5484d)' }}>
+                            <span key={tg.name} style={{ fontSize: 'var(--ui-font-meta, 12px)', color: tg.ok ? 'var(--text-muted)' : 'var(--danger, #e5484d)' }}>
                               {tg.ok ? '✓' : '✗'} {tg.name} · {tg.ok ? `${tg.latencyMs}ms` : (tg.error || t('settings.mirror.unreachable'))}
                             </span>
                           ))}
@@ -1436,7 +1389,7 @@ export const SettingsModal: React.FC<{
                           </button>
                           {logs && (
                             <pre style={{
-                              marginTop: 8, fontSize: 11, fontFamily: 'var(--font-mono)', maxHeight: 220,
+                              marginTop: 8, fontSize: 'var(--ui-font-caption, 11px)', fontFamily: 'var(--font-mono)', maxHeight: 220,
                               overflowY: 'auto', background: 'var(--bg-card)', padding: 8,
                               border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-sm)',
                               whiteSpace: 'pre-wrap', wordBreak: 'break-all',
@@ -1480,7 +1433,7 @@ export const SettingsModal: React.FC<{
                           <button className="btn primary sm" onClick={saveConnection}>
                             {t('settings.btn.saveConnect')}
                           </button>
-                          <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>{testResult}</span>
+                          <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{testResult}</span>
                         </div>
                       </section>
                     )}
@@ -1848,7 +1801,7 @@ export const SettingsModal: React.FC<{
                             <div key={cp.providerId} className="file-row" style={{ cursor: 'default' }}>
                               <span className="file-name">
                                 <b>{cp.providerId}</b>
-                                <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 12 }}>{cp.baseUrl}</span>
+                                <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>{cp.baseUrl}</span>
                               </span>
                               <span className="file-size">
                                 {cp.modelIds?.length ? t('settings.customProvider.modelCount', { count: cp.modelIds.length }) : t('settings.customProvider.anyModel')}
@@ -2059,7 +2012,7 @@ export const SettingsModal: React.FC<{
                             {t('settings.btn.save')}
                           </button>
                           <button className="btn ghost sm" onClick={() => { setEditProvider(null); setFetchedModels(null); setModelSearch(''); setFetchModelsMsg('') }}>{t('settings.btn.cancel')}</button>
-                          <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>{providerTestMsg}</span>
+                          <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{providerTestMsg}</span>
                         </div>
 
                         {/* 「拉取模型」结果:可搜索多选,勾选写回 modelsCsv(让用户无需手记模型名)。 */}
@@ -2223,7 +2176,7 @@ export const SettingsModal: React.FC<{
                             >
                               {wsBusy ? <Loader2 size={12} className="spin" /> : null} {t('settings.websearch.test')}
                             </button>
-                            {wsMsg && <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>{wsMsg}</span>}
+                            {wsMsg && <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{wsMsg}</span>}
                           </div>
                         </div>
                       </>
@@ -2297,7 +2250,7 @@ export const SettingsModal: React.FC<{
                             >
                               {ttsTesting ? <Loader2 size={12} className="spin" /> : <Play size={12} />} {t('settings.tts.testBtn')}
                             </button>
-                            <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>{ttsTestMsg}</span>
+                            <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{ttsTestMsg}</span>
                           </div>
                         </div>
                         <div className="field">
@@ -2346,7 +2299,7 @@ export const SettingsModal: React.FC<{
                               <div key={name} className="file-row" style={{ cursor: 'default' }}>
                                 <span className="file-name">
                                   <b>{name}</b>
-                                  <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 12 }}>
+                                  <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>
                                     {sc.command ? `${sc.command} ${(sc.args || []).join(' ')}` : sc.url}
                                   </span>
                                 </span>
@@ -2490,18 +2443,20 @@ export const SettingsModal: React.FC<{
                             {t('settings.btn.save')}
                           </button>
                           <button className="btn ghost sm" onClick={() => setEditMcp(null)}>{t('settings.btn.cancel')}</button>
-                          <span style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>{mcpMsg}</span>
+                          <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{mcpMsg}</span>
                         </div>
                       </>
                     )}
                   </>
                 )}
 
-                {/* 三段各成中分类:名册 / 后台智能体 / Agent CLI。原 <AgentsSettings> 只是把前两段
-                    叠起来加条分割线,分栏后没意义,已就地化掉(它「编辑时隐藏后台区」的专注模式同理:
-                    两者不在同一页了)。 */}
-                {tab === 'agents' && activeSub === 'ag-roster' && <AgentsTab cfg={p.cfg} />}
-                {tab === 'agents' && activeSub === 'ag-special' && <SpecialAgentsTab cfg={p.cfg} />}
+                {/* 普通 Agent 的主档案在 Agent Space；设置保留跨 Agent 的用户画像与入口。 */}
+                {tab === 'agents' && activeSub === 'ag-roster' && <AgentSettingsOverview cfg={p.cfg} onOpenAgent={(slug) => {
+                  if (window.tangu?.requestMainAction) window.tangu.requestMainAction('open-agent', slug)
+                  else openAgentProfile(slug)
+                  p.onClose()
+                }} />}
+                {tab === 'agents' && activeSub === 'ag-special' && <SpecialAgentsTab cfg={p.cfg} localHost={!!(isDesktop && stored?.mode === 'managed')} />}
                 {tab === 'hooks' && <HooksTab cfg={p.cfg} />}
                 {/* 统一插件页:Forsion 插件(含捆绑包,带 Amadeus 时)/ Tangu 引擎插件 两个中分类。
                     设备页(unitPage)不传级联三件套:cfg 缺省=cascadeAfterToggle 不级联 —— 否则捆绑包
@@ -2772,8 +2727,8 @@ export const SettingsModal: React.FC<{
                         <div className="settings-control-row">
                           <div className="settings-control-copy"><Sparkles size={14} /><span><strong>{t('settings.theme.flatLabel')}</strong><small>{t('settings.theme.flatDescription')}</small></span></div>
                           <div className="seg">
-                            <button className={!p.flatOn ? 'active' : ''} onClick={() => p.onFlatChange(false)}>{t('settings.theme.flatOff')}</button>
-                            <button className={p.flatOn ? 'active' : ''} onClick={() => p.onFlatChange(true)}>{t('settings.theme.flatOn')}</button>
+                            <button aria-pressed={!p.flatOn} className={!p.flatOn ? 'active' : ''} onClick={() => p.onFlatChange(false)}>{t('settings.theme.flatOff')}</button>
+                            <button aria-pressed={p.flatOn} className={p.flatOn ? 'active' : ''} onClick={() => p.onFlatChange(true)}>{t('settings.theme.flatOn')}</button>
                           </div>
                         </div>
                         <div className="settings-control-row">
@@ -2848,84 +2803,13 @@ export const SettingsModal: React.FC<{
                 {tab === 'shortcuts' && <ShortcutsTab />}
 
                 {tab === 'skills' && activeSub === 'k-library' && (
-                  <>
-                    <div className="field">
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        {t('settings.skills.libraryLabel')}
-                        <button className="icon-btn" style={{ width: 22, height: 22 }} onClick={loadAllSkills} title={t('common.refresh')}>
-                          <RefreshCw size={12} className={allSkillsLoading ? 'spin' : ''} />
-                        </button>
-                        {window.tangu?.openSkillsDir && (
-                          <button className="icon-btn" style={{ width: 22, height: 22 }} title={t('settings.skills.openFolder')} onClick={() => void window.tangu?.openSkillsDir?.()}>
-                            <FolderOpen size={12} />
-                          </button>
-                        )}
-                      </label>
-                      <div className="hint" style={{ marginBottom: 8 }}>
-                        {t('settings.skills.libraryHintPrefix')}~/.tangu/skills/&lt;id&gt;/SKILL.md{t('settings.skills.libraryHintSuffix')}
-                      </div>
-                      {allSkills === null && <div className="hint">{allSkillsLoading ? t('settings.skills.loading') : t('settings.skills.clickRefresh')}</div>}
-                      {allSkills?.length === 0 && <div className="hint">{t('settings.skills.empty')}</div>}
-                      {!!allSkills?.length && (() => {
-                        // 按来源渠道(agent 文件夹)分组,空渠道不渲染;未知 source → 「其他」。
-                        const known = new Set<string>(SKILL_CHANNELS.map((c) => c.key))
-                        const groups = new Map<string, SkillInfo[]>()
-                        for (const s of allSkills) {
-                          const k = known.has(s.source || 'cloud') ? (s.source || 'cloud') : 'other'
-                          const arr = groups.get(k) || []
-                          arr.push(s)
-                          groups.set(k, arr)
-                        }
-                        const sections = [...SKILL_CHANNELS, { key: 'other' as const, labelKey: 'settings.skills.channel.other' }]
-                          .filter((c) => (groups.get(c.key)?.length || 0) > 0)
-                        return (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                            {sections.map((c) => (
-                              <div key={c.key}>
-                                <div className="panel-section-title" style={{ padding: '8px 8px 4px' }}>
-                                  {t(c.labelKey)} · {groups.get(c.key)!.length}
-                                </div>
-                                {groups.get(c.key)!.map((s) => (
-                                  <div key={s.id} className="file-row" style={{ cursor: 'default' }}>
-                                    <span className="file-name" style={{ flex: 1 }}>
-                                      {s.origin === 'agent' && <span className="harness-kind recipe">{t('settings.agents.selfAuthored')}</span>}
-                                      <b>{s.name}</b>
-                                      {s.description && (
-                                        <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 12 }}>
-                                          {s.description.length > 70 ? `${s.description.slice(0, 70)}…` : s.description}
-                                        </span>
-                                      )}
-                                    </span>
-                                    {(s.source === 'local' || s.source === 'claude' || s.source === 'codex') && (
-                                      <button
-                                        className="btn ghost sm"
-                                        disabled={skillBusy === s.id}
-                                        title={t('settings.skills.uploadTitle')}
-                                        onClick={() => void doUploadSkill(s.id)}
-                                      >
-                                        {skillBusy === s.id ? <Loader2 size={11} className="spin" /> : t('settings.skills.uploadBtn')}
-                                      </button>
-                                    )}
-                                    {s.source === 'user' && (
-                                      <button
-                                        className="icon-btn"
-                                        title={t('settings.skills.deleteTitle')}
-                                        disabled={skillBusy === s.id}
-                                        onClick={() => void doDeleteUserSkill(s.id)}
-                                      >
-                                        <Trash2 size={13} />
-                                      </button>
-                                    )}
-                                  </div>
-                                ))}
-                              </div>
-                            ))}
-                          </div>
-                        )
-                      })()}
-                      {skillMsg && <div className="hint" style={{ marginTop: 6 }}>{skillMsg}</div>}
-                    </div>
-                  </>
+                  <GlobalSkillsLibrary
+                    cfg={p.cfg}
+                    localHost={!!(isDesktop && stored?.mode === 'managed')}
+                    initialSkillKey={p.initialSkillKey}
+                    onImportCli={isDesktop && !!window.tangu?.discoveryScan ? () => setSub('k-discovery') : undefined}
+                    onBrowseMarket={() => useApp.getState().openMarket()}
+                  />
                 )}
 
                 {tab === 'skills' && activeSub === 'k-discovery' && (
@@ -2969,7 +2853,7 @@ export const SettingsModal: React.FC<{
                                   />
                                   <span className="file-name">
                                     <b>{s.name}</b>
-                                    <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 12 }}>
+                                    <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>
                                       {s.description.length > 80 ? `${s.description.slice(0, 80)}…` : s.description}
                                     </span>
                                   </span>
@@ -2995,7 +2879,7 @@ export const SettingsModal: React.FC<{
                                     />
                                     <span className="file-name">
                                       <b>{m.name}</b>
-                                      <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 12 }}>
+                                      <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>
                                         {m.config.command ? `${m.config.command} ${(m.config.args || []).join(' ')}` : m.config.url}
                                       </span>
                                     </span>
@@ -3048,12 +2932,12 @@ export const SettingsModal: React.FC<{
                             <div style={{ marginTop: 12 }}>
                               <div className="hint" style={{ marginBottom: 8 }}>{t('settings.mcpServer.connectHint')}</div>
                               <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 10 }}>
-                                <span style={{ fontSize: 12, opacity: 0.7, flexShrink: 0 }}>{t('settings.mcpServer.endpoint')}</span>
+                                <span style={{ fontSize: 'var(--ui-font-meta, 12px)', opacity: 0.7, flexShrink: 0 }}>{t('settings.mcpServer.endpoint')}</span>
                                 <input
                                   readOnly
                                   value={url}
                                   onFocus={(e) => e.currentTarget.select()}
-                                  style={{ flex: 1, fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 12 }}
+                                  style={{ flex: 1, fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 'var(--ui-font-meta, 12px)' }}
                                 />
                                 <button className="btn ghost sm" onClick={() => copy('url', url)} title={t('settings.mcpServer.copy')}>
                                   {mcpCopied === 'url' ? <Check size={13} /> : <Copy size={13} />}

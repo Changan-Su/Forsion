@@ -43,7 +43,7 @@ function buildRegistry(): Record<string, ThemeEntry> {
   return result;
 }
 
-/** 语言注册表:bundle 项(import.meta.glob,现只剩 lovable 基底)+ 运行时合并进来的磁盘主题。**可变**。 */
+/** 语言注册表:bundle 项(import.meta.glob,Genesis 与 Glass)+ 运行时合并进来的磁盘主题。**可变**。 */
 export const themeRegistry: Record<string, ThemeEntry> = buildRegistry();
 
 /** 合并磁盘主题(来自 window.tangu.listThemes,manifest 为不可信用户文件);bundle 项(有 cssUrl)不可被覆盖。 */
@@ -165,7 +165,7 @@ export function resolveInitialLang(): string {
 export function resolveInitialSkin(): string {
   try {
     const raw = localStorage.getItem('forsion_theme_skin');
-    // zhi 在拆轴前会把 cream 的整套颜色强制成知蓝。只迁默认位一次，避免升级后老用户突然变成炭黑奶油色；
+    // 旧 zhi 语言在拆轴前会把 cream 的整套颜色强制成蓝色。只迁默认位一次；语言退场后仍保留旧配色观感。
     // 其余用户明确选过的 coral/teal/lavender/custom 保留，让它们从此按真正的配色轴完整生效。
     if (localStorage.getItem('forsion_theme_lang') === 'zhi' && raw === 'cream'
       && localStorage.getItem('forsion_theme_zhi_skin_v1') !== '1') {

@@ -186,14 +186,16 @@ export function MobileRoot() {
               themeSkin={theme.skin}
               themeMode={theme.mode}
               themeModePref={theme.modePref}
-              glassOn={theme.glass}
               flatOn={theme.flat}
+              glassOn={theme.glass}
+
               themeSeed={theme.seed}
               onClose={() => a.closeSettings()}
               onConfigChange={a.patchConfig}
               onThemeChange={(lang, skin, mode) => theme.setTheme(lang, skin, theme.bg, mode)}
+              onFlatChange={theme.setFlat}
               onGlassChange={(on) => theme.setGlass(on)}
-              onFlatChange={(on) => theme.setFlat(on)}
+
               onSeedChange={(hex) => theme.setSeedValue(hex)}
               onReloadThemes={() => theme.reloadThemes()}
               onReconnect={(patch) => void a.connect({ ...a.cfg, ...(patch || {}) })}

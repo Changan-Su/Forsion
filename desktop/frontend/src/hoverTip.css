@@ -6,14 +6,14 @@
   z-index: 95;
   max-width: 320px;
   padding: 5px 9px;
-  border-radius: 7px;
+  border-radius: var(--radius-sm, 6px);
   background: var(--bg-card, var(--bg));
   color: var(--text);
   outline: 0.5px solid var(--border);
   outline-offset: -0.5px;
   box-shadow: var(--card-shadow);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: var(--ui-font-meta, 12px);
   line-height: 1.55;
   /* 浮层绝不吃鼠标 —— 否则贴着行边缘弹出时会自己抢走 hover 造成闪烁。 */
   pointer-events: none;

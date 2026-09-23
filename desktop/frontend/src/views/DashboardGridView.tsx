@@ -277,7 +277,6 @@ function GridInner({ leaf }: ViewProps) {
   const dashPath = typeof leaf.params.dashPath === 'string' ? leaf.params.dashPath : ''
   const locked = leaf.params.locked !== false
   const mode = useTheme((s) => s.mode)
-  const flat = useTheme((s) => s.flat)
   const manifest = usePageStore((s) => s.manifest)
   const blocks = usePageStore((s) => s.blocks)
   const activePage = usePageStore((s) => s.activePage)
@@ -860,7 +859,6 @@ function GridInner({ leaf }: ViewProps) {
     <div
       className={`am-app tangu-lovable amx-pane amx-editor dash3${dragOver ? ' amx-dragover' : ''}`}
       data-mode={mode}
-      data-flat={flat ? '1' : '0'}
       onPointerDownCapture={(e) => {
         setActivePageScope(leaf.id)
         // 点到交互中那张卡之外的任何地方 → 退出交互态(画布「点空白清选」的网格版对应物)

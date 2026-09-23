@@ -16,7 +16,7 @@
  *   npm run live:harness -- --only historian,dream,muse --muse-mode auto   # Muse 三档:ask(缺省)|agent|auto
  *   npm run live:harness -- --only refine --historian-mode assist          # 自进化闭环走辅助模式(提名在辅助模式轮里出)
  *   npm run live:harness -- --only chat,tool --exec-mode sandbox           # 负对照:sandbox 模式下工具走云工作区,未登录应报错而非假空目录
- *   npm run live:harness -- --only conflict                  # 改 skills/amadeus-note-format(同步冲突副本合并)后跑:技能装载 + 双向并集 + 画布对不动
+ *   npm run live:harness -- --only conflict                  # 改 skills/amadeus-note-format(同步冲突副本合并)后跑:四问都装载技能 + 双向并集 + 画布对不动 + 子集副本直接删 + 近似非子集不丢内容 + 一次都不许 ask_user
  *   npm run live:harness -- --only autocompact --window 32000  # 自动压缩持久化(09-15):把该模型窗口钉到 32k 灌满 → run 内自动压缩落检查点 → 下个 run 从摘要接着答;改 compaction / hydrate 后跑
  *   npm run live:harness -- --only autocompact --window 100000 --compaction '{"thresholdPercent":25,"keepRecentTokens":500}'  # 百分比旋钮(09-20):大窗口下按 X% 压;负对照 = 同窗口 + --filler <正例灌的段数>、不带 --compaction(须红)
  *   npm run live:harness -- --only cache                     # 前缀缓存命中(A/B/B′/C/D + head hash 探针);token 节省看 scripts/cache-hit-report.mjs
@@ -56,7 +56,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -437,7 +437,16 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
             const id = p.approvalId || p.id || p.approval_id;
             if (id) await api(`/agent/runs/${runId}/approvals/${id}`, { method: 'POST', body: JSON.stringify({ action: 'approve' }) }).catch((err) => { ev.approveError = String(err.message); });
           }
+          // ask_user 在台架里没人应答 → 挂到 240s 超时(09-22 conflict 画布负对照实翻:模型问「留哪份」)。
+          // 只为让 run 收尾而回包,答复本身**不授权任何事**(不说留哪份、不说别动、也不说「你定」);
+          // 次数记进 ev.inquiries —— 场景该不该允许模型提问由各场景自己断言(conflict:一次都不许)。
+          else if (e.type === 'inquiry_request') {
+            ev.inquiries = (ev.inquiries || 0) + 1;
+            const id = p.inquiryId || p.id;
+            if (id) await api(`/agent/runs/${runId}/inquiries/${id}`, { method: 'POST', body: JSON.stringify({ answer: '(台架无人值守,没有人能回答这个问题。)' }) }).catch((err) => { ev.inquiryError = String(err.message); });
+          }
           else if (e.type === 'usage') ev.usages.push(p);
+          else if (e.type === 'session_title') ev.sessionTitle = { title: String(p.title || ''), atMs: Date.now() - t0 };
           // 团队运行模式(群聊分叉):发言序 + 收场原因是 group 场景的唯一观测点;done 的 content 恒空,靠 ev.done 判链路走通。
           else if (e.type === 'group_speaker' && p.phase === 'start') ev.group.speakers.push(String(p.slug || '?'));
           else if (e.type === 'group_speaker' && p.phase === 'end') ev.group.remarks.push({ ...p, seq: e.seq, duringActivation: ev.group.starts.some((s) => s.slug === p.slug && !ev.group.ends.some((x) => x.runId === s.runId)) });
@@ -842,6 +851,22 @@ try {
     };
   });
 
+  await scenario('title', 'title 首帧标题(只看用户消息)', async () => {
+    // 判据:session_title 事件在 done **之前**到(流在 done 处断开,之后的收不到)= 标题只凭用户消息、没等回复;
+    // 随后 done 判官照常跑(summary_updated 出现)且不再改标题(title_updated 恰 1 条)。
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'independent' } }) });
+    const sess = `live-title-${Date.now()}`;
+    const ev = await run(sess, '请写一段大约 400 字的介绍,讲讲 SQLite 的 WAL 模式是怎么工作的、适合什么场景。');
+    if (ev.error) return { ok: false, detail: ev.error, output: ev.content };
+    const rows = () => api('/agent/special/historian/activity?limit=50').then((a) => (a.activity || []).filter((r) => r.session_ref === sess));
+    const act = (await until(async () => { const r = await rows(); return r.some((x) => x.action === 'summary_updated') ? r : null; }, 120_000, 3000)) || await rows();
+    const titled = act.filter((x) => x.action === 'title_updated');
+    const stored = asList(await api('/agent/sessions?limit=100'), 'sessions').find((x) => x.id === sess)?.title || '';
+    const early = ev.sessionTitle;
+    const ok = !!early && early.title === stored && titled.length === 1 && act.some((x) => x.action === 'summary_updated');
+    return { ok, detail: `${early ? `首帧标题「${early.title}」@${early.atMs}ms,done@${ev.wallMs}ms` : 'done 前没收到 session_title'};落库「${stored}」;活动 ${act.map((r) => r.action).join('/') || '无'}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
   const sessB = `live-b-${Date.now()}`;
   const rawPath = join(home, 'agents', 'xyra', '.memory-raw.md');
   await scenario('historian', 'historian 记忆候选采集', async () => {
@@ -969,12 +994,37 @@ try {
     const skillLoaded = ev.toolCalls.includes('use_skill');
     const ev2 = await run(`live-conflict2-${Date.now()}`, `笔记库在 ${dir},Board.excalidraw.md 有一份同步冲突副本,请处理。`);
     const boardIntact = existsSync(board) && existsSync(boardCopy) && readFileSync(board, 'utf8') === before[0] && readFileSync(boardCopy, 'utf8') === before[1];
-    const ok = !ev.error && skillLoaded && both && baseKept && leftovers.length === 0 && !ev2.error && boardIntact;
+    // 第三问(技能 v1.2.0 子集快速路径):原位带 amadeus_canvas,副本是它的**子集**(更早的快照,末行还是打到一半的前缀)。
+    // 09-22 实报:真模型按「画布硬拒」停手让用户手删。prompt 只说「合并冲突」、不说「删副本」,测的就是规则本身:
+    // 不写文件(原位逐字节原样)+ 副本删掉;画布对(上一问)仍须原样。
+    const cv = join(dir, 'Canvas.md'); const cvCopy = join(dir, 'Canvas (conflict 2026-09-21 2236).md');
+    const cvHead = '---\namadeus_schema: amadeus.page/4\namadeus_canvas: {"v":1,"mode":"doc","main":{"x":0,"y":0,"w":720},"cards":[]}\n---\n';
+    const cvBody = `## 记录\n\n第一段 ${MARKER}-A\n\n第二段 ${MARKER}-B\n\n\n\n`;
+    writeFileSync(cv, `${cvHead}${cvBody}HUMAN.md 用于 AGENT 约束人类该怎么协作。\n\n热力图等内容\n`);
+    writeFileSync(cvCopy, `${cvHead}${cvBody}HUMAN.md 用于 AGENT \n`);
+    const cvBefore = readFileSync(cv, 'utf8');
+    const ev3 = await run(`live-conflict3-${Date.now()}`, `笔记库在 ${dir},Canvas.md 有一份同步冲突副本,合并冲突。`);
+    const cvIntact = existsSync(cv) && readFileSync(cv, 'utf8') === cvBefore;
+    const cvCopyGone = !existsSync(cvCopy);
+    const boardStillIntact = readFileSync(board, 'utf8') === before[0] && readFileSync(boardCopy, 'utf8') === before[1];
+    // 第四问(Codex 09-22 评审要的负例):**近似但不是子集** —— 副本中间有一行只是原位对应行的前缀(不享受前缀例外),
+    // 末行还带副本独有内容。素文件,所以该走并集合并;判据 = 副本独有标记不许丢(进了原位、或副本还在)。
+    const nt = join(dir, 'Notes.md'); const ntCopy = join(dir, 'Notes (conflict 2026-09-21 2240).md');
+    writeFileSync(nt, `# 记录\n\n第一段 ${MARKER}-N1\n\n第二段 ${MARKER}-N2 已完成\n\n第三段 ${MARKER}-N3\n`);
+    writeFileSync(ntCopy, `# 记录\n\n第一段 ${MARKER}-N1\n\n第二段 ${MARKER}-N2\n\n第三段 ${MARKER}-N3 副本独有 ${MARKER}-U\n`);
+    const ev4 = await run(`live-conflict4-${Date.now()}`, `笔记库在 ${dir},Notes.md 有一份同步冲突副本,合并冲突。`);
+    const ntNow = existsSync(nt) ? readFileSync(nt, 'utf8') : '';
+    const uniqueKept = ntNow.includes(`${MARKER}-U`) || (existsSync(ntCopy) && readFileSync(ntCopy, 'utf8').includes(`${MARKER}-U`));
+    const runs = [ev, ev2, ev3, ev4];
+    // 三个新 session 各自都得装载技能(只查第一问的话,后面几问盲做也能绿);conflict 里模型一次都不该提问(技能写明了别问)。
+    const allSkill = runs.every((r) => r.toolCalls.includes('use_skill'));
+    const noInquiry = runs.every((r) => !(r.inquiries || 0) && !r.inquiryError);
+    const ok = runs.every((r) => !r.error) && allSkill && noInquiry && both && baseKept && leftovers.length === 0 && boardIntact && cvIntact && cvCopyGone && boardStillIntact && uniqueKept;
     return {
       ok,
-      detail: ev.error || ev2.error || `技能${skillLoaded ? '已装载' : '未装载'};两侧标记${both ? '都在' : '缺'};基线${baseKept ? '在' : '丢'};副本${leftovers.length ? '残留 ' + leftovers.join(',') : '已删'};画布对${boardIntact ? '原样' : '被动了'}`,
-      output: `【合并】${ev.content}\n\n【Plan.md】\n${merged}\n\n【画布对】${ev2.content}`,
-      ttftMs: ttft(ev), tokens: (tokensOf(ev) || 0) + (tokensOf(ev2) || 0) || null, toolCalls: [...ev.toolCalls, ...ev2.toolCalls],
+      detail: ev.error || ev2.error || ev3.error || ev4.error || `技能${allSkill ? '四问都装载' : '有问没装载 ' + runs.map((r) => (r.toolCalls.includes('use_skill') ? '1' : '0')).join('')};提问${noInquiry ? '0 次' : runs.map((r) => r.inquiries || 0).join('/')};两侧标记${both ? '都在' : '缺'};基线${baseKept ? '在' : '丢'};副本${leftovers.length ? '残留 ' + leftovers.join(',') : '已删'};画布对${boardIntact && boardStillIntact ? '原样' : '被动了'};子集副本${cvCopyGone ? '已删' : '残留'}、画布原位${cvIntact ? '原样' : '被动了'};近似非子集的独有内容${uniqueKept ? '保住了' : '丢了'}`,
+      output: `【合并】${ev.content}\n\n【Plan.md】\n${merged}\n\n【画布对】${ev2.content}\n\n【子集副本】${ev3.content}\n\n【近似非子集】${ev4.content}\n\n【Notes.md】\n${ntNow}`,
+      ttftMs: ttft(ev), tokens: runs.reduce((a, r) => a + (tokensOf(r) || 0), 0) || null, toolCalls: runs.flatMap((r) => r.toolCalls),
     };
   });
 

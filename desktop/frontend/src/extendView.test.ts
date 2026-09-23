@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createElement, act, StrictMode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { createExtendViewController, type ExtendViewController, type ExtendViewOptions } from '@lcl/engine/extendView'
+import { createExtendViewController, presentInlineExtension, type ExtendViewController, type ExtendViewOptions } from '@lcl/engine/extendView'
 import { ExtendViewHost } from '@lcl/engine/ExtendViewHost'
 import { allViews } from '@lcl/engine/viewRegistry'
 
@@ -155,6 +155,49 @@ describe('extend view DOM lifecycle', () => {
     await boot(true)
     await act(async () => { api.open(spec('edit')) })
     expect(document.querySelector('[role="dialog"]')).not.toBeNull()
+  })
+
+  it('side Views: the temporary View covers only its owner behind Back, then hands focus back to the opener', async () => {
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+    await act(async () => root!.render(createElement(ExtendViewHost, { present: presentInlineExtension, children: (controller) => {
+      api = controller
+      return createElement('button', { id: 'trigger' }, 'Open')
+    } })))
+    const trigger = container.querySelector<HTMLButtonElement>('#trigger')!
+    trigger.focus()
+    await act(async () => { api.open(spec('detail', { mount: (el) => { el.innerHTML = '<p>Body</p>' } })) })
+    const cover = container.querySelector('.wb-extend-owner > .wb-extend-inline')!
+    expect(cover.querySelector('.wb-extend-body p')!.textContent).toBe('Body')
+    expect(trigger.hasAttribute('inert')).toBe(true)
+    const back = cover.querySelector<HTMLButtonElement>('.wb-extend-head--back button')!
+    await act(async () => { back.click() })
+    await act(async () => {})
+    expect(container.querySelector('.wb-extend-inline')).toBeNull()
+    expect(trigger.hasAttribute('inert')).toBe(false)
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('side Views: focus still returns when the opener is blurred the moment it becomes inert', async () => {
+    container = document.createElement('div')
+    document.body.append(container)
+    root = createRoot(container)
+    // Chromium's inert focus fixup is asynchronous today; a synchronous one must not lose the opener.
+    const blurring: typeof presentInlineExtension = (options, dismiss, host) => {
+      (document.activeElement as HTMLElement | null)?.blur()
+      return presentInlineExtension(options, dismiss, host)
+    }
+    await act(async () => root!.render(createElement(ExtendViewHost, { present: blurring, children: (controller) => {
+      api = controller
+      return createElement('button', { id: 'trigger' }, 'Open')
+    } })))
+    const trigger = container.querySelector<HTMLButtonElement>('#trigger')!
+    trigger.focus()
+    await act(async () => { api.open(spec('detail', { mount: (el) => { el.innerHTML = '<p>Body</p>' } })) })
+    await act(async () => { container.querySelector<HTMLButtonElement>('.wb-extend-head--back button')!.click() })
+    await act(async () => {})
+    expect(document.activeElement).toBe(trigger)
   })
 
   it('changing the owner identity closes the extension without remounting the main content', async () => {

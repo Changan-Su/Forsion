@@ -17,6 +17,7 @@ import { FloatingViewSurface } from './components/FloatingViewSurface'
 import { PluginOnboardingHost } from './components/PluginOnboardingModal'
 import { BtwPanel } from './views/chat2/BtwPanel'
 import { btwSeedOf } from './views/chat2/btwStore'
+import { listSkills } from './services/backendService'
 
 export function FloatingRoot() {
   const { t } = useI18n()
@@ -37,6 +38,16 @@ export function FloatingRoot() {
   useEffect(() => { void useApp.getState().boot() }, [])
   useEffect(() => { if (window.amadeus) ensureAmadeusReady() }, [])
   useEffect(() => installFileDropGuard(), [])
+  useEffect(() => window.tangu?.onMainAction?.((action) => {
+    if (action === 'agents-changed') {
+      void useApp.getState().refreshAgents()
+      window.dispatchEvent(new Event('forsion:agents-changed'))
+    }
+    if (action === 'skills-changed') {
+      void listSkills(useApp.getState().cfg).then((skillsList) => useApp.setState({ skillsList })).catch(() => {})
+      window.dispatchEvent(new Event('forsion:skills-changed'))
+    }
+  }), [])
   useEffect(() => {
     const id = floatingId()
     const off = window.tangu?.onFloatingTarget?.(setTarget)
@@ -61,12 +72,13 @@ export function FloatingRoot() {
     <main className="floating-native-content">
       {target.builtin === 'settings' && <SettingsModal key={JSON.stringify(target.params ?? {})}
         open initialTab={typeof target.params?.tab === 'string' ? target.params.tab as never : undefined}
+        initialSkillKey={typeof target.params?.skillKey === 'string' ? target.params.skillKey : undefined}
         cfg={app.cfg} activeSession={panelSession}
         themeLang={theme.lang} themeSkin={theme.skin} themeMode={theme.mode} themeModePref={theme.modePref}
-        glassOn={theme.glass} flatOn={theme.flat} themeSeed={theme.seed}
+        flatOn={theme.flat} glassOn={theme.glass} themeSeed={theme.seed}
         onClose={onSettingsClose} onConfigChange={app.patchConfig}
         onThemeChange={(lang, skin, mode) => theme.setTheme(lang, skin, theme.bg, mode)}
-        onGlassChange={theme.setGlass} onFlatChange={theme.setFlat} onSeedChange={theme.setSeedValue}
+        onFlatChange={theme.setFlat} onGlassChange={theme.setGlass} onSeedChange={theme.setSeedValue}
         onReloadThemes={theme.reloadThemes}
         onReconnect={(patch) => void app.connect({ ...app.cfg, ...(patch || {}) })}
         onRelaunchOnboarding={() => {

@@ -12,6 +12,16 @@ const db = (): DbFile => ({
 })
 
 describe('stampUpdatedRows', () => {
+  it('editing record page content stamps that record without touching other rows', () => {
+    const prev = db()
+    const next = { ...prev, rows: [{ ...prev.rows[0], body: '**Details**' }, prev.rows[1]] }
+    const out = stampUpdatedRows(prev, next, NOW)
+    expect(out.rows[0].cells.u).toBe('2026-09-02T09:05')
+    expect(out.rows[0].body).toBe('**Details**')
+    expect(out.rows[1]).toBe(prev.rows[1])
+    expect(stampUpdatedRows(out, { ...out, rows: out.rows.map((r) => ({ ...r })) }, NOW).rows[0].cells.u).toBe('2026-09-02T09:05')
+  })
+
   it('格式 YYYY-MM-DDTHH:mm', () => {
     expect(localMinuteStamp(NOW)).toBe('2026-09-02T09:05')
   })

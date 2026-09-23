@@ -8,8 +8,8 @@
 .art-head { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; }
 .art-head > svg { color: var(--accent-ink); flex-shrink: 0; }
 .art-titles { flex: 1; min-width: 0; }
-.art-title { font-size: 17px; font-weight: 600; line-height: 1.35; }
-.art-sub { margin-top: 3px; color: var(--text-muted); font-size: 11.5px; line-height: 1.6; }
+.art-title { font-size: var(--ui-font-title, 16px); font-weight: 600; line-height: 1.35; }
+.art-sub { margin-top: 3px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.6; }
 
 /* 卡片比启动器那排「图标 + 一行字」宽:要装下名字、时间、徽标与动作行。 */
 .newtab-grid.art-grid { grid-template-columns: repeat(auto-fill, minmax(196px, 1fr)); }
@@ -19,23 +19,23 @@
 
 .art-card-main { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0; background: none; border: var(--border-width) solid transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .art-card-main:disabled { cursor: default; }
-.art-card-name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.art-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; color: var(--text-faint); font-size: 11px; }
-.art-badge { padding: 1px 6px; border-radius: 999px; background: var(--overlay-light); color: var(--text-faint); font-size: 10px; }
+.art-card-name { flex: 1; min-width: 0; font-size: var(--ui-font-meta, 12px); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.art-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
+.art-badge { padding: 1px 6px; border-radius: 999px; background: var(--overlay-light); color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
 
 /* 动作行常显(压暗),hover / 键盘聚焦时拉满 —— 藏到 hover 里触屏就永远摸不到。 */
 .art-actions { display: flex; align-items: center; gap: 2px; margin-top: auto; opacity: .62; transition: opacity var(--duration-fast, .15s); }
 .newtab-card.art-card:hover .art-actions, .newtab-card.art-card:focus-within .art-actions { opacity: 1; }
 .art-actions .icon-btn { width: 26px; height: 26px; }
 
-.art-state { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 40px 16px; text-align: center; color: var(--text-muted); font-size: 12.5px; line-height: 1.7; }
-.art-state-title { color: var(--text); font-size: 14px; font-weight: 600; }
+.art-state { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 40px 16px; text-align: center; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.7; }
+.art-state-title { color: var(--text); font-size: var(--ui-font-heading, 14px); font-weight: 600; }
 .art-state p { margin: 0; max-width: 420px; }
 
 /* ── 产物视图(一个产物 = 一个 <webview>)────────────────────────────────── */
 .art-product { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .art-bar { display: flex; align-items: center; gap: 6px; padding: 4px 6px; border-bottom: var(--border-width, 1px) solid var(--border); background: var(--bg-card, var(--bg)); }
-.art-bar-name { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.art-bar-name { flex: 1; min-width: 0; font-size: var(--ui-font-meta, 12px); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 空锚点:guest 经 StudioGuestSurface 传送到壳上,只按这块矩形跟随几何(见该组件注释)。 */
 .art-anchor { display: flex; flex: 1; min-height: 0; min-width: 0; }
 .art-guest { display: flex; flex: 1; min-width: 0; min-height: 0; height: 100%; overflow: hidden; background: #fff; }

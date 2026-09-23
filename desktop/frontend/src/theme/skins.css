@@ -285,7 +285,7 @@
   --glow: radial-gradient(110% 75% at 82% -12%, rgba(150, 120, 205, 0.12), transparent 56%);
 }
 
-/* ── 知蓝 Zhi Blue(AFFiNE 纯白纸面×蓝笔;从旧 zhi 语言包拆出的独立配色)─────────────── */
+/* ── 晴蓝 Clear blue(保留旧 zhi 配色 id 与用户偏好，设计语言已退场)─────────────── */
 :root[data-skin='zhi'] {
   --accent: #1e96eb;
   --accent-ink: #12649d;

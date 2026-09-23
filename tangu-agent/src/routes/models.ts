@@ -17,7 +17,7 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
-import { modelContextWindowInfo, type CtxWindowSource } from '../services/contextBudget.js';
+import { CONTEXT_WINDOW_TOKENS, effectiveContextWindowInfo, type CtxWindowSource } from '../services/contextBudget.js';
 import { MIN_OVERRIDE_TOKENS, setModelContextWindow } from '../services/modelOverrides.js';
 import { modelSupportsVision, resolveModelCapability, supportedThinkingLevels, type ThinkingLevel } from '../llm/modelCapabilities.js';
 
@@ -45,8 +45,9 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
     const store = deps().profileStore;
     const profile = appIdQ ? store.resolve(appIdQ) : (store.resolve(null) ?? deps().profile);
     if (!profile) return res.status(400).json({ detail: `unknown app_id: ${appIdQ}` });
-    // contextWindow 供客户端「上下文占比」进度条用(优先级链见 modelContextWindowInfo);contextWindowSource 标注它是
-    // 人填的(override/model)还是猜的(family/default),设置页据此区分「已覆盖」与「自动识别」。
+    // contextWindow 供客户端「上下文占比」进度条用 = run 实际用的窗口(effectiveContextWindowInfo:自动识别的封顶 272k,
+    // 人填的覆盖不封顶);contextWindowSource 标注它是人填的(override/model)还是猜的(family/default),设置页据此区分
+    // 「已覆盖」与「自动识别」。maxContextWindow = 自动识别出的模型窗口(封顶前),> 缺省上限的模型菜单才露「上下文上限」。
     // modelType 区分大语言模型 / 生图模型 / 语音识别(后端已分类;桌面模型设置据此分区,generate_image 据此选模型,语音输入据此筛 ASR)。
     // supportsVision:能不能直接「看」图。黑名单制(见 modelSupportsVision)——后端/provider 显式
     // 标了就听标注,没标就默认能看。客户端据此提示「本模型没有多模态,已启用图像识别辅助模型」。
@@ -60,7 +61,7 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
     // provider/model 兜底,标灰方向两头都能错(评审实证:grok off 不该亮/qwen off 不该灰)。
     const thinkLv = (provider: string | undefined, modelId: string, baseUrl?: string): ThinkingLevel[] =>
       supportedThinkingLevels(resolveModelCapability({ provider, modelId, baseUrl }));
-    const models: Array<{ id: string; name: string; provider: string; source: 'forsion' | 'direct'; modelType: 'llm' | 'image_gen' | 'asr'; contextWindow: number; contextWindowSource: CtxWindowSource; supportsVision: boolean; thinkingLevels?: ThinkingLevel[]; groupId?: string | null; groupName?: string | null; groupSortOrder?: number; sortOrder?: number; tags?: Array<{ text: string; color: string }>; multiplier?: number | null }> = [];
+    const models: Array<{ id: string; name: string; provider: string; source: 'forsion' | 'direct'; modelType: 'llm' | 'image_gen' | 'asr'; contextWindow: number; contextWindowSource: CtxWindowSource; maxContextWindow?: number; supportsVision: boolean; thinkingLevels?: ThinkingLevel[]; groupId?: string | null; groupName?: string | null; groupSortOrder?: number; sortOrder?: number; tags?: Array<{ text: string; color: string }>; multiplier?: number | null }> = [];
 
     let forsion: { status: 'ok' | 'empty' | 'error'; detail: string | null } = { status: 'ok', detail: null };
     let cloud: any[] = [];
@@ -89,9 +90,9 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
       if (!m?.id) continue;
       // 已知类型(生图/语音识别)透传,未知归 llm。旧版只透传 image_gen,把 asr 静默拍成 llm → 桌面把语音识别模型误当聊天模型(见 AsrModelChoice/ChatView 的 modelType 分流)。
       const mType = m.modelType === 'image_gen' || m.modelType === 'asr' ? m.modelType : 'llm';
-      const win = modelContextWindowInfo(m.id, m);
+      const win = effectiveContextWindowInfo(m.id, m);
       // 思考档能力表按上游模型名匹配(目录导入的 id 是 pr-<hash>);与 agentLoop 里 clamp 用的 `apiModelId || modelId` 同口径。
-      models.push({ id: m.id, name: m.name || m.id, provider: m.provider || 'forsion', source: 'forsion', modelType: mType, groupId: m.groupId, groupName: m.groupName, groupSortOrder: m.groupSortOrder, sortOrder: m.sortOrder, tags: m.tags, multiplier: m.multiplier, contextWindow: win.tokens, contextWindowSource: win.source, supportsVision: modelSupportsVision(m.id, visionOverrideOf(m.supportsVision)), ...(mType === 'llm' ? { thinkingLevels: thinkLv(m.provider, m.apiModelId || m.id, m.defaultBaseUrl ?? m.default_base_url ?? undefined) } : {}) });
+      models.push({ id: m.id, name: m.name || m.id, provider: m.provider || 'forsion', source: 'forsion', modelType: mType, groupId: m.groupId, groupName: m.groupName, groupSortOrder: m.groupSortOrder, sortOrder: m.sortOrder, tags: m.tags, multiplier: m.multiplier, contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max, supportsVision: modelSupportsVision(m.id, visionOverrideOf(m.supportsVision)), ...(mType === 'llm' ? { thinkingLevels: thinkLv(m.provider, m.apiModelId || m.id, m.defaultBaseUrl ?? m.default_base_url ?? undefined) } : {}) });
     }
     if (forsion.status === 'ok' && cloud.length === 0) {
       // 列表为空:探针确认大脑是否可达(httpBrain 把网络/404 都吞成 [],此处补真相)。
@@ -115,8 +116,8 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
       for (const mid of p.modelIds ?? []) {
         // 窗口按完整 id 解析:run 用的 modelId 就是 `<providerId>/<model>`,用户覆盖表与回学表都按它键;族表规则认前缀。
         const id = `${p.providerId}/${mid}`;
-        const win = modelContextWindowInfo(id);
-        models.push({ id, name: mid, provider: p.providerId, source: 'direct', modelType: 'llm', contextWindow: win.tokens, contextWindowSource: win.source, supportsVision: modelSupportsVision(mid, noVision.has(mid) ? false : undefined), thinkingLevels: thinkLv(p.providerId, mid, p.baseUrl) });
+        const win = effectiveContextWindowInfo(id);
+        models.push({ id, name: mid, provider: p.providerId, source: 'direct', modelType: 'llm', contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max, supportsVision: modelSupportsVision(mid, noVision.has(mid) ? false : undefined), thinkingLevels: thinkLv(p.providerId, mid, p.baseUrl) });
       }
       for (const mid of p.imageModelIds ?? []) {
         models.push({ id: `${p.providerId}/${mid}`, name: mid, provider: p.providerId, source: 'direct', modelType: 'image_gen', contextWindow: 0, contextWindowSource: 'default', supportsVision: false });
@@ -135,6 +136,10 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
       backgroundModelId: projectBackgroundModelId,
       imageModelId: projectImageModelId,
       visionModelId: projectVisionModelId,
+      contextWindowCap: CONTEXT_WINDOW_TOKENS, // 缺省上限:模型菜单「默认」档显示 min(maxContextWindow, 它)
+      // PUT /agent/models/overrides 在本进程能不能写(与它同一道 hostExec 门):桌面连外部 / 云端 worker 时为 false,
+      // 模型菜单据此不露「上下文上限」—— 靠前端猜宿主(backendStatus)会在 external 模式下露出一个必然 404 的开关。
+      modelOverridesWritable: deps().profile.capabilities.hostExec,
       forsion,
     });
   } catch (e: any) {

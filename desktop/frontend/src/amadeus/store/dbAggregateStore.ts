@@ -30,6 +30,8 @@ export interface AggRow {
   rowId: string
   name: string
   cells: Record<string, CellValue>
+  /** 经典表记录正文必须随日历的复制/删除快照保留；笔记视图正文仍由笔记文件管理。 */
+  body?: string
 }
 export interface AggDb {
   path: string
@@ -102,7 +104,7 @@ export function useAllDatabases(): AggDb[] {
       } else {
         const nameId = db.columns[0]?.id ?? ''
         // 名称空就是空:不回落 r.id(随机编码曾漏进日历/待办显示),消费方自己决定兜底文案或隐藏。
-        const rows: AggRow[] = db.rows.map((r) => ({ rowId: r.id, name: cellText(r.cells[nameId]), cells: r.cells }))
+        const rows: AggRow[] = db.rows.map((r) => ({ rowId: r.id, name: cellText(r.cells[nameId]), cells: r.cells, ...(r.body !== undefined ? { body: r.body } : {}) }))
         out.push({ path: p, name: db.name, isNoteView: false, columns: db.columns, rows })
       }
     }
@@ -228,7 +230,7 @@ export function restoreAggRow(db: AggDb, row: AggRow, removed: DroppedRef[] = []
       }
       return cells ? { ...r, cells } : r
     }) : d.rows
-    return { ...d, rows: [...rows, { id: row.rowId, cells: { ...row.cells } }] }
+    return { ...d, rows: [...rows, { id: row.rowId, cells: { ...row.cells }, ...(row.body !== undefined ? { body: row.body } : {}) }] }
   })
 }
 
@@ -249,7 +251,7 @@ export async function duplicateAggRow(db: AggDb, rowId: string): Promise<string 
   }
   const newId = dbId()
   // 合并序与新建**相反**:盖章压掉从源行复制来的自动编号/创建时间,否则粘贴一次就重号、创建时间还是老的。
-  useDbStore.getState().mutate(db.path, (d) => ({ ...d, rows: [...d.rows, { id: newId, cells: { ...src.cells, ...newRowCells(d) } }] }))
+  useDbStore.getState().mutate(db.path, (d) => ({ ...d, rows: [...d.rows, { id: newId, cells: { ...src.cells, ...newRowCells(d) }, ...(src.body !== undefined ? { body: src.body } : {}) }] }))
   return newId
 }
 

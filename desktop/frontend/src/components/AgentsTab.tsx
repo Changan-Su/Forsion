@@ -230,7 +230,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
             <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
               {avatarUrl
                 ? <img src={avatarUrl} alt="" style={{ width: 48, height: 48, borderRadius: '50%', objectFit: 'cover' }} />
-                : <span style={{ width: 48, height: 48, borderRadius: '50%', background: 'var(--overlay-light)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, fontWeight: 600 }}>{(Array.from(editing.name.trim())[0] || '?').toUpperCase()}</span>}
+                : <span style={{ width: 48, height: 48, borderRadius: '50%', background: 'var(--overlay-light)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 'var(--ui-font-title, 16px)', fontWeight: 600 }}>{(Array.from(editing.name.trim())[0] || '?').toUpperCase()}</span>}
               <label className="btn ghost sm" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                 {avatarBusy ? <Loader2 size={13} className="spin" /> : null}{t('settings.agents.avatarPick')}
                 <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" style={{ display: 'none' }} onChange={(e) => void onPickAvatar(e)} />
@@ -304,7 +304,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
               onChange={(e) => setEditing({ ...editing, shareDefaultMemory: e.target.checked })} />
             {t('settings.agents.shareMemory')}
           </label>
-          <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{t('settings.agents.shareMemoryHint')}</div>
+          <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{t('settings.agents.shareMemoryHint')}</div>
         </div>
         <div className="field">
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
@@ -312,7 +312,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
               onChange={(e) => setEditing({ ...editing, cloudSync: e.target.checked })} />
             {t('settings.agents.cloudSync')}
           </label>
-          <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{t('settings.agents.cloudSyncHint')}</div>
+          <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{t('settings.agents.cloudSyncHint')}</div>
         </div>
         <div className="field">
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', userSelect: 'none' }}>
@@ -320,7 +320,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
               onChange={(e) => setEditing({ ...editing, activityAccess: e.target.checked })} />
             {t('settings.agents.activityAccess')}
           </label>
-          <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{t('settings.agents.activityAccessHint')}</div>
+          <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{t('settings.agents.activityAccessHint')}</div>
         </div>
         <div className="field">
           <label>{t('settings.agents.toolPolicy')}</label>
@@ -331,23 +331,23 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
           </select>
           {!!editing.toolsMode && (toolCatalog.length ? (
             <>
-              <div style={{ fontSize: 11.5, color: 'var(--text-faint)', margin: '4px 0 6px' }}>{t('settings.agents.toolPolicyHint')}</div>
+              <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', margin: '4px 0 6px' }}>{t('settings.agents.toolPolicyHint')}</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: '2px 10px' }}>
                 {toolCatalog.map((tl) => (
                   <label key={tl.name} title={tl.description}
-                    style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, cursor: 'pointer', userSelect: 'none' }}>
+                    style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 'var(--ui-font-meta, 12px)', cursor: 'pointer', userSelect: 'none' }}>
                     <input type="checkbox" checked={isToolChecked(tl.name)} onChange={() => toggleTool(tl.name)} />
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{tl.name}</span>
                   </label>
                 ))}
               </div>
             </>
-          ) : <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 4 }}>{t('settings.agents.toolPolicyEmpty')}</div>)}
+          ) : <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 4 }}>{t('settings.agents.toolPolicyEmpty')}</div>)}
         </div>
         {editing.slug && (
           <div className="field">
             <label style={{ margin: 0 }}>{t('settings.agents.brainSection')}</label>
-            <div style={{ fontSize: 11.5, color: 'var(--text-faint)', margin: '2px 0 6px' }}>{t('settings.agents.brainSectionHint')}</div>
+            <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', margin: '2px 0 6px' }}>{t('settings.agents.brainSectionHint')}</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button className="btn ghost sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}
                 onClick={() => setViewing({ slug: editing.slug!, name: editing.name, shareDefaultMemory: agents?.find((agent) => agent.slug === editing.slug)?.shareDefaultMemory } as NormalAgentDef)}>
@@ -367,7 +367,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
             {busy ? <Loader2 size={13} className="spin" /> : null} {t('common.save')}
           </button>
           <button className="btn ghost sm" onClick={() => setEditing(null)}>{t('common.cancel')}</button>
-          {msg && <span style={{ fontSize: 12.5, color: 'var(--danger)' }}>{msg}</span>}
+          {msg && <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--danger)' }}>{msg}</span>}
         </div>
       </div>
       {viewing && <AgentMemoryModal cfg={cfg} slug={viewing.slug} name={viewing.name} shareDefaultMemory={viewing.shareDefaultMemory} onClose={() => setViewing(null)} />}
@@ -409,10 +409,10 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
               <GripVertical size={13} style={{ color: 'var(--text-faint)', flexShrink: 0 }} />
               <span className="file-name" style={{ flex: 1 }}>
                 <b>{a.name}</b>
-                {a.slug === defaultSlug && <span style={{ color: 'var(--accent-ink)', marginLeft: 8, fontSize: 11 }}>· {t('settings.agents.isDefault')}</span>}
-                {a.createdBy === 'agent' && <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 11 }}>· {t('settings.agents.byAgent')}</span>}
-                {a.createdBy === 'system' && <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 11 }}>· {t('agent.badge.system')}</span>}
-                {a.description && <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 12 }}>{agentDescription(a, t).length > 60 ? `${agentDescription(a, t).slice(0, 60)}…` : agentDescription(a, t)}</span>}
+                {a.slug === defaultSlug && <span style={{ color: 'var(--accent-ink)', marginLeft: 8, fontSize: 'var(--ui-font-caption, 11px)' }}>· {t('settings.agents.isDefault')}</span>}
+                {a.createdBy === 'agent' && <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-caption, 11px)' }}>· {t('settings.agents.byAgent')}</span>}
+                {a.createdBy === 'system' && <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-caption, 11px)' }}>· {t('agent.badge.system')}</span>}
+                {a.description && <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>{agentDescription(a, t).length > 60 ? `${agentDescription(a, t).slice(0, 60)}…` : agentDescription(a, t)}</span>}
               </span>
               <button className="icon-btn" title={a.cloudSync ? t('settings.agents.cloudSyncOn') : t('settings.agents.cloudSyncOff')}
                 onClick={() => toggleCloudSync(a)} style={a.cloudSync ? { color: 'var(--accent-ink)' } : { opacity: 0.5 }}><Cloud size={13} /></button>

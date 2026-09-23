@@ -3,6 +3,8 @@
  * config setters PATCH only their own keys with an old-engine PUT fallback (5d/5h/5i),
  * a direct (solo) chat without stored modes shows the agent's defaults the engine actually uses (5j/5k; team thinking stays unmapped, 5l),
  * optional Historian attachment and light/dark screenshots.
+ * 6a/6d–7: mode menu — agents folded into the 「普通模式 ›」 sub-panel (not listed flat), team-mode naming
+ * (no legacy 群聊 / voting copy), sub-panel placement in a narrow full-height Chat View; wide / dark / narrow shots.
  * Run after npm run build: npm run check:teamdesk (isolated Electron user data).
  */
 const fs = require('fs')
@@ -109,6 +111,11 @@ async function dismissToasts(win) {
     await btn.click({ timeout: 2_000 }).catch(() => {})
     await sleep(200)
   }
+}
+
+/** 二级面板带 `pop` 入场(opacity 0→1):不等它放完,截图里整块是半透明的。 */
+async function settleAgentPane(win) {
+  await win.evaluate(`Promise.all(Array.from(document.querySelectorAll('.cm-sub, .composer-menu')).flatMap((e) => e.getAnimations()).map((a) => a.finished))`)
 }
 
 async function openTeamSession(win) {
@@ -338,7 +345,9 @@ async function run(app, win, stub) {
   await win.screenshot({ path: shots.team })
   await win.locator('.add-pill-btn').click()
   await win.locator('[data-add-agent]').click()
-  check('6a 加号菜单可打开添加 Agent', await win.getByText('群聊模式', { exact: true }).count() === 1, '')
+  // 浮层标题与状态条同叫「团队模式」,按文字数会数到两处 → 用浮层自己的钩子;旧版「群聊 / 投票」文案不许再出现。
+  const setupText = await win.locator('[data-team-setup]').innerText().catch(() => '')
+  check('6a 加号菜单可打开添加 Agent(团队模式成员浮层,无旧群聊 / 投票文案)', await win.locator('[data-team-setup]').count() === 1 && setupText.includes('团队模式') && !/群聊|投票/.test(setupText), setupText.slice(0, 120))
   await win.locator('button[title="关闭"]').last().click()
   await win.locator('.mode-pill-btn').click()
   await win.locator('[data-normal-work]').click()
@@ -346,6 +355,43 @@ async function run(app, win, stub) {
   const normal = stub.seen.configs.at(-1)?.config
   check('6b 普通模式关闭团队和计划,恢复 auto-edit', normal?.groupChat === false && normal?.planMode === false && normal?.approvalMode === 'auto-edit', JSON.stringify(normal))
   check('6c 普通模式仍保留 Historian,团队成员表退出', await win.locator('[data-historian-status]').count() === 1 && await win.locator('[data-team-desk="status"]').count() === 0, '')
+
+  // ── 6d–6g 模式菜单:可切换的 Agent 收进「普通模式 ›」二级面板(一级不再平铺);团队入口用新名 ──
+  const modeMenu = () => win.evaluate(`(() => {
+    const menu = document.querySelector('.composer-menu--mode')
+    if (!menu) return null
+    const box = (e) => { const b = e.getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom } }
+    const sub = menu.querySelector('.cm-sub[data-pane="agents"]')
+    return {
+      top: Array.from(menu.querySelectorAll('.menu-item')).filter((b) => !b.closest('.cm-sub') && !b.matches('[data-agent-switch]')).map((b) => b.textContent.trim()),
+      sections: Array.from(menu.querySelectorAll(':scope > .menu-section')).map((e) => e.textContent.trim()),
+      trigger: (menu.querySelector('[data-agent-switch]') || {}).textContent ?? null,
+      sub: sub ? { items: Array.from(sub.querySelectorAll('.menu-item')).map((b) => b.textContent.trim()), box: box(sub) } : null,
+      menu: box(menu),
+    }
+  })()`)
+  await dismissToasts(win)
+  await win.locator('.mode-pill-btn').click()
+  await win.waitForSelector('.composer-menu--mode', { state: 'visible' })
+  let mm = await modeMenu()
+  check('6d 模式菜单一级不再平铺 Agent,「普通模式」带 › 入口;团队段改名「团队模式」', !!mm && mm.trigger !== null && !mm.top.some((x) => /Xyra|Orbit One/.test(x)) && mm.top.includes('开启团队模式…') && mm.sections.includes('团队模式') && !mm.sections.some((x) => /群聊|切换 Agent/.test(x)), JSON.stringify(mm))
+  await win.locator('[data-normal-work]').hover()
+  await win.waitForSelector('.cm-sub[data-pane="agents"]', { state: 'visible', timeout: 3_000 }).catch(() => {})
+  mm = await modeMenu()
+  const beside = !!mm?.sub && (mm.sub.box.l >= mm.menu.r - 1 || mm.sub.box.r <= mm.menu.l + 1 || mm.sub.box.b <= mm.menu.t + 1)
+  check('6e 悬停「普通模式」展开二级 Agent 面板(夹具里全部三位 Agent),面板贴在一级菜单外侧不压菜单', mm?.sub?.items.join('|') === 'Xyra|Orbit One|Solo RO' && beside, JSON.stringify(mm?.sub))
+  shots.menu = path.join(os.tmpdir(), `forsion-teamdesk-modemenu-${process.pid}.png`)
+  await settleAgentPane(win)
+  await win.screenshot({ path: shots.menu })
+  await win.locator('.composer-menu--mode .approval-item').first().hover()
+  await sleep(200)
+  check('6f 指针移到别的行(审批档)二级面板收起,不与审批说明浮层叠', await win.locator('.cm-sub[data-pane="agents"]').count() === 0, '')
+  await win.locator('[data-agent-switch]').click()
+  await win.locator('.cm-sub[data-pane="agents"] .menu-item', { hasText: 'Orbit One' }).click()
+  await sleep(300)
+  // 会话配置写是按键合并的 PATCH(5d/5h):换 Agent 只发自己的键 —— 「不动团队 / 审批档」= 请求体里没有这两项,不是整对象回写旧值。
+  const switched = stub.seen.configs.at(-1)?.config
+  check('6g 二级面板选人 = 只换 Agent(不动团队 / 审批档),菜单随之关闭', switched?.agentSlug === 'orbit-one' && switched?.groupChat !== true && !('approvalMode' in (switched || {})) && await win.locator('.composer-menu--mode').count() === 0, JSON.stringify(switched))
   await dismissToasts(win)
   await win.mouse.move(640, 900)
   await sleep(300)
@@ -361,6 +407,50 @@ async function run(app, win, stub) {
   await dismissToasts(win)
   await sleep(300)
   await win.screenshot({ path: shots.dark })
+
+  // ── 7 暗色 + 窄窗口下的二级 Agent 面板:材质看截图;右侧放不下时改到左侧 / 叠在菜单上方,整块不越出 Chat View ──
+  const openAgentPane = async () => {
+    await win.locator('.mode-pill-btn').click()
+    await win.locator('[data-normal-work]').hover()
+    await win.waitForSelector('.cm-sub[data-pane="agents"]', { state: 'visible', timeout: 5_000 })
+    await settleAgentPane(win)
+  }
+  // 桩不持久化 PUT:重载后会话按夹具回到团队模式(团队模式下本就没有换人面板),先切回普通模式。
+  await win.locator('.mode-pill-btn').click()
+  await win.locator('[data-normal-work]').click()
+  await sleep(300)
+  await dismissToasts(win)
+  await openAgentPane()
+  shots.menuDark = path.join(os.tmpdir(), `forsion-teamdesk-modemenu-dark-${process.pid}.png`)
+  await win.screenshot({ path: shots.menuDark })
+  await win.keyboard.press('Escape')
+  // 窄 Chat View(= 侧栏 / 分栏里的对话,满高):主窗口 minWidth 880 缩不出来;改 View 内联宽会把 dockview 标签条压到胶囊上;
+  // 页面缩放 ×2 又会同时压矮(421px 高时叠放面板越出窗口顶 —— 与模型菜单 .cm-sub.stacked 同一局限,不在此钉)。
+  // 所以照用户的手法:把左侧栏的分隔条往右拖,只收窄 View。
+  const sash = await win.evaluate(`(() => {
+    const view = document.querySelector('.t2-chat-view').getBoundingClientRect()
+    const hit = Array.from(document.querySelectorAll('.dv-sash')).map((e) => e.getBoundingClientRect())
+      .find((r) => r.height > r.width && r.height > 200 && Math.abs(r.left + r.width / 2 - view.left) < 12)
+    return hit ? { x: hit.left + hit.width / 2, y: hit.top + hit.height / 2, target: view.right - 380 } : null
+  })()`)
+  if (sash) {
+    await win.mouse.move(sash.x, sash.y)
+    await win.mouse.down()
+    await win.mouse.move(sash.target, sash.y, { steps: 12 })
+    await win.mouse.up()
+    await sleep(600)
+  }
+  await openAgentPane()
+  const narrow = await win.evaluate(`(() => {
+    const box = (e) => { const b = e.getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom } }
+    const sub = document.querySelector('.cm-sub[data-pane="agents"]')
+    return { sub: box(sub), cls: sub.className, view: box(sub.closest('.t2-chat-view')), menu: box(document.querySelector('.composer-menu--mode')) }
+  })()`)
+  const inside = narrow.sub.l >= narrow.view.l - 1 && narrow.sub.r <= narrow.view.r + 1 && narrow.sub.t >= narrow.view.t - 1
+  const clear = narrow.sub.b <= narrow.menu.t + 1 || narrow.sub.l >= narrow.menu.r - 1 || narrow.sub.r <= narrow.menu.l + 1
+  check('7 窄 Chat View:二级 Agent 面板改到左侧 / 叠在菜单上方,留在 View 内且不压一级菜单', !!sash && narrow.view.r - narrow.view.l <= 420 && !/\bright\b/.test(narrow.cls) && inside && clear, JSON.stringify({ sash, ...narrow }))
+  shots.menuNarrow = path.join(os.tmpdir(), `forsion-teamdesk-modemenu-narrow-${process.pid}.png`)
+  await win.screenshot({ path: shots.menuNarrow })
   return shots
 }
 

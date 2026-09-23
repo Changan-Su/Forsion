@@ -86,12 +86,12 @@ const tanguSpace: SpaceDefinition = {
 
 const agentsSpace: SpaceDefinition = {
   id: 'agents', name: () => app().tr('agentProfile.space'), icon: Users,
-  sidebarDefaults: { left: [], right: [], bottom: [] },
+  sidebarDefaults: { left: [{ type: 'agents-roster', params: {} }], right: [], bottom: [] },
   build() {
-    ws().setSidebarDefaults({ left: [], right: [], bottom: [] })
+    ws().setSidebarDefaults({ left: [{ type: 'agents-roster', params: {} }], right: [], bottom: [] })
     ws().openView('agent-profile', {}, 'main')
+    ws().openView('agents-roster', {}, 'left')
     ws().initializeSidebar('bottom', false)
-    ws().initializeSidebar('left', false)
     ws().initializeSidebar('right', false)
   },
 }

@@ -162,7 +162,7 @@ const ScheduleEditor: React.FC<{ slug: string; en: AgentScheduleEntry; onDone: (
         <label>{t('automation.builder.prompt')}</label>
         <textarea value={prompt} maxLength={500} onChange={(e) => setPrompt(e.target.value)} />
       </div>
-      {error && <div style={{ color: 'var(--warn, #b8860b)', fontSize: 12 }}>{error}</div>}
+      {error && <div style={{ color: 'var(--warn, #b8860b)', fontSize: 'var(--ui-font-meta, 12px)' }}>{error}</div>}
       <div className="auto-builder-actions" style={{ marginTop: 4 }}>
         <button className="btn ghost sm" onClick={onDone}>{t('common.cancel')}</button>
         <button className="btn sm" disabled={busy || !name.trim() || !date.trim() || !prompt.trim()} onClick={() => void save()}>{busy ? '…' : t('common.save')}</button>

@@ -1,5 +1,5 @@
 /**
- * Composer2 编辑式新视觉(全部走 LCL token,明暗/扁平/浮卡自适配)。
+ * Composer2 编辑式新视觉(全部走 LCL token,明暗与统一淡阴影)。
  * 悬浮圆角卡(发送在卡内)+ 卡下药丸 chips 行。slash/@ 菜单与附件 chip 沿用 base.css 的 .composer-menu/.attach-chip。
  */
 .t2c { position: relative; width: 100%; }
@@ -16,8 +16,8 @@
    glass 主题把这层换成半透磨砂(genesis-glass/theme.css 3.5),那里糊的正是底下的正文。 */
 .t2c-card {
   --t2c-font-body: 13px;
-  --t2c-font-control: 12px;
-  --t2c-font-meta: 11px;
+  --t2c-font-control: var(--ui-font-meta);
+  --t2c-font-meta: var(--ui-font-caption);
   position: relative;
   container-type: inline-size; /* 卡宽驱动底排药丸收窄(容器查询,不看视口) */
   background: var(--t2c-card-surface, var(--bg-card, var(--bg)));
@@ -49,35 +49,35 @@
 .t2c-grow { flex: 1; }
 .t2c-iconbtn {
   width: 28px; height: 28px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
-  border: none; background: transparent; color: var(--text-muted); border-radius: 999px; cursor: pointer;
+  border: none; background: transparent; color: var(--text-muted); border-radius: var(--radius-pill, 999px); cursor: pointer;
   transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
 }
 .t2c-iconbtn:hover:not(:disabled) { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
 .t2c-iconbtn:disabled { opacity: 0.4; cursor: default; }
 .t2c-send {
   width: 32px; height: 32px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
-  border: none; border-radius: 999px; background: var(--action-fill); color: var(--on-action, #fff); cursor: pointer;
+  border: none; border-radius: var(--radius-pill, 999px); background: var(--action-fill); color: var(--on-action, #fff); cursor: pointer;
   transition: opacity var(--duration-fast, 0.15s), transform var(--duration-fast, 0.15s);
 }
 .t2c-send:hover:not(:disabled) { transform: translateY(-1px); }
 .t2c-send:disabled { opacity: 0.35; cursor: default; background: var(--overlay-medium, var(--overlay-light, rgba(127, 127, 127, 0.25))); color: var(--text-faint, var(--text-muted)); }
 .t2c-stop {
   display: inline-flex; align-items: center; gap: 5px; height: 32px; padding: 0 12px; flex-shrink: 0;
-  border: none; border-radius: 999px; background: color-mix(in srgb, var(--danger, #e0564b) 14%, transparent);
-  color: var(--danger, #e0564b); font-size: 11px; font-family: var(--font-ui); cursor: pointer;
+  border: none; border-radius: var(--radius-pill, 999px); background: color-mix(in srgb, var(--danger, #e0564b) 14%, transparent);
+  color: var(--danger, #e0564b); font-size: var(--ui-font-caption, 11px); font-family: var(--font-ui); cursor: pointer;
 }
 .t2c-stop:hover { background: color-mix(in srgb, var(--danger, #e0564b) 22%, transparent); }
 
 /* 引用卡 */
 .t2c-quote { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 8px; padding: 6px 10px; background: var(--overlay-light, rgba(127, 127, 127, 0.08)); border-left: 3px solid var(--accent-ink); border-radius: var(--radius-sm, 8px); }
-.t2c-quote-text { flex: 1; min-width: 0; font-size: 11.5px; color: var(--text-muted); white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
+.t2c-quote-text { flex: 1; min-width: 0; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); white-space: pre-wrap; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; }
 .t2c-quote-x { flex-shrink: 0; background: none; border: none; cursor: pointer; color: var(--text-faint, var(--text-muted)); padding: 2px; line-height: 0; }
 
-.t2c-hint { font-size: 11px; color: var(--danger, #e0564b); margin-bottom: 6px; }
+.t2c-hint { font-size: var(--ui-font-caption, 11px); color: var(--danger, #e0564b); margin-bottom: 6px; }
 .t2c-chiprow { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 /* 「已选择」引用条:标签 + 文件/会话芯片。芯片本体沿用 base.css 的 .attach-chip(与附件同一套观感)。 */
 .t2c-refrow { align-items: center; }
-.t2c-reflabel { font-size: 12px; color: var(--text-faint); flex-shrink: 0; }
+.t2c-reflabel { font-size: var(--ui-font-meta, 12px); color: var(--text-faint); flex-shrink: 0; }
 
 /* slash / @ 菜单(浮在卡上方) */
 .t2c-menu {
@@ -88,14 +88,14 @@
 }
 .t2c-menu-item { width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 10px; border: none; background: transparent; color: var(--text); text-align: left; border-radius: var(--radius-sm, 8px); cursor: pointer; }
 .t2c-menu-item[data-active] { background: var(--menu-hover, rgba(127, 127, 127, 0.12)); }
-.t2c-menu-cmd { font-size: 11.5px; font-weight: 600; white-space: nowrap; }
-.t2c-menu-desc { font-size: 10.5px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.t2c-menu-sec { padding: 5px 10px 3px; font-size: 10px; color: var(--text-faint, var(--text-muted)); }
+.t2c-menu-cmd { font-size: var(--ui-font-caption, 11px); font-weight: 600; white-space: nowrap; }
+.t2c-menu-desc { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.t2c-menu-sec { padding: 5px 10px 3px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
 
 /* 模式 / 模型 药丸(移入卡内底排 .t2c-row) */
 .t2c-pill {
   display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: none;
-  border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text);
+  border-radius: var(--radius-pill, 999px); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text);
   font-size: var(--t2c-font-control, 12px); font-family: var(--font-ui); cursor: pointer; transition: background var(--duration-fast, 0.15s);
 }
 /* 模型药丸(ModelPill 用 base.css .composer-chip)与模式药丸统一到 12px；作用域限定，不动别处的 chip。 */
@@ -236,6 +236,14 @@
 .add-menu-empty { padding: 10px 9px; color: var(--text-faint); font-size: var(--t2c-font-meta, 11px); }
 .add-menu-section-gap { margin-top: 4px; border-top: var(--border-width, 1px) solid var(--border); }
 
+/* 模式菜单「普通模式」行(NormalModeItem):左 = 切回普通模式,右 = 当前 Agent ›(展开二级 Agent 面板 .cm-sub)。
+   行容器不许定位:二级面板的包含块必须仍是 .composer-menu--mode。(0,3,0) 压过 base.css 的 `.composer-menu .menu-item { width:100% }`。 */
+.composer-menu--mode .mode-normal-row { display: flex; align-items: center; gap: 2px; }
+.composer-menu--mode .mode-normal-row > .menu-item { width: auto; flex: 1 1 auto; min-width: 0; }
+.composer-menu--mode .mode-normal-row > .mode-agent-trigger { flex: 0 1 auto; max-width: 50%; gap: 3px; color: var(--text-faint); }
+.composer-menu--mode .mode-normal-row > .mode-agent-trigger[aria-expanded='true'] { background: var(--menu-hover); color: var(--text); }
+.mode-agent-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* 收窄让位:药丸(含 data-cmenu 外层包裹)与其标签可截断收缩,固定图标钮各自 flex-shrink:0 不受影响。 */
 .t2c-row [data-cmenu], .t2c-row .t2c-pill, .t2c-row .composer-chip,
 .t2c-pill-label, .t2c-row .composer-chip .pill-marquee { min-width: 0; }
@@ -280,7 +288,7 @@
   display: none; flex-direction: column; gap: 3px; padding: 8px 11px; min-width: 150px;
   background: var(--bg-card, var(--bg)); border: var(--border-width, 1px) solid var(--border);
   border-radius: var(--radius-md, 12px); box-shadow: var(--card-shadow, 0 8px 28px rgba(0, 0, 0, 0.18));
-  font-size: 11px; color: var(--text-muted); white-space: nowrap;
+  font-size: var(--ui-font-caption, 11px); color: var(--text-muted); white-space: nowrap;
 }
 /* 矮窗口兜底:弹层向上生长会顶穿视口。限高加在内层列表,别加在弹层本体 */
 .t2c-ctxring-pop .t2c-ctxinfo-secs, .t2c-ctxring-pop .t2c-ctxinfo-files { max-height: 170px; overflow-y: auto; }
@@ -298,7 +306,7 @@
 .t2c-ctxinfo-label { color: var(--text-faint); }
 .t2c-ctxinfo-file { font-family: var(--font-mono); max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 .t2c-ctxinfo-file.dim { font-family: inherit; opacity: 0.6; } /* 空态那句不是文件名,别用等宽 */
-.t2c-ctxring-compact { margin-top: 4px; align-self: flex-start; padding: 3px 9px; border: none; border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); font-size: 10.5px; font-family: var(--font-ui); cursor: pointer; }
+.t2c-ctxring-compact { margin-top: 4px; align-self: flex-start; padding: 3px 9px; border: none; border-radius: var(--radius-pill, 999px); background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); font-size: var(--ui-font-caption, 11px); font-family: var(--font-ui); cursor: pointer; }
 .t2c-ctxring-compact:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.2)); }
 
 /* 语音输入录音中:麦克风按钮脉冲提示 */
@@ -309,11 +317,11 @@
 .t2c-voicebar { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; animation: t2c-voicebar-in 0.22s var(--ease-out, ease); }
 @keyframes t2c-voicebar-in { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
 .t2c-voicewave { flex: 1; min-width: 0; height: 30px; display: block; }
-.t2c-voicelabel { flex-shrink: 0; font-size: 12px; color: var(--text-muted); font-family: var(--font-ui); }
-.t2c-voicetime { flex-shrink: 0; min-width: 34px; text-align: right; font-size: 11.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.t2c-voicelabel { flex-shrink: 0; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); font-family: var(--font-ui); }
+.t2c-voicetime { flex-shrink: 0; min-width: 34px; text-align: right; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .t2c-voicestop {
   flex-shrink: 0; width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center;
-  border: none; border-radius: 999px; background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); cursor: pointer;
+  border: none; border-radius: var(--radius-pill, 999px); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); cursor: pointer;
   transition: background var(--duration-fast, 0.15s);
 }
 .t2c-voicestop:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.2)); }
@@ -331,16 +339,25 @@
 @media (prefers-reduced-motion: reduce) { .t2c-steer { animation: none; } }
 .t2c-steer-item { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 2px 0; }
 .t2c-steer-ic { flex-shrink: 0; color: var(--text-faint, var(--text-muted)); }
-.t2c-steer-text { flex: 1; min-width: 0; font-size: 12px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.t2c-steer-x { flex-shrink: 0; background: none; border: none; cursor: pointer; color: var(--text-faint, var(--text-muted)); padding: 2px; line-height: 0; border-radius: 999px; }
+.t2c-steer-text { flex: 1; min-width: 0; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t2c-steer-x { flex-shrink: 0; background: none; border: none; cursor: pointer; color: var(--text-faint, var(--text-muted)); padding: 2px; line-height: 0; border-radius: var(--radius-pill, 999px); }
 .t2c-steer-x:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
 .t2c-steer-foot { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
-.t2c-steer-hint { flex: 1; min-width: 0; font-size: 10.5px; color: var(--text-faint, var(--text-muted)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t2c-steer-hint { flex: 1; min-width: 0; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .t2c-steer-now {
   flex-shrink: 0; display: inline-flex; align-items: center; gap: 4px;
-  padding: 3px 10px; border: none; border-radius: 999px; cursor: pointer;
+  padding: 3px 10px; border: none; border-radius: var(--radius-pill, 999px); cursor: pointer;
   background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text);
-  font-size: 11px; font-family: var(--font-ui);
+  font-size: var(--ui-font-caption, 11px); font-family: var(--font-ui);
   transition: background var(--duration-fast, 0.15s);
 }
 .t2c-steer-now:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.2)); }
+
+/* 以输入卡宽度为准，分栏和侧栏 Chat View 都收起辅助标签，给引用名与核心动作留空间。 */
+@container (max-width: 360px) {
+  .t2c-refrow { margin-bottom: 6px; }
+  .t2c-reflabel { display: none; }
+  .t2c-refrow .attach-chip { min-width: 0; max-width: min(100%, 240px); }
+  .t2c-stop { width: 32px; padding-inline: 0; justify-content: center; }
+  .t2c-stop-label { display: none; }
+}

@@ -71,7 +71,7 @@ export const RightPanel: React.FC<{
         <button className={tab === 'subchats' ? 'active' : ''} onClick={() => setTab('subchats')}>
           <MessageCircle size={13} /> {t('panel.tab.subchats')}
           {p.subChats && p.subChats.length > 0 && (
-            <span style={{ marginLeft: 3, fontSize: 9, fontWeight: 700, background: 'var(--accent)', color: 'var(--on-accent)', borderRadius: 8, padding: '0 4px', lineHeight: '14px' }}>{p.subChats.length}</span>
+            <span style={{ marginLeft: 3, fontSize: 'var(--ui-font-caption, 11px)', fontWeight: 700, background: 'var(--accent)', color: 'var(--on-accent)', borderRadius: 'var(--radius-sm, 6px)', padding: '0 4px', lineHeight: '14px' }}>{p.subChats.length}</span>
           )}
         </button>
       </div>
@@ -616,7 +616,7 @@ const AgentMemoryBlock: React.FC<{
       {memory === null && <div className="panel-note">{t('panel.memory.notConnected')}</div>}
       {memory !== null && (
         memory.trim() ? (
-          <div style={{ fontSize: 12.5, padding: '0 8px' }} className="msg-content">
+          <div style={{ fontSize: 'var(--ui-font-meta, 12px)', padding: '0 8px' }} className="msg-content">
             <Markdown content={memory} />
           </div>
         ) : (
@@ -632,7 +632,7 @@ const AgentMemoryBlock: React.FC<{
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && void append()}
             style={{
-              flex: 1, fontSize: 12.5, padding: '5px 8px', background: 'var(--bg-card)',
+              flex: 1, fontSize: 'var(--ui-font-meta, 12px)', padding: '5px 8px', background: 'var(--bg-card)',
               border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-sm)', outline: 'none',
             }}
           />

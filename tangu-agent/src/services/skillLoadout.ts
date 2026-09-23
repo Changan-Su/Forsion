@@ -67,7 +67,10 @@ export async function loadSkillLoadout(
     ).filter(Boolean) as any[];
     for (const s of skills) {
       const body = String(s.content || '').trim();
-      if (body && body.length <= INLINE_SKILL_MAX_CHARS) {
+      // 共享技能即使被显式选中也保持按需加载；切换装备策略不应让别的 Agent 的指令每轮内联。
+      if (String(s.id || '').startsWith('local:@') && (body || String(s.description || '').trim())) {
+        deferredSkills.push({ id: s.id, name: s.name, description: String(s.description || '').trim() });
+      } else if (body && body.length <= INLINE_SKILL_MAX_CHARS) {
         inlineSkills.push({ name: s.name, body });
       } else if (body) {
         deferredSkills.push({ id: s.id, name: s.name, description: String(s.description || '').trim() });

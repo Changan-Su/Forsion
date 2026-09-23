@@ -33,7 +33,7 @@ export function stampUpdatedRows(prev: DbFile, next: DbFile, now: Date = new Dat
   let touched = false
   const rows = next.rows.map((r) => {
     const p = before.get(r.id)
-    if (!p || !cellsChanged(p, r, skip)) return r
+    if (!p || (p.body === r.body && !cellsChanged(p, r, skip))) return r
     touched = true
     const cells = { ...r.cells }
     for (const id of cols) cells[id] = stamp

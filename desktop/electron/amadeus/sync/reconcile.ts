@@ -72,7 +72,13 @@ export function decide(
   if (!localDirty && !remoteMoved) return { kind: 'none' }
   if (!localDirty) return { kind: 'pull' }
   if (!remoteMoved) return { kind: 'push', baseSeq: shadow.seq }
-  return local === remote.hash ? { kind: 'adopt' } : { kind: 'conflict' }
+  if (local === remote.hash) return { kind: 'adopt' }
+  // 远端 seq 动了但内容仍是我们的基线:别的设备把同样的字节原样重写了一遍,或改过又改回了基线。
+  // 两种都按「远端相对基线无变化」处理 —— 与 diff3(ours, base, theirs=base) = ours 同一结论,只是省掉
+  // 拿不到 base 时退化成冲突副本的那一步。语义上只看终态字节,不看中间版本(Codex 09-22 评审点出:
+  // 若产品要「回退意图压过本地改动」,那是另一套协议,这里刻意不做)。
+  if (remote.hash === shadow.hash) return { kind: 'push', baseSeq: remote.seq }
+  return { kind: 'conflict' }
 }
 
 import { diff3Merge } from 'node-diff3'

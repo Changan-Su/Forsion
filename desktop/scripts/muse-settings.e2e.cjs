@@ -1,18 +1,18 @@
 /**
- * Muse 设置卡回归(2026-09-10 重排:基本 / 节奏 / 通知 / 预算折叠)。真 Electron × 假引擎:
- * 打开 设置 → 智能体 → 后台智能体,断言小节顺序、巡检/重启字样已撤、文件夹提示随档位切换、切档打到 POST、
- * 预算默认折叠且展开是四个字段、「难活交给」是名册下拉且不含 muse;拍两张截图(默认 / 展开预算+全开档)。
- * 先 `npm run build`;跑法 `npm run e2e:musesettings`;截图 $TMPDIR/forsion-muse-settings{,-auto}.png(SHOT_DIR 可改)。
+ * Background agent settings in an isolated Electron window with a stub engine.
+ * Covers Historian/Muse navigation, deferred field patches, retained text/newlines,
+ * save failure, discard, keyboard menus, reduced motion, narrow and English/dark screenshots.
+ * Run after npm run build: npm run e2e:musesettings. SHOT_DIR optionally sets the artifact directory.
  */
 const fs = require('fs'), os = require('os'), path = require('path')
 const ROOT = path.resolve(__dirname, '..')
 const { _electron: electron } = require('playwright-core')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
-const OUT = process.env.SHOT_DIR || os.tmpdir()
+const OUT = process.env.SHOT_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-special-ux-'))
 const SHOT1 = path.join(OUT, 'forsion-muse-settings.png'), SHOT2 = path.join(OUT, 'forsion-muse-settings-auto.png')
 
 const results = []
-const check = (name, ok, detail) => { results.push({ name, ok }); console.log(`${ok ? '✅' : '❌'} ${name}${ok ? '' : ` — ${detail}`}`) }
+const check = (name, ok, detail) => { results.push({ name, ok: !!ok }); console.log(`${ok ? '✅' : '❌'} ${name}${ok ? '' : ` — ${detail}`}`) }
 
 async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-muse-settings-'))
@@ -22,6 +22,7 @@ async function main() {
       activeHours: null, allowedFolders: ['/Users/me/Documents/Notes'], mode: 'ask', heartbeatMinutes: 120, notify: 'immediate', escalateTo: 'coder' },
   }
   const posted = []
+  let failSave = false
   const stub = await startStubEngine({
     sessions: [], messages: [],
     models: [{ id: 'm1', name: 'Stub 模型', provider: 'stub', contextWindow: 128_000 }],
@@ -32,7 +33,7 @@ async function main() {
     ],
     handle: async ({ path: p, method, body }) => {
       if (p === '/agent/special/config' && method === 'GET') return { config: conf, defaults: { historianPrompt: '' } }
-      if (p === '/agent/special/config' && method === 'POST') { const b = await body(); posted.push(b); conf = { historian: { ...conf.historian, ...(b.historian || {}) }, muse: { ...conf.muse, ...(b.muse || {}) } }; return { config: conf } }
+      if (p === '/agent/special/config' && method === 'POST') { if (failSave) return { __code: 503, body: { detail: 'test save failure' } }; const b = await body(); posted.push(b); conf = { historian: { ...conf.historian, ...(b.historian || {}) }, muse: { ...conf.muse, ...(b.muse || {}) } }; return { config: conf } }
       if (p === '/agent/special/muse/status') return { status: { enabled: true, hasModel: true, running: false, restartsThisWindow: 0, maxRestartsPerWindow: 3, lastCycleAt: null, lastError: null, sessionId: null } }
       return undefined
     },
@@ -66,31 +67,66 @@ async function main() {
       await b.click()
       await win.waitForTimeout(700)
     }
-    const card = win.locator('.agent-card').nth(1)
-    check('Muse 卡渲染', (await card.count()) === 1 && (await card.locator('.ac-title').textContent()).includes('Muse'))
-    await card.scrollIntoViewIfNeeded()
-    await win.waitForTimeout(300)
-    const secs = await card.locator('.ac-sec').allTextContents()
-    check('三个小节标题:节奏 / 通知 / 预算', JSON.stringify(secs) === JSON.stringify(['节奏', '通知', '预算']), JSON.stringify(secs))
-    const labels = await card.locator('label').allTextContents()
-    check('巡检间隔 / 重启 字样已撤', !labels.some((l) => /巡检|重启/.test(l)), JSON.stringify(labels))
-    const hintAsk = await card.locator('textarea').locator('xpath=following-sibling::div[contains(@class,"hint")]').first().textContent()
-    check('审批档:文件夹提示=只是提示', /只是提示/.test(hintAsk), hintAsk)
-    const esc = card.locator('select').nth(3)
-    check('难活交给 = 下拉且选中 coder,不含 muse', (await esc.inputValue()) === 'coder' && !(await esc.locator('option').allTextContents()).some((o) => /Muse/.test(o)), await esc.locator('option').allTextContents().then(JSON.stringify))
-    check('预算默认折叠', !(await card.locator('details').evaluate((d) => d.open)))
+    const root = win.locator('.special-agents')
+    await root.waitFor()
+    check('Historian and Muse share a clear two-item selector', await root.getByRole('tab').count() === 2)
+    check('only the selected agent shows its fields', await root.getByRole('tabpanel').count() === 1)
+    await root.getByRole('tab', { name: /Muse/ }).click()
+    const card = root.getByRole('tabpanel')
+    check('advanced budget is collapsed by default', await card.locator('details', { hasText: '预算' }).evaluate((el) => !el.open))
+    check('ask mode explains folder access', (await card.textContent()).includes('只是提示'))
     await win.screenshot({ path: SHOT1 })
-
-    await card.locator('details summary').click()
-    await card.locator('select').nth(1).selectOption('auto')
-    await win.waitForTimeout(500)
-    const hintAuto = await card.locator('textarea').locator('xpath=following-sibling::div[contains(@class,"hint")]').first().textContent()
-    check('切全开档:文件夹提示=可直接读写', /可直接读写/.test(hintAuto), hintAuto)
-    check('切档位打到 POST /agent/special/config', posted.some((b) => b.muse && b.muse.mode === 'auto'), JSON.stringify(posted))
-    const budgetLabels = await card.locator('details label').allTextContents()
-    check('预算展开:窗口 / 周期 / TODO / 轮数', budgetLabels.length === 4 && /预算窗口/.test(budgetLabels[0]) && /周期/.test(budgetLabels[1]), JSON.stringify(budgetLabels))
-    await card.scrollIntoViewIfNeeded()
+    await card.getByRole('button', { name: '权限档', exact: true }).click()
+    await win.getByRole('menuitemradio', { name: '全开（完全自动）', exact: true }).click()
+    check('full auto updates folder guidance immediately', (await card.textContent()).includes('可直接读写'))
+    const folders = card.getByRole('textbox', { name: '额外文件夹（每行一个绝对路径）', exact: true })
+    await folders.fill('/Users/me/Documents/Notes\n')
+    await folders.press('End')
+    await folders.pressSequentially('/Users/me/Projects')
+    check('a newline stays editable while entering a second folder', (await folders.inputValue()).includes('\n/Users/me/Projects'))
+    check('editing does not POST on every keystroke', posted.length === 0)
+    await card.locator('details > summary').filter({ hasText: '预算' }).click()
+    check('budget exposes its four limits', await card.locator('details', { hasText: '预算' }).locator('input[type=number]').count() === 4)
+    await card.locator('details > summary').filter({ hasText: '通知' }).click()
+    await card.getByRole('button', { name: '难活交给', exact: true }).click()
+    check('escalation preserves Coder and excludes Muse', await win.getByRole('menuitemradio', { name: 'Coder', exact: true }).getAttribute('aria-checked') === 'true' && await win.getByRole('menuitemradio', { name: 'Muse', exact: true }).count() === 0)
+    await win.keyboard.press('Escape')
+    await root.getByRole('tab', { name: /Historian/ }).click()
+    await card.locator('summary').filter({ hasText: '高级设置' }).click()
+    const prompt = card.getByRole('textbox')
+    await prompt.fill('Write concise notes.\nKeep evidence.')
+    await root.getByRole('tab', { name: /Muse/ }).click()
+    check('switching agents keeps the unsaved folder draft', (await folders.inputValue()).includes('/Users/me/Projects'))
+    await nav.getByRole('button', { name: 'Agent Space', exact: true }).click()
+    await nav.getByRole('button', { name: '后台智能体', exact: true }).click()
+    await root.getByRole('tab', { name: /Muse/ }).click()
+    check('settings navigation preserves unsaved drafts', (await folders.inputValue()).includes('/Users/me/Projects'))
+    await root.getByRole('button', { name: '保存更改', exact: true }).click()
+    await root.getByText('更改已保存', { exact: true }).waitFor()
+    check('one save commits both drafts as field patches', posted.length === 1 && posted[0].muse.mode === 'auto' && posted[0].muse.allowedFolders.length === 2 && posted[0].historian.prompt.includes('Keep evidence.') && !('enabled' in posted[0].muse))
+    await card.getByRole('switch', { name: 'Muse（缪斯）', exact: true }).click()
+    failSave = true
+    await root.getByRole('button', { name: '保存更改', exact: true }).click()
+    await root.locator('.special-error').waitFor()
+    check('failed save keeps the draft and offers retry', await card.getByRole('switch', { name: 'Muse（缪斯）', exact: true }).getAttribute('aria-checked') === 'false' && await root.getByRole('button', { name: '保存更改', exact: true }).isEnabled())
+    failSave = false
+    await root.getByRole('button', { name: '放弃修改', exact: true }).click()
+    check('discard restores the stored enabled state', await card.getByRole('switch', { name: 'Muse（缪斯）', exact: true }).getAttribute('aria-checked') === 'true' && posted.length === 1)
     await win.screenshot({ path: SHOT2 })
+    await win.setViewportSize({ width: 760, height: 850 })
+    await win.waitForTimeout(250)
+    check('narrow background settings do not overflow', await root.evaluate((el) => el.scrollWidth <= el.clientWidth + 1))
+    await win.screenshot({ path: path.join(OUT, 'forsion-special-narrow.png') })
+    await win.emulateMedia({ reducedMotion: 'reduce' })
+    await card.getByRole('button', { name: '权限档', exact: true }).click()
+    check('background menu respects reduced motion', await win.locator('.capability-menu').evaluate((el) => getComputedStyle(el).animationName === 'none'))
+    await win.keyboard.press('Escape')
+    await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme', 'dark') })
+    await win.reload()
+    await win.locator('.settings-nav').getByRole('button', { name: 'Agents', exact: true }).click()
+    await win.locator('.settings-nav').getByRole('button', { name: 'Background agents', exact: true }).click()
+    await win.locator('.special-agents').waitFor()
+    await win.screenshot({ path: path.join(OUT, 'forsion-special-english-dark.png') })
   } finally {
     await app.close().catch(() => {})
     stub.close()

@@ -15,7 +15,7 @@
         try {
           var mode = localStorage.getItem('forsion_theme') === 'dark' ? 'dark' : 'light';
           var glass = localStorage.getItem('forsion_glass') === 'off' ? 'off' : 'on';
-          var flat = localStorage.getItem('forsion_theme_flat') !== '0' ? '1' : '0';
+          var flat = localStorage.getItem('forsion_theme_flat') === '1' ? '1' : '0';
           var MIG = { lovable: ['lovable', 'cream'], echo: ['lovable', 'coral'], qbird: ['lovable', 'teal'], dreamer: ['soft', 'lavender'], custom: ['lovable', 'custom'] };
           var legacy = MIG[localStorage.getItem('forsion_theme_preset')] || null;
           var lang = localStorage.getItem('forsion_theme_lang') || (legacy ? legacy[0] : 'lovable');

@@ -66,6 +66,12 @@ describe('decide — 三方对账判定矩阵全表', () => {
     it('双方都动、内容不同 → conflict(LWW+冲突副本)', () => {
       expect(decide('c', sh(3, 'a'), rm(5, 'b'))).toEqual({ kind: 'conflict' })
     })
+    it('本地改过 + 远端 seq 动了但内容仍是基线(原样重写 / 改了又改回,seq 可跳)→ push 按新 seq,不是 conflict', () => {
+      expect(decide('b', sh(3, 'a'), rm(5, 'a'))).toEqual({ kind: 'push', baseSeq: 5 })
+    })
+    it('远端 hash 未知(null)+ 本地改过 → 仍是 conflict(不许把 null 当基线)', () => {
+      expect(decide('b', sh(3, 'a'), rm(5, null))).toEqual({ kind: 'conflict' })
+    })
   })
 })
 

@@ -11,8 +11,9 @@ The runtime helper began as a vendored function the folder model could not expre
   `accent/on-accent` pairs, and the WCAG contrast guard. Do **not** copy the archived study back.
 
 The historical named palettes were subsequently consolidated into `../skins.css`, while language
-folders under `../themes/<id>/` now own structure only. Elevation aliases and the flat-mode rule
-live in `../../styles/base.css`.
+folders under `../themes/<id>/` now own structure only. Shared subtle elevation and menu motion
+live in `../../styles/base.css`. Raised is the default; Flat clears decorative elevation tokens
+at the root while preserving interaction feedback and menu motion.
 
 Single source of truth for Genesis theme behavior = repository-root `DESIGN.md` plus the files
 named there (`styles/base.css`, `theme/skins.css`, and `theme/themes/<id>/theme.css`).

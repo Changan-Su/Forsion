@@ -2,7 +2,7 @@
  * Genesis 阴影契约静态闸门。
  *
  * 空间高程只能消费 --card-shadow / --btn-shadow / --icon-shadow（Amadeus 内部可经
- * --shadow-panel 桥接）；html[data-flat='1'] 会一次清空前三者。零模糊描边、focus/drop
+ * --shadow-panel 桥接）；立体使用淡阴影，扁平通过全局 token 清零。零模糊描边、focus/drop
  * 反馈及少量有明确语义的动效不属于空间高程，可保留，但必须落在下面的精确例外中。
  *
  * 跑：npm run check:shadowcontract
@@ -79,7 +79,7 @@ const INTERACTION_EXCEPTIONS = new Map([
   ['frontend/src/views/dashGrid.css|.dash3-card--lift|box-shadow', '网格仪表盘 DragOverlay 跟手壳抬起反馈(只在浮层这一层,不落到格子里的卡)'],
 ])
 
-/* LCL 展示页保留旧 token，但其自身 data-flat 规则会清空这些 token。 */
+/* LCL 历史展示页保留自己的 token 契约。 */
 const LEGACY_CONTROLLED = new Set([
   'frontend/src/amadeus/lcl/shell.css',
   'frontend/src/amadeus/theme/lcl/recipes.css',
@@ -92,7 +92,7 @@ function exceptionReason(file, selector, prop, value) {
   if (EFFECT_EXCEPTIONS.has(key)) return EFFECT_EXCEPTIONS.get(key)
   if (INTERACTION_EXCEPTIONS.has(key)) return INTERACTION_EXCEPTIONS.get(key)
   if (LEGACY_CONTROLLED.has(rel(file)) && (/^var\(--(?:shadow|shadow-sm|focus|stage-shadow)\b/.test(value) || /var\(--stage-shadow\b/.test(value))) {
-    return 'LCL 旧展示页自带 data-flat 清零规则'
+    return 'LCL 历史展示页独立 token'
   }
   return ''
 }
@@ -147,15 +147,18 @@ for (const file of sourceFiles) {
   })
 }
 
-/* 契约自身也要被钉住，避免扫描通过但 flat 开关不再清 token。 */
+/* Flat must clear the canonical tokens without suppressing semantic feedback. */
 const baseFile = path.join(DESKTOP, 'frontend/src/styles/base.css')
 const baseRoot = postcss.parse(fs.readFileSync(baseFile, 'utf8'), { from: baseFile })
 const cleared = new Set()
-baseRoot.walkRules("html[data-flat='1'][data-mode]", (rule) => rule.walkDecls((decl) => {
-  if (decl.value.trim() === 'none') cleared.add(decl.prop)
-}))
-for (const token of ['--card-shadow', '--btn-shadow', '--icon-shadow', '--shadow-panel']) {
-  if (!cleared.has(token)) violations.push({ file: rel(baseFile), line: 1, selector: "html[data-flat='1'][data-mode]", prop: token, value: '<missing>', reason: 'flat 契约必须把该 token 置为 none' })
+baseRoot.walkRules((rule) => {
+  if (rule.selector === "html:root[data-mode][data-flat='1']") {
+    rule.walkDecls((decl) => { if (decl.value === 'none') cleared.add(decl.prop) })
+  }
+})
+for (const token of ['--card-shadow', '--btn-shadow', '--icon-shadow']) {
+  if (!cleared.has(token)) violations.push({ file: rel(baseFile), line: 1, selector: '[data-flat]',
+    prop: token, value: '<missing>', reason: '扁平模式必须清除装饰阴影 token' })
 }
 
 /* 负控件：防止未来误改扫描器，让明显的硬编码阴影也被放过。 */

@@ -3,16 +3,15 @@
  *  + person(人员,值 = 显示名,Cell/候选集合住 PersonCell.tsx)。
  *  经属性注册表注册(与三方插件同一入口),自我 dogfood 该 API。
  *  side-effect import 于 bootstrap,始终在场(视图依赖它们,故不做成可禁用插件)。 */
-import { useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { parseCalDate, splitSide } from '@amadeus-shared/db/calDate'
 import { fmtCalDateL } from '@amadeus/lib/calDateFmt'
 import { pageKey } from '@amadeus-shared/links'
 import { fuzzyScore } from '../../lib/fuzzy'
 import { usePageStore } from '../../store/pageStore'
-import { CheckBoxCheckSolidIcon, DateTimeIcon, LinkedPageIcon, NumberIcon, TodayIcon } from '../../components/icons'
 import { registerPropertyType, type PropCellProps } from './propertyTypes'
 import { OverlayAt } from '../../lib/clampMenu'
-import { User } from 'lucide-react'
+import { dbIcon } from './databaseIcons'
 import { PersonCell, PERSON_TYPE } from './PersonCell'
 import { registerMessages, useI18n } from '../../../i18n'
 export { isPersonCol, personCandidates, PERSON_TYPE } from './PersonCell'
@@ -103,6 +102,11 @@ function CalendarDateCell({ value, onChange }: PropCellProps) {
   const raw = typeof value === 'string' ? value : ''
   const cur = parseCalDate(raw)
   const [pos, setPos] = useState<{ x: number; y: number; anchorTop: number } | null>(null)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const close = (): void => {
+    setPos(null)
+    requestAnimationFrame(() => trigger.current?.focus({ preventScroll: true }))
+  }
   // 交按钮下沿 + 上沿,不预夹(预夹会让 OverlayAt 误判锚点再翻面,codex#2)
   const open = (e: ReactMouseEvent): void => {
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
@@ -110,11 +114,16 @@ function CalendarDateCell({ value, onChange }: PropCellProps) {
   }
   return (
     <>
-      <button className="amx-db-cellbtn" onClick={open}>
+      <button ref={trigger} className="amx-db-cellbtn" onClick={open}>
         {cur ? <span className="amx-cal-chip">{fmtCalDateL(cur)}</span> : <span className="amx-db-blank">{t('dbbuiltins.empty')}</span>}
       </button>
       {pos && (
-        <div className="amx-db-popwrap" onMouseDown={() => setPos(null)}>
+        <div className="amx-db-popwrap" onMouseDown={close} onKeyDown={(event) => {
+          if (event.key !== 'Escape' || event.nativeEvent.isComposing || event.keyCode === 229) return
+          event.preventDefault()
+          event.stopPropagation()
+          close()
+        }}>
           <OverlayAt className="amx-db-pop amx-cal-pop" x={pos.x} y={pos.y} anchorTop={pos.anchorTop} onMouseDown={(e) => e.stopPropagation()}>
             <CalDateFields value={raw} onChange={onChange} autoFocus />
             {cur && (
@@ -186,6 +195,12 @@ export function RelationPicker({ x, y, anchorTop, onPick, onClose }: {
 }) {
   const { t } = useI18n()
   const [q, setQ] = useState('')
+  const trigger = useRef(document.activeElement instanceof HTMLElement ? document.activeElement : null)
+  useEffect(() => () => {
+    requestAnimationFrame(() => {
+      if (trigger.current?.isConnected) trigger.current.focus({ preventScroll: true })
+    })
+  }, [])
   const pages = usePageStore.getState().pages
   const base = (p: string): string => (p.split(/[\\/]/).pop() ?? p).replace(/\.md$/i, '')
   const dupes = new Map<string, number>()
@@ -205,7 +220,12 @@ export function RelationPicker({ x, y, anchorTop, onPick, onClose }: {
   const linkInner = (p: string): string =>
     (dupes.get(pageKey(base(p))) ?? 0) > 1 ? `${p.replace(/\\/g, '/').replace(/\.md$/i, '')}|${base(p)}` : base(p)
   return (
-    <div className="amx-db-popwrap" onMouseDown={onClose}>
+    <div className="amx-db-popwrap" onMouseDown={onClose} onKeyDown={(event) => {
+      if (event.key !== 'Escape' || event.nativeEvent.isComposing || event.keyCode === 229) return
+      event.preventDefault()
+      event.stopPropagation()
+      onClose()
+    }}>
       <OverlayAt className="amx-db-pop" x={x} y={y} anchorTop={anchorTop} onMouseDown={(e) => e.stopPropagation()}>
         <input
           className="amx-db-pop-input"
@@ -214,8 +234,8 @@ export function RelationPicker({ x, y, anchorTop, onPick, onClose }: {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Escape') onClose()
-            else if (e.key === 'Enter' && results[0]) onPick(linkInner(results[0]))
+            if (e.nativeEvent.isComposing || e.keyCode === 229) return
+            if (e.key === 'Enter' && results[0]) { e.preventDefault(); onPick(linkInner(results[0])) }
           }}
         />
         <div className="amx-db-pop-list">
@@ -270,21 +290,21 @@ let done = false
 export function registerBuiltinPropertyTypes(): void {
   if (done) return
   done = true
-  registerPropertyType({ type: 'todo', label: 'dbbuiltins.type.todo', icon: <CheckBoxCheckSolidIcon />, baseType: 'checkbox', Cell: TodoCell })
+  registerPropertyType({ type: 'todo', label: 'dbbuiltins.type.todo', icon: dbIcon('todo'), baseType: 'checkbox', Cell: TodoCell })
   registerPropertyType({
     type: 'calendarDate',
     label: 'dbbuiltins.type.calendarDate', // ponytail: 内部 id 仍 calendarDate(存储/迁移零改),用户只见「日期」= 标准富日期属性
-    icon: <TodayIcon />,
+    icon: dbIcon('calendarDate'),
     baseType: 'text',
     Cell: CalendarDateCell,
     sortValue: (v) => (typeof v === 'string' ? v : ''),
   })
-  registerPropertyType({ type: 'relation', label: 'dbbuiltins.type.relation', icon: <LinkedPageIcon />, baseType: 'text', Cell: RelationCell })
+  registerPropertyType({ type: 'relation', label: 'dbbuiltins.type.relation', icon: dbIcon('relation'), baseType: 'text', Cell: RelationCell })
   // ⚠️ 'autonumber' / 'created' 两个 id 与引擎 automation.ts 的 db_row_add 盖章是同名契约(propertyTypes.STAMPED_TYPES)
   registerPropertyType({
     type: 'autonumber',
     label: 'dbbuiltins.type.autonumber',
-    icon: <NumberIcon />,
+    icon: dbIcon('autonumber'),
     baseType: 'number',
     Cell: AutoNumberCell,
     initialValue: ({ rows, column }) => nextAutoNumber(rows, column.id),
@@ -293,7 +313,7 @@ export function registerBuiltinPropertyTypes(): void {
   registerPropertyType({
     type: 'created',
     label: 'dbbuiltins.type.created',
-    icon: <DateTimeIcon />,
+    icon: dbIcon('created'),
     baseType: 'text',
     Cell: CreatedCell,
     initialValue: () => createdStamp(),
@@ -305,7 +325,7 @@ export function registerBuiltinPropertyTypes(): void {
   registerPropertyType({
     type: 'updated',
     label: '修改时间', // ⚠️ 测试逐字断言(见文首 registerBuiltinPropertyTypes 注释),故未改成 i18n 键
-    icon: <DateTimeIcon />,
+    icon: dbIcon('created'),
     baseType: 'text',
     Cell: CreatedCell,
     initialValue: () => createdStamp(),
@@ -315,7 +335,7 @@ export function registerBuiltinPropertyTypes(): void {
   registerPropertyType({
     type: PERSON_TYPE,
     label: '人员', // ⚠️ 同上:测试逐字断言 def.label === '人员'
-    icon: <User size={14} />,
+    icon: dbIcon('person'),
     baseType: 'text',
     Cell: PersonCell,
     sortValue: (v) => (typeof v === 'string' ? v : ''),

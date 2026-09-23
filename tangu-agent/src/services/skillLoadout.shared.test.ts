@@ -1,8 +1,8 @@
 /** 技能目录的「其他 Agent 共享」段:有共享才多一段并放行 use_skill;不列借用方自己的;sandbox / 非 host 形态不查。 */
 import { describe, it, expect, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ hostExec: true, shared: [] as Array<Record<string, unknown>> }));
-vi.mock('../seams/runtime.js', () => ({ deps: () => ({ profile: { capabilities: { hostExec: h.hostExec } }, brain: { assets: { listSkills: async () => [], getSkill: async () => null } } }) }));
+const h = vi.hoisted(() => ({ hostExec: true, shared: [] as Array<Record<string, unknown>>, selected: null as Record<string, unknown> | null }));
+vi.mock('../seams/runtime.js', () => ({ deps: () => ({ profile: { capabilities: { hostExec: h.hostExec } }, brain: { assets: { listSkills: async () => [], getSkill: async (id: string) => h.selected?.id === id ? h.selected : null } } }) }));
 vi.mock('../tools/fileWorkspace.js', () => ({ materializeSkill: async () => {} }));
 vi.mock('../seams/runContext.js', () => ({ currentDisplayAgentSlug: () => 'xyra' }));
 vi.mock('../skills/localSkills.js', () => ({ listSharedAgentSkills: async (exclude: string | null) => h.shared.filter((s) => s.ownerSlug !== exclude) }));
@@ -34,5 +34,18 @@ describe('skillLoadout 共享技能段', () => {
     const stripped = await loadSkillLoadout('u', 'tangu', { execMode: 'host', enabledSkillIds: [], skillsConfigured: true });
     expect(stripped.sections).toEqual([]);
     expect(stripped.enabledSkillIds).toEqual([]);
+  });
+  it('显式选中的共享技能只列按需目录，不把短正文内联进每轮 system', async () => {
+    h.hostExec = true; h.shared = [];
+    h.selected = { ...CODING, content: '# Forsion webapp\nBorrowed instructions' };
+    const r = await loadSkillLoadout('u', 'tangu', {
+      execMode: 'host', enabledSkillIds: [CODING.id], skillsConfigured: true,
+    });
+    expect(r.enabledSkillIds).toEqual([CODING.id]);
+    expect(r.sections).toHaveLength(1);
+    expect(r.sections[0]).toContain('## Available Skills (load on demand)');
+    expect(r.sections[0]).toContain('local:@coding/forsion-webapp');
+    expect(r.sections[0]).not.toContain('Borrowed instructions');
+    h.selected = null;
   });
 });

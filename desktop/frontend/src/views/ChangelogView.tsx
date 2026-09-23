@@ -28,7 +28,7 @@ export function ChangelogView() {
     <div className="changelog-view md-body" style={{ height: '100%', overflow: 'auto', padding: 24 }}>
       {hasUpdate && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20, paddingBottom: 16, borderBottom: '1px solid var(--border)' }}>
-          <div style={{ fontWeight: 700, fontSize: 17 }}>{t('changelog.newVersion', { version: upd.version || '' })}</div>
+          <div style={{ fontWeight: 700, fontSize: 'var(--ui-font-heading, 14px)' }}>{t('changelog.newVersion', { version: upd.version || '' })}</div>
           <span style={{ flex: 1 }} />
           <UpdateActions upd={upd} />
         </div>

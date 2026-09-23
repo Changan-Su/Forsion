@@ -23,6 +23,7 @@ import {
   defaultValueCtx,
   editorViewCtx,
   editorViewOptionsCtx,
+  parserCtx,
   rootCtx,
   serializerCtx,
   type CmdKey,
@@ -1756,11 +1757,57 @@ export function MarkdownBlock({
  *  双链建议无候选(输入 [[ 仅作纯文本)。资源不做 display/stored 变换 —— 外部文件原文往返无损。
  *  缩进编解码(indentIo)**要**做:它绕过 toDisplay/toStoredMarkdown,不包一层的话行首制表符
  *  段落在悬浮预览/工作区编辑里仍会被 remark 读成缩进代码块。 */
-export function PlainMarkdownEditor({ initial, onChange, readOnly = false }: {
+export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immediate = false }: {
   initial: string
   onChange: (md: string) => void
   readOnly?: boolean
+  /** Record peeks may unmount immediately after typing. Persist transactions before listener's 200ms debounce. */
+  immediate?: boolean
 }) {
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
+  const incoming = useRef(initial)
+  incoming.current = initial
+  const applyIncoming = useRef<(() => void) | null>(null)
+  const receiving = useRef(false)
+  const emitted = useRef<string | null>(null)
+  const emit = (md: string): void => {
+    const stored = entitiesToTabs(normalizeSerializedMd(md))
+    if (emitted.current === stored) return
+    emitted.current = stored
+    // An external reconciliation is already stored. Remember its canonical form so
+    // both this synchronous plugin and the delayed listener avoid echoing it back.
+    if (!receiving.current) onChangeRef.current(stored)
+  }
+  const emitRef = useRef(emit)
+  emitRef.current = emit
+  const immediatePlugins = useMemo(() => immediate ? [$prose((ctx) => new Plugin({
+    view: (view) => {
+      const sync = (): void => {
+        if (view.isDestroyed || incoming.current === emitted.current) return
+        const next = ctx.get(parserCtx)(tabsToEntities(incoming.current))
+        // Local edits echoed through the parent must not dispatch a replacement:
+        // keeping the same document also keeps its selection and input composition.
+        if (!next || next.eq(view.state.doc)) return
+        receiving.current = true
+        try {
+          view.dispatch(view.state.tr.replaceWith(0, view.state.doc.content.size, next.content).setMeta('addToHistory', false))
+        } finally {
+          receiving.current = false
+        }
+      }
+      applyIncoming.current = sync
+      // Milkdown initializes asynchronously; props may change before its view exists.
+      queueMicrotask(() => { if (applyIncoming.current === sync) sync() })
+      return {
+        update: (current, previous) => {
+          if (!current.state.doc.eq(previous.doc)) emitRef.current(ctx.get(serializerCtx)(current.state.doc))
+        },
+        destroy: () => { if (applyIncoming.current === sync) applyIncoming.current = null },
+      }
+    },
+  }))] : undefined, [immediate])
+  useLayoutEffect(() => { if (immediate) applyIncoming.current?.() }, [initial, immediate])
   const noop = (): void => {}
   const keys: BlockKeys = {
     insertAfter: noop, deleteEmpty: noop, mergePrev: noop, arrow: noop, moveDir: noop, selfFocus: noop,
@@ -1770,7 +1817,10 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false }: {
       <MilkdownProvider>
         <MilkdownInner
           initial={tabsToEntities(initial)}
-          onChange={(md) => onChange(entitiesToTabs(md))}
+          // Immediate mode has one writer. The listener can retain an older local
+          // transaction when an external addToHistory=false update supersedes it.
+          onChange={immediate ? noop : (md) => onChange(entitiesToTabs(md))}
+          extraPlugins={immediatePlugins}
           keys={keys}
           saveImage={async () => null}
           saveFiles={async () => {}}

@@ -107,10 +107,6 @@
   box-shadow: inset 0 0 0 1px rgba(255,255,255,0.35), var(--stage-shadow);
 }
 .tangu-soft[data-mode='dark'] .ts-stage { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.06), var(--stage-shadow); }
-/* flat mode — one toggle strips all elevation; cards then read by fill alone (kept a faint stage hairline for edge) */
-.tangu-soft[data-flat='1'] { --shadow: none; --shadow-sm: none; }
-.tangu-soft[data-flat='1'] .ts-stage { box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06); }
-.tangu-soft[data-flat='1'][data-mode='dark'] .ts-stage { box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); }
 .ts-grid { display: flex; gap: var(--gap); height: 100%; }
 .ts-col-mid { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--gap); }
 

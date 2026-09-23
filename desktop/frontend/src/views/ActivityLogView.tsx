@@ -48,12 +48,12 @@ export const ActivityLogView: React.FC = () => {
           onChange={(e) => setFilter(e.target.value)}
           placeholder={t('activityView.filter')}
           spellCheck={false}
-          style={{ flex: 1, maxWidth: 320, fontSize: 12.5 }}
+          style={{ flex: 1, maxWidth: 320, fontSize: 'var(--ui-font-meta, 12px)' }}
         />
         <button className="btn ghost sm" onClick={() => setPaused((p) => !p)}>
           {paused ? <Play size={12} /> : <Pause size={12} />} {paused ? t('activityView.resume') : t('activityView.pause')}
         </button>
-        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{t('activityView.count', { n: shown.length })}</span>
+        <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{t('activityView.count', { n: shown.length })}</span>
       </div>
       <div
         ref={boxRef}
@@ -61,7 +61,7 @@ export const ActivityLogView: React.FC = () => {
           const el = boxRef.current
           if (el) stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
         }}
-        style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 12px 12px', fontFamily: MONO, fontSize: 12, lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
+        style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 12px 12px', fontFamily: MONO, fontSize: 'var(--ui-font-meta, 12px)', lineHeight: 1.7, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
       >
         {shown.length === 0 && <div className="hint" style={{ fontFamily: 'inherit' }}>{t('activityView.empty')}</div>}
         {shown.map((l, i) => {

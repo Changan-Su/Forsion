@@ -18,7 +18,6 @@ export function AmadeusPdfView({ leaf }: ViewProps) {
   const page = typeof leaf.params.page === 'number' ? leaf.params.page : undefined
   const quote = typeof leaf.params.q === 'string' ? leaf.params.q : undefined // 引用条带的引语:临时高亮,不写盘
   const mode = useTheme((s) => s.mode)
-  const flat = useTheme((s) => s.flat)
   // Vault 是否已打开(root 落地)。启动时 dockview 会恢复上次的 PDF tab,而 restoreVault 是 void 异步调用——
   // 若在 root 落地前就读字节 → 主进程「No vault is open」。gate 住:vault ready 前不挂 PdfAnnotator(不读字节)。
   // 库外 PDF(引用条给的绝对路径)不经 vault 通道读字节 → 不必等 vault 落地。
@@ -33,7 +32,7 @@ export function AmadeusPdfView({ leaf }: ViewProps) {
   if (!pdfPath) return <div className="amx-db amx-db-state">未指定 PDF 文件。</div>
   return (
     // 内联 height 兜底:懒加载 fallback 阶段 pdfAnnotator.css 尚未到,先保证外壳撑满面板。
-    <div className="am-app tangu-lovable amx-pane amx-pdfview" data-mode={mode} data-flat={flat ? '1' : '0'} style={{ height: '100%' }}>
+    <div className="am-app tangu-lovable amx-pane amx-pdfview" data-mode={mode} style={{ height: '100%' }}>
       {vaultReady ? (
         <Suspense fallback={<Skeleton variant="document" />}>
           <PdfAnnotator key={isHostPath(pdfPath) ? 'host' : vaultRoot ?? ''} pdfPath={pdfPath} initialPage={page} initialQuote={quote} />

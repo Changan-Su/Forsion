@@ -1558,7 +1558,7 @@ async function main() {
     const wikiRow = await r.locator('.wiki-suggest .wiki-item').first().boundingBox()
     const wc = await contrast('.wiki-item[data-active]', '.wiki-suggest')
     check('T45 @ 面板选中底 ≠ 面板底且 alpha ≥ 0.06', wc.row !== wc.panel && wc.alpha >= 0.06, JSON.stringify(wc))
-    check('T45 @ 面板行高 = slash 菜单行高(同一 28px 正典)', !!slashRow && !!wikiRow && Math.abs(slashRow.height - wikiRow.height) <= 1, `slash=${slashRow && slashRow.height} wiki=${wikiRow && wikiRow.height}`)
+    check('T45 @ 面板行高 = slash 菜单行高（共用菜单标尺）', !!slashRow && !!wikiRow && Math.abs(slashRow.height - wikiRow.height) <= 1, `slash=${slashRow && slashRow.height} wiki=${wikiRow && wikiRow.height}`)
     const pageRow = await r.locator('.wiki-suggest .wiki-item').nth(3).boundingBox()
     check('T45 页面行也是同一高度(不再是两段行)', !!pageRow && Math.abs(pageRow.height - wikiRow.height) <= 1, `page=${pageRow && pageRow.height}`)
     await r.close()

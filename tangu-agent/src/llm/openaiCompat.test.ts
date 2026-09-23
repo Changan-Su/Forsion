@@ -119,7 +119,7 @@ describe('tuneOpenAiDirectPayload(直连档位下发)', () => {
   it('⚠️Claude 5 走自适应:发 budget_tokens 或 temperature 都是 400', () => {
     const p = { ...base(), model: 'claude-sonnet-5', [PROTOCOL_MARK]: 'anthropic-messages' };
     tuneOpenAiDirectPayload(p, 'high', { baseUrl: 'https://api.anthropic.com' });
-    expect(p.thinking).toEqual({ type: 'adaptive' });
+    expect(p.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
     expect(p.output_config).toEqual({ effort: 'high' });
     expect(p.temperature).toBeUndefined();
   });

@@ -8,6 +8,7 @@ import { Plugin, PluginKey } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet } from '@milkdown/kit/prose/view'
 import { common, createLowlight } from 'lowlight'
 import { currentLocale, registerMessages, translate } from '../../../i18n'
+import { isShellLang, runInTerminal, stripPrompt } from '../../../builtins/runCommand'
 
 /** 工具条文案。⚠️ 按钮字面**必须短**(和中文的两字一样):工具条绝对定位盖在代码块右上,
  *  英文写长了(实测 "Line numbers"/"Collapse" 一套 375px)会盖住短代码块的水平中心,点进去
@@ -18,6 +19,8 @@ registerMessages({
   'amxcode.copy': { zh: '复制', en: 'Copy' },
   'amxcode.copyTitle': { zh: '复制代码', en: 'Copy code' },
   'amxcode.copied': { zh: '已复制', en: 'Copied' },
+  'amxcode.run': { zh: '运行', en: 'Run' },
+  'amxcode.runTitle': { zh: '在内置终端运行(底部面板)', en: 'Run in the built-in terminal (bottom panel)' },
   'amxcode.wrap': { zh: '折行', en: 'Wrap' },
   'amxcode.wrapTitle': { zh: '切换自动折行(视图态,不改内容)', en: 'Toggle line wrap (view only, does not change content)' },
   'amxcode.linenoOff': { zh: '取消行号', en: 'Hide numbers' },
@@ -228,6 +231,20 @@ export function codeBlockPlugin() {
                       if (at !== null) view.dispatch(view.state.tr.setMeta(codeKey, { toggle: at, which: 'collapse' }))
                     })
                     bar.append(sel, copy, wrap, nums, fold)
+                    // 运行(仅 shell fence 且桌面端有 PTY;笔记里没有会话,只跑不回传)
+                    if (isShellLang(lang) && window.tangu?.pty) {
+                      const run = document.createElement('button')
+                      run.className = 'amx-code-btn'
+                      run.textContent = translate('amxcode.run')
+                      run.title = translate('amxcode.runTitle')
+                      run.addEventListener('click', () => {
+                        const at = nodeAt()
+                        const n = at === null ? null : view.state.doc.nodeAt(at)
+                        const cmd = n ? stripPrompt(n.textContent) : ''
+                        if (cmd) runInTerminal(cmd)
+                      })
+                      bar.append(run)
+                    }
                     return bar
                   },
                   // key 带语言与折行态:变更即重建(select 值/按钮态才会刷新)。

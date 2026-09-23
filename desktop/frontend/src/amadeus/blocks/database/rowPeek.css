@@ -1,0 +1,65 @@
+.amx-db-peek-shade {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  align-items: stretch;
+  justify-content: flex-end;
+  background: color-mix(in srgb, var(--overlay-scrim) 45%, transparent);
+  color: var(--text);
+  cursor: default;
+}
+.amx-db-peek {
+  width: min(640px, 90vw);
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  box-shadow: var(--card-shadow);
+  outline: none;
+  pointer-events: auto;
+}
+.amx-db-peek-shade[data-mode='side'] { pointer-events: none; background: transparent; }
+.amx-db-peek-shade[data-mode='side'] .amx-db-peek { border-left: 1px solid var(--border); }
+.amx-db-peek-shade[data-mode='center'] { align-items: center; justify-content: center; }
+.amx-db-peek-shade[data-mode='center'] .amx-db-peek { width: min(800px, 92vw); height: min(840px, 90vh); border-radius: var(--radius-lg); overflow: hidden; }
+.amx-db-peek-shade[data-mode='full'] .amx-db-peek { width: 100%; }
+.amx-db-peek-toolbar { display: flex; align-items: center; gap: 3px; flex: none; min-height: 44px; padding: 6px 12px; border-bottom: 1px solid var(--border); }
+.amx-db-peek-toolbar button { display: inline-flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-xs, var(--radius-sm)); background: transparent; color: var(--text-muted); cursor: pointer; }
+.amx-db-peek-toolbar button:hover:not(:disabled), .amx-db-peek-toolbar button[aria-pressed='true'] { background: var(--menu-hover); color: var(--text); }
+.amx-db-peek-toolbar button:focus-visible { outline: var(--focus-ring) solid var(--sel-line); outline-offset: 1px; }
+.amx-db-peek-toolbar button:disabled { opacity: .3; cursor: default; }
+.amx-db-peek-crumb { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 6px; font-size: var(--db-meta-size); color: var(--text-muted); }
+.amx-db-peek-divider { width: 1px; height: 16px; background: var(--border); margin: 0 5px; }
+.amx-db-peek-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 28px 36px 56px; }
+.amx-db-peek-title { margin: 0 0 20px; font-size: var(--db-page-title-size); line-height: 1.3; font-weight: 600; overflow-wrap: anywhere; }
+.amx-db-peek-properties .amx-db-roweditor { min-width: 0; max-width: none; width: 100%; gap: 4px; }
+.amx-db-peek-properties .amx-db-rowed-field { display: grid; grid-template-columns: minmax(104px, 28%) minmax(0, 1fr); align-items: start; gap: 10px; margin: 0; }
+.amx-db-peek-properties .amx-db-rowed-label { padding: 8px 0; font-size: var(--db-meta-size); line-height: var(--db-line-height); color: var(--text-muted); }
+.amx-db-peek-properties .amx-db-rowed-cell { min-width: 0; min-height: var(--db-cell-height); padding: 0 4px; border-color: transparent; border-radius: var(--radius-xs, var(--radius-sm)); }
+.amx-db-peek-properties .amx-db-rowed-cell:hover { background: var(--overlay-light); }
+/* The property shell owns focus. Suppress the inherited input ring inside it,
+   including the late amadeus-host.css input:focus treatment. */
+.amx-db-peek .amx-db-rowed-cell[data-db-cell]:focus-visible,
+.amx-db-peek .amx-db-rowed-cell:focus-within { outline: none; background: var(--overlay-light); box-shadow: inset 0 0 0 var(--focus-ring) var(--sel-line); }
+.amx-db-peek .amx-db-rowed-cell .amx-db-input,
+.amx-db-peek .amx-db-rowed-cell .amx-db-input:focus { padding: var(--db-cell-pad-block) 6px; background: transparent; border-color: transparent; box-shadow: none; border-radius: 0; }
+.amx-db-peek .amx-db-rowed-cell :is(.amx-db-input, .amx-db-cellbtn):focus-visible { outline: none; }
+.amx-db-peek .amx-db-rowed-cell .amx-db-value-display { min-height: var(--db-cell-height); padding: var(--db-cell-pad-block) 6px; }
+.amx-db-peek .amx-db-rowed-cell .amx-db-cellbtn { min-height: var(--db-cell-height); padding: var(--db-cell-pad-block) 6px; }
+.amx-db-peek .amx-db-rowed-cell .amx-db-cellbtn:hover { background: transparent; }
+.amx-db-peek-properties .amx-db-roweditor > .amx-db-opt-danger { align-self: flex-start; width: auto; margin-top: 10px; padding: var(--db-cell-pad-block) 6px; color: var(--text-faint, var(--text-muted)); font-size: var(--db-meta-size); }
+.amx-db-peek-properties .amx-db-roweditor > .amx-db-opt-danger:hover { color: var(--danger); background: var(--menu-hover); }
+.amx-db-peek-body { border-top: 1px solid var(--border); margin-top: 20px; padding-top: 20px; min-height: 180px; }
+.amx-db-peek-body .ProseMirror { min-height: 140px; outline: none; caret-color: var(--text); }
+.amx-db-peek-hint { color: var(--text-faint, var(--text-muted)); font-size: var(--db-text-size); margin: 0 0 12px; }
+.amx-db-peek-shade[data-mode='full'] .amx-db-peek-scroll { width: min(900px, 100%); margin-inline: auto; box-sizing: border-box; }
+@media (max-width: 600px) {
+  .amx-db-peek { width: 100%; }
+  .amx-db-peek-scroll { padding-inline: 20px; }
+  .amx-db-peek-title { font-size: var(--db-page-title-size); }
+  .amx-db-peek-shade[data-mode='center'] .amx-db-peek { width: 100%; height: 100%; border-radius: 0; }
+}
+
+.amx-db-peek .amx-db-rowed-cell :is(.amx-db-input, .amx-db-value-display, .amx-db-cellbtn) { box-sizing: border-box; font-family: var(--font-ui); font-size: var(--db-text-size); font-weight: 400; line-height: var(--db-line-height); }
+.amx-db-peek-body .ProseMirror { font-family: var(--font-body); font-size: var(--db-page-text-size); line-height: var(--db-page-line-height); }

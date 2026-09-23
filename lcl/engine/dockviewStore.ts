@@ -774,8 +774,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       const cur = activeMainPanel(api)
       if (cur) return get().navigateLeaf(cur.id, type, params)
     }
-    if (loc !== 'main') {
+    if (loc !== 'main' && !opts?.newTab) {
       // 侧栏同侧同类型复用(非 singleton 也复用):侧栏 tab 按类型唯一,如左右各一个「工作区」视图。
+      // 显式 newTab 让路(与主区同语义):代码块「运行」每次都要一个新的底部终端 tab。
       const existingSide = panelsAt(api, loc).find((p) => panelType(p) === type)
       if (existingSide) {
         existingSide.api.setActive()

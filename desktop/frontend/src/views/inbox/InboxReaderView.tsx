@@ -12,6 +12,8 @@ import { useApp } from '../../stores/appStore'
 import { useInbox, isAutomationSender, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
 import { useWorkspace, setActiveSpace } from '@lcl/engine'
 import { InboxBody } from './InboxBody'
+import { FeedbackThread, feedbackThreadAvailable } from './FeedbackThread'
+import { inboxThreadOf } from './feedbackThreadLib'
 import { hasUnknownRequirement, tierFromAuth, unmetClaimRequirements } from './claimRequirements'
 import './inbox.css'
 
@@ -46,6 +48,8 @@ export function InboxReaderView() {
   // 过期态:展示层判断(真正的领取闸在服务端)。
   const expiresAt = parseUtc(msg.expires_at ?? null)
   const expired = !!expiresAt && expiresAt.getTime() <= Date.now()
+  // 反馈线程:服务端投递的定向信(thread 判别列)+ 桌面壳有云端接缝才挂;Web / 移动端只看正文。
+  const thread = feedbackThreadAvailable() ? inboxThreadOf(msg) : null
 
   /** 与发件 agent 开新聊天:切 Tangu Space + blankNewChat 等价序列(不 import bootstrapEngine 防环)+ 选中该 agent。 */
   const chatWithSender = () => {
@@ -114,6 +118,7 @@ export function InboxReaderView() {
           <InboxBody msg={msg} />
         </div>
         <InboxAttachments msg={msg} expired={expired} />
+        {thread && <FeedbackThread key={thread.ticketId} ticketId={thread.ticketId} event={thread.event} />}
       </div>
     </div>
   )

@@ -315,8 +315,10 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
 
   // 具名 agent 用它自己的工具集:按 def.tools 白名单重载 custom 工具(空=不限→继承父)。
   // 内置工具仍随 profile(与主 loop 跑该 agent 时一致);MCP 同主 loop 不受 agent.tools 收窄。
+  // profile.features.customTools=false → 不重载(主 loop 同闸,父 ctx 本就没有 customTools,继承即空)。
+  // profile 取法同 registry.currentProfile:父 run 冻结的那份优先。
   let subCustomTools = parentCtx.customTools;
-  if (def && def.tools.length) {
+  if (def && def.tools.length && (parentCtx.profile ?? deps().profile).features.customTools) {
     try {
       const loaded = await loadCustomTools(parentCtx.appId, { enabledToolIds: def.tools });
       subCustomTools = new Map(loaded.map((t) => [t.name, t]));

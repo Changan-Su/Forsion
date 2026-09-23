@@ -15,8 +15,74 @@ import type { ToolContext } from '../tools/toolTypes.js';
 
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { isValidSlug } from '../agents/agentRegistry.js';
+import { listSharedAgentSkills } from '../skills/localSkills.js';
+import {
+  SkillCatalogError, listSkillCatalog, getSkillCatalogDetail, createCatalogSkill,
+  updateCatalogSkill, setCatalogSkillDisabled, deleteCatalogSkill, copyCatalogSkill,
+  importCatalogSkill,
+} from '../skills/catalog.js';
 
 const router = Router();
+
+function localSkillsOnly(res: any): boolean {
+  if (deps().profile.capabilities.hostExec) return true;
+  res.status(404).json({ detail: 'Local skill management is available on this device only' });
+  return false;
+}
+const agentSlugArg = (req: AuthRequest): string | undefined =>
+  typeof req.query.agentSlug === 'string' ? req.query.agentSlug
+  : typeof req.body?.agentSlug === 'string' ? req.body.agentSlug : undefined;
+function catalogError(res: any, e: unknown): void {
+  res.status(e instanceof SkillCatalogError ? e.status : 500).json({ detail: e instanceof Error ? e.message : String(e) });
+}
+
+/** 每份技能独立列出，包含真实范围、路径、只读来源、当前 Agent 的覆盖/停用状态。 */
+router.get('/agent/skills/catalog', authMiddleware, async (req: AuthRequest, res) => {
+  if (!localSkillsOnly(res)) return;
+  try { res.json({ skills: await listSkillCatalog(agentSlugArg(req)) }); }
+  catch (e) { catalogError(res, e); }
+});
+router.get('/agent/skills/catalog/:key', authMiddleware, async (req: AuthRequest, res) => {
+  if (!localSkillsOnly(res)) return;
+  try { res.json({ skill: await getSkillCatalogDetail(req.params.key, agentSlugArg(req)) }); }
+  catch (e) { catalogError(res, e); }
+});
+router.post('/agent/skills/catalog', authMiddleware, async (req: AuthRequest, res) => {
+  if (!localSkillsOnly(res)) return;
+  try { res.status(201).json({ skill: await createCatalogSkill(req.body || {}) }); }
+  catch (e) { catalogError(res, e); }
+});
+router.post('/agent/skills/catalog/import', authMiddleware, async (req: AuthRequest, res) => {
+  if (!localSkillsOnly(res)) return;
+  try { res.status(201).json({ skill: await importCatalogSkill(req.body || {}) }); }
+  catch (e) { catalogError(res, e); }
+});
+router.patch('/agent/skills/catalog/:key', authMiddleware, async (req: AuthRequest, res) => {
+  if (!localSkillsOnly(res)) return;
+  try { res.json({ skill: await updateCatalogSkill(req.params.key, req.body || {}, agentSlugArg(req)) }); }
+  catch (e) { catalogError(res, e); }
+});
+router.put('/agent/skills/catalog/:key/disabled', authMiddleware, async (req: AuthRequest, res) => {
+  if (!localSkillsOnly(res)) return;
+  try {
+    if (typeof req.body?.disabled !== 'boolean') return res.status(400).json({ detail: 'disabled must be a boolean' });
+    await setCatalogSkillDisabled(req.params.key, req.body.disabled, agentSlugArg(req));
+    res.json({ ok: true });
+  } catch (e) { catalogError(res, e); }
+});
+router.delete('/agent/skills/catalog/:key', authMiddleware, async (req: AuthRequest, res) => {
+  if (!localSkillsOnly(res)) return;
+  try { res.json({ ok: true, ...await deleteCatalogSkill(req.params.key, agentSlugArg(req)) }); }
+  catch (e) { catalogError(res, e); }
+});
+router.post('/agent/skills/catalog/:key/copy', authMiddleware, async (req: AuthRequest, res) => {
+  if (!localSkillsOnly(res)) return;
+  try {
+    const sourceAgentSlug = typeof req.body?.sourceAgentSlug === 'string' ? req.body.sourceAgentSlug : agentSlugArg(req);
+    res.status(201).json({ skill: await copyCatalogSkill(req.params.key, req.body || {}, sourceAgentSlug) });
+  }
+  catch (e) { catalogError(res, e); }
+});
 
 /** GET /agent/skills 每条的对外形状(单独导出好单测:桌面「自建」徽标只认这里透传的 origin)。 */
 export function skillSummary(s: any): { id: string; name: string; description: string; icon: string | null; category: string | null; source: string; origin: 'agent' | null; builtin: boolean; shared: boolean } {
@@ -41,14 +107,20 @@ export function skillSummary(s: any): { id: string; name: string; description: s
 router.get('/agent/skills', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const listSkills = deps().brain.assets.listSkills;
+    const slug = typeof req.query.agentSlug === 'string' && isValidSlug(req.query.agentSlug) ? req.query.agentSlug : null;
     let skills: any[] = [];
     if (listSkills) {
       // forUser:进程内实现按其过滤(全局 ∪ 本人上传);httpBrain 由 token 隐含、忽略该字段。
-      const slug = typeof req.query.agentSlug === 'string' && isValidSlug(req.query.agentSlug) ? req.query.agentSlug : null;
       const load = () => listSkills({ visibleOnly: true, forUser: req.user!.userId });
       skills = (await (slug ? runWithAgentSlug(slug, load, slug) : load()).catch(() => [])) || [];
     }
-    res.json({ skills: skills.map(skillSummary) });
+    // Agent 档案的「自选技能」也要看得到自动模式会借用的共享池，否则从自动切到自选时
+    // `local:@owner/name` 消失，保存白名单会悄悄卸掉这些技能。无 agentSlug 的全局目录保持原形。
+    const shared = slug && deps().profile.capabilities.hostExec
+      ? await listSharedAgentSkills(slug).catch(() => []) : [];
+    const visible = new Map<string, any>();
+    for (const skill of [...skills, ...shared]) if (!visible.has(skill.id)) visible.set(skill.id, skill);
+    res.json({ skills: [...visible.values()].map(skillSummary) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list skills failed' });
   }
@@ -110,10 +182,13 @@ router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
     }
 
     let custom: any[] = [];
-    try {
-      custom = (await deps().brain.assets.listCustomTools({ appId: profile.appId, visibleOnly: true })) || [];
-    } catch {
-      custom = [];
+    // 与 run 同闸(agentLoop / subAgent 按 profile.features.customTools 决定是否装载):关掉的 app 清单也不列,免得「列表有、run 不装」。
+    if (profile.features.customTools) {
+      try {
+        custom = (await deps().brain.assets.listCustomTools({ appId: profile.appId, visibleOnly: true })) || [];
+      } catch {
+        custom = [];
+      }
     }
 
     // MCP 分区(仅 standalone/TUI 装配了 deps().mcp;server 状态 + 各 server 工具)

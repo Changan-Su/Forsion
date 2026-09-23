@@ -34,18 +34,18 @@
   padding: 0 16px 0 40px;
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 26px;
+  border-radius: var(--radius-lg, 16px);
   box-shadow: var(--card-shadow);
   animation: ach-t-body 4.6s var(--ease-out) both;
 }
 .ach-toast-sub {
-  font-size: 10.5px;
+  font-size: var(--ui-font-caption, 11px);
   color: var(--text-muted);
   letter-spacing: 0.02em;
   animation: ach-t-sub 4.6s var(--ease-out) both;
 }
 .ach-toast-title {
-  font-size: 13px;
+  font-size: var(--ui-font-body, 13px);
   font-weight: 600;
   color: var(--text);
   line-height: 1.35;
@@ -82,7 +82,7 @@
   padding: 0;
   border: 0;
   background: none;
-  border-radius: 26px;
+  border-radius: var(--radius-lg, 16px);
   cursor: pointer;
   /* 基础值 = 可点:reduced-motion 下本文件末尾把动画整个关掉,那时 toast 一上来就是终态,理应立刻能点。 */
   pointer-events: auto;
@@ -219,8 +219,8 @@
 /* ── 面板:系列头(点数/进度条/勋章) ───────────────────────────── */
 .ach-serieshead { display: flex; align-items: center; gap: 24px; padding: 4px 0 16px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
 .ach-serieshead-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
-.ach-serieshead-pts { font-size: 12.5px; color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
-.ach-tier-tag { font-size: 10.5px; font-weight: 700; padding: 1px 7px; border-radius: 999px; color: #fff; }
+.ach-serieshead-pts { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); display: flex; align-items: center; gap: 8px; font-variant-numeric: tabular-nums; }
+.ach-tier-tag { font-size: var(--ui-font-caption, 11px); font-weight: 600; padding: 1px 7px; border-radius: var(--radius-pill, 999px); color: #fff; }
 .ach-tier-tag[data-tier='bronze'] { background: #b87333; }
 .ach-tier-tag[data-tier='silver'] { background: #a9a9a9; }
 .ach-tier-tag[data-tier='gold'] { background: #d4af37; }
@@ -241,15 +241,15 @@
 .ach-row.claimed { opacity: 0.55; }
 .ach-row > svg { width: 18px; height: 18px; color: var(--text-muted); flex: none; }
 .ach-row-main { flex: 1; min-width: 0; }
-.ach-row-title { font-size: 13px; font-weight: 600; color: var(--text); }
-.ach-row-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
-.ach-row-pts, .ach-row-prog { font-size: 12px; color: var(--text-faint); font-variant-numeric: tabular-nums; flex: none; }
+.ach-row-title { font-size: var(--ui-font-body, 13px); font-weight: 600; color: var(--text); }
+.ach-row-desc { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); margin-top: 2px; }
+.ach-row-pts, .ach-row-prog { font-size: var(--ui-font-meta, 12px); color: var(--text-faint); font-variant-numeric: tabular-nums; flex: none; }
 .ach-row-got { color: var(--accent-ink); display: grid; place-items: center; width: 26px; flex: none; }
 .ach-claim {
   height: 26px; padding: 0 12px; flex: none;
   border: 1px solid var(--action-fill); border-radius: var(--radius-sm);
   background: var(--action-fill); color: var(--on-action);
-  font-size: 12px; font-weight: 600; cursor: pointer;
+  font-size: var(--ui-font-meta, 12px); font-weight: 600; cursor: pointer;
   transition: filter var(--duration-fast) var(--ease-out);
   -webkit-app-region: no-drag;
 }

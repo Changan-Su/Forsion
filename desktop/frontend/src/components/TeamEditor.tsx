@@ -106,12 +106,12 @@ export const TeamEditor: React.FC<{
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'var(--overlay-scrim)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
       <div className="team-editor" onClick={(e) => e.stopPropagation()} style={{
-        width: 520, maxWidth: '92vw', maxHeight: '86vh', overflow: 'auto', borderRadius: 12,
+        width: 520, maxWidth: '92vw', maxHeight: '86vh', overflow: 'auto', borderRadius: 'var(--radius-md, 12px)',
         background: 'var(--bg)', color: 'var(--text)', border: '1px solid var(--border)', boxShadow: 'var(--card-shadow)', padding: 18,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
           <Users size={18} />
-          <strong style={{ fontSize: 15, flex: 1 }}>{team ? t('team.editor.titleEdit') : t('team.editor.titleNew')}</strong>
+          <strong style={{ fontSize: 'var(--ui-font-heading, 14px)', flex: 1 }}>{team ? t('team.editor.titleEdit') : t('team.editor.titleNew')}</strong>
           <button className="icon-btn" onClick={onClose} title={t('team.editor.cancel')}><X size={16} /></button>
         </div>
 
@@ -141,7 +141,7 @@ export const TeamEditor: React.FC<{
                 <div key={a.slug} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 160, cursor: 'pointer' }}>
                     <input type="checkbox" checked={on} onChange={() => toggle(a.slug)} />
-                    {on && <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 14 }}>{idx + 1}</span>}
+                    {on && <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-muted)', minWidth: 14 }}>{idx + 1}</span>}
                     <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
                   </label>
                   {on && (
@@ -152,7 +152,7 @@ export const TeamEditor: React.FC<{
               )
             })}
           </div>
-          {presentCount < 2 && <div style={{ fontSize: 11, color: 'var(--danger)', marginTop: 4 }}>{t('team.editor.needTwo')}</div>}
+          {presentCount < 2 && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--danger)', marginTop: 4 }}>{t('team.editor.needTwo')}</div>}
         </div>
 
         <div className="field">

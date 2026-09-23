@@ -159,7 +159,8 @@ async function main() {
     // ── Esc 关窗(关了线程就丢:与 Claude 一样只在内存) ──
     const closed = panel.waitForEvent('close')
     await box.focus()
-    await box.press('Escape')
+    // keydown 就关窗:press 的 keyup 可能落在已关的页上而抛 —— 行为由下面的 close 事件与 isClosed 判,这里不当失败。
+    await box.press('Escape').catch(() => {})
     await closed
     check('Esc 关掉旁聊浮窗', panel.isClosed())
 

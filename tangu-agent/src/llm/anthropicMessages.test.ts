@@ -1,7 +1,18 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { openaiToAnthropicBody, streamAnthropicMessages } from './anthropicMessages.js';
+import { tuneOpenAiDirectPayload, PROTOCOL_MARK as PROTOCOL } from './openaiCompat.js';
 
 describe('openaiToAnthropicBody', () => {
+  // 能力表 → wire 端到端:Opus 5.5 思考常开(disabled 是 400),display 缺省 omitted 会让工具间旁白静默。
+  it('Opus 5.5 拨「关」:仍发 adaptive + summarized + 最弱档,不发 disabled / temperature', () => {
+    const p: any = { model: 'claude-opus-5-5', temperature: 0.7, messages: [{ role: 'user', content: 'hi' }], [PROTOCOL]: 'anthropic-messages' };
+    expect(tuneOpenAiDirectPayload(p, 'off', { baseUrl: 'https://api.anthropic.com' })).toBe('minimal');
+    const body = openaiToAnthropicBody(p);
+    expect(body.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+    expect(body.output_config).toEqual({ effort: 'low' });
+    expect(body.temperature).toBeUndefined();
+  });
+
   it('lifts role:system to the top level verbatim — no injected client identity block', () => {
     const body = openaiToAnthropicBody({
       model: 'claude-x',

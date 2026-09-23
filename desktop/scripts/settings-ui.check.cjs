@@ -47,7 +47,7 @@ require('sucrase/register/ts')
 const { SEED_THEMES } = require(path.join(__dirname, '../electron/seedThemes.ts'))
 const SOFT_CSS = SEED_THEMES.find((theme) => theme.id === 'soft')?.css
 if (!SOFT_CSS) throw new Error('缺少第一方 soft 磁盘种子主题')
-const LANGS = ['lovable', 'genesis-glass', 'soft', 'zhi']
+const LANGS = ['lovable', 'genesis-glass', 'soft']
 const CSS = [
   read('styles/base.css'),
   read('theme/skins.css'),
@@ -415,7 +415,7 @@ function surfaceUnder(el) {
   for (const m of subMap.matchAll(/^\s{4}'?([\w-]+)'?: \[([\s\S]*?)^\s{4}\],$/gm)) {
     for (const k of m[2].matchAll(/'([a-z]+-[a-z]+)'/g)) declared.push([m[1], k[1]])
   }
-  const guarded = new Set([...TSX.matchAll(/tab === '([\w-]+)'[^\n]*activeSub === '([a-z]+-[a-z]+)'/g)].map((m) => `${m[1]}/${m[2]}`))
+  const guarded = new Set([...TSX.matchAll(/tab === '([\w-]+)'(?:(?!\|\||tab ===)[^\n])*?activeSub === '([a-z]+-[a-z]+)'/g)].map((m) => `${m[1]}/${m[2]}`))
   const orphan = declared.filter(([tb, k]) => !guarded.has(`${tb}/${k}`)).map(([tb, k]) => `${tb}/${k}`)
   const stray = [...guarded].filter((g) => !declared.some(([tb, k]) => `${tb}/${k}` === g))
   check('F 每个中分类都有**同 tab 下**的正文块(不会点出空白页 / 挂错页)',

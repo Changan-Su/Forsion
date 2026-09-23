@@ -17,6 +17,7 @@ import { bundleSkillRoots } from '../plugins/bundles.js';
 import { currentDisplayAgentSlug, currentRunCwd } from '../seams/runContext.js';
 import type { SkillRecord } from '../core/types.js';
 import { listAgents } from '../agents/agentRegistry.js';
+import { disabledSkillNames } from './availability.js';
 
 export const LOCAL_SKILL_PREFIX = 'local:';
 
@@ -25,8 +26,11 @@ type SkillSource = 'builtin' | 'user' | 'bundle' | 'agent' | 'project';
 
 const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
+/** Catalog publishes imports here before an atomic rename. A populated stage is never a runnable skill. */
+export const isSkillStageDirName = (name: string): boolean => name.startsWith('.skill-stage-');
+
 /** 包内置技能目录(打包进 npm files;dist/skills/../../skills → 包根 skills/)。 */
-function builtinSkillsDir(): string {
+export function builtinSkillsDir(): string {
   const here = path.dirname(fileURLToPath(import.meta.url)); // dist/skills
   return path.resolve(here, '..', '..', 'skills');
 }
@@ -72,7 +76,9 @@ export function parseFrontmatter(raw: string): { meta: Record<string, string>; b
     const kv = line.match(/^([A-Za-z][\w-]*)\s*:\s*(.*)$/);
     if (!kv) continue;
     let v = kv[2].trim();
-    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) v = v.slice(1, -1);
+    if (v.startsWith('"') && v.endsWith('"')) {
+      try { v = JSON.parse(v); } catch { v = v.slice(1, -1); }
+    } else if (v.startsWith("'") && v.endsWith("'")) v = v.slice(1, -1);
     meta[kv[1].toLowerCase()] = v;
   }
   return { meta, body: raw.slice(m[0].length) };
@@ -94,7 +100,7 @@ async function dirStamp(dir: string): Promise<string> {
   }
   const parts: string[] = [];
   for (const e of entries) {
-    if (!e.isDirectory()) continue;
+    if (!e.isDirectory() || isSkillStageDirName(e.name)) continue;
     try {
       const st = await fs.stat(path.join(dir, e.name, 'SKILL.md'));
       parts.push(`${e.name}:${st.mtimeMs}`);
@@ -146,7 +152,7 @@ async function scanDir(dir: string, source: SkillSource): Promise<SkillRecord[]>
     return skills;
   }
   for (const e of entries) {
-    if (!e.isDirectory()) continue;
+    if (!e.isDirectory() || isSkillStageDirName(e.name)) continue;
     const file = path.join(dir, e.name, 'SKILL.md');
     let raw: string;
     try {
@@ -367,6 +373,12 @@ async function untouchedMirrors(destRoot: string): Promise<Set<string>> {
   return out;
 }
 
+/** 供管理目录识别随包播种、尚未被用户改动的镜像；只读原件不能被编辑接口误认作用户作品。 */
+export async function isUntouchedSeedMirror(dir: string): Promise<boolean> {
+  const stamp = await readStamp(dir);
+  return !!stamp && stamp === (await treeHash(dir));
+}
+
 export async function listLocalSkills(): Promise<SkillRecord[]> {
   await seedBuiltinSkills(); // 首启把内置复制进 ~/.forsion/skills(幂等;覆盖 TUI 等不走 standalone 启动的入口)
   const roots: Array<[string, SkillSource]> = [
@@ -385,6 +397,13 @@ export async function listLocalSkills(): Promise<SkillRecord[]> {
   if (cwd) for (const d of projectSkillsDirs(cwd)) roots.push([d, 'project']);
 
   const scanned = await Promise.all(roots.map(([dir, src]) => scanDir(dir, src)));
+  // 停用状态按作用域过滤候选版本，而不是删除目录。Agent 排除继承只影响全局候选；
+  // 同名 Agent 专属版仍可生效。项目级候选完全不参与本次管理，沿用既有顺序。
+  const [disabledUser, disabledAgent, disabledInherited] = await Promise.all([
+    disabledSkillNames('user'),
+    slug && SAFE_SLUG.test(slug) ? disabledSkillNames('agent', slug) : Promise.resolve(new Set<string>()),
+    slug && SAFE_SLUG.test(slug) ? disabledSkillNames('inherited', slug) : Promise.resolve(new Set<string>()),
+  ]);
   // ⚠️用户目录里那些**未被改动的内置镜像**不算「用户技能」:它们只是为了可见可改而复制过去的副本,
   // 却因为排在最后而把同名的 bundle 技能盖掉,声明的 builtin < bundle < user 优先级形同虚设(codex)。
   // 判据:目录指纹仍等于我们写下去时的那一份 = 用户没动过 → 降格,让 bundle 能盖住它;
@@ -397,6 +416,11 @@ export async function listLocalSkills(): Promise<SkillRecord[]> {
     const isUserRoot = roots[i][0] === userSkillsDir();
     const isBundleRoot = bundleRoots.has(roots[i][0]);
     for (const s of scanned[i]) {
+      const name = s.id.slice(LOCAL_SKILL_PREFIX.length);
+      const source = roots[i][1];
+      if ((source === 'builtin' || source === 'bundle' || source === 'user') &&
+          (disabledUser.has(name) || disabledInherited.has(name))) continue;
+      if (source === 'agent' && disabledAgent.has(name)) continue;
       if (isUserRoot && mirrors.has(s.id) && byId.has(s.id)) continue; // 未改镜像不覆盖已有(bundle)条目
       // ⚠️无指纹的用户副本挡住 bundle 技能 —— 说出来,别静默。
       // 怎么会有这种副本:某个技能原本是**内置**、被播种进用户目录,后来它随能力搬进了 Forsion 插件
@@ -438,8 +462,9 @@ export async function listSharedAgentSkills(excludeSlug: string | null): Promise
   const out: SharedSkill[] = [];
   for (const owner of owners) {
     const byId = new Map<string, SkillRecord>();
+    const disabled = await disabledSkillNames('agent', owner.slug);
     for (const dir of [builtinAgentSkillsDir(owner.slug), agentSkillsDir(owner.slug)]) {
-      for (const s of await scanDir(dir, 'agent')) if ((s as { shared?: boolean }).shared) byId.set(s.id, s);
+      for (const s of await scanDir(dir, 'agent')) if ((s as { shared?: boolean }).shared && !disabled.has(s.id.slice(LOCAL_SKILL_PREFIX.length))) byId.set(s.id, s);
     }
     for (const s of byId.values()) out.push({ ...s, id: sharedSkillId(owner.slug, s.id.slice(LOCAL_SKILL_PREFIX.length)), ownerSlug: owner.slug, ownerName: owner.name });
   }

@@ -69,7 +69,7 @@ export function AsrModelChoice({ models }: { models: ModelsResponse | null }) {
         ) : downloading ? (
           <div className="file-row" style={{ gap: 10 }}>
             <Loader2 size={13} className="spin" />
-            <span style={{ fontSize: 12.5 }}>{t('settings.asr.downloading')} {Math.round(progress * 100)}%</span>
+            <span style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{t('settings.asr.downloading')} {Math.round(progress * 100)}%</span>
             <div style={{ flex: 1, height: 5, background: 'var(--overlay-light, rgba(127,127,127,.15))', borderRadius: 3, overflow: 'hidden' }}>
               <div style={{ width: `${Math.round(progress * 100)}%`, height: '100%', background: 'var(--accent, #6366f1)', transition: 'width .2s' }} />
             </div>

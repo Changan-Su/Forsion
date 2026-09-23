@@ -12,6 +12,7 @@ import { AmadeusOverlays } from './amadeusOverlays'
 import { FindBar } from './findInPage'
 import { detachedId } from './windowKind'
 import { installFileDropGuard } from './fileDropGuard'
+import { listSkills } from './services/backendService'
 
 /** 独立窗默认布局 = 主区空占位(home,不可关);真正的视图随后由 detachedReady 注入或从持久化恢复。 */
 function buildDetachedDefault(): void {
@@ -27,6 +28,16 @@ export function DetachedRoot() {
   }, [t])
   useEffect(() => { void useApp.getState().boot() }, [])
   useEffect(() => installFileDropGuard(), []) // 独立窗也装全局拖放守卫
+  useEffect(() => window.tangu?.onMainAction?.((action) => {
+    if (action === 'agents-changed') {
+      void useApp.getState().refreshAgents()
+      window.dispatchEvent(new Event('forsion:agents-changed'))
+    }
+    if (action === 'skills-changed') {
+      void listSkills(useApp.getState().cfg).then((skillsList) => useApp.setState({ skillsList })).catch(() => {})
+      window.dispatchEvent(new Event('forsion:skills-changed'))
+    }
+  }), [])
 
   // pull 握手:向主进程取本窗待打开的初始视图(拖出时登记的 {type, params}[]),逐个开在主区。
   useEffect(() => {

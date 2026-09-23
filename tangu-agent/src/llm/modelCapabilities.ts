@@ -120,6 +120,13 @@ const EFFORT_FULL_MAX: LevelMap = { ...EFFORT_FULL, max: 'max' };
 /** GPT-6 Astra 只支持 low/medium/high/xhigh/max,不可关闭思考,也不支持 minimal。 */
 const EFFORT_ASTRA: LevelMap = { ...EFFORT_FULL_MAX, off: null, minimal: null };
 
+/**
+ * GPT-6 Sol / Luna:同样不认 minimal,但**认 'none'(可关思考)**—— 与 Astra 不同,别合表。
+ * 依据是 Codex 后端 400 原文列出的合法值(09-22 实测:Sol/Luna = none/low/…/max,Astra = low/…/max;
+ * 'none' + 工具真请求走通)。Codex 客户端目录只展示 low 起步,比后端窄,不作准。
+ */
+const EFFORT_GPT6: LevelMap = { ...EFFORT_FULL_MAX, minimal: null };
+
 /** Codex 订阅(ChatGPT 后端)。档位取自 codex-rs 的 ReasoningEffort 枚举,'max' 是真档不是别名。 */
 const EFFORT_CODEX: LevelMap = {
   off: 'none', minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max',
@@ -161,7 +168,7 @@ const CLAUDE_EFFORT: LevelMap = {
   off: false, minimal: 'low', low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh', max: 'max',
 };
 
-/** Fable 5 / Mythos:官方模型表标的是 Adaptive **(always on)** —— 思考关不掉,off 只能夹到 low。 */
+/** Fable 5 / Mythos / Opus 5.5:官方模型表标的是 Adaptive **(always on)** —— 思考关不掉,off 只能夹到 low。 */
 const CLAUDE_EFFORT_ALWAYS_ON: LevelMap = { ...CLAUDE_EFFORT, off: null };
 
 /** Gemini thinkingBudget。-1 = 动态(模型自己决定深度),0 = 关。 */
@@ -272,8 +279,12 @@ const DEFAULT_CAP: Omit<ModelCapability, 'rule'> = {
  */
 const CLAUDE_ADAPTIVE = /(sonnet|opus|fable|mythos)-([5-9]|\d\d)|opus-4[-.]([7-9]|\d\d)|mythos-preview/i;
 
-/** 其中思考常开、关不掉的那几支(官方模型表 Thinking = Adaptive (always on))。 */
-const CLAUDE_ALWAYS_ON = /(fable|mythos)-([5-9]|\d\d)|mythos-preview/i;
+/**
+ * 其中思考常开、关不掉的那几支(官方模型表 Thinking = Adaptive (always on))。
+ * Opus 5.5 起也在此列:`thinking:{type:'disabled'}` 返回 400(Opus 5 还能关)。`(?!\d)` 防 Opus 5 的
+ * 日期快照(`opus-5-2026…`)被 `\d\d` 误吞。往后的 Opus 5.x 先按常开算:判错只是「关」夹到最弱档,反之是 400。
+ */
+const CLAUDE_ALWAYS_ON = /(fable|mythos)-([5-9]|\d\d)|mythos-preview|opus-5[-.]([5-9]|\d\d)(?!\d)/i;
 
 /**
  * 自适应族的能力(三个入口——自有 key 的 host / 订阅协议 / 托管 provider——共用同一份,
@@ -286,6 +297,14 @@ const CLAUDE_ADAPTIVE_CAP: Omit<ModelCapability, 'rule'> = {
 };
 const CLAUDE_ALWAYS_ON_CAP: Omit<ModelCapability, 'rule'> = { ...CLAUDE_ADAPTIVE_CAP, levels: CLAUDE_EFFORT_ALWAYS_ON };
 
+/**
+ * 已核实的 GPT-6 型号(官方模型页三支都只有裸 id,没有日期快照)。未知 GPT-6 变体刻意不预支(default-deny)。
+ * Codex 目录里的 `ultra` 档是客户端概念(max + 自动派子任务),后端直接 400「Invalid value: 'ultra'」,
+ * 不收(normalizeThinkingLevel 把 ultra 归到 max)。
+ */
+const GPT6_ASTRA = /^gpt-6-astra$/i;
+const GPT6_SOL_LUNA = /^gpt-6-(sol|luna)$/i;
+
 // 官方迁移指南要求带工具时走 Responses,并移除 temperature/top_p/top_logprobs。
 // Responses 转换器按白名单重建请求,只需在这里保证所有档位(包括旧会话的 off)都改道。
 const ASTRA_CAP: Omit<ModelCapability, 'rule'> = {
@@ -293,13 +312,17 @@ const ASTRA_CAP: Omit<ModelCapability, 'rule'> = {
   dropTemperature: true, viaResponses: true,
 };
 
+// Sol / Luna 的 off 发 'none' 留在 chat/completions(与 gpt-5.x 同一条官方出路:「…or set reasoning_effort
+// to 'none'」),开档照旧改道 Responses;订阅路径本就是 Responses,'none' 直接上 wire。
+const GPT6_CAP: Omit<ModelCapability, 'rule'> = { ...ASTRA_CAP, levels: EFFORT_GPT6 };
+
 /** 首条命中即生效 —— 特例在前,族规则居中,兜底在后。 */
 const RULES: Rule[] = [
   // ── 订阅登录(协议已定,不看 host)────────────────────────────────────────
   {
     id: 'codex-astra',
     protocol: /^openai-responses$/,
-    model: /^gpt-6-astra$/i,
+    model: GPT6_ASTRA,
     cap: ASTRA_CAP,
   },
   {
@@ -307,8 +330,22 @@ const RULES: Rule[] = [
     id: 'codex-astra',
     host: /(^|\.)chatgpt\.com$/,
     urlPath: /^\/backend-api\/codex(?:\/|$)/,
-    model: /^gpt-6-astra$/i,
+    model: GPT6_ASTRA,
     cap: ASTRA_CAP,
+  },
+  {
+    // 必须排在 codex-subscription 之前:那张通用档表的 minimal 原样上 wire,Sol/Luna 直接 400。
+    id: 'codex-gpt6',
+    protocol: /^openai-responses$/,
+    model: GPT6_SOL_LUNA,
+    cap: GPT6_CAP,
+  },
+  {
+    id: 'codex-gpt6',
+    host: /(^|\.)chatgpt\.com$/,
+    urlPath: /^\/backend-api\/codex(?:\/|$)/,
+    model: GPT6_SOL_LUNA,
+    cap: GPT6_CAP,
   },
   {
     // Codex 订阅(ChatGPT 额度)走 chatgpt.com/backend-api/codex/responses,支持完整 effort 档。
@@ -342,8 +379,14 @@ const RULES: Rule[] = [
   {
     id: 'openai-astra',
     host: /(^|\.)api\.openai\.com$/,
-    model: /^gpt-6-astra$/i,
+    model: GPT6_ASTRA,
     cap: ASTRA_CAP,
+  },
+  {
+    id: 'openai-gpt6',
+    host: /(^|\.)api\.openai\.com$/,
+    model: GPT6_SOL_LUNA,
+    cap: GPT6_CAP,
   },
   {
     // gpt-5.x-pro:档位表只到 medium 起步,且**不能走 chat/completions** —— 永远改道 Responses。
@@ -360,7 +403,7 @@ const RULES: Rule[] = [
     // gpt-5.6 起官方 effort 表是 none/low/medium/high/xhigh/max —— `max` 成了真档(旧表折成 xhigh
     // 是白丢一档);而 'minimal' 在 5.6 的档位表里查不到(与通用 reasoning 指南的全量列表冲突),
     // 冲突按保守解:minimal 折到 'low' —— 少想不报错,发未知值会 400。其余 quirk 与 gpt-5 同。
-    // 刻意只认 5.6-5.9:GPT-6 Astra 的思考常开约束由上面的专用规则处理。
+    // 刻意只认 5.6-5.9:GPT-6 各支的档位差异由上面的专用规则处理。
     id: 'openai-gpt5-latest',
     host: /(^|\.)api\.openai\.com$/,
     model: /^gpt-5\.[6-9]/i,
@@ -830,9 +873,11 @@ export function applyThinking(
       break;
 
     case 'anthropic-effort':
-      if (!on) payload.thinking = { type: 'disabled' };
+      if (!on) payload.thinking = { type: 'disabled' }; // display 在 disabled 上非法,不带
       else {
-        payload.thinking = { type: 'adaptive' };
+        // Claude 5 家族 display 缺省 'omitted' = 思考文本整段不回;Opus 5.5 / Fable 5.1 连工具调用之间的旁白
+        // 也改走思考块 → 不要 summarized,UI 在工具间一片静默(官方 Opus 5.5 迁移指南)。计费与 display 无关。
+        payload.thinking = { type: 'adaptive', display: 'summarized' };
         if (typeof wire === 'string') payload.output_config = { effort: wire };
       }
       break;

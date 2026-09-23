@@ -14,7 +14,6 @@ import { openFile } from '../amadeusNav'
 export function AmadeusPluginFileView({ leaf }: ViewProps) {
   const filePath = typeof leaf.params.filePath === 'string' ? leaf.params.filePath : ''
   const mode = useTheme((s) => s.mode)
-  const flat = useTheme((s) => s.flat)
   // 订阅 fileTypes:插件加载后新注册的类型会触发重渲染 → 从「无人能开」变为正常挂载。
   const fileTypes = usePluginStore((s) => s.fileTypes)
   const ft = findFileType(fileTypes, filePath) // 引用稳定(=注册时存入的同一对象),effect 不会空转
@@ -88,7 +87,6 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
     <div
       className="am-app tangu-lovable amx-pane amx-pluginfile"
       data-mode={mode}
-      data-flat={flat ? '1' : '0'}
       ref={hostRef}
     />
   )

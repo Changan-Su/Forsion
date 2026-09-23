@@ -56,13 +56,13 @@
 .unitsw-row .unitsw-ic { flex: none; display: inline-flex; width: 18px; justify-content: center; color: var(--text-muted); }
 .unitsw-row.on .unitsw-ic { color: var(--accent-ink); }
 .unitsw-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.unitsw-title { font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.unitsw-off { font-style: normal; font-size: 10.5px; font-weight: 500; color: var(--text-faint); }
+.unitsw-title { font-size: var(--ui-font-meta, 12px); font-weight: 600; display: flex; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unitsw-off { font-style: normal; font-size: var(--ui-font-caption, 11px); font-weight: 500; color: var(--text-faint); }
 /* 通路徽标(直连/中转):同一台设备拆成两行,靠它一眼分开 —— 弱于设备名、强于「离线」注记。 */
-.unitsw-via { font-style: normal; flex: none; font-size: 10px; font-weight: 500; line-height: 15px; padding: 0 5px; border-radius: 999px; background: var(--overlay-light); color: var(--text-muted); }
-.unitsw-desc { font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unitsw-via { font-style: normal; flex: none; font-size: var(--ui-font-caption, 11px); font-weight: 500; line-height: 15px; padding: 0 5px; border-radius: var(--radius-pill, 999px); background: var(--overlay-light); color: var(--text-muted); }
+.unitsw-desc { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .unitsw-check { flex: none; color: var(--accent-ink); }
-.unitsw-empty { padding: 8px 9px; font-size: 11.5px; color: var(--text-muted); }
+.unitsw-empty { padding: 8px 9px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
 
 .unitsw-foot { border-top: var(--border-width) solid var(--border); margin-top: 3px; padding-top: 4px; }
 .unitsw-hosttoggle {
@@ -76,7 +76,7 @@
   border-radius: var(--radius-sm);
   cursor: pointer;
   color: var(--text-light);
-  font-size: 11.5px;
+  font-size: var(--ui-font-caption, 11px);
 }
 .unitsw-hosttoggle:hover { background: var(--overlay-light); }
 .unitsw-foot-label { flex: 1; text-align: left; }
@@ -84,19 +84,19 @@
 .unitsw-dot.wait { background: var(--text-faint); }
 .unitsw-dot.live { background: var(--green); }
 /* 迷你开关(纯 CSS 药丸):data-on 时滑块右移 + accent 填充。 */
-.unitsw-switch { flex: none; width: 26px; height: 15px; border-radius: 999px; background: var(--overlay-strong); position: relative; transition: background 0.15s ease; }
+.unitsw-switch { flex: none; width: 26px; height: 15px; border-radius: var(--radius-pill, 999px); background: var(--overlay-strong); position: relative; transition: background 0.15s ease; }
 .unitsw-switch::after { content: ''; position: absolute; top: 2px; left: 2px; width: 11px; height: 11px; border-radius: 50%; background: var(--bg-card); transition: transform 0.15s ease; }
 .unitsw-hosttoggle[data-on] .unitsw-switch { background: var(--accent); }
 .unitsw-hosttoggle[data-on] .unitsw-switch::after { transform: translateX(11px); }
-.unitsw-foot-hint { display: flex; align-items: center; gap: 6px; padding: 0 9px 4px; font-size: 10.5px; color: var(--text-faint); user-select: text; }
+.unitsw-foot-hint { display: flex; align-items: center; gap: 6px; padding: 0 9px 4px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); user-select: text; }
 .unitsw-refresh { border: none; background: transparent; color: var(--text-faint); cursor: pointer; display: inline-flex; padding: 2px; border-radius: 4px; }
 .unitsw-refresh:hover { background: var(--overlay-light); color: var(--text-muted); }
 
 /* 已配对来访设备(T1 回收面) */
 .unitsw-pairedbox { padding: 2px 9px 5px; }
-.unitsw-paired-head { font-size: 10px; color: var(--text-ghost); text-transform: uppercase; letter-spacing: 0.04em; padding: 3px 0; }
+.unitsw-paired-head { font-size: var(--ui-font-caption, 11px); color: var(--text-ghost); text-transform: uppercase; letter-spacing: 0.04em; padding: 3px 0; }
 .unitsw-paired-row { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
-.unitsw-paired-name { flex: 1; min-width: 0; font-size: 11px; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.unitsw-paired-name { flex: 1; min-width: 0; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .unitsw-paired-x { border: none; background: transparent; color: var(--text-faint); cursor: pointer; display: inline-flex; padding: 2px; border-radius: 4px; }
 .unitsw-paired-x:hover { background: var(--danger-light); color: var(--danger); }
 

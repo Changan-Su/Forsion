@@ -13,7 +13,7 @@ import type { ToolProvider } from '../toolRegistry.js';
 import { skillsDir, agentsDir, DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { slugify } from '../../agents/agentRegistry.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
-import { parseFrontmatter, isBuiltinSkillName } from '../../skills/localSkills.js';
+import { parseFrontmatter, isBuiltinSkillName, isUntouchedSeedMirror } from '../../skills/localSkills.js';
 
 const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const oneLine = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -109,6 +109,7 @@ export const manageSkillProvider: ToolProvider = {
             const slug = oneLine(args.slug);
             if (!SAFE_SLUG.test(slug)) return 'Error: delete 需要合法 slug(小写字母/数字/连字符)';
             if (await isBuiltinSkillName(slug)) return `Error: 「${slug}」是内置技能,受保护不可删除`;
+            if (await isUntouchedSeedMirror(path.join(root, slug))) return `Error: 「${slug}」是随包提供的只读技能,请先复制成自有版本`;
             if (!(await fileExists(skillMdPath(root, slug)))) return `未找到技能: ${slug}${scopeTag}`;
             await fs.rm(path.join(root, slug), { recursive: true, force: true });
             return `已删除技能: ${slug}${scopeTag}`;
@@ -129,6 +130,7 @@ export const manageSkillProvider: ToolProvider = {
               slug = oneLine(args.slug);
               if (!SAFE_SLUG.test(slug)) return 'Error: update 需要合法 slug';
               if (await isBuiltinSkillName(slug)) return `Error: 「${slug}」是内置技能,受保护不可改`;
+              if (await isUntouchedSeedMirror(path.join(root, slug))) return `Error: 「${slug}」是随包提供的只读技能,请先复制成自有版本`;
               if (!(await fileExists(skillMdPath(root, slug)))) return `Error: 未找到要更新的技能: ${slug}${scopeTag}(列表里带 [agent] 标记的技能须传 scope:"agent";create 与 update 的 scope 须一致)`;
             }
 

@@ -1,6 +1,6 @@
 import React, { useEffect, useLayoutEffect, useRef, useMemo, useSyncExternalStore, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { X } from 'lucide-react'
+import { ArrowLeft, X } from 'lucide-react'
 import { createExtendViewController, type ExtendViewController, type ExtendViewEntry, type ExtendViewPresenter } from './extendView'
 import { useEngineI18n } from './i18nSeam'
 import './extendView.css'
@@ -9,7 +9,7 @@ import './extendView.css'
 // still dismisses that editor, without closing every extension in a split workspace.
 let lastInteractedOwner: HTMLElement | null = null
 
-function Extension({ entry, titled, onDismiss }: { entry: ExtendViewEntry; titled: boolean; onDismiss(): void }) {
+function Extension({ entry, titled, back, opener, onDismiss }: { entry: ExtendViewEntry; titled: boolean; back: boolean; opener: HTMLElement | null; onDismiss(): void }) {
   const { t } = useEngineI18n()
   const body = useRef<HTMLDivElement>(null)
   const panel = useRef<HTMLElement>(null)
@@ -20,7 +20,7 @@ function Extension({ entry, titled, onDismiss }: { entry: ExtendViewEntry; title
     const el = document.createElement('div')
     el.className = 'wb-extend-mount'
     body.current!.appendChild(el)
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    const previousFocus = opener ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null)
     let cleanup: void | (() => void)
     try { cleanup = options.mount(el, entry.handle) } catch (error) {
       console.error('[extend-view] mount failed', error)
@@ -45,9 +45,10 @@ function Extension({ entry, titled, onDismiss }: { entry: ExtendViewEntry; title
   const side = options.side ?? 'right'
   // Left/right tab groups are icon-only, so the extension names and closes itself; bottom tabs and the drawer bar already do.
   return <section ref={panel} tabIndex={-1} role="dialog" aria-label={title} className="wb-extend" data-side={side}>
-    {!titled && <header className="wb-extend-head">
+    {!titled && <header className={`wb-extend-head${back ? ' wb-extend-head--back' : ''}`}>
+      {back && <button type="button" className="wb-extend-close" title={t('extendView.back')} aria-label={t('extendView.back')} onClick={onDismiss}><ArrowLeft size={14} /></button>}
       <span className="wb-extend-title">{title}</span>
-      <button type="button" className="wb-extend-close" title={t('extendView.close')} aria-label={t('extendView.close')} onClick={onDismiss}><X size={14} /></button>
+      {!back && <button type="button" className="wb-extend-close" title={t('extendView.close')} aria-label={t('extendView.close')} onClick={onDismiss}><X size={14} /></button>}
     </header>}
     <div ref={body} className="wb-extend-body" />
   </section>
@@ -60,15 +61,17 @@ export function ExtendViewHost({ children, present, owner, ownerKey = '' }: { pr
   const ref = useRef<HTMLDivElement>(null)
   const entry = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const leaseRef = useRef<ReturnType<ExtendViewPresenter> | null>(null)
-  const [leaseTarget, setTarget] = useState<{ element: HTMLElement; entry: ExtendViewEntry; titled: boolean } | null>(null)
+  const [leaseTarget, setTarget] = useState<{ element: HTMLElement; entry: ExtendViewEntry; titled: boolean; back: boolean; opener: HTMLElement | null } | null>(null)
   const target = leaseTarget?.element ?? null
   // A closing extension keeps rendering (with its last entry) until the platform has collapsed its panel.
   const shown = leaseTarget ? (entry?.handle === leaseTarget.entry.handle ? entry : leaseTarget.entry) : null
   useLayoutEffect(() => {
     if (!entry) return
-    const lease = present(entry.options, store.dismiss)
+    // Record the opener before presenting: an inline presenter makes it inert, and a blurred opener can't be given focus back.
+    const opener = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null
+    const lease = present(entry.options, store.dismiss, ref.current ?? undefined)
     leaseRef.current = lease
-    setTarget({ element: lease.element, entry, titled: !!lease.titled })
+    setTarget({ element: lease.element, entry, titled: !!lease.titled, back: !!lease.back, opener })
     return () => {
       leaseRef.current = null
       // Replaced by a newer entry: swap in place. A plain close may tween the panel shut; drop the content only afterwards.
@@ -112,6 +115,6 @@ export function ExtendViewHost({ children, present, owner, ownerKey = '' }: { pr
     onFocusCapture={() => { lastInteractedOwner = ref.current }}
     onPointerDownCapture={() => { lastInteractedOwner = ref.current }}>
     {children(store.controller)}
-    {shown && leaseTarget && createPortal(<Extension key={shown.handle.id} entry={shown} titled={leaseTarget.titled} onDismiss={store.dismiss} />, leaseTarget.element)}
+    {shown && leaseTarget && createPortal(<Extension key={shown.handle.id} entry={shown} titled={leaseTarget.titled} back={leaseTarget.back} opener={leaseTarget.opener} onDismiss={store.dismiss} />, leaseTarget.element)}
   </div>
 }

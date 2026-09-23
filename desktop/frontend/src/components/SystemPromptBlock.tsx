@@ -20,7 +20,7 @@ export const SystemPromptBlock: React.FC<{ content: string }> = ({ content }) =>
       <AnimatedCollapse open={open}>
         <pre
           className="thinking-content"
-          style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 360, overflow: 'auto', fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 12, margin: 0 }}
+          style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 360, overflow: 'auto', fontFamily: 'var(--font-mono, ui-monospace, monospace)', fontSize: 'var(--ui-font-meta, 12px)', margin: 0 }}
         >
           {content}
         </pre>

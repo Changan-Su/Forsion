@@ -96,7 +96,7 @@ export const COMMAND_CATALOG: CommandSpec[] = [
   { name: '/skill', key: 'skill', arg: '<id>', zh: '启用/停用技能', en: 'Enable or disable a skill', surfaces: ['tui'] },
   { name: '/agents', key: 'agents', zh: '列出本地 Normal Agent（自定义人格）', en: 'List local normal agents (custom personas)', surfaces: ['tui', 'desktop'] },
   { name: '/agent', key: 'agent', arg: '<slug>', zh: '启用 Agent；管理：/agent new|edit|rm <slug>', en: 'Activate an agent; manage with /agent new|edit|rm <slug>', surfaces: ['tui', 'desktop'] },
-  { name: '/groupchat', key: 'groupchat', arg: '<slug…>', zh: '群聊模式（/groupchat off 退出）', en: 'Group chat mode (/groupchat off to leave)', surfaces: ['tui', 'desktop'] },
+  { name: '/groupchat', key: 'groupchat', arg: '<slug…>', zh: '团队模式（/groupchat off 退出）', en: 'Team mode (/groupchat off to leave)', surfaces: ['tui', 'desktop'] },
   { name: '/historian', key: 'historian', zh: 'Historian 状态/活动；/historian on|off 开关', en: 'Historian status/activity; /historian on|off to toggle', surfaces: ['tui', 'desktop'] },
   { name: '/muse', key: 'muse', zh: 'Muse 状态/TODO；/muse on|off 开关', en: 'Muse status/TODOs; /muse on|off to toggle', surfaces: ['tui', 'desktop'] },
   { name: '/memory', key: 'memory', arg: '[edit]', zh: '查看/编辑长期记忆', en: 'View or edit long-term memory', surfaces: ['tui', 'desktop'] },

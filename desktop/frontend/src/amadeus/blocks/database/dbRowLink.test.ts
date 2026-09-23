@@ -82,8 +82,8 @@ const cellOf = (rowIdx: number, colName: string): HTMLElement => {
   return dataRows()[rowIdx].querySelectorAll<HTMLElement>('.amx-db-cell')[ci]
 }
 const dataRows = (): HTMLElement[] => [...host().querySelectorAll<HTMLElement>('.amx-db-row:not(.amx-db-hrow):not(.amx-db-statsrow)')]
-/** 首列(text)渲染的是 <input>,标题得读 value。 */
-const firstCol = (): string[] => dataRows().map((r) => r.querySelector<HTMLInputElement>('.amx-db-cell input')?.value ?? '')
+/** 标题单元格默认展示，编辑时才渲染 input；两态都读取真实可见值。 */
+const firstCol = (): string[] => dataRows().map((r) => r.querySelector<HTMLInputElement>('.amx-db-cell input')?.value ?? r.querySelector('.amx-db-cell .amx-db-value-text')?.textContent ?? '')
 const dbNow = async (): Promise<DbFile> => (await import('../../store/dbStore')).useDbStore.getState().entries[ORDERS].data as DbFile
 
 describe('关联表多值 / 反向引用 / 盖章', () => {
@@ -221,19 +221,19 @@ describe('关联表多值 / 反向引用 / 盖章', () => {
   }
   const colNow = async (id: string) => (await dbNow()).columns.find((c) => c.id === id)!
 
-  it('列菜单·关联表:「允许多选」开关翻转 column.multiple(true → 删键 → true)', async () => {
+  it('列菜单·关联表:「允许关联多条记录」开关翻转 column.multiple(true → 删键 → true)', async () => {
     await mount()
     await openColMenu('配件')
-    await clickOpt('允许多选')
+    await clickOpt('允许关联多条记录')
     expect((await colNow('rel')).multiple).toBeUndefined()
-    await clickOpt('允许多选')
+    await clickOpt('允许关联多条记录')
     expect((await colNow('rel')).multiple).toBe(true)
   })
 
   it('列菜单·引用列反向模式:显示指回列(标「→ 本表」);切正向清掉反向字段;再切回反向可从头配完', async () => {
     await mount()
     await openColMenu('出库行')
-    expect(popText()).toContain('目标表的哪一列指回本表')
+    expect(popText()).toContain('指回本表的属性')
     expect([...host().querySelectorAll<HTMLElement>('.amx-db-pop .amx-db-opt')].find((e) => e.textContent?.startsWith('订单'))?.textContent).toContain('→ 本表')
     await clickOpt('正向')
     const cleared = await colNow('back')
@@ -243,11 +243,13 @@ describe('关联表多值 / 反向引用 / 盖章', () => {
     expect(cleared.lookupRel).toBeUndefined()
     expect(cellOf(0, '出库行').textContent).toBe('–') // 配置清了,值也空了
     await clickOpt('反向')
+    await clickOpt('更改类型')
+    await clickOpt('返回属性设置') // A still-incomplete reverse lookup must survive the submenu round trip.
     await clickOpt('配件') // 目标表(dbFiles 里除本表外的 .db)
     expect((await colNow('back')).refDb).toBe(PARTS)
     await clickOpt('订单') // 指回列
     expect((await colNow('back')).lookupBackCol).toBe('ord')
-    await clickOpt('名称') // 引用目标表的哪一列
+    await clickOpt('名称') // 引用属性
     const done = await colNow('back')
     expect(done.lookupCol).toBe('n')
     expect(done.lookupRel).toBeUndefined() // 反向不带正向字段
@@ -309,12 +311,12 @@ describe('关联三件:titleCol / refFilter / 清理', () => {
     expect(chips(0, '配件')).toEqual(['CPU', '内存'])
   })
 
-  it('列菜单·芯片显示列:候选 = 目标表非计算列,缺省 ✓ 在首列;选「编号」→ titleCol 落盘、芯片即变', async () => {
+  it('列菜单·芯片显示列:候选 = 目标表非计算列,缺省选中首列;选「编号」→ titleCol 落盘、芯片即变', async () => {
     await mount(ordersDb(), richParts())
     await openColMenu('配件')
     const sec = '.amx-db-pop [data-sec="titlecol"]'
     expect(opts(sec).map((b) => b.textContent?.replace('✓', ''))).toEqual(['名称', '单价', '订单', '编号', '供应商']) // 无「双倍」(公式列)
-    expect(opts(sec).find((b) => b.textContent?.includes('✓'))?.textContent).toContain('名称')
+    expect(opts(sec).find((b) => b.getAttribute('aria-pressed') === 'true')?.textContent).toContain('名称')
     await clickOpt('编号', sec)
     expect((await colNow('rel'))?.titleCol).toBe('sku')
     expect(chips(0, '配件')).toEqual(['SKU-1', 'SKU-3'])
@@ -340,7 +342,7 @@ describe('关联三件:titleCol / refFilter / 清理', () => {
   it('列菜单·限定候选:复用条件行编辑器(列源 = 目标表列),加条件落到 column.refFilter', async () => {
     await mount()
     await openColMenu('配件')
-    await clickOpt('＋ 添加条件')
+    await clickOpt('添加条件')
     expect((await colNow('rel'))?.refFilter).toEqual([{ colId: 'n', op: 'contains' }]) // 目标表首列 名称 + text 首个 op
     const sels = [...host().querySelectorAll<HTMLSelectElement>('.amx-db-pop .amx-db-fltrow .amx-db-fltsel')]
     expect([...sels[0].options].map((o) => o.textContent)).toEqual(['名称', '单价', '订单']) // 目标表列,不是本表列
@@ -385,13 +387,14 @@ describe('关联三件:titleCol / refFilter / 清理', () => {
     await act(async () => { host().querySelector<HTMLElement>('.amx-db-popwrap')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })) })
     await openColMenu('合计')
     expect(popText()).toContain('待重新配置')
-    expect(popText()).not.toContain('引用目标表的哪一列') // 显式未选态:不再回落 relCols[0] 装作已选
+    expect(popText()).not.toContain('引用属性') // 显式未选态:不再回落 relCols[0] 装作已选
   })
 
   it('关联列改类型 → 依赖它的 lookup **休眠不清**(lookupRel/lookupCol 原样、值空、菜单提示原关联列已失效);改回关联表即恢复;只有删列才清', async () => {
     await mount()
     expect(cellOf(0, '合计').textContent).toBe('150')
     await openColMenu('配件')
+    await clickOpt('更改类型')
     await clickOpt('文本')
     const dormant = (await colNow('sum'))!
     expect(dormant.lookupRel).toBe('rel') // 不清:改类型可逆,配置跟着可逆
@@ -403,6 +406,7 @@ describe('关联三件:titleCol / refFilter / 清理', () => {
     expect(popText()).toContain('原关联列已失效') // 休眠提示(lookupRel 还在、但它已不是关联表列)
     await act(async () => { host().querySelector<HTMLElement>('.amx-db-popwrap')!.dispatchEvent(new MouseEvent('mousedown', { bubbles: true })) })
     await openColMenu('配件')
+    await clickOpt('更改类型')
     await clickOpt('关联表')
     expect((await colNow('sum'))?.lookupRel).toBe('rel')
     expect(cellOf(0, '合计').textContent).toBe('150') // 改回即原样恢复,用户一个配置都不用重做
@@ -507,10 +511,10 @@ describe('可编辑投影列(lookupKind=links)', () => {
     await mount() // back 仍是普通 join lookup
     await openColMenu('出库行')
     expect(popText()).toContain('作为可编辑关联')
-    expect(popText()).toContain('引用目标表的哪一列')
+    expect(popText()).toContain('引用属性')
     await clickOpt('作为可编辑关联')
     expect((await colNow('back')).lookupKind).toBe('links')
-    expect(popText()).not.toContain('引用目标表的哪一列')
+    expect(popText()).not.toContain('引用属性')
     expect(chips(0, '出库行')).toEqual(['CPU', '显卡']) // 配好即渲 chip(lookupCol 留着也无妨)
     await clickOpt('作为可编辑关联')
     expect((await colNow('back')).lookupKind).toBeUndefined()

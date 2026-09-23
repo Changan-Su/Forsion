@@ -636,7 +636,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
         </div>
       )}
 
-      {error && <div style={{ color: 'var(--warn, #b8860b)', fontSize: 12, marginTop: 12 }}>{error}</div>}
+      {error && <div style={{ color: 'var(--warn, #b8860b)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 12 }}>{error}</div>}
       <div className="auto-builder-actions">
         <button className="btn ghost" onClick={() => (onCancel ? onCancel() : st.closeBuilder())}>{t('common.cancel')}</button>
         <button className="btn" disabled={!canSave || busy} onClick={() => void save()}>

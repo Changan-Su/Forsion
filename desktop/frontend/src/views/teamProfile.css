@@ -11,50 +11,50 @@
 .team-profile-emblem.agent-portrait-edit:hover { color: var(--text); background: var(--overlay-medium); }
 .team-profile-hero > div { min-width: 0; }
 .team-profile-hero .team-profile-identity { flex: 1; }
-.team-profile-hero h3 { margin: 0 0 5px; font-size: 10px; font-weight: 400; color: var(--text-muted); }
-.team-profile-hero .team-profile-name { margin-block: 0 3px; font-size: 19px; letter-spacing: -.02em; }
-.team-profile-hero .team-profile-desc { margin-bottom: 4px; font-size: 11px; }
+.team-profile-hero h3 { margin: 0 0 5px; font-size: var(--ui-font-caption, 11px); font-weight: 400; color: var(--text-muted); }
+.team-profile-hero .team-profile-name { margin-block: 0 3px; font-size: var(--ui-font-title, 16px); letter-spacing: -.02em; }
+.team-profile-hero .team-profile-desc { margin-bottom: 4px; font-size: var(--ui-font-caption, 11px); }
 .team-profile-hero .agent-portrait-badge { right: 3px; bottom: 3px; width: 18px; height: 18px; }
 .team-profile-hero .agent-portrait-remove { top: -5px; right: -5px; width: 17px; height: 17px; }
 .team-emblem-emoji { width: 100%; height: 100%; padding: 0; font-size: 26px; line-height: 1; text-align: center; color: var(--text); background: var(--bg-card); border: 1px solid var(--accent-ink); border-radius: inherit; }
 .team-profile-hero .agent-state { flex-wrap: wrap; row-gap: 5px; }
-.team-profile-location { flex-shrink: 0; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; margin: 0 0 14px; }
+.team-profile-location { flex-shrink: 0; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); overflow-wrap: anywhere; margin: 0 0 14px; }
 .team-profile .agent-section-nav { flex-shrink: 0; }
 .team-profile-fields { flex: 1; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; border: 0; margin: 0; padding: 0 2px 18px; min-width: 0; min-height: 0; animation: profile-enter 180ms ease both; }
-.team-profile-caption { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
+.team-profile-caption { margin: 0; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.6; }
 .team-lineup-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; justify-content: space-between; padding-block: 16px; }
 .team-lineup-toolbar .team-profile-caption { flex: 1; min-width: 110px; }
-.team-lineup-toolbar .team-member-add { min-height: 32px; padding: 6px 9px; flex-shrink: 0; font-size: 11px; }
+.team-lineup-toolbar .team-member-add { min-height: 32px; padding: 6px 9px; flex-shrink: 0; font-size: var(--ui-font-caption, 11px); }
 .team-lineup { display: grid; gap: 10px; }
 .team-member { min-width: 0; border: 1px solid transparent; border-radius: var(--radius-md, 12px); padding: 12px; background: var(--overlay-light); }
 .team-member-open { display: grid; grid-template-columns: 40px minmax(0, 1fr) 14px; gap: 3px 10px; align-items: center; width: 100%; padding: 0; text-align: left; border: 0; background: transparent; color: var(--text); cursor: pointer; }
 .team-member-open:hover { color: var(--accent-ink); }
-.team-member-open > strong { font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
+.team-member-open > strong { font-size: var(--ui-font-body, 13px); font-weight: 600; overflow-wrap: anywhere; }
 .team-member-portrait { position: relative; display: flex; align-items: center; justify-content: center; width: 40px; height: 40px; grid-row: 1 / 3; color: var(--accent-ink); background: var(--overlay-light); border-radius: var(--radius-sm, 8px); overflow: hidden; }
 .team-member-portrait > svg:first-child { width: 26px; height: 26px; }
 .team-member-portrait img { width: 100%; height: 100%; object-fit: cover; }
 .team-member-chevron { grid-column: 3; grid-row: 1 / 3; color: var(--text-muted); }
-.team-member-status { color: var(--text-muted); font-size: 10px; }
+.team-member-status { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .team-member-status.working, .team-member-status.waiting { color: var(--accent-ink); }
 .team-member-status.failed, .team-member.unavailable .team-member-status { color: var(--danger); }
 /* 会话级调档行:「本会话」标签 + 模型选择器 + Effort;它改的是这场会话,Agent 自身配置在成员详情页里改。
  * 详情面板可用宽只有 ~215px:标签独占一行,两个控件并排;Effort 是原生 select(输入控件,按 §5 保留描边),
  * 关着的 select 不给省略号,所以列宽钉死、选项文案要短。 */
 .team-member-tuning { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding-top: 10px; }
-.team-member-tuning-k { flex: 0 0 100%; color: var(--text-muted); font-size: 11px; }
+.team-member-tuning-k { flex: 0 0 100%; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 /* 并排放不下就让 Effort 换行:面板窄到 1000px 窗口时,两格硬挤会把模型名截成「Stub O…」(09-20 截图实见)。 */
 .team-member-tuning .model-select { flex: 1 1 104px; min-width: 0; }
-.team-member-tuning .model-select-btn { padding: 5px 8px; font-size: 12px; }
-.team-member-effort { flex: 0 1 88px; min-width: 0; padding: 5px 6px; font-size: 12px; }
-.team-member-role { display: grid; gap: 6px; padding-top: 12px; color: var(--text-muted); font-size: 11px; }
-.team-member-role textarea { min-width: 0; width: 100%; padding: 8px; font-size: 12px; line-height: 1.6; resize: vertical; }
+.team-member-tuning .model-select-btn { padding: 5px 8px; font-size: var(--ui-font-meta, 12px); }
+.team-member-effort { flex: 0 1 88px; min-width: 0; padding: 5px 6px; font-size: var(--ui-font-meta, 12px); }
+.team-member-role { display: grid; gap: 6px; padding-top: 12px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.team-member-role textarea { min-width: 0; width: 100%; padding: 8px; font-size: var(--ui-font-meta, 12px); line-height: 1.6; resize: vertical; }
 .team-member-actions { display: flex; gap: 4px; padding-top: 8px; }
 .team-member-actions button { border: 0; background: transparent; color: var(--text-muted); width: 30px; height: 30px; display: grid; place-items: center; cursor: pointer; border-radius: var(--radius-sm, 8px); transition: background 160ms ease, color 160ms ease; }
 .team-member-actions button:last-child { margin-left: auto; }
 .team-member-actions button:hover:not(:disabled) { background: var(--overlay-medium); color: var(--text); }
 .team-member-actions button:last-child:hover:not(:disabled) { color: var(--danger); }
 .team-member-actions button:disabled { opacity: .35; cursor: default; }
-.team-member-add { display: flex; align-items: center; justify-content: center; min-height: 44px; gap: 8px; color: var(--accent-ink); border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); background: transparent; cursor: pointer; font-size: 12px; }
+.team-member-add { display: flex; align-items: center; justify-content: center; min-height: 44px; gap: 8px; color: var(--accent-ink); border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); background: transparent; cursor: pointer; font-size: var(--ui-font-meta, 12px); }
 .team-member-add svg { width: 16px; height: 16px; }
 .team-member-add:hover { background: var(--overlay-light); }
 .team-candidate-picker { padding: 12px; margin-bottom: 12px; background: var(--overlay-light); border-radius: var(--radius-md, 12px); animation: profile-enter 160ms ease both; }
@@ -65,19 +65,19 @@
 .team-candidates > button { display: flex; align-items: center; gap: 8px; padding: 10px 4px; width: 100%; text-align: left; border: 0; background: transparent; color: var(--text); cursor: pointer; }
 .team-candidates > button:hover { color: var(--accent-ink); }
 .team-candidates > button > span { flex: 1; min-width: 0; display: grid; gap: 4px; }
-.team-candidates strong { font-size: 12px; font-weight: 500; }
-.team-candidates small { color: var(--text-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-candidates strong { font-size: var(--ui-font-meta, 12px); font-weight: 500; }
+.team-candidates small { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .team-config-fields { padding-top: 20px; }
 .team-config-fields > .profile-config-group { margin: 0; }
 .team-member-heading { flex-shrink: 0; display: grid; gap: 8px; padding-block: 14px 10px; border-bottom: 1px solid var(--border); }
-.team-member-heading > button { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 12px; color: var(--text-muted); background: transparent; border: 0; cursor: pointer; }
-.team-member-heading > small { color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; line-height: 1.6; }
+.team-member-heading > button { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); background: transparent; border: 0; cursor: pointer; }
+.team-member-heading > small { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); overflow-wrap: anywhere; line-height: 1.6; }
 .team-draft-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
 .team-detail-pane { flex: 1; min-height: 0; }
 .team-profile .agent-profile.compact { padding-inline: 0; }
 .team-temp-member { height: 100%; overflow: auto; padding-block: 15px; }
 .team-temp-member .agent-character-hero { gap: 12px; padding: 0; }
-.team-temp-member h2 { font-size: 20px; font-weight: 500; overflow-wrap: anywhere; }
+.team-temp-member h2 { font-size: var(--ui-font-title, 16px); font-weight: 500; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) {
   .team-profile-fields, .team-candidate-picker { animation: none; }
   .team-member-actions button, .team-profile-emblem.agent-portrait-edit { transition: none; }

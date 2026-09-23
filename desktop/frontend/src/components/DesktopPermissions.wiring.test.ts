@@ -106,7 +106,7 @@ async function click(key: string, container: ParentNode = host) {
 }
 const wizard = () => React.createElement(OnboardingWizard, props)
 const settings = (initialTab?: 'permissions', open = true) => React.createElement(SettingsModal, {
-  ...props, open, initialTab, cfg, glassOn: true, flatOn: false, onClose: vi.fn(), onConfigChange: vi.fn(), onGlassChange: vi.fn(), onFlatChange: vi.fn(),
+  ...props, open, initialTab, cfg, flatOn: false, onFlatChange: vi.fn(), glassOn: true, onClose: vi.fn(), onConfigChange: vi.fn(), onGlassChange: vi.fn(),
 })
 
 it('offers optional permissions after the essential desktop choices and allows skipping during a request', async () => {

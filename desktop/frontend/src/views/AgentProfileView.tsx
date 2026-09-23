@@ -1,12 +1,12 @@
 import { agentDescription, isStockAgent } from '../components/builtinAgentDescriptions'
 import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from 'react'
-import { BookOpen, Bot, CalendarClock, Check, ChevronRight, ExternalLink, ImageUp, Loader2, Plug, Search, Settings2, Sparkles, Sprout, X } from 'lucide-react'
+import { BookOpen, Bot, CalendarClock, Check, ChevronRight, ExternalLink, ArrowUp, ArrowDown, ImageUp, Loader2, MoreHorizontal, Plus, Plug, Search, Settings2, Sparkles, Sprout, Star, Trash2, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { activeMainPanel, useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine/types'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { deleteAgentAvatar, fetchAgentAvatar, getAgentHarness, listSkills, listTools, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
+import { deleteAgentAvatar, deleteAgentDef, fetchAgentAvatar, getAgentHarness, listAgents, listSkills, listTools, putAgentsMeta, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
 import { openAgentProfile } from './agentProfileNav'
 import { AgentMemoryPanel } from '../components/AgentMemoryPanel'
 import { AgentMemoryModal } from '../components/AgentMemoryModal'
@@ -17,6 +17,8 @@ import { THINKING_LEVELS } from '../types'
 import { ProfileGroup, ProfileModelField, ProfileTextEditor } from './profileControls'
 import { TeamProfile } from './TeamProfile'
 import { ProjectProfile, useProjectWorkspace } from './ProjectProfile'
+import { AgentSkillsPanel, moveAgentSkillsDraft } from './AgentSkillsPanel'
+import { CapabilityMenu } from '../components/CapabilityMenu'
 import './agentProfileMessages'
 import './agentProfile.css'
 
@@ -28,6 +30,8 @@ const SECTIONS: Array<{ id: Section; icon: typeof Bot }> = [
   { id: 'config', icon: Settings2 }, { id: 'skills', icon: Sparkles }, { id: 'mcp', icon: Plug }, { id: 'growth', icon: Sprout }, { id: 'schedule', icon: CalendarClock },
 ]
 const EMPTY_CONFIG: AgentConfig = {}
+type StoredProfileDraft = { draft: NormalAgentDef; base: NormalAgentDef; fields: Array<keyof NormalAgentDef> }
+const profileDrafts = new Map<string, StoredProfileDraft>()
 
 export { openAgentProfile }
 
@@ -42,7 +46,7 @@ export function useMainSessionId(): string | null {
   return params.follow === false && typeof params.id === 'string' ? params.id : active
 }
 
-export function TanguDetailsView() {
+export function TanguDetailsView({ extendView }: Pick<ViewProps, 'extendView'>) {
   const { t } = useI18n()
   const sessionId = useMainSessionId()
   const s = useApp(useShallow((a) => ({
@@ -55,39 +59,139 @@ export function TanguDetailsView() {
   // 项目会话(用户自己添加的本地目录,侧栏分组口径)→ PROJECT 详情;它的 Agent / 配队从「Agents」页点进去看。
   // 团队实体 / 私聊 / 外部引擎会话都是 projectless,不受影响。按 project_path 取 key:同一项目内切会话,标签与草稿都留着。
   const project = useProjectWorkspace(s.session)
-  const renderMember = (member: NormalAgentDef, childId?: string | null) => <AgentProfile agent={member} compact sessionId={childId} />
+  const renderMember = (member: NormalAgentDef, childId?: string | null) => <AgentProfile agent={member} compact sessionId={childId} extendView={extendView} />
   return <div className="agent-profile-panel" data-tangu-details>
     <div className="agent-profile-panel-title">{t('agentProfile.title')}</div>
     {project && s.session ? <ProjectProfile key={project.path} session={s.session} config={config} workspace={project} renderAgent={renderMember}
         renderTeam={(teamSession, teamConfig) => <TeamProfile key={`${teamSession.id}:${teamConfig.teamSlug || ''}`} session={teamSession} config={teamConfig} renderMember={renderMember} />} />
-      : config.groupChat || config.teamSlug ? <TeamProfile key={`${sessionId}:${config.teamSlug || ''}`} session={s.session} config={config} renderMember={renderMember} /> : config.engineId || config.soloEngineId ? <section className="agent-profile-team"><h3>{s.engines.find((e) => e.id === (config.engineId || config.soloEngineId))?.name || config.engineId || config.soloEngineId}</h3><div className="agent-current-session"><strong>{s.session?.title}</strong><span>{s.session?.project_name || config.cwd}</span></div></section> : agent ? <AgentProfile key={agent.slug} agent={agent} compact sessionId={sessionId} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}
+      : config.groupChat || config.teamSlug ? <TeamProfile key={`${sessionId}:${config.teamSlug || ''}`} session={s.session} config={config} renderMember={renderMember} /> : config.engineId || config.soloEngineId ? <section className="agent-profile-team"><h3>{s.engines.find((e) => e.id === (config.engineId || config.soloEngineId))?.name || config.engineId || config.soloEngineId}</h3><div className="agent-current-session"><strong>{s.session?.title}</strong><span>{s.session?.project_name || config.cwd}</span></div></section> : agent ? <AgentProfile key={agent.slug} agent={agent} compact sessionId={sessionId} extendView={extendView} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}
   </div>
 }
 
-export function AgentsSpaceView({ leaf, params }: ViewProps) {
+export function AgentsSpaceView({ leaf, params, extendView }: ViewProps) {
   const { t } = useI18n()
   const agents = useApp((s) => s.agentDefs)
-  const avatars = useApp((s) => s.agentAvatars)
-  const [query, setQuery] = useState('')
+  const cfg = useApp((s) => s.cfg)
+  const creating = params.creating === true
+  const setCreating = (value: boolean) => leaf.setParams({ creating: value })
+  const [newName, setNewName] = useState('')
+  const [newPurpose, setNewPurpose] = useState('')
+  const [newInstructions, setNewInstructions] = useState('')
+  const [rosterBusy, setRosterBusy] = useState(false)
+  const [rosterError, setRosterError] = useState('')
   const slug = typeof params.agentSlug === 'string' ? params.agentSlug : agents[0]?.slug
   const agent = agents.find((a) => a.slug === slug) || agents[0]
-  const filtered = useMemo(() => agents.filter((a) => `${a.name} ${a.description} ${agentDescription(a, t)} ${a.slug}`.toLowerCase().includes(query.toLowerCase())), [agents, query, t])
-  useEffect(() => { useApp.getState().refreshAgents() }, [])
+  useEffect(() => {
+    useApp.getState().refreshAgents()
+    const ws = useWorkspace.getState()
+    if (!ws.api?.panels.some((panel) => panel.params?.__type === 'agents-roster') && !ws.stash.left.some((panel) => panel.type === 'agents-roster')) {
+      ws.openView('agents-roster', {}, 'left')
+    }
+  }, [])
   // 带 section 打开(提醒点「复盘」→ 进化)是一次性的跳转:leaf.setParams 是合并语义,不清掉的话之后换 Agent 也会一直落在「进化」。
   // 用 sectionAt 当令牌:子组件按令牌导航(不靠重挂),父组件随即把两个键清掉;清掉后令牌归 0,不会再触发。
   const jumpAt = params.section === 'evolution' ? Number(params.sectionAt) || 1 : 0
   useEffect(() => { if (jumpAt) leaf.setParams({ section: undefined, sectionAt: undefined }) }, [jumpAt, leaf])
+  const emitAgentsChange = () => { window.dispatchEvent(new Event('forsion:agents-changed')); window.tangu?.requestMainAction?.('agents-changed') }
+  const createAgent = async () => {
+    const name = newName.trim()
+    const instructions = newInstructions.trim()
+    if (!name || !instructions || rosterBusy) return
+    setRosterBusy(true); setRosterError('')
+    try {
+      const created = await saveAgentDef(cfg, { name, description: newPurpose.trim(), systemPrompt: instructions })
+      useApp.setState((s) => ({ agentDefs: [...s.agentDefs, created] }))
+      useApp.getState().refreshAgents()
+      emitAgentsChange()
+      setCreating(false); setNewName(''); setNewPurpose(''); setNewInstructions('')
+      leaf.setParams({ agentSlug: created.slug })
+    } catch (error: any) { setRosterError(String(error?.message || error)) } finally { setRosterBusy(false) }
+  }
   return <div className="agents-space" data-agents-space>
-    <aside className="agents-roster">
-      <div className="agents-roster-heading"><span>{t('agentProfile.roster')}</span><span>{agents.length}</span></div>
-      <label className="agents-search"><Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('agentProfile.search')} aria-label={t('agentProfile.search')} /></label>
-      <div className="agents-roster-list">{filtered.map((a) => <button key={a.slug} className={`agents-roster-item${agent?.slug === a.slug ? ' selected' : ''}`} onClick={() => leaf.setParams({ agentSlug: a.slug })} aria-pressed={agent?.slug === a.slug}>
-        <span className="agent-portrait small">{avatars[a.slug] ? <img src={avatars[a.slug]} alt="" /> : <Bot size={23} />}</span><span><strong>{a.name}</strong><small>{agentDescription(a, t) || a.slug}</small></span>
-      </button>)}</div>
-      <button className="agent-profile-link" onClick={() => useApp.getState().openSettings('agents')}>{t('agentProfile.create')}<ChevronRight size={14} /></button>
-    </aside>
-    <main className="agents-character">{agent ? <AgentProfile key={agent.slug} agent={agent} evolutionJumpAt={jumpAt} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}</main>
+    <main className="agents-character">{creating ? <form className="agent-create-form" onSubmit={(e) => { e.preventDefault(); void createAgent() }}>
+      <header><Bot size={25} /><div><h2>{t('agentProfile.create')}</h2><p>{t('agentProfile.createHint')}</p></div></header>
+      <label className="agent-field">{t('agentProfile.name')}<input autoFocus maxLength={120} required value={newName} onChange={(e) => setNewName(e.target.value)} /></label>
+      <label className="agent-field">{t('agentProfile.description')}<input maxLength={300} value={newPurpose} onChange={(e) => setNewPurpose(e.target.value)} placeholder={t('agentProfile.descriptionPlaceholder')} /></label>
+      <label className="agent-field">{t('agentProfile.prompt')}<textarea rows={6} required value={newInstructions} onChange={(e) => setNewInstructions(e.target.value)} placeholder={t('agentProfile.createInstructionsPlaceholder')} /></label>
+      {rosterError && <p className="agent-profile-error" role="alert">{rosterError}</p>}
+      <div><button type="button" className="btn" disabled={rosterBusy} onClick={() => setCreating(false)}>{t('agentProfile.cancel')}</button><button type="submit" className="btn primary" disabled={rosterBusy || !newName.trim() || !newInstructions.trim()}>{rosterBusy && <Loader2 size={13} className="spin" />}{t('agentProfile.create')}</button></div>
+    </form> : agent ? <AgentProfile key={agent.slug} agent={agent} evolutionJumpAt={jumpAt} extendView={extendView} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}</main>
   </div>
+}
+
+export function AgentsRosterView() {
+  const { t } = useI18n()
+  const agents = useApp((s) => s.agentDefs)
+  const avatars = useApp((s) => s.agentAvatars)
+  const cfg = useApp((s) => s.cfg)
+  const defaultSlug = useApp((s) => s.defaultAgentSlug)
+  const selected = useWorkspace(useShallow((s) => {
+    const profile = s.api?.panels.find((panel) => panel.params?.__type === 'agent-profile')
+    return { slug: profile?.params?.agentSlug, creating: profile?.params?.creating === true }
+  }))
+  const [query, setQuery] = useState('')
+  const [rosterBusy, setRosterBusy] = useState(false)
+  const [rosterError, setRosterError] = useState('')
+  const [dragSlug, setDragSlug] = useState<string | null>(null)
+  const agent = agents.find((a) => a.slug === selected.slug) || agents[0]
+  const creating = selected.creating
+  const setCreating = () => useWorkspace.getState().openView('agent-profile', { reuseKey: 'primary', creating: true }, 'main')
+  const selectAgent = (slug: string) => { setRosterError(''); openAgentProfile(slug) }
+  const emitAgentsChange = () => { window.dispatchEvent(new Event('forsion:agents-changed')); window.tangu?.requestMainAction?.('agents-changed') }
+  const filtered = useMemo(() => agents.filter((a) => `${a.name} ${agentDescription(a, t)} ${a.slug}`.toLowerCase().includes(query.toLowerCase())), [agents, query, t])
+  const setDefault = async (next: string) => {
+    setRosterBusy(true); setRosterError('')
+    try {
+      const meta = await putAgentsMeta(cfg, { defaultSlug: next })
+      useApp.setState({ defaultAgentSlug: meta.defaultSlug })
+      emitAgentsChange()
+    } catch (error: any) { setRosterError(String(error?.message || error)) } finally { setRosterBusy(false) }
+  }
+  const reorder = async (from: string, to: string, after = false) => {
+    if (from === to || rosterBusy) return
+    const order = agents.map((a) => a.slug).filter((s) => s !== from)
+    const index = order.indexOf(to)
+    if (index < 0) return
+    order.splice(index + (after ? 1 : 0), 0, from)
+    setRosterBusy(true); setRosterError('')
+    try {
+      await putAgentsMeta(cfg, { order })
+      useApp.setState((s) => ({ agentDefs: order.map((id) => s.agentDefs.find((a) => a.slug === id)).filter((a): a is NormalAgentDef => !!a) }))
+      emitAgentsChange()
+    } catch (error: any) { setRosterError(String(error?.message || error)) } finally { setRosterBusy(false); setDragSlug(null) }
+  }
+  const removeAgent = async (target: NormalAgentDef) => {
+    if (!window.confirm(t('agentProfile.deleteConfirm', { name: target.name }))) return
+    setRosterBusy(true); setRosterError('')
+    try {
+      const result = await deleteAgentDef(cfg, target.slug)
+      if (!result.ok) throw new Error(t('agentProfile.deleteFailed'))
+      const remaining = agents.filter((a) => a.slug !== target.slug)
+      useApp.setState({ agentDefs: remaining, defaultAgentSlug: defaultSlug === target.slug ? (remaining[0]?.slug || 'xyra') : defaultSlug })
+      useApp.getState().refreshAgents()
+      emitAgentsChange()
+      if (agent?.slug === target.slug) selectAgent(remaining[0]?.slug || '')
+    } catch (error: any) { setRosterError(String(error?.message || error)) } finally { setRosterBusy(false) }
+  }
+  return <aside className="agents-roster">
+      <div className="agents-roster-heading"><span>{t('agentProfile.roster')} <small>{agents.length}</small></span><button type="button" aria-label={t('agentProfile.create')} title={t('agentProfile.create')} onClick={() => { setCreating(); setRosterError('') }}><Plus size={15} /></button></div>
+      <label className="agents-search"><Search size={14} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t('agentProfile.search')} aria-label={t('agentProfile.search')} /></label>
+      <div className="agents-roster-list">{filtered.map((a) => <div key={a.slug} className={`agents-roster-row${dragSlug === a.slug ? ' dragging' : ''}`} draggable={!rosterBusy && !query}
+        onDragStart={(e) => { setDragSlug(a.slug); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', a.slug) }} onDragEnd={() => setDragSlug(null)}
+        onDragOver={(e) => { if (dragSlug && dragSlug !== a.slug) e.preventDefault() }} onDrop={(e) => { e.preventDefault(); if (dragSlug) void reorder(dragSlug, a.slug) }}>
+        <button type="button" className={`agents-roster-item${!creating && agent?.slug === a.slug ? ' selected' : ''}`} onClick={() => selectAgent(a.slug)} aria-pressed={!creating && agent?.slug === a.slug}>
+          <span className="agent-portrait small">{avatars[a.slug] ? <img src={avatars[a.slug]} alt="" /> : <Bot size={23} />}</span><span><strong>{a.name}{a.slug === defaultSlug && <Star size={12} aria-label={t('agentProfile.isDefault')} fill="currentColor" />}</strong><small>{agentDescription(a, t) || a.slug}</small></span>
+        </button>
+        <CapabilityMenu label={t('agentProfile.actionsFor', { name: a.name })} className="agents-roster-more" items={[
+          { id: 'up', label: t('agentProfile.moveUp'), icon: <ArrowUp size={14} />, disabled: rosterBusy || agents[0]?.slug === a.slug, onSelect: () => void reorder(a.slug, agents[agents.indexOf(a) - 1]?.slug || a.slug) },
+          { id: 'down', label: t('agentProfile.moveDown'), icon: <ArrowDown size={14} />, disabled: rosterBusy || agents.at(-1)?.slug === a.slug, onSelect: () => void reorder(a.slug, agents[agents.indexOf(a) + 1]?.slug || a.slug, true) },
+          { id: 'default', label: t('agentProfile.makeDefault'), icon: <Star size={14} />, disabled: rosterBusy || a.slug === defaultSlug, onSelect: () => void setDefault(a.slug) },
+          { id: 'delete', label: t('agentProfile.delete'), icon: <Trash2 size={14} />, danger: true, disabled: rosterBusy || a.slug === 'xyra' || a.slug === defaultSlug, onSelect: () => void removeAgent(a) },
+        ]}><MoreHorizontal size={15} /></CapabilityMenu>
+      </div>)}{!filtered.length && <p className="agent-profile-muted">{t('agentProfile.noResults')}</p>}</div>
+      {rosterError && <p className="agent-profile-error" role="alert">{rosterError}</p>}
+      <button className="agent-profile-link agents-roster-create" onClick={() => { setCreating(); setRosterError('') }}><Plus size={14} />{t('agentProfile.create')}</button>
+    </aside>
 }
 
 /** 装备 / 工具清单的一行:勾选框 + 名称(可带芯片)+ 一行描述。描述默认截成一行,点一下展开全文 ——
@@ -101,9 +205,11 @@ function EquipmentRow({ name, description, checked, onChange, chip, tinted }: { 
 }
 
 /** evolutionJumpAt:一次性跳到「成长 › 进化」的令牌(提名提醒点开要落在工作笔记上)。令牌变了才跳;首挂时也按它初始化,免得先闪一下「配置」。 */
-function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }: { agent: NormalAgentDef; compact?: boolean; sessionId?: string | null; evolutionJumpAt?: number }) {
+function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, extendView }: { agent: NormalAgentDef; compact?: boolean; sessionId?: string | null; evolutionJumpAt?: number; extendView?: ViewProps['extendView'] }) {
   const { t } = useI18n()
   const id = useId()
+  const draftKey = `${compact ? 'details' : 'space'}:${agent.slug}`
+  const storedDraft = profileDrafts.get(draftKey)
   const s = useApp(useShallow((a) => ({ cfg: a.cfg, avatar: a.agentAvatars[agent.slug], models: a.modelsResp?.models,
     config: sessionId ? a.configBySession[sessionId] : undefined, session: a.sessions.find((x) => x.id === sessionId),
     running: sessionId ? !!a.runningBySession[sessionId] : Object.entries(a.runningBySession).some(([id, run]) => !!run && a.configBySession[id]?.agentSlug === agent.slug),
@@ -112,9 +218,11 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
   const [section, setSection] = useState<Section>(evolutionJumpAt ? 'growth' : 'config')
   const [growth, setGrowth] = useState<Growth>(evolutionJumpAt ? 'evolution' : 'memory')
   const [visitedMemory, setVisitedMemory] = useState(false)
-  const [draft, setDraft] = useState(agent)
+  const [draft, setDraft] = useState(storedDraft?.draft || agent)
   const [slugDraft, setSlugDraft] = useState(agent.slug) // 两处挂载点都 key={agent.slug},改名后随重挂归零
-  const [dirty, setDirty] = useState(false)
+  const [dirty, setDirty] = useState(!!storedDraft)
+  const dirtyFields = useRef(new Set<keyof NormalAgentDef>(storedDraft?.fields || []))
+  const baseDraft = useRef(storedDraft?.base || agent)
   const [busy, setBusy] = useState(false)
   const [avatarBusy, setAvatarBusy] = useState(false)
   const [error, setError] = useState('')
@@ -132,7 +240,15 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
   const scrollRef = useRef<HTMLDivElement>(null)
   const alive = useRef(true)
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
-  useEffect(() => { if (!dirty) setDraft(agent) }, [agent, dirty])
+  useEffect(() => {
+    if (!dirty) { setDraft(agent); baseDraft.current = agent }
+    else setDraft((current) => {
+      const changed = Object.fromEntries([...dirtyFields.current].map((key) => [key, current[key]]))
+      const next = { ...agent, ...changed } as NormalAgentDef
+      profileDrafts.set(draftKey, { draft: next, base: baseDraft.current, fields: [...dirtyFields.current] })
+      return next
+    })
+  }, [agent, dirty, draftKey])
   useEffect(() => {
     let active = true
     setLoading(true); setLoadError('')
@@ -161,7 +277,15 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
   // 记忆面板有自己的草稿:第一次看到它才挂,之后一直留着(切标签 / 切分段都不卸)。
   useEffect(() => { if (section === 'growth' && growth === 'memory') setVisitedMemory(true) }, [section, growth])
   useEffect(() => { if (evolutionJumpAt) { navigate('growth'); setGrowth('evolution') } }, [evolutionJumpAt]) // eslint-disable-line react-hooks/exhaustive-deps
-  const patch = (p: Partial<NormalAgentDef>) => { setDraft((d) => ({ ...d, ...p })); setDirty(true); setNotice(''); setError('') }
+  const patch = (p: Partial<NormalAgentDef>) => {
+    Object.keys(p).forEach((key) => dirtyFields.current.add(key as keyof NormalAgentDef))
+    setDraft((d) => {
+      const next = { ...d, ...p }
+      profileDrafts.set(draftKey, { draft: next, base: baseDraft.current, fields: [...dirtyFields.current] })
+      return next
+    })
+    setDirty(true); setNotice(''); setError('')
+  }
   const replaceAvatarUrl = (url: string | null, avatar?: string): void => {
     useApp.setState((a) => {
       const previous = a.agentAvatars[agent.slug]
@@ -206,7 +330,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
   // 文件夹名 = slug = 主键。改名走引擎的 renameAgent(搬目录 + 改会话 / 消息 / 团队 / 自动化 / 通道里的引用);
   // 这里只把本地 store 里已加载的会话配置一并改掉,免得头像 / 昵称在重拉会话前按「已删 agent」渲染。
   // 详情栏(compact)不开放:那里连「在 Agents 中打开」都要一跳,改主键这种事放在全页。
-  const canRename = !compact && !!agent.libraryDir && !isStockAgent(agent.slug)
+  const canRename = !compact && !dirty && !!agent.libraryDir && !isStockAgent(agent.slug)
   const rename = async () => {
     const old = agent.slug
     const next = slugDraft.trim()
@@ -236,6 +360,17 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
           archivedSessions: a.archivedSessions.map((x) => ({ ...x, agent_config: fix(x.agent_config) })),
         }
       })
+      for (const surface of ['space', 'details'] as const) {
+        const oldKey = `${surface}:${old}`, nextKey = `${surface}:${next}`
+        const otherDraft = profileDrafts.get(oldKey)
+        if (otherDraft) {
+          profileDrafts.set(nextKey, { ...otherDraft, draft: { ...otherDraft.draft, slug: next }, base: { ...otherDraft.base, slug: next } })
+          profileDrafts.delete(oldKey)
+        }
+      }
+      moveAgentSkillsDraft(old, next)
+      window.dispatchEvent(new Event('forsion:agents-changed'))
+      window.tangu?.requestMainAction?.('agents-changed')
       useApp.getState().toast(warnings.length ? t('agentProfile.renameWarnings', { slug: next, detail: warnings.join('; ') }) : t('agentProfile.renamed', { slug: next }), warnings.length > 0)
       openAgentProfile(next) // 视图按 agentSlug 参数选人,不换参数会退回名册第一个
     } catch (e: any) {
@@ -249,8 +384,22 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
     if (busy || !draft.name.trim()) return
     setBusy(true); setError('')
     try {
-      const updated = await saveAgentDef(s.cfg, { ...draft, name: draft.name.trim(), enabledSkillIds: draft.enabledSkillIds ?? null, enabledMcpServers: draft.enabledMcpServers ?? null, toolsMode: draft.toolsMode ?? null, toolsList: draft.toolsMode ? draft.toolsList || [] : null }, agent.slug)
+      const latest = (await listAgents(s.cfg)).find((item) => item.slug === agent.slug)
+      if (!latest) throw new Error(t('agentProfile.saveConflict'))
+      const conflicts = [...dirtyFields.current].filter((key) => JSON.stringify(latest[key]) !== JSON.stringify(baseDraft.current[key]) && JSON.stringify(latest[key]) !== JSON.stringify(draft[key]))
+      if (conflicts.length) throw new Error(t('agentProfile.saveConflict'))
+      const changes: Record<string, unknown> = {}
+      for (const key of dirtyFields.current) changes[key] = draft[key]
+      if ('name' in changes) changes.name = draft.name.trim()
+      if ('enabledSkillIds' in changes && changes.enabledSkillIds === undefined) changes.enabledSkillIds = null
+      if ('enabledMcpServers' in changes && changes.enabledMcpServers === undefined) changes.enabledMcpServers = null
+      if ('toolsMode' in changes && changes.toolsMode === undefined) changes.toolsMode = null
+      if ('toolsList' in changes && !draft.toolsMode) changes.toolsList = null
+      const updated = await saveAgentDef(s.cfg, changes, agent.slug)
       useApp.setState((a) => ({ agentDefs: a.agentDefs.map((v) => v.slug === agent.slug ? updated : v) }))
+      window.dispatchEvent(new Event('forsion:agents-changed'))
+      window.tangu?.requestMainAction?.('agents-changed')
+      profileDrafts.delete(draftKey); dirtyFields.current.clear(); baseDraft.current = updated
       if (alive.current) { setDraft(updated); setDirty(false); setNotice(t('agentProfile.saved')) }
     } catch (e: any) { if (alive.current) setError(String(e.message || e)) } finally { if (alive.current) setBusy(false) }
   }
@@ -362,7 +511,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
         {agentConfiguration}
         {s.usage && <p className="agent-profile-muted">{t('agentProfile.context')} · {s.usage.ctx.toLocaleString()} tokens</p>}
       </>}
-      {section === 'skills' && equipment('skills')}
+      {section === 'skills' && <AgentSkillsPanel cfg={s.cfg} agentSlug={agent.slug} surface={compact ? 'details' : 'space'} selectedIds={draft.enabledSkillIds} onSelectedIds={(enabledSkillIds) => patch({ enabledSkillIds })} extendView={extendView} />}
       {section === 'mcp' && equipment('mcp')}
       {section === 'growth' && <>
         {/* 两层各一张分段卡:标题 + 一句话说清它是什么。待复盘候选的角标跟着「进化」走。 */}
@@ -387,7 +536,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
     <footer className={`agent-profile-save${dirty ? ' is-dirty' : ''}`}>
       {error && <p className="agent-profile-error" role="alert">{error}</p>}
       {dirty && !draft.name.trim() && <p className="agent-profile-error" role="alert">{t('agentProfile.nameRequired')}</p>}
-      {dirty ? <><small>{t('agentProfile.unsaved')} · {t('agentProfile.agentDefaults')}</small><div><button className="btn" disabled={busy} onClick={() => { setDraft(agent); setDirty(false); setError('') }}>{t('agentProfile.cancel')}</button><button className="btn primary" disabled={busy || !draft.name.trim()} onClick={() => void save()}>{busy ? <Loader2 size={13} className="spin" /> : <Check size={13} />}{t(busy ? 'agentProfile.saving' : 'agentProfile.save')}</button></div></> : section === 'growth' || section === 'schedule' ? null : notice ? <p className="profile-save-notice" role="status"><Check size={14} />{notice}</p> : <small>{t('agentProfile.scopeHint')}</small>}
+      {dirty ? <><small>{t('agentProfile.unsaved')} · {t('agentProfile.agentDefaults')}</small><div><button className="btn" disabled={busy} onClick={() => { profileDrafts.delete(draftKey); dirtyFields.current.clear(); baseDraft.current = agent; setDraft(agent); setDirty(false); setError('') }}>{t('agentProfile.cancel')}</button><button className="btn primary" disabled={busy || !draft.name.trim()} onClick={() => void save()}>{busy ? <Loader2 size={13} className="spin" /> : <Check size={13} />}{t(busy ? 'agentProfile.saving' : 'agentProfile.save')}</button></div></> : section === 'growth' || section === 'schedule' ? null : notice ? <p className="profile-save-notice" role="status"><Check size={14} />{notice}</p> : <small>{t('agentProfile.scopeHint')}</small>}
     </footer>
     {library && <AgentMemoryModal cfg={s.cfg} slug={agent.slug} name={agent.name} shareDefaultMemory={agent.shareDefaultMemory} onClose={() => setLibrary(false)} />}
   </div>

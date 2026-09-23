@@ -5,7 +5,7 @@
 @font-face {
   font-family: 'Dancing Script';
   font-style: normal;
-  font-weight: 700;
+  font-weight: 600;
   font-display: swap;
   src: url('../assets/fonts/DancingScript-Bold-latin.woff2') format('woff2');
 }
@@ -214,7 +214,7 @@ html.dark .hp-theme-preview[data-preset='hack2gate'] { background-image: url('..
   max-width: min(420px, 54%);
   overflow: hidden;
   color: var(--text-light);
-  font-size: 9.5px;
+  font-size: var(--ui-font-caption, 11px);
   line-height: 1.3;
   opacity: 0.58;
   text-overflow: ellipsis;
@@ -274,8 +274,8 @@ html.dark .hp-theme-preview[data-preset='hack2gate'] { background-image: url('..
   letter-spacing: -0.035em;
   line-height: 1;
 }
-.hp-date { margin-top: 9px; color: var(--text-muted); font-size: 12.5px; }
-.hp-greet { margin-top: 3px; color: var(--text-light); font-size: 14px; }
+.hp-date { margin-top: 9px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.hp-greet { margin-top: 3px; color: var(--text-light); font-size: var(--ui-font-body, 13px); }
 .hp-root[data-wallpaper='true'] .hp-brand { opacity: 0.62; }
 .hp-root[data-wallpaper='true'] .hp-date,
 .hp-root[data-wallpaper='true'] .hp-greet { color: var(--text); opacity: 0.7; }
@@ -346,8 +346,8 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   gap: 12px;
   padding: 0 3px 7px 7px;
 }
-.hp-spaces-title { display: inline-flex; align-items: baseline; gap: 8px; color: var(--text); font-size: 12.5px; font-weight: 600; }
-.hp-spaces-count { color: var(--text-faint); font-size: 10.5px; font-weight: 400; }
+.hp-spaces-title { display: inline-flex; align-items: baseline; gap: 8px; color: var(--text); font-size: var(--ui-font-meta, 12px); font-weight: 600; }
+.hp-spaces-count { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-weight: 400; }
 .hp-spaces-actions { display: inline-flex; align-items: center; gap: 5px; }
 .hp-spaces-actions button {
   height: 27px;
@@ -356,11 +356,11 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   gap: 5px;
   padding: 0 8px;
   border: var(--border-width) solid var(--border);
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   background: transparent;
   color: var(--text-muted);
   font: inherit;
-  font-size: 10.5px;
+  font-size: var(--ui-font-caption, 11px);
   cursor: pointer;
   transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), transform var(--duration-instant) var(--ease-spring);
 }
@@ -402,7 +402,7 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   align-self: stretch;
   min-height: 54px;
   margin: 10px 5px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   background: color-mix(in srgb, var(--border-strong) 68%, transparent);
 }
 .hp-space-main {
@@ -470,7 +470,7 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   width: 100%;
   overflow: hidden;
   color: inherit;
-  font-size: 11px;
+  font-size: var(--ui-font-caption, 11px);
   line-height: 1.2;
   text-align: center;
   text-overflow: ellipsis;
@@ -503,10 +503,10 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   align-items: center;
   justify-content: center;
   padding: 0 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   background: var(--bg-card);
   color: var(--text-faint);
-  font-size: 9px;
+  font-size: var(--ui-font-caption, 11px);
   font-variant-numeric: tabular-nums;
 }
 .hp-more { cursor: pointer; }
@@ -524,7 +524,7 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   transform: rotate(1deg) scale(1.04);
 }
 
-.hp-spaces-empty { padding: 20px 12px 22px; color: var(--text-faint); font-size: 12px; text-align: center; }
+.hp-spaces-empty { padding: 20px 12px 22px; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); text-align: center; }
 
 /* ── 二级应用收纳层 ─────────────────────────────────────────────────────── */
 @keyframes hp-stage-in { from { opacity: 0; } to { opacity: 1; } }
@@ -606,7 +606,7 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   margin-inline: auto;
   padding: 6px 7px 6px 9px;
   border: var(--border-width) solid color-mix(in srgb, var(--border) 76%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   background: color-mix(in srgb, var(--bg-card) 58%, transparent);
   backdrop-filter: blur(28px) saturate(150%);
   -webkit-backdrop-filter: blur(28px) saturate(150%);
@@ -636,8 +636,8 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
 .hp-wallpaper-head > button:hover { color: var(--text); background: var(--bg-hover); }
 .hp-folder-identity { min-width: 0; display: flex; align-items: center; gap: 12px; }
 .hp-folder-identity > span:last-child { min-width: 0; display: flex; flex-direction: column; }
-.hp-folder-identity strong { overflow: hidden; color: var(--text); font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
-.hp-folder-identity small { color: var(--text-faint); font-size: 10.5px; }
+.hp-folder-identity strong { overflow: hidden; color: var(--text); font-size: var(--ui-font-heading, 14px); text-overflow: ellipsis; white-space: nowrap; }
+.hp-folder-identity small { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
 .hp-folder-hero { width: 44px; height: 44px; flex: none; display: inline-flex; align-items: center; justify-content: center; }
 .hp-folder-hero > .hp-tile-icon { width: 44px; height: 44px; }
 .hp-folder-hero > .hp-tile-name,
@@ -671,7 +671,7 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   background: transparent;
   color: var(--text-light);
   font: inherit;
-  font-size: 11.5px;
+  font-size: var(--ui-font-caption, 11px);
   cursor: grab;
   touch-action: none;
   transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-spring), opacity var(--duration-fast) var(--ease-out);
@@ -689,8 +689,8 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   border-radius: var(--radius-md);
   background: var(--overlay-light);
 }
-.hp-folder-empty { margin: auto; max-width: 270px; color: var(--text-faint); font-size: 12px; line-height: 1.6; text-align: center; }
-.hp-folder-panel footer { flex: none; padding-top: 12px; color: var(--text-ghost); font-size: 10.5px; text-align: center; }
+.hp-folder-empty { margin: auto; max-width: 270px; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); line-height: 1.6; text-align: center; }
+.hp-folder-panel footer { flex: none; padding-top: 12px; color: var(--text-ghost); font-size: var(--ui-font-caption, 11px); text-align: center; }
 
 /* 全部 Spaces:维持紧凑矩阵,整面磨砂承载标题和图标,不再只给标题加半透。 */
 .hp-organizer-panel {
@@ -715,15 +715,15 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   margin: 0 auto 9px;
   padding: 5px 7px 5px 8px;
   border: var(--border-width) solid color-mix(in srgb, var(--border) 76%, transparent);
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   background: color-mix(in srgb, var(--bg-card) 58%, transparent);
   backdrop-filter: blur(28px) saturate(150%);
   -webkit-backdrop-filter: blur(28px) saturate(150%);
 }
 .hp-organizer-head > div { min-width: 0; display: flex; align-items: center; gap: 9px; }
 .hp-organizer-head > div > span:nth-child(2) { min-width: 0; display: flex; flex-direction: column; }
-.hp-organizer-head strong { color: var(--text); font-size: 12px; line-height: 1.3; }
-.hp-organizer-head small { color: var(--text-faint); font-size: 9.5px; }
+.hp-organizer-head strong { color: var(--text); font-size: var(--ui-font-meta, 12px); line-height: 1.3; }
+.hp-organizer-head small { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
 .hp-organizer-mark {
   width: 30px;
   height: 30px;
@@ -797,11 +797,11 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-spring);
 }
 .hp-organizer-new > span { display: grid; place-items: center; border: var(--border-width) dashed var(--border); border-radius: var(--radius-md); box-shadow: none; }
-.hp-organizer-new small { max-width: 100%; overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.hp-organizer-new small { max-width: 100%; overflow: hidden; font-size: var(--ui-font-caption, 11px); text-overflow: ellipsis; white-space: nowrap; }
 .hp-organizer-new:hover { color: var(--text); background: var(--bg-hover); transform: translateY(-2px); }
 .hp-organizer-grid .hp-tile-name,
-.hp-organizer-new small { font-size: 10.5px; }
-.hp-organizer-panel > footer { flex: none; padding-top: 7px; color: var(--text-ghost); font-size: 9.5px; text-align: center; }
+.hp-organizer-new small { font-size: var(--ui-font-caption, 11px); }
+.hp-organizer-panel > footer { flex: none; padding-top: 7px; color: var(--text-ghost); font-size: var(--ui-font-caption, 11px); text-align: center; }
 
 /* ── 壁纸面板 ──────────────────────────────────────────────────────────── */
 .hp-wallpaper-stage { z-index: 30; justify-items: end; }
@@ -818,8 +818,8 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   animation: hp-rise var(--duration-slow) var(--ease-out) both;
 }
 .hp-wallpaper-head > div { min-width: 0; display: flex; flex-direction: column; }
-.hp-wallpaper-head strong { color: var(--text); font-size: 15px; }
-.hp-wallpaper-head span { color: var(--text-faint); font-size: 10.5px; line-height: 1.4; }
+.hp-wallpaper-head strong { color: var(--text); font-size: var(--ui-font-heading, 14px); }
+.hp-wallpaper-head span { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); line-height: 1.4; }
 .hp-wallpaper-sources {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
@@ -842,7 +842,7 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   background: transparent;
   color: var(--text-muted);
   font: inherit;
-  font-size: 11px;
+  font-size: var(--ui-font-caption, 11px);
   cursor: pointer;
 }
 .hp-wallpaper-sources button:hover { color: var(--text); }
@@ -857,13 +857,13 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   gap: 9px;
   padding: 20px;
   color: var(--text-faint);
-  font-size: 11px;
+  font-size: var(--ui-font-caption, 11px);
   line-height: 1.5;
   text-align: center;
 }
 .hp-wallpaper-error { min-height: 48px; color: var(--danger); }
 .hp-theme-presets { padding-top: 13px; }
-.hp-theme-presets > p { margin: 0 1px 9px; color: var(--text-faint); font-size: 10.5px; line-height: 1.45; }
+.hp-theme-presets > p { margin: 0 1px 9px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
 .hp-theme-presets > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
 .hp-theme-presets button {
   position: relative;
@@ -877,7 +877,7 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   background: var(--overlay-subtle);
   color: var(--text-muted);
   font: inherit;
-  font-size: 10.5px;
+  font-size: var(--ui-font-caption, 11px);
   cursor: pointer;
   transition: transform var(--duration-fast) var(--ease-spring), border-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
 }
@@ -913,14 +913,14 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   background: transparent;
   color: var(--text-muted);
   font: inherit;
-  font-size: 10.5px;
+  font-size: var(--ui-font-caption, 11px);
   cursor: pointer;
 }
 .hp-wallpaper-switch > span {
   position: relative;
   width: 27px;
   height: 16px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   background: var(--overlay-strong);
 }
 .hp-wallpaper-switch > span::after {
@@ -970,8 +970,8 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
 .hp-wallpaper-custom { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; padding: 14px 1px 6px; }
 .hp-wallpaper-custom-preview { grid-column: 1 / -1; aspect-ratio: 16 / 7; border-radius: var(--radius-md); background-color: var(--overlay-light); background-position: center; background-size: cover; }
 .hp-wallpaper-custom > div:nth-child(2) { min-width: 0; display: flex; flex-direction: column; }
-.hp-wallpaper-custom strong { color: var(--text); font-size: 11.5px; }
-.hp-wallpaper-custom span { color: var(--text-faint); font-size: 9.5px; }
+.hp-wallpaper-custom strong { color: var(--text); font-size: var(--ui-font-caption, 11px); }
+.hp-wallpaper-custom span { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
 .hp-wallpaper-custom button {
   min-height: 29px;
   display: inline-flex;
@@ -984,7 +984,7 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   background: transparent;
   color: var(--text-muted);
   font: inherit;
-  font-size: 10px;
+  font-size: var(--ui-font-caption, 11px);
   cursor: pointer;
 }
 .hp-wallpaper-custom button:hover { color: var(--text); background: var(--bg-hover); }
@@ -1005,14 +1005,14 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   cursor: pointer;
 }
 .hp-wallpaper-options > button > span { min-width: 0; display: flex; flex-direction: column; }
-.hp-wallpaper-options strong { font-size: 11.5px; }
-.hp-wallpaper-options small { color: var(--text-faint); font-size: 9.5px; font-weight: 400; }
+.hp-wallpaper-options strong { font-size: var(--ui-font-caption, 11px); }
+.hp-wallpaper-options small { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-weight: 400; }
 .hp-wallpaper-options i {
   position: relative;
   width: 27px;
   height: 16px;
   flex: none;
-  border-radius: 999px;
+  border-radius: var(--radius-pill, 999px);
   background: var(--overlay-strong);
 }
 .hp-wallpaper-options i::after {
@@ -1084,7 +1084,7 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   /* Project pill 是新会话归属的关键信息；极矮视口收起纯装饰品牌字样给它让位。 */
   .hp-brand { display: none; }
   .hp-clock { font-size: 32px; }
-  .hp-date { margin-top: 3px; font-size: 11.5px; }
+  .hp-date { margin-top: 3px; font-size: var(--ui-font-caption, 11px); }
   .hp-greet { display: none; }
 }
 

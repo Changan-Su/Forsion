@@ -4,7 +4,7 @@
  */
 import type {
   AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, MuseLibraryEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo,
-  NormalAgentDef, ProjectContext, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SpecialAgentsConfig,
+  NormalAgentDef, ProjectContext, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
   TanguDesktopConfig, ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
 import { AGENT_APP_ID } from './agentRunService'
@@ -408,6 +408,32 @@ export const fetchProviderModels = (
 export const listSkills = (cfg: TanguDesktopConfig, agentSlug?: string) =>
   request<{ skills: SkillInfo[] }>(cfg, `/agent/skills${agentSlug ? `?agentSlug=${encodeURIComponent(agentSlug)}` : ''}`).then((r) => r.skills)
 
+/** Host skill catalog: every physical user/agent copy, including shadowed versions. */
+export const listSkillCatalog = (cfg: TanguDesktopConfig, agentSlug?: string) =>
+  request<{ skills: SkillCatalogEntry[] }>(cfg, `/agent/skills/catalog${agentSlug ? `?agentSlug=${encodeURIComponent(agentSlug)}` : ''}`).then((r) => r.skills)
+
+export const getSkillCatalogEntry = (cfg: TanguDesktopConfig, key: string, agentSlug?: string) =>
+  request<{ skill: SkillCatalogEntry }>(cfg, `/agent/skills/catalog/${encodeURIComponent(key)}${agentSlug ? `?agentSlug=${encodeURIComponent(agentSlug)}` : ''}`).then((r) => r.skill)
+
+export const createSkillCatalogEntry = (cfg: TanguDesktopConfig, body: { scope: 'user' | 'agent'; agentSlug?: string; slug: string; name: string; description?: string; content: string }) =>
+  request<{ skill: SkillCatalogEntry }>(cfg, '/agent/skills/catalog', { method: 'POST', body: JSON.stringify(body) }).then((r) => r.skill)
+
+export const updateSkillCatalogEntry = (cfg: TanguDesktopConfig, key: string, body: { name?: string; description?: string; content?: string; agentSlug?: string }) =>
+  request<{ skill: SkillCatalogEntry }>(cfg, `/agent/skills/catalog/${encodeURIComponent(key)}`, { method: 'PATCH', body: JSON.stringify(body) }).then((r) => r.skill)
+
+export const setSkillCatalogEntryDisabled = (cfg: TanguDesktopConfig, key: string, disabled: boolean, agentSlug?: string) =>
+  request<{ ok: boolean }>(cfg, `/agent/skills/catalog/${encodeURIComponent(key)}/disabled`, { method: 'PUT', body: JSON.stringify({ disabled, ...(agentSlug ? { agentSlug } : {}) }) })
+
+export const deleteSkillCatalogEntry = (cfg: TanguDesktopConfig, key: string, agentSlug?: string) =>
+  request<{ ok: boolean; backupPath?: string }>(cfg, `/agent/skills/catalog/${encodeURIComponent(key)}${agentSlug ? `?agentSlug=${encodeURIComponent(agentSlug)}` : ''}`, { method: 'DELETE' })
+
+export const copySkillCatalogEntry = (cfg: TanguDesktopConfig, key: string, body: { scope: 'user' | 'agent'; agentSlug?: string; slug?: string }, sourceAgentSlug?: string) =>
+  request<{ skill: SkillCatalogEntry }>(cfg, `/agent/skills/catalog/${encodeURIComponent(key)}/copy${sourceAgentSlug ? `?agentSlug=${encodeURIComponent(sourceAgentSlug)}` : ''}`, { method: 'POST', body: JSON.stringify(body) }).then((r) => r.skill)
+
+/** Copy a user-selected folder into the host library. The source path must be local to the host. */
+export const importSkillCatalogEntry = (cfg: TanguDesktopConfig, body: { scope: 'user' | 'agent'; agentSlug?: string; sourcePath: string; slug?: string }) =>
+  request<{ skill: SkillCatalogEntry }>(cfg, '/agent/skills/catalog/import', { method: 'POST', body: JSON.stringify(body) }).then((r) => r.skill)
+
 /** 本地技能上云(owner=当前用户,云端 Tangu 会话即可启用)。 */
 export const uploadSkillToCloud = (cfg: TanguDesktopConfig, localId: string) =>
   request<{ id: string; name: string }>(cfg, '/agent/skills/upload', {
@@ -712,7 +738,7 @@ export const deletePluginFile = (cfg: TanguDesktopConfig, id: string, scope: str
 export const getSpecialConfig = (cfg: TanguDesktopConfig) =>
   request<{ config: SpecialAgentsConfig; defaults?: { historianPrompt: string } }>(cfg, '/agent/special/config')
 
-export const saveSpecialConfig = (cfg: TanguDesktopConfig, patch: Partial<SpecialAgentsConfig>) =>
+export const saveSpecialConfig = (cfg: TanguDesktopConfig, patch: { historian?: Partial<SpecialAgentsConfig['historian']>; muse?: Partial<SpecialAgentsConfig['muse']> }) =>
   request<{ config: SpecialAgentsConfig }>(cfg, '/agent/special/config', { method: 'POST', body: JSON.stringify(patch) }).then((r) => r.config)
 
 export interface SessionHistorianStatus {
@@ -942,6 +968,13 @@ export interface InboxClaimRequirements {
   tiers?: string[]
   [k: string]: unknown
 }
+/** 服务端按业务事件投递的定向消息的判别(引擎 routes/inbox.ts 只对 sender_kind='server' 的行解析;目前只有反馈中心)。
+ *  阅读面板据此挂反馈线程面板(views/inbox/FeedbackThread.tsx)。移动端 localInbox 直存服务端行,这里可能仍是 JSON 串。 */
+export interface InboxThread {
+  kind: 'feedback'
+  ticketId: string
+  event?: string
+}
 export interface InboxMessage {
   id: string
   title: string
@@ -949,6 +982,7 @@ export interface InboxMessage {
   sender_kind: 'agent' | 'server' | 'system'
   sender_id: string | null
   origin_broadcast_id: string | null
+  thread?: InboxThread | string | null
   read_at: string | null
   archived_at: string | null
   attachments?: { items: InboxAttachmentItem[]; claimed: boolean; requires?: InboxClaimRequirements } | null

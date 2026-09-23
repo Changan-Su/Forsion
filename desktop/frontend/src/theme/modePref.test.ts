@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
-  backgroundSwatch, listSkins, resolveInitialBg, resolveInitialEffectiveMode, resolveInitialMode, resolveInitialModePref, resolveInitialSkin, systemMode,
+  backgroundSwatch, listSkins, resolveInitialBg, resolveInitialEffectiveMode, resolveInitialLang, resolveInitialMode, resolveInitialModePref, resolveInitialSkin, systemMode,
 } from './registry'
 
 const g = globalThis as unknown as { localStorage?: unknown; window?: unknown }
@@ -108,6 +108,12 @@ describe('systemMode', () => {
 })
 
 describe('知语言拆回独立配色轴', () => {
+  it('旧内置语言退场后回到 Genesis，颜色偏好仍保留', () => {
+    ls['forsion_theme_lang'] = 'zhi'
+    ls['forsion_theme_skin'] = 'zhi'
+    expect(resolveInitialLang()).toBe('lovable')
+    expect(resolveInitialSkin()).toBe('zhi')
+  })
   it('旧 zhi + cream 默认位只迁一次到知蓝，保持升级前观感', () => {
     ls['forsion_theme_lang'] = 'zhi'
     ls['forsion_theme_skin'] = 'cream'

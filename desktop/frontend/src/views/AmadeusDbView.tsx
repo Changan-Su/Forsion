@@ -15,7 +15,6 @@ export function AmadeusDbView({ leaf }: ViewProps) {
    *  仪表盘卡经 ViewCard.setParams 落进围栏,独立 tab 随布局持久化;都是免费的。 */
   const viewName = typeof leaf.params.view === 'string' && leaf.params.view ? leaf.params.view : null
   const mode = useTheme((s) => s.mode)
-  const flat = useTheme((s) => s.flat)
   const name = useDbStore((s) => (dbPath ? s.entries[dbPath]?.data?.name : undefined))
   const gen = useDbStore((s) => s.gen) // 缓存整片作废后重读(见 dbStore 的 gen)
   useEffect(() => {
@@ -28,7 +27,7 @@ export function AmadeusDbView({ leaf }: ViewProps) {
   if (!dbPath) return <div className="amx-db amx-db-state">未指定数据库文件。</div>
   return (
     /* 编辑器同款契约域(.am-app+bridge 取色,镜像 mode/flat),外层滚动由 .amx-dbview 管 */
-    <div className="am-app tangu-lovable amx-pane amx-dbview" data-mode={mode} data-flat={flat ? '1' : '0'}>
+    <div className="am-app tangu-lovable amx-pane amx-dbview" data-mode={mode}>
       <DatabaseEmbed
         target={dbPath}
         pagePath={dbPath}

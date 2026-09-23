@@ -1,12 +1,19 @@
 import { describe, it, expect } from 'vitest'
 import { homedir, tmpdir } from 'node:os'
-import { defaultShell, resolveCwd, saneSize } from './pty'
+import { defaultShell, resolveCwd, saneSize, shellArgsFor } from './pty'
 
 describe('pty 纯函数', () => {
   it('defaultShell 尊重 $SHELL 且走登录 shell(GUI 进程 PATH 残缺)', () => {
     expect(defaultShell('darwin', { SHELL: '/bin/zsh' })).toEqual({ file: '/bin/zsh', args: ['-l'] })
     expect(defaultShell('linux', {})).toEqual({ file: '/bin/bash', args: ['-l'] })
     expect(defaultShell('win32', { COMSPEC: 'C:\\cmd.exe' })).toEqual({ file: 'C:\\cmd.exe', args: [] })
+  })
+
+  it('shellArgsFor:带命令 = 登录 shell + -c(退出码干净);缺命令原样;Windows 分 cmd/powershell', () => {
+    expect(shellArgsFor('darwin', '/bin/zsh', ['-l'])).toEqual(['-l'])
+    expect(shellArgsFor('darwin', '/bin/zsh', ['-l'], 'ls -la')).toEqual(['-l', '-c', 'ls -la'])
+    expect(shellArgsFor('win32', 'C:\\Windows\\system32\\cmd.exe', [], 'dir')).toEqual(['/d', '/c', 'dir'])
+    expect(shellArgsFor('win32', 'powershell.exe', [], 'dir')).toEqual(['-NoLogo', '-Command', 'dir'])
   })
 
   it('resolveCwd:不存在/非目录/缺省一律回家目录', () => {

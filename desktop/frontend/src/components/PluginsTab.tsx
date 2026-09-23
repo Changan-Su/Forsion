@@ -104,7 +104,7 @@ export const PluginsTab: React.FC<{
         </button>
       </div>
       <div style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 12, display: 'flex', flexDirection: 'column', gap: 6 }}>
-        <div style={{ fontSize: 12, fontWeight: 600 }}>{t('settings.plugins.npmInstallTitle')}</div>
+        <div style={{ fontSize: 'var(--ui-font-meta, 12px)', fontWeight: 600 }}>{t('settings.plugins.npmInstallTitle')}</div>
         <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
           <input
             className="input"
@@ -115,7 +115,7 @@ export const PluginsTab: React.FC<{
             onKeyDown={(e) => { if (e.key === 'Enter') void doInstall() }}
             style={{ flex: 1, minWidth: 200 }}
           />
-          <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
+          <label style={{ fontSize: 'var(--ui-font-caption, 11px)', display: 'flex', alignItems: 'center', gap: 4, whiteSpace: 'nowrap' }}>
             <input type="checkbox" checked={preferMirror} onChange={(e) => setPreferMirror(e.target.checked)} />
             {t('settings.plugins.preferMirror')}
           </label>
@@ -123,7 +123,7 @@ export const PluginsTab: React.FC<{
             {installing ? t('settings.plugins.installing') : t('settings.plugins.installBtn')}
           </button>
         </div>
-        <div style={{ fontSize: 10.5, color: 'var(--text-faint)' }}>{t('settings.plugins.npmInstallHint')}</div>
+        <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{t('settings.plugins.npmInstallHint')}</div>
       </div>
       {hiddenCount > 0 && <div className="hint">{t('settings.plugins.bundleOwnedHint', { n: String(hiddenCount) })}</div>}
       {!shown
@@ -136,17 +136,17 @@ export const PluginsTab: React.FC<{
             <PluginLogo url={p.iconUrl} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <b style={{ fontSize: 13 }}>{nm(p)}</b>
-                <span style={{ fontSize: 10.5, color: 'var(--text-faint)', border: 'var(--border-width) solid var(--border)', borderRadius: 4, padding: '0 4px' }}>
+                <b style={{ fontSize: 'var(--ui-font-body, 13px)' }}>{nm(p)}</b>
+                <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', border: 'var(--border-width) solid var(--border)', borderRadius: 4, padding: '0 4px' }}>
                   {p.source === 'folder' ? t('settings.plugins.folder') : t('settings.plugins.builtin')}
                 </span>
                 {p.needsRestart && (
-                  <span title={t('settings.plugins.needsRestartHint')} style={{ fontSize: 10.5, color: 'var(--warn, #b8860b)', border: 'var(--border-width) solid var(--warn, #b8860b)', borderRadius: 4, padding: '0 4px' }}>
+                  <span title={t('settings.plugins.needsRestartHint')} style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--warn, #b8860b)', border: 'var(--border-width) solid var(--warn, #b8860b)', borderRadius: 4, padding: '0 4px' }}>
                     {t('settings.plugins.needsRestart')}
                   </span>
                 )}
               </div>
-              <div style={{ fontSize: 11.5, color: 'var(--text-faint)', marginTop: 2 }}>{ds(p)}</div>
+              <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{ds(p)}</div>
             </div>
             {p.settings && p.enabled && (
               <button className="btn ghost sm" onClick={() => onOpenSettings(p.id)}>{t('settings.plugins.openSettings')}</button>

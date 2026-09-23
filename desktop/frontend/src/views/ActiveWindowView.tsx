@@ -91,10 +91,10 @@ export const ActiveWindowView: React.FC = () => {
   return (
     <div data-view="active-window" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', flexShrink: 0, flexWrap: 'wrap' }}>
-        <span style={{ fontSize: 12, color: off ? 'var(--text-muted)' : 'var(--accent-ink)', fontWeight: 600 }}>
+        <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: off ? 'var(--text-muted)' : 'var(--accent-ink)', fontWeight: 600 }}>
           {off ? t('activeWindowView.off') : t('activeWindowView.on')}
         </span>
-        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{window.tangu?.platform}</span>
+        <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{window.tangu?.platform}</span>
         <div style={{ flex: 1 }} />
         <button className="btn ghost sm" onClick={() => setPaused((p) => !p)}>
           {paused ? <Play size={12} /> : <Pause size={12} />} {paused ? t('activityView.resume') : t('activityView.pause')}
@@ -105,7 +105,7 @@ export const ActiveWindowView: React.FC = () => {
       {off && <div className="hint" style={{ padding: '4px 12px 12px' }}>{t('activeWindowView.offHint')}</div>}
 
       {!off && (
-        <div style={{ padding: '0 12px 8px', fontFamily: MONO, fontSize: 12.5, lineHeight: 1.8, flexShrink: 0 }}>
+        <div style={{ padding: '0 12px 8px', fontFamily: MONO, fontSize: 'var(--ui-font-meta, 12px)', lineHeight: 1.8, flexShrink: 0 }}>
           {!sample && <div className="hint" style={{ fontFamily: 'inherit' }}>{t('activeWindowView.noSample')}</div>}
           {sample && (
             <>
@@ -129,7 +129,7 @@ export const ActiveWindowView: React.FC = () => {
           const el = boxRef.current
           if (el) stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 24
         }}
-        style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 12px 12px', fontFamily: MONO, fontSize: 12, lineHeight: 1.7, borderTop: '1px solid var(--border)' }}
+        style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: '4px 12px 12px', fontFamily: MONO, fontSize: 'var(--ui-font-meta, 12px)', lineHeight: 1.7, borderTop: '1px solid var(--border)' }}
       >
         {segs.length === 0 && !off && <div className="hint" style={{ fontFamily: 'inherit' }}>{t('activeWindowView.segEmpty')}</div>}
         {segs.map((s, i) => (

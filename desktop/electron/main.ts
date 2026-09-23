@@ -2041,8 +2041,10 @@ app.whenReady().then(async () => {
    */
   ipcMain.handle('cloud:fetch', async (e, raw: unknown) => {
     if (!isTrustedSender(e)) return { status: 0, error: 'untrusted' }
-    const req = (raw ?? {}) as { path?: unknown; method?: unknown; body?: unknown }
+    const req = (raw ?? {}) as { path?: unknown; method?: unknown; body?: unknown; timeoutMs?: unknown }
     const path = typeof req.path === 'string' ? req.path : ''
+    // 调用方可延长超时(带 base64 附件的反馈回复在慢网上 15s 不够),封顶 120s 防止挂死。
+    const timeoutMs = Math.min(120_000, Math.max(1_000, Number(req.timeoutMs) || 15_000))
     const method = typeof req.method === 'string' ? req.method.toUpperCase() : 'GET'
     if (!/^(GET|POST|PUT|PATCH|DELETE)$/.test(method)) return { status: 0, error: 'bad_method' }
     if (!path.startsWith('/')) return { status: 0, error: 'bad_path' }
@@ -2057,7 +2059,7 @@ app.whenReady().then(async () => {
 
     const hasBody = req.body !== undefined && method !== 'GET' && method !== 'DELETE'
     const ctl = new AbortController()
-    const timer = setTimeout(() => ctl.abort(), 15_000)
+    const timer = setTimeout(() => ctl.abort(), timeoutMs)
     try {
       const r = await fetch(target, {
         method,
@@ -3496,10 +3498,17 @@ app.whenReady().then(async () => {
   ipcMain.on('window:mainAction', (e, rawAction: unknown, rawPayload: unknown) => {
     const req = isTrustedSender(e) ? normalizeMainAction(rawAction, rawPayload) : undefined
     if (!req) return
-    // 只有要用户回主窗看结果的才把主窗抢到前面:重开引导、带着草稿 / 引用去聊天。其余(⌘K 重算、测试通知卡、恢复布局、
+    // 只有要用户回主窗看结果的才把主窗抢到前面:重开引导、带着草稿 / 引用去聊天、打开 Agent。其余(⌘K 重算、测试通知卡、恢复布局、
     // 成就弹窗、撤 Space)用户还在设置浮窗里,别打断。
-    if (req.action === 'onboarding' || req.action === 'chat-draft' || req.action === 'chat-quote') showMainWindow()
-    const deliver = (): void => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('window:mainAction', req.action, req.payload) }
+    if (req.action === 'onboarding' || req.action === 'chat-draft' || req.action === 'chat-quote' || req.action === 'open-agents' || req.action === 'open-agent') showMainWindow()
+    const deliver = (): void => {
+      const recipients = req.action === 'skills-changed' || req.action === 'agents-changed'
+        ? [mainWindow, ...detachedWindows.values(), ...floatingWindows.values()]
+        : [mainWindow]
+      for (const win of recipients) if (win && !win.isDestroyed() && !win.webContents.isDestroyed() && win.webContents !== e.sender) {
+        win.webContents.send('window:mainAction', req.action, req.payload)
+      }
+    }
     if (mainWindow?.webContents.isLoadingMainFrame()) mainWindow.webContents.once('did-finish-load', deliver)
     else deliver()
   })

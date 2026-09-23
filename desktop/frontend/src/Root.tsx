@@ -30,6 +30,8 @@ import { installNotificationWiring } from './stores/notificationWiring'
 import { useShallow } from 'zustand/react/shallow'
 import { installFileDropGuard } from './fileDropGuard'
 import { syncDevCommands } from './devCommands'
+import { openAgentProfile } from './views/agentProfileNav'
+import { listSkills } from './services/backendService'
 import { FloatingPanelFrame } from './components/FloatingPanelFrame'
 import { BtwHost } from './views/chat2/BtwPanel'
 import { quoteInMainChat } from './views/chat2/btwStore'
@@ -75,6 +77,16 @@ export function Root() {
     if (action === 'chat-draft' && payload) draftInMainChat(payload)
     // 旁聊浮窗「引用到对话」:回答挂成主窗输入框的引用,不动草稿
     if (action === 'chat-quote' && payload) quoteInMainChat(payload)
+    if (action === 'agents-changed') {
+      void useApp.getState().refreshAgents()
+      window.dispatchEvent(new Event('forsion:agents-changed'))
+    }
+    if (action === 'skills-changed') {
+      void listSkills(useApp.getState().cfg).then((skillsList) => useApp.setState({ skillsList })).catch(() => {})
+      window.dispatchEvent(new Event('forsion:skills-changed'))
+    }
+    if (action === 'open-agents') openAgentProfile(useApp.getState().defaultAgentSlug || '')
+    if (action === 'open-agent' && payload && /^[a-z0-9][a-z0-9-]{0,63}$/.test(payload)) openAgentProfile(payload)
   }), [])
   const theme = useTheme()
   const a = useApp(useShallow((s) => ({
@@ -83,6 +95,7 @@ export function Root() {
     activeId: s.activeId,
     settingsOpen: s.settingsOpen,
     settingsTab: s.settingsTab,
+    settingsSkillKey: s.settingsSkillKey,
     onboarding: s.onboarding,
     feedbackOpen: s.feedbackOpen,
     marketOpen: s.marketOpen,
@@ -144,20 +157,23 @@ export function Root() {
           <SettingsModal
             open
             initialTab={a.settingsTab ?? undefined}
+            initialSkillKey={a.settingsSkillKey ?? undefined}
             cfg={a.cfg}
             activeSession={activeSession}
             themeLang={theme.lang}
             themeSkin={theme.skin}
             themeMode={theme.mode}
             themeModePref={theme.modePref}
-            glassOn={theme.glass}
             flatOn={theme.flat}
+            glassOn={theme.glass}
+
             themeSeed={theme.seed}
             onClose={() => a.closeSettings()}
             onConfigChange={a.patchConfig}
             onThemeChange={(lang, skin, mode) => theme.setTheme(lang, skin, theme.bg, mode)}
+            onFlatChange={theme.setFlat}
             onGlassChange={(on) => theme.setGlass(on)}
-            onFlatChange={(on) => theme.setFlat(on)}
+
             onSeedChange={(hex) => theme.setSeedValue(hex)}
             onReloadThemes={() => theme.reloadThemes()}
             onReconnect={(patch) => void a.connect({ ...a.cfg, ...(patch || {}) })}

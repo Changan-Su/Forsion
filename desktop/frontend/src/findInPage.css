@@ -7,7 +7,7 @@
   align-items: center;
   gap: 4px;
   background: var(--bg-card, var(--bg));
-  border-radius: 8px;
+  border-radius: var(--radius-sm, 6px);
   outline: 0.5px solid var(--border);
   outline-offset: -0.5px;
   box-shadow: var(--card-shadow);
@@ -22,11 +22,11 @@
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 12.5px;
+  font-size: var(--ui-font-meta, 12px);
 }
 .amx-findbar-count {
   color: var(--text-faint, var(--text-muted));
-  font-size: 11px;
+  font-size: var(--ui-font-caption, 11px);
   min-width: 32px;
   text-align: right;
 }
@@ -34,10 +34,10 @@
   border: none;
   background: transparent;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-body, 13px);
   width: 20px;
   height: 20px;
-  border-radius: 5px;
+  border-radius: var(--radius-sm, 6px);
   cursor: pointer;
   display: inline-flex;
   align-items: center;

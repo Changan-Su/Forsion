@@ -2,6 +2,7 @@
 import React from 'react'
 import { Check } from 'lucide-react'
 import type { ThemeEntry } from '../theme/registry'
+import { useI18n } from '../i18n'
 
 export const ThemeCard: React.FC<{
   entry: ThemeEntry
@@ -9,6 +10,7 @@ export const ThemeCard: React.FC<{
   onSelect: () => void
 }> = ({ entry, active, onSelect }) => {
   const { preview } = entry.manifest
+  const { locale } = useI18n()
   const shape = preview.shape || 'paper'
   // 语言卡只预览结构，颜色完整取当前 skin。旧实现读 manifest 的硬编码色板，导致切到珊瑚后
   // “知/Soft/Glass”卡片仍各画各的蓝/紫/灰，用户在设置里看到的就已经不是双轴模型。
@@ -27,8 +29,8 @@ export const ThemeCard: React.FC<{
         </div>
       </div>
       <div className="theme-meta">
-        <div className="theme-name">{preview.title?.text || entry.manifest.name}</div>
-        <div className="theme-tagline">{preview.tagline || entry.manifest.description}</div>
+        <div className="theme-name">{preview.title?.text || (locale === 'en' && entry.manifest.nameEn ? entry.manifest.nameEn : entry.manifest.name)}</div>
+        <div className="theme-tagline">{locale === 'en' ? (preview.taglineEn || entry.manifest.descriptionEn || preview.tagline || entry.manifest.description) : (preview.tagline || entry.manifest.description)}</div>
       </div>
       {active && <span className="theme-card-check" aria-hidden="true"><Check size={11} /></span>}
     </button>

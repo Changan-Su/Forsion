@@ -2,7 +2,8 @@
  *  主进程(写前校验)与渲染层(表格操作)双端引用;显示名存文件内,文件名只作 ![[ ]] 解析用。 */
 import { z } from 'zod'
 
-export const DB_VERSION = 1
+// v2 adds record page content. Older clients reject it instead of stripping unknown body fields on save.
+export const DB_VERSION = 2
 
 export type ColumnType = 'text' | 'number' | 'checkbox' | 'date' | 'select' | 'multiselect' | 'url' | 'page'
 
@@ -65,10 +66,12 @@ export interface DbColumn {
 export interface DbRow {
   id: string
   cells: Record<string, CellValue> // key = column.id
+  /** Optional page content, edited as rich text and stored as portable Markdown. */
+  body?: string
 }
 
 /** 核心视图类型;DbView.type 放行任意字符串(前向兼容),渲染端未知类型回退表格。 */
-export type DbViewType = 'table' | 'kanban' | 'calendar' | 'gallery' | 'chart' | 'form' | 'gantt'
+export type DbViewType = 'table' | 'list' | 'kanban' | 'calendar' | 'gallery' | 'chart' | 'form' | 'gantt'
 
 /** 视图筛选条件(扁平 AND;op 语义见 viewQuery.ts,未知 op 视为恒真不丢行)。 */
 export interface DbViewFilter {
@@ -83,6 +86,8 @@ export interface DbView {
   id: string
   name: string
   type: string
+  /** How records open in this view. Missing: center for gallery/calendar, side otherwise. */
+  openMode?: 'side' | 'center' | 'full'
   /** kanban:分组列 id(select);chart:分组列 id(任意列);table:属性分组列 id(类型见 db/groupRows.ts)。
    *  table 缺 = 不分组；其他视图缺 = 渲染端自动挑。 */
   groupBy?: string
@@ -233,11 +238,13 @@ const dbColumnSchema = z.object({
 const dbRowSchema = z.object({
   id: z.string().min(1),
   cells: z.record(z.string(), cellValueSchema),
+  body: z.string().optional(),
 })
 const dbViewSchema = z.object({
   id: z.string().min(1),
   name: z.string(),
   type: z.string().min(1), // 未知类型放行:渲染端回退表格,不丢配置
+  openMode: z.enum(['side', 'center', 'full']).optional(),
   groupBy: z.string().optional(),
   // 表格日期分组档位 / 表格层级树列(接口 DbView.groupUnit / treeCol;strip 陷阱同上,漏这里 = 菜单一选保存即丢)
   groupUnit: z.enum(['day', 'month']).optional(),
@@ -372,12 +379,17 @@ export function parseDb(text: string): DbParseResult {
   const r = dbFileSchema.safeParse(raw)
   if (!r.success) return { ok: false, error: '不是有效的 Database 文件结构' }
   if (r.data.version > DB_VERSION) return { ok: false, error: `版本过新(v${r.data.version}),请升级应用` }
-  return { ok: true, data: r.data }
+  return { ok: true, data: withDbFormatVersion(r.data) }
+}
+
+/** Legacy tables remain v1 until they contain page content; promotion is deliberately one-way. */
+export function withDbFormatVersion(db: DbFile): DbFile {
+  return db.version < 2 && db.rows.some((row) => row.body !== undefined) ? { ...db, version: 2 } : db
 }
 
 /** 两空格缩进 + 尾换行:vault 常入 git,保持可 diff。 */
 export function serializeDb(db: DbFile): string {
-  return `${JSON.stringify(db, null, 2)}\n`
+  return `${JSON.stringify(withDbFormatVersion(db), null, 2)}\n`
 }
 
 /** 列类型切换是非破坏式的(只改 column.type 不动 cells):渲染经此宽容折算,编辑时才写规范值。

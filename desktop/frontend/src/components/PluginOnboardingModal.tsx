@@ -73,14 +73,14 @@ const RecommendRow: React.FC<{ rec: PluginOnboardingRecommend; preInstalled: boo
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 12.5 }}>{card?.name || rec.name || rec.slug}</div>
-        {rec.reason && <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>{rec.reason}</div>}
-        {err && <div role="alert" style={{ fontSize: 11, color: 'var(--danger)', overflowWrap: 'anywhere' }}>{err}</div>}
+        <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{card?.name || rec.name || rec.slug}</div>
+        {rec.reason && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{rec.reason}</div>}
+        {err && <div role="alert" style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--danger)', overflowWrap: 'anywhere' }}>{err}</div>}
       </div>
       {state === 'done' ? (
-        <span style={{ fontSize: 11.5, color: 'var(--ok, #3aa675)', whiteSpace: 'nowrap' }}>{t('plugin.onboarding.installed')}</span>
+        <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--ok, #3aa675)', whiteSpace: 'nowrap' }}>{t('plugin.onboarding.installed')}</span>
       ) : state === 'missing' ? (
-        <span style={{ fontSize: 11.5, color: 'var(--text-faint)', whiteSpace: 'nowrap' }}>{t('plugin.onboarding.notFound')}</span>
+        <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', whiteSpace: 'nowrap' }}>{t('plugin.onboarding.notFound')}</span>
       ) : (
         <button className="btn sm" disabled={state !== 'ready'} onClick={() => void install()}>
           {state === 'installing' ? t('plugin.onboarding.installing') : t('plugin.onboarding.install')}
@@ -97,7 +97,7 @@ const ReqState: React.FC<{ result?: RequirementResult; checking?: boolean }> = (
   const state = result?.state ?? 'unknown'
   return (
     <span className="plugin-req-state" data-state={state} style={{
-      display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, whiteSpace: 'nowrap',
+      display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--ui-font-caption, 11px)', whiteSpace: 'nowrap',
       color: state === 'ok' ? 'var(--ok, #3aa675)' : state === 'unmet' ? 'var(--warn, #b8860b)' : 'var(--text-faint)',
     }}>
       {state === 'ok' ? <Check size={12} aria-hidden="true" /> : state === 'unmet' ? <CircleAlert size={12} aria-hidden="true" /> : <CircleHelp size={12} aria-hidden="true" />}
@@ -161,7 +161,7 @@ const Card: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
       <div className="dialog plugin-onboarding-card" style={{ width: 'min(520px, 92vw)' }} onMouseDown={(e) => e.stopPropagation()}>
         <div className="dialog-title">{t('plugin.onboarding.title', { name: pluginDisplayName(p, locale) })}</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxHeight: '64vh', overflowY: 'auto', padding: '2px 0' }}>
-          {spec.intro && <div style={{ fontSize: 12.5, color: 'var(--text-faint)' }}>{spec.intro}</div>}
+          {spec.intro && <div style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-faint)' }}>{spec.intro}</div>}
           <div className="plugin-onboarding-requires">
             <div className="hint" style={{ marginBottom: 6 }}>{t('plugin.onboarding.requiresTitle')}</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
@@ -173,8 +173,8 @@ const Card: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
                     <div style={{ flex: 1, minWidth: 0 }}>
                       {def ? <SettingRow pluginId={p.id} def={def} /> : (
                         <>
-                          <div style={{ fontSize: 12.5 }}>{r.key}</div>
-                          <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>{t('plugin.onboarding.req.inactive')}</div>
+                          <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{r.key}</div>
+                          <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{t('plugin.onboarding.req.inactive')}</div>
                         </>
                       )}
                     </div>
@@ -190,9 +190,9 @@ const Card: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
                 return (
                   <div key={requirementKey(r)} data-requirement={requirementKey(r)} style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12.5 }}>{label}</div>
-                      {detail && <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>{detail}</div>}
-                      {!reg && <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>{t('plugin.onboarding.req.inactive')}</div>}
+                      <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{label}</div>
+                      {detail && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{detail}</div>}
+                      {!reg && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{t('plugin.onboarding.req.inactive')}</div>}
                     </div>
                     <ReqState result={res} checking={checking} />
                   </div>
@@ -211,9 +211,9 @@ const Card: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
               <div className="hint" style={{ marginBottom: 6 }}>{t('plugin.onboarding.stepsTitle')}</div>
               <ol style={{ margin: 0, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {spec.steps.map((s, i) => (
-                  <li key={i} style={{ fontSize: 12.5 }}>
+                  <li key={i} style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>
                     {s.title}
-                    {s.description && <div style={{ fontSize: 11, color: 'var(--text-faint)' }}>{s.description}</div>}
+                    {s.description && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{s.description}</div>}
                   </li>
                 ))}
               </ol>
@@ -241,7 +241,7 @@ const Card: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
               </div>
             </div>
           )}
-          <div className="plugin-onboarding-summary" data-ready={allOk ? '1' : '0'} style={{ fontSize: 11.5, color: allOk ? 'var(--ok, #3aa675)' : 'var(--text-faint)' }}>
+          <div className="plugin-onboarding-summary" data-ready={allOk ? '1' : '0'} style={{ fontSize: 'var(--ui-font-caption, 11px)', color: allOk ? 'var(--ok, #3aa675)' : 'var(--text-faint)' }}>
             {allOk ? t('plugin.onboarding.allReady')
               : unmetCount === 0 && !checking ? t('plugin.onboarding.someUnknown', { n: unknownCount })
                 : t('plugin.onboarding.laterHint')}

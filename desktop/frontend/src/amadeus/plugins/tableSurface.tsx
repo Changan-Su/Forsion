@@ -30,7 +30,6 @@ import type { TableRow, TableSpec } from './types'
 
 function PluginTable({ pluginId, spec, popHost }: { pluginId: string; spec: TableSpec; popHost: HTMLElement }) {
   const mode = useTheme((s) => s.mode)
-  const flat = useTheme((s) => s.flat)
   const rootRef = useRef<HTMLDivElement>(null)
   // 表级错误 = 表体清空 + 表下一行红字(表头/工具条留着,与降级路径同构)。
   const db = useMemo(() => specToDb(spec.error ? { ...spec, rows: [] } : spec), [spec])
@@ -45,8 +44,7 @@ function PluginTable({ pluginId, spec, popHost }: { pluginId: string; spec: Tabl
   // 弹层宿主与本表同步明暗:它住在 body 上,拿不到 .am-app 祖先的 data-mode。
   useLayoutEffect(() => {
     popHost.dataset.mode = mode
-    popHost.dataset.flat = flat ? '1' : '0'
-  }, [mode, flat, popHost])
+  }, [mode, popHost])
   // 每次提交后回调(插件用它挂懒加载观察器一类只读逻辑)。故意不给 deps:update 后必须再来一发。
   useLayoutEffect(() => {
     if (rootRef.current) latest.current.onRender?.(rootRef.current)
@@ -59,7 +57,7 @@ function PluginTable({ pluginId, spec, popHost }: { pluginId: string; spec: Tabl
     [spec, rowsById],
   )
   return (
-    <div className="amadeus-root am-app tangu-lovable amx-plugtable" data-mode={mode} data-flat={flat ? '1' : '0'} ref={rootRef}>
+    <div className="amadeus-root am-app tangu-lovable amx-plugtable" data-mode={mode} ref={rootRef}>
       {
         <>
           <DatabaseEmbed

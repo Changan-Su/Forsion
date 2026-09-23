@@ -28,7 +28,17 @@ let harnessReads = 0
 // 自进化自动档的提名 → 右上角提醒(HistorianStatus 在会话里每 2.5s 轮询活动):
 //  - 团队主会话 Atlas team 的活动流**从第一次轮询起就带**一条提名 → 那是历史,不许弹(负对照;弹了会盖住右栏,后面的点击全被拦);
 //  - Research notes 的活动流只在 nominate 置真后才出现提名 → 必须弹一张卡;点「复盘」就地往该会话发 /refine;同 id 不弹第二张。
-const LONG_DESC = 'Use when the task needs this capability. '.repeat(8).trim() // 真实内置技能的描述有两三百字:一行放不下才测得出截断
+const LONG_DESC = 'Use when the task needs this capability. '.repeat(8).trim()
+const skillCatalog = [
+  { key: 'agent:research:research', id: 'local:research', slug: 'research', name: 'Research notebook', description: 'Gather and cite evidence', scope: 'agent', owner: 'research', provenance: 'agent', readOnly: false, path: path.join(home, 'research', 'skills', 'research'), content: 'Gather evidence first.' },
+  { key: 'agent:research:writing', id: 'local:writing', slug: 'writing', name: 'Writing', description: 'Write clear reports', scope: 'agent', owner: 'research', provenance: 'agent', readOnly: false, path: path.join(home, 'research', 'skills', 'writing'), content: 'Write clearly.' },
+  { key: 'user:writing', id: 'local:writing', slug: 'writing', name: 'Global writing', description: 'Shared writing guide', scope: 'user', owner: null, provenance: 'user', readOnly: false, path: path.join(home, 'skills', 'writing'), content: 'Global style.' },
+  { key: 'user:git-workflow', id: 'local:git-workflow', slug: 'git-workflow', name: 'Git workflow', description: LONG_DESC, scope: 'user', owner: null, provenance: 'bundle', readOnly: true, path: path.join(home, 'skills', 'git-workflow'), content: 'Use git.' },
+  { key: 'user:web-research', id: 'local:web-research', slug: 'web-research', name: 'Web research', description: LONG_DESC, scope: 'user', owner: null, provenance: 'bundle', readOnly: true, path: path.join(home, 'skills', 'web-research'), content: 'Search carefully.' },
+]
+const skillDisabled = new Set()
+const skillToggles = []
+const agentMeta = { defaultSlug: 'xyra', order: [] }
 let nominate = false
 let harnessEmpty = false // 置真后 GET harness 回 entries: [] —— 「还没笔记但收件箱已有提名」这个首次用户的状态,候选段必须仍在
 const historianPolls = { main: 0, solo: 0 }
@@ -38,6 +48,52 @@ const renamed = [] // POST /rename 收到的目标 slug,按序
 let app
 async function run() {
   const stub = await startStubEngine({ agents, sessions: [main, solo], messages: [{ id: 'main-user', role: 'user', content: 'Plan the research', timestamp: 1 }, { id: 'main-answer', role: 'model', content: 'The team is ready.', timestamp: 2 }], override: async ({ path: p, method, url: u, body }) => {
+    const url = new URL(typeof u === 'string' ? u : u.toString(), 'http://stub')
+    const catalogAgent = url.searchParams.get('agentSlug')
+    const catalogView = (entry) => {
+      const shadow = entry.scope === 'user' && catalogAgent ? skillCatalog.find((item) => item.scope === 'agent' && item.owner === catalogAgent && item.slug === entry.slug) : null
+      const disabled = skillDisabled.has(entry.key)
+      const disabledForAgent = !!catalogAgent && skillDisabled.has(`${catalogAgent}:${entry.key}`)
+      return { ...entry, disabled, disabledForAgent, shadowedBy: shadow?.key || null, availability: shadow ? 'shadowed' : disabled || disabledForAgent ? 'disabled' : 'available', files: [] }
+    }
+    if (p === '/agent/agents' && method === 'GET') return { agents: [...agents].sort((a, b) => {
+      const ai = agentMeta.order.indexOf(a.slug), bi = agentMeta.order.indexOf(b.slug)
+      return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi)
+    }) }
+    if (p === '/agent/agents' && method === 'POST') {
+      const input = await body(); const slug = String(input.name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')
+      const agent = { ...agents[1], ...input, slug, createdBy: 'user', libraryDir: path.join(home, slug, 'Library') }
+      agents.push(agent); return { agent }
+    }
+    if (p === '/agent/agents-meta' && method === 'GET') return agentMeta
+    if (p === '/agent/agents-meta' && method === 'PUT') { Object.assign(agentMeta, await body()); return agentMeta }
+    if (/^\/agent\/agents\/[^/]+$/.test(p) && method === 'DELETE') { const slug = p.split('/')[3]; const i = agents.findIndex((a) => a.slug === slug); if (i < 0) return { ok: false }; agents.splice(i, 1); return { ok: true } }
+    if (p === '/agent/skills/catalog' && method === 'GET') return { skills: skillCatalog.filter((entry) => entry.scope === 'user' || entry.owner === catalogAgent).map(catalogView) }
+    if (p === '/agent/skills/catalog' && method === 'POST') {
+      const input = await body(); const entry = { key: `agent:${input.agentSlug}:${input.slug}`, id: `local:${input.slug}`, slug: input.slug, name: input.name, description: input.description || '', scope: 'agent', owner: input.agentSlug, provenance: 'agent', readOnly: false, path: path.join(home, input.agentSlug, 'skills', input.slug), content: input.content }
+      skillCatalog.push(entry); return { skill: catalogView(entry) }
+    }
+    if (p.startsWith('/agent/skills/catalog/')) {
+      const suffix = p.slice('/agent/skills/catalog/'.length)
+      const [rawKey, action] = suffix.split('/')
+      const key = decodeURIComponent(rawKey)
+      const entry = skillCatalog.find((item) => item.key === key)
+      if (!entry) return { status: 404, json: { detail: 'Skill missing' } }
+      if (action === 'disabled' && method === 'PUT') {
+        const input = await body(); const target = entry.scope === 'user' && input.agentSlug ? `${input.agentSlug}:${key}` : key
+        if (input.disabled) skillDisabled.add(target); else skillDisabled.delete(target)
+        skillToggles.push({ key, agentSlug: input.agentSlug, disabled: input.disabled }); return { ok: true }
+      }
+      if (action === 'copy' && method === 'POST') {
+        const input = await body(); const slug = input.slug || entry.slug
+        if (entry.scope === 'agent') assert.equal(catalogAgent, entry.owner, 'Copying an Agent source specifies its owner')
+        const copied = { ...entry, key: `agent:${input.agentSlug}:${slug}`, id: `local:${slug}`, slug, scope: 'agent', owner: input.agentSlug, provenance: 'agent', compatibility: null, readOnly: false, path: path.join(home, input.agentSlug, 'skills', slug) }
+        skillCatalog.push(copied); return { skill: catalogView(copied) }
+      }
+      if (method === 'GET') return { skill: catalogView(entry) }
+      if (method === 'PATCH') { Object.assign(entry, await body()); return { skill: catalogView(entry) } }
+      if (method === 'DELETE') { skillCatalog.splice(skillCatalog.indexOf(entry), 1); return { ok: true } }
+    }
     // 改文件夹名(slug):引擎搬目录后回新定义;这里只回显,前端要自己把 store 里的 slug 换掉。
     if (p.startsWith('/agent/agents/') && p.endsWith('/rename') && method === 'POST') { const next = (await body()).slug; renamed.push(next); return { agent: { ...agents[1], slug: next }, warnings: [] } }
     if (p === `/agent/sessions/${solo.id}` && method === 'PATCH') { const patch = await body(); sessionModelSaved = patch.model_id; Object.assign(solo, patch); return { session: solo } }
@@ -61,7 +117,8 @@ async function run() {
     // 「自建」徽标只认 origin:'agent'(manage_skill 写的);category:'agent' 的包内置专属技能(如 bluebird-video)没有徽标 —— 负对照。
     // builtin:true 的两条 = 随包内置技能(描述照真实内置的长度写):默认收在合上的「内置技能」组里,搜索命中才自动展开。
     if (p === '/agent/skills') return { skills: [{ id: 'local:research', name: 'Research notebook', description: 'Gather and cite evidence', category: 'agent' }, { id: 'local:writing', name: 'Writing', description: 'Write clear reports', origin: 'agent' },
-      { id: 'local:git-workflow', name: 'Git workflow', description: LONG_DESC, category: '开发流程', builtin: true, shared: true }, { id: 'local:web-research', name: 'Web research', description: LONG_DESC, category: '信息检索', builtin: true }] }
+      { id: 'local:git-workflow', name: 'Git workflow', description: LONG_DESC, category: '开发流程', builtin: true, shared: true }, { id: 'local:web-research', name: 'Web research', description: LONG_DESC, category: '信息检索', builtin: true },
+      { id: 'local:@aria/translation', name: 'Translation', description: 'Shared by Aria', source: 'local' }, { id: 'cloud:writing-assistant', name: 'Cloud writer', description: 'Cloud skill', source: 'user' }] }
     // 日程:一条每天自动执行(锚点在过去 → 下一次要滚到未来)、一条已过期的一次性计划;规则两条,只有一条的动作链会叫醒 research(另一条是负对照)。
     if (p === '/agent/special/schedule' && method === 'GET') return { schedules: [{ slug: 'research', name: 'Research', db: { version: 1, name: 'Schedule', columns: [], rows: [] }, entries: [
       { id: 'sch-daily', name: 'Morning digest', date: '2026-01-01T09:00', repeat: '1d', auto: true, prompt: 'Summarize new primary sources.', description: '', todo: false, lastRun: '2026-09-18T09:00:03.000Z' },
@@ -145,46 +202,67 @@ async function run() {
     await win.screenshot({ path: path.join(home, 'details-panel.png') })
     console.log('PASS overview model/thinking edits persist; session and Agent scopes remain independent')
     await win.locator('[data-tangu-details] .agent-section-nav button').filter({ hasText: '技能' }).click()
-    assert.equal(await compact.locator('.agent-equipment-item').filter({ hasText: 'Writing' }).locator('.harness-kind').textContent(), '自建', 'A skill the agent wrote with manage_skill is badged')
-    assert.equal(await compact.locator('.agent-equipment-item').filter({ hasText: 'Research notebook' }).locator('.harness-kind').count(), 0, 'A bundled agent-category skill without origin is not badged')
-    // 内置技能收进默认合上的组:自己的两条在外面,内置两条在组里且不可见;组标题带已启用计数。
-    const ownRows = compact.locator('.profile-section-enter > .agent-equipment-list .agent-equipment-item')
-    const stockGroup = compact.locator('[data-equipment-group="builtin"]')
-    assert.equal(await ownRows.count(), 2, 'Only non-built-in skills sit in the main list')
-    assert.equal(await stockGroup.evaluate((el) => el.open), false, 'Built-in skills start collapsed')
-    assert.equal(await stockGroup.locator('.agent-equipment-item').first().isVisible(), false)
-    assert.ok((await stockGroup.locator('summary').textContent()).includes('2 / 2'), 'The collapsed group still reports how many built-in skills are enabled')
-    // 描述默认一行(长描述被截断),点一下展开全文。
-    await stockGroup.locator('summary').click()
-    const longDesc = stockGroup.locator('.equipment-desc').first()
-    assert.equal(await longDesc.evaluate((el) => el.scrollWidth > el.clientWidth + 1 && getComputedStyle(el).whiteSpace === 'nowrap'), true, 'A long description is clamped to one line')
-    const clampedHeight = await longDesc.evaluate((el) => el.getBoundingClientRect().height)
-    await longDesc.click()
-    assert.ok(await longDesc.evaluate((el, h) => el.getAttribute('aria-expanded') === 'true' && el.getBoundingClientRect().height > h * 2, clampedHeight), 'Clicking the description expands the full text')
+    await compact.locator('[data-skill-key="agent:research:writing"]').waitFor()
+    assert.equal(await compact.locator('.agent-skill-section-head').count(), 3, 'Agent, inherited, and shared or cloud skills have separate groups')
+    assert.ok((await compact.locator('[data-skill-key="user:writing"]').textContent()).includes('覆盖'), 'Shadowed global original stays visible with its reason')
+    await compact.locator('[data-skill-key="user:git-workflow"] input[type=checkbox]').uncheck()
+    await compact.locator('[data-skill-key="user:git-workflow"]').filter({ hasText: '已为此 Agent 停用' }).waitFor()
+    assert.deepEqual(skillToggles.at(-1), { key: 'user:git-workflow', agentSlug: 'research', disabled: true }, 'Global inheritance is disabled only for this agent')
+    await compact.locator('[data-skill-key="agent:research:writing"] input[type=checkbox]').uncheck()
+    await compact.locator('[data-skill-key="agent:research:writing"]').filter({ hasText: '已为此 Agent 停用' }).waitFor()
+    assert.deepEqual(skillToggles.at(-1), { key: 'agent:research:writing', agentSlug: 'research', disabled: true }, 'Agent-owned skill is disabled for its owner')
+    // Side panel: the detail is a temporary View covering this details View itself (never a neighbour) behind 返回;
+    // 返回 lands on the same row at the same scroll offset. A short window guarantees the list really scrolls.
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1500, 640))
+    await win.waitForTimeout(200)
+    await compact.locator('.agent-profile-content').evaluate((el) => { el.scrollTop = el.scrollHeight })
+    const gitSummary = compact.locator('[data-skill-key="user:git-workflow"] .agent-skill-summary')
+    await gitSummary.click()
+    const cover = win.locator('.wb-extend-inline').filter({ has: win.locator('[data-skill-detail="user:git-workflow"]') })
+    await cover.locator('[data-skill-detail="user:git-workflow"] pre').waitFor()
+    assert.ok((await cover.locator('pre').textContent()).includes('Use git.'))
+    const listScroll = await compact.locator('.agent-profile-content').evaluate((el) => el.scrollTop)
+    assert.ok(listScroll > 0, 'Fixture list must be scrolled, or the scroll-kept assertion below proves nothing')
+    assert.equal(await win.locator('.wb-tab[data-transient="true"]').count(), 0, 'A side View never opens a docked temporary View beside itself')
+    const coverFit = await cover.evaluate(async (el) => {
+      await Promise.all(el.getAnimations().map((animation) => animation.finished)) // measure at rest, not mid push-in
+      const owner = el.parentElement.querySelector(':scope > .wb-view'), a = el.getBoundingClientRect(), b = owner.getBoundingClientRect()
+      const box = (r) => [r.top, r.left, r.width, r.height].map(Math.round).join(',')
+      // A descendant that sets visibility:visible itself must not show through the transparent cover.
+      const reveal = owner.querySelector('.agent-profile-content').appendChild(Object.assign(document.createElement('div'), { textContent: 'reveal' }))
+      reveal.style.visibility = 'visible'
+      const painted = [reveal, ...(function* up(el) { for (let n = el.parentElement; n && n !== el.ownerDocument.body; n = n.parentElement) yield n })(reveal)].every((n) => getComputedStyle(n).opacity !== '0')
+      reveal.remove()
+      return { fits: ['top', 'left', 'width', 'height'].every((k) => Math.abs(a[k] - b[k]) < 1) || `${box(a)} vs ${box(b)}`, hidden: getComputedStyle(owner).visibility, inert: owner.inert, revealPainted: painted }
+    })
+    assert.deepEqual(coverFit, { fits: true, hidden: 'hidden', inert: true, revealPainted: false }, 'The cover matches its owner View exactly and nothing under it paints')
     await win.waitForTimeout(220)
+    await cover.screenshot({ path: path.join(home, 'compact-skill-detail.png') })
+    await cover.getByRole('button', { name: '返回', exact: true }).click()
+    await cover.waitFor({ state: 'detached' })
+    await win.waitForTimeout(50)
+    assert.equal(await gitSummary.evaluate((el) => el === document.activeElement), true, 'Back returns focus to the row that opened the detail')
+    assert.equal(await compact.locator('.agent-profile-content').evaluate((el) => el.scrollTop), listScroll, 'Back keeps the list where it was')
     await win.locator('[data-tangu-details]').screenshot({ path: path.join(home, 'compact-skills.png') })
-    await stockGroup.locator('summary').click()
-    // 搜索命中内置技能 → 组自动展开;清空搜索 → 合回去(过滤后的命中不许藏在合着的组里)。
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1500, 1000))
+    await win.waitForTimeout(200)
     await compact.getByLabel('搜索名称或描述', { exact: true }).fill('Git workflow')
-    assert.equal(await stockGroup.evaluate((el) => el.open), true, 'A search hit inside the built-in group opens it')
-    assert.equal(await compact.locator('.agent-equipment-item').count(), 1)
-    await compact.getByLabel('搜索名称或描述', { exact: true }).fill('Writing')
-    assert.equal(await compact.locator('.agent-equipment-item').count(), 1)
-    await compact.getByLabel('Writing', { exact: false }).uncheck()
+    assert.equal(await compact.locator('.agent-skill-row').count(), 1, 'Search filters both scopes')
     await compact.getByLabel('搜索名称或描述', { exact: true }).fill('')
-    assert.equal(await stockGroup.evaluate((el) => el.open), false, 'Clearing the search collapses the built-in group again')
-    await compact.getByRole('button', { name: '仅看已启用', exact: true }).click()
-    assert.equal(await ownRows.count(), 1)
-    await compact.getByRole('button', { name: '仅看已启用', exact: true }).click()
     const geometry = await compact.evaluate((el) => {
       const body = el.querySelector('.agent-profile-content'), nav = el.querySelector('.agent-section-nav'), footer = el.querySelector('.agent-profile-save')
       body.scrollTop = body.scrollHeight
       return { footer: footer.getBoundingClientRect().bottom, panel: el.getBoundingClientRect().bottom, nav: nav.getBoundingClientRect().bottom, body: body.getBoundingClientRect().top, overflow: el.scrollWidth > el.clientWidth + 1 }
     })
     assert.ok(geometry.footer <= geometry.panel + 1 && geometry.nav <= geometry.body + 1 && !geometry.overflow)
+    await compact.getByRole('button', { name: '技能使用方式', exact: true }).click()
+    await win.getByRole('menuitemradio', { name: '自选', exact: true }).click()
+    assert.equal(await compact.locator('[data-skill-id="local:@aria/translation"] input[type=checkbox]').isChecked(), true, 'Switching to selected preserves a shared Agent skill from the automatic pool')
+    assert.equal(await compact.locator('[data-skill-id="cloud:writing-assistant"] input[type=checkbox]').isChecked(), false, 'Switching to selected must not enable cloud skills automatically')
+    await compact.locator('[data-skill-id="cloud:writing-assistant"] input[type=checkbox]').check()
     await win.locator('[data-tangu-details]').getByRole('button', { name: '保存配置', exact: true }).click()
     await win.waitForTimeout(200)
-    assert.deepEqual(saved.enabledSkillIds, ['local:research', 'local:git-workflow', 'local:web-research'], 'Unchecking one skill keeps the rest, including the collapsed built-in ones')
+    assert.deepEqual(saved.enabledSkillIds, ['local:research', 'local:web-research', 'local:@aria/translation', 'cloud:writing-assistant'], 'Selected policy keeps shared and cloud skills outside the local catalog')
     console.log('PASS default right details follows main session; compact skill editing')
     // 记忆与进化并成一个「成长」标签(两张分段卡);原来的两个一级标签不该还在。
     assert.equal(await compact.getByRole('tab', { name: '记忆', exact: true }).count() + await compact.getByRole('tab', { name: '进化', exact: true }).count(), 0)
@@ -224,8 +302,9 @@ async function run() {
     await win.waitForTimeout(220)
     await compact.locator('.agent-character-hero').screenshot({ path: path.join(home, 'hero-hover.png') })
     await compact.getByRole('button', { name: '移除头像', exact: true }).click()
-    await win.waitForTimeout(200)
+    for (let i = 0; i < 20 && avatarDeletes < 1; i++) await win.waitForTimeout(100)
     assert.equal(avatarDeletes, 1)
+    await heroPortrait.locator('img').waitFor({ state: 'detached' })
     assert.equal(await heroPortrait.locator('img').count(), 0)
     await compact.getByLabel('名称', { exact: true }).fill('Research Lead')
     await compact.getByLabel('简介', { exact: true }).fill('Finds and checks primary evidence.')
@@ -322,7 +401,8 @@ async function run() {
     console.log('PASS schedule tab: next occurrence, auto chip, collapsed past entries, only the rules that wake this agent')
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1024, 720))
     await compact.getByRole('tab', { name: '技能', exact: true }).click()
-    await compact.getByRole('button', { name: '全部停用', exact: true }).click()
+    await compact.getByRole('button', { name: '技能使用方式', exact: true }).click()
+    await win.getByRole('menuitemradio', { name: '全部关闭', exact: true }).click()
     const dock = await compact.evaluate((el) => {
       const footer = el.querySelector('.agent-profile-save').getBoundingClientRect()
       return { bottom: footer.bottom, viewport: innerHeight, content: el.querySelector('.agent-profile-content').clientHeight, overflow: el.scrollWidth > el.clientWidth + 1 }
@@ -339,29 +419,95 @@ async function run() {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1500, 1000))
 
     // Ribbon exposes the new Space directly.
+    skillCatalog.push({ key: 'agent:research:Old Skill', id: 'local:Old Skill', slug: 'Old Skill', name: 'Old Skill', description: 'Legacy folder name', scope: 'agent', owner: 'research', provenance: 'agent', compatibility: 'legacy-slug', readOnly: true, path: path.join(home, 'research', 'skills', 'Old Skill'), content: 'Legacy instructions.' })
     const agentsButton = win.locator('[data-ribbon-id="space:agents"], [data-id="space:agents"], button[title="Agents"]').first()
     if (await agentsButton.count()) await agentsButton.click()
     else await win.getByRole('button', { name: 'Agents', exact: true }).first().click()
     await win.locator('[data-agents-space]').waitFor()
+    const roster = win.locator('.agents-roster')
+    await roster.waitFor()
+    assert.equal(await roster.evaluate((el) => el.closest('.dv-groupview') !== document.querySelector('[data-agents-space]').closest('.dv-groupview')), true, 'Roster uses a separate native side panel group')
+    assert.equal(await win.locator('[data-agents-space] .agents-roster').count(), 0, 'No duplicate embedded roster in Main View')
+    await roster.locator('.agents-roster-heading button').click()
+    const agentForm = win.locator('.agent-create-form')
+    await agentForm.getByLabel('名称', { exact: true }).fill('Analyst')
+    await agentForm.getByLabel('简介', { exact: true }).fill('Checks calculations')
+    await agentForm.getByLabel('工作指令', { exact: true }).fill('Verify each result.')
+    await agentForm.getByRole('button', { name: '创建 Agent', exact: true }).click()
+    const analystRow = roster.locator('.agents-roster-row').filter({ hasText: 'Analyst' })
+    await analystRow.waitFor()
+    await analystRow.locator('.agents-roster-more').click()
+    await win.getByRole('menuitem', { name: '设为默认', exact: true }).click()
+    for (let i = 0; i < 20 && agentMeta.defaultSlug !== 'analyst'; i++) await win.waitForTimeout(50)
+    assert.equal(agentMeta.defaultSlug, 'analyst')
+    await analystRow.locator('.agents-roster-more').click()
+    await win.getByRole('menuitem', { name: '上移', exact: true }).click()
+    for (let i = 0; i < 20 && agentMeta.order[1] !== 'analyst'; i++) await win.waitForTimeout(50)
+    assert.deepEqual(agentMeta.order, ['xyra', 'analyst', 'research'])
+    const xyraRow = roster.locator('.agents-roster-row').filter({ hasText: 'Xyra' })
+    await xyraRow.locator('.agents-roster-more').click()
+    await win.getByRole('menuitem', { name: '设为默认', exact: true }).click()
+    for (let i = 0; i < 20 && agentMeta.defaultSlug !== 'xyra'; i++) await win.waitForTimeout(50)
+    assert.equal(agentMeta.defaultSlug, 'xyra')
+    await analystRow.locator('.agents-roster-more').click()
+    win.once('dialog', (dialog) => dialog.accept())
+    await win.getByRole('menuitem', { name: '删除 Agent', exact: true }).click()
+    await analystRow.waitFor({ state: 'detached' })
+    assert.equal(agents.length, 2)
+    console.log('PASS Agent roster create, default, reorder, and delete')
     await win.locator('.agents-roster-item').filter({ hasText: 'Research' }).click()
     const profile = win.locator('[data-agent-profile="research"]')
     await profile.locator('.agent-section-nav button').filter({ hasText: '技能' }).click()
-    assert.equal(await profile.getByLabel('Writing', { exact: false }).isChecked(), false)
-    // 开了共享(SKILL.md frontmatter shared: true)的技能打「共享」徽标;同组没开的不打。自建徽标优先(Writing 那条仍是「自建」)。
-    const fullStock = profile.locator('[data-equipment-group="builtin"]')
-    await fullStock.locator('summary').click()
-    const sharedRow = fullStock.locator('.agent-equipment-item').filter({ hasText: 'Git workflow' })
-    assert.equal(await sharedRow.locator('.harness-kind').innerText(), '共享', 'A shared skill is badged')
-    assert.equal(await fullStock.locator('.agent-equipment-item').filter({ hasText: 'Web research' }).locator('.harness-kind').count(), 0, 'An unshared skill in the same group is not badged')
-    assert.equal(await profile.locator('.agent-equipment-item').filter({ hasText: 'Writing' }).locator('.harness-kind').innerText(), '自建')
-    await sharedRow.screenshot({ path: path.join(home, 'skill-shared-chip.png') })
-    await fullStock.locator('summary').click()
-    await profile.getByLabel('Writing', { exact: false }).check()
-    await profile.getByLabel('Writing', { exact: false }).uncheck()
-    await profile.getByRole('button', { name: '保存配置', exact: true }).click()
-    await win.waitForTimeout(300)
-    assert.deepEqual(saved.enabledSkillIds, ['local:research', 'local:git-workflow', 'local:web-research'], 'Unchecking one skill keeps the rest, including the collapsed built-in ones')
+    await profile.locator('[data-skill-key="agent:research:writing"]').waitFor()
+    assert.equal(await profile.locator('[data-skill-key="agent:research:Old Skill"] input[type=checkbox]').isDisabled(), true, 'A legacy folder cannot be disabled through the catalog')
+    assert.ok((await profile.locator('[data-skill-key="agent:research:Old Skill"]').textContent()).includes('旧目录名只读'), 'Legacy skill explains its read-only state')
+    // Main View: the detail opens as a docked temporary View beside the profile; the list stays usable.
+    const skillDetail = (key) => win.locator(`.wb-native-extend [data-skill-detail="${key}"]`)
+    await profile.locator('[data-skill-key="agent:research:Old Skill"] .agent-skill-summary').click()
+    await skillDetail('agent:research:Old Skill').waitFor()
+    assert.equal(await win.locator('.wb-tab[data-transient="true"]').count(), 1, 'The Main View detail is a native temporary tab')
+    assert.equal(await win.locator('.wb-extend-inline').count(), 0, 'A Main View never covers itself')
+    assert.ok(await profile.locator('[data-skill-key="agent:research:Old Skill"]').evaluate((el) => el.classList.contains('current') && getComputedStyle(el).visibility === 'visible'), 'The open row stays visible and marked')
+    await skillDetail('agent:research:Old Skill').getByRole('button', { name: '复制为此 Agent 专属', exact: true }).click()
+    await skillDetail('agent:research:Old Skill').locator('.agent-skill-editor').getByLabel('文件夹名', { exact: true }).fill('old-skill-copy')
+    await skillDetail('agent:research:Old Skill').locator('.agent-skill-editor').getByRole('button', { name: '复制为此 Agent 专属', exact: true }).click()
+    await profile.locator('[data-skill-key="agent:research:old-skill-copy"]').waitFor()
+    assert.equal(await profile.locator('[data-skill-key="agent:research:writing"] input[type=checkbox]').isChecked(), false, 'The full profile sees the compact profile change')
+    assert.equal(await profile.locator('[data-skill-key="user:git-workflow"] input[type=checkbox]').isChecked(), false, 'Inherited exclusion follows this agent')
+    await profile.getByRole('button', { name: '新建技能', exact: true }).click()
+    const skillForm = profile.locator('.agent-skill-editor')
+    await skillForm.getByLabel('文件夹名', { exact: true }).fill('analysis')
+    await skillForm.getByLabel('名称', { exact: true }).fill('Analysis')
+    await skillForm.getByLabel('技能说明', { exact: true }).fill('Compare the evidence.')
+    await skillForm.getByRole('button', { name: '新建技能', exact: true }).click()
+    await profile.locator('[data-skill-key="agent:research:analysis"]').waitFor()
+    assert.equal(skillCatalog.some((entry) => entry.key === 'agent:research:analysis'), true)
+    await skillDetail('agent:research:analysis').getByRole('button', { name: '编辑', exact: true }).click()
+    await skillDetail('agent:research:analysis').locator('.agent-skill-editor textarea').fill('Compare primary evidence.')
+    await skillDetail('agent:research:analysis').locator('.agent-skill-editor textarea').press('Escape')
+    assert.equal(await skillDetail('agent:research:analysis').locator('.agent-skill-editor textarea').inputValue(), 'Compare primary evidence.', 'Esc must not dismiss the temporary View and drop an edit')
+    // 编辑到一半切走主区标签:临时 View 随主人隐藏而关,草稿留着;切回来点同一行接着改。
+    await win.locator('.dv-new-tab').first().click()
+    await win.locator('.wb-tab[data-transient="true"]').waitFor({ state: 'detached' })
+    await win.locator('.wb-tab').filter({ hasText: 'Agents' }).first().click()
+    await profile.locator('[data-skill-key="agent:research:analysis"].current').waitFor()
+    await profile.locator('[data-skill-key="agent:research:analysis"] .agent-skill-summary').click()
+    assert.equal(await skillDetail('agent:research:analysis').locator('.agent-skill-editor textarea').inputValue(), 'Compare primary evidence.', 'An edit interrupted by leaving the tab resumes from its row')
+    await win.evaluate(() => [...document.querySelectorAll('.wb-tab')].find((t) => !/Agents|技能详情/.test(t.textContent || '') && t.querySelector('.wb-tab-close'))?.querySelector('.wb-tab-close')?.click())
+    await skillDetail('agent:research:analysis').locator('.agent-skill-editor').getByRole('button', { name: '保存', exact: true }).click()
+    await skillDetail('agent:research:analysis').locator('pre').filter({ hasText: 'Compare primary evidence.' }).waitFor()
+    assert.equal(skillCatalog.find((entry) => entry.key === 'agent:research:analysis').content, 'Compare primary evidence.')
+    win.once('dialog', (dialog) => dialog.accept())
+    await skillDetail('agent:research:analysis').getByRole('button', { name: '删除技能', exact: true }).click()
+    await profile.locator('[data-skill-key="agent:research:analysis"]').waitFor({ state: 'detached' })
+    await profile.locator('[data-skill-key="user:git-workflow"] .agent-skill-summary').click()
+    await skillDetail('user:git-workflow').getByRole('button', { name: '复制为此 Agent 专属', exact: true }).click()
+    await skillDetail('user:git-workflow').locator('.agent-skill-editor').getByRole('button', { name: '复制为此 Agent 专属', exact: true }).click()
+    await profile.locator('[data-skill-key="agent:research:git-workflow"]').waitFor()
+    await win.waitForTimeout(220)
+    await win.screenshot({ path: path.join(home, 'agents-skills-new.png') })
     await profile.locator('.agent-section-nav button').filter({ hasText: 'MCP' }).click()
+    await win.locator('.wb-tab[data-transient="true"]').waitFor({ state: 'detached' })
     await profile.getByLabel('documents', { exact: false }).uncheck()
     await profile.getByRole('button', { name: '保存配置', exact: true }).click()
     await win.waitForTimeout(300)
@@ -369,6 +515,14 @@ async function run() {
     await profile.locator('.agent-section-nav button').filter({ hasText: '配置' }).click()
     await win.waitForTimeout(220)
     await win.screenshot({ path: path.join(home, 'agents-light.png') })
+    assert.ok(await profile.evaluate((el) => el.getBoundingClientRect().width <= 762), 'Wide main view retains a readable profile width')
+    await win.locator('.dv-edge-toggle').first().click()
+    await roster.waitFor({ state: 'detached' })
+    await win.waitForTimeout(250)
+    assert.ok(await profile.evaluate((el) => el.getBoundingClientRect().width <= 762), 'Collapsing the native side panel must not stretch form controls')
+    await win.locator('.dv-edge-toggle').first().click()
+    await roster.waitFor()
+    assert.equal(await roster.locator('.agents-roster-item.selected').filter({ hasText: 'Research' }).count(), 1, 'Selection survives collapsing the roster')
     // 文件夹名(slug)原地改名:内置 xyra 只读;非法串本地拦下不发请求;合法 → POST /rename,视图与名册按新 slug 重挂;改回去让后面的定位器继续有效。
     await win.locator('.agents-roster-item').filter({ hasText: 'Xyra' }).click()
     assert.equal(await win.locator('[data-agent-profile="xyra"] .agent-character-id').getAttribute('readonly'), '', 'built-in agent keeps its folder name')
@@ -398,6 +552,14 @@ async function run() {
       await win.screenshot({ path: path.join(home, shot) })
       assert.equal(await profile.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false, `${tab} must not overflow the full-width profile`)
     }
+    // 暗色 × 主区停靠的技能详情一张。临时 View 关了就是关了:切回「技能」标签不许自己再弹出来。
+    await profile.getByRole('tab', { name: '技能', exact: true }).click()
+    await win.waitForTimeout(260)
+    assert.equal(await win.locator('.wb-tab[data-transient="true"]').count(), 0, 'A closed temporary View must not reopen by itself when its tab comes back')
+    await profile.locator('[data-skill-key="agent:research:research"] .agent-skill-summary').click()
+    await skillDetail('agent:research:research').waitFor()
+    await win.waitForTimeout(260)
+    await win.screenshot({ path: path.join(home, 'agents-dark-skill-detail.png') })
     await profile.getByRole('tab', { name: '配置', exact: true }).click()
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(820, 900))
     await win.waitForTimeout(250)
@@ -435,6 +597,23 @@ async function run() {
     }
     await compactEn.getByRole('tab', { name: 'Growth', exact: true }).click()
     assert.deepEqual(await compactEn.locator('.profile-segment small').evaluateAll((els) => els.map((el) => el.scrollWidth <= el.clientWidth + 1)), [true, true], 'Segment captions fit the docked panel in English without truncation')
+    // 侧栏技能详情 × 英文 / 暗色:覆盖本 View、Back 文案、不横向溢出、Esc 关掉覆盖层回到列表。
+    await compactEn.getByRole('tab', { name: 'Skills', exact: true }).click()
+    const researchEn = compactEn.locator('[data-skill-key="agent:research:research"] .agent-skill-summary')
+    const coverEn = win.locator('.wb-extend-inline')
+    await researchEn.click()
+    await coverEn.getByRole('button', { name: 'Back', exact: true }).waitFor()
+    assert.equal(await coverEn.locator('.wb-extend-title').textContent(), 'Skill details')
+    await win.waitForTimeout(260)
+    await coverEn.screenshot({ path: path.join(home, 'compact-english-skill-detail.png') })
+    assert.equal(await coverEn.evaluate((el) => el.scrollWidth > el.clientWidth + 1), false, 'The side-panel skill detail must not overflow in English')
+    await coverEn.getByRole('button', { name: 'Back', exact: true }).press('Escape')
+    await coverEn.waitFor({ state: 'detached' })
+    await win.evaluate(() => { document.documentElement.setAttribute('data-mode', 'dark'); document.documentElement.classList.add('dark') })
+    await researchEn.click()
+    await coverEn.getByRole('button', { name: 'Back', exact: true }).waitFor()
+    await win.waitForTimeout(260)
+    await win.locator('.wb-extend-owner:has(> .wb-extend-inline)').screenshot({ path: path.join(home, 'compact-dark-skill-detail.png') })
     assert.deepEqual(errors, [])
     console.log('PASS Agent skill and MCP loadout save; screenshots:', home)
   } catch (e) { console.error('Artifacts:', home); try { await (await app?.firstWindow())?.screenshot({ path: path.join(home, 'failure.png') }) } catch {} throw e } finally { await app?.close(); await stub.close() }

@@ -589,6 +589,9 @@ export interface ModelInfo {
   contextWindow?: number
   /** contextWindow 的来源:override=env 或本机 modelOverrides / model=模型自报 / learned=上游报错回学 / family=族表推断 / default=兜底。设置页据此区分「已覆盖」与「自动」。 */
   contextWindowSource?: 'override' | 'model' | 'learned' | 'family' | 'default'
+  /** 自动识别出的模型窗口(封顶前,不看本机覆盖)。contextWindow 是 run 实际用的:自动识别的一律封顶 contextWindowCap,
+   *  本机覆盖(modelOverrides)不封顶 —— 模型菜单的「上下文上限」据此露出、写的就是覆盖。老引擎不下发 = 不露。 */
+  maxContextWindow?: number
   /** 能不能直接「看」图。黑名单制:缺省/true=能;false=遇图自动转交「辅助模型 · 图像识别」。 */
   supportsVision?: boolean
   /** 该模型真正支持的思考档(引擎能力表下发;仅 llm)。思考菜单据此把不支持的档标灰。缺省=不知道,全可选。 */
@@ -607,6 +610,10 @@ export interface ModelsResponse {
   asrModelId?: string | null
   /** admin 的 app 级「辅助模型 · 图像识别」槽(本端未显式选择时跟随)。 */
   visionModelId?: string | null
+  /** 引擎的缺省上下文上限(272k):自动识别出的窗口超过它就封顶,本机覆盖才开更大。 */
+  contextWindowCap?: number
+  /** 该引擎能不能写本机模型覆盖(PUT /agent/models/overrides 同一道 hostExec 门)。false / 缺省 = 不露「上下文上限」。 */
+  modelOverridesWritable?: boolean
   /** 云端托管面诊断:empty=可达但 admin 没配模型;error=不可达/未授权/未部署 brain-api。 */
   forsion?: { status: 'ok' | 'empty' | 'error'; detail: string | null }
 }
@@ -695,6 +702,32 @@ export interface SkillInfo {
   builtin?: boolean
   /** Agent 级技能开了共享(SKILL.md frontmatter `shared: true`):别的 Agent 能在技能目录里看到并借用。 */
   shared?: boolean
+}
+
+/** One physical skill copy in the host library. `key` identifies this copy even when slugs collide. */
+export interface SkillCatalogEntry {
+  key: string
+  id: string
+  slug: string
+  name: string
+  description: string
+  icon?: string | null
+  version?: string | null
+  scope: 'user' | 'agent'
+  owner: string | null
+  path: string
+  provenance: 'builtin' | 'bundle' | 'user' | 'builtin-mirror' | 'agent-builtin' | 'agent' | 'agent-mirror'
+  origin?: string | null
+  /** Existing on-disk folders outside the slug rules remain visible, but require a new valid name to manage. */
+  compatibility?: 'legacy-slug' | null
+  readOnly: boolean
+  disabled: boolean
+  disabledForAgent?: boolean
+  availability: 'available' | 'disabled' | 'shadowed'
+  shadowedBy: string | null
+  /** Only returned by the detail endpoint. Body excludes YAML frontmatter. */
+  content?: string
+  files?: Array<{ path: string; size: number }>
 }
 
 export interface ToolsResponse {
@@ -796,6 +829,8 @@ export interface CtxInfo {
    *  ⚠️ 新增来源要同时加进 Composer2 的白名单与 i18n 的 ctx.windowSource.* —— 白名单外的值
    *  会被静默当成 'default' 显示成「128k 兜底」,标注反而变成假的。 */
   ctxWindowSource: string
+  /** 模型本身的窗口(封顶前)。> ctxWindow 且来源不是 override = 被缺省上限封了顶。 */
+  ctxWindowMax?: number
   sections: Array<{ k: string; tokens: number }>
   files: string[]
   filesTruncated: boolean
@@ -1154,6 +1189,9 @@ declare global {
       accountQuota?(): Promise<{ status: number; json: any }>
       /** 用掉一张限额重置卡(今日+本周已用清零)。 */
       accountUseResetCard?(type?: 'both' | 'weekly'): Promise<{ status: number; json: any }>
+      /** 以当前用户身份调 Forsion 云端 API(只收相对路径,主进程拼 cloudUrl 并盖 token;token 不下发渲染层)。
+       *  返回 { status, json } 或 { status: 0, error }(0 = 没发出去:未登录 / 地址非法 / 网络断)。timeoutMs 缺省 15s,上限 120s。 */
+      cloudFetch?(req: { path: string; method?: string; body?: unknown; timeoutMs?: number }): Promise<{ status: number; json?: any; error?: string }>
       /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
       submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>
@@ -1270,7 +1308,8 @@ declare global {
       onOpenUrl?(cb: (url: string) => void): () => void
       /** 内置终端 PTY;spawn 失败(原生模块未就绪)返回 { error } 而非抛。 */
       pty?: {
-        spawn(opts: { cols?: number; rows?: number; cwd?: string }): Promise<{ id?: string; shell?: string; error?: string }>
+        /** cmd:带命令启动(`shell -l -c cmd`,退出即 onExit 带退出码);缺省=交互登录 shell。 */
+        spawn(opts: { cols?: number; rows?: number; cwd?: string; cmd?: string }): Promise<{ id?: string; shell?: string; error?: string }>
         write(id: string, data: string): void
         resize(id: string, cols: number, rows: number): void
         kill(id: string): void

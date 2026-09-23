@@ -282,7 +282,7 @@ A tab can be moved out into a window of its own, and tabs can be dragged between
 | Mini card | `⌘/Ctrl + ⇧ + M` (global), or palette → "Open mini card" | Chat only, no note views; if another app already owns that combination, the palette entry is the only way in |
 
 - UI zoom: `⌘/Ctrl + =`, `⌘/Ctrl + -`, `⌘/Ctrl + 0`, from 50% to 200% in 10% steps. It scales the whole interface, not just the text. Settings → Appearance also offers Small (80%), Standard (100%) and Large (120%) presets; the shortcuts (desktop app only) and palette commands still fine-tune or reset it.
-- Themes live under Settings → Appearance → Appearance, split into independent axes: "Design language" (Genesis, Genesis Glass · 「琉璃」, 「知」, plus anything you drop into the themes folder), "Color scheme" ("Accent" and "Background" are two separate axes, each offering Classic, Coral, Teal, Lavender, Zhi Blue, Custom), "Light / Dark" (Light, Dark, Follow system), "Shadow" (Raised, Flat) and "Frosted glass" (On, Off (low-power mode)).
+- Themes live under Settings → Appearance → Appearance, split into independent axes: "Design language" (Genesis, Genesis Glass, the included Soft theme, plus anything you drop into the themes folder), "Color scheme" ("Accent" and "Background" are two separate axes, each offering Classic, Coral, Teal, Lavender, Clear blue, Custom), "Light / Dark" (Light, Dark, Follow system), "Shadow" (Raised, Flat) and "Frosted glass" (On, Off (low-power mode)).
 - Light and dark also flip in one click: the moon icon at the bottom of the ribbon, or palette → "Toggle light/dark mode".
 - The status bar is the last line of the window: current Space (click = open the palette), cloud-sync state (click = sync now), backlink count, word count. The master switch and the per-item visibility list are under Settings → Appearance → Status Bar, and the order is draggable.
 
@@ -3262,11 +3262,11 @@ Settings → "Appearance" → "Appearance". "Appearance" is both the group name 
 |---|---|
 | `Genesis` | The default. Paper feel, charcoal accent, soft shadows instead of rules |
 | `Genesis Glass · 琉璃` | Genesis structure with a native glass shell; body cards stay fully opaque |
-| `知` | Compact structure, small radius, very thin shadows |
+| `Soft · 柔影` | Included on first install; rounded floating panels and a soft stage |
 
 Two buttons sit at the top right of the panel: "Open themes folder", where third-party themes go, and "Reload themes", which makes a newly added one appear in the list. If the selected theme exposes its own options (Glass has a set for surface opacity, blur and hairlines), an options panel appears under the cards.
 
-"Color scheme" is two independent axes, "Accent" and "Background", sharing one swatch row: "Classic", "Coral", "Teal", "Lavender", "Zhi Blue", "Custom". The same id on both = the original combined scheme; "Custom" adds a colour picker.
+"Color scheme" is two independent axes, "Accent" and "Background", sharing one swatch row: "Classic", "Coral", "Teal", "Lavender", "Clear blue", "Custom". The same id on both = the original combined scheme; "Custom" adds a colour picker.
 
 | Setting | Options | Default |
 |---|---|---|

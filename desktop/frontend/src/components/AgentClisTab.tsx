@@ -78,7 +78,7 @@ export const AgentClisTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => 
   }
 
   const renderAction = (engineId: string, kind: 'skill' | 'mcp', name: string, imported: boolean): React.ReactNode => {
-    if (imported) return <span className="hint" style={{ fontSize: 12 }}>{t('settings.agentClis.imported')}</span>
+    if (imported) return <span className="hint" style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{t('settings.agentClis.imported')}</span>
     const key = `${engineId}:${kind}:${name}`
     return (
       <button className="btn ghost sm" disabled={busy === key} onClick={() => doImport(engineId, kind, name)}>
@@ -166,7 +166,7 @@ export const AgentClisTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => 
                               <span className="file-name">
                                 <b>{s.name}</b>
                                 {!!s.description && (
-                                  <span style={{ color: 'var(--text-muted)', fontSize: 12, marginLeft: 8 }}>
+                                  <span style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginLeft: 8 }}>
                                     {s.description}
                                   </span>
                                 )}
@@ -185,7 +185,7 @@ export const AgentClisTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => 
                             <div key={m.name} className="file-row" style={{ cursor: 'default' }}>
                               <span className="file-name">
                                 <b>{m.name}</b>
-                                <span style={{ color: 'var(--text-muted)', fontSize: 12, marginLeft: 8 }}>
+                                <span style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginLeft: 8 }}>
                                   {m.url || m.command || ''}
                                 </span>
                               </span>

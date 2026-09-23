@@ -130,12 +130,12 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
   const eventDesc = (event: string): string => (EVENT_DESC[event] ? t(EVENT_DESC[event]) : '')
 
   const badge = (text: string, color: string): React.ReactNode => (
-    <span style={{ fontSize: 10.5, color, border: `var(--border-width) solid ${color}`, borderRadius: 4, padding: '0 4px' }}>{text}</span>
+    <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color, border: `var(--border-width) solid ${color}`, borderRadius: 4, padding: '0 4px' }}>{text}</span>
   )
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-      <div className="hint" style={{ fontSize: 12 }}>
+      <div className="hint" style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>
         {t('hookstab.intro')}
       </div>
 
@@ -147,26 +147,26 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
 
       {draft && (
         <div style={{ border: 'var(--border-width) solid var(--border)', borderRadius: 'var(--radius-lg, 10px)', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <label style={{ fontSize: 12 }}>
+          <label style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>
             {t('hookstab.event')}
             <select value={draft.event} onChange={(e) => setDraft({ ...draft, event: e.target.value })} style={{ marginLeft: 8 }}>
               {eventNames.map((n) => <option key={n} value={n}>{n}</option>)}
             </select>
           </label>
-          <div style={{ fontSize: 11.5, color: 'var(--text-faint)' }}>{eventDesc(draft.event)}</div>
+          <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{eventDesc(draft.event)}</div>
           {!MATCHERLESS.has(draft.event) && (
-            <label style={{ fontSize: 12 }}>
+            <label style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>
               {t('hookstab.matcher')}
               <input value={draft.matcher} placeholder="* / run_bash / edit_file|write_file / mcp__.*"
                 onChange={(e) => setDraft({ ...draft, matcher: e.target.value })} style={{ marginLeft: 8, width: 'calc(100% - 60px)' }} />
             </label>
           )}
-          <label style={{ fontSize: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <label style={{ fontSize: 'var(--ui-font-meta, 12px)', display: 'flex', flexDirection: 'column', gap: 4 }}>
             {t('hookstab.command')}
             <textarea value={draft.command} rows={2} placeholder={t('hookstab.commandPlaceholder')}
-              onChange={(e) => setDraft({ ...draft, command: e.target.value })} style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 12 }} />
+              onChange={(e) => setDraft({ ...draft, command: e.target.value })} style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--ui-font-meta, 12px)' }} />
           </label>
-          <label style={{ fontSize: 12 }}>
+          <label style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>
             {t('hookstab.timeout')}
             <input value={draft.timeout} type="number" placeholder="600" onChange={(e) => setDraft({ ...draft, timeout: e.target.value })} style={{ marginLeft: 8, width: 80 }} />
           </label>
@@ -184,8 +184,8 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
         if (!rows.length) return null
         return (
           <div key={event}>
-            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>{event}
-              <span style={{ fontWeight: 400, color: 'var(--text-faint)', marginLeft: 8, fontSize: 11 }}>{eventDesc(event)}</span>
+            <div style={{ fontSize: 'var(--ui-font-meta, 12px)', fontWeight: 600, marginBottom: 4 }}>{event}
+              <span style={{ fontWeight: 400, color: 'var(--text-faint)', marginLeft: 8, fontSize: 'var(--ui-font-caption, 11px)' }}>{eventDesc(event)}</span>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               {rows.map((h) => (
@@ -197,7 +197,7 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
                       {h.trust === 'needs-review' && badge(t('hookstab.needsReview'), 'var(--warn, #b8860b)')}
                       {!h.enabled && badge(t('hookstab.disabled'), 'var(--text-faint)')}
                     </div>
-                    <div style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 12, marginTop: 3, wordBreak: 'break-all' }}>{h.command}</div>
+                    <div style={{ fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 3, wordBreak: 'break-all' }}>{h.command}</div>
                   </div>
                   {h.trust === 'needs-review' && <button className="btn ghost sm" onClick={() => void trust({ ...h, event })}>{t('hookstab.trust')}</button>}
                   <button className="btn ghost sm" onClick={() => startEdit({ ...h, event })}>{t('hookstab.edit')}</button>

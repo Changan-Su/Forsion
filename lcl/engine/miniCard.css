@@ -64,7 +64,7 @@
   max-width: 112px;
   padding: 0 8px;
   border-radius: var(--radius-sm, 9px);
-  font: 600 11.5px/1 var(--font-ui, sans-serif);
+  font: 600 var(--ui-font-caption, 11px)/1 var(--font-ui, sans-serif);
 }
 .mini-card-space:disabled { cursor: default; color: var(--text-muted, rgba(0, 0, 0, 0.58)); }
 .mini-card-space > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -76,7 +76,7 @@
   overflow: hidden;
   padding: 0 5px;
   color: var(--text-faint, var(--text-muted));
-  font: 500 10.5px/1 var(--font-ui, sans-serif);
+  font: 500 var(--ui-font-caption, 11px)/1 var(--font-ui, sans-serif);
   text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -136,7 +136,7 @@
   flex: 0 0 auto;
   padding: 9px 11px 6px;
   color: var(--text-faint, var(--text-muted));
-  font: 600 10px/1.2 var(--font-ui, sans-serif);
+  font: 600 var(--ui-font-caption, 11px)/1.2 var(--font-ui, sans-serif);
 }
 .mini-card-popover-list { min-height: 0; overflow-y: auto; padding: 0 5px 5px; }
 .mini-card-row {
@@ -150,7 +150,7 @@
   border-radius: var(--radius-sm, 9px);
   background: transparent;
   color: var(--text-muted, rgba(0, 0, 0, 0.62));
-  font: 500 11.5px/1.25 var(--font-ui, sans-serif);
+  font: 500 var(--ui-font-caption, 11px)/1.25 var(--font-ui, sans-serif);
   text-align: left;
   cursor: pointer;
 }
@@ -160,7 +160,7 @@
 .mini-card-row.active > svg, .mini-card-row-new > svg { color: var(--accent-ink, var(--accent)); }
 .mini-card-row-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mini-card-row-fallback { flex: 0 0 auto; width: 15px; }
-.mini-card-row-current { flex: 0 0 auto; width: 5px; height: 5px; border-radius: 999px; background: var(--accent, var(--accent-ink)); }
+.mini-card-row-current { flex: 0 0 auto; width: 5px; height: 5px; border-radius: var(--radius-pill, 999px); background: var(--accent, var(--accent-ink)); }
 /* Chat 是 mini 的主路径:保留完整发送能力,但把“开新对话配置台”收成快速输入卡。 */
 .mini-card-shell .t2-toolbar { display: none; }
 .mini-card-shell .t2-stream-inner {
@@ -175,14 +175,14 @@
 .mini-card-shell .t2-empty-mark .brand-logo { width: 42px; height: 42px; }
 .mini-card-shell .t2-empty-title {
   max-width: 230px;
-  font-size: 13.5px;
+  font-size: var(--ui-font-body, 13px);
   line-height: 1.45;
 }
 .mini-card-shell .t2-empty-sub {
   max-width: 230px;
   overflow: hidden;
   color: var(--text-faint, var(--text-muted));
-  font-size: 10.5px;
+  font-size: var(--ui-font-caption, 11px);
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -194,7 +194,7 @@
   gap: 4px;
   min-height: 24px;
   padding: 3px 8px;
-  font-size: 10.5px;
+  font-size: var(--ui-font-caption, 11px);
 }
 .mini-card-shell .project-pill-name { max-width: 176px; }
 .mini-card-shell .project-menu { width: min(var(--menu-select-width, 224px), calc(100vw - 16px)); }
@@ -206,7 +206,7 @@
 .mini-card-shell .t2c-ta {
   min-height: 1.45em;
   max-height: 96px;
-  font-size: 13px;
+  font-size: var(--ui-font-body, 13px);
   line-height: 1.45;
 }
 .mini-card-shell .t2c-row { gap: 2px; margin-top: 5px; }
