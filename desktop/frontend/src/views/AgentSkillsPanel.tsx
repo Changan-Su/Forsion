@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import type { ExtendViewController, ExtendViewHandle } from '@lcl/engine/extendView'
 import { Check, ChevronDown, ChevronRight, ExternalLink, FolderInput, Loader2, Plus, Search, Trash2, X } from 'lucide-react'
 import { CapabilityMenu } from '../components/CapabilityMenu'
+import { Markdown } from '../components/Markdown'
 import { translate, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import {
@@ -284,7 +285,7 @@ export function AgentSkillsPanel({ cfg, agentSlug, surface, selectedIds, onSelec
           <label>{t('agentProfile.description')}<input value={description} onChange={(e) => setDescription(e.target.value)} /></label>
           <label>{t('agentProfile.skillInstructions')}<textarea required rows={12} value={content} onChange={(e) => setContent(e.target.value)} /></label>
           <div><button type="button" className="btn ghost sm" onClick={() => { setEditing(false); setName(detail.name); setDescription(detail.description); setContent(detail.content || '') }}>{t('agentProfile.cancel')}</button><button type="submit" className="btn primary sm" disabled={!!busyKey || !name.trim() || !content.trim()}>{t('common.save')}</button></div>
-        </form> : <><p>{detail.description}</p><small>{detail.path}</small><pre>{detail.content || t('agentProfile.emptyText')}</pre>
+        </form> : <><p>{detail.description}</p><small>{detail.path}</small><div className="agent-skill-content md-body">{detail.content ? <Markdown content={detail.content} allowRun={false} /> : <p>{t('agentProfile.emptyText')}</p>}</div>
           {!!detail.files?.length && <details><summary>{t('agentProfile.skillFiles', { count: detail.files.length })}</summary><ul>{detail.files.map((file) => <li key={file.path}>{file.path}</li>)}</ul></details>}
           <div className="agent-skill-detail-actions">{detail.scope === 'agent' && !detail.readOnly && <><button className="btn ghost sm" onClick={() => setEditing(true)}>{t('agentProfile.edit')}</button><button className="btn ghost sm danger" disabled={!!busyKey} onClick={() => void deleteDetail()}><Trash2 size={13} />{t('agentProfile.skillDelete')}</button></>}
             {(detail.scope === 'user' || legacyDirectory(detail)) && <button className="btn ghost sm" disabled={!!busyKey} onClick={() => { const validSlug = /^[a-z0-9][a-z0-9-]*$/.test(detail.slug) ? detail.slug : detail.slug.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'skill'; setCopySlug(catalog.some((entry) => entry.scope === 'agent' && entry.slug === validSlug) ? `${validSlug}-copy` : validSlug); setCopyOpen(!copyOpen) }}>{t('agentProfile.copyToAgent')}</button>}

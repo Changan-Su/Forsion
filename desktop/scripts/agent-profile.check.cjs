@@ -33,7 +33,7 @@ const skillCatalog = [
   { key: 'agent:research:research', id: 'local:research', slug: 'research', name: 'Research notebook', description: 'Gather and cite evidence', scope: 'agent', owner: 'research', provenance: 'agent', readOnly: false, path: path.join(home, 'research', 'skills', 'research'), content: 'Gather evidence first.' },
   { key: 'agent:research:writing', id: 'local:writing', slug: 'writing', name: 'Writing', description: 'Write clear reports', scope: 'agent', owner: 'research', provenance: 'agent', readOnly: false, path: path.join(home, 'research', 'skills', 'writing'), content: 'Write clearly.' },
   { key: 'user:writing', id: 'local:writing', slug: 'writing', name: 'Global writing', description: 'Shared writing guide', scope: 'user', owner: null, provenance: 'user', readOnly: false, path: path.join(home, 'skills', 'writing'), content: 'Global style.' },
-  { key: 'user:git-workflow', id: 'local:git-workflow', slug: 'git-workflow', name: 'Git workflow', description: LONG_DESC, scope: 'user', owner: null, provenance: 'bundle', readOnly: true, path: path.join(home, 'skills', 'git-workflow'), content: 'Use git.' },
+  { key: 'user:git-workflow', id: 'local:git-workflow', slug: 'git-workflow', name: 'Git workflow', description: LONG_DESC, scope: 'user', owner: null, provenance: 'bundle', readOnly: true, path: path.join(home, 'skills', 'git-workflow'), content: '# Git workflow\n\nUse **git**.\n\n- Check status\n- Commit changes\n\n```sh\ngit status\n```' },
   { key: 'user:web-research', id: 'local:web-research', slug: 'web-research', name: 'Web research', description: LONG_DESC, scope: 'user', owner: null, provenance: 'bundle', readOnly: true, path: path.join(home, 'skills', 'web-research'), content: 'Search carefully.' },
 ]
 const skillDisabled = new Set()
@@ -219,8 +219,13 @@ async function run() {
     const gitSummary = compact.locator('[data-skill-key="user:git-workflow"] .agent-skill-summary')
     await gitSummary.click()
     const cover = win.locator('.wb-extend-inline').filter({ has: win.locator('[data-skill-detail="user:git-workflow"]') })
-    await cover.locator('[data-skill-detail="user:git-workflow"] pre').waitFor()
-    assert.ok((await cover.locator('pre').textContent()).includes('Use git.'))
+    const skillBody = cover.locator('[data-skill-detail="user:git-workflow"] .agent-skill-content')
+    await skillBody.getByRole('heading', { name: 'Git workflow' }).waitFor()
+    assert.equal(await skillBody.locator('strong').innerText(), 'git', 'Skill emphasis renders as rich text')
+    assert.deepEqual(await skillBody.locator('li').allInnerTexts(), ['Check status', 'Commit changes'], 'Skill list renders as list items')
+    assert.equal((await skillBody.locator('pre code').innerText()).trim(), 'git status', 'Only fenced code stays preformatted')
+    assert.equal((await skillBody.innerText()).includes('**git**'), false, 'Read-only skill detail hides Markdown source delimiters')
+    assert.equal(await skillBody.locator('[data-testid="code-run"]').count(), 0, 'Skill instructions never offer direct command execution')
     const listScroll = await compact.locator('.agent-profile-content').evaluate((el) => el.scrollTop)
     assert.ok(listScroll > 0, 'Fixture list must be scrolled, or the scroll-kept assertion below proves nothing')
     assert.equal(await win.locator('.wb-tab[data-transient="true"]').count(), 0, 'A side View never opens a docked temporary View beside itself')
@@ -495,7 +500,7 @@ async function run() {
     assert.equal(await skillDetail('agent:research:analysis').locator('.agent-skill-editor textarea').inputValue(), 'Compare primary evidence.', 'An edit interrupted by leaving the tab resumes from its row')
     await win.evaluate(() => [...document.querySelectorAll('.wb-tab')].find((t) => !/Agents|技能详情/.test(t.textContent || '') && t.querySelector('.wb-tab-close'))?.querySelector('.wb-tab-close')?.click())
     await skillDetail('agent:research:analysis').locator('.agent-skill-editor').getByRole('button', { name: '保存', exact: true }).click()
-    await skillDetail('agent:research:analysis').locator('pre').filter({ hasText: 'Compare primary evidence.' }).waitFor()
+    await skillDetail('agent:research:analysis').locator('.agent-skill-content').filter({ hasText: 'Compare primary evidence.' }).waitFor()
     assert.equal(skillCatalog.find((entry) => entry.key === 'agent:research:analysis').content, 'Compare primary evidence.')
     win.once('dialog', (dialog) => dialog.accept())
     await skillDetail('agent:research:analysis').getByRole('button', { name: '删除技能', exact: true }).click()

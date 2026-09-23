@@ -8,6 +8,7 @@ import {
 import type { NormalAgentDef, SkillCatalogEntry, SkillInfo, TanguDesktopConfig } from '../types'
 import { registerMessages, useI18n } from '../i18n'
 import { CapabilityMenu } from './CapabilityMenu'
+import { Markdown } from './Markdown'
 import './globalSkillsLibrary.css'
 
 registerMessages({
@@ -325,7 +326,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
           </div>
           {selectedCatalog.readOnly && <p className="gsk-readonly"><Check size={13} />{t(selectedCatalog.compatibility ? 'globalSkills.legacyReadOnly' : 'globalSkills.readOnly')}</p>}
           <div className="gsk-meta"><span>{t('globalSkills.path')}</span><code title={selectedCatalog.path}>{selectedCatalog.path}</code></div>
-          {detailError ? <p className="gsk-message" role="alert">{detailError}</p> : detailLoading || !currentDetail ? <p className="gsk-detail-loading"><Loader2 size={14} className="spin" />{t('globalSkills.loading')}</p> : <><section className="gsk-content"><h4>{t('globalSkills.content')}</h4><pre>{currentDetail.content || t('globalSkills.noContent')}</pre></section>{!!currentDetail.files?.length && <section className="gsk-files"><h4>{t('globalSkills.files')} · {currentDetail.files.length}</h4><div>{currentDetail.files.map((file) => <span key={file.path}><FileText size={12} />{file.path}</span>)}</div></section>}</>}
+          {detailError ? <p className="gsk-message" role="alert">{detailError}</p> : detailLoading || !currentDetail ? <p className="gsk-detail-loading"><Loader2 size={14} className="spin" />{t('globalSkills.loading')}</p> : <><section className="gsk-content"><h4>{t('globalSkills.content')}</h4><div className="gsk-content-body md-body">{currentDetail.content ? <Markdown content={currentDetail.content} allowRun={false} /> : <p>{t('globalSkills.noContent')}</p>}</div></section>{!!currentDetail.files?.length && <section className="gsk-files"><h4>{t('globalSkills.files')} · {currentDetail.files.length}</h4><div>{currentDetail.files.map((file) => <span key={file.path}><FileText size={12} />{file.path}</span>)}</div></section>}</>}
         </> : selectedCloud ? <>
           <div className="gsk-detail-head"><div><span>{t('globalSkills.cloud')}</span><h3>{selectedCloud.name}</h3><p>{selectedCloud.description}</p></div></div>
           <p className="gsk-cloud-note">{t('globalSkills.cloudExplanation')}</p><p className="gsk-cloud-note">{t('globalSkills.cloudPreview')}</p>

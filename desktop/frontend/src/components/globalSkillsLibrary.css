@@ -47,7 +47,7 @@
 .gsk-meta > span, .gsk-content h4, .gsk-files h4 { margin: 0; color: var(--text-muted); font-size: var(--ui-font-meta); font-weight: 620; }
 .gsk-meta code { overflow-wrap: anywhere; color: var(--text-faint); font-family: var(--font-mono); font-size: var(--ui-font-meta); }
 .gsk-content, .gsk-files { padding: 11px 0; border-top: var(--border-width) solid var(--overlay-medium); }
-.gsk-content pre { max-height: 360px; overflow: auto; margin: 9px 0 0; padding: 11px; border-radius: var(--radius-sm); background: var(--overlay-subtle); color: var(--text); font-family: var(--font-mono); font-size: var(--ui-font-meta); line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.gsk-content-body { max-height: 360px; overflow: auto; margin-top: 9px; padding: 11px; border-radius: var(--radius-sm); background: var(--overlay-subtle); overflow-wrap: anywhere; }
 .gsk-files > div { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
 .gsk-files > div span { display: inline-flex; align-items: center; gap: 5px; max-width: 100%; padding: 4px 7px; border-radius: var(--radius-sm); background: var(--overlay-subtle); color: var(--text-muted); font-family: var(--font-mono); font-size: var(--ui-font-caption); overflow-wrap: anywhere; }
 .gsk-placeholder { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 310px; gap: 10px; color: var(--text-faint); text-align: center; }

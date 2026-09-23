@@ -145,7 +145,7 @@
 .agent-skill-detail-head strong { font-size: var(--ui-font-body, 13px); }
 .agent-skill-detail > p { margin: 0; font-size: var(--ui-font-meta, 12px); line-height: 1.6; color: var(--text-muted); }
 .agent-skill-detail > small { font-size: var(--ui-font-caption, 11px); line-height: 1.5; color: var(--text-faint, var(--text-muted)); overflow-wrap: anywhere; }
-.agent-skill-detail > pre { max-height: 320px; overflow: auto; margin: 0; padding: 12px; border-radius: var(--radius-sm, 8px); background: var(--bg); font-size: var(--ui-font-meta, 12px); line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.agent-skill-content { min-width: 0; max-height: 320px; overflow: auto; padding: 12px; border-radius: var(--radius-sm, 8px); background: var(--bg); overflow-wrap: anywhere; }
 .agent-skill-detail details { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .agent-skill-detail details > summary { cursor: pointer; }
 .agent-skill-detail ul { margin: 8px 0 0; padding-left: 20px; overflow-wrap: anywhere; }
@@ -369,6 +369,6 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 /* Skill detail in the host's temporary View: beside the Main View, or covering the side panel behind a Back header. */
 .agent-skill-extend { padding: 14px 16px 20px; }
 .agent-skill-extend > .agent-skill-detail { margin: 0; padding: 0; border-radius: 0; background: none; }
-.agent-skill-extend .agent-skill-detail > pre { max-height: none; }
+.agent-skill-extend .agent-skill-content { max-height: none; }
 .agent-skill-row.current { box-shadow: inset 0 0 0 1px var(--accent), 0 0 0 0.5px var(--accent); } /* DESIGN 选中态强调带 */
 .agent-skill-row.current > svg { color: var(--accent-ink); }

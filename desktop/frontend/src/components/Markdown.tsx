@@ -33,7 +33,7 @@ const WikiAnchor = ({ href, children, node: _node, ...rest }: any) =>
   )
 
 /** 代码块「运行」的回传口:聊天消息给 onRun(把结果作为用户消息发回会话);别处(工作区文件预览等)不给 = 只跑不回传。 */
-const RunContext = React.createContext<{ onRun?: (r: RunResult) => void; cwd?: string } | undefined>(undefined)
+const RunContext = React.createContext<{ onRun?: (r: RunResult) => void; cwd?: string; allowRun: boolean } | undefined>(undefined)
 
 /** fence 语言来自 rehype-highlight 落在 <code> 上的 `language-xxx` 类(detect:false,所以只可能是 info string)。 */
 function fenceLang(node: unknown): string | undefined {
@@ -50,7 +50,7 @@ const CodeBlock: React.FC<React.HTMLAttributes<HTMLPreElement> & { node?: unknow
   const preRef = React.useRef<HTMLPreElement>(null)
   const runCtx = useContext(RunContext)
   // Run 键靠 window.tangu.pty 门控:web/移动端没有 PTY,自然不露。
-  const runnable = isShellLang(fenceLang(node)) && !!window.tangu?.pty
+  const runnable = runCtx?.allowRun !== false && isShellLang(fenceLang(node)) && !!window.tangu?.pty
   const copy = () => {
     const text = preRef.current?.innerText ?? ''
     navigator.clipboard.writeText(text).then(() => {
@@ -92,8 +92,8 @@ const CodeBlock: React.FC<React.HTMLAttributes<HTMLPreElement> & { node?: unknow
  * anchorPrefix:传入时给 h1/h2/h3 渲染稳定 id(`${anchorPrefix}-${第n个标题}`)+ data-toc-level,
  * 供右侧「目录」扫描跳转。不传则零影响(记忆/日志面板等普通渲染)。
  */
-export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** shell 代码块「运行」的回传与工作目录(聊天消息给;缺省=只跑不回传)。 */ run?: { onRun?: (r: RunResult) => void; cwd?: string } }> = React.memo(
-  ({ content, anchorPrefix, run }) => {
+export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** shell 代码块「运行」的回传与工作目录(聊天消息给;缺省=只跑不回传)。 */ run?: { onRun?: (r: RunResult) => void; cwd?: string }; /** 只读文档可隐藏运行入口，仍保留复制代码。 */ allowRun?: boolean }> = React.memo(
+  ({ content, anchorPrefix, run, allowRun = true }) => {
     const components: Record<string, any> = { pre: CodeBlock, a: WikiAnchor }
     if (anchorPrefix) {
       const counter = { i: 0 }
@@ -110,7 +110,7 @@ export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** sh
       components.h3 = heading(3)
     }
     return (
-      <RunContext.Provider value={run}>
+      <RunContext.Provider value={{ ...run, allowRun }}>
         <ReactMarkdown
           remarkPlugins={[remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki]}
           rehypePlugins={[[rehypeKatex, { throwOnError: false }], [rehypeHighlight, { ignoreMissing: true, detect: false }]]}

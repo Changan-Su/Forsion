@@ -15,7 +15,7 @@ const skills = [
   { key: KEY_LEGACY, id: 'local:Legacy_Skill', slug: 'Legacy_Skill', name: 'Legacy skill', description: 'An older folder name.', icon: null, version: null, scope: 'user', owner: null, path: '/host/.forsion/tangu/skills/Legacy_Skill', provenance: 'user', origin: null, compatibility: 'legacy-slug', readOnly: true, disabled: false, disabledForAgent: false, availability: 'available', shadowedBy: null },
 ]
 const details = {
-  [KEY_USER]: { content: '## 工作方式\n\n先判断读者与目标，再给出清晰的结构。', files: [{ path: 'SKILL.md', size: 130 }, { path: 'references/style.md', size: 92 }] },
+  [KEY_USER]: { content: '## 工作方式\n\n先判断**读者**与目标。\n\n- 整理结构\n- 检查措辞\n\n```text\n示例正文\n```', files: [{ path: 'SKILL.md', size: 130 }, { path: 'references/style.md', size: 92 }] },
   [KEY_BUILTIN]: { content: 'Use the current clock only when needed.', files: [{ path: 'SKILL.md', size: 80 }] },
   [KEY_LEGACY]: { content: 'Older instructions.', files: [{ path: 'SKILL.md', size: 60 }] },
 }
@@ -75,7 +75,13 @@ async function main() {
     await panel.locator('.gsk-row.selected', { hasText: '写作规范' }).waitFor({ timeout: 10000 })
     check('skillKey deep link selects the exact global copy', await panel.locator('.gsk-row.selected', { hasText: '写作规范' }).count() === 1)
     await panel.getByText('references/style.md', { exact: true }).waitFor({ timeout: 10000 })
-    check('detail reads body, path and attached files', await panel.locator('.gsk-content pre').innerText() === details[KEY_USER].content && await panel.locator('.gsk-meta code').innerText() === skills[1].path)
+    const skillBody = panel.locator('.gsk-content-body')
+    check('detail reads body, path and attached files', await skillBody.getByRole('heading', { name: '工作方式' }).count() === 1 && await panel.locator('.gsk-meta code').innerText() === skills[1].path)
+    check('read-only skill Markdown renders headings, emphasis, lists and fenced code',
+      await skillBody.locator('strong').innerText() === '读者' &&
+      JSON.stringify(await skillBody.locator('li').allInnerTexts()) === JSON.stringify(['整理结构', '检查措辞']) &&
+      (await skillBody.locator('pre code').innerText()).trim() === '示例正文' &&
+      !(await skillBody.innerText()).includes('**读者**'))
     const libraryShot = path.join(OUT, 'global-skills-library.png')
     await panel.screenshot({ path: libraryShot })
     console.log(`SCREENSHOT ${libraryShot}`)
