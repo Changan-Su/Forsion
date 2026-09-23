@@ -70,6 +70,8 @@ async function main() {
       row: [...document.querySelectorAll('.t2s-srow.active')].map((e) => (e.textContent || '').trim()),
       chars: [...document.querySelectorAll('.sb-plain, .status-item')].map((e) => (e.textContent || '').trim()).filter((t) => /字|chars/i.test(t)),
       groups: [...document.querySelectorAll('.dv-groupview')].filter((g) => g.querySelector('.dv-nav-btn')).length,
+      byGroup: [...document.querySelectorAll('.dv-groupview')].filter((g) => g.querySelector('.dv-nav-btn'))
+        .map((g) => [...g.querySelectorAll('.wb-tab-name')].map((e) => (e.textContent || '').trim())),
       welcome: /从左栏选一篇笔记开始/.test(document.body.innerText),
     }
   })
@@ -160,11 +162,11 @@ async function main() {
     await closeTab('Gamma', 'first') // 关左组那份 Gamma
     await roundTrip()
     const f6 = await state()
-    check('F6 夹具:往返后左组 [新标签页, Beta]、右组 Gamma', f6.groups === 2 && f6.active.includes('Beta') && f6.active.includes('Gamma') && f6.tabs.filter((t) => t === 'Gamma').length === 1, JSON.stringify(f6))
+    check('F6 夹具:往返后左组 [新标签页, Beta]、右组 Gamma', JSON.stringify(f6.byGroup) === JSON.stringify([['新建标签页', 'Beta'], ['Gamma']]) && f6.active.includes('Beta') && f6.active.includes('Gamma'), JSON.stringify(f6))
     await closeTab('Beta')
     const f7 = await state()
     // 左组顶上来的是新标签页(activeMainPanel 不是编辑器),认领过的都关了 → 收养人得是右组看得见的 Gamma
-    check('⚠️F7 关掉 Beta、左组剩新标签页:树亮右组看得见、从没认领过的 Gamma', f7.groups === 2 && rowIs('Gamma')(f7), JSON.stringify(f7))
+    check('⚠️F7 关掉 Beta、左组剩新标签页:树亮右组看得见、从没认领过的 Gamma', JSON.stringify(f7.byGroup) === JSON.stringify([['新建标签页'], ['Gamma']]) && rowIs('Gamma')(f7), JSON.stringify(f7))
 
     await closeTab('Gamma')
     const f9 = await state()

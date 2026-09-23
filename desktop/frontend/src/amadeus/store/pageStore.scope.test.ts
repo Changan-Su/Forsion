@@ -94,6 +94,15 @@ describe('活动面板关掉后门面的退路', () => {
     await settle()
     expect(m.usePageStore.getState().activePage).toBeNull()
   })
+
+  it('main 里的启动页还在装载途中:作废那次装载,别等它装完再冒出来', async () => {
+    const m = await freshStore()
+    m.pageStoreFor(m.MAIN_SCOPE).setState({ pendingPage: 'Alpha.md' }) // restoreVault 的 loadPage 在途
+    m.pageStoreFor('e1')
+    m.setActivePageScope('e1')
+    m.disposePageStoreScope('e1')
+    expect(m.usePageStore.getState().pendingPage).toBeNull()
+  })
 })
 
 describe('deleteBlock 装载身份守卫(loadNonce)', () => {
