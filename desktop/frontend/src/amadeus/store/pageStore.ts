@@ -1590,8 +1590,15 @@ const stores = new Map<string, PageStoreApi>()
 export const MAIN_SCOPE = 'main'
 const useActiveScope = create<{ id: string }>(() => ({ id: MAIN_SCOPE }))
 export const activePageScope = (): string => useActiveScope.getState().id
+/** 门面此刻挂在哪个作用域(React 里订阅用)。 */
+export const useActivePageScope = (): string => useActiveScope((s) => s.id)
+/** 认领过门面、还没回收的作用域,最近的在后 —— 活动面板关掉时按它退回「剩下那半屏」。 */
+const claimed: string[] = []
 /** 活动面板跟随焦点。切换会把门面订阅整体改挂到新面板(见下面 attachFacade)。 */
 export function setActivePageScope(id: string): void {
+  const i = claimed.indexOf(id)
+  if (i >= 0) claimed.splice(i, 1)
+  claimed.push(id)
   if (useActiveScope.getState().id !== id) useActiveScope.setState({ id })
 }
 
@@ -1795,7 +1802,11 @@ export function disposePageStoreScope(scope: string): void {
   })
   // 关掉的正好是活动面板 → 活动指针必须改投,否则下一次 getState() 会**凭空重建一个空 store**:
   // 侧栏/命令面板/状态栏立刻看到「没有活动笔记」,而剩下那半屏明明还开着。
-  if (activePageScope() === scope) setActivePageScope(stores.keys().next().value ?? MAIN_SCOPE)
+  // 改投上一个认领过、还开着的面板;一个都不剩才回 'main'。以前投的是 stores 里第一个,而 'main'
+  // 恒排第一(门面最先建它)→ 总落回 restoreVault 装进 'main' 的启动页,跟主区显示的对不上(09-23)。
+  const i = claimed.indexOf(scope)
+  if (i >= 0) claimed.splice(i, 1)
+  if (activePageScope() === scope) setActivePageScope(claimed[claimed.length - 1] ?? MAIN_SCOPE)
 }
 export { disposePageStoreScope as disposePageScope }
 

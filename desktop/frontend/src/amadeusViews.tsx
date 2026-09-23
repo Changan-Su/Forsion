@@ -12,7 +12,7 @@ import {
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
-import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScope, flushAllScopes, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, trashVaultFiles, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
+import { activePageScope, cascadeFdAfterRename, claimTitleFocus, disposePageScope, flushAllScopes, MAIN_SCOPE, onNotePathGone, pageStoreFor, PageScopeCtx, remapScopePaths, setActivePageScope, trashVaultFiles, useActivePageScope, usePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { retireUnifiedPath, insertFilesForPath } from '@amadeus/unified/lifecycle'
 import { useUiOverlay } from './amadeusOverlayStore'
 import { useUiStore } from '@amadeus/store/uiStore'
@@ -2136,6 +2136,9 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     }
   }
   const isActiveLeaf = useWorkspace((s) => s.mainTabs.find((t) => t.id === leaf.id)?.active ?? false)
+  // 主区「当前」编辑器:焦点在侧栏时 = 最后活动主区组的前台 tab(openNote 的落点也按它)。单列壳 api 恒 null。
+  const isMainCurrent = useWorkspace((s) => !!s.api && activeMainPanel(s.api)?.id === leaf.id)
+  const facadeScope = useActivePageScope()
   const notePath = typeof leaf.params.notePath === 'string' ? leaf.params.notePath : null
   const prevActiveRef = useRef(false)
   // ── v4 绞杀者路由(spec §9 step 3 Phase A):先读原文按 fm 分类,素文件/外来 md/v4 →
@@ -2321,6 +2324,13 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     if (isActiveLeaf) setActivePageScope(leaf.id)
     prevActiveRef.current = isActiveLeaf
   }, [isActiveLeaf, leaf.id])
+  // ②b 门面还挂在无主的 'main' 上(没有哪个编辑器被激活过 —— Note Space 配方最后把焦点给了左栏树;
+  //    或认领过的面板全关了)→ 主区当前编辑器收养它。否则树高亮 / 状态栏读的是 restoreVault 装进 'main'
+  //    的启动页,和主区显示的(欢迎页或另一篇)对不上(09-23)。只收养无主的,不跟已认领的面板抢。
+  //    等 vaultRoot 就位再收:restoreVault 经门面调用,抢在它前面收养 = 启动页装进本面板、欢迎页被顶掉。
+  useEffect(() => {
+    if (isMainCurrent && facadeScope === MAIN_SCOPE && vaultRoot) setActivePageScope(leaf.id)
+  }, [isMainCurrent, facadeScope, vaultRoot, leaf.id])
 
   // ③ 本面板内发生导航(在活动状态下被 openNote 装了新笔记)→ 认领它(写回 params + 标题)。
   //    插件文件类型(如 .mindmap.md)也会占用 activePage,但它绝不是笔记 → 不认领,
