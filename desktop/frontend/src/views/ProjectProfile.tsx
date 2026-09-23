@@ -34,9 +34,11 @@ export function useProjectWorkspace(session?: SessionRecord | null): ProjectWork
     if (!session?.project_path || session.projectless) return ''
     const all = a.workspaces()
     const ws = all.find((w) => w.key === sessionWorkspaceKey(session, all))
-    return isProjectWorkspace(ws) ? JSON.stringify({ key: ws.key, name: ws.name, path: ws.path }) : ''
+    // 家目录不行:引擎的 isForbiddenProjectDir 拒绝它(默认工作区没配置时回落家目录,或旧别名会话就在家目录)→ 照旧 Agent 详情。
+    // 判的是**会话自己的**路径:引擎按 sessionId 绑定的就是它。
+    return isProjectWorkspace(ws) && session.project_path !== a.homeDir ? JSON.stringify({ key: ws.key, name: ws.name, path: ws.path, system: ws.system, isDefault: ws.isDefault, sessionKeys: ws.sessionKeys }) : ''
   })
-  return useMemo(() => (signature ? { ...(JSON.parse(signature) as { key: string; name: string; path: string }), kind: 'local' as const } : null), [signature])
+  return useMemo(() => (signature ? { ...(JSON.parse(signature) as Omit<ProjectWorkspace, 'kind'>), kind: 'local' as const } : null), [signature])
 }
 
 /** PROJECT 详情:骨架与 TEAM 详情同一套(头部即基本信息 / 滑块导航 / 一个滚动体 / 底部保存栏),内容换成项目的三面:
@@ -49,6 +51,9 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     sessions: a.sessions, archived: a.archivedSessions, configBySession: a.configBySession, runningBySession: a.runningBySession,
     defaultSlug: a.defaultAgentSlug, connected: a.connState === 'ok', homeDir: a.homeDir,
   })))
+  // 这个会话实际工作的目录 = 引擎按 sessionId 绑定的那个。默认工作区换过位置时,旧会话的目录(别名)≠ 组的当前路径:
+  // 显示、读写、设置缓存一律跟会话走;只有「用它开新会话」落在组的当前目录(startWith 用 workspace)。
+  const dir = session.project_path || workspace.path
   const [ctx, setCtx] = useState<ProjectContext | null>(null)
   const [loadError, setLoadError] = useState('')
   const [reloadAt, setReloadAt] = useState(0)
@@ -69,9 +74,9 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const now = Date.now()
 
   const executors = useMemo(() => projectExecutors({
-    sessions: [...s.sessions, ...s.archived], projectPath: workspace.path, configBySession: s.configBySession,
+    sessions: [...s.sessions, ...s.archived], projectPath: dir, aliases: workspace.sessionKeys, configBySession: s.configBySession,
     runningBySession: s.runningBySession, defaultSlug: s.defaultSlug, currentSessionId: session.id,
-  }), [s.sessions, s.archived, s.configBySession, s.runningBySession, s.defaultSlug, workspace.path, session.id])
+  }), [s.sessions, s.archived, s.configBySession, s.runningBySession, s.defaultSlug, dir, workspace.sessionKeys, session.id])
   const running = executors.some((e) => e.running)
   const sessionRunning = !!s.runningBySession[session.id]
 
@@ -82,10 +87,10 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     void getProjectContext(s.cfg, session.id).then((value) => {
       if (!alive) return
       setCtx(value)
-      useApp.getState().rememberProjectSettings(workspace.path, value.settings)
+      useApp.getState().rememberProjectSettings(dir, value.settings)
     }).catch((e) => { if (alive) setLoadError(e?.status === 404 ? t('projectProfile.localOnly') : String(e?.message || e)) })
     return () => { alive = false }
-  }, [s.cfg, session.id, workspace.path, reloadAt]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [s.cfg, session.id, dir, reloadAt]) // eslint-disable-line react-hooks/exhaustive-deps
   // 这个项目里的 run 刚结束(比如「让 Tangu 生成」写完了 AGENTS.md)→ 重拉;编辑中的草稿不动。
   const wasRunning = useRef(running)
   useEffect(() => { if (wasRunning.current && !running) setReloadAt((n) => n + 1); wasRunning.current = running }, [running])
@@ -98,10 +103,10 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const clear = () => { setError(''); setNotice('') }
   const open = (key: string) => { setSelected(key); setOpened((keys) => (keys.includes(key) ? keys : [...keys, key])) }
   const reveal = (p: string) => { void window.tangu?.revealHostPath?.(p) }
-  const copyPath = () => { void navigator.clipboard?.writeText(workspace.path).then(() => { setNotice(t('projectProfile.copied')) }) }
+  const copyPath = () => { void navigator.clipboard?.writeText(dir).then(() => { setNotice(t('projectProfile.copied')) }) }
   const commitName = async () => {
     const name = nameDraft.trim()
-    if (!name || name === workspace.name) { setNameDraft(workspace.name); return }
+    if (workspace.system || !name || name === workspace.name) { setNameDraft(workspace.name); return }
     await useApp.getState().renameWorkspace(workspace, name)
   }
   const patchSettings = (value: Partial<ProjectSettings>) => { setSettingsDraft((d) => ({ ...d, ...value })); setSettingsDirty(true); clear() }
@@ -132,7 +137,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
       const saved = await putProjectSettings(s.cfg, session.id, { ...(settingsDirty ? settingsDraft : ctx?.settings || {}), defaultAgent: undefined, defaultTeam: undefined, ...value })
       setCtx((c) => (c ? { ...c, settings: saved } : c))
       setSettingsDraft(saved ?? {}); setSettingsDirty(false)
-      useApp.getState().rememberProjectSettings(workspace.path, saved)
+      useApp.getState().rememberProjectSettings(dir, saved)
       setNotice(t('projectProfile.saved'))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
   }
@@ -163,7 +168,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
       if (settingsDirty) {
         const saved = await putProjectSettings(s.cfg, session.id, settingsDraft)
         setCtx((c) => (c ? { ...c, settings: saved } : c))
-        useApp.getState().rememberProjectSettings(workspace.path, saved)
+        useApp.getState().rememberProjectSettings(dir, saved)
         setSettingsDirty(false)
       }
       setNotice(t('projectProfile.saved'))
@@ -216,12 +221,12 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     return null
   }
 
-  return <section className="team-profile project-profile" data-project-profile={workspace.path}>
+  return <section className="team-profile project-profile" data-project-profile={dir}>
     <div className="team-profile-main" hidden={!!selected}>
       <header className="team-profile-hero">
         <span className="team-profile-emblem" aria-hidden="true">{git?.repo ? <FolderGit2 size={26} strokeWidth={1.5} /> : <Folder size={26} strokeWidth={1.5} />}</span>
         <div className="team-profile-identity"><h3>{t('projectProfile.kind')}</h3>
-          <input className="agent-character-name team-profile-name" aria-label={t('projectProfile.name')} title={workspace.name} value={nameDraft} maxLength={100} disabled={!!busy}
+          <input className="agent-character-name team-profile-name" aria-label={t('projectProfile.name')} title={workspace.name} value={nameDraft} maxLength={100} disabled={!!busy} readOnly={!!workspace.system}
             onChange={(e) => setNameDraft(e.target.value)} onBlur={() => void commitName()} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') { setNameDraft(workspace.name); e.currentTarget.blur() } }} />
           <span className={`agent-state${running ? ' working' : ''}`}><i />{t(!s.connected ? 'agentProfile.offline' : running ? 'projectProfile.status.working' : 'projectProfile.status.idle')}
             <span>· {t('projectProfile.sessions', { count: executors.reduce((n, ex) => n + ex.sessions.length, 0) })}</span>
@@ -229,7 +234,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
           </span></div>
         <button className="profile-expand" title={t('projectProfile.open')} aria-label={t('projectProfile.open')} onClick={() => openSpecial('workspace', workspace.key)}><ExternalLink size={15} /></button>
       </header>
-      <p className="team-profile-location project-profile-path"><button type="button" title={workspace.path} onClick={() => reveal(workspace.path)}>{shortenPath(workspace.path, s.homeDir)}</button></p>
+      <p className="team-profile-location project-profile-path"><button type="button" title={dir} onClick={() => reveal(dir)}>{shortenPath(dir, s.homeDir)}</button></p>
       <nav className="agent-section-nav" style={{ '--profile-tab-count': TABS.length, '--profile-tab-index': TABS.findIndex((item) => item.id === tab) } as CSSProperties} aria-label={t('projectProfile.navigation')} role="tablist" onKeyDown={(e) => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
         e.preventDefault()
@@ -327,8 +332,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
                 {git.nested && <p className="agent-profile-muted">{t('projectProfile.git.nested')}</p>}
               </div>}
             <div className="project-inline-actions start" data-project-git-actions>
-              <button type="button" onClick={() => openTerminal(workspace.path)}><TerminalSquare size={13} />{t('projectProfile.terminal')}</button>
-              <button type="button" onClick={() => reveal(workspace.path)}><FolderOpen size={13} />{t('projectProfile.reveal')}</button>
+              <button type="button" onClick={() => openTerminal(dir)}><TerminalSquare size={13} />{t('projectProfile.terminal')}</button>
+              <button type="button" onClick={() => reveal(dir)}><FolderOpen size={13} />{t('projectProfile.reveal')}</button>
               <button type="button" onClick={copyPath}><Copy size={13} />{t('projectProfile.copyPath')}</button>
               <button type="button" onClick={() => setReloadAt((n) => n + 1)}><RefreshCw size={13} />{t('projectProfile.refresh')}</button>
             </div>

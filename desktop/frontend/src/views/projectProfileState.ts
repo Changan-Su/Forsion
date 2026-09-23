@@ -31,14 +31,17 @@ export function executorOf(session: SessionRecord, config: AgentConfig | null | 
 export function projectExecutors(input: {
   sessions: SessionRecord[]
   projectPath: string
+  /** 同组的别名路径(默认工作区换过目录时,旧 project_path 仍归这一组;见 WorkspaceDescriptor.sessionKeys)。 */
+  aliases?: string[]
   configBySession: Record<string, AgentConfig>
   runningBySession: Record<string, string>
   defaultSlug: string
   currentSessionId?: string | null
 }): ProjectExecutor[] {
   const byKey = new Map<string, ProjectExecutor>()
+  const paths = new Set([input.projectPath, ...(input.aliases || [])])
   for (const s of input.sessions) {
-    if (s.projectless || s.project_path !== input.projectPath) continue
+    if (s.projectless || !s.project_path || !paths.has(s.project_path)) continue
     const { kind, id, key } = executorOf(s, input.configBySession[s.id], input.defaultSlug)
     const at = Date.parse(s.updated_at) || 0
     const ex = byKey.get(key) || { key, kind, id, sessions: [], running: false, current: false, lastActive: 0 }

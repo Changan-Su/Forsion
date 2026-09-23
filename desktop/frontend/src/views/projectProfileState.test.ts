@@ -31,6 +31,12 @@ describe('projectExecutors', () => {
     ])
   })
 
+  it('默认工作区换过目录:别名路径下的旧会话仍算这个项目的', () => {
+    const sessions = [session('new', { project_path: '/vault/Sessions', agent_config: { agentSlug: 'a' } }), session('old', { project_path: '/Users/me/Tangu', agent_config: { agentSlug: 'b' } }), session('x', { project_path: '/elsewhere' })]
+    const out = projectExecutors({ sessions, projectPath: '/vault/Sessions', aliases: ['/vault/Sessions', '/Users/me/Tangu'], configBySession: {}, runningBySession: {}, defaultSlug: 'd' })
+    expect(out.map((e) => e.key).sort()).toEqual(['agent:a', 'agent:b'])
+  })
+
   it('executorOf:teamSlug 优先于 groupChat,engine 优先于 agent', () => {
     expect(executorOf(session('x'), { teamSlug: 't', groupChat: true, agentSlug: 'a' }, 'd').key).toBe('team:t')
     expect(executorOf(session('x'), { soloEngineId: 'pi', agentSlug: 'a' }, 'd').key).toBe('engine:pi')
@@ -66,9 +72,11 @@ describe('project defaults', () => {
     expect(newSessionConfig(sticky, {}, {})).toEqual(sticky)
   })
 
-  it('isProjectWorkspace:只认非系统的本地目录', () => {
+  it('isProjectWorkspace:用户添加的本地目录 + Tangu 默认工作区;Vault 等其余系统目录不算', () => {
     expect(isProjectWorkspace({ key: '/p', name: 'p', kind: 'local', path: '/p' })).toBe(true)
-    expect(isProjectWorkspace({ key: '/d', name: 'd', kind: 'local', path: '/d', system: true })).toBe(false)
+    expect(isProjectWorkspace({ key: '/d', name: '默认工作区', kind: 'local', path: '/d', system: true, isDefault: true })).toBe(true)
+    expect(isProjectWorkspace({ key: '/v', name: 'Vault', kind: 'local', path: '/v', system: true })).toBe(false)
+    expect(isProjectWorkspace({ key: '__default__', name: '默认工作区', kind: 'local', path: null, system: true, isDefault: true })).toBe(false)
     expect(isProjectWorkspace({ key: '__cloud__:Tangu', name: 'Tangu', kind: 'cloud', path: null })).toBe(false)
     expect(isProjectWorkspace({ key: 'c', name: 'c', kind: 'channel', path: '/c' })).toBe(false)
     expect(isProjectWorkspace(undefined)).toBe(false)

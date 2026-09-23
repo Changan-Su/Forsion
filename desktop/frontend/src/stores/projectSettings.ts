@@ -2,10 +2,10 @@ import type { AgentConfig, ProjectSettings, TeamDef, WorkspaceDescriptor } from 
 
 export type ProjectWorkspace = WorkspaceDescriptor & { kind: 'local'; path: string }
 
-/** 只有用户自己添加的本地目录才算「Project」:系统默认工作区、Vault、通道文件夹、云端 Project 与无根会话都不是 ——
- *  与侧栏分组同一口径。默认工作区里的随手会话仍看 Agent 详情,不该被项目页顶掉。 */
+/** 本地目录才算「Project」:用户添加的目录 + Tangu 默认工作区(09-23 用户:「默认文件夹也是 Project」)。
+ *  Vault(笔记库)、通道文件夹、云端 Project 与无根会话都不是 —— 与侧栏分组同一口径。 */
 export function isProjectWorkspace(ws: WorkspaceDescriptor | undefined | null): ws is ProjectWorkspace {
-  return !!ws && ws.kind === 'local' && !ws.system && !!ws.path
+  return !!ws && ws.kind === 'local' && !!ws.path && (!ws.system || !!ws.isDefault)
 }
 
 /** 项目默认项 → 新会话的初始配置(+ 模型)。团队展开成**会话级配队**(groupChat + 成员 + 职责 + TEAM.md),不是 teamSlug ——

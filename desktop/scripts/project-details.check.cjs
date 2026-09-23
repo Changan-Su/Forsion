@@ -23,12 +23,18 @@ class StopEarly extends Error {}
 const agentDef = (slug, name, description) => ({ slug, name, description, tools: [], model: '', thinkingLevel: '', maxIterations: null, approvalMode: '', createdBy: 'user', createdAt: '2026-09-01', systemPrompt: `You are ${name}.`, soul: '', libraryDir: `/tmp/pd-lib/${slug}/Library` })
 const AGENTS = [agentDef('xyra', 'Xyra', 'General assistant'), agentDef('coder', 'Coder', 'Writes code')]
 const TEMPLATE = '# Project instructions\n\n## What this project is\n'
-const sessionFixtures = (projectDir) => {
+const sessionFixtures = (projectDir, defaultDir, aliasDir) => {
   const base = { summary: '', archived: false, model_id: 'm1', created_at: '2026-09-20 09:00:00', projectless: false, project_path: projectDir, project_name: 'Demo Project' }
   return [
     { ...base, id: 'pd-main', title: 'Demo main', updated_at: '2026-09-22 11:00:00', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: projectDir } },
     { ...base, id: 'pd-coder', title: 'Coder work', updated_at: '2026-09-22 10:00:00', agent_config: { agentSlug: 'coder', execMode: 'host', cwd: projectDir } },
     { ...base, id: 'pd-team', title: 'Demo party', updated_at: '2026-09-21 10:00:00', agent_config: { groupChat: true, groupAgents: ['xyra', 'coder'], execMode: 'host', cwd: projectDir } },
+    // 默认工作区的会话(09-23 用户:「默认文件夹也是 Project」):harness 种了 localVault,默认目录 = <vault>/Sessions
+    { ...base, id: 'pd-default', title: 'Default chat', updated_at: '2026-09-18 10:00:00', project_path: defaultDir, project_name: '默认工作区', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: defaultDir } },
+    // 默认目录换过位置:旧会话按 project_name(各语言的「默认工作区」)归入默认组,但它们的真实目录是别名 —— 面板必须跟会话自己的目录走;
+    // 别名恰好是家目录时引擎拒收,照旧 Agent 详情(codex 评审 09-23 的两条 P2)
+    { ...base, id: 'pd-alias', title: 'Old default chat', updated_at: '2026-09-17 10:00:00', project_path: aliasDir, project_name: 'Tangu 默认工作区', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: aliasDir } },
+    { ...base, id: 'pd-homealias', title: 'Home default chat', updated_at: '2026-09-16 10:00:00', project_path: os.homedir(), project_name: 'Tangu 默认工作区', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: os.homedir() } },
     { ...base, id: 'pd-rootless', title: 'Rootless chat', updated_at: '2026-09-19 10:00:00', projectless: true, project_path: null, project_name: null, agent_config: { agentSlug: 'xyra', execMode: 'sandbox' } },
   ]
 }
@@ -210,6 +216,25 @@ async function run(app, win, stub, seen, home) {
   await details.locator('[data-agent-profile="xyra"]').waitFor()
   check('8 无根会话 → 右栏是 Agent 详情,不是项目页', await details.locator('[data-project-profile]').count() === 0)
 
+  // ── 8b 默认工作区也是 Project:右栏是项目页;系统工作区不可改名 → 名称只读 ─────────
+  await openSession(win, 'Default chat', 'pd-default')
+  await details.locator('[data-project-profile]').waitFor({ timeout: 10_000 }).catch(() => {})
+  const def = await details.evaluate((el) => {
+    const p = el.querySelector('[data-project-profile]'), name = p && p.querySelector('.team-profile-name')
+    return p ? { path: p.getAttribute('data-project-profile'), name: name && name.value, readOnly: !!(name && name.readOnly) } : null
+  })
+  check('8b 默认工作区的会话 → 右栏是 PROJECT 详情(默认目录),名称只读', !!def && /[\\/]Sessions$/.test(def.path) && /默认工作区/.test(def.name || '') && def.readOnly, JSON.stringify(def))
+
+  // ── 8c/8d 默认组里的旧别名会话:面板跟会话自己的目录;别名是家目录 → Agent 详情 ────────
+  await openSession(win, 'Old default chat', 'pd-alias')
+  await details.locator('[data-project-profile]').waitFor({ timeout: 10_000 }).catch(() => {})
+  const aliasPath = await details.evaluate((el) => { const p = el.querySelector('[data-project-profile]'); return p && p.getAttribute('data-project-profile') })
+  const aliasGets = seen.ctxGets.filter((id) => id === 'pd-alias').length
+  check('8c 别名会话 → 项目页显示它自己的目录(不是默认组的当前目录),且按它的 sessionId 取上下文', !!aliasPath && /[\\/]OldTangu$/.test(aliasPath) && aliasGets > 0, JSON.stringify({ aliasPath, aliasGets }))
+  await openSession(win, 'Home default chat', 'pd-homealias')
+  await details.locator('[data-agent-profile="xyra"]').waitFor({ timeout: 10_000 }).catch(() => {})
+  check('8d 别名是家目录的会话 → 照旧 Agent 详情(引擎拒收家目录)', await details.locator('[data-project-profile]').count() === 0 && await details.locator('[data-agent-profile="xyra"]').count() > 0)
+
   // ── 9 英文 × 暗色:回到项目会话,三个页面都不溢出 + 截图 ───────────────────
   await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme_pref', 'dark') })
   await win.reload({ waitUntil: 'domcontentloaded' })
@@ -245,8 +270,8 @@ async function main() {
   for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
   const ctx = contextFixture(projectDir)
   const seen = { ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0 }
-  const projectIds = new Set(['pd-main', 'pd-coder', 'pd-team'])
-  const stub = await startStubEngine({ agents: AGENTS, sessions: sessionFixtures(projectDir), messages: [], handle: async ({ path: route, method, url, body }) => {
+  const projectIds = new Set(['pd-main', 'pd-coder', 'pd-team', 'pd-default', 'pd-alias'])
+  const stub = await startStubEngine({ agents: AGENTS, sessions: sessionFixtures(projectDir, path.join(vault, 'Sessions'), path.join(home, 'OldTangu')), messages: [], handle: async ({ path: route, method, url, body }) => {
     if (route === '/agent/runs' && url.searchParams.has('sessionId')) return { runs: [] }
     if (route === '/agent/teams') return { teams: [] }
     if (route === '/agent/special/config') return { config: { historian: { enabled: false }, muse: { enabled: false } } }

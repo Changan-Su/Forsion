@@ -525,6 +525,8 @@ export interface WorkspaceDescriptor {
   path: string | null
   /** 常驻系统工作区(默认云 Project / Tangu 默认本地区):不可重命名 / 移除。 */
   system?: boolean
+  /** Tangu 默认本地工作区。system 里只有它算 Project(右栏显示 PROJECT 详情);Vault 与默认云 Project 不算。 */
+  isDefault?: boolean
   /** 云端 Project 名(kind='cloud'):会话 project_name 与 run 的 workspaceProject 都用它。 */
   project?: string
   /** 通道种类(kind='channel')。 */

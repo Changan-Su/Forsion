@@ -409,6 +409,7 @@ export function resolveNewSessionWorkspace(
       kind: 'local',
       path,
       system: true,
+      isDefault: true,
       sessionKeys: path ? [path] : [],
     }
   }
@@ -2114,7 +2115,7 @@ export const useApp = create<AppState>((set, get) => ({
       ...projNames.map((p): WorkspaceDescriptor => ({
         key: cloudProjectKey(p), name: p, kind: 'cloud', path: null, system: p === DEFAULT_CLOUD_PROJECT, project: p,
       })),
-      { key: defaultKey, name: defaultName, kind: 'local', path: defPath, system: true, sessionKeys: [...defaultSessionKeys] },
+      { key: defaultKey, name: defaultName, kind: 'local', path: defPath, system: true, isDefault: true, sessionKeys: [...defaultSessionKeys] },
     ]
     const seen = new Set<string>([...projNames.map(cloudProjectKey), defaultKey, ...defaultSessionKeys])
     // Vault 不再只在「编辑器 + 文件自动模式」临时出现:它是常驻系统工作区,可直接作为新会话 cwd。
@@ -2433,8 +2434,9 @@ export const useApp = create<AppState>((set, get) => ({
       const cloudProject = rootless ? null : path ? null : (ws?.kind === 'cloud' ? (ws.project || DEFAULT_CLOUD_PROJECT) : DEFAULT_CLOUD_PROJECT)
       // 模型**当场固化**(记忆兜底也算,同下面的 agentSlug):不传的话引擎按 profile.defaultModelId
       // 落库,而输入栏显示的是 newChatModelId() —— 两边一错开就是「发送后药丸跳回默认模型」。
-      // 项目默认项只读同步缓存(setActiveId / setNewChatWs 已预取;冷缓存 = 不预填):send() 里不等网络。
-      const projectDefaults = path && ws && isProjectWorkspace(ws) ? projectDefaultsForNewSession(get().projectSettingsByPath[path] ?? null, get().teams) : { config: {} }
+      // 项目默认项:缓存命中直接用(setActiveId / setNewChatWs 已预取);冷缓存 = 重启后第一次隐式新会话(默认工作区从不经 setNewChatWs)
+      // → 等一次本地 GET(≤1.5s,同 createInWorkspace),否则默认工作区的项目默认项首条消息就漏掉(codex 评审 09-23)。家目录引擎拒收,跳过。
+      const projectDefaults = path && ws && isProjectWorkspace(ws) && path !== get().homeDir ? projectDefaultsForNewSession(await get().ensureProjectSettings(path).catch(() => null), get().teams) : { config: {} }
       const model_id = get().newChatModel || projectDefaults.model || newChatModelId(get())
       // 初始配置先算好、随建会话请求原子落库(老引擎忽略 agent_config → 回来为空 → 补 PUT;同 createInWorkspace)。
       // 显式选择(newChatCfg)> 项目默认 > 上次用的档位(newSessionConfig)。
