@@ -64,7 +64,15 @@ export async function runVerifyCommand(command: string, cwd?: string, signal?: A
 const GIT_TIMEOUT_MS = 800;
 const GIT_STATUS_MAX_LINES = 20; // ponytail: 大仓 status 截断到 20 行 + 计数,模型要全量自己跑 git status
 
-async function git(cwd: string, args: string[], ctx?: RuntimeExecContext): Promise<string> {
+/** 这几个环境变量会把 git 整个指到别的仓去(GIT_DIR 泄进来时 `-C cwd` 形同虚设);仓永远只由 -C 决定,一律剥掉(同 desktop gitHistory.ts)。 */
+const GIT_SCRUBBED_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_COMMON_DIR', 'GIT_CEILING_DIRECTORIES', 'GIT_NAMESPACE'];
+
+export interface GitRunResult { code: number; stdout: string; stderr: string; reason?: 'aborted' | 'timeout' | 'output-limit' | 'spawn-error' }
+
+/** 跑一条**只读** git 命令,返回退出码与输出(非零不抛:仓库状态天生靠退出码判;项目详情面板据此区分「非仓库 / 无上游」)。
+ *  固定前缀:不分页、不跑 fsmonitor / 钩子 / 外部 diff、不验签也不调 gpg —— 外来仓的 `.git/config` 能借这几处执行任意程序。
+ *  timeoutMs 缺省 800 = 每轮现场注入的预算;面板那类交互式调用可以给长一点。 */
+export async function runGit(cwd: string, args: string[], ctx?: RuntimeExecContext, timeoutMs = GIT_TIMEOUT_MS): Promise<GitRunResult> {
   // Apple's /usr/bin/git shim can start xcodebuild for each private sandbox cache.
   // These fixed native developer-tool locations avoid an unsandboxed xcrun probe.
   const executable = process.platform === 'darwin'
@@ -72,16 +80,23 @@ async function git(cwd: string, args: string[], ctx?: RuntimeExecContext): Promi
     : 'git';
   const prepared = prepareHostCommand({ ...ctx, cwd }, [
     executable, '--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
-    '-c', 'diff.external=', '-C', cwd, ...args,
+    '-c', 'diff.external=', '-c', 'log.showSignature=false', '-c', 'gpg.program=', '-C', cwd, ...args,
   ]);
   try {
+    const env: NodeJS.ProcessEnv = { ...(prepared.options.env ?? process.env), GIT_TERMINAL_PROMPT: '0' };
+    for (const key of GIT_SCRUBBED_ENV) delete env[key];
     const result = await runBoundedProcess(prepared.file, prepared.args, {
-      cwd: String(prepared.options.cwd), env: prepared.options.env,
-      signal: ctx?.signal, timeoutMs: GIT_TIMEOUT_MS, maxOutputBytes: 256 * 1024,
+      cwd: String(prepared.options.cwd), env,
+      signal: ctx?.signal, timeoutMs, maxOutputBytes: 256 * 1024,
     });
-    if (result.code !== 0 || result.reason || result.cleanupTimedOut) throw new Error('Git state collection did not complete');
-    return result.stdout.trim();
+    return { code: result.code, stdout: result.stdout, stderr: result.stderr, reason: result.reason ?? (result.cleanupTimedOut ? 'timeout' : undefined) };
   } finally { prepared.cleanup(); }
+}
+
+async function git(cwd: string, args: string[], ctx?: RuntimeExecContext): Promise<string> {
+  const result = await runGit(cwd, args, ctx);
+  if (result.code !== 0 || result.reason) throw new Error('Git state collection did not complete');
+  return result.stdout.trim();
 }
 
 /** git 现场段(host 会话专用):分支 + 脏文件摘要 + 最近提交。非 git 仓 / 无 git / 超时 → null 静默跳过。 */

@@ -66,7 +66,7 @@ const realDir = (p: string): string => {
     return p;
   }
 };
-const isPlainFileUnder = (baseDir: string, relName: string): boolean => {
+export const isPlainFileUnder = (baseDir: string, relName: string): boolean => {
   const segs = relName.split('/');
   let cur = baseDir;
   for (let i = 0; i < segs.length; i++) {

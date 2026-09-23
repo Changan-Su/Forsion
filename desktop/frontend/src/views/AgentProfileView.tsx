@@ -16,6 +16,7 @@ import type { AgentConfig, NormalAgentDef, SkillInfo, ToolsResponse } from '../t
 import { THINKING_LEVELS } from '../types'
 import { ProfileGroup, ProfileModelField, ProfileTextEditor } from './profileControls'
 import { TeamProfile } from './TeamProfile'
+import { ProjectProfile, useProjectWorkspace } from './ProjectProfile'
 import './agentProfileMessages'
 import './agentProfile.css'
 
@@ -51,9 +52,15 @@ export function TanguDetailsView() {
   const config = s.config || s.session?.agent_config || EMPTY_CONFIG
   const slug = config.agentSlug || config.soloAgentSlug || s.defaultSlug
   const agent = s.agents.find((a) => a.slug === slug)
+  // 项目会话(用户自己添加的本地目录,侧栏分组口径)→ PROJECT 详情;它的 Agent / 配队从「Agents」页点进去看。
+  // 团队实体 / 私聊 / 外部引擎会话都是 projectless,不受影响。按 project_path 取 key:同一项目内切会话,标签与草稿都留着。
+  const project = useProjectWorkspace(s.session)
+  const renderMember = (member: NormalAgentDef, childId?: string | null) => <AgentProfile agent={member} compact sessionId={childId} />
   return <div className="agent-profile-panel" data-tangu-details>
     <div className="agent-profile-panel-title">{t('agentProfile.title')}</div>
-    {config.groupChat || config.teamSlug ? <TeamProfile key={`${sessionId}:${config.teamSlug || ''}`} session={s.session} config={config} renderMember={(member, childId) => <AgentProfile agent={member} compact sessionId={childId} />} /> : config.engineId || config.soloEngineId ? <section className="agent-profile-team"><h3>{s.engines.find((e) => e.id === (config.engineId || config.soloEngineId))?.name || config.engineId || config.soloEngineId}</h3><div className="agent-current-session"><strong>{s.session?.title}</strong><span>{s.session?.project_name || config.cwd}</span></div></section> : agent ? <AgentProfile key={agent.slug} agent={agent} compact sessionId={sessionId} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}
+    {project && s.session ? <ProjectProfile key={project.path} session={s.session} config={config} workspace={project} renderAgent={renderMember}
+        renderTeam={(teamSession, teamConfig) => <TeamProfile key={`${teamSession.id}:${teamConfig.teamSlug || ''}`} session={teamSession} config={teamConfig} renderMember={renderMember} />} />
+      : config.groupChat || config.teamSlug ? <TeamProfile key={`${sessionId}:${config.teamSlug || ''}`} session={s.session} config={config} renderMember={renderMember} /> : config.engineId || config.soloEngineId ? <section className="agent-profile-team"><h3>{s.engines.find((e) => e.id === (config.engineId || config.soloEngineId))?.name || config.engineId || config.soloEngineId}</h3><div className="agent-current-session"><strong>{s.session?.title}</strong><span>{s.session?.project_name || config.cwd}</span></div></section> : agent ? <AgentProfile key={agent.slug} agent={agent} compact sessionId={sessionId} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}
   </div>
 }
 

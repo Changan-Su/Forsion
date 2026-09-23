@@ -4,7 +4,7 @@
  */
 import type {
   AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, MuseLibraryEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo,
-  NormalAgentDef, SessionRecord, SkillInfo, SpecialAgentsConfig,
+  NormalAgentDef, ProjectContext, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SpecialAgentsConfig,
   TanguDesktopConfig, ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
 import { AGENT_APP_ID } from './agentRunService'
@@ -1020,3 +1020,24 @@ export const expandCustomCommand = (cfg: TanguDesktopConfig, name: string, args:
     method: 'POST',
     body: JSON.stringify({ args }),
   }).then((r) => r.text)
+
+// ── 项目上下文(桌面「PROJECT 详情」;只有本地引擎有,按 sessionId 绑定项目 —— cwd 不从客户端传)──
+/** 形状不对(老引擎 / 桩引擎对未知路由回 200 空对象)按 404 抛:面板显示「只在本地引擎上可用」,而不是拿 undefined.doc 崩掉整个右栏。 */
+const projectContextShape = (r: ProjectContext): ProjectContext => {
+  if (!r || typeof r !== 'object' || !r.doc || !r.git || !Array.isArray(r.skills)) throw Object.assign(new Error('Project context unavailable'), { status: 404 })
+  return r
+}
+export const getProjectContext = (cfg: TanguDesktopConfig, sessionId: string) =>
+  request<ProjectContext>(cfg, `/agent/project-context?sessionId=${encodeURIComponent(sessionId)}`).then(projectContextShape)
+/** 有会话就按 sessionId 绑定;没有会话可借的项目(全删光又加回来)按路径读用户侧记录 —— 只有这个只读端点收 cwd。 */
+export const getProjectSettings = (cfg: TanguDesktopConfig, ref: { sessionId: string } | { cwd: string }, opts?: { timeoutMs?: number }) =>
+  request<{ settings: ProjectSettings | null }>(cfg, `/agent/project-context/settings?${'sessionId' in ref ? `sessionId=${encodeURIComponent(ref.sessionId)}` : `cwd=${encodeURIComponent(ref.cwd)}`}`, undefined, opts).then((r) => r.settings ?? null)
+export const initProjectContext = (cfg: TanguDesktopConfig, sessionId: string) =>
+  request<{ createdDir: boolean; createdDoc: boolean; context: ProjectContext }>(cfg, '/agent/project-context/init', { method: 'POST', body: JSON.stringify({ sessionId }) }).then((r) => ({ ...r, context: projectContextShape(r.context) }))
+/** 409 = 文件在读出之后被别处改过(没有写入);调用方提示用户重载。 */
+export const putProjectDoc = (cfg: TanguDesktopConfig, sessionId: string, content: string, expectedMtimeMs?: number | null) =>
+  request<{ path: string; mtimeMs: number }>(cfg, '/agent/project-context/doc', { method: 'PUT', body: JSON.stringify({ sessionId, content, ...(expectedMtimeMs != null ? { expectedMtimeMs } : {}) }) })
+export const putProjectSettings = (cfg: TanguDesktopConfig, sessionId: string, settings: ProjectSettings | null) =>
+  request<{ settings: ProjectSettings | null }>(cfg, '/agent/project-context/settings', { method: 'PUT', body: JSON.stringify({ sessionId, settings }) }).then((r) => r.settings ?? null)
+export const createProjectSkill = (cfg: TanguDesktopConfig, sessionId: string, input: { slug: string; name: string; description: string; content: string }) =>
+  request<{ skill: ProjectSkillInfo }>(cfg, '/agent/project-context/skills', { method: 'POST', body: JSON.stringify({ sessionId, ...input }) }).then((r) => r.skill)

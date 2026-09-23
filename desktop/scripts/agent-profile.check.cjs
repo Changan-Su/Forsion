@@ -7,7 +7,8 @@ const assert = require('assert/strict')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const ROOT = path.join(__dirname, '..')
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-agent-profile-'))
-const base = { archived: false, model_id: 'm1', created_at: '2026-09-16 10:00:00', updated_at: '2026-09-16 10:00:00', projectless: false, project_path: home, project_name: 'Atlas' }
+// 无根会话:项目会话的右栏自 09-22 起是 PROJECT 详情(check:projectdetails 覆盖),本仪器盯的是 Agent 详情 / 装备 UI 本身
+const base = { archived: false, model_id: 'm1', created_at: '2026-09-16 10:00:00', updated_at: '2026-09-16 10:00:00', projectless: true, project_path: null, project_name: null }
 const config = { groupChat: true, groupAgents: ['xyra', 'research'], execMode: 'host', cwd: home, agentSlug: 'xyra' }
 const main = { ...base, id: 'profile-main', title: 'Atlas team', agent_config: config }
 const child = { ...base, id: 'profile-child', title: 'Research work', agent_config: { agentSlug: 'research', execMode: 'host', cwd: home, teamMember: { teamSessionId: main.id } } }
