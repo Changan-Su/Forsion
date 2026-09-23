@@ -324,7 +324,7 @@ export const Composer2: React.FC<{
   sessionId, advisory, autoFocus, disabled, disabledPlaceholder, running, execConfig, teamApproval,
   models, modelsResponse, modelId, onModelChange, engines, engineId,
   engineModels, engineModelId, onEngineModelChange, engineCommands,
-  thinkingLevel, onThinkingChange,
+  thinkingLevel: sessionThinkingLevel, onThinkingChange,
   defaultModelIds, onDefaultModelChange,
   maxIterations, onMaxIterationsChange,
   verifyCommand, onVerifyCommandChange,
@@ -542,7 +542,13 @@ export const Composer2: React.FC<{
 
   const isHost = execConfig.execMode === 'host'
   const isChat = preset === 'chat'
-  const approval = execConfig.approvalMode || 'auto-edit'
+  // 会话没存档时引擎按当前 Agent 定义的档跑(applyAgentActivation 补会话缺省的键),药丸照同一条链显示:
+  // 私聊 / 团队会话由引擎建、不带审批档与思考档,兜底成「替我批准」「中」就是谎报(09-22 反馈:药丸替我批准,实际按 Agent 的只读逐次弹)。
+  // 团队模式:审批档随团队 run 下发给成员(照样套);思考档成员各用自己的(teamRuns.memberRunConfig),不套。
+  // 引擎侧口径钉在 tangu-agent test/agentDefaultApproval.test.ts,改一边必须改另一边。
+  const agentDef = engineId ? undefined : agents?.find((a) => a.slug === currentAgentSlug)
+  const approval = execConfig.approvalMode || agentDef?.approvalMode || 'auto-edit'
+  const thinkingLevel = sessionThinkingLevel || (groupChat ? undefined : agentDef?.thinkingLevel) || undefined
   // 视口兜底:这些菜单是 absolute-in-relative + 固定宽度,窄屏时仍可能被边缘夹住。
   // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
   const modeFix = useEdgeNudge(openMenu === 'mode', { boundary: '.t2-chat-view' })
@@ -723,7 +729,8 @@ export const Composer2: React.FC<{
             `${t('input.slash.status')}`,
             `model=${modelId || '-'}`,
             `think=${thinkingLevel || 'medium'}${ctxInfo?.thinkingRequested === (thinkingLevel || 'medium') && ctxInfo.thinkingEffective && ctxInfo.thinkingEffective !== ctxInfo.thinkingRequested ? `→${ctxInfo.thinkingEffective}` : ''}`,
-            `approval=${execConfig.approvalMode || '-'}`,
+            // 与引擎同一公式(agentLoop:会话 → Agent 定义 → host 替我批准 / 沙箱完全放行);药丸的 approval 只画 host,沙箱缺省不在它里面
+            `approval=${execConfig.approvalMode || agentDef?.approvalMode || (execConfig.execMode === 'host' ? 'auto-edit' : 'full-auto')} (${execConfig.approvalMode ? 'session' : agentDef?.approvalMode ? 'agent' : 'default'})`,
             `cwd=${execConfig.cwd || '-'}`,
             // 会话值(下一 run 必用)优先;没有再看引擎报的生效值(Agent 定义 / 默认),别把 Agent 定义的 3 显示成 90。
             `loop=${maxIterations || ctxInfo?.maxIterations || 90} (${maxIterations ? 'session' : ctxInfo?.maxIterationsSource || 'default'})`,
@@ -796,7 +803,7 @@ export const Composer2: React.FC<{
     }
     return items
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, isChat, onPresetChange, engineId, engineCommands, customCommands, describe, execConfig, sessionTokens, ctxTokens, contextWindow, runCost, costLimit, ctxInfo, !!onBtw])
+  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, isChat, onPresetChange, engineId, engineCommands, customCommands, describe, execConfig, agentDef, sessionTokens, ctxTokens, contextWindow, runCost, costLimit, ctxInfo, !!onBtw])
 
   const slash = useMemo(() => {
     if (disabled || slashDismissed) return null
