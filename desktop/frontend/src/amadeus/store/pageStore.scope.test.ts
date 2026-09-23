@@ -69,6 +69,42 @@ describe('scope 摘表 × 同步重领养(pendingDispose)', () => {
   })
 })
 
+// 09-23:关掉活动面板,门面曾退回 stores 里第一个 = 'main'(restoreVault 装的启动页),
+// 于是树高亮 / 状态栏跳回启动那篇,而剩下的编辑器明明还开着(真 Electron:check:facade)。
+describe('活动面板关掉后门面的退路', () => {
+  it('退回上一个认领过、还开着的面板,不回启动那份 main', async () => {
+    const m = await freshStore()
+    m.pageStoreFor(m.MAIN_SCOPE).setState({ activePage: 'Alpha.md' })
+    m.pageStoreFor('e1').setState({ activePage: 'Gamma.md' })
+    m.pageStoreFor('e2').setState({ activePage: 'Beta.md' })
+    m.setActivePageScope('e1')
+    m.setActivePageScope('e2')
+    m.disposePageStoreScope('e2')
+    expect(m.activePageScope()).toBe('e1')
+    expect(m.usePageStore.getState().activePage).toBe('Gamma.md')
+  })
+
+  it('认领过的都关了才回 main,且把 main 里那篇启动页交出去(门面 = 无当前笔记)', async () => {
+    const m = await freshStore()
+    m.pageStoreFor(m.MAIN_SCOPE).setState({ activePage: 'Alpha.md' })
+    m.pageStoreFor('e1').setState({ activePage: 'Gamma.md' })
+    m.setActivePageScope('e1')
+    m.disposePageStoreScope('e1')
+    expect(m.activePageScope()).toBe(m.MAIN_SCOPE)
+    await settle()
+    expect(m.usePageStore.getState().activePage).toBeNull()
+  })
+
+  it('main 里的启动页还在装载途中:作废那次装载,别等它装完再冒出来', async () => {
+    const m = await freshStore()
+    m.pageStoreFor(m.MAIN_SCOPE).setState({ pendingPage: 'Alpha.md' }) // restoreVault 的 loadPage 在途
+    m.pageStoreFor('e1')
+    m.setActivePageScope('e1')
+    m.disposePageStoreScope('e1')
+    expect(m.usePageStore.getState().pendingPage).toBeNull()
+  })
+})
+
 describe('deleteBlock 装载身份守卫(loadNonce)', () => {
   it('await 期间页被重装(路径相同):放弃删除', async () => {
     let release!: (v: Array<{ path: string }>) => void

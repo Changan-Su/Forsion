@@ -4,7 +4,8 @@
  *  0-2  新对话空状态落在 **view 的竖向中心**(此前只在「输入框以上那段」居中 → 整体偏高)
  *  3,11 细长列(宽:高 < 9:16)不画头像,宽列照常 —— 量的是 container-type: size 有没有生效
  *  4-5  Amadeus 右栏默认 = 对话视图(展开右栏,活动 tab 必须是对话,且主区仍是编辑器)
- *  6-7  侧栏对话默认引用**主区当前打开的文件**
+ *  6-7  侧栏对话默认引用**主区当前打开的文件**(开 Alpha 再换 Beta:引用必须跟过去,不许残留)
+ *  7b   左栏树高亮同样跟到 Beta(编辑器没拿过焦点时,门面页作用域曾停在启动那篇)
  *  8-10 拖笔记进聊天区 → 「已选择」芯片、不塞草稿、且只挂引用也能发
  *  12-13 侧栏拖宽之后,折叠再展开必须还是那个宽(此前被 pinSides 打回黄金分割)
  *  14   切 Space 时清 stashActive:上个空间停在哪个 tab 不许顶掉下个空间配方的首项
@@ -26,9 +27,9 @@
  * ⚠️ 量「居中」要量**内容块**(品牌图上缘 → 副标下缘)的中点,不是 .t2-empty 自己的 rect ——
  *    它是 inset:0 的铺满层,rect 恒等于整列,量它必然「完美居中」= 假绿。
  * ⚠️ 先 npm run build:量的是 out/ 里的产物,源码改了没构建就是白测。
- * ⚠️ **非密闭**:TANGU_HOME 只隔离 tangu 侧,Amadeus 库仍是本机那份 → 5/6 点的是真实库里的第一篇笔记。
- *    空库/新机器上 5/6 红**不是回归**,是没笔记可点;先在库里放一篇再跑。
- *    5 还隐含 host 会话(引用是本机绝对路径,云端会话按设计不挂 —— 见 Composer2 autoChip 的 isHost 闸)。
+ * ⚠️ Amadeus 库由本脚本种在临时目录(seedVault:Alpha / Beta 两篇)。不种的话首启无 lastVault 会落到
+ *    本机真实的 ~/Forsion-Dev/Amadeus:结果随那份库的第一篇而变,还会往真库里补种 Calendar.db。
+ *    6 还隐含 host 会话(引用是本机绝对路径,云端会话按设计不挂 —— 见 Composer2 autoChip 的 isHost 闸)。
  *
  * 用法:npm run check:chatside
  */
@@ -44,12 +45,22 @@ function check(name, ok, detail) {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`)
 }
 
+/** 临时库 + 指向它的 Amadeus 配置。dev 态主进程把 userData 改成 `<--user-data-dir>-dev`(main.ts),配置落那里。 */
+function seedVault(home) {
+  const vault = path.join(home, 'vault')
+  fs.mkdirSync(vault, { recursive: true })
+  for (const n of ['Alpha', 'Beta']) fs.writeFileSync(path.join(vault, `${n}.md`), `# ${n}\n\n${n} body\n`)
+  fs.mkdirSync(path.join(home, 'userdata-dev'), { recursive: true })
+  fs.writeFileSync(path.join(home, 'userdata-dev', 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
+}
+
 async function main() {
   if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) {
     console.error('缺 out/main/main.js —— 先跑 npm run build')
     process.exit(1)
   }
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-chatside-'))
+  seedVault(home)
   const sideShot = path.join(os.tmpdir(), `forsion-chat-panel-${process.pid}.png`)
   const sideDarkShot = path.join(os.tmpdir(), `forsion-chat-panel-dark-${process.pid}.png`)
   const selectionMenuShot = path.join(os.tmpdir(), `forsion-chat-selection-menu-${process.pid}.png`)
@@ -463,35 +474,45 @@ async function main() {
   )
   await win.screenshot({ path: sideDarkShot })
 
-  // ── 3 侧栏对话默认引用主区当前这篇 ──────────────────────────────────────────
-  const row = win.locator('.t2s-srow').first()
-  let noteName = ''
-  if (await row.count().catch(() => 0)) {
-    noteName = (await row.textContent().catch(() => '') || '').trim()
-    await row.click().catch(() => {})
-    await win.waitForTimeout(2500)
-  }
-  const ref = await win.evaluate(`(() => {
+  // ── 6-7 侧栏对话默认引用主区当前这篇 ────────────────────────────────────────
+  // 先开 Alpha 再换 Beta:只点第一篇分不出「跟上了」和「残留」—— 启动时默认页作用域里就装着库里第一篇,
+  // 引用读错了来源(不是主区编辑器 tab 此刻认领的那篇)照样对得上。
+  // 09-22 负对照:撤掉 WorkspaceHost leafFromProps.setParams 的 refreshTabs,6/7 红(mainTabs[].filePath 不跟)。
+  const readRef = () => win.evaluate(`(() => {
     const label = document.querySelector('.t2c-reflabel')
     const chips = Array.from(document.querySelectorAll('.t2c-refrow .attach-chip > span')).map((e) => e.textContent.trim())
     return { label: label ? label.textContent.trim() : null, chips }
   })()`)
+  const openRow = async (name) => {
+    await win.locator('.t2s-srow', { hasText: name }).first().click().catch(() => {})
+    await win.waitForTimeout(2500)
+  }
+  await openRow('Alpha')
+  const first = await readRef()
   check(
     '6 主区打开一篇笔记 → 侧栏对话自动挂上「已选择」引用',
-    !!ref.label && ref.chips.length > 0,
-    `点开的行=${JSON.stringify(noteName)};引用条=${JSON.stringify(ref)}`,
+    !!first.label && first.chips.length > 0,
+    `点开 Alpha;引用条=${JSON.stringify(first)}`,
   )
+  await openRow('Beta')
+  const ref = await readRef()
   check(
     '7 挂的正是主区那一篇(不是别的/残留的)',
-    !!noteName && ref.chips.some((c) => c && (noteName.includes(c.replace(/\\.md$/i, '')) || c.includes(noteName))),
-    `${JSON.stringify(ref.chips)} vs ${JSON.stringify(noteName)}`,
+    ref.chips.length === 1 && ref.chips[0].replace(/\.md$/i, '') === 'Beta',
+    `Alpha 时 ${JSON.stringify(first.chips)} → 换到 Beta 后 ${JSON.stringify(ref.chips)}`,
   )
+  // 7b 左栏树高亮读的是 pageStore 门面(活动页作用域)。这一路只点左栏、编辑器从没拿过 Dockview 焦点,
+  // 作用域曾停在启动时装载的那篇 → 编辑器已是 Beta,高亮还钉在 Alpha(09-22)。
+  const hl = await win.evaluate(`Array.from(document.querySelectorAll('.t2s-srow.active')).map((e) => e.textContent.trim())`)
+  check('7b 左栏树高亮跟到主区那一篇(编辑器没拿过焦点也一样)', hl.length === 1 && hl[0] === 'Beta', `高亮行=${JSON.stringify(hl)}`)
 
   // ── 拖引用进聊天区 → 芯片(结构化通道,不再拼文本再解析)────────────────────────────
   // 合成 DragEvent + DataTransfer:HTML5 拖放没法用 mouse.down/move 驱动(浏览器不给合成 drag)。
   // 代价:绕过了 Dockview 自己的拖放层。真机上若「拖得动但没反应」,先怀疑那一层截了 drop。
   const drag = await win.evaluate(`(() => {
-    const src = Array.from(document.querySelectorAll('.t2s-srow')).find((e) => !e.classList.contains('active')) || document.querySelector('.t2s-srow')
+    // 拖主区**没开着**的那篇(Alpha):拖已自动引用的那篇会被去重吞掉,芯片数不涨。按名字挑,不靠 .active 反推
+    // (高亮错位时反推出来的恰是已引用那篇 —— 7b 修前就是这样)。
+    const src = Array.from(document.querySelectorAll('.t2s-srow')).find((e) => e.textContent.trim() === 'Alpha')
     const target = document.querySelector('.t2-chat-view')
     if (!src || !target) return { err: 'no src/target' }
     const dt = new DataTransfer()
@@ -735,6 +756,7 @@ async function main() {
   // 已重置,这是它漏下的那半)。要打的路径是「Amadeus 右栏**从没展开过**」——所以必须**另起一个干净
   // 实例**:上面那轮已经把 Amadeus 的右栏展开并存进命名布局了,同一实例里再走一遍打不到这条。
   const home2 = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-chatside2-'))
+  seedVault(home2)
   const app2 = await electron.launch({
     args: [`--user-data-dir=${path.join(home2, 'userdata')}`, '--lang=zh-CN', ROOT],
     cwd: ROOT,

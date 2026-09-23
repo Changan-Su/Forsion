@@ -1,7 +1,7 @@
 // Amadeus「打开笔记」的统一门面:搜索/标签/快切/反链等一律走这里,别直接调 loadPage。
 // 语义(类 Obsidian):已有认领该笔记的编辑器 tab → 激活它;newTab(⌘点击)→ 新开 tab;
 // 一个编辑器都没有(全被关掉)→ 带 notePath 新开;否则在当前(最近活动)编辑器里加载。
-import { activePageScope, pageStoreFor, usePageStore } from '@amadeus/store/pageStore'
+import { activePageScope, pageStoreFor, setActivePageScope, usePageStore } from '@amadeus/store/pageStore'
 import { useWorkspace, activeMainPanel } from '@lcl/engine'
 import { amadeus } from '@amadeus/api'
 import { hasUnifiedInstance, unifiedHeadings, unifiedRevealBlock, unifiedRevealHeading } from '@amadeus/unified/lifecycle'
@@ -106,6 +106,10 @@ export async function openNote(path: string, opts?: { newTab?: boolean; reuseKey
     await waitForActive(path)
     return
   }
+  // 装进哪个面板,「当前这篇」(门面活动作用域)就指向哪个面板。这条分支不激活面板(焦点留在左栏树),
+  // effect ② 只在面板被激活时认领 —— 编辑器从没拿过焦点时门面还挂在启动那份 'main' 上:树高亮 / 状态栏 /
+  // 大纲 / 插件 getActivePage 全读启动那篇,v3 导航历史漏记,waitForActive 空等到超时(09-22)。
+  if (focused) setActivePageScope(focused.id)
   await pageStoreFor(focused?.id ?? activePageScope()).getState().loadPage(path)
   await waitForActive(path)
 }

@@ -49,7 +49,10 @@ function leafFromProps(props: IDockviewPanelProps): Leaf {
     loc: (__loc === 'left' || __loc === 'right' || __loc === 'bottom') ? __loc : 'main',
     params: userParams,
     setTitle: (t) => props.api.setTitle(t),
-    setParams: (p) => props.api.updateParameters({ ...raw, ...p }),
+    // 走 store 那份 makeLeaf.setParams(读实时 panel.params + refreshTabs + 记账布局)。视图就地换文件
+    // (编辑器认领笔记、阅读器换 PDF)走的是这里;此前只 updateParameters,mainTabs[].filePath 要等下一次
+    // 结构事件才跟上 → 侧栏对话默认引用挂不上 / 挂旧的那篇(09-22 check:chatside 6/7)。
+    setParams: (p) => useWorkspace.getState().leafById(props.api.id)?.setParams(p),
     close: () => props.api.close(),
   }
 }
