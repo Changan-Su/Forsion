@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { configureTangu } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
 import { loadSkillLoadout } from '../src/services/skillLoadout.js';
+import { SHARED_SKILL_ID_RE } from '../src/skills/localSkills.js';
 
 const profile = createTanguProfile({ sandboxMode: 'none' });
 const hostStub: any = new Proxy({}, { get: () => () => { throw new Error('host stub'); } });
@@ -44,7 +45,11 @@ afterEach(() => {
 describe('loadSkillLoadout — requestedSkillIds 加性(指针,不内联正文进 system)', () => {
   it('host 默认(无显式技能):全部本地技能进 deferred 目录,无 requested', async () => {
     const { enabledSkillIds, sections, requested } = await loadSkillLoadout('u', 'tangu', { execMode: 'host' });
-    expect([...enabledSkillIds].sort()).toEqual(['local:bar', 'local:baz', 'local:foo']);
+    // 09-22 起 host 默认目录还追加别的 agent 开了共享的技能(id `local:@owner/name`;coding 的包内置技能随包就开着共享,
+    // 不看 TANGU_HOME)。自己的三个仍须一个不少,多出来的只许是借用池里的形状。
+    const [own, borrowed] = [[...enabledSkillIds].filter((id) => !id.startsWith('local:@')).sort(), [...enabledSkillIds].filter((id) => id.startsWith('local:@'))];
+    expect(own).toEqual(['local:bar', 'local:baz', 'local:foo']);
+    expect(borrowed.every((id) => SHARED_SKILL_ID_RE.test(id))).toBe(true);
     expect(sections.join('\n')).toContain('Available Skills');
     expect(requested).toEqual([]);
   });
