@@ -87,6 +87,10 @@ vi.mock('node:fs', async (importOriginal) => {
 
 const sha = (s: string): string => createHash('sha256').update(s).digest('hex')
 const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 60))
+/** 「文件真被挪进 .sync-trash」这类**正向**的盘上副作用按条件等,不按固定 60ms:windows-2022 runner 上 rename 偶尔
+ *  慢过 60ms,v2.11.4 首轮就红在这里(重跑即绿)。只用于「等某件事发生」;断言「什么都没发生」的仍用 settle
+ *  (等久了也不会变绿,不存在抖动)。 */
+const DISK_WAIT = { timeout: 3000, interval: 20 }
 let stop: (() => unknown) | undefined
 
 beforeEach(async () => {
@@ -171,10 +175,11 @@ it('远端删除落到本地 = 挪进 .sync-trash 而不是硬删', async () => 
   const { mirror } = await bootMirror(files)
   env.remote = env.remote.filter((e) => e.path !== 'gone.md')
   env.sse!.onChange({ seq: 11, type: 'page', op: 'delete', path: 'gone.md', newPath: null, fileSeq: 2, origin: { client: 'other', actor: 'user' } })
-  await settle()
-  await expect(fs.access(path.join(mirror, 'gone.md'))).rejects.toThrow()
   const day = new Date().toISOString().slice(0, 10)
-  expect(await fs.readFile(path.join(mirror, '.sync-trash', day, 'gone.md'), 'utf8')).toBe('content of gone.md')
+  await vi.waitFor(async () => {
+    await expect(fs.access(path.join(mirror, 'gone.md'))).rejects.toThrow()
+    expect(await fs.readFile(path.join(mirror, '.sync-trash', day, 'gone.md'), 'utf8')).toBe('content of gone.md')
+  }, DISK_WAIT)
   expect(await fs.readFile(path.join(mirror, 'keep.md'), 'utf8')).toBe('content of keep.md')
 })
 
@@ -235,14 +240,18 @@ it('own 镜像根被挪走后重启:shadow 非空 → error 态,不造空根、�
 it('软删归档失败(rename EACCES)不退化成硬删:本地文件与 shadow 都留着', async () => {
   const { engine, mirror } = await bootMirror(['keep.md', 'gone.md'])
   env.renameFail = true
-  sseDelete('gone.md', 11); await settle()
+  sseDelete('gone.md', 11)
+  // job 失败进重试态(错误归类走既有 isNetworkErr),绝不是 idle。先等这次归档**真的试过并失败**,再看文件 ——
+  // 固定 60ms 时盘慢就还在 syncing(慢盘对照实测),「文件还在」只是因为还没轮到它,证明不了「失败不退化成硬删」。
+  await vi.waitFor(() => expect(['error', 'offline']).toContain(engine.getStatus().state), DISK_WAIT)
   expect(await fs.readFile(path.join(mirror, 'gone.md'), 'utf8')).toBe('content of gone.md')
-  expect(['error', 'offline']).toContain(engine.getStatus().state) // job 失败进重试态(错误归类走既有 isNetworkErr),绝不是 idle
   env.renameFail = false
-  await engine.restart(); await settle() // shadow 还跟踪着它 → 重试时按远端删除归档,而不是当新文件重新上传
-  await expect(fs.access(path.join(mirror, 'gone.md'))).rejects.toThrow()
+  await engine.restart() // shadow 还跟踪着它 → 重试时按远端删除归档,而不是当新文件重新上传
   const day = new Date().toISOString().slice(0, 10)
-  expect(await fs.readFile(path.join(mirror, '.sync-trash', day, 'gone.md'), 'utf8')).toBe('content of gone.md')
+  await vi.waitFor(async () => {
+    await expect(fs.access(path.join(mirror, 'gone.md'))).rejects.toThrow()
+    expect(await fs.readFile(path.join(mirror, '.sync-trash', day, 'gone.md'), 'utf8')).toBe('content of gone.md')
+  }, DISK_WAIT)
 })
 
 it('待确认名单跨重启粘性:restart 后低于阈值的残余照样等确认(shadow.pending)', async () => {
