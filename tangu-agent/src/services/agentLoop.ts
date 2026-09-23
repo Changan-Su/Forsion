@@ -22,6 +22,7 @@ import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery } from 
 import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, type ToolContext } from '../tools/registry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
+import { buildAgentRoster } from './agentRoster.js';
 import { AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
 import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
 import { SKETCH_SECTION, sketchEnabledFor, sketchTurnSignalFor } from '../tools/builtin/sketch.js';
@@ -1214,6 +1215,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           if (parts.length) systemParts.push('## Your Library (reference)\nLong-term reference material you maintain; use it as context.\n\n' + parts.join('\n\n'));
         } catch (e) { console.warn('[agent-core] cloud library inject failed:', e); }
       }
+    }
+    // 5c) 其他 Agent 名册(仅 host、非子代理、非团队成员 —— delegate / start_discussion 在那些 run 里本就不可见)。
+    if (execMode === 'host' && ps.hostExtras && !isTeamMember && !agentConfig.delegatedFrom) {
+      try { const roster = await buildAgentRoster(activeAgentSlug); if (roster) systemParts.push(roster); }
+      catch (e) { console.warn('[agent-core] agent roster skipped:', (e as Error)?.message || e); }
     }
     ctxMark('agentFolder');
     // Freeze a bounded Agent-scoped recall snapshot for this run (no embedding/network index).

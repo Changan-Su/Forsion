@@ -55,7 +55,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'loop', 'group', 'teamdup', 'teamapproval', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -606,6 +606,16 @@ try {
     return { ok: !ev.error && ev.done && sandbox && wrote.length === 0 && !manualInit, inconclusive: sandbox && !manualInit && !pointsToHistory,
       detail: ev.error || `${sandbox ? '指向了 Sandbox' : '没提 Sandbox(提示词的插件项目一节未生效)'};${wrote.length ? `却动了文件(${wrote.join(',')})` : '只答未改'};${manualInit ? '⚠️教用户手敲 git init(会把 History 面板变只读)' : '没让用户手建仓'};${pointsToHistory ? '指向了版本面板' : '未指向版本面板(不计红,读原话)'}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // 名册 + 借用(09-22):系统提示的「Other Agents」要让缺省 agent 知道 Coding 存在;技能目录的「Skills shared by other agents」
+  // 要让它能 use_skill 借到 coding 的共享技能(id 带主人 local:@coding/…)。判据:提到 coding + 真调了 use_skill + 取回的正文是那份技能。
+  await scenario('borrow', 'borrow 名册 + 借用其他 Agent 的共享技能', async () => {
+    const ev = await run(`live-borrow-${Date.now()}`, 'Which other named agents are listed for you? Give their slugs. Then load the shared skill whose id ends with "/forsion-webapp" using use_skill, and reply with the first heading line of that skill. Keep the whole reply short.');
+    const roster = /\bcoding\b/i.test(ev.content);
+    const used = ev.toolCalls.includes('use_skill');
+    const loaded = ev.toolResults.some((r) => r.name === 'use_skill' && !r.isError && /Forsion/.test(r.result));
+    return { ok: !ev.error && roster && used && loaded, detail: ev.error || `名册${roster ? '提到 coding' : '未提 coding'};use_skill ${used ? '已调用' : '未调用'};正文${loaded ? '取回' : '未取回'};工具 ${ev.toolCalls.join(',') || '无'}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
   await scenario('childchat', 'childchat 委派完整落库与原子会话续聊', async () => {

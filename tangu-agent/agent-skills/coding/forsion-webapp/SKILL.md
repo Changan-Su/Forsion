@@ -3,7 +3,10 @@ name: Forsion 网页构建约定
 description: 在 Forsion 的 Coding Space 里构建网页/前端应用时**必须先读**。讲清本环境的即时预览规则——importmap + esm.sh 拉任意 npm 包、可直接写 JSX/TSX(预览端自动转译)、无构建步骤、无 npm install、多文件结构、index.html 入口。写任何 web 代码前遵循本约定。
 version: 1.0.0
 category: Forsion
+shared: true
 ---
+
+> Scope: written for Forsion Coding Space's static preview runtime (files served as-is, .ts/.tsx transpiled on the fly, bare imports through an importmap to esm.sh, no bundler, no npm install). In a repository that has its own build system, follow that build system instead of these rules.
 
 # Forsion 网页构建约定
 

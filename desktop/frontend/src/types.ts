@@ -639,6 +639,8 @@ export interface SkillInfo {
   origin?: 'agent' | null
   /** 随包内置(含家目录里没被改过的镜像;用户改过的副本不算)。Agent 详情据此把内置技能收进折叠组;分类各写各的,不能当判据。 */
   builtin?: boolean
+  /** Agent 级技能开了共享(SKILL.md frontmatter `shared: true`):别的 Agent 能在技能目录里看到并借用。 */
+  shared?: boolean
 }
 
 export interface ToolsResponse {

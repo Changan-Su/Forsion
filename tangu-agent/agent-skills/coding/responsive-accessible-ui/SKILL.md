@@ -3,7 +3,10 @@ name: 响应式布局与无障碍
 description: 当在 Coding Space 构建或修改任何网页 UI(页面、布局、组件、表单、弹窗/对话框、导航、图标按钮)时使用,提供移动优先响应式布局、flexbox/grid 套路、clamp 流式尺寸、语义化 HTML、ARIA 取舍、键盘可达与焦点管理(focus trap)、WCAG 对比度、prefers-reduced-motion/prefers-color-scheme、表单可访问性、触摸目标 44×44 等 a11y 能力,附可直接复制的 CSS/JSX 片段与交付前自检清单。
 version: 1.0.0
 category: 无障碍
+shared: true
 ---
+
+> Scope: written for Forsion Coding Space's static preview runtime (files served as-is, .ts/.tsx transpiled on the fly, bare imports through an importmap to esm.sh, no bundler, no npm install). In a repository that has its own build system, follow that build system instead of these rules.
 
 # 响应式布局与无障碍(a11y)
 

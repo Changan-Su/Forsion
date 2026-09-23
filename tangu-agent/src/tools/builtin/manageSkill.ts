@@ -33,10 +33,11 @@ async function fileExists(p: string): Promise<boolean> {
 /** 组装 SKILL.md:frontmatter(name + 可选 description + origin)+ 正文。frontmatter 值强制单行(解析器按行读)。
  *  `origin: agent` = 来源标识:这个工具只会被 agent 调用,create/update 一律打上(用户手写后被 agent 改过的也算「agent 动过」),
  *  localSkills.toRecord 透传成 SkillRecord.origin → 桌面技能列表打「自建」徽标。没有它,用户级自建技能与手写技能无从分辨(09-18 取证)。 */
-function composeSkillMd(name: string, description: string, body: string): string {
+function composeSkillMd(name: string, description: string, body: string, shared = false): string {
   const lines = ['---', `name: ${oneLine(name)}`];
   const d = oneLine(description);
   if (d) lines.push(`description: ${d}`);
+  if (shared) lines.push('shared: true'); // 用户手加的共享开关(跨 agent 借用,09-22):update 重写 frontmatter 时保留,别静默抹掉
   lines.push('origin: agent', '---', '', String(body ?? '').trim(), '');
   return lines.join('\n');
 }
@@ -134,14 +135,16 @@ export const manageSkillProvider: ToolProvider = {
             // name/description:create 用给定值;update 缺省沿用现有 frontmatter(免得每次都重报)。
             let name = args.name != null ? String(args.name) : '';
             let description = args.description != null ? String(args.description) : '';
-            if (action === 'update' && (!name || args.description == null)) {
+            let shared = false;
+            if (action === 'update') {
               const prev = parseFrontmatter(await fs.readFile(skillMdPath(root, slug), 'utf-8').catch(() => '')).meta;
               if (!name) name = prev.name || slug;
               if (args.description == null) description = prev.description || '';
+              shared = /^(true|yes|1)$/i.test(prev.shared || '');
             }
 
             await fs.mkdir(path.join(root, slug), { recursive: true });
-            await fs.writeFile(skillMdPath(root, slug), composeSkillMd(name || slug, description, body), 'utf-8');
+            await fs.writeFile(skillMdPath(root, slug), composeSkillMd(name || slug, description, body, shared), 'utf-8');
             return `已${action === 'create' ? '创建' : '更新'}技能: ${slug}(${name || slug})${scopeTag}。将经 use_skill 按需加载。`;
           }
 

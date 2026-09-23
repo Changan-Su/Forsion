@@ -19,7 +19,10 @@
 .agent-portrait { display: flex; align-items: center; justify-content: center; flex-shrink: 0; width: 96px; height: 104px; color: var(--accent); border-radius: var(--radius-lg, 20px); background: var(--overlay-light); overflow: hidden; }
 .agent-portrait img { width: 100%; height: 100%; object-fit: cover; }
 .agent-portrait.small { width: 36px; height: 40px; border-radius: var(--radius-sm, 8px); }
-.agent-character-id { font-size: 10px; color: var(--text-muted); overflow-wrap: anywhere; }
+.agent-character-id { display: block; width: calc(100% + 7px); min-width: 0; margin-left: -7px; padding: 1px 6px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm, 8px); text-overflow: ellipsis; transition: background 160ms ease, border-color 160ms ease; }
+.agent-character-id:not([readonly]):hover { background: var(--overlay-light); }
+.agent-character-id:not([readonly]):focus { color: var(--text); background: var(--bg-card); border-color: var(--accent-ink); }
+.agent-character-id[readonly] { cursor: default; }
 .agent-character-identity { min-width: 0; flex: 1; }
 /* 头部即「基本信息」(09-18 从配置页并入):头像点开即换,名称 / 简介原地编辑。
  * 静息态与纯展示一致 —— 透明 1px 边 + 透明底(去边写 border-color,盒模型不变、状态切换不位移);悬停给一层底,

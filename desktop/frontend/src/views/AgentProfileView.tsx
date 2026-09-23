@@ -1,4 +1,4 @@
-import { agentDescription } from '../components/builtinAgentDescriptions'
+import { agentDescription, isStockAgent } from '../components/builtinAgentDescriptions'
 import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent, type CSSProperties } from 'react'
 import { BookOpen, Bot, CalendarClock, Check, ChevronRight, ExternalLink, ImageUp, Loader2, Plug, Search, Settings2, Sparkles, Sprout, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
@@ -6,7 +6,7 @@ import { activeMainPanel, useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine/types'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { deleteAgentAvatar, fetchAgentAvatar, getAgentHarness, listSkills, listTools, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
+import { deleteAgentAvatar, fetchAgentAvatar, getAgentHarness, listSkills, listTools, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
 import { openAgentProfile } from './agentProfileNav'
 import { AgentMemoryPanel } from '../components/AgentMemoryPanel'
 import { AgentMemoryModal } from '../components/AgentMemoryModal'
@@ -106,6 +106,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
   const [growth, setGrowth] = useState<Growth>(evolutionJumpAt ? 'evolution' : 'memory')
   const [visitedMemory, setVisitedMemory] = useState(false)
   const [draft, setDraft] = useState(agent)
+  const [slugDraft, setSlugDraft] = useState(agent.slug) // 两处挂载点都 key={agent.slug},改名后随重挂归零
   const [dirty, setDirty] = useState(false)
   const [busy, setBusy] = useState(false)
   const [avatarBusy, setAvatarBusy] = useState(false)
@@ -195,6 +196,48 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
       setNotice(t('agentProfile.avatarRemoved'))
     } catch (e: any) { setError(String(e.message || e)) } finally { setAvatarBusy(false) }
   }
+  // 文件夹名 = slug = 主键。改名走引擎的 renameAgent(搬目录 + 改会话 / 消息 / 团队 / 自动化 / 通道里的引用);
+  // 这里只把本地 store 里已加载的会话配置一并改掉,免得头像 / 昵称在重拉会话前按「已删 agent」渲染。
+  // 详情栏(compact)不开放:那里连「在 Agents 中打开」都要一跳,改主键这种事放在全页。
+  const canRename = !compact && !!agent.libraryDir && !isStockAgent(agent.slug)
+  const rename = async () => {
+    const old = agent.slug
+    const next = slugDraft.trim()
+    if (busy || next === old) return
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/.test(next)) { setError(t('agentProfile.renameInvalid')); return }
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const { agent: renamed, warnings } = await renameAgentDef(s.cfg, old, next)
+      const fix = <C extends AgentConfig | null | undefined>(c: C): C => {
+        if (!c) return c
+        const out = { ...c }
+        if (out.agentSlug === old) out.agentSlug = next
+        if (out.soloAgentSlug === old) out.soloAgentSlug = next
+        if (out.groupAgents?.includes(old)) out.groupAgents = out.groupAgents.map((x) => (x === old ? next : x))
+        return out
+      }
+      useApp.setState((a) => {
+        const agentAvatars = { ...a.agentAvatars }
+        if (agentAvatars[old]) { agentAvatars[next] = agentAvatars[old]; delete agentAvatars[old] }
+        return {
+          agentAvatars,
+          agentDefs: a.agentDefs.map((v) => (v.slug === old ? renamed : v)),
+          defaultAgentSlug: a.defaultAgentSlug === old ? next : a.defaultAgentSlug,
+          newChatCfg: fix(a.newChatCfg),
+          configBySession: Object.fromEntries(Object.entries(a.configBySession).map(([k, v]) => [k, fix(v)])),
+          sessions: a.sessions.map((x) => ({ ...x, agent_config: fix(x.agent_config) })),
+          archivedSessions: a.archivedSessions.map((x) => ({ ...x, agent_config: fix(x.agent_config) })),
+        }
+      })
+      useApp.getState().toast(warnings.length ? t('agentProfile.renameWarnings', { slug: next, detail: warnings.join('; ') }) : t('agentProfile.renamed', { slug: next }), warnings.length > 0)
+      openAgentProfile(next) // 视图按 agentSlug 参数选人,不换参数会退回名册第一个
+    } catch (e: any) {
+      if (!alive.current) return
+      const known: Record<string, string> = { builtin: 'agentProfile.folderFixed', exists: 'agentProfile.renameExists', cloud_synced: 'agentProfile.renameCloudSynced', plugin_seeded: 'agentProfile.renamePluginSeeded', busy: 'agentProfile.renameBusy', invalid_slug: 'agentProfile.renameInvalid' }
+      setError(known[e?.code] ? t(known[e.code]) : String(e?.message || e))
+      setSlugDraft(old)
+    } finally { if (alive.current) setBusy(false) }
+  }
   const save = async () => {
     if (busy || !draft.name.trim()) return
     setBusy(true); setError('')
@@ -207,10 +250,10 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
   const equipment = (kind: 'skills' | 'mcp') => {
     const key = kind === 'skills' ? 'enabledSkillIds' : 'enabledMcpServers'
     const selected = draft[key]
-    type Entry = { id: string; name: string; description: string; origin: 'agent' | null; builtin: boolean }
-    const entries: Entry[] = kind === 'skills' ? skills.map((x) => ({ id: x.id, name: x.name, description: x.description, origin: x.origin ?? null, builtin: !!x.builtin }))
-      : mcp.map((x) => ({ id: x.server, name: x.server, description: `${x.status} · ${x.tools.length}`, origin: null, builtin: false }))
-    for (const item of selected || []) if (!entries.some((e) => e.id === item)) entries.push({ id: item, name: item, description: t('agentProfile.unavailable'), origin: null, builtin: false })
+    type Entry = { id: string; name: string; description: string; origin: 'agent' | null; builtin: boolean; shared: boolean }
+    const entries: Entry[] = kind === 'skills' ? skills.map((x) => ({ id: x.id, name: x.name, description: x.description, origin: x.origin ?? null, builtin: !!x.builtin, shared: !!x.shared }))
+      : mcp.map((x) => ({ id: x.server, name: x.server, description: `${x.status} · ${x.tools.length}`, origin: null, builtin: false, shared: false }))
+    for (const item of selected || []) if (!entries.some((e) => e.id === item)) entries.push({ id: item, name: item, description: t('agentProfile.unavailable'), origin: null, builtin: false, shared: false })
     const q = query.trim().toLowerCase()
     const on = (e: Entry): boolean => !selected || selected.includes(e.id)
     const filtered = entries.filter((e) => (!enabledOnly || on(e)) && `${e.name} ${e.description}`.toLowerCase().includes(q))
@@ -219,7 +262,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
     const own = filtered.filter((e) => !e.builtin)
     const stock = filtered.filter((e) => e.builtin)
     const row = (entry: Entry) => <EquipmentRow key={entry.id} name={entry.name} description={entry.description} checked={on(entry)} tinted
-      chip={entry.origin === 'agent' ? t('settings.agents.selfAuthored') : undefined}
+      chip={entry.origin === 'agent' ? t('settings.agents.selfAuthored') : entry.shared ? t('settings.agents.sharedSkill') : undefined}
       onChange={(checked) => { const ids = selected || entries.map((x) => x.id); patch({ [key]: checked ? [...new Set([...ids, entry.id])] : ids.filter((x) => x !== entry.id) }) }} />
     return <>
       <div className="profile-list-toolbar">
@@ -280,7 +323,10 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0 }
         </label>
         {s.avatar && <button type="button" className="agent-portrait-remove" title={t('agentProfile.avatarRemove')} aria-label={t('agentProfile.avatarRemove')} disabled={avatarBusy} onClick={() => void removeAvatar()}><X size={11} /></button>}
       </div>
-      <div className="agent-character-identity"><span className="agent-character-id">{agent.slug}</span>
+      <div className="agent-character-identity">
+        <input className="agent-character-id" aria-label={t('agentProfile.folder')} title={t(canRename ? 'agentProfile.folderHint' : 'agentProfile.folderFixed')} value={slugDraft} maxLength={64} spellCheck={false} readOnly={!canRename} tabIndex={canRename ? undefined : -1} disabled={busy}
+          onChange={(e) => setSlugDraft(e.target.value)} onBlur={() => void rename()}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur() } else if (e.key === 'Escape') { e.preventDefault(); setSlugDraft(agent.slug) } }} />
         <input className="agent-character-name" aria-label={t('agentProfile.name')} placeholder={t('agentProfile.name')} title={draft.name} value={draft.name} maxLength={120} disabled={busy} onChange={(e) => patch({ name: e.target.value })} />
         <textarea className="agent-character-desc" aria-label={t('agentProfile.description')} placeholder={t('agentProfile.descriptionPlaceholder')} rows={2} value={agentDescription({ slug: agent.slug, description: draft.description }, t)} disabled={busy} onChange={(e) => patch({ description: e.target.value })} />
         <span className={`agent-state${s.running ? ' working' : ''}`}><i />{t(!s.connected ? 'agentProfile.offline' : s.running ? 'agentProfile.working' : 'agentProfile.standby')}</span></div>

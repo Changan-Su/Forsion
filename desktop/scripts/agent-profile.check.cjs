@@ -33,9 +33,12 @@ let harnessEmpty = false // 置真后 GET harness 回 entries: [] —— 「还�
 const historianPolls = { main: 0, solo: 0 }
 const nomination = (id, sessionId) => ({ id, action: 'harness_candidates', detail: 'Check the marker file before answering', session_ref: sessionId, created_at: '2026-09-18 10:00:00' })
 let saved = null, sessionModelSaved = null, avatarWrites = 0, avatarDeletes = 0
+const renamed = [] // POST /rename 收到的目标 slug,按序
 let app
 async function run() {
   const stub = await startStubEngine({ agents, sessions: [main, solo], messages: [{ id: 'main-user', role: 'user', content: 'Plan the research', timestamp: 1 }, { id: 'main-answer', role: 'model', content: 'The team is ready.', timestamp: 2 }], override: async ({ path: p, method, url: u, body }) => {
+    // 改文件夹名(slug):引擎搬目录后回新定义;这里只回显,前端要自己把 store 里的 slug 换掉。
+    if (p.startsWith('/agent/agents/') && p.endsWith('/rename') && method === 'POST') { const next = (await body()).slug; renamed.push(next); return { agent: { ...agents[1], slug: next }, warnings: [] } }
     if (p === `/agent/sessions/${solo.id}` && method === 'PATCH') { const patch = await body(); sessionModelSaved = patch.model_id; Object.assign(solo, patch); return { session: solo } }
     if (p.endsWith('/memory/dream')) return { config: { enabled: true, modelId: '', timeoutMs: 60000, maxOutputTokens: 4096, intervalHours: 6 }, status: { state: 'idle', running: false }, candidates: 0 }
     if (p.endsWith('/memory/revisions')) return { revisions: [] }
@@ -57,7 +60,7 @@ async function run() {
     // 「自建」徽标只认 origin:'agent'(manage_skill 写的);category:'agent' 的包内置专属技能(如 bluebird-video)没有徽标 —— 负对照。
     // builtin:true 的两条 = 随包内置技能(描述照真实内置的长度写):默认收在合上的「内置技能」组里,搜索命中才自动展开。
     if (p === '/agent/skills') return { skills: [{ id: 'local:research', name: 'Research notebook', description: 'Gather and cite evidence', category: 'agent' }, { id: 'local:writing', name: 'Writing', description: 'Write clear reports', origin: 'agent' },
-      { id: 'local:git-workflow', name: 'Git workflow', description: LONG_DESC, category: '开发流程', builtin: true }, { id: 'local:web-research', name: 'Web research', description: LONG_DESC, category: '信息检索', builtin: true }] }
+      { id: 'local:git-workflow', name: 'Git workflow', description: LONG_DESC, category: '开发流程', builtin: true, shared: true }, { id: 'local:web-research', name: 'Web research', description: LONG_DESC, category: '信息检索', builtin: true }] }
     // 日程:一条每天自动执行(锚点在过去 → 下一次要滚到未来)、一条已过期的一次性计划;规则两条,只有一条的动作链会叫醒 research(另一条是负对照)。
     if (p === '/agent/special/schedule' && method === 'GET') return { schedules: [{ slug: 'research', name: 'Research', db: { version: 1, name: 'Schedule', columns: [], rows: [] }, entries: [
       { id: 'sch-daily', name: 'Morning digest', date: '2026-01-01T09:00', repeat: '1d', auto: true, prompt: 'Summarize new primary sources.', description: '', todo: false, lastRun: '2026-09-18T09:00:03.000Z' },
@@ -343,6 +346,15 @@ async function run() {
     const profile = win.locator('[data-agent-profile="research"]')
     await profile.locator('.agent-section-nav button').filter({ hasText: '技能' }).click()
     assert.equal(await profile.getByLabel('Writing', { exact: false }).isChecked(), false)
+    // 开了共享(SKILL.md frontmatter shared: true)的技能打「共享」徽标;同组没开的不打。自建徽标优先(Writing 那条仍是「自建」)。
+    const fullStock = profile.locator('[data-equipment-group="builtin"]')
+    await fullStock.locator('summary').click()
+    const sharedRow = fullStock.locator('.agent-equipment-item').filter({ hasText: 'Git workflow' })
+    assert.equal(await sharedRow.locator('.harness-kind').innerText(), '共享', 'A shared skill is badged')
+    assert.equal(await fullStock.locator('.agent-equipment-item').filter({ hasText: 'Web research' }).locator('.harness-kind').count(), 0, 'An unshared skill in the same group is not badged')
+    assert.equal(await profile.locator('.agent-equipment-item').filter({ hasText: 'Writing' }).locator('.harness-kind').innerText(), '自建')
+    await sharedRow.screenshot({ path: path.join(home, 'skill-shared-chip.png') })
+    await fullStock.locator('summary').click()
     await profile.getByLabel('Writing', { exact: false }).check()
     await profile.getByLabel('Writing', { exact: false }).uncheck()
     await profile.getByRole('button', { name: '保存配置', exact: true }).click()
@@ -356,6 +368,25 @@ async function run() {
     await profile.locator('.agent-section-nav button').filter({ hasText: '配置' }).click()
     await win.waitForTimeout(220)
     await win.screenshot({ path: path.join(home, 'agents-light.png') })
+    // 文件夹名(slug)原地改名:内置 xyra 只读;非法串本地拦下不发请求;合法 → POST /rename,视图与名册按新 slug 重挂;改回去让后面的定位器继续有效。
+    await win.locator('.agents-roster-item').filter({ hasText: 'Xyra' }).click()
+    assert.equal(await win.locator('[data-agent-profile="xyra"] .agent-character-id').getAttribute('readonly'), '', 'built-in agent keeps its folder name')
+    await win.locator('.agents-roster-item').filter({ hasText: 'Research' }).click()
+    const folder = profile.getByLabel('文件夹名', { exact: true })
+    assert.equal(await folder.getAttribute('readonly'), null)
+    await folder.fill('Bad Slug'); await folder.press('Enter')
+    await profile.locator('.agent-profile-error').filter({ hasText: '只能用小写字母' }).waitFor()
+    assert.deepEqual(renamed, [], 'invalid slug never reaches the engine')
+    await folder.fill('research-2'); await folder.press('Enter')
+    const profile2 = win.locator('[data-agent-profile="research-2"]')
+    await profile2.waitFor()
+    assert.deepEqual(renamed, ['research-2'])
+    assert.equal(await win.locator('.agents-roster-item.selected').filter({ hasText: 'Research' }).count(), 1, 'roster keeps the renamed agent selected')
+    assert.equal(await win.locator('.agents-roster-item').count(), 2, 'no duplicate roster row after rename')
+    await profile2.locator('.agent-character-hero').screenshot({ path: path.join(home, 'hero-rename.png') })
+    await profile2.getByLabel('文件夹名', { exact: true }).fill('research'); await profile2.getByLabel('文件夹名', { exact: true }).press('Enter')
+    await profile.waitFor()
+    assert.deepEqual(renamed, ['research-2', 'research'])
     await win.evaluate(() => { document.documentElement.setAttribute('data-mode', 'dark'); document.documentElement.classList.add('dark') })
     await win.waitForTimeout(220)
     await win.screenshot({ path: path.join(home, 'agents-dark.png') })

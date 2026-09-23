@@ -52,6 +52,18 @@ describe('manage_skill', () => {
     expect(raw).toContain('new steps');
   });
 
+  it('update keeps a hand-added shared flag; create never adds one', async () => {
+    await fs.mkdir(path.join(home, 'skills', 'lendable'), { recursive: true });
+    await fs.writeFile(skillMd('lendable'), '---\nname: Lendable\ndescription: d\nshared: true\n---\nold body\n');
+    expect(await run({ action: 'update', slug: 'lendable', instructions: 'new body' })).toContain('已更新');
+    const raw = await fs.readFile(skillMd('lendable'), 'utf-8');
+    expect(raw).toContain('shared: true');
+    expect(raw).toContain('new body');
+    await run({ action: 'create', name: 'Plain One', instructions: 'x' });
+    expect(await fs.readFile(skillMd('plain-one'), 'utf-8')).not.toContain('shared');
+    for (const slug of ['lendable', 'plain-one']) await run({ action: 'delete', slug }); // 末尾用例要看到「no user skills」
+  });
+
   it('rejects path-traversal slugs', async () => {
     expect(await run({ action: 'delete', slug: '../../etc/passwd' })).toContain('合法 slug');
     expect(await run({ action: 'update', slug: '../x', instructions: 'y' })).toContain('合法 slug');
