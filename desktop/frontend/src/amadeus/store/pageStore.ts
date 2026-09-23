@@ -1806,7 +1806,14 @@ export function disposePageStoreScope(scope: string): void {
   // 恒排第一(门面最先建它)→ 总落回 restoreVault 装进 'main' 的启动页,跟主区显示的对不上(09-23)。
   const i = claimed.indexOf(scope)
   if (i >= 0) claimed.splice(i, 1)
-  if (activePageScope() === scope) setActivePageScope(claimed[claimed.length - 1] ?? MAIN_SCOPE)
+  if (activePageScope() === scope) {
+    const next = claimed[claimed.length - 1] ?? MAIN_SCOPE
+    // 退回 'main' = 没有面板可回了。它装的启动页谁也没在看 → 交出去(先落盘再清),门面显示「无当前笔记」,
+    // 别让树高亮 / 插件 getActivePage 拿到一篇旧的。宿主若还有编辑器,会立刻把门面收养走(amadeusViews ②b)。
+    const main = pageStoreFor(MAIN_SCOPE).getState()
+    if (next === MAIN_SCOPE && main.activePage) void main.releasePage(main.activePage)
+    setActivePageScope(next)
+  }
 }
 export { disposePageStoreScope as disposePageScope }
 

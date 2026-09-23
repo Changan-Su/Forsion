@@ -84,12 +84,15 @@ describe('活动面板关掉后门面的退路', () => {
     expect(m.usePageStore.getState().activePage).toBe('Gamma.md')
   })
 
-  it('认领过的都关了才回 main', async () => {
+  it('认领过的都关了才回 main,且把 main 里那篇启动页交出去(门面 = 无当前笔记)', async () => {
     const m = await freshStore()
-    m.pageStoreFor('e1')
+    m.pageStoreFor(m.MAIN_SCOPE).setState({ activePage: 'Alpha.md' })
+    m.pageStoreFor('e1').setState({ activePage: 'Gamma.md' })
     m.setActivePageScope('e1')
     m.disposePageStoreScope('e1')
     expect(m.activePageScope()).toBe(m.MAIN_SCOPE)
+    await settle()
+    expect(m.usePageStore.getState().activePage).toBeNull()
   })
 })
 

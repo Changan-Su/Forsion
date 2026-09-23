@@ -12,6 +12,11 @@
  *        (修前:dispose 改投 stores 里第一个 = 'main')
  *   F4 夹具:聚焦 Gamma → ⌘\ 分屏 → 树上开 Beta 进右组
  *   F5 ⚠️ 关掉右组的 Beta(整组没了,Dockview 不激活左组):树亮左组的 Gamma
+ *   (以下每段先切 Tangu 再切回:编辑器全部重挂、认领历史清空,只能靠收养)
+ *   F8 ⚠️ 前台是新标签页、Gamma 只剩后台标签:树仍亮 Gamma
+ *   F6 夹具:左组 [新标签页, Beta] | 右组 Gamma(右组那份从没被认领过)
+ *   F7 ⚠️ 关掉 Beta、左组顶上来新标签页:树亮右组看得见的 Gamma(Codex 评审的场景)
+ *   F9 ⚠️ 最后一个编辑器也关掉:树什么都不亮 —— 'main' 里的启动页已交出,不再冒出来
  *
  * 判门面只读 DOM(树行 .active),不信 store 自证。三篇正文长度不同,状态栏字数也能认出是哪篇(写进 detail)。
  * 夹具换 Beta 进标签用树行点击:焦点留在左栏,正是「编辑器没被激活」这条路。
@@ -99,13 +104,14 @@ async function main() {
 
     const rowIs = (name) => (s) => s.row.length === 1 && s.row[0] === name
     const openRow = async (name) => { await win.locator('.t2s-srow', { hasText: name }).first().click(); await win.waitForTimeout(1800) }
-    const closeTab = async (name) => {
-      const hit = await win.evaluate((n) => {
-        const t = [...document.querySelectorAll('.wb-tab')].reverse().find((e) => (e.querySelector('.wb-tab-name')?.textContent || '').trim() === n)
+    const closeTab = async (name, which = 'last') => {
+      const hit = await win.evaluate(([n, w]) => {
+        const all = [...document.querySelectorAll('.wb-tab')]
+        const t = (w === 'first' ? all : all.reverse()).find((e) => (e.querySelector('.wb-tab-name')?.textContent || '').trim() === n)
         const x = t && t.querySelector('.wb-tab-close')
         if (x) x.click()
         return !!x
-      }, name)
+      }, [name, which])
       if (!hit) throw new Error(`找不到「${name}」标签的关闭钮 —— 选择器过时就当场红,别让夹具半成品混过断言`)
       await win.waitForTimeout(1800)
     }
@@ -132,6 +138,37 @@ async function main() {
     await closeTab('Beta')
     const f5 = await state()
     check('⚠️F5 关掉右组的 Beta(整组没了):树亮左组剩下的 Gamma', f5.groups === 1 && !f5.tabs.includes('Beta') && rowIs('Gamma')(f5), JSON.stringify(f5))
+
+    // ── 往返后的收养人(Codex 评审):切到 Tangu 再切回 → 编辑器全部重挂、认领历史清空,只能靠 ②b 收养 ──
+    // ⚠️ 组头的「+」一律开在主区第一组,点哪一组的都一样(实测);要把新标签放进哪组只能靠这个顺序安排。
+    const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+    const roundTrip = async () => {
+      await win.locator('.rb-space[title="Tangu"]').first().click({ timeout: 15_000 }); await win.waitForTimeout(2500)
+      await win.locator('.rb-space[title="Note"]').first().click({ timeout: 15_000 }); await win.waitForTimeout(3000)
+    }
+    // F8:单组 [Gamma, 新标签页],前台切到新标签页再往返 → 主区没有前台编辑器,Gamma 只在后台
+    await win.locator('.wb-tab', { hasText: '新建标签页' }).first().click(); await win.waitForTimeout(800)
+    await roundTrip()
+    const f8 = await state()
+    check('⚠️F8 往返后前台是新标签页、Gamma 只在后台:树亮 Gamma,不落回启动页', f8.tabs.includes('Gamma') && !f8.active.includes('Gamma') && rowIs('Gamma')(f8), JSON.stringify(f8))
+
+    // F6/F7:左组 [新标签页, Beta] | 右组 [Gamma](右组那份从没被认领过)
+    await win.locator('.wb-tab', { hasText: 'Gamma' }).first().click(); await win.waitForTimeout(800)
+    await win.keyboard.press(`${mod}+Backslash`); await win.waitForTimeout(1500) // 右组 = Gamma 副本
+    await win.click('.dv-new-tab'); await win.waitForTimeout(900) // 开进左组
+    await openRow('Beta') // 左组前台是空白新标签 → 就地变成 Beta
+    await closeTab('Gamma', 'first') // 关左组那份 Gamma
+    await roundTrip()
+    const f6 = await state()
+    check('F6 夹具:往返后左组 [新标签页, Beta]、右组 Gamma', f6.groups === 2 && f6.active.includes('Beta') && f6.active.includes('Gamma') && f6.tabs.filter((t) => t === 'Gamma').length === 1, JSON.stringify(f6))
+    await closeTab('Beta')
+    const f7 = await state()
+    // 左组顶上来的是新标签页(activeMainPanel 不是编辑器),认领过的都关了 → 收养人得是右组看得见的 Gamma
+    check('⚠️F7 关掉 Beta、左组剩新标签页:树亮右组看得见、从没认领过的 Gamma', f7.groups === 2 && rowIs('Gamma')(f7), JSON.stringify(f7))
+
+    await closeTab('Gamma')
+    const f9 = await state()
+    check('⚠️F9 最后一个编辑器也关了:树上什么都不亮,启动页不再冒出来', !f9.tabs.includes('Gamma') && f9.row.length === 0, JSON.stringify(f9))
   } catch (e) {
     check('台架自身跑完', false, String(e && e.stack || e))
   } finally {

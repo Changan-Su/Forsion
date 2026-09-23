@@ -2136,8 +2136,15 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     }
   }
   const isActiveLeaf = useWorkspace((s) => s.mainTabs.find((t) => t.id === leaf.id)?.active ?? false)
-  // 主区「当前」编辑器:焦点在侧栏时 = 最后活动主区组的前台 tab(openNote 的落点也按它)。单列壳 api 恒 null。
-  const isMainCurrent = useWorkspace((s) => !!s.api && activeMainPanel(s.api)?.id === leaf.id)
+  // 门面无主时该谁收养(各编辑器按同一份 mainTabs 算,恒只有一个 true):主区当前面板(焦点在侧栏时 =
+  // 最后活动主区组的前台 tab,openNote 的落点也按它)是编辑器就是它;否则(新标签页 / 聊天)取主区第一个
+  // 前台编辑器 —— 分屏另一半看得见的那篇;再没有就取第一个编辑器(藏在后台的标签)。单列壳 api 恒 null,不参与。
+  const isFacadeHeir = useWorkspace((s) => {
+    if (!s.api) return false
+    const am = activeMainPanel(s.api)
+    const eds = s.mainTabs.filter((t) => t.type === 'amadeus-editor')
+    return (eds.find((t) => t.id === am?.id) ?? eds.find((t) => t.front) ?? eds[0])?.id === leaf.id
+  })
   const facadeScope = useActivePageScope()
   const notePath = typeof leaf.params.notePath === 'string' ? leaf.params.notePath : null
   const prevActiveRef = useRef(false)
@@ -2325,12 +2332,12 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     prevActiveRef.current = isActiveLeaf
   }, [isActiveLeaf, leaf.id])
   // ②b 门面还挂在无主的 'main' 上(没有哪个编辑器被激活过 —— Note Space 配方最后把焦点给了左栏树;
-  //    或认领过的面板全关了)→ 主区当前编辑器收养它。否则树高亮 / 状态栏读的是 restoreVault 装进 'main'
-  //    的启动页,和主区显示的(欢迎页或另一篇)对不上(09-23)。只收养无主的,不跟已认领的面板抢。
-  //    等 vaultRoot 就位再收:restoreVault 经门面调用,抢在它前面收养 = 启动页装进本面板、欢迎页被顶掉。
+  //    或认领过的面板全关了)→ 由上面算出的那个编辑器收养。否则树高亮 / 状态栏读的是 restoreVault 装进
+  //    'main' 的启动页,和主区显示的(欢迎页或另一篇)对不上(09-23)。只收养无主的,不跟已认领的面板抢。
+  //    等 vaultRoot 就位再收:restoreVault 经门面调用,抢在它前面收养 = 启动页装进本面板、欢迎页被顶掉(实测)。
   useEffect(() => {
-    if (isMainCurrent && facadeScope === MAIN_SCOPE && vaultRoot) setActivePageScope(leaf.id)
-  }, [isMainCurrent, facadeScope, vaultRoot, leaf.id])
+    if (isFacadeHeir && facadeScope === MAIN_SCOPE && vaultRoot) setActivePageScope(leaf.id)
+  }, [isFacadeHeir, facadeScope, vaultRoot, leaf.id])
 
   // ③ 本面板内发生导航(在活动状态下被 openNote 装了新笔记)→ 认领它(写回 params + 标题)。
   //    插件文件类型(如 .mindmap.md)也会占用 activePage,但它绝不是笔记 → 不认领,
