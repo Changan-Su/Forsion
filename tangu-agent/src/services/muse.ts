@@ -730,9 +730,19 @@ async function tick(): Promise<void> {
     if (!cfg.modelId) { lastRunning = false; log('已启用但无可用模型(本地未选且云端无后台默认),跳过'); return; }
     // 播种/自愈 Muse 系统 agent 文件夹(幂等;首次创建时一次性迁移旧自定义 prompt)。
     await ensureMuseAgent(legacyMusePrompt()).catch((e: any) => log(`播种 muse agent 失败:${e?.message || e}`));
+    const userId = museUserId();
+    // Muse 自己定的休眠(set_next_wake)只挡心跳:规则命中、到期日程照常起。
+    // 睡着时**每个巡检**都看用户回没回来(一次查询 + 读至多三天的活动文件):回来了就清掉休眠,心跳照常判。
+    // 放在运行时段闸与让位闸**之前**:用户正聊着天(让位)或在时段外时也要清,否则状态一直挂着「休眠中」、
+    // 之后的规则周期还会收到过时的「休眠照旧」提示(Codex 09-24 两轮)。
+    let sleep = await getMuseSleep().catch(() => null);
+    if (sleep && (await userActiveSince(userId, sleep.setAt, sleep.minuteLines))) {
+      log(`用户回来了,提前结束休眠(原定到 ${localTime(new Date(sleep.until))})`);
+      await setMuseSleep(null).catch((e: any) => log(`清休眠失败:${e?.message || e}`));
+      sleep = null;
+    }
     if (!isWithinActiveHours(cfg, nowHour())) { log(`不在运行时段(当前 ${nowHour()} 时),跳过`); return; }
 
-    const userId = museUserId();
     await sendDailyDigestIfDue(cfg, userId);
     // 后台让位：用户有进行中的 run → 不与之抢模型账号/速率，本轮跳过（下次巡检再来）。
     if (await anyUserRunActive()) { lastRunning = false; log('用户有进行中的 run，本轮让位'); return; }
@@ -742,17 +752,7 @@ async function tick(): Promise<void> {
     // 安静周期也要在 Journal 里留一笔,而不是静默消失。
     let dueMuse: ScheduleEntry[] = [];
     try { dueMuse = await museDueSchedules(); } catch (e: any) { log(`读自己的日程失败:${e?.message || e}`); }
-    // Muse 自己定的休眠(set_next_wake)只挡心跳:规则命中、到期日程照常起。
-    // 睡着时**每个巡检**都看用户回没回来(一次查询 + 读至多三天的活动文件):回来了就清掉休眠,心跳照常判 ——
-    // 只在心跳到点时才看的话,状态会一直挂着「休眠中」,规则周期也会收到过时的「休眠照旧」提示(Codex 09-24)。
-    const now = Date.now();
-    let sleep = await getMuseSleep(now).catch(() => null);
-    if (sleep && (await userActiveSince(userId, sleep.setAt, sleep.minuteLines))) {
-      log(`用户回来了,提前结束休眠(原定到 ${localTime(new Date(sleep.until))})`);
-      await setMuseSleep(null).catch((e: any) => log(`清休眠失败:${e?.message || e}`));
-      sleep = null;
-    }
-    const heartbeatDue = heartbeatDecision({ heartbeatMinutes: cfg.heartbeatMinutes, lastCycleAt, now, sleep }) === 'due';
+    const heartbeatDue = heartbeatDecision({ heartbeatMinutes: cfg.heartbeatMinutes, lastCycleAt, now: Date.now(), sleep }) === 'due';
     if (!museFired.length && !dueMuse.length && !heartbeatDue) { lastRunning = false; return; }
     if (museFired.length) log(`盯任务命中 ${museFired.length} 条:${museFired.map((t) => t.id).join(', ')}`);
     if (dueMuse.length) log(`自己的日程到期 ${dueMuse.length} 条:${dueMuse.map((e) => e.name).join(', ')}`);

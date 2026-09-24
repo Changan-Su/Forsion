@@ -76,7 +76,8 @@ describe('休眠落盘', () => {
   it('读回校验:未来的 setAt / 超 24h / until ≤ setAt / 坏值 → 当没睡', () => {
     const now = 1_800_000_000_000;
     expect(validSleep({ until: now + H, setAt: now - 1, reason: 'r', minuteLines: 2 }, now)).toEqual({ until: now + H, setAt: now - 1, reason: 'r', minuteLines: 2 });
-    expect(validSleep({ until: now + H, setAt: now - 1, minuteLines: -3 }, now)?.minuteLines).toBe(0);
+    expect(validSleep({ until: now + H, setAt: now - 1, minuteLines: -3 }, now)?.minuteLines).toBeUndefined(); // 坏值 = 基线未知,不是 0
+    expect(validSleep({ until: now + H, setAt: now - 1 }, now)?.minuteLines).toBeUndefined();
     expect(validSleep({ until: now + H, setAt: now + 1 }, now)).toBeNull();
     expect(validSleep({ until: now + 30 * H, setAt: now - 1 }, now)).toBeNull();
     expect(validSleep({ until: now - 5, setAt: now - 1 }, now)).toBeNull();

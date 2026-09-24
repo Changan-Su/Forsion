@@ -73,9 +73,10 @@ export const museWakeProvider: ToolProvider = {
           return 'OK — sleep cancelled; the normal heartbeat applies again.';
         }
         // 同一分钟基线:此刻这一分钟里已有的用户行数;之后同一分钟再多出来的行 = 用户回来了(日志只有分钟精度)
+        // 读失败 → 基线未知(同一分钟的行一律不算),别当 0:当 0 会把睡下前那一分钟的动作认成「回来了」
         const minute = activityTs(new Date(now));
-        const minuteLines = (await readUserActivityStamps(1, new Date(now)).catch(() => [] as string[])).filter((t) => t === minute).length;
-        await setMuseSleep({ until: at, setAt: now, reason, minuteLines });
+        const stamps = await readUserActivityStamps(1, new Date(now)).catch(() => null);
+        await setMuseSleep({ until: at, setAt: now, reason, ...(stamps ? { minuteLines: stamps.filter((t) => t === minute).length } : {}) });
         const d = new Date(at);
         const mins = Math.round((at - now) / 60_000);
         return `OK — heartbeat paused until ${pad(d.getHours())}:${pad(d.getMinutes())} (in ${Math.floor(mins / 60)}h ${mins % 60}m). ` +

@@ -24,8 +24,9 @@ export interface MuseSleep {
   setAt: number;
   /** Muse 给的理由(一句话,MuseView 与 Journal 显示) */
   reason: string;
-  /** 睡下那一分钟里已有几行用户活动(活动日志是分钟精度:同一分钟里「之后」多出来的行靠这个基线认出来) */
-  minuteLines: number;
+  /** 睡下那一分钟里已有几行用户活动(活动日志是分钟精度:同一分钟里「之后」多出来的行靠这个基线认出来)。
+   *  缺省 = 未知(读活动文件失败 / 旧格式):同一分钟的行一律不算,别当 0 —— 当 0 会把睡下前那一分钟的动作认成「回来了」。 */
+  minuteLines?: number;
 }
 
 interface MuseStateShape {
@@ -60,7 +61,7 @@ export function validSleep(s: unknown, now = Date.now()): MuseSleep | null {
   const minuteLines = Number(o?.minuteLines);
   return {
     until, setAt, reason: String(o?.reason || '').slice(0, 200),
-    minuteLines: Number.isInteger(minuteLines) && minuteLines >= 0 ? minuteLines : 0,
+    ...(Number.isInteger(minuteLines) && minuteLines >= 0 ? { minuteLines } : {}),
   };
 }
 

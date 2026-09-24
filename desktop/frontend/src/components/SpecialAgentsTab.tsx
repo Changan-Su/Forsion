@@ -83,13 +83,15 @@ function BackgroundQuotaSection({ museModelId, modelLabel }: { museModelId: stri
   const [busy, setBusy] = useState(false)
   const [confirm, setConfirm] = useState<number | null>(null)
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null)
-  const latest = useRef<AccountQuotaView | null>(null) // 异步回调里拿「此刻最新」的额度,别用闭包里的旧 quota
-  latest.current = quota
+  // 异步回调里拿「此刻最新」的额度:每个写入点**同步**更新(只在渲染时回填的话,广播与开关回包夹在同一帧里,
+  // apply 读到的还是旧快照、再把它广播出去 —— Codex 09-24 复审)
+  const latest = useRef<AccountQuotaView | null>(null)
+  const put = (q: AccountQuotaView): void => { latest.current = q; setQuota(q) }
   useEffect(() => {
     let alive = true
     let pushed = false // 首拉回来之前已经收到过广播(转入 / 切账号后别处刷新)→ 首拉那份是旧快照,丢掉
-    const off = subscribeAccountQuota((q) => { if (alive && q) { pushed = true; setQuota(q) } })
-    void window.tangu?.accountQuota?.().then((r) => { if (alive && !pushed && r?.status === 200 && r.json) setQuota(r.json) }).catch(() => {})
+    const off = subscribeAccountQuota((q) => { if (alive && q) { pushed = true; put(q) } })
+    void window.tangu?.accountQuota?.().then((r) => { if (alive && !pushed && r?.status === 200 && r.json) put(r.json) }).catch(() => {})
     return () => { alive = false; off() }
   }, [])
   const bg = quota?.background
@@ -99,8 +101,7 @@ function BackgroundQuotaSection({ museModelId, modelLabel }: { museModelId: stri
     const cur = latest.current
     if (!cur) return
     const merged = patch(cur)
-    latest.current = merged
-    setQuota(merged)
+    put(merged)
     publishAccountQuota(merged)
   }
   const axis = (key: 'daily' | 'weekly') => {
