@@ -120,21 +120,32 @@ describe('Tangu for Chrome 扩展桥', () => {
     await expect(extensionCall('page.read', {}, 150)).rejects.toThrow(/did not answer page.read/);
   });
 
+  const raw = async (): Promise<{ ws: WebSocket; closed: Promise<number> }> => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/tangu-browser`, { origin: `chrome-extension://${EXTENSION_ID}` });
+    const closed = new Promise<number>((r) => ws.on('close', (code) => r(code)));
+    ws.on('error', () => { /* 被掐断时客户端报 ECONNRESET,随后 close */ });
+    await new Promise((r) => ws.on('open', r));
+    return { ws, closed };
+  };
+
   it('没认证的连接只收小帧、并发有上限(别的系统用户也连得上回环口)', async () => {
-    const raw = async (): Promise<{ ws: WebSocket; closed: Promise<number> }> => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/tangu-browser`, { origin: `chrome-extension://${EXTENSION_ID}` });
-      const closed = new Promise<number>((r) => ws.on('close', (code) => r(code)));
-      await new Promise((r) => ws.on('open', r));
-      return { ws, closed };
-    };
     const big = await raw();
-    big.ws.send(JSON.stringify({ type: 'hello', nonce: 'ab'.repeat(16), pad: 'x'.repeat(5000) }));
-    expect(await big.closed).toBe(1009);
+    big.ws.send(JSON.stringify({ type: 'hello', nonce: 'ab'.repeat(16), pad: 'x'.repeat(1024 * 1024) }));
+    expect(await big.closed).toBe(1006); // 按原始字节直接掐断,不等 ws 把整帧收齐再判(那时内存已经吃进去了)
     const idle = await Promise.all(Array.from({ length: 8 }, raw)); // 占满握手名额、一直不说话
     expect(await (await raw()).closed).toBe(1013);
     for (const s of idle) s.ws.close();
     await Promise.all(idle.map((s) => s.closed));
     const { welcomed } = await fakeExtension(); // 名额释放后正常配对不受影响
+    expect((await welcomed).type).toBe('welcome');
+  });
+
+  it('握手字段类型全不可信:toString 被置空的对象不会弄崩引擎', async () => {
+    const evil = await raw();
+    evil.ws.send(JSON.stringify({ type: 'hello', nonce: 'ab'.repeat(16), version: { toString: null } }));
+    evil.ws.send(JSON.stringify({ type: 'auth', proof: { toString: null } }));
+    expect(await evil.closed).toBe(4001);
+    const { welcomed } = await fakeExtension();
     expect((await welcomed).type).toBe('welcome');
   });
 

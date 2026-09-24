@@ -70,6 +70,17 @@ async function main() {
   const shown = await codeText()
   check('换码前发出的轮询晚到,不会把旧码盖回来', shown !== oldCode && shown === (await page.evaluate(() => window.__extHarness.code)), { shown, oldCode })
 
+  // 换码进行中按钮置灰:两次换码乱序返回会留下已作废的码
+  await open()
+  await page.evaluate(() => { window.__extHarness.holdResets = true })
+  const resetBtn = panel.getByRole('button', { name: '换一个' })
+  await resetBtn.click()
+  await page.waitForFunction(() => window.__extHarness.held.length > 0)
+  const busy = await resetBtn.isDisabled()
+  await page.evaluate(() => window.__extHarness.release())
+  await page.waitForFunction(() => document.querySelector('[data-testid="browser-extension-code"]')?.textContent?.includes('abab'))
+  check('换码进行中「换一个」置灰,回来后恢复', busy && (await resetBtn.isEnabled()), { busy })
+
   await open('?external')
   const extText = await panel.textContent()
   check('外部引擎:不给「打开扩展文件夹」(目录在引擎那台机器上),改为写明路径',

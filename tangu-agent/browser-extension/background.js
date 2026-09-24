@@ -61,7 +61,8 @@ async function connect() {
   sock.onerror = () => {}; // 之后必有 onclose
   sock.onclose = (e) => {
     clearTimeout(handshakeTimer);
-    if (ws === sock) ws = null;
+    if (ws !== sock) return; // 换码时关掉的旧连接晚到的关闭事件:状态与重连归新连接管,别覆盖(Codex 09-24)
+    ws = null;
     // 「连接码失效」只在确有其事时才显示:对面先证明了自己是 Tangu、又拒了我方(4001),或对面的证明对不上我方的码。
     // 只是状态,照样慢速重试 —— 没验明身份的对面发个 4001 / 占着不说话,不能让扩展从此不再连(Codex 09-24)。
     const rejected = (e.code === 4001 && sock.tangu.serverVerified) || sock.tangu.codeRejected;
@@ -98,7 +99,7 @@ async function onMessage(sock, data) {
   if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify(reply));
 }
 
-setInterval(() => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' })); }, PING_MS);
+setInterval(() => { if (ws && ws.readyState === WebSocket.OPEN && ws.tangu.ready) ws.send(JSON.stringify({ type: 'ping' })); }, PING_MS); // 握手中途插一个 ping 会被引擎当作坏握手
 chrome.alarms.create('tangu-reconnect', { periodInMinutes: 1 }); // worker 被回收后由闹钟唤醒重连
 chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'tangu-reconnect') void connect(); });
 chrome.runtime.onStartup.addListener(() => { void connect(); });

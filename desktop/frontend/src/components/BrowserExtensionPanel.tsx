@@ -43,6 +43,7 @@ export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDeskt
   const [info, setInfo] = useState<BrowserExtensionStatus | null>(null)
   const [unavailable, setUnavailable] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [resetting, setResetting] = useState(false) // 换码不并发:两次换码乱序返回会留下已作废的码(Codex 09-24)
   // 请求代次:换码 / 换引擎之后才回来的旧轮询结果一律丢弃,免得把新码盖回旧码(Codex 09-24)
   const gen = useRef(0)
 
@@ -69,8 +70,9 @@ export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDeskt
   const reset = async (): Promise<void> => {
     if (!window.confirm(t('settings.browserExt.resetConfirm'))) return
     const mine = ++gen.current
+    setResetting(true)
     // 回来时再推一代:换码途中发出的轮询(可能先于换码到达引擎)一并作废
-    try { const next = await resetBrowserExtensionCode(cfg); if (mine === gen.current) { gen.current++; setInfo(next) } } catch { /* 下次轮询会刷新 */ }
+    try { const next = await resetBrowserExtensionCode(cfg); if (mine === gen.current) { gen.current++; setInfo(next) } } catch { /* 下次轮询会刷新 */ } finally { setResetting(false) }
   }
 
   const status = unavailable
@@ -91,7 +93,7 @@ export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDeskt
               <div className="settings-inline-actions">
                 <code className="settings-code-chip" data-testid="browser-extension-code">{info.code}</code>
                 <button type="button" className="btn ghost sm" onClick={() => void copy()}>{copied ? <Check size={12} /> : <Copy size={12} />}{copied ? t('settings.browserExt.copied') : t('settings.browserExt.copy')}</button>
-                <button type="button" className="btn ghost sm" onClick={() => void reset()}><RefreshCw size={12} />{t('settings.browserExt.reset')}</button>
+                <button type="button" className="btn ghost sm" disabled={resetting} onClick={() => void reset()}><RefreshCw size={12} />{t('settings.browserExt.reset')}</button>
               </div>
             )}
           />

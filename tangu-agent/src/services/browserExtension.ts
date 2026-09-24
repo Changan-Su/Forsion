@@ -7,7 +7,8 @@
  * (HMAC-SHA256,密钥 = 连接码里的令牌,令牌本身从不上线):扩展要先验明这边真是 Tangu 才执行命令,
  * 本机抢占端口的进程既拿不到令牌、也指挥不了扩展。
  * 信任边界:同一系统用户下的进程读得到令牌文件(0600 只挡别的用户)—— 与改写 Native Messaging 清单同级,
- * 视为可信;别的系统用户的进程连得上回环口,所以握手阶段限帧长、限并发(Codex 09-24)。
+ * 视为可信;别的系统用户的进程连得上回环口,所以握手阶段按原始字节限流(不等 ws 收齐整帧)、限并发、
+ * 不信任任何字段的类型(Codex 09-24)。
  * 连接码按引擎家目录各存一份 → dev / 正式版 / CLI 互不串(端口也各配各的,桌面经 env 注入)。
  */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -17,6 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { getRawSection } from '../core/config.js';
 import { tanguHome } from '../core/tanguHome.js';
+import type { IncomingMessage } from 'node:http';
 
 /** manifest.json 的 key 钉死的扩展 ID;上架应用商店后的 ID 经 config browserExtension.extensionIds 追加。 */
 export const EXTENSION_ID = 'gpajikakdmhjebadgcbmhidkkajclfoi';
@@ -24,7 +26,7 @@ const DEFAULT_PORT = 47654;
 const HELLO_TIMEOUT_MS = 5_000;
 const CALL_TIMEOUT_MS = 45_000;
 const MAX_PAYLOAD = 32 * 1024 * 1024; // 截图 / 大页正文;扩展侧另把截图卡在 24MB 以内
-const MAX_HANDSHAKE_FRAME = 4 * 1024; // 未认证的连接只该发 hello / auth 这种小帧
+const MAX_PREAUTH_BYTES = 16 * 1024; // 未认证的连接只该发 hello / auth 两个小帧(实际约 300 字节)
 const MAX_PENDING_HANDSHAKES = 8;
 
 interface Pending { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
@@ -77,7 +79,7 @@ const hmacHex = (message: string): string => createHmac('sha256', extensionToken
 
 function proofOk(got: unknown, message: string): boolean {
   const want = Buffer.from(hmacHex(message));
-  const have = Buffer.from(String(got ?? ''));
+  const have = Buffer.from(typeof got === 'string' ? got : '');
   return have.length === want.length && timingSafeEqual(have, want);
 }
 
@@ -109,11 +111,11 @@ export function startBrowserExtensionBridge(): void {
     try { wss.close(); } catch { /* ignore */ }
     if (server === wss) server = null;
   });
-  wss.on('connection', (ws) => onConnection(ws));
+  wss.on('connection', (ws, req) => onConnection(ws, req));
   server = wss;
 }
 
-function onConnection(ws: WebSocket): void {
+function onConnection(ws: WebSocket, req: IncomingMessage): void {
   if (pendingHandshakes >= MAX_PENDING_HANDSHAKES) { ws.close(1013, 'busy'); return; }
   pendingHandshakes++;
   let handshaking = true;
@@ -122,18 +124,25 @@ function onConnection(ws: WebSocket): void {
   let serverNonce = '';
   let version = '';
   const helloTimer = setTimeout(() => { if (!client) ws.close(4001, 'hello timeout'); }, HELLO_TIMEOUT_MS);
+  // 未认证阶段按套接字原始字节计数:ws 的 message 事件要等整帧(最多 maxPayload)收齐才触发,在那里判长度为时已晚
+  let preAuthBytes = 0;
+  const countRaw = (chunk: Buffer): void => {
+    if (client) { req.socket.off('data', countRaw); return; }
+    preAuthBytes += chunk.length;
+    if (preAuthBytes > MAX_PREAUTH_BYTES) ws.terminate();
+  };
+  req.socket.on('data', countRaw);
   ws.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {
-    if (!client && (Buffer.isBuffer(data) ? data.length : Array.isArray(data) ? data.reduce((n, b) => n + b.length, 0) : data.byteLength) > MAX_HANDSHAKE_FRAME) {
-      ws.close(1009, 'handshake frame too large');
-      return;
-    }
+    try { onFrame(data); } catch { ws.close(1011, 'bad message'); } // 字段类型全不可信(比如 toString 被置空的对象),绝不让异常冒到进程
+  });
+  function onFrame(data: Buffer | ArrayBuffer | Buffer[]): void {
     let m: any;
     try { m = JSON.parse(String(data)); } catch { return; }
     if (!client) {
       // ① hello{nonce} → 回 challenge{proof=HMAC(server:扩展nonce), nonce};② auth{proof=HMAC(client:我方nonce)} → welcome
       if (m?.type === 'hello' && !serverNonce && typeof m.nonce === 'string' && /^[0-9a-f]{16,128}$/.test(m.nonce)) {
         serverNonce = randomBytes(16).toString('hex');
-        version = String(m.version || '');
+        version = typeof m.version === 'string' ? m.version.slice(0, 64) : '';
         ws.send(JSON.stringify({ type: 'challenge', proof: hmacHex(`server:${m.nonce}`), nonce: serverNonce }));
         return;
       }
@@ -154,7 +163,7 @@ function onConnection(ws: WebSocket): void {
     client.pending.delete(m.id);
     clearTimeout(p.timer);
     if (m.error) p.reject(new Error(String(m.error))); else p.resolve(m.result);
-  });
+  }
   ws.on('close', () => {
     clearTimeout(helloTimer);
     endHandshake();
