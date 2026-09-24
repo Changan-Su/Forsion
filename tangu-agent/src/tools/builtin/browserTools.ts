@@ -158,8 +158,11 @@ export async function userBrowserEndpoint(ctx: Pick<ToolContext, 'muse' | 'appro
 /** 接管态下以用户身份在已登录页面上动手的工具(含让用户的标签后退跳走的 back):与 browser_task 同一审批档(approvals.ts)。 */
 export const USER_BROWSER_ACTIONS: ReadonlySet<string> = new Set(['browser_click', 'browser_type', 'browser_press', 'browser_console', 'browser_back']);
 
+/** 守护进程按「Chrome 实例 × 引擎家目录」分:dev / 正式版 / CLI 各用各的游标,进程级锁管不到别的引擎进程
+ *  (Codex 09-24:别的进程在「核对游标 → 执行」之间切走游标,点击就落到别的标签)。代价:每套各点一次「允许」。
+ *  ponytail: 同一家目录的两个引擎进程同时驱动用户浏览器仍会共用游标;真撞上再上跨进程锁。 */
 function attachSessionName(endpoint: string): string {
-  return `tangu_chrome_${createHash('sha1').update(endpoint).digest('hex').slice(0, 10)}`;
+  return `tangu_chrome_${createHash('sha1').update(`${endpoint}|${tanguHome()}`).digest('hex').slice(0, 10)}`;
 }
 
 // 连不上用户的 Chrome(用户点了「拒绝」/ 弹框没人理)后按端点短暂冷却:模型连试几次 = 用户那边叠几个弹框。
@@ -185,7 +188,7 @@ function withAttachLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 // `${端点}|${会话}` → 本会话选中 / 打开的标签 + 当时的守护进程 pid(守护进程闲置退出重开后标签 id 重新编号,旧 id 会指到别的标签)。
-const boundTabs = new Map<string, { endpoint: string; tab: string; daemon: string }>();
+const boundTabs = new Map<string, { endpoint: string; tab: string; kind: 'id' | 'label'; daemon: string }>();
 const MAX_BOUND_TABS = 200; // ponytail: 按插入序淘汰最老的;长跑引擎里每个用过接管的会话一条,够用
 /** 守护进程 pid;pid 文件不在、或进程已死(崩溃会留下旧文件)→ ''。 */
 async function daemonPid(endpoint: string): Promise<string> {
@@ -194,10 +197,10 @@ async function daemonPid(endpoint: string): Promise<string> {
   if (!/^[1-9]\d*$/.test(pid)) return ''; // kill(0, …) 会发给整个进程组
   try { process.kill(Number(pid), 0); return pid; } catch (e: any) { return e?.code === 'EPERM' ? pid : ''; }
 }
-async function bindTab(ctx: ToolContext, endpoint: string, tab: string): Promise<void> {
+async function bindTab(ctx: ToolContext, endpoint: string, tab: string, kind: 'id' | 'label'): Promise<void> {
   const key = `${endpoint}|${ctx.sessionId}`;
   boundTabs.delete(key);
-  boundTabs.set(key, { endpoint, tab, daemon: await daemonPid(endpoint) });
+  boundTabs.set(key, { endpoint, tab, kind, daemon: await daemonPid(endpoint) });
   if (boundTabs.size > MAX_BOUND_TABS) boundTabs.delete(boundTabs.keys().next().value!);
 }
 /**
@@ -220,7 +223,8 @@ async function rebindTab(ctx: ToolContext, endpoint: string): Promise<string | n
   // dev 里用户实翻)→ 游标已在本会话的标签上就不切;顺带同一标签上连续操作不再每次把它激活到前台。
   const list = await runBrowserCommand(ctx, 'tab', ['list'], commandTimeout(), endpoint);
   const current = list.success && Array.isArray(list.data?.tabs) ? list.data.tabs.find((t: any) => t?.active) : undefined;
-  if (current && (current.tabId === b.tab || current.label === b.tab) && b.daemon === await daemonPid(endpoint)) return null;
+  const onBound = current && (b.kind === 'id' ? current.tabId === b.tab : current.label === b.tab); // 标识按绑定时的类型比,别的标签的 label 不能冒充 id
+  if (onBound && b.daemon === await daemonPid(endpoint)) return null;
   const sw = await runBrowserCommand(ctx, 'tab', [b.tab], commandTimeout(), endpoint);
   if (sw.success && b.daemon === await daemonPid(endpoint)) return null;
   boundTabs.delete(key);
@@ -295,7 +299,8 @@ export const __browserToolInternals = {
   navigate,
   findUserBrowser,
   pickTabs: (tabs: TabInfo[], select: string) => pickTabs(tabs, select),
-  bindTab: (ctx: ToolContext, endpoint: string, tab: string) => bindTab(ctx, endpoint, tab),
+  bindTab: (ctx: ToolContext, endpoint: string, tab: string, kind: 'id' | 'label' = 'id') => bindTab(ctx, endpoint, tab, kind),
+  attachSessionName: (endpoint: string) => attachSessionName(endpoint),
   clearBindings: () => boundTabs.clear(),
 };
 
@@ -470,7 +475,7 @@ async function navigate(ctx: ToolContext, rawUrl: string): Promise<Record<string
       : /No tab with label/i.test(own.error || '') // 其余失败(连不上等)原样上报,别再多开一次连接
         ? await runBrowserCommand(ctx, 'tab', ['new', '--label', label, url], navTimeout, cdp)
         : own;
-    if (opened.success) await bindTab(ctx, cdp, label);
+    if (opened.success) await bindTab(ctx, cdp, label, 'label');
   } else {
     opened = await runBrowserCommand(ctx, 'open', [url], navTimeout, null);
   }
@@ -837,7 +842,7 @@ async function readUserTabs(ctx: ToolContext, cdp: string, select: string): Prom
   }
   const sw = await runBrowserCommand(ctx, 'tab', [hits[0].tab], commandTimeout(), cdp);
   if (!sw.success) return toJson({ success: false, error: sw.error });
-  await bindTab(ctx, cdp, hits[0].tab); // 之后本会话的 browser_click / snapshot … 都落在这个标签上
+  await bindTab(ctx, cdp, hits[0].tab, 'id'); // 之后本会话的 browser_click / snapshot … 都落在这个标签上
   const text = await runBrowserCommand(ctx, 'get', ['text', 'body'], commandTimeout(), cdp);
   const refs = await runBrowserCommand(ctx, 'snapshot', ['-i', '-c'], commandTimeout(), cdp);
   return toJson({

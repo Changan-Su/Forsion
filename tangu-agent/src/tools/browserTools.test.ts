@@ -253,6 +253,29 @@ describe('user browser attach (Chrome remote debugging)', () => {
     expect(calls(log).slice(before).map((a) => a.replace(/^.* --json /, ''))).toEqual(['tab list', 'click @e1']);
   });
 
+  it.skipIf(process.platform === 'win32')('a tab bound by id is not satisfied by another tab whose label equals that id', async () => {
+    const { log } = fakeBin(false);
+    await exec('browser_tabs', { select: 't2' }, ctxOf());
+    // 伪造:当前游标在一个 label 恰好叫 "t2" 的别的标签上(tab list 报 tabId t9 / label t2 为 active)
+    const bin = process.env.TANGU_AGENT_BROWSER_BIN!;
+    writeFileSync(bin, readFileSync(bin, 'utf8').replace(`*"tab list"*)`, `*"tab list"*) echo '{"success":true,"data":{"tabs":[{"tabId":"t9","label":"t2","active":true,"title":"x","url":"https://x/"},{"tabId":"t2","active":false,"title":"Video","url":"https://www.bilibili.com/video/BV1"}]}}';; *"tab list-orig"*)`));
+    const before = calls(log).length;
+    await exec('browser_click', { ref: 'e1' }, ctxOf());
+    expect(calls(log).slice(before).map((a) => a.replace(/^.* --json /, ''))).toEqual(['tab list', 'tab t2', 'click @e1']); // 必须切回真正的 t2
+  });
+
+  it('keeps separate agent-browser daemons per engine home (dev / release / CLI never share a cursor)', () => {
+    const saved = process.env.TANGU_HOME;
+    try {
+      process.env.TANGU_HOME = '/Users/x/.forsion/tangu';
+      const release = __browserToolInternals.attachSessionName('ws://127.0.0.1:9222/devtools/browser/a');
+      process.env.TANGU_HOME = '/Users/x/.forsion-dev/tangu';
+      const dev = __browserToolInternals.attachSessionName('ws://127.0.0.1:9222/devtools/browser/a');
+      expect(release).not.toBe(dev);
+      expect(release).toMatch(/^tangu_chrome_[0-9a-f]{10}$/);
+    } finally { if (saved === undefined) delete process.env.TANGU_HOME; else process.env.TANGU_HOME = saved; }
+  });
+
   it.skipIf(process.platform === 'win32')('if another conversation moved the cursor, switch back before acting', async () => {
     const { dir, log } = fakeBin(false);
     await exec('browser_tabs', { select: 't2' }, ctxOf());

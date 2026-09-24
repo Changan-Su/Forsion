@@ -114,7 +114,7 @@ try {
   check('④ 会话 B 选中用户的另一个标签', bSel.success && /three unread/.test(bSel.text || ''), bSel.error || bSel.title);
   const aSnap = await run(browserToolsProvider, 'browser_snapshot', { compact: false });
   check('④ 会话 A 的快照仍是它自己的页(先切回再读)', aSnap.success && /nav ok/.test(aSnap.snapshot || '') && !/three unread/.test(aSnap.snapshot || ''), String(aSnap.snapshot || aSnap.error).slice(0, 80));
-  sessionName = readFileSync(join(process.env.TANGU_BROWSER_SOCKET_DIR, `${`tangu_chrome_`}${(await import('node:crypto')).createHash('sha1').update(ws).digest('hex').slice(0, 10)}.pid`), 'utf8').trim();
+  sessionName = readFileSync(join(process.env.TANGU_BROWSER_SOCKET_DIR, `${bt.attachSessionName(ws)}.pid`), 'utf8').trim();
 } catch (e) {
   check('冒烟未跑完', false, String(e?.stack || e));
   if (chromeErr) console.log(`      chrome stderr: ${chromeErr.slice(-600)}`);
