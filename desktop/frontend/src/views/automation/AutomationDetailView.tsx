@@ -16,6 +16,9 @@ import { Markdown } from '../../components/Markdown'
 import { useDbStore } from '../../amadeus/store/dbStore'
 import { actionsText, condText, fmtTime, isFinishedTrigger, watchedColumnIds, whereText } from './lib'
 import { AutomationBuilder } from './AutomationBuilder'
+import { AutomationHome } from './AutomationHome'
+import { ExecutionsList } from './AutomationRunsView'
+import './messages'
 import type { AgentScheduleEntry, HistorianActivityItem, MuseTriggerInfo } from '../../types'
 import './automation.css'
 
@@ -54,7 +57,7 @@ const FireButton: React.FC<{ tr: MuseTriggerInfo }> = ({ tr }) => {
       <button className="btn ghost sm" disabled={busy} title={t('automation.fire.hint')} onClick={() => void fire()}>
         <Play size={12} /> {busy ? '…' : t('automation.fire.btn')}
       </button>
-      {result && <span className="auto-fire-result">{result}</span>}
+      {result && <span className="auto-fire-result" role="status">{result}</span>}
     </>
   )
 }
@@ -227,14 +230,14 @@ export const AutomationDetailView: React.FC = () => {
   if (st.builder) {
     const editing = st.builder.editingId ? st.triggers.find((x) => x.id === st.builder!.editingId) : undefined
     return (
-      <div className="auto-detail">
-        <AutomationBuilder key={st.builder.editingId || 'new'} editing={editing} />
+      <div className="auto-detail auto-editor-detail">
+        <AutomationBuilder key={st.builder.editingId || st.builder.starter || 'new'} editing={editing} starter={st.builder.starter} />
       </div>
     )
   }
 
   const sel = st.sel
-  if (!sel) return <div className="auto-detail-empty">{t('automation.detail.empty')}</div>
+  if (!sel) return <div className="auto-detail"><AutomationHome /></div>
 
   if (sel.kind === 'muse') {
     const muse = st.specialCfg?.muse
@@ -299,7 +302,8 @@ export const AutomationDetailView: React.FC = () => {
         <div className="auto-card-head">
           <Zap size={17} />
           <div className="auto-card-title">{tr.desc}</div>
-          <FireButton tr={tr} />
+          <span className={`auto-status-label ${tr.enabled ? 'on' : ''}`}>{t(tr.enabled ? 'automation.ux.on' : 'automation.ux.off')}</span>
+          <FireButton key={tr.id} tr={tr} />
           <button className="btn ghost sm" onClick={() => st.openBuilder(tr.id)}>{t('common.edit')}</button>
         </div>
         <div className="auto-facts">
@@ -323,8 +327,13 @@ export const AutomationDetailView: React.FC = () => {
           {tr.enabled && tr.nextRunAt && <span className="auto-fact"><b>{t('automation.fact.nextRun')}</b>{fmtTime(tr.nextRunAt)}</span>}
         </div>
       </div>
-      <div className="auto-transcript-head">{t('automation.detail.latest')}</div>
-      {hasOwnAction
+      <div className="auto-detail-flow">
+        <span><Zap size={14} />{condText(t, tr.cond)}</span>
+        {tr.actions?.map((step, i) => <React.Fragment key={i}><span aria-hidden="true">→</span><span>{i + 1}. {t(`automation.step.${step.type}`)}</span></React.Fragment>)}
+      </div>
+      {hasOwnAction && <p className="auto-hint">{t('automation.ux.runHint')}{tr.cond.type === 'db_changed' ? ` ${t('automation.ux.dbRunHint')}` : ''}</p>}
+      <div className="auto-transcript-head">{t(tr.actions?.length ? 'automation.ux.runResults' : 'automation.detail.latest')}</div>
+      {tr.actions?.length ? <ExecutionsList key={tr.id} triggerId={tr.id} /> : hasOwnAction
         ? sessionId
           ? <SessionTranscript sessionId={sessionId} />
           : <div className="auto-runs-empty">{t('automation.trigger.neverFired')}</div>

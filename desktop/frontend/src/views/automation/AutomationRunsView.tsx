@@ -7,6 +7,8 @@
  * 行只带元信息(时间/状态/摘要),不按 run 切片消息——主区恒显完整会话尾部。
  */
 import React, { useEffect, useState } from 'react'
+import { CheckCircle2, CircleAlert } from 'lucide-react'
+import './messages'
 import { useApp } from '../../stores/appStore'
 import { useAutomation, sessionForTrigger } from '../../stores/automationStore'
 import { getAutomationExecutions, getAutomationRuns, getHistorianActivity } from '../../services/backendService'
@@ -18,38 +20,47 @@ import './automation.css'
 const dotClass = (status: string): string =>
   status === 'running' || status === 'queued' ? 'running' : status === 'completed' || status === 'done' ? 'on' : 'off'
 
-/** 动作链规则的执行账本(每次触发一行;title 展开逐步骤结果)。 */
-const ExecutionsList: React.FC<{ triggerId: string }> = ({ triggerId }) => {
+/** Expandable ledger, shared by the main result area and the runs sidebar. */
+export const ExecutionsList: React.FC<{ triggerId: string }> = ({ triggerId }) => {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
   const nonce = useAutomation((s) => s.refreshNonce)
   const [rows, setRows] = useState<AutomationExecutionInfo[]>([])
+  const [loading, setLoading] = useState(true)
+  const [failed, setFailed] = useState(false)
+  const [retry, setRetry] = useState(0)
   useEffect(() => {
     let alive = true
-    const pull = (): void => void getAutomationExecutions(cfg, triggerId).then((r) => alive && setRows(r)).catch(() => {})
-    pull()
-    const timer = setInterval(pull, 8000)
+    const pull = async (): Promise<void> => {
+      try {
+        const result = await getAutomationExecutions(cfg, triggerId)
+        if (alive) { setRows(result); setFailed(false) }
+      } catch { if (alive) setFailed(true) }
+      finally { if (alive) setLoading(false) }
+    }
+    void pull()
+    const timer = setInterval(() => void pull(), 8000)
     return () => { alive = false; clearInterval(timer) }
-  }, [cfg, triggerId, nonce])
-  if (!rows.length) return <div className="auto-runs-empty">{t('automation.trigger.neverFired')}</div>
-  return (
-    <>
-      {rows.map((r) => (
-        <div
-          key={r.id}
-          className="auto-run-row"
-          title={r.steps.map((s, i) => `${s.ok ? '✓' : '✗'} ${i + 1}. ${s.type}${s.tool ? `(${s.tool})` : ''} — ${s.summary}`).join('\n') || r.error || r.status}
-        >
-          <span className={`auto-dot ${r.status === 'done' ? 'on' : 'off'}`} />
-          <span className="auto-run-time">{fmtTime(r.created_at)}</span>
-          <span className="auto-run-meta">
-            {r.origin === 'manual' ? `${t('automation.exec.manual')} · ` : ''}
-            {r.error ? r.error.slice(0, 40) : t('automation.exec.steps', { n: String(r.steps.length) })}
-          </span>
-        </div>
-      ))}
-    </>
-  )
+  }, [cfg, triggerId, nonce, retry])
+  if (loading) return <div className="auto-runs-empty" role="status">{t('automation.ux.runLoading')}</div>
+  if (failed) return <div className="auto-runs-empty" role="alert">{t('automation.ux.runError')} <button className="btn ghost sm" onClick={() => setRetry((n) => n + 1)}>{t('automation.ux.retry')}</button></div>
+  if (!rows.length) return <div className="auto-runs-empty">{t('automation.ux.runEmpty')}</div>
+  return <div className="auto-executions">{rows.map((r, index) => (
+    <details key={r.id} className="auto-execution" open={index === 0 ? true : undefined}>
+      <summary>
+        <span className={`auto-dot ${dotClass(r.status)}`} />
+        <time>{fmtTime(r.created_at)}</time>
+        <span className="auto-execution-status">{['done', 'failed', 'running', 'queued'].includes(r.status) ? t(`automation.ux.${r.status}`) : r.status}</span>
+        <span className="auto-hint">{t(r.origin === 'auto' ? 'automation.ux.autoOrigin' : 'automation.ux.manualOrigin')}</span>
+      </summary>
+      {r.error && <p className="auto-execution-error">{r.error}</p>}
+      <ol>{r.steps.map((step, i) => <li key={i}>
+        {step.ok ? <CheckCircle2 size={14} /> : <CircleAlert size={14} />}
+        <div><strong>{t('automation.ux.stepResult', { n: String(i + 1), type: t(`automation.step.${step.type}`) })}{step.tool ? ` · ${step.tool}` : ''}</strong><p>{step.summary}</p></div>
+      </li>)}</ol>
+      {!r.steps.length && <p className="auto-hint">{t('automation.ux.noSteps')}</p>}
+    </details>
+  ))}</div>
 }
 
 const RunsList: React.FC<{ sessionId: string }> = ({ sessionId }) => {
@@ -108,7 +119,7 @@ const HistorianList: React.FC = () => {
 export const AutomationRunsView: React.FC = () => {
   const { t } = useI18n()
   const st = useAutomation()
-  const sel = st.sel
+  const sel = st.builder ? null : st.sel
 
   let body: React.ReactNode = <div className="auto-runs-empty">{t('automation.runs.pick')}</div>
   if (sel?.kind === 'muse') {
@@ -118,7 +129,7 @@ export const AutomationRunsView: React.FC = () => {
   } else if (sel?.kind === 'trigger') {
     const tr = st.triggers.find((x) => x.id === sel.triggerId)
     if (tr?.actions?.length) {
-      body = <ExecutionsList triggerId={tr.id} />
+      body = <ExecutionsList key={tr.id} triggerId={tr.id} />
     } else if (tr?.agentSlug) {
       const sid = sessionForTrigger(st.autoSessions, tr.id)
       body = sid ? <RunsList sessionId={sid} /> : <div className="auto-runs-empty">{t('automation.trigger.neverFired')}</div>

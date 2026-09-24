@@ -21,6 +21,7 @@
     "check:backend-deps": "node scripts/backend-dependencies.check.cjs",
     "test:sync": "vitest run electron/amadeus/sync electron/amadeus/ipc.move.test.ts electron/amadeus/ipc.entrymove.test.ts electron/amadeus/ipc.account.test.ts electron/amadeus/settings.account.test.ts frontend/src/amadeus/store/pageStore.move-race.test.ts frontend/src/stores/entrySyncStore frontend/src/services/cloudBridgeVanished.test.ts frontend/src/components/ShareCard.race.test.ts frontend/src/amadeusFolderPublish.test.ts",
     "test:accounts": "vitest run forsionAuth authMainLifecycle externalAuthLifecycle accountTransition AccountCard cloudAccount cloudHttpAccount cloudBridgeCacheAccount contentLayoutAccount settings.account ipc.account collabMain.account appStore.connect engine.lifecycle writeFailures pageStore.vaultswitch dbStore.test drawingStore.test electron/amadeus/sync/engine.test.ts",
+    "e2e:automation": "node scripts/automation-space.e2e.cjs",
     "e2e:editor": "node scripts/e2e-editor.cjs",
     "e2e:dnd": "node scripts/block-dnd.e2e.cjs",
     "e2e:sidebardrop": "node scripts/sidebar-drop.e2e.cjs",

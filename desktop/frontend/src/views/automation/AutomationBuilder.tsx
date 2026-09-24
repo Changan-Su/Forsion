@@ -1,15 +1,10 @@
 /**
- * 可视化新建/编辑自动化(Dify 借鉴的是执行契约与表单化配置,不是画布):
- * 触发卡(定时统一入口:每天/一次/间隔 + 事件目录 datalist + 文件达标)→ 可增删排序的动作步骤卡
- * (通知/跑 Agent/调工具;工具参数表单按目录 JSON schema 自动生成)→ 底部护栏行。
- * 竖排线性链 + CSS 连接线,刻意不做自由画布(分支编排出现再升级)。
- * 0 个步骤 = 旧语义「唤醒 Muse 整理为 TODO」(保存 actions:null);编辑旧式 agentSlug 规则时
- * 自动转成一个 agent_run 步骤(保存即迁移到动作链模型)。
- * 保存 = POST /agent/special/muse/triggers upsert(校验在引擎端与 manage_automation 工具同源;
- * tool_call 只有这条 UI 通道能建=保存即人工预批)。
+ * 画布式顺序工作流：节点位置只影响布局，步骤顺序决定执行顺序。
+ * 选中节点在右侧配置；新规则默认暂停，嵌入笔记按钮时沿用手动启用语义。
+ * 旧式 Muse 规则保留无动作链的行为；工具仍走既有白名单与参数契约。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { ArrowDown, ArrowUp, Bell, Bot, Database, Sparkles, Trash2, Workflow, Wrench, Zap } from 'lucide-react'
+import { ArrowDown, ArrowUp, Bell, Bot, CheckCircle2, Database, Sparkles, Trash2, Workflow, Wrench, Zap } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
 import { useAutomation } from '../../stores/automationStore'
 import { saveMuseTrigger } from '../../services/backendService'
@@ -24,6 +19,10 @@ import { usePageStore } from '../../amadeus/store/pageStore'
 import { useDbStore } from '../../amadeus/store/dbStore'
 import { ensureAmadeusReady } from '../../amadeusPlugins'
 import type { MuseTriggerInfo } from '../../types'
+import { starterSteps, stepIssue, type Starter } from './experience'
+import { WorkflowCanvas, type FlowNode } from './WorkflowCanvas'
+import { TemplateField } from './TemplateField'
+import './messages'
 
 type TriggerKind = 'timer' | 'event_seen' | 'file_chars_gte' | 'manual' | 'db_changed'
 type TimerMode = 'daily_at' | 'at' | 'every'
@@ -31,6 +30,7 @@ type TimerMode = 'daily_at' | 'at' | 'every'
 /** 嵌入用法(Amadeus 按钮块的配置弹层):固定手动触发 + 保存后把规则交回调用方,不碰自动化 Space 的选中态。 */
 export interface AutomationBuilderProps {
   editing?: MuseTriggerInfo
+  starter?: Starter
   /** true=锁死「手动(按钮)」触发,隐藏触发类型选择器。 */
   fixedManual?: boolean
   /** 给了就用它取代默认的「关闭构建器 + 选中该规则」收尾。 */
@@ -50,17 +50,21 @@ function defaultDatetime(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:00`
 }
 
-export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, fixedManual, onSaved, onCancel }) => {
+export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, starter, fixedManual, onSaved, onCancel }) => {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
   const agentDefs = useApp((s) => s.agentDefs)
   const st = useAutomation()
   const catalog = st.actionsCatalog
 
-  const [desc, setDesc] = useState(editing?.desc || '')
+  const [desc, setDesc] = useState(editing?.desc || (starter ? t(`automation.ux.${starter}.name`) : ''))
+  const [selected, setSelectedId] = useState('trigger')
+  const [compactPane, setCompactPane] = useState<'canvas' | 'config'>('canvas')
+  const setSelected = (id: string): void => { setSelectedId(id); setCompactPane('config') }
+  const [enabled, setEnabled] = useState(editing?.enabled ?? !!fixedManual)
   const initCond = editing?.cond
   const [kind, setKind] = useState<TriggerKind>(
-    !initCond ? (fixedManual ? 'manual' : 'timer')
+    !initCond ? (fixedManual || starter === 'button' ? 'manual' : starter === 'table' ? 'db_changed' : 'timer')
     : initCond.type === 'event_seen' ? 'event_seen'
     : initCond.type === 'file_chars_gte' ? 'file_chars_gte'
     : initCond.type === 'manual' ? 'manual'
@@ -71,7 +75,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
     initCond?.type === 'at' ? 'at' : initCond?.type === 'every' ? 'every' : 'daily_at',
   )
   const [time, setTime] = useState(initCond?.type === 'daily_at' ? initCond.time : '09:00')
-  // 已结束的一次性规则(时刻过+已停用,与列表归档同判):重置为下一整点,编辑=改期重开(保存强制 enabled)。
+  // 已结束的一次性规则重置为下一整点；是否启用由「保存与启用」节点显式选择。
   // 仅"时刻刚过但仍 enabled"(引擎 tick 未至,提醒还欠着)不算——那时重置时间会静默吞掉待补发的提醒。
   const expiredAt = !!editing && isFinishedTrigger(editing)
   const [datetime, setDatetime] = useState(initCond?.type === 'at' && !expiredAt ? initCond.datetime.replace(' ', 'T') : defaultDatetime())
@@ -109,7 +113,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
   const dbColsRaw = useDbStore((s) => (kind === 'db_changed' && dbPath ? s.entries[dbPath]?.data?.columns : undefined))
   // 计算列(公式/引用)不落盘,引擎游标比对永远看不见它变 —— 列出来 = 一条永不触发的规则。
   const dbCols = useMemo(() => dbColsRaw?.filter((c) => c.type !== 'formula' && c.type !== 'lookup'), [dbColsRaw])
-  const [steps, setSteps] = useState<StepDraft[]>(() => stepsFrom(editing))
+  const [steps, setSteps] = useState<StepDraft[]>(() => editing ? stepsFrom(editing) : starterSteps(starter, t))
   const [musePrompt, setMusePrompt] = useState(editing && !editing.actions?.length && !editing.agentSlug ? editing.prompt || '' : '')
   const [cooldown, setCooldown] = useState(() => initialCooldown(editing, kind))
   // 新建规则时切触发类型,冷却初值跟着换(db_changed → 0);用户已亲手改过的值不动。
@@ -120,6 +124,12 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
+  const addStep = (type: StepDraft['type']): void => {
+    if (steps.length >= 24) return
+    const step = blankStep(type)
+    setSteps((ss) => [...ss, step])
+    setSelected(String(step.key))
+  }
   const hasAgentStep = steps.some((s) => s.type === 'agent_run')
   const patchStep = (key: number, patch: Partial<StepDraft>): void =>
     setSteps((ss) => ss.map((s) => (s.key === key ? { ...s, ...patch } : s)))
@@ -132,7 +142,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
       return next
     })
 
-  // 含 DB 触发/动作的规则:本版表单表达不了它,渲染出来就会在保存时把那部分抹掉。
+  // 含未知字段的规则:表单表达不了它,保存时不能把那部分抹掉。
   // 明说 + 不给保存,比"看着能编辑其实会毁配置"强(codex 抓的)。
   if (hasUnsupportedParts(editing)) {
     return (
@@ -148,33 +158,11 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
     )
   }
 
-  const stepValid = (s: StepDraft): boolean => {
-    if (s.type === 'notify') return !!s.title.trim()
-    if (s.type === 'agent_run') return !!s.agentSlug && !!s.prompt.trim()
-    if (s.type === 'db_row_add' || s.type === 'db_row_edit') {
-      if (!/\.db$/i.test(s.dbPath.trim())) return false
-      if (!s.cells.some((c) => c.k.trim())) return false
-      if (s.type === 'db_row_edit') {
-        // 改行:不是多维表触发就没有「触发命中的那一行」可缺省,必须显式给行 id 或按列值匹配(match 不靠触发行)。
-        if (kind !== 'db_changed' && !s.rowId.trim() && !s.matchColumn.trim()) return false
-        // rowFrom 沿的是触发行的关联列,没有触发行就是一条死配置。
-        if (s.rowFrom.trim() && kind !== 'db_changed') return false
-        // 有匹配列没匹配值 = 匹配空串,几乎必是误填。
-        if (s.matchColumn.trim() && !s.matchValue.trim()) return false
-      }
-      return true
-    }
-    const cat = catalog.find((c) => c.name === s.tool)
-    if (!cat) return false
-    return (cat.parameters.required || []).every((k) => (s.argValues[k] || '').trim() !== '')
-  }
-
-  const canSave = useMemo(() => {
-    if (!desc.trim()) return false
+  const triggerValid = (() => {
     if (kind === 'timer') {
       if (timerMode === 'daily_at' && !/^\d{1,2}:\d{2}$/.test(time)) return false
       if (timerMode === 'at' && !datetime) return false
-      if (timerMode === 'every' && !(Number(ivlN) > 0)) return false
+      if (timerMode === 'every' && (!Number.isInteger(Number(ivlN)) || Number(ivlN) < 1)) return false
     }
     if (kind === 'event_seen' && !match.trim()) return false
     if (kind === 'file_chars_gte' && (!path.trim() || !(Number(n) > 0))) return false
@@ -185,13 +173,23 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
       if (dbWhere.length > MAX_WHERE) return false
       if (dbWhere.some((w) => w.column.trim() && (w.op === 'eq' || w.op === 'ne') && !w.value.trim())) return false
     }
-    // 手动类没有 Muse 兜底语义:0 步骤的按钮点了什么也不会发生,直接不让存。
-    if (kind === 'manual' && !steps.length) return false
-    return steps.every(stepValid)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- stepValid 闭包只另依赖 kind/catalog(已在列)
-  }, [desc, kind, timerMode, time, datetime, ivlN, match, path, n, dbPath, dbEvent, dbColumnIds, dbWhere, steps, catalog])
+    return true
+  })()
+  const issues: { node: string; text: string }[] = []
+  if (!desc.trim()) issues.push({ node: 'trigger', text: t('automation.ux.issue.name') })
+  if (!triggerValid) issues.push({ node: 'trigger', text: t('automation.ux.issue.trigger') })
+  if (!steps.length && (!editing || kind === 'manual')) issues.push({ node: 'review', text: t('automation.ux.issue.steps') })
+  steps.forEach((step, i) => {
+    const issue = stepIssue(step, kind, catalog)
+    if (issue) issues.push({ node: String(step.key), text: `${i + 1}. ${t(`automation.ux.issue.${issue}`)}` })
+  })
+  if (kind !== 'timer' && kind !== 'manual' && (!cooldown.trim() || !Number.isFinite(Number(cooldown)) || Number(cooldown) < 0)) {
+    issues.push({ node: 'review', text: t('automation.ux.issue.cooldown') })
+  }
+  const canSave = issues.length === 0
 
   const save = async (): Promise<void> => {
+    if (!canSave || busy) return
     const condType = kind === 'timer' ? timerMode : kind
     // 预检:编辑器开久了 at 时刻悄悄过期(mount 时的 expiredAt 不会重算)——引擎同口径(5min 容忍)本地先拒
     if (condType === 'at' && (parseLocalDatetime(datetime)?.getTime() ?? 0) < Date.now() - 5 * 60_000) {
@@ -237,12 +235,11 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
         cooldown_hours: cooldownPayload(kind, cooldown), // 0 放行(db_changed 纯动作链 = 不冷却)
         // 新 builder 不再产旧式单动作;0 步骤 = 显式清空(actions:null)回到唤醒 Muse 旧语义
         actions: steps.length ? actions : null,
-        enabled: expiredAt ? true : editing?.enabled ?? true,
+        enabled,
       })
-      st.bump()
-      if (onSaved) { onSaved(saved); return } // 嵌入用法(Amadeus 按钮块):由调用方决定收尾
-      st.closeBuilder()
-      if (editing) st.setSel({ kind: 'trigger', triggerId: editing.id })
+      if (onSaved) { st.bump(); onSaved(saved); return }
+      st.acceptSaved(saved)
+      useApp.getState().toast(t('automation.ux.saved'))
     } catch (e: any) {
       setError(String(e?.message || e))
     } finally {
@@ -254,17 +251,41 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
     ty === 'notify' ? <Bell size={14} /> : ty === 'agent_run' ? <Bot size={14} />
     : ty === 'db_row_add' || ty === 'db_row_edit' ? <Database size={14} /> : <Wrench size={14} />
 
-  return (
-    <div className="auto-builder">
-      <div className="auto-builder-title">
-        <Workflow size={17} /> {editing ? t('automation.builder.editTitle') : t('automation.builder.title')}
-      </div>
+  const flowNodes: FlowNode[] = [
+    { id: 'trigger', title: t('automation.builder.trigger'), subtitle: t(`automation.builder.${kind === 'timer' ? 'condTimer' : kind === 'manual' ? 'condManual' : kind === 'db_changed' ? 'condDb' : kind === 'event_seen' ? 'condEvent' : 'condFile'}`), icon: <Zap size={17} />, ready: triggerValid && !!desc.trim() },
+    ...steps.map((step, i) => ({ id: String(step.key), title: `${i + 1}. ${t(`automation.step.${step.type}`)}`, subtitle: step.title || step.prompt || step.dbPath || step.tool || t('automation.ux.setupHint'), icon: stepIcon(step.type), ready: !stepIssue(step, kind, catalog) })),
+    ...(!steps.length && editing && kind !== 'manual' ? [{ id: 'muse', title: t('automation.builder.museFallback'), subtitle: musePrompt || t('automation.builder.museFallbackHint'), icon: <Sparkles size={17} />, ready: true }] : []),
+    { id: 'review', title: t('automation.ux.finish'), subtitle: canSave ? t('automation.ux.allReady') : t('automation.ux.finishHint'), icon: <CheckCircle2 size={17} />, ready: canSave },
+  ]
+  const additions = <div className="auto-addstep">
+    <span>{t('automation.ux.addStep')}</span>
+    {(['notify', 'agent_run', 'db_row_add', 'db_row_edit', 'tool_call'] as const).map((type) => <button key={type}
+      disabled={busy || steps.length >= 24 || type === 'tool_call' && !catalog.length}
+      title={steps.length >= 24 ? t('automation.ux.maxSteps') : type === 'tool_call' && !catalog.length ? t('automation.builder.toolCatalogEmpty') : ''}
+      onClick={() => addStep(type)}>{stepIcon(type)}{t(`automation.step.${type}`)}</button>)}
+  </div>
 
-      <div className="auto-node">
+  return (
+    <div className={`auto-builder auto-workflow-builder ${fixedManual ? 'auto-builder-embedded' : ''}`}>
+      <div className="auto-builder-title">
+        <Workflow size={17} /><span>{editing ? t('automation.builder.editTitle') : t('automation.builder.title')}</span>
+        <button className="btn ghost sm" disabled={busy} onClick={() => (onCancel ? onCancel() : st.closeBuilder())}>{t('common.cancel')}</button>
+      </div>
+      <div className="auto-compact-tabs" role="group" aria-label={t('automation.ux.workspace')}>
+        <button aria-pressed={compactPane === 'canvas'} onClick={() => setCompactPane('canvas')}>{t('automation.ux.flow')}</button>
+        <button aria-pressed={compactPane === 'config'} onClick={() => setCompactPane('config')}>{t('automation.ux.setup')}</button>
+      </div>
+      <div className={`auto-builder-workspace auto-pane-${compactPane}`}>
+        <WorkflowCanvas nodes={flowNodes} selected={selected} onSelect={setSelected}>
+          {additions}<p className="auto-canvas-note">{t('automation.ux.canvasOrder')}</p>
+        </WorkflowCanvas>
+        <div className="auto-inspector" aria-label={t('automation.ux.setup')}>
+      <div className="auto-node" hidden={selected !== 'trigger'}>
+
         <div className="auto-node-head"><span className="auto-ic"><Zap size={14} /></span>{t('automation.builder.trigger')}</div>
         <div className="field">
           <label>{t('automation.builder.desc')}</label>
-          <input type="text" value={desc} maxLength={200} placeholder={t('automation.builder.descPh')} onChange={(e) => setDesc(e.target.value)} />
+          <input aria-label={t('automation.builder.desc')} type="text" value={desc} maxLength={200} placeholder={t('automation.builder.descPh')} onChange={(e) => setDesc(e.target.value)} />
         </div>
         {!fixedManual && (
           <div className="field">
@@ -429,26 +450,20 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
       {steps.map((s, i) => {
         const cat = s.type === 'tool_call' ? catalog.find((c) => c.name === s.tool) : undefined
         return (
-          <div className="auto-node" key={s.key}>
+          <div className="auto-node" key={s.key} hidden={selected !== String(s.key)}>
             <div className="auto-node-head">
               <span className="auto-ic">{stepIcon(s.type)}</span>
               {t('automation.builder.stepN', { n: String(i + 1) })} · {t(`automation.step.${s.type}`)}
               <span className="auto-step-tools">
                 <button className="icon-btn" disabled={i === 0} title={t('automation.builder.moveUp')} onClick={() => moveStep(i, -1)}><ArrowUp size={12} /></button>
                 <button className="icon-btn" disabled={i === steps.length - 1} title={t('automation.builder.moveDown')} onClick={() => moveStep(i, 1)}><ArrowDown size={12} /></button>
-                <button className="icon-btn" title={t('common.delete')} onClick={() => setSteps((ss) => ss.filter((x) => x.key !== s.key))}><Trash2 size={12} /></button>
+                <button className="icon-btn" title={t('common.delete')} onClick={() => { setSteps((ss) => ss.filter((x) => x.key !== s.key)); setSelected('trigger') }}><Trash2 size={12} /></button>
               </span>
             </div>
             {s.type === 'notify' && (
               <>
-                <div className="field">
-                  <label>{t('automation.builder.notifyTitle')}</label>
-                  <input type="text" value={s.title} maxLength={200} placeholder={t('automation.builder.notifyTitlePh')} onChange={(e) => patchStep(s.key, { title: e.target.value })} />
-                </div>
-                <div className="field">
-                  <label>{t('automation.builder.notifyBody')}</label>
-                  <textarea value={s.body} maxLength={4000} onChange={(e) => patchStep(s.key, { body: e.target.value })} />
-                </div>
+                <TemplateField label={t('automation.builder.notifyTitle')} value={s.title} maxLength={200} placeholder={t('automation.builder.notifyTitlePh')} onChange={(title) => patchStep(s.key, { title })} columns={dbCols} hasRow={kind === 'db_changed'} />
+                <TemplateField label={t('automation.builder.notifyBody')} value={s.body} multiline onChange={(body) => patchStep(s.key, { body })} columns={dbCols} hasRow={kind === 'db_changed'} />
                 <div className="auto-hint">{t('automation.builder.notifyHint')}</div>
               </>
             )}
@@ -567,7 +582,12 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
               <>
                 <div className="field">
                   <label>{t('automation.builder.tool')}</label>
-                  <select value={s.tool} onChange={(e) => patchStep(s.key, { tool: e.target.value, argValues: {} })}>
+                  <select value={s.tool} onChange={(e) => {
+                    const tool = catalog.find((item) => item.name === e.target.value)
+                    const argValues = Object.fromEntries((tool?.parameters.required || [])
+                      .filter((key) => tool?.parameters.properties?.[key]?.type === 'boolean').map((key) => [key, 'false']))
+                    patchStep(s.key, { tool: e.target.value, argValues })
+                  }}>
                     <option value="">{t('automation.builder.toolPick')}</option>
                     {catalog.map((c) => (
                       <option key={c.name} value={c.name}>{c.name}{c.dangerous ? ' ⚠' : ''}</option>
@@ -589,7 +609,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
                           {p.enum.map((v) => <option key={v} value={v}>{v}</option>)}
                         </select>
                       ) : p.type === 'boolean' ? (
-                        <label className="auto-check"><input type="checkbox" checked={val === 'true'} onChange={(e) => setVal(e.target.checked ? 'true' : '')} /> {p.description || ''}</label>
+                        <label className="auto-check"><input type="checkbox" checked={val === 'true'} onChange={(e) => setVal(e.target.checked ? 'true' : 'false')} /> {p.description || ''}</label>
                       ) : p.type === 'number' ? (
                         <input type="number" value={val} onChange={(e) => setVal(e.target.value)} />
                       ) : p.type === 'string' ? (
@@ -606,8 +626,8 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
         )
       })}
 
-      {steps.length === 0 && kind !== 'manual' && (
-        <div className="auto-node auto-node-muse">
+      {steps.length === 0 && editing && kind !== 'manual' && (
+        <div className="auto-node auto-node-muse" hidden={selected !== 'muse'}>
           <div className="auto-node-head"><span className="auto-ic"><Sparkles size={14} /></span>{t('automation.builder.museFallback')}</div>
           <div className="auto-hint">{t('automation.builder.museFallbackHint')}</div>
           <div className="field">
@@ -617,14 +637,12 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
         </div>
       )}
 
-      <div className="auto-addstep">
-        <button onClick={() => setSteps((ss) => [...ss, blankStep('notify')])}><Bell size={12} /> {t('automation.step.notify')}</button>
-        <button onClick={() => setSteps((ss) => [...ss, blankStep('agent_run')])}><Bot size={12} /> {t('automation.step.agent_run')}</button>
-        <button disabled={!catalog.length} title={catalog.length ? '' : t('automation.builder.toolCatalogEmpty')} onClick={() => setSteps((ss) => [...ss, blankStep('tool_call')])}><Wrench size={12} /> {t('automation.step.tool_call')}</button>
-        <button onClick={() => setSteps((ss) => [...ss, blankStep('db_row_add')])}><Database size={12} /> {t('automation.step.db_row_add')}</button>
-        <button onClick={() => setSteps((ss) => [...ss, blankStep('db_row_edit')])}><Database size={12} /> {t('automation.step.db_row_edit')}</button>
-      </div>
-
+      <div className="auto-node auto-review" hidden={selected !== 'review'}>
+        <div className="auto-node-head"><CheckCircle2 size={16} />{t('automation.ux.review')}</div>
+        <p className="auto-hint">{t('automation.ux.enableHint')}</p>
+        <label className="auto-check"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />{t('automation.ux.enabledLabel')}</label>
+        {issues.length ? <div className="auto-validation" role="status"><strong>{t('automation.ux.checklist')}</strong>{issues.map((issue, i) => <button key={i} onClick={() => setSelected(issue.node)}>{issue.text}</button>)}</div>
+          : <p className="auto-ready"><CheckCircle2 size={14} />{t('automation.ux.allReady')}</p>}
       {kind !== 'timer' && kind !== 'manual' && (
         <div className="auto-guard">
           <label>{t('automation.builder.cooldown')}</label>
@@ -636,12 +654,15 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, f
         </div>
       )}
 
-      {error && <div style={{ color: 'var(--warn, #b8860b)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 12 }}>{error}</div>}
-      <div className="auto-builder-actions">
-        <button className="btn ghost" onClick={() => (onCancel ? onCancel() : st.closeBuilder())}>{t('common.cancel')}</button>
-        <button className="btn" disabled={!canSave || busy} onClick={() => void save()}>
-          {busy ? '…' : t('common.save')}
-        </button>
+      </div>
+      </div>
+      </div>
+      <div className="auto-builder-actions auto-builder-footer">
+        <div className="auto-save-status" aria-live="polite">
+          {error ? <span role="alert">{error}</span> : issues.length ? <button onClick={() => setSelected(issues[0].node)}>{issues[0].text}{issues.length > 1 ? ` (+${issues.length - 1})` : ''}</button> : <span>{t('automation.ux.allReady')}</span>}
+        </div>
+        <button className="btn ghost sm" onClick={() => setSelected('review')}>{t('automation.ux.review')}</button>
+        <button className="btn sm" disabled={!canSave || busy} onClick={() => void save()}>{busy ? '…' : t(enabled ? 'automation.ux.saveEnabled' : 'automation.ux.savePaused')}</button>
       </div>
     </div>
   )
