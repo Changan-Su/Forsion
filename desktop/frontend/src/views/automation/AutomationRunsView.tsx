@@ -116,7 +116,7 @@ const HistorianList: React.FC = () => {
   )
 }
 
-export const AutomationRunsView: React.FC = () => {
+export const AutomationRunsView: React.FC<{ renderSession?: (sessionId: string) => React.ReactNode }> = ({ renderSession }) => {
   const { t } = useI18n()
   const st = useAutomation()
   const sel = st.builder ? null : st.sel
@@ -132,7 +132,7 @@ export const AutomationRunsView: React.FC = () => {
       body = <ExecutionsList key={tr.id} triggerId={tr.id} />
     } else if (tr?.agentSlug) {
       const sid = sessionForTrigger(st.autoSessions, tr.id)
-      body = sid ? <RunsList sessionId={sid} /> : <div className="auto-runs-empty">{t('automation.trigger.neverFired')}</div>
+      body = sid ? <><RunsList sessionId={sid} />{renderSession?.(sid)}</> : <div className="auto-runs-empty">{t('automation.trigger.neverFired')}</div>
     } else {
       body = <div className="auto-runs-empty">{t('automation.trigger.museNote')}</div>
     }

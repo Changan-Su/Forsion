@@ -1,6 +1,9 @@
 import { registerMessages } from '../../i18n'
 
 registerMessages({
+  'automation.ux.actions': { zh: '更多操作', en: 'More actions' },
+  'automation.ux.help': { zh: '使用说明', en: 'Workflow help' },
+  'automation.ux.properties': { zh: '规则配置', en: 'Rule configuration' },
   'automation.ux.myWorkflows': { zh: '我的自动化', en: 'My workflows' },
   'automation.ux.noRules': { zh: '从入门模板创建第一条自动化。', en: 'Create your first workflow from a starter template.' },
   'automation.ux.workspace': { zh: "自动化工作台", en: "Automation studio" },

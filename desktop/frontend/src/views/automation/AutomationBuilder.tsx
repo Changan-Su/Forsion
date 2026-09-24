@@ -18,6 +18,10 @@ import { useShallow } from 'zustand/react/shallow'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { useDbStore } from '../../amadeus/store/dbStore'
 import { ensureAmadeusReady } from '../../amadeusPlugins'
+import type { ExtendViewController } from '@lcl/engine'
+import { ArrowLeft, HelpCircle, Plus } from 'lucide-react'
+import { CapabilityMenu } from '../../components/CapabilityMenu'
+import { AutomationExtension } from './AutomationExtension'
 import type { MuseTriggerInfo } from '../../types'
 import { starterSteps, stepIssue, type Starter } from './experience'
 import { WorkflowCanvas, type FlowNode } from './WorkflowCanvas'
@@ -30,6 +34,7 @@ type TimerMode = 'daily_at' | 'at' | 'every'
 /** 嵌入用法(Amadeus 按钮块的配置弹层):固定手动触发 + 保存后把规则交回调用方,不碰自动化 Space 的选中态。 */
 export interface AutomationBuilderProps {
   editing?: MuseTriggerInfo
+  extendView?: ExtendViewController
   starter?: Starter
   /** true=锁死「手动(按钮)」触发,隐藏触发类型选择器。 */
   fixedManual?: boolean
@@ -50,7 +55,7 @@ function defaultDatetime(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:00`
 }
 
-export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, starter, fixedManual, onSaved, onCancel }) => {
+export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, starter, fixedManual, onSaved, onCancel, extendView }) => {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
   const agentDefs = useApp((s) => s.agentDefs)
@@ -59,8 +64,8 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
 
   const [desc, setDesc] = useState(editing?.desc || (starter ? t(`automation.ux.${starter}.name`) : ''))
   const [selected, setSelectedId] = useState('trigger')
-  const [compactPane, setCompactPane] = useState<'canvas' | 'config'>('canvas')
-  const setSelected = (id: string): void => { setSelectedId(id); setCompactPane('config') }
+  const [inspectorOpen, setInspectorOpen] = useState(false)
+  const setSelected = (id: string): void => { setSelectedId(id); setInspectorOpen(true) }
   const [enabled, setEnabled] = useState(editing?.enabled ?? !!fixedManual)
   const initCond = editing?.cond
   const [kind, setKind] = useState<TriggerKind>(
@@ -257,13 +262,14 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
     ...(!steps.length && editing && kind !== 'manual' ? [{ id: 'muse', title: t('automation.builder.museFallback'), subtitle: musePrompt || t('automation.builder.museFallbackHint'), icon: <Sparkles size={17} />, ready: true }] : []),
     { id: 'review', title: t('automation.ux.finish'), subtitle: canSave ? t('automation.ux.allReady') : t('automation.ux.finishHint'), icon: <CheckCircle2 size={17} />, ready: canSave },
   ]
-  const additions = <div className="auto-addstep">
-    <span>{t('automation.ux.addStep')}</span>
-    {(['notify', 'agent_run', 'db_row_add', 'db_row_edit', 'tool_call'] as const).map((type) => <button key={type}
-      disabled={busy || steps.length >= 24 || type === 'tool_call' && !catalog.length}
-      title={steps.length >= 24 ? t('automation.ux.maxSteps') : type === 'tool_call' && !catalog.length ? t('automation.builder.toolCatalogEmpty') : ''}
-      onClick={() => addStep(type)}>{stepIcon(type)}{t(`automation.step.${type}`)}</button>)}
-  </div>
+  const additions = <>
+    <CapabilityMenu label={t('automation.ux.addStep')} className="btn ghost sm" disabled={busy || steps.length >= 24}
+      items={(['notify', 'agent_run', 'db_row_add', 'db_row_edit', 'tool_call'] as const).map((type) => ({
+        id: type, label: t(`automation.step.${type}`), icon: stepIcon(type), disabled: type === 'tool_call' && !catalog.length,
+        onSelect: () => addStep(type),
+      }))}><Plus size={14} />{t('automation.ux.addStep')}</CapabilityMenu>
+    <button className="icon-btn" title={t('automation.ux.help')} onClick={() => setSelected('help')}><HelpCircle size={15} /></button>
+  </>
 
   return (
     <div className={`auto-builder auto-workflow-builder ${fixedManual ? 'auto-builder-embedded' : ''}`}>
@@ -271,14 +277,11 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
         <Workflow size={17} /><span>{editing ? t('automation.builder.editTitle') : t('automation.builder.title')}</span>
         <button className="btn ghost sm" disabled={busy} onClick={() => (onCancel ? onCancel() : st.closeBuilder())}>{t('common.cancel')}</button>
       </div>
-      <div className="auto-compact-tabs" role="group" aria-label={t('automation.ux.workspace')}>
-        <button aria-pressed={compactPane === 'canvas'} onClick={() => setCompactPane('canvas')}>{t('automation.ux.flow')}</button>
-        <button aria-pressed={compactPane === 'config'} onClick={() => setCompactPane('config')}>{t('automation.ux.setup')}</button>
+      <div className="auto-builder-workspace" hidden={!extendView && inspectorOpen}>
+        <WorkflowCanvas nodes={flowNodes} selected={inspectorOpen ? selected : ''} onSelect={setSelected}>{additions}</WorkflowCanvas>
       </div>
-      <div className={`auto-builder-workspace auto-pane-${compactPane}`}>
-        <WorkflowCanvas nodes={flowNodes} selected={selected} onSelect={setSelected}>
-          {additions}<p className="auto-canvas-note">{t('automation.ux.canvasOrder')}</p>
-        </WorkflowCanvas>
+      <AutomationExtension controller={extendView} open={inspectorOpen} title={t('automation.ux.setup')} onClose={() => setInspectorOpen(false)}>
+        {!extendView && <button className="btn ghost sm auto-inline-back" onClick={() => setInspectorOpen(false)}><ArrowLeft size={14} />{t('automation.ux.flow')}</button>}
         <div className="auto-inspector" aria-label={t('automation.ux.setup')}>
       <div className="auto-node" hidden={selected !== 'trigger'}>
 
@@ -655,8 +658,12 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
       )}
 
       </div>
+      <div className="auto-node" hidden={selected !== 'help'}>
+        <h3>{t('automation.ux.flow')}</h3><p className="auto-hint">{t('automation.ux.canvasOrder')}</p>
+        <p className="auto-hint">{t('automation.ux.nativeHint')}</p>
       </div>
       </div>
+      </AutomationExtension>
       <div className="auto-builder-actions auto-builder-footer">
         <div className="auto-save-status" aria-live="polite">
           {error ? <span role="alert">{error}</span> : issues.length ? <button onClick={() => setSelected(issues[0].node)}>{issues[0].text}{issues.length > 1 ? ` (+${issues.length - 1})` : ''}</button> : <span>{t('automation.ux.allReady')}</span>}

@@ -15,11 +15,11 @@ export const AutomationHome: React.FC = () => {
       <div className="auto-home-kicker"><Workflow size={16} /> {t('automation.ux.workspace')}</div>
       <h1>{t('automation.ux.welcome')}</h1>
       <p className="auto-home-lead">{t('automation.ux.intro')}</p>
-      <ol className="auto-guide">
+      <details className="auto-home-help"><summary>{t('automation.ux.help')}</summary><ol className="auto-guide">
         {['trigger', 'actions', 'test'].map((key, i) => (
           <li key={key}><span>{i + 1}</span><div><strong>{t(`automation.ux.guide.${key}`)}</strong><p>{t(`automation.ux.guide.${key}Hint`)}</p></div></li>
         ))}
-      </ol>
+      </ol></details>
       <div className="auto-home-section"><h2>{t('automation.ux.startWith')}</h2><button className="btn ghost sm" onClick={() => openBuilder()}><Plus size={13} />{t('automation.ux.blank')}</button></div>
       <div className="auto-starters">
         {STARTERS.map((starter) => {
@@ -32,7 +32,6 @@ export const AutomationHome: React.FC = () => {
         })}
       </div>
       <p className="auto-home-note">{t('automation.ux.draftHint')}</p>
-      <div className="auto-home-ecosystem"><strong>{t('automation.ux.native')}</strong><p>{t('automation.ux.nativeHint')}</p></div>
     </div>
   )
 }

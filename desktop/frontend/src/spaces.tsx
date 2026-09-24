@@ -1,3 +1,4 @@
+import { AUTOMATION_WORKSPACE_MODE } from './views/automation/automationListSource'
 import { hasNativeFeature, amadeusAvailable, inboxAvailable } from './features/runtime'
 /** 具体的 Space 定义 + 注册入口。Space = 取代「App」的功能组合(见 engine/types.SpaceDefinition)。
  *  每个 Space 贡献一个 ribbon 顶部图标(可拖动改序,默认排在折叠钮之下、商店之上),点击切换。
@@ -193,15 +194,15 @@ const codingSpace: SpaceDefinition = {
   },
 }
 
-/** Automation Space:左=自动化列表(Muse 巡检/Historian/盯任务规则);主=选中项详情/构建器;
- *  右=触发记录(历次运行)。跨栏通道=stores/automationStore(照 calendarNavStore 先例)。 */
+/** Automation Space:统一工作区列表 + 主区流程；配置与运行记录由主 View 按需打开 Extend View。 */
 const AUTOMATION_SIDE_VIEWS: Record<'left' | 'right', PersistedPanel[]> = {
-  left: [{ type: 'automation-list', params: {} }],
-  right: [{ type: 'automation-runs', params: {} }],
+  left: [{ type: 'workspace', params: {} }],
+  right: [],
 }
 
 const automationSpace: SpaceDefinition = {
   id: 'automation',
+  autoWorkspaceMode: AUTOMATION_WORKSPACE_MODE,
   name: () => app().tr('space.automation'),
   icon: Workflow,
   sidebarDefaults: AUTOMATION_SIDE_VIEWS,
@@ -209,8 +210,7 @@ const automationSpace: SpaceDefinition = {
   build() {
     ws().setSidebarDefaults(AUTOMATION_SIDE_VIEWS)
     ws().openView('automation-detail', {}, 'main')
-    ws().openView('automation-list', {}, 'left')
-    ws().openView('automation-runs', {}, 'right')
+    ws().openView('workspace', {}, 'left')
   },
 }
 

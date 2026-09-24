@@ -9,17 +9,17 @@ Automation Space connects a trigger to an ordered chain of actions. Start from a
 
 ## Build on the canvas
 
-Select a trigger or action node to configure it. Narrow panels offer separate **Workflow canvas** and **Node configuration** tabs. Add notification, agent, database or tool steps from the canvas toolbar. Move a step up or down in its configuration to change execution order.
+The sidebar uses Forsion's shared Workspace View for search, groups and item menus. Select a trigger or action node to open its configuration in Extend View. Closing the panel preserves the current draft. The **Add step** menu collects notification, agent, database and tool actions; the help button opens guidance. Move a step up or down in its configuration to change execution order.
 
-Drag nodes to arrange the current view; moving them does not change execution order. Adding, removing or reordering steps arranges the chain automatically. Drag empty space or scroll to pan, and use the zoom controls or Ctrl / Command + scroll to zoom. **Fit to view** brings the whole workflow into view. The current workflow model is sequential; conditional branches and parallel execution are not available.
+Drag nodes to arrange the current view; moving them does not change execution order. Adding, removing or reordering steps arranges the chain automatically. Pan, zoom, snapping, fit and the minimap use Forsion's shared canvas controls. The current workflow model is sequential; conditional branches and parallel execution are not available.
 
 ## Configure, test and enable
 
 1. Configure the trigger: schedule, event, file threshold, database change, or manual click.
 2. Configure the actions. Notification fields offer an **Insert variable** picker for the current date and time, and database triggers also provide fields from the triggering row.
 3. Follow the setup messages at the bottom. Clicking one opens the node that needs attention.
-4. New workflows default to **Save paused**. Saving opens the saved rule. **Test run** executes its saved actions; expand a run to inspect each step and its full result. Retry if history could not be loaded.
-5. Enable the rule in the sidebar after checking its results, or choose **Enable after saving** in the review node. Editing an existing rule preserves its enabled state.
+4. New workflows default to **Save paused**. Saving opens the saved rule. **Test run** executes its saved actions and opens Extend View; expand a run to inspect each step and its full result. Retry if history could not be loaded. Rules, agent schedules and system automations also provide a **Run results** entry.
+5. Enable the rule through its Workspace item menu or detail actions after checking its results, or choose **Enable after saving** in the review node. Editing an existing rule preserves its enabled state.
 
 Manual tests of database rules have no triggering-row context. Validate row variables and default row targets with a real database change. When an agent step reports that a task was queued or started, open its session to check the final output.
 
