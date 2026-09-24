@@ -28,6 +28,7 @@
  *   npm run live:harness -- --only teamapproval              # 团队 × 完全通行(09-21 反馈):成员 config 自带 auto-edit / run 启动后才切档,两条都须 0 次审批;改审批闸 / teamRuns 档位后跑
  *   npm run live:harness -- --only coding                    # 改 agents/codingPrompt.ts / skills/forsion-plugin 后跑:Coding 人格面对插件项目须指向 Sandbox 面板、且不自己动手 git init/commit(版本由宿主管)
  *   npm run live:harness -- --only refine                    # 自进化闭环(09-18):Historian 自动档提名 → 收件箱 → /refine 采纳写 HARNESS.md → 新会话系统提示带上;改 REFINE_DIRECTIVE / harnessStore / 判官 harness 字段 / 注入槽后跑
+ *   npm run live:harness -- --only browserext               # Tangu for Chrome 扩展(09-24):临时 Chrome 装真扩展并配对,读用户的标签 + 在 Tangu 标签组里后台操作;改扩展 / 桥 / 扩展那一路的工具后跑
  *   npm run live:harness -- --only browsertabs              # 读用户已打开的浏览器标签(09-24):起临时 headless Chrome 冒充用户浏览器;改 browser_tabs / 浏览器提示词后跑(CHROME_BIN 可指定)
  *   node scripts/live-harness.mjs --selftest                 # 纯判据(done 锚点 / load_tools 措辞 / 子代理归属 / 团队激活窗与真并行)的负对照;不起引擎、不需凭证
  *
@@ -47,6 +48,7 @@ import { tmpdir, homedir } from 'node:os';
 import { join, dirname, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fromDb, report as timelineReport } from './stall-timeline.mjs';
+import { launchChromePipe, pairExtension } from './lib/chrome-pipe.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const entry = join(root, 'dist', 'standalone', 'main.js');
@@ -58,7 +60,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'browserext'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -67,7 +69,7 @@ const FILLER = Math.max(0, Math.floor(Number(opt('filler', 0)) || 0));
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'browserext']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -362,12 +364,37 @@ if (ONLY.has('browsertabs')) {
   await fetch(`http://127.0.0.1:${chromePort}/json/new?${page('/video/BV1live')}`, { method: 'PUT' });
 }
 
+// browserext(09-24):临时 Chrome(管道 CDP)装真扩展,引擎的扩展桥开在一个空闲端口;其余场景把桥关掉,
+// 免得台架引擎去抢本机正式版 / dev 的固定端口。页面同样走本地 http。
+const EXT_MARKER = `橙柚-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+const EXT_RESULT = `结果-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+let extChrome = null; let extPages = null; let extPort = 0; let extPage = (p) => p;
+if (ONLY.has('browserext')) {
+  extPort = await new Promise((r) => { const srv = createServer(); srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => r(p)); }); });
+  const PAGES = {
+    '/inbox': '<title>Inbox - Example Mail</title><h1>Inbox</h1><p>3 unread messages</p>',
+    '/video/BV1ext': `<title>天禄五环 三款对比测评 - 哔哩哔哩</title><h1>天禄五环 三款对比测评</h1><p>UP 主结论:三款里最推荐的是「${EXT_MARKER}」款。</p>`,
+    '/search': '<title>Demo search</title><h1>Demo search</h1><form action="/results"><input name="q" placeholder="搜索关键词"><button>搜索</button></form>',
+  };
+  extPages = createHttpServer((q, r) => {
+    const u = new URL(q.url, 'http://x');
+    r.setHeader('content-type', 'text/html; charset=utf-8');
+    if (u.pathname === '/results') { const q2 = u.searchParams.get('q') || ''; r.end(`<title>${EXT_RESULT} · ${q2}</title><h1>Results for ${q2}</h1>`); return; }
+    r.end(PAGES[u.pathname] || '<title>404</title>');
+  });
+  await new Promise((r) => extPages.listen(0, '127.0.0.1', r));
+  extPage = (p) => `http://127.0.0.1:${extPages.address().port}${p}`;
+  extChrome = await launchChromePipe({ url: extPage('/inbox'), userDataDir: join(OUT, 'ext-chrome') });
+  await extChrome.cdp('Target.createTarget', { url: extPage('/video/BV1ext'), background: true });
+}
+
 const child = spawn(process.execPath, [
   entry, '--port', String(port), '--host', '127.0.0.1', '--data-dir', join(home, 'state.db'),
   '--sandbox', SANDBOX, '--cloud-url', 'http://127.0.0.1:9', '--token', TOKEN,
 ], { env: {
   ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
   TANGU_BROWSER_CDP: userChromeWs || 'off',
+  ...(extPort ? { TANGU_BROWSER_EXTENSION_PORT: String(extPort), TANGU_BROWSER_ALLOW_PRIVATE_URLS: '1' } : { TANGU_BROWSER_EXTENSION: '0' }),
   // --window:只钉台架模型的窗口(contextBudget 的 env 覆盖表,最高优先级),别的模型不受影响
   ...(WINDOW ? { TANGU_MODEL_CONTEXT_WINDOWS: JSON.stringify({ [MODEL]: WINDOW }) } : {}),
 }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -549,6 +576,8 @@ async function finish(reason) {
   if (finished) return; finished = true;
   rmSync(authLink, { force: true }); // 任何退出路径都不留凭证软链
   if (userChrome) userChrome.kill('SIGKILL');
+  extChrome?.kill();
+  extPages?.close();
   userPages?.close();
   if (!childExit) { child.kill('SIGTERM'); await Promise.race([new Promise((r) => child.once('exit', r)), sleep(8000)]); }
   if (!childExit) { child.kill('SIGKILL'); await Promise.race([new Promise((r) => child.once('exit', r)), sleep(3000)]); }
@@ -1572,6 +1601,44 @@ try {
       detail: ev.error || `工具 ${ev.toolCalls.join('→') || '无'};${hit ? '答中款名' : `未答中款名 ${TABS_MARKER}`};模型 ${ev.usages.length} 轮;墙钟 ${sec(ev.wallMs)}${detour.length ? `;绕路 ${detour.join(',')}` : ''}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
+  // 09-24 用户反馈的三件事(扩展这一路):没有自己的标签组 / 抢前台 / 每次都要确认。
+  // 判据:读用户已打开的页(browser_tabs)答中款名;在浏览器里搜索时走 Tangu 自己的页、auto-edit 下 0 次审批、
+  // 用户正看着的标签始终 visible(没被激活别的标签抢走);两道题都不许 browser_task。
+  if (ONLY.has('browserext')) {
+    const status = await api('/agent/browser-extension');
+    const [, extPortStr, extToken] = String(status.code || '').split(':');
+    const loaded = await extChrome.cdp('Extensions.loadUnpacked', { path: join(root, 'browser-extension') });
+    await pairExtension(extChrome, loaded.id, { port: Number(extPortStr), token: extToken });
+    const connected = await until(async () => (await api('/agent/browser-extension')).connected, 15_000, 300);
+    const inboxVisible = async () => {
+      const { targetInfos } = await extChrome.cdp('Target.getTargets');
+      const inbox = targetInfos.find((t) => t.type === 'page' && t.url.endsWith('/inbox'));
+      if (!inbox) return 'gone';
+      const { sessionId } = await extChrome.cdp('Target.attachToTarget', { targetId: inbox.targetId, flatten: true });
+      const r = await extChrome.cdp('Runtime.evaluate', { expression: 'document.visibilityState', returnByValue: true }, sessionId);
+      await extChrome.cdp('Target.detachFromTarget', { sessionId });
+      return r?.result?.value;
+    };
+    await scenario('browserext', 'browserext 读用户已打开的标签(扩展)', async () => {
+      if (!connected) return { ok: false, detail: '扩展没连上引擎' };
+      const ev = await run(`live-ext-read-${Date.now()}`, '我浏览器里开着一个天禄五环的 B 站测评视频页面，帮我看看里面最推荐哪一款？直接告诉我款名。', 180_000, { approvalMode: 'auto-edit' });
+      const hit = ev.content.includes(EXT_MARKER);
+      const vis = await inboxVisible();
+      return { ok: !ev.error && ev.done && ev.toolCalls.includes('browser_tabs') && hit && vis === 'visible' && !ev.toolCalls.includes('browser_task'),
+        detail: ev.error || `工具 ${ev.toolCalls.join('→') || '无'};${hit ? '答中款名' : `未答中 ${EXT_MARKER}`};用户的标签 ${vis};审批 ${ev.approvals};模型 ${ev.usages.length} 轮;墙钟 ${sec(ev.wallMs)}`,
+        output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+    });
+    await scenario('browserext', 'browserext 在 Tangu 标签组里后台操作(扩展)', async () => {
+      if (!connected) return { ok: false, detail: '扩展没连上引擎' };
+      const ev = await run(`live-ext-act-${Date.now()}`, `请在浏览器里打开 ${extPage('/search')}，在搜索框输入「天禄五环」并提交搜索，然后把结果页的标题原样告诉我。`, 240_000, { approvalMode: 'auto-edit' });
+      const hit = ev.content.includes(EXT_RESULT);
+      const vis = await inboxVisible();
+      const opened = ev.toolCalls.includes('browser_navigate');
+      return { ok: !ev.error && ev.done && opened && hit && ev.approvals === 0 && vis === 'visible' && !ev.toolCalls.includes('browser_task'),
+        detail: ev.error || `工具 ${ev.toolCalls.join('→') || '无'};${hit ? '答中结果页标题' : `未答中 ${EXT_RESULT}`};审批 ${ev.approvals}(Tangu 自己的页应为 0);用户的标签 ${vis};模型 ${ev.usages.length} 轮;墙钟 ${sec(ev.wallMs)}`,
+        output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+    });
+  }
   await finish();
 } catch (e) {
   console.error(String(e?.message || e));

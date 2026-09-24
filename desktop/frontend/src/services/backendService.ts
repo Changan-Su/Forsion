@@ -553,6 +553,16 @@ export interface ChannelConfigPatch {
   appSecret?: string
 }
 
+/** Tangu for Chrome 扩展:桥的状态 + 连接码(连接码即配对凭据,只走带鉴权的本机引擎接口)。 */
+export interface BrowserExtensionStatus {
+  enabled: boolean; port: number; listening: boolean; error: string; connected: boolean
+  clients: Array<{ version: string; connectedAt: number }>; extensionId: string; extensionDir: string; code: string
+}
+export const getBrowserExtension = (cfg: TanguDesktopConfig) =>
+  request<BrowserExtensionStatus>(cfg, '/agent/browser-extension')
+export const resetBrowserExtensionCode = (cfg: TanguDesktopConfig) =>
+  request<BrowserExtensionStatus>(cfg, '/agent/browser-extension/reset-code', { method: 'POST', body: '{}' })
+
 export const listChannels = (cfg: TanguDesktopConfig) =>
   request<{ available: boolean; channels: ChannelStatus[] }>(cfg, '/agent/channels')
 

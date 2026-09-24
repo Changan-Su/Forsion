@@ -66,6 +66,7 @@
     "check:bluebirdtimestamps": "node scripts/bluebird-space.check.cjs --timestamps",
     "check:splitregions": "node scripts/split-regions.check.cjs",
     "check:br": "node scripts/e2e-editor.cjs --check=blank-line-br",
+    "check:browserext": "node scripts/e2e-editor.cjs --check=browserext-settings",
     "check:attention": "node scripts/e2e-editor.cjs --check=attention-save",
     "check:cjk": "node scripts/e2e-editor.cjs --check=cjk-flanking",
     "check:enter": "node scripts/e2e-editor.cjs --check=enter-semantics",

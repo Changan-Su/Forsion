@@ -2795,6 +2795,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-row-control > input { width: min(100%, 220px); }
 .settings-row-wide-control { flex: 0 1 410px; min-width: 260px; }
 .settings-number-input { max-width: 110px; text-align: right; font-variant-numeric: tabular-nums; }
+/* 设置 → 浏览器 → Chrome 扩展:连接码(整段可选中)+ 行内按钮 */
+.settings-inline-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.settings-code-chip { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 2px 7px; border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); color: var(--text-muted); font-family: var(--font-mono); font-size: var(--ui-font-caption, 11px); user-select: all; }
 .settings-switch {
   position: relative;
   flex: 0 0 auto;

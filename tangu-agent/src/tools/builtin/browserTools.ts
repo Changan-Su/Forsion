@@ -16,6 +16,7 @@ import { assertPublicHttpUrl } from '../../core/util/urlSafety.js';
 import { tanguHome } from '../../core/tanguHome.js';
 import { getRawSection } from '../../core/config.js';
 import { formatToolOutput } from '../outputPersist.js';
+import { extensionCall, extensionConnected } from '../../services/browserExtension.js';
 import type { ToolDef, ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 
@@ -29,9 +30,9 @@ const TAB_REFS_MAX_CHARS = 6_000;
 
 // 模型面文案一律英文(项目约定)
 const NOT_CONNECTED_HINT =
-  "Not connected to the user's own browser, so their open tabs cannot be seen (Chrome is not running, or its remote debugging is off). "
-  + 'Tell the user the one-time setup: open chrome://inspect/#remote-debugging in Chrome 144 or newer and enable remote debugging for this browser; '
-  + 'Chrome will then ask them to click "Allow" when Tangu connects. Safari and Firefox are not supported. '
+  "Not connected to the user's own browser, so their open tabs cannot be seen. "
+  + 'Tell the user the one-time setup: install the "Tangu for Chrome" extension (Tangu → Settings → Browser → Chrome extension has the steps) '
+  + 'and paste the connect code shown there into the extension. Safari and Firefox are not supported. '
   + "Until then, the other browser_* tools use Tangu's separate background browser, which has none of the user's tabs or logins.";
 const OWN_BROWSER_EMPTY_NOTE =
   "This is Tangu's own background browser, not the user's, and it shows nothing (no page loaded, or no interactive elements). "
@@ -235,6 +236,18 @@ async function rebindTab(ctx: ToolContext, endpoint: string): Promise<string | n
  * (没绑定执行侧直接拒),所以「有活绑定」正是它们可能落到用户浏览器上的充要前提 —— 闸门不再自己探端口
  * (探测抖一下就会和执行侧判得不一样,Codex 09-24 复审 #4);不按会话比对,子代理的工具 ctx 用的是 subId。
  */
+/**
+ * 审批闸用(approvals.ts):这个会话的点按类动作会不会落到用户**自己的**标签上。
+ * 扩展那一路:会话绑的是 Tangu 标签组里的页(它自己的地盘)→ 不批;绑的是用户的标签 → 批。
+ * 本会话没有扩展绑定(比如子代理,闸门拿的是父会话 id)→ 看全局有没有绑用户标签的,再退回远程调试那一路的判定。
+ */
+export async function userBrowserActionGated(sessionId: string): Promise<boolean> {
+  const own = extBound.get(sessionId);
+  if (own && extensionConnected()) return !own.sandbox;
+  for (const b of extBound.values()) if (!b.sandbox) return true;
+  return userBrowserBound();
+}
+
 export async function userBrowserBound(): Promise<boolean> {
   // pid 未知的绑定执行侧会拒,这里仍算上:宁可多问一次(安全侧)
   for (const b of boundTabs.values()) if (!b.daemon || b.daemon === await daemonPid(b.endpoint)) return true;
@@ -248,6 +261,7 @@ function onOwnTab(t: ToolDef): ToolDef {
   return {
     ...t,
     execute: async (args, ctx) => {
+      if (useExtension(ctx)) return extensionExecute(t.name, args, ctx);
       const cdp = await userBrowserEndpoint(ctx);
       const scoped: ToolContext = { ...ctx };
       pinnedEndpoint.set(scoped, cdp);
@@ -765,7 +779,7 @@ export const browserToolsProvider: ToolProvider = {
   ] as ToolDef[]).map(onOwnTab),
 };
 
-interface TabInfo { tab: string; title: string; url: string; tangu?: true }
+interface TabInfo { tab: string; title: string; url: string; focused?: true; tangu?: true }
 
 /** select → 唯一标签:先按标签 id 精确命中,否则按标题/URL 子串(不分大小写)。0 个或多个都不猜,交回模型挑。 */
 function pickTabs(tabs: TabInfo[], select: string): TabInfo[] {
@@ -802,9 +816,9 @@ export const browserTabsProvider: ToolProvider = {
             "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser "
             + '("this page", "the video I have open") — not browser_task, which starts a separate browser without the user\'s tabs. '
             + 'Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as "t3", or text found in exactly one tab\'s title or URL — '
-            + 'brings that tab to the front and returns its text plus @eN element refs that the browser_* control tools then act on. '
-            + 'Chrome does not reveal which tab the user is looking at: match what they describe, and ask if several tabs fit. '
-            + 'If Tangu is not connected, the result explains the one-time setup to relay to the user.',
+            + 'reads that tab and returns its text plus element refs (eN) that the browser_* control tools then act on. '
+            + 'The tab the user is looking at is marked focused when that is known; otherwise match what they describe, and ask if several tabs fit. '
+            + 'Tabs Tangu opened itself are marked tangu. If Tangu is not connected, the result explains the one-time setup to relay to the user.',
           parameters: {
             type: 'object',
             properties: {
@@ -815,6 +829,7 @@ export const browserTabsProvider: ToolProvider = {
         },
       },
       execute: async (args, ctx) => {
+        if (useExtension(ctx)) return extensionTabs(ctx, String(args.select ?? '').trim());
         const cdp = await userBrowserEndpoint(ctx);
         if (!cdp) return toJson({ success: false, connected: false, error: NOT_CONNECTED_HINT });
         return withAttachLock(() => readUserTabs(ctx, cdp, String(args.select ?? '').trim()));
@@ -854,3 +869,151 @@ async function readUserTabs(ctx: ToolContext, cdp: string, select: string): Prom
     ...(refs.success ? { refs: clipText(String(refs.data?.snapshot ?? ''), TAB_REFS_MAX_CHARS) } : {}),
   });
 }
+
+// ── 扩展这一路(Tangu for Chrome;装了且连上就优先于远程调试)───────────────────────────────
+// 按 Chrome 标签 id 直接寻址:没有共享游标 → 不用锁、不切标签、不激活;远程调试那一路的锁 / pid / 重绑全用不上。
+// 会话 → 它选中的标签(sandbox = 在 Tangu 标签组里 / Tangu 自己开的,点按不用审批);会话 → 它自己开的那一页。
+const extBound = new Map<string, { tabId: number; sandbox: boolean }>();
+const extOwnTab = new Map<string, number>();
+
+function useExtension(ctx: ToolContext): boolean {
+  return !isBackgroundRun(ctx) && extensionConnected(); // 无人值守 run 永不碰用户的浏览器(与远程调试那一路同口径)
+}
+
+function extBind(ctx: ToolContext, tabId: number, sandbox: boolean): void {
+  extBound.delete(ctx.sessionId);
+  extBound.set(ctx.sessionId, { tabId, sandbox });
+  if (extBound.size > MAX_BOUND_TABS) extBound.delete(extBound.keys().next().value!);
+}
+
+const tabRef = (id: number): string => `t${id}`;
+const refOf = (v: unknown): string => String(v ?? '').trim().replace(/^@/, '');
+const errText = (e: any): string => String(e?.message || e);
+
+async function extensionTabs(ctx: ToolContext, select: string): Promise<string> {
+  try {
+    const { tabs } = await extensionCall<{ tabs: any[] }>('tabs.list');
+    const list: TabInfo[] = tabs.map((t) => ({
+      tab: tabRef(t.id), title: String(t.title || ''), url: String(t.url || ''),
+      ...(t.focused ? { focused: true as const } : {}), ...(t.tangu ? { tangu: true as const } : {}),
+    }));
+    if (!select) return toJson({ success: true, tabs: list });
+    const hits = pickTabs(list, select);
+    if (hits.length !== 1) {
+      return toJson({
+        success: false,
+        error: hits.length ? `"${select}" matches ${hits.length} tabs — call again with one tab id.` : `No open tab matches "${select}".`,
+        tabs: hits.length ? hits : list,
+      });
+    }
+    const tabId = Number(hits[0].tab.slice(1));
+    const page = await extensionCall<any>('page.read', { tabId, maxText: TAB_TEXT_MAX_CHARS });
+    extBind(ctx, tabId, !!hits[0].tangu); // 之后本会话的 browser_click / snapshot … 都落在这个标签上(按 id,不切前台)
+    return toJson({
+      success: true,
+      tab: hits[0].tab,
+      title: page.title || hits[0].title,
+      url: page.url || hits[0].url,
+      text: clipText(String(page.text || ''), TAB_TEXT_MAX_CHARS),
+      refs: clipText(String(page.snapshot || ''), TAB_REFS_MAX_CHARS),
+    });
+  } catch (e) {
+    return toJson({ success: false, error: errText(e) });
+  }
+}
+
+/** 在本会话自己的那一页里打开(没有就在 Tangu 标签组里后台新开一个);绝不动用户正看着的标签。 */
+async function extensionNavigate(ctx: ToolContext, rawUrl: string): Promise<Record<string, any>> {
+  const url = await validateUrl(rawUrl);
+  const own = extOwnTab.get(ctx.sessionId);
+  let tab: any = null;
+  if (own != null) { try { tab = await extensionCall('tabs.navigate', { tabId: own, url }); } catch { tab = null; } } // 那一页被用户关了 → 重开
+  if (!tab) tab = await extensionCall('tabs.open', { url });
+  extOwnTab.delete(ctx.sessionId);
+  extOwnTab.set(ctx.sessionId, tab.id);
+  if (extOwnTab.size > MAX_BOUND_TABS) extOwnTab.delete(extOwnTab.keys().next().value!);
+  extBind(ctx, tab.id, true);
+  const out: Record<string, any> = {
+    success: true,
+    url: tab.url || url,
+    title: tab.title || '',
+    note: "Opened in the background in the \"Tangu\" tab group of the user's Chrome; the tab the user is on was not touched.",
+  };
+  try {
+    const snap = await extensionCall<any>('page.snapshot', { tabId: tab.id });
+    out.snapshot = clipSnapshot(String(snap.snapshot || ''));
+    out.element_count = snap.refCount;
+  } catch (e) {
+    out.snapshotError = errText(e);
+  }
+  return out;
+}
+
+async function extensionExecute(name: string, args: Record<string, any>, ctx: ToolContext): Promise<string> {
+  try {
+    if (name === 'browser_navigate') return toJson(await extensionNavigate(ctx, String(args.url ?? '')));
+    if (name === 'browser_search') {
+      const query = String(args.query ?? '').trim();
+      if (!query) return 'Error: query is required';
+      const engine = (['duckduckgo', 'bing', 'google', 'baidu'].includes(args.engine) ? args.engine : searchEngine()) as SearchEngine;
+      return toJson({ ...(await extensionNavigate(ctx, searchUrl(engine, query))), query, engine });
+    }
+    const bound = extBound.get(ctx.sessionId);
+    if (!bound) return toJson({ success: false, error: NO_TAB_BOUND });
+    const tabId = bound.tabId;
+    switch (name) {
+      case 'browser_snapshot': {
+        const r = await extensionCall<any>('page.snapshot', { tabId });
+        return formatToolOutput(ctx, 'browser_snapshot', toJson({ success: true, url: r.url, title: r.title, snapshot: clipSnapshot(String(r.snapshot || '')), element_count: r.refCount }));
+      }
+      case 'browser_click': {
+        const ref = refOf(args.ref);
+        if (!ref) return 'Error: ref is required';
+        const r = await extensionCall<any>('page.click', { tabId, ref });
+        return toJson({ success: true, clicked: ref, url: r.url, title: r.title });
+      }
+      case 'browser_type': {
+        const ref = refOf(args.ref);
+        if (!ref) return 'Error: ref is required';
+        const r = await extensionCall<any>('page.type', { tabId, ref, text: String(args.text ?? '') });
+        return toJson({ success: true, value: r.value, url: r.url, title: r.title });
+      }
+      case 'browser_scroll': {
+        const direction = String(args.direction ?? '');
+        if (direction !== 'up' && direction !== 'down') return 'Error: direction must be up or down';
+        const px = Number.isFinite(Number(args.pixels)) && Number(args.pixels) > 0 ? Number(args.pixels) : 500;
+        const r = await extensionCall<any>('page.scroll', { tabId, dy: direction === 'up' ? -px : px });
+        return toJson({ success: true, scrollY: r.y, maxScrollY: r.max });
+      }
+      case 'browser_back': {
+        const r = await extensionCall<any>('page.back', { tabId });
+        return toJson({ success: true, url: r.url, title: r.title });
+      }
+      case 'browser_press': {
+        const key = String(args.key ?? '').trim();
+        if (!key) return 'Error: key is required';
+        const r = await extensionCall<any>('page.press', { tabId, key });
+        return toJson({ success: true, key, url: r.url, title: r.title });
+      }
+      case 'browser_console': {
+        if (args.expression == null) {
+          return toJson({ success: false, error: 'Reading console logs is not available through the Tangu Chrome extension yet; pass an expression to evaluate instead.' });
+        }
+        const r = await extensionCall<any>('page.eval', { tabId, expression: String(args.expression) });
+        return toJson(r?.ok === false ? { success: false, error: r.error } : { success: true, result: r?.result, type: r?.type });
+      }
+      case 'browser_screenshot': {
+        const r = await extensionCall<any>('page.screenshot', { tabId, full: args.full_page !== false });
+        await fs.mkdir(screenshotDir(), { recursive: true });
+        const file = path.join(screenshotDir(), `browser_screenshot_${randomUUID()}.png`);
+        await fs.writeFile(file, Buffer.from(String(r.data || ''), 'base64'));
+        return toJson({ success: true, screenshot_path: file });
+      }
+      default:
+        return toJson({ success: false, error: `${name} is not supported through the Tangu Chrome extension` });
+    }
+  } catch (e) {
+    return toJson({ success: false, error: errText(e) });
+  }
+}
+

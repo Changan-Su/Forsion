@@ -32,6 +32,7 @@ import commandsRouter from './routes/commands.js';
 import hooksRouter from './routes/hooks.js';
 import wechatRouter from './routes/wechat.js';
 import channelsRouter from './routes/channels.js';
+import browserExtensionRouter from './routes/browserExtension.js';
 import inboxRouter from './routes/inbox.js';
 import ttsRouter from './routes/tts.js';
 import adminRouter from './routes/admin.js';
@@ -46,6 +47,7 @@ import { startHistorian, stopHistorian } from './services/historian.js';
 import { startMuseSupervisor, stopMuseSupervisor } from './services/muse.js';
 import { startInboxPull, stopInboxPull } from './services/inboxPull.js';
 import { startChannels, stopChannels } from './channels/hub.js';
+import { startBrowserExtensionBridge, stopBrowserExtensionBridge } from './services/browserExtension.js';
 import { disposeAllProcesses } from './tools/processRegistry.js';
 
 export interface TanguModule {
@@ -101,6 +103,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(hooksRouter);
   dataRouter.use(wechatRouter);
   dataRouter.use(channelsRouter);
+  dataRouter.use(browserExtensionRouter);
   dataRouter.use(inboxRouter);
   dataRouter.use(ttsRouter);
 
@@ -144,6 +147,8 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     startInboxPull();
     // 多通道(微信/Telegram/QQ):自带 hostExec 闸门,云端/worker no-op。
     void startChannels().catch((e: any) => console.warn('[tangu] Channels 启动失败:', e?.message || e));
+    // Tangu for Chrome 扩展的本机桥:只在本地形态(能碰用户浏览器的地方)起;云端 / worker 不起。
+    if (deps().profile.capabilities.hostExec) startBrowserExtensionBridge();
 
     // 配置驱动 profile:启动 app_profile_overrides 轮询(admin panel 改 → 本进程 ≤刷新窗口收敛)。
     // thin worker 无本地 DB(host.query 抛)→ 传 profilePolling:false,用基线 profile(admin 覆盖暂不下达,后续可经 state-API 取)。
@@ -157,6 +162,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     stopMuseSupervisor();
     stopInboxPull();
     stopChannels();
+    stopBrowserExtensionBridge();
     deps().profileStore.dispose();
     abortAllRuns();
     disposeAllProcesses(); // run_background 的子进程(防热加载/退出泄漏)

@@ -2,6 +2,7 @@ import { PRODUCT } from '../product'
 import { ModelPickerSettings } from './ModelPickerSettings'
 import { AutoCompactSetting } from './AutoCompactSetting'
 import { HostSandboxSettings } from './HostSandboxSettings'
+import { BrowserExtensionPanel } from './BrowserExtensionPanel'
 /**
  * 设置页:连接 / 模型 / MCP / Browser / WeChat / 主题 / 高级。
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
@@ -2537,6 +2538,7 @@ export const SettingsModal: React.FC<{
                         {remoteMsg && <span className="hint">{remoteMsg}</span>}
                       </div>
                     </SettingsPanel>
+                    <BrowserExtensionPanel cfg={p.cfg} />
                   </>
                 )}
 

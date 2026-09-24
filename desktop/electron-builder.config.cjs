@@ -98,6 +98,9 @@ module.exports = {
           { from: '../tangu-agent/package.json', to: 'tangu-server/package.json' },
           { from: '../tangu-agent/skills', to: 'tangu-server/skills' },
           { from: '../tangu-agent/agent-skills', to: 'tangu-server/agent-skills' },
+          // Tangu for Chrome 扩展:设置页「打开扩展文件夹」指向这里,用户在 Chrome 里「加载已解压的扩展程序」选它
+          // (引擎按 dist/services/../../browser-extension 自定位,dev 与打包态同一相对路径)。
+          { from: '../tangu-agent/browser-extension', to: 'tangu-server/browser-extension' },
           { from: 'build/python', to: 'python' },
           { from: 'build/node', to: 'node' },
           // ⚠️这一条不是多余的:electron-builder 的拷贝过滤器(app-builder-lib util/filter.js)对每个
