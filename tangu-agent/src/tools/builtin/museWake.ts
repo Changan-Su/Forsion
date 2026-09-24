@@ -48,8 +48,9 @@ export const museWakeProvider: ToolProvider = {
           description:
             'Skip your regular heartbeat wake-ups until a given time, to save the user\'s background budget when nothing needs you soon — ' +
             'e.g. the user is away, or it is outside their usual active hours (see the user rhythm in your kickoff). ' +
-            'You are still woken early when the user becomes active again (a chat message or an in-app action), when an automation rule fires, ' +
-            'or when one of your own schedule entries comes due. At most 24h. Calling it again replaces the previous sleep; hours=0 resumes the normal heartbeat. ' +
+            'The sleep ends as soon as the user becomes active again (a chat message or an in-app action) and your normal heartbeat resumes — after a long sleep ' +
+            'that means you run right away; automation rules and your own due schedule entries still wake you in the meantime. At most 24h. ' +
+            'Calling it again replaces the previous sleep; hours=0 resumes the normal heartbeat. ' +
             'If a task needs you at a specific time, schedule it with manage_schedule instead of relying on the heartbeat.',
           parameters: {
             type: 'object',
@@ -80,7 +81,7 @@ export const museWakeProvider: ToolProvider = {
         const d = new Date(at);
         const mins = Math.round((at - now) / 60_000);
         return `OK — heartbeat paused until ${pad(d.getHours())}:${pad(d.getMinutes())} (in ${Math.floor(mins / 60)}h ${mins % 60}m). ` +
-          'You will be woken earlier if the user becomes active, a rule fires, or one of your schedule entries comes due.';
+          'The sleep ends early if the user becomes active; rules and your due schedule entries still wake you meanwhile.';
       },
     },
   ],

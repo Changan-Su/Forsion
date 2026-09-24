@@ -139,6 +139,8 @@ function BackgroundQuotaSection({ museModelId, modelLabel }: { museModelId: stri
     <div className="special-bgquota" data-busy={busy ? '1' : undefined}>
       <p className="special-bgquota-lead">{t('bgQuota.lead', { share: String(bg.sharePercent ?? 15), model: modelLabel(bg.modelId) })}</p>
       <div className="special-bgquota-axes">{axis('daily')}{axis('weekly')}</div>
+      {/* ponytail: 只看 Muse 显式选的模型;「设置 → 模型」里本机改过辅助模型槽(config.json models.background)时 Muse 也会走主额度,
+          这里不提醒 —— 要提醒得让 /agent/models 带回本机槽位 */}
       {!!museModelId && museModelId !== bg.modelId && <p className="special-bgquota-warn">{t('bgQuota.otherModel', { model: modelLabel(museModelId) })}</p>}
       {!!window.tangu?.accountBgAutoMain && (
         <div className="special-toggle-row"><div><strong>{t('bgQuota.autoMain')}</strong><p>{t('bgQuota.autoMainHint')}</p></div>
