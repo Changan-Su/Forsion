@@ -23,6 +23,12 @@ Drag nodes to arrange the current view; moving them does not change execution or
 
 Manual tests of database rules have no triggering-row context. Validate row variables and default row targets with a real database change. When an agent step reports that a task was queued or started, open its session to check the final output.
 
+## Existing automations
+
+The canvas uses the existing rule format and sequential execution engine. Existing rules need no migration or recreation; agent tool interfaces and approval rules are unchanged. Saving an edit preserves the rule ID and enabled state. As in the previous editor, legacy single-agent rules become one agent step when edited, while legacy Muse wake-up rules retain their prompt without an action chain.
+
+After rescheduling a completed one-time rule, explicitly enable it in the review node. Manual rules created inside note buttons still default to enabled. Rules containing trigger or action fields this editor does not recognize are shown as read-only to prevent configuration loss.
+
 ## Connected to Forsion
 
 Note buttons can run manual workflows, database changes can trigger workflows, agents can perform tasks, and notifications arrive in the inbox. Muse and Historian are managed separately under system automations. Agent schedules also appear in Automation Space and the calendar.

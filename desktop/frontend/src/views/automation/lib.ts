@@ -161,7 +161,7 @@ export interface StepDraft {
   agentSlug: string
   prompt: string
   tool: string
-  /** 工具参数原始输入(全字符串;boolean 存 'true'/'')。 */
+  /** 工具参数原始输入(全字符串;boolean 存 'true'/'false'，缺席保持省略)。 */
   argValues: Record<string, string>
   /** db 动作:目标 .db(vault 相对路径)。 */
   dbPath: string
