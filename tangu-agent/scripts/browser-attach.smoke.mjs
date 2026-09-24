@@ -43,7 +43,9 @@ const PAGES = {
   '/video': ['天禄五环 测评 - 哔哩哔哩', `视频结论:最推荐 3 号,口令 ${MARKER}`],
   '/': ['Tangu nav target', 'nav ok'],
 };
-const http = createServer((q, r) => { const [t, b] = PAGES[q.url.split('?')[0]] || ['404', '']; r.setHeader('content-type', 'text/html; charset=utf-8'); r.end(`<title>${t}</title><h1>${t}</h1><p>${b}</p>`); });
+// /video 带一个按钮:点一次标题 +1,用来验「拿 browser_tabs 给的 refs 连点」(09-24 dev 实翻:refs 被多余的切标签清空)
+const BUTTON = `<button onclick="this.dataset.n=(+this.dataset.n||0)+1;document.title='CLICKED-'+this.dataset.n">推荐款</button>`;
+const http = createServer((q, r) => { const path = q.url.split('?')[0]; const [t, b] = PAGES[path] || ['404', '']; r.setHeader('content-type', 'text/html; charset=utf-8'); r.end(`<title>${t}</title><h1>${t}</h1><p>${b}</p>${path === '/video' ? BUTTON : ''}`); });
 await new Promise((r) => http.listen(0, '127.0.0.1', r));
 const origin = `http://127.0.0.1:${http.address().port}`;
 const USER_TABS = [`${origin}/inbox`, `${origin}/video`];
@@ -83,6 +85,13 @@ try {
   check('② 列表里没有正文(答案只能靠 select 读)', !JSON.stringify(listed).includes(MARKER));
   const read = await timed('browser_tabs(select)', () => run(browserTabsProvider, 'browser_tabs', { select: '哔哩哔哩' }));
   check('② select 读到页内文字', read.success && String(read.text || '').includes(MARKER), String(read.text || read.error).slice(0, 120));
+  // ②' 用 select 返回的 refs 连点两次:不许被多余的切标签清空(Unknown ref),两次都要生效
+  const btnRef = String(read.refs || '').match(/button "推荐款" \[ref=(e\d+)\]/)?.[1];
+  const c1 = btnRef ? await run(browserToolsProvider, 'browser_click', { ref: btnRef }) : { error: 'refs 里没有按钮' };
+  const c2 = btnRef ? await run(browserToolsProvider, 'browser_click', { ref: btnRef }) : c1;
+  // 别用 tab list 的标题核:agent-browser 缓存的是连上 / 导航那一刻的标题,页面后改的 title 不更新(09-24 实测)
+  const clickedTitle = (await run(browserToolsProvider, 'browser_console', { expression: 'document.title' })).data?.result;
+  check("②' 用 browser_tabs 给的 ref 连点两次都生效", c1.success && c2.success && clickedTitle === 'CLICKED-2', `${c1.error || ''}${c2.error || ''} title=${clickedTitle}`);
   const ambiguous = await run(browserTabsProvider, 'browser_tabs', { select: '127.0.0.1' });
   check('② 多个命中不乱猜', ambiguous.success === false && (ambiguous.tabs || []).length >= 2);
 

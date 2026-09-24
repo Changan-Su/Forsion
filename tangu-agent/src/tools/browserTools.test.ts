@@ -186,8 +186,8 @@ describe('user browser attach (Chrome remote debugging)', () => {
       `  *"tab tangu-"*) ${hasOwnTab ? `echo '{"success":true,"data":{"tabId":"t9","label":"tangu-x"}}'` : `echo '{"success":false,"error":"No tab with label \`tangu-x\`; run \`agent-browser tab\` to list open tabs"}'`};;`,
       `  *"tab new"*) echo '{"success":true,"data":{"tabId":"t9","label":"tangu-x","url":"http://127.0.0.1/x"}}';;`,
       `  *" open "*) echo '{"success":true,"data":{"url":"http://127.0.0.1/x","title":"X"}}';;`,
-      `  *"tab list"*) echo '{"success":true,"data":{"tabs":[{"tabId":"t1","active":true,"title":"GitHub","url":"https://github.com/"},{"tabId":"t2","active":false,"title":"Video - bilibili","url":"https://www.bilibili.com/video/BV1"}]}}';;`,
-      `  *"tab t2"*) echo '{"success":true,"data":{"tabId":"t2","title":"Video - bilibili","url":"https://www.bilibili.com/video/BV1"}}';;`,
+      `  *"tab list"*) CUR=$(cat "$AGENT_BROWSER_SOCKET_DIR/current" 2>/dev/null || echo t1); A1=false; A2=false; [ "$CUR" = t1 ] && A1=true; [ "$CUR" = t2 ] && A2=true; echo '{"success":true,"data":{"tabs":[{"tabId":"t1","active":'$A1',"title":"GitHub","url":"https://github.com/"},{"tabId":"t2","active":'$A2',"title":"Video - bilibili","url":"https://www.bilibili.com/video/BV1"}]}}';;`,
+      `  *"tab t2"*) echo t2 > "$AGENT_BROWSER_SOCKET_DIR/current"; echo '{"success":true,"data":{"tabId":"t2","title":"Video - bilibili","url":"https://www.bilibili.com/video/BV1"}}';;`,
       `  *"get text"*) echo '{"success":true,"data":{"text":"Best pick: No. 3"}}';;`,
       `  *snapshot*) echo '{"success":true,"data":{"snapshot":"- link \\"No. 3\\" [ref=e1]","refs":{"e1":{}}}}';;`,
       `  *" click "*) echo '{"success":true,"data":{}}';;`,
@@ -237,19 +237,29 @@ describe('user browser attach (Chrome remote debugging)', () => {
     expect(read.refs).toContain('ref=e1');
   });
 
-  it.skipIf(process.platform === 'win32')('control tools act only on the tab this conversation selected, re-selecting it first', async () => {
+  it.skipIf(process.platform === 'win32')('control tools act only on the tab this conversation selected, without re-switching (refs survive)', async () => {
     const { log } = fakeBin(false);
     // 没选过标签:不许作用在守护进程随手绑的那个(可能是用户的任意标签)
     const blind = await exec('browser_click', { ref: 'e1' }, ctxOf({ sessionId: 's-other' }));
     expect(blind.success).toBe(false);
     expect(blind.error).toMatch(/browser_tabs/);
     expect(calls(log).some((a) => / click /.test(` ${a} `))).toBe(false);
-    // 选中 t2 后点击:先切回 t2 再 click(别的会话在中间切走游标也不怕)
+    // 选中 t2 后点击:游标本来就在 t2 → 只核一眼不切(agent-browser 的 tab 切换哪怕切到当前标签也会清空 refs,
+    // 09-24 dev 实翻「Unknown ref: e149」)
     await exec('browser_tabs', { select: 't2' }, ctxOf());
     const before = calls(log).length;
     const clicked = await exec('browser_click', { ref: 'e1' }, ctxOf());
     expect(clicked.success).toBe(true);
-    expect(calls(log).slice(before).map((a) => a.replace(/^.* --json /, ''))).toEqual(['tab t2', 'click @e1']);
+    expect(calls(log).slice(before).map((a) => a.replace(/^.* --json /, ''))).toEqual(['tab list', 'click @e1']);
+  });
+
+  it.skipIf(process.platform === 'win32')('if another conversation moved the cursor, switch back before acting', async () => {
+    const { dir, log } = fakeBin(false);
+    await exec('browser_tabs', { select: 't2' }, ctxOf());
+    writeFileSync(join(dir, 'current'), 't1'); // 别的会话把共享游标切到了 t1
+    const before = calls(log).length;
+    await exec('browser_click', { ref: 'e1' }, ctxOf());
+    expect(calls(log).slice(before).map((a) => a.replace(/^.* --json /, ''))).toEqual(['tab list', 'tab t2', 'click @e1']);
   });
 
   it.skipIf(process.platform === 'win32')('a restarted agent-browser daemon invalidates the selection (tab ids are renumbered)', async () => {

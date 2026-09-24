@@ -216,6 +216,11 @@ async function rebindTab(ctx: ToolContext, endpoint: string): Promise<string | n
       + 'Reading tabs with browser_tabs still works.';
   }
   if (b.daemon !== await daemonPid(endpoint)) { boundTabs.delete(key); return NO_TAB_BOUND; }
+  // agent-browser 的 `tab <id>` 哪怕切到**当前**标签也会清空元素 refs(09-24 实测:之后 click @eN → Unknown ref,
+  // dev 里用户实翻)→ 游标已在本会话的标签上就不切;顺带同一标签上连续操作不再每次把它激活到前台。
+  const list = await runBrowserCommand(ctx, 'tab', ['list'], commandTimeout(), endpoint);
+  const current = list.success && Array.isArray(list.data?.tabs) ? list.data.tabs.find((t: any) => t?.active) : undefined;
+  if (current && (current.tabId === b.tab || current.label === b.tab) && b.daemon === await daemonPid(endpoint)) return null;
   const sw = await runBrowserCommand(ctx, 'tab', [b.tab], commandTimeout(), endpoint);
   if (sw.success && b.daemon === await daemonPid(endpoint)) return null;
   boundTabs.delete(key);
