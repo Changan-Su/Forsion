@@ -3095,6 +3095,19 @@ app.whenReady().then(async () => {
     const scope = type ?? 'both'
     try { return await cloudJson(c, 'POST', '/api/token-quota/reset-card/use', { type: scope }, 15_000) } catch (e: any) { return { status: 0, json: { detail: String(e?.message || e) } } }
   })
+  // 后台额度(Muse / 自动化):从主额度等额转入(本周期)、用尽后改用主额度继续。与额度视图同一套取 cloudUrl 的回落链。
+  ipcMain.handle('account:bgConvert', async (_e, percent: unknown) => {
+    const c = await accountCloud()
+    if (!c.token) return { status: 401, json: null }
+    if (!Number.isInteger(percent) || (percent as number) < 1 || (percent as number) > 100) return { status: 400, json: { error: 'invalid_percent' } }
+    try { return await cloudJson(c, 'POST', '/api/token-quota/background/convert', { percent }, 15_000) } catch (e: any) { return { status: 0, json: { detail: String(e?.message || e) } } }
+  })
+  ipcMain.handle('account:bgAutoMain', async (_e, enabled: unknown) => {
+    const c = await accountCloud()
+    if (!c.token) return { status: 401, json: null }
+    if (typeof enabled !== 'boolean') return { status: 400, json: { error: 'invalid_request' } }
+    try { return await cloudJson(c, 'POST', '/api/token-quota/background/auto-main', { enabled }, 15_000) } catch (e: any) { return { status: 0, json: { detail: String(e?.message || e) } } }
+  })
 
   // ── Forsion Market ──
   // 浏览/详情/安装全在主进程:有 cloudUrl + 文件系统 + 免 CORS。浏览端点公开(无需 token)。

@@ -203,6 +203,9 @@ export interface MuseStatusInfo {
   /** 自建 Space(2026-09-11):插件目录 + 内容戳(变了 → 只重载 agent-muse 插件)。旧引擎无 → undefined = 不同步。 */
   spaceDir?: string
   spaceStamp?: number
+  /** Muse 自己定的休眠(set_next_wake,2026-09-24):心跳暂停到这个时刻;null = 醒着。旧引擎无此字段。 */
+  sleepUntil?: number | null
+  sleepReason?: string | null
 }
 
 /** 自动化动作链步骤(引擎 museTriggers.ActionSpec 镜像;tool_call 只能在构建器创建)。 */
@@ -1191,6 +1194,10 @@ declare global {
       accountQuota?(): Promise<{ status: number; json: any }>
       /** 用掉一张限额重置卡(今日+本周已用清零)。 */
       accountUseResetCard?(type?: 'both' | 'weekly'): Promise<{ status: number; json: any }>
+      /** 后台额度:从主额度等额转入 limit×percent%(本周期有效;POST /api/token-quota/background/convert)。 */
+      accountBgConvert?(percent: number): Promise<{ status: number; json: any }>
+      /** 后台额度用尽后改用主额度继续(开关;POST /api/token-quota/background/auto-main)。 */
+      accountBgAutoMain?(enabled: boolean): Promise<{ status: number; json: any }>
       /** 以当前用户身份调 Forsion 云端 API(只收相对路径,主进程拼 cloudUrl 并盖 token;token 不下发渲染层)。
        *  返回 { status, json } 或 { status: 0, error }(0 = 没发出去:未登录 / 地址非法 / 网络断)。timeoutMs 缺省 15s,上限 120s。 */
       cloudFetch?(req: { path: string; method?: string; body?: unknown; timeoutMs?: number }): Promise<{ status: number; json?: any; error?: string }>

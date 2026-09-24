@@ -15,6 +15,27 @@ export interface AccountQuotaView {
   weeklyResetAt?: string
   resetCards?: number
   pointsAutoDeduct?: boolean
+  /** 后台额度(Muse / 自动化;2026-09-24 起服务端才下发,旧服务端无此字段)。 */
+  background?: BackgroundQuotaView
+}
+
+/**
+ * 后台额度:主额度之外额外一桶(限额 × sharePercent + 本期从主额度转入的量),只收「后台智能体 × 云端默认后台模型」的用量。
+ * 字段口径同主额度:-1 = 不限,percent = 已用百分比。modelId = 计入的那个模型;null = 服务端没配,桶不生效。
+ */
+export interface BackgroundQuotaView {
+  sharePercent?: number
+  dailyLimit: number
+  dailyUsed?: number
+  dailyRemaining?: number
+  dailyPercent?: number
+  weeklyLimit: number
+  weeklyUsed?: number
+  weeklyRemaining?: number
+  weeklyPercent?: number
+  /** 用尽后改用主额度继续(缺省 false = Muse / 自动化暂停) */
+  autoMain?: boolean
+  modelId?: string | null
 }
 
 export type QuotaAdvisory = {
@@ -84,4 +105,24 @@ export function quotaAdvisoryFor(quota: AccountQuotaView | null | undefined): Qu
     exhausted: threshold === 0,
     critical: threshold === 0 || threshold === 5,
   }
+}
+
+/**
+ * 后台额度提醒:桶生效(有计入模型)且本期真的用过才提醒 —— 从没让 Muse 跑过云端默认模型的人,
+ * 不该被一条「后台额度已用尽」吓到(份额被 admin 调成 0 时上限就是 0)。
+ */
+export function backgroundAdvisoryFor(quota: AccountQuotaView | null | undefined): QuotaAdvisory | null {
+  const bg = quota?.background
+  if (!bg?.modelId) return null
+  if (!(Number(bg.dailyUsed) > 0 || Number(bg.weeklyUsed) > 0)) return null
+  return quotaAdvisoryFor(bg)
+}
+
+/** 聊天框只有一个提醒位:剩余比例更低的那条赢,打平时主额度优先(那是用户自己的对话)。 */
+export function pickQuotaAdvisory(
+  main: QuotaAdvisory | null,
+  background: QuotaAdvisory | null,
+): { advisory: QuotaAdvisory; bucket: 'main' | 'background' } | null {
+  if (main && (!background || main.remainingPercent <= background.remainingPercent)) return { advisory: main, bucket: 'main' }
+  return background ? { advisory: background, bucket: 'background' } : null
 }

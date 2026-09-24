@@ -11,12 +11,21 @@ import { createPortal } from 'react-dom'
 import { OverlayAt } from '@lcl/engine'
 import { LogOut, Loader2, Gauge, ChevronDown, ChevronRight, Send, UserRound, ExternalLink, RotateCcw } from 'lucide-react'
 import type { AuthStatusInfo } from '../types'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
 import { TierBadge } from './TierBadge'
+import { museAvailable } from '../features/runtime'
 import { track } from '../achievements/store'
 import { AccountSwitcher } from './AccountSwitcher'
-import { publishAccountQuota } from '../services/accountQuota'
+import { publishAccountQuota, type BackgroundQuotaView } from '../services/accountQuota'
 import { ResetCardCeremony, type ResetCardResult } from './ResetCardCeremony'
+
+registerMessages({
+  'sidebar.account.menu.background': { zh: '后台智能体', en: 'Background agents' },
+  'sidebar.account.menu.backgroundHint': {
+    zh: '主额度之外额外的一份,只计 Muse 与自动化用云端默认后台模型的用量',
+    en: 'An extra allowance on top of your main quota, used only by Muse and automations on the cloud default background model',
+  },
+})
 
 /** /api/token-quota/my 透传里本菜单消费的字段(percent 是「已用」百分比,展示用 100-x)。 */
 interface QuotaJson {
@@ -30,6 +39,15 @@ interface QuotaJson {
   resetCards?: number
   resetCardsWeekly?: number
   pointsAutoDeduct?: boolean
+  background?: BackgroundQuotaView
+}
+
+/** 后台额度两轴里更紧的那个的剩余百分比(按 remaining / limit 精确算,上限 0 = 0%);两轴都不限 → null。 */
+function backgroundRemainPct(bg: BackgroundQuotaView): number | null {
+  const left = (limit: number, remaining?: number): number | null =>
+    limit < 0 ? null : limit === 0 ? 0 : Math.max(0, Math.min(100, ((Number(remaining) || 0) / limit) * 100))
+  const axes = [left(Number(bg.dailyLimit), bg.dailyRemaining), left(Number(bg.weeklyLimit), bg.weeklyRemaining)].filter((x): x is number => x !== null)
+  return axes.length ? Math.floor(Math.min(...axes)) : null
 }
 
 /** 重置卡两种粒度:全额(日+周)/ 仅周,与 server reset-card/use 的 type 一致。 */
@@ -290,6 +308,16 @@ export const AccountCard: React.FC<{
                 <span>{t('sidebar.account.menu.daily')}</span><span className="grow" />
                 <b>{quota.dailyLimit < 0 ? t('sidebar.account.menu.unlimited') : remainPct(quota.dailyPercent)}</b>
               </div>
+              {/* 后台额度(Muse 只在桌面本地引擎跑;服务端没配计入模型 → 不显示) */}
+              {museAvailable() && !!quota.background?.modelId && (() => {
+                const pct = backgroundRemainPct(quota.background)
+                return (
+                  <div className="ap-row" data-row="background" title={t('sidebar.account.menu.backgroundHint')}>
+                    <span>{t('sidebar.account.menu.background')}</span><span className="grow" />
+                    <b>{pct === null ? t('sidebar.account.menu.unlimited') : `${pct}%`}</b>
+                  </div>
+                )
+              })()}
             </>
           ) : (
             <div className="ap-row ap-dim">{quotaErr ? t('sidebar.account.menu.quotaFail') : t('sidebar.account.menu.loading')}</div>
