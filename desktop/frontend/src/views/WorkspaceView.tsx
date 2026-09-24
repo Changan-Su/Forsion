@@ -12,9 +12,9 @@ import { amadeusAvailable, sessionsAvailable } from '../features/runtime'
 import { useMemo, useState, useEffect, useReducer, useRef, type ReactNode } from 'react'
 import { useWorkspace, activeMainPanel, scheduleWorkspaceSave, useSpaceStore, getView } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
-import { Check, ChevronDown, FileText, Folder, Search, X } from 'lucide-react'
+import { Check, ChevronDown, FileText, ListFilter, MoreHorizontal, Search, X } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
-import type { ListAction, ListItem, ListSourceContribution } from '@amadeus/plugins/types'
+import type { ListItem, ListSourceContribution } from '@amadeus/plugins/types'
 import { useApp } from '../stores/appStore'
 import { registerMessages, useI18n } from '../i18n'
 import { useShallow } from 'zustand/react/shallow'
@@ -32,12 +32,22 @@ import { autoWorkspaceMode, resolveWorkspaceModes, workspaceKeyForPath, type Wor
 import { useCodeStudio } from '../stores/codeStudioStore'
 import { VaultSideSwitch } from '../components/VaultSideSwitch'
 import { SidebarRow } from '../components/SidebarRow'
+import { CapabilityMenu } from '../components/CapabilityMenu'
+import { ContextMenu, type CtxMenu } from '../components/RightPanel'
 import { resolveIcon } from '@amadeus/components/icons'
 import { ensureAmadeusReady } from '../amadeusPlugins'
 
 registerMessages({
   'wsview.all': { zh: '全部', en: 'All' },
   'wsview.noMatches': { zh: '没有匹配项', en: 'No matches' },
+  'wsview.empty': { zh: '暂无内容', en: 'Nothing here yet' },
+  'wsview.search': { zh: '搜索{source}', en: 'Search {source}' },
+  'wsview.clearSearch': { zh: '清空搜索', en: 'Clear search' },
+  'wsview.filter': { zh: '筛选分类', en: 'Filter by category' },
+  'wsview.clearFilter': { zh: '显示全部', en: 'Show all' },
+  'wsview.actions': { zh: '{source}操作', en: '{source} actions' },
+  'wsview.itemActions': { zh: '{title}的操作', en: 'Actions for {title}' },
+  'wsview.resultCount': { zh: '{count} 项', en: '{count} items' },
   // 新旧两个会话档并存:新档(轨道侧栏)占「会话」这个名字,旧档降为「会话(旧)」——
   // 档位 id 仍是 'sessions'(布局持久化键,发版即冻结),只改文案。
   'workspace.mode.orbits': { zh: '会话', en: 'Sessions' },
@@ -253,7 +263,7 @@ export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?:
   }
 
   const body: ReactNode =
-    pluginSrc ? <PluginListBody src={pluginSrc} />
+    pluginSrc ? <PluginListBody key={mode} src={pluginSrc} />
     : mode === 'orbits' ? <OrbitsView sideFilter={sideFilter} />
     : mode === 'sessions' ? <SessionsView sideFilter={sideFilter} />
     : mode === 'files' ? <FilesBody vaultCtx={vaultCtx} sideFilter={sideFilter} />
@@ -281,7 +291,7 @@ export function WorkspaceView({ leaf, defaultMode }: ViewProps & { defaultMode?:
               setModeMenuOpen(true)
             }}
           >
-            <span className="t2sw-mode-label">{modeTriggerText}</span>
+            <span className="t2sw-mode-label">{effectiveModeText}</span>
             <ChevronDown size={13} aria-hidden />
           </button>
           {/* 常驻 DOM 才能同时拥有展开与收起动画；关闭时 aria-hidden + tabIndex=-1 隔离交互。 */}
@@ -389,13 +399,23 @@ export function PluginListBody({ src }: { src: ListSourceContribution }) {
   useEffect(() => src.subscribe(() => force()), [src, vaultRoot])
   const [query, setQuery] = useState('')
   const [group, setGroup] = useState<string | null>(null)
-  const [menu, setMenu] = useState<{ x: number; y: number; actions: ListAction[] } | null>(null)
+  const [menu, setMenu] = useState<CtxMenu>(null)
+  const menuOpener = useRef<HTMLElement | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
   const [dropKey, setDropKey] = useState<string | null>(null)
   // 源换了(插件切换/禁用重启)→ 过滤态跟着重置,免得拿旧源的分组键去查新源。
-  useEffect(() => { setQuery(''); setGroup(null) }, [src])
+  useEffect(() => { setQuery(''); setGroup(null); setMenu(null) }, [src])
 
   const groups = src.groups?.() ?? []
-  const items = src.items({ query: query || undefined, group: group ?? undefined })
+  const activeGroup = groups.find((item) => item.key === group)
+  // Sources may remove an empty category after archive/delete; never leave a hidden stale filter.
+  useEffect(() => { if (group && !activeGroup) setGroup(null) }, [group, activeGroup?.key])
+  const items = src.items({ query: query || undefined, group: activeGroup?.key })
+  const actions = src.actions ?? []
+  const primary = actions.find((action) => action.primary) ?? actions[0]
+  const secondary = [...actions.filter((action) => action !== primary).map((action) => ({ ...action, id: `action:${action.id}` })),
+    ...(src.groupActions ?? []).map((action) => ({ ...action, id: `group:${action.id}` }))]
   const activeKey = src.activeKey?.() ?? null
   // 无 groups() 声明时,退回按 item.group 的静态分区(老契约行为)。
   const sections = useMemo(() => {
@@ -448,103 +468,82 @@ export function PluginListBody({ src }: { src: ListSourceContribution }) {
         }
       : {}
 
-  // 行 = 共享 SidebarRow(与会话/笔记行**同一个组件**,几何与状态类一致);插件只出数据。
-  // 行首图标走宿主图标词表(resolveIcon),插件按名取 —— 既统一又保留辨识度(如平台角标)。
-  const row = (it: ListItem): ReactNode => (
-    <SidebarRow
-      key={it.key}
-      title={it.title}
-      className={`${activeKey === it.key ? 'active' : ''}${dropKey === `i:${it.key}` ? ' amx-drop-into' : ''}`.trim() || undefined}
-      {...dropProps(`i:${it.key}`, { item: it })}
-      // 未读点(ListItem.unread,2026-09-11 收件箱接入时补):与未读会话同一个点,绝对定位贴在图标角上(见 SidebarPane)。
-      lead={<><LeadIcon key={it.iconUrl ?? ''} item={it} />{it.unread && <span className="t2s-dot unread" title={t('sidebar.unread')} />}</>}
-      trailing={it.hint ? <span className="t2s-count">{it.hint}</span> : undefined}
-      onClick={(e) => src.open(it, { newTab: e.metaKey || e.ctrlKey })}
-      onContextMenu={(e) => {
-        const acts = src.itemMenu?.(it) ?? []
-        if (!acts.length) return
-        e.preventDefault()
-        setMenu({ x: e.clientX, y: e.clientY, actions: acts })
-      }}
-    >
-      <span className="t2s-srow-title">{it.title}</span>
-    </SidebarRow>
-  )
+  const closeMenu = (): void => {
+    setMenu(null)
+    menuOpener.current?.focus({ preventScroll: true })
+  }
+  // Keep the shared row, with an independent sibling menu button (never nest buttons).
+  const row = (it: ListItem): ReactNode => {
+    const actions = src.itemMenu?.(it) ?? []
+    return <div className="t2sw-plug-item" key={it.key}>
+      <SidebarRow as="button"
+        title={it.title}
+        className={`${activeKey === it.key ? 'active' : ''}${it.unread ? ' is-unread' : ''}${dropKey === `i:${it.key}` ? ' amx-drop-into' : ''}${actions.length ? ' has-actions' : ''}`.trim() || undefined}
+        {...dropProps(`i:${it.key}`, { item: it })}
+        lead={<><LeadIcon key={it.iconUrl ?? ''} item={it} />{it.unread && <span className="t2s-dot unread" title={t('sidebar.unread')} />}</>}
+        trailing={it.hint ? <span className="t2s-count">{it.hint}</span> : undefined}
+        onClick={(e) => src.open(it, { newTab: e.metaKey || e.ctrlKey })}
+        onContextMenu={(e) => {
+          if (!actions.length) return
+          e.preventDefault(); e.stopPropagation()
+          menuOpener.current = e.currentTarget
+          setMenu({ x: e.clientX, y: e.clientY, items: actions.map((action) => ({ label: action.label, run: action.run })) })
+        }}
+      ><span className="t2s-srow-title">{it.title}</span></SidebarRow>
+      {!!actions.length && <CapabilityMenu label={t('wsview.itemActions', { title: it.title })} className="t2sw-plug-row-menu"
+        items={actions.map((action) => ({ id: action.id, label: action.label, onSelect: action.run }))}><MoreHorizontal size={14} /></CapabilityMenu>}
+    </div>
+  }
 
   return (
     <div className="t2sw-plug">
-      {!!src.actions?.length && (
-        <div className="t2sw-plug-acts">
-          {src.actions.map((a) => (
-            <button key={a.id} className="t2sw-plug-btn" onClick={() => a.run()}>{a.label}</button>
-          ))}
-        </div>
-      )}
-
-      {groups.length > 0 && (
-        <>
-          <div className="t2sw-plug-sec">
-            <span className="t2s-group-label">{src.title}</span>
-            {src.groupActions?.map((a) => (
-              <button key={a.id} className="t2sw-plug-mini" title={a.label} onClick={() => a.run()}>＋</button>
-            ))}
-          </div>
-          <SidebarRow
-            className={group === null ? 'active' : undefined}
-            lead={<Folder className="t2s-lead-icon t2s-dim" />}
-            onClick={() => setGroup(null)}
-          >
-            <span className="t2s-srow-title">{t('wsview.all')}</span>
-          </SidebarRow>
-          {groups.map((g) => (
-            <SidebarRow
-              key={g.key}
-              className={`${group === g.key ? 'active' : ''}${dropKey === `g:${g.key}` ? ' amx-drop-into' : ''}`.trim() || undefined}
-              title={g.title}
-              {...dropProps(`g:${g.key}`, { group: g.key })}
-              lead={resolveIcon(g.icon, <Folder className="t2s-lead-icon t2s-dim" />)}
-              trailing={g.count !== undefined ? <span className="t2s-count">{g.count}</span> : undefined}
-              onClick={() => setGroup(g.key)}
-            >
-              <span className="t2s-srow-title">{g.title}</span>
-            </SidebarRow>
-          ))}
-        </>
-      )}
-
-      {src.search && (
-        <div className="t2s-search">
+      {(src.search || primary || secondary.length > 0) && <div className="t2sw-plug-toolbar">
+        {src.search && <div className="t2s-search">
           <Search size={13} className="t2s-dim" />
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={src.title} />
-        </div>
-      )}
-
-      <div
-        className={`t2sw-plug-list${dropKey === 'list' ? ' amx-drop-into' : ''}`}
-        {...dropProps('list', { group: group ?? undefined })}
-      >
-        {sections
-          ? sections.map(([g, list]) =>
-              g === '' ? <div key="__flat">{list.map(row)}</div> : (
-                <div key={g}>
-                  <div className="t2sw-plug-sec"><span className="t2s-group-label">{g}</span><span className="t2s-count">{list.length}</span></div>
-                  {list.map(row)}
-                </div>
-              ))
-          : items.map(row)}
-        {items.length === 0 && <div className="t2sw-empty">{query ? t('wsview.noMatches') : src.title}</div>}
+          <input ref={searchRef} aria-label={t('wsview.search', { source: src.title })} placeholder={t('wsview.search', { source: src.title })}
+            value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => {
+              if (e.key === 'Escape' && query) { e.preventDefault(); e.stopPropagation(); setQuery('') }
+              if (e.key === 'ArrowDown') { e.preventDefault(); listRef.current?.querySelector<HTMLButtonElement>('.t2s-srow')?.focus() }
+            }} />
+          {query && <button type="button" aria-label={t('wsview.clearSearch')} title={t('wsview.clearSearch')}
+            onClick={() => { setQuery(''); searchRef.current?.focus() }}><X size={12} /></button>}
+        </div>}
+        {primary && <button type="button" className="t2sw-plug-btn" title={primary.label} onClick={() => primary.run()}>{primary.label}</button>}
+        {!!secondary.length && <CapabilityMenu label={t('wsview.actions', { source: src.title })} className="t2sw-plug-overflow"
+          items={secondary.map((action) => ({ id: action.id, label: action.label, onSelect: action.run }))}><MoreHorizontal size={15} /></CapabilityMenu>}
+      </div>}
+      {!!groups.length && <div className="t2sw-plug-filterbar">
+        <CapabilityMenu label={t('wsview.filter')} className="t2sw-plug-filter" selection acceptsDrag={src.drop ? canTake : undefined}
+          searchLabel={groups.length > 8 ? t('wsview.filter') : undefined}
+          items={[
+            { id: '__all', label: t('wsview.all'), selected: !activeGroup, onSelect: () => setGroup(null), ...dropProps('g:all', {}) },
+            ...groups.map((g) => ({ id: `group:${g.key}`, label: g.title, hint: g.count === undefined ? undefined : String(g.count),
+              icon: resolveIcon(g.icon), selected: group === g.key, onSelect: () => setGroup(g.key),
+              dropActive: dropKey === `g:${g.key}`, ...dropProps(`g:${g.key}`, { group: g.key }),
+            })),
+          ]}>
+          <ListFilter size={13} /><span>{activeGroup?.title ?? t('wsview.all')}</span><ChevronDown size={12} />
+        </CapabilityMenu>
+        {activeGroup && <button type="button" className="t2sw-plug-reset" title={t('wsview.clearFilter')} aria-label={t('wsview.clearFilter')} onClick={() => setGroup(null)}><X size={12} /></button>}
+        <span className="t2sw-plug-total" aria-live="polite">{t('wsview.resultCount', { count: items.length })}</span>
+      </div>}
+      <div ref={listRef} className={`t2sw-plug-list${dropKey === 'list' ? ' amx-drop-into' : ''}`}
+        {...dropProps('list', { group: activeGroup?.key })}
+        onKeyDown={(event) => {
+          if (!(event.target instanceof HTMLElement) || !event.target.matches('.t2s-srow')) return
+          if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) return
+          const rows = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('.t2s-srow'))
+          const index = rows.indexOf(event.target as HTMLButtonElement)
+          const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1 : Math.max(0, Math.min(rows.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))
+          event.preventDefault(); rows[next]?.focus()
+        }}>
+        {sections ? sections.map(([g, list]) => g === '' ? <div key="__flat">{list.map(row)}</div> : <div key={g}>
+          <div className="t2sw-plug-sec"><span className="t2s-group-label">{g}</span><span className="t2s-count">{list.length}</span></div>
+          {list.map(row)}
+        </div>) : items.map(row)}
+        {items.length === 0 && <div className="t2sw-empty">{query ? t('wsview.noMatches') : t('wsview.empty')}</div>}
       </div>
-
-      {menu && (
-        <>
-          <div className="t2sw-plug-scrim" onClick={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null) }} />
-          <div className="t2sw-plug-menu" style={{ left: Math.min(menu.x, window.innerWidth - 180), top: Math.min(menu.y, window.innerHeight - 40 - menu.actions.length * 28) }}>
-            {menu.actions.map((a) => (
-              <div key={a.id} onClick={() => { setMenu(null); a.run() }}>{a.label}</div>
-            ))}
-          </div>
-        </>
-      )}
+      {menu && <ContextMenu menu={menu} onClose={closeMenu} autoFocus />}
     </div>
   )
 }

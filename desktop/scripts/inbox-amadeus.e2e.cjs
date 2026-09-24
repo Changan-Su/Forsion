@@ -218,6 +218,7 @@ async function main() {
     const spaced = await clickInboxSpace(win)
     await win.waitForSelector('.t2sw-plug-list .t2s-srow', { timeout: 15_000 }).catch(() => {})
     await win.waitForTimeout(600)
+    await win.getByRole('button', { name: '筛选分类', exact: true }).click()
     const ws = await win.evaluate(() => {
       const plug = document.querySelector('.t2sw-plug')
       const root = plug?.closest('.t2sw')
@@ -225,7 +226,7 @@ async function main() {
         trigger: root?.querySelector('.t2sw-mode-label')?.textContent || '',
         rows: plug ? plug.querySelectorAll('.t2sw-plug-list .t2s-srow').length : 0,
         dots: plug ? plug.querySelectorAll('.t2sw-plug-list .t2s-srow .t2s-dot.unread').length : 0,
-        groups: plug ? [...plug.querySelectorAll(':scope > .t2s-srow .t2s-srow-title')].map((e) => e.textContent) : [],
+        groups: [...document.querySelectorAll('[role=menuitemradio]')].map((e) => e.getAttribute('aria-label')),
         oldRows: document.querySelectorAll('.ibx-row, .ibx-chips').length,
         dotInCorner: (() => {
           const dot = plug?.querySelector('.t2sw-plug-list .t2s-srow .t2s-dot.unread')
@@ -240,6 +241,23 @@ async function main() {
     check('收件箱 Space 左栏 = 统一工作区(自动 · 收件箱):5 行、未读点 4 个且贴在图标右下角,旧 Gmail 式列表 0 个', spaced && ws.trigger.includes('收件箱') && ws.rows === 5 && ws.dots === 4 && ws.dotInCorner && ws.oldRows === 0, JSON.stringify({ spaced, ...ws }))
     check('工作区分组:全部 / 未读 / Forsion / 自动化 / 智能体 / 已归档,不显示任何 automation 规则 id',
       ['全部', '未读', 'Forsion', '自动化', '智能体', '已归档'].every((g) => ws.groups.includes(g)) && !ws.groups.some((g) => /automation:|w-[a-z0-9]/i.test(g || '')), JSON.stringify(ws.groups))
+    await win.locator('.capability-menu').evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((animation) => animation.finished)))
+    await win.screenshot({ path: path.join(path.dirname(SHOT), 'workspace-filter-zh.png') })
+    await win.keyboard.press('Escape')
+    check('分类默认收纳，列表之前的工具区不到 90px', await win.locator('.t2sw-plug-list').evaluate((el) => el.getBoundingClientRect().top - el.closest('.t2sw-plug').getBoundingClientRect().top < 90))
+    const search = win.getByRole('textbox', { name: '搜索收件箱', exact: true })
+    await search.fill('自动化')
+    check('工作区搜索直接缩小消息列表', await win.locator('.t2sw-plug-list .t2s-srow').count() === 2)
+    await search.press('ArrowDown')
+    check('搜索下方向键进入列表，行可键盘聚焦', await win.evaluate(() => document.activeElement?.matches('.t2sw-plug-list .t2s-srow')))
+    await search.focus(); await search.press('Escape')
+    check('Escape 清空搜索，保留全部消息', await search.inputValue() === '' && await win.locator('.t2sw-plug-list .t2s-srow').count() === 5)
+    const rowMenu = win.getByRole('button', { name: '自动化汇总的操作', exact: true })
+    await rowMenu.focus(); await rowMenu.click()
+    check('行内操作可发现，沿用原生菜单', await win.getByRole('menuitem', { name: '标为未读', exact: true }).count() === 1)
+    await win.keyboard.press('Escape')
+    check('关闭条目菜单将焦点还给入口', await rowMenu.evaluate((el) => document.activeElement === el))
+    await win.screenshot({ path: path.join(path.dirname(SHOT), 'workspace-inbox-zh.png') })
     await openMessage(win, '自动化汇总')
     const automationMeta = await win.evaluate(() => {
       const meta = document.querySelector('.ibx-reader-meta')
@@ -297,7 +315,7 @@ async function main() {
     check('任务卡「忽略」→ Muse LOG 收到 [feedback] 行,卡定格', seen.feedback.some((x) => /ignored/.test(x)) && (await win.locator('.ibx-cards .t2-taskcard.done:not(.ibx-approval)').count()) === 1, JSON.stringify(seen.feedback))
 
     // 工作区分组筛选:未读(客户端)/ 稳定来源类别 / 已归档(换服务端 filter)/ 回到全部
-    const clickGroup = async (name) => { await win.locator('.t2sw-plug > .t2s-srow', { hasText: name }).first().click().catch(() => {}); await win.waitForTimeout(900) }
+    const clickGroup = async (name) => { await win.getByRole('button', { name: '筛选分类', exact: true }).click(); await win.getByRole('menuitemradio', { name, exact: true }).click(); await win.waitForTimeout(900) }
     const listRows = () => win.locator('.t2sw-plug-list .t2s-srow').count()
     await clickGroup('未读'); const unreadRows = await listRows()
     await clickGroup('自动化'); const automationRows = await listRows()
@@ -499,6 +517,19 @@ async function main() {
     await openMessage(win, '同线程的 agent 信')
     const agentThread = await win.evaluate(() => document.querySelectorAll('[data-feedback-thread]').length)
     check('信任闸:agent 信带同形 thread → 零反馈线程面板', agentThread === 0, `panels=${agentThread}`)
+    if (!NEGATIVE_CONTROL) {
+      await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme', 'dark') })
+      await win.reload({ waitUntil: 'domcontentloaded' })
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1000, 820))
+      await win.locator('button.rb-space[title="Inbox"]').click()
+      await win.locator('.t2sw-plug-list .t2s-srow').first().waitFor()
+      check('英文窄窗口共享列表无横向溢出', await win.locator('.t2sw-plug').evaluate((el) => el.scrollWidth <= el.clientWidth + 1))
+      check('共享工具栏跟随英文', await win.getByRole('textbox', { name: 'Search Inbox', exact: true }).count() === 1)
+      await win.locator('.t2sw-plug-overflow').click()
+      await win.locator('.capability-menu').evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((animation) => animation.finished)))
+      check('窄窗口菜单在视口内且使用英文', await win.locator('.capability-menu').evaluate((el) => el.getBoundingClientRect().right <= innerWidth && !/[\u4e00-\u9fff]/.test(el.textContent)))
+      await win.screenshot({ path: path.join(path.dirname(SHOT), 'workspace-inbox-en-dark-narrow.png') })
+    }
   } finally {
     await app.close().catch(() => {})
     stub.close()

@@ -119,11 +119,11 @@ export const inboxListSource: ListSourceContribution = {
   },
   actions: [
     { id: 'read-all', get label() { return translate('inbox.action.readAll') }, run: () => { void useInbox.getState().readAll() } },
-    { id: 'pull', get label() { return translate('inbox.action.refresh') }, run: () => { void useInbox.getState().pull() } },
+    { id: 'pull', primary: true, get label() { return translate('inbox.action.refresh') }, run: () => { void useInbox.getState().pull() } },
   ],
   itemMenu(item) {
     const st = useInbox.getState()
-    const m = st.messages.find((x) => x.id === item.key)
+    const m = [...st.messages, ...st.archived].find((x) => x.id === item.key)
     if (!m) return []
     return [
       { id: 'read', label: translate(m.read_at ? 'inbox.action.markUnread' : 'inbox.action.markRead'), run: () => st.markRead(m.id, !m.read_at) },

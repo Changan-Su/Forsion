@@ -9,7 +9,7 @@ Automation Space connects a trigger to an ordered chain of actions. Start from a
 
 ## Build on the canvas
 
-The sidebar uses Forsion's shared Workspace View for search, groups and item menus. Select a trigger or action node to open its configuration in Extend View. Closing the panel preserves the current draft. The **Add step** menu collects notification, agent, database and tool actions; the help button opens guidance. Move a step up or down in its configuration to change execution order.
+The sidebar uses Forsion's shared Workspace View. Search and **New automation** stay visible; choose a category from **All**, or open **Guide and templates** from the actions menu. Each row shows an action button on hover or keyboard focus. Select a trigger or action node to open its configuration in Extend View. Closing the panel preserves the current draft. The **Add step** menu collects notification, agent, database and tool actions; the help button opens guidance. Move a step up or down in its configuration to change execution order.
 
 Drag nodes to arrange the current view; moving them does not change execution order. Adding, removing or reordering steps arranges the chain automatically. Pan, zoom, snapping, fit and the minimap use Forsion's shared canvas controls. The current workflow model is sequential; conditional branches and parallel execution are not available.
 

@@ -13,10 +13,10 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const http = require('http')
-const { spawn } = require('child_process')
+const { createHash } = require('crypto')
 const { chromium } = require('playwright-core')
 
-const BASE = process.env.HARNESS_URL || 'http://localhost:5173/harness.html'
+let BASE = process.env.HARNESS_URL || ''
 const SHOTS = process.env.SHOTS || path.join(os.tmpdir(), 'listsrc-shots')
 
 function findChromium() {
@@ -45,19 +45,25 @@ const check = (name, ok, detail) => {
 
 async function main() {
   let vite = null
-  if (!(await ping())) {
-    vite = spawn('npx', ['vite', 'frontend'], { cwd: path.resolve(__dirname, '..'), stdio: 'ignore' })
-    let up = false
-    for (let i = 0; i < 60 && !up; i++) { await new Promise((r) => setTimeout(r, 500)); up = await ping() }
-    if (!up) { console.error('vite 没起来'); vite.kill(); process.exit(1) }
-  }
+  if (!BASE) {
+    // Own the harness server so another worktree on 5173 cannot produce a false green.
+    const { createServer } = await import('vite')
+    const root = path.resolve(__dirname, '../frontend')
+    if (!fs.existsSync(path.join(root, 'public/excalidraw/excalidraw.js'))) throw new Error('先运行 node build/copy-excalidraw-assets.cjs 准备台架资源')
+    const cacheDir = path.join(os.tmpdir(), `forsion-listsrc-vite-${createHash('sha1').update(root).digest('hex').slice(0, 12)}`)
+    vite = await createServer({ root, cacheDir, configFile: path.join(root, 'vite.config.ts'), server: { host: '127.0.0.1', port: 0, strictPort: false } })
+    await vite.listen()
+    BASE = `http://127.0.0.1:${vite.httpServer.address().port}/harness.html`
+  } else if (!(await ping())) throw new Error(`Harness is unavailable: ${BASE}`)
   fs.mkdirSync(SHOTS, { recursive: true })
   const browser = await chromium.launch({ executablePath: findChromium() })
   try {
     for (const mode of ['light', 'dark']) {
       const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 460, height: 320 } })
+      page.on('pageerror', (error) => console.error('Renderer:', error.message))
+      page.on('console', (message) => { if (message.type() === 'error') console.error('Console:', message.text()) })
       await page.goto(`${BASE}?listsrc${mode === 'dark' ? '&dark' : ''}`, { waitUntil: 'load' })
-      await page.waitForSelector('.t2sw-plug .t2s-srow')
+      await page.waitForSelector('.t2sw-plug .t2s-srow').catch(async (error) => { await page.screenshot({ path: path.join(SHOTS, 'failure.png') }); throw error })
       await page.waitForTimeout(1200) // 远程 favicon + onError 兜底都跑完
       const shot = path.join(SHOTS, `listsrc-${mode}.png`)
       await page.screenshot({ path: shot })
@@ -98,6 +104,43 @@ async function main() {
       check(`${mode} activeKey → 唯一原生选中行 + 左侧色条`, active.count === 1 && active.title.includes('32px 图标') && active.markWidth === '2px' && active.markContent !== 'none', JSON.stringify(active))
       await page.close()
     }
+    const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 520, height: 420 } })
+    await page.goto(`${BASE}?listsrc&controls`, { waitUntil: 'load' })
+    await page.locator('.t2sw-plug-list .t2s-srow').first().waitFor()
+    check('旧插件未声明 primary 也保留首个动作，其余操作收纳', await page.locator('.t2sw-plug-btn').innerText() === '新建条目' && await page.getByRole('button', { name: '导出列表', exact: true }).count() === 0)
+    check('工具区收纳到两行，列表直接可见', await page.locator('.t2sw-plug-list').evaluate((el) => el.getBoundingClientRect().top - el.closest('.t2sw-plug').getBoundingClientRect().top < 90))
+    await page.getByRole('button', { name: '台架列表源操作', exact: true }).click()
+    await page.getByRole('menuitem', { name: '新建分类', exact: true }).click()
+    check('原 groupActions 仍通过统一菜单调用', await page.evaluate(() => window.__listProbe.actions.includes('folder')))
+    await page.getByRole('button', { name: '筛选分类', exact: true }).click()
+    await page.getByRole('menuitemradio', { name: '第二组', exact: true }).click()
+    check('分类筛选传回插件并在入口显示当前分类', await page.locator('.t2sw-plug-list .t2s-srow').count() === 3 && (await page.locator('.t2sw-plug-filter').innerText()).includes('第二组'))
+    await page.getByRole('button', { name: '显示全部', exact: true }).click()
+    const search = page.getByRole('textbox', { name: '搜索台架列表源', exact: true })
+    await search.fill('Bilibili'); await search.press('ArrowDown'); await page.keyboard.press('Enter')
+    check('搜索→方向键→Enter 实际打开条目', await page.evaluate(() => window.__listProbe.opened.at(-1) === 'b'))
+    await page.getByRole('button', { name: '清空搜索', exact: true }).click()
+    const menu = page.getByRole('button', { name: 'Bilibili 视频总结的操作', exact: true })
+    await menu.focus(); await menu.click()
+    await page.getByRole('menuitem', { name: '查看属性', exact: true }).click()
+    check('条目更多操作不误触打开条目', await page.evaluate(() => window.__listProbe.actions.at(-1) === 'b' && window.__listProbe.opened.length === 1))
+    await page.locator('.t2sw-plug-list .t2s-srow').first().click({ button: 'right' })
+    await page.getByRole('menuitem', { name: '查看属性', exact: true }).waitFor()
+    check('右键复用 Portal 原生菜单，避免窄栏裁切', await page.locator('.ctx-menu').evaluate((el) => !el.closest('.t2sw') && el.getBoundingClientRect().right <= innerWidth))
+    await page.keyboard.press('Escape')
+    const data = await page.evaluateHandle(() => { const dt = new DataTransfer(); dt.setData('application/x-tangu-paths', JSON.stringify(['/tmp/example.md'])); return dt })
+    await page.locator('.t2sw-plug-filter').dispatchEvent('dragenter', { dataTransfer: data })
+    const target = page.getByRole('menuitemradio', { name: '第二组', exact: true })
+    await target.dispatchEvent('dragover', { dataTransfer: data })
+    check('拖放自动展开分类并标记目标', await target.evaluate((el) => el.classList.contains('capability-menu-drop')))
+    await target.dispatchEvent('drop', { dataTransfer: data })
+    check('拖放保留原插件路径载荷和分类目标', await page.evaluate(() => { const drop = window.__listProbe.drops.at(-1); return drop.payload.paths[0] === '/tmp/example.md' && drop.target.group === 'second' }))
+    await target.click()
+    await page.evaluate(() => window.__listProbe.removeGroups())
+    await page.waitForFunction(() => document.querySelectorAll('.t2sw-plug-list .t2s-srow').length === 6)
+    check('分类消失后解除过期筛选，不留空列表', true)
+    await page.screenshot({ path: path.join(SHOTS, 'listsrc-controls.png') })
+    await page.close()
     // ── 数据接线的源码闸(几何管不着,但正是 2026-08-28 「明明有记录列表却是空」的那半)──
     //    插件在**启动期**激活,那时 vault 根还没恢复(宿主 vault 引导是懒的),列表源启动时那次
     //    读索引拿到的是 readTextFile 的**静默 null**;库落地后没人再喊它一声,列表就恒空。
@@ -110,7 +153,7 @@ async function main() {
     check('PluginListBody 挂载时 ensureAmadeusReady(冷启进插件 Space 也把库唤起来)', /ensureAmadeusReady\(\)/.test(body.slice(0, 2000)), '')
   } finally {
     await browser.close()
-    if (vite) vite.kill()
+    if (vite) await vite.close()
   }
   const bad = results.filter((x) => !x).length
   console.log(bad ? `\n${bad} 条不过` : `\n全过(${results.length} 条)`)

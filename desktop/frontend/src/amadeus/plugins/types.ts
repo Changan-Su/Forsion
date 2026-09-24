@@ -504,6 +504,9 @@ export interface ListGroup {
 export interface ListAction {
   id: string
   label: string
+  /** Keep this action in the compact toolbar; remaining actions live in its menu.
+   *  When omitted by every action, the host keeps the first action visible. Older hosts ignore it. */
+  primary?: boolean
   run(): void
 }
 
@@ -515,7 +518,7 @@ export interface ListAction {
 export interface ListSourceContribution {
   /** Source id, unique within the plugin (kebab-case recommended). */
   id: string
-  /** Section title shown above the list. */
+  /** Source name shown in the workspace selector and search label. */
   title: string
   /** Current items snapshot, already filtered by the host-owned search text and selected group.
    *  Called on every render — keep it cheap (cache inside the plugin). */
@@ -529,12 +532,12 @@ export interface ListSourceContribution {
   open(item: ListItem, opts?: { newTab?: boolean }): void
   /** Render the shared search box above the list; the text arrives via `items({ query })`. */
   search?: boolean
-  /** Selectable filter rows (folders). The host renders them with an "all" row on top, tracks the
+  /** Selectable categories/folders. The host collects them in a menu with an "all" option, tracks the
    *  selection, and passes it back via `items({ group })`. */
   groups?(): ListGroup[]
-  /** Buttons above the whole list (e.g. "New analysis"). */
+  /** List actions; one primary action stays visible and the rest are collected in a menu. */
   actions?: ListAction[]
-  /** Buttons on the groups section header (e.g. "New folder"). */
+  /** Group-management actions (e.g. "New folder"), collected in the shared actions menu. */
   groupActions?: ListAction[]
   /** Right-click menu for one row (e.g. "Move to…", "Delete"). */
   itemMenu?(item: ListItem): ListAction[]

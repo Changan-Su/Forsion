@@ -1865,6 +1865,24 @@ if (new URLSearchParams(location.search).has('dock')) {
     open: () => {},
     subscribe: () => () => {},
   } as unknown as ListSourceContribution
+  // Optional shared-toolbar probe: old plugin actions and drag contracts still work without a new API.
+  if (new URLSearchParams(location.search).has('controls')) {
+    const listeners = new Set<() => void>()
+    let active = 'a', groupKeys = ['first', 'second']
+    const probe = { opened: [] as string[], actions: [] as string[], drops: [] as unknown[],
+      removeGroups() { groupKeys = []; listeners.forEach((fn) => fn()) },
+    }
+    ;(window as any).__listProbe = probe
+    SRC.subscribe = (cb) => { listeners.add(cb); return () => { listeners.delete(cb) } }
+    SRC.activeKey = () => active
+    SRC.open = (item) => { active = item.key; probe.opened.push(item.key); listeners.forEach((fn) => fn()) }
+    SRC.items = (f) => ITEMS.filter((item, index) => (!f?.query || item.title.includes(f.query)) && (!f?.group || (f.group === 'first' ? index < 3 : index >= 3)))
+    SRC.groups = () => groupKeys.map((key, i) => ({ key, title: i ? '第二组' : '第一组', count: 3 }))
+    SRC.actions = ['新建条目', '导出列表'].map((label) => ({ id: label, label, run: () => { probe.actions.push(label) } }))
+    SRC.groupActions = [{ id: 'folder', label: '新建分类', run: () => { probe.actions.push('folder') } }]
+    SRC.itemMenu = (item) => [{ id: 'inspect', label: '查看属性', run: () => { probe.actions.push(item.key) } }]
+    SRC.drop = { accepts: ['paths'], onDrop: (payload, target) => { probe.drops.push({ payload, target }) } }
+  }
   createRoot(document.getElementById('root')!).render(
     <div className="amadeus-root am-app" style={{ position: 'fixed', inset: 0, background: 'var(--bg)', display: 'flex' }}>
       {/* ⚠️ 层级照生产**逐层**摆:WorkspaceView 是 dockview 面板,**外面没有 `.t2s-side`**

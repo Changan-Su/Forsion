@@ -59,6 +59,11 @@ async function main() {
     const autoButton = win.locator('button.rb-space[title="自动化"], button.rb-space[title="Automation"]').first()
     if (await autoButton.count()) await autoButton.click(); else await openSpace()
     await win.waitForSelector('.auto-home')
+    const showGuide = async () => {
+      await win.getByRole('button', { name: '自动化操作', exact: true }).click()
+      await win.getByRole('menuitem', { name: '入门与模板', exact: true }).click()
+    }
+    check('shared workspace collects navigation above the list in two compact rows', await win.locator('.t2sw-plug-list').evaluate((el) => el.getBoundingClientRect().top - el.closest('.t2sw-plug').getBoundingClientRect().top < 90))
     check('first visit offers four real starter templates', await win.locator('.auto-starter').count() === 4)
     await win.screenshot({ path: path.join(OUT, 'home-zh.png') })
     for (const label of ['Muse 巡检', 'Historian 记忆维护']) {
@@ -69,7 +74,7 @@ async function main() {
       await win.locator('.wb-extend-close').click()
       await win.locator('.wb-extend').waitFor({ state: 'detached' })
     }
-    await win.getByRole('button', { name: '入门与模板', exact: true }).click()
+    await showGuide()
     await win.locator('.auto-starter').first().click()
     await win.waitForSelector('.auto-canvas')
     check('starter opens trigger, notification, review nodes without saving', await win.locator('.auto-flow-node').count() === 3 && requests.length === 0)
@@ -166,7 +171,7 @@ async function main() {
     check('narrow configuration labels remain readable', await visibleNode.locator('.auto-node-head').evaluate((el) => el.getBoundingClientRect().height < 65))
     await win.screenshot({ path: path.join(OUT, 'canvas-narrow-zh.png') })
     await win.getByRole('button', { name: '取消', exact: true }).click()
-    await win.getByRole('button', { name: '入门与模板', exact: true }).click()
+    await showGuide()
     await win.locator('.auto-starter').nth(1).click()
     check('agent template explains the missing selection', (await win.locator('.auto-save-status').innerText()).includes('选择执行任务的 Agent') && await win.getByRole('button', { name: '保存为暂停', exact: true }).isDisabled())
     await win.locator('.auto-save-status button').click()
