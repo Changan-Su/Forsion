@@ -4,9 +4,9 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTanguProfile } from '../profiles/index.js';
-import { __browserToolInternals, browserTabsProvider, userBrowserEndpoint } from './builtin/browserTools.js';
+import { __browserToolInternals, browserTabsProvider, browserToolsProvider, userBrowserEndpoint } from './builtin/browserTools.js';
 import { toolNeedsApproval } from '../services/approvals.js';
-import { getToolCapabilities } from './registry.js';
+import { getToolCapabilities, getToolDefinitions } from './registry.js';
 import type { ToolContext } from './toolTypes.js';
 
 describe('browser tool URL safety', () => {
@@ -122,11 +122,12 @@ describe('user browser attach (Chrome remote debugging)', () => {
     } finally { srv.close(); }
   });
 
-  it('never attaches for background runs or when switched off', async () => {
+  it('never attaches for background runs (Muse, automations, deferred approvals) or when switched off', async () => {
     process.env.TANGU_BROWSER_CDP = 'ws://127.0.0.1:1/devtools/browser/x';
     expect(await userBrowserEndpoint({})).toBe('ws://127.0.0.1:1/devtools/browser/x');
     expect(await userBrowserEndpoint({ muse: true })).toBeNull();
     expect(await userBrowserEndpoint({ approvalDeferral: 'queue' })).toBeNull();
+    expect(await userBrowserEndpoint({ automationOrigin: 'rule:daily' })).toBeNull(); // Codex 09-24 #1:自动化 run 是 full-auto、没人看着
     process.env.TANGU_BROWSER_CDP = 'off';
     expect(await userBrowserEndpoint({})).toBeNull();
   });
@@ -144,6 +145,14 @@ describe('user browser attach (Chrome remote debugging)', () => {
     expect(__browserToolInternals.pickTabs(tabs, 'youtube')).toHaveLength(0);
   });
 
+  it('browser_tabs is hidden from background runs (Muse runs plan mode, which whitelists it)', () => {
+    const names = (extra: Partial<ToolContext>): string[] => getToolDefinitions(ctxOf(extra)).map((t: any) => t.function.name);
+    expect(names({})).toContain('browser_tabs');
+    expect(names({ muse: true, planMode: true })).not.toContain('browser_tabs');
+    expect(names({ approvalDeferral: 'queue' })).not.toContain('browser_tabs');
+    expect(names({ automationOrigin: 'rule:daily' })).not.toContain('browser_tabs');
+  });
+
   it('browser_tabs explains the one-time setup when not connected', async () => {
     process.env.TANGU_BROWSER_CDP = 'off';
     const out = JSON.parse(String(await browserTabsProvider.tools()[0].execute({}, ctxOf())));
@@ -151,30 +160,35 @@ describe('user browser attach (Chrome remote debugging)', () => {
     expect(out.error).toMatch(/chrome:\/\/inspect\/#remote-debugging/);
   });
 
-  it('gates clicks/typing only while driving the user\'s browser, and never in full-auto', () => {
+  it('gates clicks/typing/back only while driving the user\'s browser, and never in full-auto', () => {
     expect(toolNeedsApproval('browser_click', 'auto-edit')).toBe(false);
     expect(toolNeedsApproval('browser_click', 'auto-edit', { userBrowser: true })).toBe(true);
+    expect(toolNeedsApproval('browser_back', 'auto-edit', { userBrowser: true })).toBe(true);
     expect(toolNeedsApproval('browser_console', 'readonly', { userBrowser: true })).toBe(true);
     expect(toolNeedsApproval('browser_click', 'full-auto', { userBrowser: true })).toBe(false);
     expect(toolNeedsApproval('browser_snapshot', 'auto-edit', { userBrowser: true })).toBe(false);
   });
 
-  // 假 agent-browser:把每次的 argv 记进日志,按子命令回答(sh 脚本,Windows 上跳过,同上面 navigate 用例)
-  const fakeBin = (hasOwnTab: boolean): { dir: string; log: string } => {
+  // 假 agent-browser(sh,Windows 跳过):argv 记日志、按子命令回答;像真的一样在 socket 目录写 <session>.pid
+  // (pid 取 PID_FILE_VALUE,改它 = 模拟守护进程闲置退出后重开)。endpoint 含 "refuse" 时一律报连不上 CDP。
+  const fakeBin = (hasOwnTab: boolean, endpoint = 'ws://127.0.0.1:9/devtools/browser/fake'): { dir: string; log: string } => {
     const dir = mkdtempSync(join(tmpdir(), 'tangu-fakebr-attach-'));
     const log = join(dir, 'argv.log');
     const bin = join(dir, 'agent-browser');
     writeFileSync(bin, [
       '#!/bin/sh',
       `echo "$*" >> '${log}'`,
+      'prev=""; for a in "$@"; do [ "$prev" = "--session" ] && echo "${PID_FILE_VALUE:-4242}" > "$AGENT_BROWSER_SOCKET_DIR/$a.pid"; prev="$a"; done',
       'case "$*" in',
-      `  *"tab tangu"*) ${hasOwnTab ? `echo '{"success":true,"data":{"tabId":"t9","label":"tangu"}}'` : `echo '{"success":false,"error":"No tab with label \`tangu\`; run \`agent-browser tab\` to list open tabs"}'`};;`,
-      `  *"tab new"*) echo '{"success":true,"data":{"tabId":"t9","label":"tangu","url":"http://127.0.0.1/x"}}';;`,
+      `  *refuse*) echo '{"success":false,"error":"CDP WebSocket connect failed: IO error: Connection refused (os error 61)"}';;`,
+      `  *"tab tangu-"*) ${hasOwnTab ? `echo '{"success":true,"data":{"tabId":"t9","label":"tangu-x"}}'` : `echo '{"success":false,"error":"No tab with label \`tangu-x\`; run \`agent-browser tab\` to list open tabs"}'`};;`,
+      `  *"tab new"*) echo '{"success":true,"data":{"tabId":"t9","label":"tangu-x","url":"http://127.0.0.1/x"}}';;`,
       `  *" open "*) echo '{"success":true,"data":{"url":"http://127.0.0.1/x","title":"X"}}';;`,
       `  *"tab list"*) echo '{"success":true,"data":{"tabs":[{"tabId":"t1","active":true,"title":"GitHub","url":"https://github.com/"},{"tabId":"t2","active":false,"title":"Video - bilibili","url":"https://www.bilibili.com/video/BV1"}]}}';;`,
       `  *"tab t2"*) echo '{"success":true,"data":{"tabId":"t2","title":"Video - bilibili","url":"https://www.bilibili.com/video/BV1"}}';;`,
       `  *"get text"*) echo '{"success":true,"data":{"text":"Best pick: No. 3"}}';;`,
       `  *snapshot*) echo '{"success":true,"data":{"snapshot":"- link \\"No. 3\\" [ref=e1]","refs":{"e1":{}}}}';;`,
+      `  *" click "*) echo '{"success":true,"data":{}}';;`,
       `  *) echo '{"success":false,"error":"unexpected"}';;`,
       'esac',
     ].join('\n'));
@@ -182,40 +196,83 @@ describe('user browser attach (Chrome remote debugging)', () => {
     process.env.TANGU_AGENT_BROWSER_BIN = bin;
     process.env.TANGU_BROWSER_SOCKET_DIR = dir;
     process.env.TANGU_BROWSER_ALLOW_PRIVATE_URLS = '1';
-    process.env.TANGU_BROWSER_CDP = 'ws://127.0.0.1:9/devtools/browser/fake';
+    process.env.TANGU_BROWSER_CDP = endpoint;
     return { dir, log };
   };
-  const calls = (log: string): string[] => readFileSync(log, 'utf8').trim().split('\n');
+  const calls = (log: string): string[] => { try { return readFileSync(log, 'utf8').trim().split('\n').filter(Boolean); } catch { return []; } };
+  const tool = (name: string): any => [...browserToolsProvider.tools(), ...browserTabsProvider.tools()].find((t) => t.name === name);
+  const exec = async (name: string, args: any, ctx: ToolContext): Promise<any> => JSON.parse(String(await tool(name).execute(args, ctx)));
 
-  it.skipIf(process.platform === 'win32')('navigate opens a new Tangu-labelled tab instead of replacing the user\'s tab', async () => {
+  it.skipIf(process.platform === 'win32')('navigate opens a per-conversation Tangu tab instead of replacing the user\'s tab', async () => {
     const { log } = fakeBin(false);
     const out = await __browserToolInternals.navigate(ctxOf(), 'http://127.0.0.1/x');
     expect(out.success).toBe(true);
     const argv = calls(log);
     expect(argv.every((a) => a.includes('--cdp ws://127.0.0.1:9/devtools/browser/fake') && /--session tangu_chrome_[0-9a-f]{10} /.test(a))).toBe(true);
-    expect(argv.some((a) => a.includes('tab new --label tangu http://127.0.0.1/x'))).toBe(true);
+    expect(argv.some((a) => /tab new --label tangu-[0-9a-f]{6} http:\/\/127\.0\.0\.1\/x$/.test(a))).toBe(true);
     expect(argv.some((a) => / open /.test(` ${a} `))).toBe(false); // open 会覆盖用户正看着的那个标签
   });
 
-  it.skipIf(process.platform === 'win32')('navigate reuses Tangu\'s own tab when it already exists', async () => {
+  it.skipIf(process.platform === 'win32')('navigate reuses this conversation\'s own tab when it already exists', async () => {
     const { log } = fakeBin(true);
     await __browserToolInternals.navigate(ctxOf(), 'http://127.0.0.1/x');
     const argv = calls(log);
-    expect(argv[0]).toMatch(/tab tangu$/);
+    expect(argv[0]).toMatch(/tab tangu-[0-9a-f]{6}$/);
     expect(argv[1]).toMatch(/--json open http:\/\/127\.0\.0\.1\/x$/);
     expect(argv.some((a) => a.includes('tab new'))).toBe(false);
   });
 
   it.skipIf(process.platform === 'win32')('browser_tabs lists tabs, refuses to guess, and reads the one selected', async () => {
     fakeBin(false);
-    const tool = browserTabsProvider.tools()[0];
-    const listed = JSON.parse(String(await tool.execute({}, ctxOf())));
+    const listed = await exec('browser_tabs', {}, ctxOf());
     expect(listed.tabs.map((t: any) => t.tab)).toEqual(['t1', 't2']);
-    const ambiguous = JSON.parse(String(await tool.execute({ select: 'http' }, ctxOf())));
+    const ambiguous = await exec('browser_tabs', { select: 'http' }, ctxOf());
     expect(ambiguous.success).toBe(false);
     expect(ambiguous.tabs).toHaveLength(2);
-    const read = JSON.parse(String(await tool.execute({ select: 'bilibili' }, ctxOf())));
+    const read = await exec('browser_tabs', { select: 'bilibili' }, ctxOf());
     expect(read).toMatchObject({ success: true, tab: 't2', url: 'https://www.bilibili.com/video/BV1', text: 'Best pick: No. 3' });
     expect(read.refs).toContain('ref=e1');
+  });
+
+  it.skipIf(process.platform === 'win32')('control tools act only on the tab this conversation selected, re-selecting it first', async () => {
+    const { log } = fakeBin(false);
+    // 没选过标签:不许作用在守护进程随手绑的那个(可能是用户的任意标签)
+    const blind = await exec('browser_click', { ref: 'e1' }, ctxOf({ sessionId: 's-other' }));
+    expect(blind.success).toBe(false);
+    expect(blind.error).toMatch(/browser_tabs/);
+    expect(calls(log).some((a) => / click /.test(` ${a} `))).toBe(false);
+    // 选中 t2 后点击:先切回 t2 再 click(别的会话在中间切走游标也不怕)
+    await exec('browser_tabs', { select: 't2' }, ctxOf());
+    const before = calls(log).length;
+    const clicked = await exec('browser_click', { ref: 'e1' }, ctxOf());
+    expect(clicked.success).toBe(true);
+    expect(calls(log).slice(before).map((a) => a.replace(/^.* --json /, ''))).toEqual(['tab t2', 'click @e1']);
+  });
+
+  it.skipIf(process.platform === 'win32')('a restarted agent-browser daemon invalidates the selection (tab ids are renumbered)', async () => {
+    const { log } = fakeBin(false);
+    await exec('browser_tabs', { select: 't2' }, ctxOf());
+    process.env.PID_FILE_VALUE = '9999'; // 下一条命令起守护进程「换了一个」
+    try {
+      await exec('browser_tabs', {}, ctxOf()); // 触发一次写 pid
+      const before = calls(log).length;
+      const out = await exec('browser_click', { ref: 'e1' }, ctxOf());
+      expect(out.success).toBe(false);
+      expect(out.error).toMatch(/browser_tabs/);
+      expect(calls(log).length).toBe(before); // 连 tab 切换都没发:旧 id 可能已指向别的标签
+    } finally { delete process.env.PID_FILE_VALUE; }
+  });
+
+  it.skipIf(process.platform === 'win32')('a refused connection cools down that endpoint only', async () => {
+    const { log } = fakeBin(false, 'ws://127.0.0.1:9/devtools/browser/refuse-a');
+    const first = await exec('browser_tabs', {}, ctxOf());
+    expect(first.error).toMatch(/Allow/);
+    const n = calls(log).length;
+    const second = await exec('browser_tabs', {}, ctxOf());
+    expect(second.error).toBe(first.error);
+    expect(calls(log).length).toBe(n); // 冷却期内不再发起连接(每次连接 Chrome 都弹一次框)
+    process.env.TANGU_BROWSER_CDP = 'ws://127.0.0.1:9/devtools/browser/other-b'; // 换了实例的 Chrome 不受旧冷却连累
+    const other = await exec('browser_tabs', {}, ctxOf());
+    expect(other.success).toBe(true);
   });
 });

@@ -98,6 +98,8 @@ export function approvalPreview(call: ToolCall): string {
     return `apply_patch (${n} file change(s))`;
   }
   if (name === 'kill_process') return `kill process ${args.process_id ?? ''}`;
+  // 接管用户 Chrome 时 browser_console 要批:用户批的是整段页内 JS,不许在 200 字处截断藏住后半段(Codex 09-24 #5)
+  if (name === 'browser_console') return args.expression != null ? `browser_console — run JS in the page:\n${String(args.expression)}` : 'browser_console (read console/errors)';
   if (name === 'browser_task') {
     const t = String(args.task ?? '').trim();
     const domains = Array.isArray(args.allowed_domains) && args.allowed_domains.length ? ` [${args.allowed_domains.join(', ')}]` : '';

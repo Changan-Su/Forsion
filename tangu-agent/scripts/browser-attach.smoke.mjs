@@ -95,6 +95,16 @@ try {
   await timed('browser_navigate#2', () => run(browserToolsProvider, 'browser_navigate', { url: `${navUrl}?again=1` }));
   const afterNav2 = await pages();
   check('③ 再次导航复用 tangu 标签(不叠标签)', afterNav2.length === afterNav.length, `${afterNav.length} → ${afterNav2.length}`);
+
+  // ④ 跨会话:所有会话共用一个守护进程、一个「当前标签」游标 —— 各自只能动自己选中 / 打开的标签
+  const ctxB = { ...ctx, sessionId: 'smoke-b' };
+  const runB = async (p, n, args) => JSON.parse(await tool(p, n).execute(args, ctxB));
+  const blind = await runB(browserToolsProvider, 'browser_snapshot', {});
+  check('④ 没选过标签的会话不能操作(不会落到别人的页上)', blind.success === false && /browser_tabs/.test(blind.error || ''), blind.error);
+  const bSel = await runB(browserTabsProvider, 'browser_tabs', { select: '/inbox' });
+  check('④ 会话 B 选中用户的另一个标签', bSel.success && /three unread/.test(bSel.text || ''), bSel.error || bSel.title);
+  const aSnap = await run(browserToolsProvider, 'browser_snapshot', { compact: false });
+  check('④ 会话 A 的快照仍是它自己的页(先切回再读)', aSnap.success && /nav ok/.test(aSnap.snapshot || '') && !/three unread/.test(aSnap.snapshot || ''), String(aSnap.snapshot || aSnap.error).slice(0, 80));
   sessionName = readFileSync(join(process.env.TANGU_BROWSER_SOCKET_DIR, `${`tangu_chrome_`}${(await import('node:crypto')).createHash('sha1').update(ws).digest('hex').slice(0, 10)}.pid`), 'utf8').trim();
 } catch (e) {
   check('冒烟未跑完', false, String(e?.stack || e));

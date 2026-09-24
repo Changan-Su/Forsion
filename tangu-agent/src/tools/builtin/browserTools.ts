@@ -16,7 +16,7 @@ import { assertPublicHttpUrl } from '../../core/util/urlSafety.js';
 import { tanguHome } from '../../core/tanguHome.js';
 import { getRawSection } from '../../core/config.js';
 import { formatToolOutput } from '../outputPersist.js';
-import type { ToolProvider } from '../toolRegistry.js';
+import type { ToolDef, ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -92,7 +92,9 @@ function sessionName(ctx: ToolContext): string {
 //  - Chrome **每条新连接**都弹「允许远程调试?」→ 所有会话共用一个 agent-browser session = 一条常驻连接;
 //  - Chrome 退出**不删**这个文件 → 必须探端口活着,不能只看文件在不在;
 //  - agent-browser 的 session 守护进程记死首次的 --cdp 地址,Chrome 重启后同名 session 永远连不上
-//    → session 名带 ws 地址的哈希,Chrome 换了实例就自然换一个守护进程。
+//    → session 名带 ws 地址的哈希,Chrome 换了实例就自然换一个守护进程;
+//  - 守护进程只有「当前标签」一个全局游标,`open` 覆盖它、`tab tN` 把 tN 切到前台;闲置退出重开后标签 id 从 t1 重新编号
+//    → 见下方 withAttachLock / boundTabs(Codex 09-24 #2)。
 
 function chromeUserDataDirs(): string[] {
   const home = homedir();
@@ -134,29 +136,95 @@ async function findUserBrowser(dirs: string[] = chromeUserDataDirs()): Promise<s
   return null;
 }
 
+/** 无人值守 run:Muse(ctx.muse,且自带 automationOrigin='muse')、自动化规则唤起的 agent run(automationOrigin,
+ *  full-auto 且无人看着 —— Codex 09-24 #1)、异步审批档的 run(approvalDeferral)。子代理从父 ctx 继承这些字段。 */
+function isBackgroundRun(ctx: Pick<ToolContext, 'muse' | 'approvalDeferral' | 'automationOrigin'>): boolean {
+  return !!(ctx.muse || ctx.approvalDeferral || ctx.automationOrigin);
+}
+
 /**
  * 本次调用该接管的用户浏览器 ws 端点;null = 用 Tangu 自己的后台浏览器。
  * browser.cdp(env TANGU_BROWSER_CDP):'auto'(缺省,自动发现)| 'off' | 显式 ws 地址(台架 / 非常规安装)。
  * 后台 run(Muse、无人值守自动化)绝不碰用户的浏览器:它们开的标签、点的按钮会直接出现在用户眼前。
  */
-export async function userBrowserEndpoint(ctx: Pick<ToolContext, 'muse' | 'approvalDeferral'>): Promise<string | null> {
-  if (ctx.muse || ctx.approvalDeferral) return null;
+export async function userBrowserEndpoint(ctx: Pick<ToolContext, 'muse' | 'approvalDeferral' | 'automationOrigin'>): Promise<string | null> {
+  if (isBackgroundRun(ctx)) return null;
   const v = String(process.env.TANGU_BROWSER_CDP ?? browserCfg().cdp ?? 'auto').trim();
   if (['off', '0', 'false'].includes(v.toLowerCase())) return null;
   if (v && v.toLowerCase() !== 'auto') return v;
   return findUserBrowser();
 }
 
-/** 接管态下以用户身份在已登录页面上动手的工具:与 browser_task 同一审批档(approvals.ts)。 */
-export const USER_BROWSER_ACTIONS: ReadonlySet<string> = new Set(['browser_click', 'browser_type', 'browser_press', 'browser_console']);
+/** 接管态下以用户身份在已登录页面上动手的工具(含让用户的标签后退跳走的 back):与 browser_task 同一审批档(approvals.ts)。 */
+export const USER_BROWSER_ACTIONS: ReadonlySet<string> = new Set(['browser_click', 'browser_type', 'browser_press', 'browser_console', 'browser_back']);
 
 function attachSessionName(endpoint: string): string {
   return `tangu_chrome_${createHash('sha1').update(endpoint).digest('hex').slice(0, 10)}`;
 }
 
-// 连不上用户的 Chrome(用户点了「拒绝」/ 弹框没人理)后短暂冷却:模型连试几次 = 用户那边叠几个弹框。
+// 连不上用户的 Chrome(用户点了「拒绝」/ 弹框没人理)后按端点短暂冷却:模型连试几次 = 用户那边叠几个弹框。
 const ATTACH_COOLDOWN_MS = 20_000;
-let attachFailure: { until: number; error: string } | null = null;
+let attachFailure: { endpoint: string; until: number; error: string } | null = null;
+
+const NO_TAB_BOUND = "No tab is selected for this conversation in the user's Chrome. Use browser_tabs to pick one of the user's tabs, "
+  + "or browser_navigate to open a page in Tangu's own tab.";
+
+// 一次工具调用内钉死接管目标:外壳判过的端点传给里面每条命令,中途 Chrome 开关远程调试也不会半截换浏览器(Codex 09-24 #4)。
+const pinnedEndpoint = new WeakMap<ToolContext, string | null>();
+async function endpointOf(ctx: ToolContext): Promise<string | null> {
+  return pinnedEndpoint.has(ctx) ? pinnedEndpoint.get(ctx) ?? null : userBrowserEndpoint(ctx);
+}
+
+// 所有会话共用一个守护进程、一个「当前标签」游标:接管态的每次工具调用在进程级锁里跑完整段「切标签 → 操作」,
+// 别的 run 插不进来切走游标(否则 A 的 open 可能落到 B 刚选中的用户标签上)。
+let attachChain: Promise<unknown> = Promise.resolve();
+function withAttachLock<T>(fn: () => Promise<T>): Promise<T> {
+  const next = attachChain.then(fn, fn);
+  attachChain = next.catch(() => undefined);
+  return next;
+}
+
+// `${端点}|${会话}` → 本会话选中 / 打开的标签 + 当时的守护进程 pid(守护进程闲置退出重开后标签 id 重新编号,旧 id 会指到别的标签)。
+const boundTabs = new Map<string, { tab: string; daemon: string }>();
+async function daemonPid(endpoint: string): Promise<string> {
+  try { return (await fs.readFile(path.join(browserSocketDir(), `${attachSessionName(endpoint)}.pid`), 'utf8')).trim(); } catch { return ''; }
+}
+async function bindTab(ctx: ToolContext, endpoint: string, tab: string): Promise<void> {
+  boundTabs.set(`${endpoint}|${ctx.sessionId}`, { tab, daemon: await daemonPid(endpoint) });
+}
+/** 把游标切回本会话的标签;返回给模型的错误文案,成功 null。 */
+async function rebindTab(ctx: ToolContext, endpoint: string): Promise<string | null> {
+  const key = `${endpoint}|${ctx.sessionId}`;
+  const b = boundTabs.get(key);
+  if (!b || !b.daemon || b.daemon !== await daemonPid(endpoint)) { boundTabs.delete(key); return NO_TAB_BOUND; }
+  const sw = await runBrowserCommand(ctx, 'tab', [b.tab], commandTimeout(), endpoint);
+  if (sw.success) return null;
+  boundTabs.delete(key);
+  return `The tab this conversation was using in the user's Chrome is no longer available (${sw.error}). Pick one again with browser_tabs.`;
+}
+
+// browser_search / browser_navigate 自己切到本会话的 Tangu 标签(navigate);其余都只作用在本会话选中 / 打开的标签上。
+const OPENS_OWN_TAB = new Set(['browser_search', 'browser_navigate']);
+/** browser_* 外壳:没接管 → 原样执行;接管 → 锁内、钉死端点、先切回本会话的标签再执行。 */
+function onOwnTab(t: ToolDef): ToolDef {
+  return {
+    ...t,
+    execute: async (args, ctx) => {
+      const cdp = await userBrowserEndpoint(ctx);
+      const scoped: ToolContext = { ...ctx };
+      pinnedEndpoint.set(scoped, cdp);
+      if (!cdp) return t.execute(args, scoped);
+      return withAttachLock(async () => {
+        if (ctx.signal?.aborted) return toJson({ success: false, error: 'aborted' });
+        if (!OPENS_OWN_TAB.has(t.name)) {
+          const err = await rebindTab(scoped, cdp);
+          if (err) return toJson({ success: false, attached: true, error: err });
+        }
+        return t.execute(args, scoped);
+      });
+    },
+  };
+}
 
 /**
  * agent-browser 的 unix domain socket 根目录。
@@ -309,9 +377,10 @@ async function runBrowserCommand(
   endpoint?: string | null, // 调用方已判过接管就传进来(一次工具调用内多条命令口径一致);undefined = 现判
 ): Promise<BrowserCommandResult & { attached?: boolean }> {
   if (!browserEnabled()) return { success: false, error: 'Browser tools are disabled (TANGU_BROWSER_ENABLED=0)' };
-  const cdp = endpoint === undefined ? await userBrowserEndpoint(ctx) : endpoint;
-  if (cdp && attachFailure && Date.now() < attachFailure.until) return { success: false, attached: true, error: attachFailure.error };
+  const cdp = endpoint === undefined ? await endpointOf(ctx) : endpoint;
+  if (cdp && attachFailure?.endpoint === cdp && Date.now() < attachFailure.until) return { success: false, attached: true, error: attachFailure.error };
   const name = cdp ? attachSessionName(cdp) : sessionName(ctx);
+  const fresh = !!cdp && !(await daemonPid(cdp)); // 守护进程还没起 = 这条命令要新建连接,Chrome 会弹授权框
   const socketDir = browserSocketDir();
   await fs.mkdir(socketDir, { recursive: true });
   const env: NodeJS.ProcessEnv = {
@@ -338,32 +407,33 @@ async function runBrowserCommand(
     if (!bin || r.enoent) r = await spawnAgentBrowser('npx', ['agent-browser', ...baseArgs], env, timeoutMs, ctx.signal);
   }
   if (!cdp) return r;
-  // 只认连 CDP 本身失败(实测措辞 "CDP WebSocket connect failed: …");页面自己的 net::ERR_CONNECTION_* 不算
-  if (!r.success && /CDP WebSocket|WebSocket connect/i.test(r.error || '')) {
+  // 连 CDP 本身失败(实测措辞 "CDP WebSocket connect failed: …";页面自己的 net::ERR_CONNECTION_* 不算),
+  // 或首连超时(授权框没人点)→ 按端点冷却并说清去哪点;已连上后的超时就是页面慢,不提授权框。
+  if (!r.success && (/CDP WebSocket|WebSocket connect/i.test(r.error || '') || (fresh && /timed out/i.test(r.error || '')))) {
     const error = `Could not connect to the user's Chrome (${r.error}). ${ALLOW_PROMPT_HINT} Ask them, then retry once — every attempt pops another prompt.`;
-    attachFailure = { until: Date.now() + ATTACH_COOLDOWN_MS, error };
+    attachFailure = { endpoint: cdp, until: Date.now() + ATTACH_COOLDOWN_MS, error };
     return { ...r, attached: true, error };
   }
-  // 首连要等用户去 Chrome 里点「允许」,人不在就超时:把去哪点说清楚(不进冷却——慢页面也会超时)
-  if (!r.success && /timed out/i.test(r.error || '')) return { ...r, attached: true, error: `${r.error}. ${ALLOW_PROMPT_HINT}` };
-  if (r.success) attachFailure = null;
+  if (r.success && attachFailure?.endpoint === cdp) attachFailure = null;
   return { ...r, attached: true };
 }
 
 async function navigate(ctx: ToolContext, rawUrl: string): Promise<Record<string, any>> {
   const url = await validateUrl(rawUrl);
   const navTimeout = Math.max(commandTimeout(), NAVIGATE_TIMEOUT_MS);
-  const cdp = await userBrowserEndpoint(ctx);
+  const cdp = await endpointOf(ctx);
   let opened;
   if (cdp) {
     // 用户的 Chrome 里,agent-browser 的 open 会直接覆盖当前绑定的那个标签(可能正是用户在看的页)
-    // → 只在 Tangu 自己打了 tangu 标签的那一页里跳;还没有就新开一个。
-    const own = await runBrowserCommand(ctx, 'tab', ['tangu'], commandTimeout(), cdp);
+    // → 只在本会话自己的 Tangu 标签(按会话打 label)里跳;还没有就新开一个。会话之间不共用,免得互相冲掉页面。
+    const label = `tangu-${createHash('sha1').update(ctx.sessionId).digest('hex').slice(0, 6)}`;
+    const own = await runBrowserCommand(ctx, 'tab', [label], commandTimeout(), cdp);
     opened = own.success
       ? await runBrowserCommand(ctx, 'open', [url], navTimeout, cdp)
       : /No tab with label/i.test(own.error || '') // 其余失败(连不上等)原样上报,别再多开一次连接
-        ? await runBrowserCommand(ctx, 'tab', ['new', '--label', 'tangu', url], navTimeout, cdp)
+        ? await runBrowserCommand(ctx, 'tab', ['new', '--label', label, url], navTimeout, cdp)
         : own;
+    if (opened.success) await bindTab(ctx, cdp, label);
   } else {
     opened = await runBrowserCommand(ctx, 'open', [url], navTimeout, null);
   }
@@ -399,7 +469,7 @@ function refArg(v: unknown): string {
 
 export const browserToolsProvider: ToolProvider = {
   id: 'builtin:browser-tools',
-  tools: () => [
+  tools: () => ([
     {
       name: 'browser_search',
       mode: 'host',
@@ -650,7 +720,7 @@ export const browserToolsProvider: ToolProvider = {
         return toJson(r.success ? { success: true, screenshot_path: r.data?.path || file } : r);
       },
     },
-  ],
+  ] as ToolDef[]).map(onOwnTab),
 };
 
 interface TabInfo { tab: string; title: string; url: string; tangu?: true }
@@ -679,7 +749,8 @@ export const browserTabsProvider: ToolProvider = {
     {
       name: 'browser_tabs',
       mode: 'host',
-      isEnabledFor: (profile) => profile.features.webSearch && profile.capabilities.hostExec,
+      // 后台 run(Muse 周期跑 plan mode,白名单里有它)永不接管用户浏览器:给它看只会拿到「没连上,去教用户开开关」的误导
+      isEnabledFor: (profile, ctx) => profile.features.webSearch && profile.capabilities.hostExec && !isBackgroundRun(ctx),
       capabilities: { sideEffect: 'browser', parallel: false, concurrencyKey: 'browser', defaultTimeoutMs: 60_000 },
       definition: {
         type: 'function',
@@ -704,34 +775,40 @@ export const browserTabsProvider: ToolProvider = {
       execute: async (args, ctx) => {
         const cdp = await userBrowserEndpoint(ctx);
         if (!cdp) return toJson({ success: false, connected: false, error: NOT_CONNECTED_HINT });
-        const list = await runBrowserCommand(ctx, 'tab', ['list'], commandTimeout(), cdp);
-        if (!list.success) return toJson({ success: false, error: list.error });
-        const tabs: TabInfo[] = (Array.isArray(list.data?.tabs) ? list.data.tabs : []).map((t: any) => ({
-          tab: String(t.tabId), title: String(t.title || ''), url: String(t.url || ''), ...(t.label === 'tangu' ? { tangu: true as const } : {}),
-        }));
-        const select = String(args.select ?? '').trim();
-        if (!select) return toJson({ success: true, tabs });
-        const hits = pickTabs(tabs, select);
-        if (hits.length !== 1) {
-          return toJson({
-            success: false,
-            error: hits.length ? `"${select}" matches ${hits.length} tabs — call again with one tab id.` : `No open tab matches "${select}".`,
-            tabs: hits.length ? hits : tabs,
-          });
-        }
-        const sw = await runBrowserCommand(ctx, 'tab', [hits[0].tab], commandTimeout(), cdp);
-        if (!sw.success) return toJson({ success: false, error: sw.error });
-        const text = await runBrowserCommand(ctx, 'get', ['text', 'body'], commandTimeout(), cdp);
-        const refs = await runBrowserCommand(ctx, 'snapshot', ['-i', '-c'], commandTimeout(), cdp);
-        return toJson({
-          success: true,
-          tab: hits[0].tab,
-          title: sw.data?.title || hits[0].title,
-          url: sw.data?.url || hits[0].url,
-          ...(text.success ? { text: clipText(String(text.data?.text ?? ''), TAB_TEXT_MAX_CHARS) } : { textError: text.error }),
-          ...(refs.success ? { refs: clipText(String(refs.data?.snapshot ?? ''), TAB_REFS_MAX_CHARS) } : {}),
-        });
+        return withAttachLock(() => readUserTabs(ctx, cdp, String(args.select ?? '').trim()));
       },
     },
   ],
 };
+
+/** browser_tabs 本体(已在 withAttachLock 内):列标签;select 命中唯一一个 → 切过去、绑定给本会话、读正文与 refs。 */
+async function readUserTabs(ctx: ToolContext, cdp: string, select: string): Promise<string> {
+  if (ctx.signal?.aborted) return toJson({ success: false, error: 'aborted' });
+  const list = await runBrowserCommand(ctx, 'tab', ['list'], commandTimeout(), cdp);
+  if (!list.success) return toJson({ success: false, error: list.error });
+  const tabs: TabInfo[] = (Array.isArray(list.data?.tabs) ? list.data.tabs : []).map((t: any) => ({
+    tab: String(t.tabId), title: String(t.title || ''), url: String(t.url || ''), ...(String(t.label || '').startsWith('tangu') ? { tangu: true as const } : {}),
+  }));
+  if (!select) return toJson({ success: true, tabs });
+  const hits = pickTabs(tabs, select);
+  if (hits.length !== 1) {
+    return toJson({
+      success: false,
+      error: hits.length ? `"${select}" matches ${hits.length} tabs — call again with one tab id.` : `No open tab matches "${select}".`,
+      tabs: hits.length ? hits : tabs,
+    });
+  }
+  const sw = await runBrowserCommand(ctx, 'tab', [hits[0].tab], commandTimeout(), cdp);
+  if (!sw.success) return toJson({ success: false, error: sw.error });
+  await bindTab(ctx, cdp, hits[0].tab); // 之后本会话的 browser_click / snapshot … 都落在这个标签上
+  const text = await runBrowserCommand(ctx, 'get', ['text', 'body'], commandTimeout(), cdp);
+  const refs = await runBrowserCommand(ctx, 'snapshot', ['-i', '-c'], commandTimeout(), cdp);
+  return toJson({
+    success: true,
+    tab: hits[0].tab,
+    title: sw.data?.title || hits[0].title,
+    url: sw.data?.url || hits[0].url,
+    ...(text.success ? { text: clipText(String(text.data?.text ?? ''), TAB_TEXT_MAX_CHARS) } : { textError: text.error }),
+    ...(refs.success ? { refs: clipText(String(refs.data?.snapshot ?? ''), TAB_REFS_MAX_CHARS) } : {}),
+  });
+}
