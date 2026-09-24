@@ -6,6 +6,7 @@ import type { HistorianConfig, ModelInfo, MuseConfig, NormalAgentDef, SpecialAge
 import { registerMessages, useI18n } from '../i18n'
 import { track } from '../achievements/store'
 import { CapabilityMenu } from './CapabilityMenu'
+import { publishAccountQuota, subscribeAccountQuota, type AccountQuotaView } from '../services/accountQuota'
 import './specialAgents.css'
 
 registerMessages({
@@ -26,7 +27,37 @@ registerMessages({
   'specialUi.startHour': { zh: '开始时间（小时）', en: 'Start time (hour)' },
   'specialUi.endHour': { zh: '结束时间（小时）', en: 'End time (hour)' },
   'specialUi.searchModels': { zh: '搜索模型', en: 'Search models' },
+  'bgQuota.title': { zh: '后台额度', en: 'Background quota' },
+  'bgQuota.lead': {
+    zh: '主额度之外额外送的一份,相当于你额度的 {share}%;只计 Muse 与自动化用云端默认后台模型({model})的用量。这里的改动立即生效。',
+    en: 'An extra allowance on top of your main quota, worth {share}% of your limit. Only Muse and automations running on the cloud default background model ({model}) draw from it. Changes here apply immediately.',
+  },
+  'bgQuota.daily': { zh: '今日', en: 'Today' },
+  'bgQuota.weekly': { zh: '本周', en: 'This week' },
+  'bgQuota.remaining': { zh: '剩余 {percent}%', en: '{percent}% left' },
+  'bgQuota.unlimited': { zh: '不限', en: 'Unlimited' },
+  'bgQuota.otherModel': {
+    zh: 'Muse 当前用的是 {model},不计入后台额度,会消耗主额度。',
+    en: 'Muse is set to {model}, which does not count toward the background quota and uses your main quota instead.',
+  },
+  'bgQuota.autoMain': { zh: '用完后改用主额度继续', en: 'Continue on main quota when used up' },
+  'bgQuota.autoMainHint': {
+    zh: '关闭时,后台额度用完后 Muse 与自动化会暂停到下个周期。',
+    en: 'When off, Muse and automations pause until the next period once the background quota runs out.',
+  },
+  'bgQuota.convert': { zh: '从主额度转入', en: 'Move from main quota' },
+  'bgQuota.convertHint': {
+    zh: '按你额度的百分比等额转入,仅本周期有效,不超过主额度剩余。',
+    en: 'Moves an equal amount, as a share of your limit, for this period only and never more than your main quota has left.',
+  },
+  'bgQuota.confirm': { zh: '再点确认', en: 'Click to confirm' },
+  'bgQuota.converted': { zh: '已转入,本周期有效', en: 'Moved for this period' },
+  'bgQuota.noMain': { zh: '主额度已用完,没有可转入的额度', en: 'Your main quota is used up; there is nothing to move' },
+  'bgQuota.failed': { zh: '操作失败:{e}', en: 'Action failed: {e}' },
 })
+
+/** 转入档位(限额的百分比);横幅上的一键转入固定用 10。 */
+const BG_CONVERT_STEPS = [5, 10, 20] as const
 
 function Toggle({ value, onChange, label, disabled = false }: { value: boolean; onChange: (value: boolean) => void; label: string; disabled?: boolean }) {
   return <button type="button" className="special-toggle" role="switch" aria-checked={value} aria-label={label} disabled={disabled} onClick={() => onChange(!value)}><span /></button>
@@ -40,6 +71,82 @@ function NumberField({ label, value, onChange, min, max, hint }: { label: string
   useEffect(() => setText(String(value)), [value])
   const commit = () => { const next = text.trim() && Number.isFinite(Number(text)) ? Math.min(max, Math.max(min, Math.floor(Number(text)))) : value; setText(String(next)); onChange(next) }
   return <Field label={label} hint={hint}><input aria-label={label} type="number" min={min} max={max} value={text} onChange={(e) => setText(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } }} /></Field>
+}
+
+/**
+ * Forsion 后台额度(账号级,服务端真源;不走本页的草稿 / 保存流程,点了就生效)。
+ * 只在宿主有额度接口、且服务端配了计入模型(background.modelId)时出现。museModelId = Muse 显式选的模型('' = 跟随云端)。
+ */
+function BackgroundQuotaSection({ museModelId, modelLabel }: { museModelId: string; modelLabel: (id: string) => string }) {
+  const { t } = useI18n()
+  const [quota, setQuota] = useState<AccountQuotaView | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [confirm, setConfirm] = useState<number | null>(null)
+  const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null)
+  useEffect(() => {
+    let alive = true
+    void window.tangu?.accountQuota?.().then((r) => { if (alive && r?.status === 200 && r.json) setQuota(r.json) }).catch(() => {})
+    const off = subscribeAccountQuota((q) => { if (alive && q) setQuota(q) })
+    return () => { alive = false; off() }
+  }, [])
+  const bg = quota?.background
+  if (!window.tangu?.accountQuota || !bg?.modelId) return null
+  const apply = (next: AccountQuotaView | undefined): void => {
+    if (!next) return
+    const merged = { ...next, resetCards: quota?.resetCards } as AccountQuotaView
+    setQuota(merged)
+    publishAccountQuota(merged)
+  }
+  const axis = (key: 'daily' | 'weekly') => {
+    const limit = Number(bg[`${key}Limit`])
+    const left = limit < 0 ? null : limit === 0 ? 0 : Math.max(0, Math.min(100, (Number(bg[`${key}Remaining`]) / limit) * 100))
+    return (
+      <div className="special-bgquota-axis" key={key} data-axis={key}>
+        <span>{t(`bgQuota.${key}`)}</span>
+        <b>{left === null ? t('bgQuota.unlimited') : t('bgQuota.remaining', { percent: String(Math.floor(left)) })}</b>
+        {left !== null && <i aria-hidden="true"><em style={{ width: `${left}%` }} data-low={left <= 15 ? '1' : undefined} /></i>}
+      </div>
+    )
+  }
+  const setAutoMain = async (enabled: boolean): Promise<void> => {
+    if (busy || !window.tangu?.accountBgAutoMain) return
+    setBusy(true); setMsg(null)
+    try {
+      const r = await window.tangu.accountBgAutoMain(enabled)
+      if (r?.status === 200 && r.json?.success) apply({ ...(quota as AccountQuotaView), background: { ...bg, autoMain: enabled } })
+      else setMsg({ text: t('bgQuota.failed', { e: String(r?.json?.detail || r?.status) }), error: true })
+    } catch (e: any) { setMsg({ text: t('bgQuota.failed', { e: String(e?.message || e) }), error: true }) } finally { setBusy(false) }
+  }
+  const convert = async (percent: number): Promise<void> => {
+    if (busy || !window.tangu?.accountBgConvert) return
+    if (confirm !== percent) { setConfirm(percent); return } // 两击确认,与重置卡同一姿势
+    setBusy(true); setMsg(null); setConfirm(null)
+    try {
+      const r = await window.tangu.accountBgConvert(percent)
+      if (r?.status === 200 && r.json?.success) { apply(r.json.quota); setMsg({ text: t('bgQuota.converted') }) }
+      else setMsg({ text: r?.json?.error === 'insufficient_main_quota' ? t('bgQuota.noMain') : t('bgQuota.failed', { e: String(r?.json?.detail || r?.status) }), error: true })
+    } catch (e: any) { setMsg({ text: t('bgQuota.failed', { e: String(e?.message || e) }), error: true }) } finally { setBusy(false) }
+  }
+  return <>
+    <div className="special-section-title">{t('bgQuota.title')}</div>
+    <div className="special-bgquota" data-busy={busy ? '1' : undefined}>
+      <p className="special-bgquota-lead">{t('bgQuota.lead', { share: String(bg.sharePercent ?? 15), model: modelLabel(bg.modelId) })}</p>
+      <div className="special-bgquota-axes">{axis('daily')}{axis('weekly')}</div>
+      {!!museModelId && museModelId !== bg.modelId && <p className="special-bgquota-warn">{t('bgQuota.otherModel', { model: modelLabel(museModelId) })}</p>}
+      {!!window.tangu?.accountBgAutoMain && (
+        <div className="special-toggle-row"><div><strong>{t('bgQuota.autoMain')}</strong><p>{t('bgQuota.autoMainHint')}</p></div>
+          <Toggle label={t('bgQuota.autoMain')} value={!!bg.autoMain} disabled={busy} onChange={(v) => void setAutoMain(v)} /></div>
+      )}
+      {!!window.tangu?.accountBgConvert && (
+        <Field label={t('bgQuota.convert')} hint={t('bgQuota.convertHint')}>
+          <div className="special-choices">{BG_CONVERT_STEPS.map((p) => (
+            <button type="button" key={p} aria-pressed={confirm === p} disabled={busy} onClick={() => void convert(p)}>{confirm === p ? t('bgQuota.confirm') : `+${p}%`}</button>
+          ))}</div>
+        </Field>
+      )}
+      {msg && <p className={msg.error ? 'special-error' : 'special-bgquota-note'} role={msg.error ? 'alert' : 'status'}>{msg.text}</p>}
+    </div>
+  </>
 }
 
 type SpecialDraft = { conf: SpecialAgentsConfig; baseline: SpecialAgentsConfig; prompt: string; folders: string }
@@ -134,6 +241,7 @@ export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktop
             <Field label={t('settings.special.m.activeHours')}>{choice(t('settings.special.m.activeHours'), m.activeHours ? 'custom' : 'all', [{ id: 'all', label: t('settings.special.m.activeAllDay') }, { id: 'custom', label: t('settings.special.custom') }], (id) => changeMuse({ activeHours: id === 'custom' ? { start: 9, end: 22 } : null }))}
               {m.activeHours && <div className="special-hours"><NumberField label={t('specialUi.startHour')} value={m.activeHours.start} min={0} max={23} onChange={(start) => changeMuse({ activeHours: { ...m.activeHours!, start } })} /><NumberField label={t('specialUi.endHour')} value={m.activeHours.end} min={0} max={23} onChange={(end) => changeMuse({ activeHours: { ...m.activeHours!, end } })} /></div>}
             </Field></div>
+          <BackgroundQuotaSection museModelId={m.modelId} modelLabel={(id) => models.find((item) => item.id === id)?.name || id} />
           <details className="special-disclosure"><summary>{t('settings.special.m.notify')}</summary><div className="special-field-grid"><Field label={t('settings.special.m.notifyMode')}>{choice(t('settings.special.m.notifyMode'), m.notify || 'immediate', [{ id: 'immediate', label: t('settings.special.m.notifyImmediate') }, { id: 'digest', label: t('settings.special.m.notifyDigest') }], (notify) => changeMuse({ notify: notify as MuseConfig['notify'] }))}</Field><Field label={t('settings.special.m.escalateTo')}>{choice(t('settings.special.m.escalateTo'), m.escalateTo || '', [{ id: '', label: t('settings.special.m.escalateNone') }, ...escalation], (escalateTo) => changeMuse({ escalateTo }))}</Field></div></details>
           <details className="special-disclosure"><summary>{t('settings.special.m.budget')}</summary><div className="special-field-grid">
             <NumberField label={t('settings.special.m.budgetWindow')} value={m.restartWindowHours} min={1} max={24} onChange={(restartWindowHours) => changeMuse({ restartWindowHours })} />

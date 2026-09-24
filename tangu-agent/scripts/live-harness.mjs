@@ -56,7 +56,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -65,7 +65,7 @@ const FILLER = Math.max(0, Math.floor(Number(opt('filler', 0)) || 0));
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -357,6 +357,15 @@ const api = async (path, init = {}) => {
   if (!r.ok) throw new Error(`${init.method || 'GET'} ${path} → ${r.status} ${(typeof body === 'string' ? body : JSON.stringify(body)).slice(0, 300)}`);
   return body;
 };
+// 用户活动行(与 userActivity.ts 同格式,本地时间):musewake 播作息、「用户回来了」都写这里(隔离 home 的共享域 activity/)。
+const pad2 = (x) => String(x).padStart(2, '0');
+const actStamp = (d) => `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}${pad2(d.getHours())}${pad2(d.getMinutes())}`;
+const actDay = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const appendUserActivity = (d = new Date(), what = 'note.edit f="Notes/harness.md" l=1') => {
+  const dir = join(shared, 'activity'); mkdirSync(dir, { recursive: true });
+  appendFileSync(join(dir, `${actDay(d)}.log`), `${actStamp(d)} ${what}\n`);
+};
+const hhmm = (ms) => { const d = new Date(Number(ms)); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
 const museLogTail = () => { try { return readFileSync(engineLog, 'utf8').split('\n').filter((l) => l.includes('[muse]')).slice(-6).join(' ⏎ '); } catch { return ''; } };
 /** 直接读隔离 state.db 的压缩检查点(只读打开,引擎同时写着也安全);没有 HTTP 面,只能这么核。 */
 const summariesOf = async (sessionId) => {
@@ -1044,7 +1053,7 @@ try {
     // 末轮剥 tools)+ later-full-miss 19.6k(cli-chat-proxy 路由不粘)+ 新内容 30.4k;codex 同场景 43.7k 且没顶到上限。
     const engineText = () => { try { return readFileSync(engineLog, 'utf8'); } catch { return ''; } };
     // 两道闸的措辞不同且互不为子串(muse.ts 计费闸 `token 预算用尽` / 毛量闸 `毛 prompt 预算用尽`):
-    // 只 grep 计费那句,毛量闸挡住时下面会报成「420s 未起」—— 把「被预算挡住」误读成「起不来」。
+    // 只 grep 计费那句,毛量闸挡住时下面会报成「600s 未起」—— 把「被预算挡住」误读成「起不来」。
     // 命中哪句也写进 detail:计费闸查 maxTokensPerWindow,毛量闸查 GROSS_TOKENS_FACTOR,指错地方白排查一轮。
     // ponytail: 只收 `if (cfg.maxTokensPerWindow > 0)` 里的两道闸;muse.ts 的重启闸(本窗口预算用尽)故意不进
     // —— 台架配 maxRestartsPerWindow=3,周期 2 之前不可能触发。两边措辞的对齐由 test/museBudgetGateMarkers.test.ts 钉。
@@ -1052,7 +1061,19 @@ try {
     const blocked = () => { const t = engineText(); return BLOCK_MARKS.find((m) => t.includes(m)) || ''; };
     const firstCycleAt = Number(started.lastCycleAt) || 0;
     const advanced = (s) => Number(s?.lastCycleAt) > 0 && (firstCycleAt ? Number(s.lastCycleAt) > firstCycleAt : Number(s.restartsThisWindow) >= 2);
-    const second = await until(async () => { const s = await status(); return advanced(s) || blocked() ? s : null; }, 420_000, 5000);
+    // Muse 自己睡了(set_next_wake,09-24):别把「按设计睡着」判成「起不来」—— 模拟用户回来(写一行用户活动),顺带验「一动就醒」。
+    // 活动日志是分钟精度,与睡下同一分钟的行按设计不算(userActiveSince 严格大于)→ 进到下一分钟再写,否则永远叫不醒(09-24 首跑实测)。
+    // 睡了的话多等「凑整分钟 + 一个巡检」,总时限从 420s 放到 600s。
+    let slept = '';
+    let sleptAt = 0;
+    let nudged = false;
+    const second = await until(async () => {
+      const s = await status();
+      if (advanced(s) || blocked()) return s;
+      if (!slept && !s.running && Number(s.sleepUntil) > Date.now()) { slept = `睡到 ${hhmm(s.sleepUntil)}(${s.sleepReason || '无理由'})→ 写用户活动叫醒`; sleptAt = Date.now(); }
+      if (slept && !nudged && Math.floor(Date.now() / 60_000) > Math.floor(sleptAt / 60_000)) { appendUserActivity(); nudged = true; }
+      return null;
+    }, 600_000, 5000);
     // 起周期那一行的实际措辞见 src/services/muse.ts:`启动第 N/M 个思考周期(…,计费 A/B,毛量 C/D)`。
     // 引擎早就不再打 `token 已计 A/B`,旧正则永远零命中、detail 里恒是 `?`(评审:仪器自己坏了没人知道)。
     // 两段连着匹配才只命中这一行:单写 `计费 A/B` 会把「token 预算用尽(… 计费 A/B,未缓存 …)」也算进来。
@@ -1072,7 +1093,50 @@ try {
     const blockedBy = blocked();
     const twoCycles = advanced(second) && !blockedBy;
     const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0);
-    return { ok, detail: `周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '420s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length};自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
+    return { ok, detail: `${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length};自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
+  });
+  // ── musewake(09-24,opt-in,单独跑:`--only musewake`):「用户睡了、没事可做」时 Muse 会不会自己 set_next_wake,
+  // 引擎会不会真的跳过心跳,用户一动能不能立刻醒。作息按**当前钟点**播:活跃窗口 = 现在 +6h 起 10 个小时(每天每小时一行,
+  // 14 天),于是「现在」恒落在作息的深夜段、最近一次活动约 9 小时前 —— 不管台架几点跑,判断题都是同一道。
+  // 判据三段各自留证:①周期 1 后 sleepUntil 至少推后 1 小时;②心跳 1 分钟、巡检 1 分钟下 100s 内不起周期 2(闸真挡住);
+  // ③写一行用户活动后 180s 内起周期 2(一动就醒)。模型原话进 output,睡到几点 / 理由进 detail。
+  await scenario('musewake', `muse 按作息自主跳过心跳(${MUSE_MODE})`, async () => {
+    const now = new Date();
+    const nowH = now.getHours();
+    const active = (h) => { const k = (h - nowH + 24) % 24; return k >= 6 && k < 16; };
+    for (let t = now.getTime() - 14 * 86_400_000; t < now.getTime(); t += 3_600_000) {
+      const d = new Date(t); d.setMinutes(15, 0, 0);
+      if (d.getTime() < now.getTime() && active(d.getHours())) appendUserActivity(d, `note.edit f="Notes/day-${actDay(d)}.md" l=${d.getHours()}`);
+    }
+    const usualStart = new Date(now.getTime() + 6 * 3_600_000); usualStart.setMinutes(0, 0, 0);
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 1, supervisorPollMinutes: 1, maxIterationsPerCycle: 12, maxRestartsPerWindow: 5, allowedFolders: [workspace], notify: 'immediate' } }) });
+    const status = () => api('/agent/special/muse/status').then((s) => (s && typeof s.status === 'object' ? s.status : s));
+    const started = await until(async () => { const s = await status(); return s.running || s.lastCycleAt ? s : null; }, 120_000, 3000);
+    if (!started) return { ok: false, detail: `120s 未起周期;[muse] 日志:${museLogTail() || '(无)'}` };
+    const done1 = await until(async () => { const s = await status(); return !s.running && s.lastCycleAt ? s : null; }, 360_000, 5000);
+    if (!done1) return { ok: false, detail: '周期 1 360s 未收尾' };
+    const cycle1At = Number(done1.lastCycleAt);
+    const sid = done1.sessionId;
+    const says = async () => (sid ? asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '');
+    const sleepUntil = Number(done1.sleepUntil) || 0;
+    const slept = sleepUntil - Date.now() >= 60 * 60_000;
+    const plan = sleepUntil ? `睡到 ${hhmm(sleepUntil)}(作息起点 ${hhmm(usualStart)};理由:${done1.sleepReason || '无'})` : '没睡';
+    if (!slept) return { ok: false, detail: `现在 ${hhmm(now)} 在作息深夜段、上次活动约 9h 前,Muse ${plan}`, output: await says(), status: done1 };
+    // ② 心跳 1 分钟 + 巡检 1 分钟:醒着的话 100s 内必起周期 2
+    await sleep(100_000);
+    const mid = await status();
+    const honored = Number(mid.lastCycleAt) === cycle1At;
+    // ③ 用户回来了
+    appendUserActivity();
+    const woke = await until(async () => { const s = await status(); return Number(s.lastCycleAt) > cycle1At ? s : null; }, 180_000, 5000);
+    const journalDir = join(home, 'agents', 'muse', 'Library', 'Journal');
+    const journal = existsSync(journalDir) ? readdirSync(journalDir).map((f) => readFileSync(join(journalDir, f), 'utf8')).join('\n') : '';
+    const journalSleep = /sleep → /.test(journal);
+    return {
+      ok: slept && honored && !!woke,
+      detail: `${plan};心跳闸${honored ? '挡住了' : '没挡住(100s 内又起了周期)'};用户活动后${woke ? '醒了' : '180s 未醒'};Journal ${journalSleep ? '记了休眠' : '没记休眠'}`,
+      output: await says(), journal, status: woke || mid,
+    };
   });
   // ── 自进化闭环(09-18):三个 run 串成一条链,每一环各自留证据,红了能看出断在哪。
   //  ① 一次明确的工作方法纠正 → Historian 判官(harnessCandidates 开)应提名候选进 agents/<slug>/.harness-raw.md(自动档那半从未真机点验过);

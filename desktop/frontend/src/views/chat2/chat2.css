@@ -966,6 +966,8 @@
 }
 .t2-quota-action.upgrade { color: var(--accent-ink); }
 .t2-quota-action.reset { color: var(--text-muted); }
+.t2-quota-action.convert { color: var(--accent-ink); }
+.t2-quota-action.settings { color: var(--text-muted); }
 .t2-quota-action:hover:not(:disabled), .t2-quota-dismiss:hover { background: var(--overlay-medium); }
 .t2-quota-action:disabled { color: var(--text-faint); cursor: default; }
 .t2-quota-dismiss {

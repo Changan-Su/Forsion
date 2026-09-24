@@ -79,6 +79,8 @@ const api = {
   openPayCenter: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('auth:openPayCenter'),
   accountQuota: (): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:quota'),
   accountUseResetCard: (type?: string): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:useResetCard', type),
+  accountBgConvert: (percent: number): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:bgConvert', percent),
+  accountBgAutoMain: (enabled: boolean): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:bgAutoMain', enabled),
   /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
   submitFeedback: (input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }> =>
     ipcRenderer.invoke('feedback:submit', input),

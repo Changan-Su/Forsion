@@ -127,3 +127,61 @@ export async function readActivityLines(opts: ReadActivityOptions = {}): Promise
   }
   return tail;
 }
+
+/**
+ * 这行是不是**用户**自己的动作:引擎后台(Muse 周期 / 自动化)写的行带 `o=<来源>`(registry.ts agent.edit、
+ * runStore.ts run.done;用户自己会话的 run 不带)。先抹掉引号段再找 —— 值里的字面 ` o=` 不算(值已消毒,引号必成对)。
+ */
+export function isUserActivityLine(line: string): boolean {
+  return !/\so=\S/.test(line.replace(/"[^"]*"/g, '""'));
+}
+
+/**
+ * 最近 days 天(含今天)**用户**活动的时间戳(YYYYMMDDHHMM,本地时间,旧→新)。
+ * 与 readActivityLines 不同:不截条数/字符 —— 作息统计要整段历史,只取每行前 12 个字符,体量无所谓。
+ */
+export async function readUserActivityStamps(days: number, now = new Date()): Promise<string[]> {
+  const out: string[] = [];
+  for (let i = Math.max(1, days) - 1; i >= 0; i--) {
+    let raw: string;
+    try {
+      raw = await fs.readFile(join(activityDir(), `${localDateStr(new Date(now.getTime() - i * 86_400_000))}.log`), 'utf8');
+    } catch {
+      continue;
+    }
+    for (const line of raw.split('\n')) {
+      if (/^\d{12} \S/.test(line) && isUserActivityLine(line)) out.push(line.slice(0, 12));
+    }
+  }
+  return out;
+}
+
+export interface ActivityRhythm {
+  /** 每个本地小时(0..23)有用户活动的天数 */
+  hourDays: number[];
+  /** 有任何用户活动的天数 */
+  activeDays: number;
+  /** 最近一次用户活动(YYYYMMDDHHMM);没有 → null */
+  last: string | null;
+}
+
+/** 作息统计(纯函数,单测钉):输入 readUserActivityStamps 的时间戳。 */
+export function activityRhythm(stamps: string[]): ActivityRhythm {
+  const byHour = Array.from({ length: 24 }, () => new Set<string>());
+  const days = new Set<string>();
+  let last: string | null = null;
+  for (const s of stamps) {
+    if (!/^\d{12}$/.test(s)) continue;
+    const h = Number(s.slice(8, 10));
+    if (h > 23) continue;
+    byHour[h].add(s.slice(0, 8));
+    days.add(s.slice(0, 8));
+    if (!last || s > last) last = s;
+  }
+  return { hourDays: byHour.map((x) => x.size), activeDays: days.size, last };
+}
+
+/** YYYYMMDDHHMM(本地)→ Date。 */
+export function parseActivityTs(s: string): Date {
+  return new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +s.slice(8, 10), +s.slice(10, 12));
+}

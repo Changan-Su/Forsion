@@ -26,7 +26,17 @@ let quota: AccountQuotaView = {
 }
 
 window.tangu = {
+  // museAvailable() 看它:有本地引擎才会出后台额度那条(Muse 只在桌面本地跑)
+  backendStatus: async () => ({ state: 'running' }),
   accountQuota: async () => ({ status: 200, json: quota }),
+  accountBgConvert: async (percent: number) => {
+    const bg = quota.background
+    if (bg) {
+      const add = percent // 台架主限额恒 100:转入 限额×percent% = percent 点
+      quota = { ...quota, background: { ...bg, dailyLimit: bg.dailyLimit + add, dailyRemaining: (bg.dailyRemaining || 0) + add, weeklyLimit: bg.weeklyLimit + add, weeklyRemaining: (bg.weeklyRemaining || 0) + add } }
+    }
+    return { status: 200, json: { success: true, quota } }
+  },
   accountUseResetCard: async () => {
     quota = { ...quota, dailyRemaining: 100, weeklyRemaining: 100, resetCards: Math.max(0, (quota.resetCards || 0) - 1) }
     return { status: 200, json: { success: true, quota, resetCards: quota.resetCards } }
