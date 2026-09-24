@@ -191,6 +191,7 @@ const MAX_BOUND_TABS = 200; // ponytail: 按插入序淘汰最老的;长跑引�
 async function daemonPid(endpoint: string): Promise<string> {
   let pid = '';
   try { pid = (await fs.readFile(path.join(browserSocketDir(), `${attachSessionName(endpoint)}.pid`), 'utf8')).trim(); } catch { return ''; }
+  if (!/^[1-9]\d*$/.test(pid)) return ''; // kill(0, …) 会发给整个进程组
   try { process.kill(Number(pid), 0); return pid; } catch (e: any) { return e?.code === 'EPERM' ? pid : ''; }
 }
 async function bindTab(ctx: ToolContext, endpoint: string, tab: string): Promise<void> {
@@ -202,15 +203,20 @@ async function bindTab(ctx: ToolContext, endpoint: string, tab: string): Promise
 /**
  * 把游标切回本会话的标签;返回给模型的错误文案,成功 null。切之前、切之后各核一次守护进程还是绑定时那一个
  * (切之后那次防「刚好闲置退出、tab 命令拉起了新守护进程」——新进程里同一个 id 是别的标签)。
- * 平台没有 pid 文件(绑定时记成 '')就只能信标签 id(Windows 未实测)。
+ * 绑定时拿不到 pid(pid 文件缺失 / 平台不写,Windows 未实测)→ 无从核验 → 失败即关闭:只许读,不许点按(Codex 三轮)。
  */
 async function rebindTab(ctx: ToolContext, endpoint: string): Promise<string | null> {
   const key = `${endpoint}|${ctx.sessionId}`;
   const b = boundTabs.get(key);
-  const sameDaemon = async (): Promise<boolean> => !b?.daemon || b.daemon === await daemonPid(endpoint);
-  if (!b || !(await sameDaemon())) { boundTabs.delete(key); return NO_TAB_BOUND; }
+  if (!b) return NO_TAB_BOUND;
+  if (!b.daemon) {
+    boundTabs.delete(key);
+    return "Acting on the user's tabs is unavailable here: the browser bridge's process id can't be verified, so a tab id might point at a different tab. "
+      + 'Reading tabs with browser_tabs still works.';
+  }
+  if (b.daemon !== await daemonPid(endpoint)) { boundTabs.delete(key); return NO_TAB_BOUND; }
   const sw = await runBrowserCommand(ctx, 'tab', [b.tab], commandTimeout(), endpoint);
-  if (sw.success && await sameDaemon()) return null;
+  if (sw.success && b.daemon === await daemonPid(endpoint)) return null;
   boundTabs.delete(key);
   return sw.success ? NO_TAB_BOUND : `The tab this conversation was using in the user's Chrome is no longer available (${sw.error}). Pick one again with browser_tabs.`;
 }
@@ -220,6 +226,7 @@ async function rebindTab(ctx: ToolContext, endpoint: string): Promise<string | n
  * (探测抖一下就会和执行侧判得不一样,Codex 09-24 复审 #4);不按会话比对,子代理的工具 ctx 用的是 subId。
  */
 export async function userBrowserBound(): Promise<boolean> {
+  // pid 未知的绑定执行侧会拒,这里仍算上:宁可多问一次(安全侧)
   for (const b of boundTabs.values()) if (!b.daemon || b.daemon === await daemonPid(b.endpoint)) return true;
   return false;
 }

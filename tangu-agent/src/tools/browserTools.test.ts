@@ -279,6 +279,18 @@ describe('user browser attach (Chrome remote debugging)', () => {
     expect(calls(log).length).toBe(before);
   });
 
+  it.skipIf(process.platform === 'win32')('without a verifiable daemon pid, control tools refuse (reading still works)', async () => {
+    const { log } = fakeBin(false);
+    process.env.PID_FILE_VALUE = ''; // pid 文件是空的 = 无从核验守护进程有没有换过
+    const read = await exec('browser_tabs', { select: 't2' }, ctxOf());
+    expect(read.success).toBe(true); // 读不受影响
+    const before = calls(log).length;
+    const out = await exec('browser_click', { ref: 'e1' }, ctxOf());
+    expect(out.success).toBe(false);
+    expect(out.error).toMatch(/can't be verified/);
+    expect(calls(log).length).toBe(before); // 失败即关闭:连 tab 切换都不发(Codex 三轮:空 pid 曾被放行)
+  });
+
   it.skipIf(process.platform === 'win32')('a refused connection cools down that endpoint only', async () => {
     const { log } = fakeBin(false, 'ws://127.0.0.1:9/devtools/browser/refuse-a');
     const first = await exec('browser_tabs', {}, ctxOf());
