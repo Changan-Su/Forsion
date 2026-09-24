@@ -131,3 +131,45 @@ it('shows the reset ceremony only after the card has been consumed', async () =>
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain('额度已焕新')
   expect(document.querySelector('[role="dialog"]')?.textContent).toContain('重置卡剩余 1 张')
 })
+
+it('shows the background-agent quota row under usage on hosts with a local engine (tighter axis wins)', async () => {
+  window.tangu!.accountQuota = vi.fn().mockResolvedValue({
+    status: 200,
+    json: {
+      dailyLimit: 100, dailyRemaining: 60, dailyPercent: 40, weeklyLimit: 500, weeklyRemaining: 400, weeklyPercent: 20,
+      background: { modelId: 'm-cheap', sharePercent: 15, dailyLimit: 15, dailyRemaining: 3, weeklyLimit: 75, weeklyRemaining: 45 },
+    },
+  }) as any
+  ;(window.tangu as any).backendStatus = vi.fn()
+  await mount()
+  await click('Alice')
+  await tick()
+  await click('额度剩余')
+  await tick()
+  const row = document.querySelector('[data-row="background"]')
+  expect(row?.textContent).toContain('后台智能体')
+  expect(row?.textContent).toContain('20%') // 今日 3/15 = 20%,比本周 45/75 = 60% 紧
+})
+
+it('hides the background row where Muse cannot run or before the server reports a counted model', async () => {
+  window.tangu!.accountQuota = vi.fn().mockResolvedValue({
+    status: 200,
+    json: { dailyLimit: 100, dailyPercent: 40, weeklyLimit: 500, weeklyPercent: 20, background: { modelId: 'm-cheap', dailyLimit: 15, dailyRemaining: 3, weeklyLimit: 75, weeklyRemaining: 45 } },
+  }) as any
+  await mount() // 没有 backendStatus = 没有本地引擎(网页 / 手机)
+  await click('Alice')
+  await tick()
+  await click('额度剩余')
+  await tick()
+  expect(document.querySelector('[data-row="background"]')).toBeNull()
+  await act(async () => root.unmount())
+  root = createRoot(host)
+  ;(window.tangu as any).backendStatus = vi.fn()
+  window.tangu!.accountQuota = vi.fn().mockResolvedValue({ status: 200, json: { dailyLimit: 100, dailyPercent: 40, weeklyLimit: 500, weeklyPercent: 20 } }) as any
+  await mount() // 旧服务端:视图里没有 background
+  await click('Alice')
+  await tick()
+  await click('额度剩余')
+  await tick()
+  expect(document.querySelector('[data-row="background"]')).toBeNull()
+})
