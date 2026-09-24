@@ -19,6 +19,7 @@ import type { ToolCall } from '../core/types.js';
 import { runHooks } from '../hooks/index.js';
 import { currentAgentSlug } from '../seams/runContext.js';
 import { canonicalToolName, declaredApproval, toolNameSpellings } from '../tools/toolRegistry.js';
+import { USER_BROWSER_ACTIONS, userBrowserEndpoint } from '../tools/builtin/browserTools.js';
 import { getRawSection } from '../core/config.js';
 import { deps } from '../seams/runtime.js';
 import type { AppProfile } from '../seams/appProfile.js';
@@ -54,7 +55,7 @@ function nextApprovalId(): string {
  *   custom    : 按 config.json approval 段的 base 档(逐条规则的命中判定在 gateToolCall)
  * 只读工具（read_file/list_dir/web_search/...）永不在此返回 true。
  */
-export function toolNeedsApproval(name: string, mode: ApprovalMode | undefined): boolean {
+export function toolNeedsApproval(name: string, mode: ApprovalMode | undefined, opts?: { userBrowser?: boolean }): boolean {
   if (mode === 'custom') mode = customRules().base;
   if (!mode || mode === 'full-auto') return false;
   const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch';
@@ -64,6 +65,9 @@ export function toolNeedsApproval(name: string, mode: ApprovalMode | undefined):
   const runsCommands =
     name === 'run_bash' || name === 'kill_process' || name === 'run_background' ||
     name === 'write_process_input' || name === 'browser_task' || name.startsWith('mcp__') ||
+    // 接管了用户自己的 Chrome(browserTools.userBrowserEndpoint)时,点按 / 输入 / 页内执行 JS 就是以用户身份
+    // 操作已登录网站,与 browser_task 同档;没接管时它们只动 Tangu 自己的后台浏览器,照旧免批。由调用方判定后传入。
+    (opts?.userBrowser === true && USER_BROWSER_ACTIONS.has(name)) ||
     // 插件工具经 capabilities.approval:'command' 自声明并入本档(核心不硬编码插件工具名;如 computer-use 的 act_ui)。
     declaredApproval(name) === 'command';
   if (mode === 'readonly') return writesFiles || runsCommands;
@@ -421,7 +425,10 @@ export async function gateToolCall(
   if (escalate) logEscalation(runId, call, ctx);
 
   if (!escalate && !forceAsk) {
-    if (!toolNeedsApproval(name, mode)) return { action: 'approve' };
+    // 与执行侧同一个判定(配置 + DevToolsActivePort + 端口活着);无人值守 run 本就不接管,也就不因此排队审批
+    const userBrowser = mode !== 'full-auto' && USER_BROWSER_ACTIONS.has(name)
+      && !!(await userBrowserEndpoint({ approvalDeferral: ctx.approvalDeferral }));
+    if (!toolNeedsApproval(name, mode, { userBrowser })) return { action: 'approve' };
     if (isAlwaysAllowed(ctx.sessionId, name)) return { action: 'approve' };
   }
 

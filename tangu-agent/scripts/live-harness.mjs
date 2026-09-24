@@ -28,6 +28,7 @@
  *   npm run live:harness -- --only teamapproval              # 团队 × 完全通行(09-21 反馈):成员 config 自带 auto-edit / run 启动后才切档,两条都须 0 次审批;改审批闸 / teamRuns 档位后跑
  *   npm run live:harness -- --only coding                    # 改 agents/codingPrompt.ts / skills/forsion-plugin 后跑:Coding 人格面对插件项目须指向 Sandbox 面板、且不自己动手 git init/commit(版本由宿主管)
  *   npm run live:harness -- --only refine                    # 自进化闭环(09-18):Historian 自动档提名 → 收件箱 → /refine 采纳写 HARNESS.md → 新会话系统提示带上;改 REFINE_DIRECTIVE / harnessStore / 判官 harness 字段 / 注入槽后跑
+ *   npm run live:harness -- --only browsertabs              # 读用户已打开的浏览器标签(09-24):起临时 headless Chrome 冒充用户浏览器;改 browser_tabs / 浏览器提示词后跑(CHROME_BIN 可指定)
  *   node scripts/live-harness.mjs --selftest                 # 纯判据(done 锚点 / load_tools 措辞 / 子代理归属 / 团队激活窗与真并行)的负对照;不起引擎、不需凭证
  *
  * 凭证:把 ~/.forsion-dev/provider-auth.json(--auth 可改)**软链**进隔离共享域 —— 引擎自己读,本脚本不读;
@@ -40,6 +41,7 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, appendFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { createServer as createHttpServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname, resolve, relative } from 'node:path';
@@ -56,7 +58,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -65,7 +67,7 @@ const FILLER = Math.max(0, Math.floor(Number(opt('filler', 0)) || 0));
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -335,11 +337,37 @@ const base = `http://127.0.0.1:${port}`;
 const engineLog = join(OUT, 'engine.log');
 const startedAt = new Date().toISOString();
 
+// browsertabs(09-24):起一个临时 headless Chrome 冒充「用户正在用的浏览器」,经 TANGU_BROWSER_CDP 指给引擎。
+// 其余场景一律 TANGU_BROWSER_CDP=off —— 缺省 auto 会找到开发机上真开着远程调试的 Chrome,每连一次它就弹一次授权框。
+const TABS_MARKER = `青柚-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+let userChrome = null; let userChromeWs = ''; let userPages = null;
+if (ONLY.has('browsertabs')) {
+  const bin = process.env.CHROME_BIN || (process.platform === 'darwin' ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' : process.platform === 'win32' ? 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe' : 'google-chrome');
+  const dir = join(OUT, 'user-chrome');
+  // 页面走本地 http:data: URL 会把正文整段带进 URL,标签列表就把答案漏给模型了(09-24 首跑实测只调列表就答中)
+  const PAGES = {
+    '/inbox': ['Inbox - Example Mail', '3 unread messages'],
+    '/video/BV1live': ['天禄五环 三款对比测评 - 哔哩哔哩', `UP 主结论:三款里最推荐的是「${TABS_MARKER}」款,另外两款性价比一般。`],
+  };
+  userPages = createHttpServer((q, r) => { const [t, b] = PAGES[q.url] || ['404', '']; r.setHeader('content-type', 'text/html; charset=utf-8'); r.end(`<title>${t}</title><h1>${t}</h1><p>${b}</p>`); });
+  await new Promise((r) => userPages.listen(0, '127.0.0.1', r));
+  const page = (p) => `http://127.0.0.1:${userPages.address().port}${p}`;
+  userChrome = spawn(bin, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${dir}`, '--no-first-run', '--no-default-browser-check', page('/inbox')], { stdio: 'ignore' });
+  const portLines = () => { try { return readFileSync(join(dir, 'DevToolsActivePort'), 'utf8').trim().split('\n'); } catch { return []; } };
+  for (let i = 0; i < 100 && portLines().length < 2; i++) await new Promise((r) => setTimeout(r, 100));
+  const [chromePort, wsPath] = portLines();
+  if (!wsPath) { console.error('browsertabs:临时 Chrome 没起来(CHROME_BIN 可指定路径)'); userChrome.kill('SIGKILL'); process.exit(2); }
+  userChromeWs = `ws://127.0.0.1:${chromePort}${wsPath}`;
+  // headless 命令行只收一个 URL:第二个「用户标签」经 /json/new 开(真 Chrome 的 chrome://inspect 模式下这些 HTTP 端点是 404,引擎只走 ws)
+  await fetch(`http://127.0.0.1:${chromePort}/json/new?${page('/video/BV1live')}`, { method: 'PUT' });
+}
+
 const child = spawn(process.execPath, [
   entry, '--port', String(port), '--host', '127.0.0.1', '--data-dir', join(home, 'state.db'),
   '--sandbox', SANDBOX, '--cloud-url', 'http://127.0.0.1:9', '--token', TOKEN,
 ], { env: {
   ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
+  TANGU_BROWSER_CDP: userChromeWs || 'off',
   // --window:只钉台架模型的窗口(contextBudget 的 env 覆盖表,最高优先级),别的模型不受影响
   ...(WINDOW ? { TANGU_MODEL_CONTEXT_WINDOWS: JSON.stringify({ [MODEL]: WINDOW }) } : {}),
 }, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -511,6 +539,8 @@ function ttftSection() {
 async function finish(reason) {
   if (finished) return; finished = true;
   rmSync(authLink, { force: true }); // 任何退出路径都不留凭证软链
+  if (userChrome) userChrome.kill('SIGKILL');
+  userPages?.close();
   if (!childExit) { child.kill('SIGTERM'); await Promise.race([new Promise((r) => child.once('exit', r)), sleep(8000)]); }
   if (!childExit) { child.kill('SIGKILL'); await Promise.race([new Promise((r) => child.once('exit', r)), sleep(3000)]); }
   let timeline = '';
@@ -1467,6 +1497,18 @@ try {
       output: samples.map((s) => `[${s.cell} r${s.round} t${s.turn}] ${s.reply}`).join('\n'),
       ttftSummary: summary, ttftSamples: samples,
     };
+  });
+  // 09-24 反馈:「我浏览器里开着…」→ 旧版先 load_tools、读到后台空浏览器、再试屏幕控制、再用 browser_task 另起一个 Chrome,
+  // 5 轮 173s 没答上。判据:走 browser_tabs、不许 browser_task、答中页里的随机款名;轮数 / 墙钟 / 绕路进 detail(速度回归看这里)。
+  await scenario('browsertabs', 'browsertabs 读用户已打开的浏览器标签', async () => {
+    const ev = await run(`live-tabs-${Date.now()}`, '我浏览器里开着一个天禄五环的 B 站测评视频页面，帮我看看里面最推荐哪一款？直接告诉我款名。', 180_000);
+    const used = ev.toolCalls.includes('browser_tabs');
+    const readPage = ev.toolResults.some((r) => r.name === 'browser_tabs' && r.full.includes(TABS_MARKER)); // 答案只在正文里:列表里捡不到
+    const hit = ev.content.includes(TABS_MARKER);
+    const detour = ev.toolCalls.filter((t) => ['browser_task', 'load_tools', 'browser_snapshot', 'browser_navigate', 'browser_search', 'find_roots'].includes(t));
+    return { ok: !ev.error && ev.done && used && readPage && hit && !ev.toolCalls.includes('browser_task'),
+      detail: ev.error || `工具 ${ev.toolCalls.join('→') || '无'};${hit ? '答中款名' : `未答中款名 ${TABS_MARKER}`};模型 ${ev.usages.length} 轮;墙钟 ${sec(ev.wallMs)}${detour.length ? `;绕路 ${detour.join(',')}` : ''}`,
+      output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
   await finish();
 } catch (e) {

@@ -6,5 +6,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts', 'test/**/*.test.{ts,mjs}'],
+    // browser_* 缺省会自动接管本机开了远程调试的 Chrome:单测绝不能连到开发者正在用的浏览器(每连一次它弹一次授权框)
+    env: { TANGU_BROWSER_CDP: 'off' },
   },
 });
