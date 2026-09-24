@@ -294,7 +294,9 @@ export const browserUseProvider: ToolProvider = {
         function: {
           name: 'browser_task',
           description:
-            'Delegate a whole multi-step web task to an autonomous browser agent (browser-use) that drives the user\'s real, logged-in local Chrome with vision + reasoning, and returns the final result. '
+            'Delegate a whole multi-step web task to an autonomous browser agent (browser-use) that starts its own Chrome window and uses vision + reasoning, then returns the final result. '
+            + 'That window normally uses a copy of the user\'s Chrome profile (their logins), but falls back to a fresh profile without logins when that is unavailable. '
+            + 'It cannot see the tabs the user already has open — for those, use browser_tabs. '
             + 'Use this for goals that need several page interactions or the user\'s existing logins — e.g. "check my inbox for X", "book the cheapest flight on <site>", "fill and submit this form", "research <topic> across these pages". '
             + 'It runs its own loop end-to-end (no step-by-step driving from you). For a single navigate/click/read, prefer the lighter browser_navigate/browser_click tools instead. '
             + 'It acts as the user on logged-in sites — scope it with allowed_domains when possible.',

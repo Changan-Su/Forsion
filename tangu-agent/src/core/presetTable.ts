@@ -60,7 +60,7 @@ export interface PresetSpec {
 export const CODING_PRESET_DEFERRED: ReadonlySet<string> = new Set([
   'browser_search', 'browser_navigate', 'browser_snapshot', 'browser_click', 'browser_type',
   'browser_scroll', 'browser_back', 'browser_press', 'browser_console', 'browser_screenshot',
-  'browser_task', 'web_search', 'web_fetch',
+  'browser_task', 'browser_tabs', 'web_search', 'web_fetch',
   'amadeus_list_notes', 'amadeus_list_calendars', 'amadeus_list_events',
   'amadeus_create_event', 'amadeus_edit_event', 'amadeus_delete_event',
   'inbox_send', 'display_file', 'read_session', 'search_sessions', 'read_document',
