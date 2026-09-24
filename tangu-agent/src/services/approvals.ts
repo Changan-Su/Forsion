@@ -19,7 +19,7 @@ import type { ToolCall } from '../core/types.js';
 import { runHooks } from '../hooks/index.js';
 import { currentAgentSlug } from '../seams/runContext.js';
 import { canonicalToolName, declaredApproval, toolNameSpellings } from '../tools/toolRegistry.js';
-import { USER_BROWSER_ACTIONS, userBrowserEndpoint } from '../tools/builtin/browserTools.js';
+import { USER_BROWSER_ACTIONS, userBrowserBound } from '../tools/builtin/browserTools.js';
 import { getRawSection } from '../core/config.js';
 import { deps } from '../seams/runtime.js';
 import type { AppProfile } from '../seams/appProfile.js';
@@ -427,9 +427,9 @@ export async function gateToolCall(
   if (escalate) logEscalation(runId, call, ctx);
 
   if (!escalate && !forceAsk) {
-    // 与执行侧同一个判定(配置 + DevToolsActivePort + 端口活着);无人值守 run 本就不接管,也就不因此排队审批
-    const userBrowser = mode !== 'full-auto' && USER_BROWSER_ACTIONS.has(name)
-      && !!(await userBrowserEndpoint({ approvalDeferral: ctx.approvalDeferral }));
+    // 接管态的点按类工具只能作用在绑定过的用户标签上 → 「有活绑定」即要批(与执行侧同一真源,不另探端口);
+    // 无人值守 run 本就不接管,也就不因此排队审批
+    const userBrowser = mode !== 'full-auto' && USER_BROWSER_ACTIONS.has(name) && !ctx.approvalDeferral && await userBrowserBound();
     if (!toolNeedsApproval(name, mode, { userBrowser })) return { action: 'approve' };
     if (isAlwaysAllowed(ctx.sessionId, name)) return { action: 'approve' };
   }

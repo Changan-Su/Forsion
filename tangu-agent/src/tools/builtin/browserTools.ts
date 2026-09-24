@@ -164,7 +164,7 @@ function attachSessionName(endpoint: string): string {
 
 // 连不上用户的 Chrome(用户点了「拒绝」/ 弹框没人理)后按端点短暂冷却:模型连试几次 = 用户那边叠几个弹框。
 const ATTACH_COOLDOWN_MS = 20_000;
-let attachFailure: { endpoint: string; until: number; error: string } | null = null;
+const attachFailures = new Map<string, { until: number; error: string }>(); // 端点 → 冷却
 
 const NO_TAB_BOUND = "No tab is selected for this conversation in the user's Chrome. Use browser_tabs to pick one of the user's tabs, "
   + "or browser_navigate to open a page in Tangu's own tab.";
@@ -185,22 +185,43 @@ function withAttachLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 // `${端点}|${会话}` → 本会话选中 / 打开的标签 + 当时的守护进程 pid(守护进程闲置退出重开后标签 id 重新编号,旧 id 会指到别的标签)。
-const boundTabs = new Map<string, { tab: string; daemon: string }>();
+const boundTabs = new Map<string, { endpoint: string; tab: string; daemon: string }>();
+const MAX_BOUND_TABS = 200; // ponytail: 按插入序淘汰最老的;长跑引擎里每个用过接管的会话一条,够用
+/** 守护进程 pid;pid 文件不在、或进程已死(崩溃会留下旧文件)→ ''。 */
 async function daemonPid(endpoint: string): Promise<string> {
-  try { return (await fs.readFile(path.join(browserSocketDir(), `${attachSessionName(endpoint)}.pid`), 'utf8')).trim(); } catch { return ''; }
+  let pid = '';
+  try { pid = (await fs.readFile(path.join(browserSocketDir(), `${attachSessionName(endpoint)}.pid`), 'utf8')).trim(); } catch { return ''; }
+  try { process.kill(Number(pid), 0); return pid; } catch (e: any) { return e?.code === 'EPERM' ? pid : ''; }
 }
 async function bindTab(ctx: ToolContext, endpoint: string, tab: string): Promise<void> {
-  boundTabs.set(`${endpoint}|${ctx.sessionId}`, { tab, daemon: await daemonPid(endpoint) });
+  const key = `${endpoint}|${ctx.sessionId}`;
+  boundTabs.delete(key);
+  boundTabs.set(key, { endpoint, tab, daemon: await daemonPid(endpoint) });
+  if (boundTabs.size > MAX_BOUND_TABS) boundTabs.delete(boundTabs.keys().next().value!);
 }
-/** 把游标切回本会话的标签;返回给模型的错误文案,成功 null。 */
+/**
+ * 把游标切回本会话的标签;返回给模型的错误文案,成功 null。切之前、切之后各核一次守护进程还是绑定时那一个
+ * (切之后那次防「刚好闲置退出、tab 命令拉起了新守护进程」——新进程里同一个 id 是别的标签)。
+ * 平台没有 pid 文件(绑定时记成 '')就只能信标签 id(Windows 未实测)。
+ */
 async function rebindTab(ctx: ToolContext, endpoint: string): Promise<string | null> {
   const key = `${endpoint}|${ctx.sessionId}`;
   const b = boundTabs.get(key);
-  if (!b || !b.daemon || b.daemon !== await daemonPid(endpoint)) { boundTabs.delete(key); return NO_TAB_BOUND; }
+  const sameDaemon = async (): Promise<boolean> => !b?.daemon || b.daemon === await daemonPid(endpoint);
+  if (!b || !(await sameDaemon())) { boundTabs.delete(key); return NO_TAB_BOUND; }
   const sw = await runBrowserCommand(ctx, 'tab', [b.tab], commandTimeout(), endpoint);
-  if (sw.success) return null;
+  if (sw.success && await sameDaemon()) return null;
   boundTabs.delete(key);
-  return `The tab this conversation was using in the user's Chrome is no longer available (${sw.error}). Pick one again with browser_tabs.`;
+  return sw.success ? NO_TAB_BOUND : `The tab this conversation was using in the user's Chrome is no longer available (${sw.error}). Pick one again with browser_tabs.`;
+}
+/**
+ * 审批闸用:此刻有没有哪个会话在用户的 Chrome 里绑着活的标签。接管态的点按类工具**只能**作用在绑定标签上
+ * (没绑定执行侧直接拒),所以「有活绑定」正是它们可能落到用户浏览器上的充要前提 —— 闸门不再自己探端口
+ * (探测抖一下就会和执行侧判得不一样,Codex 09-24 复审 #4);不按会话比对,子代理的工具 ctx 用的是 subId。
+ */
+export async function userBrowserBound(): Promise<boolean> {
+  for (const b of boundTabs.values()) if (!b.daemon || b.daemon === await daemonPid(b.endpoint)) return true;
+  return false;
 }
 
 // browser_search / browser_navigate 自己切到本会话的 Tangu 标签(navigate);其余都只作用在本会话选中 / 打开的标签上。
@@ -261,6 +282,8 @@ export const __browserToolInternals = {
   navigate,
   findUserBrowser,
   pickTabs: (tabs: TabInfo[], select: string) => pickTabs(tabs, select),
+  bindTab: (ctx: ToolContext, endpoint: string, tab: string) => bindTab(ctx, endpoint, tab),
+  clearBindings: () => boundTabs.clear(),
 };
 
 function searchUrl(engine: SearchEngine, query: string): string {
@@ -378,7 +401,8 @@ async function runBrowserCommand(
 ): Promise<BrowserCommandResult & { attached?: boolean }> {
   if (!browserEnabled()) return { success: false, error: 'Browser tools are disabled (TANGU_BROWSER_ENABLED=0)' };
   const cdp = endpoint === undefined ? await endpointOf(ctx) : endpoint;
-  if (cdp && attachFailure?.endpoint === cdp && Date.now() < attachFailure.until) return { success: false, attached: true, error: attachFailure.error };
+  const cooling = cdp ? attachFailures.get(cdp) : undefined;
+  if (cooling && Date.now() < cooling.until) return { success: false, attached: true, error: cooling.error };
   const name = cdp ? attachSessionName(cdp) : sessionName(ctx);
   const fresh = !!cdp && !(await daemonPid(cdp)); // 守护进程还没起 = 这条命令要新建连接,Chrome 会弹授权框
   const socketDir = browserSocketDir();
@@ -411,10 +435,10 @@ async function runBrowserCommand(
   // 或首连超时(授权框没人点)→ 按端点冷却并说清去哪点;已连上后的超时就是页面慢,不提授权框。
   if (!r.success && (/CDP WebSocket|WebSocket connect/i.test(r.error || '') || (fresh && /timed out/i.test(r.error || '')))) {
     const error = `Could not connect to the user's Chrome (${r.error}). ${ALLOW_PROMPT_HINT} Ask them, then retry once — every attempt pops another prompt.`;
-    attachFailure = { endpoint: cdp, until: Date.now() + ATTACH_COOLDOWN_MS, error };
+    attachFailures.set(cdp, { until: Date.now() + ATTACH_COOLDOWN_MS, error });
     return { ...r, attached: true, error };
   }
-  if (r.success && attachFailure?.endpoint === cdp) attachFailure = null;
+  if (r.success) attachFailures.delete(cdp);
   return { ...r, attached: true };
 }
 

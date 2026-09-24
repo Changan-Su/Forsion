@@ -104,6 +104,8 @@ describe('user browser attach (Chrome remote debugging)', () => {
     for (const [k, v] of [['TANGU_BROWSER_CDP', saved.cdp], ['TANGU_AGENT_BROWSER_BIN', saved.bin], ['TANGU_BROWSER_SOCKET_DIR', saved.sock], ['TANGU_BROWSER_ALLOW_PRIVATE_URLS', saved.priv]] as const) {
       if (v === undefined) delete process.env[k]; else process.env[k] = v;
     }
+    delete process.env.PID_FILE_VALUE;
+    __browserToolInternals.clearBindings(); // 绑定是模块级状态,用例之间不许串
   });
 
   it('finds the endpoint only when DevToolsActivePort is well-formed and its port is alive', async () => {
@@ -178,7 +180,7 @@ describe('user browser attach (Chrome remote debugging)', () => {
     writeFileSync(bin, [
       '#!/bin/sh',
       `echo "$*" >> '${log}'`,
-      'prev=""; for a in "$@"; do [ "$prev" = "--session" ] && echo "${PID_FILE_VALUE:-4242}" > "$AGENT_BROWSER_SOCKET_DIR/$a.pid"; prev="$a"; done',
+      'prev=""; for a in "$@"; do [ "$prev" = "--session" ] && echo "$PID_FILE_VALUE" > "$AGENT_BROWSER_SOCKET_DIR/$a.pid"; prev="$a"; done',
       'case "$*" in',
       `  *refuse*) echo '{"success":false,"error":"CDP WebSocket connect failed: IO error: Connection refused (os error 61)"}';;`,
       `  *"tab tangu-"*) ${hasOwnTab ? `echo '{"success":true,"data":{"tabId":"t9","label":"tangu-x"}}'` : `echo '{"success":false,"error":"No tab with label \`tangu-x\`; run \`agent-browser tab\` to list open tabs"}'`};;`,
@@ -197,6 +199,7 @@ describe('user browser attach (Chrome remote debugging)', () => {
     process.env.TANGU_BROWSER_SOCKET_DIR = dir;
     process.env.TANGU_BROWSER_ALLOW_PRIVATE_URLS = '1';
     process.env.TANGU_BROWSER_CDP = endpoint;
+    process.env.PID_FILE_VALUE = String(process.pid); // 守护进程 pid 要指向活着的进程(实现会核活性)
     return { dir, log };
   };
   const calls = (log: string): string[] => { try { return readFileSync(log, 'utf8').trim().split('\n').filter(Boolean); } catch { return []; } };
@@ -252,15 +255,28 @@ describe('user browser attach (Chrome remote debugging)', () => {
   it.skipIf(process.platform === 'win32')('a restarted agent-browser daemon invalidates the selection (tab ids are renumbered)', async () => {
     const { log } = fakeBin(false);
     await exec('browser_tabs', { select: 't2' }, ctxOf());
-    process.env.PID_FILE_VALUE = '9999'; // 下一条命令起守护进程「换了一个」
-    try {
-      await exec('browser_tabs', {}, ctxOf()); // 触发一次写 pid
-      const before = calls(log).length;
-      const out = await exec('browser_click', { ref: 'e1' }, ctxOf());
-      expect(out.success).toBe(false);
-      expect(out.error).toMatch(/browser_tabs/);
-      expect(calls(log).length).toBe(before); // 连 tab 切换都没发:旧 id 可能已指向别的标签
-    } finally { delete process.env.PID_FILE_VALUE; }
+    process.env.PID_FILE_VALUE = String(process.ppid); // 下一条命令起守护进程「换了一个」(另一个活进程)
+    await exec('browser_tabs', {}, ctxOf()); // 触发一次写 pid
+    const before = calls(log).length;
+    const out = await exec('browser_click', { ref: 'e1' }, ctxOf());
+    expect(out.success).toBe(false);
+    expect(out.error).toMatch(/browser_tabs/);
+    expect(calls(log).length).toBe(before); // 连 tab 切换都没发:旧 id 可能已指向别的标签
+  });
+
+  it.skipIf(process.platform === 'win32')('a crashed daemon that left its old pid file also invalidates the selection', async () => {
+    const { spawn } = await import('node:child_process');
+    const { log } = fakeBin(false);
+    const doomed = spawn('sleep', ['30']);
+    process.env.PID_FILE_VALUE = String(doomed.pid); // 绑定时的守护进程
+    await exec('browser_tabs', { select: 't2' }, ctxOf());
+    doomed.kill('SIGKILL'); // 进程没了,pid 文件内容还是它(Codex 复审 P1:只比文件内容会放行,新守护进程里 t2 是别的标签)
+    await new Promise((r) => doomed.once('exit', r));
+    const before = calls(log).length;
+    const out = await exec('browser_click', { ref: 'e1' }, ctxOf());
+    expect(out.success).toBe(false);
+    expect(out.error).toMatch(/browser_tabs/);
+    expect(calls(log).length).toBe(before);
   });
 
   it.skipIf(process.platform === 'win32')('a refused connection cools down that endpoint only', async () => {
