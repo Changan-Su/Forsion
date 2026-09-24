@@ -140,6 +140,15 @@ describe('Tangu for Chrome 扩展桥', () => {
     expect((await welcomed).type).toBe('welcome');
   });
 
+  it('超限的那一块在 ws 解析之前就判死:一次写入的 20KB hello 连 challenge 都换不来', async () => {
+    const s = await raw();
+    const frames: string[] = [];
+    s.ws.on('message', (d) => frames.push(String(d)));
+    s.ws.send(JSON.stringify({ type: 'hello', nonce: 'ab'.repeat(16), pad: 'x'.repeat(20 * 1024) }));
+    expect(await s.closed).toBe(1006);
+    expect(frames).toEqual([]);
+  });
+
   it('握手字段类型全不可信:toString 被置空的对象不会弄崩引擎', async () => {
     const evil = await raw();
     evil.ws.send(JSON.stringify({ type: 'hello', nonce: 'ab'.repeat(16), version: { toString: null } }));

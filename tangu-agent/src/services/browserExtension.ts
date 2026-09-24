@@ -124,15 +124,17 @@ function onConnection(ws: WebSocket, req: IncomingMessage): void {
   let serverNonce = '';
   let version = '';
   const helloTimer = setTimeout(() => { if (!client) ws.close(4001, 'hello timeout'); }, HELLO_TIMEOUT_MS);
-  // 未认证阶段按套接字原始字节计数:ws 的 message 事件要等整帧(最多 maxPayload)收齐才触发,在那里判长度为时已晚
+  // 未认证阶段按套接字原始字节计数:ws 的 message 事件要等整帧(最多 maxPayload)收齐才触发,在那里判长度为时已晚。
+  // prependListener = 排在 ws 自己的 data 监听前面,超限的那一块 ws 还没解析就已判死(下面 message 里再按 readyState 丢弃)
   let preAuthBytes = 0;
   const countRaw = (chunk: Buffer): void => {
     if (client) { req.socket.off('data', countRaw); return; }
     preAuthBytes += chunk.length;
     if (preAuthBytes > MAX_PREAUTH_BYTES) ws.terminate();
   };
-  req.socket.on('data', countRaw);
+  req.socket.prependListener('data', countRaw);
   ws.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {
+    if (ws.readyState !== WebSocket.OPEN) return; // 已判死 / 已发 close 之后到的帧一律不处理
     try { onFrame(data); } catch { ws.close(1011, 'bad message'); } // 字段类型全不可信(比如 toString 被置空的对象),绝不让异常冒到进程
   });
   function onFrame(data: Buffer | ArrayBuffer | Buffer[]): void {

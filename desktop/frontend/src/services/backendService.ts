@@ -558,10 +558,11 @@ export interface BrowserExtensionStatus {
   enabled: boolean; port: number; listening: boolean; error: string; connected: boolean
   clients: Array<{ version: string; connectedAt: number }>; extensionId: string; extensionDir: string; code: string
 }
+// 都带超时:引擎挂住不回时,轮询不叠请求、换码按钮不会永远置灰
 export const getBrowserExtension = (cfg: TanguDesktopConfig) =>
-  request<BrowserExtensionStatus>(cfg, '/agent/browser-extension')
+  request<BrowserExtensionStatus>(cfg, '/agent/browser-extension', undefined, { timeoutMs: 5000 })
 export const resetBrowserExtensionCode = (cfg: TanguDesktopConfig) =>
-  request<BrowserExtensionStatus>(cfg, '/agent/browser-extension/reset-code', { method: 'POST', body: '{}' })
+  request<BrowserExtensionStatus>(cfg, '/agent/browser-extension/reset-code', { method: 'POST', body: '{}' }, { timeoutMs: 10000 })
 
 export const listChannels = (cfg: TanguDesktopConfig) =>
   request<{ available: boolean; channels: ChannelStatus[] }>(cfg, '/agent/channels')

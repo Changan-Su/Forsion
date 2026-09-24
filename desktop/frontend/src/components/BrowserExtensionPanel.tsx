@@ -56,7 +56,7 @@ export function BrowserExtensionPanel({ cfg, managed = true }: { cfg: TanguDeskt
       if (mine === gen.current) setUnavailable(true)
     }
   }, [cfg])
-  useEffect(() => { gen.current++; setInfo(null) }, [cfg])
+  useEffect(() => { gen.current++; setInfo(null); setResetting(false) }, [cfg])
   useEffect(() => {
     void load()
     const timer = window.setInterval(() => { void load() }, 3000)
