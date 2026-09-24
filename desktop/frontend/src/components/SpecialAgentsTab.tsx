@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from 'react'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import { Check, ChevronRight, FolderPlus, History, Loader2, Sparkles } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { getSpecialConfig, saveSpecialConfig, listModels, listAgents } from '../services/backendService'
@@ -83,17 +83,23 @@ function BackgroundQuotaSection({ museModelId, modelLabel }: { museModelId: stri
   const [busy, setBusy] = useState(false)
   const [confirm, setConfirm] = useState<number | null>(null)
   const [msg, setMsg] = useState<{ text: string; error?: boolean } | null>(null)
+  const latest = useRef<AccountQuotaView | null>(null) // 异步回调里拿「此刻最新」的额度,别用闭包里的旧 quota
+  latest.current = quota
   useEffect(() => {
     let alive = true
-    void window.tangu?.accountQuota?.().then((r) => { if (alive && r?.status === 200 && r.json) setQuota(r.json) }).catch(() => {})
-    const off = subscribeAccountQuota((q) => { if (alive && q) setQuota(q) })
+    let pushed = false // 首拉回来之前已经收到过广播(转入 / 切账号后别处刷新)→ 首拉那份是旧快照,丢掉
+    const off = subscribeAccountQuota((q) => { if (alive && q) { pushed = true; setQuota(q) } })
+    void window.tangu?.accountQuota?.().then((r) => { if (alive && !pushed && r?.status === 200 && r.json) setQuota(r.json) }).catch(() => {})
     return () => { alive = false; off() }
   }, [])
   const bg = quota?.background
   if (!window.tangu?.accountQuota || !bg?.modelId) return null
-  const apply = (next: AccountQuotaView | undefined): void => {
-    if (!next) return
-    const merged = { ...next, resetCards: quota?.resetCards } as AccountQuotaView
+  /** 服务端回来的新视图:并进**最新**状态(重置卡数等视图里没有的字段沿用),再广播给别的额度 UI。 */
+  const apply = (patch: (cur: AccountQuotaView) => AccountQuotaView): void => {
+    const cur = latest.current
+    if (!cur) return
+    const merged = patch(cur)
+    latest.current = merged
     setQuota(merged)
     publishAccountQuota(merged)
   }
@@ -113,7 +119,7 @@ function BackgroundQuotaSection({ museModelId, modelLabel }: { museModelId: stri
     setBusy(true); setMsg(null)
     try {
       const r = await window.tangu.accountBgAutoMain(enabled)
-      if (r?.status === 200 && r.json?.success) apply({ ...(quota as AccountQuotaView), background: { ...bg, autoMain: enabled } })
+      if (r?.status === 200 && r.json?.success) apply((cur) => ({ ...cur, background: cur.background && { ...cur.background, autoMain: enabled } }))
       else setMsg({ text: t('bgQuota.failed', { e: String(r?.json?.detail || r?.status) }), error: true })
     } catch (e: any) { setMsg({ text: t('bgQuota.failed', { e: String(e?.message || e) }), error: true }) } finally { setBusy(false) }
   }
@@ -123,7 +129,7 @@ function BackgroundQuotaSection({ museModelId, modelLabel }: { museModelId: stri
     setBusy(true); setMsg(null); setConfirm(null)
     try {
       const r = await window.tangu.accountBgConvert(percent)
-      if (r?.status === 200 && r.json?.success) { apply(r.json.quota); setMsg({ text: t('bgQuota.converted') }) }
+      if (r?.status === 200 && r.json?.success && r.json.quota) { const next = r.json.quota as AccountQuotaView; apply((cur) => ({ ...next, resetCards: cur.resetCards })); setMsg({ text: t('bgQuota.converted') }) }
       else setMsg({ text: r?.json?.error === 'insufficient_main_quota' ? t('bgQuota.noMain') : t('bgQuota.failed', { e: String(r?.json?.detail || r?.status) }), error: true })
     } catch (e: any) { setMsg({ text: t('bgQuota.failed', { e: String(e?.message || e) }), error: true }) } finally { setBusy(false) }
   }
@@ -137,7 +143,8 @@ function BackgroundQuotaSection({ museModelId, modelLabel }: { museModelId: stri
         <div className="special-toggle-row"><div><strong>{t('bgQuota.autoMain')}</strong><p>{t('bgQuota.autoMainHint')}</p></div>
           <Toggle label={t('bgQuota.autoMain')} value={!!bg.autoMain} disabled={busy} onChange={(v) => void setAutoMain(v)} /></div>
       )}
-      {!!window.tangu?.accountBgConvert && (
+      {/* 两轴都不限(主额度不限)时后台也不限,转入无意义 —— 不给按钮,免得点了报「主额度已用完」 */}
+      {!!window.tangu?.accountBgConvert && (Number(bg.dailyLimit) >= 0 || Number(bg.weeklyLimit) >= 0) && (
         <Field label={t('bgQuota.convert')} hint={t('bgQuota.convertHint')}>
           <div className="special-choices">{BG_CONVERT_STEPS.map((p) => (
             <button type="button" key={p} aria-pressed={confirm === p} disabled={busy} onClick={() => void convert(p)}>{confirm === p ? t('bgQuota.confirm') : `+${p}%`}</button>

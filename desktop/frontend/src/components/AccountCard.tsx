@@ -42,11 +42,12 @@ interface QuotaJson {
   background?: BackgroundQuotaView
 }
 
-/** 后台额度两轴里更紧的那个的剩余百分比(已用口径取反);两轴都不限 → null。 */
+/** 后台额度两轴里更紧的那个的剩余百分比(按 remaining / limit 精确算,上限 0 = 0%);两轴都不限 → null。 */
 function backgroundRemainPct(bg: BackgroundQuotaView): number | null {
-  const used = [bg.dailyLimit >= 0 ? Number(bg.dailyPercent) || 0 : null, bg.weeklyLimit >= 0 ? Number(bg.weeklyPercent) || 0 : null]
-    .filter((x): x is number => x !== null)
-  return used.length ? Math.max(0, 100 - Math.round(Math.max(...used))) : null
+  const left = (limit: number, remaining?: number): number | null =>
+    limit < 0 ? null : limit === 0 ? 0 : Math.max(0, Math.min(100, ((Number(remaining) || 0) / limit) * 100))
+  const axes = [left(Number(bg.dailyLimit), bg.dailyRemaining), left(Number(bg.weeklyLimit), bg.weeklyRemaining)].filter((x): x is number => x !== null)
+  return axes.length ? Math.floor(Math.min(...axes)) : null
 }
 
 /** 重置卡两种粒度:全额(日+周)/ 仅周,与 server reset-card/use 的 type 一致。 */

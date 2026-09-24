@@ -10,6 +10,7 @@
  */
 import type { ToolProvider } from '../toolRegistry.js';
 import { MUSE_SLEEP_MAX_MS, setMuseSleep } from '../../services/museState.js';
+import { activityTs, readUserActivityStamps } from '../../services/userActivity.js';
 
 const pad = (x: number): string => String(x).padStart(2, '0');
 
@@ -71,7 +72,10 @@ export const museWakeProvider: ToolProvider = {
           await setMuseSleep(null);
           return 'OK — sleep cancelled; the normal heartbeat applies again.';
         }
-        await setMuseSleep({ until: at, setAt: now, reason });
+        // 同一分钟基线:此刻这一分钟里已有的用户行数;之后同一分钟再多出来的行 = 用户回来了(日志只有分钟精度)
+        const minute = activityTs(new Date(now));
+        const minuteLines = (await readUserActivityStamps(1, new Date(now)).catch(() => [] as string[])).filter((t) => t === minute).length;
+        await setMuseSleep({ until: at, setAt: now, reason, minuteLines });
         const d = new Date(at);
         const mins = Math.round((at - now) / 60_000);
         return `OK — heartbeat paused until ${pad(d.getHours())}:${pad(d.getMinutes())} (in ${Math.floor(mins / 60)}h ${mins % 60}m). ` +

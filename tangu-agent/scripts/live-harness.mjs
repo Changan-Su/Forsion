@@ -1062,16 +1062,14 @@ try {
     const firstCycleAt = Number(started.lastCycleAt) || 0;
     const advanced = (s) => Number(s?.lastCycleAt) > 0 && (firstCycleAt ? Number(s.lastCycleAt) > firstCycleAt : Number(s.restartsThisWindow) >= 2);
     // Muse 自己睡了(set_next_wake,09-24):别把「按设计睡着」判成「起不来」—— 模拟用户回来(写一行用户活动),顺带验「一动就醒」。
-    // 活动日志是分钟精度,与睡下同一分钟的行按设计不算(userActiveSince 严格大于)→ 进到下一分钟再写,否则永远叫不醒(09-24 首跑实测)。
-    // 睡了的话多等「凑整分钟 + 一个巡检」,总时限从 420s 放到 600s。
+    // 睡着后**立刻**写一行用户活动:多半与睡下同一分钟 —— 活动日志只有分钟精度,这正好实测「同一分钟基线」那条路
+    // (set_next_wake 记下那一分钟已有几行,多出来的算回来了;09-24 首跑没有基线时这里永远叫不醒)。
+    // 睡了的话多等一个巡检,总时限从 420s 放到 600s。
     let slept = '';
-    let sleptAt = 0;
-    let nudged = false;
     const second = await until(async () => {
       const s = await status();
       if (advanced(s) || blocked()) return s;
-      if (!slept && !s.running && Number(s.sleepUntil) > Date.now()) { slept = `睡到 ${hhmm(s.sleepUntil)}(${s.sleepReason || '无理由'})→ 写用户活动叫醒`; sleptAt = Date.now(); }
-      if (slept && !nudged && Math.floor(Date.now() / 60_000) > Math.floor(sleptAt / 60_000)) { appendUserActivity(); nudged = true; }
+      if (!slept && !s.running && Number(s.sleepUntil) > Date.now()) { slept = `睡到 ${hhmm(s.sleepUntil)}(${s.sleepReason || '无理由'})→ 写用户活动叫醒`; appendUserActivity(); }
       return null;
     }, 600_000, 5000);
     // 起周期那一行的实际措辞见 src/services/muse.ts:`启动第 N/M 个思考周期(…,计费 A/B,毛量 C/D)`。
@@ -1133,7 +1131,7 @@ try {
     const journal = existsSync(journalDir) ? readdirSync(journalDir).map((f) => readFileSync(join(journalDir, f), 'utf8')).join('\n') : '';
     const journalSleep = /sleep → /.test(journal);
     return {
-      ok: slept && honored && !!woke,
+      ok: slept && honored && !!woke && journalSleep,
       detail: `${plan};心跳闸${honored ? '挡住了' : '没挡住(100s 内又起了周期)'};用户活动后${woke ? '醒了' : '180s 未醒'};Journal ${journalSleep ? '记了休眠' : '没记休眠'}`,
       output: await says(), journal, status: woke || mid,
     };

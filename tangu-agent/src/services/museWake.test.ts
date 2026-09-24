@@ -18,7 +18,7 @@ vi.mock('../seams/runtime.js', () => ({
 
 import { heartbeatDecision, buildRhythmHint, buildCycleMessages, formatJournalLine, writeLastCycleAt, readLastCycleAt } from './muse.js';
 import { validSleep, getMuseSleep, setMuseSleep, museStateFile, resetMuseStateCacheForTest, MUSE_SLEEP_MAX_MS } from './museState.js';
-import { isUserActivityLine, activityRhythm } from './userActivity.js';
+import { isUserActivityLine, activityRhythm, activitySince, readUserActivityStamps } from './userActivity.js';
 import { resolveWakeAt, museWakeProvider } from '../tools/builtin/museWake.js';
 import { SPECIAL_AGENTS_DEFAULTS } from './specialAgentsConfig.js';
 
@@ -37,8 +37,8 @@ const withHome = async (fn: () => Promise<void>): Promise<void> => {
 
 describe('心跳闸', () => {
   const now = 1_800_000_000_000;
-  const base = { heartbeatMinutes: 120, lastCycleAt: now - 3 * H, now, sleep: null, userActiveSinceSleep: false };
-  const sleep = { until: now + 5 * H, setAt: now - 2 * H, reason: 'night' };
+  const base = { heartbeatMinutes: 120, lastCycleAt: now - 3 * H, now, sleep: null };
+  const sleep = { until: now + 5 * H, setAt: now - 2 * H, reason: 'night', minuteLines: 0 };
   it('没到点 / 心跳关着 → not_due(休眠与否无关)', () => {
     expect(heartbeatDecision({ ...base, lastCycleAt: now - 1 * H })).toBe('not_due');
     expect(heartbeatDecision({ ...base, heartbeatMinutes: 0, sleep })).toBe('not_due');
@@ -47,9 +47,8 @@ describe('心跳闸', () => {
     expect(heartbeatDecision(base)).toBe('due');
     expect(heartbeatDecision({ ...base, sleep: { ...sleep, until: now } })).toBe('due');
   });
-  it('到点但睡着 → asleep;睡下之后用户动过 → woken', () => {
+  it('到点但睡着 → asleep(「用户回来了」由调用方每个巡检先判、清掉休眠)', () => {
     expect(heartbeatDecision({ ...base, sleep })).toBe('asleep');
-    expect(heartbeatDecision({ ...base, sleep, userActiveSinceSleep: true })).toBe('woken');
   });
 });
 
@@ -76,7 +75,8 @@ describe('set_next_wake 醒来时刻', () => {
 describe('休眠落盘', () => {
   it('读回校验:未来的 setAt / 超 24h / until ≤ setAt / 坏值 → 当没睡', () => {
     const now = 1_800_000_000_000;
-    expect(validSleep({ until: now + H, setAt: now - 1, reason: 'r' }, now)).toEqual({ until: now + H, setAt: now - 1, reason: 'r' });
+    expect(validSleep({ until: now + H, setAt: now - 1, reason: 'r', minuteLines: 2 }, now)).toEqual({ until: now + H, setAt: now - 1, reason: 'r', minuteLines: 2 });
+    expect(validSleep({ until: now + H, setAt: now - 1, minuteLines: -3 }, now)?.minuteLines).toBe(0);
     expect(validSleep({ until: now + H, setAt: now + 1 }, now)).toBeNull();
     expect(validSleep({ until: now + 30 * H, setAt: now - 1 }, now)).toBeNull();
     expect(validSleep({ until: now - 5, setAt: now - 1 }, now)).toBeNull();
@@ -87,7 +87,7 @@ describe('休眠落盘', () => {
     await withHome(async () => {
       const t = Date.now() - 1000;
       await writeLastCycleAt(t);
-      const sleep = { until: Date.now() + 2 * H, setAt: Date.now() - 10, reason: 'user asleep' };
+      const sleep = { until: Date.now() + 2 * H, setAt: Date.now() - 10, reason: 'user asleep', minuteLines: 1 };
       await setMuseSleep(sleep);
       await writeLastCycleAt(t + 1);
       resetMuseStateCacheForTest();
@@ -115,6 +115,30 @@ describe('用户动作判定与作息', () => {
     expect(isUserActivityLine('202609241200 run.done s=abc123 status=done o=muse')).toBe(false);
     expect(isUserActivityLine('202609241200 agent.edit tool=write_file f="My Notes/a.md" o=trg1')).toBe(false);
     expect(isUserActivityLine('202609241200 note.edit f="a o=b.md"')).toBe(true);
+  });
+
+  it('睡下之后有没有动作:之后的分钟有行 → 有;同一分钟只认多于基线的行,没基线一律不算', () => {
+    const setAt = new Date(2026, 8, 24, 23, 40, 30).getTime();
+    expect(activitySince(['202609242341'], setAt, 0)).toBe(true);
+    expect(activitySince(['202609242339', '202609242340'], setAt)).toBe(false);
+    expect(activitySince(['202609242340'], setAt, 1)).toBe(false); // 睡下那一刻已经在的那一行
+    expect(activitySince(['202609242340', '202609242340'], setAt, 1)).toBe(true); // 同一分钟又多了一行 = 回来了
+  });
+
+  it('按本地日历日读文件:夏令时切换那天不跳日(Europe/London 3 月 29 日)', async () => {
+    const prevTz = process.env.TZ;
+    process.env.TZ = 'Europe/London';
+    try {
+      await withHome(async () => {
+        const dir = path.join(process.env.TANGU_HOME!, 'activity');
+        await fsp.mkdir(dir, { recursive: true });
+        for (const d of ['28', '29', '30']) await fsp.writeFile(path.join(dir, `2026-03-${d}.log`), `202603${d}1000 note.edit f="a.md"\n`, 'utf8');
+        const stamps = await readUserActivityStamps(2, new Date(2026, 2, 30, 0, 30));
+        expect(stamps).toEqual(['202603291000', '202603301000']);
+      });
+    } finally {
+      if (prevTz === undefined) delete process.env.TZ; else process.env.TZ = prevTz;
+    }
   });
 
   it('按本地小时数「有活动的天数」,同一天同一小时只算一次', () => {

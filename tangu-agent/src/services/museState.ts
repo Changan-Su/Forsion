@@ -24,6 +24,8 @@ export interface MuseSleep {
   setAt: number;
   /** Muse 给的理由(一句话,MuseView 与 Journal 显示) */
   reason: string;
+  /** 睡下那一分钟里已有几行用户活动(活动日志是分钟精度:同一分钟里「之后」多出来的行靠这个基线认出来) */
+  minuteLines: number;
 }
 
 interface MuseStateShape {
@@ -55,7 +57,11 @@ export function validSleep(s: unknown, now = Date.now()): MuseSleep | null {
   const setAt = Number(o?.setAt);
   if (!Number.isFinite(until) || !Number.isFinite(setAt)) return null;
   if (setAt <= 0 || setAt > now || until <= setAt || until - setAt > MUSE_SLEEP_MAX_MS) return null;
-  return { until, setAt, reason: String(o?.reason || '').slice(0, 200) };
+  const minuteLines = Number(o?.minuteLines);
+  return {
+    until, setAt, reason: String(o?.reason || '').slice(0, 200),
+    minuteLines: Number.isInteger(minuteLines) && minuteLines >= 0 ? minuteLines : 0,
+  };
 }
 
 let writeChain: Promise<void> = Promise.resolve();

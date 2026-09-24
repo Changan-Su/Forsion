@@ -45,7 +45,7 @@ window.tangu = {
     ;(window as unknown as { __quotaHarness: { upgraded: boolean } }).__quotaHarness.upgraded = true
     return { ok: true }
   },
-} as NonNullable<Window['tangu']>
+} as unknown as NonNullable<Window['tangu']>
 
 ;(window as unknown as { __quotaHarness: {
   upgraded: boolean

@@ -42,7 +42,7 @@ import { displayText } from '../core/displayText.js';
 import { loadSchedule, entriesOf, dueEntries, markEntryFired, type ScheduleEntry } from './agentSchedule.js';
 import { countPendingApprovals } from './pendingApprovals.js';
 import { sendInboxMessage, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
-import { readActivityLines, readUserActivityStamps, activityRhythm, parseActivityTs, activityTs, type ActivityRhythm } from './userActivity.js';
+import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
 import { museStateFile, readLastCycleAt, patchMuseState, getMuseSleep, setMuseSleep, type MuseSleep } from './museState.js';
 import { loadTriggers, evaluateTriggers, markTriggersFired, disableTriggers, disableTriggersWithReasons, buildTriggerKickoff, type MuseTrigger, type EventCursor, type DbLike } from './museTriggers.js';
 import { loadCursors, setCursors, pruneCursors } from './dbCursors.js';
@@ -392,12 +392,11 @@ async function userActivitySince(userId: string, sinceMs: number): Promise<boole
 
 /** 用户自 sinceMs 起有没有**任何**动作:用户会话的新消息,或应用内活动日志的用户行(引擎后台写的 o= 行不算)。
  *  set_next_wake 的「用户一动就醒」与 kickoff 的安静提示共用。活动行是分钟精度:与 sinceMs 同一分钟的行不算。 */
-async function userActiveSince(userId: string, sinceMs: number): Promise<boolean> {
+async function userActiveSince(userId: string, sinceMs: number, minuteLines?: number): Promise<boolean> {
   if (await userActivitySince(userId, sinceMs)) return true;
   if (!sinceMs) return true;
-  const since = activityTs(new Date(sinceMs));
   const days = Math.ceil((Date.now() - sinceMs) / 86_400_000) + 1;
-  try { return (await readUserActivityStamps(Math.min(days, 3))).some((t) => t > since); } catch { return false; }
+  try { return activitySince(await readUserActivityStamps(Math.min(days, 3)), sinceMs, minuteLines); } catch { return false; }
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -420,15 +419,14 @@ async function rhythmHint(): Promise<string> {
 }
 
 /**
- * 心跳闸(纯函数,单测钉):没到点 → not_due;到点但 Muse 睡着 → asleep(除非睡下之后用户动过 → woken,清休眠照常起);
- * 到点且醒着 → due。休眠只挡心跳,规则命中 / 到期日程在调用方另判,不经这里。
+ * 心跳闸(纯函数,单测钉):没到点 → not_due;到点但 Muse 睡着 → asleep;到点且醒着(或休眠已过期)→ due。
+ * 「用户回来了就醒」在调用方每个巡检先判、清掉休眠再进这里;休眠只挡心跳,规则命中 / 到期日程另判,不经这里。
  */
 export function heartbeatDecision(x: {
-  heartbeatMinutes: number; lastCycleAt: number; now: number; sleep: MuseSleep | null; userActiveSinceSleep: boolean;
-}): 'not_due' | 'due' | 'asleep' | 'woken' {
+  heartbeatMinutes: number; lastCycleAt: number; now: number; sleep: MuseSleep | null;
+}): 'not_due' | 'due' | 'asleep' {
   if (x.heartbeatMinutes <= 0 || x.now - x.lastCycleAt < x.heartbeatMinutes * 60_000) return 'not_due';
-  if (!x.sleep || x.now >= x.sleep.until) return 'due';
-  return x.userActiveSinceSleep ? 'woken' : 'asleep';
+  return !x.sleep || x.now >= x.sleep.until ? 'due' : 'asleep';
 }
 
 /** 休眠中被规则 / 日程叫醒时的提示:别把这当成一次完整巡视,处理完就收,休眠照旧。 */
@@ -744,19 +742,17 @@ async function tick(): Promise<void> {
     // 安静周期也要在 Journal 里留一笔,而不是静默消失。
     let dueMuse: ScheduleEntry[] = [];
     try { dueMuse = await museDueSchedules(); } catch (e: any) { log(`读自己的日程失败:${e?.message || e}`); }
-    // Muse 自己定的休眠(set_next_wake)只挡心跳:规则命中、到期日程照常起。用户一有动作就提前醒(清掉休眠,心跳照常判)。
+    // Muse 自己定的休眠(set_next_wake)只挡心跳:规则命中、到期日程照常起。
+    // 睡着时**每个巡检**都看用户回没回来(一次查询 + 读至多三天的活动文件):回来了就清掉休眠,心跳照常判 ——
+    // 只在心跳到点时才看的话,状态会一直挂着「休眠中」,规则周期也会收到过时的「休眠照旧」提示(Codex 09-24)。
     const now = Date.now();
-    const sleep = cfg.heartbeatMinutes > 0 ? await getMuseSleep(now).catch(() => null) : null;
-    const beat = heartbeatDecision({
-      heartbeatMinutes: cfg.heartbeatMinutes, lastCycleAt, now, sleep,
-      // 只在「到点 + 睡着」时才查活动(每个巡检一次查询 + 读至多三天的活动文件)
-      userActiveSinceSleep: sleep && now - lastCycleAt >= cfg.heartbeatMinutes * 60_000 ? await userActiveSince(userId, sleep.setAt) : false,
-    });
-    if (beat === 'woken') {
-      log(`用户回来了,提前结束休眠(原定到 ${localTime(new Date(sleep!.until))})`);
+    let sleep = await getMuseSleep(now).catch(() => null);
+    if (sleep && (await userActiveSince(userId, sleep.setAt, sleep.minuteLines))) {
+      log(`用户回来了,提前结束休眠(原定到 ${localTime(new Date(sleep.until))})`);
       await setMuseSleep(null).catch((e: any) => log(`清休眠失败:${e?.message || e}`));
+      sleep = null;
     }
-    const heartbeatDue = beat === 'due' || beat === 'woken';
+    const heartbeatDue = heartbeatDecision({ heartbeatMinutes: cfg.heartbeatMinutes, lastCycleAt, now, sleep }) === 'due';
     if (!museFired.length && !dueMuse.length && !heartbeatDue) { lastRunning = false; return; }
     if (museFired.length) log(`盯任务命中 ${museFired.length} 条:${museFired.map((t) => t.id).join(', ')}`);
     if (dueMuse.length) log(`自己的日程到期 ${dueMuse.length} 条:${dueMuse.map((e) => e.name).join(', ')}`);

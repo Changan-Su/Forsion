@@ -143,9 +143,11 @@ export function isUserActivityLine(line: string): boolean {
 export async function readUserActivityStamps(days: number, now = new Date()): Promise<string[]> {
   const out: string[] = [];
   for (let i = Math.max(1, days) - 1; i >= 0; i--) {
+    // 按本地日历日倒推(setDate),别减固定 24h:夏令时切换那天减 24h 会跳过或重复一个本地日期,那天的活动就漏读了
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i, 12);
     let raw: string;
     try {
-      raw = await fs.readFile(join(activityDir(), `${localDateStr(new Date(now.getTime() - i * 86_400_000))}.log`), 'utf8');
+      raw = await fs.readFile(join(activityDir(), `${localDateStr(day)}.log`), 'utf8');
     } catch {
       continue;
     }
@@ -154,6 +156,21 @@ export async function readUserActivityStamps(days: number, now = new Date()): Pr
     }
   }
   return out;
+}
+
+/**
+ * 自 sinceMs 起活动日志里有没有**用户**动作(纯函数,单测钉)。日志是分钟精度:之后的分钟有行 → 有;
+ * 与 sinceMs 同一分钟的行,只有多于基线 minuteLines(那一刻已经在的行数)才算 —— 不给基线就一律不算
+ * (同分钟里分不清先后,宁可漏一次也不把睡下前的动作当成「回来了」)。
+ */
+export function activitySince(stamps: string[], sinceMs: number, minuteLines?: number): boolean {
+  const since = activityTs(new Date(sinceMs));
+  let same = 0;
+  for (const t of stamps) {
+    if (t > since) return true;
+    if (t === since) same++;
+  }
+  return minuteLines !== undefined && same > minuteLines;
 }
 
 export interface ActivityRhythm {
