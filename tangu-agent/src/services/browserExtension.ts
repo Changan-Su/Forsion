@@ -6,6 +6,8 @@
  * 安全:只监听回环;只收 Origin = 固定扩展 ID(manifest.key 钉死)的连接;握手是双向挑战-应答
  * (HMAC-SHA256,密钥 = 连接码里的令牌,令牌本身从不上线):扩展要先验明这边真是 Tangu 才执行命令,
  * 本机抢占端口的进程既拿不到令牌、也指挥不了扩展。
+ * 信任边界:同一系统用户下的进程读得到令牌文件(0600 只挡别的用户)—— 与改写 Native Messaging 清单同级,
+ * 视为可信;别的系统用户的进程连得上回环口,所以握手阶段限帧长、限并发(Codex 09-24)。
  * 连接码按引擎家目录各存一份 → dev / 正式版 / CLI 互不串(端口也各配各的,桌面经 env 注入)。
  */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -21,14 +23,19 @@ export const EXTENSION_ID = 'gpajikakdmhjebadgcbmhidkkajclfoi';
 const DEFAULT_PORT = 47654;
 const HELLO_TIMEOUT_MS = 5_000;
 const CALL_TIMEOUT_MS = 45_000;
+const MAX_PAYLOAD = 32 * 1024 * 1024; // 截图 / 大页正文;扩展侧另把截图卡在 24MB 以内
+const MAX_HANDSHAKE_FRAME = 4 * 1024; // 未认证的连接只该发 hello / auth 这种小帧
+const MAX_PENDING_HANDSHAKES = 8;
 
 interface Pending { resolve: (v: any) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
-interface Client { ws: WebSocket; version: string; connectedAt: number; pending: Map<number, Pending> }
+interface Client { id: number; ws: WebSocket; version: string; connectedAt: number; pending: Map<number, Pending> }
 
 let server: WebSocketServer | null = null;
 let listenError = '';
 let clients: Client[] = [];
 let seq = 0;
+let nextClientId = 0;
+let pendingHandshakes = 0;
 
 function cfg(): any { return getRawSection('browserExtension') || {}; }
 
@@ -91,7 +98,7 @@ export function startBrowserExtensionBridge(): void {
     host: '127.0.0.1',
     port: extensionPort(),
     path: '/tangu-browser',
-    maxPayload: 64 * 1024 * 1024, // 截图 / 大页正文
+    maxPayload: MAX_PAYLOAD,
     verifyClient: ({ origin }: { origin?: string }) => origins.has(String(origin || '')),
   });
   wss.on('listening', () => { listenError = ''; });
@@ -107,11 +114,19 @@ export function startBrowserExtensionBridge(): void {
 }
 
 function onConnection(ws: WebSocket): void {
+  if (pendingHandshakes >= MAX_PENDING_HANDSHAKES) { ws.close(1013, 'busy'); return; }
+  pendingHandshakes++;
+  let handshaking = true;
+  const endHandshake = (): void => { if (handshaking) { handshaking = false; pendingHandshakes--; } };
   let client: Client | null = null;
   let serverNonce = '';
   let version = '';
   const helloTimer = setTimeout(() => { if (!client) ws.close(4001, 'hello timeout'); }, HELLO_TIMEOUT_MS);
-  ws.on('message', (data) => {
+  ws.on('message', (data: Buffer | ArrayBuffer | Buffer[]) => {
+    if (!client && (Buffer.isBuffer(data) ? data.length : Array.isArray(data) ? data.reduce((n, b) => n + b.length, 0) : data.byteLength) > MAX_HANDSHAKE_FRAME) {
+      ws.close(1009, 'handshake frame too large');
+      return;
+    }
     let m: any;
     try { m = JSON.parse(String(data)); } catch { return; }
     if (!client) {
@@ -124,7 +139,8 @@ function onConnection(ws: WebSocket): void {
       }
       if (m?.type === 'auth' && serverNonce && proofOk(m.proof, `client:${serverNonce}`)) {
         clearTimeout(helloTimer);
-        client = { ws, version, connectedAt: Date.now(), pending: new Map() };
+        endHandshake();
+        client = { id: ++nextClientId, ws, version, connectedAt: Date.now(), pending: new Map() };
         clients.push(client);
         ws.send(JSON.stringify({ type: 'welcome', engine: engineLabel() }));
         return;
@@ -141,6 +157,7 @@ function onConnection(ws: WebSocket): void {
   });
   ws.on('close', () => {
     clearTimeout(helloTimer);
+    endHandshake();
     if (!client) return;
     clients = clients.filter((c) => c !== client);
     for (const p of client.pending.values()) { clearTimeout(p.timer); p.reject(new Error('The Chrome extension disconnected')); }
@@ -150,10 +167,17 @@ function onConnection(ws: WebSocket): void {
 
 export function extensionConnected(): boolean { return clients.length > 0; }
 
-/** 发一条命令给扩展(多个 Chrome 配置都装了扩展时,用最近连上的那个)。 */
-export function extensionCall<T = any>(method: string, params: Record<string, unknown> = {}, timeoutMs = CALL_TIMEOUT_MS): Promise<T> {
-  const client = clients[clients.length - 1];
-  if (!client) return Promise.reject(new Error('The Tangu Chrome extension is not connected'));
+/** 当前默认连接(多个 Chrome 配置都装了扩展时 = 最近连上的那个);没有 → null。 */
+export function currentExtensionClient(): number | null { return clients.length ? clients[clients.length - 1].id : null; }
+export function extensionClientAlive(id: number): boolean { return clients.some((c) => c.id === id); }
+
+/**
+ * 发一条命令给扩展。clientId 给了就只发给那一条连接(标签 id 只在它所属的浏览器里有意义 ——
+ * 换了浏览器还用旧 id,可能正好落到另一个浏览器里同号的用户标签上,Codex 09-24);没给 = 当前默认连接。
+ */
+export function extensionCall<T = any>(method: string, params: Record<string, unknown> = {}, timeoutMs = CALL_TIMEOUT_MS, clientId?: number): Promise<T> {
+  const client = clientId == null ? clients[clients.length - 1] : clients.find((c) => c.id === clientId);
+  if (!client) return Promise.reject(new Error(clientId == null ? 'The Tangu Chrome extension is not connected' : 'The Chrome window this conversation was using is no longer connected'));
   const id = ++seq;
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {

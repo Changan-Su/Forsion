@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WebSocket } from 'ws';
 import {
-  EXTENSION_ID, connectCode, extensionCall, extensionConnected, extensionStatus, extensionToken,
+  EXTENSION_ID, connectCode, currentExtensionClient, extensionCall, extensionClientAlive, extensionConnected, extensionStatus, extensionToken,
   startBrowserExtensionBridge, stopBrowserExtensionBridge,
 } from './browserExtension.js';
 
@@ -118,6 +118,38 @@ describe('Tangu for Chrome 扩展桥', () => {
     const { welcomed } = await fakeExtension({ handler: () => new Promise(() => {}) });
     await welcomed;
     await expect(extensionCall('page.read', {}, 150)).rejects.toThrow(/did not answer page.read/);
+  });
+
+  it('没认证的连接只收小帧、并发有上限(别的系统用户也连得上回环口)', async () => {
+    const raw = async (): Promise<{ ws: WebSocket; closed: Promise<number> }> => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/tangu-browser`, { origin: `chrome-extension://${EXTENSION_ID}` });
+      const closed = new Promise<number>((r) => ws.on('close', (code) => r(code)));
+      await new Promise((r) => ws.on('open', r));
+      return { ws, closed };
+    };
+    const big = await raw();
+    big.ws.send(JSON.stringify({ type: 'hello', nonce: 'ab'.repeat(16), pad: 'x'.repeat(5000) }));
+    expect(await big.closed).toBe(1009);
+    const idle = await Promise.all(Array.from({ length: 8 }, raw)); // 占满握手名额、一直不说话
+    expect(await (await raw()).closed).toBe(1013);
+    for (const s of idle) s.ws.close();
+    await Promise.all(idle.map((s) => s.closed));
+    const { welcomed } = await fakeExtension(); // 名额释放后正常配对不受影响
+    expect((await welcomed).type).toBe('welcome');
+  });
+
+  it('指名的那条连接断了:发给它的命令直接失败,绝不落到后连上的另一个浏览器', async () => {
+    const a = await fakeExtension({ handler: () => 'A' });
+    await a.welcomed;
+    const idA = currentExtensionClient()!;
+    const b = await fakeExtension({ handler: () => 'B' });
+    await b.welcomed;
+    expect(currentExtensionClient()).not.toBe(idA); // 默认连接 = 最近连上的
+    await expect(extensionCall('tabs.list', {}, undefined, idA)).resolves.toBe('A');
+    a.ws.close();
+    for (let i = 0; i < 50 && extensionClientAlive(idA); i++) await new Promise((r) => setTimeout(r, 20));
+    await expect(extensionCall('tabs.list', {}, undefined, idA)).rejects.toThrow(/no longer connected/);
+    await expect(extensionCall('tabs.list')).resolves.toBe('B');
   });
 
   it('换连接码会断开已配对的扩展', async () => {

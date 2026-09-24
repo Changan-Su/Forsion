@@ -1,6 +1,7 @@
 /**
  * Dev-only visual harness:设置 → 浏览器 →「Chrome 扩展」卡片 —— 真 BrowserExtensionPanel + 生产 CSS;
- * 引擎端点与 openHostPath 都是桩,不连后端。?connected / ?busy(端口被占)/ ?dark / ?lang=en。
+ * 引擎端点与 openHostPath 都是桩,不连后端。?connected / ?busy(端口被占)/ ?external(外部引擎)/ ?dark / ?lang=en;
+ * __extHarness.holdPolls=true 扣住之后的状态轮询(按发出时刻的状态作答),release() 放行 —— 复现「旧轮询晚到」竞态。
  * 跑法:node scripts/e2e-editor.cjs --check=browserext-settings --shot
  */
 import { createRoot } from 'react-dom/client'
@@ -16,7 +17,11 @@ setLocaleGlobal(params.get('lang') === 'en' ? 'en' : 'zh')
 applyTheme('lovable', 'cream', 'cream', params.has('dark') ? 'dark' : 'light')
 
 const BACKEND = 'http://stub.local'
-const harness = { opened: [] as string[], resets: 0, code: 'tangu:47655:3f9c2a71d04b8e56a1c7f02d9e4b6a8c13e5f7092b4d6c8e' }
+const harness = {
+  opened: [] as string[], resets: 0, code: 'tangu:47655:3f9c2a71d04b8e56a1c7f02d9e4b6a8c13e5f7092b4d6c8e',
+  holdPolls: false, held: [] as Array<() => void>,
+  release() { harness.holdPolls = false; for (const r of harness.held.splice(0)) r() },
+}
 ;(window as unknown as { __extHarness: typeof harness }).__extHarness = harness
 const status = () => ({
   enabled: true, port: 47655, listening: !params.has('busy'), error: params.has('busy') ? 'EADDRINUSE' : '',
@@ -30,7 +35,11 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
   if (!url.startsWith(BACKEND)) return realFetch(input, init)
   const path = new URL(url).pathname
   if (path === '/agent/browser-extension/reset-code') { harness.resets++; harness.code = `tangu:47655:${'ab'.repeat(24)}`; return json(status()) }
-  if (path === '/agent/browser-extension') return json(status())
+  if (path === '/agent/browser-extension') {
+    const snap = status() // 请求发出那一刻的状态(含当时的码)
+    if (harness.holdPolls) await new Promise<void>((r) => harness.held.push(r))
+    return json(snap)
+  }
   return json({})
 }
 window.tangu = {
@@ -40,7 +49,7 @@ window.tangu = {
 createRoot(document.getElementById('root')!).render(
   <LocaleProvider>
     <main className="settings-body" style={{ maxWidth: 760, margin: '0 auto', padding: '24px 16px' }}>
-      <BrowserExtensionPanel cfg={{ backendUrl: BACKEND, token: 'stub' } as TanguDesktopConfig} />
+      <BrowserExtensionPanel cfg={{ backendUrl: BACKEND, token: 'stub' } as TanguDesktopConfig} managed={!params.has('external')} />
     </main>
   </LocaleProvider>,
 )

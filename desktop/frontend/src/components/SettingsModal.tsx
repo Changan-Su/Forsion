@@ -2538,7 +2538,7 @@ export const SettingsModal: React.FC<{
                         {remoteMsg && <span className="hint">{remoteMsg}</span>}
                       </div>
                     </SettingsPanel>
-                    <BrowserExtensionPanel cfg={p.cfg} />
+                    <BrowserExtensionPanel cfg={p.cfg} managed={stored.mode !== 'external'} />
                   </>
                 )}
 

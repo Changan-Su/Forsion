@@ -16,6 +16,8 @@ const GROUP_COLOR = 'orange';
 const PING_MS = 20_000; // 有流量 MV3 worker 就不会被回收(Chrome ≥116;实测 75s 无断线)
 const LOAD_TIMEOUT_MS = 30_000;
 const SCRIPT_TIMEOUT_MS = 15_000; // 冻结 / 休眠的后台标签里脚本可能迟迟不跑
+const HANDSHAKE_TIMEOUT_MS = 8_000; // 对面接了连接却迟迟不出挑战(抢占端口的进程)→ 断开重试
+const MAX_SCREENSHOT_CHARS = 24 * 1024 * 1024; // 引擎单帧上限 32MB,留余量
 
 let ws = null;
 let connStatus = 'idle'; // idle | not-paired | connecting | connected | offline | bad-code
@@ -52,14 +54,19 @@ async function connect() {
   let sock;
   try { sock = new WebSocket(`ws://127.0.0.1:${pairing.port}/tangu-browser`); } catch { scheduleRetry(); return; }
   ws = sock;
-  sock.tangu = { token: pairing.token, nonce: newNonce(), serverVerified: false, ready: false };
+  sock.tangu = { token: pairing.token, nonce: newNonce(), serverVerified: false, ready: false, codeRejected: false };
+  const handshakeTimer = setTimeout(() => { if (!sock.tangu.ready) sock.close(4003, 'handshake timeout'); }, HANDSHAKE_TIMEOUT_MS);
   sock.onopen = () => sock.send(JSON.stringify({ type: 'hello', nonce: sock.tangu.nonce, version: chrome.runtime.getManifest().version }));
   sock.onmessage = (e) => { void onMessage(sock, e.data); };
   sock.onerror = () => {}; // 之后必有 onclose
   sock.onclose = (e) => {
+    clearTimeout(handshakeTimer);
     if (ws === sock) ws = null;
-    if (e.code === 4001) { void setStatus('bad-code'); return; } // 连接码不对:别反复撞,等用户重新粘贴
-    void setStatus('offline');
+    // 「连接码失效」只在确有其事时才显示:对面先证明了自己是 Tangu、又拒了我方(4001),或对面的证明对不上我方的码。
+    // 只是状态,照样慢速重试 —— 没验明身份的对面发个 4001 / 占着不说话,不能让扩展从此不再连(Codex 09-24)。
+    const rejected = (e.code === 4001 && sock.tangu.serverVerified) || sock.tangu.codeRejected;
+    void setStatus(rejected ? 'bad-code' : 'offline');
+    if (rejected) retryDelay = 30_000;
     scheduleRetry();
   };
 }
@@ -77,7 +84,7 @@ async function onMessage(sock, data) {
   if (!st.ready) {
     // 对面先证明它知道令牌(对我方随机数的 HMAC),我方再证明;验明之前收到的任何命令一律丢弃
     if (m.type === 'challenge' && !st.serverVerified) {
-      if (typeof m.nonce !== 'string' || m.proof !== await hmacHex(st.token, `server:${st.nonce}`)) { sock.close(4002, 'server proof mismatch'); return; }
+      if (typeof m.nonce !== 'string' || m.proof !== await hmacHex(st.token, `server:${st.nonce}`)) { st.codeRejected = true; sock.close(4002, 'server proof mismatch'); return; }
       st.serverVerified = true;
       sock.send(JSON.stringify({ type: 'auth', proof: await hmacHex(st.token, `client:${m.nonce}`) }));
       return;
@@ -93,7 +100,7 @@ async function onMessage(sock, data) {
 
 setInterval(() => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' })); }, PING_MS);
 chrome.alarms.create('tangu-reconnect', { periodInMinutes: 1 }); // worker 被回收后由闹钟唤醒重连
-chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'tangu-reconnect' && connStatus !== 'bad-code') void connect(); });
+chrome.alarms.onAlarm.addListener((a) => { if (a.name === 'tangu-reconnect') void connect(); });
 chrome.runtime.onStartup.addListener(() => { void connect(); });
 chrome.runtime.onInstalled.addListener(() => { void connect(); });
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -140,26 +147,38 @@ function describeTab(t, focusedId, groups) {
   };
 }
 
-/** 等一次导航加载完:先看到 loading 再等 complete(避免拿旧页面的 complete 提前返回)。 */
+/**
+ * 等一次导航完成:看到 loading 之后的 complete,或网址已变且状态 complete(同文档跳转 —— 只改 # 片段、
+ * 同文档后退 —— 不走 loading)。真等满超时就在结果上标 loadTimedOut,不当成功报(Codex 09-24)。
+ */
 function afterNavigation(tabId, trigger, timeoutMs = LOAD_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     let sawLoading = false;
     let finished = false;
-    const end = () => {
+    let startUrl = null;
+    const end = (timedOut) => {
       if (finished) return;
       finished = true;
       chrome.tabs.onUpdated.removeListener(onUpdated);
       clearTimeout(timer);
-      chrome.tabs.get(tabId).then(resolve, reject);
+      clearInterval(poll);
+      chrome.tabs.get(tabId).then((t) => resolve(timedOut ? { ...t, loadTimedOut: true } : t), reject);
     };
     const onUpdated = (id, info) => {
       if (id !== tabId) return;
       if (info.status === 'loading') sawLoading = true;
-      if (info.status === 'complete' && sawLoading) end();
+      if (info.status === 'complete' && sawLoading) end(false);
     };
-    const timer = setTimeout(end, timeoutMs);
+    const poll = setInterval(() => {
+      chrome.tabs.get(tabId).then((t) => {
+        if (startUrl != null && t.status === 'complete' && !t.pendingUrl && (sawLoading || t.url !== startUrl)) end(false);
+      }, () => end(false));
+    }, 250);
+    const timer = setTimeout(() => end(true), timeoutMs);
     chrome.tabs.onUpdated.addListener(onUpdated);
-    Promise.resolve().then(trigger).catch((e) => { finished = true; chrome.tabs.onUpdated.removeListener(onUpdated); clearTimeout(timer); reject(e); });
+    chrome.tabs.get(tabId)
+      .then((t) => { startUrl = t.url || ''; return trigger(); })
+      .catch((e) => { if (finished) return; finished = true; chrome.tabs.onUpdated.removeListener(onUpdated); clearTimeout(timer); clearInterval(poll); reject(e); });
   });
 }
 
@@ -226,6 +245,23 @@ async function withPage(tabId, r) {
   try { const t = await chrome.tabs.get(tabId); return { ...r, url: t.url || t.pendingUrl || '', title: t.title || '' }; } catch { return r; }
 }
 
+const KEYS = {
+  Enter: [13, '\r'], Tab: [9], Escape: [27], Backspace: [8], Delete: [46], Space: [32, ' '],
+  ArrowUp: [38], ArrowDown: [40], ArrowLeft: [37], ArrowRight: [39], PageUp: [33], PageDown: [34], Home: [36], End: [35],
+};
+
+async function pressTrusted(tabId, key) {
+  const spec = KEYS[key];
+  if (!spec) throw new Error(`unsupported key ${key}`);
+  const [code, text] = spec;
+  const base = { key: key === 'Space' ? ' ' : key, code: key === 'Space' ? 'Space' : key, windowsVirtualKeyCode: code, nativeVirtualKeyCode: code };
+  return withDebugger(tabId, async (target) => {
+    await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', { type: text ? 'keyDown' : 'rawKeyDown', ...base, ...(text ? { text, unmodifiedText: text } : {}) });
+    await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+    return { ok: true };
+  });
+}
+
 async function withDebugger(tabId, fn) {
   const target = { tabId };
   await chrome.debugger.attach(target, '1.3');
@@ -250,11 +286,11 @@ async function handle(method, p) {
         : (await chrome.windows.create({ url: p.url, focused: false })).tabs[0];
       await addToTanguGroup(created.id, created.windowId);
       const tab = await untilComplete(created.id);
-      return describeTab(tab || created, -1, await tanguGroupIds());
+      return { ...describeTab(tab || created, -1, await tanguGroupIds()), loadTimedOut: !tab || tab.status !== 'complete' };
     }
     case 'tabs.navigate': {
       const tab = await afterNavigation(p.tabId, () => chrome.tabs.update(p.tabId, { url: p.url }));
-      return describeTab(tab, -1, await tanguGroupIds());
+      return { ...describeTab(tab, -1, await tanguGroupIds()), loadTimedOut: !!tab.loadTimedOut };
     }
     case 'tabs.close':
       await chrome.tabs.remove(p.tabId);
@@ -274,15 +310,19 @@ async function handle(method, p) {
       return withPage(p.tabId, r);
     }
     case 'page.press': {
-      const r = await inject(p.tabId, kitPress, [String(p.key || '')]);
-      if (r && r.submitted) await settleAfterAction(p.tabId);
+      // 合成 KeyboardEvent 大多不产生默认行为(Backspace 不删字、Tab 不移焦点)→ 用调试接口发可信按键;
+      // 挂不上(比如该标签开着 DevTools)才退回合成事件,并如实标注。
+      const key = String(p.key || '');
+      let r;
+      try { r = await pressTrusted(p.tabId, key); } catch { r = { ...(await inject(p.tabId, kitPress, [key])), synthetic: true }; }
+      await settleAfterAction(p.tabId);
       return withPage(p.tabId, r);
     }
     case 'page.scroll':
       return inject(p.tabId, kitScroll, [Number(p.dy) || 0]);
     case 'page.back': {
       const tab = await afterNavigation(p.tabId, () => chrome.tabs.goBack(p.tabId), 15_000);
-      return { ok: true, url: tab.url, title: tab.title };
+      return { ok: true, url: tab.url, title: tab.title, loadTimedOut: !!tab.loadTimedOut };
     }
     case 'page.eval':
       return withDebugger(p.tabId, async (target) => {
@@ -297,6 +337,7 @@ async function handle(method, p) {
         const r = await withTimeout(
           chrome.debugger.sendCommand(target, 'Page.captureScreenshot', { format: 'png', captureBeyondViewport: !!p.full }),
           SCRIPT_TIMEOUT_MS, 'screenshot');
+        if (String(r.data || '').length > MAX_SCREENSHOT_CHARS) return { ok: false, error: 'Screenshot too large — take a viewport screenshot (full_page: false) instead.' };
         return { ok: true, data: r.data };
       });
     default:

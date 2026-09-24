@@ -56,6 +56,26 @@ async function main() {
   await page.waitForFunction(() => document.querySelector('[data-testid="browser-extension-code"]')?.textContent?.includes('abab'))
   check('换码确认后显示新码', (await page.evaluate(() => window.__extHarness.resets)) === 1)
 
+  // 竞态:换码之前 / 途中发出的轮询晚回来,不许把新码盖回旧码
+  const codeText = () => page.locator('[data-testid="browser-extension-code"]').textContent()
+  await open()
+  await page.waitForFunction(() => document.querySelector('[data-testid="browser-extension-code"]')?.textContent?.startsWith('tangu:'))
+  await page.evaluate(() => { window.__extHarness.holdPolls = true })
+  await page.waitForFunction(() => window.__extHarness.held.length > 0, null, { timeout: 5000 })
+  const oldCode = await codeText()
+  await panel.getByRole('button', { name: '换一个' }).click()
+  await page.waitForFunction((old) => document.querySelector('[data-testid="browser-extension-code"]')?.textContent !== old, oldCode)
+  await page.evaluate(() => window.__extHarness.release())
+  await page.waitForTimeout(300)
+  const shown = await codeText()
+  check('换码前发出的轮询晚到,不会把旧码盖回来', shown !== oldCode && shown === (await page.evaluate(() => window.__extHarness.code)), { shown, oldCode })
+
+  await open('?external')
+  const extText = await panel.textContent()
+  check('外部引擎:不给「打开扩展文件夹」(目录在引擎那台机器上),改为写明路径',
+    (await panel.getByRole('button', { name: '打开扩展文件夹' }).count()) === 0 && extText.includes('外部引擎') && extText.includes('/tangu-server/browser-extension'), extText.slice(-160))
+  if (shot) await page.locator('.settings-browser-ext-panel').screenshot({ path: path.join(out, 'ext-external.png') })
+
   await open('?connected')
   check('连上后状态为已连接', (await page.locator('[data-testid="browser-extension-status"]').textContent()) === '已连接')
   await open('?busy')

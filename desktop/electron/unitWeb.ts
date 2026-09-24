@@ -206,6 +206,12 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     })
 
   /** /engine/* 反代:剥外来身份、盖本机引擎 token,请求/响应双向原始管道(SSE 天然直通)。 */
+  const isLocalOnlyEnginePath = (path: string): boolean => {
+    let p = path
+    try { p = decodeURIComponent(new URL(path, 'http://x').pathname) } catch { /* 解不开就按原样比 */ }
+    return p.toLowerCase().replace(/\/{2,}/g, '/').startsWith('/engine/agent/browser-extension')
+  }
+
   const proxyEngine = (req: http.IncomingMessage, res: http.ServerResponse, path: string): void => {
     const engine = deps.getEngine()
     if (!engine.url) { json(res, 503, { detail: '本机引擎未就绪', code: 'ENGINE_NOT_READY' }); return }
@@ -436,6 +442,12 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     }
     if (path === '/engine' || path.startsWith('/engine/')) {
       if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
+      // Chrome 扩展的连接码 = 操作本机已登录浏览器的配对凭据:只给本机设置页,已配对的其他设备也不许读 / 换(Codex 09-24)。
+      // 按引擎路由的口径规整再比:Express 默认不分大小写、容忍尾斜杠;另防 // 与 ./、%2D 之类的变体绕过
+      if (isLocalOnlyEnginePath(path)) {
+        json(res, 403, { detail: 'Chrome 扩展连接码只能在本机查看', code: 'LOCAL_ONLY' })
+        return
+      }
       proxyEngine(req, res, url.slice('/engine'.length) || '/')
       return
     }
