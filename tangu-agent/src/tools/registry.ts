@@ -19,7 +19,7 @@ import { sandboxPythonProvider } from './builtin/sandboxPython.js';
 import { hostExecProvider } from './hostExec.js';
 import { fileSearchProvider } from './builtin/fileSearch.js';
 import { webFetchProvider } from './builtin/webFetch.js';
-import { browserToolsProvider } from './builtin/browserTools.js';
+import { browserToolsProvider, browserTabsProvider } from './builtin/browserTools.js';
 import { todoProvider } from './builtin/todo.js';
 import { hostProcessProvider } from './builtin/hostProcess.js';
 import { delegateProvider } from './builtin/delegate.js';
@@ -179,6 +179,7 @@ registerToolProvider(transcribeAudioProvider); // host-only:transcribe_audio 经
 registerToolProvider(viewVideoProvider); // host-only:view_video 用本机 ffmpeg 抽帧「看」视频(联络表+单帧两档);无 ffmpeg 不可见(append 末尾,保前缀缓存)
 registerToolProvider(uiCommandsProvider); // GUI 限定(ctx.client + 客户端上报目录双闸,CLI/TUI/自动化不注册):读写界面设置 + 派发渲染端命令(append 末尾,保前缀缓存)
 registerToolProvider(teamSayProvider); // 团队成员随时向主聊天发言(append 末尾,保前缀缓存)
+registerToolProvider(browserTabsProvider); // host-only:browser_tabs 看/读用户自己 Chrome 里开着的标签(远程调试接管;append 末尾,保前缀缓存)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */
