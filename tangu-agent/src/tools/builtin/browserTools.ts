@@ -209,6 +209,7 @@ async function rebindTab(ctx: ToolContext, endpoint: string): Promise<string | n
   const key = `${endpoint}|${ctx.sessionId}`;
   const b = boundTabs.get(key);
   if (!b) return NO_TAB_BOUND;
+  // ponytail: Windows 未实测 —— 若 agent-browser 在那边不写 <session>.pid,接管态点按类工具恒拒(读照常);真机验过再放
   if (!b.daemon) {
     boundTabs.delete(key);
     return "Acting on the user's tabs is unavailable here: the browser bridge's process id can't be verified, so a tab id might point at a different tab. "
