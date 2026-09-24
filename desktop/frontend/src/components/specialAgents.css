@@ -50,9 +50,22 @@
 .special-save span, .special-save .btn { display: inline-flex; align-items: center; gap: 6px; }
 .special-save .special-error { color: var(--danger); margin: 0; overflow-wrap: anywhere; }
 .special-loading { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; color: var(--text-muted); font-size: var(--ui-font-body); }
+/* Forsion 后台额度(账号级,立即生效):两轴剩余 + 细条;不描边(内容块),低于 15% 换警示色。 */
+.special-bgquota { display: grid; gap: 12px; }
+.special-bgquota[data-busy] { opacity: .7; }
+.special-bgquota-lead, .special-bgquota-note { margin: 0; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
+.special-bgquota-warn { margin: 0; color: var(--warning); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
+.special-bgquota-axes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.special-bgquota-axis { display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 4px 10px; font-size: var(--ui-font-body); }
+.special-bgquota-axis > span { color: var(--text-muted); }
+.special-bgquota-axis > b { justify-self: end; font-weight: 600; color: var(--text); }
+.special-bgquota-axis > i { grid-column: 1 / -1; display: block; height: 4px; border-radius: 999px; background: var(--overlay-medium); overflow: hidden; }
+.special-bgquota-axis > i > em { display: block; height: 100%; border-radius: inherit; background: var(--accent-ink); }
+.special-bgquota-axis > i > em[data-low] { background: var(--danger); }
 @container special-settings (max-width: 480px) {
   .special-agent-nav { grid-template-columns: 1fr; }
   .special-field-grid { grid-template-columns: 1fr; }
+  .special-bgquota-axes { grid-template-columns: 1fr; }
   .special-agent-nav > button { padding-block: 10px; }
 }
 @keyframes special-content-enter { from { opacity: .3; translate: 0 3px; } to { opacity: 1; translate: 0 0; } }

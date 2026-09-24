@@ -14,7 +14,20 @@ import {
 import { useApp } from '../stores/appStore'
 import { openNewChat } from '../sessionNav'
 import type { AgentScheduleEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, PendingApprovalInfo, SessionRecord, TanguDesktopConfig } from '../types'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
+
+registerMessages({
+  'special.muse.sleeping': { zh: '休眠至 {time}', en: 'Sleeping until {time}' },
+  'special.muse.sleepingTitle': {
+    zh: 'Muse 判断暂时没事可做,跳过心跳到这个时刻;你一有动作、规则命中或日程到期都会提前叫醒它。理由:{reason}',
+    en: 'Muse found nothing to do and skips its heartbeat until then; your activity, a rule or a due schedule wakes it earlier. Reason: {reason}',
+  },
+})
+
+const hhmm = (ms: number): string => {
+  const d = new Date(ms)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
 
 export const MuseView: React.FC<{
   cfg: TanguDesktopConfig
@@ -143,6 +156,8 @@ export const MuseView: React.FC<{
     m === 'auto' ? t('settings.special.m.modeAuto') : m === 'agent' ? t('settings.special.m.modeAgent') : t('settings.special.m.modeAsk')
 
   const running = !!status?.running
+  // Muse 自己定的休眠(set_next_wake):醒着 / 跑着时不显示;过期的休眠引擎侧已当醒着,这里再兜一次。
+  const sleepUntil = !running && status?.sleepUntil && status.sleepUntil > Date.now() ? status.sleepUntil : 0
   const pendingN = approvals.length || status?.pendingApprovals || 0
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
@@ -153,9 +168,14 @@ export const MuseView: React.FC<{
           <span className="conn-pill" style={{ fontSize: 'var(--ui-font-meta, 12px)', fontWeight: 400 }} title={t('special.muse.modeLabel')}>{modeLabel(status.mode).split(/[（(]/)[0]}</span>
         )}
         {pendingN > 0 && <span className="conn-pill" style={{ fontSize: 'var(--ui-font-meta, 12px)', fontWeight: 400, color: 'var(--accent-ink)' }}>{t('special.muse.pending', { n: pendingN })}</span>}
-        <span className="conn-pill" style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>
+        <span
+          className="conn-pill"
+          data-state={!status?.enabled ? 'disabled' : running ? 'running' : sleepUntil ? 'sleeping' : 'idle'}
+          style={{ fontSize: 'var(--ui-font-meta, 12px)' }}
+          title={status?.enabled && sleepUntil ? t('special.muse.sleepingTitle', { reason: status.sleepReason || '—' }) : undefined}
+        >
           <span className="dot" style={{ background: running ? 'var(--accent-ink)' : 'var(--text-muted)' }} />
-          {!status?.enabled ? t('special.muse.disabled') : running ? t('special.muse.running') : t('special.muse.idle')}
+          {!status?.enabled ? t('special.muse.disabled') : running ? t('special.muse.running') : sleepUntil ? t('special.muse.sleeping', { time: hhmm(sleepUntil) }) : t('special.muse.idle')}
         </span>
         <button className="icon-btn" title={t('muse.openLibrary')} onClick={() => useWorkspace.getState().openView('muse-files', {}, 'main', { newTab: true })}><FolderOpen size={13} /></button>
         <button className="icon-btn" onClick={() => void load()}><RefreshCw size={13} /></button>

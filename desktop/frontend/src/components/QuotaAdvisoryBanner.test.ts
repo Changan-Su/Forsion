@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LocaleProvider } from '../i18n'
 import { QuotaAdvisoryBanner } from './QuotaAdvisoryBanner'
 
@@ -96,4 +96,48 @@ it('stays hidden for signed-out users', async () => {
   await mount(false)
   expect(window.tangu!.accountQuota).not.toHaveBeenCalled()
   expect(host.querySelector('.t2-quota-advisory')).toBeNull()
+})
+
+describe('background quota (Muse / automations)', () => {
+  const bgQuota = (over: Record<string, unknown> = {}) => ({
+    status: 200,
+    json: {
+      dailyLimit: 100, dailyRemaining: 80, weeklyLimit: 100, weeklyRemaining: 90, resetCards: 0,
+      background: { modelId: 'm-cheap', dailyLimit: 15, dailyUsed: 15, dailyRemaining: 0, weeklyLimit: 15, weeklyUsed: 15, weeklyRemaining: 0, autoMain: false, ...over },
+    },
+  })
+
+  it('takes the single slot when the background bucket runs out, and offers a confirmed move from the main quota', async () => {
+    window.tangu!.accountQuota = vi.fn().mockResolvedValue(bgQuota()) as any
+    ;(window.tangu as any).backendStatus = vi.fn()
+    ;(window.tangu as any).accountBgConvert = vi.fn().mockResolvedValue({
+      status: 200,
+      json: { success: true, quota: bgQuota({ dailyLimit: 25, dailyRemaining: 10, weeklyLimit: 25, weeklyRemaining: 10 }).json },
+    })
+    await mount()
+    const banner = host.querySelector('.t2-quota-advisory')
+    expect(banner?.getAttribute('data-bucket')).toBe('background')
+    expect(host.textContent).toContain('后台智能体今日额度已用尽,Muse 与自动化已暂停')
+    expect(host.textContent).not.toContain('使用重置卡')
+    await act(async () => button('从主额度转入 10%').click())
+    expect((window.tangu as any).accountBgConvert).not.toHaveBeenCalled()
+    await act(async () => button('再次点击确认').click())
+    await tick()
+    expect((window.tangu as any).accountBgConvert).toHaveBeenCalledWith(10)
+    expect(onToast).toHaveBeenCalledWith('已从主额度转入 10%,本周期有效')
+    expect(host.querySelector('.t2-quota-advisory')).toBeNull()
+  })
+
+  it('says so when the exhausted bucket is continuing on the main quota', async () => {
+    window.tangu!.accountQuota = vi.fn().mockResolvedValue(bgQuota({ autoMain: true })) as any
+    ;(window.tangu as any).backendStatus = vi.fn()
+    await mount()
+    expect(host.textContent).toContain('后台智能体今日额度已用尽,正在用主额度继续')
+  })
+
+  it('never shows the background bucket where Muse cannot run (no local engine)', async () => {
+    window.tangu!.accountQuota = vi.fn().mockResolvedValue(bgQuota()) as any
+    await mount()
+    expect(host.querySelector('.t2-quota-advisory')).toBeNull()
+  })
 })

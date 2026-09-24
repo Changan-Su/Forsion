@@ -42,7 +42,8 @@ import { displayText } from '../core/displayText.js';
 import { loadSchedule, entriesOf, dueEntries, markEntryFired, type ScheduleEntry } from './agentSchedule.js';
 import { countPendingApprovals } from './pendingApprovals.js';
 import { sendInboxMessage, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
-import { readActivityLines } from './userActivity.js';
+import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
+import { museStateFile, readLastCycleAt, patchMuseState, getMuseSleep, setMuseSleep, type MuseSleep } from './museState.js';
 import { loadTriggers, evaluateTriggers, markTriggersFired, disableTriggers, disableTriggersWithReasons, buildTriggerKickoff, type MuseTrigger, type EventCursor, type DbLike } from './museTriggers.js';
 import { loadCursors, setCursors, pruneCursors } from './dbCursors.js';
 import { readDbOrNull } from './amadeusDb.js';
@@ -76,31 +77,11 @@ export function museJournalPath(date = localDate()): string {
   return path.join(museLibraryDir(), 'Journal', `${date}.md`);
 }
 
-/** Muse 的运行态落盘,住**引擎自有状态域** ~/.tangu/(与 special-agents.json 这份 Muse 配置同级)。
- *  刻意**不**放 agents/muse/:那是 Muse 自己的可写根(fsPolicy.writableRoots),调度控制态放在模型
- *  能写的地方,Muse 或一次提示注入把 lastCycleAt 写成远未来,下次启动读回后心跳条件长期不成立 =
- *  把自己永久停掉(Codex 评审 #2)。位置只挡住 write 工具的可写根,run_bash 那条路另算:文件名同时在
- *  hostSandboxProtection 的 deny 名单里,两道闸都钉。同理**不做**旧位置(agents/muse/state.json)回读迁移 —— 回读就
- *  把这条攻击面原样搬回来;升级后最多多跑一个周期。
- *  今天只有 lastCycleAt:只住内存时**每次启动 app 都会在 15s 后必跑一个周期**(§3.4),开机频繁的用户
- *  等于把心跳配置架空。ponytail: 直接整文件读写、坏文件当没跑过(退回今天的行为),不上原子写/版本号
- *  —— 单写者、丢了最多多跑一个周期。要再存别的运行态就往这个对象里加字段。 */
-export function museStateFile(): string {
-  return path.join(tanguHome(), 'muse-state.json');
-}
-export async function readLastCycleAt(): Promise<number> {
-  try {
-    const raw = JSON.parse(await fs.readFile(museStateFile(), 'utf8'));
-    const v = Number(raw?.lastCycleAt);
-    // 晚于当前时刻的值只可能来自篡改或时钟回拨 → 当没跑过。宁可多跑一个周期,也不让一个坏值把 Muse 停死。
-    return Number.isFinite(v) && v > 0 && v <= Date.now() ? v : 0;
-  } catch { return 0; }
-}
+/** Muse 的运行态落盘(muse-state.json:lastCycleAt + set_next_wake 定的休眠)——实现与安全边界见 museState.ts。
+ *  lastCycleAt 只住内存时**每次启动 app 都会在 15s 后必跑一个周期**(§3.4),开机频繁的用户等于把心跳配置架空。 */
+export { museStateFile, readLastCycleAt };
 export async function writeLastCycleAt(ms: number): Promise<void> {
-  try {
-    await fs.mkdir(path.dirname(museStateFile()), { recursive: true });
-    await fs.writeFile(museStateFile(), JSON.stringify({ lastCycleAt: ms }), 'utf8');
-  } catch (e: any) { log(`写 muse-state.json 失败:${e?.message || e}`); }
+  try { await patchMuseState({ lastCycleAt: ms }); } catch (e: any) { log(`写 muse-state.json 失败:${e?.message || e}`); }
 }
 /** 进程内只读一次(tick 与 museStatus 都等它:桌面每 4s 轮询 status,比首个 tick 早 15 秒)。 */
 let stateLoad: Promise<void> | null = null;
@@ -142,9 +123,10 @@ export function museAgentConfig(cfg: MuseConfig, agentThinking?: string): Record
 }
 
 /** Journal 行(纯函数,单测钉格式)。note 折成单行、截 120 字。 */
-export function formatJournalLine(x: { time: string; mode: string; trigger: string; tokens: number; files: number; status: string; note: string }): string {
+export function formatJournalLine(x: { time: string; mode: string; trigger: string; tokens: number; files: number; status: string; note: string; sleep?: string }): string {
   const note = displayText(x.note, 120);
-  return `- ${x.time} · ${x.mode} · ${displayText(x.trigger, 80)} · tokens ${x.tokens} · files ${x.files} · ${x.status}${note ? ` · ${note}` : ''}`;
+  const sleep = x.sleep ? ` · sleep → ${displayText(x.sleep, 140)}` : '';
+  return `- ${x.time} · ${x.mode} · ${displayText(x.trigger, 80)} · tokens ${x.tokens} · files ${x.files} · ${x.status}${sleep}${note ? ` · ${note}` : ''}`;
 }
 
 async function ensureMuseDirs(): Promise<void> {
@@ -208,10 +190,13 @@ async function flushJournal(): Promise<void> {
       const m = await query<any[]>(`SELECT content FROM chat_messages WHERE id = ? LIMIT 1`, [run.assistant_message_id]).catch(() => []);
       note = String(m?.[0]?.content || '');
     }
+    // 这个周期里定的休眠(setAt 落在周期开始之后)记进同一行:用户翻 Journal 能看到「为什么这几个钟头没动静」。
+    const slept = await getMuseSleep().catch(() => null);
+    const sleep = slept && slept.setAt >= pj.startedAt ? `${localTime(new Date(slept.until))} (${slept.reason})` : '';
     await appendMuseJournal(formatJournalLine({
       time: localTime(new Date(pj.startedAt)), mode: pj.mode, trigger: pj.trigger,
       tokens: Number(run.tokens_total) || 0, files: await filesTouched(pj.sessionId, pj.runId),
-      status: String(run.status), note,
+      status: String(run.status), note, sleep,
     }), localDate(new Date(pj.startedAt)));
     spaceStamp = await spaceDirStamp().catch(() => spaceStamp); // 周期收尾:Space 变了桌面才重载插件
   } catch (e: any) {
@@ -405,6 +390,53 @@ async function userActivitySince(userId: string, sinceMs: number): Promise<boole
   return !!rows.length;
 }
 
+/** 用户自 sinceMs 起有没有**任何**动作:用户会话的新消息,或应用内活动日志的用户行(引擎后台写的 o= 行不算)。
+ *  set_next_wake 的「用户一动就醒」与 kickoff 的安静提示共用。活动行是分钟精度:与 sinceMs 同一分钟的行不算。 */
+async function userActiveSince(userId: string, sinceMs: number, minuteLines?: number): Promise<boolean> {
+  if (await userActivitySince(userId, sinceMs)) return true;
+  if (!sinceMs) return true;
+  const days = Math.ceil((Date.now() - sinceMs) / 86_400_000) + 1;
+  try { return activitySince(await readUserActivityStamps(Math.min(days, 3)), sinceMs, minuteLines); } catch { return false; }
+}
+
+const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+/** 作息简报(纯函数,单测钉):按本地小时的活动天数 + 最近一次活动 + 现在几点。给 Muse 判断「该不该睡、睡到几点」。 */
+export function buildRhythmHint(r: ActivityRhythm, now: Date, days: number): string {
+  const head = `\n\n[User rhythm — from the in-app activity log, last ${days} days]\nLocal time now: ${WEEKDAYS[now.getDay()]} ${localTime(now)}.`;
+  if (!r.activeDays || !r.last) return `${head} No user activity recorded in this period.`;
+  const last = parseActivityTs(r.last);
+  const mins = Math.max(0, Math.round((now.getTime() - last.getTime()) / 60_000));
+  const ago = mins >= 1440 ? `${Math.floor(mins / 1440)}d ${Math.floor((mins % 1440) / 60)}h` : `${Math.floor(mins / 60)}h ${mins % 60}m`;
+  const lastDay = localDate(last) === localDate(now) ? '' : `${WEEKDAYS[last.getDay()]} `;
+  const hours = r.hourDays.map((n, h) => `${String(h).padStart(2, '0')}:${n}`).join(' ');
+  return `${head} Last user activity: ${lastDay}${localTime(last)} (${ago} ago).\n` +
+    `Days with activity by local hour, out of ${r.activeDays} active days: ${hours}`;
+}
+
+async function rhythmHint(): Promise<string> {
+  try { return buildRhythmHint(activityRhythm(await readUserActivityStamps(14)), new Date(), 14); } catch { return ''; }
+}
+
+/**
+ * 心跳闸(纯函数,单测钉):没到点 → not_due;到点但 Muse 睡着 → asleep;到点且醒着(或休眠已过期)→ due。
+ * 「用户回来了就醒」在调用方每个巡检先判、清掉休眠再进这里;休眠只挡心跳,规则命中 / 到期日程另判,不经这里。
+ */
+export function heartbeatDecision(x: {
+  heartbeatMinutes: number; lastCycleAt: number; now: number; sleep: MuseSleep | null;
+}): 'not_due' | 'due' | 'asleep' {
+  if (x.heartbeatMinutes <= 0 || x.now - x.lastCycleAt < x.heartbeatMinutes * 60_000) return 'not_due';
+  return !x.sleep || x.now >= x.sleep.until ? 'due' : 'asleep';
+}
+
+/** 休眠中被规则 / 日程叫醒时的提示:别把这当成一次完整巡视,处理完就收,休眠照旧。 */
+function sleepNote(sleep: MuseSleep | null, trigger: string): string {
+  if (!sleep || trigger === 'heartbeat') return '';
+  const until = new Date(sleep.until);
+  return `\n\n(You set yourself to sleep until ${localTime(until)}${localDate(until) === localDate() ? '' : ' tomorrow'} — "${displayText(sleep.reason, 120)}". ` +
+    `This cycle was triggered by ${displayText(trigger, 80)}: handle that, keep it short; your sleep stays in effect unless you change it with set_next_wake.)`;
+}
+
 /** 取该用户近期 TODO（pending + 已处理/驳回）拼成去重提示，注入 Muse 系统提示。失败 → 空串。 */
 async function existingTodoHint(userId: string): Promise<string> {
   try {
@@ -550,7 +582,7 @@ function spaceKickoff(): string {
  */
 export function buildCycleMessages(
   cfg: MuseConfig,
-  dyn: { extraKickoff?: string; hint?: string; pending?: number; quietSince?: boolean },
+  dyn: { extraKickoff?: string; hint?: string; pending?: number; quietSince?: boolean; sleepNote?: string },
 ): { message: string; ephemeralHint: string } {
   const message =
     'Start this round: first use read_log to review your own recent cycles, the [feedback] entries showing how the user handled your previous todos, and any [approval] entries about actions you deferred earlier. ' +
@@ -558,12 +590,15 @@ export function buildCycleMessages(
     tierKickoff(cfg) + ' ' +
     `Avoid the "TODOs you have already proposed" below; use add_muse_todo only for genuinely new, high-value todos (at most ${cfg.maxTodosPerWindow} this period — spend the quota sparingly). ` +
     'Use manage_schedule to plan your own follow-ups (auto=true entries wake you up when due; remove them when done). ' +
+    'Pace yourself — every cycle spends the user\'s background budget: when nothing needs you soon (the user is away, or it is outside their usual hours per the user rhythm below), ' +
+    'finish briefly and call set_next_wake to sleep until they are likely back; their activity ends the sleep, and your rules and due schedule still wake you meanwhile. ' +
     spaceKickoff() + ' ' +
     (cfg.escalateTo ? `For work that needs a stronger model, delegate to the agent "${cfg.escalateTo}". ` : '') +
     (cfg.notify === 'digest' ? 'Notification policy is digest: do not message the user per item; write what matters into your journal, a daily digest is sent for you. ' : '') +
     'You may use remember to record durable insights about the user (what they value, accept, or dismiss). When done, briefly say what you did and what you deferred.';
   const ephemeralHint =
-    (dyn.quietSince ? '\n\n(No new user messages since your last cycle — this is a heartbeat; maintenance, preparation or simply "nothing to do" are all fine answers.)' : '') +
+    (dyn.quietSince ? '\n\n(No new user messages or in-app activity since your last cycle — this is a heartbeat; maintenance, preparation or simply "nothing to do" are all fine answers, and so is set_next_wake.)' : '') +
+    (dyn.sleepNote || '') +
     (dyn.pending ? `\n\n(${dyn.pending} of your earlier actions are still waiting for the user's approval — do not re-request them.)` : '') +
     (dyn.extraKickoff || '') +
     (dyn.hint || '');
@@ -582,9 +617,11 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
     (await activityTailHint()) +
     (await recentSessionTitles(userId)) +
     (await folderHint(cfg.allowedFolders)) +
-    (await existingTodoHint(userId));
+    (await existingTodoHint(userId)) +
+    (await rhythmHint());
   const pending = await countPendingApprovals(userId).catch(() => 0);
-  const { message, ephemeralHint } = buildCycleMessages(cfg, { extraKickoff, hint, pending, quietSince });
+  const sleep = await getMuseSleep().catch(() => null);
+  const { message, ephemeralHint } = buildCycleMessages(cfg, { extraKickoff, hint, pending, quietSince, sleepNote: sleepNote(sleep, trigger) });
   const agentThinking = (await getAgent(MUSE_AGENT_SLUG).catch(() => null))?.thinkingLevel;
   const runId = uuidv4();
   await createRun({
@@ -693,9 +730,19 @@ async function tick(): Promise<void> {
     if (!cfg.modelId) { lastRunning = false; log('已启用但无可用模型(本地未选且云端无后台默认),跳过'); return; }
     // 播种/自愈 Muse 系统 agent 文件夹(幂等;首次创建时一次性迁移旧自定义 prompt)。
     await ensureMuseAgent(legacyMusePrompt()).catch((e: any) => log(`播种 muse agent 失败:${e?.message || e}`));
+    const userId = museUserId();
+    // Muse 自己定的休眠(set_next_wake)只挡心跳:规则命中、到期日程照常起。
+    // 睡着时**每个巡检**都看用户回没回来(一次查询 + 读至多三天的活动文件):回来了就清掉休眠,心跳照常判。
+    // 放在运行时段闸与让位闸**之前**:用户正聊着天(让位)或在时段外时也要清,否则状态一直挂着「休眠中」、
+    // 之后的规则周期还会收到过时的「休眠照旧」提示(Codex 09-24 两轮)。
+    let sleep = await getMuseSleep().catch(() => null);
+    if (sleep && (await userActiveSince(userId, sleep.setAt, sleep.minuteLines))) {
+      log(`用户回来了,提前结束休眠(原定到 ${localTime(new Date(sleep.until))})`);
+      await setMuseSleep(null).catch((e: any) => log(`清休眠失败:${e?.message || e}`));
+      sleep = null;
+    }
     if (!isWithinActiveHours(cfg, nowHour())) { log(`不在运行时段(当前 ${nowHour()} 时),跳过`); return; }
 
-    const userId = museUserId();
     await sendDailyDigestIfDue(cfg, userId);
     // 后台让位：用户有进行中的 run → 不与之抢模型账号/速率，本轮跳过（下次巡检再来）。
     if (await anyUserRunActive()) { lastRunning = false; log('用户有进行中的 run，本轮让位'); return; }
@@ -705,11 +752,11 @@ async function tick(): Promise<void> {
     // 安静周期也要在 Journal 里留一笔,而不是静默消失。
     let dueMuse: ScheduleEntry[] = [];
     try { dueMuse = await museDueSchedules(); } catch (e: any) { log(`读自己的日程失败:${e?.message || e}`); }
-    const heartbeatDue = cfg.heartbeatMinutes > 0 && Date.now() - lastCycleAt >= cfg.heartbeatMinutes * 60_000;
+    const heartbeatDue = heartbeatDecision({ heartbeatMinutes: cfg.heartbeatMinutes, lastCycleAt, now: Date.now(), sleep }) === 'due';
     if (!museFired.length && !dueMuse.length && !heartbeatDue) { lastRunning = false; return; }
     if (museFired.length) log(`盯任务命中 ${museFired.length} 条:${museFired.map((t) => t.id).join(', ')}`);
     if (dueMuse.length) log(`自己的日程到期 ${dueMuse.length} 条:${dueMuse.map((e) => e.name).join(', ')}`);
-    const quietSince = !(await userActivitySince(userId, lastCycleAt));
+    const quietSince = !(await userActiveSince(userId, lastCycleAt));
     const trigger = museFired.length ? `rule:${museFired.map((t) => t.id).join('+')}`
       : dueMuse.length ? `schedule:${dueMuse.map((e) => e.name).join('+').slice(0, 60)}` : 'heartbeat';
 
@@ -810,6 +857,9 @@ export interface MuseStatus {
   /** 自建 Space:插件目录 + 内容戳(桌面 agentSpaceSync 按戳变化重载 agent-muse 插件;0=目录空/不存在)。 */
   spaceDir: string;
   spaceStamp: number;
+  /** Muse 自己定的休眠(set_next_wake):心跳暂停到这个时刻(epoch ms);null = 醒着。 */
+  sleepUntil: number | null;
+  sleepReason: string | null;
 }
 
 export async function museStatus(): Promise<MuseStatus> {
@@ -826,6 +876,7 @@ export async function museStatus(): Promise<MuseStatus> {
   let pendingApprovals = 0;
   try { pendingApprovals = await countPendingApprovals(museUserId()); } catch { /* 表未建/DB 不可用 */ }
   if (!spaceStamp) spaceStamp = await spaceDirStamp().catch(() => 0); // 引擎刚起还没跑过周期 → 按磁盘现状算一次
+  const sleep = await getMuseSleep().catch(() => null);
   return {
     enabled: !!cfg?.enabled,
     hasModel: !!cfg?.modelId,
@@ -841,6 +892,8 @@ export async function museStatus(): Promise<MuseStatus> {
     libraryDir: museLibraryDir(),
     spaceDir: museSpaceDir(),
     spaceStamp,
+    sleepUntil: sleep?.until ?? null,
+    sleepReason: sleep?.reason ?? null,
   };
 }
 

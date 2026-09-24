@@ -10,6 +10,7 @@ import { applyTheme } from './theme/loader'
 import type { AuthAccountInfo } from './types'
 
 setLocaleGlobal('zh')
+const withBg = new URLSearchParams(location.search).has('bg')
 applyTheme('lovable', 'cream', 'paper', 'light')
 const accounts: AuthAccountInfo[] = [
   { id: 'alice', cloudUrl: 'https://example.test', username: 'Alice', active: true },
@@ -25,7 +26,13 @@ const bridge: Partial<NonNullable<Window['tangu']>> = {
   forsionLogin: async () => { throw new Error('Test fixture: open the sign-in page to choose another account') },
   forsionLogout: async () => { const i = accounts.findIndex((a) => a.id === active); if (i >= 0) accounts.splice(i, 1); active = ''; emit(); return { ok: true } },
   onAuthChanged: (cb) => { listeners.add(cb); return () => { listeners.delete(cb) } },
-  accountQuota: async () => ({ status: 200, json: { dailyPercent: 10, weeklyPercent: 25, dailyLimit: 100, weeklyLimit: 500 } }),
+  accountQuota: async () => ({ status: 200, json: {
+    dailyPercent: 10, weeklyPercent: 25, dailyLimit: 100, weeklyLimit: 500, weeklyResetAt: '2026-09-28',
+    // ?bg:服务端带回后台额度(Muse / 自动化那一桶),菜单「额度剩余」下多一行「后台智能体」
+    ...(withBg ? { background: { modelId: 'm-cheap', sharePercent: 15, dailyLimit: 15, dailyRemaining: 9, weeklyLimit: 75, weeklyRemaining: 60 } } : {}),
+  } }),
+  // 后台那一行只在有本地引擎(Muse 能跑)的宿主上出现
+  ...(withBg ? { backendStatus: (async () => ({ state: 'running' })) as unknown as NonNullable<Window['tangu']>['backendStatus'] } : {}),
 }
 window.tangu = bridge as NonNullable<Window['tangu']>
 

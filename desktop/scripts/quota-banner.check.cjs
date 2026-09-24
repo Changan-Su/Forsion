@@ -86,6 +86,41 @@ async function main() {
     console.log(`SHOT ${out}`)
   }
 
+  // ── 后台额度(09-24):主额度健康、后台桶用尽 → 同一个提醒位换成后台那条;动作 = 从主额度转入(二次确认)+ 设置
+  await page.setViewportSize({ width: 1000, height: 720 })
+  // 上面用重置卡留下的仪式弹层还开着(遮罩吃点击):先收掉
+  if (await page.locator('.reset-ceremony-continue').count()) await page.locator('.reset-ceremony-continue').click()
+  const bgExhausted = { modelId: 'm-cheap', dailyLimit: 15, dailyUsed: 15, dailyRemaining: 0, weeklyLimit: 15, weeklyUsed: 15, weeklyRemaining: 0, autoMain: false }
+  await page.evaluate((bg) => window.__quotaHarness.setQuota({ dailyRemaining: 70, weeklyRemaining: 70, resetCards: 2, background: bg }), bgExhausted)
+  // 上一步的主额度提示条还在:等换成后台那条再读,别在重渲前读到旧的
+  await page.locator('.t2-quota-advisory[data-bucket="background"]').waitFor()
+  check('后台桶用尽占用同一个提醒位', (await banner.getAttribute('data-bucket')) === 'background' && (await banner.textContent()).includes('后台智能体今日额度已用尽,Muse 与自动化已暂停'))
+  check('始终只有一条提示条', await page.locator('.t2-quota-advisory').count() === 1)
+  check('后台那条不挂重置卡', !(await banner.textContent()).includes('重置卡'))
+  check('后台那条有转入与设置', await banner.getByText('从主额度转入 10%', { exact: true }).isVisible() && await banner.getByText('后台额度设置', { exact: true }).isVisible())
+  if (process.argv.some((arg) => arg.startsWith('--shot'))) {
+    const out = path.join(os.tmpdir(), 'forsion-quota-banner')
+    await page.screenshot({ path: path.join(out, 'quota-bg-light.png') })
+    await page.setViewportSize({ width: 420, height: 720 })
+    await page.screenshot({ path: path.join(out, 'quota-bg-narrow.png') })
+    const narrow = await banner.evaluate((el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, viewport: innerWidth } })
+    check('后台那条窄栏不横向溢出', narrow.left >= 0 && narrow.right <= narrow.viewport, narrow)
+    await page.setViewportSize({ width: 1000, height: 720 })
+  }
+  await banner.getByText('从主额度转入 10%', { exact: true }).click()
+  check('转入需要二次确认', await banner.getByText('再次点击确认', { exact: true }).isVisible())
+  await banner.getByText('再次点击确认', { exact: true }).click()
+  await banner.waitFor({ state: 'detached' })
+  check('转入后后台桶有余量,提示消失', await banner.count() === 0)
+
+  if (process.argv.some((arg) => arg.startsWith('--shot'))) {
+    const dark = new URL(base); dark.searchParams.set('dark', '1')
+    await page.goto(dark.toString())
+    await page.evaluate((bg) => window.__quotaHarness.setQuota({ dailyRemaining: 70, weeklyRemaining: 70, background: bg }), bgExhausted)
+    await page.locator('.t2-quota-advisory[data-bucket="background"]').waitFor()
+    await page.screenshot({ path: path.join(os.tmpdir(), 'forsion-quota-banner', 'quota-bg-dark.png') })
+  }
+
   await browser.close()
   console.log(`${checks}/${checks} passed`)
 }

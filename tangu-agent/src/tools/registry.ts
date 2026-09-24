@@ -34,6 +34,7 @@ import { discussProvider } from './builtin/discuss.js';
 import { dispatchProvider } from './builtin/startProjectSession.js';
 import { displayFileProvider } from './builtin/displayTools.js';
 import { teamSayProvider } from './builtin/teamSay.js';
+import { museWakeProvider } from './builtin/museWake.js';
 import { deskPresentProvider } from './builtin/deskPresent.js';
 import { imageGenProvider } from './builtin/imageTools.js';
 import { inboxSendProvider } from './builtin/inboxSend.js';
@@ -180,6 +181,7 @@ registerToolProvider(viewVideoProvider); // host-only:view_video 用本机 ffmpe
 registerToolProvider(uiCommandsProvider); // GUI 限定(ctx.client + 客户端上报目录双闸,CLI/TUI/自动化不注册):读写界面设置 + 派发渲染端命令(append 末尾,保前缀缓存)
 registerToolProvider(teamSayProvider); // 团队成员随时向主聊天发言(append 末尾,保前缀缓存)
 registerToolProvider(browserTabsProvider); // host-only:browser_tabs 看/读用户自己 Chrome 里开着的标签(远程调试接管;append 末尾,保前缀缓存)
+registerToolProvider(museWakeProvider); // 仅 Muse 周期(ctx.muse,子代理除外):set_next_wake 按作息跳过心跳省额度(append 末尾;普通 run 不可见,快照不变)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */
