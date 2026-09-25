@@ -2,7 +2,7 @@ import { registerMessages } from '../i18n'
 registerMessages({
   'projectProfile.kind': { zh: '项目', en: 'Project' },
   'projectProfile.navigation': { zh: '项目详情', en: 'Project details' },
-  'projectProfile.tab.agents': { zh: 'Agents', en: 'Agents' },
+  'projectProfile.tab.agents': { zh: 'Agent', en: 'Agents' },
   'projectProfile.tab.settings': { zh: '配置', en: 'Settings' },
   'projectProfile.tab.git': { zh: 'Git', en: 'Git' },
   'projectProfile.open': { zh: '在项目页中打开', en: 'Open project page' },
@@ -31,7 +31,7 @@ registerMessages({
   'projectProfile.noCandidates': { zh: '没有可选的 Agent', en: 'No agents to choose from' },
   'projectProfile.closePicker': { zh: '关闭选择', en: 'Close picker' },
   'projectProfile.teams': { zh: '团队', en: 'Teams' },
-  'projectProfile.agents': { zh: 'Agents', en: 'Agents' },
+  'projectProfile.agents': { zh: 'Agent', en: 'Agents' },
   'projectProfile.inspect': { zh: '查看', en: 'Inspect' },
   'projectProfile.back': { zh: '返回项目', en: 'Back to project' },
   'projectProfile.instructions': { zh: '项目指令', en: 'Project instructions' },

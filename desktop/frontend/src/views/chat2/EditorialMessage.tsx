@@ -112,11 +112,11 @@ registerMessages({
   'rewind.both': { zh: '代码 + 对话都回退', en: 'Both code and conversation' },
   // 如实写覆盖范围:快照只挂在内置写文件工具上,终端命令与插件/MCP 工具的写入拿不到 pre-image。
   'rewind.scopeNote': {
-    zh: '只覆盖 agent 经内置写文件工具(write/edit/multi_edit/apply_patch)改过的文件;终端命令与插件/MCP 工具改的不在内。',
+    zh: '只覆盖 Agent 经内置写文件工具(write/edit/multi_edit/apply_patch)改过的文件;终端命令与插件/MCP 工具改的不在内。',
     en: 'Covers only files changed through the built-in file-writing tools (write/edit/multi_edit/apply_patch); changes made by shell commands or plugin/MCP tools are not included.',
   },
   'rewind.skippedNote': { zh: '另有 {n} 个文件当时太大未存快照,恢复不了。', en: '{n} file(s) were too large to snapshot and cannot be restored.' },
-  'rewind.keepNote': { zh: 'agent 新建、之后又被改动过的文件会原样保留,不会被删。', en: 'Files the agent created that changed afterwards are kept as-is, never deleted.' },
+  'rewind.keepNote': { zh: 'Agent 新建、之后又被改动过的文件会原样保留,不会被删。', en: 'Files the agent created that changed afterwards are kept as-is, never deleted.' },
 })
 
 /** 该不该给「重新登录」按钮:句式命中 **且** 当前模型确实来自订阅直连(模型 id 前缀就是 provider id,

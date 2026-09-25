@@ -116,7 +116,7 @@ export function buildStudioDraft(brief: StudioBrief): string {
     return lines.join('\n')
   }
   const capabilities: Record<StudioCapability, string> = zh
-    ? { chat: 'AI 对话', agent: '智能体工作流', images: '图像生成', account: 'Forsion 账号' }
+    ? { chat: 'AI 对话', agent: 'Agent 工作流', images: '图像生成', account: 'Forsion 账号' }
     : { chat: 'AI chat', agent: 'Agent workflows', images: 'Image generation', account: 'Forsion account' }
   const selected = STUDIO_CAPABILITIES.filter(id => brief.capabilities.includes(id))
   const lines = [

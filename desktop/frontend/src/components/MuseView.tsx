@@ -15,6 +15,9 @@ import { useApp } from '../stores/appStore'
 import { openNewChat } from '../sessionNav'
 import type { AgentScheduleEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, PendingApprovalInfo, SessionRecord, TanguDesktopConfig } from '../types'
 import { registerMessages, useI18n } from '../i18n'
+import { formatDateTime } from '../format/time'
+import { fmtCalDateL } from '@amadeus/lib/calDateFmt'
+import { parseCalDate } from '@amadeus-shared/db/calDate'
 
 registerMessages({
   'special.muse.sleeping': { zh: '休眠至 {time}', en: 'Sleeping until {time}' },
@@ -224,7 +227,7 @@ export const MuseView: React.FC<{
             <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
               <b>{e.name}</b>
               <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
-                {e.date.replace('T', ' ')}{e.repeat ? ` · every ${e.repeat}` : ''}{e.lastRun ? ` · ${t('special.muse.trigFired', { t: new Date(e.lastRun).toLocaleString() })}` : ''}
+                {fmtCalDateL(parseCalDate(e.date)) || e.date}{e.repeat ? ` · ${t('automation.schedule.every', { ivl: e.repeat })}` : ''}{e.lastRun ? ` · ${t('special.muse.trigFired', { t: formatDateTime(e.lastRun) })}` : ''}
                 {e.description && <div>{e.description}</div>}
               </div>
             </span>
@@ -251,7 +254,7 @@ export const MuseView: React.FC<{
             <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
               <b>{tg.desc}</b>
               <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
-                {condText(tg)}{tg.lastFiredAt ? ` · ${t('special.muse.trigFired', { t: new Date(tg.lastFiredAt).toLocaleString() })}` : ''}
+                {condText(tg)}{tg.lastFiredAt ? ` · ${t('special.muse.trigFired', { t: formatDateTime(tg.lastFiredAt) })}` : ''}
               </div>
             </span>
             <button className="icon-btn" title={t('special.muse.watchDelete')} onClick={() => void removeTrigger(tg.id)}><Trash2 size={13} /></button>

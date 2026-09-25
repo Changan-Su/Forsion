@@ -161,7 +161,7 @@ Click "Amadeus" on the ribbon and the whole workspace becomes the notes layout. 
 | Main area | Notes, whiteboards and dashboards live here, opened as tabs, splittable | Always on |
 | Right sidebar | "Chat panel", "Outline", "Backlinks", "Graph" | The floating panel button at the top right (tooltip "Toggle right panel"); collapsed the first time you arrive |
 | Bottom panel | Empty in Amadeus — you drag a view into it | `⌘/Ctrl + J` |
-| Status bar | Current Space, cloud sync, backlink count, word count | The master switch under Settings → Appearance → Status Bar |
+| Status bar | Current Space, cloud sync, backlink count, word count | The master switch under Settings → Appearance → Status bar |
 
 > [!note]
 > Everything note-related needs an open vault first. Until you open one, panels like search and tags just read "Open a vault first." — that is not an error.
@@ -237,8 +237,8 @@ The main area is a browser-style tab strip; notes, whiteboards and dashboards al
 - Close: the × on a tab ("Close"). Right-clicking a tab also offers "Move to new window".
 - Back and forward: the two arrows at the left of the strip, or `⌘/Ctrl + ⇧ + [` and `⌘/Ctrl + ⇧ + ]`; `⌘/Ctrl + ⌥/Alt + ←` and `⌘/Ctrl + ⌥/Alt + →` work too. History is per tab, so switching tabs switches which history you are walking.
 - Splitting: drop a tab onto another tab strip to merge, or onto the body of a pane to split. The main area takes all four directions; sidebars only top and bottom. A drop that has nowhere to land shows no target and the tab snaps back.
-- The launcher (page heading "New Tab"): "Recent" at the top, then a group of native Forsion entry points, then one group per plugin. Common cards are "Home", "New Chat", "New Note", "Today", "New whiteboard", "New dashboard", "Calendar" and "To-Do List". Most cards can be dragged straight onto a tab strip or sidebar to open there; the create-something cards deliberately cannot.
-- Closing the last tab does not leave an empty window — you get a placeholder page with a "New Tab" button on it.
+- The launcher (page heading "New tab"): "Recent" at the top, then a group of native Forsion entry points, then one group per plugin. Common cards are "Home", "New session", "New note", "Today", "New whiteboard", "New dashboard", "Calendar" and "To-do list". Most cards can be dragged straight onto a tab strip or sidebar to open there; the create-something cards deliberately cannot.
+- Closing the last tab does not leave an empty window — you get a placeholder page with a "New tab" button on it.
 - Layout gone messy: the first floating button at the top right is "Restore default layout for this Space", called "Reset layout" in the palette.
 - Layout you want to keep: palette → "Save current layout as a Space", give it a name, and it becomes a new Space on the ribbon (desktop app).
 
@@ -282,9 +282,9 @@ A tab can be moved out into a window of its own, and tabs can be dragged between
 | Mini card | `⌘/Ctrl + ⇧ + M` (global), or palette → "Open mini card" | Chat only, no note views; if another app already owns that combination, the palette entry is the only way in |
 
 - UI zoom: `⌘/Ctrl + =`, `⌘/Ctrl + -`, `⌘/Ctrl + 0`, from 50% to 200% in 10% steps. It scales the whole interface, not just the text. Settings → Appearance also offers Small (80%), Standard (100%) and Large (120%) presets; the shortcuts (desktop app only) and palette commands still fine-tune or reset it.
-- Themes live under Settings → Appearance → Appearance, split into independent axes: "Design language" (Genesis, Genesis Glass, the included Soft theme, plus anything you drop into the themes folder), "Color scheme" ("Accent" and "Background" are two separate axes, each offering Classic, Coral, Teal, Lavender, Clear blue, Custom), "Light / Dark" (Light, Dark, Follow system), "Shadow" (Raised, Flat) and "Frosted glass" (On, Off (low-power mode)).
+- Themes live under Settings → Appearance → Appearance, split into independent axes: "Design language" (Genesis, Genesis Glass, the included Soft theme, plus anything you drop into the themes folder), "Color scheme" ("Accent" and "Background" are two separate axes, each offering Classic, Coral, Teal, Lavender, Clear blue, Custom), "Light / dark" (Light, Dark, Follow system), "Shadow" (Raised, Flat) and "Frosted glass" (On, Off (low-power mode)).
 - Light and dark also flip in one click: the moon icon at the bottom of the ribbon, or palette → "Toggle light/dark mode".
-- The status bar is the last line of the window: current Space (click = open the palette), cloud-sync state (click = sync now), backlink count, word count. The master switch and the per-item visibility list are under Settings → Appearance → Status Bar, and the order is draggable.
+- The status bar is the last line of the window: current Space (click = open the palette), cloud-sync state (click = sync now), backlink count, word count. The master switch and the per-item visibility list are under Settings → Appearance → Status bar, and the order is draggable.
 
 > [!warning]
 > Some design languages lock the colour scheme (Genesis Glass · 「琉璃」 is fixed to the system). The moon icon then does nothing and its tooltip changes to "This theme follows the system appearance" — not a fault, that theme simply does not allow the switch.
@@ -851,7 +851,7 @@ Find in page: `⌘/Ctrl + F`, or the command palette → "Find in page". The bar
 Word count:
 
 - Open a note and the right end of the status bar at the bottom of the window shows "{n} chars" live. That is a **character count** (length with all whitespace removed), not a word count.
-- It can be turned off on its own under Settings → Appearance → Status Bar, where the item is called "Word count".
+- It can be turned off on its own under Settings → Appearance → Status bar, where the item is called "Word count".
 - If you want words: command palette → "Count words", which shows a notification reading "About {chars} characters · {words} words on this page". Words are split on whitespace, so the number is of limited use in Chinese text. The command comes from a built-in plugin and disappears if you disable that plugin on the plugins page.
 - The status bar belongs to the desktop shell; mobile does not have it.
 
@@ -1831,13 +1831,13 @@ The "Views" section embeds app views as cards; the dashboard draws each title as
 | "Outline" | Yes | — |
 | "Search" | No | — |
 | "Tags" | No | — |
-| "What's New" | No | — |
+| "What's new" | No | — |
 | "Messages" | No | Needs a local backend |
-| "To-Do List" | No | Needs the Calendar builtin plugin on |
+| "To-do list" | No | Needs the Calendar builtin plugin on |
 | "Calendar" | No | Needs the Calendar builtin plugin on |
 | "Automations" | No | Needs an Automation Space |
-| "Activity Log" | No | Developer view |
-| "Active Window" | No | Developer view |
+| "Activity log" | No | Developer view |
+| "Active window" | No | Developer view |
 
 - Views that need a file open a picker first, titled: Pick a file for the "{name}" card…
 - If a view is currently unavailable (its plugin is switched off, say), the card reads View "{type}" is unavailable instead of going blank.
@@ -1971,7 +1971,7 @@ Everything about time in Amadeus — the to-do list, the calendar, reminders —
 
 The time views do not scan your vault looking for tasks; they honour this one explicit mark. Write an `@` time mark on any line of a note and that line joins the time views, and the line itself decides where it goes:
 
-- A line with a Markdown checkbox (`- [ ] …`) → the "To-Do List".
+- A line with a Markdown checkbox (`- [ ] …`) → the "To-do list".
 - A line without a checkbox → the calendar, as an event.
 - Any line carrying `@remind:` → a notification at that moment; it stacks on top of either of the above.
 
@@ -2003,7 +2003,7 @@ The rest of the rules:
 - Every entry remembers which note it came from and the nearest heading above it; one click takes you back there.
 - Marks in note text are read by the desktop app — on web and mobile there are no note-driven to-dos, events or reminders.
 
-If you are unsure whether a line was picked up, look where it should have gone: the "To-Do List" for lines with a checkbox, the calendar named "Notes" for lines without. Marks are not recomputed on every keystroke — they are rescanned when you switch views, switch vaults, open another note, or files are added or removed, and refresh on their own within a minute anyway.
+If you are unsure whether a line was picked up, look where it should have gone: the "To-do list" for lines with a checkbox, the calendar named "Notes" for lines without. Marks are not recomputed on every keystroke — they are rescanned when you switch views, switch vaults, open another note, or files are added or removed, and refresh on their own within a minute anyway.
 
 ### Type @ to write a date: the suggestion panel
 
@@ -2035,7 +2035,7 @@ The panel is available anywhere in the note editor and is not offered on read-on
 
 ### The to-do list
 
-The "To-Do List" collects everything unfinished across the vault into one list. Two ways in: the left panel of the Calendar Space, or the "To-Do List" card on the new tab page behind the `+` in the tab bar (the card can be dragged into a sidebar or a split). There is no command palette entry for it.
+The "To-do list" collects everything unfinished across the vault into one list. Two ways in: the left panel of the Calendar Space, or the "To-do list" card on the new tab page behind the `+` in the tab bar (the card can be dragged into a sidebar or a split). There is no command palette entry for it.
 
 It draws from exactly two sources: rows of databases that have joined the calendar and have a completion checkbox column mapped, and checkbox lines in note text that carry an `@` mark.
 
@@ -2112,7 +2112,7 @@ A daily note is an ordinary Markdown note: link out of it with `[[wikilinks]]`, 
 
 Click the "Calendar" icon in the ribbon to enter the Calendar Space, or press `⌘/Ctrl + 5` (the digit is the icon's position in the ribbon; on a default install it is the fifth). There is no calendar entry in the command palette. The Calendar Space is a desktop feature.
 
-Inside are three panels: the calendar in the main area, the "To-Do List" on the left, and a mini month calendar plus "Calendar Settings" on the right. That is the starting layout; once you rearrange the panels yourself, your arrangement is what comes back.
+Inside are three panels: the calendar in the main area, the "To-do list" on the left, and a mini month calendar plus "Calendar settings" on the right. That is the starting layout; once you rearrange the panels yourself, your arrangement is what comes back.
 
 | View | Key | What it looks like |
 |---|---|---|
@@ -2129,7 +2129,7 @@ Inside are three panels: the calendar in the main area, the "To-Do List" on the 
 - A month cell shows at most 3 events; click the "{n} more" chip at the bottom of the cell for that day's full list.
 - Mini month calendar on the right: click a day and the main area scrolls smoothly to it (only while the main area is showing the calendar). It also paints a soft band over the range currently visible in the main calendar and follows it as you scroll.
 - The whole calendar can be switched off: `⌘/Ctrl + ,` → "Plugins" → "Built-in plugins" → the checkbox on the "Calendar" card. That removes the ribbon icon and the three views; your panel arrangement is still there when you switch it back on.
-- The calendar opens elsewhere too: the "Calendar" card on the new tab page, and calendar and to-do cards on a dashboard. Only one calendar instance can exist at a time; the "To-Do List" can be opened several times.
+- The calendar opens elsewhere too: the "Calendar" card on the new tab page, and calendar and to-do cards on a dashboard. Only one calendar instance can exist at a time; the "To-do list" can be opened several times.
 
 ### Events: creating, dragging and the peek card
 
@@ -2160,7 +2160,7 @@ Dragging edits the data directly:
 
 ### What feeds the calendar, and its settings
 
-The calendar is not one table but several sources stacked together. The "Calendars" section of "Calendar Settings" in the right panel lists them all, each row with a type icon.
+The calendar is not one table but several sources stacked together. The "Calendars" section of "Calendar settings" in the right panel lists them all, each row with a type icon.
 
 | Source | Where it comes from | Editable? |
 |---|---|---|
@@ -2906,7 +2906,7 @@ The "Built-in plugins" section at the top of the plugin page holds six items tha
 Press `⌘/Ctrl + ,` to open settings, then "Extensions" → "Plugins" in the left nav. This page is desktop only. It has two sub-tabs: "Forsion plugins" for interface plugins, "Tangu engine plugins" for the half that gives the AI its tools.
 
 - Check or uncheck the box on a card to enable or disable it. It takes effect instantly, with no restart.
-- Click a card for its detail page: version, a "Built-in" or "External" badge, description, "Settings", one button per entry under "Commands", "Bundled content", "Companion app", the README, and an expandable "What's New". Leave with "Back to list".
+- Click a card for its detail page: version, a "Built-in" or "External" badge, description, "Settings", one button per entry under "Commands", "Bundled content", "Companion app", the README, and an expandable "What's new". Leave with "Back to list".
 - "Uninstall" appears only for external plugins. The confirmation spells it out: the folder is deleted whole, bundled engine plugins and Spaces go with it, seeded agents are kept.
 - Every enabled plugin automatically gets one extra setting, "Working folder" — where it reads and writes inside your vault. Leave it empty to fall back to the default, the plugin's name.
 - A plugin with settings of its own also gets a direct entry in the "Extensions" group of the left nav.
@@ -2962,7 +2962,7 @@ The plugin folder is `~/.forsion/plugins/`, one folder per plugin, and market in
 | A panel reads "Plugin view failed to load (see console)" | Toggle the plugin off and on again, then check "Updates" in the market for a newer version |
 | You switched interface language but the plugin's `/` entries and command names are still in the old one | Toggle that plugin off and on, or restart the app. Those names are fixed at the moment the plugin is enabled and do not follow a mid-session language switch |
 | One plugin sends too many notifications | Settings → "Appearance" → "Notifications" → "Plugin notifications", and switch off its row |
-| An unwanted item in the status bar | Settings → "Appearance" → "Status Bar", uncheck it; drag to reorder |
+| An unwanted item in the status bar | Settings → "Appearance" → "Status bar", uncheck it; drag to reorder |
 | A message reading "… bundled engine plugin(s) failed to toggle along (engine offline?)" | Wait for the engine to come back, then flip that plugin's switch once more |
 | You uninstalled an engine plugin but its AI tools are still there | Restart the backend; the message says so too |
 | A rule you turned off in Automation comes back after a plugin reload | That rule was seeded by the plugin. To stop it for good, disable the plugin itself |
@@ -3203,7 +3203,7 @@ The left-hand nav has five groups: "Workspace", "Appearance", "AI", "Extensions"
 | "Sync" | Workspace | "Online sync" and "Vault remote sync" |
 | "Appearance" | Appearance | Design language, colour scheme, light/dark, fonts |
 | "Shortcuts" | Appearance | Rebind any command |
-| "Status Bar" | Appearance | What the bottom bar shows |
+| "Status bar" | Appearance | What the bottom bar shows |
 | "Advanced" | System | The "Restore default layout" button |
 
 - "Notes" and "Sync" appear only in the desktop app; the web client and device pages do not have them.
@@ -3272,14 +3272,14 @@ Two buttons sit at the top right of the panel: "Open themes folder", where third
 |---|---|---|
 | "Accent" | Six swatches | "Classic" |
 | "Background" | Six swatches | Follows "Accent" |
-| "Light / Dark" | "Light" / "Dark" / "Follow system" | "Light" |
+| "Light / dark" | "Light" / "Dark" / "Follow system" | "Light" |
 | "Shadow" | "Raised" / "Flat" | "Flat" |
 | "Frosted glass" | "On" / "Off (low-power mode)" | "On" |
 | "Smooth caret" | On / off | Off |
 
 The command palette has five switches that skip the settings window: "Toggle light/dark mode", "Change accent color", "Switch theme style", "Switch language", "Toggle smooth caret". Note that "Switch theme style" cycles the design language, not the interface language; the interface language is "Switch language", and the palette is its only entry point.
 
-> [!warning] While "Genesis Glass · 琉璃" is active, light/dark is locked to the system: the "Light / Dark" buttons are greyed out, the moon icon on the ribbon does nothing, and the hint reads "This theme follows the system appearance". Switch to another design language to control it by hand.
+> [!warning] While "Genesis Glass · 琉璃" is active, light/dark is locked to the system: the "Light / dark" buttons are greyed out, the moon icon on the ribbon does nothing, and the hint reads "This theme follows the system appearance". Switch to another design language to control it by hand.
 
 ### Fonts and interface zoom
 
@@ -3343,7 +3343,7 @@ Sidebars and panels have no settings page of their own; they are driven by comma
 - The blocks above the notes tree — "Pinned", "Cloud sync", "Shared with me", "Starred", "Collections" — can be reordered by dragging their headers. Mouse only: touch and pen will not start the drag, and only the header is a handle — dragging from inside a block drags a note instead.
 - "Pinned", "Starred" and "Collections" are stored on this device, per vault. Rename or move the vault folder and those blocks come back empty.
 
-The status bar is at Settings → "Appearance" → "Status Bar": the "Display" panel has one master switch, "Show status bar" (on by default), and the "Status bar" panel below is a checkable, drag-to-reorder list holding "Current Space", "Running sessions", "Sync status", "Backlinks", "Word count" and "Inbox unread". Turn the master switch off and the whole bar goes away, giving the height back to the workspace.
+The status bar is at Settings → "Appearance" → "Status bar": the "Display" panel has one master switch, "Show status bar" (on by default), and the "Status bar" panel below is a checkable, drag-to-reorder list holding "Current Space", "Running sessions", "Sync status", "Backlinks", "Word count" and "Inbox unread". Turn the master switch off and the whole bar goes away, giving the height back to the workspace.
 
 > [!warning] "Backlinks" and "Word count" show up only while the active tab is a note editor. Switch to a whiteboard, dashboard, PDF or database and they disappear — that is by design, not a fault.
 
@@ -3387,7 +3387,7 @@ Almost every "the feature is gone" report lands in one of these five. Run throug
 | The note commands are not in the command palette | The whole set is registered only inside the Amadeus Space and withdrawn when you leave | Switch to Amadeus first, then press `⌘/Ctrl + K` |
 | A command does nothing and shows "Open a vault first — the tutorial is created inside it" | No vault is open | Click "Open vault" at the bottom of the sidebar and pick a folder on disk |
 | To-dos, `@` events and `@remind:` reminders do not exist at all | They are built from the desktop vault index | Use the desktop app; the web and mobile shells carry the notes themselves only |
-| No "Calendar" icon in the ribbon, and "To-Do List" will not open | The built-in plugin is switched off | Settings (`⌘/Ctrl + ,`) → "Plugins" → "Built-in plugins" → tick "Calendar"; the ribbon icon comes back on the next launch |
+| No "Calendar" icon in the ribbon, and "To-do list" will not open | The built-in plugin is switched off | Settings (`⌘/Ctrl + ,`) → "Plugins" → "Built-in plugins" → tick "Calendar"; the ribbon icon comes back on the next launch |
 | On a second machine, Starred, Pinned and Collections are all empty | All three are stored on this device only and do not travel with the files | Mark them again on the new machine |
 
 > [!note]

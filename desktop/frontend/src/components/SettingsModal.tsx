@@ -35,6 +35,7 @@ import { applyUiFonts, readFont, writeFont, type FontSlot } from '../uiFont'
 import { getUiZoom, setUiZoom } from '../uiZoom'
 import { listFonts, getFont } from '../fontPresets'
 import { registerMessages, useI18n } from '../i18n'
+import { formatDateTime } from '../format/time'
 import { LocaleToggle } from './LocaleToggle'
 import { BrandLogo } from './BrandLogo'
 import { ThemePreview } from './ThemePreview'
@@ -1768,8 +1769,8 @@ export const SettingsModal: React.FC<{
                           <span className="hint">
                             {t('settings.forsion.lastSynced', {
                               time: stored.forsionLastSyncedAt
-                                ? new Date(stored.forsionLastSyncedAt).toLocaleString()
-                                : (syncSt?.lastAt ? new Date(syncSt.lastAt).toLocaleString() : t('settings.forsion.never')),
+                                ? formatDateTime(stored.forsionLastSyncedAt)
+                                : (syncSt?.lastAt ? formatDateTime(syncSt.lastAt) : t('settings.forsion.never')),
                             })}
                           </span>
                         </div>
@@ -1928,7 +1929,7 @@ export const SettingsModal: React.FC<{
                                 {noteSync.pending > 0 ? ` · ${t('settings.notes.cloudSyncPending', { n: String(noteSync.pending) })}` : ''}
                                 {' · '}
                                 {t('settings.forsion.lastSynced', {
-                                  time: noteSync.lastSyncAt ? new Date(noteSync.lastSyncAt).toLocaleString() : t('settings.forsion.never'),
+                                  time: noteSync.lastSyncAt ? formatDateTime(noteSync.lastSyncAt) : t('settings.forsion.never'),
                                 })}
                               </span>
                             </div>

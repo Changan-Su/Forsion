@@ -18,7 +18,8 @@ import { useCodeStudio } from '../../stores/codeStudioStore'
 import { useI18n } from '../../i18n'
 import { CapabilityMenu, type CapabilityMenuItem } from '../../components/CapabilityMenu'
 import { useProducts } from './productsStore'
-import { groupProducts, kindRow, relativeTime, shortcutToast } from './productKinds'
+import { groupProducts, kindRow, shortcutToast } from './productKinds'
+import { formatListTime } from '../../format/time'
 import './artificialMessages'
 import './artificial.css'
 
@@ -138,7 +139,7 @@ export function ArtificialView() {
         </button>
         <div className="art-card-foot">
           <div className="art-card-meta">
-            <span>{relativeTime(p.updatedAt, now, locale)}</span>
+            <span>{formatListTime(p.updatedAt, { now, locale })}</span>
             {p.published && <span className="art-badge" data-badge="published">{t('artificial.badge.published')}</span>}
             {p.kind === 'plugin' && p.devLoad && <span className="art-badge" data-badge="devload">{t('artificial.badge.devLoad')}</span>}
           </div>

@@ -18,6 +18,7 @@ import { useOtherVaultCalDbs } from '../stores/otherVaultCalStore'
 import { useIcsCalDbs } from '../stores/icsCalendarStore'
 import { useInbox, senderOf, parseUtc, type InboxMessage } from '../stores/inboxStore'
 import { registerMessages, useI18n } from '../i18n'
+import { formatMonthDay } from '../format/time'
 
 registerMessages({
   'dashcompact.untitled': { zh: '未命名', en: 'Untitled' },
@@ -124,7 +125,7 @@ export function CalendarDashboardCard({ size }: { size: DashboardCardSize }) {
           <div key={item.key} className="dash-compact-row dash-agenda-row">
             <i style={{ background: item.color }} />
             <span>{item.title || t('dashcompact.untitled')}</span>
-            <em>{item.start.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })}</em>
+            <em>{formatMonthDay(item.start)}</em>
           </div>
         ))}
         {!shown.length && <div className="dash-compact-empty"><CalendarDays size={16} />{t('dashcompact.agendaEmpty')}</div>}
@@ -137,7 +138,7 @@ export function CalendarDashboardCard({ size }: { size: DashboardCardSize }) {
 const inboxTime = (message: InboxMessage): string => {
   const date = parseUtc(message.created_at)
   if (!date) return ''
-  return date.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' })
+  return formatMonthDay(date)
 }
 
 export function InboxDashboardCard({ size }: { size: DashboardCardSize }) {

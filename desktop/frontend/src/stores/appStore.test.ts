@@ -3,6 +3,8 @@ import type { AgentRunEvent, AuthStatusInfo, SessionRecord, UiMessage } from '..
 import { DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, sessionWorkspaceKey } from '../types'
 import { useApp, recordToUi, withAmadeusWorkspace, type AppState } from './appStore'
 import { usePageStore } from '../amadeus/store/pageStore'
+import '../i18n.generated'
+import { translationValues } from '../i18n'
 
 // 助手消息身份还原:历史/重载的助手消息按「每条存的 agent_slug」显示真实作者,
 // 否则只能回退到「会话默认 agent」(就是 Christina 被显示成默认 Tangu Arioso 的 bug)。
@@ -79,6 +81,20 @@ describe('默认本地工作区分组', () => {
     expect(loadedDefault[0].sessionKeys).toEqual(['/new-default', '/old-default'])
     expect(sessionWorkspaceKey(legacyDefaultSession, loaded)).toBe('/new-default')
     expect(loaded.some((w) => w.key === '/old-default')).toBe(false)
+  })
+
+  it('U-36:en 改成句首大写后,旧 en 落盘名「Tangu Default Workspace」仍归入默认组', () => {
+    const legacyEn: SessionRecord = { ...legacyDefaultSession, id: 'legacy-en', project_path: '/old-en', project_name: 'Tangu Default Workspace' }
+    useApp.setState({ defaultWsDir: '/new-default', sessions: [legacyDefaultSession, legacyEn] })
+    const ws = useApp.getState().workspaces()
+    const def = ws.filter((w) => w.name === 'app.defaultWorkspace')
+    expect(def).toHaveLength(1)
+    expect(def[0].sessionKeys).toEqual(expect.arrayContaining(['/new-default', '/old-default', '/old-en']))
+    expect(sessionWorkspaceKey(legacyEn, ws)).toBe('/new-default')
+    expect(ws.some((w) => w.key === '/old-en')).toBe(false)
+    // 旧值登记在 translationValues 里,而不是散落在调用点
+    expect(translationValues('app.defaultWorkspace')).toEqual(expect.arrayContaining(['Tangu 默认工作区', 'Tangu default workspace', 'Tangu Default Workspace']))
+    expect(translationValues('app.cloudWorkspace')).toContain('Cloud Workspace')
   })
 })
 

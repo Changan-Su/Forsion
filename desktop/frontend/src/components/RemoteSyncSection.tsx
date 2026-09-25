@@ -8,6 +8,7 @@
 import React, { useEffect, useState } from 'react'
 import { Loader2, RefreshCw } from 'lucide-react'
 import { useI18n } from '../i18n'
+import { formatDateTime } from '../format/time'
 import type { RemoteSyncConfig, RemoteSyncProgress, RemoteSyncReport, RemoteSyncState } from '../types'
 
 export function RemoteSyncSection(): React.ReactElement | null {
@@ -392,7 +393,7 @@ export function RemoteSyncSection(): React.ReactElement | null {
         {report && !running && (
           <div className="hint">
             {t('settings.remotesync.lastResult', {
-              time: new Date(report.finishedAt).toLocaleString(),
+              time: formatDateTime(report.finishedAt),
               push: String(report.pushed),
               pull: String(report.pulled),
               del: String(report.deletedLocal + report.deletedRemote),

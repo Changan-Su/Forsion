@@ -11,7 +11,7 @@ import { translate } from '../../i18n'
 import './artificialMessages' // 片段注册(副作用);testSetup 已把语言钉成 zh
 import {
   KIND_ORDER, PRODUCT_KINDS, groupProducts, kindRow, productIdFromParams,
-  relativeParts, relativeTime, resolveKind, serveOutcome, shortcutToast, sortProducts,
+  resolveKind, serveOutcome, shortcutToast, sortProducts,
 } from './productKinds'
 
 const product = (p: Partial<ProductSummary> & { id: string }): ProductSummary => ({
@@ -129,23 +129,3 @@ describe('造物:排序与分组', () => {
   })
 })
 
-describe('造物:相对时间', () => {
-  const now = Date.UTC(2026, 8, 21, 12, 0, 0)
-  it('按最大合适单位取整,过去为负(= Intl 的口径)', () => {
-    expect(relativeParts(now - 30_000, now)).toEqual({ value: 0, unit: 'second' })
-    expect(relativeParts(now - 5 * 60_000, now)).toEqual({ value: -5, unit: 'minute' })
-    expect(relativeParts(now - 3 * 3_600_000, now)).toEqual({ value: -3, unit: 'hour' })
-    expect(relativeParts(now - 2 * 86_400_000, now)).toEqual({ value: -2, unit: 'day' })
-    expect(relativeParts(now - 40 * 86_400_000, now)).toEqual({ value: -1, unit: 'month' })
-    expect(relativeParts(now - 800 * 86_400_000, now)).toEqual({ value: -2, unit: 'year' })
-    // 时钟漂移 / 刚写入的文件可能落在未来:同样成立,不会掉进「0 秒」
-    expect(relativeParts(now + 5 * 60_000, now)).toEqual({ value: 5, unit: 'minute' })
-  })
-  it('措辞交给 Intl,两种界面语言都出得来(不自己拼文案)', () => {
-    const zh = relativeTime(now - 3 * 86_400_000, now, 'zh')
-    const en = relativeTime(now - 3 * 86_400_000, now, 'en')
-    expect(zh).toBeTruthy()
-    expect(en).toMatch(/3 days ago/)
-    expect(zh).not.toBe(en)
-  })
-})

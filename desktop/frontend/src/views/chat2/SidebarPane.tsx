@@ -30,11 +30,11 @@ registerMessages({
   'sidebar.archiveN': { zh: '归档 {n} 项', en: 'Archive {n}' },
   'sidebar.unarchiveN': { zh: '取消归档 {n} 项', en: 'Unarchive {n}' },
   'sidebar.deleteN': { zh: '删除 {n} 项', en: 'Delete {n}' },
-  'sidebar.deleteConfirmN': { zh: '删除选中的 {n} 个会话?不可撤销。', en: 'Delete {n} selected chats? This cannot be undone.' },
+  'sidebar.deleteConfirmN': { zh: '删除选中的 {n} 个会话？不可撤销。', en: 'Delete {n} selected chats? This cannot be undone.' },
   // Chat / Work 是产品词,中英同形;侧栏胶囊是唯一可见切换入口。
   'sidebar.mode.chat': { zh: 'Chat', en: 'Chat' },
   'sidebar.mode.work': { zh: 'Work', en: 'Work' },
-  'sidebar.mode.tip': { zh: 'Chat:轻聊天,只列聊天会话;Work:完整工具面,列出全部项目', en: 'Chat: light conversations, chat sessions only. Work: full toolset, all projects' },
+  'sidebar.mode.tip': { zh: 'Chat：轻聊天，只列聊天会话；Work：完整工具面，列出全部项目', en: 'Chat: light conversations, chat sessions only. Work: full toolset, all projects' },
   'sidebar.pin': { zh: 'Pin 到顶部', en: 'Pin to top' },
   'sidebar.unpin': { zh: '取消 Pin', en: 'Unpin' },
 })

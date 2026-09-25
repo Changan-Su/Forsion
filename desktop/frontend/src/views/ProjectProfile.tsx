@@ -11,7 +11,8 @@ import { AvatarStack } from '../components/AvatarStack'
 import { openSpecial } from './SpecialViews'
 import { openTerminal } from '../builtins'
 import { isProjectWorkspace, type ProjectWorkspace } from '../stores/projectSettings'
-import { projectExecutors, relativeTimeOf, shortenPath, type ProjectExecutor } from './projectProfileState'
+import { projectExecutors, shortenPath, type ProjectExecutor } from './projectProfileState'
+import { formatRelative } from '../format/time'
 import './projectProfileMessages'
 import './teamProfile.css'
 import './projectProfile.css'
@@ -262,7 +263,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               <button className="team-member-open" disabled={!canOpen} onClick={() => open(ex.key)} aria-label={`${t('projectProfile.inspect')} ${executorLabel(ex)}`}>
                 <span className="team-member-portrait">{executorPortrait(ex)}</span>
                 <strong><span>{executorLabel(ex)}</span>{ex.current && <em className="project-executor-tag">{t('projectProfile.current')}</em>}{isDefault(ex) && <em className="project-executor-tag" title={t('projectProfile.isDefault')}><Star size={10} /></em>}</strong>
-                <span className={`team-member-status ${ex.running ? 'working' : 'idle'}`}>{t(ex.running ? 'projectProfile.status.working' : ex.kind === 'party' ? 'projectProfile.party' : ex.kind === 'engine' ? 'projectProfile.engine' : 'projectProfile.status.idle')} · {t('projectProfile.sessions', { count: ex.sessions.length })}{ex.lastActive ? ` · ${t('projectProfile.lastActive', { time: relativeTimeOf(ex.lastActive, now, locale) })}` : ''}</span>
+                <span className={`team-member-status ${ex.running ? 'working' : 'idle'}`}>{t(ex.running ? 'projectProfile.status.working' : ex.kind === 'party' ? 'projectProfile.party' : ex.kind === 'engine' ? 'projectProfile.engine' : 'projectProfile.status.idle')} · {t('projectProfile.sessions', { count: ex.sessions.length })}{ex.lastActive ? ` · ${t('projectProfile.lastActive', { time: formatRelative(ex.lastActive, { now, locale }) })}` : ''}</span>
                 {canOpen && <ChevronRight size={14} className="team-member-chevron" />}
               </button>
               {(ex.kind === 'agent' || (ex.kind === 'team' && team)) && <div className="project-inline-actions">
@@ -302,7 +303,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
           </section>
           {ctx.plans.length > 0 && <section className="project-card" data-project-plans>
             <div className="project-card-head"><div><h3>{t('projectProfile.plans')}</h3><small>{t('projectProfile.plansHint', { dir: `${ctx.workspaceDirName}/plans` })}</small></div></div>
-            <div className="project-list">{ctx.plans.map((plan) => <button type="button" key={plan.path} className="project-row" title={plan.path} onClick={() => void window.tangu?.openHostPath?.(plan.path)}><strong>{plan.title || plan.name}</strong><small>{relativeTimeOf(plan.mtimeMs, now, locale)}</small></button>)}</div>
+            <div className="project-list">{ctx.plans.map((plan) => <button type="button" key={plan.path} className="project-row" title={plan.path} onClick={() => void window.tangu?.openHostPath?.(plan.path)}><strong>{plan.title || plan.name}</strong><small>{formatRelative(plan.mtimeMs, { now, locale })}</small></button>)}</div>
           </section>}
           <section className="project-card" data-project-defaults>
             <div className="project-card-head"><div><h3>{t('projectProfile.defaults')}</h3><small>{t('projectProfile.defaultsHint')}</small></div></div>
@@ -347,7 +348,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
           </section>}
           {git.repo && !!git.commits?.length && <section className="project-card" data-project-git-commits>
             <div className="project-card-head"><div><h3>{t('projectProfile.git.commits')}</h3></div></div>
-            <div className="project-list">{git.commits.map((c) => <div key={c.sha} className="project-row project-row-static project-git-commit" title={c.sha}><strong>{c.subject}</strong><small>{relativeTimeOf(c.at, now, locale)}</small><code>{c.short}</code></div>)}</div>
+            <div className="project-list">{git.commits.map((c) => <div key={c.sha} className="project-row project-row-static project-git-commit" title={c.sha}><strong>{c.subject}</strong><small>{formatRelative(c.at, { now, locale })}</small><code>{c.short}</code></div>)}</div>
           </section>}
         </div>}
         {!ctx && !loadError && <p className="agent-profile-muted" style={{ paddingTop: 16 }}><Loader2 size={14} className="spin" /> {t('projectProfile.loading')}</p>}

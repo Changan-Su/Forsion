@@ -1,7 +1,7 @@
 import { registerMessages } from '../i18n'
 
 registerMessages({
-  'onboarding.guide.intro': { zh: '从这里，开始你的工作空间。', en: 'Make this your workspace.' },
+  'onboarding.guide.intro': { zh: '从这里，开始使用 Forsion。', en: 'Start using Forsion here.' },
   'onboarding.guide.welcome': { zh: '连接一个模型，挑选喜欢的外观，就可以开始。其余能力，等需要时再开启。', en: 'Connect a model, choose a look, and you’re ready. Add more capabilities as you need them.' },
   'onboarding.guide.essentials': { zh: '只需几个选择', en: 'Just a few choices' },
   'onboarding.guide.changeLater': { zh: '这些选择都可以稍后更改', en: 'You can change these choices later' },
@@ -44,12 +44,12 @@ registerMessages({
   'onboarding.guide.computer': { zh: '操作电脑', en: 'Computer control' },
   'onboarding.guide.media': { zh: '语音与媒体', en: 'Voice and media' },
   'onboarding.guide.doneTitle': { zh: '从第一件事开始。', en: 'Start with one thing.' },
-  'onboarding.guide.doneBody': { zh: '你的选择已保留。进入工作空间后，可以提问、整理笔记，或打开一个项目。', en: 'Your choices are saved. Ask a question, organize a note, or open a project in your workspace.' },
+  'onboarding.guide.doneBody': { zh: '你的选择已保留。进入 Forsion 后，可以提问、整理笔记，或打开一个项目。', en: 'Your choices are saved. Ask a question, organize a note, or open a project in Forsion.' },
   'onboarding.guide.more': { zh: '需要时，再继续探索', en: 'Explore more when you need it' },
   'onboarding.guide.moreModels': { zh: '语音与辅助模型', en: 'Voice and auxiliary models' },
   'onboarding.guide.moreModelsPath': { zh: '设置 → 模型', en: 'Settings → Models' },
   'onboarding.guide.moreAgents': { zh: '专属助手与技能', en: 'Assistants and skills' },
-  'onboarding.guide.moreAgentsPath': { zh: '智能体空间', en: 'Agents space' },
+  'onboarding.guide.moreAgentsPath': { zh: 'Agents', en: 'Agents Space' },
   'onboarding.guide.moreTools': { zh: '本机工具与下载源', en: 'Local tools and downloads' },
-  'onboarding.guide.moreToolsPath': { zh: '设置 → 常规设置 → 本机运行环境', en: 'Settings → General → Local runtime' },
+  'onboarding.guide.moreToolsPath': { zh: '设置 → 常规 → 连接', en: 'Settings → General → Connection' },
 })

@@ -38,11 +38,11 @@ registerMessages({
   },
   'desktopPermissions.computerTitle': { zh: 'Tangu Computer Use', en: 'Tangu Computer Use' },
   'desktopPermissions.computerMac': {
-    zh: '让智能体查看屏幕并操作鼠标、键盘。请在 macOS「隐私与安全性」中为 tangu-computer-use 授权。',
+    zh: '让 Agent 查看屏幕并操作鼠标、键盘。请在 macOS「隐私与安全性」中为 tangu-computer-use 授权。',
     en: 'Let agents view the screen and control the mouse and keyboard. In macOS Privacy & Security, grant access to tangu-computer-use.',
   },
   'desktopPermissions.computerWindows': {
-    zh: '通过 tangu-computer-use 让智能体查看屏幕并操作鼠标、键盘。Windows 无需额外的 macOS 辅助功能或屏幕录制授权。',
+    zh: '通过 tangu-computer-use 让 Agent 查看屏幕并操作鼠标、键盘。Windows 无需额外的 macOS 辅助功能或屏幕录制授权。',
     en: 'Let agents view the screen and control the mouse and keyboard through tangu-computer-use. Windows needs no extra macOS Accessibility or Screen Recording permissions.',
   },
   'desktopPermissions.windowsLimit': {

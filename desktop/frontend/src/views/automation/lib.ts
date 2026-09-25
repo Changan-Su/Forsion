@@ -9,6 +9,7 @@ import type {
   MuseTriggerUpsert,
   NormalAgentDef,
 } from '../../types'
+import { formatMonthDay, formatTime, toDate } from '../../format/time'
 
 type T = (key: string, vars?: Record<string, string>) => string
 
@@ -110,11 +111,8 @@ export const BUILTIN_EVENTS = [
 
 /** ISO/epoch → 本地短时间。 */
 export function fmtTime(v: string | number | null | undefined): string {
-  if (!v) return '—'
-  const d = new Date(v)
-  if (isNaN(d.getTime())) return '—'
-  const p = (x: number): string => String(x).padStart(2, '0')
-  return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`
+  const d = toDate(v)
+  return d ? `${formatMonthDay(d)} ${formatTime(d)}` : '—'
 }
 
 // ── 规则 → upsert 全量入参 ───────────────────────────────────────────────────────────────

@@ -15,7 +15,7 @@ import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import type { ProductSummary } from '../../../../shared/products'
 import { translate } from '../../i18n'
-import { relativeTime } from './productKinds'
+import { formatListTime } from '../../format/time'
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
@@ -79,13 +79,13 @@ describe('造物栅格:相对时间', () => {
   it('⚠️栅格开着的时候「几分钟前」自己走,不会停在装载那一刻', async () => {
     rows = [productOf({ updatedAt: BASE - 60_000 })]
     await mount()
-    expect(stamp()).toBe(relativeTime(BASE - 60_000, BASE, 'zh'))
+    expect(stamp()).toBe(formatListTime(BASE - 60_000, { now: BASE, locale: 'zh' }))
 
     // 没有任何交互,纯粹是时间过去了 5 分钟(副屏上摊着的那块栅格)。
     await act(async () => { await vi.advanceTimersByTimeAsync(5 * 60_000) })
 
-    expect(stamp()).toBe(relativeTime(BASE - 60_000, BASE + 5 * 60_000, 'zh'))
-    expect(stamp()).not.toBe(relativeTime(BASE - 60_000, BASE, 'zh'))
+    expect(stamp()).toBe(formatListTime(BASE - 60_000, { now: BASE + 5 * 60_000, locale: 'zh' }))
+    expect(stamp()).not.toBe(formatListTime(BASE - 60_000, { now: BASE, locale: 'zh' }))
     // 自走的是时钟,不是重新扫盘:不许因此多打一遍主进程。
     expect(productsList).toHaveBeenCalledTimes(1)
   })

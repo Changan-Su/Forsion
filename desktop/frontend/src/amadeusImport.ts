@@ -14,7 +14,7 @@ registerMessages({
   'fileimport.overCloudLimit': { zh: '超过云端单文件上限 {limit}', en: 'over the {limit} cloud file limit' },
   'fileimport.over50mb': { zh: '超 50MB', en: 'over 50 MB' },
   'fileimport.unreadable': { zh: '读不到', en: 'unreadable' },
-  'fileimport.withReason': { zh: '{name}({reason})', en: '{name} ({reason})' },
+  'fileimport.withReason': { zh: '{name}（{reason}）', en: '{name} ({reason})' },
   'fileimport.uploading': { zh: '正在上传 {name}… {pct}%', en: 'Uploading {name}… {pct}%' },
   'fileimport.placeholder': { zh: '⏳ 正在上传 {name}…', en: '⏳ Uploading {name}…' },
   'fileimport.placeholderFailed': { zh: '⚠️ 上传失败:{name}', en: '⚠️ Upload failed: {name}' },

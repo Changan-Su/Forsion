@@ -16,7 +16,7 @@ import type { ModelsResponse, VisionMode } from '../types'
 
 registerMessages({
   'aux.backgroundCompact': { zh: '后台任务', en: 'Background tasks' },
-  'aux.backgroundCompactHint': { zh: '用于后台智能体、摘要与整理。', en: 'For background agents, summaries and organization.' },
+  'aux.backgroundCompactHint': { zh: '用于后台 Agent、摘要与整理。', en: 'For background agents, summaries and organization.' },
   'aux.visionCompact': { zh: '图像识别', en: 'Image recognition' },
   'aux.visionCompactHint': { zh: '主模型无法看图时，辅助理解图片。', en: 'Helps interpret images when the main model cannot.' },
   'aux.visionBehavior': { zh: '图像处理方式', en: 'Image handling' },

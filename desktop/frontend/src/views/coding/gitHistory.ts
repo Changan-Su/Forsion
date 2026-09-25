@@ -64,17 +64,3 @@ export function autoVersionName(messages: UiMessage[]): string {
   return points.length > NAME_MAX ? `${points.slice(0, NAME_MAX - 1).join('')}…` : line
 }
 
-/** 「3 分钟前」/「3 minutes ago」:跟界面语言,不跟系统语言。仓里没有现成的毫秒版可复用。 */
-export function relativeTime(at: number, tag: string, now: number = Date.now()): string {
-  const seconds = (at - now) / 1000
-  if (!Number.isFinite(seconds)) return ''
-  const abs = Math.abs(seconds)
-  // 一年封顶:旧快照动辄跨年,没有 year 档就会渲染成「24 个月前 / 24 months ago」。
-  const [value, unit]: [number, Intl.RelativeTimeFormatUnit] = abs < 60 ? [seconds, 'second']
-    : abs < 3600 ? [seconds / 60, 'minute']
-      : abs < 86400 ? [seconds / 3600, 'hour']
-        : abs < 2592000 ? [seconds / 86400, 'day']
-          : abs < 31536000 ? [seconds / 2592000, 'month']
-            : [seconds / 31536000, 'year']
-  return new Intl.RelativeTimeFormat(tag, { numeric: 'auto' }).format(Math.round(value), unit)
-}

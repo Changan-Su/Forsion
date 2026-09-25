@@ -136,7 +136,7 @@ async function main() {
       placeholder: card.querySelector('.t2c-ta').getAttribute('placeholder'),
       stopLabel: getComputedStyle(card.querySelector('.t2c-stop-label')).display,
     }))
-    check('420px: 完整小贴士和停止文字恢复', wideComposer.placeholder.startsWith('小贴士:') && wideComposer.stopLabel !== 'none', wideComposer)
+    check('420px: 完整小贴士和停止文字恢复', wideComposer.placeholder.startsWith('小贴士：') && wideComposer.stopLabel !== 'none', wideComposer)
     await view.locator('.t2c-stop').click()
     console.log(`${count}/${count} passed; screenshots: ${home}`)
   } catch (error) {

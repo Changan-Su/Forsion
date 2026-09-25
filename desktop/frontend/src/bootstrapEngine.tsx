@@ -58,7 +58,7 @@ registerMessages({
   'bootengine.view.pluginFile': { zh: '插件文件', en: 'Plugin file' },
   'bootengine.cmd.quickFind': { zh: '快速查找', en: 'Quick find' },
   'bootengine.cmd.openNote': { zh: '打开笔记', en: 'Open note' },
-  'bootengine.cmd.setActiveSpace': { zh: '切换空间', en: 'Switch Space' },
+  'bootengine.cmd.setActiveSpace': { zh: '切换 Space', en: 'Switch Space' },
   'bootengine.cmd.findInPage': { zh: '页内查找', en: 'Find in page' },
   'bootengine.cmd.showChatPanel': { zh: '显示对话面板', en: 'Show chat panel' },
   'bootengine.cmd.openMini': { zh: '打开 Mini 卡片', en: 'Open mini card' },

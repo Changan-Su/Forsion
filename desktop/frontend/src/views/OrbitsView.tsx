@@ -25,7 +25,7 @@ import { openNewChat, openSession, openSolo, openTeam, rotateSolo } from '../ses
 import { AvatarStack } from '../components/AvatarStack'
 import { AgentAvatar } from '../components/AgentAvatar'
 import { tipProps, tipT } from '../hoverTip'
-import { relativeTimeOf } from './projectProfileState'
+import { formatRelative } from '../format/time'
 import { TeamEditor } from '../components/TeamEditor'
 import * as api from '../services/backendService'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -54,7 +54,7 @@ registerMessages({
   'orbits.row.deleteTeam': { zh: '删除团队', en: 'Delete team' },
   'orbits.team.deleted': { zh: '团队已删除(历史会话保留,只读)', en: 'Team deleted (past sessions are kept, read-only)' },
   'orbits.team.confirmDelete': { zh: '删除团队「{name}」?会连同它的 TEAM.md 与 Library 一起删除,不可恢复。', en: 'Delete team "{name}"? Its TEAM.md and Library folder are deleted with it and cannot be recovered.' },
-  'orbits.row.openMuseSpace': { zh: '打开 Muse 空间', en: 'Open the Muse space' },
+  'orbits.row.openMuseSpace': { zh: '打开 Muse Space', en: 'Open the Muse Space' },
   'orbits.gone.agent': { zh: '该 Agent 已删除,只剩历史会话', en: 'This agent was deleted; only its past sessions remain' },
   'orbits.gone.engine': { zh: '该引擎已卸载,只剩历史会话', en: 'This engine is no longer installed; only its past sessions remain' },
   'orbits.gone.team': { zh: '该团队已删除,只剩历史会话', en: 'This team was deleted; only its past sessions remain' },
@@ -66,7 +66,7 @@ registerMessages({
   'orbits.badge.running': { zh: '运行中', en: 'Running' },
   'orbits.badge.proactive': { zh: '主动式', en: 'Proactive' },
   'orbits.engine.needsSignin': { zh: '待登录', en: 'Needs sign-in' },
-  'orbits.muse.unavailable': { zh: 'Muse 空间尚未启用', en: 'The Muse space is not enabled' },
+  'orbits.muse.unavailable': { zh: 'Muse Space 尚未启用', en: 'The Muse Space is not enabled' },
   // 一级行悬停提示的类型词(评审 U-19 轻量版:不改 40px 单行,只在 hoverTip 里补「类型 · 相对时间」)。
   'orbits.tip.team': { zh: '团队', en: 'Team' },
   'orbits.tip.line': { zh: '{kind} · {when}', en: '{kind} · {when}' },
@@ -235,7 +235,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const rowTip = (name: string, kindKey: string, identKey: string) => tipProps(() => {
     const at = activityByIdent.get(identKey) || 0
     const kind = tipT(kindKey)
-    return [name, at ? tipT('orbits.tip.line', { kind, when: relativeTimeOf(at, Date.now(), locale) }) : kind]
+    return [name, at ? tipT('orbits.tip.line', { kind, when: formatRelative(at, { locale }) }) : kind]
   })
   const agentNames = useMemo(() => agents.map((a) => a.name || a.slug), [agents])
 

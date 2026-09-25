@@ -61,7 +61,7 @@ async function main() {
     await win.waitForSelector('.settings-main', { timeout: 30_000 }).catch(() => {})
     check('设置开在独立浮窗里', (await win.locator('.settings-main').count()) > 0)
     const nav = win.locator('.settings-nav')
-    for (const l of ['智能体', '后台智能体']) {
+    for (const l of ['Agent', '后台 Agent']) {
       const b = nav.getByRole('button', { name: l, exact: true }).first()
       await b.scrollIntoViewIfNeeded().catch(() => {})
       await b.click()
@@ -97,8 +97,8 @@ async function main() {
     await prompt.fill('Write concise notes.\nKeep evidence.')
     await root.getByRole('tab', { name: /Muse/ }).click()
     check('switching agents keeps the unsaved folder draft', (await folders.inputValue()).includes('/Users/me/Projects'))
-    await nav.getByRole('button', { name: 'Agent Space', exact: true }).click()
-    await nav.getByRole('button', { name: '后台智能体', exact: true }).click()
+    await nav.getByRole('button', { name: 'Agent 名册', exact: true }).click()
+    await nav.getByRole('button', { name: '后台 Agent', exact: true }).click()
     await root.getByRole('tab', { name: /Muse/ }).click()
     check('settings navigation preserves unsaved drafts', (await folders.inputValue()).includes('/Users/me/Projects'))
     await root.getByRole('button', { name: '保存更改', exact: true }).click()

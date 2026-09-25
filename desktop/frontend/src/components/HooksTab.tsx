@@ -22,7 +22,7 @@ registerMessages({
   'hookstab.ev.SubagentStart': { zh: '子代理开始（委派 / 讨论）', en: 'Subagent starts (delegate / discussion)' },
   'hookstab.ev.SubagentStop': { zh: '子代理结束', en: 'Subagent stops' },
   'hookstab.intro': {
-    zh: 'Hook 在 agent 循环的固定生命周期点跑你自己的 shell 命令 —— 模型绕不过去的确定性护栏（就像 git pre-commit）。仅本地生效，云端从不运行。脚本从 stdin 收 JSON；exit 2 或 {"decision":"block"} 即拦截。',
+    zh: 'Hook 在 Agent 循环的固定生命周期点跑你自己的 shell 命令 —— 模型绕不过去的确定性护栏（就像 git pre-commit）。仅本地生效，云端从不运行。脚本从 stdin 收 JSON；exit 2 或 {"decision":"block"} 即拦截。',
     en: 'Hooks run your own shell commands at fixed points in the agent loop — deterministic guardrails the model cannot skip (like a git pre-commit hook). Host-only; never runs in the cloud. Scripts get JSON on stdin; exit 2 or {"decision":"block"} blocks.',
   },
   'hookstab.loadFailed': { zh: '无法加载 Hooks', en: 'Could not load hooks' },

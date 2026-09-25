@@ -90,7 +90,7 @@ registerMessages({
   'dbembed.type.select': { zh: '单选', en: 'Select' },
   'dbembed.type.multiselect': { zh: '多选', en: 'Multi-select' },
   'dbembed.type.url': { zh: '链接', en: 'Link' },
-  'dbembed.type.page': { zh: 'Page Name', en: 'Page name' },
+  'dbembed.type.page': { zh: '页面名称', en: 'Page name' },
   'dbembed.type.file': { zh: '附件', en: 'Attachment' },
   'dbembed.type.formula': { zh: '公式', en: 'Formula' },
   'dbembed.type.rowlink': { zh: '关联表', en: 'Relation' },
@@ -317,7 +317,7 @@ registerMessages({
   'dbembed.sortViewHint': { zh: '点击属性依次切换升序、降序和取消；支持多列排序。', en: 'Click a property to cycle through ascending, descending and off. Multiple sorts are supported.' },
   'dbembed.filterMore': { zh: '筛选…', en: 'Filter…' },
   'dbembed.calendarSettings': { zh: '日历设置', en: 'Calendar settings' },
-  'dbembed.addToCalendar': { zh: '添加到日历空间', en: 'Add to Calendar Space' },
+  'dbembed.addToCalendar': { zh: '添加到日历 Space', en: 'Add to Calendar Space' },
   'dbembed.deleteView': { zh: '删除视图', en: 'Delete view' },
   'dbembed.lastViewLocked': { zh: '最后一个视图不可删除', en: 'The last view cannot be deleted' },
   // 条件行编辑器
