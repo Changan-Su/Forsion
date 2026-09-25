@@ -183,7 +183,7 @@ const zh: Dict = {
   'view.drawing': '白板',
   // ── Coding Space(编码工作室)──
   'space.coding': '编码工作室',
-  'view.codeStudio': '代码工作台',
+  'view.codeStudio': '编码工作室',
   // ── Creations Space(造物):编码工作室做出来的东西 ──
   'space.artificial': '造物',
   'view.artificial': '造物',
@@ -570,7 +570,7 @@ const zh: Dict = {
   'automation.trigger.neverFired': '还没触发过——命中后这里会出现该次运行',
   'automation.trigger.museNote': '该规则命中会唤醒 Muse,运行内容见',
   'automation.runs.empty': '暂无记录',
-  'automation.runs.pick': '选择左侧自动化查看记录',
+  'automation.runs.pick': '选中一条自动化后，这里显示它的运行记录',
   'automation.builder.title': '新建自动化',
   'automation.builder.editTitle': '编辑自动化',
   'automation.builder.trigger': '触发',
@@ -1994,7 +1994,7 @@ const en: Dict = {
   'view.drawing': 'Whiteboard',
   // ── Coding Space ──
   'space.coding': 'Coding Studio',
-  'view.codeStudio': 'Code Studio',
+  'view.codeStudio': 'Coding Studio',
   // ── Creations Space ──
   'space.artificial': 'Creations',
   'view.artificial': 'Creations',
@@ -2380,7 +2380,7 @@ const en: Dict = {
   'automation.trigger.neverFired': 'Not fired yet — runs will appear here once it does',
   'automation.trigger.museNote': 'This rule wakes Muse; see its runs under',
   'automation.runs.empty': 'No records',
-  'automation.runs.pick': 'Pick an automation to see its history',
+  'automation.runs.pick': 'Select an automation to see its runs here',
   'automation.builder.title': 'New automation',
   'automation.builder.editTitle': 'Edit automation',
   'automation.builder.trigger': 'Trigger',

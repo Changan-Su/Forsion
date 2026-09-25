@@ -1,6 +1,6 @@
 import { registerMessages } from '../../i18n'
 registerMessages({
-  'studio.openTool': { zh: 'Coding Studio · 打开项目工具', en: 'Coding Studio · Open project tool' },
+  'studio.openTool': { zh: '编码工作室 · 打开项目工具', en: 'Coding Studio · Open project tool' },
   'studio.projectTools': { zh: '项目工具', en: 'Project tools' },
   'studio.panelPosition': { zh: '面板位置', en: 'Panel position' },
   'studio.move.left': { zh: '移至左侧面板', en: 'Move to left panel' },
