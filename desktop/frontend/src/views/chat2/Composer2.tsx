@@ -974,7 +974,7 @@ export const Composer2: React.FC<{
       return (base.startsWith(q) ? 0 : base.includes(q) ? 1 : 2) * 10000 + c.p.length
     }
     return [...pool].sort((a, b) => score(a) - score(b)).slice(0, 10)
-  }, [fileRefCtx, refFiles, vaultPages, chatSessions, activeSessionId, isHost])
+  }, [fileRefCtx, refFiles, vaultPages, chatSessions, activeSessionId, isHost, t])
   const refActive = !!fileRefCtx && refMatches.length > 0
   useEffect(() => { setRefIndex(0) }, [fileRefCtx?.start, fileRefCtx?.query])
 

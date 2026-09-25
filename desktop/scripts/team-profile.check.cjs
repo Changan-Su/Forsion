@@ -207,7 +207,7 @@ async function run() {
     await party.locator('[data-team-member="xyra"]').getByRole('button', { name: 'Xyra 本会话模型', exact: true }).click()
     await party.locator('[data-team-member="xyra"] .composer-menu .menu-item').filter({ hasText: 'Stub Opus' }).click()
     // 临时成员的模型 / Effort 就住在它自己的定义里:卡上这两个控件必须写 groupTempAgents,不许再往调档表里存第二份。
-    await party.getByLabel('Fact checker 本会话 Effort', { exact: true }).selectOption('low')
+    await party.getByLabel('Fact checker 本会话思考档位', { exact: true }).selectOption('low')
     await party.getByRole('button', { name: 'TEAM 配置', exact: true }).click()
     await party.getByLabel('团队名称', { exact: true }).fill('Project expedition')
     await party.getByLabel('团队指令 · TEAM', { exact: true }).fill('Work only on this project.')
