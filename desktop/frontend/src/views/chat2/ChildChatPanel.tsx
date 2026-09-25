@@ -28,7 +28,9 @@ export function SubChatStatus({ sessionId }: { sessionId: string }) {
     let disposed = false
     setSaved([])
     const load = () => void getBackgroundSessions(cfg, sessionId).then((rows) => {
-      if (!disposed) setSaved(rows.filter((r) => r.kind !== 'teamwork'))
+      // teamwork 走团队车道;historian 子会话(每个父会话一条,uuidv5)已由右栏 HistorianStatus 那一行代表,
+      // 这里再列一行就是「同名两行 Historian」(UIUX 评审 U-04)。完整记录从 HistorianStatus 展开区进。
+      if (!disposed) setSaved(rows.filter((r) => r.kind !== 'teamwork' && r.kind !== 'historian'))
     }).catch(() => {})
     load()
     const timer = setInterval(load, 4000)

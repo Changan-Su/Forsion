@@ -7,7 +7,7 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Folder, PanelsTopLeft, Users, Sparkles,
+  ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Users, Sparkles,
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { useLiveVoice, useLiveVoiceEnabled } from '../../hooks/useLiveVoice'
@@ -37,6 +37,8 @@ import { getCustomCommands, expandCustomCommand, listMessages, type CustomComman
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
 import { NormalModeItem } from './NormalModeItem'
 import { mainReferenceKey } from './mainReference'
+import { disarmTip, tipProps } from '../../hoverTip'
+import { RefChipView } from './RefChipView'
 import './composer2.css'
 
 registerMessages({
@@ -1277,6 +1279,9 @@ export const Composer2: React.FC<{
     : planMode && !isChat ? ClipboardList
     : isHost ? curApproval.Icon
     : MessageSquare
+  // 「完全放行」药丸自身也要带风险色(U-07):与 modeLabel 同源判定 —— 只有药丸**正在显示**审批档
+  // 且那一档是 full-auto 时才染;群聊 / 计划 / Chat / 非 host 显示的是别的东西,不染。
+  const dangerPill = !groupActive && !(planMode && !isChat) && !isChat && isHost && curApproval.id === 'full-auto'
   // Chat 是轻量对话，不露出 Work 才需要的计划/群聊/审批模式入口。
   const showModeChip = !isChat && (!!onPlanModeChange || isHost || !!onGroupChange || !!onAgentSwitch)
   const currentEngine = (engines || []).find((e) => e.id === engineId)
@@ -1338,24 +1343,16 @@ export const Composer2: React.FC<{
             <div className="t2c-chiprow t2c-refrow" role="group" aria-label={t('input.ref.selected')}>
               <span className="t2c-reflabel">{t('input.ref.selected')}</span>
               {allRefChips.map((c) => (
-                <span className="attach-chip" key={c.token} title={c.token}>
-                  {c.kind === 'session'
-                    ? <MessageSquare size={13} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />
-                    : c.kind === 'folder'
-                    ? <Folder size={13} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />
-                    : c.kind === 'view'
-                    ? <PanelsTopLeft size={13} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />
-                    : <FileText size={13} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />}
-                  <span>{c.name}</span>
-                  <button
-                    title={t('input.remove')}
-                    onClick={() => {
-                      // 自动那条不在 refChips 里,× 它 = 记下「这一篇先别挂」(换篇即复活)。
-                      if (autoChip && c.token === autoChip.token) setAutoRefOff(c.token)
-                      else setRefChips((prev) => prev.filter((x) => x.token !== c.token))
-                    }}
-                  ><X size={12} /></button>
-                </span>
+                <RefChipView
+                  key={c.token}
+                  chip={c}
+                  removeTitle={t('input.remove')}
+                  onRemove={() => {
+                    // 自动那条不在 refChips 里,× 它 = 记下「这一篇先别挂」(换篇即复活)。
+                    if (autoChip && c.token === autoChip.token) setAutoRefOff(c.token)
+                    else setRefChips((prev) => prev.filter((x) => x.token !== c.token))
+                  }}
+                />
               ))}
             </div>
           )}
@@ -1574,7 +1571,8 @@ export const Composer2: React.FC<{
               <span className={`mode-pill-wrap t2c-capsule-peer${openMenu === 'mode' ? ' is-open' : ''}`} data-cmenu>
                 <button
                   className={`t2c-pill mode-pill-btn${openMenu === 'mode' ? ' is-open' : ''}${planMode && !isChat ? ' active' : ''}`}
-                  title={t('input.modeChipTitle')}
+                  data-danger={dangerPill || undefined}
+                  title={dangerPill ? t('input.approval.fullAutoDesc') : t('input.modeChipTitle')}
                   aria-expanded={openMenu === 'mode'}
                   onClick={() => setOpenMenu((m) => (m === 'mode' ? null : 'mode'))}
                 >
@@ -1663,7 +1661,10 @@ export const Composer2: React.FC<{
                     className="t2c-ctxring-btn"
                     aria-expanded={openMenu === 'ctx'}
                     aria-label={`${t('input.ctxLabel')} ${pct}%`}
-                    onClick={() => setOpenMenu((m) => (m === 'ctx' ? null : 'ctx'))}
+                    // 空心环保持原样(09-25 用户拍板),只补悬停说明免得被当成加载转圈(U-24);
+                    // 详情浮层仍是点击触发(ctxring.check 钉着),浮层开着时不再叠一层提示。
+                    {...tipProps(() => (openMenu === 'ctx' ? null : [`${t('input.ctxLabel')} ${pct}%`]))}
+                    onClick={() => { disarmTip(); setOpenMenu((m) => (m === 'ctx' ? null : 'ctx')) }}
                   >
                     <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
                       <circle className="t2c-ctxring-track" cx="12" cy="12" r={R} />

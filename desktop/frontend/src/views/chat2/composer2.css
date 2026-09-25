@@ -361,3 +361,9 @@
   .t2c-stop { width: 32px; padding-inline: 0; justify-content: center; }
   .t2c-stop-label { display: none; }
 }
+
+/* uiux-b1 U-07:「完全放行」药丸自带风险态(与菜单项 danger 同色,不描边)。
+   必须留在文件末尾:要压过同特异性的 .t2c-pill.mode-pill-btn.is-open 等(DESIGN §7.2)。 */
+.t2c-pill.mode-pill-btn[data-danger] { color: var(--danger); background: var(--danger-light); }
+.t2c-pill.mode-pill-btn[data-danger]:hover,
+.t2c-pill.mode-pill-btn[data-danger].is-open { background: color-mix(in srgb, var(--danger) 16%, transparent); }
