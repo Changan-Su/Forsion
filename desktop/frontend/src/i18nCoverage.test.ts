@@ -156,6 +156,8 @@ describe('i18n 覆盖', () => {
     // 「工作区」只指工作目录 / 项目文件夹;「工作空间」不再使用(指整个 app 时直接写 Forsion 或改写)。
     const BANNED: Array<{ re: RegExp; fix: string; allow?: Record<string, string> }> = [
       { re: /智能体/, fix: '写「Agent」' },
+      // zh 里 Agent 是专名,一律大写;`manage_agent`、`{agent}`、`agent=xx`、`.agents/` 这类代码 / 占位符不算。
+      { re: /(^|[^A-Za-z_{=./-])agents?(?=[^A-Za-z_}=/-]|$)/, fix: '写「Agent」(专名大写)' },
       { re: /工作空间/, fix: '指 Space 写「Space」,指整个 app 写「Forsion」或改写,指目录写「工作区」' },
       { re: /Agent Space|Agents space|智能体空间/, fix: 'Agents 这个 Space 就叫「Agents」' },
       {

@@ -44,7 +44,7 @@ registerMessages({
   'onboarding.guide.computer': { zh: '操作电脑', en: 'Computer control' },
   'onboarding.guide.media': { zh: '语音与媒体', en: 'Voice and media' },
   'onboarding.guide.doneTitle': { zh: '从第一件事开始。', en: 'Start with one thing.' },
-  'onboarding.guide.doneBody': { zh: '你的选择已保留。进入 Forsion 后，可以提问、整理笔记，或打开一个项目。', en: 'Your choices are saved. Ask a question, organize a note, or open a project in your workspace.' },
+  'onboarding.guide.doneBody': { zh: '你的选择已保留。进入 Forsion 后，可以提问、整理笔记，或打开一个项目。', en: 'Your choices are saved. Ask a question, organize a note, or open a project in Forsion.' },
   'onboarding.guide.more': { zh: '需要时，再继续探索', en: 'Explore more when you need it' },
   'onboarding.guide.moreModels': { zh: '语音与辅助模型', en: 'Voice and auxiliary models' },
   'onboarding.guide.moreModelsPath': { zh: '设置 → 模型', en: 'Settings → Models' },

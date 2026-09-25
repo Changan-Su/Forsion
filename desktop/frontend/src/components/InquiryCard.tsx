@@ -15,7 +15,7 @@ registerMessages({
   'plan.edit': { zh: '编辑计划', en: 'Edit plan' },
   'plan.sendBack': { zh: '打回', en: 'Request changes' },
   'plan.reject': { zh: '拒绝', en: 'Reject' },
-  'plan.feedbackPlaceholder': { zh: '要改哪里?(反馈会发给 agent 重做计划)', en: 'What should change? (sent to the agent to revise the plan)' },
+  'plan.feedbackPlaceholder': { zh: '要改哪里?(反馈会发给 Agent 重做计划)', en: 'What should change? (sent to the agent to revise the plan)' },
   'plan.sendFeedback': { zh: '发送反馈', en: 'Send feedback' },
   'plan.doneApproved': { zh: '已批准', en: 'Approved' },
   'plan.doneRevised': { zh: '已批准(按你修订的版本)', en: 'Approved (your revised version)' },

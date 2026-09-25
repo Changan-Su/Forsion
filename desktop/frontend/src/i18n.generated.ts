@@ -264,7 +264,7 @@ registerMessages({
     "en": "Direct · "
   },
   "input.tooLong": {
-    "zh": "消息过长({len} 字符,上限 {max})——大段材料请保存为文件,让 agent 用工具按需读取,整段粘贴会按轮数翻倍烧 token。",
+    "zh": "消息过长({len} 字符,上限 {max})——大段材料请保存为文件,让 Agent 用工具按需读取,整段粘贴会按轮数翻倍烧 token。",
     "en": "Message too long ({len} chars, limit {max}) — save large material as a file and let the agent read it on demand with tools; pasting it inline burns tokens multiplied by the number of turns."
   },
   "input.skip.notImage": {
@@ -372,7 +372,7 @@ registerMessages({
     "en": "Queued messages"
   },
   "input.steer.hint": {
-    "zh": "等 agent 到达可读取点后插入 · ↑ 取回编辑",
+    "zh": "等 Agent 到达可读取点后插入 · ↑ 取回编辑",
     "en": "Delivered at the next boundary · ↑ to recall"
   },
   "input.steer.now": {
@@ -524,7 +524,7 @@ registerMessages({
     "en": "Sub-chats"
   },
   "panel.subchats.empty": {
-    "zh": "暂无子聊天（agent 发起讨论或子代理任务时会出现在这里）",
+    "zh": "暂无子聊天（Agent 发起讨论或子代理任务时会出现在这里）",
     "en": "No sub-chats yet (discussions or subagent tasks the agent starts appear here)"
   },
   "panel.subchats.live": {
@@ -560,7 +560,7 @@ registerMessages({
     "en": "Session files"
   },
   "panel.noFilesYet": {
-    "zh": "暂无文件。agent 产出与拖入的文件都会出现在这里。",
+    "zh": "暂无文件。Agent 产出与拖入的文件都会出现在这里。",
     "en": "No files yet. Agent outputs and dropped files will appear here."
   },
   "panel.activityLog": {
@@ -620,7 +620,7 @@ registerMessages({
     "en": "Folder name (Enter to create)"
   },
   "panel.preview.tooLarge": {
-    "zh": "文件较大({size}),不在面板预览;请用编辑器打开或让 agent 按需读取。",
+    "zh": "文件较大({size}),不在面板预览;请用编辑器打开或让 Agent 按需读取。",
     "en": "File is large ({size}); not previewed in the panel. Open it in an editor or have the agent read it on demand."
   },
   "panel.preview.binaryNoPreview": {
@@ -917,7 +917,7 @@ registerMessages({
     "en": "No image models found. Enable image models in the Forsion admin, or fill in \"Image models\" under Custom Provider below."
   },
   "settings.model.imageHelp": {
-    "zh": "选中即设为默认生图模型;agent 调 generate_image 时自动使用(也可在调用里指定 model)。",
+    "zh": "选中即设为默认生图模型;Agent 调 generate_image 时自动使用(也可在调用里指定 model)。",
     "en": "Selecting one sets it as the default; the agent uses it automatically when calling generate_image (it can also specify a model)."
   },
   "settings.model.asrModelsLabel": {
@@ -969,7 +969,7 @@ registerMessages({
     "en": "Auxiliary model · LLM"
   },
   "settings.aux.llmHint": {
-    "zh": "后台/特殊 agent(Muse、Historian)用的模型,与主模型分开挑,便宜档就够。不选=跟随 Forsion 后台的默认。",
+    "zh": "后台/特殊 Agent(Muse、Historian)用的模型,与主模型分开挑,便宜档就够。不选=跟随 Forsion 后台的默认。",
     "en": "Model used by background agents (Muse, Historian). Picked separately from your main model — a cheap tier is plenty. Unset = follow the Forsion admin default."
   },
   "settings.aux.visionLabel": {
@@ -1378,7 +1378,7 @@ registerMessages({
   "settings.forsion.expired": { "zh": "登录已过期,请重新登录(否则后端无法连接)。", "en": "Session expired — please re-login (the backend can't connect otherwise)." },
   "settings.forsion.relogin": { "zh": "重新登录", "en": "Re-login" },
   "settings.skills.libraryHintPrefix": {
-    "zh": "按来源渠道(agent 文件夹)分组。本地技能放 ",
+    "zh": "按来源渠道(Agent 文件夹)分组。本地技能放 ",
     "en": "Grouped by source channel (agent folder). Put local skills in "
   },
   "settings.skills.libraryHintSuffix": {
@@ -1932,7 +1932,7 @@ registerMessages({
   "settings.tts.testOk": { "zh": "合成成功,正在播放", "en": "Synthesized, playing" },
   "settings.tts.testText": { "zh": "你好呀,我是 Tangu。今天过得怎么样?", "en": "Hi, I'm Tangu. How is your day going?" },
   "settings.notes.cloudSyncLabel": { "zh": "在线同步(Cloud Vault)", "en": "Online sync (Cloud Vault)" },
-  "settings.notes.cloudSyncHint": { "zh": "工作区顶部「本地 | 云端」滑块的云端侧即云端库:与你的云端 vault 双向持续同步(需登录 Forsion 账号),网页端与云端 agent 实时可见。本地侧的笔记永不上云。单文件上限:笔记 5MB,附件随会员档位(免费版 5MB)。", "en": "The Cloud side of the Local | Cloud switch at the top of the workspace is your cloud vault — continuously two-way synced (Forsion login required) and live-visible to the web app and cloud agents. Notes on the Local side never leave this device. Per-file limit: 5 MB for notes; attachments depend on your plan (5 MB on Free)." },
+  "settings.notes.cloudSyncHint": { "zh": "工作区顶部「本地 | 云端」滑块的云端侧即云端库:与你的云端 vault 双向持续同步(需登录 Forsion 账号),网页端与云端 Agent 实时可见。本地侧的笔记永不上云。单文件上限:笔记 5MB,附件随会员档位(免费版 5MB)。", "en": "The Cloud side of the Local | Cloud switch at the top of the workspace is your cloud vault — continuously two-way synced (Forsion login required) and live-visible to the web app and cloud agents. Notes on the Local side never leave this device. Per-file limit: 5 MB for notes; attachments depend on your plan (5 MB on Free)." },
   "notes.cloud.loginHint": { "zh": "登录 Forsion 账号后,这里会与你的云端 vault 自动双向同步。", "en": "Sign in to Forsion and this vault will two-way sync with your cloud vault automatically." },
   "notes.cloud.loginBtn": { "zh": "登录", "en": "Sign in" },
   "notes.cloud.local": { "zh": "本地", "en": "Local" },

@@ -1837,7 +1837,7 @@ The "Views" section embeds app views as cards; the dashboard draws each title as
 | "Calendar" | No | Needs the Calendar builtin plugin on |
 | "Automations" | No | Needs an Automation Space |
 | "Activity log" | No | Developer view |
-| "Active Window" | No | Developer view |
+| "Active window" | No | Developer view |
 
 - Views that need a file open a picker first, titled: Pick a file for the "{name}" card…
 - If a view is currently unavailable (its plugin is switched off, say), the card reads View "{type}" is unavailable instead of going blank.

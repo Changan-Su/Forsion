@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatDate, formatDateTime, formatListTime, formatMonthDay, formatRelative, formatTime, relativeParts, toDate } from './time'
+import { formatDate, formatDateTime, formatListTime, formatLongDate, formatMonthDay, formatRelative, formatTime, relativeParts, toDate } from './time'
 
 const now = new Date(2026, 8, 25, 12, 0).getTime() // 2026-09-25 12:00 本地
 
@@ -64,6 +64,12 @@ describe('绝对日期', () => {
     expect(formatDateTime(t, { now, locale: 'en' })).toBe('Sep 17, 14:05')
     expect(formatTime(new Date(2026, 8, 17, 9, 3))).toBe('09:03')
     expect(formatMonthDay(t)).toBe('9/17')
+  })
+
+  it('长日期:zh「9月17日 星期四」月日与星期间留空;en 用英语语序「Thursday, September 17」', () => {
+    const t = new Date(2026, 8, 17, 14, 5)
+    expect(formatLongDate(t, { locale: 'zh' })).toBe('9月17日 星期四')
+    expect(formatLongDate(t, { locale: 'en' })).toBe('Thursday, September 17')
   })
 })
 

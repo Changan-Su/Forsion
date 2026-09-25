@@ -135,11 +135,14 @@ export function formatListTime(at: TimeInput, opts: TimeOpts = {}): string {
   return Math.abs(now - d.getTime()) < 7 * DAY ? formatRelative(d, { ...opts, now }) : formatDate(d, { ...opts, now })
 }
 
-/** 月日 + 星期(主页时钟下的日期行):「9月17日 星期三」/「September 17 Wednesday」。 */
+/** 月日 + 星期(主页时钟下的日期行):「9月17日 星期三」/「Wednesday, September 17」。
+ *  zh 分两趟拼,中间留一口气(一趟出的是「9月17日星期三」);en 用 Intl 自己的语序,别拼成「September 17 Wednesday」。 */
 export function formatLongDate(at: TimeInput, opts: TimeOpts = {}): string {
   const d = toDate(at)
   if (!d) return ''
-  const tag = intlLocale(opts.locale ?? currentLocale())
+  const locale = opts.locale ?? currentLocale()
+  const tag = intlLocale(locale)
+  if (locale !== 'zh') return new Intl.DateTimeFormat(tag, { weekday: 'long', month: 'long', day: 'numeric' }).format(d)
   return `${new Intl.DateTimeFormat(tag, { month: 'long', day: 'numeric' }).format(d)} ${new Intl.DateTimeFormat(tag, { weekday: 'long' }).format(d)}`
 }
 
