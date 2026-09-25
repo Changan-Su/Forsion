@@ -1014,3 +1014,7 @@
 .t2-user-refs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; white-space: normal; }
 .t2-user-refs:last-child { margin-bottom: 0; }
 .t2-user-refs .attach-chip { max-width: 240px; }
+
+/* uiux-g: U-18 小坞兼任放大按钮(role=button)时的焦点环画在盒内 —— 右栏车道会裁掉外扩的圈。
+ * 放文件末尾,压过全局 :where([role=button]) 的 outline-offset。 */
+.agent-desk-card[data-idle][role='button']:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: -2px; }
