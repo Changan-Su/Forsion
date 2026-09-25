@@ -37,11 +37,11 @@ registerMessages({
   },
   "app.defaultWorkspace": {
     "zh": "Tangu 默认工作区",
-    "en": "Tangu Default Workspace"
+    "en": "Tangu default workspace"
   },
   "app.cloudWorkspace": {
     "zh": "Cloud 工作区",
-    "en": "Cloud Workspace"
+    "en": "Cloud workspace"
   },
   "app.workspace": {
     "zh": "工作区",
@@ -733,7 +733,7 @@ registerMessages({
   },
   "settings.tab.model": {
     "zh": "模型/Provider",
-    "en": "Model / Provider"
+    "en": "Model / provider"
   },
   "settings.tab.skills": {
     "zh": "技能",
@@ -1302,7 +1302,7 @@ registerMessages({
   },
   "settings.mcp.add": {
     "zh": "添加 MCP Server",
-    "en": "Add MCP Server"
+    "en": "Add MCP server"
   },
   "settings.mcp.nameLabel": {
     "zh": "名称(工具前缀)",
@@ -1342,7 +1342,7 @@ registerMessages({
   },
   "settings.theme.modeLabel": {
     "zh": "明暗",
-    "en": "Light / Dark"
+    "en": "Light / dark"
   },
   "settings.theme.light": {
     "zh": "亮色",
@@ -1499,7 +1499,7 @@ registerMessages({
   },
   "settings.discovery.mcpCount": {
     "zh": "MCP 服务器（{count}）",
-    "en": "MCP Servers ({count})"
+    "en": "MCP servers ({count})"
   },
   "settings.advanced.note": {
     "zh": "会话级配置(技能/工具启用、执行环境、审批档)在右侧面板与输入栏调整。快捷键:Ctrl/Cmd+N 新建会话,Ctrl/Cmd+, 打开设置。",
@@ -1735,11 +1735,11 @@ registerMessages({
   },
   "inquiry.planProposal": {
     "zh": "计划提案",
-    "en": "Plan Proposal"
+    "en": "Plan proposal"
   },
   "inquiry.todoList": {
     "zh": "任务清单",
-    "en": "To-do List"
+    "en": "To-do list"
   },
   "thinking.thinking": {
     "zh": "思考中…",
@@ -1825,14 +1825,14 @@ registerMessages({
 
 // ── 当前 Agent 记忆 + 新建标签页启动器(2026-06-28 UI 优化;见文件头说明)──
 registerMessages({
-  "panel.memory.currentAgent": { "zh": "当前 Agent 记忆", "en": "Current Agent Memory" },
-  "panel.memory.recentLogs": { "zh": "最近日志", "en": "Recent Logs" },
+  "panel.memory.currentAgent": { "zh": "当前 Agent 记忆", "en": "Current agent memory" },
+  "panel.memory.recentLogs": { "zh": "最近日志", "en": "Recent logs" },
   "panel.log.none": { "zh": "暂无日志", "en": "No logs yet" },
-  "newtab.title": { "zh": "新建标签页", "en": "New Tab" },
-  "newtab.mainSection": { "zh": "主区视图", "en": "Main Area" },
-  "newtab.sideSection": { "zh": "侧栏视图", "en": "Side Panel" },
+  "newtab.title": { "zh": "新建标签页", "en": "New tab" },
+  "newtab.mainSection": { "zh": "主区视图", "en": "Main area" },
+  "newtab.sideSection": { "zh": "侧栏视图", "en": "Side panel" },
   "newtab.recentSection": { "zh": "最近使用", "en": "Recent" },
-  "newtab.newNote": { "zh": "新建笔记", "en": "New Note" },
+  "newtab.newNote": { "zh": "新建笔记", "en": "New note" },
   "newtab.today": { "zh": "今天", "en": "Today" },
 })
 
@@ -1841,8 +1841,8 @@ registerMessages({
   "onboarding.welcome.title": { "zh": "欢迎使用 {name}", "en": "Welcome to {name}" },
   "onboarding.welcome.version": { "zh": "版本 {v}", "en": "Version {v}" },
   "onboarding.welcome.continue": { "zh": "继续", "en": "Continue" },
-  "onboarding.welcome.viewChangelog": { "zh": "查看更新内容", "en": "What's New" },
-  "onboarding.welcome.changelogTitle": { "zh": "更新内容", "en": "What's New" },
+  "onboarding.welcome.viewChangelog": { "zh": "查看更新内容", "en": "What's new" },
+  "onboarding.welcome.changelogTitle": { "zh": "更新内容", "en": "What's new" },
   "onboarding.welcome.noChangelog": { "zh": "暂无更新记录", "en": "No release notes yet" },
   "onboarding.connect.benefitsTitle": { "zh": "登录 Forsion 账号即可", "en": "With a Forsion account" },
   "onboarding.connect.benefitSync": { "zh": "云端同步:记忆、会话、设置多端一致", "en": "Cloud sync — memory, sessions and settings stay consistent across devices" },

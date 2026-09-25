@@ -146,7 +146,7 @@ const zh: Dict = {
   'app.amadeusWorkspace': 'Amadeus · {name}',
   'app.createProjectFail': '创建项目失败: {e}',
   'ws.detail.count': '{n} 个会话',
-  'ws.detail.newChat': '在此项目中新建对话',
+  'ws.detail.newChat': '在此项目中新建会话',
   'ws.detail.empty': '该项目暂无会话',
   'ws.detail.viewMore': '查看更多',
   'agents.detail.title': '后台 Agent',
@@ -1956,9 +1956,9 @@ const en: Dict = {
   'app.amadeusWorkspace': 'Amadeus · {name}',
   'app.createProjectFail': 'Failed to create project: {e}',
   'ws.detail.count': '{n} sessions',
-  'ws.detail.newChat': 'New Chat In This Project',
+  'ws.detail.newChat': 'New session in this project',
   'ws.detail.empty': 'No sessions in this project yet',
-  'ws.detail.viewMore': 'View More',
+  'ws.detail.viewMore': 'View more',
   'agents.detail.title': 'Background agents',
   'agents.detail.settings': 'Settings',
   'agents.detail.historian': 'Historian activity',
@@ -1984,9 +1984,9 @@ const en: Dict = {
   'space.tangu': 'Tangu',
   'space.amadeus': 'Note',
   'space.calendar': 'Calendar',
-  'view.todo': 'To-Do List',
+  'view.todo': 'To-do list',
   'view.calendar': 'Calendar',
-  'view.calendarConfig': 'Calendar Settings',
+  'view.calendarConfig': 'Calendar settings',
   'view.db': 'Database',
   'view.drawing': 'Whiteboard',
   // ── Coding Space ──
@@ -2047,7 +2047,7 @@ const en: Dict = {
   'coding.openLink': 'Open',
   'coding.publishHint': 'Use relative paths for assets; .ts/.tsx are transpiled on publish, no build step.',
   'coding.publishNoEntry': 'No .html entry in this project yet — generate a page first.',
-  'coding.listingTitle': 'App Market',
+  'coding.listingTitle': 'App market',
   'coding.listingHint': 'Listed apps appear publicly under "Web Apps" in the market after platform review.',
   'coding.listingNone': 'Not listed',
   'coding.listingPending': 'In review',
@@ -2067,8 +2067,8 @@ const en: Dict = {
   'coding.termsLi3': 'You take responsibility for the content you publish.',
   'coding.termsManage': 'The platform manages public content per applicable laws and the Content Publishing Guidelines, and may restrict access to, stop displaying, or remove violating content.',
   'coding.termsAgreePre': 'I have read and agree to the ',
-  'coding.termsGuidelines': 'Content Publishing Guidelines',
-  'coding.termsConfirm': 'Confirm & Publish',
+  'coding.termsGuidelines': 'Content publishing guidelines',
+  'coding.termsConfirm': 'Confirm & publish',
   'coding.cancel': 'Cancel',
   'coding.projectName': 'Project name',
   'coding.create': 'Create',
@@ -2280,7 +2280,7 @@ const en: Dict = {
   'settings.developer.activityViewCmd': 'Activity log live view command',
   'settings.developer.activityViewCmdHint': 'Adds an "Open activity log" entry to the command palette (⌘K): a main-area tab tailing the activity journal in real time (2s refresh, filter/pause).',
   'command.openActivityLog': 'Open activity log',
-  'view.activityLog': 'Activity Log',
+  'view.activityLog': 'Activity log',
   'activityView.filter': 'Filter (substring)…',
   'activityView.pause': 'Pause',
   'activityView.resume': 'Resume',
@@ -2288,7 +2288,7 @@ const en: Dict = {
   'activityView.empty': 'No activity recorded yet. Make sure "Record in-app activity" is enabled in developer options, then do something.',
   // Active-window sampling seam (developer tool)
   'command.openActiveWindow': 'Active window sampling',
-  'view.activeWindow': 'Active Window',
+  'view.activeWindow': 'Active window',
   'activeWindowView.on': 'Seam enabled',
   'activeWindowView.off': 'Seam disabled',
   'activeWindowView.offHint': 'Active-window sampling is off by default. Turn on "Active window sampling" in Settings → Developer options and the app you are focused on will show up here live.',
@@ -2476,7 +2476,7 @@ const en: Dict = {
   'market.tab.plugins': 'Plugins',
   'market.tab.spaces': 'Spaces',
   'market.tab.themes': 'Themes',
-  'market.tab.webapps': 'Web Apps',
+  'market.tab.webapps': 'Web apps',
   'market.tab.installed': 'Installed',
   'market.searchPlaceholder': 'Search names, authors or tags',
   'market.clearSearch': 'Clear search',
@@ -2577,7 +2577,7 @@ const en: Dict = {
   'sidebar.account.login': 'Sign in to Forsion',
   'sidebar.account.loginHint': 'Sign in for cloud memory / skills / hosted models (works fine without signing in too)',
   'sidebar.account.loggingIn': 'Signing in…',
-  'sidebar.account.center': 'Account Center',
+  'sidebar.account.center': 'Account center',
   'sidebar.account.logout': 'Log out',
   'sidebar.account.menu.usage': 'Usage remaining',
   'sidebar.account.menu.weekly': 'Weekly',
@@ -2605,7 +2605,7 @@ const en: Dict = {
   'sidebar.account.engineDown': 'Engine not running · click to restart',
   'sidebar.account.engineStarting': 'Engine starting…',
   'sidebar.settings': 'Settings (Ctrl+,)',
-  'header.theme': 'Light / Dark',
+  'header.theme': 'Light / dark',
   'header.browser': 'Browser',
   'header.browserEnabled': 'Browser tools enabled',
   'header.browserDisabled': 'Browser tools disabled',
@@ -2629,7 +2629,7 @@ const en: Dict = {
   'app.update.bannerTitle': 'New version v{version} available',
   'app.update.bannerAction': 'Update now',
   'app.update.bannerDismiss': 'Dismiss',
-  'about.changelogTitle': "What's New",
+  'about.changelogTitle': "What's new",
   'about.builtWith': 'Forsion Desktop',
   'about.builtWithMobile': 'Forsion Mobile',
   'about.complianceTitle': 'Compliance',
@@ -2677,7 +2677,7 @@ const en: Dict = {
   'qr.failed': 'Failed to generate QR code, please retry.',
   'qr.alt': 'Login QR code',
   'channels.newSessionHint': 'Connecting creates a new session; later messages go to it. In the IM use /new, /list, /switch to manage sessions and /help for all commands.',
-  'channels.botToken': 'Bot Token',
+  'channels.botToken': 'Bot token',
   'channels.botTokenHint': 'Create a bot via @BotFather on Telegram to get a token, then press Connect.',
   'channels.qqHint': 'Create a bot on the QQ Open Platform (q.qq.com) to get AppID / AppSecret.',
   'channels.secretSaved': 'Saved (type to replace)',
@@ -2752,7 +2752,7 @@ const en: Dict = {
   'settings.tab.spaces': 'Spaces',
   'settings.spaces.hint': 'Manage the Spaces in the ribbon. Built-in Spaces ship with the app and cannot be removed; Spaces you created or installed from the market can be uninstalled (their on-disk layout recipe is deleted).',
   'settings.spaces.builtin': 'Built-in',
-  'settings.spaces.user': 'Custom/Market',
+  'settings.spaces.user': 'Custom/market',
   'settings.spaces.uninstall': 'Uninstall',
   'settings.spaces.uninstalled': 'Uninstalled "{name}"',
   'settings.spaces.empty': 'No Spaces yet.',
@@ -2769,7 +2769,7 @@ const en: Dict = {
   'settings.amadeusPlugins.builtinTitle': 'Built-in plugins',
   'settings.amadeusPlugins.builtinHint': 'Ships with the app and is on by default (browser, terminal and calendar are native host views; the rest are editor add-ons). Turning one off removes it from the workbench, command palette and editor — calendar takes its Space with it.',
   'settings.amadeusPlugins.externalTitle': 'External plugins',
-  'settings.amadeusPlugins.changelog': "What's New",
+  'settings.amadeusPlugins.changelog': "What's new",
   'settings.amadeusPlugins.hint': 'Toggle takes effect instantly; click a plugin for details. Plugin folder: ~/.forsion/plugins/ (market installs). A plugin may bundle engine plugins / agents / skills / Spaces — they are discovered, toggled and uninstalled together with it.',
   'settings.amadeusPlugins.openFolder': 'Open plugins folder',
   'settings.amadeusPlugins.reload': 'Reload',
@@ -2935,7 +2935,7 @@ const en: Dict = {
   'onboarding.connect.forsionHint': 'Sign in with your Forsion account (the cloud URL is set via an environment variable — nothing to enter here). Or switch to your own API key above.',
   'onboarding.connect.skipForNow': 'Skip for now',
   'onboarding.theme.stepLabel': 'Choose a theme',
-  'onboarding.theme.modeLabel': 'Light / Dark',
+  'onboarding.theme.modeLabel': 'Light / dark',
   'onboarding.theme.light': 'Light',
   'onboarding.theme.dark': 'Dark',
   'onboarding.theme.hint': 'You can change this anytime in Settings → Appearance.',
@@ -2992,7 +2992,7 @@ const en: Dict = {
   'settings.group.model': 'Models',
   'settings.group.agents': 'Agents',
   'settings.group.extensions': 'Extensions',
-  'settings.group.appearanceAbout': 'Appearance & About',
+  'settings.group.appearanceAbout': 'Appearance & about',
   'settings.group.plugins': 'Extensions',
   'settings.group.advanced': 'Advanced',
   'settings.group.about': 'About',
@@ -3121,7 +3121,7 @@ const en: Dict = {
   'settings.clearData.confirm': 'Clear the selected data? This cannot be undone and the app will restart.',
   'settings.clearData.macNote': 'This only clears data. To fully uninstall Forsion, drag it from Applications to the Trash.',
   // Update tab + developer test
-  'view.changelog': "What's New",
+  'view.changelog': "What's new",
   'changelog.newVersion': 'New version {version} available',
   'changelog.newest': 'Latest',
   'settings.developer.testUpdateLabel': 'Update popup test',
@@ -3199,9 +3199,9 @@ const en: Dict = {
   'input.slash.stop': 'Stop the current run',
   'input.slash.skillUse': 'Use skill {name} for this message',
   'input.skillChipTitle': 'This skill will be used for this message',
-  'input.slash.agent': 'Use a Normal Agent (custom persona)',
+  'input.slash.agent': 'Use a normal agent (custom persona)',
   'input.agentActive': 'Active agent: {name}',
-  'input.agentCleared': 'Normal Agent cleared',
+  'input.agentCleared': 'Normal agent cleared',
   // run engine selection (external ACP agent)
   'input.engineDefault': 'Tangu',
   'input.engineChipTitle': 'Run engine',
@@ -3230,7 +3230,7 @@ const en: Dict = {
   'settings.agentClis.imported': 'Imported',
 
   'settings.tab.agents': 'Agents',
-  'settings.agents.title': 'Normal Agents (custom personas)',
+  'settings.agents.title': 'Normal agents (custom personas)',
   'settings.agents.hint': 'Define reusable conversational personas (system prompt + model + settings) for different tasks. Agents can also self-author via the manage_agent tool.',
   'settings.agents.new': 'New agent',
   'settings.agents.brainSection': 'Brain (memory / journal / library)',
@@ -3391,7 +3391,7 @@ const en: Dict = {
   'settings.special.off': 'Off',
   'settings.special.custom': 'Custom',
   'settings.special.sectionTitle': 'Background agents (special)',
-  'settings.agents.sectionTitle': 'Normal Agents (custom personas)',
+  'settings.agents.sectionTitle': 'Normal agents (custom personas)',
   'settings.agents.starterTemplate': 'You are … (describe this agent\'s identity, expertise, tone, and how it should approach tasks).',
 
   'sidebar.special.title': 'Background agents',
@@ -3559,7 +3559,7 @@ const en: Dict = {
   'preview.notAvailable': 'No preview for this file type',
   'preview.tooLarge': 'File too large ({size}) to preview',
   'preview.htmlPreview': 'Preview',
-  'view.wsfile': 'File Preview',
+  'view.wsfile': 'File preview',
   'preview.openWithDefault': 'Open with default app',
   'preview.unsupportedAsk': "Can't preview this file type. Open it with the system default app?",
   'preview.expired': 'Preview content expired (this kind of preview does not survive restarts). Reopen it from its source.',
@@ -3715,10 +3715,23 @@ export function __dictSnapshot(): Record<Locale, Dict> {
   return { zh: { ...zh }, en: { ...en } }
 }
 
-/** 某个 key 的全部本地化值。主要给需要识别旧落盘文案的兼容层用：
+/**
+ * 「按值识别」的键改过文案后,旧值仍要认得(评审 U-36)。例:会话落盘的 project_name 是当时界面语言下的
+ * `app.defaultWorkspace` 值;把 en 从 `Tangu Default Workspace` 改成句首大写后,老会话若只和**当前**字典比对
+ * 就会从默认组里脱出来,自成一组。所以改这类键的任何一种语言的值,都必须先把旧值登记在这里(只增不删)。
+ * 当前按值识别的键:`app.defaultWorkspace`(appStore.workspaces)、`app.cloudWorkspace`、`agent.builtin.*`
+ * (builtinAgentDescriptions)。
+ */
+const LEGACY_VALUES: Record<string, readonly string[]> = {
+  'app.defaultWorkspace': ['Tangu Default Workspace'],
+  'app.cloudWorkspace': ['Cloud Workspace'],
+}
+
+/** 某个 key 的全部本地化值(含登记过的旧值)。主要给需要识别旧落盘文案的兼容层用：
  * 例如会话在中文界面下存了 project_name，后来切英文仍应归到同一系统工作区。 */
 export function translationValues(key: string): string[] {
-  return [...new Set(Object.values(DICTS).map((dict) => dict[key]).filter((value): value is string => !!value))]
+  const current = Object.values(DICTS).map((dict) => dict[key]).filter((value): value is string => !!value)
+  return [...new Set([...current, ...(LEGACY_VALUES[key] ?? [])])]
 }
 
 /** 查一个 key(缺失回退:目标语言 → zh → key 本身)。`translate` 与 Provider 的 `t` 共用它。 */

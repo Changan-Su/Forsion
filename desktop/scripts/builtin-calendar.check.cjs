@@ -130,7 +130,7 @@ async function main() {
     await win.waitForTimeout(1500)
     await openLauncher(win) // 开启动器,看入口有没有一起消失(开不出来 = 直接抛,不许空跑)
     const off = await win.evaluate(SNAP)
-    const noEntry = !off.launcher.some((n) => ['日历', 'Calendar', '待办清单', 'To-Do List'].includes(n))
+    const noEntry = !off.launcher.some((n) => ['日历', 'Calendar', '待办清单', 'To-do list'].includes(n))
     check(
       '2 关掉:图标/视图/Space 全撤,启动器入口也没了',
       off.calIcon === 0 && off.calView === 0 && off.active !== 'calendar' && noEntry,
@@ -249,7 +249,7 @@ async function main() {
       groups: document.querySelectorAll('.dv-groupview').length,
       spaces: document.querySelectorAll('.rb-space').length,
       deadTabs: [...document.querySelectorAll('.wb-tab-name')].filter((e) =>
-        ['日历', 'Calendar', '待办清单', 'To-Do List', '日历设置', 'Calendar Settings'].includes((e.textContent || '').trim())).length,
+        ['日历', 'Calendar', '待办清单', 'To-do list', '日历设置', 'Calendar settings'].includes((e.textContent || '').trim())).length,
     }))()`)
     check(
       '7 折叠侧栏 stash 里的日历视图:关插件后展开侧栏不许开出死视图',

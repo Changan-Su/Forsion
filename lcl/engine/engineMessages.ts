@@ -55,7 +55,7 @@ export const LCL_MESSAGES: Record<string, { zh: string; en: string }> = {
   'lcl.mini.switchSpace': { zh: '切换 Space', en: 'Switch Space' },
   'lcl.mini.showMain': { zh: '在主面板显示', en: 'Show in main panel' },
   'lcl.mini.close': { zh: '关闭 Mini Panel', en: 'Close Mini Panel' },
-  'lcl.mini.empty': { zh: '暂无已适配的 Space', en: 'No Mini Panel spaces available' },
+  'lcl.mini.empty': { zh: '暂无已适配的 Space', en: 'No Mini Panel Spaces available' },
   'lcl.mini.closeMenu': { zh: '关闭菜单', en: 'Close menu' },
   'lcl.mobile.closeTab': { zh: '关闭标签页', en: 'Close tab' },
 }
