@@ -555,7 +555,7 @@ a:hover { color: var(--accent-ink); }
   background: var(--overlay-light);
   color: var(--text-faint);
 }
-.project-menu-search:focus-within { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-ink) 22%, transparent); }
+.project-menu-search:focus-within { box-shadow: 0 0 0 var(--focus-ring) var(--sel-line); }
 .project-menu-search input { flex: 1; min-width: 0; background: none; border: none; outline: none; color: var(--text); font-size: var(--t2c-font-control, 12px); }
 .project-menu-search input::placeholder { color: var(--text-faint); }
 .project-menu-list { max-height: 240px; overflow-y: auto; overscroll-behavior: contain; }
@@ -1944,7 +1944,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   box-shadow: none;
 }
 .cm-effort-input:focus-visible { outline: none; }
-.cm-effort-slider-wrap:has(.cm-effort-input:focus-visible) .cm-effort-thumb { outline: 3px solid color-mix(in srgb, var(--accent) 32%, transparent); outline-offset: 0; box-shadow: var(--btn-shadow); }
+.cm-effort-slider-wrap:has(.cm-effort-input:focus-visible) .cm-effort-thumb { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 1px; box-shadow: var(--btn-shadow); }
 .cm-effort-slider-wrap:has(.cm-effort-input:active) .cm-effort-thumb { transform: translate(-50%, -50%) scale(1.08); }
 .cm-effort.is-max .cm-effort-thumb {
   /* shadow-contract: effect — 白内圈与紫辉光标识 Max，不承担卡片高程。 */
@@ -2847,7 +2847,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   background: var(--bg);
   color: var(--text-faint);
 }
-.settings-filter-input:focus-within { border-color: var(--sel-line); box-shadow: 0 0 0 2px var(--accent-light); }
+.settings-filter-input:focus-within { border-color: var(--sel-line); box-shadow: 0 0 0 var(--focus-ring) var(--sel-line); }
 .settings-filter-input > input { min-width: 0; flex: 1; padding: 0; border: 0; background: transparent; box-shadow: none; }
 .settings-filter-input > button { display: inline-flex; align-items: center; padding: 2px; color: var(--text-faint); cursor: pointer; }
 .settings-inline-notice { padding: 8px 15px; border-bottom: var(--border-width) solid var(--border); background: var(--accent-light); color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); }

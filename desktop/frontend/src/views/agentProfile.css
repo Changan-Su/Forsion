@@ -9,7 +9,7 @@
 .agents-search, .profile-search { display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); color: var(--text-muted); }
 .agents-search input, .profile-search input { width: 100%; min-width: 0; border: 0; background: transparent; outline: none; padding: 0; box-shadow: none; font-size: var(--ui-font-meta, 12px); color: var(--text); }
 /* 环画在框内:正文滚动区左右只有 2px 内边距,外扩的环会被裁掉两条竖边 */
-.profile-search:focus-within { outline: 2px solid var(--accent); outline-offset: -2px; }
+.profile-search:focus-within { outline: var(--focus-ring) solid var(--accent); outline-offset: -2px; }
 .agents-roster-list { overflow: auto; flex: 1; min-height: 0; }
 .agents-roster-row { position: relative; }
 .agents-roster-row.dragging { opacity: .5; }
@@ -53,7 +53,7 @@
 .agent-portrait-slot { position: relative; flex-shrink: 0; }
 .agent-portrait-edit { position: relative; cursor: pointer; }
 .agent-portrait-edit input[type=file] { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
-.agent-portrait-edit:has(input:focus-visible) { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+.agent-portrait-edit:has(input:focus-visible) { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 2px; }
 .agent-portrait-badge, .agent-portrait-remove { position: absolute; display: grid; place-items: center; padding: 0; color: var(--text); background: var(--bg-card); border: 1px solid var(--border); border-radius: 50%; opacity: 0; transition: opacity 160ms ease; }
 .agent-portrait-badge { right: 5px; bottom: 5px; width: 24px; height: 24px; pointer-events: none; }
 .agent-portrait-remove { top: -6px; right: -6px; width: 20px; height: 20px; color: var(--text-muted); cursor: pointer; }
@@ -80,7 +80,7 @@
 .agent-section-nav button.selected { color: var(--accent-ink); background: transparent; }
 .agent-profile-content { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 24px 2px; scrollbar-width: thin; }
 .agent-profile-content:focus { outline: none; }
-.agent-profile-content:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.agent-profile-content:focus-visible { outline: var(--focus-ring) solid var(--accent); outline-offset: -2px; }
 .profile-edit-fields { border: 0; margin: 0; padding: 0; min-width: 0; }
 .profile-edit-fields:disabled { opacity: .7; }
 .agent-profile-content h3 { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); font-weight: 500; margin: 24px 0 12px; }
@@ -160,7 +160,7 @@
 .agent-equipment-item { display: flex; gap: 10px; align-items: flex-start; padding: 12px 10px; border-radius: var(--radius-sm, 8px); font-size: var(--ui-font-meta, 12px); line-height: 1.6; cursor: pointer; transition: background 160ms ease; }
 .agent-equipment-item:hover, .agent-equipment-item.enabled { background: var(--overlay-light); }
 /* 只在键盘聚焦勾选框时圈整行;点开描述(按钮自己有焦点环)不该让整行套上一圈粗框 */
-.agent-equipment-item:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+.agent-equipment-item:has(input:focus-visible) { outline: var(--focus-ring) solid var(--accent); outline-offset: -2px; }
 .agent-equipment-item input { flex-shrink: 0; margin-top: 3px; accent-color: var(--accent); }
 .agent-equipment-item strong { font-size: var(--ui-font-body, 13px); font-weight: 500; overflow-wrap: anywhere; }
 /* 清单行(EquipmentRow):勾选框 + 名称一行,描述另起一行、默认截成一行,点开才是全文。
@@ -169,7 +169,7 @@ div.agent-equipment-item { display: grid; gap: 1px; padding: 7px 10px; cursor: d
 div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 10px; min-width: 0; cursor: pointer; }
 .equipment-desc { display: block; width: calc(100% - 23px); min-width: 0; margin-left: 23px; padding: 0; text-align: left; font-size: var(--ui-font-meta, 12px); line-height: 1.6; color: var(--text-muted); background: transparent; border: 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .equipment-desc:hover { color: var(--text); }
-.equipment-desc:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+.equipment-desc:focus-visible { outline: var(--focus-ring) solid var(--accent); outline-offset: 1px; border-radius: 4px; }
 .equipment-desc[aria-expanded=true] { white-space: normal; overflow-wrap: anywhere; }
 /* 内置技能组:默认合上。标题行 = 组名 + 已启用计数,不描边(内容卡纪律),靠底色与清单区分。 */
 .equipment-group { margin-top: 10px; border-radius: var(--radius-sm, 8px); background: var(--overlay-light); }

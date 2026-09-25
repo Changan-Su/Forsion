@@ -21,7 +21,7 @@
 .gsk-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 53px; padding: 8px 12px; border: 0; border-top: var(--border-width) solid var(--overlay-subtle); background: transparent; text-align: left; color: var(--text); font: inherit; cursor: pointer; }
 .gsk-row:hover { background: var(--overlay-subtle); }
 .gsk-row.selected { background: var(--accent-light); }
-.gsk-row:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: -2px; }
+.gsk-row:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: -2px; }
 .gsk-row-icon { display: grid; place-items: center; width: 27px; height: 27px; flex: 0 0 auto; border-radius: var(--radius-sm); background: var(--overlay-light); color: var(--text-muted); }
 .gsk-row.selected .gsk-row-icon { color: var(--accent-ink); }
 .gsk-row-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
@@ -59,7 +59,7 @@
 .gsk-form label { display: flex; flex-direction: column; gap: 5px; color: var(--text-muted); font-size: var(--ui-font-meta); font-weight: 600; }
 .gsk-form input, .gsk-form select, .gsk-form textarea { width: 100%; min-height: var(--control-height, 32px); padding: 7px 9px; border: var(--border-width) solid var(--overlay-medium); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font: inherit; font-size: var(--ui-font-body); font-weight: 400; }
 .gsk-form textarea { resize: vertical; font-family: var(--font-mono); line-height: 1.55; }
-.gsk-form input:focus, .gsk-form select:focus, .gsk-form textarea:focus { outline: 2px solid var(--accent-ink); outline-offset: 0; }
+.gsk-form input:focus, .gsk-form select:focus, .gsk-form textarea:focus { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 0; }
 .gsk-form p { margin: 0; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
 .gsk-form-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-top: 3px; }
 @media (max-width: 900px) { .gsk-columns { grid-template-columns: minmax(220px, 0.45fr) minmax(0, 0.55fr); } .gsk-state { display: none; } }
