@@ -46,7 +46,7 @@ async function launch(home, stubUrl) {
 }
 async function clickMuseSpace(win) {
   const ok = await win.evaluate(() => {
-    const b = [...document.querySelectorAll('button.rb-space')].find((x) => /muse/i.test(x.getAttribute('title') || x.textContent || ''))
+    const b = [...document.querySelectorAll('button.rb-space')].find((x) => /muse/i.test(x.getAttribute('aria-label') || x.getAttribute('title') || x.textContent || ''))
     if (b) b.click()
     return !!b
   })

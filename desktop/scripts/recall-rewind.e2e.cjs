@@ -96,7 +96,7 @@ async function main() {
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
     await win.waitForTimeout(1500)
     // renderer 的「上次 Space」可能来自另一个 dev 实例;显式进入 Tangu,别拿侧栏里任意搜索框当 Space 探针。
-    const spaceBtn = win.locator('.rb-space[title="Agent"]').first()
+    const spaceBtn = win.locator('.rb-space[aria-label="Agent"]').first()
     if (await spaceBtn.count().catch(() => 0)) { await spaceBtn.click().catch(() => {}); await win.waitForTimeout(1000) }
     // 侧栏折叠时先展开(同 check:newtab)
     if (!(await win.locator('.t2s-mode').first().count().catch(() => 0))) {

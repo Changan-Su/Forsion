@@ -52,8 +52,8 @@ async function openChatSession(win) {
   await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
   await win.waitForTimeout(1000)
   const clicked = await win.evaluate((names) => {
-    const b = [...document.querySelectorAll('button.rb-space')].find((x) => names.some((n) => (x.getAttribute('title') || x.textContent || '').includes(n)))
-    if (b) { b.click(); return (b.getAttribute('title') || b.textContent || '').trim() }
+    const b = [...document.querySelectorAll('button.rb-space')].find((x) => names.some((n) => (x.getAttribute('aria-label') || x.getAttribute('title') || x.textContent || '').includes(n)))
+    if (b) { b.click(); return (b.getAttribute('aria-label') || b.getAttribute('title') || b.textContent || '').trim() }
     return null
   }, ['Agent', 'Tangu'])
   await win.waitForTimeout(1500)

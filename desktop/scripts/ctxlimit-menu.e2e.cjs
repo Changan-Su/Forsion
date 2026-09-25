@@ -90,7 +90,7 @@ async function main() {
     await win.keyboard.press('Escape')
 
     // ── 会话里:进度环弹层的封顶说明 + 开到最大后分母当场换(会话列表在 Tangu space 的侧栏)
-    await win.locator('.rb-btn.rb-space[title="Tangu"]').first().click()
+    await win.locator('.rb-btn.rb-space[aria-label="Tangu"]').first().click()
     await win.waitForTimeout(1200)
     await win.locator('.t2s-srow', { hasText: '上下文上限会话' }).first().click({ timeout: 10000 })
     await win.waitForTimeout(1200)

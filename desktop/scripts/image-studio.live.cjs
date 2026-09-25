@@ -107,7 +107,7 @@ async function main() {
     await Promise.race([skip.waitFor({ state: 'visible', timeout: 45000 }), win.locator('.dv-groupview').first().waitFor({ state: 'visible', timeout: 45000 })])
     if (await skip.isVisible().catch(() => false)) await skip.click()
     await win.waitForSelector('.dv-groupview')
-    const icon = win.locator('.rb-space[title="Image Studio"]').first()
+    const icon = win.locator('.rb-space[aria-label="Image Studio"]').first()
     if (!await icon.isVisible().catch(() => false)) await win.locator('.rb-top .rb-more').first().hover()
     await icon.click(); await win.waitForSelector('.ims-empty')
     await win.locator('.ims input[type="file"][multiple]').setInputFiles(path.join(OUT, generated.files[0]))

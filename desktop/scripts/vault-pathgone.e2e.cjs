@@ -68,7 +68,7 @@ async function main() {
       if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break }
     }
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
-    await win.locator('.rb-space[title="Note"], .rb-space:has-text("Note")').first().click({ timeout: 15_000 })
+    await win.locator('.rb-space[aria-label="Note"], .rb-space:has-text("Note")').first().click({ timeout: 15_000 })
     await win.waitForSelector('.t2s-srow', { timeout: 20_000 })
 
     const emojiCount = () => win.evaluate(() => document.querySelectorAll('.t2s-srow .amx-page-emoji').length)

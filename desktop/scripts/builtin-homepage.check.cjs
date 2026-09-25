@@ -71,7 +71,7 @@ const COMPACT_TILE_LIMIT_FOR_TEST = 6
  *  更要命的是 `addRibbonIcon` 是**追加**:插件关掉再开,图标就排到区末尾、直接落进「…」——
  *  这是与内置日历同源的既有行为(槽位不保),不是本插件引入的,所以按并集判「回来了没有」。 */
 async function ribbonSpaces(win) {
-  const read = (root) => `[...document.querySelectorAll('${root} .rb-space')].map((b) => b.getAttribute('title') || b.querySelector('.rb-label')?.textContent || '')`
+  const read = (root) => `[...document.querySelectorAll('${root} .rb-space')].map((b) => b.getAttribute('aria-label') || b.getAttribute('title') || b.querySelector('.rb-label')?.textContent || '')`
   const bar = await win.evaluate(read('.rb-top'))
   const home = await win.evaluate(read('.rb-home'))
   const more = win.locator('.rb-top .rb-more').first()
@@ -87,7 +87,7 @@ async function ribbonSpaces(win) {
 /** ribbon 上的 Space 名 + 主页视图可见性 + 坞格子 + 活动 Space + 启动器卡片。 */
 const SNAP = `(() => {
   const names = [...document.querySelectorAll('.rb-space')]
-    .map((b) => b.getAttribute('title') || b.querySelector('.rb-label')?.textContent || '')
+    .map((b) => b.getAttribute('aria-label') || b.getAttribute('title') || b.querySelector('.rb-label')?.textContent || '')
   const vis = (sel) => [...document.querySelectorAll(sel)].filter((e) => e.getBoundingClientRect().width > 0).length
   return {
     barSpaces: names,
@@ -137,7 +137,7 @@ async function boot() {
 async function enterSpace(win, names) {
   const click = (root) => `(() => {
     const b = [...document.querySelectorAll('${root} .rb-space')].find((x) =>
-      ${JSON.stringify(names)}.includes(x.getAttribute('title') || x.querySelector('.rb-label')?.textContent || ''))
+      ${JSON.stringify(names)}.includes(x.getAttribute('aria-label') || x.getAttribute('title') || x.querySelector('.rb-label')?.textContent || ''))
     if (b) { b.click(); return true }
     return false
   })()`

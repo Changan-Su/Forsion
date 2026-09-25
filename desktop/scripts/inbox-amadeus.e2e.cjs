@@ -73,7 +73,7 @@ const APPROVAL = { id: 'apv-1', session_id: 'S', run_id: 'R', agent_slug: 'muse'
 
 async function clickInboxSpace(win) {
   const ok = await win.evaluate(() => {
-    const b = [...document.querySelectorAll('button.rb-space')].find((x) => /收件箱|inbox/i.test(x.getAttribute('title') || x.textContent || ''))
+    const b = [...document.querySelectorAll('button.rb-space')].find((x) => /收件箱|inbox/i.test(x.getAttribute('aria-label') || x.getAttribute('title') || x.textContent || ''))
     if (b) b.click()
     return !!b
   })
@@ -522,7 +522,7 @@ async function main() {
       await win.reload({ waitUntil: 'domcontentloaded' })
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1000, 820))
       await win.setViewportSize({ width: 1000, height: 820 })
-      await win.locator('button.rb-space[title="Inbox"]').click()
+      await win.locator('button.rb-space[aria-label="Inbox"]').click()
       await win.locator('.t2sw-plug-list .t2s-srow').first().waitFor()
       check('英文窄窗口共享列表无横向溢出', await win.locator('.t2sw-plug').evaluate((el) => innerWidth <= 1000 && el.scrollWidth <= el.clientWidth + 1))
       check('共享工具栏跟随英文', await win.getByRole('textbox', { name: 'Search Inbox', exact: true }).count() === 1)
