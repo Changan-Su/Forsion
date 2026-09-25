@@ -42,7 +42,7 @@ registerMessages({
   'csl.emptyHint': { zh: '新建或打开的项目会出现在这里，方便下次继续。', en: 'Projects you create or open appear here so you can return to them.' },
   'csl.noResults': { zh: '没有找到匹配的项目', en: 'No matching projects' },
   'csl.clearSearch': { zh: '清空搜索', en: 'Clear search' },
-  'csl.hostUnavailable': { zh: '请在桌面端打开 Coding Studio，以创建和打开本地项目。', en: 'Open Coding Studio in the desktop app to create and open local projects.' },
+  'csl.hostUnavailable': { zh: '请在桌面端打开编码工作室，以创建和打开本地项目。', en: 'Open Coding Studio in the desktop app to create and open local projects.' },
   'csl.listFailed': { zh: '无法读取项目目录，请重试。', en: 'Could not read the project folder. Try again.' },
   'csl.createFailed': { zh: '项目未创建成功，请检查目录权限后重试。', en: 'Could not create the project. Check folder permissions and try again.' },
   'csl.importFailed': { zh: '无法打开这个文件夹，请重试。', en: 'Could not open this folder. Try again.' },

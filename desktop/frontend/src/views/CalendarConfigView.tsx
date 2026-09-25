@@ -85,7 +85,7 @@ function WeekStartSetting() {
   return (
     <div className="amx-calcfg-weekstart" data-week-start={pref}>
       <span className="amx-calcfg-weekstart-label">{t('calcfg.weekStart')}</span>
-      <CapabilityMenu label={t('calcfg.weekStart')} className="capability-menu-trigger amx-calcfg-weekstart-btn" selection
+      <CapabilityMenu label={`${t('calcfg.weekStart')} · ${current.label}`} className="capability-menu-trigger amx-calcfg-weekstart-btn" selection
         items={options.map((o) => ({ id: `week-start:${o.value}`, label: o.label, selected: o.value === pref, onSelect: () => setPref(o.value) }))}>
         <span>{current.label}</span><ChevronDown size={13} />
       </CapabilityMenu>
