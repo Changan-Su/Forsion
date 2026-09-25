@@ -98,6 +98,10 @@ export function approvalPreview(call: ToolCall): string {
     return `apply_patch (${n} file change(s))`;
   }
   if (name === 'kill_process') return `kill process ${args.process_id ?? ''}`;
+  if (name === 'update_session_settings') {
+    const parts = [args.model ? `model → ${args.model}` : '', args.thinking_level ? `thinking → ${args.thinking_level}` : ''].filter(Boolean);
+    return `session settings: ${parts.join(' · ') || '(nothing)'}${args.reason ? ` — ${String(args.reason).slice(0, 200)}` : ''}`;
+  }
   // 接管用户 Chrome 时 browser_console 要批:用户批的是整段页内 JS,不许在 200 字处截断藏住后半段(Codex 09-24 #5)
   if (name === 'browser_console') return args.expression != null ? `browser_console — run JS in the page:\n${String(args.expression)}` : 'browser_console (read console/errors)';
   if (name === 'browser_task') {

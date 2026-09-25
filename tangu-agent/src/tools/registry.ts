@@ -44,6 +44,7 @@ import { readActivityProvider } from './builtin/readActivity.js';
 import { readSessionProvider } from './builtin/readSession.js';
 import { searchSessionsProvider } from './builtin/searchSessions.js';
 import { manageHarnessProvider } from './builtin/manageHarness.js';
+import { sessionSettingsProvider } from './builtin/sessionSettings.js';
 import { sketchProvider } from './builtin/sketch.js';
 import { manageAutomationProvider } from './builtin/manageAutomation.js';
 import { transcribeAudioProvider } from './builtin/transcribeAudio.js';
@@ -182,6 +183,7 @@ registerToolProvider(uiCommandsProvider); // GUI 限定(ctx.client + 客户端�
 registerToolProvider(teamSayProvider); // 团队成员随时向主聊天发言(append 末尾,保前缀缓存)
 registerToolProvider(browserTabsProvider); // host-only:browser_tabs 看/读用户自己 Chrome 里开着的标签(远程调试接管;append 末尾,保前缀缓存)
 registerToolProvider(museWakeProvider); // 仅 Muse 周期(ctx.muse,子代理除外):set_next_wake 按作息跳过心跳省额度(append 末尾;普通 run 不可见,快照不变)
+registerToolProvider(sessionSettingsProvider); // host-only 前台 run:session_settings 读 / update_session_settings 改本会话模型与思考档(写走 command 审批档;审批档不开放;append 末尾,保前缀缓存)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */

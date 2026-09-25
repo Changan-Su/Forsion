@@ -14,6 +14,7 @@ import { realpathSync } from 'node:fs';
 import { publish, drain, cleanup } from './eventBus.js';
 import { makeUiSettingsUpdater } from './uiAck.js';
 import { gateToolCall, requestApproval, type ApprovalDecision, type ApprovalMode } from './approvals.js';
+import { takeRunThinking } from './sessionSettings.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } from '../seams/runContext.js';
 import path from 'node:path';
@@ -842,7 +843,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const MAX_TRUNCATION_RECOVERY = 3;
   let truncationRecoveryUsed = 0;
   // 未显式设置的会话默认思考·中(2026-07-16 产品拍板);显式 'off' 仍关。UI 显示默认须同步(ModelPill)。
-  const thinkingLevel: ThinkingLevel = agentConfig.thinkingLevel || 'medium';
+  // let:update_session_settings 在本 run 里改了思考档 → 迭代边界取走覆盖值,下一次请求起生效(模型仍按 run 定格)。
+  let thinkingLevel: ThinkingLevel = agentConfig.thinkingLevel || 'medium';
   const attachments = input.attachments || [];
   let imageInputs = normalizeImageAttachments(attachments);
   // host-exec（TUI/桌面本机模式）注入：execMode/cwd/approvalMode 只经 per-run agentConfig 传入。
@@ -2054,6 +2056,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     };
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       if (ac.signal.aborted) throw new AbortLikeError();
+      const thinkingOverride = takeRunThinking(runId);
+      if (thinkingOverride && thinkingOverride !== thinkingLevel) {
+        thinkingLevel = thinkingOverride;
+        toolCtx.thinkingLevel = thinkingOverride; // self_brainstorm 分身须同档
+      }
       // load_tools 解锁后的 defs 重算(未解锁迭代零开销;解锁项按 registry 规则追加在内置 defs 末尾)
       if (toolDefsDirty) {
         toolDefs = getToolDefinitions(toolCtx);
@@ -2731,6 +2738,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     steerWakeups.delete(runId);
     steerArrivals.delete(runId);
     steerClosed.delete(runId);
+    takeRunThinking(runId); // 末轮才改的思考档没被取走 → 丢弃(会话存值已写,下一个 run 照样生效)
     runSession.delete(runId);
     advanceQueue(sessionId); // 推进同会话队列：起下一个排队 run（正常完成/失败/中止都经此）
     setTimeout(() => cleanup(runId), 30_000);

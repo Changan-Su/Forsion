@@ -17,18 +17,14 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
-import { CONTEXT_WINDOW_TOKENS, effectiveContextWindowInfo, type CtxWindowSource } from '../services/contextBudget.js';
+import { CONTEXT_WINDOW_TOKENS } from '../services/contextBudget.js';
 import { MIN_OVERRIDE_TOKENS, setModelContextWindow } from '../services/modelOverrides.js';
-import { modelSupportsVision, resolveModelCapability, supportedThinkingLevels, type ThinkingLevel } from '../llm/modelCapabilities.js';
+import { listModelCatalog } from '../services/modelCatalog.js';
 
 const router = Router();
 
-/**
- * 托管模型的 supportsVision 标注 → 传给黑名单表的 override。**只有显式 false 算标注**:
- * `supports_vision` 列默认 TRUE,拿 TRUE 当「admin 说了能看」会把硬编码黑名单整片架空。
- * 与真正决定要不要走辅助识图的 mainModelSupportsVision(visionService)同一口径。
- */
-export const visionOverrideOf = (v: unknown): false | undefined => (v === false ? false : undefined);
+// 旧导入点(测试 / 外部)不断:口径搬进 services/modelCatalog.ts。
+export { visionOverrideOf } from '../services/modelCatalog.js';
 
 router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
   try {
@@ -45,57 +41,11 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
     const store = deps().profileStore;
     const profile = appIdQ ? store.resolve(appIdQ) : (store.resolve(null) ?? deps().profile);
     if (!profile) return res.status(400).json({ detail: `unknown app_id: ${appIdQ}` });
-    // contextWindow 供客户端「上下文占比」进度条用 = run 实际用的窗口(effectiveContextWindowInfo:自动识别的封顶 272k,
-    // 人填的覆盖不封顶);contextWindowSource 标注它是人填的(override/model)还是猜的(family/default),设置页据此区分
-    // 「已覆盖」与「自动识别」。maxContextWindow = 自动识别出的模型窗口(封顶前),> 缺省上限的模型菜单才露「上下文上限」。
-    // modelType 区分大语言模型 / 生图模型 / 语音识别(后端已分类;桌面模型设置据此分区,generate_image 据此选模型,语音输入据此筛 ASR)。
-    // supportsVision:能不能直接「看」图。黑名单制(见 modelSupportsVision)——后端/provider 显式
-    // 标了就听标注,没标就默认能看。客户端据此提示「本模型没有多模态,已启用图像识别辅助模型」。
-    // ⚠️ 只有 `false` 算标注:托管模型的 supports_vision 列默认就是 TRUE(建模型时没人会去取消勾选),
-    // 拿它当「admin 说了能看」会把硬编码黑名单整片架空 —— 真正决定要不要走辅助识图的
-    // mainModelSupportsVision 本来就只认 false(visionService),这里跟它对齐,否则会出现
-    // 「界面说这模型能看图、引擎其实在走辅助模型」的两套口径(GLM-5.3 这类纯文本模型上必现)。
-    // thinkingLevels:该模型真正支持的思考档(能力表 supportedThinkingLevels;H6 思考档可见)。
-    // 客户端据此把不支持的档位标灰——此前 /think 菜单全档可选,选了不支持的静默降档零提示。
-    // ⚠️ baseUrl 必须带上:能力表大半规则按 host 键(xai/dashscope/moonshot…),丢了它会退到
-    // provider/model 兜底,标灰方向两头都能错(评审实证:grok off 不该亮/qwen off 不该灰)。
-    const thinkLv = (provider: string | undefined, modelId: string, baseUrl?: string): ThinkingLevel[] =>
-      supportedThinkingLevels(resolveModelCapability({ provider, modelId, baseUrl }));
-    const models: Array<{ id: string; name: string; provider: string; source: 'forsion' | 'direct'; modelType: 'llm' | 'image_gen' | 'asr'; contextWindow: number; contextWindowSource: CtxWindowSource; maxContextWindow?: number; supportsVision: boolean; thinkingLevels?: ThinkingLevel[]; groupId?: string | null; groupName?: string | null; groupSortOrder?: number; sortOrder?: number; tags?: Array<{ text: string; color: string }>; multiplier?: number | null }> = [];
-
-    let forsion: { status: 'ok' | 'empty' | 'error'; detail: string | null } = { status: 'ok', detail: null };
-    let cloud: any[] = [];
-    let projectDefaultModelId: string | null = null;
-    let projectBackgroundModelId: string | null = null;
-    let projectImageModelId: string | null = null;
-    let projectVisionModelId: string | null = null;
-    try {
-      // 优先按应用过滤(admin 的 project_model_configs);brain 未实现该可选方法 → 回退全局列表。
-      const listForProject = deps().brain.models.listModelsForProject;
-      if (listForProject) {
-        const r = await listForProject(profile.appId);
-        cloud = r?.models || [];
-        projectDefaultModelId = r?.defaultModelId ?? null;
-        projectBackgroundModelId = r?.backgroundModelId ?? null;
-        projectImageModelId = r?.imageModelId ?? null;
-        projectVisionModelId = r?.visionModelId ?? null;
-      } else {
-        cloud = (await deps().brain.models.listGlobalModels()) || [];
-      }
-    } catch (e: any) {
-      forsion = { status: 'error', detail: e?.message || String(e) };
-      cloud = [];
-    }
-    for (const m of cloud) {
-      if (!m?.id) continue;
-      // 已知类型(生图/语音识别)透传,未知归 llm。旧版只透传 image_gen,把 asr 静默拍成 llm → 桌面把语音识别模型误当聊天模型(见 AsrModelChoice/ChatView 的 modelType 分流)。
-      const mType = m.modelType === 'image_gen' || m.modelType === 'asr' ? m.modelType : 'llm';
-      const win = effectiveContextWindowInfo(m.id, m);
-      // 思考档能力表按上游模型名匹配(目录导入的 id 是 pr-<hash>);与 agentLoop 里 clamp 用的 `apiModelId || modelId` 同口径。
-      models.push({ id: m.id, name: m.name || m.id, provider: m.provider || 'forsion', source: 'forsion', modelType: mType, groupId: m.groupId, groupName: m.groupName, groupSortOrder: m.groupSortOrder, sortOrder: m.sortOrder, tags: m.tags, multiplier: m.multiplier, contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max, supportsVision: modelSupportsVision(m.id, visionOverrideOf(m.supportsVision)), ...(mType === 'llm' ? { thinkingLevels: thinkLv(m.provider, m.apiModelId || m.id, m.defaultBaseUrl ?? m.default_base_url ?? undefined) } : {}) });
-    }
-    if (forsion.status === 'ok' && cloud.length === 0) {
-      // 列表为空:探针确认大脑是否可达(httpBrain 把网络/404 都吞成 [],此处补真相)。
+    // 字段口径(contextWindow / modelType / supportsVision / thinkingLevels …)见 services/modelCatalog.ts。
+    const cat = await listModelCatalog(profile);
+    let forsion = cat.forsion;
+    if (forsion.status === 'ok' && !cat.models.some((m) => m.source === 'forsion')) {
+      // 云端列表为空:探针确认大脑是否可达(httpBrain 把网络/404 都吞成 [],此处补真相)。
       try {
         const u = await deps().brain.users.getUserById(req.user!.userId);
         forsion = u
@@ -105,37 +55,14 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
         forsion = { status: 'error', detail: `云端不可达:${e?.message || e}` };
       }
     }
-
-    // 直连模型暴露为 `<providerId>/<模型>`(registry 形式 1,本就是自由填约定):裸模型名与云端托管
-    // 模型同名(如订阅 codex 的 gpt-5.5 vs Forsion 托管 gpt-5.5)时曾被下方去重吞掉 —— 用户加了
-    // provider 却"看不到自己的模型"。前缀化后 id 永不与云端相撞,选谁走谁也不再有歧义;
-    // 旧会话存的裸 id 仍由 registry 形式 2(modelIds 精确命中)照常解析。name 保留裸名供展示。
-    const directProviders = deps().brain.models.listDirectProviders?.() ?? [];
-    for (const p of directProviders) {
-      const noVision = new Set(p.noVisionModelIds ?? []);
-      for (const mid of p.modelIds ?? []) {
-        // 窗口按完整 id 解析:run 用的 modelId 就是 `<providerId>/<model>`,用户覆盖表与回学表都按它键;族表规则认前缀。
-        const id = `${p.providerId}/${mid}`;
-        const win = effectiveContextWindowInfo(id);
-        models.push({ id, name: mid, provider: p.providerId, source: 'direct', modelType: 'llm', contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max, supportsVision: modelSupportsVision(mid, noVision.has(mid) ? false : undefined), thinkingLevels: thinkLv(p.providerId, mid, p.baseUrl) });
-      }
-      for (const mid of p.imageModelIds ?? []) {
-        models.push({ id: `${p.providerId}/${mid}`, name: mid, provider: p.providerId, source: 'direct', modelType: 'image_gen', contextWindow: 0, contextWindowSource: 'default', supportsVision: false });
-      }
-    }
-
-    // 选择器按 id 选用(value={m.id})→ 按 id 去重兜底(direct 已前缀化,正常不会撞)。
-    const seenId = new Set<string>();
-    const uniqueModels = models.filter((m) => (seenId.has(m.id) ? false : (seenId.add(m.id), true)));
-
     // 默认模型:admin 的 project 默认 > profile 静态默认。后台/生图槽供客户端「未显式设置即跟随」。
     res.json({
-      models: uniqueModels,
-      directProviders,
-      defaultModelId: projectDefaultModelId || profile.defaultModelId || null,
-      backgroundModelId: projectBackgroundModelId,
-      imageModelId: projectImageModelId,
-      visionModelId: projectVisionModelId,
+      models: cat.models,
+      directProviders: cat.directProviders,
+      defaultModelId: cat.defaultModelId,
+      backgroundModelId: cat.backgroundModelId,
+      imageModelId: cat.imageModelId,
+      visionModelId: cat.visionModelId,
       contextWindowCap: CONTEXT_WINDOW_TOKENS, // 缺省上限:模型菜单「默认」档显示 min(maxContextWindow, 它)
       // PUT /agent/models/overrides 在本进程能不能写(与它同一道 hostExec 门):桌面连外部 / 云端 worker 时为 false,
       // 模型菜单据此不露「上下文上限」—— 靠前端猜宿主(backendStatus)会在 external 模式下露出一个必然 404 的开关。
