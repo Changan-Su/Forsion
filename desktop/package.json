@@ -118,6 +118,7 @@
     "check:modelmenu": "node scripts/model-menu.check.cjs",
     "check:menutap": "node scripts/menu-tap.check.cjs",
     "check:settingsui": "node scripts/settings-ui.check.cjs",
+    "check:settingsmode": "node scripts/settings-mode.check.cjs",
     "check:themecontrast": "node scripts/theme-contrast.check.cjs",
     "check:themevisual": "node scripts/theme-visual.check.cjs",
     "check:themeapp": "node scripts/theme-app.check.cjs",

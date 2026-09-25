@@ -1205,7 +1205,7 @@ const zh: Dict = {
   'settings.group.tools': '工具',
   'settings.group.corePlugins': '核心插件',
   'settings.group.communityPlugins': '社区插件',
-  'settings.tab.general': '常规设置',
+  'settings.tab.general': '常规',
   'settings.page.generalDescription': '管理工作目录、运行环境与 Forsion 连接状态。',
   'settings.page.spacesDescription': '选择启动位置，查看或移除已安装的工作空间。',
   'settings.page.notesDescription': '统一管理附件位置、笔记行为与删除安全选项。',
@@ -1416,7 +1416,7 @@ const zh: Dict = {
   'pill.more': '更多(翻页)',
   'header.currentAgent': '当前 Agent',
   // 设置 → Agent CLIs(外部 agent 引擎检测 + 默认模型)
-  'settings.tab.agentClis': 'Agent CLIs',
+  'settings.tab.agentClis': '本机 Agent CLI',
   'settings.agentClis.title': '外部 Agent CLI',
   'settings.agentClis.hint': '检测到的第三方 Agent(Claude Code / Codex 等);可设默认模型。新会话开始时才能选用它们。',
   'settings.agentClis.detected': '已检测到',
@@ -1962,7 +1962,7 @@ const en: Dict = {
   'ws.detail.newChat': 'New Chat In This Project',
   'ws.detail.empty': 'No sessions in this project yet',
   'ws.detail.viewMore': 'View More',
-  'agents.detail.title': 'Background Agents',
+  'agents.detail.title': 'Background agents',
   'agents.detail.settings': 'Settings',
   'agents.detail.historian': 'Historian activity',
   'agents.detail.noActivity': 'No activity yet',
@@ -2657,7 +2657,7 @@ const en: Dict = {
 
   // Settings - Developer Options (unlocked by tapping the version 10×)
   'settings.tab.developer': 'Developer',
-  'settings.tab.browser': 'Browser Control',
+  'settings.tab.browser': 'Browser control',
   'settings.tab.channels': 'Channels',
   'channel.name.wechat': 'WeChat',
   'channel.name.telegram': 'Telegram',
@@ -2745,7 +2745,7 @@ const en: Dict = {
   'settings.notes.deleteAssetsNo': 'Remembered: keep them',
   'settings.notes.deleteAssetsHint': 'Only attachments referenced by this note alone; anything another note links to is kept.',
   'settings.remote.saved': 'Remote settings saved. The managed backend may restart to apply them.',
-  'settings.browser.title': 'Browser Control',
+  'settings.browser.title': 'Browser control',
   'settings.browser.agentBrowser': 'Agent browser',
   'settings.browser.hint': 'Tangu prefers browser_search and browser_* interaction tools for web work; web_search remains available for compatibility.',
   'settings.browser.engine': 'Browser engine',
@@ -3218,7 +3218,7 @@ const en: Dict = {
   'pill.more': 'More (next page)',
   'header.currentAgent': 'Current agent',
   // Settings → Agent CLIs (external agent engine detection + default model)
-  'settings.tab.agentClis': 'Agent CLIs',
+  'settings.tab.agentClis': 'Local agent CLIs',
   'settings.agentClis.title': 'Agent CLIs',
   'settings.agentClis.hint': 'Detected third-party agents (Claude Code / Codex …). Set a default model. New chats can pick them.',
   'settings.agentClis.detected': 'Detected',
@@ -3352,7 +3352,7 @@ const en: Dict = {
   'settings.agents.sharedSkill': 'Shared',
   'agent.pickTitle': 'Choose agent',
 
-  'settings.tab.special': 'Background Agents',
+  'settings.tab.special': 'Background agents',
   'settings.special.title': 'Special Agents (background)',
   'settings.special.hint': 'On by default; once you turn one off, it stays off. Leave the model empty to follow the cloud default; records are isolated locally and never appear in the session list.',
   'settings.special.pickModelFirst': 'Pick a model before enabling',
@@ -3400,7 +3400,7 @@ const en: Dict = {
   'settings.agents.sectionTitle': 'Normal Agents (custom personas)',
   'settings.agents.starterTemplate': 'You are … (describe this agent\'s identity, expertise, tone, and how it should approach tasks).',
 
-  'sidebar.special.title': 'Background Agents',
+  'sidebar.special.title': 'Background agents',
   'special.action.title_updated': 'title updated',
   'special.action.summary_updated': 'summary updated',
   'special.action.log_appended': 'log appended',
@@ -3548,7 +3548,7 @@ const en: Dict = {
   'command.run': 'Run',
   'command.count': '{count} commands',
   'group.host': 'Host',
-  'special.agents.title': 'Background Agents',
+  'special.agents.title': 'Background agents',
   'special.memory.title': 'Memory',
   // Special entry-card subtitles
   'sidebar.special.historianSub': 'Summarizes titles · curates memory',
@@ -3605,7 +3605,7 @@ const en: Dict = {
 
   // ── Notifications & status bar (settings tab + event/item copy) ──
   'settings.tab.notifications': 'Notifications',
-  'settings.tab.statusbar': 'Status Bar',
+  'settings.tab.statusbar': 'Status bar',
   'ntf.enable': 'Enable notifications',
   'ntf.delivery': 'Delivery',
   'ntf.enableHint': 'Floating cards popping from the top-right; when off, everything (errors included) is silenced.',

@@ -1,0 +1,97 @@
+/*
+ * 设置页(SettingsModal)自带样式 —— UIUX 评审 09-25 这一轮新增的部分(U-01/05/14/15/16/44)。
+ * 基础排版仍在 base.css 的设置段;这里只放新结构,且凡是覆盖 base.css 的规则都**抬特异性**,
+ * 不靠源码顺序(组件 CSS 与 base.css 的注入先后不作保证,DESIGN §7.2)。
+ */
+
+/* ── 连接页状态条(U-14):原「当前状态」大卡 + 三行 → 一行 ── */
+.settings-status-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  box-shadow: var(--card-shadow);
+}
+.settings-status-strip > strong { color: var(--text); font-size: var(--ui-font-body, 13px); font-weight: 650; }
+.settings-status-strip-meta { flex: 1; min-width: 0; display: inline-flex; flex-wrap: wrap; gap: 4px 12px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.settings-status-strip .btn { display: inline-flex; align-items: center; gap: 5px; }
+
+/* ── 后端运行方式卡:默认收起,展开后点卡只改草稿(U-01) ── */
+.settings-mode-panel .settings-mode-desc { margin: 0; padding: 12px 15px 0; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.5; }
+.settings-mode-panel .settings-mode-pending {
+  margin: 0 15px 15px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--sel-fill, var(--overlay-light));
+  color: var(--text);
+  font-size: var(--ui-font-meta, 12px);
+  line-height: 1.5;
+}
+
+/* 吸底保存栏放在所属面板里:面板有左右内边距时栏自己补齐,顶线贯通。 */
+.settings-panel > .special-save.settings-save-bar { margin: 16px 0 0; padding-inline: 2px; }
+
+/* ── 设置搜索结果(U-15):行复用 .settings-nav-list button / .settings-nav-subitem,只补两行布局 ── */
+.settings-nav-list .settings-nav-results { margin-bottom: 14px; }
+.settings-nav-list .settings-nav-result { align-items: flex-start; min-height: 40px; }
+.settings-nav-list .settings-nav-result .settings-nav-subitem-mark { margin-top: 6px; }
+.settings-nav-result-copy { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.settings-nav-result-copy > span { overflow: hidden; color: var(--text); text-overflow: ellipsis; white-space: nowrap; }
+.settings-nav-result-copy > small { overflow: hidden; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); text-overflow: ellipsis; white-space: nowrap; }
+.settings-nav-empty { padding: 18px 10px; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); text-align: center; }
+
+/* 搜索落点闪一下:只用选中语义 token,不描边、不挪位。 */
+.settings-body [data-setting-anchor].is-anchor-flash {
+  border-radius: var(--radius-md);
+  animation: settings-anchor-flash 1.6s ease-out;
+}
+@keyframes settings-anchor-flash {
+  0%, 35% { background-color: var(--sel-fill, var(--accent-light)); }
+  100% { background-color: transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-body [data-setting-anchor].is-anchor-flash { animation-duration: 0.01s; }
+}
+
+/* ── 左栏(U-14) ──
+ * mac 浮窗:原生标题栏(.floating-native-chrome,仅 darwin)已经让开交通灯,base.css 的
+ * `[data-platform="mac"] .settings-nav-top{padding-top:36px}` 与 `.floating-native-root .settings-nav-top{14px}`
+ * 同为 (0,2,0)、mac 那条在后 → 浮窗里多空 22px。这里抬到 (0,3,0) 收回。品牌块与原生标题重复,同一作用域下隐藏
+ * (Windows 浮窗没有那条标题,品牌块照留)。 */
+[data-platform="mac"] .floating-native-root .settings-nav-top { padding-top: 14px; }
+[data-platform="mac"] .floating-native-root .settings-nav-brand { display: none; }
+/* 左栏还能往下滚时底部渐隐(先例 chat2.css 的 .t2-stream);滚到底就撤掉,不吞最后一项。不写 ::-webkit-scrollbar。 */
+.settings-nav .settings-nav-list[data-overflow='bottom'] {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent 100%);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent 100%);
+}
+
+/* ── 设计语言缩略图(U-16) ── */
+/* 「Forsion」小字不再全大写(复制 / 读屏都拿原文;视觉只留一点字距)。 */
+.theme-card .theme-preview .theme-preview-sheet small { text-transform: none; letter-spacing: .02em; }
+.theme-card .theme-preview[data-font='serif'] .theme-preview-sheet { font-family: ui-serif, 'Songti SC', 'Noto Serif SC', Georgia, serif; }
+.theme-card .theme-preview[data-font='mono'] .theme-preview-sheet { font-family: var(--font-mono, ui-monospace, monospace); }
+/* Glass:纯色 --bg 上的 72% 半透 + blur 暗色下几乎看不出。垫一层有形状的底(accent 色块),
+ * 侧栏做成真半透玻璃压在色块上,纸面保持实色(与 Glass 主题「外壳透、正文不透」一致)。 */
+.theme-card .theme-preview[data-shape='glass'] { position: relative; isolation: isolate; }
+.theme-card .theme-preview[data-shape='glass']::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(circle at 16% 30%, color-mix(in srgb, var(--theme-preview-accent) 55%, transparent) 0 13%, transparent 14%),
+    radial-gradient(circle at 26% 78%, color-mix(in srgb, var(--theme-preview-accent) 34%, transparent) 0 11%, transparent 12%),
+    radial-gradient(circle at 80% 18%, color-mix(in srgb, var(--theme-preview-accent) 20%, transparent) 0 16%, transparent 17%);
+}
+/* 窗体本身不再挂 backdrop-filter:它会成为 Backdrop Root,里面侧栏的 blur 就看不到外层色块了。 */
+.theme-card .theme-preview[data-shape='glass'] .theme-preview-window { background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.theme-card .theme-preview[data-shape='glass'] .theme-preview-rail {
+  background: color-mix(in srgb, var(--theme-preview-surface) 48%, transparent);
+  -webkit-backdrop-filter: blur(6px) saturate(160%);
+  backdrop-filter: blur(6px) saturate(160%);
+}

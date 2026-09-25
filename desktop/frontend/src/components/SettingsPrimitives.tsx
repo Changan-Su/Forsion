@@ -7,9 +7,11 @@ export function SettingsPanel(props: {
   actions?: ReactNode
   children?: ReactNode
   className?: string
+  /** 设置搜索的落点(settingsSearchIndex.ts 的 anchor)。 */
+  anchor?: string
 }) {
   return (
-    <section className={`settings-panel${props.className ? ` ${props.className}` : ''}`}>
+    <section className={`settings-panel${props.className ? ` ${props.className}` : ''}`} data-setting-anchor={props.anchor}>
       <div className={`settings-panel-head${props.actions ? ' settings-panel-head--actions' : ''}`}>
         {props.icon && <span className="settings-panel-icon">{props.icon}</span>}
         <div>
@@ -29,9 +31,11 @@ export function SettingsRow(props: {
   control?: ReactNode
   children?: ReactNode
   className?: string
+  /** 设置搜索的落点(settingsSearchIndex.ts 的 anchor)。 */
+  anchor?: string
 }) {
   return (
-    <div className={`settings-control-row settings-setting-row${props.className ? ` ${props.className}` : ''}`}>
+    <div className={`settings-control-row settings-setting-row${props.className ? ` ${props.className}` : ''}`} data-setting-anchor={props.anchor}>
       <div className="settings-control-copy">
         <span>
           <strong>{props.label}</strong>

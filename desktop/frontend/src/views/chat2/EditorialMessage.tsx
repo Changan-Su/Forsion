@@ -135,7 +135,7 @@ export function ReloginChip({ error, modelId }: { error?: string; modelId?: stri
   const id = subLoginProvider(error, modelId)
   if (!id || !window.tangu?.providerLogin) return null
   return (
-    <button className="t2-relogin" onClick={() => useApp.getState().openSettings('model')}>
+    <button className="t2-relogin" onClick={() => useApp.getState().openSettings('model/m-providers')}>
       <LogIn size={12} /> {t('chat.err.relogin', { provider: SUB_PROVIDER_LABELS[id] })}
     </button>
   )
