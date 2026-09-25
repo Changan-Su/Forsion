@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { downloadUrlFor, installCommandFor, requiredProgram } from './envInstall'
 import { KNOWN_APPS } from '../shared/knownApps'
 
-const NON_INTERACTIVE = ['--source winget', '--accept-source-agreements', '--accept-package-agreements', '--disable-interactivity']
+const NON_INTERACTIVE = ['--source winget', '--accept-source-agreements', '--accept-package-agreements']
 
 describe('引导安装命令表', () => {
   it('Windows 的每条 winget 命令都带非交互参数(缺了新机器会卡在 msstore 协议提示上)', () => {
@@ -12,6 +12,14 @@ describe('引导安装命令表', () => {
     ]
     expect(cmds.length).toBeGreaterThanOrEqual(5)
     for (const cmd of cmds) for (const flag of NON_INTERACTIVE) expect(cmd, cmd!).toContain(flag)
+    // winget < 1.4 不认它,整条命令会报「参数无法识别」
+    for (const cmd of cmds) expect(cmd).not.toContain('--disable-interactivity')
+  })
+
+  it('需要 root 的 Linux 命令都显式带 sudo(界面据此改成复制到终端)', () => {
+    for (const tool of ['node', 'python3', 'git', 'docker']) for (const mirror of ['default', 'china'] as const) {
+      expect(installCommandFor(tool, 'linux', mirror)).toMatch(/\bsudo\b/)
+    }
   })
 
   it('按命令找出它依赖的程序:不在就不给安装按钮', () => {

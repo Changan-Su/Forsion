@@ -23,7 +23,7 @@ export const KNOWN_APPS: Record<string, KnownApp> = {
       // cask 装完不自动起,接 open 让 probe 立刻能变绿
       darwin: 'brew install --cask activitywatch && open -a ActivityWatch',
       // 非交互参数必带:新机器第一次用 winget 会停在 msstore 源协议提示上(见 electron/envInstall.ts 头注释)。
-      win32: 'winget install --id ActivityWatch.ActivityWatch -e --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity',
+      win32: 'winget install --id ActivityWatch.ActivityWatch -e --source winget --accept-source-agreements --accept-package-agreements',
       // linux 官方是 AppImage 手动落位,无一键 → 走官网
     },
   },

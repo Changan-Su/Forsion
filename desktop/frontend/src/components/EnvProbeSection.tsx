@@ -141,7 +141,8 @@ export const EnvProbeSection: React.FC<{
     return () => off?.()
   }, [])
 
-  const needsSudo = (p: EnvProbeResult): boolean => /^sudo\b/.test(p.installCommand || '')
+  // 命令里任何位置有 sudo(含 `curl … | sudo sh`)都改成复制到终端。
+  const needsSudo = (p: EnvProbeResult): boolean => /\bsudo\b/.test(p.installCommand || '')
 
   const runInstall = async (p: EnvProbeResult): Promise<void> => {
     if (!p.installId || !window.tangu?.envRun || locked) return

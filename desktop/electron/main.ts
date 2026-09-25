@@ -236,6 +236,17 @@ function chinaInstallEnv(): Record<string, string> {
   }
 }
 
+/** 命令依赖的程序(winget/brew/apt-get/curl)在不在。只认「确实找不到」;超时、非零退出这类含糊情况一律当在 ——
+ *  宁可让「安装」跑出一条错误日志,也别因为机器一时卡顿把能用的按钮藏掉(评审指出 probeVersion 是失败即判无)。
+ *  Windows 用 where.exe:exit 1 = PATH 上没有;cmd /c 对缺失程序也只回 1,和程序自身报错分不开,所以不走 shell。 */
+function programExists(prog: string): Promise<boolean> {
+  const win = process.platform === 'win32'
+  return new Promise((resolve) => {
+    execFile(win ? 'where.exe' : prog, win ? [prog] : ['--version'], { timeout: 8000, env: envWithFullPath(), windowsHide: true },
+      (err) => resolve(!err || (win ? (err as { code?: unknown }).code !== 1 : (err as { code?: unknown }).code !== 'ENOENT')))
+  })
+}
+
 function probeVersion(cmd: string, args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
     // Windows:npm/docker/python 等多为 .cmd/.bat shim,execFile 不带 shell 无法执行(npm 根本没有 npm.exe)→ 一律
@@ -265,7 +276,7 @@ async function runEnvCheck(): Promise<EnvProbe[]> {
   const programOk = new Map<string, Promise<boolean>>()
   const programAvailable = (command: string): Promise<boolean> => {
     const prog = requiredProgram(command)
-    if (!programOk.has(prog)) programOk.set(prog, probeVersion(prog, ['--version']).then((v) => v !== null))
+    if (!programOk.has(prog)) programOk.set(prog, programExists(prog))
     return programOk.get(prog)!
   }
   for (const p of probes) {
@@ -2607,7 +2618,8 @@ app.whenReady().then(async () => {
     return await new Promise<{ exitCode: number }>((resolve) => {
       // stdin 一律关掉:安装器/包管理器一旦停下来要输入(winget 源协议、sudo 密码),关着的 stdin 让它立刻失败
       // 并把原因打进日志;开着的管道没人写,它就永远等下去、界面永远转圈(2026-09-25 Windows 实测)。
-      const child = spawn(command, { shell: true, env: envWithFullPath(mirrorEnv), stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
+      // 不加 windowsHide:runner 是管理员、测不到 UAC,藏起控制台后提权弹窗会不会退到任务栏闪烁没验证过,保持原样。
+      const child = spawn(command, { shell: true, env: envWithFullPath(mirrorEnv), stdio: ['ignore', 'pipe', 'pipe'] })
       const emit = (line: string): void => {
         if (!wc.isDestroyed()) wc.send('env:output', { installId, line })
       }
@@ -2626,9 +2638,10 @@ app.whenReady().then(async () => {
   })
   // ── Forsion 插件依赖应用一键安装:白名单表(shared/knownApps)查命令 → 登记 opaque id,
   // 执行/流式输出复用 env:run 通道。插件只能声明 id,命令文本永远在宿主,无注入面。──
-  ipcMain.handle('plugin:request-install', (_e, appId: string) => {
+  ipcMain.handle('plugin:request-install', async (_e, appId: string) => {
     const cmd = KNOWN_APPS[String(appId)]?.install[process.platform as 'darwin' | 'win32' | 'linux']
-    if (!cmd) return null // 表外 id / 本平台无一键命令 → 前端降级「打开官网」
+    // 表外 id / 本平台无一键命令 / 命令依赖的 winget、brew 不在 → 前端降级「打开官网」
+    if (!cmd || !(await programExists(requiredProgram(cmd)))) return null
     const installId = `app_${String(appId)}_${Date.now().toString(36)}`
     pendingInstallCommands.set(installId, cmd)
     return { installId, command: cmd }
