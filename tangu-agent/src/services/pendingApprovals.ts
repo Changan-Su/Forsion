@@ -16,6 +16,7 @@
  *    (某些工具)→ approvals.ts,静态引用会成环。
  */
 import path from 'node:path';
+import { previewText } from './approvals.js';
 import { createHash } from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
@@ -111,7 +112,7 @@ export async function queueApproval(input: {
       `INSERT INTO pending_approvals (id, user_id, session_id, run_id, agent_slug, tool, args, preview, reason, cwd, status, note, dedupe_key)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
       [id, input.userId, input.sessionId, input.runId || null, input.agentSlug || null, tool, args,
-        displayText(input.preview, 2000), input.reason ? JSON.stringify(input.reason) : null,
+        storedPreview(input.preview), input.reason ? JSON.stringify(input.reason) : null,
         input.cwd || null, input.note ? displayText(input.note, 1000) : null, key],
     );
   } catch (e) {
@@ -431,3 +432,12 @@ export async function deferApproval(
   };
 }
 
+
+/** 收件箱存的审批预览:沿用 approvals.previewText(保留换行 / 缩进、转义伪装字符、超长空白标成 [N spaces]),
+ *  上限放宽且**显式标出截断** —— 旧版 displayText(…, 2000) 把换行折成空格、截断不留痕,
+ *  控制面调用(无人值守 run 只能排队到这里)的尾部命令会整段消失(Codex 09-25 复审)。 */
+const STORED_PREVIEW_MAX = 20_000;
+export function storedPreview(preview: unknown): string {
+  const p = previewText(preview);
+  return p.length > STORED_PREVIEW_MAX ? `${p.slice(0, STORED_PREVIEW_MAX)}\n… [truncated ${p.length - STORED_PREVIEW_MAX} chars]` : p;
+}

@@ -80,3 +80,25 @@ describe('ApprovalCard「总允许」按钮与 why 行', () => {
     expect(buttons().some((b) => b.includes(alwaysLabel))).toBe(false)
   })
 })
+
+describe('run_bash 命令框:长命令 / 伪装字符如实提示', () => {
+  let host: HTMLDivElement
+  let root: Root
+  beforeEach(() => { setLocaleGlobal('zh'); host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host) })
+  afterEach(() => { act(() => root.unmount()); host.remove() })
+  const bash = (command: string): ApprovalRequest => ({ approvalId: 'b1', name: 'run_bash', arguments: JSON.stringify({ command }), preview: `$ ${command}`, status: 'pending' } as ApprovalRequest)
+
+  it('超过 16 行:框撑到 16 行并提示总行数;短命令不提示', () => {
+    const long = ['echo ok # safe', ...Array.from({ length: 20 }, () => ''), 'rm -rf ~/Documents'].join('\n')
+    act(() => root.render(React.createElement(ApprovalCard, { req: bash(long), onDecide: () => {} })))
+    expect(host.querySelector('textarea')?.getAttribute('rows')).toBe('16')
+    expect(host.textContent).toContain(translate('approval.cmdLong', { n: 22 }))
+    act(() => root.render(React.createElement(ApprovalCard, { key: 'b2', req: { ...bash('ls'), approvalId: 'b2' }, onDecide: () => {} })))
+    expect(host.textContent).not.toContain('请滚动')
+  })
+
+  it('带 RLO 等方向控制字符:提示所见可能不是所跑', () => {
+    act(() => root.render(React.createElement(ApprovalCard, { req: bash('echo ‮gnp.exe'), onDecide: () => {} })))
+    expect(host.textContent).toContain(translate('approval.cmdHiddenChars'))
+  })
+})

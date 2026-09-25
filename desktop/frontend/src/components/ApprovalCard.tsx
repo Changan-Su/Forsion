@@ -29,6 +29,9 @@ export const ApprovalCard: React.FC<{
     try { return String(JSON.parse(req.arguments).command ?? '') } catch { return '' }
   })()
   const [cmd, setCmd] = useState(initialCmd)
+  // 命令框最多撑到 16 行;更长 / 带能伪装显示的控制字符时明说,尾部不能藏在折叠线下(Codex 09-25 复审:原先封顶 6 行)
+  const cmdLines = cmd.split('\n').length
+  const cmdHidden = /[\u0000-\u0008\u000b-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(cmd)
   const resolved = req.status !== 'pending'
   const diff = useMemo(() => (isBash ? null : toolDiffText(req.name, req.arguments)), [isBash, req.name, req.arguments])
 
@@ -73,10 +76,17 @@ export const ApprovalCard: React.FC<{
           className="approval-edit"
           value={cmd}
           onChange={(e) => setCmd(e.target.value)}
-          rows={Math.min(6, Math.max(1, cmd.split('\n').length))}
+          rows={Math.min(16, Math.max(1, cmdLines))}
           spellCheck={false}
         />
-      ) : (
+      ) : null}
+      {isBash && !resolved && (cmdLines > 16 || cmdHidden) && (
+        <div className="approval-why">
+          {cmdLines > 16 && t('approval.cmdLong', { n: cmdLines })}
+          {cmdHidden && t('approval.cmdHiddenChars')}
+        </div>
+      )}
+      {isBash && !resolved ? null : (
         <>
           {/* preview 恒显:引擎把越界警示(英文「⚠ Write outside the workspace · 」)与控制面要害(建什么、到点无人值守跑什么)
               拼进这个字符串;本地化的原因走上面的 why 行。旧事件没有 reason 时它仍是唯一的警示载体,diff 只能附加不能替换 */}

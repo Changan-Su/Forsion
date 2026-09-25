@@ -263,7 +263,8 @@ describe('pendingApprovals × Codex 09-10 评审补钉', () => {
     const d = await gateToolCall('R1', c, { sessionId: 'S', execMode: 'host', approvalMode: 'auto-edit', cwd: work, userId: USER, agentSlug: 'muse', approvalDeferral: 'queue' })
     expect(d.action).toBe('reject')
     const [row] = await listApprovals(USER, 'pending')
-    expect(row.preview.includes('\n')).toBe(false)
+    // 存值保留换行(收件箱卡片多行展示,`# 注释\nrm` 不能折成一行);单行化只在进 LOG / 标题时做(displayText),下面断言的正是那一步
+    expect(row.preview.includes('\n')).toBe(true)
     await decideApproval(row.id, USER, 'reject', 'user')
     const line = appendedLogs.find((l) => l.startsWith('[approval] rejected'))!
     expect(line.includes('\n')).toBe(false)
