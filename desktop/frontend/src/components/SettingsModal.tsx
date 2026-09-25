@@ -90,12 +90,15 @@ import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWai
 import { ipcErrorText } from '../ipcError'
 import { resolveSettingsTarget } from './settingsTarget'
 import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery, type SettingsSearchEntry } from './settingsSearchIndex'
-import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, type SettingsEdits } from './settingsDraft'
+import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys, type SettingsEdits } from './settingsDraft'
 import { SettingsSaveBar } from './SettingsSaveBar'
 import './settingsModal.css'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
+  // 失焦自动保存失败(Codex 第一轮 A-2):就地提示并给重试,草稿保留。
+  'settingsmodal.commit.failed': { zh: '未保存:{error}', en: 'Not saved: {error}' },
+  'settingsmodal.commit.retry': { zh: '重试', en: 'Retry' },
   'settingsmodal.keepAwake.title': { zh: '有会话运行时阻止休眠', en: 'Stay awake while sessions run' },
   'settingsmodal.keepAwake.description': {
     zh: '会话运行期间阻止电脑因闲置自动休眠，全部结束后恢复；屏幕仍会熄灭。合盖、手动睡眠照常生效；Windows 笔记本用电池时，系统仍可能按电源策略休眠。',
@@ -426,14 +429,48 @@ export const SettingsModal: React.FC<{
   const [edits, setEdits] = useState<SettingsEdits>({})
   const stored = mergeEdits(savedCfg, edits)
   const edit = (patch: SettingsEdits): void => setEdits((prev) => ({ ...prev, ...patch }))
-  /** 提交草稿里的若干键:norm 可规整(trim 等);成功后只摘掉提交时那一份值。 */
+  /** 失焦自动保存失败的键 → 错误与重试(就地显示在该输入旁,Codex 第一轮 A-2)。草稿不动,可改完再失焦或点重试。 */
+  const [commitErrors, setCommitErrors] = useState<Partial<Record<keyof StoredDesktopConfig, { message: string; retry: () => void }>>>({})
+  /** 提交草稿里的若干键:norm 可规整(trim 等);成功后只摘掉提交时那一份值。失败记进 commitErrors(由 commitErrorHint 就地显示)。 */
   const commitEdits = (keys: Array<keyof StoredDesktopConfig>, norm?: (v: SettingsEdits) => SettingsEdits): Promise<void> => {
     const snapshot = pickEdits(edits, keys)
     if (!Object.keys(snapshot).length || !window.tangu?.setConfig) return Promise.resolve()
     return window.tangu.setConfig(norm ? norm(snapshot) : snapshot).then((next) => {
       setStored(next)
       setEdits((prev) => dropCommittedEdits(prev, snapshot))
-    }).catch((e: any) => setTestResult(`${t('settings.toast.saveFailed')}${e?.message || e}`))
+      setCommitErrors((prev) => withoutKeys(prev, keys))
+    }).catch((e: any) => {
+      const message = String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+      setCommitErrors((prev) => ({ ...prev, ...Object.fromEntries(keys.map((k) => [k, { message, retry: () => void commitEdits(keys, norm) }])) }))
+    })
+  }
+  /** 「选择目录」直接落盘(不经草稿);失败同样就地提示并可重试。 */
+  const savePickedWorkspace = (d: string): void => {
+    const typed = edits.defaultWorkspaceDir
+    void window.tangu!.setConfig({ defaultWorkspaceDir: d }).then((next) => {
+      setStored(next)
+      // 请求在路上时又手输了新路径 → 那份新草稿留着,不被选目录的回执抹掉。
+      setEdits((prev) => {
+        if (prev.defaultWorkspaceDir !== typed) return prev
+        const rest = { ...prev }
+        delete rest.defaultWorkspaceDir
+        return rest
+      })
+      setCommitErrors((prev) => withoutKeys(prev, ['defaultWorkspaceDir']))
+    }).catch((e: any) => {
+      const message = String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+      setCommitErrors((prev) => ({ ...prev, defaultWorkspaceDir: { message, retry: () => savePickedWorkspace(d) } }))
+    })
+  }
+  const commitErrorHint = (key: keyof StoredDesktopConfig): React.ReactNode => {
+    const err = commitErrors[key]
+    if (!err) return null
+    return (
+      <div className="hint settings-commit-error" role="alert" data-commit-error={key}>
+        <span>{t('settingsmodal.commit.failed', { error: err.message })}</span>
+        <button type="button" className="btn ghost sm" onClick={err.retry}>{t('settingsmodal.commit.retry')}</button>
+      </div>
+    )
   }
   // 后端运行方式的草稿(U-01):点卡片只改这里,真正切换走下方显式按钮。null = 跟随落盘值。
   const [modeDraft, setModeDraft] = useState<'managed' | 'external' | null>(null)
@@ -448,6 +485,7 @@ export const SettingsModal: React.FC<{
     if (p.open) return
     setHostSandboxDraft(null)
     setEdits({})
+    setCommitErrors({})
     setModeDraft(null)
   }, [p.open])
   const [backendSt, setBackendSt] = useState<BackendStatusInfo | null>(null)
@@ -1429,20 +1467,7 @@ export const SettingsModal: React.FC<{
                         />
                         <button
                           className="btn ghost sm"
-                          onClick={() => void window.tangu?.pickDirectory?.().then((d) => {
-                            if (!d) return
-                            const typed = edits.defaultWorkspaceDir
-                            void window.tangu!.setConfig({ defaultWorkspaceDir: d }).then((next) => {
-                              setStored(next)
-                              // 请求在路上时又手输了新路径 → 那份新草稿留着,不被选目录的回执抹掉。
-                              setEdits((prev) => {
-                                if (prev.defaultWorkspaceDir !== typed) return prev
-                                const rest = { ...prev }
-                                delete rest.defaultWorkspaceDir
-                                return rest
-                              })
-                            })
-                          })}
+                          onClick={() => void window.tangu?.pickDirectory?.().then((d) => { if (d) savePickedWorkspace(d) })}
                         >
                           {t('settings.workspace.pick')}
                         </button>
@@ -1450,6 +1475,7 @@ export const SettingsModal: React.FC<{
                       <div className="hint">
                         {t('settings.workspace.hint')}
                       </div>
+                      {commitErrorHint('defaultWorkspaceDir')}
                     </section>
                     <div data-setting-anchor="keep-awake">
                       <SettingsPanel
@@ -1759,6 +1785,7 @@ export const SettingsModal: React.FC<{
                             {t('settings.forsion.save')}
                           </button>
                         </div>
+                        {commitErrorHint('cloudUrl')}
                         <div className="hint">{t('settings.forsion.cloudUrlHint')}</div>
                       </div>
                     )}
@@ -1847,6 +1874,7 @@ export const SettingsModal: React.FC<{
                                 aria-label={t('settings.notes.folderLabel')}
                               />
                             </div>
+                            {commitErrorHint('notesAttachmentFolder')}
                           </SettingsRow>
                         )}
                         <SettingsRow anchor="daily-notes" label={t('settings.notes.dailyLabel')} description={t('settings.notes.dailyHint')}>
@@ -1861,6 +1889,7 @@ export const SettingsModal: React.FC<{
                               aria-label={t('settings.notes.dailyLabel')}
                             />
                           </div>
+                          {commitErrorHint('notesDailyFolder')}
                         </SettingsRow>
                       </div>
                     </SettingsPanel>
@@ -2477,6 +2506,7 @@ export const SettingsModal: React.FC<{
                             onBlur={() => void commitEdits(['ttsModelId'], (v) => ({ ttsModelId: (v.ttsModelId || '').trim() }))}
                             placeholder={t('settings.tts.modelPlaceholder')}
                           />
+                          {commitErrorHint('ttsModelId')}
                         </div>
                         <div className="field">
                           <label>{t('settings.tts.voice')}</label>
@@ -2488,6 +2518,7 @@ export const SettingsModal: React.FC<{
                             onBlur={() => void commitEdits(['ttsVoice'], (v) => ({ ttsVoice: (v.ttsVoice || '').trim() }))}
                             placeholder={t('settings.tts.voicePlaceholder')}
                           />
+                          {commitErrorHint('ttsVoice')}
                           {/* 系统音色候选(可输可选;百炼无音色列表 API,静态表);复刻/设计音色经下方工作室「使用」自动填入 */}
                           <datalist id="tts-voice-options">
                             {TTS_VOICE_SUGGESTIONS.map(([v, labelKey]) => <option key={v} value={v} label={t(labelKey)} />)}

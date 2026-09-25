@@ -48,3 +48,11 @@ export function hasDirtyEdits(
   if (!saved) return false
   return keys.some((key) => key in edits && (edits[key] ?? defaults[key]) !== (saved[key] ?? defaults[key]))
 }
+
+/** 去掉若干键(键都不在 → 原样返回同一引用,免得 setState 白触发重渲染)。 */
+export function withoutKeys<T extends object>(obj: T, keys: ReadonlyArray<keyof T>): T {
+  if (!keys.some((k) => k in obj)) return obj
+  const next = { ...obj }
+  for (const k of keys) delete next[k]
+  return next
+}

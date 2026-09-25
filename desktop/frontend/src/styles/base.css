@@ -4809,3 +4809,7 @@ html:root :is(.project-menu, .composer-menu, .engine-picker, .add-menu) { transf
   outline-offset: 1px;
 }
 /* uiux-c: end */
+
+/* 设置里失焦自动保存失败的就地提示(Codex 第一轮 A-2):同 .hint 的位置与字号,换危险色 + 一个「重试」。
+ * 放文件末尾:与 .hint 同特异性,须压过它的颜色(DESIGN §7)。 */
+.settings-commit-error { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: var(--danger); }

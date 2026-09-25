@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { StoredDesktopConfig } from '../types'
-import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits } from './settingsDraft'
+import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys } from './settingsDraft'
 
 const saved = { mode: 'managed', sandbox: 'auto', mirror: 'default', keepAwakeWhileRunning: false, defaultWorkspaceDir: '/a' } as unknown as StoredDesktopConfig
 
@@ -36,5 +36,13 @@ describe('settings draft overlay', () => {
     const noPython = { ...saved } as StoredDesktopConfig
     expect(hasDirtyEdits(noPython, { pythonMode: 'bundled' }, ['pythonMode'], { pythonMode: 'bundled' })).toBe(false)
     expect(hasDirtyEdits(null, { mirror: 'china' }, ['mirror'])).toBe(false)
+  })
+})
+
+describe('withoutKeys(失焦提交成功后清掉该键的错误)', () => {
+  it('去掉给定键;键都不在时原样返回同一引用', () => {
+    const errs = { defaultWorkspaceDir: 'x', ttsVoice: 'y' }
+    expect(withoutKeys(errs, ['defaultWorkspaceDir'])).toEqual({ ttsVoice: 'y' })
+    expect(withoutKeys(errs, ['notesDailyFolder' as keyof typeof errs])).toBe(errs)
   })
 })
