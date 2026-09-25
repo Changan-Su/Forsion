@@ -333,7 +333,7 @@ function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 
 }
 
 /** resetLayout 的撤销快照(一次性)。profile = 拍快照时的 Space 画像键(sideProfileKey),api = 当时的 Dockview 实例。 */
-let layoutUndo: { env: LayoutEnvelopeV4; api: DockviewApi; profile: string | null } | null = null
+let layoutUndo: { env: LayoutEnvelopeV4; api: DockviewApi; profile: string | null; stashActive: WorkspaceState['stashActive'] } | null = null
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 export function scheduleWorkspaceSave(): void {
@@ -441,8 +441,10 @@ interface WorkspaceState {
    *  fn 返回 undefined = 不动;null = 关掉(走 closeLeaf 的收尾,不是裸 panel.api.close());对象 = 合并进参数。
    *  引擎不懂参数语义,改哪个键由调用方定(文件改名 / 删除跟随见 frontend views/followPathGone.ts)。 */
   remapLeaves(fn: (type: string, params: Record<string, unknown>) => Record<string, unknown> | null | undefined): void
-  /** 恢复默认布局:清空 → 重建默认(黄金分割 中 0.618 / 两侧各 0.191)→ 清持久化。 */
-  resetLayout(): void
+  /** 恢复默认布局:清空 → 重建默认(黄金分割 中 0.618 / 两侧各 0.191)→ 清持久化。
+   *  undoable = **用户亲手点的**(右上角钮 / 命令 / 设置):拍快照并弹「撤销」。自动路径(进一个没存档的 Space、
+   *  用户 Space 重建…)不传 —— 那时 Dockview 里还是**上一个 Space** 的布局,给撤销就会把它灌进新 Space。 */
+  resetLayout(opts?: { undoable?: boolean }): void
   /** 撤销最近一次 resetLayout(还原清空前的标签、分屏与侧栏开合)。快照一次性,换 Space / 换 api /
    *  应用命名布局后作废。还原成功 true。 */
   undoResetLayout(): boolean
@@ -741,12 +743,15 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
   },
 
-  resetLayout() {
+  resetLayout(opts) {
     const api = get().api
     if (!api) return
-    // 清空前拍快照(同存档信封,不含临时扩展视图),给「撤销」用。拍不下来就不给撤销,重置照做。
+    // 清空前拍快照(同存档信封,不含临时扩展视图;另记收起侧栏的「当前项」),给「撤销」用。
+    // 只有用户亲手重置才拍;拍不下来就不给撤销,重置照做。自动重置同时作废旧快照。
     let snap: typeof layoutUndo = null
-    try { snap = { env: envelope(api, get()), api, profile: get().sideProfileKey } } catch { snap = null }
+    if (opts?.undoable) {
+      try { snap = { env: envelope(api, get()), api, profile: get().sideProfileKey, stashActive: { ...get().stashActive } } } catch { snap = null }
+    }
     dismissExtensions()
     try { api.clear() } catch { /* ignore */ }
     clearLayout()
@@ -766,7 +771,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 快照只对拍它的那份 api、那个 Space 有效:切过 Space 再点通知里的「撤销」= 静默作废,不把别的 Space 的布局灌进来。
     if (!u || !api || u.api !== api || u.profile !== get().sideProfileKey) return false
     const ok = get().applyLayout(u.env)
-    if (ok) scheduleWorkspaceSave()
+    if (ok) {
+      set({ stashActive: u.stashActive }) // 信封不带它:不还原的话,展开收起的侧栏会落到第一个视图而不是原来选中的那个
+      scheduleWorkspaceSave()
+    }
     return ok
   },
 

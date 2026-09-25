@@ -595,7 +595,7 @@ export const WorkspaceHost: React.FC<{
         <button
           className="dv-edge-toggle dv-edge-reset"
           title={t('lcl.edge.reset')}
-          onClick={() => useWorkspace.getState().resetLayout()}
+          onClick={() => useWorkspace.getState().resetLayout({ undoable: true })}
         >
           <RotateCcwSquare size={15} />
         </button>

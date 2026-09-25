@@ -5,6 +5,8 @@
  *   ① reset 前拍快照 + 经 ribbonActions.notify 给出「撤销」动作;撤销 = 把快照原样 fromJSON 回去,侧栏开合一并还原
  *   ② 快照一次性:撤销过一次再点无效
  *   ③ 换 Space(画像键变了)/ 应用命名布局后快照作废 —— 不把别的 Space 的布局灌进来
+ *   ④ 自动重置(进一个没存档的 Space 时 spaceRegistry 调的那种)不给撤销,且作废之前的快照(codex 评审 P1)
+ *   ⑤ 撤销连收起侧栏的「当前项」stashActive 一起还原(codex 评审 P2)
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DockviewApi } from 'dockview-react'
@@ -37,7 +39,7 @@ describe('resetLayout 的撤销', () => {
     setRibbonActions({ notify })
     const { loaded } = mkApi()
     useWorkspace.setState({ leftVisible: false, rightVisible: true, bottomVisible: false, sideProfileKey: 'home' })
-    useWorkspace.getState().resetLayout()
+    useWorkspace.getState().resetLayout({ undoable: true })
     expect(useWorkspace.getState().leftVisible).toBe(true) // 重置把左栏打开了
     expect(notify).toHaveBeenCalledTimes(1)
     const [text, action] = notify.mock.calls[0] as [string, { label: string; run(): void }]
@@ -56,7 +58,7 @@ describe('resetLayout 的撤销', () => {
     setRibbonActions({ notify: vi.fn() })
     const { loaded } = mkApi()
     useWorkspace.setState({ sideProfileKey: 'home' })
-    useWorkspace.getState().resetLayout()
+    useWorkspace.getState().resetLayout({ undoable: true })
     useWorkspace.setState({ sideProfileKey: 'calendar' })
     expect(useWorkspace.getState().undoResetLayout()).toBe(false)
     expect(loaded).toHaveLength(0)
@@ -65,15 +67,38 @@ describe('resetLayout 的撤销', () => {
   it('③ 换了 api(窗口重建)→ 撤销作废', () => {
     mkApi()
     useWorkspace.setState({ sideProfileKey: 'home' })
-    useWorkspace.getState().resetLayout()
+    useWorkspace.getState().resetLayout({ undoable: true })
     const second = mkApi()
     expect(useWorkspace.getState().undoResetLayout()).toBe(false)
     expect(second.loaded).toHaveLength(0)
   })
 
+  it('④ 自动重置(不带 undoable)不弹撤销,还作废手动重置留下的快照', () => {
+    const notify = vi.fn()
+    setRibbonActions({ notify })
+    const { loaded } = mkApi()
+    useWorkspace.setState({ sideProfileKey: 'home' })
+    useWorkspace.getState().resetLayout({ undoable: true })
+    expect(notify).toHaveBeenCalledTimes(1)
+    useWorkspace.getState().resetLayout() // 如切进一个没存档的 Space:此刻 Dockview 里还是上一个 Space 的布局
+    expect(notify).toHaveBeenCalledTimes(1)
+    expect(useWorkspace.getState().undoResetLayout()).toBe(false)
+    expect(loaded).toHaveLength(0)
+  })
+
+  it('⑤ 撤销还原收起侧栏的当前项(stashActive)', () => {
+    setRibbonActions({ notify: vi.fn() })
+    mkApi()
+    useWorkspace.setState({ sideProfileKey: 'home', stashActive: { left: null, right: 'outline#2', bottom: null } })
+    useWorkspace.getState().resetLayout({ undoable: true })
+    expect(useWorkspace.getState().stashActive.right).toBeNull()
+    expect(useWorkspace.getState().undoResetLayout()).toBe(true)
+    expect(useWorkspace.getState().stashActive.right).toBe('outline#2')
+  })
+
   it('没注入 notify 时照常重置、不抛', () => {
     expect(ribbonActions.notify).toBeUndefined()
     mkApi()
-    expect(() => useWorkspace.getState().resetLayout()).not.toThrow()
+    expect(() => useWorkspace.getState().resetLayout({ undoable: true })).not.toThrow()
   })
 })
