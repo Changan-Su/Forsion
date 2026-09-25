@@ -1,18 +1,19 @@
 // 用户关掉的捆绑包 ⇒ 内嵌引擎插件补关(2026-09-25):引擎对捆绑包内嵌插件改为缺省启用后,拨开关那一次级联
 // 若没发出去(引擎不在),只能靠 syncDisabledBundleEngines 在装载完 / 就绪边沿补。
 // 契约:只认 disabledIds;只 PUT 仍开着的;跳过用户目录同 id 与首方内置;设备页不动对端引擎;后端没就绪 → 边沿重试;
-// PUT 前现读偏好(不拿旧快照盖掉级联刚写的 true);失败 30s 后补。
+// 与级联同一条按插件串行链、链内现读偏好(不拿旧快照盖掉级联刚写的 true);失败 30s 后补,每次触发各有额度。
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import type { TanguDesktopConfig } from '../../types'
 
 const calls = {
   puts: [] as Array<[string, boolean]>, lists: 0, engine: [] as Array<{ id: string; enabled: boolean; source: string }>,
-  onList: null as null | (() => void), failPuts: 0,
+  onList: null as null | (() => void), failPuts: 0, hold: null as null | Promise<void>, holding: false,
 }
 vi.mock('../../services/backendService', () => ({
   listPlugins: vi.fn(async () => { calls.lists += 1; calls.onList?.(); return calls.engine }),
   setPluginEnabled: vi.fn(async (_cfg: unknown, id: string, enabled: boolean) => {
     if (calls.failPuts > 0) { calls.failPuts -= 1; throw new Error('HTTP 503') }
+    if (calls.hold) { const h = calls.hold; calls.hold = null; calls.holding = true; await h }
     calls.puts.push([id, enabled])
     return { ok: true, enabled }
   }),
@@ -20,7 +21,7 @@ vi.mock('../../services/backendService', () => ({
   saveMuseTrigger: vi.fn(async () => ({})),
 }))
 
-const { usePluginStore, syncDisabledBundleEngines } = await import('./pluginStore')
+const { usePluginStore, syncDisabledBundleEngines, serialByPlugin } = await import('./pluginStore')
 const { setTanguProbe } = await import('./tanguSeam')
 
 const CFG: TanguDesktopConfig = { backendUrl: 'http://t', token: 'tok', modelId: '' }
@@ -40,6 +41,8 @@ beforeEach(() => {
   calls.lists = 0
   calls.onList = null
   calls.failPuts = 0
+  calls.hold = null
+  calls.holding = false
   ready = CFG
   g.window = {}
   setTanguProbe(probe())
@@ -100,6 +103,33 @@ describe('syncDisabledBundleEngines', () => {
     calls.failPuts = 1
     await syncDisabledBundleEngines()
     expect(calls.puts).toEqual([])
+    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.waitFor(() => expect(calls.puts).toEqual([['computer-use', false]]))
+  })
+
+  it('补关的 PUT 在飞时用户重新打开 → 级联排在它后面(同一条链),最终是开的', async () => {
+    usePluginStore.setState({ plugins: [bundle('cu', ['computer-use'])] as never, disabledIds: ['cu'] })
+    calls.engine = [engine('computer-use', true)]
+    let release!: () => void
+    calls.hold = new Promise<void>((r) => { release = r })
+    const sync = syncDisabledBundleEngines()
+    await vi.waitFor(() => expect(calls.holding).toBe(true))
+    const cascade = serialByPlugin('cu', async () => { calls.puts.push(['computer-use', true]) }) // 级联的 true
+    release()
+    await Promise.all([sync, cascade])
+    expect(calls.puts).toEqual([['computer-use', false], ['computer-use', true]])
+  })
+
+  it('一次触发把重试额度用完,不挡之后新触发的重试', async () => {
+    vi.useFakeTimers()
+    usePluginStore.setState({ plugins: [bundle('cu', ['computer-use'])] as never, disabledIds: ['cu'] })
+    calls.engine = [engine('computer-use', true)]
+    calls.failPuts = 4 // 首发 + 3 次重试全失败
+    await syncDisabledBundleEngines()
+    for (let i = 0; i < 4; i++) await vi.advanceTimersByTimeAsync(30_000)
+    expect([calls.failPuts, calls.puts]).toEqual([0, []])
+    calls.failPuts = 1 // 新的一次触发(如就绪边沿):首发失败,仍该补
+    await syncDisabledBundleEngines()
     await vi.advanceTimersByTimeAsync(30_000)
     await vi.waitFor(() => expect(calls.puts).toEqual([['computer-use', false]]))
   })
