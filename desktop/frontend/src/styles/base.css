@@ -2820,7 +2820,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 }
 .settings-switch.active { border-color: var(--accent-ink); background: var(--accent-ink); }
 .settings-switch.active > span { transform: translateX(14px); background: var(--bg-card); }
-.settings-switch:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+.settings-switch:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 2px; }
 .settings-switch:disabled { cursor: not-allowed; }
 .is-disabled { opacity: .48; }
 
@@ -4798,3 +4798,14 @@ html:root :is(.project-menu, .composer-menu, .engine-picker, .add-menu) { transf
     .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu, .add-menu-sub, .unitsw-menu,
     .rb-menu, .rb-iconpick) { animation: none; }
 }
+
+/* uiux-c: 全局键盘焦点环(U-43)。
+   原来唯一的「全局」规则是 .am-app :focus-visible(amadeus/styles.css),Ribbon、标签条、侧栏行、状态栏都不在它的作用域里,
+   Tab 过去看不出焦点在哪。:where() 零特异性 —— 任何组件自己写了 :focus-visible 都照样压得过它;
+   只收可交互的原生语义元素,**不含** [tabindex] 通配(容器级 tabindex=-1 的程序化焦点不该画圈)。
+   线宽走 --focus-ring(08-13 拍板 1px),颜色走 --accent-ink。 */
+:where(button, [role='button'], [role='tab'], a[href], summary):focus-visible {
+  outline: var(--focus-ring) solid var(--accent-ink);
+  outline-offset: 1px;
+}
+/* uiux-c: end */
