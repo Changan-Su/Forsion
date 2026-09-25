@@ -91,6 +91,7 @@ import { ipcErrorText } from '../ipcError'
 import { resolveSettingsTarget } from './settingsTarget'
 import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery, type SettingsSearchEntry } from './settingsSearchIndex'
 import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys, type SettingsEdits } from './settingsDraft'
+import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
 import { SettingsSaveBar } from './SettingsSaveBar'
 import './settingsModal.css'
 
@@ -1529,13 +1530,13 @@ export const SettingsModal: React.FC<{
                         {(modeExpanded || modePending) && (
                           <>
                             <p className="settings-mode-desc">{t('settings.backend.modeDescription')}</p>
-                            <div className="settings-choice-grid" role="radiogroup" aria-label={t('settings.backend.modeLabel')}>
-                              <button type="button" role="radio" aria-checked={viewMode === 'managed'} className={`settings-choice-card${viewMode === 'managed' ? ' active' : ''}`} disabled={runtimeSaving} onClick={() => pickModeDraft('managed')}>
+                            <div className="settings-choice-grid" role="radiogroup" aria-label={t('settings.backend.modeLabel')} onKeyDown={onRadioGroupKeyDown}>
+                              <button type="button" role="radio" aria-checked={viewMode === 'managed'} tabIndex={radioTabIndex(viewMode === 'managed', 0, true)} className={`settings-choice-card${viewMode === 'managed' ? ' active' : ''}`} disabled={runtimeSaving} onClick={() => pickModeDraft('managed')}>
                                 <span className="settings-choice-icon"><Settings2 size={17} /></span>
                                 <span><strong>{t('settings.backend.modeManaged')}</strong><small>{t('settings.backend.modeManagedDescription')}</small></span>
                                 {viewMode === 'managed' && <Check size={15} className="settings-choice-check" />}
                               </button>
-                              <button type="button" role="radio" aria-checked={viewMode === 'external'} className={`settings-choice-card${viewMode === 'external' ? ' active' : ''}`} disabled={runtimeSaving} onClick={() => pickModeDraft('external')}>
+                              <button type="button" role="radio" aria-checked={viewMode === 'external'} tabIndex={radioTabIndex(viewMode === 'external', 1, true)} className={`settings-choice-card${viewMode === 'external' ? ' active' : ''}`} disabled={runtimeSaving} onClick={() => pickModeDraft('external')}>
                                 <span className="settings-choice-icon"><Globe2 size={17} /></span>
                                 <span><strong>{t('settings.backend.modeExternal')}</strong><small>{t('settings.backend.modeExternalDescription')}</small></span>
                                 {viewMode === 'external' && <Check size={15} className="settings-choice-check" />}
@@ -2886,12 +2887,13 @@ export const SettingsModal: React.FC<{
                           </button>
                         </div>
                       </div>
-                      <div className="theme-grid" role="radiogroup" aria-label={t('settings.theme.langLabel')}>
-                        {listLanguages().map((th) => (
+                      <div className="theme-grid" role="radiogroup" aria-label={t('settings.theme.langLabel')} onKeyDown={onRadioGroupKeyDown}>
+                        {listLanguages().map((th, i, all) => (
                           <ThemeCard
                             key={th.manifest.id}
                             entry={th}
                             active={th.manifest.id === p.themeLang}
+                            tabIndex={radioTabIndex(th.manifest.id === p.themeLang, i, all.some((x) => x.manifest.id === p.themeLang))}
                             onSelect={() => {
                               // 传明暗**偏好**(非落地明暗):换到锁定 colorScheme 的主题时由 setTheme 解析,
                               // 不在此处先按旧 mode 应用一次(会闪),交给 setTheme 一步到位。

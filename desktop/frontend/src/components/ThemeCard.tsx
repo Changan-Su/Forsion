@@ -36,7 +36,9 @@ export const ThemeCard: React.FC<{
   entry: ThemeEntry
   active: boolean
   onSelect: () => void
-}> = ({ entry, active, onSelect }) => {
+  /** roving tabindex(外层 radiogroup 用 radioTabIndex 算好传进来);缺省按 active 给。 */
+  tabIndex?: number
+}> = ({ entry, active, onSelect, tabIndex }) => {
   const { preview } = entry.manifest
   const { locale } = useI18n()
   const shape = inferShape(entry.manifest)
@@ -51,8 +53,8 @@ export const ThemeCard: React.FC<{
   } as React.CSSProperties
   const name = preview.title?.text || (locale === 'en' && entry.manifest.nameEn ? entry.manifest.nameEn : entry.manifest.name)
   return (
-    // 单选语义(U-44):外层 .theme-grid 是 radiogroup;可访问名只取主题名 + 标语,预览里的「F Forsion Aa」不进名字。
-    <button type="button" role="radio" aria-checked={active} className={`theme-card${active ? ' active' : ''}`} onClick={onSelect}>
+    // 单选语义(U-44):外层 .theme-grid 是 radiogroup(方向键 / roving tabindex 见 radioGroupKeys);可访问名只取主题名 + 标语,预览里的「F Forsion Aa」不进名字。
+    <button type="button" role="radio" aria-checked={active} tabIndex={tabIndex ?? (active ? 0 : -1)} className={`theme-card${active ? ' active' : ''}`} onClick={onSelect}>
       <div className="theme-preview" data-shape={shape} data-font={font} style={previewStyle} aria-hidden="true">
         <div className="theme-preview-window">
           <span className="theme-preview-rail"><i>F</i><i /><i /></span>
