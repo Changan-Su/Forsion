@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { MessageSquareReply, Paperclip, Send, X } from 'lucide-react'
 import { useI18n } from '../../i18n'
+import { formatDateTime } from '../../format/time'
 import {
   attachmentDataUrl, checkAttachments, fileToAttachment, fmtKb, isImageMime,
   type FeedbackAttachmentInput, type FeedbackThreadData,
@@ -167,7 +168,7 @@ function Messages({ data }: { data: FeedbackThreadData }) {
 
 function fmtTime(s: string): string {
   const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : `${s.replace(' ', 'T')}Z`)
-  return isNaN(+d) ? s : d.toLocaleString()
+  return formatDateTime(d) || s
 }
 
 /** 文本类附件存盘:一律 octet-stream(别让渲染层按 mime 就地打开);Blob URL 押后 revoke。 */

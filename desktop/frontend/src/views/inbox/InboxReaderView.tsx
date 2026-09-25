@@ -7,6 +7,7 @@
 import { useEffect, useState } from 'react'
 import { Archive, ArchiveRestore, Cloud, Info, Mail, MailOpen, MessageCircle, Trash2, Workflow } from 'lucide-react'
 import { registerMessages, useI18n } from '../../i18n'
+import { formatDate, formatDateTime } from '../../format/time'
 import { APP_VERSION } from '../../changelog'
 import { useApp } from '../../stores/appStore'
 import { useInbox, isAutomationSender, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
@@ -62,7 +63,7 @@ function InboxReaderEmpty() {
 }
 
 export function InboxReaderView() {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const { messages, archived, selectedId, markRead, markArchived, remove } = useInbox()
   const agentDefs = useApp((s) => s.agentDefs)
   const avatars = useApp((s) => s.agentAvatars)
@@ -108,10 +109,10 @@ export function InboxReaderView() {
               </span>
             )}
             <span className="ibx-sender">{senderOf(msg)}</span>
-            <span className="ibx-time">{parseUtc(msg.created_at)?.toLocaleString() ?? ''}</span>
+            <span className="ibx-time">{formatDateTime(parseUtc(msg.created_at), { locale })}</span>
             {expiresAt && (
               <span className={`ibx-expire${expired ? ' expired' : ''}`}>
-                {expired ? t('inbox.expired') : t('inbox.expiresAt', { d: expiresAt.toLocaleDateString() })}
+                {expired ? t('inbox.expired') : t('inbox.expiresAt', { d: formatDate(expiresAt, { locale }) })}
               </span>
             )}
             <span className="ibx-reader-actions">

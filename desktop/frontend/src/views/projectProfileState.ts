@@ -62,16 +62,3 @@ export function shortenPath(p: string, homeDir?: string | null): string {
   const home = homeDir ? homeDir.replace(/\\/g, '/').replace(/\/$/, '') : ''
   return home && (norm === home || norm.startsWith(`${home}/`)) ? `~${norm.slice(home.length)}` : norm
 }
-
-/** 「3 天前」:语言跟随界面,不自己拼文案(Intl 不认的运行时退回日期)。 */
-export function relativeTimeOf(at: number, now: number, locale: string): string {
-  const diff = Math.round((at - now) / 1000)
-  const abs = Math.abs(diff)
-  const [value, unit]: [number, Intl.RelativeTimeFormatUnit] = abs < 60 ? [diff, 'second']
-    : abs < 3600 ? [Math.round(diff / 60), 'minute']
-    : abs < 86400 ? [Math.round(diff / 3600), 'hour']
-    : abs < 86400 * 30 ? [Math.round(diff / 86400), 'day']
-    : abs < 86400 * 365 ? [Math.round(diff / (86400 * 30)), 'month']
-    : [Math.round(diff / (86400 * 365)), 'year']
-  try { return new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(value, unit) } catch { return new Date(at).toLocaleDateString() }
-}

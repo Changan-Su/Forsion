@@ -150,4 +150,21 @@ describe('i18n 覆盖', () => {
     const report = [...unknown.entries()].map(([k, files]) => `${k}  <- ${[...new Set(files)].join(', ')}`).sort()
     expect(report, `字典里没有这些键,界面会直接渲染键名:\n  ${report.join('\n  ')}`).toEqual([])
   })
+
+  it('H. 日期 / 时间显示只走 format/time.ts 单源(U-29:不许再跟系统区域走)', () => {
+    // 硬断言覆盖两类可静态判定的写法:toLocaleDateString / toLocaleTimeString,以及 new Intl.DateTimeFormat /
+    // new Intl.RelativeTimeFormat。裸 `.toLocaleString()` 数字也在用(千分位),静态分不清,所以只拦
+    // `new Date(…).toLocaleString(` 这一种明确是日期的形状;其余靠 code review。
+    // `Intl.DateTimeFormat().resolvedOptions()` 取本机时区不是格式化,不在拦截范围(不带 new)。
+    const BAD = /\btoLocale(?:Date|Time)String\(|new Intl\.(?:DateTimeFormat|RelativeTimeFormat)\(|new Date\([^()]*\)\.toLocaleString\(/
+    const TIME_SRC = join(SRC, 'format', 'time.ts')
+    const hits: string[] = []
+    for (const file of [...ALL_SRC, ...ENGINE_SRC]) {
+      if (file === TIME_SRC) continue
+      readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+        if (BAD.test(line) && !/^\s*(\/\/|\*)/.test(line)) hits.push(`${relative(SRC, file)}:${i + 1}  ${line.trim().slice(0, 120)}`)
+      })
+    }
+    expect(hits, `这些地方绕过了 format/time.ts(不传 locale = 跟系统区域走,中文界面会冒出 17/09/2026):\n  ${hits.join('\n  ')}`).toEqual([])
+  })
 })

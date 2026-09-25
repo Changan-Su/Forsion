@@ -98,29 +98,3 @@ export function shortcutToast(result: ShortcutResult): { key: string; error: boo
   return { key: 'artificial.toast.shortcutFailed', error: true, vars: { detail: result.detail || result.code } }
 }
 
-const UNITS: Array<[Intl.RelativeTimeFormatUnit, number]> = [
-  ['year', 31_536_000_000],
-  ['month', 2_592_000_000],
-  ['day', 86_400_000],
-  ['hour', 3_600_000],
-  ['minute', 60_000],
-]
-
-/** 相对时间的**单位选择**(与 Intl 的措辞分开,好让单测钉住逻辑而不看 ICU 版本的脸色)。 */
-export function relativeParts(at: number, now: number): { value: number; unit: Intl.RelativeTimeFormatUnit } {
-  const diff = at - now // 过去为负,正好是 RelativeTimeFormat 的口径
-  for (const [unit, ms] of UNITS) {
-    if (Math.abs(diff) >= ms) return { value: Math.round(diff / ms), unit }
-  }
-  return { value: 0, unit: 'second' } // numeric:'auto' → 「现在」/「now」
-}
-
-/** 「3 天前」。语言跟随当前界面语言,不自己拼文案。 */
-export function relativeTime(at: number, now: number, locale: string): string {
-  const { value, unit } = relativeParts(at, now)
-  try {
-    return new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(value, unit)
-  } catch {
-    return new Date(at).toLocaleDateString(locale) // 极老的运行时:退回日期,不崩
-  }
-}

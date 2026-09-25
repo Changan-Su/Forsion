@@ -6,6 +6,7 @@ import {
   type AgentMemorySnapshot, type AgentMemoryRevision, type AgentMemoryDream, type AgentMemoryDreamConfig,
 } from '../services/backendService'
 import { registerMessages, useI18n } from '../i18n'
+import { formatDateTime } from '../format/time'
 import type { TanguDesktopConfig } from '../types'
 
 registerMessages({
@@ -165,7 +166,7 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
       <span style={hint}>{t('agentMemory.pending', { count: dream.candidates })}</span>
     </div>
     {dream.status.detail && <p style={hint}>{dream.status.detail}</p>}
-    {(dream.status.finishedAt || dream.status.startedAt) && <div style={hint}>{new Date(dream.status.finishedAt || dream.status.startedAt!).toLocaleString()}</div>}
+    {(dream.status.finishedAt || dream.status.startedAt) && <div style={hint}>{formatDateTime(dream.status.finishedAt || dream.status.startedAt)}</div>}
     {configDraft && <details style={{ marginTop: 8 }}><summary>{t('agentMemory.settings')}</summary>
       <div className="field" style={{ marginTop: 10 }}><label htmlFor="memory-dream-model">{t('agentMemory.model')}</label>
         <input id="memory-dream-model" value={configDraft.modelId} disabled={busy || dream.status.running} onChange={(e) => setConfigDraft({ ...configDraft, modelId: e.target.value })} /></div>
@@ -255,7 +256,7 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
         <button className="btn sm" disabled={busy} onClick={loadRevisions}>{t('agentMemory.reload')}</button>
         {revisions?.length === 0 && <p style={hint}>{t('agentMemory.noRevisions')}</p>}
         {revisions?.map((revision) => <details key={revision.version} style={{ marginTop: 8 }}><summary style={hint} title={revision.version}>
-          {new Date(revision.createdAt).toLocaleString()} · {revision.version.slice(0, 8)} · {t(`agentMemory.source.${revision.source.kind}`)}</summary>
+          {formatDateTime(revision.createdAt)} · {revision.version.slice(0, 8)} · {t(`agentMemory.source.${revision.source.kind}`)}</summary>
           <pre style={{ ...hint, whiteSpace: 'pre-wrap', maxHeight: 220, overflow: 'auto' }}>{revision.content}</pre>
           <button className="btn sm" disabled={writeDisabled || revision.version === snapshot.version} onClick={() => void action(() => update(() => restoreAgentMemory(cfg, slug, revision.version, snapshot.version)))}>{t('agentMemory.restore')}</button>
         </details>)}

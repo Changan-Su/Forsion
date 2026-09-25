@@ -25,7 +25,7 @@ import { openNewChat, openSession, openSolo, openTeam, rotateSolo } from '../ses
 import { AvatarStack } from '../components/AvatarStack'
 import { AgentAvatar } from '../components/AgentAvatar'
 import { tipProps, tipT } from '../hoverTip'
-import { relativeTimeOf } from './projectProfileState'
+import { formatRelative } from '../format/time'
 import { TeamEditor } from '../components/TeamEditor'
 import * as api from '../services/backendService'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -235,7 +235,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const rowTip = (name: string, kindKey: string, identKey: string) => tipProps(() => {
     const at = activityByIdent.get(identKey) || 0
     const kind = tipT(kindKey)
-    return [name, at ? tipT('orbits.tip.line', { kind, when: relativeTimeOf(at, Date.now(), locale) }) : kind]
+    return [name, at ? tipT('orbits.tip.line', { kind, when: formatRelative(at, { locale }) }) : kind]
   })
   const agentNames = useMemo(() => agents.map((a) => a.name || a.slug), [agents])
 

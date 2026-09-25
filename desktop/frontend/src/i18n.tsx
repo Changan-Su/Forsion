@@ -288,10 +288,6 @@ const zh: Dict = {
   'inbox.action.refresh': '拉取新消息',
   'inbox.action.chat': '与 {name} 聊天',
   'inbox.deleteConfirm': '删除消息「{title}」?',
-  'inbox.time.now': '刚刚',
-  'inbox.time.minutes': '{n} 分钟前',
-  'inbox.time.hours': '{n} 小时前',
-  'inbox.time.days': '{n} 天前',
   'inbox.pullOk': '已拉取 {n} 条新消息',
   'inbox.pullNone': '没有新消息',
   'inbox.opFail': '操作失败:{e}',
@@ -2098,10 +2094,6 @@ const en: Dict = {
   'inbox.action.refresh': 'Check for new',
   'inbox.action.chat': 'Chat with {name}',
   'inbox.deleteConfirm': 'Delete "{title}"?',
-  'inbox.time.now': 'just now',
-  'inbox.time.minutes': '{n}m ago',
-  'inbox.time.hours': '{n}h ago',
-  'inbox.time.days': '{n}d ago',
   'inbox.pullOk': 'Pulled {n} new messages',
   'inbox.pullNone': 'No new messages',
   'inbox.opFail': 'Operation failed: {e}',
@@ -3744,6 +3736,11 @@ function translateIn(locale: Locale, key: string, vars?: Record<string, unknown>
  */
 export function translate(key: string, vars?: Record<string, unknown>): string {
   return translateIn(_locale, key, vars)
+}
+
+/** 按**指定**语言翻译(不读当前界面语言)。给需要显式 locale 的纯函数用,如 `format/time.ts` 的单测路径。 */
+export function translateFor(locale: Locale, key: string, vars?: Record<string, unknown>): string {
+  return translateIn(locale, key, vars)
 }
 
 function interpolate(s: string, vars?: Record<string, unknown>): string {

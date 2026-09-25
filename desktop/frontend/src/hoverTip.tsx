@@ -10,6 +10,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { create } from 'zustand'
 import { useApp } from './stores/appStore'
 import './hoverTip.css'
+import { formatDateTime } from './format/time'
 
 const SHOW_DELAY = 1000
 const SKIP_DELAY = 100
@@ -71,11 +72,9 @@ export function tipProps(load: Loader): { onMouseEnter: (e: React.MouseEvent<HTM
   }
 }
 
-/** 时间戳 → 本地「年-月-日 时:分」(跟随系统区域;秒是噪音,不显示)。 */
+/** 时间戳 → 「2026年9月17日 14:05」/「Sep 17, 2026, 14:05」(跟界面语言;秒是噪音,不显示)。 */
 export function fmtTime(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, {
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  })
+  return formatDateTime(ms, { year: 'always' })
 }
 
 /** 文案:loader 跑在事件回调里(非渲染),故走 store 取 tr,免得给一堆无 i18n 的文件塞 hook。 */
