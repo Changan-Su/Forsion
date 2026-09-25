@@ -2847,7 +2847,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   background: var(--bg);
   color: var(--text-faint);
 }
-.settings-filter-input:focus-within { border-color: var(--sel-line); box-shadow: 0 0 0 var(--focus-ring) var(--sel-line); }
+.settings-filter-input:focus-within { border-color: var(--sel-line); box-shadow: 0 0 0 var(--focus-ring) var(--accent-light); }
 .settings-filter-input > input { min-width: 0; flex: 1; padding: 0; border: 0; background: transparent; box-shadow: none; }
 .settings-filter-input > button { display: inline-flex; align-items: center; padding: 2px; color: var(--text-faint); cursor: pointer; }
 .settings-inline-notice { padding: 8px 15px; border-bottom: var(--border-width) solid var(--border); background: var(--accent-light); color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); }
