@@ -66,6 +66,13 @@ async function run() {
     await win.locator('.t2o-row').filter({ hasText: 'Atlas Crew' }).first().click()
     if (!await win.locator('[data-tangu-details]').isVisible()) await win.locator('.dv-edge-right').click()
     const panel = win.locator('[data-tangu-details]'), party = panel.locator('[data-team-profile]')
+    // 项目会话的右栏是 PROJECT 详情(09-23 合入):配队不再直接铺开,要在「Agents」页点进本会话的
+    // 临时配队(executor key = party:<sessionId>)。按 data-* 找,不按显示名。
+    const openProjectParty = async (sessionId) => {
+      const card = panel.locator(`[data-project-profile] [data-project-executor="party:${sessionId}"] .team-member-open`)
+      await card.waitFor()
+      await card.click()
+    }
     await party.getByRole('alert').filter({ hasText: 'Team load failed' }).waitFor()
     assert.equal(await party.locator('.team-lineup').count(), 0)
     failLoad = false
@@ -160,7 +167,8 @@ async function run() {
     await win.waitForTimeout(160)
     await party.locator('.team-lineup').screenshot({ path: path.join(home, 'party-tuning-open.png') })
     await win.keyboard.press('Escape')
-    await win.getByTitle('切换明暗模式', { exact: true }).click()
+    // 按 ribbon 槽的 id 点明暗钮:U-21 起收起态不再挂原生 title(改自绘浮签 data-rb-tip),getByTitle 永远找不到。
+    await win.locator('.rb-slot[data-id="rb-mode"] .rb-btn').click()
     await win.waitForFunction(() => document.documentElement.getAttribute('data-mode') === 'dark')
     await win.waitForTimeout(400)
     await win.waitForTimeout(220)
@@ -195,6 +203,7 @@ async function run() {
     console.log('PASS saved TEAM survives UI reload with its charter, roles, roster and custom image avatar (profile + sidebar row, upload + remove)')
 
     await win.locator('.t2s-srow').filter({ hasText: 'Project party' }).first().click()
+    await openProjectParty(projectSession.id)
     await party.locator('[data-team-member="research"]').waitFor()
     const savedTeamWrites = teamWrites
     await party.getByRole('button', { name: '添加成员', exact: true }).click()
@@ -233,6 +242,7 @@ async function run() {
     await win.screenshot({ path: path.join(home, 'project-party-narrow.png') })
     await win.reload()
     await win.locator('.t2s-srow').filter({ hasText: 'Project expedition' }).first().click()
+    await openProjectParty(projectSession.id)
     await party.getByRole('button', { name: '查看成员 Fact checker', exact: true }).click()
     assert.equal(await temp.getByRole('textbox', { name: '工作指令', exact: true }).inputValue(), 'Cross-check claims against the cited sources.')
     await win.locator('[data-chat-surface="chat"] .t2c-ta').fill('Use the configured party')
