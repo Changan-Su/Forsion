@@ -61,6 +61,8 @@ interface ThemeSettingBase {
 export interface ThemePreview {
   /** 预览只表达结构语言；颜色始终取当前 skin，避免语言卡再次私藏一套配色。 */
   shape?: 'paper' | 'glass' | 'soft' | 'compact';
+  /** 缩略图字形(可选)。缺省时设置页按 tags 推断(含 'serif' → 衬线),再缺省无衬线。 */
+  font?: 'sans' | 'serif' | 'mono';
   background: string | { light: string; dark: string };
   accent: string;
   label?: string;
