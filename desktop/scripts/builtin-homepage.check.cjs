@@ -95,6 +95,7 @@ const SNAP = `(() => {
     tiles: [...document.querySelectorAll('.hp-space-main .hp-tile:not(.hp-folder) .hp-tile-name')].map((e) => (e.textContent || '').trim()),
     folderTiles: [...document.querySelectorAll('.hp-space-main .hp-folder .hp-tile-name')].map((e) => (e.textContent || '').trim()),
     organizerTiles: [...document.querySelectorAll('.hp-organizer-grid > .hp-tile .hp-tile-name')].map((e) => (e.textContent || '').trim()),
+    organizerIds: [...document.querySelectorAll('.hp-organizer-grid > .hp-tile')].map((e) => e.getAttribute('data-id') || ''),
     organizer: vis('.hp-organizer-stage'),
     ribbonFolders: document.querySelectorAll('.rb-top .rb-folder').length,
     brand: (document.querySelector('.hp-brand')?.textContent || '').trim(),
@@ -134,14 +135,21 @@ async function boot() {
 }
 
 /** 点 ribbon 上某个 Space(折叠/展开两种形态都认),等 lazy 分块到位。 */
-async function enterSpace(win, names) {
+async function enterSpace(win, names, id) {
   const click = (root) => `(() => {
     const b = [...document.querySelectorAll('${root} .rb-space')].find((x) =>
       ${JSON.stringify(names)}.includes(x.getAttribute('aria-label') || x.getAttribute('title') || x.querySelector('.rb-label')?.textContent || ''))
     if (b) { b.click(); return true }
     return false
   })()`
-  let hit = await win.evaluate(click('.rb-top')) || await win.evaluate(click('.rb-home'))
+  // 优先按 Space id 找(条上每格 .rb-slot 带 data-id="space:<id>"):显示名会随文案口径改(U-27 把
+  // 「Agent」让给了 Agents 名册、Tangu Space 叫回「Tangu」,本台架第 2/6/9 步就是这样按名字红掉的)。
+  const byId = id ? `(() => {
+    const b = document.querySelector('.rb-slot[data-id="space:${id}"] .rb-space')
+    if (b) { b.click(); return true }
+    return false
+  })()` : null
+  let hit = (byId && await win.evaluate(byId)) || await win.evaluate(click('.rb-top')) || await win.evaluate(click('.rb-home'))
   if (!hit) { // 条上没有 → 可能被收进「…」溢出浮层(见 ribbonSpaces 的注释)
     const more = win.locator('.rb-top .rb-more').first()
     if (await more.count().catch(() => 0)) {
@@ -153,7 +161,7 @@ async function enterSpace(win, names) {
   await win.waitForTimeout(1800)
   return hit
 }
-const enterHome = (win) => enterSpace(win, HOME_NAMES)
+const enterHome = (win) => enterSpace(win, HOME_NAMES, 'home')
 
 /** 开启动器并**确认它真的开出来了**:点击失败或没挂载就直接抛 —— 否则 launcher=[] 会让
  *  「入口没了」的断言空跑通过(builtin-calendar 里 Codex 评审抓过的同款假绿)。 */
@@ -338,9 +346,9 @@ async function main() {
     const expanded = await win.evaluate(SNAP)
     const dockOk = ribbonOthers.length > 0 && expanded.organizer === 1 && expanded.organizerTiles.length === ribbonOthers.length
       && ribbonOthers.every((n) => expanded.organizerTiles.includes(n)) && !expanded.organizerTiles.some((n) => HOME_NAMES.includes(n))
+    // 按格子的 data-id 找 Tangu Space,不按显示名(它曾叫「Agent」,现叫「Tangu」;「Agents」是另一个名册 Space)。
     const jumped = await win.evaluate(`(() => {
-      const t = [...document.querySelectorAll('.hp-organizer-grid .hp-tile')].find((x) =>
-        (x.querySelector('.hp-tile-name')?.textContent || '').trim() === 'Agent')
+      const t = document.querySelector('.hp-organizer-grid .hp-tile[data-id="space:tangu"]')
       if (!t) return false
       t.click(); return true
     })()`)
@@ -382,6 +390,8 @@ async function main() {
       const pcs = getComputedStyle(pill), mcs = getComputedStyle(menu), ucs = getComputedStyle(utility)
       return {
         pillW: p.width, menuW: m.width, aligned: Math.abs(p.left - m.left), itemH: i.height,
+        // 行高判据跟 token 走(--menu-item-min-height):09-23 按「更多」菜单校准从 28px 调到 32px,写死 28 就恒红。
+        rowToken: parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--menu-item-min-height')),
         pillBorder: pcs.borderTopWidth, menuRadius: parseFloat(mcs.borderTopLeftRadius),
         utilityRadius: parseFloat(ucs.borderTopLeftRadius), utilityBorder: ucs.borderTopWidth,
         searches: menu.querySelectorAll('.project-menu-search').length,
@@ -389,9 +399,9 @@ async function main() {
       }
     })()`)
     check(
-      '3a Project 选择器符合新菜单几何:等宽/对齐/28px 行/无轮廓 pill/少量项目不露搜索',
+      '3a Project 选择器符合新菜单几何:等宽/对齐/行高 = --menu-item-min-height/无轮廓 pill/少量项目不露搜索',
       Math.abs(projectMenuUi.pillW - projectMenuUi.menuW) < 1
-        && projectMenuUi.aligned < 1 && projectMenuUi.itemH >= 27 && projectMenuUi.itemH <= 29
+        && projectMenuUi.aligned < 1 && projectMenuUi.rowToken > 0 && Math.abs(projectMenuUi.itemH - projectMenuUi.rowToken) <= 1
         && projectMenuUi.pillBorder === '0px' && projectMenuUi.menuRadius >= 8
         && projectMenuUi.utilityRadius >= 6 && projectMenuUi.utilityBorder === '0px'
         && projectMenuUi.searches === 0 && projectMenuUi.active === 1,
@@ -495,8 +505,9 @@ async function main() {
         && pointerMotion.releaseOverlay === 0 && pointerMotion.releaseMs < 240
         && ord.includes('space:home')
         && ord.indexOf('space:inbox') < ord.indexOf('space:tangu')
-        && reordered.organizerTiles.indexOf('收件箱') < reordered.organizerTiles.indexOf('Agent'),
-      JSON.stringify({ pointerMotion, ribbonOrder: ord, organizerTiles: reordered.organizerTiles }),
+        && reordered.organizerIds.indexOf('space:inbox') >= 0
+        && reordered.organizerIds.indexOf('space:inbox') < reordered.organizerIds.indexOf('space:tangu'),
+      JSON.stringify({ pointerMotion, ribbonOrder: ord, organizerIds: reordered.organizerIds }),
     )
     // 夹具清场:后面几条按「没有用户自定义排列」的默认态判定
     await win.evaluate(ribbonFixture(null))
@@ -529,7 +540,7 @@ async function main() {
 
     // 9 别的 Space 的命名布局里留着主页面板:关插件后切回去不许炸。
     //   夹具全靠点击:Tangu Space → 启动器 →「主页」卡 = 在主区开一张主页,再切走(saveNamed)。
-    await enterSpace(win, ['Agent'])
+    await enterSpace(win, ['Tangu'], 'tangu')
     await openLauncher(win)
     const carded = await win.evaluate(`(() => {
       const c = [...document.querySelectorAll('.newtab-card')].find((x) =>
@@ -539,11 +550,11 @@ async function main() {
     })()`)
     await win.waitForTimeout(1800)
     const planted = await win.evaluate(SNAP)
-    await enterSpace(win, ['Note'])
+    await enterSpace(win, ['Note'], 'amadeus')
     await win.evaluate(toggle(false))
     await win.waitForTimeout(1500)
     errs.length = 0
-    await enterSpace(win, ['Agent']) // ← applyNamed 吃到含 homepage 的命名布局
+    await enterSpace(win, ['Tangu'], 'tangu') // ← applyNamed 吃到含 homepage 的命名布局
     await win.waitForTimeout(1200)
     const back = await win.evaluate(SNAP)
     const alive = await win.evaluate(`(() => ({

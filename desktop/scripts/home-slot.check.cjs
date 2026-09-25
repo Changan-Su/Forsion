@@ -42,6 +42,10 @@ const SNAP = `(() => {
   const box = (sel) => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, mid: r.top + r.height / 2, h: r.height } }
   return {
     top: names('.rb-top .rb-space'),
+    // 按 Space id 认格子(.rb-slot[data-id="space:<id>"]):显示名随文案口径变(Tangu Space 曾叫「Agent」,
+    // 现叫「Tangu」,「Agents」是名册 Space —— has-text("Agent") 两个都命中),本台架第 3 步起就是这样红的。
+    topIds: [...document.querySelectorAll('.rb-top .rb-slot[data-id^="space:"]')].filter((e) => e.querySelector('.rb-space'))
+      .map((e) => { const b = e.querySelector('.rb-space'); return { id: e.getAttribute('data-id'), name: b.getAttribute('aria-label') || b.querySelector('.rb-label')?.textContent || '' } }),
     slot: names('.rb-home .rb-space'),
     active: localStorage.getItem('forsion_tangu_active_space'),
     order: JSON.parse(localStorage.getItem('forsion_tangu_ribbon_order') || '[]'),
@@ -66,6 +70,17 @@ async function boot() {
   await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
   await win.waitForTimeout(1800)
   return { app, win }
+}
+
+const idsOf = (snap) => snap.topIds.map((x) => x.id)
+const nameOf = (snap, id) => snap.topIds.find((x) => x.id === id)?.name || ''
+const escapeRe = (t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+/** 右键主位菜单里按**整行文字精确匹配**点一项(子串匹配会把「Agent」「Agents」混为一谈)。 */
+async function pickSlotSpace(win, name) {
+  await win.click('.rb-home .rb-space', { button: 'right' })
+  await win.waitForTimeout(500)
+  await win.locator('.ctx-menu button').filter({ hasText: new RegExp(`^\\s*${escapeRe(name)}\\s*$`) }).first().click()
+  await win.waitForTimeout(900)
 }
 
 /** 重载渲染进程(ribbon store 只在模块装载时读一次 localStorage,种顺序必须靠 reload 生效)。 */
@@ -125,27 +140,24 @@ async function main() {
     await reload(win)
     const seeded = await win.evaluate(SNAP)
     const order0 = JSON.stringify(seeded.order)
-    await win.click('.rb-home .rb-space', { button: 'right' })
-    await win.waitForTimeout(500)
-    await win.click('.ctx-menu button:has-text("Agent")')
-    await win.waitForTimeout(900)
+    const tanguName = nameOf(seeded, 'space:tangu')
+    const homeName = seeded.slot[0]
+    await pickSlotSpace(win, tanguName)
     const swapped = await win.evaluate(SNAP)
-    await win.click('.rb-home .rb-space', { button: 'right' })
-    await win.waitForTimeout(500)
-    await win.click('.ctx-menu button:has-text("主页")')
-    await win.waitForTimeout(900)
+    await pickSlotSpace(win, homeName)
     const back = await win.evaluate(SNAP)
     // 种的序里主页排在 收件箱 之后、Amadeus 之前 —— 换 Tangu 进槽后,主页必须**回到那一格**,
     // 而不是掉到末尾(掉末尾 = 用了 removeRibbonIcon 那条错法)。
-    const homeAt = swapped.top.indexOf('主页')
+    const sw = idsOf(swapped), bk = idsOf(back)
+    const homeAt = sw.indexOf('space:home')
     check(
       '3 右键换主位:新的进槽/旧的回上区且回到原格,持久顺序一个字没变',
-      swapped.slot[0] === 'Agent' && !swapped.top.includes('Agent') && swapped.slotPref === 'tangu'
-        && homeAt === swapped.top.indexOf('收件箱') + 1 && homeAt === swapped.top.indexOf('Note') - 1
-        && back.slot[0] === '主页' && back.top.includes('Agent') && !back.top.includes('主页')
+      !!tanguName && swapped.slot[0] === tanguName && !sw.includes('space:tangu') && swapped.slotPref === 'tangu'
+        && homeAt > 0 && homeAt === sw.indexOf('space:inbox') + 1 && homeAt === sw.indexOf('space:amadeus') - 1
+        && back.slot[0] === homeName && bk.includes('space:tangu') && !bk.includes('space:home')
         && JSON.stringify(swapped.order) === order0 && JSON.stringify(back.order) === order0
         && seeded.order.length === SEED.length,
-      JSON.stringify({ swappedTop: swapped.top, homeAt, backSlot: back.slot, backTop: back.top, orderStable: JSON.stringify(back.order) === order0 }),
+      JSON.stringify({ tanguName, swappedTop: sw, homeAt, backSlot: back.slot, backTop: bk, orderStable: JSON.stringify(back.order) === order0 }),
     )
 
     // 4 启动档「主位槽」= 缺省(不写 forsion_default_space)。先把主位换成 Amadeus,重启应落 amadeus。
@@ -153,11 +165,11 @@ async function main() {
     await win.waitForTimeout(300)
     ;({ app, win } = await restart(app))
     const b4 = await win.evaluate(SNAP)
-    check('4 启动档「主位槽」(缺省):重启落在主位所指的 Space', b4.active === 'amadeus' && b4.slot[0] === 'Note', JSON.stringify({ active: b4.active, slot: b4.slot }))
+    check('4 启动档「主位槽」(缺省):重启落在主位所指的 Space', b4.active === 'amadeus' && b4.slot[0] === nameOf(seeded, 'space:amadeus'), JSON.stringify({ active: b4.active, slot: b4.slot }))
 
     // 5 启动档「上次退出」:切到 Tangu 再重启,应回 Tangu(而不是主位的 Amadeus)
     await win.evaluate(`localStorage.setItem('forsion_default_space', '__last__')`)
-    await win.click('.rb-top .rb-space[aria-label="Agent"]')
+    await win.click('.rb-top .rb-slot[data-id="space:tangu"] .rb-space')
     await win.waitForTimeout(1800)
     ;({ app, win } = await restart(app))
     const b5 = await win.evaluate(SNAP)
