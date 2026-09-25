@@ -72,3 +72,17 @@ it('locks every action while the caller is saving a setting that affects install
   expect(buttons.length).toBeGreaterThan(2)
   expect(buttons.every((b) => b.disabled)).toBe(true)
 })
+
+it('drops a pending hand-off when the caller locks the section before the config read settles', async () => {
+  await render({ mode: 'managed', mirror: 'default' })
+  let resolve!: (v: any) => void
+  vi.mocked(window.tangu!.getConfig).mockImplementationOnce(() => new Promise((r) => { resolve = r }))
+  const onLeave = vi.fn()
+  await act(async () => root.render(React.createElement(EnvProbeSection, { onLeave })))
+  await act(async () => askButtons()[0].click())
+  expect(askButtons()[0].disabled).toBe(true) // 读配置期间不接第二次点击
+  await act(async () => root.render(React.createElement(EnvProbeSection, { onLeave, locked: true })))
+  await act(async () => resolve({ mode: 'managed', mirror: 'china' }))
+  expect(send).not.toHaveBeenCalled()
+  expect(onLeave).not.toHaveBeenCalled()
+})

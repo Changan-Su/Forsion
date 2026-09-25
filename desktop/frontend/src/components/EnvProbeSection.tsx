@@ -102,6 +102,12 @@ export const EnvProbeSection: React.FC<{
   // 交给它装的是那台机器(Codex 评审 P1)—— 此时只给宿主那条本机命令。
   const connected = useApp((s) => s.connState === 'ok' && (s.modelsResp?.models.length ?? 0) > 0)
   const canAskTangu = connected && !!host?.managed
+  // 读配置那一下是异步的:期间被锁(向导开始换源)或被卸载,点击就作废;读的过程中也不接第二次点击。
+  const [asking, setAsking] = useState(false)
+  const lockedRef = useRef(locked)
+  lockedRef.current = locked
+  const alive = useRef(true)
+  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
 
   const doEnvCheck = async (): Promise<EnvProbeResult[] | null> => {
     if (!window.tangu?.envCheck) return null
@@ -167,13 +173,19 @@ export const EnvProbeSection: React.FC<{
   /** 交给 Tangu:新开会话直接发(targetSessionId=null 强制新会话,不污染当前对话)。
    *  点下去那一刻再读一次宿主配置:挂载期间别处(另一扇窗)把后端换成外部的,不能照旧往外发(Codex 评审)。 */
   const askTangu = async (tools: string[]): Promise<void> => {
-    if (!tools.length || locked) return
-    const cfg = await window.tangu?.getConfig?.().catch(() => null)
-    if (!cfg || cfg.mode !== 'managed') { void doEnvCheck(); return }
-    const app = useApp.getState()
-    void app.send(buildInstallPrompt(tools, platform, cfg.mirror === 'china'), [], undefined, undefined, undefined, null)
-    useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
-    onLeave?.()
+    if (!tools.length || locked || asking) return
+    setAsking(true)
+    try {
+      const cfg = await window.tangu?.getConfig?.().catch(() => null)
+      if (!alive.current || lockedRef.current) return
+      if (!cfg || cfg.mode !== 'managed') { void doEnvCheck(); return }
+      const app = useApp.getState()
+      void app.send(buildInstallPrompt(tools, platform, cfg.mirror === 'china'), [], undefined, undefined, undefined, null)
+      useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
+      onLeave?.()
+    } finally {
+      if (alive.current) setAsking(false)
+    }
   }
 
   // npm 跟随 node 装(主进程不给它独立安装命令)→ 缺 node 时不必单列 npm,免得 Tangu 装两遍。
@@ -191,7 +203,7 @@ export const EnvProbeSection: React.FC<{
           {summary}
         </span>
         {canAskTangu && missingForTangu.length > 1 && (
-          <button className="btn ghost sm" disabled={locked || envChecking} onClick={() => void askTangu(missingForTangu)}>
+          <button className="btn ghost sm" disabled={locked || asking || envChecking} onClick={() => void askTangu(missingForTangu)}>
             <Bot size={12} /> {t('env.askTanguAll')}
           </button>
         )}
@@ -224,7 +236,7 @@ export const EnvProbeSection: React.FC<{
                 {!pr.found && !SELF_HEALING.has(pr.tool) && (canAskTangu || pr.installId) && (
                   <span className="env-probe-actions">
                     {canAskTangu && (
-                      <button className="btn ghost sm" disabled={locked || runningInstall !== null} onClick={() => void askTangu([pr.tool])}>
+                      <button className="btn ghost sm" disabled={locked || asking || runningInstall !== null} onClick={() => void askTangu([pr.tool])}>
                         <Bot size={12} /> {t('env.askTangu')}
                       </button>
                     )}
