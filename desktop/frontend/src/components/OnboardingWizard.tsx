@@ -2,11 +2,11 @@
 import React, { useEffect, useRef, useState } from 'react'
 import {
   ArrowRight, ArrowLeft, Bot, Check, Cloud, KeyRound, Loader2, LogIn, ExternalLink,
-  MonitorCog, FolderOpen, Sun, Moon, X, FileText, RefreshCw, Palette, ShieldCheck, Sparkles,
+  MonitorCog, FolderOpen, Sun, Moon, X, FileText, RefreshCw, Palette, ShieldCheck, Sparkles, Wrench, Globe2, Zap,
 } from 'lucide-react'
 import { listModels, testProviderConnection } from '../services/backendService'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
-import type { DesktopPermissionId, ModelsResponse } from '../types'
+import type { DesktopPermissionId, MirrorTestResult, ModelsResponse } from '../types'
 import { useI18n } from '../i18n'
 import { PRODUCT, PRODUCT_DISPLAY_NAME } from '../product'
 import { listLanguages, listSkins, skinSwatch, backgroundSwatch, forcedSchemeForLanguage } from '../theme/registry'
@@ -21,25 +21,28 @@ import { APP_VERSION, CHANGELOG } from '../changelog'
 import { track } from '../achievements/store'
 import { applyUiFonts, readFont, writeFont } from '../uiFont'
 import { OnboardingModelChoice } from './OnboardingModelChoice'
+import { EnvProbeSection } from './EnvProbeSection'
 import './onboardingMessages'
 import './onboarding.css'
 
 export const likelyMainlandChina = (): boolean => {
   try {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''
+    // forsion_region = 语言四级链里 IP 探测缓存下的国家码(i18n.tsx):兜住「国内用户跑英文系统 + 非中国时区」。
     return navigator.language.toLowerCase() === 'zh-cn' || /^Asia\/(Shanghai|Chongqing|Harbin|Urumqi)$/.test(tz)
+      || localStorage.getItem('forsion_region') === 'CN'
   } catch { return false }
 }
 export const ONBOARDING_DISMISS_KEY = 'forsion_tangu_onboarding_done'
 export const ONBOARDING_VERSION_KEY = 'forsion_tangu_onboarding_version'
 export const SUB_PROVIDER_LABELS: Record<string, string> = { codex: 'Codex', xai: 'xAI · Grok' }
-type Step = 'welcome' | 'connect' | 'model' | 'theme' | 'workspace' | 'permissions' | 'done'
+type Step = 'welcome' | 'connect' | 'model' | 'theme' | 'workspace' | 'env' | 'permissions' | 'done'
 const permissionSets: Record<'computer' | 'media', DesktopPermissionId[]> = {
   computer: ['computerAccessibility', 'computerScreen'], media: ['microphone', 'camera', 'screen'],
 }
 const stepOrder = (): Step[] => {
   const steps: Step[] = PRODUCT.agentBackend && !!window.tangu?.envCheck
-    ? ['welcome', 'connect', 'model', 'theme', 'workspace', 'done'] : ['welcome', 'theme', 'done']
+    ? ['welcome', 'connect', 'model', 'theme', 'workspace', 'env', 'done'] : ['welcome', 'theme', 'done']
   if (hasDesktopPermissions()) steps.splice(steps.indexOf('done'), 0, 'permissions')
   return steps
 }
@@ -176,9 +179,33 @@ export const OnboardingWizard: React.FC<{
   const [chosenModel, setChosenModel] = useState<string | null>(null)
   const modelRequest = useRef(0)
   const [workspaceDir, setWorkspaceDir] = useState<string | null>(null)
+  // ── 本机环境:下载源即选即存(与设置同一个 mirror 键);存完才重挂检测区,安装命令按新源重算 ──
+  const [mirror, setMirror] = useState<'default' | 'china'>('default')
+  const [mirrorSaving, setMirrorSaving] = useState(false)
+  const [probeKey, setProbeKey] = useState(0)
+  const [mirrorTesting, setMirrorTesting] = useState(false)
+  const [mirrorTest, setMirrorTest] = useState<MirrorTestResult | null>(null)
+  const chinaLikely = likelyMainlandChina()
+  const chooseMirror = async (next: 'default' | 'china'): Promise<void> => {
+    if (next === mirror || mirrorSaving) return
+    setMirrorSaving(true); setSaveError(''); setMirrorTest(null)
+    try {
+      await window.tangu?.setConfig({ mirror: next })
+      setMirror(next)
+      setProbeKey((k) => k + 1)
+    } catch (error) {
+      setSaveError(t('onboarding.guide.saveFail', { error: error instanceof Error ? error.message : String(error) }))
+    } finally { setMirrorSaving(false) }
+  }
+  const testMirror = (): void => {
+    if (!window.tangu?.envTestMirror) return
+    setMirrorTesting(true); setMirrorTest(null)
+    void window.tangu.envTestMirror(mirror).then(setMirrorTest).catch(() => setMirrorTest(null)).finally(() => setMirrorTesting(false))
+  }
   useEffect(() => {
     void window.tangu?.getConfig?.().then((c) => {
       setWorkspaceDir((draft) => draft ?? c.defaultWorkspaceDir ?? '')
+      setMirror(c.mirror === 'china' ? 'china' : 'default')
       setSyncEnabled(!!c.forsionSyncEnabled)
     }).catch(() => {})
     void window.tangu?.listProviders?.().then((items) => setByokSaved(items.length > 0)).catch(() => {})
@@ -232,7 +259,7 @@ export const OnboardingWizard: React.FC<{
     } finally { setSaving(false) }
   }
   const connectReady = loggedIn || byokSaved || subLoggedIn
-  const iconFor = { connect: Cloud, model: Bot, theme: Palette, workspace: FolderOpen, permissions: ShieldCheck, done: Check }
+  const iconFor = { connect: Cloud, model: Bot, theme: Palette, workspace: FolderOpen, env: Wrench, permissions: ShieldCheck, done: Check }
   const title = step === 'welcome' ? t('onboarding.guide.intro') : step === 'done' ? t('onboarding.guide.doneTitle')
     : step === 'permissions' ? t('desktopPermissions.title') : t(`onboarding.step.${step}.title`)
   const description = step === 'welcome' ? t('onboarding.guide.welcome') : step === 'done' ? t('onboarding.guide.doneBody')
@@ -543,6 +570,39 @@ export const OnboardingWizard: React.FC<{
             <p className="ob-muted">{t('onboarding.guide.workspaceLater')}</p>
           </div>
         </div>}
+        {step === 'env' && <div className="ob-env-layout">
+          <div className="ob-env-source">
+            <h2>{t('onboarding.guide.sourceTitle')}</h2>
+            <div className="ob-env-options" role="radiogroup" aria-label={t('onboarding.guide.sourceTitle')}>
+              {(['default', 'china'] as const).map((id) => {
+                const Icon = id === 'china' ? Zap : Globe2
+                return <button key={id} role="radio" aria-checked={mirror === id} disabled={mirrorSaving}
+                  className={`ob-env-option${mirror === id ? ' selected' : ''}`} onClick={() => void chooseMirror(id)}>
+                  <Icon size={18} /><span>
+                    <strong>{t(id === 'china' ? 'onboarding.guide.sourceChina' : 'onboarding.guide.sourceDefault')}
+                      {id === 'china' && chinaLikely && <em>{t('onboarding.guide.recommended')}</em>}</strong>
+                    <small>{t(id === 'china' ? 'onboarding.guide.sourceChinaHint' : 'onboarding.guide.sourceDefaultHint')}</small>
+                  </span>
+                  {mirror === id && (mirrorSaving ? <Loader2 size={15} className="spin ob-env-mark" /> : <Check size={15} className="ob-env-mark" />)}
+                </button>
+              })}
+            </div>
+            <div className="ob-env-test">
+              <button className="btn ghost sm" disabled={mirrorTesting || mirrorSaving || !window.tangu?.envTestMirror} onClick={testMirror}>
+                {mirrorTesting ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />} {t('settings.mirror.test')}
+              </button>
+              {mirrorTest?.targets.map((tg) => (
+                <span key={tg.name} className={tg.ok ? 'ok' : 'fail'}>
+                  {tg.ok ? <Check size={12} /> : <X size={12} />}{tg.name} · {tg.ok ? `${tg.latencyMs}ms` : (tg.error || t('settings.mirror.unreachable'))}
+                </span>
+              ))}
+            </div>
+            <p className="ob-muted">{t('onboarding.guide.sourceScope')}</p>
+          </div>
+          {/* 交给 Tangu 装 = 开新会话并自动发送 → 得先离开向导才看得见对话,走 finish 记下已引导。
+              key=probeKey:换源存盘后重挂,安装命令按新源重算(main.ts runEnvCheck 在检测时读 mirror)。 */}
+          <div className="ob-env-tools"><EnvProbeSection key={probeKey} onLeave={finish} /></div>
+        </div>}
         {step === 'permissions' && <div className="ob-permission-layout">
           <div className="seg ob-sections">
             {(['computer', 'media'] as const).filter((tab) => tab !== 'computer' || computerAvailable).map((tab) => <button key={tab} aria-pressed={permissionTab === tab} className={permissionTab === tab ? 'active' : ''}
@@ -560,6 +620,7 @@ export const OnboardingWizard: React.FC<{
               {isHost && <><dt>{t('onboarding.guide.model')}</dt><dd>{chosenModel ? models?.models.find((m) => m.id === chosenModel)?.name || chosenModel : t('onboarding.guide.followDefault')}</dd></>}
               <dt>{t('onboarding.guide.theme')}</dt><dd>{listLanguages().find((th) => th.manifest.id === themeLang)?.manifest.name || themeLang}</dd>
               {isHost && <><dt>{t('onboarding.guide.workspace')}</dt><dd>{workspaceDir || t('onboarding.guide.workspaceLater')}</dd></>}
+              {isHost && <><dt>{t('onboarding.guide.sourceTitle')}</dt><dd>{t(mirror === 'china' ? 'onboarding.guide.sourceChina' : 'onboarding.guide.sourceDefault')}</dd></>}
             </dl>
           </div><div className="ob-next-steps"><h2>{t('onboarding.guide.more')}</h2>
             {isHost ? <>
@@ -577,7 +638,7 @@ export const OnboardingWizard: React.FC<{
             : <button className="btn ghost" onClick={() => setShowChangelog(true)}><FileText size={14} />{t('onboarding.welcome.viewChangelog')}</button>}
           <span className="ob-footer-hint">{t('onboarding.guide.changeLater')}</span>
           {step !== 'done' && <button className="btn ghost" disabled={saving} onClick={step === 'permissions' ? () => void advance() : finish}>{t(step === 'permissions' ? 'desktopPermissions.later' : 'onboarding.nav.skip')}</button>}
-          <button className="btn primary" disabled={saving || (step === 'model' && modelsLoading)} onClick={step === 'done' ? finish : () => void advance()}>
+          <button className="btn primary" disabled={saving || mirrorSaving || (step === 'model' && modelsLoading)} onClick={step === 'done' ? finish : () => void advance()}>
             {t(step === 'welcome' ? 'onboarding.welcome.continue' : step === 'done' ? 'onboarding.nav.start' : step === 'connect' && !connectReady ? 'onboarding.connect.skipForNow' : 'onboarding.nav.next')}
             {saving ? <Loader2 size={15} className="spin" /> : <ArrowRight size={15} />}
           </button>
