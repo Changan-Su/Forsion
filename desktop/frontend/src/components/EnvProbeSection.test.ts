@@ -33,7 +33,7 @@ beforeEach(() => {
 })
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); delete window.tangu; vi.unstubAllGlobals() })
 
-it('hands installs to Tangu only for the local managed backend, using the mirror saved at check time', async () => {
+it('hands installs to Tangu only for the local managed backend, using the mirror saved at click time', async () => {
   await render({ mode: 'managed', mirror: 'china' })
   const row = container.querySelector('[data-tool="git"]')!
   expect(row.getAttribute('data-state')).toBe('missing')
@@ -54,4 +54,21 @@ it('reports a failed check instead of rendering an empty list', async () => {
   await act(async () => root.render(React.createElement(EnvProbeSection)))
   expect(container.querySelector('.env-probe-summary.is-error')?.textContent).toContain('env.checkFailed')
   expect(container.querySelector('.env-probe-list')).toBeNull()
+})
+
+it('re-reads the host config on click and does not send once the backend has become external', async () => {
+  await render({ mode: 'managed', mirror: 'default' })
+  expect(askButtons()).toHaveLength(1)
+  vi.mocked(window.tangu!.getConfig).mockResolvedValue({ mode: 'external', mirror: 'default' } as any)
+  await act(async () => askButtons()[0].click())
+  expect(send).not.toHaveBeenCalled()
+  expect(askButtons()).toHaveLength(0) // 顺手重测后按新模式收起
+})
+
+it('locks every action while the caller is saving a setting that affects installs', async () => {
+  window.tangu = { envCheck: vi.fn().mockResolvedValue(probes), getConfig: vi.fn().mockResolvedValue({ mode: 'managed', mirror: 'default' }) } as any
+  await act(async () => root.render(React.createElement(EnvProbeSection, { locked: true })))
+  const buttons = [...container.querySelectorAll('button')]
+  expect(buttons.length).toBeGreaterThan(2)
+  expect(buttons.every((b) => b.disabled)).toBe(true)
 })

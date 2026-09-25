@@ -601,7 +601,7 @@ export const OnboardingWizard: React.FC<{
           </div>
           {/* 交给 Tangu 装 = 开新会话并自动发送 → 得先离开向导才看得见对话,走 finish 记下已引导。
               key=probeKey:换源存盘后重挂,安装命令按新源重算(main.ts runEnvCheck 在检测时读 mirror)。 */}
-          <div className="ob-env-tools"><EnvProbeSection key={probeKey} onLeave={finish} /></div>
+          <div className="ob-env-tools"><EnvProbeSection key={probeKey} locked={mirrorSaving} onLeave={finish} /></div>
         </div>}
         {step === 'permissions' && <div className="ob-permission-layout">
           <div className="seg ob-sections">

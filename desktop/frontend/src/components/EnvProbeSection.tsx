@@ -80,7 +80,9 @@ export function buildInstallPrompt(tools: string[], platform: string, china: boo
 export const EnvProbeSection: React.FC<{
   /** 交给 Tangu 后要离开当前面板(向导/设置)才看得到对话 —— 由调用方决定怎么关。 */
   onLeave?: () => void
-}> = ({ onLeave }) => {
+  /** 调用方正在改会影响安装的配置(如向导换源存盘中):锁住全部动作,等它落定后调用方会重挂本组件。 */
+  locked?: boolean
+}> = ({ onLeave, locked = false }) => {
   const { t } = useI18n()
   const [probes, setProbes] = useState<EnvProbeResult[] | null>(null)
   const [envChecking, setEnvChecking] = useState(false)
@@ -93,14 +95,13 @@ export const EnvProbeSection: React.FC<{
   // 平台名给 Tangu 当上下文(它据此选包管理器);window.tangu.platform 是 preload 注入的静态值。
   const platform = window.tangu?.platform || ''
 
-  // 下载源与后端模式在**检测同一刻**从宿主配置读(main.ts runEnvCheck 也是那一刻读 mirror)。
+  // 后端模式从宿主配置读(检测时读一次决定显不显示,点「让 Tangu 装」时再读一次决定发不发、用哪个源)。
   // 别用 appStore.desktopConfig:它只在启动/后端就绪时刷新,引导或设置刚换的源它还不知道(Codex 评审)。
-  const [host, setHost] = useState<{ mirror: 'default' | 'china'; managed: boolean } | null>(null)
+  const [host, setHost] = useState<{ managed: boolean } | null>(null)
   // Tangu 可用 = 后端连上了 且 有至少一个可用模型 且 是本机托管后端;外部后端可能在别的机器上,
   // 交给它装的是那台机器(Codex 评审 P1)—— 此时只给宿主那条本机命令。
   const connected = useApp((s) => s.connState === 'ok' && (s.modelsResp?.models.length ?? 0) > 0)
   const canAskTangu = connected && !!host?.managed
-  const mirrorChina = host?.mirror === 'china'
 
   const doEnvCheck = async (): Promise<EnvProbeResult[] | null> => {
     if (!window.tangu?.envCheck) return null
@@ -109,7 +110,7 @@ export const EnvProbeSection: React.FC<{
     try {
       const [r, cfg] = await Promise.all([window.tangu.envCheck(), window.tangu.getConfig?.().catch(() => null)])
       setProbes(r)
-      if (cfg) setHost({ mirror: cfg.mirror === 'china' ? 'china' : 'default', managed: cfg.mode === 'managed' })
+      if (cfg) setHost({ managed: cfg.mode === 'managed' })
       return r
     } catch (e) {
       // 吞掉 = 列表静默为空(2.11.4 前就是这样,看起来像「检测功能没了」);显式报出来。
@@ -136,7 +137,7 @@ export const EnvProbeSection: React.FC<{
   const needsSudo = (p: EnvProbeResult): boolean => /^sudo\b/.test(p.installCommand || '')
 
   const runInstall = async (p: EnvProbeResult): Promise<void> => {
-    if (!p.installId || !window.tangu?.envRun) return
+    if (!p.installId || !window.tangu?.envRun || locked) return
     // sudo 命令需要 TTY 输密码,GUI 子进程里必然卡死/失败 → 改为复制命令请用户去终端执行。
     if (needsSudo(p)) {
       try { await navigator.clipboard.writeText(p.installCommand || '') } catch { /* ignore */ }
@@ -163,11 +164,14 @@ export const EnvProbeSection: React.FC<{
     }
   }
 
-  /** 交给 Tangu:新开会话直接发(targetSessionId=null 强制新会话,不污染当前对话)。 */
-  const askTangu = (tools: string[]): void => {
-    if (!tools.length) return
+  /** 交给 Tangu:新开会话直接发(targetSessionId=null 强制新会话,不污染当前对话)。
+   *  点下去那一刻再读一次宿主配置:挂载期间别处(另一扇窗)把后端换成外部的,不能照旧往外发(Codex 评审)。 */
+  const askTangu = async (tools: string[]): Promise<void> => {
+    if (!tools.length || locked) return
+    const cfg = await window.tangu?.getConfig?.().catch(() => null)
+    if (!cfg || cfg.mode !== 'managed') { void doEnvCheck(); return }
     const app = useApp.getState()
-    void app.send(buildInstallPrompt(tools, platform, mirrorChina), [], undefined, undefined, undefined, null)
+    void app.send(buildInstallPrompt(tools, platform, cfg.mirror === 'china'), [], undefined, undefined, undefined, null)
     useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
     onLeave?.()
   }
@@ -187,11 +191,11 @@ export const EnvProbeSection: React.FC<{
           {summary}
         </span>
         {canAskTangu && missingForTangu.length > 1 && (
-          <button className="btn ghost sm" disabled={envChecking} onClick={() => askTangu(missingForTangu)}>
+          <button className="btn ghost sm" disabled={locked || envChecking} onClick={() => void askTangu(missingForTangu)}>
             <Bot size={12} /> {t('env.askTanguAll')}
           </button>
         )}
-        <button className="btn ghost sm" disabled={envChecking || runningInstall !== null} onClick={() => void doEnvCheck()}>
+        <button className="btn ghost sm" disabled={locked || envChecking || runningInstall !== null} onClick={() => void doEnvCheck()}>
           <RefreshCw size={12} className={envChecking ? 'spin' : ''} /> {t('onboarding.env.recheck')}
         </button>
       </div>
@@ -220,14 +224,14 @@ export const EnvProbeSection: React.FC<{
                 {!pr.found && !SELF_HEALING.has(pr.tool) && (canAskTangu || pr.installId) && (
                   <span className="env-probe-actions">
                     {canAskTangu && (
-                      <button className="btn ghost sm" disabled={runningInstall !== null} onClick={() => askTangu([pr.tool])}>
+                      <button className="btn ghost sm" disabled={locked || runningInstall !== null} onClick={() => void askTangu([pr.tool])}>
                         <Bot size={12} /> {t('env.askTangu')}
                       </button>
                     )}
                     {pr.installId && (
                       <button
                         className="btn ghost sm"
-                        disabled={runningInstall !== null}
+                        disabled={locked || runningInstall !== null}
                         title={pr.installCommand || ''}
                         onClick={() => void runInstall(pr)}
                       >
