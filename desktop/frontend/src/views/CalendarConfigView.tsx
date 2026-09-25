@@ -21,7 +21,8 @@ import { useCalendarConfig, colorForDb, isHidden, defaultDbPath, memberOf } from
 import { useCalendarNav } from '../amadeus/store/calendarNavStore'
 import { openDb } from '../amadeusNav'
 import { MemberColPicker } from './calendar/MemberColPicker'
-import { weekdays, addDays, diffDays, fmtStamp, monthGridDays, monthLabel, startOfDay, toLocalDate } from './calendar/dateUtils'
+import { weekdays, addDays, diffDays, fmtStamp, monthGridDays, monthLabel, startOfDay, toLocalDate, useWeekStart, useWeekStartPref, localeWeekStart, type WeekStartPref } from './calendar/dateUtils'
+import { CapabilityMenu } from '../components/CapabilityMenu'
 import { OverlayAt } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 
@@ -63,7 +64,34 @@ registerMessages({
   'calcfg.searchDbPlaceholder': { zh: '搜索要加入日历的数据库…', en: 'Search databases to add to the calendar…' },
   'calcfg.noCandidates': { zh: '没有含日期属性的可添加数据库', en: 'No databases with a date property available to add' },
   'calcfg.footHint': { zh: '只有含「日期」属性的数据库会出现在这里', en: 'Only databases with a Date property appear here' },
+  'calcfg.weekStart': { zh: '一周开始于', en: 'Week starts on' },
+  'calcfg.weekStart.auto': { zh: '跟随语言（{day}）', en: 'Default ({day})' },
+  'calcfg.weekStart.sun': { zh: '周日', en: 'Sunday' },
+  'calcfg.weekStart.mon': { zh: '周一', en: 'Monday' },
 })
+
+/** 「一周开始于」:缺省跟随界面语言(zh 周一 / en 周日),可覆盖。月历、主区月视图、数据库日历视图共用这一份。 */
+function WeekStartSetting() {
+  const { t } = useI18n()
+  const pref = useWeekStartPref((s) => s.pref)
+  const setPref = useWeekStartPref((s) => s.setPref)
+  const dayName = (d: 0 | 1): string => t(d === 1 ? 'calcfg.weekStart.mon' : 'calcfg.weekStart.sun')
+  const options: Array<{ value: WeekStartPref; label: string }> = [
+    { value: 'auto', label: t('calcfg.weekStart.auto', { day: dayName(localeWeekStart()) }) },
+    { value: 0, label: dayName(0) },
+    { value: 1, label: dayName(1) },
+  ]
+  const current = options.find((o) => o.value === pref) ?? options[0]
+  return (
+    <div className="amx-calcfg-weekstart" data-week-start={pref}>
+      <span className="amx-calcfg-weekstart-label">{t('calcfg.weekStart')}</span>
+      <CapabilityMenu label={`${t('calcfg.weekStart')} · ${current.label}`} className="capability-menu-trigger amx-calcfg-weekstart-btn" selection
+        items={options.map((o) => ({ id: `week-start:${o.value}`, label: o.label, selected: o.value === pref, onSelect: () => setPref(o.value) }))}>
+        <span>{current.label}</span><ChevronDown size={13} />
+      </CapabilityMenu>
+    </div>
+  )
+}
 
 export function CalendarConfigView() {
   return (
@@ -102,7 +130,8 @@ function MiniCalendar() {
     }
   }, [focused, visibleStart, visibleEnd])
 
-  const grid = useMemo(() => monthGridDays(month), [month])
+  const firstDow = useWeekStart()
+  const grid = useMemo(() => monthGridDays(month), [month, firstDow])
   const todayStr = fmtStamp(today, true)
   const inBand = (d: Date): boolean => {
     if (!focused || !visibleStart || !visibleEnd) return false
@@ -284,6 +313,7 @@ function ConfigList() {
         <Plus size={14} /> {t('calcfg.addCalendar')} <ChevronDown size={13} />
       </button>
       {importErr && <div className="amx-calcfg-hint" style={{ color: 'var(--danger)' }}>{importErr}</div>}
+      <WeekStartSetting />
 
       {addMenu && (
         <div className="amx-db-popwrap" onMouseDown={() => setAddMenu(null)}>

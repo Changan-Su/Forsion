@@ -49,7 +49,7 @@ describe('Coding Studio presentation commands', () => {
     expect(open.mock.calls).toEqual([['brief', 'left'], ['brief', 'left']])
     expect(JSON.parse(getCommand().invoke!.state!())).toEqual({ projectRoot: '/projects/a', available: true })
     const title = getCommand('coding-studio.brief').title as () => string
-    expect(title()).toContain('项目简报')
+    expect(title()).toBe('编码工作室 · 项目简报')
     setLocaleGlobal('en')
     expect(title()).toBe('Coding Studio · Project brief')
     expect(getCommand().invoke!.description).not.toMatch(/[\u4e00-\u9fff]/)

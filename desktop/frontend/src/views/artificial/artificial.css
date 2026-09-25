@@ -17,16 +17,23 @@
 /* 卡片本身不再是按钮 —— 按下去的是里面那颗 data-action=open,别整张卡跟着塌。 */
 .newtab-card.art-card:active { transform: none; }
 
-.art-card-main { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0; background: none; border: var(--border-width) solid transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+/* 主动作要像一颗按钮(U-13):整行可点、悬停 / 键盘聚焦有底色,尾部箭头说明「点这里打开」。负外边距让底色外扩而文字不挪位。 */
+.art-card-main { display: flex; align-items: center; gap: 8px; min-width: 0; margin: -5px -6px 0; padding: 5px 6px; border-radius: var(--radius-sm); background: none; border: var(--border-width) solid transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; transition: background var(--duration-fast, .15s); }
+.art-card-go { flex: none; color: var(--text-faint); opacity: 0; transition: opacity var(--duration-fast, .15s); }
 .art-card-main:disabled { cursor: default; }
 .art-card-name { flex: 1; min-width: 0; font-size: var(--ui-font-meta, 12px); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .art-card-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
 .art-badge { padding: 1px 6px; border-radius: 999px; background: var(--overlay-light); color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
 
-/* 动作行常显(压暗),hover / 键盘聚焦时拉满 —— 藏到 hover 里触屏就永远摸不到。 */
-.art-actions { display: flex; align-items: center; gap: 2px; margin-top: auto; opacity: .62; transition: opacity var(--duration-fast, .15s); }
-.newtab-card.art-card:hover .art-actions, .newtab-card.art-card:focus-within .art-actions { opacity: 1; }
-.art-actions .icon-btn { width: 26px; height: 26px; }
+/* 卡脚:时间 / 徽标 + 「⋯」。⋯ 常显(压暗),hover / 键盘聚焦时拉满 —— 藏到 hover 里触屏就永远摸不到。 */
+.art-card-foot { display: flex; align-items: center; gap: 6px; margin-top: auto; min-width: 0; }
+.art-card-foot .art-card-meta { flex: 1; min-width: 0; }
+.art-card-more.icon-btn { flex: none; width: 26px; height: 26px; opacity: .62; transition: opacity var(--duration-fast, .15s); }
+.newtab-card.art-card:hover .art-card-more, .newtab-card.art-card:focus-within .art-card-more, .art-card-more[aria-expanded='true'] { opacity: 1; }
+
+/* 首次读取:骨架(自带 150ms 出现延迟)+ 只给读屏的状态句。 */
+.art-loading { padding: 8px 0; }
+.art-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
 .art-state { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 40px 16px; text-align: center; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.7; }
 .art-state-title { color: var(--text); font-size: var(--ui-font-heading, 14px); font-weight: 600; }
@@ -49,4 +56,7 @@
    整张卡跟着抬 = 悬浮反馈在说谎,而且给内容卡描了边(DESIGN.md §5「内容卡不描边」)。
    这里把继承来的那三条按原值还原,悬浮反馈只留给真正能点的那颗主按钮。 */
 .newtab-card.art-card:hover { border-color: var(--border); background: var(--bg-card); transform: none; }
+.art-card-main:hover:not(:disabled), .art-card-main:focus-visible { background: var(--overlay-light); }
 .art-card-main:hover:not(:disabled) .art-card-name { color: var(--accent-ink); }
+.art-card-main:hover:not(:disabled) .art-card-go, .art-card-main:focus-visible .art-card-go { opacity: 1; }
+.art-card-main:focus-visible { outline: var(--focus-ring, 1px) solid var(--accent-ink); outline-offset: 0; }

@@ -15,7 +15,7 @@ export function registerStudioCommands(root: string, open: (tool: StudioTool, si
   const register = (command: Command) => { commands.push(command); addCommand(command) }
   for (const kind of Object.keys(TITLES) as StudioTool[]) {
     const id = `coding-studio.${kind}`
-    register({ id, title: () => `Coding Studio · ${translate(TITLES[kind])}`, keywords: 'coding studio temp panel', run: () => { if (current()) open(kind) } })
+    register({ id, title: () => `${translate('space.coding')} · ${translate(TITLES[kind])}`, keywords: 'coding studio 编码工作室 temp panel', run: () => { if (current()) open(kind) } })
   }
   register({
     id: STUDIO_TOOL_COMMAND,

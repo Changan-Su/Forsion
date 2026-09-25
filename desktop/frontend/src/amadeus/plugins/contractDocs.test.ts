@@ -82,6 +82,15 @@ describe('插件契约 ↔ 作者手册漂移', () => {
     }
   })
 
+  it('①e ListAction 每个字段都在 SKILL.md 露过面', () => {
+    // 同 ①b:列表源的动作项是贡献点类型,加字段(2026-09-25 的 danger)不补手册是静默绿。
+    const members = membersOf(types, 'ListAction')
+    expect(members, '抽取失效自检:ListAction 必含 danger').toContain('danger')
+    const missing = members.filter((m) => !skill.includes(m))
+    expect(missing, `手册没提这些字段:${missing.join(', ')}`).toEqual([])
+    expect(skill, '手册要把 danger 写进列表源小节').toMatch(/danger\?/)
+  })
+
   it('①c registerCommand 的「只做导航」旧规不许与 invoke 并存', () => {
     // 两句话直接打架:声明了 invoke 的命令就是动作面。留着旧规 = 手册自相矛盾,
     // 插件作者按哪句写都可能被打回。

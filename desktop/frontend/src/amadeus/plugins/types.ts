@@ -514,6 +514,10 @@ export interface ListAction {
   /** Keep this action in the compact toolbar; remaining actions live in its menu.
    *  When omitted by every action, the host keeps the first action visible. Older hosts ignore it. */
   primary?: boolean
+  /** Irreversible action (delete, remove…): the host paints it in the danger color in every menu it
+   *  lands in (2026-09-25+). Presentation only — confirming stays the plugin's job inside `run()`.
+   *  Older hosts ignore it. */
+  danger?: boolean
   run(): void
 }
 

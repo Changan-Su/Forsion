@@ -1554,6 +1554,16 @@
   .amx-cal-density { display: none; }
 }
 
+/* uiux-d: 日历规则组末尾的覆盖块(DESIGN §7:同特异性覆盖放组尾)。
+ * U-12:小时轴 .amx-cal-ghours 是定位元素(relative + 被 syncGutter 平移 -scrollTop),而表头角 / 「全天」没定位 ——
+ * 定位元素后绘制,滚动后刻度就盖进了表头角与「全天」格。给这两格定位并抬一层,让刻度从它们底下滑过。 */
+.amx-cal-gcorner, .amx-cal-gallday { position: relative; z-index: 1; }
+/* U-33:「一周开始于」设置行(日历设置右栏底部)。 */
+.amx-calcfg-weekstart { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.amx-calcfg-weekstart-label { flex: none; }
+.amx-calcfg-weekstart .amx-calcfg-weekstart-btn { min-width: 0; min-height: 28px; padding: 4px 8px; border-color: transparent; background: var(--bg-hover, var(--overlay-light)); font-size: var(--ui-font-meta, 12px); }
+/* uiux-d: end */
+
 /* ── 云端库面板 + presence(web 专属,window.amadeusCollab 解闸;桌面永不渲染) ── */
 .amxc-overlay {
   position: fixed; inset: 0; z-index: 240;

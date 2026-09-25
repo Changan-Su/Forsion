@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach } from 'vitest'
 import { setLocaleGlobal } from '../../i18n'
-import { toLocalDate, monthGridDays, coversDay, eventBox, sameDay, startOfWeek, WEEK_START, eventTimeSummary, fmtDur } from './dateUtils'
+import { toLocalDate, monthGridDays, coversDay, eventBox, sameDay, startOfWeek, weekStart, useWeekStartPref, eventTimeSummary, fmtDur } from './dateUtils'
 
 describe('toLocalDate', () => {
   it('全天 = 本地午夜(不偏 UTC)', () => {
@@ -21,7 +21,7 @@ describe('monthGridDays', () => {
   it('恒 42 格且从周首开始', () => {
     const days = monthGridDays(new Date(2026, 6, 15))
     expect(days).toHaveLength(42)
-    expect(days[0].getDay()).toBe(WEEK_START)
+    expect(days[0].getDay()).toBe(weekStart())
   })
   it('含目标月 1 号', () => {
     const days = monthGridDays(new Date(2026, 6, 1))
@@ -60,8 +60,22 @@ describe('eventBox', () => {
 })
 
 describe('startOfWeek', () => {
-  it('落在 WEEK_START', () => {
-    expect(startOfWeek(new Date(2026, 6, 15)).getDay()).toBe(WEEK_START)
+  it('落在 weekStart()', () => {
+    expect(startOfWeek(new Date(2026, 6, 15)).getDay()).toBe(weekStart())
+  })
+  it('周首日按语言缺省,用户覆盖优先;两套月格(日历 / 数据库日历视图)都从同一个周首日起', () => {
+    setLocaleGlobal('zh')
+    expect(weekStart()).toBe(1)
+    // 2026-07-15 是周三:zh 周首 = 07-13(周一)
+    expect(startOfWeek(new Date(2026, 6, 15)).getDate()).toBe(13)
+    setLocaleGlobal('en')
+    expect(weekStart()).toBe(0)
+    expect(startOfWeek(new Date(2026, 6, 15)).getDate()).toBe(12)
+    useWeekStartPref.getState().setPref(1)
+    expect(weekStart()).toBe(1)
+    expect(monthGridDays(new Date(2026, 6, 1))[0].getDay()).toBe(1)
+    useWeekStartPref.getState().setPref('auto')
+    setLocaleGlobal('zh')
   })
 })
 

@@ -63,6 +63,7 @@ import { openDb } from '../../../amadeusNav'
 import { registerMessages, useI18n } from '../../../i18n'
 import { useCalendarConfig, memberOf } from '../../store/calendarConfigStore'
 import { MemberColPicker } from '../../../views/calendar/MemberColPicker'
+import { monthGridDays, useWeekStart, weekdays } from '../../../views/calendar/dateUtils'
 import { act, actDebounced, shortVal } from '../../../activity/log'
 import { OverlayAt } from '../../lib/clampMenu'
 import { dropAfter, dropAfterX, moveColumn, moveRow, sameOrder } from './rowOrder'
@@ -337,13 +338,6 @@ registerMessages({
   'dbembed.today': { zh: '今天', en: 'Today' },
   'dbembed.calDateColHint': { zh: '日历所用的日期列(在视图 tab 菜单里换)', en: 'The date column this calendar uses (switch it in the view tab menu)' },
   'dbembed.addOnDay': { zh: '在这天新建', en: 'New row on this day' },
-  'dbembed.dow0': { zh: '日', en: 'Sun' },
-  'dbembed.dow1': { zh: '一', en: 'Mon' },
-  'dbembed.dow2': { zh: '二', en: 'Tue' },
-  'dbembed.dow3': { zh: '三', en: 'Wed' },
-  'dbembed.dow4': { zh: '四', en: 'Thu' },
-  'dbembed.dow5': { zh: '五', en: 'Fri' },
-  'dbembed.dow6': { zh: '六', en: 'Sat' },
 })
 
 /** ⚠️ 模块级表只存**键**:文案在渲染时 t(labelKey) 求值。写字面量会冻在模块加载那一刻,切语言不跟。 */
@@ -3779,7 +3773,7 @@ function KanbanBody({ db, rows, view, visCols, setCell, addRow, openRow, rowTitl
 const pad2 = (n: number): string => String(n).padStart(2, '0')
 const fmtYmd = (d: Date): string => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 
-/** 日历:按日期列(date / calendarDate)铺月栅格,周日起始(与 Calendar Space 一致);
+/** 日历:按日期列(date / calendarDate)铺月栅格,周首日与 Calendar Space 同源(dateUtils.weekStart);
  *  区间值逐日铺条;日格 ＋ 新行带当日初值。42 格恒定,月份切换高度不跳。 */
 function CalendarBody({ db, rows, view, addRow, openRow, rowTitle, addDateCol, readOnly, rowAttrs }: {
   db: DbFile
@@ -3793,6 +3787,7 @@ function CalendarBody({ db, rows, view, addRow, openRow, rowTitle, addDateCol, r
   rowAttrs?: (row: DbRow) => Record<string, string>
 }) {
   const { t } = useI18n()
+  useWeekStart() // 订阅周首日(语言 / 日历设置)变化;月格与表头在渲染期现算
   const [ym, setYm] = useState(() => {
     const n = new Date()
     return { y: n.getFullYear(), m: n.getMonth() }
@@ -3815,8 +3810,8 @@ function CalendarBody({ db, rows, view, addRow, openRow, rowTitle, addDateCol, r
     const e = c.end ? splitSide(c.end).date : s
     return { s, e: e >= s ? e : s }
   }
-  const lead = new Date(ym.y, ym.m, 1).getDay()
-  const cells = Array.from({ length: 42 }, (_, i) => new Date(ym.y, ym.m, 1 - lead + i))
+  // 月格与表头和日历 Space 同源(dateUtils):周首日跟语言 / 日历设置,不再在这里自算一套。
+  const cells = monthGridDays(new Date(ym.y, ym.m, 1))
   const byDay = new Map<string, DbRow[]>()
   for (const r of rows) {
     const sp = spanOf(r)
@@ -3844,8 +3839,8 @@ function CalendarBody({ db, rows, view, addRow, openRow, rowTitle, addDateCol, r
         </span>
       </div>
       <div className="amx-db-cal-grid">
-        {['dbembed.dow0', 'dbembed.dow1', 'dbembed.dow2', 'dbembed.dow3', 'dbembed.dow4', 'dbembed.dow5', 'dbembed.dow6'].map((k) => (
-          <div className="amx-db-cal-dow" key={k}>{t(k)}</div>
+        {weekdays().map((w) => (
+          <div className="amx-db-cal-dow" key={w}>{w}</div>
         ))}
         {cells.map((d) => {
           const k = fmtYmd(d)

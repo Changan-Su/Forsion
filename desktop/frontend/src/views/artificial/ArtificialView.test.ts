@@ -21,6 +21,10 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
 
 const ws = vi.hoisted(() => ({ openView: vi.fn() }))
 vi.mock('@lcl/engine', () => ({
+  // 「⋯」菜单(CapabilityMenu)的浮层与首读骨架:这里只要能渲染出来,几何不归本测试管。
+  OverlayAt: ({ children, innerRef, x: _x, y: _y, anchorTop: _top, ...rest }: Record<string, unknown> & { children?: unknown; innerRef?: (el: HTMLDivElement | null) => void }) =>
+    createElement('div', { ...rest, ref: innerRef }, children as never),
+  Skeleton: () => createElement('div', { 'data-skeleton': true }),
   getView: (type: string) => (type === 'code-studio' ? { type } : undefined),
   setActiveSpace: vi.fn(),
   useSpaceStore: (select: (s: { spaces: Array<{ id: string }> }) => unknown) => select({ spaces: [{ id: 'coding' }] }),
@@ -32,6 +36,7 @@ vi.mock('../../stores/appStore', () => ({ useApp: { getState: () => ({ toast: sh
 vi.mock('../../stores/codeStudioStore', () => ({ useCodeStudio: { getState: () => ({ openProject: vi.fn() }) } }))
 
 const { ArtificialView } = await import('./ArtificialView')
+const { resetProductsStore, useProducts } = await import('./productsStore')
 
 const ID = 'p_0123456789ab'
 /** 2026-09-21 12:00 UTC。固定基准,断言不看跑测机器当天日期的脸色。 */
@@ -54,6 +59,7 @@ beforeEach(() => {
   vi.setSystemTime(BASE)
   rows = [productOf()]
   productsList.mockClear(); productsShortcut.mockClear(); shell.toast.mockClear()
+  resetProductsStore() // 栅格数据住模块级缓存:每条用例从「没加载过」起步,不吃上一条的行
   window.tangu = { productsList, productsShortcut } as unknown as typeof window.tangu
   host = document.createElement('div'); document.body.append(host)
   reactRoot = createRoot(host)
@@ -98,7 +104,11 @@ describe('造物栅格:添加到桌面', () => {
   it('⚠️把**本地化的**兜底文件名一起交给主进程(作品名清洗后可能什么都不剩)', async () => {
     rows = [productOf({ name: '★' })]
     await mount()
-    await act(async () => { host.querySelector<HTMLButtonElement>('[data-action="shortcut"]')!.click() })
+    // 次要动作都收进了「⋯」(U-13):先开菜单,再点菜单项(菜单 portal 到 body)。
+    await act(async () => { host.querySelector<HTMLButtonElement>('.art-card-more')!.click() })
+    const item = document.body.querySelector<HTMLButtonElement>(`[role="menuitem"][aria-label="${translate('artificial.action.shortcut')}"]`)
+    expect(item, '「添加到桌面」应在「⋯」菜单里').toBeTruthy()
+    await act(async () => { item!.click() })
 
     expect(productsShortcut).toHaveBeenCalledWith(ID, translate('artificial.shortcut.fallbackName'))
     // 钉住它确实是**文案**而不是键:少了 en 词条时 i18nCoverage 会红,这里钉当前语言那一侧。
@@ -113,5 +123,54 @@ describe('打开作品', () => {
     await mount()
     await act(async () => { (host.querySelector('[data-action="open"]') as HTMLButtonElement).click() })
     expect(ws.openView).toHaveBeenCalledWith('product', { id: ID }, 'main', { newTab: true })
+  })
+})
+
+describe('卡片层级(U-13)', () => {
+  it('卡面只剩主动作 + 「⋯」;移到废纸篓在菜单最后且标 danger', async () => {
+    window.tangu = { productsList, productsShortcut, productsTrash: vi.fn(), productsUpdate: vi.fn(), revealHostPath: vi.fn() } as unknown as typeof window.tangu
+    await mount()
+    const card = host.querySelector('[data-artificial-card]')!
+    expect([...card.querySelectorAll('[data-action]')].map((b) => b.getAttribute('data-action'))).toEqual(['open'])
+    await act(async () => { card.querySelector<HTMLButtonElement>('.art-card-more')!.click() })
+    const items = [...document.body.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')]
+    expect(items.at(-1)!.getAttribute('aria-label')).toBe(translate('artificial.action.trash'))
+    expect(items.at(-1)!.classList.contains('danger')).toBe(true)
+    expect(items.slice(0, -1).some((b) => b.classList.contains('danger'))).toBe(false)
+  })
+})
+
+describe('再次进入不闪(U-39)', () => {
+  it('有旧栅格时先画旧的、后台重扫,不回到加载态', async () => {
+    await mount()
+    expect(useProducts.getState().status).toBe('ready')
+    await act(async () => { reactRoot.unmount() })
+    host.remove(); host = document.createElement('div'); document.body.append(host)
+    reactRoot = createRoot(host)
+    let release: (rows: ProductSummary[]) => void = () => {}
+    productsList.mockImplementationOnce(() => new Promise<ProductSummary[]>((resolve) => { release = resolve }))
+    await act(async () => { reactRoot.render(createElement(ArtificialView)) })
+    // 重扫还没回来:栅格已经在,没有加载态
+    expect(host.querySelector('[data-artificial-card]')).toBeTruthy()
+    expect(host.querySelector('[data-state="loading"]')).toBeNull()
+    await act(async () => { release([productOf({ name: 'Renamed' })]) })
+    expect(host.querySelector('.art-card-name')?.textContent).toBe('Renamed')
+  })
+
+  it('已有栅格时后台重扫失败不清屏', async () => {
+    await mount()
+    productsList.mockImplementationOnce(async () => { throw new Error('disk gone') })
+    await act(async () => { await useProducts.getState().load() })
+    expect(useProducts.getState().status).toBe('ready')
+    expect(host.querySelector('[data-artificial-card]')).toBeTruthy()
+  })
+
+  it('第一次进入没有数据时:骨架 + 读屏状态句,不是转圈', async () => {
+    productsList.mockImplementationOnce(() => new Promise<ProductSummary[]>(() => {}))
+    await mount()
+    const loading = host.querySelector('[data-state="loading"]')!
+    expect(loading.querySelector('[data-skeleton]')).toBeTruthy()
+    expect(loading.querySelector('[role="status"]')?.textContent).toBe(translate('artificial.loading'))
+    expect(host.querySelector('.spin')).toBeNull()
   })
 })

@@ -128,7 +128,7 @@ export const inboxListSource: ListSourceContribution = {
     return [
       { id: 'read', label: translate(m.read_at ? 'inbox.action.markUnread' : 'inbox.action.markRead'), run: () => st.markRead(m.id, !m.read_at) },
       { id: 'archive', label: translate(m.archived_at ? 'inbox.action.unarchive' : 'inbox.action.archive'), run: () => st.markArchived(m.id, !m.archived_at) },
-      { id: 'delete', label: translate('inbox.action.delete'), run: () => { if (window.confirm(translate('inbox.deleteConfirm', { title: m.title }))) st.remove(m.id) } },
+      { id: 'delete', label: translate('inbox.action.delete'), danger: true, run: () => { if (window.confirm(translate('inbox.deleteConfirm', { title: m.title }))) st.remove(m.id) } },
     ]
   },
 }

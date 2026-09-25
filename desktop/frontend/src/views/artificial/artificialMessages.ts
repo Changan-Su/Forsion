@@ -38,6 +38,7 @@ registerMessages({
   'artificial.action.reveal': { zh: '在文件管理器中显示', en: 'Show in folder' },
   'artificial.action.rename': { zh: '重命名', en: 'Rename' },
   'artificial.action.trash': { zh: '移到废纸篓', en: 'Move to trash' },
+  'artificial.action.more': { zh: '更多操作 · {name}', en: 'More actions for {name}' },
   'artificial.rename.title': { zh: '重命名作品', en: 'Rename creation' },
   'artificial.rename.label': { zh: '只改显示名称,不动项目文件夹', en: 'Changes the display name only; the project folder keeps its name' },
   'artificial.trash.confirm': {
