@@ -1,5 +1,6 @@
 /** TUI 状态机：把 agent 事件流归约成可渲染的 transcript + 流式块 + 状态/用量/审批。 */
 import type { UiState, UiAction, Block, TranscriptItem } from './types.js';
+import { L } from './i18n.js';
 
 export const initialState: UiState = {
   items: [],
@@ -55,7 +56,7 @@ export function reducer(state: UiState, action: UiAction): UiState {
         ...state,
         items: [
           ...state.items,
-          { id: state.nextId, kind: 'notice', text: action.text, tone: action.tone || 'info' },
+          { id: state.nextId, kind: 'notice', text: action.text, tone: action.tone || 'info', ...(action.variant ? { variant: action.variant } : {}) },
         ],
         nextId: state.nextId + 1,
       };
@@ -134,6 +135,17 @@ export function reducer(state: UiState, action: UiAction): UiState {
       };
     }
 
+    // 插话注入点:引擎已把此前的助手内容定稿落库(finalizeAssistantMessage)、插话作为 user 行落库 → 界面同序:
+    // 先封存 live 气泡,再追加用户气泡,live 置空继续接新一段输出(仍在运行,busy 不变)。
+    case 'TURN_BOUNDARY': {
+      const flushed = flushLive(state);
+      let nextId = flushed.nextId;
+      const users: TranscriptItem[] = action.userTexts
+        .filter((t) => t.trim())
+        .map((text) => ({ id: nextId++, kind: 'user' as const, text }));
+      return { ...state, items: [...flushed.items, ...users], nextId, live: state.live ? [] : state.live };
+    }
+
     case 'DONE': {
       const { items, nextId } = flushLive(state);
       return {
@@ -151,7 +163,7 @@ export function reducer(state: UiState, action: UiAction): UiState {
     case 'ERROR': {
       const flushed = flushLive(state);
       const tone = action.aborted ? 'warn' : 'error';
-      const text = action.aborted ? '⏹ 已中止' : `✗ ${action.msg}`;
+      const text = action.aborted ? L('⏹ 已中止', '⏹ Aborted') : `✗ ${action.msg}`;
       return {
         ...state,
         items: [...flushed.items, { id: flushed.nextId, kind: 'notice', text, tone }],

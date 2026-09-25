@@ -541,7 +541,7 @@ async function main() {
     check('D3 ⚠️「工作区外写入」警示仍在 preview 里(解释只能附加,不能顶替)',
       !!esc && esc.preview.includes('⚠ 工作区外写入'), JSON.stringify(esc?.preview))
     check('D4 mode 的卡解释「当前档位要求批准」(带生效档)',
-      !!mode && mode.why.length > 0 && /自动编辑|Auto edit/i.test(mode.why), JSON.stringify(mode?.why))
+      !!mode && mode.why.length > 0 && /替我批准|Approve for me/i.test(mode.why), JSON.stringify(mode?.why))
     check('D5 ⚠️escalate/custom-ask 不给「总允许」(引擎对这两种就是不记),普通档给',
       !!ask && ask.btns.length === 2 && !!esc && esc.btns.length === 2 && !!mode && mode.btns.length === 3,
       JSON.stringify(apv.slice(-3).map((x) => x.btns)))

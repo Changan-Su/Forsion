@@ -376,7 +376,7 @@ export class IlinkRuntime {
     }
     // 有媒体但没全解出来 → 给 agent 一句可见的提示(它可以告知用户重发),不静默。
     const lost = mediaItemCount - attachments.length - files.length;
-    const textOut = [text, lost > 0 ? `（用户随消息发来 ${lost} 个图片/文件，但读取失败，请告知用户）` : '']
+    const textOut = [text, lost > 0 ? `(The user sent ${lost} image(s)/file(s) with this message, but reading them failed; tell the user.)` : '']
       .filter(Boolean)
       .join('\n');
     if (!textOut && !attachments.length && !files.length) return;

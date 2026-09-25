@@ -411,12 +411,12 @@ registerMessages({
     "en": "How should Tangu actions be approved?"
   },
   "input.approval.readonlyDesc": {
-    "zh": "改文件、跑命令、联网,每次都先问我",
-    "en": "Always ask before editing files, running commands or using the internet"
+    "zh": "改文件、跑命令前都先问我",
+    "en": "Asks before editing files or running commands"
   },
   "input.approval.autoEditDesc": {
-    "zh": "工作区内可直接改文件,跑命令才问我",
-    "en": "Edits files in the workspace freely, asks before running commands"
+    "zh": "工作区内可直接改文件,跑命令、写工作区外才问我",
+    "en": "Edits files in the workspace freely; asks before running commands or writing outside it"
   },
   "input.approval.fullAutoDesc": {
     "zh": "不受限地访问网络和你电脑上的任何文件",

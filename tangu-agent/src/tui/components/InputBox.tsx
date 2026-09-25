@@ -2,6 +2,8 @@ import { useMemo, useRef, useState, type ReactElement } from 'react';
 import { Box, Text, useInput } from 'ink';
 import { theme } from '../theme.js';
 import { matchCommands, completeFilePath } from '../commands.js';
+import { inputHistory } from '../history.js';
+import { L } from '../i18n.js';
 
 export interface Suggestion {
   label: string;
@@ -48,13 +50,22 @@ function computeSuggestions(value: string, cursor: number, cwd: string): Suggest
 export interface InputBoxProps {
   busy: boolean;
   cwd: string;
+  /** false = 让出键盘(审批 / 询问 / 选择器在前台);组件保持挂载,草稿不丢。 */
+  active?: boolean;
   onSubmit: (text: string) => void;
   onAbort: () => void;
   onExit: () => void;
+  /** Shift+Tab:循环思考档。 */
+  onCycleThinking?: () => void;
+  /** Ctrl+P:打开模型选择器。 */
+  onOpenModelPicker?: () => void;
 }
 
-/** 输入框：光标编辑、↑↓历史、Tab 补全(/命令 + @文件)、Alt+Enter 换行、Esc 中止、Ctrl+C 退出。 */
-export function InputBox({ busy, cwd, onSubmit, onAbort, onExit }: InputBoxProps): ReactElement {
+/**
+ * 输入框：光标编辑、↑↓历史(跨会话落盘)、Tab 补全(/命令 + @文件)、Shift+Tab 思考档、Ctrl+P 模型、
+ * Alt+Enter 换行、Esc 中止、Ctrl+C 退出。运行中回车 = 插话(由 App 决定 steer / 排队)。
+ */
+export function InputBox({ busy, cwd, active = true, onSubmit, onAbort, onExit, onCycleThinking, onOpenModelPicker }: InputBoxProps): ReactElement {
   const [value, setValue] = useState('');
   const [cursor, setCursor] = useState(0);
   const vRef = useRef(value);
@@ -62,7 +73,8 @@ export function InputBox({ busy, cwd, onSubmit, onAbort, onExit }: InputBoxProps
   vRef.current = value;
   cRef.current = cursor;
 
-  const history = useRef<string[]>([]);
+  // 历史在模块级单例里(跨会话落盘,且不随本组件卸载丢失)。
+  const history = inputHistory();
   const histIndex = useRef(-1);
   const draft = useRef('');
 
@@ -99,7 +111,7 @@ export function InputBox({ busy, cwd, onSubmit, onAbort, onExit }: InputBoxProps
   };
 
   const historyPrev = (): void => {
-    const h = history.current;
+    const h = history.list();
     if (!h.length) return;
     if (histIndex.current === -1) draft.current = vRef.current;
     histIndex.current = Math.min(histIndex.current + 1, h.length - 1);
@@ -109,7 +121,8 @@ export function InputBox({ busy, cwd, onSubmit, onAbort, onExit }: InputBoxProps
   const historyNext = (): void => {
     if (histIndex.current <= -1) return;
     histIndex.current -= 1;
-    const val = histIndex.current === -1 ? draft.current : history.current[history.current.length - 1 - histIndex.current];
+    const h = history.list();
+    const val = histIndex.current === -1 ? draft.current : h[h.length - 1 - histIndex.current];
     setVC(val, val.length);
   };
 
@@ -131,15 +144,24 @@ export function InputBox({ busy, cwd, onSubmit, onAbort, onExit }: InputBoxProps
       }
       const text = vRef.current;
       if (!text.trim()) return;
-      history.current.push(text);
+      history.add(text); // 以空格开头 / 与上条相同的不记;形似密钥的只留本会话不落盘
       histIndex.current = -1;
       draft.current = '';
       onSubmit(text);
       setVC('', 0);
       return;
     }
+    // Shift+Tab 到达时是 name='tab' + shift:必须先于普通 Tab(补全)判。
+    if (key.tab && key.shift) {
+      onCycleThinking?.();
+      return;
+    }
     if (key.tab) {
       applyCompletion();
+      return;
+    }
+    if (key.ctrl && input === 'p') {
+      onOpenModelPicker?.();
       return;
     }
     if (key.upArrow) {
@@ -181,7 +203,7 @@ export function InputBox({ busy, cwd, onSubmit, onAbort, onExit }: InputBoxProps
       insertAt(input);
       return;
     }
-  });
+  }, { isActive: active });
 
   const suggestions = useMemo(() => computeSuggestions(value, cursor, cwd), [value, cursor, cwd]);
 
@@ -199,6 +221,11 @@ export function InputBox({ busy, cwd, onSubmit, onAbort, onExit }: InputBoxProps
           <Text>{after}</Text>
         </Text>
       </Box>
+      {busy && !value ? (
+        <Text color={theme.dim}>
+          {L('  运行中：回车 = 插话（下一步注入）· Esc 中止', '  Running: Enter = steer (injected at the next step) · Esc to abort')}
+        </Text>
+      ) : null}
       {suggestions.length > 0 && (
         <Box flexDirection="column" marginLeft={2}>
           {suggestions.slice(0, 8).map((s) => (

@@ -79,7 +79,7 @@ router.post('/agent/wechat/session-agent', authMiddleware, async (req: AuthReque
   try {
     const sessionId = String(req.body?.session_id || '');
     const agentSlug = String(req.body?.agent_slug || '');
-    if (!sessionId || !agentSlug) return res.status(400).json({ detail: 'session_id 与 agent_slug 必填' });
+    if (!sessionId || !agentSlug) return res.status(400).json({ detail: 'session_id and agent_slug are required' });
     res.json(await wechatRemote.setSessionAgent(req.user!.userId, sessionId, agentSlug));
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'set session agent failed' });

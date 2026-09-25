@@ -13,7 +13,7 @@ import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import { publish } from '../../services/eventBus.js';
 import { chatModels, effectiveThinkingOn, listModelCatalog, resolveModelQuery, type CatalogModel } from '../../services/modelCatalog.js';
-import { patchSessionAgentConfig, requestRunThinking, setSessionModelId } from '../../services/sessionSettings.js';
+import { patchSessionAgentConfig, readSessionSettings, requestRunThinking, setSessionModelId } from '../../services/sessionSettings.js';
 import { THINKING_LEVELS, normalizeThinkingLevel, type ThinkingLevel } from '../../llm/modelCapabilities.js';
 import { deps } from '../../seams/runtime.js';
 
@@ -88,7 +88,7 @@ export const sessionSettingsProvider: ToolProvider = {
           description:
             "Change this conversation's model and/or thinking level. Use when the user asks for it (e.g. \"switch to opus\", \"think harder\"), or when the task clearly needs a stronger / cheaper setting — then say why in `reason`, the user sees it on the approval prompt. " +
             'The model may be a partial name; an ambiguous or unknown name changes nothing and returns the candidates. ' +
-            'A model change takes effect from the next user message (your current reply still runs on the current model); a thinking-level change applies from your next request. ' +
+            'A model change takes effect after your current reply finishes (the reply itself still runs on the current model); a thinking-level change applies from your next request. ' +
             'The approval mode cannot be changed with this tool — tell the user to change it themselves.',
           parameters: {
             type: 'object',
@@ -124,11 +124,13 @@ export const sessionSettingsProvider: ToolProvider = {
         const notes: string[] = [];
         const changed: { modelId?: string; thinkingLevel?: ThinkingLevel } = {};
         if (target) {
-          if (target.id === ctx.modelId) notes.push(`Model is already ${target.id}.`);
+          // 比「会话此刻存的」而不是 run 启动时的 ctx.modelId:同一个 run 里切了两次(A→B→A)时,第二次按 ctx 会误报「已是 A」而库里留着 B。
+          const stored = (await readSessionSettings(ctx.sessionId, ctx.userId))?.modelId || ctx.modelId;
+          if (target.id === stored) notes.push(`Model is already ${target.id}.`);
           else {
             await setSessionModelId(ctx.sessionId, ctx.userId, target.id);
             changed.modelId = target.id;
-            notes.push(`Model set to ${target.id}; it takes effect from the user's next message (this reply still runs on ${ctx.modelId || 'the current model'}).`);
+            notes.push(`Model set to ${target.id}; it takes effect after this reply finishes (this reply, and anything the user adds while it runs, still uses ${ctx.modelId || 'the current model'}).`);
           }
         }
         if (level) {

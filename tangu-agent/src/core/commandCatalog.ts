@@ -119,9 +119,9 @@ export const COMMAND_CATALOG: CommandSpec[] = [
 export type ApprovalModeId = 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
 export const APPROVAL_MODE_META: Record<ApprovalModeId, { zh: string; en: string; descZh: string; descEn: string }> = {
   readonly: { zh: '询问我批准', en: 'Ask for approval', descZh: '改文件、跑命令前都先问我', descEn: 'Asks before editing files or running commands' },
-  'auto-edit': { zh: '替我批准', en: 'Approve for me', descZh: '工作区内直接改文件；跑命令、写工作区外才问我', descEn: 'Edits files in the workspace directly; asks before running commands or writing outside it' },
+  'auto-edit': { zh: '替我批准', en: 'Approve for me', descZh: '工作区内可直接改文件,跑命令、写工作区外才问我', descEn: 'Edits files in the workspace freely; asks before running commands or writing outside it' },
   'full-auto': { zh: '完全放行', en: 'Full access', descZh: '不再询问（受保护路径仍然拒绝）', descEn: 'Never asks (protected paths are still refused)' },
-  custom: { zh: '自定义', en: 'Custom', descZh: '按 ~/.tangu/config.json 的 approval 规则判定', descEn: 'Decided by the approval rules in ~/.tangu/config.json' },
+  custom: { zh: '自定义', en: 'Custom', descZh: '按 config.json 的 approval 规则判定(桌面在 ~/.forsion,纯命令行在 ~/.tangu)', descEn: 'Decided by the approval rules in config.json (~/.forsion with the desktop app, ~/.tangu for the CLI alone)' },
 };
 export const APPROVAL_MODE_IDS = Object.keys(APPROVAL_MODE_META) as ApprovalModeId[];
 

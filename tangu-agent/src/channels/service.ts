@@ -1,29 +1,67 @@
 /**
- * 通道无关管线:入站消息 → 绑定校验 → (stop/审批/slash) → Tangu run → 回复交付(分段+语音)。
+ * 通道无关管线:入站消息 → 绑定校验 → (stop/审批/询问/slash) → Tangu run → 回复交付(分段+语音)。
  * 从 wechatRemote 移植泛化;微信/Telegram/QQ 共用,通道差异全部收在 ChannelDriver(传输层)。
  *
  * 会话语义(2026-07 起):无「默认会话」概念——每次连接(扫码/connect)都新建一个会话;
  * 通道会话统一落在该通道专属工作区(project_path),桌面侧栏按文件夹分组展示。
- * 新会话创建时盖上通道默认 Agent / LLM / 画图 / 语音模型(见 stampSession)。
+ * 新会话创建时盖上通道默认 Agent / LLM / 画图 / 语音模型(见 createChannelSession)。
+ *
+ * slash 命令的解析 / 分发 / 文案在 commands.ts(目录驱动);用户可见文案在 messages.ts(zh/en 成对)。
+ *
+ * 每个 peer 的运行态(09-25 重做,同日评审二轮再改):
+ *   - runsByPeer:该 peer 发起、未结束的**全部** run(在跑 + 排队)。旧版只记一个 runId,run 进行中再发一条
+ *     消息就指向了排队的那个,「停止」只停掉排队的、真正在跑的继续跑(r_7 补答 1)。
+ *   - 每个 run **一个**事件订阅(trackRun → onRunEvent),审批 / 询问 / 结果全在这里登记与投递。旧版回复等待者
+ *     自己订阅、在第一张卡处退订,此后到的第二张卡(并行子代理用父 runId 发 ask_user;/new 后两个会话各跑一个
+ *     run)没人接,直接丢了。等待者现在只是一个「回复出口」(ReplySink):挂着时 run 的里程碑经它回给触发它的那条
+ *     入站消息,没挂时经驱动主动推送。
+ *   - 卡片(审批 / 询问)每 peer 一条 FIFO:队首 = 正显示在聊天里的那张,「批准 / 拒绝」/ 答复只作用于它;答完 /
+ *     作废后再显示下一张。旧版每 peer 一个槽,第二张直接覆盖第一张、第一张永远无人兑现。
+ *   - 审批卡**显示出来**后 10 分钟无人应答 → 按拒绝兑现(rejectReason 与「用户拒绝」区分),并在通道里说一声。
+ *   - 入站按 peer 串行**分派**(receive),分派完即放手:run 的回复不占住驱动的轮询循环(否则任务跑着的头 3 分钟里
+ *     发「停止」要等到任务出第一条回复才被读到)。
  */
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
+import { withKeyLock } from '../core/keyLock.js';
 import { deps } from '../seams/runtime.js';
 import { createRun } from '../services/runStore.js';
-import { abortRun, enqueueRun } from '../services/agentLoop.js';
+import { abortRun, enqueueRun, sessionHasActiveRun } from '../services/agentLoop.js';
 import { subscribe } from '../services/eventBus.js';
 import { resolveApproval } from '../services/approvals.js';
-import { readAgentsMeta, listAgents, getAgent } from '../agents/agentRegistry.js';
+import { resolveInquiry } from '../services/inquiries.js';
+import { patchSessionAgentConfig, readSessionSettings, requestRunThinking, setSessionModelId } from '../services/sessionSettings.js';
+import { chatModels, listModelCatalog } from '../services/modelCatalog.js';
+import { readAgentsMeta, listAgents, getAgent, agentCapOf, DEFAULT_MAX_ITERATIONS } from '../agents/agentRegistry.js';
 import { resolveReplySegment, splitMessage, segmentDelayMs } from '../services/replySegment.js';
 import { resolveVoiceMessage, synthesizeVoiceWav, VOICE_MESSAGE_PLUGIN_ID } from '../services/voiceMessage.js';
 import { setPluginEnabled, setScopeSettings } from '../plugins/settingsStore.js';
-import { channelSettings, channelWorkspaceDir } from './config.js';
+import { channelSettings, channelWorkspaceDir, saveChannelSettings } from './config.js';
+import { ChannelCommandCenter, normalizeChannelText, parseChannelCommand, stopReply, type ChannelCommandRuntime, type ChannelUsage } from './commands.js';
+import { CHANNEL_NAME, channelMsg, clipReply, resolveChannelLocale, type ChannelLocale } from './messages.js';
 import type { ApprovalMode, ChannelDriver, ChannelInbound, ChannelKind, SendResult } from './types.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const RUN_REPLY_TIMEOUT_MS = 180_000;
+
+/** 通道审批无人应答的超时(之后按拒绝兑现)。hermes 5 分钟;通道消息常被手机通知延后,放宽到 10 分钟。 */
+export const CHANNEL_APPROVAL_TIMEOUT_MS = 10 * 60_000;
+const APPROVAL_TIMEOUT_MIN = Math.round(CHANNEL_APPROVAL_TIMEOUT_MS / 60_000);
+// 给模型看的拒绝原因(英文):与「用户拒绝」区分开,模型才不会把沉默当成用户的意见。
+export const APPROVAL_TIMEOUT_REASON = `No one answered this approval request in the chat channel within ${APPROVAL_TIMEOUT_MIN} minutes, so the action was not run.`;
+export const APPROVAL_SUPERSEDED_REASON = 'The user sent a new message in the chat channel instead of answering this approval request, so the action was not run.';
+export const APPROVAL_CHANNEL_STOPPED_REASON = 'The chat channel was stopped or restarted before anyone answered this approval request, so the action was not run.';
+
+const STOP_RE = /^(stop|停止|取消|中止)$/i;
+const APPROVE_RE = /^(批准|同意|确认|可以|好的?|是的?|yes|y|ok|approve|👍)$/i;
+const REJECT_RE = /^(拒绝|不同意|不行|否|不|no|n|reject)$/i;
+/** 审批 preview / 计划正文在通道里的最大长度(卡片其余文字 + 这段 < 单条上限)。 */
+const PREVIEW_MAX = 1200;
+const PLAN_MAX = 1100;
+/** 审批档从严到宽的名次(启动对齐只收紧时比大小用)。 */
+const APPROVAL_RANK: Record<ApprovalMode, number> = { readonly: 0, 'auto-edit': 1, 'full-auto': 2 };
 
 interface BindingRow {
   id: string;
@@ -35,11 +73,67 @@ interface BindingRow {
   remote_approval_mode: ApprovalMode;
 }
 
+interface PeerAddr { key: string; accountId: string; peerId: string }
+
+/** 等用户在通道里回复的一张卡。每 peer 一条 FIFO(见 prompts),队首是正显示着的那张。 */
+interface ApprovalPrompt extends PeerAddr {
+  kind: 'approval';
+  runId: string;
+  approvalId: string;
+  preview: string;
+  /** 无人应答超时:这张卡**显示出来**时才起算(排队期间用户看不到它,不能替他计时)。 */
+  timer?: ReturnType<typeof setTimeout>;
+}
+
+interface InquiryPrompt extends PeerAddr {
+  kind: 'inquiry';
+  runId: string;
+  inquiryId: string;
+  /** 登记时就渲染好的问题卡(plan 询问要用当时的计划正文)。 */
+  text: string;
+  /** 回复序号 n → answers[n-1](plan 询问是固定选项串的子集,wire 约定逐字不动)。 */
+  answers: string[];
+  /** exit_plan_mode 的计划审阅(通道自己答的才由通道代发「开始执行」,见 RunState.planAnsweredHere)。 */
+  isPlan: boolean;
+}
+
+type Prompt = ApprovalPrompt | InquiryPrompt;
+
+/**
+ * run 的回复出口:挂着时 run 的下一个里程碑(卡片 / 结果)经它回给触发它的那条入站消息(首条 resolve,之后主动推送);
+ * 没挂时由 output() 经驱动主动推送。每个 run 同一时刻至多一个。
+ */
+interface ReplySink {
+  deliver(text: string): void;
+  /** 摘下出口(停 typing、清计时器);还没回过话的,用 fallback 兑现 —— 不留悬挂的 promise。 */
+  close(fallback?: string): void;
+}
+
+interface RunState {
+  runId: string;
+  addr: PeerAddr;
+  agentSlug?: string;
+  off: () => void;
+  sink: ReplySink | null;
+  /** exit_plan_mode 先发 plan 事件、再发 inquiry_request。 */
+  planText: string;
+  planAutoStart: boolean;
+  /** 计划审阅由通道这边作答:只有这时批准「马上开始」后由通道代发执行消息(桌面答的由桌面自己发,两边都发就跑两遍)。 */
+  planAnsweredHere: boolean;
+  /** 被通道「停止」:aborted 终态不再单独回一句「任务已停止」(停止的回复已经说了),分段回复也即停。 */
+  stopped: boolean;
+  /** 已收到 done / error:之后只剩把回复发完,不再处理事件。 */
+  ended: boolean;
+}
+
+/** 分派结果:直接回一句,或一个要等的 run 回复(不能直接返回 Promise —— async 函数会把它摊平成等待)。 */
+type Dispatched = string | { wait: Promise<string> };
+
 export interface ChannelServiceOpts {
   kind: ChannelKind;
   driver: ChannelDriver;
-  /** 未绑定 peer 收到消息时的提示。 */
-  unboundHint: string;
+  /** 未绑定 peer 收到消息时的提示(缺省按语言从 messages.ts 取)。 */
+  unboundHint?: string;
   /** 入站文件落盘目录名(微信沿用历史 wechat-inbox)。 */
   inboxDirName: string;
   /** 新会话默认标题。 */
@@ -64,18 +158,46 @@ export function parseJson(v: any): any {
   try { return JSON.parse(v); } catch { return null; }
 }
 
+/** 通道 run 实际用的审批档:绑定上的值(随通道设置同步,见 syncApprovalMode)。 */
+export function effectiveApprovalMode(binding: Pick<BindingRow, 'remote_approval_mode'>): ApprovalMode {
+  const m = binding.remote_approval_mode;
+  return m === 'readonly' || m === 'auto-edit' || m === 'full-auto' ? m : 'auto-edit';
+}
+
+/** 询问的答复:纯序号且在范围内 → 对应选项原文;否则原样当自由文本。 */
+export function inquiryAnswerFor(answers: string[], text: string): string {
+  if (/^\d{1,2}$/.test(text)) {
+    const n = Number(text);
+    if (n >= 1 && n <= answers.length) return answers[n - 1];
+  }
+  return text;
+}
+
 export class ChannelService {
   readonly kind: ChannelKind;
   readonly driver: ChannelDriver;
   private readonly opts: ChannelServiceOpts;
   private readonly hostClientTag?: string;
-  private readonly activeRunsByPeer = new Map<string, string>();
-  // 通道内审批:peer → 当前待批操作(收到 approval_request 时登记;用户回「批准/拒绝」时取用)。
-  private readonly pendingApprovalByPeer = new Map<string, { runId: string; approvalId: string; preview: string; agentSlug?: string }>();
+  private readonly commands = new ChannelCommandCenter();
+  /** 本通道跟踪中的 run(trackRun 登记,finishRun 摘掉)。 */
+  private readonly runs = new Map<string, RunState>();
+  /** peer → 该 peer 发起、尚未结束的 run(在跑 + 排队)。 */
+  private readonly runsByPeer = new Map<string, Set<string>>();
+  /** peer → 待用户回复的卡片 FIFO(队首正显示着;其余答完 / 作废一张再出一张)。 */
+  private readonly prompts = new Map<string, Prompt[]>();
+  /**
+   * peer → 审批卡作废时刻(超时自动拒绝 / 桌面端代答 / run 在别处结束,且之后没有别的卡)。之后短时间内回
+   * 「批准 / 拒绝」要答「已过期」,不能落成一条内容是「批准」的新任务。一次性:有新卡登记即清,无卡时被下一条非命令消息取用。
+   */
+  private readonly expiredApprovalAt = new Map<string, number>();
   // typing 指示:peer → 周期性重发「正在输入」的定时器(run 期间开启,出回复时关闭)。
   private readonly typingTimers = new Map<string, ReturnType<typeof setInterval>>();
-  // 挂起的 waitForRunReply 强制结束器:stop()/服务重载时把所有等待中的回复 settle 掉,避免泄漏。
+  // 挂着的回复出口的强制结束器:stop()/服务重载时把所有等待中的回复 settle 掉,避免泄漏。
   private readonly pendingSettlers = new Set<() => void>();
+  /** peer → 入站串行分派链的队尾(receive)。 */
+  private readonly inboundChains = new Map<string, Promise<void>>();
+  /** releasePending 递增:排在分派链里、还没轮到的入站随之作废。 */
+  private epoch = 0;
 
   constructor(opts: ChannelServiceOpts) {
     this.kind = opts.kind;
@@ -86,6 +208,8 @@ export class ChannelService {
 
   settings() { return channelSettings(this.kind); }
   workspaceDir(): string { return channelWorkspaceDir(this.kind); }
+  /** 本通道回复语言(设置手选 → TANGU_LOCALE → 系统 → 平台缺省)。每次现算:改设置即时生效。 */
+  locale(): ChannelLocale { return resolveChannelLocale(this.kind, this.settings().locale); }
   private async ensureWorkspaceDir(): Promise<string> {
     const dir = this.workspaceDir();
     await fsp.mkdir(dir, { recursive: true }).catch(() => {});
@@ -93,23 +217,45 @@ export class ChannelService {
   }
   private peerKey(accountId: string, peerId: string): string { return `${accountId}:${peerId}`; }
 
-  /** 结束所有挂起等待 + 定时器(通道停止/重载时)。 */
+  /** 结束所有挂起等待 + 定时器 + 订阅(通道停止 / 禁用 / 换凭据重启 / 引擎退出时)。 */
   releasePending(): void {
+    this.epoch += 1;
+    // 待批的审批先按拒绝兑现(原因写清):只清计时器不兑现的话,通道重启后它们再无人应答、也不再超时,run 永远卡在审批上。
+    // 先摘表再兑现:resolveApproval 会广播 approval_result,订阅者见表里已没有它,不会去「显示下一张」。
+    // (广播的落库在 eventBus 的 per-run 写链里,失败只记日志;引擎退出时这里的写入不会冒成未处理的 rejection。)
+    // 询问不动:通道里的询问本就不超时,桌面端仍可作答。
+    const all = [...this.prompts.values()].flat();
+    this.prompts.clear();
+    for (const p of all) {
+      if (p.kind !== 'approval') continue;
+      if (p.timer) clearTimeout(p.timer);
+      resolveApproval(p.approvalId, { action: 'reject', rejectReason: APPROVAL_CHANNEL_STOPPED_REASON });
+    }
     for (const t of this.typingTimers.values()) clearInterval(t);
     this.typingTimers.clear();
     for (const settle of [...this.pendingSettlers]) settle();
     this.pendingSettlers.clear();
+    for (const st of this.runs.values()) st.off();
+    this.runs.clear();
+    this.runsByPeer.clear();
+    this.expiredApprovalAt.clear();
+    this.inboundChains.clear();
   }
 
   // ── 绑定/会话 ──
 
   /**
    * 连接账号:登记账号行 + 作废该用户本通道全部旧绑定 + 新建绑定与**全新会话**。
-   * 「连接即新会话」——不复用旧会话;历史会话仍留在通道工作区文件夹里可切回(/switch)。
+   * 「连接即新会话」——不复用旧会话;历史会话仍留在通道工作区文件夹里可切回(/resume)。
+   * 调用方显式带的审批档(微信扫码的 approval_mode)与设置不一致时写回设置并同步到本通道全部绑定 ——
+   * 与 hub.applySettings 同一口径(设置是唯一真源,设置值 = 各绑定上的值);只写设置不同步的话,本通道别的绑定
+   * 要到下次改设置才对齐。
    */
   async bindAccount(input: { userId: string; accountId: string; peerId?: string | null; label?: string | null; approvalMode?: ApprovalMode }): Promise<{ sessionId: string }> {
     const st = this.settings();
     const approval = input.approvalMode || st.approvalMode;
+    const modeChanged = !!input.approvalMode && input.approvalMode !== st.approvalMode;
+    if (modeChanged) saveChannelSettings(this.kind, { approvalMode: approval });
     const sessionId = await this.createChannelSession(input.userId, undefined, undefined);
     await query(
       `INSERT INTO tangu_wechat_accounts (id, user_id, wx_user_id, channel, status, created_at, updated_at)
@@ -124,7 +270,36 @@ export class ChannelService {
        VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
       [uuidv4(), input.userId, this.kind, input.accountId, input.peerId || null, sessionId, approval],
     );
+    if (modeChanged) await this.syncApprovalMode(approval);
     return { sessionId };
+  }
+
+  /**
+   * 把通道设置里的审批档同步到本通道**全部**绑定。旧版只在建绑定时写一次 remote_approval_mode,而通道 run 强制用它
+   * —— 设置页收紧了档,已连接的会话照旧按老档跑(r_1 §3.2 缺陷 3,也是安全问题)。
+   * 不动 updated_at:findBinding / activeBinding 按它排序,改设置不该改变「哪个绑定最新」。
+   *
+   * narrowOnly(引擎启动时的对齐用):只把**比设置宽**的绑定收紧到设置档,不放宽。启动时没有任何用户动作,
+   * 而设置值可能来自兜底链(微信:TANGU_WECHAT_REMOTE_APPROVAL_MODE → 旧 wechat.remoteApprovalMode → 'auto-edit'),
+   * 老客户端按 readonly 建的绑定不能因此被悄悄放宽到 auto-edit / full-auto。放宽只走用户在设置页的显式改动(applySettings)。
+   * 改了几个、还有几个比设置严,都打日志。
+   */
+  async syncApprovalMode(mode: ApprovalMode, opts: { narrowOnly?: boolean } = {}): Promise<void> {
+    if (!opts.narrowOnly) {
+      await query(`UPDATE tangu_wechat_bindings SET remote_approval_mode = ? WHERE channel = ?`, [mode, this.kind]);
+      return;
+    }
+    const rows = await query<any[]>(`SELECT id, remote_approval_mode FROM tangu_wechat_bindings WHERE channel = ?`, [this.kind]);
+    const looser = rows.filter((r) => APPROVAL_RANK[effectiveApprovalMode(r)] > APPROVAL_RANK[mode]);
+    const stricter = rows.filter((r) => APPROVAL_RANK[effectiveApprovalMode(r)] < APPROVAL_RANK[mode]).length;
+    for (const r of looser) {
+      await query(`UPDATE tangu_wechat_bindings SET remote_approval_mode = ? WHERE id = ?`, [mode, r.id]);
+    }
+    if (looser.length) {
+      const from = [...new Set(looser.map((r) => String(r.remote_approval_mode ?? 'null')))].join('/');
+      console.warn(`[${this.kind}-channel] 启动对齐:${looser.length} 个绑定的审批档从 ${from} 收紧到设置档 ${mode}`);
+    }
+    if (stricter) console.warn(`[${this.kind}-channel] 启动对齐:${stricter} 个绑定比设置档 ${mode} 更严,保持不动(在设置页改一次审批档即全部对齐)`);
   }
 
   async disconnect(userId: string, accountId?: string): Promise<{ ok: boolean }> {
@@ -204,12 +379,11 @@ export class ChannelService {
     return rows.map((r) => ({ id: r.id, title: r.title || this.opts.sessionTitle, updated_at: r.updated_at, connected: r.id === connected, agentSlug: (parseJson(r.agent_config) || {}).agentSlug || null }));
   }
 
-  /** 设置某会话使用的 Normal Agent(merge agentSlug)。 */
+  /** 设置某会话使用的 Normal Agent(按键合并 agentSlug,与桌面 PATCH 同锁)。 */
   async setSessionAgent(userId: string, sessionId: string, slug: string): Promise<{ ok: boolean }> {
-    const rows = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [sessionId, userId]);
+    const rows = await query<any[]>(`SELECT id FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [sessionId, userId]);
     if (!rows[0]) throw new Error('Session not found');
-    const cfg = parseJson(rows[0].agent_config) || {};
-    await deps().state.setAgentConfig(sessionId, JSON.stringify({ ...cfg, agentSlug: slug }));
+    await patchSessionAgentConfig(sessionId, { agentSlug: slug });
     return { ok: true };
   }
 
@@ -218,10 +392,10 @@ export class ChannelService {
     const rows = await query<any[]>(`SELECT agent_config, project_path FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [sessionId, userId]);
     const s = rows[0];
     if (!s) throw new Error('Session not found');
-    if (s.project_path !== this.workspaceDir()) throw new Error('只能连接本通道工作区下的会话');
+    if (s.project_path !== this.workspaceDir()) throw new Error("Only sessions in this channel's workspace can be connected");
     const cfg = parseJson(s.agent_config) || {};
     if (cfg.execMode !== 'host' || !cfg.cwd) {
-      await deps().state.setAgentConfig(sessionId, JSON.stringify({ ...cfg, execMode: 'host', approvalMode: cfg.approvalMode || this.settings().approvalMode, cwd: cfg.cwd || s.project_path || this.workspaceDir() }));
+      await patchSessionAgentConfig(sessionId, { execMode: 'host', approvalMode: cfg.approvalMode || this.settings().approvalMode, cwd: cfg.cwd || s.project_path || this.workspaceDir() });
     }
     await query(`UPDATE tangu_wechat_bindings SET session_id = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND channel = ? AND is_active = TRUE`, [sessionId, userId, this.kind]);
     return { ok: true };
@@ -229,7 +403,7 @@ export class ChannelService {
 
   /**
    * 把一份媒体(图片/文件)发送到某会话当前连接的通道 peer。
-   * 供 builtin 工具(channel_send_file / channel_send_image)与插件 SDK 调用。
+   * 供 builtin 工具(channel_send_file / channel_send_image)与插件 SDK 调用 —— 错误串是给模型看的,英文。
    */
   async sendMediaForSession(userId: string, sessionId: string, buffer: Buffer, opts: { kind: 'image' | 'file'; fileName: string }, signal?: AbortSignal): Promise<SendResult> {
     const rows = await query<any[]>(
@@ -239,9 +413,9 @@ export class ChannelService {
       [sessionId, userId, this.kind],
     );
     const b = rows[0];
-    if (!b) return { ok: false, error: '该会话未连接通道(没有活跃绑定)。请先在 Tangu Desktop 设置里连接通道,并把此会话设为正在连接。' };
-    if (!b.peer_id) return { ok: false, error: '通道尚未确定联系人。请先让对方发一条消息,再重试发送。' };
-    if (!this.driver.sendMedia) return { ok: false, error: '该通道不支持发送媒体。' };
+    if (!b) return { ok: false, error: 'This session is not connected to a channel (no active binding). The user must connect the channel in Tangu Desktop settings and make this the connected session.' };
+    if (!b.peer_id) return { ok: false, error: 'The channel has no contact yet. Ask the user to send a message in the chat first, then retry.' };
+    if (!this.driver.sendMedia) return { ok: false, error: 'This channel does not support sending media.' };
     return this.driver.sendMedia(b.account_id, b.peer_id, buffer, opts, signal);
   }
 
@@ -255,82 +429,156 @@ export class ChannelService {
 
   // ── 入站管线 ──
 
+  /**
+   * 驱动入口(hub 接的是这个):立即返回 '',不占住驱动的轮询循环。
+   * 同一 peer 的入站按到达顺序串行**分派**(校验绑定 / 停止 / 兑现卡片 / 命令 / 建 run 入队),分派完就放手 ——
+   * run 的回复不在串行链上等,经 driver.send 推回。所以「停止」在任务跑着时也是即刻读到的,且一定排在它要停的那条
+   * 任务的建 run 之后(不会先跑空、再让任务起来)。命令回复同样经 send 发出(驱动的发送本身按 peer / 账号串行,顺序不乱)。
+   * 代价:驱动在分派之前就推进了游标(Telegram offset),分派中途崩溃这条不会重投 —— 此时 run 往往已落库,重投只会重复执行。
+   */
+  receive(msg: ChannelInbound): Promise<string> {
+    const key = this.peerKey(msg.accountId, msg.peerId);
+    const epoch = this.epoch;
+    const step = (this.inboundChains.get(key) ?? Promise.resolve()).then(async () => {
+      if (epoch !== this.epoch) return; // 通道已停止 / 重启:排队中的旧入站作废
+      const r = await this.dispatchInbound(msg);
+      if (typeof r === 'string') {
+        if (r) this.push(msg.accountId, msg.peerId, r);
+      } else {
+        void r.wait.then((t) => { if (t) this.push(msg.accountId, msg.peerId, t); });
+      }
+    }).catch((e: any) => console.warn(`[${this.kind}-channel] 处理入站消息失败:`, e?.message || e));
+    this.inboundChains.set(key, step);
+    void step.then(() => { if (this.inboundChains.get(key) === step) this.inboundChains.delete(key); });
+    return Promise.resolve('');
+  }
+
+  /** 处理一条入站并等到它的首条回复(测试与需要同步拿回复的调用方用;驱动走 receive)。 */
   async handleInbound(msg: ChannelInbound): Promise<string> {
-    const text = msg.text.trim();
+    const r = await this.dispatchInbound(msg);
+    return typeof r === 'string' ? r : r.wait;
+  }
+
+  /** 主动推一条文本给 peer(失败只记日志)。 */
+  private push(accountId: string, peerId: string, text: string): void {
+    void this.driver.send(accountId, peerId, text)
+      .then((r) => { if (!r?.ok) console.warn(`[${this.kind}-channel] 推送失败:`, r?.error); })
+      .catch((e: any) => console.warn(`[${this.kind}-channel] 推送失败:`, e?.message || e));
+  }
+
+  private async dispatchInbound(msg: ChannelInbound): Promise<Dispatched> {
+    const text = normalizeChannelText(msg.text);
     const attachments = msg.attachments ?? [];
     const key = this.peerKey(msg.accountId, msg.peerId);
+    const addr: PeerAddr = { key, accountId: msg.accountId, peerId: msg.peerId };
+    const L = this.locale();
     // 先校验绑定:stop / 批准拒绝 / slash / 普通任务 都要求该 peer 已绑定(防未绑定 peer 绕过执行)。
-    const binding = await this.findBinding(msg.accountId, msg.peerId);
-    if (!binding) return this.opts.unboundHint;
+    // 按账号串行:receive 只按 peer 串行,两个不同 peer 同时给一个还没认主的绑定发消息,不锁的话两边都读到 peer_id 为空、
+    // 都认领成功(TOFU 竞态,peer 隔离失守)。旧版整条轮询串行,碰巧没这个窗口(QQ 本来就有)。
+    const binding = await withKeyLock(`channel-binding:${this.kind}:${msg.accountId}`, () => this.findBinding(msg.accountId, msg.peerId));
+    if (!binding) return this.opts.unboundHint ?? channelMsg(L, 'unbound', { channel: CHANNEL_NAME[this.kind][L] });
 
     // Channel Session 关闭时不驱动 agent 会话(收件箱转发独立于此,仍可能在推送)。
-    if (!this.settings().sessions) return '通道会话功能当前已关闭(仅收件箱转发在工作)。可在 Tangu Desktop 设置 → 通道 里开启。';
+    if (!this.settings().sessions) return channelMsg(L, 'sessionsOff');
 
-    const activeRun = this.activeRunsByPeer.get(key);
-    if (/^(stop|停止|取消|中止)$/i.test(text)) {
-      if (activeRun) {
-        abortRun(activeRun);
-        this.activeRunsByPeer.delete(key);
-        return '已停止当前 Tangu Agent 任务。';
-      }
-      return '当前没有正在运行的 Tangu Agent 任务。';
+    const cmd = parseChannelCommand(text);
+    // 停止:裸关键词与 /stop 同一条路(旧版 /stop 落进「未知命令」)。
+    if (STOP_RE.test(text) || cmd?.name === '/stop') return stopReply(L, this.stopPeer(key));
+
+    const isVerdict = !cmd && (APPROVE_RE.test(text) || REJECT_RE.test(text));
+    const head = this.prompts.get(key)?.[0];
+    // 通道内审批:队首是审批卡时,「批准/拒绝」直接兑现它(无需回桌面)。命令照常执行,不动卡片。
+    // 下面几步必须同步连着做:先摘卡再兑现(resolveApproval 会广播 approval_result,订阅者见卡已摘掉,不会当成「别处代答」);
+    // 回复出口要在 run 的下一个事件之前挂上(run 在兑现后的微任务里才继续,同步挂上即赶得上)。
+    if (head?.kind === 'approval' && isVerdict) {
+      this.takeHead(key);
+      const ok = resolveApproval(head.approvalId, { action: APPROVE_RE.test(text) ? 'approve' : 'reject' });
+      const wait = ok ? this.waitForRunReply(head.runId) : null; // 先挂出口:下一张卡若是同一 run 的,它就是这条「批准」的回复
+      this.afterHeadGone(key, head, !ok);
+      this.releaseIfWaitingOnUser(head.runId);
+      return wait ? { wait } : channelMsg(L, 'expired');
+    }
+    // 询问(ask_user / exit_plan_mode):队首是问题卡时,下一条非命令消息就是答复 —— 序号 → 选项原文,否则自由文本。
+    // 「好 / 不」这类词在这里也是答复(不归审批,也不被「已过期」标记截走)。
+    if (head?.kind === 'inquiry' && !cmd) {
+      if (!text) return channelMsg(L, 'inquiryNeedsText');
+      this.takeHead(key);
+      const st = this.runs.get(head.runId);
+      if (st && head.isPlan) st.planAnsweredHere = true; // 须在兑现前:plan_approved 紧随其后
+      const ok = resolveInquiry(head.inquiryId, inquiryAnswerFor(head.answers, text));
+      if (!ok && st) st.planAnsweredHere = false;
+      const wait = ok ? this.waitForRunReply(head.runId) : null;
+      this.afterHeadGone(key, head, false);
+      this.releaseIfWaitingOnUser(head.runId);
+      return wait ? { wait } : channelMsg(L, 'expired');
     }
 
-    // 通道内审批:有待批操作时,「批准/拒绝」直接放行或取消(无需回桌面)。
-    const pendingApproval = this.pendingApprovalByPeer.get(key);
-    if (pendingApproval) {
-      if (/^(批准|同意|确认|可以|好的?|是的?|yes|y|ok|approve|👍)$/i.test(text)) {
-        this.pendingApprovalByPeer.delete(key);
-        const ok = resolveApproval(pendingApproval.approvalId, { action: 'approve' });
-        return ok ? this.waitForRunReply(pendingApproval.runId, key, msg.accountId, msg.peerId, pendingApproval.agentSlug) : '该操作已过期或已在别处处理。';
-      }
-      if (/^(拒绝|不同意|不行|否|不|no|n|reject)$/i.test(text)) {
-        this.pendingApprovalByPeer.delete(key);
-        const ok = resolveApproval(pendingApproval.approvalId, { action: 'reject' });
-        return ok ? this.waitForRunReply(pendingApproval.runId, key, msg.accountId, msg.peerId, pendingApproval.agentSlug) : '该操作已过期或已在别处处理。';
+    // slash 命令(目录驱动,见 commands.ts)。未知的 /x 在那边回「未知命令」,绝不落到下面当普通消息。
+    if (cmd) return this.commands.dispatch(this.commandRuntime(binding, key, L), key, cmd);
+
+    // 刚作废的审批卡(超时 / 桌面端代答 / run 在别处结束)后迟到的「批准 / 拒绝」:答「已过期」,不当新任务。
+    // 只在没有卡片待答时看(有卡时上面两支已接走);标记被这条消息取用即删。
+    if (!head) {
+      const expiredAt = this.expiredApprovalAt.get(key);
+      if (expiredAt !== undefined) {
+        this.expiredApprovalAt.delete(key);
+        if (isVerdict && Date.now() - expiredAt < CHANNEL_APPROVAL_TIMEOUT_MS) return channelMsg(L, 'expired');
       }
     }
 
-    // 通道 slash 命令:/new /list /switch /agents /agent /voice /text /help。
-    if (text.startsWith('/')) return this.handleSlash(binding, text);
+    // 刚列过模型:10 分钟内回个纯数字 = 选模型(有审批卡待答时数字不归它 —— 走下面当新消息,那张卡按放弃处理)。
+    if (!head && /^\d{1,3}$/.test(text)) {
+      const picked = await this.commands.tryPickNumber(this.commandRuntime(binding, key, L), key, text);
+      if (picked !== null) return picked;
+    }
 
     const rows = await query<any[]>(`SELECT model_id, agent_config, project_path FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [binding.session_id, binding.user_id]);
     const session = rows[0];
-    if (!session) return '绑定的 Tangu 会话不存在,请在 Desktop 重新连接通道。';
+    if (!session) return channelMsg(L, 'sessionMissing');
     const modelId = session.model_id || this.settings().modelId || deps().profile.defaultModelId || '';
-    if (!modelId) return 'Tangu Agent 尚未配置默认模型,请先在 Desktop 选择模型。';
+    if (!modelId) return channelMsg(L, 'noModel');
 
-    // 上一个待批操作未处理就发来新任务 → 视为放弃,拒绝旧审批,避免旧 run 永久挂起等审批。
-    const stale = this.pendingApprovalByPeer.get(key);
-    if (stale) { resolveApproval(stale.approvalId, { action: 'reject' }); this.pendingApprovalByPeer.delete(key); }
+    // 正显示的审批卡没答就发来新任务 → 视为放弃这张卡:按「被新消息取代」拒绝(原因如实告诉模型),旧 run 的结果照样推回
+    // (旧版拒绝后没人再订阅,旧 run 的收尾回复就丢了)。排在它后面的卡接着显示 —— 用户还没见过它们,不替他放弃。
+    // 上面有 await:只在这条消息到达时看到的那张卡仍是队首时才放弃它(这期间它可能已超时 / 被桌面答掉,换上来的新卡用户还没看到)。
+    const stale = this.prompts.get(key)?.[0];
+    if (stale && stale === head && stale.kind === 'approval') {
+      this.takeHead(key);
+      const ok = resolveApproval(stale.approvalId, { action: 'reject', rejectReason: APPROVAL_SUPERSEDED_REASON });
+      this.afterHeadGone(key, stale, false);
+      const st = this.runs.get(stale.runId);
+      if (ok && st) this.resumeIfIdle(st);
+    }
 
     const runId = uuidv4();
     const assistantMessageId = uuidv4();
     const userMessageId = uuidv4();
     const currentCfg = parseJson(session.agent_config) || {};
     const st = this.settings();
+    // 会话存的 agent_config 整份带进 run(思考档 / 轮数 / 计划模式 / 技能…都在里面;/think /loop 就是写它),
+    // 只覆盖通道必须钉死的键。
     const agentConfig: any = {
       ...currentCfg,
       execMode: 'host',
-      approvalMode: binding.remote_approval_mode || 'auto-edit',
+      approvalMode: effectiveApprovalMode(binding),
       // host 执行需要真实 cwd:优先会话已存 cwd,其次 project_path,最后兜底通道工作区。
       cwd: currentCfg.cwd || session.project_path || this.workspaceDir(),
       // 会话已选 agent 则用之,否则通道默认 agent,再兜底用户全局默认 agent。
       agentSlug: currentCfg.agentSlug || st.agentSlug || readAgentsMeta().defaultSlug,
     };
     if (!agentConfig.imageModelId && st.imageModelId) agentConfig.imageModelId = st.imageModelId;
-    // 入站文件 → 落盘到会话工作区 <channel>-inbox/,把相对路径写进消息(host 工具可直接读)。
+    // 入站文件 → 落盘到会话工作区 <channel>-inbox/,把相对路径写进消息(host 工具可直接读;给模型看的,英文)。
     const fileNotes: string[] = [];
     for (const f of msg.files ?? []) {
       try {
         const saved = await this.saveInboundFile(agentConfig.cwd, f);
-        fileNotes.push(`[用户发来文件,已保存到 ${saved}]`);
+        fileNotes.push(`[The user sent a file; it was saved to ${saved}]`);
       } catch (e: any) {
-        fileNotes.push(`[用户发来文件 ${f.name},但保存失败:${e?.message || e}]`);
+        fileNotes.push(`[The user sent the file ${f.name}, but saving it failed: ${e?.message || e}]`);
       }
     }
     // 纯图片消息给个占位文本:部分 provider(如 Anthropic)拒绝空文本块,聊天记录里也更可读。
-    const message = [text, ...fileNotes].filter(Boolean).join('\n') || (attachments.length ? '[图片]' : '');
+    const message = [text, ...fileNotes].filter(Boolean).join('\n') || (attachments.length ? '[image]' : '');
     await createRun({
       id: runId,
       sessionId: binding.session_id,
@@ -349,9 +597,306 @@ export class ChannelService {
         source: { channel: this.kind, accountId: msg.accountId, openid: msg.peerId, messageId: msg.messageId },
       },
     });
-    this.activeRunsByPeer.set(key, runId);
+    this.trackRun(runId, addr, agentConfig.agentSlug);
     enqueueRun(binding.session_id, runId);
-    return this.waitForRunReply(runId, key, msg.accountId, msg.peerId, agentConfig.agentSlug);
+    return { wait: this.waitForRunReply(runId) };
+  }
+
+  // ── run 跟踪 ──
+
+  /** 停掉该 peer 的全部 run(在跑 + 排队),卡片全部作废。返回停了几个。 */
+  private stopPeer(key: string): number {
+    const ids = [...(this.runsByPeer.get(key) ?? [])];
+    this.runsByPeer.delete(key);
+    for (const id of ids) {
+      const st = this.runs.get(id);
+      if (st) st.stopped = true;
+      abortRun(id); // 在跑的走 AbortController;排队的出队并补终态(agentLoop.abortRun 两种都认)
+    }
+    // 卡片都属于这个 peer 的 run(刚全停了):审批 / 询问的 resolver 随 abort 信号释放,这里只摘表、清计时器。
+    for (const p of this.prompts.get(key) ?? []) if (p.kind === 'approval' && p.timer) clearTimeout(p.timer);
+    this.prompts.delete(key);
+    return ids.length;
+  }
+
+  /** 登记 run 归属 + 挂它唯一的事件订阅(必须在 enqueueRun 之前,事件才不会漏)。 */
+  private trackRun(runId: string, addr: PeerAddr, agentSlug?: string): void {
+    let set = this.runsByPeer.get(addr.key);
+    if (!set) this.runsByPeer.set(addr.key, (set = new Set()));
+    set.add(runId);
+    const st: RunState = {
+      runId, addr, agentSlug, off: () => {}, sink: null,
+      planText: '', planAutoStart: false, planAnsweredHere: false, stopped: false, ended: false,
+    };
+    this.runs.set(runId, st);
+    st.off = subscribe(runId, (ev) => {
+      try {
+        this.onRunEvent(st, ev);
+      } catch (e: any) {
+        console.warn(`[${this.kind}-channel] 处理 run 事件 ${ev?.type} 失败:`, e?.message || e);
+      }
+    });
+  }
+
+  private onRunEvent(st: RunState, ev: { type: string; payload?: any }): void {
+    if (st.ended) return;
+    const p = ev.payload || {};
+    switch (ev.type) {
+      case 'plan': st.planText = String(p.plan || ''); return;
+      case 'plan_approved': st.planAutoStart = p.auto === true; return;
+      case 'approval_request': {
+        const approvalId = String(p.approvalId || '');
+        if (!approvalId) return;
+        const raw = String(p.preview || p.name || channelMsg(this.locale(), 'approvalPreviewFallback'));
+        const preview = raw.length > PREVIEW_MAX ? `${raw.slice(0, PREVIEW_MAX)}…` : raw;
+        this.enqueuePrompt({ kind: 'approval', ...st.addr, runId: st.runId, approvalId, preview });
+        return;
+      }
+      case 'inquiry_request': {
+        const inquiryId = String(p.inquiryId || '');
+        if (!inquiryId) return;
+        const { text, answers, isPlan } = this.renderInquiry(this.locale(), p, st.planText);
+        this.enqueuePrompt({ kind: 'inquiry', ...st.addr, runId: st.runId, inquiryId, text, answers, isPlan });
+        return;
+      }
+      // 兑现广播:通道自己兑现的,兑现前已摘掉卡片(这里找不到,忽略);还在表里 = 桌面端 / 别处代答了。
+      case 'approval_result':
+        this.settledElsewhere(st, (q) => q.kind === 'approval' && q.approvalId === p.approvalId);
+        return;
+      case 'inquiry_result':
+        this.settledElsewhere(st, (q) => q.kind === 'inquiry' && q.inquiryId === p.inquiryId);
+        return;
+      case 'done':
+      case 'error':
+        this.onRunEnd(st, ev.type, p);
+        return;
+      default:
+        return; // token / tool_* 等流式事件:什么都不做(别每个 token 读一次 config.json)
+    }
+  }
+
+  /** run 结束:它名下的卡作废(正显示的那张换下一张),结果经出口 / 主动推送送达,发完再摘掉 run。 */
+  private onRunEnd(st: RunState, type: 'done' | 'error', p: any): void {
+    st.ended = true;
+    const key = st.addr.key;
+    const q = this.prompts.get(key) ?? [];
+    const shown = q[0]?.runId === st.runId ? q[0] : undefined;
+    const rest = q.filter((x) => x.runId !== st.runId);
+    for (const x of q) if (x.runId === st.runId && x.kind === 'approval' && x.timer) clearTimeout(x.timer);
+    if (rest.length) this.prompts.set(key, rest);
+    else this.prompts.delete(key);
+
+    const L = this.locale();
+    if (type === 'done') {
+      // 拟人分段(按 agent,回落全局):该 agent 开启时把回复拆成多条依次发出;否则单条。
+      void this.deliverReply(String(p.content || channelMsg(L, 'done')), (t) => this.output(st, t), () => {
+        // 只在计划是通道这边批的时候代发:桌面批的,桌面自己会在 run 结束后发执行消息(两边都发就跑两遍)。
+        const kickoff = st.planAutoStart && st.planAnsweredHere && !st.stopped;
+        this.finalizeRun(st);
+        if (kickoff) this.kickoffPlan(st.addr);
+      }, st);
+    } else {
+      if (p.aborted && st.stopped) this.output(st, ''); // 「停止」的回复已经说了,不再重复
+      else this.output(st, p.aborted ? channelMsg(L, 'taskStopped') : channelMsg(L, 'taskFailed', { error: p.error || 'unknown error' }));
+      this.finalizeRun(st);
+    }
+    // 结果先发,再换下一张卡(deliverReply 的首段是同步发出的)。
+    if (shown) this.afterHeadGone(key, shown, true);
+  }
+
+  /** run 的回复发完:摘出口、摘 run、退订。 */
+  private finalizeRun(st: RunState): void {
+    st.sink?.close();
+    this.finishRun(st);
+  }
+
+  private finishRun(st: RunState): void {
+    const set = this.runsByPeer.get(st.addr.key);
+    if (set) {
+      set.delete(st.runId);
+      if (!set.size) this.runsByPeer.delete(st.addr.key);
+    }
+    if (this.runs.get(st.runId) === st) this.runs.delete(st.runId);
+    st.off();
+  }
+
+  /** 把 run 的一条回复送出:有出口走出口(首条回给触发它的入站消息),否则主动推送。空串 = 不说话。 */
+  private output(st: RunState, text: string): void {
+    if (st.sink) st.sink.deliver(text);
+    else if (text) this.push(st.addr.accountId, st.addr.peerId, text);
+  }
+
+  // ── 卡片(审批 / 询问)队列 ──
+
+  private enqueuePrompt(p: Prompt): void {
+    this.expiredApprovalAt.delete(p.key); // 有新卡了:之前作废的那张不再是「批准 / 拒绝」的对象
+    const q = this.prompts.get(p.key);
+    if (q?.length) {
+      // 排队:当前那张答完 / 作废后再显示。它的 run 此刻在等用户(只是卡还没轮到),摘掉出口 —— 否则 typing 一直转、
+      // 3 分钟后还会推一句「仍在执行」。轮到它时经主动推送显示。
+      q.push(p);
+      this.runs.get(p.runId)?.sink?.close();
+      return;
+    }
+    this.prompts.set(p.key, [p]);
+    this.showPrompt(p);
+  }
+
+  /** 显示一张卡(它此刻是队首):审批卡起 10 分钟计时;经它 run 的出口回(出口随即摘下 —— run 在等用户),没有出口就主动推送。 */
+  private showPrompt(p: Prompt): void {
+    const L = this.locale();
+    let text = p.kind === 'approval' ? channelMsg(L, 'approvalCard', { preview: p.preview, minutes: APPROVAL_TIMEOUT_MIN }) : p.text;
+    const more = (this.prompts.get(p.key)?.length ?? 1) - 1;
+    if (more > 0) text = `${text}\n\n${channelMsg(L, 'promptsQueued', { n: more })}`;
+    if (p.kind === 'approval') {
+      p.timer = setTimeout(() => this.onApprovalTimeout(p), CHANNEL_APPROVAL_TIMEOUT_MS);
+      p.timer.unref?.();
+    }
+    const sink = this.runs.get(p.runId)?.sink;
+    if (sink) {
+      sink.deliver(clipReply(text));
+      sink.close();
+    } else {
+      this.push(p.accountId, p.peerId, clipReply(text));
+    }
+  }
+
+  /** 摘下队首(清它的计时器)。调用方随后必须调 afterHeadGone。 */
+  private takeHead(key: string): Prompt | undefined {
+    const p = this.prompts.get(key)?.shift();
+    if (p?.kind === 'approval' && p.timer) { clearTimeout(p.timer); p.timer = undefined; }
+    return p;
+  }
+
+  /**
+   * 队首那张没了之后:还有卡 → 显示下一张;没卡了且没的是一张审批卡、又不是在通道里答掉的(markExpired)→ 记下作废时刻,
+   * 迟到的「批准 / 拒绝」答「已过期」。队列里还有卡时不记 —— 那时「批准」的对象是新显示的那张。
+   */
+  private afterHeadGone(key: string, gone: Prompt, markExpired: boolean): void {
+    const q = this.prompts.get(key);
+    if (q?.length) { this.showPrompt(q[0]); return; }
+    this.prompts.delete(key);
+    if (markExpired && gone.kind === 'approval') this.expiredApprovalAt.set(key, Date.now());
+  }
+
+  /** 卡片在桌面端 / 别处被答掉了:从队列摘掉;若正显示着,换下一张;run 若不再等任何显示中的卡,重挂出口接着推结果。 */
+  private settledElsewhere(st: RunState, match: (p: Prompt) => boolean): void {
+    const key = st.addr.key;
+    const q = this.prompts.get(key);
+    const i = q ? q.findIndex(match) : -1;
+    if (!q || i < 0) return;
+    const [p] = q.splice(i, 1);
+    if (p.kind === 'approval' && p.timer) clearTimeout(p.timer);
+    if (i === 0) this.afterHeadGone(key, p, true);
+    this.resumeIfIdle(st);
+  }
+
+  /** 审批超时(它正显示着):按拒绝兑现(原因与用户拒绝区分),通知用户,换下一张卡,接着等 run 的结果推回来。 */
+  private onApprovalTimeout(p: ApprovalPrompt): void {
+    const q = this.prompts.get(p.key);
+    if (!q || q[0] !== p) return;
+    q.shift();
+    p.timer = undefined;
+    // 先摘再兑现:resolveApproval 会广播 approval_result,订阅者见卡已摘掉,不当「别处代答」。
+    const ok = resolveApproval(p.approvalId, { action: 'reject', rejectReason: APPROVAL_TIMEOUT_REASON });
+    if (ok) this.push(p.accountId, p.peerId, channelMsg(this.locale(), 'approvalTimedOut', { minutes: APPROVAL_TIMEOUT_MIN, preview: p.preview }));
+    this.afterHeadGone(p.key, p, true);
+    const st = this.runs.get(p.runId);
+    if (ok && st) this.resumeIfIdle(st);
+  }
+
+  /**
+   * run 刚从等卡中解脱(桌面代答 / 超时 / 被新消息取代):没有出口、它的下一张卡也没正显示着时,重挂一个出口
+   * (typing + 结果主动推送)。须在兑现后**同步**调用,赶在 run 的下一个事件之前。
+   */
+  private resumeIfIdle(st: RunState): void {
+    if (st.ended || st.sink || this.runs.get(st.runId) !== st) return;
+    if (this.prompts.get(st.addr.key)?.some((p) => p.runId === st.runId)) return; // 它还有卡在显示 / 排队:仍在等用户
+    void this.waitForRunReply(st.runId).then((t) => { if (t) this.push(st.addr.accountId, st.addr.peerId, t); });
+  }
+
+  /** run 还有卡排在队里(没轮到显示)= 仍在等用户:摘掉它的出口(同 enqueuePrompt 排队那支)。 */
+  private releaseIfWaitingOnUser(runId: string): void {
+    const st = this.runs.get(runId);
+    if (st?.sink && this.prompts.get(st.addr.key)?.some((p) => p.runId === runId)) st.sink.close();
+  }
+
+  /** 命令运行时:把 service 的能力按 commands.ts 的接缝暴露(每条命令现造,绑定 / 会话都是这一刻的)。 */
+  private commandRuntime(binding: BindingRow, key: string, locale: ChannelLocale): ChannelCommandRuntime {
+    const userId = binding.user_id;
+    const sessionId = binding.session_id;
+    return {
+      kind: this.kind,
+      locale,
+      approvalMode: effectiveApprovalMode(binding),
+      channelDefaults: () => { const st = this.settings(); return { agentSlug: st.agentSlug, modelId: st.modelId }; },
+      defaultAgentSlug: () => readAgentsMeta().defaultSlug,
+      workspaceDir: () => this.workspaceDir(),
+      readSession: () => readSessionSettings(sessionId, userId),
+      patchConfig: (patch) => patchSessionAgentConfig(sessionId, patch),
+      setModel: (modelId) => setSessionModelId(sessionId, userId, modelId),
+      listModels: async () => chatModels((await listModelCatalog(deps().profile)).models), // 与通道 run 同一个 profile
+      listAgents: () => listAgents(),
+      getAgent: (slug) => getAgent(slug),
+      agentLoopCap: (def) => agentCapOf(def),
+      defaultLoopCap: DEFAULT_MAX_ITERATIONS,
+      newSession: async (title) => {
+        const sid = await this.createChannelSession(userId, undefined, title);
+        await this.setConnectedSession(userId, sid);
+      },
+      listSessions: () => this.listProjectSessions(userId),
+      connectSession: async (id) => { await this.setConnectedSession(userId, id); },
+      compact: (focus, modelId, cfg) => this.compactSession(sessionId, modelId, focus, cfg),
+      usage: () => this.sessionUsage(sessionId),
+      sessionBusy: () => sessionHasActiveRun(sessionId),
+      peerRunIds: () => [...(this.runsByPeer.get(key) ?? [])],
+      stopPeer: () => this.stopPeer(key),
+      pendingState: () => {
+        const head = this.prompts.get(key)?.[0];
+        return { approval: head?.kind === 'approval', inquiry: head?.kind === 'inquiry' };
+      },
+      requestRunThinking: (runId, level) => requestRunThinking(runId, level),
+      saveDefaultModel: (modelId) => { saveChannelSettings(this.kind, { modelId }); },
+      setVoice: async (on, slug) => {
+        if (on) await setPluginEnabled(VOICE_MESSAGE_PLUGIN_ID, true); // 确保插件启用(通道-only 用户也能开)
+        await setScopeSettings(VOICE_MESSAGE_PLUGIN_ID, { agentSlug: slug }, { apply: on });
+      },
+    };
+  }
+
+  /** 与桌面 POST /agent/sessions/:id/compact 同一套:旋钮 = 会话 compaction > 该会话 Agent 的 [compaction] > config.json。 */
+  private async compactSession(sessionId: string, modelId: string, focus: string, cfg: Record<string, unknown>): Promise<{ ok: boolean; summarizedCount?: number; reason?: string }> {
+    const { isDelegateActive } = await import('../services/delegateTranscript.js');
+    if (isDelegateActive(sessionId)) return { ok: false, reason: 'a delegated task is still running' };
+    // 动态 import:compaction 依赖面大(历史回放 / 后台用量),通道模块静态引它会把整串拖进每个引用 hub 的入口。
+    const { compactSession } = await import('../services/compaction.js');
+    const { resolveCompactionSettings, globalCompactionLayer } = await import('../services/compactionSettings.js');
+    const slug = typeof cfg.agentSlug === 'string' ? cfg.agentSlug : '';
+    const def = slug ? await getAgent(slug).catch(() => null) : null;
+    return compactSession(sessionId, modelId, deps().profile.appId, undefined, {
+      focus: focus || undefined,
+      settings: resolveCompactionSettings((cfg as any).compaction, def?.compaction, globalCompactionLayer()),
+    });
+  }
+
+  /** 本会话累计用量:tokens 与桌面 /usage 同口径(agent_runs.tokens_total 求和);费用按 usage 事件的 cost 在 JS 里累加(不写 SQL JSON 谓词)。 */
+  private async sessionUsage(sessionId: string): Promise<ChannelUsage> {
+    const rows = await query<any[]>(`SELECT COUNT(*) AS runs, COALESCE(SUM(tokens_total), 0) AS total FROM agent_runs WHERE session_id = ?`, [sessionId]);
+    let cost: number | null = null;
+    let cached = 0;
+    try {
+      const ev = await query<any[]>(
+        `SELECT e.payload FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id WHERE r.session_id = ? AND e.type = 'usage'`,
+        [sessionId],
+      );
+      cost = 0;
+      for (const row of ev) {
+        const p = parseJson(row.payload) || {};
+        cost += Number(p.cost) || 0;
+        cached += Number(p.cached) || 0;
+      }
+    } catch { cost = null; }
+    return { tokens: Number(rows[0]?.total) || 0, runs: Number(rows[0]?.runs) || 0, cost, cached };
   }
 
   /**
@@ -374,94 +919,110 @@ export class ChannelService {
   }
 
   /**
-   * 等待该 run 的「下一个里程碑」并把一条回复发回通道。
-   * 每次等待结束即退订(支持多轮审批往返而不堆积监听器):
-   *  - approval_request → 登记待批 + 回发 preview(run 仍挂起等用户回「批准/拒绝」),terminal=false
-   *  - done/error → 终止,清理 peer 状态,terminal=true
+   * 给 run 挂一个回复出口,等它的「下一个里程碑」:卡片(审批 / 询问)显示出来、或 run 结束 —— 由 onRunEvent 经出口投递。
+   *  - 首条回复 resolve 本 promise(调用方负责发出);超时(180s)先回「仍在执行」、停 typing,但出口保留,之后的回复主动推送。
+   *  - 卡片显示后出口即摘下(run 在等用户);用户答复 / 超时 / 桌面代答后再挂一个新的。
+   * run 已结束 / 不在跟踪 → 立即以 '' 兑现。同一 run 已有出口时先把旧的收掉(不留悬挂的 promise)。
    */
-  private waitForRunReply(runId: string, key: string, accountId: string, peerId: string, agentSlug?: string): Promise<string> {
-    let settled = false;
-    let closed = false;
-    let unsubscribe: (() => void) | null = null;
-    this.startTyping(accountId, peerId, key);
-    return new Promise((resolve) => {
-      // 送一条回复给通道:首条用 resolve(由驱动自动回发);超时已回过提示后,改主动 send 推送。
-      const deliver = (text: string): void => {
-        if (!settled) { settled = true; resolve(text); }
-        else void this.driver.send(accountId, peerId, text);
-      };
-      // 结束本次等待:退订 + 停 typing;terminal 时清 peer 运行态。
-      const close = (terminal: boolean): void => {
-        if (closed) return;
-        closed = true;
-        clearTimeout(timer);
-        unsubscribe?.();
+  private waitForRunReply(runId: string): Promise<string> {
+    const st = this.runs.get(runId);
+    if (!st || st.ended) return Promise.resolve('');
+    const { key, accountId, peerId } = st.addr;
+    return new Promise<string>((resolve) => {
+      let settled = false;
+      let closed = false;
+      const settle = (text: string): void => { if (!settled) { settled = true; resolve(text); } };
+      const timer = setTimeout(() => {
         this.stopTyping(accountId, peerId, key);
-        this.pendingSettlers.delete(forceSettle);
-        if (terminal) {
-          // 只清「本 run」的登记:新消息可能已把 activeRunsByPeer 指向新 run,别把它误删——
-          // 否则新 run 的分段循环会因 activeRunsByPeer 变 undefined 而中断(只发第一条)。
-          if (this.activeRunsByPeer.get(key) === runId) this.activeRunsByPeer.delete(key);
-          this.pendingApprovalByPeer.delete(key);
-        }
+        settle(channelMsg(this.locale(), 'stillRunning'));
+      }, RUN_REPLY_TIMEOUT_MS);
+      const sink: ReplySink = {
+        deliver: (text) => {
+          if (!settled) settle(text);
+          else if (text) this.push(accountId, peerId, text);
+        },
+        close: (fallback = '') => {
+          settle(fallback);
+          if (closed) return;
+          closed = true;
+          clearTimeout(timer);
+          this.stopTyping(accountId, peerId, key);
+          this.pendingSettlers.delete(forceSettle);
+          if (st.sink === sink) st.sink = null;
+        },
       };
       // stop()/服务重载时强制结束挂起的等待。
-      const forceSettle = (): void => { if (!settled) { settled = true; resolve('通道服务已停止。'); } close(true); };
+      const forceSettle = (): void => sink.close(channelMsg(this.locale(), 'serviceStopped'));
+      st.sink?.close();
+      st.sink = sink;
       this.pendingSettlers.add(forceSettle);
-      const timer = setTimeout(() => {
-        // 超时:先回一条「仍在执行」并停 typing,但保留订阅 → run 完成时主动把结果推送给通道。
-        this.stopTyping(accountId, peerId, key);
-        if (!settled) { settled = true; resolve('Tangu Agent 仍在执行中。完成后我会把结果发给你;如需停止,请回复「停止」。'); }
-      }, RUN_REPLY_TIMEOUT_MS);
-      unsubscribe = subscribe(runId, (ev) => {
-        if (ev.type === 'approval_request') {
-          const approvalId = String(ev.payload?.approvalId || '');
-          const preview = String(ev.payload?.preview || ev.payload?.name || '操作');
-          if (approvalId) this.pendingApprovalByPeer.set(key, { runId, approvalId, preview, agentSlug });
-          deliver(`⚠️ 需要你批准这个操作:\n${preview}\n\n回复「批准」执行,「拒绝」取消,或「停止」结束任务。`);
-          close(false); // 退订(用户回「批准」时会新建一次等待重新订阅);保留 run + 待批登记
-          return;
-        }
-        if (ev.type === 'done') {
-          // 拟人分段(按 agent,回落全局):该 agent 开启时把回复拆成多条依次发出;否则单条。
-          void this.deliverReply(String(ev.payload?.content || '完成。'), deliver, () => close(true), { accountId, peerId, key, runId, agentSlug });
-          return;
-        }
-        if (ev.type === 'error') { deliver(ev.payload?.aborted ? '任务已停止。' : `任务失败:${ev.payload?.error || 'unknown error'}`); close(true); }
-      });
+      this.startTyping(accountId, peerId, key);
     });
   }
 
   /**
-   * 把一条 done 回复送达通道。分段消息插件开启时拆成多条:首段走 deliver(同步回复),其余段
-   * 等拟人延迟后经驱动推送;被「停止」清空即停发。末了调 done() 收尾(停 typing + 清 peer 态)。
+   * 询问卡(纯文本):问题 + 编号选项。plan 询问(exit_plan_mode)的选项串是与 parsePlanAnswer 的 wire 约定,
+   * 序号必须映射回**原串**;「需要修改(在输入框写反馈)」那项在通道里不列 —— 直接回文字就是反馈,选它反而把
+   * 那句占位话当反馈回给模型。
+   */
+  private renderInquiry(L: ChannelLocale, payload: any, planText: string): { text: string; answers: string[]; isPlan: boolean } {
+    const options: string[] = Array.isArray(payload.options) ? payload.options.map((o: unknown) => String(o ?? '')).filter(Boolean) : [];
+    if (payload.kind === 'plan' && options.length >= 4) {
+      const answers = [options[0], options[1], options[3]]; // 批准并自动开始 / 批准(手动开始)/ 拒绝
+      const labels = [channelMsg(L, 'planApproveStart'), channelMsg(L, 'planApproveManual'), channelMsg(L, 'planReject')];
+      const plan = planText.trim();
+      const planBlock = plan ? (plan.length > PLAN_MAX ? `${plan.slice(0, PLAN_MAX)}\n${channelMsg(L, 'planTruncated')}` : plan) : '';
+      const text = [planBlock, planBlock ? '' : null, channelMsg(L, 'planReady'), ...labels.map((l, i) => `${i + 1}. ${l}`), '', channelMsg(L, 'planHint')]
+        .filter((x) => x !== null).join('\n');
+      return { text, answers, isPlan: true };
+    }
+    const question = String(payload.question || '').trim();
+    const lines = [`❓ ${question}`];
+    if (options.length) lines.push('', ...options.map((o, i) => `${i + 1}. ${o}`));
+    lines.push('', channelMsg(L, options.length ? 'inquiryHintOptions' : 'inquiryHintFree'));
+    return { text: lines.join('\n'), answers: options, isPlan: false };
+  }
+
+  /**
+   * 计划「批准,马上开始执行」:桌面是客户端在 run 结束后自动发起执行消息;通道没有客户端,这里代发一条。
+   * 走 receive:与用户自己的消息同一条串行链,回复主动推送。
+   */
+  private kickoffPlan(addr: PeerAddr): void {
+    void this.receive({ accountId: addr.accountId, peerId: addr.peerId, text: channelMsg(this.locale(), 'planKickoff') });
+  }
+
+  /**
+   * 把一条 done 回复送达通道。分段消息插件开启时拆成多条:首段同步送出(经出口即回给入站消息),其余段
+   * 等拟人延迟后送出;被「停止」即停发。末了调 done() 收尾(摘出口 + 摘 run)。
    */
   private async deliverReply(
     content: string,
     deliver: (text: string) => void,
     done: () => void,
-    ctx: { accountId: string; peerId: string; key: string; runId: string; agentSlug?: string },
+    st: RunState,
   ): Promise<void> {
+    const { accountId, peerId } = st.addr;
     try {
-      const seg = resolveReplySegment(ctx.agentSlug);
+      const seg = resolveReplySegment(st.agentSlug);
       const delayBase = seg.delayBase;
       const segs = seg.enabled ? splitMessage(content) : [content];
-      // 只在「被停止」(activeRunsByPeer 整个清掉)时中断;被新消息取代(指向另一个 run)不算——每条回复都要发全,
-      // 否则「回复中又发一条消息」会把上一条回复截成只剩第一段(实测的吞消息 bug)。新回复会经驱动限速排队跟在后面。
+      // 只在本 run 被「停止」时中断;被新消息排在后面不算——每条回复都要发全,否则「回复中又发一条消息」
+      // 会把上一条回复截成只剩第一段(实测的吞消息 bug)。新回复会经驱动限速排队跟在后面。
+      const stopped = (): boolean => st.stopped;
       deliver(segs[0] ?? content);
       for (let i = 1; i < segs.length; i++) {
-        if (!this.activeRunsByPeer.has(ctx.key)) break; // 被「停止」清空 → 停发
+        if (stopped()) break;
         await sleep(segmentDelayMs(segs[i], delayBase));
-        if (!this.activeRunsByPeer.has(ctx.key)) break;
-        void this.driver.setTyping?.(ctx.accountId, ctx.peerId, true).catch(() => {});
+        if (stopped()) break;
+        void this.driver.setTyping?.(accountId, peerId, true).catch(() => {});
         deliver(segs[i]);
       }
       // 语音模式:文字之外,再把整条回复合成音频、当文件发一份。通道可配 TTS 模型/音色覆盖(缺省沿用「语音朗读」)。
-      const st = this.settings();
-      const base = resolveVoiceMessage(ctx.agentSlug);
-      const voice = { ...base, model: st.ttsModelId || base.model, voice: st.ttsVoice || base.voice };
-      if (voice.enabled && voice.wechat && this.driver.sendMedia && this.activeRunsByPeer.has(ctx.key)) {
-        if (voice.model) await this.sendVoiceFile(ctx.accountId, ctx.peerId, content, voice);
+      const cfg = this.settings();
+      const base = resolveVoiceMessage(st.agentSlug);
+      const voice = { ...base, model: cfg.ttsModelId || base.model, voice: cfg.ttsVoice || base.voice };
+      if (voice.enabled && voice.wechat && this.driver.sendMedia && !stopped()) {
+        if (voice.model) await this.sendVoiceFile(accountId, peerId, content, voice);
         else console.warn(`[${this.kind}-channel] 语音已开启但未配置 TTS 模型(设置→模型→语音朗读或通道语音模型),只发了文字。`);
       }
     } catch (e) {
@@ -500,66 +1061,5 @@ export class ChannelService {
     const t = this.typingTimers.get(key);
     if (t) { clearInterval(t); this.typingTimers.delete(key); }
     void this.driver.setTyping?.(accountId, peerId, false).catch(() => {});
-  }
-
-  // ── slash 命令 ──
-  private async handleSlash(binding: BindingRow, text: string): Promise<string> {
-    const parts = text.slice(1).trim().split(/\s+/);
-    const c = (parts[0] || '').toLowerCase();
-    const arg = parts.slice(1).join(' ').trim();
-    if (c === 'new' || c === 'n' || c === '新建') {
-      const sid = await this.createChannelSession(binding.user_id, undefined, arg || undefined);
-      await this.setConnectedSession(binding.user_id, sid);
-      return '✓ 已新建会话并切换连接。之后的消息都发往这个新会话。回复 /list 查看全部。';
-    }
-    if (c === 'list' || c === 'ls' || c === '列表') {
-      const items = await this.listProjectSessions(binding.user_id);
-      if (!items.length) return '当前还没有会话。回复 /new 新建一个。';
-      const lines = items.map((s, i) => `${i + 1}. ${s.connected ? '● ' : ''}${s.title || '未命名'}`);
-      return `通道会话(● 为正在连接):\n${lines.join('\n')}\n\n回复 /switch <序号> 切换。`;
-    }
-    if (c === 'switch' || c === 'sw' || c === '切换') {
-      const n = parseInt(arg, 10);
-      const items = await this.listProjectSessions(binding.user_id);
-      if (!Number.isFinite(n) || n < 1 || n > items.length) return `序号无效。回复 /list 查看会话(共 ${items.length} 个)。`;
-      await this.setConnectedSession(binding.user_id, items[n - 1].id);
-      return `✓ 已切换到会话 ${n}:${items[n - 1].title || '未命名'}。`;
-    }
-    if (c === 'agents' || c === 'agentlist') {
-      const all = await listAgents();
-      if (!all.length) return '还没有可用的 Agent。回复 /help 查看其它命令。';
-      const rows = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = ? LIMIT 1`, [binding.session_id]);
-      const cur = (parseJson(rows[0]?.agent_config) || {}).agentSlug || this.settings().agentSlug || readAgentsMeta().defaultSlug;
-      const lines = all.map((a) => `${a.slug === cur ? '● ' : ''}${a.slug} — ${a.name}`);
-      return `可用 Agent(● 为当前):\n${lines.join('\n')}\n\n回复 /agent <slug> 切换。`;
-    }
-    if (c === 'agent') {
-      if (!arg) return '用法:/agent <slug>。回复 /agents 查看可用 Agent。';
-      const def = await getAgent(arg);
-      if (!def) return `未找到 Agent: ${arg}。回复 /agents 查看可用列表。`;
-      const rows = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [binding.session_id, binding.user_id]);
-      const cfg = parseJson(rows[0]?.agent_config) || {};
-      await deps().state.setAgentConfig(binding.session_id, JSON.stringify({ ...cfg, agentSlug: def.slug }));
-      return `✓ 已切换到 Agent:${def.name}(${def.slug})。之后本会话的消息都用它。`;
-    }
-    if (c === 'voice' || c === 'text' || c === '语音' || c === '文字') {
-      const on = c === 'voice' || c === '语音';
-      // 目标 = 本会话当前 agent(与 /agent 同源;缺省用默认 agent)。
-      const rows = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [binding.session_id, binding.user_id]);
-      const slug = (parseJson(rows[0]?.agent_config) || {}).agentSlug || readAgentsMeta().defaultSlug;
-      try {
-        if (on) await setPluginEnabled(VOICE_MESSAGE_PLUGIN_ID, true); // 确保插件启用(通道-only 用户也能开)
-        await setScopeSettings(VOICE_MESSAGE_PLUGIN_ID, { agentSlug: slug }, { apply: on });
-      } catch (e: any) {
-        return `切换失败:${e?.message || e}`;
-      }
-      return on
-        ? '✓ 已切到语音消息:之后本会话的回复会附带一条可播放的语音文件。需配置 TTS 模型(Desktop 设置 → 模型 → 语音朗读,或通道的语音模型);未配则只发文字。回复 /text 切回文字。'
-        : '✓ 已切回文字消息。回复 /voice 再切到语音。';
-    }
-    if (c === 'help' || c === 'h' || c === '帮助' || c === '?') {
-      return ['可用命令:', '/new 新建会话并切换连接', '/list 列出会话(● 为正在连接)', '/switch <序号> 切换正在连接的会话', '/agents 列出可用 Agent', '/agent <slug> 切换本会话的 Agent', '/voice 语音消息 · /text 文字消息', '/help 显示本帮助', '停止 中止当前任务', '批准 / 拒绝 处理待批操作'].join('\n');
-    }
-    return `未知命令 /${parts[0]}。回复 /help 查看可用命令。`;
   }
 }

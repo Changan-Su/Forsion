@@ -53,7 +53,29 @@ function UserMessage({ text }: { text: string }): ReactElement {
   );
 }
 
-function Notice({ text, tone }: { text: string; tone: string }): ReactElement {
+/** /diff 输出按行上色(不走 markdown:几百行 diff 每次重排代价高,且 reflow 会折坏长行)。 */
+function diffLineColor(line: string): string | undefined {
+  if (line.startsWith('── ')) return theme.accent;
+  if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff --git') || line.startsWith('index ')) return theme.dim;
+  if (line.startsWith('@@')) return theme.accent;
+  if (line.startsWith('+')) return theme.success;
+  if (line.startsWith('-')) return theme.error;
+  if (line.startsWith('…')) return theme.warn;
+  return undefined;
+}
+
+function Notice({ text, tone, variant }: { text: string; tone: string; variant?: 'diff' }): ReactElement {
+  if (variant === 'diff') {
+    return (
+      <Box marginTop={1} flexDirection="column">
+        {text.split('\n').map((ln, i) => (
+          <Text key={i} color={diffLineColor(ln)}>
+            {ln || ' '}
+          </Text>
+        ))}
+      </Box>
+    );
+  }
   const color =
     tone === 'error' ? theme.error : tone === 'success' ? theme.success : tone === 'warn' ? theme.warn : theme.dim;
   return (
@@ -66,7 +88,7 @@ function Notice({ text, tone }: { text: string; tone: string }): ReactElement {
 /** Static 里渲染一条已定稿项（assistant 走 markdown）。 */
 export function ItemView({ item }: { item: TranscriptItem }): ReactElement {
   if (item.kind === 'user') return <UserMessage text={item.text} />;
-  if (item.kind === 'notice') return <Notice text={item.text} tone={item.tone} />;
+  if (item.kind === 'notice') return <Notice text={item.text} tone={item.tone} variant={item.variant} />;
   return (
     <Box marginTop={1} flexDirection="column">
       <Blocks blocks={item.blocks} markdown />

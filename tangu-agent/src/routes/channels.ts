@@ -27,6 +27,10 @@ function settingsPatch(body: any): Partial<ChannelSettings> {
   }
   const am = body.approvalMode;
   if (am === 'readonly' || am === 'auto-edit' || am === 'full-auto') patch.approvalMode = am;
+  // 通道回复语言:'zh' / 'en' 手选;'' 或 'auto' = 清掉手选,回到自动判定(见 channels/messages.ts)。
+  const loc = body.locale;
+  if (loc === 'zh' || loc === 'en') patch.locale = loc;
+  else if (loc === '' || loc === 'auto') (patch as any).locale = '';
   if (body.inboxForward && typeof body.inboxForward === 'object') {
     const senders = body.inboxForward.senders;
     patch.inboxForward = {
@@ -64,7 +68,7 @@ router.post('/agent/channels/:kind/connect', authMiddleware, async (req: AuthReq
   try {
     const kind = kindOf(req.params.kind);
     channelHub.ensureAvailable();
-    if (kind === 'wechat') return res.status(400).json({ detail: '微信请使用扫码连接(/agent/wechat/login/start)' });
+    if (kind === 'wechat') return res.status(400).json({ detail: 'WeChat connects by QR code: use /agent/wechat/login/start' });
     const svc = channelHub.service(kind);
     let accountId = '';
     let label = '';

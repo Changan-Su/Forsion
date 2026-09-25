@@ -20,24 +20,22 @@ class ChannelHub {
   private started = false;
 
   constructor() {
+    // 未绑定提示按通道语言从 messages.ts 取(service 内部),这里不再写死中文 / 英文。
     this.services.set('wechat', new ChannelService({
       kind: 'wechat',
       driver: this.wechatDriver,
-      unboundHint: '这个微信账号尚未绑定 Tangu Agent,请先在 Tangu Desktop 设置里扫码连接。',
       inboxDirName: 'wechat-inbox', // 历史目录名,勿改
       sessionTitle: 'WeChat Remote',
     }));
     this.services.set('telegram', new ChannelService({
       kind: 'telegram',
       driver: this.telegramDriver,
-      unboundHint: 'This Telegram chat is not bound to Tangu Agent yet. Connect it in Tangu Desktop → Settings → Channels first.',
       inboxDirName: 'telegram-inbox',
       sessionTitle: 'Telegram',
     }));
     this.services.set('qq', new ChannelService({
       kind: 'qq',
       driver: this.qqDriver,
-      unboundHint: '这个 QQ 尚未绑定 Tangu Agent,请先在 Tangu Desktop 设置里连接通道。',
       inboxDirName: 'qq-inbox',
       sessionTitle: 'QQ',
     }));
@@ -60,6 +58,10 @@ class ChannelHub {
     if (this.started || !this.available()) return;
     this.started = true;
     for (const kind of CHANNEL_KINDS) {
+      // 修复前改过审批档的老绑定还停在旧档(只在建绑定时写过一次):启动时按设置对齐一次 —— 只收紧不放宽。
+      // 启动不是用户动作,设置值还可能来自兜底链(微信 legacy env / 旧段 / 缺省 auto-edit),不能借它把老绑定放宽。
+      await this.service(kind).syncApprovalMode(channelSettings(kind).approvalMode, { narrowOnly: true })
+        .catch((e: any) => console.warn(`[channels] ${kind} 审批档同步失败:`, e?.message || e));
       if (channelSettings(kind).enabled) {
         await this.startChannel(kind).catch((e: any) => console.warn(`[channels] ${kind} 启动失败:`, e?.message || e));
       }
@@ -74,7 +76,9 @@ class ChannelHub {
   async startChannel(kind: ChannelKind): Promise<void> {
     this.ensureAvailable();
     const svc = this.service(kind);
-    await svc.driver.start((msg) => svc.handleInbound(msg));
+    // receive 立即返回 '':入站按 peer 串行分派后放手,run 回复经 driver.send 推送 —— 不占住驱动的轮询循环
+    // (微信 / Telegram 的轮询都 await 这个回调;旧版 await 到 run 出第一条回复,期间的「停止」/status 读不到)。
+    await svc.driver.start((msg) => svc.receive(msg));
   }
 
   stopChannel(kind: ChannelKind): void {
@@ -85,12 +89,15 @@ class ChannelHub {
   }
 
   /**
-   * 应用设置变更:保存 + 热生效(enabled 切换 → 启停;凭据变更且在跑 → 重启该通道)。
+   * 应用设置变更:保存 + 热生效(enabled 切换 → 启停;凭据变更且在跑 → 重启该通道;
+   * 审批档 → 同步到该通道全部绑定,已连接的会话下一条消息起就按新档)。
    */
   async applySettings(kind: ChannelKind, patch: Partial<ChannelSettings>): Promise<ChannelSettings> {
     const before = channelSettings(kind);
     const after = saveChannelSettings(kind, patch);
     if (!this.available()) return after;
+    // 通道 run 强制用绑定上的档:不同步的话设置页收紧了档,已连接的会话照旧按老档跑。
+    if (patch.approvalMode !== undefined) await this.service(kind).syncApprovalMode(after.approvalMode);
     const credsChanged = (patch.botToken !== undefined && patch.botToken !== before.botToken)
       || (patch.appId !== undefined && patch.appId !== before.appId)
       || (patch.appSecret !== undefined && patch.appSecret !== before.appSecret);
@@ -120,6 +127,7 @@ class ChannelHub {
         ttsModelId: st.ttsModelId,
         ttsVoice: st.ttsVoice,
         approvalMode: st.approvalMode,
+        locale: st.locale ?? null,
         inboxForward: st.inboxForward,
         credentials: {
           botTokenSet: !!st.botToken,
@@ -149,7 +157,7 @@ class ChannelHub {
     );
     const kind = (rows[0]?.channel || '') as ChannelKind;
     if (!kind || !this.services.has(kind)) {
-      return { ok: false, error: '该会话未连接任何通道(没有活跃绑定)。请先在 Tangu Desktop 设置里连接通道,并把此会话设为正在连接。' };
+      return { ok: false, error: 'This session is not connected to any channel (no active binding). The user must connect a channel in Tangu Desktop settings and make this the connected session.' };
     }
     return this.service(kind).sendMediaForSession(userId, sessionId, buffer, opts, signal);
   }

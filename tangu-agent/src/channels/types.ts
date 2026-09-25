@@ -13,7 +13,7 @@ export interface InboundImage { name: string; mimeType: string; data: string }
 /** 入站文件(交管线落盘到会话工作区)。 */
 export interface InboundFile { name: string; mimeType: string; buffer: Buffer }
 
-/** 通道入站消息(驱动 → 管线)。返回值 = 要回给用户的首条文本(驱动负责发出)。 */
+/** 通道入站消息(驱动 → 管线)。 */
 export interface ChannelInbound {
   accountId: string;
   peerId: string;
@@ -28,7 +28,10 @@ export interface SendResult { ok: boolean; error?: string }
 /** 通道驱动(传输层):连接生命周期 + 收发。会话映射/审批/slash/交付全在通道无关管线里。 */
 export interface ChannelDriver {
   readonly kind: ChannelKind;
-  /** 启动底层连接(长轮询/WS)。入站消息回调 onMessage(由 hub 接到管线)。幂等。 */
+  /**
+   * 启动底层连接(长轮询/WS)。入站消息回调 onMessage(由 hub 接到管线)。幂等。
+   * onMessage 返回的非空文本由驱动发出;hub 接的 ChannelService.receive 恒立即回 '',所有回复都经 send 推送。
+   */
   start(onMessage: (msg: ChannelInbound) => Promise<string>): Promise<void>;
   stop(): void;
   /** 各账号连接状态(label 供 UI 展示,如 bot 用户名)。 */
@@ -52,7 +55,10 @@ export interface ChannelSettings {
   /** 语音(TTS)模型/音色(空 = 沿用「语音朗读」全局设置)。 */
   ttsModelId: string;
   ttsVoice: string;
+  /** 通道 run 的审批档。改设置即同步到该通道全部绑定(见 ChannelService.syncApprovalMode);通道里只能看不能改。 */
   approvalMode: ApprovalMode;
+  /** 通道回复语言(缺省 = 自动:TANGU_LANG / 系统语言 / 平台缺省,见 messages.resolveChannelLocale)。 */
+  locale?: 'zh' | 'en';
   /** 收件箱转发:senders='all' 或 [agent slug|'system'|'server']。与 Channel Session 相互独立。 */
   inboxForward: { enabled: boolean; senders: 'all' | string[] };
   /** Telegram 凭据。 */

@@ -69,7 +69,7 @@ options:
   --cwd <path>          工作目录（host-exec 下文件/命令相对此解析），默认当前目录
   --host-exec           本地直连真实文件系统 + shell（默认）
   --sandbox-exec        改用云沙箱 + 云工作区（run_python 等）
-  --approval <mode>     审批档：readonly | auto-edit | full-auto（默认 auto-edit）
+  --approval <mode>     审批档：readonly | auto-edit | full-auto | custom（默认 auto-edit）
   --think <level>       思考强度：off | minimal | low | medium | high | xhigh | max（默认 medium；
                         模型不支持的档位自动降到最近可用档，开启后思考内容默认折叠）
   --token-budget <n>    本回合软 token 预算（超出后收尾停止）
@@ -80,5 +80,5 @@ options:
   --provider* / --providers-file   直连 LLM provider（同 standalone）
   -h, --help            显示帮助
 
-会话内 /help 查看全部命令。
+会话内 /help 查看全部命令，/hotkeys 查看快捷键。
 `;

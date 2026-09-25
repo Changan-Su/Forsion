@@ -12,7 +12,7 @@ import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 import type { ProjectSettings,
   AgentConfig, AgentRunEvent, Attachment, AuthStatusInfo, CtxInfo, ModelsResponse, NormalAgentDef,
   MsgSeg, SessionRecord, SkillInfo, SketchItem, SubChat, TanguDesktopConfig, ToolEvent, UiMessage, WorkspaceDescriptor, StoredDesktopConfig,
-  DefaultModelSlot, TeamDef } from '../types'
+  DefaultModelSlot, TeamDef, ThinkingLevel } from '../types'
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
 import { isProjectWorkspace, newSessionConfig, projectDefaultsForNewSession } from './projectSettings'
@@ -55,6 +55,12 @@ registerMessages({
   // 审批档 PUT 失败:引擎按存值审批,没存上就不能停在新档上
   'appstore.approvalSaveFailed': { zh: '审批档没能保存,已恢复为原来的档({e})', en: 'Couldn’t save the approval mode; restored the previous one ({e})' },
   'appstore.approvalSaveRaced': { zh: '审批档被更早的一次保存覆盖,已改为实际生效的档', en: 'An earlier save overwrote the approval mode; now showing the one in effect' },
+  // agent 经 update_session_settings 改了会话设置(session_config_changed)。*In = 改的不是眼前这个会话(后台会话的 run)。
+  // 换模型不进当前 run:回复进行中插的话会并进这一轮(steer),仍用原模型 → 只能说「这轮回复结束后」。
+  'appstore.agentSwitchedModel': { zh: 'Agent 已把本会话的模型切到 {model}，本轮回复结束后的下一条消息起生效', en: 'The agent switched this conversation to {model}; it takes effect after this reply finishes' },
+  'appstore.agentSwitchedModelIn': { zh: 'Agent 已把「{title}」的模型切到 {model}，本轮回复结束后的下一条消息起生效', en: 'The agent switched “{title}” to {model}; it takes effect after that reply finishes' },
+  'appstore.agentSetThinking': { zh: 'Agent 已把本会话的思考深度调为「{level}」', en: 'The agent set this conversation’s thinking depth to {level}' },
+  'appstore.agentSetThinkingIn': { zh: 'Agent 已把「{title}」的思考深度调为「{level}」', en: 'The agent set the thinking depth of “{title}” to {level}' },
 })
 
 export type { SettingsTab }
@@ -487,6 +493,72 @@ const approvalWrites = new Map<string, { issued: number; pending: number; mode: 
 /** 会话配置落库一律按键合并:只发这次改的键(api.patchSessionConfig);老引擎没有 PATCH → 回落整对象 PUT(本地最新整对象)。 */
 function saveSessionConfig(sid: string, patch: Partial<AgentConfig>): Promise<unknown> {
   return api.patchSessionConfig(useApp.getState().cfg, sid, patch, () => useApp.getState().configBySession[sid] || {})
+}
+/** 会话自己存的模型(列表 / 归档 / 子聊天缓存;不含全局默认 —— 那是 sendMessage 回退链的后半段,不是会话的值)。 */
+function sessionModelOf(s: Pick<AppState, 'sessions' | 'archivedSessions'>, sid: string): string {
+  return s.sessions.find((x) => x.id === sid)?.model_id || s.archivedSessions.find((x) => x.id === sid)?.model_id
+    || useChildChat.getState().sessions[sid]?.model_id || ''
+}
+/** 会话模型的**本地**改写:列表 / 归档 / 子聊天缓存 + 作废 ctx 环。不落库、不动全局默认 ——
+ *  setSessionModel(用户在药丸上换)与 session_config_changed(agent 在引擎侧已写库)共用,两处别各写各的。 */
+function patchSessionModelLocal(sid: string, modelId: string): void {
+  const child = useChildChat.getState().sessions[sid]
+  if (child) useChildChat.getState().remember({ ...child, model_id: modelId })
+  useApp.setState((s) => {
+    // 换模型即作废旧 context_info:窗口值/来源标注是按旧模型算的,留着会让 ctx 环分母错到下一次 run
+    const { [sid]: _stale, ...ctxRest } = s.ctxInfoBySession
+    return {
+      sessions: s.sessions.map((x) => (x.id === sid ? { ...x, model_id: modelId } : x)),
+      archivedSessions: s.archivedSessions.map((x) => (x.id === sid ? { ...x, model_id: modelId } : x)),
+      ctxInfoBySession: ctxRest,
+    }
+  })
+}
+/** 会话配置的本地底:已加载的 configBySession,缺了退到列表行自带的 agent_config;两者都没有 = undefined。 */
+function sessionConfigBaseOf(s: Pick<AppState, 'configBySession' | 'sessions' | 'archivedSessions'>, sid: string): AgentConfig | undefined {
+  return s.configBySession[sid] || [...s.sessions, ...s.archivedSessions].find((x) => x.id === sid)?.agent_config
+}
+/** session_config_changed 的对账:事件只当「引擎那边改过,去读一次」的信号,落到本地的是**引擎现值**而不是载荷。
+ *  事件存库、订阅从 seq 0 回放(重启 / 第二个窗口 / pollSession 重新订阅在飞 run)—— 直接套载荷会把 agent 早先的值
+ *  盖过用户之后在药丸上的改动,下一次 send 再按它起跑。只在载荷与本地不同的字段上读;读的过程中本地被用户改了 → 用户赢;
+ *  只有引擎现值 == 载荷(agent 这一笔仍是最新)才提示。读失败(老引擎 / 断连)退回套载荷 = 原行为,别把同步整个丢了。 */
+async function syncAgentSessionConfig(sid: string, want: { modelId?: string; thinkingLevel?: ThinkingLevel }): Promise<void> {
+  const generation = authGeneration
+  const s0 = useApp.getState()
+  const modelBefore = sessionModelOf(s0, sid)
+  const base = sessionConfigBaseOf(s0, sid)
+  const levelBefore = base?.thinkingLevel
+  const checkModel = !!want.modelId && want.modelId !== modelBefore
+  // 本地连会话配置都没有就不凭空造一条 {thinkingLevel}:残缺条目会挡住 refreshSessions 的整份预填(那里只填「本地还没有」的会话)
+  const checkLevel = !!want.thinkingLevel && !!base && levelBefore !== want.thinkingLevel
+  if (!checkModel && !checkLevel) return // 值未变(常见于回放、引擎现值就是 agent 这笔):不读、不提示
+  const c = s0.cfg
+  const [engineModel, engineLevel] = await Promise.all([
+    checkModel ? api.getSessionDetail(c, sid).then((r) => r?.model_id || '', () => want.modelId!) : Promise.resolve(''),
+    checkLevel ? api.getSessionConfig(c, sid).then((r) => THINKING_LEVELS.find((lv) => lv === r?.thinkingLevel), () => want.thinkingLevel) : Promise.resolve(undefined),
+  ])
+  if (generation !== authGeneration) return
+  const s = useApp.getState()
+  const tr = s.tr
+  const here = sid === s.activeId
+  const title = () => [...s.sessions, ...s.archivedSessions].find((x) => x.id === sid)?.title
+    || useChildChat.getState().sessions[sid]?.title || tr('sidebar.newChat')
+  if (checkModel && engineModel && engineModel !== modelBefore && sessionModelOf(s, sid) === modelBefore) {
+    patchSessionModelLocal(sid, engineModel)
+    if (engineModel === want.modelId) {
+      const model = s.modelsResp?.models.find((m) => m.id === engineModel)?.name || engineModel
+      s.toast(here ? tr('appstore.agentSwitchedModel', { model }) : tr('appstore.agentSwitchedModelIn', { model, title: title() }))
+    }
+  }
+  const baseNow = sessionConfigBaseOf(useApp.getState(), sid)
+  if (checkLevel && engineLevel && engineLevel !== levelBefore && baseNow && baseNow.thinkingLevel === levelBefore) {
+    // 只合并这一个键:其余键可能正有本窗口的在途写(loadSessionHistory 取 local-wins 也是这个理由)
+    useApp.setState((st) => ({ configBySession: { ...st.configBySession, [sid]: { ...(st.configBySession[sid] || baseNow), thinkingLevel: engineLevel } } }))
+    if (engineLevel === want.thinkingLevel) {
+      const level = tr(`input.thinkingShort.${engineLevel}`)
+      s.toast(here ? tr('appstore.agentSetThinking', { level }) : tr('appstore.agentSetThinkingIn', { level, title: title() }))
+    }
+  }
 }
 let lastAuthExpiredAt = 0 // handleAuthExpired 去抖:轮询/SSE/models 可能同时多次 401
 /** boot 期 managed 重连:引擎已 ready 但 connState 没到 ok(testConnection 撞上引擎刚 listen / 偶发超时)→ 15s 一次
@@ -1193,6 +1265,17 @@ export const useApp = create<AppState>((set, get) => ({
         if (pl.auto) planAutoStart.add(runId)
         if (pl.file) get().toast(t('app.planArchived', { file: pl.file }))
         break
+      case 'session_config_changed': {
+        // agent 经 update_session_settings 改了会话模型 / 思考档:引擎已落库,这里只同步本地缓存。
+        // 不同步 = 下一次 run 仍按 store 里的旧值起跑(sendMessage 读 sessions[].model_id / configBySession),把引擎刚写的值盖回去。
+        // 只读不写(引擎已写,再写一次会和用户并发改互踩);不动全局默认 cfg.modelId —— agent 改一个会话不该顺手改掉用户新会话的默认模型。
+        // 载荷可能是回放的旧值 → 不直接套,交给 syncAgentSessionConfig 读引擎现值再对账。
+        const sid = typeof pl.sessionId === 'string' && pl.sessionId ? pl.sessionId : sessionId
+        const modelId = typeof pl.modelId === 'string' ? pl.modelId.trim() : ''
+        const level = THINKING_LEVELS.find((lv) => lv === pl.thinkingLevel)
+        void syncAgentSessionConfig(sid, { modelId: modelId || undefined, thinkingLevel: level }).catch(() => {})
+        break
+      }
       case 'team_output': {
         const row = pl.message
         if (!row?.id || row.role !== 'model') break
@@ -2831,17 +2914,7 @@ export const useApp = create<AppState>((set, get) => ({
     // 在会话里换模型 = 也换掉全局默认(新会话延续);cfg.modelId 本来就是「新会话用哪个模型」的真源。
     if (remember) set((s) => { void window.tangu?.setConfig?.({ modelId }); return { cfg: { ...s.cfg, modelId } } })
     if (!sid) { set({ newChatModel: modelId }); return }
-    const child = useChildChat.getState().sessions[sid]
-    if (child) useChildChat.getState().remember({ ...child, model_id: modelId })
-    set((s) => {
-      // 换模型即作废旧 context_info:窗口值/来源标注是按旧模型算的,留着会让 ctx 环分母错到下一次 run
-      const { [sid]: _stale, ...ctxRest } = s.ctxInfoBySession
-      return {
-        sessions: s.sessions.map((x) => (x.id === sid ? { ...x, model_id: modelId } : x)),
-        archivedSessions: s.archivedSessions.map((x) => (x.id === sid ? { ...x, model_id: modelId } : x)),
-        ctxInfoBySession: ctxRest,
-      }
-    })
+    patchSessionModelLocal(sid, modelId)
     void api.updateSession(get().cfg, sid, { model_id: modelId }).catch((e) => get().toast(get().tr('app.modelSwitchSaveFail', { e: e?.message || e }), true))
   },
 

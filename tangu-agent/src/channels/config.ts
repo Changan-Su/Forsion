@@ -61,6 +61,7 @@ export function channelSettings(kind: ChannelKind): ChannelSettings {
     // 默认「替我批准」(auto-edit) —— 全端默认统一到这一档,通道不再比桌面更保守。
     approvalMode: normApproval(raw.approvalMode, legacy ? legacy.approvalMode : 'auto-edit'),
     inboxForward: normForward(raw.inboxForward),
+    locale: raw.locale === 'zh' || raw.locale === 'en' ? raw.locale : undefined,
     botToken: str(raw.botToken) || undefined,
     appId: str(raw.appId) || undefined,
     appSecret: str(raw.appSecret) || undefined,

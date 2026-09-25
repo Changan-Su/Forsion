@@ -9,11 +9,13 @@ import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
 import { useI18n } from '../i18n'
 
-/** 档位 id 是连字符(引擎口径),i18n 键是驼峰(既有) —— 映射写一处,别两边各拼各的。 */
+/** 档位 id 是连字符(引擎口径),i18n 键是驼峰(既有) —— 映射写一处,别两边各拼各的。
+ *  名字直接用输入框审批药丸的那套键(询问我批准 / 替我批准 / 完全放行):同一屏上药丸与审批卡的「为什么问你」
+ *  曾各叫一套(只读 / 自动编辑 / 全自动),一个档两个名字。引擎侧同名表 = commandCatalog 的 APPROVAL_MODE_META。 */
 export const MODE_KEY: Record<string, string> = {
-  readonly: 'approval.mode.readonly',
-  'auto-edit': 'approval.mode.autoEdit',
-  'full-auto': 'approval.mode.fullAuto',
+  readonly: 'input.approval.readonly',
+  'auto-edit': 'input.approval.autoEdit',
+  'full-auto': 'input.approval.fullAuto',
 }
 
 export const ApprovalCard: React.FC<{
