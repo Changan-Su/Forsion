@@ -624,21 +624,39 @@ function onBackendReadyEdge(): void {
  *  不在就丢了;而引擎对捆绑包内嵌插件缺省启用(tangu-agent plugins/bootstrap)—— 欠下的在装载完与每次就绪边沿补上。
  *  只认持久化的禁用偏好(用户明确意图):不看激活态(启动时还在异步激活,会误关),也不管门禁挡下的
  *  (显式 false 是粘性的,解禁后没人翻回来)。只 PUT 仍开着的,多窗口重复跑是空转。跳过口径同级联:
- *  用户目录同 id 覆盖与首方内置同 id 不归捆绑包管;设备页不动对端引擎(见 SettingsModal 的级联注释)。 */
+ *  用户目录同 id 覆盖与首方内置同 id 不归捆绑包管;设备页不动对端引擎(见 SettingsModal 的级联注释)。
+ *  关不掉不能只等下一个边沿:后端一直就绪就不会再有边沿 → 失败按 ensure 重放的节奏补(≥30s、至多 3 次)。 */
+let bundleSyncRetry: ReturnType<typeof setTimeout> | null = null
+let bundleSyncRetries = 0
 export async function syncDisabledBundleEngines(): Promise<void> {
   if (typeof window === 'undefined' || window.tangu?.unitPage || (window as unknown as { __FORSION_UNIT_PAGE__?: unknown }).__FORSION_UNIT_PAGE__) return
   ensureReadySubscription() // 这次等不到后端,就绪边沿再来一次
   const cfg = (await readTangu()?.waitBackend?.(ENSURE_WAIT_MS)) ?? null
   if (!cfg) return
-  const { plugins, disabledIds } = usePluginStore.getState()
-  const ids = new Set(plugins.filter((p) => disabledIds.includes(p.id)).flatMap((p) => p.bundle?.enginePlugins ?? []))
-  if (!ids.size) return
+  // 每次 PUT 前现读偏好(读与发之间不隔 await):等名单期间用户又打开了捆绑包,级联刚写的 true 不许被旧快照盖回。
+  const parentOff = (id: string): boolean => {
+    const s = usePluginStore.getState()
+    return s.plugins.some((p) => s.disabledIds.includes(p.id) && !!p.bundle?.enginePlugins?.includes(id))
+  }
+  const s = usePluginStore.getState()
+  if (!s.plugins.some((p) => s.disabledIds.includes(p.id) && p.bundle?.enginePlugins?.length)) return
   let userOwned = new Set<string>()
   try {
     userOwned = new Set(((await window.tangu?.pluginsUserInstalled?.()) ?? []).map((x) => x.id))
   } catch { /* 桥缺位按空集 */ }
-  for (const e of await listPlugins(cfg)) {
-    if (ids.has(e.id) && e.enabled && e.source !== 'builtin' && !userOwned.has(e.id)) await setPluginEnabled(cfg, e.id, false).catch(() => {})
+  const engine = await listPlugins(cfg) // 拉失败也回 [],与「一个都没有」分不开 → 按失败补一次
+  let failed = !engine.length
+  for (const e of engine) {
+    if (!e.enabled || e.source === 'builtin' || userOwned.has(e.id) || !parentOff(e.id)) continue
+    await setPluginEnabled(cfg, e.id, false).catch(() => { failed = true })
+  }
+  if (!failed) bundleSyncRetries = 0
+  else if (!bundleSyncRetry && bundleSyncRetries < ENSURE_REPLAY_MAX) {
+    bundleSyncRetries += 1
+    bundleSyncRetry = setTimeout(() => {
+      bundleSyncRetry = null
+      void syncDisabledBundleEngines().catch((e) => console.warn('[amadeus] 捆绑包内嵌引擎插件补关失败', e))
+    }, ENSURE_REPLAY_MIN_GAP_MS)
   }
 }
 
