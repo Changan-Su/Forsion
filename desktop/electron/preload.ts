@@ -255,7 +255,7 @@ const api = {
     return () => ipcRenderer.removeListener('market:installProgress', listener)
   },
   marketInstalled: (): Promise<Record<string, string[]>> => ipcRenderer.invoke('market:installed'),
-  marketUninstall: (type: string, slug: string): Promise<{ ok: boolean; path: string; type: string }> =>
+  marketUninstall: (type: string, slug: string): Promise<{ ok: boolean; path: string; type: string; id?: string }> =>
     ipcRenderer.invoke('market:uninstall', type, slug),
   // ── 后端插件卸载(仅 ~/.tangu/plugins 用户目录;设置清理走后端 DELETE,重启由前端触发)──
   pluginsUserInstalled: (): Promise<Array<{ id: string; slug: string }>> => ipcRenderer.invoke('plugins:userInstalled'),

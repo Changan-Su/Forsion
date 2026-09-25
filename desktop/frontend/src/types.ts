@@ -1364,11 +1364,11 @@ declare global {
       /** Forsion Market:浏览(公开)/ 详情含 README / 安装(下载+按类型解压到 ~/.tangu)/ 已装列表。 */
       marketList?(type?: string): Promise<{ items: MarketCard[] }>
       marketDetail?(id: string): Promise<MarketDetail>
-      marketInstall?(id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string }>
+      marketInstall?(id: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
       /** 安装进度订阅(主进程只推给发起窗口);返回退订函数。 */
       onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null }>>>
-      marketUninstall?(type: string, slug: string): Promise<{ ok: boolean; path: string; type: string }>
+      marketUninstall?(type: string, slug: string): Promise<{ ok: boolean; path: string; type: string; id?: string }>
       /** 后端插件卸载:列用户目录已装(manifest id→目录名)/ 按 id 删目录(仅 ~/.tangu/plugins,首方插件删不到)。 */
       pluginsUserInstalled?(): Promise<Array<{ id: string; slug: string }>>
       pluginsUninstall?(id: string): Promise<{ ok: boolean }>

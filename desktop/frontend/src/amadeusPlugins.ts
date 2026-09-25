@@ -5,6 +5,7 @@ import { amadeusAvailable } from './features/runtime'
  *  - 插件贡献的 commands 桥进 engine 命令面板(全局可见,id 前缀 amadeus:)。
  *  - 插件 API 的 openSearch/openSwitcher(uiStore.palette)映射到桌面等价物,外部插件不改也能用。 */
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import type { AmadeusPlugin } from '@amadeus/plugins/types'
 import { calloutBlocks, wordCount } from '@amadeus/plugins/builtins'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { useUiStore } from '@amadeus/store/uiStore'
@@ -17,6 +18,16 @@ import { evaluateAndNudge } from './stores/pluginOnboardingStore'
 import { installAmadeusAutomationBridge } from './amadeusAutomation'
 
 let installed = false
+
+/** 本窗所有「按磁盘重新对账」的动作排一队:初次装载、发方全量重载、收方按 id 重载。
+ *  交错的话,先读到旧磁盘快照的那一个后落定,会把刚装的插件从本窗 store 里抹掉(Codex 评审)。
+ *  监听先于初次装载注册,所以启动中的窗口收到的广播一定排在它自己的首次装载之后。 */
+let reconcileQueue: Promise<unknown> = Promise.resolve()
+function enqueueReconcile<T>(job: () => Promise<T>): Promise<T> {
+  const next = reconcileQueue.then(job, job)
+  reconcileQueue = next.catch(() => {})
+  return next
+}
 
 export function installAmadeusPlugins(): void {
   if (installed) return
@@ -39,9 +50,12 @@ export function installAmadeusPlugins(): void {
       if (typeof id === 'string') void usePluginStore.getState().reloadOne(id, { strict: true }).catch((e) => console.warn(`[amadeus] 开发态插件 ${id} 重载失败`, e))
     }
   })
+  // 市场 / 设置住在独立浮窗(09-20 起):那边装、卸、更新只重载得动它自己,主窗要等刷新或重启才看得见。
+  // 发方广播 extensions-changed(announceExtensionsChanged),这里各窗自己对账。
+  window.tangu?.onMainAction?.((action, payload) => { if (action === 'extensions-changed') applyExtensionsChanged(payload) })
   const store = usePluginStore.getState()
   store.init(amadeusAvailable() ? [calloutBlocks, wordCount] : [])
-  void store.loadExternal().then(() => {
+  void enqueueReconcile(() => store.loadExternal()).then(() => {
     // 捆绑包内嵌的 Space 引用插件自己的视图,必须等插件装完(视图已注册)才过得了 parseSpaceJson 的
     // isViewRegistered 闸 —— bootstrapEngine 那次 loadUserSpaces 跑在插件之前,注定被「未注册视图」跳过。
     // 补跑一次:装了带 Space 的插件,ribbon 顶部(Space 区)末尾即自动出现,无需进设置页或重启。
@@ -79,6 +93,44 @@ export function installAmadeusPlugins(): void {
     if (pal === 'switch') useUiOverlay.getState().open('switcher')
     else if (pal === 'search') openSearchView()
   })
+}
+
+type ExtensionKind = 'amadeus-plugin' | 'space' | 'theme'
+
+/** 通知其余窗口(主窗 / 分离窗 / mini / 别的浮窗):磁盘上的插件 · Space · 主题变了。ids = 来源有变的插件 id。 */
+export function announceExtensionsChanged(type: ExtensionKind, ids: string[] = []): void {
+  window.tangu?.requestMainAction?.('extensions-changed', JSON.stringify({ type, ids }))
+}
+
+/** 本窗全量重载外置插件,并把「新装 / 版本变了 / 没了」的 id 广播出去。同版本换了代码比不出来,所以
+ *  `also` = 调用方明确知道动过的 id(市场装的那个,同版本重装也算);`all` = 全部点名(设置页「重新加载」:
+ *  用户可能原地改了代码没改版本)。收方 reloadOne 对没变的 id 是空转,多点名无害。 */
+export function reloadPluginsAndAnnounce(opts?: { all?: boolean; also?: string[] }): Promise<{ before: AmadeusPlugin[]; after: AmadeusPlugin[]; fresh: AmadeusPlugin[]; removed: AmadeusPlugin[] }> {
+  return enqueueReconcile(async () => {
+    const before = usePluginStore.getState().plugins.filter((p) => !p.builtin)
+    await usePluginStore.getState().reloadExternal()
+    const after = usePluginStore.getState().plugins.filter((p) => !p.builtin)
+    const fresh = after.filter((p) => !before.some((b) => b.id === p.id))
+    const removed = before.filter((b) => !after.some((p) => p.id === b.id))
+    const changed = opts?.all ? after : after.filter((p) => before.find((b) => b.id === p.id)?.version !== p.version)
+    announceExtensionsChanged('amadeus-plugin', [...new Set([...changed, ...removed].map((p) => p.id).concat(opts?.also ?? []))])
+    return { before, after, fresh, removed }
+  })
+}
+
+/** 收方:只重载点名的 id —— 不能 reloadExternal,它会先拆掉**全部**插件,连带关掉用户开着的插件视图。 */
+function applyExtensionsChanged(payload?: string): void {
+  let change: { type?: unknown; ids?: unknown }
+  try { change = JSON.parse(payload || '') } catch { return }
+  if (change.type === 'theme') {
+    void import('./stores/themeStore').then((m) => m.useTheme.getState().reloadThemes())
+    return
+  }
+  const ids = Array.isArray(change.ids) ? change.ids.filter((x): x is string => typeof x === 'string') : []
+  void enqueueReconcile(() => Promise.all(ids.map((id) => usePluginStore.getState().reloadOne(id).catch((e) => console.warn(`[amadeus] 插件 ${id} 跨窗重载失败`, e)))))
+    // 捆绑包内嵌 Space 要等插件视图注册完才过得了闸;space 类型没有 id,直接重扫。
+    .then(() => import('./userSpaces'))
+    .then(async (m) => { await m.loadUserSpaces(); m.settleAsyncStartupSpace() })
 }
 
 let amadeusBooted = false

@@ -9,7 +9,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { amadeus } from '@amadeus/api'
-import { installAmadeusPlugins } from '../amadeusPlugins'
+import { installAmadeusPlugins, reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding, promptIfPending, isGate } from '../stores/pluginOnboardingStore'
 import { registerMessages, useI18n } from '../i18n'
 import { PRODUCT } from '../product'
@@ -370,7 +370,7 @@ const PluginDetail: React.FC<{
       return
     }
     onBack()
-    await usePluginStore.getState().reloadExternal()
+    await reloadPluginsAndAnnounce() // 设置是独立浮窗:主窗 / 分离窗里跑着的那份实例靠广播拆
     void loadUserSpaces() // 撤下其内嵌 Space
     if (ids.length) {
       // 引擎侧已装载的内嵌插件(工具/路由)无法运行期反注册 → 重启并核实;
@@ -533,7 +533,6 @@ export const AmadeusPluginsTab: React.FC<{
   const activeIds = usePluginStore((s) => s.activeIds)
   const toggle = usePluginStore((s) => s.toggle)
   const openFolder = usePluginStore((s) => s.openPluginsFolder)
-  const reload = usePluginStore((s) => s.reloadExternal)
   const scaffold = usePluginStore((s) => s.scaffoldSample)
   usePluginOnboarding((s) => s.version) // 「待引导」徽标随实测结果即时变化
   const [detail, setDetail] = useState<string | null>(null)
@@ -612,7 +611,8 @@ export const AmadeusPluginsTab: React.FC<{
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
         {/* 设备页(unitPage):插件目录/脚手架都是对方机器上的 shell 行为,unitBridge 只有 notSupported 桩 —— 藏;重新装载(重拉 unit/plugins + unit/spaces)保留。 */}
         {!window.tangu?.unitPage && <button className="btn ghost sm" onClick={() => openFolder()}>{t('settings.amadeusPlugins.openFolder')}</button>}
-        <button className="btn ghost sm" onClick={() => void reload().then(() => loadUserSpaces())}>{t('settings.amadeusPlugins.reload')}</button>
+        {/* 手动拷进插件目录后点这里:all = 连同版本原地改的代码也让主窗重读(只重载本浮窗的话,主窗照样要刷新 / 重启) */}
+        <button className="btn ghost sm" onClick={() => void reloadPluginsAndAnnounce({ all: true }).then(() => loadUserSpaces())}>{t('settings.amadeusPlugins.reload')}</button>
         {!window.tangu?.unitPage && <button className="btn ghost sm" onClick={() => void scaffold()}>{t('settings.amadeusPlugins.scaffold')}</button>}
       </div>
       {externals.length === 0 && <div className="hint">{t(managedFeatures ? 'settings.amadeusPlugins.unitEmpty' : 'settings.amadeusPlugins.empty')}</div>}
