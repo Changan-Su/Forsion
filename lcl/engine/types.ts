@@ -139,6 +139,10 @@ export interface Command {
   invoke?: CommandInvoke
   /** 人类面执行。args 只在 agent 派发且未声明 `invoke.run` 时传入。 */
   run(args?: Record<string, unknown>): void | Promise<void>
+  /** 开关类命令的当前状态(可选)。声明了 = 这是个开关:钉进 Ribbon 命令区时按钮带 `aria-pressed`
+   *  与 `.is-on` 高亮,一眼看出开没开。渲染期求值,须便宜、无副作用;Ribbon 在点击后与悬停时重读,
+   *  别处改了状态要等下次重渲才跟上(引擎不订阅宿主状态)。不是开关就别声明 —— 否则会被读屏报成「未按下」。 */
+  checked?: () => boolean
 }
 
 /** ribbon 竖条上的一个图标(≈ Obsidian addRibbonIcon)。 */

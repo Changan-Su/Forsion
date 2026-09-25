@@ -239,6 +239,24 @@ ctx.registerCommand({
 3. **插件命令只在桌面存在**(web 与 mobile 的 `listPlugins` 都返回 `[]`)。声明了 `invoke` 也不会
    出现在手机的目录里 —— 这是正确行为,不是 bug,别为此写特例。
 
+#### `checked`:开关类命令的当前状态(2026-09-25)
+
+用户可以把任意命令钉进 Ribbon 命令区。**开关类**命令(开 / 关某个模式)声明 `checked`,钉上去的按钮
+就带 `aria-pressed` 并在开着时高亮,一眼看得出现在是开是关;不声明就是普通动作钮。
+
+```js
+ctx.registerCommand({
+  id: 'myplugin-focus-mode',
+  title: () => t('专注模式'),
+  run: () => setFocus(!isFocus()),
+  checked: () => isFocus(),   // 渲染期求值:要便宜、无副作用
+})
+```
+
+- **只给真开关用**。「打开报告」这种动作声明了 `checked` 会被读屏报成「未按下」。
+- 宿主**不订阅**你的状态:Ribbon 在点击后、悬停进出时重读;别处(快捷键、设置页)改了状态,
+  按钮要等下一次重渲才跟上。旧宿主没有这个字段 = 静默忽略,不用做特性检测。
+
 | `registerSettingsView` | 详情页里自己画的面板 | 会被反复挂载卸载,状态别放模块级单例 |
 | `registerReadiness` | onboarding 检查卡上的一行 `check` | 2026-09-21 起;**必须 `ctx.registerReadiness?.(…)`**;拿不准回 `'unknown'`,见下「前置条件」 |
 | `registerEditorExtension` | 笔记编辑器的按键 / 装饰 | `'high'` 档不处理**必须 `return false`** |
