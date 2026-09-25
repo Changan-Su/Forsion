@@ -675,7 +675,7 @@ export interface AppState {
   connectOnce(c: TanguDesktopConfig): Promise<void>
   refreshSpecialEnabled(c: TanguDesktopConfig): Promise<void>
   /** 把 Background Session(@讨论/Historian 辅助讨论等,经 /background 端点轮询)合并进该会话的子聊天列表。 */
-  mergeBackgroundSubChats(sessionId: string, items: Array<{ runId: string; title: string; status: string }>): void
+  mergeBackgroundSubChats(sessionId: string, items: Array<{ runId: string; title: string; status: string; kind?: string }>): void
   boot(): Promise<void>
   refreshAgents(): void
   /** 历史拉取在途(按会话):ChatView 据此显示会话骨架屏而非空状态(module 级 loadedHistory 不响应式)。 */
@@ -1752,10 +1752,10 @@ export const useApp = create<AppState>((set, get) => ({
         const streaming = it.status === 'running' || it.status === 'queued'
         const idx = next.findIndex((x) => x.id === it.runId)
         if (idx < 0) {
-          next.push({ id: it.runId, kind: 'discussion', title: it.title, runId: it.runId, streaming, segs: [] })
+          next.push({ id: it.runId, kind: 'discussion', title: it.title, runId: it.runId, streaming, segs: [], ...(it.kind ? { bgKind: it.kind } : {}) })
           changed = true
-        } else if (next[idx].streaming !== streaming) {
-          next[idx] = { ...next[idx], streaming }
+        } else if (next[idx].streaming !== streaming || (it.kind && next[idx].bgKind !== it.kind)) {
+          next[idx] = { ...next[idx], streaming, ...(it.kind ? { bgKind: it.kind } : {}) }
           changed = true
         }
       }

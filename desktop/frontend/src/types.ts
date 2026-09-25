@@ -88,6 +88,9 @@ export interface SubChat {
   title: string
   sessionId?: string
   runId?: string             // discussion:要订阅的 run(= id)
+  /** 由 /background 并进来的行:引擎给的后台会话 kind(historian / discussion …);实时 subagent 行没有。
+   *  右栏按它(而不是标题)认出 Historian 的旧 run —— 普通子会话也可能叫「Historian」。 */
+  bgKind?: string
   streaming: boolean
   segs: SubChatSeg[]         // subagent 内容随主流累积;discussion 由面板二开 SSE 现拉,segs 保持空
 }
