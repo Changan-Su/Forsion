@@ -31,7 +31,7 @@ async function main() {
   const openStudio = async () => {
     await win.waitForSelector('.dv-groupview', { timeout: 45000 })
     if (await win.locator('.ims').isVisible().catch(() => false)) return
-    const icon = win.locator('.rb-space[aria-label="Image Studio"]').first()
+    const icon = win.locator('.rb-space[aria-label="图像工作室"]').first()
     if (!await icon.isVisible().catch(() => false)) await win.locator('.rb-top .rb-more').first().hover()
     await icon.click()
     await win.waitForSelector('.ims')

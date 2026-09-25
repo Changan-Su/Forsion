@@ -33,6 +33,7 @@ import { noteRefInsert } from '../../components/wikiChat'
 import { refToText, type ChatRef } from './chatDragRef'
 import { useApp } from '../../stores/appStore'
 import { ApprovalRulesModal } from '../../components/ApprovalRulesModal'
+import { thinkingLabel } from '../../components/thinkingLabel'
 import { commandsFor } from '../../commandCatalog'
 import { getCustomCommands, expandCustomCommand, listMessages, type CustomCommandInfo } from '../../services/backendService'
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
@@ -69,9 +70,9 @@ const WAIT_TIP_KEYS = [
 // 触屏端(Android 壳复用本组件)只留与键盘 / 悬停 / 拖拽 / 侧栏无关的
 const TOUCH_TIP_KEYS = [STEER_TIP, 'input.tip.wikiRef']
 registerMessages({
-  'input.tip': { zh: '小贴士:{tip}', en: 'Tip: {tip}' },
+  'input.tip': { zh: '小贴士：{tip}', en: 'Tip: {tip}' },
   'input.runningPlaceholder': { zh: '运行中，可继续输入…', en: 'Working… You can keep typing' },
-  'input.tip.steer': { zh: '运行中也能继续发消息,会在下一步交给 Agent', en: 'You can send while it runs: the agent reads it at the next step' },
+  'input.tip.steer': { zh: '运行中也能继续发消息，会在下一步交给 Agent', en: 'You can send while it runs: the agent reads it at the next step' },
   'input.tip.switchChat': { zh: '可以先切去别的会话,运行不会中断,侧栏圆点标出运行中', en: 'Switch chats meanwhile; this run keeps going, marked by a sidebar dot' },
   'input.tip.quote': { zh: '划选回复里的文字,点「引用」即可带进下一条消息', en: 'Select text in a reply and click Quote to cite it in your next message' },
   'input.tip.dropFiles': { zh: '文件可拖到聊天区任意位置,截图可直接粘贴进输入框', en: 'Drop files anywhere in the chat, or paste a screenshot into the box' },
@@ -788,7 +789,7 @@ export const Composer2: React.FC<{
         const unsupported = !!supported && !supported.includes(lv)
         items.push({
           cmd: `/think ${lv}`,
-          desc: `${t('input.slash.thinkDesc', { level: lv })}${unsupported ? ` ${t('pill.thinkUnsupported')}` : ''}${thinkingLevel === lv ? t('input.slash.current') : ''}`,
+          desc: `${t('input.slash.thinkDesc', { level: thinkingLabel(lv, t) })}${unsupported ? ` ${t('pill.thinkUnsupported')}` : ''}${thinkingLevel === lv ? t('input.slash.current') : ''}`,
           run: () => { onThinkingChange(lv); close() },
         })
       }
@@ -1103,7 +1104,7 @@ export const Composer2: React.FC<{
       const lv = (thinkMatch[1] || '').toLowerCase() as NonNullable<AgentConfig['thinkingLevel']>
       if (THINKING_LEVELS.includes(lv)) {
         onThinkingChange(lv)
-        setHint(t('input.slash.thinkSet', { level: lv }))
+        setHint(t('input.slash.thinkSet', { level: thinkingLabel(lv, t) }))
       } else {
         setHint(t('input.slash.thinkUsage', { levels: THINKING_LEVELS.join('|') }))
       }

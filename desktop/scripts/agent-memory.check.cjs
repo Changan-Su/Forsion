@@ -97,7 +97,7 @@ async function main() {
       await win.waitForTimeout(250)
     }
     await openSettings()
-    const agentsNav = win.getByRole('button', { name: '智能体', exact: true }).first()
+    const agentsNav = win.getByRole('button', { name: 'Agent', exact: true }).first()
     await agentsNav.click({ timeout: 15000 })
     const openAgent = async (slug) => {
       const row = win.locator('.file-row').filter({ has: win.locator('b', { hasText: `Memory ${slug}` }) }).first()

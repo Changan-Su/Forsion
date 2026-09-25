@@ -48,7 +48,7 @@ registerMessages({
   'home.greet.night.named': { zh: '夜深了,{name}', en: 'Working late, {name}' },
   'home.spaces': { zh: 'Spaces', en: 'Spaces' },
   'home.pinnedSpaces': { zh: '前置 Space', en: 'Pinned Spaces' },
-  'home.spaceCount': { zh: '{n} 个空间', en: '{n} spaces' },
+  'home.spaceCount': { zh: '{n} 个 Space', en: '{n} Spaces' },
   'home.newFolder': { zh: '新建收纳夹', en: 'New folder' },
   'home.showAll': { zh: '全部 Spaces', en: 'All Spaces' },
   'home.organizer.title': { zh: 'Space 收纳', en: 'Space organizer' },

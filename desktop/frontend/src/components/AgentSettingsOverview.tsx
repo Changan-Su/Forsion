@@ -6,12 +6,12 @@ import { registerMessages, useI18n } from '../i18n'
 import './agentSettingsOverview.css'
 
 registerMessages({
-  'agentSettings.rosterTitle': { zh: 'Agent Space', en: 'Agent Space' },
-  'agentSettings.rosterDescription': { zh: '在 Agent Space 中创建、排序并编辑智能体。这里保留适用于所有 Agent 的设置。', en: 'Create, reorder and edit agents in Agent Space. Settings here apply across agents.' },
-  'agentSettings.open': { zh: '打开 Agent Space', en: 'Open Agent Space' },
+  'agentSettings.rosterTitle': { zh: 'Agent 名册', en: 'Agent roster' },
+  'agentSettings.rosterDescription': { zh: '在 Agents 中创建、排序并编辑 Agent。这里保留适用于所有 Agent 的设置。', en: 'Create, reorder and edit agents in the Agents Space. Settings here apply across agents.' },
+  'agentSettings.open': { zh: '打开 Agents', en: 'Open Agents' },
   'agentSettings.default': { zh: '当前默认 Agent', en: 'Current default agent' },
   'agentSettings.manage': { zh: '查看档案', en: 'View profile' },
-  'agentSettings.noAgents': { zh: '尚无可用 Agent。前往 Agent Space 新建。', en: 'No agents yet. Create one in Agent Space.' },
+  'agentSettings.noAgents': { zh: '尚无可用 Agent。前往 Agents 新建。', en: 'No agents yet. Create one in the Agents Space.' },
   'agentSettings.userTitle': { zh: '用户画像', en: 'User profile' },
   'agentSettings.userDescription': { zh: '告诉 Agent 你的称呼、偏好和长期需求；这份资料由所有 Agent 共用。', en: 'Tell agents how to address you, your preferences and long-term needs. All agents share this profile.' },
   'agentSettings.userPlaceholder': { zh: '# 用户画像\n\n## 称呼\n\n## 偏好\n\n## 长期目标', en: '# User profile\n\n## Name\n\n## Preferences\n\n## Long-term goals' },

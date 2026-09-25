@@ -117,7 +117,7 @@ describe('background quota (Muse / automations)', () => {
     await mount()
     const banner = host.querySelector('.t2-quota-advisory')
     expect(banner?.getAttribute('data-bucket')).toBe('background')
-    expect(host.textContent).toContain('后台智能体今日额度已用尽,Muse 与自动化已暂停')
+    expect(host.textContent).toContain('后台 Agent 今日额度已用尽,Muse 与自动化已暂停')
     expect(host.textContent).not.toContain('使用重置卡')
     await act(async () => button('从主额度转入 10%').click())
     expect((window.tangu as any).accountBgConvert).not.toHaveBeenCalled()
@@ -132,7 +132,7 @@ describe('background quota (Muse / automations)', () => {
     window.tangu!.accountQuota = vi.fn().mockResolvedValue(bgQuota({ autoMain: true })) as any
     ;(window.tangu as any).backendStatus = vi.fn()
     await mount()
-    expect(host.textContent).toContain('后台智能体今日额度已用尽,正在用主额度继续')
+    expect(host.textContent).toContain('后台 Agent 今日额度已用尽,正在用主额度继续')
   })
 
   it('never shows the background bucket where Muse cannot run (no local engine)', async () => {

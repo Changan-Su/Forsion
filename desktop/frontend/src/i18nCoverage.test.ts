@@ -151,6 +151,85 @@ describe('i18n 覆盖', () => {
     expect(report, `字典里没有这些键,界面会直接渲染键名:\n  ${report.join('\n  ')}`).toEqual([])
   })
 
+  it('G. 术语表:zh 不许出现已收口的旧叫法(U-27,见 genesis-ui skill「术语表」)', () => {
+    // Agent 这个概念一律写「Agent」;Space 这个容器一律写「Space」;Agents 这个 Space 就叫「Agents」;
+    // 「工作区」只指工作目录 / 项目文件夹;「工作空间」不再使用(指整个 app 时直接写 Forsion 或改写)。
+    const BANNED: Array<{ re: RegExp; fix: string; allow?: Record<string, string> }> = [
+      { re: /智能体/, fix: '写「Agent」' },
+      { re: /工作空间/, fix: '指 Space 写「Space」,指整个 app 写「Forsion」或改写,指目录写「工作区」' },
+      { re: /Agent Space|Agents space|智能体空间/, fix: 'Agents 这个 Space 就叫「Agents」' },
+      {
+        re: /空间/, fix: '指 Space 这个容器时写「Space」',
+        allow: {
+          'autocompact.hint': '「腾出空间」= 上下文余量,不指 Space',
+          'imageStudio.ai.hint.expand': '「留出空间」= 画布四周的空白,不指 Space',
+        },
+      },
+    ]
+    const bad: string[] = []
+    for (const [k, v] of Object.entries(zh)) {
+      for (const b of BANNED) if (b.re.test(v) && !b.allow?.[k]) bad.push(`${k} = ${v}  → ${b.fix}`)
+    }
+    for (const [k, v] of Object.entries(en)) if (/Agent Space|Agents space/.test(v)) bad.push(`${k}(en) = ${v}  → Agents 这个 Space 写 "Agents" / "the Agents Space"`)
+    expect(bad.sort(), `术语没收口:\n  ${bad.join('\n  ')}`).toEqual([])
+  })
+
+  it('F. zh 词条不是纯拉丁文(U-30:中文界面残留英文),品牌 / 专名 / 格式串逐条登记理由', () => {
+    // 术语表里「zh 不译」的专名:由这些词拼成的 zh 值算合规(如「Agent」「Space ×{n}」「Muse Space」)。
+    // ⚠️ 复数 Agents / Spaces 不在这里:它们只在作 Space 名时合规,见下面逐键登记。
+    const TERMS = new Set([
+      'Agent', 'Space', 'MCP', 'Hooks', 'Git', 'AI', 'Python', 'Vault', 'Sandbox', 'Provider', 'ID', 'URL', 'HTTP', 'SSE', 'DEV', 'P2P',
+      'Forsion', 'Tangu', 'Muse', 'Amadeus', 'Note', 'Chat', 'Work', 'Desk', 'QQ', 'Telegram', 'OpenAI', 'Codex', 'OpenCode', 'Claude', 'Code',
+      'CosyVoice', 'JetBrains', 'Mono', 'Hack2Gate', 'English', 'Computer', 'Use', 'Bot', 'Token', 'tokens',
+    ])
+    // 逐键登记:不是由术语拼成、但刻意保留拉丁文的值。
+    const ALLOW: Record<string, string> = {
+      'achievements.a.first-login.title': '成就标题,化用论文名的英文梗',
+      'achievements.a.first-message.title': '成就标题,英文梗',
+      'agentProfile.space': 'Space 名「Agents」(与 Spaces 同为专名)',
+      'onboarding.guide.moreAgentsPath': '指向 Space 名「Agents」',
+      'home.spaces': '「Spaces」是主页 Space 架的专名(U-27 拍板 #1 的先例)',
+      'approvalRules.allowPh': '工具名示例(代码),不可译',
+      'approvalRules.askPh': '工具名示例(代码),不可译',
+      'approvalRules.denyPh': '工具名示例(代码),不可译',
+      'team.editor.docPlaceholder': 'TEAM.md 骨架,给模型读的 Markdown 标题',
+      'settings.developer.cloudUrlPlaceholder': 'URL 示例',
+    }
+    const bad: string[] = []
+    for (const [k, v] of Object.entries(zh)) {
+      if (HAN.test(v) || !/[A-Za-z]/.test(v) || ALLOW[k]) continue
+      const words = v.replace(/\{\w+\}/g, ' ').match(/[A-Za-z][A-Za-z0-9]*/g) ?? []
+      if (words.every((w) => TERMS.has(w))) continue
+      bad.push(`${k} = ${v}`)
+    }
+    expect(bad.sort(), `zh 值是纯英文:翻成中文,或确属品牌 / 专名就进 TERMS / ALLOW 并写明理由:\n  ${bad.join('\n  ')}`).toEqual([])
+  })
+
+  it('E. zh 标点(报告模式,U-32):半角 , ; : ( ) ? ! 紧挨汉字的计数与样例,不让测试变红', () => {
+    // 规则见 genesis-ui skill「中文标点」:句内全角;{var}、反引号代码、URL、路径、快捷键、HH:mm 除外。
+    // 全仓 codemod 另立项(要排除落盘 / 按值识别的键,先 grep 按中文文案选元素的台架)。清零后把这里改成硬断言。
+    const strip = (v: string): string => v
+      .replace(/\{\w+\}/g, '□')
+      .replace(/`[^`]*`/g, '□')
+      .replace(/https?:\/\/\S+/g, '□')
+      .replace(/(?:~|\.{1,2})?\/[\w./*~-]+/g, '□')
+      .replace(/(?:⌘|Ctrl|Cmd|Shift|Alt|Option|Meta)[+\w⇧⌥⌘,.]*/g, '□')
+      .replace(/\d{1,2}:\d{2}/g, '□')
+    const PUNCT = /[一-龥][,;:()?!]|[,;:()?!][一-龥]/g
+    let hits = 0
+    const keys: string[] = []
+    for (const [k, v] of Object.entries(zh)) {
+      const n = (strip(v).match(PUNCT) ?? []).length
+      if (n) { hits += n; keys.push(`${k} = ${v.slice(0, 60)}`) }
+    }
+    console.info(`[i18n E] zh 半角标点紧挨汉字:${hits} 处 / ${keys.length} 个键(总 ${Object.keys(zh).length})。样例:\n  ${keys.slice(0, 8).join('\n  ')}`)
+    // 防假绿:扫描确实跑过(字典非空);已手修的高曝光几条不许回退。
+    expect(Object.keys(zh).length).toBeGreaterThan(1000)
+    for (const k of ['input.placeholder', 'chat.emptyTitle', 'chat.emptyHint', 'settings.workspace.hint', 'onboarding.workspace.hint', 'input.tip.steer', 'sidebar.mode.tip']) {
+      expect(strip(zh[k]).match(PUNCT), `${k} 已手修成全角,别改回半角:${zh[k]}`).toBeNull()
+    }
+  })
+
   it('H. 日期 / 时间显示只走 format/time.ts 单源(U-29:不许再跟系统区域走)', () => {
     // 硬断言覆盖两类可静态判定的写法:toLocaleDateString / toLocaleTimeString,以及 new Intl.DateTimeFormat /
     // new Intl.RelativeTimeFormat。裸 `.toLocaleString()` 数字也在用(千分位),静态分不清,所以只拦

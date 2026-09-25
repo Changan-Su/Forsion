@@ -1,7 +1,8 @@
 /**
- * 自动汇总:全量翻译批次(14 个组件)产出的 i18n 片段。
- * 由 tangu-i18n-sweep workflow 生成,在 main.tsx 顶部 import 以在渲染前注册。
- * 勿手改;新增文案请加在对应组件并补到此处(或下次重跑批次)。
+ * i18n 词条片段(历史上由一次性的全量翻译批次 tangu-i18n-sweep 汇总产出;那个生成器**不在仓内**,也不会再重跑)。
+ * 现状:本文件**人工维护** —— 改值直接改这里,zh / en 成对改;在 main.tsx 等入口顶部 import,渲染前注册。
+ * 新增文案优先放进对应组件的模块级 registerMessages 片段或该包的 *Messages.ts,不必再往这里堆。
+ * ⚠️ 同一个键若也在 i18n.tsx 里,**本文件的值生效**(后注册覆盖);i18nCoverage.test.ts 管 zh/en 成对与禁用词。
  */
 import { registerMessages } from "./i18n"
 
@@ -195,7 +196,7 @@ registerMessages({
     "en": "Max"
   },
   "input.slash.thinkSet": {
-    "zh": "思考档位已设为 {level}（模型不支持时自动降档）",
+    "zh": "思考档位已设为「{level}」（模型不支持时自动降档）",
     "en": "Thinking effort set to {level} (auto-clamped if the model can't do it)"
   },
   "input.slash.thinkUsage": {
@@ -231,7 +232,7 @@ registerMessages({
     "en": "Turn on plan mode (read-only research → submit plan for approval)"
   },
   "input.slash.thinkDesc": {
-    "zh": "思考档位设为 {level}",
+    "zh": "思考档位设为「{level}」",
     "en": "Set thinking effort to {level}"
   },
   "input.slash.current": {
@@ -311,7 +312,7 @@ registerMessages({
     "en": "Connect a backend in settings first…"
   },
   "input.placeholder": {
-    "zh": "输入消息,输入 / 唤起技能(Enter 发送,Shift+Enter 换行)",
+    "zh": "输入消息，输入 / 唤起技能（Enter 发送，Shift+Enter 换行）",
     "en": "Type a message, type / to invoke skills (Enter to send, Shift+Enter for a new line)"
   },
   "input.addContent": {
@@ -439,11 +440,11 @@ registerMessages({
     "en": "Thinking effort"
   },
   "chat.emptyTitle": {
-    "zh": "纸上得来终觉浅,绝知此事要躬行。",
+    "zh": "纸上得来终觉浅，绝知此事要躬行。",
     "en": "What's learned on paper stays shallow; true knowing comes from doing."
   },
   "chat.emptyHint": {
-    "zh": "输入一句话,让 Tangu 开始干活。",
+    "zh": "输入一句话，让 Tangu 开始干活。",
     "en": "Type a message to put Tangu to work."
   },
   "chat.thinking": {
@@ -836,7 +837,7 @@ registerMessages({
     "en": "Choose…"
   },
   "settings.workspace.hint": {
-    "zh": "侧栏「Tangu 默认工作区」新建会话用的本机目录;留空默认用笔记库内的 Sessions 文件夹(无笔记库时 ~/Forsion)。改后关闭设置即刷新侧栏工作区。",
+    "zh": "侧栏「Tangu 默认工作区」新建会话用的本机目录；留空默认用笔记库内的 Sessions 文件夹（无笔记库时 ~/Forsion）。改后关闭设置即刷新侧栏工作区。",
     "en": "Local directory used by the sidebar \"Tangu default workspace\" for new sessions; leave empty to use the Sessions folder inside your notes library (or ~/Forsion without one). After changing, close Settings to refresh the sidebar workspace."
   },
   "settings.token.label": {
@@ -1324,7 +1325,7 @@ registerMessages({
     "en": "Command (stdio; choose either this or URL)"
   },
   "settings.mcp.urlLabel": {
-    "zh": "URL(HTTP/SSE)",
+    "zh": "URL（HTTP/SSE）",
     "en": "URL (HTTP/SSE)"
   },
   "settings.mcp.envLabel": {
@@ -1497,7 +1498,7 @@ registerMessages({
     "en": "Skills ({count})"
   },
   "settings.discovery.mcpCount": {
-    "zh": "MCP Server({count})",
+    "zh": "MCP 服务器（{count}）",
     "en": "MCP Servers ({count})"
   },
   "settings.advanced.note": {
@@ -1645,8 +1646,8 @@ registerMessages({
     "en": "Done 🎉"
   },
   "onboarding.done.line1": {
-    "zh": "· 输入栏可随时切换模型与思考深度;选择「本机」执行真实文件操作(带审批)",
-    "en": "· Switch models and thinking depth anytime from the input bar; choose \"Local\" to run real file operations (with approval)"
+    "zh": "· 输入栏可随时切换模型与思考档位；选择「本机」执行真实文件操作（带审批）",
+    "en": "· Switch models and thinking effort anytime from the input bar; choose \"Local\" to run real file operations (with approval)"
   },
   "onboarding.done.line2": {
     "zh": "· 已有 Claude Code / Codex / Hermes?设置 → 高级 → 「从其他 Agent 导入」一键迁移技能与 MCP",
@@ -1800,7 +1801,7 @@ registerMessages({
   "group.setup.title": { "zh": "团队模式", "en": "Team mode" },
   "group.setup.close": { "zh": "关闭", "en": "Close" },
   "group.setup.participants": { "zh": "参与者({n} 已选)", "en": "Participants ({n} selected)" },
-  "group.setup.noAgents": { "zh": "还没有 Agent。先到设置 → Agents 创建几个不同人格的 Agent。", "en": "No agents yet. Create a few in Settings → Agents first." },
+  "group.setup.noAgents": { "zh": "还没有 Agent。先到设置 → Agent 创建几个不同人格的 Agent。", "en": "No agents yet. Create a few in Settings → Agents first." },
   "group.setup.intensity": { "zh": "讨论强度", "en": "Discussion intensity" },
   "group.setup.roundsUnit": { "zh": "轮", "en": "r" },
   "group.setup.customRounds": { "zh": "自定义轮数", "en": "Custom rounds" },
@@ -1815,7 +1816,7 @@ registerMessages({
   "group.setup.addTemp": { "zh": "新建临时 Agent", "en": "New temporary agent" },
   "group.setup.tempBadge": { "zh": "· 临时", "en": "· temp" },
   "group.setup.tempSave": { "zh": "添加", "en": "Add" },
-  "group.setup.tempFormHint": { "zh": "临时 Agent 字段与普通 Agent 一样,但只用于本会话、不会保存到设置 → Agents。", "en": "A temporary agent has the same fields as a normal one, but is used only in this session — not saved to Settings → Agents." },
+  "group.setup.tempFormHint": { "zh": "临时 Agent 字段与普通 Agent 一样,但只用于本会话、不会保存到设置 → Agent。", "en": "A temporary agent has the same fields as a normal one, but is used only in this session — not saved to Settings → Agents." },
   "group.intensity.relaxed": { "zh": "轻松", "en": "Relaxed" },
   "group.intensity.medium": { "zh": "中等", "en": "Medium" },
   "group.intensity.intense": { "zh": "激烈", "en": "Intense" },
@@ -1863,12 +1864,12 @@ registerMessages({
   "command.navBack": { "zh": "后退(本标签页)", "en": "Back (this tab)" },
   "command.navForward": { "zh": "前进(本标签页)", "en": "Forward (this tab)" },
   "view.workspace": { "zh": "工作区", "en": "Workspace" },
-  "market.tab.spaces": { "zh": "空间", "en": "Spaces" },
-  "market.spaceInstalled": { "zh": "已安装「{name}」,Space 已出现在左侧功能条顶部", "en": "Installed \"{name}\" — the space is now on the ribbon" },
+  "market.tab.spaces": { "zh": "Space", "en": "Spaces" },
+  "market.spaceInstalled": { "zh": "已安装「{name}」,Space 已出现在左侧功能条顶部", "en": "Installed \"{name}\" — the Space is now on the ribbon" },
   "command.saveAsSpace": { "zh": "将当前布局另存为 Space", "en": "Save current layout as a Space" },
-  "spaces.namePrompt": { "zh": "新 Space 名称", "en": "New space name" },
-  "spaces.saved": { "zh": "已另存为 Space「{name}」(见左侧功能条顶部)", "en": "Saved as space \"{name}\" (see the ribbon top)" },
-  "spaces.deleteConfirm": { "zh": "删除 Space「{name}」?其布局配方将从磁盘移除。", "en": "Delete space \"{name}\"? Its recipe will be removed from disk." },
+  "spaces.namePrompt": { "zh": "新 Space 名称", "en": "New Space name" },
+  "spaces.saved": { "zh": "已另存为 Space「{name}」(见左侧功能条顶部)", "en": "Saved as Space \"{name}\" (see the ribbon top)" },
+  "spaces.deleteConfirm": { "zh": "删除 Space「{name}」?其布局配方将从磁盘移除。", "en": "Delete Space \"{name}\"? Its recipe will be removed from disk." },
   "view.outline": { "zh": "大纲", "en": "Outline" },
   "workspace.mode.auto": { "zh": "自动", "en": "Auto" },
   "workspace.mode.autoTip": { "zh": "跟随主视图自动切换(对话→会话/文件,笔记→笔记/文件)", "en": "Follows the focused main view (chat → sessions/files, note → notes/files)" },

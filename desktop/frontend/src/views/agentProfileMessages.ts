@@ -2,8 +2,8 @@ import { registerMessages } from '../i18n'
 registerMessages({
   'agentProfile.title': { zh: 'Tangu 详情', en: 'Tangu details' },
   'agentProfile.space': { zh: 'Agents', en: 'Agents' },
-  'agentProfile.roster': { zh: '智能体名册', en: 'Agent roster' },
-  'agentProfile.search': { zh: '搜索智能体', en: 'Search agents' },
+  'agentProfile.roster': { zh: 'Agent 名册', en: 'Agent roster' },
+  'agentProfile.search': { zh: '搜索 Agent', en: 'Search agents' },
   'agentProfile.skills': { zh: '技能', en: 'Skills' },
   'agentProfile.mcp': { zh: 'MCP', en: 'MCP' },
   'agentProfile.memory': { zh: '记忆', en: 'Memory' },

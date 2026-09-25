@@ -161,7 +161,7 @@ Click "Amadeus" on the ribbon and the whole workspace becomes the notes layout. 
 | Main area | Notes, whiteboards and dashboards live here, opened as tabs, splittable | Always on |
 | Right sidebar | "Chat panel", "Outline", "Backlinks", "Graph" | The floating panel button at the top right (tooltip "Toggle right panel"); collapsed the first time you arrive |
 | Bottom panel | Empty in Amadeus — you drag a view into it | `⌘/Ctrl + J` |
-| Status bar | Current Space, cloud sync, backlink count, word count | The master switch under Settings → Appearance → Status Bar |
+| Status bar | Current Space, cloud sync, backlink count, word count | The master switch under Settings → Appearance → Status bar |
 
 > [!note]
 > Everything note-related needs an open vault first. Until you open one, panels like search and tags just read "Open a vault first." — that is not an error.
@@ -284,7 +284,7 @@ A tab can be moved out into a window of its own, and tabs can be dragged between
 - UI zoom: `⌘/Ctrl + =`, `⌘/Ctrl + -`, `⌘/Ctrl + 0`, from 50% to 200% in 10% steps. It scales the whole interface, not just the text. Settings → Appearance also offers Small (80%), Standard (100%) and Large (120%) presets; the shortcuts (desktop app only) and palette commands still fine-tune or reset it.
 - Themes live under Settings → Appearance → Appearance, split into independent axes: "Design language" (Genesis, Genesis Glass, the included Soft theme, plus anything you drop into the themes folder), "Color scheme" ("Accent" and "Background" are two separate axes, each offering Classic, Coral, Teal, Lavender, Clear blue, Custom), "Light / Dark" (Light, Dark, Follow system), "Shadow" (Raised, Flat) and "Frosted glass" (On, Off (low-power mode)).
 - Light and dark also flip in one click: the moon icon at the bottom of the ribbon, or palette → "Toggle light/dark mode".
-- The status bar is the last line of the window: current Space (click = open the palette), cloud-sync state (click = sync now), backlink count, word count. The master switch and the per-item visibility list are under Settings → Appearance → Status Bar, and the order is draggable.
+- The status bar is the last line of the window: current Space (click = open the palette), cloud-sync state (click = sync now), backlink count, word count. The master switch and the per-item visibility list are under Settings → Appearance → Status bar, and the order is draggable.
 
 > [!warning]
 > Some design languages lock the colour scheme (Genesis Glass · 「琉璃」 is fixed to the system). The moon icon then does nothing and its tooltip changes to "This theme follows the system appearance" — not a fault, that theme simply does not allow the switch.
@@ -851,7 +851,7 @@ Find in page: `⌘/Ctrl + F`, or the command palette → "Find in page". The bar
 Word count:
 
 - Open a note and the right end of the status bar at the bottom of the window shows "{n} chars" live. That is a **character count** (length with all whitespace removed), not a word count.
-- It can be turned off on its own under Settings → Appearance → Status Bar, where the item is called "Word count".
+- It can be turned off on its own under Settings → Appearance → Status bar, where the item is called "Word count".
 - If you want words: command palette → "Count words", which shows a notification reading "About {chars} characters · {words} words on this page". Words are split on whitespace, so the number is of limited use in Chinese text. The command comes from a built-in plugin and disappears if you disable that plugin on the plugins page.
 - The status bar belongs to the desktop shell; mobile does not have it.
 
@@ -2962,7 +2962,7 @@ The plugin folder is `~/.forsion/plugins/`, one folder per plugin, and market in
 | A panel reads "Plugin view failed to load (see console)" | Toggle the plugin off and on again, then check "Updates" in the market for a newer version |
 | You switched interface language but the plugin's `/` entries and command names are still in the old one | Toggle that plugin off and on, or restart the app. Those names are fixed at the moment the plugin is enabled and do not follow a mid-session language switch |
 | One plugin sends too many notifications | Settings → "Appearance" → "Notifications" → "Plugin notifications", and switch off its row |
-| An unwanted item in the status bar | Settings → "Appearance" → "Status Bar", uncheck it; drag to reorder |
+| An unwanted item in the status bar | Settings → "Appearance" → "Status bar", uncheck it; drag to reorder |
 | A message reading "… bundled engine plugin(s) failed to toggle along (engine offline?)" | Wait for the engine to come back, then flip that plugin's switch once more |
 | You uninstalled an engine plugin but its AI tools are still there | Restart the backend; the message says so too |
 | A rule you turned off in Automation comes back after a plugin reload | That rule was seeded by the plugin. To stop it for good, disable the plugin itself |
@@ -3203,7 +3203,7 @@ The left-hand nav has five groups: "Workspace", "Appearance", "AI", "Extensions"
 | "Sync" | Workspace | "Online sync" and "Vault remote sync" |
 | "Appearance" | Appearance | Design language, colour scheme, light/dark, fonts |
 | "Shortcuts" | Appearance | Rebind any command |
-| "Status Bar" | Appearance | What the bottom bar shows |
+| "Status bar" | Appearance | What the bottom bar shows |
 | "Advanced" | System | The "Restore default layout" button |
 
 - "Notes" and "Sync" appear only in the desktop app; the web client and device pages do not have them.
@@ -3343,7 +3343,7 @@ Sidebars and panels have no settings page of their own; they are driven by comma
 - The blocks above the notes tree — "Pinned", "Cloud sync", "Shared with me", "Starred", "Collections" — can be reordered by dragging their headers. Mouse only: touch and pen will not start the drag, and only the header is a handle — dragging from inside a block drags a note instead.
 - "Pinned", "Starred" and "Collections" are stored on this device, per vault. Rename or move the vault folder and those blocks come back empty.
 
-The status bar is at Settings → "Appearance" → "Status Bar": the "Display" panel has one master switch, "Show status bar" (on by default), and the "Status bar" panel below is a checkable, drag-to-reorder list holding "Current Space", "Running sessions", "Sync status", "Backlinks", "Word count" and "Inbox unread". Turn the master switch off and the whole bar goes away, giving the height back to the workspace.
+The status bar is at Settings → "Appearance" → "Status bar": the "Display" panel has one master switch, "Show status bar" (on by default), and the "Status bar" panel below is a checkable, drag-to-reorder list holding "Current Space", "Running sessions", "Sync status", "Backlinks", "Word count" and "Inbox unread". Turn the master switch off and the whole bar goes away, giving the height back to the workspace.
 
 > [!warning] "Backlinks" and "Word count" show up only while the active tab is a note editor. Switch to a whiteboard, dashboard, PDF or database and they disappear — that is by design, not a fault.
 

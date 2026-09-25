@@ -80,7 +80,7 @@ registerMessages({
   'globalSkills.body': { zh: 'SKILL.md 正文', en: 'SKILL.md body' },
   'globalSkills.bodyHint': { zh: '名称和用途会写入 frontmatter；这里只填写说明与步骤。', en: 'Name and purpose are saved in frontmatter. Write the instructions and steps here.' },
   'globalSkills.chooseAgent': { zh: '选择 Agent', en: 'Choose agent' },
-  'globalSkills.noAgent': { zh: '还没有可复制到的 Agent。请先在 Agent Space 创建。', en: 'No agent is available. Create one in Agent Space first.' },
+  'globalSkills.noAgent': { zh: '还没有可复制到的 Agent。请先在 Agents 创建。', en: 'No agent is available. Create one in the Agents Space first.' },
   'globalSkills.cancel': { zh: '取消', en: 'Cancel' },
   'globalSkills.save': { zh: '保存', en: 'Save' },
   'globalSkills.copyAction': { zh: '复制技能', en: 'Copy skill' },

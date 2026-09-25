@@ -147,7 +147,7 @@ it('shows the background-agent quota row under usage on hosts with a local engin
   await click('额度剩余')
   await tick()
   const row = document.querySelector('[data-row="background"]')
-  expect(row?.textContent).toContain('后台智能体')
+  expect(row?.textContent).toContain('后台 Agent')
   expect(row?.textContent).toContain('20%') // 今日 3/15 = 20%,比本周 45/75 = 60% 紧
 })
 

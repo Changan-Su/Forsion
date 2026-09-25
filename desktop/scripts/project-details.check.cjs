@@ -173,9 +173,9 @@ async function run(app, win, stub, seen, home) {
   await win.waitForTimeout(400)
   const settingsPut = seen.settingsPuts.at(-1)
   check('5 默认项保存 → PUT settings { defaultAgent: coder, approvalMode: full-auto },不带 defaultTeam', !!settingsPut && settingsPut.sessionId === 'pd-main' && settingsPut.settings.defaultAgent === 'coder' && settingsPut.settings.approvalMode === 'full-auto' && !settingsPut.settings.defaultTeam, JSON.stringify(settingsPut))
-  await profile.getByRole('tab', { name: 'Agents', exact: true }).click()
+  await profile.getByRole('tab', { name: 'Agent', exact: true }).click()
   list = await rows()
-  check('5a Agents 页 coder 行带「项目默认」星标,行动作按钮 aria-pressed=true', list[1].key === 'agent:coder' && await profile.locator('[data-project-executor="agent:coder"] .project-inline-actions button[aria-pressed="true"]').count() === 1, JSON.stringify(list))
+  check('5a Agent 页 coder 行带「项目默认」星标,行动作按钮 aria-pressed=true', list[1].key === 'agent:coder' && await profile.locator('[data-project-executor="agent:coder"] .project-inline-actions button[aria-pressed="true"]').count() === 1, JSON.stringify(list))
   // 星标按钮直接切换默认(不经保存栏):点 xyra 的「设为项目默认」→ PUT { defaultAgent: xyra },coder 星标移走
   await profile.locator('[data-project-executor="agent:xyra"] .project-inline-actions button').nth(1).click()
   await win.waitForTimeout(400)
@@ -200,7 +200,7 @@ async function run(app, win, stub, seen, home) {
   await win.screenshot({ path: shots.windowLight = shot('project-window-zh-light') })
 
   // ── 7 用它开新会话:落成新对话草稿(activeId 空),右栏随之切成该 Agent 的详情 ────
-  await profile.getByRole('tab', { name: 'Agents', exact: true }).click()
+  await profile.getByRole('tab', { name: 'Agent', exact: true }).click()
   await profile.locator('[data-project-executor="agent:coder"] .project-inline-actions button').first().click()
   await details.locator('> [data-agent-profile="coder"], .agent-profile-panel-title + [data-agent-profile="coder"]').first().waitFor({ timeout: 10_000 }).catch(() => {})
   const draftState = await win.evaluate(() => ({

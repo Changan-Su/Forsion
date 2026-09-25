@@ -61,8 +61,8 @@ export const COMMAND_CATALOG: CommandSpec[] = [
   },
   {
     name: '/status', key: 'status',
-    zh: '本会话概况：模型 / 思考档 / 审批档 / 工作目录 / 用量',
-    en: 'Session overview: model, thinking level, approval mode, cwd, usage',
+    zh: '本会话概况：模型 / 思考档位 / 审批档 / 工作目录 / 用量',
+    en: 'Session overview: model, thinking effort, approval mode, cwd, usage',
     surfaces: ['tui', 'desktop'],
   },
   { name: '/export', key: 'export', zh: '导出本会话为 Markdown', en: 'Export this session as Markdown', surfaces: ['tui', 'desktop'] },
@@ -77,8 +77,8 @@ export const COMMAND_CATALOG: CommandSpec[] = [
   { name: '/model', key: 'model', arg: '<id>', zh: '切换模型', en: 'Switch model', surfaces: ['tui', 'desktop'] },
   {
     name: '/think', key: 'think', arg: '<档位>', aliases: ['/effort'],
-    zh: '思考强度：off|minimal|low|medium|high|xhigh|max（模型不支持的档自动降档）',
-    en: 'Thinking level: off|minimal|low|medium|high|xhigh|max (auto-clamped to what the model supports)',
+    zh: '思考档位：off|minimal|low|medium|high|xhigh|max（模型不支持的档自动降档）',
+    en: 'Thinking effort: off|minimal|low|medium|high|xhigh|max (auto-clamped to what the model supports)',
     surfaces: ['tui', 'desktop'],
   },
   { name: '/approval', key: 'approval', arg: '<档位>', zh: '切换审批档：readonly|auto-edit|full-auto', en: 'Switch approval mode: readonly|auto-edit|full-auto', surfaces: ['tui', 'desktop'] },
