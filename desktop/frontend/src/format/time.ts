@@ -17,11 +17,9 @@
  * 仪器:`i18nCoverage.test.ts` 的 H 断言扫源码,禁止本文件以外出现 `toLocaleDateString` /
  * `toLocaleTimeString` / `Intl.DateTimeFormat` / `Intl.RelativeTimeFormat`。
  */
-import { currentLocale, registerMessages, translateFor, type Locale } from '../i18n'
-
-registerMessages({
-  'time.justNow': { zh: '刚刚', en: 'just now' },
-})
+// 「刚刚 / just now」词条住在 i18n.tsx 基础字典(time.justNow):本模块加载期不调用任何 i18n 函数,
+// 这样 vi.mock('../i18n') 只给了 useI18n 的组件测试也能照常 import 用到本模块的组件。
+import { currentLocale, translateFor, type Locale } from '../i18n'
 
 export type TimeInput = number | string | Date | null | undefined
 
