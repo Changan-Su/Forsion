@@ -14,6 +14,7 @@
  *   noclick    mousedown / mouseup 至少一个落在行上,却没有派发到行上的 click(常见于 down/up 目标不同)
  * 另记一条时间线:切回后 `.t2s-srow` 的增删(行挂出来之后又被整批删 = 重挂窗口,即便本轮没撞上)。
  *
+ *   nospace / preactive  仪器自身的前置失败(没真切走 / 切回;目标行点之前已激活)—— 出现即判红,防真空通过
  * 断言:① 每一击都成功(行变 .active);② 零指纹。失败时整张表打印出来,按指纹再定修法。
  * 「未复现」本身是有效结果:全绿即说明桩夹具下这条路稳,表照样打印,供与真机对照。
  *
@@ -27,9 +28,9 @@
  *   U41_LIST_DELAY(给 GET /agent/sessions* 加多少 ms 延迟,模拟慢引擎:名册晚到时行会不会在手指下被整批重挂)
  */
 const path = require('path')
-const { sleep, shotDir, makeReporter, launch, boot, enterSpace, SPACE_NAMES, captureWindow } = require('./lib/uiux-electron.cjs')
+const { sleep, shotDir, makeReporter, launch, boot, enterSpace, SPACE_NAMES, activeSpace, captureWindow } = require('./lib/uiux-electron.cjs')
 
-const ROUNDS = Number(process.env.U41_ROUNDS || 3)
+const ROUNDS = Math.max(1, Number(process.env.U41_ROUNDS || 3)) // 0 轮 = 什么都没量却全绿,不允许
 const DELAYS = (process.env.U41_DELAYS || '0,50,150,300,600').split(',').map(Number)
 const PRESS_MS = Number(process.env.U41_PRESS_MS || 70)
 const TITLES = ['Probe session one', 'Probe session two', 'Probe session three']
@@ -118,6 +119,9 @@ async function ensureRowsVisible(win) {
 async function trial(win, delay, title) {
   await enterSpace(win, SPACE_NAMES.inbox, { real: true })
   await sleep(1200)
+  // 没真的切走 = 这一击不是「切 Space 后首击」,不能算 ok(否则普通点击也会把本仪器刷绿)。
+  const away = await activeSpace(win)
+  if (away !== 'inbox') return { delay, title, ok: false, fp: ['nospace'], waited: 0, churn: `away=${away}` }
   await win.evaluate(INSTALL)
   await win.evaluate(RESET)
   if (process.env.U41_NEGATIVE) await win.evaluate(NEGATIVE_ARM)
@@ -133,6 +137,10 @@ async function trial(win, delay, title) {
     await sleep(16)
   }
   if (!loc) return { delay, title, ok: false, fp: ['norow'], waited: Date.now() - waitStart }
+  const back = await activeSpace(win)
+  if (back !== 'tangu') return { delay, title, ok: false, fp: ['nospace'], waited: Date.now() - waitStart, churn: `back=${back}` }
+  // 目标行点之前就是激活态 → 结局不可判(点没点中都「active」),记成前置失败而不是 ok。
+  if (loc.active) return { delay, title, ok: false, fp: ['preactive'], waited: Date.now() - waitStart }
   const waited = Date.now() - waitStart
   await win.mouse.move(loc.x, loc.y)
   await win.mouse.down()
@@ -205,7 +213,7 @@ async function run(app, win, shots) {
   const printed = rows.filter((r) => r.fp.length)
   R.check(`1 切回 Tangu 后首击会话行全部生效(${rows.length} 击,延迟 ${DELAYS.join('/')}ms 各 ${ROUNDS} 次)`, misses.length === 0,
     misses.map((r) => `d=${r.delay} ${r.title} fp=${r.fp.join(',') || '无指纹'}`).join(' ; ') || '0 次失手')
-  for (const f of ['remount', 'moved', 'intercept', 'dragstart', 'noclick']) {
+  for (const f of ['remount', 'moved', 'intercept', 'dragstart', 'noclick', 'nospace', 'preactive']) {
     const hit = printed.filter((r) => r.fp.includes(f))
     R.check(`2 指纹「${f}」零出现`, hit.length === 0, hit.map((r) => `d=${r.delay}(${r.ok ? 'ok' : 'MISS'})`).join(' ') || '0')
   }

@@ -100,35 +100,40 @@ async function launch(opts = {}) {
   const defaultDir = path.join(home, 'Default Workspace')
   for (const dir of [userData, `${userData}-dev`, vault, projectDir, defaultDir, path.join(home, 'Forsion-Dev', 'Project')]) fs.mkdirSync(dir, { recursive: true })
   const fx = opts.fixtures || defaultFixtures(projectDir)
-  const stub = await startStubEngine({ agents: fx.agents, sessions: fx.sessions })
-  const proxy = opts.delay ? await startDelayProxy(stub.url, opts.delay) : null
-  const backend = proxy ? proxy.url : stub.url
-  // 未打包时主进程用 `<dir>-dev`,两份都种;笔记库也预置 —— 日历 Space 的可用性判定要 amadeusAvailable()。
-  for (const dir of [userData, `${userData}-dev`]) {
-    fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: backend, token: 'e2e', defaultWorkspaceDir: defaultDir }), 'utf8')
-    fs.writeFileSync(path.join(dir, 'amadeus-config.dev.json'), JSON.stringify({ localVault: vault, lastVault: vault }), 'utf8')
-  }
-  const env = { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: backend }
-  if (opts.overrideHome) env.HOME = home
-  let app
-  try {
-    app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT, env })
-  } catch (e) {
+  // 起到一半失败(桩 / 代理 / 写配置 / 起 Electron / 等首窗)也要把已起的东西全收掉,不留进程与临时目录。
+  let stub = null
+  let proxy = null
+  let app = null
+  const close = async () => {
+    if (app) await app.close().catch(() => {})
     if (proxy) await proxy.close().catch(() => {})
-    try { stub.close() } catch { /* ignore */ }
+    try { if (stub) stub.close() } catch { /* ignore */ }
     try { fs.rmSync(home, { recursive: true, force: true }) } catch { /* ignore */ }
-    console.error('启动失败:多半是已有 dev 版 Electron 占着单实例锁。自己关掉那个实例再跑(本仪器不代为 pkill)。')
+  }
+  try {
+    stub = await startStubEngine({ agents: fx.agents, sessions: fx.sessions })
+    proxy = opts.delay ? await startDelayProxy(stub.url, opts.delay) : null
+    const backend = proxy ? proxy.url : stub.url
+    // 未打包时主进程用 `<dir>-dev`,两份都种;笔记库也预置 —— 日历 Space 的可用性判定要 amadeusAvailable()。
+    for (const dir of [userData, `${userData}-dev`]) {
+      fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: backend, token: 'e2e', defaultWorkspaceDir: defaultDir }), 'utf8')
+      fs.writeFileSync(path.join(dir, 'amadeus-config.dev.json'), JSON.stringify({ localVault: vault, lastVault: vault }), 'utf8')
+    }
+    const env = { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: backend }
+    if (opts.overrideHome) env.HOME = home
+    try {
+      app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT, env })
+    } catch (e) {
+      console.error('启动失败:多半是已有 dev 版 Electron 占着单实例锁。自己关掉那个实例再跑(本仪器不代为 pkill)。')
+      throw e
+    }
+    const win = await app.firstWindow()
+    win.on('pageerror', (e) => console.error('[renderer pageerror]', String((e && e.stack) || e).slice(0, 600)))
+    return { app, win, home, projectDir, stub, close }
+  } catch (e) {
+    await close()
     throw e
   }
-  const win = await app.firstWindow()
-  win.on('pageerror', (e) => console.error('[renderer pageerror]', String((e && e.stack) || e).slice(0, 600)))
-  const close = async () => {
-    await app.close().catch(() => {})
-    if (proxy) await proxy.close().catch(() => {})
-    try { stub.close() } catch { /* ignore */ }
-    try { fs.rmSync(home, { recursive: true, force: true }) } catch { /* ignore */ }
-  }
-  return { app, win, home, projectDir, stub, close }
 }
 
 /** 首启:定窗口尺寸 → 点掉引导 → 等工作区;space 给了就钉成启动 Space 并 reload 落进去。 */

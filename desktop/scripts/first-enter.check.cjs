@@ -29,7 +29,7 @@ const fs = require('fs')
 const path = require('path')
 const { ROOT, sleep, shotDir, makeReporter, launch, boot, enterSpace, SPACE_NAMES, activeSpace, captureWindow } = require('./lib/uiux-electron.cjs')
 
-const RUNS = Number(process.env.U40_RUNS || 3)
+const RUNS = Math.max(1, Number(process.env.U40_RUNS || 3)) // 0 轮 = 什么都没量却全绿,不允许
 /** U40_PREFETCH=1:进 Space 前先在页内 import() 相关分块(预取方案的对照组)。 */
 const PREFETCH = !!process.env.U40_PREFETCH
 const VISIBLE_MS = 150
@@ -51,21 +51,31 @@ const COLLECT = (label, space, quietMs = 500, timeoutMs = 10000) => `new Promise
   const t0 = mark ? mark.startTime : performance.now()
   const W = window.innerWidth
   const regionOf = (el) => { const g = el.closest('.dv-groupview') || el; const r = g.getBoundingClientRect(); const cx = r.left + r.width / 2; return cx < W * 0.3 ? 'left' : cx > W * 0.7 ? 'right' : 'main' }
-  const seen = {} // region -> { first, last }
+  // region -> { first, last, runStart, prevFrame, maxRun }:只算**连续可见**的一段(两次出现之间的空档不计入时长)
+  const seen = {}
+  let frame = 0
   let spinnerFrom = null; let spinnerTo = null
   let quietSince = null
   const tick = () => {
     const now = performance.now()
-    const visible = Array.from(document.querySelectorAll('.sk')).filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 })
-    for (const el of visible) { const k = regionOf(el); const e = seen[k] || (seen[k] = { first: now, last: now }); e.last = now }
+    frame += 1
+    // 活动 Space 切过去之前的骨架属于离开的那个 Space,不计(Space 切换在点击处理里同步完成)。
+    const arrived = localStorage.getItem('forsion_tangu_active_space') === ${JSON.stringify(space)}
+    const visible = arrived ? Array.from(document.querySelectorAll('.sk')).filter((el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 }) : []
+    const hit = new Set(visible.map(regionOf))
+    for (const k of hit) {
+      const e = seen[k] || (seen[k] = { first: now, last: now, runStart: now, prevFrame: frame, maxRun: 0 })
+      if (e.prevFrame !== frame - 1 && e.prevFrame !== frame) e.runStart = now // 断开过:新的一段
+      e.prevFrame = frame; e.last = now
+      e.maxRun = Math.max(e.maxRun, now - e.runStart)
+    }
     const spin = !!document.querySelector('[data-artificial-root] [data-state="loading"]')
     if (spin && spinnerFrom == null) spinnerFrom = now
     if (!spin && spinnerFrom != null && spinnerTo == null) spinnerTo = now
     // 活动 Space 还没切过去时不算「安静」(溢出浮层里的 Space 要先 hover 500ms 才点得到)
-    const arrived = localStorage.getItem('forsion_tangu_active_space') === ${JSON.stringify(space)}
     if (!arrived || visible.length || spin) quietSince = null; else if (quietSince == null) quietSince = now
     if ((quietSince != null && now - quietSince >= ${quietMs}) || now - t0 > ${timeoutMs}) {
-      const spans = Object.entries(seen).map(([region, e]) => ({ region, from: Math.round(e.first - t0), ms: Math.round(e.last - e.first) }))
+      const spans = Object.entries(seen).map(([region, e]) => ({ region, from: Math.round(e.first - t0), ms: Math.round(e.maxRun) }))
       const lastOff = Object.values(seen).reduce((m, e) => Math.max(m, e.last - t0), 0)
       try { performance.measure(${JSON.stringify(label)} + ':settled', { start: t0, end: t0 + lastOff }) } catch {}
       // 长任务(≥50ms 的主线程占用):分块到了之后骨架还挂着,多半耗在模块求值 / 首渲染上。
@@ -180,7 +190,7 @@ async function main() {
       first.length === RUNS && first.every((r) => r.hit && r.active === space && r.spans.length > 0),
       JSON.stringify(first.map((r) => ({ hit: r.hit, active: r.active, spans: r.spans.length }))))
     R.check(`2 ${space}:同次启动再进没有可见骨架(≥${VISIBLE_MS}ms)—— 分块缓存生效`,
-      again.length === RUNS && again.every((r) => r.maxVisible < VISIBLE_MS),
+      again.length === RUNS && again.every((r) => r.hit && r.active === space && r.maxVisible < VISIBLE_MS),
       JSON.stringify(again.map((r) => r.maxVisible)))
   }
   console.log(`SHOTS ${shots}`)

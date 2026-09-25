@@ -69,15 +69,21 @@ const SPY = `(() => {
 
 /** 逐帧采样左栏宽,持续 ms(用于捕获「先跳再弹回」的过渡帧)。返回 [ { t, w } ](仅宽变化时记)。 */
 const sampleFrames = (ms) => `new Promise((resolve) => {
-  const out = []; const t0 = performance.now(); let last = null
+  // 先等活动 Space 切成 tangu(最长 3s),从那一帧起采 ms 毫秒;没等到 = 返回空序列(5c 会据此判红,不许真空通过)。
+  const out = []; const tStart = performance.now(); let t0 = null; let last = null
   const probe = () => {
+    const now = performance.now()
+    const active = localStorage.getItem('forsion_tangu_active_space')
+    if (t0 == null) {
+      if (active !== 'tangu') { if (now - tStart < 3000) requestAnimationFrame(probe); else resolve(out); return }
+      t0 = now
+    }
     const gs = Array.from(document.querySelectorAll('.dv-groupview')).filter((g) => g.getBoundingClientRect().width > 0)
     const left = gs.sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left)[0]
     const w = left ? Math.round(left.getBoundingClientRect().width) : null
-    const active = localStorage.getItem('forsion_tangu_active_space')
     const key = active + ':' + w
-    if (key !== last) { out.push({ t: Math.round(performance.now() - t0), w, active }); last = key }
-    if (performance.now() - t0 < ${ms}) requestAnimationFrame(probe); else resolve(out)
+    if (key !== last) { out.push({ t: Math.round(now - t0), w, active }); last = key }
+    if (now - t0 < ${ms}) requestAnimationFrame(probe); else resolve(out)
   }
   requestAnimationFrame(probe)
 })`
@@ -162,7 +168,7 @@ async function run(app, win, shots) {
   for (let i = 1; i <= 3; i += 1) {
     const r = await roundTrip(win, 'inbox', `inbox#${i}`)
     trips.push(r)
-    R.check(`2.${i} 切收件箱 → 切回 Tangu:左栏宽不变`, r.went && r.back && r.st.active === 'tangu' && near(r.st.width, W) && near(leftW(r.st), W),
+    R.check(`2.${i} 切收件箱 → 切回 Tangu:左栏宽不变`, r.went && r.away.active === 'inbox' && r.back && r.st.active === 'tangu' && near(r.st.width, W) && near(leftW(r.st), W),
       JSON.stringify({ went: r.went, away: { active: r.away.active, w: r.away.width, store: r.away.store }, back: r.st.width, stored: leftW(r.st) }))
   }
   await captureWindow(app, path.join(shots, 'sidewidth-2-after-inbox.png'))
@@ -172,7 +178,7 @@ async function run(app, win, shots) {
     const r = await roundTrip(win, other, other)
     trips.push(r)
     if (!r.went) { R.note(`3 ${other} 不在 ribbon 上,跳过`, ''); continue }
-    R.check(`3 从 ${other} 切回 Tangu:左栏宽不变`, r.back && r.st.active === 'tangu' && near(r.st.width, W) && near(leftW(r.st), W),
+    R.check(`3 从 ${other} 切回 Tangu:左栏宽不变`, r.away.active === other && r.back && r.st.active === 'tangu' && near(r.st.width, W) && near(leftW(r.st), W),
       JSON.stringify({ away: { active: r.away.active, w: r.away.width }, back: r.st.width, stored: leftW(r.st) }))
   }
 
@@ -236,7 +242,9 @@ async function run(app, win, shots) {
   R.check('5b 活动 Space 不是 tangu 时,没有任何写入落到 lcl.sideWidth2.tangu(跨 Space 串写)', crossWrites.length === 0, `${crossWrites.length} 次`)
   // 只看活动 Space 已切成 tangu 之后的帧(之前那几帧是离开的 Space 自己的宽,不是过渡)。
   const jumps = trips.filter((r) => r.seq.some((f) => f.active === 'tangu' && typeof f.w === 'number' && f.w > 0 && !near(f.w, W)))
-  R.check('5c 切回 Tangu 途中逐帧采样:左栏没有先停在别的宽再弹回(过渡帧)', jumps.length === 0,
+  const unsampled = trips.filter((r) => r.went && !r.seq.some((f) => f.active === 'tangu'))
+  R.check('5c 切回 Tangu 途中逐帧采样:左栏没有先停在别的宽再弹回(过渡帧)', jumps.length === 0 && unsampled.length === 0 && trips.length > 0,
+    (unsampled.length ? `未采到切回帧:${unsampled.map((r) => r.label).join(',')} ; ` : '') +
     jumps.map((r) => `${r.label}: ${JSON.stringify(r.seq)}`).join(' ; ') || `${trips.length} 次往返均无`)
   if (clobber.length || crossWrites.length || process.env.U20_VERBOSE) {
     console.log('\n── lcl.sideWidth2.* 写入日志 ──')
