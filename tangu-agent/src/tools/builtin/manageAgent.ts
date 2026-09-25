@@ -3,7 +3,11 @@
  * agent 沉淀「人格」为可复用资产）。落盘 `~/.tangu/agents/<slug>.md`，created_by=agent。
  *
  * mode:'host' → 仅本地 host 会话可见；云端(sandbox 强制 + hostExec=false)永不暴露。
- * 写文件经 agentLoop 的审批闸门（与其它 host 写工具同档）。
+ * 审批:create / update 是「控制面」(approvals.controlPlaneCall)—— 询问我批准 / 替我批准两档每次都问、
+ * 不进「总允许」,完全放行档放过;list / delete 免批(delete 另有「不能删自己」守卫)。
+ * (旧头注说「写文件经审批闸门、与 host 写工具同档」不属实:本工具不在写工具集合里,曾在所有档位免批。)
+ * approval_mode 不对模型开放:审批档只归用户在设置里改;模型传了就报错、什么都不写。
+ * update 时模型省略的字段一律保留原值(buildAgentDef 对省略项会写空,在本调用点兜住,不改它的公共语义)。
  */
 import type { ToolProvider } from '../toolRegistry.js';
 import { listAgents, getAgent, saveAgent, deleteAgent, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN, DEFAULT_MAX_ITERATIONS } from '../../agents/agentRegistry.js';
@@ -46,7 +50,6 @@ export const manageAgentProvider: ToolProvider = {
               tools: { type: 'array', items: { type: 'string' }, description: 'Allowlist of enabled custom/MCP tool ids (optional)' },
               thinking_level: { type: 'string', enum: [...THINKING_LEVELS], description: 'Thinking intensity (optional)' },
               max_iterations: { type: 'number', description: `Maximum loop iterations per turn (optional, at least ${AGENT_MAX_ITERATIONS_MIN}; an agent may raise its own cap but never lower it)` },
-              approval_mode: { type: 'string', enum: ['readonly', 'auto-edit', 'full-auto'], description: 'Approval level (optional)' },
             },
             required: ['action'],
           },
@@ -62,27 +65,30 @@ export const manageAgentProvider: ToolProvider = {
           }
           if (action === 'delete') {
             const slug = String(args.slug || '');
-            if (!slug) return 'Error: delete 需要 slug';
+            if (!slug) return 'Error: delete requires slug.';
             // 不能删除自己:删了再 create 同 slug = 绕过下面的人格守卫(Codex 评审 #2)。
-            if (isSelf(slug, ctx)) return 'Error: 不能删除自己(当前激活的 agent);请用户在设置里操作。';
+            if (isSelf(slug, ctx)) return 'Error: you cannot delete yourself (the active agent). Ask the user to do it in Settings.';
             const ok = await deleteAgent(slug);
-            return ok ? `已删除 agent: ${slug}` : `未找到 agent: ${slug}`;
+            return ok ? `Deleted agent: ${slug}` : `Agent not found: ${slug}`;
           }
           if (action === 'create' || action === 'update') {
-            if (!args.name || !args.system_prompt) return 'Error: create/update 需要 name 与 system_prompt';
+            // 审批档只归用户(H2):schema 里已删,模型照旧传 → 报错且不落盘(同 update_session_settings 的先例)。
+            // 错误语要告诉模型怎么改:捆绑技能等旧材料可能还教它传 approval_mode,别让它卡在这一步。
+            if (args.approval_mode !== undefined) return 'Error: approval_mode can only be changed by the user in Settings. Nothing was saved; call again without approval_mode.';
+            if (!args.name || !args.system_prompt) return 'Error: create/update requires name and system_prompt.';
             // slug 归一必须与 saveAgent 的落盘规则一致(非法 slug → slugify(name)),否则可以用
             // 大写等非法变体让守卫查不到 existing、saveAgent 却归一回自己的 slug(Codex 评审 #2)。
             const requested = args.slug ? String(args.slug) : '';
             const slug = requested && isValidSlug(requested) ? requested : slugify(String(args.name));
             const existing = await getAgent(slug);
-            if (action === 'update' && !existing) return `Error: 未找到要更新的 agent: ${slug}`;
+            if (action === 'update' && !existing) return `Error: agent not found: ${slug} (use action=list to see agents).`;
             // 人格主权:不能改写**自己**的人格——system_prompt/SOUL 归用户所有(create 撞自己 slug 同样拦,
             // saveAgent 对已存在 slug 是覆盖)。运行参数(model/tools/thinking 等)放行:那是自调参,不是人格漂移。
             // agent 自有的可进化层是 HARNESS.md(manage_harness)。
             if (isSelf(slug, ctx)) {
               const soulChanged = args.soul != null && String(args.soul) !== (existing?.soul || '');
               if (!existing || String(args.system_prompt) !== existing.systemPrompt || soulChanged) {
-                return 'Error: 不能修改自己的人格(system_prompt/SOUL 归用户所有)。运行参数(model/tools/thinking_level 等)可改——原样回传现有 system_prompt 即可;工作方法的沉淀请用 manage_harness。';
+                return 'Error: you cannot change your own persona (system_prompt / SOUL belong to the user). You may change run parameters (model, tools, thinking_level, ...) by passing your current system_prompt back unchanged; record working methods with manage_harness instead.';
               }
             }
             // 轮数:低于下限一律拒(与 routes/agents 同口径);对**自己**只许持平或调高 —— 模型给自己写个 3,之后每回合
@@ -93,23 +99,26 @@ export const manageAgentProvider: ToolProvider = {
               const cur = existing?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
               if (isSelf(slug, ctx) && want < cur) return `Error: an agent may not lower its own max_iterations (current ${cur}, requested ${want}). Keep it or raise it; only the user can lower it in Settings.`;
             }
+            // 省略 ≠ 清空(H2):buildAgentDef 对 description / model / tools / thinkingLevel / approvalMode 的省略项写空,
+            // 而 approvalMode 写空 = 激活时回落 auto-edit —— 用户设成只读的 Agent 被模型改一次模型就悄悄放宽。
+            // 覆盖同 slug 的 create(saveAgent 对已存在 slug 是覆盖)同样保留:existing 在就按它补。
             const def = await saveAgent({
               slug,
               name: String(args.name),
-              description: args.description != null ? String(args.description) : undefined,
-              model: args.model != null ? String(args.model) : undefined,
-              tools: Array.isArray(args.tools) ? args.tools.map((t: any) => String(t)) : undefined,
-              thinkingLevel: args.thinking_level,
+              description: args.description != null ? String(args.description) : existing?.description,
+              model: args.model != null ? String(args.model) : existing?.model,
+              tools: Array.isArray(args.tools) ? args.tools.map((t: any) => String(t)) : existing?.tools,
+              thinkingLevel: args.thinking_level != null ? args.thinking_level : (existing?.thinkingLevel || undefined),
               // 省略 ≠ 清空:否则 update 只改 model 就把自己的 150 降回默认 90,上面的「不许自降」守卫形同虚设(Codex 09-13 #1)
               maxIterations: args.max_iterations != null ? Number(args.max_iterations) : (existing?.maxIterations ?? undefined),
-              approvalMode: args.approval_mode,
+              approvalMode: existing?.approvalMode || undefined, // 永不取自模型参数
               systemPrompt: String(args.system_prompt),
               soul: args.soul != null ? String(args.soul) : undefined,
               createdBy: 'agent',
             });
             return `已${action === 'create' ? '创建' : '更新'} agent: ${def.slug}（${def.name}）。用户可在设置/输入栏选用它。`;
           }
-          return `Error: 未知 action: ${action}`;
+          return `Error: unknown action: ${action}`;
         } catch (e: any) {
           return `Error: ${e?.message || e}`;
         }

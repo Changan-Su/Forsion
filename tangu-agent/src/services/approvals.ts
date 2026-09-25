@@ -23,8 +23,32 @@ import { USER_BROWSER_ACTIONS, userBrowserBound } from '../tools/builtin/browser
 import { getRawSection } from '../core/config.js';
 import { deps } from '../seams/runtime.js';
 import type { AppProfile } from '../seams/appProfile.js';
+import { canonicalFuturePath } from '../sandbox/hostSandboxProtection.js';
+import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
+import { MUSE_AGENT_SLUG, getAgent, isValidSlug, slugify } from '../agents/agentRegistry.js';
 
 export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
+
+const KNOWN_APPROVAL_MODES: readonly string[] = ['readonly', 'auto-edit', 'full-auto', 'custom'];
+const warnedUnknownModes = new Set<string>();
+/**
+ * 审批档归一(H5 fail-closed):空 / 缺席 → undefined(调用方按原口径兜底:host=auto-edit、云端=full-auto);
+ * 四个 id 原样;**其它任何非空值** → readonly 并告警。旧口径是 `||` 透传,落到 toolNeedsApproval 末尾的
+ * `return false` —— 一个拼错 / 新客户端才认识的档位 = 全部放行。同一个值只告警一次(每次工具调用都会过这里)。
+ */
+export function normalizeApprovalMode(raw: unknown, source = 'approvalMode'): ApprovalMode | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  if (typeof raw === 'string' && KNOWN_APPROVAL_MODES.includes(raw)) return raw as ApprovalMode;
+  warnUnknownMode(raw, source);
+  return 'readonly';
+}
+function warnUnknownMode(raw: unknown, source: string): void {
+  const key = `${source}|${String(raw)}`;
+  if (warnedUnknownModes.has(key)) return;
+  if (warnedUnknownModes.size > 200) warnedUnknownModes.clear(); // ponytail: 只防无界增长
+  warnedUnknownModes.add(key);
+  console.warn(`[tangu] 未知审批档 ${JSON.stringify(raw)}(来源 ${source}),按 readonly 处理`);
+}
 export type ApprovalAction = 'approve' | 'approve_always' | 'reject';
 export interface ApprovalDecision {
   action: ApprovalAction;
@@ -53,9 +77,12 @@ function nextApprovalId(): string {
  *   auto-edit : 写文件放行，跑命令要批（codex「auto edit」语义）
  *   full-auto : 全放行
  *   custom    : 按 config.json approval 段的 base 档(逐条规则的命中判定在 gateToolCall)
+ *   不认识的非空档:按 readonly(H5,见 normalizeApprovalMode);空 / 缺席 = 不审批(云端口径)
  * 只读工具（read_file/list_dir/web_search/...）永不在此返回 true。
+ * 控制面(manage_agent 建改 / 无人值守自动化与日程)按参数判定,不在此处 —— 见 controlPlaneCall。
  */
-export function toolNeedsApproval(name: string, mode: ApprovalMode | undefined, opts?: { userBrowser?: boolean }): boolean {
+export function toolNeedsApproval(name: string, rawMode: ApprovalMode | undefined, opts?: { userBrowser?: boolean }): boolean {
+  let mode = normalizeApprovalMode(rawMode, 'toolNeedsApproval');
   if (mode === 'custom') mode = customRules().base;
   if (!mode || mode === 'full-auto') return false;
   const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch';
@@ -70,13 +97,71 @@ export function toolNeedsApproval(name: string, mode: ApprovalMode | undefined, 
     (opts?.userBrowser === true && USER_BROWSER_ACTIONS.has(name)) ||
     // 插件工具经 capabilities.approval:'command' 自声明并入本档(核心不硬编码插件工具名;如 computer-use 的 act_ui)。
     declaredApproval(name) === 'command';
-  if (mode === 'readonly') return writesFiles || runsCommands;
   if (mode === 'auto-edit') return runsCommands;
+  // readonly(归一后已不可能再有别的值;即便有,也按最严的一档兜 —— 旧代码这里 return false = 未知档全放行)
+  return writesFiles || runsCommands;
+}
+
+/**
+ * 控制面(H1):agent 发起的「建出之后无人值守、以完全放行跑的工作」。前两档(readonly / auto-edit)
+ * 每次都问、**不进「总允许」**;full-auto 放行;custom 规则照旧先裁决(deny / allow / ask)。
+ * 这三个都是核心工具,按参数判定写在核心里(插件声明式 capabilities.approval 管不了「同一工具的某些动作」)。
+ *   - manage_agent  : create / update(改的是别的 agent 下次怎么跑,含模型 / 工具 / 思考档);list / delete 免批
+ *   - manage_schedule: set 且 auto=true(到期经 automation 管道以 full-auto 起跑);auto=false 纯规划免批。
+ *                     例外:Muse 自己的后台周期给**自己**排的 auto 条目 —— 它们回灌进 Muse 的周期、按 Muse 当前档跑
+ *                     (automation.ts 跳过 muse),不是提权;不豁免的话 ask/agent 档的 Muse 每个自排跟进都要排队等人批。
+ *   - manage_automation: set 且规则启用,并且含 agent_run / tool_call 步骤、或旧式 agent 简写(单步 agent_run);
+ *                     更新时省略 actions = 保留旧动作链(upsertTrigger),看不到旧链 → 按控制面问(fail-closed)。
+ *                     list / remove / 纯停用(enabled:false 且不同时写入 agent_run / tool_call / 旧式 agent)、
+ *                     纯 notify / db 动作链、唤醒 Muse 的旧式规则免批。
+ *   非 host 会话(本机引擎的 sandbox 会话)里控制面**不论档位**都问:sandbox 的 full-auto 是缺省值、只授权沙箱内的事,
+ *   不是对「到点在 host 上以完全放行跑」的授权(见 gateToolCall)。
+ * 解析口径逐一对齐各工具自己的校验(validateEntryInput 的 auto、validateTriggerInput 的 enabled / agent_slug)。
+ */
+export function controlPlaneCall(
+  name: string,
+  args: unknown,
+  opts: { agentSlug?: string; museCycle?: boolean } = {},
+): boolean {
+  const a: Record<string, any> = args && typeof args === 'object' ? (args as Record<string, any>) : {};
+  const action = String(a.action ?? '');
+  if (name === 'manage_agent') return action === 'create' || action === 'update';
+  if (name === 'manage_schedule') {
+    if (action !== 'set' || !(a.auto === true || a.auto === 'true')) return false;
+    const target = String(a.agent || opts.agentSlug || DEFAULT_AGENT_SLUG).trim(); // 与 manageSchedule.execute 同口径
+    return !(opts.museCycle && target === MUSE_AGENT_SLUG);
+  }
+  if (name === 'manage_automation') {
+    if (action !== 'set') return false;
+    const agent = String(a.agent_slug ?? a.agent ?? '').trim(); // manageAutomation:agent_slug ?? agent;muse 归一为唤醒 Muse
+    // 本次调用**写进去**的控制内容:非 Muse 的旧式 agent 简写,或含 agent_run / tool_call 的动作链(形状不对按最严)。
+    const writesControl = (agent !== '' && agent !== MUSE_AGENT_SLUG) ||
+      (a.actions != null && (!Array.isArray(a.actions) || a.actions.some((s: any) => {
+        const t = String(s?.type || '');
+        return t === 'agent_run' || t === 'tool_call';
+      })));
+    // 停用(validateTriggerInput:缺席=启用)只在**不写入**控制内容时免批:停用的同时改写 agent_run 链 / 旧式 agent 的 prompt,
+    // 用户之后在面板里一键重新启用,跑的就是模型写的那条链(面板不显示改动)。省略 actions 的纯停用照旧免批。
+    if (a.enabled !== undefined && !a.enabled) return writesControl;
+    if (writesControl) return true;
+    // 启用且省略 actions 的更新 = 保留旧动作链(upsertTrigger),分类器看不到旧链 → 按控制面问(fail-closed);null = 显式清空。
+    return a.actions === undefined && !!String(a.id ?? '').trim();
+  }
   return false;
 }
 
-/** 给审批弹窗用的人类可读预览（从 tool 参数里抽要害）。 */
-export function approvalPreview(call: ToolCall): string {
+/** controlPlaneCall 可能为真的工具(闸门据此决定要不要为非 host 调用解析参数)。 */
+const CONTROL_PLANE_TOOLS = new Set(['manage_agent', 'manage_schedule', 'manage_automation']);
+
+const clip = (v: unknown, n: number): string => {
+  const s = String(v ?? '').replace(/\s+/g, ' ').trim();
+  return s.length > n ? `${s.slice(0, n)}…` : s;
+};
+
+/** 给审批弹窗用的人类可读预览（从 tool 参数里抽要害）。
+ *  opts.keptActions:manage_automation 更新且省略 actions 时,闸门读到的旧动作链(undefined = 没读 / 读不到;
+ *  null 或 [] = 旧规则没有动作链)。 */
+export function approvalPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {}): string {
   let args: any = {};
   try {
     args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
@@ -109,8 +194,71 @@ export function approvalPreview(call: ToolCall): string {
     const domains = Array.isArray(args.allowed_domains) && args.allowed_domains.length ? ` [${args.allowed_domains.join(', ')}]` : '';
     return `browser_task${domains}: ${t.length > 160 ? `${t.slice(0, 160)}…` : t}`;
   }
+  // 控制面三件:审批卡(旧客户端不认 reason.kind='control')和 Muse 代批判官都只看得到 preview ——
+  // 截断的 JSON 答不了「它要建什么、谁到时候无人值守去跑、跑什么」。
+  if (name === 'manage_agent') {
+    const act = String(args.action ?? '');
+    if (act !== 'create' && act !== 'update') return `manage_agent ${act}${args.slug ? ` ${args.slug}` : ''}`;
+    const parts = [
+      args.model != null ? `model → ${clip(args.model, 80)}` : '',
+      args.thinking_level != null ? `thinking → ${clip(args.thinking_level, 20)}` : '',
+      Array.isArray(args.tools) ? `tools → [${clip(args.tools.join(', '), 160)}]` : '',
+      args.max_iterations != null ? `max_iterations → ${clip(args.max_iterations, 10)}` : '',
+      args.system_prompt != null ? `instructions: ${clip(args.system_prompt, 160)}` : '',
+      args.soul != null ? `persona (${String(args.soul).length} chars)` : '',
+    ].filter(Boolean);
+    return `manage_agent ${act} ${args.slug ? clip(args.slug, 60) : '(slug from name)'} "${clip(args.name, 80)}"${parts.length ? ` · ${parts.join(' · ')}` : ''}`;
+  }
+  if (name === 'manage_schedule') {
+    const act = String(args.action ?? '');
+    const who = args.agent ? ` for agent "${clip(args.agent, 60)}"` : '';
+    if (act !== 'set') return `manage_schedule ${act}${who}${args.id ? ` ${args.id}` : ''}`;
+    const auto = args.auto === true || args.auto === 'true';
+    return `manage_schedule set ${args.id ? clip(args.id, 60) : '(new)'}${who}: "${clip(args.name, 100)}" @ ${clip(args.date || '?', 40)}` +
+      `${args.repeat ? ` every ${clip(args.repeat, 10)}` : ''}` +
+      (auto ? ` · runs unattended when due: ${clip(args.prompt, 200)}` : ' · planning only');
+  }
+  if (name === 'manage_automation') {
+    const act = String(args.action ?? '');
+    if (act !== 'set') return `manage_automation ${act}${args.id ? ` ${args.id}` : ''}`;
+    const when = [args.cond_type, args.datetime || args.interval || args.time || args.match || args.path || args.event]
+      .filter(Boolean).map((x) => clip(x, 60)).join(' ');
+    const agent = String(args.agent_slug ?? args.agent ?? '').trim();
+    const renderSteps = (list: any[]): string => list.map((s: any) => {
+      const t = String(s?.type || '?');
+      if (t === 'agent_run') return `agent_run "${clip(s.agentSlug || s.agent_slug, 60)}" unattended: ${clip(s.prompt, 160)}`;
+      if (t === 'tool_call') return `tool_call ${clip(s.tool, 60)}`;
+      if (t === 'notify') return `notify "${clip(s.title, 60)}"`;
+      return `${t}${s?.path ? ` ${clip(s.path, 60)}` : ''}`;
+    }).join(' → ');
+    // 更新且省略 actions = 保留旧链(upsertTrigger);旧式 agent / prompt 则按本次参数整量覆写。
+    // 闸门读得到旧链时经 opts.keptActions 传进来,让用户看见批的这条规则到点**实际**跑什么(评审 #7)。
+    const keeps = args.actions === undefined && !!args.id;
+    const kept = keeps && Array.isArray(opts.keptActions) && opts.keptActions.length ? opts.keptActions : undefined;
+    const steps = Array.isArray(args.actions)
+      ? renderSteps(args.actions)
+      : kept
+        ? `keeps existing actions: ${renderSteps(kept)}`
+        : agent && agent !== MUSE_AGENT_SLUG
+          ? `agent_run "${clip(agent, 60)}" unattended: ${clip(args.prompt, 160)}`
+          : keeps && opts.keptActions === undefined ? '(actions unchanged)' : 'wake Muse';
+    const off = args.enabled !== undefined && !args.enabled ? ' (disabled)' : '';
+    return `manage_automation set ${args.id ? clip(args.id, 60) : '(new)'}${off}: "${clip(args.desc, 100)}" · when ${when || '?'} · ${steps}`;
+  }
   return `${name} ${JSON.stringify(args).slice(0, 200)}`;
 }
+
+/**
+ * 拒绝的模型面文案(英文),按原因区分 —— ApprovalDecision.rejectReason 是唯一载体:
+ *   - 规则 / hook / 无人值守排队:各自在产生处写 rejectReason(`Denied by approval rule: …` 等);
+ *   - 中止(用户停了 run、审批还挂着):ABORTED_REJECT_REASON;
+ *   - 用户在审批卡 / 通道里点了拒绝:决定体不带 rejectReason → 消费方回落 USER_REJECT_REASON。
+ * 旧文案是写死的中文「用户拒绝了该操作。」,且三种原因共用,模型分不清是被拒、被停还是被规则挡。
+ */
+export const USER_REJECT_REASON =
+  'The user rejected this tool call, so it was NOT run. Do not retry the same call; ask the user how to proceed or continue with other work.';
+export const ABORTED_REJECT_REASON =
+  'The run was stopped while this tool call was waiting for approval, so it was NOT run.';
 
 // 同 run 审批串行化(Codex 评审 07-30 #2):TUI 的审批 UI 是单槽,通道端收到首个决定即退订——
 // 并行子代理同时弹审批会互相顶掉,后到的一直挂到超时。同 run 的请求排队逐个发布。
@@ -139,12 +287,13 @@ function requestApprovalNow(
   signal?: AbortSignal,
   reason?: ApprovalReason,
 ): Promise<ApprovalDecision> {
-  if (signal?.aborted) return Promise.resolve({ action: 'reject' });
+  // 中止 ≠ 用户拒绝:按拒绝兑现,但原因写清(主 loop 随后抛 AbortLikeError 不会读到;子代理等其它消费方会)
+  if (signal?.aborted) return Promise.resolve({ action: 'reject', rejectReason: ABORTED_REJECT_REASON });
   const approvalId = nextApprovalId();
   return new Promise<ApprovalDecision>((resolve) => {
     const onAbort = (): void => {
       pending.delete(approvalId);
-      resolve({ action: 'reject' });
+      resolve({ action: 'reject', rejectReason: ABORTED_REJECT_REASON });
     };
     if (signal) signal.addEventListener('abort', onAbort, { once: true });
     pending.set(approvalId, {
@@ -229,12 +378,12 @@ export function isKnownSafeBash(command: string): boolean {
 
 // 路径抽取已迁 tools/writeTargets.ts(检查点快照共用同一口径,见该文件头注)。
 
-const APPROVAL_MODES = new Set(['readonly', 'auto-edit', 'full-auto', 'custom']);
-/** 会话此刻存着的审批档(输入区切档 = PUT 进 agent_config)。没存 → undefined;**读失败照抛**(调用方自己决定兜底方向)。 */
+/** 会话此刻存着的审批档(输入区切档 = PUT 进 agent_config)。没存 → undefined;**读失败照抛**(调用方自己决定兜底方向)。
+ *  存了个不认识的非空值 → readonly(H5):从前当「没存」,回落到可能更宽的启动快照。 */
 export async function storedApprovalMode(sessionId: string): Promise<ApprovalMode | undefined> {
   const raw = await deps().state.getAgentConfig(sessionId);
   const mode = (typeof raw === 'string' ? JSON.parse(raw) : raw)?.approvalMode;
-  return APPROVAL_MODES.has(mode) ? mode : undefined;
+  return normalizeApprovalMode(mode, `session ${sessionId}`);
 }
 
 
@@ -289,8 +438,10 @@ function parseCallArgs(call: ToolCall): any {
  * 判定分支在 gateToolCall 里已经算过一遍,不带出来客户端只能猜(而它猜不到引擎侧生效的 base 档)。
  */
 export interface ApprovalReason {
-  /** custom-ask=用户规则要求问 · escalate=工作区外写入升级 · mode=该档位本就需要审批 */
-  kind: 'custom-ask' | 'escalate' | 'mode';
+  /** custom-ask=用户规则要求问 · escalate=工作区外写入升级 · mode=该档位本就需要审批
+   *  · control=控制面:建出之后无人值守、以完全放行跑的工作(建自动化 / auto 日程 / 建改 Agent),不可「总允许」。
+   *  旧客户端不认识新 kind 只是不显示原因(桌面 appStore 白名单清洗成 undefined)。 */
+  kind: 'custom-ask' | 'escalate' | 'mode' | 'control';
   /** 命中的规则串(仅 custom-ask) */
   rule?: string;
   /** 引擎侧**生效**的档位(custom 未命中时是降解后的 base;客户端算不出来) */
@@ -310,9 +461,12 @@ const strList = (v: unknown): string[] =>
 /** 读 approval 段。ponytail: 每次现读(config.json 就几 KB)——改完规则立刻生效，不必重启引擎。 */
 export function customRules(): CustomApprovalRules {
   const raw = (getRawSection('approval') as any) || {};
-  const base = raw.base;
+  // H5:缺席 / 空 = 缺省 auto-edit(照旧);三档原样;其它任何值(拼错的 "read-only"、大小写变体、把 custom 当 base)
+  // → readonly 并告警。旧口径是一律落 auto-edit —— 用户想写只读、手滑写成 "Readonly",就被静默放宽成自动改文件。
+  let base = normalizeApprovalMode(raw.base, 'config.json approval.base');
+  if (base === 'custom') { warnUnknownMode(raw.base, 'config.json approval.base'); base = 'readonly'; }
   return {
-    base: base === 'readonly' || base === 'full-auto' ? base : 'auto-edit',
+    base: base ?? 'auto-edit',
     allow: strList(raw.allow),
     ask: strList(raw.ask),
     deny: strList(raw.deny),
@@ -362,13 +516,82 @@ export function customVerdict(call: ToolCall, rules: CustomApprovalRules): 'allo
   return customVerdictDetailed(call, rules)?.verdict;
 }
 
+/** child 是否在 parent 之内(含相等);两侧都应是 canonicalFuturePath 归一过的绝对路径。 */
+function isInsideDir(child: string, parent: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * H3:custom 的 allow 规则能否豁免「越界写」升级。只有规则带**绝对路径前缀**、且本次**全部**写目标
+ * (相对路径按 cwd 解析)经真实路径归一后都落在该前缀之内才算 —— 裸 `write_file` 这种 allow 从前在越界升级之前
+ * 就返回了,等于静默放行工作区外任意位置的写入。归一用 canonicalFuturePath(与 fsPolicy.realResolve 同一算法:
+ * realpath 最深已存在祖先再拼回),前缀与目标两侧同规归一:`../` 逃逸、前缀内的软链指向外面、macOS /tmp→/private/tmp 都挡得住。
+ * 规则匹配本身(ruleMatches)仍是字面前缀、只看首个目标 —— deny / ask 语义不动,这里只收紧 allow 的豁免面。
+ */
+export function allowRuleCoversWrites(rule: string, call: ToolCall, cwd?: string): boolean {
+  const i = rule.indexOf(':');
+  const prefix = i >= 0 ? rule.slice(i + 1).trim() : '';
+  if (!prefix || !path.isAbsolute(prefix)) return false;
+  const targets = writeTargetsOf(call);
+  if (!targets.length) return false;
+  const root = canonicalFuturePath(prefix);
+  const base = cwd || process.cwd();
+  return targets.every((t) => isInsideDir(canonicalFuturePath(path.resolve(base, t)), root));
+}
+
+/** 本次 run 的 profile 是否本机引擎形态(ctx.profile 缺省回退部署基线;未配置 = 否)。 */
+function profileHasHostExec(p?: AppProfile): boolean {
+  try { return !!(p ?? deps().profile).capabilities.hostExec; } catch { return false; }
+}
+
+/**
+ * 控制面审批卡的预览:在 approvalPreview 之上补**只有闸门读得到**的事实(评审 #7),用户据此才批得明白 ——
+ *   - manage_automation 更新且省略 actions:旧动作链会保留,写出它到点实际跑什么(从前只有「(actions unchanged)」);
+ *   - manage_agent create / update:是否覆盖已有 agent,以及生效的审批档 —— Agent 自带档由 manageAgent 保留;
+ *     没有自带档(新建,或先 delete 再 create)= 跟会话档。先免批 delete 再 create,卡上写的是「new agent」,不再像无害的新建。
+ * 读失败只是少这点补充,判定不受影响。
+ */
+async function controlPreview(call: ToolCall): Promise<string> {
+  const args = parseCallArgs(call) || {};
+  const name = call.function.name;
+  try {
+    const id = String(args.id ?? '').trim();
+    if (name === 'manage_automation' && args.actions === undefined && id) {
+      const { loadTriggers } = await import('./museTriggers.js');
+      const cur = (await loadTriggers()).find((t) => t.id === id);
+      return approvalPreview(call, { keptActions: cur ? (cur.actions ?? null) : undefined });
+    }
+    if (name === 'manage_agent') {
+      // slug 归一与 manageAgent.execute 同口径(非法 slug → slugify(name)),否则预览说的和实际写的不是同一个 agent
+      const requested = args.slug ? String(args.slug) : '';
+      const slug = requested && isValidSlug(requested) ? requested : slugify(String(args.name ?? ''));
+      const existing = slug ? await getAgent(slug) : null;
+      const create = String(args.action) === 'create';
+      const what = existing
+        ? create ? `overwrites existing agent "${slug}"` : `edits agent "${slug}"`
+        : create ? `new agent "${slug}"` : `agent "${slug}" does not exist`;
+      const tier = existing?.approvalMode
+        ? `approval tier stays ${existing.approvalMode}`
+        : 'no approval tier of its own (follows the session)';
+      return `${approvalPreview(call)} · ${what} · ${tier}`;
+    }
+  } catch { /* 补充信息读不到就不补 */ }
+  return approvalPreview(call);
+}
+
 /**
  * loop 工具执行前的审批闸门。返回归一化决定（approve / reject）。
- *   - execMode!=='host' 且非 mcp__ → 立即 approve（**server/worker 零影响**）
+ *   - execMode!=='host' 且非 mcp__ → 立即 approve（**server/worker 零影响**）—— 唯一例外:本机引擎(hostExec)的
+ *     sandbox 会话发起控制面调用,不论档位都问(sandbox 的 full-auto 只是缺省值,不是对 host 无人值守工作的授权)
  *   - 入口先把工具名归一成正典名(旧别名不得绕过用户规则),此后全程按归一后的 call 判定
- *   - custom 档命中规则 → deny 直接拒 / allow 直接放 / ask 强制批；未命中按其 base 档
+ *   - 档位归一:不认识的非空档按 readonly(H5)
+ *   - custom 档命中规则 → deny 直接拒 / ask 强制批 / allow 直接放 —— 但 allow 不豁免越界写升级,
+ *     除非规则带绝对路径前缀且全部写目标都在其内(H3);未命中按其 base 档
  *   - run_bash 且 known-safe(只读单命令) → 立即 approve（纯 UX,即便 readonly）
  *   - 越界写(工作区外,非保护路径)→ 强制升级审批（auto-edit 也要批;full-auto 放行;不吃「总允许」）
+ *   - 控制面(controlPlaneCall:建无人值守工作 / 建改 Agent)→ readonly / auto-edit 必问,不吃「总允许」(H1);
+ *     无人值守 run 的代批档('agent')对控制面不代批,一律排队给用户;预览补上旧动作链 / 覆盖与审批档(评审 #7)
  *   - 否则按档:不需审批 / 已「总允许」→ approve;否则 await 用户决定
  */
 export async function gateToolCall(
@@ -396,41 +619,58 @@ export async function gateToolCall(
   const canonical = canonicalToolName(call.function.name);
   if (canonical !== call.function.name) call = { ...call, function: { ...call.function, name: canonical } };
   const name = call.function.name;
+  const isControl = CONTROL_PLANE_TOOLS.has(name) &&
+    controlPlaneCall(name, parseCallArgs(call), { agentSlug: ctx.agentSlug, museCycle: !!ctx.approvalDeferral });
   // host 模式全部过闸;非 host 仅 MCP 工具过闸(本地形态的 sandbox 会话也可能挂 MCP)。
-  if (ctx.execMode !== 'host' && !name.startsWith('mcp__')) return { action: 'approve' };
+  // 例外(评审 H1 #1):manage_automation / manage_schedule 是 mode:'both'、只按 profile 的 hostExec 门禁 ——
+  // 本机的 sandbox 会话(桌面「未选工作区」、TUI / API 直接传 execMode:'sandbox')也看得见,而它们建出的规则 / auto 日程
+  // 到点以 execMode:'host' + full-auto 起跑。从前这里直接放行 = 沙箱会话一句话建出 host 上的无人值守全开工作,
+  // 连审批卡都不弹。sandbox 的档(缺省 full-auto,或 agent 定义带的档)只管沙箱内,不是这件事的授权 → 控制面一律问。
+  // 云端(profile 无 hostExec)这几个工具本就不可见,且照旧零影响:不进闸、不发事件。
+  const nonHost = ctx.execMode !== 'host';
+  const nonHostControl = nonHost && isControl && profileHasHostExec(ctx.profile);
+  if (nonHost && !name.startsWith('mcp__') && !nonHostControl) return { action: 'approve' };
 
   // custom 档先裁决:用户写下的规则**压过**下面的 known-safe 捷径(把 `run_bash:ls` 放进 ask
   // 就该真弹审批,否则规则形同虚设);未命中则降解成 base 档,后续逻辑与三档完全一致。
   // 档位现读:团队 run 一跑几小时、成员子 run 各自冻着启动那刻的档 —— 只认快照,用户切到「完全通行」整场纹丝不动(09-21 反馈)。
   // 读失败 fail-closed:回落快照可能正好放开用户刚收紧的档 → 按只读问,用户写的 deny / ask 规则照样生效、allow 不放行
   // (只读档管不到 manage_automation 这类只靠 custom 规则把关的工具,光落 readonly 等于绕过 deny —— Codex 09-21 二轮)。
-  let mode = ctx.approvalMode;
+  let mode = normalizeApprovalMode(ctx.approvalMode, 'run snapshot');
   let readFailed = false;
   if (ctx.modeSessionId) {
     try { mode = (await storedApprovalMode(ctx.modeSessionId)) || mode; } catch { readFailed = true; }
   }
   let forceAsk = false;
   let askRule = '';
+  let allowRule = '';
   if (mode === 'custom' || readFailed) {
     const rules = customRules();
     const v = customVerdictDetailed(call, readFailed ? { ...rules, allow: [] } : rules);
     // 拒绝时把规则串一并带出:否则用户写坏一条 deny 规则,只看到 agent 莫名失败,无从调起。
     // 模型面文本一律英文(项目约定:提示/工具结果英文,UI/日志中文)
     if (v?.verdict === 'deny') return { action: 'reject', rejectReason: `Denied by approval rule: ${v.rule}` };
-    if (v?.verdict === 'allow') return { action: 'approve' };
+    if (v?.verdict === 'allow') allowRule = v.rule; // 先不放:越界升级算完再定(H3)
     forceAsk = v?.verdict === 'ask';
     askRule = forceAsk ? v!.rule : '';
     mode = readFailed ? 'readonly' : rules.base;
   }
 
+  // 越界写升级:工作区外写一律要批(full-auto 例外:用户已全信任)。**先于** allow 放行计算(H3):
+  // 从前 allow 在这之前就返回,裸 `write_file` allow = 工作区外任意写静默放行。
+  const escalate = ctx.execMode === 'host' && mode !== 'full-auto' && writeEscalationNeeded(call, ctx);
+  if (allowRule && (!escalate || allowRuleCoversWrites(allowRule, call, ctx.cwd))) return { action: 'approve' };
+
   // known-safe 只读 bash:免审批。
   if (!forceAsk && name === 'run_bash' && isKnownSafeBash(bashCommandOf(call))) return { action: 'approve' };
 
-  // 越界写升级:工作区外写一律要批(full-auto 例外:用户已全信任)。
-  const escalate = ctx.execMode === 'host' && mode !== 'full-auto' && writeEscalationNeeded(call, ctx);
   if (escalate) logEscalation(runId, call, ctx);
 
-  if (!escalate && !forceAsk) {
+  // 控制面(H1):host 会话 mode 为空 = 不审批的云端口径,与 toolNeedsApproval 一致;custom 已降解成 base。
+  // 非 host 会话不看档位(见入口处的例外)。
+  const control = nonHost ? nonHostControl : isControl && !!mode && mode !== 'full-auto';
+
+  if (!escalate && !forceAsk && !control) {
     // 接管态的点按类工具只能作用在绑定过的用户标签上 → 「有活绑定」即要批(与执行侧同一真源,不另探端口);
     // 无人值守 run 本就不接管,也就不因此排队审批
     const userBrowser = mode !== 'full-auto' && USER_BROWSER_ACTIONS.has(name) && !ctx.approvalDeferral && await userBrowserBound();
@@ -454,23 +694,32 @@ export async function gateToolCall(
   if (permV.block) return { action: 'reject', rejectReason: 'Denied by a PermissionRequest hook.' };
   if (permV.allow) return { action: 'approve' };
 
-  const preview = escalate ? '⚠ 工作区外写入 · ' + approvalPreview(call) : approvalPreview(call);
-  // 「为什么问你」(B3):优先级与判定同序 —— 用户自己写的规则 > 越界升级 > 档位本身。
+  // preview 同时是审批卡正文与 Muse 代批判官的输入(模型面)→ 英文;越界的本地化标签由客户端按 reason.kind 渲染。
+  const base = control ? await controlPreview(call) : approvalPreview(call);
+  const preview = escalate ? `⚠ Write outside the workspace · ${base}` : base;
+  // 「为什么问你」(B3):优先级与判定同序 —— 用户自己写的规则 > 越界升级 > 控制面 > 档位本身
+  // (越界只有写工具、控制面只有 manage_*,两者互斥)。
   const reason: ApprovalReason = forceAsk
     ? { kind: 'custom-ask', rule: askRule, mode }
     : escalate
       ? { kind: 'escalate', mode }
-      : { kind: 'mode', mode };
+      : control
+        ? { kind: 'control', mode }
+        : { kind: 'mode', mode };
   // 无人值守 run:没有订阅者能应答 approval_request,await 就是永久卡死 → 排队 / 代批(动态 import 防模块环)。
   if (ctx.approvalDeferral) {
     const { deferApproval } = await import('./pendingApprovals.js');
-    return deferApproval(runId, call, preview, reason, ctx);
+    // 控制面不交给代批判官(评审 #2):判官的放行口径是「可逆 / 在工作区内」,答不了「要不要让某个 agent 到点无人值守全开跑」,
+    // 而 H1 的约定是这类调用必须由用户本人点头 → 'agent' 档也按 'queue' 排队进收件箱。
+    return deferApproval(runId, call, preview, reason, control ? { ...ctx, approvalDeferral: 'queue' } : ctx);
   }
   const d = await requestApproval(runId, call, preview, signal, reason);
 
   if (d.action === 'approve_always') {
-    // 越界写、custom 的 ask 规则都不进「总允许」:前者每次都确认,后者是用户写死的「永远问我」。
-    if (!escalate && !forceAsk) allowAlways(ctx.sessionId, name);
+    // 越界写、custom 的 ask 规则、控制面都不进「总允许」:越界每次都确认;ask 是用户写死的「永远问我」;
+    // 控制面按工具裸名缓存 = 批一次「建个提醒」就放行本会话之后所有「建无人值守 agent 任务」(H1)。
+    // 旧客户端不认 kind='control' 仍会显示「总允许」按钮 —— 按一次性批准处理,不缓存。
+    if (!escalate && !forceAsk && !control) allowAlways(ctx.sessionId, name);
     return { action: 'approve', argsOverride: d.argsOverride };
   }
   return d;

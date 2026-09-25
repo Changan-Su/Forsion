@@ -13,7 +13,7 @@ import { PROTOCOL_MARK } from '../llm/openaiCompat.js';
 import { realpathSync } from 'node:fs';
 import { publish, drain, cleanup } from './eventBus.js';
 import { makeUiSettingsUpdater } from './uiAck.js';
-import { gateToolCall, requestApproval, type ApprovalDecision, type ApprovalMode } from './approvals.js';
+import { gateToolCall, requestApproval, normalizeApprovalMode, USER_REJECT_REASON, type ApprovalDecision, type ApprovalMode } from './approvals.js';
 import { takeRunThinking } from './sessionSettings.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } from '../seams/runContext.js';
@@ -870,8 +870,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           .filter((r) => !cwd || r !== path.resolve(cwd))
           .slice(0, 8)
       : [];
+  // 不认识的非空档 → readonly 并告警(H5 fail-closed);空 / 缺席才走缺省(host=auto-edit,云端=full-auto)。
+  // 旧口径 `||` 透传,拼错的档一路落到 toolNeedsApproval 的 `return false` = 全部放行。
   const approvalMode: ApprovalMode =
-    agentConfig.approvalMode || (execMode === 'host' ? 'auto-edit' : 'full-auto');
+    normalizeApprovalMode(agentConfig.approvalMode, `run ${runId}`) || (execMode === 'host' ? 'auto-edit' : 'full-auto');
   // 会话档现读只在本机引擎形态(hostExec;含本机的沙箱会话 —— 它们的 MCP 工具也过闸):云端形态的状态层是 HTTP,
   // 每次 MCP 调用多一趟往返、瞬时失败还会落只读弹审批,而这次修的是本机的事 → 云端照旧用快照。
   // 成员身份以库里的父链接为准:agentConfig 来自请求体,分支会话(branchSession)也会把 teamMember 原样抄走 —— 不核实,
@@ -1873,7 +1875,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }, hookCtx());
       if (ac.signal.aborted) throw new AbortLikeError();
       if (preV.block) {
-        return mkRejected(call, startedAt, parallelGroup, `⛔ Hook 拦截：${preV.blockReason || 'PreToolUse hook 阻止了该操作'}`);
+        // 模型面英文,且写清是 hook 挡的(不是用户拒的):同 approvals 的 rejectReason 口径
+        return mkRejected(call, startedAt, parallelGroup, `Blocked by a PreToolUse hook, so this tool call was NOT run: ${preV.blockReason || 'no reason given.'}`);
       }
       // hook 改写参数 → 用改写后的 call 走审批与执行（审批基于改写后的内容，更安全）。
       const effCall = preV.updatedInput
@@ -1889,8 +1892,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
       if (ac.signal.aborted) throw new AbortLikeError();
       if (decision.action === 'reject') {
-        // 规则自动拒绝时带上是哪条规则挡的(用户拒绝仍是原文案)
-        return mkRejected(call, startedAt, parallelGroup, decision.rejectReason || '用户拒绝了该操作。');
+        // 模型面文案英文、按原因区分:规则 / hook / 无人值守排队 / 中止各自带 rejectReason;
+        // 没带 = 用户在审批卡或通道里点了拒绝(中止在上一行已抛 AbortLikeError,不会走到这里)。
+        return mkRejected(call, startedAt, parallelGroup, decision.rejectReason || USER_REJECT_REASON);
       }
       // 审批时用户改了参数（如修订 bash 命令）→ 用覆盖后的参数执行。
       const execCall = decision.argsOverride

@@ -9,6 +9,10 @@
  * **tool_call 步骤刻意不在本工具开放**(validateTriggerInput allowToolCall=false):
  * 聊天 agent 在 full-auto 下能自建规则,放开=自授权 run_bash 提权链;tool_call 只走桌面构建器(人工预批)。
  * 旧名 muse_watch 在 registry.executeTool 留静默别名(不进 defs/快照,只兜升级瞬间的存量调用)。
+ * 审批(H1 控制面,见 approvals.controlPlaneCall):建 / 改 / 启用含 agent_run(或旧式 agent 简写)的规则 ——
+ * 到点以 full-auto 无人值守跑 —— 在询问我批准 / 替我批准两档每次都问、不进「总允许」;本机 sandbox 会话里不论档位都问
+ * (本工具 mode:'both',sandbox 会话也看得见)。list / remove / 纯停用(不同时改写 agent_run 链或旧式 agent)/
+ * 纯 notify·db 动作链免批。改本工具的参数口径(enabled / agent / actions 的缺省语义)须同步那边的分类器。
  */
 import type { ToolProvider } from '../toolRegistry.js';
 import {
@@ -141,16 +145,16 @@ export const manageAutomationProvider: ToolProvider = {
         }
         if (action === 'remove') {
           const id = String(args.id || '').trim();
-          if (!id) return 'Error: id 必填(先 list 查看)';
-          if (isPluginTriggerId(id)) return `Error: 规则 ${id} 由插件管理,请在插件设置里禁用`;
+          if (!id) return 'Error: id is required (use list to see ids).';
+          if (isPluginTriggerId(id)) return `Error: rule ${id} is managed by a plugin; the user can disable it in that plugin's settings.`;
           const gone = await removeTrigger(id);
           // L13(2026-09-02):派生游标随规则一起走 —— HTTP DELETE 一直这么做,这条路从前漏了。
           // 兜底的 pruneCursors 被 tick 起始的「名册里还有 db 规则吗」门控:删掉最后一条 db 规则后 prune
           // 再也不跑 → 孤儿游标永久留在 db-cursors.json 里(文件长胖;id 复用时读端自证兜住误触发)。
           if (gone) await dropCursors([id]).catch(() => {});
-          return gone ? `已删除规则 ${id}。` : `Error: 未找到规则 ${id}`;
+          return gone ? `Removed rule ${id}.` : `Error: rule ${id} not found`;
         }
-        if (action !== 'set') return 'Error: action 须为 set/list/remove';
+        if (action !== 'set') return 'Error: action must be set/list/remove';
 
         // 工具参数名是 agent(对模型友好),校验层键是 agent_slug——这里显式映射(修 muse_watch 时代静默掉落的 bug)。
         const v = validateTriggerInput({ ...args, agent_slug: args.agent_slug ?? args.agent } as any, { cwd: ctx.cwd, vaultPath: amadeusVaultPath() });
@@ -161,16 +165,16 @@ export const manageAutomationProvider: ToolProvider = {
         }
 
         if (v.value.agentSlug && !(await getAgent(v.value.agentSlug))) {
-          return `Error: agent "${v.value.agentSlug}" 不存在(先用 manage_agent 查看可用 agent)`;
+          return `Error: agent "${v.value.agentSlug}" not found (use manage_agent action=list to see agents)`;
         }
         for (const a of v.value.actions || []) {
           if (a.type === 'agent_run' && !(await getAgent(a.agentSlug))) {
-            return `Error: agent "${a.agentSlug}" 不存在(先用 manage_agent 查看可用 agent)`;
+            return `Error: agent "${a.agentSlug}" not found (use manage_agent action=list to see agents)`;
           }
         }
         const id = String(args.id || '').trim() || undefined;
         // 插件种子规则(plugin:<插件id>:<key>)归插件的 ensure 管:聊天 agent 不能改也不能借它的 id 凭空建(伪插件规则绕 50 条帽)。
-        if (id && isPluginTriggerId(id)) return `Error: 规则 ${id} 由插件管理,不能经本工具修改`;
+        if (id && isPluginTriggerId(id)) return `Error: rule ${id} is managed by a plugin and cannot be changed with this tool.`;
         // 监听列必须是落盘列:公式/引用/投影列的值不落盘,游标恒空 → 规则一次都不触发、零日志、面板正常。
         // 桌面构建器早就把它们过滤掉了,引擎侧从前没有对等闸(这条工具能建出这种「永远不响」的规则)。
         // ⚠️ H2 同款闸(与 HTTP 路由对齐):只在新建 / cond 实质变化 / 本次要置为 enabled:true 时体检。
@@ -185,15 +189,16 @@ export const manageAutomationProvider: ToolProvider = {
         if (!r.ok) return `Error: ${r.error}`;
         const c = v.value.cond;
         const note = c.type === 'manual'
-          ? '(不会自动触发;在笔记里插入按钮块并选中这条规则,由用户点击执行)'
+          ? ' (never fires on its own; the user runs it by clicking a button block that points at this rule in a note)'
           : v.value.actions?.length
-          ? '(supervisor 巡检约每 5 分钟评估一次,命中即按动作链执行)'
+          ? ' (evaluated about every 5 minutes; when it fires, the action steps run in order)'
           : v.value.agentSlug
-            ? `(命中后由 agent "${v.value.agentSlug}" 全自动执行;巡检约每 5 分钟评估一次)`
+            ? ` (when it fires, agent "${v.value.agentSlug}" runs it unattended with full access; evaluated about every 5 minutes)`
             : c.type === 'daily_at'
-              ? '(每天过点后的首次巡检触发;若设了 Muse 运行时段,时段外会顺延补发)'
-              : '(Muse 巡检周期约每 5 分钟评估一次;需 Muse 已在设置中启用)';
-        return `${r.created ? '已设定' : '已更新'}自动化 ${r.trigger.id}:「${v.value.desc}」[${condSummary(c)}]${note}`;
+              ? ' (fires at the first check after that time each day; if Muse has active hours set, a firing outside them is delivered once they begin)'
+              : ' (evaluated by Muse about every 5 minutes; Muse must be enabled in Settings)';
+        const state = v.value.enabled ? '' : ' [disabled]';
+        return `${r.created ? 'Created' : 'Updated'} automation ${r.trigger.id}${state}: "${v.value.desc}" [${condSummary(c)}]${note}`;
       },
     },
   ],
