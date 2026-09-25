@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { noteRefInsert, remarkWiki, splitWiki, wikiLabel } from './wikiChat'
+import { embedsOfParagraph, noteRefInsert, remarkWiki, splitWiki, wikiLabel } from './wikiChat'
 import { parsePdfLinkInner } from '@amadeus-shared/pdfLink'
 
 describe('noteRefInsert ↔ splitWiki 往返契约(Composer 插入 → 气泡渲染)', () => {
@@ -144,5 +144,35 @@ describe('LINE_CITE_RE 路径头纪律(Codex 二审:前导散文不许吞)', () 
   it('绝对路径含空格是合法引用,不受路径头校验误伤', () => {
     const [p] = splitWiki('[/Users/x/My Docs/util.ts#L3]')
     expect(p.wiki?.inner).toBe('/Users/x/My Docs/util.ts#L3')
+  })
+})
+
+describe('嵌入段 embedsOfParagraph(聊天里独占一段的 `![[…]]` → 内联嵌入)', () => {
+  const para = (...kids: any[]) => ({ type: 'paragraph', children: kids })
+  const text = (value: string) => ({ type: 'text', value })
+  it('单条 / 换行连写多条(软换行与硬换行)都认,内文原样(含锚点与宽度)', () => {
+    expect(embedsOfParagraph(para(text('![[a.png]]')))).toEqual({ inners: ['a.png'], tail: '' })
+    expect(embedsOfParagraph(para(text('![[/abs/a.png|300]]\n![[/abs/b.mp4#t=20]]')))).toEqual({ inners: ['/abs/a.png|300', '/abs/b.mp4#t=20'], tail: '' })
+    expect(embedsOfParagraph(para(text('![[a.png]]'), { type: 'break' }, text('![[b.wav]]')))!.inners).toEqual(['a.png', 'b.wav'])
+  })
+  it('流式半截:段尾没写完的下一条算 tail,已完整的照常升格(否则每来一条就整段卸载重挂)', () => {
+    for (const tail of ['!', '![', '![[', '![[/abs/b.p', '![[/abs/b.png]']) {
+      expect(embedsOfParagraph(para(text(`![[/abs/a.png]]\n${tail}`)))).toEqual({ inners: ['/abs/a.png'], tail })
+    }
+  })
+  it('负对照:句中嵌入 / 夹带正文 / 第一条都没写完 / 带别的行内节点 → 不升格', () => {
+    for (const t of ['看 ![[a.png]] 这张', '![[a.png]] 这是说明', '![[a.pn', '[[a.png]]', '']) {
+      expect(embedsOfParagraph(para(text(t)))).toBeNull()
+    }
+    expect(embedsOfParagraph(para(text('![[a.png]]'), { type: 'emphasis', children: [text('x')] }))).toBeNull()
+  })
+  it('remarkWiki:嵌入段挂 data-embeds,子节点照旧变引用条(没开嵌入的调用点靠它兜底)', () => {
+    const tree: any = { type: 'root', children: [para(text('![[/abs/a.png]]')), para(text('普通 [[B]]'))] }
+    remarkWiki()(tree)
+    const [emb, plain] = tree.children
+    expect(JSON.parse(emb.data.hProperties.dataEmbeds)).toEqual({ inners: ['/abs/a.png'], tail: '' })
+    expect(emb.children.map((k: any) => k.type)).toEqual(['text', 'link'])
+    expect(emb.children[1].url).toBe('#wiki=' + encodeURIComponent('/abs/a.png'))
+    expect(plain.data).toBeUndefined()
   })
 })

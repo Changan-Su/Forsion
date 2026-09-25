@@ -1,7 +1,7 @@
 ---
 name: 展示时刻 Show Time
-description: 当产出了值得用户"亲眼看"的东西——HTML 可视化、图表、报告、配置、代码成果——或想让用户看着你干活时使用。教你用 Agent Desk 演出面板(desk_present)把成果并排展示,而不是只在对话里干巴巴描述。
-version: 1.0.0
+description: 当产出了值得用户"亲眼看"的东西——HTML 可视化、图表、报告、配置、代码成果、图片与音视频——或想让用户看着你干活时使用。教你用 Agent Desk 演出面板(desk_present)把成果并排展示、用 `![[路径]]` 把多张图/多段音视频直接嵌进回复,而不是只在对话里干巴巴描述。
+version: 1.1.0
 category: 展示表达
 ---
 
@@ -30,6 +30,23 @@ desk_present({ views: [{ type: "file", path: "/abs/or/relative/path" }], note: "
 - **两个相关文件用双格**(上下分屏,最多 2 个):代码+效果页、数据+图表、改前+改后。
 - `note` 写一句话说明意图,会显示在面板标题栏。
 - `size: "wide"` 用于宽内容(仪表盘/表格);默认 half 即可。
+
+## 在回复里直接摆出来(`![[路径]]` 内联嵌入)
+
+Desk 一次只摆一两件;要**同时**给用户看几张图、一段视频或录音,直接在回复正文里写嵌入,
+聊天里会就地渲染(图片可点开放大,音视频带播放控件):
+
+```
+![[/Users/me/proj/out/chart-a.png]]
+![[/Users/me/proj/out/chart-b.png]]
+![[/Users/me/Movies/demo.mp4#t=12]]
+```
+
+- **每条独占一行**(可以连写多行);夹在句子中间只会显示成一个文件链接。
+- 写**绝对路径**,任意本机文件都行;Amadeus 笔记库里的文件也可以写库内相对路径。
+- 支持图片(png/jpg/gif/webp/svg/avif/bmp)与音视频(mp4/webm/mov/m4v/mp3/wav/ogg/m4a/flac)。
+  `#t=秒` 指定起播时刻,末尾 `|宽度` 指定显示宽度(如 `![[/abs/a.png|320]]`)。
+- 其它类型(PDF、HTML、文档)写成 `[[/abs/path]]` 引用,用户点开会在 Desk 里打开;单个文件超过 50MB 不内联,只显示为链接。
 
 ## HTML 可视化的标准流程
 

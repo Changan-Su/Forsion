@@ -71,10 +71,26 @@ interface MdNode {
   value?: string
   url?: string
   children?: MdNode[]
+  data?: { hProperties?: Record<string, unknown> }
+}
+
+/** 整段只有 `![[…]]`(可连写多条,空白/换行隔开)→ 各条内文;否则 null。
+ *  句中的 `![[x]]` 不算 —— 与 Amadeus 编辑器同口径:块级嵌入必须独占一段。
+ *  段尾允许一截没写完的 `![[…`(tail,原样显示):流式输出里下一条还在路上时,整段若退回普通段落,
+ *  已渲出的图片/视频会随每条新嵌入卸载重挂、重读一遍盘。 */
+export function embedsOfParagraph(node: MdNode): { inners: string[]; tail: string } | null {
+  const kids = node.children
+  if (!kids?.length || !kids.every((k) => k.type === 'text' || k.type === 'break')) return null
+  const text = kids.map((k) => (k.type === 'break' ? '\n' : k.value || '')).join('')
+  const m = /^((?:\s*!\[\[[^\]\n]+\]\])+)\s*(!(?:\[(?:\[[^\]\n]*\]?)?)?)?$/.exec(text)
+  if (!m) return null
+  return { inners: [...m[1].matchAll(/!\[\[([^\]\n]+)\]\]/g)].map((x) => x[1]), tail: m[2] ?? '' }
 }
 
 /** remark 插件:text 节点里的 [[x]] → link(url=`#wiki=<inner>`),由 Markdown.tsx 的 a 组件拦截渲染。
- *  code/inlineCode/math 是独立节点类型天然不碰;link 内部不递归(双链不嵌进已有链接)。 */
+ *  code/inlineCode/math 是独立节点类型天然不碰;link 内部不递归(双链不嵌进已有链接)。
+ *  嵌入段(embedsOfParagraph)另在段落上挂 `data-embeds`,由 Markdown 的 p 组件在开了嵌入的调用点
+ *  换成内联嵌入;子节点照旧变引用条 —— 没开嵌入的调用点 / 渲不了的类型就拿它兜底。 */
 export function remarkWiki() {
   const SKIP = new Set(['code', 'inlineCode', 'link', 'linkReference', 'math', 'inlineMath'])
   const walk = (node: MdNode): void => {
@@ -83,6 +99,10 @@ export function remarkWiki() {
     for (let i = 0; i < kids.length; i++) {
       const k = kids[i]
       if (SKIP.has(k.type)) continue
+      if (k.type === 'paragraph') {
+        const embeds = embedsOfParagraph(k)
+        if (embeds) k.data = { ...k.data, hProperties: { ...k.data?.hProperties, dataEmbeds: JSON.stringify(embeds) } }
+      }
       if (k.type !== 'text' || !k.value || k.value.indexOf('[') === -1) {
         walk(k)
         continue

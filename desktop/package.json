@@ -111,6 +111,7 @@
     "probe:rtc": "electron scripts/rtc-live.probe.cjs",
     "e2e:inspect": "node scripts/inspect-overlay.e2e.cjs",
     "e2e:mediacite": "node scripts/media-citation.e2e.cjs",
+    "e2e:chatembed": "node scripts/chat-embed.e2e.cjs",
     "e2e:webcite": "node scripts/web-citation.e2e.cjs",
     "check:ctxring": "node scripts/ctxring.check.cjs",
     "check:connect": "node scripts/connect-preview.check.cjs",

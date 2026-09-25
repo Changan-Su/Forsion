@@ -28,6 +28,7 @@
  *   npm run live:harness -- --only teamapproval              # 团队 × 完全通行(09-21 反馈):成员 config 自带 auto-edit / run 启动后才切档,两条都须 0 次审批;改审批闸 / teamRuns 档位后跑
  *   npm run live:harness -- --only coding                    # 改 agents/codingPrompt.ts / skills/forsion-plugin 后跑:Coding 人格面对插件项目须指向 Sandbox 面板、且不自己动手 git init/commit(版本由宿主管)
  *   npm run live:harness -- --only refine                    # 自进化闭环(09-18):Historian 自动档提名 → 收件箱 → /refine 采纳写 HARNESS.md → 新会话系统提示带上;改 REFINE_DIRECTIVE / harnessStore / 判官 harness 字段 / 注入槽后跑
+ *   npm run live:harness -- --only embed                    # 内联嵌入(09-25):改 skills/show-time 后跑;三份文件(两图一音频)须各有一行独占的 `![[绝对路径]]`
  *   npm run live:harness -- --only browsertabs              # 读用户已打开的浏览器标签(09-24):起临时 headless Chrome 冒充用户浏览器;改 browser_tabs / 浏览器提示词后跑(CHROME_BIN 可指定)
  *   node scripts/live-harness.mjs --selftest                 # 纯判据(done 锚点 / load_tools 措辞 / 子代理归属 / 团队激活窗与真并行)的负对照;不起引擎、不需凭证
  *
@@ -58,7 +59,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'embed'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -67,7 +68,7 @@ const FILLER = Math.max(0, Math.floor(Number(opt('filler', 0)) || 0));
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'embed']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -654,6 +655,28 @@ try {
     const pointsToHistory = /(版本|History|Save version)/i.test(ev.content);
     return { ok: !ev.error && ev.done && sandbox && wrote.length === 0 && !manualInit, inconclusive: sandbox && !manualInit && !pointsToHistory,
       detail: ev.error || `${sandbox ? '指向了 Sandbox' : '没提 Sandbox(提示词的插件项目一节未生效)'};${wrote.length ? `却动了文件(${wrote.join(',')})` : '只答未改'};${manualInit ? '⚠️教用户手敲 git init(会把 History 面板变只读)' : '没让用户手建仓'};${pointsToHistory ? '指向了版本面板' : '未指向版本面板(不计红,读原话)'}`,
+      output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // 内联嵌入(09-25):show-time 技能教 agent 把要给人看的图 / 音视频写成**独占一行**的 `![[绝对路径]]`,聊天就地渲出
+  // 图片与播放器(Desk 一次只摆两件,三份文件正好越过它)。判据只认「独占一行」—— 夹在句中的渲不成嵌入,只是一条文件链接。
+  // display_file / desk_present 不算违规,但不计入「展示了」:那说明技能那一节没被采纳,原话进报告给人读。
+  await scenario('embed', 'embed 回复里内联展示两图一音频', async () => {
+    const dir = join(workspace, `embed-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+    const wav = Buffer.alloc(44 + 8000); // 1 秒 8kHz 静音
+    wav.write('RIFF', 0); wav.writeUInt32LE(36 + 8000, 4); wav.write('WAVE', 8); wav.write('fmt ', 12); wav.writeUInt32LE(16, 16);
+    wav.writeUInt16LE(1, 20); wav.writeUInt16LE(1, 22); wav.writeUInt32LE(8000, 24); wav.writeUInt32LE(8000, 28); wav.writeUInt16LE(1, 32);
+    wav.writeUInt16LE(8, 34); wav.write('data', 36); wav.writeUInt32LE(8000, 40); wav.fill(128, 44);
+    const files = [['before.png', png], ['after.png', png], ['narration.wav', wav]].map(([n, b]) => { const f = join(dir, n); writeFileSync(f, b); return f; });
+    const ev = await run(`live-embed-${Date.now()}`, `我在 ${dir} 里放了改版前后的两张截图 before.png、after.png,还有一段配音 narration.wav。把这三个文件都直接摆在聊天里给我看,我要一起对比。`, 180_000);
+    const lines = ev.content.split('\n').map((l) => l.trim());
+    const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const shown = files.filter((f) => lines.some((l) => new RegExp(`^!\\[\\[${esc(f)}(?:#[^\\]|]*)?(?:\\|\\d+)?\\]\\]$`).test(l)));
+    const other = ev.toolCalls.filter((t) => t === 'display_file' || t === 'desk_present');
+    return { ok: !ev.error && ev.done && shown.length === files.length,
+      detail: ev.error || `独占一行的嵌入 ${shown.length}/${files.length}${shown.length < files.length ? `(缺 ${files.filter((f) => !shown.includes(f)).map((f) => f.split('/').pop()).join(',')})` : ''}${other.length ? `;另调了 ${other.join(',')}` : ''}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
