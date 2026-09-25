@@ -101,6 +101,16 @@ describe('npm 暂存区(.pending)', () => {
     expect(await fs.readdir(root)).toEqual(['tangu-computer-use'])
   })
 
+  it('更新器被杀留下的 staging / old 半成品:下次播种一并清掉,不被当成更新', async () => {
+    const leftovers = path.join(root, '.pending')
+    await write(path.join(leftovers, '.tangu-computer-use.staging-4242'), { 'manifest.json': manifest('tangu-computer-use', '0.9.0') })
+    await write(path.join(leftovers, '.tangu-computer-use.staging-4242.old'), { 'manifest.json': manifest('tangu-computer-use', '0.8.0') })
+    const r = await seedAt('2.11.5')
+    expect(r.installed).toEqual(['tangu-computer-use'])
+    expect(await read(path.join(root, 'tangu-computer-use', 'main.js'))).toBe('v0.5.0')
+    expect(await fs.readdir(root)).toEqual(['tangu-computer-use'])
+  })
+
   it('负对照:暂存区宿主不兼容(minAppVersion / apiVersion)或 id 不符 → 不用它,且清掉', async () => {
     for (const [name, m] of [
       ['minApp', JSON.stringify({ id: 'tangu-computer-use', version: '0.6.0', minAppVersion: '9.0.0' })],

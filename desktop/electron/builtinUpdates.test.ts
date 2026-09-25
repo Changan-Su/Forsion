@@ -106,6 +106,17 @@ describe('checkBuiltinUpdates', () => {
     expect(logs.some((l) => l.includes('npm 更新'))).toBe(true)
   })
 
+  it('已有暂存 0.5.6 再来 0.5.7:整目录换位,.pending/ 里不留 staging / old 残渣', async () => {
+    const v6 = tgz(pkgFiles('0.5.6'))
+    const v7 = tgz(pkgFiles('0.5.7'))
+    expect(await check(registry(serve(R1, '0.5.6', v6)).fetch)).toEqual(['tangu-computer-use@0.5.6'])
+    await fs.writeFile(path.join(pending(), 'only-in-0.5.6.txt'), 'old')
+    expect(await check(registry(serve(R1, '0.5.7', v7)).fetch)).toEqual(['tangu-computer-use@0.5.7'])
+    expect(await fs.readFile(path.join(pending(), 'main.js'), 'utf8')).toBe('v0.5.7')
+    expect(await fs.stat(path.join(pending(), 'only-in-0.5.6.txt')).then(() => true, () => false)).toBe(false)
+    expect(await fs.readdir(path.dirname(pending()))).toEqual(['tangu-computer-use'])
+  })
+
   it('已是最新:只问 packument,不下载', async () => {
     const reg = registry(serve(R1, '0.5.5', tgz(pkgFiles('0.5.5'))))
     expect(await check(reg.fetch)).toEqual([])

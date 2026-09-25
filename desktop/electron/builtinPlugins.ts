@@ -19,7 +19,8 @@
  *
  * 第二个来源 = npm 更新器(builtinUpdates.ts)下载好的新版,暂存在 `<pluginsRoot>/.pending/<随包目录名>/`:
  * 同 id、比随包新、过 gatePluginManifest(apiVersion / minAppVersion)才顶替随包来源,之后走同一套替换规则。
- * 暂存区每次播种后清掉(用过的、过时的、不兼容的都删),更新器按需重下。播种仍是启动期唯一的写点。
+ * 每次播种结束整个 `.pending/` 清掉(用过的、过时的、不兼容的、崩溃留下的半成品都删),更新器按需重下。
+ * 播种仍是启动期唯一的写点。
  *
  * 播种过的 id 记在进程内(builtinPluginIds),readExternalPlugins 据此标 `builtin`:设置页显示「内置」、
  * 不给卸载按钮(不想用就关开关;删了目录下次启动也会种回来 —— 内置的语义就是「一直在」)。
@@ -152,7 +153,6 @@ export async function seedBuiltinBundles(
   if (platform !== 'darwin' && platform !== 'win32') return report
   for (const src of sources) {
     const pendingPath = pendingDirFor(pluginsRoot, src)
-    let usePending = false
     try {
       const bundled = await readManifest(src)
       if (!bundled) {
@@ -160,7 +160,7 @@ export async function seedBuiltinBundles(
         continue // 没随包(单品变体 / 包没装)是常态,不是错
       }
       const pending = await readManifest(pendingPath)
-      usePending = !!pending && pending.id === bundled.id && cmpVersion(pending.version, bundled.version) > 0
+      const usePending = !!pending && pending.id === bundled.id && cmpVersion(pending.version, bundled.version) > 0
         && !gatePluginManifest(pending, opts.appVersion ?? null)
       const from = usePending ? pendingPath : src
       const offered = usePending ? pending! : bundled
@@ -180,19 +180,14 @@ export async function seedBuiltinBundles(
         report.kept.push(bundled.id)
       }
       builtinIds.add(bundled.id)
-      await dropPending(pendingPath) // 用过的、过时的、不兼容的一律清掉;更新器按需重下
     } catch (e) {
-      // 从暂存区换失败也清掉它:下次启动退回随包来源,不让一份坏下载每次启动都卡住播种。
-      if (usePending) await dropPending(pendingPath)
       log(`[builtin-plugins] 播种 ${src} 失败(忽略,下次启动再试):${(e as Error)?.message || e}`)
     }
   }
+  // 暂存区只活到下一次播种:用过的、过时的、不兼容的、换失败的(下次退回随包来源,不让一份坏下载每次启动都卡住)、
+  // 更新器被杀留下的 staging 半成品,一律清掉。更新器按需重下。
+  await fs.rm(path.join(pluginsRoot, '.pending'), { recursive: true, force: true }).catch(() => {})
   return report
-}
-
-async function dropPending(pendingPath: string): Promise<void> {
-  await fs.rm(pendingPath, { recursive: true, force: true }).catch(() => {})
-  await fs.rmdir(path.dirname(pendingPath)).catch(() => {}) // .pending 空了才删得掉
 }
 
 /** 测试用:清掉进程内的内置 id 集。 */
