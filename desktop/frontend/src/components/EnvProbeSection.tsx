@@ -224,7 +224,8 @@ export const EnvProbeSection: React.FC<{
                 </span>
                 <span className="env-probe-name">
                   <strong>{TOOL_LABEL[pr.tool] || pr.tool}</strong>
-                  <small>{t(`env.purpose.${pr.tool}`)}</small>
+                  {/* 用途键是拼出来的,i18nCoverage 扫不到:主进程新增探测项没配文案时宁可不显示,也别把 key 渲出来。 */}
+                  {TOOL_LABEL[pr.tool] && <small>{t(`env.purpose.${pr.tool}`)}</small>}
                 </span>
                 <span className="env-probe-version" title={pr.version || undefined}>
                   {pr.found && pr.version ? <>
