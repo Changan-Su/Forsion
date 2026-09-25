@@ -12,9 +12,17 @@ import './messages'
 export const AUTOMATION_WORKSPACE_MODE = 'plugin:automation:rules' as const
 const keyOf = (sel: AutomationSel | null): string | null => sel ? JSON.stringify(sel) : null
 const openDetail = () => useWorkspace.getState().openView('automation-detail', {}, 'main')
-const mutate = async (run: () => Promise<unknown>): Promise<void> => {
-  try { await run(); useAutomation.getState().bump() }
-  catch (error) { useApp.getState().toast(String(error instanceof Error ? error.message : error), true) }
+const mutate = async (run: () => Promise<unknown>): Promise<boolean> => {
+  try { await run(); useAutomation.getState().bump(); return true }
+  catch (error) { useApp.getState().toast(String(error instanceof Error ? error.message : error), true); return false }
+}
+/** Engine deletes are hard deletes: ask first, and after a successful delete drop the selection when it pointed
+ *  at the removed row (otherwise the main view falls back to an orphaned "pick one" state until the next poll). */
+export async function confirmDelete(sel: AutomationSel, name: string, run: () => Promise<unknown>): Promise<boolean> {
+  if (!window.confirm(t('automation.deleteConfirm', { name }))) return false
+  const ok = await mutate(run)
+  if (ok && keyOf(useAutomation.getState().sel) === keyOf(sel)) useAutomation.getState().setSel(null)
+  return ok
 }
 let readers = 0
 let stopPolling: (() => void) | undefined
@@ -73,7 +81,7 @@ export const automationListSource: ListSourceContribution = {
       return [
         { id: 'edit', label: t('common.edit'), run() { state.openBuilder(tr.id); openDetail() } },
         { id: 'toggle', label: t(tr.enabled ? 'automation.ux.pause' : 'automation.ux.enable'), run() { void mutate(() => saveMuseTrigger(cfg, { ...triggerToUpsert(tr), enabled: !tr.enabled, actor: 'user' })) } },
-        { id: 'delete', label: t('common.delete'), run() { void mutate(() => deleteMuseTrigger(cfg, tr.id)) } },
+        { id: 'delete', label: t('common.delete'), danger: true, run() { void confirmDelete(sel, tr.desc, () => deleteMuseTrigger(cfg, tr.id)) } },
       ]
     }
     if (sel.kind === 'schedule') {
@@ -81,7 +89,7 @@ export const automationListSource: ListSourceContribution = {
       if (!en) return []
       return [
         { id: 'toggle', label: t(en.auto ? 'automation.ux.pause' : 'automation.ux.enable'), run() { void mutate(() => saveAgentScheduleEntry(cfg, sel.slug, { id: en.id, name: en.name, date: en.date, repeat: en.repeat, auto: !en.auto, prompt: en.prompt, description: en.description, todo: en.todo })) } },
-        { id: 'delete', label: t('common.delete'), run() { void mutate(() => deleteAgentScheduleEntry(cfg, sel.slug, en.id)) } },
+        { id: 'delete', label: t('common.delete'), danger: true, run() { void confirmDelete(sel, en.name, () => deleteAgentScheduleEntry(cfg, sel.slug, en.id)) } },
       ]
     }
     const config = state.specialCfg?.[sel.kind]

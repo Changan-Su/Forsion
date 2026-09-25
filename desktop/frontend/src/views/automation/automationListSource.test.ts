@@ -69,4 +69,23 @@ describe('native automation workspace source', () => {
     useAutomation.getState().openBuilder()
     expect(source.activeKey!()).toBeNull()
   })
+  it('⚠️delete asks first, marks itself danger, and clears the selection only after a confirmed delete', async () => {
+    const del = vi.spyOn(backend, 'deleteMuseTrigger').mockResolvedValue(undefined as never)
+    const confirm = vi.fn(() => false)
+    vi.stubGlobal('window', { confirm })
+    try {
+      useAutomation.getState().setSel({ kind: 'trigger', triggerId: trigger.id })
+      const action = source.itemMenu!(source.items({ group: 'rules' })[0]).find((a) => a.id === 'delete')!
+      expect(action.danger).toBe(true)
+      action.run()
+      await Promise.resolve()
+      expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Inventory'))
+      expect(del).not.toHaveBeenCalled()
+      expect(useAutomation.getState().sel).toEqual({ kind: 'trigger', triggerId: trigger.id })
+      confirm.mockReturnValue(true)
+      action.run()
+      await vi.waitFor(() => expect(useAutomation.getState().sel).toBeNull())
+      expect(del).toHaveBeenCalledWith(expect.anything(), trigger.id)
+    } finally { vi.unstubAllGlobals() }
+  })
 })
