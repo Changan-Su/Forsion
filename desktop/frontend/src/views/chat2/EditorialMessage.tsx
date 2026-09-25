@@ -10,7 +10,8 @@ import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, T
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { Markdown } from '../../components/Markdown'
-import { WikiText } from '../../components/ChatWikiLink'
+import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'
+import { RefChipView, splitLeadingRefs } from './RefChipView'
 import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
 import { SketchCards } from '../../components/SketchCard'
@@ -305,8 +306,12 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
       return <div ref={rootRef} className="t2-sys t2-interrupted">⏹ {t('msg.interrupted')}</div>
     }
     const name = userName || t('chat.you')
+    // 输入框「已选择」芯片发送时拼成正文第一行;气泡里还原成同一套芯片(U-11)。
+    // 目录标题用剥掉引用后的正文;复制 / 编辑仍拿原始 msg.content(发的是什么就是什么)。
+    const lead = splitLeadingRefs(msg.content)
+    const tocTitle = lead ? (lead.body.trim() || lead.refs.map((r) => r.name).join(' ')) : msg.content
     return (
-      <div ref={rootRef} className="t2-userwrap" id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={msg.content}>
+      <div ref={rootRef} className="t2-userwrap" id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
           <div className="t2-user">
@@ -317,7 +322,16 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
                   : <span key={`${a.name}-${i}`} className="msg-attach-file" title={a.name}>📎 {a.name}</span>)}
               </div>
             )}
-            <WikiText text={msg.content} />
+            {lead && (
+              <div className="t2-user-refs">
+                {lead.refs.map((r, i) => (
+                  <RefChipView key={`${r.token}-${i}`} chip={r}>
+                    {r.wiki ? <ChatWikiLink inner={r.wiki} /> : undefined}
+                  </RefChipView>
+                ))}
+              </div>
+            )}
+            {lead ? (lead.body && <WikiText text={lead.body} />) : <WikiText text={msg.content} />}
           </div>
           <div className="t2-actions">
             <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(msg.content)}><Copy size={14} /></button>
@@ -359,7 +373,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
     <div ref={rootRef} className="t2-asst" id={`tocmsg-${msg.id}`}>
       <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(msg.agentName || agentNameFallback || 'Tangu')}</div>
       <div className="t2-asst-col">
-        <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{(msg.agentName || agentNameFallback || 'Tangu').toUpperCase()}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
+        <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{msg.agentName || agentNameFallback || 'Tangu'}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
         {msg.systemPrompt && <SystemPromptBlock content={msg.systemPrompt} />}
         {msg.reasoning && <Thinking2 reasoning={msg.reasoning} />}
         {(() => {

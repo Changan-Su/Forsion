@@ -3,7 +3,8 @@ import { ChevronRight, History } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
 import { notifyApp } from '../../stores/notificationStore'
 import { takeFreshNominations } from '../../stores/notificationWiring'
-import { getSessionHistorian, type SessionHistorianStatus } from '../../services/backendService'
+import { getBackgroundSessions, getSessionHistorian, type SessionHistorianStatus } from '../../services/backendService'
+import { useChildChat } from '../../stores/childChatStore'
 import { registerMessages, useI18n } from '../../i18n'
 import { Markdown } from '../../components/Markdown'
 import { openAgentProfile } from '../agentProfileNav'
@@ -13,6 +14,7 @@ registerMessages({
   'historian.status.working': { zh: '整理会话中', en: 'Reviewing conversation' },
   'historian.status.empty': { zh: '本会话还没有 Historian 工作记录', en: 'No Historian activity in this conversation yet' },
   'historian.status.unavailable': { zh: '状态暂不可用', en: 'Status unavailable' },
+  'historian.status.viewTranscript': { zh: '查看完整记录', en: 'View full transcript' },
 })
 
 /** Only model output and completed actions are shown; maintenance prompts stay in the background. */
@@ -55,7 +57,20 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
   const [data, setData] = useState<SessionHistorianStatus | null>(null)
   const [failed, setFailed] = useState(false)
   const seen = useRef<Set<string> | null>(null) // 本会话已见过的活动 id;null = 还没成功轮询过(首轮不提醒)
-  useEffect(() => { setOpen(false); setData(null); setFailed(false); seen.current = null }, [sessionId])
+  // Historian 的子会话(引擎每个父会话最多一条,kind='historian')。SubChatStatus 不再单列它(U-04 去重),
+  // 完整记录的入口改在这里:展开时现取,取不到(老引擎 / 还没跑过)就不露按钮。
+  const [transcriptId, setTranscriptId] = useState<string | null>(null)
+  useEffect(() => { setOpen(false); setData(null); setFailed(false); setTranscriptId(null); seen.current = null }, [sessionId])
+  // 展开期间首次生成子会话也要冒出入口:没找到之前随状态轮询(记录数 / 运行态变化)再取;找到就不再取。
+  const pollKey = `${data?.records?.length ?? 0}:${data?.activity?.length ?? 0}:${!!data?.running}`
+  useEffect(() => {
+    if (!open || !connected || transcriptId) return
+    let disposed = false
+    void getBackgroundSessions(cfg, sessionId, 'historian')
+      .then((rows) => { if (!disposed) setTranscriptId(rows.find((r) => r.kind === 'historian')?.sessionId ?? null) })
+      .catch(() => {})
+    return () => { disposed = true }
+  }, [cfg, sessionId, open, connected, transcriptId, pollKey])
   useEffect(() => {
     if (!connected) return
     let disposed = false
@@ -89,6 +104,14 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
       {records.map((r) => <Markdown key={r.id} content={r.content} />)}
       {(data?.activity || []).map((item) => <div className="t2o-historian-event" key={item.id}>{item.detail}</div>)}
       {!records.length && !data?.activity.length && <div className="panel-note">{t('historian.status.empty')}</div>}
+      {transcriptId && (
+        <button
+          type="button"
+          className="t2-tsum-more"
+          data-historian-transcript
+          onClick={() => useChildChat.getState().open(sessionId, { id: transcriptId, title: 'Historian', sessionId: transcriptId })}
+        >{t('historian.status.viewTranscript')}</button>
+      )}
     </div>}
   </div>
 }

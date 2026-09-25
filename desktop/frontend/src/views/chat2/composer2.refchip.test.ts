@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import { refChipOf, fileChip, folderChip, viewChip } from './Composer2'
 import { refToText, type ChatRef } from './chatDragRef'
+import { splitLeadingRefs } from './RefChipView'
 
 const VAULT = '/Users/x/vault'
 const roundTrip = (r: ChatRef): void => expect(refChipOf(r, VAULT).token).toBe(refToText(r, VAULT).trim())
@@ -67,5 +68,61 @@ describe('refChipOf', () => {
       name: '规划 <A> "主视图"',
       kind: 'view',
     })
+  })
+})
+
+/** 气泡侧的逆运算(U-11):Composer 把芯片 token 用空格连成正文第一行再接 \n,气泡要能原样拆回来。
+ *  所有用例都从**真的芯片构造函数**出发,而不是手写 token —— 构造一改,这里跟着红。 */
+describe('splitLeadingRefs', () => {
+  const send = (chips: { token: string }[], text: string): string => chips.map((c) => c.token).join(' ') + '\n' + text
+
+  it('全部 token 形态往返:笔记 / 会话 / 本机文件 / 带空格路径 / 文件夹 / View', () => {
+    const chips = [
+      refChipOf({ kind: 'note', path: '项目/周报.md' }, VAULT),
+      refChipOf({ kind: 'session', id: 'abc', title: '昨天那个 bug' }, VAULT),
+      refChipOf({ kind: 'file', path: '/tmp/a/b.txt' }, VAULT),
+      fileChip('/Users/x/Desktop/Screen Shot 2026-09-25 at 10.00.png'),
+      folderChip('/Users/x/My Project'),
+      viewChip('canvas&board', '规划 <A> "主视图"'),
+      refChipOf({ kind: 'file', path: 'src/app.ts' }, VAULT),
+    ]
+    const out = splitLeadingRefs(send(chips, '帮我看看'))!
+    expect(out).not.toBeNull()
+    expect(out.refs.map((r) => r.token)).toEqual(chips.map((c) => c.token))
+    expect(out.body).toBe('帮我看看')
+    expect(out.refs.map((r) => r.kind)).toEqual(['note', 'session', 'file', 'file', 'file', 'view', 'file'])
+    expect(out.refs[1].name).toBe('昨天那个 bug')
+    expect(out.refs[3].name).toBe('Screen Shot 2026-09-25 at 10.00.png') // 气泡里不再是带引号的原路径
+    expect(out.refs[4].name).toBe('My Project')
+    expect(out.refs[5].name).toBe('规划 <A> "主视图"')
+    expect(out.refs[0].wiki).toBe(`${VAULT}/项目/周报.md|周报`)
+  })
+
+  it('引用 + 引语 + 正文:正文原样保留(多行、> 引用块都不动)', () => {
+    const c = fileChip('/tmp/my docs/a.md')
+    expect(splitLeadingRefs(`${c.token}\n> 上文\n\n问题一\n问题二`)).toEqual({
+      refs: [{ token: c.token, name: 'a.md', kind: 'file' }], body: '> 上文\n\n问题一\n问题二',
+    })
+  })
+
+  it('只发芯片没写字:有无结尾换行都拆,正文为空', () => {
+    const c = refChipOf({ kind: 'session', id: 's1', title: 'T' }, VAULT)
+    expect(splitLeadingRefs(`${c.token}\n`)?.body).toBe('')
+    expect(splitLeadingRefs(c.token)?.refs).toHaveLength(1)
+  })
+
+  it('负例:普通消息一律不拆(宁可原样显示也不吃掉用户的话)', () => {
+    for (const text of [
+      '你好\n第二行',
+      '/refine\n复盘一下',                 // 斜杠命令不是路径
+      'and/or 这个怎么选\n…',              // 句子
+      'and/or\n下一行',                   // 单段无扩展名的相对路径不认
+      '"hello world"\n引号里是句子',        // 引号里没有分隔符
+      'https://example.com/a.html\n看看',  // URL
+      '/tmp/a.txt  双空格\n',              // token 之间不是单空格
+      '[[笔记]] 后面跟了字\n',              // 第一行混了普通文字
+      '/Users/x/a.txt',                    // 单独一个裸路径、无换行:多半是用户自己打的
+      '',
+    ]) expect(splitLeadingRefs(text), text).toBeNull()
   })
 })
