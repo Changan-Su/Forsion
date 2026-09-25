@@ -81,4 +81,31 @@ describe('notificationStore', () => {
     notifyApp({ text: 'x'.repeat(2000) })
     expect(useNotifications.getState().items[0].text).toHaveLength(500)
   })
+
+  it('durationMs 覆盖 level 缺省停留(撤销提示留够 8 秒),补位与去重重置都沿用它', () => {
+    notifyApp({ text: 'undo', level: 'info', durationMs: 8000, dedupeKey: 'k' })
+    vi.advanceTimersByTime(6000) // info 缺省 5000 早该走了
+    expect(useNotifications.getState().items).toHaveLength(1)
+    notifyApp({ text: 'undo again', level: 'info', dedupeKey: 'k' }) // 去重重置停留:仍按 8000
+    vi.advanceTimersByTime(7000)
+    expect(useNotifications.getState().items).toHaveLength(1)
+    vi.advanceTimersByTime(1500)
+    expect(useNotifications.getState().items).toHaveLength(0)
+  })
+
+  it('inAppOnly:窗口无焦点也不跟发系统通知;缺省照发', () => {
+    const osNotify = vi.fn()
+    // node 环境:没有 window / document,按需桩(store 用 typeof document 判定有无 DOM)。
+    vi.stubGlobal('window', { tangu: { notify: osNotify } })
+    vi.stubGlobal('document', { hasFocus: () => false })
+    try {
+      notifyApp({ text: 'restored', inAppOnly: true })
+      expect(osNotify).not.toHaveBeenCalled()
+      expect(useNotifications.getState().items).toHaveLength(1)
+      notifyApp({ text: 'plain' })
+      expect(osNotify).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })

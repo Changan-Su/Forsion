@@ -23,6 +23,11 @@ export interface NotifyInput {
   /** 无视开关强制弹出(仅设置页「发送测试通知」用,预览位置/样式)。 */
   force?: boolean
   action?: { label: string; run(): void }
+  /** 自定义停留时长(ms,>0 才生效);缺省按 level。带撤销钮的提示用它留够反应时间(U-06:约 8 秒)。sticky 优先。 */
+  durationMs?: number
+  /** 只在应用内显示,不跟发系统通知。给「用户刚在本应用里点出来的即时反馈」用 —— 比如从设置浮窗触发的
+   *  恢复布局:那一刻主窗恰好没焦点,照常规会多弹一条系统横幅,而用户就在看着这个应用。 */
+  inAppOnly?: boolean
 }
 
 export interface AppNotification {
@@ -37,6 +42,8 @@ export interface AppNotification {
   count: number
   dedupeKey?: string
   action?: { label: string; run(): void }
+  /** 自定义停留时长(见 NotifyInput.durationMs);缺省按 level。补位 / 去重重置停留时都用它。 */
+  durationMs?: number
 }
 
 /** 内置事件注册表(设置页开关列表的数据源;插件事件 plugin:<id> 动态出现,默认开)。 */
@@ -63,6 +70,8 @@ export function eventDefaultOn(event: string): boolean {
 const MAX_VISIBLE = 4
 /** 停留时长(ms);0 = 常驻。 */
 const DURATION: Record<NotifyLevel, number> = { success: 3200, info: 5000, warning: 8000, error: 0 }
+const customDuration = (ms: unknown): number | undefined => (typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? Math.min(ms, 120_000) : undefined)
+const durationOf = (n: Pick<AppNotification, 'level' | 'durationMs'>): number => n.durationMs ?? DURATION[n.level]
 
 const PREFS_KEY = 'forsion.ntf.prefs'
 interface NtfPrefs {
@@ -136,6 +145,7 @@ export const useNotifications = create<NtfState>((set, get) => {
         if (!(st.prefs.events[event] ?? eventDefaultOn(event))) return null
       }
       const sticky = input.sticky ?? level === 'error'
+      const durationMs = customDuration(input.durationMs)
       const text = String(input.text ?? '').slice(0, 500) // 防插件超长字符串撑爆卡片
       const title = input.title ? String(input.title).slice(0, 120) : undefined
 
@@ -147,6 +157,7 @@ export const useNotifications = create<NtfState>((set, get) => {
           const upd: AppNotification = {
             ...found, text, title: title ?? found.title, level, count: found.count + 1,
             createdAt: Date.now(), sticky: sticky || found.sticky, action: input.action ?? found.action,
+            durationMs: durationMs ?? found.durationMs,
           }
           set((s) => ({
             items: s.items.map((n) => (n.id === found.id ? upd : n)),
@@ -154,7 +165,7 @@ export const useNotifications = create<NtfState>((set, get) => {
           }))
           if (visible) {
             if (upd.sticky) clearTimer(found.id)
-            else startTimer(found.id, DURATION[level])
+            else startTimer(found.id, durationOf(upd))
           }
           return found.id
         }
@@ -163,17 +174,18 @@ export const useNotifications = create<NtfState>((set, get) => {
       const n: AppNotification = {
         id: `ntf-${++seq}-${Date.now()}`, text, title, level, event,
         sourceLabel: input.sourceLabel, createdAt: Date.now(), sticky, count: 1,
-        dedupeKey: input.dedupeKey, action: input.action,
+        dedupeKey: input.dedupeKey, action: input.action, durationMs,
       }
       // 系统通知:与应用内通知同步发(所有事件,不止收件箱);仅窗口在后台时(前台已有卡片,免重复横幅);
       // osEnabled 门控。web/mobile 无 window.tangu.notify → 可选链忽略。dedupe 合并不重发(上面已 return)。
-      if (st.prefs.osEnabled && typeof document !== 'undefined' && !document.hasFocus()) {
+      // inAppOnly:调用方声明这是应用内即时反馈(见 NotifyInput.inAppOnly),不跟发。
+      if (!input.inAppOnly && st.prefs.osEnabled && typeof document !== 'undefined' && !document.hasFocus()) {
         const osTitle = title || input.sourceLabel || 'Forsion'
         try { window.tangu?.notify?.(osTitle, text) } catch { /* 无桥/web 忽略 */ }
       }
       if (st.items.length < MAX_VISIBLE) {
         set((s) => ({ items: [...s.items, n] }))
-        if (!sticky) startTimer(n.id, DURATION[level])
+        if (!sticky) startTimer(n.id, durationOf(n))
       } else {
         set((s) => ({ queue: [...s.queue, n] }))
       }
@@ -195,7 +207,7 @@ export const useNotifications = create<NtfState>((set, get) => {
         promoted.push(nx)
       }
       set({ items, queue })
-      for (const nx of promoted) if (!nx.sticky) startTimer(nx.id, DURATION[nx.level])
+      for (const nx of promoted) if (!nx.sticky) startTimer(nx.id, durationOf(nx))
     },
 
     dismissAll: () => {

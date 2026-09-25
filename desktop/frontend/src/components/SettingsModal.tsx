@@ -3307,7 +3307,7 @@ export const SettingsModal: React.FC<{
                       <button
                         className="btn ghost sm"
                         // 设置是独立浮窗(自己没有 Dockview,resetLayout 在这边第一句就退了):请主窗恢复。web 仍在同一渲染进程。
-                        onClick={() => { if (window.tangu?.requestMainAction) window.tangu.requestMainAction('reset-layout'); else useWorkspace.getState().resetLayout(); p.onClose() }}
+                        onClick={() => { if (window.tangu?.requestMainAction) window.tangu.requestMainAction('reset-layout'); else useWorkspace.getState().resetLayout({ undoable: true }); p.onClose() }}
                       >
                         <RotateCcw size={13} />
                         {t('settingsmodal.advanced.resetLayout')}
