@@ -6,7 +6,7 @@
  */
 import { useEffect, useState } from 'react'
 import { Archive, ArchiveRestore, Cloud, Info, Mail, MailOpen, MessageCircle, Trash2, Workflow } from 'lucide-react'
-import { useI18n } from '../../i18n'
+import { registerMessages, useI18n } from '../../i18n'
 import { APP_VERSION } from '../../changelog'
 import { useApp } from '../../stores/appStore'
 import { useInbox, isAutomationSender, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
@@ -22,6 +22,43 @@ const ATTACH_ICONS: Record<string, string> = {
   reset_card: '🎟️', reset_card_weekly: '🎟️', points: '⭐', membership: '👑',
 }
 
+registerMessages({
+  'inbox.reader.unread': { zh: '{n} 封未读', en: '{n} unread' },
+  'inbox.reader.readLatest': { zh: '阅读最新一封', en: 'Read latest' },
+  'inbox.reader.caughtUp': { zh: '没有未读消息', en: "You're all caught up" },
+})
+
+/** 主区未选中时的空态 = 「状态 + 动作」(U-10):告诉用户还有几封没读,并给一键去读最新那封 / 全部已读。
+ *  计数取本地已拉到的未归档列表(与「阅读最新一封」同源,按钮永远有去处)。 */
+function InboxReaderEmpty() {
+  const { t } = useI18n()
+  const messages = useInbox((s) => s.messages)
+  const unread = messages.filter((m) => !m.read_at && !m.archived_at)
+  const stamp = (m: InboxMessage): number => parseUtc(m.created_at)?.getTime() ?? 0
+  const latest = unread.reduce<InboxMessage | null>((best, m) => (!best || stamp(m) > stamp(best) ? m : best), null)
+  const readLatest = (): void => {
+    if (!latest) return
+    useInbox.getState().select(latest.id)
+    useWorkspace.getState().openView('inbox-reader', {}, 'main')
+  }
+  return (
+    <div className="ibx-reader">
+      <div className="ibx-reader-empty" data-unread={unread.length}>
+        {latest ? <Mail size={26} strokeWidth={1.5} /> : <MailOpen size={26} strokeWidth={1.5} />}
+        <div className="ibx-reader-empty-title">{latest ? t('inbox.reader.unread', { n: unread.length }) : t('inbox.reader.caughtUp')}</div>
+        {latest ? (
+          <div className="ibx-reader-empty-actions">
+            <button type="button" className="btn primary sm" data-action="read-latest" onClick={readLatest}>{t('inbox.reader.readLatest')}</button>
+            <button type="button" className="btn ghost sm" data-action="read-all" onClick={() => useInbox.getState().readAll()}>{t('inbox.action.readAll')}</button>
+          </div>
+        ) : (
+          <div className="ibx-reader-empty-hint">{t('inbox.reader.empty')}</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function InboxReaderView() {
   const { t } = useI18n()
   const { messages, archived, selectedId, markRead, markArchived, remove } = useInbox()
@@ -30,16 +67,7 @@ export function InboxReaderView() {
   // 工作区里点开的可能是「已归档」文件夹里的一封 —— 两份都找。
   const msg = selectedId ? (messages.find((m) => m.id === selectedId) ?? archived.find((m) => m.id === selectedId)) : null
 
-  if (!msg) {
-    return (
-      <div className="ibx-reader">
-        <div className="ibx-reader-empty">
-          <Mail size={26} strokeWidth={1.5} />
-          {t('inbox.reader.empty')}
-        </div>
-      </div>
-    )
-  }
+  if (!msg) return <InboxReaderEmpty />
 
   const senderAgent = msg.sender_kind === 'agent' && msg.sender_id ? agentDefs.find((a) => a.slug === msg.sender_id) : null
   const avatarUrl = senderAgent ? avatars[senderAgent.slug] : undefined
