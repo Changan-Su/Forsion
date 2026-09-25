@@ -591,17 +591,22 @@ export function getPluginDisableState(pluginId: string): PluginDisableState | nu
   return pendingDisable.get(pluginId) ?? null
 }
 
-/** 每插件一条规则串行链:ensure 的「逐条 upsert」与 disable 的「拉全量 → 逐条关」不许交错。
- *  交错的后果是静默的:disable 先拉到名单(那时 ensure 还没发),ensure 随后把规则全 upsert 成 enabled:true,
- *  最终用户看到插件是禁用的、引擎里规则却是开的 —— 正是 codex 抓的那条。链只按 id 分,不引依赖。
- *  捆绑包内嵌引擎插件的启停也走这条链:拨开关的级联(AmadeusPluginsTab)与补关(syncDisabledBundleEngines)
- *  各自在链内现读偏好,两边的 PUT 不会乱序落成「卡片开、引擎关」。 */
-const ruleChains = new Map<string, Promise<unknown>>()
-export function serialByPlugin<T>(pluginId: string, task: () => Promise<T>): Promise<T> {
-  const next = (ruleChains.get(pluginId) ?? Promise.resolve()).then(task, task)
-  ruleChains.set(pluginId, next.catch(() => {})) // 链本身不许因为某一环失败就断掉
+function serialIn<T>(chains: Map<string, Promise<unknown>>, pluginId: string, task: () => Promise<T>): Promise<T> {
+  const next = (chains.get(pluginId) ?? Promise.resolve()).then(task, task)
+  chains.set(pluginId, next.catch(() => {})) // 链本身不许因为某一环失败就断掉
   return next
 }
+
+/** 每插件一条规则串行链:ensure 的「逐条 upsert」与 disable 的「拉全量 → 逐条关」不许交错。
+ *  交错的后果是静默的:disable 先拉到名单(那时 ensure 还没发),ensure 随后把规则全 upsert 成 enabled:true,
+ *  最终用户看到插件是禁用的、引擎里规则却是开的 —— 正是 codex 抓的那条。链只按 id 分,不引依赖。 */
+const ruleChains = new Map<string, Promise<unknown>>()
+const serialByPlugin = <T>(pluginId: string, task: () => Promise<T>): Promise<T> => serialIn(ruleChains, pluginId, task)
+
+/** 捆绑包内嵌引擎插件启停的串行链(按父插件):拨开关的级联(AmadeusPluginsTab)与补关(syncDisabledBundleEngines)
+ *  各自在链内现读偏好,两边的 PUT 不会乱序落成「卡片开、引擎关」。与规则链分开:引擎 PUT 卡住不许连带挡住规则停用。 */
+const bundleEngineChains = new Map<string, Promise<unknown>>()
+export const serialBundleEngines = <T>(pluginId: string, task: () => Promise<T>): Promise<T> => serialIn(bundleEngineChains, pluginId, task)
 
 /** 就绪边沿订阅只挂一份,且跟着探针对象走:探针换了(测试 / 重装配)就退掉旧的重挂 —— 挂在旧探针上的订阅永远收不到新边沿。 */
 let readySub: { probe: object; off: () => void } | null = null
@@ -627,8 +632,7 @@ function onBackendReadyEdge(): void {
  *  只认持久化的禁用偏好(用户明确意图):不看激活态(启动时还在异步激活,会误关),也不管门禁挡下的
  *  (显式 false 是粘性的,解禁后没人翻回来)。只 PUT 仍开着的,多窗口重复跑是空转。跳过口径同级联:
  *  用户目录同 id 覆盖与首方内置同 id 不归捆绑包管;设备页不动对端引擎(见 SettingsModal 的级联注释)。
- *  关不掉不能只等下一个边沿:后端一直就绪就不会再有边沿 → 失败按 ensure 重放的节奏补(≥30s,每次触发至多 3 次)。 */
-let bundleSyncRetry: ReturnType<typeof setTimeout> | null = null
+ *  关不掉不能只等下一个边沿:后端一直就绪就不会再有边沿 → 失败按 ensure 重放的节奏补(≥30s,每次触发各自至多 3 次)。 */
 export async function syncDisabledBundleEngines(attempt = 0): Promise<void> {
   if (typeof window === 'undefined' || window.tangu?.unitPage || (window as unknown as { __FORSION_UNIT_PAGE__?: unknown }).__FORSION_UNIT_PAGE__) return
   ensureReadySubscription() // 这次等不到后端,就绪边沿再来一次
@@ -646,18 +650,15 @@ export async function syncDisabledBundleEngines(attempt = 0): Promise<void> {
   const on = new Set(engine.filter((e) => e.enabled && e.source !== 'builtin' && !userOwned.has(e.id)).map((e) => e.id))
   for (const p of parents) {
     // 与级联同链,链内现读偏好:等名单 / 排队期间用户重新打开了,就让位给级联写的 true。
-    await serialByPlugin(p.id, async () => {
+    await serialBundleEngines(p.id, async () => {
       if (!isOff(p.id)) return
       for (const id of p.bundle?.enginePlugins ?? []) {
         if (on.has(id)) await setPluginEnabled(cfg, id, false).catch(() => { failed = true })
       }
     })
   }
-  if (failed && !bundleSyncRetry && attempt < ENSURE_REPLAY_MAX) {
-    bundleSyncRetry = setTimeout(() => {
-      bundleSyncRetry = null
-      void syncDisabledBundleEngines(attempt + 1).catch((e) => console.warn('[amadeus] 捆绑包内嵌引擎插件补关失败', e))
-    }, ENSURE_REPLAY_MIN_GAP_MS)
+  if (failed && attempt < ENSURE_REPLAY_MAX) {
+    setTimeout(() => void syncDisabledBundleEngines(attempt + 1).catch((e) => console.warn('[amadeus] 捆绑包内嵌引擎插件补关失败', e)), ENSURE_REPLAY_MIN_GAP_MS)
   }
 }
 

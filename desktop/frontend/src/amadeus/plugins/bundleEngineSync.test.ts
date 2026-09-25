@@ -1,13 +1,14 @@
 // 用户关掉的捆绑包 ⇒ 内嵌引擎插件补关(2026-09-25):引擎对捆绑包内嵌插件改为缺省启用后,拨开关那一次级联
 // 若没发出去(引擎不在),只能靠 syncDisabledBundleEngines 在装载完 / 就绪边沿补。
 // 契约:只认 disabledIds;只 PUT 仍开着的;跳过用户目录同 id 与首方内置;设备页不动对端引擎;后端没就绪 → 边沿重试;
-// 与级联同一条按插件串行链、链内现读偏好(不拿旧快照盖掉级联刚写的 true);失败 30s 后补,每次触发各有额度。
+// 与级联同一条按插件串行链、链内现读偏好(不拿旧快照盖掉级联刚写的 true);失败 30s 后补,每次触发各自持有重试。
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
-import type { TanguDesktopConfig } from '../../types'
+import type { MuseTriggerInfo, TanguDesktopConfig } from '../../types'
 
 const calls = {
   puts: [] as Array<[string, boolean]>, lists: 0, engine: [] as Array<{ id: string; enabled: boolean; source: string }>,
   onList: null as null | (() => void), failPuts: 0, hold: null as null | Promise<void>, holding: false,
+  rules: [] as MuseTriggerInfo[], ruleSaves: [] as Array<[string, boolean]>,
 }
 vi.mock('../../services/backendService', () => ({
   listPlugins: vi.fn(async () => { calls.lists += 1; calls.onList?.(); return calls.engine }),
@@ -17,11 +18,11 @@ vi.mock('../../services/backendService', () => ({
     calls.puts.push([id, enabled])
     return { ok: true, enabled }
   }),
-  getMuseTriggers: vi.fn(async () => []),
-  saveMuseTrigger: vi.fn(async () => ({})),
+  getMuseTriggers: vi.fn(async () => calls.rules),
+  saveMuseTrigger: vi.fn(async (_cfg: unknown, t: { id: string; enabled: boolean }) => { calls.ruleSaves.push([t.id, t.enabled]); return t }),
 }))
 
-const { usePluginStore, syncDisabledBundleEngines, serialByPlugin } = await import('./pluginStore')
+const { usePluginStore, syncDisabledBundleEngines, serialBundleEngines } = await import('./pluginStore')
 const { setTanguProbe } = await import('./tanguSeam')
 
 const CFG: TanguDesktopConfig = { backendUrl: 'http://t', token: 'tok', modelId: '' }
@@ -43,6 +44,8 @@ beforeEach(() => {
   calls.failPuts = 0
   calls.hold = null
   calls.holding = false
+  calls.rules = []
+  calls.ruleSaves = []
   ready = CFG
   g.window = {}
   setTanguProbe(probe())
@@ -114,7 +117,7 @@ describe('syncDisabledBundleEngines', () => {
     calls.hold = new Promise<void>((r) => { release = r })
     const sync = syncDisabledBundleEngines()
     await vi.waitFor(() => expect(calls.holding).toBe(true))
-    const cascade = serialByPlugin('cu', async () => { calls.puts.push(['computer-use', true]) }) // 级联的 true
+    const cascade = serialBundleEngines('cu', async () => { calls.puts.push(['computer-use', true]) }) // 级联的 true
     release()
     await Promise.all([sync, cascade])
     expect(calls.puts).toEqual([['computer-use', false], ['computer-use', true]])
@@ -132,5 +135,29 @@ describe('syncDisabledBundleEngines', () => {
     await syncDisabledBundleEngines()
     await vi.advanceTimersByTimeAsync(30_000)
     await vi.waitFor(() => expect(calls.puts).toEqual([['computer-use', false]]))
+  })
+
+  it('两次触发交叠、首发都失败 → 各自补一次(不共用一个定时器)', async () => {
+    vi.useFakeTimers()
+    usePluginStore.setState({ plugins: [bundle('cu', ['computer-use'])] as never, disabledIds: ['cu'] })
+    calls.engine = [engine('computer-use', true)]
+    calls.failPuts = 2
+    await syncDisabledBundleEngines()
+    await syncDisabledBundleEngines()
+    await vi.advanceTimersByTimeAsync(30_000)
+    await vi.waitFor(() => expect(calls.puts).toEqual([['computer-use', false], ['computer-use', false]]))
+  })
+
+  it('引擎链卡住不挡 Muse 规则停用(两条链分开)', async () => {
+    delete g.window // 走真实的 disable():它在 node 环境里本就不碰 window
+    calls.rules = [{
+      id: 'plugin:stuck:a', desc: 'a', enabled: true, cooldownHours: 0, lastFiredAt: null, createdAt: '',
+      cond: { type: 'db_changed', path: 'a.db', vault: '/v', event: 'row_added' }, actions: [{ type: 'notify', title: 't' }],
+    } as MuseTriggerInfo]
+    usePluginStore.setState({ initialized: false, plugins: [], activeIds: [], disabledIds: [], disposers: {} })
+    usePluginStore.getState().init([{ id: 'stuck', name: 'stuck', version: '0', setup: () => {} }])
+    void serialBundleEngines('stuck', () => new Promise<void>(() => {})) // 引擎 PUT 永远不回
+    usePluginStore.getState().disable('stuck')
+    await vi.waitFor(() => expect(calls.ruleSaves).toEqual([['plugin:stuck:a', false]]))
   })
 })

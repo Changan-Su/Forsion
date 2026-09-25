@@ -7,7 +7,7 @@ import { NativeFeaturesSection } from '../features/NativeFeaturesSection'
  */
 import React, { useEffect, useRef, useState } from 'react'
 import { ArrowLeft } from 'lucide-react'
-import { serialByPlugin, usePluginStore } from '@amadeus/plugins/pluginStore'
+import { serialBundleEngines, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding, promptIfPending, isGate } from '../stores/pluginOnboardingStore'
@@ -59,7 +59,7 @@ registerMessages({
 })
 
 /** 启停后的捆绑包级联:内嵌 Space 显隐同步 + 内嵌引擎插件随父插件同开同关(经引擎 HTTP)。
- *  按父插件串行(serialByPlugin,与 pluginStore 的补关同一条链):快速连点按序执行,防 PUT 乱序落成「父关子开」
+ *  按父插件串行(serialBundleEngines,与 pluginStore 的补关同一条链):快速连点按序执行,防 PUT 乱序落成「父关子开」
  *  或补关的 false 盖掉刚写的 true(codex P1-4 / 09-25)。
  *  纪律(codex P1-4/P1-5):以父插件**实际**启用结果为准(setup 抛错=未启用,不按点击意图猜);
  *  用户目录手装的同 id(loader 优先级更高的覆盖版)与首方内置不归捆绑包管,跳过;失败 toast,不静默。 */
@@ -91,7 +91,7 @@ function cascadeAfterToggle(
     if (failed) panelToast(useApp.getState().tr('settings.amadeusPlugins.cascadeFail', { n: String(failed) }), true)
     onEngineReload?.()
   }
-  return serialByPlugin(p.id, run)
+  return serialBundleEngines(p.id, run)
 }
 
 /** 捆绑内容徽章(计数;空捆绑不渲染)。 */
