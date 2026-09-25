@@ -134,9 +134,11 @@ function pyEnv() {
 const SMOKE = "import docx, pptx, openpyxl, xlsxwriter, pypdf, pdfplumber, reportlab.pdfgen.canvas, pandas, numpy, "
   + "PIL.Image, lxml.etree, markdown, bs4, tabulate, matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot";
 
-/** 在 dir 下的内置 Python 里跑 import smoke;失败即抛。afterPack 对打包产物再跑一次。 */
+/** 在 dir 下的内置 Python 里跑 import smoke;失败即抛。afterPack 对打包产物再跑一次。
+ *  -I:不把 cwd 放进 sys.path(afterPack 的 cwd 是 desktop/,哪天多个同名目录就假绿)、不看用户 site/PYTHON* 环境;
+ *  -B:不写字节码(-I 连 PYTHONDONTWRITEBYTECODE 也忽略,afterPack 在签名前跑,写进去会被封进包)。 */
 function smokePython(dir) {
-  execFileSync(pythonBin(dir), ['-c', SMOKE], { stdio: 'inherit', env: pyEnv() });
+  execFileSync(pythonBin(dir), ['-I', '-B', '-c', SMOKE], { stdio: 'inherit', env: pyEnv() });
 }
 
 /** 按 python-requirements.txt 装进内置解释器自己的 site-packages。
