@@ -12,9 +12,10 @@
  *   E8  用户气泡里的 `![[…]]` 不升格(嵌入只给助手消息开)
  *   E9  点图片 → Agent Desk 开出这张图
  *   E10 流式:嵌入逐条到达(中间有半截 `![[…`),先到的图片**不重挂**(身份戳还在),收尾不留半截
+ *   E11 锚点写坏(`#t=1:35` / 区间终点 `#t=95,80`)照渲播放器,但下面一行说清楚(非法锚点不许静默变 0 秒)
  *
  * 需先 npm run build(e2e 吃 out/ 产物,不重建 = 在验旧代码)。用法:npm run e2e:chatembed
- * 截图:$TMPDIR/forsion-chatembed-{light,dark}.png(观感类改动交付前必看)。
+ * 截图:$TMPDIR/forsion-chatembed-{light,dark,warn}.png(观感类改动交付前必看)。
  * ⚠️ 有 dev 版 Electron 在跑会「启动失败」(单实例锁)。
  */
 const fs = require('fs')
@@ -25,7 +26,7 @@ const { _electron: electron } = require('playwright-core')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const ROOT = path.join(__dirname, '..')
-const SHOTS = { light: path.join(os.tmpdir(), 'forsion-chatembed-light.png'), dark: path.join(os.tmpdir(), 'forsion-chatembed-dark.png') }
+const SHOTS = { light: path.join(os.tmpdir(), 'forsion-chatembed-light.png'), dark: path.join(os.tmpdir(), 'forsion-chatembed-dark.png'), warn: path.join(os.tmpdir(), 'forsion-chatembed-warn.png') }
 const results = []
 function check(name, ok, detail) {
   results.push({ name, ok: !!ok })
@@ -131,8 +132,12 @@ async function main() {
   const huge = path.join(media, 'huge.wav')
   const pdf = path.join(media, 'r.pdf')
   fs.writeFileSync(shotA, gradientPng(480, 270, [59, 130, 246], [16, 185, 129]))
-  fs.writeFileSync(shotB, gradientPng(480, 270, [168, 85, 247], [236, 72, 153]))
+  fs.writeFileSync(shotB, gradientPng(400, 225, [168, 85, 247], [236, 72, 153])) // 与 shotA 不同宽:E9 才分得出开的是哪张
   fs.writeFileSync(talk, silentWav(200))
+  const badWav = path.join(media, 'bad.wav')
+  const rangeWav = path.join(media, 'range.wav')
+  fs.writeFileSync(badWav, silentWav(120))
+  fs.writeFileSync(rangeWav, silentWav(200))
   fs.writeFileSync(huge, Buffer.alloc(51 * 1024 * 1024)) // 过 fs:readFile 的 50MB 闸即可,内容不会被读
   fs.writeFileSync(pdf, '%PDF-1.4 not really')
   const udDev = path.join(home, 'userdata-dev')
@@ -153,6 +158,8 @@ async function main() {
           '库内录音:', '', '![[素材/lecture.wav#t=95]]', '',
           '太大的:', '', `![[${huge}]]`, '',
           `报告:`, '', `![[${pdf}]]`, '',
+          '写坏的锚点:', '', `![[${badWav}#t=1:35]]`, '',
+          '区间终点写坏:', '', `![[${rangeWav}#t=95,80]]`, '',
           `句中的不升格 ![[${shotB}]] 这里。`,
         ].join('\n'),
       },
@@ -207,14 +214,28 @@ async function main() {
       probe.host.length === 2 && probe.host.every((x) => x.src.startsWith('blob:') && x.nw > 0) && Math.abs(probe.host[1].w - 200) < 2,
       JSON.stringify(probe.host.map((x) => ({ src: x.src.slice(0, 5), nw: x.nw, w: Math.round(x.w) }))))
     check('E2 库内图片 → amadeus-asset:// 真解码', probe.vault.length === 1 && probe.vault[0].nw === 320, JSON.stringify(probe.vault))
+    const warnOf = (name) => win.evaluate((n) => {
+      const a = document.querySelector(`.t2-asst audio.t2-embed-audio[title$="${n}"]`)
+      const w = a?.nextElementSibling
+      return { found: !!a, src: a?.getAttribute('src') || '', warn: w?.classList.contains('t2-embed-warn') ? w.textContent : null }
+    }, name)
     const e3 = await waitMedia(win, '.t2-asst audio.t2-embed-audio[title$="talk.wav"]', 20)
-    check('E3 库外音频 `#t=20` → blob: 且停在 20 秒', e3.found && e3.src.startsWith('blob:') && Math.abs(e3.at - 20) < 1.5, JSON.stringify(e3))
+    const e3w = await warnOf('talk.wav')
+    check('E3 库外音频 `#t=20` → blob: 且停在 20 秒(合法锚点不挂提示)', e3.found && e3.src.startsWith('blob:') && Math.abs(e3.at - 20) < 1.5 && e3w.warn === null, JSON.stringify({ ...e3, warn: e3w.warn }))
     const e4 = await waitMedia(win, '.t2-asst audio.t2-embed-audio[title$="lecture.wav"]', 95)
     check('E4 库内音频 `#t=95` → amadeus-asset:// 且停在 95 秒', e4.found && e4.src.startsWith('amadeus-asset://') && Math.abs(e4.at - 95) < 1.5, JSON.stringify(e4))
     check('E5 >50MB 不内联 → 退回引用条,不留读盘占位', probe.hugeChip === 1 && probe.pending === 0, `chip=${probe.hugeChip} pending=${probe.pending}`)
     check('E6 句中的 `![[x]]` 不升格,仍是引用条', probe.midChip && !probe.midEmbed, `chip=${probe.midChip} embed=${probe.midEmbed}`)
     check('E7 PDF 不内联 → 引用条', probe.pdfChip === 1, `chip=${probe.pdfChip}`)
     check('E8 用户气泡里的 `![[…]]` 不升格', probe.userChip && !probe.userEmbed, `chip=${probe.userChip} embed=${probe.userEmbed}`)
+    const bad = await warnOf('bad.wav')
+    check('E11a 锚点写坏 `#t=1:35` → 照渲播放器、src 不带时刻,下面一行提示', bad.found && bad.src.startsWith('blob:') && !bad.src.includes('#t=') && /锚点无效/.test(bad.warn || ''), JSON.stringify(bad))
+    const rng = await waitMedia(win, '.t2-asst audio.t2-embed-audio[title$="range.wav"]', 95)
+    const rngw = await warnOf('range.wav')
+    check('E11b 区间终点写坏 `#t=95,80` → 起点照用(停在 95 秒)+ 提示终点已忽略', rng.found && Math.abs(rng.at - 95) < 1.5 && /区间终点无效/.test(rngw.warn || ''), JSON.stringify({ at: rng.at, warn: rngw.warn }))
+    await win.evaluate(() => document.querySelector('.t2-asst audio.t2-embed-audio[title$="bad.wav"]')?.scrollIntoView({ block: 'center' }))
+    await win.waitForTimeout(300)
+    await win.locator('.t2-chat-col').first().screenshot({ path: SHOTS.warn }).catch(() => {})
 
     await win.evaluate(() => document.querySelector('.t2-asst .t2-embeds')?.scrollIntoView({ block: 'start' }))
     await win.waitForTimeout(400)
@@ -235,7 +256,7 @@ async function main() {
       if (desk && desk.nw > 0) break
       await win.waitForTimeout(250)
     }
-    check('E9 点图片 → Agent Desk 开出这张图', !!desk && desk.nw === 480, JSON.stringify(desk))
+    check('E9 点图片 → Agent Desk 开出**这一张**(按尺寸认:shotA 480 宽,shotB 400、封面 320)', !!desk && desk.nw === 480, JSON.stringify(desk))
 
     // ── E10 流式:逐条到达(中间有半截),先到的图不重挂,收尾不留半截 ───────────────────────
     stub.script([
