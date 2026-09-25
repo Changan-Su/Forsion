@@ -195,8 +195,8 @@ registerMessages({
     "en": "Max"
   },
   "input.slash.thinkSet": {
-    "zh": "思考强度已设为 {level}（模型不支持时自动降档）",
-    "en": "Thinking level set to {level} (auto-clamped if the model can't do it)"
+    "zh": "思考档位已设为 {level}（模型不支持时自动降档）",
+    "en": "Thinking effort set to {level} (auto-clamped if the model can't do it)"
   },
   "input.slash.thinkUsage": {
     "zh": "用法：/think {levels}",
@@ -231,8 +231,8 @@ registerMessages({
     "en": "Turn on plan mode (read-only research → submit plan for approval)"
   },
   "input.slash.thinkDesc": {
-    "zh": "思考深度设为 {level}",
-    "en": "Set thinking depth to {level}"
+    "zh": "思考档位设为 {level}",
+    "en": "Set thinking effort to {level}"
   },
   "input.slash.current": {
     "zh": "(当前)",
@@ -435,8 +435,8 @@ registerMessages({
     "en": "Model and thinking effort for this session"
   },
   "input.thinkingSection": {
-    "zh": "思考深度",
-    "en": "Thinking depth"
+    "zh": "思考档位",
+    "en": "Thinking effort"
   },
   "chat.emptyTitle": {
     "zh": "纸上得来终觉浅,绝知此事要躬行。",

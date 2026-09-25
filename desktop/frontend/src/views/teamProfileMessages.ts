@@ -46,7 +46,7 @@ registerMessages({
   'teamProfile.tempRequired': { zh: '请为临时成员填写名称与工作指令。', en: 'Temporary members need a name and instructions.' },
   'teamProfile.backToSave': { zh: '返回配队并检查修改', en: 'Return to party to review changes' },
   'teamProfile.tuneScope': { zh: '本会话 · 模型与思考档位', en: 'This chat · model & thinking effort' },
-  'teamProfile.tuneHint': { zh: '成员在本会话使用的模型与 Effort（不改 Agent 自身配置）', en: 'Model and effort each member uses in this conversation, leaving their own settings untouched' },
+  'teamProfile.tuneHint': { zh: '成员在本会话使用的模型与思考档位（不改 Agent 自身配置）', en: 'Model and thinking effort each member uses in this session, leaving their own settings untouched' },
   'teamProfile.tuneModel': { zh: '本会话模型', en: 'Model for this chat' },
   'teamProfile.tuneEffort': { zh: '本会话思考档位', en: 'Thinking effort for this chat' },
   'teamProfile.tuneDefault': { zh: '默认', en: 'Default' },

@@ -26,7 +26,7 @@ img.agent-avatar-mini {
   flex: 0 0 auto;
   width: 16px;
   height: 16px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm, 6px);
   object-fit: cover;
 }
 .agent-avatar-initial.agent-avatar-mini {
