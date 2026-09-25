@@ -21,16 +21,22 @@ import './automation.css'
 const dotClass = (status: string): string =>
   status === 'running' || status === 'queued' ? 'running' : status === 'completed' || status === 'done' ? 'on' : 'off'
 
-/** 执行账本的模块级缓存(U-39,stale-while-revalidate):面板重建 / 在规则间来回切时先画上次的记录,后台照常轮询。 */
-const executionsCache = new Map<string, AutomationExecutionInfo[]>()
+/** 执行账本的模块级缓存(U-39,stale-while-revalidate):面板重建 / 在规则间来回切时先画上次的记录,后台照常轮询。
+ *  按连接配置对象分桶(WeakMap):换账号 / 换后端 = 换了 cfg,旧环境的记录绝不先画出来。 */
+const executionsCache = new WeakMap<object, Map<string, AutomationExecutionInfo[]>>()
+const cacheOf = (cfg: object): Map<string, AutomationExecutionInfo[]> => {
+  let bucket = executionsCache.get(cfg)
+  if (!bucket) { bucket = new Map(); executionsCache.set(cfg, bucket) }
+  return bucket
+}
 
 /** Expandable ledger, shared by the main result area and the runs sidebar. */
 export const ExecutionsList: React.FC<{ triggerId: string }> = ({ triggerId }) => {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
   const nonce = useAutomation((s) => s.refreshNonce)
-  const [rows, setRows] = useState<AutomationExecutionInfo[]>(() => executionsCache.get(triggerId) ?? [])
-  const [loading, setLoading] = useState(() => !executionsCache.has(triggerId))
+  const [rows, setRows] = useState<AutomationExecutionInfo[]>(() => cacheOf(cfg).get(triggerId) ?? [])
+  const [loading, setLoading] = useState(() => !cacheOf(cfg).has(triggerId))
   const [failed, setFailed] = useState(false)
   const [retry, setRetry] = useState(0)
   useEffect(() => {
@@ -38,8 +44,9 @@ export const ExecutionsList: React.FC<{ triggerId: string }> = ({ triggerId }) =
     const pull = async (): Promise<void> => {
       try {
         const result = await getAutomationExecutions(cfg, triggerId)
-        executionsCache.set(triggerId, result)
-        if (alive) { setRows(result); setFailed(false) }
+        if (!alive) return // 已卸载 / 已换规则或配置:迟到的结果不进缓存也不上屏
+        cacheOf(cfg).set(triggerId, result)
+        setRows(result); setFailed(false)
       } catch { if (alive) setFailed(true) }
       finally { if (alive) setLoading(false) }
     }

@@ -157,6 +157,14 @@ describe('再次进入不闪(U-39)', () => {
     expect(host.querySelector('.art-card-name')?.textContent).toBe('Renamed')
   })
 
+  it('已有栅格时后台重扫失败不清屏', async () => {
+    await mount()
+    productsList.mockImplementationOnce(async () => { throw new Error('disk gone') })
+    await act(async () => { await useProducts.getState().load() })
+    expect(useProducts.getState().status).toBe('ready')
+    expect(host.querySelector('[data-artificial-card]')).toBeTruthy()
+  })
+
   it('第一次进入没有数据时:骨架 + 读屏状态句,不是转圈', async () => {
     productsList.mockImplementationOnce(() => new Promise<ProductSummary[]>(() => {}))
     await mount()

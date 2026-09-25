@@ -29,11 +29,13 @@ registerMessages({
 })
 
 /** 主区未选中时的空态 = 「状态 + 动作」(U-10):告诉用户还有几封没读,并给一键去读最新那封 / 全部已读。
- *  计数取本地已拉到的未归档列表(与「阅读最新一封」同源,按钮永远有去处)。 */
+ *  数字取服务端全量未读数(列表接口有条数上限,本地数会少报);「阅读最新一封」只在已拉到的列表里找,找不到就不给这颗钮。 */
 function InboxReaderEmpty() {
   const { t } = useI18n()
   const messages = useInbox((s) => s.messages)
+  const serverUnread = useInbox((s) => s.unreadCount)
   const unread = messages.filter((m) => !m.read_at && !m.archived_at)
+  const count = Math.max(serverUnread, unread.length)
   const stamp = (m: InboxMessage): number => parseUtc(m.created_at)?.getTime() ?? 0
   const latest = unread.reduce<InboxMessage | null>((best, m) => (!best || stamp(m) > stamp(best) ? m : best), null)
   const readLatest = (): void => {
@@ -43,13 +45,13 @@ function InboxReaderEmpty() {
   }
   return (
     <div className="ibx-reader">
-      <div className="ibx-reader-empty" data-unread={unread.length}>
-        {latest ? <Mail size={26} strokeWidth={1.5} /> : <MailOpen size={26} strokeWidth={1.5} />}
-        <div className="ibx-reader-empty-title">{latest ? t('inbox.reader.unread', { n: unread.length }) : t('inbox.reader.caughtUp')}</div>
-        {latest ? (
+      <div className="ibx-reader-empty" data-unread={count}>
+        {count ? <Mail size={26} strokeWidth={1.5} /> : <MailOpen size={26} strokeWidth={1.5} />}
+        <div className="ibx-reader-empty-title">{count ? t('inbox.reader.unread', { n: count }) : t('inbox.reader.caughtUp')}</div>
+        {count ? (
           <div className="ibx-reader-empty-actions">
-            <button type="button" className="btn primary sm" data-action="read-latest" onClick={readLatest}>{t('inbox.reader.readLatest')}</button>
-            <button type="button" className="btn ghost sm" data-action="read-all" onClick={() => useInbox.getState().readAll()}>{t('inbox.action.readAll')}</button>
+            {latest && <button type="button" className="btn primary sm" data-action="read-latest" onClick={readLatest}>{t('inbox.reader.readLatest')}</button>}
+            <button type="button" className={`btn ${latest ? 'ghost' : 'primary'} sm`} data-action="read-all" onClick={() => useInbox.getState().readAll()}>{t('inbox.action.readAll')}</button>
           </div>
         ) : (
           <div className="ibx-reader-empty-hint">{t('inbox.reader.empty')}</div>

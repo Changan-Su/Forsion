@@ -15,7 +15,7 @@ export type ProductsStatus = 'loading' | 'ready' | 'error'
 interface ProductsState {
   items: ProductSummary[]
   status: ProductsStatus
-  /** 重扫一次。已有栅格时保持 ready(不打回骨架);晚到的旧请求结果一律丢弃。 */
+  /** 重扫一次。已有栅格时保持 ready(不打回骨架,重扫失败也不清屏);晚到的旧请求结果一律丢弃。 */
   load(): Promise<void>
 }
 
@@ -33,7 +33,8 @@ export const useProducts = create<ProductsState>((set, get) => ({
       const rows = await list()
       if (mine === seq) set({ items: rows, status: 'ready' })
     } catch {
-      if (mine === seq) set({ status: 'error' })
+      // 已有栅格时后台重扫失败不清屏(SWR:旧数据比错误页有用,下次聚焦 / 刷新再试);只有从没读到过才落错误态。
+      if (mine === seq && get().status !== 'ready') set({ status: 'error' })
     }
   },
 }))
