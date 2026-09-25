@@ -101,10 +101,16 @@ async function main() {
     check('A 恢复默认布局确实重置了(标签变了)', reset.tabs !== before.tabs && reset.mainTabCount < before.mainTabCount, JSON.stringify(reset))
 
     // B 通知带撤销
-    const action = win.locator('.ntf .ntf-action').first()
+    // 按内容认那张卡,不按位置:隔离家目录下「在线同步失败:未登录」之类的卡可能先到、排在最上面。
+    const card = win.locator('.ntf').filter({ hasText: /恢复/ }).first()
+    const action = card.locator('.ntf-action').first()
     const hasAction = (await action.count()) > 0
-    const ntfText = hasAction ? await win.locator('.ntf').first().innerText() : ''
+    const ntfText = hasAction ? await card.innerText() : ''
     check('B 右上角通知「已恢复…」带撤销钮', hasAction && /恢复/.test(ntfText) && /撤销/.test(ntfText), ntfText.replace(/\s+/g, ' '))
+    // B2 撤销提示停留约 8 秒(info 缺省 5 秒,来不及反应):6 秒时仍在。指针先挪开 —— 悬停在通知上会暂停计时,测不出东西。
+    await win.mouse.move(400, 500)
+    await win.waitForTimeout(6000)
+    check('B2 撤销提示 6 秒后仍在(durationMs≈8s,不按 info 的 5s 消失)', (await card.count()) > 0 && (await action.count()) > 0)
     if (SHOT_DIR) await win.screenshot({ path: path.join(SHOT_DIR, 'layoutreset-toast.png') })
 
     // C 撤销 → 逐项复原
