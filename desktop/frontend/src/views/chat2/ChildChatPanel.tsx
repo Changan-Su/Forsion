@@ -23,19 +23,21 @@ export function SubChatStatus({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
   const live = useApp((s) => s.subChatsBySession[sessionId])
+  // Historian 关着时 HistorianStatus 不挂载,它的「查看完整记录」入口也没了 —— 那时旧记录仍留在这里列出。
+  const historianOn = useApp((s) => !!s.specialEnabled.historian)
   const [saved, setSaved] = useState<BackgroundSessionInfo[]>([])
   useEffect(() => {
     let disposed = false
     setSaved([])
     const load = () => void getBackgroundSessions(cfg, sessionId).then((rows) => {
-      // teamwork 走团队车道;historian 子会话(每个父会话一条,uuidv5)已由右栏 HistorianStatus 那一行代表,
-      // 这里再列一行就是「同名两行 Historian」(UIUX 评审 U-04)。完整记录从 HistorianStatus 展开区进。
-      if (!disposed) setSaved(rows.filter((r) => r.kind !== 'teamwork' && r.kind !== 'historian'))
+      // teamwork 走团队车道;historian 子会话(每个父会话一条,uuidv5)在 Historian 开着时已由右栏
+      // HistorianStatus 那一行代表,再列一行就是「同名两行 Historian」(UIUX 评审 U-04),完整记录从它的展开区进。
+      if (!disposed) setSaved(rows.filter((r) => r.kind !== 'teamwork' && !(historianOn && r.kind === 'historian')))
     }).catch(() => {})
     load()
     const timer = setInterval(load, 4000)
     return () => { disposed = true; clearInterval(timer) }
-  }, [cfg, sessionId])
+  }, [cfg, sessionId, historianOn])
   const rows = saved.map((r) => ({ id: r.sessionId, title: r.title || r.kind, sessionId: r.sessionId, runId: r.runId || undefined, streaming: r.runStatus === 'running' || r.runStatus === 'queued' }))
   for (const l of live || []) {
     if (!rows.some((r) => r.sessionId === l.sessionId || (r.runId && r.runId === l.runId))) rows.push({ id: l.id, title: l.title, sessionId: l.sessionId!, runId: l.runId, streaming: l.streaming })

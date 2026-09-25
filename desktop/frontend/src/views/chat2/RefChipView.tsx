@@ -9,6 +9,12 @@
  * splitLeadingRefs 是它的逆运算,只认 refChipOf / fileChip / folderChip / viewChip 能产出的形态;
  * 第一行里但凡有一段认不出来,就整行不拆(宁可照旧显示原文,也不把用户自己写的话吃成芯片)。
  * 复制 / 编辑仍用原始 msg.content —— 这里只改「怎么显示」,不改「发的是什么」。
+ *
+ * 已知边界(Codex 评审 09-25,取舍而非遗漏):正文里没有「这行是芯片」的标记,所以
+ *  - 用户手打的首行若恰好是 `src/app.ts` / `"/tmp/my docs"` 这类路径,也会显示成芯片(只影响显示,复制/编辑是原文);
+ *  - 根目录裸文件名(`README.md`)与无扩展名的相对目录不认,整行照旧显示原文 —— 放宽就会吞掉 `v1.2` 这类正文;
+ *  - 发送后分不出文件和文件夹,文件夹芯片用文件图标。
+ * 要根治得在消息里带结构化引用字段(引擎协议改动),不在本条范围。
  */
 import type { ReactNode } from 'react'
 import { FileText, Folder, MessageSquare, PanelsTopLeft, X } from 'lucide-react'
