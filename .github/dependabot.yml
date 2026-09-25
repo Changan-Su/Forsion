@@ -1,0 +1,13 @@
+# 内置捆绑包(desktop/electron/builtinPlugins.ts 的 BUILTIN_BUNDLE_PACKAGES)在 npm 发了新版 → 提 PR 升级 desktop 里
+# 钉死的精确版本,下一个安装包就自带最新版;已装机器不等这个 PR,自己从 npm 更新(builtinUpdates.ts)。
+# 只盯白名单里的包,其余依赖不在这里自动升级。新增内置包时在 allow 里加一行。
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /desktop
+    schedule:
+      interval: daily
+    allow:
+      - dependency-name: '@forsion/tangu-computer-use'
+    commit-message:
+      prefix: 'chore(desktop)'

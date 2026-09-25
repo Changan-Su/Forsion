@@ -44,6 +44,7 @@ for (const dir of resources) {
     check(main.includes(channel) && preload.includes(channel), `Permission IPC missing from main/preload: ${channel}`)
   }
   check(main.includes('[builtin-plugins]'), 'Builtin plugin seeding missing from main')
+  check(main.includes('[builtin-updates]'), 'Builtin plugin npm updater missing from main')
   check(preload.includes('desktopPermissionsStatus'), 'Permission status bridge missing')
   let renderer = ''
   try {

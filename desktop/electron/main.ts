@@ -44,6 +44,7 @@ import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaC
 import { createTray } from './tray'
 import { readThemesDir, seedDefaultThemes } from './themes'
 import { builtinBundleSources, seedBuiltinBundles } from './builtinPlugins'
+import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
 import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, type DownloadProgress } from './marketInstall'
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks } from './codePreview'
 import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudioSnapshots, restoreCodeStudioSnapshot } from './codeStudioProjects'
@@ -1914,7 +1915,36 @@ app.whenReady().then(async () => {
     await seedBuiltinBundles(
       join(forsionHomeDir(), 'plugins'),
       builtinBundleSources({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() }),
+      { appVersion: app.getVersion() },
     ).catch((e) => console.warn('[builtin-plugins] 播种失败(忽略):', (e as Error)?.message))
+  }
+  // 内置捆绑包的 npm 更新(builtinUpdates.ts):启动 1 分钟后查一次、之后每 6 小时一次,新版只下载进暂存区,
+  // 由下次启动的上面那次播种换上。只在打包版跑:dev 的随包来源就是 node_modules,跟着 npm install 走。
+  if (PRODUCT.agentBackend && app.isPackaged) {
+    let busy = false
+    const runBuiltinUpdates = async (): Promise<void> => {
+      if (busy) return
+      busy = true
+      try {
+        const stored = await loadConfig()
+        await checkBuiltinUpdates({
+          pluginsRoot: join(forsionHomeDir(), 'plugins'),
+          sources: builtinBundleSources({ isPackaged: true, resourcesPath: process.resourcesPath, appPath: app.getAppPath() }),
+          appVersion: app.getVersion(),
+          registries: registryOrder(stored.mirror),
+          // 官方源走 net.fetch(认系统代理);npmmirror 在大陆直连,照旧 Node fetch —— 同 market:install 的口径。
+          fetch: (url, init) => (url.startsWith(NPM_OFFICIAL) ? net.fetch(url, init) : fetch(url, init)),
+        })
+      } catch (e) {
+        console.warn('[builtin-updates] 检查失败(忽略):', (e as Error)?.message)
+      } finally {
+        busy = false
+      }
+    }
+    setTimeout(() => {
+      void runBuiltinUpdates()
+      setInterval(() => void runBuiltinUpdates(), 6 * 3600_000).unref()
+    }, 60_000).unref()
   }
   // tangu CLI 自动安装/自愈:shim 指向 App 内部资源(App 自动更新 → CLI 同步),幂等注入 PATH;吞错不阻塞。
   if (PRODUCT.agentBackend) void ensureCliInstalled({

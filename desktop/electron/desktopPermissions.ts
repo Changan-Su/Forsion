@@ -6,7 +6,8 @@ import path from 'node:path'
 import { execFile, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 import { askHelper, helperSocketPath } from './computerUse'
-import { builtinBundleSources } from './builtinPlugins'
+import { activeBundleDir, builtinBundleSources } from './builtinPlugins'
+import { forsionHomeDir } from './forsionHome'
 import { PermissionGuide } from './permissionGuide'
 import { isDesktopPermissionId, type DesktopPermissionId, type DesktopPermissionRequestOptions, type DesktopPermissionState, type DesktopPermissionsSnapshot } from '../shared/desktopPermissions'
 
@@ -19,6 +20,19 @@ interface HelperStatus {
   source?: { attribution?: string; pid?: number; executablePath?: string }
   settingsWindow?: Rect
   settingsFrontmost?: boolean
+}
+
+/** Run the installer of the Computer Use copy the engine actually loads (installed, or an npm update that
+ *  is newer than the app's bundle), falling back to the bundled source. Installing the bundled helper while
+ *  the engine runs a newer copy makes the two replace each other's helper, and every replacement of an
+ *  ad-hoc signed helper costs the user a new macOS permission grant. */
+async function computerUseInstallerRoot(): Promise<string> {
+  const sources = builtinBundleSources({ isPackaged: app.isPackaged, appPath: app.getAppPath(), resourcesPath: process.resourcesPath })
+  const pluginsRoot = path.join(forsionHomeDir(), 'plugins')
+  const active = await Promise.all(sources.map((source) => activeBundleDir(pluginsRoot, source)))
+  const root = [...active, ...sources].find((dir) => existsSync(path.join(dir, 'scripts/setup-helper.mjs')))
+  if (!root) throw new Error('The bundled Computer Use installer is missing. Reinstall Forsion and retry.')
+  return root
 }
 
 /** Same selection order as the bundled helper-path.mjs, including standard user installs. */
@@ -122,10 +136,7 @@ export class DesktopPermissions {
 
   private runInstaller(checkOnly = false): Promise<boolean> {
     if (!checkOnly && this.setupPending) return this.setupPending
-    const root = builtinBundleSources({ isPackaged: app.isPackaged, appPath: app.getAppPath(), resourcesPath: process.resourcesPath })
-      .find((dir) => existsSync(path.join(dir, 'scripts/setup-helper.mjs')))
-    if (!root) return Promise.reject(new Error('The bundled Computer Use installer is missing. Reinstall Forsion and retry.'))
-    const work = new Promise<boolean>((resolve, reject) => {
+    const work = computerUseInstallerRoot().then((root) => new Promise<boolean>((resolve, reject) => {
       const child = spawn(process.execPath, [path.join(root, 'scripts/setup-helper.mjs'), checkOnly ? '--check' : '--runtime'], {
         env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', BUN_BE_BUN: '1' },
         stdio: ['ignore', 'pipe', 'pipe'], detached: true,
@@ -139,7 +150,7 @@ export class DesktopPermissions {
       child.once('close', (code) => code === 0 ? resolve(true)
         : checkOnly && code === 10 ? resolve(false)
         : reject(new Error(output.trim() || `Computer Use installer exited with ${code}`)))
-    })
+    }))
     if (checkOnly) return work
     // A UI timeout must not interrupt staging/atomic replacement of the helper.
     this.setupPending = work.finally(() => { this.setupPending = undefined })

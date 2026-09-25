@@ -17,12 +17,16 @@
  * 只在 darwin / win32 播种:这些捆绑包的引擎侧自己按平台门控(Linux helper 从未真机验收),
  * 在没有工具面的平台上多一张插件卡只是噪音。
  *
+ * 第二个来源 = npm 更新器(builtinUpdates.ts)下载好的新版,暂存在 `<pluginsRoot>/.pending/<随包目录名>/`:
+ * 同 id、比随包新、过 gatePluginManifest(apiVersion / minAppVersion)才顶替随包来源,之后走同一套替换规则。
+ * 暂存区每次播种后清掉(用过的、过时的、不兼容的都删),更新器按需重下。播种仍是启动期唯一的写点。
+ *
  * 播种过的 id 记在进程内(builtinPluginIds),readExternalPlugins 据此标 `builtin`:设置页显示「内置」、
  * 不给卸载按钮(不想用就关开关;删了目录下次启动也会种回来 —— 内置的语义就是「一直在」)。
  */
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
-import { cmpVersion } from '@amadeus-shared/ipc'
+import { cmpVersion, gatePluginManifest } from '@amadeus-shared/ipc'
 
 /** 随 App 内置的捆绑包 npm 包名(dev 从 node_modules 取;打包版按包名的最后一段落在 resources/bundled-plugins/)。 */
 export const BUILTIN_BUNDLE_PACKAGES: readonly string[] = ['@forsion/tangu-computer-use']
@@ -58,18 +62,34 @@ export interface SeedBundlesReport {
   skipped: string[]
 }
 
-async function readManifest(dir: string): Promise<{ id: string; version: string } | null> {
+export interface BundleManifest {
+  id: string
+  version: string
+  apiVersion?: unknown
+  minAppVersion?: unknown
+}
+
+export async function readManifest(dir: string): Promise<BundleManifest | null> {
   try {
-    const m = JSON.parse(await fs.readFile(path.join(dir, 'manifest.json'), 'utf8')) as { id?: unknown; version?: unknown }
+    const m = JSON.parse(await fs.readFile(path.join(dir, 'manifest.json'), 'utf8')) as Record<string, unknown>
     if (typeof m.id !== 'string' || !SAFE_PLUGIN_ID.test(m.id)) return null
-    return { id: m.id, version: typeof m.version === 'string' && m.version ? m.version : '0.0.0' }
+    return {
+      id: m.id,
+      version: typeof m.version === 'string' && m.version ? m.version : '0.0.0',
+      apiVersion: m.apiVersion,
+      minAppVersion: m.minAppVersion,
+    }
   } catch {
     return null
   }
 }
 
+/** npm 更新器的暂存目录 `<pluginsRoot>/.pending/<随包目录名>`。点开头:桌面 readExternalPlugins 与引擎 bundleDirs 都看不见。 */
+export const pendingDirFor = (pluginsRoot: string, source: string): string =>
+  path.join(pluginsRoot, '.pending', path.basename(source))
+
 /** 已装同 id 的目录(目录名可与 id 不同:市场按 install_slug 落目录,readExternalPlugins 认 manifest id)。 */
-async function installedDirFor(pluginsRoot: string, id: string): Promise<string | null> {
+export async function installedDirFor(pluginsRoot: string, id: string): Promise<string | null> {
   const direct = path.join(pluginsRoot, id)
   if (await readManifest(direct).then((m) => m?.id === id)) return direct
   let entries: import('node:fs').Dirent[]
@@ -84,6 +104,14 @@ async function installedDirFor(pluginsRoot: string, id: string): Promise<string 
     if ((await readManifest(dir))?.id === id) return dir
   }
   return null
+}
+
+/** 实际生效的那份捆绑包:已装的同 id 副本(播种保证它不比随包旧;npm 更新 / install.sh 装的会更新),没装才退回随包来源。
+ *  凡是要「跑包里的脚本」的地方(桌面权限引导装 helper)都必须用这份:跑随包旧版会和引擎侧的新版互相把 helper
+ *  换来换去,ad-hoc 签名每换一次 macOS 就要重新授权。 */
+export async function activeBundleDir(pluginsRoot: string, source: string): Promise<string> {
+  const bundled = await readManifest(source)
+  return (bundled && (await installedDirFor(pluginsRoot, bundled.id))) || source
 }
 
 /** 原子落位:同盘 staging 整拷(解引用符号链接,播种结果自包含)→ 旧的挪开 → staging 换位 → 删旧;任一步失败回滚。
@@ -116,39 +144,55 @@ async function replaceDir(src: string, dest: string): Promise<void> {
 export async function seedBuiltinBundles(
   pluginsRoot: string,
   sources: string[],
-  opts: { platform?: NodeJS.Platform; log?: (m: string) => void } = {},
+  opts: { platform?: NodeJS.Platform; log?: (m: string) => void; appVersion?: string | null } = {},
 ): Promise<SeedBundlesReport> {
   const report: SeedBundlesReport = { installed: [], updated: [], kept: [], skipped: [] }
   const platform = opts.platform ?? process.platform
   const log = opts.log ?? ((m: string) => console.log(m))
   if (platform !== 'darwin' && platform !== 'win32') return report
   for (const src of sources) {
+    const pendingPath = pendingDirFor(pluginsRoot, src)
+    let usePending = false
     try {
       const bundled = await readManifest(src)
       if (!bundled) {
         report.skipped.push(src)
         continue // 没随包(单品变体 / 包没装)是常态,不是错
       }
+      const pending = await readManifest(pendingPath)
+      usePending = !!pending && pending.id === bundled.id && cmpVersion(pending.version, bundled.version) > 0
+        && !gatePluginManifest(pending, opts.appVersion ?? null)
+      const from = usePending ? pendingPath : src
+      const offered = usePending ? pending! : bundled
+      const how = usePending ? 'npm 更新' : '随 App 更新'
       const current = await installedDirFor(pluginsRoot, bundled.id)
       const installed = current ? await readManifest(current) : null
       if (!installed) {
         await fs.mkdir(pluginsRoot, { recursive: true })
-        await replaceDir(src, path.join(pluginsRoot, bundled.id))
+        await replaceDir(from, path.join(pluginsRoot, bundled.id))
         report.installed.push(bundled.id)
-        log(`[builtin-plugins] 已内置 ${bundled.id}@${bundled.version}`)
-      } else if (cmpVersion(bundled.version, installed.version) > 0) {
-        await replaceDir(src, current!)
+        log(`[builtin-plugins] 已内置 ${bundled.id}@${offered.version}(${how})`)
+      } else if (cmpVersion(offered.version, installed.version) > 0) {
+        await replaceDir(from, current!)
         report.updated.push(bundled.id)
-        log(`[builtin-plugins] ${bundled.id} ${installed.version} → ${bundled.version}(随 App 更新)`)
+        log(`[builtin-plugins] ${bundled.id} ${installed.version} → ${offered.version}(${how})`)
       } else {
         report.kept.push(bundled.id)
       }
       builtinIds.add(bundled.id)
+      await dropPending(pendingPath) // 用过的、过时的、不兼容的一律清掉;更新器按需重下
     } catch (e) {
+      // 从暂存区换失败也清掉它:下次启动退回随包来源,不让一份坏下载每次启动都卡住播种。
+      if (usePending) await dropPending(pendingPath)
       log(`[builtin-plugins] 播种 ${src} 失败(忽略,下次启动再试):${(e as Error)?.message || e}`)
     }
   }
   return report
+}
+
+async function dropPending(pendingPath: string): Promise<void> {
+  await fs.rm(pendingPath, { recursive: true, force: true }).catch(() => {})
+  await fs.rmdir(path.dirname(pendingPath)).catch(() => {}) // .pending 空了才删得掉
 }
 
 /** 测试用:清掉进程内的内置 id 集。 */
