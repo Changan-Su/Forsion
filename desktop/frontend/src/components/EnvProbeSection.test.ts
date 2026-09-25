@@ -86,3 +86,16 @@ it('drops a pending hand-off when the caller locks the section before the config
   expect(send).not.toHaveBeenCalled()
   expect(onLeave).not.toHaveBeenCalled()
 })
+
+it('offers the download page when there is no one-click install (no winget / no Homebrew)', async () => {
+  const openExternal = vi.fn()
+  window.tangu = {
+    envCheck: vi.fn().mockResolvedValue([{ tool: 'git', found: false, version: null, installId: null, installCommand: null, downloadUrl: 'https://git-scm.com/downloads' }]),
+    getConfig: vi.fn().mockResolvedValue({ mode: 'external', mirror: 'default' }), openExternal,
+  } as any
+  await act(async () => root.render(React.createElement(EnvProbeSection)))
+  const actions = container.querySelector('[data-tool="git"] .env-probe-actions')!
+  expect(actions.textContent).not.toContain('onboarding.env.install')
+  await act(async () => [...actions.querySelectorAll('button')].find((b) => b.textContent?.includes('env.download'))!.click())
+  expect(openExternal).toHaveBeenCalledWith('https://git-scm.com/downloads')
+})

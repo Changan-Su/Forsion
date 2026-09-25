@@ -24,6 +24,8 @@ export function userBinDirs(): string[] {
         join(process.env.LOCALAPPDATA || join(home, 'AppData', 'Local'), 'Microsoft', 'WindowsApps'),
         join(process.env.ProgramFiles || 'C:\\Program Files', 'nodejs'),
         join(process.env.ProgramFiles || 'C:\\Program Files', 'Git', 'cmd'),
+        // Docker Desktop 的 CLI 在这里;装完不重启 app 也找得到(winget 改的是注册表 PATH,本进程的 env 不会跟着变)。
+        join(process.env.ProgramFiles || 'C:\\Program Files', 'Docker', 'Docker', 'resources', 'bin'),
       ]
     : [
         '/opt/homebrew/bin', '/usr/local/bin', '/usr/local/sbin',

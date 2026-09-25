@@ -778,6 +778,8 @@ export interface EnvProbeResult {
   version: string | null
   installId: string | null
   installCommand: string | null
+  /** 缺失时的手动下载页(老宿主没有这个字段)。 */
+  downloadUrl?: string | null
 }
 
 /** 镜像连通性测试结果(每个 registry 目标一行)。 */

@@ -10,7 +10,7 @@
  * 让它重测,否则「安装」跑的还是旧源的命令。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { AlertCircle, Bot, Check, CheckCircle2, CircleDashed, Loader2, Play, RefreshCw, X } from 'lucide-react'
+import { AlertCircle, Bot, Check, CheckCircle2, CircleDashed, ExternalLink, Loader2, Play, RefreshCw, X } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { useWorkspace } from '@lcl/engine'
@@ -31,6 +31,7 @@ registerMessages({
   'env.optional': { zh: '可选', en: 'Optional' },
   'env.withNode': { zh: '随 Node.js 安装', en: 'Installed with Node.js' },
   'env.autoInstall': { zh: '下次启动时自动安装', en: 'Installs automatically on next launch' },
+  'env.download': { zh: '下载页', en: 'Download page' },
   'env.sudoHint': { zh: '需要系统密码的命令会复制到剪贴板，请在终端中运行。', en: 'Commands that need your system password are copied for you to run in Terminal.' },
   'env.purpose.node': { zh: '运行本机编码工具与 MCP 服务', en: 'Runs local coding tools and MCP servers' },
   'env.purpose.npm': { zh: '安装 Node 软件包', en: 'Installs Node packages' },
@@ -234,7 +235,7 @@ export const EnvProbeSection: React.FC<{
                     {t('onboarding.env.missing')}{optional && <em>{t('env.optional')}</em>}
                   </>}
                 </span>
-                {!pr.found && !SELF_HEALING.has(pr.tool) && (canAskTangu || pr.installId) && (
+                {!pr.found && !SELF_HEALING.has(pr.tool) && (canAskTangu || pr.installId || pr.downloadUrl) && (
                   <span className="env-probe-actions">
                     {canAskTangu && (
                       <button className="btn ghost sm" disabled={locked || asking || runningInstall !== null} onClick={() => void askTangu([pr.tool])}>
@@ -250,6 +251,12 @@ export const EnvProbeSection: React.FC<{
                       >
                         {runningInstall === pr.installId ? <Loader2 size={12} className="spin" /> : <Play size={12} />}{' '}
                         {needsSudo(pr) ? t('onboarding.env.copyCmd') : t('onboarding.env.install')}
+                      </button>
+                    )}
+                    {/* 退路:包管理器不在(没有 winget 的 Windows、没装 Homebrew 的 Mac)时这是唯一的路;大陆镜像开着时指向 npmmirror。 */}
+                    {pr.downloadUrl && window.tangu?.openExternal && (
+                      <button className="btn ghost sm" disabled={locked} title={pr.downloadUrl} onClick={() => void window.tangu?.openExternal?.(pr.downloadUrl!)}>
+                        <ExternalLink size={12} /> {t('env.download')}
                       </button>
                     )}
                   </span>
