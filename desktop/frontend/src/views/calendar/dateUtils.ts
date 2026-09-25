@@ -1,6 +1,7 @@
 /** Calendar View 的纯日期数学(原生 Date,本地时区)。'YYYY-MM-DD' 刻意用本地构造避 UTC 午夜坑。 */
+import { create } from 'zustand'
 import { parseCalDate, splitSide } from '@amadeus-shared/db/calDate'
-import { registerMessages, translate } from '../../i18n'
+import { currentLocale, registerMessages, translate, useI18n } from '../../i18n'
 
 registerMessages({
   // 星期:zh 是单字(配「周」前缀),en 是三字母缩写(本身就完整)。两套语序不同 ——
@@ -47,10 +48,49 @@ const MONTH_KEYS = [
 ]
 const monthName = (d: Date): string => translate(MONTH_KEYS[d.getMonth()])
 
-export const WEEK_START = 0 // 0=周日
-/** 星期表头用的短名(0=周日)。**函数不是常量** —— 模块级数组会定格在加载那一刻的语言。
- *  值同时被调用方当 React key 用,七个值互不相同,可以。 */
-export const weekdays = (): string[] => Array.from({ length: 7 }, (_, i) => translate(`caldate.dow${i}`))
+// ── 一周从哪天开始(U-33)───────────────────────────────────────────────────
+// 缺省按界面语言:zh=周一、en=周日;日历设置里可以覆盖(存 localStorage,跨窗靠 storage 事件同步)。
+// ⚠️ 只管**显示**:表头顺序、月格起点。ics.ts 的 `dow: d.getDay()` 是 RRULE BYDAY 语义(0=SU),绝不跟着旋转。
+export type WeekStartPref = 'auto' | 0 | 1
+const WEEK_START_KEY = 'forsion.calendar.weekStart'
+const readWeekStartPref = (): WeekStartPref => {
+  try {
+    const v = localStorage.getItem(WEEK_START_KEY)
+    return v === '0' ? 0 : v === '1' ? 1 : 'auto'
+  } catch { return 'auto' }
+}
+export const useWeekStartPref = create<{ pref: WeekStartPref; setPref(pref: WeekStartPref): void }>((set) => ({
+  pref: readWeekStartPref(),
+  setPref(pref) {
+    try {
+      if (pref === 'auto') localStorage.removeItem(WEEK_START_KEY)
+      else localStorage.setItem(WEEK_START_KEY, String(pref))
+    } catch { /* 存不下就只在本窗生效 */ }
+    set({ pref })
+  },
+}))
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => { if (e.key === WEEK_START_KEY) useWeekStartPref.setState({ pref: readWeekStartPref() }) })
+}
+/** 语言缺省的周首日(不看用户覆盖):zh=1(周一),其余=0(周日)。 */
+export const localeWeekStart = (): 0 | 1 => (currentLocale() === 'zh' ? 1 : 0)
+/** 当前周首日(0=周日,1=周一):用户在日历设置里选过就用它,否则按语言。 */
+export function weekStart(): 0 | 1 {
+  const pref = useWeekStartPref.getState().pref
+  return pref === 'auto' ? localeWeekStart() : pref
+}
+/** React 侧订阅:语言或用户覆盖一变就重渲。凡是按周首日排版的组件都要调它(返回值可作 memo 依赖 / key)。 */
+export function useWeekStart(): 0 | 1 {
+  useI18n()
+  useWeekStartPref((s) => s.pref)
+  return weekStart()
+}
+/** 星期表头用的短名,**已按周首日旋转**(第一个就是 weekStart() 那天)。
+ *  **函数不是常量** —— 模块级数组会定格在加载那一刻的语言。值同时被调用方当 React key 用,七个值互不相同,可以。 */
+export const weekdays = (): string[] => {
+  const first = weekStart()
+  return Array.from({ length: 7 }, (_, i) => translate(`caldate.dow${(i + first) % 7}`))
+}
 /** 单个星期的成品标签:zh=「周三」,en=「Wed」。别在调用点拼前缀。 */
 export const dowLabel = (dow: number): string => translate('caldate.dowLabel', { d: translate(`caldate.dow${dow}`) })
 export const HOURS = Array.from({ length: 24 }, (_, i) => i)
@@ -77,7 +117,7 @@ export function sameDay(a: Date, b: Date): boolean {
 }
 export function startOfWeek(d: Date): Date {
   const s = startOfDay(d)
-  return addDays(s, -((s.getDay() - WEEK_START + 7) % 7))
+  return addDays(s, -((s.getDay() - weekStart() + 7) % 7))
 }
 /** 月视图 6×7 = 42 格,从含 1 号那周的周首开始。 */
 export function monthGridDays(anchor: Date): Date[] {

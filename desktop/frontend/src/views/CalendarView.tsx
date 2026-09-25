@@ -63,6 +63,7 @@ import {
   startOfDay,
   startOfWeek,
   toLocalDate,
+  useWeekStart,
 } from './calendar/dateUtils'
 
 // 文案:本文件独占 `calview.*` 命名空间(其余日历文件各自持有自己的前缀,勿共用键)。
@@ -171,6 +172,8 @@ const daySpanClass = (ev: CalEvent, day: Date): string => {
 
 export function CalendarView() {
   const { t } = useI18n()
+  // 周首日一变(语言 / 日历设置),月视图整块重挂:它的周行、居中滚动位都按周首日算过一遍。
+  const firstDow = useWeekStart()
   const members = useCalendarMembers()
   const agentDbs = useAgentCalDbs()
   const otherDbs = useOtherVaultCalDbs() // 非活动侧(Local↔Cloud 另一侧)只读日历,汇总两侧(任务1)
@@ -334,7 +337,7 @@ export function CalendarView() {
       )}
 
       {mode === 'month' ? (
-        <MonthScroll ref={api} events={visible} selectedKey={card?.key ?? null} onPick={openCard} onCreate={(d, at) => void create(d, null, at)} titleRef={titleRef} />
+        <MonthScroll key={`dow${firstDow}`} ref={api} events={visible} selectedKey={card?.key ?? null} onPick={openCard} onCreate={(d, at) => void create(d, null, at)} titleRef={titleRef} />
       ) : (
         <TimeScroll ref={api} n={n} events={visible} selectedKey={card?.key ?? null} onPick={openCard} onCreate={(d, min, at) => void create(d, min, at)} titleRef={titleRef} />
       )}
