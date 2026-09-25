@@ -359,10 +359,10 @@ export function installEngine(): void {
   setRibbonActions({
     newSpace: window.tangu?.spacesSave ? () => { void askString(app().tr('spaces.namePrompt')).then((v) => { const name = v?.trim(); if (name) void createBlankSpace(name) }) } : undefined,
     prompt: (title, initial) => askString(title, initial),
-    // 引擎的一次性提示(如「已恢复默认布局 · 撤销」)→ 宿主通知。独立事件 id:不挂在 system.generic 上,
-    // 用户关掉通用系统通知也不会连撤销入口一起丢。带撤销钮时停留约 8 秒(U-06);仅应用内 —— 从设置浮窗
-    // 触发时主窗恰好没焦点,不该为用户眼前的操作再弹一条系统横幅。
-    notify: (text, action) => { notifyApp({ text, level: 'info', event: 'workspace.layout', dedupeKey: 'workspace.layout', action, durationMs: action ? 8000 : undefined, inAppOnly: true }) },
+    // 引擎的一次性提示(如「已恢复默认布局 · 撤销」)→ 宿主通知。独立事件 id:不挂在 system.generic 上。
+    // 带撤销钮的是**操作回执**(receipt):通知总开关 / 事件开关关着也照样给(Codex 第一轮 C-2),停留约 8 秒(U-06);
+    // 仅应用内 —— 从设置浮窗触发时主窗恰好没焦点,不该为用户眼前的操作再弹一条系统横幅。
+    notify: (text, action) => { notifyApp({ text, level: 'info', event: 'workspace.layout', dedupeKey: 'workspace.layout', action, durationMs: action ? 8000 : undefined, inAppOnly: true, receipt: !!action }) },
   })
 
   // commands

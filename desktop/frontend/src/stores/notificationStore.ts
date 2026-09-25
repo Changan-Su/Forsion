@@ -28,6 +28,10 @@ export interface NotifyInput {
   /** 只在应用内显示,不跟发系统通知。给「用户刚在本应用里点出来的即时反馈」用 —— 比如从设置浮窗触发的
    *  恢复布局:那一刻主窗恰好没焦点,照常规会多弹一条系统横幅,而用户就在看着这个应用。 */
   inAppOnly?: boolean
+  /** 操作回执:用户刚亲手做的动作所附带的撤销入口(如「已恢复默认布局 · 撤销」)。它是那次操作的一部分,
+   *  不是一条「通知」—— 不受通知总开关 / 事件开关过滤(关了通知,重置照样清空布局,撤销入口不能跟着没了;
+   *  Codex 第一轮 C-2)。隐含 inAppOnly。别拿它给自动事件绕开用户的开关。 */
+  receipt?: boolean
 }
 
 export interface AppNotification {
@@ -140,7 +144,7 @@ export const useNotifications = create<NtfState>((set, get) => {
       const level: NotifyLevel = input.level && ['info', 'success', 'warning', 'error'].includes(input.level) ? input.level : 'info'
       const event = input.event ?? 'system.generic'
       const st = get()
-      if (!input.force) {
+      if (!input.force && !input.receipt) {
         if (!st.prefs.enabled) return null
         if (!(st.prefs.events[event] ?? eventDefaultOn(event))) return null
       }
@@ -179,7 +183,7 @@ export const useNotifications = create<NtfState>((set, get) => {
       // 系统通知:与应用内通知同步发(所有事件,不止收件箱);仅窗口在后台时(前台已有卡片,免重复横幅);
       // osEnabled 门控。web/mobile 无 window.tangu.notify → 可选链忽略。dedupe 合并不重发(上面已 return)。
       // inAppOnly:调用方声明这是应用内即时反馈(见 NotifyInput.inAppOnly),不跟发。
-      if (!input.inAppOnly && st.prefs.osEnabled && typeof document !== 'undefined' && !document.hasFocus()) {
+      if (!input.inAppOnly && !input.receipt && st.prefs.osEnabled && typeof document !== 'undefined' && !document.hasFocus()) {
         const osTitle = title || input.sourceLabel || 'Forsion'
         try { window.tangu?.notify?.(osTitle, text) } catch { /* 无桥/web 忽略 */ }
       }
