@@ -93,17 +93,23 @@ export const EnvProbeSection: React.FC<{
   // 平台名给 Tangu 当上下文(它据此选包管理器);window.tangu.platform 是 preload 注入的静态值。
   const platform = window.tangu?.platform || ''
 
-  // Tangu 可用 = 后端连上了 且 有至少一个可用模型;否则发过去也只是开个必然失败的会话。
-  const canAskTangu = useApp((s) => s.connState === 'ok' && (s.modelsResp?.models.length ?? 0) > 0)
-  const mirrorChina = useApp((s) => (s.desktopConfig?.mirror || 'default') === 'china')
+  // 下载源与后端模式在**检测同一刻**从宿主配置读(main.ts runEnvCheck 也是那一刻读 mirror)。
+  // 别用 appStore.desktopConfig:它只在启动/后端就绪时刷新,引导或设置刚换的源它还不知道(Codex 评审)。
+  const [host, setHost] = useState<{ mirror: 'default' | 'china'; managed: boolean } | null>(null)
+  // Tangu 可用 = 后端连上了 且 有至少一个可用模型 且 是本机托管后端;外部后端可能在别的机器上,
+  // 交给它装的是那台机器(Codex 评审 P1)—— 此时只给宿主那条本机命令。
+  const connected = useApp((s) => s.connState === 'ok' && (s.modelsResp?.models.length ?? 0) > 0)
+  const canAskTangu = connected && !!host?.managed
+  const mirrorChina = host?.mirror === 'china'
 
   const doEnvCheck = async (): Promise<EnvProbeResult[] | null> => {
     if (!window.tangu?.envCheck) return null
     setEnvChecking(true)
     setCheckError('')
     try {
-      const r = await window.tangu.envCheck()
+      const [r, cfg] = await Promise.all([window.tangu.envCheck(), window.tangu.getConfig?.().catch(() => null)])
       setProbes(r)
+      if (cfg) setHost({ mirror: cfg.mirror === 'china' ? 'china' : 'default', managed: cfg.mode === 'managed' })
       return r
     } catch (e) {
       // 吞掉 = 列表静默为空(2.11.4 前就是这样,看起来像「检测功能没了」);显式报出来。

@@ -634,10 +634,10 @@ export const OnboardingWizard: React.FC<{
       <footer className="ob-footer">
         {saveError && <div className="ob-save-error" role="alert">{saveError}</div>}
         <div className="ob-footer-row">
-          {stepIdx > 0 ? <button className="btn ghost" disabled={saving} onClick={() => setStep(STEP_ORDER[stepIdx - 1])}><ArrowLeft size={14} />{t('onboarding.nav.prev')}</button>
+          {stepIdx > 0 ? <button className="btn ghost" disabled={saving || mirrorSaving} onClick={() => setStep(STEP_ORDER[stepIdx - 1])}><ArrowLeft size={14} />{t('onboarding.nav.prev')}</button>
             : <button className="btn ghost" onClick={() => setShowChangelog(true)}><FileText size={14} />{t('onboarding.welcome.viewChangelog')}</button>}
           <span className="ob-footer-hint">{t('onboarding.guide.changeLater')}</span>
-          {step !== 'done' && <button className="btn ghost" disabled={saving} onClick={step === 'permissions' ? () => void advance() : finish}>{t(step === 'permissions' ? 'desktopPermissions.later' : 'onboarding.nav.skip')}</button>}
+          {step !== 'done' && <button className="btn ghost" disabled={saving || mirrorSaving} onClick={step === 'permissions' ? () => void advance() : finish}>{t(step === 'permissions' ? 'desktopPermissions.later' : 'onboarding.nav.skip')}</button>}
           <button className="btn primary" disabled={saving || mirrorSaving || (step === 'model' && modelsLoading)} onClick={step === 'done' ? finish : () => void advance()}>
             {t(step === 'welcome' ? 'onboarding.welcome.continue' : step === 'done' ? 'onboarding.nav.start' : step === 'connect' && !connectReady ? 'onboarding.connect.skipForNow' : 'onboarding.nav.next')}
             {saving ? <Loader2 size={15} className="spin" /> : <ArrowRight size={15} />}
