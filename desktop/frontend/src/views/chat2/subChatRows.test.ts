@@ -22,6 +22,12 @@ describe('subChatRows(U-04 右栏去重)', () => {
     const rows = subChatRows([HIST, DISC], [merged('hr1', 'Historian'), merged('dr1', '讨论')], true)
     expect(rows.map((r) => r.title)).toEqual(['讨论'])
   })
+  it('⚠️ Historian 跑过新 run 后,live 里残留的旧 run(无 sessionId、标题 Historian)也不漏回来', () => {
+    const rows = subChatRows([HIST, DISC], [merged('hr0-old', 'Historian'), merged('dr1', '讨论')], true)
+    expect(rows.map((r) => r.title)).toEqual(['讨论'])
+    // Historian 关:旧 run 照旧列出(与改动前一致)
+    expect(subChatRows([HIST], [merged('hr0-old', 'Historian')], false).map((r) => r.id)).toEqual(['h1', 'hr0-old'])
+  })
   it('负对照:Historian 关时同一条 live 按 runId 与 saved 合并,不重复', () => {
     expect(subChatRows([HIST], [merged('hr1', 'Historian')], false)).toHaveLength(1)
   })
