@@ -405,7 +405,7 @@ export const OnboardingWizard: React.FC<{
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <Palette size={13} /> {t('onboarding.guide.styleLabel')}
                 </label>
-                <div className="theme-grid">
+                <div className="theme-grid" role="radiogroup" aria-label={t('onboarding.guide.styleLabel')}>
                   {listLanguages().map((th) => (
                     <ThemeCard
                       key={th.manifest.id}

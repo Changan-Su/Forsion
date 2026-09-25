@@ -41,7 +41,7 @@
   font-size: var(--ui-font-caption, 11px); cursor: pointer;
 }
 .btw-act:hover { background: var(--overlay-light); color: var(--text); }
-.btw-act:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 1px; }
+.btw-act:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 1px; }
 
 .btw-compose { padding: 6px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
 .btw-quote-chip {

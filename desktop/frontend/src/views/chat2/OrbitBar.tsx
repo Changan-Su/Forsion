@@ -32,6 +32,11 @@ registerMessages({
   'orbit.bar.exited': { zh: '已退出团队模式,由 {name} 继续', en: 'Left team mode; {name} continues' },
   'orbit.bar.working': { zh: '{n} 人工作中', en: '{n} working' },
   'orbit.bar.waiting': { zh: '{name} 等待审批', en: '{name} waiting for approval' },
+  // 头像是首字 / 图片且对读屏隐藏(AgentAvatar 恒 aria-hidden / alt=""),名字由头像组的可访问名补上。
+  'orbit.bar.memberList': { zh: '成员：{names}', en: 'Members: {names}' },
+  'orbit.bar.memberWorking': { zh: '{name}(工作中)', en: '{name} (working)' },
+  'orbit.bar.memberWaiting': { zh: '{name}(等待审批)', en: '{name} (waiting for approval)' },
+  'orbit.bar.listSep': { zh: '、', en: ', ' },
 })
 
 export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: AgentConfig; running: boolean }): React.ReactElement | null {
@@ -109,7 +114,17 @@ export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: 
     <div className="t2o-bar" role="status" data-orbit={isTeam ? 'team' : 'teammode'}>
       <span className="t2o-bar-title">{title}</span>
       <span className="t2o-bar-sub">{t('orbit.bar.members', { n: members.length })}{workingCount ? ` · ${t('orbit.bar.working', { n: workingCount })}` : ''}{waitingNames.length ? ` · ${t('orbit.bar.waiting', { name: waitingNames.join('、') })}` : ''}</span>
-      <span className="t2o-bar-avatars">
+      <span
+        className="t2o-bar-avatars"
+        role="img"
+        aria-label={t('orbit.bar.memberList', {
+          names: members.slice(0, 6).map((slug) => {
+            const st = running ? s.teamWork?.[slug]?.status : undefined
+            return st === 'working' ? t('orbit.bar.memberWorking', { name: nameOf(slug) })
+              : st === 'waiting' ? t('orbit.bar.memberWaiting', { name: nameOf(slug) }) : nameOf(slug)
+          }).join(t('orbit.bar.listSep')),
+        })}
+      >
         {members.slice(0, 6).map((slug) => {
           const url = s.agentAvatars[slug]
           const st = running ? s.teamWork?.[slug]?.status : undefined

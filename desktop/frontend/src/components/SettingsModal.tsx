@@ -177,6 +177,11 @@ registerMessages({
   'settingsmodal.backend.runtimeDirty': { zh: '有未保存的更改，保存后会重启后端', en: 'Unsaved changes. Saving restarts the backend.' },
   'settingsmodal.status.backend': { zh: '后端：{state}', en: 'Backend: {state}' },
   'settingsmodal.status.account': { zh: '账号：{state}', en: 'Account: {state}' },
+  // 外部连接模式:状态条按「本应用 ↔ 外部后端」的连接判定,不再读内置进程(那边此时本就停着)。
+  'settingsmodal.status.external': { zh: '外部连接：{state}', en: 'External connection: {state}' },
+  'settingsmodal.status.connOk': { zh: '已连通', en: 'Connected' },
+  'settingsmodal.status.connPending': { zh: '连接中', en: 'Connecting' },
+  'settingsmodal.status.connErr': { zh: '连接失败', en: 'Connection failed' },
 })
 
 type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'permissions' | 'advanced' | 'developer' | 'about'
@@ -446,6 +451,8 @@ export const SettingsModal: React.FC<{
     setModeDraft(null)
   }, [p.open])
   const [backendSt, setBackendSt] = useState<BackendStatusInfo | null>(null)
+  // 外部连接(或 web,无内置后端)时状态条看的是 appStore 的连接态;backendStatus() 只描述内置进程。
+  const connState = useApp((s) => s.connState)
   const [logs, setLogs] = useState<string[] | null>(null)
   // Forsion 账号 / provider OAuth 登录态
   const [authSt, setAuthSt] = useState<AuthStatusInfo | null>(null)
@@ -826,6 +833,12 @@ export const SettingsModal: React.FC<{
   // 以前点卡片即 setConfig({mode}) —— mode 是 managedKeys,一点就重启/停掉内置后端(U-01)。
   const mode = savedCfg?.mode || 'external'
   const viewMode = modeDraft ?? mode
+  // 状态条判定源:已落盘为外部连接(或 web 端没有内置后端)→ 看连接态;托管 → 看内置进程。
+  // desktop 上 savedCfg 未读回前按托管处理(显示「加载中」),免得先闪一下外部连接的状态。
+  const externalConn = !isDesktop || savedCfg?.mode === 'external'
+  const stripHealth: 'ok' | 'err' | 'pending' = externalConn
+    ? (connState === 'ok' ? 'ok' : connState === 'err' ? 'err' : 'pending')
+    : (backendSt?.state === 'ready' ? 'ok' : backendSt?.state === 'crashed' ? 'err' : 'pending')
   const modePending = viewMode !== mode
   const pickModeDraft = (m: 'managed' | 'external'): void => setModeDraft(m === mode ? null : m)
   // 托管运行组(改了要重启后端的键)。cloudUrl 也是 managedKey,但它住在 Forsion 页、有自己的显式保存,
@@ -1451,11 +1464,13 @@ export const SettingsModal: React.FC<{
                 {tab === 'general' && activeSub === 'g-conn' && (
                   <>
                     {/* 状态条(U-14):原「当前状态」大卡 + 三行 压成一行;「运行模式」不再单列(下面那张卡就是它)。 */}
-                    <section className={`settings-status-strip${backendSt?.state === 'ready' ? ' is-ready' : ''}`} aria-label={t('settings.overview.label')}>
-                      <i className={`settings-status-dot${backendSt?.state === 'ready' ? ' ok' : backendSt?.state === 'crashed' ? ' err' : ''}`} aria-hidden="true" />
-                      <strong>{backendSt?.state === 'ready' ? t('settings.overview.readyTitle') : t('settings.overview.attentionTitle')}</strong>
+                    <section className={`settings-status-strip${stripHealth === 'ok' ? ' is-ready' : ''}`} aria-label={t('settings.overview.label')} data-status-source={externalConn ? 'external' : 'managed'}>
+                      <i className={`settings-status-dot${stripHealth === 'ok' ? ' ok' : stripHealth === 'err' ? ' err' : ''}`} aria-hidden="true" />
+                      <strong>{stripHealth === 'ok' ? t('settings.overview.readyTitle') : t('settings.overview.attentionTitle')}</strong>
                       <span className="settings-status-strip-meta">
-                        <span>{t('settingsmodal.status.backend', { state: backendSt ? t(BACKEND_STATE_LABEL[backendSt.state] || 'settings.backend.state.stopped') : t('common.loading') })}</span>
+                        {externalConn
+                          ? <span>{t('settingsmodal.status.external', { state: t(connState === 'ok' ? 'settingsmodal.status.connOk' : connState === 'err' ? 'settingsmodal.status.connErr' : 'settingsmodal.status.connPending') })}</span>
+                          : <span>{t('settingsmodal.status.backend', { state: backendSt ? t(BACKEND_STATE_LABEL[backendSt.state] || 'settings.backend.state.stopped') : t('common.loading') })}</span>}
                         <span>{t('settingsmodal.status.account', { state: authSt?.loggedIn && authSt.tokenValid !== false ? t('settings.overview.signedIn') : t('settings.overview.signedOut') })}</span>
                       </span>
                       {isDesktop && !(authSt?.loggedIn && authSt.tokenValid !== false) && (
@@ -3293,7 +3308,7 @@ export const SettingsModal: React.FC<{
                       <button
                         className="btn ghost sm"
                         // 设置是独立浮窗(自己没有 Dockview,resetLayout 在这边第一句就退了):请主窗恢复。web 仍在同一渲染进程。
-                        onClick={() => { if (window.tangu?.requestMainAction) window.tangu.requestMainAction('reset-layout'); else useWorkspace.getState().resetLayout(); p.onClose() }}
+                        onClick={() => { if (window.tangu?.requestMainAction) window.tangu.requestMainAction('reset-layout'); else useWorkspace.getState().resetLayout({ undoable: true }); p.onClose() }}
                       >
                         <RotateCcw size={13} />
                         {t('settingsmodal.advanced.resetLayout')}

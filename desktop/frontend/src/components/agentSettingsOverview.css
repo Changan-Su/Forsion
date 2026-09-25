@@ -12,7 +12,7 @@
 .agso-actions .btn { gap: 6px; }
 .agso-profile { padding: 13px 15px; border-top: var(--border-width) solid var(--overlay-medium); }
 .agso-profile textarea { width: 100%; padding: 10px; border: var(--border-width) solid var(--overlay-medium); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); font-family: var(--font-mono); font-size: var(--ui-font-body); line-height: 1.55; resize: vertical; }
-.agso-profile textarea:focus { outline: 2px solid var(--accent-ink); outline-offset: 0; }
+.agso-profile textarea:focus { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 0; }
 .agso-profile > div { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-top: 9px; }
 .agso-profile > div span { color: var(--text-muted); font-size: var(--ui-font-meta); }
 @media (max-width: 620px) { .agso-default { align-items: flex-start; flex-direction: column; } .agso-default > span { flex-basis: auto; } .agso-default > button { width: 100%; } }

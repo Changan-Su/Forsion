@@ -682,7 +682,22 @@ async function shotAlwaysPanel(win, stub, shots, name, keyOrPrefix, isProbe) {
   await sleep(1500)
   if (isProbe) await win.evaluate(() => window.__deskProbeSetMode('always'))
   await sleep(400)
-  await win.locator(btnSel('.agent-desk-card[data-desk-session^="dc-s"]', T.expand)).first().click().catch(() => {})
+  // 新会话零条目 + always = U-18 小坞:头行(含「展开」钮)被 CSS 藏掉,点它必然落空(原来 .catch 吞掉 → 本条恒红)。
+  // 小坞本身是 role=button(uiux-g):走键盘 —— 聚焦小坞按 Enter 放大,顺带钉住「键盘够得到放大」。
+  const cardSel = '.agent-desk-card[data-desk-session^="dc-s"]'
+  const headBtn = win.locator(btnSel(cardSel, T.expand)).first()
+  if (await headBtn.isVisible().catch(() => false)) await headBtn.click().catch(() => {})
+  else {
+    const dock = win.locator(`${cardSel}[data-idle][role="button"][tabindex="0"]`).first()
+    const dockOk = (await dock.count()) > 0 && !!(await dock.getAttribute('aria-label'))
+    check(`6k ${name}:零条目小坞是可聚焦的按钮(role=button、tabindex=0、有可访问名)`, dockOk)
+    if (dockOk) {
+      await dock.focus()
+      await sleep(200)
+      await shoot(win, shots, `${name}-dock-focus`) // 焦点环画在盒内(outline-offset:-2px),车道不裁
+      await win.keyboard.press('Enter')
+    }
+  }
   const sel = isProbe ? `[data-companion="${keyOrPrefix}"]` : `[data-companion^="${keyOrPrefix}"]`
   const up = await waitFor(win, (s) => !!document.querySelector(`.agent-desk.open ${s}[data-surface="desk-panel"] canvas`), sel, 10_000)
   await sleep(isProbe ? 900 : 3500)

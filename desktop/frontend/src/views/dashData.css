@@ -69,7 +69,7 @@
   color: var(--text);
 }
 .dash-filter-editor select:focus-visible,
-.dash-filter-editor input:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.dash-filter-editor input:focus-visible { outline: var(--focus-ring) solid var(--primary); outline-offset: 1px; }
 .dash-filter-commit {
   border: none; border-radius: var(--radius-sm, 6px); cursor: pointer;
   padding: 5px 8px; font-size: var(--ui-font-meta, 12px); font-weight: 550;

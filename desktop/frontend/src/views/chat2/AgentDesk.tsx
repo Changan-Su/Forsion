@@ -315,6 +315,9 @@ export function DeskCard({ sessionId }: { sessionId: string }) {
   const expand = plan.expandable ? () => useApp.getState().patchDesk(sessionId, { mode: 'open' }) : undefined
   const companion = plan.showCompanion ? comp : null
   const idle = deskCardIdle(plan, items.length)
+  // 小坞把头行(含放大钮)藏了:companion='always' 且零条目时,放大只能靠整卡 onClick → 键盘够不到。
+  // 此时让小坞本身当按钮(仅 expand 有定义时),Enter / Space 放大。
+  const dockButton = idle && !!expand
 
   return (
     <div
@@ -322,6 +325,14 @@ export function DeskCard({ sessionId }: { sessionId: string }) {
       data-idle={idle || undefined}
       className={`agent-desk-card${expand ? ' act' : ''}${gone ? ' gone' : ''}`}
       onClick={expand}
+      role={dockButton ? 'button' : undefined}
+      tabIndex={dockButton ? 0 : undefined}
+      aria-label={dockButton ? `${t('desk.title')} · ${t('desk.expand')}` : undefined}
+      onKeyDown={dockButton ? (e) => {
+        if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
+        e.preventDefault()
+        expand!()
+      } : undefined}
       title={expand ? t('desk.expand') : idle ? `${t('desk.title')} · ${t('desk.empty')}` : undefined}
     >
       <div className="agent-desk-card-head">
