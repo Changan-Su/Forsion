@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { seedBuiltinBundles, builtinPluginIds, builtinBundleSources, _resetBuiltinIdsForTest } from './builtinPlugins'
+import { seedBuiltinBundles, builtinPluginIds, builtinBundleSources, activeBundleDir, pendingDirFor, _resetBuiltinIdsForTest } from './builtinPlugins'
 
 const write = async (dir: string, files: Record<string, string>): Promise<void> => {
   for (const [rel, body] of Object.entries(files)) {
@@ -86,6 +86,41 @@ describe('seedBuiltinBundles', () => {
     const linux = await seed('linux')
     expect(linux).toEqual({ installed: [], updated: [], kept: [], skipped: [] })
     expect(await read(path.join(root, 'tangu-computer-use', 'main.js'))).toBeNull()
+  })
+})
+
+describe('npm 暂存区(.pending)', () => {
+  const pend = () => pendingDirFor(root, src)
+  const seedAt = (appVersion: string) => seedBuiltinBundles(root, [src], { platform: 'darwin', appVersion, log: () => {} })
+
+  it('暂存区比随包旧(新 App 已带了更新的):用随包,暂存区清掉', async () => {
+    await write(pend(), { 'manifest.json': manifest('tangu-computer-use', '0.4.9'), 'main.js': 'v0.4.9' })
+    const r = await seedAt('2.11.5')
+    expect(r.installed).toEqual(['tangu-computer-use'])
+    expect(await read(path.join(root, 'tangu-computer-use', 'main.js'))).toBe('v0.5.0')
+    expect(await fs.readdir(root)).toEqual(['tangu-computer-use'])
+  })
+
+  it('负对照:暂存区宿主不兼容(minAppVersion / apiVersion)或 id 不符 → 不用它,且清掉', async () => {
+    for (const [name, m] of [
+      ['minApp', JSON.stringify({ id: 'tangu-computer-use', version: '0.6.0', minAppVersion: '9.0.0' })],
+      ['api', JSON.stringify({ id: 'tangu-computer-use', version: '0.6.0', apiVersion: 2 })],
+      ['id', manifest('someone-else', '0.6.0')],
+    ] as const) {
+      await fs.rm(root, { recursive: true, force: true })
+      await write(pend(), { 'manifest.json': m, 'main.js': 'v0.6.0' })
+      await seedAt('2.11.5')
+      expect(await read(path.join(root, 'tangu-computer-use', 'main.js')), name).toBe('v0.5.0')
+      expect(await fs.readdir(root), name).toEqual(['tangu-computer-use'])
+    }
+  })
+})
+
+describe('activeBundleDir', () => {
+  it('已装同 id(哪怕目录名不同)→ 用已装那份;没装 → 随包来源', async () => {
+    expect(await activeBundleDir(root, src)).toBe(src)
+    await write(path.join(root, 'cu-from-market'), { 'manifest.json': manifest('tangu-computer-use', '0.6.0') })
+    expect(await activeBundleDir(root, src)).toBe(path.join(root, 'cu-from-market'))
   })
 })
 

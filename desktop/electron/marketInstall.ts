@@ -240,9 +240,18 @@ function hostOf(url: string): string {
   try { return new URL(url).host } catch { return url.slice(0, 60) }
 }
 
-/** 依次尝试候选,返回第一个完整下载到的 zip。每个候选:响应头超时 + 断流超时 + 大小上限 + zip 魔数
- *  (代理站被限流时常回 200 的 HTML 页面,不认魔数就会拿它去解压、把能用的下一个候选错过)。 */
-export async function downloadZip(urls: string[], fetchFn: FetchFn, onProgress: (p: DownloadProgress) => void = () => {}): Promise<Buffer> {
+const ZIP_MAGIC: readonly number[] = [0x50, 0x4b]
+/** gzip 魔数:npm tarball(.tgz)用,见 builtinUpdates.ts。 */
+export const GZIP_MAGIC: readonly number[] = [0x1f, 0x8b]
+
+/** 依次尝试候选,返回第一个完整下载到的归档(缺省 zip;传 GZIP_MAGIC 下 .tgz)。每个候选:响应头超时 + 断流超时 +
+ *  大小上限 + 魔数(代理站被限流时常回 200 的 HTML 页面,不认魔数就会拿它去解压、把能用的下一个候选错过)。 */
+export async function downloadZip(
+  urls: string[],
+  fetchFn: FetchFn,
+  onProgress: (p: DownloadProgress) => void = () => {},
+  magic: readonly number[] = ZIP_MAGIC,
+): Promise<Buffer> {
   const failed: Array<{ host: string; reason: string }> = []
   for (const [i, url] of urls.entries()) {
     const host = hostOf(url)
@@ -272,7 +281,7 @@ export async function downloadZip(urls: string[], fetchFn: FetchFn, onProgress: 
         onProgress({ attempt: i + 1, attempts: urls.length, host, received, total })
       }
       const buf = Buffer.concat(chunks)
-      if (buf.length < 4 || buf[0] !== 0x50 || buf[1] !== 0x4b) throw new Error('not a zip')
+      if (buf.length < 4 || magic.some((b, j) => buf[j] !== b)) throw new Error(magic === ZIP_MAGIC ? 'not a zip' : 'unexpected content')
       return buf
     } catch (e) {
       const cause = (e as { cause?: { code?: string; message?: string } })?.cause // Node fetch 把真原因(ECONNRESET 等)藏在 cause 里
