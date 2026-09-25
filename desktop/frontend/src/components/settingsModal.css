@@ -53,8 +53,8 @@
   animation: settings-anchor-flash 1.6s ease-out;
 }
 @keyframes settings-anchor-flash {
+  /* 不写 100%:回到元素自身的底色(卡片是 --bg-card,行是透明),不会先褪成透明再跳回。 */
   0%, 35% { background-color: var(--sel-fill, var(--accent-light)); }
-  100% { background-color: transparent; }
 }
 @media (prefers-reduced-motion: reduce) {
   .settings-body [data-setting-anchor].is-anchor-flash { animation-duration: 0.01s; }
