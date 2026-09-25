@@ -91,12 +91,14 @@ export function buildRunAgentConfig(c: MutableConfig, groupAgents: string[] | nu
 
 /** 起 run 前写进会话的设置(按键合并;null = 删键)。审批档只写 TUI 专属键,见 TUI_APPROVAL_KEY。 */
 export function runSessionPatch(c: MutableConfig): Record<string, unknown> {
-  return {
+  const p: Record<string, unknown> = {
     thinkingLevel: c.thinkingLevel,
     [TUI_APPROVAL_KEY]: c.approvalMode,
-    maxIterations: c.maxIterations ?? null,
-    planMode: c.planMode ? true : null,
+    planMode: c.planMode === true, // 关也写 false(不写 null):null = 删键,语义同关,但写死值更不怕与别端的 PATCH 交错
   };
+  // 循环上限只写 TUI 自己设过的:写 null = 删键,会把同会话在桌面设的上限在 TUI 跑一轮时静默抹掉
+  if (c.maxIterations != null) p.maxIterations = c.maxIterations;
+  return p;
 }
 
 export interface SessionSettingsIO {

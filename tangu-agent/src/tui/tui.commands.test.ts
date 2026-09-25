@@ -229,8 +229,12 @@ describe('run config (runConfig.ts)', () => {
     const p = runSessionPatch(cfg({ approvalMode: 'full-auto', thinkingLevel: 'off' }));
     expect(p).not.toHaveProperty('approvalMode');
     expect(p[TUI_APPROVAL_KEY]).toBe('full-auto');
-    expect(p).toMatchObject({ thinkingLevel: 'off', maxIterations: null, planMode: null });
+    expect(p).toMatchObject({ thinkingLevel: 'off', planMode: false });
     expect(runSessionPatch(cfg({ maxIterations: 12, planMode: true }))).toMatchObject({ maxIterations: 12, planMode: true });
+    // 没设过循环上限:不写这个键(写 null 会删掉桌面在同会话设的上限);计划模式关写 false
+    const bare = runSessionPatch(cfg({ maxIterations: undefined, planMode: false }));
+    expect('maxIterations' in bare).toBe(false);
+    expect(bare.planMode).toBe(false);
     // app.tsx 的两处会话写(起 run / 切档)都得走专属键 —— 源码里不许再出现把 approvalMode 写进会话的调用。
     const src = readFileSync(join(__dirname, 'app.tsx'), 'utf8');
     expect(src).not.toMatch(/(patchSessionAgentConfig|settingsWriter\.patch)\([^)]*\{\s*approvalMode/);
