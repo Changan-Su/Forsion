@@ -146,10 +146,13 @@ html.dark .hp-theme-preview[data-preset='hack2gate'] { background-image: url('..
 }
 .hp-root[data-wallpaper='true'][data-vignette='false'] .hp-wallpaper-edge { opacity: 0.64; }
 
+/* 首层 --hp-center-scrim = 中心柔光(U-08):只在「压暗背景」开着时定义,关掉就是一层透明。
+ * 刻意叠在已有的 tone 层上、不另起 DOM,也不用 .hp-stack::before(聚焦态带 transform,会另起堆叠上下文)。 */
 .hp-wallpaper-tone {
   z-index: -2;
   opacity: 0;
   background:
+    var(--hp-center-scrim, linear-gradient(transparent, transparent)),
     linear-gradient(to bottom, color-mix(in srgb, var(--bg) 24%, transparent), transparent 34%),
     linear-gradient(to right, color-mix(in srgb, var(--bg) 24%, transparent), transparent 15%, transparent 85%, color-mix(in srgb, var(--bg) 24%, transparent)),
     radial-gradient(ellipse at center, transparent 36%, color-mix(in srgb, var(--bg) 64%, transparent) 100%);
@@ -157,6 +160,7 @@ html.dark .hp-theme-preview[data-preset='hack2gate'] { background-image: url('..
 }
 .hp-root[data-wallpaper='true'] .hp-wallpaper-tone { opacity: 1; }
 .hp-root[data-wallpaper='true'][data-vignette='false'] .hp-wallpaper-tone { opacity: 0.36; }
+.hp-root[data-vignette='true'] { --hp-center-scrim: radial-gradient(ellipse 46% 40% at 50% 56%, color-mix(in srgb, var(--bg) 40%, transparent), transparent 78%); }
 /* 背景轴给了 --glow 才画;未声明就保持透明,不在组件里自造色。 */
 .hp-glow {
   z-index: -1;
@@ -338,6 +342,37 @@ html[data-glass='off'] .hp-root .hp-wallpaper-sheet {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
+/* uiux-d: U-08 输入卡外面那几样(Agent 提示行、团队行、项目芯片)原本没有自己的底,直接压在壁纸的大字上。
+ * 给它们各垫一枚薄玻璃胶囊:材质画在**无子节点的 ::before** 上(同输入卡的处方),元素自己不成为 backdrop root。 */
+.hp-root .hp-composer .engine-picker-hint,
+.hp-root .hp-composer .agent-select-team {
+  position: relative;
+  isolation: isolate;
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+}
+.hp-root .hp-composer .project-pill { position: relative; isolation: isolate; }
+.hp-root .hp-composer .engine-picker-hint::before,
+.hp-root .hp-composer .agent-select-team::before,
+.hp-root .hp-composer .project-pill::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--bg-card) 64%, transparent);
+  backdrop-filter: var(--hp-glass-filter);
+  -webkit-backdrop-filter: var(--hp-glass-filter);
+}
+html[data-glass='off'] .hp-root .hp-composer .engine-picker-hint::before,
+html[data-glass='off'] .hp-root .hp-composer .agent-select-team::before,
+html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
+  background: var(--bg-card);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+/* uiux-d: end */
 .hp-spaces-head {
   min-height: 32px;
   display: flex;

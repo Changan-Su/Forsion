@@ -81,7 +81,7 @@ registerMessages({
   'home.wallpaper.tooLarge': { zh: '图片超过 32 MB,请先压缩后再试', en: 'The image is over 32 MB. Compress it and try again.' },
   'home.wallpaper.focusBlur': { zh: '聚焦景深', en: 'Focus depth' },
   'home.wallpaper.focusBlurHint': { zh: '操作输入框、模型或模式等控件时柔化背景', en: 'Soften the stage while using the chat input, model, mode, or related controls' },
-  'home.wallpaper.vignette': { zh: '边缘压暗', en: 'Edge vignette' },
+  'home.wallpaper.vignette': { zh: '压暗背景', en: 'Dim background' },
   'home.wallpaper.vignetteHint': { zh: '让文字和控件在明亮壁纸上保持清晰', en: 'Keep text and controls legible on bright images' },
 })
 
