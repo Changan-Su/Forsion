@@ -8,7 +8,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_CLOUD_PROJECT, ROOTLESS_WORKSPACE_KEY, type WorkspaceDescriptor } from '../types'
-import { useApp, newSessionPreset, stickyDefaults, applyPreset, resolveNewSessionWorkspace, type AppState } from './appStore'
+import { useApp, newSessionPreset, stickyDefaults, applyPreset, resolveNewSessionWorkspace, newChatProjectPath, type AppState } from './appStore'
 import { effectiveSessionMode, sessionsInMode, workspacesInMode } from '../views/sessionMode'
 import { currentPlatform } from '../services/agentRunService'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -61,6 +61,20 @@ describe('resolveNewSessionWorkspace(Homepage / send / newSession 共用落点)'
   it('Work 未选项目时按端能力落本地默认工作区或默认云 Project', () => {
     expect(resolveNewSessionWorkspace({ sessionMode: 'work', newChatWs: null, desktopMode: 'managed', defaultWsDir: '/default', homeDir: '/home', tr }, 'desktop')).toMatchObject({ key: '/default', kind: 'local', path: '/default' })
     expect(resolveNewSessionWorkspace({ sessionMode: 'work', newChatWs: null, desktopMode: 'external', defaultWsDir: '/default', homeDir: '/home', tr }, 'web')).toMatchObject({ kind: 'cloud', project: DEFAULT_CLOUD_PROJECT })
+  })
+})
+
+describe('newChatProjectPath(send 与选择条状态句共用的「套哪个项目的默认项」)', () => {
+  const tr = ((k: string) => k) as AppState['tr']
+  const base = { desktopMode: 'managed' as const, defaultWsDir: '/default', homeDir: '/home', tr }
+  it('⚠️ 没显式选项目:落到本地默认工作区项目,仍要套它的默认项(Codex 第一轮 B2-1)', () => {
+    expect(newChatProjectPath({ ...base, sessionMode: 'work', newChatWs: null }, 'desktop')).toBe('/default')
+  })
+  it('显式项目按它;chat 预设 / 云端 / 家目录都不套', () => {
+    expect(newChatProjectPath({ ...base, sessionMode: 'work', newChatWs: localWs }, 'desktop')).toBe(localWs.path)
+    expect(newChatProjectPath({ ...base, sessionMode: 'chat', newChatWs: null }, 'desktop')).toBeNull()
+    expect(newChatProjectPath({ ...base, desktopMode: 'external', sessionMode: 'work', newChatWs: null }, 'web')).toBeNull()
+    expect(newChatProjectPath({ ...base, defaultWsDir: '/home', sessionMode: 'work', newChatWs: null }, 'desktop')).toBeNull()
   })
 })
 

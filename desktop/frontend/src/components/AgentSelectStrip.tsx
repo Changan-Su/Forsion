@@ -21,9 +21,11 @@ import { EngineIcon } from './EngineIcon'
 import { PillBar } from './EnginePicker'
 import { CompactChatPicker } from './CompactChatPicker'
 import { ContextMenu, menuPos, type CtxMenu } from './RightPanel'
-import { useApp } from '../stores/appStore'
+import { useApp, newChatProjectPath } from '../stores/appStore'
+import { currentPlatform } from '../services/agentRunService'
+import { projectDefaultsForNewSession } from '../stores/projectSettings'
+import { draftDispatch } from './agentSelectStatus'
 import { AgentAvatar } from './AgentAvatar'
-import { isProjectWorkspace } from '../stores/projectSettings'
 import { openSolo } from '../sessionNav'
 import type { AgentConfig } from '../types'
 import './agentSelectStrip.css'
@@ -77,14 +79,15 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
     engineCaps: state.engineCaps,
     teams: state.teams,
   })))
-  // 新对话草稿落在项目里时,发送那一刻会按项目默认项补 Agent / 团队(appStore.send → projectDefaultsForNewSession,
-  // 只补草稿里缺席的键)。状态句得说同一个人,不能一律报全局默认(creview)。设置未进缓存时退回全局默认。
-  const draftProject = useApp((st) => {
-    if (sessionId) return null
-    const ws = st.newChatWs
-    if (!isProjectWorkspace(ws) || ws.path === st.homeDir) return null
-    return st.projectSettingsByPath[ws.path] ?? null
-  })
+  // 新对话:发送那一刻会按项目默认项补 Agent / 团队(appStore.send → newChatProjectPath + projectDefaultsForNewSession,
+  // 只补草稿里缺席的键)。状态句得说同一个人:项目落点与发送链同一个解析(含未显式选项目时的隐式默认工作区)。
+  const draftProjectPath = useApp((st) => (sessionId ? null : newChatProjectPath(st, currentPlatform())))
+  const draftProject = useApp((st) => (draftProjectPath ? st.projectSettingsByPath[draftProjectPath] ?? null : null))
+  const draftProjectKnown = useApp((st) => !draftProjectPath || draftProjectPath in st.projectSettingsByPath)
+  // 默认工作区从不经 setNewChatWs 预取:缓存还冷就在这里取一次(send 冷缓存时也会等这同一份)。
+  useEffect(() => {
+    if (draftProjectPath && !draftProjectKnown) void useApp.getState().ensureProjectSettings(draftProjectPath).catch(() => null)
+  }, [draftProjectPath, draftProjectKnown])
 
   const engineId = cfg.engineId || ''
   const pickedSlugs = pickedAgentSlugs(cfg)
@@ -236,19 +239,16 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
   // Chat 预设恒 sandbox + 无 agent(applyPreset 会抹掉 agentSlug/cwd),不露选择条;没有任何候选同理。
   if (cfg.preset === 'chat' || !items.length) return null
 
-  // 状态句:≥2 人 = 团队行;1 人 = 谁来接;0 人 = 默认 Agent 接(照样能发)。「再点移除」只留在已选 pill 的 title 里。
-  const fillsFromProject = !!draftProject && cfg.agentSlug === undefined && cfg.groupChat === undefined
-  const projectTeam = fillsFromProject && !draftProject!.defaultAgent && draftProject!.defaultTeam
-    ? (Array.isArray(s.teams) ? s.teams : []).find((x) => x.slug === draftProject!.defaultTeam)
-    : undefined
-  const defaultSlug = (fillsFromProject && draftProject!.defaultAgent) || s.defaultAgentSlug
-  const defaultName = s.agentDefs.find((a) => a.slug === defaultSlug)?.name
+  // 状态句:≥2 人 = 团队行;1 人 = 谁来接;0 人 = 发送时实际接手的人(项目默认 Agent / 团队,再兜全局默认)。
+  // 「再点移除」只留在已选 pill 的 title 里。
+  const dispatch = draftDispatch(cfg, sessionId ? {} : projectDefaultsForNewSession(draftProject, Array.isArray(s.teams) ? s.teams : []).config, s.defaultAgentSlug)
+  const defaultName = dispatch.kind === 'agent' && dispatch.slug ? s.agentDefs.find((a) => a.slug === dispatch.slug)?.name : undefined
   const statusLine = teamCount >= TEAM_MIN
     ? t('agentSelect.team', { n: teamCount })
     : picked.length === 1
       ? t('agentSelect.hintOne', { name: picked[0].name })
-      : projectTeam && projectTeam.members.length >= TEAM_MIN
-        ? t('agentSelect.team', { n: projectTeam.members.length })
+      : dispatch.kind === 'team'
+        ? t('agentSelect.team', { n: dispatch.count })
         : defaultName ? t('agentSelect.hintDefault', { name: defaultName }) : t('agentSelect.hintDefaultAnon')
 
   const compactValue = pickedIds[0] || ''
