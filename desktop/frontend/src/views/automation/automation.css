@@ -186,3 +186,7 @@
   .auto-home { margin-block: 16px; }
   .auto-card .auto-card-head { align-items: flex-start; }
 }
+
+/* uiux-d: 执行账本首读 = 骨架 + 只给读屏的状态句(U-39)。 */
+.auto-runs-loading { padding: 4px 0; }
+.auto-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }

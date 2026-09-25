@@ -8,6 +8,7 @@
  */
 import React, { useEffect, useState } from 'react'
 import { CheckCircle2, CircleAlert } from 'lucide-react'
+import { Skeleton } from '@lcl/engine'
 import './messages'
 import { useApp } from '../../stores/appStore'
 import { useAutomation, sessionForTrigger } from '../../stores/automationStore'
@@ -20,13 +21,16 @@ import './automation.css'
 const dotClass = (status: string): string =>
   status === 'running' || status === 'queued' ? 'running' : status === 'completed' || status === 'done' ? 'on' : 'off'
 
+/** 执行账本的模块级缓存(U-39,stale-while-revalidate):面板重建 / 在规则间来回切时先画上次的记录,后台照常轮询。 */
+const executionsCache = new Map<string, AutomationExecutionInfo[]>()
+
 /** Expandable ledger, shared by the main result area and the runs sidebar. */
 export const ExecutionsList: React.FC<{ triggerId: string }> = ({ triggerId }) => {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
   const nonce = useAutomation((s) => s.refreshNonce)
-  const [rows, setRows] = useState<AutomationExecutionInfo[]>([])
-  const [loading, setLoading] = useState(true)
+  const [rows, setRows] = useState<AutomationExecutionInfo[]>(() => executionsCache.get(triggerId) ?? [])
+  const [loading, setLoading] = useState(() => !executionsCache.has(triggerId))
   const [failed, setFailed] = useState(false)
   const [retry, setRetry] = useState(0)
   useEffect(() => {
@@ -34,6 +38,7 @@ export const ExecutionsList: React.FC<{ triggerId: string }> = ({ triggerId }) =
     const pull = async (): Promise<void> => {
       try {
         const result = await getAutomationExecutions(cfg, triggerId)
+        executionsCache.set(triggerId, result)
         if (alive) { setRows(result); setFailed(false) }
       } catch { if (alive) setFailed(true) }
       finally { if (alive) setLoading(false) }
@@ -42,7 +47,8 @@ export const ExecutionsList: React.FC<{ triggerId: string }> = ({ triggerId }) =
     const timer = setInterval(() => void pull(), 8000)
     return () => { alive = false; clearInterval(timer) }
   }, [cfg, triggerId, nonce, retry])
-  if (loading) return <div className="auto-runs-empty" role="status">{t('automation.ux.runLoading')}</div>
+  // 骨架自带 150ms 出现延迟(快的时候什么都不闪);读屏靠 sr-only 状态句。
+  if (loading) return <div className="auto-runs-loading"><Skeleton variant="list" /><span className="auto-sr-only" role="status">{t('automation.ux.runLoading')}</span></div>
   if (failed) return <div className="auto-runs-empty" role="alert">{t('automation.ux.runError')} <button className="btn ghost sm" onClick={() => setRetry((n) => n + 1)}>{t('automation.ux.retry')}</button></div>
   if (!rows.length) return <div className="auto-runs-empty">{t('automation.ux.runEmpty')}</div>
   return <div className="auto-executions">{rows.map((r, index) => (

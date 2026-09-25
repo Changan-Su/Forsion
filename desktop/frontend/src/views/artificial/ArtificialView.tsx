@@ -8,14 +8,16 @@
  * 栅格复用启动器的 .newtab-grid / .newtab-card(base.css),卡片内部的左对齐排版、徽标与动作行
  * 在 artificial.css 里补齐。种类差异(图标 / 分组名 / 能不能启动)一律查 PRODUCT_KINDS,别在这里写 if。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { AppWindow, Blocks, Code2, FolderOpen, Loader2, MonitorDown, Pencil, RotateCw, Trash2 } from 'lucide-react'
-import { getView, setActiveSpace, useSpaceStore, useWorkspace } from '@lcl/engine'
+import { useEffect, useState } from 'react'
+import { AppWindow, ArrowUpRight, Blocks, Code2, FolderOpen, MonitorDown, MoreHorizontal, Pencil, RotateCw, Trash2 } from 'lucide-react'
+import { getView, setActiveSpace, Skeleton, useSpaceStore, useWorkspace } from '@lcl/engine'
 import { askString } from '@amadeus/components/askString'
 import type { ProductSummary } from '../../../../shared/products'
 import { useApp } from '../../stores/appStore'
 import { useCodeStudio } from '../../stores/codeStudioStore'
 import { useI18n } from '../../i18n'
+import { CapabilityMenu, type CapabilityMenuItem } from '../../components/CapabilityMenu'
+import { useProducts } from './productsStore'
 import { groupProducts, kindRow, relativeTime, shortcutToast } from './productKinds'
 import './artificialMessages'
 import './artificial.css'
@@ -24,38 +26,25 @@ const detail = (e: unknown): string => (e instanceof Error ? e.message : String(
 
 export function ArtificialView() {
   const { t, locale } = useI18n()
-  const [items, setItems] = useState<ProductSummary[]>([])
-  const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading')
+  // 数据住模块级缓存(productsStore):切 Space 重建面板时先画上次的栅格,后台再重扫(U-39)。
+  const items = useProducts((s) => s.items)
+  const status = useProducts((s) => s.status)
+  const load = useProducts((s) => s.load)
+  // 本次挂载时手里没有栅格 → 第一次 ready 时淡入(有旧栅格就直接画,不做动效)。
+  const [fadeIn] = useState(() => useProducts.getState().status !== 'ready')
   const [busy, setBusy] = useState<string | null>(null)
   // 「继续编辑」与空态按钮的去处:Coding Space 没注册(产品档案不点名 / 无本地预览服务器)就不露入口。
   const canEdit = useSpaceStore((s) => s.spaces.some((sp) => sp.id === 'coding')) && !!getView('code-studio')
-  const request = useRef(0)
   // 「5 分钟前」的**基准时刻**得自己走:取自渲染期的 Date.now() 只在重渲染时更新,
   // 而这块栅格常被丢在副屏上开一整天 —— 一小时后它还写着「5 分钟前」。
   const [now, setNow] = useState(() => Date.now())
-
-  const load = useCallback(async () => {
-    const list = window.tangu?.productsList
-    if (!list) { setStatus('error'); return }
-    const seq = ++request.current
-    // 刷新时保留已有栅格:整屏打回骨架会让每次窗口聚焦都闪一下。
-    setStatus((s) => (s === 'ready' ? s : 'loading'))
-    try {
-      const rows = await list()
-      if (seq !== request.current) return
-      setItems(rows)
-      setStatus('ready')
-    } catch {
-      if (seq === request.current) setStatus('error')
-    }
-  }, [])
 
   // 挂载 + 每次窗口重新聚焦:产物是磁盘上的目录,用户可能刚在工作室里新建、或在访达里删掉。
   useEffect(() => {
     void load()
     const onFocus = (): void => { setNow(Date.now()); void load() }
     window.addEventListener('focus', onFocus)
-    return () => { request.current++; window.removeEventListener('focus', onFocus) }
+    return () => { window.removeEventListener('focus', onFocus) }
   }, [load])
 
   // 每分钟推一次基准时刻(相对时间最小的单位就是分钟,再密没有意义)。
@@ -124,42 +113,40 @@ export function ArtificialView() {
     const row = kindRow(p.kind)
     const Icon = row.icon
     const disabled = busy === p.id
-    const act = (
-      label: string,
-      action: string,
-      Glyph: typeof AppWindow,
-      run: () => void,
-    ) => (
-      <button
-        className="icon-btn" data-action={action} title={label} aria-label={`${label} · ${p.name}`}
-        disabled={disabled} onClick={run}
-      >
-        <Glyph size={13} />
-      </button>
-    )
+    // 卡面只留主动作(打开 / 继续编辑);其余收进「⋯」,移到废纸篓排最后并标 danger(U-13)。
+    // 菜单项 id = 旧的 data-action 名,台架 / 单测按它迁移。
+    const menu: CapabilityMenuItem[] = [
+      ...(row.canLaunch && window.tangu?.openDetached ? [{ id: 'open-window', label: t('artificial.action.openWindow'), icon: <AppWindow size={14} />, onSelect: () => openWindow(p) }] : []),
+      ...(canEdit ? [{ id: 'edit', label: t('artificial.action.edit'), icon: <Code2 size={14} />, onSelect: () => continueEditing(p) }] : []),
+      ...(row.canShortcut && window.tangu?.productsShortcut ? [{ id: 'shortcut', label: t('artificial.action.shortcut'), icon: <MonitorDown size={14} />, onSelect: () => { void addShortcut(p) } }] : []),
+      ...(window.tangu?.revealHostPath ? [{ id: 'reveal', label: t('artificial.action.reveal'), icon: <FolderOpen size={14} />, onSelect: () => { void window.tangu?.revealHostPath?.(p.root) } }] : []),
+      ...(window.tangu?.productsUpdate ? [{ id: 'rename', label: t('artificial.action.rename'), icon: <Pencil size={14} />, onSelect: () => { void rename(p) } }] : []),
+      ...(window.tangu?.productsTrash ? [{ id: 'trash', label: t('artificial.action.trash'), icon: <Trash2 size={14} />, danger: true, onSelect: () => { void trash(p) } }] : []),
+    ]
+    const mainDisabled = disabled || (!row.canLaunch && !canEdit)
     return (
       <div className="newtab-card art-card" key={p.id} data-artificial-card data-product-id={p.id} data-kind={p.kind}>
         <button
           // 跑不起来又没有编码工作室可去(单品变体)→ 主按钮没有去处,置灰而不是点了没反应。
-          className="art-card-main" data-action="open" disabled={disabled || (!row.canLaunch && !canEdit)}
+          className="art-card-main" data-action="open" disabled={mainDisabled}
           aria-label={row.canLaunch ? t('artificial.action.open', { name: p.name }) : `${t('artificial.action.edit')} · ${p.name}`}
           onClick={() => (row.canLaunch ? openProduct(p) : continueEditing(p))}
         >
           <span className="newtab-card-ic"><Icon size={18} /></span>
           <span className="art-card-name" title={p.name}>{p.name}</span>
+          {!mainDisabled && <ArrowUpRight size={14} className="art-card-go" aria-hidden />}
         </button>
-        <div className="art-card-meta">
-          <span>{relativeTime(p.updatedAt, now, locale)}</span>
-          {p.published && <span className="art-badge" data-badge="published">{t('artificial.badge.published')}</span>}
-          {p.kind === 'plugin' && p.devLoad && <span className="art-badge" data-badge="devload">{t('artificial.badge.devLoad')}</span>}
-        </div>
-        <div className="art-actions">
-          {row.canLaunch && !!window.tangu?.openDetached && act(t('artificial.action.openWindow'), 'open-window', AppWindow, () => openWindow(p))}
-          {canEdit && act(t('artificial.action.edit'), 'edit', Code2, () => continueEditing(p))}
-          {row.canShortcut && !!window.tangu?.productsShortcut && act(t('artificial.action.shortcut'), 'shortcut', MonitorDown, () => { void addShortcut(p) })}
-          {!!window.tangu?.revealHostPath && act(t('artificial.action.reveal'), 'reveal', FolderOpen, () => { void window.tangu?.revealHostPath?.(p.root) })}
-          {!!window.tangu?.productsUpdate && act(t('artificial.action.rename'), 'rename', Pencil, () => { void rename(p) })}
-          {!!window.tangu?.productsTrash && act(t('artificial.action.trash'), 'trash', Trash2, () => { void trash(p) })}
+        <div className="art-card-foot">
+          <div className="art-card-meta">
+            <span>{relativeTime(p.updatedAt, now, locale)}</span>
+            {p.published && <span className="art-badge" data-badge="published">{t('artificial.badge.published')}</span>}
+            {p.kind === 'plugin' && p.devLoad && <span className="art-badge" data-badge="devload">{t('artificial.badge.devLoad')}</span>}
+          </div>
+          {menu.length > 0 && (
+            <CapabilityMenu label={t('artificial.action.more', { name: p.name })} className="icon-btn art-card-more" disabled={disabled} items={menu}>
+              <MoreHorizontal size={14} />
+            </CapabilityMenu>
+          )}
         </div>
       </div>
     )
@@ -181,7 +168,11 @@ export function ArtificialView() {
         </div>
 
         {status === 'loading' && (
-          <div className="art-state" role="status" data-state="loading"><Loader2 size={16} className="spin" /> {t('artificial.loading')}</div>
+          // 骨架自带 150ms 出现延迟:扫盘快时什么都不闪。读屏靠旁边那句 sr-only 状态。
+          <div className="art-loading" data-state="loading">
+            <Skeleton variant="list" />
+            <span className="art-sr-only" role="status">{t('artificial.loading')}</span>
+          </div>
         )}
         {status === 'error' && (
           <div className="art-state" role="alert" data-state="error">
@@ -198,12 +189,16 @@ export function ArtificialView() {
             )}
           </div>
         )}
-        {status === 'ready' && groups.map((g) => (
-          <div className="newtab-sec" key={g.kind} data-kind-group={g.kind}>
-            <div className="newtab-sec-title">{t(kindRow(g.kind).labelKey)}</div>
-            <div className="newtab-grid art-grid">{g.items.map(card)}</div>
+        {status === 'ready' && groups.length > 0 && (
+          <div className={fadeIn ? 'sk-fade-in' : undefined}>
+            {groups.map((g) => (
+              <div className="newtab-sec" key={g.kind} data-kind-group={g.kind}>
+                <div className="newtab-sec-title">{t(kindRow(g.kind).labelKey)}</div>
+                <div className="newtab-grid art-grid">{g.items.map(card)}</div>
+              </div>
+            ))}
           </div>
-        ))}
+        )}
       </div>
     </div>
   )
