@@ -65,7 +65,7 @@ registerMessages({
   'calcfg.noCandidates': { zh: '没有含日期属性的可添加数据库', en: 'No databases with a date property available to add' },
   'calcfg.footHint': { zh: '只有含「日期」属性的数据库会出现在这里', en: 'Only databases with a Date property appear here' },
   'calcfg.weekStart': { zh: '一周开始于', en: 'Week starts on' },
-  'calcfg.weekStart.auto': { zh: '跟随语言（{day}）', en: 'Match language ({day})' },
+  'calcfg.weekStart.auto': { zh: '跟随语言（{day}）', en: 'Default ({day})' },
   'calcfg.weekStart.sun': { zh: '周日', en: 'Sunday' },
   'calcfg.weekStart.mon': { zh: '周一', en: 'Monday' },
 })
