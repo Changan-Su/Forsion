@@ -23,13 +23,21 @@ import { NativeExtendView } from './nativeExtendView'
 import { allViews, getView, subscribeViews } from './viewRegistry'
 import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension } from './dockviewStore'
 import { useNav } from './navStore'
-import { useCommandStore } from './commandRegistry'
+import { useCommandStore, commandHotkeyText } from './commandRegistry'
+import { useEngineI18n } from './i18nSeam'
+import { useShortcuts, formatHotkey, isMacPlatform } from './shortcutStore'
 import { getActiveSpace } from './spaceRegistry'
 import { computeDropTarget, locOf, type DropTarget } from './dropModel'
 import { getDetachApi, type ViewRef } from './detachSeam'
 import { OverlayAt, zoomOf } from './menuAnchor'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import { cycleFocusedGroupTab, tabCycleDelta } from './tabCycle'
+
+/** tooltip「名称(快捷键)」:快捷键取该命令**当前生效**的键、按平台格式化(改了键就跟着变,解绑就只剩名称)。 */
+function withHotkey(t: (k: string, v?: Record<string, unknown>) => string, text: string, cmdId: string): string {
+  const key = commandHotkeyText(cmdId)
+  return key ? t('lcl.withHotkey', { label: text, key }) : text
+}
 
 /** 从 Dockview panel.params 造可跨窗重建的 ViewRef({type, 用户 params});剥引擎私有 __loc/__type。 */
 function viewRefFromParams(params: Record<string, unknown> | undefined, component?: string): ViewRef | null {
@@ -144,6 +152,7 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
   const loc = (params as { __loc?: string } | undefined)?.__loc
   const iconOnly = loc === 'left' || loc === 'right'
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const { t } = useEngineI18n()
   const tabRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!menu) return
@@ -178,7 +187,7 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
       {!iconOnly && closable && (
         <button
           className="wb-tab-close"
-          title={document.documentElement.lang.startsWith('zh') ? '关闭' : 'Close'}
+          title={t('lcl.tab.close')}
           draggable={false}
           onPointerDown={(e) => e.stopPropagation()}
           onMouseDown={(e) => { e.stopPropagation(); e.preventDefault() }}
@@ -197,11 +206,11 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
               if (ref && d) { d.detach([ref]); useWorkspace.getState().closeLeaf(api.id) }
               setMenu(null)
             }}>
-              <AppWindow size={13} /> {document.documentElement.lang.startsWith('zh') ? '移到新窗口' : 'Move to new window'}
+              <AppWindow size={13} /> {t('lcl.tab.moveToWindow')}
             </button>
           )}
           <button onClick={() => { useWorkspace.getState().closeLeaf(api.id); setMenu(null) }}>
-            <X size={13} /> {document.documentElement.lang.startsWith('zh') ? '关闭' : 'Close'}
+            <X size={13} /> {t('lcl.tab.close')}
           </button>
         </OverlayAt>,
         document.body,
@@ -232,6 +241,8 @@ function makePrefixActions(): React.FC<IDockviewHeaderActionsProps> {
   return function PrefixActions({ panels, activePanel }) {
     // 左栏收起后,主区组成为最左 → 折叠钮要躲开 mac 交通灯(加 --edge,见 engine.css)。
     const leftCollapsed = !useWorkspace((s) => s.leftVisible)
+    const { t } = useEngineI18n()
+    useShortcuts((s) => s.overrides) // 设置里改了键 → tooltip 里的快捷键跟着变
     // per-tab 历史:箭头作用于**本组自己**的活动 tab。订阅 mainTabs(激活变化)与 stacks 重渲。
     // ⚠️ 别用全局 activeMainPanel:这套箭头每个主区组各渲一份,分屏后左右两套都会指向同一个
     //    全局活动 tab —— 点左边那套动的是右边那个 tab(用户实报的「控制别的 tabs」),而本组的栈
@@ -243,17 +254,21 @@ function makePrefixActions(): React.FC<IDockviewHeaderActionsProps> {
     const canBack = !!st && st.idx > 0
     const canFwd = !!st && st.idx >= 0 && st.idx < st.entries.length - 1
     if (!isMainGroup(panels)) return null
-    const zh = document.documentElement.lang.startsWith('zh')
     return (
       <div className={`dv-prefix${leftCollapsed ? ' dv-prefix--edge' : ''}`}>
         {/* 主面板常驻前进/后退(per-tab 历史,只走当前 tab 的栈;由各 feature recordNav(leafId,…) 喂)。 */}
-        <button className="dv-nav-btn" disabled={!canBack} title={zh ? '后退 (⌘/Ctrl+⇧+[)' : 'Back'} onClick={() => { if (amId) useNav.getState().back(amId) }}>
+        <button className="dv-nav-btn" disabled={!canBack} title={withHotkey(t, t('lcl.nav.back'), 'nav-back')} onClick={() => { if (amId) useNav.getState().back(amId) }}>
           <ArrowLeft size={15} />
         </button>
-        <button className="dv-nav-btn" disabled={!canFwd} title={zh ? '前进 (⌘/Ctrl+⇧+])' : 'Forward'} onClick={() => { if (amId) useNav.getState().forward(amId) }}>
+        <button className="dv-nav-btn" disabled={!canFwd} title={withHotkey(t, t('lcl.nav.forward'), 'nav-forward')} onClick={() => { if (amId) useNav.getState().forward(amId) }}>
           <ArrowRight size={15} />
         </button>
-        <button className="dv-edge-toggle" title={zh ? '左侧栏' : 'Toggle left panel'} onClick={() => useWorkspace.getState().toggleSidebar('left')}>
+        <button
+          className={`dv-edge-toggle${leftCollapsed ? '' : ' is-on'}`}
+          aria-pressed={!leftCollapsed}
+          title={withHotkey(t, t('lcl.edge.left'), 'toggle-left')}
+          onClick={() => useWorkspace.getState().toggleSidebar('left')}
+        >
           <PanelLeft size={15} />
         </button>
       </div>
@@ -264,10 +279,10 @@ function makePrefixActions(): React.FC<IDockviewHeaderActionsProps> {
 /** 主区组标签栏「所有 tab 之后」的 ＋:打开空白启动器(launcher/NewTabView),选视图后空白页变成它。 */
 function makeSuffixActions(): React.FC<IDockviewHeaderActionsProps> {
   return function SuffixActions({ panels }) {
+    const { t } = useEngineI18n()
     if (!isMainGroup(panels)) return null
-    const zh = document.documentElement.lang.startsWith('zh')
     return (
-      <button className="dv-new-tab" title={zh ? '新建标签页' : 'New tab'} onClick={() => { const sp = getActiveSpace(); if (sp?.newPage) sp.newPage(); else useWorkspace.getState().openView('launcher', {}, 'main', { newTab: true }) }}>
+      <button className="dv-new-tab" title={t('lcl.tab.new')} onClick={() => { const sp = getActiveSpace(); if (sp?.newPage) sp.newPage(); else useWorkspace.getState().openView('launcher', {}, 'main', { newTab: true }) }}>
         <Plus size={15} />
       </button>
     )
@@ -386,6 +401,37 @@ export const WorkspaceHost: React.FC<{
   // (= 加底部面板之前主区一直就是这样),也不要一次阶跃。真要收掉那点空当,得让 padding 与补间
   // 同相位地一起动,不是翻一个类能了的。
   const bottomVisible = useWorkspace((s) => s.bottomVisible)
+  const rightVisible = useWorkspace((s) => s.rightVisible)
+  const { t } = useEngineI18n()
+  useShortcuts((s) => s.overrides) // 浮钮 tooltip 里的快捷键跟着设置走
+  const edgeRef = useRef<HTMLDivElement>(null)
+  // 右上角浮钮组是绝对定位浮在最右那组的标签头上的 → 给**被它压住的那条标签头**留出等宽的右内边距,
+  // 否则右栏第一个 tab / 主区溢出的 tab 会被「恢复默认布局」钮截走点击(09-17 台架实踩)。
+  // 用几何判「压住谁」而不是按位置类猜:右栏开 / 关、右栏上下分屏、主区左右分屏时压住的组都不一样。
+  useEffect(() => {
+    const edge = edgeRef.current
+    const host = edge?.parentElement
+    if (!edge || !host) return
+    let raf = 0
+    const mark = (): void => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => {
+        // offsetWidth 是布局 px(与 CSS 变量同坐标系,不受祖先 zoom 影响);+6 = 浮钮组的 right 偏移,+4 = 呼吸位
+        host.style.setProperty('--dv-edge-actions-w', `${edge.offsetWidth + 10}px`)
+        const er = edge.getBoundingClientRect()
+        host.querySelectorAll<HTMLElement>('.dv-tabs-and-actions-container').forEach((el) => {
+          const r = el.getBoundingClientRect()
+          el.classList.toggle('dv-under-edge', r.width > 0 && r.top < er.bottom && r.bottom > er.top && r.right > er.left && r.left < er.right)
+        })
+      })
+    }
+    mark()
+    const ro = new ResizeObserver(mark)
+    ro.observe(host)
+    ro.observe(edge)
+    const off = useWorkspace.subscribe(mark) // 组增删 / 侧栏开合 / 标签变化
+    return () => { cancelAnimationFrame(raf); ro.disconnect(); off() }
+  }, [])
   // 小窗钮跟着宿主的 open-mini 命令走:只有桌面注册它(web 无 openMini)→ 引擎不碰 window.tangu。
   const miniCmd = useCommandStore((s) => s.commands.find((c) => c.id === 'open-mini'))
   // 视图注册表 → Dockview components map(注册变化时重建,支持运行期注册)。
@@ -545,29 +591,31 @@ export const WorkspaceHost: React.FC<{
         onReady={onReady}
       />
       {/* 右上角浮钮组:恢复默认布局 → 小窗(仅桌面)→ 底部面板 → 右栏(用户指定的次序);折叠钮收起后都仍在原处,可重开。 */}
-      <div className="dv-edge-actions">
+      <div className="dv-edge-actions" ref={edgeRef}>
         <button
           className="dv-edge-toggle dv-edge-reset"
-          title={document.documentElement.lang.startsWith('zh') ? '恢复本 Space 默认布局' : 'Restore default layout for this Space'}
+          title={t('lcl.edge.reset')}
           onClick={() => useWorkspace.getState().resetLayout()}
         >
           <RotateCcwSquare size={15} />
         </button>
         {miniCmd && (
-          <button className="dv-edge-toggle dv-edge-mini" title={`${label(miniCmd.title)} (⌘/Ctrl+⇧+M)`} onClick={() => void miniCmd.run()}>
+          <button className="dv-edge-toggle dv-edge-mini" title={t('lcl.withHotkey', { label: label(miniCmd.title), key: formatHotkey('mod+shift+m', isMacPlatform()) }) /* 全局快捷键(主进程注册),不在命令表里 */} onClick={() => void miniCmd.run()}>
             <PictureInPicture2 size={15} />
           </button>
         )}
         <button
           className={`dv-edge-toggle dv-edge-bottom${bottomVisible ? ' is-on' : ''}`}
-          title={document.documentElement.lang.startsWith('zh') ? '底部面板 (⌘/Ctrl+J)' : 'Toggle bottom panel (Ctrl/Cmd+J)'}
+          aria-pressed={bottomVisible}
+          title={withHotkey(t, t('lcl.edge.bottom'), 'toggle-bottom')}
           onClick={() => useWorkspace.getState().toggleSidebar('bottom')}
         >
           <PanelBottom size={15} />
         </button>
         <button
-          className="dv-edge-toggle dv-edge-right"
-          title={document.documentElement.lang.startsWith('zh') ? '右侧栏' : 'Toggle right panel'}
+          className={`dv-edge-toggle dv-edge-right${rightVisible ? ' is-on' : ''}`}
+          aria-pressed={rightVisible}
+          title={withHotkey(t, t('lcl.edge.right'), 'toggle-right')}
           onClick={() => useWorkspace.getState().toggleSidebar('right')}
         >
           <PanelRight size={15} />
