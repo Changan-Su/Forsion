@@ -111,12 +111,15 @@ function SyncItem() {
     : offline ? t('sb.syncOffline')
     : t('sb.synced')
   const status = (err && mirror?.error ? ipcErrorText(mirror.error) : undefined) || (rp?.key ? `${text} · ${rp.key}` : text)
+  // 点了真会触发一轮同步时才说「点击立即同步」:只开了按条目同步、未登录(auth-required)、远程正在跑时点它什么也不做,
+  // 这时再许诺「立即同步」就是误导。条件与下面 onClick 的两条分支同源。
+  const canSync = (mirrorOn && mirror?.state !== 'auth-required') || (!!remote?.configured && !remote.running)
   return (
     <button
       type="button"
       className="sb-click"
       // 点它会**立刻触发一轮同步** —— 原来只写状态,用户不知道点了会发生什么。
-      title={`${status} · ${t('sb.clickToSync')}`}
+      title={canSync ? `${status} · ${t('sb.clickToSync')}` : status}
       onClick={() => {
         if (mirrorOn) void window.amadeusSync?.syncNow?.().catch(() => {})
         if (remote?.configured && !remote.running) void window.remoteSync?.run?.().catch(() => {})
