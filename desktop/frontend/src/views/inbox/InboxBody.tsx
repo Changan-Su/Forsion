@@ -23,6 +23,7 @@ import type { PendingApprovalInfo } from '../../types'
 import { splitSuggestions } from '../chat2/suggest'
 import { TaskCards } from '../chat2/TaskCards'
 import { runTaskCard } from '../chat2/taskLanding'
+import { previewNeedsScrollHint } from '../../components/approvalText'
 
 const UnifiedPageLazy = lazyRetry(() => import('@amadeus/unified/UnifiedPage').then((m) => ({ default: m.UnifiedPage })))
 
@@ -174,6 +175,7 @@ function ApprovalCard({ id }: { id: string }) {
       ) : (
         <>
           <div className="ibx-approval-preview">{row.preview}</div>
+          {previewNeedsScrollHint(row.preview) && <div className="ibx-approval-meta">{t('approval.previewScrollHint')}</div>}
           <div className="ibx-approval-meta">{row.tool}{row.cwd ? ` · ${row.cwd}` : ''}{reason ? ` · ${reason}` : ''}</div>
           {row.note && <div className="ibx-approval-meta">{t('special.muse.approvalNote', { note: row.note })}</div>}
           {row.status === 'pending' ? (

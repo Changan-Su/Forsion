@@ -81,24 +81,42 @@ describe('ApprovalCard「总允许」按钮与 why 行', () => {
   })
 })
 
-describe('run_bash 命令框:长命令 / 伪装字符如实提示', () => {
+describe('run_bash 命令框:所见即所跑', () => {
   let host: HTMLDivElement
   let root: Root
-  beforeEach(() => { setLocaleGlobal('zh'); host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host) })
-  afterEach(() => { act(() => root.unmount()); host.remove() })
-  const bash = (command: string): ApprovalRequest => ({ approvalId: 'b1', name: 'run_bash', arguments: JSON.stringify({ command }), preview: `$ ${command}`, status: 'pending' } as ApprovalRequest)
+  let scrollH = 0
+  const desc = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollHeight')
+  beforeEach(() => {
+    setLocaleGlobal('zh'); host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host)
+    // happy-dom 没有布局:用桩 scrollHeight 模拟「软换行后内容比框高」
+    Object.defineProperty(HTMLElement.prototype, 'scrollHeight', { configurable: true, get: () => scrollH })
+  })
+  afterEach(() => {
+    act(() => root.unmount()); host.remove()
+    if (desc) Object.defineProperty(HTMLElement.prototype, 'scrollHeight', desc)
+  })
+  const bash = (command: string, id = 'b1'): ApprovalRequest => ({ approvalId: id, name: 'run_bash', arguments: JSON.stringify({ command }), preview: `$ ${command.replace(/ {25,}/g, (m) => `[${m.length} spaces]`)}`, status: 'pending' } as ApprovalRequest)
 
-  it('超过 16 行:框撑到 16 行并提示总行数;短命令不提示', () => {
-    const long = ['echo ok # safe', ...Array.from({ length: 20 }, () => ''), 'rm -rf ~/Documents'].join('\n')
-    act(() => root.render(React.createElement(ApprovalCard, { req: bash(long), onDecide: () => {} })))
-    expect(host.querySelector('textarea')?.getAttribute('rows')).toBe('16')
-    expect(host.textContent).toContain(translate('approval.cmdLong', { n: 22 }))
-    act(() => root.render(React.createElement(ApprovalCard, { key: 'b2', req: { ...bash('ls'), approvalId: 'b2' }, onDecide: () => {} })))
-    expect(host.textContent).not.toContain('请滚动')
+  it('内容高过上限:如实提示没显示完;放得下则不提示', () => {
+    scrollH = 2000
+    act(() => root.render(React.createElement(ApprovalCard, { req: bash('echo ok'), onDecide: () => {} })))
+    expect(host.textContent).toContain(translate('approval.cmdOverflow'))
+    scrollH = 40
+    act(() => root.render(React.createElement(ApprovalCard, { key: 'b2', req: bash('ls', 'b2'), onDecide: () => {} })))
+    expect(host.textContent).not.toContain(translate('approval.cmdOverflow'))
   })
 
-  it('带 RLO 等方向控制字符:提示所见可能不是所跑', () => {
-    act(() => root.render(React.createElement(ApprovalCard, { req: bash('echo ‮gnp.exe'), onDecide: () => {} })))
-    expect(host.textContent).toContain(translate('approval.cmdHiddenChars'))
+  it('一大段空白(长单行也算):提示并摆出引擎标过空白的预览', () => {
+    const cmd = `echo ok${' '.repeat(200)}&& rm -rf ~/Documents`
+    act(() => root.render(React.createElement(ApprovalCard, { req: bash(cmd), onDecide: () => {} })))
+    expect(host.textContent).toContain(translate('approval.cmdWideBlank'))
+    expect(host.querySelector('.approval-preview')?.textContent).toContain('[200 spaces]&& rm -rf ~/Documents')
+  })
+
+  it('RLO / ALM / 零宽等伪装字符:提示所见可能不是所跑', () => {
+    for (const ch of ['\u202E', '\u061C', '\u200B', '\uFEFF', '\u0085']) {
+      act(() => root.render(React.createElement(ApprovalCard, { key: ch, req: bash(`echo ${ch}x`, ch), onDecide: () => {} })))
+      expect(host.textContent, JSON.stringify(ch)).toContain(translate('approval.cmdHiddenChars'))
+    }
   })
 })

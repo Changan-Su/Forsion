@@ -2,12 +2,13 @@
  * host-exec 审批卡片(approval_request 事件 → 内嵌聊天流;run_bash 命令可编辑后批准)。
  * 文件修改类工具批准前渲染 diff 预览(B4:破坏发生前可见)。已兑现(approval_result/410)置灰。
  */
-import React, { useMemo, useState } from 'react'
+import React, { useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ShieldQuestion, Check, CheckCheck, X } from 'lucide-react'
 import type { ApprovalRequest } from '../types'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
 import { useI18n } from '../i18n'
+import { SPOOF_RE, WIDE_BLANK_RE } from './approvalText'
 
 /** 档位 id 是连字符(引擎口径),i18n 键是驼峰(既有) —— 映射写一处,别两边各拼各的。
  *  名字直接用输入框审批药丸的那套键(询问我批准 / 替我批准 / 完全放行):同一屏上药丸与审批卡的「为什么问你」
@@ -17,6 +18,8 @@ export const MODE_KEY: Record<string, string> = {
   'auto-edit': 'input.approval.autoEdit',
   'full-auto': 'input.approval.fullAuto',
 }
+
+const TA_MAX_PX = 480
 
 export const ApprovalCard: React.FC<{
   req: ApprovalRequest
@@ -29,9 +32,20 @@ export const ApprovalCard: React.FC<{
     try { return String(JSON.parse(req.arguments).command ?? '') } catch { return '' }
   })()
   const [cmd, setCmd] = useState(initialCmd)
-  // 命令框最多撑到 16 行;更长 / 带能伪装显示的控制字符时明说,尾部不能藏在折叠线下(Codex 09-25 复审:原先封顶 6 行)
-  const cmdLines = cmd.split('\n').length
-  const cmdHidden = /[\u0000-\u0008\u000b-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/.test(cmd)
+  // 命令框按内容自适应高度(上限 TA_MAX_PX),还放不下就明说 —— 尾部不能藏在折叠线下(Codex 09-25 复审:原先封顶 6 行)。
+  // 只数 \n 不够:一条长单行 + 挂在行尾的大段空白,软换行后照样把 `rm -rf` 推到可见区外(替补评审实测),所以量真实 scrollHeight。
+  const taRef = useRef<HTMLTextAreaElement>(null)
+  const [cmdOverflow, setCmdOverflow] = useState(false)
+  useLayoutEffect(() => {
+    const el = taRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    const h = el.scrollHeight
+    el.style.height = `${Math.min(h, TA_MAX_PX)}px`
+    setCmdOverflow(h > TA_MAX_PX)
+  }, [cmd])
+  const cmdHidden = SPOOF_RE.test(cmd)
+  const cmdWideBlank = WIDE_BLANK_RE.test(cmd)
   const resolved = req.status !== 'pending'
   const diff = useMemo(() => (isBash ? null : toolDiffText(req.name, req.arguments)), [isBash, req.name, req.arguments])
 
@@ -76,15 +90,21 @@ export const ApprovalCard: React.FC<{
           className="approval-edit"
           value={cmd}
           onChange={(e) => setCmd(e.target.value)}
-          rows={Math.min(16, Math.max(1, cmdLines))}
+          ref={taRef}
+          rows={1}
           spellCheck={false}
         />
       ) : null}
-      {isBash && !resolved && (cmdLines > 16 || cmdHidden) && (
-        <div className="approval-why">
-          {cmdLines > 16 && t('approval.cmdLong', { n: cmdLines })}
-          {cmdHidden && t('approval.cmdHiddenChars')}
-        </div>
+      {isBash && !resolved && (cmdOverflow || cmdHidden || cmdWideBlank) && (
+        <>
+          <div className="approval-why">
+            {cmdOverflow && <div>{t('approval.cmdOverflow')}</div>}
+            {cmdHidden && <div>{t('approval.cmdHiddenChars')}</div>}
+            {cmdWideBlank && <div>{t('approval.cmdWideBlank')}</div>}
+          </div>
+          {/* 引擎净化过的预览(控制字符转义、长空白标成 [N spaces]):可疑时摆出来,原始命令框看不出的东西在这里看得出 */}
+          {(cmdHidden || cmdWideBlank) && <div className="approval-preview">{req.preview}</div>}
+        </>
       )}
       {isBash && !resolved ? null : (
         <>
