@@ -22,7 +22,8 @@ export interface EmbedCtx {
 }
 
 const IMG_EXT_RE = /\.(png|jpe?g|gif|webp|svg|avif|bmp)$/i // 与 wikilink.ts / embedLayer.tsx 同口径
-const fwd = (p: string): string => p.replace(/\\/g, '/')
+// 盘符大小写也归一(`c:\` 与 `C:\` 是同一处);其余部分不折叠 —— Linux 上 /Vault 与 /vault 是两个目录。
+const fwd = (p: string): string => p.replace(/\\/g, '/').replace(/^[a-z](?=:)/, (d) => d.toUpperCase())
 
 type Hit = { kind: 'image' | 'video' | 'audio'; abs: string; vault: string | null; name: string; frag: string; warn: string | null }
 
@@ -48,8 +49,10 @@ export function ChatEmbed({ inner, ctx }: { inner: string; ctx: EmbedCtx }) {
     const p = resolveFileName(rel, files)
     return p ? { kind, abs: `${root}/${p}`, vault: p, name, frag, warn } : null
   }, [inner, root, files, ctx.execMode])
-  // 失败记在**具体文件**上:换库 / 换文件自动重试,同一份不反复读。
+  // 失败记在**具体来源**(载体 + 路径)上:换库 / 换文件自动重试,同一份不反复读;
+  // 库还没载入时按库外整读失败(>50MB)的库内文件,库一载入就换流式重试。
   const [failed, setFailed] = useState<string | null>(null)
+  const srcKey = hit ? `${hit.vault ? 'v' : 'h'}:${hit.abs}` : ''
   const [blob, setBlob] = useState<{ abs: string; url: string } | null>(null)
   const hostAbs = hit && !hit.vault ? hit.abs : null
   useEffect(() => {
@@ -57,18 +60,18 @@ export function ChatEmbed({ inner, ctx }: { inner: string; ctx: EmbedCtx }) {
     // ponytail: 库外走 readHostFile 整文件 base64(与 InlineFiles / WsFileView 同一条路、同一个 50MB 闸);
     // 超了退引用条。>50MB 视频真成刚需时,给 amadeus-asset:// 加一个按「agent 摆出来过的路径」白名单放行的 host 面做流式读。
     const read = window.tangu?.readHostFile
-    if (!read) { setFailed(hostAbs); return }
+    if (!read) { setFailed(`h:${hostAbs}`); return }
     let alive = true
     let url: string | null = null
     read(hostAbs).then((r) => {
       if (!alive) return
-      if (r.tooLarge) { setFailed(hostAbs); return }
+      if (r.tooLarge) { setFailed(`h:${hostAbs}`); return }
       url = URL.createObjectURL(new Blob([b64ToBytes(r.content) as BlobPart], { type: mimeForExt(hostAbs) || r.mimeType }))
       setBlob({ abs: hostAbs, url })
-    }, () => { if (alive) setFailed(hostAbs) })
+    }, () => { if (alive) setFailed(`h:${hostAbs}`) })
     return () => { alive = false; if (url) URL.revokeObjectURL(url) }
   }, [hostAbs])
-  if (!hit || failed === hit.abs) return <ChatWikiLink inner={inner} />
+  if (!hit || failed === srcKey) return <ChatWikiLink inner={inner} />
   const src = hit.vault ? toAssetUrl(hit.vault) : blob?.abs === hit.abs ? blob.url : null
   const w = embedWidthOf(inner)
   const style = w ? { width: w } : undefined
@@ -76,7 +79,7 @@ export function ChatEmbed({ inner, ctx }: { inner: string; ctx: EmbedCtx }) {
   // 渲染失败(坏图 / 解不了的编码)退引用条时,解码出的字节别再挂着 —— 近 50MB 一份。
   const fail = (): void => {
     if (blob?.abs === hit.abs) { URL.revokeObjectURL(blob.url); setBlob(null) }
-    setFailed(hit.abs)
+    setFailed(srcKey)
   }
   if (hit.kind === 'image') {
     return (

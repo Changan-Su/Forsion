@@ -37,18 +37,40 @@ describe('Markdown × 内联嵌入开关', () => {
     expect(h).not.toContain('t2-embed-pending')
     expect(h).toContain('data-wiki="/abs/r.pdf"')
   })
-  it('Windows:库内文件写成 `C:\\…` 绝对路径也认成库内(走 amadeus-asset 流式),不掉进 50MB 的整读路', async () => {
-    // SSR 读 zustand 的初始快照(getServerSnapshot),塞进去的库状态看不见 —— 这条得真渲染。
+  // SSR 读 zustand 的初始快照(getServerSnapshot),塞进去的库状态看不见 —— 下面两条得真渲染。
+  const mount = async (content: string) => {
     ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
-    const prev = usePageStore.getState()
-    usePageStore.setState({ vaultRoot: 'C:\\Vault', files: ['img/a.png'] })
     const el = document.createElement('div')
     const root = createRoot(el)
+    await act(async () => { root.render(React.createElement(Markdown, { content, embeds: { execMode: 'host' } })) })
+    return { el, unmount: () => act(async () => root.unmount()) }
+  }
+  it('Windows:库内文件写成 `C:\\…` / 小写盘符 `c:\\…` 绝对路径也认成库内(走 amadeus-asset 流式),不掉进 50MB 的整读路', async () => {
+    const prev = usePageStore.getState()
+    usePageStore.setState({ vaultRoot: 'C:\\Vault', files: ['img/a.png'] })
+    const m = await mount('![[C:\\Vault\\img\\a.png]]\n![[c:\\Vault\\img\\a.png]]')
     try {
-      await act(async () => { root.render(React.createElement(Markdown, { content: '![[C:\\Vault\\img\\a.png]]', embeds: { execMode: 'host' } })) })
-      expect(el.querySelector('img.t2-embed-image')?.getAttribute('src')).toBe('amadeus-asset://v/img%2Fa.png')
+      expect([...m.el.querySelectorAll('img.t2-embed-image')].map((i) => i.getAttribute('src'))).toEqual(['amadeus-asset://v/img%2Fa.png', 'amadeus-asset://v/img%2Fa.png'])
     } finally {
-      await act(async () => root.unmount())
+      await m.unmount()
+      usePageStore.setState({ vaultRoot: prev.vaultRoot, files: prev.files })
+    }
+  })
+  it('库还没载入时按库外整读失败(>50MB)的库内文件:库一载入就换流式重试,不卡在引用条', async () => {
+    const prev = usePageStore.getState()
+    const w = window as unknown as { tangu?: unknown }
+    const prevTangu = w.tangu
+    w.tangu = { readHostFile: async () => ({ mimeType: 'image/png', content: '', size: 60e6, tooLarge: true }) }
+    usePageStore.setState({ vaultRoot: null, files: [] })
+    const m = await mount('![[/Vault/img/a.png]]')
+    try {
+      expect(m.el.querySelector('img.t2-embed-image')).toBeNull()
+      expect(m.el.querySelector('a.wikilink')).not.toBeNull() // 整读超限 → 引用条
+      await act(async () => { usePageStore.setState({ vaultRoot: '/Vault', files: ['img/a.png'] }) })
+      expect(m.el.querySelector('img.t2-embed-image')?.getAttribute('src')).toBe('amadeus-asset://v/img%2Fa.png')
+    } finally {
+      await m.unmount()
+      w.tangu = prevTangu
       usePageStore.setState({ vaultRoot: prev.vaultRoot, files: prev.files })
     }
   })
