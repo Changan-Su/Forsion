@@ -1015,6 +1015,7 @@
 .t2-user-refs:last-child { margin-bottom: 0; }
 .t2-user-refs .attach-chip { max-width: 240px; }
 
-/* uiux-g: U-18 小坞兼任放大按钮(role=button)时的焦点环画在盒内 —— 右栏车道会裁掉外扩的圈。
- * 放文件末尾,压过全局 :where([role=button]) 的 outline-offset。 */
-.agent-desk-card[data-idle][role='button']:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: -2px; }
+/* uiux-g: U-18 小坞兼任放大按钮(role=button)时的焦点环画在盒**外**:小坞恒有伴随面(always 才可放大),
+ * 它的 canvas 铺满正文且自成合成层,画在盒内的圈(offset<0)会被整个盖住、实拍看不见;车道四周有 16px /
+ * --tsum-gut 留白、无 overflow 裁切,外扩 2px 不会被裁。放文件末尾,压过全局 :where([role=button])。 */
+.agent-desk-card[data-idle][role='button']:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 2px; }
