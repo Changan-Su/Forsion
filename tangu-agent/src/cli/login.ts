@@ -3,26 +3,14 @@
  *   POST /api/auth/cli/start → 出链接 + user_code → 开浏览器 → 轮询 /api/auth/cli/poll → 拿 token 存本地。
  * 用户只需点链接、在浏览器登录批准;token 自动回到 CLI,不用手动复制。
  */
-import { spawn } from 'node:child_process';
 import { saveCreds, loadCreds } from '../standalone/credStore.js';
+import { openBrowser } from '../utils/openBrowser.js';
 
 const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const green = (s: string) => `\x1b[32m${s}\x1b[0m`;
 const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
-
-function openBrowser(url: string): void {
-  try {
-    const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
-    const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
-    const p = spawn(cmd, args, { stdio: 'ignore', detached: true });
-    p.on('error', () => {}); // 打不开就让用户手动复制链接
-    p.unref();
-  } catch {
-    /* ignore */
-  }
-}
 
 export async function loginFlow(cloudUrl: string): Promise<void> {
   if (!cloudUrl) {
