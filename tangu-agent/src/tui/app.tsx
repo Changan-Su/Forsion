@@ -44,8 +44,8 @@ import { L } from './i18n.js';
 import { nextThinkingLevel, parseThinkingArg } from './thinking.js';
 import { collectGitDiff } from './gitDiff.js';
 import {
-  parseSlash, buildRunAgentConfig, runSessionPatch, resumePlan, agentActivation, needsFullAutoConfirm, fullAutoConfirmPicker,
-  resolveModelArg, claimInjectedSteers, rescueSteers, launchRun, isApprovalMode, TUI_APPROVAL_KEY,
+  parseSlash, buildRunAgentConfig, resumePlan, agentActivation, needsFullAutoConfirm, fullAutoConfirmPicker,
+  resolveModelArg, claimInjectedSteers, rescueSteers, launchRun, isApprovalMode, TUI_APPROVAL_KEY, createSessionSettingsWriter, noModelNotice,
   type MutableConfig, type QueuedMessage,
 } from './runConfig.js';
 import { theme } from './theme.js';
@@ -216,11 +216,21 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
     ).catch(() => {});
   };
 
+  // 会话设置(模型 / 思考档 / TUI 审批档 / 循环上限 / 计划模式)的所有写都走这一条队列:按会话、按发出顺序落库。
+  // 别在下面直接调 patchSessionAgentConfig / setSessionModelId —— 起 run 那次写要先等建行,直调会被它后发先至地盖回旧档
+  // (见 runConfig.createSessionSettingsWriter)。
+  const settingsWriterRef = useRef<ReturnType<typeof createSessionSettingsWriter> | null>(null);
+  const settingsWriter = (settingsWriterRef.current ??= createSessionSettingsWriter({
+    ensure: (sid, model) => ensureSession(sid, model),
+    patch: patchSessionAgentConfig,
+    setModel: (sid, model) => setSessionModelId(sid, userId, model),
+  }));
+
   useEffect(() => {
-    void ensureSession(sessionIdRef.current, cfgRef.current.model);
+    void settingsWriter.ensure(sessionIdRef.current, cfgRef.current.model);
     void loadCatalog().catch(() => {}); // 预热:状态栏的生效档 / Shift+Tab 的可选档都靠它
     if (!cfgRef.current.model) {
-      notice('未设置模型：用 /model <id> 选择（/model 查看可用，支持 <provider>/<model>）', 'warn');
+      notice(noModelNotice(), 'warn');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -408,7 +418,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
   const startRun = (message: string): boolean => {
     if (activeRunId.current) return false;
     if (!cfgRef.current.model) {
-      notice('未设置模型：先用 /model <id> 选择（/model 查看可用）', 'warn');
+      notice(noModelNotice(), 'warn');
       return false;
     }
     const runId = randomUUID();
@@ -422,14 +432,9 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
     // 审批档只写 TUI 专属键 —— 共享的 approvalMode 桌面审批时现读,写了就是跨端改档(见 runConfig TUI_APPROVAL_KEY)。
     // 先写完再起 run —— 引擎起跑时也会读改写同一份 agent_config(补 agentSlug / preset)。
     // 先确保会话行存在(/new 后秒发时建行的 INSERT 可能还没落):否则下面两个 UPDATE 落空,/resume 恢复不出来。
+    // 走 settingsWriter 排队:建行期间用户 /think、/approval 改的档排在这次写之后,不会被这里截的旧档盖回去。
     launchRun({
-      persist: () =>
-        ensureSession(sid, c.model).then(() =>
-          Promise.all([
-            patchSessionAgentConfig(sid, runSessionPatch(c)).catch(() => {}),
-            setSessionModelId(sid, userId, c.model).catch(() => {}),
-          ]),
-        ),
+      persist: () => settingsWriter.runStart(sid, c),
       create: () =>
         createRun({
           id: runId,
@@ -514,7 +519,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
     sessionIdRef.current = nid;
     setSessionId(nid);
     setCfg((c) => ({ ...c, seedSystem: undefined }));
-    void ensureSession(nid, cfgRef.current.model);
+    void settingsWriter.ensure(nid, cfgRef.current.model);
     setCtxInfo(null);
     dispatch({ type: 'RESET_SESSION' });
   };
@@ -535,8 +540,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
     patchCfg({ model: id });
     setCtxInfo(null);
     saveModel(id);
-    await ensureSession(sessionIdRef.current, id);
-    await setSessionModelId(sessionIdRef.current, userId, id).catch(() => {});
+    await settingsWriter.model(sessionIdRef.current, id);
     const lv = cfgRef.current.thinkingLevel;
     const eff = effectiveThinkingOn(lv, (entry ?? modelInfo(id))?.thinkingLevels);
     const lines = [L(`模型已切到 ${id}（已记住，下次直接 tangu 即用）`, `Model switched to ${id} (remembered for the next launch)`)];
@@ -577,7 +581,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
   /** 改思考档:本地配置 + 会话存值;有在跑的 run → 从它下一次请求起就按新档(与 agent 工具同一条 run 内通道)。 */
   const applyThinking = (lv: ThinkingLevel, announce: boolean): void => {
     patchCfg({ thinkingLevel: lv });
-    void patchSessionAgentConfig(sessionIdRef.current, { thinkingLevel: lv }).catch(() => {});
+    void settingsWriter.patch(sessionIdRef.current, { thinkingLevel: lv });
     const runId = activeRunId.current;
     if (runId) requestRunThinking(runId, lv);
     if (!announce) return;
@@ -611,7 +615,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
 
   const applyApprovalMode = (mode: ApprovalMode): void => {
     patchCfg({ approvalMode: mode });
-    void patchSessionAgentConfig(sessionIdRef.current, { [TUI_APPROVAL_KEY]: mode }).catch(() => {}); // 只供 TUI 自己 /resume,不改桌面的共享档
+    void settingsWriter.patch(sessionIdRef.current, { [TUI_APPROVAL_KEY]: mode }); // 只供 TUI 自己 /resume,不改桌面的共享档
     const meta = APPROVAL_MODE_META[mode as ApprovalModeId];
     const lines = [L(`审批档已切到「${meta.zh}」（${mode}）：${meta.descZh}`, `Approval mode set to "${meta.en}" (${mode}): ${meta.descEn}`)];
     if (activeRunId.current) lines.push(L('当前运行仍按原档审批，从你的下一条消息起生效', 'The current run keeps its approval mode; the change applies from your next message'));
@@ -781,13 +785,24 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
             notice(L(`这里不支持按序号选模型。/model 打开选择器（直接打字过滤），或 /model <名称>；确实叫「${rest}」的 id 请写 /model =${rest}`, `Picking a model by number isn't supported here. Run /model to open the picker (type to filter) or /model <name>; for an id that really is "${rest}", use /model =${rest}`), 'warn');
             return;
           case 'unverified':
-            // 逃生口 `=<id>`,或目录拉不到:原样接受(只配了 base URL、没列模型的 provider 照旧能用),不做校验。
+            // 逃生口 `=<id>`、目录外的 `provider/model` 完整 id,或目录拉不到:原样接受
+            // (只配了 base URL、没列模型的 provider 照旧能用),不做校验 —— applyModel 会提示「未经目录校验」。
             await applyModel(r.id, undefined, true);
             return;
           case 'hit':
             await applyModel(r.model.id, r.model);
             return;
           case 'ambiguous':
+            // 完整 id 只有近似的:开已过滤的选择器让人挑,并说清怎么原样用这个 id(绝不替用户换成近似的那个)。
+            if (r.asTyped) {
+              notice(
+                L(
+                  `目录里没有「${r.asTyped}」，已列出相近的模型；要原样使用这个 id 请写 /model =${r.asTyped}`,
+                  `"${r.asTyped}" isn't in the model catalog; showing close matches. To use this id as typed, run /model =${r.asTyped}`,
+                ),
+                'warn',
+              );
+            }
             await openModelPicker(rest);
             return;
           case 'none':
@@ -1297,7 +1312,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         return;
       case '/compact':
         if (!cfgRef.current.model) {
-          notice('未设置模型：先用 /model <id> 选择', 'warn');
+          notice(noModelNotice(), 'warn');
           return;
         }
         if (activeRunId.current) {
@@ -1340,7 +1355,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
       return;
     }
     if (!busyRef.current && !cfgRef.current.model) {
-      notice('未设置模型：先用 /model <id> 选择（/model 查看可用，支持 <provider>/<model>）', 'warn');
+      notice(noModelNotice(), 'warn');
       return;
     }
     const q: QueuedMessage = { id: randomUUID(), display: text, message: await augmentMentions(text) };

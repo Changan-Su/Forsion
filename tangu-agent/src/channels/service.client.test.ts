@@ -49,7 +49,10 @@ vi.mock('../services/eventBus.js', () => ({
   }),
 }));
 
-vi.mock('../services/approvals.js', () => ({ resolveApproval: vi.fn(() => true) }));
+vi.mock('../services/approvals.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../services/approvals.js')>()),
+  resolveApproval: vi.fn(() => true),
+}));
 vi.mock('../agents/agentRegistry.js', () => ({
   readAgentsMeta: () => ({ defaultSlug: 'xyra' }),
   listAgents: vi.fn(async () => []),

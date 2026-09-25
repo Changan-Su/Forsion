@@ -71,10 +71,27 @@ export const CHANNEL_MESSAGES = {
     en: '⚠️ This action needs your approval:\n{preview}\n\nReply "approve" to run it, "reject" to skip it, or "stop" to end the task. With no reply within {minutes} minutes it is rejected automatically.',
   },
   approvalPreviewFallback: { zh: '操作', en: 'action' },
+  approvalTooLong: {
+    zh: '⚠️ 有个操作需要批准,但内容太长({chars} 字),聊天里显示不全,已自动拒绝、没有执行。开头是:\n{head}\n\n如需执行,请到 Tangu Desktop 里继续这个任务,在那里看全文并批准。',
+    en: '⚠️ An action needs approval, but it is too long ({chars} characters) to show in full in this chat, so it was rejected automatically and not run. It starts with:\n{head}\n\nTo run it, continue this task in Tangu Desktop, where you can review the full text and approve it.',
+  },
+  approvalPartsCheck: {
+    zh: '(这个请求共分 {n} 条发出;没收全就回复「拒绝」。)',
+    en: '(This request came in {n} parts. If you did not get all of them, reply "reject".)',
+  },
+  approvalDeliveryFailed: {
+    zh: '⚠️ 下面这个待批操作有部分内容没能发到这里,已自动拒绝、没有执行:\n{head}\n\n如需执行,请到 Tangu Desktop 里继续这个任务,在那里看全文并批准。',
+    en: '⚠️ Part of this approval request could not be delivered to this chat, so it was rejected automatically and not run:\n{head}\n\nTo run it, continue this task in Tangu Desktop, where you can review the full text and approve it.',
+  },
+  promptStillPending: {
+    zh: '⏳ 注意:上面还有一个请求在等你答复,你接下来的回复(包括「批准」「好的」)都会作用于它:\n{head}',
+    en: '⏳ Note: an earlier request above is still waiting for your answer, and your next reply (including "approve" or "ok") applies to it:\n{head}',
+  },
   approvalTimedOut: {
     zh: '⌛ {minutes} 分钟内没有回复,已自动拒绝,该操作没有执行:\n{preview}',
     en: '⌛ No reply within {minutes} minutes, so the approval was rejected automatically and the action was not run:\n{preview}',
   },
+  inquiryTruncated: { zh: '…(问题较长,完整内容见 Tangu Desktop)', en: '… (the question is long; see Tangu Desktop for the full text)' },
   inquiryHintOptions: {
     zh: '回复序号选择,或直接回复文字作答;回复「停止」结束任务。',
     en: 'Reply with a number to choose, or just type your answer. Reply "stop" to end the task.',

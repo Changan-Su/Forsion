@@ -128,7 +128,7 @@ export interface ChannelUsage { tokens: number; runs: number; cost: number | nul
 export interface ChannelCommandRuntime {
   kind: ChannelKind;
   locale: ChannelLocale;
-  /** 通道 run 实际用的审批档(绑定上的值,见 service.effectiveApprovalMode)。 */
+  /** 通道 run 实际用的审批档(通道设置与绑定取更严的一档,见 service.channelRunApprovalMode)。 */
   approvalMode: ApprovalMode;
   /** 通道设置里的默认 Agent / 模型('' = 未设)。 */
   channelDefaults(): { agentSlug: string; modelId: string };
@@ -211,7 +211,7 @@ export function stopReply(locale: ChannelLocale, stopped: number): string {
 }
 
 function approvalLine(locale: ChannelLocale, mode: ApprovalMode): { label: string; desc: string } {
-  const meta = APPROVAL_MODE_META[mode] ?? APPROVAL_MODE_META['auto-edit'];
+  const meta = APPROVAL_MODE_META[mode] ?? APPROVAL_MODE_META.readonly; // 不认识的档按只读报(与引擎 fail-closed 同口径),不报成更宽的
   return locale === 'zh' ? { label: meta.zh, desc: meta.descZh } : { label: meta.en, desc: meta.descEn };
 }
 

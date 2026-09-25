@@ -741,6 +741,14 @@ export async function getAgent(slug: string): Promise<NormalAgentDef | null> {
   return null;
 }
 
+/**
+ * saveAgent 的审批档哨兵:在按 slug 串行化的保存里**现读**磁盘上的审批档原样保留;该 slug 此刻不存在 → 空(跟随会话,
+ * 与全新 create 同口径)。manage_agent 专用 —— 它传的若是自己先前读到的 existing.approvalMode,那次读取到落盘之间
+ * 用户恰好在设置里把档从 full-auto 收紧成 readonly,模型这次更新就会把 full-auto 写回去(Codex 09-25 P1)。
+ * Symbol:JSON 表达不了,HTTP 调用方传不进来。
+ */
+export const KEEP_APPROVAL_MODE: unique symbol = Symbol('tangu.keepApprovalMode');
+
 export interface SaveAgentInput {
   slug?: string;
   name: string;
@@ -751,7 +759,8 @@ export interface SaveAgentInput {
   enabledMcpServers?: string[] | null;
   thinkingLevel?: ThinkLevel;
   maxIterations?: number | null;
-  approvalMode?: ApprovalMode;
+  /** KEEP_APPROVAL_MODE = 保留**保存那一刻**磁盘上的审批档(在按 slug 串行化的保存里现读),见下。 */
+  approvalMode?: ApprovalMode | typeof KEEP_APPROVAL_MODE;
   systemPrompt: string;
   /** 人格(SOUL.md);缺省保留已有。 */
   soul?: string;
@@ -768,6 +777,12 @@ export interface SaveAgentInput {
   toolsMode?: 'allow' | 'deny' | null;
   /** 内置工具名单;null=清除,缺省保留已有。 */
   toolsList?: string[] | null;
+  /** true = 该 slug 在保存那一刻(锁内现读)必须已存在,否则抛错不落盘 —— 调用方先读到了它、按「改已有的」
+   *  请求的批准;这期间被删了就别悄悄新建一个(新建的审批档是空 = 跟随会话,比它原来的档宽)。 */
+  mustExist?: boolean;
+  /** true = 该 slug 在保存那一刻(锁内现读)必须**不存在**,否则抛错不落盘 —— 调用方先读到它不存在、按「新建」请求的批准
+   *  (卡上写的是「new agent · 跟随会话档」);这期间冒出一个同 slug 的(可能是 full-auto)就别把指令写进去,让调用方重来。 */
+  mustNotExist?: boolean;
 }
 
 /** existing + input → 完整 def 的合并语义(校验/裁剪/缺省保留已有字段)。纯函数:本地 saveAgent 与
@@ -813,7 +828,9 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
     tools: Array.isArray(input.tools) ? input.tools.filter((t) => typeof t === 'string' && t.trim()).slice(0, 100) : [],
     thinkingLevel: THINK.includes(input.thinkingLevel as ThinkLevel) ? (input.thinkingLevel as ThinkLevel) : '',
     maxIterations: clampAgentMaxIterations(slug, input.maxIterations),
-    approvalMode: APPROVAL.includes(input.approvalMode as ApprovalMode) ? (input.approvalMode as ApprovalMode) : '',
+    approvalMode: input.approvalMode === KEEP_APPROVAL_MODE
+      ? (existing?.approvalMode || '')
+      : APPROVAL.includes(input.approvalMode as ApprovalMode) ? (input.approvalMode as ApprovalMode) : '',
     createdBy: existing?.createdBy || input.createdBy || 'user',
     createdAt: existing?.createdAt || new Date().toISOString(),
     systemPrompt: (input.systemPrompt != null ? String(input.systemPrompt) : existing?.systemPrompt || '').trim().slice(0, 100_000),
@@ -837,17 +854,34 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
   return def;
 }
 
-/** 新建/更新一个 agent(落盘 <slug>/config.toml + SOUL.md)。保留已有 createdAt/createdBy/libraryOrder,绝不动 MEMORY/LOG/Library。 */
+// 同 slug 的保存串行化(进程内):读 existing → 合并 → 落盘 之间有 await,两次保存交错时后写的一方会用它读到的旧值
+// 盖掉先写的一方(比如用户刚收紧的审批档)。KEEP_APPROVAL_MODE 的「现读」只有在这把锁里才算数。
+const saveChains = new Map<string, Promise<unknown>>(); // slug -> 队尾
+
+/** 新建/更新一个 agent(落盘 <slug>/config.toml + SOUL.md)。保留已有 createdAt/createdBy/libraryOrder,绝不动 MEMORY/LOG/Library。
+ *  同 slug 的调用按到达顺序串行(读-合并-写整段在锁内)。 */
 export async function saveAgent(input: SaveAgentInput): Promise<NormalAgentDef> {
   const slug = input.slug && isValidSlug(input.slug) ? input.slug : slugify(input.name);
-  const existing = await getAgent(slug);
-  const def = buildAgentDef(slug, existing, input);
-  const adir = path.join(agentsDir(), slug);
-  mkdirSync(adir, { recursive: true });
-  await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig(def), 'utf-8');
-  await fs.writeFile(path.join(adir, 'SOUL.md'), def.soul || '', 'utf-8');
-  cache = null; // 失效缓存
-  return def;
+  // 首访播种必须在锁外跑完:ensureAgentsReady → ensureBuiltinAvatar → saveAgentAvatar → saveAgent(同一个 xyra)。
+  // 放在锁里(经 getAgent 触发)= 自己等自己,首个保存恰是 xyra 时永久挂死。锁外先跑,锁内的 getAgent 再调就是空操作。
+  await ensureAgentsReady();
+  const tail = saveChains.get(slug) || Promise.resolve();
+  const mine = tail.then(async () => {
+    const existing = await getAgent(slug);
+    if (input.mustExist && !existing) throw new Error(`agent not found: ${slug} (it was removed before the change could be saved)`);
+    if (input.mustNotExist && existing) throw new Error(`agent already exists: ${slug} (it was created before your new agent could be saved). Nothing was saved; check it with action=list, then pass a different slug or call again to replace it.`);
+    const def = buildAgentDef(slug, existing, input);
+    const adir = path.join(agentsDir(), slug);
+    mkdirSync(adir, { recursive: true });
+    await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig(def), 'utf-8');
+    await fs.writeFile(path.join(adir, 'SOUL.md'), def.soul || '', 'utf-8');
+    cache = null; // 失效缓存
+    return def;
+  });
+  const entry = mine.then(() => undefined, () => undefined);
+  saveChains.set(slug, entry);
+  void entry.then(() => { if (saveChains.get(slug) === entry) saveChains.delete(slug); });
+  return mine;
 }
 
 export async function deleteAgent(slug: string): Promise<boolean> {

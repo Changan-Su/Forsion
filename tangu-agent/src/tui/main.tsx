@@ -20,7 +20,8 @@ import { loginFlow } from '../cli/login.js';
 import { OAUTH_PROVIDERS, providerOAuthLogin, loadOAuthDirectProviders } from '../llm/providerOAuth.js';
 import { createMcpManager } from '../mcp/manager.js';
 import { loadTanguEnv } from '../core/tanguHome.js';
-import { parseTuiConfig, TUI_HELP } from './config.js';
+import { parseTuiConfig, tuiHelp } from './config.js';
+import { L } from './i18n.js';
 import { printBanner } from './components/Banner.js';
 import { App } from './app.js';
 import { dispatchPluginCommand, listPlugins, activateAllPlugins } from '../plugins/bootstrap.js';
@@ -66,7 +67,7 @@ async function main(): Promise<void> {
 
   const cfg = parseTuiConfig(process.argv.slice(2));
   if (cfg.showHelp) {
-    process.stdout.write(TUI_HELP);
+    process.stdout.write(tuiHelp());
     return;
   }
 
@@ -111,10 +112,14 @@ async function main(): Promise<void> {
   const errs = validate(cfg);
   if (errs.length) {
     process.stderr.write(
-      '配置错误:\n  - ' +
+      L('配置错误:', 'Configuration error:') +
+        '\n  - ' +
         errs.join('\n  - ') +
-        '\n\n  提示: 先 `tangu login --cloud-url <forsion 地址>` 登录，之后直接 `tangu` 即可（免 token，进去 /model 选模型）。\n\n' +
-        TUI_HELP,
+        L(
+          '\n\n  提示: 先 `tangu login --cloud-url <forsion 地址>` 登录，之后直接 `tangu` 即可（免 token，进去 /model 选模型）。\n\n',
+          '\n\n  Tip: sign in first with `tangu login --cloud-url <forsion url>`, then just run `tangu` (no token needed; pick a model with /model).\n\n',
+        ) +
+        tuiHelp(),
     );
     process.exit(1);
   }

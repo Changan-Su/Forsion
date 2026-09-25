@@ -5,10 +5,12 @@
  * 不动全局默认 cfg.modelId(agent 改一个会话不该改掉用户新会话的默认模型)。
  * 第二条病理(回放):事件存库、重新订阅从 seq 0 回放 —— 落到本地的必须是**引擎现值**,不是载荷,否则 agent 早先那笔
  * 会盖过用户之后在药丸上的改动。所以处理器是「载荷≠本地 → 读引擎 → 套引擎值;引擎值==载荷才提示」。
+ * 09-25 Codex 评审三条:读失败(重试一次仍失败)保留本地、绝不套载荷;同一会话的对账按会话串行(A→B→C 收敛到 C);
+ * send 起跑前等本会话在途对账(有上限),不然下一轮仍按旧值起跑。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRunEvent } from '../types'
-import { useApp } from './appStore'
+import { AGENT_CONFIG_READ_RETRY_MS, AGENT_CONFIG_SYNC_WAIT_MS, useApp } from './appStore'
 import { useChildChat } from './childChatStore'
 
 const updateSessionMock = vi.hoisted(() => vi.fn())
@@ -37,6 +39,9 @@ const emit = (payload: Record<string, unknown>, sid = 's1', runId = 'r1') =>
   useApp.getState().reduceEvent(sid, runId, { current: 'a1' }, { seq: 1, type: 'session_config_changed', payload } as AgentRunEvent)
 // 对账是异步的(读引擎);mock 都是立即 resolve,一个宏任务就把微任务链排空
 const flush = () => new Promise((r) => setTimeout(r, 0))
+/** 读失败要隔 AGENT_CONFIG_READ_RETRY_MS 重读一次:等过这段再看结果 */
+const settleRetry = () => new Promise((r) => setTimeout(r, AGENT_CONFIG_READ_RETRY_MS + 30))
+const modelOf = (sid: string) => useApp.getState().sessions.find((x) => x.id === sid)?.model_id
 /** 引擎现值:默认 = 「agent 这笔仍是最新」(读回来就是载荷)。个别用例改写成用户后来的值 / 读失败。 */
 let engine: { model_id: string; config: Record<string, unknown> }
 const session = (id: string, model_id: string) => ({ id, title: id, model_id }) as never
@@ -196,14 +201,127 @@ describe('session_config_changed', () => {
     expect(toast).not.toHaveBeenCalled()
   })
 
-  it('读引擎失败(老引擎 / 断连)→ 退回套载荷,别把同步整个丢了', async () => {
-    getSessionDetailMock.mockRejectedValue(new Error('404'))
-    getSessionConfigMock.mockRejectedValue(new Error('404'))
-    emit({ sessionId: 's1', modelId: 'anthropic/opus', thinkingLevel: 'high' })
+  it('⚠️读引擎失败(重试一次仍失败)→ 保留本地,绝不套载荷(载荷可能是回放出来的旧值)', async () => {
+    // 场景同「回放」那条:库里 = 用户后来选的 C,回放出 agent 早先的 B,偏偏这时读引擎断连。
+    // 旧写法读失败就套载荷 → 药丸跳回 B、下一次 send 按 B 起跑,把用户的 C 盖掉。
+    useApp.setState({ sessions: [session('s1', 'user/c')], configBySession: { s1: { execMode: 'host', thinkingLevel: 'xhigh' } } })
+    getSessionDetailMock.mockRejectedValue(new Error('ECONNREFUSED'))
+    getSessionConfigMock.mockRejectedValue(new Error('ECONNREFUSED'))
+    emit({ sessionId: 's1', modelId: 'anthropic/opus', thinkingLevel: 'high', source: 'agent' })
+    await settleRetry()
+    expect(getSessionDetailMock).toHaveBeenCalledTimes(2) // 重试了一次
+    expect(getSessionConfigMock).toHaveBeenCalledTimes(2)
+    expect(modelOf('s1')).toBe('user/c')
+    expect(useApp.getState().configBySession.s1.thinkingLevel).toBe('xhigh')
+    expect(useApp.getState().ctxInfoBySession.s1).toBeDefined() // 没换模型就不作废 ctx 环
+    expect(toast).not.toHaveBeenCalled()
+    useApp.setState({ runningBySession: {} })
+    await useApp.getState().send('next', [])
+    expect(startRunMock.mock.calls[0][1].modelId).toBe('user/c')
+    expect(startRunMock.mock.calls[0][1].agentConfig.thinkingLevel).toBe('xhigh')
+  })
+
+  it('读引擎第一次失败、重试成功 → 照常套引擎现值并提示', async () => {
+    getSessionDetailMock.mockRejectedValueOnce(new Error('ECONNRESET'))
+    emit({ sessionId: 's1', modelId: 'anthropic/opus', source: 'agent' })
     await flush()
-    expect(useApp.getState().sessions.find((x) => x.id === 's1')?.model_id).toBe('anthropic/opus')
-    expect(useApp.getState().configBySession.s1.thinkingLevel).toBe('high')
-    expect(toast).toHaveBeenCalledTimes(2)
+    expect(modelOf('s1')).toBe('openai/old') // 还在等重试
+    await settleRetry()
+    expect(getSessionDetailMock).toHaveBeenCalledTimes(2)
+    expect(modelOf('s1')).toBe('anthropic/opus')
+    expect(toast.mock.calls.map((c) => c[0])).toEqual(['appstore.agentSwitchedModel {"model":"Opus"}'])
+  })
+
+  it('⚠️同一轮 agent 连改两次(A→B→C)→ 按会话串行对账,收敛到引擎最新值 C', async () => {
+    // 两笔事件在任何一次读回来之前就到了。并行对账:两笔都记下「之前 = A」,先落地的 B 让后一笔的「本地仍是 A」守卫失效,
+    // 读到的 C 被丢掉 → 药丸停在 B,下一轮按 B 起跑。
+    const models = ['anthropic/opus', 'x/c']
+    const levels = ['high', 'max']
+    getSessionDetailMock.mockImplementation(async (_c: unknown, id: string) => ({ id, title: id, model_id: models.shift() }))
+    getSessionConfigMock.mockImplementation(async () => ({ thinkingLevel: levels.shift() }))
+    emit({ sessionId: 's1', modelId: 'anthropic/opus', thinkingLevel: 'high', source: 'agent' })
+    emit({ sessionId: 's1', modelId: 'x/c', thinkingLevel: 'max', source: 'agent' })
+    await flush()
+    expect(modelOf('s1')).toBe('x/c')
+    expect(useApp.getState().configBySession.s1.thinkingLevel).toBe('max')
+    expect(toast.mock.calls.map((c) => c[0])).toEqual([
+      'appstore.agentSwitchedModel {"model":"Opus"}',
+      'appstore.agentSetThinking {"level":"input.thinkingShort.high"}',
+      'appstore.agentSwitchedModel {"model":"x/c"}',
+      'appstore.agentSetThinking {"level":"input.thinkingShort.max"}',
+    ])
+    useApp.setState({ runningBySession: {} })
+    await useApp.getState().send('next', [])
+    expect(startRunMock.mock.calls[0][1].modelId).toBe('x/c')
+    expect(startRunMock.mock.calls[0][1].agentConfig.thinkingLevel).toBe('max')
+  })
+
+  it('⚠️对账还在飞时就发下一条 → send 先等它落地,按引擎现值起跑', async () => {
+    let release!: () => void
+    getSessionDetailMock.mockImplementation(() => new Promise((r) => { release = () => r({ id: 's1', title: 's1', model_id: 'anthropic/opus' }) }))
+    engine.config = { thinkingLevel: 'max' }
+    emit({ sessionId: 's1', modelId: 'anthropic/opus', thinkingLevel: 'max', source: 'agent' })
+    useApp.setState({ runningBySession: {} }) // 本轮 run 已结束,用户紧接着发下一条
+    const sending = useApp.getState().send('next', [])
+    await flush()
+    expect(startRunMock).not.toHaveBeenCalled() // 还在等对账
+    release()
+    await sending
+    expect(startRunMock).toHaveBeenCalledTimes(1)
+    expect(startRunMock.mock.calls[0][1].modelId).toBe('anthropic/opus')
+    expect(startRunMock.mock.calls[0][1].agentConfig.thinkingLevel).toBe('max')
+  })
+
+  it('⚠️对账等待期间再按一次回车 → 第二次 send 当场不受理,整场只起跑一次', async () => {
+    // 等待期间输入框没有反馈、草稿要等 send 落定才清:用户以为没发出去再按回车。旧写法两次一起出等待、双双 startRun,
+    // 引擎把第二条排成新 run = 同一句发两遍。startRunMock 默认 reject(send 都回 false),所以按起跑次数判,不按返回值。
+    let release: (() => void) | undefined
+    getSessionDetailMock.mockImplementation(() => new Promise((r) => { release = () => r({ id: 's1', title: 's1', model_id: 'anthropic/opus' }) }))
+    try {
+      emit({ sessionId: 's1', modelId: 'anthropic/opus', source: 'agent' })
+      useApp.setState({ runningBySession: {} })
+      const first = useApp.getState().send('next', [])
+      await flush()
+      const second = useApp.getState().send('next', [])
+      // 第二次必须在对账落地之前就收场(不受理),而不是排在后面等同一段对账
+      const early = await Promise.race([second.then((v) => ({ v })), flush().then(() => 'still-waiting' as const)])
+      expect(early).toEqual({ v: false })
+      expect(startRunMock).not.toHaveBeenCalled()
+      release!()
+      await first
+      expect(startRunMock).toHaveBeenCalledTimes(1)
+      expect(startRunMock.mock.calls[0][1].modelId).toBe('anthropic/opus')
+      // 等待结束即撤登记:之后的 send 照常起跑,不会被永久挡住
+      await useApp.getState().send('again', [])
+      expect(startRunMock).toHaveBeenCalledTimes(2)
+    } finally {
+      release?.()
+      await flush()
+    }
+  })
+
+  it('对账卡住(引擎不回)→ send 最多等 AGENT_CONFIG_SYNC_WAIT_MS,之后照本地值起跑', async () => {
+    let release: (() => void) | undefined // 前面的断言先挂时 mock 还没跑、release 未赋值:finally 里用 ?.(),别让 TypeError 盖掉真正的失败
+    getSessionDetailMock.mockImplementation(() => new Promise((r) => { release = () => r({ id: 's1', title: 's1', model_id: 'openai/old' }) }))
+    vi.useFakeTimers()
+    try {
+      emit({ sessionId: 's1', modelId: 'anthropic/opus', source: 'agent' })
+      useApp.setState({ runningBySession: {} })
+      const sending = useApp.getState().send('next', [])
+      await vi.advanceTimersByTimeAsync(AGENT_CONFIG_SYNC_WAIT_MS - 50)
+      expect(startRunMock).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(100)
+      await sending
+      expect(startRunMock).toHaveBeenCalledTimes(1)
+      expect(startRunMock.mock.calls[0][1].modelId).toBe('openai/old')
+      // 超时后这条卡住的链被摘掉:读会话的 fetch 没有超时,不摘的话此后每次 send 都白等满上限
+      await useApp.getState().send('again', []) // 不推进计时器也必须直接起跑
+      expect(startRunMock).toHaveBeenCalledTimes(2)
+    } finally {
+      vi.useRealTimers() // flush() 用真 setTimeout:忘了切回,后面每条用例都挂住
+      release?.() // 卡住的链留在模块级 Map 里,不放掉的话后面的 send 都要白等
+      await flush()
+    }
   })
 
   it('改的是后台会话(不是眼前这个)→ 提示点名会话标题,不说「本会话」', async () => {

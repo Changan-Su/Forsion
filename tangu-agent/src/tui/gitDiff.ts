@@ -10,7 +10,7 @@
  * (status / diff 本不跑 hooks;core.hooksPath 置空只是给以后加的子命令兜底。)
  */
 import { execFile } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readlinkSync } from 'node:fs';
 import path from 'node:path';
 import { L } from './i18n.js';
 
@@ -79,6 +79,39 @@ function failure(o: GitOut): string | null {
   return o.stderr.trim() || o.errCode || 'unknown error';
 }
 
+/** stderr 首行(fatal: / error: 那句),截短;没有就报退出码。 */
+const firstLine = (o: GitOut): string => o.stderr.trim().split('\n')[0]?.slice(0, 200) || `exit ${o.code}`;
+
+/**
+ * 取数类子命令(diff / ls-files)的失败原因:没跑成,或**跑起来了但退出码非 0**。
+ * 后者不能当正常:stdout 可能只有半截(例:文件在列出后变得不可读),静默拼进报告就是少一块还不说。
+ * `git diff`(不带 --exit-code)有差异也退 0,所以这里只有 0 算正常。
+ */
+function cmdFailure(o: GitOut): string | null {
+  return failure(o) ?? (o.code !== 0 ? firstLine(o) : null);
+}
+
+/**
+ * `git diff --no-index` 的退出码:0 = 无差异,1 = 有差异(正常);其余(128 = 读不了 / hash 不了)是失败。
+ * 1 但既没 diff 又有 stderr(文件在 stat 之后被删:`error: Could not access`)同样是失败。
+ */
+function noIndexFailure(o: GitOut): string | null {
+  const f = failure(o);
+  if (f) return f;
+  if (o.code === 0) return null;
+  if (o.code === 1 && (o.stdout || !o.stderr.trim())) return null;
+  return firstLine(o);
+}
+
+/**
+ * 未跟踪的符号链接:git 记的是链接本身(mode 120000,内容 = 指向的路径),照 git 的格式自己拼一段。
+ * 不交给 `diff --no-index`:它会顺着链接走 —— 指向目录的链接报 `Could not access '<link>/null'`;
+ * 悬空链接在 stat 那步就 ENOENT。两种都会被误报成「读取失败」。
+ */
+function symlinkDiff(rel: string, target: string): string {
+  return [`diff --git a/${rel} b/${rel}`, 'new file mode 120000', '--- /dev/null', `+++ b/${rel}`, '@@ -0,0 +1 @@', `+${target}`, '\\ No newline at end of file'].join('\n') + '\n';
+}
+
 export async function collectGitDiff(cwd: string, maxLines = DIFF_MAX_LINES): Promise<GitDiffReport> {
   const probe = await git(cwd, ['rev-parse', '--show-toplevel']);
   // spawn 的 ENOENT 两种来源:git 不在 PATH,或 cwd 已被删(Node 报的也是 spawn git ENOENT)。
@@ -97,15 +130,22 @@ export async function collectGitDiff(cwd: string, maxLines = DIFF_MAX_LINES): Pr
   if (!status.trim()) return { kind: 'clean', root };
 
   const notes: string[] = [];
-  // diff 这类取数失败不致命(status 已经有了),但要说出来,别静默少一块。
+  // diff 这类取数失败不致命(status 已经有了),但要说出来,别静默少一块。每个子命令各查各的退出码。
+  const note = (sub: string, why: string): void => {
+    notes.push(L(`… git ${sub} 失败：${why}（请在终端运行 git diff）`, `… git ${sub} failed: ${why} (run git diff in a terminal)`));
+  };
   const out = async (args: string[]): Promise<string> => {
     const o = await git(root, args);
-    const f = failure(o);
-    if (f) notes.push(L(`… git ${args.find((a) => !a.startsWith('-')) || ''} 失败：${f}（请在终端运行 git diff）`, `… git ${args.find((a) => !a.startsWith('-')) || ''} failed: ${f} (run git diff in a terminal)`));
+    const f = cmdFailure(o);
+    if (f) note(args.find((a) => !a.startsWith('-')) || '', f);
     return o.stdout;
   };
   // 有 HEAD:diff HEAD 同时覆盖已暂存 + 未暂存;新仓(还没有提交)只能分别取两边。
-  const hasHead = (await git(root, ['rev-parse', '--verify', '--quiet', 'HEAD'])).code === 0;
+  // `rev-parse --verify --quiet` 没有 HEAD 时退 1(正常);没跑成则照新仓处理,但说出来。
+  const headProbe = await git(root, ['rev-parse', '--verify', '--quiet', 'HEAD']);
+  const headFail = failure(headProbe) ?? (headProbe.code > 1 ? firstLine(headProbe) : null);
+  if (headFail) note('rev-parse HEAD', headFail);
+  const hasHead = headProbe.code === 0;
   const tracked = hasHead
     ? [await out(['diff', ...DIFF_FLAGS, 'HEAD'])]
     : [await out(['diff', ...DIFF_FLAGS, '--cached']), await out(['diff', ...DIFF_FLAGS])];
@@ -117,22 +157,43 @@ export async function collectGitDiff(cwd: string, maxLines = DIFF_MAX_LINES): Pr
   const untracked = (await out(['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean);
   const untrackedDiffs: string[] = [];
   let skipped = 0;
+  // 读不了的未跟踪文件(权限 / 列出后被删):汇总成一条,带第一条原因 —— 别一个文件一行刷屏,也别静默消失。
+  const unreadable: { rel: string; why: string }[] = [];
+  // 未跟踪的内嵌 git 仓:ls-files 列成 `sub/`(带尾斜杠),git 自己也不往里展开。单独一条说明,不占文件名额、不算读取失败。
+  const nested: string[] = [];
   for (const rel of untracked) {
+    if (rel.endsWith('/')) {
+      nested.push(rel);
+      continue;
+    }
     if (untrackedDiffs.length >= MAX_UNTRACKED_FILES) {
       skipped++;
       continue;
     }
+    const abs = path.join(root, rel);
     try {
-      if (statSync(path.join(root, rel)).size > MAX_UNTRACKED_BYTES) {
+      // lstat 不跟链接:悬空链接不会 ENOENT,指向大文件 / 目录的链接也按链接本身算。
+      const st = lstatSync(abs);
+      if (st.isSymbolicLink()) {
+        untrackedDiffs.push(symlinkDiff(rel, readlinkSync(abs)));
+        continue;
+      }
+      if (st.isDirectory()) {
+        nested.push(rel); // 兜底:不带尾斜杠的目录(git 不这么列,防版本差异)
+        continue;
+      }
+      if (st.size > MAX_UNTRACKED_BYTES) {
         skipped++;
         continue;
       }
-    } catch {
-      skipped++;
+    } catch (e: any) {
+      unreadable.push({ rel, why: e?.code || e?.message || String(e) });
       continue;
     }
-    const d = await git(root, ['diff', ...DIFF_FLAGS, '--no-index', '--', '/dev/null', rel]); // 有差异时退出码 1,属正常
-    if (d.stdout) untrackedDiffs.push(d.stdout);
+    const d = await git(root, ['diff', ...DIFF_FLAGS, '--no-index', '--', '/dev/null', rel]);
+    const f = noIndexFailure(d);
+    if (f) unreadable.push({ rel, why: f });
+    else if (d.stdout) untrackedDiffs.push(d.stdout);
   }
 
   const body = [...tracked, ...untrackedDiffs].filter((s) => s.trim()).join('\n');
@@ -144,7 +205,16 @@ export async function collectGitDiff(cwd: string, maxLines = DIFF_MAX_LINES): Pr
     diffText ? `── git diff ──\n${diffText}` : '',
     dropped ? L(`… 还有 ${dropped} 行未显示（完整内容请在终端运行 git diff）`, `… ${dropped} more lines not shown (run git diff for the full output)`) : '',
     skipped ? L(`… ${skipped} 个未跟踪文件过大或过多，未展开内容`, `… ${skipped} untracked file(s) too large or too many; contents not shown`) : '',
+    nested.length
+      ? L(`… ${nested.length} 个未跟踪的内嵌 git 仓库，未展开内容（${nested[0]}）`, `… ${nested.length} untracked nested git repo(s); contents not shown (${nested[0]})`)
+      : '',
     ...notes,
+    unreadable.length
+      ? L(
+          `… ${unreadable.length} 个未跟踪文件读取失败，未展开内容（${unreadable[0].rel}：${unreadable[0].why}）`,
+          `… ${unreadable.length} untracked file(s) could not be read; contents not shown (${unreadable[0].rel}: ${unreadable[0].why})`,
+        )
+      : '',
   ];
   return { kind: 'ok', root, text: parts.filter(Boolean).join('\n') };
 }

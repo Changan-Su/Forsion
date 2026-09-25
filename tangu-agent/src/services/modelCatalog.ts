@@ -127,18 +127,33 @@ export type ModelMatch =
 const norm = (s: string): string => s.toLowerCase().replace(/[\s_]+/g, '-');
 
 /**
- * 用户 / 模型随手写的模型名 → 目录里的一条。依次:id 精确 → name 精确 → `<provider>:<name>` 写法 →
- * 唯一子串命中(id 或 name)。多个子串命中 → ambiguous(调用方列候选,绝不猜);零命中 → none。
- * 比较一律小写并把空格 / 下划线折成连字符(「opus 5.5」「claude_opus」都能命中)。
+ * 用户 / 模型随手写的模型名 → 目录里的一条。依次:原样 id 精确(区分大小写,含 `<provider>:<model>` 写法)→
+ * 归一后 id 精确 → name 精确 → 唯一子串命中(id 或 name)。归一后 id / name 精确或子串命中多条 → ambiguous
+ * (调用方列候选,绝不猜);零命中 → none。
+ * 只有**原样** id 唯一(目录按原始 id 去重):归一(小写、空格 / 下划线折成连字符)之后云端的 `Qwen/Qwen3-235B` 与直连的
+ * `qwen/qwen3-235b` 是同一个串,旧口径 find 取目录第一项 = 静默切到另一家(09-25 #6)。name 同理不唯一:两个直连 provider
+ * 都叫「gpt-5」时 /model 与 update_session_settings 会静默切 provider(Codex 09-25 P2)。
+ * 归一让「opus 5.5」「claude_opus」都能命中。
  */
 export function resolveModelQuery(query: string, models: CatalogModel[]): ModelMatch {
-  const raw = norm(String(query || '').trim());
-  if (!raw) return { kind: 'none' };
+  const trimmed = String(query || '').trim();
+  if (!trimmed) return { kind: 'none' };
   // `vendor:model` 当 `vendor/model` 再试一次;原样那次在前 —— ollama 的 `qwen3.5:4b` 本身就是 id,不能被改写吞掉。
-  const qs = [...new Set([raw, raw.replace(/^([\w.-]+):(?!\/)/, '$1/')])];
-  for (const q of qs) {
-    const exact = models.find((m) => norm(m.id) === q) || models.find((m) => norm(m.name) === q);
+  const variants = (q: string): string[] => [...new Set([q, q.replace(/^([\w.-]+):(?!\/)/, '$1/')])];
+  for (const q of variants(trimmed)) {
+    const exact = models.find((m) => m.id === q);
     if (exact) return { kind: 'hit', model: exact };
+  }
+  const qs = variants(norm(trimmed));
+  for (const q of qs) {
+    const byId = models.filter((m) => norm(m.id) === q);
+    if (byId.length === 1) return { kind: 'hit', model: byId[0] };
+    if (byId.length > 1) return { kind: 'ambiguous', candidates: byId };
+  }
+  for (const q of qs) {
+    const byName = models.filter((m) => norm(m.name) === q);
+    if (byName.length === 1) return { kind: 'hit', model: byName[0] };
+    if (byName.length > 1) return { kind: 'ambiguous', candidates: byName };
   }
   const q = qs[qs.length - 1];
   const partial = models.filter((m) => norm(m.id).includes(q) || norm(m.name).includes(q));

@@ -4,10 +4,11 @@
  * 插话认领与收尾抢救、/diff 采集。坏了任何一条,对应的交互就会静默跑偏。
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync, statSync, symlinkSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { PassThrough, Readable } from 'node:stream';
 import { createElement, Fragment } from 'react';
 import { render } from 'ink';
@@ -25,9 +26,10 @@ import { approvalLabel, thinkingLabel } from './components/StatusBar.js';
 import { collectGitDiff, truncateLines } from './gitDiff.js';
 import {
   parseSlash, buildRunAgentConfig, runSessionPatch, resumePlan, agentActivation, needsFullAutoConfirm, fullAutoConfirmPicker,
-  resolveModelArg, claimInjectedSteers, rescueSteers, launchRun, TUI_APPROVAL_KEY, type MutableConfig, type QueuedMessage,
+  resolveModelArg, claimInjectedSteers, rescueSteers, launchRun, TUI_APPROVAL_KEY, createSessionSettingsWriter, noModelNotice, type MutableConfig, type QueuedMessage,
 } from './runConfig.js';
-import { commandsFor } from '../core/commandCatalog.js';
+import { commandsFor, APPROVAL_MODE_IDS } from '../core/commandCatalog.js';
+import { tuiHelp } from './config.js';
 import type { CatalogModel } from '../services/modelCatalog.js';
 
 const items = (labels: string[], extra: Partial<PickerItem<string>>[] = []): PickerItem<string>[] =>
@@ -231,7 +233,69 @@ describe('run config (runConfig.ts)', () => {
     expect(runSessionPatch(cfg({ maxIterations: 12, planMode: true }))).toMatchObject({ maxIterations: 12, planMode: true });
     // app.tsx 的两处会话写(起 run / 切档)都得走专属键 —— 源码里不许再出现把 approvalMode 写进会话的调用。
     const src = readFileSync(join(__dirname, 'app.tsx'), 'utf8');
-    expect(src).not.toMatch(/patchSessionAgentConfig\([^)]*\{\s*approvalMode/);
+    expect(src).not.toMatch(/(patchSessionAgentConfig|settingsWriter\.patch)\([^)]*\{\s*approvalMode/);
+  });
+
+  it('session settings writes land in the order they were issued (a /think during run-start persistence is not overwritten)', async () => {
+    const store: Record<string, unknown> = {};
+    let model = '';
+    const log: string[] = [];
+    let releaseEnsure!: () => void;
+    const ensureGate = new Promise<void>((r) => (releaseEnsure = r));
+    const w = createSessionSettingsWriter({
+      ensure: async () => {
+        log.push('ensure');
+        await ensureGate; // 建行的 INSERT 还没落(/new 后秒发)
+      },
+      patch: async (_sid, p) => {
+        log.push(`patch ${JSON.stringify(p)}`);
+        for (const [k, v] of Object.entries(p)) v === null ? delete store[k] : (store[k] = v);
+      },
+      setModel: async (_sid, m) => {
+        log.push(`model ${m}`);
+        model = m;
+      },
+    });
+    // 起 run 截的是旧档 medium / auto-edit;建行期间用户 /think high、/approval readonly、/model m2。
+    const run = w.runStart('s1', cfg({ thinkingLevel: 'medium', approvalMode: 'auto-edit' }));
+    const think = w.patch('s1', { thinkingLevel: 'high' });
+    const appr = w.patch('s1', { [TUI_APPROVAL_KEY]: 'readonly' });
+    const mdl = w.model('s1', 'm2');
+    await Promise.resolve();
+    expect(log).toEqual(['ensure']); // 后发的写在排队,没抢在起 run 那份前面落库
+    releaseEnsure();
+    await Promise.all([run, think, appr, mdl]);
+    expect(store).toMatchObject({ thinkingLevel: 'high', [TUI_APPROVAL_KEY]: 'readonly' });
+    expect(model).toBe('m2');
+    // 某一步失败不卡住后面的写,也不向调用方抛(起跑不能因为写库失败卡住)。
+    const w2 = createSessionSettingsWriter({
+      ensure: async () => { throw new Error('db down'); },
+      patch: async (_sid, p) => { if ('boom' in p) throw new Error('x'); Object.assign(store, p); },
+      setModel: async () => {},
+    });
+    await expect(w2.patch('s2', { boom: 1 })).resolves.toBeUndefined();
+    await expect(w2.runStart('s2', cfg({ thinkingLevel: 'low' }))).resolves.toBeUndefined();
+    expect(store.thinkingLevel).toBe('low');
+    // /new 建行也排进队列:紧跟着的改档等建行落了再写(否则 UPDATE 打在还不存在的行上,落空)。
+    const order: string[] = [];
+    let releaseNew!: () => void;
+    const newGate = new Promise<void>((r) => (releaseNew = r));
+    const w3 = createSessionSettingsWriter({
+      ensure: async () => { await newGate; order.push('insert'); },
+      patch: async () => { order.push('patch'); },
+      setModel: async () => {},
+    });
+    const created = w3.ensure('s3', 'm');
+    const patched = w3.patch('s3', { thinkingLevel: 'off' });
+    releaseNew();
+    await Promise.all([created, patched]);
+    expect(order).toEqual(['insert', 'patch']);
+    // app.tsx 里所有会话设置写都得走队列:直调就又能后发先至(只许把函数引用交给 writer)。
+    const src = readFileSync(join(__dirname, 'app.tsx'), 'utf8');
+    const writerIO = /createSessionSettingsWriter\(\{[\s\S]*?\n  \}\)\);/;
+    expect(src).toMatch(writerIO);
+    expect(src.replace(writerIO, '')).not.toMatch(/\b(patchSessionAgentConfig|setSessionModelId)\(/);
+    expect(src).toMatch(/persist: \(\) => settingsWriter\.runStart\(/);
   });
 
   it('resume: TUI key wins over the shared one; full-auto is held back unless already full-auto', () => {
@@ -278,6 +342,29 @@ describe('run config (runConfig.ts)', () => {
     expect(resolveModelArg('gemini-3', models, null)).toEqual({ kind: 'none', catalogError: null });
   });
 
+  it('/model provider/model not in the catalog is accepted as-is (old behavior); a near match opens the picker instead of switching; half-typed ids are not', () => {
+    const models = [{ id: 'codex/gpt-5.6-sol' }, { id: 'codex/gpt-5.6-astra' }, { id: 'claude-opus-5' }].map((m) => ({ ...m, name: m.id, provider: 'p' })) as unknown as CatalogModel[];
+    // 只配了 base URL 的直连 provider 不进目录:旧版 /model provider/model 一直能用,不许逼用户改写成 =<id>。
+    expect(resolveModelArg('codex/gpt-5.6-luna', models, null)).toEqual({ kind: 'unverified', id: 'codex/gpt-5.6-luna' });
+    expect(resolveModelArg('ollama/qwen3.5:4b', models, 'HTTP 503')).toEqual({ kind: 'unverified', id: 'ollama/qwen3.5:4b' });
+    expect(resolveModelArg('openrouter/anthropic/claude-x', models, null)).toEqual({ kind: 'unverified', id: 'openrouter/anthropic/claude-x' });
+    // 目录里对得上的仍走目录:精确命中(大小写 / `vendor:model` 写法同 resolveModelQuery)/ 多个候选开选择器。
+    expect(resolveModelArg('codex/gpt-5.6-sol', models, null)).toMatchObject({ kind: 'hit', model: { id: 'codex/gpt-5.6-sol' } });
+    expect(resolveModelArg('Codex/GPT-5.6-Sol', models, null)).toMatchObject({ kind: 'hit', model: { id: 'codex/gpt-5.6-sol' } });
+    expect(resolveModelArg('codex/gpt-5.6', models, null)).toEqual({ kind: 'ambiguous', asTyped: 'codex/gpt-5.6' });
+    // 完整 id 只和目录里**一个** id 子串近似:不许像短名那样直接切过去(会静默换成另一个模型并记成默认),开选择器 + 提示 =<id>。
+    expect(resolveModelArg('codex/gpt-5.6-so', models, null)).toEqual({ kind: 'ambiguous', asTyped: 'codex/gpt-5.6-so' });
+    const mini = [{ id: 'openai/gpt-5-mini' }, { id: 'claude-opus-5' }].map((m) => ({ ...m, name: m.id, provider: 'p' })) as unknown as CatalogModel[];
+    expect(resolveModelArg('openai/gpt-5', mini, null)).toEqual({ kind: 'ambiguous', asTyped: 'openai/gpt-5' });
+    expect(resolveModelArg('openai:gpt-5-mini', mini, null)).toMatchObject({ kind: 'hit', model: { id: 'openai/gpt-5-mini' } }); // 不是完整 id 形,走原口径
+    // 短名(不含 /)唯一子串照旧直接命中。
+    expect(resolveModelArg('opus', mini, null)).toMatchObject({ kind: 'hit', model: { id: 'claude-opus-5' } });
+    // 半截(只有一段)不算完整 id,照旧报没匹配。
+    expect(resolveModelArg('nope/', models, null)).toEqual({ kind: 'none', catalogError: null });
+    expect(resolveModelArg('/nope', models, null)).toEqual({ kind: 'none', catalogError: null });
+    expect(resolveModelArg('luna', models, null)).toEqual({ kind: 'none', catalogError: null });
+  });
+
   it('steer bookkeeping: injected steers show the typed text; missed ones jump ahead of queued follow-ups', () => {
     const q = (id: string): QueuedMessage => ({ id, display: `typed ${id}`, message: `expanded ${id}` });
     const { texts, remaining } = claimInjectedSteers([q('a'), q('b')], [{ id: 'b', content: 'expanded b' }, { id: 'hook', content: 'from a stop hook' }]);
@@ -315,6 +402,24 @@ describe('run config (runConfig.ts)', () => {
 describe('status labels + i18n', () => {
   afterAll(() => setUiLocale(null));
 
+  it('tangu --help follows the UI language: the English one has no Chinese; both list the same flags, every approval mode and /hotkeys', () => {
+    setUiLocale('en');
+    const en = tuiHelp();
+    setUiLocale('zh');
+    const zh = tuiHelp();
+    setUiLocale(null);
+    expect(en).not.toMatch(/[\u4e00-\u9fff]/);
+    expect(zh).toMatch(/[\u4e00-\u9fff]/);
+    const flags = (t: string): string[] => [...new Set(t.match(/--[a-z][a-z-]*\*?/g) ?? [])].sort();
+    expect(flags(en)).toEqual(flags(zh));
+    expect(flags(en)).toEqual(expect.arrayContaining(['--approval', '--think', '--model', '--cwd', '--help']));
+    for (const t of [en, zh]) {
+      for (const m of APPROVAL_MODE_IDS) expect(t).toContain(m); // 含本轮新加的 custom
+      expect(t).toContain('/hotkeys');
+      expect(t).toContain('/help');
+    }
+  });
+
   it('detects zh from env first, then Intl; C/POSIX count as unset', () => {
     expect(detectZh({ LANG: 'zh_CN.UTF-8' }, 'en-US')).toBe(true);
     expect(detectZh({ LANG: 'en_US.UTF-8' }, 'zh-CN')).toBe(false);
@@ -330,6 +435,21 @@ describe('status labels + i18n', () => {
     setUiLocale('en');
     expect(approvalLabel('readonly')).toBe('Ask for approval');
     expect(approvalLabel('weird')).toBe('weird');
+  });
+
+  // 没配模型的英文用户第一眼看到的就是这句(旧版 app.tsx 四处各写一份纯中文)。
+  it('the "no model set" notice is bilingual, and app.tsx has no Chinese-only copy of it left', () => {
+    setUiLocale('en');
+    const en = noModelNotice();
+    setUiLocale('zh');
+    const zh = noModelNotice();
+    setUiLocale(null);
+    expect(en).not.toMatch(/[\u4e00-\u9fff]/);
+    expect(zh).toMatch(/[\u4e00-\u9fff]/);
+    for (const t of [en, zh]) expect(t).toContain('/model');
+    const appSrc = readFileSync(fileURLToPath(new URL('./app.tsx', import.meta.url)), 'utf8');
+    expect(appSrc).not.toMatch(/notice\(\s*['`"]未设置模型/); // 四个调用点(首屏 / 起 run / /compact / 发消息)都走 noModelNotice()
+    expect(appSrc.match(/notice\(noModelNotice\(\)/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
   });
 
   it('thinking label shows requested→effective only when they differ', () => {
@@ -410,6 +530,115 @@ describe('/diff collection', () => {
       expect(fromSub.text).toContain('+brand new');
       expect(fromSub.text).toContain('+inner');
       expect(fromSub.text).toContain('+two');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+      setUiLocale(null);
+    }
+  });
+
+  // 子命令「跑起来了但退出码非 0」不能当正常(stdout 可能只有半截):各查各的,失败写成说明(Codex 评审 tui #4)。
+  it.skipIf(!hasGit || process.platform === 'win32')('a git subcommand that starts but exits non-zero is reported, not silently dropped', async () => {
+    setUiLocale('en');
+    const root = mkdtempSync(join(tmpdir(), 'tangu-tui-diff-fail-'));
+    const prevPath = process.env.PATH;
+    try {
+      const repo = join(root, 'repo');
+      execFileSync('mkdir', ['-p', repo]);
+      const g = (...args: string[]): void => {
+        execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd: repo, stdio: 'ignore' });
+      };
+      g('init', '-q');
+      writeFileSync(join(repo, 'a.txt'), 'one\n');
+      g('add', 'a.txt');
+      g('commit', '-q', '-m', 'init');
+      writeFileSync(join(repo, 'a.txt'), 'one\ntwo\n');
+      writeFileSync(join(repo, 'new.txt'), 'brand new\n');
+
+      // 1) 未跟踪文件读不了(列出之后权限变了):git diff --no-index 退 128 —— 旧版只看 stdout,这个文件的内容静默消失。
+      const locked = join(repo, 'locked.txt');
+      writeFileSync(locked, 'secret\n');
+      execFileSync('chmod', ['000', locked]);
+      const canStillRead = (() => {
+        try {
+          readFileSync(locked);
+          return true; // root 跑测试:chmod 000 拦不住,这一段没法构造
+        } catch {
+          return false;
+        }
+      })();
+      if (!canStillRead) {
+        const r = await collectGitDiff(repo);
+        expect(r.kind).toBe('ok');
+        if (r.kind !== 'ok') return;
+        expect(r.text).toContain('+brand new'); // 别的未跟踪文件照常展开
+        expect(r.text).toMatch(/1 untracked file\(s\) could not be read; contents not shown \(locked\.txt: .+\)$/m); // 原因是 git 的 stderr 首行(可能被本地化,不钉原文)
+      }
+      execFileSync('chmod', ['644', locked]);
+
+      // 2) 取数子命令正常启动后退出码非 0:用一个假 git 包一层真 git,按参数让指定子命令退 128。
+      const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+      const shim = join(root, 'bin');
+      execFileSync('mkdir', ['-p', shim]);
+      writeFileSync(
+        join(shim, 'git'),
+        `#!/bin/sh\ncase " $* " in\n  *" $TANGU_FAKE_GIT_FAIL "*) echo "fatal: simulated failure" >&2; exit 128;;\nesac\nexec ${JSON.stringify(realGit)} "$@"\n`,
+        { mode: 0o755 },
+      );
+      process.env.PATH = `${shim}:${prevPath}`;
+
+      process.env.TANGU_FAKE_GIT_FAIL = 'ls-files';
+      const noList = await collectGitDiff(repo);
+      expect(noList.kind === 'ok' && noList.text).toContain('… git ls-files failed: fatal: simulated failure');
+      expect(noList.kind === 'ok' && noList.text).toContain('+two'); // 已跟踪的 diff 不受影响
+
+      process.env.TANGU_FAKE_GIT_FAIL = '--no-color HEAD'; // 只打中 `git diff … HEAD`,不碰 --stat 与 rev-parse
+      const noDiff = await collectGitDiff(repo);
+      expect(noDiff.kind === 'ok' && noDiff.text).toContain('… git diff failed: fatal: simulated failure');
+      expect(noDiff.kind === 'ok' && noDiff.text).toContain('a.txt | '); // --stat 照常
+    } finally {
+      process.env.PATH = prevPath;
+      delete process.env.TANGU_FAKE_GIT_FAIL;
+      try {
+        execFileSync('chmod', ['-R', 'u+rw', root]);
+      } catch {
+        /* ignore */
+      }
+      rmSync(root, { recursive: true, force: true });
+      setUiLocale(null);
+    }
+  });
+
+  // 未跟踪的符号链接 / 内嵌仓不是「读取失败」:悬空链接 stat 必 ENOENT,指向目录的链接与 `sub/` 交给
+  // `diff --no-index` 会报 `Could not access '<x>/null'` —— 旧版把它们误报成「could not be read」。
+  it.skipIf(!hasGit || process.platform === 'win32')('untracked symlinks and nested repos are shown as such, not reported as unreadable', async () => {
+    setUiLocale('en');
+    const root = mkdtempSync(join(tmpdir(), 'tangu-tui-diff-links-'));
+    try {
+      const repo = join(root, 'repo');
+      execFileSync('mkdir', ['-p', join(repo, 'sub'), join(repo, 'dir')]);
+      const g = (cwd: string, ...args: string[]): void => {
+        execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...args], { cwd, stdio: 'ignore' });
+      };
+      g(repo, 'init', '-q');
+      g(repo, 'commit', '-q', '--allow-empty', '-m', 'init');
+      g(join(repo, 'sub'), 'init', '-q'); // 未跟踪的内嵌仓:ls-files 列成 `sub/`
+      writeFileSync(join(repo, 'sub', 'inner.txt'), 'inner\n');
+      writeFileSync(join(repo, 'dir', 'x.txt'), 'in dir\n');
+      writeFileSync(join(repo, 'plain.txt'), 'plain\n');
+      symlinkSync('nowhere', join(repo, 'dangling'));
+      symlinkSync('dir', join(repo, 'linkdir'));
+      symlinkSync('plain.txt', join(repo, 'linkfile'));
+      const r = await collectGitDiff(repo);
+      expect(r.kind).toBe('ok');
+      if (r.kind !== 'ok') return;
+      expect(r.text).not.toMatch(/could not be read/);
+      expect(r.text).toMatch(/^… 1 untracked nested git repo\(s\); contents not shown \(sub\/\)$/m);
+      for (const [link, target] of [['dangling', 'nowhere'], ['linkdir', 'dir'], ['linkfile', 'plain.txt']]) {
+        expect(r.text).toContain(`diff --git a/${link} b/${link}\nnew file mode 120000\n--- /dev/null\n+++ b/${link}\n@@ -0,0 +1 @@\n+${target}\n`);
+      }
+      expect(r.text).toContain('+plain'); // 普通未跟踪文件照常展开
+      expect(r.text).toContain('+in dir');
+      expect(r.text).not.toContain('+inner'); // 内嵌仓内容不展开(git 自己也不往里走)
     } finally {
       rmSync(root, { recursive: true, force: true });
       setUiLocale(null);

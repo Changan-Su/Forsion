@@ -99,6 +99,65 @@ export function runSessionPatch(c: MutableConfig): Record<string, unknown> {
   };
 }
 
+export interface SessionSettingsIO {
+  /** 会话行不存在就建(INSERT … ON CONFLICT DO NOTHING):否则后面的 UPDATE 落空。 */
+  ensure: (sid: string, model: string) => Promise<unknown>;
+  /** agent_config 按键合并写(引擎侧 patchSessionAgentConfig,与桌面 PATCH 同锁)。 */
+  patch: (sid: string, patch: Record<string, unknown>) => Promise<unknown>;
+  /** chat_sessions.model_id。 */
+  setModel: (sid: string, model: string) => Promise<unknown>;
+}
+
+export interface SessionSettingsWriter {
+  /** 建会话行(启动 / /new):排进同一队列,紧跟着的 /think、/approval 不会先于建行落空。 */
+  ensure(sid: string, model: string): Promise<void>;
+  /** 起 run 前:建行 → 写本端设置(runSessionPatch)+ 模型。 */
+  runStart(sid: string, c: MutableConfig): Promise<void>;
+  /** /think、/approval 等单键改档。 */
+  patch(sid: string, patch: Record<string, unknown>): Promise<void>;
+  /** /model:建行 → 写模型。 */
+  model(sid: string, id: string): Promise<void>;
+}
+
+/**
+ * TUI 对会话设置的所有写,按会话串行、**按发出顺序**落库。
+ *
+ * 为什么要排队:起 run 的那次写要先等建行(ensure)才发得出去,而 /think、/approval 的单键写是立刻发的 ——
+ * 用户在建行那几毫秒里改档,单键写先落、起 run 那份(起跑时截的旧档)后落,把新档盖回旧档:
+ * 界面显示新档,/resume 却恢复旧档(Codex 评审 tui #2)。引擎侧的 session:config 锁只保证单次读改写原子,
+ * 管不了「谁先发出」;所以在 TUI 这头按发出顺序排好再交给它。
+ * 各步失败都吞掉(会话存值是 /resume 的便利,不能因为写库失败卡住起跑),也不阻塞队列里后面的写。
+ */
+export function createSessionSettingsWriter(io: SessionSettingsIO): SessionSettingsWriter {
+  const tails = new Map<string, Promise<void>>();
+  const enqueue = (sid: string, job: () => Promise<unknown>): Promise<void> => {
+    const next = (tails.get(sid) ?? Promise.resolve()).then(job).then(
+      () => undefined,
+      () => undefined,
+    );
+    tails.set(sid, next);
+    void next.then(() => {
+      if (tails.get(sid) === next) tails.delete(sid);
+    });
+    return next;
+  };
+  const quiet = (p: Promise<unknown>): Promise<unknown> => p.catch(() => undefined);
+  return {
+    ensure: (sid, model) => enqueue(sid, () => io.ensure(sid, model)),
+    runStart: (sid, c) =>
+      enqueue(sid, async () => {
+        await quiet(io.ensure(sid, c.model));
+        await Promise.all([quiet(io.patch(sid, runSessionPatch(c))), quiet(io.setModel(sid, c.model))]);
+      }),
+    patch: (sid, p) => enqueue(sid, () => io.patch(sid, p)),
+    model: (sid, id) =>
+      enqueue(sid, async () => {
+        await quiet(io.ensure(sid, id));
+        await io.setModel(sid, id);
+      }),
+  };
+}
+
 export interface ResumePlan {
   /** 直接 patch 进本地配置的部分(Agent 另查:定义要异步读盘)。 */
   patch: Partial<MutableConfig>;
@@ -171,12 +230,23 @@ export function fullAutoConfirmPicker(): { title: string; subtitle: string; tone
   };
 }
 
+/**
+ * 没选模型时的提示:启动首屏 / 发消息 / 起 run / /compact 共用这一句。英文用户没配模型时第一眼看到的就是它,
+ * 所以必须双语(旧版四处各写一份纯中文)。
+ */
+export const noModelNotice = (): string =>
+  L(
+    '未设置模型：先用 /model 选择（不带参数打开选择器；也可直接写 <provider>/<model> 完整 id）',
+    'No model set: pick one with /model first (no argument opens the picker; a full <provider>/<model> id also works)',
+  );
+
 export type ModelArgOutcome =
   | { kind: 'usage' }
   | { kind: 'numeric' }
   | { kind: 'unverified'; id: string }
   | { kind: 'hit'; model: CatalogModel }
-  | { kind: 'ambiguous' }
+  /** asTyped:用户敲的是 `<provider>/<model>` 完整 id、目录里只有近似的 → 调用方提示可用 `=<id>` 原样采用。 */
+  | { kind: 'ambiguous'; asTyped?: string }
   | { kind: 'none'; catalogError: string | null };
 
 /**
@@ -184,6 +254,13 @@ export type ModelArgOutcome =
  *   `=<id>`   逃生口,目录外的 id 原样接受(不校验);
  *   纯数字    拒绝 —— 选择器不显示序号,当子串匹配会静默切到某个恰好含该数字的模型并记成默认;
  *   目录为空  退回旧行为(原样接受),别把用户卡死;
+ *   `<provider>/<model>` 完整 id:
+ *             目录里 id / name 精确对上 → 命中;
+ *             只有子串近似(哪怕唯一,如 `openai/gpt-5` 之于目录里的 `openai/gpt-5-mini`)→ ambiguous + asTyped,
+ *               开已过滤的选择器让用户挑,**不许**像短名那样唯一子串直接切过去 —— 那会静默换成另一个模型并记成默认;
+ *               用户要的若就是目录外的这个 id,按提示写 `=<id>`;
+ *             一个都对不上 → 按旧行为原样接受(调用方提示「未经目录校验」):只配了 base URL、没列模型的
+ *               直连 provider 本来就不进目录,旧版 `/model provider/model` 一直能用;
  *   none      带上目录拉取错误(云端挂了 / 没登录时目录只剩本机直连,「没匹配」多半是云端 id)。
  */
 export function resolveModelArg(arg: string, models: CatalogModel[], catalogError: string | null): ModelArgOutcome {
@@ -195,10 +272,29 @@ export function resolveModelArg(arg: string, models: CatalogModel[], catalogErro
   if (/^\d+$/.test(a)) return { kind: 'numeric' };
   if (!models.length) return { kind: 'unverified', id: a };
   const r = resolveModelQuery(a, models);
+  if (isFullModelId(a)) {
+    if (r.kind === 'hit' && exactModelMatch(a, r.model)) return { kind: 'hit', model: r.model };
+    if (r.kind === 'none') return { kind: 'unverified', id: a };
+    return { kind: 'ambiguous', asTyped: a }; // 唯一子串 / 多个候选:都开选择器,不替用户换模型
+  }
   if (r.kind === 'hit') return { kind: 'hit', model: r.model };
   if (r.kind === 'ambiguous') return { kind: 'ambiguous' };
   return { kind: 'none', catalogError };
 }
+
+/**
+ * 命中的是不是「精确」那一档(id 或 name 与输入相同),而不是子串近似。比较口径抄 resolveModelQuery:
+ * 小写、空格 / 下划线折成连字符、`vendor:model` 也按 `vendor/model` 认 —— modelCatalog 没导出 norm,这里保持同步。
+ */
+function exactModelMatch(query: string, m: CatalogModel): boolean {
+  const key = (s: string): string => s.toLowerCase().replace(/[\s_]+/g, '-');
+  const q = key(query);
+  const qs = [q, q.replace(/^([\w.-]+):(?!\/)/, '$1/')];
+  return qs.includes(key(String(m.id ?? ''))) || qs.includes(key(String(m.name ?? '')));
+}
+
+/** `provider/model` 形的完整 id:两段都非空、不含空白(`codex/` 或 `/luna` 这种半截不算)。 */
+const isFullModelId = (a: string): boolean => /^[^\s/]+\/\S*[^\s/]$/.test(a);
 
 /**
  * turn_boundary:引擎注入的用户消息按 id 认领本端的待注入插话 → 显示用户敲的原文(@文件 展开前);

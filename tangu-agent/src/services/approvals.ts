@@ -25,7 +25,11 @@ import { deps } from '../seams/runtime.js';
 import type { AppProfile } from '../seams/appProfile.js';
 import { canonicalFuturePath } from '../sandbox/hostSandboxProtection.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
-import { MUSE_AGENT_SLUG, getAgent, isValidSlug, slugify } from '../agents/agentRegistry.js';
+import { MUSE_AGENT_SLUG, AGENT_MAX_ITERATIONS_MIN, buildAgentDef, getAgent, isValidSlug, slugify, type NormalAgentDef } from '../agents/agentRegistry.js';
+// 控制面预览按**落盘前的校验结果**渲染(见 savedText)。两个校验都是纯同步函数;museTriggers 只在函数体里用 agentRegistry 的导出,
+// 与本文件 ↔ agentRegistry 的既有互引同理,求值顺序无关。
+import { validateEntryInput } from './agentSchedule.js';
+import { validateTriggerInput } from './museTriggers.js';
 
 export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
 
@@ -153,10 +157,48 @@ export function controlPlaneCall(
 /** controlPlaneCall 可能为真的工具(闸门据此决定要不要为非 host 调用解析参数)。 */
 const CONTROL_PLANE_TOOLS = new Set(['manage_agent', 'manage_schedule', 'manage_automation']);
 
-const clip = (v: unknown, n: number): string => {
-  const s = String(v ?? '').replace(/\s+/g, ' ').trim();
-  return s.length > n ? `${s.slice(0, n)}…` : s;
+/** 控制面审批卡的待批内容**一个字都不省**:无人值守要跑的提示词、tool_call 的参数、Agent 的指令 / 人格 / 工具名单。
+ *  桌面 / TUI 审批卡与 Muse 代批判官都只看得到 preview —— 旧口径截到 160 字、tool_call 只写工具名,
+ *  批准重新启用一条旧规则时用户只看见「tool_call run_bash」,看不见实际命令(Codex 09-25 P1)。
+ *  空白折叠只为单行可读,不丢内容;界面要折叠自己折,不能在这里省。 */
+const full = (v: unknown): string => String(v ?? '').replace(/\s+/g, ' ').trim();
+/** 参数原样 JSON(不折空白:字符串里的换行按 \n 转义,一个字符不丢)。 */
+const asJson = (v: unknown): string => {
+  try { return JSON.stringify(v ?? {}) ?? String(v); } catch { return String(v); }
 };
+/**
+ * 卡上写的必须是**实际落盘**的那一份(09-25 评审 #4):写全之后卡片展示的是原始参数,而各工具落盘前会截断 ——
+ * agent_run / 旧式 prompt 500、日程 prompt 4000 / description 500、notify 正文 4000、Agent 指令 / 人格 100k。
+ * 模型在 500 字之后补一句「更正:什么都别删」,卡上看得见、存下来的却没有。所以控制面三件先过各自的校验
+ * (validateTriggerInput / validateEntryInput / buildAgentDef,都是纯同步函数)再渲染;截掉了就明说。
+ * 校验不过 = 工具会报错、什么都不存 → 退回原始参数渲染(不把校验的中文错误语塞进英文卡片)。
+ */
+const savedText = (saved: string, raw: unknown): string => {
+  const shown = full(saved);
+  return String(raw ?? '').trim() !== saved.trim()
+    ? `${shown} [truncated: only the first ${saved.length} characters are saved]`
+    : shown;
+};
+
+/** manage_agent 的参数 → buildAgentDef 会存下的那份(与 manageAgent.execute 的映射同口径;existing=null 只取字段校验 / 截断)。
+ *  轮数低于下限的由工具自己拒(且会触发 clamp 的告警),不传进来。缺 name / system_prompt → buildAgentDef 抛 → undefined。 */
+function savedAgentFields(args: any): NormalAgentDef | undefined {
+  const iter = Number(args.max_iterations);
+  try {
+    return buildAgentDef('preview', null, {
+      name: String(args.name ?? ''),
+      description: args.description != null ? String(args.description) : undefined,
+      model: args.model != null ? String(args.model) : undefined,
+      tools: Array.isArray(args.tools) ? args.tools.map((t: unknown) => String(t)) : undefined,
+      thinkingLevel: args.thinking_level,
+      maxIterations: Number.isFinite(iter) && iter >= AGENT_MAX_ITERATIONS_MIN ? iter : undefined,
+      systemPrompt: String(args.system_prompt ?? ''),
+      soul: args.soul != null ? String(args.soul) : undefined,
+    });
+  } catch {
+    return undefined;
+  }
+}
 
 /** 给审批弹窗用的人类可读预览（从 tool 参数里抽要害）。
  *  opts.keptActions:manage_automation 更新且省略 actions 时,闸门读到的旧动作链(undefined = 没读 / 读不到;
@@ -198,52 +240,74 @@ export function approvalPreview(call: ToolCall, opts: { keptActions?: unknown[] 
   // 截断的 JSON 答不了「它要建什么、谁到时候无人值守去跑、跑什么」。
   if (name === 'manage_agent') {
     const act = String(args.action ?? '');
-    if (act !== 'create' && act !== 'update') return `manage_agent ${act}${args.slug ? ` ${args.slug}` : ''}`;
+    if (act !== 'create' && act !== 'update') return `manage_agent ${act}${args.slug ? ` ${full(args.slug)}` : ''}`;
+    // 只列模型本次传了的字段(省略的由 manageAgent 保留原值);值取落盘那份。description 进 Agent 系统提示的 Identity 段,同样要写出来。
+    const sv = savedAgentFields(args);
+    const iter = Number(args.max_iterations);
     const parts = [
-      args.model != null ? `model → ${clip(args.model, 80)}` : '',
-      args.thinking_level != null ? `thinking → ${clip(args.thinking_level, 20)}` : '',
-      Array.isArray(args.tools) ? `tools → [${clip(args.tools.join(', '), 160)}]` : '',
-      args.max_iterations != null ? `max_iterations → ${clip(args.max_iterations, 10)}` : '',
-      args.system_prompt != null ? `instructions: ${clip(args.system_prompt, 160)}` : '',
-      args.soul != null ? `persona (${String(args.soul).length} chars)` : '',
+      args.description != null ? `description: ${sv ? savedText(sv.description, args.description) : full(args.description)}` : '',
+      args.model != null ? `model → ${sv ? full(sv.model) || '(session model)' : full(args.model)}` : '',
+      args.thinking_level != null ? `thinking → ${sv ? sv.thinkingLevel || '(not set)' : full(args.thinking_level)}` : '',
+      Array.isArray(args.tools) ? `tools → [${(sv ? sv.tools : args.tools).map(full).join(', ')}]` : '',
+      args.max_iterations != null
+        ? `max_iterations → ${sv && Number.isFinite(iter) && iter >= AGENT_MAX_ITERATIONS_MIN ? sv.maxIterations : full(args.max_iterations)}`
+        : '',
+      args.system_prompt != null ? `instructions: ${sv ? savedText(sv.systemPrompt, args.system_prompt) : full(args.system_prompt)}` : '',
+      args.soul != null ? `persona: ${sv ? savedText(sv.soul ?? '', args.soul) : full(args.soul)}` : '',
     ].filter(Boolean);
-    return `manage_agent ${act} ${args.slug ? clip(args.slug, 60) : '(slug from name)'} "${clip(args.name, 80)}"${parts.length ? ` · ${parts.join(' · ')}` : ''}`;
+    return `manage_agent ${act} ${args.slug ? full(args.slug) : '(slug from name)'} "${sv ? full(sv.name) : full(args.name)}"${parts.length ? ` · ${parts.join(' · ')}` : ''}`;
   }
   if (name === 'manage_schedule') {
     const act = String(args.action ?? '');
-    const who = args.agent ? ` for agent "${clip(args.agent, 60)}"` : '';
-    if (act !== 'set') return `manage_schedule ${act}${who}${args.id ? ` ${args.id}` : ''}`;
+    const who = args.agent ? ` for agent "${full(args.agent)}"` : '';
+    if (act !== 'set') return `manage_schedule ${act}${who}${args.id ? ` ${full(args.id)}` : ''}`;
     const auto = args.auto === true || args.auto === 'true';
-    return `manage_schedule set ${args.id ? clip(args.id, 60) : '(new)'}${who}: "${clip(args.name, 100)}" @ ${clip(args.date || '?', 40)}` +
-      `${args.repeat ? ` every ${clip(args.repeat, 10)}` : ''}` +
-      (auto ? ` · runs unattended when due: ${clip(args.prompt, 200)}` : ' · planning only');
+    // description 到点拼进无人值守 kickoff 的「Context:」(automation.scheduleMessage),与 prompt 同样是要跑的指令(评审 #2)。
+    const v = validateEntryInput(args);
+    const prompt = v.ok ? savedText(v.value.prompt, args.prompt) : full(args.prompt);
+    const desc = v.ok ? (v.value.description ? savedText(v.value.description, args.description) : '') : full(args.description);
+    return `manage_schedule set ${args.id ? full(args.id) : '(new)'}${who}: "${v.ok ? full(v.value.name) : full(args.name)}" @ ${full(args.date || '?')}` +
+      `${args.repeat ? ` every ${full(args.repeat)}` : ''}` +
+      (auto ? ` · runs unattended when due: ${prompt}` : ' · planning only') +
+      (desc ? ` · context: ${desc}` : '');
   }
   if (name === 'manage_automation') {
     const act = String(args.action ?? '');
-    if (act !== 'set') return `manage_automation ${act}${args.id ? ` ${args.id}` : ''}`;
+    if (act !== 'set') return `manage_automation ${act}${args.id ? ` ${full(args.id)}` : ''}`;
     const when = [args.cond_type, args.datetime || args.interval || args.time || args.match || args.path || args.event]
-      .filter(Boolean).map((x) => clip(x, 60)).join(' ');
-    const agent = String(args.agent_slug ?? args.agent ?? '').trim();
-    const renderSteps = (list: any[]): string => list.map((s: any) => {
+      .filter(Boolean).map(full).join(' ');
+    // 本次写入的动作链 / 旧式 prompt 取校验后的那份(见 savedText)。cond 换成 manual 只为绕开这里给不了的 cwd / vault
+    // (file_chars_gte / db_changed 要),动作与 prompt 的校验与 cond 无关;与工具同样 allowToolCall=false。
+    // cond 真不合法时工具照样报错、什么都不存 —— 卡上多写了几个字,不放宽任何东西。
+    const v = validateTriggerInput({ ...args, agent_slug: args.agent_slug ?? args.agent, cond_type: 'manual' });
+    const agent = v.ok ? (v.value.agentSlug ?? '') : String(args.agent_slug ?? args.agent ?? '').trim();
+    const newActions: unknown = v.ok ? v.value.actions : args.actions;
+    const legacyPrompt = v.ok ? savedText(v.value.prompt ?? '', args.prompt) : full(args.prompt);
+    // 原始参数里同一步的原文(按下标对齐,校验不改顺序):截断标记要拿它比。kept 链是已落盘的值,没有原文 → 不标。
+    const rawSteps: any[] = v.ok && Array.isArray(args.actions) ? args.actions : [];
+    // 每步写全:agent_run 的整段提示词、tool_call 的整份参数、notify 正文、多维表写入的目标与单元格。
+    const renderSteps = (list: any[], raw: any[] = []): string => list.map((s: any, i: number) => {
       const t = String(s?.type || '?');
-      if (t === 'agent_run') return `agent_run "${clip(s.agentSlug || s.agent_slug, 60)}" unattended: ${clip(s.prompt, 160)}`;
-      if (t === 'tool_call') return `tool_call ${clip(s.tool, 60)}`;
-      if (t === 'notify') return `notify "${clip(s.title, 60)}"`;
-      return `${t}${s?.path ? ` ${clip(s.path, 60)}` : ''}`;
+      const text = (key: 'prompt' | 'body'): string => (raw[i] ? savedText(String(s?.[key] ?? ''), raw[i]?.[key]) : full(s?.[key]));
+      if (t === 'agent_run') return `agent_run "${full(s.agentSlug || s.agent_slug)}" unattended: ${text('prompt')}`;
+      if (t === 'tool_call') return `tool_call ${full(s.tool)} ${asJson(s.args)}`;
+      if (t === 'notify') return `notify "${full(s.title)}"${s.body ? `: ${text('body')}` : ''}`;
+      const { type: _t, path: p, ...rest } = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>;
+      return `${t}${p ? ` ${full(p)}` : ''}${Object.keys(rest).length ? ` ${asJson(rest)}` : ''}`;
     }).join(' → ');
     // 更新且省略 actions = 保留旧链(upsertTrigger);旧式 agent / prompt 则按本次参数整量覆写。
     // 闸门读得到旧链时经 opts.keptActions 传进来,让用户看见批的这条规则到点**实际**跑什么(评审 #7)。
     const keeps = args.actions === undefined && !!args.id;
     const kept = keeps && Array.isArray(opts.keptActions) && opts.keptActions.length ? opts.keptActions : undefined;
-    const steps = Array.isArray(args.actions)
-      ? renderSteps(args.actions)
+    const steps = Array.isArray(newActions)
+      ? renderSteps(newActions, rawSteps)
       : kept
         ? `keeps existing actions: ${renderSteps(kept)}`
         : agent && agent !== MUSE_AGENT_SLUG
-          ? `agent_run "${clip(agent, 60)}" unattended: ${clip(args.prompt, 160)}`
+          ? `agent_run "${full(agent)}" unattended: ${legacyPrompt}`
           : keeps && opts.keptActions === undefined ? '(actions unchanged)' : 'wake Muse';
     const off = args.enabled !== undefined && !args.enabled ? ' (disabled)' : '';
-    return `manage_automation set ${args.id ? clip(args.id, 60) : '(new)'}${off}: "${clip(args.desc, 100)}" · when ${when || '?'} · ${steps}`;
+    return `manage_automation set ${args.id ? full(args.id) : '(new)'}${off}: "${full(args.desc)}" · when ${when || '?'} · ${steps}`;
   }
   return `${name} ${JSON.stringify(args).slice(0, 200)}`;
 }

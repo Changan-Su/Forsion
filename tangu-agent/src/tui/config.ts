@@ -8,6 +8,7 @@ import { parseConfig, type StandaloneConfig } from '../standalone/config.js';
 import { isThinkingLevel } from '../llm/modelCapabilities.js';
 import type { ThinkingLevel } from '../core/types.js';
 import type { ApprovalMode } from './types.js';
+import { L } from './i18n.js';
 
 export interface TuiConfig extends StandaloneConfig {
   cwd: string;
@@ -56,7 +57,13 @@ export function parseTuiConfig(argv: string[]): TuiConfig {
   return cfg;
 }
 
-export const TUI_HELP = `Tangu — 本地 agent（成熟 TUI，hermes/codex 形）
+/**
+ * `tangu --help` 的全文,跟随界面语言(同 i18n.ts 的判定:TANGU_LANG → LC_ALL → LC_MESSAGES → LANG → Intl)。
+ * 函数而非常量:模块加载时 TANGU_LANG 可能还没从 .env 读进来,调用时再判。两份逐项对齐(单测钉 flag 集合一致)。
+ */
+export const tuiHelp = (): string =>
+  L(
+    `Tangu — 本地 agent（成熟 TUI，hermes/codex 形）
 
 用法:
   tangu login [--cloud-url <forsion>]   浏览器登录（codex 式），token 存 ~/.tangu/auth.json
@@ -64,12 +71,13 @@ export const TUI_HELP = `Tangu — 本地 agent（成熟 TUI，hermes/codex 形�
   tangu                                 进入 TUI（登录后免参数；进去用 /model 选模型）
   tangu --model <id>                    直接指定模型进入（登录后免 --token / --cloud-url）
 
-options:
+选项:
   --model <id>          模型 id（Forsion 托管 id 或 <provider>/<model>），env TANGU_MODEL  [可空，进 TUI 后 /model 选，会记住]
   --cwd <path>          工作目录（host-exec 下文件/命令相对此解析），默认当前目录
   --host-exec           本地直连真实文件系统 + shell（默认）
   --sandbox-exec        改用云沙箱 + 云工作区（run_python 等）
-  --approval <mode>     审批档：readonly | auto-edit | full-auto | custom（默认 auto-edit）
+  --approval <mode>     审批档：readonly（询问我批准）| auto-edit（替我批准）| full-auto（完全放行）
+                        | custom（自定义：按 config.json 的 approval 规则），默认 auto-edit
   --think <level>       思考强度：off | minimal | low | medium | high | xhigh | max（默认 medium；
                         模型不支持的档位自动降到最近可用档，开启后思考内容默认折叠）
   --token-budget <n>    本回合软 token 预算（超出后收尾停止）
@@ -80,5 +88,35 @@ options:
   --provider* / --providers-file   直连 LLM provider（同 standalone）
   -h, --help            显示帮助
 
+界面语言跟随系统（LANG 为 zh* 显示中文，其余英文；TANGU_LANG=zh|en 强制指定）。
 会话内 /help 查看全部命令，/hotkeys 查看快捷键。
-`;
+`,
+    `Tangu — local agent (full TUI, in the style of hermes/codex)
+
+Usage:
+  tangu login [--cloud-url <forsion>]   Sign in in the browser (codex-style); the token is stored in ~/.tangu/auth.json
+  tangu login <provider>                Sign in with an AI subscription to use it as the LLM (e.g. tangu login xai)
+  tangu                                 Start the TUI (no flags needed once signed in; pick a model with /model)
+  tangu --model <id>                    Start with a specific model (no --token / --cloud-url needed once signed in)
+
+Options:
+  --model <id>          Model id (a Forsion-hosted id or <provider>/<model>), env TANGU_MODEL  [optional; pick one with /model in the TUI, it is remembered]
+  --cwd <path>          Working directory (files and commands resolve against it with host exec); defaults to the current directory
+  --host-exec           Work directly on the local file system and shell (default)
+  --sandbox-exec        Use the cloud sandbox and cloud workspace instead (run_python, etc.)
+  --approval <mode>     Approval mode: readonly (Ask for approval) | auto-edit (Approve for me) | full-auto (Full access)
+                        | custom (Custom: the approval rules in config.json); default auto-edit
+  --think <level>       Thinking level: off | minimal | low | medium | high | xhigh | max (default medium;
+                        levels the model doesn't support fall back to the nearest one; reasoning is folded once done)
+  --token-budget <n>    Soft token budget for this turn (wraps up and stops once exceeded)
+  --cloud-url <url>     Forsion cloud (brain API), env TANGU_CLOUD_URL  [optional once signed in]
+  --token <token>       forsion_token, env TANGU_TOKEN                  [optional once signed in]
+  --data-dir <path>     Embedded SQLite file (default ~/.tangu/state.db, 'memory' = in memory; shared with Desktop)
+  --db <url>            Optional: use an external Postgres instead
+  --provider* / --providers-file   Direct LLM providers (same as standalone)
+  -h, --help            Show this help
+
+The interface language follows the system (zh* LANG shows Chinese, anything else English; TANGU_LANG=zh|en forces one).
+In a session, /help lists every command and /hotkeys lists the keyboard shortcuts.
+`,
+  );

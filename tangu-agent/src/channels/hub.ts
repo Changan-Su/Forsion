@@ -8,7 +8,7 @@ import { ChannelService } from './service.js';
 import { WechatChannel } from './wechat.js';
 import { TelegramChannel } from './telegram.js';
 import { QQChannel } from './qq.js';
-import { channelSettings, saveChannelSettings } from './config.js';
+import { channelHasCredentials, channelSettings, saveChannelSettings } from './config.js';
 import type { ChannelKind, ChannelSettings, SendResult } from './types.js';
 import { CHANNEL_KINDS } from './types.js';
 
@@ -81,6 +81,7 @@ class ChannelHub {
     await svc.driver.start((msg) => svc.receive(msg));
   }
 
+  /** 通道**完全停止**(禁用 / 断开 / 引擎退出):停传输层 + 兑现并释放全部挂起(待批审批按拒绝、询问答「通道已停止」)。 */
   stopChannel(kind: ChannelKind): void {
     const svc = this.services.get(kind);
     if (!svc) return;
@@ -89,23 +90,39 @@ class ChannelHub {
   }
 
   /**
-   * 应用设置变更:保存 + 热生效(enabled 切换 → 启停;凭据变更且在跑 → 重启该通道;
+   * 只重启传输层(换凭据 / 启用):**不** releasePending。service 实例常驻、驱动是同一个对象,run 订阅、待答卡片、
+   * 回复出口都留着,答复与结果照样经重启后的驱动走。旧版这里走 stopChannel,退订全部 run:在等 ask_user / 计划审阅的
+   * run 永远等下去,用户随后的答复被当成新任务,在跑任务的结果也丢了。启动失败只记日志(卡片仍可在桌面端作答,审批照常超时)。
+   */
+  async restartChannel(kind: ChannelKind): Promise<void> {
+    this.ensureAvailable();
+    this.service(kind).driver.stop();
+    await this.startChannel(kind);
+  }
+
+  /**
+   * 应用设置变更:保存 + 热生效(enabled 关 / 凭据清空 → 完全停止;开启 / 凭据变更 → 重启传输层;
    * 审批档 → 同步到该通道全部绑定,已连接的会话下一条消息起就按新档)。
    */
   async applySettings(kind: ChannelKind, patch: Partial<ChannelSettings>): Promise<ChannelSettings> {
     const before = channelSettings(kind);
     const after = saveChannelSettings(kind, patch);
     if (!this.available()) return after;
-    // 通道 run 强制用绑定上的档:不同步的话设置页收紧了档,已连接的会话照旧按老档跑。
-    if (patch.approvalMode !== undefined) await this.service(kind).syncApprovalMode(after.approvalMode);
+    // 同步失败不挡后面的启停:通道 run 按「设置与绑定取更严」定档(service.channelRunApprovalMode),收紧已经生效;
+    // 放宽要等下次同步成功。失败必须留痕 —— 否则用户放宽了档却一直按旧档问,无从查起。
+    if (patch.approvalMode !== undefined) {
+      await this.service(kind).syncApprovalMode(after.approvalMode)
+        .catch((e: any) => console.warn(`[channels] ${kind} 审批档同步到绑定失败(通道 run 仍按设置与绑定中更严的一档跑;放宽要等下次同步成功):`, e?.message || e));
+    }
     const credsChanged = (patch.botToken !== undefined && patch.botToken !== before.botToken)
       || (patch.appId !== undefined && patch.appId !== before.appId)
       || (patch.appSecret !== undefined && patch.appSecret !== before.appSecret);
-    if (!after.enabled) {
+    // 凭据被清空 = 完全停止,不是重启:驱动 start 见不到凭据直接早退(传输层就此停着),不 releasePending 的话
+    // 挂着的询问永远等、审批要干等 10 分钟才超时拒绝、run 的结果无处可发。
+    if (!after.enabled || (credsChanged && !channelHasCredentials(kind, after))) {
       this.stopChannel(kind);
     } else if (!before.enabled || credsChanged) {
-      this.stopChannel(kind);
-      await this.startChannel(kind).catch((e: any) => console.warn(`[channels] ${kind} 启动失败:`, e?.message || e));
+      await this.restartChannel(kind).catch((e: any) => console.warn(`[channels] ${kind} 启动失败:`, e?.message || e));
     }
     return after;
   }

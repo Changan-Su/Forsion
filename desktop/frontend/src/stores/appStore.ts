@@ -518,10 +518,23 @@ function patchSessionModelLocal(sid: string, modelId: string): void {
 function sessionConfigBaseOf(s: Pick<AppState, 'configBySession' | 'sessions' | 'archivedSessions'>, sid: string): AgentConfig | undefined {
   return s.configBySession[sid] || [...s.sessions, ...s.archivedSessions].find((x) => x.id === sid)?.agent_config
 }
+/** 读引擎失败后隔多久再读一次(只重试这一次)。 */
+export const AGENT_CONFIG_READ_RETRY_MS = 300
+/** send 起跑前等本会话在途对账的上限:超时照本地值起跑 —— 引擎卡住不能连发送一起卡死。 */
+export const AGENT_CONFIG_SYNC_WAIT_MS = 3000
+const READ_FAILED = Symbol('read-failed')
+/** 读一次,失败(断连 / 引擎重启窗口)隔 AGENT_CONFIG_READ_RETRY_MS 再读一次;两次都失败 = READ_FAILED。 */
+async function readWithRetry<T>(read: () => Promise<T>): Promise<T | typeof READ_FAILED> {
+  try { return await read() } catch { /* 再给一次 */ }
+  await new Promise((r) => setTimeout(r, AGENT_CONFIG_READ_RETRY_MS))
+  try { return await read() } catch { return READ_FAILED }
+}
 /** session_config_changed 的对账:事件只当「引擎那边改过,去读一次」的信号,落到本地的是**引擎现值**而不是载荷。
  *  事件存库、订阅从 seq 0 回放(重启 / 第二个窗口 / pollSession 重新订阅在飞 run)—— 直接套载荷会把 agent 早先的值
  *  盖过用户之后在药丸上的改动,下一次 send 再按它起跑。只在载荷与本地不同的字段上读;读的过程中本地被用户改了 → 用户赢;
- *  只有引擎现值 == 载荷(agent 这一笔仍是最新)才提示。读失败(老引擎 / 断连)退回套载荷 = 原行为,别把同步整个丢了。 */
+ *  只有引擎现值 == 载荷(agent 这一笔仍是最新)才提示。
+ *  读失败(重试一次仍失败)→ 该字段**保留本地、不套载荷**:载荷可能正是回放出来的旧值,断连那一刻套上去就把用户后来的改动盖掉
+ *  (Codex 评审 09-25)。只经 queueAgentConfigSync 调用 —— 同一会话的对账必须串行。 */
 async function syncAgentSessionConfig(sid: string, want: { modelId?: string; thinkingLevel?: ThinkingLevel }): Promise<void> {
   const generation = authGeneration
   const s0 = useApp.getState()
@@ -534,8 +547,10 @@ async function syncAgentSessionConfig(sid: string, want: { modelId?: string; thi
   if (!checkModel && !checkLevel) return // 值未变(常见于回放、引擎现值就是 agent 这笔):不读、不提示
   const c = s0.cfg
   const [engineModel, engineLevel] = await Promise.all([
-    checkModel ? api.getSessionDetail(c, sid).then((r) => r?.model_id || '', () => want.modelId!) : Promise.resolve(''),
-    checkLevel ? api.getSessionConfig(c, sid).then((r) => THINKING_LEVELS.find((lv) => lv === r?.thinkingLevel), () => want.thinkingLevel) : Promise.resolve(undefined),
+    checkModel ? readWithRetry(() => api.getSessionDetail(c, sid)).then((r) => (r === READ_FAILED ? '' : r?.model_id || '')) : Promise.resolve(''),
+    checkLevel
+      ? readWithRetry(() => api.getSessionConfig(c, sid)).then((r) => (r === READ_FAILED ? undefined : THINKING_LEVELS.find((lv) => lv === r?.thinkingLevel)))
+      : Promise.resolve(undefined),
   ])
   if (generation !== authGeneration) return
   const s = useApp.getState()
@@ -560,6 +575,35 @@ async function syncAgentSessionConfig(sid: string, want: { modelId?: string; thi
     }
   }
 }
+/** 按会话串行的对账链。并行各读各的会互踩:同一轮 agent 连改两次(A→B→C),两笔都记下「之前 = A」,
+ *  先落地的 B 让后一笔「本地仍是 A」的守卫失效,读到的最新值 C 被丢掉,药丸停在 B、下一轮按 B 起跑。
+ *  串起来后一笔的「之前」取在前一笔落地之后。链排空即删(按身份比),别让之后的 send 白等一个早已落定的 promise。 */
+const agentConfigSyncs = new Map<string, Promise<void>>()
+function queueAgentConfigSync(sid: string, want: { modelId?: string; thinkingLevel?: ThinkingLevel }): void {
+  const next = (agentConfigSyncs.get(sid) || Promise.resolve()).then(() => syncAgentSessionConfig(sid, want)).catch(() => {})
+  agentConfigSyncs.set(sid, next)
+  void next.finally(() => { if (agentConfigSyncs.get(sid) === next) agentConfigSyncs.delete(sid) })
+}
+/** send 起跑前等本会话在途的对账(上限 AGENT_CONFIG_SYNC_WAIT_MS,超时照本地值走):不等 = 下一轮按对账前的旧模型 /
+ *  思考档起跑,把 agent 刚在引擎里写的值盖回去。
+ *  超时就把这条链摘掉:会话读取的 fetch 没有超时,引擎重启窗口里的死连接能挂好几分钟 —— 不摘,这期间每次 send 都白等满上限。
+ *  挂着的那笔日后落地也无害:syncAgentSessionConfig 只在「本地仍是读之前的值」时才套。 */
+async function waitAgentConfigSync(sid: string): Promise<void> {
+  const pending = agentConfigSyncs.get(sid)
+  if (!pending) return
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timedOut = await Promise.race([
+    pending.then(() => false),
+    new Promise<boolean>((r) => { timer = setTimeout(() => r(true), AGENT_CONFIG_SYNC_WAIT_MS) }),
+  ])
+  clearTimeout(timer)
+  if (timedOut && agentConfigSyncs.get(sid) === pending) agentConfigSyncs.delete(sid)
+}
+/** 正停在 waitAgentConfigSync 里的 send(按会话)。这段等待最长 AGENT_CONFIG_SYNC_WAIT_MS、输入框毫无反馈、草稿要等 send 落定才清 ——
+ *  用户以为没发出去再按一次回车,两次一起出等待、双双走到 startRun,引擎把第二条排成新 run = 同一句发两遍(Codex 评审 09-25)。
+ *  等待期间同会话再来的 send 直接不受理(返回 false:输入框留着草稿,第一次落定时照常清掉)。
+ *  只守这段有上限的等待,不守到 startRun 落定:startRun 没有超时,守过去的话一次挂死的请求会把会话锁住、此后每次发送都静默吞掉。 */
+const sendsAwaitingSync = new Set<string>()
 let lastAuthExpiredAt = 0 // handleAuthExpired 去抖:轮询/SSE/models 可能同时多次 401
 /** boot 期 managed 重连:引擎已 ready 但 connState 没到 ok(testConnection 撞上引擎刚 listen / 偶发超时)→ 15s 一次
  *  **只 connect 不 restart**,上限 8 次;每次 ready 广播重新计数。 */
@@ -1270,11 +1314,11 @@ export const useApp = create<AppState>((set, get) => ({
         // agent 经 update_session_settings 改了会话模型 / 思考档:引擎已落库,这里只同步本地缓存。
         // 不同步 = 下一次 run 仍按 store 里的旧值起跑(sendMessage 读 sessions[].model_id / configBySession),把引擎刚写的值盖回去。
         // 只读不写(引擎已写,再写一次会和用户并发改互踩);不动全局默认 cfg.modelId —— agent 改一个会话不该顺手改掉用户新会话的默认模型。
-        // 载荷可能是回放的旧值 → 不直接套,交给 syncAgentSessionConfig 读引擎现值再对账。
+        // 载荷可能是回放的旧值 → 不直接套,读引擎现值再对账;按会话串行(连改两次不互踩),send 起跑前会等它落地。
         const sid = typeof pl.sessionId === 'string' && pl.sessionId ? pl.sessionId : sessionId
         const modelId = typeof pl.modelId === 'string' ? pl.modelId.trim() : ''
         const level = THINKING_LEVELS.find((lv) => lv === pl.thinkingLevel)
-        void syncAgentSessionConfig(sid, { modelId: modelId || undefined, thinkingLevel: level }).catch(() => {})
+        queueAgentConfigSync(sid, { modelId: modelId || undefined, thinkingLevel: level })
         break
       }
       case 'team_output': {
@@ -2553,6 +2597,16 @@ export const useApp = create<AppState>((set, get) => ({
       if (!s.agent_config) void api.putSessionConfig(get().cfg, s.id, init).catch(() => {})
     }
     const sessionId = sid
+    // agent 刚改了本会话模型 / 思考档、对账还在飞 → 先等它落地再读 store(下面的配置与 sessionModelId 都在这之后读)
+    // 等待期间同会话的第二次 send 不受理(见 sendsAwaitingSync);检查与登记同步完成,中间不许有 await。
+    // 没有在途对账就不登记、不 await:与引入等待之前逐字同路,连发的程序化调用照旧各自起跑。
+    if (!wasNewChat) {
+      if (sendsAwaitingSync.has(sessionId)) return false
+      if (agentConfigSyncs.has(sessionId)) {
+        sendsAwaitingSync.add(sessionId)
+        try { await waitAgentConfigSync(sessionId) } finally { sendsAwaitingSync.delete(sessionId) }
+      }
+    }
     act(wasNewChat ? 'chat.new' : 'chat.send', { s: sessionId.slice(0, 6), text })
     // Agent Desk:新一条用户消息解除「用户关过面板」的静音。
     const storedAgentConfig = implicitInit || get().configBySession[sessionId] || {}

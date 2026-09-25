@@ -30,7 +30,7 @@ import { deps } from '../seams/runtime.js';
 import { createRun } from '../services/runStore.js';
 import { abortRun, enqueueRun, sessionHasActiveRun } from '../services/agentLoop.js';
 import { subscribe } from '../services/eventBus.js';
-import { resolveApproval } from '../services/approvals.js';
+import { normalizeApprovalMode, resolveApproval, type ApprovalMode as EngineApprovalMode } from '../services/approvals.js';
 import { resolveInquiry } from '../services/inquiries.js';
 import { patchSessionAgentConfig, readSessionSettings, requestRunThinking, setSessionModelId } from '../services/sessionSettings.js';
 import { chatModels, listModelCatalog } from '../services/modelCatalog.js';
@@ -40,7 +40,7 @@ import { resolveVoiceMessage, synthesizeVoiceWav, VOICE_MESSAGE_PLUGIN_ID } from
 import { setPluginEnabled, setScopeSettings } from '../plugins/settingsStore.js';
 import { channelSettings, channelWorkspaceDir, saveChannelSettings } from './config.js';
 import { ChannelCommandCenter, normalizeChannelText, parseChannelCommand, stopReply, type ChannelCommandRuntime, type ChannelUsage } from './commands.js';
-import { CHANNEL_NAME, channelMsg, clipReply, resolveChannelLocale, type ChannelLocale } from './messages.js';
+import { CHANNEL_NAME, CHANNEL_REPLY_MAX, channelMsg, clipReply, resolveChannelLocale, type ChannelLocale } from './messages.js';
 import type { ApprovalMode, ChannelDriver, ChannelInbound, ChannelKind, SendResult } from './types.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -52,16 +52,45 @@ const APPROVAL_TIMEOUT_MIN = Math.round(CHANNEL_APPROVAL_TIMEOUT_MS / 60_000);
 // 给模型看的拒绝原因(英文):与「用户拒绝」区分开,模型才不会把沉默当成用户的意见。
 export const APPROVAL_TIMEOUT_REASON = `No one answered this approval request in the chat channel within ${APPROVAL_TIMEOUT_MIN} minutes, so the action was not run.`;
 export const APPROVAL_SUPERSEDED_REASON = 'The user sent a new message in the chat channel instead of answering this approval request, so the action was not run.';
-export const APPROVAL_CHANNEL_STOPPED_REASON = 'The chat channel was stopped or restarted before anyone answered this approval request, so the action was not run.';
+// 只有通道**完全停止**(禁用 / 断开 / 凭据清空 / 引擎退出)或该账号被断开才走这条;换凭据只重启传输层,待批的卡片留着(见 hub.restartChannel)。
+export const APPROVAL_CHANNEL_STOPPED_REASON = 'The chat channel was stopped or disconnected before anyone answered this approval request, so the action was not run.';
+/**
+ * 通道完全停止 / 账号断开时替用户兑现还挂着的询问(ask_user / 计划审阅):不兑现的话 run 永远卡在等答复上(询问不超时)。给模型看,英文。
+ * 开头自带「[No answer]」:ask_user 会在前面拼上「用户回答:」,不自标的话模型读到的是「用户回答了:通道停了」。
+ */
+export const INQUIRY_CHANNEL_STOPPED_ANSWER = '[No answer] The chat channel was stopped or disconnected before the user answered this question. This is a system note, not the user\'s reply: do not assume an answer; continue without it or wait for the user to reach out again.';
+/** 多条审批卡有条没发出去(驱动报失败):用户没看全,不在通道里批。给模型看,英文。 */
+export const APPROVAL_DELIVERY_FAILED_REASON = 'Part of this approval request could not be delivered to the chat channel, so the user could not review it in full there and it was not run. If it is still needed, ask the user to continue in Tangu Desktop, where they can review and approve the full action.';
+/** 审批内容长到通道里分条也显示不全:不在通道里批(批准后执行的是完整参数,卡上看不到的尾巴不能替用户放行)。 */
+export function approvalTooLongReason(chars: number): string {
+  return `This action was too long (${chars} characters) to show in full in the chat channel, so the user could not review it there and it was not run. If it is still needed, split it into shorter steps, or ask the user to continue in Tangu Desktop, where they can review and approve the full action.`;
+}
 
 const STOP_RE = /^(stop|停止|取消|中止)$/i;
 const APPROVE_RE = /^(批准|同意|确认|可以|好的?|是的?|yes|y|ok|approve|👍)$/i;
 const REJECT_RE = /^(拒绝|不同意|不行|否|不|no|n|reject)$/i;
-/** 审批 preview / 计划正文在通道里的最大长度(卡片其余文字 + 这段 < 单条上限)。 */
-const PREVIEW_MAX = 1200;
+/**
+ * 审批卡里的 preview **不截断**(批准后执行的是完整参数,旧版截到 1200 字,长命令末尾的删除 / 外传在卡上根本看不到):
+ * 超过单条能放的就分条发,每条带 (i/n);超过条数上限就不在通道里批(按拒绝兑现,让用户去桌面端看全文)。
+ * 每条 preview 片段 ≤ PREVIEW_PART_MAX,加上抬头 / 回复提示 / 排队提示 / 序号仍 < CHANNEL_REPLY_MAX。
+ */
+export const PREVIEW_PART_MAX = 1400;
+export const APPROVAL_CARD_MAX_PARTS = 5;
+/** 超时通知 / 过长拒绝里只引开头,提醒是哪个操作(不需要全文)。 */
+const PREVIEW_HEAD_MAX = 300;
 const PLAN_MAX = 1100;
-/** 审批档从严到宽的名次(启动对齐只收紧时比大小用)。 */
+/**
+ * 询问卡里问题正文的上限(超出截断并注明去桌面端看全文,同 PLAN_MAX 的口径)。选项与回复提示**从不截**:
+ * 回复序号映射的就是它们(旧版整卡 clipReply 到 1800 字,长问题把选项和提示截没了,用户回「2」却映射到没见过的选项)。
+ * 整卡放不下一条就按 (i/n) 分条发全。
+ */
+export const INQUIRY_QUESTION_MAX = PREVIEW_PART_MAX * 3;
+/** 审批档从严到宽的名次(启动对齐只收紧、建 run 取更严时比大小用)。 */
 const APPROVAL_RANK: Record<ApprovalMode, number> = { readonly: 0, 'auto-edit': 1, 'full-auto': 2 };
+/** 通道三档阶梯:custom / 不认识的档一律按 readonly 算(通道设置只提供三档;custom 只可能是遗留 / 手改的绑定值)。 */
+function approvalLadder(m: EngineApprovalMode | undefined): ApprovalMode {
+  return m === 'auto-edit' || m === 'full-auto' ? m : 'readonly';
+}
 
 interface BindingRow {
   id: string;
@@ -70,7 +99,8 @@ interface BindingRow {
   account_id: string;
   peer_id: string | null;
   session_id: string;
-  remote_approval_mode: ApprovalMode;
+  /** 库里是 VARCHAR,没有枚举约束:可能是旧版 / 手改的任意值,读的时候一律过 effectiveApprovalMode。 */
+  remote_approval_mode: string | null;
 }
 
 interface PeerAddr { key: string; accountId: string; peerId: string }
@@ -158,10 +188,46 @@ export function parseJson(v: any): any {
   try { return JSON.parse(v); } catch { return null; }
 }
 
-/** 通道 run 实际用的审批档:绑定上的值(随通道设置同步,见 syncApprovalMode)。 */
-export function effectiveApprovalMode(binding: Pick<BindingRow, 'remote_approval_mode'>): ApprovalMode {
-  const m = binding.remote_approval_mode;
-  return m === 'readonly' || m === 'auto-edit' || m === 'full-auto' ? m : 'auto-edit';
+/**
+ * 绑定上记着的审批档(记录值,随通道设置同步,见 syncApprovalMode)。与引擎同一个归一(H5 fail-closed):
+ * 四个 id 原样(含遗留的 custom);**其它任何非空值 → readonly**;空 / 缺席 = 历史缺省 auto-edit(同建表 DEFAULT)。
+ * 旧版把三档以外的一律落 auto-edit —— 库里一个拼错的 / 旧客户端写的值就把写文件放成免批。
+ */
+export function effectiveApprovalMode(binding: Pick<BindingRow, 'remote_approval_mode'>): EngineApprovalMode {
+  return normalizeApprovalMode(binding.remote_approval_mode, 'channel binding') ?? 'auto-edit';
+}
+
+/**
+ * 通道 run **实际**用的审批档:通道设置与绑定里**更严**的那档(readonly < auto-edit < full-auto;custom / 不认识的按 readonly)。
+ * 设置页收紧档位时先存设置、再异步同步绑定 —— 同步失败或还没轮到时,只看绑定就会按旧的宽档接单。取更严的一档,
+ * 收紧即刻生效;放宽要等同步成功(绑定仍是记录值,不在这里改写)。通道 run 不现读会话存值(approvalModeSessionId),
+ * 这里算出的就是整个 run 的档。
+ */
+export function channelRunApprovalMode(settingsMode: unknown, binding: Pick<BindingRow, 'remote_approval_mode'>): ApprovalMode {
+  const s = approvalLadder(normalizeApprovalMode(settingsMode, 'channel settings') ?? 'auto-edit');
+  const b = approvalLadder(effectiveApprovalMode(binding));
+  return APPROVAL_RANK[s] <= APPROVAL_RANK[b] ? s : b;
+}
+
+/** 按行切 preview(尽量在换行处断,不拆代理对),每段 ≤ size。只切不删:各段拼回去就是原文。 */
+export function splitPreview(text: string, size = PREVIEW_PART_MAX): string[] {
+  const parts: string[] = [];
+  let rest = text;
+  while (rest.length > size) {
+    let cut = rest.lastIndexOf('\n', size);
+    if (cut < size / 2) cut = size; // 附近没有换行:硬切
+    else cut += 1; // 换行留在前一段末尾
+    const c = rest.charCodeAt(cut - 1);
+    if (c >= 0xd800 && c <= 0xdbff) cut -= 1; // 不把代理对劈成两半
+    parts.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+  parts.push(rest);
+  return parts;
+}
+
+function previewHead(text: string): string {
+  return text.length > PREVIEW_HEAD_MAX ? `${text.slice(0, PREVIEW_HEAD_MAX)}…` : text;
 }
 
 /** 询问的答复:纯序号且在范围内 → 对应选项原文;否则原样当自由文本。 */
@@ -217,29 +283,66 @@ export class ChannelService {
   }
   private peerKey(accountId: string, peerId: string): string { return `${accountId}:${peerId}`; }
 
-  /** 结束所有挂起等待 + 定时器 + 订阅(通道停止 / 禁用 / 换凭据重启 / 引擎退出时)。 */
+  /**
+   * 通道**完全停止**(禁用 / 断开 / 引擎退出):结束所有挂起等待 + 定时器 + 订阅,并替用户兑现还挂着的卡片。
+   * 换凭据 / 启用只重启传输层,不调这里(hub.restartChannel):service 实例常驻,run 订阅与卡片留着,答复与结果照样经新驱动走
+   * —— 旧版重启也走这里,退订了全部 run,在等 ask_user 的 run 永远等下去、用户重启后的答复被当成新任务、在跑任务的结果也丢了。
+   */
   releasePending(): void {
     this.epoch += 1;
-    // 待批的审批先按拒绝兑现(原因写清):只清计时器不兑现的话,通道重启后它们再无人应答、也不再超时,run 永远卡在审批上。
-    // 先摘表再兑现:resolveApproval 会广播 approval_result,订阅者见表里已没有它,不会去「显示下一张」。
-    // (广播的落库在 eventBus 的 per-run 写链里,失败只记日志;引擎退出时这里的写入不会冒成未处理的 rejection。)
-    // 询问不动:通道里的询问本就不超时,桌面端仍可作答。
     const all = [...this.prompts.values()].flat();
     this.prompts.clear();
-    for (const p of all) {
-      if (p.kind !== 'approval') continue;
-      if (p.timer) clearTimeout(p.timer);
-      resolveApproval(p.approvalId, { action: 'reject', rejectReason: APPROVAL_CHANNEL_STOPPED_REASON });
-    }
     for (const t of this.typingTimers.values()) clearInterval(t);
     this.typingTimers.clear();
     for (const settle of [...this.pendingSettlers]) settle();
     this.pendingSettlers.clear();
+    // 先退订再兑现(settleDropped):兑现会广播 approval_result / inquiry_result,不能再让订阅者去「显示下一张」/ 重挂出口。
     for (const st of this.runs.values()) st.off();
     this.runs.clear();
     this.runsByPeer.clear();
     this.expiredApprovalAt.clear();
     this.inboundChains.clear();
+    this.settleDropped(all);
+  }
+
+  /**
+   * 断开**某一个账号**(微信多账号里只移除一个;其余账号照常在跑):只释放这个账号名下的卡片与 run,语义同 releasePending。
+   * 旧版单账号断开只作废绑定 + 移除 iLink 账号,它名下在等 ask_user 的 run 永远等、结果推给一个已不存在的账号。
+   * epoch 是全通道的,不动:排在分派链里的这个账号的旧入站,轮到时绑定已作废,只会回「未绑定」。
+   */
+  releasePendingFor(accountId: string): void {
+    const dropped: Prompt[] = [];
+    for (const [key, q] of [...this.prompts]) {
+      if (!q.some((p) => p.accountId === accountId)) continue;
+      dropped.push(...q);
+      this.prompts.delete(key);
+    }
+    for (const st of [...this.runs.values()]) {
+      if (st.addr.accountId !== accountId) continue;
+      st.off(); // 先退订再兑现(同 releasePending)
+      st.sink?.close(); // 摘出口:停 typing、清计时器、摘 pendingSettlers;账号正在移除,不再往它说话
+      this.runs.delete(st.runId);
+      this.runsByPeer.delete(st.addr.key);
+    }
+    for (const key of [...this.expiredApprovalAt.keys()]) if (key.startsWith(`${accountId}:`)) this.expiredApprovalAt.delete(key);
+    this.settleDropped(dropped);
+  }
+
+  /**
+   * 替用户兑现被丢下的卡片:审批按拒绝、询问答「通道已停止 / 断开,没有答复」(原因都写清,给模型看的英文)。只清计时器不兑现的话,
+   * 它们再无人应答(询问本就不超时),run 永远卡着。已在桌面端答掉的,resolve* 回 false,无副作用。
+   * 调用前必须已退订相关 run:兑现会广播 approval_result / inquiry_result,不能再让订阅者去「显示下一张」/ 重挂出口。
+   * (广播的落库在 eventBus 的 per-run 写链里,失败只记日志;引擎退出时这里的写入不会冒成未处理的 rejection。)
+   */
+  private settleDropped(prompts: Prompt[]): void {
+    for (const p of prompts) {
+      if (p.kind === 'approval') {
+        if (p.timer) clearTimeout(p.timer);
+        resolveApproval(p.approvalId, { action: 'reject', rejectReason: APPROVAL_CHANNEL_STOPPED_REASON });
+      } else {
+        resolveInquiry(p.inquiryId, INQUIRY_CHANNEL_STOPPED_ANSWER);
+      }
+    }
   }
 
   // ── 绑定/会话 ──
@@ -290,8 +393,10 @@ export class ChannelService {
       return;
     }
     const rows = await query<any[]>(`SELECT id, remote_approval_mode FROM tangu_wechat_bindings WHERE channel = ?`, [this.kind]);
-    const looser = rows.filter((r) => APPROVAL_RANK[effectiveApprovalMode(r)] > APPROVAL_RANK[mode]);
-    const stricter = rows.filter((r) => APPROVAL_RANK[effectiveApprovalMode(r)] < APPROVAL_RANK[mode]).length;
+    // custom / 不认识的绑定值按 readonly 排名(建 run 时也按 readonly 用,见 channelRunApprovalMode):只会被算作「更严」,不会被改宽。
+    const rank = (r: any): number => APPROVAL_RANK[approvalLadder(effectiveApprovalMode(r))];
+    const looser = rows.filter((r) => rank(r) > APPROVAL_RANK[mode]);
+    const stricter = rows.filter((r) => rank(r) < APPROVAL_RANK[mode]).length;
     for (const r of looser) {
       await query(`UPDATE tangu_wechat_bindings SET remote_approval_mode = ? WHERE id = ?`, [mode, r.id]);
     }
@@ -302,10 +407,15 @@ export class ChannelService {
     if (stricter) console.warn(`[${this.kind}-channel] 启动对齐:${stricter} 个绑定比设置档 ${mode} 更严,保持不动(在设置页改一次审批档即全部对齐)`);
   }
 
+  /**
+   * 断开:作废绑定 + 账号行。带 accountId(微信单账号断开;两个调用方 routes/channels 与 wechatRemote 都先经这里再移除 iLink 账号)
+   * 时顺带释放该账号名下挂着的卡片与 run(releasePendingFor)—— 不带时由调用方走 hub.stopChannel 完全停止。
+   */
   async disconnect(userId: string, accountId?: string): Promise<{ ok: boolean }> {
     if (accountId) {
       await query(`UPDATE tangu_wechat_bindings SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND channel = ? AND account_id = ?`, [userId, this.kind, accountId]);
       await query(`UPDATE tangu_wechat_accounts SET status = 'inactive', updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND channel = ? AND id = ?`, [userId, this.kind, accountId]);
+      this.releasePendingFor(accountId);
     } else {
       await query(`UPDATE tangu_wechat_bindings SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND channel = ?`, [userId, this.kind]);
       await query(`UPDATE tangu_wechat_accounts SET status = 'inactive', updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND channel = ?`, [userId, this.kind]);
@@ -461,9 +571,20 @@ export class ChannelService {
 
   /** 主动推一条文本给 peer(失败只记日志)。 */
   private push(accountId: string, peerId: string, text: string): void {
-    void this.driver.send(accountId, peerId, text)
-      .then((r) => { if (!r?.ok) console.warn(`[${this.kind}-channel] 推送失败:`, r?.error); })
-      .catch((e: any) => console.warn(`[${this.kind}-channel] 推送失败:`, e?.message || e));
+    void this.send(accountId, peerId, text);
+  }
+
+  /** 同 push,但回报是否送达(驱动报 ok:false 或抛错 = 没送达;已记日志)。发送在调用时同步发起,多条按调用顺序。 */
+  private send(accountId: string, peerId: string, text: string): Promise<boolean> {
+    return this.driver.send(accountId, peerId, text)
+      .then((r) => {
+        if (!r?.ok) console.warn(`[${this.kind}-channel] 推送失败:`, r?.error);
+        return !!r?.ok;
+      })
+      .catch((e: any) => {
+        console.warn(`[${this.kind}-channel] 推送失败:`, e?.message || e);
+        return false;
+      });
   }
 
   private async dispatchInbound(msg: ChannelInbound): Promise<Dispatched> {
@@ -560,7 +681,8 @@ export class ChannelService {
     const agentConfig: any = {
       ...currentCfg,
       execMode: 'host',
-      approvalMode: effectiveApprovalMode(binding),
+      // 设置与绑定取更严的一档:设置页刚收紧、绑定同步失败 / 还没同步到,也不按旧的宽档接单。
+      approvalMode: channelRunApprovalMode(st.approvalMode, binding),
       // host 执行需要真实 cwd:优先会话已存 cwd,其次 project_path,最后兜底通道工作区。
       cwd: currentCfg.cwd || session.project_path || this.workspaceDir(),
       // 会话已选 agent 则用之,否则通道默认 agent,再兜底用户全局默认 agent。
@@ -647,8 +769,12 @@ export class ChannelService {
       case 'approval_request': {
         const approvalId = String(p.approvalId || '');
         if (!approvalId) return;
-        const raw = String(p.preview || p.name || channelMsg(this.locale(), 'approvalPreviewFallback'));
-        const preview = raw.length > PREVIEW_MAX ? `${raw.slice(0, PREVIEW_MAX)}…` : raw;
+        const preview = String(p.preview || p.name || channelMsg(this.locale(), 'approvalPreviewFallback'));
+        // 分条也放不下:不在通道里批。requestApproval 先登记 resolver 再广播,这里同步兑现是安全的。
+        if (splitPreview(preview).length > APPROVAL_CARD_MAX_PARTS) {
+          this.refuseTooLong(st, approvalId, preview);
+          return;
+        }
         this.enqueuePrompt({ kind: 'approval', ...st.addr, runId: st.runId, approvalId, preview });
         return;
       }
@@ -742,23 +868,92 @@ export class ChannelService {
     this.showPrompt(p);
   }
 
+  /**
+   * 审批内容分条也放不下(> APPROVAL_CARD_MAX_PARTS 条):按拒绝兑现(给模型的原因写清、建议拆小),告诉用户去桌面端看全文。
+   * 不登记卡片;没有别的卡待答时记下作废时刻 —— 用户看完这句回「批准」要答「已过期」,不能落成一条内容是「批准」的新任务。
+   */
+  private refuseTooLong(st: RunState, approvalId: string, preview: string): void {
+    const ok = resolveApproval(approvalId, { action: 'reject', rejectReason: approvalTooLongReason(preview.length) });
+    if (!ok) return; // 已在别处答掉
+    const L = this.locale();
+    const key = st.addr.key;
+    const pending = this.prompts.get(key)?.[0];
+    let text = channelMsg(L, 'approvalTooLong', { chars: preview.length, head: previewHead(preview) });
+    // 更早的卡还在等答复(并行工具调用:A 正显示、B 过长被拒):这句拒绝成了聊天里最后一条,用户回个「好的」就批了上面的 A。
+    // 在**同一条**里点明「接下来的回复作用于上面那个」—— 分开推会跟经出口送出的拒绝抢顺序(见 showPrompt 多条那段)。
+    if (pending) text += `\n\n${channelMsg(L, 'promptStillPending', { head: previewHead(pending.kind === 'approval' ? pending.preview : pending.text) })}`;
+    this.output(st, clipReply(text));
+    if (!pending) this.expiredApprovalAt.set(key, Date.now());
+  }
+
+  /**
+   * 审批卡的各条消息:preview 全文照发(见 PREVIEW_PART_MAX 的注释),一条放得下就是原样一张卡;放不下则分条,
+   * 首条带抬头、末条带回复提示与排队提示,每条前缀 (i/n)。抬头 / 提示取自同一条 approvalCard 文案,两种形态措辞一致。
+   */
+  private approvalCardParts(L: ChannelLocale, preview: string, queued: string): string[] {
+    const chunks = splitPreview(preview);
+    if (chunks.length === 1) return [clipReply(`${channelMsg(L, 'approvalCard', { preview, minutes: APPROVAL_TIMEOUT_MIN })}${queued}`)];
+    const MARK = '\u0000';
+    const [head, foot] = channelMsg(L, 'approvalCard', { preview: MARK, minutes: APPROVAL_TIMEOUT_MIN }).split(MARK);
+    const n = chunks.length;
+    // 末条点明共几条:(i/n) 之外再提醒一句,丢了中间一条(微信限流丢弃不报错)的用户别照样回「批准」。
+    const check = `\n${channelMsg(L, 'approvalPartsCheck', { n })}`;
+    return chunks.map((c, i) => {
+      const tag = `(${i + 1}/${n})`;
+      if (i === 0) return `${tag} ${head}${c}`;
+      return i === n - 1 ? `${tag}\n${c}${foot}${check}${queued}` : `${tag}\n${c}`;
+    });
+  }
+
+  /** 询问卡的各条消息:一条放得下原样发;放不下按 (i/n) 分条发全(选项与回复提示在末尾,绝不截掉),排队提示跟在末条。 */
+  private inquiryCardParts(text: string, queued: string): string[] {
+    if (text.length + queued.length <= CHANNEL_REPLY_MAX) return [`${text}${queued}`];
+    const chunks = splitPreview(text);
+    const n = chunks.length;
+    return chunks.map((c, i) => {
+      const tag = `(${i + 1}/${n})`;
+      if (i === 0) return `${tag} ${c}`;
+      return i === n - 1 ? `${tag}\n${c}${queued}` : `${tag}\n${c}`;
+    });
+  }
+
   /** 显示一张卡(它此刻是队首):审批卡起 10 分钟计时;经它 run 的出口回(出口随即摘下 —— run 在等用户),没有出口就主动推送。 */
   private showPrompt(p: Prompt): void {
     const L = this.locale();
-    let text = p.kind === 'approval' ? channelMsg(L, 'approvalCard', { preview: p.preview, minutes: APPROVAL_TIMEOUT_MIN }) : p.text;
     const more = (this.prompts.get(p.key)?.length ?? 1) - 1;
-    if (more > 0) text = `${text}\n\n${channelMsg(L, 'promptsQueued', { n: more })}`;
+    const queued = more > 0 ? `\n\n${channelMsg(L, 'promptsQueued', { n: more })}` : '';
+    const parts = p.kind === 'approval' ? this.approvalCardParts(L, p.preview, queued) : this.inquiryCardParts(p.text, queued);
     if (p.kind === 'approval') {
       p.timer = setTimeout(() => this.onApprovalTimeout(p), CHANNEL_APPROVAL_TIMEOUT_MS);
       p.timer.unref?.();
     }
     const sink = this.runs.get(p.runId)?.sink;
-    if (sink) {
-      sink.deliver(clipReply(text));
+    if (parts.length === 1 && sink) {
+      sink.deliver(parts[0]);
       sink.close();
-    } else {
-      this.push(p.accountId, p.peerId, clipReply(text));
+      return;
     }
+    // 多条:不能让首条走出口 —— 出口兑现的是入站那条的等待,它在后面的微任务里才发,同步推的第 2 条会抢到前面。
+    // 摘下出口(以 '' 兑现:不说话),全部按序主动推送;三个驱动的发送都按调用顺序串行,顺序不乱。
+    sink?.close();
+    const sends = parts.map((t) => this.send(p.accountId, p.peerId, t));
+    // 审批卡有一条没送达:用户没看全,不能让一句「批准」放行看不到的那段 —— 按拒绝兑现(见 onApprovalUndelivered)。
+    if (p.kind === 'approval') void Promise.all(sends).then((oks) => { if (oks.includes(false)) this.onApprovalUndelivered(p); });
+  }
+
+  /**
+   * 审批卡(经主动推送发出的)有条没送达:它若仍在显示、没人答,按「没发全」拒绝(给模型的原因写清),通知用户,换下一张卡。
+   * 已被答掉 / 作废的(不在队首)不管 —— 送达失败的回报可能晚于用户的答复(微信限流要退避重试好几秒)。
+   * 微信 iLink 限流重试后丢弃时不报失败(ilinkRuntime),那一路只剩 (i/n) 与末条的「没收全就拒绝」提醒。
+   */
+  private onApprovalUndelivered(p: ApprovalPrompt): void {
+    if (this.prompts.get(p.key)?.[0] !== p) return;
+    this.takeHead(p.key);
+    const ok = resolveApproval(p.approvalId, { action: 'reject', rejectReason: APPROVAL_DELIVERY_FAILED_REASON });
+    if (ok) this.push(p.accountId, p.peerId, channelMsg(this.locale(), 'approvalDeliveryFailed', { head: previewHead(p.preview) }));
+    this.afterHeadGone(p.key, p, true);
+    const st = this.runs.get(p.runId);
+    if (ok && st) this.resumeIfIdle(st);
   }
 
   /** 摘下队首(清它的计时器)。调用方随后必须调 afterHeadGone。 */
@@ -799,7 +994,7 @@ export class ChannelService {
     p.timer = undefined;
     // 先摘再兑现:resolveApproval 会广播 approval_result,订阅者见卡已摘掉,不当「别处代答」。
     const ok = resolveApproval(p.approvalId, { action: 'reject', rejectReason: APPROVAL_TIMEOUT_REASON });
-    if (ok) this.push(p.accountId, p.peerId, channelMsg(this.locale(), 'approvalTimedOut', { minutes: APPROVAL_TIMEOUT_MIN, preview: p.preview }));
+    if (ok) this.push(p.accountId, p.peerId, channelMsg(this.locale(), 'approvalTimedOut', { minutes: APPROVAL_TIMEOUT_MIN, preview: previewHead(p.preview) }));
     this.afterHeadGone(p.key, p, true);
     const st = this.runs.get(p.runId);
     if (ok && st) this.resumeIfIdle(st);
@@ -828,7 +1023,7 @@ export class ChannelService {
     return {
       kind: this.kind,
       locale,
-      approvalMode: effectiveApprovalMode(binding),
+      approvalMode: channelRunApprovalMode(this.settings().approvalMode, binding), // 与建 run 同一口径:/approval /status 报的就是会生效的档
       channelDefaults: () => { const st = this.settings(); return { agentSlug: st.agentSlug, modelId: st.modelId }; },
       defaultAgentSlug: () => readAgentsMeta().defaultSlug,
       workspaceDir: () => this.workspaceDir(),
@@ -976,7 +1171,8 @@ export class ChannelService {
         .filter((x) => x !== null).join('\n');
       return { text, answers, isPlan: true };
     }
-    const question = String(payload.question || '').trim();
+    const q = String(payload.question || '').trim();
+    const question = q.length > INQUIRY_QUESTION_MAX ? `${splitPreview(q, INQUIRY_QUESTION_MAX)[0]}\n${channelMsg(L, 'inquiryTruncated')}` : q;
     const lines = [`❓ ${question}`];
     if (options.length) lines.push('', ...options.map((o, i) => `${i + 1}. ${o}`));
     lines.push('', channelMsg(L, options.length ? 'inquiryHintOptions' : 'inquiryHintFree'));

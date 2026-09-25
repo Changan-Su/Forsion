@@ -22,7 +22,7 @@ vi.mock('./forsionHome', () => ({
 }))
 vi.mock('./amadeus/settings', () => ({ amadeusConfigPath: () => join(H.dir, 'amadeus-config.json') }))
 
-const { BackendManager } = await import('./backendManager')
+const { BackendManager, injectEngineLang } = await import('./backendManager')
 
 const writeAuth = (token: string): void =>
   writeFileSync(join(H.dir, 'auth.json'), JSON.stringify({ token }), 'utf8')
@@ -54,7 +54,30 @@ describe('BackendManager channel client attribution', () => {
     const source = readFileSync(new URL('./backendManager.ts', import.meta.url), 'utf8')
     // 通道 run 不经 renderer startRun(),只有这个 spawn 契约能把真实 App 版本交给引擎。
     expect(source).toContain('env.TANGU_HOST_CLIENT = `desktop/${app.getVersion()}`')
-    expect(source).toContain('if (!env.TANGU_LANG) env.TANGU_LANG =') // 通道回复 / TUI 语言:Finder 启动无 LANG,按系统界面语言注入
+    expect(source).toContain("injectEngineLang(env, app.getLocale?.() || '')") // 通道回复 / TUI 语言:spawn 时走下面钉住的判定
+  })
+})
+
+describe('injectEngineLang(引擎界面语言注入)', () => {
+  const run = (env: NodeJS.ProcessEnv, locale = 'zh-CN'): NodeJS.ProcessEnv => {
+    const e = { ...env }
+    injectEngineLang(e, locale)
+    return e
+  }
+  it('Finder 启动(四个语言变量都没有)→ 按系统界面语言注入', () => {
+    expect(run({}).TANGU_LANG).toBe('zh')
+    expect(run({}, 'en-US').TANGU_LANG).toBe('en')
+  })
+  it('⚠️用户 shell 里设了 LANG / LC_ALL / LC_MESSAGES → 不注入(TANGU_LANG 排在它们前面,注入就把用户的选择盖掉)', () => {
+    expect(run({ LANG: 'en_US.UTF-8' }).TANGU_LANG).toBeUndefined() // 系统界面中文、shell 英文:引擎该回英文
+    expect(run({ LC_ALL: 'zh_CN.UTF-8' }, 'en-US').TANGU_LANG).toBeUndefined()
+    expect(run({ LC_MESSAGES: 'en_GB' }).TANGU_LANG).toBeUndefined()
+  })
+  it('显式 TANGU_LANG 原样保留', () => {
+    expect(run({ TANGU_LANG: 'en' }).TANGU_LANG).toBe('en')
+  })
+  it('C / POSIX / C.UTF-8 / 空白 = 未设置(与引擎 detectZh 同口径)→ 照样注入', () => {
+    expect(run({ LANG: 'C.UTF-8', LC_ALL: 'C', LC_MESSAGES: 'POSIX', TANGU_LANG: '  ' }).TANGU_LANG).toBe('zh')
   })
 })
 

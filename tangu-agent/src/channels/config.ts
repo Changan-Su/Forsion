@@ -11,8 +11,23 @@ import type { ApprovalMode, ChannelKind, ChannelSettings } from './types.js';
 
 const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
-function normApproval(v: unknown, fallback: ApprovalMode): ApprovalMode {
-  return v === 'readonly' || v === 'auto-edit' || v === 'full-auto' ? v : fallback;
+/**
+ * 通道设置里的审批档归一(与引擎 normalizeApprovalMode 同口径,H5 fail-closed):只有**空 / 缺席**才走兜底链
+ * (微信 legacy → 'auto-edit');三档原样;custom 与其它任何非空值(手改拼错的 "read-only"、旧 env 里的脏值)→ readonly。
+ * 旧版把不认识的一律落兜底 auto-edit —— 用户想写只读、拼错一个字,新绑定就被写成 auto-edit、写文件免批。
+ * 口径内联、不 import 引擎的 normalizeApprovalMode:approvals.ts 拖着 agentRegistry / pendingApprovals 等一整张图(经 forward.ts 的
+ * 动态 import 还会绕回 hub → 本文件),而本文件被驱动与 agentRename 引用,设置读取不该挂上这张图。改口径时两处同改。
+ */
+const warnedApproval = new Set<string>();
+export function normApproval(v: unknown, fallback: ApprovalMode): ApprovalMode {
+  if (v === undefined || v === null || (typeof v === 'string' && v.trim() === '')) return fallback;
+  if (v === 'readonly' || v === 'auto-edit' || v === 'full-auto') return v;
+  const k = JSON.stringify(v) ?? String(v);
+  if (!warnedApproval.has(k) && warnedApproval.size < 50) { // 每次读设置都过这里:同一个值只告警一次
+    warnedApproval.add(k);
+    console.warn(`[channels] 通道设置里的审批档 ${k} 不认识,按 readonly 处理`);
+  }
+  return 'readonly';
 }
 
 function legacyWechat(): { enabled: boolean; approvalMode: ApprovalMode } {
@@ -66,6 +81,16 @@ export function channelSettings(kind: ChannelKind): ChannelSettings {
     appId: str(raw.appId) || undefined,
     appSecret: str(raw.appSecret) || undefined,
   };
+}
+
+/**
+ * 该通道的凭据是否齐全(与驱动 start 的早退条件同一口径:Telegram 要 botToken,QQ 要 appId + appSecret;
+ * 微信的凭据是扫码登录的 iLink 账号,不在设置里,恒 true)。凭据被清空时 hub 走完全停止而不是重启。
+ */
+export function channelHasCredentials(kind: ChannelKind, st: Pick<ChannelSettings, 'botToken' | 'appId' | 'appSecret'>): boolean {
+  if (kind === 'telegram') return !!st.botToken;
+  if (kind === 'qq') return !!st.appId && !!st.appSecret;
+  return true;
 }
 
 /** 合并写回某通道设置(只动传入的键;secrets 传空串表示清除)。 */

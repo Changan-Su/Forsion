@@ -10,7 +10,7 @@
  * update 时模型省略的字段一律保留原值(buildAgentDef 对省略项会写空,在本调用点兜住,不改它的公共语义)。
  */
 import type { ToolProvider } from '../toolRegistry.js';
-import { listAgents, getAgent, saveAgent, deleteAgent, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN, DEFAULT_MAX_ITERATIONS } from '../../agents/agentRegistry.js';
+import { listAgents, getAgent, saveAgent, deleteAgent, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN, DEFAULT_MAX_ITERATIONS, KEEP_APPROVAL_MODE } from '../../agents/agentRegistry.js';
 import { THINKING_LEVELS } from '../../llm/modelCapabilities.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
 
@@ -111,7 +111,14 @@ export const manageAgentProvider: ToolProvider = {
               thinkingLevel: args.thinking_level != null ? args.thinking_level : (existing?.thinkingLevel || undefined),
               // 省略 ≠ 清空:否则 update 只改 model 就把自己的 150 降回默认 90,上面的「不许自降」守卫形同虚设(Codex 09-13 #1)
               maxIterations: args.max_iterations != null ? Number(args.max_iterations) : (existing?.maxIterations ?? undefined),
-              approvalMode: existing?.approvalMode || undefined, // 永不取自模型参数
+              // 永不取自模型参数,也不取上面先读的 existing:从那次读到落盘之间用户可能刚在设置里收紧了档,
+              // 传旧值会把它写回去(Codex 09-25 P1)。KEEP = saveAgent 在按 slug 串行化的保存里现读现留;
+              // 此刻 slug 不存在 → 空(同全新 create)。先读到了却在保存前被删 → mustExist 让它报错,不悄悄新建一个空档的。
+              // 反过来:预读时不存在(按「新建」批的)、保存前冒出一个同 slug 的 → mustNotExist 报错,不把指令写进一个可能是
+              // full-auto 的现成 Agent;模型重来一次,审批卡就会如实写「overwrites existing agent · approval tier stays …」(09-25 #5)。
+              approvalMode: KEEP_APPROVAL_MODE,
+              mustExist: action === 'update' || !!existing,
+              mustNotExist: action === 'create' && !existing,
               systemPrompt: String(args.system_prompt),
               soul: args.soul != null ? String(args.soul) : undefined,
               createdBy: 'agent',
