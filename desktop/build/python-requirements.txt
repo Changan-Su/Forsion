@@ -1,0 +1,19 @@
+# 内置 Python 预装库(build/fetch-python.cjs 在打包前装进 build/python)。
+# 与云端沙箱 tangu-agent/src/sandbox/Dockerfile 的 pip 清单**逐行一致** —— 提示词和内置技能
+# (python-docx/openpyxl/python-pptx、data-analysis-python 的 matplotlib、pdf 技能的 reportlab)
+# 按这份清单写,本地与云端必须同一套,改一边就改另一边。
+python-docx==1.1.2
+python-pptx==1.0.2
+openpyxl==3.1.5
+XlsxWriter==3.2.0
+pypdf==5.1.0
+pdfplumber==0.11.4
+reportlab==4.2.5
+pandas==2.2.3
+numpy==2.1.3
+matplotlib==3.9.2
+Pillow==11.0.0
+lxml==5.3.0
+markdown==3.7
+beautifulsoup4==4.12.3
+tabulate==0.9.0

@@ -66,6 +66,19 @@ exports.default = async function afterPack(context) {
     }
   }
 
+  // ④ 内置 Python 预装库闸:同 ③ 盯**打包后的结果** —— 拷贝过滤器已知会静默丢 .pyc/__pycache__/.a/.o,
+  //    哪天多丢一类原生扩展,只有对产物真 import 才抓得到。放在 ② 签名之前:smoke 不写字节码(pyEnv)。
+  if (product.agentBackend) {
+    const { existsSync } = require('fs');
+    const pyRoot = path.join(resourcesDir(), 'python');
+    if (existsSync(path.join(pyRoot, '.skipped'))) {
+      console.log('[afterPack] 内置 Python 已降级(.skipped)→ 跳过预装库检查');
+    } else {
+      require('./fetch-python.cjs').smokePython(pyRoot);
+      console.log('[afterPack] 内置 Python 预装库可 import ✓');
+    }
+  }
+
   // ② macOS ad-hoc 自签 —— 必须放在 native rebuild 之后(重建改动了 bundle,签名要最后做,
   //    且 --deep 才能把重建后的 .node 一并签上)。无 Developer ID → Gatekeeper 显「未识别开发者/仍要打开」。
   if (electronPlatformName === 'darwin') {

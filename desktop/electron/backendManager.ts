@@ -275,7 +275,16 @@ export class BackendManager {
       const nodeRt = resolveBundledNode()
       const pathKey = pathKeyOf(env)
       env[pathKey] = composeEnginePath(env[pathKey] || '', py?.pathDirs || [], nodeRt?.pathDirs || [])
-      if (py) env.TANGU_PYTHON_BIN = py.pythonBin
+      if (py) {
+        env.TANGU_PYTHON_BIN = py.pythonBin
+        // 内置 Python 住在安装目录里(mac 是已签名的 .app):字节码不许写回去 —— 会破签名封条、
+        // per-machine 安装写不进,而打包时 .pyc 又被 electron-builder 过滤掉了。引到家目录下,
+        // 预装的 pandas 等冷 import 只慢第一次(实测热 0.34s vs 每次重编 0.9s)。
+        // ponytail: agent 自己 `pip install` 仍装进安装目录(升级即丢、mac 破封条);
+        //   根治=PIP_USER=1+PYTHONUSERBASE 指到家目录,但 PIP_USER 会让 agent 建的 venv 里 pip install 直接报错,
+        //   等真有人报再做。
+        if (!env.PYTHONPYCACHEPREFIX) env.PYTHONPYCACHEPREFIX = join(forsionHomeDir(), 'pycache')
+      }
 
       // 中国大陆镜像(可逆:仅注入子进程 env,不改用户全局 dotfile;关掉即恢复直连)。pip/npm/git 子进程继承之。
       if (s.mirror === 'china') {

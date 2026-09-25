@@ -5,10 +5,12 @@
  *  - 由 build/beforeBuild.cjs 在打包前按目标 (platform, arch) 调用;也可 `node build/fetch-python.cjs` 手动跑。
  *  - 版本不写死:查 astral-sh/python-build-standalone 最新 release,挑匹配三元组的 `install_only` 资产。
  *  - 解压用系统 tar(三平台 runner 均自带,含 Windows 的 bsdtar);tar 自动识别 gzip。
- *  - 失败**硬报错**(不静默降级):宁可构建失败,也不发一个「号称内置 Python 却没带」的包。
+ *  - 解释器下载失败 → 降级为不打包(运行时回落系统 Python),强制内置设 TANGU_REQUIRE_PYTHON=1。
  *    逃生阀 TANGU_SKIP_FETCH_PYTHON=1(仅打包非 Python 形态时);跳过时建空目录避免 extraResources 缺 from 报错。
+ *  - 解释器到手后按 python-requirements.txt 预装办公/数据库(对标 DSH 桌面端开箱即用)。
+ *    **装库失败硬报错、不降级**:提示词和内置技能按「库都在」写,有解释器没库的包比没 Python 更坑。
  */
-const { existsSync, mkdirSync, rmSync, writeFileSync } = require('node:fs');
+const { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } = require('node:fs');
 const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 
@@ -107,14 +109,63 @@ async function fetchPython({ platformName, archName }) {
       throw new Error(`解压后 ${dest} 无解释器`);
     }
     console.log(`[fetch-python] ✓ ${dest}`);
-    return dest;
   } catch (e) {
     if (process.env.TANGU_REQUIRE_PYTHON) throw e;
     return degrade(dest, e.message || String(e));
   }
+  installPackages(dest); // 在 try 外:装库失败必须让构建挂掉,而不是把解释器也一起降级掉
+  return dest;
 }
 
-module.exports = { fetchPython, pythonDir };
+/** 解释器路径:Windows 包是平铺的 python.exe,其余在 bin/python3。 */
+const pythonBin = (dir) =>
+  existsSync(path.join(dir, 'python.exe')) ? path.join(dir, 'python.exe') : path.join(dir, 'bin', 'python3');
+
+/** 构建机的 Python 环境不许漏进来:用户 site / PYTHONPATH 会让 pip 以为「已装」跳过、让 smoke 假绿;
+ *  不写字节码 —— afterPack 里跑 smoke 时 .app 还没签名,写进去的 __pycache__ 会被一起封进包。 */
+function pyEnv() {
+  const env = { ...process.env, PYTHONNOUSERSITE: '1', PYTHONDONTWRITEBYTECODE: '1', PIP_USER: '0', PIP_REQUIRE_VIRTUALENV: '0' };
+  delete env.PYTHONPATH;
+  delete env.PYTHONHOME;
+  return env;
+}
+
+/** 预装库的真实 import(含 lxml/PIL/pdfium/matplotlib 的原生扩展)—— 只查 dist-info 抓不到 .so 被拷贝过滤器丢掉。 */
+const SMOKE = "import docx, pptx, openpyxl, xlsxwriter, pypdf, pdfplumber, reportlab.pdfgen.canvas, pandas, numpy, "
+  + "PIL.Image, lxml.etree, markdown, bs4, tabulate, matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot";
+
+/** 在 dir 下的内置 Python 里跑 import smoke;失败即抛。afterPack 对打包产物再跑一次。 */
+function smokePython(dir) {
+  execFileSync(pythonBin(dir), ['-c', SMOKE], { stdio: 'inherit', env: pyEnv() });
+}
+
+/** 按 python-requirements.txt 装进内置解释器自己的 site-packages。
+ *  用目标解释器本身跑 pip:CI 每行都是本机架构;本地跨架构打包要求本机能执行目标解释器(mac 靠 Rosetta)。 */
+function installPackages(dest) {
+  const py = pythonBin(dest);
+  const scripts = path.join(dest, existsSync(path.join(dest, 'python.exe')) ? 'Scripts' : 'bin');
+  const before = new Set(existsSync(scripts) ? readdirSync(scripts) : []);
+  const req = path.join(buildDir(), 'python-requirements.txt');
+  console.log(`[fetch-python] pip install -r ${path.basename(req)}`);
+  // --no-compile:electron-builder 的拷贝过滤器无条件丢 .pyc/__pycache__,编了也白编;
+  // 运行时字节码由 backendManager 的 PYTHONPYCACHEPREFIX 引到包外。
+  execFileSync(py, ['-m', 'pip', 'install', '--only-binary=:all:', '--no-compile', '--no-cache-dir',
+    '--disable-pip-version-check', '--no-warn-script-location', '-r', req], { stdio: 'inherit', env: pyEnv() });
+  // pip 生成的命令行脚本 shebang 写死了构建机路径,而这个目录在引擎 PATH 最前(composeEnginePath),
+  // 留着会遮住用户自己装的同名命令(fonttools/f2py…)。删掉新增的;要用走 `python -m`。
+  for (const f of existsSync(scripts) ? readdirSync(scripts) : []) {
+    if (!before.has(f)) rmSync(path.join(scripts, f), { recursive: true, force: true });
+  }
+  // tests 目录是纯死重(实测 ~110MB,pandas 一家过半)。
+  execFileSync(py, ['-c', "import pathlib, shutil, sysconfig\n"
+    + "root = pathlib.Path(sysconfig.get_paths()['purelib'])\n"
+    + "for p in [p for p in root.rglob('tests') if p.is_dir()]: shutil.rmtree(p, ignore_errors=True)"],
+  { stdio: 'inherit', env: pyEnv() });
+  smokePython(dest);
+  console.log('[fetch-python] ✓ 预装库');
+}
+
+module.exports = { fetchPython, pythonDir, smokePython };
 
 // CLI:node build/fetch-python.cjs [platform] [arch](缺省=本机)
 if (require.main === module) {
