@@ -61,7 +61,12 @@ async function main(): Promise<void> {
   }
   if (sub && !sub.startsWith('-') && sub !== 'login') {
     const handled = await dispatchPluginCommand(sub, process.argv.slice(3));
-    if (handled !== null) return; // 插件已处理;进程存活与否由其打开的句柄决定（如 worker 的 listening server）
+    // 插件已处理:返回码记为退出码,但不强退 —— 进程存活与否由其打开的句柄决定（如 worker 的 listening server）。
+    // 以前直接 return,`tangu computer-use doctor` 失败也以 0 退出。
+    if (handled !== null) {
+      process.exitCode = handled;
+      return;
+    }
   }
 
   const cfg = parseTuiConfig(process.argv.slice(2));
