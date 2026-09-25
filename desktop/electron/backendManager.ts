@@ -255,7 +255,7 @@ export class BackendManager {
       // 源通道仍单独保留在 input.source.channel,不拿 wechat/telegram/qq 污染「端×版本」维度。
       env.TANGU_HOST_CLIENT = `desktop/${app.getVersion()}`
       // 通道回复 / TUI 的界面语言:Finder 启动的桌面没有 LANG,引擎继承空 env 只能猜。按系统界面语言注入(用户在 shell 里显式设了就不动)。
-      if (!env.TANGU_LANG) env.TANGU_LANG = /^zh/i.test(app.getLocale()) ? 'zh' : 'en'
+      if (!env.TANGU_LANG) env.TANGU_LANG = /^zh/i.test(app.getLocale?.() || '') ? 'zh' : 'en'
       env.TANGU_BROWSER_ENABLED = s.browserEnabled === false ? '0' : '1'
       env.TANGU_BROWSER_ENGINE = s.browserEngine || 'auto'
       env.TANGU_BROWSER_SEARCH_ENGINE = s.browserSearchEngine || 'duckduckgo'

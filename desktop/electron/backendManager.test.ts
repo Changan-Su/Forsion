@@ -14,7 +14,7 @@ import { join } from 'node:path'
 const H = vi.hoisted(() => ({ dir: '' }))
 H.dir = mkdtempSync(join(tmpdir(), 'forsion-bm-'))
 
-vi.mock('electron', () => ({ app: { isPackaged: false, getVersion: () => '0.0.0-test' } }))
+vi.mock('electron', () => ({ app: { isPackaged: false, getVersion: () => '0.0.0-test', getLocale: () => 'zh-CN' } }))
 vi.mock('./forsionHome', () => ({
   forsionHomeDir: () => H.dir,
   tanguDataDir: () => H.dir,
@@ -54,6 +54,7 @@ describe('BackendManager channel client attribution', () => {
     const source = readFileSync(new URL('./backendManager.ts', import.meta.url), 'utf8')
     // 通道 run 不经 renderer startRun(),只有这个 spawn 契约能把真实 App 版本交给引擎。
     expect(source).toContain('env.TANGU_HOST_CLIENT = `desktop/${app.getVersion()}`')
+    expect(source).toContain('if (!env.TANGU_LANG) env.TANGU_LANG =') // 通道回复 / TUI 语言:Finder 启动无 LANG,按系统界面语言注入
   })
 })
 

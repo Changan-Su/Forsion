@@ -54,6 +54,8 @@ export interface PendingApproval {
   name: string;
   args: string;
   preview: string;
+  /** 引擎的「为什么问你」(approval_request.reason.kind,白名单清洗过)。escalate / custom-ask / control 不吃「总允许」。 */
+  reasonKind?: 'custom-ask' | 'escalate' | 'mode' | 'control';
 }
 
 /** ask_user / exit_plan_mode 的待答询问(机制同审批,answer 为自由文本)。 */

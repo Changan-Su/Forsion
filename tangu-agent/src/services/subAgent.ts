@@ -22,7 +22,7 @@ import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
 import { getToolDefinitions, listDeferredTools, executeTool, type ToolContext } from '../tools/registry.js';
 import { SUB_AGENT_DENY_TOOLS, isSubAgentDenied, canonicalToolName } from '../tools/toolRegistry.js';
-import { gateToolCall, requestApproval } from './approvals.js';
+import { gateToolCall, requestApproval, USER_REJECT_REASON } from './approvals.js';
 import { publish } from './eventBus.js';
 import { publishBackgroundUsage } from './backgroundUsage.js';
 import { assistantTurnOf } from './contextBudget.js';
@@ -521,10 +521,12 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       let isError = false;
       let execCall = hookCall;
       if (preV?.block) {
-        content = `⛔ Hook 拦截：${preV.blockReason || 'PreToolUse hook 阻止了该操作'}`;
+        // 与主循环(agentLoop)逐字同一句:模型面英文,写明是 hook 挡的、没执行(旧文案是中文「⛔ Hook 拦截：…」)。
+        content = `Blocked by a PreToolUse hook, so this tool call was NOT run: ${preV.blockReason || 'no reason given.'}`;
         isError = true;
       } else if (decision && decision.action === 'reject') {
-        content = decision.rejectReason || 'The user rejected this operation.';
+        // 决定体没带 rejectReason = 用户在审批卡 / 通道点了拒绝 → 与主循环同一回落文案(规则 / 中止各自带原因)。
+        content = decision.rejectReason || USER_REJECT_REASON;
         isError = true;
       } else {
         execCall = decision?.argsOverride

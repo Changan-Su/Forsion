@@ -25,6 +25,9 @@ import { CODING_AGENT_VERSION, CODING_SYSTEM_PROMPT, CODING_SOUL } from './codin
 import { loadSpecialAgentsConfig, legacyMusePrompt, DEFAULT_MUSE_PROMPT } from '../services/specialAgentsConfig.js';
 import { THINKING_LEVELS } from '../llm/modelCapabilities.js';
 import { normalizeCompactionLayer } from '../services/compactionSettings.js';
+// ⚠️ 与 approvals.ts 互相 import(它 import 本文件的 getAgent / slugify 等):两边都只在函数体里用对方的导出,
+// 所以求值顺序无关紧要。别在本文件顶层调用 normalizeApprovalMode(模块未求值完 → TDZ)。
+import { normalizeApprovalMode } from '../services/approvals.js';
 import type { ThinkingLevel } from '../core/types.js';
 
 /** 循环轮数缺省(会话/Agent 都没给时 agentLoop 用它)与 **Agent 级下限**:Agent 定义里低于下限的 max_iterations
@@ -109,6 +112,33 @@ export function isValidSlug(slug: string): boolean {
 const THINK: ThinkLevel[] = [...THINKING_LEVELS];
 const APPROVAL: ApprovalMode[] = ['readonly', 'auto-edit', 'full-auto', 'custom'];
 
+/** 审批档原值的首尾空白先剥(与 projectContext 同口径):`"auto-edit "` = auto-edit、`"   "` = 空(跟随会话)。非字符串原样交给 normalizeApprovalMode。 */
+const trimApproval = (v: unknown): unknown => (typeof v === 'string' ? v.trim() : v);
+
+const warnedUnparsedApproval = new Set<string>(); // unparsedApprovalMode 的告警去重(slug|原值)
+
+/**
+ * config.toml **整份解析失败**时的审批档兜底(fail-closed)。最常见的手改错误恰恰是 `approval_mode = readonly`
+ * 忘了引号 —— 非法 TOML,旧口径整份当空对象 → 审批档 '' = 跟随会话(host 上是 auto-edit),想收紧反而放宽。
+ * 现在:文件里有一行非空的 approval_mode(不论写的是哪一档,文件已不可信)→ readonly 并告警;
+ * 没有这一行、或值是空串(`approval_mode = ""`)→ ''(与「空 = 跟随会话」同口径)。
+ * 只认行首的顶层键写法;`[ \t]*` 不跨行,免得 `approval_mode =` 后换行把下一行的值算进来。
+ */
+function unparsedApprovalMode(slug: string, tomlRaw: string): ApprovalMode {
+  const m = /^[ \t]*["']?approval_mode["']?[ \t]*=[ \t]*(.*)$/m.exec(tomlRaw);
+  if (!m) return '';
+  const value = m[1].replace(/[ \t]+#.*$/, '').trim().replace(/^(["'])(.*)\1$/, '$2').trim();
+  if (!value) return '';
+  // 告警按「slug|原值」进程内去重:云端 cloudGetAgent / httpBrain 水合每次请求都重解析,坏文件不修会刷屏(同 approvals.warnUnknownMode)
+  const key = `${slug}|${m[1].trim()}`;
+  if (!warnedUnparsedApproval.has(key)) {
+    if (warnedUnparsedApproval.size > 200) warnedUnparsedApproval.clear(); // 只防无界增长
+    warnedUnparsedApproval.add(key);
+    console.warn(`[tangu] agent ${slug} 的 config.toml 解析失败,其中 approval_mode = ${m[1].trim()} 按 readonly 处理(修好 TOML 语法后恢复)`);
+  }
+  return 'readonly';
+}
+
 /** 解析旧扁平 agent 文件（frontmatter 单行标量 + tools 列表 + 正文)。容错:缺字段回退默认。迁移源。 */
 export function parseAgentFile(slug: string, raw: string): NormalAgentDef {
   const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?/);
@@ -132,7 +162,8 @@ export function parseAgentFile(slug: string, raw: string): NormalAgentDef {
     .map((s) => s.trim().replace(/^["']|["']$/g, ''))
     .filter(Boolean);
   const thinking = (THINK.includes(meta.thinkinglevel as ThinkLevel) ? meta.thinkinglevel : '') as ThinkLevel;
-  const approval = (APPROVAL.includes(meta.approvalmode as ApprovalMode) ? meta.approvalmode : '') as ApprovalMode;
+  // 未知非空档 → readonly + 告警(H5,同 parseAgentConfig);空 / 纯空白 / 缺席 = ''(跟随会话);首尾空白先剥(同 projectContext)
+  const approval: ApprovalMode = normalizeApprovalMode(trimApproval(meta.approvalmode), `agent ${slug} (legacy .md)`) ?? '';
   const maxIter = Number(meta.maxiterations);
   return {
     slug,
@@ -174,7 +205,8 @@ export function serializeAgent(def: NormalAgentDef): string {
 /** 解析 config.toml + SOUL.md 正文 → NormalAgentDef。容错:解析失败/缺字段回退默认。 */
 export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): NormalAgentDef {
   let meta: Record<string, any> = {};
-  try { meta = (parseToml(tomlRaw) as Record<string, any>) || {}; } catch { meta = {}; }
+  let unparsed = false;
+  try { meta = (parseToml(tomlRaw) as Record<string, any>) || {}; } catch { meta = {}; unparsed = true; }
   const str = (v: any): string => (typeof v === 'string' ? v : v == null ? '' : String(v));
   const tools = Array.isArray(meta.tools)
     ? meta.tools.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 100)
@@ -187,8 +219,12 @@ export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): N
     : [];
   const effort = str(meta.model_reasoning_effort);
   const think = (THINK.includes(effort as ThinkLevel) ? effort : '') as ThinkLevel;
-  const appr = str(meta.approval_mode);
-  const approval = (APPROVAL.includes(appr as ApprovalMode) ? appr : '') as ApprovalMode;
+  // 审批档(H5 fail-closed):空 / 纯空白 / 缺席 = ''(跟随会话);四个 id 原样(首尾空白先剥,同 projectContext);
+  // **其它非空值**(拼错、新客户端才认识的档、非字符串)→ readonly 并告警。旧口径静默写成 '' = 跟随会话 ——
+  // 用户手改 config.toml 想收紧,拼错一个字反而放宽。整份解析失败另走 unparsedApprovalMode(少个引号同样不许放宽)。
+  const approval: ApprovalMode = unparsed
+    ? unparsedApprovalMode(slug, tomlRaw)
+    : normalizeApprovalMode(trimApproval(meta.approval_mode), `agent ${slug} config.toml`) ?? '';
   const maxIter = Number(meta.max_iterations);
   return {
     slug,

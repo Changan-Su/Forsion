@@ -32,15 +32,19 @@ export const ApprovalCard: React.FC<{
   const resolved = req.status !== 'pending'
   const diff = useMemo(() => (isBash ? null : toolDiffText(req.name, req.arguments)), [isBash, req.name, req.arguments])
 
-  // 引擎在这两种情形下**不会**把工具记进「总允许」(approvals.ts 明写:越界写每次都确认,
-  // custom 的 ask 是用户写死的「永远问我」)。按钮却照常显示 = 又一处「界面说一套引擎做一套」。
-  const alwaysWorks = req.reason?.kind !== 'escalate' && req.reason?.kind !== 'custom-ask'
+  // 引擎在这三种情形下**不会**把工具记进「总允许」(approvals.ts 明写:越界写每次都确认,
+  // custom 的 ask 是用户写死的「永远问我」,控制面(建无人值守工作)点了「总允许」也只算批准一次)。
+  // 按钮却照常显示 = 又一处「界面说一套引擎做一套」。
+  const kind = req.reason?.kind
+  const alwaysWorks = kind !== 'escalate' && kind !== 'custom-ask' && kind !== 'control'
   const why = (() => {
     const r = req.reason
     if (!r) return ''
     const m = r.mode && MODE_KEY[r.mode] ? t(MODE_KEY[r.mode] as any) : ''
     if (r.kind === 'custom-ask') return t('approval.why.customAsk', { rule: r.rule || '' })
     if (r.kind === 'escalate') return t('approval.why.escalate')
+    // 控制面不拼档位:沙箱会话的控制面调用带的是 full-auto(缺省档),写出来就成了「完全放行下仍要你批」
+    if (r.kind === 'control') return t('approval.why.control')
     return m ? t('approval.why.mode', { mode: m }) : ''
   })()
 
@@ -74,7 +78,8 @@ export const ApprovalCard: React.FC<{
         />
       ) : (
         <>
-          {/* preview 恒显:它是「⚠ 工作区外写入」等升级警示的唯一载体(引擎 approvals.ts 拼进字符串),diff 只能附加不能替换 */}
+          {/* preview 恒显:引擎把越界警示(英文「⚠ Write outside the workspace · 」)与控制面要害(建什么、到点无人值守跑什么)
+              拼进这个字符串;本地化的原因走上面的 why 行。旧事件没有 reason 时它仍是唯一的警示载体,diff 只能附加不能替换 */}
           <div className="approval-preview">{req.preview}</div>
           {diff && <div className="approval-diff"><DiffView text={diff} side={false} /></div>}
         </>

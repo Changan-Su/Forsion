@@ -116,7 +116,15 @@ export const manageAgentProvider: ToolProvider = {
               soul: args.soul != null ? String(args.soul) : undefined,
               createdBy: 'agent',
             });
-            return `已${action === 'create' ? '创建' : '更新'} agent: ${def.slug}（${def.name}）。用户可在设置/输入栏选用它。`;
+            // create 撞上已有 slug = 覆盖(设计如此,见上;readonly / auto-edit 的审批卡已写「overwrites」),但完全放行档不弹卡 ——
+            // 回执必须点破,否则纯中文名不带 slug(slugify → 'agent')连建两个,模型两次都以为「建好了」,第一个已被悄悄替换。
+            const verb = action === 'update'
+              ? 'Updated agent'
+              : existing ? 'Overwrote existing agent' : 'Created agent';
+            const overwrote = action === 'create' && existing
+              ? ' It replaced the agent that already had this slug; fields you omitted were kept from that agent. To add a separate agent, pass a different slug.'
+              : '';
+            return `${verb}: ${def.slug} (${def.name}).${overwrote} The user can select it in Settings or from the chat input bar.`;
           }
           return `Error: unknown action: ${action}`;
         } catch (e: any) {

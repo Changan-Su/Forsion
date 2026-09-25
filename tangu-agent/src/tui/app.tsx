@@ -35,7 +35,7 @@ import { getLastUserMessageContent, deleteLastExchange, renderSessionMarkdown } 
 import { ItemView, LiveView, TodoPanel } from './components/Message.js';
 import { StatusBar, approvalLabel, thinkingLabel } from './components/StatusBar.js';
 import { InputBox } from './components/InputBox.js';
-import { ApprovalPrompt } from './components/ApprovalPrompt.js';
+import { ApprovalPrompt, pendingApprovalFromEvent } from './components/ApprovalPrompt.js';
 import { InquiryPrompt } from './components/InquiryPrompt.js';
 import { SelectPrompt } from './components/SelectPrompt.js';
 import { dispWidth } from './components/Banner.js';
@@ -320,7 +320,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
       }
       case 'approval_request':
         flushNow();
-        dispatch({ type: 'APPROVAL', approval: { approvalId: p.approvalId, name: p.name, args: p.arguments || '', preview: p.preview || '' } });
+        dispatch({ type: 'APPROVAL', approval: pendingApprovalFromEvent(p) });
         break;
       case 'inquiry_request':
         flushNow();

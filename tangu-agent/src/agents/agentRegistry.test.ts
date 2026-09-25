@@ -54,10 +54,11 @@ describe('parseAgentFile', () => {
     expect(d.createdBy).toBe('user'); // 默认
   });
 
-  it('rejects invalid thinking/approval/maxIterations', () => {
+  it('rejects invalid thinking/maxIterations; unknown approval fails closed to readonly', () => {
     const d = parseAgentFile('x', '---\nname: X\nthinkingLevel: bogus\napprovalMode: nope\nmaxIterations: -5\n---\nb');
     expect(d.thinkingLevel).toBe('');
-    expect(d.approvalMode).toBe('');
+    // H5(2026-09-25):未知非空审批档不再静默写成 ''(= 跟随会话,可能更宽),而是按 readonly
+    expect(d.approvalMode).toBe('readonly');
     expect(d.maxIterations).toBe(null);
   });
 

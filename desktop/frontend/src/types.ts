@@ -891,8 +891,9 @@ export interface ApprovalRequest {
 
 /** 引擎给出的审批判定理由。kind 由 reducer 白名单清洗,渲染层可以信任。 */
 export interface ApprovalReason {
-  /** custom-ask=你写的规则要求问 · escalate=工作区外写入升级 · mode=该档位本就需要审批 */
-  kind: 'custom-ask' | 'escalate' | 'mode'
+  /** custom-ask=你写的规则要求问 · escalate=工作区外写入升级 · mode=该档位本就需要审批
+   *  · control=控制面(建无人值守、以完全放行跑的工作:自动化 / auto 日程 / 建改 Agent),引擎不缓存「总允许」 */
+  kind: 'custom-ask' | 'escalate' | 'mode' | 'control'
   /** 命中的规则串(仅 custom-ask) */
   rule?: string
   /** 引擎侧**生效**的档位(custom 未命中时是降解后的 base) */

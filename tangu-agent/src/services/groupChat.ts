@@ -33,6 +33,7 @@ import { getAgent, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { compactSession, getLatestSummary } from './compaction.js';
 import { activateMember as realActivateMember, type ActivateMember, type MemberOutcome } from './teamRuns.js';
+import { normalizeApprovalMode } from './approvals.js';
 import { TEAM_OUTPUT_MODE, teamOutputCollector, teamOutputRecord } from './teamOutputs.js';
 
 /** 兜底天花板(周期数;每周期 = 还想聊的成员各说一次)。不是缺省上限:没传 groupMaxRounds 时团队只靠成员自己的 DONE 收场,这里只防失控。 */
@@ -659,7 +660,6 @@ function concurrencyCap(v: any, members: number): number {
 }
 
 const THINK_LEVELS: readonly string[] = THINKING_LEVELS;
-const APPROVAL_MODES = ['readonly', 'auto-edit', 'full-auto'];
 
 /** 会话级成员调档(agentConfig.teamMemberConfigs:slug → { model, thinkingLevel }):
  *  只覆盖显式给了值的那一项,其余照成员定义。model 走子 run 的 model_id、thinkingLevel 走子 run 的 agentConfig,
@@ -696,7 +696,10 @@ export function sanitizeTempAgents(raw: any): NormalAgentDef[] {
       tools: Array.isArray(r.tools) ? r.tools.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 100) : [],
       thinkingLevel: THINK_LEVELS.includes(r.thinkingLevel) ? r.thinkingLevel : '',
       maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.min(200, Math.floor(maxIter)) : null,
-      approvalMode: APPROVAL_MODES.includes(r.approvalMode) ? r.approvalMode : '',
+      // H5 fail-closed:空 / 纯空白 / 缺席 = ''(跟随会话);未知非空值 → readonly 并告警(旧口径静默写 '' = 放宽)。
+      // 首尾空白先剥(与 projectContext / agentRegistry 同口径)。
+      // 'custom' 现在照收 —— 与 agentRegistry 落盘口径一致(旧白名单漏了它,自定义档的临时成员被悄悄抹成跟随会话)。
+      approvalMode: normalizeApprovalMode(typeof r.approvalMode === 'string' ? r.approvalMode.trim() : r.approvalMode, `temp agent ${slug}`) ?? '',
       createdBy: 'user',
       createdAt: '',
       systemPrompt: systemPrompt.slice(0, 100_000),

@@ -1186,9 +1186,10 @@ export const useApp = create<AppState>((set, get) => ({
       case 'approval_request': {
         // reason 白名单清洗:审批事件会持久化重放,一条畸形 payload 不清洗 = 每次渲染都炸(同 context_info 纪律)
         const rk = pl.reason?.kind
-        const reason = rk === 'custom-ask' || rk === 'escalate' || rk === 'mode'
+        // control = 控制面(建无人值守工作):引擎不缓存「总允许」,卡片据此藏掉那个按钮 —— 漏在白名单外 = 按钮照显、点了只算一次
+        const reason = rk === 'custom-ask' || rk === 'escalate' || rk === 'mode' || rk === 'control'
           ? {
-            kind: rk as 'custom-ask' | 'escalate' | 'mode',
+            kind: rk as 'custom-ask' | 'escalate' | 'mode' | 'control',
             ...(typeof pl.reason.rule === 'string' && pl.reason.rule ? { rule: String(pl.reason.rule).slice(0, 200) } : {}),
             ...(['readonly', 'auto-edit', 'full-auto'].includes(pl.reason.mode) ? { mode: pl.reason.mode } : {}),
           }

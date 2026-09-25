@@ -21,6 +21,7 @@ import { tanguHome, WORKSPACE_DIR_NAME } from '../core/tanguHome.js';
 import { PROJECT_DOC_FILENAMES, isPlainFileUnder, loadProjectDocSafe } from './projectDoc.js';
 import { listProjectSkills } from '../skills/localSkills.js';
 import { runGit } from './runtimeContext.js';
+import { normalizeApprovalMode } from './approvals.js';
 
 export interface ProjectSettings {
   /** 新会话预填的 Agent;与 defaultTeam 二选一。 */
@@ -90,7 +91,6 @@ const GIT_CHANGES_SHOWN = 20;
 const GIT_COMMITS_SHOWN = 8;
 const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const THINKING = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
-const APPROVAL = new Set(['readonly', 'auto-edit', 'full-auto', 'custom']);
 
 /** 新项目的指令文件骨架(模型读的,英文)。占位小节留空,让用户 / 「让 Tangu 生成」来填,而不是写一堆通用废话进系统提示。 */
 export const PROJECT_DOC_TEMPLATE = `# Project instructions
@@ -218,7 +218,7 @@ export async function listProjectPlans(cwd: string, limit = 30): Promise<Project
 export const projectSettingsFile = (): string => path.join(tanguHome(), 'project-settings.json');
 interface SettingsFile { version: 1; projects: Record<string, ProjectSettings> }
 
-/** 白名单收窄:Agent / Team 二选一(Agent 优先)、模型 id 长度封顶、思考档与审批档只认已知枚举。没有一个有效键 → null(= 删除)。 */
+/** 白名单收窄:Agent / Team 二选一(Agent 优先)、模型 id 长度封顶、思考档只认已知枚举、审批档未知非空按 readonly。没有一个有效键 → null(= 删除)。 */
 export function sanitizeProjectSettings(input: unknown): ProjectSettings | null {
   if (!input || typeof input !== 'object' || Array.isArray(input)) return null;
   const src = input as Record<string, unknown>;
@@ -232,8 +232,10 @@ export function sanitizeProjectSettings(input: unknown): ProjectSettings | null 
   if (model) out.model = model;
   const thinking = str(src.thinkingLevel, 16);
   if (thinking && THINKING.has(thinking)) out.thinkingLevel = thinking;
-  const approval = str(src.approvalMode, 16);
-  if (approval && APPROVAL.has(approval)) out.approvalMode = approval;
+  // 审批档走 normalizeApprovalMode(H5 fail-closed):空 / 缺席 = 不设(跟随缺省);四个 id 原样;其它非空值(拼错、
+  // 新客户端才认识的档、非字符串、超长)→ readonly 并告警。旧口径静默丢弃 = 回落到可能更宽的缺省档。
+  const approval = normalizeApprovalMode(typeof src.approvalMode === 'string' ? src.approvalMode.trim() : src.approvalMode, 'project settings approvalMode');
+  if (approval) out.approvalMode = approval;
   return Object.keys(out).length ? out : null;
 }
 
