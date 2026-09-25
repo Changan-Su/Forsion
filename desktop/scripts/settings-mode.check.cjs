@@ -104,6 +104,25 @@ async function main() {
     check('A3 草稿态显示托管参数与「切换到托管并启动」', await fl.locator('.settings-runtime-panel').isVisible()
       && await fl.locator('.settings-runtime-panel .special-save button', { hasText: '切换到托管并启动' }).count() === 1)
     await fl.screenshot({ path: path.join(shots, 'settings-mode-draft.png') })
+    // 吸底栏真的吸在 .settings-body 底部:面板比可视区高时,滚到面板顶部,栏仍在可视区内(面板 overflow:hidden 会让它跟着滚走)。
+    const setFloatingSize = (w, h) => app.evaluate(({ BrowserWindow }, [w, h]) => {
+      for (const win of BrowserWindow.getAllWindows()) if (win.webContents.getURL().includes('window=floating')) win.setSize(w, h)
+    }, [w, h])
+    await setFloatingSize(1040, 520)
+    await pause(400)
+    const sticky = await fl.evaluate(() => {
+      const body = document.querySelector('.settings-body')
+      const panel = document.querySelector('.settings-runtime-panel')
+      const bar = panel?.querySelector('.special-save')
+      if (!body || !panel || !bar) return { ok: false, why: 'missing' }
+      body.scrollTop += panel.getBoundingClientRect().top - body.getBoundingClientRect().top
+      const b = body.getBoundingClientRect(), r = bar.getBoundingClientRect(), pr = panel.getBoundingClientRect()
+      return { tall: pr.bottom > b.bottom + 4, ok: r.bottom <= b.bottom + 1 && r.top >= b.top, bar: [r.top, r.bottom], body: [b.top, b.bottom], panelBottom: pr.bottom }
+    })
+    check('A5 吸底栏在面板高于可视区时仍吸在底部(前置:面板确实比可视区高)', sticky.tall && sticky.ok, sticky)
+    await fl.screenshot({ path: path.join(shots, 'settings-savebar-sticky.png') })
+    await setFloatingSize(1040, 720)
+    await pause(300)
 
     // ── B 草稿不被即时开关冲掉 ──
     await fl.locator('.settings-runtime-panel select').first().selectOption('none')

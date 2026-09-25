@@ -431,6 +431,8 @@ export const SettingsModal: React.FC<{
   }
   // 后端运行方式的草稿(U-01):点卡片只改这里,真正切换走下方显式按钮。null = 跟随落盘值。
   const [modeDraft, setModeDraft] = useState<'managed' | 'external' | null>(null)
+  const modeDraftRef = useRef(modeDraft)
+  modeDraftRef.current = modeDraft
   const [modeExpanded, setModeExpanded] = useState(false)
   const [runtimeSaving, setRuntimeSaving] = useState(false)
   // Backend restarts refresh p.cfg/getConfig while this page stays open. Keep the
@@ -843,6 +845,7 @@ export const SettingsModal: React.FC<{
   const saveManaged = () => {
     if (!stored) return
     const snapshot = pickEdits(edits, RUNTIME_KEYS)
+    const submittedMode = modeDraft
     setRuntimeSaving(true)
     void window.tangu!.setConfig({
       mode: 'managed',
@@ -853,8 +856,9 @@ export const SettingsModal: React.FC<{
     }).then((next) => {
       setStored(next)
       setEdits((prev) => dropCommittedEdits(prev, snapshot))
-      setModeDraft(null)
-      setModeExpanded(false)
+      // 请求在路上时用户又改了运行方式:只收回本次提交的那个草稿,新选择留着。
+      setModeDraft((d) => (d === submittedMode ? null : d))
+      if (submittedMode === modeDraftRef.current || !modeDraftRef.current) setModeExpanded(false)
     }).catch((e: any) => setTestResult(`${t('settings.toast.saveFailed')}${e?.message || e}`))
       .finally(() => setRuntimeSaving(false))
   }
@@ -1115,6 +1119,7 @@ export const SettingsModal: React.FC<{
     if (!tabItems.some(([id]) => id === e.tab)) return false
     if (e.sub && !subItemsForTab(e.tab as Tab).some(([k]) => k === e.sub)) return false
     return (e.needs ?? []).every((need) => need === 'stored' ? !!stored
+      : need === 'desktop' ? isDesktop
       : need === 'managed' ? isDesktop && viewMode === 'managed'
         : (!isDesktop || viewMode === 'external') && !cloudWeb)
   }
@@ -1412,9 +1417,16 @@ export const SettingsModal: React.FC<{
                           className="btn ghost sm"
                           onClick={() => void window.tangu?.pickDirectory?.().then((d) => {
                             if (!d) return
+                            const typed = edits.defaultWorkspaceDir
                             void window.tangu!.setConfig({ defaultWorkspaceDir: d }).then((next) => {
                               setStored(next)
-                              setEdits((prev) => { const rest = { ...prev }; delete rest.defaultWorkspaceDir; return rest })
+                              // 请求在路上时又手输了新路径 → 那份新草稿留着,不被选目录的回执抹掉。
+                              setEdits((prev) => {
+                                if (prev.defaultWorkspaceDir !== typed) return prev
+                                const rest = { ...prev }
+                                delete rest.defaultWorkspaceDir
+                                return rest
+                              })
                             })
                           })}
                         >
@@ -1476,12 +1488,12 @@ export const SettingsModal: React.FC<{
                           <>
                             <p className="settings-mode-desc">{t('settings.backend.modeDescription')}</p>
                             <div className="settings-choice-grid" role="radiogroup" aria-label={t('settings.backend.modeLabel')}>
-                              <button type="button" role="radio" aria-checked={viewMode === 'managed'} className={`settings-choice-card${viewMode === 'managed' ? ' active' : ''}`} onClick={() => pickModeDraft('managed')}>
+                              <button type="button" role="radio" aria-checked={viewMode === 'managed'} className={`settings-choice-card${viewMode === 'managed' ? ' active' : ''}`} disabled={runtimeSaving} onClick={() => pickModeDraft('managed')}>
                                 <span className="settings-choice-icon"><Settings2 size={17} /></span>
                                 <span><strong>{t('settings.backend.modeManaged')}</strong><small>{t('settings.backend.modeManagedDescription')}</small></span>
                                 {viewMode === 'managed' && <Check size={15} className="settings-choice-check" />}
                               </button>
-                              <button type="button" role="radio" aria-checked={viewMode === 'external'} className={`settings-choice-card${viewMode === 'external' ? ' active' : ''}`} onClick={() => pickModeDraft('external')}>
+                              <button type="button" role="radio" aria-checked={viewMode === 'external'} className={`settings-choice-card${viewMode === 'external' ? ' active' : ''}`} disabled={runtimeSaving} onClick={() => pickModeDraft('external')}>
                                 <span className="settings-choice-icon"><Globe2 size={17} /></span>
                                 <span><strong>{t('settings.backend.modeExternal')}</strong><small>{t('settings.backend.modeExternalDescription')}</small></span>
                                 {viewMode === 'external' && <Check size={15} className="settings-choice-check" />}

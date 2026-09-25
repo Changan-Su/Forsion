@@ -12,7 +12,7 @@
  *    中英混写属于「刻意留中文」一类,不进字典。
  */
 
-export type SettingsSearchNeed = 'stored' | 'managed' | 'external'
+export type SettingsSearchNeed = 'stored' | 'desktop' | 'managed' | 'external'
 
 export interface SettingsSearchEntry {
   /** 结果行的稳定 id(台架按它点)。 */
@@ -25,19 +25,19 @@ export interface SettingsSearchEntry {
   labelKey: string
   /** 模糊搜索别名(空格分隔,中英都写);首个词给台架当检索词。 */
   keywords: string
-  /** 额外门控:stored = 桌面配置已读到;managed / external = 后端运行方式(按草稿)。 */
+  /** 额外门控:stored = 桌面配置已读到;desktop = 仅桌面宿主;managed / external = 后端运行方式(按草稿)。 */
   needs?: SettingsSearchNeed[]
 }
 
 export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'workspace-dir', tab: 'general', sub: 'g-basic', anchor: 'workspace-dir', labelKey: 'settings.workspace.label', keywords: '工作目录 工作区 目录 workspace folder directory', needs: ['stored'] },
   { id: 'keep-awake', tab: 'general', sub: 'g-basic', anchor: 'keep-awake', labelKey: 'settingsmodal.keepAwake.title', keywords: '休眠 睡眠 唤醒 sleep awake', needs: ['stored'] },
-  { id: 'backend-mode', tab: 'general', sub: 'g-conn', anchor: 'backend-mode', labelKey: 'settings.backend.modeLabel', keywords: '后端 托管 外部 backend managed external' },
+  { id: 'backend-mode', tab: 'general', sub: 'g-conn', anchor: 'backend-mode', labelKey: 'settings.backend.modeLabel', keywords: '后端 托管 外部 backend managed external', needs: ['desktop'] },
   { id: 'sandbox', tab: 'general', sub: 'g-conn', anchor: 'sandbox', labelKey: 'settings.sandbox.label', keywords: '沙箱 docker sandbox', needs: ['stored', 'managed'] },
   { id: 'python', tab: 'general', sub: 'g-conn', anchor: 'python', labelKey: 'settings.python.label', keywords: 'python 解释器 interpreter', needs: ['stored', 'managed'] },
   { id: 'mirror', tab: 'general', sub: 'g-conn', anchor: 'mirror', labelKey: 'settings.mirror.label', keywords: '镜像 国内 加速 mirror china', needs: ['stored', 'managed'] },
   { id: 'external-backend', tab: 'general', sub: 'g-conn', anchor: 'external-backend', labelKey: 'settings.external.title', keywords: '外部地址 令牌 url token', needs: ['external'] },
-  { id: 'forsion-account', tab: 'general', sub: 'g-forsion', anchor: 'forsion-account', labelKey: 'settings.forsion.accountLabel', keywords: '账号 登录 account login sign' },
+  { id: 'forsion-account', tab: 'general', sub: 'g-forsion', anchor: 'forsion-account', labelKey: 'settings.forsion.accountLabel', keywords: '账号 登录 account login sign', needs: ['desktop'] },
   { id: 'cloud-url', tab: 'general', sub: 'g-forsion', anchor: 'cloud-url', labelKey: 'settings.forsion.cloudUrlLabel', keywords: '云端 服务器 cloud server', needs: ['stored'] },
   { id: 'memory-sync', tab: 'general', sub: 'g-forsion', anchor: 'memory-sync', labelKey: 'settings.forsion.syncLabel', keywords: '记忆 同步 memory brain sync', needs: ['stored'] },
   { id: 'inbox-notify', tab: 'general', sub: 'g-inbox', anchor: 'inbox-notify', labelKey: 'settings.inbox.notifyLabel', keywords: '收件箱 inbox notification', needs: ['stored'] },

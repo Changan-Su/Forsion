@@ -32,8 +32,11 @@
   line-height: 1.5;
 }
 
-/* 吸底保存栏放在所属面板里:面板有左右内边距时栏自己补齐,顶线贯通。 */
-.settings-panel > .special-save.settings-save-bar { margin: 16px 0 0; padding-inline: 2px; }
+/* 吸底保存栏放在所属面板里:面板有左右内边距时栏自己补齐,顶线贯通。
+ * base.css 的 .settings-panel 是 overflow:hidden(裁圆角)—— 那会让面板成为滚动容器,sticky 只在面板内生效、
+ * 跟着面板滚走。改 clip:照样裁圆角,但不建滚动容器,sticky 才吸在 .settings-body 底部。 */
+.settings-body .settings-panel:has(> .settings-save-bar) { overflow: clip; }
+.settings-panel > .special-save.settings-save-bar { margin: 16px 0 0; padding-inline: 15px; }
 
 /* ── 设置搜索结果(U-15):行复用 .settings-nav-list button / .settings-nav-subitem,只补两行布局 ── */
 .settings-nav-list .settings-nav-results { margin-bottom: 14px; }
