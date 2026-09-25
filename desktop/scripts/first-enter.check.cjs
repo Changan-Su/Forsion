@@ -23,7 +23,8 @@
  *
  * ⚠️ 本脚本额外覆写 `HOME`(同 check:artificial):造物托管根 = <HOME>/Forsion-Dev/Project,不覆写会读用户真目录。
  * 跑法:npx electron-vite build && npm run check:firstenter
- * 旋钮:U40_RUNS(启动几轮,缺省 3)/ U40_PREFETCH=1(对照组:进入前先 import() 分块,看预取能省多少)/ U40_VERBOSE=1(列出首进拉了哪些分块)/ SHOT_DIR(首进骨架截图落点)
+ * 旋钮:U40_RUNS(启动几轮,缺省 3)/ U40_PREFETCH=1(对照组:进入前先 import() JS 分块 + 挂上它们的 CSS 依赖,
+ *   看预取能省多少;对照组自己也有断言:首进时一个分块都不许再拉,否则对照不完整、结论作废)/ U40_VERBOSE=1(列出首进拉了哪些分块)/ SHOT_DIR(首进骨架截图落点)
  */
 const fs = require('fs')
 const path = require('path')
@@ -34,6 +35,8 @@ const RUNS = Math.max(1, Number(process.env.U40_RUNS || 3)) // 0 轮 = 什么都
 const PREFETCH = !!process.env.U40_PREFETCH
 const VISIBLE_MS = 150
 const R = makeReporter()
+/** 预取对照组每轮实际预取成功了几个(JS / CSS),写进断言 3。 */
+const prefetchLog = []
 
 /** 页内长任务观察器(只装一次)。骨架本身按帧采样(见 COLLECT),不用 MutationObserver:
  *  dockview 会把面板 DOM 挪进挪出,增删记录对不上号(实测漏记「撤下」,把 230ms 的骨架量成 750ms)。 */
@@ -136,9 +139,25 @@ async function oneLaunch(run, shots) {
     await sleep(1500)
     await env.win.evaluate(INSTALL)
     if (PREFETCH) {
-      // 模拟「空闲时 import() 预取分块」:模块进了缓存,但 React.lazy 的 payload 仍是未解析态。
-      const names = fs.readdirSync(path.join(ROOT, 'out/renderer/assets')).filter((f) => /^(CalendarView|TodoListView|CalendarConfigView|ArtificialView)-.*\.js$/.test(f))
-      await env.win.evaluate(async (fs_) => { await Promise.all(fs_.map((f) => import(`./assets/${f}`).catch(() => null))) }, names)
+      // 模拟「空闲时预取分块」:JS 模块 import() 进缓存,但 React.lazy 的 payload 仍是未解析态。
+      // Vite 的 __vitePreload 解析 lazy 分块前还会等它的 CSS 依赖 <link> 加载完;只 import() JS 的话首进仍要拉 CSS,
+      // 对照不完整。这里把 CSS 依赖也挂上(preload 见到同 href 的 link 就跳过)。名单按实测首进拉的分块定,
+      // 分块改名后对照断言(3)会红,照 U40_VERBOSE 的「分块」列补正则。
+      const assets = fs.readdirSync(path.join(ROOT, 'out/renderer/assets'))
+      const js = assets.filter((f) => /^(CalendarView|TodoListView|CalendarConfigView|ArtificialView)-.*\.js$/.test(f))
+      const css = assets.filter((f) => /^(astryxBridge|artificial)-.*\.css$/.test(f))
+      const res = await env.win.evaluate(async ({ js: js_, css: css_ }) => {
+        const jsOk = await Promise.all(js_.map((f) => import(`./assets/${f}`).then(() => true, () => false)))
+        const cssOk = await Promise.all(css_.map((f) => new Promise((resolve) => {
+          const l = document.createElement('link')
+          l.rel = 'stylesheet'
+          l.href = new URL(`./assets/${f}`, location.href).href
+          l.onload = () => resolve(true); l.onerror = () => resolve(false)
+          document.head.appendChild(l)
+        })))
+        return { jsOk, cssOk }
+      }, { js, css })
+      prefetchLog.push({ js: js.length, jsOk: res.jsOk.filter(Boolean).length, css: css.length, cssOk: res.cssOk.filter(Boolean).length })
       await sleep(800)
     }
     const net = netRecorder(env.win)
@@ -192,6 +211,13 @@ async function main() {
     R.check(`2 ${space}:同次启动再进没有可见骨架(≥${VISIBLE_MS}ms)—— 分块缓存生效`,
       again.length === RUNS && again.every((r) => r.hit && r.active === space && r.maxVisible < VISIBLE_MS),
       JSON.stringify(again.map((r) => r.maxVisible)))
+  }
+  if (PREFETCH) {
+    // 对照组自证:预取全部成功,且首进一个分块都没再拉 —— 否则「预取省不省时间」的结论没有依据。
+    const firsts = all.filter((r) => r.n === 1)
+    R.check('3 预取对照组完整:JS / CSS 依赖全部预取成功,首进零分块请求',
+      prefetchLog.length === RUNS && prefetchLog.every((p) => p.js > 0 && p.css > 0 && p.jsOk === p.js && p.cssOk === p.css) && firsts.length > 0 && firsts.every((r) => r.net.assets.n === 0),
+      JSON.stringify({ prefetchLog, firstEntryAssets: firsts.map((r) => `${r.space}:${r.net.assets.names.join('+') || 0}`) }))
   }
   console.log(`SHOTS ${shots}`)
   process.exit(R.summary() ? 1 : 0)

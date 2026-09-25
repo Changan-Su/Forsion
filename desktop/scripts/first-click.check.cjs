@@ -24,7 +24,12 @@
  *
  * 跑法:npx electron-vite build && npm run check:firstclick
  * 旋钮:U41_ROUNDS(每档几次,缺省 3)/ U41_DELAYS(逗号分隔,缺省 0,50,150,300,600)/ U41_PRESS_MS(按住多久,缺省 70)/
- *   U41_NEGATIVE=1(负对照:切换后铺 400ms 遮罩,短延迟档必须红)/
+ *   U41_NEGATIVE=veil|moved|remount(负对照,每条指纹通道各证一次自己能红;`1` 等同 veil):
+ *     veil    切换后铺 400ms 透明遮罩 → 短延迟档必须报 intercept + MISS
+ *     moved   按下会话行的那一刻把行 translateY(8px) → 必须报 moved
+ *     remount 按下会话行的那一刻把行换成一份克隆(React 管不到的死节点)→ 必须报 remount + MISS
+ *             (intercept / noclick 会跟着亮:命中的是克隆不是原行、down/up 目标不同 —— 读表时 remount 优先)
+ *   /
  *   U41_LIST_DELAY(给 GET /agent/sessions* 加多少 ms 延迟,模拟慢引擎:名册晚到时行会不会在手指下被整批重挂)
  */
 const path = require('path')
@@ -65,17 +70,38 @@ const INSTALL = `(() => {
   return true
 })()`
 const RESET = `(() => { window.__u41.events = []; window.__u41.churn = []; return true })()`
-/** 负对照(U41_NEGATIVE=1):下一次点 Space 钮后铺一层 400ms 的透明遮罩 —— 短延迟那几档必须报 intercept + MISS,
- *  报不出来说明指纹采集是空的(check-negative-control 纪律:仪器先证明自己能红)。 */
-const NEGATIVE_ARM = `(() => {
-  window.addEventListener('click', (e) => {
-    if (!(e.target && e.target.closest && e.target.closest('.rb-space'))) return
-    const veil = document.createElement('div')
-    veil.className = 'u41-negative-veil'
-    veil.style.cssText = 'position:fixed;inset:0;z-index:99999;background:transparent'
-    document.body.appendChild(veil)
-    setTimeout(() => veil.remove(), 400)
-  }, { capture: true, once: true })
+/** 负对照(U41_NEGATIVE):人为造出某一类失败,对应指纹必须亮 —— 亮不了说明那条采集通道是空的
+ *  (check-negative-control 纪律:仪器先证明自己能红)。每一击前装一次、用完即卸。 */
+const NEGATIVE_MODE = (() => {
+  const v = process.env.U41_NEGATIVE
+  if (!v) return null
+  if (v === '1' || v === 'veil') return 'veil'
+  if (v === 'moved' || v === 'remount') return v
+  throw new Error(`U41_NEGATIVE 只认 veil / moved / remount(1 = veil),收到 ${v}`)
+})()
+const NEGATIVE_ARM = (mode) => `(() => {
+  const mode = ${JSON.stringify(mode)}
+  if (mode === 'veil') {
+    // 下一次点 Space 钮后铺一层 400ms 的透明遮罩
+    window.addEventListener('click', (e) => {
+      if (!(e.target && e.target.closest && e.target.closest('.rb-space'))) return
+      const veil = document.createElement('div')
+      veil.className = 'u41-negative-veil'
+      veil.style.cssText = 'position:fixed;inset:0;z-index:99999;background:transparent'
+      document.body.appendChild(veil)
+      setTimeout(() => veil.remove(), 400)
+    }, { capture: true, once: true })
+    return true
+  }
+  // moved / remount:下一次在会话行上按下时动手(捕获阶段,先于探针的 MID 采样)
+  const onDown = (e) => {
+    const row = e.target && e.target.closest ? e.target.closest('.t2s-srow') : null
+    if (!row) return
+    window.removeEventListener('mousedown', onDown, true)
+    if (mode === 'moved') row.style.transform = 'translateY(8px)'
+    else row.replaceWith(row.cloneNode(true))
+  }
+  window.addEventListener('mousedown', onDown, true)
   return true
 })()`
 
@@ -124,7 +150,7 @@ async function trial(win, delay, title) {
   if (away !== 'inbox') return { delay, title, ok: false, fp: ['nospace'], waited: 0, churn: `away=${away}` }
   await win.evaluate(INSTALL)
   await win.evaluate(RESET)
-  if (process.env.U41_NEGATIVE) await win.evaluate(NEGATIVE_ARM)
+  if (NEGATIVE_MODE) await win.evaluate(NEGATIVE_ARM(NEGATIVE_MODE))
   const t0 = Date.now()
   await enterSpace(win, SPACE_NAMES.tangu, { real: true })
   if (delay) await sleep(delay)

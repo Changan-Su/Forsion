@@ -4,12 +4,13 @@
  *
  * 按 Space 分别记宽是刻意设计(spaceRegistry.switchSpace → setSideProfile);本仪器钉的是**同一个
  * Tangu Space 内**,用户拖出来的左栏宽经各种往返后不变:
- *   0  左栏 sash 拖到 TARGET(320)→ DOM 宽 ≈320,且 localStorage `lcl.sideWidth2.tangu`.left ≈320
+ *   0  左栏 sash 拖到 TARGET(缺省 345)→ DOM 宽 ≈TARGET,且 localStorage `lcl.sideWidth2.tangu`.left ≈TARGET
  *      (拆两条:「根本没记下」与「记下后被冲掉」是两种病)
  *   1  开设置浮窗(ribbon 设置钮 → 独立 BrowserWindow)→ 关掉 → 宽不变
  *   2  切收件箱 → 切回 Tangu(真鼠标点 ribbon)→ 宽不变;连做 3 轮(偶发的只有多轮才见)
  *   3  「从别的 Space 切回来」:Note / 日历 各往返一次 → 宽不变
- *   4  窗口 resize:缩到 1100 再放回 1440 → 宽不变(记住 320 时 computeSideWidth 的上限是 min(680, 0.6W),不该钳)
+ *   4  窗口 resize:缩到 1100 再放回 WIN_W(缺省 1600)→ 宽不变(记住 345 时 computeSideWidth 的上限是 min(680, 0.6W),不该钳)
+ *   6  收起再展开左栏 / 开合右栏与底部面板 / 点会话行 → 宽不变(每步都断言那一下**真的发生了**,防真空通过)
  *   5  整轮下来 tangu 的存档宽从没被改写成别的值;切回途中逐帧采样的宽**没有**先跳到别的值再弹回
  *      (用户看见的「跳」可能只是过渡帧,终态却对 —— 两种都要记)
  *
@@ -49,6 +50,9 @@ const MEASURE = `(() => {
     hasT2: !!(left && left.querySelector('.t2sw')),
     store: { tangu: read('tangu'), [active]: read(active) },
     viewport: window.innerWidth,
+    // 布局签名:全部可见组(不只左栏)的取整 rect。用来证明「开合右栏 / 底部面板」那一下真的改了布局(否则 6b 会真空通过)。
+    sig: Array.from(document.querySelectorAll('.dv-groupview')).filter((g) => g.getBoundingClientRect().width > 0).map((g) => { const r = g.getBoundingClientRect(); return [r.left, r.top, r.width, r.height].map(Math.round).join(',') }).sort().join('|'),
+    activeRow: (() => { const a = document.querySelector('.t2sw .t2s-srow.active .t2s-srow-title'); return a ? (a.textContent || '').trim() : null })(),
   }
 })()`
 
@@ -201,28 +205,48 @@ async function run(app, win, shots) {
   await win.keyboard.press('Meta+Slash')
   await sleep(1200)
   const stExpanded = await win.evaluate(MEASURE)
-  R.check('6 收起再展开左栏:宽回到拖出来的那个', stCollapsed.width !== stExpanded.width && near(stExpanded.width, W) && near(leftW(stExpanded), W),
-    JSON.stringify({ collapsed: stCollapsed.width, expanded: stExpanded.width, stored: leftW(stExpanded) }))
+  // 收起时最左的可见组已不是工作区侧栏(hasT2=false)才算真的收起了;不能靠「量到的宽变了」这种副作用判。
+  R.check('6 收起再展开左栏:宽回到拖出来的那个', !stCollapsed.hasT2 && stExpanded.hasT2 && near(stExpanded.width, W) && near(leftW(stExpanded), W),
+    JSON.stringify({ collapsedHasT2: stCollapsed.hasT2, collapsed: stCollapsed.width, expanded: stExpanded.width, stored: leftW(stExpanded) }))
 
   // ── 6b 开合右栏 / 底部面板(lockOtherSide + pinSides 路径):左栏宽纹丝不动 ──
+  // 每一下都记布局签名:签名没变 = 那一下根本没开合(按钮没点中 / 快捷键没生效),这一步就不算量过。
   const sideOps = []
-  const edgeRight = win.locator('.dv-edge-right').first()
-  if (await edgeRight.count().catch(() => 0)) {
-    for (let i = 0; i < 2; i += 1) { await edgeRight.click().catch(() => {}); await sleep(900); sideOps.push({ op: `right#${i + 1}`, w: (await win.evaluate(MEASURE)).width }) }
+  const doOp = async (op, act) => {
+    const before = (await win.evaluate(MEASURE)).sig
+    await act()
+    await sleep(900)
+    const st = await win.evaluate(MEASURE)
+    sideOps.push({ op, w: st.width, changed: st.sig !== before })
   }
-  for (let i = 0; i < 2; i += 1) { await win.keyboard.press('Meta+J'); await sleep(900); sideOps.push({ op: `bottom#${i + 1}`, w: (await win.evaluate(MEASURE)).width }) }
+  const sig0 = (await win.evaluate(MEASURE)).sig
+  const edgeRight = win.locator('.dv-edge-right').first()
+  const hasEdge = !!(await edgeRight.count().catch(() => 0))
+  if (hasEdge) for (let i = 0; i < 2; i += 1) await doOp(`right#${i + 1}`, () => edgeRight.click().catch(() => {}))
+  for (let i = 0; i < 2; i += 1) await doOp(`bottom#${i + 1}`, () => win.keyboard.press('Meta+J'))
   const stOps = await win.evaluate(MEASURE)
-  R.check('6b 开合右栏 / 底部面板各两次:左栏宽始终不变', sideOps.length >= 2 && sideOps.every((o) => near(o.w, W)) && near(leftW(stOps), W),
-    JSON.stringify({ sideOps, stored: leftW(stOps) }))
+  R.check('6b 开合右栏 / 底部面板各两次(每下都真的改了布局、开合成对后复原):左栏宽始终不变',
+    hasEdge && sideOps.length === 4 && sideOps.every((o) => o.changed && near(o.w, W)) && stOps.sig === sig0 && near(leftW(stOps), W),
+    JSON.stringify({ hasEdge, sideOps, restored: stOps.sig === sig0, stored: leftW(stOps) }))
 
   // ── 7 点一条会话行(主区换会话 → openView/pinSides 路径)──
-  const row = win.locator('.t2sw .t2s-srow, .t2sw .t2o-row').first()
-  if (await row.count().catch(() => 0)) {
+  // 挑一条当前未激活的行:点完它变成激活态,才证明主区真换了内容(走到了 openView / pinSides)。
+  // 夹具会话在「Probe Project」组里,组收着就先点开组头(同 check:firstclick)。
+  const rowSel = () => win.locator('.t2sw .t2s-srow:not(.active)').filter({ hasText: 'Probe session' }).first()
+  if (!(await rowSel().isVisible().catch(() => false))) {
+    await win.locator('.t2sw .t2s-group').filter({ hasText: 'Probe Project' }).first().locator('.t2s-group-label').first().click().catch(() => {})
+    await sleep(900)
+  }
+  const row = rowSel()
+  if (await row.isVisible().catch(() => false)) {
+    const want = ((await row.locator('.t2s-srow-title').first().textContent().catch(() => '')) || '').trim()
     await row.click().catch(() => {})
     await sleep(1200)
     const stRow = await win.evaluate(MEASURE)
-    R.check('7 点侧栏会话行(主区换内容):左栏宽不变', near(stRow.width, W) && near(leftW(stRow), W), JSON.stringify({ w: stRow.width, stored: leftW(stRow) }))
-  } else R.note('7 侧栏里没有会话行,跳过', '')
+    const switched = !!want && !!stRow.activeRow && stRow.activeRow.startsWith(want)
+    R.check('7 点侧栏会话行(该行变成激活态):左栏宽不变', switched && near(stRow.width, W) && near(leftW(stRow), W),
+      JSON.stringify({ want, activeRow: stRow.activeRow, w: stRow.width, stored: leftW(stRow) }))
+  } else R.check('7 前置:侧栏里有可点的会话行', false, '没找到可见的夹具会话行 .t2s-srow(Probe session *)')
 
   // ── 8 reload(≈重启渲染层):setSideProfile 从存档读回 ──
   const preLog = await win.evaluate(() => window.__u20log || []) // reload 会清掉页内日志,先取走
