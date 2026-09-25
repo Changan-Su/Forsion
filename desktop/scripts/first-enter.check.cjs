@@ -205,8 +205,11 @@ async function main() {
   for (const space of ['calendar', 'artificial']) {
     const first = all.filter((r) => r.space === space && r.n === 1)
     const again = all.filter((r) => r.space === space && r.n === 2)
-    R.check(`1 ${space}:${first.length} 轮都点进去了,且首进挂出过骨架(否则首进不走 lazy,基线无意义)`,
-      first.length === RUNS && first.every((r) => r.hit && r.active === space && r.spans.length > 0),
+    // 预取对照组里骨架消失正是「预取有效」的结果,不能判红;只在基线组要求首进挂出过骨架。
+    R.check(PREFETCH
+      ? `1 ${space}:${first.length} 轮都点进去了(对照组:骨架出没出现只记数、不判)`
+      : `1 ${space}:${first.length} 轮都点进去了,且首进挂出过骨架(否则首进不走 lazy,基线无意义)`,
+      first.length === RUNS && first.every((r) => r.hit && r.active === space && (PREFETCH || r.spans.length > 0)),
       JSON.stringify(first.map((r) => ({ hit: r.hit, active: r.active, spans: r.spans.length }))))
     R.check(`2 ${space}:同次启动再进没有可见骨架(≥${VISIBLE_MS}ms)—— 分块缓存生效`,
       again.length === RUNS && again.every((r) => r.hit && r.active === space && r.maxVisible < VISIBLE_MS),
