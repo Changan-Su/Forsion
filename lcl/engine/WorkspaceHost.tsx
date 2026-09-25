@@ -564,6 +564,7 @@ export const WorkspaceHost: React.FC<{
     // 布局变更:只同步侧栏可见态 + 存盘。跨组变形已由 dropView 显式写 __loc(不再位置反查 reconcile)。
     const syncLayout = (): void => {
       ws.syncPanelState()
+      ws.noteLayoutChange() // 重置后第一次改布局结构 → 「撤销」作废(见 dockviewStore.noteLayoutChange)
       captureSideWidths(e.api) // 记住「可自由拖宽」侧栏(如 Coding 对话栏)被拖后的宽度 → 持久
       scheduleWorkspaceSave()
     }

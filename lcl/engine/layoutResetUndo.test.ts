@@ -7,6 +7,7 @@
  *   ③ 换 Space(画像键变了)/ 应用命名布局后快照作废 —— 不把别的 Space 的布局灌进来
  *   ④ 自动重置(进一个没存档的 Space 时 spaceRegistry 调的那种)不给撤销,且作废之前的快照(codex 评审 P1)
  *   ⑤ 撤销连收起侧栏的「当前项」stashActive 一起还原(codex 评审 P2)
+ *   ⑥ 重置后用户第一次改了布局结构(新开标签 / 分屏)→ 快照作废、「撤销」提示收回;只拖尺寸不算(Codex 第一轮 C-1)
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DockviewApi } from 'dockview-react'
@@ -18,7 +19,7 @@ function mkApi() {
   let layout: { tag: string } = { tag: 'user-layout' }
   const api = {
     panels: [] as unknown[],
-    groups: [] as unknown[],
+    groups: [] as Array<{ panels: Array<{ id: string }> }>,
     activePanel: null,
     width: 1200,
     height: 800,
@@ -94,6 +95,33 @@ describe('resetLayout 的撤销', () => {
     expect(useWorkspace.getState().stashActive.right).toBeNull()
     expect(useWorkspace.getState().undoResetLayout()).toBe(true)
     expect(useWorkspace.getState().stashActive.right).toBe('outline#2')
+  })
+
+  it('⑥ 重置后新开了标签:布局回调到来即作废快照并收回提示;撤销不再把旧布局灌回', () => {
+    const dismiss = vi.fn()
+    setRibbonActions({ notify: vi.fn(() => dismiss) })
+    const { api, loaded } = mkApi()
+    useWorkspace.setState({ sideProfileKey: 'home' })
+    useWorkspace.getState().resetLayout({ undoable: true })
+    // 重置本身引起的那批(异步到达的)布局回调:结构没变 → 撤销仍有效
+    useWorkspace.getState().noteLayoutChange()
+    expect(dismiss).not.toHaveBeenCalled()
+    // 用户新开一个标签
+    api.groups.push({ panels: [{ id: 'note#new' }] })
+    useWorkspace.getState().noteLayoutChange()
+    expect(dismiss).toHaveBeenCalledTimes(1)
+    expect(useWorkspace.getState().undoResetLayout()).toBe(false)
+    expect(loaded).toHaveLength(0)
+  })
+
+  it('⑥ 布局回调还没到就点了撤销:按结构指纹同样拒绝', () => {
+    setRibbonActions({ notify: vi.fn() })
+    const { api, loaded } = mkApi()
+    useWorkspace.setState({ sideProfileKey: 'home' })
+    useWorkspace.getState().resetLayout({ undoable: true })
+    api.groups.push({ panels: [{ id: 'chat#2' }] })
+    expect(useWorkspace.getState().undoResetLayout()).toBe(false)
+    expect(loaded).toHaveLength(0)
   })
 
   it('没注入 notify 时照常重置、不抛', () => {

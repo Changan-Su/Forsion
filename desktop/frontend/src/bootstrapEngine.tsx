@@ -27,7 +27,7 @@ import { useApp, activeChatModelId } from './stores/appStore'
 import { openBtw } from './views/chat2/btwStore'
 import { PRODUCT } from './product'
 import { useTheme } from './stores/themeStore'
-import { notifyApp } from './stores/notificationStore'
+import { notifyApp, useNotifications } from './stores/notificationStore'
 import { cycleLocale, registerMessages, translate, useI18n } from './i18n'
 import { WorkspaceView, OutlineView } from './views/WorkspaceView'
 import { NewTabView } from './views/NewTabView'
@@ -362,7 +362,11 @@ export function installEngine(): void {
     // 引擎的一次性提示(如「已恢复默认布局 · 撤销」)→ 宿主通知。独立事件 id:不挂在 system.generic 上。
     // 带撤销钮的是**操作回执**(receipt):通知总开关 / 事件开关关着也照样给(Codex 第一轮 C-2),停留约 8 秒(U-06);
     // 仅应用内 —— 从设置浮窗触发时主窗恰好没焦点,不该为用户眼前的操作再弹一条系统横幅。
-    notify: (text, action) => { notifyApp({ text, level: 'info', event: 'workspace.layout', dedupeKey: 'workspace.layout', action, durationMs: action ? 8000 : undefined, inAppOnly: true, receipt: !!action }) },
+    // 返回收回函数:撤销快照作废(重置后用户已改了布局)时引擎把这条提示连同按钮撤掉(Codex 第一轮 C-1)。
+    notify: (text, action) => {
+      const id = notifyApp({ text, level: 'info', event: 'workspace.layout', dedupeKey: 'workspace.layout', action, durationMs: action ? 8000 : undefined, inAppOnly: true, receipt: !!action })
+      return id ? () => useNotifications.getState().dismiss(id) : undefined
+    },
   })
 
   // commands
