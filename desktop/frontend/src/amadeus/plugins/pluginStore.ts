@@ -36,7 +36,7 @@ import { UI_MODE } from '@lcl/engine/uiMode'
 import { AUTO_WORK_FOLDER_KEY } from './display'
 // 自动化播种 / 禁用即关规则:backendService 依赖图干净(http / agentRunService / localInbox,均不引 appStore),
 // 可静态 import;cfg 必须经 tanguSeam 探针的 waitBackend 拿(appStore 与本模块有 import 环)。
-import { getMuseTriggers, saveMuseTrigger } from '../../services/backendService'
+import { getMuseTriggers, listPlugins, saveMuseTrigger, setPluginEnabled } from '../../services/backendService'
 import { buildPluginTriggerUpserts, isPluginOwnedRule, normalizeVaultRel } from './pluginAutomation'
 import { MUTATE_DB_RETRIES, mutateDbCas } from './pluginDb'
 import { useDbStore } from '../store/dbStore'
@@ -612,10 +612,34 @@ function ensureReadySubscription(): void {
   readySub = { probe, off: probe.subscribeReady(onBackendReadyEdge) }
 }
 
-/** 后端 !ok→ok 边沿的唯一入口:两笔欠账都在这里补 —— 没种下的规则(ensure)与没停用的规则(disable)。 */
+/** 后端 !ok→ok 边沿的唯一入口:欠账都在这里补 —— 没种下的规则(ensure)、没停用的规则(disable)、
+ *  没关掉的捆绑包内嵌引擎插件。 */
 function onBackendReadyEdge(): void {
   replayFailedEnsures()
   replayPendingDisables()
+  void syncDisabledBundleEngines().catch((e) => console.warn('[amadeus] 捆绑包内嵌引擎插件补关失败', e))
+}
+
+/** 用户关掉的捆绑包 ⇒ 它内嵌的引擎插件也必须是关的。拨开关时的级联(AmadeusPluginsTab)只发一次,那一刻引擎
+ *  不在就丢了;而引擎对捆绑包内嵌插件缺省启用(tangu-agent plugins/bootstrap)—— 欠下的在装载完与每次就绪边沿补上。
+ *  只认持久化的禁用偏好(用户明确意图):不看激活态(启动时还在异步激活,会误关),也不管门禁挡下的
+ *  (显式 false 是粘性的,解禁后没人翻回来)。只 PUT 仍开着的,多窗口重复跑是空转。跳过口径同级联:
+ *  用户目录同 id 覆盖与首方内置同 id 不归捆绑包管;设备页不动对端引擎(见 SettingsModal 的级联注释)。 */
+export async function syncDisabledBundleEngines(): Promise<void> {
+  if (typeof window === 'undefined' || window.tangu?.unitPage || (window as unknown as { __FORSION_UNIT_PAGE__?: unknown }).__FORSION_UNIT_PAGE__) return
+  ensureReadySubscription() // 这次等不到后端,就绪边沿再来一次
+  const cfg = (await readTangu()?.waitBackend?.(ENSURE_WAIT_MS)) ?? null
+  if (!cfg) return
+  const { plugins, disabledIds } = usePluginStore.getState()
+  const ids = new Set(plugins.filter((p) => disabledIds.includes(p.id)).flatMap((p) => p.bundle?.enginePlugins ?? []))
+  if (!ids.size) return
+  let userOwned = new Set<string>()
+  try {
+    userOwned = new Set(((await window.tangu?.pluginsUserInstalled?.()) ?? []).map((x) => x.id))
+  } catch { /* 桥缺位按空集 */ }
+  for (const e of await listPlugins(cfg)) {
+    if (ids.has(e.id) && e.enabled && e.source !== 'builtin' && !userOwned.has(e.id)) await setPluginEnabled(cfg, e.id, false).catch(() => {})
+  }
 }
 
 /** 对「上次 ensure 失败、没在飞、离上次重放 ≥30s、重放未满 3 次」的插件各重放一次。
@@ -1393,6 +1417,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const externals = sources.map(toPlugin)
       set((s) => ({ plugins: [...s.plugins.filter((p) => p.builtin), ...externals] }))
       for (const p of externals) applyPref(p.id)
+      if (readTangu()?.waitBackend) void syncDisabledBundleEngines().catch((e) => console.warn('[amadeus] 捆绑包内嵌引擎插件补关失败', e))
     },
 
     async reloadExternal() {

@@ -32,7 +32,7 @@ const MANIFEST = 'tangu-plugin.json';
  *   ③ 共享域 plugins/<bundle>/tangu-plugins —— Forsion 插件捆绑包内嵌的引擎插件(原地读取,见 bundles.ts)。
  * `TANGU_PLUGINS=off` 全关;`TANGU_PLUGINS_DIR=<path>` 只扫该目录(覆盖以上全部,含 bundle)。
  */
-export function resolvePluginsDirs(): string[] {
+export function resolvePluginsDirs(bundleRoots = bundleEnginePluginRoots()): string[] {
   if (process.env.TANGU_PLUGINS === 'off') return [];
   const override = process.env.TANGU_PLUGINS_DIR;
   if (override) return [path.resolve(override)];
@@ -40,7 +40,7 @@ export function resolvePluginsDirs(): string[] {
   return [
     path.resolve(here, '../../plugins'), // ① <pkg>/plugins(首方,随包/进 worker 镜像)
     pluginsDir(), // ② ~/.tangu/plugins(用户安装的全局插件)
-    ...bundleEnginePluginRoots(), // ③ Forsion bundle 内嵌(优先级最低:顶不掉首方/用户装的同 id)
+    ...bundleRoots, // ③ Forsion bundle 内嵌(优先级最低:顶不掉首方/用户装的同 id)
   ];
 }
 
@@ -59,8 +59,8 @@ export interface DiscoveredPlugin {
 export function discoverPlugins(): DiscoveredPlugin[] {
   const found: DiscoveredPlugin[] = [];
   const seen = new Set<string>(); // 同 id 只取第一个(高优先级目录),防用户插件顶掉首方(forsion-worker)
-  const bundleRoots = new Set(bundleEnginePluginRoots());
-  for (const root of resolvePluginsDirs()) {
+  const bundleRoots = bundleEnginePluginRoots(); // 只扫一次:搜索根与 bundled 标记必须出自同一份结果
+  for (const root of resolvePluginsDirs(bundleRoots)) {
     let names: string[];
     try {
       names = readdirSync(root);
@@ -102,7 +102,7 @@ export function discoverPlugins(): DiscoveredPlugin[] {
         continue;
       }
       seen.add(manifest.id);
-      found.push({ manifest, dir, iconUrl: pluginIconDataUrl(dir), entryUrl: pathToFileURL(path.resolve(dir, manifest.entry)).href, bundled: bundleRoots.has(root) });
+      found.push({ manifest, dir, iconUrl: pluginIconDataUrl(dir), entryUrl: pathToFileURL(path.resolve(dir, manifest.entry)).href, bundled: bundleRoots.includes(root) });
     }
   }
   // 确定性:按 id 排序（与 MCP 的字母序纪律一致，保证工具/路由注册顺序稳定）。
