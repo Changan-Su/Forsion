@@ -38,7 +38,7 @@ function check(name, ok, detail) {
 
 const SNAP = `(() => {
   const names = (sel) => [...document.querySelectorAll(sel)]
-    .map((b) => b.getAttribute('title') || b.querySelector('.rb-label')?.textContent || '')
+    .map((b) => b.getAttribute('aria-label') || b.getAttribute('title') || b.querySelector('.rb-label')?.textContent || '')
   const box = (sel) => { const e = document.querySelector(sel); if (!e) return null; const r = e.getBoundingClientRect(); return { top: r.top, bottom: r.bottom, mid: r.top + r.height / 2, h: r.height } }
   return {
     top: names('.rb-top .rb-space'),
@@ -157,7 +157,7 @@ async function main() {
 
     // 5 启动档「上次退出」:切到 Tangu 再重启,应回 Tangu(而不是主位的 Amadeus)
     await win.evaluate(`localStorage.setItem('forsion_default_space', '__last__')`)
-    await win.click('.rb-top .rb-space[title="Agent"]')
+    await win.click('.rb-top .rb-space[aria-label="Agent"]')
     await win.waitForTimeout(1800)
     ;({ app, win } = await restart(app))
     const b5 = await win.evaluate(SNAP)

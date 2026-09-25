@@ -115,7 +115,7 @@ async function run() {
         })
         return {
           url: location.href,
-          ribbon: [...document.querySelectorAll('.rb-space')].map((el) => el.getAttribute('title') || el.textContent),
+          ribbon: [...document.querySelectorAll('.rb-space')].map((el) => el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent),
           body: (document.body.textContent || '').slice(0, 1200),
           hasTangu: !!window.tangu,
           hasAmadeus: !!window.amadeus,
@@ -126,7 +126,7 @@ async function run() {
           registeredSpaces: await import('/@fs/Users/suqingyuan/Documents/Project/Forsion/Forsion-Genesis/lcl/engine/index.ts')
             .then((m) => m.useSpaceStore.getState().spaces.map((space) => space.id))
             .catch((e) => [`importError:${String(e)}`]),
-          ribbonAfterManualLoad: [...document.querySelectorAll('.rb-space')].map((el) => el.getAttribute('title') || el.textContent),
+          ribbonAfterManualLoad: [...document.querySelectorAll('.rb-space')].map((el) => el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent),
         }
       })
       await win.screenshot({ path: path.join(shots, 'bluebird-space-timeout.png'), fullPage: true })

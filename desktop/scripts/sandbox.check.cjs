@@ -99,7 +99,7 @@ async function openCodingSpace(win) {
   // 按 title **或** .rb-label 文案认(收起态 ribbon 只有 title,展开态只有 label)—— 同 builtin-artificial.check 的 enterSpace。
   const click = (root) => `(() => {
     const b = [...document.querySelectorAll('${root} .rb-space')].find((x) =>
-      ${JSON.stringify(SPACE_NAMES)}.includes(x.getAttribute('title') || x.querySelector('.rb-label')?.textContent || ''))
+      ${JSON.stringify(SPACE_NAMES)}.includes(x.getAttribute('aria-label') || x.getAttribute('title') || x.querySelector('.rb-label')?.textContent || ''))
     if (b) { b.click(); return true }
     return false
   })()`

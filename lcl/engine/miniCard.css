@@ -54,8 +54,8 @@
 }
 .mini-card-space:active:not(:disabled), .mini-card-action:active { transform: scale(0.94); }
 .mini-card-space:focus-visible, .mini-card-action:focus-visible, .mini-card-row:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--accent-ink, var(--accent)) 72%, transparent);
-  outline-offset: -2px;
+  outline: var(--focus-ring, 1px) solid var(--accent-ink, var(--accent));
+  outline-offset: -1px;
 }
 
 .mini-card-space {

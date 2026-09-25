@@ -726,3 +726,71 @@ html[data-dv-dragging] .t2s-side { -webkit-app-region: no-drag; }
 .wb-home-new:hover { border-color: var(--accent-ink); background: var(--overlay-light); transform: translateY(-1px); }
 .wb-home-new:active { transform: translateY(0) scale(.98); }
 .wb-home-new > svg { color: var(--accent-ink); }
+
+/* ===== uiux-c(09-25 UI/UX 评审)追加块:放文件末尾,同特异性覆盖在前面规则之后生效 ===== */
+/* U-06:右上角浮钮组压着的那条标签头(WorkspaceHost 按几何打 .dv-under-edge)让出浮钮组的宽度,
+   否则右栏第一个 tab 的点击会被「恢复默认布局」钮截走。 */
+.dockview-theme-lcl .dv-tabs-and-actions-container.dv-under-edge { padding-right: var(--dv-edge-actions-w, 0px); }
+/* U-06:左右栏折叠钮与底部面板钮一样用颜色表达开合(aria-pressed 同步给读屏)。 */
+.dv-edge-toggle.is-on { color: var(--accent-ink, var(--accent, var(--text))); }
+
+/* U-21:钉进命令区的开关类命令(Command.checked)开着时高亮。 */
+.rb-btn.is-on { color: var(--accent-ink, var(--accent, var(--text))); }
+.rb-btn.is-on:hover { color: var(--accent-ink, var(--accent, var(--text))); }
+
+/* U-21:Ribbon 收起态自绘浮签(取代原生 title;时序 1s / 0.1s skip 同侧栏 hoverTip,外观同 .amx-tip)。
+   left/top 由 Ribbon 按 zoom 折算后写入;浮签绝不吃鼠标,否则贴边弹出时会抢走 hover 造成闪烁。 */
+.rb-tip {
+  position: fixed;
+  z-index: 95;
+  max-width: 280px;
+  padding: 4px 9px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-card, var(--bg));
+  color: var(--text);
+  outline: 0.5px solid var(--border);
+  outline-offset: -0.5px;
+  box-shadow: var(--card-shadow);
+  font-family: var(--font-ui);
+  font-size: var(--ui-font-meta, 12px);
+  line-height: 1.55;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  transform: translateY(-50%) translateX(0) scale(1);
+  transition: opacity 140ms ease, transform 160ms cubic-bezier(0.22, 1.4, 0.36, 1);
+}
+@starting-style {
+  .rb-tip { opacity: 0; transform: translateY(-50%) translateX(-6px) scale(0.94); }
+}
+@media (prefers-reduced-motion: reduce) { .rb-tip { transition: none; } }
+
+/* U-23:状态栏可点项改成 <button>(键盘可达):抹掉按钮默认外观,继承状态栏的字体与行高。 */
+.sb button.sb-click {
+  font: inherit;
+  line-height: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  -webkit-app-region: no-drag;
+}
+.sb button.sb-click:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
+/* 插件项与内置项之间的分隔(无自定义顺序时插件项归右端)。 */
+.sb-sep { width: var(--border-width, 1px); height: 10px; background: var(--border); flex-shrink: 0; pointer-events: none; }
+/* 项目按语境整项消失时(组件返回 null)包装 div 是空的:别让它白占一格 gap。
+   分隔线两侧任一侧没有可见项就藏掉(否则插件项独自在场时会挂一根孤零零的竖线)。 */
+.sb-item:empty { display: none; }
+.sb-group:not(:has(.sb-item:not(:empty) ~ .sb-sep)) .sb-sep,
+.sb-sep:not(:has(~ .sb-item:not(:empty))) { display: none; }
+
+/* U-43:引擎自带控件的键盘焦点环(与 base.css 全局 :focus-visible 同值;引擎也跑在没有 base.css 的宿主里)。 */
+.rb-btn:focus-visible,
+.dv-nav-btn:focus-visible,
+.dv-edge-toggle:focus-visible,
+.dv-new-tab:focus-visible,
+.sb .sb-click:focus-visible {
+  outline: var(--focus-ring, 1px) solid var(--accent-ink, var(--accent));
+  outline-offset: 1px;
+}
+/* ===== uiux-c 追加块 end ===== */

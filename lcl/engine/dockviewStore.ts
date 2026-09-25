@@ -18,6 +18,8 @@ import { computeSideWidth, computeBottomHeight, computeTransientSideWidth } from
 import { shouldRecordSideWidth } from './sideCapture'
 import { locOf, type DropTarget } from './dropModel'
 import { useNav } from './navStore'
+import { ribbonActions } from './ribbonRegistry'
+import { engineTr } from './i18nSeam'
 import {
   LAYOUT_KEY, saveLayout, loadLayout, clearLayout, saveNamedLayout, loadNamedLayout, listNamedLayouts,
   type LayoutEnvelopeV4, type PersistedPanel,
@@ -330,6 +332,9 @@ function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 
   }
 }
 
+/** resetLayout 的撤销快照(一次性)。profile = 拍快照时的 Space 画像键(sideProfileKey),api = 当时的 Dockview 实例。 */
+let layoutUndo: { env: LayoutEnvelopeV4; api: DockviewApi; profile: string | null; stashActive: WorkspaceState['stashActive'] } | null = null
+
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 export function scheduleWorkspaceSave(): void {
   if (saveTimer) clearTimeout(saveTimer)
@@ -436,8 +441,15 @@ interface WorkspaceState {
    *  fn 返回 undefined = 不动;null = 关掉(走 closeLeaf 的收尾,不是裸 panel.api.close());对象 = 合并进参数。
    *  引擎不懂参数语义,改哪个键由调用方定(文件改名 / 删除跟随见 frontend views/followPathGone.ts)。 */
   remapLeaves(fn: (type: string, params: Record<string, unknown>) => Record<string, unknown> | null | undefined): void
-  /** 恢复默认布局:清空 → 重建默认(黄金分割 中 0.618 / 两侧各 0.191)→ 清持久化。 */
-  resetLayout(): void
+  /** 恢复默认布局:清空 → 重建默认(黄金分割 中 0.618 / 两侧各 0.191)→ 清持久化。
+   *  undoable = **用户亲手点的**(右上角钮 / 命令 / 设置):拍快照并弹「撤销」。自动路径(进一个没存档的 Space、
+   *  用户 Space 重建…)不传 —— 那时 Dockview 里还是**上一个 Space** 的布局,给撤销就会把它灌进新 Space。 */
+  resetLayout(opts?: { undoable?: boolean }): void
+  /** 撤销最近一次 resetLayout(还原清空前的标签、分屏与侧栏开合)。快照一次性,换 Space / 换 api /
+   *  应用命名布局后作废。还原成功 true。 */
+  undoResetLayout(): boolean
+  /** 整份应用一个布局信封(applyNamed 与撤销共用)。成功 true;损坏 false。 */
+  applyLayout(blob: LayoutEnvelopeV4): boolean
   /** 按当前容器宽把两侧栏重钉回目标宽(容器 resize 后调,补 dockview 不自动重算黄金分割的缺口)。 */
   repinSides(): void
   /** 开/聚焦一个视图。singleton 已存在则聚焦(**除非显式 newTab**——那是「我明确要再来一个」,
@@ -731,9 +743,15 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
   },
 
-  resetLayout() {
+  resetLayout(opts) {
     const api = get().api
     if (!api) return
+    // 清空前拍快照(同存档信封,不含临时扩展视图;另记收起侧栏的「当前项」),给「撤销」用。
+    // 只有用户亲手重置才拍;拍不下来就不给撤销,重置照做。自动重置同时作废旧快照。
+    let snap: typeof layoutUndo = null
+    if (opts?.undoable) {
+      try { snap = { env: envelope(api, get()), api, profile: get().sideProfileKey, stashActive: { ...get().stashActive } } } catch { snap = null }
+    }
     dismissExtensions()
     try { api.clear() } catch { /* ignore */ }
     clearLayout()
@@ -742,6 +760,22 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set({ stash: { left: [], right: [], bottom: [] }, stashActive: { left: null, right: null, bottom: null }, leftVisible: true, rightVisible: true, bottomVisible: false, focusedChatLeafId: null })
     get().defaultBuilder?.() // 重建默认;openView 的 firstOfSide → sizeSide 按黄金分割钉宽
     scheduleWorkspaceSave()
+    layoutUndo = snap
+    if (snap) ribbonActions.notify?.(engineTr('lcl.layout.restored'), { label: engineTr('lcl.layout.undo'), run: () => { get().undoResetLayout() } })
+  },
+
+  undoResetLayout() {
+    const u = layoutUndo
+    layoutUndo = null
+    const api = get().api
+    // 快照只对拍它的那份 api、那个 Space 有效:切过 Space 再点通知里的「撤销」= 静默作废,不把别的 Space 的布局灌进来。
+    if (!u || !api || u.api !== api || u.profile !== get().sideProfileKey) return false
+    const ok = get().applyLayout(u.env)
+    if (ok) {
+      set({ stashActive: u.stashActive }) // 信封不带它:不还原的话,展开收起的侧栏会落到第一个视图而不是原来选中的那个
+      scheduleWorkspaceSave()
+    }
+    return ok
   },
 
   repinSides: () => { const api = get().api; if (api) pinSides(api) },
@@ -1008,9 +1042,15 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
 
   applyNamed(name) {
-    const api = get().api
     const blob = loadNamedLayout(name)
-    if (!api || !blob) return false
+    if (!get().api || !blob) return false
+    layoutUndo = null // 换了一整份布局(切 Space 走这里):之前的「恢复默认」快照作废
+    return get().applyLayout(blob)
+  },
+
+  applyLayout(blob) {
+    const api = get().api
+    if (!api) return false
     try {
       migrateLayoutBlob(blob)
       dismissExtensions()

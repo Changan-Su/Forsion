@@ -44,7 +44,7 @@ function check(name, ok, detail) {
 /** ribbon 上的 Space 名(折叠态在 title,展开态在 .rb-label)+ 日历视图可见性 + 活动 Space。 */
 const SNAP = `(() => {
   const names = [...document.querySelectorAll('.rb-space')]
-    .map((b) => b.getAttribute('title') || b.querySelector('.rb-label')?.textContent || '')
+    .map((b) => b.getAttribute('aria-label') || b.getAttribute('title') || b.querySelector('.rb-label')?.textContent || '')
   const vis = (sel) => [...document.querySelectorAll(sel)].filter((e) => e.getBoundingClientRect().width > 0).length
   return {
     spaces: names,
@@ -83,7 +83,7 @@ async function boot() {
 async function enterSpace(win, names) {
   const hit = await win.evaluate(`(() => {
     const b = [...document.querySelectorAll('.rb-space')].find((x) =>
-      ${JSON.stringify(names)}.includes(x.getAttribute('title') || x.querySelector('.rb-label')?.textContent || ''))
+      ${JSON.stringify(names)}.includes(x.getAttribute('aria-label') || x.getAttribute('title') || x.querySelector('.rb-label')?.textContent || ''))
     if (b) { b.click(); return true }
     return false
   })()`)

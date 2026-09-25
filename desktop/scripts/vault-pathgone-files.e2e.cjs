@@ -122,7 +122,7 @@ async function main() {
       if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break }
     }
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
-    await win.locator('.rb-space[title="Note"], .rb-space:has-text("Note")').first().click({ timeout: 15_000 })
+    await win.locator('.rb-space[aria-label="Note"], .rb-space:has-text("Note")').first().click({ timeout: 15_000 })
 
     const row = (title) => win.locator('.t2s-srow', { has: win.locator('.t2s-srow-title', { hasText: new RegExp(`^${esc(title)}$`) }) }).first()
     const folder = (name) => win.locator('.t2s-group', { has: win.locator('.t2s-group-label', { hasText: new RegExp(`^${esc(name)}$`) }) }).first()

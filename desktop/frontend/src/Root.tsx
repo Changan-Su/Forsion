@@ -71,7 +71,7 @@ export function Root() {
     // 设置浮窗里点「发送测试通知」:通知卡只有主窗渲染,由主窗来弹才是真预览。
     if (action === 'test-notification') sendTestNotification()
     // 以下同理:浮窗 = 独立渲染进程 + 独立 store,作用在工作台上的动作由主窗自己做(09-21)。
-    if (action === 'reset-layout') useWorkspace.getState().resetLayout()
+    if (action === 'reset-layout') useWorkspace.getState().resetLayout({ undoable: true })
     if (action === 'achievement-toast') debugFireToast()
     if (action === 'space-removed' && payload) forgetUserSpace(payload)
     if (action === 'chat-draft' && payload) draftInMainChat(payload)

@@ -70,7 +70,7 @@ async function main() {
       if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break }
     }
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
-    await win.locator('.rb-space[title="Note"], .rb-space:has-text("Note")').first().click({ timeout: 15_000 })
+    await win.locator('.rb-space[aria-label="Note"], .rb-space:has-text("Note")').first().click({ timeout: 15_000 })
     await win.waitForSelector('.t2s-srow:has-text("Dash-two")', { timeout: 20_000 })
 
     /** 主区此刻显示什么(读 DOM,不信 store 自证)。箭头取带箭头的第一个主区组。 */

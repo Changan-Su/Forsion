@@ -191,7 +191,7 @@ async function previewDiagnostic(app, win, suffix) {
   return report
 }
 async function openCodingSpace(win) {
-  const locator = '.rb-space[title="编码工作室"], .rb-space[title="Coding Studio"], .rb-space[title="Coding"]'
+  const locator = '.rb-space[aria-label="编码工作室"], .rb-space[aria-label="Coding Studio"], .rb-space[aria-label="Coding"]'
   const direct = win.locator(locator).first()
   if (await direct.isVisible().catch(() => false)) { await direct.click(); return }
   const more = win.locator('.rb-top .rb-more').first()

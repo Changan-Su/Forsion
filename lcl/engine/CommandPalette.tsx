@@ -56,7 +56,7 @@ export function CommandPalette() {
         <input
           className="cmd-input"
           autoFocus
-          placeholder={pickCb ? (document.documentElement.lang.startsWith('zh') ? '选择要添加的命令…' : 'Pick a command to add…') : t('command.placeholder')}
+          placeholder={pickCb ? t('lcl.palette.pickCommand') : t('command.placeholder')}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value)

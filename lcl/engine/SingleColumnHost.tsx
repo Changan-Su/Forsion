@@ -22,6 +22,7 @@ import { NativeExtendView } from './nativeExtendView'
 import { useWorkspace, restoreSingleColumnLayout, presentDrawerExtension } from './singleColumnStore'
 import { Skeleton, ViewErrorBoundary, skeletonVariantOf } from './Skeleton'
 import './singleColumn.css'
+import { useEngineI18n } from './i18nSeam'
 // ⚠️ 引擎 chrome 样式。移动端构建把 `Shell.tsx` 换成空壳(mobile/vite.config engineSwap),而
 // `import './engine.css'` 原本挂在 Shell 上 —— 外壳一换,`.cmd-overlay/.cmd-panel` 这套命令浮层
 // 样式在移动端就整个没了(CommandPalette 与 Amadeus 的 QuickSwitcher/TemplatePicker 三家共用)。
@@ -433,7 +434,7 @@ function MoreSheet({ onClose }: { onClose: () => void }) {
  *  新建走 desktop 同款逻辑:当前 Space 有 newPage 则调,否则 openView('launcher', newTab)。 */
 function TabSheet({ onClose }: { onClose: () => void }) {
   const tabs = useWorkspace((s) => s.mainTabs)
-  const zh = document.documentElement.lang.startsWith('zh')
+  const { t: tr } = useEngineI18n()
   const newTab = () => {
     const sp = getActiveSpace()
     if (sp?.newPage) sp.newPage()
@@ -463,7 +464,7 @@ function TabSheet({ onClose }: { onClose: () => void }) {
                 <span
                   className="mb-tabrow-x"
                   role="button"
-                  aria-label="close tab"
+                  aria-label={tr('lcl.mobile.closeTab')}
                   onClick={(e) => { e.stopPropagation(); useWorkspace.getState().closeLeaf(t.id) }}
                 >
                   <X size={17} />
@@ -473,7 +474,7 @@ function TabSheet({ onClose }: { onClose: () => void }) {
           )
         })}
         <button className="mb-sheet-row mb-tabrow-new" onClick={newTab}>
-          <Plus size={18} /> <span>{zh ? '新建标签页' : 'New tab'}</span>
+          <Plus size={18} /> <span>{tr('lcl.tab.new')}</span>
         </button>
       </div>
     </div>

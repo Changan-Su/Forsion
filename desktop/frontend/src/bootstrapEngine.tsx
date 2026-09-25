@@ -5,8 +5,9 @@ import { registerOperationsViews } from './features/operations'
 import { hasNativeFeature, amadeusAvailable } from './features/runtime'
 import { registerMiniViews } from './mini/miniViews'
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
-import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelBottom, Code2, Trophy, Activity, AppWindow } from 'lucide-react'
-import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, adoptSpaceLayoutCold, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, supportsMiniPanel } from '@lcl/engine'
+import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelBottom, Code2, Trophy, Activity, AppWindow, Sun, TextCursorInput } from 'lucide-react'
+import type { LucideIcon, LucideProps } from 'lucide-react'
+import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, adoptSpaceLayoutCold, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, supportsMiniPanel, LCL_MESSAGES } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
 import { useEffect } from 'react'
 import { windowKind } from './windowKind'
@@ -26,6 +27,7 @@ import { useApp, activeChatModelId } from './stores/appStore'
 import { openBtw } from './views/chat2/btwStore'
 import { PRODUCT } from './product'
 import { useTheme } from './stores/themeStore'
+import { notifyApp } from './stores/notificationStore'
 import { cycleLocale, registerMessages, translate, useI18n } from './i18n'
 import { WorkspaceView, OutlineView } from './views/WorkspaceView'
 import { NewTabView } from './views/NewTabView'
@@ -87,13 +89,23 @@ const splitChat = (): void => {
   const pinned = typeof active.params.sessionId === 'string' ? active.params.sessionId : app().activeId
   ws().splitActive('right', { followActive: false, sessionId: pinned, reuseKey: `session:${pinned || 'new'}` })
 }
+/** Ribbon 明暗钮的图标跟随当前明暗:暗色显示 Sun(点了变亮),亮色显示 Moon(点了变暗)。
+ *  做成读 store 的组件而不是换注册:RibbonItem.icon 是静态字段,主页坞 / 移动单列壳也直接拿它渲染。 */
+const ThemeModeIcon = ((props: LucideProps) => {
+  const dark = useTheme((s) => s.mode === 'dark')
+  return dark ? <Sun {...props} /> : <Moon {...props} />
+}) as unknown as LucideIcon
+
 let installed = false
 
 export function installEngine(): void {
   if (installed) return
   installed = true
 
-  setEngineI18n(useI18n) // LCL 引擎的 i18n 接缝:注入宿主 hook(引擎自身不依赖 desktop 的 i18n 实现)
+  // LCL 引擎的 i18n 接缝:注入宿主 hook + 非 hook 的 translate(引擎自身不依赖 desktop 的 i18n 实现);
+  // 引擎自带的 lcl.* 文案先并进宿主字典,切语言走宿主 context 当场生效。
+  registerMessages(LCL_MESSAGES)
+  setEngineI18n(useI18n, translate)
 
   // 内置插件(浏览器 / 终端):默认开,可在 设置 → Forsion 插件 关掉。**放最前面**——它同时接管
   // 主进程回投的外链(app:open-url),排在几十个 registerView 之后的话,那些调用里任一处抛错
@@ -320,7 +332,7 @@ export function installEngine(): void {
   if (window.tangu?.marketList) addRibbonIcon({ id: 'rb-market', side: 'bottom', icon: Store, tooltip: () => app().tr('market.title'), onClick: () => app().openMarket() })
   addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements() })
   // 主题锁定明暗时 toggleMode 静默无效 → tooltip 改说明「由主题决定」,悬停即知为何点不动(codex Low-2)。
-  addRibbonIcon({ id: 'rb-mode', side: 'bottom', icon: Moon, tooltip: () => useTheme.getState().modeLocked ? app().tr('settings.theme.modeLocked') : app().tr('theme.changeMode'), onClick: () => useTheme.getState().toggleMode() })
+  addRibbonIcon({ id: 'rb-mode', side: 'bottom', icon: ThemeModeIcon, tooltip: () => useTheme.getState().modeLocked ? app().tr('settings.theme.modeLocked') : app().tr('theme.changeMode'), onClick: () => useTheme.getState().toggleMode() })
   addRibbonIcon({ id: 'rb-cmd', side: 'bottom', icon: CommandIcon, tooltip: () => app().tr('command.palette'), onClick: openCommandPalette })
   // 底部常驻(side:'bottom'),无持久顺序时注册序即上下序:明暗/命令 → 设置 → 账号(账号最底)。
   // 用户拖过底部区后 bottomOrder 非空,新注册项按 rankIds 排到区末尾(反馈那条由注册处的一次性迁移兜住)。
@@ -347,6 +359,9 @@ export function installEngine(): void {
   setRibbonActions({
     newSpace: window.tangu?.spacesSave ? () => { void askString(app().tr('spaces.namePrompt')).then((v) => { const name = v?.trim(); if (name) void createBlankSpace(name) }) } : undefined,
     prompt: (title, initial) => askString(title, initial),
+    // 引擎的一次性提示(如「已恢复默认布局 · 撤销」)→ 宿主通知。独立事件 id:不挂在 system.generic 上,
+    // 用户关掉通用系统通知也不会连撤销入口一起丢。
+    notify: (text, action) => { notifyApp({ text, level: 'info', event: 'workspace.layout', dedupeKey: 'workspace.layout', action }) },
   })
 
   // commands
@@ -363,7 +378,7 @@ export function installEngine(): void {
   } })
   // hotkey 从 mod+b 改到 mod+/:mod+b 与 Amadeus 编辑器的加粗(commonmark Mod-b)冲突,编辑时会同时切侧栏。
   // 换 mod+/ 是因为 mod+shift+b 也被编辑器占(blockquote),mod+\ 被 split-right 占;mod+/ app 命令表与编辑器 keymap 皆空闲。
-  addCommand({ id: 'toggle-left', icon: PanelLeft, title: () => app().tr('command.toggleLeft'), keywords: 'sidebar 左栏', hotkey: 'mod+/', run: () => ws().toggleSidebar('left') })
+  addCommand({ id: 'toggle-left', icon: PanelLeft, checked: () => ws().leftVisible, title: () => app().tr('command.toggleLeft'), keywords: 'sidebar 左栏', hotkey: 'mod+/', run: () => ws().toggleSidebar('left') })
   addCommand({ id: 'quick-find', icon: Search, title: () => translate('bootengine.cmd.quickFind'), keywords: 'search find quick 搜索 查找 快速', hotkey: 'mod+p', run: () => useQuickFind.getState().openPalette() })
   // 页内查找(Cmd/Ctrl+F):壳级浮条 + 活动 View 的 DOM 扫描,见 findInPage.tsx。
   //  · 注册成命令而不是某个组件上的 onKeyDown —— 这样它自动进命令面板、进设置里的快捷键表、
@@ -384,18 +399,18 @@ export function installEngine(): void {
       openFindBar()
     },
   })
-  addCommand({ id: 'toggle-right', icon: PanelLeft, title: () => app().tr('command.toggleRight'), keywords: 'sidebar 右栏', run: () => ws().toggleSidebar('right') })
+  addCommand({ id: 'toggle-right', icon: PanelLeft, checked: () => ws().rightVisible, title: () => app().tr('command.toggleRight'), keywords: 'sidebar 右栏', run: () => ws().toggleSidebar('right') })
   // mod+j 与 VS Code 的面板热键对齐;app 命令表与编辑器 keymap 皆空闲(mod+/ 已被左栏占,见上)。
   // ⚠️仅桌面壳:移动单列壳没有底部面板,而 singleColumnStore.toggleSidebar 是
   // `side === 'left' ? 左 : 右` 的二元三目 —— 传 'bottom' 会**去开右抽屉**(命令面板在移动端也在,
   // 不 gate 就真能点到)。同理它的 bucketOf/sidebarDefaults 也没有 bottom 桶。
-  if (UI_MODE !== 'mobile') addCommand({ id: 'toggle-bottom', icon: PanelBottom, title: () => app().tr('command.toggleBottom'), keywords: 'panel bottom terminal 底部 面板 终端', hotkey: 'mod+j', run: () => ws().toggleSidebar('bottom') })
+  if (UI_MODE !== 'mobile') addCommand({ id: 'toggle-bottom', icon: PanelBottom, checked: () => ws().bottomVisible, title: () => app().tr('command.toggleBottom'), keywords: 'panel bottom terminal 底部 面板 终端', hotkey: 'mod+j', run: () => ws().toggleSidebar('bottom') })
   addCommand({ id: 'theme-mode', icon: Moon, title: () => app().tr('theme.changeMode'), keywords: 'theme dark 明暗', run: () => useTheme.getState().toggleMode() })
   addCommand({ id: 'theme-skin', title: () => app().tr('theme.changeSkin'), keywords: 'theme skin 配色', run: () => useTheme.getState().cycleSkin() })
   addCommand({ id: 'theme-lang', title: () => app().tr('theme.changeLanguage'), keywords: 'theme language genesis lovable soft', run: () => useTheme.getState().cycleLang() })
   // ⚠️别与上一条混:theme-lang = 主题的「语言层」(genesis/lovable/soft),这条才是界面中英文。
   addCommand({ id: 'toggle-locale', icon: Languages, title: () => app().tr('locale.toggleTitle'), keywords: 'locale language i18n 语言 中英文 chinese english', run: () => cycleLocale() })
-  addCommand({ id: 'toggle-smooth-caret', title: () => app().tr('command.toggleSmoothCaret'), keywords: 'smooth caret cursor 光标 丝滑 word', run: () => {
+  addCommand({ id: 'toggle-smooth-caret', icon: TextCursorInput, checked: isSmoothCaretOn, title: () => app().tr('command.toggleSmoothCaret'), keywords: 'smooth caret cursor 光标 丝滑 word', run: () => {
     setSmoothCaret(!isSmoothCaretOn())
   } })
   if (hasNativeFeature('tangu')) addCommand({ id: 'split-right', title: () => app().tr('command.splitRight'), keywords: 'split 分屏', hotkey: 'mod+\\', run: splitChat })
@@ -407,7 +422,7 @@ export function installEngine(): void {
   }
   addCommand({ id: 'nav-back', title: () => app().tr('command.navBack'), keywords: 'back history 后退 历史', hotkey: 'mod+shift+[', run: () => navGo('back') })
   addCommand({ id: 'nav-forward', title: () => app().tr('command.navForward'), keywords: 'forward history 前进 历史', hotkey: 'mod+shift+]', run: () => navGo('forward') })
-  addCommand({ id: 'reset-layout', title: () => app().tr('command.resetLayout'), keywords: 'layout reset default 布局 默认 黄金分割', run: () => ws().resetLayout() })
+  addCommand({ id: 'reset-layout', title: () => app().tr('command.resetLayout'), keywords: 'layout reset default 布局 默认 黄金分割', run: () => ws().resetLayout({ undoable: true }) })
   if (hasNativeFeature('tangu')) addCommand({
     id: 'show-chat-panel',
     icon: MessageCircle,
