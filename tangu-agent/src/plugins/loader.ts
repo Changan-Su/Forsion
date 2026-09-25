@@ -51,12 +51,15 @@ export interface DiscoveredPlugin {
   iconUrl?: string;
   /** 已构建入口的 file:// URL（动态 import 用）。 */
   entryUrl: string;
+  /** 来自 Forsion 捆绑包内嵌根(③)。启停归捆绑包管,见 bootstrap 的 defaultEnabled。 */
+  bundled: boolean;
 }
 
 /** 廉价:扫各目录、读 manifest、校验 apiVersion，按 id 去重(先扫目录胜)后排序。目录全缺失/为空 → `[]`。 */
 export function discoverPlugins(): DiscoveredPlugin[] {
   const found: DiscoveredPlugin[] = [];
   const seen = new Set<string>(); // 同 id 只取第一个(高优先级目录),防用户插件顶掉首方(forsion-worker)
+  const bundleRoots = new Set(bundleEnginePluginRoots());
   for (const root of resolvePluginsDirs()) {
     let names: string[];
     try {
@@ -99,7 +102,7 @@ export function discoverPlugins(): DiscoveredPlugin[] {
         continue;
       }
       seen.add(manifest.id);
-      found.push({ manifest, dir, iconUrl: pluginIconDataUrl(dir), entryUrl: pathToFileURL(path.resolve(dir, manifest.entry)).href });
+      found.push({ manifest, dir, iconUrl: pluginIconDataUrl(dir), entryUrl: pathToFileURL(path.resolve(dir, manifest.entry)).href, bundled: bundleRoots.has(root) });
     }
   }
   // 确定性:按 id 排序（与 MCP 的字母序纪律一致，保证工具/路由注册顺序稳定）。

@@ -1,0 +1,75 @@
+name: cu-windows-smoke
+
+# 电脑操作在 Windows 上的端到端冒烟(发版后手动跑:Actions → cu-windows-smoke → Run workflow,填 tag):
+# 装已发布的安装包 → 首启播种捆绑包 → 真引擎**不拨任何开关**就给出 CU 工具 → 真 helper 读出记事本。
+# 由来(2026-09-25):新装机器上捆绑包卡片显示开、内嵌引擎插件却是关的,agent 一个 CU 工具都没有;
+# mac 上的老环境早年手动开过,所以只有 Windows 新装机撞见。build-desktop 与单测都够不着这条链。
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to install, e.g. v2.11.5
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ inputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install released app
+        shell: pwsh
+        run: |
+          $ver = $env:TAG.TrimStart('v')
+          gh release download $env:TAG --repo $env:GITHUB_REPOSITORY -p "Forsion-$ver-x64.exe" -D $env:RUNNER_TEMP
+          Start-Process -FilePath (Join-Path $env:RUNNER_TEMP "Forsion-$ver-x64.exe") -ArgumentList '/S' -Wait
+          $exe = Join-Path $env:LOCALAPPDATA 'Programs\Forsion\Forsion.exe'
+          if (-not (Test-Path $exe)) { throw "Not installed: $exe" }
+          "EXE=$exe" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "RES=$(Join-Path (Split-Path $exe) 'resources')" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: First launch seeds the bundle
+        shell: pwsh
+        run: |
+          Start-Process -FilePath $env:EXE
+          $seeded = Join-Path $HOME '.forsion\plugins\tangu-computer-use\manifest.json'
+          $deadline = (Get-Date).AddSeconds(120)
+          while ((Get-Date) -lt $deadline -and -not (Test-Path $seeded)) { Start-Sleep 2 }
+          Stop-Process -Name Forsion -Force -ErrorAction SilentlyContinue
+          if (-not (Test-Path $seeded)) { throw 'Computer Use bundle was not seeded' }
+
+      - name: Engine offers CU tools without any toggle
+        shell: pwsh
+        run: |
+          $th = Join-Path $HOME '.forsion\tangu'
+          $env:ELECTRON_RUN_AS_NODE = '1'; $env:TANGU_HOME = $th; $env:TANGU_LOCAL_TOKEN = 'smoke'
+          $main = Join-Path $env:RES 'tangu-server\dist\standalone\main.js'
+          $eng = Start-Process -FilePath $env:EXE -ArgumentList @("`"$main`"", '--port', '47999', '--host', '127.0.0.1', '--data-dir', "`"$th\state.db`"", '--sandbox', 'none') -PassThru
+          try {
+            for ($i = 0; $i -lt 60; $i++) { try { Invoke-RestMethod http://127.0.0.1:47999/health | Out-Null; break } catch { Start-Sleep 2 } }
+            $names = (Invoke-RestMethod http://127.0.0.1:47999/agent/tools -Headers @{ Authorization = 'Bearer smoke' }).builtins.name
+            $cu = @('find_roots', 'observe_ui', 'act_ui') | Where-Object { $names -contains $_ }
+            "CU tools offered: $($cu -join ', ')"
+            if ($cu.Count -ne 3) { throw 'Computer Use tools are not offered by default' }
+          } finally { Stop-Process -Id $eng.Id -Force -ErrorAction SilentlyContinue }
+
+      - name: Real helper reads Notepad
+        shell: pwsh
+        run: |
+          Start-Process notepad; Start-Sleep 3
+          $env:ELECTRON_RUN_AS_NODE = '1'
+          $script = Join-Path $env:GITHUB_WORKSPACE 'desktop\scripts\cu-windows-smoke.mjs'
+          $bundle = Join-Path $HOME '.forsion\plugins\tangu-computer-use'
+          $p = Start-Process -FilePath $env:EXE -ArgumentList @("`"$script`"", "`"$bundle`"") -PassThru -NoNewWindow -RedirectStandardOutput smoke.log -RedirectStandardError smoke.err
+          $null = $p.Handle # 先取句柄,否则 ExitCode 可能读成空
+          if (-not $p.WaitForExit(240000)) { Stop-Process -Id $p.Id -Force; throw 'Smoke timed out' }
+          Get-Content smoke.log, smoke.err
+          if ($p.ExitCode -ne 0) { throw "Smoke failed with exit code $($p.ExitCode)" }
