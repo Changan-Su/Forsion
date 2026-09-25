@@ -55,7 +55,8 @@ export const APPROVAL_SUPERSEDED_REASON = 'The user sent a new message in the ch
 // 只有通道**完全停止**(禁用 / 断开 / 凭据清空 / 引擎退出)或该账号被断开才走这条;换凭据只重启传输层,待批的卡片留着(见 hub.restartChannel)。
 export const APPROVAL_CHANNEL_STOPPED_REASON = 'The chat channel was stopped or disconnected before anyone answered this approval request, so the action was not run.';
 /**
- * 通道完全停止 / 账号断开时替用户兑现还挂着的询问(ask_user / 计划审阅):不兑现的话 run 永远卡在等答复上(询问不超时)。给模型看,英文。
+ * 通道完全停止 / 账号断开时还挂着的询问(ask_user / 计划审阅)的兜底答复。所属 run 此时已被中止(releasePending → abandonRun),
+ * 正常路径下询问随 abort 信号释放、用不到它;只有不带信号登记的询问才靠它从等待里出来(否则 run 永远卡着,询问不超时)。给模型看,英文。
  * 开头自带「[No answer]」:ask_user 会在前面拼上「用户回答:」,不自标的话模型读到的是「用户回答了:通道停了」。
  */
 export const INQUIRY_CHANNEL_STOPPED_ANSWER = '[No answer] The chat channel was stopped or disconnected before the user answered this question. This is a system note, not the user\'s reply: do not assume an answer; continue without it or wait for the user to reach out again.';
@@ -113,6 +114,12 @@ interface ApprovalPrompt extends PeerAddr {
   preview: string;
   /** 无人应答超时:这张卡**显示出来**时才起算(排队期间用户看不到它,不能替他计时)。 */
   timer?: ReturnType<typeof setTimeout>;
+  /**
+   * 经主动推送发出、还有条没确认送达(showPrompt 的 send 路径):这期间「批准」不兑现(回一句「还在发」),
+   * 「拒绝」照常兑现;任一条报失败即按「没发全」拒绝(onApprovalUndelivered)。
+   * 旧版一发出就开放批准:用户看到第一条就回「批准」,执行的是含未送达尾巴的完整操作。
+   */
+  delivering?: boolean;
 }
 
 interface InquiryPrompt extends PeerAddr {
@@ -262,8 +269,14 @@ export class ChannelService {
   private readonly pendingSettlers = new Set<() => void>();
   /** peer → 入站串行分派链的队尾(receive)。 */
   private readonly inboundChains = new Map<string, Promise<void>>();
-  /** releasePending 递增:排在分派链里、还没轮到的入站随之作废。 */
+  /** releasePending 递增:排在分派链里、还没轮到的入站随之作废;分派到一半的入站也据此不再起 run(见 dispatchInbound 的 channelGone)。 */
   private epoch = 0;
+  /**
+   * accountId → 断开代数(releasePendingFor 递增)。epoch 是全通道的,单账号断开不动它;分派已过了 findBinding(绑定还没作废)、
+   * 正卡在查会话 / 存入站文件 / createRun 上的这个账号的入站,靠它知道「账号已断开,别再起 run」。
+   * 不清:键数以出现过的账号为上限;清掉会让代数回到 0,与分派中途记下的快照可能恰好相等。
+   */
+  private readonly accountGen = new Map<string, number>();
 
   constructor(opts: ChannelServiceOpts) {
     this.kind = opts.kind;
@@ -284,7 +297,10 @@ export class ChannelService {
   private peerKey(accountId: string, peerId: string): string { return `${accountId}:${peerId}`; }
 
   /**
-   * 通道**完全停止**(禁用 / 断开 / 引擎退出):结束所有挂起等待 + 定时器 + 订阅,并替用户兑现还挂着的卡片。
+   * 通道**完全停止**(禁用 / 断开 / 凭据清空 / 引擎退出):**中止**本通道发起的全部 run(在跑 + 排队),再结束所有挂起等待 +
+   * 定时器 + 订阅,兜底兑现还挂着的卡片。
+   * 为什么中止而不是放着:停了之后没人再订阅这些 run —— 结果无处可发,它再问一句 ask_user / 要一次审批也没人接;旧版还替用户
+   * 答掉在等的询问,等于让模型带着「没人回答」接着在主机上跑、无人看管(Codex 评审二轮 #5)。
    * 换凭据 / 启用只重启传输层,不调这里(hub.restartChannel):service 实例常驻,run 订阅与卡片留着,答复与结果照样经新驱动走
    * —— 旧版重启也走这里,退订了全部 run,在等 ask_user 的 run 永远等下去、用户重启后的答复被当成新任务、在跑任务的结果也丢了。
    */
@@ -296,8 +312,8 @@ export class ChannelService {
     this.typingTimers.clear();
     for (const settle of [...this.pendingSettlers]) settle();
     this.pendingSettlers.clear();
-    // 先退订再兑现(settleDropped):兑现会广播 approval_result / inquiry_result,不能再让订阅者去「显示下一张」/ 重挂出口。
-    for (const st of this.runs.values()) st.off();
+    // 先中止、再退订、最后兜底兑现(见 abandonRun / settleDropped)。
+    for (const st of this.runs.values()) this.abandonRun(st);
     this.runs.clear();
     this.runsByPeer.clear();
     this.expiredApprovalAt.clear();
@@ -306,11 +322,13 @@ export class ChannelService {
   }
 
   /**
-   * 断开**某一个账号**(微信多账号里只移除一个;其余账号照常在跑):只释放这个账号名下的卡片与 run,语义同 releasePending。
+   * 断开**某一个账号**(微信多账号里只移除一个;其余账号照常在跑):只中止 / 释放这个账号名下的 run 与卡片,语义同 releasePending。
    * 旧版单账号断开只作废绑定 + 移除 iLink 账号,它名下在等 ask_user 的 run 永远等、结果推给一个已不存在的账号。
-   * epoch 是全通道的,不动:排在分派链里的这个账号的旧入站,轮到时绑定已作废,只会回「未绑定」。
+   * epoch 是全通道的,不动:排在分派链里的这个账号的旧入站,轮到时绑定已作废,只会回「未绑定」;已过了 findBinding、正在分派的,
+   * 由 accountGen 递增作废(不起 run;run 行已落库的入队即中止)。
    */
   releasePendingFor(accountId: string): void {
+    this.accountGen.set(accountId, (this.accountGen.get(accountId) ?? 0) + 1); // 分派中途的该账号入站随之作废
     const dropped: Prompt[] = [];
     for (const [key, q] of [...this.prompts]) {
       if (!q.some((p) => p.accountId === accountId)) continue;
@@ -319,7 +337,7 @@ export class ChannelService {
     }
     for (const st of [...this.runs.values()]) {
       if (st.addr.accountId !== accountId) continue;
-      st.off(); // 先退订再兑现(同 releasePending)
+      this.abandonRun(st); // 先中止再退订(同 releasePending)
       st.sink?.close(); // 摘出口:停 typing、清计时器、摘 pendingSettlers;账号正在移除,不再往它说话
       this.runs.delete(st.runId);
       this.runsByPeer.delete(st.addr.key);
@@ -329,10 +347,24 @@ export class ChannelService {
   }
 
   /**
-   * 替用户兑现被丢下的卡片:审批按拒绝、询问答「通道已停止 / 断开,没有答复」(原因都写清,给模型看的英文)。只清计时器不兑现的话,
-   * 它们再无人应答(询问本就不超时),run 永远卡着。已在桌面端答掉的,resolve* 回 false,无副作用。
-   * 调用前必须已退订相关 run:兑现会广播 approval_result / inquiry_result,不能再让订阅者去「显示下一张」/ 重挂出口。
-   * (广播的落库在 eventBus 的 per-run 写链里,失败只记日志;引擎退出时这里的写入不会冒成未处理的 rejection。)
+   * 通道 / 账号不再管这个 run 了:中止它(在跑的走 AbortController —— 在等的审批 / 询问随 abort 信号同步释放;排队的出队并补终态),
+   * 再退订。已收到 done / error 的(只剩把回复发完)不中止。先标 ended:中止途中若同步冒出事件(eventBus 已有 seq 时 emit 是同步的),
+   * onRunEvent 一律忽略,不去往一个已停的通道推「任务已停止」/ 显示下一张卡。
+   */
+  private abandonRun(st: RunState): void {
+    const live = !st.ended;
+    st.ended = true;
+    st.stopped = true;
+    if (live) abortRun(st.runId);
+    st.off();
+  }
+
+  /**
+   * 兜底兑现被丢下的卡片:审批按拒绝、询问答「通道已停止 / 断开,没有答复」(原因都写清,给模型看的英文)。
+   * 调用前相关 run 已被 abandonRun 中止 + 退订:正常路径下它们在等的 resolver 已随 abort 信号释放,这里 resolve* 回 false、无副作用;
+   * 只有不带 abort 信号登记的(或已在桌面端答掉的)才轮到这里 —— 兑现是为了让已中止的 loop 从等待里出来收尾,不是替用户作答让它接着跑。
+   * (退订在前:兑现会广播 approval_result / inquiry_result,不能再让订阅者去「显示下一张」/ 重挂出口。
+   * 广播的落库在 eventBus 的 per-run 写链里,失败只记日志;引擎退出时这里的写入不会冒成未处理的 rejection。)
    */
   private settleDropped(prompts: Prompt[]): void {
     for (const p of prompts) {
@@ -593,6 +625,11 @@ export class ChannelService {
     const key = this.peerKey(msg.accountId, msg.peerId);
     const addr: PeerAddr = { key, accountId: msg.accountId, peerId: msg.peerId };
     const L = this.locale();
+    // 分派开始时的停止代数快照。receive 只在分派开始前看一次 epoch;之后这里还有好几个 await(绑定 / 会话 / 存入站文件 / createRun),
+    // 期间通道完全停止(releasePending)或这个账号被断开(releasePendingFor)的,不许再起一个没人接管的 host run(Codex 三轮)。
+    const epoch = this.epoch;
+    const accGen = this.accountGen.get(msg.accountId) ?? 0;
+    const channelGone = (): boolean => epoch !== this.epoch || accGen !== (this.accountGen.get(msg.accountId) ?? 0);
     // 先校验绑定:stop / 批准拒绝 / slash / 普通任务 都要求该 peer 已绑定(防未绑定 peer 绕过执行)。
     // 按账号串行:receive 只按 peer 串行,两个不同 peer 同时给一个还没认主的绑定发消息,不锁的话两边都读到 peer_id 为空、
     // 都认领成功(TOFU 竞态,peer 隔离失守)。旧版整条轮询串行,碰巧没这个窗口(QQ 本来就有)。
@@ -612,8 +649,11 @@ export class ChannelService {
     // 下面几步必须同步连着做:先摘卡再兑现(resolveApproval 会广播 approval_result,订阅者见卡已摘掉,不会当成「别处代答」);
     // 回复出口要在 run 的下一个事件之前挂上(run 在兑现后的微任务里才继续,同步挂上即赶得上)。
     if (head?.kind === 'approval' && isVerdict) {
+      const approve = APPROVE_RE.test(text);
+      // 分条的卡还没全部确认送达:不批(用户可能只看到了前几条),卡片原样留着、不记作废;「拒绝」任何时候都安全,照常兑现。
+      if (approve && head.delivering) return channelMsg(L, 'approvalStillSending');
       this.takeHead(key);
-      const ok = resolveApproval(head.approvalId, { action: APPROVE_RE.test(text) ? 'approve' : 'reject' });
+      const ok = resolveApproval(head.approvalId, { action: approve ? 'approve' : 'reject' });
       const wait = ok ? this.waitForRunReply(head.runId) : null; // 先挂出口:下一张卡若是同一 run 的,它就是这条「批准」的回复
       this.afterHeadGone(key, head, !ok);
       this.releaseIfWaitingOnUser(head.runId);
@@ -654,6 +694,8 @@ export class ChannelService {
     }
 
     const rows = await query<any[]>(`SELECT model_id, agent_config, project_path FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [binding.session_id, binding.user_id]);
+    // 通道已停 / 账号已断开:静默作废(回 '' —— receive 不推空串,不往已停的驱动 / 已移除的账号说话;也不再把入站文件落盘)。
+    if (channelGone()) return '';
     const session = rows[0];
     if (!session) return channelMsg(L, 'sessionMissing');
     const modelId = session.model_id || this.settings().modelId || deps().profile.defaultModelId || '';
@@ -701,6 +743,7 @@ export class ChannelService {
     }
     // 纯图片消息给个占位文本:部分 provider(如 Anthropic)拒绝空文本块,聊天记录里也更可读。
     const message = [text, ...fileNotes].filter(Boolean).join('\n') || (attachments.length ? '[image]' : '');
+    if (channelGone()) return ''; // 存入站文件期间停了:同上,不建 run
     await createRun({
       id: runId,
       sessionId: binding.session_id,
@@ -719,6 +762,15 @@ export class ChannelService {
         source: { channel: this.kind, accountId: msg.accountId, openid: msg.peerId, messageId: msg.messageId },
       },
     });
+    if (channelGone()) {
+      // createRun 期间停了:run 行已落库(queued),不能只 return —— recoverQueuedRuns 下次启动会把它当普通排队 run 重跑,
+      // 照样没有通道在听。入队后立即中止:abortRun 对排队(出队 + 补 aborted 终态)与已起的(AbortController;runLoop 在
+      // 钩子 / 采样之前就 throwIfAborted)都认。不 trackRun:没有订阅,结果不往已停的通道 / 已移除的账号推。
+      // 这里到 enqueueRun 之间没有 await,不会再漏一个窗口。
+      enqueueRun(binding.session_id, runId);
+      abortRun(runId);
+      return '';
+    }
     this.trackRun(runId, addr, agentConfig.agentSlug);
     enqueueRun(binding.session_id, runId);
     return { wait: this.waitForRunReply(runId) };
@@ -936,14 +988,19 @@ export class ChannelService {
     // 多条:不能让首条走出口 —— 出口兑现的是入站那条的等待,它在后面的微任务里才发,同步推的第 2 条会抢到前面。
     // 摘下出口(以 '' 兑现:不说话),全部按序主动推送;三个驱动的发送都按调用顺序串行,顺序不乱。
     sink?.close();
+    if (p.kind === 'approval') p.delivering = true; // 须在发出之前:send 在调用时同步发起
     const sends = parts.map((t) => this.send(p.accountId, p.peerId, t));
-    // 审批卡有一条没送达:用户没看全,不能让一句「批准」放行看不到的那段 —— 按拒绝兑现(见 onApprovalUndelivered)。
-    if (p.kind === 'approval') void Promise.all(sends).then((oks) => { if (oks.includes(false)) this.onApprovalUndelivered(p); });
+    if (p.kind !== 'approval') return;
+    // 全部确认送达才开放「批准」(见 ApprovalPrompt.delivering)。有一条没送达:用户没看全,不能让一句「批准」放行看不到的那段 ——
+    // 首个失败回报即按拒绝兑现(不等其余几条的重试;onApprovalUndelivered 只处理仍在队首的这张,重复调用无副作用)。
+    for (const s of sends) void s.then((ok) => { if (!ok) this.onApprovalUndelivered(p); });
+    void Promise.all(sends).then((oks) => { if (oks.every(Boolean)) p.delivering = false; });
   }
 
   /**
    * 审批卡(经主动推送发出的)有条没送达:它若仍在显示、没人答,按「没发全」拒绝(给模型的原因写清),通知用户,换下一张卡。
-   * 已被答掉 / 作废的(不在队首)不管 —— 送达失败的回报可能晚于用户的答复(微信限流要退避重试好几秒)。
+   * 送达确认之前「批准」不兑现(delivering),所以失败回报到时这张卡要么还在队首、要么已被拒绝 / 超时 / 取代 / 别处答掉
+   * (不在队首,不管)—— 不会有「先批准、后报没送达」。
    * 微信 iLink 限流重试后丢弃时不报失败(ilinkRuntime),那一路只剩 (i/n) 与末条的「没收全就拒绝」提醒。
    */
   private onApprovalUndelivered(p: ApprovalPrompt): void {

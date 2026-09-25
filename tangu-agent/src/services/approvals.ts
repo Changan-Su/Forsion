@@ -157,14 +157,94 @@ export function controlPlaneCall(
 /** controlPlaneCall 可能为真的工具(闸门据此决定要不要为非 host 调用解析参数)。 */
 const CONTROL_PLANE_TOOLS = new Set(['manage_agent', 'manage_schedule', 'manage_automation']);
 
-/** 控制面审批卡的待批内容**一个字都不省**:无人值守要跑的提示词、tool_call 的参数、Agent 的指令 / 人格 / 工具名单。
- *  桌面 / TUI 审批卡与 Muse 代批判官都只看得到 preview —— 旧口径截到 160 字、tool_call 只写工具名,
- *  批准重新启用一条旧规则时用户只看见「tool_call run_bash」,看不见实际命令(Codex 09-25 P1)。
- *  空白折叠只为单行可读,不丢内容;界面要折叠自己折,不能在这里省。 */
-const full = (v: unknown): string => String(v ?? '').replace(/\s+/g, ' ').trim();
-/** 参数原样 JSON(不折空白:字符串里的换行按 \n 转义,一个字符不丢)。 */
+/*
+ * 审批预览的排版(Codex 09-25 二轮 #2)。控制面审批卡的待批内容**一个字都不省**:无人值守要跑的提示词、tool_call 的参数、
+ * Agent 的指令 / 人格 / 工具名单 —— 桌面 / TUI 审批卡、通道卡与 Muse 代批判官都只看得到 preview(Codex 09-25 P1)。
+ * **换行不折**:旧口径把所有空白折成一个空格,`echo ok # safe\nrm -rf ~/Documents` 显示成一行,后一条命令看着像在注释里。
+ * 所以:
+ *   - 内容字段(命令 / 提示词 / 指令 / 人格 / 正文 / stdin / 浏览器任务)换行与缩进原样;结构化预览(manage_*)里多行的值排成块,
+ *     每行带固定前缀 PREVIEW_GUTTER —— 内容行冒充不了结构行(「· tools → […]」),截断标记落在块外、不带前缀;
+ *     tool_call 步骤 / 兜底分支(mcp__ 等)的参数里,顶层含换行的字符串值同样抽出来排成块(`args.<键>:`),其余照旧 JSON;
+ *   - 标识类字段(slug / 名字 / id / 模型 / 日期 / 工具名)保持单行,换行写成可见的 `\n`,不静默折掉;
+ *   - 整段预览最后过一遍 previewText:C0(留 \t \n)/ C1 / 零宽 / 方向控制 / 行段分隔符换成可见转义(见 SPOOF_CHARS);
+ *     **长空白串**(不论行首行中,宽于 MAX_BLANK_COLS 列)换成可见的 `[N spaces]` —— pre-wrap 的卡片里,一长串空白挂在
+ *     行尾(CSS 对 pre-wrap 行尾空白无条件 hang),其后的文字**与卡片宽度无关地**软换行到第 0 列、不带前缀,冒充结构行
+ *     (Codex 09-25 三轮 #5;280/400/640px 实测都落在第 0 列)。缩进与对齐在阈值内原样。
+ *   - 前缀只挡得住「硬换行」:卡片比内容行窄时,普通长行照样软换行到第 0 列。所以引擎补的事实(改哪个 agent、审批档)
+ *     放第一行、在任何模型内容之前(controlPreview),不靠排在末尾的位置说话 —— 收件箱按 2000 字截断时也截不掉它。
+ * 客户端原样显示(桌面 .approval-preview 是 pre-wrap;TUI 的 Ink Text 认 \n;通道按行切条)。界面要折叠自己折,不能在这里省。
+ */
+/** 块内容行的前缀(结构化预览里多行的值)。 */
+export const PREVIEW_GUTTER = '  │ ';
+// 能在展示面上伪装内容的字符:C0 控制符(不含 \t \n;\r 单独出现时也算 —— 终端里它把光标拉回行首、覆盖前文)、DEL、
+// C1(8 位 CSI 0x9B 真终端会解释,TUI 就跑在终端里)、软连字符、阿拉伯字母标记、蒙古文元音分隔符、零宽空格、
+// LRM / RLM、行 / 段分隔符(浏览器里会断行)、方向嵌入 / 覆盖 / 隔离、word joiner 与不可见运算符、BOM。
+// 换成**可见**转义而不是空格:空格能把伪装后的串变得像无害的,可见的 \u202E 会让人多看一眼。
+// ZWNJ / ZWJ(U+200C / U+200D)不在内:波斯文、印地文与 emoji 序列正常要用它们,单独出现也改不了显示顺序。
+const SPOOF_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u00AD\u061C\u180E\u200B\u200E\u200F\u2028\u2029\u202A-\u202E\u2060-\u206F\uFEFF]/g;
+/** 一段横向空白(行首行中都算)宽过这么多列(tab 按 8 列)就换成可见标记。24 = 六级 4 空格缩进 / 三个 tab 仍原样;
+ *  桌面卡片 / 终端都宽过它,挂在行尾的空白推不走后面的文字(见上方排版说明)。 */
+const MAX_BLANK_COLS = 24;
+/** String.replace 的回调:run 是一段极大的横向空白,at 是它在 all 里的位置。 */
+const blankRun = (run: string, at: number, all: string): string => {
+  // 块前缀(行首的 PREVIEW_GUTTER)末尾那个空格和内容的行首缩进连成一串:它不算内容,原样留着
+  const lead = at >= 3 && all.startsWith(PREVIEW_GUTTER, at - 3) && (at === 3 || all[at - 4] === '\n') ? run[0] : '';
+  const content = run.slice(lead.length);
+  let cols = 0;
+  for (const c of content) cols += c === '\t' ? 8 : 1;
+  if (cols <= MAX_BLANK_COLS) return run;
+  const kind = /^ +$/.test(content) ? 'spaces' : /^\t+$/.test(content) ? 'tabs' : 'whitespace chars';
+  // 两侧各留一个空格与邻字隔开;行首 / 行尾不补
+  const before = lead || (at === 0 || all[at - 1] === '\n' ? '' : ' ');
+  const end = at + run.length;
+  const after = end === all.length || all[end] === '\n' ? '' : ' ';
+  return `${before}[${content.length} ${kind}]${after}`;
+};
+/** 审批预览的展示净化:保留换行、缩进与制表符,其余能伪装显示的字符换成可见转义(\x1B、\u202E);CRLF 归一为 \n、去掉末尾空白;
+ *  宽过 MAX_BLANK_COLS 列的空白串换成 `[N spaces]`(见上方排版说明)。
+ *  approvalPreview 的返回值已经过这一道;收件箱 / 其它要**多行**展示预览的地方复用它(单行的 LOG / 标题照旧用 displayText)。 */
+export function previewText(s: unknown): string {
+  return String(s ?? '')
+    .replace(/\r\n/g, '\n')
+    .replace(SPOOF_CHARS, (c) => {
+      const n = c.charCodeAt(0);
+      return n < 0x100 ? `\\x${n.toString(16).toUpperCase().padStart(2, '0')}` : `\\u${n.toString(16).toUpperCase().padStart(4, '0')}`;
+    })
+    .replace(/\s+$/, '')
+    // 净化之后剩下的横向空白:空格、\t、NBSP、U+1680、U+2000–U+200A、U+202F、U+205F、U+3000(\v \f \r 已转义)
+    .replace(/[^\S\n]+/g, blankRun);
+}
+/** 标识类字段:单行,换行写成可见的 `\n`(不折、不丢)。其余控制符由 previewText 统一转义。 */
+const full = (v: unknown): string => String(v ?? '').trim().replace(/\r?\n/g, '\\n');
+/** 内容字段:换行与缩进原样。单行 → 原样(去首尾空白);多行 → 以换行开头、每行带 PREVIEW_GUTTER、以换行结尾的块
+ *  (只去掉开头的空行与末尾空白,首行缩进也保留)。拼接用 labeled / joinParts,块后面的结构从新的一行起。 */
+const body = (v: unknown): string => {
+  const s = String(v ?? '').replace(/\r\n/g, '\n').replace(/^(?:[ \t]*\n)+/, '').trimEnd();
+  if (!s.includes('\n')) return s.trim();
+  return `\n${s.split('\n').map((l) => (l ? PREVIEW_GUTTER + l : PREVIEW_GUTTER.trimEnd())).join('\n')}\n`;
+};
+/** `label: 值`;值是块时冒号后直接换行。 */
+const labeled = (label: string, b: string): string => (b.startsWith('\n') ? `${label}:${b}` : `${label}: ${b}`);
+/** 按分隔符拼接;前一段以块结尾(已换行)时分隔符去掉行首空格,不把结构接在内容行后面。 */
+const joinParts = (parts: string[], sep = ' · '): string =>
+  parts.reduce((acc, p, i) => (i === 0 ? p : `${acc}${acc.endsWith('\n') ? sep.trimStart() : sep}${p}`), '');
+/** 参数原样 JSON(不折空白:字符串里的换行按 \n 转义,一个字符不丢;方向控制符由 previewText 转义)。 */
 const asJson = (v: unknown): string => {
   try { return JSON.stringify(v ?? {}) ?? String(v); } catch { return String(v); }
+};
+/** `head {参数 JSON}`;参数对象里**顶层**含换行的字符串值(命令、脚本、正文)抽出来排成 `args.<键>:` 块,其余键照旧 JSON
+ *  (Codex 09-25 三轮 #6:无人值守 tool_call run_bash 的 `echo ok # safe\nrm -rf ~` 在单行 JSON 里只剩一个可见的 \n 区分)。
+ *  全是空白的多行值留在 JSON 里(块会把它修成空的)。只看顶层:嵌套对象里的字符串照旧 JSON 转义,一个字符不丢。 */
+const withArgs = (head: string, v: unknown): string => {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return `${head} ${asJson(v)}`;
+  const rest: Record<string, unknown> = {};
+  const blocks: string[] = [];
+  for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
+    if (typeof val === 'string' && val.includes('\n') && val.trim()) blocks.push(labeled(`args.${full(k)}`, body(val)));
+    else rest[k] = val;
+  }
+  if (!blocks.length) return `${head} ${asJson(v)}`;
+  return joinParts([Object.keys(rest).length ? `${head} ${asJson(rest)}` : head, ...blocks]);
 };
 /**
  * 卡上写的必须是**实际落盘**的那一份(09-25 评审 #4):写全之后卡片展示的是原始参数,而各工具落盘前会截断 ——
@@ -174,10 +254,11 @@ const asJson = (v: unknown): string => {
  * 校验不过 = 工具会报错、什么都不存 → 退回原始参数渲染(不把校验的中文错误语塞进英文卡片)。
  */
 const savedText = (saved: string, raw: unknown): string => {
-  const shown = full(saved);
-  return String(raw ?? '').trim() !== saved.trim()
-    ? `${shown} [truncated: only the first ${saved.length} characters are saved]`
-    : shown;
+  const shown = body(saved);
+  if (String(raw ?? '').trim() === saved.trim()) return shown;
+  // 块:标记单独一行、不带前缀 —— 内容写不出「看着没截断」的样子
+  const mark = `[truncated: only the first ${saved.length} characters are saved]`;
+  return shown.endsWith('\n') ? `${shown}${mark}` : `${shown} ${mark}`;
 };
 
 /** manage_agent 的参数 → buildAgentDef 会存下的那份(与 manageAgent.execute 的映射同口径;existing=null 只取字段校验 / 截断)。
@@ -200,10 +281,16 @@ function savedAgentFields(args: any): NormalAgentDef | undefined {
   }
 }
 
-/** 给审批弹窗用的人类可读预览（从 tool 参数里抽要害）。
+/** 给审批弹窗用的人类可读预览（从 tool 参数里抽要害）。多行内容原样保留(见 previewText 上方的排版说明),
+ *  返回前整段过 previewText。
  *  opts.keptActions:manage_automation 更新且省略 actions 时,闸门读到的旧动作链(undefined = 没读 / 读不到;
  *  null 或 [] = 旧规则没有动作链)。 */
 export function approvalPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {}): string {
+  return previewText(rawPreview(call, opts));
+}
+
+/** approvalPreview 的未净化版本:末尾可能是块(以换行结尾),controlPreview 据此在后面接补充信息。 */
+function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {}): string {
   let args: any = {};
   try {
     args = call.function.arguments ? JSON.parse(call.function.arguments) : {};
@@ -217,8 +304,16 @@ export function approvalPreview(call: ToolCall, opts: { keptActions?: unknown[] 
   if (name === 'multi_edit') return `multi_edit ${args.path} (${Array.isArray(args.edits) ? args.edits.length : '?'} edits)`;
   if (name === 'run_background') return `bg$ ${String(args.command ?? '').trim()}`;
   if (name === 'write_process_input') {
-    const inp = String(args.input ?? '');
-    return `→ proc ${args.process_id}: ${inp.length > 80 ? inp.slice(0, 80) + '…' : inp || '(poll)'}`;
+    // 与 run_bash 同档,写全不截(Codex 09-25 三轮 #3:旧口径截到 80 字,`echo ok` + 80 个空格 + `\nrm -rf ~` 卡上只剩 echo ok)。
+    // 取值与工具同口径:input 不是字符串 = 空 = 只轮询。
+    const inp: string = typeof args.input === 'string' ? args.input : '';
+    const head = `→ proc ${full(args.process_id)}`;
+    if (!inp) return `${head}: (poll)`;
+    // 全空白(回车 / 空格)写成 JSON 字面量:原样写就是一片空白,卡上看着像什么都没发 —— 一个回车就能确认 [Y/n]
+    if (!inp.trim()) return `${head}: ${JSON.stringify(inp)}`;
+    if (!inp.includes('\n')) return `${head}: ${inp}`;
+    // 多行:每一行都写(含首尾的空行 —— 对交互进程,空行 = 按了一次回车),每行带前缀
+    return `${head}:\n${inp.replace(/\r\n/g, '\n').split('\n').map((l) => (l ? PREVIEW_GUTTER + l : PREVIEW_GUTTER.trimEnd())).join('\n')}`;
   }
   if (name === 'apply_patch') {
     const n = (String(args.patch ?? args.input ?? '').match(/^\*\*\* (?:Add|Update|Delete) File:/gm) || []).length;
@@ -232,9 +327,9 @@ export function approvalPreview(call: ToolCall, opts: { keptActions?: unknown[] 
   // 接管用户 Chrome 时 browser_console 要批:用户批的是整段页内 JS,不许在 200 字处截断藏住后半段(Codex 09-24 #5)
   if (name === 'browser_console') return args.expression != null ? `browser_console — run JS in the page:\n${String(args.expression)}` : 'browser_console (read console/errors)';
   if (name === 'browser_task') {
-    const t = String(args.task ?? '').trim();
-    const domains = Array.isArray(args.allowed_domains) && args.allowed_domains.length ? ` [${args.allowed_domains.join(', ')}]` : '';
-    return `browser_task${domains}: ${t.length > 160 ? `${t.slice(0, 160)}…` : t}`;
+    // 以用户身份操作已登录网站,与 run_bash 同档:任务全文写出,不在 160 字处截断(Codex 09-25 三轮 #3)
+    const domains = Array.isArray(args.allowed_domains) && args.allowed_domains.length ? ` [${args.allowed_domains.map(full).join(', ')}]` : '';
+    return labeled(`browser_task${domains}`, body(args.task));
   }
   // 控制面三件:审批卡(旧客户端不认 reason.kind='control')和 Muse 代批判官都只看得到 preview ——
   // 截断的 JSON 答不了「它要建什么、谁到时候无人值守去跑、跑什么」。
@@ -245,17 +340,17 @@ export function approvalPreview(call: ToolCall, opts: { keptActions?: unknown[] 
     const sv = savedAgentFields(args);
     const iter = Number(args.max_iterations);
     const parts = [
-      args.description != null ? `description: ${sv ? savedText(sv.description, args.description) : full(args.description)}` : '',
+      args.description != null ? labeled('description', sv ? savedText(sv.description, args.description) : body(args.description)) : '',
       args.model != null ? `model → ${sv ? full(sv.model) || '(session model)' : full(args.model)}` : '',
       args.thinking_level != null ? `thinking → ${sv ? sv.thinkingLevel || '(not set)' : full(args.thinking_level)}` : '',
       Array.isArray(args.tools) ? `tools → [${(sv ? sv.tools : args.tools).map(full).join(', ')}]` : '',
       args.max_iterations != null
         ? `max_iterations → ${sv && Number.isFinite(iter) && iter >= AGENT_MAX_ITERATIONS_MIN ? sv.maxIterations : full(args.max_iterations)}`
         : '',
-      args.system_prompt != null ? `instructions: ${sv ? savedText(sv.systemPrompt, args.system_prompt) : full(args.system_prompt)}` : '',
-      args.soul != null ? `persona: ${sv ? savedText(sv.soul ?? '', args.soul) : full(args.soul)}` : '',
+      args.system_prompt != null ? labeled('instructions', sv ? savedText(sv.systemPrompt, args.system_prompt) : body(args.system_prompt)) : '',
+      args.soul != null ? labeled('persona', sv ? savedText(sv.soul ?? '', args.soul) : body(args.soul)) : '',
     ].filter(Boolean);
-    return `manage_agent ${act} ${args.slug ? full(args.slug) : '(slug from name)'} "${sv ? full(sv.name) : full(args.name)}"${parts.length ? ` · ${parts.join(' · ')}` : ''}`;
+    return joinParts([`manage_agent ${act} ${args.slug ? full(args.slug) : '(slug from name)'} "${sv ? full(sv.name) : full(args.name)}"`, ...parts]);
   }
   if (name === 'manage_schedule') {
     const act = String(args.action ?? '');
@@ -264,12 +359,14 @@ export function approvalPreview(call: ToolCall, opts: { keptActions?: unknown[] 
     const auto = args.auto === true || args.auto === 'true';
     // description 到点拼进无人值守 kickoff 的「Context:」(automation.scheduleMessage),与 prompt 同样是要跑的指令(评审 #2)。
     const v = validateEntryInput(args);
-    const prompt = v.ok ? savedText(v.value.prompt, args.prompt) : full(args.prompt);
-    const desc = v.ok ? (v.value.description ? savedText(v.value.description, args.description) : '') : full(args.description);
-    return `manage_schedule set ${args.id ? full(args.id) : '(new)'}${who}: "${v.ok ? full(v.value.name) : full(args.name)}" @ ${full(args.date || '?')}` +
-      `${args.repeat ? ` every ${full(args.repeat)}` : ''}` +
-      (auto ? ` · runs unattended when due: ${prompt}` : ' · planning only') +
-      (desc ? ` · context: ${desc}` : '');
+    const prompt = v.ok ? savedText(v.value.prompt, args.prompt) : body(args.prompt);
+    const desc = v.ok ? (v.value.description ? savedText(v.value.description, args.description) : '') : body(args.description);
+    return joinParts([
+      `manage_schedule set ${args.id ? full(args.id) : '(new)'}${who}: "${v.ok ? full(v.value.name) : full(args.name)}" @ ${full(args.date || '?')}` +
+        `${args.repeat ? ` every ${full(args.repeat)}` : ''}`,
+      auto ? labeled('runs unattended when due', prompt) : 'planning only',
+      desc ? labeled('context', desc) : '',
+    ].filter(Boolean));
   }
   if (name === 'manage_automation') {
     const act = String(args.action ?? '');
@@ -282,19 +379,19 @@ export function approvalPreview(call: ToolCall, opts: { keptActions?: unknown[] 
     const v = validateTriggerInput({ ...args, agent_slug: args.agent_slug ?? args.agent, cond_type: 'manual' });
     const agent = v.ok ? (v.value.agentSlug ?? '') : String(args.agent_slug ?? args.agent ?? '').trim();
     const newActions: unknown = v.ok ? v.value.actions : args.actions;
-    const legacyPrompt = v.ok ? savedText(v.value.prompt ?? '', args.prompt) : full(args.prompt);
+    const legacyPrompt = v.ok ? savedText(v.value.prompt ?? '', args.prompt) : body(args.prompt);
     // 原始参数里同一步的原文(按下标对齐,校验不改顺序):截断标记要拿它比。kept 链是已落盘的值,没有原文 → 不标。
     const rawSteps: any[] = v.ok && Array.isArray(args.actions) ? args.actions : [];
     // 每步写全:agent_run 的整段提示词、tool_call 的整份参数、notify 正文、多维表写入的目标与单元格。
-    const renderSteps = (list: any[], raw: any[] = []): string => list.map((s: any, i: number) => {
+    const renderSteps = (list: any[], raw: any[] = []): string => joinParts(list.map((s: any, i: number) => {
       const t = String(s?.type || '?');
-      const text = (key: 'prompt' | 'body'): string => (raw[i] ? savedText(String(s?.[key] ?? ''), raw[i]?.[key]) : full(s?.[key]));
-      if (t === 'agent_run') return `agent_run "${full(s.agentSlug || s.agent_slug)}" unattended: ${text('prompt')}`;
-      if (t === 'tool_call') return `tool_call ${full(s.tool)} ${asJson(s.args)}`;
-      if (t === 'notify') return `notify "${full(s.title)}"${s.body ? `: ${text('body')}` : ''}`;
+      const text = (key: 'prompt' | 'body'): string => (raw[i] ? savedText(String(s?.[key] ?? ''), raw[i]?.[key]) : body(s?.[key]));
+      if (t === 'agent_run') return labeled(`agent_run "${full(s.agentSlug || s.agent_slug)}" unattended`, text('prompt'));
+      if (t === 'tool_call') return withArgs(`tool_call ${full(s.tool)}`, s.args);
+      if (t === 'notify') return s.body ? labeled(`notify "${full(s.title)}"`, text('body')) : `notify "${full(s.title)}"`;
       const { type: _t, path: p, ...rest } = (s && typeof s === 'object' ? s : {}) as Record<string, unknown>;
       return `${t}${p ? ` ${full(p)}` : ''}${Object.keys(rest).length ? ` ${asJson(rest)}` : ''}`;
-    }).join(' → ');
+    }), ' → ');
     // 更新且省略 actions = 保留旧链(upsertTrigger);旧式 agent / prompt 则按本次参数整量覆写。
     // 闸门读得到旧链时经 opts.keptActions 传进来,让用户看见批的这条规则到点**实际**跑什么(评审 #7)。
     const keeps = args.actions === undefined && !!args.id;
@@ -304,12 +401,13 @@ export function approvalPreview(call: ToolCall, opts: { keptActions?: unknown[] 
       : kept
         ? `keeps existing actions: ${renderSteps(kept)}`
         : agent && agent !== MUSE_AGENT_SLUG
-          ? `agent_run "${full(agent)}" unattended: ${legacyPrompt}`
+          ? labeled(`agent_run "${full(agent)}" unattended`, legacyPrompt)
           : keeps && opts.keptActions === undefined ? '(actions unchanged)' : 'wake Muse';
     const off = args.enabled !== undefined && !args.enabled ? ' (disabled)' : '';
-    return `manage_automation set ${args.id ? full(args.id) : '(new)'}${off}: "${full(args.desc)}" · when ${when || '?'} · ${steps}`;
+    return joinParts([`manage_automation set ${args.id ? full(args.id) : '(new)'}${off}: "${full(args.desc)}"`, `when ${when || '?'}`, steps]);
   }
-  return `${name} ${JSON.stringify(args).slice(0, 200)}`;
+  // 兜底(mcp__ 任意能力、插件声明 command 档的工具):整份参数,不在 200 字处截断(Codex 09-25 三轮 #3);多行字符串排成块(#6)
+  return withArgs(name, args);
 }
 
 /**
@@ -638,7 +736,10 @@ async function controlPreview(call: ToolCall): Promise<string> {
       const tier = existing?.approvalMode
         ? `approval tier stays ${existing.approvalMode}`
         : 'no approval tier of its own (follows the session)';
-      return `${approvalPreview(call)} · ${what} · ${tier}`;
+      // 引擎补的事实放**第一行**、在任何模型内容之前(Codex 09-25 三轮 #5):排在末尾时,人格 / 指令里一长串空白能让一行
+      // 伪造的「· approval tier stays readonly」软换行到第 0 列、冒充结构行;收件箱按 2000 字截断时末尾的事实也会被截掉。
+      // 第一行全是引擎写的:slug 已按 isValidSlug / slugify 归一,审批档来自磁盘。
+      return previewText(`${what} · ${tier}\n${rawPreview(call)}`);
     }
   } catch { /* 补充信息读不到就不补 */ }
   return approvalPreview(call);

@@ -854,36 +854,50 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
   return def;
 }
 
-// 同 slug 的保存串行化(进程内):读 existing → 合并 → 落盘 之间有 await,两次保存交错时后写的一方会用它读到的旧值
+// 同 slug 的写串行化(进程内):读 existing → 合并 → 落盘 之间有 await,两次保存交错时后写的一方会用它读到的旧值
 // 盖掉先写的一方(比如用户刚收紧的审批档)。KEEP_APPROVAL_MODE 的「现读」只有在这把锁里才算数。
+// 删除 / 头像的读-改-写也排进同一条队(Codex 09-25 二轮 #3 #4):删除不入队 = 保存读到 existing 之后删掉、保存再把目录建回来
+// (mustExist 形同虚设);头像在锁外读的旧快照(含审批档)会盖掉排在它前面的用户收紧。
 const saveChains = new Map<string, Promise<unknown>>(); // slug -> 队尾
 
-/** 新建/更新一个 agent(落盘 <slug>/config.toml + SOUL.md)。保留已有 createdAt/createdBy/libraryOrder,绝不动 MEMORY/LOG/Library。
- *  同 slug 的调用按到达顺序串行(读-合并-写整段在锁内)。 */
-export async function saveAgent(input: SaveAgentInput): Promise<NormalAgentDef> {
-  const slug = input.slug && isValidSlug(input.slug) ? input.slug : slugify(input.name);
-  // 首访播种必须在锁外跑完:ensureAgentsReady → ensureBuiltinAvatar → saveAgentAvatar → saveAgent(同一个 xyra)。
-  // 放在锁里(经 getAgent 触发)= 自己等自己,首个保存恰是 xyra 时永久挂死。锁外先跑,锁内的 getAgent 再调就是空操作。
-  await ensureAgentsReady();
+/** 把 fn 排进该 slug 的队。⚠️ fn 里绝不能再调 saveAgent / deleteAgent / saveAgentAvatar / deleteAgentAvatar(同 slug = 自己等自己,
+ *  永久挂死)—— 要写就调 writeAgentLocked。入队前先 ensureAgentsReady(见 saveAgent 的注释)。 */
+function withAgentLock<T>(slug: string, fn: () => Promise<T>): Promise<T> {
   const tail = saveChains.get(slug) || Promise.resolve();
-  const mine = tail.then(async () => {
-    const existing = await getAgent(slug);
-    if (input.mustExist && !existing) throw new Error(`agent not found: ${slug} (it was removed before the change could be saved)`);
-    if (input.mustNotExist && existing) throw new Error(`agent already exists: ${slug} (it was created before your new agent could be saved). Nothing was saved; check it with action=list, then pass a different slug or call again to replace it.`);
-    const def = buildAgentDef(slug, existing, input);
-    const adir = path.join(agentsDir(), slug);
-    mkdirSync(adir, { recursive: true });
-    await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig(def), 'utf-8');
-    await fs.writeFile(path.join(adir, 'SOUL.md'), def.soul || '', 'utf-8');
-    cache = null; // 失效缓存
-    return def;
-  });
+  const mine = tail.then(fn);
   const entry = mine.then(() => undefined, () => undefined);
   saveChains.set(slug, entry);
   void entry.then(() => { if (saveChains.get(slug) === entry) saveChains.delete(slug); });
   return mine;
 }
 
+/** 锁内落盘(调用方已持有该 slug 的锁、existing 是锁内现读的)。基于已有 agent 的写不建目录:落盘那一刻它的 config.toml
+ *  不在了(锁外的删除,如别的进程 / 手动删)就报错,绝不把删掉的 agent 写回来。 */
+async function writeAgentLocked(slug: string, existing: NormalAgentDef | null, input: SaveAgentInput): Promise<NormalAgentDef> {
+  if (input.mustExist && !existing) throw new Error(`agent not found: ${slug} (it was removed before the change could be saved)`);
+  if (input.mustNotExist && existing) throw new Error(`agent already exists: ${slug} (it was created before your new agent could be saved). Nothing was saved; check it with action=list, then pass a different slug or call again to replace it.`);
+  const def = buildAgentDef(slug, existing, input);
+  const adir = path.join(agentsDir(), slug);
+  if (!existing) mkdirSync(adir, { recursive: true });
+  else if (!existsSync(path.join(adir, 'config.toml'))) throw new Error(`agent not found: ${slug} (it was removed before the change could be saved)`);
+  await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig(def), 'utf-8');
+  await fs.writeFile(path.join(adir, 'SOUL.md'), def.soul || '', 'utf-8');
+  cache = null; // 失效缓存
+  return def;
+}
+
+/** 新建/更新一个 agent(落盘 <slug>/config.toml + SOUL.md)。保留已有 createdAt/createdBy/libraryOrder,绝不动 MEMORY/LOG/Library。
+ *  同 slug 的调用按到达顺序串行(读-合并-写整段在锁内)。 */
+export async function saveAgent(input: SaveAgentInput): Promise<NormalAgentDef> {
+  const slug = input.slug && isValidSlug(input.slug) ? input.slug : slugify(input.name);
+  // 首访播种必须在锁外跑完:ensureAgentsReady → ensureBuiltinAvatar → saveAgentAvatar(同一个 xyra,入同一条队)。
+  // 放在锁里(经 getAgent 触发)= 自己等自己,首个保存恰是 xyra 时永久挂死。锁外先跑,锁内的 getAgent 再调就是空操作。
+  // deleteAgent / saveAgentAvatar / deleteAgentAvatar 入队前同样先跑它。
+  await ensureAgentsReady();
+  return withAgentLock(slug, async () => writeAgentLocked(slug, await getAgent(slug), input));
+}
+
+/** 删除一个 agent(整个文件夹)。与保存同队:排在它前面的保存先落盘再删,排在后面的 mustExist 保存会看到它已不在。 */
 export async function deleteAgent(slug: string): Promise<boolean> {
   if (!isValidSlug(slug)) return false;
   if (slug === DEFAULT_AGENT_SLUG) return false; // 不允许删默认 agent(含其记忆/日志)
@@ -891,14 +905,17 @@ export async function deleteAgent(slug: string): Promise<boolean> {
     // Muse 启用期间禁删(supervisor 会自愈重建,删了也白删且丢记忆);关闭 Muse 后允许删。
     try { if (loadSpecialAgentsConfig().muse.enabled) return false; } catch { /* 配置读失败不阻删 */ }
   }
-  try {
-    await fs.rm(path.join(agentsDir(), slug), { recursive: true, force: true });
-    await fs.rm(path.join(agentsDir(), `${slug}.md`), { force: true }).catch(() => { /* 清理可能的遗留扁平 */ });
-    cache = null;
-    return true;
-  } catch {
-    return false;
-  }
+  await ensureAgentsReady(); // 与 saveAgent 同理:入队前跑完首访播种
+  return withAgentLock(slug, async () => {
+    try {
+      await fs.rm(path.join(agentsDir(), slug), { recursive: true, force: true });
+      await fs.rm(path.join(agentsDir(), `${slug}.md`), { force: true }).catch(() => { /* 清理可能的遗留扁平 */ });
+      cache = null;
+      return true;
+    } catch {
+      return false;
+    }
+  });
 }
 
 // ── 头像(存进该 agent 的 Library/,config.avatar 引用;≤1MB)。常量导出供云端 cloudAgentStore 共用。──
@@ -919,25 +936,59 @@ export async function saveAgentAvatar(slug: string, base64: string, mimeType: st
   const buf = Buffer.from(raw, 'base64');
   if (!buf.length) throw new Error('empty image');
   if (buf.length > AVATAR_MAX_BYTES) throw new Error('image too large (max 1MB)');
-  const cur = await getAgent(slug);
-  if (!cur) throw new Error('agent not found');
-  const libDir = path.join(agentsDir(), slug, 'Library');
-  mkdirSync(libDir, { recursive: true });
-  // 删旧 avatar.*(避免不同扩展名堆积)
-  try {
-    for (const f of await fs.readdir(libDir)) {
-      if (/^avatar\.(png|jpe?g|gif|webp)$/i.test(f)) await fs.rm(path.join(libDir, f), { force: true }).catch(() => { /* ignore */ });
+  // 读-写整段在该 slug 的队里(Codex 09-25 二轮 #3 #4):旧口径锁外读 cur、再把 cur 的每个字段(含审批档)经 saveAgent 写回 ——
+  // 排在它前面的用户收紧(full-auto → readonly)会被这份旧快照盖回去;期间被删的 agent,mkdir Library 就把目录建回来了。
+  // 首访播种先在锁外跑完(ensureBuiltinAvatar 正是从播种里调本函数的,嵌套那次 ensureAgentsReady 立即返回、队是空的)。
+  await ensureAgentsReady();
+  return withAgentLock(slug, async () => {
+    const cur = await getAgent(slug);
+    if (!cur) throw new Error('agent not found');
+    const adir = path.join(agentsDir(), slug);
+    const libDir = path.join(adir, 'Library');
+    // getAgent 读完到这里之间,agent 可能被锁外删掉(别的进程 / 手动删):递归 mkdir 会把 <slug>/Library 连同 <slug>/ 建回来,
+    // 留下只有头像的孤儿目录(Codex 09-25 三轮 #8)。所以先复查 config.toml,再**非递归**建 Library —— <slug>/ 不在就 ENOENT,
+    // 绝不替它建。
+    if (!existsSync(path.join(adir, 'config.toml'))) throw new Error('agent not found');
+    try {
+      mkdirSync(libDir);
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') throw new Error('agent not found');
+      if (e?.code !== 'EEXIST') throw e;
     }
-  } catch { /* ignore */ }
-  const filename = `avatar.${ext}`;
-  await fs.writeFile(path.join(libDir, filename), buf);
-  await saveAgent({
-    slug, name: cur.name, description: cur.description, model: cur.model, tools: cur.tools,
-    thinkingLevel: cur.thinkingLevel, maxIterations: cur.maxIterations, approvalMode: cur.approvalMode,
-    systemPrompt: cur.systemPrompt, soul: cur.soul, avatar: filename, createdBy: cur.createdBy,
+    // 删旧 avatar.*(避免不同扩展名堆积)
+    try {
+      for (const f of await fs.readdir(libDir)) {
+        if (/^avatar\.(png|jpe?g|gif|webp)$/i.test(f)) await fs.rm(path.join(libDir, f), { force: true }).catch(() => { /* ignore */ });
+      }
+    } catch { /* ignore */ }
+    const filename = `avatar.${ext}`;
+    const file = path.join(libDir, filename);
+    await fs.writeFile(file, buf);
+    try {
+      await writeAgentLocked(slug, cur, { ...keepAgentFields(cur), avatar: filename });
+    } catch (e) {
+      // 写头像的同时 agent 被锁外删掉了(删到一半、我们刚写进 Library):收走刚写的头像,空了的 Library / <slug>/ 一并去掉。
+      // 只删自己写的文件与**空**目录(rmdir 不递归,非空就留着)—— 绝不 rm -rf。
+      if (!existsSync(path.join(adir, 'config.toml'))) {
+        await fs.rm(file, { force: true }).catch(() => { /* ignore */ });
+        await fs.rmdir(libDir).catch(() => { /* 非空 / 已不在 */ });
+        await fs.rmdir(adir).catch(() => { /* 非空 / 已不在 */ });
+      }
+      throw e;
+    }
+    if (builtinAgentAvatar(slug)) await fs.rm(avatarRemovedMarker(slug), { force: true });
+    return filename;
   });
-  if (builtinAgentAvatar(slug)) await fs.rm(avatarRemovedMarker(slug), { force: true });
-  return filename;
+}
+
+/** 只改头像时写回的其余字段:全部取**锁内现读**的 cur(buildAgentDef 对 description / model / tools 等是整量覆盖,省略 = 清空,
+ *  所以得显式带上);审批档用 KEEP_APPROVAL_MODE —— 头像操作永远不写审批档,只留落盘那一刻磁盘上的值。 */
+function keepAgentFields(cur: NormalAgentDef): SaveAgentInput {
+  return {
+    slug: cur.slug, name: cur.name, description: cur.description, model: cur.model, tools: cur.tools,
+    thinkingLevel: cur.thinkingLevel, maxIterations: cur.maxIterations, approvalMode: KEEP_APPROVAL_MODE,
+    systemPrompt: cur.systemPrompt, soul: cur.soul, createdBy: cur.createdBy,
+  };
 }
 
 /** 读头像二进制 + mime;无则 null。 */
@@ -958,24 +1009,23 @@ export async function readAgentAvatar(slug: string): Promise<{ data: Buffer; mim
 /** 删除头像:移除 Library/avatar.* 并清空 config.avatar(保留其余字段)。无头像时也按成功返回。 */
 export async function deleteAgentAvatar(slug: string): Promise<boolean> {
   if (!isValidSlug(slug)) throw new Error('invalid slug');
-  const cur = await getAgent(slug);
-  if (!cur) throw new Error('agent not found');
-  const libDir = path.join(agentsDir(), slug, 'Library');
-  try {
-    for (const f of await fs.readdir(libDir)) {
-      if (/^avatar\.(png|jpe?g|gif|webp)$/i.test(f)) await fs.rm(path.join(libDir, f), { force: true }).catch(() => { /* ignore */ });
+  await ensureAgentsReady(); // 同 saveAgentAvatar:读-写整段入队,首访播种先在锁外跑完
+  return withAgentLock(slug, async () => {
+    const cur = await getAgent(slug);
+    if (!cur) throw new Error('agent not found');
+    const libDir = path.join(agentsDir(), slug, 'Library');
+    try {
+      for (const f of await fs.readdir(libDir)) {
+        if (/^avatar\.(png|jpe?g|gif|webp)$/i.test(f)) await fs.rm(path.join(libDir, f), { force: true }).catch(() => { /* ignore */ });
+      }
+    } catch { /* 目录不存在 → 无文件可删 */ }
+    await writeAgentLocked(slug, cur, { ...keepAgentFields(cur), avatar: '' });
+    // 内置头像均尊重用户显式删除。
+    if (builtinAgentAvatar(slug)) {
+      await fs.writeFile(avatarRemovedMarker(slug), new Date().toISOString(), 'utf-8').catch(() => { /* ignore */ });
     }
-  } catch { /* 目录不存在 → 无文件可删 */ }
-  await saveAgent({
-    slug, name: cur.name, description: cur.description, model: cur.model, tools: cur.tools,
-    thinkingLevel: cur.thinkingLevel, maxIterations: cur.maxIterations, approvalMode: cur.approvalMode,
-    systemPrompt: cur.systemPrompt, soul: cur.soul, avatar: '', createdBy: cur.createdBy,
+    return true;
   });
-  // 内置头像均尊重用户显式删除。
-  if (builtinAgentAvatar(slug)) {
-    await fs.writeFile(avatarRemovedMarker(slug), new Date().toISOString(), 'utf-8').catch(() => { /* ignore */ });
-  }
-  return true;
 }
 
 // ── Library 文件管理(通用参考资料 + avatar)。设置面板增删改查;Agent 经文件工具读写同一目录。──

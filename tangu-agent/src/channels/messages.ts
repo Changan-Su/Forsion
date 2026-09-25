@@ -79,6 +79,10 @@ export const CHANNEL_MESSAGES = {
     zh: '(这个请求共分 {n} 条发出;没收全就回复「拒绝」。)',
     en: '(This request came in {n} parts. If you did not get all of them, reply "reject".)',
   },
+  approvalStillSending: {
+    zh: '⏳ 这个请求的完整内容还在发送中,请收全后稍等片刻再回复「批准」(回复「拒绝」随时有效)。',
+    en: '⏳ The full request is still being sent. Once you have all of it, reply "approve" again in a moment ("reject" works any time).',
+  },
   approvalDeliveryFailed: {
     zh: '⚠️ 下面这个待批操作有部分内容没能发到这里,已自动拒绝、没有执行:\n{head}\n\n如需执行,请到 Tangu Desktop 里继续这个任务,在那里看全文并批准。',
     en: '⚠️ Part of this approval request could not be delivered to this chat, so it was rejected automatically and not run:\n{head}\n\nTo run it, continue this task in Tangu Desktop, where you can review the full text and approve it.',

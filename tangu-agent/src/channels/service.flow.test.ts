@@ -7,6 +7,7 @@
  * 外加:/stop 与裸「停止」同路、未知 /x 不转给模型、会话 thinkingLevel 带进 run、数字选模型。
  * 末尾「评审二轮」一组:卡片 FIFO(不丢、不覆盖)、代答 / 超时后的「已过期」口径、receive 不占轮询、
  * 通道停止时兑现审批、启动对齐只收紧、扫码带档同步全部绑定。
+ * 「Codex 三轮」一组:分派到一半时通道停止 / 账号断开,不再起一个没人接管的 run(已落库的入队即中止)。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChannelDriver } from './types.js';
@@ -24,6 +25,8 @@ const state = vi.hoisted(() => {
     created: [] as any[],
     enqueued: [] as string[],
     aborted: [] as string[],
+    /** 中止 / 兑现的先后(Codex 二轮 #5:通道停止须先中止 run,再兜底兑现卡片)。 */
+    order: [] as string[],
     approvals: [] as Array<[string, any]>,
     inquiries: [] as Array<[string, string]>,
     sql: [] as Array<[string, any[]]>,
@@ -61,7 +64,7 @@ vi.mock('../seams/runtime.js', () => ({
 }));
 vi.mock('../services/runStore.js', () => ({ createRun: vi.fn(async (run: any) => { state.created.push(run); }) }));
 vi.mock('../services/agentLoop.js', () => ({
-  abortRun: vi.fn((runId: string) => { state.aborted.push(runId); }),
+  abortRun: vi.fn((runId: string) => { state.aborted.push(runId); state.order.push(`abort:${runId}`); }),
   enqueueRun: vi.fn((_sid: string, runId: string) => { state.enqueued.push(runId); }),
   sessionHasActiveRun: vi.fn(() => false),
 }));
@@ -76,9 +79,9 @@ vi.mock('../services/eventBus.js', () => ({
 // 审批档归一用真的 normalizeApprovalMode(通道绑定的 fail-closed 口径就钉在它身上);只替换兑现。
 vi.mock('../services/approvals.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../services/approvals.js')>()),
-  resolveApproval: vi.fn((id: string, d: any) => { state.approvals.push([id, d]); return true; }),
+  resolveApproval: vi.fn((id: string, d: any) => { state.approvals.push([id, d]); state.order.push(`approval:${id}`); return true; }),
 }));
-vi.mock('../services/inquiries.js', () => ({ resolveInquiry: vi.fn((id: string, a: string) => { state.inquiries.push([id, a]); return true; }) }));
+vi.mock('../services/inquiries.js', () => ({ resolveInquiry: vi.fn((id: string, a: string) => { state.inquiries.push([id, a]); state.order.push(`inquiry:${id}`); return true; }) }));
 vi.mock('../agents/agentRegistry.js', () => ({
   readAgentsMeta: () => ({ defaultSlug: 'xyra' }),
   listAgents: vi.fn(async () => []),
@@ -104,6 +107,9 @@ import {
   ChannelService, INQUIRY_CHANNEL_STOPPED_ANSWER, INQUIRY_QUESTION_MAX, PREVIEW_PART_MAX, approvalTooLongReason, channelRunApprovalMode, effectiveApprovalMode, splitPreview,
 } from './service.js';
 import { CHANNEL_REPLY_MAX } from './messages.js';
+import { abortRun, enqueueRun } from '../services/agentLoop.js';
+import { createRun } from '../services/runStore.js';
+import { query } from '../core/db.js';
 
 // receive() 的串行分派链比直接 handleInbound 多几跳微任务:多冲几轮。
 const flush = async (): Promise<void> => { for (let i = 0; i < 50; i++) await Promise.resolve(); };
@@ -131,6 +137,7 @@ beforeEach(() => {
   state.created = [];
   state.enqueued = [];
   state.aborted = [];
+  state.order = [];
   state.approvals = [];
   state.inquiries = [];
   state.sql = [];
@@ -565,8 +572,10 @@ describe('评审二轮:通道停止 / 启动对齐 / 扫码带档', () => {
     state.emit(r, 'approval_request', { approvalId: 'apv-s2', preview: 'y' });
     await p;
     svc.releasePending();
+    expect(state.aborted).toEqual([r]); // Codex 二轮 #5:先中止 run(不让它带着「没人批」接着跑)
     const reason = { action: 'reject', rejectReason: APPROVAL_CHANNEL_STOPPED_REASON };
-    expect(state.approvals).toEqual([['apv-s1', reason], ['apv-s2', reason]]);
+    expect(state.approvals).toEqual([['apv-s1', reason], ['apv-s2', reason]]); // 兜底:真引擎里 resolver 已随 abort 释放,这里回 false
+    expect(state.order[0]).toBe(`abort:${r}`);
     await vi.advanceTimersByTimeAsync(CHANNEL_APPROVAL_TIMEOUT_MS * 3);
     expect(state.approvals).toHaveLength(2);
   });
@@ -800,9 +809,43 @@ describe('Codex 评审(09-25):通道完全停止时替用户兑现询问', () =>
     state.emit(r, 'approval_request', { approvalId: 'apv-s3', preview: 'x' });
     await p;
     svc.releasePending();
+    expect(state.aborted).toEqual([r]);
+    expect(state.order).toEqual([`abort:${r}`, 'inquiry:inq-s1', 'approval:apv-s3']); // 先中止,再兜底兑现
     expect(state.inquiries).toEqual([['inq-s1', INQUIRY_CHANNEL_STOPPED_ANSWER]]);
     expect(state.approvals).toEqual([['apv-s3', { action: 'reject', rejectReason: APPROVAL_CHANNEL_STOPPED_REASON }]]);
     expect(INQUIRY_CHANNEL_STOPPED_ANSWER).not.toMatch(/[一-鿿]/);
+  });
+
+  it('Codex 二轮 #5:没有卡片待答、正在跑 / 排队的 run 也一并中止;结果不再往已停的通道推', async () => {
+    const svc = makeService();
+    void svc.receive({ accountId: 'acc', peerId: 'peer', text: 'long task', messageId: 'm1' });
+    await flush();
+    const r1 = lastRunId();
+    void svc.receive({ accountId: 'acc', peerId: 'peer', text: 'queued task', messageId: 'm2' });
+    await flush();
+    const r2 = lastRunId();
+    svc.releasePending();
+    expect(state.aborted.sort()).toEqual([r1, r2].sort());
+    sent = [];
+    state.emit(r1, 'error', { aborted: true });
+    state.emit(r2, 'error', { aborted: true });
+    await flush();
+    expect(sent.filter((t) => t.includes('任务已停止'))).toEqual([]);
+  });
+
+  it('Codex 二轮 #5:中止途中同步冒出的终态事件被忽略(不往已停的通道推「任务已停止」)', async () => {
+    vi.mocked(abortRun).mockImplementationOnce((runId: string) => {
+      state.aborted.push(runId);
+      state.emit(runId, 'error', { aborted: true }); // eventBus 已有 seq 时 emit 是同步的
+    });
+    const svc = makeService();
+    void svc.receive({ accountId: 'acc', peerId: 'peer', text: 'long task', messageId: 'm1' });
+    await flush();
+    const r = lastRunId();
+    svc.releasePending();
+    await flush();
+    expect(state.aborted).toEqual([r]);
+    expect(sent.filter((t) => t.includes('任务已停止'))).toEqual([]);
   });
 
   it('只重启传输层(不调 releasePending)时:询问照样能在通道里答,结果照样推回', async () => {
@@ -814,12 +857,115 @@ describe('Codex 评审(09-25):通道完全停止时替用户兑现询问', () =>
     await p;
     svc.driver.stop();
     await svc.driver.start(async () => '');
+    expect(state.aborted).toEqual([]); // 只重启传输层:run 不中止
     const p2 = inbound(svc, '2');
     await flush();
     expect(state.inquiries).toEqual([['inq-r1', 'b']]);
     state.emit(r, 'done', { content: 'used b' });
     await expect(p2).resolves.toBe('used b');
     expect(state.created).toHaveLength(1);
+  });
+});
+
+describe('Codex 三轮:分派到一半时通道停止 / 账号断开 —— 不起没人接管的 run', () => {
+  /** 让下一次 createRun 落库后挂住,直到 release()(模拟 DB 慢)。 */
+  const holdCreateRun = (): { release: () => void } => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    vi.mocked(createRun).mockImplementationOnce(async (run: any) => { state.created.push(run); await gate; });
+    return { release };
+  };
+  const lastCall = (fn: any): number => fn.mock.invocationCallOrder[fn.mock.invocationCallOrder.length - 1];
+
+  it('releasePending 时 createRun 还没回来:run 入队后立即中止(先入队再中止,否则中止落空),不跟踪、不往已停的通道推', async () => {
+    const hold = holdCreateRun();
+    const svc = makeService();
+    void svc.receive({ accountId: 'acc', peerId: 'peer', text: 'long task', messageId: 'm1' });
+    await flush();
+    expect(state.created).toHaveLength(1); // 已在 createRun 里挂着
+    const r = lastRunId();
+    expect(state.enqueued).toEqual([]);
+    svc.releasePending();
+    hold.release();
+    await flush();
+    expect(state.enqueued).toEqual([r]); // 不留 queued 行给 recoverQueuedRuns 下次启动重跑
+    expect(state.aborted).toEqual([r]);
+    expect(lastCall(vi.mocked(enqueueRun))).toBeLessThan(lastCall(vi.mocked(abortRun)));
+    expect(state.listeners.get(r)?.size ?? 0).toBe(0); // 没挂订阅
+    state.emit(r, 'error', { aborted: true });
+    await flush();
+    expect(sent).toEqual([]);
+  });
+
+  it('disconnect(user, account) 时 createRun 还没回来:同样入队即中止,回复为空', async () => {
+    const hold = holdCreateRun();
+    const svc = makeService();
+    const p = svc.handleInbound({ accountId: 'acc', peerId: 'peer', text: 'long task' });
+    await flush();
+    const r = lastRunId();
+    await svc.disconnect('u1', 'acc');
+    hold.release();
+    await expect(p).resolves.toBe('');
+    expect(state.enqueued).toEqual([r]);
+    expect(state.aborted).toEqual([r]);
+    expect(lastCall(vi.mocked(enqueueRun))).toBeLessThan(lastCall(vi.mocked(abortRun)));
+    expect(state.listeners.get(r)?.size ?? 0).toBe(0);
+  });
+
+  it('断开的是别的账号:分派中的这条照常起 run、跟踪、不中止(代数按账号分,不是全通道)', async () => {
+    const hold = holdCreateRun();
+    const svc = makeService();
+    const p = svc.handleInbound({ accountId: 'acc', peerId: 'peer', text: 'long task' });
+    await flush();
+    const r = lastRunId();
+    await svc.disconnect('u1', 'acc2');
+    hold.release();
+    await flush();
+    expect(state.enqueued).toEqual([r]);
+    expect(state.aborted).toEqual([]);
+    state.emit(r, 'done', { content: 'finished' });
+    await expect(p).resolves.toBe('finished');
+  });
+
+  it('查会话期间通道停止:不建 run,也不再把入站文件落盘', async () => {
+    const orig = vi.mocked(query).getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let sessionQueried = false;
+    vi.mocked(query).mockImplementation(async (sql: string, params?: any[]) => {
+      if (sql.includes('FROM chat_sessions')) { sessionQueried = true; await gate; }
+      return orig(sql, params);
+    });
+    try {
+      const svc = makeService();
+      const save = vi.spyOn(svc as any, 'saveInboundFile').mockResolvedValue('wechat-inbox/a.txt');
+      const p = svc.handleInbound({ accountId: 'acc', peerId: 'peer', text: 'see file', files: [{ name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('x') }] });
+      await flush();
+      expect(sessionQueried).toBe(true);
+      svc.releasePending();
+      release();
+      await expect(p).resolves.toBe('');
+      expect(save).not.toHaveBeenCalled();
+      expect(state.created).toEqual([]);
+      expect(state.enqueued).toEqual([]);
+    } finally {
+      vi.mocked(query).mockImplementation(orig);
+    }
+  });
+
+  it('存入站文件期间账号断开:不建 run', async () => {
+    const svc = makeService();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const save = vi.spyOn(svc as any, 'saveInboundFile').mockImplementation(async () => { await gate; return 'wechat-inbox/a.txt'; });
+    const p = svc.handleInbound({ accountId: 'acc', peerId: 'peer', text: 'see file', files: [{ name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('x') }] });
+    await flush();
+    expect(save).toHaveBeenCalledTimes(1);
+    await svc.disconnect('u1', 'acc');
+    release();
+    await expect(p).resolves.toBe('');
+    expect(state.created).toEqual([]);
+    expect(state.enqueued).toEqual([]);
   });
 });
 
@@ -923,7 +1069,7 @@ describe('评审二轮(09-25):多条审批卡有条没送达 → 不在通道里
     warn.mockRestore();
   });
 
-  it('送达失败的回报晚于用户的答复:已批准的不被改判', async () => {
+  it('Codex 二轮 #1:还有条没确认送达就回「批准」→ 不批(回「还在发」,卡片留着);随后那条报失败 → 按「没发全」拒绝', async () => {
     let failLater: (() => void) | null = null;
     let i = 0;
     const svc = makeService((_a, _p, text) => {
@@ -935,15 +1081,91 @@ describe('评审二轮(09-25):多条审批卡有条没送达 → 不在通道里
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const p = inbound(svc, 'deploy');
     await flush();
-    state.emit(lastRunId(), 'approval_request', { approvalId: 'apv-late', preview: longPreview() });
+    const r = lastRunId();
+    state.emit(r, 'approval_request', { approvalId: 'apv-late', preview: longPreview() });
     await p;
+    await flush();
+    await svc.receive({ accountId: 'acc', peerId: 'peer', text: '批准', messageId: 'm-early' }); // 驱动真实入口:回复经 send 推出
+    await flush();
+    expect(state.approvals).toEqual([]); // 没有批准:用户可能只看到了前几条
+    expect(sent[sent.length - 1]).toBe('⏳ 这个请求的完整内容还在发送中,请收全后稍等片刻再回复「批准」(回复「拒绝」随时有效)。');
+    expect(state.created).toHaveLength(1); // 「批准」也没落成新任务
+    expect(await inbound(svc, '/status')).toContain('等你批准'); // 卡片原样留着
+    failLater!();
+    await flush();
+    expect(state.approvals).toEqual([['apv-late', { action: 'reject', rejectReason: APPROVAL_DELIVERY_FAILED_REASON }]]);
+    expect(sent.some((t) => t.includes('有部分内容没能发到这里,已自动拒绝'))).toBe(true);
+    expect(await inbound(svc, '批准')).toBe('该请求已过期,或已在别处处理。');
+    expect(state.approvals).toHaveLength(1);
+    state.emit(r, 'done', { content: 'skipped deploy' });
+    await flush();
+    expect(sent).toContain('skipped deploy');
+    warn.mockRestore();
+  });
+
+  it('Codex 二轮 #1:全部确认送达之后「批准」才兑现', async () => {
+    const pending: Array<() => void> = [];
+    const svc = makeService((_a, _p, text) => new Promise((res) => { pending.push(() => { sent.push(text); res({ ok: true }); }); }));
+    const p = inbound(svc, 'deploy');
+    await flush();
+    const preview = longPreview();
+    state.emit(lastRunId(), 'approval_request', { approvalId: 'apv-ok', preview });
+    await p;
+    await flush();
+    const n = splitPreview(preview).length;
+    expect(pending).toHaveLength(n);
+    for (const done of pending.slice(0, n - 1)) done(); // 只差最后一条(带回复提示与关键尾巴)
+    await flush();
+    await svc.receive({ accountId: 'acc', peerId: 'peer', text: '批准', messageId: 'm-early' });
+    await flush();
+    expect(state.approvals).toEqual([]);
+    expect(pending).toHaveLength(n + 1); // 多出来的那条是「还在发」的回复
+    pending[n - 1]();
     await flush();
     void inbound(svc, '批准');
     await flush();
+    expect(state.approvals).toEqual([['apv-ok', { action: 'approve' }]]);
+  });
+
+  it('Codex 二轮 #1:送达确认前回「拒绝」即刻兑现;之后迟到的失败回报不再改判', async () => {
+    let failLater: (() => void) | null = null;
+    let i = 0;
+    const svc = makeService((_a, _p, text) => {
+      i += 1;
+      if (i === 2) return new Promise((res) => { failLater = () => res({ ok: false, error: 'late' }); });
+      sent.push(text);
+      return Promise.resolve({ ok: true });
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const p = inbound(svc, 'deploy');
+    await flush();
+    state.emit(lastRunId(), 'approval_request', { approvalId: 'apv-rej', preview: longPreview() });
+    await p;
+    await flush();
+    void inbound(svc, '拒绝');
+    await flush();
+    expect(state.approvals).toEqual([['apv-rej', { action: 'reject' }]]);
     failLater!();
     await flush();
-    expect(state.approvals).toEqual([['apv-late', { action: 'approve' }]]);
+    expect(state.approvals).toHaveLength(1);
+    expect(sent.some((t) => t.includes('有部分内容没能发到这里'))).toBe(false);
     warn.mockRestore();
+  });
+
+  it('Codex 二轮 #1:英文 locale 的「还在发」整条英文', async () => {
+    state.settings.locale = 'en';
+    const svc = makeService((_a, _p, text) => (text.startsWith('(2/') ? new Promise(() => {}) : (sent.push(text), Promise.resolve({ ok: true }))));
+    const p = inbound(svc, 'deploy');
+    await flush();
+    state.emit(lastRunId(), 'approval_request', { approvalId: 'apv-en', preview: longPreview() });
+    await p;
+    await flush();
+    await svc.receive({ accountId: 'acc', peerId: 'peer', text: 'approve', messageId: 'm-early' });
+    await flush();
+    expect(state.approvals).toEqual([]);
+    const reply = sent[sent.length - 1];
+    expect(reply).toMatch(/^⏳ The full request is still being sent/);
+    expect(reply).not.toMatch(/[一-鿿]/);
   });
 });
 
@@ -961,6 +1183,8 @@ describe('评审二轮(09-25):微信单账号断开释放该账号的卡片', ()
     state.emit(r2, 'approval_request', { approvalId: 'apv-a2', preview: 'rm -rf build' });
     await Promise.all([p1, p2]);
     await svc.disconnect('u1', 'acc');
+    expect(state.aborted).toEqual([r1]); // Codex 二轮 #5:只中止被断开账号的 run,另一个账号的照常
+    expect(state.order).toEqual([`abort:${r1}`, 'inquiry:inq-a1']);
     expect(state.inquiries).toEqual([['inq-a1', INQUIRY_CHANNEL_STOPPED_ANSWER]]);
     expect(state.approvals).toEqual([]);
     sent = [];
@@ -979,6 +1203,7 @@ describe('评审二轮(09-25):微信单账号断开释放该账号的卡片', ()
     state.emit(lastRunId(), 'approval_request', { approvalId: 'apv-d1', preview: 'x' });
     await p;
     await svc.disconnect('u1', 'acc');
+    expect(state.aborted).toEqual([lastRunId()]);
     expect(state.approvals).toEqual([['apv-d1', { action: 'reject', rejectReason: APPROVAL_CHANNEL_STOPPED_REASON }]]);
   });
 
