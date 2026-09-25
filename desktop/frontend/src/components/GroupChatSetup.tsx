@@ -7,6 +7,7 @@ import React, { useMemo, useState } from 'react'
 import { Users, Check, X, Plus, Pencil, Trash2, UserPlus } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'
+import { thinkingLabel } from './thinkingLabel'
 
 registerMessages({
   'group.setup.selfPacedHint': { zh: '发消息后成员同时开工,可相互 @ 交接;每位成员自己决定何时收尾,全员完成即结束,没有轮数上限。', en: 'After you send, members work in parallel and can @-mention each other; each decides when they are done, and the team stops once everyone is — no round limit.' },
@@ -126,7 +127,7 @@ export const GroupChatSetup: React.FC<{
                 <label>{t('settings.agents.thinking')}</label>
                 <select value={editingTemp.thinkingLevel} onChange={(e) => setEditingTemp({ ...editingTemp, thinkingLevel: e.target.value as TempDraft['thinkingLevel'] })}>
                   <option value="">{t('settings.agents.inherit')}</option>
-                  {THINKING_LEVELS.map((lv) => <option key={lv} value={lv}>{lv}</option>)}
+                  {THINKING_LEVELS.map((lv) => <option key={lv} value={lv}>{thinkingLabel(lv, t)}</option>)}
                 </select>
               </div>
               <div className="field">

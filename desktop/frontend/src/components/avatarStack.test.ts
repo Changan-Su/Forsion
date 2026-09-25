@@ -9,7 +9,7 @@
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { AvatarStack, avatarColorIndex, avatarStackLayout } from './AvatarStack'
+import { AvatarStack, avatarStackLayout } from './AvatarStack'
 
 const extent = (cells: Array<{ x: number; y: number; size: number }>) => ({
   right: Math.max(...cells.map((c) => c.x + c.size)),
@@ -93,20 +93,18 @@ describe('avatarStackLayout', () => {
   })
 })
 
-describe('avatarColorIndex', () => {
-  it('恒落在 1..6(= --c1..--c6 六档色板)且对同一 slug 稳定', () => {
-    const slugs = ['tangu-ario', 'muse', 'fio', '', 'a', '张三']
-    for (const slug of slugs) {
-      const idx = avatarColorIndex(slug)
-      expect(idx).toBeGreaterThanOrEqual(1)
-      expect(idx).toBeLessThanOrEqual(6)
-      expect(avatarColorIndex(slug)).toBe(idx)
-    }
-  })
-
-  it('不同 slug 会分到不同档(不是恒一档)', () => {
-    const seen = new Set(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map(avatarColorIndex))
-    expect(seen.size).toBeGreaterThan(1)
+describe('首字中性底色(09-25 用户拍板:不按 slug 上彩色)', () => {
+  it('缺头像的格一律同一中性底,不随 slug 变色;同组撞字取不同的字', () => {
+    ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
+    const host = document.createElement('div')
+    document.body.appendChild(host)
+    const root = createRoot(host)
+    act(() => { root.render(React.createElement(AvatarStack, { items: [{ slug: 'qin-che', name: '秦彻' }, { slug: 'qin-lao', name: '秦老大' }] })) })
+    const cells = Array.from(host.querySelectorAll<HTMLElement>('span[title]'))
+    expect(cells.map((c) => c.textContent)).toEqual(['彻', '老'])
+    expect(new Set(cells.map((c) => c.style.background))).toEqual(new Set(['var(--overlay-strong)']))
+    act(() => root.unmount())
+    host.remove()
   })
 })
 

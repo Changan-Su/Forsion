@@ -1,4 +1,4 @@
-import { MessageCircle, BookOpen, FolderOpen, Bot } from 'lucide-react'
+import { MessageCircle, BookOpen, FolderOpen, Bot, Users } from 'lucide-react'
 import { registerView } from '@lcl/engine'
 import { useApp } from '../stores/appStore'
 import { translate } from '../i18n'
@@ -20,8 +20,9 @@ export function registerTanguViews(): void {
   // activeId / messagesBySession / runningBySession,不创建所谓「Side Chat」会话或第二套 runtime。
   registerView({ type: 'chat-panel', kind: 'aux', displayName: () => translate('bootengine.view.chatPanel'), icon: MessageCircle, factory: (props) => <ChatView {...props} />, singleton: true })
   registerView({ type: 'tangu-details', kind: 'aux', displayName: () => translate('agentProfile.title'), icon: Bot, factory: (props) => <TanguDetailsView {...props} />, singleton: true })
-  registerView({ type: 'agents-roster', kind: 'aux', displayName: () => translate('agentProfile.roster'), icon: Bot, factory: () => <AgentsRosterView />, singleton: true })
-  registerView({ type: 'agent-profile', kind: 'page', displayName: () => translate('agentProfile.space'), icon: Bot, factory: (props) => <AgentsSpaceView {...props} />, singleton: true })
+  // Bot 专属 Tangu 本体(tangu-details / agents-detail);Agent 名册与 Agents 页用 Users,与 Agents Space 的图标一致(评审 U-22)。
+  registerView({ type: 'agents-roster', kind: 'aux', displayName: () => translate('agentProfile.roster'), icon: Users, factory: () => <AgentsRosterView />, singleton: true })
+  registerView({ type: 'agent-profile', kind: 'page', displayName: () => translate('agentProfile.space'), icon: Users, factory: (props) => <AgentsSpaceView {...props} />, singleton: true })
   // 右栏视图(可关,可重开)
   registerView({ type: 'memory', kind: 'aux', displayName: () => app().tr('panel.tab.memory'), icon: BookOpen, factory: () => <MemoryPanelView />, singleton: true })
   registerView({ type: 'subchats', kind: 'aux', displayName: () => app().tr('panel.tab.subchats'), icon: MessageCircle, factory: () => <SubchatsView />, singleton: true })

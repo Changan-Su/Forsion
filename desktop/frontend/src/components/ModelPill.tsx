@@ -14,13 +14,15 @@ import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNud
 import type { NestedPanelPlacement } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'
+import { thinkingLabel } from './thinkingLabel'
 import type { AgentConfig, DefaultModelSlot, ModelInfo, ModelsResponse } from '../types'
 
 registerMessages({
   'pill.rowAdvanced': { zh: '高级', en: 'Advanced' },
   'pill.rowModel': { zh: '模型', en: 'Model' },
-  'pill.rowEffort': { zh: 'Effort', en: 'Effort' },
-  'pill.reasoningStrength': { zh: '推理强度', en: 'Reasoning effort' },
+  // 字段名统一「思考档位 / Thinking effort」(U-28a:此前有思考强度 / 推理强度 / Effort 多种叫法)。
+  'pill.rowEffort': { zh: '思考档位', en: 'Thinking effort' },
+  'pill.reasoningStrength': { zh: '思考档位', en: 'Thinking effort' },
   'pill.defaultAuxModel': { zh: '默认辅助模型', en: 'Default auxiliary model' },
   'pill.defaultImageModel': { zh: '生图模型', en: 'Image generation model' },
   'pill.defaultVisionModel': { zh: '识图辅助模型', en: 'Vision auxiliary model' },
@@ -40,8 +42,8 @@ type Thinking = NonNullable<AgentConfig['thinkingLevel']>
 type Pane = 'model' | 'context' | DefaultModelSlot
 
 const thinkingLabelKey = (lv: Thinking): string => `input.thinking.${lv}`
-const thinkingShortKey = (lv: Thinking): string => `input.thinkingShort.${lv}`
-const effortDisplay = (lv: Thinking, t: (key: string) => string): string => lv === 'max' ? 'Max' : t(thinkingShortKey(lv))
+// 档位显示名走 thinkingLabel 单源(U-28a);原先这里 'max' 写死英文 'Max',中文界面也露英文。
+const effortDisplay = (lv: Thinking, t: (key: string) => string): string => thinkingLabel(lv, t)
 /** 与输入框进度环同一写法(272k / 1M);环在 Composer2 里,这边反向 import 会成环。 */
 const fmtWindow = (n: number): string => n >= 1e6 ? `${Math.floor(n / 1e5) / 10}M` : `${Math.floor(n / 100) / 10}k`
 

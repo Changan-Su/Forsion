@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import { ArrowLeft, Bot, Check, ChevronRight, Copy, ExternalLink, FileText, Folder, FolderGit2, FolderOpen, GitBranch, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Sparkles, Star, TerminalSquare, Users, X } from 'lucide-react'
+import { ArrowLeft, Check, ChevronRight, Copy, ExternalLink, FileText, Folder, FolderGit2, FolderOpen, GitBranch, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Sparkles, Star, TerminalSquare, Users, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
@@ -15,6 +15,8 @@ import { projectExecutors, relativeTimeOf, shortenPath, type ProjectExecutor } f
 import './projectProfileMessages'
 import './teamProfile.css'
 import './projectProfile.css'
+import { AgentAvatar } from '../components/AgentAvatar'
+import { thinkingLabel } from '../components/thinkingLabel'
 
 type Tab = 'agents' | 'settings' | 'git'
 const TABS: Array<{ id: Tab; icon: typeof Users }> = [{ id: 'agents', icon: Users }, { id: 'settings', icon: Settings2 }, { id: 'git', icon: GitBranch }]
@@ -192,7 +194,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     : ex.kind === 'party' ? ex.sessions[0]?.title || t('projectProfile.party')
     : s.engines.find((e) => e.id === ex.id)?.name || ex.id
   const executorPortrait = (ex: ProjectExecutor): ReactNode => {
-    if (ex.kind === 'agent') return s.avatars[ex.id] ? <img src={s.avatars[ex.id]} alt="" /> : <Bot size={42} strokeWidth={1} />
+    if (ex.kind === 'agent') return <AgentAvatar name={agentOf(ex.id)?.name || ex.id} url={s.avatars[ex.id]} fill />
     if (ex.kind === 'engine') return <TerminalSquare size={26} strokeWidth={1.2} />
     const team = ex.kind === 'team' ? teamOf(ex.id) : undefined
     if (team && s.teamAvatars[team.slug] && isTeamImageAvatar(team.avatar)) return <img src={s.teamAvatars[team.slug]} alt="" />
@@ -249,7 +251,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
           {picker && <div className="team-candidate-picker"><div className="team-candidate-heading"><label className="agents-search"><Search size={13} /><input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} aria-label={t('agentProfile.search')} placeholder={t('agentProfile.search')} /></label><button aria-label={t('projectProfile.closePicker')} onClick={() => setPicker(false)}><X size={14} /></button></div>
             <p className="team-profile-caption">{t('projectProfile.addHint')}</p>
             <div className="team-candidates project-candidates">
-              {agentCandidates.map((a) => <button key={a.slug} onClick={() => startWith({ kind: 'agent', slug: a.slug })}>{s.avatars[a.slug] ? <img src={s.avatars[a.slug]} alt="" width={16} height={16} style={{ borderRadius: 4 }} /> : <Bot size={16} />}<span><strong>{a.name}</strong><small>{a.description}</small></span><MessageSquarePlus size={14} /></button>)}
+              {agentCandidates.map((a) => <button key={a.slug} onClick={() => startWith({ kind: 'agent', slug: a.slug })}><AgentAvatar name={a.name || a.slug} url={s.avatars[a.slug]} size={16} className="agent-avatar-mini" /><span><strong>{a.name}</strong><small>{a.description}</small></span><MessageSquarePlus size={14} /></button>)}
               {teamCandidates.map((team) => <button key={team.slug} onClick={() => startWith({ kind: 'team', team })}><Users size={16} /><span><strong>{team.name}</strong><small>{team.description || team.members.map((m) => agentOf(m.slug)?.name || m.slug).join(' · ')}</small></span><MessageSquarePlus size={14} /></button>)}
               {!agentCandidates.length && !teamCandidates.length && <p className="agent-profile-muted">{t('projectProfile.noCandidates')}</p>}
             </div></div>}
@@ -316,7 +318,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
             <ProfileModelField models={(s.models || []).filter((m) => (m.modelType || 'llm') === 'llm')} value={settingsDraft.model || ''} label={t('agentProfile.model')} onChange={(model) => patchSettings({ model: model || undefined })} />
             <label className="project-field">{t('agentProfile.thinking')}<select value={settingsDraft.thinkingLevel || ''} onChange={(e) => patchSettings({ thinkingLevel: (e.target.value || undefined) as ProjectSettings['thinkingLevel'] })}>
               <option value="">{t('projectProfile.inherit')}</option>
-              {THINKING_LEVELS.map((lv) => <option key={lv} value={lv}>{t(`input.thinkingShort.${lv}`)}</option>)}
+              {THINKING_LEVELS.map((lv) => <option key={lv} value={lv}>{thinkingLabel(lv, t)}</option>)}
             </select></label>
           </section>
         </div>}

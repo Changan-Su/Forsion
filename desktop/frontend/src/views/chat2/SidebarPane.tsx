@@ -6,7 +6,7 @@
  * 样式全在 sidebar2.css(t2s- 前缀,token 驱动);右键菜单复用 base.css 的 .ctx-menu。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, FolderX, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Pin, PinOff } from 'lucide-react'
+import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Pin, PinOff } from 'lucide-react'
 import { folderPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
 import { moveTo } from '@lcl/engine'
@@ -19,6 +19,7 @@ import { setChannelConnectedSession } from '../../services/backendService'
 import { useChannels } from '../../stores/channelsStore'
 import { setChatRefDrag } from './chatDragRef'
 import { isOrbitPinned, orderOrbitEntries, type OrbitPinTimes } from './orbitPins'
+import { displaySessionTitle, workspaceGroupLabel } from '../../sessionTitle'
 import './sidebar2.css'
 import { OverlayAt } from '@lcl/engine'
 
@@ -124,9 +125,9 @@ interface MenuState { id: string; ids: string[]; x: number; y: number; archived:
 
 /** 顶部入口行(新对话 / 记忆 / 后台智能体):图标 + 名 + 可选展开箭头。 */
 const SpecialRow: React.FC<{
-  icon: React.ReactNode; title: string; active: boolean; onClick: () => void; onExpand?: () => void
-}> = ({ icon, title, active, onClick, onExpand }) => (
-  <button className={`t2s-special${active ? ' active' : ''}`} onClick={onClick}>
+  icon: React.ReactNode; title: string; active: boolean; onClick: () => void; onExpand?: () => void; act?: string
+}> = ({ icon, title, active, onClick, onExpand, act }) => (
+  <button className={`t2s-special${active ? ' active' : ''}`} data-act={act} onClick={onClick}>
     <span className="t2s-special-ic">{icon}</span>
     <span className="t2s-special-title">{title}</span>
     {onExpand && (
@@ -287,7 +288,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   /** 工作区组头的前导槽:图标 ↔ hover 换箭头(与笔记树文件夹行同一套)。三个变体(重命名中/微信/普通)共用。
    *  本地工作区用 Folder/FolderOpen 表达展开态 —— 箭头默认不显,总得有东西担起「展开了没」。 */
   const wsLead = (ws: WorkspaceDescriptor, collapsed: boolean) => {
-    const Ic = ws.kind === 'channel' ? CHANNEL_ICONS[ws.channel || 'wechat'] : ws.kind === 'cloud' ? Cloud : ws.kind === 'rootless' ? FolderX : collapsed ? Folder : FolderOpen
+    const Ic = ws.kind === 'channel' ? CHANNEL_ICONS[ws.channel || 'wechat'] : ws.kind === 'cloud' ? Cloud : ws.kind === 'rootless' ? MessagesSquare : collapsed ? Folder : FolderOpen
     return (
       <span className="t2s-lead">
         <Ic className="t2s-lead-icon" />
@@ -339,7 +340,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
         const all = [...allSessions, ...allArchived]
         const refs = sel.batch(s.id).map((id) => {
           const x = all.find((y) => y.id === id)
-          return { kind: 'session' as const, id, title: x?.title || 'New Chat' }
+          return { kind: 'session' as const, id, title: displaySessionTitle(x?.title, t) }
         })
         setChatRefDrag(e.dataTransfer, refs)
       }}
@@ -355,7 +356,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
           onClick={(e) => e.stopPropagation()}
         />
       ) : (
-        <span className="t2s-srow-title">{s.title || 'New Chat'}</span>
+        <span className="t2s-srow-title">{displaySessionTitle(s.title, t)}</span>
       )}
     </SidebarRow>
   )
@@ -372,7 +373,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
           <div className="t2s-special-group">
             {/* 尺寸由 .t2s-special-ic > svg 的 --t2s-icon 接管,故不传 size(传了也无效)。 */}
             <div className="t2s-special-row">
-              <SpecialRow icon={<SquarePen />} title={t('sidebar.newChat')} active={false} onClick={p.onNewChat} />
+              <SpecialRow icon={<SquarePen />} title={t('sidebar.newChat')} active={false} onClick={p.onNewChat} act="new-chat" />
               {p.mode && p.onModeChange && (
                 <div className="t2s-vaultseg t2s-mode" role="tablist" aria-label={t('sidebar.mode.tip')} title={t('sidebar.mode.tip')}>
                   <div className="t2s-vaultseg-thumb" data-side={p.mode} />
@@ -457,7 +458,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                       // 通道文件夹:纯展开折叠(与普通工作区一致)。行尾连接状态点。
                       <button className="t2s-group-toggle t2s-folder-row" onClick={() => { p.onActivateEntry?.(en.key); isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
                         {wsLead(ws, isCollapsed)}
-                        <span className="t2s-group-label">{ws.name}</span>
+                        <span className="t2s-group-label">{workspaceGroupLabel(ws, t)}</span>
                         {pinned && <Pin className="t2o-pin-mark" aria-hidden="true" />}
                         <span className={`t2s-mini-dot${channelRunning.get(ws.channel || 'wechat') ? ' ok' : ''}`} />
                       </button>
@@ -466,7 +467,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                       // 已展开再点 = 折叠(toggleGroup 不动 activeWorkspaceKey,不会被联动 effect 弹回);收起时点 = 展开自己。
                       <button className="t2s-group-toggle t2s-folder-row" onClick={() => { p.onActivateEntry?.(en.key); isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
                         {wsLead(ws, isCollapsed)}
-                        <span className="t2s-group-label">{ws.name}</span>
+                        <span className="t2s-group-label">{workspaceGroupLabel(ws, t)}</span>
                         {pinned && <Pin className="t2o-pin-mark" aria-hidden="true" />}
                       </button>
                     )}
@@ -474,13 +475,14 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                     {(!ws.system || p.onTogglePinned) && (
                       <button type="button" className="t2s-group-add" title={t('sidebar.ws.menu')} onClick={(e) => openWsMenu(e, ws)}><MoreHorizontal size={14} /></button>
                     )}
-                    <button type="button" className="t2s-group-add" title={t('sidebar.newChatIn', { name: ws.name })} onClick={() => p.onNewInWorkspace(ws)}><Plus size={14} /></button>
+                    <button type="button" className="t2s-group-add" title={t('sidebar.newChatIn', { name: workspaceGroupLabel(ws, t) })} onClick={() => p.onNewInWorkspace(ws)}><Plus size={14} /></button>
                   </div>
                   <AnimatedCollapse open={!isCollapsed}>
                     <div className={`t2s-group-sessions${after && !isCollapsed ? ' drag-over-end' : ''}`} {...dropOn}>
                       {items.slice(0, sessionLimit).map(renderItem)}
                       {items.length > sessionLimit && (
-                        <button className="t2s-viewmore" onClick={() => p.onOpenWorkspace(ws.key)}>{t('sidebar.viewMore')} · {items.length}</button>
+                        // 数字是**余下几条**(U-37):列表里已经摆着 sessionLimit 条,再报总数会读成「还有这么多」。
+                        <button className="t2s-viewmore" onClick={() => p.onOpenWorkspace(ws.key)}>{t('sidebar.viewMore')} · {items.length - sessionLimit}</button>
                       )}
                     </div>
                   </AnimatedCollapse>
@@ -498,7 +500,8 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
             <>
               <button className="t2s-srow t2s-archived-toggle" onClick={() => setShowArchived(!showArchived)}>
                 <span className="t2s-chev"><Archive size={13} /></span>
-                <span className="t2s-srow-title t2s-faint">{t('sidebar.archived', { count: p.archivedSessions.length })}</span>
+                <span className="t2s-srow-title t2s-faint">{t('sidebar.archived')}</span>
+                <span className="t2s-count">{p.archivedSessions.length}</span>
               </button>
               {showArchived && p.archivedSessions.map(renderItem)}
             </>
@@ -552,7 +555,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
               setMenu(null)
               const ok = ids.length > 1
                 ? window.confirm(t('sidebar.deleteConfirmN', { n: String(ids.length) }))
-                : window.confirm(t('sidebar.deleteConfirm', { name: s?.title || 'New Chat' }))
+                : window.confirm(t('sidebar.deleteConfirm', { name: displaySessionTitle(s?.title, t) }))
               if (!ok) return
               for (const id of ids) p.onDelete(id)
               sel.clear()

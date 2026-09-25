@@ -107,8 +107,8 @@ registerMessages({
     "en": "Add local workspace"
   },
   "sidebar.archived": {
-    "zh": "已归档 ({count})",
-    "en": "Archived ({count})"
+    "zh": "已归档",
+    "en": "Archived"
   },
   "sidebar.rename": {
     "zh": "重命名",
@@ -195,8 +195,8 @@ registerMessages({
     "en": "Max"
   },
   "input.slash.thinkSet": {
-    "zh": "思考强度已设为 {level}（模型不支持时自动降档）",
-    "en": "Thinking level set to {level} (auto-clamped if the model can't do it)"
+    "zh": "思考档位已设为 {level}（模型不支持时自动降档）",
+    "en": "Thinking effort set to {level} (auto-clamped if the model can't do it)"
   },
   "input.slash.thinkUsage": {
     "zh": "用法：/think {levels}",
@@ -231,8 +231,8 @@ registerMessages({
     "en": "Turn on plan mode (read-only research → submit plan for approval)"
   },
   "input.slash.thinkDesc": {
-    "zh": "思考深度设为 {level}",
-    "en": "Set thinking depth to {level}"
+    "zh": "思考档位设为 {level}",
+    "en": "Set thinking effort to {level}"
   },
   "input.slash.current": {
     "zh": "(当前)",
@@ -431,12 +431,12 @@ registerMessages({
     "en": "Uses permissions defined in config.json"
   },
   "input.modelChipTitle": {
-    "zh": "本会话模型与思考深度",
-    "en": "Model and thinking depth for this session"
+    "zh": "本会话模型与思考档位",
+    "en": "Model and thinking effort for this session"
   },
   "input.thinkingSection": {
-    "zh": "思考深度",
-    "en": "Thinking depth"
+    "zh": "思考档位",
+    "en": "Thinking effort"
   },
   "chat.emptyTitle": {
     "zh": "纸上得来终觉浅,绝知此事要躬行。",
@@ -1795,7 +1795,7 @@ registerMessages({
   "group.vote.round": { "zh": "第 {round} 轮投票", "en": "Round {round} vote" },
   "group.vote.tally": { "zh": "{end}/{total} 赞成结束", "en": "{end}/{total} to end" },
   "group.voting.inProgress": { "zh": "正在投票…", "en": "Voting…" },
-  "input.mention.groupNote": { "zh": "群内 Agent · 优先发言", "en": "Agents in group · speaks first" },
+  "input.mention.groupNote": { "zh": "团队内 Agent · 优先发言", "en": "Team agents · speak first" },
   "input.mention.delegateNote": { "zh": "委派给 Agent · 作为 subagent 处理", "en": "Delegate to agent · runs as subagent" },
   "group.setup.title": { "zh": "团队模式", "en": "Team mode" },
   "group.setup.close": { "zh": "关闭", "en": "Close" },
