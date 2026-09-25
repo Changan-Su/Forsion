@@ -53,6 +53,8 @@ export async function authFetch(
  * Chromium 里读响应体中途被 abort,报的是通用 AbortError(不带我们给的 TimeoutError 原因,实测)。
  * 超时就按超时报:不然调用方会把它当成「用户取消」静默吞掉,界面上看到的也是「BodyStreamBuffer was aborted」。
  * 调用方自己的 signal 取消时原样抛出。
+ * ponytail: 只包这四个读取方法;res.clone() / 直读 res.body 绕过包装(到点照样失败,只是报通用 AbortError)。
+ * 现有带超时的调用方都只调 json();哪天要走那两条,再改成包一层 body 流。
  */
 function reportBodyTimeouts(res: Response, deadline: AbortSignal): void {
   for (const method of ['json', 'text', 'arrayBuffer', 'blob'] as const) {
