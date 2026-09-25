@@ -1,0 +1,6 @@
+/* ProfileModelField:目录外的自定义模型 id 后缀一枚小签(评审 U-28a;不告警,只说明这是自定义值)。 */
+.profile-model-trigger .profile-model-custom {
+  margin-left: 6px;
+  color: var(--text-faint);
+  font-size: var(--ui-font-caption, 11px);
+}

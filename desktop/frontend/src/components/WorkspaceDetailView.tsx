@@ -4,10 +4,11 @@
  * 上下文菜单与归档区复刻侧栏(Sidebar.tsx)同款模式,复用 ctx-menu 样式与 sidebar.* 文案。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { Plus, Folder, FolderX, Cloud, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, ChevronDown } from 'lucide-react'
+import { Plus, Folder, MessagesSquare, Cloud, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, ChevronDown } from 'lucide-react'
 import type { SessionRecord, WorkspaceDescriptor } from '../types'
 import { useI18n } from '../i18n'
 import { OverlayAt } from '@lcl/engine'
+import { displaySessionTitle, workspaceGroupLabel } from '../sessionTitle'
 
 const PAGE = 11 // 每页会话格数(留一格给 View More)
 
@@ -88,7 +89,7 @@ export const WorkspaceDetailView: React.FC<{
           }}
         />
       ) : (
-        <span className="wsd-card-title">{s.title || 'New Chat'}</span>
+        <span className="wsd-card-title">{displaySessionTitle(s.title, t)}</span>
       )}
       <span className="wsd-card-time">{fmt(s.updated_at || s.created_at)}</span>
     </button>
@@ -98,8 +99,8 @@ export const WorkspaceDetailView: React.FC<{
     <div className="wsd">
       <div className="wsd-inner">
         <div className="wsd-head">
-          {workspace.kind === 'cloud' ? <Cloud size={16} /> : workspace.kind === 'rootless' ? <FolderX size={16} /> : <Folder size={16} />}
-          <span className="wsd-title">{workspace.name}</span>
+          {workspace.kind === 'cloud' ? <Cloud size={16} /> : workspace.kind === 'rootless' ? <MessagesSquare size={16} /> : <Folder size={16} />}
+          <span className="wsd-title">{workspaceGroupLabel(workspace, t)}</span>
           <span className="wsd-count">{t('ws.detail.count', { n: active.length })}</span>
         </div>
 
@@ -132,7 +133,8 @@ export const WorkspaceDetailView: React.FC<{
             >
               {showArchived ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
               <Archive size={13} />
-              <span>{t('sidebar.archived', { count: archived.length })}</span>
+              <span>{t('sidebar.archived')}</span>
+              <span className="t2s-count">{archived.length}</span>
             </button>
             {showArchived && (
               <div className="wsd-grid" style={{ marginTop: 8 }}>
@@ -171,7 +173,7 @@ export const WorkspaceDetailView: React.FC<{
               onClick={() => {
                 const s = sessions.find((x) => x.id === menu.id)
                 setMenu(null)
-                if (window.confirm(t('sidebar.deleteConfirm', { name: s?.title || 'New Chat' }))) onDelete(menu.id)
+                if (window.confirm(t('sidebar.deleteConfirm', { name: displaySessionTitle(s?.title, t) }))) onDelete(menu.id)
               }}
             >
               <Trash2 size={13} /> {t('sidebar.delete')}

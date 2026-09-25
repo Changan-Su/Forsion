@@ -23,6 +23,7 @@ import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord,
 import { useEdgeNudge, useWorkspace } from '@lcl/engine'
 import { ModelPill, type ModelPillGroup } from '../../components/ModelPill'
 import { registerMessages, useI18n } from '../../i18n'
+import { displaySessionTitle } from '../../sessionTitle'
 import { groupModelsByProvider } from '../../components/ModelGroupList'
 import { GroupChatSetup } from '../../components/GroupChatSetup'
 import { track } from '../../achievements/store'
@@ -964,7 +965,7 @@ export const Composer2: React.FC<{
       ...chatSessions
         .filter((s) => s.id !== activeSessionId)
         .slice(0, 300)
-        .map((s) => ({ p: s.title || 'New Chat', session: { id: s.id, title: s.title || 'New Chat', summary: s.summary } })),
+        .map((s) => ({ p: displaySessionTitle(s.title, t), session: { id: s.id, title: displaySessionTitle(s.title, t), summary: s.summary } })),
     ]
     const pool = q ? cands.filter((c) => c.p.toLowerCase().includes(q)) : cands
     // 文件名前缀命中 > 文件名包含 > 仅路径包含;同档路径短者先。

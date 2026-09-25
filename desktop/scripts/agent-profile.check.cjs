@@ -433,7 +433,9 @@ async function run() {
     await roster.waitFor()
     assert.equal(await roster.evaluate((el) => el.closest('.dv-groupview') !== document.querySelector('[data-agents-space]').closest('.dv-groupview')), true, 'Roster uses a separate native side panel group')
     assert.equal(await win.locator('[data-agents-space] .agents-roster').count(), 0, 'No duplicate embedded roster in Main View')
-    await roster.locator('.agents-roster-heading button').click()
+    // 创建入口只剩底部那一个(评审 U-25 删掉了标题行的 ＋)。
+    assert.equal(await roster.locator('.agents-roster-heading button').count(), 0, 'Roster heading no longer duplicates the create entry')
+    await roster.locator('.agents-roster-create').click()
     const agentForm = win.locator('.agent-create-form')
     await agentForm.getByLabel('名称', { exact: true }).fill('Analyst')
     await agentForm.getByLabel('简介', { exact: true }).fill('Checks calculations')

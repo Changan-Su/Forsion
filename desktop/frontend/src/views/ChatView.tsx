@@ -5,6 +5,7 @@ import { ArrowDown, Folder, MessageCircleQuestion, MessageSquarePlus, Quote } fr
 import type { AgentConfig, UiMessage } from '../types'
 import { Composer2 } from './chat2/Composer2'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
+import { displaySessionTitle } from '../sessionTitle'
 import { ProjectSelector } from '../components/ProjectSelector'
 import { WorkspaceFilePreview } from '../components/WorkspaceFilePreview'
 import { targetFor } from '../components/InlineFiles'
@@ -283,7 +284,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   // 每个 leaf 维护自己的标题，避免分屏时误改第一块 Chat tab。会话清单尚未加载但 sessionId 已从
   // Mini handoff 到达时用稳定占位；不能再另挂一段「新对话」标题 effect 与本段来回改名(React #185)。
   useEffect(() => {
-    leaf.setTitle(activeSession?.title || (activeId ? 'Tangu Agent' : t('sidebar.newChat')))
+    leaf.setTitle(activeSession?.title ? displaySessionTitle(activeSession.title, t) : (activeId ? 'Tangu Agent' : t('sidebar.newChat')))
   }, [activeId, activeSession?.title, leaf, t])
 
   // 内容级搜索命中 → 打开会话后滚到那条消息并闪一下(P3)。消息还没到齐时不动手:

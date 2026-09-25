@@ -23,6 +23,9 @@ import { useApp } from '../stores/appStore'
 import { openSpecial } from './SpecialViews'
 import { openNewChat, openSession, openSolo, openTeam, rotateSolo } from '../sessionNav'
 import { AvatarStack } from '../components/AvatarStack'
+import { AgentAvatar } from '../components/AgentAvatar'
+import { tipProps, tipT } from '../hoverTip'
+import { relativeTimeOf } from './projectProfileState'
 import { TeamEditor } from '../components/TeamEditor'
 import * as api from '../services/backendService'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -34,11 +37,11 @@ import './chat2/orbits.css'
 
 registerMessages({
   'orbits.filter.label': { zh: '筛选工作区', en: 'Filter workspace' },
-  'orbits.filter.all': { zh: 'All', en: 'All' },
-  'orbits.filter.agent': { zh: 'Agent', en: 'Agent' },
-  'orbits.filter.team': { zh: 'Team', en: 'Team' },
-  'orbits.filter.project': { zh: 'Project', en: 'Project' },
-  'orbits.plus.tip': { zh: '新建', en: 'New' },
+  'orbits.filter.all': { zh: '全部', en: 'All' },
+  'orbits.filter.agent': { zh: 'Agent', en: 'Agents' },
+  'orbits.filter.team': { zh: '团队', en: 'Teams' },
+  'orbits.filter.project': { zh: '项目', en: 'Projects' },
+  'orbits.plus.tip': { zh: '新建 Agent、团队或项目', en: 'New agent, team or project' },
   'orbits.plus.agent': { zh: '新建 Agent', en: 'New agent' },
   'orbits.plus.team': { zh: '新建团队', en: 'New team' },
   'orbits.plus.project': { zh: '新建项目', en: 'New project' },
@@ -64,20 +67,10 @@ registerMessages({
   'orbits.badge.proactive': { zh: '主动式', en: 'Proactive' },
   'orbits.engine.needsSignin': { zh: '待登录', en: 'Needs sign-in' },
   'orbits.muse.unavailable': { zh: 'Muse 空间尚未启用', en: 'The Muse space is not enabled' },
+  // 一级行悬停提示的类型词(评审 U-19 轻量版:不改 40px 单行,只在 hoverTip 里补「类型 · 相对时间」)。
+  'orbits.tip.team': { zh: '团队', en: 'Team' },
+  'orbits.tip.line': { zh: '{kind} · {when}', en: '{kind} · {when}' },
 })
-
-/** 与 appStore 的 `groupColor` 同算法(那份是模块私有,不导出 → 这里按值复刻,别改算法:
- *  同一个 slug 在群聊发言人徽章与私聊头像底色上必须是同一个色相)。 */
-function slugTint(slug: string): string {
-  let h = 0
-  for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0
-  return `hsl(${h % 360} 62% 45%)`
-}
-
-/** 首字:按码点取(emoji / 代理对不能用 `[0]`)。 */
-function firstChar(text: string): string {
-  return ([...text][0] || '?').toUpperCase()
-}
 
 interface MenuAt { x: number; y: number }
 interface RowMenu extends MenuAt { kind: 'agent' | 'engine' | 'team' | 'gone'; slug: string; entryKey: string }
@@ -91,7 +84,7 @@ function anchorOf(e: React.MouseEvent | React.KeyboardEvent): MenuAt {
 /** sideFilter(工作区 view 左栏胶囊):与 SessionsView 逐字同义 —— cloud=只看云端、local=只看本地、
  *  undefined=不过滤。Agent 轨道是 host-only,cloud 侧整块不列。 */
 export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = {}) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   // ⚠️ 这段 store 映射照抄 SessionsView(同一批 props 要原样喂给 SidebarPane);只多取 Agent 轨道那几项。
   const s = useApp(useShallow((state) => ({
     runningBySession: state.runningBySession,
@@ -237,6 +230,15 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     }
     return out
   }, [s.sessions, s.configBySession])
+  /** 一级行的悬停提示(U-19):名字一行 +「类型 · 相对时间」一行;从未有过会话只写类型。取代原生 title,免得两层提示叠在一起。
+   *  类型词复用既有词条(私聊 = agentSelect.direct、主动式 = orbits.badge.proactive)。 */
+  const rowTip = (name: string, kindKey: string, identKey: string) => tipProps(() => {
+    const at = activityByIdent.get(identKey) || 0
+    const kind = tipT(kindKey)
+    return [name, at ? tipT('orbits.tip.line', { kind, when: relativeTimeOf(at, Date.now(), locale) }) : kind]
+  })
+  const agentNames = useMemo(() => agents.map((a) => a.name || a.slug), [agents])
+
   // 高亮源 = 当前会话的轨道身份,不另造通道(§3.2)。
   const activeCfg = s.activeId ? s.configBySession[s.activeId] : undefined
   const activeSpaceId = useSpaceStore((st) => st.activeSpaceId)
@@ -259,26 +261,19 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     const url = s.agentAvatars[slug]
     const isMuse = slug === 'muse'
     const active = isMuse ? activeSpaceId === 'muse' : activeCfg?.soloAgentSlug === slug
-    const tint = slugTint(slug)
     return (
       <button
         key={`agent:${slug}`}
         type="button"
         className={`t2o-row${active ? ' active' : ''}`}
         data-pinned={isOrbitPinned(pinnedEntries, entryKey) ? 'true' : undefined}
-        title={name}
+        {...rowTip(name || slug, isMuse ? 'orbits.badge.proactive' : 'agentSelect.direct', `agent:${slug}`)}
         onClick={() => { activatePinned(entryKey); isMuse ? openMuse() : openSolo('agent', slug) }}
         onContextMenu={(e) => openRowMenuAtPointer(e, 'agent', slug, entryKey)}
       >
         <span className="t2o-lead">
-          {url
-            ? <img className="t2o-avatar" src={url} width={30} height={30} alt="" draggable={false} />
-            : (
-              <span
-                className="t2o-avatar t2o-avatar-text"
-                style={{ background: `color-mix(in srgb, ${tint} 18%, transparent)`, color: tint }}
-              >{firstChar(name || slug)}</span>
-            )}
+          {/* 首字一律中性底色(09-25 用户拍板,不按 slug 上彩色);同姓撞字靠 initialFor 取不同的字。 */}
+          <AgentAvatar name={name || slug} url={url} siblings={agentNames} size={30} className="t2o-avatar" initialClassName="t2o-avatar-text" />
           {runningSolo.has(slug) && <span className="t2s-dot running" title={t('orbits.badge.running')} />}
           {isMuse && <span className="t2s-dot proactive" title={t('orbits.badge.proactive')} />}
         </span>
@@ -313,7 +308,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
           type="button"
           className={`t2o-row${activeCfg?.soloEngineId === e.id ? ' active' : ''}`}
           data-pinned={isOrbitPinned(pinnedEntries, entryKey) ? 'true' : undefined}
-          title={e.name || e.id}
+          {...rowTip(e.name || e.id, 'agentSelect.direct', `engine:${e.id}`)}
           onClick={() => { activatePinned(entryKey); openSolo('engine', e.id) }}
           onContextMenu={(ev) => openRowMenuAtPointer(ev, 'engine', e.id, entryKey)}
         >
@@ -345,7 +340,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
           type="button"
           className={`t2o-row${activeCfg?.teamSlug === tm.slug ? ' active' : ''}`}
           data-pinned={isOrbitPinned(pinnedEntries, entryKey) ? 'true' : undefined}
-          title={tm.name}
+          {...rowTip(tm.name, 'orbits.tip.team', `team:${tm.slug}`)}
           onClick={() => { activatePinned(entryKey); openTeam(tm.slug) }}
           onContextMenu={(ev) => openRowMenuAtPointer(ev, 'team', tm.slug, entryKey)}
         >
@@ -387,7 +382,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
           onClick={() => { activatePinned(entryKey); openSession(g.sessionId) }}
           onContextMenu={(ev) => openRowMenuAtPointer(ev, 'gone', g.id, entryKey)}
         >
-          <span className="t2o-lead"><span className="t2o-avatar t2o-avatar-text" style={{ background: 'var(--overlay-medium)', color: 'var(--text-faint, var(--text-muted))' }}>{firstChar(g.id)}</span></span>
+          <span className="t2o-lead"><AgentAvatar name={g.id} className="t2o-avatar" initialClassName="t2o-avatar-text t2o-avatar-gone" /></span>
           <span className="t2o-name">{g.id}</span>
           <span className="t2o-badge">{t(g.kind === 'engine' ? 'orbits.gone.engineBadge' : g.kind === 'team' ? 'orbits.gone.teamBadge' : 'orbits.gone.agentBadge')}</span>
           {isOrbitPinned(pinnedEntries, entryKey) && <Pin className="t2o-pin-mark" aria-hidden="true" />}

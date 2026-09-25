@@ -8,7 +8,7 @@
  * 没有模式与轮数字段,成员各自以 DONE 表态收场),降回 1 立刻撤(引擎侧 <2 人整条 run failed,前端必须守 ≥2)。
  * 右键 / 长按 pill = 「私聊」(Agent 轨道的入口,与侧栏私聊行同一张表)。
  *
- * 样式复用既有 `.engine-picker` / `.engine-pill` / `.agent-pill-avatar` 一套(base.css 不动):
+ * 样式复用既有 `.engine-picker` / `.engine-pill` / `.agent-pill-avatar` 一套(base.css 不动;序号徽章 / 竖线在 agentSelectStrip.css):
  * `.agent-pill` / `.agent-select-strip` 只是**仪器与结构的抓手**,视觉仍由 `.engine-pill` 提供;
  * 窄栏(≤520px 容器查询)折叠成单个 `CompactChatPicker` 也是白拿 —— 见 components/compactChatPicker.css,
  * 它按 `.newchat-pickers > .engine-picker > .engine-picker-bar/-hint` 收起,故根节点必须留在那个位置。
@@ -22,12 +22,17 @@ import { PillBar } from './EnginePicker'
 import { CompactChatPicker } from './CompactChatPicker'
 import { ContextMenu, menuPos, type CtxMenu } from './RightPanel'
 import { useApp } from '../stores/appStore'
+import { AgentAvatar } from './AgentAvatar'
 import { openSolo } from '../sessionNav'
 import type { AgentConfig } from '../types'
+import './agentSelectStrip.css'
 
 registerMessages({
   'agentSelect.title': { zh: '选择 Agent', en: 'Pick agents' },
-  'agentSelect.hint': { zh: '选择一个或多个 Agent 以开始', en: 'Pick one or more agents to start' },
+  // 提示行是**状态句**(评审 U-09):0 选 = 默认 Agent 照样能发,不是「请先选择」。
+  'agentSelect.hintDefault': { zh: '由默认 Agent {name} 处理', en: 'Handled by the default agent, {name}' },
+  'agentSelect.hintDefaultAnon': { zh: '由默认 Agent 处理', en: 'Handled by the default agent' },
+  'agentSelect.hintOne': { zh: '{name} 将处理这条消息', en: '{name} will handle this message' },
   'agentSelect.removeHint': { zh: '再次点击移除', en: 'Click again to remove' },
   'agentSelect.team': { zh: '团队模式 · {n} 人', en: 'Team mode · {n} people' },
   'agentSelect.picked': { zh: '已选', en: 'Picked' },
@@ -39,26 +44,12 @@ registerMessages({
 /** 进团队模式的人数下限(引擎侧 <2 人整条 run failed);也是「画发言序号」的门槛 —— 单选没有顺序可言。 */
 const TEAM_MIN = 2
 
-// base.css 不属本簇,故序号徽章 / 竖线 / 副文案就地用 token 内联(不写死颜色,明暗两套自动跟随)。
-const INDEX_STYLE: React.CSSProperties = {
-  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flex: 'none',
-  minWidth: 14, height: 14, marginRight: 4, padding: '0 3px', borderRadius: 999,
-  background: 'var(--overlay-medium)', color: 'var(--text-muted)', fontSize: 10, fontWeight: 600, lineHeight: 1,
-}
-const SEP_STYLE: React.CSSProperties = { flex: 'none', width: 1, height: 20, margin: '0 4px', background: 'var(--border)' }
-const TEAM_STYLE: React.CSSProperties = { fontSize: 11.5, color: 'var(--text-muted)' }
-
 type Candidate =
   | { id: string; kind: 'agent'; slug: string; name: string; description?: string; system?: boolean }
   | { id: string; kind: 'engine'; engineId: string; name: string }
 
 const agentId = (slug: string): string => `agent:${slug}` // §9 前缀隔离:slug 与 engineId 可能同名(codex)
 const engineKey = (id: string): string => `engine:${id}`
-
-function firstChar(name: string): string {
-  const s = (name || '').trim()
-  return s ? Array.from(s)[0].toUpperCase() : '?'
-}
 
 const sameOrder = (a: string[], b: string[]): boolean => a.length === b.length && a.every((x, i) => x === b[i])
 
@@ -117,6 +108,7 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
   }, [s.agentDefs, s.engines, engineId, cfg.execMode, cfg.groupAgents, cfg.groupTempAgents, cfg.agentSlug])
 
   const byId = useMemo(() => new Map(items.map((i) => [i.id, i])), [items])
+  const agentNames = useMemo(() => items.filter((i) => i.kind === 'agent').map((i) => i.name), [items])
   const picked = pickedIds.map((id) => byId.get(id)).filter((i): i is Candidate => !!i)
   const candidates = items.filter((i) => !pickedIds.includes(i.id))
   const teamCount = cfg.groupChat ? pickedSlugs.length : 0
@@ -192,8 +184,8 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
 
   const pillIcon = (item: Candidate): React.ReactNode => {
     if (item.kind === 'engine') return warming === item.engineId ? <Loader2 size={16} className="spin" /> : <EngineIcon engineId={item.engineId} size={16} />
-    const url = s.agentAvatars[item.slug]
-    return url ? <img className="agent-pill-avatar" src={url} alt="" /> : <span className="agent-pill-initial">{firstChar(item.name)}</span>
+    // 首字一律中性底色(09-25 拍板);同姓撞字靠 initialFor 在同屏名字里取不同的字。
+    return <AgentAvatar name={item.name} url={s.agentAvatars[item.slug]} siblings={agentNames} imgClassName="agent-pill-avatar" initialClassName="agent-pill-initial" />
   }
 
   const pillTitle = (item: Candidate, isPicked: boolean): string => {
@@ -223,7 +215,7 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
           setMenu({ ...menuPos(e), items: [{ label: t('agentSelect.direct'), icon: <MessageCircle size={13} />, run: () => openDirect(item) }] })
         }}
       >
-        {isPicked && picked.length >= TEAM_MIN && <span className="agent-pill-index" style={INDEX_STYLE}>{(order as number) + 1}</span>}
+        {isPicked && picked.length >= TEAM_MIN && <span className="agent-pill-index">{(order as number) + 1}</span>}
         <span className="engine-pill-icon">{pillIcon(item)}</span>
         <span className="engine-pill-label">{item.name}</span>
         {item.kind === 'agent' && item.system && <span className="agent-badge-system">{t('agent.badge.system')}</span>}
@@ -233,6 +225,14 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
 
   // Chat 预设恒 sandbox + 无 agent(applyPreset 会抹掉 agentSlug/cwd),不露选择条;没有任何候选同理。
   if (cfg.preset === 'chat' || !items.length) return null
+
+  // 状态句:≥2 人 = 团队行;1 人 = 谁来接;0 人 = 默认 Agent 接(照样能发)。「再点移除」只留在已选 pill 的 title 里。
+  const defaultName = s.agentDefs.find((a) => a.slug === s.defaultAgentSlug)?.name
+  const statusLine = teamCount >= TEAM_MIN
+    ? t('agentSelect.team', { n: teamCount })
+    : picked.length === 1
+      ? t('agentSelect.hintOne', { name: picked[0].name })
+      : defaultName ? t('agentSelect.hintDefault', { name: defaultName }) : t('agentSelect.hintDefaultAnon')
 
   const compactValue = pickedIds[0] || ''
   const compactIcon = picked[0] ? pillIcon(picked[0]) : <EngineIcon engineId="" size={16} />
@@ -264,12 +264,11 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
         {/* 单一 children 数组(同一键空间):pill 从候选段挪到已选段时 React 移动节点而不是重挂。 */}
         {[
           ...picked.map((item, i) => renderPill(item, i)),
-          ...(picked.length > 0 ? [<span key="sep" className="agent-select-sep" aria-hidden="true" style={SEP_STYLE} />] : []),
+          ...(picked.length > 0 ? [<span key="sep" className="agent-select-sep" aria-hidden="true" />] : []),
           ...candidates.map((item) => renderPill(item, null)),
         ]}
       </PillBar>
-      {teamCount >= TEAM_MIN && <div className="agent-select-team" style={TEAM_STYLE}>{t('agentSelect.team', { n: teamCount })}</div>}
-      <div className="engine-picker-hint">{picked.length ? t('agentSelect.removeHint') : t('agentSelect.hint')}</div>
+      <div className={`engine-picker-hint${teamCount >= TEAM_MIN ? ' agent-select-team' : ''}`}>{statusLine}</div>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
     </div>
   )

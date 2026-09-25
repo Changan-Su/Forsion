@@ -148,6 +148,8 @@
   display: block;
   flex-shrink: 0;
 }
+/* 首字兜底一律中性底色(09-25 用户拍板:不按 slug 上彩色,同姓撞字靠 initialFor 取不同的字);
+ * 墓碑行(已删 / 已卸载)再退一档到 faint。 */
 .t2o-avatar-text {
   display: inline-flex;
   align-items: center;
@@ -155,7 +157,10 @@
   font-size: 13px;
   font-weight: 600;
   line-height: 1;
+  background: var(--overlay-medium);
+  color: var(--text-muted);
 }
+.t2o-avatar-text.t2o-avatar-gone { color: var(--text-faint, var(--text-muted)); }
 /* 状态点贴槽右下角:**绝对定位**不进内联流(同 `.t2s-lead .t2s-dot` 的手法与理由)。
  * 主动式徽章挪到右上角,与 running 同时亮得下。描边是零模糊环,不是空间高程。 */
 .t2o-lead .t2s-dot {
@@ -261,7 +266,7 @@
 .t2o-bar-sub { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 auto; }
 .t2o-bar-avatars { display: inline-flex; align-items: center; gap: 2px; }
 .t2o-bar-avatar { width: 18px; height: 18px; border-radius: 50%; object-fit: cover; display: inline-flex; align-items: center; justify-content: center; }
-.t2o-bar-avatar-text { font-size: 9px; font-weight: 600; color: var(--text); background: color-mix(in srgb, var(--accent-ink) 14%, transparent); }
+.t2o-bar-avatar-text { font-size: var(--ui-font-caption, 11px); font-weight: 600; color: var(--text-muted); background: var(--overlay-medium); }
 .t2o-bar-acts { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
 /* 按钮·药丸·芯片不去边(DESIGN.md §5)。 */
 .t2o-bar-chip {

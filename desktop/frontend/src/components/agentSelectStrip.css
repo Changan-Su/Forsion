@@ -1,0 +1,25 @@
+/* Agent 选择条的序号徽章与分隔竖线(原先内联写死 10 / 11.5px,评审 U-09 / U-46 收成类 + 六档字号)。
+ * 视觉仍由 base.css 的 `.engine-pill` 一套提供;这里只放本组件独有的两枚小件。 */
+.agent-select-strip .agent-pill-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  min-width: 14px;
+  height: 14px;
+  margin-right: 4px;
+  padding: 0 3px;
+  border-radius: var(--radius-pill, 999px);
+  background: var(--overlay-medium);
+  color: var(--text-muted);
+  font-size: var(--ui-font-caption, 11px);
+  font-weight: 600;
+  line-height: 1;
+}
+.agent-select-strip .agent-select-sep {
+  flex: none;
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--border);
+}

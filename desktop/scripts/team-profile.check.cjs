@@ -81,7 +81,7 @@ async function run() {
     const researchCard = party.locator('[data-team-member="research"]')
     await researchCard.getByRole('button', { name: 'Research 本会话模型', exact: true }).click()
     await researchCard.locator('.composer-menu .menu-item').filter({ hasText: 'Stub Sonnet' }).click()
-    await researchCard.getByLabel('Research 本会话 Effort', { exact: true }).selectOption('high')
+    await researchCard.getByLabel('Research 本会话思考档位', { exact: true }).selectOption('high')
     await party.getByRole('button', { name: '添加成员', exact: true }).click()
     await party.locator('.team-candidates button').filter({ hasText: 'Writer' }).click()
     await party.locator('[data-team-member="writer"]').getByRole('button', { name: '向前调整位置', exact: true }).click()
@@ -146,7 +146,7 @@ async function run() {
     assert.deepEqual(await party.locator('[data-team-member]').evaluateAll((els) => els.map((e) => e.dataset.teamMember)), ['xyra', 'writer', 'research'])
     // 调档从会话配置读回来;没调过的成员显示「沿用」而不是某个具体模型。
     const researchTuning = party.locator('[data-team-member="research"]')
-    assert.equal(await researchTuning.getByLabel('Research 本会话 Effort', { exact: true }).inputValue(), 'high')
+    assert.equal(await researchTuning.getByLabel('Research 本会话思考档位', { exact: true }).inputValue(), 'high')
     assert.match(await researchTuning.getByRole('button', { name: 'Research 本会话模型', exact: true }).textContent(), /Stub Sonnet/)
     assert.match(await party.locator('[data-team-member="xyra"]').getByRole('button', { name: 'Xyra 本会话模型', exact: true }).textContent(), /默认模型/)
     const tuningBox = async (sel) => party.locator(`[data-team-member="xyra"] ${sel}`).boundingBox()

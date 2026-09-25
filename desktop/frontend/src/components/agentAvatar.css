@@ -1,0 +1,36 @@
+/* AgentAvatar 的首字兜底(评审 U-09 / U-22;09-25 用户拍板:一律中性,不上彩色)。
+ * 尺寸与底色归调用方的容器类;这里只给居中与字重。`fill` 形态铺满已定尺寸的肖像框,
+ * 字号用容器查询单位随框缩放(选择器含 `-avatar`,属 check:uiscale 豁免的图形标记)。 */
+.agent-avatar-initial {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-weight: 600;
+  line-height: 1;
+  user-select: none;
+}
+.agent-avatar-glyph { display: block; }
+.agent-avatar-fill {
+  width: 100%;
+  height: 100%;
+  container-type: size;
+  color: var(--text-muted);
+}
+.agent-avatar-fill .agent-avatar-glyph { font-size: 42cqmin; font-weight: 500; }
+/* 候选清单里的 16px 小头像(替掉原先的 `<Bot size={16}>`)。复合类 (0,2,0) 压过
+ * `.team-candidates > button > span { flex: 1; display: grid }` 那条 (0,1,2) 的通配。 */
+.agent-avatar-initial.agent-avatar-mini,
+img.agent-avatar-mini {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+.agent-avatar-initial.agent-avatar-mini {
+  background: var(--overlay-medium);
+  color: var(--text-muted);
+  font-size: var(--ui-font-caption, 11px);
+}
