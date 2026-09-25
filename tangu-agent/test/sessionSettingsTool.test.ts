@@ -149,7 +149,7 @@ describe('执行', () => {
     const r = await call('update_session_settings', { model: 'opus', thinking_level: 'ultra', reason: 'hard proof' }, ctxFor('A', 'RA'));
     off();
     expect(String(r.result)).toContain('claude-opus-5-5');
-    expect(String(r.result)).toContain('next message');
+    expect(String(r.result)).toContain('after this reply finishes');
     const row = await rowOf('A');
     expect(row.model).toBe('claude-opus-5-5');
     expect(row.cfg).toEqual({ approvalMode: 'readonly', maxIterations: 7, thinkingLevel: 'max' }); // 审批档原样
