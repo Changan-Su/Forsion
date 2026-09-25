@@ -130,7 +130,21 @@ async function main() {
     assert.equal(await sw.locator('#host-sandbox-network').inputValue(), 'allow')
     await panel.scrollIntoViewIfNeeded()
     await sw.screenshot({ path: '/tmp/forsion-host-sandbox-en-dark.png', animations: 'disabled' })
-    console.log('PASS real settings: legacy default, mode/network controls, disk persistence, managed backend restart preserves drafts, reload, bilingual text and layout')
+
+    // U-01 反方向:托管 → 外部。点「外部连接」卡只改草稿(不停内置后端);显式「切换到外部连接并重连」才落 mode 并停后端。
+    await waitReady(win)
+    await sw.locator('.settings-mode-panel [data-action="mode-change"]').click()
+    await sw.locator('.settings-mode-panel .settings-choice-card[role="radio"]').nth(1).click()
+    await new Promise(resolve => setTimeout(resolve, 1200))
+    assert.equal((await win.evaluate(() => window.tangu.getConfig())).mode, 'managed', 'clicking the external card must not persist mode')
+    assert.equal((await win.evaluate(() => window.tangu.backendStatus())).state, 'ready', 'clicking the external card must not stop the managed backend')
+    const ext = sw.locator('.settings-external-panel')
+    await ext.locator('input[type="text"]').fill(stub.url)
+    await ext.locator('button.btn.primary').filter({ hasText: 'Switch to external and reconnect' }).click()
+    await poll(async () => (await win.evaluate(() => window.tangu.getConfig())).mode === 'external', 'explicit switch persists mode=external')
+    await poll(async () => (await win.evaluate(() => window.tangu.backendStatus())).state !== 'ready', 'managed backend stops after switching to external')
+    assert.equal(await sw.locator('.settings-mode-panel .settings-choice-card').count(), 0, 'mode cards collapse after the explicit switch')
+    console.log('PASS real settings: legacy default, mode/network controls, disk persistence, managed backend restart preserves drafts, reload, bilingual text and layout, explicit managed→external switch')
   } catch (error) {
     if (app) await (await app.firstWindow()).screenshot({ path: '/tmp/forsion-host-sandbox-failure.png' }).catch(() => {})
     throw error
