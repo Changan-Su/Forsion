@@ -15,9 +15,13 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import './i18n.generated' // 必须先注册,否则只看到 i18n.tsx 里的基础键
 import { __dictSnapshot } from './i18n'
+// LCL 引擎自带的文案表(宿主装配期 registerMessages 进来;见 lcl/engine/i18nSeam.ts)。纯字面量,直接 import。
+import { LCL_MESSAGES } from '../../../lcl/engine/engineMessages'
 
 const HAN = /[一-龥]/
 const SRC = __dirname
+/** 引擎源码:以前只扫 desktop,lcl 里的 t('…') / engineTr('…') 缺键没人管(U-45)。 */
+const LCL_ENGINE = join(__dirname, '../../../lcl/engine')
 
 /**
  * 15 个组件在**模块作用域**自带 `registerMessages({...})` 片段,只有 import 了那个组件才会进字典。
@@ -64,9 +68,12 @@ function collectFragments(files: string[]): { zh: Record<string, string>; en: Re
 
 const base = __dictSnapshot()
 const ALL_SRC = walk(SRC)
+const ENGINE_SRC = walk(LCL_ENGINE)
 const frag = collectFragments(ALL_SRC.filter((f) => readFileSync(f, 'utf8').includes('registerMessages(')))
-const zh = { ...base.zh, ...frag.zh }
-const en = { ...base.en, ...frag.en }
+const lclZh = Object.fromEntries(Object.entries(LCL_MESSAGES).map(([k, v]) => [k, v.zh]))
+const lclEn = Object.fromEntries(Object.entries(LCL_MESSAGES).map(([k, v]) => [k, v.en]))
+const zh = { ...base.zh, ...frag.zh, ...lclZh }
+const en = { ...base.en, ...frag.en, ...lclEn }
 
 /** 值里带汉字却**故意**如此的键:产品名/品牌/中文专有名词在英文界面下也该保持原样。 */
 const EN_MAY_CONTAIN_HAN = new Set<string>([
@@ -90,6 +97,16 @@ describe('i18n 覆盖', () => {
     // 防假绿:collectFragments 若因格式变化一个都没解析出来,A/B/C 会全绿但什么都没查。
     expect(frag.scanned, '一个 registerMessages 片段都没解析出来 —— 仪器已失效,先修解析').toBeGreaterThanOrEqual(15)
     expect(Object.keys(frag.zh).length).toBeGreaterThan(100)
+  })
+
+  it('0b. 仪器自检:引擎源码与引擎文案表确实被收进来了', () => {
+    expect(ENGINE_SRC.length, 'lcl/engine 一个源文件都没扫到 —— 路径变了先来改 LCL_ENGINE').toBeGreaterThan(20)
+    expect(Object.keys(LCL_MESSAGES).length).toBeGreaterThan(20)
+  })
+
+  it('D2. 引擎文案表的键不与宿主字典撞车(撞了 registerMessages 会静默改掉宿主那条)', () => {
+    const clash = Object.keys(LCL_MESSAGES).filter((k) => k in base.zh || k in frag.zh).sort()
+    expect(clash, `引擎键与宿主键同名:\n    ${clash.join('\n    ')}`).toEqual([])
   })
 
   it('D. 没有两个文件用同一个键注册不同文案(并行加词条时的静默互踩)', () => {
@@ -116,9 +133,9 @@ describe('i18n 覆盖', () => {
 
   it('C. 源码里用到的字面量键都在字典里(缺键会把 key 本身渲染出来)', () => {
     // t('a.b') / translate('a.b') / tr('a.b');只收字面量,模板串与变量键跳过(静态判不了)。
-    const USE = /\b(?:t|tr|translate)\(\s*(['"])([\w.-]+)\1/g
+    const USE = /\b(?:t|tr|translate|engineTr)\(\s*(['"])([\w.-]+)\1/g
     const unknown = new Map<string, string[]>()
-    for (const file of ALL_SRC) {
+    for (const file of [...ALL_SRC, ...ENGINE_SRC]) {
       const text = readFileSync(file, 'utf8')
       for (const m of text.matchAll(USE)) {
         const key = m[2]

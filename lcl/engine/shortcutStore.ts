@@ -59,6 +59,11 @@ export function eventToHotkey(e: KeyboardEvent): string | null {
 }
 
 /** 热键字符串 → 展示文本(mac 用符号紧排,其它用 Ctrl+Shift+… )。 */
+/** 宿主启动时写 `<html data-platform>`(与 desktop ShortcutsTab 同一判据);无 DOM 时按非 mac。 */
+export function isMacPlatform(): boolean {
+  try { return document.documentElement.dataset.platform === 'mac' } catch { return false }
+}
+
 export function formatHotkey(hk: string, isMac: boolean): string {
   if (!hk) return ''
   const sym: Record<string, string> = isMac
