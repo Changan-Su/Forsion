@@ -117,8 +117,10 @@ export async function checkBuiltinUpdates(o: BuiltinUpdateOpts): Promise<string[
         continue
       }
 
-      // staging 与暂存区同在 .pending/ 下(点开头,两边加载器都看不见),写完一次 rename 换位。
+      // staging 与暂存区同在 .pending/ 下(点开头,两边加载器都看不见),写完才换位。旧暂存区先整体改名挪开,
+      // 绝不原地递归删:删到一半被杀会留下「manifest 还在、文件缺了」的半截目录,下次启动会被当成完整更新换上。
       const staging = path.join(path.dirname(pendingPath), `.${path.basename(pendingPath)}.staging-${process.pid}`)
+      const retired = `${staging}.old`
       await fs.rm(staging, { recursive: true, force: true })
       try {
         for (const e of entries) {
@@ -127,10 +129,14 @@ export async function checkBuiltinUpdates(o: BuiltinUpdateOpts): Promise<string[
           await fs.writeFile(dest, e.data)
           if (e.mode && process.platform !== 'win32') await fs.chmod(dest, e.mode) // helper 可执行位
         }
-        await fs.rm(pendingPath, { recursive: true, force: true })
+        await fs.rm(retired, { recursive: true, force: true })
+        await fs.rename(pendingPath, retired).catch((err: NodeJS.ErrnoException) => {
+          if (err.code !== 'ENOENT') throw err
+        })
         await fs.rename(staging, pendingPath)
       } finally {
         await fs.rm(staging, { recursive: true, force: true })
+        await fs.rm(retired, { recursive: true, force: true })
       }
       staged.push(`${bundled.id}@${latest.version}`)
       log(`[builtin-updates] ${bundled.id} ${have} → ${latest.version} 已下载,下次启动生效`)
