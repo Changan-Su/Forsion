@@ -15,12 +15,16 @@ interface SbPrefsState extends SbPrefs {
   setOrder(ids: string[]): void
 }
 
+/** 没有存档时(新用户 / 从没动过状态栏设置)的缺省隐藏项。收件箱未读与 Ribbon 收件箱角标重复,
+ *  缺省收起(09-25 评审 U-23 拍板);**只改缺省** —— 已存偏好原样读回,老用户勾过的不动。 */
+export const DEFAULT_HIDDEN: readonly string[] = ['inbox.unread']
+
 function read(): SbPrefs {
   try {
     const v = localStorage.getItem(KEY)
     if (v) return { enabled: true, hidden: [], order: [], ...(JSON.parse(v) as Partial<SbPrefs>) }
   } catch { /* ignore */ }
-  return { enabled: true, hidden: [], order: [] }
+  return { enabled: true, hidden: [...DEFAULT_HIDDEN], order: [] }
 }
 function persist(s: SbPrefs): void {
   try { localStorage.setItem(KEY, JSON.stringify({ enabled: s.enabled, hidden: s.hidden, order: s.order })) } catch { /* ignore */ }

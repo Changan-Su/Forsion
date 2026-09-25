@@ -9,11 +9,10 @@ function PluginStatusText({ pluginId, itemId }: { pluginId: string; itemId: stri
   const owned = usePluginStore((s) => s.statusItems.find((o) => o.pluginId === pluginId && o.item.id === itemId))
   if (!owned) return null
   const it = owned.item
-  return (
-    <span className={it.onClick ? 'sb-click' : 'sb-plain'} title={it.title} onClick={it.onClick}>
-      {it.text ?? ''}
-    </span>
-  )
+  // 可点的插件项同内置项一样是 <button>(键盘 Tab 得到);纯展示的仍是 span。
+  return it.onClick
+    ? <button type="button" className="sb-click" title={it.title} onClick={it.onClick}>{it.text ?? ''}</button>
+    : <span className="sb-plain" title={it.title}>{it.text ?? ''}</span>
 }
 
 let installed = false
