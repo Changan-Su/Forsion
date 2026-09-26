@@ -16,7 +16,7 @@ import { openNewChat } from '../sessionNav'
 import type { AgentScheduleEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, PendingApprovalInfo, SessionRecord, TanguDesktopConfig } from '../types'
 import { registerMessages, useI18n } from '../i18n'
 import { formatDateTime } from '../format/time'
-import { fmtCalDateL } from '@amadeus/lib/calDateFmt'
+import { fmtCalDateYL } from '@amadeus/lib/calDateFmt'
 import { parseCalDate } from '@amadeus-shared/db/calDate'
 import { useAutomation } from '../stores/automationStore'
 import '../views/automation/messages' // automation.deleteConfirm(与自动化 Space 删除同一句确认)
@@ -247,7 +247,7 @@ export const MuseView: React.FC<{
             <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
               <b>{e.name}</b>
               <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
-                {fmtCalDateL(parseCalDate(e.date)) || e.date}{e.repeat ? ` · ${t('automation.schedule.every', { ivl: e.repeat })}` : ''}{e.lastRun ? ` · ${t('special.muse.trigFired', { t: formatDateTime(e.lastRun) })}` : ''}
+                {fmtCalDateYL(parseCalDate(e.date)) || e.date}{e.repeat ? ` · ${t('automation.schedule.every', { ivl: e.repeat })}` : ''}{e.lastRun ? ` · ${t('special.muse.trigFired', { t: formatDateTime(e.lastRun) })}` : ''}
                 {e.description && <div>{e.description}</div>}
               </div>
             </span>
