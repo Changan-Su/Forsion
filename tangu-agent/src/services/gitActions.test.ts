@@ -12,8 +12,8 @@ import { mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
-  DEFAULT_GITIGNORE, GitActionError, assertCommittable, cleanCommitMessage, commitMessageContext, commitMessagePrompt,
-  gitCommit, gitCreateBranch, gitInit, gitPush, serialized,
+  DEFAULT_GITIGNORE, GitActionError, assertCommittable, assertStagedSafe, cleanCommitMessage, commitMessageContext, commitMessagePrompt,
+  gitCommit, gitCreateBranch, gitInit, gitPending, gitPush, isCredentialPath, serialized,
 } from './gitActions.js';
 import { resetGitSettingsForTest } from './gitSettings.js';
 
@@ -33,7 +33,7 @@ beforeAll(() => {
   root = mkdtempSync(path.join(tmpdir(), 'tangu-gitactions-'));
   globalConfig = path.join(root, 'gitconfig');
   writeFileSync(globalConfig, '');
-  Object.assign(process.env, { GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: '1', ...IDENTITY });
+  Object.assign(process.env, { GIT_CONFIG_GLOBAL: globalConfig, GIT_CONFIG_NOSYSTEM: '1', TANGU_HOME: dir('tangu-home'), ...IDENTITY });
 });
 afterAll(() => {
   rmSync(root, { recursive: true, force: true });
@@ -135,12 +135,72 @@ describe('gitCommit', () => {
   it('新文件太多 / 太大 → 点名拒绝(上限可注入)', async () => {
     const cwd = repo('commit-limits');
     writeFileSync(path.join(cwd, 'big.bin'), Buffer.alloc(64));
-    const tooMany = await assertCommittable(cwd, { entries: ['a', 'b', 'c/d', 'c/e'], untracked: ['a', 'b', 'c/d', 'c/e'] }, { maxFiles: 3, maxBytes: 1024 }).catch((e) => e);
+    const tooMany = await assertCommittable(cwd, { untracked: ['a', 'b', 'c/d', 'c/e'] }, { maxFiles: 3, maxBytes: 1024 }).catch((e) => e);
     expect(tooMany.code).toBe('too_many_files');
     expect(tooMany.detail).toContain('c/ (2)');
-    const tooLarge = await assertCommittable(cwd, { entries: ['big.bin'], untracked: ['big.bin'] }, { maxFiles: 10, maxBytes: 10 }).catch((e) => e);
+    const tooLarge = await assertCommittable(cwd, { untracked: ['big.bin'] }, { maxFiles: 10, maxBytes: 10 }).catch((e) => e);
     expect(tooLarge.code).toBe('large_files');
     expect(tooLarge.detail).toContain('big.bin');
+  });
+
+  it('最终 index 复核:按暂存对象的真实大小拦(过滤器处理后变大的、用户预先暂存的都逃不过)', async () => {
+    const cwd = repo('commit-final-index');
+    writeFileSync(path.join(cwd, 'blob.bin'), Buffer.alloc(64));
+    const blob = git(cwd, 'hash-object', '-w', 'blob.bin');
+    const err = await assertStagedSafe(cwd, [{ status: 'A', path: 'blob.bin', mode: '100644', blob }], { maxFiles: 10, maxBytes: 10 }).catch((e) => e);
+    expect(err.code).toBe('large_files');
+    expect(await assertStagedSafe(cwd, [{ status: 'A', path: 'blob.bin', mode: '100644', blob }], { maxFiles: 10, maxBytes: 1024 })).toBeUndefined();
+  });
+
+  it('有已暂存的只提交已暂存的,没暂存的改动原样留着(不替用户推翻部分暂存)', async () => {
+    const cwd = repo('commit-staged-only');
+    writeFileSync(path.join(cwd, 'a.txt'), 'a'); writeFileSync(path.join(cwd, 'b.txt'), 'b');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
+    writeFileSync(path.join(cwd, 'a.txt'), 'a2'); writeFileSync(path.join(cwd, 'b.txt'), 'b2'); writeFileSync(path.join(cwd, 'new.txt'), 'n');
+    git(cwd, 'add', 'a.txt');
+    const pending = await gitPending(cwd);
+    expect(pending).toMatchObject({ stagedOnly: true, total: 1, files: [{ code: 'M', path: 'a.txt' }] });
+    expect((await gitCommit(cwd, 'only a')).stagedOnly).toBe(true);
+    expect(git(cwd, 'show', '--name-only', '--format=', 'HEAD')).toBe('a.txt');
+    expect(git(cwd, 'diff', '--cached', '--name-only')).toBe(''); // 暂存区清空(那一项进了提交)
+    expect(git(cwd, 'diff', '--name-only')).toBe('b.txt');         // 没暂存的改动原样还在工作区
+    expect(git(cwd, 'ls-files', '--others', '--exclude-standard')).toBe('new.txt');
+  });
+
+  it('凭据类文件 → credential_files 点名拒绝;是我们 add 的就把 index 退回原样;.env.example 照常', async () => {
+    const cwd = repo('commit-secrets');
+    writeFileSync(path.join(cwd, 'a.txt'), 'a');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
+    writeFileSync(path.join(cwd, '.env'), 'TOKEN=x'); writeFileSync(path.join(cwd, 'app.js'), 'x');
+    const err = await gitCommit(cwd, 'x').catch((e) => e);
+    expect(err.code).toBe('credential_files');
+    expect(err.detail).toBe('.env');
+    expect(git(cwd, 'diff', '--cached', '--name-only')).toBe(''); // 退回了:什么都没暂存
+    rmSync(path.join(cwd, '.env')); writeFileSync(path.join(cwd, '.env.example'), 'TOKEN=');
+    expect((await gitCommit(cwd, 'ok')).subject).toBe('ok');
+    for (const [file, hit] of [['.env.local', true], ['config/secrets.json', true], ['id_ed25519', true], ['id_ed25519.pub', false], ['server.pem', true], ['.npmrc', true], ['src/secretSanta.tsx', false], ['docs/tokens.md', false]] as const) {
+      expect(isCredentialPath(file), file).toBe(hit);
+    }
+  });
+
+  it('用户预先暂存了一个嵌套仓(gitlink)→ embedded_repo', async () => {
+    const cwd = repo('commit-gitlink');
+    const inner = dir('commit-gitlink/lib');
+    git(inner, 'init', '-q'); writeFileSync(path.join(inner, 'x.txt'), 'x'); git(inner, 'add', '.'); git(inner, 'commit', '-qm', 'inner');
+    git(cwd, 'add', 'lib');
+    expect(await codeOf(gitCommit(cwd, 'x'))).toBe('embedded_repo');
+  });
+
+  it('项目是大仓的子目录 → nested_repo:不替它把整个父仓 add -A', async () => {
+    const outer = repo('commit-parent');
+    writeFileSync(path.join(outer, 'private.txt'), 'p');
+    const sub = dir('commit-parent/app');
+    writeFileSync(path.join(sub, 'a.txt'), 'a');
+    expect(await codeOf(gitCommit(sub, 'x'))).toBe('nested_repo');
+    expect(await codeOf(gitPending(sub))).toBe('nested_repo');
+    expect(await codeOf(gitCreateBranch(sub, 'b'))).toBe('nested_repo');
+    expect(await codeOf(gitPush(sub))).toBe('nested_repo');
+    expect(git(outer, 'diff', '--cached', '--name-only')).toBe('');
   });
 
   it('git 不知道你是谁 → no_identity(不是笼统的 git_failed)', async () => {
@@ -151,6 +211,39 @@ describe('gitCommit', () => {
     try {
       expect(await codeOf(gitCommit(cwd, 'x'))).toBe('no_identity');
     } finally { Object.assign(process.env, IDENTITY); }
+  });
+});
+
+describe('仓库自带会执行程序的配置(gitTrust)', () => {
+  it.skipIf(process.platform === 'win32')('未信任:钩子不跑、提交被拒;点了信任才照用户配置跑(钩子执行),之后不再问', async () => {
+    const cwd = repo('trust-hooks');
+    writeFileSync(path.join(cwd, 'a.txt'), 'a');
+    const hooks = dir('trust-hooks/.githooks');
+    const marker = path.join(root, 'trust-hooks-ran');
+    writeFileSync(path.join(hooks, 'pre-commit'), `#!/bin/sh\ntouch "${marker}"\n`, { mode: 0o755 });
+    git(cwd, 'config', 'core.hooksPath', '.githooks');
+    const err = await gitCommit(cwd, 'x').catch((e) => e);
+    expect(err.code).toBe('untrusted_config');
+    expect(err.detail).toContain('core.hookspath');
+    expect(existsSync(marker)).toBe(false);
+    expect(git(cwd, 'diff', '--cached', '--name-only')).toBe('');
+    expect((await gitCommit(cwd, 'trusted', true)).subject).toBe('trusted');
+    expect(existsSync(marker)).toBe(true); // 信任后照用户自己的配置跑:钩子真的执行了
+    writeFileSync(path.join(cwd, 'b.txt'), 'b');
+    expect((await gitCommit(cwd, 'again')).subject).toBe('again'); // 信任记在宿主侧,下次不再问
+  });
+
+  it.skipIf(process.platform === 'win32')('过滤器(read 级):未信任时连待提交清单都不读 —— clean 过滤器一次都没跑', async () => {
+    const cwd = repo('trust-filter');
+    writeFileSync(path.join(cwd, 'a.txt'), 'a');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
+    const marker = path.join(root, 'trust-filter-ran');
+    git(cwd, 'config', 'filter.evil.clean', `sh -c 'touch "${marker}"; cat'`);
+    writeFileSync(path.join(cwd, '.gitattributes'), '*.txt filter=evil\n');
+    writeFileSync(path.join(cwd, 'a.txt'), 'changed');
+    expect(await codeOf(gitPending(cwd))).toBe('untrusted_config');
+    expect(await codeOf(commitMessageContext(cwd))).toBe('untrusted_config');
+    expect(existsSync(marker)).toBe(false);
   });
 });
 
@@ -203,6 +296,17 @@ describe('gitPush', () => {
     resetGitSettingsForTest({ forceWithLease: true });
     await gitPush(cwd);
     expect(git(remote, 'log', '-1', '--format=%s', 'main')).toBe('rewritten');
+  });
+
+  it('有上游时推到上游那个分支(显式 refspec,不吃 push.default 的隐式选择)', async () => {
+    const { cwd, remote } = setup('push-upstream');
+    git(cwd, 'push', '-q', '-u', 'origin', 'HEAD:release');
+    writeFileSync(path.join(cwd, 'b.txt'), 'b');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'to release');
+    git(cwd, 'config', 'push.default', 'nothing'); // 无参数的 git push 在这里会直接失败
+    expect(await gitPush(cwd)).toMatchObject({ remote: 'origin', branch: 'release', target: 'origin/release' });
+    expect(git(remote, 'log', '-1', '--format=%s', 'release')).toBe('to release');
+    expect(() => git(remote, 'rev-parse', '--verify', 'refs/heads/main')).toThrow(); // 没有顺手推出一个同名分支
   });
 
   it('没有远端 → no_remote;游离 HEAD → detached', async () => {

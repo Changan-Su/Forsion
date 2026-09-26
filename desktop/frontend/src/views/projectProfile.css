@@ -71,6 +71,16 @@
 .project-git-message { width: 100%; min-width: 0; padding: 7px 8px; font-size: var(--ui-font-meta, 12px); line-height: 1.6; resize: vertical; }
 .project-git-error { display: grid; gap: 6px; color: var(--danger); font-size: var(--ui-font-meta, 12px); }
 .project-git-error p { margin: 0; }
+.project-git-trust { display: grid; gap: 6px; padding: 8px 10px; border-radius: var(--radius-sm, 8px); background: var(--overlay-medium); font-size: var(--ui-font-meta, 12px); }
+.project-git-trust p { margin: 0; }
+.project-git-trust pre, .project-git-files ul { margin: 0; max-height: 140px; overflow: auto; font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-caption, 11px); }
+.project-git-trust pre { color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.project-git-files { display: grid; gap: 4px; min-width: 0; }
+.project-git-files small { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.project-git-files ul { display: grid; gap: 2px; padding: 6px 8px; list-style: none; border-radius: var(--radius-sm, 8px); background: var(--overlay-medium); }
+.project-git-files li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 4px; min-width: 0; }
+.project-git-files li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-git-files li code { color: var(--text-muted); }
 .project-git-error pre { margin: 0; max-height: 140px; overflow: auto; padding: 6px 8px; border-radius: var(--radius-sm, 8px); background: var(--overlay-medium); color: var(--text-muted); font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-caption, 11px); white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) {
   .project-skill-form, .project-git-commit-form { animation: none; }

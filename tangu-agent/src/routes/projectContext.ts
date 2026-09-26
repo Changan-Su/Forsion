@@ -10,8 +10,10 @@
  *          (图标只经这组端点改;PUT settings 保留 icon 现值)
  *   GET    /agent/project-context/icon?sessionId=|cwd=                                    → 图标图片二进制(settings.icon 是 emoji / 空 → 404)
  *   DELETE /agent/project-context/icon?sessionId=                                         → 移除图标(emoji 或图片),返回 { settings }
- *   POST   /agent/project-context/git/{init,message,commit,branch,push}  { sessionId, message?, name? }
- *          → 用户点的 git 动作(services/gitActions.ts);失败回 400 { detail, error: <code>, info },桌面按 error 出文案
+ *   POST   /agent/project-context/git/{init,trust,commit,branch,push}  { sessionId, message?, name?, trust? } → 写动作 + 新的 context
+ *   POST   /agent/project-context/git/{pending,message}                { sessionId, trust? } → 待提交清单 / 生成的提交信息(只读)
+ *          → 用户点的 git 动作(services/gitActions.ts);失败回 400 { detail, error: <code>, info },桌面按 error 出文案。
+ *          trust=true = 用户在面板上点了「信任并继续」(仓库自带会执行程序的配置,见 services/gitTrust.ts)
  *   GET|PUT /agent/git-settings                                                          → 「设置 → Git」(config.json 的 git 段)
  *
  * 只对本地引擎开放(hostExec):云端 microserver 没有用户磁盘。**cwd 不从客户端收**:请求按 sessionId 绑定,只认本人会话行上的
@@ -25,7 +27,7 @@ import {
   canonicalProjectPath, createProjectSkill, deleteProjectIcon, initProjectWorkspace, projectContext, readProjectIcon, readProjectSettings,
   saveProjectIcon, setProjectIconEmoji, writeProjectDoc, writeProjectSettings,
 } from '../services/projectContext.js';
-import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitInit, gitPush, serialized } from '../services/gitActions.js';
+import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitInit, gitPending, gitPush, gitTrustRepo, serialized } from '../services/gitActions.js';
 import { DEFAULT_GIT_SETTINGS, gitSettings, updateGitSettings } from '../services/gitSettings.js';
 
 const router = Router();
@@ -168,23 +170,39 @@ function gitFail(res: Response, e: any, fallback: string): void {
   res.status(500).json({ detail: e?.message || fallback });
 }
 
-/** 写动作:同一目录排队,做完连同新的项目上下文一起回,面板一次刷新。 */
+/** 写动作:同一目录排队;做完连同新的项目上下文一起回,面板一次刷新。上下文在队列里读(不混进下一个动作的状态);
+ *  读失败回 context:null —— 动作已经做完,不许报成失败(用户会重试 → 重复提交 / 再跑一遍钩子),桌面见 null 自己重读。 */
 function gitWrite(pathName: string, action: (cwd: string, body: any) => Promise<object>): void {
   router.post(`/agent/project-context/git/${pathName}`, authMiddleware, async (req: AuthRequest, res) => {
     try {
       const cwd = await projectDirOf(req, res, req.body?.sessionId);
       if (!cwd) return;
-      const result = await serialized(cwd, () => action(cwd, req.body || {}));
-      res.json({ ...result, context: await projectContext(cwd) });
+      res.json(await serialized(cwd, async () => {
+        const result = await action(cwd, req.body || {});
+        return { ...result, context: await projectContext(cwd).catch(() => null) };
+      }));
     } catch (e: any) {
       gitFail(res, e, `git ${pathName} failed`);
     }
   });
 }
+const trusted = (body: any): boolean => body?.trust === true;
 gitWrite('init', (cwd) => gitInit(cwd));
-gitWrite('commit', async (cwd, body) => ({ commit: await gitCommit(cwd, body.message) }));
-gitWrite('branch', (cwd, body) => gitCreateBranch(cwd, body.name));
-gitWrite('push', (cwd) => gitPush(cwd));
+gitWrite('trust', (cwd) => gitTrustRepo(cwd));
+gitWrite('commit', async (cwd, body) => ({ commit: await gitCommit(cwd, body.message, trusted(body)) }));
+gitWrite('branch', (cwd, body) => gitCreateBranch(cwd, body.name, trusted(body)));
+gitWrite('push', (cwd, body) => gitPush(cwd, trusted(body)));
+
+/** 待提交清单(提交框完整列出;有已暂存的只列已暂存的)。只读,不排队。 */
+router.post('/agent/project-context/git/pending', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const cwd = await projectDirOf(req, res, req.body?.sessionId);
+    if (!cwd) return;
+    res.json(await gitPending(cwd, trusted(req.body)));
+  } catch (e: any) {
+    gitFail(res, e, 'list pending changes failed');
+  }
+});
 
 /** 用会话自己的模型写一条提交信息(只读,不排队;计费在 generateCommitMessage 里)。 */
 router.post('/agent/project-context/git/message', authMiddleware, async (req: AuthRequest, res) => {
@@ -192,7 +210,7 @@ router.post('/agent/project-context/git/message', authMiddleware, async (req: Au
     const cwd = await projectDirOf(req, res, req.body?.sessionId);
     if (!cwd) return;
     const rows = await query<any[]>('SELECT model_id, app_id FROM chat_sessions WHERE id = ? LIMIT 1', [req.body.sessionId]);
-    const message = await generateCommitMessage(cwd, { userId: req.user!.userId, modelId: rows[0]?.model_id ?? null, appId: rows[0]?.app_id || 'tangu' });
+    const message = await generateCommitMessage(cwd, { userId: req.user!.userId, modelId: rows[0]?.model_id ?? null, appId: rows[0]?.app_id || 'tangu', trust: trusted(req.body) });
     res.json({ message });
   } catch (e: any) {
     gitFail(res, e, 'generate commit message failed');

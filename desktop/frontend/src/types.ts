@@ -687,6 +687,14 @@ export interface GitSummary {
   changesTotal?: number
   commits?: GitCommitInfo[]
   remote?: string | null
+  /** 远端个数(没有 origin、只有一个远端时也能推)。 */
+  remotes?: number
+  /** 仓库自带会执行程序的配置项与钩子;空 = 没有。 */
+  configRisks?: string[]
+  /** 用户在面板上信任过这个仓的配置。 */
+  trusted?: boolean
+  /** 读工作区会跑仓库自带的过滤器且未信任 → 这次没读改动(changes 为空不代表干净)。 */
+  changesUnread?: boolean
 }
 /** 「设置 → Git」(引擎 config.json 的 git 段):PROJECT 详情的 git 动作与 agent 自己建分支 / 写提交时都照它。 */
 export interface GitSettings {

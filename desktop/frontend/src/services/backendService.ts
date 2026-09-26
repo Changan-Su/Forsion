@@ -1072,20 +1072,27 @@ export const getProjectSettings = (cfg: TanguDesktopConfig, ref: { sessionId: st
 // ── 项目的 git 动作(PROJECT 详情「Git」页;用户点了才做)。失败带机器码 code(not_repo / nothing_to_commit / embedded_repo /
 //    too_many_files / large_files / no_identity / invalid_branch / no_remote / git_failed …)+ info(git 原文 / 点名的文件)。
 //    成功一律带回新的项目上下文,面板一次刷新。
-const withContext = <T extends { context: ProjectContext }>(r: T): T => ({ ...r, context: projectContextShape(r.context) })
+//    context 为 null = 动作做完了、只是随后读上下文失败:调用方照「成功」处理并自己重读,别报成失败(用户会重试 → 重复提交)。
+//    trust=true = 用户刚点了「信任并继续」(仓库自带会执行程序的配置)。
+const withContext = <T extends { context: ProjectContext | null }>(r: T): T => ({ ...r, context: r.context ? projectContextShape(r.context) : null })
 const gitPost = <T,>(cfg: TanguDesktopConfig, action: string, body: object, timeoutMs = 60_000) =>
   request<T>(cfg, `/agent/project-context/git/${action}`, { method: 'POST', body: JSON.stringify(body) }, { timeoutMs })
 export const gitInitProject = (cfg: TanguDesktopConfig, sessionId: string) =>
-  gitPost<{ createdGitignore: boolean; context: ProjectContext }>(cfg, 'init', { sessionId }).then(withContext)
+  gitPost<{ createdGitignore: boolean; context: ProjectContext | null }>(cfg, 'init', { sessionId }).then(withContext)
+export const gitTrustProject = (cfg: TanguDesktopConfig, sessionId: string) =>
+  gitPost<{ trusted: boolean; context: ProjectContext | null }>(cfg, 'trust', { sessionId }).then(withContext)
+/** 这次会提交的文件(有已暂存的只列已暂存的,stagedOnly=true)。 */
+export const gitPendingProject = (cfg: TanguDesktopConfig, sessionId: string, trust = false) =>
+  gitPost<{ files: Array<{ code: string; path: string }>; total: number; stagedOnly: boolean }>(cfg, 'pending', { sessionId, trust })
 /** 用会话自己的模型写一条提交信息(计入额度)。 */
-export const generateGitCommitMessage = (cfg: TanguDesktopConfig, sessionId: string) =>
-  gitPost<{ message: string }>(cfg, 'message', { sessionId }, 120_000).then((r) => r.message)
-export const gitCommitProject = (cfg: TanguDesktopConfig, sessionId: string, message: string) =>
-  gitPost<{ commit: { sha: string; subject: string }; context: ProjectContext }>(cfg, 'commit', { sessionId, message }, 120_000).then(withContext)
-export const gitCreateProjectBranch = (cfg: TanguDesktopConfig, sessionId: string, name: string) =>
-  gitPost<{ branch: string; context: ProjectContext }>(cfg, 'branch', { sessionId, name }).then(withContext)
-export const gitPushProject = (cfg: TanguDesktopConfig, sessionId: string) =>
-  gitPost<{ remote: string; branch: string; output: string; context: ProjectContext }>(cfg, 'push', { sessionId }, 180_000).then(withContext)
+export const generateGitCommitMessage = (cfg: TanguDesktopConfig, sessionId: string, trust = false) =>
+  gitPost<{ message: string }>(cfg, 'message', { sessionId, trust }, 120_000).then((r) => r.message)
+export const gitCommitProject = (cfg: TanguDesktopConfig, sessionId: string, message: string, trust = false) =>
+  gitPost<{ commit: { sha: string; subject: string; stagedOnly: boolean }; context: ProjectContext | null }>(cfg, 'commit', { sessionId, message, trust }, 120_000).then(withContext)
+export const gitCreateProjectBranch = (cfg: TanguDesktopConfig, sessionId: string, name: string, trust = false) =>
+  gitPost<{ branch: string; context: ProjectContext | null }>(cfg, 'branch', { sessionId, name, trust }).then(withContext)
+export const gitPushProject = (cfg: TanguDesktopConfig, sessionId: string, trust = false) =>
+  gitPost<{ remote: string; branch: string; target: string; output: string; context: ProjectContext | null }>(cfg, 'push', { sessionId, trust }, 180_000).then(withContext)
 /** 「设置 → Git」。writable=false(云端 worker 的 config.json 是所有用户共用的)时设置页只读说明、不给改。 */
 export const getGitSettings = (cfg: TanguDesktopConfig) =>
   request<{ settings: GitSettings; defaults: GitSettings; writable: boolean }>(cfg, '/agent/git-settings')

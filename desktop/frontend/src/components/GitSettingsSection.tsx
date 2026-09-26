@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { GitBranch } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { getGitSettings, setGitSettings } from '../services/backendService'
@@ -29,10 +29,10 @@ registerMessages({
     zh: '例如：用中文写，标题以 feat: 或 fix: 开头',
     en: 'For example: Follow Conventional Commits and keep the subject under 50 characters',
   },
-  'gitSettings.lease': { zh: '推送时使用 --force-with-lease', en: 'Push with --force-with-lease' },
+  'gitSettings.lease': { zh: '推送时允许改写远端历史', en: 'Allow rewriting remote history when pushing' },
   'gitSettings.leaseHint': {
-    zh: '改写过历史的分支（比如修改了上一次提交）也能推上去；如果远端已经有别人推送的新提交，仍会拒绝，不会覆盖。',
-    en: 'Lets you push a branch whose history you rewrote, for example after amending the last commit. If someone else has pushed new commits, the push is still refused instead of overwriting them.',
+    zh: '开启后推送会带上 --force-with-lease 和 --force-if-includes：修改过上一次提交这类改写了历史的分支也能推上去；远端有你本地还没合进来的提交时仍会拒绝。关闭时推送从不改写远端历史。',
+    en: 'Pushes then use --force-with-lease and --force-if-includes, so a branch whose history you rewrote (for example by amending the last commit) can still be pushed. The push is refused if the remote has commits you have not integrated locally. When off, pushes never rewrite remote history.',
   },
   'gitSettings.reset': { zh: '恢复默认', en: 'Reset to default' },
   'gitSettings.readonly': {
@@ -59,6 +59,7 @@ export function GitSettingsSection({ cfg }: { cfg: TanguDesktopConfig }) {
   const [instructions, setInstructions] = useState('')
   const [error, setError] = useState('')
   const [unavailable, setUnavailable] = useState(false)
+  const saveSeq = useRef(0)
 
   useEffect(() => {
     let alive = true
@@ -75,14 +76,17 @@ export function GitSettingsSection({ cfg }: { cfg: TanguDesktopConfig }) {
   if (unavailable) return <SettingsPanel icon={<GitBranch size={16} />} title={t('gitSettings.title')} description={t('gitSettings.unavailable')} />
   if (!state) return null
   const locked = !state.writable
-  // ⚠️只回写这次保存的那一项:前缀的响应可能在用户已经开始写提交说明之后才回来,整份回写会把正在打的字冲掉
-  //   (台架时序抖一下就复现:说明框失焦时读到的是被冲回的空串,于是判成「没改」,一个请求都不发)。
+  // ⚠️草稿只回写「这次保存的那一项、且框里还是发出去的那个值」:前缀的响应可能在用户已经开始写提交说明之后才回来,
+  //   整份回写会把正在打的字冲掉(台架 6n 把这个时序钉成了必现);同一个框保存途中又改了,也留着他新打的字。
+  //   开关等整份状态只认最后一次保存的响应,乱序回来的旧响应不许把显示倒回去。
   const save = async (patch: { [K in keyof GitSettings]?: GitSettings[K] | null }) => {
+    const seq = ++saveSeq.current
     try {
       const settings = await setGitSettings(cfg, patch)
-      setState((s) => (s ? { ...s, settings } : s))
-      if ('branchPrefix' in patch) setPrefix(settings.branchPrefix)
-      if ('commitInstructions' in patch) setInstructions(settings.commitInstructions)
+      if (seq === saveSeq.current) setState((s) => (s ? { ...s, settings } : s))
+      const sent = (v: unknown, cur: string) => v == null || cur.trim() === v
+      if ('branchPrefix' in patch) setPrefix((cur) => (sent(patch.branchPrefix, cur) ? settings.branchPrefix : cur))
+      if ('commitInstructions' in patch) setInstructions((cur) => (sent(patch.commitInstructions, cur) ? settings.commitInstructions : cur))
       setError('')
     } catch (e: any) { setError(e?.message || String(e)) }
   }

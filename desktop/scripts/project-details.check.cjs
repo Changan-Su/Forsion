@@ -249,6 +249,8 @@ async function run(app, win, stub, seen, home, ctx) {
   await form.waitFor()
   const generated = await until(async () => (await form.locator('textarea').inputValue()).startsWith('feat: add git actions'))
   check('6f 点「提交…」→ 展开提交框;POST git/message 带 sessionId,生成的信息填进输入框', generated && seen.gitMessages.length === 1 && seen.gitMessages[0].sessionId === 'pd-main', JSON.stringify(seen.gitMessages))
+  const fileRows = await form.locator('[data-project-git-files] li').allTextContents()
+  check('6f3 提交框先列出这次会提交的完整清单(POST git/pending):4 项,含未跟踪的 notes.txt', seen.gitPendings.length === 1 && fileRows.length === 4 && fileRows.some((r) => r.includes('notes.txt')) && /会提交这 4 项改动/.test(await form.textContent()), JSON.stringify(fileRows))
   // 收起提交框只是「取消」:「放弃修改」会被读成丢弃代码改动(截图自查抓到过)
   const formButtons = await form.locator('button').allTextContents()
   check('6f2 提交框按钮:重新生成 / 取消 / 提交;取消与提交同一行', formButtons.join('|') === '重新生成|取消|提交' && await form.locator('.project-git-commit-confirm button').evaluateAll((els) => new Set(els.map((el) => Math.round(el.getBoundingClientRect().top))).size === 1), JSON.stringify(formButtons))
@@ -283,6 +285,35 @@ async function run(app, win, stub, seen, home, ctx) {
   await until(async () => /origin\/tangu\/demo-x/.test(await gitCard.textContent())) // 请求到了桩 ≠ 响应已渲染
   await until(async () => (await gitError.count()) === 0)
   check('6j 推送 → POST git/push;上游变成 origin/tangu/demo-x,上一次的错误条收起', seen.gitPushes.length === 1 && /origin\/tangu\/demo-x/.test(await gitCard.textContent()) && await gitError.count() === 0, await gitCard.textContent())
+  // 6j2 推送被信任闸拦下 → 错误条给「信任这个仓库并继续」→ 带 trust:true 重发同一个推送
+  seen.pushGate = true
+  await writeRow.locator('[data-git-action="push"]').click()
+  const trustRetry = gitError.locator('[data-git-action="trust-retry"]')
+  await trustRetry.waitFor()
+  const gateText = await gitError.textContent()
+  await trustRetry.click()
+  await until(async () => seen.gitPushes.some((b) => b.trust === true))
+  await until(async () => (await gitError.count()) === 0)
+  check('6j2 信任闸:未信任 → 本地化说明 + 风险项 + 「信任并继续」;点了 → 同一个推送带 trust:true 重发并成功', /执行程序的 Git 配置/.test(gateText) && /core\.hookspath/.test(gateText) && seen.gitPushes.at(-2)?.trust !== true && seen.gitPushes.at(-1)?.trust === true && await gitError.count() === 0, JSON.stringify(seen.gitPushes.slice(-2)))
+  seen.pushGate = false
+  // 6j3 读级风险(过滤器):改动标「未读取」+ 信任横幅;点信任 → POST git/trust → 横幅收起、改动读出来
+  ctx.git = { ...ctx.git, changesUnread: true, configRisks: ['filter.evil.clean'], trusted: false, changes: [], changesTotal: 0, staged: 0, unstaged: 0, untracked: 0 }
+  await gitCard.locator('[data-project-git-actions] button').nth(3).click()
+  const banner = gitCard.locator('[data-project-git-untrusted]')
+  await banner.waitFor()
+  const bannerOk = /filter\.evil\.clean/.test(await banner.textContent()) && /未读取/.test(await gitCard.textContent())
+  await dismissToasts(win)
+  await details.screenshot({ path: shots.gitUntrusted = shot('project-git-untrusted-zh-light') })
+  await banner.locator('[data-git-action="trust"]').click()
+  await until(async () => (await banner.count()) === 0)
+  check('6j3 读级风险:改动显示「未读取」+ 横幅列出风险项;点「信任这个仓库」→ POST git/trust,横幅收起、改动读出来', bannerOk && seen.gitTrusts.length === 1 && seen.gitTrusts[0].sessionId === 'pd-main' && await banner.count() === 0 && /a\.txt/.test(await profile.textContent()), JSON.stringify(seen.gitTrusts))
+  // 6j4 子目录项目(大仓的一部分):只读说明,没有写动作
+  ctx.git = { ...ctx.git, nested: true }
+  await gitCard.locator('[data-project-git-actions] button').nth(3).click()
+  await until(async () => (await gitCard.locator('[data-project-git-readonly="nested"]').count()) === 1)
+  check('6j4 项目在更大的仓库里 → 只读说明,没有提交 / 分支 / 推送', await writeRow.count() === 0 && await gitCard.locator('[data-project-git-readonly="nested"]').count() === 1, await gitCard.textContent())
+  ctx.git = { ...ctx.git, nested: false }
+
   ctx.git = { available: true, repo: false }
   await gitCard.locator('[data-project-git-actions] button').nth(3).click()
   const initBtn = gitCard.locator('[data-git-action="init"]')
@@ -516,7 +547,7 @@ async function main() {
   for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
   const ctx = contextFixture(projectDir)
   const seen = { ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [],
-    gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitInits: [], gitSettingsPuts: [] }
+    gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false }
   let gitSettings = { branchPrefix: 'tangu/', commitInstructions: '', forceWithLease: false }
   const demoIds = new Set(['pd-main', 'pd-coder', 'pd-team']) // 默认项 / 图标只属于 Demo Project;别的项目组读到的是空
   // 真实磁盘上的项目 .tangu(移除工作区勾「删除相关文件」时要进废纸篓)
@@ -542,12 +573,18 @@ async function main() {
     if (route === '/agent/sessions' && method === 'GET' && url.searchParams.get('archived') === 'true') return { sessions: [] }
     // 带 body 的写接口:override 在 handle 之前跑且能读 body(handle 的 body() 只能读一次,GET 分支已用掉 sessionId 的读取)
     // Git 写动作:按引擎(services/gitActions.ts)的口径改 ctx.git,成功带回新上下文;失败回 400 { error: code, info }
+    if (route === '/agent/project-context/git/pending' && method === 'POST') { const b = await body(); seen.gitPendings.push(b); const files = (ctx.git.changes || []).map((c) => ({ code: c.code, path: c.path })); return { files, total: files.length, stagedOnly: false } }
+    if (route === '/agent/project-context/git/trust' && method === 'POST') {
+      const b = await body(); seen.gitTrusts.push(b)
+      ctx.git = { ...ctx.git, changesUnread: undefined, trusted: true, changes: [{ code: ' M', path: 'a.txt' }], changesTotal: 1, staged: 0, unstaged: 1, untracked: 0 }
+      return { trusted: true, context: ctx }
+    }
     if (route === '/agent/project-context/git/message' && method === 'POST') { const b = await body(); seen.gitMessages.push(b); await sleep(300); return { message: 'feat: add git actions to project details\n\nCommit, branch and push from the panel.' } }
     if (route === '/agent/project-context/git/commit' && method === 'POST') {
       const b = await body(); seen.gitCommits.push(b)
       const subject = String(b.message).split('\n')[0]
       ctx.git = { ...ctx.git, staged: 0, unstaged: 0, untracked: 0, changesTotal: 0, changes: [], ahead: (ctx.git.ahead || 0) + 1, commits: [{ sha: 'c'.repeat(40), short: 'ccccccc', at: Date.now(), subject }, ...(ctx.git.commits || [])] }
-      return { commit: { sha: 'c'.repeat(40), subject }, context: ctx }
+      return { commit: { sha: 'c'.repeat(40), subject, stagedOnly: false }, context: ctx }
     }
     if (route === '/agent/project-context/git/branch' && method === 'POST') {
       const b = await body(); seen.gitBranches.push(b)
@@ -555,7 +592,13 @@ async function main() {
       ctx.git = { ...ctx.git, branch: b.name, upstream: null, ahead: 0 }
       return { branch: b.name, context: ctx }
     }
-    if (route === '/agent/project-context/git/push' && method === 'POST') { const b = await body(); seen.gitPushes.push(b); ctx.git = { ...ctx.git, upstream: `origin/${ctx.git.branch}`, ahead: 0 }; return { remote: 'origin', branch: ctx.git.branch, output: '', context: ctx } }
+    if (route === '/agent/project-context/git/push' && method === 'POST') {
+      const b = await body(); seen.gitPushes.push(b)
+      // 信任闸(引擎 gitTrust):没带 trust 的那一次回 untrusted_config,桌面要给「信任并继续」并带 trust 重发
+      if (seen.pushGate && !b.trust) return { __code: 400, body: { detail: 'untrusted', error: 'untrusted_config', info: 'core.hookspath\nhooks/pre-push' } }
+      ctx.git = { ...ctx.git, upstream: `origin/${ctx.git.branch}`, ahead: 0 }
+      return { remote: 'origin', branch: ctx.git.branch, target: `origin/${ctx.git.branch}`, output: '', context: ctx }
+    }
     if (route === '/agent/project-context/git/init' && method === 'POST') {
       const b = await body(); seen.gitInits.push(b)
       ctx.git = { available: true, repo: true, nested: false, branch: 'main', detached: false, upstream: null, ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 2, changesTotal: 2, changes: [{ code: '??', path: '.gitignore' }, { code: '??', path: 'index.html' }], commits: [], remote: null }
