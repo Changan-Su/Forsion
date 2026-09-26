@@ -34,8 +34,8 @@ import '../styles/unitSwitcher.css'
 registerMessages({
   'unit.local': { zh: '本地', en: 'Local' },
   'unit.cloud': { zh: '云端', en: 'Cloud' },
-  'unit.localDesc': { zh: '本机引擎与本地笔记库', en: 'Local engine and vault' },
-  'unit.cloudDesc': { zh: '云端笔记库（引擎照旧）', en: 'Cloud vault (engine unchanged)' },
+  'unit.localDesc': { zh: '本机引擎与本地智库', en: 'Local engine and vault' },
+  'unit.cloudDesc': { zh: '云端智库（引擎照旧）', en: 'Cloud vault (engine unchanged)' },
   'unit.deviceDesc': { zh: '经云端中转，异地也能用', en: 'Via cloud relay — works anywhere' },
   'unit.deviceLanDesc': { zh: '同一局域网直连，更快', en: 'Direct over LAN — faster' },
   'unit.viaLan': { zh: '直连', en: 'Direct' },

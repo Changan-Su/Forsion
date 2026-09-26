@@ -164,7 +164,7 @@ async function main() {
     const dialog = win.getByRole('dialog', { name: /编辑事件/ })
     await dialog.waitFor({ timeout: 5000 })
     check('事件详情具有 dialog 语义并自动聚焦标题', await win.evaluate(() => document.activeElement?.getAttribute('aria-label') === '名称'))
-    check('事件详情提供打开数据库入口', (await dialog.getByRole('button', { name: /打开数据库/ }).count()) === 1)
+    check('事件详情提供打开数据库入口', (await dialog.getByRole('button', { name: /打开多维表/ }).count()) === 1)
     await win.keyboard.press('Escape')
     check('Escape 可关闭事件详情', (await dialog.count()) === 0)
 

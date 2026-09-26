@@ -15,7 +15,7 @@ registerMessages({
   'csd.selectAll': { zh: '全选', en: 'Select all' },
   'csd.selectNone': { zh: '全不选', en: 'Deselect all' },
   'csd.conflictMsg': {
-    zh: '云端工作区根目录已有「{name}」。可以换一个云端文件夹名，或把本 Vault 的同步内容合并进现有文件夹（换机后重新开启同步时选「合并」）。',
+    zh: '云端智库根目录已有「{name}」。可以换一个云端文件夹名，或把本智库的同步内容合并进现有文件夹（换机后重新开启同步时选「合并」）。',
     en: 'The cloud workspace root already has a folder called “{name}”. Pick a different name for the cloud folder, or merge this vault’s synced content into the existing one (choose Merge when you turn sync back on after switching machines).',
   },
   'csd.newNamePlaceholder': { zh: '新的云端文件夹名', en: 'New cloud folder name' },
@@ -23,7 +23,7 @@ registerMessages({
   'csd.mergeInto': { zh: '合并进「{name}」', en: 'Merge into “{name}”' },
   'csd.useNewName': { zh: '用新名字开启', en: 'Use new name' },
   'csd.intro': {
-    zh: '「{name}」将带完整相对路径同步到云端工作区（双向）。子页面与库内关联默认一并纳入，保留 Vault 里的相对位置；取消勾选即不同步：',
+    zh: '「{name}」将带完整相对路径同步到云端智库（双向）。子页面与库内关联默认一并纳入，保留智库里的相对位置；取消勾选即不同步：',
     en: '“{name}” will sync to the cloud workspace with its full relative path (two-way). Subpages and in-vault links are included by default and keep their position in the vault; uncheck anything you do not want synced:',
   },
   'csd.analyzing': { zh: '正在分析关联…', en: 'Analyzing links…' },

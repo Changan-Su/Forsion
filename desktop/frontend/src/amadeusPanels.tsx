@@ -20,7 +20,7 @@ registerMessages({
   'amxpanel.saveCollection': { zh: '存为集合', en: 'Save as collection' },
   'amxpanel.saveCollectionTip': { zh: '存为集合（左栏可一键回放这次搜索）', en: 'Save as a collection (replay this search from the sidebar in one click)' },
   'amxpanel.saveCollectionHint': { zh: '集合会出现在左栏，点击即重放这次搜索。', en: 'The collection shows up in the sidebar — click it to replay this search.' },
-  'amxpanel.noVault': { zh: '先打开一个 Vault。', en: 'Open a vault first.' },
+  'amxpanel.noVault': { zh: '先打开一个智库。', en: 'Open a vault first.' },
   'amxpanel.searchEmpty': { zh: '输入关键词，搜遍全部笔记内容。', en: 'Type a keyword to search the contents of every note.' },
   'amxpanel.noResults': { zh: '无结果', en: 'No results' },
   'amxpanel.tagsHead': { zh: '标签 · {n}', en: 'Tags · {n}' },

@@ -36,12 +36,12 @@ registerMessages({
     "en": "Failed to load history: {e}"
   },
   "app.defaultWorkspace": {
-    "zh": "Tangu 默认工作区",
-    "en": "Tangu default workspace"
+    "zh": "Tangu 默认项目",
+    "en": "Tangu default project"
   },
   "app.cloudWorkspace": {
-    "zh": "Cloud 工作区",
-    "en": "Cloud workspace"
+    "zh": "Cloud 项目",
+    "en": "Cloud project"
   },
   "app.workspace": {
     "zh": "工作区",
@@ -104,8 +104,8 @@ registerMessages({
     "en": "New chat in \"{name}\""
   },
   "sidebar.addLocalWorkspace": {
-    "zh": "添加本地工作区",
-    "en": "Add local workspace"
+    "zh": "添加本地项目",
+    "en": "Add local project"
   },
   "sidebar.archived": {
     "zh": "已归档",
@@ -500,8 +500,8 @@ registerMessages({
     "en": "Workspace"
   },
   "panel.files.noLocalWs": {
-    "zh": "暂无本地工作区。添加本地工作区后，其文件夹内容会显示在这里。",
-    "en": "No local workspaces yet. Add one and its folder contents appear here."
+    "zh": "暂无本地项目。添加本地项目后，其文件夹内容会显示在这里。",
+    "en": "No local projects yet. Add one and its folder contents appear here."
   },
   "panel.files.refresh": {
     "zh": "刷新",
@@ -825,11 +825,11 @@ registerMessages({
     "en": "Crashed"
   },
   "settings.workspace.label": {
-    "zh": "Tangu 默认工作区目录",
-    "en": "Tangu default workspace directory"
+    "zh": "Tangu 默认项目目录",
+    "en": "Tangu default project directory"
   },
   "settings.workspace.placeholder": {
-    "zh": "笔记库内 Sessions（默认，自动创建）",
+    "zh": "智库内 Sessions（默认，自动创建）",
     "en": "Sessions inside your notes library (default, auto-created)"
   },
   "settings.workspace.pick": {
@@ -837,8 +837,8 @@ registerMessages({
     "en": "Choose…"
   },
   "settings.workspace.hint": {
-    "zh": "侧栏「Tangu 默认工作区」新建会话用的本机目录；留空默认用笔记库内的 Sessions 文件夹（无笔记库时 ~/Forsion）。改后关闭设置即刷新侧栏工作区。",
-    "en": "Local directory used by the sidebar \"Tangu default workspace\" for new sessions; leave empty to use the Sessions folder inside your notes library (or ~/Forsion without one). After changing, close Settings to refresh the sidebar workspace."
+    "zh": "侧栏「Tangu 默认项目」新建会话用的本机目录；留空默认用智库内的 Sessions 文件夹（无智库时 ~/Forsion）。改后关闭设置即刷新侧栏项目。",
+    "en": "Local directory used by the sidebar \"Tangu default project\" for new sessions; leave empty to use the Sessions folder inside your vault (or ~/Forsion without one). After changing, close Settings to refresh the sidebar projects."
   },
   "settings.token.label": {
     "zh": "手动 token（高级，可选；覆盖登录凭证）",
@@ -1778,7 +1778,7 @@ registerMessages({
   "settings.forsion.never": { "zh": "从未", "en": "Never" },
   "settings.forsion.needLoginHint": { "zh": "登录 Forsion 后才能同步；未登录也能用直连 API（模型页配置）正常使用 Tangu。", "en": "Sign in to Forsion to sync; Tangu works fully without it via direct API providers (configure in Model tab)." },
   "settings.forsion.gatedTitle": { "zh": "需要登录 Forsion 的功能", "en": "Features that need Forsion" },
-  "settings.forsion.gatedList": { "zh": "云端模型目录 · 技能分享 · 云工作区存储 · Brain 记忆同步", "en": "Cloud model catalog · skill sharing · cloud workspace storage · Brain memory sync" },
+  "settings.forsion.gatedList": { "zh": "云端模型目录 · 技能分享 · 云工作区存储 · Brain 记忆同步", "en": "Cloud model catalog · skill sharing · cloud vault storage · Brain memory sync" },
 })
 
 // ── 群聊模式(Group Chat;2026-06 新增;补到此处,见文件头说明)──
@@ -1931,9 +1931,9 @@ registerMessages({
   "settings.tts.testBtn": { "zh": "试听", "en": "Test voice" },
   "settings.tts.testOk": { "zh": "合成成功，正在播放", "en": "Synthesized, playing" },
   "settings.tts.testText": { "zh": "你好呀，我是 Tangu。今天过得怎么样？", "en": "Hi, I'm Tangu. How is your day going?" },
-  "settings.notes.cloudSyncLabel": { "zh": "在线同步（Cloud Vault）", "en": "Online sync (Cloud Vault)" },
-  "settings.notes.cloudSyncHint": { "zh": "工作区顶部「本地 | 云端」滑块的云端侧即云端库：与你的云端 vault 双向持续同步（需登录 Forsion 账号），网页端与云端 Agent 实时可见。本地侧的笔记永不上云。单文件上限：笔记 5MB，附件随会员档位（免费版 5MB）。", "en": "The Cloud side of the Local | Cloud switch at the top of the workspace is your cloud vault — continuously two-way synced (Forsion login required) and live-visible to the web app and cloud agents. Notes on the Local side never leave this device. Per-file limit: 5 MB for notes; attachments depend on your plan (5 MB on Free)." },
-  "notes.cloud.loginHint": { "zh": "登录 Forsion 账号后，这里会与你的云端 vault 自动双向同步。", "en": "Sign in to Forsion and this vault will two-way sync with your cloud vault automatically." },
+  "settings.notes.cloudSyncLabel": { "zh": "在线同步（云端智库）", "en": "Online sync (Cloud Vault)" },
+  "settings.notes.cloudSyncHint": { "zh": "工作区顶部「本地 | 云端」滑块的云端侧即云端智库：与你在云端的智库双向持续同步（需登录 Forsion 账号），网页端与云端 Agent 实时可见。本地侧的笔记永不上云。单文件上限：笔记 5MB，附件随会员档位（免费版 5MB）。", "en": "The Cloud side of the Local | Cloud switch at the top of the workspace is your cloud vault — continuously two-way synced (Forsion login required) and live-visible to the web app and cloud agents. Notes on the Local side never leave this device. Per-file limit: 5 MB for notes; attachments depend on your plan (5 MB on Free)." },
+  "notes.cloud.loginHint": { "zh": "登录 Forsion 账号后，这里会与你的云端智库自动双向同步。", "en": "Sign in to Forsion and this vault will two-way sync with your cloud vault automatically." },
   "notes.cloud.loginBtn": { "zh": "登录", "en": "Sign in" },
   "notes.cloud.local": { "zh": "本地", "en": "Local" },
   "notes.cloud.cloud": { "zh": "云端", "en": "Cloud" },
@@ -1943,15 +1943,15 @@ registerMessages({
   "settings.notes.cloudSyncSkipped": { "zh": "已跳过 {n} 项（超限或路径非法）", "en": "Skipped {n} item(s) (too large or invalid path)" },
   "settings.notes.cloudSyncPendingDel": { "zh": "删除保护：{n} 项批量删除已被拦下，确认后才会执行", "en": "Deletion guard: {n} bulk deletion(s) held, confirm to proceed" },
   "settings.notes.cloudSyncConfirmDel": { "zh": "确认删除", "en": "Confirm deletions" },
-  "settings.remotesync.label": { "zh": "本地库远程同步", "en": "Vault remote sync" },
-  "settings.remotesync.hint": { "zh": "把本地库同步到你自己的存储（Dropbox / S3 / WebDAV / 文件夹），手动或定时，非实时；与上方的在线同步（Cloud Vault）互不相干。删除有防误删闸，冲突两版都保留。", "en": "Sync your local vault to your own storage (Dropbox / S3 / WebDAV / folder), manually or on a schedule. Independent from Online sync (Cloud Vault) above. Mass-delete guard and conflict copies keep data safe." },
+  "settings.remotesync.label": { "zh": "本地智库远程同步", "en": "Vault remote sync" },
+  "settings.remotesync.hint": { "zh": "把本地智库同步到你自己的存储（Dropbox / S3 / WebDAV / 文件夹），手动或定时，非实时；与在线同步（云端智库）互不相干。删除有防误删闸，冲突两版都保留。", "en": "Sync your local vault to your own storage (Dropbox / S3 / WebDAV / folder), manually or on a schedule. Independent from Online sync (Cloud Vault) above. Mass-delete guard and conflict copies keep data safe." },
   "settings.remotesync.service": { "zh": "远程服务", "en": "Remote service" },
   "settings.remotesync.schedule": { "zh": "同步计划", "en": "Sync schedule" },
   "settings.remotesync.scheduleHint": { "zh": "按固定间隔在后台自动同步；任何时候都可以手动「立即同步」。", "en": "Runs automatically in the background at the chosen interval; you can always sync manually." },
   "settings.remotesync.advanced": { "zh": "高级", "en": "Advanced" },
   "settings.remotesync.maxFile": { "zh": "单文件上限（MB,0 = 不限）", "en": "Max file size (MB, 0 = unlimited)" },
   "settings.remotesync.preparing": { "zh": "正在对账…（扫描本地与远端）", "en": "Preparing… (scanning local & remote)" },
-  "settings.remotesync.scope": { "zh": "同步范围：整个本地库的全部文件（含附件/画板/多维表；系统垃圾与 .git、.trash 除外）—— {root}", "en": "Scope: every file in the local vault (attachments, drawings, databases included; system junk, .git and .trash excluded) — {root}" },
+  "settings.remotesync.scope": { "zh": "同步范围：整个本地智库的全部文件（含附件/画板/多维表；系统垃圾与 .git、.trash 除外）—— {root}", "en": "Scope: every file in the local vault (attachments, drawings, databases included; system junk, .git and .trash excluded) — {root}" },
   "settings.remotesync.dirBoth": { "zh": "双向同步（默认）", "en": "Bidirectional (default)" },
   "settings.remotesync.dirPush": { "zh": "仅上传（增量备份，不删远端）", "en": "Upload only (incremental backup)" },
   "settings.remotesync.dirPull": { "zh": "仅下载（增量还原，不删本地）", "en": "Download only (incremental restore)" },
@@ -1976,7 +1976,7 @@ registerMessages({
   "settings.remotesync.backendOff": { "zh": "关闭", "en": "Off" },
   "settings.remotesync.backendPenzor": { "zh": "Forsion 云端（条件写，推荐）", "en": "Forsion Cloud (conditional writes, recommended)" },
   "settings.remotesync.penzorVault": { "zh": "同步库名（默认 default）", "en": "Sync vault name (default: default)" },
-  "settings.remotesync.penzorHint": { "zh": "使用 Forsion 账号登录态；每台设备同步到同一个库名即可互通。与「云端库」是两套机制，互不相干。", "en": "Uses your Forsion login. Point every device at the same vault name to sync. Independent from the Cloud vault." },
+  "settings.remotesync.penzorHint": { "zh": "使用 Forsion 账号登录态；每台设备同步到同一个库名即可互通。与「云端智库」是两套机制，互不相干。", "en": "Uses your Forsion login. Point every device at the same vault name to sync. Independent from the Cloud vault." },
   "settings.remotesync.backendFolder": { "zh": "文件夹（U 盘 / NAS）", "en": "Folder (USB / NAS)" },
   "settings.remotesync.backendS3": { "zh": "S3 兼容（OSS / COS / MinIO / R2）", "en": "S3-compatible (OSS / COS / MinIO / R2)" },
   "settings.remotesync.backendWebdav": { "zh": "WebDAV（坚果云 / Nextcloud）", "en": "WebDAV (Nextcloud etc.)" },
@@ -1998,9 +1998,9 @@ registerMessages({
   "settings.remotesync.pendingDel": { "zh": "防误删闸：{n} 项删除已拦下，确认后才会执行", "en": "Mass-delete guard: {n} deletion(s) held, confirm to proceed" },
   "settings.remotesync.confirmDel": { "zh": "确认删除并同步", "en": "Confirm deletions & sync" },
   "settings.remotesync.errors": { "zh": "错误", "en": "Errors" },
-  "settings.remotesync.rootErr.no-local-vault": { "zh": "未找到本地库（先在 Amadeus 打开一个本地 vault）", "en": "No local vault (open one in Amadeus first)" },
-  "settings.remotesync.rootErr.cloud-vault-forbidden": { "zh": "当前活动库是云端库；此功能只同步本地库（云端库自带同步）", "en": "Active vault is the Cloud vault; this feature syncs the local vault only" },
-  "settings.remotesync.rootErr.vault-missing": { "zh": "本地库路径不存在", "en": "Local vault path missing" },
+  "settings.remotesync.rootErr.no-local-vault": { "zh": "未找到本地智库（先在 Amadeus 打开一个本地智库）", "en": "No local vault (open one in Amadeus first)" },
+  "settings.remotesync.rootErr.cloud-vault-forbidden": { "zh": "当前打开的是云端智库；此功能只同步本地智库（云端智库自带同步）", "en": "Active vault is the Cloud vault; this feature syncs the local vault only" },
+  "settings.remotesync.rootErr.vault-missing": { "zh": "本地智库路径不存在", "en": "Local vault path missing" },
   "settings.notes.cloudSyncState.disabled": { "zh": "未启用", "en": "Off" },
   "settings.notes.cloudSyncState.starting": { "zh": "启动中", "en": "Starting" },
   "settings.notes.cloudSyncState.idle": { "zh": "已同步", "en": "Up to date" },

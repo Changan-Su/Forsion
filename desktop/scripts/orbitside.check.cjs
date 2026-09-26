@@ -550,7 +550,7 @@ async function run(app, win) {
   check('10c Pin 状态已持久化', !!pinState.saved && pinState.saved.includes('ws:') && pinState.saved.includes('row:agent:xyra'), pinState.saved)
 
   // ── 9a Tangu Space 被动恢复:会话恢复,Project 折叠状态不被 setActiveId / mount effect 撬开 ──
-  const defaultGroup = win.locator('.t2o .t2s-group', { hasText: 'Tangu 默认工作区' }).first()
+  const defaultGroup = win.locator('.t2o .t2s-group', { hasText: 'Tangu 默认项目' }).first()
   const defaultRow = win.locator('.t2o .t2s-srow', { hasText: '默认工作区会话' }).first()
   if (!(await defaultRow.isVisible().catch(() => false))) await defaultGroup.locator('.t2s-group-toggle').click()
   await defaultRow.click()
@@ -567,7 +567,7 @@ async function run(app, win) {
     await sleep(800)
   }
   const spaceRestore = await win.evaluate(`(() => {
-    const group = Array.from(document.querySelectorAll('.t2o .t2s-group')).find((g) => (g.textContent || '').includes('Tangu 默认工作区'))
+    const group = Array.from(document.querySelectorAll('.t2o .t2s-group')).find((g) => (g.textContent || '').includes('Tangu 默认项目'))
     const row = Array.from(document.querySelectorAll('.t2o .t2s-srow')).find((e) => (e.textContent || '').includes('默认工作区会话'))
     const r = row && row.getBoundingClientRect()
     return { hasGroup: !!group, active: group?.getAttribute('data-active') === 'true', open: !!group?.querySelector('.t2s-lead-chev.open'), rowVisible: !!r && r.width > 0 && r.height > 0, rowActive: !!row?.classList.contains('active') }

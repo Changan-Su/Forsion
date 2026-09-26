@@ -31,7 +31,7 @@ registerMessages({
 
 **先记住三件事：**
 
-- 每一篇笔记就是笔记库（Vault）文件夹里的一个 \`.md\` 文件，纯 markdown，别的编辑器也读得懂。
+- 每一篇笔记就是智库文件夹里的一个 \`.md\` 文件，纯 markdown，别的编辑器也读得懂。
 - 右上角「文档 / 画布」胶囊切换视角：**同一份内容**，一种是从上往下读的文档，一种是随手摆的画布。
 - 卡片是两种视角之间的桥：文档里的一块内容，到画布上就是一张能拖的卡。
 
@@ -63,7 +63,7 @@ Positions on the canvas live in a single \`amadeus_canvas\` line in the file's f
   'amtut.card.t2': {
     zh: `### 文档模式：像文档一样写
 
-- 空行输入 \`/\` 唤出块菜单：标题、列表、待办、表格、代码、数据库、画板……
+- 空行输入 \`/\` 唤出块菜单：标题、列表、待办、表格、代码、多维表、画板……
 - markdown 前缀也直接生效：\`# \` 标题、\`- \` 列表、\`- [ ] \` 待办、\`> \` 折叠。
 - 每一块左边的 \`⠿\` 拖着排序，点开是块菜单（转换类型、移到新列、变成卡片）。
 - \`[[\` 引用另一篇笔记，被引的那篇会自动长出反向链接。`,
@@ -159,7 +159,7 @@ On the canvas a single click is reserved for selecting and dragging, so **nothin
 Made a mess and want to start over? Delete this file, then search the command palette (\`⌘/Ctrl + K\`) for "tutorial".`,
   },
   'amtut.toast.noVault': {
-    zh: '请先打开一个笔记库（Vault），教程会生成到里面',
+    zh: '请先打开一个智库，教程会生成到里面',
     en: 'Open a vault first — the tutorial is created inside it',
   },
   'amtut.toast.failed': {

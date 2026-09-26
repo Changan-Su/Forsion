@@ -64,7 +64,7 @@ registerMessages({
   'share.quotaReached': { zh: '已达套餐上限', en: 'Plan limit reached' },
   'share.opFailed': { zh: '操作失败', en: 'Something went wrong' },
   'share.syncOff': { zh: '关闭云同步（云端副本保留）', en: 'Turn off cloud sync (the cloud copy is kept)' },
-  'share.syncOn': { zh: '开启云同步（同步到云端工作区）', en: 'Turn on cloud sync (sync to the cloud workspace)' },
+  'share.syncOn': { zh: '开启云同步（同步到云端工作区）', en: 'Turn on cloud sync (sync to your cloud vault)' },
   'share.notUploaded': { zh: '云端还没有这一页（同步尚未完成或失败），稍后再试', en: 'This page is not in the cloud yet (sync pending or failed). Try again later.' },
   'share.notInCloud': { zh: '这一页还没有同步到云端 —— 共享和发布的都是云端副本，先在下方开启云同步，再回来生成链接。', en: 'This page is not synced to the cloud yet. Sharing and publishing work on the cloud copy, so turn on cloud sync below first, then come back for a link.' },
 })

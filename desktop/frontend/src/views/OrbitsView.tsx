@@ -38,7 +38,7 @@ import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbit
 import './chat2/orbits.css'
 
 registerMessages({
-  'orbits.filter.label': { zh: '筛选工作区', en: 'Filter workspace' },
+  'orbits.filter.label': { zh: '筛选列表', en: 'Filter list' },
   'orbits.filter.all': { zh: '全部', en: 'All' },
   'orbits.filter.agent': { zh: 'Agent', en: 'Agents' },
   'orbits.filter.team': { zh: '团队', en: 'Teams' },

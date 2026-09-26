@@ -41,7 +41,7 @@ registerMessages({
   'sidebar.pin': { zh: '置顶', en: 'Pin to top' },
   'sidebar.unpin': { zh: '取消置顶', en: 'Unpin' },
   'sidebar.ws.details': { zh: '查看详情', en: 'View details' },
-  'sidebar.ws.removeTitle': { zh: '移除工作区「{name}」？', en: 'Remove workspace "{name}"?' },
+  'sidebar.ws.removeTitle': { zh: '移除项目「{name}」？', en: 'Remove project "{name}"?' },
   'sidebar.ws.removeMsg': { zh: '会从侧栏移除它，并删除其中的 {count} 个会话，不可撤销。磁盘上的项目文件夹不会删除。', en: 'It is removed from the sidebar and its {count} session(s) are deleted. This cannot be undone. The project folder on disk is not deleted.' },
   'sidebar.ws.removeFiles': { zh: '同时删除相关文件：项目里的 .tangu 文件夹（Tangu 的指令、技能、计划），移到废纸篓', en: "Also delete related files: the project's .tangu folder (Tangu instructions, skills and plans), moved to the Trash" },
   'sidebar.ws.removeAction': { zh: '移除', en: 'Remove' },

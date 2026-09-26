@@ -73,7 +73,7 @@ registerMessages({
   'calview.newEventTitle': { zh: '新事件', en: 'New event' },
   'calview.new': { zh: '新建', en: 'New' },
   'calview.newInto': { zh: '新建到「{name}」', en: 'New event in "{name}"' },
-  'calview.noDbHint': { zh: '请先在右栏添加一个日历数据库', en: 'Add a calendar database in the right panel first' },
+  'calview.noDbHint': { zh: '请先在右栏添加一个含日期属性的多维表', en: 'Add a calendar database in the right panel first' },
   'calview.today': { zh: '今天', en: 'Today' },
   'calview.prevPage': { zh: '上一页', en: 'Previous' },
   'calview.nextPage': { zh: '下一页', en: 'Next' },
@@ -82,7 +82,7 @@ registerMessages({
   'calview.zoomIn': { zh: '放大时间轴', en: 'Zoom in timeline' },
   'calview.densityReset': { zh: '恢复默认密度', en: 'Reset to default density' },
   'calview.empty': {
-    zh: '还没有日历事件。点「新建」，或在右栏添加一个含日期属性的数据库。',
+    zh: '还没有日历事件。点「新建」，或在右栏添加一个含日期属性的多维表。',
     en: 'No calendar events yet. Click "New", or add a database with a date property in the right panel.',
   },
   'calview.allDay': { zh: '全天', en: 'All-day' },

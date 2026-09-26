@@ -174,7 +174,7 @@ async function main() {
   await page.waitForTimeout(400)
   await page.keyboard.type('x /', { delay: 40 })
   await page.waitForTimeout(250)
-  await page.locator('.slash-item').filter({ hasText: '数据库' }).filter({ hasNotText: '链接' }).first().click()
+  await page.locator('.slash-item').filter({ hasText: '多维表' }).filter({ hasNotText: '链接' }).first().click()
   await page.waitForTimeout(800)
   t = await texts()
   check('T8 选嵌入类后 "/" 被消费', (t[6] || '').trim() === 'x', `text=${JSON.stringify(t[6])}`)

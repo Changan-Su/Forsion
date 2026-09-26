@@ -9,7 +9,7 @@ import { registerMessages, translate } from './i18n'
 
 registerMessages({
   'fileimport.tooLargeCloud': { zh: '超过云端单文件上限', en: 'Over the cloud file size limit' },
-  'fileimport.vaultFull': { zh: '云端库容量已满', en: 'The cloud vault is full' },
+  'fileimport.vaultFull': { zh: '云端智库容量已满', en: 'The cloud vault is full' },
   'fileimport.unknownError': { zh: '未知错误', en: 'Unknown error' },
   'fileimport.overCloudLimit': { zh: '超过云端单文件上限 {limit}', en: 'over the {limit} cloud file limit' },
   'fileimport.over50mb': { zh: '超 50MB', en: 'over 50 MB' },

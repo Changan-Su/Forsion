@@ -39,7 +39,7 @@ registerMessages({
   'pgchrome.urlPlaceholder': { zh: '粘贴图片地址（https://…)', en: 'Paste an image URL (https://…)' },
   'pgchrome.setCover': { zh: '设为封面', en: 'Set as cover' },
   'pgchrome.chooseLocal': { zh: '选择本地图片…', en: 'Choose a local image…' },
-  'pgchrome.uploadHint': { zh: '图片会保存到当前笔记库的附件位置。', en: 'Images are saved with attachments in this vault.' },
+  'pgchrome.uploadHint': { zh: '图片会保存到当前智库的附件位置。', en: 'Images are saved with attachments in this vault.' },
   'pgchrome.emojiPlaceholder': { zh: '搜索 emoji（中/英），或粘贴任意字符后回车…', en: 'Search emoji (Chinese or English), or paste any character and press Enter…' },
   'pgchrome.emojiEmpty': { zh: '没有匹配的 emoji —— 回车可直接用你输入的字符', en: 'No matching emoji — press Enter to use what you typed' },
   'pgchrome.removeIcon': { zh: '移除图标', en: 'Remove icon' },

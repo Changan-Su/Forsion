@@ -29,7 +29,7 @@ registerMessages({
   'amxpv.statusLoading': { zh: '加载中…', en: 'Loading…' },
   'amxpv.statusReady': { zh: '已保存', en: 'Saved' },
   'amxpv.emptyBlock': { zh: '空块', en: 'Empty block' },
-  'amxpv.openVault': { zh: '打开一个 Vault，或新建页面开始。', en: 'Open a vault, or create a page to get started.' },
+  'amxpv.openVault': { zh: '打开一个智库，或新建页面开始。', en: 'Open a vault, or create a page to get started.' },
   'amxpv.renameTitle': { zh: '点击重命名页面', en: 'Click to rename the page' },
   'amxpv.expandSection': { zh: '展开小节（{n} 行）', en: 'Expand section ({n} rows)' },
   'amxpv.foldSection': { zh: '折叠小节', en: 'Collapse section' },

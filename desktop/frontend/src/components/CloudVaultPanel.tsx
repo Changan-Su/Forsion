@@ -10,7 +10,7 @@ import { openNote } from '../amadeusNav'
 import { registerMessages, useI18n } from '../i18n'
 
 registerMessages({
-  'cloudvault.title': { zh: '云端笔记库', en: 'Cloud vaults' },
+  'cloudvault.title': { zh: '云端智库', en: 'Cloud vaults' },
   'cloudvault.myVaults': { zh: '我的库', en: 'My vaults' },
   'cloudvault.sharedWithMe': { zh: '与我共享 · {n}', en: 'Shared with me · {n}' },
   'cloudvault.sharedEmpty': { zh: '别人共享给你的页面会出现在这里（打开对方发的邀请链接并同意）。', en: 'Pages other people share with you show up here — open their invite link and accept it.' },

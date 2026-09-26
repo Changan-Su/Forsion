@@ -174,7 +174,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
 } {
   const vault = new VaultManager({
     openDirectory: async () => {
-      const res = await dialog.showOpenDialog({ title: '打开 Vault 文件夹', properties: ['openDirectory', 'createDirectory'] })
+      const res = await dialog.showOpenDialog({ title: '打开智库文件夹', properties: ['openDirectory', 'createDirectory'] })
       return res.canceled ? null : res.filePaths[0] ?? null
     },
     logActivity,

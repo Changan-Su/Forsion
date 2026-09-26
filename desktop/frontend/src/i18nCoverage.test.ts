@@ -160,6 +160,10 @@ describe('i18n 覆盖', () => {
       { re: /(^|[^A-Za-z_{=./-])agents?(?=[^A-Za-z_}=/-]|$)/, fix: '写「Agent」(专名大写)' },
       { re: /工作空间/, fix: '指 Space 写「Space」,指整个 app 写「Forsion」或改写,指目录写「工作区」' },
       { re: /Agent Space|Agents space|智能体空间/, fix: 'Agents 这个 Space 就叫「Agents」' },
+      // 09-26 用户拍板(UI/UX 走查 W-09 / W-19):侧栏那个文件夹对象叫「项目」;笔记库 / Vault 在中文里叫「智库」;数据库叫「多维表」。
+      { re: /(默认|本地|重命名|移除|添加本地|筛选)工作区/, fix: '文件夹对象写「项目」(「工作区」只指工作区面板与可写范围)' },
+      { re: /笔记库|本地库|云端库|(?<![\w/-])[Vv]ault(?![\w/-])/, fix: '写「智库」(en 仍是 vault)' },
+      { re: /数据库/, fix: '写「多维表」' },
       {
         re: /空间/, fix: '指 Space 这个容器时写「Space」',
         allow: {
