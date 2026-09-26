@@ -2,7 +2,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../src/agents/cloudAgentStore.js', () => ({
-  cloudGetAgent: async (_u: string, slug: string) => ({ slug, shareDefaultMemory: false }),
+  cloudGetAgent: async (_u: string, slug: string) => (slug === 'gone' ? null : { slug, shareDefaultMemory: false }),
 }));
 
 import { configureTangu } from '../src/seams/runtime.js';
@@ -31,7 +31,7 @@ beforeEach(async () => {
   reply = JSON.stringify({
     title: '新标题',
     log: '完成了部署脚本',
-    memory: ['用户偏好简洁直接的回答', 'API key is sk-abcdefghijklmnopqrstuvwx1234', 'x'.repeat(301), '第四条记忆内容', '第五条记忆内容'],
+    memory: ['用户偏好简洁直接的回答', '用户的数据库密码是 hunter2', 'Build uses sk-abcdefghijklmnopqrstuvwx1234 style ids', 'x'.repeat(301), '第四条记忆内容', '第五条记忆内容'],
   });
   configureTangu({
     host: local.host,
@@ -77,7 +77,9 @@ describe('cloud idle Historian (tangu sessions)', () => {
     expect(ancient.historian_last_summary_at).toBeNull();
 
     // 记忆:≤3 条、超 300 字的丢弃、密钥脱敏;记忆域各归各的(未绑定会话不继承上一个的 aria)
+    // 提到凭据的整条丢(hunter2 不是令牌形状,redactSecrets 认不出);令牌形状的脱敏后保留
     expect(mem.filter((m) => m.slug === 'aria').map((m) => m.text)).toEqual(['用户偏好简洁直接的回答', expect.stringContaining('[REDACTED]'), '第四条记忆内容']);
+    expect(mem.some((m) => m.text.includes('hunter2'))).toBe(false);
     expect(mem.filter((m) => m.slug !== 'aria')).toHaveLength(3);
     expect(mem.filter((m) => m.slug !== 'aria').every((m) => m.slug === undefined)).toBe(true);
     expect(mem.some((m) => m.text.includes('sk-abc'))).toBe(false);
@@ -87,6 +89,17 @@ describe('cloud idle Historian (tangu sessions)', () => {
     expect(prompts[0]).toContain('[Existing memory]\n已有:用户住在杭州');
     const done = await query<any[]>(`SELECT id, title FROM chat_sessions WHERE historian_last_summary_at IS NOT NULL ORDER BY id`);
     expect(done.map((r) => [r.id, r.title])).toEqual([['aria-s', '新标题'], ['plain-s', '新标题']]);
+  });
+
+  it('agent bound but unresolvable (deleted / lookup failed) → no LOG / memory writes, title still maintained', async () => {
+    await query(`UPDATE chat_sessions SET agent_config = '{"agentSlug":"gone"}' WHERE id = 'aria-s'`);
+    await tick();
+    expect(mem.filter((m) => m.slug === 'gone')).toHaveLength(0);
+    expect(mem).toHaveLength(3); // 只剩 plain-s 那一趟
+    expect(logs).toHaveLength(1);
+    const row = (await query<any[]>(`SELECT title, historian_last_summary_at FROM chat_sessions WHERE id = 'aria-s'`))[0];
+    expect(row.title).toBe('新标题');
+    expect(row.historian_last_summary_at).not.toBeNull();
   });
 
   it('empty memory array writes nothing; non-JSON output still marks the pass', async () => {

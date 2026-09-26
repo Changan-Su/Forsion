@@ -33,6 +33,9 @@ const MAX_TRANSCRIPT_CHARS = 6000;
 const LOOKBACK_MINUTES = 24 * 60;
 const MEMORY_MAX_PER_PASS = 3;
 const MEMORY_CONTEXT_CHARS = 3000; // 注入现有记忆的**尾部**(最新条目),防重复;头部是最老的条目
+// redactSecrets 只认得出 sk-/ghp_ 之类的令牌形状;「数据库密码是 hunter2」这种自由文本靠提示词不可靠 → 提到凭据的候选整条丢。
+// ponytail: 关键词黑名单,会误杀「用户偏好用 1Password」这类无害条目;误杀只是少记一条,漏放是凭据进长期记忆。
+const CREDENTIAL_RE = /password|passwd|passphrase|secret|token|api[ _-]?key|private key|credential|密码|口令|密钥|私钥|令牌|验证码/i;
 const HISTORIAN_CHARGE_USER = false; // 背景任务默认不扣用户配额；置 true 则按 cost 扣
 
 const HISTORIAN_PROMPT =
@@ -214,7 +217,7 @@ function parseJudgement(raw: string): { title: string; log: string; memory: stri
     const j = JSON.parse(s);
     const memory = (Array.isArray(j?.memory) ? j.memory : [])
       .map((c: unknown) => redactSecrets(String(c ?? '').replace(/\s*[\r\n]+\s*/g, '; ').trim()))
-      .filter((c: string) => c.length >= 4 && c.length <= REMEMBER_FACT_MAX_CHARS && c.toUpperCase() !== 'NOTHING')
+      .filter((c: string) => c.length >= 4 && c.length <= REMEMBER_FACT_MAX_CHARS && c.toUpperCase() !== 'NOTHING' && !CREDENTIAL_RE.test(c))
       .slice(0, MEMORY_MAX_PER_PASS);
     return { title: String(j?.title ?? '').trim(), log: String(j?.log ?? '').trim(), memory };
   } catch {
@@ -234,15 +237,18 @@ async function summarizeTanguSession(
 
   // 会话绑定 agent → LOG/记忆落该 agent 的记忆域(cloudGetAgent 含内置预设兜底,resolveMemorySlug 折叠 shareDefaultMemory);
   // 解析失败/未绑定 → 默认记忆域。seams 的 memory 实现读 runContext 的 currentAgentSlug。
+  // 绑了 agent 却解析不出(删了 / 读库失败)→ 记忆域未知:这一趟不写 LOG / 记忆,免得这段对话的事实落进默认记忆、串给无关会话。
   let memSlug: string | undefined;
+  let scopeKnown = true;
   try {
     const raw = row.agent_config;
     const cfg0 = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null;
     if (cfg0?.agentSlug) {
       const def = await cloudGetAgent(userId, String(cfg0.agentSlug)).catch(() => null);
       if (def) memSlug = resolveMemorySlug(def);
+      else scopeKnown = false;
     }
-  } catch { /* ignore */ }
+  } catch { scopeKnown = false; }
   // 每个会话都重设:enterWith 改的是 tick 整条异步链,上一个会话的 slug 会漏给下一个未绑定 agent 的会话。
   enterRunContext(userId, undefined, memSlug);
 
@@ -285,13 +291,13 @@ async function summarizeTanguSession(
         .catch((e: any) => console.warn('[historian] tangu 标题更新失败:', e?.message || e));
     }
     const logText = j.log;
-    if (logText && logText.length >= 2 && logText.length <= 200) {
+    if (scopeKnown && logText && logText.length >= 2 && logText.length <= 200) {
       await appendLogEntry(userId, logText).catch((e: any) => console.warn('[historian] tangu appendLog failed:', e?.message || e));
     }
-    for (const fact of j.memory) {
+    for (const fact of scopeKnown ? j.memory : []) {
       const r = await deps().brain.memory.appendMemoryEntry(userId, fact, { dedup: true })
         .catch((e: any) => { console.warn('[historian] tangu appendMemory failed:', e?.message || e); return null; });
-      if (r?.appended) console.log(`[historian] tangu session ${sessionId.slice(0, 8)} 记入长期记忆(${memSlug || 'default'}): ${fact.slice(0, 60)}`);
+      if (r?.appended) console.log(`[historian] tangu session ${sessionId.slice(0, 8)} 记入长期记忆 1 条(${memSlug || 'default'})`); // 不打原文:记忆内容不进服务端日志
       if (r?.reason === 'full') break;
     }
   }
