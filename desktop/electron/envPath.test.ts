@@ -4,9 +4,10 @@
  * —— 探测补了 PATH,托管引擎 spawn 没补。dev 从终端起继承完整 PATH,复现不出来。
  */
 import { describe, it, expect } from 'vitest'
-import { existsSync } from 'node:fs'
-import { delimiter } from 'node:path'
-import { appendUserBinDirs, composeEnginePath, userBinDirs } from './envPath'
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { delimiter, join } from 'node:path'
+import { appendUserBinDirs, composeEnginePath, userBinDirs, withBundledGit } from './envPath'
 
 const GUI_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(delimiter) // GUI 启动的 mac app 实拿到的那份
 
@@ -33,5 +34,37 @@ describe('composeEnginePath 顺序即策略', () => {
     expect(out[out.length - 1]).toBe('/bundled/node/bin') // 兜底,系统有 node 就用系统的
     const present = userBinDirs().filter((d) => existsSync(d))
     expect(out.slice(5, -1)).toEqual(present)             // 用户 bin 夹在中间
+  })
+})
+
+describe('withBundledGit 只兜底、不抢用户的 git', () => {
+  const noGit = () => false
+  const hasGit = () => true
+
+  it('Windows:追加在末尾,用户装的 Git for Windows 先命中', () => {
+    // 分隔符用宿主的 delimiter(函数按它拼);这里钉的是顺序,不是 Windows 路径格式
+    expect(withBundledGit(GUI_PATH, ['/res/git/cmd'], 'win32', hasGit)).toBe([GUI_PATH, '/res/git/cmd'].join(delimiter))
+  })
+
+  it('mac 没有真 git:前置,压过 /usr/bin/git 那个会弹「安装开发者工具」的 shim', () => {
+    expect(withBundledGit(GUI_PATH, ['/res/git/bin'], 'darwin', noGit).split(delimiter)[0]).toBe('/res/git/bin')
+  })
+
+  it('mac 有真 git(CLT / homebrew):完全不挂,原 PATH 一字不动', () => {
+    expect(withBundledGit(GUI_PATH, ['/res/git/bin'], 'darwin', hasGit)).toBe(GUI_PATH)
+  })
+
+  it('没有内置 git(Linux / 降级):原样返回', () => {
+    expect(withBundledGit(GUI_PATH, [], 'darwin', noGit)).toBe(GUI_PATH)
+  })
+
+  it('mac 缺省判定走 findGit:/usr/bin 里的 shim 不算真 git', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'bundled-git-'))
+    try {
+      const fake = join(dir, 'git')
+      writeFileSync(fake, '#!/bin/sh\n'); chmodSync(fake, 0o755)
+      // PATH 上有一个真 git → 不挂;这条不依赖本机装没装 CLT(findGit 命中 PATH 里这份就停)
+      expect(withBundledGit([dir, GUI_PATH].join(delimiter), ['/res/git/bin'], 'darwin')).toBe([dir, GUI_PATH].join(delimiter))
+    } finally { rmSync(dir, { recursive: true, force: true }) }
   })
 })

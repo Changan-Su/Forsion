@@ -1,5 +1,5 @@
 /**
- * electron-builder beforeBuild 钩子:打包前按目标 (platform, arch) 拉取内置 Python 到 build/python。
+ * electron-builder beforeBuild 钩子:打包前按目标 (platform, arch) 拉取内置 Python / Node / git / LibreOffice 到 build/。
  * beforeBuild 早于 pack(extraResources 拷贝)执行,故此处下好后 extraResources 的 build/python 才有内容。
  * CI 每个 matrix 行只构建单一 arch(--mac --arm64 / --win / --linux),context.arch 即目标 arch。
  *
@@ -10,6 +10,7 @@
 const { fetchPython } = require('./fetch-python.cjs');
 const { fetchNode } = require('./fetch-node.cjs');
 const { fetchOffice } = require('./fetch-office.cjs');
+const { fetchGit } = require('./fetch-git.cjs');
 
 exports.default = async function beforeBuild(context) {
   const productId = process.env.FORSION_PRODUCT || 'forsion';
@@ -19,6 +20,7 @@ exports.default = async function beforeBuild(context) {
   const archName = context.arch;                   // 'x64' | 'arm64' | 'armv7l'
   await fetchPython({ platformName, archName });
   await fetchNode({ platformName, archName });
+  await fetchGit({ platformName, archName });
   fetchOffice({ platformName, archName });
   return true; // 保留 electron-builder 默认依赖安装/打包(见文件头警告)
 };

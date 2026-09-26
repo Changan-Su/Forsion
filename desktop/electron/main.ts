@@ -25,8 +25,9 @@ import { privateHostReason } from './netGuard'
 import { execFile, execFileSync, spawn } from 'child_process'
 import { homedir, hostname, networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
-import { BackendManager, bundledPythonBin, resolveBundledNode, type BackendStatus } from './backendManager'
-import { envWithFullPath } from './envPath'
+import { BackendManager, bundledPythonBin, resolveBundledGit, resolveBundledNode, type BackendStatus } from './backendManager'
+import { envWithFullPath, pathKeyOf, withBundledGit } from './envPath'
+import { findGit } from './gitHistory'
 import { downloadUrlFor, installCommandFor, requiredProgram } from './envInstall'
 import { createKeepAwake } from './keepAwake'
 import { createMcpLifecycle, startForsionMcp } from './mcpServer'
@@ -267,7 +268,9 @@ async function runEnvCheck(): Promise<EnvProbe[]> {
     { tool: 'node', cmd: 'node', args: ['--version'] },
     { tool: 'npm', cmd: 'npm', args: ['--version'] },
     { tool: 'python3', cmd: process.platform === 'win32' ? 'python' : 'python3', args: ['--version'] },
-    { tool: 'git', cmd: 'git', args: ['--version'] },
+    // mac 不探 PATH 上的 git:那是 Apple 的 /usr/bin/git shim,没装 CLT 时一跑就弹「安装开发者工具」系统框。
+    // 按 findGit 的口径找真 git(homebrew/CLT/Xcode),找不到就当没装(内置那份在下面顶上)。
+    { tool: 'git', cmd: process.platform === 'darwin' ? findGit(envWithFullPath()) ?? '' : 'git', args: ['--version'] },
     // `--version` 只问客户端(docker.exe),不连 daemon:原来的 `version --format {{.Server.Version}}` 要查
     // daemon,Docker Desktop 没开/慢启动时会卡满 8s 超时并误报「未装」。检测存在性用客户端版本即可。
     { tool: 'docker', cmd: 'docker', args: ['--version'] },
@@ -281,7 +284,7 @@ async function runEnvCheck(): Promise<EnvProbe[]> {
     return programOk.get(prog)!
   }
   for (const p of probes) {
-    const version = await probeVersion(p.cmd, p.args)
+    const version = p.cmd ? await probeVersion(p.cmd, p.args) : null
     // npm 跟随 node 装,无独立安装命令
     let installCommand = version === null && p.tool !== 'npm' ? installCommandFor(p.tool, process.platform, mirror) : null
     if (installCommand && !(await programAvailable(installCommand))) installCommand = null
@@ -301,20 +304,23 @@ async function runEnvCheck(): Promise<EnvProbe[]> {
     const entry: EnvProbe = { tool: 'python3', found: true, version: `${v || 'Python'} · bundled`, installId: null, installCommand: null, downloadUrl: null }
     if (idx >= 0) out[idx] = entry; else out.push(entry)
   }
+  /** 系统那份没探到才用内置顶上(系统已有 → 保留它的版本号,内置只是兜底)。 */
+  const useBundled = async (tool: string, bin: string): Promise<void> => {
+    const idx = out.findIndex((o) => o.tool === tool)
+    if (idx < 0 || out[idx].found || !existsSync(bin)) return
+    const v = await probeVersion(bin, ['--version'])
+    out[idx] = { tool, found: true, version: `${v || tool} · bundled`, installId: null, installCommand: null, downloadUrl: null }
+  }
   // 内置 Node:系统没装时 agent 的 PATH 里仍有这份内置 node/npm(backendManager 追加在 PATH 末尾),
   // 所以「未检测到」是谎报。系统装了就照旧显示系统那份 —— 内置只是兜底,不抢版本。
   const nodeRt = resolveBundledNode()
   if (nodeRt) {
-    /** 系统那份没探到才用内置顶上(系统已有 → 保留它的版本号,内置只是兜底)。 */
-    const useBundled = async (tool: string, bin: string): Promise<void> => {
-      const idx = out.findIndex((o) => o.tool === tool)
-      if (idx < 0 || out[idx].found || !existsSync(bin)) return
-      const v = await probeVersion(bin, ['--version'])
-      out[idx] = { tool, found: true, version: `${v || tool} · bundled`, installId: null, installCommand: null, downloadUrl: null }
-    }
     await useBundled('node', nodeRt.nodeBin)
     await useBundled('npm', nodeRt.npmBin)
   }
+  // 内置 git:同上只兜底(Windows 追加在 PATH 末尾;mac 只在没有真 git 时前置,见 withBundledGit)。
+  const gitRt = resolveBundledGit()
+  if (gitRt) await useBundled('git', gitRt.gitBin)
   // tangu CLI:App 启动时自装的终端命令(report-only,无安装按钮——ensureCliInstalled 每次启动自愈)。
   const shim = join(tanguHomeDir(), 'bin', process.platform === 'win32' ? 'tangu.cmd' : 'tangu')
   out.push({
@@ -2365,7 +2371,13 @@ app.whenReady().then(async () => {
     ipcMain, isTrustedSender,
     projectsRoot: () => join(forsionWorkspaceDir(), 'Project'),
     homeDir: forsionHomeDir,
-    env: () => envWithFullPath(),
+    // 版本历史找 git 用这份 env:内置 git 按同一规则挂上,没装 git 的机器也有版本管理。
+    env: () => {
+      const e = envWithFullPath()
+      const key = pathKeyOf(e)
+      e[key] = withBundledGit(e[key] || '', resolveBundledGit()?.pathDirs || [])
+      return e
+    },
     isPackaged: app.isPackaged,
     desktopDir: () => app.getPath('desktop'),
     execPath: process.execPath,

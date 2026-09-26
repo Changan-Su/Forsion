@@ -11,6 +11,7 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, delimiter } from 'node:path'
+import { findGit } from './gitHistory'
 
 /** 用户态包管理器/版本管理器最常见的安装位置(存在才补)。 */
 export function userBinDirs(): string[] {
@@ -64,4 +65,22 @@ export function envWithFullPath(extra?: Record<string, string>): NodeJS.ProcessE
  */
 export function composeEnginePath(base: string, pythonDirs: string[], nodeDirs: string[]): string {
   return [...pythonDirs, appendUserBinDirs(base), ...nodeDirs].filter(Boolean).join(delimiter)
+}
+
+/**
+ * 内置 git 挂到 PATH 上 —— 只当兜底,绝不抢用户自己的 git(他的凭据助手、配置、更新的版本都挂在那份上):
+ *   - 非 darwin:追加在末尾,用户装的 Git for Windows 排在前面自然先命中。
+ *   - darwin:**只在找不到任何真 git 时前置**。`/usr/bin/git` 是 Apple 的 shim,恒在 PATH 上且排在前面 ——
+ *     内置那份追加在后面等于没装,没 Command Line Tools 的机器一跑 git 就弹「安装开发者工具」。
+ *     「真 git」按 findGit 的口径(PATH 里除 /usr/bin 外的 + homebrew/CLT/Xcode 固定位置)。
+ */
+export function withBundledGit(
+  pathValue: string,
+  gitDirs: string[],
+  platform: NodeJS.Platform = process.platform,
+  hasSystemGit: (pathValue: string) => boolean = (p) => findGit({ PATH: p }, platform) !== null,
+): string {
+  if (!gitDirs.length) return pathValue
+  if (platform !== 'darwin') return [pathValue, ...gitDirs].filter(Boolean).join(delimiter)
+  return hasSystemGit(pathValue) ? pathValue : [...gitDirs, pathValue].filter(Boolean).join(delimiter)
 }

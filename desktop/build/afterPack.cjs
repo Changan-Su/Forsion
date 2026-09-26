@@ -79,6 +79,18 @@ exports.default = async function afterPack(context) {
     }
   }
 
+  // ⑥ 内置 git 闸:同 ④ 对**打包产物**真跑 init/commit/https 助手 —— mac 的包装脚本丢了可执行位、
+  //    git-core 里的软链被拷贝展开或丢掉,都只在这里现形。Linux 本就不捆(.skipped)。
+  if (product.agentBackend) {
+    const { existsSync } = require('fs');
+    const gitRoot = path.join(resourcesDir(), 'git');
+    if (existsSync(path.join(gitRoot, '.skipped'))) {
+      console.log('[afterPack] 内置 git 未捆(.skipped)→ 跳过 git 检查');
+    } else {
+      require('./fetch-git.cjs').smokeGit(gitRoot, electronPlatformName);
+    }
+  }
+
   // ② macOS ad-hoc 自签 —— 必须放在 native rebuild 之后(重建改动了 bundle,签名要最后做,
   //    且 --deep 才能把重建后的 .node 一并签上)。无 Developer ID → Gatekeeper 显「未识别开发者/仍要打开」。
   if (electronPlatformName === 'darwin') {

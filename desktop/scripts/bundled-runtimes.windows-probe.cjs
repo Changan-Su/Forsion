@@ -1,5 +1,5 @@
 /**
- * 干净 Windows 台架(09-26):随包 Python / LibreOffice 在**没装 VC++ 运行库**的机器上能不能用。
+ * 干净 Windows 台架(09-26):随包 Python / LibreOffice / git 在**没装 VC++ 运行库**的机器上能不能用。
  *
  * GitHub windows runner 自带 VC++,build-desktop 里 afterPack 的两道闸在那儿永远是绿的。这里借 runner 是
  * 一次性管理员机器:把 System32 里那 5 个 VC++ DLL 藏掉、PATH 收到只剩系统目录(runner 的工具目录里常各带一份
@@ -7,6 +7,8 @@
  *   ① 内置 Python import smoke(fetch-python.cjs 的 smokePython,含 numpy/pandas/matplotlib/pdfium 原生库)
  *   ② 随包 LibreOffice:Forsion.exe 以 ELECTRON_RUN_AS_NODE 把现拼的 docx 转 PDF(afterPack 的 OFFICE_GATE)
  *   ③ 负对照:把 kit 引擎旁的 app-local VC++ DLL 挪走,② 必须红 —— 否则系统 DLL 没藏干净,①② 是假绿。
+ *   ④ 内置 git(MinGit):smokeGit 真跑 init/commit/https 助手;再经 cmd.exe 按 PATH 找 `git`
+ *      (引擎 run_bash 就是这么调的,PATH 里只有系统目录 + 内置 cmd/,runner 自带的 Git 不在)。
  *
  * 用法:node desktop/scripts/bundled-runtimes.windows-probe.cjs <含安装包 .exe 的目录>
  * 由 .github/workflows/probe-bundled-runtimes.yml 调用;本机(非 Windows)跑不了。
@@ -16,6 +18,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { smokePython } = require('../build/fetch-python.cjs');
+const { smokeGit } = require('../build/fetch-git.cjs');
 const { OFFICE_GATE } = require('../build/afterPack.cjs');
 const { kitEntry, enginePackage, VC_DLLS } = require('../build/fetch-office.cjs');
 
@@ -75,8 +78,17 @@ for (const dll of VC_DLLS) fs.renameSync(path.join(bin, dll), path.join(aside, d
 results.negativeRed = !officeGate();
 for (const dll of VC_DLLS) fs.renameSync(path.join(aside, dll), path.join(bin, dll));
 
+console.log('\n④ 内置 git(MinGit)');
+try {
+  smokeGit(path.join(resources, 'git'), 'win32');
+  const out = execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'git --version'],
+    { encoding: 'utf8', env: { ...process.env, PATH: `${process.env.PATH};${path.join(resources, 'git', 'cmd')}` } });
+  console.log(`  cmd.exe 经 PATH 找到:${out.trim()}`);
+  results.git = /^git version/.test(out.trim());
+} catch (e) { console.log(`  失败:${String(e.message).split('\n')[0]}`); results.git = false; }
+
 console.log('\n结果', JSON.stringify(results));
-const ok = results.python && results.office && results.negativeRed;
+const ok = results.python && results.office && results.negativeRed && results.git;
 console.log(ok ? '✓ 干净 Windows 上随包运行时可用,且负对照有效'
   : results.negativeRed ? '✗ 随包运行时在无 VC++ 的机器上不可用' : '✗ 负对照没变红:系统 VC++ 没藏干净,①② 的绿不可信');
 process.exit(ok ? 0 : 1);

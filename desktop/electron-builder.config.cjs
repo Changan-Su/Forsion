@@ -100,6 +100,8 @@ module.exports = {
           { from: '../tangu-agent/agent-skills', to: 'tangu-server/agent-skills' },
           { from: 'build/python', to: 'python' },
           { from: 'build/node', to: 'node' },
+          // 便携 git(fetch-git.cjs):Windows=MinGit、mac=dugite-native 精简版、Linux 只有 .skipped 占位。
+          { from: 'build/git', to: 'git' },
           // ⚠️这一条不是多余的:electron-builder 的拷贝过滤器(app-builder-lib util/filter.js)对每个
           // matcher **无条件丢弃 `from` 根下那一层 `node_modules`**(`relative === 'node_modules'` → false),
           // 深一层的 `lib/node_modules` 才放行。Windows 的官方 Node 包是平铺的 —— npm 就住在根下
