@@ -10,6 +10,9 @@
  *          (图标只经这组端点改;PUT settings 保留 icon 现值)
  *   GET    /agent/project-context/icon?sessionId=|cwd=                                    → 图标图片二进制(settings.icon 是 emoji / 空 → 404)
  *   DELETE /agent/project-context/icon?sessionId=                                         → 移除图标(emoji 或图片),返回 { settings }
+ *   POST   /agent/project-context/git/{init,message,commit,branch,push}  { sessionId, message?, name? }
+ *          → 用户点的 git 动作(services/gitActions.ts);失败回 400 { detail, error: <code>, info },桌面按 error 出文案
+ *   GET|PUT /agent/git-settings                                                          → 「设置 → Git」(config.json 的 git 段)
  *
  * 只对本地引擎开放(hostExec):云端 microserver 没有用户磁盘。**cwd 不从客户端收**:请求按 sessionId 绑定,只认本人会话行上的
  * project_path(桌面项目分组键)—— 能写的只有用户已经在里面工作的目录,`hostExec` 说明的是引擎形态,不是路径授权(codex 评审)。
@@ -22,6 +25,8 @@ import {
   canonicalProjectPath, createProjectSkill, deleteProjectIcon, initProjectWorkspace, projectContext, readProjectIcon, readProjectSettings,
   saveProjectIcon, setProjectIconEmoji, writeProjectDoc, writeProjectSettings,
 } from '../services/projectContext.js';
+import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitInit, gitPush, serialized } from '../services/gitActions.js';
+import { DEFAULT_GIT_SETTINGS, gitSettings, updateGitSettings } from '../services/gitSettings.js';
 
 const router = Router();
 
@@ -152,6 +157,60 @@ router.delete('/agent/project-context/icon', authMiddleware, async (req: AuthReq
     res.json({ settings: await deleteProjectIcon(cwd) });
   } catch (e: any) {
     fail(res, e, 'remove project icon failed');
+  }
+});
+
+// ── Git 动作(PROJECT 详情「Git」页;用户点了才做)───────────────────────────
+
+/** 带 code 的失败 → 400 { error: code }(桌面 request() 从 error 取机器码本地化,info 是 git 原文 / 文件名);其余 → 500。 */
+function gitFail(res: Response, e: any, fallback: string): void {
+  if (e instanceof GitActionError) { res.status(400).json({ detail: e.message, error: e.code, info: e.detail }); return; }
+  res.status(500).json({ detail: e?.message || fallback });
+}
+
+/** 写动作:同一目录排队,做完连同新的项目上下文一起回,面板一次刷新。 */
+function gitWrite(pathName: string, action: (cwd: string, body: any) => Promise<object>): void {
+  router.post(`/agent/project-context/git/${pathName}`, authMiddleware, async (req: AuthRequest, res) => {
+    try {
+      const cwd = await projectDirOf(req, res, req.body?.sessionId);
+      if (!cwd) return;
+      const result = await serialized(cwd, () => action(cwd, req.body || {}));
+      res.json({ ...result, context: await projectContext(cwd) });
+    } catch (e: any) {
+      gitFail(res, e, `git ${pathName} failed`);
+    }
+  });
+}
+gitWrite('init', (cwd) => gitInit(cwd));
+gitWrite('commit', async (cwd, body) => ({ commit: await gitCommit(cwd, body.message) }));
+gitWrite('branch', (cwd, body) => gitCreateBranch(cwd, body.name));
+gitWrite('push', (cwd) => gitPush(cwd));
+
+/** 用会话自己的模型写一条提交信息(只读,不排队;计费在 generateCommitMessage 里)。 */
+router.post('/agent/project-context/git/message', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const cwd = await projectDirOf(req, res, req.body?.sessionId);
+    if (!cwd) return;
+    const rows = await query<any[]>('SELECT model_id, app_id FROM chat_sessions WHERE id = ? LIMIT 1', [req.body.sessionId]);
+    const message = await generateCommitMessage(cwd, { userId: req.user!.userId, modelId: rows[0]?.model_id ?? null, appId: rows[0]?.app_id || 'tangu' });
+    res.json({ message });
+  } catch (e: any) {
+    gitFail(res, e, 'generate commit message failed');
+  }
+});
+
+/** 「设置 → Git」的读写口。写的是本进程的 config.json → 云端 worker(hostExec=false)不开放,同 /agent/compaction。 */
+router.get('/agent/git-settings', authMiddleware, (_req, res) => {
+  res.json({ settings: gitSettings(), defaults: DEFAULT_GIT_SETTINGS, writable: deps().profile.capabilities.hostExec });
+});
+router.put('/agent/git-settings', authMiddleware, (req, res) => {
+  if (!deps().profile.capabilities.hostExec) return res.status(404).json({ detail: 'Git settings are only available on a local engine' });
+  const body = req.body;
+  if (!body || typeof body !== 'object' || Array.isArray(body) || !Object.keys(body).length) return res.status(400).json({ detail: 'git settings fields required' });
+  try {
+    res.json({ settings: updateGitSettings(body) });
+  } catch (e: any) {
+    res.status(400).json({ detail: e?.message || 'invalid git settings' });
   }
 });
 

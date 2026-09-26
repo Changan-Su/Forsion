@@ -63,7 +63,16 @@
 .project-skill-form input, .project-skill-form textarea { width: 100%; min-width: 0; padding: 7px 8px; font-size: var(--ui-font-meta, 12px); }
 .project-skill-form > div { display: flex; justify-content: flex-end; gap: 6px; }
 .project-candidates optgroup, .project-field optgroup { color: var(--text-muted); }
+/* Git 页的写动作:建仓空态 / 提交框 / 带 git 原文的失败(原文可能很长,限高滚动)。 */
+.project-git-empty { display: grid; gap: 8px; }
+.project-git-empty p { margin: 0; }
+.project-git-commit-confirm { display: flex; gap: 6px; margin-left: auto; }
+.project-git-commit-form { animation: profile-enter 160ms ease both; }
+.project-git-message { width: 100%; min-width: 0; padding: 7px 8px; font-size: var(--ui-font-meta, 12px); line-height: 1.6; resize: vertical; }
+.project-git-error { display: grid; gap: 6px; color: var(--danger); font-size: var(--ui-font-meta, 12px); }
+.project-git-error p { margin: 0; }
+.project-git-error pre { margin: 0; max-height: 140px; overflow: auto; padding: 6px 8px; border-radius: var(--radius-sm, 8px); background: var(--overlay-medium); color: var(--text-muted); font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-caption, 11px); white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) {
-  .project-skill-form { animation: none; }
+  .project-skill-form, .project-git-commit-form { animation: none; }
   .project-row, .project-inline-actions button, .project-profile-path > button { transition: none; }
 }

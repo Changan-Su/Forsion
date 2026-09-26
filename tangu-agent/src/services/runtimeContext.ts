@@ -9,6 +9,7 @@ import { runBoundedProcess } from '../utils/boundedProcess.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 export type RuntimeExecContext = Pick<ToolContext, 'cwd' | 'extraRoots' | 'hostSandbox' | 'execMode' | 'signal'>;
 import { renderTodos, type TodoItem } from '../tools/builtin/todo.js';
+import { gitSettings } from './gitSettings.js';
 
 /** todo 现场段:有未完项才注入(全完成/空单=null,别拿旧清单占 token)。 */
 export function renderTodoState(todos: TodoItem[]): string | null {
@@ -69,17 +70,21 @@ const GIT_SCRUBBED_ENV = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJ
 
 export interface GitRunResult { code: number; stdout: string; stderr: string; reason?: 'aborted' | 'timeout' | 'output-limit' | 'spawn-error' }
 
+/** 用哪个 git。Apple's /usr/bin/git shim can start xcodebuild for each private sandbox cache;
+ *  these fixed native developer-tool locations avoid an unsandboxed xcrun probe. 都没有就交给 PATH
+ *  (桌面在垫片跑不起来时会把内置 git 排到 PATH 前面,见 desktop/electron/envPath.ts)。 */
+export function gitExecutable(): string {
+  return process.platform === 'darwin'
+    ? ['/Library/Developer/CommandLineTools/usr/bin/git', '/Applications/Xcode.app/Contents/Developer/usr/bin/git'].find(existsSync) || 'git'
+    : 'git';
+}
+
 /** 跑一条**只读** git 命令,返回退出码与输出(非零不抛:仓库状态天生靠退出码判;项目详情面板据此区分「非仓库 / 无上游」)。
  *  固定前缀:不分页、不跑 fsmonitor / 钩子 / 外部 diff、不验签也不调 gpg —— 外来仓的 `.git/config` 能借这几处执行任意程序。
  *  timeoutMs 缺省 800 = 每轮现场注入的预算;面板那类交互式调用可以给长一点。 */
 export async function runGit(cwd: string, args: string[], ctx?: RuntimeExecContext, timeoutMs = GIT_TIMEOUT_MS): Promise<GitRunResult> {
-  // Apple's /usr/bin/git shim can start xcodebuild for each private sandbox cache.
-  // These fixed native developer-tool locations avoid an unsandboxed xcrun probe.
-  const executable = process.platform === 'darwin'
-    ? ['/Library/Developer/CommandLineTools/usr/bin/git', '/Applications/Xcode.app/Contents/Developer/usr/bin/git'].find(existsSync) || 'git'
-    : 'git';
   const prepared = prepareHostCommand({ ...ctx, cwd }, [
-    executable, '--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
+    gitExecutable(), '--no-pager', '-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null',
     '-c', 'diff.external=', '-c', 'log.showSignature=false', '-c', 'gpg.program=', '-C', cwd, ...args,
   ]);
   try {
@@ -99,6 +104,15 @@ async function git(cwd: string, args: string[], ctx?: RuntimeExecContext): Promi
   return result.stdout.trim();
 }
 
+/** 用户在「设置 → Git」里定的偏好。只在 git 仓里才有意义,所以挂在这一段;agent 自己建分支 / 写提交时照做。 */
+export function gitPreferenceLines(): string {
+  const s = gitSettings();
+  const lines: string[] = [];
+  if (s.branchPrefix) lines.push(`- When you choose a branch name yourself, start it with "${s.branchPrefix}". Use a branch name the user gives exactly as given.`);
+  if (s.commitInstructions) lines.push(`- Commit message instructions:\n${s.commitInstructions}`);
+  return lines.length ? `user git preferences (Settings → Git; apply when you create a branch or write a commit message yourself):\n${lines.join('\n')}` : '';
+}
+
 /** git 现场段(host 会话专用):分支 + 脏文件摘要 + 最近提交。非 git 仓 / 无 git / 超时 → null 静默跳过。 */
 export async function collectGitState(cwd?: string, ctx?: RuntimeExecContext): Promise<string | null> {
   if (!cwd) return null;
@@ -111,11 +125,13 @@ export async function collectGitState(cwd?: string, ctx?: RuntimeExecContext): P
     const statusLines = status ? status.split('\n').filter(Boolean) : [];
     const shown = statusLines.slice(0, GIT_STATUS_MAX_LINES).join('\n');
     const more = statusLines.length > GIT_STATUS_MAX_LINES ? `\n… and ${statusLines.length - GIT_STATUS_MAX_LINES} more` : '';
+    const prefs = gitPreferenceLines();
     return (
       '[Git state]\n' +
       `branch: ${branch}\n` +
       (statusLines.length ? `dirty files (${statusLines.length}):\n${shown}${more}` : 'working tree clean') +
-      (log ? `\nrecent commits:\n${log}` : '')
+      (log ? `\nrecent commits:\n${log}` : '') +
+      (prefs ? `\n${prefs}` : '')
     );
   } catch {
     return null;

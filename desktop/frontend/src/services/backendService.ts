@@ -4,7 +4,7 @@
  */
 import type {
   AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, MuseLibraryEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo,
-  NormalAgentDef, ProjectContext, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
+  GitSettings, NormalAgentDef, ProjectContext, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
   TanguDesktopConfig, ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
 import { AGENT_APP_ID } from './agentRunService'
@@ -24,12 +24,14 @@ async function request<T>(cfg: TanguDesktopConfig, path: string, init?: RequestI
   if (!r.ok) {
     let detail = `HTTP ${r.status}`
     let code: string | undefined
+    let info: string | undefined
     try {
       const j = await r.json()
       detail = j?.detail || detail
       if (typeof j?.error === 'string') code = j.error // 机器可读错误码(如 claim_requirements_unmet),调用方据此本地化
+      if (typeof j?.info === 'string') info = j.info // 与错误码配套的原文(如 git 的 stderr),调用方按需展示
     } catch { /* keep */ }
-    throw Object.assign(new Error(detail), { status: r.status }, code ? { code } : {})
+    throw Object.assign(new Error(detail), { status: r.status }, code ? { code } : {}, info ? { info } : {})
   }
   return r.json() as Promise<T>
 }
@@ -1067,6 +1069,29 @@ export const getProjectContext = (cfg: TanguDesktopConfig, sessionId: string) =>
 /** 有会话就按 sessionId 绑定;没有会话可借的项目(全删光又加回来)按路径读用户侧记录 —— 只有这个只读端点收 cwd。 */
 export const getProjectSettings = (cfg: TanguDesktopConfig, ref: { sessionId: string } | { cwd: string }, opts?: { timeoutMs?: number }) =>
   request<{ settings: ProjectSettings | null }>(cfg, `/agent/project-context/settings?${'sessionId' in ref ? `sessionId=${encodeURIComponent(ref.sessionId)}` : `cwd=${encodeURIComponent(ref.cwd)}`}`, undefined, opts).then((r) => r.settings ?? null)
+// ── 项目的 git 动作(PROJECT 详情「Git」页;用户点了才做)。失败带机器码 code(not_repo / nothing_to_commit / embedded_repo /
+//    too_many_files / large_files / no_identity / invalid_branch / no_remote / git_failed …)+ info(git 原文 / 点名的文件)。
+//    成功一律带回新的项目上下文,面板一次刷新。
+const withContext = <T extends { context: ProjectContext }>(r: T): T => ({ ...r, context: projectContextShape(r.context) })
+const gitPost = <T,>(cfg: TanguDesktopConfig, action: string, body: object, timeoutMs = 60_000) =>
+  request<T>(cfg, `/agent/project-context/git/${action}`, { method: 'POST', body: JSON.stringify(body) }, { timeoutMs })
+export const gitInitProject = (cfg: TanguDesktopConfig, sessionId: string) =>
+  gitPost<{ createdGitignore: boolean; context: ProjectContext }>(cfg, 'init', { sessionId }).then(withContext)
+/** 用会话自己的模型写一条提交信息(计入额度)。 */
+export const generateGitCommitMessage = (cfg: TanguDesktopConfig, sessionId: string) =>
+  gitPost<{ message: string }>(cfg, 'message', { sessionId }, 120_000).then((r) => r.message)
+export const gitCommitProject = (cfg: TanguDesktopConfig, sessionId: string, message: string) =>
+  gitPost<{ commit: { sha: string; subject: string }; context: ProjectContext }>(cfg, 'commit', { sessionId, message }, 120_000).then(withContext)
+export const gitCreateProjectBranch = (cfg: TanguDesktopConfig, sessionId: string, name: string) =>
+  gitPost<{ branch: string; context: ProjectContext }>(cfg, 'branch', { sessionId, name }).then(withContext)
+export const gitPushProject = (cfg: TanguDesktopConfig, sessionId: string) =>
+  gitPost<{ remote: string; branch: string; output: string; context: ProjectContext }>(cfg, 'push', { sessionId }, 180_000).then(withContext)
+/** 「设置 → Git」。writable=false(云端 worker 的 config.json 是所有用户共用的)时设置页只读说明、不给改。 */
+export const getGitSettings = (cfg: TanguDesktopConfig) =>
+  request<{ settings: GitSettings; defaults: GitSettings; writable: boolean }>(cfg, '/agent/git-settings')
+/** 逐键改;某键给 null = 恢复缺省。 */
+export const setGitSettings = (cfg: TanguDesktopConfig, patch: { [K in keyof GitSettings]?: GitSettings[K] | null }) =>
+  request<{ settings: GitSettings }>(cfg, '/agent/git-settings', { method: 'PUT', body: JSON.stringify(patch) }).then((r) => r.settings)
 export const initProjectContext = (cfg: TanguDesktopConfig, sessionId: string) =>
   request<{ createdDir: boolean; createdDoc: boolean; context: ProjectContext }>(cfg, '/agent/project-context/init', { method: 'POST', body: JSON.stringify({ sessionId }) }).then((r) => ({ ...r, context: projectContextShape(r.context) }))
 /** 409 = 文件在读出之后被别处改过(没有写入);调用方提示用户重载。 */

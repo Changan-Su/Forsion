@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { ArrowLeft, Check, ChevronRight, Copy, ExternalLink, FileText, Folder, FolderGit2, FolderOpen, GitBranch, ImageUp, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Users, X } from 'lucide-react'
+import { ArrowLeft, Check, ChevronRight, Copy, ExternalLink, FileText, Folder, FolderGit2, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, ImageUp, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Upload, Users, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { createProjectSkill, deleteProjectIcon, getProjectContext, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon } from '../services/backendService'
+import { createProjectSkill, deleteProjectIcon, generateGitCommitMessage, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitPushProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon } from '../services/backendService'
+import { askString } from '../amadeus/components/askString'
 import type { AgentConfig, NormalAgentDef, ProjectContext, ProjectSettings, SessionRecord, TeamDef } from '../types'
 import { isTeamImageAvatar, sessionWorkspaceKey, THINKING_LEVELS } from '../types'
 import { ProfileModelField, ProfileTextEditor } from './profileControls'
@@ -64,8 +65,14 @@ export function useProjectSubject(path: string | null): { workspace: ProjectWork
   }, [signature])
 }
 
+/** 引擎 git 动作的机器码(services/gitActions.ts);有词条的按当前语言说,没有的回落引擎原文。 */
+const GIT_ERROR_CODES = new Set([
+  'git_unavailable', 'git_timeout', 'git_failed', 'not_repo', 'already_repo', 'nothing_to_commit', 'empty_message', 'message_too_long',
+  'embedded_repo', 'too_many_files', 'large_files', 'no_identity', 'invalid_branch', 'detached', 'no_remote', 'ambiguous_remote', 'no_model', 'quota_exceeded',
+])
+
 /** PROJECT 详情:骨架与 TEAM 详情同一套(头部即基本信息 / 滑块导航 / 一个滚动体 / 底部保存栏),内容换成项目的三面:
- *  Agents(谁在这里工作过)/ 配置(指令文件 · 项目技能 · 计划 · 本机默认项)/ Git(现场)。数据全部来自引擎的 project-context,
+ *  Agents(谁在这里工作过)/ 配置(指令文件 · 项目技能 · 计划 · 本机默认项)/ Git(现场 + 用户点的建仓 / 提交 / 建分支 / 推送)。数据全部来自引擎的 project-context,
  *  它读到什么就显示什么 —— 这个面板存在的意义就是回答「Tangu 到底看没看见这个项目的约定」。 */
 export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam, currentSessionId }: Props) {
   const { t, locale } = useI18n()
@@ -95,6 +102,11 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
+  // Git 页:提交框(null = 收起)、生成中、带原文的 git 失败(git 的 stderr / 被点名的文件,显示在 Git 卡片里而不是底栏)
+  const [commitDraft, setCommitDraft] = useState<string | null>(null)
+  const [generating, setGenerating] = useState(false)
+  const [gitErr, setGitErr] = useState<{ message: string; info?: string } | null>(null)
+  const genSeq = useRef(0)
   const now = Date.now()
 
   const current = currentSessionId === undefined ? session.id : currentSessionId
@@ -211,6 +223,57 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
       setNotice(t('projectProfile.initialized', { dir: r.context.workspaceDirName }))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
   }
+  // ── Git 动作(用户点了才做;引擎按 sessionId 绑定目录,做完连同新的上下文一起回)──
+  const gitErrorOf = (e: any): { message: string; info?: string } => ({
+    message: typeof e?.code === 'string' && GIT_ERROR_CODES.has(e.code) ? t(`projectProfile.git.err.${e.code}`) : String(e?.message || e),
+    info: typeof e?.info === 'string' && e.info ? e.info : undefined,
+  })
+  const gitRun = async <T,>(key: string, action: () => Promise<T>, done: (value: T) => void) => {
+    if (busy) return
+    setBusy(key); clear(); setGitErr(null)
+    try { done(await action()) } catch (e: any) { setGitErr(gitErrorOf(e)) } finally { setBusy('') }
+  }
+  const gitInit = () => gitRun('git-init', () => gitInitProject(s.cfg, session.id), (r) => {
+    setCtx(r.context)
+    setNotice(t(r.createdGitignore ? 'projectProfile.git.initDoneIgnore' : 'projectProfile.git.initDone'))
+  })
+  /** 让会话自己的模型写提交信息。关掉提交框 / 再点一次 → 旧的那次回来也不落(genSeq)。 */
+  const generateMessage = async () => {
+    const seq = ++genSeq.current
+    setGenerating(true); setGitErr(null)
+    try {
+      const message = await generateGitCommitMessage(s.cfg, session.id)
+      if (seq === genSeq.current) setCommitDraft((d) => (d === null ? d : message))
+    } catch (e: any) {
+      if (seq === genSeq.current) setGitErr(gitErrorOf(e))
+    } finally {
+      if (seq === genSeq.current) setGenerating(false)
+    }
+  }
+  const openCommit = () => { clear(); setCommitDraft(''); void generateMessage() }
+  const closeCommit = () => { genSeq.current++; setGenerating(false); setCommitDraft(null); setGitErr(null) }
+  const commit = () => {
+    const message = commitDraft?.trim()
+    if (!message) return
+    void gitRun('git-commit', () => gitCommitProject(s.cfg, session.id, message), (r) => {
+      setCtx(r.context); setCommitDraft(null)
+      setNotice(t('projectProfile.git.committed', { subject: r.commit.subject }))
+    })
+  }
+  const newBranch = async () => {
+    if (busy) return
+    const prefix = await getGitSettings(s.cfg).then((r) => r.settings.branchPrefix).catch(() => '')
+    const name = (await askString(t('projectProfile.git.newBranchTitle'), prefix, { label: t('projectProfile.git.newBranchLabel'), confirmLabel: t('projectProfile.git.newBranchConfirm') }))?.trim()
+    if (!name || name === prefix) return
+    await gitRun('git-branch', () => gitCreateProjectBranch(s.cfg, session.id, name), (r) => {
+      setCtx(r.context)
+      setNotice(t('projectProfile.git.branched', { branch: r.branch }))
+    })
+  }
+  const push = () => gitRun('git-push', () => gitPushProject(s.cfg, session.id), (r) => {
+    setCtx(r.context)
+    setNotice(t('projectProfile.git.pushed', { target: `${r.remote}/${r.branch}` }))
+  })
   const generate = () => {
     if (!ctx || sessionRunning) return
     clear()
@@ -399,7 +462,11 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
         {tab === 'git' && ctx && git && <div className="project-section">
           <section className="project-card" data-project-git>
             {!git.available ? <p className="agent-profile-muted">{t('projectProfile.git.unavailable')}</p>
-              : !git.repo ? <p className="agent-profile-muted">{t('projectProfile.git.none')}</p>
+              : !git.repo ? <div className="project-git-empty">
+                <p className="agent-profile-muted">{t('projectProfile.git.none')}</p>
+                <p className="agent-profile-muted">{t('projectProfile.git.initHint')}</p>
+                <div className="project-card-actions"><button className="btn primary sm" data-git-action="init" disabled={!!busy} onClick={() => void gitInit()}>{busy === 'git-init' ? <Loader2 size={13} className="spin" /> : <FolderGit2 size={13} />}{t('projectProfile.git.init')}</button></div>
+              </div>
               : <div className="project-git-summary">
                 <div><span>{t('projectProfile.git.branch')}</span><strong title={git.branch}>{git.branch}</strong>{git.detached && <span className="project-chip">{t('projectProfile.git.detached')}</span>}</div>
                 <div><span>{t('projectProfile.git.upstream')}</span>{git.upstream ? <><strong title={git.upstream}>{git.upstream}</strong><span className="project-chip">{git.ahead || git.behind ? [git.ahead ? t('projectProfile.git.ahead', { count: git.ahead }) : '', git.behind ? t('projectProfile.git.behind', { count: git.behind }) : ''].filter(Boolean).join(' · ') : t('projectProfile.git.inSync')}</span></> : <strong className="agent-profile-muted">{t('projectProfile.git.noUpstream')}</strong>}</div>
@@ -407,6 +474,12 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
                 {git.remote && <div><span>{t('projectProfile.git.remote')}</span><strong title={git.remote}>{git.remote}</strong></div>}
                 {git.nested && <p className="agent-profile-muted">{t('projectProfile.git.nested')}</p>}
               </div>}
+            {git.repo && <div className="project-card-actions" data-project-git-write>
+              <button className="btn primary sm" data-git-action="commit" disabled={!!busy || !changeCount || commitDraft !== null} onClick={openCommit}><GitCommitHorizontal size={13} />{t('projectProfile.git.commit')}</button>
+              <button className="btn sm" data-git-action="branch" disabled={!!busy} onClick={() => void newBranch()}>{busy === 'git-branch' ? <Loader2 size={13} className="spin" /> : <GitBranchPlus size={13} />}{t('projectProfile.git.newBranch')}</button>
+              {(git.upstream || git.remote) && <button className="btn sm" data-git-action="push" disabled={!!busy || !!git.detached} title={git.detached ? t('projectProfile.git.err.detached') : undefined} onClick={() => void push()}>{busy === 'git-push' ? <Loader2 size={13} className="spin" /> : <Upload size={13} />}{git.ahead ? t('projectProfile.git.pushCount', { count: git.ahead }) : t('projectProfile.git.push')}</button>}
+            </div>}
+            {gitErr && <div className="project-git-error" role="alert" data-project-git-error><p>{gitErr.message}</p>{gitErr.info && <pre>{gitErr.info}</pre>}</div>}
             <div className="project-inline-actions start" data-project-git-actions>
               <button type="button" onClick={() => openTerminal(dir)}><TerminalSquare size={13} />{t('projectProfile.terminal')}</button>
               <button type="button" onClick={() => reveal(dir)}><FolderOpen size={13} />{t('projectProfile.reveal')}</button>
@@ -414,6 +487,19 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               <button type="button" onClick={() => setReloadAt((n) => n + 1)}><RefreshCw size={13} />{t('projectProfile.refresh')}</button>
             </div>
           </section>
+          {git.repo && commitDraft !== null && <section className="project-card project-git-commit-form" data-project-git-commit-form>
+            <div className="project-card-head"><div><h3>{t('projectProfile.git.commitTitle', { count: changeCount })}</h3><small>{t('projectProfile.git.commitHint')}</small></div></div>
+            <textarea className="project-git-message" rows={4} value={commitDraft} disabled={generating || busy === 'git-commit'} aria-label={t('projectProfile.git.messageLabel')}
+              placeholder={t(generating ? 'projectProfile.git.generating' : 'projectProfile.git.messagePlaceholder')} onChange={(e) => setCommitDraft(e.target.value)} />
+            <div className="project-card-actions">
+              <button className="btn sm" data-git-action="regenerate" disabled={generating || !!busy} onClick={() => void generateMessage()}>{generating ? <Loader2 size={13} className="spin" /> : <Sparkles size={13} />}{t('projectProfile.git.regenerate')}</button>
+              {/* 取消与提交成组靠右:窄栏里折行时整组一起下去,不会把「提交」单独甩到下一行最左边 */}
+              <div className="project-git-commit-confirm">
+                <button className="btn sm" disabled={busy === 'git-commit'} onClick={closeCommit}>{t('common.cancel')}</button>
+                <button className="btn primary sm" data-git-action="commit-confirm" disabled={!commitDraft.trim() || generating || !!busy} onClick={commit}>{busy === 'git-commit' && <Loader2 size={13} className="spin" />}{t('projectProfile.git.commitConfirm')}</button>
+              </div>
+            </div>
+          </section>}
           {git.repo && !!git.changes?.length && <section className="project-card" data-project-git-changes>
             <div className="project-card-head"><div><h3>{t('projectProfile.git.changeCount', { count: changeCount })}</h3></div></div>
             <div className="project-list">{git.changes.map((c) => <div key={`${c.code}${c.path}`} className="project-row project-row-static project-git-change" title={c.path}><code className={c.code === '??' ? 'untracked' : c.code[0] !== ' ' ? 'staged' : ''}>{c.code.trim() || '·'}</code><span>{c.path}</span></div>)}

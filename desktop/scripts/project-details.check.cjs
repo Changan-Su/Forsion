@@ -86,7 +86,7 @@ const overflowReport = (loc) => loc.evaluate((el) => {
     .slice(0, 6).map((n) => `${n.tagName.toLowerCase()}.${String(n.className && n.className.baseVal !== undefined ? n.className.baseVal : n.className).split(' ').slice(0, 2).join('.')}+${Math.round(n.getBoundingClientRect().right - right)}px`).join(', ')
 })
 
-async function run(app, win, stub, seen, home) {
+async function run(app, win, stub, seen, home, ctx) {
   win.setDefaultTimeout(15_000)
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1500, 1000))
   await win.waitForSelector('#root', { timeout: 30_000 })
@@ -239,6 +239,82 @@ async function run(app, win, stub, seen, home) {
   await details.screenshot({ path: shots.gitLight = shot('project-git-zh-light') })
   await win.screenshot({ path: shots.windowLight = shot('project-window-zh-light') })
 
+  // ── 6e–6m Git 写动作(用户点的;假引擎只记请求、按引擎口径改 ctx.git)──
+  const until = async (fn, ms = 8000) => { const end = Date.now() + ms; while (Date.now() < end) { if (await fn()) return true; await sleep(120) } return false }
+  const writeRow = gitCard.locator('[data-project-git-write]')
+  const writeLabels = await writeRow.locator('button').allTextContents()
+  check('6e 写动作行:提交… / 新建分支… / 推送（2）(领先 2 → 按钮带数)', writeLabels.length === 3 && /提交/.test(writeLabels[0]) && /新建分支/.test(writeLabels[1]) && /推送（2）/.test(writeLabels[2]), JSON.stringify(writeLabels))
+  await writeRow.locator('[data-git-action="commit"]').click()
+  const form = profile.locator('[data-project-git-commit-form]')
+  await form.waitFor()
+  const generated = await until(async () => (await form.locator('textarea').inputValue()).startsWith('feat: add git actions'))
+  check('6f 点「提交…」→ 展开提交框;POST git/message 带 sessionId,生成的信息填进输入框', generated && seen.gitMessages.length === 1 && seen.gitMessages[0].sessionId === 'pd-main', JSON.stringify(seen.gitMessages))
+  // 收起提交框只是「取消」:「放弃修改」会被读成丢弃代码改动(截图自查抓到过)
+  const formButtons = await form.locator('button').allTextContents()
+  check('6f2 提交框按钮:重新生成 / 取消 / 提交;取消与提交同一行', formButtons.join('|') === '重新生成|取消|提交' && await form.locator('.project-git-commit-confirm button').evaluateAll((els) => new Set(els.map((el) => Math.round(el.getBoundingClientRect().top))).size === 1), JSON.stringify(formButtons))
+  await dismissToasts(win)
+  await details.screenshot({ path: shots.gitCommitForm = shot('project-git-commit-zh-light') })
+  await form.locator('textarea').fill('fix: 手改过的提交信息')
+  await form.locator('[data-git-action="commit-confirm"]').click()
+  const closed = await until(async () => (await form.count()) === 0)
+  const firstCommit = await profile.locator('[data-project-git-commits] .project-git-commit strong').first().textContent().catch(() => '')
+  check('6g 提交 → POST git/commit { sessionId, 手改后的信息 };提交框收起,最近提交第一条是它,改动清空', closed && seen.gitCommits.length === 1 && seen.gitCommits[0].sessionId === 'pd-main' && seen.gitCommits[0].message === 'fix: 手改过的提交信息' && firstCommit === 'fix: 手改过的提交信息' && await profile.locator('[data-project-git-changes]').count() === 0, JSON.stringify({ commits: seen.gitCommits, firstCommit }))
+  await writeRow.locator('[data-git-action="branch"]').click()
+  const promptInput = win.locator('.dialog .dialog-input')
+  await promptInput.waitFor()
+  check('6h 新建分支:对话框预填「设置 → Git」里的前缀 tangu/', (await promptInput.inputValue()) === 'tangu/', await promptInput.inputValue())
+  await promptInput.fill('tangu/demo-x')
+  await promptInput.press('Enter')
+  await until(async () => seen.gitBranches.length === 1)
+  await until(async () => /tangu\/demo-x/.test(await gitCard.textContent()))
+  check('6h2 POST git/branch { sessionId, name: tangu/demo-x };分支变成它', seen.gitBranches[0]?.name === 'tangu/demo-x' && seen.gitBranches[0]?.sessionId === 'pd-main' && /tangu\/demo-x/.test(await gitCard.textContent()), JSON.stringify(seen.gitBranches))
+  await writeRow.locator('[data-git-action="branch"]').click()
+  await promptInput.waitFor()
+  await promptInput.fill('bad..name')
+  await promptInput.press('Enter')
+  const gitError = profile.locator('[data-project-git-error]')
+  await gitError.waitFor()
+  const errText = await gitError.textContent()
+  check('6i 非法分支名 → Git 卡片里本地化报错 + git 原文(不是引擎英文原句)', /这不是一个合法的分支名/.test(errText) && /bad\.\.name/.test(await gitError.locator('pre').textContent()) && !/That is not a valid/.test(errText), errText)
+  await dismissToasts(win)
+  await details.screenshot({ path: shots.gitError = shot('project-git-error-zh-light') })
+  await writeRow.locator('[data-git-action="push"]').click()
+  await until(async () => seen.gitPushes.length === 1)
+  await until(async () => /origin\/tangu\/demo-x/.test(await gitCard.textContent())) // 请求到了桩 ≠ 响应已渲染
+  await until(async () => (await gitError.count()) === 0)
+  check('6j 推送 → POST git/push;上游变成 origin/tangu/demo-x,上一次的错误条收起', seen.gitPushes.length === 1 && /origin\/tangu\/demo-x/.test(await gitCard.textContent()) && await gitError.count() === 0, await gitCard.textContent())
+  ctx.git = { available: true, repo: false }
+  await gitCard.locator('[data-project-git-actions] button').nth(3).click()
+  const initBtn = gitCard.locator('[data-git-action="init"]')
+  await initBtn.waitFor()
+  check('6k 不是仓库 → 说明 + 「创建 Git 仓库」;没有提交 / 分支 / 推送', /不是 git 仓库/.test(await gitCard.textContent()) && await writeRow.count() === 0, await gitCard.textContent())
+  await details.screenshot({ path: shots.gitInit = shot('project-git-init-zh-light') })
+  await initBtn.click()
+  await until(async () => (await writeRow.count()) === 1)
+  check('6l 创建 → POST git/init { sessionId };面板回到仓库摘要,出现写动作行(无远端 → 没有推送键)', seen.gitInits.length === 1 && seen.gitInits[0].sessionId === 'pd-main' && await writeRow.count() === 1 && await writeRow.locator('[data-git-action="push"]').count() === 0, JSON.stringify(seen.gitInits))
+  check('6m Git 写动作之后仍不横向溢出', await noOverflow(profile), await overflowReport(profile))
+
+  // ── 6n 设置 → Git:三项都落到 PUT /agent/git-settings(文本框失焦才写,开关立即写)──
+  await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'general/g-git' } }))
+  let fl
+  await until(async () => { fl = app.windows().find((w) => w.url().includes('window=floating')); return !!fl }, 15_000)
+  await fl.locator('#git-settings-prefix').waitFor({ timeout: 30_000 })
+  const prefixValue = await fl.locator('#git-settings-prefix').inputValue()
+  await fl.locator('#git-settings-prefix').fill('me/')
+  await fl.locator('#git-settings-instructions').click()
+  await fl.locator('#git-settings-instructions').fill('用中文写提交标题')
+  await sleep(900) // 打完字停一下:前缀那次保存的响应(桩里晚到 600ms)正好落在这里 —— 整份回写会把刚打的字冲掉
+  await fl.locator('.git-settings-panel [role="switch"]').click()
+  await until(async () => seen.gitSettingsPuts.length >= 3)
+  const puts = seen.gitSettingsPuts
+  check('6n 设置 → Git:前缀读出 tangu/;改前缀(失焦)/ 提交说明(失焦)/ force-with-lease(开关)各写一次', prefixValue === 'tangu/' && puts.some((p) => p.branchPrefix === 'me/') && puts.some((p) => p.commitInstructions === '用中文写提交标题') && puts.some((p) => p.forceWithLease === true), JSON.stringify(puts))
+  await fl.locator('#git-settings-prefix').fill('a b')
+  check('6o 非法前缀:就地提示,不发请求', /只能包含字母/.test(await fl.locator('.git-settings-panel').textContent()), await fl.locator('.git-settings-panel').textContent())
+  await fl.locator('#git-settings-prefix').fill('me/')
+  await sleep(300)
+  await fl.screenshot({ path: shots.gitSettings = shot('settings-git-zh-light') })
+  await fl.close()
+
   // ── 7 用它开新会话:落成新对话草稿(activeId 空),右栏随之切成该 Agent 的详情 ────
   await profile.getByRole('tab', { name: 'Agent', exact: true }).click()
   await profile.locator('[data-project-executor="agent:coder"] .project-inline-actions button').first().click()
@@ -303,6 +379,13 @@ async function run(app, win, stub, seen, home) {
     await details.screenshot({ path: shots[`en-dark-${tab}`] = shot(`project-${tab.toLowerCase()}-en-dark`) })
   }
   check('9a 英文 × 暗色三页都不横向溢出', overflowEn.every(([, ok]) => ok), JSON.stringify(overflowEn))
+  // 停在 Git 页:暗色下提交框(生成中 → 填好)也截一张
+  await profile.locator('[data-project-git-write] [data-git-action="commit"]').click()
+  await profile.locator('[data-project-git-commit-form] textarea').waitFor()
+  await sleep(700)
+  await details.screenshot({ path: shots['en-dark-commit'] = shot('project-git-commit-en-dark') })
+  const enForm = await profile.locator('[data-project-git-commit-form]').textContent()
+  check('9e 英文 × 暗色的提交框:英文文案(Cancel 不是 Discard changes)、不溢出', /Commit changes/.test(enForm) && /Cancel/.test(enForm) && !/Discard/.test(enForm) && await noOverflow(profile), enForm)
   const dark = await win.evaluate(() => document.documentElement.getAttribute('data-mode'))
   check('9b 暗色确实生效(html[data-mode=dark])', dark === 'dark', String(dark))
 
@@ -427,7 +510,9 @@ async function main() {
   const projectDir = path.join(home, 'Demo Project')
   for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
   const ctx = contextFixture(projectDir)
-  const seen = { ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [] }
+  const seen = { ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [],
+    gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitInits: [], gitSettingsPuts: [] }
+  let gitSettings = { branchPrefix: 'tangu/', commitInstructions: '', forceWithLease: false }
   const demoIds = new Set(['pd-main', 'pd-coder', 'pd-team']) // 默认项 / 图标只属于 Demo Project;别的项目组读到的是空
   // 真实磁盘上的项目 .tangu(移除工作区勾「删除相关文件」时要进废纸篓)
   fs.mkdirSync(path.join(projectDir, '.tangu', 'skills'), { recursive: true })
@@ -451,6 +536,33 @@ async function main() {
     // 桩对 ?archived=true 也回同一份会话表;不拦的话归档表 = 活跃表的复印件,执行者的会话数翻倍
     if (route === '/agent/sessions' && method === 'GET' && url.searchParams.get('archived') === 'true') return { sessions: [] }
     // 带 body 的写接口:override 在 handle 之前跑且能读 body(handle 的 body() 只能读一次,GET 分支已用掉 sessionId 的读取)
+    // Git 写动作:按引擎(services/gitActions.ts)的口径改 ctx.git,成功带回新上下文;失败回 400 { error: code, info }
+    if (route === '/agent/project-context/git/message' && method === 'POST') { const b = await body(); seen.gitMessages.push(b); await sleep(300); return { message: 'feat: add git actions to project details\n\nCommit, branch and push from the panel.' } }
+    if (route === '/agent/project-context/git/commit' && method === 'POST') {
+      const b = await body(); seen.gitCommits.push(b)
+      const subject = String(b.message).split('\n')[0]
+      ctx.git = { ...ctx.git, staged: 0, unstaged: 0, untracked: 0, changesTotal: 0, changes: [], ahead: (ctx.git.ahead || 0) + 1, commits: [{ sha: 'c'.repeat(40), short: 'ccccccc', at: Date.now(), subject }, ...(ctx.git.commits || [])] }
+      return { commit: { sha: 'c'.repeat(40), subject }, context: ctx }
+    }
+    if (route === '/agent/project-context/git/branch' && method === 'POST') {
+      const b = await body(); seen.gitBranches.push(b)
+      if (b.name === 'bad..name') return { __code: 400, body: { detail: 'That is not a valid branch name', error: 'invalid_branch', info: "fatal: 'bad..name' is not a valid branch name" } }
+      ctx.git = { ...ctx.git, branch: b.name, upstream: null, ahead: 0 }
+      return { branch: b.name, context: ctx }
+    }
+    if (route === '/agent/project-context/git/push' && method === 'POST') { const b = await body(); seen.gitPushes.push(b); ctx.git = { ...ctx.git, upstream: `origin/${ctx.git.branch}`, ahead: 0 }; return { remote: 'origin', branch: ctx.git.branch, output: '', context: ctx } }
+    if (route === '/agent/project-context/git/init' && method === 'POST') {
+      const b = await body(); seen.gitInits.push(b)
+      ctx.git = { available: true, repo: true, nested: false, branch: 'main', detached: false, upstream: null, ahead: 0, behind: 0, staged: 0, unstaged: 0, untracked: 2, changesTotal: 2, changes: [{ code: '??', path: '.gitignore' }, { code: '??', path: 'index.html' }], commits: [], remote: null }
+      return { createdGitignore: true, context: ctx }
+    }
+    if (route === '/agent/git-settings' && method === 'GET') return { settings: gitSettings, defaults: { branchPrefix: 'tangu/', commitInstructions: '', forceWithLease: false }, writable: true }
+    if (route === '/agent/git-settings' && method === 'PUT') {
+      const b = await body(); seen.gitSettingsPuts.push(b); gitSettings = { ...gitSettings, ...b }
+      // 前缀的响应故意晚到:用户这时已经在写提交说明,回写整份设置会把正在打的字冲掉(6n 靠它把竞态钉成必现)
+      if ('branchPrefix' in b) await sleep(600)
+      return { settings: gitSettings }
+    }
     if (route === '/agent/project-context/doc' && method === 'PUT') { const b = await body(); seen.docPuts.push(b); ctx.doc = { ...ctx.doc, exists: true, content: b.content, mtimeMs: 2000 }; return { path: ctx.doc.path, mtimeMs: 2000 } }
     // 同引擎:PUT settings 不改 icon,保留现值
     if (route === '/agent/project-context/settings' && method === 'PUT') { const b = await body(); seen.settingsPuts.push(b); const { icon: _ignored, ...rest } = b.settings || {}; ctx.settings = ctx.settings?.icon ? { ...rest, icon: ctx.settings.icon } : rest; return { settings: ctx.settings } }
@@ -492,7 +604,7 @@ async function main() {
     const win = await app.firstWindow()
     win.on('pageerror', (e) => { errors.push(String(e && e.stack || e).slice(0, 400)); console.error('[renderer pageerror]', String(e && e.stack || e).slice(0, 600)) })
     win.on('console', (m) => { if (m.type() === 'error') console.error('[renderer console.error]', m.text().slice(0, 600)) })
-    shots = await run(app, win, stub, seen, home)
+    shots = await run(app, win, stub, seen, home, ctx)
     check('10 渲染进程零 pageerror', errors.length === 0, errors.join(' || ').slice(0, 300))
   } catch (e) {
     if (e instanceof StopEarly) console.error(`STOP  ${e.message}`)

@@ -688,6 +688,12 @@ export interface GitSummary {
   commits?: GitCommitInfo[]
   remote?: string | null
 }
+/** 「设置 → Git」(引擎 config.json 的 git 段):PROJECT 详情的 git 动作与 agent 自己建分支 / 写提交时都照它。 */
+export interface GitSettings {
+  branchPrefix: string
+  commitInstructions: string
+  forceWithLease: boolean
+}
 export interface ProjectContext {
   cwd: string
   workspaceDir: string
