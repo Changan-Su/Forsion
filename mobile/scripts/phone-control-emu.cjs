@@ -442,6 +442,23 @@ async function runCases() {
 async function runT2() {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'phone-emu-'))
 
+  // ⚠️ 无障碍开着时先跑真屏幕块,且默认不跑卸载 / 换签名:系统卸载伴随包时会把它从 enabled_accessibility_services
+  //    里摘掉 —— 台架一卸载就把用户亲手开的无障碍关了,之后的真屏幕块永远 SKIP(09-26 实翻)。
+  //    开无障碍 / 关无障碍都是改系统安全设置,台架两个方向都不代劳;要跑破坏性用例显式加 DESTRUCTIVE=1。
+  if (handsA11yEnabled()) {
+    if (!handsInstalled()) installHands()
+    launchForsion(); await sleep(2500)
+    await runT2Gated()
+    skip('a11y-off cases (status.hands=disabled / observe → hands_disabled / backgrounded launch without hands)',
+      'accessibility service is on; turning it off is a system security setting the harness does not change')
+    if (process.env.DESTRUCTIVE !== '1') {
+      skip('uninstall / different-signature cases', 'uninstalling hands revokes its accessibility grant; re-run with DESTRUCTIVE=1 to include them')
+      return
+    }
+    await runT2Install(scratch)
+    return
+  }
+
   // 18 · 伴随包已装、无障碍未开 → status.hands=disabled、不声明 phone.ui;observe → hands_disabled
   if (!handsInstalled()) installHands()
   launchForsion(); await sleep(2500)
@@ -453,6 +470,29 @@ async function runT2() {
   let r = await waitResult(c.ackId)
   check('observe while a11y off → hands_disabled', r && r.ok === false && r.code === 'hands_disabled', r)
 
+  await runT2Install(scratch)
+
+  // 20b · §9.2 后台委托只在伴随包就绪时才有:这里无障碍没开 → 后台 launch 仍回 needs_foreground,且什么都没启动
+  //(就绪时的正向用例在 runT2Gated 的 T-bg-launch)
+  adb('shell', 'input', 'keyevent', 'KEYCODE_HOME'); await sleep(1500)
+  adb('logcat', '-c')
+  c = issue('launch', { pkg: 'com.android.settings' })
+  await exec(c)
+  r = await waitResult(c.ackId)
+  await sleep(800)
+  const bgStarted = /START u0 \{[^}]*cmp=com\.android\.settings\//.test(adb('logcat', '-d'))
+  check('launch while backgrounded, hands not ready → needs_foreground, nothing started', r && r.code === 'needs_foreground' && !bgStarted, { r, bgStarted })
+  launchForsion(); await sleep(2000)
+
+  skip('T2 screen ops (lease/observe-tree/screenshot/tap/type/type-without-focus/scroll/key/stale/commit_target by handle+coords/protected_app/account-change re-ask/cancel-during-consent/stop→abort/locked)',
+    'accessibility service not enabled. Enable it (system security setting — do it yourself), then re-run:\n' +
+    `    adb shell settings put secure enabled_accessibility_services ${HANDS_A11Y}\n` +
+    '    adb shell settings put secure accessibility_enabled 1')
+}
+
+/** 卸载 / 异签名 / 恢复:会摘掉伴随包的无障碍授权,无障碍开着时只在 DESTRUCTIVE=1 下跑。 */
+async function runT2Install(scratch) {
+  let st, c, r
   // 19 · 伴随包未装 → status.hands=missing;observe → hands_missing
   uninstallHands()
   await sleep(1000)
@@ -489,51 +529,46 @@ async function runT2() {
     await sleep(1000)
   }
   st = await evaluate(`${PC}.status()`)
-  check('after restoring proper hands → status.hands back to disabled', st && st.hands === 'disabled', st)
-
-  // 20b · §9.2 后台委托只在伴随包就绪时才有:这里无障碍没开 → 后台 launch 仍回 needs_foreground,且什么都没启动
-  //(就绪时的正向用例在 runT2Gated 的 T-bg-launch)
-  adb('shell', 'input', 'keyevent', 'KEYCODE_HOME'); await sleep(1500)
-  adb('logcat', '-c')
-  c = issue('launch', { pkg: 'com.android.settings' })
-  await exec(c)
-  r = await waitResult(c.ackId)
-  await sleep(800)
-  const bgStarted = /START u0 \{[^}]*cmp=com\.android\.settings\//.test(adb('logcat', '-d'))
-  check('launch while backgrounded, hands not ready → needs_foreground, nothing started', r && r.code === 'needs_foreground' && !bgStarted, { r, bgStarted })
-  launchForsion(); await sleep(2000)
-
-  // 21+ · 真正的屏幕操作:需伴随包无障碍服务已启用(改系统安全设置,台架不代劳)
-  if (!handsA11yEnabled()) {
-    skip('T2 screen ops (lease/observe-tree/screenshot/tap/type/type-without-focus/scroll/key/stale/commit_target by handle+coords/protected_app/account-change re-ask/cancel-during-consent/stop→abort/locked)',
-      'accessibility service not enabled. Enable it (system security setting — do it yourself), then re-run:\n' +
-      `    adb shell settings put secure enabled_accessibility_services ${HANDS_A11Y}\n` +
-      '    adb shell settings put secure accessibility_enabled 1')
-    return
-  }
-  await runT2Gated()
+  check('after restoring proper hands → status.hands back to not-ready (reinstall drops the a11y grant)', st && st.hands === 'disabled', st)
 }
 
 /** 需无障碍服务的 T2 用例(未启用时被 runT2 跳过)。断言只认假引擎的 result / abort 与 observation 内容。 */
 async function runT2Gated() {
-  const acceptLease = () => tapButtonWithText(/^(允许|Allow)$/, 8000)
-  const denyLease = () => tapButtonWithText(/^(暂不|Not now)$/, 8000)
-  const openSettings = () => { adb('shell', 'am', 'start', '-a', 'android.settings.SETTINGS'); }
+  // ⚠️ 伴随包的租约浮层 / 停止药丸是给**人**的同意与急停:台架不代点,走到这里打印提示、等人在模拟器窗口里点。
+  //    (另:uiautomator 一连接系统就挂起其他无障碍服务,伴随包当场被销毁 —— T2 块里一律不用 uiautomator。)
+  //    人点完,结果由伴随包经主包回到假引擎,下面的 waitResult 用长等待接住。
+  const HUMAN_MS = 85000
+  const askHuman = async (label) => {
+    console.log(`\n>>> 请在模拟器窗口里点「${label}」(最多等 ${HUMAN_MS / 1000} 秒)\n`)
+    // 留证:浮层到底弹没弹(screencap 不走 UiAutomation,不会挂起伴随包)
+    setTimeout(() => { try { fs.writeFileSync(path.join(os.tmpdir(), `phone-emu-consent-${label}-${Date.now()}.png`), execFileSync(path.join(sdk, 'platform-tools/adb'), ['exec-out', 'screencap', '-p'])) } catch { /* 留证失败不影响用例 */ } }, 4000)
+    return true
+  }
+  const acceptLease = () => askHuman('允许')
+  const denyLease = () => askHuman('暂不')
+  // 授权行为用例(拒绝 / 换号重问 / 停止 / 同意中撤销)要人多点几次,逻辑已由 JUnit 覆盖:只在 CONSENT_TESTS=1 时跑
+  const consentTests = process.env.CONSENT_TESTS === '1'
+  // NEW_TASK|CLEAR_TASK:每次都回「设置」首页 —— 不清的话 intent 投给栈顶已有实例,停在上一条用例进过的子页
+  //(09-26 实测:搜索框用例因此一直找不到搜索框而 SKIP)
+  const openSettings = () => { adb('shell', 'am', 'start', '-a', 'android.settings.SETTINGS', '-f', '0x10008000'); }
 
   // L1 · 首条 T2 指令弹租约浮层,拒绝 → lease_declined,什么都没做
   openSettings(); await sleep(2000)
-  let c = issue('observe', {}, { execMs: 90000 })
-  await exec(c)
-  const declined = !!(await denyLease())
-  let r = await waitResult(c.ackId, 12000)
-  check('T2 first op → lease overlay; deny → lease_declined', declined && r && r.code === 'lease_declined', { declined, r })
+  let c, r
+  if (consentTests) {
+    c = issue('observe', {}, { execMs: 90000 })
+    await exec(c)
+    const declined = !!(await denyLease())
+    r = await waitResult(c.ackId, HUMAN_MS)
+    check('T2 first op → lease overlay; deny → lease_declined', declined && r && r.code === 'lease_declined', { declined, r })
+  }
 
   // L2 · 再来一条,允许 → observe 回一棵带句柄的树
   openSettings(); await sleep(1500)
   c = issue('observe', {}, { execMs: 90000 })
   await exec(c)
   const allowed = !!(await acceptLease())
-  r = await waitResult(c.ackId, 15000)
+  r = await waitResult(c.ackId, HUMAN_MS)
   const hasHandles = !!(r && r.ok && /\[\d+\]/.test(r.text || '') && /^app: /.test(r.text || ''))
   check('lease allow → observe returns a tree with handles', allowed && hasHandles, { allowed, head: (r && r.text || '').split('\n')[0] })
 
@@ -541,7 +576,10 @@ async function runT2Gated() {
   // flags=0 时药丸拿走整屏触摸与按键焦点 —— 下面这一点、一按都被它吞掉,Settings 纹丝不动。放在所有屏幕操作用例之前。
   {
     const top0 = topActivity()
-    const tappedRow = await tapButtonWithText(/^(Network & internet|网络和互联网|Display|显示)$/, 6000)
+    // 行坐标取自刚才 observe 的树(不用 uiautomator,见上)
+    const row = ((r && r.text) || '').match(/"(Network & internet|网络和互联网|Display|显示)"[^\n]*\((\d+),(\d+)\)/)
+    if (row) adb('shell', 'input', 'tap', row[2], row[3])
+    const tappedRow = row ? row[1] : null
     await sleep(1500)
     const top1 = topActivity()
     adb('shell', 'input', 'keyevent', 'KEYCODE_BACK'); await sleep(1500)
@@ -575,8 +613,18 @@ async function runT2Gated() {
   const searchNode = (r && (r.text.match(/\[(\d+)\][^\n]*\{[^}]*edit/) || r.text.match(/\[(\d+)\][^\n]*[Ss]earch/) || [])[1])
   if (searchNode) {
     c = issue('tap', { node: Number(searchNode) }); await exec(c); await waitResult(c.ackId, 10000)
-    c = issue('type', { text: 'wifi' }); await exec(c); r = await waitResult(c.ackId, 12000)
-    check('type into Settings search → ok', r && r.ok === true, { code: r && r.code })
+    // 模型的走法:点完先 observe,再带句柄打字 —— 紧跟着无句柄 type 会赶在新页面给输入框焦点之前,
+    // 伴随包按契约回 invalid_args(09-26 实测;不是缺陷)。
+    await sleep(800)
+    c = issue('observe', {}); await exec(c); r = await waitResult(c.ackId, 12000)
+    const obsNo = Number((((r && r.text) || '').split('\n')[0].match(/· obs (\d+)$/) || [])[1])
+    const field = ((r && r.text) || '').match(/\[(\d+)\][^\n]*\{[^}]*\bedit\b/)
+    if (field && obsNo) {
+      c = issue('type', { text: 'wifi', node: Number(field[1]), obs: obsNo }); await exec(c); r = await waitResult(c.ackId, 12000)
+      check('type into Settings search (by handle) → ok, text lands in the field', r && r.ok === true && /EditText "wifi"/.test(r.text || ''), { code: r && r.code, error: r && r.error })
+    } else {
+      check('type into Settings search → search page shows an editable field', false, { head: ((r && r.text) || '').split('\n')[0] })
+    }
   } else {
     skip('type into Settings search', 'no editable search field found in observation')
   }
@@ -658,52 +706,39 @@ async function runT2Gated() {
   check('launch while backgrounded + hands ready → delegated, ok handoff, Settings in front',
     r && r.ok === true && r.handoff === true && /com\.android\.settings\//.test(topActivity()), { r, top: topActivity() })
 
-  // G-account · 换号(forsion_token 变了)之后的第一条 T2 op 必须重新弹同意,不沿用上一个账号的租约(09-26 二轮评审 P1 #5)。
-  // 两道防线:主包 cancelAll(没绑上时记账、绑上先还)+ 伴随包租约认账号键(token 摘要)。这里走真链路,断言只认「又弹了浮层」。
-  await setToken(TOKEN2); await sleep(800)
-  openSettings(); await sleep(1500)
-  c = issue('observe', {}, { execMs: 90000 }); await exec(c)
-  const reaskedAcct = !!(await denyLease())
-  r = await waitResult(c.ackId, 12000)
-  check('account change → next T2 op asks again (deny → lease_declined)', reaskedAcct && r && r.code === 'lease_declined', { reaskedAcct, r })
-  await setToken(TOKEN); await sleep(800)
-  // 重新拿到租约,给下面的急停用例用
-  c = issue('observe', {}, { execMs: 90000 }); await exec(c)
-  const regranted = !!(await acceptLease())
-  r = await waitResult(c.ackId, 15000)
-  check('re-grant after account switch-back → observe ok', regranted && r && r.ok === true, { regranted, code: r && r.code })
+  if (!consentTests) {
+    skip('consent behaviour (deny / re-ask after account change / Stop → abort / re-ask after Stop)', 'needs extra human taps; covered by JUnit (LeaseState / ConsentWait / HandsClient). Run with CONSENT_TESTS=1 to include')
+  } else {
+    // G-account · 换号(forsion_token 变了)之后的第一条 T2 op 必须重新弹同意,不沿用上一个账号的租约(09-26 二轮评审 P1 #5)。
+    // 两道防线:主包 cancelAll(没绑上时记账、绑上先还)+ 伴随包租约认账号键(token 摘要)。这里走真链路,断言只认「又弹了浮层」。
+    await setToken(TOKEN2); await sleep(800)
+    openSettings(); await sleep(1500)
+    c = issue('observe', {}, { execMs: 90000 }); await exec(c)
+    const reaskedAcct = !!(await denyLease())
+    r = await waitResult(c.ackId, HUMAN_MS)
+    check('account change → next T2 op asks again (deny → lease_declined)', reaskedAcct && r && r.code === 'lease_declined', { reaskedAcct, r })
+    await setToken(TOKEN); await sleep(800)
+    // 重新拿到租约,给下面的急停用例用
+    c = issue('observe', {}, { execMs: 90000 }); await exec(c)
+    const regranted = !!(await acceptLease())
+    r = await waitResult(c.ackId, HUMAN_MS)
+    check('re-grant after account switch-back → observe ok', regranted && r && r.ok === true, { regranted, code: r && r.code })
 
-  // T-stop · 药丸「停止」→ 撤租约 + 主包 POST /abort 到达假引擎。
-  // ⚠️ 这里的停止是在两条 op **之间**点的(observe 已回执):旧实现只在 op 执行中记 run,这时 abort 根本不发(09-26 评审 P1)。
-  openSettings(); await sleep(1500)
-  c = issue('observe', {}); await exec(c); await waitResult(c.ackId, 12000)
-  const before = aborts.length
-  const stopped = !!(await tapButtonWithText(/^(停止|Stop)$/, 6000))
-  await sleep(1500)
-  check('Stop pill between ops → abort POST reaches engine', stopped && aborts.length > before && aborts[aborts.length - 1].runId === RUN, { stopped, aborts: aborts.length })
-  // 停止即撤租约:下一条 T2 op 重新弹同意浮层(拒绝 → lease_declined),不沿用
-  c = issue('observe', {}, { execMs: 90000 }); await exec(c)
-  const reasked = !!(await denyLease())
-  r = await waitResult(c.ackId, 12000)
-  check('after Stop the lease is gone → next op asks again (deny → lease_declined)', reasked && r && r.code === 'lease_declined', { reasked, r })
-
-  // G-cancel-consent · 同意浮层挂着时撤销(换号 → cancelAll):浮层撤掉、这条 op 当场回 lease_declined,不等到 90s 期限;
-  // 执行道随之放行,下一条 op 立刻又能弹浮层(09-26 二轮评审 P2 #9 / P1 #6)。旧实现只 removeView 不放行等待:这条要 ~88s 才回执、
-  // 下一条排执行道到期 → busy。
-  openSettings(); await sleep(1500)
-  c = issue('observe', {}, { execMs: 90000 }); await exec(c)
-  const consentUp = await screenHasText(/^(允许|Allow)$/, 8000)
-  const tCancel = Date.now()
-  await setToken(TOKEN2)
-  r = await waitResult(c.ackId, 12000)
-  const releasedMs = r ? Date.now() - tCancel : null
-  const consentGone = !(await screenHasText(/^(允许|Allow)$/, 0))
-  check('cancel while the lease consent is up → overlay gone, lease_declined within seconds', consentUp && r && r.code === 'lease_declined' && consentGone && releasedMs < 10000,
-    { consentUp, code: r && r.code, releasedMs, consentGone })
-  c = issue('observe', {}); await exec(c) // 缺省 execMs 20s:执行道若还被占着就会 busy
-  const askedAgain = !!(await denyLease())
-  r = await waitResult(c.ackId, 12000)
-  check('after cancel-during-consent the lane is free → next op asks again (deny → lease_declined)', askedAgain && r && r.code === 'lease_declined', { askedAgain, r })
+    // T-stop · 药丸「停止」→ 撤租约 + 主包 POST /abort 到达假引擎。
+    // ⚠️ 这里的停止是在两条 op **之间**点的(observe 已回执):旧实现只在 op 执行中记 run,这时 abort 根本不发(09-26 评审 P1)。
+    openSettings(); await sleep(1500)
+    c = issue('observe', {}); await exec(c); await waitResult(c.ackId, 12000)
+    const before = aborts.length
+    const stopped = !!(await askHuman('停止'))
+    for (const t0 = Date.now(); aborts.length === before && Date.now() - t0 < HUMAN_MS;) await sleep(500)
+    check('Stop pill between ops → abort POST reaches engine', stopped && aborts.length > before && aborts[aborts.length - 1].runId === RUN, { stopped, aborts: aborts.length })
+    // 停止即撤租约:下一条 T2 op 重新弹同意浮层(拒绝 → lease_declined),不沿用
+    c = issue('observe', {}, { execMs: 90000 }); await exec(c)
+    const reasked = !!(await denyLease())
+    r = await waitResult(c.ackId, HUMAN_MS)
+    check('after Stop the lease is gone → next op asks again (deny → lease_declined)', reasked && r && r.code === 'lease_declined', { reasked, r })
+  }
+  skip('cancel while the lease consent is up', 'checking the overlay needs uiautomator, which suspends the companion service; covered by JUnit ConsentWaitTest')
   await setToken(TOKEN); await sleep(800)
 
   // T-locked · 熄屏 → locked(随后唤醒复位)
@@ -744,6 +779,41 @@ async function soak(seconds, island) {
   const [cmd, arg] = process.argv.slice(2)
   try {
     if (cmd === 'soak') await soak(Number(arg) || 120, process.argv[4] === 'island')
+    else if (cmd === 'probe') {
+      // 单条探测:node scripts/phone-control-emu.cjs probe <op> '<args JSON>' —— 打印完整回执(排查用;需已有租约,否则会弹同意)
+      adb('reverse', `tcp:${ENGINE_PORT}`, `tcp:${ENGINE_PORT}`)
+      // ⚠️ 前台服务只能在前台起(Android 12+):先切回 Forsion 起灵动岛,再切到要操作的 App(PROBE_ACTION,缺省「设置」)
+      launchForsion(); await sleep(2500)
+      await evaluate(`Capacitor.Plugins.LiveIsland.show({ title: 'emu probe', text: 'x', chip: '', since: Date.now(), sessionId: 's', channelName: 'c', more: 0 })`)
+      adb('shell', 'am', 'start', '-a', process.env.PROBE_ACTION || 'android.settings.SETTINGS'); await sleep(2500)
+      const pc = issue(arg, JSON.parse(process.argv[4] || '{}'), { execMs: 30000 })
+      await exec(pc)
+      const pr = await waitResult(pc.ackId, 35000)
+      console.log(JSON.stringify(pr && { ...pr, image: pr.image ? `${pr.image.length} chars` : undefined }, null, 1))
+      await evaluate(`Capacitor.Plugins.LiveIsland.reset()`).catch(() => null)
+    }
+    else if (cmd === 't2') {
+      // 只跑 T2 屏幕块(T1 用例已多次全绿;T1 里的 uiautomator 每调一次都会让伴随包服务重连一次)
+      adb('reverse', `tcp:${ENGINE_PORT}`, `tcp:${ENGINE_PORT}`)
+      launchForsion(); await sleep(5000)
+      await setToken(TOKEN); await sleep(800)
+      // ⚠️ 模拟真实 run:灵动岛 dataSync 前台服务在,Forsion 退到后台(台架去开「设置」)才不被冻结 / 断网。
+      //    09-26 实测没有它:后台 ~1 分钟后 claim / result 全是 UnknownHostException(进程网络被系统掐了),T2 全线无回执。契约 §7。
+      await evaluate(`Capacitor.Plugins.LiveIsland.show({ title: 'emu t2', text: 'x', chip: '', since: Date.now(), sessionId: 's', channelName: 'c', more: 0 })`)
+      // 预热:模拟器冷启动后网络栈要一两分钟才就绪(09-26 实测前 ~90s claim 全是 UnknownHostException,浮层根本不会弹)。
+      // 先用一条 T1 volume 往返确认 claim 链路通了,再进要人点的 T2 块。
+      let warm = null
+      for (const t0 = Date.now(); !warm && Date.now() - t0 < 180000;) {
+        const w = issue('volume', { dir: 'up' }); await exec(w)
+        const wr = await waitResult(w.ackId, 8000)
+        if (wr && wr.ok) warm = wr; else await sleep(3000)
+      }
+      check('warm-up: claim path reachable (T1 volume round-trip)', !!warm, warm)
+      const st = await evaluate(`${PC}.status()`)
+      check('precondition: phone control on, hands ready, phone.ui declared', st && st.enabled && st.hands === 'ready' && (st.capabilities || []).includes('phone.ui'), st)
+      if (st && st.hands === 'ready') await runT2()
+      await evaluate(`Capacitor.Plugins.LiveIsland.reset()`).catch(() => null)
+    }
     else await runCases()
   } catch (e) {
     check('harness', false, e.message)

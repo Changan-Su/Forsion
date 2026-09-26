@@ -209,8 +209,20 @@ dataSync 前台服务**(`LiveIslandService`,有 run 在跑时由 `mobile/src/liv
   确认框挂着时另一条指令的 claim / 排队 / 排队超期(假引擎的 `commitDelayMs` 旋钮)。
   T2 屏幕操作类用例要先由用户手动开启伴随包的无障碍服务(系统安全设置,台架不代劳),否则记 SKIP;其中含药丸非模态
   (药丸外的点按与返回键到达下层 App)、往按钮里 type → `invalid_args`、后台 launch 委托、两步之间点停止 → abort 且租约作废。
+  - `node scripts/phone-control-emu.cjs t2`:只跑 T2 屏幕块(先 T1 volume 往返预热 claim 链路)。**租约浮层上的「允许」由人在
+    模拟器窗口里点**(台架打印提示后等待,并截图留证),其余全自动;拒绝 / 停止 / 换号重问这类授权行为用例要多点几次,
+    `CONSENT_TESTS=1` 才跑(逻辑已由 JUnit 覆盖)。`probe <op> '<args>'`:单条探测、打印完整回执(需已有租约)。
+  - ⚠️ T2 块里**不许用 uiautomator**:它连 UiAutomation(flags=0)时系统挂起其他无障碍服务,伴随包当场销毁、租约与浮层一起没
+    (09-26 实测 logcat「accessibility service destroyed」)。屏幕上的坐标一律取自伴随包自己的 observation。
+  - ⚠️ 台架里 Forsion 退到后台时必须有灵动岛前台服务(t2 / probe 模式会先在前台拉起它):否则约 1 分钟后进程被掐网,
+    claim / result 全是 `UnknownHostException`(§7 的同一条依赖)。前台服务只能在前台起(Android 12+)。
+  - 卸载伴随包会把它从 `enabled_accessibility_services` 里摘掉:无障碍开着时卸载 / 换签名用例默认不跑(`DESTRUCTIVE=1`)。
+  - 09-26 模拟器 API 35 真屏幕 15/15:租约同意、observe 树、截图、点按、按句柄输入、滚动、按键、非输入框 type 拒、
+    无焦点 type 拒、过期句柄、Forsion 自身 `protected_app`、后台 launch 委托、熄屏 `locked`、药丸非模态。
+    `commit_target` 未在真屏幕上测到(模拟器无 SIM / 未登录,拿不到稳定的「发送」按钮),由 `TapGuardTest` / `PolicyTest` 与 live 假手机覆盖。
 - 伴随包 JVM 单测:`cd mobile/android && ./gradlew :hands:testDebugUnitTest :app:testDebugUnitTest`
-  (`TreeSerializerTest` / `TapGuardTest` / `PolicyTest` / `OverlayTest` / `HandsVerbsTest` / `PhoneVerbsTest`)。
+  (`TreeSerializerTest` / `TapGuardTest` / `PolicyTest` / `OverlayTest` / `HandsVerbsTest` / `PhoneVerbsTest`;
+  `ServiceConfigTest` 钉住无障碍配置里的 `canPerformGestures` 等能力声明 —— 漏了它手势全部静默失效)。
 
 ## 9. T2:屏幕操作(`phone.ui`,伴随包无障碍)
 
