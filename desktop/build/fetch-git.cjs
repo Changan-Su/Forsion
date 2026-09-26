@@ -110,6 +110,11 @@ function smokeGit(root, platformName = process.platform) {
     must(['add', 'gate.txt'], repo);
     must(['-c', 'user.name=gate', '-c', 'user.email=gate@forsion.invalid', 'commit', '-q', '-m', 'gate'], repo);
     if (!must(['log', '--oneline'], repo).stdout.includes('gate')) throw new Error('[git-gate] commit 后 log 里没有它');
+    if (platformName !== 'win32') {
+      // 包装脚本:相对路径调用 + CDPATH(旧版 cd 会把目录打印进 d,git 起不来)
+      const rel = spawnSync(path.join('bin', 'git'), ['--version'], { cwd: path.resolve(root), env: { ...env, CDPATH: '/usr' }, encoding: 'utf8', timeout: 60_000 });
+      if (rel.status !== 0) throw new Error(`[git-gate] 相对路径 + CDPATH 调用失败: ${(rel.stderr || rel.error?.message || '').trim()}`);
+    }
     const remote = git(['ls-remote', 'https://127.0.0.1:9/gate.git']);
     if (!/unable to access/i.test(remote.stderr)) throw new Error(`[git-gate] https 远程助手不在位: ${remote.stderr.trim()}`);
     console.log(`[git-gate] ${version} ✓ (init/commit/https helper)`);

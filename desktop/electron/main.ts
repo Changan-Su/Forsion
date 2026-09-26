@@ -249,11 +249,12 @@ function programExists(prog: string): Promise<boolean> {
   })
 }
 
-function probeVersion(cmd: string, args: string[]): Promise<string | null> {
+function probeVersion(cmd: string, args: string[], shell = process.platform === 'win32'): Promise<string | null> {
   return new Promise((resolve) => {
     // Windows:npm/docker/python 等多为 .cmd/.bat shim,execFile 不带 shell 无法执行(npm 根本没有 npm.exe)→ 一律
     // 误判「未装」。shell:true 交 cmd.exe 解析。args 全为硬编码常量(--version 等),无注入面。windowsHide 免弹窗。
-    const p = execFile(cmd, args, { timeout: 8000, env: envWithFullPath(), shell: process.platform === 'win32', windowsHide: true }, (err, stdout, stderr) => {
+    // 已知是 .exe 的绝对路径传 shell=false:cmd.exe 拼串会拆开带空格的安装路径、展开路径里的 %VAR%。
+    const p = execFile(cmd, args, { timeout: 8000, env: envWithFullPath(), shell, windowsHide: true }, (err, stdout, stderr) => {
       if (err) return resolve(null)
       resolve(String(stdout || stderr).trim().split('\n')[0].slice(0, 80) || '(ok)')
     })
@@ -323,8 +324,8 @@ async function runEnvCheck(): Promise<EnvProbe[]> {
   const gitRt = resolveBundledGit()
   const gitIdx = out.findIndex((o) => o.tool === 'git')
   if (gitRt && gitIdx >= 0 && !out[gitIdx].found) {
-    // Windows 下 probeVersion 走 cmd.exe 拼串:装在 Program Files 这类带空格的路径里,不加引号会被拆开
-    const v = await probeVersion(process.platform === 'win32' ? `"${gitRt.gitBin}"` : gitRt.gitBin, ['--version'])
+    // 不走 shell:Windows 上它是确定的 git.exe,mac 上是带 shebang 的包装脚本,都能直接 execFile
+    const v = await probeVersion(gitRt.gitBin, ['--version'], false)
     if (v) out[gitIdx] = { tool: 'git', found: true, version: `${v} · bundled`, installId: null, installCommand: null, downloadUrl: null }
   }
   // tangu CLI:App 启动时自装的终端命令(report-only,无安装按钮——ensureCliInstalled 每次启动自愈)。

@@ -4,10 +4,10 @@
  * —— 探测补了 PATH,托管引擎 spawn 没补。dev 从终端起继承完整 PATH,复现不出来。
  */
 import { afterEach, beforeEach, describe, it, expect } from 'vitest'
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { appendUserBinDirs, composeEnginePath, darwinPathGitWorks, userBinDirs, withBundledGit } from './envPath'
+import { appendUserBinDirs, composeEnginePath, darwinPathGitWorks, darwinShimTargets, userBinDirs, withBundledGit } from './envPath'
 
 const GUI_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(delimiter) // GUI 启动的 mac app 实拿到的那份
 
@@ -57,6 +57,19 @@ describe('withBundledGit 只兜底、不抢用户的 git', () => {
   it('没有内置 git(Linux / 降级):原样返回', () => {
     expect(withBundledGit(GUI_PATH, [], 'darwin', broken)).toBe(GUI_PATH)
   })
+
+  // 缺省接线(不注入判定)。两条都与本机装没装 CLT 无关:PATH 里第一份 git 是个真文件 / PATH 上一份都没有。
+  it('缺省判定:PATH 先命中真 git 不挂;一份都没有就前置', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wired-git-'))
+    const empty = mkdtempSync(join(tmpdir(), 'wired-nogit-'))
+    try {
+      writeFileSync(join(dir, 'git'), '#!/bin/sh\n'); chmodSync(join(dir, 'git'), 0o755)
+      expect(withBundledGit([dir, GUI_PATH].join(delimiter), ['/res/git/bin'], 'darwin')).toBe([dir, GUI_PATH].join(delimiter))
+      expect(withBundledGit(empty, ['/res/git/bin'], 'darwin')).toBe(['/res/git/bin', empty].join(delimiter))
+    } finally {
+      rmSync(dir, { recursive: true, force: true }); rmSync(empty, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('darwinPathGitWorks 看 PATH 实际命中的那份', () => {
@@ -77,8 +90,22 @@ describe('darwinPathGitWorks 看 PATH 实际命中的那份', () => {
   })
 
   // Homebrew 有 git、没装 CLT:PATH 先命中 /usr/bin/git shim。旧判定「机器上有真 git 就不挂」在这里会弹框(Codex 评审 P1)。
-  it.runIf(existsSync('/usr/bin/git'))('先命中 /usr/bin/git 时只看 CLT / Xcode,排在后面的真 git 不算', () => {
+  it.runIf(existsSync('/usr/bin/git'))('先命中 /usr/bin/git 时只看它转去的那份,排在后面的真 git 不算', () => {
     expect(darwinPathGitWorks(['/usr/bin', dir].join(delimiter), [])).toBe(false)
     expect(darwinPathGitWorks(['/usr/bin', dir].join(delimiter), [join(dir, 'git')])).toBe(true)
+  })
+
+  it.runIf(existsSync('/usr/bin/git'))('软链到 /usr/bin/git 的也算 shim(~/bin/git -> /usr/bin/git)', () => {
+    const links = mkdtempSync(join(tmpdir(), 'path-gitlink-'))
+    try {
+      symlinkSync('/usr/bin/git', join(links, 'git'))
+      expect(darwinPathGitWorks(links, [])).toBe(false)
+    } finally { rmSync(links, { recursive: true, force: true }) }
+  })
+})
+
+describe('darwinShimTargets 跟着开发者目录走', () => {
+  it('DEVELOPER_DIR 优先:指到哪就只认那里的 git(失效目录 → shim 跑不起来)', () => {
+    expect(darwinShimTargets({ DEVELOPER_DIR: '/nonexistent' })).toEqual(['/nonexistent/usr/bin/git'])
   })
 })

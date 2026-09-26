@@ -8,9 +8,9 @@
  * 因为探测(main.ts `env:check`)补了 PATH,托管引擎 spawn(backendManager)没补,
  * agent 的 run_bash 继承的就是没补的那份。补全逻辑集中在这里,三处共用一份清单。
  */
-import { accessSync, constants as fsConstants, existsSync, statSync } from 'node:fs'
+import { accessSync, constants as fsConstants, existsSync, readlinkSync, realpathSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { delimiter, dirname, join, resolve } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 
 /** 用户态包管理器/版本管理器最常见的安装位置(存在才补)。 */
 export function userBinDirs(): string[] {
@@ -66,9 +66,8 @@ export function composeEnginePath(base: string, pythonDirs: string[], nodeDirs: 
   return [...pythonDirs, appendUserBinDirs(base), ...nodeDirs].filter(Boolean).join(delimiter)
 }
 
-/** Apple 的 /usr/bin/git shim 背后真正的 git:装了 CLT 或 Xcode 才有,shim 才不弹「安装开发者工具」。
- *  ponytail: 只认默认安装位置;xcode-select 指到别处(Xcode-beta.app)时判成没有 → 多挂一份内置 git,照样能用。 */
-const DARWIN_DEVTOOLS_GIT = ['/Library/Developer/CommandLineTools/usr/bin/git', '/Applications/Xcode.app/Contents/Developer/usr/bin/git']
+/** 没选过开发者目录时 xcrun 的缺省查找:Xcode.app → CLT。 */
+const DARWIN_DEVTOOLS_GIT = ['/Applications/Xcode.app/Contents/Developer/usr/bin/git', '/Library/Developer/CommandLineTools/usr/bin/git']
 
 function isExecutableFile(file: string): boolean {
   try {
@@ -78,12 +77,24 @@ function isExecutableFile(file: string): boolean {
   } catch { return false }
 }
 
-/** darwin:按 PATH 查 `git` **实际会命中**的那份能不能用。命中 /usr/bin/git(shim)时看 CLT / Xcode 在不在;
- *  光问「机器上有没有真 git」不够 —— Homebrew 的 git 排在 /usr/bin 后面,run_bash 里照样先撞上 shim。 */
-export function darwinPathGitWorks(pathValue: string, devToolsGit: string[] = DARWIN_DEVTOOLS_GIT): boolean {
+const readlinkOrNull = (file: string): string | null => { try { return readlinkSync(file) } catch { return null } }
+
+/** Apple 的 /usr/bin/git shim 实际会转去的 git:DEVELOPER_DIR > `xcode-select -s` 选中的目录(新旧两代系统
+ *  各存一处)> 缺省位置。只读链接、不起 xcode-select 子进程。 */
+export function darwinShimTargets(env: NodeJS.ProcessEnv = process.env): string[] {
+  const selected = env.DEVELOPER_DIR || ['/var/select/developer_dir', '/var/db/xcode_select_link'].map(readlinkOrNull).find(Boolean)
+  return selected ? [join(selected, 'usr', 'bin', 'git')] : DARWIN_DEVTOOLS_GIT
+}
+
+/** darwin:按 PATH 查 `git` **实际会命中**的那份能不能用。命中的是 /usr/bin/git shim(含软链到它的)时,
+ *  看它转去的那份在不在 —— 光问「机器上有没有真 git」不够:Homebrew 的 git 排在 /usr/bin 后面,
+ *  run_bash 里照样先撞上 shim 弹「安装开发者工具」。 */
+export function darwinPathGitWorks(pathValue: string, shimTargets: string[] = darwinShimTargets()): boolean {
   const hit = pathValue.split(delimiter).filter(Boolean).map((dir) => join(dir, 'git')).find(isExecutableFile)
   if (!hit) return false
-  return resolve(dirname(hit)) !== '/usr/bin' || devToolsGit.some(isExecutableFile)
+  let real = hit
+  try { real = realpathSync(hit) } catch { /* 刚查到又没了:按原路径判 */ }
+  return dirname(real) !== '/usr/bin' || shimTargets.some(isExecutableFile)
 }
 
 /**
