@@ -84,6 +84,14 @@ export function resolveBundledNode(): { pathDirs: string[]; nodeBin: string; npm
   return existsSync(bin) ? { pathDirs: [join(dir, 'bin')], nodeBin: bin, npmBin: join(dir, 'bin', 'npm') } : null
 }
 
+/** 随包 LibreOffice 转换引擎(build/fetch-office.cjs)的入口模块;打包=resources/office,
+ *  dev=desktop/build/office(`npm run fetch-office` 后才有)。布局与 fetch-office.cjs 的 kitEntry 一致。 */
+export function resolveOfficeKit(): string | null {
+  const root = app.isPackaged ? join(process.resourcesPath, 'office') : join(__dirname, '..', '..', 'build', 'office')
+  const entry = join(root, 'node_modules', '@deepseek-ai', 'libreoffice-kit', 'lib', 'index.js')
+  return existsSync(entry) ? entry : null
+}
+
 export interface BackendStatus {
   state: BackendState
   url: string | null
@@ -285,6 +293,9 @@ export class BackendManager {
         //   等真有人报再做。
         if (!env.PYTHONPYCACHEPREFIX) env.PYTHONPYCACHEPREFIX = join(forsionHomeDir(), 'pycache')
       }
+      // read_document 先用它把 docx/xlsx/pptx 转 PDF 再按真页读;不设 = 走原来的系统 LibreOffice/纯文本兜底。
+      const officeKit = resolveOfficeKit()
+      if (officeKit) env.TANGU_OFFICE_KIT = officeKit
 
       // 中国大陆镜像(可逆:仅注入子进程 env,不改用户全局 dotfile;关掉即恢复直连)。pip/npm/git 子进程继承之。
       if (s.mirror === 'china') {

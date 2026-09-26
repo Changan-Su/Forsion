@@ -87,4 +87,56 @@ exports.default = async function afterPack(context) {
     execFileSync('codesign', ['--force', '--deep', '--sign', '-', appPath], { stdio: 'inherit' });
     console.log('[afterPack] ad-hoc 签名完成');
   }
+
+  // ⑤ 随包 LibreOffice 转换引擎闸:用**打包出来的 app 本体**(ELECTRON_RUN_AS_NODE —— 引擎就跑在它上面;
+  //    CI 的 setup-node 是 20,够不上 kit 要的 ≥22.19)把现写的最小 docx 真转成 PDF。放在 ② 签名之后:
+  //    --deep 会重签 Resources 里嵌套的 LibreOfficeDev.app,要验的是签完的样子。
+  //    ⚠️ 验不到:Windows 的 VC++ 运行库是否真走 app-local(runner 自带 VC++);这里只能查 DLL 在位。
+  if (product.agentBackend) {
+    const { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } = require('fs');
+    const { kitEntry, enginePackage, VC_DLLS } = require('./fetch-office.cjs');
+    const officeRoot = path.join(resourcesDir(), 'office');
+    if (existsSync(path.join(__dirname, 'office', '.skipped'))) {
+      console.log('[afterPack] LibreOffice 转换引擎已跳过(.skipped)→ 跳过转换检查');
+    } else {
+      if (electronPlatformName === 'win32') {
+        const bin = path.join(officeRoot, 'node_modules', '@deepseek-ai', enginePackage('win32', require('electron-builder').Arch[arch]), 'bin');
+        for (const dll of VC_DLLS) if (!existsSync(path.join(bin, dll))) throw new Error(`[afterPack] 随包 LibreOffice 缺 app-local ${dll}`);
+      }
+      const name = packager.appInfo.productFilename;
+      const exe = electronPlatformName === 'darwin' ? path.join(appOutDir, `${name}.app`, 'Contents', 'MacOS', name)
+        : electronPlatformName === 'win32' ? path.join(appOutDir, `${name}.exe`)
+          : path.join(appOutDir, packager.executableName);
+      const tmp = mkdtempSync(path.join(require('os').tmpdir(), 'forsion-office-gate-'));
+      try {
+        const script = path.join(tmp, 'gate.mjs');
+        writeFileSync(script, OFFICE_GATE);
+        execFileSync(exe, [script, kitEntry(officeRoot), path.join(tmp, 'gate.docx'), path.join(tmp, 'gate.pdf')],
+          { stdio: 'inherit', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, timeout: 600_000 });
+        const pdf = readFileSync(path.join(tmp, 'gate.pdf'));
+        if (pdf.length < 1000 || pdf.subarray(0, 5).toString() !== '%PDF-') throw new Error(`[afterPack] 随包 LibreOffice 产出的不是 PDF(${pdf.length} B)`);
+        console.log(`[afterPack] 随包 LibreOffice 转换 docx→PDF ✓ (${pdf.length} B)`);
+      } finally {
+        rmSync(tmp, { recursive: true, force: true });
+      }
+    }
+  }
 };
+
+/** ⑤ 的检查脚本:用 kit 自带的 fflate 现拼一份最小 docx(不依赖内置 Python 是否降级),再让 kit 转 PDF。 */
+const OFFICE_GATE = `import { createRequire } from 'node:module';
+import { writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
+const [entry, docx, pdf] = process.argv.slice(2);
+const { zipSync, strToU8 } = createRequire(entry)('fflate');
+const xml = (s) => strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' + s);
+writeFileSync(docx, zipSync({
+  '[Content_Types].xml': xml('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+  '_rels/.rels': xml('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+  'word/document.xml': xml('<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Forsion office gate 办公引擎检查</w:t></w:r></w:p></w:body></w:document>'),
+}));
+const { createConverter } = await import(pathToFileURL(entry).href);
+const converter = await createConverter({ timeoutMs: 300000 });
+try { console.log('[office-gate] backend=' + (await converter.render({ inputPath: docx, outputPath: pdf })).backend); }
+finally { await converter.dispose(); }
+`;
