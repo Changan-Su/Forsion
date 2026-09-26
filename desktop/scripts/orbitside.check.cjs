@@ -74,12 +74,16 @@ const AVATAR_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAA
 
 /** 本地 agent 名册(桩引擎 /agent/agents 的返回;字段照 chat-layout 的先例用驼峰)。
  *  第三个刻意不给 avatar:首字兜底圆底也要落在同一个 30×30 槽里。 */
-// libraryDir:本地 agent 才有(引擎 listAgents 补的);没有它 = 云端定义 = 不能开私聊,OrbitsView 不列(§3.4 host 闸)。夹具照本地形状给。
+// libraryDir:本地 agent 才有(引擎 listAgents 补的);没有它 = 云端定义(web 的 /agent/agents 就长这样)= 开不了私聊,
+// OrbitsView 照样列出、点击改为「用它开新对话」(09-27;此前整行不列,web 看不到默认 Agent)。Cloud One 照云端形状给。
 const AGENTS = [
   { slug: 'xyra', name: 'Xyra', description: 'General assistant', createdBy: 'user', avatar: 'avatar.png', libraryDir: '/tmp/orbit-lib/xyra/Library' },
   { slug: 'orbit-one', name: 'Orbit One', description: 'Orbitside instrument agent', createdBy: 'user', avatar: 'avatar.png', libraryDir: '/tmp/orbit-lib/orbit-one/Library' },
   { slug: 'orbit-two', name: 'Orbit Two', description: 'Orbitside instrument agent (no avatar)', createdBy: 'user', libraryDir: '/tmp/orbit-lib/orbit-two/Library' },
+  { slug: 'cloud-one', name: 'Cloud One', description: 'Cloud-shaped agent (no libraryDir)', createdBy: 'user' },
 ]
+/** 前端打过的私聊端点(3h:云端 agent 行点击不许走这里)。 */
+const SOLO_HITS = []
 /** 私聊 open 端点的夹具回应(桩引擎没有 /agent/solo 路由;由 startFront 代理答):点私聊行 → 拿到 orb-s1 这条会话。main() 里赋值。 */
 let SOLO_OPEN_RESPONSE = null
 
@@ -120,6 +124,7 @@ function startFront(stubUrl) {
       return
     }
     // 私聊 open:让「点私聊行 → sessionNav.openSolo → store.ensureSoloSession → openSession」整条真链路跑通(生产构建没有 __forsionStore)。
+    if (p.startsWith('/agent/solo/')) SOLO_HITS.push(p)
     if (p === '/agent/solo/agent/xyra/open' && req.method === 'POST' && SOLO_OPEN_RESPONSE) {
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify(SOLO_OPEN_RESPONSE))
@@ -409,6 +414,15 @@ async function run(app, win) {
     JSON.stringify({ foundRootless, rootlessVisible: afterOrbitOpen.visible }))
   check('3g 纯点击独立 Agent 不改变一级活动排序', JSON.stringify(afterOrbitOpen.level1) === JSON.stringify(orderBeforeOrbitOpen),
     JSON.stringify({ before: orderBeforeOrbitOpen, after: afterOrbitOpen.level1 }))
+  // ── 3h 云端形状 agent:照样列出,点击 = 用它开新对话(选中该 Agent),不打私聊端点(09-27)──
+  const soloBefore = SOLO_HITS.length
+  const cloudRows = await win.locator('.t2o .t2o-row', { hasText: 'Cloud One' }).count()
+  if (cloudRows) await win.locator('.t2o .t2o-row', { hasText: 'Cloud One' }).first().click()
+  await sleep(600)
+  const pickedPills = await win.locator('.agent-pill.selected').allTextContents()
+  check('3h 云端 agent(无 libraryDir)行在场;点击开新对话并选中它,不打 /agent/solo',
+    cloudRows === 1 && SOLO_HITS.length === soloBefore && pickedPills.some((x) => x.includes('Cloud One')),
+    JSON.stringify({ cloudRows, solo: SOLO_HITS.slice(soloBefore), pickedPills }))
   await win.locator('.t2o .t2s-srow', { hasText: '项目会话一' }).first().click().catch(() => {})
   await sleep(600)
 
