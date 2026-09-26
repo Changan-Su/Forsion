@@ -83,7 +83,7 @@ describe('read_document × 随包 LibreOffice 转换引擎', () => {
     await fs.rm(path.join(path.dirname(cwd), 'calls.json'));
     await HOST_TOOLS.read_document.execute({ path: 'broken.xlsx' }, ctx);
     expect(existsSync(path.join(path.dirname(cwd), 'calls.json'))).toBe(true);
-  });
+  }, 30_000); // 装了系统 LibreOffice 的机器上两次回落都真跑 soffice(各 ~2.5s),全量并发下会过默认 5s
 
   it('取消 / 超时打断转换 → 直接结束,不再起回落解析', async () => {
     const { cwd, ctx } = await fixture('throw');
