@@ -505,8 +505,15 @@ async function main() {
     // 三种 reason 各来一张卡,一次断完:custom-ask 要报出**命中的规则串**,escalate 与 custom-ask
     // 还必须**藏掉「总允许」**——引擎对这两种情形是静默降级为单次批准的(approvals.ts 明写),
     // 按钮照常显示就又是一处「界面说一套引擎做一套」。
+    // D9(09-25 复审):长单行 + 挂在行尾的大段空白,软换行后能把 `rm -rf` 推出命令框可见区 —— 框须按真实高度撑开,
+    // 并提示「一大段空白」、摆出引擎净化过的预览([N spaces])。排最前,不挪动 D1-D5 取的末三张。
+    const SNEAKY = `echo ok${' '.repeat(200)}&& echo "cleanup finished"${' '.repeat(200)}&& rm -rf ~/Documents`
     stub.script([
       // 排最前:D1-D5 取的是末三张;这张只给 D6-D8(长 diff 撑破 .approval-diff 的 320px 滚动盒)
+      { type: 'approval_request', payload: {
+        approvalId: 'a9', name: 'run_bash', arguments: JSON.stringify({ command: SNEAKY }),
+        preview: '$ echo ok [200 spaces]&& echo "cleanup finished" [200 spaces]&& rm -rf ~/Documents', reason: { kind: 'mode', mode: 'auto-edit' },
+      } },
       { type: 'approval_request', payload: {
         approvalId: 'a0', name: 'write_file',
         arguments: JSON.stringify({ path: '/tmp/demo/tall.txt', content: Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join('\n') }),
@@ -573,6 +580,21 @@ async function main() {
     await win.waitForTimeout(500)
     check('D8 真鼠标点得到「批准」且送达引擎', stub.seen.approvals.some((a) => a.approvalId === 'a0' && a.action === 'approve'),
       JSON.stringify(stub.seen.approvals))
+    const sneaky = win.locator('.approval-card', { hasText: '[200 spaces]' }).first()
+    await sneaky.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' })).catch(() => {})
+    await win.waitForTimeout(300)
+    const sn = await sneaky.evaluate((card) => {
+      const ta = card.querySelector('textarea.approval-edit')
+      return {
+        why: [...card.querySelectorAll('.approval-why')].map((w) => w.textContent || '').join(' | ').trim(), // 档位理由一行 + 可疑提示另起一块
+        preview: (card.querySelector('.approval-preview')?.textContent || '').trim(),
+        fits: !!ta && ta.scrollHeight <= ta.clientHeight + 2, sh: ta?.scrollHeight, ch: ta?.clientHeight,
+      }
+    }).catch((e) => ({ err: String(e) }))
+    check('D9 ⚠️长单行 + 大段空白:命令框整段可见(或提示没显示完)、提示「一大段空白」、摆出标过空白的预览',
+      (sn.fits || /没显示完|too long to show/.test(sn.why || '')) && /一大段空白|long run of blank/.test(sn.why || '') && /\[200 spaces\]&& rm -rf ~\/Documents/.test(sn.preview || ''),
+      JSON.stringify(sn))
+    await sneaky.screenshot({ path: process.env.APPROVAL_BASH_SHOT || '/tmp/approval-bash-wideblank.png' }).catch(() => {})
 
     // ── 场景 E:custom 规则编辑器(H2)。此前这套规则只能手写 config.json。
     // 钉三件:入口只在选了 custom 时出现 / 打开时把服务端已有规则读进来 / 保存发出的 PUT 是编辑后的内容。
