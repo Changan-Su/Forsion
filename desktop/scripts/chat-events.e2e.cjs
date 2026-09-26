@@ -14,6 +14,7 @@ const os = require('os')
 const path = require('path')
 const { _electron: electron } = require('playwright-core')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
+const { enterSpace } = require('./lib/uiux-electron.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const results = []
@@ -92,12 +93,28 @@ async function main() {
     }
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
     await win.waitForTimeout(1200)
-    if (!(await win.locator('.t2s-mode').first().count().catch(() => 0))) {
+    // 打开那个会话(侧栏行)。启动缺省是 Home Space(没有会话侧栏):先切 Tangu Space、侧栏切会话列表(同 chat-runstats)。
+    // ⚠️ 找不到行必须抛错:点空了 send() 会从主页输入框隐式新建云端 sandbox 会话 —— A–D 照绿,
+    //    E 段(审批档与「编辑规则…」只对 host 会话出)整片假红(09-27 E1/E2 就是这么红的)。
+    await enterSpace(win, 'tangu')
+    await win.waitForTimeout(1200)
+    if (!(await win.locator('.t2s-search input').first().count().catch(() => 0))) {
       await win.click('.dv-edge-left').catch(() => {})
       await win.waitForTimeout(700)
     }
-    // 打开那个会话(侧栏行)
-    await win.locator('.t2s-srow', { hasText: '端到端会话' }).first().click().catch(() => {})
+    const picker = win.locator('.t2sw-mode-picker').first()
+    if (await picker.count().catch(() => 0)) {
+      await picker.locator('.t2sw-mode-trigger').click().catch(() => {})
+      await picker.locator('[data-workspace-mode="sessions"]').click().catch(() => {})
+      await win.waitForTimeout(1000)
+    }
+    const row = win.locator('.t2s-srow', { hasText: '端到端会话' }).first()
+    if (!(await row.count().catch(() => 0))) {
+      const shot = path.join(os.tmpdir(), 'forsion-chatev-nav-fail.png')
+      await win.screenshot({ path: shot }).catch(() => {})
+      throw new Error(`没找到会话行「端到端会话」;截图 ${shot}`)
+    }
+    await row.click()
     await win.waitForTimeout(1200)
 
     // ── 场景 A:工具卡 diff(P1)+ 成本闸(H3)+ 自动压缩(H4)+ 上下文分解(H5/H8/B2)+ 思考降档(H6)
