@@ -19,7 +19,8 @@ export interface UiActionRecord {
   id?: string
   /** run_ui_command 的参数,JSON 截到 200 字符(可能含笔记路径,够定位就行)。 */
   args?: string
-  /** 被哪道闸拦掉(no-ackId / not-owner / duplicate / stopped / exception);为空 = 执行了。 */
+  /** 被哪道闸拦掉(no-ackId / not-owner / duplicate / stopped / exception;client_cmd 另有 invalid / no-surface);
+   *  为空 = 执行了。kind='client' 的条目 id=能力面 ns,**不记 body**(可能含短信正文)。 */
   drop?: string
   ok?: boolean
   error?: string

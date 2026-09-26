@@ -22,6 +22,7 @@ import { recordError } from '@/diag'
 import { installSpaceShortcuts } from './spaceShortcuts'
 import { installUnitsEntry } from './UnitsSheet'
 import { installLiveIsland } from './liveIsland'
+import { installPhoneControl } from './phoneControl'
 
 window.addEventListener('error', (e) => { console.error('[tangu-mobile] window error:', e.error || e.message) })
 window.addEventListener('unhandledrejection', (e) => { console.error('[tangu-mobile] unhandledrejection:', e.reason) })
@@ -61,6 +62,8 @@ try {
   installUnitsEntry()
   // 灵动岛:agent 在跑时把进度 / 待审批贴到各家的岛上(Android 16 Live Updates),点岛回到那个会话。
   installLiveIsland()
+  // 手机操控(T1):把原生 PhoneControl 登记成 client surface `phone`(设置行 + startRun 的能力声明)。
+  installPhoneControl()
 } catch (err) {
   console.error('[tangu-mobile] init failed, continue to mount:', err)
   recordError('init', err) // 同 desktop main.tsx:被 catch 吞掉的启动错误不派发 window 'error'

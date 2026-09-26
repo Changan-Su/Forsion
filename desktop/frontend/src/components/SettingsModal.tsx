@@ -15,6 +15,7 @@ import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeFor
 import { UI_MODE, UI_ZOOM_EVENT, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式
 import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
+import { listClientSurfaces } from '../services/clientSurfaces'
 import {
   fetchProviderModels,
   listModels, listTools, setModelContextWindow,
@@ -3076,6 +3077,9 @@ export const SettingsModal: React.FC<{
                         />
                       )}
                     />
+                    {/* 客户端能力面自带的设置行(手机操控等,见 services/clientSurfaces.ts):数据驱动,
+                        desktop/web 没注册就什么都不出,这里不写任何平台判断。 */}
+                    {listClientSurfaces().map(({ ns, surface: { SettingsRow: Row } }) => Row && <Row key={ns} />)}
                   </>
                 )}
 

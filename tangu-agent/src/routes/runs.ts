@@ -122,6 +122,61 @@ export function normalizeUiSettings(v: unknown): Record<string, { value: string;
   return out;
 }
 
+/**
+ * 客户端能力握手(手机操控,契约 tangu-agent/docs/phone-control.md §2):发起端自报它的原生层能执行哪些动作族。
+ * 信任边界:值来自客户端,决定哪些 `clientCapability` 工具进模型的工具面(toolRegistry 中央闸)。
+ * 数组、≤16 项、每项 `<ns>.<name>`、去重、排序;不合法项静默丢弃(老客户端多送 / 新客户端多送都不该起不了 run)。
+ * 缺席或全被丢弃 → undefined(不落 input)。
+ */
+const CLIENT_CAP_RE = /^[a-z][a-z0-9-]{0,23}\.[a-z0-9-]{1,16}$/;
+const MAX_CLIENT_CAPS = 16;
+export function normalizeClientCapabilities(v: unknown): string[] | undefined {
+  if (!Array.isArray(v)) return undefined;
+  const out = new Set<string>();
+  for (const x of v.slice(0, MAX_CLIENT_CAPS)) if (typeof x === 'string' && CLIENT_CAP_RE.test(x)) out.add(x);
+  return out.size ? [...out].sort() : undefined;
+}
+
+/**
+ * 多行文本消毒(客户端动作回执的 text:候选列表 / 以后 T2 的屏幕树,**要保留换行**)。
+ * 与 sanitizeText 同一份危险字符集(控制字符 + 零宽 + bidi 覆写),只放过 \n 与 \t;\r 统一成 \n。
+ * 剥掉而不是换空格:这里不折叠空白,换空格会把对齐的行弄乱。
+ */
+export function sanitizeMultilineText(v: string, max: number): string {
+  return v
+    .replace(/\r\n?/g, '\n')
+    .replace(/[\u0000-\u0008\u000B-\u001F\u007F\u200B-\u200F\u2028\u2029\u202A-\u202E\u2066-\u2069]/g, '')
+    .slice(0, max);
+}
+
+const CLIENT_RESULT_CODE_RE = /^[a-z_]{1,32}$/;
+const CLIENT_RESULT_IMAGE_RE = /^data:image\/(jpeg|png);base64,[A-Za-z0-9+/]+={0,2}$/;
+const MAX_CLIENT_RESULT_TEXT = 48_000;
+const MAX_CLIENT_RESULT_IMAGE = 2.5 * 1024 * 1024;
+
+/**
+ * 客户端动作回执(inquiries 路由 cc_ 分支 phase:'result')的消毒,契约 §3.3。回执会被工具格式化后**进模型上下文**,
+ * 而发它的是手机上的原生层 —— 内容里可能有别的 App 自己取的名字(候选列表)。所以每个字段按类型收、按长度截,
+ * 不合规的字段直接丢(ok 除外:只有字面量 true 才算成功)。
+ */
+export function normalizeClientResult(b: Record<string, unknown>): import('../tools/toolTypes.js').ClientActionResult {
+  const text = (k: string, max: number, multi = false): string | undefined => {
+    const v = b[k];
+    if (typeof v !== 'string') return undefined;
+    const s = multi ? sanitizeMultilineText(v, max) : sanitizeText(v, max);
+    return s || undefined;
+  };
+  const out: import('../tools/toolTypes.js').ClientActionResult = { ok: b.ok === true };
+  if (typeof b.code === 'string' && CLIENT_RESULT_CODE_RE.test(b.code)) out.code = b.code;
+  const error = text('error', 500); if (error) out.error = error;
+  const t = text('text', MAX_CLIENT_RESULT_TEXT, true); if (t) out.text = t;
+  const app = text('app', 80); if (app) out.app = app;
+  if (typeof b.image === 'string' && b.image.length <= MAX_CLIENT_RESULT_IMAGE && CLIENT_RESULT_IMAGE_RE.test(b.image)) out.image = b.image;
+  if (typeof b.handoff === 'boolean') out.handoff = b.handoff;
+  if (typeof b.verified === 'boolean') out.verified = b.verified;
+  return out;
+}
+
 /** 界面动作回执里的设置新值(key → value):键/条数/长度与 normalizeUiSettings 同一套上限;值域不收(run 内不变)。 */
 export function normalizeUiValues(v: unknown): Record<string, string> | undefined {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
@@ -137,7 +192,7 @@ export function normalizeUiValues(v: unknown): Record<string, string> | undefine
 router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
-    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings } = req.body || {};
+    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings, client_capabilities } = req.body || {};
     if (agent_config != null && (typeof agent_config !== 'object' || Array.isArray(agent_config))) {
       return res.status(400).json({ detail: 'agent_config must be an object' });
     }
@@ -146,6 +201,7 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
     const clientTag = normalizeClientTag(client);
     const uiCommandsNorm = normalizeUiCommands(ui_commands);
     const uiSettingsNorm = normalizeUiSettings(ui_settings);
+    const clientCapsNorm = normalizeClientCapabilities(client_capabilities);
     // 接缝①(G1):app_id 经请求流入(缺省=本进程装配的 profile);未知 app_id 拒绝。
     const profile = resolveProfile(app_id);
     if (!profile) {
@@ -201,6 +257,8 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
         // 界面面能力握手:字段在场(哪怕空数组)= 渲染端够新,会处理 ui_cmd 事件。缺席 → 工具不注册。
         ...(uiCommandsNorm ? { uiCommands: uiCommandsNorm } : {}),
         ...(uiSettingsNorm ? { uiSettings: uiSettingsNorm } : {}),
+        // 客户端原生能力(phone.intents 等):只从本路由进 —— 派生 run(团队 / 讨论 / 子代理)自建 input,不继承。
+        ...(clientCapsNorm ? { clientCapabilities: clientCapsNorm } : {}),
       },
     });
 

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  仅 debug 包(src/debug):只对本机回环与模拟器宿主放行明文 HTTP,给台架用 ——
+  mobile/scripts/phone-control-emu.cjs 以 VITE_API_ORIGIN=http://localhost:8787 构建、adb reverse 接假引擎,
+  原生 PhoneClaim 与 WebView 都要能打明文 localhost。其余一律沿用平台缺省(禁明文)。release 不受影响。
+
+  ⚠️ 有了这个文件,API 24+ 上 android:usesCleartextTraffic 会被忽略:debug 包 live reload 指向局域网 IP 的
+     http 地址(cap run -l)会连不上。要那样调试,临时把该 IP 加进下面的 domain 列表。
+-->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>

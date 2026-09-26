@@ -22,6 +22,9 @@ export interface ToolDef extends ToolImpl {
   deferGroup?: string;
   /** 目录行文案(英文一句话,带典型触发意图;缺省取 description 首行截断)。 */
   deferHint?: string;
+  /** 客户端能力(如 'phone.intents'):本工具靠发起端原生层执行(ctx.requestClientAction)。声明了就过
+   *  clientCapabilityAllowed 中央闸(default-deny),且工具名必须以 `<ns>_` 开头。契约 tangu-agent/docs/phone-control.md §2。 */
+  clientCapability?: string;
 }
 
 /** 一组工具的提供者:内置工具按域拆若干 provider,app 自带工具经 AppProfile.toolLoadout.providers 注入。 */
@@ -125,6 +128,68 @@ export function isSubAgentDenied(ctx: Pick<ToolContext, 'subAgentDepth' | 'subAg
   return SUB_AGENT_DENY_TOOLS.has(canonical) && !ctx.subAgentGrants?.has(canonical);
 }
 
+/** 客户端能力工具只给**发起端自己**的 run:今天 = 手机端(远程驱动阶段再放宽这一个常量)。 */
+const CLIENT_CAPABILITY_CLIENT_RE = /^mobile\//;
+
+/**
+ * 客户端能力工具(ToolDef.clientCapability)的中央闸,default-deny。四条同时满足才可见:
+ *   ① ctx.client 是手机端(Muse / 自动化是 muse/*、automation/*;团队 / 讨论成员继承 client tag 但不继承能力);
+ *   ② 本 run 声明了该能力(routes/runs normalizeClientCapabilities → input.clientCapabilities);
+ *   ③ 非子代理 / 计划模式 / 通道会话 / 讨论成员(与 uiSurfaceEnabledFor 同一组排除,理由同:没有人在那台手机前);
+ *   ④ 工具名以 `<ns>_` 开头(phone.intents → phone_*):插件拿一个叫 write_file 的工具挂能力混不进来。
+ * 住 add() 里:defs / 目录 / load_tools 可解锁集 / executeTool 按名解析四处同源,一处拒 = 四处都没有。
+ * ⚠️ 与部署级白名单(profile.toolLoadout.builtins ← TANGU_TOOL_BUILTINS / app_profiles.tool_builtins)是**与**关系:
+ *    白名单不是 'all' 时,phone_* 必须逐个列进去(插件工具在 add() 里同样按 isBuiltin=true 受它约束)。prod 为 'all'。
+ */
+export function clientCapabilityAllowed(
+  t: Pick<ToolDef, 'name' | 'clientCapability'>,
+  ctx: Pick<ToolContext, 'client' | 'clientCapabilities' | 'subAgentDepth' | 'planMode' | 'channelSession' | 'inDiscussion'>,
+): boolean {
+  if (t.clientCapability === undefined) return true;
+  const cap = t.clientCapability;
+  const ns = typeof cap === 'string' ? cap.split('.')[0] : '';
+  return (
+    CLIENT_CAPABILITY_CLIENT_RE.test(ctx.client || '')
+    && Array.isArray(ctx.clientCapabilities) && ctx.clientCapabilities.includes(cap)
+    && !((ctx.subAgentDepth ?? 0) >= 1)
+    && !ctx.planMode
+    && !ctx.channelSession
+    && !ctx.inDiscussion
+    && !!ns && t.name.startsWith(`${ns}_`)
+  );
+}
+
+/**
+ * 把 run 级的 ctx.requestClientAction 收窄到**正在执行的这一个工具**(registry.executeTool 按次调用)。
+ * run 级闭包只按「本 run 声明过哪些能力」判 ns;不收窄的话,同一 run 里任何工具(没声明 clientCapability 的
+ * 插件工具)都能直调 requestClientAction({ns:'phone',…}),绕过上面的中央闸。收窄后:
+ *   - 工具没声明 clientCapability → requestClientAction 为 undefined(同「本 run 没能力」,工具照常优雅降级);
+ *   - 声明了 → 只准发自己能力的 ns('phone.intents' → 'phone'),别的 ns 立即 undeclared,不发任何事件。
+ * ⚠️ 返回新对象、绝不改入参:withTimeoutSignal 不设超时时 scopedCtx 就是 run 级 ctx 本身。
+ */
+export function bindClientActionToTool(ctx: ToolContext, t: Pick<ToolDef, 'clientCapability'>): ToolContext {
+  const base = ctx.requestClientAction;
+  if (!base) return ctx;
+  const cap = t.clientCapability;
+  const ns = typeof cap === 'string' ? cap.split('.')[0] : '';
+  if (!ns) return { ...ctx, requestClientAction: undefined };
+  return {
+    ...ctx,
+    requestClientAction: (req, opts) => {
+      const want = String(req?.ns ?? '');
+      if (want === ns) return base(req, opts);
+      return Promise.resolve({
+        ok: false, code: 'undeclared',
+        error: `This tool only declared the "${ns}" client capability, so it cannot send "${want.slice(0, 24)}" actions. Nothing was sent.`,
+      });
+    },
+  };
+}
+
+/** 可见性归引擎逻辑的「门禁工具」:不进 agent 编辑 UI 的工具黑白名单,也不受 tools_mode/tools_list 约束。
+ *  客户端能力工具算门禁工具:否则 phone_* 会出现在桌面端的勾选目录里,allow 名单还会在手机上把它们静默砍掉。 */
+const isGatedTool = (t: ToolDef): boolean => !!t.isEnabledFor || t.clientCapability !== undefined;
+
 // ── 全局(内置)provider 注册表。注册顺序即工具喂给 LLM 的顺序——不可随意调换。──
 const providers: ToolProvider[] = [];
 const providerIndex = new Map<string, number>();
@@ -182,6 +247,9 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string,
   const host = ctx.execMode === 'host';
   const sandboxCtx = { ...ctx, hostSandbox: ctx.hostSandbox ?? (ctx.execMode === 'sandbox' ? undefined : resolveHostSandboxPolicy()) };
   const sandboxRestricted = isHostSandboxRestricted(sandboxCtx);
+  // 工具自己的 isEnabledFor 拿不到 run 级 requestClientAction:可见性判定用不着它,而插件在这里存下闭包,
+  // 之后就能绕过 executeTool 的按工具收窄(bindClientActionToTool)直调。
+  const enabledForCtx: ToolContext = ctx.requestClientAction ? { ...ctx, requestClientAction: undefined } : ctx;
   let builtins = profile.toolLoadout.builtins;
   // 部署级白名单(TANGU_TOOL_BUILTINS 等)含 deferred 工具却漏列 load_tools → 自动补上:
   // 否则目录还在、唯一解锁入口没了,deferred 工具永久不可达(还可能被同名 custom 工具顶替)。
@@ -195,6 +263,7 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string,
     // 子代理硬闸放在**最前**:defs / 目录 / load_tools 的可解锁集 / executeTool 的按名解析
     // 全经本函数,一处拒=四处都没有。放在 deferBypass 之前(Muse/自动化的子代理也一样拒)。
     if (isSubAgentDenied(ctx, t.name)) return;
+    if (!clientCapabilityAllowed(t, ctx)) return;
     if (sandboxRestricted && (!isBuiltin || fromPlugin || !isHostSandboxToolAllowed(t.name, sandboxCtx))) return;
     const m = t.mode || 'both';
     if (host && m === 'sandbox') return;
@@ -208,20 +277,22 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string,
     // ② 正向面:不在常驻 ∪ 按需集合里的一律拒(默认拒,明天新加的工具不会自动漏进 chat);且只认核心 provider——
     //    插件 provider(origin:'plugin')与 app 工具(isBuiltin=false)同名顶替也进不来;
     // ③ host execMode 下再拒按 cwd 爬真实磁盘的只读 both 工具(D11 纵深防御)。
+    // 例外:带 clientCapability 的工具按「能力」放行、不看来源(内置与插件等价)—— 它们已过上面的中央闸,
+    // 而 chat 恰是手机端的常用形态;内置 phone_* 另在 CHAT_PRESET_DEFERRED 里(按需装载)。
     const face = presetOf(ctx.preset).toolFace;
     if (face.rejectHostMode && m === 'host') return;
-    if (face.face.size && (!isBuiltin || fromPlugin || !face.face.has(t.name))) return;
+    if (face.face.size && t.clientCapability === undefined && (!isBuiltin || fromPlugin || !face.face.has(t.name))) return;
     if (host && face.hostDiskHidden.has(t.name)) return;
     if (isBuiltin && builtins !== 'all' && !builtins.includes(t.name)) return;
     // 每-agent 内置工具黑白名单(config.toml tools_mode/tools_list):只约束**无门禁**的内置工具——
     // 门禁工具(isEnabledFor)可见性归引擎逻辑且不在 UI 目录里(allow 模式不误伤 Muse/inbox 系);
     // 基建工具豁免;MCP/app 工具(isBuiltin=false)不受约束。范围与 listLoadoutTools() 严格一致。
-    if (isBuiltin && !t.isEnabledFor && !LOADOUT_EXEMPT.has(t.name)
+    if (isBuiltin && !isGatedTool(t) && !LOADOUT_EXEMPT.has(t.name)
       && (ctx.toolsMode === 'allow' || ctx.toolsMode === 'deny')) {
       const listed = !!ctx.toolsList?.includes(t.name);
       if (ctx.toolsMode === 'deny' ? listed : !listed) return;
     }
-    if (t.isEnabledFor && !t.isEnabledFor(profile, ctx)) return;
+    if (t.isEnabledFor && !t.isEnabledFor(profile, enabledForCtx)) return;
     out.set(t.name, t);
   };
   for (const p of providers) for (const t of p.tools()) add(t, true, p.origin === 'plugin');
@@ -235,7 +306,7 @@ export function listLoadoutTools(): { name: string; description: string }[] {
   const seen = new Map<string, string>();
   for (const p of providers) {
     for (const t of p.tools()) {
-      if (t.isEnabledFor || LOADOUT_EXEMPT.has(t.name)) continue;
+      if (isGatedTool(t) || LOADOUT_EXEMPT.has(t.name)) continue;
       const d = t.definition?.function?.description || '';
       seen.set(t.name, d.split('\n')[0].slice(0, 160));
     }

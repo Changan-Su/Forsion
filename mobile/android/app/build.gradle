@@ -53,6 +53,9 @@ dependencies {
     implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
     implementation project(':capacitor-android')
     testImplementation "junit:junit:$junitVersion"
+    // 手机操控的纯逻辑单测(PhoneVerbsTest):android.jar 里的 org.json 是桩(一调就抛 / 返回缺省值),
+    // JVM 上要真实现。只进测试 classpath,不进 APK。
+    testImplementation 'org.json:json:20231013'
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
     implementation project(':capacitor-cordova-android-plugins')

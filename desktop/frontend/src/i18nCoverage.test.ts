@@ -25,11 +25,12 @@ const SRC = __dirname
  * 片段清一色是 `'key': { zh: '…', en: '…' }` 的纯字面量,new Function 足够且不引入运行时依赖。
  * ⚠️ 这些片段同样可能缺 en,必须纳入 A/B 断言,漏收就等于给自己开了 15 个文件的后门。
  */
-function collectFragments(files: string[]): { zh: Record<string, string>; en: Record<string, string>; scanned: number; conflicts: string[] } {
+function collectFragments(files: string[]): { zh: Record<string, string>; en: Record<string, string>; scanned: number; scannedFiles: Set<string>; conflicts: string[] } {
   const zh: Record<string, string> = {}
   const en: Record<string, string> = {}
   const owner: Record<string, string> = {}
   const conflicts: string[] = []
+  const scannedFiles = new Set<string>()
   let scanned = 0
   for (const file of files) {
     const text = readFileSync(file, 'utf8')
@@ -55,15 +56,22 @@ function collectFragments(files: string[]): { zh: Record<string, string>; en: Re
           if (typeof v?.en === 'string') en[k] = v.en
         }
         scanned++
+        scannedFiles.add(file)
       } catch { /* 求值不了的片段跳过,C 断言会把它的键报成缺失,不会假绿 */ }
       at = text.indexOf('registerMessages(', end)
     }
   }
-  return { zh, en, scanned, conflicts }
+  return { zh, en, scanned, scannedFiles, conflicts }
 }
 
+/**
+ * 移动端自有源码(liveIsland / UnitsSheet / phoneControl …)同样在模块作用域 registerMessages,
+ * 运行时进的是同一本字典 —— 不扫就是给整个 mobile/src 开了后门(那里的文案只在手机上显示,更没人点检)。
+ */
+const MOBILE_SRC = join(SRC, '../../../mobile/src')
+
 const base = __dictSnapshot()
-const ALL_SRC = walk(SRC)
+const ALL_SRC = [...walk(SRC), ...walk(MOBILE_SRC)]
 const frag = collectFragments(ALL_SRC.filter((f) => readFileSync(f, 'utf8').includes('registerMessages(')))
 const zh = { ...base.zh, ...frag.zh }
 const en = { ...base.en, ...frag.en }
@@ -90,6 +98,9 @@ describe('i18n 覆盖', () => {
     // 防假绿:collectFragments 若因格式变化一个都没解析出来,A/B/C 会全绿但什么都没查。
     expect(frag.scanned, '一个 registerMessages 片段都没解析出来 —— 仪器已失效,先修解析').toBeGreaterThanOrEqual(15)
     expect(Object.keys(frag.zh).length).toBeGreaterThan(100)
+    // 移动端那半单独自检:路径算错 / 目录改名时 walk 静默返回空,上面的总数照样过线。
+    const mobileFiles = [...frag.scannedFiles].filter((f) => !relative(MOBILE_SRC, f).startsWith('..')).map((f) => relative(MOBILE_SRC, f))
+    expect(mobileFiles, 'mobile/src 的 registerMessages 片段没被收进来 —— 检查 MOBILE_SRC').toEqual(expect.arrayContaining(['liveIsland.ts', 'UnitsSheet.tsx']))
   })
 
   it('D. 没有两个文件用同一个键注册不同文案(并行加词条时的静默互踩)', () => {

@@ -55,4 +55,65 @@
     <uses-permission android:name="android.permission.POST_PROMOTED_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <!-- 手机操控 T1(PhoneControlPlugin):AlarmClock.ACTION_SET_ALARM / SET_TIMER 要求的 normal 级权限(安装即授予)。
+         ⚠️ 刻意不加:无障碍服务、QUERY_ALL_PACKAGES、CALL_PHONE(拨号只用 ACTION_DIAL 填号)、CAMERA
+         (CameraManager.setTorchMode 不需要)。见 Forsion-Genesis/tangu-agent/docs/phone-control.md。 -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+
+    <!-- 手机操控的包可见性(Android 11+):只声明要用的几类 Intent,不申请 QUERY_ALL_PACKAGES。
+         LAUNCHER 让「按名字打开 App」与目标 App 的显示名可见;其余让 resolveActivity 能判定接手者(R1/R3 分级)。
+         ⚠️ 带 <data> 的过滤器只匹配同样带 data 的查询:DIAL/SENDTO 必须写 scheme,SEND 必须写 mimeType。 -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="geo" />
+        </intent>
+        <!-- 地图 App 自家的导航 scheme(引擎 tangu-agent/src/tools/builtin/phoneLinks.ts 生成、PhoneVerbs.MAP_SCHEMES 分级)。
+             ⚠️ 不写这几条,没被 https/geo 顺带变可见的地图 App 在 11+ 上 resolveActivity 为空:导航候选被当成「没人接」
+             跳过,落到 geo 兜底(只落点不出路线)。改 phoneLinks.ts 的 scheme 必须同步这里。 -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="amapuri" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="androidamap" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="baidumap" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="qqmap" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="google.navigation" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+            <data android:scheme="tel" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="smsto" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SENDTO" />
+            <data android:scheme="mailto" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND" />
+            <data android:mimeType="text/plain" />
+        </intent>
+    </queries>
 </manifest>

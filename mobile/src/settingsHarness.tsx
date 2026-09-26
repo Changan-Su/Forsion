@@ -2,6 +2,7 @@
  * Dev-only 移动设置视觉台架:
  *   PORT=5284 npm run dev → /settings-harness.html (加 ?dark 看暗色，?desktop 看桌面设置侧栏，
  *   ?onboarding 看首启引导——台架 window.tangu 无 envCheck，走的正是 web/移动端的收缩步骤序)
+ *   ?phone 看「高级 → 测试性功能」里的手机操控设置行(真机才注册;台架给 PhoneControl 挂假 web 实现)
  *
  * 裸挂生产 SettingsModal + 生产主题/CSS,绕过移动端登录与后端启动,供两层 IA 截图和触控回归。
  * Vite 的 build 入口只有 index.html,本文件不进 APK 产物。
@@ -16,10 +17,13 @@ import '@/i18n.generated'
 import { applyTheme } from '@/theme/loader'
 import { resolveInitialLang, resolveInitialSkin, resolveInitialBg } from '@/theme/registry'
 import type { TanguDesktopConfig } from '@/types'
+import { registerPlugin } from '@capacitor/core'
+import { registerClientSurface } from '@/services/clientSurfaces'
 
 const dark = new URLSearchParams(location.search).has('dark')
 const desktop = new URLSearchParams(location.search).has('desktop')
 const onboarding = new URLSearchParams(location.search).has('onboarding')
+const phone = new URLSearchParams(location.search).has('phone')
 const initialMode = dark ? 'dark' : 'light'
 const initialLang = resolveInitialLang()
 const initialSkin = resolveInitialSkin()
@@ -113,8 +117,29 @@ function SettingsHarness() {
   )
 }
 
-createRoot(document.getElementById('root')!).render(
-  <LocaleProvider>
-    <SettingsHarness />
-  </LocaleProvider>,
-)
+/**
+ * ?phone:手机操控的设置行只在真机注册(installPhoneControl 要 Capacitor 原生)。台架抢先给 PhoneControl 挂一个
+ * 假 web 实现(Capacitor 同名插件先注册者赢),再按生产的组件与状态源登记 surface —— 开关读的仍是「原生」回报。
+ */
+async function mountPhoneRow(): Promise<void> {
+  let enabled = false
+  registerPlugin('PhoneControl', {
+    web: {
+      status: async () => ({ enabled, capabilities: enabled ? ['phone.intents'] : [], foreground: true, proto: 1 }),
+      setEnabled: async (o: { enabled: boolean }) => { enabled = o.enabled; return { enabled } },
+      configure: async () => ({}),
+      exec: async () => ({ accepted: false }),
+    },
+  })
+  const [{ setPhoneControlEnabled }, { PhoneControlRow }] = await Promise.all([import('./phoneControl'), import('./PhoneControlRow')])
+  registerClientSurface('phone', { capabilities: () => [], exec: () => undefined, SettingsRow: PhoneControlRow })
+  await setPhoneControlEnabled(false) // 顺带拉一次状态
+}
+
+void (phone ? mountPhoneRow() : Promise.resolve()).finally(() => {
+  createRoot(document.getElementById('root')!).render(
+    <LocaleProvider>
+      <SettingsHarness />
+    </LocaleProvider>,
+  )
+})

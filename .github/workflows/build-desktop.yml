@@ -284,6 +284,14 @@ jobs:
           npm run e2e:settingscfg
           npm run e2e:update
 
+      # 原生纯逻辑单测(JVM,不起设备):手机操控的指令校验 / R1-R3 分级 / 号码清洗 / Intent 规划(PhoneVerbsTest)。
+      # 原生其余部分(真正调系统 API 的 PhoneControlPlugin)CI 只有编译覆盖,设备行为靠 scripts/phone-control-emu.cjs。
+      - name: Android unit tests
+        working-directory: mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest --no-daemon
+
       - name: Build APK
         working-directory: mobile/android
         env:

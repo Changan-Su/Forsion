@@ -139,6 +139,22 @@ export interface ToolContext {
    */
   updateUiSettings?: (values: Record<string, string>) => void;
   /**
+   * 发起端(手机)自报的客户端能力(input.clientCapabilities,经 routes/runs normalizeClientCapabilities 消毒;
+   * run 内冻结)。带 `clientCapability` 的工具据此在 toolRegistry 的中央闸 default-deny。
+   * 契约:tangu-agent/docs/phone-control.md §2。
+   */
+  clientCapabilities?: readonly string[];
+  /**
+   * 让发起端的原生层执行一个动作(services/clientAck.ts):发 `client_cmd` → 原生 claim → 执行 → 回执。
+   * 闭包已绑定本 run 的 runId/sessionId —— 调用方指定不了别的 run。只在 clientCapabilities 非空时装配;
+   * 工具执行时再由 registry 按工具收窄(toolRegistry.bindClientActionToTool):没声明 `clientCapability` 的工具
+   * 拿到 undefined,声明了的只能发自己能力的 ns(别的 ns 立即 `undeclared`);isEnabledFor 里一律 undefined。
+   * `opts.signal` 传工具拿到的 `ctx.signal`(registry 的超时信号);run 级中止信号总会一并监听。
+   * ⚠️ 带 capabilities.defaultTimeoutMs 的工具,超时必须 ≥ claimMs + execMs,否则 registry 先把工具判超时,
+   *    手机那边却可能在稍后照样执行(模型以为失败、实际做了)。
+   */
+  requestClientAction?: (req: ClientActionRequest, opts?: ClientActionOptions) => Promise<ClientActionResult>;
+  /**
    * 当前 run 的在存工作消息数组冻结快照(self_brainstorm 用):返回主 loop workingMessages 的浅拷贝。
    * 分身补全的共享前缀**必须**取自这里而非 DB 重建——脚手架消息不落库、运行内折叠、pin 锚定都会让
    * 重建序列字节不一致,provider 前缀缓存全 miss(这是该工具「命中缓存」承诺的唯一真源)。
@@ -219,4 +235,33 @@ export interface UiCommandEntry {
 export interface UiSettingEntry {
   value: string;
   allowed?: string[];
+}
+
+/** 发给客户端原生层的一个动作(契约 tangu-agent/docs/phone-control.md §3.1 / §4)。
+ *  ns 必须命中本 run 已声明的某个 `<ns>.*` 能力;op 由原生 verb 表解释。 */
+export interface ClientActionRequest {
+  ns: string;
+  op: string;
+  args?: Record<string, unknown>;
+}
+
+/** claimMs:等原生 claim 的时长(缺省 15s,钳 3–30s);execMs:claim 之后等结果的时长(缺省 20s,钳 5–120s)。 */
+export interface ClientActionOptions {
+  claimMs?: number;
+  execMs?: number;
+  signal?: AbortSignal;
+}
+
+/** 原生回执(经 routes/runs normalizeClientResult 消毒)或引擎自产的失败(两种中止 aborted / aborted_claimed、
+ *  undeclared、两种超时 not_picked_up / no_report)。
+ *  code 恒匹配 /^[a-z_]{1,32}$/,取值见契约 §3.4。 */
+export interface ClientActionResult {
+  ok: boolean;
+  code?: string;
+  error?: string;
+  text?: string;
+  image?: string;
+  app?: string;
+  handoff?: boolean;
+  verified?: boolean;
 }

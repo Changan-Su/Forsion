@@ -27,7 +27,11 @@ export async function clearStoredToken(): Promise<void> {
 /** 生产网关。native 下 location.origin=https://localhost 永远不可能同源,缺省必须烤死生产地址。 */
 const PROD_ORIGIN = 'https://api.forsion.net'
 
-/** Forsion 网关源:VITE_API_ORIGIN 覆盖(dev/自托管);native 缺省=生产,web(dev/preview)缺省=同源走代理。 */
+/**
+ * Forsion 网关源:VITE_API_ORIGIN 覆盖(dev/自托管);native 缺省=生产,web(dev/preview)缺省=同源走代理。
+ * ⚠️ native 分支的规则在 vite.config.ts 的 nativeConfig() 里还有一份(构建期写 forsion-native.json 给原生
+ *    手机操控用),两处必须同步改。
+ */
 export function apiOrigin(): string {
   const explicit = import.meta.env.VITE_API_ORIGIN
   if (explicit) return String(explicit).replace(/\/$/, '')

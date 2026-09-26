@@ -8,7 +8,7 @@ import { deps } from '../seams/runtime.js';
 import { DockerCleanupError } from '../sandbox/dockerLifecycle.js';
 import { isHostSandboxRestricted, isHostSandboxToolAllowed, resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { executeCustomTool } from './customTools.js';
-import { registerToolProvider, resolveTools, isDeferredIn, isSubAgentDenied, canonicalToolName, type ToolDef } from './toolRegistry.js';
+import { registerToolProvider, resolveTools, isDeferredIn, isSubAgentDenied, canonicalToolName, bindClientActionToTool, type ToolDef } from './toolRegistry.js';
 import { presetOf } from '../core/presetTable.js';
 import { datetimeProvider, calculatorProvider } from './builtin/coreUtils.js';
 import { memoryLogProvider } from './builtin/memoryLog.js';
@@ -49,6 +49,7 @@ import { manageAutomationProvider } from './builtin/manageAutomation.js';
 import { transcribeAudioProvider } from './builtin/transcribeAudio.js';
 import { viewVideoProvider } from './builtin/viewVideo.js';
 import { uiCommandsProvider } from './builtin/uiCommands.js';
+import { phoneToolsProvider } from './builtin/phoneTools.js';
 import { manageScheduleProvider } from './builtin/manageSchedule.js';
 import { loadToolsProvider } from './builtin/loadTools.js';
 import { appendActivityLine } from '../services/userActivity.js';
@@ -182,6 +183,7 @@ registerToolProvider(uiCommandsProvider); // GUI 限定(ctx.client + 客户端�
 registerToolProvider(teamSayProvider); // 团队成员随时向主聊天发言(append 末尾,保前缀缓存)
 registerToolProvider(browserTabsProvider); // host-only:browser_tabs 看/读用户自己 Chrome 里开着的标签(远程调试接管;append 末尾,保前缀缓存)
 registerToolProvider(museWakeProvider); // 仅 Muse 周期(ctx.muse,子代理除外):set_next_wake 按作息跳过心跳省额度(append 末尾;普通 run 不可见,快照不变)
+registerToolProvider(phoneToolsProvider); // 手机端限定(clientCapability 'phone.intents' 中央闸;与 uiCommandsProvider 同属「发起端能力面」):phone_* 五件经 client_cmd 让手机原生执行(全 deferred,append 末尾;无能力的 run 不可见,快照不变)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */
@@ -325,7 +327,11 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
   const impl: ToolDef | undefined = resolveTools(currentProfile(ctx), ctx).get(name);
   if (impl) {
     const caps = mergeCapabilities(name, impl);
-    const { scopedCtx, cleanup } = withTimeoutSignal(ctx, caps.defaultTimeoutMs);
+    const timed = withTimeoutSignal(ctx, caps.defaultTimeoutMs);
+    const cleanup = timed.cleanup;
+    // 客户端原生动作按工具收窄:没声明 clientCapability 的工具拿不到 requestClientAction,声明了的只能发自己的 ns
+    // (否则任何插件工具都能直调它绕过中央闸)。⚠️ 这一行被 clientCapabilityGate.test.ts 的执行侧用例覆盖。
+    const scopedCtx = bindClientActionToTool(timed.scopedCtx, impl);
     // ⚠️「拍 pre-image → 执行 → 取写后指纹 / 撤销」必须整段在**同一把写锁**里(codex 2026-08-17 P1)。
     // 原来快照在锁外拍:两个子代理/会话同时写同一个文件时,双方都会在任一方进锁之前拍完快照 ——
     // 后写的那个拍到的是**前写者改动之前**的字节,回退它就把前者的改动一起抹掉。

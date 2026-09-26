@@ -344,6 +344,10 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   let subDefsDirty = false;
   const subCtx: ToolContext = {
     ...parentCtx,
+    // 客户端原生动作不下放:工具面那边中央闸已按 subAgentDepth 拒,但插件工具可以不声明能力而直调
+    // ctx.requestClientAction —— 子代理的任务正文是模型生成的,不该成为驱动用户手机的入口。
+    requestClientAction: undefined,
+    clientCapabilities: undefined,
     subAgentDepth: (parentCtx.subAgentDepth || 0) + 1,
     subAgentGrants: grants,
     // 委派方身份:manage_agent 守卫要连它一起保护(具名子代理在自己的 ALS 里跑,父代理会变成「别人」)。

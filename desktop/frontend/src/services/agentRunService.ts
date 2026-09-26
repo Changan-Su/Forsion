@@ -8,6 +8,7 @@ import { APP_VERSION } from '../changelog'
 import { registerMessages, translate } from '../i18n'
 import { authFetch } from './http'
 import { buildCommandCatalog, readUiSettings } from '../agentCommands'
+import { collectClientCapabilities } from './clientSurfaces'
 
 registerMessages({
   'agentrun.authFailed': { zh: '鉴权失败(401):令牌无效或已过期', en: 'Authentication failed (401): the token is invalid or has expired' },
@@ -91,6 +92,9 @@ export async function startRun(
       //    所以哪怕目录为空也要送(送空数组 ≠ 不送)。目录随端而异是正确行为。
       ui_commands: buildCommandCatalog(),
       ui_settings: readUiSettings(),
+      // 客户端能力握手(tangu-agent/docs/phone-control.md §2):已注册能力面的能力并集,desktop/web 恒为 []。
+      // 引擎据此 default-deny `clientCapability` 工具;请求时现算(移动端开关随时会变)。
+      client_capabilities: collectClientCapabilities(),
       message: params.message,
       attachments: params.attachments || [],
       agent_config: params.agentConfig || {},

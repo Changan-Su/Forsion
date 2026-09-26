@@ -23,7 +23,8 @@
     "e2e:fileback": "node scripts/file-back.e2e.cjs",
     "e2e:unitsentry": "node scripts/units-entry.e2e.cjs",
     "e2e:update": "node scripts/update-remind.e2e.cjs",
-    "e2e:attachsave": "node scripts/attachment-save.e2e.cjs"
+    "e2e:attachsave": "node scripts/attachment-save.e2e.cjs",
+    "emu:phone": "node scripts/phone-control-emu.cjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.7",

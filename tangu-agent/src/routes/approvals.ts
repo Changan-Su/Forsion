@@ -19,7 +19,8 @@ import { deps } from '../seams/runtime.js';
 import { resolveInquiry } from '../services/inquiries.js';
 import { parseDeskShotBody, resolveDeskShot } from '../services/deskCapture.js';
 import { resolveUiAction } from '../services/uiAck.js';
-import { normalizeUiValues, sanitizeText } from './runs.js';
+import { resolveClientAction } from '../services/clientAck.js';
+import { normalizeClientResult, normalizeUiValues, sanitizeText } from './runs.js';
 
 const router = Router();
 
@@ -115,6 +116,23 @@ router.post('/agent/runs/:runId/approvals/:approvalId', authMiddleware, async (r
 router.post('/agent/runs/:runId/inquiries/:inquiryId', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
+    // 客户端原生动作(phone_* 等)的 claim / commit / result 也借这条路(同样的网关理由,见下方 ui_ 分支注释)。
+    // 契约 tangu-agent/docs/phone-control.md §3.2:404 = run 不属于调用者;**其余一切**(未知 phase、digest / nonce 不符、
+    // 已兑现、已中止、已超时)一律 410,不区分原因 —— 原生见 410 即终局、绝不执行。登记表在 services/clientAck.ts。
+    // ⚠️ 必须排在 ui_ 分支与 answer 必填判定之前:这些电文没有 answer 字段,晚一步就被 400 吃掉。
+    if (req.params.inquiryId.startsWith('cc_')) {
+      const run0 = await getRunForUser(req.params.runId, userId);
+      if (!run0) return res.status(404).json({ detail: 'Run not found' });
+      const b = req.body && typeof req.body === 'object' ? req.body : {};
+      const { runId, inquiryId } = req.params;
+      const out =
+        b.phase === 'claim' ? resolveClientAction(runId, inquiryId, { phase: 'claim', digest: b.digest, claimant: b.claimant })
+        : b.phase === 'commit' ? resolveClientAction(runId, inquiryId, { phase: 'commit', nonce: b.nonce })
+        : b.phase === 'result' ? resolveClientAction(runId, inquiryId, { phase: 'result', nonce: b.nonce, result: normalizeClientResult(b) })
+        : null;
+      if (!out) return res.status(410).json({ detail: 'client action is no longer pending' });
+      return res.json({ ok: true, ...out });
+    }
     // 界面动作回执(set_ui_setting / run_ui_command)搭这条路进来 —— **只借路由,不借电文**。
     // 为什么不自开一条:云端网关(server/microserver/agent-core/fleetDispatch.ts)只代理
     // runs / abort / approvals / inquiries 四条,新路由在 web 与移动端根本到不了 worker。

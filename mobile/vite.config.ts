@@ -32,6 +32,24 @@ function engineSwap(): Plugin {
   }
 }
 
+/**
+ * 原生侧(PhoneControlPlugin)自取的 API 基址:构建时写进产物根的 `forsion-native.json`,
+ * cap sync 后落在 APK 的 `assets/public/forsion-native.json`,原生用 AssetManager 读 —— 绝不经 JS 传入
+ * (见 Forsion-Genesis/tangu-agent/docs/phone-control.md §1)。
+ * ⚠️ 规则必须与 src/capacitorAuth.ts 的 native 分支 apiOrigin()/apiBase() 逐字一致
+ *    (VITE_API_ORIGIN 覆盖,缺省生产网关,去一个尾斜杠,再拼 /api);改一边必须改另一边。
+ */
+function nativeConfig(apiOriginEnv: string | undefined): Plugin {
+  const apiBase = String(apiOriginEnv || 'https://api.forsion.net').replace(/\/$/, '') + '/api'
+  return {
+    name: 'mobile-native-config',
+    apply: 'build',
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: 'forsion-native.json', source: JSON.stringify({ apiBase }) + '\n' })
+    },
+  }
+}
+
 const PROXY_PATHS = ['/api', '/auth', '/account', '/shared', '/oauth', '/shop', '/pay', '/legal']
 
 // 前端环境变量约定:PORT/BACKEND_URL 经 loadEnv 读(config 阶段 process.env 读不到 .env)。
@@ -40,7 +58,7 @@ export default defineConfig(({ mode }) => {
   const DEV_PORT = Number(env.PORT) || 5274
   const DEV_PROXY = env.BACKEND_URL || env.TANGU_DEV_PROXY || 'http://localhost:3001'
   return {
-  plugins: [engineSwap(), react()],
+  plugins: [engineSwap(), react(), nativeConfig(env.VITE_API_ORIGIN)],
   // Vite 默认递归扫描 root 下的所有 HTML；Capacitor sync 生成的 android/.../public/index.html
   // 也会因此被当成 dev 入口，继而扫描旧 bundle/可选 peer dependency。dev 只认正典入口。
   optimizeDeps: {

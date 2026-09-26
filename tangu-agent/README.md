@@ -299,6 +299,11 @@ Steering regression checks preserve the same run, completed tool evidence and qu
 
 - **类型契约**：[`plugin-api/tangu-agent.d.ts`](./plugin-api/tangu-agent.d.ts) 是稳定公开 API 的单一真源——插件用 tsconfig `paths` 把 `@forsion/tangu-agent` 映射到它的拷贝，**只允许 `import type`**（运行时能力全走 `activate(ctx)` 传入的 `ctx.sdk`，否则会复制核心单例）。改契约后跑 `npm run sync:plugin-api`；与真类型的兼容由 `src/plugins/apiContract.ts` 随 typecheck 双向断言。
 - **上手模板**：独立示例仓 [tangu-sample-plugin](https://github.com/Changan-Su/tangu-sample-plugin)（工具 + 设置 schema + promptSection 全演示）；`plugins/` 下的 stickers / reply-segment 是真实案例。纯数据扩展另有各自模板仓：[tangu-sample-theme](https://github.com/Changan-Su/tangu-sample-theme)（主题包）、[tangu-sample-space](https://github.com/Changan-Su/tangu-sample-space)（Space 配方）、[tangu-sample-agent](https://github.com/Changan-Su/tangu-sample-agent)（智能体）。
+- **客户端原生动作（手机操控接缝）**：工具声明 `clientCapability: '<ns>.<name>'`（如 `phone.intents`），在 `execute` 里调 `ctx.requestClientAction({ ns, op, args }, { claimMs?, execMs?, signal: ctx.signal })`，结果是 `ClientActionResult`（`ok` / `code` / `error` / `text` / `app` / `handoff` / `verified`）。线协议与 verb 表见 Forsion-Genesis 仓的 `tangu-agent/docs/phone-control.md`。要点：
+  - 可见性由核心中央闸统一判（default-deny）：发起端是手机（`client` 为 `mobile/*`）、本 run 声明了该能力、非子代理 / 计划模式 / 通道会话 / 讨论成员，且**工具名必须以 `<ns>_` 开头**（`phone.intents` → `phone_*`），否则工具永不出现。chat 预设按能力放行，内置与插件等价。部署级内置白名单（`TANGU_TOOL_BUILTINS` / profile `tool_builtins`）不是 `all` 时，这类工具同样要逐个列进去。
+  - `requestClientAction` 只在 run 声明了能力时存在，闭包已绑定本 run（指定不了别的 run，子代理里也拿不到）；缺席时工具应优雅降级。执行时还会按工具收窄：**没声明 `clientCapability` 的工具拿不到它**（`isEnabledFor` 里也拿不到），声明了的只能发自己能力的 ns（`phone.intents` → `phone`），别的 ns 立即回 `undeclared`、什么都不发。
+  - 等待上限由它自己的两段计时管：`claimMs`（等原生领取，缺省 15s，钳 3–30s）+ `execMs`（领取后等结果，缺省 20s，钳 5–120s）。**别给这类工具设短于 `claimMs + execMs` 的 `capabilities.defaultTimeoutMs`**（最好不设）：registry 先判超时时，手机那边可能稍后照样执行，模型会以为没做成。
+  - 结果码 `not_picked_up` = 手机根本没领取（协议保证什么都没发生）；`no_report` = 领取了但没回（可能已经发生），两者给用户的说法不同。中止同理：`aborted` = 领取前被中止（什么都没发生），`aborted_claimed` = 领取后被中止（可能已经发生，先请用户看一眼手机再重试）。
 - 注意：编辑器（Amadeus 笔记）插件是另一套系统——`manifest.json + main.js` 放 vault 的 `.amadeus/plugins/` 或全局 `~/.forsion/amadeus/plugins/`，见桌面端设置 → 笔记插件。
 
 ---

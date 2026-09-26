@@ -20,6 +20,7 @@ import { effectiveSessionMode, type SessionMode } from '../views/sessionMode'
 import { abortRunAndWait, cancelSteer, currentPlatform, expediteSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
 import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
 import { recordUiAction } from '../diag'
+import { getClientSurface, notifyClientSurfaces } from '../services/clientSurfaces'
 import { windowKind } from '../windowKind'
 import { splitSuggestions } from '../views/chat2/suggest'
 import type { ChatRef } from '../views/chat2/chatDragRef'
@@ -289,7 +290,7 @@ const stopTerminals = new Map<string, { assistantId: string; event: AgentRunEven
 // 该会话下一个无关 run 的 done 会莫名自动「开始执行」。所有终结路径统一在 endRun 清理。
 const planAutoStart = new Set<string>()
 /**
- * G2 · 界面动作的**发起窗口**登记表:只有起这条 run 的这个渲染实例才执行 `ui_cmd`。
+ * G2 · 界面动作的**发起窗口**登记表:只有起这条 run 的这个渲染实例才执行 `ui_cmd`(及转交 `client_cmd`)。
  *
  * ⚠️ 少了这道闸会出两种错,而且都不报错、只是行为诡异:
  *  ① **重放** —— run 事件是「回放 + 实时」,客户端永远从 seq 0 订阅(agentRunService 的
@@ -1105,6 +1106,30 @@ export const useApp = create<AppState>((set, get) => ({
         })().catch((e) => { recordUiAction({ runId, ackId, ...req, drop: 'exception', error: String((e as Error)?.message || e) }) /* 动态 import 失败也不该炸掉事件流,引擎会超时兜住 */ })
         break
       }
+      case 'client_cmd': {
+        // 客户端动作(phone_* 工具,契约 tangu-agent/docs/phone-control.md §3.1)。与 ui_cmd 共用 G2 / G3,
+        // 但**只转交给能力面、JS 永不回执**:claim / result 由原生自己发,引擎的 pending 表才是唯一权威。
+        // 这几道闸只是早筛(省一次注定 410 的 claim);漏过去的重放 / 伪造由原生 claim 兜底。
+        //  - 被闸拦掉也不回执:回了等于替别的窗口/设备作答(同 ui_cmd G2 的理由)。
+        //  - 全程同步、没有 await,所以 stopped 在这里查一次就够;⚠️ 将来在转交前加 await 必须补重查。
+        // diag 只记 ns 与闸名,**绝不记 body**(可能含短信正文;引擎侧 [client-cmd] 日志同样不写载荷)。
+        const ackId = typeof pl.ackId === 'string' ? pl.ackId : ''
+        const ns = typeof pl.ns === 'string' ? pl.ns : ''
+        const body = typeof pl.body === 'string' ? pl.body : ''
+        const surface = ns ? getClientSurface(ns) : undefined
+        const drop = !ackId ? 'no-ackId' : !ns || !body ? 'invalid'
+          : !uiActionOwnedRuns.has(runId) ? 'not-owner' : uiActionDoneAcks.has(ackId) ? 'duplicate'
+          : stoppedRuns.has(runId) ? 'stopped' : !surface ? 'no-surface' : ''
+        const rec = { runId, ackId, kind: 'client', id: ns }
+        if (drop || !surface) { recordUiAction({ ...rec, drop }); break }
+        if (uiActionDoneAcks.size >= MAX_DONE_ACKS) uiActionDoneAcks.clear()
+        uiActionDoneAcks.add(ackId)
+        recordUiAction(rec)
+        const fail = (e: unknown) => recordUiAction({ ...rec, drop: 'exception', error: String((e as Error)?.message || e) })
+        // 能力面抛错(同步或异步)不许炸掉事件流;引擎那侧 claim 超时自会兜住。
+        try { void Promise.resolve(surface.exec({ runId, ackId, body })).catch(fail) } catch (e) { fail(e) }
+        break
+      }
       case 'desk_capture_request':
         if (pl.shotId) {
           const cfg = get().cfg
@@ -1911,6 +1936,8 @@ export const useApp = create<AppState>((set, get) => ({
         subscribedRuns.clear()
         runWatchdogs.forEach((wd) => clearInterval(wd))
         runWatchdogs.clear()
+        // 上面 abort 的 run 都不走 endRun → 能力面收不到 onRunEnd,由这里统一通知重置(移动端登出即走此路)。
+        notifyClientSurfaces('reset')
       }
       void window.tangu?.authStatus?.().then((a) => { if (generation === authGeneration) set({ authInfo: a }) }).catch(() => {})
       // Some transitions await the engine restart before emitting auth:changed, so
@@ -3217,6 +3244,7 @@ function endRun(set: (fn: (s: AppState) => Partial<AppState>) => void, get: () =
   // 在此作废,防止标记泄漏到该会话后续无关 run(Codex 评审 #4)。
   planAutoStart.delete(runId)
   uiActionOwnedRuns.delete(runId) // G2 归属标记随 run 终结释放(同 planAutoStart,统一在此清理)
+  notifyClientSurfaces('runEnd', runId) // 能力面(手机操控)随 run 终结收尾;尽力而为,原生对未知 runId 应无操作
   const wd = runWatchdogs.get(runId)
   if (wd) { clearInterval(wd); runWatchdogs.delete(runId) }
   set((s) => {
