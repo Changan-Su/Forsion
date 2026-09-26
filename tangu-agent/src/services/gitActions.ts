@@ -17,6 +17,7 @@ import { deps } from '../seams/runtime.js';
 import type { ChatMessage } from '../core/types.js';
 import { gitExecutable, runGit } from './runtimeContext.js';
 import { gitSettings } from './gitSettings.js';
+import { defaultWorkspaceDir } from '../channels/config.js';
 
 const ACTION_TIMEOUT_MS = 60_000;
 const PUSH_TIMEOUT_MS = 120_000;
@@ -93,12 +94,24 @@ export function serialized<T>(cwd: string, task: () => Promise<T>): Promise<T> {
   return next;
 }
 
+/** 默认工作区(常在笔记库里的 Sessions/)是所有「不在项目里」的对话共用的大目录;它和它的上级都不建仓、不整目录提交 ——
+ *  一次 `add -A` 就把整片笔记收进仓里(openai/codex#19588 同款)。桌面也不给这里露写按钮,这里是第二道。 */
+async function assertNotSharedWorkspace(cwd: string): Promise<void> {
+  const shared = await fs.realpath(defaultWorkspaceDir()).catch(() => null);
+  if (!shared) return;
+  const real = await fs.realpath(cwd).catch(() => cwd);
+  if (real === shared || shared.startsWith(real + path.sep)) {
+    throw new GitActionError('shared_workspace', 'The default workspace is shared by every conversation outside a project; use a project folder for version control');
+  }
+}
+
 // ── 建仓 ──────────────────────────────────────────────────────────────────
 
 /** 在项目目录里建仓(不做首次提交 —— 要进仓的东西让用户在面板里看过再提交)。已在某个仓里(含外层仓)→ 拒绝。
  *  没有 .gitignore 才写一份缺省的:lstat 看到任何东西(含软链)都不碰,新建用 O_EXCL。
  *  用户配了 init.defaultBranch 就照用,没配才用 main。 */
 export async function gitInit(cwd: string): Promise<{ createdGitignore: boolean }> {
+  await assertNotSharedWorkspace(cwd);
   if (await insideWorkTree(cwd)) throw new GitActionError('already_repo', 'This folder is already inside a git repository');
   let createdGitignore = false;
   const ignore = path.join(cwd, '.gitignore');
@@ -174,6 +187,7 @@ export async function gitCommit(cwd: string, message: unknown): Promise<{ sha: s
   const text = typeof message === 'string' ? message.replace(/\0/g, '').replace(/\r\n/g, '\n').trim() : '';
   if (!text) throw new GitActionError('empty_message', 'The commit message is empty');
   if (text.length > COMMIT_MESSAGE_MAX) throw new GitActionError('message_too_long', `The commit message is longer than ${COMMIT_MESSAGE_MAX} characters`);
+  await assertNotSharedWorkspace(cwd);
   await requireRepo(cwd);
   const changes = await pendingChanges(cwd);
   if (!changes.entries.length) throw new GitActionError('nothing_to_commit', 'There is nothing to commit');

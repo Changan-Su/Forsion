@@ -79,6 +79,24 @@ describe('gitInit', () => {
   });
 });
 
+describe('默认工作区(所有不在项目里的对话共用)', () => {
+  it('它和它的上级都不建仓、不提交 → shared_workspace;旁边的兄弟目录照常', async () => {
+    const vault = dir('vault');
+    const sessions = dir('vault/Sessions');
+    process.env.TANGU_DEFAULT_WORKSPACE = sessions;
+    try {
+      expect(await codeOf(gitInit(sessions))).toBe('shared_workspace');
+      expect(await codeOf(gitInit(vault))).toBe('shared_workspace');
+      expect(existsSync(path.join(sessions, '.git'))).toBe(false);
+      expect(existsSync(path.join(sessions, '.gitignore'))).toBe(false);
+      git(sessions, 'init', '-q'); // 用户自己在这里建过仓:面板也不替他整目录提交
+      writeFileSync(path.join(sessions, 'note.md'), 'x');
+      expect(await codeOf(gitCommit(sessions, 'x'))).toBe('shared_workspace');
+      expect(await codeOf(gitInit(dir('vault-sibling')))).toBe('ok');
+    } finally { delete process.env.TANGU_DEFAULT_WORKSPACE; }
+  });
+});
+
 describe('gitCommit', () => {
   it('提交全部改动(含新文件),信息原样落盘;再提交 → nothing_to_commit', async () => {
     const cwd = repo('commit-all');

@@ -340,6 +340,11 @@ async function run(app, win, stub, seen, home, ctx) {
     return p ? { path: p.getAttribute('data-project-profile'), name: name && name.value, readOnly: !!(name && name.readOnly) } : null
   })
   check('8b 默认工作区的会话 → 右栏是 PROJECT 详情(默认目录),名称只读', !!def && /[\\/]Sessions$/.test(def.path) && /默认项目/.test(def.name || '') && def.readOnly, JSON.stringify(def))
+  // 默认工作区常在笔记库里:Git 页只读,不给建仓 / 提交 / 分支 / 推送(引擎 gitActions 也拒,这里钉界面那道)
+  await details.locator('[data-project-profile]').getByRole('tab', { name: 'Git', exact: true }).click()
+  const defGit = details.locator('[data-project-profile] [data-project-git]')
+  await defGit.waitFor()
+  check('8b2 默认工作区的 Git 页:只读说明在场,没有任何写动作', await defGit.locator('[data-git-action]').count() === 0 && await defGit.locator('[data-project-git-readonly="shared"]').count() === 1, await defGit.textContent())
 
   // ── 8c/8d 默认组里的旧别名会话:面板跟会话自己的目录;别名是家目录 → Agent 详情 ────────
   await openSession(win, 'Old default chat', 'pd-alias')

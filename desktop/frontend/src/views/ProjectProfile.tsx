@@ -6,6 +6,7 @@ import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
 import { createProjectSkill, deleteProjectIcon, generateGitCommitMessage, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitPushProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon } from '../services/backendService'
 import { askString } from '../amadeus/components/askString'
+import { normPath } from './coding/studioModel'
 import type { AgentConfig, NormalAgentDef, ProjectContext, ProjectSettings, SessionRecord, TeamDef } from '../types'
 import { isTeamImageAvatar, sessionWorkspaceKey, THINKING_LEVELS } from '../types'
 import { ProfileModelField, ProfileTextEditor } from './profileControls'
@@ -69,6 +70,7 @@ export function useProjectSubject(path: string | null): { workspace: ProjectWork
 const GIT_ERROR_CODES = new Set([
   'git_unavailable', 'git_timeout', 'git_failed', 'not_repo', 'already_repo', 'nothing_to_commit', 'empty_message', 'message_too_long',
   'embedded_repo', 'too_many_files', 'large_files', 'no_identity', 'invalid_branch', 'detached', 'no_remote', 'ambiguous_remote', 'no_model', 'quota_exceeded',
+  'shared_workspace',
 ])
 
 /** PROJECT 详情:骨架与 TEAM 详情同一套(头部即基本信息 / 滑块导航 / 一个滚动体 / 底部保存栏),内容换成项目的三面:
@@ -107,6 +109,13 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [generating, setGenerating] = useState(false)
   const [gitErr, setGitErr] = useState<{ message: string; info?: string } | null>(null)
   const genSeq = useRef(0)
+  // 写动作的两处禁区(只读摘要照常):① 默认工作区 —— 所有不在项目里的对话共用、常在笔记库里,建仓 / 整目录提交 = 把整片笔记收进仓
+  //   (引擎 gitActions 也拒,这里是第一道);② 编码工作室托管的项目(~/Forsion/Project/<项目>)—— 版本由宿主在「版本」面板里管,
+  //   这里再按用户口径提交 / 建分支 = 两个驱动方改同一个仓。
+  const [managedRoot, setManagedRoot] = useState('')
+  useEffect(() => { let alive = true; void window.tangu?.codeProjectsRoot?.().then((root) => { if (alive) setManagedRoot(root || '') }).catch(() => {}); return () => { alive = false } }, [])
+  const gitReadOnly: 'shared' | 'managed' | null = workspace.isDefault || workspace.system ? 'shared'
+    : managedRoot && normPath(dir).replace(/\/[^/]*$/, '') === normPath(managedRoot) ? 'managed' : null
   const now = Date.now()
 
   const current = currentSessionId === undefined ? session.id : currentSessionId
@@ -464,8 +473,10 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
             {!git.available ? <p className="agent-profile-muted">{t('projectProfile.git.unavailable')}</p>
               : !git.repo ? <div className="project-git-empty">
                 <p className="agent-profile-muted">{t('projectProfile.git.none')}</p>
-                <p className="agent-profile-muted">{t('projectProfile.git.initHint')}</p>
-                <div className="project-card-actions"><button className="btn primary sm" data-git-action="init" disabled={!!busy} onClick={() => void gitInit()}>{busy === 'git-init' ? <Loader2 size={13} className="spin" /> : <FolderGit2 size={13} />}{t('projectProfile.git.init')}</button></div>
+                {!gitReadOnly && <>
+                  <p className="agent-profile-muted">{t('projectProfile.git.initHint')}</p>
+                  <div className="project-card-actions"><button className="btn primary sm" data-git-action="init" disabled={!!busy} onClick={() => void gitInit()}>{busy === 'git-init' ? <Loader2 size={13} className="spin" /> : <FolderGit2 size={13} />}{t('projectProfile.git.init')}</button></div>
+                </>}
               </div>
               : <div className="project-git-summary">
                 <div><span>{t('projectProfile.git.branch')}</span><strong title={git.branch}>{git.branch}</strong>{git.detached && <span className="project-chip">{t('projectProfile.git.detached')}</span>}</div>
@@ -474,7 +485,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
                 {git.remote && <div><span>{t('projectProfile.git.remote')}</span><strong title={git.remote}>{git.remote}</strong></div>}
                 {git.nested && <p className="agent-profile-muted">{t('projectProfile.git.nested')}</p>}
               </div>}
-            {git.repo && <div className="project-card-actions" data-project-git-write>
+            {git.available && gitReadOnly && <p className="agent-profile-muted" data-project-git-readonly={gitReadOnly}>{t(gitReadOnly === 'shared' ? 'projectProfile.git.sharedNote' : 'projectProfile.git.managedNote')}</p>}
+            {git.repo && !gitReadOnly && <div className="project-card-actions" data-project-git-write>
               <button className="btn primary sm" data-git-action="commit" disabled={!!busy || !changeCount || commitDraft !== null} onClick={openCommit}><GitCommitHorizontal size={13} />{t('projectProfile.git.commit')}</button>
               <button className="btn sm" data-git-action="branch" disabled={!!busy} onClick={() => void newBranch()}>{busy === 'git-branch' ? <Loader2 size={13} className="spin" /> : <GitBranchPlus size={13} />}{t('projectProfile.git.newBranch')}</button>
               {(git.upstream || git.remote) && <button className="btn sm" data-git-action="push" disabled={!!busy || !!git.detached} title={git.detached ? t('projectProfile.git.err.detached') : undefined} onClick={() => void push()}>{busy === 'git-push' ? <Loader2 size={13} className="spin" /> : <Upload size={13} />}{git.ahead ? t('projectProfile.git.pushCount', { count: git.ahead }) : t('projectProfile.git.push')}</button>}
@@ -487,7 +499,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               <button type="button" onClick={() => setReloadAt((n) => n + 1)}><RefreshCw size={13} />{t('projectProfile.refresh')}</button>
             </div>
           </section>
-          {git.repo && commitDraft !== null && <section className="project-card project-git-commit-form" data-project-git-commit-form>
+          {git.repo && !gitReadOnly && commitDraft !== null && <section className="project-card project-git-commit-form" data-project-git-commit-form>
             <div className="project-card-head"><div><h3>{t('projectProfile.git.commitTitle', { count: changeCount })}</h3><small>{t('projectProfile.git.commitHint')}</small></div></div>
             <textarea className="project-git-message" rows={4} value={commitDraft} disabled={generating || busy === 'git-commit'} aria-label={t('projectProfile.git.messageLabel')}
               placeholder={t(generating ? 'projectProfile.git.generating' : 'projectProfile.git.messagePlaceholder')} onChange={(e) => setCommitDraft(e.target.value)} />
