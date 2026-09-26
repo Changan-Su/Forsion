@@ -13,6 +13,14 @@ const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 
 const KIT = '@deepseek-ai/libreoffice-kit@0.1.2';
+/** kit 0.1.2 的 optionalDependencies 原样(npm 已发布版本不可变);装完按 kit 的声明对账。
+ *  必须显式装引擎包:引擎包声明 engines node>=22.19,而构建机 npm 跑在 Node 20(CI setup-node)——
+ *  npm 对**可选**依赖遇 engines 不符会整个跳过(只剩 17 个包、没有引擎),显式依赖则只告警照装。
+ *  运行时是 Electron 自带的 Node 24,不受这条约束。 */
+const ENGINE_VERSIONS = {
+  'libreoffice-kit-darwin-arm64': '0.1.1', 'libreoffice-kit-darwin-x64': '0.1.1',
+  'libreoffice-kit-win32-x64': '0.1.2', 'libreoffice-kit-win32-arm64': '0.1.2', 'libreoffice-kit-wasm': '0.1.1',
+};
 
 const officeDir = () => path.join(__dirname, 'office');
 
@@ -56,14 +64,22 @@ function fetchOffice({ platformName, archName }) {
     writeFileSync(path.join(dest, '.skipped'), 'office engine skipped\n');
     return dest;
   }
-  console.log(`[fetch-office] npm install ${KIT} (${platformName}-${archName})`);
+  const engineName = enginePackage(platformName, archName);
+  if (!ENGINE_VERSIONS[engineName]) throw new Error(`[fetch-office] 不支持的目标 ${platformName}-${archName}`);
+  const engineSpec = `@deepseek-ai/${engineName}@${ENGINE_VERSIONS[engineName]}`;
+  console.log(`[fetch-office] npm install ${KIT} ${engineSpec}`);
   // win32 上 npm 是 .cmd shim,不经 shell 起不来;路径里可能有空格,所以 shell 时自己加引号。
   const win = process.platform === 'win32';
+  // 跨平台/跨架构打包:npm 对**显式**依赖按本机实际 os/cpu 校验(--os/--cpu 只管可选依赖的挑选),
+  // 目标不是本机就得 --force 跳过这道校验。CI 每行都是本机架构,走不到这里。
+  const cross = platformName !== process.platform || archName !== process.arch ? ['--force'] : [];
   execFileSync(win ? 'npm.cmd' : 'npm', ['install', '--prefix', win ? `"${dest}"` : dest, '--no-save', '--no-package-lock',
-    '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', `--os=${platformName}`, `--cpu=${archName}`, KIT],
+    '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund', `--os=${platformName}`, `--cpu=${archName}`, ...cross, KIT, engineSpec],
   { stdio: 'inherit', shell: win });
-  const engine = path.join(dest, 'node_modules', '@deepseek-ai', enginePackage(platformName, archName));
+  const engine = path.join(dest, 'node_modules', '@deepseek-ai', engineName);
   if (!existsSync(path.join(engine, 'prebuilds.json'))) throw new Error(`[fetch-office] 装完缺引擎包 ${engine}`);
+  const want = require(path.join(dest, 'node_modules', '@deepseek-ai', 'libreoffice-kit', 'package.json')).optionalDependencies?.[`@deepseek-ai/${engineName}`];
+  if (want !== ENGINE_VERSIONS[engineName]) throw new Error(`[fetch-office] kit 要 ${engineName}@${want},这里写的是 ${ENGINE_VERSIONS[engineName]}:升 kit 时同步 ENGINE_VERSIONS`);
   if (platformName === 'win32') {
     const from = vcRedistDir(archName);
     for (const dll of VC_DLLS) copyFileSync(path.join(from, dll), path.join(engine, 'bin', dll));
