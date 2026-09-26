@@ -81,6 +81,8 @@
 }
 /* lucide 默认 24px 是**表现属性**,CSS 压得过 —— 故 JSX 一律别传 size。 */
 :is(.t2s-side, .t2sw-plug) .t2s-lead .t2s-lead-icon { width: 1em; height: 1em; }
+/* Project 导入的图片图标(emoji 走 .amx-page-emoji,见 amadeus-host.css):与兜底图标同为 1em 见方。 */
+.t2s-lead img.t2s-project-icon { display: block; width: 1em; height: 1em; object-fit: cover; border-radius: 3px; }
 .t2s-side .t2s-lead .t2s-lead-chev {
   position: absolute; inset: 0; margin: 0;
   align-items: center; justify-content: center;
