@@ -1,19 +1,37 @@
 // Callout 渲染:blockquote 首行以 `[!type]`(可带 +/- 折叠符)开头 → Obsidian 式着色标注。
-// 纯 ProseMirror 装饰(不改 schema、不动序列化)→ .md 落盘仍是原生 Obsidian callout 语法,零迁移。
-// token 保持可编辑、只样式化成徽章(Obsidian 编辑态同款诚实);
+// ProseMirror 装饰 + 定向标题分段；不改 schema，落盘仍是原生 Obsidian callout 语法。
+// 折叠块标题直接编辑，令牌通过源码按钮编辑；有色标注沿用双击源码入口。
 // 折叠([!x]-)已实现:收起只留首行,chevron 切换 = 改写 token 里的 +/- 字符(状态即 md,跨端一致)。
 
-import { $prose } from '@milkdown/kit/utils'
+import { $prose, $remark } from '@milkdown/kit/utils'
 import { Plugin, PluginKey, TextSelection, type Selection } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import type { EditorState } from '@milkdown/kit/prose/state'
 import type { ResolvedPos, Node as PMNode } from '@milkdown/kit/prose/model'
 import { registerMessages, translate } from '../../../i18n'
+import { splitParagraph } from './softBreak'
 
 registerMessages({
   'mdcallout.expand': { zh: '展开', en: 'Expand' },
   'mdcallout.collapse': { zh: '折叠', en: 'Collapse' },
+  'mdcallout.title': { zh: '折叠标题', en: 'Toggle title' },
+  'mdcallout.empty': { zh: '空折叠块，点击添加内容', en: 'Empty toggle. Click to add content.' },
+  'mdcallout.source': { zh: '编辑折叠源码', en: 'Edit toggle source' },
 })
+
+// Obsidian callout 的第一行就是标题；只在读取时拆开这一个段落，不改变普通 Markdown 的软换行。
+// 序列化树没有 position，不能在写侧重复拆分（Shift+Enter 仍是段内换行）。
+type CalloutAst = { type: string; value?: string; children?: CalloutAst[]; position?: unknown }
+export function splitCalloutTitle(tree: CalloutAst): void {
+  const first = tree.children?.[0]
+  if (tree.type === 'blockquote' && first?.type === 'paragraph' && first.position
+    && /^\[![a-z]+\][+-]?/i.test(first.children?.[0]?.value ?? '')) {
+    const parts: CalloutAst[] = splitParagraph(first)
+    if (parts.length > 1) tree.children!.splice(0, 1, ...parts)
+  }
+  tree.children?.forEach(splitCalloutTitle)
+}
+export const calloutTitleRemark = $remark('amadeusCalloutTitle', () => () => splitCalloutTitle)
 
 /**
  * 落盘前把 callout 令牌的 `\[` 还原成 `[`。
@@ -49,7 +67,7 @@ function calloutOf(node: PMNode) {
   const m = first && first.isTextblock ? CALLOUT_RE.exec(first.textContent) : null
   if (!m || !first) return null
   // 令牌与标题之间那个空格跟着令牌一起藏,否则隐藏后标题左边凭空空一格
-  const gap = first.textContent[m[0].length] === ' ' ? 1 : 0
+  const gap = /[ \u00a0]/.test(first.textContent[m[0].length] ?? '') ? 1 : 0
   const mk = TITLE_MARK_RE.exec(first.textContent.slice(m[0].length + gap))
   return {
     type: m[1].toLowerCase(),
@@ -67,21 +85,26 @@ function calloutOf(node: PMNode) {
  * 某个位置所在的 callout(往上找最近的 blockquote 祖先)。
  * headEnd = 首段(标题行)末尾;markerPos = `]` 后那个 +/- 字符的位置。
  */
-function calloutAt($pos: ResolvedPos) {
-  for (let d = $pos.depth; d > 0; d--) {
+function calloutAt($pos: ResolvedPos, hiddenAncestor = false) {
+  for (let i = 1; i <= $pos.depth; i++) {
+    const d = hiddenAncestor ? i : $pos.depth + 1 - i
     const node = $pos.node(d)
     if (node.type.name !== 'blockquote') continue
     const c = calloutOf(node)
-    if (!c) return null
+    if (!c) continue
     const bqStart = $pos.start(d) // blockquote 内容起点
+    const inHead = $pos.pos < bqStart + c.first.nodeSize
+    if (hiddenAncestor && (c.marker !== '-' || inHead)) continue
     return {
+      ...c,
+      node,
       marker: c.marker,
       collapsed: c.marker === '-',
       bqPos: $pos.before(d), // blockquote 本身那一位(源码态就以它为身份)
       bqStart,
       afterBq: $pos.after(d), // blockquote 之后那一位
       headEnd: bqStart + 1 + c.first.content.size,
-      inHead: $pos.pos < bqStart + c.first.nodeSize,
+      inHead,
       markerPos: bqStart + 1 + c.type.length + 3,
       /** 标题行里被藏起来的语法段(令牌、`## `/`- ` 前缀),文档绝对位 */
       hidden: [
@@ -98,14 +121,136 @@ const collapsedCalloutAt = ($pos: ResolvedPos) => {
   return c && c.collapsed ? c : null
 }
 
+const SCROLL_BUFFER = '--amx-fold-scroll-buffer'
+const scrollBuffer = (pane: HTMLElement): number => parseFloat(pane.style.getPropertyValue(SCROLL_BUFFER)) || 0
+const setScrollBuffer = (pane: HTMLElement, px: number): void => {
+  pane.style.setProperty(SCROLL_BUFFER, `${Math.max(0, Math.ceil(px))}px`)
+}
+
+/**
+ * 页面滚到末尾时，正文收起会缩小 scrollHeight，浏览器先夹掉 scrollTop，整页一起跳。
+ * 在滚动容器末尾补足刚收起的高度，并随展开动画逐帧结算；向上滚动时释放余量。
+ */
+const foldScrollJobs = new WeakMap<HTMLElement, () => void>()
+const foldBufferListeners = new WeakMap<HTMLElement, () => void>()
+function holdFoldViewport(pane: HTMLElement, change: () => void): void {
+  foldScrollJobs.get(pane)?.()
+  foldBufferListeners.get(pane)?.()
+  const top = pane.scrollTop
+  const minHeight = top + pane.clientHeight
+  // 先给足临时余量，再改文档；否则浏览器会在 dispatch 内同步夹掉 scrollTop。
+  setScrollBuffer(pane, scrollBuffer(pane) + pane.scrollHeight)
+  change()
+  let raf = 0
+  let active = true
+  const started = performance.now()
+  const trim = (): void => {
+    const natural = pane.scrollHeight - scrollBuffer(pane)
+    const needed = Math.max(0, pane.scrollTop + pane.clientHeight - natural)
+    if (needed < scrollBuffer(pane)) setScrollBuffer(pane, needed)
+    if (!scrollBuffer(pane)) {
+      pane.removeEventListener('scroll', trim)
+      foldBufferListeners.delete(pane)
+    }
+  }
+  const armTrim = (): void => {
+    trim()
+    if (scrollBuffer(pane)) {
+      pane.addEventListener('scroll', trim, { passive: true })
+      foldBufferListeners.set(pane, () => {
+        pane.removeEventListener('scroll', trim)
+        foldBufferListeners.delete(pane)
+      })
+    }
+  }
+  const unlisten = (): void => {
+    pane.removeEventListener('wheel', release)
+    pane.removeEventListener('touchmove', release)
+    pane.removeEventListener('keydown', release)
+  }
+  const settle = (): void => {
+    const current = scrollBuffer(pane)
+    const natural = pane.scrollHeight - current
+    setScrollBuffer(pane, Math.max(0, minHeight - natural))
+    pane.scrollTop = top
+    if (active && performance.now() - started < 260) raf = requestAnimationFrame(settle)
+    else {
+      unlisten()
+      foldScrollJobs.delete(pane)
+      armTrim()
+    }
+  }
+  const release = (): void => {
+    if (!active) return
+    active = false
+    cancelAnimationFrame(raf)
+    unlisten()
+    foldScrollJobs.delete(pane)
+    requestAnimationFrame(() => { if (!foldScrollJobs.has(pane)) armTrim() })
+  }
+  foldScrollJobs.set(pane, release)
+  pane.addEventListener('wheel', release, { passive: true, once: true })
+  pane.addEventListener('touchmove', release, { passive: true, once: true })
+  pane.addEventListener('keydown', release, { once: true })
+  settle()
+}
+
 /** 切折叠 = 改写 token 里的 +/- 字符(状态即 md,Obsidian 同语义、跨端一致) */
-function toggleFold(view: EditorView, c: { marker?: string; collapsed: boolean; markerPos: number }) {
-  const tr = view.state.tr
-  view.dispatch(
-    c.marker
-      ? tr.insertText(c.collapsed ? '+' : '-', c.markerPos, c.markerPos + 1)
-      : tr.insertText('-', c.markerPos, c.markerPos),
-  )
+let foldAnimationId = 0
+function toggleFold(view: EditorView, c: { marker?: string; collapsed: boolean; markerPos: number; bqPos: number }) {
+  const fold = view.state.doc.nodeAt(c.bqPos)
+  const isFold = !!fold && calloutOf(fold)?.type === 'fold'
+  const animationId = isFold ? ++foldAnimationId : 0
+  if (isFold) {
+    view.dispatch(view.state.tr.setMeta(calloutKey, { foldStart: { at: c.bqPos, id: animationId } } satisfies CalloutMeta))
+    const beforeDom = view.nodeDOM(c.bqPos)
+    // 展开时必须先让 display:none 的子块以高度 0 进入布局，再改 marker 才有插值起点。
+    if (beforeDom instanceof HTMLElement) void beforeDom.offsetHeight
+  }
+  const change = (): void => {
+    const tr = view.state.tr
+    view.dispatch(
+      c.marker
+        ? tr.insertText(c.collapsed ? '+' : '-', c.markerPos, c.markerPos + 1)
+        : tr.insertText('-', c.markerPos, c.markerPos),
+    )
+  }
+  const pane = view.dom.closest<HTMLElement>('.amx-pane.amx-editor')
+  if (c.marker && pane) holdFoldViewport(pane, change)
+  else change()
+  if (isFold) setTimeout(() => {
+    if (view.dom.isConnected)
+      view.dispatch(view.state.tr.setMeta(calloutKey, { foldEnd: animationId } satisfies CalloutMeta))
+  }, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 230)
+}
+
+/** PM 的同一文档位置可以落在字号为 0 的令牌末尾，也可以落在可见标题首字前。
+ * 前者会画出 0 高原生光标，自绘光标也读到令牌的底部；将 DOM 选区规范到可见文字。
+ */
+function alignFoldTitleCaret(view: EditorView): void {
+  const selection = view.state.selection
+  if (!selection.empty || !view.hasFocus()) return
+  const c = calloutAt(selection.$from)
+  if (!c || c.type !== 'fold' || !c.inHead || calloutKey.getState(view.state)?.srcAt === c.bqPos) return
+  if (selection.from !== c.hidden[c.hidden.length - 1][1]) return
+  const domSelection = document.getSelection()
+  const anchor = domSelection?.anchorNode
+  const origin = anchor instanceof Element ? anchor : anchor?.parentElement
+  if (!origin?.closest('.callout-syntax')) return
+  const head = view.nodeDOM(c.bqStart)
+  if (!(head instanceof HTMLElement)) return
+  const walker = document.createTreeWalker(head, NodeFilter.SHOW_TEXT)
+  let node: Node | null
+  while ((node = walker.nextNode())) {
+    if (!node.textContent || node.parentElement?.closest('.callout-syntax,button')) continue
+    if (view.posAtDOM(node, 0) !== selection.from) continue
+    const range = document.createRange()
+    range.setStart(node, 0)
+    range.collapse(true)
+    domSelection!.removeAllRanges()
+    domSelection!.addRange(range)
+    return
+  }
 }
 
 /**
@@ -113,9 +258,10 @@ function toggleFold(view: EditorView, c: { marker?: string; collapsed: boolean; 
  *
  * ⚠️ 不能改回「光标在标题行就露源码」那套(2026-07-31 两次实报):ProseMirror 的 selection 失焦后
  * **原地不动**,点过一次就永远露着;而折叠态的光标守卫又会主动把光标送进/送离标题行,于是
- * 从没点过的块也会自己把 `[!note]-` 亮出来。露不露**只由双击决定**,与光标位置无关。
+ * 从没点过的块也会自己把 `[!note]-` 亮出来。源码只由显式入口打开，与光标位置无关。
  *
- * 交互契约(用户 2026-07-31 拍板):
+ * 有色标注保留原交互；[!fold] 使用左侧按钮折叠、标题直接编辑、显式源码入口。
+ * 有色标注的交互契约:
  *   · 标题行**整行单击** = 切折叠(不放光标)
  *   · **双击** = 露源码(第一下顺带切了一次折叠,刻意不抵消)
  *   · **本块失焦** = 收回源码态(每个 Amadeus 块是独立编辑器,点别的块即失焦)
@@ -123,7 +269,45 @@ function toggleFold(view: EditorView, c: { marker?: string; collapsed: boolean; 
  */
 // export:统一实例 spike(amadeus/unified)需要在「光标离开 callout」时代为清 srcAt ——
 // 每块一实例时代「本块失焦=收回」靠编辑器 blur,单实例里点别的段落不再触发 blur。
-export const calloutKey = new PluginKey<{ srcAt: number | null }>('amadeus-callout-src')
+type CalloutState = { srcAt: number | null; animations: { at: number; id: number }[] }
+type CalloutMeta = { srcAt?: number | null; foldStart?: { at: number; id: number }; foldEnd?: number }
+export const calloutKey = new PluginKey<CalloutState>('amadeus-callout-src')
+
+/** 在宿主的结构源码/通用引用键位之前处理折叠标题，避免退格删坏隐藏令牌。 */
+export function handleFoldKeyDown(view: EditorView, event: KeyboardEvent): boolean {
+  if (!view.editable || event.isComposing) return false
+  const { state } = view
+  const c = calloutAt(state.selection.$from)
+  if (!c || c.type !== 'fold' || !c.inHead || calloutKey.getState(state)?.srcAt === c.bqPos) return false
+  const start = c.hidden[c.hidden.length - 1][1]
+  if (event.key === 'Home' || (event.key === 'ArrowLeft' && event.metaKey)) {
+    view.dispatch(state.tr.setSelection(TextSelection.create(state.doc, event.shiftKey ? Math.max(start, state.selection.anchor) : start, start)))
+    alignFoldTitleCaret(view)
+    return true
+  }
+  if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false
+  if (event.key === 'ArrowLeft' && state.selection.empty && state.selection.from <= start) {
+    const before = TextSelection.near(state.doc.resolve(c.bqPos), -1)
+    if (before.from < c.bqPos) view.dispatch(state.tr.setSelection(before))
+    return true
+  }
+  if (event.key === 'Backspace' && state.selection.empty && state.selection.from <= start) {
+    const children: PMNode[] = [state.schema.nodes.paragraph.create(null, c.first.content.cut(start - c.bqStart - 1))]
+    c.node.forEach((node, _offset, index) => { if (index > 0) children.push(node) })
+    const tr = state.tr.replaceWith(c.bqPos, c.afterBq, children)
+    view.dispatch(tr.setSelection(TextSelection.near(tr.doc.resolve(c.bqPos + 1))).scrollIntoView())
+    return true
+  }
+  if (event.key === 'Enter' && state.selection.$from.sameParent(state.selection.$to)) {
+    const tr = state.tr.deleteSelection()
+    if (c.marker !== '+') tr.insertText('+', c.markerPos, c.markerPos + (c.marker ? 1 : 0))
+    const at = Math.max(tr.selection.from, tr.mapping.map(start))
+    tr.split(at, 1, [{ type: state.schema.nodes.paragraph }])
+    view.dispatch(tr.setSelection(TextSelection.near(tr.doc.resolve(at + 2))).scrollIntoView())
+    return true
+  }
+  return false
+}
 
 /** 语法字符藏着时,方向键把它当一个整体跳过 —— 否则光标停在看不见的字里,打字位置发玄。 */
 function skipHidden(state: EditorState, next: number, dir: 1 | -1): number | null {
@@ -139,15 +323,21 @@ function skipHidden(state: EditorState, next: number, dir: 1 | -1): number | nul
 export function calloutPlugin() {
   return $prose(
     () =>
-      new Plugin<{ srcAt: number | null }>({
+      new Plugin<CalloutState>({
         key: calloutKey,
         state: {
-          init: () => ({ srcAt: null }),
+          init: () => ({ srcAt: null, animations: [] }),
           apply: (tr, value) => {
-            const m = tr.getMeta(calloutKey) as { srcAt?: number | null } | undefined
-            if (m && 'srcAt' in m) return { srcAt: m.srcAt ?? null }
+            const m = tr.getMeta(calloutKey) as CalloutMeta | undefined
+            let animations = value.animations.map((a) => ({ ...a, at: tr.mapping.map(a.at) }))
+            if (m?.foldStart) animations = [...animations.filter((a) => a.at !== m.foldStart!.at), m.foldStart]
+            if (m?.foldEnd) animations = animations.filter((a) => a.id !== m.foldEnd)
+            if (m && 'srcAt' in m) return { srcAt: m.srcAt ?? null, animations }
             // 没有显式改动就跟着文档编辑漂(在源码态里打字,位置会前后挪)
-            return value.srcAt === null ? value : { srcAt: tr.mapping.map(value.srcAt) }
+            if (value.srcAt === null) return { srcAt: null, animations }
+            const at = tr.mapping.map(value.srcAt)
+            const node = tr.doc.nodeAt(at)
+            return { srcAt: node && calloutOf(node) && tr.selection.from > at && tr.selection.to < at + node.nodeSize ? at : null, animations }
           },
         },
         /**
@@ -155,15 +345,21 @@ export function calloutPlugin() {
          * (点标题行文字右侧的空白、折叠时光标本来就在内容里、方向键、加载时自动聚焦),
          * 于是「打字打进虚空」。一条守卫收口所有入口。
          *
-         * ⚠️ 送到折叠块**之后**,不是停在标题行 —— 停标题行会让语法字符(`[!note]-`)平白亮起来,
-         * 而用户从没把光标放进去过(2026-07-31 实报)。往下走进折叠区时,块后本来也正是想去的落点。
+         * [!fold] 回到可见标题末；有色标注保留向后越过整块的语义。
          * ⚠️ 只管空光标 —— 跨隐藏区的选区(Meta+A 全选删除)是合法的,别破坏。
          */
         appendTransaction(_trs, _old, state) {
           const sel = state.selection
           if (!sel.empty) return null
-          const c = collapsedCalloutAt(sel.$from)
-          if (!c || c.inHead) return null
+          const head = calloutAt(sel.$from)
+          if (head?.type === 'fold' && head.inHead && calloutKey.getState(state)?.srcAt !== head.bqPos) {
+            const visibleStart = head.hidden[head.hidden.length - 1][1]
+            if (sel.from < visibleStart) return state.tr.setSelection(TextSelection.create(state.doc, visibleStart))
+          }
+          const c = calloutAt(sel.$from, true)
+          if (!c) return null
+          // 用户主动收起时留在标题，继续编辑的位置可预测；嵌套折叠取最外层可见标题。
+          if (c.type === 'fold') return state.tr.setSelection(TextSelection.create(state.doc, c.headEnd))
           const outside = (s: Selection): boolean => s.from < c.bqStart || s.from >= c.afterBq
           const fwd = TextSelection.near(state.doc.resolve(Math.min(c.afterBq, state.doc.content.size)), 1)
           if (outside(fwd)) return state.tr.setSelection(fwd)
@@ -182,6 +378,7 @@ export function calloutPlugin() {
             },
           },
           handleKeyDown(view, event) {
+            if (handleFoldKeyDown(view, event)) return true
             // 语法字符藏着时,←/→ 把它整段跳过(否则光标停在看不见的字里)
             if ((event.key === 'ArrowLeft' || event.key === 'ArrowRight') && !event.shiftKey) {
               const sel = view.state.selection
@@ -203,18 +400,27 @@ export function calloutPlugin() {
             view.dispatch(view.state.tr.insertText('+', c.markerPos, c.markerPos + 1))
             return false
           },
-          /** 标题行**整行单击** = 切折叠(不放光标)。源码态里例外:那时候单击照常放光标,否则没法定位。 */
+          /** 折叠标题单击编辑；有色标注标题仍切折叠。源码态都按普通文本定位。 */
           handleClick(view, pos) {
             const c = calloutAt(view.state.doc.resolve(pos))
             if (!c || !c.inHead) return false
             if (calloutKey.getState(view.state)?.srcAt === c.bqPos) return false
+            if (c.type === 'fold') {
+              if (!view.editable) return false
+              // 原生 selectionchange 比 click/keydown 晚一拍；显式落位避免紧接着 Enter 用旧行首位置。
+              const at = Math.max(c.hidden[c.hidden.length - 1][1], Math.min(pos, c.headEnd))
+              view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, at)))
+              view.focus()
+              alignFoldTitleCaret(view)
+              return true
+            }
             toggleFold(view, c)
             return true
           },
-          /** 标题行**双击** = 露出源码。第一下顺带切了一次折叠,刻意不抵消(用户拍板)。 */
+          /** 折叠标题双击保留原生选词；有色标注双击进入源码。 */
           handleDoubleClick(view, pos) {
             const c = calloutAt(view.state.doc.resolve(pos))
-            if (!c || !c.inHead) return false
+            if (!c || !c.inHead || c.type === 'fold') return false
             view.dispatch(view.state.tr.setMeta(calloutKey, { srcAt: c.bqPos }))
             return false // 让 ProseMirror 照常选中双击处的词
           },
@@ -226,10 +432,13 @@ export function calloutPlugin() {
               if (c) {
                 const { type, marker, token, hideLen, mark } = c
                 const collapsed = marker === '-'
+                const pluginState = calloutKey.getState(state)
+                const inSrcMode = pluginState?.srcAt === pos
                 decos.push(
                   Decoration.node(pos, pos + node.nodeSize, {
                     class: `callout callout-${type}${collapsed ? ' callout-collapsed' : ''}`,
                     'data-callout': type,
+                    ...(pluginState?.animations.some((a) => a.at === pos) ? { 'data-fold-animating': '' } : {}),
                   }),
                 )
                 // [!type](+/-) 徽章(token 已含折叠符):blockquote 开(+1)+ 首段开(+1)= 文本起点 pos+2。
@@ -237,10 +446,18 @@ export function calloutPlugin() {
                 // 标题排版(`## ` → H2 …)挂在首段上,**恒定**:随光标进出改字号会让整行跳一下。
                 const headStart = pos + 1
                 const headEnd = headStart + c.first.nodeSize
+                if (type === 'fold') {
+                  const empty = !inSrcMode && c.first.content.size === hideLen + (mark?.len ?? 0)
+                  decos.push(Decoration.node(headStart, headEnd, {
+                    class: 'callout-toggle-title',
+                    ...(empty ? { 'data-placeholder': translate('mdcallout.title') } : {}),
+                    ...(empty && state.selection.empty && state.selection.from === pos + 2 + c.first.content.size
+                      ? { 'data-empty-caret': '' } : {}),
+                  }))
+                }
                 if (mark) decos.push(Decoration.node(headStart, headEnd, { class: `callout-title-${mark.cls}` }))
-                // 语法字符(令牌 + 标题前缀)只在**双击进了源码态**时露出,与光标位置无关。
+                // 语法字符(令牌 + 标题前缀)只在显式进入源码态时露出。
                 // ⚠️ 别改回「光标在标题行就露」,原因见 calloutKey 处的注释(两次实报都栽在那上面)。
-                const inSrcMode = calloutKey.getState(state)?.srcAt === pos
                 if (!inSrcMode) {
                   decos.push(Decoration.inline(pos + 2, pos + 2 + hideLen, { class: 'callout-syntax' }))
                   if (mark)
@@ -253,10 +470,8 @@ export function calloutPlugin() {
                 // 折叠 chevron:改写 token 的 +/- 字符 → 状态进 md(Obsidian 同语义)。
                 // ']' 之后的位置 = pos+2 + '[!' + type + ']'。
                 const markerPos = pos + 2 + type.length + 3
-                // chevron 紧跟标题**文字**之后(Obsidian 同款,标题多长它就跟到哪)。
-                // ⚠️ 是首段内容末尾(pos+2+content.size),不是 headEnd —— 后者在段落之外,
-                // widget 会掉到标题行下面去。也别挂到 token 之后:那里随 `+`/`-` 增删左右抖。
-                const chevronAt = pos + 2 + c.first.content.size
+                // 折叠块按钮固定在行首；有色标注仍在标题文字之后。二者都必须挂在段落内。
+                const chevronAt = type === 'fold' ? pos + 2 : pos + 2 + c.first.content.size
                 decos.push(
                   Decoration.widget(
                     chevronAt,
@@ -265,24 +480,82 @@ export function calloutPlugin() {
                       // ⚠️ 类名不能叫 callout-fold —— 那是 `[!fold]` 类型加在 blockquote 上的类,
                       // 同名会让「chevron 旋转 90°」的规则命中整个引用块。
                       b.className = `callout-chevron${collapsed ? ' collapsed' : ''}`
+                      b.type = 'button'
                       b.title = collapsed ? translate('mdcallout.expand') : translate('mdcallout.collapse')
-                      b.textContent = '›'
+                      b.setAttribute('aria-label', b.title)
+                      b.setAttribute('aria-expanded', String(!collapsed))
+                      b.innerHTML = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M5.5 3.8a.65.65 0 0 1 1.02-.53l5.3 3.67a1.3 1.3 0 0 1 0 2.12l-5.3 3.67a.65.65 0 0 1-1.02-.53z"/></svg>'
                       b.contentEditable = 'false'
                       b.addEventListener('mousedown', (e) => {
                         e.preventDefault()
                         e.stopPropagation()
                       })
-                      b.addEventListener('click', () => toggleFold(view, { marker, collapsed, markerPos }))
+                      const activate = (): void => {
+                        const c = calloutAt(view.state.doc.resolve(pos + 2))
+                        if (c?.bqPos === pos) toggleFold(view, c)
+                      }
+                      const focusCurrent = (): void => {
+                        const head = view.nodeDOM(pos + 1) as HTMLElement | null
+                        head?.querySelector<HTMLButtonElement>('.callout-chevron')?.focus()
+                      }
+                      b.addEventListener('keydown', (e) => {
+                        if (e.key !== ' ' && e.key !== 'Enter') return
+                        e.preventDefault()
+                        e.stopPropagation()
+                        // PM 会重建装饰所在的标题段落；keyup 结束后把焦点交给新按钮。
+                        document.addEventListener('keyup', focusCurrent, { capture: true, once: true })
+                        activate()
+                      })
+                      b.addEventListener('click', (e) => {
+                        e.preventDefault()
+                        e.stopPropagation()
+                        activate()
+                        if ((e as MouseEvent).detail === 0) queueMicrotask(focusCurrent)
+                      })
                       return b
                     },
-                    // key 带位置/折叠符位置/折叠态:三者任一变就重建。⚠️ markerPos 必须进 key ——
-                    // 改类型名(`[!note]`→`[!tip]`)时 pos 与 collapsed 都不变,漏了它闭包里的
-                    // markerPos 会过期,点箭头就写错字符。
-                    { side: 1, ignoreSelection: true, stopEvent: () => true, key: `cf${pos}:${markerPos}:${collapsed ? 1 : 0}` },
+                    // marker 是装饰身份的一部分，撤销/重做与源码编辑时也会重建带正确状态的按钮。
+                    // 键盘触发后的焦点由 keyup 交给新按钮。
+                    { side: type === 'fold' ? -1 : 1, ignoreSelection: true, stopEvent: () => true, key: `cf${pos}:${markerPos}:${marker ?? ''}` },
                   ),
                 )
+                if (type === 'fold') {
+                  decos.push(Decoration.widget(headEnd - 1, (view) => {
+                    const b = document.createElement('button')
+                    b.type = 'button'
+                    b.className = 'amx-src-btn callout-source'
+                    b.contentEditable = 'false'
+                    b.textContent = '</>'
+                    b.title = translate('mdcallout.source')
+                    b.setAttribute('aria-label', b.title)
+                    if (!view.editable) b.style.display = 'none'
+                    b.onmousedown = (e) => e.preventDefault()
+                    b.onclick = (e) => {
+                      e.preventDefault()
+                      view.dispatch(view.state.tr.setMeta(calloutKey, { srcAt: pos })
+                        .setSelection(TextSelection.create(view.state.doc, pos + 2)))
+                      view.focus()
+                    }
+                    return b
+                  }, { side: 1, stopEvent: () => true, key: `cs${pos}` }))
+                  if (!collapsed && node.childCount === 1) decos.push(Decoration.widget(headEnd, (view) => {
+                    const b = document.createElement('button')
+                    b.type = 'button'
+                    b.className = 'callout-empty'
+                    b.contentEditable = 'false'
+                    b.textContent = translate('mdcallout.empty')
+                    if (!view.editable) b.style.display = 'none'
+                    b.onmousedown = (e) => e.preventDefault()
+                    b.onclick = () => {
+                      const tr = view.state.tr.insert(headEnd, view.state.schema.nodes.paragraph.create())
+                      view.dispatch(tr.setSelection(TextSelection.create(tr.doc, headEnd + 1)))
+                      view.focus()
+                    }
+                    return b
+                  }, { side: -1, stopEvent: () => true, key: `ce${pos}:${headEnd}` }))
+                }
               }
-              return false // 不深入 blockquote 内部(嵌套引用不重复标)
+              return true // 嵌套折叠各自保留开关与状态。
             })
             return decos.length ? DecorationSet.create(state.doc, decos) : null
           },

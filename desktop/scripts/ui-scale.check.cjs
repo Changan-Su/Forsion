@@ -32,7 +32,7 @@ function walk(dir) {
     })
   }
 }
-walk(path.join(ROOT, 'frontend/src')); walk(path.join(ROOT, '../lcl/engine'))
+walk(path.join(ROOT, 'frontend/src')); walk(path.join(ROOT, '../lcl'))
 console.log(`UI scale: ${roles.map(r => `${r}=${values.get(r)}`).join(', ')}`)
 console.log(`${checked} chrome declarations checked; ${preserved} document/graphic declarations preserved`)
 if (failures.length) { console.error(failures.join('\n')); process.exitCode = 1 }

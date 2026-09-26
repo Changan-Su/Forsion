@@ -41,6 +41,13 @@
 .am-app.amx-pane { height: 100%; overflow: auto; background: transparent; color: var(--text); }
 /* 顶栏(sticky, top:0)之上不留纸面空隙:top padding 归零,顶栏贴到纸卡最上沿、与正文同底色无缝(见 .amx-toolbar)。 */
 .amx-editor { padding: 0 0 40px; }
+/* 折叠正文缩短文档时的滚动余量；只在交互需要时由 callout.ts 设置。 */
+.am-app.amx-pane.amx-editor::after {
+  content: '';
+  display: block;
+  height: var(--amx-fold-scroll-buffer, 0px);
+  pointer-events: none;
+}
 /* 独立 .db 数据库视图(AmadeusDbView):.amx-pane 已管高度/滚动,这里只给表格四周留白。 */
 .amx-dbview { padding: 18px 24px 40px; }
 /* 独立图片视图(AmadeusImageView):内层 scroll 自管滚动/居中(故关掉 .amx-pane 的外层 overflow)。
@@ -369,10 +376,7 @@
   font-family: var(--font-mono, ui-monospace, monospace);
 }
 
-/* ── 语法字符(`[!note]-` 令牌、标题里的 `## `/`- `)只在光标不在标题行时隐藏 ──
-   Obsidian Live Preview 手感。⚠️ 用 font-size:0 而不是 display:none:span 还在,
-   项目符号那条要靠它的 ::before 变出 `•`;而且光标一进这行就整段浮现,不存在
-   「方向键在看不见的字里空走」(这是原先不敢藏令牌的唯一顾虑)。 */
+/* 语法默认隐藏；有色标注双击、折叠块显式点击源码入口后才显示。 */
 .am-app .milkdown .ProseMirror .callout-syntax { font-size: 0; }
 /* ⚠️ 特异性要压得住 `.callout-fold .callout-token`(那条给 fold 的令牌单独定了 0.7em),
    否则折叠块的 `[!fold]-` 藏不掉 —— 真机截图取证过。 */
@@ -450,11 +454,12 @@
    这层本来就是 contentEditable=false,里面没有可选的文本。 */
 .am-app .wiki-inline-img-wrap { position: relative; display: inline-block; line-height: 0; user-select: none; }
 
-/* 图片选中态(点一下图片 = PM 选区精确铺在那段 `![[…]]` 源码上,见 wikilink.ts):
+/* 图片选中态(点一下图片或跨块文字选区覆盖图片,见 wikilink.ts/mdImage.ts):
    accent 描边 + 右缘缩放把手。块选中的淡底在图片上看不见,所以这里用环不用底。
    ⚠️ 强调色必须写 `var(--primary, var(--accent, …))` 这条回退链:Amadeus 有的主题只定义
    `--accent`,裸写 `var(--primary)` 会整条声明作废 —— 环和把手当场隐形(截图才发现)。 */
 .am-app .wiki-inline-img-wrap[data-selected] > img,
+.am-app .wiki-inline-img-wrap[data-range-selected] > img,
 .am-app .wiki-inline-img-wrap[data-resizing] > img {
   outline: 1px solid color-mix(in srgb, var(--primary, var(--accent, #6c5ce7)) 82%, transparent);
   outline-offset: 2px;
@@ -505,10 +510,96 @@
   --callout-color: var(--text-muted);
   background: transparent;
   border-radius: 0;
-  padding: 2px 0 2px 4px;
+  padding: 0 0 0 28px;
+  color: var(--text);
 }
 .am-app .milkdown .ProseMirror blockquote.callout-fold > *:not(:first-child) {
-  margin-left: 18px; /* = Notion 的「tab 一下」:折叠内内容比标题缩进一级 */
+  margin-left: 0;
+  overflow: visible;
+  transition:
+    height 0.2s cubic-bezier(0.32, 0.72, 0, 1),
+    opacity 0.16s ease,
+    margin-block 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.am-app .milkdown .ProseMirror blockquote.callout-fold[data-fold-animating] > *:not(:first-child) {
+  overflow: clip;
+}
+/* display 在收起补间结束时才离场；完成后隐藏子树，Tab 不会进入。 */
+.am-app .milkdown .ProseMirror blockquote.callout-fold.callout-collapsed > *:not(:first-child) {
+  display: none;
+  height: 0;
+  opacity: 0;
+  margin-block: 0;
+  pointer-events: none;
+}
+/* 动画期间保留布局盒，收起到 0 后再由上面的 display:none 真正移出可访问树。 */
+.am-app .milkdown .ProseMirror blockquote.callout-fold.callout-collapsed[data-fold-animating] > *:not(:first-child) {
+  display: block;
+}
+@starting-style {
+  .am-app .milkdown .ProseMirror blockquote.callout-fold:not(.callout-collapsed) > *:not(:first-child) {
+    height: 0;
+    opacity: 0;
+    margin-block: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .am-app .milkdown .ProseMirror blockquote.callout-fold > *:not(:first-child) { transition: none; }
+}
+.am-app .milkdown .ProseMirror .callout-toggle-title {
+  position: relative;
+  margin-block: 0;
+  padding-right: 34px;
+  min-height: 1.65em;
+  cursor: text;
+}
+.am-app .milkdown .ProseMirror .callout-toggle-title > .callout-chevron {
+  position: absolute;
+  font: inherit;
+  height: 24px;
+  left: -28px;
+  top: calc((1lh - 24px) / 2);
+  margin: 0;
+}
+.am-app .milkdown .ProseMirror .callout-toggle-title[data-placeholder]::after {
+  content: attr(data-placeholder);
+  position: absolute;
+  left: 0;
+  top: 0;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+/* 空标题只有被隐藏的 Markdown token，浏览器没有可绘制的原生 caret；给可输入位置画一根。 */
+html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-toggle-title[data-empty-caret]::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: calc((1lh - 1.2em) / 2);
+  width: 1px;
+  height: 1.2em;
+  background: currentColor;
+  pointer-events: none;
+  animation: sc-blink 1s step-end infinite;
+}
+.am-app .callout-toggle-title:hover > .callout-source,
+.am-app .callout-toggle-title:focus-within > .callout-source {
+  opacity: 1;
+  pointer-events: auto;
+}
+.am-app .callout-source { top: 2px; right: 0; }
+.am-app .callout-empty {
+  display: block;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  padding: 3px 0;
+  text-align: left;
+  cursor: text;
+}
+.am-app .callout-empty:hover { color: var(--text); }
+@media (hover: none) {
+  .am-app .callout-toggle-title > .callout-source { opacity: 1; pointer-events: auto; }
 }
 .am-app .milkdown .ProseMirror blockquote.callout-fold .callout-token {
   background: transparent;

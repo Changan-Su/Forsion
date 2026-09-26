@@ -169,11 +169,11 @@ const amadeusSpace: SpaceDefinition = {
   },
 }
 
-/** Coding Space:左=Tangu 对话(Prompt,复用 ChatView);主=Code|Preview 工作台;右=工作区文件树。
- *  模仿 Google AI Studio:左侧描述需求 → Coding Agent 生成 web app → 主区实时预览/改代码。
+/** Coding Space:未选项目时左=项目导航,进入项目后左=对话;主=项目索引或 Code|Preview;右=文件树。
+ *  左栏使用原生 View 槽位,CodeStudioView 随项目状态切换导航与 Chat View。
  *  新会话默认落 Coding Agent(不改全局 defaultSlug,只设新会话草稿)。 */
 const CODING_SIDE_VIEWS: SidebarDefaults = {
-  left: [{ type: 'chat', params: { followActive: true, reuseKey: 'primary', studio: true } }],
+  left: [{ type: 'coding-navigation', params: {} }],
   right: [{ type: 'workspace', params: {} }],
   bottom: [{ type: 'terminal', params: {} }],
 }
@@ -183,15 +183,15 @@ const codingSpace: SpaceDefinition = {
   name: () => app().tr('space.coding'),
   icon: Code2,
   sidebarDefaults: CODING_SIDE_VIEWS,
-  // 左栏 = 对话(Prompt),当宽 IDE 侧栏用:可自由拖宽 + 记住宽度(默认比常规宽 20%)。
+  // 左栏 = 项目导航或对话:可自由拖宽 + 记住宽度。
   resizableSides: { left: true },
-  // 对话栏起手比黄金分割宽 20%(IDE 观感);其余 Space 不设 → 与钉宽档同宽。
-  sideDefaultScale: { left: 1.2 },
+  // 导航比旧对话更精简,起手用标准侧栏宽度;手动调整仍照常记住。
+  sideDefaultScale: { left: 1 },
   build() {
     ws().setSidebarDefaults(CODING_SIDE_VIEWS)
     app().selectNewChatAgent?.('coding') // 新会话默认 Coding agent
     ws().openView('code-studio', {}, 'main')
-    ws().openView('chat', { followActive: true, reuseKey: 'primary', studio: true }, 'left')
+    ws().openView('coding-navigation', {}, 'left')
     ws().initializeSidebar('right', false)
     ws().initializeSidebar('bottom', false)
   },

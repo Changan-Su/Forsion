@@ -8,7 +8,7 @@ export function FloatingPanelFrame({ title, onClose, children, compact = false, 
   onClose: () => void
   children: ReactNode
   compact?: boolean
-  /** 旁聊这类窄面板(对齐桌面原生窗的 440 宽缺省) */
+  /** 旁聊这类窄面板(对齐桌面原生窗的宽度) */
   narrow?: boolean
 }) {
   return <motion.div className="floating-panel-layer" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}

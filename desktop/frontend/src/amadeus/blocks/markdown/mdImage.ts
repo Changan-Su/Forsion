@@ -95,8 +95,14 @@ class MdImageView implements NodeView {
   /** NodeView 选中态兜底同步:部分外部命令直接恢复 NodeSelection 时,仍要保证环与把手在。 */
   syncSelection(): void {
     const pos = this.getPos()
-    if (pos == null) return this.deselectNode()
+    if (pos == null) {
+      delete this.dom.dataset.rangeSelected
+      return this.deselectNode()
+    }
     const sel = this.view.state.selection
+    // 跨块文字选区覆盖图片时,图片节点本身没有可着色字符;给渲染体一圈选中反馈。
+    if (sel.from < pos + this.node.nodeSize && sel.to > pos) this.dom.dataset.rangeSelected = ''
+    else delete this.dom.dataset.rangeSelected
     const picked = sel instanceof NodeSelection && sel.from === pos
     if (picked && !this.dom.hasAttribute('data-selected')) this.selectNode()
     else if (!picked && this.dom.hasAttribute('data-selected')) this.deselectNode()

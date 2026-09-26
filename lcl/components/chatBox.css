@@ -1,0 +1,44 @@
+/* Shared Chat Box surface. t2c names remain stable for existing theme packages. */
+/* 悬浮卡 —— 字面意义上的悬浮:输入区**不占布局**,正文铺满整列从它底下穿过去
+   (见 chat2.css 的 .composer-anchor)。所以底色必须是**不透明**的:它要真的挡住底下滚过的字。
+   glass 主题把这层换成半透磨砂(genesis-glass/theme.css 3.5),那里糊的正是底下的正文。 */
+.t2c-card {
+  --t2c-font-body: 13px;
+  --t2c-font-control: var(--ui-font-meta);
+  --t2c-font-meta: var(--ui-font-caption);
+  position: relative;
+  container-type: inline-size; /* 卡宽驱动底排药丸收窄(容器查询,不看视口) */
+  background: var(--t2c-card-surface, var(--bg-card, var(--bg)));
+  /* 不描边(2026-08-14 用户要求,同 chat2.css 那批卡)。留着 1px transparent 而不是 border:none:
+     盒模型不变 → 拖文件进来时 .dragover 换个 border-color 就能亮边,布局不位移。 */
+  border: var(--border-width, 1px) solid transparent;
+  border-radius: var(--radius-chat-surface, 20px);
+  box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.08));
+  padding: 12px 14px;
+  transition: border-color var(--duration-fast, 0.15s);
+}
+.t2c-card.dragover { border-color: var(--accent-ink); background: color-mix(in srgb, var(--accent-ink) 6%, var(--t2c-card-surface, var(--bg-card, var(--bg)))); }
+
+.t2c-ta {
+  width: 100%; border: none; outline: none; background: transparent; resize: none;
+  color: var(--text); font-family: var(--font-ui); font-size: var(--t2c-font-body, 13px); line-height: 1.6;
+  /* min-height 保底一行:即便 autoGrow 在未布局时把内联 height 写小,也永远有一行可点可输入的区域
+     (根治「首启引导后输入区塌成 0、须刷新才有」)。 */
+  min-height: 1.6em; max-height: 200px; display: block;
+}
+.t2c-ta::placeholder { color: var(--text-faint, var(--text-muted)); transition: opacity .3s ease; }
+/* 等待期间小贴士换条:先淡出再换字(Composer2 tipFade) */
+.t2c-ta[data-tip-fade]::placeholder { opacity: 0; }
+/* 窄输入框里小贴士折行(Composer2 tipTall):撑到两行,别把后半句裁掉 */
+.t2c-ta[data-tip-tall] { min-height: 3.2em; }
+
+/* 卡内底排:+ · 模式 / 上下文环 · 模型 · mic · 圆形发送 · 停止 */
+.t2c-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: nowrap; }
+.t2c-grow { flex: 1; }
+.t2c-send {
+  width: 32px; height: 32px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
+  border: none; border-radius: var(--radius-pill, 999px); background: var(--action-fill); color: var(--on-action, #fff); cursor: pointer;
+  transition: opacity var(--duration-fast, 0.15s), transform var(--duration-fast, 0.15s);
+}
+.t2c-send:hover:not(:disabled) { transform: translateY(-1px); }
+.t2c-send:disabled { opacity: 0.35; cursor: default; background: var(--overlay-medium, var(--overlay-light, rgba(127, 127, 127, 0.25))); color: var(--text-faint, var(--text-muted)); }

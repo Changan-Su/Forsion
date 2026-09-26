@@ -26,7 +26,7 @@ const BUILTINS = new Set<FloatingPanelBuiltin>(['settings', 'market', 'achieveme
 /** 缺省几何 [宽, 高, 最小宽, 最小高]:反馈与旁聊是窄面板,其余是整页工具。 */
 const DEFAULT_SIZE: Partial<Record<FloatingPanelBuiltin, [number, number, number, number]>> = {
   feedback: [720, 760, 560, 480],
-  btw: [440, 640, 360, 420],
+  btw: [480, 580, 380, 400],
 }
 const text = (value: unknown, max: number): string | undefined =>
   typeof value === 'string' ? value.trim().slice(0, max) || undefined : undefined

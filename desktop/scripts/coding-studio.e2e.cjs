@@ -16,8 +16,10 @@ const os = require('os')
 const path = require('path')
 const { _electron: electron } = require('playwright-core')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
+const { writeChatBoxProbe, verifyChatBoxProbe } = require('./lib/chatbox-probe.cjs')
 
 const ROOT = path.resolve(__dirname, '..')
+const APP_ROOT = process.env.CODING_STUDIO_APP_ROOT || ROOT
 const OUTPUT = path.resolve(ROOT, '../outputs')
 const results = []
 const rendererErrors = []
@@ -207,9 +209,10 @@ async function openCodingSpace(win) {
 }
 
 async function main() {
-  if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) throw new Error('Build first: cd desktop && npm run build')
+  if (!fs.existsSync(path.join(APP_ROOT, 'out/main/main.js'))) throw new Error('Build first: cd desktop && npm run build')
   fs.mkdirSync(OUTPUT, { recursive: true })
   const testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-coding-studio-'))
+  writeChatBoxProbe(testDir)
   const userData = path.join(testDir, 'userdata')
   const vault = path.join(testDir, 'vault')
   const managed = path.join(testDir, 'Project')
@@ -222,7 +225,13 @@ async function main() {
   const session = { id: 'coding-fixture', title: 'Studio fixture chat', summary: '', archived: false, model_id: 'm1',
     agent_config: null, project_path: project, project_name: 'Imported studio project',
     created_at: '2026-09-07 00:00:00', updated_at: '2026-09-07 00:00:00' }
-  const stub = await startStubEngine({ sessions: [session] })
+  const stub = await startStubEngine({ sessions: [session], models: [
+    { id: 'm1', name: 'Studio default', provider: 'stub', contextWindow: 128000 },
+    { id: 'm2', name: 'Studio reasoning', provider: 'stub', contextWindow: 256000, thinkingLevels: ['low', 'medium', 'high'] },
+    { id: 'image-only', name: 'Image only', provider: 'stub', modelType: 'image_gen' },
+  ] })
+  // External-mode boot reconnects after reload only with a configured token.
+  fs.writeFileSync(path.join(`${userData}-dev`, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'e2e', defaultWorkspaceDir: path.join(testDir, 'sessions') }))
   let app
   let win
   /** Seeded below, inside the host's own projects root — the one directory shape the host treats as
@@ -230,7 +239,7 @@ async function main() {
   let gitProject = null
   try {
     app = await electron.launch({
-      args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT,
+      args: [`--user-data-dir=${userData}`, '--lang=zh-CN', APP_ROOT], cwd: ROOT,
       env: { ...process.env, ELECTRON_DISABLE_SECURITY_WARNINGS: '1', TANGU_HOME: testDir, TANGU_BACKEND_URL: stub.url }, timeout: 45000,
     })
     win = await app.firstWindow()
@@ -269,11 +278,42 @@ async function main() {
     }, { project, managed })
     await openCodingSpace(win)
     await win.waitForSelector('.csl-launchpad')
+    await until(async () => await win.locator('.csl-catalog-actions .csl-new').isEnabled())
     await shoot(app, win, 'launchpad')
+    check('Launchpad starts with the project index and keeps creation behind a clear entry',
+      await win.locator('.csl-catalog').isVisible() && await win.locator('.csl-brief').count() === 0
+      && await win.locator('.csl-catalog-actions .csl-new').isEnabled()
+      && await win.locator('.csn').isVisible() && await win.locator('.wb-view--left .t2c-ta').count() === 0)
+    check('Initial navigation uses a compact left panel', await win.evaluate(() => {
+      const width = document.querySelector('.csn')?.getBoundingClientRect().width || 0
+      return width >= 200 && width <= window.innerWidth * .2
+    }))
+    await win.locator('.csn-item').filter({ hasText: '模板库' }).click()
+    check('Native left navigation opens the template Gallery in the main View',
+      await win.locator('.csl-gallery').isVisible() && await win.locator('.csl-gallery-card').count() === 7)
+    await shoot(app, win, 'gallery')
+    await win.locator('.csn-item').filter({ hasText: '新建项目' }).click()
+    await win.waitForSelector('.csl-create-page')
+    check('Creation focuses the idea field', await win.locator('.csl-idea').evaluate(el => document.activeElement === el))
+    check('Creation embeds the shared Chat Box and live model picker', await win.locator('.csl-chatbox[data-ui-component="chat-box"] .model-pill-btn').isVisible())
+    await shoot(app, win, 'create-start')
+    await win.locator('.csl-chatbox .model-pill-btn').click()
+    await win.locator('.composer-menu--portal [data-pane-trigger="model"]').click()
+    check('The shared creation picker excludes image generation models', await win.locator('.composer-menu--portal .menu-item').filter({ hasText: 'Image only' }).count() === 0)
+    await shoot(app, win, 'create-model-picker')
+    await win.locator('.composer-menu--portal .menu-item').filter({ hasText: 'Studio reasoning' }).click()
+    check('Picking a model does not submit or validate the project form', await win.locator('.csl-create-page').isVisible() && await win.locator('.csl-error').count() === 0)
+    await win.locator('.csl-chatbox .model-pill-btn').click()
+    await win.locator('.composer-menu--portal .cm-effort-input').fill('4')
+    await win.keyboard.press('Escape')
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1000, 850))
+    await shoot(app, win, 'create-narrow')
+    check('Narrow creation keeps both the model and create action visible', await win.locator('.csl-chatbox .model-pill-btn').isVisible() && await win.locator('.csl-chatbox .csl-create').isVisible())
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1540, 1040))
     await traceMotion(win, 'Optional brief details expand through intermediate heights', '.csl-details', () => win.locator('.csl-details summary').click(), 'height')
     await traceMotion(win, 'Optional brief details collapse through intermediate heights', '.csl-details', () => win.locator('.csl-details summary').click(), 'height')
     // 模板数从 6 改成 7 是 2026-09-21「Forsion 插件」起点落地时刻意改的,不是漂移。
-    check('Launchpad has seven editable templates and a real import action', await win.locator('.csl-template').count() === 7 && await win.locator('.csl-import').isEnabled())
+    check('Creation page has seven editable templates', await win.locator('.csl-template').count() === 7)
     // 插件起点:选中它之后 Forsion Connect 能力块整块收起(插件不经网页 SDK),并给出理由。
     await win.locator('.csl-template[data-template-id="plugin"]').click()
     check('The Forsion plugin template replaces the Connect capability picker with its reason',
@@ -283,10 +323,15 @@ async function main() {
       && (await win.locator('.csl-idea').inputValue()).includes('manifest.json'))
     await win.locator('.csl-template[data-template-id="assistant"]').click()
     check('Choosing a web template again restores the Connect capability picker', await win.locator('.csl-capabilities').count() === 1)
-    check('Studio requires a project before accepting a build request', await win.locator('.t2c-ta').first().isDisabled()
-      && (await win.locator('.t2c-ta').first().getAttribute('placeholder')).includes('创建或打开'))
+    check('The project navigation occupies the left View until a project opens',
+      await win.locator('.csn').isVisible() && await win.locator('.wb-view--left .t2c-ta').count() === 0)
+    await win.locator('.csl-back').click()
+    check('Returning to the index restores focus to New project', await win.locator('.csl-catalog').isVisible()
+      && await win.locator('.csl-catalog-actions .csl-new').evaluate(el => document.activeElement === el))
     await win.locator('.csl-import').click()
     await win.waitForSelector('.csu-workspace')
+    check('Opening a project replaces left navigation with the real Coding chat View',
+      !!await until(async () => await win.locator('.wb-view--left .t2c-ta').count() > 0 && await win.locator('.csn').count() === 0))
     const ready = await until(() => guestEval(win, 'document.getElementById("version")?.textContent === "BASELINE"'))
     check('Import renders the actual project file in an Electron guest', ready)
     if (!ready) throw new Error('Guest did not load the imported project')
@@ -424,6 +469,8 @@ async function main() {
     // 换到托管根里的夹具项目 —— 宿主判可写的唯一形态,保存 / 恢复整条链只能在这里跑真。
     await win.locator('.csu-project').click()
     await win.waitForSelector('.csl-launchpad')
+    check('Returning to projects restores the native left navigation',
+      !!await until(async () => await win.locator('.csn').isVisible() && await win.locator('.wb-view--left .t2c-ta').count() === 0))
     let managedHistory = { mode: 'install', reason: null }
     if (!gitProject) {
       skip('Version history saves and restores a project inside the managed projects root', 'the host did not report a projects root, so no managed fixture was seeded')
@@ -493,6 +540,30 @@ async function main() {
     check('Leaving the project disposes its stable preview surface and guest', !!await until(async () => await win.locator('.csu-guest-surface').count() === 0 && await win.locator('webview').count() === 0))
     check('Temporary Studio tools never enter saved workspace layouts', await win.evaluate(() => Object.entries(localStorage).filter(([key]) => /layout/i.test(key)).every(([,value]) => !value.includes('__extend-') && !value.includes('coding-tool:'))))
     check('An imported project remains discoverable on the launchpad', !!await until(async () => (await win.locator('.csl-project').allTextContents()).some(text => text.includes('Imported studio project'))))
+    await win.locator('.csl-search input').fill('no-such-project')
+    check('Project search shows an explicit no-results state', await win.locator('.csl-project').count() === 0
+      && await win.getByText('没有找到匹配的项目', { exact: true }).isVisible())
+    await win.locator('.csl-search input').fill('Imported studio project')
+    check('Project search finds an imported folder by name', await win.locator('.csl-project').count() === 1)
+    await win.locator('.csl-search input').fill('')
+    await win.locator('.csn-item').filter({ hasText: '外部文件夹' }).click()
+    check('Left navigation filters the main project list', await win.locator('.csl-catalog h1').textContent() === '外部文件夹'
+      && (await win.locator('.csl-project').allTextContents()).every(text => text.includes('外部文件夹')))
+    await win.locator('.csn-item').filter({ hasText: '我的项目' }).click()
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(800, 760))
+    await win.waitForTimeout(350)
+    check('Narrow project index keeps its controls and rows inside the view', await win.evaluate(() => {
+      const index = document.querySelector('.csl-launchpad')
+      const controls = [...document.querySelectorAll('.csl-catalog-actions button, .csl-catalog-toolbar, .csl-project')]
+      const box = index?.getBoundingClientRect()
+      return !!box && index.scrollWidth <= index.clientWidth + 1 && controls.every(el => {
+        const r = el.getBoundingClientRect()
+        return r.left >= box.left - 1 && r.right <= box.right + 1
+      })
+    }))
+    await shoot(app, win, 'launchpad-narrow')
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1540, 1040))
+    await win.waitForTimeout(350)
 
     // Use the real persisted preferences + startup loader. Do not synthesize theme tokens
     // or change data-theme/data-skin/data-bg: the current design language stays intact.
@@ -515,8 +586,8 @@ async function main() {
     await win.waitForSelector('.dv-groupview', { timeout: 45000 })
     await openCodingSpace(win)
     await win.waitForSelector('.csl-launchpad', { timeout: 45000 })
-    check('English preference translates the live launchpad', !!await until(async () => await win.getByRole('heading', { name: 'Coding Studio', exact: true }).isVisible().catch(() => false))
-      && await win.getByRole('button', { name: 'Create project', exact: true }).isVisible()
+    check('English preference translates the live launchpad', !!await until(async () => await win.getByRole('heading', { name: 'My projects', exact: true }).isVisible().catch(() => false))
+      && await win.getByRole('button', { name: 'New project', exact: true }).first().isVisible()
       && await win.getByRole('button', { name: 'Open local folder', exact: true }).isVisible())
     await win.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))))
     await win.waitForTimeout(500)
@@ -595,6 +666,7 @@ async function main() {
     // remain a draft; no sample app or stub response is substituted for generation.
     await win.locator('.csu-project').click()
     await win.waitForSelector('.csl-launchpad')
+    await win.locator('.csl-catalog-actions .csl-new').click()
     await win.locator('.csl-template').filter({ hasText: 'Writing assistant' }).click()
     check('Choosing a template fills an editable brief and its real capability',
       (await win.locator('.csl-idea').inputValue()).includes('AI writing assistant')
@@ -610,6 +682,12 @@ async function main() {
     await win.getByLabel('Who is it for?', { exact: true }).fill(createdAudience)
     await win.getByLabel('Requirements to keep', { exact: true }).fill(createdConstraints)
     await win.getByLabel('Project name', { exact: true }).fill(createdName)
+    await win.locator('.csl-chatbox .model-pill-btn').click()
+    await win.locator('.composer-menu--portal [data-pane-trigger="model"]').click()
+    await win.locator('.composer-menu--portal .menu-item').filter({ hasText: 'Studio reasoning' }).click()
+    await win.locator('.csl-chatbox .model-pill-btn').click()
+    await win.locator('.composer-menu--portal .cm-effort-input').fill('4')
+    await win.keyboard.press('Escape')
     await shoot(app, win, 'create-brief')
     await win.getByRole('button', { name: 'Create project', exact: true }).click()
     await win.waitForSelector('.csu-workspace')
@@ -621,6 +699,10 @@ async function main() {
     check('The composer visibly stays bound to the created project', await win.locator('[data-studio-project]').getAttribute('data-studio-project') === createdProject
       && (await win.locator('[data-studio-project]').textContent()).includes(createdName)
       && await win.locator('.newchat-projectbar .project-selector').count() === 0)
+    check('Creation transfers the selected model into the actual Coding conversation', (await win.locator('.t2-chat-view .model-pill-btn').textContent()).includes('Studio reasoning'))
+    await win.locator('.t2-chat-view .model-pill-btn').click()
+    check('Creation transfers reasoning effort without resetting the draft', await win.locator('.t2-chat-view .cm-effort-input').inputValue() === '4')
+    await win.keyboard.press('Escape')
     const createdBrief = fs.readFileSync(briefFile, 'utf8')
     check('The saved brief preserves user edits, audience, constraints and selected SDK',
       [createdIdea, createdAudience, createdConstraints, 'window.forsion.ai.chat'].every(value => createdBrief.includes(value)))
@@ -648,6 +730,7 @@ async function main() {
     check('A newly created project is listed once across managed and recent projects', !!await until(async () =>
       await win.locator('.csl-project').filter({ hasText: createdName }).count() === 1))
     check('New project and brief actions preserve the imported project source', fs.readFileSync(path.join(project, 'index.html'), 'utf8') === SAMPLE)
+    await verifyChatBoxProbe(win, check)
     check('All workflows complete without a model request', stub.seen.runs.length === 0)
     check('No renderer exception occurred', rendererErrors.length === 0, rendererErrors.join('; ').slice(0, 800))
   } catch (error) {

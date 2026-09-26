@@ -2,14 +2,16 @@
 import { createPortal } from 'react-dom'
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Code2, Eye, Columns2, Folder, Globe, Loader2, ExternalLink, RotateCw, Monitor, Tablet, Smartphone, MousePointer2, Puzzle, TerminalSquare, FileText, History, CheckSquare, AlertCircle, Settings2, Square, X, ArrowLeft, PanelLeft, PanelRight, PanelBottom, FolderTree } from 'lucide-react'
-import { getView, useWorkspace, type ViewProps, type ExtendViewController } from '@lcl/engine'
+import { getView, useSpaceStore, useWorkspace, type ViewProps, type ExtendViewController } from '@lcl/engine'
 import { lazyRetry } from '../lazyRetry'
 import { ConnectPublishDialog } from '../components/ConnectPublishDialog'
 import { useApp } from '../stores/appStore'
+import type { ChatBoxSelection } from '../components/chatbox'
 import { useCodeStudio, type StudioMode } from '../stores/codeStudioStore'
 import { translate, useI18n } from '../i18n'
 import { parseStreamingWrite } from './streamingWrite'
 import { ProjectLaunchpad } from './coding/ProjectLaunchpad'
+import { useLaunchNavigation } from './coding/launchpadNavigation'
 import { buildStudioDraft, type StudioBrief } from './coding/projectBrief'
 import { saveStudioBriefFile } from './coding/briefFile'
 import { StudioEditor } from './coding/StudioEditor'
@@ -62,9 +64,12 @@ export function CodeStudioView({ extendView, leaf }: ViewProps) {
   const { t } = useI18n()
   const activate = useCallback(() => useWorkspace.getState().activateLeaf(leaf.id), [leaf.id])
   const root = useCodeStudio(s => s.activeProject)
+  const inCodingSpace = useSpaceStore(s => s.activeSpaceId === 'coding')
   const projectsRoot = useCodeStudio(s => s.projectsRoot)
   const projects = useCodeStudio(s => s.projects)
-  const recentProjects = useMemo(() => Object.entries(projects).sort((a, b) => b[1].openedAt - a[1].openedAt).map(([path]) => ({ path, name: projectName(path) })), [projects])
+  const recentProjects = useMemo(() => Object.entries(projects).sort((a, b) => b[1].openedAt - a[1].openedAt).map(([path, prefs]) => ({
+    path, name: projectName(path), openedAt: prefs.openedAt, description: prefs.brief?.idea, kind: prefs.brief?.kind, templateId: prefs.brief?.templateId,
+  })), [projects])
   const [error, setError] = useState('')
   const [retry, setRetry] = useState(0)
   const [briefSaveError, setBriefSaveError] = useState<{ root: string; message: string } | null>(null)
@@ -78,6 +83,29 @@ export function CodeStudioView({ extendView, leaf }: ViewProps) {
     return () => { live = false }
   }, [projectsRoot, retry])
   useEffect(() => { if (!root) useCodeStudio.getState().idleChat() }, [root])
+  useEffect(() => { if (root) useLaunchNavigation.getState().showProjects() }, [root])
+  useEffect(() => {
+    if (!inCodingSpace) return
+    const ws = useWorkspace.getState()
+    ws.setSidebarDefaults({ ...ws.sidebarDefaults, left: root
+      ? [{ type: 'chat', params: { followActive: true, reuseKey: 'primary', studio: true } }]
+      : [{ type: 'coding-navigation', params: {} }] })
+    const desired = root ? 'chat' : 'coding-navigation'
+    const previous = root ? 'coding-navigation' : 'chat'
+    const leftTypes = ws.api?.panels.filter(panel => (panel.params as { __loc?: string } | undefined)?.__loc === 'left')
+      .map(panel => (panel.params as { __type?: string } | undefined)?.__type) ?? []
+    if (leftTypes.includes(desired) && !leftTypes.includes(previous)) return
+    if (!ws.leftVisible && ws.stash.left.some(view => view.type === desired) && !ws.stash.left.some(view => view.type === previous)) return
+    // Older saved Coding layouts still have Chat in the left slot. Replace that View
+    // with navigation on the launchpad, and restore the real Chat View for a project.
+    if (root) {
+      showCodingChat()
+      ws.closeSideView('left', 'coding-navigation')
+    } else {
+      ws.openView('coding-navigation', {}, 'left')
+      ws.closeSideView('left', 'chat')
+    }
+  }, [root, inCodingSpace])
   const saveCreatedBrief = async (path: string, brief: StudioBrief): Promise<void> => {
     path = normPath(path)
     if (briefWrites.current.has(path)) return
@@ -91,8 +119,14 @@ export function CodeStudioView({ extendView, leaf }: ViewProps) {
       if (alive.current) setBriefSaveError({ root: path, message: String((e as Error).message || e) })
     } finally { briefWrites.current.delete(path) }
   }
-  const create = (path: string, name: string, brief: StudioBrief) => {
+  const create = (path: string, name: string, brief: StudioBrief, selection: ChatBoxSelection) => {
     useCodeStudio.getState().openProject(path, name)
+    // Opening the project applies Coding agent defaults first. The visible launchpad
+    // selection wins afterwards and belongs only to this new project draft.
+    const app = useApp.getState()
+    app.setSessionModel(selection.modelId, null, false)
+    app.setSessionThinking(selection.thinkingLevel, null, false)
+    app.setNewChatCfg(cfg => ({ ...cfg, engineId: undefined, engineModelId: undefined }))
     useCodeStudio.getState().updateProject({ brief })
     void saveCreatedBrief(path, brief)
   }
@@ -101,6 +135,15 @@ export function CodeStudioView({ extendView, leaf }: ViewProps) {
     if (brief) void saveCreatedBrief(root, brief)
   }} />
   return <div className="csu-launch-root">{error && <div className="csu-error" role="alert">{t('studio.loadError', { error })}<button onClick={() => setRetry(n => n + 1)}>{t('studio.retry')}</button></div>}<ProjectLaunchpad root={projectsRoot} recentProjects={recentProjects} onOpen={(path, name) => useCodeStudio.getState().openProject(path, name)} onCreate={create} /></div>
+}
+function showCodingChat(): void {
+  const ws = useWorkspace.getState()
+  // A Coding layout may also contain a Chat tab in main. Explicitly create in
+  // the left group so singleton reuse cannot steal that main tab instead.
+  const leftChat = ws.api?.panels.find(panel => (panel.params as { __loc?: string; __type?: string } | undefined)?.__loc === 'left'
+    && (panel.params as { __type?: string } | undefined)?.__type === 'chat')
+  if (leftChat) ws.activateLeaf(leftChat.id)
+  else ws.openView('chat', { followActive: true, reuseKey: 'primary', studio: true }, 'left', { newTab: true })
 }
 function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrief }: { root: string; extendView?: ExtendViewController; onActivate(): void; briefSaveError: string; retryBrief(): void }) {
   const { t } = useI18n()
@@ -287,7 +330,7 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
       if (id) app.setSessionPlanMode(plan, id)
       else app.setNewChatCfg(config => ({ ...config, planMode: plan }))
     }
-    useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary', studio: true }, 'left')
+    showCodingChat()
     useCodeStudio.getState().queuePrompt(text)
     app.toast(t('studio.promptReady'))
   }

@@ -39,6 +39,7 @@ import { getCustomCommands, expandCustomCommand, listMessages, type CustomComman
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
 import { NormalModeItem } from './NormalModeItem'
 import { mainReferenceKey } from './mainReference'
+import { ChatBoxSurface, ChatBoxInput, ChatBoxToolbar, ChatBoxSubmit } from '@lcl/components'
 import { disarmTip, tipProps } from '../../hoverTip'
 import { RefChipView } from './RefChipView'
 import './composer2.css'
@@ -1332,7 +1333,7 @@ export const Composer2: React.FC<{
             </div>
           </div>
         )}
-        <div ref={cardRef} className={`t2c-card${dragOver ? ' dragover' : ''}`}>
+        <ChatBoxSurface ref={cardRef} className={dragOver ? 'dragover' : undefined}>
           {advisory}
           {hint && <div className="t2c-hint">{hint}</div>}
           {quotedText && (
@@ -1394,7 +1395,8 @@ export const Composer2: React.FC<{
               ))}
             </div>
           )}
-          <textarea
+          <ChatBoxInput
+            autoSize={false}
             ref={taRef}
             className="t2c-ta"
             rows={1}
@@ -1548,7 +1550,7 @@ export const Composer2: React.FC<{
             </div>
           )}
 
-          <div className="t2c-row">
+          <ChatBoxToolbar>
             <AddContentMenu
               open={openMenu === 'add'}
               disabled={disabled}
@@ -1770,23 +1772,23 @@ export const Composer2: React.FC<{
             {running ? (
               <>
                 {(!!draft.trim() || allRefChips.length > 0) && (
-                  <button className="t2c-send" onClick={send} disabled={disabled} title={t('input.send')}><ArrowUp size={16} /></button>
+                  <ChatBoxSubmit onClick={send} disabled={disabled} title={t('input.send')} aria-label={t('input.send')} />
                 )}
                 <button className="t2c-stop" onClick={onStop} title={t('input.stop')} aria-label={t('input.stop')}><Square size={10} /><span className="t2c-stop-label">{t('input.stop')}</span></button>
               </>
             ) : (
               // 只挂了引用、一个字没写也可发(与 send() 的放行条件同源;不同步的话按钮灰着 = 哑火)
-              <button className="t2c-send" onClick={send} disabled={disabled || (!draft.trim() && !allRefChips.length)} title={t('input.send')}><ArrowUp size={16} /></button>
+              <ChatBoxSubmit onClick={send} disabled={disabled || (!draft.trim() && !allRefChips.length)} title={t('input.send')} aria-label={t('input.send')} />
             )}
             </>)}
-          </div>
+          </ChatBoxToolbar>
           {voice.error && !voice.recording && !voice.busy && !live.active && (
             <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{voice.error}</div>
           )}
           {live.error && (live.active || !voice.error) && (
             <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{live.error}</div>
           )}
-        </div>
+        </ChatBoxSurface>
       </div>
       {rulesOpen && <ApprovalRulesModal cfg={liveCfg} onClose={() => setRulesOpen(false)} />}
     </div>

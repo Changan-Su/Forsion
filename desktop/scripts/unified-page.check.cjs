@@ -394,7 +394,15 @@ async function main() {
       b13.di === '1' && b13.ml > 0 && b13.lis === 2 && !b13.inLi, JSON.stringify(b13))
 
     await clickIn(`${PM} pre`)
-    await pg.keyboard.press('End')
+    // 点击 pre 的坐标会落在首字后;macOS 的 End 在 contenteditable 中也不保证跳到块尾。
+    // 精确把 PM 光标落在代码节点尾，再验 Tab 插入两空格。
+    await pg.evaluate(() => {
+      const v = window.__upage.probe.view()
+      let at = -1
+      v.state.doc.descendants((n, pos) => { if (n.type.name === 'code_block') at = pos + 1 + n.content.size })
+      if (at >= 0) v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.create(v.state.doc, at)))
+      v.focus()
+    })
     await pg.keyboard.press('Tab')
     await pg.waitForTimeout(150)
     // ⚠️ 读 pre.textContent 会把工具条按钮的字(语言下拉/复制/折行/行号/折叠)也算进来 ——
@@ -591,7 +599,7 @@ async function main() {
 
   // P14:块级嵌入层(embedLayer.tsx 装饰 widget)。
   //  a 裸 URL 段落 → 书签卡;`![[缺失]]` → 跨笔记嵌入壳(harness resolveEmbed 恒 null → 嵌入丢失)
-  //  b 方向键进嵌入段 → 装饰让位露源码(编辑入口)  c Esc 块选中 + Delete 删嵌入 + 撤销还原
+  //  b 点击 </> → 嵌入让位露源码(当前唯一编辑入口)  c Esc 块选中 + Delete 删嵌入 + 撤销还原
   {
     const seed = '首段。\n\nhttps://example.com/x\n\n![[不存在的笔记]]\n\n尾段。\n'
     const pg = await browser.newPage({ locale: 'zh-CN' })
@@ -610,10 +618,10 @@ async function main() {
     }, PM)
     record('P14a 书签卡+跨笔记嵌入壳上屏', a14.n === 2 && a14.bookmark && a14.missing, JSON.stringify(a14))
 
-    // b:双击嵌入 → widget 让位,源码露出(可编辑;竖直方向键会跳过无行盒的隐藏段,双击是入口)。
+    // b:显式点击 </> → widget 让位,源码露出。
     await pg.evaluate(() => {
       const card = [...document.querySelectorAll('.unified-embed')].find((e) => e.textContent?.includes('example.com'))
-      card.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }))
+      card.querySelector('.amx-src-btn').click()
     })
     await pg.waitForTimeout(300)
     const b14 = await pg.evaluate((s) => {
@@ -623,7 +631,7 @@ async function main() {
         p.textContent?.includes('https://example.com/x') && !p.querySelector('.wikilink-src-hidden'))
       return { embeds, urlVisible }
     }, PM)
-    record('P14b 双击嵌入 → 露源码', b14.embeds === 1 && b14.urlVisible, JSON.stringify(b14))
+    record('P14b 点击嵌入 </> → 露源码', b14.embeds === 1 && b14.urlVisible, JSON.stringify(b14))
 
     // c:Esc 选中该块 → Delete 删除 → 撤销还原(装饰路径对原生编辑零干扰)。
     await pg.keyboard.press('Escape')
@@ -975,17 +983,16 @@ async function main() {
       return { h2: !!h2, residue: pm.textContent.includes('/h2'), ps: pm.querySelectorAll(':scope > p').length }
     }, PM)
     // 幕三:空段落打 '/' 浏览全部项 —— 「模板」「数据库」都得在列(模板走宿主选择器路由,见段首注)。
-    await pg.evaluate((s) => {
-      const pm = document.querySelector(s)
-      const last = pm.querySelector(':scope > p:last-of-type') ?? pm.lastElementChild
-      const r = document.createRange()
-      r.selectNodeContents(last)
-      r.collapse(false)
-      const sel = window.getSelection()
-      sel.removeAllRanges()
-      sel.addRange(r)
-    }, PM)
-    await pg.keyboard.press('Enter')
+    // 上一幕把最后一个段落变成 H2,DOM Range 的 fallback 会落到 pre 工具条里;
+    // 直接用 PM 事务准备空段落,这幕只检验 slash 目录本身。
+    await pg.evaluate(() => {
+      const v = window.__upage.probe.view()
+      const end = v.state.doc.content.size
+      const tr = v.state.tr.insert(end, v.state.schema.nodes.paragraph.create())
+      tr.setSelection(v.state.selection.constructor.create(tr.doc, end + 1))
+      v.dispatch(tr)
+      v.focus()
+    })
     await pg.keyboard.type('/')
     await pg.waitForTimeout(300)
     const d19 = await pg.evaluate(() => {
@@ -1086,8 +1093,7 @@ async function main() {
     await pg.close()
   }
 
-  // P21:跨块拖选 = 整块淡底(AFFiNE 对齐)。PM 原生给的是按行参差的文字高亮;这里只换呈现
-  // (选区仍是 TextSelection,删除/复制走原生)。块内选字必须**不受影响**,仍是原生高亮。
+  // P21:跨块文字拖选按真实字符范围呈现;块内选字也仍是原生高亮。
   {
     const seed = '甲段落文字。\n\n乙段落文字。\n\n丙段落文字。\n'
     const pg = await browser.newPage({ locale: 'zh-CN' })
@@ -1112,7 +1118,7 @@ async function main() {
     const a21 = await pg.evaluate((s) => ({
       marked: document.querySelectorAll(`${s} .amx-block-selected`).length,
       flag: document.querySelector(s)?.getAttribute('data-blocksel'),
-      texts: [...document.querySelectorAll(`${s} .amx-block-selected`)].map((e) => e.textContent).join('|'),
+      selected: window.getSelection()?.toString() ?? '',
     }), PM)
     // 块内选字 → 不接管(仍是原生文字高亮)。⚠️ 必须点到**别的**段落:点回拖拽终点那一格,
     // Chromium 会按连击处理(等于双击),选区不落单块 —— 探针实测过,是仪器坑不是行为错。
@@ -1125,8 +1131,8 @@ async function main() {
       sel: (window.getSelection()?.toString() ?? '').length,
     }), PM)
     record(
-      'P21 跨块拖选=整块淡底(块内选字不接管)',
-      a21.marked === 2 && a21.flag === 'true' && a21.texts === '甲段落文字。|乙段落文字。' &&
+      'P21 跨块拖字=真实字符范围(块内选字仍原生)',
+      a21.marked === 0 && !a21.flag && a21.selected.includes('段落文字。') && a21.selected.includes('乙段落文字。') &&
         b21.marked === 0 && !b21.flag && b21.sel > 0,
       JSON.stringify({ a21, b21 }),
     )
@@ -1340,7 +1346,7 @@ async function main() {
     await pg.waitForSelector(PM, { timeout: 20000 })
     await pg.waitForTimeout(400)
     // ⚠️ 选区走 probe 精确设:mac 的 Home/End 是文档级不是行级(Shift+End 会一路选到文末,
-    //    实测 3 块全中)。本关验的是「跨块选区的呈现 + 整批删除」,不该被键位映射牵着走。
+    //    实测 3 块全中)。本关验的是「文字选区按字符呈现 + 顶满整块时整批删除」。
     await pg.evaluate(() => {
       const v = window.__upage.probe.view()
       const a = 1 // 首段内容起点
@@ -1360,8 +1366,8 @@ async function main() {
       marked: document.querySelectorAll(`${s} .amx-block-selected`).length,
     }), PM)
     record(
-      'P26 Shift+方向键跨块扩展(整块呈现)+ 整批删除',
-      a26.marked === 2 && a26.flag === 'true' && !b26.text.includes('段甲') && !b26.text.includes('段乙') &&
+      'P26 跨块文字选区不整块着色,顶满整块仍整批删除',
+      a26.marked === 0 && !a26.flag && !b26.text.includes('段甲') && !b26.text.includes('段乙') &&
         b26.text.includes('段丙') && b26.marked === 0,
       JSON.stringify({ a26, b26 }),
     )
@@ -2392,7 +2398,8 @@ async function main() {
       record('R1 表格空单元格行首退格不删整只表格(P0 回归)', ok && /table/.test(r1), JSON.stringify({ ok, r1 }))
       await pg.close()
     }
-    // R2 折叠顺序 ≠ 文档顺序时,折叠标题上回车的新块仍落在**自己这一节**之后
+    // R2 折叠顺序 ≠ 文档顺序时,折叠标题上回车的新正文仍紧跟该标题(K1 同款),
+    // 不误跳到先折的乙标题下面。
     {
       const pg = await openSeed('# 甲\n\n甲一。\n\n# 乙\n\n乙一。\n')
       const foldAt = async (title) => {
@@ -2425,8 +2432,9 @@ async function main() {
         v.state.doc.forEach((n) => out.push(n.textContent))
         return out.join('|')
       })
-      record('R2 先折乙再折甲:甲上回车的新块落在甲的小节之后、乙之前',
-        r2.indexOf('新节') > r2.indexOf('甲一') && r2.indexOf('新节') < r2.indexOf('乙一'), r2)
+      record('R2 先折乙再折甲:甲上回车的新正文紧跟甲标题,仍在乙之前',
+        r2.indexOf('新节') > r2.indexOf('甲|') && r2.indexOf('新节') < r2.indexOf('甲一') &&
+          r2.indexOf('新节') < r2.indexOf('乙|'), r2)
       await pg.close()
     }
     // R3 链接卡片「删除」= 连文字一起删,且不抛异常(旧实现走 schema.text('') 必炸 RangeError)

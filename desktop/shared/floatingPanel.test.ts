@@ -22,7 +22,7 @@ describe('normalizeFloatingPanelOpenOptions', () => {
 
   it('旁聊 btw:窄面板缺省几何 + 会话归属只收非空字符串', () => {
     const btw = normalizeFloatingPanelOpenOptions({ id: 'btw:s1', title: 'BTW', builtin: 'btw', sessionId: ' s1 ' })
-    expect(btw).toEqual(expect.objectContaining({ builtin: 'btw', sessionId: 's1', width: 440, height: 640, minWidth: 360, minHeight: 420 }))
+    expect(btw).toEqual(expect.objectContaining({ builtin: 'btw', sessionId: 's1', width: 480, height: 580, minWidth: 380, minHeight: 400 }))
     expect(normalizeFloatingPanelOpenOptions({ id: 'btw:s1', title: 'BTW', builtin: 'btw', sessionId: '  ' })).not.toHaveProperty('sessionId')
     expect(normalizeFloatingPanelOpenOptions({ id: 'settings', title: 'S', builtin: 'settings', sessionId: 42 })).not.toHaveProperty('sessionId')
   })

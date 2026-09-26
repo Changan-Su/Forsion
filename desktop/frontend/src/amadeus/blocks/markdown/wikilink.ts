@@ -55,10 +55,11 @@ function buildDecorations(
     const cs = pos + 1
     const s = buildBlockString(node) // offset i ↔ 文档位 cs+i;内联 code 抹成空格、硬换行→'\n'(与公式共用)
     if (s.indexOf('[[') === -1) return false
-    // 聚焦且选区落在本块 → 算光标所在「行」区间(以 '\n' 为界),该行双链露源码、其余行照常渲染。
+    // 只有选区两端都在本块时才按所在行露源码。跨块拖字经过双链时要保留渲染体,
+    // 否则被选中的链接突然变回 [[源码]],与其它已渲染内容的选区反馈不一致。
     let lineFrom = -1
     let lineTo = -1
-    if (focus && selFrom <= cs + node.content.size && selTo >= cs) {
+    if (focus && selFrom >= cs && selTo <= cs + node.content.size) {
       const a = Math.max(0, Math.min(s.length, selFrom - cs))
       const b = Math.max(0, Math.min(s.length, selTo - cs))
       lineFrom = s.lastIndexOf('\n', a - 1) + 1
@@ -161,6 +162,8 @@ function buildDecorations(
             const el = document.createElement('span')
             el.className = ok ? 'wikilink' : 'wikilink wikilink-unresolved' // 未解析 → 黯淡虚线,点击询问创建
             el.setAttribute('data-wiki', target)
+            el.dataset.srcFrom = String(from)
+            el.dataset.srcTo = String(to)
             if (emoji) {
               const ic = document.createElement('span')
               ic.className = 'wikilink-emoji' // inline-block 逃逸下划线传播(text-decoration 子元素关不掉)
@@ -191,6 +194,14 @@ const marked = new WeakMap<EditorView, HTMLElement>()
 function syncPicked(view: EditorView): void {
   const { from, to } = view.state.selection
   const focus = wikiKey.getState(view.state)?.focus ?? false
+  // widget 的源码段被 display:none 藏住,浏览器原生 ::selection 涂不到渲染后的链接/图片。
+  // 就地标记相交的 widget,只给它本身反馈,不把所在段落整块染色。
+  for (const el of view.dom.querySelectorAll<HTMLElement>('.wikilink[data-src-from], .wiki-inline-img-wrap[data-src-from]')) {
+    const start = Number(el.dataset.srcFrom)
+    const end = Number(el.dataset.srcTo)
+    if (from !== to && from < end && to > start) el.dataset.rangeSelected = ''
+    else delete el.dataset.rangeSelected
+  }
   const prev = marked.get(view) ?? null
   // 独占段图片选中的是外层 paragraph NodeSelection(分栏/拖拽/Tab 子树都以块为单位);
   // 行内图片仍精确选源码区间。两档最后都映射回同一枚 widget。

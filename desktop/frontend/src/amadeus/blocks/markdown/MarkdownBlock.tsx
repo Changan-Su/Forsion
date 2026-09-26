@@ -50,6 +50,7 @@ import {
 import { blankLineRemark, softBreakRemark, stripEmptyLineBr } from './softBreak'
 import { tabIndent, tabOutdent } from './tabIndent'
 import { commonmarkWithIndent, setTextAlignment, type TextAlignment } from './paragraphIndent'
+import { structuralIndentRemark } from './structuralIndent'
 import { clipboard } from '@milkdown/kit/plugin/clipboard'
 import { history } from '@milkdown/kit/plugin/history'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
@@ -94,7 +95,7 @@ import { fuzzyScore } from '../../lib/fuzzy'
 import { WikiSuggest } from './WikiSuggest'
 import { BLANK_BUTTON_BLOCK } from '../button/format'
 import { taskCheckboxPlugin } from './taskList'
-import { calloutPlugin, unescapeCalloutToken } from './callout'
+import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
 import { codeBlockPlugin } from './codeBlock'
 import { askString } from '../../components/askString'
 import { linkInputRule, normalizeHref } from './linkHref'
@@ -566,6 +567,10 @@ export function MilkdownInner({
         }
       }
 
+      if (handleFoldKeyDown(view, event)) {
+        event.preventDefault()
+        return true
+      }
       if (event.key === 'Enter') {
         if (event.shiftKey) {
           // unified:放行 PM 原生 = 段内硬换行(Notion 语义);块世界才是「切块」。
@@ -859,6 +864,7 @@ export function MilkdownInner({
       .use(pluginEditorExtensions('high', { pagePath: () => pagePathRef.current }))
       .use(commonmarkWithIndent)
       .use(gfm)
+      .use(structuralIndentRemark)
       // `**注意：**后面` 这类 CJK 标点贴定界符的串按 CJK 友好规则解析(否则字面 + 保存转义)。须紧跟 gfm,见 ./cjkFriendly。
       .use(cjkFriendlyRemark)
       // 自定义行内标记:下划线/文字色/背景色(schema mark + remark HTML 桥,见 ./marks)。
@@ -873,6 +879,7 @@ export function MilkdownInner({
       // unified(v4)不挂 softBreakRemark:标准 md 分段落盘,软换行由 Milkdown 原生 break 节点原样往返。
       // 换 blankLineRemark —— 只补读侧的「空行 → 空段落」还原(写侧本来就落成空行,见 softBreak.ts 顶注)。
       .use(unified ? blankLineRemark : softBreakRemark)
+      .use(calloutTitleRemark)
       .use(underlineSchema)
       .use(colorSchema)
       .use(bgSchema)
@@ -933,8 +940,8 @@ export function MilkdownInner({
           'Mod-r': (state, dispatch) => setTextAlignment(state, dispatch, 'right'),
         }),
       ))
-      // Tab 缩进(与 v4 blockLayer 共用 tabIndent.ts 的同一份阶梯):列表 sink/lift、代码块两空格、
-      // 段落并入前列表/自转 bullet、表格让位 gfm 跳格、其余吞键防焦点逃逸 —— v3 此前段落里按 Tab
+      // Tab 缩进(与 v4 blockLayer 共用 tabIndent.ts 的同一份阶梯):列表嵌套/首项视觉档、代码块两空格、
+      // 段落与结构块视觉档、表格跳格、其余吞键防焦点逃逸 —— v3 此前段落里按 Tab
       // 会直接把焦点抛出编辑器(用户实报「没做缩进」)。unified 让位:v4 由 blockLayer 带折叠钩子接管。
       .use($prose(() =>
         keymap({

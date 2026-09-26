@@ -5,18 +5,19 @@
  *  · code_block 内 Tab = 插两空格(多行选区=逐行行首),Shift-Tab = 逐行去至多两空格
  *  · 表格内 → 自己调 goToNextCell(±1)(与 gfm tableKeymap 同一条命令):边界格跳不动时**吞键**,
  *    裸 return false 会落进浏览器默认行为把焦点抛出编辑器(评审 P2)
- *  · 列表项 Tab/Shift-Tab = sink/lift(显式调命令,不依赖 fall-through;首项无处可缩也吞掉);
+ *  · 列表项 Tab/Shift-Tab = 优先 sink/lift；首项无前一兄弟时缩进整份列表，退档时保留待办/编号类型；
  *    Shift-Tab 对「li 内非首子段落」只抬那一段(历史 merge 内容的对称逃生口)
- *  · 段落(不在列表/表格/代码里)→ 整段缩进档 ±1(2026-08-14 用户拍板:纯缩进,Notion/AFFiNE
- *    视觉;此前的「段落转列表/并入前列表」两条已废除)。语义在 paragraphIndent.ts。
+ *  · 普通段落、标题、引用/callout、跨块选区 → 各自视觉缩进档 ±1；图片/嵌入跟着所在段落。
+ *    其中段落档位在 paragraphIndent.ts，结构块档位在 structuralIndent.ts。
  *  · 其余一律吞掉:编辑器内按 Tab 绝不把焦点放走(AFFiNE/Notion 同款,焦点跳走比无操作更糟)
  */
 import { sinkListItem, liftListItem } from '@milkdown/kit/prose/schema-list'
-import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
+import { NodeSelection, type EditorState, type Transaction } from '@milkdown/kit/prose/state'
 import type { EditorView } from '@milkdown/kit/prose/view'
 import { goToNextCell } from '@milkdown/kit/prose/tables'
 import { liftTarget } from '@milkdown/kit/prose/transform'
 import { adjustParagraphIndent } from './paragraphIndent'
+import { adjustSelectedBlockIndents, adjustStructuralIndent } from './structuralIndent'
 
 export interface TabFoldHooks {
   /** sink 的落点是**前一兄弟 li** 的子列表:该兄弟处于列表折叠态(子项 display:none)时返回 true,
@@ -39,6 +40,15 @@ const inTable = (state: EditorState): boolean => {
   const { $from } = state.selection
   for (let d = $from.depth; d >= 1; d--) if ($from.node(d).type.name === 'table') return true
   return false
+}
+
+const visualListIndent = (state: EditorState): number => {
+  const { $from } = state.selection
+  for (let d = $from.depth; d >= 1; d--) {
+    const node = $from.node(d)
+    if (node.type.name === 'bullet_list' || node.type.name === 'ordered_list') return Number(node.attrs.indent ?? 0)
+  }
+  return 0
 }
 
 /** 表格内 Tab/Shift-Tab:与 gfm tableKeymap 同一条 goToNextCell;边界格跳不动也吞键防焦点逃逸。 */
@@ -72,6 +82,7 @@ export function tabIndent(state: EditorState, dispatch: Dispatch, view: EditorVi
     return true
   }
   if (inTable(state)) return tableTab(state, dispatch, 1)
+  if (!state.selection.empty && !$from.sameParent($to) && !inListItem(state) && adjustSelectedBlockIndents(state, dispatch, 1)) return true
   if (inListItem(state)) {
     // sink 把当前项送进前一兄弟 li 的子列表:兄弟折叠着就先展开,别把项缩进 display:none 里
     // (与 merge 分支同款两拍语义:这一下只展开,再按一次才真缩进)。
@@ -89,10 +100,16 @@ export function tabIndent(state: EditorState, dispatch: Dispatch, view: EditorVi
         }
       }
     }
-    sinkListItem(state.schema.nodes.list_item)(state, dispatch)
+    // 第一项没有前一兄弟，原生 sink 无法嵌套；给整份根列表一档可落盘的视觉缩进。
+    if (!sinkListItem(state.schema.nodes.list_item)(state, dispatch)) adjustStructuralIndent(state, dispatch, $from, 1)
     return true
   }
-  if ($from.parent.type.name === 'paragraph') return adjustParagraphIndent(state, dispatch, 1)
+  if ($from.parent.type.name === 'paragraph') {
+    if (adjustStructuralIndent(state, dispatch, $from, 1)) return true
+    return adjustParagraphIndent(state, dispatch, 1)
+  }
+  if (state.selection instanceof NodeSelection && state.selection.node.type.name === 'paragraph') return adjustParagraphIndent(state, dispatch, 1)
+  if (adjustStructuralIndent(state, dispatch, $from, 1)) return true
   return true
 }
 
@@ -112,8 +129,11 @@ export function tabOutdent(state: EditorState, dispatch: Dispatch): boolean {
     return true
   }
   if (inTable(state)) return tableTab(state, dispatch, -1)
+  if (!state.selection.empty && !$from.sameParent($to) && !inListItem(state) && adjustSelectedBlockIndents(state, dispatch, -1)) return true
   if (inListItem(state)) {
     const li = state.schema.nodes.list_item
+    // 根列表已有视觉缩进时先退档，避免 liftListItem 把待办/编号直接拆成普通段落。
+    if (visualListIndent(state) > 0) return adjustStructuralIndent(state, dispatch, $from, -1)
     // 段落是 li 的**非首子块**(Tab 并进来的那种)→ 只把这一段抬出去(merge 的真逆操作)。
     // 整项 liftListItem 在这形态下会把邻项的 bullet 一并拆掉(评审 P2:Tab↔Shift-Tab 不对称)。
     if ($from.parent.type.name === 'paragraph' && $from.depth >= 2 && $from.node($from.depth - 1).type === li && $from.index($from.depth - 1) > 0) {
@@ -124,9 +144,14 @@ export function tabOutdent(state: EditorState, dispatch: Dispatch): boolean {
         return true
       }
     }
-    liftListItem(li)(state, dispatch)
+    if (!liftListItem(li)(state, dispatch)) adjustStructuralIndent(state, dispatch, $from, -1)
     return true
   }
-  if ($from.parent.type.name === 'paragraph') return adjustParagraphIndent(state, dispatch, -1)
+  if ($from.parent.type.name === 'paragraph') {
+    if (adjustStructuralIndent(state, dispatch, $from, -1)) return true
+    return adjustParagraphIndent(state, dispatch, -1)
+  }
+  if (state.selection instanceof NodeSelection && state.selection.node.type.name === 'paragraph') return adjustParagraphIndent(state, dispatch, -1)
+  if (adjustStructuralIndent(state, dispatch, $from, -1)) return true
   return true
 }

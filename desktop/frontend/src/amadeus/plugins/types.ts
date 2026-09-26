@@ -841,6 +841,12 @@ export interface PluginContext {
   /** Host-native UI primitives (2026-09-07+). A plugin keeps ownership of its content DOM and gives
    *  the host a shell to overlay plus its scroll/content roots. Old hosts omit the whole member. */
   ui?: {
+    /** Shared prompt input + live model catalog. Local draft; the plugin owns submission.
+     *  Feature-detect on older hosts. The host disposes mounts on disable/reload/setup failure. */
+    mountChatBox?(
+      el: HTMLElement,
+      opts: import('../../../../shared/chatBox').PluginChatBoxOptions,
+    ): import('../../../../shared/chatBox').PluginChatBoxHandle
     mountFloatingToc(
       shell: HTMLElement,
       opts: PluginFloatingTocOptions,
