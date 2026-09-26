@@ -652,6 +652,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
           } else {
             const { LiteParse } = await import('@llamaindex/liteparse');
             const office = await officeKitPdf(abs, ctx.signal);
+            // 取消 / 工具超时打断的转换不是「引擎坏了」:别再起一轮收不回来的 liteparse 回落(Codex)。
+            if (office === 'failed' && ctx.signal?.aborted) return 'Error: read_document was cancelled or timed out.';
             transient = office === 'failed';
             const kitPdf = office === 'failed' ? null : office;
             try {

@@ -85,6 +85,15 @@ describe('read_document × 随包 LibreOffice 转换引擎', () => {
     expect(existsSync(path.join(path.dirname(cwd), 'calls.json'))).toBe(true);
   });
 
+  it('取消 / 超时打断转换 → 直接结束,不再起回落解析', async () => {
+    const { cwd, ctx } = await fixture('throw');
+    await fs.writeFile(path.join(cwd, 'slow.docx'), 'not really a docx');
+    const abort = new AbortController();
+    abort.abort();
+    const out = await HOST_TOOLS.read_document.execute({ path: 'slow.docx' }, { ...ctx, signal: abort.signal });
+    expect(out).toBe('Error: read_document was cancelled or timed out.');
+  });
+
   it('非 Office 格式不碰 kit', async () => {
     const { cwd, ctx } = await fixture('pdf');
     await fs.writeFile(path.join(cwd, 'direct.pdf'), tinyPdf(['Only page']));
