@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { automationListSource as source, subscribeAutomation } from './automationListSource'
 import { useAutomation } from '../../stores/automationStore'
 import { useApp } from '../../stores/appStore'
+import { useNotifications } from '../../stores/notificationStore'
 import * as backend from '../../services/backendService'
 import type { MuseTriggerInfo } from '../../types'
 
@@ -69,23 +70,27 @@ describe('native automation workspace source', () => {
     useAutomation.getState().openBuilder()
     expect(source.activeKey!()).toBeNull()
   })
-  it('⚠️delete asks first, marks itself danger, and clears the selection only after a confirmed delete', async () => {
+  it('⚠️delete hides the row at once, sends nothing until the undo window closes, and undo keeps the rule', async () => {
+    vi.useFakeTimers()
     const del = vi.spyOn(backend, 'deleteMuseTrigger').mockResolvedValue(undefined as never)
-    const confirm = vi.fn(() => false)
-    vi.stubGlobal('window', { confirm })
-    try {
-      useAutomation.getState().setSel({ kind: 'trigger', triggerId: trigger.id })
-      const action = source.itemMenu!(source.items({ group: 'rules' })[0]).find((a) => a.id === 'delete')!
-      expect(action.danger).toBe(true)
-      action.run()
-      await Promise.resolve()
-      expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Inventory'))
-      expect(del).not.toHaveBeenCalled()
-      expect(useAutomation.getState().sel).toEqual({ kind: 'trigger', triggerId: trigger.id })
-      confirm.mockReturnValue(true)
-      action.run()
-      await vi.waitFor(() => expect(useAutomation.getState().sel).toBeNull())
-      expect(del).toHaveBeenCalledWith(expect.anything(), trigger.id)
-    } finally { vi.unstubAllGlobals() }
+    const undoAction = () => useNotifications.getState().items.find((n) => n.action)?.action
+    useAutomation.getState().setSel({ kind: 'trigger', triggerId: trigger.id })
+    const action = source.itemMenu!(source.items({ group: 'rules' })[0]).find((a) => a.id === 'delete')!
+    expect(action.danger).toBe(true)
+    action.run()
+    expect(source.items().map((item) => item.title)).not.toContain('Inventory')
+    expect(useAutomation.getState().sel).toBeNull()
+    undoAction()!.run()
+    vi.advanceTimersByTime(10_000)
+    expect(del).not.toHaveBeenCalled()
+    expect(source.items().map((item) => item.title)).toContain('Inventory')
+
+    action.run()
+    vi.advanceTimersByTime(4999)
+    expect(del).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(del).toHaveBeenCalledWith(expect.anything(), trigger.id)
+    expect(undoAction()).toBeUndefined()
+    await vi.waitFor(() => expect(source.items().map((item) => item.title)).toContain('Inventory')) // stub store never drops it
   })
 })
