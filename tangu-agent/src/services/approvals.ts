@@ -165,6 +165,8 @@ const CONTROL_PLANE_TOOLS = new Set(['manage_agent', 'manage_schedule', 'manage_
  *   - 内容字段(命令 / 提示词 / 指令 / 人格 / 正文 / stdin / 浏览器任务)换行与缩进原样;结构化预览(manage_*)里多行的值排成块,
  *     每行带固定前缀 PREVIEW_GUTTER —— 内容行冒充不了结构行(「· tools → […]」),截断标记落在块外、不带前缀;
  *     tool_call 步骤 / 兜底分支(mcp__ 等)的参数里,顶层含换行的字符串值同样抽出来排成块(`args.<键>:`),其余照旧 JSON;
+ *     **要执行的值**(这些参数、write_process_input 的 stdin)首尾的换行不吞:写成块前的 `[starts with "…" · ends with "…"]`,
+ *     只剩一行时整值写 JSON 字面量(见 execBlock;对交互进程一个空行就是一次回车);
  *   - 标识类字段(slug / 名字 / id / 模型 / 日期 / 工具名)保持单行,换行写成可见的 `\n`,不静默折掉;
  *   - 整段预览最后过一遍 previewText:C0(留 \t \n)/ C1 / 零宽 / 方向控制 / 行段分隔符换成可见转义(见 SPOOF_CHARS);
  *     **长空白串**(不论行首行中,宽于 MAX_BLANK_COLS 列)换成可见的 `[N spaces]` —— pre-wrap 的卡片里,一长串空白挂在
@@ -210,7 +212,10 @@ export function previewText(s: unknown): string {
       const n = c.charCodeAt(0);
       return n < 0x100 ? `\\x${n.toString(16).toUpperCase().padStart(2, '0')}` : `\\u${n.toString(16).toUpperCase().padStart(4, '0')}`;
     })
-    .replace(/\s+$/, '')
+    // 不用 .replace(/\s+$/, ''):一长串空白后面跟着别的字(`"yes<空白>"` 的引号、`[ends with "<空白>"]`)时它是平方级
+    // (9 万个空格 ≈ 3.6s,同步卡在审批闸里,入队时 storedPreview 还再来一遍 —— 三轮 C #2)。trimEnd 线性,剥的字符集相同
+    // (WhiteSpace + LineTerminator,与 \s 同一张表)。
+    .trimEnd()
     // 净化之后剩下的横向空白:空格、\t、NBSP、U+1680、U+2000–U+200A、U+202F、U+205F、U+3000(\v \f \r 已转义)
     .replace(/[^\S\n]+/g, blankRun);
 }
@@ -223,6 +228,29 @@ const body = (v: unknown): string => {
   if (!s.includes('\n')) return s.trim();
   return `\n${s.split('\n').map((l) => (l ? PREVIEW_GUTTER + l : PREVIEW_GUTTER.trimEnd())).join('\n')}\n`;
 };
+/** 可执行的值(write_process_input 的 stdin、tool_call 步骤 / mcp__ 等兜底分支的参数)排成块:**每个换行都看得见**
+ *  (Codex 09-25 三轮 B #2)。body() 是给提示词这类正文用的,去掉开头的空行与末尾空白 —— 对要执行的值那就是吞掉回车:
+ *  发按键的 `"\nyes\n"` 显示成 `args.input: yes`,实际先回车、再 yes、再回车。所以:
+ *    - 剥出开头的空白行(start 之前)与末尾空白(end 之后,含换行 / \r / 空格);都在**原串**上算,\r\n 与单独的 \r 原样进 JSON;
+ *    - 中间是多行 → 照旧排块(两端没有空白时与 body 逐字相同);两端有东西时,块**前**加一行不带前缀的结构行
+ *      `[starts with "…" · ends with "…"]`(JSON 字面量,每个 \n 都写出来;内容行都带前缀,冒充不了)。
+ *      「ends with」也写在块前,不写在块后:引擎补的事实放在模型内容之前(见上方排版说明),长脚本被收件箱 / LOG / 通道
+ *      截断时截不掉它。不整值退成 JSON:脚本几乎都以换行结尾,整段 JSON 会把三轮 #6 的多行命令打回一行;
+ *    - 中间只剩一行(含全空白)→ undefined:调用方整值写 JSON 字面量(withArgs 留在参数 JSON 里)。
+ *  不用 /\s+$/ 剥末尾:对 10 万字的参数是平方级(5 万个空格 + 1 个字 ≈ 1s);开头按行走一遍,线性。 */
+const execBlock = (s: string): string | undefined => {
+  let start = 0;
+  for (let nl = s.indexOf('\n'); nl !== -1 && !s.slice(start, nl).trim(); nl = s.indexOf('\n', start)) start = nl + 1;
+  const end = start + s.slice(start).trimEnd().length;
+  const core = s.slice(start, end);
+  if (!core.includes('\n')) return undefined;
+  const lines = core.replace(/\r\n/g, '\n').split('\n').map((l) => (l ? PREVIEW_GUTTER + l : PREVIEW_GUTTER.trimEnd()));
+  const edges = [
+    start ? `starts with ${JSON.stringify(s.slice(0, start))}` : '',
+    end < s.length ? `ends with ${JSON.stringify(s.slice(end))}` : '',
+  ].filter(Boolean).join(' · ');
+  return `\n${edges ? `[${edges}]\n` : ''}${lines.join('\n')}\n`;
+};
 /** `label: 值`;值是块时冒号后直接换行。 */
 const labeled = (label: string, b: string): string => (b.startsWith('\n') ? `${label}:${b}` : `${label}: ${b}`);
 /** 按分隔符拼接;前一段以块结尾(已换行)时分隔符去掉行首空格,不把结构接在内容行后面。 */
@@ -232,15 +260,18 @@ const joinParts = (parts: string[], sep = ' · '): string =>
 const asJson = (v: unknown): string => {
   try { return JSON.stringify(v ?? {}) ?? String(v); } catch { return String(v); }
 };
-/** `head {参数 JSON}`;参数对象里**顶层**含换行的字符串值(命令、脚本、正文)抽出来排成 `args.<键>:` 块,其余键照旧 JSON
+/** `head {参数 JSON}`;参数对象里**顶层**的多行字符串值(命令、脚本、正文)抽出来排成 `args.<键>:` 块,其余键照旧 JSON
  *  (Codex 09-25 三轮 #6:无人值守 tool_call run_bash 的 `echo ok # safe\nrm -rf ~` 在单行 JSON 里只剩一个可见的 \n 区分)。
- *  全是空白的多行值留在 JSON 里(块会把它修成空的)。只看顶层:嵌套对象里的字符串照旧 JSON 转义,一个字符不丢。 */
+ *  块走 execBlock:首尾的换行 / 空白行写成块前的 `[starts with … · ends with …]`,不吞(三轮 B #2)。
+ *  去掉首尾空白后只剩一行的值(`"\nyes\n"`、`"yes\n\n"`)与全空白的值留在 JSON 里 —— 每个 \n 都转义可见。
+ *  只看顶层:嵌套对象里的字符串照旧 JSON 转义,一个字符不丢。 */
 const withArgs = (head: string, v: unknown): string => {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return `${head} ${asJson(v)}`;
   const rest: Record<string, unknown> = {};
   const blocks: string[] = [];
   for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-    if (typeof val === 'string' && val.includes('\n') && val.trim()) blocks.push(labeled(`args.${full(k)}`, body(val)));
+    const block = typeof val === 'string' ? execBlock(val) : undefined;
+    if (block) blocks.push(labeled(`args.${full(k)}`, block));
     else rest[k] = val;
   }
   if (!blocks.length) return `${head} ${asJson(v)}`;
@@ -309,11 +340,22 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {
     const inp: string = typeof args.input === 'string' ? args.input : '';
     const head = `→ proc ${full(args.process_id)}`;
     if (!inp) return `${head}: (poll)`;
-    // 全空白(回车 / 空格)写成 JSON 字面量:原样写就是一片空白,卡上看着像什么都没发 —— 一个回车就能确认 [Y/n]
-    if (!inp.trim()) return `${head}: ${JSON.stringify(inp)}`;
-    if (!inp.includes('\n')) return `${head}: ${inp}`;
-    // 多行:每一行都写(含首尾的空行 —— 对交互进程,空行 = 按了一次回车),每行带前缀
-    return `${head}:\n${inp.replace(/\r\n/g, '\n').split('\n').map((l) => (l ? PREVIEW_GUTTER + l : PREVIEW_GUTTER.trimEnd())).join('\n')}`;
+    // 单独的 Ctrl-C:工具不写 stdin,改发 SIGINT,也不补换行(processRegistry.writeStdin 的 CTRL_C 分支)。
+    // 只写在头部、不带冒号:内容一律在 `: ` 之后,单行输入写不出这个样子(process_id 伪造不了:对不上进程,工具直接报错)。
+    if (inp === '\x03') return `${head} (Ctrl-C → SIGINT)`;
+    // 卡上写的是**实际写进 stdin 的字节**(Codex 09-25 三轮 C #1):工具默认在 input 后再补一个 \n
+    // (hostProcess.ts `append_newline !== false` → writeStdin 写 `data + '\n'`)。只写 input 就少一个回车 ——
+    // `"\nyes\n"` 卡上两个 \n,实际三个,多出来的那个能确认下一个 [Y/n]。所以 sent = 真正写出去的那串:
+    //   - 默认补换行、单行、两端无空白 → 原样(`yes` = 敲 yes 再回车,最常见的一种)。长得像引擎自己写的形态的除外:
+    //     一行字 `(poll)` 原样写就是「只轮询、什么都不写」的卡,实际敲字再回车;以 `"` 开头的读起来是 JSON 字面量 —— 都按字节写;
+    //   - 其余一律按 sent 渲染,与 tool_call / mcp__ 参数同一套(execBlock,三轮 B #2):中间是多行 → 块,块里的行就是字节,
+    //     首尾写成块前的 `[starts with … · ends with …]`(默认模式下至少有 ends with "\n");否则整串 JSON 字面量,每个 \n 都在;
+    //   - append_newline:false → 头部标 `(no trailing newline)`,且单行也写成 JSON 字面量:与默认模式的 `yes` 一眼分得开。
+    //     标记同样在冒号之前,内容冒充不了。取值与工具同口径:只有布尔 false 才不补(字符串 "false" 照样补)。
+    const append = args.append_newline !== false;
+    if (append && !inp.includes('\n') && inp === inp.trim() && inp !== '(poll)' && !inp.startsWith('"')) return `${head}: ${inp}`;
+    const sent = append ? `${inp}\n` : inp;
+    return labeled(append ? head : `${head} (no trailing newline)`, execBlock(sent) ?? JSON.stringify(sent));
   }
   if (name === 'apply_patch') {
     const n = (String(args.patch ?? args.input ?? '').match(/^\*\*\* (?:Add|Update|Delete) File:/gm) || []).length;

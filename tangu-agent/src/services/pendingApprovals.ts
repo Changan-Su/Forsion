@@ -87,16 +87,52 @@ export function dedupeKeyOf(tool: string, cwd: string | undefined, args: string)
   return createHash('sha256').update(`${tool}\n${c}\n${args}`).digest('hex');
 }
 
+/** 不排队的原因:参数超上限(截断会成非法 JSON),或预览净化后超 STORED_PREVIEW_MAX(卡上放不下全文)。
+ *  retired = 同键、此前仍 pending 的旧行,已被撤回(见 queueApproval)。 */
+export interface QueueTooLarge { tooLarge: 'args' | 'preview'; size: number; limit: number; retired: string[] }
+
+/** 撤回行的 note(引擎写的数据串,同 recoverStaleExecuting / 代批否决的英文 note 口径)。 */
+function supersededNote(kind: QueueTooLarge['tooLarge']): string {
+  return `withdrawn by the system: the same action was requested again and ${kind === 'args' ? 'its arguments are too large to queue' : 'its preview cannot be shown in full on the approval card'}`;
+}
+
 /** 落一条待批行;同用户同 (工具, cwd, 参数) 已有 pending 行 → 复用(模型同一周期重试不会刷出一排)。
- *  并发插入靠 idx_pending_approvals_dedupe(部分唯一索引)兜底:撞索引就改读已有行。 */
+ *  并发插入靠 idx_pending_approvals_dedupe(部分唯一索引)兜底:撞索引就改读已有行。
+ *  两道尺寸闸都在去重之前:放不下的请求连「复用已有行」也不回(不给模型一个看似已排队的 id)。
+ *
+ *  升级兼容(Codex 09-25 三轮 inbox-trunc #1):main 把预览存成 displayText(preview, 2000) —— 折成一行、静默截断。
+ *  升级前留下的同键 pending 行,卡上是截断预览,批准却跑完整参数。所以:
+ *   - 放不下(tooLarge):同键 pending 行一并撤回(rejected / decided_by=system)。否则告诉模型「没排队、没执行」
+ *     是假话 —— 旧卡仍可批,且看不见尾巴;模型若再拆小重排,同一件事还可能跑两遍。撤回只会更严,不会更松。
+ *   - 复用(去重命中,含并发撞索引):把旧行的预览刷新成这次的全文。去重键覆盖完整参数,换上的预览描述的是同一份参数。 */
 export async function queueApproval(input: {
   userId: string; sessionId: string; runId?: string; agentSlug?: string; call: ToolCall;
   preview: string; reason?: ApprovalReason; cwd?: string; note?: string;
-}): Promise<{ id: string; existing: boolean } | { tooLarge: true }> {
+}): Promise<{ id: string; existing: boolean } | QueueTooLarge> {
   const tool = input.call.function.name;
   const args = String(input.call.function.arguments || '{}');
-  if (args.length > MAX_DEFERRED_ARGS) return { tooLarge: true };
   const key = dedupeKeyOf(tool, input.cwd, args);
+  const tooLarge: Omit<QueueTooLarge, 'retired'> | null = args.length > MAX_DEFERRED_ARGS
+    ? { tooLarge: 'args', size: args.length, limit: MAX_DEFERRED_ARGS }
+    : null;
+  const shown = tooLarge ? null : storedPreview(input.preview);
+  if (tooLarge || shown === null) {
+    const refusal = tooLarge ?? { tooLarge: 'preview' as const, size: previewText(input.preview).length, limit: STORED_PREVIEW_MAX };
+    const note = supersededNote(refusal.tooLarge);
+    const retired = await query<any[]>(
+      `UPDATE pending_approvals SET status = 'rejected', decided_by = 'system', note = ?, decided_at = CURRENT_TIMESTAMP
+       WHERE user_id = ? AND dedupe_key = ? AND status = 'pending' RETURNING id, agent_slug`,
+      [note, input.userId, key],
+    );
+    const ids: string[] = [];
+    for (const r of retired || []) {
+      const id = String(r.id);
+      ids.push(id);
+      log(`withdrew ${id} (${tool}): re-requested, refused as too large (${refusal.tooLarge})`);
+      await appendAgentLog(r.agent_slug || DEFAULT_AGENT_SLUG, input.userId, `[approval] request ${id} ${note}`);
+    }
+    return { ...refusal, retired: ids };
+  }
   const findExisting = async (): Promise<string | null> => {
     const dup = await query<any[]>(
       `SELECT id FROM pending_approvals WHERE user_id = ? AND status = 'pending' AND dedupe_key = ? LIMIT 1`,
@@ -104,20 +140,24 @@ export async function queueApproval(input: {
     );
     return dup?.[0]?.id ? String(dup[0].id) : null;
   };
+  const reuse = async (id: string): Promise<{ id: string; existing: true }> => {
+    await query(`UPDATE pending_approvals SET preview = ? WHERE id = ? AND status = 'pending'`, [shown, id]);
+    return { id, existing: true };
+  };
   const existing = await findExisting();
-  if (existing) return { id: existing, existing: true };
+  if (existing) return reuse(existing);
   const id = uuidv4();
   try {
     await query(
       `INSERT INTO pending_approvals (id, user_id, session_id, run_id, agent_slug, tool, args, preview, reason, cwd, status, note, dedupe_key)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
       [id, input.userId, input.sessionId, input.runId || null, input.agentSlug || null, tool, args,
-        storedPreview(input.preview), input.reason ? JSON.stringify(input.reason) : null,
+        shown, input.reason ? JSON.stringify(input.reason) : null,
         input.cwd || null, input.note ? displayText(input.note, 1000) : null, key],
     );
   } catch (e) {
     const raced = await findExisting(); // 并发插入撞了唯一索引 → 用赢家的行
-    if (raced) return { id: raced, existing: true };
+    if (raced) return reuse(raced);
     throw e;
   }
   return { id, existing: false };
@@ -413,9 +453,24 @@ export async function deferApproval(
     userId, sessionId: ctx.sessionId, runId, agentSlug, call, preview, reason, cwd: ctx.cwd, note,
   });
   if ('tooLarge' in q) {
+    // 两条入队路径(queue 档;agent 档代批否决后转排队)都经 queueApproval,在这里一并回话;代批否决的理由照样带上。
+    // 「拆不开」的出路(Codex 09-25 三轮 inbox-trunc #2):manage_agent 的 system_prompt / soul 每次整字段替换,
+    // 只说「拆小」会把模型逼去写一份删短的提示词或反复重试。
+    const withdrawn = q.retired.length
+      ? `An earlier identical request that was still waiting for approval (${q.retired.join(', ')}) was withdrawn for the same reason, so nothing is pending for it now. `
+      : '';
+    const unsplittable =
+      'If it cannot be split (for example a single field that has to be written whole), do not retry it or shorten the content to fit; ' +
+      'tell the user that it needs their approval in an interactive session, then continue with other work.';
     return {
       action: 'reject',
-      rejectReason: `This action needs the user's approval, but its arguments are too large to queue (${String(call.function.arguments || '').length} chars > ${MAX_DEFERRED_ARGS}). Split it into smaller steps.`,
+      rejectReason: (q.tooLarge === 'args'
+        ? `This action needs the user's approval, but its arguments are too large to queue (${q.size} chars > ${q.limit}). ` +
+          (note ? `${note}. ` : '') + withdrawn + 'It was NOT queued and did NOT run. Split it into smaller steps. '
+        : `This action needs the user's approval, but its preview is too long to show in full on the approval card (${q.size} chars > ${q.limit}), ` +
+          'and the user must be able to see everything they approve. ' + (note ? `${note}. ` : '') + withdrawn +
+          'It was NOT queued and did NOT run. Split it into smaller steps whose content is short enough to review, then continue with other work. ') +
+        unsplittable,
     };
   }
   const { id, existing } = q;
@@ -433,11 +488,15 @@ export async function deferApproval(
 }
 
 
+/** 收件箱存的审批预览上限(净化**之后**的字符数;previewText 会把一个伪装字符写成 6 个字的 `\u202E`)。 */
+export const STORED_PREVIEW_MAX = 20_000;
 /** 收件箱存的审批预览:沿用 approvals.previewText(保留换行 / 缩进、转义伪装字符、超长空白标成 [N spaces]),
- *  上限放宽且**显式标出截断** —— 旧版 displayText(…, 2000) 把换行折成空格、截断不留痕,
- *  控制面调用(无人值守 run 只能排队到这里)的尾部命令会整段消失(Codex 09-25 复审)。 */
-const STORED_PREVIEW_MAX = 20_000;
-export function storedPreview(preview: unknown): string {
+ *  存**全文**;放不下返回 null,queueApproval 据此不排队。
+ *  不变式:能被批准的,卡上一个字都看得见。旧版在 2 万字处截断、标一句 `[truncated N chars]` 照样入队 ——
+ *  批准执行的却是完整参数(至多 MAX_DEFERRED_ARGS),长命令尾部的动作用户批了却看不见(Codex 09-25 三轮 #3)。
+ *  不改成「把上限抬到覆盖最长参数」:预览相对参数没有干净的上界 —— previewText 把单个伪装字符扩成 6 字、
+ *  manage_automation 省略 actions 时会带上库里旧动作链(不在参数里)—— 所以按实测长度拒,而不是按参数长度推。 */
+export function storedPreview(preview: unknown): string | null {
   const p = previewText(preview);
-  return p.length > STORED_PREVIEW_MAX ? `${p.slice(0, STORED_PREVIEW_MAX)}\n… [truncated ${p.length - STORED_PREVIEW_MAX} chars]` : p;
+  return p.length > STORED_PREVIEW_MAX ? null : p;
 }

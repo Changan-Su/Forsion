@@ -7,10 +7,11 @@
  * 不进「总允许」,完全放行档放过;list / delete 免批(delete 另有「不能删自己」守卫)。
  * (旧头注说「写文件经审批闸门、与 host 写工具同档」不属实:本工具不在写工具集合里,曾在所有档位免批。)
  * approval_mode 不对模型开放:审批档只归用户在设置里改;模型传了就报错、什么都不写。
- * update 时模型省略的字段一律保留原值(buildAgentDef 对省略项会写空,在本调用点兜住,不改它的公共语义)。
+ * update 时模型省略的字段一律保留原值:覆盖已有 agent 走 patchAgent —— 在按 slug 串行化的保存里现读、只改模型传了的字段
+ * (旧口径从锁外预读的 existing 补省略项,预读到落盘之间用户在设置里的改动会被写回去)。
  */
 import type { ToolProvider } from '../toolRegistry.js';
-import { listAgents, getAgent, saveAgent, deleteAgent, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN, DEFAULT_MAX_ITERATIONS, KEEP_APPROVAL_MODE } from '../../agents/agentRegistry.js';
+import { listAgents, getAgent, saveAgent, patchAgent, deleteAgent, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN, DEFAULT_MAX_ITERATIONS, KEEP_APPROVAL_MODE, type AgentPatch, type NormalAgentDef } from '../../agents/agentRegistry.js';
 import { THINKING_LEVELS } from '../../llm/modelCapabilities.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
 
@@ -82,47 +83,58 @@ export const manageAgentProvider: ToolProvider = {
             const slug = requested && isValidSlug(requested) ? requested : slugify(String(args.name));
             const existing = await getAgent(slug);
             if (action === 'update' && !existing) return `Error: agent not found: ${slug} (use action=list to see agents).`;
-            // 人格主权:不能改写**自己**的人格——system_prompt/SOUL 归用户所有(create 撞自己 slug 同样拦,
-            // saveAgent 对已存在 slug 是覆盖)。运行参数(model/tools/thinking 等)放行:那是自调参,不是人格漂移。
-            // agent 自有的可进化层是 HARNESS.md(manage_harness)。
-            if (isSelf(slug, ctx)) {
-              const soulChanged = args.soul != null && String(args.soul) !== (existing?.soul || '');
-              if (!existing || String(args.system_prompt) !== existing.systemPrompt || soulChanged) {
-                return 'Error: you cannot change your own persona (system_prompt / SOUL belong to the user). You may change run parameters (model, tools, thinking_level, ...) by passing your current system_prompt back unchanged; record working methods with manage_harness instead.';
+            // 守卫对「某一份」agent 快照判:预读判一次(快速失败、报错顺序照旧);覆盖已有 agent 的路径在 patchAgent 里
+            // 对**锁内现读**的 cur 再判一次 —— 只判预读的话,预读到落盘之间用户改了人格 / 调高了轮数,模型「原样回传」的旧 prompt、
+            // 「不低于预读值」的轮数照样把用户刚改的写回去(与审批档 KEEP 同一类窗口)。
+            const guard = (cur: NormalAgentDef | null): string | null => {
+              // 人格主权:不能改写**自己**的人格——system_prompt/SOUL 归用户所有(create 撞自己 slug 同样拦,
+              // saveAgent 对已存在 slug 是覆盖)。运行参数(model/tools/thinking 等)放行:那是自调参,不是人格漂移。
+              // agent 自有的可进化层是 HARNESS.md(manage_harness)。
+              if (isSelf(slug, ctx)) {
+                const soulChanged = args.soul != null && String(args.soul) !== (cur?.soul || '');
+                if (!cur || String(args.system_prompt) !== cur.systemPrompt || soulChanged) {
+                  return 'you cannot change your own persona (system_prompt / SOUL belong to the user). You may change run parameters (model, tools, thinking_level, ...) by passing your current system_prompt back unchanged; record working methods with manage_harness instead.';
+                }
               }
-            }
-            // 轮数:低于下限一律拒(与 routes/agents 同口径);对**自己**只许持平或调高 —— 模型给自己写个 3,之后每回合
-            // 两次工具调用就收尾,用户在会话里看不出是谁改的(09-13 导出实证)。
-            if (args.max_iterations != null) {
-              const want = Number(args.max_iterations);
-              if (!Number.isFinite(want) || want < AGENT_MAX_ITERATIONS_MIN) return `Error: max_iterations must be at least ${AGENT_MAX_ITERATIONS_MIN} (got ${args.max_iterations}).`;
-              const cur = existing?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
-              if (isSelf(slug, ctx) && want < cur) return `Error: an agent may not lower its own max_iterations (current ${cur}, requested ${want}). Keep it or raise it; only the user can lower it in Settings.`;
-            }
-            // 省略 ≠ 清空(H2):buildAgentDef 对 description / model / tools / thinkingLevel / approvalMode 的省略项写空,
-            // 而 approvalMode 写空 = 激活时回落 auto-edit —— 用户设成只读的 Agent 被模型改一次模型就悄悄放宽。
-            // 覆盖同 slug 的 create(saveAgent 对已存在 slug 是覆盖)同样保留:existing 在就按它补。
-            const def = await saveAgent({
-              slug,
+              // 轮数:低于下限一律拒(与 routes/agents 同口径);对**自己**只许持平或调高 —— 模型给自己写个 3,之后每回合
+              // 两次工具调用就收尾,用户在会话里看不出是谁改的(09-13 导出实证)。
+              if (args.max_iterations != null) {
+                const want = Number(args.max_iterations);
+                if (!Number.isFinite(want) || want < AGENT_MAX_ITERATIONS_MIN) return `max_iterations must be at least ${AGENT_MAX_ITERATIONS_MIN} (got ${args.max_iterations}).`;
+                const now = cur?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+                if (isSelf(slug, ctx) && want < now) return `an agent may not lower its own max_iterations (current ${now}, requested ${want}). Keep it or raise it; only the user can lower it in Settings.`;
+              }
+              return null;
+            };
+            const refused = guard(existing);
+            if (refused) return `Error: ${refused}`;
+            // 只放模型**传了**的字段:省略 ≠ 清空(H2)—— buildAgentDef 对 description / model / tools / thinkingLevel 的省略项写空;
+            // 轮数省略也得保留,否则 update 只改 model 就把自己的 150 降回默认 90,「不许自降」守卫形同虚设(Codex 09-13 #1)。
+            // 省略的字段**不**从上面的预读 existing 补:从那次读到落盘之间用户可能刚在设置里收窄了工具 / 换了模型,传旧值会把它写回去
+            // (09-25 审批档那条 P1 的同类窗口)。覆盖已有的走 patchAgent:在按 slug 串行化的保存里现读、只改传了的字段。
+            const fields: AgentPatch = {
               name: String(args.name),
-              description: args.description != null ? String(args.description) : existing?.description,
-              model: args.model != null ? String(args.model) : existing?.model,
-              tools: Array.isArray(args.tools) ? args.tools.map((t: any) => String(t)) : existing?.tools,
-              thinkingLevel: args.thinking_level != null ? args.thinking_level : (existing?.thinkingLevel || undefined),
-              // 省略 ≠ 清空:否则 update 只改 model 就把自己的 150 降回默认 90,上面的「不许自降」守卫形同虚设(Codex 09-13 #1)
-              maxIterations: args.max_iterations != null ? Number(args.max_iterations) : (existing?.maxIterations ?? undefined),
-              // 永不取自模型参数,也不取上面先读的 existing:从那次读到落盘之间用户可能刚在设置里收紧了档,
-              // 传旧值会把它写回去(Codex 09-25 P1)。KEEP = saveAgent 在按 slug 串行化的保存里现读现留;
-              // 此刻 slug 不存在 → 空(同全新 create)。先读到了却在保存前被删 → mustExist 让它报错,不悄悄新建一个空档的。
-              // 反过来:预读时不存在(按「新建」批的)、保存前冒出一个同 slug 的 → mustNotExist 报错,不把指令写进一个可能是
-              // full-auto 的现成 Agent;模型重来一次,审批卡就会如实写「overwrites existing agent · approval tier stays …」(09-25 #5)。
-              approvalMode: KEEP_APPROVAL_MODE,
-              mustExist: action === 'update' || !!existing,
-              mustNotExist: action === 'create' && !existing,
               systemPrompt: String(args.system_prompt),
+              description: args.description != null ? String(args.description) : undefined,
+              model: args.model != null ? String(args.model) : undefined,
+              tools: Array.isArray(args.tools) ? args.tools.map((t: any) => String(t)) : undefined,
+              thinkingLevel: args.thinking_level != null ? args.thinking_level : undefined,
+              maxIterations: args.max_iterations != null ? Number(args.max_iterations) : undefined,
               soul: args.soul != null ? String(args.soul) : undefined,
               createdBy: 'agent',
-            });
+            };
+            // 审批档永不取自模型参数,也不取预读的 existing(Codex 09-25 P1):
+            // · 覆盖已有 → patchAgent 用 KEEP_APPROVAL_MODE 现读现留;先读到了却在保存前被删 → mustExist 报错,不悄悄新建一个空档的。
+            // · 全新 create → saveAgent + KEEP(slug 不存在 = 空档,同全新 create);预读时不存在(按「新建」批的)、保存前冒出同 slug 的
+            //   → mustNotExist 报错,不把指令写进一个可能是 full-auto 的现成 Agent;模型重来一次,审批卡就会如实写
+            //   「overwrites existing agent · approval tier stays …」(09-25 #5)。
+            const def = existing
+              ? await patchAgent(slug, (cur) => {
+                const again = guard(cur);
+                if (again) throw new Error(again);
+                return fields;
+              })
+              : await saveAgent({ ...fields, slug, name: String(args.name), systemPrompt: String(args.system_prompt), approvalMode: KEEP_APPROVAL_MODE, mustNotExist: true });
             // create 撞上已有 slug = 覆盖(设计如此,见上;readonly / auto-edit 的审批卡已写「overwrites」),但完全放行档不弹卡 ——
             // 回执必须点破,否则纯中文名不带 slug(slugify → 'agent')连建两个,模型两次都以为「建好了」,第一个已被悄悄替换。
             const verb = action === 'update'

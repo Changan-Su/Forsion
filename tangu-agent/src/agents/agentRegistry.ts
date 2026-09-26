@@ -749,6 +749,24 @@ export async function getAgent(slug: string): Promise<NormalAgentDef | null> {
  */
 export const KEEP_APPROVAL_MODE: unique symbol = Symbol('tangu.keepApprovalMode');
 
+/** 锁内现读发现该 agent 不在(mustExist 的保存 / patchAgent / 落盘那一刻 config.toml 已被锁外删掉)。
+ *  路由据此回 404,不靠匹配报错文本;message 保持原样(manage_agent 把它原文回给模型)。 */
+export class AgentNotFoundError extends Error {
+  constructor(slug: string) {
+    super(`agent not found: ${slug} (it was removed before the change could be saved)`);
+    this.name = 'AgentNotFoundError';
+  }
+}
+
+/** 锁内现读发现该 slug 已被占(mustNotExist 的保存:预读时还不在、落盘前冒出来一个同 slug 的)。路由据此回 409;
+ *  message 保持原样(manage_agent 把它原文回给模型,测试按原文匹配)。 */
+export class AgentExistsError extends Error {
+  constructor(slug: string) {
+    super(`agent already exists: ${slug} (it was created before your new agent could be saved). Nothing was saved; check it with action=list, then pass a different slug or call again to replace it.`);
+    this.name = 'AgentExistsError';
+  }
+}
+
 export interface SaveAgentInput {
   slug?: string;
   name: string;
@@ -874,12 +892,12 @@ function withAgentLock<T>(slug: string, fn: () => Promise<T>): Promise<T> {
 /** 锁内落盘(调用方已持有该 slug 的锁、existing 是锁内现读的)。基于已有 agent 的写不建目录:落盘那一刻它的 config.toml
  *  不在了(锁外的删除,如别的进程 / 手动删)就报错,绝不把删掉的 agent 写回来。 */
 async function writeAgentLocked(slug: string, existing: NormalAgentDef | null, input: SaveAgentInput): Promise<NormalAgentDef> {
-  if (input.mustExist && !existing) throw new Error(`agent not found: ${slug} (it was removed before the change could be saved)`);
-  if (input.mustNotExist && existing) throw new Error(`agent already exists: ${slug} (it was created before your new agent could be saved). Nothing was saved; check it with action=list, then pass a different slug or call again to replace it.`);
+  if (input.mustExist && !existing) throw new AgentNotFoundError(slug);
+  if (input.mustNotExist && existing) throw new AgentExistsError(slug);
   const def = buildAgentDef(slug, existing, input);
   const adir = path.join(agentsDir(), slug);
   if (!existing) mkdirSync(adir, { recursive: true });
-  else if (!existsSync(path.join(adir, 'config.toml'))) throw new Error(`agent not found: ${slug} (it was removed before the change could be saved)`);
+  else if (!existsSync(path.join(adir, 'config.toml'))) throw new AgentNotFoundError(slug);
   await fs.writeFile(path.join(adir, 'config.toml'), serializeAgentConfig(def), 'utf-8');
   await fs.writeFile(path.join(adir, 'SOUL.md'), def.soul || '', 'utf-8');
   cache = null; // 失效缓存
@@ -895,6 +913,62 @@ export async function saveAgent(input: SaveAgentInput): Promise<NormalAgentDef> 
   // deleteAgent / saveAgentAvatar / deleteAgentAvatar 入队前同样先跑它。
   await ensureAgentsReady();
   return withAgentLock(slug, async () => writeAgentLocked(slug, await getAgent(slug), input));
+}
+
+/** 字段级补丁:undefined = 未提交 → 保留该 agent 现有的值;null 对 maxIterations / enabledSkillIds / enabledMcpServers /
+ *  toolsMode / toolsList 仍是「清除」(同 SaveAgentInput)。 */
+export type AgentPatch = Partial<Omit<SaveAgentInput, 'slug' | 'mustExist' | 'mustNotExist'>>;
+
+/** cur + 补丁 → 完整的 SaveAgentInput:未提交的字段逐个取 cur 的值(buildAgentDef 对 description / model / tools / thinkingLevel /
+ *  maxIterations 是整量覆盖,省略 = 清空,所以得显式带上)。avatar / createdBy 不填 —— buildAgentDef 本就按它自己读到的 existing 保留。
+ *  纯函数,cur 从哪来由调用方负责:只有**锁内现读**的 cur 才不会把并发写回去(本地 patchAgent、云端 cloudPatchAgent 都在锁里调它)。 */
+export function mergeAgentPatch(cur: NormalAgentDef, patch: AgentPatch): SaveAgentInput {
+  const pick = <K extends keyof AgentPatch>(k: K, fallback: AgentPatch[K]): AgentPatch[K] => (patch[k] !== undefined ? patch[k] : fallback);
+  return {
+    ...patch,
+    slug: cur.slug,
+    name: pick('name', cur.name) as string,
+    description: pick('description', cur.description),
+    model: pick('model', cur.model),
+    tools: pick('tools', cur.tools),
+    enabledSkillIds: pick('enabledSkillIds', cur.enabledSkillIds),
+    enabledMcpServers: pick('enabledMcpServers', cur.enabledMcpServers),
+    thinkingLevel: pick('thinkingLevel', cur.thinkingLevel || undefined),
+    maxIterations: pick('maxIterations', cur.maxIterations),
+    approvalMode: pick('approvalMode', cur.approvalMode),
+    systemPrompt: pick('systemPrompt', cur.systemPrompt) as string,
+    soul: pick('soul', cur.soul),
+    shareDefaultMemory: pick('shareDefaultMemory', cur.shareDefaultMemory),
+    cloudSync: pick('cloudSync', cur.cloudSync),
+    activityAccess: pick('activityAccess', cur.activityAccess),
+    toolsMode: pick('toolsMode', cur.toolsMode),
+    toolsList: pick('toolsList', cur.toolsList),
+  };
+}
+
+/**
+ * 改一个**已有** agent 的部分字段:读现值 → 合并 → 落盘整段在该 slug 的队里,只有 fields 里提交了的字段会变。
+ * 旧口径(设置页 PATCH、manage_agent update)在锁外先读 cur、再把 cur 的每个未提交字段(含审批档)显式写回 ——
+ * 读到写之间用户收紧的审批档 / 收窄的工具名单被这份旧快照盖回去;期间被删的 agent 被这次保存建回来。
+ * - 审批档没提交 → KEEP_APPROVAL_MODE(锁内现读现留),永远不从调用方的快照里取。
+ * - 恒 mustExist:锁内读不到(已被删)→ AgentNotFoundError,不新建。patch 一个不存在的 agent 就是新建,那该走 saveAgent。
+ * - fields 可以是函数:拿锁内现读的 cur 做守卫(manage_agent 的人格主权 / 不许自降轮数),抛错 = 什么都不写。
+ * 入队前先 ensureAgentsReady(同 saveAgent:首访播种会给 xyra 存头像,放锁里 = 自己等自己)。
+ */
+export async function patchAgent(slug: string, fields: AgentPatch | ((cur: NormalAgentDef) => AgentPatch)): Promise<NormalAgentDef> {
+  if (!isValidSlug(slug)) throw new AgentNotFoundError(slug);
+  await ensureAgentsReady();
+  return withAgentLock(slug, async () => {
+    const cur = await getAgent(slug);
+    if (!cur) throw new AgentNotFoundError(slug);
+    const patch = typeof fields === 'function' ? fields(cur) : fields;
+    return writeAgentLocked(slug, cur, {
+      ...mergeAgentPatch(cur, patch),
+      approvalMode: patch.approvalMode !== undefined ? patch.approvalMode : KEEP_APPROVAL_MODE,
+      mustExist: true,
+      mustNotExist: false,
+    });
+  });
 }
 
 /** 删除一个 agent(整个文件夹)。与保存同队:排在它前面的保存先落盘再删,排在后面的 mustExist 保存会看到它已不在。 */

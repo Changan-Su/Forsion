@@ -15,8 +15,9 @@ import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
-import { queueApproval, listApprovals, countPendingApprovals, decideApproval } from '../src/services/pendingApprovals.js';
-import { gateToolCall } from '../src/services/approvals.js';
+import { displayText } from '../src/core/displayText.js';
+import { queueApproval, listApprovals, countPendingApprovals, decideApproval, dedupeKeyOf, MAX_DEFERRED_ARGS, STORED_PREVIEW_MAX } from '../src/services/pendingApprovals.js';
+import { gateToolCall, approvalPreview } from '../src/services/approvals.js';
 import type { ToolCall } from '../src/core/types.js';
 
 vi.mock('../src/services/agentLoop.js', () => ({ enqueueRun: vi.fn() }));
@@ -250,6 +251,9 @@ describe('pendingApprovals × Codex 09-10 评审补钉', () => {
 
     expect(d.action).toBe('reject')
     expect(d.rejectReason).toContain('too large to queue')
+    // 整字段写入(manage_agent 的 system_prompt / soul)拆不开:除了「拆小」还得给一条不重试的出路(Codex 09-25 三轮 inbox-trunc #2)
+    expect(d.rejectReason).toContain('If it cannot be split')
+    expect(d.rejectReason).toContain('interactive session')
     expect(await countPendingApprovals(USER)).toBe(0)
   })
   it('MCP / 非内置工具不能延后:直接告诉模型跳过,零落行', async () => {
@@ -271,3 +275,125 @@ describe('pendingApprovals × Codex 09-10 评审补钉', () => {
     expect(line.split('[approval]').length).toBe(3) // 原文里那个假抬头被折进同一行,不是独立的第二行
   })
 });
+
+describe('收件箱预览放不下全文 → 不排队(Codex 09-25 三轮 #3:能批的必须看得全)', () => {
+  const ctx = () => ({ sessionId: 'S', execMode: 'host', approvalMode: 'auto-edit' as const, cwd: work, userId: USER, agentSlug: 'muse' })
+  // 参数 ~25k 远低于 MAX_DEFERRED_ARGS,预览却超 STORED_PREVIEW_MAX:旧版截到 2 万字照样入队,尾部的 rm 卡上看不见、批准后照跑
+  const TAIL = 'rm -rf ~/tail-only-visible-if-full'
+  const longCmd = () => call('run_bash', { command: `echo ${'a'.repeat(25_000)}\n${TAIL}` })
+
+  it('queue 档:不落行、不发收件箱,模型收到「看不全→拆小」的英文说明', async () => {
+    const c = longCmd()
+    expect(c.function.arguments.length).toBeLessThan(MAX_DEFERRED_ARGS)
+    const d = await gateToolCall('R1', c, { ...ctx(), approvalDeferral: 'queue' })
+    expect(d.action).toBe('reject')
+    expect(d.rejectReason).toContain('too long to show in full')
+    expect(d.rejectReason).toContain('did NOT run')
+    expect(d.rejectReason).toContain('Split it into smaller steps')
+    expect(d.rejectReason).toContain('If it cannot be split')
+    expect(d.rejectReason).toContain('interactive session')
+    expect(d.rejectReason).not.toContain('was withdrawn') // 没有同键旧行时不提撤回
+    expect(d.rejectReason).not.toMatch(/Deferred for the user's approval/)
+    expect(d.rejectReason).not.toMatch(/[\u4e00-\u9fff]/)
+    expect((await listApprovals(USER)).length).toBe(0)
+    expect((await query<any[]>(`SELECT id FROM inbox_messages WHERE user_id = ?`, [USER])).length).toBe(0)
+  })
+
+  it('agent 档:代批否决后转排队的那条路同样不落行,否决理由照样带给模型', async () => {
+    judgeVerdict = '{"approve": false, "reason": "too risky"}'
+    const d = await gateToolCall('R1', longCmd(), { ...ctx(), approvalDeferral: 'agent' })
+    expect(d.action).toBe('reject')
+    expect(d.rejectReason).toContain('too long to show in full')
+    expect(d.rejectReason).toContain('declined by the approving agent: too risky')
+    expect((await listApprovals(USER)).length).toBe(0)
+  })
+
+  it('直接调 queueApproval:回 tooLarge=preview + 净化后长度与上限;连已有同键行也不复用', async () => {
+    const c = longCmd()
+    const q = await queueApproval({ userId: USER, sessionId: 'S', agentSlug: 'muse', call: c, preview: approvalPreview(c), cwd: work })
+    expect(q).toMatchObject({ tooLarge: 'preview', limit: STORED_PREVIEW_MAX })
+    expect((q as any).size).toBe(approvalPreview(c).length)
+    expect((q as any).size).toBeGreaterThan(STORED_PREVIEW_MAX)
+    expect(await countPendingApprovals(USER)).toBe(0)
+    // 旧版截断入队的同键行(升级前留下的):尺寸闸在去重之前,不回它的 id 冒充「已排队」;
+    // 而且这行本身不能留着可批(卡上是截断预览)—— 撤回,并把撤回的 id 交给调用方告诉模型
+    await query(
+      `INSERT INTO pending_approvals (id, user_id, session_id, tool, args, preview, status, dedupe_key) VALUES ('legacy', ?, 'S', 'run_bash', ?, 'x', 'pending', ?)`,
+      [USER, c.function.arguments, dedupeKeyOf('run_bash', work, c.function.arguments)],
+    )
+    const again = await queueApproval({ userId: USER, sessionId: 'S', agentSlug: 'muse', call: c, preview: approvalPreview(c), cwd: work })
+    expect(again).toMatchObject({ tooLarge: 'preview', retired: ['legacy'] })
+    expect('id' in again).toBe(false)
+    expect(await countPendingApprovals(USER)).toBe(0)
+  })
+
+  // 升级场景(Codex 09-25 三轮 inbox-trunc #1a):main 存的是 displayText(preview, 2000) —— 折成一行、静默截断。
+  // 升级后 Muse 同参重试,新代码嫌预览太长不排队、告诉模型「NOT queued」,旧行却还 pending 可批,
+  // 批准照跑完整参数(卡上看不见的尾巴 TAIL_RAN 也跑)。修复:放不下时把同键 pending 旧行一并撤回。
+  it('超上限 × 同键旧行(升级前的截断预览):旧行被撤回、批不了,尾部不执行;模型被告知撤回了哪条', async () => {
+    const c = call('run_bash', { command: `echo ${'a'.repeat(25_000)}\necho TAIL_RAN > tail.txt` })
+    const legacyPreview = displayText(approvalPreview(c), 2000) // main 的存法
+    expect(legacyPreview).not.toContain('TAIL_RAN')
+    await query(
+      `INSERT INTO pending_approvals (id, user_id, session_id, agent_slug, tool, args, preview, cwd, status, dedupe_key) VALUES ('legacy', ?, 'S', 'muse', 'run_bash', ?, ?, ?, 'pending', ?)`,
+      [USER, c.function.arguments, legacyPreview, work, dedupeKeyOf('run_bash', work, c.function.arguments)],
+    )
+    const d = await gateToolCall('R1', c, { ...ctx(), approvalDeferral: 'queue' })
+    expect(d.action).toBe('reject')
+    // 先断危害本身(负对照时这里就红:旧卡照批、尾巴照跑),再断文案
+    const r = await decideApproval('legacy', USER, 'approve', 'user')
+    expect(existsSync(join(work, 'tail.txt'))).toBe(false)
+    expect(r).toMatchObject({ ok: false, status: 'rejected' })
+    const legacy = (await listApprovals(USER)).find((row) => row.id === 'legacy')!
+    expect(legacy.status).toBe('rejected')
+    expect(legacy.decided_by).toBe('system')
+    expect(String(legacy.note)).toContain('cannot be shown in full')
+    expect(await countPendingApprovals(USER)).toBe(0)
+    expect(appendedLogs.some((l) => l.includes('[approval] request legacy withdrawn by the system'))).toBe(true)
+    expect(d.rejectReason).toContain('too long to show in full')
+    expect(d.rejectReason).toContain('was withdrawn')
+    expect(d.rejectReason).toContain('legacy')
+    expect(d.rejectReason).toContain('did NOT run')
+    expect(d.rejectReason).not.toMatch(/[一-鿿]/)
+  })
+
+  // 升级场景(#1b):同键旧行 + 新预览在上限以内 → 复用旧行 id(不重复排队、不重发收件箱),但卡上换成新的全文预览。
+  it('上限以内 × 同键旧行:复用旧行,但预览刷新成全文(尾部命令在卡上)', async () => {
+    const c = call('run_bash', { command: `echo ${'a'.repeat(5_000)}\n${TAIL}` })
+    await query(
+      `INSERT INTO pending_approvals (id, user_id, session_id, agent_slug, tool, args, preview, cwd, status, dedupe_key) VALUES ('legacy', ?, 'S', 'muse', 'run_bash', ?, ?, ?, 'pending', ?)`,
+      [USER, c.function.arguments, displayText(approvalPreview(c), 2000), work, dedupeKeyOf('run_bash', work, c.function.arguments)],
+    )
+    const d = await gateToolCall('R1', c, { ...ctx(), approvalDeferral: 'queue' })
+    expect(d.rejectReason).toMatch(/Deferred for the user's approval \(request legacy\)/)
+    const rows = await listApprovals(USER, 'pending')
+    expect(rows.map((r) => r.id)).toEqual(['legacy'])
+    expect(rows[0].preview).toBe(approvalPreview(c))
+    expect(rows[0].preview.endsWith(TAIL)).toBe(true)
+    expect((await query<any[]>(`SELECT id FROM inbox_messages WHERE user_id = ?`, [USER])).length).toBe(0)
+  })
+
+  it('并发同参排队撞唯一索引:输家复用赢家的行时也刷新成自己那份预览', async () => {
+    const c = call('run_bash', { command: 'echo same-args' })
+    const [a, b] = await Promise.all([
+      queueApproval({ userId: USER, sessionId: 'S', agentSlug: 'muse', call: c, preview: 'first preview', cwd: work }),
+      queueApproval({ userId: USER, sessionId: 'S', agentSlug: 'muse', call: c, preview: 'second preview', cwd: work }),
+    ])
+    if ('tooLarge' in a || 'tooLarge' in b) throw new Error('unexpected')
+    expect(a.id).toBe(b.id)
+    const loser = a.existing ? 'first preview' : 'second preview'
+    expect(a.existing !== b.existing).toBe(true)
+    const [row] = await listApprovals(USER, 'pending')
+    expect(row.preview).toBe(loser)
+  })
+
+  it('上限以内:照常排队,存的是全文(尾部命令在、无截断标记),与闸门给的预览逐字一致', async () => {
+    const c = call('run_bash', { command: `echo ${'a'.repeat(19_000)}\n${TAIL}` })
+    const d = await gateToolCall('R1', c, { ...ctx(), approvalDeferral: 'queue' })
+    expect(d.rejectReason).toMatch(/Deferred for the user's approval \(request /)
+    const [row] = await listApprovals(USER, 'pending')
+    expect(row.preview).toBe(approvalPreview(c))
+    expect(row.preview.endsWith(TAIL)).toBe(true)
+    expect(row.preview).not.toMatch(/truncated/)
+  })
+})

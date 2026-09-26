@@ -2473,7 +2473,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         //    没有计划卡=没有批准入口,整条计划流程静默失效。收尾前催一次。
         //    整 run 只催一次(第二次放行):plan 模式也用来问答/调研,不该把每一轮都逼成计划。
         //    不看 usedTools:「只读调研完直接口述计划」正是要拦的那种。——
-        if (planMode && !planNudged && !lastIter) {
+        // 本 run 已调过 exit_plan_mode(计划已提交 / 已批准):run 级 planMode 快照仍是 true,但不能再催 —— 否则批准后收尾又被催,
+        // 模型重交计划、桌面弹第二张计划卡、「自动开始」等不到 done(09-26 真模型 12/12 复现,698fb79b 起就在)。
+        if (planMode && !planNudged && !lastIter && !allToolCalls.some((c) => c.function.name === 'exit_plan_mode')) {
           planNudged = true;
           if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
           workingMessages.push({

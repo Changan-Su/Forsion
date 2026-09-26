@@ -2,7 +2,7 @@
  * Normal Agent CRUD。handler 自带 authMiddleware。
  *   GET    /agent/agents                列出全部 agent 定义
  *   POST   /agent/agents { name, systemPrompt, ... }   新建（slug 由 name 派生或显式给）
- *   PATCH  /agent/agents/:slug          更新
+ *   PATCH  /agent/agents/:slug          更新(只改提交了的字段;按 slug 串行化、被并发删掉 → 404)
  *   DELETE /agent/agents/:slug          删除
  *
  * 存储按 profile 分流：本地（hostExec=true）= 进程级 ~/.tangu/agents 文件夹（agentRegistry）；
@@ -13,9 +13,9 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
-import { listAgents, getAgent, saveAgent, deleteAgent, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN } from '../agents/agentRegistry.js';
+import { listAgents, getAgent, saveAgent, patchAgent, AgentNotFoundError, AgentExistsError, type AgentPatch, deleteAgent, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN } from '../agents/agentRegistry.js';
 import {
-  cloudAgentsEnabled, cloudListAgents, cloudGetAgent, cloudSaveAgent, cloudDeleteAgent,
+  cloudAgentsEnabled, cloudListAgents, cloudGetAgent, cloudSaveAgent, cloudPatchAgent, cloudDeleteAgent,
   cloudSaveAgentAvatar, cloudReadAgentAvatar, cloudDeleteAgentAvatar, cloudReadAgentsMeta, cloudWriteAgentsMeta,
 } from '../agents/cloudAgentStore.js';
 import path from 'node:path';
@@ -98,6 +98,9 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
       toolsMode: b.toolsMode !== undefined ? b.toolsMode : undefined,
       toolsList: b.toolsList !== undefined ? b.toolsList : undefined,
       createdBy: 'user' as const,
+      // 上面的唯一化是锁外预读:查完到落盘之间冒出同 slug 的(连点两次提交 / manage_agent create 同名)→ 锁内现读报错、
+      // 什么都不写(回 409),不把刚建好的那个连同它的审批档悄悄盖掉。
+      mustNotExist: true,
     };
     const agent = cloud ? await cloudSaveAgent(uid, slug, input) : await saveAgent(input);
     if (!cloud && scope && (b.cloudSync != null || b.shareDefaultMemory != null)) {
@@ -107,6 +110,7 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
     if (!cloud) agent.cloudSync = agentSyncPermission(slug, scope).enabled;
     res.json({ agent });
   } catch (e: any) {
+    if (e instanceof AgentExistsError) return void res.status(409).json({ detail: 'An agent with this slug was just created. Nothing was saved; reload and try again.' });
     res.status(400).json({ detail: e?.message || 'create agent failed' });
   }
 });
@@ -116,33 +120,42 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
   if (!cloud && !ensureLocal(res)) return;
   try {
     const slug = req.params.slug;
+    // 预读:不存在 → 404 先于下面的 400 校验(旧行为)。合并**不用**它 —— 见下面的 patchAgent / cloudPatchAgent。
     const cur = cloud ? await cloudGetAgent(req.user!.userId, slug) : await getAgent(slug);
     if (!cur) return res.status(404).json({ detail: 'Agent not found' });
     const b = req.body || {};
     const scope = cloud ? null : agentSyncScope(deps().brain.agentFiles, req.user!.userId);
     if (!cloud && b.cloudSync && !scope) return res.status(400).json({ detail: 'Sign in to a Forsion account before enabling cloud sync' });
     if (Number(b.maxIterations) > 0 && Number(b.maxIterations) < AGENT_MAX_ITERATIONS_MIN) return res.status(400).json({ detail: `max_iterations must be at least ${AGENT_MAX_ITERATIONS_MIN}` });
-    const input = {
-      slug,
-      name: b.name != null ? String(b.name) : cur.name,
-      description: b.description != null ? b.description : cur.description,
-      model: b.model != null ? b.model : cur.model,
-      tools: Array.isArray(b.tools) ? b.tools : cur.tools,
-      enabledSkillIds: b.enabledSkillIds === null || Array.isArray(b.enabledSkillIds) ? b.enabledSkillIds : cur.enabledSkillIds,
-      enabledMcpServers: b.enabledMcpServers === null || Array.isArray(b.enabledMcpServers) ? b.enabledMcpServers : cur.enabledMcpServers,
-      thinkingLevel: b.thinkingLevel != null ? b.thinkingLevel : cur.thinkingLevel,
-      maxIterations: b.maxIterations !== undefined ? b.maxIterations : cur.maxIterations,
-      approvalMode: b.approvalMode != null ? b.approvalMode : cur.approvalMode,
-      systemPrompt: b.systemPrompt != null ? String(b.systemPrompt) : cur.systemPrompt,
-      soul: b.soul != null ? String(b.soul) : cur.soul,
-      shareDefaultMemory: b.shareDefaultMemory != null ? !!b.shareDefaultMemory : cur.shareDefaultMemory,
-      cloudSync: cloud ? (b.cloudSync != null ? !!b.cloudSync : cur.cloudSync) : (!!b.cloudSync || cur.cloudSync),
-      activityAccess: b.activityAccess != null ? !!b.activityAccess : cur.activityAccess,
+    // 只放**提交了的**字段(undefined = 未提交 → 保留现值)。「算不算提交」逐字段沿用旧口径:
+    // name / description / model / thinkingLevel / approvalMode / systemPrompt / soul 与三个开关按 != null(传 null = 没提交);
+    // maxIterations / toolsMode / toolsList 按 !== undefined(null = 显式清除);两份名单 null 或数组才算;
+    // 本地 cloudSync 只能经这里打开(旧口径 `!!b.cloudSync || cur.cloudSync`),关同步走同步权限那条。
+    const fields: AgentPatch = {
+      name: b.name != null ? String(b.name) : undefined,
+      description: b.description != null ? b.description : undefined,
+      model: b.model != null ? b.model : undefined,
+      tools: Array.isArray(b.tools) ? b.tools : undefined,
+      enabledSkillIds: b.enabledSkillIds === null || Array.isArray(b.enabledSkillIds) ? b.enabledSkillIds : undefined,
+      enabledMcpServers: b.enabledMcpServers === null || Array.isArray(b.enabledMcpServers) ? b.enabledMcpServers : undefined,
+      thinkingLevel: b.thinkingLevel != null ? b.thinkingLevel : undefined,
+      maxIterations: b.maxIterations,
+      // 设置页就是用户改审批档的地方:提交了就照写(可收紧也可放宽,这是用户本人);没提交 → patchAgent 锁内现读现留。
+      approvalMode: b.approvalMode != null ? b.approvalMode : undefined,
+      systemPrompt: b.systemPrompt != null ? String(b.systemPrompt) : undefined,
+      soul: b.soul != null ? String(b.soul) : undefined,
+      shareDefaultMemory: b.shareDefaultMemory != null ? !!b.shareDefaultMemory : undefined,
+      cloudSync: cloud ? (b.cloudSync != null ? !!b.cloudSync : undefined) : (b.cloudSync ? true : undefined),
+      activityAccess: b.activityAccess != null ? !!b.activityAccess : undefined,
       // null=显式清除(saveAgent 收 null → undefined 落盘);缺省保留现值
-      toolsMode: b.toolsMode !== undefined ? b.toolsMode : cur.toolsMode,
-      toolsList: b.toolsList !== undefined ? b.toolsList : cur.toolsList,
+      toolsMode: b.toolsMode,
+      toolsList: b.toolsList,
     };
-    const agent = cloud ? await cloudSaveAgent(req.user!.userId, slug, input) : await saveAgent(input);
+    // 本地 patchAgent / 云端 cloudPatchAgent 同一口径:在按 slug(云端按 user+slug)串行化的保存里现读 cur、只改提交了的字段、
+    // 审批档没提交就 KEEP、恒 mustExist。旧口径用上面锁外预读的 cur 补齐全部未提交字段(含审批档)再整份保存 ——
+    // 并发的用户收紧(另一个窗口 / 另一台设备)被这份旧快照盖回去;并发的 DELETE 被这次保存建回来(复活)。
+    // 现在被删了 → AgentNotFoundError → 404(云端墓碑过的预设也算删了:预读按预设兜底放行,锁内现读认墓碑)。
+    const agent = cloud ? await cloudPatchAgent(req.user!.userId, slug, fields) : await patchAgent(slug, fields);
     if (!cloud && scope && (b.cloudSync != null || b.shareDefaultMemory != null)) {
       const enabled = b.cloudSync != null ? !!b.cloudSync : agentSyncPermission(slug, scope).enabled;
       setAgentSyncPermission(slug, scope, enabled, agent.shareDefaultMemory === true);
@@ -150,6 +163,7 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
     if (!cloud) agent.cloudSync = agentSyncPermission(slug, scope).enabled;
     res.json({ agent });
   } catch (e: any) {
+    if (e instanceof AgentNotFoundError) return void res.status(404).json({ detail: 'Agent not found' });
     res.status(400).json({ detail: e?.message || 'update agent failed' });
   }
 });

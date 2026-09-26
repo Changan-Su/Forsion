@@ -197,8 +197,7 @@ export class IlinkRuntime {
     const client = this.clients.get(accountId);
     if (!account || !client) return { ok: false, error: `unknown account ${accountId}` };
     try {
-      await this.sendWithContext(account, client, openid, text);
-      return { ok: true };
+      return await this.sendWithContext(account, client, openid, text);
     } catch (e: any) {
       return { ok: false, error: e?.message || String(e) };
     }
@@ -388,11 +387,17 @@ export class IlinkRuntime {
       attachments: attachments.length ? attachments : undefined,
       files: files.length ? files : undefined,
     });
+    // 回复没送达:sendWithContext 已记日志;入站回复没有上游可报,这里不再抛。
     if (reply) await this.sendWithContext(account, client, openid, reply);
   }
 
-  private async sendWithContext(account: AccountState, client: IlinkClient, openid: string, text: string): Promise<void> {
-    await this.paced(account.accountId, async () => {
+  /**
+   * 发一条文本(同账号串行限速)。**没送达一律回 ok:false**:通道审批卡的送达闸(channels/service.ts 的 delivering /
+   * onApprovalUndelivered)靠它拒绝没发全的多条审批卡 —— 限流重试放弃后丢了还报成功,用户只看到前几条就能「批准」整个操作。
+   * 判定口径与 sendMedia 同一个 sendmessage 端点一致:ret / errcode 非 0 即失败。
+   */
+  private async sendWithContext(account: AccountState, client: IlinkClient, openid: string, text: string): Promise<{ ok: boolean; error?: string }> {
+    return this.paced(account.accountId, async () => {
       const ctx = account.contextTokens[openid];
       let res = await client.sendText(openid, text, ctx);
       if (isSessionExpired(res) && ctx) {
@@ -406,7 +411,19 @@ export class IlinkRuntime {
         await sleep(RATE_LIMIT_BACKOFF_MS);
         res = await client.sendText(openid, text, account.contextTokens[openid]);
       }
-      if (isRateLimited(res)) this.log('error', `[${account.accountId}] send 重试后仍被限流,已丢弃 for ${openid}`);
+      if (isRateLimited(res)) {
+        this.log('error', `[${account.accountId}] send 重试后仍被限流,已丢弃 for ${openid}`);
+        return { ok: false, error: `iLink rate limit: message dropped after ${RATE_LIMIT_RETRIES} retries` };
+      }
+      if (isSessionExpired(res)) {
+        this.log('error', `[${account.accountId}] send 会话已过期,未送达 for ${openid}`);
+        return { ok: false, error: 'iLink session expired: message not delivered (the contact must message the bot again, or re-scan in Tangu Desktop)' };
+      }
+      if ((res.ret ?? 0) !== 0 || (res.errcode ?? 0) !== 0) {
+        this.log('error', `[${account.accountId}] send 失败 ret=${res.ret ?? ''} errcode=${res.errcode ?? ''} for ${openid}`);
+        return { ok: false, error: `iLink send failed (ret=${res.ret ?? ''} errcode=${res.errcode ?? ''} ${res.errmsg ?? ''})`.trim() };
+      }
+      return { ok: true };
     });
   }
 }
