@@ -11,6 +11,8 @@ import { BUNDLE_ORIGIN_FILE, bundleDirs, bundleEnginePluginRoots, bundleSkillRoo
 import { parseAgentFolder } from '../agents/agentRegistry.js';
 import { validSyncPath } from '../services/agentSyncPaths.js';
 import { discoverPlugins, resolvePluginsDirs } from './loader.js';
+import { dispatchPluginCommand } from './bootstrap.js';
+import { isPluginEnabledSync, setPluginEnabled } from './settingsStore.js';
 import { TANGU_PLUGIN_API } from './types.js';
 import { agentsDir, pluginsDir } from '../core/tanguHome.js';
 import { listLocalSkills } from '../skills/localSkills.js';
@@ -135,6 +137,27 @@ describe('内嵌引擎插件', () => {
     const found = discoverPlugins().filter((d) => d.manifest.id === 'dup-tool');
     expect(found).toHaveLength(1);
     expect(found[0].dir).toBe(path.join(pluginsDir(), 'dup-tool'));
+  });
+
+  it('默认跟随捆绑包启用(自报 defaultEnabled:false 也一样);显式关闭照旧生效;用户目录插件不受影响', async () => {
+    // 回归:随 App 播种的电脑操作在新装机器上卡片开着、引擎侧却是关的 —— 捆绑包之外没有别的开关能打开它。
+    const write = (dir: string, id: string): void => {
+      writeJson(path.join(dir, 'tangu-plugin.json'), { ...engineManifest(id), entry: 'index.mjs', commands: [id] });
+      writeFileSync(path.join(dir, 'index.mjs'), `export default { activate(ctx) {
+  ctx.registerPlugin({ id: '${id}', name: '${id}', description: 'x', defaultEnabled: false });
+  ctx.registerCommand({ name: '${id}', summary: 'x', run: () => 0 });
+} };\n`);
+    };
+    write(path.join(makeBundle('cu-like'), 'tangu-plugins', 'bundled-off'), 'bundled-off');
+    write(path.join(pluginsDir(), 'user-off'), 'user-off');
+
+    expect(await dispatchPluginCommand('bundled-off', [])).toBe(0);
+    expect(await dispatchPluginCommand('user-off', [])).toBe(0);
+    expect(isPluginEnabledSync('bundled-off')).toBe(true);
+    expect(isPluginEnabledSync('user-off')).toBe(false);
+
+    await setPluginEnabled('bundled-off', false); // 桌面拨掉捆绑包 → 级联写显式 false
+    expect(isPluginEnabledSync('bundled-off')).toBe(false);
   });
 
   it('无内嵌件的 bundle 不产生插件根', () => {

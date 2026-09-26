@@ -142,6 +142,10 @@ jobs:
         if: runner.os == 'Windows'
         working-directory: desktop
         shell: bash
+        # 静态链接 MSVC 运行时:默认动态链接会依赖 VCRUNTIME140.dll(不随系统,来自 VC++ 运行库),
+        # 没装过它的干净 Windows 上 helper 进程直接起不来。release-content.check 会拦回归。
+        env:
+          RUSTFLAGS: -C target-feature=+crt-static
         run: node node_modules/@forsion/tangu-computer-use/scripts/build-native.mjs --platform windows
 
       - name: Build bundled Computer Use Linux helper

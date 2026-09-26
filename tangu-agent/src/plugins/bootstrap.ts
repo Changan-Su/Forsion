@@ -75,7 +75,11 @@ function makeContext(d: DiscoveredPlugin, state: HostState): TanguPluginContext 
   return {
     registerCommand: (cmd) => state.commands.set(cmd.name, cmd),
     registerToolProvider: (p) => registerToolProvider({ ...p, origin: 'plugin' }), // 全局注册表,append 在核心 builtin 之后;打 plugin 标(chat 正向面只认核心 provider)
-    registerPlugin: (meta) => registerPlugin({ ...meta, source: 'folder', iconUrl: d.iconUrl }), // folder 插件进统一注册表；图标只信宿主读到的包根 icon.png
+    // folder 插件进统一注册表；图标只信宿主读到的包根 icon.png。
+    // 捆绑包内嵌的引擎插件默认跟随捆绑包(桌面上捆绑包缺省即启用,且只给捆绑包一个开关、拨动时级联):
+    // 它自报的 defaultEnabled:false 在产品里没有任何打开入口,只会造成「卡片开着、工具一个没有」——
+    // 随 App 播种的电脑操作在新装机器上就是这样(09-25 Windows 实测)。显式开关(__enabled)照旧优先。
+    registerPlugin: (meta) => registerPlugin({ ...meta, defaultEnabled: d.bundled || meta.defaultEnabled, source: 'folder', iconUrl: d.iconUrl }),
 
     registerProfile: (p) => state.profiles.set(p.appId, p),
     registerHostAdapter: (id, build) => state.hostAdapters.set(id, build),

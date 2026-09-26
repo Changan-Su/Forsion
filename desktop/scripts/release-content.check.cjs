@@ -81,6 +81,9 @@ for (const dir of resources) {
     try {
       const binary = fs.readFileSync(file)
       check(binary.length > 100_000 && binary.subarray(0, 2).toString() === 'MZ', 'Windows native helper missing/invalid')
+      // 导入表里的 DLL 名是明文:出现 VC++ 运行库那一族即动态链接了它,没装 VC++ 运行库的机器上 helper 起不来。
+      const vcRuntime = binary.toString('latin1').match(/\b(?:vcruntime|msvcp|concrt|vccorlib|vcomp|vcamp)\d+(?:_\w+)?\.dll/i)
+      check(!vcRuntime, `Windows native helper needs ${vcRuntime?.[0]} (build with +crt-static)`)
     } catch { errors.push(`Missing ${file}`) }
   }
   if (process.platform === 'linux') {
