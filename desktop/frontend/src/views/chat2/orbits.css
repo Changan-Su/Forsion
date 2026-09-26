@@ -277,7 +277,12 @@
 .t2o-bar-chip:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
 .t2o-bar-chip:disabled { opacity: 0.5; cursor: default; }
 .t2o-bar-note { flex-basis: 100%; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
-@media (max-width: 360px) { .t2o-bar-sub, .t2o-bar-title { display: none; } }
+/* 极窄时收起标题与副行。团队那行副行是实时区域(role=status):display:none 会把它移出无障碍树、状态变化不再播报
+ * (Codex 第三轮 H1-6)—— 只做视觉隐藏;单人会话那行不是实时区域,照旧 display:none。 */
+@media (max-width: 360px) {
+  .t2o-bar-sub:not([role="status"]), .t2o-bar-title { display: none; }
+  .t2o-bar-sub[role="status"] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; flex: none; }
+}
 /* 墓碑行(实体已删/已卸载,只剩历史会话):名字变淡,不给 hover 尾部操作。 */
 .t2o-row-gone .t2o-name { color: var(--text-muted); font-weight: 500; }
 

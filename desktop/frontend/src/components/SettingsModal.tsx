@@ -100,6 +100,9 @@ registerMessages({
   // 失焦自动保存失败(Codex 第一轮 A-2):就地提示并给重试,草稿保留。
   'settingsmodal.commit.failed': { zh: '未保存：{error}', en: 'Not saved: {error}' },
   'settingsmodal.commit.retry': { zh: '重试', en: 'Retry' },
+  // 持久配置读回前外部连接表单只读(Codex H1-1):此时表单里可能是托管后端的临时地址 / 令牌。
+  'settingsmodal.external.cfgLoading': { zh: '正在读取已保存的连接配置…', en: 'Loading the saved connection settings…' },
+  'settingsmodal.external.cfgFailed': { zh: '读不到已保存的连接配置，暂不能修改：{error}', en: 'Couldn\'t load the saved connection settings, so they can\'t be changed yet: {error}' },
   'settingsmodal.keepAwake.title': { zh: '有会话运行时阻止休眠', en: 'Stay awake while sessions run' },
   'settingsmodal.keepAwake.description': {
     zh: '会话运行期间阻止电脑因闲置自动休眠，全部结束后恢复；屏幕仍会熄灭。合盖、手动睡眠照常生效；Windows 笔记本用电池时，系统仍可能按电源策略休眠。',
@@ -427,11 +430,13 @@ export const SettingsModal: React.FC<{
   // 落盘快照(主进程 effectiveConfig)与未保存草稿**分开存**(U-05):即时控件 `.then(setStored)` 只刷新快照,
   // 草稿(`edits`)浮在上面不被冲掉。下文读 `stored` 拿到的是合并视图;写草稿一律 `edit({...})`,不要 setStored({...stored})。
   const [savedCfg, setStored] = useState<StoredDesktopConfig | null>(null)
+  /** 打开设置时 getConfig() 失败的原因(Codex H1-1):读不回持久配置时外部连接表单保持只读并说明原因。 */
+  const [cfgLoadError, setCfgLoadError] = useState('')
   const [edits, setEdits] = useState<SettingsEdits>({})
   const stored = mergeEdits(savedCfg, edits)
   const edit = (patch: SettingsEdits): void => setEdits((prev) => ({ ...prev, ...patch }))
   /** 失焦自动保存失败的键 → 错误与重试(就地显示在该输入旁,Codex 第一轮 A-2)。草稿不动,可改完再失焦或点重试。 */
-  const [commitErrors, setCommitErrors] = useState<Partial<Record<keyof StoredDesktopConfig, { message: string; retry: () => void }>>>({})
+  const [commitErrors, setCommitErrors] = useState<Partial<Record<keyof StoredDesktopConfig, { message: string; retry: () => void; picked?: true }>>>({})
   /** 提交草稿里的若干键:norm 可规整(trim 等);成功后只摘掉提交时那一份值。失败记进 commitErrors(由 commitErrorHint 就地显示)。 */
   const commitEdits = (keys: Array<keyof StoredDesktopConfig>, norm?: (v: SettingsEdits) => SettingsEdits): Promise<void> => {
     const snapshot = pickEdits(edits, keys)
@@ -464,7 +469,9 @@ export const SettingsModal: React.FC<{
       setCommitErrors((prev) => withoutKeys(prev, ['defaultWorkspaceDir']))
     }).catch((e: any) => {
       const message = String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
-      setCommitErrors((prev) => ({ ...prev, defaultWorkspaceDir: { message, retry: () => savePickedWorkspace(d) } }))
+      // picked:这条错误的「重试」提交的是当时选中的目录 d。用户随后改填了路径 → 由 onChange 收回它(Codex H1-2),
+      // 否则点重试时输入框先失焦提交新路径、重试又把旧目录写回,旧目录最终落盘。
+      setCommitErrors((prev) => ({ ...prev, defaultWorkspaceDir: { message, retry: () => savePickedWorkspace(d), picked: true } }))
     })
   }
   const commitErrorHint = (key: keyof StoredDesktopConfig): React.ReactNode => {
@@ -788,11 +795,12 @@ export const SettingsModal: React.FC<{
       setLogs(null)
       setDevice(null)
       if (isDesktop) {
+        setCfgLoadError('')
         void window.tangu!.getConfig().then((s) => {
           setStored(s)
           // 自动同步(默认关):开启则打开设置时拉一次;未登录时后端 no-op,不报错。
           if (s.forsionSyncEnabled) void doSyncNow()
-        })
+        }).catch((e: any) => setCfgLoadError(String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')))
         void window.tangu!.backendStatus!().then(setBackendSt)
         refreshAuth()
         refreshCustomProviders()
@@ -890,6 +898,9 @@ export const SettingsModal: React.FC<{
   // 用户在此期间的编辑记在 extDraft。
   const [extDraft, setExtDraft] = useState<{ backendUrl: string; token: string } | null>(null)
   const switchingToExternal = isDesktop && mode !== 'external'
+  // 桌面端持久配置还没读回(或读失败):mode 会被当成 external、表单回退到 draft(p.cfg)—— 托管时那是内置后端的
+  // 临时地址 / 令牌,此刻点保存就会把它写成外部配置、盖掉原有的外部连接(Codex H1-1)。读回前表单与按钮一律只读。
+  const connCfgPending = isDesktop && !savedCfg
   const connForm = switchingToExternal
     ? (extDraft ?? { backendUrl: savedCfg?.externalConnection?.backendUrl ?? '', token: savedCfg?.externalConnection?.token ?? '' })
     : { backendUrl: draft.backendUrl, token: draft.token }
@@ -995,6 +1006,7 @@ export const SettingsModal: React.FC<{
   }, [])
 
   const test = async () => {
+    if (connCfgPending) return
     setTesting(true)
     const r = await testConnection({ ...draft, ...connForm })
     setTestResult(r.message)
@@ -1002,6 +1014,7 @@ export const SettingsModal: React.FC<{
   }
 
   const saveConnection = async (): Promise<void> => {
+    if (connCfgPending) return // 按钮已禁用;这里再守一道(回车 / 程序触发)
     // 只提交表单里的外部地址与令牌(托管切外部时它来自落盘的外部连接 + 用户编辑,见 connForm)。
     const patch = { backendUrl: connForm.backendUrl.trim().replace(/\/+$/, ''), token: connForm.token }
     // 从托管切到外部是用户在这里**显式确认**的(U-01):先落 mode(主进程随之停掉内置后端),
@@ -1480,7 +1493,11 @@ export const SettingsModal: React.FC<{
                         <input
                           type="text"
                           value={stored.defaultWorkspaceDir || ''}
-                          onChange={(e) => edit({ defaultWorkspaceDir: e.target.value })}
+                          onChange={(e) => {
+                            edit({ defaultWorkspaceDir: e.target.value })
+                            // 选目录失败的提示绑着旧目录:改了路径就收回(失焦提交失败的那种不收,它的重试读最新草稿)。
+                            if (commitErrors.defaultWorkspaceDir?.picked) setCommitErrors((prev) => withoutKeys(prev, ['defaultWorkspaceDir']))
+                          }}
                           onBlur={() => void commitEdits(['defaultWorkspaceDir'], (v) => ({ defaultWorkspaceDir: (v.defaultWorkspaceDir || '').trim() }))}
                           onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
                           placeholder={t('settings.workspace.placeholder')}
@@ -1711,11 +1728,17 @@ export const SettingsModal: React.FC<{
                           <span className="settings-panel-icon"><Plug size={16} /></span>
                           <div><strong>{t('settings.external.title')}</strong><p>{t('settings.external.description')}</p></div>
                         </div>
+                        {connCfgPending && (
+                          <div className="hint" role={cfgLoadError ? 'alert' : 'status'} data-conn-cfg-pending>
+                            {cfgLoadError ? t('settingsmodal.external.cfgFailed', { error: cfgLoadError }) : t('settingsmodal.external.cfgLoading')}
+                          </div>
+                        )}
                         <div className="field">
                           <label>{t('settings.external.urlLabel')}</label>
                           <input
                             type="text"
                             value={connForm.backendUrl}
+                            disabled={connCfgPending}
                             onChange={(e) => editConnForm({ backendUrl: e.target.value })}
                             placeholder="http://localhost:8787"
                           />
@@ -1726,15 +1749,16 @@ export const SettingsModal: React.FC<{
                           <input
                             type="password"
                             value={connForm.token}
+                            disabled={connCfgPending}
                             onChange={(e) => editConnForm({ token: e.target.value })}
                             placeholder={t('settings.external.tokenPlaceholder')}
                           />
                         </div>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          <button className="btn ghost sm" onClick={test} disabled={testing}>
+                          <button className="btn ghost sm" onClick={test} disabled={testing || connCfgPending}>
                             {testing ? <Loader2 size={13} className="spin" /> : null} {t('settings.btn.testConnection')}
                           </button>
-                          <button className="btn primary sm" onClick={() => void saveConnection()}>
+                          <button className="btn primary sm" data-conn-save onClick={() => void saveConnection()} disabled={connCfgPending}>
                             {isDesktop && mode !== 'external' ? t('settingsmodal.backend.modeApplyExternal') : t('settings.btn.saveConnect')}
                           </button>
                           {isDesktop && modePending && (

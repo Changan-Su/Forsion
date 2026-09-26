@@ -20,6 +20,7 @@ async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tangu-memory-electron-'))
   process.env.TANGU_HOME = home
   const SHOTS = process.env.SHOT_DIR || home // 截图落点(缺省留在隔离家目录里,随 ARTIFACTS 一起看)
+  fs.mkdirSync(SHOTS, { recursive: true }) // 自定义落点可能还不存在(Codex 第三轮 H2-4;Playwright 1.61 截图自己也会建父目录,这里不依赖它)
   const userData = path.join(home, 'userdata')
   for (const dir of [userData, `${userData}-dev`]) {
     fs.mkdirSync(dir, { recursive: true })

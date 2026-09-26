@@ -8,6 +8,10 @@
  *  F 左 / 右 / 底部三枚开合钮都带 aria-pressed,且与实际开合一致
  *  G 通知总开关关着也照样给「撤销」:它是那次操作的回执,不是一条普通通知(Codex 第一轮 C-2)
  *  H 恢复后用户先新开了一张标签 → 撤销入口当场收回(不然再点会把重置前的快照灌回、吞掉新标签;Codex 第一轮 C-1)
+ *  I 恢复后只拖了左侧栏的分隔线 → 撤销入口还在,点了照样逐项复原(侧栏宽度不算「改了布局」;Codex 第三轮 H1-3)。
+ *    在收件箱 Space 里做:它的默认布局带一条可自由拖宽的左栏(主页的默认布局没有侧栏)。
+ *    拖主区分屏线作废撤销那半只能在默认布局里造出分屏 = 结构先变,由 lcl 单测 layoutResetUndo ⑦ 锁
+ *  J 撤销提示到期自己消失:指针不在通知上(悬停会暂停计时),7.5 秒时仍在(回归成 7 秒会红)、约 8 秒后收走(不超过 10.5 秒;Codex 第三轮 R2-g-4)
  *
  * 需要先在本目录 `npx electron-vite build`(读 out/)。跑:npm run check:layoutreset
  * ⚠️ 独立 --user-data-dir + TANGU_HOME:不碰开发者自己的实例与 ~/.forsion。
@@ -19,6 +23,7 @@ const { _electron: electron } = require('playwright-core')
 
 const ROOT = path.join(__dirname, '..')
 const SHOT_DIR = process.env.SHOT_DIR || ''
+if (SHOT_DIR) fs.mkdirSync(SHOT_DIR, { recursive: true })
 const results = []
 function check(name, ok, detail) {
   results.push({ name, ok })
@@ -143,6 +148,61 @@ async function main() {
     const afterNew = await snapshot(win)
     check('H 重置后改了布局(新开标签)→ 撤销提示收回', (await card2.count()) === 0, `mainTabCount:${afterReset.mainTabCount}→${afterNew.mainTabCount}`)
     check('H 新开的标签还在(没被旧快照吞掉)', afterNew.mainTabCount === afterReset.mainTabCount + 1, `${afterReset.mainTabCount}→${afterNew.mainTabCount}`)
+
+    // I 重置后只拖左侧栏的分隔线:撤销仍有效(收件箱 Space:默认布局带可拖宽的左栏)
+    await win.evaluate(() => { localStorage.setItem('forsion_default_space', 'inbox'); localStorage.removeItem('forsion_tangu_session_mode') })
+    await win.reload()
+    await win.waitForSelector('.dv-edge-reset', { timeout: 30_000 })
+    await win.waitForTimeout(2000)
+    check('I 前置:已落在收件箱 Space', (await win.evaluate(() => localStorage.getItem('forsion_tangu_active_space'))) === 'inbox')
+    for (let i = 0; i < 2; i++) { await win.click('.dv-new-tab'); await win.waitForTimeout(350) }
+    const beforeI = await snapshot(win)
+    await win.click('.dv-edge-reset')
+    await win.waitForTimeout(1500) // 过了重置自己的沉降(钉侧栏宽的双 raf 等)
+    const card3 = win.locator('.ntf').filter({ hasText: /恢复/ }).first()
+    /** 最左那个组(左侧栏)的右沿,与压在那条线上的竖向 sash 中心。 */
+    const leftSash = () => win.evaluate(() => {
+      const groups = [...document.querySelectorAll('.dv-groupview')].map((g) => g.getBoundingClientRect()).filter((r) => r.width > 0)
+      if (!groups.length) return null
+      const left = groups.reduce((a, b) => (b.left < a.left ? b : a))
+      const sash = [...document.querySelectorAll('.dv-sash')].map((el) => el.getBoundingClientRect())
+        .find((r) => r.width > 0 && r.width < 12 && r.height > 100 && Math.abs((r.left + r.right) / 2 - left.right) <= 6)
+      return sash ? { x: (sash.left + sash.right) / 2, y: sash.top + sash.height / 2, width: left.width } : { width: left.width }
+    })
+    const s0 = await leftSash()
+    if (s0 && s0.x !== undefined) {
+      await win.mouse.move(s0.x, s0.y)
+      await win.mouse.down()
+      for (let dx = 10; dx <= 60; dx += 10) { await win.mouse.move(s0.x + dx, s0.y); await win.waitForTimeout(30) }
+      await win.mouse.up()
+    }
+    await win.mouse.move(400, 500)
+    await win.waitForTimeout(700)
+    const s1 = await leftSash()
+    check('I 前置:左侧栏分隔线真的被拖动了(宽度变了 ≥30px)', !!(s0 && s1 && s0.x !== undefined && Math.abs(s1.width - s0.width) >= 30), JSON.stringify({ s0, s1 }))
+    check('I 只拖左侧栏宽:撤销提示仍在', (await card3.count()) > 0 && (await card3.locator('.ntf-action').count()) > 0)
+    if (SHOT_DIR) await win.screenshot({ path: path.join(SHOT_DIR, 'layoutreset-sidedrag.png') })
+    if (await card3.locator('.ntf-action').count()) await card3.locator('.ntf-action').first().click()
+    await win.waitForTimeout(900)
+    const undoneI = await snapshot(win)
+    check('I 拖过侧栏后点撤销:标签列表逐项复原', undoneI.tabs === beforeI.tabs, `before=${beforeI.tabs}\n      after =${undoneI.tabs}`)
+
+    // J 到期消失(约 8 秒):计时期间指针不在通知上
+    await win.click('.dv-edge-reset')
+    const shownAt = Date.now()
+    await win.mouse.move(400, 500)
+    const card4 = win.locator('.ntf').filter({ hasText: /恢复/ }).first()
+    await card4.waitFor({ timeout: 3000 }).catch(() => {})
+    const hovered = () => card4.evaluate((el) => el.matches(':hover')).catch(() => false)
+    check('J 前置:撤销提示出现,且指针不在它上面(悬停会暂停计时)', (await card4.count()) > 0 && !(await hovered()))
+    await win.waitForTimeout(Math.max(0, 7500 - (Date.now() - shownAt)))
+    check('J 7.5 秒时撤销提示仍在(停留 ≈8 秒,回归成 7 秒这里就红)', (await card4.count()) > 0 && !(await hovered()), `at=${Date.now() - shownAt}ms`)
+    let goneAt = 0
+    while (Date.now() - shownAt < 10_500) {
+      if ((await card4.count()) === 0) { goneAt = Date.now() - shownAt; break }
+      await win.waitForTimeout(100)
+    }
+    check('J 撤销提示约 8 秒后自己收走(≤10.5 秒)', goneAt > 7500 && goneAt <= 10_500, `goneAt=${goneAt}ms`)
   } finally {
     await app.close().catch(() => {})
     fs.rmSync(home, { recursive: true, force: true })

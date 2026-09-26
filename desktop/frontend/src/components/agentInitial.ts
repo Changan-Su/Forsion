@@ -14,29 +14,67 @@ export function initialOf(name: string | null | undefined): string {
   return c ? c.toUpperCase() : '?'
 }
 
-/**
- * 同屏去撞字的首字。`siblings` = 同一组里的全部名字(可以含自己,完全同名的会被跳过 —— 同名本就分不开)。
- * 首字与任何兄弟相同 → 从与它们**最长公共前缀**之后找第一个非空白字;名字本身就是那个前缀(「秦」vs「秦彻」)→ 退回首字。
- * 往后找时跳过**兄弟们的首字**(Codex 第一轮 B2-3):「Alice」退回首字 A,「Alice Adams」跳过公共前缀后遇到的
- * 又是 A —— 直接取就又撞了;跳过被占的字取到 D。找不到可用的字才退回首字。
- */
-export function initialFor(name: string | null | undefined, siblings: ReadonlyArray<string | null | undefined> = []): string {
-  const me = chars(name)
-  if (!me.length) return '?'
+/** 一个名字的候选字(小写比较,原样大写输出):首字不与任何人撞 → 只有首字;撞了 → 最长公共前缀之后的非空白字,
+ *  依次排开。名字本身就是那个前缀(「秦」vs「秦彻」)→ 无候选,只能退回首字。 */
+function candidatesOf(me: string[], group: string[][]): { first: string; picks: string[]; collides: boolean } {
   const lower = me.map((c) => c.toLowerCase())
   const self = lower.join('')
   let common = 0
-  const taken = new Set<string>()
-  for (const other of siblings) {
-    const o = chars(other).map((c) => c.toLowerCase())
-    if (!o.length || o.join('') === self) continue
-    taken.add(o[0])
-    if (o[0] !== lower[0]) continue
+  for (const o of group) {
+    if (!o.length || o.join('') === self || o[0] !== lower[0]) continue
     let k = 0
     while (k < lower.length && k < o.length && lower[k] === o[k]) k++
     common = Math.max(common, k)
   }
-  if (!common) return me[0].toUpperCase()
-  for (let i = common; i < me.length; i++) if (me[i].trim() && !taken.has(lower[i])) return me[i].toUpperCase()
-  return me[0].toUpperCase()
+  const picks: string[] = []
+  for (let i = common; common && i < me.length; i++) if (me[i].trim()) picks.push(me[i])
+  return { first: me[0], picks, collides: common > 0 }
+}
+
+/**
+ * 整组一起分配首字(Codex 第三轮 H1-4):逐个名字各算各的会撞 ——「Alice Adams」与「Alice Dixon」都跳过被占的 A、
+ * 都落到 D。这里按**整组**算最终字形并查冲突:
+ *   ① 首字不撞的、以及只能退回首字的(名字就是公共前缀),先占住各自的首字;
+ *   ② 其余按名字排序后依次取第一个没人占的候选字(排序 = 与传入顺序无关,同一组在各处算出同一套字);
+ *   ③ 候选都被占了才退回首字(完全同名本就分不开)。
+ * 返回与 names 同序的字形数组;空名 → '?'。
+ */
+export function initialsFor(names: ReadonlyArray<string | null | undefined>): string[] {
+  const split = names.map((n) => chars(n))
+  const group = split.map((me) => me.map((c) => c.toLowerCase()))
+  const out: string[] = split.map(() => '?')
+  const used = new Set<string>()
+  const pending: Array<{ index: number; key: string; picks: string[]; first: string }> = []
+  split.forEach((me, index) => {
+    if (!me.length) return
+    const { first, picks, collides } = candidatesOf(me, group)
+    if (!collides || !picks.length) { out[index] = first.toUpperCase(); used.add(first.toLowerCase()); return }
+    pending.push({ index, key: group[index].join(''), picks, first })
+  })
+  pending.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.index - b.index))
+  const sameName = new Map<string, string>() // 完全同名的几位共用一个字(本就分不开,别让后一位白白吃掉别的字)
+  for (const item of pending) {
+    const shared = sameName.get(item.key)
+    if (shared) { out[item.index] = shared; continue }
+    const pick = item.picks.find((c) => !used.has(c.toLowerCase()))
+    const glyph = (pick ?? item.first).toUpperCase()
+    used.add(glyph.toLowerCase())
+    sameName.set(item.key, glyph)
+    out[item.index] = glyph
+  }
+  return out
+}
+
+/**
+ * 同屏去撞字的首字。`siblings` = 同一组里的全部名字(可以含自己;不含时按「自己 + siblings」成组)。
+ * 结果取自 initialsFor(整组分配),所以同一组里每个名字各自调用也拿到一套互不相撞的字。
+ */
+export function initialFor(name: string | null | undefined, siblings: ReadonlyArray<string | null | undefined> = []): string {
+  const me = chars(name)
+  if (!me.length) return '?'
+  const self = me.join('').toLowerCase()
+  let at = siblings.findIndex((s) => chars(s).join('').toLowerCase() === self)
+  const group = at >= 0 ? siblings : [name, ...siblings]
+  if (at < 0) at = 0
+  return initialsFor(group)[at]
 }

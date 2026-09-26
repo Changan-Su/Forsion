@@ -164,12 +164,16 @@ const SPACE_NAMES = {
 /** 点 ribbon 上某个 Space,返回**是否真的切到了它**(活动 Space == id)。
  *  定位优先级(Codex 第一轮 F-1):① 条上格子的 data-id="space:<id>" ② 可访问名 aria-label(收起态 Ribbon 只有它,
  *  没有 title 也没有 .rb-label —— 以前只认后两者,默认收起的 Ribbon 上一个都点不中)③ 展开态的 .rb-label ④ 「…」溢出浮层。
+ *  溢出浮层同样先按行的 data-id 找;按名字找时 aria-label / title / .rb-label **各自**比对 —— 有未读时 aria-label 是
+ *  「收件箱,3 条未读」,不等于显示名,不能让它用 || 挡掉后面准确的 .rb-label(Codex 第三轮 H2-2)。
  *  real=true 走真鼠标(hit-test 在内);否则 element.click()。 */
 async function enterSpace(win, id, { real = false, timeout = 4000 } = {}) {
   const names = SPACE_NAMES[id] || [id]
   const find = (root, byId) => `(() => {
-    const byName = (x) => ${JSON.stringify(names)}.includes(x.getAttribute('aria-label') || x.getAttribute('title') || (x.querySelector('.rb-label')?.textContent || '').trim())
-    const b = ${byId ? `document.querySelector('.rb-slot[data-id="space:${id}"] .rb-space')` : `[...document.querySelectorAll('${root} .rb-space')].find(byName)`}
+    const names = ${JSON.stringify(names)}
+    const byName = (x) => [x.getAttribute('aria-label'), x.getAttribute('title'), (x.querySelector('.rb-label')?.textContent || '').trim()]
+      .some((v) => !!v && names.includes(v))
+    const b = ${byId ? `document.querySelector('${root ? `${root} .rb-fly-row` : '.rb-slot'}[data-id="space:${id}"] .rb-space')` : `[...document.querySelectorAll('${root} .rb-space')].find(byName)`}
     if (!b) return null
     const r = b.getBoundingClientRect()
     if (!${real}) b.click()
@@ -181,7 +185,7 @@ async function enterSpace(win, id, { real = false, timeout = 4000 } = {}) {
     if (await more.count().catch(() => 0)) {
       await more.hover()
       await sleep(500)
-      hit = await win.evaluate(find('.rb-fly', false))
+      hit = (await win.evaluate(find('.rb-fly', true))) || (await win.evaluate(find('.rb-fly', false)))
     }
   }
   if (!hit) return false

@@ -24,15 +24,56 @@ const dotClass = (status: string): string =>
 /** 执行账本的模块级缓存(U-39,stale-while-revalidate):面板重建 / 在规则间来回切时先画上次的记录,后台照常轮询。
  *  按**连接 + 账号**分桶(executionsScope):换账号 / 换后端 = 换桶,旧环境的记录绝不先画出来;
  *  cfg 里别的字段(默认模型、生图模型 …)变了不换桶 —— 以前按 cfg 对象引用分桶,在别处改个默认模型
- *  appStore 就换一个新 cfg 对象,回来又是骨架(Codex 第一轮 D-2)。 */
+ *  appStore 就换一个新 cfg 对象,回来又是骨架(Codex 第一轮 D-2)。
+ *  Codex 第三轮 H1-5:键里只放令牌的哈希(不在内存里另存一份明文令牌);桶数与每桶条目都有上限(按最近使用淘汰);
+ *  退出 / 切换账号时整份清空 —— 长期运行、来回换连接或账号也不会无限增长。 */
+const MAX_SCOPES = 4
+const MAX_TRIGGERS_PER_SCOPE = 40
 const executionsCache = new Map<string, Map<string, AutomationExecutionInfo[]>>()
-export function executionsScope(cfg: Pick<TanguDesktopConfig, 'backendUrl' | 'token'>, accountId: string | null | undefined): string {
-  return JSON.stringify([cfg.backendUrl.replace(/\/+$/, ''), cfg.token, accountId ?? ''])
+/** 非加密哈希(cyrb53):只为让缓存键里不出现明文令牌,不做安全用途。 */
+function tokenDigest(token: string): string {
+  let h1 = 0xdeadbeef ^ token.length
+  let h2 = 0x41c6ce57 ^ token.length
+  for (let i = 0; i < token.length; i++) {
+    const c = token.charCodeAt(i)
+    h1 = Math.imul(h1 ^ c, 2654435761)
+    h2 = Math.imul(h2 ^ c, 1597334677)
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909)
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909)
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36)
 }
+export function executionsScope(cfg: Pick<TanguDesktopConfig, 'backendUrl' | 'token'>, accountId: string | null | undefined): string {
+  return JSON.stringify([cfg.backendUrl.replace(/\/+$/, ''), cfg.token ? tokenDigest(cfg.token) : '', accountId ?? ''])
+}
+/** 取桶(没有就建),并把它挪到「最近使用」一端;超出桶数上限时淘汰最久没用的。 */
 const cacheOf = (scope: string): Map<string, AutomationExecutionInfo[]> => {
   let bucket = executionsCache.get(scope)
-  if (!bucket) { bucket = new Map(); executionsCache.set(scope, bucket) }
+  if (bucket) executionsCache.delete(scope)
+  else bucket = new Map()
+  executionsCache.set(scope, bucket)
+  while (executionsCache.size > MAX_SCOPES) executionsCache.delete(executionsCache.keys().next().value!)
   return bucket
+}
+/** 写一条规则的记录,同样按最近使用淘汰超出上限的规则。 */
+const remember = (scope: string, triggerId: string, rows: AutomationExecutionInfo[]): void => {
+  const bucket = cacheOf(scope)
+  bucket.delete(triggerId)
+  bucket.set(triggerId, rows)
+  while (bucket.size > MAX_TRIGGERS_PER_SCOPE) bucket.delete(bucket.keys().next().value!)
+}
+/** 只读:不建桶、不改淘汰顺序(渲染期调用)。 */
+const peek = (scope: string, triggerId: string): AutomationExecutionInfo[] | undefined => executionsCache.get(scope)?.get(triggerId)
+/** 测试用:当前缓存形状(桶数、每桶条目数、全部键)。 */
+export const executionsCacheStats = (): { scopes: string[]; sizes: number[] } =>
+  ({ scopes: [...executionsCache.keys()], sizes: [...executionsCache.values()].map((b) => b.size) })
+// 退出 / 切换账号 → 整份清空(旧账号的记录不留在内存里)。订阅挂在模块上:面板没开着也照样清。
+if (typeof (useApp as { subscribe?: unknown }).subscribe === 'function') {
+  useApp.subscribe((s, prev) => {
+    const now = s.authInfo?.loggedIn ? (s.authInfo.accountId ?? s.authInfo.username ?? '') : null
+    const before = prev.authInfo?.loggedIn ? (prev.authInfo.accountId ?? prev.authInfo.username ?? '') : null
+    if (before !== null && now !== before) executionsCache.clear()
+  })
 }
 
 /** Expandable ledger, shared by the main result area and the runs sidebar. */
@@ -42,8 +83,8 @@ export const ExecutionsList: React.FC<{ triggerId: string }> = ({ triggerId }) =
   const accountId = useApp((s) => s.authInfo?.accountId ?? s.authInfo?.username ?? null)
   const scope = executionsScope(cfg, accountId)
   const nonce = useAutomation((s) => s.refreshNonce)
-  const [rows, setRows] = useState<AutomationExecutionInfo[]>(() => cacheOf(scope).get(triggerId) ?? [])
-  const [loading, setLoading] = useState(() => !cacheOf(scope).has(triggerId))
+  const [rows, setRows] = useState<AutomationExecutionInfo[]>(() => peek(scope, triggerId) ?? [])
+  const [loading, setLoading] = useState(() => !peek(scope, triggerId))
   const [failed, setFailed] = useState(false)
   const [retry, setRetry] = useState(0)
   useEffect(() => {
@@ -52,7 +93,7 @@ export const ExecutionsList: React.FC<{ triggerId: string }> = ({ triggerId }) =
       try {
         const result = await getAutomationExecutions(cfg, triggerId)
         if (!alive) return // 已卸载 / 已换规则或配置:迟到的结果不进缓存也不上屏
-        cacheOf(scope).set(triggerId, result)
+        remember(scope, triggerId, result)
         setRows(result); setFailed(false)
       } catch { if (alive) setFailed(true) }
       finally { if (alive) setLoading(false) }
