@@ -40,3 +40,11 @@ describe('额度重置时间(北京时间 0 点)', () => {
     expect(weeklyResetTime('garbage')).toBeNull()
   })
 })
+
+describe('ctxSegments 截断时不列子项', () => {
+  it('压缩后系统段被截断:父项只剩占用,子项(旧估算)不再列出', () => {
+    const system = ctxSegments(1000, info(), t).find((s) => s.id === 'system')!
+    expect(system.tokens).toBe(1000)
+    expect(system.parts).toBeUndefined()
+  })
+})

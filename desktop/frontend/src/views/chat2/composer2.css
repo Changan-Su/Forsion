@@ -251,7 +251,7 @@
 /* 点击开合(此前是 hover;悬停要靠一条 8px 透明桥才点得到「压缩」,点击式不需要)。仪器:npm run check:ctxring */
 .t2c-ctxring.is-open .t2c-ctxring-pop { display: flex; }
 .t2c-cu-head {
-  display: flex; align-items: center; gap: 6px; width: 100%; padding: 0; border: none; background: none;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; width: 100%; padding: 0; border: none; background: none; /* 极窄视口(手机 web)数字换到第二行,不撑破弹层 */
   font: inherit; color: var(--text-muted); cursor: pointer;
 }
 .t2c-cu-title { color: var(--text-muted); }

@@ -1,6 +1,7 @@
 /**
  * Dev-only 台架:输入框上下文环的详情弹层(真 ContextUsagePop + 真 composer2.css)。
  * 参数:?lang=en  ?dark  ?theme=genesis-glass  ?noinfo(还没跑过 run)  ?logout(未登录)  ?unlimited(今日不限)  ?capped(1M 被封顶)
+ *      ?over(占用超出窗口);window.__ctxu.switchAccount() = 直接换到账号 B(B 的额度 300ms 后才回来)
  * 跑:node scripts/e2e-editor.cjs --check=ctxusage --shot
  */
 import { createRoot } from 'react-dom/client'
@@ -22,10 +23,14 @@ const quota = {
   dailyLimit: q.has('unlimited') ? -1 : 100, dailyRemaining: q.has('unlimited') ? -1 : 88, dailyPercent: 12,
   weeklyLimit: 500, weeklyRemaining: 40, weeklyPercent: 92, weeklyResetAt: '2026-10-02',
 }
-window.tangu = { accountQuota: async () => ({ status: 200, json: quota }) } as unknown as NonNullable<Window['tangu']>
-if (!q.has('logout')) {
-  useApp.setState({ authInfo: { loggedIn: true, tokenValid: true, membershipTier: 'pro', cloudUrl: '', username: 'demo', tokenSource: 'tangu-login' } as AuthStatusInfo })
-}
+let account = 'A'
+const quotaB = { ...quota, dailyRemaining: 50, dailyPercent: 50, weeklyRemaining: 450, weeklyPercent: 10 }
+window.tangu = {
+  accountQuota: async () => account === 'A' ? { status: 200, json: quota } : new Promise((r) => setTimeout(() => r({ status: 200, json: quotaB }), 300)),
+} as unknown as NonNullable<Window['tangu']>
+const signIn = (id: string) => useApp.setState({ authInfo: { accountId: id, loggedIn: true, tokenValid: true, membershipTier: 'pro', cloudUrl: '', username: `demo-${id}`, tokenSource: 'tangu-login' } as AuthStatusInfo })
+if (!q.has('logout')) signIn('A')
+;(window as unknown as { __ctxu: { switchAccount(): void } }).__ctxu = { switchAccount() { account = 'B'; signIn('B') } }
 
 const info: CtxInfo = {
   ctxWindow: 272000,
@@ -58,7 +63,7 @@ createRoot(document.getElementById('root')!).render(
           <ContextUsagePop
             open
             contextWindow={272000}
-            ctxTokens={117600}
+            ctxTokens={q.has('over') ? 300000 : 117600}
             sessionTokens={402000}
             ctxInfo={q.has('noinfo') ? null : info}
             onCompact={() => { (window as unknown as { __compacted: number }).__compacted++ }}

@@ -40,6 +40,7 @@ async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
   const open = async (params, locale = 'zh-CN') => {
     const page = await browser.newPage({ locale, viewport: { width: 520, height: 720 }, deviceScaleFactor: 2 })
+    page.on('pageerror', (e) => console.error('pageerror:', e.message))
     const url = new URL(base)
     url.search = params
     await page.goto(url.toString())
@@ -127,6 +128,38 @@ async function main() {
   s = await info(page)
   check('今日不限:显示「不限」、无条、无倒计时', /不限/.test(s.limits[0].text) && !/重置/.test(s.limits[0].text) && s.limits[0].key === 'daily', s.limits)
   check('封顶说明不藏进详情(ctxlimit T7 依赖)', /模型最大 1M，默认只用到 272k/.test(s.text), s.text)
+  await page.close()
+
+  // Codex:A 直接切到 B —— A 的额度当场清掉(不等 B 回来),B 回来后显示 B 的
+  page = await open('')
+  await page.waitForSelector('.t2c-cu-limit')
+  await page.evaluate(() => window.__ctxu.switchAccount())
+  await page.waitForTimeout(80)
+  const mid = await page.locator('.t2c-cu-limit').count()
+  await page.waitForSelector('.t2c-cu-limit')
+  s = await info(page)
+  check('切换账号:旧账号额度当场清掉,新账号的回来后才显示', mid === 0 && /已用 50%/.test(s.limits[0].text) && /已用 10%/.test(s.limits[1].text), { mid, limits: s.limits })
+  await page.close()
+
+  // Codex:占用超出登记窗口 —— 头部写真实占用、封顶 100%,图例加起来不超过 100%
+  page = await open('over')
+  await page.locator('.t2c-cu-head').click()
+  const pcts = await page.$$eval('.t2c-cu-legend .t2c-cu-row:not(.is-sub) > span:last-child', (els) => els.map((e) => parseFloat(e.textContent) || 0))
+  s = await info(page)
+  check('超出窗口:头部 300k / 272k tokens (100%),图例合计 ≤ 100%', /300k \/ 272k tokens \(100%\)/.test(s.text) && pcts.reduce((a, b) => a + b, 0) <= 100.2, { pcts, head: s.text.slice(0, 60) })
+  await page.close()
+
+  // Codex:极窄视口(手机 web)头部不撑破弹层
+  page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 260, height: 720 } })
+  await page.goto(base.toString())
+  await page.locator('.t2c-cu-head').waitFor()
+  const narrow = await page.evaluate(() => {
+    const pop = document.querySelector('.t2c-ctxring-pop').getBoundingClientRect()
+    const num = document.querySelector('.t2c-cu-num').getBoundingClientRect()
+    return { popRight: pop.right, numRight: num.right, vw: innerWidth, overflowX: document.querySelector('.t2c-ctxring-pop').scrollWidth - document.querySelector('.t2c-ctxring-pop').clientWidth }
+  })
+  // 弹层水平位置归 useEdgeNudge(台架没挂,menu-clamp 仪器管),这里只钉头部内容不撑破弹层
+  check('260px 视口:头部数字换行不越出弹层、无横向溢出', narrow.numRight <= narrow.popRight && narrow.overflowX <= 0, narrow)
   await page.close()
 
   await browser.close()
