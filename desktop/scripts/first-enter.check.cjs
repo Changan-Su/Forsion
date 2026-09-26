@@ -43,6 +43,8 @@ const NO_PRELOAD = BASELINE || NEGATIVE
 /** 首进必须拉到的 lazy 分块(去掉 hash 后的名字前缀)。 */
 const LAZY_CHUNK = { calendar: /^CalendarView\.js$/, artificial: /^ArtificialView\.js$/ }
 const VISIBLE_MS = 150
+/** 主区真内容的根:进了 Space 却只剩错误态 / 空白时它不在。 */
+const CONTENT = { calendar: '.amx-cal', artificial: '[data-artificial-root]' }
 const R = makeReporter()
 
 /** 页内长任务观察器(只装一次)。骨架本身按帧采样(见 COLLECT),不用 MutationObserver:
@@ -157,9 +159,16 @@ async function enterAndMeasure(app, win, space, n, shots, run, net) {
   // 首进的骨架截一张(第一轮):DESIGN §8 自查「三栏同时出骨架」到底长什么样。
   if (n === 1 && run === 1 && hit) { await sleep(160); await captureWindow(app, path.join(shots, `firstenter-${space}-skeleton.png`)) }
   const m = await collecting
+  // 防假绿(Codex r2b-5):视图崩成错误态 / 什么都没挂上时,「没骨架、0ms 落定」同样成立 —— 另验真内容在、没有错误态。
+  await sleep(300)
+  const content = await win.evaluate((sel) => {
+    const el = document.querySelector(sel)
+    const r = el && el.getBoundingClientRect()
+    return { mounted: !!(r && r.width > 0 && r.height > 0), error: !!document.querySelector('.dv-groupview .sk-error, [data-error-boundary]') }
+  }, CONTENT[space])
   const active = await activeSpace(win)
   const clickEpoch = await win.evaluate(() => window.__u40.clickEpoch || 0)
-  return { space, n, hit, active, ...m, net: net.since(clickEpoch >= tNode ? clickEpoch : tNode) }
+  return { space, n, hit, active, ...m, content, net: net.since(clickEpoch >= tNode ? clickEpoch : tNode) }
 }
 
 async function oneLaunch(run, shots) {
@@ -227,11 +236,11 @@ async function main() {
     R.check(BASELINE
       ? `1 ${space}(基线):${first.length} 轮都点进去了,首进拉了自己的 lazy 分块(${LAZY_CHUNK[space].source})且挂出过骨架`
       : `1 ${space}:${first.length} 轮都点进去了,首进没有可见骨架(≥${VISIBLE_MS}ms)且 ${VISIBLE_MS}ms 内落定 —— 空闲预热生效`,
-      first.length === RUNS && first.every((r) => r.hit && r.active === space && !r.noClick && (BASELINE ? lazyHit(r) && r.mountedSpans.length > 0 : r.maxVisible < VISIBLE_MS && r.settled < VISIBLE_MS)),
+      first.length === RUNS && first.every((r) => r.hit && r.active === space && !r.noClick && (BASELINE ? lazyHit(r) && r.mountedSpans.length > 0 : r.maxVisible < VISIBLE_MS && r.settled < VISIBLE_MS) && r.content.mounted && !r.content.error),
       // ↑ 造物的骨架多半在 150ms 透明期内就撤,光看「可见」分不出修没修;落定(点击→最后一块骨架撤下)分得出:无预热约 250ms,有预热个位数
-      JSON.stringify(first.map((r) => ({ hit: r.hit, active: r.active, lazyChunk: lazyHit(r), visible: r.maxVisible, settled: r.settled, noClick: !!r.noClick }))))
+      JSON.stringify(first.map((r) => ({ hit: r.hit, active: r.active, lazyChunk: lazyHit(r), visible: r.maxVisible, settled: r.settled, content: r.content, noClick: !!r.noClick }))))
     R.check(`2 ${space}:同次启动再进没有可见骨架(≥${VISIBLE_MS}ms)—— 分块缓存生效`,
-      again.length === RUNS && again.every((r) => r.hit && r.active === space && r.maxVisible < VISIBLE_MS),
+      again.length === RUNS && again.every((r) => r.hit && r.active === space && r.maxVisible < VISIBLE_MS && r.content.mounted && !r.content.error),
       JSON.stringify(again.map((r) => r.maxVisible)))
   }
   console.log(`SHOTS ${shots}`)

@@ -5,6 +5,7 @@ import type { ListItem, ListSourceContribution } from '../../amadeus/plugins/typ
 import { translate as t } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { notifyApp } from '../../stores/notificationStore'
+import { windowKind } from '../../windowKind'
 import { useAutomation, type AutomationSel } from '../../stores/automationStore'
 import { deleteMuseTrigger, saveMuseTrigger, saveSpecialConfig, deleteAgentScheduleEntry, saveAgentScheduleEntry } from '../../services/backendService'
 import { actionsText, condText, isFinishedTrigger, triggerToUpsert } from './lib'
@@ -24,15 +25,20 @@ const mutate = async (run: () => Promise<unknown>): Promise<boolean> => {
  *  onDeleted runs after a successful delete, before the row leaves the pending set, so a caller holding its own
  *  copy of the list (MuseView) drops it without the row flashing back. */
 const UNDO_MS = 5000
+/** How long a successful delete keeps its row hidden. Covers views that poll on their own clock (MuseView, ~4s)
+ *  without hiding for good: a rule restored from a backup or another backend with the same id shows up again. */
+const TOMBSTONE_MS = 60_000
 const pendingDeletes = new Set<string>()
-/** Deleted for good: ids never come back, and a view holding its own copy of the rows (MuseView polls on its
- *  own clock) must not show a deleted row again between the delete and its next fetch. */
-const deletedKeys = new Set<string>()
-const hiddenKey = (key: string): boolean => pendingDeletes.has(key) || deletedKeys.has(key)
+const deletedAt = new Map<string, number>()
+const hiddenKey = (key: string): boolean => pendingDeletes.has(key) || Date.now() - (deletedAt.get(key) ?? -Infinity) < TOMBSTONE_MS
 export const isPendingDelete = (sel: AutomationSel): boolean => hiddenKey(keyOf(sel)!)
 export function deleteWithUndo(sel: AutomationSel, name: string, run: () => Promise<unknown>, onDeleted?: () => void): void {
   const key = keyOf(sel)!
-  if (pendingDeletes.has(key)) return
+  if (hiddenKey(key)) return
+  // Only the main window mounts the notification stack (Root's NotificationHost). Elsewhere (a detached or mini
+  // window) the receipt would never be drawn, so there is no Undo to offer: ask first and delete at once instead.
+  const withReceipt = windowKind() === 'main'
+  if (!withReceipt && !window.confirm(t('automation.deleteConfirm', { name }))) return
   pendingDeletes.add(key)
   const store = useAutomation.getState()
   if (keyOf(store.sel) === key) store.setSel(null)
@@ -42,8 +48,9 @@ export function deleteWithUndo(sel: AutomationSel, name: string, run: () => Prom
   const commit = () => {
     if (decided) return
     decided = true
-    void mutate(run).then((ok) => { if (ok) { deletedKeys.add(key); onDeleted?.() } }).finally(settle)
+    void mutate(run).then((ok) => { if (ok) { deletedAt.set(key, Date.now()); onDeleted?.() } }).finally(settle)
   }
+  if (!withReceipt) { commit(); return }
   const shown = notifyApp({ text: t('automation.deleted', { name }), level: 'info', dedupeKey: `automation.delete:${key}`,
     receipt: true, durationMs: UNDO_MS, onClose: commit,
     action: { label: t('automation.undo'), run() { if (!decided) { decided = true; settle() } } } })

@@ -2,6 +2,7 @@ import { registerMessages } from '../../i18n'
 
 registerMessages({
   'automation.deleted': { zh: '已删除「{name}」', en: 'Deleted \u201c{name}\u201d' },
+  'automation.deleteConfirm': { zh: '删除「{name}」？此操作无法撤销。', en: 'Delete \u201c{name}\u201d? This can\u2019t be undone.' },
   'automation.undo': { zh: '撤销', en: 'Undo' },
   'automation.ux.actions': { zh: '更多操作', en: 'More actions' },
   'automation.ux.help': { zh: '使用说明', en: 'Workflow help' },
