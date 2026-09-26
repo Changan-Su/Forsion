@@ -17,7 +17,7 @@ import { join, dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { forsionHomeDir, tanguDataDir, defaultWorkspaceDir } from './forsionHome'
 import { amadeusConfigPath } from './amadeus/settings'
-import { composeEnginePath, pathKeyOf } from './envPath'
+import { composeEnginePath, pathKeyOf, withBundledGit } from './envPath'
 
 export type BackendState = 'stopped' | 'starting' | 'ready' | 'crashed'
 
@@ -82,6 +82,16 @@ export function resolveBundledNode(): { pathDirs: string[]; nodeBin: string; npm
   }
   const bin = join(dir, 'bin', 'node')
   return existsSync(bin) ? { pathDirs: [join(dir, 'bin')], nodeBin: bin, npmBin: join(dir, 'bin', 'npm') } : null
+}
+
+/** 内置 git(build/fetch-git.cjs):打包=resources/git;dev=desktop/build/git(`npm run fetch-git` 后才有)。
+ *  Windows=MinGit 的 cmd/git.exe;mac=包装脚本 bin/git(exec path 只在包装里设)。Linux 不捆 → null。
+ *  挂 PATH 的规则见 envPath.ts withBundledGit(只兜底;mac 仅在没有真 git 时前置)。 */
+export function resolveBundledGit(): { pathDirs: string[]; gitBin: string } | null {
+  const dir = app.isPackaged ? join(process.resourcesPath, 'git') : join(__dirname, '..', '..', 'build', 'git')
+  const binDir = join(dir, process.platform === 'win32' ? 'cmd' : 'bin')
+  const bin = join(binDir, process.platform === 'win32' ? 'git.exe' : 'git')
+  return existsSync(bin) ? { pathDirs: [binDir], gitBin: bin } : null
 }
 
 /** 随包 LibreOffice 转换引擎(build/fetch-office.cjs)的入口模块;打包=resources/office,
@@ -275,14 +285,14 @@ export class BackendManager {
       // 的 lastVault —— 不再瞎猜默认路径(用户的 vault 常是自定义路径,且运行时可切换 vault)。
       env.FORSION_AMADEUS_CONFIG = amadeusConfigPath()
 
-      // PATH 装配(内置 Python 前置 / 用户 bin 目录补全 / 内置 Node 末尾兜底)一次算完,顺序见
-      // composeEnginePath。⚠️ 补全用户 bin 目录这步不能省:GUI 启动的 app 只有精简 PATH,
+      // PATH 装配(内置 Python 前置 / 用户 bin 目录补全 / 内置 Node 末尾兜底 / 内置 git 兜底)一次算完,顺序见
+      // composeEnginePath 与 withBundledGit。⚠️ 补全用户 bin 目录这步不能省:GUI 启动的 app 只有精简 PATH,
       // agent 的 run_bash 继承之 → /opt/homebrew/bin 里的 ffmpeg/git 一律 command not found
       //(2026-09-06 青鸟转录事故);dev 从终端起继承完整 PATH,复现不出来。
       const py = s.pythonMode !== 'system' ? resolveBundledPython() : null
       const nodeRt = resolveBundledNode()
       const pathKey = pathKeyOf(env)
-      env[pathKey] = composeEnginePath(env[pathKey] || '', py?.pathDirs || [], nodeRt?.pathDirs || [])
+      env[pathKey] = withBundledGit(composeEnginePath(env[pathKey] || '', py?.pathDirs || [], nodeRt?.pathDirs || []), resolveBundledGit()?.pathDirs || [])
       if (py) {
         env.TANGU_PYTHON_BIN = py.pythonBin
         // 内置 Python 住在安装目录里(mac 是已签名的 .app):字节码不许写回去 —— 会破签名封条、

@@ -176,7 +176,7 @@ function installPackages(dest) {
   console.log('[fetch-python] ✓ 预装库');
 }
 
-module.exports = { fetchPython, pythonDir, smokePython };
+module.exports = { fetchPython, pythonDir, smokePython, ghJson };
 
 // CLI:node build/fetch-python.cjs [platform] [arch](缺省=本机)
 if (require.main === module) {
