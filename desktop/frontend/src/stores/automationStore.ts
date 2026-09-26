@@ -68,13 +68,15 @@ export const useAutomation = create<AutomationState>((set, get) => ({
   async refresh(cfg) {
     const revision = get().refreshNonce
     // 六源并发,单源失败不阻断其余(旧引擎无 automation/schedule 端点 → 该项保持旧值/空)。
+    // 端点在但响应形状不对(旧引擎 / 桩)时回落旧值,别把 undefined 存进列表字段 —— 列表 .map 会让整个 Space 崩掉。
+    const list = <T,>(v: T[] | undefined, prev: T[]): T[] => (Array.isArray(v) ? v : prev)
     const [special, status, triggers, autoSessions, schedules, actionsCatalog] = await Promise.all([
       getSpecialConfig(cfg).then((r) => r.config).catch(() => get().specialCfg),
       getMuseStatus(cfg).catch(() => get().museStatus),
-      getMuseTriggers(cfg).catch(() => get().triggers),
-      getAutomationSessions(cfg).catch(() => get().autoSessions),
-      getAgentSchedules(cfg).catch(() => get().schedules),
-      getAutomationActions(cfg).catch(() => get().actionsCatalog),
+      getMuseTriggers(cfg).then((v) => list(v, get().triggers)).catch(() => get().triggers),
+      getAutomationSessions(cfg).then((v) => list(v, get().autoSessions)).catch(() => get().autoSessions),
+      getAgentSchedules(cfg).then((v) => list(v, get().schedules)).catch(() => get().schedules),
+      getAutomationActions(cfg).then((v) => list(v, get().actionsCatalog)).catch(() => get().actionsCatalog),
     ])
     // A poll started before a save must not erase the saved rule or its selection.
     if (get().refreshNonce !== revision) return
