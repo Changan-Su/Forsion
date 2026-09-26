@@ -140,3 +140,5 @@ const converter = await createConverter({ timeoutMs: 300000 });
 try { console.log('[office-gate] backend=' + (await converter.render({ inputPath: docx, outputPath: pdf })).backend); }
 finally { await converter.dispose(); }
 `;
+exports.OFFICE_GATE = OFFICE_GATE; // 干净 Windows 探针(scripts/bundled-runtimes.windows-probe.cjs)复用同一段
+

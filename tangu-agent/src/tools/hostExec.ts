@@ -73,9 +73,13 @@ async function officeKitPdf(abs: string, signal?: AbortSignal): Promise<{ pdf: s
     // 给回落链留出余量。signal = 用户取消 + 工具超时(executeTool 已并入),转换跟着停。
     const converter = await createConverter({ timeoutMs: 90_000 });
     const pdf = path.join(dir, 'document.pdf'); // kit 要求输出路径不存在:全新临时目录里的固定名
+    const t0 = Date.now();
     try { await converter.render({ inputPath: abs, outputPath: pdf }, signal); } finally { await converter.dispose(); }
+    // 这两行日志是 live 台架区分「走了随包引擎」还是「回落到系统 soffice」的唯一证据,也是用户机上排查的入口
+    console.log(`[read_document] 随包 LibreOffice 转 PDF ✓ ${path.basename(abs)} ${Date.now() - t0}ms`);
     return { pdf, dir };
-  } catch {
+  } catch (e: any) {
+    console.warn(`[read_document] 随包 LibreOffice 转换失败,回落原链路:${e?.code || ''} ${e?.message || e}`);
     await fs.rm(dir, { recursive: true, force: true });
     return 'failed';
   }
@@ -593,7 +597,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         name: 'read_document',
         description:
           'Extract the text/markdown content of a document so you can actually read it — use this instead of read_file for binary documents (read_file would return garbled bytes). ' +
-          'PDF works out of the box; xlsx/pptx need LibreOffice installed on the machine, and without it docx is read as plain text (no page layout). Path resolved relative to the current working directory. ' +
+          'PDF works out of the box. docx/xlsx/pptx are converted through LibreOffice, which the Forsion desktop app bundles (elsewhere it must be installed on the machine); without it docx is read as plain text (no page layout). Path resolved relative to the current working directory. ' +
           'The text is split into pages marked "--- page N ---" (N is the real page number). A whole long document comes back truncated, so for a big file work in two steps: ' +
           'search:"phrase" to find where something is (literal case-insensitive substring, NOT semantic — retry with other wordings if it misses), then pages:"12-18" to read that part in full. ' +
           'When you tell the user something you read here, cite the spot as a wikilink — copy the exact form printed in this tool\'s output header (e.g. [[papers/report.pdf#page=12]]) and only change the page number. ' +
@@ -674,7 +678,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
           // 脚本去啃(2026-09-11 Windows 实报,连环出错)。装了就走上面那条:真分页优先。
           // 纯文本也抽不出字(坏档 / 通篇是图)才报原错 —— 那种情况装 LibreOffice(+ocr)确实是出路。
           const text = /\.docx$/i.test(abs) ? await hostSandboxFs(ctx).readFile(abs).then(docxText).catch(() => '') : '';
-          if (!text) return `Error: document parsing failed (${e?.message || e}). docx/xlsx/pptx require LibreOffice installed on this machine.`;
+          if (!text) return `Error: document parsing failed (${e?.message || e}). docx/xlsx/pptx need LibreOffice (bundled with the Forsion desktop app; otherwise install it on this machine).`;
           memo = { key: memoKey, pages: [{ page: 1, text }], plainText: true };
         }
         if (!transient) docMemo = memo;
