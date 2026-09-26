@@ -13,7 +13,9 @@
  * 而「版本相同内容不同」正是开发者在迭代,他有 install.sh。
  *
  * 播种来源:打包版 = `resources/bundled-plugins/<name>`(electron-builder extraResources 从 node_modules 里的
- * 随包 npm 包复制);dev = `<appPath>/node_modules/<pkg>`(同一个包,`npm run vendor:cu` 刷新)。
+ * 随包 npm 包复制);dev = `<appPath>/node_modules/<pkg>`(同一个包)。随包版本 = desktop/package.json 里钉死的
+ * npm 精确版本,Dependabot 在 npm 发了新版时提 PR 升级。别用本地构建替换它:本地 build:native 是 ad-hoc 签名,
+ * 会让 Mac 用户重新授权(release-content.check 会拦)。
  * 只在 darwin / win32 播种:这些捆绑包的引擎侧自己按平台门控(Linux helper 从未真机验收),
  * 在没有工具面的平台上多一张插件卡只是噪音。
  *

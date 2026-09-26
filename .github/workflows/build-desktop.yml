@@ -136,22 +136,9 @@ jobs:
         working-directory: desktop
         run: node node_modules/@forsion/tangu-computer-use/scripts/platform-contract.check.mjs
 
-      # 本机 vendor 含 macOS 双架构 helper；Windows 的 Rust bridge 在原生 runner 构建后随包交付。
-      # 不能让终端用户首次使用时才安装 Rust/cargo。
-      - name: Build bundled Computer Use Windows helper
-        if: runner.os == 'Windows'
-        working-directory: desktop
-        shell: bash
-        # 静态链接 MSVC 运行时:默认动态链接会依赖 VCRUNTIME140.dll(不随系统,来自 VC++ 运行库),
-        # 没装过它的干净 Windows 上 helper 进程直接起不来。release-content.check 会拦回归。
-        env:
-          RUSTFLAGS: -C target-feature=+crt-static
-        run: node node_modules/@forsion/tangu-computer-use/scripts/build-native.mjs --platform windows
-
-      - name: Build bundled Computer Use Linux helper
-        if: runner.os == 'Linux'
-        working-directory: desktop
-        run: node node_modules/@forsion/tangu-computer-use/scripts/build-native.mjs --platform linux
+      # 内置 CU 是 npm 上钉死版本的发布包,三平台 helper 都已随包(CU 自己的 release CI 构建:macOS 用固定证书签名、
+      # Windows 静态链接 MSVC 运行时)。这里不再重编 —— 安装包里的 helper 与 npm 上发布的字节是同一份;
+      # release-content.check 仍在各原生 runner 上核 Windows 无 VC++ 运行库依赖、Linux 可执行、macOS 证书指纹。
 
       # ③ 出安装包;afterPack 会把 better-sqlite3 重建为目标 Electron ABI
       - name: Verify bundled Computer Use sealed apps

@@ -36,7 +36,8 @@ for (const dir of resources) {
   let pkg = {}
   try { pkg = JSON.parse(readArchive('package.json')) } catch { errors.push(`${archive}: invalid package.json`) }
   check(pkg.version === expectedVersion, `App version ${pkg.version} != ${expectedVersion}`)
-  check(pkg.dependencies?.['@forsion/tangu-computer-use'] === 'file:vendor/tangu-computer-use.tgz', 'CU dependency missing from packaged app')
+  // 内置 CU = npm 上钉死的精确版本(Dependabot 提 PR 升级);范围或本地 file: 依赖都会让安装包内容不可复现。
+  check(/^\d+\.\d+\.\d+$/.test(pkg.dependencies?.['@forsion/tangu-computer-use'] ?? ''), 'CU dependency must be an exact npm version')
   const engine = readJson(path.join(dir, 'tangu-server', 'package.json'))
   check(engine.version === expectedVersion, `Engine version ${engine.version} != ${expectedVersion}`)
 

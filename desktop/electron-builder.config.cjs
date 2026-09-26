@@ -115,8 +115,8 @@ module.exports = {
           { from: 'build/office/node_modules', to: 'office/node_modules' },
           // 设备页 web 构建(unitWeb 静态壳;webDistDir 读 resourcesPath/unit-web)
           { from: 'unit-web-dist', to: 'unit-web' },
-          // 内置插件捆绑包(electron/builtinPlugins.ts 启动时播种进 <home>/plugins/):来源是 vendor/*.tgz 装进
-          // node_modules 的随包 npm 包;放 resources 而非 asar —— 引擎是独立 node 进程,原地读 asar 里的目录读不到。
+          // 内置插件捆绑包(electron/builtinPlugins.ts 启动时播种进 <home>/plugins/):来源是 package.json 钉死的 npm
+          // 精确版本装进 node_modules 的包;放 resources 而非 asar —— 引擎是独立 node 进程,原地读 asar 里的目录读不到。
           // 落点目录名 = 包名去 scope(builtinPlugins.bundledDirName),两边同一约定。
           {
             from: 'node_modules/@forsion/tangu-computer-use',

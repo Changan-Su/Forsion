@@ -170,7 +170,6 @@
     "check:hooks": "eslint --config build/eslint.hooks.mjs \"frontend/src/**/*.{ts,tsx}\"",
     "check:deskshot": "node scripts/desk-shot.check.cjs",
     "check:splash": "node scripts/splash-loop.check.cjs",
-    "vendor:cu": "cd ../../Forsion-Instrumentality-Project/tangu-computer-use && npm run build && node scripts/build-native.mjs --arch all && npm pack --pack-destination ../../Forsion-Genesis/desktop/vendor && cd ../../Forsion-Genesis/desktop && mv -f vendor/forsion-tangu-computer-use-*.tgz vendor/tangu-computer-use.tgz && node scripts/refresh-vendor-lock.cjs @forsion/tangu-computer-use && npm install --no-audit --no-fund",
     "check:parity": "node scripts/platform-parity.check.cjs",
     "check:unitswitcher": "node scripts/unit-switcher.check.cjs",
     "test:ics-tz": "for tz in Europe/London America/New_York Asia/Shanghai Australia/Lord_Howe UTC; do echo \"== $tz\"; TZ=$tz vitest run frontend/src/views/calendar/ics.test.ts || exit 1; done",
@@ -247,7 +246,6 @@
     "check:mininative": "node scripts/mini-auto.check.cjs --native-helper"
   },
   "dependencies": {
-    "@forsion/tangu-computer-use": "file:vendor/tangu-computer-use.tgz",
     "@astryxdesign/core": "^0.1.4",
     "@astryxdesign/theme-neutral": "^0.1.4",
     "@aws-sdk/client-s3": "^3.1091.0",
@@ -257,6 +255,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@excalidraw/excalidraw": "npm:@zsviczian/excalidraw@0.18.122",
+    "@forsion/tangu-computer-use": "0.5.8",
     "@milkdown/kit": "^7.21.2",
     "@milkdown/plugin-math": "^7.5.9",
     "@milkdown/react": "^7.21.2",
