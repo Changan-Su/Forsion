@@ -5,6 +5,7 @@
  * 与询问的关键区别:**必须自带超时**——没有桌面端在线时(TUI / 云端 / 面板关着)根本没人会答,
  * 不能像等用户那样无限挂着。
  */
+import { randomBytes } from 'node:crypto';
 import { publish } from './eventBus.js';
 
 export interface DeskShotResult {
@@ -31,7 +32,10 @@ export function parseDeskShotBody(body: unknown): DeskShotResult {
   return { dataUrl, mode: b.mode === 'card' ? 'card' : 'open', ...(companion ? { companion } : {}) };
 }
 
-const pending = new Map<string, (r: DeskShotResult) => void>(); // shotId -> resolver
+/** shotId -> { runId, resolve }。⚠️ 必须连 runId 一起存(同 uiAck.ts):兑现路由只能证明 URL 里的 runId
+ *  属于调用者,证明不了 shotId 属于那条 run —— 少了绑定,同一 worker 上任意已登录用户拿自己的 runId +
+ *  别人的 shotId 就能把任意图片塞进受害者的模型上下文。 */
+const pending = new Map<string, { runId: string; resolve: (r: DeskShotResult) => void }>();
 
 let seq = 0;
 
@@ -44,7 +48,8 @@ export function requestDeskShot(
   timeoutMs = DESK_SHOT_TIMEOUT_MS,
 ): Promise<DeskShotResult> {
   if (signal?.aborted) return Promise.resolve({ error: 'aborted' });
-  const shotId = `shot_${Date.now().toString(36)}_${++seq}`;
+  // 随机段:时间戳+计数可预测,而 shotId 就是兑现凭据(绑定 runId 之外的第二道)。
+  const shotId = `shot_${Date.now().toString(36)}_${++seq}_${randomBytes(9).toString('base64url')}`;
   return new Promise<DeskShotResult>((resolve) => {
     const done = (r: DeskShotResult): void => {
       clearTimeout(timer);
@@ -56,15 +61,16 @@ export function requestDeskShot(
     const timer = setTimeout(() => done({ error: 'no response from the desktop app' }), timeoutMs);
     timer.unref?.(); // 别让这颗定时器吊住进程退出(standalone CLI 路径)
     signal?.addEventListener('abort', onAbort, { once: true });
-    pending.set(shotId, done);
+    pending.set(shotId, { runId, resolve: done });
     void publish(runId, 'desk_capture_request', { shotId });
   });
 }
 
 /** HTTP 端点调用:兑现某次截屏。false = 该 id 已不在等待(超时/重复/多窗口第二个到达者)。 */
-export function resolveDeskShot(shotId: string, result: DeskShotResult): boolean {
-  const done = pending.get(shotId);
-  if (!done) return false;
-  done(result);
+export function resolveDeskShot(runId: string, shotId: string, result: DeskShotResult): boolean {
+  const entry = pending.get(shotId);
+  // runId 不匹配 = 拿别条 run 的凭据来兑现 → 一律当作「不在等待」,不泄露它是否存在。
+  if (!entry || entry.runId !== runId) return false;
+  entry.resolve(result);
   return true;
 }
