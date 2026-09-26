@@ -32,6 +32,9 @@ export interface NotifyInput {
    *  不是一条「通知」—— 不受通知总开关 / 事件开关过滤(关了通知,重置照样清空布局,撤销入口不能跟着没了;
    *  Codex 第一轮 C-2)。隐含 inAppOnly。别拿它给自动事件绕开用户的开关。 */
   receipt?: boolean
+  /** 这条提示离开屏幕(到期、点 ×、点动作钮、全部清除)时调一次。撤销型回执靠它决定「到点才真做」:
+   *  停留从真正上屏才开始计、悬停会暂停,都跟着这条提示走(排队中 / 悬停时不会提前落定)。去重合并时新值覆盖旧值。 */
+  onClose?: () => void
 }
 
 export interface AppNotification {
@@ -48,6 +51,7 @@ export interface AppNotification {
   action?: { label: string; run(): void }
   /** 自定义停留时长(见 NotifyInput.durationMs);缺省按 level。补位 / 去重重置停留时都用它。 */
   durationMs?: number
+  onClose?: () => void
 }
 
 /** 内置事件注册表(设置页开关列表的数据源;插件事件 plugin:<id> 动态出现,默认开)。 */
@@ -134,6 +138,10 @@ export const useNotifications = create<NtfState>((set, get) => {
     timers.set(id, { handle: setTimeout(() => get().dismiss(id), ms), deadline: Date.now() + ms, remaining: 0 })
   }
 
+  const closed = (n: AppNotification | undefined): void => {
+    try { n?.onClose?.() } catch { /* 回调抛错不砸通知栈 */ }
+  }
+
   return {
     items: [],
     queue: [],
@@ -161,7 +169,7 @@ export const useNotifications = create<NtfState>((set, get) => {
           const upd: AppNotification = {
             ...found, text, title: title ?? found.title, level, count: found.count + 1,
             createdAt: Date.now(), sticky: sticky || found.sticky, action: input.action ?? found.action,
-            durationMs: durationMs ?? found.durationMs,
+            durationMs: durationMs ?? found.durationMs, onClose: input.onClose ?? found.onClose,
           }
           set((s) => ({
             items: s.items.map((n) => (n.id === found.id ? upd : n)),
@@ -178,7 +186,7 @@ export const useNotifications = create<NtfState>((set, get) => {
       const n: AppNotification = {
         id: `ntf-${++seq}-${Date.now()}`, text, title, level, event,
         sourceLabel: input.sourceLabel, createdAt: Date.now(), sticky, count: 1,
-        dedupeKey: input.dedupeKey, action: input.action, durationMs,
+        dedupeKey: input.dedupeKey, action: input.action, durationMs, onClose: input.onClose,
       }
       // 系统通知:与应用内通知同步发(所有事件,不止收件箱);仅窗口在后台时(前台已有卡片,免重复横幅);
       // osEnabled 门控。web/mobile 无 window.tangu.notify → 可选链忽略。dedupe 合并不重发(上面已 return)。
@@ -199,6 +207,7 @@ export const useNotifications = create<NtfState>((set, get) => {
     dismiss: (id) => {
       clearTimer(id)
       const s = get()
+      const gone = s.items.find((n) => n.id === id) || s.queue.find((n) => n.id === id)
       let items = s.items.filter((n) => n.id !== id)
       let queue = s.queue.filter((n) => n.id !== id)
       if (items.length === s.items.length && queue.length === s.queue.length) return
@@ -212,11 +221,14 @@ export const useNotifications = create<NtfState>((set, get) => {
       }
       set({ items, queue })
       for (const nx of promoted) if (!nx.sticky) startTimer(nx.id, durationOf(nx))
+      closed(gone)
     },
 
     dismissAll: () => {
       for (const id of [...timers.keys()]) clearTimer(id)
+      const { items, queue } = get()
       set({ items: [], queue: [] })
+      for (const n of [...items, ...queue]) closed(n)
     },
 
     setEnabled: (on) => {

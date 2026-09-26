@@ -4,7 +4,7 @@ import { usePluginStore } from '../../amadeus/plugins/pluginStore'
 import type { ListItem, ListSourceContribution } from '../../amadeus/plugins/types'
 import { translate as t } from '../../i18n'
 import { useApp } from '../../stores/appStore'
-import { notifyApp, useNotifications } from '../../stores/notificationStore'
+import { notifyApp } from '../../stores/notificationStore'
 import { useAutomation, type AutomationSel } from '../../stores/automationStore'
 import { deleteMuseTrigger, saveMuseTrigger, saveSpecialConfig, deleteAgentScheduleEntry, saveAgentScheduleEntry } from '../../services/backendService'
 import { actionsText, condText, isFinishedTrigger, triggerToUpsert } from './lib'
@@ -18,13 +18,18 @@ const mutate = async (run: () => Promise<unknown>): Promise<boolean> => {
   catch (error) { useApp.getState().toast(String(error instanceof Error ? error.message : error), true); return false }
 }
 /** Engine deletes are hard deletes, so nothing is sent at once: the row hides, the selection drops if it pointed
- *  there, and an undo receipt stays up for UNDO_MS before the real delete runs (U-03 plan M). Quitting inside that
- *  window just keeps the row, which is the safe way to fail. A failed delete toasts and the row comes back. */
+ *  there, and an "Deleted · Undo" receipt shows. The real delete runs when that receipt leaves the screen without
+ *  Undo — so its UNDO_MS only starts once it is actually visible and pauses on hover (U-03 plan M). Quitting before
+ *  then just keeps the row, which is the safe way to fail. A failed delete toasts and the row comes back.
+ *  onDeleted runs after a successful delete, before the row leaves the pending set, so a caller holding its own
+ *  copy of the list (MuseView) drops it without the row flashing back. */
 const UNDO_MS = 5000
 const pendingDeletes = new Set<string>()
-export const isPendingDelete = (sel: AutomationSel): boolean => pendingDeletes.has(keyOf(sel)!)
-/** onDeleted runs after a successful delete, before the row leaves the pending set, so a caller holding its own
- *  copy of the list (MuseView) drops it without the row flashing back. */
+/** Deleted for good: ids never come back, and a view holding its own copy of the rows (MuseView polls on its
+ *  own clock) must not show a deleted row again between the delete and its next fetch. */
+const deletedKeys = new Set<string>()
+const hiddenKey = (key: string): boolean => pendingDeletes.has(key) || deletedKeys.has(key)
+export const isPendingDelete = (sel: AutomationSel): boolean => hiddenKey(keyOf(sel)!)
 export function deleteWithUndo(sel: AutomationSel, name: string, run: () => Promise<unknown>, onDeleted?: () => void): void {
   const key = keyOf(sel)!
   if (pendingDeletes.has(key)) return
@@ -33,12 +38,16 @@ export function deleteWithUndo(sel: AutomationSel, name: string, run: () => Prom
   if (keyOf(store.sel) === key) store.setSel(null)
   store.bump()
   const settle = () => { pendingDeletes.delete(key); useAutomation.getState().bump() }
-  const timer = setTimeout(() => {
-    if (toast) useNotifications.getState().dismiss(toast)
-    void mutate(run).then((ok) => { if (ok) onDeleted?.() }).finally(settle)
-  }, UNDO_MS)
-  const toast = notifyApp({ text: t('automation.deleted', { name }), level: 'info', dedupeKey: `automation.delete:${key}`,
-    receipt: true, durationMs: UNDO_MS, action: { label: t('automation.undo'), run() { clearTimeout(timer); settle() } } })
+  let decided = false
+  const commit = () => {
+    if (decided) return
+    decided = true
+    void mutate(run).then((ok) => { if (ok) { deletedKeys.add(key); onDeleted?.() } }).finally(settle)
+  }
+  const shown = notifyApp({ text: t('automation.deleted', { name }), level: 'info', dedupeKey: `automation.delete:${key}`,
+    receipt: true, durationMs: UNDO_MS, onClose: commit,
+    action: { label: t('automation.undo'), run() { if (!decided) { decided = true; settle() } } } })
+  if (!shown) setTimeout(commit, UNDO_MS) // 没有通知栈可挂(不该发生):照旧给出撤销时长再删
 }
 let readers = 0
 let stopPolling: (() => void) | undefined
@@ -77,7 +86,7 @@ export const automationListSource: ListSourceContribution = {
     }
     for (const kind of ['muse', 'historian'] as const) rows.push({ key: keyOf({ kind })!, title: t(`automation.${kind}.title`),
       icon: kind === 'muse' ? 'sparkles' : 'history', category: 'system', hint: t(state.specialCfg?.[kind].enabled ? 'automation.ux.on' : 'automation.ux.off') })
-    return rows.filter((row) => !pendingDeletes.has(row.key) && (!filter?.group ? q || row.category !== 'finished' : row.category === filter.group)
+    return rows.filter((row) => !hiddenKey(row.key) && (!filter?.group ? q || row.category !== 'finished' : row.category === filter.group)
       && (!q || `${row.title} ${row.searchText || ''}`.toLowerCase().includes(q)))
   },
   groups: () => ['rules', 'buttons', 'schedules', 'system', 'finished'].map((key) => ({ key,

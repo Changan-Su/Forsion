@@ -70,27 +70,47 @@ describe('native automation workspace source', () => {
     useAutomation.getState().openBuilder()
     expect(source.activeKey!()).toBeNull()
   })
-  it('⚠️delete hides the row at once, sends nothing until the undo window closes, and undo keeps the rule', async () => {
+  it('⚠️delete hides the row at once; the engine delete waits until the undo receipt has been on screen, and Undo keeps the rule', async () => {
     vi.useFakeTimers()
+    const ntf = useNotifications.getState()
+    ntf.dismissAll()
     const del = vi.spyOn(backend, 'deleteMuseTrigger').mockResolvedValue(undefined as never)
-    const undoAction = () => useNotifications.getState().items.find((n) => n.action)?.action
+    const receipt = () => [...useNotifications.getState().items, ...useNotifications.getState().queue].find((n) => n.dedupeKey?.startsWith('automation.delete:'))
+    const titles = () => source.items().map((item) => item.title)
     useAutomation.getState().setSel({ kind: 'trigger', triggerId: trigger.id })
     const action = source.itemMenu!(source.items({ group: 'rules' })[0]).find((a) => a.id === 'delete')!
     expect(action.danger).toBe(true)
+
+    // Undo(NotificationHost 点动作钮 = run + dismiss):永不删,行回来,回执也走了
     action.run()
-    expect(source.items().map((item) => item.title)).not.toContain('Inventory')
+    expect(titles()).not.toContain('Inventory')
     expect(useAutomation.getState().sel).toBeNull()
-    undoAction()!.run()
+    const r = receipt()!
+    r.action!.run(); ntf.dismiss(r.id)
     vi.advanceTimersByTime(10_000)
     expect(del).not.toHaveBeenCalled()
-    expect(source.items().map((item) => item.title)).toContain('Inventory')
+    expect(receipt()).toBeUndefined()
+    expect(titles()).toContain('Inventory')
 
+    // 通知栈满:回执排队,没上屏就不计时
+    for (let i = 0; i < 4; i++) ntf.notify({ text: `busy ${i}`, sticky: true })
     action.run()
+    vi.advanceTimersByTime(20_000)
+    expect(del).not.toHaveBeenCalled()
+    for (const n of useNotifications.getState().items.filter((x) => x.text.startsWith('busy'))) ntf.dismiss(n.id)
+
+    // 上屏后悬停暂停:照样不删;移开后走完剩余时长才删
+    ntf.pause()
+    vi.advanceTimersByTime(20_000)
+    expect(del).not.toHaveBeenCalled()
+    ntf.resume()
     vi.advanceTimersByTime(4999)
     expect(del).not.toHaveBeenCalled()
+    const nonce = useAutomation.getState().refreshNonce
     vi.advanceTimersByTime(1)
     expect(del).toHaveBeenCalledWith(expect.anything(), trigger.id)
-    expect(undoAction()).toBeUndefined()
-    await vi.waitFor(() => expect(source.items().map((item) => item.title)).toContain('Inventory')) // stub store never drops it
+    expect(receipt()).toBeUndefined()
+    await vi.waitFor(() => expect(useAutomation.getState().refreshNonce).toBeGreaterThanOrEqual(nonce + 2)) // 删完 bump + 落定 bump
+    expect(titles()).not.toContain('Inventory') // 删掉了就一直藏着,不等下一次拉取
   })
 })
