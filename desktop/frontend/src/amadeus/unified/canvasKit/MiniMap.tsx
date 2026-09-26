@@ -12,7 +12,7 @@ import type { Viewport } from './viewport'
 
 registerMessages({
   'cvminimap.aria': { zh: '画布缩略图', en: 'Canvas minimap' },
-  'cvminimap.hint': { zh: '画布缩略图:点击或拖动以导航', en: 'Canvas minimap: click or drag to navigate' },
+  'cvminimap.hint': { zh: '画布缩略图：点击或拖动以导航', en: 'Canvas minimap: click or drag to navigate' },
 })
 
 export const MINI_W = 184

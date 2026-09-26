@@ -36,7 +36,7 @@ registerMessages({
   'evcard.openDb': { zh: '打开数据库', en: 'Open database' },
   'evcard.delete': { zh: '删除', en: 'Delete' },
   'evcard.rowlinkReadonly': { zh: '关联表列请在表格里编辑', en: 'Edit related rows in the table' },
-  'evcard.noOptions': { zh: '（无选项,请在表格里添加）', en: '(No options — add them in the table)' },
+  'evcard.noOptions': { zh: '（无选项，请在表格里添加）', en: '(No options — add them in the table)' },
 })
 
 export interface Anchor { left: number; top: number; right: number; bottom: number; zoom?: number }

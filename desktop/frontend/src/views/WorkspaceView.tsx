@@ -51,7 +51,7 @@ registerMessages({
   // 新旧两个会话档并存:新档(轨道侧栏)占「会话」这个名字,旧档降为「会话(旧)」——
   // 档位 id 仍是 'sessions'(布局持久化键,发版即冻结),只改文案。
   'workspace.mode.orbits': { zh: '会话', en: 'Sessions' },
-  'workspace.mode.sessionsLegacy': { zh: '会话(旧)', en: 'Sessions (legacy)' },
+  'workspace.mode.sessionsLegacy': { zh: '会话（旧）', en: 'Sessions (legacy)' },
   // 旧档顶部的升级提示条(存量用户手选过旧档 → 不迁移 params.mode,只给一条可点的路,方案 §11 ⑥)。
   'workspace.legacyHint': { zh: '已有新版会话侧栏', en: 'A new sessions sidebar is available' },
   'workspace.legacyHint.switch': { zh: '切换', en: 'Switch' },

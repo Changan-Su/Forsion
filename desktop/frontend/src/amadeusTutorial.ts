@@ -159,11 +159,11 @@ On the canvas a single click is reserved for selecting and dragging, so **nothin
 Made a mess and want to start over? Delete this file, then search the command palette (\`⌘/Ctrl + K\`) for "tutorial".`,
   },
   'amtut.toast.noVault': {
-    zh: '请先打开一个笔记库(Vault),教程会生成到里面',
+    zh: '请先打开一个笔记库（Vault），教程会生成到里面',
     en: 'Open a vault first — the tutorial is created inside it',
   },
   'amtut.toast.failed': {
-    zh: '教程生成失败:{err}',
+    zh: '教程生成失败：{err}',
     en: 'Could not create the tutorial: {err}',
   },
 })

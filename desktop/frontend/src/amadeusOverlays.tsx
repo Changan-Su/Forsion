@@ -29,7 +29,7 @@ registerMessages({
   'amoverlay.create': { zh: '创建', en: 'Create' },
   'amoverlay.templatePlaceholder': { zh: '选择模板…', en: 'Choose a template…' },
   'amoverlay.noTemplates': {
-    zh: '还没有模板。把笔记放进 vault 的 templates/ 文件夹即可,支持 {{date}} {{time}} {{title}} 变量。',
+    zh: '还没有模板。把笔记放进 vault 的 templates/ 文件夹即可，支持 {{date}} {{time}} {{title}} 变量。',
     en: 'No templates yet. Put notes in the templates/ folder of your vault to use them here — the {{date}} {{time}} {{title}} variables are supported.',
   },
   'amoverlay.createTemplatesFolder': { zh: '创建 templates 文件夹', en: 'Create templates folder' },

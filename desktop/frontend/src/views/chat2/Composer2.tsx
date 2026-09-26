@@ -50,7 +50,7 @@ registerMessages({
   'input.normalWork': { zh: '普通模式', en: 'Normal mode' },
   'input.presetChat': { zh: 'Chat', en: 'Chat' }, // 产品词,中英同形(与侧栏胶囊 sidebar.mode.* 同一套)
   'input.presetWork': { zh: 'Work', en: 'Work' },
-  'input.presetLocked': { zh: '模式在创建会话时确定;换模式请新建会话', en: 'Mode is fixed when the session is created; start a new session to change it' },
+  'input.presetLocked': { zh: '模式在创建会话时确定；换模式请新建会话', en: 'Mode is fixed when the session is created; start a new session to change it' },
   // 团队成员子聊天:审批档读写的都是团队会话,选了对全队生效。
   'input.approvalSection.team': { zh: '团队审批档 · 改动对全队生效', en: 'Approval mode for the whole team' },
   // /export 导出的 markdown 里,用户那一侧消息的小标题(助手侧固定是品牌名 Tangu,不翻译)。
@@ -73,17 +73,17 @@ registerMessages({
   'input.tip': { zh: '小贴士：{tip}', en: 'Tip: {tip}' },
   'input.runningPlaceholder': { zh: '运行中，可继续输入…', en: 'Working… You can keep typing' },
   'input.tip.steer': { zh: '运行中也能继续发消息，会在下一步交给 Agent', en: 'You can send while it runs: the agent reads it at the next step' },
-  'input.tip.switchChat': { zh: '可以先切去别的会话,运行不会中断,侧栏圆点标出运行中', en: 'Switch chats meanwhile; this run keeps going, marked by a sidebar dot' },
-  'input.tip.quote': { zh: '划选回复里的文字,点「引用」即可带进下一条消息', en: 'Select text in a reply and click Quote to cite it in your next message' },
-  'input.tip.dropFiles': { zh: '文件可拖到聊天区任意位置,截图可直接粘贴进输入框', en: 'Drop files anywhere in the chat, or paste a screenshot into the box' },
-  'input.tip.wikiRef': { zh: '输入 [[ 可引用历史会话,本机项目里还能引用笔记和文件', en: 'Type [[ to reference past chats, or notes and files in local projects' },
-  'input.tip.dragSession': { zh: '把侧栏的会话拖进对话区,即可挂为引用随消息发送', en: 'Drag a chat from the sidebar into the conversation to cite it' },
-  'input.tip.branch': { zh: '悬停已完成的回复,点分支图标即可从此处开出新会话', en: 'Hover a finished reply and click the branch icon to fork a new chat' },
-  'input.tip.newTab': { zh: '⌘/Ctrl 点击侧栏里的会话,会在新标签页打开', en: '⌘/Ctrl-click a session in the sidebar to open it in a new tab' },
-  'input.tip.palette': { zh: '按 ⌘/Ctrl+K 打开命令面板,搜索并执行命令', en: 'Press ⌘/Ctrl+K to open the command palette and run commands' },
-  'input.tip.quickFind': { zh: '⌘/Ctrl+P 快速查找,按名称跳到会话', en: '⌘/Ctrl+P opens quick find: jump to a session by name' },
+  'input.tip.switchChat': { zh: '可以先切去别的会话，运行不会中断，侧栏圆点标出运行中', en: 'Switch chats meanwhile; this run keeps going, marked by a sidebar dot' },
+  'input.tip.quote': { zh: '划选回复里的文字，点「引用」即可带进下一条消息', en: 'Select text in a reply and click Quote to cite it in your next message' },
+  'input.tip.dropFiles': { zh: '文件可拖到聊天区任意位置，截图可直接粘贴进输入框', en: 'Drop files anywhere in the chat, or paste a screenshot into the box' },
+  'input.tip.wikiRef': { zh: '输入 [[ 可引用历史会话，本机项目里还能引用笔记和文件', en: 'Type [[ to reference past chats, or notes and files in local projects' },
+  'input.tip.dragSession': { zh: '把侧栏的会话拖进对话区，即可挂为引用随消息发送', en: 'Drag a chat from the sidebar into the conversation to cite it' },
+  'input.tip.branch': { zh: '悬停已完成的回复，点分支图标即可从此处开出新会话', en: 'Hover a finished reply and click the branch icon to fork a new chat' },
+  'input.tip.newTab': { zh: '⌘/Ctrl 点击侧栏里的会话，会在新标签页打开', en: '⌘/Ctrl-click a session in the sidebar to open it in a new tab' },
+  'input.tip.palette': { zh: '按 ⌘/Ctrl+K 打开命令面板，搜索并执行命令', en: 'Press ⌘/Ctrl+K to open the command palette and run commands' },
+  'input.tip.quickFind': { zh: '⌘/Ctrl+P 快速查找，按名称跳到会话', en: '⌘/Ctrl+P opens quick find: jump to a session by name' },
   'input.tip.findInChat': { zh: '⌘/Ctrl+F 在当前对话里查找文字', en: 'Press ⌘/Ctrl+F to find text in the current conversation' },
-  'input.tip.toc': { zh: '悬停对话左侧的短横线展开目录,点击即可跳回任意一轮提问', en: "Hover the bars on the chat's left edge, then click to jump to a turn" },
+  'input.tip.toc': { zh: '悬停对话左侧的短横线展开目录，点击即可跳回任意一轮提问', en: "Hover the bars on the chat's left edge, then click to jump to a turn" },
 })
 
 interface SlashItem { cmd: string; desc: string; run: () => void }

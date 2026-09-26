@@ -13,7 +13,7 @@ import { isTeamImageAvatar, type NormalAgentDef, type TeamDef } from '../types'
 registerMessages({
   'team.editor.titleNew': { zh: '新建团队', en: 'New team' },
   'team.editor.titleEdit': { zh: '编辑团队', en: 'Edit team' },
-  'team.editor.name': { zh: '团队名称(可空)', en: 'Team name (optional)' },
+  'team.editor.name': { zh: '团队名称（可空）', en: 'Team name (optional)' },
   'team.editor.namePlaceholder': { zh: '留空 = 按成员名自动命名', en: 'Leave empty to name it after the members' },
   'team.editor.avatar': { zh: '团队头像', en: 'Team avatar' },
   'team.editor.avatarImage': { zh: '上传图片', en: 'Upload image' },
@@ -22,9 +22,9 @@ registerMessages({
   'team.editor.avatarHint': { zh: '支持 PNG、JPEG、GIF、WebP（不超过 1 MB）；也可使用 Emoji，留空显示成员组合头像。', en: 'PNG, JPEG, GIF or WebP up to 1 MB. You can also use an emoji, or leave it empty for the member avatar stack.' },
   'team.editor.avatarTooLarge': { zh: '头像不能超过 1 MB', en: 'The avatar must be no larger than 1 MB' },
   'team.editor.avatarReadFailed': { zh: '读取团队头像失败', en: 'Could not read the team avatar' },
-  'team.editor.members': { zh: '成员(勾选顺序 = 发言顺序)', en: 'Members (pick order = speaking order)' },
-  'team.editor.rolePlaceholder': { zh: '角色 / 分工(可选)', en: 'Role (optional)' },
-  'team.editor.doc': { zh: 'TEAM.md(团队约定,模型读取,建议英文)', en: 'TEAM.md (team charter read by the models; English recommended)' },
+  'team.editor.members': { zh: '成员（勾选顺序 = 发言顺序）', en: 'Members (pick order = speaking order)' },
+  'team.editor.rolePlaceholder': { zh: '角色 / 分工（可选）', en: 'Role (optional)' },
+  'team.editor.doc': { zh: 'TEAM.md（团队约定，模型读取，建议英文）', en: 'TEAM.md (team charter read by the models; English recommended)' },
   'team.editor.docPlaceholder': { zh: '# Team\n## Mission\n## Roles\n## Workflow\n## Protocol', en: '# Team\n## Mission\n## Roles\n## Workflow\n## Protocol' },
   'team.editor.needTwo': { zh: '至少选择 2 名在册成员', en: 'Pick at least 2 members that still exist' },
   'team.editor.missing': { zh: '已不存在', en: 'missing' },
@@ -32,7 +32,7 @@ registerMessages({
   'team.editor.create': { zh: '创建团队', en: 'Create team' },
   'team.editor.cancel': { zh: '取消', en: 'Cancel' },
   'team.editor.saved': { zh: '团队已保存', en: 'Team saved' },
-  'team.editor.failed': { zh: '保存失败:{e}', en: 'Save failed: {e}' },
+  'team.editor.failed': { zh: '保存失败：{e}', en: 'Save failed: {e}' },
 })
 
 export const TeamEditor: React.FC<{

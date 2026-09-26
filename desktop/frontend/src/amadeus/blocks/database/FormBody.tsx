@@ -14,15 +14,15 @@ import { registerMessages, useI18n } from '../../../i18n'
 import './formBody.css'
 
 registerMessages({
-  'dbform.noFields': { zh: '没有可填写的字段(计算列与自动编号/创建时间不进表单)。', en: 'No fillable fields — formula, auto-number and created-time columns never appear in a form.' },
+  'dbform.noFields': { zh: '没有可填写的字段（计算列与自动编号/创建时间不进表单）。', en: 'No fillable fields — formula, auto-number and created-time columns never appear in a form.' },
   'dbform.required': { zh: '必填', en: 'Required' },
   'dbform.submit': { zh: '提交', en: 'Submit' },
   'dbform.done': { zh: '已提交 {n} 条', en: '{n} submitted' },
-  'dbform.defaultUnsupported': { zh: '默认值:不支持', en: 'Default value: not supported' },
+  'dbform.defaultUnsupported': { zh: '默认值：不支持', en: 'Default value: not supported' },
   'dbform.defaultChecked': { zh: '默认勾选', en: 'Checked by default' },
   'dbform.defaultValue': { zh: '默认值', en: 'Default value' },
-  'dbform.defaultNone': { zh: '默认值:无', en: 'Default value: none' },
-  'dbform.defaultCsv': { zh: '默认值(逗号分隔)', en: 'Default value (comma-separated)' },
+  'dbform.defaultNone': { zh: '默认值：无', en: 'Default value: none' },
+  'dbform.defaultCsv': { zh: '默认值（逗号分隔）', en: 'Default value (comma-separated)' },
 })
 
 export type FormSetCell = (rowId: string, colId: string, v: CellValue | undefined) => void

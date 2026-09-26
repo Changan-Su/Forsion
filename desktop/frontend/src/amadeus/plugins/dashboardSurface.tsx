@@ -32,7 +32,7 @@ import { COMPILER_VERSION, PAGE_SCHEMA, type PageManifest } from '@amadeus-share
 import { registerMessages, translate } from '../../i18n'
 
 registerMessages({
-  'plugindash.recipeInvalid': { zh: '仪表盘配方无效:{err}', en: 'Invalid dashboard recipe: {err}' },
+  'plugindash.recipeInvalid': { zh: '仪表盘配方无效：{err}', en: 'Invalid dashboard recipe: {err}' },
 })
 
 export interface PluginDashboardOptions {

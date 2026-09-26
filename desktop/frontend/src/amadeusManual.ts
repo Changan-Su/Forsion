@@ -30,15 +30,15 @@ export const MANUAL_PATHS: Record<Locale, string> = {
 
 registerMessages({
   'ammanual.toast.noVault': {
-    zh: '请先打开一个笔记库(Vault),手册会生成到里面',
+    zh: '请先打开一个笔记库（Vault），手册会生成到里面',
     en: 'Open a vault first — the manual is created inside it',
   },
   'ammanual.toast.failed': {
-    zh: '手册生成失败:{err}',
+    zh: '手册生成失败：{err}',
     en: 'Could not create the manual: {err}',
   },
   'ammanual.toast.otherFailed': {
-    zh: '{lang}版手册没能生成:{err}(这一份照常打开)',
+    zh: '{lang}版手册没能生成：{err}（这一份照常打开）',
     en: 'The {lang} copy of the manual could not be created: {err} (this one still opens)',
   },
 })

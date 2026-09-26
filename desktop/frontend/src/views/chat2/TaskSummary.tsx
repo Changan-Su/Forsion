@@ -22,7 +22,7 @@ registerMessages({
   'tsum.state.stopped': { zh: '已停止', en: 'Stopped' },
   'tsum.state.done': { zh: '已完成', en: 'Done' },
   'tsum.elapsed': { zh: '已运行 {t}', en: 'Running {t}' },
-  'tsum.attention.approval': { zh: '需要批准:{name}', en: 'Approval needed: {name}' },
+  'tsum.attention.approval': { zh: '需要批准：{name}', en: 'Approval needed: {name}' },
   'tsum.attention.inquiry': { zh: '需要你回答', en: 'Needs your answer' },
   'tsum.plan': { zh: '计划', en: 'Plan' },
   'tsum.scope': { zh: '工作范围', en: 'Scope' },
@@ -30,7 +30,7 @@ registerMessages({
   'tsum.scope.add': { zh: '添加工作文件夹', en: 'Add working folder' },
   'tsum.scope.remove': { zh: '移出工作范围', en: 'Remove from scope' },
   'tsum.scope.hint': {
-    zh: '加进来的文件夹 Agent 可直接读写、不再逐次弹审批;相对路径仍只相对默认目录解析。',
+    zh: '加进来的文件夹 Agent 可直接读写、不再逐次弹审批；相对路径仍只相对默认目录解析。',
     en: 'Added folders are readable/writable without per-call approval; relative paths still resolve against the default folder.',
   },
   'tsum.sources': { zh: '来源', en: 'Sources' },

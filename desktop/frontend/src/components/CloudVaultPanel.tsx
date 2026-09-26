@@ -13,14 +13,14 @@ registerMessages({
   'cloudvault.title': { zh: '云端笔记库', en: 'Cloud vaults' },
   'cloudvault.myVaults': { zh: '我的库', en: 'My vaults' },
   'cloudvault.sharedWithMe': { zh: '与我共享 · {n}', en: 'Shared with me · {n}' },
-  'cloudvault.sharedEmpty': { zh: '别人共享给你的页面会出现在这里(打开对方发的邀请链接并同意)。', en: 'Pages other people share with you show up here — open their invite link and accept it.' },
+  'cloudvault.sharedEmpty': { zh: '别人共享给你的页面会出现在这里（打开对方发的邀请链接并同意）。', en: 'Pages other people share with you show up here — open their invite link and accept it.' },
   'cloudvault.roleViewer': { zh: '只读', en: 'Read-only' },
   'cloudvault.roleEditor': { zh: '可编辑', en: 'Can edit' },
   'cloudvault.published': { zh: '已发布 · {n}', en: 'Published · {n}' },
-  'cloudvault.publishedEmpty': { zh: '在笔记的「分享 → 发布」里生成公开链接,链接会列在这里。', en: 'Create a public link from a note under Share → Publish, and it will be listed here.' },
+  'cloudvault.publishedEmpty': { zh: '在笔记的「分享 → 发布」里生成公开链接，链接会列在这里。', en: 'Create a public link from a note under Share → Publish, and it will be listed here.' },
   'cloudvault.copyLink': { zh: '复制链接', en: 'Copy link' },
   'cloudvault.unpublish': { zh: '取消发布', en: 'Unpublish' },
-  'cloudvault.unpublished': { zh: '已取消发布,链接立即失效', en: 'Unpublished — the link stopped working immediately' },
+  'cloudvault.unpublished': { zh: '已取消发布，链接立即失效', en: 'Unpublished — the link stopped working immediately' },
 })
 
 export function CloudVaultPanel({ onClose }: { onClose: () => void }): React.ReactElement | null {

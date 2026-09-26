@@ -17,7 +17,7 @@ import { registerMessages, translate } from './i18n'
 
 registerMessages({
   'deeplink.unrecognized': { zh: '无法识别的 Forsion 链接', en: 'Unrecognized Forsion link' },
-  'deeplink.unavailable': { zh: '链接目标不可用(视图未启用或参数非法)', en: 'Link target unavailable (view disabled or bad params)' },
+  'deeplink.unavailable': { zh: '链接目标不可用（视图未启用或参数非法）', en: 'Link target unavailable (view disabled or bad params)' },
 })
 
 const VIEW_DENY = new Set(['browser', 'terminal'])

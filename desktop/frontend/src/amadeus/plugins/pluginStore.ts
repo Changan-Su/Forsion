@@ -75,7 +75,7 @@ import { openWebFloatingPanel } from '../../pluginPanelSeam'
 registerMessages({
   'pluginhost.workFolder.label': { zh: '工作文件夹', en: 'Working folder' },
   'pluginhost.workFolder.desc': {
-    zh: '本插件在笔记库内读写文件的文件夹(相对库根;留空恢复默认=插件名)',
+    zh: '本插件在笔记库内读写文件的文件夹（相对库根；留空恢复默认=插件名）',
     en: 'Folder inside the vault where this plugin reads and writes files (relative to the vault root; leave empty to fall back to the plugin name)',
   },
   'pluginhost.setupFailed': { zh: '插件「{name}」加载失败', en: 'Plugin "{name}" failed to load' },

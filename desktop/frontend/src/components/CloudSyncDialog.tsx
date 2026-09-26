@@ -11,11 +11,11 @@ import { registerMessages, useI18n } from '../i18n'
 registerMessages({
   'csd.title': { zh: '开启云同步', en: 'Turn on cloud sync' },
   'csd.failed': { zh: '开启云同步失败', en: 'Could not turn on cloud sync' },
-  'csd.enabled': { zh: '已开启云同步:云端「{name}」', en: 'Cloud sync is on — cloud folder “{name}”' },
+  'csd.enabled': { zh: '已开启云同步：云端「{name}」', en: 'Cloud sync is on — cloud folder “{name}”' },
   'csd.selectAll': { zh: '全选', en: 'Select all' },
   'csd.selectNone': { zh: '全不选', en: 'Deselect all' },
   'csd.conflictMsg': {
-    zh: '云端工作区根目录已有「{name}」。可以换一个云端文件夹名,或把本 Vault 的同步内容合并进现有文件夹(换机后重新开启同步时选「合并」)。',
+    zh: '云端工作区根目录已有「{name}」。可以换一个云端文件夹名，或把本 Vault 的同步内容合并进现有文件夹（换机后重新开启同步时选「合并」）。',
     en: 'The cloud workspace root already has a folder called “{name}”. Pick a different name for the cloud folder, or merge this vault’s synced content into the existing one (choose Merge when you turn sync back on after switching machines).',
   },
   'csd.newNamePlaceholder': { zh: '新的云端文件夹名', en: 'New cloud folder name' },
@@ -23,14 +23,14 @@ registerMessages({
   'csd.mergeInto': { zh: '合并进「{name}」', en: 'Merge into “{name}”' },
   'csd.useNewName': { zh: '用新名字开启', en: 'Use new name' },
   'csd.intro': {
-    zh: '「{name}」将带完整相对路径同步到云端工作区(双向)。子页面与库内关联默认一并纳入,保留 Vault 里的相对位置;取消勾选即不同步:',
+    zh: '「{name}」将带完整相对路径同步到云端工作区（双向）。子页面与库内关联默认一并纳入，保留 Vault 里的相对位置；取消勾选即不同步：',
     en: '“{name}” will sync to the cloud workspace with its full relative path (two-way). Subpages and in-vault links are included by default and keep their position in the vault; uncheck anything you do not want synced:',
   },
   'csd.analyzing': { zh: '正在分析关联…', en: 'Analyzing links…' },
   'csd.groupSubPages': { zh: '子页面', en: 'Subpages' },
   'csd.groupLinkedPages': { zh: '关联笔记', en: 'Linked notes' },
   'csd.groupAssets': { zh: '附件', en: 'Attachments' },
-  'csd.nothingElse': { zh: '没有子页面与库内关联,仅同步此条目。', en: 'No subpages or in-vault links — only this item will sync.' },
+  'csd.nothingElse': { zh: '没有子页面与库内关联，仅同步此条目。', en: 'No subpages or in-vault links — only this item will sync.' },
   'csd.enabling': { zh: '开启中…', en: 'Turning on…' },
   'csd.enable': { zh: '开启同步', en: 'Turn on sync' },
 })

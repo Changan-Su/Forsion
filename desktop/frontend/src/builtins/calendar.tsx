@@ -37,7 +37,7 @@ const CalendarConfigView = lazyRetry(() => import('../views/CalendarConfigView')
 
 registerMessages({
   'calendar.builtinDesc': {
-    zh: '日历 Space:汇总全库多维表的日期与待办属性,支持 .ics 订阅。',
+    zh: '日历 Space：汇总全库多维表的日期与待办属性，支持 .ics 订阅。',
     en: 'Calendar Space: aggregates date and to-do properties across your vault, with .ics subscriptions.',
   },
 })

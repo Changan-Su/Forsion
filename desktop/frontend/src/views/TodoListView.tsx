@@ -38,8 +38,8 @@ registerMessages({
   'todolist.emptyTitle': { zh: '还没有待办。', en: 'No to-dos yet.' },
   'todolist.emptyHintA': { zh: '在笔记里写 ', en: 'Write ' },
   'todolist.emptyExample': { zh: '- [ ] 事项 @2026-09-01', en: '- [ ] Task @2026-09-01' },
-  'todolist.emptyHintB': { zh: '(打 ', en: ' in a note (type ' },
-  'todolist.emptyHintC': { zh: ' 有候选),或在下面直接加一条。', en: ' for suggestions), or add one below.' },
+  'todolist.emptyHintB': { zh: '（打 ', en: ' in a note (type ' },
+  'todolist.emptyHintC': { zh: ' 有候选），或在下面直接加一条。', en: ' for suggestions), or add one below.' },
 })
 
 const DONE_KEY = 'done'

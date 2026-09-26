@@ -31,10 +31,10 @@ import { resolveFileName } from '../lib/vaultFiles'
 import { registerMessages, useI18n } from '../../i18n'
 
 registerMessages({
-  'blockhost.openTitle': { zh: '打开(⌘/Ctrl+点击在新标签页打开)', en: 'Open (⌘/Ctrl+click to open in a new tab)' },
+  'blockhost.openTitle': { zh: '打开（⌘/Ctrl+点击在新标签页打开）', en: 'Open (⌘/Ctrl+click to open in a new tab)' },
   'blockhost.openAria': { zh: '打开引用的内容', en: 'Open the referenced content' },
   'blockhost.viewSource': { zh: '查看源码', en: 'View source' },
-  'blockhost.dragHandle': { zh: '点击打开菜单,按住拖动', en: 'Click for menu, hold to drag' },
+  'blockhost.dragHandle': { zh: '点击打开菜单，按住拖动', en: 'Click for menu, hold to drag' },
   'blockhost.addBelow': { zh: '在下方插入块', en: 'Add block below' },
   'blockhost.copyEmbedRef': { zh: '复制嵌入引用', en: 'Copy embed reference' },
   'blockhost.duplicate': { zh: '复制块', en: 'Duplicate block' },
@@ -42,7 +42,7 @@ registerMessages({
   'blockhost.removeEmbed': { zh: '移除嵌入', en: 'Remove embed' },
   'blockhost.delete': { zh: '删除', en: 'Delete' },
   'blockhost.openInTab': { zh: '在 Forsion 标签页中打开', en: 'Open in a Forsion tab' },
-  'blockhost.openInTabAnnotate': { zh: '在 Forsion 标签页中打开(可批注)', en: 'Open in a Forsion tab (with annotations)' },
+  'blockhost.openInTabAnnotate': { zh: '在 Forsion 标签页中打开（可批注）', en: 'Open in a Forsion tab (with annotations)' },
   'blockhost.openWithSystem': { zh: '用系统默认程序打开', en: 'Open with the default app' },
   'blockhost.open': { zh: '打开 ↗', en: 'Open ↗' },
   'blockhost.startAt': { zh: '起播时刻', en: 'Start time' },

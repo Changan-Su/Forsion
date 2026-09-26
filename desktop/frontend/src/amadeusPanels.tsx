@@ -18,16 +18,16 @@ registerMessages({
   'amxpanel.searchHead': { zh: '全文搜索', en: 'Full-text search' },
   'amxpanel.searchPlaceholder': { zh: '搜索全部笔记…', en: 'Search all notes…' },
   'amxpanel.saveCollection': { zh: '存为集合', en: 'Save as collection' },
-  'amxpanel.saveCollectionTip': { zh: '存为集合(左栏可一键回放这次搜索)', en: 'Save as a collection (replay this search from the sidebar in one click)' },
-  'amxpanel.saveCollectionHint': { zh: '集合会出现在左栏,点击即重放这次搜索。', en: 'The collection shows up in the sidebar — click it to replay this search.' },
+  'amxpanel.saveCollectionTip': { zh: '存为集合（左栏可一键回放这次搜索）', en: 'Save as a collection (replay this search from the sidebar in one click)' },
+  'amxpanel.saveCollectionHint': { zh: '集合会出现在左栏，点击即重放这次搜索。', en: 'The collection shows up in the sidebar — click it to replay this search.' },
   'amxpanel.noVault': { zh: '先打开一个 Vault。', en: 'Open a vault first.' },
-  'amxpanel.searchEmpty': { zh: '输入关键词,搜遍全部笔记内容。', en: 'Type a keyword to search the contents of every note.' },
+  'amxpanel.searchEmpty': { zh: '输入关键词，搜遍全部笔记内容。', en: 'Type a keyword to search the contents of every note.' },
   'amxpanel.noResults': { zh: '无结果', en: 'No results' },
   'amxpanel.tagsHead': { zh: '标签 · {n}', en: 'Tags · {n}' },
   'amxpanel.tagsEmpty': { zh: '还没有 #标签。在笔记里写 #灵感 这样的行内标签即可出现在这里。', en: 'No #tags yet. Write an inline tag like #idea in a note and it will show up here.' },
   'amxpanel.graphHead': { zh: '关系图 · 当前笔记', en: 'Graph · current note' },
   'amxpanel.graphNoNote': { zh: '未打开笔记', en: 'No note open' },
-  'amxpanel.graphEmpty': { zh: '这篇笔记还没有链接(出链 [[…]] 或反链)。', en: 'This note has no links yet — no outgoing [[…]] links and no backlinks.' },
+  'amxpanel.graphEmpty': { zh: '这篇笔记还没有链接（出链 [[…]] 或反链）。', en: 'This note has no links yet — no outgoing [[…]] links and no backlinks.' },
 })
 
 const ps = () => usePageStore.getState()

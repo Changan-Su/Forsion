@@ -135,7 +135,7 @@ registerMessages({
   // —— 下面三条是**落盘产物命名**:它们会变成永久的 git 提交标题,所以在写入那一刻按当前界面语言求值。——
   'studio.history.untitled': { zh: '未命名版本', en: 'Untitled version' },
   'studio.history.backupName': { zh: '恢复前的备份', en: 'Backup before restore' },
-  'studio.history.restorePrefix': { zh: '恢复到:', en: 'Restore:' },
+  'studio.history.restorePrefix': { zh: '恢复到：', en: 'Restore:' },
   'studio.history.noChanges': { zh: '与上一个版本相比没有改动。', en: 'No changes since the last version.' },
   'studio.history.files': { zh: '{count} 个文件', en: '{count} files' },
   'studio.history.auto': { zh: '自动', en: 'Auto' },

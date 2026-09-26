@@ -226,7 +226,7 @@ describe('HistoryPanel 恢复与旧快照', () => {
     const loads = versions.mock.calls.length
     await click(confirmBox.querySelector('.csu-primary'))
     // 备份 / 恢复提交的标题同样是落盘产物命名,必须带着当前语言的文案过桥。
-    expect(restore).toHaveBeenCalledWith('/projects/a', 'sha-1', { backup: '恢复前的备份', restorePrefix: '恢复到:' })
+    expect(restore).toHaveBeenCalledWith('/projects/a', 'sha-1', { backup: '恢复前的备份', restorePrefix: '恢复到：' })
     expect(onRestored).toHaveBeenCalledTimes(1)
     expect(host.querySelector('[role="status"]')?.textContent).toContain('备份版本')
     expect(versions.mock.calls.length).toBeGreaterThan(loads)

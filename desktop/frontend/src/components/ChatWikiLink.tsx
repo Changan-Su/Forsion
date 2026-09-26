@@ -12,8 +12,8 @@ import { sessionIdOfTarget } from '../views/chat2/chatDragRef'
 import { deskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 
 registerMessages({
-  'chatwiki.mediaTipBadAnchor': { zh: '{path}(时刻锚点无效,从头播放)', en: '{path} (invalid time anchor — playing from the start)' },
-  'chatwiki.mediaTipBadRangeEnd': { zh: '{path} {stamp}(区间终点无效,已忽略)', en: '{path} {stamp} (invalid range end — ignored)' },
+  'chatwiki.mediaTipBadAnchor': { zh: '{path}（时刻锚点无效，从头播放）', en: '{path} (invalid time anchor — playing from the start)' },
+  'chatwiki.mediaTipBadRangeEnd': { zh: '{path} {stamp}（区间终点无效，已忽略）', en: '{path} {stamp} (invalid range end — ignored)' },
 })
 
 export function ChatWikiLink({ inner }: { inner: string }) {

@@ -12,8 +12,8 @@ import { planNewChat, planSessionOpen, type ChatLeaf } from './sessionOpenPlan'
 import { registerMessages, translate } from './i18n'
 
 registerMessages({
-  'orbits.rotate.queued': { zh: '已开新会话,正在后台总结上一段的记忆', en: 'New session started; summarizing the previous one in the background' },
-  'orbits.rotate.skipped': { zh: '已开新会话(这次没有采集记忆:Historian 未启用或正忙)', en: 'New session started (memory was not collected this time: Historian is off or busy)' },
+  'orbits.rotate.queued': { zh: '已开新会话，正在后台总结上一段的记忆', en: 'New session started; summarizing the previous one in the background' },
+  'orbits.rotate.skipped': { zh: '已开新会话（这次没有采集记忆：Historian 未启用或正忙）', en: 'New session started (memory was not collected this time: Historian is off or busy)' },
   'orbits.rotate.none': { zh: '已开新会话', en: 'New session started' },
 })
 

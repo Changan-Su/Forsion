@@ -20,22 +20,22 @@ import type { AgentConfig } from '../../types'
 registerMessages({
   'orbit.bar.solo': { zh: '私聊 · 工作区 = {name} 的 Library · 历史会话仅 Agent 可读', en: 'Direct · workspace = {name}’s Library · past sessions are readable by the agent only' },
   'orbit.bar.soloEngine': { zh: '私聊 · 工作区 = {name} 的 Library', en: 'Direct · workspace = {name}’s Library' },
-  'orbit.bar.newSession': { zh: '新会话(先总结记忆)', en: 'New session (summarize memory first)' },
+  'orbit.bar.newSession': { zh: '新会话（先总结记忆）', en: 'New session (summarize memory first)' },
   'orbit.bar.newSessionEngine': { zh: '新会话', en: 'New session' },
   'orbit.bar.raiseTeam': { zh: '组建团队', en: 'Start a team' },
-  'orbit.bar.teamCreated': { zh: '已建立团队 {name},对话在新标签继续', en: 'Team {name} created — the conversation continues in a new tab' },
+  'orbit.bar.teamCreated': { zh: '已建立团队 {name}，对话在新标签继续', en: 'Team {name} created — the conversation continues in a new tab' },
   'orbit.bar.teamMode': { zh: '团队模式', en: 'Team mode' },
   'orbit.bar.members': { zh: '{n} 人', en: '{n} members' },
   'orbit.bar.addPeople': { zh: '拉人', en: 'Add people' },
   'orbit.bar.exit': { zh: '退出团队模式', en: 'Exit team mode' },
   'orbit.bar.joined': { zh: '{names} 加入 · 此前对话已摘要给成员', en: '{names} joined · earlier conversation summarized for members' },
-  'orbit.bar.exited': { zh: '已退出团队模式,由 {name} 继续', en: 'Left team mode; {name} continues' },
+  'orbit.bar.exited': { zh: '已退出团队模式，由 {name} 继续', en: 'Left team mode; {name} continues' },
   'orbit.bar.working': { zh: '{n} 人工作中', en: '{n} working' },
   'orbit.bar.waiting': { zh: '{name} 等待审批', en: '{name} waiting for approval' },
   // 头像是首字 / 图片且对读屏隐藏(AgentAvatar 恒 aria-hidden / alt=""),名字由头像组的可访问名补上。
   'orbit.bar.memberList': { zh: '成员：{names}', en: 'Members: {names}' },
-  'orbit.bar.memberWorking': { zh: '{name}(工作中)', en: '{name} (working)' },
-  'orbit.bar.memberWaiting': { zh: '{name}(等待审批)', en: '{name} (waiting for approval)' },
+  'orbit.bar.memberWorking': { zh: '{name}（工作中）', en: '{name} (working)' },
+  'orbit.bar.memberWaiting': { zh: '{name}（等待审批）', en: '{name} (waiting for approval)' },
   'orbit.bar.listSep': { zh: '、', en: ', ' },
 })
 

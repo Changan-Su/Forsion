@@ -24,7 +24,7 @@ import { deleteWithUndo, isPendingDelete } from '../views/automation/automationL
 registerMessages({
   'special.muse.sleeping': { zh: '休眠至 {time}', en: 'Sleeping until {time}' },
   'special.muse.sleepingTitle': {
-    zh: 'Muse 判断暂时没事可做,跳过心跳到这个时刻;你一有动作、规则命中或日程到期都会提前叫醒它。理由:{reason}',
+    zh: 'Muse 判断暂时没事可做，跳过心跳到这个时刻；你一有动作、规则命中或日程到期都会提前叫醒它。理由：{reason}',
     en: 'Muse found nothing to do and skips its heartbeat until then; your activity, a rule or a due schedule wakes it earlier. Reason: {reason}',
   },
 })

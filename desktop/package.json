@@ -187,6 +187,7 @@
     "check:sidewidth": "node scripts/side-width.check.cjs",
     "check:firstclick": "node scripts/first-click.check.cjs",
     "check:firstenter": "node scripts/first-enter.check.cjs",
+    "fix:zhpunct": "node scripts/zh-punct.codemod.cjs",
     "check:agentprofile": "node scripts/agent-profile.check.cjs",
     "check:projectdetails": "node scripts/project-details.check.cjs",
     "check:teamoutputs": "node scripts/team-outputs.check.cjs",

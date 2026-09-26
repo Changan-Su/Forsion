@@ -35,9 +35,9 @@ import { isCoarsePointer } from '../../touch'
 import { registerMessages, subscribeLocale, translate } from '../../i18n'
 
 registerMessages({
-  'blocklayer.dragHandle': { zh: '点击打开菜单,按住拖动', en: 'Click for menu, hold to drag' },
+  'blocklayer.dragHandle': { zh: '点击打开菜单，按住拖动', en: 'Click for menu, hold to drag' },
   'blocklayer.addBelow': { zh: '在下方插入块', en: 'Add block below' },
-  'blocklayer.cardGrab': { zh: '选中所在卡片,按住拖动整卡', en: 'Select card, hold to drag it' },
+  'blocklayer.cardGrab': { zh: '选中所在卡片，按住拖动整卡', en: 'Select card, hold to drag it' },
   'blocklayer.expandChildren': { zh: '展开子项', en: 'Expand children' },
   'blocklayer.foldChildren': { zh: '折叠子项', en: 'Collapse children' },
   'blocklayer.expandSection': { zh: '展开小节', en: 'Expand section' },

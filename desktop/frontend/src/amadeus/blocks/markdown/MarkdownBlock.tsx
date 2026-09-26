@@ -154,16 +154,16 @@ registerMessages({
   'mdblock.slash.button': { zh: '按钮', en: 'Button' },
   // 弹框(askString)
   'mdblock.link.title': { zh: '插入链接', en: 'Insert link' },
-  'mdblock.link.label': { zh: '输入或粘贴地址(裸域名会自动补 https://)', en: 'Type or paste an address (a bare domain gets https:// added)' },
+  'mdblock.link.label': { zh: '输入或粘贴地址（裸域名会自动补 https://)', en: 'Type or paste an address (a bare domain gets https:// added)' },
   'mdblock.bookmark.title': { zh: '插入书签', en: 'Insert bookmark' },
-  'mdblock.bookmark.label': { zh: '粘贴链接地址(https:// 开头);YouTube 链接会直接内嵌播放器。', en: 'Paste a link (starting with https://); a YouTube link embeds the player directly.' },
+  'mdblock.bookmark.label': { zh: '粘贴链接地址（https:// 开头）；YouTube 链接会直接内嵌播放器。', en: 'Paste a link (starting with https://); a YouTube link embeds the player directly.' },
   'mdblock.embed.title': { zh: '嵌入块引用', en: 'Embed a block reference' },
-  'mdblock.embed.label': { zh: '形如 笔记名#块ID(块菜单「复制嵌入引用」可得);也可只填笔记名嵌整篇首块。', en: 'Shaped like note-name#block-id (the block menu’s “Copy embed reference” gives you one); a note name alone embeds that note’s first block.' },
+  'mdblock.embed.label': { zh: '形如 笔记名#块ID（块菜单「复制嵌入引用」可得）；也可只填笔记名嵌整篇首块。', en: 'Shaped like note-name#block-id (the block menu’s “Copy embed reference” gives you one); a note name alone embeds that note’s first block.' },
   'mdblock.embed.confirm': { zh: '嵌入', en: 'Embed' },
   // 提示条
   'mdblock.toast.staleTarget': { zh: '文件已创建，但原插入位置已失效（笔记已切换或块已删除）', en: 'The file was created, but the original insert position is gone (the note changed or the block was deleted)' },
   'mdblock.toast.slashFailed': { zh: '「{label}」失败：{message}', en: '“{label}” failed: {message}' },
-  'mdblock.plugin.runNotString': { zh: 'run() 必须返回字符串,实际是 {type}', en: 'run() must return a string, but it returned {type}' },
+  'mdblock.plugin.runNotString': { zh: 'run() 必须返回字符串，实际是 {type}', en: 'run() must return a string, but it returned {type}' },
   'mdblock.plugin.runTooLong': { zh: 'run() 返回内容过长', en: 'run() returned too much content' },
   'mdblock.plugin.runControlChars': { zh: 'run() 返回内容含控制字符', en: 'run() returned content containing control characters' },
   // 「粘贴为」菜单
@@ -175,7 +175,7 @@ registerMessages({
   'mdblock.pasteAs.embedHint': { zh: '播放器 / 网页', en: 'Player / web page' },
   // 菜单空态与脚注
   'mdblock.menu.noMatch': { zh: '无匹配项', en: 'No matches' },
-  'mdblock.menu.noDatabase': { zh: '库里还没有数据库(用 /数据库 新建一个)', en: 'No databases in this vault yet (create one with /database)' },
+  'mdblock.menu.noDatabase': { zh: '库里还没有数据库（用 /数据库 新建一个）', en: 'No databases in this vault yet (create one with /database)' },
   'mdblock.foot.select': { zh: '↑↓ 选择', en: '↑↓ Select' },
   'mdblock.foot.confirm': { zh: '↵ 确认', en: '↵ Confirm' },
   'mdblock.foot.insert': { zh: '↵ 插入', en: '↵ Insert' },

@@ -26,7 +26,7 @@ describe('ipcErrorText', () => {
     expect(ipcErrorText(e)).toBe("Couldn't read the local folder, so this round won't treat missing files as deleted: /v/Notes: EACCES: permission denied")
     expect(ipcErrorText("Error invoking remote method 'spaces:delete': Error: invalid-space-id")).toBe('Invalid Space identifier')
     setLocaleGlobal('zh')
-    expect(ipcErrorText('vault-missing: /Users/a/vault')).toBe('vault 目录不存在:/Users/a/vault')
+    expect(ipcErrorText('vault-missing: /Users/a/vault')).toBe('vault 目录不存在：/Users/a/vault')
   })
 
   it('不认识的原样透传(只剥前缀)', () => {

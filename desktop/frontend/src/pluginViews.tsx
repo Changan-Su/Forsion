@@ -16,7 +16,7 @@ import type { ViewContribution } from '@amadeus/plugins/types'
 import { registerMessages, translate } from './i18n'
 
 registerMessages({
-  'pluginview.mountFailed': { zh: '插件视图加载失败(见控制台)', en: 'Plugin view failed to load (see console)' },
+  'pluginview.mountFailed': { zh: '插件视图加载失败（见控制台）', en: 'Plugin view failed to load (see console)' },
 })
 
 /** DOM-mount 宿主:div 交给插件的 mount(),卸载时跑其返回的清理函数。

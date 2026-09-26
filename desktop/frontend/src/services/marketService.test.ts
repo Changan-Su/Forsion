@@ -15,7 +15,7 @@ describe('installMarket 的错误文案', () => {
   })
   it('resolve 原因码套上界面语言的文案(测试钉 zh)', async () => {
     withInstallError("Error invoking remote method 'market:install': Error: resolve: HTTP 502")
-    await expect(installMarket('x')).rejects.toThrow('没能从 Forsion 服务器拿到下载地址(HTTP 502)')
+    await expect(installMarket('x')).rejects.toThrow('没能从 Forsion 服务器拿到下载地址（HTTP 502）')
     await expect(installMarket('x')).rejects.toMatchObject({ stage: 'resolve' }) // 界面据此不附 GitHub 网络指引
   })
 })

@@ -9,13 +9,13 @@ import './foldRows.css'
 
 registerMessages({
   'dbfold.title': { zh: '行折叠', en: 'Fold rows' },
-  'dbfold.hint': { zh: '键相同的行收成一条汇总行:数字求和,不同的值列出内容;点汇总行展开。', en: 'Rows with the same key collapse into one summary row: numbers are summed, differing values are listed. Click a summary row to expand it.' },
-  'dbfold.by': { zh: '折叠键(值相同才折)', en: 'Fold key (same value)' },
+  'dbfold.hint': { zh: '键相同的行收成一条汇总行：数字求和，不同的值列出内容；点汇总行展开。', en: 'Rows with the same key collapse into one summary row: numbers are summed, differing values are listed. Click a summary row to expand it.' },
+  'dbfold.by': { zh: '折叠键（值相同才折）', en: 'Fold key (same value)' },
   'dbfold.time': { zh: '时间窗列', en: 'Time window column' },
   'dbfold.timeNone': { zh: '不按时间', en: 'None' },
-  'dbfold.minutes': { zh: '时间窗(分钟)', en: 'Window (minutes)' },
+  'dbfold.minutes': { zh: '时间窗（分钟）', en: 'Window (minutes)' },
   'dbfold.off': { zh: '关闭行折叠', en: 'Turn off folding' },
-  'dbfold.blocked': { zh: '层级视图下不折叠(父子缩进优先)', en: 'Not available while the hierarchy is on' },
+  'dbfold.blocked': { zh: '层级视图下不折叠（父子缩进优先）', en: 'Not available while the hierarchy is on' },
   'dbfold.noCols': { zh: '没有可用的列', en: 'No columns available' },
   'dbfold.expand': { zh: '展开全部', en: 'Expand all' },
   'dbfold.collapse': { zh: '折叠全部', en: 'Collapse all' },

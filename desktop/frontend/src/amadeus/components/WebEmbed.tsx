@@ -6,9 +6,9 @@ import { BookmarkCard, VideoIframe, youtubeId, bilibiliRef } from './BookmarkCar
 import { registerMessages, useI18n } from '../../i18n'
 
 registerMessages({
-  'webembed.blocked': { zh: '已拦截:网页嵌入只允许公网 http(s) 地址（拒绝 file/data/javascript、localhost 与内网）。', en: 'Blocked: web embeds only allow public http(s) addresses — file/data/javascript, localhost and private networks are rejected.' },
+  'webembed.blocked': { zh: '已拦截：网页嵌入只允许公网 http(s) 地址（拒绝 file/data/javascript、localhost 与内网）。', en: 'Blocked: web embeds only allow public http(s) addresses — file/data/javascript, localhost and private networks are rejected.' },
   'webembed.toCard': { zh: '转为书签卡', en: 'Convert to bookmark card' },
-  'webembed.toCardTitle': { zh: '改回裸 URL 一行(书签卡)', en: 'Turn it back into a plain URL line (bookmark card)' },
+  'webembed.toCardTitle': { zh: '改回裸 URL 一行（书签卡）', en: 'Turn it back into a plain URL line (bookmark card)' },
   'webembed.unsupported': { zh: '此端不支持内嵌网页，已降级为书签卡。', en: 'Embedded web pages are not supported here, so this fell back to a bookmark card.' },
   'webembed.wake': { zh: '▶ 唤醒网页', en: '▶ Wake page' },
   'webembed.pausedNote': { zh: '编辑本段时会自动暂停', en: 'Pauses automatically while you edit this paragraph' },

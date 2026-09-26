@@ -20,16 +20,16 @@ registerMessages({
   'amxcode.copyTitle': { zh: '复制代码', en: 'Copy code' },
   'amxcode.copied': { zh: '已复制', en: 'Copied' },
   'amxcode.run': { zh: '运行', en: 'Run' },
-  'amxcode.runTitle': { zh: '在内置终端运行(底部面板)', en: 'Run in the built-in terminal (bottom panel)' },
+  'amxcode.runTitle': { zh: '在内置终端运行（底部面板）', en: 'Run in the built-in terminal (bottom panel)' },
   'amxcode.wrap': { zh: '折行', en: 'Wrap' },
-  'amxcode.wrapTitle': { zh: '切换自动折行(视图态,不改内容)', en: 'Toggle line wrap (view only, does not change content)' },
+  'amxcode.wrapTitle': { zh: '切换自动折行（视图态，不改内容）', en: 'Toggle line wrap (view only, does not change content)' },
   'amxcode.linenoOff': { zh: '取消行号', en: 'Hide numbers' },
   'amxcode.lineno': { zh: '行号', en: 'Numbers' },
-  'amxcode.linenoDisabled': { zh: '折行开着时不显示行号(软换行无独立行号)', en: 'Line numbers are unavailable while wrapping is on (soft-wrapped lines have no number of their own)' },
-  'amxcode.linenoTitle': { zh: '切换行号(视图态,不改内容)', en: 'Toggle line numbers (view only, does not change content)' },
+  'amxcode.linenoDisabled': { zh: '折行开着时不显示行号（软换行无独立行号）', en: 'Line numbers are unavailable while wrapping is on (soft-wrapped lines have no number of their own)' },
+  'amxcode.linenoTitle': { zh: '切换行号（视图态，不改内容）', en: 'Toggle line numbers (view only, does not change content)' },
   'amxcode.expand': { zh: '展开', en: 'Unfold' },
   'amxcode.collapse': { zh: '折叠', en: 'Fold' },
-  'amxcode.collapseTitle': { zh: '折叠代码块(限高 8 行,视图态)', en: 'Fold the code block (8-line limit, view only)' },
+  'amxcode.collapseTitle': { zh: '折叠代码块（限高 8 行，视图态）', en: 'Fold the code block (8-line limit, view only)' },
 })
 
 const lowlight = createLowlight(common)

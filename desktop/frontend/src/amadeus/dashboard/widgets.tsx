@@ -12,7 +12,7 @@ import { formatZonedClock } from '../../format/time'
 
 registerMessages({
   'dashwidget.sectionUntitled': { zh: '未命名分区', en: 'Untitled section' },
-  'dashwidget.clockBadTz': { zh: '时区「{tz}」无效,已按本机时间显示', en: 'Time zone "{tz}" is invalid, showing local time instead' },
+  'dashwidget.clockBadTz': { zh: '时区「{tz}」无效，已按本机时间显示', en: 'Time zone "{tz}" is invalid, showing local time instead' },
   'dashwidget.wmoClear': { zh: '晴', en: 'Clear' },
   'dashwidget.wmoPartly': { zh: '多云', en: 'Partly cloudy' },
   'dashwidget.wmoOvercast': { zh: '阴', en: 'Overcast' },
@@ -26,11 +26,11 @@ registerMessages({
   'dashwidget.weatherNoCity': { zh: '未指定城市', en: 'No city specified' },
   'dashwidget.weatherCityNotFound': { zh: '找不到「{city}」', en: 'Could not find "{city}"' },
   'dashwidget.weatherBadResponse': { zh: '返回数据异常', en: 'Unexpected response from the weather service' },
-  'dashwidget.weatherError': { zh: '天气不可用:{msg}', en: 'Weather unavailable: {msg}' },
+  'dashwidget.weatherError': { zh: '天气不可用：{msg}', en: 'Weather unavailable: {msg}' },
   'dashwidget.weatherWind': { zh: '风 {n} km/h', en: 'Wind {n} km/h' },
   'dashwidget.loading': { zh: '加载中…', en: 'Loading…' },
   'dashwidget.webviewNoUrl': { zh: '未指定 url', en: 'No url specified' },
-  'dashwidget.webviewBlocked': { zh: '已拦截:网页卡片只允许公网 http(s) 地址（拒绝 file/data/javascript、localhost 与内网）。', en: 'Blocked: web cards only allow public http(s) addresses (file, data and javascript URLs, localhost and private networks are rejected).' },
+  'dashwidget.webviewBlocked': { zh: '已拦截：网页卡片只允许公网 http(s) 地址（拒绝 file/data/javascript、localhost 与内网）。', en: 'Blocked: web cards only allow public http(s) addresses (file, data and javascript URLs, localhost and private networks are rejected).' },
   'dashwidget.webviewUnsupported': { zh: '此端不支持内嵌网页', en: 'Embedded web pages are not supported on this platform' },
 })
 

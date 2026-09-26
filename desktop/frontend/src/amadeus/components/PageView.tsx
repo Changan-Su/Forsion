@@ -31,7 +31,7 @@ registerMessages({
   'amxpv.emptyBlock': { zh: '空块', en: 'Empty block' },
   'amxpv.openVault': { zh: '打开一个 Vault，或新建页面开始。', en: 'Open a vault, or create a page to get started.' },
   'amxpv.renameTitle': { zh: '点击重命名页面', en: 'Click to rename the page' },
-  'amxpv.expandSection': { zh: '展开小节({n} 行)', en: 'Expand section ({n} rows)' },
+  'amxpv.expandSection': { zh: '展开小节（{n} 行）', en: 'Expand section ({n} rows)' },
   'amxpv.foldSection': { zh: '折叠小节', en: 'Collapse section' },
   'amxpv.addBlock': { zh: '＋ 新块', en: '＋ New block' },
   'amxpv.dndHint': { zh: '拖动 ⠿ 到列边缘可分栏 · 拖到行间可新建行', en: 'Drag ⠿ to a column edge to split into columns · drop between rows to add a row' },
