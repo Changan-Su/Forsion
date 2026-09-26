@@ -2528,6 +2528,11 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle('fs:trash', async (_e, p: string) => {
     if (!p || typeof p !== 'string') throw new Error('非法路径')
+    // 已经不在了 = 目的已达成(幂等):移除项目时它可能从没建过 .tangu/。lstat 不跟软链,悬空软链也照常移走
+    if (!(await lstat(p).then(() => true).catch(() => false))) return { ok: true, missing: true }
+    // 台架接缝:真 Electron 仪器验「移到废纸篓」时挪进这个临时目录,不往用户的真废纸篓里塞东西
+    const e2eTrash = process.env.FORSION_E2E_TRASH_DIR
+    if (e2eTrash) { await mkdir(e2eTrash, { recursive: true }); await rename(p, join(e2eTrash, `${Date.now()}-${basename(p)}`)); return { ok: true } }
     await shell.trashItem(p) // 移入系统回收站(可恢复),不做不可逆删除
     return { ok: true }
   })

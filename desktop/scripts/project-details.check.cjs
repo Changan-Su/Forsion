@@ -258,6 +258,87 @@ async function run(app, win, stub, seen, home) {
   check('9a 英文 × 暗色三页都不横向溢出', overflowEn.every(([, ok]) => ok), JSON.stringify(overflowEn))
   const dark = await win.evaluate(() => document.documentElement.getAttribute('data-mode'))
   check('9b 暗色确实生效(html[data-mode=dark])', dark === 'dark', String(dark))
+
+  // ── 11 侧栏「查看详情」/「移除工作区」/「删除 Agent」(会删东西,放最后) ───────────────────
+  const projectDir = path.join(home, 'Demo Project'), trashDir = path.join(home, 'e2e-trash')
+  const groupHead = (name) => win.locator('.t2s-folder-row').filter({ hasText: name }).first()
+  const orbitRow = (name) => win.locator('.t2o-row').filter({ hasText: name }).first()
+  const menuItem = (act) => win.locator(`.ctx-menu [data-act="${act}"]`)
+  const dialog = win.locator('[data-remove-dialog] .dialog')
+  const activeSession = () => win.evaluate(() => (document.querySelector('[data-chat-surface="chat"]') || {}).getAttribute?.('data-session-id') || null)
+  // 11a(英文 × 暗色)移除对话框:正文、勾选项、取消 = 什么都不删
+  await groupHead('Demo Project').click({ button: 'right' })
+  await menuItem('ws-remove').click()
+  await dialog.waitFor()
+  const enDialog = await dialog.evaluate((el) => ({ title: el.querySelector('.dialog-title').textContent, msg: el.querySelector('.dialog-msg').textContent, check: !!el.querySelector('.dialog-check input[type=checkbox]:not(:checked)') }))
+  await win.waitForTimeout(350) // 对话框入场动画走完再截
+  await win.screenshot({ path: shots.removeDialogEn = shot('remove-project-dialog-en-dark') })
+  await dialog.locator('.dialog-btn').first().click()
+  await dialog.waitFor({ state: 'detached' })
+  check('11a 英文:「Remove workspace」对话框(3 个会话、项目文件夹不删、勾选项缺省不勾);取消后什么都没删', /Remove workspace "Demo Project"/.test(enDialog.title) && /3 session/.test(enDialog.msg) && /folder on disk is not deleted/.test(enDialog.msg) && enDialog.check && !seen.sessionDeletes.length, JSON.stringify(enDialog))
+
+  await win.evaluate(() => { localStorage.setItem('tangu_locale', 'zh'); localStorage.setItem('forsion_theme_pref', 'light') })
+  await win.reload({ waitUntil: 'domcontentloaded' })
+  await win.waitForSelector('.t2sw, .t2s-side', { timeout: 30_000 })
+  await sleep(1000)
+  await openSession(win, 'Rootless chat', 'pd-rootless')
+  if (!(await details.count())) await win.locator('.dv-edge-right').click()
+  await details.locator('[data-agent-profile="xyra"]').waitFor()
+  await win.locator('.dv-edge-right').click() // 收起右栏:「查看详情」得自己把它展开
+  await win.waitForTimeout(400)
+  const closedBefore = !(await win.locator('[data-tangu-details]').isVisible().catch(() => false))
+  // 11b 项目菜单「查看详情」:右栏展开、只有一份详情、显示 Demo Project,主区会话不变,没有「当前会话」标签
+  await groupHead('Demo Project').click({ button: 'right' })
+  await menuItem('ws-details').click()
+  const subjectProject = win.locator('[data-tangu-details][data-details-subject="project"] [data-project-profile]')
+  await subjectProject.waitFor({ timeout: 10_000 }).catch(() => {})
+  await subjectProject.locator('[data-project-executor]').first().waitFor({ timeout: 10_000 }).catch(() => {})
+  const sp = { closedBefore, panels: await win.locator('[data-tangu-details]').count(), path: await subjectProject.getAttribute('data-project-profile').catch(() => null), active: await activeSession(), currentTags: await subjectProject.locator('.project-executor-tag').filter({ hasText: '当前会话' }).count() }
+  await win.waitForTimeout(300)
+  await dismissToasts(win)
+  await win.screenshot({ path: shots.detailsProject = shot('details-subject-project-zh-light') })
+  check('11b 右栏收起 → 项目菜单「查看详情」:右栏展开且只有一份、显示 Demo Project;主区仍是无根会话;没有「当前会话」标签', sp.closedBefore && sp.panels === 1 && /Demo Project$/.test(sp.path || '') && sp.active === 'pd-rootless' && sp.currentTags === 0, JSON.stringify(sp))
+  // 11c 「回到当前会话」→ 回到跟随(无根会话 = xyra 的 Agent 详情)
+  await win.locator('[data-act="details-back"]').click()
+  await details.locator('[data-agent-profile="xyra"]').waitFor({ timeout: 10_000 }).catch(() => {})
+  check('11c 「回到当前会话」→ 右栏回到跟随当前会话', await win.locator('[data-details-subject]').count() === 0 && await details.locator('[data-agent-profile="xyra"]').count() > 0)
+  // 11d Agent 行「查看详情」→ Coder 的 Agent 详情;切会话 → 自动回到跟随
+  await orbitRow('Coder').click({ button: 'right' })
+  await menuItem('agent-details').click()
+  const subjectAgent = win.locator('[data-tangu-details][data-details-subject="agent"] [data-agent-profile="coder"]')
+  await subjectAgent.waitFor({ timeout: 10_000 }).catch(() => {})
+  const agentShown = await subjectAgent.count() === 1 && (await activeSession()) === 'pd-rootless'
+  await win.screenshot({ path: shots.detailsAgent = shot('details-subject-agent-zh-light') })
+  await openSession(win, 'Default chat', 'pd-default')
+  await win.waitForTimeout(400)
+  check('11d Agent 行「查看详情」→ 右栏显示 Coder、主区不动;切会话后自动回到跟随', agentShown && await win.locator('[data-details-subject]').count() === 0 && await details.locator('[data-project-profile]').count() === 1)
+
+  // 11e 删除 Agent:勾「同时删除相关文件」→ DELETE ?keepFiles=1(引擎先挪)→ 挪到的目录进废纸篓;侧栏行消失
+  await orbitRow('Coder').click({ button: 'right' })
+  await menuItem('agent-delete').click()
+  await dialog.waitFor()
+  const agentDialog = await dialog.evaluate((el) => ({ title: el.querySelector('.dialog-title').textContent, msg: el.querySelector('.dialog-msg').textContent, check: (el.querySelector('.dialog-check') || {}).textContent || '' }))
+  await win.waitForTimeout(350) // 对话框入场动画走完再截
+  await win.screenshot({ path: shots.removeAgent = shot('remove-agent-dialog-zh-light') })
+  await dialog.locator('.dialog-check input').check()
+  await dialog.locator('.dialog-btn[data-danger]').click()
+  for (let i = 0; i < 30 && !(seen.agentDeletes.length && fs.existsSync(trashDir) && fs.readdirSync(trashDir).some((n) => n.endsWith('coder-kept'))); i++) await sleep(150)
+  await orbitRow('Coder').waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {})
+  const del = seen.agentDeletes[0]
+  check('11e 删除 Agent:对话框(名册与侧栏移除、文件默认留在 agents/.removed/、勾选项);勾上确认 → DELETE ?keepFiles=1、挪到的目录进废纸篓、侧栏 Coder 行消失', /删除 Agent「Coder」/.test(agentDialog.title) && /agents\/\.removed\//.test(agentDialog.msg) && /同时删除相关文件/.test(agentDialog.check) && del?.slug === 'coder' && del.keepFiles && !fs.existsSync(del.keptAt) && fs.readdirSync(trashDir).some((n) => n.endsWith('coder-kept')) && await orbitRow('Coder').count() === 0, JSON.stringify({ agentDialog, del }))
+
+  // 11f 移除工作区:勾「同时删除相关文件」→ 三个会话删掉、项目里的 .tangu 进废纸篓、项目文件夹本身还在
+  await groupHead('Demo Project').click({ button: 'right' })
+  await menuItem('ws-remove').click()
+  await dialog.waitFor()
+  await win.waitForTimeout(350) // 对话框入场动画走完再截
+  await win.screenshot({ path: shots.removeProject = shot('remove-project-dialog-zh-light') })
+  await dialog.locator('.dialog-check input').check()
+  await dialog.locator('.dialog-btn[data-danger]').click()
+  for (let i = 0; i < 30 && fs.existsSync(path.join(projectDir, '.tangu')); i++) await sleep(150)
+  await groupHead('Demo Project').waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {})
+  const gone = { deletes: [...seen.sessionDeletes].sort(), tangu: fs.existsSync(path.join(projectDir, '.tangu')), dir: fs.existsSync(projectDir), trashed: fs.readdirSync(trashDir).filter((n) => n.endsWith('.tangu')).length, head: await groupHead('Demo Project').count() }
+  check('11f 移除工作区 + 勾选删文件:三个会话 DELETE、.tangu 进废纸篓、项目文件夹还在、侧栏组消失', gone.deletes.join() === 'pd-coder,pd-main,pd-team' && !gone.tangu && gone.dir && gone.trashed === 1 && gone.head === 0, JSON.stringify(gone))
   return shots
 }
 
@@ -269,7 +350,10 @@ async function main() {
   const projectDir = path.join(home, 'Demo Project')
   for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
   const ctx = contextFixture(projectDir)
-  const seen = { ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0 }
+  const seen = { ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, sessionDeletes: [], agentDeletes: [] }
+  // 真实磁盘上的项目 .tangu(移除工作区勾「删除相关文件」时要进废纸篓)
+  fs.mkdirSync(path.join(projectDir, '.tangu', 'skills'), { recursive: true })
+  fs.writeFileSync(path.join(projectDir, '.tangu', 'AGENTS.md'), TEMPLATE, 'utf8')
   const projectIds = new Set(['pd-main', 'pd-coder', 'pd-team', 'pd-default', 'pd-alias'])
   const stub = await startStubEngine({ agents: AGENTS, sessions: sessionFixtures(projectDir, path.join(vault, 'Sessions'), path.join(home, 'OldTangu')), messages: [], handle: async ({ path: route, method, url, body }) => {
     if (route === '/agent/runs' && url.searchParams.has('sessionId')) return { runs: [] }
@@ -291,6 +375,16 @@ async function main() {
     if (route === '/agent/project-context/settings' && method === 'PUT') { const b = await body(); seen.settingsPuts.push(b); ctx.settings = b.settings; return { settings: b.settings } }
     if (route === '/agent/project-context/skills' && method === 'POST') { const b = await body(); seen.skills.push(b); const skill = { id: `local:${b.slug}`, name: b.name, description: b.description, path: path.join(projectDir, '.tangu', 'skills', b.slug), legacy: false }; ctx.skills.push(skill); return { skill } }
     if (route === '/agent/sessions' && method === 'POST') seen.sessionsCreated += 1
+    if (/^\/agent\/sessions\/[^/]+$/.test(route) && method === 'DELETE') { seen.sessionDeletes.push(route.split('/')[3]); return { ok: true } }
+    // 删 Agent:?keepFiles=1 = 引擎把目录挪走并回 keptAt(这里造一个真目录,桌面随后把它移进 e2e 废纸篓);名册同步去掉它
+    if (/^\/agent\/agents\/[^/]+$/.test(route) && method === 'DELETE') {
+      const slug = route.split('/')[3], keepFiles = url.searchParams.get('keepFiles') === '1'
+      const keptAt = keepFiles ? path.join(home, 'removed', `${slug}-kept`) : undefined
+      if (keptAt) { fs.mkdirSync(keptAt, { recursive: true }); fs.writeFileSync(path.join(keptAt, 'MEMORY.md'), '- x\n') }
+      seen.agentDeletes.push({ slug, keepFiles, keptAt })
+      const i = AGENTS.findIndex((a) => a.slug === slug); if (i >= 0) AGENTS.splice(i, 1)
+      return { ok: true, ...(keptAt ? { keptAt } : {}) }
+    }
     return undefined
   } })
   for (const dir of [userData, `${userData}-dev`]) {
@@ -300,7 +394,7 @@ async function main() {
   let app
   let shots = null
   try {
-    app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url } })
+    app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, FORSION_E2E_TRASH_DIR: path.join(home, 'e2e-trash') } })
   } catch (e) {
     console.error('隔离 Electron 启动失败;保留现有应用实例。')
     try { stub.close() } catch { /* ignore */ }

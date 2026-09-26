@@ -6,19 +6,21 @@ import { activeMainPanel, useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine/types'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { deleteAgentAvatar, deleteAgentDef, fetchAgentAvatar, getAgentHarness, listAgents, listSkills, listTools, putAgentsMeta, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
+import { deleteAgentAvatar, fetchAgentAvatar, getAgentHarness, listAgents, listSkills, listTools, putAgentsMeta, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
 import { openAgentProfile } from './agentProfileNav'
 import { AgentMemoryPanel } from '../components/AgentMemoryPanel'
 import { AgentMemoryModal } from '../components/AgentMemoryModal'
 import { AgentHarnessPanel } from '../components/AgentHarnessPanel'
 import { AgentSchedulePanel } from '../components/AgentSchedulePanel'
-import type { AgentConfig, NormalAgentDef, SkillInfo, ToolsResponse } from '../types'
+import type { AgentConfig, NormalAgentDef, SessionRecord, SkillInfo, ToolsResponse } from '../types'
 import { THINKING_LEVELS } from '../types'
 import { ProfileGroup, ProfileModelField, ProfileTextEditor } from './profileControls'
 import { TeamProfile } from './TeamProfile'
-import { ProjectProfile, useProjectWorkspace } from './ProjectProfile'
+import { ProjectProfile, useProjectSubject, useProjectWorkspace } from './ProjectProfile'
 import { AgentSkillsPanel, moveAgentSkillsDraft } from './AgentSkillsPanel'
 import { CapabilityMenu } from '../components/CapabilityMenu'
+import { AgentRemoveDialog } from '../components/RemoveDialog'
+import { useDetailsSubject } from '../stores/detailsSubject'
 import './agentProfileMessages'
 import './agentProfile.css'
 import { AgentAvatar } from '../components/AgentAvatar'
@@ -62,10 +64,22 @@ export function TanguDetailsView({ extendView }: Pick<ViewProps, 'extendView'>) 
   // 团队实体 / 私聊 / 外部引擎会话都是 projectless,不受影响。按 project_path 取 key:同一项目内切会话,标签与草稿都留着。
   const project = useProjectWorkspace(s.session)
   const renderMember = (member: NormalAgentDef, childId?: string | null) => <AgentProfile agent={member} compact sessionId={childId} extendView={extendView} />
-  return <div className="agent-profile-panel" data-tangu-details>
-    <div className="agent-profile-panel-title">{t('agentProfile.title')}</div>
-    {project && s.session ? <ProjectProfile key={project.path} session={s.session} config={config} workspace={project} renderAgent={renderMember}
-        renderTeam={(teamSession, teamConfig) => <TeamProfile key={`${teamSession.id}:${teamConfig.teamSlug || ''}`} session={teamSession} config={teamConfig} renderMember={renderMember} />} />
+  const renderTeam = (teamSession: SessionRecord, teamConfig: AgentConfig) => <TeamProfile key={`${teamSession.id}:${teamConfig.teamSlug || ''}`} session={teamSession} config={teamConfig} renderMember={renderMember} />
+  // 侧栏「查看详情」:临时显示指定的项目 / Agent,不切会话;设下之后当前会话变了就作废(store 订阅也会清)
+  const activeId = useApp((a) => a.activeId)
+  const subject = useDetailsSubject((d) => (d.subject && d.subject.from === activeId ? d.subject : null))
+  const subjectProject = useProjectSubject(subject?.kind === 'project' ? subject.path : null)
+  const carrier = useApp((a) => (subjectProject ? a.sessions.find((x) => x.id === subjectProject.carrierId) || a.archivedSessions.find((x) => x.id === subjectProject.carrierId) : undefined))
+  const carrierConfig = useApp((a) => (carrier ? a.configBySession[carrier.id] : undefined))
+  const subjectAgent = subject?.kind === 'agent' ? s.agents.find((a) => a.slug === subject.slug) : undefined
+  const viewing = subjectProject && carrier ? 'project' : subjectAgent ? 'agent' : null
+  return <div className="agent-profile-panel" data-tangu-details data-details-subject={viewing || undefined}>
+    <div className="agent-profile-panel-title">{t('agentProfile.title')}
+      {viewing && <button type="button" className="profile-text-action" data-act="details-back" onClick={() => useDetailsSubject.setState({ subject: null })}>{t('agentProfile.backToCurrent')}</button>}</div>
+    {viewing === 'project' && subjectProject && carrier ? <ProjectProfile key={`subject:${subjectProject.workspace.path}`} session={carrier} config={carrierConfig || carrier.agent_config || EMPTY_CONFIG}
+        workspace={subjectProject.workspace} currentSessionId={activeId} renderAgent={renderMember} renderTeam={renderTeam} />
+      : viewing === 'agent' && subjectAgent ? <AgentProfile key={`subject:${subjectAgent.slug}`} agent={subjectAgent} compact extendView={extendView} />
+      : project && s.session ? <ProjectProfile key={project.path} session={s.session} config={config} workspace={project} renderAgent={renderMember} renderTeam={renderTeam} />
       : config.groupChat || config.teamSlug ? <TeamProfile key={`${sessionId}:${config.teamSlug || ''}`} session={s.session} config={config} renderMember={renderMember} /> : config.engineId || config.soloEngineId ? <section className="agent-profile-team"><h3>{s.engines.find((e) => e.id === (config.engineId || config.soloEngineId))?.name || config.engineId || config.soloEngineId}</h3><div className="agent-current-session"><strong>{s.session?.title}</strong><span>{s.session?.project_name || config.cwd}</span></div></section> : agent ? <AgentProfile key={agent.slug} agent={agent} compact sessionId={sessionId} extendView={extendView} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}
   </div>
 }
@@ -163,19 +177,8 @@ export function AgentsRosterView() {
       emitAgentsChange()
     } catch (error: any) { setRosterError(String(error?.message || error)) } finally { setRosterBusy(false); setDragSlug(null) }
   }
-  const removeAgent = async (target: NormalAgentDef) => {
-    if (!window.confirm(t('agentProfile.deleteConfirm', { name: target.name }))) return
-    setRosterBusy(true); setRosterError('')
-    try {
-      const result = await deleteAgentDef(cfg, target.slug)
-      if (!result.ok) throw new Error(t('agentProfile.deleteFailed'))
-      const remaining = agents.filter((a) => a.slug !== target.slug)
-      useApp.setState({ agentDefs: remaining, defaultAgentSlug: defaultSlug === target.slug ? (remaining[0]?.slug || 'xyra') : defaultSlug })
-      useApp.getState().refreshAgents()
-      emitAgentsChange()
-      if (agent?.slug === target.slug) selectAgent(remaining[0]?.slug || '')
-    } catch (error: any) { setRosterError(String(error?.message || error)) } finally { setRosterBusy(false) }
-  }
+  // 删除走与侧栏同一个确认(同时删除相关文件的勾选项 + store.removeAgent);删掉的是正在看的那个 → 换到名册第一个
+  const [removing, setRemoving] = useState<NormalAgentDef | null>(null)
   return <aside className="agents-roster">
       {/* 创建入口只留底部那一个(评审 U-25:标题行的 ＋ 与底部链接重复)。 */}
       <div className="agents-roster-heading"><span>{t('agentProfile.roster')} <small>{agents.length}</small></span></div>
@@ -190,11 +193,13 @@ export function AgentsRosterView() {
           { id: 'up', label: t('agentProfile.moveUp'), icon: <ArrowUp size={14} />, disabled: rosterBusy || agents[0]?.slug === a.slug, onSelect: () => void reorder(a.slug, agents[agents.indexOf(a) - 1]?.slug || a.slug) },
           { id: 'down', label: t('agentProfile.moveDown'), icon: <ArrowDown size={14} />, disabled: rosterBusy || agents.at(-1)?.slug === a.slug, onSelect: () => void reorder(a.slug, agents[agents.indexOf(a) + 1]?.slug || a.slug, true) },
           { id: 'default', label: t('agentProfile.makeDefault'), icon: <Star size={14} />, disabled: rosterBusy || a.slug === defaultSlug, onSelect: () => void setDefault(a.slug) },
-          { id: 'delete', label: t('agentProfile.delete'), icon: <Trash2 size={14} />, danger: true, disabled: rosterBusy || a.slug === 'xyra' || a.slug === defaultSlug, onSelect: () => void removeAgent(a) },
+          { id: 'delete', label: t('agentProfile.delete'), icon: <Trash2 size={14} />, danger: true, disabled: rosterBusy || a.slug === 'xyra' || a.slug === defaultSlug, onSelect: () => { setRosterError(''); setRemoving(a) } },
         ]}><MoreHorizontal size={15} /></CapabilityMenu>
       </div>)}{!filtered.length && <p className="agent-profile-muted">{t('agentProfile.noResults')}</p>}</div>
       {rosterError && <p className="agent-profile-error" role="alert">{rosterError}</p>}
       <button className="agent-profile-link agents-roster-create" onClick={() => { setCreating(); setRosterError('') }}><Plus size={14} />{t('agentProfile.create')}</button>
+      {removing && <AgentRemoveDialog agent={removing} onClose={() => setRemoving(null)}
+        onDone={() => { if (agent?.slug === removing.slug) selectAgent(useApp.getState().agentDefs[0]?.slug || '') }} />}
     </aside>
 }
 

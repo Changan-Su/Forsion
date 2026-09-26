@@ -28,6 +28,8 @@ type Props = {
   workspace: ProjectWorkspace
   renderAgent: (agent: NormalAgentDef, sessionId?: string | null) => ReactNode
   renderTeam: (session: SessionRecord, config: AgentConfig) => ReactNode
+  /** 「当前会话」标记跟谁:缺省 = session。侧栏「查看详情」打开时 session 只是借来的载体(引擎端点按 sessionId 绑定),传真正的当前会话。 */
+  currentSessionId?: string | null
 }
 
 /** 当前会话所属的 Project(侧栏分组口径:非系统的本地目录);不是 → null。选择器只吐一个字符串签名,`workspaces()` 每次都造新对象,
@@ -44,10 +46,25 @@ export function useProjectWorkspace(session?: SessionRecord | null): ProjectWork
   return useMemo(() => (signature ? { ...(JSON.parse(signature) as Omit<ProjectWorkspace, 'kind'>), kind: 'local' as const } : null), [signature])
 }
 
+/** 侧栏「查看详情」指定的项目(不看当前会话):按路径找工作区,借它最近的一条会话当载体。没有会话可借 → null。 */
+export function useProjectSubject(path: string | null): { workspace: ProjectWorkspace; carrierId: string } | null {
+  const signature = useApp((a) => {
+    if (!path || path === a.homeDir) return ''
+    const ws = a.workspaces().find((w) => w.path === path)
+    const carrier = [...a.sessions, ...a.archivedSessions].find((x) => x.project_path === path && !x.projectless)
+    return isProjectWorkspace(ws) && carrier ? JSON.stringify({ ws: { key: ws.key, name: ws.name, path: ws.path, system: ws.system, isDefault: ws.isDefault, sessionKeys: ws.sessionKeys }, carrierId: carrier.id }) : ''
+  })
+  return useMemo(() => {
+    if (!signature) return null
+    const v = JSON.parse(signature) as { ws: Omit<ProjectWorkspace, 'kind'>; carrierId: string }
+    return { workspace: { ...v.ws, kind: 'local' as const }, carrierId: v.carrierId }
+  }, [signature])
+}
+
 /** PROJECT 详情:骨架与 TEAM 详情同一套(头部即基本信息 / 滑块导航 / 一个滚动体 / 底部保存栏),内容换成项目的三面:
  *  Agents(谁在这里工作过)/ 配置(指令文件 · 项目技能 · 计划 · 本机默认项)/ Git(现场)。数据全部来自引擎的 project-context,
  *  它读到什么就显示什么 —— 这个面板存在的意义就是回答「Tangu 到底看没看见这个项目的约定」。 */
-export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam }: Props) {
+export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam, currentSessionId }: Props) {
   const { t, locale } = useI18n()
   const s = useApp(useShallow((a) => ({
     cfg: a.cfg, agents: a.agentDefs, avatars: a.agentAvatars, teams: a.teams, teamAvatars: a.teamAvatars, engines: a.engines, models: a.modelsResp?.models,
@@ -76,10 +93,11 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [notice, setNotice] = useState('')
   const now = Date.now()
 
+  const current = currentSessionId === undefined ? session.id : currentSessionId
   const executors = useMemo(() => projectExecutors({
     sessions: [...s.sessions, ...s.archived], projectPath: dir, aliases: workspace.sessionKeys, configBySession: s.configBySession,
-    runningBySession: s.runningBySession, defaultSlug: s.defaultSlug, currentSessionId: session.id,
-  }), [s.sessions, s.archived, s.configBySession, s.runningBySession, s.defaultSlug, dir, workspace.sessionKeys, session.id])
+    runningBySession: s.runningBySession, defaultSlug: s.defaultSlug, currentSessionId: current,
+  }), [s.sessions, s.archived, s.configBySession, s.runningBySession, s.defaultSlug, dir, workspace.sessionKeys, current])
   const running = executors.some((e) => e.running)
   const sessionRunning = !!s.runningBySession[session.id]
 
@@ -156,6 +174,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const generate = () => {
     if (!ctx || sessionRunning) return
     clear()
+    // 从侧栏「查看详情」进来时载体不是当前会话:先切过去,生成过程用户看得见(切会话会让右栏回到跟随,仍是这个项目)
+    if (current !== session.id) useApp.getState().setActiveId(session.id)
     void useApp.getState().send(t('projectProfile.generatePrompt', { file: relDoc }), [], undefined, undefined, undefined, session.id)
     setNotice(t('projectProfile.generateSent'))
   }
