@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import { ArrowLeft, Check, ChevronRight, Copy, ExternalLink, FileText, Folder, FolderGit2, FolderOpen, GitBranch, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Sparkles, Star, TerminalSquare, Users, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { ArrowLeft, Check, ChevronRight, Copy, ExternalLink, FileText, Folder, FolderGit2, FolderOpen, GitBranch, ImageUp, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Users, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { createProjectSkill, getProjectContext, initProjectContext, putProjectDoc, putProjectSettings } from '../services/backendService'
+import { createProjectSkill, deleteProjectIcon, getProjectContext, initProjectContext, putProjectDoc, putProjectSettings, uploadProjectIcon } from '../services/backendService'
 import type { AgentConfig, NormalAgentDef, ProjectContext, ProjectSettings, SessionRecord, TeamDef } from '../types'
-import { isTeamImageAvatar, sessionWorkspaceKey, THINKING_LEVELS } from '../types'
+import { isProjectIconFile, isTeamImageAvatar, sessionWorkspaceKey, THINKING_LEVELS } from '../types'
 import { ProfileModelField, ProfileTextEditor } from './profileControls'
 import { AvatarStack } from '../components/AvatarStack'
 import { openSpecial } from './SpecialViews'
@@ -17,6 +18,8 @@ import './projectProfileMessages'
 import './teamProfile.css'
 import './projectProfile.css'
 import { AgentAvatar } from '../components/AgentAvatar'
+import { ProjectIcon } from '../components/ProjectIcon'
+import { IconPicker } from '@amadeus/chrome/pageChrome'
 import { thinkingLabel } from '../components/thinkingLabel'
 
 type Tab = 'agents' | 'settings' | 'git'
@@ -71,6 +74,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [settingsDraft, setSettingsDraft] = useState<ProjectSettings>({})
   const [settingsDirty, setSettingsDirty] = useState(false)
   const [skillForm, setSkillForm] = useState<{ slug: string; name: string; description: string; content: string } | null>(null)
+  const [iconPick, setIconPick] = useState<{ x: number; y: number } | null>(null)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -131,17 +135,57 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     }
     setPicker(false); setQuery('')
   }
-  /** 行内星标立即落盘。默认项是**一条**记录:配置页里还没保存的草稿一并带上(分开写会互相盖掉 —— 星标写完再点保存,旧草稿会把星标写回去),
-   *  写完草稿即与落盘一致,保存栏收起。 */
+  /** 行内星标 / emoji 图标立即落盘。默认项是**一条**记录:配置页里还没保存的草稿一并带上(分开写会互相盖掉 —— 星标写完再点保存,
+   *  旧草稿会把星标写回去),写完草稿即与落盘一致,保存栏收起。 */
+  const persistSettings = async (value: Partial<ProjectSettings>) => {
+    const saved = await putProjectSettings(s.cfg, session.id, { ...(settingsDirty ? settingsDraft : ctx?.settings || {}), ...value })
+    setCtx((c) => (c ? { ...c, settings: saved } : c))
+    setSettingsDraft(saved ?? {}); setSettingsDirty(false)
+    useApp.getState().rememberProjectSettings(dir, saved)
+  }
   const saveDefaultExecutor = async (value: Pick<ProjectSettings, 'defaultAgent' | 'defaultTeam'>) => {
     if (busy) return
     setBusy('default'); clear()
     try {
-      const saved = await putProjectSettings(s.cfg, session.id, { ...(settingsDirty ? settingsDraft : ctx?.settings || {}), defaultAgent: undefined, defaultTeam: undefined, ...value })
-      setCtx((c) => (c ? { ...c, settings: saved } : c))
-      setSettingsDraft(saved ?? {}); setSettingsDirty(false)
-      useApp.getState().rememberProjectSettings(dir, saved)
+      await persistSettings({ defaultAgent: undefined, defaultTeam: undefined, ...value })
       setNotice(t('projectProfile.saved'))
+    } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
+  }
+  // 图标即时落盘(与名称同一习惯,不走保存栏)。图片端点只动 icon 一个键:只把它并进草稿,保存栏里没提交的别的改动留着,
+  // 也免得那份旧草稿一保存把 icon 写回去。
+  const icon = ctx?.settings?.icon
+  const applyIcon = (saved: ProjectSettings | null) => {
+    setCtx((c) => (c ? { ...c, settings: saved } : c))
+    setSettingsDraft((d) => ({ ...d, icon: saved?.icon }))
+    useApp.getState().rememberProjectSettings(dir, saved)
+    if (isProjectIconFile(saved?.icon)) void useApp.getState().loadProjectIcon(dir, true)
+  }
+  const pickIconImage = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || busy) return
+    if (file.size > 1_048_576) { setError(t('projectProfile.iconTooLarge')); return }
+    setBusy('icon'); clear()
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result))
+        reader.onerror = () => reject(reader.error || new Error('read failed'))
+        reader.readAsDataURL(file)
+      })
+      applyIcon(await uploadProjectIcon(s.cfg, session.id, dataUrl, file.type))
+      setNotice(t('projectProfile.iconSaved'))
+    } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
+  }
+  /** emoji → 写 settings.icon;null(选择器里的「移除图标」)→ 回默认。原来是导入的图片就先删掉它:图片住在项目目录里,不留孤儿文件。 */
+  const pickIconEmoji = async (emoji: string | null) => {
+    setIconPick(null)
+    if (busy || (emoji ?? undefined) === icon) return
+    setBusy('icon'); clear()
+    try {
+      if (!emoji || isProjectIconFile(icon)) applyIcon(await deleteProjectIcon(s.cfg, session.id))
+      if (emoji) await persistSettings({ icon: emoji })
+      setNotice(t(emoji ? 'projectProfile.iconSaved' : 'projectProfile.iconRemoved'))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
   }
   const init = async () => {
@@ -227,7 +271,17 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   return <section className="team-profile project-profile" data-project-profile={dir}>
     <div className="team-profile-main" hidden={!!selected}>
       <header className="team-profile-hero">
-        <span className="team-profile-emblem" aria-hidden="true">{git?.repo ? <FolderGit2 size={26} strokeWidth={1.5} /> : <Folder size={26} strokeWidth={1.5} />}</span>
+        {/* 图标与 TEAM 头部同一套:点图标导入图片(存进项目的 .tangu/),角上笑脸开 emoji 选择器(内含「移除图标」)。 */}
+        <div className="agent-portrait-slot">
+          <label className="team-profile-emblem agent-portrait-edit" title={t('projectProfile.iconImageHint', { dir: ctx?.workspaceDirName || '.tangu' })} aria-busy={busy === 'icon' || undefined}>
+            <ProjectIcon path={dir} fallback={git?.repo ? <FolderGit2 size={26} strokeWidth={1.5} /> : <Folder size={26} strokeWidth={1.5} />} />
+            <span className="agent-portrait-badge" aria-hidden="true">{busy === 'icon' ? <Loader2 size={10} className="spin" /> : <ImageUp size={10} />}</span>
+            <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" aria-label={t('projectProfile.iconChange')} disabled={!!busy || !ctx} onChange={(e) => void pickIconImage(e)} />
+          </label>
+          <button type="button" className="agent-portrait-remove" data-project-icon-emoji title={t('projectProfile.iconEmoji')} aria-label={t('projectProfile.iconEmoji')} disabled={!!busy || !ctx} onClick={(e) => setIconPick({ x: e.clientX, y: e.clientY })}><Smile size={10} /></button>
+        </div>
+        {/* 选择器自身是 position:fixed 却不 portal;右栏祖先带 backdrop-filter 会把 fixed 的参照系换掉 → 挂到 body。 */}
+        {iconPick && createPortal(<IconPicker x={iconPick.x} y={iconPick.y} current={icon ?? null} onPick={(em) => void pickIconEmoji(em)} onClose={() => setIconPick(null)} />, document.body)}
         <div className="team-profile-identity"><h3>{t('projectProfile.kind')}</h3>
           <input className="agent-character-name team-profile-name" aria-label={t('projectProfile.name')} title={workspace.name} value={nameDraft} maxLength={100} disabled={!!busy} readOnly={!!workspace.system}
             onChange={(e) => setNameDraft(e.target.value)} onBlur={() => void commitName()} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') { setNameDraft(workspace.name); e.currentTarget.blur() } }} />

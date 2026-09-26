@@ -10,6 +10,8 @@ import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronR
 import { folderPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
 import { moveTo } from '@lcl/engine'
+import { ProjectIcon } from '../../components/ProjectIcon'
+import { isProjectWorkspace } from '../../stores/projectSettings'
 import { sessionWorkspaceKey, type ChannelKind, type SessionRecord, type TanguDesktopConfig, type WorkspaceDescriptor } from '../../types'
 import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { registerMessages, useI18n } from '../../i18n'
@@ -286,12 +288,13 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   }
 
   /** 工作区组头的前导槽:图标 ↔ hover 换箭头(与笔记树文件夹行同一套)。三个变体(重命名中/微信/普通)共用。
-   *  本地工作区用 Folder/FolderOpen 表达展开态 —— 箭头默认不显,总得有东西担起「展开了没」。 */
+   *  本地工作区用 Folder/FolderOpen 表达展开态 —— 箭头默认不显,总得有东西担起「展开了没」。
+   *  Project 设了图标(PROJECT 详情里换的 emoji / 图片)就换成它:展开态只剩 hover 箭头表达,与笔记树带 emoji 的文件夹同理。 */
   const wsLead = (ws: WorkspaceDescriptor, collapsed: boolean) => {
     const Ic = ws.kind === 'channel' ? CHANNEL_ICONS[ws.channel || 'wechat'] : ws.kind === 'cloud' ? Cloud : ws.kind === 'rootless' ? MessagesSquare : collapsed ? Folder : FolderOpen
     return (
       <span className="t2s-lead">
-        <Ic className="t2s-lead-icon" />
+        {isProjectWorkspace(ws) ? <ProjectIcon path={ws.path} className="amx-page-emoji t2s-project-icon" fallback={<Ic className="t2s-lead-icon" />} /> : <Ic className="t2s-lead-icon" />}
         <span className={`t2s-chev t2s-lead-chev${collapsed ? '' : ' open'}`} onClick={(e) => { e.stopPropagation(); toggleGroup(ws.key) }}>
           <ChevronRight size={12} />
         </span>

@@ -6,6 +6,7 @@
  *   - 改写校验 mtime(别处改过 → conflict,不落盘)
  *   - 项目技能落 .tangu/skills/<slug>/SKILL.md,同名不覆盖,加载器按 local:<slug> 看得见
  *   - 项目默认项按 realpath 索引、白名单收窄、空值即删
+ *   - 项目图标:图片落 .tangu/icon.<ext>、settings.icon 指过去;换图清旧、移除连文件带指针;软链 / 超限 / 非图片拒;整份 PUT 不抹 icon
  *   - git 摘要:非仓库 repo:false;真仓库能读到分支 / 改动 / 提交(本机没有 git 时跳过)
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -14,8 +15,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSyn
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
-  assertSafeChain, createProjectSkill, gitSummary, initProjectWorkspace, listProjectPlans, maskRemoteUrl, parseStatusLine,
-  PROJECT_DOC_TEMPLATE, readProjectSettings, resolveDocTarget, sanitizeProjectSettings, writeProjectDoc, writeProjectSettings,
+  assertSafeChain, createProjectSkill, deleteProjectIcon, gitSummary, initProjectWorkspace, listProjectPlans, maskRemoteUrl, parseStatusLine,
+  PROJECT_DOC_TEMPLATE, readProjectIcon, readProjectSettings, resolveDocTarget, sanitizeProjectSettings, saveProjectIcon, writeProjectDoc,
+  writeProjectSettings,
 } from './projectContext.js';
 import { listProjectSkills } from '../skills/localSkills.js';
 
@@ -182,6 +184,48 @@ describe('project settings(用户侧)', () => {
     expect(await readProjectSettings(a)).toBeNull();
     expect(await readProjectSettings(b)).toEqual({ model: 'm1' });
     expect(readFileSync(path.join(root, 'home', 'project-settings.json'), 'utf8')).toContain('"m1"');
+  });
+});
+
+describe('project icon', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+  it('导入图片 → .tangu/icon.png + settings.icon;换成 webp 清掉旧 png;整份 PUT 带着 icon 不被抹;移除连文件带指针', async () => {
+    const cwd = mk('icon-a');
+    await writeProjectSettings(cwd, { model: 'm1' });
+    expect(await saveProjectIcon(cwd, `data:image/png;base64,${png.toString('base64')}`, 'image/png')).toEqual({ model: 'm1', icon: 'icon.png' });
+    expect(readFileSync(path.join(cwd, '.tangu', 'icon.png'))).toEqual(png);
+    expect(await readProjectIcon(cwd)).toEqual({ data: png, mimeType: 'image/png' });
+    await saveProjectIcon(cwd, png.toString('base64'), 'image/webp');
+    expect(existsSync(path.join(cwd, '.tangu', 'icon.png'))).toBe(false);
+    expect((await readProjectSettings(cwd))?.icon).toBe('icon.webp');
+    await writeProjectSettings(cwd, { ...(await readProjectSettings(cwd)), model: 'm2' });
+    expect(await readProjectSettings(cwd)).toEqual({ model: 'm2', icon: 'icon.webp' });
+    expect(await deleteProjectIcon(cwd)).toEqual({ model: 'm2' });
+    expect(existsSync(path.join(cwd, '.tangu', 'icon.webp'))).toBe(false);
+    expect(await readProjectIcon(cwd)).toBeNull();
+  });
+
+  it('emoji 只是 settings.icon 文本,读图片 → null;移除同样清掉', async () => {
+    const cwd = mk('icon-emoji');
+    expect(await writeProjectSettings(cwd, { icon: '🚀' })).toEqual({ icon: '🚀' });
+    expect(await readProjectIcon(cwd)).toBeNull();
+    expect(await deleteProjectIcon(cwd)).toBeNull();
+    expect(sanitizeProjectSettings({ icon: 'x'.repeat(33) })).toBeNull();
+    expect(sanitizeProjectSettings({ icon: 'a\nb' })).toBeNull();
+  });
+
+  it('`.tangu` 是软链 / 非图片 / 超 1MB → 拒;settings 指向的图片被换成软链 → 读不出', async () => {
+    const linked = mk('icon-linked');
+    symlinkSync(mk('icon-outside'), path.join(linked, '.tangu'));
+    await expect(saveProjectIcon(linked, png.toString('base64'), 'image/png')).rejects.toThrow(/symbolic link/);
+    expect(existsSync(path.join(root, 'icon-outside', 'icon.png'))).toBe(false);
+    const cwd = mk('icon-b');
+    await expect(saveProjectIcon(cwd, png.toString('base64'), 'image/svg+xml')).rejects.toThrow(/unsupported/);
+    await expect(saveProjectIcon(cwd, Buffer.alloc(1_048_577).toString('base64'), 'image/png')).rejects.toThrow(/too large/);
+    await saveProjectIcon(cwd, png.toString('base64'), 'image/png');
+    rmSync(path.join(cwd, '.tangu', 'icon.png'));
+    symlinkSync(w('secret.png', 'secret'), path.join(cwd, '.tangu', 'icon.png'));
+    expect(await readProjectIcon(cwd)).toBeNull();
   });
 });
 

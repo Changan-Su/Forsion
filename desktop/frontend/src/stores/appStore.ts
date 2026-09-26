@@ -386,6 +386,12 @@ export const rootlessWs = (t: AppState['tr']): WorkspaceDescriptor =>
   ({ key: ROOTLESS_WORKSPACE_KEY, name: t('input.project.dontWork'), kind: 'rootless', path: null, system: true })
 
 /** 引擎有真实 host FS:managed 桌面,或设备页(unitPage,引擎是对方的 managed 引擎)。 */
+/** 项目端点的定位:优先借该项目的任一会话(按 sessionId 绑定);一个会话都没有(会话删光后又添加回来)就按路径读用户侧记录。 */
+const projectRef = (s: Pick<AppState, 'sessions' | 'archivedSessions'>, path: string): { sessionId: string } | { cwd: string } => {
+  const carrier = [...s.sessions, ...s.archivedSessions].find((x) => x.project_path === path && !x.projectless)
+  return carrier ? { sessionId: carrier.id } : { cwd: path }
+}
+
 const isHostCapable = (s: Pick<AppState, 'desktopMode'>): boolean =>
   s.desktopMode === 'managed' || (typeof window !== 'undefined' && !!window.tangu?.unitPage && window.tangu.hostFiles !== false)
 
@@ -637,6 +643,10 @@ export interface AppState {
   rememberProjectSettings(path: string, settings: ProjectSettings | null): void
   /** 缓存缺席时借该项目任一会话拉一次(本地引擎,毫秒级);没有会话可借 / 老引擎没有这个接口 → null 且不缓存。 */
   ensureProjectSettings(path: string): Promise<ProjectSettings | null>
+  /** 项目图标图片的 objectURL(按项目路径;侧栏组头与 PROJECT 详情共用一份)。'' = 拉过 / 在途,没有图。 */
+  projectIconUrls: Record<string, string>
+  /** 拉项目图标图片;force = 换图 / 移除后重拉(旧 URL revoke)。 */
+  loadProjectIcon(path: string, force?: boolean): Promise<void>
   stoppingBySession: Record<string, string | undefined>
   groupVoting: Record<string, boolean>
   /** LLM 瞬时失败重试中(引擎 status/llm_retry 事件):渲染「第 N/M 次重试,Xs 后」。任何后续非 status 事件即清除。 */
@@ -920,6 +930,7 @@ export const useApp = create<AppState>((set, get) => ({
   voiceOnByAgent: {},
   runningBySession: {},
   projectSettingsByPath: {},
+  projectIconUrls: {},
   stoppingBySession: {},
   groupVoting: {},
   llmRetryBySession: {},
@@ -1734,13 +1745,22 @@ export const useApp = create<AppState>((set, get) => ({
     const cached = get().projectSettingsByPath
     if (path in cached) return cached[path]
     if (!isHostCapable(get())) return null
-    // 优先借该项目的任一会话(按 sessionId 绑定);一个会话都没有(会话删光后又添加回来)就按路径读用户侧记录
-    const carrier = [...get().sessions, ...get().archivedSessions].find((x) => x.project_path === path && !x.projectless)
     try {
-      const settings = await api.getProjectSettings(get().cfg, carrier ? { sessionId: carrier.id } : { cwd: path }, { timeoutMs: 1500 })
+      const settings = await api.getProjectSettings(get().cfg, projectRef(get(), path), { timeoutMs: 1500 })
       get().rememberProjectSettings(path, settings)
       return settings
     } catch { return null }
+  },
+  loadProjectIcon: async (path, force) => {
+    // 不设 host 门:只有 settings.icon 已指向图片才会走到这里(那份记录本就来自能读项目的引擎);external 模式连本机引擎也要能显示
+    if (!force && path in get().projectIconUrls) return
+    set((st) => ({ projectIconUrls: { ...st.projectIconUrls, [path]: st.projectIconUrls[path] ?? '' } })) // 在途占位:两个侧栏实例不双发
+    const url = await api.fetchProjectIcon(get().cfg, projectRef(get(), path))
+    set((st) => {
+      const old = st.projectIconUrls[path]
+      if (old) URL.revokeObjectURL(old)
+      return { projectIconUrls: { ...st.projectIconUrls, [path]: url || '' } }
+    })
   },
   hydrateTeamWork: async (sessionId) => {
     // 打开 / 重载团队会话:成员的工作会话与最近一次 run 从持久端点复原(实时事件只覆盖本客户端订阅着的团队 run)。已有实时状态的成员不覆盖。

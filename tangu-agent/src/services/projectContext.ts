@@ -21,6 +21,7 @@ import { tanguHome, WORKSPACE_DIR_NAME } from '../core/tanguHome.js';
 import { PROJECT_DOC_FILENAMES, isPlainFileUnder, loadProjectDocSafe } from './projectDoc.js';
 import { listProjectSkills } from '../skills/localSkills.js';
 import { runGit } from './runtimeContext.js';
+import { AVATAR_EXT_MIME, AVATAR_MAX_BYTES, AVATAR_MIME_EXT } from '../agents/agentRegistry.js';
 
 export interface ProjectSettings {
   /** 新会话预填的 Agent;与 defaultTeam 二选一。 */
@@ -30,6 +31,8 @@ export interface ProjectSettings {
   model?: string;
   thinkingLevel?: string;
   approvalMode?: string;
+  /** 项目图标:emoji(任意短文本)或 `icon.<ext>` = 用户导入、存在 `<cwd>/.tangu/` 里的图片(同团队头像的单字段约定)。 */
+  icon?: string;
 }
 export interface ProjectDocInfo {
   /** 「这个项目的指令文件」:cwd 层首个命中的候选名;一个都没有时 = 待创建的 `<cwd>/.tangu/AGENTS.md`。 */
@@ -147,7 +150,7 @@ export async function assertSafeChain(base: string, rel: string, wantFile: boole
 }
 
 /** 新建文件:O_EXCL 独占(已存在 → EEXIST,绝不覆盖)+ O_NOFOLLOW(lstat 与 open 之间的窗口交给内核把关;Windows 无此常量退化)。 */
-async function writeNew(file: string, text: string): Promise<void> {
+async function writeNew(file: string, text: string | Buffer): Promise<void> {
   const fd = await fs.open(file, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0), 0o644);
   try { await fd.writeFile(text, 'utf8'); } finally { await fd.close(); }
 }
@@ -234,6 +237,8 @@ export function sanitizeProjectSettings(input: unknown): ProjectSettings | null 
   if (thinking && THINKING.has(thinking)) out.thinkingLevel = thinking;
   const approval = str(src.approvalMode, 16);
   if (approval && APPROVAL.has(approval)) out.approvalMode = approval;
+  const icon = str(src.icon, 32);
+  if (icon && !/[\u0000-\u001f]/.test(icon)) out.icon = icon;
   return Object.keys(out).length ? out : null;
 }
 
@@ -266,10 +271,15 @@ function serialized<T>(key: string, task: () => Promise<T>): Promise<T> {
 
 /** 写默认项(整份读改写 + 临时文件 rename 原子落盘,整个 RMW 串行);settings 为 null / 无有效键 = 删除该项目的记录。返回落盘后的值。 */
 export function writeProjectSettings(cwd: string, settings: unknown): Promise<ProjectSettings | null> {
+  return updateProjectSettings(cwd, () => settings);
+}
+
+/** 按当前记录改一处(图标上传 / 移除只动 icon 一个键):读当前值与写回在同一个串行段里,不和并发的整份 PUT 交错。 */
+export function updateProjectSettings(cwd: string, next: (current: ProjectSettings | null) => unknown): Promise<ProjectSettings | null> {
   return serialized(projectSettingsFile(), async () => {
     const key = await fs.realpath(cwd).catch(() => path.resolve(cwd));
-    const clean = sanitizeProjectSettings(settings);
     const file = await readSettingsFile();
+    const clean = sanitizeProjectSettings(next(sanitizeProjectSettings(file.projects[key])));
     if (clean) file.projects[key] = clean;
     else delete file.projects[key];
     const target = projectSettingsFile();
@@ -340,6 +350,61 @@ export async function createProjectSkill(cwd: string, input: { slug?: unknown; n
   // 值一律 JSON 双引号串(合法 YAML 标量),parseFrontmatter 会剥掉引号;冒号 / 井号在裸值里会被别的解析器读歪。
   await writeNew(path.join(dir, 'SKILL.md'), `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n\n${body}\n`);
   return { id: `local:${slug}`, name, description, path: dir, legacy: false };
+}
+
+// ── 项目图标 ───────────────────────────────────────────────────────────────
+// 指针(settings.icon)住用户侧,图片住项目的 `.tangu/`(用户拍板:导入的图标文件放项目自己的目录里)。
+
+export const PROJECT_ICON_FILE = /^icon\.(png|jpe?g|gif|webp)$/i;
+
+/** 清掉 `.tangu/` 里所有 icon.* 图片(换图 / 移除共用)。`.tangu` 是软链 → 拒;不存在 → 无事可做;rm 碰到软链只删链本身。 */
+async function clearIconFiles(cwd: string): Promise<void> {
+  await assertSafeChain(cwd, WORKSPACE_DIR_NAME, false);
+  const dir = path.join(cwd, WORKSPACE_DIR_NAME);
+  const names = await fs.readdir(dir).catch(() => [] as string[]);
+  await Promise.all(names.filter((n) => PROJECT_ICON_FILE.test(n)).map((n) => fs.rm(path.join(dir, n), { force: true })));
+}
+
+/** 导入图片当项目图标:`<cwd>/.tangu/icon.<ext>`(png/jpeg/gif/webp,≤1MB),旧的 icon.* 先清,再把 settings.icon 指过去。返回落盘后的默认项。 */
+export function saveProjectIcon(cwd: string, base64: string, mimeType: string): Promise<ProjectSettings | null> {
+  const ext = AVATAR_MIME_EXT[String(mimeType).toLowerCase()];
+  if (!ext) return Promise.reject(new Error('unsupported image type (png/jpeg/gif/webp only)'));
+  const raw = base64.trimStart().startsWith('data:') ? base64.slice(base64.indexOf(',') + 1) : base64;
+  const buf = Buffer.from(raw, 'base64');
+  if (!buf.length) return Promise.reject(new Error('empty image'));
+  if (buf.length > AVATAR_MAX_BYTES) return Promise.reject(new Error('image too large (max 1MB)'));
+  const filename = `icon.${ext}`;
+  // 清旧 + O_EXCL 新建之间不能被另一笔上传插队(否则后者 EEXIST)
+  return serialized(`icon:${path.resolve(cwd)}`, async () => {
+    await clearIconFiles(cwd);
+    await assertSafeChain(cwd, `${WORKSPACE_DIR_NAME}/${filename}`, true);
+    await fs.mkdir(path.join(cwd, WORKSPACE_DIR_NAME), { recursive: true });
+    await writeNew(path.join(cwd, WORKSPACE_DIR_NAME, filename), buf);
+    return updateProjectSettings(cwd, (cur) => ({ ...cur, icon: filename }));
+  });
+}
+
+/** 移除图标(emoji 或图片都算):删 `.tangu/icon.*`,清 settings.icon。 */
+export function deleteProjectIcon(cwd: string): Promise<ProjectSettings | null> {
+  return serialized(`icon:${path.resolve(cwd)}`, async () => {
+    await clearIconFiles(cwd);
+    return updateProjectSettings(cwd, (cur) => ({ ...cur, icon: undefined }));
+  });
+}
+
+/** 读图标图片:只在用户自己的 settings.icon 指向 `icon.<ext>` 时才出这一个固定名文件;逐段拒软链 + O_NOFOLLOW + 大小封顶。 */
+export async function readProjectIcon(cwd: string): Promise<{ data: Buffer; mimeType: string } | null> {
+  const icon = (await readProjectSettings(cwd))?.icon;
+  if (!icon || !PROJECT_ICON_FILE.test(icon)) return null;
+  const rel = `${WORKSPACE_DIR_NAME}/${icon}`;
+  try { await assertSafeChain(cwd, rel, true); } catch { return null; }
+  const fd = await fs.open(path.join(cwd, rel), fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)).catch(() => null);
+  if (!fd) return null;
+  try {
+    const st = await fd.stat();
+    if (!st.isFile() || st.size > AVATAR_MAX_BYTES) return null;
+    return { data: await fd.readFile(), mimeType: AVATAR_EXT_MIME[icon.split('.').pop()!.toLowerCase()] || 'application/octet-stream' };
+  } finally { await fd.close(); }
 }
 
 // ── git ────────────────────────────────────────────────────────────────────

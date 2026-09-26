@@ -1075,3 +1075,18 @@ export const putProjectSettings = (cfg: TanguDesktopConfig, sessionId: string, s
   request<{ settings: ProjectSettings | null }>(cfg, '/agent/project-context/settings', { method: 'PUT', body: JSON.stringify({ sessionId, settings }) }).then((r) => r.settings ?? null)
 export const createProjectSkill = (cfg: TanguDesktopConfig, sessionId: string, input: { slug: string; name: string; description: string; content: string }) =>
   request<{ skill: ProjectSkillInfo }>(cfg, '/agent/project-context/skills', { method: 'POST', body: JSON.stringify({ sessionId, ...input }) }).then((r) => r.skill)
+/** 导入图标图片(引擎写进项目的 `.tangu/icon.<ext>`);返回落盘后的默认项(icon 已指向它)。 */
+export const uploadProjectIcon = (cfg: TanguDesktopConfig, sessionId: string, data: string, mimeType: string) =>
+  request<{ settings: ProjectSettings | null }>(cfg, '/agent/project-context/icon', { method: 'POST', body: JSON.stringify({ sessionId, data, mimeType }) }).then((r) => r.settings ?? null)
+/** 移除图标(emoji 或图片都清)。 */
+export const deleteProjectIcon = (cfg: TanguDesktopConfig, sessionId: string) =>
+  request<{ settings: ProjectSettings | null }>(cfg, `/agent/project-context/icon?sessionId=${encodeURIComponent(sessionId)}`, { method: 'DELETE' }).then((r) => r.settings ?? null)
+/** 图标图片 → objectURL;没有图片 / 云端引擎 / 网络错 → null。 */
+export async function fetchProjectIcon(cfg: TanguDesktopConfig, ref: { sessionId: string } | { cwd: string }): Promise<string | null> {
+  try {
+    const q = 'sessionId' in ref ? `sessionId=${encodeURIComponent(ref.sessionId)}` : `cwd=${encodeURIComponent(ref.cwd)}`
+    const response = await authFetch(`${cfg.backendUrl}/agent/project-context/icon?${q}`, { headers: headers(cfg.token) })
+    if (!response.ok) return null
+    return URL.createObjectURL(await response.blob())
+  } catch { return null }
+}
