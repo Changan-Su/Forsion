@@ -80,10 +80,13 @@ function isExecutableFile(file: string): boolean {
 const readlinkOrNull = (file: string): string | null => { try { return readlinkSync(file) } catch { return null } }
 
 /** Apple 的 /usr/bin/git shim 实际会转去的 git:DEVELOPER_DIR > `xcode-select -s` 选中的目录(新旧两代系统
- *  各存一处)> 缺省位置。只读链接、不起 xcode-select 子进程。 */
-export function darwinShimTargets(env: NodeJS.ProcessEnv = process.env): string[] {
-  const selected = env.DEVELOPER_DIR || ['/var/select/developer_dir', '/var/db/xcode_select_link'].map(readlinkOrNull).find(Boolean)
-  return selected ? [join(selected, 'usr', 'bin', 'git')] : DARWIN_DEVTOOLS_GIT
+ *  各存一处)> 缺省位置。只读链接、不起 xcode-select 子进程。选中值可以是 Xcode.app 本身(Apple 允许),
+ *  xcrun 会补成 Contents/Developer —— 照做,否则把用户选中的 Xcode 误判成失效、换上内置 git。 */
+export function darwinShimTargets(env: NodeJS.ProcessEnv = process.env, readLink: (file: string) => string | null = readlinkOrNull): string[] {
+  const selected = env.DEVELOPER_DIR || ['/var/select/developer_dir', '/var/db/xcode_select_link'].map(readLink).find(Boolean)
+  if (!selected) return DARWIN_DEVTOOLS_GIT
+  const devDir = /\.app\/?$/.test(selected) ? join(selected, 'Contents', 'Developer') : selected
+  return [join(devDir, 'usr', 'bin', 'git')]
 }
 
 /** darwin:按 PATH 查 `git` **实际会命中**的那份能不能用。命中的是 /usr/bin/git shim(含软链到它的)时,

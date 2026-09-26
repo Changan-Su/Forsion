@@ -105,7 +105,20 @@ describe('darwinPathGitWorks 看 PATH 实际命中的那份', () => {
 })
 
 describe('darwinShimTargets 跟着开发者目录走', () => {
+  const noLink = () => null
+  const XCODE_GIT = '/Applications/Xcode.app/Contents/Developer/usr/bin/git'
+
   it('DEVELOPER_DIR 优先:指到哪就只认那里的 git(失效目录 → shim 跑不起来)', () => {
-    expect(darwinShimTargets({ DEVELOPER_DIR: '/nonexistent' })).toEqual(['/nonexistent/usr/bin/git'])
+    expect(darwinShimTargets({ DEVELOPER_DIR: '/nonexistent' }, () => '/Library/Developer/CommandLineTools')).toEqual(['/nonexistent/usr/bin/git'])
+  })
+
+  it('选中值是 Xcode.app 本身时按 xcrun 补成 Contents/Developer', () => {
+    expect(darwinShimTargets({ DEVELOPER_DIR: '/Applications/Xcode.app' }, noLink)).toEqual([XCODE_GIT])
+    expect(darwinShimTargets({ DEVELOPER_DIR: '/Applications/Xcode.app/Contents/Developer' }, noLink)).toEqual([XCODE_GIT])
+  })
+
+  it('没设 DEVELOPER_DIR 时读 xcode-select -s 留下的链接;都没有走缺省 Xcode.app → CLT', () => {
+    expect(darwinShimTargets({}, (f) => (f === '/var/db/xcode_select_link' ? '/Applications/Xcode.app' : null))).toEqual([XCODE_GIT])
+    expect(darwinShimTargets({}, noLink)).toEqual([XCODE_GIT, '/Library/Developer/CommandLineTools/usr/bin/git'])
   })
 })
