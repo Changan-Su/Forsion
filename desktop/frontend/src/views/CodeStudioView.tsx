@@ -102,7 +102,9 @@ export function CodeStudioView({ extendView, leaf }: ViewProps) {
         ? { type: 'chat', params: { followActive: true, reuseKey: 'primary', studio: true } }
         : { type: 'coding-navigation', params: {} }
       const kept = ws.stash.left.filter(view => view.type !== previous && view.type !== desired)
-      useWorkspace.setState({ stash: { ...ws.stash, left: [next, ...kept] } })
+      // 暂存里原先激活的若正是被换掉的那个,激活项跟着换成新视图;否则展开时找不到它,会落到别的标签(Codex r3c)
+      const active = ws.stashActive.left === previous ? next.type : ws.stashActive.left
+      useWorkspace.setState({ stash: { ...ws.stash, left: [next, ...kept] }, stashActive: { ...ws.stashActive, left: active } })
       return
     }
     // Older saved Coding layouts still have Chat in the left slot. Replace that View
