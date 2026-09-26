@@ -8,6 +8,10 @@
  * 末尾「评审二轮」一组:卡片 FIFO(不丢、不覆盖)、代答 / 超时后的「已过期」口径、receive 不占轮询、
  * 通道停止时兑现审批、启动对齐只收紧、扫码带档同步全部绑定。
  * 「Codex 三轮」一组:分派到一半时通道停止 / 账号断开,不再起一个没人接管的 run(已落库的入队即中止)。
+ * 「Codex 三轮 b #1」一组:查绑定期间停用再启用 / 账号断开,旧入站回来后不兑现新一代的卡、不停新 run、不迟到执行命令。
+ * 「Codex 三轮 b 复核」一组:入站按**到达**代数认(排在慢分派后面的旧入站、排在查绑定锁上的旧入站);命令途中停了,写操作不做、不回话。
+ * 审批卡不论几条一律经 driver.send 主动推送(不经出口回给入站消息):出口拿不到送达结果,单条卡被限流丢了也能被随口一句「好」批掉。
+ * 所以下面凡是等审批卡的用例,卡都在 sent 里、入站那条的回复是 '';回「批准」前先 flush 让送达确认落下(否则答「还在发」)。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChannelDriver } from './types.js';
@@ -96,6 +100,10 @@ vi.mock('../services/modelCatalog.js', async (importOriginal) => ({
 vi.mock('../services/replySegment.js', () => ({ resolveReplySegment: () => ({ enabled: false }), splitMessage: (t: string) => [t], segmentDelayMs: () => 0 }));
 vi.mock('../services/voiceMessage.js', () => ({ resolveVoiceMessage: () => ({ enabled: false, wechat: false, model: '' }), synthesizeVoiceWav: vi.fn(), VOICE_MESSAGE_PLUGIN_ID: 'voice-message' }));
 vi.mock('../plugins/settingsStore.js', () => ({ setPluginEnabled: vi.fn(), setScopeSettings: vi.fn() }));
+// 通道 /compact 的整理本体(service 里动态 import):只看它有没有被调到。
+vi.mock('../services/compaction.js', () => ({ compactSession: vi.fn(async () => ({ ok: true, summarizedCount: 3 })) }));
+vi.mock('../services/compactionSettings.js', () => ({ resolveCompactionSettings: () => ({}), globalCompactionLayer: () => ({}) }));
+vi.mock('../services/delegateTranscript.js', () => ({ isDelegateActive: () => false }));
 vi.mock('./config.js', () => ({
   channelSettings: () => state.settings,
   saveChannelSettings: vi.fn((_k: string, patch: any) => { Object.assign(state.settings, patch); return state.settings; }),
@@ -110,6 +118,10 @@ import { CHANNEL_REPLY_MAX } from './messages.js';
 import { abortRun, enqueueRun } from '../services/agentLoop.js';
 import { createRun } from '../services/runStore.js';
 import { query } from '../core/db.js';
+import { listModelCatalog } from '../services/modelCatalog.js';
+import { setPluginEnabled, setScopeSettings } from '../plugins/settingsStore.js';
+import { compactSession as compactImpl } from '../services/compaction.js';
+import { getAgent } from '../agents/agentRegistry.js';
 
 // receive() 的串行分派链比直接 handleInbound 多几跳微任务:多冲几轮。
 const flush = async (): Promise<void> => { for (let i = 0; i < 50; i++) await Promise.resolve(); };
@@ -282,9 +294,10 @@ describe('d. 审批超时', () => {
     await flush();
     const r = lastRunId();
     state.emit(r, 'approval_request', { approvalId: 'apv-1', preview: 'run_bash rm -rf build' });
-    const card = await p;
-    expect(card).toContain('run_bash rm -rf build');
-    expect(card).toContain('10 分钟');
+    await expect(p).resolves.toBe(''); // 审批卡主动推送,不作入站那条的回复
+    const cards = sent.filter((t) => t.includes('run_bash rm -rf build'));
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toContain('10 分钟');
     await vi.advanceTimersByTimeAsync(CHANNEL_APPROVAL_TIMEOUT_MS - 1000);
     expect(state.approvals).toEqual([]);
     await vi.advanceTimersByTimeAsync(2000);
@@ -426,9 +439,11 @@ describe('评审二轮:卡片队列(每 peer 一条 FIFO,队首显示,答完 / �
     const r = lastRunId();
     state.emit(r, 'approval_request', { approvalId: 'apv-1', preview: 'sub1: rm a' });
     state.emit(r, 'inquiry_request', { inquiryId: 'inq-1', question: 'Which dir?', options: ['a', 'b'] });
-    const card = await p;
-    expect(card).toContain('sub1: rm a');
-    expect(card).not.toContain('Which dir?');
+    await expect(p).resolves.toBe(''); // 审批卡主动推送
+    await flush(); // 送达确认落下,「批准」才兑现
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain('sub1: rm a');
+    expect(sent[0]).not.toContain('Which dir?');
     const p2 = inbound(svc, '批准');
     await expect(p2).resolves.toContain('Which dir?');
     expect(state.approvals).toEqual([['apv-1', { action: 'approve' }]]);
@@ -448,11 +463,12 @@ describe('评审二轮:卡片队列(每 peer 一条 FIFO,队首显示,答完 / �
     const r = lastRunId();
     state.emit(r, 'approval_request', { approvalId: 'apv-1', preview: 'sub1: rm a' });
     state.emit(r, 'approval_request', { approvalId: 'apv-2', preview: 'sub2: rm b' });
-    expect(await p).toContain('sub1: rm a');
+    await expect(p).resolves.toBe(''); // 审批卡主动推送
+    expect(sent.filter((t) => t.includes('sub1: rm a'))).toHaveLength(1);
+    expect(sent.some((t) => t.includes('sub2: rm b'))).toBe(false); // 第二张排着,还没显示
     await vi.advanceTimersByTimeAsync(CHANNEL_APPROVAL_TIMEOUT_MS - 60_000); // 第一张快到点才答
-    const p2 = inbound(svc, '批准');
-    const card2 = await p2;
-    expect(card2).toContain('sub2: rm b');
+    await expect(inbound(svc, '批准')).resolves.toBe(''); // 下一张是审批卡:同样主动推送,不作这条「批准」的回复
+    expect(sent.filter((t) => t.includes('sub2: rm b'))).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(CHANNEL_APPROVAL_TIMEOUT_MS - 1000); // 第二张从显示时起算,还没到
     expect(state.approvals).toEqual([['apv-1', { action: 'approve' }]]);
     await vi.advanceTimersByTimeAsync(2000);
@@ -472,9 +488,11 @@ describe('评审二轮:卡片队列(每 peer 一条 FIFO,队首显示,答完 / �
     const rB = lastRunId();
     state.emit(rA, 'approval_request', { approvalId: 'apv-A', preview: 'A: deploy' });
     state.emit(rB, 'approval_request', { approvalId: 'apv-B', preview: 'B: rm -rf' });
-    expect(await pA).toContain('A: deploy');
+    await expect(pA).resolves.toBe(''); // A 的卡主动推送
+    expect(sent.filter((t) => t.includes('A: deploy'))).toHaveLength(1);
     await expect(pB).resolves.toBe(''); // B 的卡排在后面:B 的出口摘下(不转 typing、不推「仍在执行」)
     expect(sent.some((t) => t.includes('B: rm -rf'))).toBe(false);
+    await flush(); // A 卡送达确认落下
     const pv = inbound(svc, '批准');
     await flush();
     expect(state.approvals).toEqual([['apv-A', { action: 'approve' }]]);
@@ -969,6 +987,396 @@ describe('Codex 三轮:分派到一半时通道停止 / 账号断开 —— 不�
   });
 });
 
+describe('Codex 三轮 b #1:查绑定期间通道停用 / 账号断开 —— 上一代的入站回来后整条作废,不碰新一代的卡 / run / 会话', () => {
+  const origQuery = vi.mocked(query).getMockImplementation()!;
+  let releaseHeld: (() => void) | null = null;
+  // 断言中途失败也放掉挂着的查绑定:按账号的锁是模块级的,不放会让后面碰 acc 的用例全部排队超时
+  afterEach(() => { releaseHeld?.(); releaseHeld = null; vi.mocked(query).mockImplementation(origQuery); });
+  /** 让下一次查绑定(FROM tangu_wechat_bindings)挂住直到 release();之后的查询照常。 */
+  const holdBindingLookup = (): { release: () => void; pending: () => boolean } => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    releaseHeld = release;
+    let armed = true;
+    let waiting = false;
+    vi.mocked(query).mockImplementation(async (sql: string, params?: any[]) => {
+      if (armed && sql.includes('FROM tangu_wechat_bindings')) { armed = false; waiting = true; await gate; waiting = false; }
+      return origQuery(sql, params);
+    });
+    return { release, pending: () => waiting };
+  };
+  /**
+   * 新一代(停用再启用 / 重新接入账号之后)的一张审批卡。正常分派造不出这个状态:查绑定按账号加了 FIFO 锁,新一代的入站排在
+   * 挂着的旧入站后面、来不及登记 run —— 这里直接登记,钉住「挡住旧入站的是代数检查,不是锁的排队顺序」(锁日后收窄 / 挪位也不回归)。
+   */
+  const newGenerationCard = async (svc: ChannelService): Promise<void> => {
+    (svc as any).trackRun('run-new', { key: 'acc:peer', accountId: 'acc', peerId: 'peer' });
+    state.emit('run-new', 'approval_request', { approvalId: 'apv-new', preview: 'new: rm -rf b' });
+    await flush(); // 卡片送达确认(delivering 落下),否则旧「批准」本来就会被「还在发送」挡住,测不出东西
+    expect((svc as any).prompts.get('acc:peer')?.[0]?.approvalId).toBe('apv-new');
+  };
+  const stops: Array<[string, (svc: ChannelService) => Promise<void>]> = [
+    // 停用 = hub.stopChannel → releasePending;再启用只重启传输层(hub.restartChannel),service 实例常驻,无需再调什么
+    ['通道停用再启用', async (svc) => { svc.releasePending(); }],
+    ['该账号断开再接入', async (svc) => { await svc.disconnect('u1', 'acc'); }],
+  ];
+
+  for (const [label, stop] of stops) {
+    it.each(['批准', '拒绝', '停止', '/stop'])(`${label}:旧的「%s」查绑定回来后不兑现新卡、不停新 run、不回话`, async (text) => {
+      const svc = makeService();
+      // 旧一代:用户正对着一张审批卡作答
+      const p0 = inbound(svc, 'old task');
+      await flush();
+      state.emit(lastRunId(), 'approval_request', { approvalId: 'apv-old', preview: 'old: rm a' });
+      await expect(p0).resolves.toBe(''); // 审批卡主动推送
+      expect(sent.some((t) => t.includes('old: rm a'))).toBe(true);
+      await flush(); // 送达确认落下:旧卡此刻可批,与真实的「对着一张卡作答」同态
+
+      const hold = holdBindingLookup();
+      let reply: unknown = 'pending';
+      // 不 await:修坏时旧「批准」会兑现新卡并挂在新 run 的回复出口上(永不 settle),断言要落在下面的状态上而不是超时
+      void svc.handleInbound({ accountId: 'acc', peerId: 'peer', text, messageId: 'm-stale' }).then((r) => { reply = r; });
+      await flush();
+      expect(hold.pending()).toBe(true);
+      await stop(svc);
+      expect(state.approvals).toEqual([['apv-old', { action: 'reject', rejectReason: APPROVAL_CHANNEL_STOPPED_REASON }]]);
+
+      await newGenerationCard(svc);
+      state.aborted = [];
+      sent = [];
+      hold.release();
+      await flush();
+      expect(state.approvals).toHaveLength(1); // apv-new 没被旧消息兑现(批准 / 拒绝都没有)
+      expect(reply).toBe('');
+      expect(state.aborted).toEqual([]); // 新 run 没被旧「停止」停掉
+      expect((svc as any).prompts.get('acc:peer')?.[0]?.approvalId).toBe('apv-new');
+      expect((svc as any).runsByPeer.get('acc:peer')?.has('run-new')).toBe(true);
+      expect(sent).toEqual([]);
+
+      // 新一代照常:此后的「批准」兑现的就是它
+      void svc.handleInbound({ accountId: 'acc', peerId: 'peer', text: '批准', messageId: 'm-fresh' });
+      await flush();
+      expect(state.approvals.at(-1)).toEqual(['apv-new', { action: 'approve' }]);
+    });
+  }
+
+  it('旧的 /new 查绑定回来时通道已停用:不新建会话、不改连接、不回话(今天就走得到的一条)', async () => {
+    const svc = makeService();
+    const create = vi.spyOn(svc, 'createChannelSession').mockResolvedValue('s-new');
+    const connect = vi.spyOn(svc, 'setConnectedSession').mockResolvedValue({ ok: true });
+    const hold = holdBindingLookup();
+    const p = svc.handleInbound({ accountId: 'acc', peerId: 'peer', text: '/new', messageId: 'm-new' });
+    await flush();
+    expect(hold.pending()).toBe(true);
+    svc.releasePending();
+    hold.release();
+    await expect(p).resolves.toBe('');
+    expect(create).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
+  });
+
+  it('列过模型后,旧的数字查绑定回来时通道已停用:不改会话模型', async () => {
+    state.models = [
+      { id: 'model-1', name: 'Model One', provider: 'forsion', source: 'forsion', modelType: 'llm', contextWindow: 1, contextWindowSource: 'default', supportsVision: false, thinkingLevels: ['off', 'high'] },
+      { id: 'model-2', name: 'Model Two', provider: 'forsion', source: 'forsion', modelType: 'llm', contextWindow: 1, contextWindowSource: 'default', supportsVision: false, thinkingLevels: ['off', 'high'] },
+    ];
+    const svc = makeService();
+    expect(await inbound(svc, '/model')).toContain('2. Model Two');
+    const hold = holdBindingLookup();
+    const p = svc.handleInbound({ accountId: 'acc', peerId: 'peer', text: '2', messageId: 'm-2' });
+    await flush();
+    expect(hold.pending()).toBe(true);
+    svc.releasePending();
+    hold.release();
+    await expect(p).resolves.toBe('');
+    expect(state.session.model_id).toBe('model-1');
+    expect(state.sql.some(([sql]) => sql.startsWith('UPDATE chat_sessions SET model_id'))).toBe(false);
+    expect(state.created).toEqual([]);
+  });
+});
+
+describe('Codex 三轮 b 复核:入站按到达代数认;命令途中通道停用 / 账号断开 —— 写操作不做、不回话', () => {
+  const origQuery = vi.mocked(query).getMockImplementation()!;
+  const gates: Array<() => void> = [];
+  // 断言中途失败也放掉挂着的闸:按账号的查绑定锁是模块级的,不放会让后面碰 acc 的用例全部排队超时
+  afterEach(() => { for (const r of gates.splice(0)) r(); vi.mocked(query).mockImplementation(origQuery); });
+  const gate = (): { wait: Promise<void>; release: () => void } => {
+    let release!: () => void;
+    const wait = new Promise<void>((r) => { release = r; });
+    gates.push(release);
+    return { wait, release };
+  };
+  type Hold = { release: () => void; hit: () => boolean };
+  /** 下一次命中 match 的查询挂住直到 release()。evalFirst:先按此刻的状态求值再挂(查询已读到旧行、只是回包慢)。 */
+  const holdQuery = (match: (sql: string) => boolean, evalFirst = false): Hold => {
+    const g = gate();
+    let armed = true;
+    let hit = false;
+    vi.mocked(query).mockImplementation(async (sql: string, params?: any[]) => {
+      if (armed && match(sql)) {
+        armed = false;
+        hit = true;
+        if (evalFirst) { const r = await origQuery(sql, params); await g.wait; return r; }
+        await g.wait;
+      }
+      return origQuery(sql, params);
+    });
+    return { release: g.release, hit: () => hit };
+  };
+  /** 让某个 vi.fn 的下一次调用挂住直到 release(),再返回 result()。 */
+  const holdOnce = (fn: any, result: () => any): Hold => {
+    const g = gate();
+    let hit = false;
+    fn.mockImplementationOnce(async () => { hit = true; await g.wait; return result(); });
+    return { release: g.release, hit: () => hit };
+  };
+  const MODELS = [
+    { id: 'model-1', name: 'Model One', provider: 'forsion', source: 'forsion', modelType: 'llm', contextWindow: 1, contextWindowSource: 'default', supportsVision: false, thinkingLevels: ['off', 'low', 'high'] },
+    { id: 'model-2', name: 'Model Two', provider: 'forsion', source: 'forsion', modelType: 'llm', contextWindow: 1, contextWindowSource: 'default', supportsVision: false, thinkingLevels: ['off', 'low', 'high'] },
+  ];
+  const stops: Array<[string, (svc: ChannelService) => Promise<void>]> = [
+    ['通道停用', async (svc) => { svc.releasePending(); }],
+    ['该账号断开', async (svc) => { await svc.disconnect('u1', 'acc'); }],
+  ];
+  const sqlSince = (mark: number, needle: string): boolean => state.sql.slice(mark).some(([sql]) => sql.includes(needle));
+
+  describe('#1 排在慢分派后面的旧入站按到达代数丢弃', () => {
+    const variants: Array<[string, () => void]> = [
+      // mock 的 query 不理会 is_active = FALSE:断开后绑定照样查得到 = 已重新扫码接入
+      ['已重新接入(绑定仍有效):不当成一条新 host 任务「批准」', () => {}],
+      ['未重新接入(查不到绑定):不往已移除的账号回「未绑定」', () => { state.binding.peer_id = 'someone-else'; }],
+    ];
+    for (const [label, afterDisconnect] of variants) {
+      it(`断开账号时排在同 peer 慢命令(列模型)后面的旧「批准」—— ${label}`, async () => {
+        state.models = MODELS;
+        const svc = makeService();
+        const p0 = inbound(svc, 'old task');
+        await flush();
+        state.emit(lastRunId(), 'approval_request', { approvalId: 'apv-old', preview: 'old: rm a' });
+        await expect(p0).resolves.toBe(''); // 审批卡主动推送
+        expect(sent.some((t) => t.includes('old: rm a'))).toBe(true);
+        await flush(); // 送达确认落下
+
+        const slow = holdOnce(vi.mocked(listModelCatalog), () => ({ models: state.models }));
+        void svc.receive({ accountId: 'acc', peerId: 'peer', text: '/model', messageId: 'm-slow' });
+        await flush();
+        expect(slow.hit()).toBe(true); // 慢分派占着这个 peer 的分派链
+        void svc.receive({ accountId: 'acc', peerId: 'peer', text: '批准', messageId: 'm-queued' }); // 到达于断开之前
+        await flush();
+        await svc.disconnect('u1', 'acc');
+        expect(state.approvals).toEqual([['apv-old', { action: 'reject', rejectReason: APPROVAL_CHANNEL_STOPPED_REASON }]]);
+        afterDisconnect();
+        sent = [];
+        slow.release();
+        await flush();
+        await flush();
+        // 断言在状态上,不只在 sent 上:#2 的修复也会吞掉在途 /model 的回复,只看 sent 分不出 #1 回退
+        expect(state.created.map((r) => r.input.message)).toEqual(['old task']);
+        expect(state.enqueued).toHaveLength(1);
+        expect(state.approvals).toHaveLength(1);
+        expect(sent).toEqual([]);
+      });
+    }
+
+    it('断开的是别的账号:排在后面的这条照常分派(代数按账号分)', async () => {
+      state.models = MODELS;
+      const svc = makeService();
+      const slow = holdOnce(vi.mocked(listModelCatalog), () => ({ models: state.models }));
+      void svc.receive({ accountId: 'acc', peerId: 'peer', text: '/model', messageId: 'm-slow' });
+      await flush();
+      expect(slow.hit()).toBe(true);
+      void svc.receive({ accountId: 'acc', peerId: 'peer', text: 'next task', messageId: 'm-queued' });
+      await flush();
+      await svc.disconnect('u1', 'acc2');
+      slow.release();
+      await flush();
+      await flush();
+      expect(state.created.map((r) => r.input.message)).toEqual(['next task']);
+      expect(sent.some((t) => t.includes('Model Two'))).toBe(true); // 在途的 /model 也照常回
+    });
+  });
+
+  it('#1 锁内先看代数:别的 peer 的查绑定挡着时账号断开又重新接入,排在锁上的旧入站不认领新一代还没认主的绑定', async () => {
+    state.binding.peer_id = 'peer-1';
+    const svc = makeService();
+    // peer-1 的查绑定已读到旧绑定(b1 → peer-1),回包慢:占着按账号的查绑定锁
+    const h = holdQuery((sql) => sql.includes('FROM tangu_wechat_bindings'), true);
+    const p1 = svc.handleInbound({ accountId: 'acc', peerId: 'peer-1', text: 'hi', messageId: 'm-1' });
+    const p2 = svc.handleInbound({ accountId: 'acc', peerId: 'peer-2', text: 'rm -rf ~', messageId: 'm-2' }); // 排在锁上
+    await flush();
+    expect(h.hit()).toBe(true);
+    await svc.disconnect('u1', 'acc');
+    state.binding = { ...state.binding, id: 'b2', peer_id: null }; // 重新扫码接入:新绑定还没认主
+    const mark = state.sql.length;
+    h.release();
+    await expect(p1).resolves.toBe('');
+    await expect(p2).resolves.toBe('');
+    expect(state.binding.peer_id).toBeNull();
+    expect(sqlSince(mark, 'SET peer_id')).toBe(false);
+    expect(state.created).toEqual([]);
+  });
+
+  for (const [stopLabel, stop] of stops) {
+    it(`#1 陌生 peer 查绑定期间${stopLabel}:不回「未绑定」(代数检查须在 !binding 之前)`, async () => {
+      const svc = makeService();
+      const h = holdQuery((sql) => sql.includes('FROM tangu_wechat_bindings'));
+      const p = svc.handleInbound({ accountId: 'acc', peerId: 'stranger', text: 'hi', messageId: 'm-x' });
+      await flush();
+      expect(h.hit()).toBe(true);
+      await stop(svc);
+      h.release();
+      await expect(p).resolves.toBe('');
+    });
+  }
+
+  describe('#2 命令在 commands.ts 里 await 期间停了', () => {
+    type Case = {
+      name: string;
+      text: string;
+      setup?: (svc: ChannelService) => Promise<void> | void;
+      hold: (svc: ChannelService) => Hold;
+      check: (svc: ChannelService, mark: number, ctx: Record<string, any>) => Promise<void> | void;
+    };
+    const readSessionSql = (sql: string): boolean => sql.startsWith('SELECT model_id, title, agent_config FROM chat_sessions');
+    const cases: Case[] = [
+      {
+        name: '/new 建会话期间:不把绑定挪到新会话',
+        text: '/new',
+        hold: (svc) => {
+          const g = gate();
+          let hit = false;
+          vi.spyOn(svc, 'createChannelSession').mockImplementation(async () => { hit = true; await g.wait; return 's-new'; });
+          return { release: g.release, hit: () => hit };
+        },
+        check: (_svc, mark) => { expect(sqlSince(mark, 'SET session_id')).toBe(false); },
+      },
+      {
+        name: '列过模型后回「2」、拉目录期间:不改会话模型',
+        text: '2',
+        setup: async (svc) => { expect(await inbound(svc, '/model')).toContain('2. Model Two'); },
+        hold: () => holdOnce(vi.mocked(listModelCatalog), () => ({ models: state.models })),
+        check: (_svc, mark) => {
+          expect(state.session.model_id).toBe('model-1');
+          expect(sqlSince(mark, 'UPDATE chat_sessions SET model_id')).toBe(false);
+          expect(state.created).toEqual([]);
+        },
+      },
+      {
+        name: '/model 拉目录期间:不记下编号列表(新一代回「2」不按用户没见过的列表换模型)',
+        text: '/model',
+        hold: () => holdOnce(vi.mocked(listModelCatalog), () => ({ models: state.models })),
+        check: async (svc) => {
+          void inbound(svc, '2');
+          await flush();
+          expect(state.session.model_id).toBe('model-1');
+          expect(state.created.map((r) => r.input.message)).toEqual(['2']); // 当普通消息
+        },
+      },
+      {
+        name: '/model 2 --default 换完模型、读 Agent 期间:不存通道默认模型',
+        text: '/model 2 --default',
+        hold: () => holdOnce(vi.mocked(getAgent), () => null),
+        check: () => { expect(state.settings.modelId).toBe('model-1'); },
+      },
+      {
+        name: '/think low 读会话期间:不改会话思考档',
+        text: '/think low',
+        hold: () => holdQuery(readSessionSql),
+        check: () => { expect(JSON.parse(state.session.agent_config).thinkingLevel).toBe('high'); },
+      },
+      {
+        name: '/voice 读会话期间:不启用插件、不改设置',
+        text: '/voice',
+        hold: () => holdQuery(readSessionSql),
+        check: (_svc, _mark, ctx) => {
+          expect(vi.mocked(setPluginEnabled).mock.calls.length).toBe(ctx.enabledCalls);
+          expect(vi.mocked(setScopeSettings).mock.calls.length).toBe(ctx.scopeCalls);
+        },
+      },
+      {
+        name: '/voice 启用插件期间:不再改语音设置',
+        text: '/voice',
+        hold: () => holdOnce(vi.mocked(setPluginEnabled), () => undefined),
+        check: (_svc, _mark, ctx) => { expect(vi.mocked(setScopeSettings).mock.calls.length).toBe(ctx.scopeCalls); },
+      },
+      {
+        name: '/resume 1 列会话期间:不挪绑定、不改会话执行配置',
+        text: '/resume 1',
+        setup: () => { state.session = { ...state.session, id: 's2' }; },
+        hold: () => holdQuery((sql) => sql.startsWith('SELECT id, title, updated_at, agent_config FROM chat_sessions')),
+        check: (_svc, mark) => {
+          expect(sqlSince(mark, 'SET session_id')).toBe(false);
+          expect(JSON.parse(state.session.agent_config).execMode).toBeUndefined();
+        },
+      },
+      {
+        name: '/resume 1 已进连接入口、查目标会话期间:不挪绑定、不改会话执行配置',
+        text: '/resume 1',
+        setup: () => { state.session = { ...state.session, id: 's2' }; },
+        hold: () => holdQuery((sql) => sql.startsWith('SELECT agent_config, project_path FROM chat_sessions')),
+        check: (_svc, mark) => {
+          expect(sqlSince(mark, 'SET session_id')).toBe(false);
+          expect(JSON.parse(state.session.agent_config).execMode).toBeUndefined();
+        },
+      },
+      {
+        name: '/compact 读会话期间:不开始整理',
+        text: '/compact',
+        hold: () => holdQuery(readSessionSql),
+        check: (_svc, _mark, ctx) => { expect(vi.mocked(compactImpl).mock.calls.length).toBe(ctx.compactCalls); },
+      },
+      {
+        name: '/compact 已进整理入口、读 Agent 期间:不开始整理',
+        text: '/compact',
+        hold: () => holdOnce(vi.mocked(getAgent), () => null),
+        check: (_svc, _mark, ctx) => { expect(vi.mocked(compactImpl).mock.calls.length).toBe(ctx.compactCalls); },
+      },
+    ];
+
+    for (const [stopLabel, stop] of stops) {
+      for (const c of cases) {
+        it(`${stopLabel}:${c.name};回复为空`, async () => {
+          state.models = MODELS;
+          const svc = makeService();
+          await c.setup?.(svc);
+          const ctx = {
+            enabledCalls: vi.mocked(setPluginEnabled).mock.calls.length,
+            scopeCalls: vi.mocked(setScopeSettings).mock.calls.length,
+            compactCalls: vi.mocked(compactImpl).mock.calls.length,
+          };
+          const h = c.hold(svc);
+          const mark = state.sql.length;
+          sent = [];
+          const p = svc.handleInbound({ accountId: 'acc', peerId: 'peer', text: c.text, messageId: 'm-cmd' });
+          await flush();
+          expect(h.hit()).toBe(true);
+          await stop(svc);
+          h.release();
+          await expect(p).resolves.toBe('');
+          await c.check(svc, mark, ctx);
+        });
+      }
+    }
+
+    it('没停:同样的命令照常写、照常回(闸不误伤)', async () => {
+      state.models = MODELS;
+      const svc = makeService();
+      const connect = vi.spyOn(svc, 'setConnectedSession').mockResolvedValue({ ok: true });
+      vi.spyOn(svc, 'createChannelSession').mockResolvedValue('s-new');
+      expect(await inbound(svc, '/new')).not.toBe('');
+      expect(connect).toHaveBeenCalledTimes(1);
+      expect(await inbound(svc, '/think low')).not.toBe('');
+      expect(JSON.parse(state.session.agent_config).thinkingLevel).toBe('low');
+      const compactCalls = vi.mocked(compactImpl).mock.calls.length;
+      expect(await inbound(svc, '/compact')).not.toBe('');
+      expect(vi.mocked(compactImpl).mock.calls.length).toBe(compactCalls + 1);
+      expect(await inbound(svc, '/model 2 --default')).toContain('Model Two');
+      expect(state.session.model_id).toBe('model-2');
+      expect(state.settings.modelId).toBe('model-2');
+    });
+  });
+});
+
 describe('评审二轮(09-25):询问卡不截选项', () => {
   it('长问题(> 单条上限):按 (i/n) 分条发全 —— 选项与回复提示都在,回「2」映射到用户看得见的第 2 项', async () => {
     const svc = makeService();
@@ -1059,7 +1467,7 @@ describe('评审二轮(09-25):多条审批卡有条没送达 → 不在通道里
     await flush();
     expect(state.approvals).toEqual([['apv-drop', { action: 'reject', rejectReason: APPROVAL_DELIVERY_FAILED_REASON }]]);
     expect(APPROVAL_DELIVERY_FAILED_REASON).not.toMatch(/[一-鿿]/);
-    expect(sent.some((t) => t.includes('有部分内容没能发到这里,已自动拒绝'))).toBe(true);
+    expect(sent.some((t) => t.includes('没能完整发到这里,已自动拒绝'))).toBe(true);
     expect(await inbound(svc, '批准')).toBe('该请求已过期,或已在别处处理。');
     expect(state.approvals).toHaveLength(1);
     expect(state.created).toHaveLength(1);
@@ -1094,7 +1502,7 @@ describe('评审二轮(09-25):多条审批卡有条没送达 → 不在通道里
     failLater!();
     await flush();
     expect(state.approvals).toEqual([['apv-late', { action: 'reject', rejectReason: APPROVAL_DELIVERY_FAILED_REASON }]]);
-    expect(sent.some((t) => t.includes('有部分内容没能发到这里,已自动拒绝'))).toBe(true);
+    expect(sent.some((t) => t.includes('没能完整发到这里,已自动拒绝'))).toBe(true);
     expect(await inbound(svc, '批准')).toBe('该请求已过期,或已在别处处理。');
     expect(state.approvals).toHaveLength(1);
     state.emit(r, 'done', { content: 'skipped deploy' });
@@ -1148,7 +1556,7 @@ describe('评审二轮(09-25):多条审批卡有条没送达 → 不在通道里
     failLater!();
     await flush();
     expect(state.approvals).toHaveLength(1);
-    expect(sent.some((t) => t.includes('有部分内容没能发到这里'))).toBe(false);
+    expect(sent.some((t) => t.includes('没能完整发到这里'))).toBe(false);
     warn.mockRestore();
   });
 
@@ -1166,6 +1574,72 @@ describe('评审二轮(09-25):多条审批卡有条没送达 → 不在通道里
     const reply = sent[sent.length - 1];
     expect(reply).toMatch(/^⏳ The full request is still being sent/);
     expect(reply).not.toMatch(/[一-鿿]/);
+  });
+});
+
+describe('单条审批卡也走主动推送 + 送达闸(出口拿不到送达结果)', () => {
+  // 驱动真实入口:receive 对驱动恒回 '',一切回复都经 driver.send;旧版单条卡走出口,送达结果被丢掉
+  const msgOf = (text: string, id: string) => ({ accountId: 'acc', peerId: 'peer', text, messageId: id });
+  const isCard = (t: string): boolean => t.includes('需要你批准');
+
+  it('单条卡推送失败(如 iLink 限流放弃 → ok:false):按「没发全」拒绝、通知用户;之后随口一句「好」答已过期,什么都不批', async () => {
+    let cardSends = 0;
+    const svc = makeService(async (_a, _p, text) => {
+      if (isCard(text)) { cardSends += 1; return { ok: false, error: 'iLink rate limit: message dropped after 3 retries' }; }
+      sent.push(text);
+      return { ok: true };
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await svc.receive(msgOf('clean up', 'm1'));
+      await flush();
+      const r = lastRunId();
+      state.emit(r, 'approval_request', { approvalId: 'apv-single-drop', preview: 'run_bash rm -rf build' });
+      await flush();
+      expect(cardSends).toBe(1); // 恰好发了一次(没有经出口再发一遍)
+      expect(state.approvals).toEqual([['apv-single-drop', { action: 'reject', rejectReason: APPROVAL_DELIVERY_FAILED_REASON }]]);
+      expect(sent.some((t) => t.includes('没能完整发到这里,已自动拒绝') && t.includes('run_bash rm -rf build'))).toBe(true);
+      await svc.receive(msgOf('好', 'm2')); // 用户根本没见过那张卡
+      await flush();
+      expect(state.approvals).toHaveLength(1); // 「好」没批任何东西
+      expect(sent[sent.length - 1]).toBe('该请求已过期,或已在别处处理。');
+      expect(state.created).toHaveLength(1); // 也没落成一条内容是「好」的新任务
+      state.emit(r, 'done', { content: 'skipped cleanup' });
+      await flush();
+      expect(sent).toContain('skipped cleanup'); // run 的结果照样推回
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('单条卡还没确认送达就回「批准」→ 回「还在发」、不批,卡片留着;送达确认后再回「批准」→ 批准', async () => {
+    let deliverCard: (() => void) | null = null;
+    const svc = makeService((_a, _p, text) => {
+      if (isCard(text)) return new Promise((res) => { deliverCard = () => { sent.push(text); res({ ok: true }); }; });
+      sent.push(text);
+      return Promise.resolve({ ok: true });
+    });
+    await svc.receive(msgOf('ship it', 'm1'));
+    await flush();
+    const r = lastRunId();
+    state.emit(r, 'approval_request', { approvalId: 'apv-single-late', preview: 'git push origin main' });
+    await flush();
+    expect(deliverCard).not.toBeNull(); // 卡经 driver.send 发出,回报还没到
+    await svc.receive(msgOf('批准', 'm2'));
+    await flush();
+    expect(state.approvals).toEqual([]);
+    expect(sent[sent.length - 1]).toBe('⏳ 这个请求的完整内容还在发送中,请收全后稍等片刻再回复「批准」(回复「拒绝」随时有效)。');
+    expect(state.created).toHaveLength(1); // 「批准」没落成新任务
+    expect(await inbound(svc, '/status')).toContain('等你批准'); // 卡片原样留着
+    deliverCard!();
+    await flush();
+    expect(sent.filter((t) => t.includes('git push origin main'))).toHaveLength(1); // 恰好一张
+    await svc.receive(msgOf('批准', 'm3'));
+    await flush();
+    expect(state.approvals).toEqual([['apv-single-late', { action: 'approve' }]]);
+    state.emit(r, 'done', { content: 'pushed' });
+    await flush();
+    expect(sent[sent.length - 1]).toBe('pushed');
   });
 });
 
@@ -1207,7 +1681,7 @@ describe('评审二轮(09-25):微信单账号断开释放该账号的卡片', ()
     expect(state.approvals).toEqual([['apv-d1', { action: 'reject', rejectReason: APPROVAL_CHANNEL_STOPPED_REASON }]]);
   });
 
-  it('兑现询问的答复自标 [No answer](ask_user 会在前面拼「用户回答:」),且是英文', () => {
+  it('兑现询问的答复自标 [No answer](ask_user 给用户答复贴「User answered:」,只有逐字认出的系统代答原样交回),且是英文', () => {
     expect(INQUIRY_CHANNEL_STOPPED_ANSWER.startsWith('[No answer]')).toBe(true);
     expect(INQUIRY_CHANNEL_STOPPED_ANSWER).not.toMatch(/[一-鿿]/);
   });
@@ -1220,7 +1694,7 @@ describe('评审二轮(09-25):过长拒绝落在一张仍待答的卡之后', ()
     await flush();
     const r = lastRunId();
     state.emit(r, 'approval_request', { approvalId: 'apv-A', preview: 'git push --force origin main' });
-    await p; // A 经出口回给入站消息
+    await p; // A 主动推送(审批卡一律如此)
     state.emit(r, 'approval_request', { approvalId: 'apv-B', preview: 'x'.repeat(PREVIEW_PART_MAX * (APPROVAL_CARD_MAX_PARTS + 1)) });
     await flush();
     expect(state.approvals).toEqual([['apv-B', { action: 'reject', rejectReason: approvalTooLongReason(PREVIEW_PART_MAX * (APPROVAL_CARD_MAX_PARTS + 1)) }]]);

@@ -84,8 +84,8 @@ export const CHANNEL_MESSAGES = {
     en: '⏳ The full request is still being sent. Once you have all of it, reply "approve" again in a moment ("reject" works any time).',
   },
   approvalDeliveryFailed: {
-    zh: '⚠️ 下面这个待批操作有部分内容没能发到这里,已自动拒绝、没有执行:\n{head}\n\n如需执行,请到 Tangu Desktop 里继续这个任务,在那里看全文并批准。',
-    en: '⚠️ Part of this approval request could not be delivered to this chat, so it was rejected automatically and not run:\n{head}\n\nTo run it, continue this task in Tangu Desktop, where you can review the full text and approve it.',
+    zh: '⚠️ 下面这个待批操作没能完整发到这里,已自动拒绝、没有执行:\n{head}\n\n如需执行,请到 Tangu Desktop 里继续这个任务,在那里看全文并批准。',
+    en: '⚠️ This approval request could not be fully delivered to this chat, so it was rejected automatically and not run:\n{head}\n\nTo run it, continue this task in Tangu Desktop, where you can review the full text and approve it.',
   },
   promptStillPending: {
     zh: '⏳ 注意:上面还有一个请求在等你答复,你接下来的回复(包括「批准」「好的」)都会作用于它:\n{head}',

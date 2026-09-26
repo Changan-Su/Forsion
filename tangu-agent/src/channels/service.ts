@@ -14,7 +14,7 @@
  *   - 每个 run **一个**事件订阅(trackRun → onRunEvent),审批 / 询问 / 结果全在这里登记与投递。旧版回复等待者
  *     自己订阅、在第一张卡处退订,此后到的第二张卡(并行子代理用父 runId 发 ask_user;/new 后两个会话各跑一个
  *     run)没人接,直接丢了。等待者现在只是一个「回复出口」(ReplySink):挂着时 run 的里程碑经它回给触发它的那条
- *     入站消息,没挂时经驱动主动推送。
+ *     入站消息,没挂时经驱动主动推送。例外:审批卡一律主动推送(要拿送达结果,见 showPrompt)。
  *   - 卡片(审批 / 询问)每 peer 一条 FIFO:队首 = 正显示在聊天里的那张,「批准 / 拒绝」/ 答复只作用于它;答完 /
  *     作废后再显示下一张。旧版每 peer 一个槽,第二张直接覆盖第一张、第一张永远无人兑现。
  *   - 审批卡**显示出来**后 10 分钟无人应答 → 按拒绝兑现(rejectReason 与「用户拒绝」区分),并在通道里说一声。
@@ -57,11 +57,13 @@ export const APPROVAL_CHANNEL_STOPPED_REASON = 'The chat channel was stopped or 
 /**
  * 通道完全停止 / 账号断开时还挂着的询问(ask_user / 计划审阅)的兜底答复。所属 run 此时已被中止(releasePending → abandonRun),
  * 正常路径下询问随 abort 信号释放、用不到它;只有不带信号登记的询问才靠它从等待里出来(否则 run 永远卡着,询问不超时)。给模型看,英文。
- * 开头自带「[No answer]」:ask_user 会在前面拼上「用户回答:」,不自标的话模型读到的是「用户回答了:通道停了」。
+ * 开头自带「[No answer]」:ask_user 给用户的答复贴「User answered:」标签,只有与 interaction.ts 的 SYSTEM_ANSWERS 逐字相同的
+ * 系统代答才原样交回、不贴标签 —— 所以这串必须与 interaction.ts 里那份 INQUIRY_CHANNEL_STOPPED_ANSWER 逐字相同
+ * (改一边忘了另一边,模型读到的就是「User answered: 通道停了」;interaction.test.ts 的钉子测试兜着)。
  */
 export const INQUIRY_CHANNEL_STOPPED_ANSWER = '[No answer] The chat channel was stopped or disconnected before the user answered this question. This is a system note, not the user\'s reply: do not assume an answer; continue without it or wait for the user to reach out again.';
-/** 多条审批卡有条没发出去(驱动报失败):用户没看全,不在通道里批。给模型看,英文。 */
-export const APPROVAL_DELIVERY_FAILED_REASON = 'Part of this approval request could not be delivered to the chat channel, so the user could not review it in full there and it was not run. If it is still needed, ask the user to continue in Tangu Desktop, where they can review and approve the full action.';
+/** 审批卡(单条整张,或多条里的某一条)没发出去(驱动报失败):用户没看全,不在通道里批。给模型看,英文。 */
+export const APPROVAL_DELIVERY_FAILED_REASON = 'All or part of this approval request could not be delivered to the chat channel, so the user could not review it in full there and it was not run. If it is still needed, ask the user to continue in Tangu Desktop, where they can review and approve the full action.';
 /** 审批内容长到通道里分条也显示不全:不在通道里批(批准后执行的是完整参数,卡上看不到的尾巴不能替用户放行)。 */
 export function approvalTooLongReason(chars: number): string {
   return `This action was too long (${chars} characters) to show in full in the chat channel, so the user could not review it there and it was not run. If it is still needed, split it into shorter steps, or ask the user to continue in Tangu Desktop, where they can review and approve the full action.`;
@@ -115,9 +117,10 @@ interface ApprovalPrompt extends PeerAddr {
   /** 无人应答超时:这张卡**显示出来**时才起算(排队期间用户看不到它,不能替他计时)。 */
   timer?: ReturnType<typeof setTimeout>;
   /**
-   * 经主动推送发出、还有条没确认送达(showPrompt 的 send 路径):这期间「批准」不兑现(回一句「还在发」),
+   * 还有条没确认送达(审批卡不论几条一律经主动推送发出,见 showPrompt):这期间「批准」不兑现(回一句「还在发」),
    * 「拒绝」照常兑现;任一条报失败即按「没发全」拒绝(onApprovalUndelivered)。
-   * 旧版一发出就开放批准:用户看到第一条就回「批准」,执行的是含未送达尾巴的完整操作。
+   * 旧版一发出就开放批准:用户看到第一条就回「批准」,执行的是含未送达尾巴的完整操作;单条卡走出口时连送达结果都没有,
+   * 被限流丢了的卡用户没见过,随口一句「好」也会批掉它。
    */
   delivering?: boolean;
 }
@@ -165,6 +168,17 @@ interface RunState {
 
 /** 分派结果:直接回一句,或一个要等的 run 回复(不能直接返回 Promise —— async 函数会把它摊平成等待)。 */
 type Dispatched = string | { wait: Promise<string> };
+
+/** 一条入站所属的「代」:通道 epoch(releasePending 递增)+ 该账号的断开代数(releasePendingFor 递增)。 */
+interface InboundGen { epoch: number; accGen: number }
+
+/**
+ * 命令执行途中通道停止 / 账号断开:命令运行时的写操作闸抛这个,命令就地收手(commands.ts 的 run 把它收成「命令失败」,
+ * dispatchInbound 见通道已换代把这句回复也吞掉 —— 用户看不到,只进开发日志)。
+ */
+class ChannelGoneError extends Error {
+  constructor() { super('channel stopped or account disconnected while this command was running; command dropped'); }
+}
 
 export interface ChannelServiceOpts {
   kind: ChannelKind;
@@ -272,8 +286,8 @@ export class ChannelService {
   /** releasePending 递增:排在分派链里、还没轮到的入站随之作废;分派到一半的入站也据此不再起 run(见 dispatchInbound 的 channelGone)。 */
   private epoch = 0;
   /**
-   * accountId → 断开代数(releasePendingFor 递增)。epoch 是全通道的,单账号断开不动它;分派已过了 findBinding(绑定还没作废)、
-   * 正卡在查会话 / 存入站文件 / createRun 上的这个账号的入站,靠它知道「账号已断开,别再起 run」。
+   * accountId → 断开代数(releasePendingFor 递增)。epoch 是全通道的,单账号断开不动它;这个账号的入站按**到达时**的代数认:
+   * 排在分派链里还没轮到的、正在查绑定 / 跑命令 / 查会话 / 存入站文件 / createRun 的,都靠它知道「账号已断开,整条作废」。
    * 不清:键数以出现过的账号为上限;清掉会让代数回到 0,与分派中途记下的快照可能恰好相等。
    */
   private readonly accountGen = new Map<string, number>();
@@ -324,8 +338,9 @@ export class ChannelService {
   /**
    * 断开**某一个账号**(微信多账号里只移除一个;其余账号照常在跑):只中止 / 释放这个账号名下的 run 与卡片,语义同 releasePending。
    * 旧版单账号断开只作废绑定 + 移除 iLink 账号,它名下在等 ask_user 的 run 永远等、结果推给一个已不存在的账号。
-   * epoch 是全通道的,不动:排在分派链里的这个账号的旧入站,轮到时绑定已作废,只会回「未绑定」;已过了 findBinding、正在分派的,
-   * 由 accountGen 递增作废(不起 run;run 行已落库的入队即中止)。
+   * epoch 是全通道的,不动;分派链也不清(别的账号的入站照常排)。这个账号的旧入站由 accountGen 递增作废:还排在分派链里的,
+   * 轮到时按到达代数整条丢弃(不回「未绑定」,也不在重新接入后被当成新任务);正在分派的,不认领 / 不兑现卡片 / 命令不写 / 不起 run
+   * (run 行已落库的入队即中止)。
    */
   releasePendingFor(accountId: string): void {
     this.accountGen.set(accountId, (this.accountGen.get(accountId) ?? 0) + 1); // 分派中途的该账号入站随之作废
@@ -529,16 +544,21 @@ export class ChannelService {
     return { ok: true };
   }
 
-  /** 把「正在连接的 session」切换到 sessionId(校验归属;兜底补齐 host+cwd)。 */
-  async setConnectedSession(userId: string, sessionId: string): Promise<{ ok: boolean }> {
+  /**
+   * 把「正在连接的 session」切换到 sessionId(校验归属;兜底补齐 host+cwd)。
+   * stale:通道命令(/new /resume)传入 —— 中途通道停止 / 账号断开(可能已重新接入)的,不去挪新一代的绑定。
+   */
+  async setConnectedSession(userId: string, sessionId: string, stale?: () => boolean): Promise<{ ok: boolean }> {
     const rows = await query<any[]>(`SELECT agent_config, project_path FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [sessionId, userId]);
     const s = rows[0];
     if (!s) throw new Error('Session not found');
     if (s.project_path !== this.workspaceDir()) throw new Error("Only sessions in this channel's workspace can be connected");
     const cfg = parseJson(s.agent_config) || {};
     if (cfg.execMode !== 'host' || !cfg.cwd) {
+      if (stale?.()) throw new ChannelGoneError();
       await patchSessionAgentConfig(sessionId, { execMode: 'host', approvalMode: cfg.approvalMode || this.settings().approvalMode, cwd: cfg.cwd || s.project_path || this.workspaceDir() });
     }
+    if (stale?.()) throw new ChannelGoneError();
     await query(`UPDATE tangu_wechat_bindings SET session_id = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND channel = ? AND is_active = TRUE`, [sessionId, userId, this.kind]);
     return { ok: true };
   }
@@ -580,10 +600,13 @@ export class ChannelService {
    */
   receive(msg: ChannelInbound): Promise<string> {
     const key = this.peerKey(msg.accountId, msg.peerId);
-    const epoch = this.epoch;
+    // 到达时的代数(通道 epoch + 该账号断开代数),不是轮到分派时的:前面同一 peer 的慢分派(/compact、列模型、大文件)
+    // 挡着时断开账号,releasePendingFor 不清分派链,排在后面的旧「批准」轮到时若现取快照,就成了新一代的入站 ——
+    // 没重新接入则往已移除的账号回「未绑定」,已重新接入则当成一条新 host 任务「批准」起 run(Codex 三轮 b 复核 #1)。
+    const gen = this.inboundGen(msg.accountId);
     const step = (this.inboundChains.get(key) ?? Promise.resolve()).then(async () => {
-      if (epoch !== this.epoch) return; // 通道已停止 / 重启:排队中的旧入站作废
-      const r = await this.dispatchInbound(msg);
+      if (this.isStaleGen(gen, msg.accountId)) return; // 排队期间通道停止 / 该账号断开:旧入站整条作废、不回话
+      const r = await this.dispatchInbound(msg, gen);
       if (typeof r === 'string') {
         if (r) this.push(msg.accountId, msg.peerId, r);
       } else {
@@ -619,21 +642,36 @@ export class ChannelService {
       });
   }
 
-  private async dispatchInbound(msg: ChannelInbound): Promise<Dispatched> {
+  /** 一条入站到达时的停止代数(见 receive)。 */
+  private inboundGen(accountId: string): InboundGen {
+    return { epoch: this.epoch, accGen: this.accountGen.get(accountId) ?? 0 };
+  }
+  /** 该代数之后通道完全停止过(releasePending)或这个账号断开过(releasePendingFor)。两个代数都只增不减:一旦过期永远过期。 */
+  private isStaleGen(gen: InboundGen, accountId: string): boolean {
+    return gen.epoch !== this.epoch || gen.accGen !== (this.accountGen.get(accountId) ?? 0);
+  }
+
+  /** gen = 这条入站**到达**时的代数(receive 传入;handleInbound 直接调用时取调用这一刻)。 */
+  private async dispatchInbound(msg: ChannelInbound, gen: InboundGen = this.inboundGen(msg.accountId)): Promise<Dispatched> {
     const text = normalizeChannelText(msg.text);
     const attachments = msg.attachments ?? [];
     const key = this.peerKey(msg.accountId, msg.peerId);
     const addr: PeerAddr = { key, accountId: msg.accountId, peerId: msg.peerId };
     const L = this.locale();
-    // 分派开始时的停止代数快照。receive 只在分派开始前看一次 epoch;之后这里还有好几个 await(绑定 / 会话 / 存入站文件 / createRun),
-    // 期间通道完全停止(releasePending)或这个账号被断开(releasePendingFor)的,不许再起一个没人接管的 host run(Codex 三轮)。
-    const epoch = this.epoch;
-    const accGen = this.accountGen.get(msg.accountId) ?? 0;
-    const channelGone = (): boolean => epoch !== this.epoch || accGen !== (this.accountGen.get(msg.accountId) ?? 0);
+    // 这里有好几个 await(绑定 / 会话 / 命令 / 存入站文件 / createRun),期间通道完全停止(releasePending)或这个账号被断开
+    // (releasePendingFor)的 = 上一代的入站:不许再起一个没人接管的 host run(Codex 三轮),也不许拿新一代的状态办事。
+    const channelGone = (): boolean => this.isStaleGen(gen, msg.accountId);
     // 先校验绑定:stop / 批准拒绝 / slash / 普通任务 都要求该 peer 已绑定(防未绑定 peer 绕过执行)。
     // 按账号串行:receive 只按 peer 串行,两个不同 peer 同时给一个还没认主的绑定发消息,不锁的话两边都读到 peer_id 为空、
     // 都认领成功(TOFU 竞态,peer 隔离失守)。旧版整条轮询串行,碰巧没这个窗口(QQ 本来就有)。
-    const binding = await withKeyLock(`channel-binding:${this.kind}:${msg.accountId}`, () => this.findBinding(msg.accountId, msg.peerId));
+    // 锁内先看代数:排在锁上等的旧入站(别的 peer 的查绑定挡着时账号断开、又重新扫码接入),轮到时不许认领新一代那个还没认主的绑定。
+    const binding = await withKeyLock(`channel-binding:${this.kind}:${msg.accountId}`, () => (channelGone() ? Promise.resolve(null) : this.findBinding(msg.accountId, msg.peerId)));
+    // 查绑定期间通道停止 / 账号断开(停用再启用也算:epoch 已变,service 实例常驻)= 这条是上一代的入站:整条作废、零副作用
+    // (回 '',连「未绑定」也不往重启后的驱动 / 已移除的账号说)。否则它会拿新一代的状态办事 —— 兑现重启后的新队首审批卡、
+    // 停掉新一代的 run、迟到执行 /new /model 与数字选模型。这里到 stop / 批准拒绝 / 询问作答之间没有 await,查这一处即覆盖;
+    // 命令 / 数字选模型自己还有 await,由 commandRuntime 的写操作闸 + 下面命令返回后的再查兜住(Codex 三轮 b #1 与复核 #2)。
+    // 代数检查才是不变量,不靠按账号查绑定锁(FIFO)碰巧的排队顺序。
+    if (channelGone()) return '';
     if (!binding) return this.opts.unboundHint ?? channelMsg(L, 'unbound', { channel: CHANNEL_NAME[this.kind][L] });
 
     // Channel Session 关闭时不驱动 agent 会话(收件箱转发独立于此,仍可能在推送)。
@@ -650,11 +688,12 @@ export class ChannelService {
     // 回复出口要在 run 的下一个事件之前挂上(run 在兑现后的微任务里才继续,同步挂上即赶得上)。
     if (head?.kind === 'approval' && isVerdict) {
       const approve = APPROVE_RE.test(text);
-      // 分条的卡还没全部确认送达:不批(用户可能只看到了前几条),卡片原样留着、不记作废;「拒绝」任何时候都安全,照常兑现。
+      // 卡还没全部确认送达(单条卡也算:可能还没到、或已被限流丢了):不批(用户可能只看到了前几条,甚至一条都没看到),
+      // 卡片原样留着、不记作废;「拒绝」任何时候都安全,照常兑现。
       if (approve && head.delivering) return channelMsg(L, 'approvalStillSending');
       this.takeHead(key);
       const ok = resolveApproval(head.approvalId, { action: approve ? 'approve' : 'reject' });
-      const wait = ok ? this.waitForRunReply(head.runId) : null; // 先挂出口:下一张卡若是同一 run 的,它就是这条「批准」的回复
+      const wait = ok ? this.waitForRunReply(head.runId) : null; // 先挂出口:下一张询问卡若是同一 run 的,它就是这条「批准」的回复(审批卡一律主动推送)
       this.afterHeadGone(key, head, !ok);
       this.releaseIfWaitingOnUser(head.runId);
       return wait ? { wait } : channelMsg(L, 'expired');
@@ -675,7 +714,11 @@ export class ChannelService {
     }
 
     // slash 命令(目录驱动,见 commands.ts)。未知的 /x 在那边回「未知命令」,绝不落到下面当普通消息。
-    if (cmd) return this.commands.dispatch(this.commandRuntime(binding, key, L), key, cmd);
+    // 命令途中通道停止 / 账号断开:写操作已被运行时的闸挡下(命令就地抛错收手),回复(多半是「命令失败」)也不往已停的通道说。
+    if (cmd) {
+      const reply = await this.commands.dispatch(this.commandRuntime(binding, key, L, channelGone), key, cmd);
+      return channelGone() ? '' : reply;
+    }
 
     // 刚作废的审批卡(超时 / 桌面端代答 / run 在别处结束)后迟到的「批准 / 拒绝」:答「已过期」,不当新任务。
     // 只在没有卡片待答时看(有卡时上面两支已接走);标记被这条消息取用即删。
@@ -689,7 +732,8 @@ export class ChannelService {
 
     // 刚列过模型:10 分钟内回个纯数字 = 选模型(有审批卡待答时数字不归它 —— 走下面当新消息,那张卡按放弃处理)。
     if (!head && /^\d{1,3}$/.test(text)) {
-      const picked = await this.commands.tryPickNumber(this.commandRuntime(binding, key, L), key, text);
+      const picked = await this.commands.tryPickNumber(this.commandRuntime(binding, key, L, channelGone), key, text);
+      if (channelGone()) return ''; // 同上:选模型途中停了,不改模型(运行时挡下)、不回话
       if (picked !== null) return picked;
     }
 
@@ -948,7 +992,8 @@ export class ChannelService {
     const MARK = '\u0000';
     const [head, foot] = channelMsg(L, 'approvalCard', { preview: MARK, minutes: APPROVAL_TIMEOUT_MIN }).split(MARK);
     const n = chunks.length;
-    // 末条点明共几条:(i/n) 之外再提醒一句,丢了中间一条(微信限流丢弃不报错)的用户别照样回「批准」。
+    // 末条点明共几条:(i/n) 之外再提醒一句 —— 驱动报失败的已由送达闸拒绝(onApprovalUndelivered);这句兜的是驱动报了成功、
+    // 用户仍可能没看全的情况,别照样回「批准」。
     const check = `\n${channelMsg(L, 'approvalPartsCheck', { n })}`;
     return chunks.map((c, i) => {
       const tag = `(${i + 1}/${n})`;
@@ -969,7 +1014,10 @@ export class ChannelService {
     });
   }
 
-  /** 显示一张卡(它此刻是队首):审批卡起 10 分钟计时;经它 run 的出口回(出口随即摘下 —— run 在等用户),没有出口就主动推送。 */
+  /**
+   * 显示一张卡(它此刻是队首):审批卡起 10 分钟计时。它 run 的出口随即摘下(run 在等用户)。
+   * 单条询问卡且有出口:经出口回(回给触发它的入站消息);审批卡(不论几条)与多条询问卡:全部按序主动推送。
+   */
   private showPrompt(p: Prompt): void {
     const L = this.locale();
     const more = (this.prompts.get(p.key)?.length ?? 1) - 1;
@@ -980,12 +1028,16 @@ export class ChannelService {
       p.timer.unref?.();
     }
     const sink = this.runs.get(p.runId)?.sink;
-    if (parts.length === 1 && sink) {
+    // 审批卡一律走主动推送:出口(回给入站那条)拿不到送达结果,单条卡被限流丢了用户也就没看到,随口一句「好」却会批掉它。
+    // 推送路径带送达确认(delivering),没发到就按「没发全」拒绝。询问卡答错了只是答错,仍可走出口。
+    // 换路径不改传输:receive 对驱动恒回 '',出口兑现的那句也是 receive 经 push → driver.send 发的 —— 两条路是同一次
+    // driver.send(QQ 被动回复的 msg_id / msg_seq、微信的 context_token 都按 peer 取,次数与配额不变),只差拿不拿送达结果。
+    if (parts.length === 1 && sink && p.kind !== 'approval') {
       sink.deliver(parts[0]);
       sink.close();
       return;
     }
-    // 多条:不能让首条走出口 —— 出口兑现的是入站那条的等待,它在后面的微任务里才发,同步推的第 2 条会抢到前面。
+    // 多条(及审批卡):不能让首条走出口 —— 出口兑现的是入站那条的等待,它在后面的微任务里才发,同步推的第 2 条会抢到前面。
     // 摘下出口(以 '' 兑现:不说话),全部按序主动推送;三个驱动的发送都按调用顺序串行,顺序不乱。
     sink?.close();
     if (p.kind === 'approval') p.delivering = true; // 须在发出之前:send 在调用时同步发起
@@ -998,10 +1050,13 @@ export class ChannelService {
   }
 
   /**
-   * 审批卡(经主动推送发出的)有条没送达:它若仍在显示、没人答,按「没发全」拒绝(给模型的原因写清),通知用户,换下一张卡。
+   * 审批卡(一律经主动推送发出)有条没送达(单条卡即整张):它若仍在显示、没人答,按「没发全」拒绝(给模型的原因写清),
+   * 通知用户,换下一张卡。
    * 送达确认之前「批准」不兑现(delivering),所以失败回报到时这张卡要么还在队首、要么已被拒绝 / 超时 / 取代 / 别处答掉
    * (不在队首,不管)—— 不会有「先批准、后报没送达」。
-   * 微信 iLink 限流重试后丢弃时不报失败(ilinkRuntime),那一路只剩 (i/n) 与末条的「没收全就拒绝」提醒。
+   * 微信 iLink 限流重试后仍被限流 / 会话过期 / ret·errcode 非 0 都回 ok:false(ilinkRuntime.sendWithContext),走这里拒绝。
+   * 通知本身走同一条可能被限流的管道,也可能丢;丢了只是少一句说明 —— 卡已拒绝,迟到的「批准」不会放行它
+   * (没有下一张卡时记下作废时刻,答「已过期」;有下一张时作用于那张,它有自己的送达闸)。
    */
   private onApprovalUndelivered(p: ApprovalPrompt): void {
     if (this.prompts.get(p.key)?.[0] !== p) return;
@@ -1073,10 +1128,17 @@ export class ChannelService {
     if (st?.sink && this.prompts.get(st.addr.key)?.some((p) => p.runId === runId)) st.sink.close();
   }
 
-  /** 命令运行时:把 service 的能力按 commands.ts 的接缝暴露(每条命令现造,绑定 / 会话都是这一刻的)。 */
-  private commandRuntime(binding: BindingRow, key: string, locale: ChannelLocale): ChannelCommandRuntime {
+  /**
+   * 命令运行时:把 service 的能力按 commands.ts 的接缝暴露(每条命令现造,绑定 / 会话都是这一刻的)。
+   * gone = 这条入站所属的代已过期(见 dispatchInbound 的 channelGone)。命令在 commands.ts 里还有 await(列模型 / 读会话 /
+   * 建会话…),期间通道停止 / 账号断开的,写操作一律不做:闸在每个写回调的入口(和它自己的 await 之间)抛 ChannelGoneError。
+   * 抛而不是静默跳过:commands.ts 在写之后还有同步副作用(对在跑 run 改思考档、记 / 忘编号列表、存通道默认模型),抛了整条命令收手。
+   * 列模型虽是读,也在返回前过闸:/model 紧接着同步记下编号列表,不挡的话新一代回个数字会按用户没见过的列表换模型。
+   */
+  private commandRuntime(binding: BindingRow, key: string, locale: ChannelLocale, gone: () => boolean): ChannelCommandRuntime {
     const userId = binding.user_id;
     const sessionId = binding.session_id;
+    const live = (): void => { if (gone()) throw new ChannelGoneError(); };
     return {
       kind: this.kind,
       locale,
@@ -1085,39 +1147,50 @@ export class ChannelService {
       defaultAgentSlug: () => readAgentsMeta().defaultSlug,
       workspaceDir: () => this.workspaceDir(),
       readSession: () => readSessionSettings(sessionId, userId),
-      patchConfig: (patch) => patchSessionAgentConfig(sessionId, patch),
-      setModel: (modelId) => setSessionModelId(sessionId, userId, modelId),
-      listModels: async () => chatModels((await listModelCatalog(deps().profile)).models), // 与通道 run 同一个 profile
+      patchConfig: (patch) => { live(); return patchSessionAgentConfig(sessionId, patch); },
+      setModel: (modelId) => { live(); return setSessionModelId(sessionId, userId, modelId); },
+      listModels: async () => {
+        const models = chatModels((await listModelCatalog(deps().profile)).models); // 与通道 run 同一个 profile
+        live();
+        return models;
+      },
       listAgents: () => listAgents(),
       getAgent: (slug) => getAgent(slug),
       agentLoopCap: (def) => agentCapOf(def),
       defaultLoopCap: DEFAULT_MAX_ITERATIONS,
       newSession: async (title) => {
+        live();
         const sid = await this.createChannelSession(userId, undefined, title);
-        await this.setConnectedSession(userId, sid);
+        live(); // 建会话期间停了:新会话已落库(孤儿,留在通道工作区),但不把绑定挪过去
+        await this.setConnectedSession(userId, sid, gone);
       },
       listSessions: () => this.listProjectSessions(userId),
-      connectSession: async (id) => { await this.setConnectedSession(userId, id); },
-      compact: (focus, modelId, cfg) => this.compactSession(sessionId, modelId, focus, cfg),
+      connectSession: async (id) => { live(); await this.setConnectedSession(userId, id, gone); },
+      compact: (focus, modelId, cfg) => { live(); return this.compactSession(sessionId, modelId, focus, cfg, live); },
       usage: () => this.sessionUsage(sessionId),
       sessionBusy: () => sessionHasActiveRun(sessionId),
       peerRunIds: () => [...(this.runsByPeer.get(key) ?? [])],
-      stopPeer: () => this.stopPeer(key),
+      stopPeer: () => { live(); return this.stopPeer(key); },
       pendingState: () => {
         const head = this.prompts.get(key)?.[0];
         return { approval: head?.kind === 'approval', inquiry: head?.kind === 'inquiry' };
       },
-      requestRunThinking: (runId, level) => requestRunThinking(runId, level),
-      saveDefaultModel: (modelId) => { saveChannelSettings(this.kind, { modelId }); },
+      requestRunThinking: (runId, level) => { live(); requestRunThinking(runId, level); },
+      saveDefaultModel: (modelId) => { live(); saveChannelSettings(this.kind, { modelId }); },
       setVoice: async (on, slug) => {
+        live();
         if (on) await setPluginEnabled(VOICE_MESSAGE_PLUGIN_ID, true); // 确保插件启用(通道-only 用户也能开)
+        live();
         await setScopeSettings(VOICE_MESSAGE_PLUGIN_ID, { agentSlug: slug }, { apply: on });
       },
     };
   }
 
-  /** 与桌面 POST /agent/sessions/:id/compact 同一套:旋钮 = 会话 compaction > 该会话 Agent 的 [compaction] > config.json。 */
-  private async compactSession(sessionId: string, modelId: string, focus: string, cfg: Record<string, unknown>): Promise<{ ok: boolean; summarizedCount?: number; reason?: string }> {
+  /**
+   * 与桌面 POST /agent/sessions/:id/compact 同一套:旋钮 = 会话 compaction > 该会话 Agent 的 [compaction] > config.json。
+   * live:通道命令传入的写操作闸 —— 前面几个 await(动态 import / 读 Agent)期间通道停了就不开始压缩(已开始的整理跑完为止)。
+   */
+  private async compactSession(sessionId: string, modelId: string, focus: string, cfg: Record<string, unknown>, live: () => void): Promise<{ ok: boolean; summarizedCount?: number; reason?: string }> {
     const { isDelegateActive } = await import('../services/delegateTranscript.js');
     if (isDelegateActive(sessionId)) return { ok: false, reason: 'a delegated task is still running' };
     // 动态 import:compaction 依赖面大(历史回放 / 后台用量),通道模块静态引它会把整串拖进每个引用 hub 的入口。
@@ -1125,6 +1198,7 @@ export class ChannelService {
     const { resolveCompactionSettings, globalCompactionLayer } = await import('../services/compactionSettings.js');
     const slug = typeof cfg.agentSlug === 'string' ? cfg.agentSlug : '';
     const def = slug ? await getAgent(slug).catch(() => null) : null;
+    live();
     return compactSession(sessionId, modelId, deps().profile.appId, undefined, {
       focus: focus || undefined,
       settings: resolveCompactionSettings((cfg as any).compaction, def?.compaction, globalCompactionLayer()),
