@@ -33,6 +33,19 @@ describe('removeAgentKeepFiles', () => {
     expect(second.ok && second.keptAt !== first.keptAt && existsSync(second.keptAt!) && existsSync(first.keptAt!)).toBe(true);
   });
 
+  it('遗留扁平 <slug>.md 一起挪走(留在原地下次启动会被迁回来);只剩扁平文件时也是挪不是删', async () => {
+    const { saveAgent, removeAgentKeepFiles } = await import('./agentRegistry.js');
+    await saveAgent({ slug: 'both', name: 'Both', systemPrompt: 'x', description: 'd' });
+    writeFileSync(path.join(home, 'agents', 'both.md'), '---\nname: Both\n---\nold');
+    const both = await removeAgentKeepFiles('both');
+    expect(both.ok && existsSync(path.join(both.keptAt!, 'config.toml')) && existsSync(path.join(both.keptAt!, 'both.md'))).toBe(true);
+    expect(existsSync(path.join(home, 'agents', 'both.md'))).toBe(false);
+    writeFileSync(path.join(home, 'agents', 'flat.md'), '---\nname: Flat\n---\nold');
+    const flat = await removeAgentKeepFiles('flat');
+    expect(readFileSync(path.join(flat.keptAt!, 'flat.md'), 'utf8')).toContain('name: Flat');
+    expect(await removeAgentKeepFiles('ghost')).toEqual({ ok: true }); // 本来就不在
+  });
+
   it('默认 Agent / 非法 slug → 拒,文件不动', async () => {
     const { removeAgentKeepFiles, listAgents } = await import('./agentRegistry.js');
     await listAgents(); // 播种默认 Agent

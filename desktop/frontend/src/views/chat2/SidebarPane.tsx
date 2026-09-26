@@ -587,7 +587,8 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
               </button>
             )
           })()}
-          {p.onShowWorkspaceDetails && isProjectWorkspace(wsMenu.ws) && (
+          {/* 详情按 sessionId 取项目上下文:没有一条会话能借的项目(如空的默认工作区)不给这一项,免得点了没反应 */}
+          {p.onShowWorkspaceDetails && isProjectWorkspace(wsMenu.ws) && [...allSessions, ...allArchived].some((s) => s.project_path === wsMenu.ws.path && !s.projectless) && (
             <button data-act="ws-details" onClick={() => { const ws = wsMenu.ws; setWsMenu(null); p.onShowWorkspaceDetails?.(ws) }}>
               <Info size={13} /> {t('sidebar.ws.details')}
             </button>

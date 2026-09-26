@@ -841,19 +841,20 @@ export async function deleteAgent(slug: string): Promise<boolean> {
  *  (先挪后删:默认 Agent / 启用中的 Muse 被拒时,文件不会先没了)。 */
 export async function removeAgentKeepFiles(slug: string): Promise<{ ok: boolean; keptAt?: string }> {
   if (!agentDeletable(slug)) return { ok: false };
-  const src = path.join(agentsDir(), slug);
   const dest = path.join(agentsDir(), '.removed', `${slug}-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  const moved = async (from: string, to: string): Promise<boolean> => fs.rename(from, to).then(() => true, (e: NodeJS.ErrnoException) => { if (e?.code === 'ENOENT') return false; throw e; });
   try {
     await fs.mkdir(path.dirname(dest), { recursive: true });
-    await fs.rename(src, dest);
-  } catch (e: any) {
-    if (e?.code !== 'ENOENT') return { ok: false };
-    await fs.rm(path.join(agentsDir(), `${slug}.md`), { force: true }).catch(() => { /* 只剩遗留扁平文件 */ });
+    const dir = await moved(path.join(agentsDir(), slug), dest);
+    // 遗留的扁平 <slug>.md 也一起挪走:留在原地下次启动 migrateFlatAgentsOnce 会把这个 Agent 迁回来;只剩它时也不能删
+    if (!dir) await fs.mkdir(dest, { recursive: true });
+    const flat = await moved(path.join(agentsDir(), `${slug}.md`), path.join(dest, `${slug}.md`));
     cache = null;
-    return { ok: true };
+    if (!dir && !flat) { await fs.rmdir(dest).catch(() => { /* ignore */ }); return { ok: true }; } // 本来就不在了
+    return { ok: true, keptAt: dest };
+  } catch {
+    return { ok: false };
   }
-  cache = null;
-  return { ok: true, keptAt: dest };
 }
 
 // ── 头像(存进该 agent 的 Library/,config.avatar 引用;≤1MB)。常量导出供云端 cloudAgentStore 共用。──

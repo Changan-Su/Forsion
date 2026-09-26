@@ -65,9 +65,8 @@ export function TanguDetailsView({ extendView }: Pick<ViewProps, 'extendView'>) 
   const project = useProjectWorkspace(s.session)
   const renderMember = (member: NormalAgentDef, childId?: string | null) => <AgentProfile agent={member} compact sessionId={childId} extendView={extendView} />
   const renderTeam = (teamSession: SessionRecord, teamConfig: AgentConfig) => <TeamProfile key={`${teamSession.id}:${teamConfig.teamSlug || ''}`} session={teamSession} config={teamConfig} renderMember={renderMember} />
-  // 侧栏「查看详情」:临时显示指定的项目 / Agent,不切会话;设下之后当前会话变了就作废(store 订阅也会清)
-  const activeId = useApp((a) => a.activeId)
-  const subject = useDetailsSubject((d) => (d.subject && d.subject.from === activeId ? d.subject : null))
+  // 侧栏「查看详情」:临时显示指定的项目 / Agent,不切会话;右栏跟随的主会话变了就作废(store 订阅也会清)
+  const subject = useDetailsSubject((d) => (d.subject && d.subject.from === sessionId ? d.subject : null))
   const subjectProject = useProjectSubject(subject?.kind === 'project' ? subject.path : null)
   const carrier = useApp((a) => (subjectProject ? a.sessions.find((x) => x.id === subjectProject.carrierId) || a.archivedSessions.find((x) => x.id === subjectProject.carrierId) : undefined))
   const carrierConfig = useApp((a) => (carrier ? a.configBySession[carrier.id] : undefined))
@@ -77,7 +76,7 @@ export function TanguDetailsView({ extendView }: Pick<ViewProps, 'extendView'>) 
     <div className="agent-profile-panel-title">{t('agentProfile.title')}
       {viewing && <button type="button" className="profile-text-action" data-act="details-back" onClick={() => useDetailsSubject.setState({ subject: null })}>{t('agentProfile.backToCurrent')}</button>}</div>
     {viewing === 'project' && subjectProject && carrier ? <ProjectProfile key={`subject:${subjectProject.workspace.path}`} session={carrier} config={carrierConfig || carrier.agent_config || EMPTY_CONFIG}
-        workspace={subjectProject.workspace} currentSessionId={activeId} renderAgent={renderMember} renderTeam={renderTeam} />
+        workspace={subjectProject.workspace} currentSessionId={sessionId} renderAgent={renderMember} renderTeam={renderTeam} />
       : viewing === 'agent' && subjectAgent ? <AgentProfile key={`subject:${subjectAgent.slug}`} agent={subjectAgent} compact extendView={extendView} />
       : project && s.session ? <ProjectProfile key={project.path} session={s.session} config={config} workspace={project} renderAgent={renderMember} renderTeam={renderTeam} />
       : config.groupChat || config.teamSlug ? <TeamProfile key={`${sessionId}:${config.teamSlug || ''}`} session={s.session} config={config} renderMember={renderMember} /> : config.engineId || config.soloEngineId ? <section className="agent-profile-team"><h3>{s.engines.find((e) => e.id === (config.engineId || config.soloEngineId))?.name || config.engineId || config.soloEngineId}</h3><div className="agent-current-session"><strong>{s.session?.title}</strong><span>{s.session?.project_name || config.cwd}</span></div></section> : agent ? <AgentProfile key={agent.slug} agent={agent} compact sessionId={sessionId} extendView={extendView} /> : <p className="agent-profile-muted">{t('agentProfile.noAgent')}</p>}

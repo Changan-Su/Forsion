@@ -338,7 +338,12 @@ async function run(app, win, stub, seen, home) {
   for (let i = 0; i < 30 && fs.existsSync(path.join(projectDir, '.tangu')); i++) await sleep(150)
   await groupHead('Demo Project').waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {})
   const gone = { deletes: [...seen.sessionDeletes].sort(), tangu: fs.existsSync(path.join(projectDir, '.tangu')), dir: fs.existsSync(projectDir), trashed: fs.readdirSync(trashDir).filter((n) => n.endsWith('.tangu')).length, head: await groupHead('Demo Project').count() }
-  check('11f 移除工作区 + 勾选删文件:三个会话 DELETE、.tangu 进废纸篓、项目文件夹还在、侧栏组消失', gone.deletes.join() === 'pd-coder,pd-main,pd-team' && !gone.tangu && gone.dir && gone.trashed === 1 && gone.head === 0, JSON.stringify(gone))
+  // 重载:会话是真从引擎删掉了,不是只在本地列表里藏起来
+  await win.reload({ waitUntil: 'domcontentloaded' })
+  await win.waitForSelector('.t2sw, .t2s-side', { timeout: 30_000 })
+  await groupHead('Tangu 默认工作区').waitFor({ timeout: 15_000 }).catch(() => {})
+  gone.afterReload = await groupHead('Demo Project').count()
+  check('11f 移除工作区 + 勾选删文件:三个会话 DELETE、.tangu 进废纸篓、项目文件夹还在、侧栏组消失且重载后不回来', gone.deletes.join() === 'pd-coder,pd-main,pd-team' && !gone.tangu && gone.dir && gone.trashed === 1 && gone.head === 0 && gone.afterReload === 0, JSON.stringify(gone))
   return shots
 }
 
@@ -355,7 +360,9 @@ async function main() {
   fs.mkdirSync(path.join(projectDir, '.tangu', 'skills'), { recursive: true })
   fs.writeFileSync(path.join(projectDir, '.tangu', 'AGENTS.md'), TEMPLATE, 'utf8')
   const projectIds = new Set(['pd-main', 'pd-coder', 'pd-team', 'pd-default', 'pd-alias'])
-  const stub = await startStubEngine({ agents: AGENTS, sessions: sessionFixtures(projectDir, path.join(vault, 'Sessions'), path.join(home, 'OldTangu')), messages: [], handle: async ({ path: route, method, url, body }) => {
+  // 同一个数组交给桩引擎(state.sessions 就是它):DELETE 从这里真删,重载后列表里才真的没有
+  const sessions = sessionFixtures(projectDir, path.join(vault, 'Sessions'), path.join(home, 'OldTangu'))
+  const stub = await startStubEngine({ agents: AGENTS, sessions, messages: [], handle: async ({ path: route, method, url, body }) => {
     if (route === '/agent/runs' && url.searchParams.has('sessionId')) return { runs: [] }
     if (route === '/agent/teams') return { teams: [] }
     if (route === '/agent/special/config') return { config: { historian: { enabled: false }, muse: { enabled: false } } }
@@ -375,7 +382,7 @@ async function main() {
     if (route === '/agent/project-context/settings' && method === 'PUT') { const b = await body(); seen.settingsPuts.push(b); ctx.settings = b.settings; return { settings: b.settings } }
     if (route === '/agent/project-context/skills' && method === 'POST') { const b = await body(); seen.skills.push(b); const skill = { id: `local:${b.slug}`, name: b.name, description: b.description, path: path.join(projectDir, '.tangu', 'skills', b.slug), legacy: false }; ctx.skills.push(skill); return { skill } }
     if (route === '/agent/sessions' && method === 'POST') seen.sessionsCreated += 1
-    if (/^\/agent\/sessions\/[^/]+$/.test(route) && method === 'DELETE') { seen.sessionDeletes.push(route.split('/')[3]); return { ok: true } }
+    if (/^\/agent\/sessions\/[^/]+$/.test(route) && method === 'DELETE') { const id = route.split('/')[3]; seen.sessionDeletes.push(id); const i = sessions.findIndex((x) => x.id === id); if (i >= 0) sessions.splice(i, 1); return { ok: true } }
     // 删 Agent:?keepFiles=1 = 引擎把目录挪走并回 keptAt(这里造一个真目录,桌面随后把它移进 e2e 废纸篓);名册同步去掉它
     if (/^\/agent\/agents\/[^/]+$/.test(route) && method === 'DELETE') {
       const slug = route.split('/')[3], keepFiles = url.searchParams.get('keepFiles') === '1'

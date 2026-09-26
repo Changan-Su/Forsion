@@ -235,11 +235,14 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     : <>{ctx.doc.truncated ? <span className="project-chip warn">{t('projectProfile.docTruncated')}</span> : <span className="project-chip ok"><Check size={11} />{t('projectProfile.docActive')}</span>}
       {ctx.doc.sources.length > 1 && <span className="project-chip" title={ctx.doc.sources.filter((p) => p !== ctx.doc.path).join('\n')}>{t('projectProfile.docOthers', { count: ctx.doc.sources.length - 1 })}</span>}</>
 
+  // 「当前会话」那一行点开 = 真正的当前会话:跟随模式下就是 session(用传进来的实时 config);侧栏「查看详情」时 session 只是借来的载体
+  const currentOf = (ex: ProjectExecutor): SessionRecord | undefined => (!ex.current ? undefined : current === session.id ? session : ex.sessions.find((x) => x.id === current))
   const detailFor = (ex: ProjectExecutor): ReactNode => {
-    if (ex.kind === 'agent') { const agent = agentOf(ex.id); return agent ? renderAgent(agent, ex.current ? session.id : ex.sessions[0]?.id) : null }
+    const cur = currentOf(ex)
+    if (ex.kind === 'agent') { const agent = agentOf(ex.id); return agent ? renderAgent(agent, cur ? cur.id : ex.sessions[0]?.id) : null }
     if (ex.kind === 'team' || ex.kind === 'party') {
-      const target = ex.current ? session : ex.sessions[0]
-      return target ? renderTeam(target, (ex.current ? config : s.configBySession[target.id]) || target.agent_config || {}) : null
+      const target = cur || ex.sessions[0]
+      return target ? renderTeam(target, (target === session ? config : s.configBySession[target.id]) || target.agent_config || {}) : null
     }
     return null
   }
