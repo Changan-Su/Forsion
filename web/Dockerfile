@@ -23,8 +23,8 @@ COPY lcl ./lcl
 # 手机视口经 `@mobile` 别名装载 Mobile 壳(web/src/main.tsx 动态 import),源码必须在场;
 # 其裸依赖(framer-motion/zustand/react…)同样从 /app/node_modules 解析,已在 web 的 lock 里。
 COPY mobile/src ./mobile/src
-# changelog.ts 经 `?raw` 内联 desktop 根的 CHANGELOG.md(关于页用),frontend/ 之外唯一外部引用。
-COPY desktop/CHANGELOG.md ./desktop/CHANGELOG.md
+# changelog.ts 经 `?raw` 内联 desktop 根的 CHANGELOG.md 与英文版 CHANGELOG.en.md(关于页按语言取),frontend/ 之外唯二的外部引用。
+COPY desktop/CHANGELOG.md desktop/CHANGELOG.en.md ./desktop/
 # 白板引擎的自托管副本由这支脚本从 node_modules 现生成(web 的 `npm run build` 会先跑 prepare-board)。
 # ⚠️ 副本本身**不入库**,所以绝不能指望 COPY desktop/frontend 把它带进来 —— CI 里那个目录是空的。
 COPY desktop/build/copy-excalidraw-assets.cjs ./desktop/build/copy-excalidraw-assets.cjs
