@@ -4,18 +4,24 @@
 .btw-panel { flex: 1; width: 100%; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg); }
 
 .btw-bar {
-  display: flex; align-items: center; gap: 8px;
-  /* min-height 按带「清空」钮的高度留足:空态没有那颗钮,出第一条回答时提示行不该往下跳 */
-  box-sizing: border-box; min-height: 42px; /* 8 + .icon-btn 30 + 4 */
-  padding: 8px 10px 4px 14px;
-  color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.45;
+  display: flex; align-items: flex-start; gap: 8px;
+  box-sizing: border-box; min-height: 76px;
+  padding: 14px 14px 12px 18px;
+  border-bottom: var(--border-width, 1px) solid var(--border);
 }
-.btw-hint { flex: 1; min-width: 0; }
+.btw-bar-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.btw-context { display: flex; align-items: baseline; gap: 8px; min-width: 0; color: var(--text); font-size: var(--ui-font-heading, 14px); line-height: 1.35; }
+.btw-context > span { flex: none; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); font-weight: 400; }
+.btw-context > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.btw-hint { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.45; }
+.btw-bar > .icon-btn { flex: none; margin-top: -4px; }
 
-.btw-body { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 14px 12px; display: flex; flex-direction: column; gap: 18px; }
+.btw-body { flex: 1; min-height: 0; overflow-y: auto; padding: 18px 18px 12px; display: flex; flex-direction: column; gap: 20px; }
 .btw-empty { margin: auto 12px; text-align: center; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.6; }
 
-.btw-turn { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.btw-turn { flex: none; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+/* 短旁聊贴近输入区，长线程仍从顶部滚动。 */
+.btw-body > .btw-turn:first-child { margin-top: auto; }
 .btw-turn-quote {
   margin: 0; padding: 1px 0 1px 10px;
   border-left: 2px solid var(--border);
@@ -43,7 +49,7 @@
 .btw-act:hover { background: var(--overlay-light); color: var(--text); }
 .btw-act:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 1px; }
 
-.btw-compose { padding: 6px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
+.btw-compose { padding: 10px 14px 14px; display: flex; flex-direction: column; gap: 8px; border-top: var(--border-width, 1px) solid var(--border); }
 .btw-quote-chip {
   display: flex; align-items: flex-start; gap: 6px;
   padding: 6px 8px; border-radius: var(--radius-sm, 6px);

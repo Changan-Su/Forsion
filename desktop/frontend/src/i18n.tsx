@@ -6,7 +6,7 @@
  * 各组件按命名空间拥有自己的键前缀(sidebar.* / input.* / chat.* / panel.* / settings.* /
  * about.* / onboarding.* / approval.* / tool.* / inquiry.* / thinking.* / toc.* / common.*)。
  */
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
 import { broadcastPrefs } from './uiPrefsBus'
 import { LOCALE_KEY as LS_KEY } from './types'
 
@@ -3841,6 +3841,17 @@ export const LocaleProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     t: (key, vars) => translateIn(locale, key, vars),
   }), [locale, setLocale])
 
+  return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
+}
+
+/** Secondary React roots (plugin UI mounts) follow the host locale without replacing
+ *  its setter or repeating language detection / region requests. */
+export const HostLocaleProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const locale = useSyncExternalStore(subscribeLocale, currentLocale, currentLocale)
+  const value = useMemo<I18nValue>(() => ({
+    locale, setLocale: setLocaleGlobal,
+    t: (key, vars) => translateIn(locale, key, vars),
+  }), [locale])
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>
 }
 

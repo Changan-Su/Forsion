@@ -85,7 +85,16 @@ async function main() {
     await btw.locator('.btw-turn-a', { hasText: 'AZURE-FALCON' }).waitFor({ timeout: 15000 })
     check('回答来自引擎旁聊端点,问的是本会话', asides.length === 1 && asides[0].sessionId === 'sess-main' && asides[0].question === '代号是什么?' && asides[0].thread.length === 0)
     check('主对话里什么都没发(没有起 run,输入框已清空)', stub.seen.runs.length === 0 && (await input.inputValue()) === '')
-    check('浮窗标题带会话名', (await panel.title()).includes('Parser 重构') || (await panel.locator('.floating-native-chrome').textContent().catch(() => '')).includes('Parser 重构'))
+    check('浮窗保留完整会话名供标题提示', (await panel.locator('.floating-native-chrome > span').getAttribute('title')).includes('Parser 重构'))
+    const chrome = await panel.evaluate(() => {
+      const header = document.querySelector('.floating-native-chrome')
+      const title = header?.querySelector('span')
+      if (!header || !title) return null
+      const a = header.getBoundingClientRect(); const b = title.getBoundingClientRect()
+      return { text: title.textContent, left: b.left - a.left, right: a.right - b.right, height: a.height }
+    })
+    check('macOS 标题避开系统窗口按钮且在窗内居中', process.platform !== 'darwin' || (!!chrome && chrome.text === '顺便问' && chrome.left >= 80 && chrome.right >= 80), JSON.stringify(chrome))
+    check('旁聊头部显示所属会话', (await btw.locator('.btw-context').textContent()).includes('Parser 重构'))
 
     // ── 追问:带上前一轮 ──
     const box = btw.locator('.btw-input textarea')
@@ -93,6 +102,13 @@ async function main() {
     await box.press('Enter')
     await btw.locator('.btw-turn-a', { hasText: 'NOCLAF-ERUZA' }).waitFor({ timeout: 15000 })
     check('追问把第一轮往返带给引擎', asides[1]?.thread?.length === 1 && asides[1].thread[0].answer.includes('AZURE-FALCON'))
+    const shortLayout = await panel.evaluate(() => {
+      const body = document.querySelector('.btw-body')?.getBoundingClientRect()
+      const last = document.querySelector('.btw-turn:last-child')?.getBoundingClientRect()
+      const compose = document.querySelector('.btw-compose')?.getBoundingClientRect()
+      return body && last && compose ? { gap: body.bottom - last.bottom, composeBottom: compose.bottom, viewport: innerHeight } : null
+    })
+    check('短旁聊贴近输入区且输入区留在窗口内', !!shortLayout && shortLayout.gap >= 0 && shortLayout.gap <= 16 && shortLayout.composeBottom <= shortLayout.viewport + 1, JSON.stringify(shortLayout))
     await panel.screenshot({ path: path.join(shots, 'btw-window.png') })
 
     // ── 会话级:切走隐藏、切回再现,线程还在 ──
@@ -196,6 +212,21 @@ async function main() {
     const lum = (bg.match(/\d+(\.\d+)?/g) || []).slice(0, 3).map(Number).reduce((a, b) => a + b, 0) / 3
     check('深色模式下面板底色是暗的(token 生效,不是写死的浅色)', lum < 90, bg)
     await panel2.screenshot({ path: path.join(shots, 'btw-en-dark.png') })
+    const longTitle = 'Parser 重构：包含多阶段分析与多次工具调用的长期会话标题'
+    await panel2.evaluate((title) => window.tangu.openFloatingPanel({ id: 'btw:sess-main', title: `By the way · ${title}`, builtin: 'btw', params: { sessionId: 'sess-main', title, nonce: `long-title-${Date.now()}` } }), longTitle)
+    check('长会话名传到旁聊内容头部', await until(async () => (await panel2.locator('.btw-context strong').getAttribute('title')) === longTitle))
+    await app.evaluate(({ BrowserWindow }) => {
+      BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('id=btw%3Asess-main'))?.setSize(380, 400)
+    })
+    const narrow = await panel2.evaluate(() => {
+      const panel = document.querySelector('.btw-panel')?.getBoundingClientRect()
+      const compose = document.querySelector('.btw-compose')?.getBoundingClientRect()
+      const label = document.querySelector('.btw-context strong')
+      const context = label?.getBoundingClientRect()
+      return panel && compose && context && label ? { panelRight: panel.right, composeBottom: compose.bottom, contextRight: context.right, titleOverflow: label.scrollWidth > label.clientWidth && getComputedStyle(label).textOverflow === 'ellipsis', viewportW: innerWidth, viewportH: innerHeight, scrollW: document.documentElement.scrollWidth } : null
+    })
+    check('最小 macOS 窗口下长标题省略且输入区不越界', !!narrow && narrow.titleOverflow && narrow.panelRight <= narrow.viewportW + 1 && narrow.composeBottom <= narrow.viewportH + 1 && narrow.contextRight <= narrow.viewportW - 14 && narrow.scrollW <= narrow.viewportW + 1, JSON.stringify(narrow))
+    await panel2.screenshot({ path: path.join(shots, 'btw-en-dark-narrow.png') })
     console.log(`${checks} checks passed. Screenshots: ${shots}`)
   } catch (error) {
     if (app) { for (const [i, w] of app.windows().entries()) await w.screenshot({ path: path.join(shots, `failure-${i}.png`) }).catch(() => {}) }

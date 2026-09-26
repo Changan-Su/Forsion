@@ -171,6 +171,33 @@ async function checkPluginApi() {
     await page.waitForFunction(() => [...document.querySelectorAll('.lcl-ftoc-item')].some((el) => el.title === 'Refreshed section'))
     check('插件 API：refresh 可覆盖观察器看不到的属性变化', await page.locator('.lcl-ftoc-item[title="Refreshed section"]').count() === 1)
 
+    await page.evaluate(() => {
+      const headings = Array.from({ length: 80 }, (_, index) => {
+        const heading = document.createElement('h2')
+        heading.textContent = `Long section ${index + 1}`
+        return heading
+      })
+      window.__ftocProbe.scroll.append(...headings)
+    })
+    await page.waitForFunction(() => document.querySelectorAll('.lcl-ftoc-item').length === 84)
+    await page.evaluate(() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur() })
+    await page.mouse.move(1000, 100)
+    await page.waitForFunction(() => !document.querySelector('.lcl-ftoc')?.classList.contains('open'))
+    await page.waitForTimeout(300)
+    const compact = await toc.evaluate((el) => {
+      const bounds = el.getBoundingClientRect()
+      const last = el.querySelector('.lcl-ftoc-item:last-child')?.getBoundingClientRect()
+      return { height: bounds.height, max: window.innerHeight * 0.44, lastBottom: last?.bottom, bottom: bounds.bottom }
+    })
+    check('长目录：折叠态压进视口且末项可见', compact.height <= compact.max + 2 && compact.lastBottom <= compact.bottom + 1, JSON.stringify(compact))
+    await page.screenshot({ path: path.join(SHOTS, 'plugin-long-collapsed.png') })
+    await toc.hover()
+    await page.waitForFunction(() => document.querySelector('.lcl-ftoc')?.classList.contains('open'))
+    await page.waitForTimeout(300)
+    const longOpen = await toc.evaluate((el) => ({ scrollHeight: el.scrollHeight, clientHeight: el.clientHeight, max: window.innerHeight * 0.56, count: el.querySelectorAll('.lcl-ftoc-item').length }))
+    check('长目录：展开态限制高度并保留滚动', longOpen.count === 84 && longOpen.clientHeight <= longOpen.max + 2 && longOpen.scrollHeight > longOpen.clientHeight, JSON.stringify(longOpen))
+    await page.screenshot({ path: path.join(SHOTS, 'plugin-long-expanded.png') })
+
     await page.evaluate(() => { window.__ftocProbe.scroll.style.width = '480px' })
     await page.waitForFunction(() => !document.querySelector('.lcl-ftoc'))
     check('插件 API：窄滚动面自动隐藏', await page.locator('.lcl-ftoc').count() === 0)

@@ -25,10 +25,15 @@ registerMessages({
  *  那行 `[plugin-view] mount failed` 谁都看得见,但开发者看不见「是我的插件炸的」。 */
 export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; pluginId?: string }> = ({ def, pluginId, extendView, leaf, params }) => {
   const ref = useRef<HTMLDivElement>(null)
+  const disposeBeforePaint = useRef<(() => void) | null>(null)
   const current = useRef({ leaf, params })
   current.current = { leaf, params }
   const listeners = useRef(new Set<(params: Readonly<Record<string, unknown>>) => void>())
   useLayoutEffect(() => { for (const notify of listeners.current) notify(params) }, [params])
+  // Plugin views may own Electron webviews/canvases. Passive effect cleanup can run
+  // after the first paint of the next Space, leaving the old surface visible briefly.
+  // Keep mounting passive, but dispose the live surface during React's unmount commit.
+  useLayoutEffect(() => () => { disposeBeforePaint.current?.() }, [])
   useEffect(() => {
     const el = ref.current
     if (!el) return
@@ -61,12 +66,17 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
       if (pluginId) recordDevMountError(pluginId, def.id, e)
       el.textContent = translate('pluginview.mountFailed')
     }
-    return () => {
+    let disposed = false
+    const dispose = (): void => {
+      if (disposed) return
+      disposed = true
       alive = false
       listeners.current.clear()
       try { if (typeof cleanup === 'function') cleanup() } catch (e) { console.error(`[plugin-view] cleanup "${def.id}" failed`, e) }
       el.replaceChildren()
     }
+    disposeBeforePaint.current = dispose
+    return () => { dispose(); if (disposeBeforePaint.current === dispose) disposeBeforePaint.current = null }
   }, [def, pluginId, extendView])
   return <div ref={ref} style={{ height: '100%', overflow: 'auto' }} />
 }

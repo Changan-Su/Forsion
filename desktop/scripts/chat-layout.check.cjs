@@ -10,6 +10,7 @@ const { _electron: electron } = require('playwright-core')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const ROOT = path.resolve(__dirname, '..')
+const APP_ROOT = process.env.FORSION_APP_ROOT || ROOT
 const agents = Array.from({ length: 28 }, (_, i) => ({
   slug: i ? `agent-${i}` : 'xyra', name: i ? `Research assistant ${i}` : 'Xyra',
   description: i ? 'Analyze project files and explain the results' : 'General assistant',
@@ -24,7 +25,7 @@ function check(name, ok, detail) {
 }
 
 async function main() {
-  assert.ok(fs.existsSync(path.join(ROOT, 'out/main/main.js')), '先运行 npm run build')
+  assert.ok(fs.existsSync(path.join(APP_ROOT, 'out/main/main.js')), '先运行 npm run build')
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-chat-layout-'))
   const userdata = path.join(home, 'userdata')
   const vault = path.join(home, 'vault')
@@ -42,7 +43,7 @@ async function main() {
   let app
   try {
     app = await electron.launch({
-      args: [`--user-data-dir=${userdata}`, '--lang=zh-CN', ROOT], cwd: ROOT,
+      args: [`--user-data-dir=${userdata}`, '--lang=zh-CN', APP_ROOT], cwd: ROOT,
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url },
     })
     const win = await app.firstWindow()

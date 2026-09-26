@@ -37,6 +37,7 @@ import { registerInboxListSource } from './views/inbox/inboxListSource'
 import { INBOX_WORKSPACE_MODE } from './views/workspaceMode'
 import { WsFileView } from './views/WsFileView'
 import { CodeStudioView } from './views/CodeStudioView'
+import { CodingNavigationView } from './views/coding/CodingNavigationView'
 import { ChangelogView } from './views/ChangelogView'
 import { initUiZoom } from './uiZoom'
 import { syncDevCommands } from './devCommands'
@@ -125,7 +126,10 @@ export function installEngine(): void {
   // Tangu Web 恢复含 wsfile 的布局不被整份丢弃,视图内对缺失的 host 能力自兜底占位。
   registerView({ type: 'wsfile', kind: 'entity', idParam: 'path', displayName: () => app().tr('view.wsfile'), icon: FileText, factory: (props) => <WsFileView {...props} /> })
   // Coding Space 主界面(Code | Preview 工作台);仅在产品档案点名 coding 时注册。
-  if (PRODUCT.nativeFeatures === undefined && PRODUCT.spaces.includes('coding')) registerView({ type: 'code-studio', kind: 'page', displayName: () => app().tr('view.codeStudio'), icon: Code2, factory: (props) => <CodeStudioView {...props} />, singleton: true })
+  if (PRODUCT.nativeFeatures === undefined && PRODUCT.spaces.includes('coding')) {
+    registerView({ type: 'code-studio', kind: 'page', displayName: () => app().tr('view.codeStudio'), icon: Code2, factory: (props) => <CodeStudioView {...props} />, singleton: true })
+    registerView({ type: 'coding-navigation', kind: 'collection', displayName: () => app().tr('space.coding'), icon: Code2, factory: () => <CodingNavigationView /> })
+  }
   registerOperationsViews()
   // 「更新」标签页(更新日志 + 下载/安装):检测到新版自动弹出;任何产品变体都注册。
   registerView({ type: 'changelog', kind: 'page', embeddable: true, displayName: () => app().tr('view.changelog'), icon: FileText, factory: () => <ChangelogView />, singleton: true })

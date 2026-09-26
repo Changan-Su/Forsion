@@ -255,6 +255,7 @@ export function FloatingToc({
     <div className={`lcl-ftoc-frame is-${placement}`} data-side={side}>
       <nav
         className={`lcl-ftoc${expanded ? ' open' : ''}`}
+        style={expanded ? undefined : { height: `min(44vh, ${items.length * 6 + 12}px)` }}
         onMouseEnter={enter}
         onMouseLeave={leave}
         onFocusCapture={() => setFocused(true)}

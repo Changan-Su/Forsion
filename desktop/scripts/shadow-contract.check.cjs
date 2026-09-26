@@ -12,7 +12,7 @@ const path = require('path')
 const postcss = require('postcss')
 
 const DESKTOP = path.resolve(__dirname, '..')
-const ROOTS = [path.join(DESKTOP, 'frontend/src'), path.join(DESKTOP, '../lcl/engine')]
+const ROOTS = [path.join(DESKTOP, 'frontend/src'), path.join(DESKTOP, '../lcl')]
 const CANONICAL = /^var\(--(?:card-shadow|btn-shadow|icon-shadow|shadow-panel)\b[\s\S]*\)$/
 
 const norm = (value) => String(value).replace(/\\/g, '/').replace(/\s+/g, ' ').trim()

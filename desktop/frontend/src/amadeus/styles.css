@@ -795,6 +795,16 @@
 .am-app .milkdown .ProseMirror p[data-indent='6'] { margin-left: calc(6 * var(--amx-indent-step, 28px)); }
 .am-app .milkdown .ProseMirror p[data-indent='7'] { margin-left: calc(7 * var(--amx-indent-step, 28px)); }
 .am-app .milkdown .ProseMirror p[data-indent='8'] { margin-left: calc(8 * var(--amx-indent-step, 28px)); }
+/* 标题、整份根列表(含首条待办)、引用/callout 的档位由相邻 Markdown 注释保存。
+   列表内部的常规子项仍用原生嵌套结构，不叠加一层视觉缩进。 */
+.am-app .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6, ul, ol, blockquote)[data-indent='1'] { margin-left: calc(1 * var(--amx-indent-step, 28px)); }
+.am-app .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6, ul, ol, blockquote)[data-indent='2'] { margin-left: calc(2 * var(--amx-indent-step, 28px)); }
+.am-app .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6, ul, ol, blockquote)[data-indent='3'] { margin-left: calc(3 * var(--amx-indent-step, 28px)); }
+.am-app .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6, ul, ol, blockquote)[data-indent='4'] { margin-left: calc(4 * var(--amx-indent-step, 28px)); }
+.am-app .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6, ul, ol, blockquote)[data-indent='5'] { margin-left: calc(5 * var(--amx-indent-step, 28px)); }
+.am-app .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6, ul, ol, blockquote)[data-indent='6'] { margin-left: calc(6 * var(--amx-indent-step, 28px)); }
+.am-app .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6, ul, ol, blockquote)[data-indent='7'] { margin-left: calc(7 * var(--amx-indent-step, 28px)); }
+.am-app .milkdown .ProseMirror :is(h1, h2, h3, h4, h5, h6, ul, ol, blockquote)[data-indent='8'] { margin-left: calc(8 * var(--amx-indent-step, 28px)); }
 .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6)[data-align='center'] { text-align: center; }
 .am-app .milkdown .ProseMirror :is(p, h1, h2, h3, h4, h5, h6)[data-align='right'] { text-align: right; }
 .am-app .milkdown .ProseMirror ul,
@@ -1126,7 +1136,7 @@ body.amx-marquee-active * {
 .am-app .amx-bm-videofoot .amx-bm-tocard {
   margin-left: auto;
 }
-/* callout 折叠([!x]-):收起只留首段;chevron 紧跟标题文字之后,折叠时不旋转 */
+/* 折叠使用固定点击区的 SVG 三角，旋转图形而非按钮，切换时命中区不变。 */
 .am-app .callout-chevron {
   border: none;
   background: transparent;
@@ -1134,19 +1144,29 @@ body.amx-marquee-active * {
   font-size: var(--ui-font-body, 13px);
   line-height: 1;
   /* 定宽 + 居中:rotate 会改字形包围盒,不定宽的话每次折叠箭头都横向挪一点 */
-  width: 14px;
+  width: 24px;
+  height: 18px;
   padding: 0;
   margin-left: 5px;
   text-align: center;
   cursor: pointer;
-  display: inline-block;
-  transform: rotate(90deg);
-  transition: transform 0.15s ease;
-  vertical-align: -1px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm, 6px);
+  vertical-align: middle;
+  user-select: none;
+  transition: background 0.12s ease, color 0.12s ease;
 }
-.am-app .callout-chevron.collapsed {
-  transform: rotate(0deg);
+.am-app .callout-chevron svg { transform: rotate(90deg); transition: transform 0.12s ease; }
+.am-app .callout-chevron.collapsed svg { transform: rotate(0deg); }
+/* PM 更新 Markdown marker 时会重建按钮；起始样式让新 SVG 仍从上一方向旋转入位。 */
+@starting-style {
+  .am-app .callout-chevron:not(.collapsed) svg { transform: rotate(0deg); }
+  .am-app .callout-chevron.collapsed svg { transform: rotate(90deg); }
 }
+.am-app .callout-chevron:hover { color: var(--text); background: var(--overlay-light); }
+.am-app .callout-chevron:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* 折叠/展开的高度过渡。⚠️ 不能用 display:none —— 那个切不出动画。
    `interpolate-size: allow-keywords` 让 `height: auto ↔ 0` 可插值(Chromium 129+);
    不支持的环境自动退化成瞬切,不会坏。高度 0 + overflow:hidden 的效果与原来一致:
@@ -1168,6 +1188,7 @@ body.amx-marquee-active * {
 }
 @media (prefers-reduced-motion: reduce) {
   .am-app .callout > *:not(:first-child) { transition: none; }
+  .am-app .callout-chevron, .am-app .callout-chevron svg { transition: none; }
 }
 /* 标题小节折叠:chevron 悬停浮现于行左缘;折叠时常显 + 行数徽章 */
 .amx-hfold-wrap {
@@ -2832,11 +2853,15 @@ body.amx-marquee-active * {
 .am-app .unified-body .ProseMirror p.ProseMirror-selectednode:has(> .wiki-inline-img-wrap) {
   background: transparent;
 }
-/* 多块选中(AFFiNE 对齐):整块淡底,原生那道参差的文字高亮让位。选区语义仍是 TextSelection,
-   装饰由 blockLayer 的 blockSelDeco 给;data-blocksel 只在跨块时挂上,块内选字不受影响。 */
-.am-app .unified-body .ProseMirror .amx-block-selected {
+/* 空白框选/把手子树整块着色;文字跨块拖选仍显示浏览器的真实字符范围。
+   普通文字选区穿过列表、数据库、图片等渲染结构时,该结构可整体着色。 */
+.am-app .unified-body .ProseMirror :is(.amx-block-selected, .amx-rendered-selected) {
   border-radius: 6px;
   background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+.am-app .unified-body .ProseMirror .wikilink[data-range-selected] {
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--primary) 18%, transparent);
 }
 .am-app .unified-body .ProseMirror[data-blocksel='true']::selection,
 .am-app .unified-body .ProseMirror[data-blocksel='true'] *::selection {

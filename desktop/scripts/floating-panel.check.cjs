@@ -176,6 +176,13 @@ async function main() {
       }
       return uiOf(page)
     }
+    const panelFit = (page) => page.evaluate(() => {
+      const rect = document.querySelector('.floating-native-root').getBoundingClientRect()
+      return { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom,
+        width: innerWidth, height: innerHeight, zoom: document.body.style.zoom }
+    })
+    const fitsViewport = (box) => Math.abs(box.left) < 2 && Math.abs(box.top) < 2
+      && Math.abs(box.right - box.width) < 2 && Math.abs(box.bottom - box.height) < 2
     const baseline = await uiOf(main)
     await floating.locator('.settings-theme-fonts select').first().selectOption({ index: 1 })
     const afterFont = await settled(main, (v) => v.font > 0)
@@ -188,10 +195,38 @@ async function main() {
     await floating.locator('.settings-zoom-presets button').nth(2).click()
     const afterZoom = await settled(main, (v) => v.zoom === '1.2')
     check('界面缩放跟到主窗', baseline.zoom === '' && afterZoom.zoom === '1.2', `'${baseline.zoom}' -> '${afterZoom.zoom}'`)
+    const largePanel = await panelFit(floating)
+    check('120%: Floating panel fills its own viewport without clipping', fitsViewport(largePanel), JSON.stringify(largePanel))
+    await floating.waitForFunction(() => document.querySelectorAll('.settings-zoom-presets button')[2]?.getAttribute('aria-pressed') === 'true')
+    await pause(200) // Let Electron paint the new preset state before capture.
+    const largeShot = path.join(temp, 'floating-settings-120.png')
+    await floating.screenshot({ path: largeShot })
+    console.log(`ZOOM_SCREENSHOT ${largeShot}`)
+    await floating.locator('.settings-zoom-presets button').nth(0).click()
+    const smallPanel = await panelFit(floating)
+    check('80%: Floating panel fills its own viewport without blank margins', fitsViewport(smallPanel), JSON.stringify(smallPanel))
+    await floating.waitForFunction(() => document.querySelectorAll('.settings-zoom-presets button')[0]?.getAttribute('aria-pressed') === 'true')
+    await pause(200)
+    const smallShot = path.join(temp, 'floating-settings-80.png')
+    await floating.screenshot({ path: smallShot })
+    console.log(`ZOOM_SCREENSHOT ${smallShot}`)
+    const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
+    await floating.bringToFront()
+    await floating.keyboard.press(`${mod}+Shift+Equal`)
+    const fromPanel = await settled(main, (v) => v.zoom === '0.9')
+    check('plus shortcut in Floating panel zooms every window', fromPanel.zoom === '0.9' && (await uiOf(floating)).zoom === '0.9', JSON.stringify(fromPanel))
+    await main.bringToFront()
+    await main.keyboard.press(`${mod}+Minus`)
+    const fromMain = await settled(floating, (v) => v.zoom === '0.8')
+    check('minus shortcut in main window zooms every window', fromMain.zoom === '0.8' && (await uiOf(main)).zoom === '0.8', JSON.stringify(fromMain))
+    const nativeZoom = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()
+      .filter((win) => !win.isDestroyed()).map((win) => win.webContents.getZoomFactor()))
+    check('zoom shortcuts do not change Electron per-window zoom', nativeZoom.every((zoom) => Math.abs(zoom - 1) < 0.01), JSON.stringify(nativeZoom))
     // 调回 100%:既验反向(删键→回端默认),也让浮窗恢复原尺寸再去点语言开关。
+    await floating.bringToFront()
     await floating.locator('.settings-zoom-presets button').nth(1).click()
     const backZoom = await settled(main, (v) => v.zoom === '')
-    check('缩放调回 100% 也跟得到(删键回默认)', afterZoom.zoom === '1.2' && backZoom.zoom === '', `'1.2' -> '${backZoom.zoom}'`)
+    check('缩放调回 100% 也跟得到(删键回默认)', fromMain.zoom === '0.8' && backZoom.zoom === '', `'0.8' -> '${backZoom.zoom}'`)
 
     // 设置自己的提示条(09-21):浮窗不挂 NotificationHost,插件装卸 / 重扫 / Space 卸载等结果以前全部静默蒸发。
     // 断言一律打在浮窗 page 上 —— 那才是用户看着的地方。走真 UI:引擎插件页的「重载插件」。

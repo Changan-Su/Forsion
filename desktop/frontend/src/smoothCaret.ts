@@ -147,6 +147,14 @@ function caretInfo(): { x: number; y: number; h: number; host: Element; origin: 
   const range = sel.getRangeAt(0)
   const c = range.startContainer
   let r: DOMRect | undefined = range.getClientRects()[0]
+  // 空折叠标题只有字号 0 的 Markdown token，collapsed Range 会落在 token 末尾、给出高度 0 的
+  // 矩形（y 还在行底）。它的可见插入点是标题左上角的正文基线。
+  const emptyFold = el?.closest('.callout-toggle-title[data-placeholder]')
+  if (emptyFold && (!r || r.height === 0)) {
+    const box = emptyFold.getBoundingClientRect()
+    const h = caretEm(emptyFold)
+    return { x: box.left, y: box.top + (box.height - h) / 2, h, host, origin: emptyFold }
+  }
   // 空块(`<p><br></p>`、只有 `###` widget 的空标题)collapsed range 给不出可用矩形:要么一个没有,
   // 要么给个高度 0 的。此时按 DOM 位置找邻居定位(空段落照旧落到 <br>,行内盒高度即 caret 高度)。
   if (c instanceof Element && (!r || r.height === 0)) {

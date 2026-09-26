@@ -4,7 +4,7 @@
  * (与 singleColumn.css 的移动 zoom 段同判据同值;inline style 覆盖同属性的 CSS 值,不叠乘)。
  * 用户显式调过(localStorage 有值)则一律以用户值为准;重置=清值回端默认。
  */
-import { addCommand, UI_ZOOM_EVENT } from '@lcl/engine'
+import { addCommand, effectiveHotkey, eventToHotkey, useShortcuts, UI_ZOOM_EVENT } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { broadcastPrefs } from './uiPrefsBus'
 import { UI_ZOOM_KEY as KEY } from './types'
@@ -16,6 +16,33 @@ const MIN = 0.5
 const MAX = 2
 
 let endpointDefault = 1
+let shortcutsInstalled = false
+
+/** Shell only installs command hotkeys in workspace windows. Floating and Mini windows have no Shell,
+ * so zoom shortcuts live beside the zoom preference itself and use the same cross-window setter.
+ * Handle the shifted '+' spelling too (on many keyboards Cmd/Ctrl+Plus is Shift+Equal). */
+function installZoomShortcuts(): void {
+  if (shortcutsInstalled) return
+  shortcutsInstalled = true
+  window.addEventListener('keydown', (event) => {
+    if (event.defaultPrevented || useShortcuts.getState().recording) return
+    const typed = eventToHotkey(event)
+    const zoomInHotkey = effectiveHotkey({ id: 'ui-zoom-in', hotkey: 'mod+=' })
+    const zoomOutHotkey = effectiveHotkey({ id: 'ui-zoom-out', hotkey: 'mod+-' })
+    const zoomResetHotkey = effectiveHotkey({ id: 'ui-zoom-reset', hotkey: 'mod+0' })
+    const shiftedPlus = zoomInHotkey === 'mod+=' && (event.metaKey || event.ctrlKey)
+      && !event.altKey && event.key === '+'
+    const action = zoomInHotkey && (typed === zoomInHotkey || shiftedPlus) ? 'in'
+      : zoomOutHotkey && typed === zoomOutHotkey ? 'out'
+        : zoomResetHotkey && typed === zoomResetHotkey ? 'reset' : null
+    if (!action) return
+    event.preventDefault() // Do not let Chromium change only this BrowserWindow's native zoom.
+    event.stopImmediatePropagation() // Shell's command listener would otherwise run the same command twice.
+    if (action === 'in') bumpUiZoom(STEP)
+    else if (action === 'out') bumpUiZoom(-STEP)
+    else resetUiZoom()
+  })
+}
 
 function stored(): number | null {
   try {
@@ -96,6 +123,7 @@ export function initUiZoom(defaultZoom = 1): void {
   const tr = (k: string): string => useApp.getState().tr(k)
   // 等效 Ctrl/⌘+±。hotkey 只在 Electron 绑(web 浏览器让原生 Ctrl+± 管浏览器缩放,不抢)。
   const isElectron = typeof window !== 'undefined' && !!(window as { tangu?: unknown }).tangu
+  if (isElectron) installZoomShortcuts()
   addCommand({
     id: 'ui-zoom-in',
     title: () => tr('command.zoomIn'),
