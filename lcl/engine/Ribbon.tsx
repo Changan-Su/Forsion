@@ -515,6 +515,7 @@ export function Ribbon() {
   const flyRow = (e: Entry, folder: RibbonFolder | null, at: number, list: string[]): React.ReactNode => (
     <div
       key={e.id}
+      data-id={e.id} /* 同条上格子的 data-id:台架按稳定 id 定位溢出行(未读角标会改可访问名;Codex 第三轮 H2-2) */
       className={`rb-fly-row${drag?.id === e.id ? ' dragging' : ''}${overId === e.id && drag?.id !== e.id ? ` drag-over${drag && list.indexOf(drag.id) >= 0 && list.indexOf(drag.id) < at ? ' below' : ''}` : ''}`}
       draggable
       onDragStart={(ev) => { ev.stopPropagation(); startDrag(ev, e.id, folder?.zone ?? fly!.zone, folder?.id ?? null) }}
