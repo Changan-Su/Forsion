@@ -160,7 +160,7 @@ export interface PendingApprovalInfo {
   reason: string | null
   cwd: string | null
   status: 'pending' | 'executing' | 'approved' | 'rejected' | 'failed'
-  decided_by: 'user' | 'agent' | null
+  decided_by: 'user' | 'agent' | 'system' | null
 
   note: string | null
   result: string | null

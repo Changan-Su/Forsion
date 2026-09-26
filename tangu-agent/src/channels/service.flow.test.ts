@@ -47,6 +47,12 @@ vi.mock('../core/db.js', () => ({
       return [];
     }
     if (sql.includes('UPDATE tangu_wechat_bindings SET peer_id')) { state.binding.peer_id = params[0]; return []; }
+    if (sql.includes('UPDATE tangu_wechat_bindings SET session_id')) {
+      // 通道命令按分派时那条绑定的 id 挪(RETURNING 读回改到的行);桌面路由按「用户 + 通道 + 活跃」挪
+      const hit = sql.includes('WHERE id = ?') ? state.binding.id === params[1] : state.binding.user_id === params[1];
+      if (hit) state.binding.session_id = params[0];
+      return hit && sql.includes('RETURNING') ? [{ id: state.binding.id }] : [];
+    }
     if (sql.includes('FROM tangu_wechat_bindings')) {
       if (sql.includes('AND peer_id = ?') && state.binding.peer_id !== params[2]) return [];
       return [{ ...state.binding }];
@@ -310,6 +316,21 @@ describe('d. 审批超时', () => {
     expect(await inbound(svc, '批准')).toBe('该请求已过期,或已在别处处理。');
     expect(state.approvals).toHaveLength(1);
     expect(state.created).toHaveLength(1);
+  });
+
+  it('写类审批卡带完整改动(不只 `write /path (N chars)`,远程也看得见要写什么)', async () => {
+    const svc = makeService();
+    const p = inbound(svc, 'write it');
+    await flush();
+    const r = lastRunId();
+    state.emit(r, 'approval_request', {
+      approvalId: 'apv-w', name: 'write_file', preview: 'write /tmp/deploy.sh (38 chars)',
+      arguments: JSON.stringify({ path: '/tmp/deploy.sh', content: '#!/bin/sh\necho build\nrm -rf ~/Documents\n' }),
+    });
+    await expect(p).resolves.toBe('');
+    await flush();
+    const card = sent.filter((t) => t.includes('/tmp/deploy.sh')).join('\n');
+    expect(card).toContain('rm -rf ~/Documents');
   });
 
   it('用户在超时前回复 → 计时器作废(普通拒绝,不带超时原因)', async () => {
@@ -1374,6 +1395,193 @@ describe('Codex 三轮 b 复核:入站按到达代数认;命令途中通道停�
       expect(state.session.model_id).toBe('model-2');
       expect(state.settings.modelId).toBe('model-2');
     });
+  });
+});
+
+describe('Codex 四轮 #4:/resume /new 挪绑定的 UPDATE 已发出后账号断开 / 重新接入 —— 落地时只碰分派时那一条绑定', () => {
+  const origQuery = vi.mocked(query).getMockImplementation()!;
+  let releaseHeld: (() => void) | null = null;
+  // 断言中途失败也放掉挂着的 UPDATE:按账号的查绑定锁是模块级的,不放会让后面碰 acc 的用例排队超时
+  afterEach(() => { releaseHeld?.(); releaseHeld = null; vi.mocked(query).mockImplementation(origQuery); });
+
+  type Row = Record<string, any>;
+  const WS = '/tmp/wechat';
+  let bindings: Row[];
+  let sessions: Row[];
+  let clock: number;
+  const norm = (sql: string): string => sql.replace(/\s+/g, ' ').trim();
+  /** 值槽:? 取下一个参数,CURRENT_TIMESTAMP 取递增时钟(ORDER BY updated_at DESC 靠它排新旧),TRUE / FALSE 取布尔。 */
+  const slot = (tok: string, params: any[]): any => {
+    const t = tok.trim().toUpperCase();
+    if (t === '?') return params.shift();
+    if (t === 'CURRENT_TIMESTAMP') return ++clock;
+    if (t === 'TRUE' || t === 'FALSE') return t === 'TRUE';
+    throw new Error(`unmodeled value: ${tok}`);
+  };
+  /** WHERE 子句按 AND 逐条求值(col = ? / col = TRUE|FALSE);认不出的子句直接抛 —— 宁可红,不静默匹配不到。 */
+  const whereOf = (clause: string, params: any[]): ((r: Row) => boolean) => {
+    const conds = clause.split(/ AND /i).map((c) => {
+      const m = /^(\w+) = (.+)$/.exec(c.trim());
+      if (!m) throw new Error(`unmodeled WHERE clause: ${c}`);
+      const v = slot(m[2], params);
+      return (r: Row) => r[m[1]] === v;
+    });
+    return (r) => conds.every((f) => f(r));
+  };
+  /** 一张会按 SQL 语义改行的绑定表 + 会话表(基础 mock 只有单个 state.binding、不理 is_active,表达不了「新旧两条绑定」)。 */
+  const exec = async (raw: string, p: any[] = []): Promise<any> => {
+    state.sql.push([raw, p]);
+    const sql = norm(raw);
+    const params = [...p];
+    let m: RegExpExecArray | null;
+    if ((m = /^INSERT INTO tangu_wechat_bindings \((.+?)\) VALUES \((.+?)\)$/.exec(sql))) {
+      const cols = m[1].split(',').map((c) => c.trim());
+      const vals = m[2].split(',').map((v) => slot(v, params));
+      bindings.push(Object.fromEntries(cols.map((c, i) => [c, vals[i]])));
+      return [];
+    }
+    if ((m = /^UPDATE tangu_wechat_bindings SET (.+?) WHERE (.+?)(?: RETURNING (\w+))?$/.exec(sql))) {
+      const sets = m[1].split(',').map((a) => {
+        const [col, val] = a.split('=').map((x) => x.trim());
+        return [col, slot(val, params)] as const;
+      });
+      const hit = bindings.filter(whereOf(m[2], params));
+      for (const r of hit) for (const [col, v] of sets) r[col] = v;
+      return m[3] ? hit.map((r) => ({ [m![3]]: r[m![3]] })) : [];
+    }
+    if ((m = /^SELECT \* FROM tangu_wechat_bindings WHERE (.+?)(?: ORDER BY updated_at DESC)?(?: LIMIT (\d+))?$/.exec(sql))) {
+      const out = bindings.filter(whereOf(m[1], params)).sort((a, b) => b.updated_at - a.updated_at).map((r) => ({ ...r }));
+      return m[2] ? out.slice(0, Number(m[2])) : out;
+    }
+    if (sql.includes('tangu_wechat_bindings')) throw new Error(`unmodeled bindings SQL: ${sql}`);
+    if (sql.startsWith('SELECT agent_config, project_path FROM chat_sessions WHERE id = ?')) return sessions.filter((s) => s.id === params[0]).map((s) => ({ ...s }));
+    if (sql.startsWith('SELECT id, title, updated_at, agent_config FROM chat_sessions')) return sessions.map((s) => ({ ...s }));
+    if (sql.startsWith('UPDATE chat_sessions SET project_path = ? WHERE id = ?')) {
+      // createChannelSession 建的新会话(/new、重新接入):已是 host + cwd,不牵出 patchSessionAgentConfig
+      sessions.unshift({ id: params[1], title: 'WeChat Remote', updated_at: ++clock, project_path: params[0], agent_config: JSON.stringify({ execMode: 'host', cwd: params[0] }) });
+      return [];
+    }
+    if (sql.includes('tangu_wechat_accounts')) return [];
+    throw new Error(`unmodeled SQL: ${sql}`);
+  };
+  /** 下一条挪绑定的 UPDATE 挂住,放行后才按**此刻**的表求值 = 语句发出后、落地前表已经变了(连接池换序 / 排在别的写后面)。 */
+  const holdSessionUpdate = (): { release: () => void; hit: () => boolean } => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    releaseHeld = release;
+    let armed = true;
+    let hit = false;
+    vi.mocked(query).mockImplementation(async (sql: string, params?: any[]) => {
+      if (armed && sql.includes('UPDATE tangu_wechat_bindings SET session_id')) { armed = false; hit = true; await gate; }
+      return exec(sql, params);
+    });
+    return { release, hit: () => hit };
+  };
+  const active = (): Row[] => bindings.filter((r) => r.is_active === true);
+
+  beforeEach(() => {
+    clock = 10;
+    bindings = [{ id: 'b1', user_id: 'u1', channel: 'wechat', account_id: 'acc', peer_id: 'peer', session_id: 's1', remote_approval_mode: 'auto-edit', is_active: true, created_at: 1, updated_at: 1 }];
+    const cfg = JSON.stringify({ execMode: 'host', cwd: WS });
+    sessions = [
+      { id: 's1', title: 'Current', updated_at: 2, project_path: WS, agent_config: cfg },
+      { id: 's2', title: 'Old pick', updated_at: 1, project_path: WS, agent_config: cfg },
+    ];
+    vi.mocked(query).mockImplementation(exec);
+  });
+
+  for (const text of ['/resume 2', '/new']) {
+    it(`${text}:UPDATE 在途时断开并重新扫码接入 —— 放行后新绑定仍连着接入时建的会话,回复为空`, async () => {
+      const svc = makeService();
+      const h = holdSessionUpdate();
+      const p = svc.handleInbound({ accountId: 'acc', peerId: 'peer', text, messageId: 'm-cmd' });
+      // /new 先建会话(建工作区目录是真 I/O,冲微任务不够):轮询到 UPDATE 发出为止
+      await vi.waitFor(() => expect(h.hit()).toBe(true)); // stale 检查已过,UPDATE 已发出
+      await svc.disconnect('u1', 'acc');
+      const { sessionId: fresh } = await svc.bindAccount({ userId: 'u1', accountId: 'acc' });
+      const [b2] = active();
+      expect(b2.id).not.toBe('b1');
+      expect(b2.session_id).toBe(fresh);
+      h.release();
+      await expect(p).resolves.toBe('');
+      expect(active()).toHaveLength(1);
+      expect(active()[0].id).toBe(b2.id);
+      expect(active()[0].session_id).toBe(fresh); // 修坏时被挪到旧命令选的会话
+    });
+  }
+
+  it('/resume 2:UPDATE 在途时另一个账号扫码接入(单活跃绑定顶掉了这条,本账号没断开)—— 不挪新绑定,回「未绑定」原文而不是英文内部错误', async () => {
+    const svc = makeService();
+    const h = holdSessionUpdate();
+    const p = svc.handleInbound({ accountId: 'acc', peerId: 'peer', text: '/resume 2', messageId: 'm-cmd' });
+    await flush();
+    expect(h.hit()).toBe(true);
+    const { sessionId: fresh } = await svc.bindAccount({ userId: 'u1', accountId: 'acc2' });
+    h.release();
+    const reply = await p;
+    expect(active()).toHaveLength(1);
+    expect(active()[0]).toMatchObject({ account_id: 'acc2', session_id: fresh });
+    expect(bindings.find((r) => r.id === 'b1')!.session_id).toBe('s1');
+    expect(reply).toContain('尚未绑定');
+    expect(reply).not.toMatch(/channel stopped|account disconnected/);
+  });
+
+  // 复核:Telegram / QQ 连接路由恒用同一 accountId(tg:<id> / qq:bot)且不先 disconnect,微信同号重扫 = addAccount 再 bindAccount
+  // —— accountGen 不递增,在途命令不算过时;UPDATE 按 id 没改到,旧版回「尚未绑定」是假话(新绑定就在同一账号上等这个 peer)。
+  // peerId:undefined = TG/QQ 路由(新绑定待认主);'peer' = 微信同一个人重扫(新绑定直接认的就是他)。
+  for (const text of ['/resume 2', '/new']) {
+    for (const peerId of [undefined, 'peer']) {
+      it(`${text}:UPDATE 在途时同一账号不断开直接重新接入(peerId=${peerId ?? '待认主'})—— 不挪新绑定,如实回「本次没生效」而不是「尚未绑定」`, async () => {
+        const svc = makeService();
+        const h = holdSessionUpdate();
+        const p = svc.handleInbound({ accountId: 'acc', peerId: 'peer', text, messageId: 'm-cmd' });
+        await vi.waitFor(() => expect(h.hit()).toBe(true));
+        const { sessionId: fresh } = await svc.bindAccount({ userId: 'u1', accountId: 'acc', peerId });
+        const [b2] = active();
+        expect(b2.id).not.toBe('b1');
+        h.release();
+        const reply = await p;
+        expect(active()).toHaveLength(1);
+        expect(active()[0]).toMatchObject({ id: b2.id, account_id: 'acc', session_id: fresh }); // 接入是更晚的操作:旧命令不挪它
+        expect(bindings.find((r) => r.id === 'b1')!.session_id).toBe('s1');
+        expect(reply).toContain('命令执行失败'); // 没换代:这句要发出去(不是 '' 被吞)
+        expect(reply).not.toContain('尚未绑定'); // 修坏时回的就是这句
+        expect(reply).not.toMatch(/channel stopped|account disconnected/);
+        if (text !== '/resume 2') return;
+        // 「重发即生效」是真话:同一 peer 再发一次,落到新绑定上(待认主的由它认领)
+        const target = sessions[1].id;
+        expect(target).not.toBe(fresh);
+        expect(await svc.handleInbound({ accountId: 'acc', peerId: 'peer', text, messageId: 'm-again' })).toContain('已切换到会话 2');
+        expect(active()).toHaveLength(1);
+        expect(active()[0]).toMatchObject({ id: b2.id, peer_id: 'peer', session_id: target });
+      });
+    }
+  }
+
+  it('/resume 2:同一账号重新接入后、旧命令落地前,新绑定已被别的 peer 认领 —— 对这个 peer 确实未绑定,回「未绑定」原文', async () => {
+    const svc = makeService();
+    const h = holdSessionUpdate();
+    const p = svc.handleInbound({ accountId: 'acc', peerId: 'peer', text: '/resume 2', messageId: 'm-cmd' });
+    await flush();
+    expect(h.hit()).toBe(true);
+    const { sessionId: fresh } = await svc.bindAccount({ userId: 'u1', accountId: 'acc' });
+    active()[0].peer_id = 'other'; // 别人先发了一条,TOFU 认领了新绑定
+    h.release();
+    const reply = await p;
+    expect(active()[0]).toMatchObject({ account_id: 'acc', peer_id: 'other', session_id: fresh });
+    expect(reply).toContain('尚未绑定');
+  });
+
+  it('没断开:/resume /new 照常挪分派时那条绑定、照常回;桌面路由(不带 guard)照旧挪当前活跃绑定', async () => {
+    const svc = makeService();
+    expect(await svc.handleInbound({ accountId: 'acc', peerId: 'peer', text: '/resume 2', messageId: 'm-r' })).toContain('已切换到会话 2');
+    expect(active()[0]).toMatchObject({ id: 'b1', session_id: 's2' });
+    expect(await svc.handleInbound({ accountId: 'acc', peerId: 'peer', text: '/new', messageId: 'm-n' })).toContain('已新建会话并切换连接');
+    const created = sessions[0].id;
+    expect(created).not.toMatch(/^s[12]$/);
+    expect(active()[0]).toMatchObject({ id: 'b1', session_id: created });
+    await svc.setConnectedSession('u1', 's1');
+    expect(active()[0]).toMatchObject({ id: 'b1', session_id: 's1' });
   });
 });
 

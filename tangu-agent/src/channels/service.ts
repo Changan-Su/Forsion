@@ -30,7 +30,7 @@ import { deps } from '../seams/runtime.js';
 import { createRun } from '../services/runStore.js';
 import { abortRun, enqueueRun, sessionHasActiveRun } from '../services/agentLoop.js';
 import { subscribe } from '../services/eventBus.js';
-import { normalizeApprovalMode, resolveApproval, type ApprovalMode as EngineApprovalMode } from '../services/approvals.js';
+import { deferredPreview, normalizeApprovalMode, resolveApproval, type ApprovalMode as EngineApprovalMode } from '../services/approvals.js';
 import { resolveInquiry } from '../services/inquiries.js';
 import { patchSessionAgentConfig, readSessionSettings, requestRunThinking, setSessionModelId } from '../services/sessionSettings.js';
 import { chatModels, listModelCatalog } from '../services/modelCatalog.js';
@@ -546,9 +546,27 @@ export class ChannelService {
 
   /**
    * 把「正在连接的 session」切换到 sessionId(校验归属;兜底补齐 host+cwd)。
-   * stale:通道命令(/new /resume)传入 —— 中途通道停止 / 账号断开(可能已重新接入)的,不去挪新一代的绑定。
+   * 桌面端直接调(路由,不带 guard):挪此刻本通道的活跃绑定 —— 用户对当前状态的直接操作。
+   * 通道命令(/new /resume)带 guard:
+   *   stale     —— 中途通道停止 / 账号断开(可能已重新接入)的,不去挪新一代的绑定;
+   *   binding —— 分派时认到的那一条绑定。UPDATE 只认这一行(且它此刻仍有效):stale 只能在 UPDATE **发出前**查,
+   *              发出后账号断开又重新接入(或另一个账号扫码接入,单活跃绑定不变式作废了这条),按「用户 + 通道 + 活跃」
+   *              匹配的 UPDATE 落地时会把新绑定指向旧命令选的会话(Codex 四轮 #4)。重新接入一律 INSERT 新 id 的行、
+   *              断开只把行置为无效、没有任何路径把旧行改回有效 —— 绑定 id 本身就是持久化的代数,不必另加版本列,
+   *              也不必和断开 / 接入串行:这条 UPDATE 无论何时落地,都只可能碰到旧行。
+   *   一行没改到 = 这条绑定已被作废,按此刻的表分三种回(后两句会发到用户那边,不能是英文内部错误):
+   *   ① 通道已换代(停止 / 本账号断开过)—— 抛 ChannelGoneError,回复由 dispatchInbound 吞掉;
+   *   ② 没换代,但**同一账号**又接入了一次(Telegram / QQ 连接路由恒用同一 accountId 且不先断开;微信同号重扫 = addAccount
+   *      再 bindAccount),新绑定还没认主或认的就是这个 peer —— 这个聊天其实仍连着,回「未绑定」是假话(Codex 四轮 #4 复核):
+   *      如实说本次命令没生效,重发即落到新绑定上;
+   *   ③ 其余(被另一个账号的接入顶掉,或新绑定已被别的 peer 认领)—— 对这个 peer 而言确实未绑定,回「未绑定」原文。
    */
-  async setConnectedSession(userId: string, sessionId: string, stale?: () => boolean): Promise<{ ok: boolean }> {
+  async setConnectedSession(
+    userId: string,
+    sessionId: string,
+    guard?: { stale?: () => boolean; binding?: { id: string; account_id: string; peer_id: string | null } },
+  ): Promise<{ ok: boolean }> {
+    const stale = guard?.stale;
     const rows = await query<any[]>(`SELECT agent_config, project_path FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [sessionId, userId]);
     const s = rows[0];
     if (!s) throw new Error('Session not found');
@@ -559,7 +577,30 @@ export class ChannelService {
       await patchSessionAgentConfig(sessionId, { execMode: 'host', approvalMode: cfg.approvalMode || this.settings().approvalMode, cwd: cfg.cwd || s.project_path || this.workspaceDir() });
     }
     if (stale?.()) throw new ChannelGoneError();
-    await query(`UPDATE tangu_wechat_bindings SET session_id = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND channel = ? AND is_active = TRUE`, [sessionId, userId, this.kind]);
+    const b = guard?.binding;
+    if (!b) {
+      await query(`UPDATE tangu_wechat_bindings SET session_id = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND channel = ? AND is_active = TRUE`, [sessionId, userId, this.kind]);
+      return { ok: true };
+    }
+    // RETURNING 在 SQLite(≥3.35)与 Postgres 都可用(pendingApprovals 的抢占同一写法);读回空 = 没改到
+    const hit = await query<any[]>(
+      `UPDATE tangu_wechat_bindings SET session_id = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND user_id = ? AND channel = ? AND is_active = TRUE RETURNING id`,
+      [sessionId, b.id, userId, this.kind],
+    );
+    if (!hit?.length) {
+      if (stale?.()) throw new ChannelGoneError(); // ①
+      const L = this.locale();
+      // ② 只读不写:同账号的新绑定照旧连着接入时建的会话,旧命令不去挪它(接入是更晚的那次操作)
+      const now = await query<any[]>(
+        `SELECT * FROM tangu_wechat_bindings WHERE user_id = ? AND channel = ? AND account_id = ? AND is_active = TRUE`,
+        [userId, this.kind, b.account_id],
+      );
+      // TODO(messages.ts):换成专用的「连接已重置,本次命令未生效,请重发」键;expired(「该请求已过期,或已在别处处理」)是
+      // 暂用的真话 —— 命令确实因为别处的重新接入而失效
+      if (now.some((r) => !r.peer_id || r.peer_id === b.peer_id)) throw new Error(channelMsg(L, 'expired'));
+      throw new Error(this.opts.unboundHint ?? channelMsg(L, 'unbound', { channel: CHANNEL_NAME[this.kind][L] })); // ③
+    }
     return { ok: true };
   }
 
@@ -865,7 +906,12 @@ export class ChannelService {
       case 'approval_request': {
         const approvalId = String(p.approvalId || '');
         if (!approvalId) return;
-        const preview = String(p.preview || p.name || channelMsg(this.locale(), 'approvalPreviewFallback'));
+        const summary = String(p.preview || p.name || channelMsg(this.locale(), 'approvalPreviewFallback'));
+        // 写类工具的闸门预览只有 `write /path (N chars)`:远程审批看不到要写什么,批准却按完整参数落盘。
+        // 与收件箱同一口径(deferredPreview:摘要 + 完整改动),放不下就走下面的「过长,去桌面批」(Codex 09-26 四轮复核)。
+        const preview = p.name && p.arguments != null
+          ? deferredPreview({ id: approvalId, type: 'function', function: { name: String(p.name), arguments: String(p.arguments) } } as any, summary)
+          : summary;
         // 分条也放不下:不在通道里批。requestApproval 先登记 resolver 再广播,这里同步兑现是安全的。
         if (splitPreview(preview).length > APPROVAL_CARD_MAX_PARTS) {
           this.refuseTooLong(st, approvalId, preview);
@@ -1162,10 +1208,11 @@ export class ChannelService {
         live();
         const sid = await this.createChannelSession(userId, undefined, title);
         live(); // 建会话期间停了:新会话已落库(孤儿,留在通道工作区),但不把绑定挪过去
-        await this.setConnectedSession(userId, sid, gone);
+        await this.setConnectedSession(userId, sid, { stale: gone, binding });
       },
       listSessions: () => this.listProjectSessions(userId),
-      connectSession: async (id) => { live(); await this.setConnectedSession(userId, id, gone); },
+      // 只挪分派时认到的这一条绑定(binding.id):UPDATE 发出后才断开 / 重新接入的,落地时也碰不到新绑定
+      connectSession: async (id) => { live(); await this.setConnectedSession(userId, id, { stale: gone, binding }); },
       compact: (focus, modelId, cfg) => { live(); return this.compactSession(sessionId, modelId, focus, cfg, live); },
       usage: () => this.sessionUsage(sessionId),
       sessionBusy: () => sessionHasActiveRun(sessionId),

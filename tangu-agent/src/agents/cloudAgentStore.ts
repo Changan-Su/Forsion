@@ -7,7 +7,7 @@
  * (agentActivation → brain.agents.getAgent),本模块不参与。
  */
 import { deps } from '../seams/runtime.js';
-import { AgentFileConflictError, type AgentFilesBrain } from '../seams/cloudBrain.js';
+import { AgentFileConflictError, type AgentFileContent, type AgentFilesBrain } from '../seams/cloudBrain.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { withKeyLock } from '../core/keyLock.js';
 import {
@@ -90,6 +90,9 @@ export async function cloudListAgents(userId: string): Promise<NormalAgentDef[]>
 // 保存 / 删除 / 头像读-改-写全部排进同一条进程内队(键带 userId:云端是多租户,不同用户的同名 slug 互不相干)。
 // 进程外的写者(桌面 agentFileSync、另一个服务实例)进程内锁管不到 → config.toml 落盘带 CAS 票据(baseSeq),
 // 锁内现读之后被别人改过/删过就拒写,绝不 LWW 盖回去;旧云端不回 seq → 回退 LWW(与今天一样)。
+// SOUL.md 是独立的一行、独立的 seq:config.toml 的 CAS 管不到它。所以 ① 这次保存没改人格(def.soul 与锁内现读的一致)
+// → 根本不写 SOUL.md —— 只改名字的 PATCH 不能拿现读的快照去盖另一台设备刚改的人格;② 改了人格 → 带 SOUL.md 自己的
+// CAS 票据(soulSeq)写,现读之后被别人改过就报冲突,不覆盖。旧云端(无 seq)改了人格仍是 LWW,只有「没改就不写」那半生效。
 // ⚠️ 锁内绝不能再调 cloudSaveAgent / cloudPatchAgent / cloudDeleteAgent / 头像两函数(同键 = 自己等自己,永久挂死)——
 //    要写就调 writeLocked。
 
@@ -98,8 +101,30 @@ function withCloudAgentLock<T>(userId: string, slug: string, fn: () => Promise<T
 }
 
 /** 锁内现读的结果。def=null = 该 slug 此刻不存在(已墓碑,或从未存在且不是内置预设)。
- *  baseSeq = config.toml 落盘用的 CAS 票据:live 行 → 它的 seq;无行/墓碑行 → 0(仅创建/复活);旧云端无 seq → undefined(LWW)。 */
-interface LockedRead { def: NormalAgentDef | null; baseSeq: number | undefined }
+ *  baseSeq = config.toml 落盘用的 CAS 票据:live 行 → 它的 seq;无行/墓碑行 → 0(仅创建/复活);旧云端无 seq → undefined(LWW)。
+ *  soulBase = 判「这次保存改没改人格」的基准(比较前两边都 trim,基准再按 buildAgentDef 的长度上限截,见 writeLocked):
+ *  config.toml live 且解析成功 → def.soul(即解析 + Arioso 升级后的视图 —— 带着现读人格的保存就是没改,旧 Xyra 原文
+ *  也不会因为一次改名被顺手物化);其余(虚拟预设 / 墓碑后重建 / 解析失败)→ SOUL.md 行里的原文,没有 live 文本行就是 ''
+ *  (虚拟预设物化时 '' ≠ 预设人格 → 照写)。
+ *  soulSeq = SOUL.md 落盘用的 CAS 票据,口径同 baseSeq,只有一处例外:config.toml 无行、SOUL.md 却有 live 行 → 0(见 readForWrite)。 */
+interface LockedRead { def: NormalAgentDef | null; baseSeq: number | undefined; soulBase: string; soulSeq: number | undefined }
+
+/** 人格长度上限,与 agentRegistry.buildAgentDef 的 `soul.slice(0, 100_000)` 同值(那边没导出,只能抄一份)。
+ *  漂移由 cloudAgentStore.locking.test 的 100_050 字用例兜住:上限调高 / 调低,「没改就不写」都会失败。 */
+const SOUL_MAX_CHARS = 100_000;
+
+/** 一行的 CAS 票据:无行/墓碑行 → 0(仅创建/复活);live 行 → 它的 seq;旧云端无 seq → undefined(LWW)。 */
+const casTicket = (row: AgentFileContent | null): number | undefined =>
+  !row || row.deleted ? 0 : typeof row.seq === 'number' && row.seq > 0 ? row.seq : undefined;
+
+/** 云端 agent 写冲突:锁内现读之后,file 被进程外的写者(桌面 agentFileSync / 另一个服务实例)改过或删过。
+ *  message 是给调用方 / 模型看的英文原文;路由可按 instanceof + file 映射成 409 与可本地化的错误码。 */
+export class CloudAgentConflictError extends Error {
+  constructor(readonly slug: string, readonly file: 'config.toml' | 'SOUL.md', message: string) {
+    super(message);
+    this.name = 'CloudAgentConflictError';
+  }
+}
 
 /** 写路径专用的现读(调用方持有该 user+slug 的锁)。与 cloudGetAgent 的两处刻意不同:
  *  ① 区分「从未落库」与「已墓碑」—— 前者按内置预设兜底(虚拟预设可编辑、编辑即物化),后者 = 用户删过 = 不存在
@@ -113,16 +138,24 @@ interface LockedRead { def: NormalAgentDef | null; baseSeq: number | undefined }
  *  把罕见的复活换成观察者能拉到的「活→删」翻转。 */
 async function readForWrite(userId: string, slug: string): Promise<LockedRead> {
   const cfg = await files().getFile(userId, slug, 'config.toml');
-  if (!cfg) return { def: builtinAgentDef(slug), baseSeq: 0 };
-  if (cfg.deleted) return { def: null, baseSeq: 0 };
-  const baseSeq = typeof cfg.seq === 'number' && cfg.seq > 0 ? cfg.seq : undefined;
-  if (cfg.isBinary || cfg.content == null) return { def: null, baseSeq };
+  // SOUL.md 每条分支都读:虚拟预设物化 / 墓碑后重建也要写它,得拿到它真实的票据。
   const soulRow = await files().getFile(userId, slug, 'SOUL.md');
-  const soul = soulRow && !soulRow.deleted && !soulRow.isBinary && soulRow.content != null ? soulRow.content : '';
+  const soulRaw = soulRow && !soulRow.deleted && !soulRow.isBinary && soulRow.content != null ? soulRow.content : null;
+  const soul = { soulBase: soulRaw ?? '', soulSeq: casTicket(soulRow) };
+  // config.toml 无行、SOUL.md 却有 live 行:云端自己从不这么落(总是先 config.toml 再 SOUL.md),只能是某台设备推了一半
+  // —— 桌面 agentFileSync 一文件一请求,SOUL.md 按目录序排在 config.toml 前,推完它就断网/失败就停在这儿。那是设备上
+  // 活着的人格,不是孤儿:SOUL.md 票据给 0(仅创建),这次保存若要写别的人格(虚拟预设物化 / 同名新建)就撞 EXISTS 报冲突,
+  // 绝不拿它自己的 seq 把它盖掉(设备回来后按「本地=影子、远端变了」会把盖上去的人格拉回本地)。config.toml 已先落
+  // = 部分保存(同 writeLocked 的 SOUL.md 冲突);此后 cloudGetAgent 读得到这份人格,再存就正常。旧云端(无 seq)照旧 LWW。
+  if (!cfg) return { def: builtinAgentDef(slug), baseSeq: 0, soulBase: soul.soulBase, soulSeq: soul.soulSeq === undefined ? undefined : 0 };
+  if (cfg.deleted) return { def: null, baseSeq: 0, ...soul };
+  const baseSeq = typeof cfg.seq === 'number' && cfg.seq > 0 ? cfg.seq : undefined;
+  if (cfg.isBinary || cfg.content == null) return { def: null, baseSeq, ...soul };
   try {
-    return { def: upgradeAriosoPersona(parseAgentConfig(slug, cfg.content, soul)), baseSeq };
+    const def = upgradeAriosoPersona(parseAgentConfig(slug, cfg.content, soulRaw ?? ''));
+    return { def, baseSeq, soulBase: def.soul || '', soulSeq: soul.soulSeq };
   } catch {
-    return { def: null, baseSeq }; // 与 cloudGetAgent 同:解析失败按「读不到」
+    return { def: null, baseSeq, ...soul }; // 与 cloudGetAgent 同:解析失败按「读不到」
   }
 }
 
@@ -153,9 +186,27 @@ async function writeLocked(userId: string, slug: string, cur: LockedRead, input:
     if (!c) throw e;
     // 现读之后被进程外的写者改过/删过:什么都不写(SOUL.md 也不动),让调用方重来 —— 绝不把旧快照(含更宽的审批档)盖回去。
     if (c.gone) throw new AgentNotFoundError(slug);
-    throw new Error(`agent changed concurrently: ${slug} (another device or request saved it first). Nothing was saved; reload and try again.`);
+    throw new CloudAgentConflictError(slug, 'config.toml', `agent changed concurrently: ${slug} (another device or request saved it first). Nothing was saved; reload and try again.`);
   }
-  await putText(userId, slug, 'SOUL.md', def.soul || '');
+  // 人格没改 → 不碰 SOUL.md(改名 / 审批档 / 头像这类保存,绝不拿现读的旧人格去盖另一台设备刚落的新人格)。
+  // 基准按 buildAgentDef 同一个上限截了再比:没改的超长人格经 buildAgentDef 已被截短,拿全文比永远「改了」→ 每次改名/换头像
+  // 都悄悄把用户没动过的人格截短。代价:把超长人格恰好删到前 SOUL_MAX_CHARS 字的那一次编辑会被当成「没改」(与截短结果同文)。
+  const soul = def.soul || '';
+  const stored = cur.soulBase.trim();
+  if (soul.trim() === stored.slice(0, SOUL_MAX_CHARS).trim()) {
+    // 回包给存着的那份:否则超长人格的 PATCH 回包比下一次 GET 短(看起来像被截了,实际没动)。
+    return soul.trim() === stored ? def : { ...def, soul: stored };
+  }
+  // 改了人格 → 带 SOUL.md 自己的票据写。config.toml 排在前面、已落盘:这里冲突 = 部分保存,报错原文如实说明哪半没存。
+  try {
+    await files().putFile(userId, slug, 'SOUL.md', {
+      content: soul, isBinary: false, size: Buffer.byteLength(soul, 'utf8'), mtimeMs: Date.now(), deviceId: DEVICE_ID,
+      ...(cur.soulSeq !== undefined ? { baseSeq: cur.soulSeq } : {}),
+    });
+  } catch (e) {
+    if (!casConflictOf(e)) throw e;
+    throw new CloudAgentConflictError(slug, 'SOUL.md', `agent persona (SOUL.md) changed concurrently: ${slug} (another device or request saved it first). The other settings were saved; SOUL.md was not written and keeps the other writer's version. Reload and try again.`);
+  }
   return def;
 }
 

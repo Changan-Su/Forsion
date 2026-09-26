@@ -14,7 +14,7 @@
 import path from 'node:path';
 import { publish } from './eventBus.js';
 import { isOutsideWorkspace, writableRoots } from '../tools/fsPolicy.js';
-import { writeTargetsOf } from '../tools/writeTargets.js';
+import { WRITE_TOOLS, writeTargetsOf } from '../tools/writeTargets.js';
 import type { ToolCall } from '../core/types.js';
 import { runHooks } from '../hooks/index.js';
 import { currentAgentSlug } from '../seams/runContext.js';
@@ -221,6 +221,9 @@ export function previewText(s: unknown): string {
 }
 /** 标识类字段:单行,换行写成可见的 `\n`(不折、不丢)。其余控制符由 previewText 统一转义。 */
 const full = (v: unknown): string => String(v ?? '').trim().replace(/\r?\n/g, '\\n');
+/** 写类工具的路径:同 full 单行、换行可见,但**不去首尾空白** —— 工具按原串解析路径,去掉空格显示的就是另一个路径。
+ *  普通路径与旧口径逐字相同(`${args.path}`);路径里的换行不再在卡上另起一行冒充结构行(见 deferredPreview 的块)。 */
+const pathLine = (v: unknown): string => String(v).replace(/\r?\n/g, '\\n');
 /** 内容字段:换行与缩进原样。单行 → 原样(去首尾空白);多行 → 以换行开头、每行带 PREVIEW_GUTTER、以换行结尾的块
  *  (只去掉开头的空行与末尾空白,首行缩进也保留)。拼接用 labeled / joinParts,块后面的结构从新的一行起。 */
 const body = (v: unknown): string => {
@@ -330,9 +333,10 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {
   }
   const name = call.function.name;
   if (name === 'run_bash') return `$ ${String(args.command ?? '').trim()}`;
-  if (name === 'write_file') return `write ${args.path} (${String(args.content ?? '').length} chars)`;
-  if (name === 'edit_file') return `edit ${args.path}`;
-  if (name === 'multi_edit') return `multi_edit ${args.path} (${Array.isArray(args.edits) ? args.edits.length : '?'} edits)`;
+  // 写类四件在实时卡上只写一行摘要(桌面卡按参数自己算 diff);无人值守排队的那份由 deferredPreview 接上完整改动。
+  if (name === 'write_file') return `write ${pathLine(args.path)} (${String(args.content ?? '').length} chars)`;
+  if (name === 'edit_file') return `edit ${pathLine(args.path)}`;
+  if (name === 'multi_edit') return `multi_edit ${pathLine(args.path)} (${Array.isArray(args.edits) ? args.edits.length : '?'} edits)`;
   if (name === 'run_background') return `bg$ ${String(args.command ?? '').trim()}`;
   if (name === 'write_process_input') {
     // 与 run_bash 同档,写全不截(Codex 09-25 三轮 #3:旧口径截到 80 字,`echo ok` + 80 个空格 + `\nrm -rf ~` 卡上只剩 echo ok)。
@@ -450,6 +454,57 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null } = {
   }
   // 兜底(mcp__ 任意能力、插件声明 command 档的工具):整份参数,不在 200 字处截断(Codex 09-25 三轮 #3);多行字符串排成块(#6)
   return withArgs(name, args);
+}
+
+/** 要落盘的值(写入内容 / 替换前后的文本 / 补丁):与 tool_call 参数同一套(execBlock)—— 多行排块、每行带前缀,
+ *  首尾的换行 / 空白写成块前的 `[starts with … · ends with …]`;只剩一行(含空串、全空白)→ 整值 JSON 字面量,一个字符不丢。 */
+const exactValue = (label: string, v: string): string => labeled(label, execBlock(v) ?? JSON.stringify(v));
+
+/** 写类工具**完整的待落盘改动**;取值与各工具的 execute 逐一同口径(hostExec.ts write_file / edit_file / multi_edit、
+ *  applyPatch.ts),卡上写的就是批准后落盘的那份。非写类 → undefined。 */
+function pendingChange(call: ToolCall): string | undefined {
+  const name = call.function.name;
+  if (!WRITE_TOOLS.has(name)) return undefined;
+  const args: any = parseCallArgs(call) ?? {}; // 与 executeTool 同:坏 JSON 按 {} 跑
+  if (name === 'write_file') return exactValue('content', String(args.content ?? ''));
+  if (name === 'edit_file') {
+    return joinParts([exactValue('old_string', String(args.old_string ?? '')), exactValue('new_string', String(args.new_string ?? ''))], '\n');
+  }
+  if (name === 'multi_edit') {
+    // 不是非空数组 = 工具直接报错、什么都不写;照样原样写出来,不猜
+    if (!Array.isArray(args.edits) || !args.edits.length) return `edits: ${args.edits === undefined ? '(missing)' : asJson(args.edits)}`;
+    return joinParts(args.edits.flatMap((e: any, i: number) => [
+      exactValue(`edits[${i}].old_string`, String(e?.old_string ?? '')),
+      exactValue(`edits[${i}].new_string`, String(e?.new_string ?? '')),
+    ]), '\n');
+  }
+  return exactValue('patch', String(args.patch ?? args.input ?? '')); // apply_patch
+}
+
+/**
+ * 无人值守排队(收件箱审批卡 / Muse 待批清单)存的预览(Codex 09-26 四轮 #1):闸门给的 preview(与实时卡同一份摘要,
+ * 越界写带 `⚠ Write outside the workspace` 前缀)之后,写类工具再接上**完整的待落盘改动** —— write_file 的全文、
+ * edit_file 的 old/new、multi_edit 的每一处、apply_patch 的补丁原文。实时卡由桌面按参数自己算 diff;收件箱与 Muse 清单
+ * 只渲染存下来的这份,旧口径只有 `write /path (N chars)`,用户批的是看不见的内容,批准却按完整参数落盘。
+ * 整段过 previewText(换行保留、伪装字符转义、宽空白标记);放不下 STORED_PREVIEW_MAX 由 queueApproval 拒绝排队。
+ * 单行的 LOG / 收件箱标题 / 给模型的回话照旧用短 preview 经 displayText 折叠,不走这里。
+ */
+export function deferredPreview(call: ToolCall, preview: string): string {
+  const change = pendingChange(call);
+  return previewText(change === undefined ? preview : joinParts([preview, change], '\n'));
+}
+
+/**
+ * deferredPreview 的逆:从存下的预览取回闸门那行摘要,给**单行**的展示面用(批准 / 拒绝 / 撤回的 LOG 行、收件箱回执标题)
+ * —— 写类行存的是摘要 + 完整改动,整段 displayText 折叠会把文件内容片段塞进给模型读的 LOG 与收件箱标题(Codex 09-26 四轮复核 #2)。
+ * 写类工具的闸门摘要一定是单行:rawPreview 的四个分支只有 `write|edit|multi_edit <pathLine(path)> …` 与
+ * `apply_patch (N file change(s))`,pathLine 把 \n 写成可见的 `\n`,孤立的 \r、U+2028/2029 在 SPOOF_CHARS 里,
+ * 闸门交出来之前已过 previewText 转义;越界前缀也是单行 —— 所以第一个换行就是 joinParts 接改动的那个。
+ * 非写类原样返回:run_bash 等多行预览本身就是动作,整段折进 LOG,拆第一行会让第二条命令从 LOG 里消失。
+ */
+export function deferredSummary(tool: string, stored: unknown): string {
+  const s = String(stored ?? '');
+  return WRITE_TOOLS.has(tool) ? s.split('\n', 1)[0] : s;
 }
 
 /**

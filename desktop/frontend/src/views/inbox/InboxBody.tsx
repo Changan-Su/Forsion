@@ -177,7 +177,8 @@ function ApprovalCard({ id }: { id: string }) {
           <div className="ibx-approval-preview">{row.preview}</div>
           {previewNeedsScrollHint(row.preview) && <div className="ibx-approval-meta">{t('approval.previewScrollHint')}</div>}
           <div className="ibx-approval-meta">{row.tool}{row.cwd ? ` · ${row.cwd}` : ''}{reason ? ` · ${reason}` : ''}</div>
-          {row.note && <div className="ibx-approval-meta">{t('special.muse.approvalNote', { note: row.note })}</div>}
+          {/* decided_by='system' = 引擎撤回(如升级前的截断预览不可批),不是默认 Agent 的代批意见 */}
+          {row.note && <div className="ibx-approval-meta">{row.decided_by === 'system' ? t('inbox.approval.withdrawnSystem') : t('special.muse.approvalNote', { note: row.note })}</div>}
           {row.status === 'pending' ? (
             <div className="t2-taskcard-actions">
               <button className="primary" disabled={busy} onClick={() => void decide('approve')}><ShieldCheck size={12} /> {t('special.muse.approve')}</button>

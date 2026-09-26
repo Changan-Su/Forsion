@@ -12,9 +12,9 @@ import { createAiStudioProfile } from '../src/profiles/aiStudio.js';
 import { AgentFileConflictError, type AgentFileMeta } from '../src/seams/cloudBrain.js';
 import {
   cloudGetAgent, cloudSaveAgent, cloudPatchAgent, cloudDeleteAgent,
-  cloudSaveAgentAvatar, cloudDeleteAgentAvatar, cloudReadAgentAvatar,
+  cloudSaveAgentAvatar, cloudDeleteAgentAvatar, cloudReadAgentAvatar, CloudAgentConflictError,
 } from '../src/agents/cloudAgentStore.js';
-import { serializeAgentConfig, parseAgentConfig, KEEP_APPROVAL_MODE, AgentNotFoundError, AgentExistsError, type NormalAgentDef } from '../src/agents/agentRegistry.js';
+import { serializeAgentConfig, parseAgentConfig, builtinAgentDef, KEEP_APPROVAL_MODE, AgentNotFoundError, AgentExistsError, type NormalAgentDef } from '../src/agents/agentRegistry.js';
 
 type Row = { content?: string; contentBase64?: string; isBinary: boolean; mtimeMs: number; size: number; deleted: boolean; seq: number };
 type Deferred = { promise: Promise<void>; release: () => void; reached: Promise<void>; hit: () => void };
@@ -43,6 +43,8 @@ function memAgentFiles(style: ErrStyle = 'http', legacy = false) {
   const putGates = new Map<string, Deferred>();
   const getGates = new Map<string, Deferred>();
   const casCalls: Array<{ relPath: string; baseSeq: number | undefined }> = [];
+  /** SOUL.md 的每次 putFile(另记一份,别混进 casCalls —— 既有断言按 casCalls.at(-1) 取 config.toml 的票据)。 */
+  const soulPuts: Array<{ baseSeq: number | undefined; content: string | undefined }> = [];
   const raw = {
     put(u: string, s: string, r: string, b: any): Row {
       const prev = store.get(key(u, s, r));
@@ -56,7 +58,7 @@ function memAgentFiles(style: ErrStyle = 'http', legacy = false) {
     },
   };
   return {
-    store, putGates, getGates, casCalls, raw,
+    store, putGates, getGates, casCalls, soulPuts, raw,
     row: (u: string, s: string, r: string): Row | undefined => store.get(key(u, s, r)),
     getManifest: async (u: string) => {
       const by = new Map<string, AgentFileMeta[]>();
@@ -79,6 +81,7 @@ function memAgentFiles(style: ErrStyle = 'http', legacy = false) {
       const g = putGates.get(r);
       if (g) { putGates.delete(r); g.hit(); await g.promise; }
       if (r === 'config.toml') casCalls.push({ relPath: r, baseSeq: b.baseSeq });
+      if (r === 'SOUL.md') soulPuts.push({ baseSeq: b.baseSeq, content: b.content });
       const cur = store.get(key(u, s, r));
       // 与服务端 putFile 同款 CAS:0 = 仅创建(无行插入 / 墓碑复活 / live 行 → EXISTS);>0 = live 且 seq 相符才写。
       if (legacy) { const row = raw.put(u, s, r, b); return { mtimeMs: row.mtimeMs }; }
@@ -389,5 +392,230 @@ describe('锁按 user 隔离', () => {
     expect(other.name).toBe('Other 2');
     gate.release();
     await avatar;
+  });
+});
+
+// ── SOUL.md 独立票据(Codex round-4 #3):config.toml 的 CAS 管不到 SOUL.md。旧口径每次保存都拿锁内现读的人格
+//    无条件、无票据地写回 SOUL.md —— 另一台设备只改了人格、网页同时只改名字,名字的 CAS 过了,人格被旧快照盖掉。──
+
+/** 模拟另一台设备只改了人格:直接改库里的 SOUL.md,绕过进程内锁。 */
+function outsideSoul(slug: string, content: string): void {
+  af.raw.put(U, slug, 'SOUL.md', { content, isBinary: false, size: content.length, mtimeMs: Date.now() });
+}
+const seedWithSoul = (): Promise<NormalAgentDef> =>
+  cloudSaveAgent(U, 'bot', { slug: 'bot', name: 'Bot', systemPrompt: 'be a bot', description: 'orig desc', model: 'm-1', approvalMode: 'full-auto', soul: 'orig soul' });
+
+describe.each(['http', 'server'] as const)('SOUL.md:没改人格不写,改了带自己的票据(%s 冲突形状)', (style) => {
+  beforeEach(() => configure(style));
+
+  it('a name-only patch leaves a SOUL.md edited concurrently by another device untouched', async () => {
+    await seedWithSoul();
+    const puts = af.soulPuts.length;
+    const gate = deferred();
+    af.getGates.set('SOUL.md', gate); // 锁内现读读到 SOUL.md 之后、返回之前卡住
+    const patch = cloudPatchAgent(U, 'bot', { name: 'Bot 2' });
+    await gate.reached;
+    outsideSoul('bot', 'device soul');
+    const deviceSeq = af.row(U, 'bot', 'SOUL.md')!.seq;
+    gate.release();
+    expect((await patch).name).toBe('Bot 2');
+    expect(await cloudGetAgent(U, 'bot')).toMatchObject({ name: 'Bot 2', soul: 'device soul', approvalMode: 'full-auto' });
+    expect(af.row(U, 'bot', 'SOUL.md')).toMatchObject({ content: 'device soul', seq: deviceSeq, deleted: false });
+    expect(af.soulPuts.length).toBe(puts); // 这次保存根本没写 SOUL.md
+  });
+
+  it('a soul change carrying a stale SOUL.md ticket is rejected as a conflict and does not overwrite the device persona', async () => {
+    await seedWithSoul();
+    const gate = deferred();
+    af.getGates.set('SOUL.md', gate);
+    const patch = cloudPatchAgent(U, 'bot', { soul: 'mine' });
+    const settled = patch.then(() => null, (e) => e);
+    await gate.reached;
+    outsideSoul('bot', 'device soul');
+    const deviceSeq = af.row(U, 'bot', 'SOUL.md')!.seq;
+    gate.release();
+    const err = await settled;
+    expect(err).toBeInstanceOf(CloudAgentConflictError);
+    expect(err.file).toBe('SOUL.md');
+    expect(String(err.message)).toMatch(/persona \(SOUL\.md\) changed concurrently/);
+    expect(String(err.message)).not.toMatch(/Nothing was saved/); // config.toml 已落盘:部分保存必须如实说
+    const sent = af.soulPuts.at(-1)!;
+    expect(sent.content).toBe('mine');
+    expect(sent.baseSeq).toBeGreaterThan(0);
+    expect(sent.baseSeq).toBeLessThan(deviceSeq); // 带的是现读时的票据
+    expect(af.row(U, 'bot', 'SOUL.md')).toMatchObject({ content: 'device soul', seq: deviceSeq, deleted: false });
+    expect((await cloudGetAgent(U, 'bot'))?.soul).toBe('device soul');
+  });
+
+  it('an uncontended soul change is written with the ticket read inside the lock', async () => {
+    await seedWithSoul();
+    const seq = af.row(U, 'bot', 'SOUL.md')!.seq;
+    expect((await cloudPatchAgent(U, 'bot', { soul: 'mine' })).soul).toBe('mine');
+    expect(af.soulPuts.at(-1)).toEqual({ baseSeq: seq, content: 'mine' });
+    expect((await cloudGetAgent(U, 'bot'))?.soul).toBe('mine');
+  });
+
+  it('avatar writes never touch SOUL.md (delete-avatar racing a device persona edit)', async () => {
+    await seedWithSoul();
+    const puts = af.soulPuts.length;
+    const gate = deferred();
+    af.getGates.set('SOUL.md', gate);
+    const del = cloudDeleteAgentAvatar(U, 'bot');
+    await gate.reached;
+    outsideSoul('bot', 'device soul');
+    gate.release();
+    await del;
+    expect((await cloudGetAgent(U, 'bot'))?.soul).toBe('device soul');
+    expect(af.soulPuts.length).toBe(puts);
+  });
+});
+
+describe('SOUL.md 比较基准:虚拟预设 / 孤儿行 / 墓碑重建', () => {
+  it('materializing a virtual preset with a name-only patch still writes its persona (create ticket 0)', async () => {
+    const preset = builtinAgentDef('recita')!;
+    expect(preset.soul.trim()).not.toBe('');
+    await cloudPatchAgent(U, 'recita', { name: 'My Recita' });
+    expect(af.soulPuts.at(-1)).toEqual({ baseSeq: 0, content: preset.soul });
+    expect((await cloudGetAgent(U, 'recita'))?.soul).toBe(preset.soul.trim());
+  });
+
+  // 口径反转(Codex round-4 复核 #2):上一轮这里是「新建不继承孤儿 SOUL.md —— 拿孤儿行的 seq 把它写成 ''」。
+  // 但云端从不单独落 SOUL.md,config.toml 无行时的 live SOUL.md 只能是某台设备推了一半(SOUL.md 按目录序先推),
+  // 那是设备上活着的人格:拿它的 seq 写 = 用 CAS「合法地」盖掉它,设备回来还会把盖上去的内容拉回本地。现在给 0 → EXISTS。
+  it('creating an agent over a live SOUL.md with no config.toml (a device mid-push) never overwrites it: create ticket 0 → conflict', async () => {
+    outsideSoul('fresh', 'device persona');
+    const deviceSeq = af.row(U, 'fresh', 'SOUL.md')!.seq;
+    const err = await cloudSaveAgent(U, 'fresh', { slug: 'fresh', name: 'Fresh', systemPrompt: 'x', mustNotExist: true }).then(() => null, (e) => e);
+    expect(err).toBeInstanceOf(CloudAgentConflictError);
+    expect(err.file).toBe('SOUL.md');
+    expect(af.soulPuts.at(-1)).toEqual({ baseSeq: 0, content: '' });
+    expect(af.row(U, 'fresh', 'SOUL.md')).toMatchObject({ content: 'device persona', seq: deviceSeq, deleted: false });
+    expect(af.row(U, 'fresh', 'config.toml')?.deleted).toBe(false); // config.toml 先落了 = 部分保存(报错原文如实说)
+    expect((await cloudGetAgent(U, 'fresh'))?.soul).toBe('device persona');
+  });
+
+  it('re-creating a deleted agent revives its tombstoned SOUL.md with a create ticket (0)', async () => {
+    await seedWithSoul();
+    await cloudDeleteAgent(U, 'bot');
+    expect(af.row(U, 'bot', 'SOUL.md')?.deleted).toBe(true);
+    await cloudSaveAgent(U, 'bot', { slug: 'bot', name: 'Bot', systemPrompt: 'x', soul: 'again' });
+    expect(af.soulPuts.at(-1)).toEqual({ baseSeq: 0, content: 'again' });
+    expect((await cloudGetAgent(U, 'bot'))?.soul).toBe('again');
+  });
+});
+
+describe('旧云端(无 seq):没改人格照样不写;改了人格仍是 LWW(已知残余,不假装受保护)', () => {
+  it('name-only patch skips SOUL.md; a soul change is sent without a ticket', async () => {
+    configure('http', true);
+    await seedWithSoul();
+    const puts = af.soulPuts.length;
+    const gate = deferred();
+    af.getGates.set('SOUL.md', gate);
+    const patch = cloudPatchAgent(U, 'bot', { name: 'Bot 2' });
+    await gate.reached;
+    outsideSoul('bot', 'device soul');
+    gate.release();
+    await patch;
+    expect((await cloudGetAgent(U, 'bot'))?.soul).toBe('device soul');
+    expect(af.soulPuts.length).toBe(puts);
+    await cloudPatchAgent(U, 'bot', { soul: 'mine' });
+    expect(af.soulPuts.at(-1)).toEqual({ baseSeq: undefined, content: 'mine' });
+  });
+});
+
+// ── Codex round-4 复核 #2:内置预设还没有 config.toml、SOUL.md 却有设备推上来的 live 行(agentFileSync 一文件一请求,
+//    SOUL.md 按目录序先推;推完它就断网 / config.toml 那次失败)。旧口径拿那一行自己的 seq 写预设人格 → CAS 必过 →
+//    只改名字的 PATCH 把设备人格换成了预设人格(设备回来后「本地=影子、远端变了」→ 再拉回本地,两头都丢)。──
+describe.each(['http', 'server'] as const)('虚拟预设 × 设备推了一半的 SOUL.md(%s 冲突形状)', (style) => {
+  beforeEach(() => configure(style));
+
+  it('a name-only patch on a config-less preset never overwrites the device SOUL.md, and the state self-heals', async () => {
+    const preset = builtinAgentDef('recita')!;
+    outsideSoul('recita', 'device recita soul');
+    const deviceSeq = af.row(U, 'recita', 'SOUL.md')!.seq;
+    const err = await cloudPatchAgent(U, 'recita', { name: 'My Recita' }).then(() => null, (e) => e);
+    expect(err).toBeInstanceOf(CloudAgentConflictError);
+    expect(err.file).toBe('SOUL.md');
+    expect(String(err.message)).toMatch(/persona \(SOUL\.md\) changed concurrently/);
+    expect(String(err.message)).not.toMatch(/Nothing was saved/); // config.toml 已落盘,不许说「什么都没存」
+    expect(af.soulPuts.at(-1)).toEqual({ baseSeq: 0, content: preset.soul }); // 仅创建的票据,不是设备行的 seq
+    expect(af.row(U, 'recita', 'SOUL.md')).toMatchObject({ content: 'device recita soul', seq: deviceSeq, deleted: false });
+    // 部分保存之后读得到设备人格(config.toml 在了,cloudGetAgent 不再按预设兜底),再改名字正常落、不碰 SOUL.md。
+    expect(await cloudGetAgent(U, 'recita')).toMatchObject({ name: 'My Recita', soul: 'device recita soul' });
+    const puts = af.soulPuts.length;
+    expect((await cloudPatchAgent(U, 'recita', { name: 'Recita 2' })).soul).toBe('device recita soul');
+    expect(af.soulPuts.length).toBe(puts);
+    expect(af.row(U, 'recita', 'SOUL.md')).toMatchObject({ content: 'device recita soul', seq: deviceSeq });
+  });
+
+  it('a config-less preset whose SOUL.md was deleted (tombstone) still materializes with the create ticket', async () => {
+    const preset = builtinAgentDef('recita')!;
+    outsideSoul('recita', 'old');
+    af.raw.del(U, 'recita', 'SOUL.md', Date.now());
+    await cloudPatchAgent(U, 'recita', { name: 'My Recita' });
+    expect(af.soulPuts.at(-1)).toEqual({ baseSeq: 0, content: preset.soul });
+    expect((await cloudGetAgent(U, 'recita'))?.soul).toBe(preset.soul.trim());
+  });
+});
+
+// ── Codex round-4 复核 #1:buildAgentDef 把 soul 截到 100_000 字,而比较基准是没截过的全文 → 超长人格永远算「改了」,
+//    改名字 / 换头像 / 删头像都会把 SOUL.md 重写一遍并悄悄截短。三个入口都得原样不动。──
+describe('超长人格(> 100_000 字):没改就不写、不截短', () => {
+  const LONG = 'p'.repeat(100_050);
+  const seedLong = async (): Promise<number> => {
+    await seedWithSoul();
+    outsideSoul('bot', LONG); // 公开的 cloudSaveAgent 会截,只能直接落库(桌面写的超长 SOUL.md)
+    return af.row(U, 'bot', 'SOUL.md')!.seq;
+  };
+  const expectUntouched = async (seq: number, puts: number): Promise<void> => {
+    expect(af.soulPuts.length).toBe(puts);
+    expect(af.row(U, 'bot', 'SOUL.md')).toMatchObject({ seq, deleted: false });
+    expect(af.row(U, 'bot', 'SOUL.md')!.content!.length).toBe(100_050);
+    expect((await cloudGetAgent(U, 'bot'))?.soul.length).toBe(100_050);
+  };
+
+  it('a name-only patch leaves it untouched and answers with the stored persona, not the truncated one', async () => {
+    const seq = await seedLong();
+    const puts = af.soulPuts.length;
+    const d = await cloudPatchAgent(U, 'bot', { name: 'Bot 2' });
+    expect(d.name).toBe('Bot 2');
+    expect(d.soul.length).toBe(100_050); // 回包 = 存着的那份,不比下一次 GET 短
+    await expectUntouched(seq, puts);
+  });
+
+  it('saving an avatar leaves it untouched', async () => {
+    const seq = await seedLong();
+    const puts = af.soulPuts.length;
+    expect(await cloudSaveAgentAvatar(U, 'bot', PNG_B64, 'image/png')).toBe('avatar.png');
+    await expectUntouched(seq, puts);
+  });
+
+  it('deleting the avatar leaves it untouched', async () => {
+    await seedWithSoul();
+    await cloudSaveAgentAvatar(U, 'bot', PNG_B64, 'image/png');
+    outsideSoul('bot', LONG); // 头像先传好再落超长人格:只考删头像这一条入口
+    const seq = af.row(U, 'bot', 'SOUL.md')!.seq;
+    const puts = af.soulPuts.length;
+    expect(await cloudDeleteAgentAvatar(U, 'bot')).toBe(true);
+    await expectUntouched(seq, puts);
+  });
+
+  it('a real edit inside the first 100_000 chars is still written (capped, with the ticket)', async () => {
+    const seq = await seedLong();
+    const edited = 'q' + LONG.slice(1);
+    const d = await cloudPatchAgent(U, 'bot', { soul: edited });
+    expect(d.soul).toBe(edited.slice(0, 100_000));
+    expect(af.soulPuts.at(-1)).toEqual({ baseSeq: seq, content: edited.slice(0, 100_000) });
+    expect((await cloudGetAgent(U, 'bot'))?.soul).toBe(edited.slice(0, 100_000));
+  });
+});
+
+describe('旧云端(无 seq)× 设备推了一半的 SOUL.md:不假装受保护,照旧 LWW(不发它不认的 0)', () => {
+  it('a config-less preset over a live seq-less SOUL.md is written without a ticket', async () => {
+    configure('http', true);
+    const preset = builtinAgentDef('recita')!;
+    outsideSoul('recita', 'device recita soul');
+    await cloudPatchAgent(U, 'recita', { name: 'My Recita' });
+    expect(af.soulPuts.at(-1)).toEqual({ baseSeq: undefined, content: preset.soul });
   });
 });

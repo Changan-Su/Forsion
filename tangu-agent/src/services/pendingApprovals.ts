@@ -16,7 +16,7 @@
  *    (某些工具)→ approvals.ts,静态引用会成环。
  */
 import path from 'node:path';
-import { previewText } from './approvals.js';
+import { previewText, deferredPreview, deferredSummary } from './approvals.js';
 import { createHash } from 'node:crypto';
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
@@ -52,6 +52,8 @@ export interface PendingApprovalRow {
   /** executing = 已被某次 approve 抢占、工具在跑(CAS 闸:并发双击只有一方拿到行);进程半途崩溃的 executing
    *  行由 recoverStaleExecuting 在 10 分钟后改判 failed。 */
   status: 'pending' | 'executing' | 'approved' | 'rejected' | 'failed';
+  /** 预览口径版本(见 PREVIEW_VERSION)。NULL = 升级前的行(预览可能折叠 / 截断 / 只有一行摘要):永远批不了。 */
+  preview_version: number | null;
   decided_by: string | null;
   note: string | null;
   result: string | null;
@@ -81,6 +83,62 @@ function parseArgs(call: ToolCall): Record<string, any> {
 /** 可执行载荷的上限:超过不排队(截断会把参数截成非法 JSON → 批准后按 {} 执行,违反「按原参数执行」)。 */
 export const MAX_DEFERRED_ARGS = 100_000;
 
+/**
+ * 行里预览的口径版本(pending_approvals.preview_version,Codex 09-26 四轮 #2)。批准的抢占要求 ≥ 本值,入队时写本值。
+ *   1 = 待批动作全文可见:预览经 approvals.previewText 净化存全文,写类工具带完整改动(deferredPreview),放不下就不排队。
+ * 升级前的行是 NULL:main 存的是 displayText(preview, 2000)(折成一行、静默截断),本分支早先的写类预览只有
+ * `write /path (N chars)` 一行摘要 —— 批准却按完整参数执行。这些行一律撤回(retireLegacyPending),不给批。
+ * 以后哪一版口径被判「看不全」,把本值加一:旧行在下一次触碰时自动撤回,不用再写迁移。
+ */
+export const PREVIEW_VERSION = 1;
+
+/** 撤回旧行的 note(引擎写的数据串,同 recoverStaleExecuting / supersededNote 的英文口径;进该 agent 的 LOG 给模型读)。 */
+export const LEGACY_PREVIEW_NOTE =
+  'withdrawn by the system: it was queued by an older version whose approval card may not show the full action, ' +
+  'so it cannot be approved. It did NOT run; the agent can request it again if it is still needed';
+/** 批准撞上旧行时的回话(接口 409 的 detail;行本身已撤回)。 */
+export const LEGACY_PREVIEW_REFUSAL =
+  'cannot be approved: this request was queued by an older version whose approval card may not show the full action; it was withdrawn and did NOT run';
+
+/**
+ * 把本用户仍 pending、预览口径版本不够的行一律撤回(rejected / decided_by=system),每行在该 agent 的 LOG 留一行
+ * (带工具名与闸门摘要)—— 它据此按需重新请求,新请求带完整预览、发新的收件箱卡;撤了 Muse 的行就叫醒 Muse。
+ * 只会更严:撤回的行不执行,也不再能批。
+ * 在 queueApproval / decideApproval / listApprovals / getApproval / countPendingApprovals 入口各跑一次:升级后第一次
+ * 被任何一面(收件箱卡、Muse 清单、Muse 周期计数)碰到就撤,桌面看到的已是终态(已拒绝 + note),不会出现点了才报错的批准键。
+ * 批准那一步的抢占另外再验一遍版本(decideApproval),本函数失败也放不过旧行 —— 所以这里吞错只记日志。
+ * 不缓存「已扫过」:旧版引擎可能在降级 / 再升级之间又写进旧行;零命中的 UPDATE 很便宜。返回撤回的 id。
+ */
+async function retireLegacyPending(userId: string): Promise<string[]> {
+  let rows: any[] = [];
+  try {
+    rows = (await query<any[]>(
+      `UPDATE pending_approvals SET status = 'rejected', decided_by = 'system', note = ?, decided_at = CURRENT_TIMESTAMP
+       WHERE user_id = ? AND status = 'pending' AND (preview_version IS NULL OR preview_version < ?) RETURNING id, agent_slug, tool, preview`,
+      [LEGACY_PREVIEW_NOTE, userId, PREVIEW_VERSION],
+    )) || [];
+  } catch (e: any) {
+    log(`撤回旧版审批行失败:${e?.message || e}`);
+    return [];
+  }
+  const ids: string[] = [];
+  let museTouched = false;
+  for (const r of rows) {
+    const id = String(r.id);
+    const slug = r.agent_slug || DEFAULT_AGENT_SLUG;
+    ids.push(id);
+    if (slug === MUSE_AGENT_SLUG) museTouched = true;
+    log(`withdrew ${id} (${r.tool}): queued before full approval previews (preview_version < ${PREVIEW_VERSION})`);
+    // 带上撤的是哪件事(四轮复核 #3):只写 id,agent 读 LOG 不知道被撤的是什么,「可重新请求」无从下手。
+    // 引擎的事实在前、模型派生的摘要在后(同 execBlock 的边界行):摘要被折叠 / 截断也截不掉「没执行、可重提」。
+    await appendAgentLog(slug, userId,
+      `[approval] request ${id} ${LEGACY_PREVIEW_NOTE}. The request was ${displayText(r.tool, 64)}: ${displayText(deferredSummary(String(r.tool ?? ''), r.preview), 300)}`);
+  }
+  // 与 decideApproval 的拒绝同口径:Muse 的请求被了结了就叫醒它,下个周期读到 LOG 按需重提(kickMuse 自带防重入)
+  if (museTouched) await kickMuseSafe();
+  return ids;
+}
+
 /** 去重键 = 工具名 + 规范化 cwd + 完整参数的 SHA-256:同一相对路径在不同 cwd 下是两件事;定长便于建唯一索引。 */
 export function dedupeKeyOf(tool: string, cwd: string | undefined, args: string): string {
   const c = cwd ? path.resolve(cwd) : '';
@@ -104,7 +162,12 @@ function supersededNote(kind: QueueTooLarge['tooLarge']): string {
  *  升级前留下的同键 pending 行,卡上是截断预览,批准却跑完整参数。所以:
  *   - 放不下(tooLarge):同键 pending 行一并撤回(rejected / decided_by=system)。否则告诉模型「没排队、没执行」
  *     是假话 —— 旧卡仍可批,且看不见尾巴;模型若再拆小重排,同一件事还可能跑两遍。撤回只会更严,不会更松。
- *   - 复用(去重命中,含并发撞索引):把旧行的预览刷新成这次的全文。去重键覆盖完整参数,换上的预览描述的是同一份参数。 */
+ *   - 复用(去重命中,含并发撞索引):把旧行的预览刷新成这次的全文。去重键覆盖完整参数,换上的预览描述的是同一份参数。
+ *
+ *  存的预览 = deferredPreview(call, preview):写类工具接上完整改动(Codex 09-26 四轮 #1),尺寸闸按这份全文量。
+ *  口径版本(四轮 #2):新行写 PREVIEW_VERSION;去重只复用同版本的行 —— 旧行(升级前,版本不够)**不**就地刷新升级:
+ *  桌面早先按旧行渲染的卡(截断 / 一行摘要)还开着,刷新后它就变得可批,用户点的是没见过全文的那张卡。
+ *  旧行在尺寸闸之后由 retireLegacyPending 撤回(先过尺寸闸:放不下时同键旧行按 supersededNote 撤、回报给模型),再插新行、发新卡。 */
 export async function queueApproval(input: {
   userId: string; sessionId: string; runId?: string; agentSlug?: string; call: ToolCall;
   preview: string; reason?: ApprovalReason; cwd?: string; note?: string;
@@ -115,9 +178,10 @@ export async function queueApproval(input: {
   const tooLarge: Omit<QueueTooLarge, 'retired'> | null = args.length > MAX_DEFERRED_ARGS
     ? { tooLarge: 'args', size: args.length, limit: MAX_DEFERRED_ARGS }
     : null;
-  const shown = tooLarge ? null : storedPreview(input.preview);
+  const fullPreview = tooLarge ? '' : deferredPreview(input.call, input.preview);
+  const shown = tooLarge ? null : storedPreview(fullPreview);
   if (tooLarge || shown === null) {
-    const refusal = tooLarge ?? { tooLarge: 'preview' as const, size: previewText(input.preview).length, limit: STORED_PREVIEW_MAX };
+    const refusal = tooLarge ?? { tooLarge: 'preview' as const, size: fullPreview.length, limit: STORED_PREVIEW_MAX };
     const note = supersededNote(refusal.tooLarge);
     const retired = await query<any[]>(
       `UPDATE pending_approvals SET status = 'rejected', decided_by = 'system', note = ?, decided_at = CURRENT_TIMESTAMP
@@ -133,15 +197,17 @@ export async function queueApproval(input: {
     }
     return { ...refusal, retired: ids };
   }
+  await retireLegacyPending(input.userId);
+  // 只认同口径版本的行(旧行上面已撤;万一撤回失败,这里也不复用、不升级它 —— 插入撞唯一索引就报错,不排队)
   const findExisting = async (): Promise<string | null> => {
     const dup = await query<any[]>(
-      `SELECT id FROM pending_approvals WHERE user_id = ? AND status = 'pending' AND dedupe_key = ? LIMIT 1`,
-      [input.userId, key],
+      `SELECT id FROM pending_approvals WHERE user_id = ? AND status = 'pending' AND dedupe_key = ? AND preview_version >= ? LIMIT 1`,
+      [input.userId, key, PREVIEW_VERSION],
     );
     return dup?.[0]?.id ? String(dup[0].id) : null;
   };
   const reuse = async (id: string): Promise<{ id: string; existing: true }> => {
-    await query(`UPDATE pending_approvals SET preview = ? WHERE id = ? AND status = 'pending'`, [shown, id]);
+    await query(`UPDATE pending_approvals SET preview = ? WHERE id = ? AND status = 'pending' AND preview_version >= ?`, [shown, id, PREVIEW_VERSION]);
     return { id, existing: true };
   };
   const existing = await findExisting();
@@ -149,11 +215,12 @@ export async function queueApproval(input: {
   const id = uuidv4();
   try {
     await query(
-      `INSERT INTO pending_approvals (id, user_id, session_id, run_id, agent_slug, tool, args, preview, reason, cwd, status, note, dedupe_key)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+      `INSERT INTO pending_approvals (id, user_id, session_id, run_id, agent_slug, tool, args, preview, reason, cwd, status, note, preview_version, dedupe_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+      // dedupe_key 保持最后一个参数(pendingApprovals.inbox / subagent 两份 mock 按 params 末位认键)
       [id, input.userId, input.sessionId, input.runId || null, input.agentSlug || null, tool, args,
         shown, input.reason ? JSON.stringify(input.reason) : null,
-        input.cwd || null, input.note ? displayText(input.note, 1000) : null, key],
+        input.cwd || null, input.note ? displayText(input.note, 1000) : null, PREVIEW_VERSION, key],
     );
   } catch (e) {
     const raced = await findExisting(); // 并发插入撞了唯一索引 → 用赢家的行
@@ -165,8 +232,9 @@ export async function queueApproval(input: {
 
 /** 按 id 读一行(桌面审批卡用:列表接口缺省 100 行,按 id 在列表里找会把老记录判成「找不到」—— Codex 09-11 P1)。 */
 export async function getApproval(userId: string, id: string): Promise<PendingApprovalRow | null> {
+  await retireLegacyPending(userId); // 旧行先撤回:卡片直接渲染终态(已拒绝 + note),不摆一个点了才报错的批准键
   const rows = await query<any[]>(
-    `SELECT id, user_id, session_id, run_id, agent_slug, tool, args, preview, reason, cwd, status, decided_by, note, result, created_at, decided_at
+    `SELECT id, user_id, session_id, run_id, agent_slug, tool, args, preview, reason, cwd, status, preview_version, decided_by, note, result, created_at, decided_at
      FROM pending_approvals WHERE user_id = ? AND id = ? LIMIT 1`,
     [userId, id],
   );
@@ -175,8 +243,9 @@ export async function getApproval(userId: string, id: string): Promise<PendingAp
 
 export async function listApprovals(userId: string, status?: string, limit = 100): Promise<PendingApprovalRow[]> {
   const lim = Math.min(500, Math.max(1, limit));
+  await retireLegacyPending(userId);
   const rows = await query<any[]>(
-    `SELECT id, user_id, session_id, run_id, agent_slug, tool, args, preview, reason, cwd, status, decided_by, note, result, created_at, decided_at
+    `SELECT id, user_id, session_id, run_id, agent_slug, tool, args, preview, reason, cwd, status, preview_version, decided_by, note, result, created_at, decided_at
      FROM pending_approvals WHERE user_id = ?${status ? ' AND status = ?' : ''} ORDER BY created_at DESC LIMIT ${lim}`,
     status ? [userId, status] : [userId],
   );
@@ -184,6 +253,7 @@ export async function listApprovals(userId: string, status?: string, limit = 100
 }
 
 export async function countPendingApprovals(userId: string): Promise<number> {
+  await retireLegacyPending(userId);
   const rows = await query<any[]>(`SELECT COUNT(*) AS n FROM pending_approvals WHERE user_id = ? AND status = 'pending'`, [userId]);
   return Number(rows?.[0]?.n) || 0;
 }
@@ -254,29 +324,53 @@ async function executeApproved(row: PendingApprovalRow): Promise<{ result: strin
 
 /**
  * 用户(或代批 agent)裁决。approve → 立刻执行并写回;reject → 标记 + LOG 行。
- * 返回 ok=false 的情形:行不存在 / 非本人 / 已裁决过(幂等:重复点击不重复执行)。
+ * 返回 ok=false 的情形:行不存在 / 非本人 / 已裁决过(幂等:重复点击不重复执行)/ 批准一条升级前的行(见下)。
+ *
+ * 升级前的行(preview_version 不够,Codex 09-26 四轮 #2):批准的抢占条件里带版本,旧行**永远抢不到** —— 这是闸,
+ * 入口的 retireLegacyPending 只是让它们尽早落到终态。旧行批准 → ok=false、status=rejected、error=LEGACY_PREVIEW_REFUSAL
+ * (接口回 409,桌面按 id 重拉即见「已拒绝」+ note);本次刚撤回的旧行上点拒绝 → ok=true(用户要的「不执行」已成立)。
  */
 export async function decideApproval(
   id: string, userId: string, decision: 'approve' | 'reject', by: 'user' | 'agent', note?: string,
 ): Promise<{ ok: boolean; status?: PendingApprovalRow['status']; result?: string; error?: string }> {
   await recoverStaleExecuting(userId);
+  const retired = await retireLegacyPending(userId);
   const noteStr = note ? displayText(note, 1000) : null;
   // CAS 抢占:只有把 pending 翻成 executing/rejected 的那一次调用拿到行。并发双击 / approve 与 reject 同时到
   // 都只有一方赢(第二方读回空 → 查当前状态回报)。RETURNING 在 SQLite(≥3.35)与 Postgres 都可用;
   // 进程内 mutex 挡不住共享 Postgres 的多进程,所以闸必须在数据库里。
+  // 批准另要预览口径版本够(四轮 #2):用户在卡上看得见全文的行才抢得到;拒绝不设此条件。
+  const approve = decision === 'approve';
   const claimed = await query<any[]>(
     `UPDATE pending_approvals SET status = ?, decided_by = ?, note = COALESCE(?, note), decided_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND user_id = ? AND status = 'pending' RETURNING *`,
-    [decision === 'reject' ? 'rejected' : 'executing', by, noteStr, id, userId],
+     WHERE id = ? AND user_id = ? AND status = 'pending'${approve ? ' AND preview_version >= ?' : ''} RETURNING *`,
+    [approve ? 'executing' : 'rejected', by, noteStr, id, userId, ...(approve ? [PREVIEW_VERSION] : [])],
   );
   const row = claimed?.[0] as PendingApprovalRow | undefined;
   if (!row) {
-    const cur = await query<any[]>(`SELECT status FROM pending_approvals WHERE id = ? AND user_id = ? LIMIT 1`, [id, userId]);
-    const st = cur?.[0]?.status as PendingApprovalRow['status'] | undefined;
-    return st ? { ok: false, status: st, error: `already ${st}` } : { ok: false, error: 'approval not found' };
+    const cur = (await query<any[]>(
+      `SELECT status, note, preview_version FROM pending_approvals WHERE id = ? AND user_id = ? LIMIT 1`, [id, userId],
+    ))?.[0];
+    if (!cur) return { ok: false, error: 'approval not found' };
+    let st = cur.status as PendingApprovalRow['status'];
+    const legacy = !(Number(cur.preview_version) >= PREVIEW_VERSION); // NULL → Number(null)=0,也算旧
+    // 入口撤回之后才落进来的旧行(降级过的旧版引擎还在写):再撤一次,绝不让它停在 pending 可批
+    if (legacy && st === 'pending') {
+      retired.push(...(await retireLegacyPending(userId)));
+      if (retired.includes(id)) st = 'rejected';
+    }
+    // 本次刚撤回的旧行上点拒绝:用户要的「不执行」已成立
+    if (legacy && !approve && retired.includes(id)) return { ok: true, status: 'rejected' };
+    // 批准旧行:本次刚撤回 / 撤回失败仍 pending(抢占条件已挡住)/ 更早就撤回(桌面上还开着撤回前的卡)—— 都说清原因
+    if (legacy && approve && (st === 'pending' || retired.includes(id) || cur.note === LEGACY_PREVIEW_NOTE)) {
+      return { ok: false, status: st, error: LEGACY_PREVIEW_REFUSAL };
+    }
+    return { ok: false, status: st, error: `already ${st}` };
   }
   const agentSlug = row.agent_slug || DEFAULT_AGENT_SLUG;
-  const shownPreview = displayText(row.preview, 300);
+  // 单行面(LOG / 回执标题)只用闸门那行摘要:写类行的 preview 带着完整改动(四轮 #1),整段折叠会把文件内容塞进来(复核 #2)
+  const summary = deferredSummary(row.tool, row.preview);
+  const shownPreview = displayText(summary, 300);
   if (decision === 'reject') {
     await appendAgentLog(agentSlug, userId, `[approval] rejected by ${by}: ${shownPreview}${noteStr ? ` — ${noteStr}` : ''}`);
     if (agentSlug === MUSE_AGENT_SLUG) await kickMuseSafe();
@@ -297,7 +391,7 @@ export async function decideApproval(
     `[approval] approved by ${by} and executed (${status}): ${shownPreview} → ${displayText(exec.result, 300)}`);
   // 收件箱回执(Muse 发信人缺省不转通道;标题沿用预览=模型/工具原文经净化,不硬编码语言)。
   await sendInboxMessage(userId, {
-    title: `${status === 'approved' ? '✓' : '✗'} ${displayText(row.preview, 180)}`,
+    title: `${status === 'approved' ? '✓' : '✗'} ${displayText(summary, 180)}`,
     body: exec.result.slice(0, 2000),
     senderId: agentSlug,
   }).catch(() => {});
@@ -332,9 +426,12 @@ export async function judgeApproval(input: {
       (userMd ? `\n\n[USER.md]\n${userMd}` : '') +
       (memory ? `\n\n[User's long-term memory]\n${memory}` : '');
     const args = parseArgs(input.call);
+    // 判官看的与用户卡上看的是同一份全文(写类 = 摘要 + 完整改动);看不全就不替用户批 —— 否决只是转排队(Codex 09-26 四轮复核)
+    const fullPreview = deferredPreview(input.call, input.preview);
+    if (fullPreview.length > STORED_PREVIEW_MAX) return { approve: false, reason: 'the change is too large to review in full' };
     const user =
       `Background agent "${input.agentSlug}" requests an action.\n` +
-      `Tool: ${input.call.function.name}\nPreview: ${input.preview}\n` +
+      `Tool: ${input.call.function.name}\nPreview: ${fullPreview}\n` +
       `Why approval is needed: ${input.reason ? `${input.reason.kind}${input.reason.rule ? ` (${input.reason.rule})` : ''}` : 'policy'}\n` +
       `Arguments: ${JSON.stringify(args).slice(0, 4000)}`;
     const llm = deps().brain.llm;
