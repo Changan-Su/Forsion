@@ -1,6 +1,6 @@
 /** 命令面板(Cmd/Ctrl+K):跑 commandRegistry 里的命令。移植自 Amadeus,改读引擎 store。 */
 import { useEffect, useState, type KeyboardEvent } from 'react'
-import { useCommandStore } from './commandRegistry'
+import { commandHotkeyText, useCommandStore } from './commandRegistry'
 import { fuzzyRank } from './fuzzy'
 import { label } from './types'
 import { useEngineI18n } from './i18nSeam'
@@ -77,7 +77,8 @@ export function CommandPalette() {
                 {c.icon && <c.icon size={14} className="cmd-icon" />}
                 {label(c.title)}
               </span>
-              {c.hotkey && <kbd className="cmd-hotkey">{c.hotkey}</kbd>}
+              {/* 生效键(用户改绑 / 解绑都跟)按平台格式化:原样打 c.hotkey 会露出「mod+n」这种存储串 */}
+              {commandHotkeyText(c.id) && <kbd className="cmd-hotkey">{commandHotkeyText(c.id)}</kbd>}
             </button>
           ))}
           {results.length === 0 && <div className="cmd-empty">{t('command.empty')}</div>}

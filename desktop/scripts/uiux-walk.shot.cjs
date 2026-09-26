@@ -100,7 +100,8 @@ async function main() {
   const skipped = []
   const pageErrors = [] // 截图过程中渲染层抛的异常:没把页面画崩的异步报错,光看图会漏
   for (const c of COMBOS) {
-    const { app, win, close } = await launch({ tag: `walk-${c.id}` })
+    // overrideHome:造物托管根 = <HOME>/Forsion-Dev/Project,不覆写会读到用户真目录(同 check:artificial)
+    const { app, win, close } = await launch({ tag: `walk-${c.id}`, overrideHome: true })
     let current = 'boot'
     const onErr = (e) => pageErrors.push(`${c.id} ${current}: ${String((e && e.message) || e).slice(0, 160)}`)
     win.on('pageerror', onErr)

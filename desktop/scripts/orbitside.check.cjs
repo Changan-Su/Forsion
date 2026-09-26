@@ -507,7 +507,7 @@ async function run(app, win) {
   await orbitProject.hover()
   await (await leftPane(win)).screenshot({ path: shots.actions })
   await orbitProject.click({ button: 'right' })
-  const contextPin = win.locator('.ctx-menu button', { hasText: /Pin 到顶部|Pin to top/ }).last()
+  const contextPin = win.locator('.ctx-menu button', { hasText: /(?<!取消)置顶|Pin to top/ }).last()
   check('10r 一级 Project 整行右键打开与 `…` 相同的操作菜单',
     await contextPin.isVisible().catch(() => false), '')
   await win.keyboard.press('Escape')
@@ -518,18 +518,18 @@ async function run(app, win) {
     const row = level1Rows.nth(i)
     const name = ((await row.locator('.t2o-name').textContent().catch(() => '')) || '').trim()
     await row.click({ button: 'right' })
-    const menuVisible = await win.locator('.ctx-menu button', { hasText: /Pin 到顶部|Pin to top/ }).last().isVisible().catch(() => false)
+    const menuVisible = await win.locator('.ctx-menu button', { hasText: /(?<!取消)置顶|Pin to top/ }).last().isVisible().catch(() => false)
     orbitRowRightClicks.push({ name, menuVisible })
     await win.mouse.click(900, 700)
   }
   check('10s Agent / Engine / TEAM 等其它一级行整行右键也打开各自 `…` 菜单',
     orbitRowRightClicks.length > 0 && orbitRowRightClicks.every((x) => x.menuVisible), JSON.stringify(orbitRowRightClicks))
   await orbitProject.locator(':scope > .t2s-group-add').first().click()
-  await win.locator('.ctx-menu button', { hasText: /Pin 到顶部|Pin to top/ }).last().click()
+  await win.locator('.ctx-menu button', { hasText: /(?<!取消)置顶|Pin to top/ }).last().click()
   const xyra = win.locator('.t2o .t2o-row', { hasText: 'Xyra' }).first()
   await xyra.hover()
   await xyra.locator('.t2o-tail').click()
-  await win.locator('.ctx-menu button', { hasText: /Pin 到顶部|Pin to top/ }).last().click()
+  await win.locator('.ctx-menu button', { hasText: /(?<!取消)置顶|Pin to top/ }).last().click()
   await sleep(350)
   let pinState = await win.evaluate(`(() => ({
     order: Array.from(document.querySelectorAll('.t2o [data-pinned="true"]')).map((e) => ((e.querySelector('.t2o-name, .t2s-group-label') || e).textContent || '').trim()),
