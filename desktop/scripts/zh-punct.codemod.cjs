@@ -15,7 +15,7 @@
  * 括号成对处理:一对 () 里有汉字或紧挨汉字,两边一起换;不成对的单个括号只看是否紧挨汉字。
  * 全角标点自带间距,换完顺手去掉它外侧的空格。
  *
- * 跑法:node scripts/zh-punct.codemod.cjs [--check](--check 只报数不写,有待改项退出码 1)
+ * 跑法:node scripts/zh-punct.codemod.cjs [--check | --selftest](--check 只报数不写,有待改项退出码 1;--selftest 跑规则自检)
  * 输出:改了的键 + 原值 → 新值,落 SHOT_DIR 或临时目录的 zh-punct-changes.json(给改台架 / 测试里的旧文案用)。
  */
 const fs = require('fs')
@@ -33,6 +33,7 @@ const MAP = { ',': '，', ';': '；', ':': '：', '?': '？', '!': '！', '(': '
 const PROTECT = [
   /\{\w+\}/g, /`[^`]*`/g, /https?:\/\/\S+/g, /(?:~|\.{1,2})?\/[\w./*~-]+/g,
   /(?:⌘|Ctrl|Cmd|Shift|Alt|Option|Meta)[+\w⇧⌥⌘,.]*/g, /\d{1,2}:\d{2}/g, /!\[\[?/g, /\\[nrtu]/g,
+  /!?\[[^\]\n]*\]\([^)\n]*\)/g, // Markdown 链接 / 图片的语法括号:[文字](路径) 换成全角就不是链接了
 ]
 
 /** 返回换过标点的文本(raw 源码字面量内容,转义序列原样保留)。 */
@@ -50,6 +51,8 @@ function fix(raw) {
     else if (raw[i] === ')') pairs.push([stack.length ? stack.pop() : -1, i])
   }
   for (const o of stack) pairs.push([o, -1])
+  // 外层先定:内层括号紧挨的是外层括号,外层先换成全角,内层这一遍就能看见 —— 否则第二遍才换,脚本不幂等。
+  pairs.sort((x, y) => (x[0] < 0 ? x[1] : x[0]) - (y[0] < 0 ? y[1] : y[0]))
   for (const [o, c] of pairs) {
     const inner = o >= 0 && c >= 0 ? raw.slice(o + 1, c) : ''
     const go = /[一-龥]/.test(inner) || (o >= 0 && (han(o - 1) || (c < 0 && han(o + 1)))) || (c >= 0 && (han(c + 1) || (o < 0 && han(c - 1))))
@@ -65,10 +68,18 @@ function fix(raw) {
     while (p >= 0 && raw[p] === ' ') p--
     if (han(p) || han(i + 1) || ('?!'.includes(ch) && p >= 0 && '？！'.includes(out[p]))) out[i] = MAP[ch]
   }
+  // 全角标点自带间距:只删**本次换过**的标点外侧的空格(「（」前、其余后),锁定区里的一个不碰。
+  const drop = new Array(raw.length).fill(false)
+  const blank = (j) => j >= 0 && j < raw.length && (raw[j] === ' ' || raw[j] === '\t') && !locked[j]
+  for (let i = 0; i < raw.length; i++) {
+    if (out[i] === raw[i]) continue
+    if (out[i] === '（') { for (let j = i - 1; blank(j); j--) drop[j] = true; continue }
+    for (let j = i + 1; blank(j); j++) drop[j] = true
+    if (out[i] !== '）') for (let j = i - 1; blank(j); j--) drop[j] = true
+  }
   let s = ''
-  for (let i = 0; i < out.length; i++) s += out[i]
-  // 全角标点外侧的空格:「（」前、其余全角标点后。只删因本次转换而多余的(整串里本来就全角的也一并规整,无害)。
-  return s.replace(/[ \t]+（/g, '（').replace(/([，；：？！）])[ \t]+/g, '$1').replace(/[ \t]+([，；：？！）])/g, '$1')
+  for (let i = 0; i < out.length; i++) if (!drop[i]) s += out[i]
+  return s
 }
 
 function walk(dir, acc = []) {
@@ -125,5 +136,22 @@ function main() {
 
 }
 
-if (require.main === module) main()
+/** 自检:node scripts/zh-punct.codemod.cjs --selftest(每条都要一遍即对、第二遍零改动)。 */
+function selftest() {
+  const cases = [
+    ['会话(旧)', '会话（旧）'], ['输入消息(Enter 发送, Shift+Enter 换行)', '输入消息（Enter 发送，Shift+Enter 换行）'],
+    ['删除「{name}」?', '删除「{name}」？'], ['失败: {error}', '失败：{error}'], ['时间 12:30 开始', '时间 12:30 开始'],
+    ['打开 https://a.b/c?x=1 看看', '打开 https://a.b/c?x=1 看看'], ['自定义(config.json)', '自定义（config.json）'],
+    ['用 `a,b` 分隔', '用 `a,b` 分隔'], ['真的吗?!', '真的吗？！'], ['Token: abc', 'Token: abc'], ['按 ⌘, 打开', '按 ⌘, 打开'],
+    ['插入![[文件]]', '插入![[文件]]'], ['路径 ~/a/b:c', '路径 ~/a/b:c'], ['汉((A))', '汉（（A））'],
+    ['关闭:插入 [文件名](相对路径) 链接。', '关闭：插入 [文件名](相对路径) 链接。'],
+    ['说明 `/中文， a.md` 看', '说明 `/中文， a.md` 看'], ['拿不到(与 A 同样),X11', '拿不到（与 A 同样），X11'],
+  ]
+  const bad = cases.filter(([i, o]) => fix(i) !== o || fix(o) !== o)
+  for (const [i, o] of bad) console.log(`✗ ${i} → ${fix(i)}(期望 ${o})`)
+  console.log(bad.length ? `${bad.length} 条不对` : `自检 ${cases.length} 条全对`)
+  if (bad.length) process.exitCode = 1
+}
+
+if (require.main === module) { if (process.argv.includes('--selftest')) selftest(); else main() }
 module.exports = { fix }

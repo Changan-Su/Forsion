@@ -924,7 +924,7 @@ const zh: Dict = {
   'settings.notes.folderLabel': 'Vault 相对文件夹',
   'settings.notes.folderHint': '相对 Vault 根目录，如 assets。所有附件集中存放于此（需在 Vault 内才能内联预览）。',
   'settings.notes.previewLabel': '导入文件默认开启预览',
-  'settings.notes.previewHint': '开启：插入 ![[文件]] 预览块（图片内联，其它显示可点开的文件卡片）。关闭：插入 [文件名]（相对路径）链接。',
+  'settings.notes.previewHint': '开启：插入 ![[文件]] 预览块（图片内联，其它显示可点开的文件卡片）。关闭：插入 [文件名](相对路径) 链接。',
   'settings.notes.upgradeV4Label': '打开旧笔记时升级为 v4 纯 Markdown 格式',
   'settings.notes.upgradeV4Hint': '默认开启：v3 块标记笔记在编辑时转为纯 Markdown（无标记、标准分段）。升级仅在你真正编辑后落盘；若还有设备停留在 2.7.8 以前，可暂时关闭。',
   'settings.notes.dailyLabel': '日记文件夹',

@@ -218,6 +218,7 @@ describe('i18n 覆盖', () => {
       .replace(/(?:⌘|Ctrl|Cmd|Shift|Alt|Option|Meta)[+\w⇧⌥⌘,.]*/g, '□')
       .replace(/\d{1,2}:\d{2}/g, '□')
       .replace(/!\[\[?/g, '□')
+      .replace(/!?\[[^\]\n]*\]\([^)\n]*\)/g, '□') // Markdown 链接语法示例
     const PUNCT = /[一-龥][,;:()?!]|[,;:()?!][一-龥]/
     const bad = Object.entries(zh).filter(([k, v]) => !k.startsWith('amadeus.default.') && PUNCT.test(strip(v))).map(([k, v]) => `${k} = ${v.slice(0, 60)}`)
     expect(Object.keys(zh).length).toBeGreaterThan(1000) // 防假绿:扫描确实跑过
