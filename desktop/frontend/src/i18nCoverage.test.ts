@@ -253,24 +253,26 @@ describe('i18n 覆盖', () => {
     // H 只拦得住 `new Date(…).toLocaleString(`;先赋给变量再 `at.toLocaleString()` 就漏过去,照样随系统区域显示日期。
     // 静态分不清接收者是日期还是数字,所以反过来:**全部**调用都按「文件 + 接收者表达式」登记,只放行确认是数字
     // (千分位)的那几处,并写明理由。新增的一律变红 —— 是日期就改走 format/time.ts,是数字就来这里登记。
-    const NUMBER_OK: Record<string, string> = {
-      'stores/appStore.ts  Math.round(runCost)': '单次运行费用(数字千分位)',
-      'stores/appStore.ts  costLimit': '费用上限(数字)',
-      'stores/appStore.ts  (Number(pl.savedChars) || 0)': '压缩省下的字数(数字)',
-      'components/FeedbackModal.tsx  text.trim().length': '反馈字数(数字)',
-      'components/FeedbackModal.tsx  FEEDBACK_TEXT_LIMIT': '字数上限常量(数字)',
-      'components/ModelPickerSettings.tsx  model.maxContextWindow!': '上下文窗口上限(token 数)',
-      'components/ModelPickerSettings.tsx  (model.contextWindow ?? 0)': '上下文窗口(token 数)',
-      'views/AgentProfileView.tsx  s.usage.ctx': '上下文 token 数',
-      'views/chat2/Composer2.tsx  (sessionTokens ?? 0)': '会话 token 数',
-      'views/chat2/Composer2.tsx  (ctxTokens ?? 0)': '上下文 token 数',
-      'views/chat2/Composer2.tsx  (contextWindow ?? 0)': '上下文窗口(token 数)',
-      'views/chat2/Composer2.tsx  Math.round(runCost)': '单次运行费用(数字)',
-      'views/chat2/Composer2.tsx  costLimit': '费用上限(数字)',
-      'views/chat2/Composer2.tsx  outgoing.length': '输入字数(数字)',
-      'views/chat2/Composer2.tsx  MAX_INPUT_CHARS': '输入字数上限常量(数字)',
-      'amadeus/blocks/database/DatabaseEmbed.tsx  number': '数字列的纯文本值(前面已判 number !== null)',
-      'amadeus/blocks/database/DatabaseEmbed.tsx  v': '数字列的纯文本值(前面已判 typeof v === \'number\')',
+    // 每项还记**次数**:只按「文件 + 接收者」放行时,同文件再来一个同名接收者(如 DatabaseEmbed 里另一个 `v` 是日期)
+    // 会被已有登记顺手放过;次数对不上即红,新增的那处得自己来登记。
+    const NUMBER_OK: Record<string, [count: number, reason: string]> = {
+      'stores/appStore.ts  Math.round(runCost)': [1, '单次运行费用(数字千分位)'],
+      'stores/appStore.ts  costLimit': [1, '费用上限(数字)'],
+      'stores/appStore.ts  (Number(pl.savedChars) || 0)': [1, '压缩省下的字数(数字)'],
+      'components/FeedbackModal.tsx  text.trim().length': [1, '反馈字数(数字)'],
+      'components/FeedbackModal.tsx  FEEDBACK_TEXT_LIMIT': [1, '字数上限常量(数字)'],
+      'components/ModelPickerSettings.tsx  model.maxContextWindow!': [1, '上下文窗口上限(token 数)'],
+      'components/ModelPickerSettings.tsx  (model.contextWindow ?? 0)': [1, '上下文窗口(token 数)'],
+      'views/AgentProfileView.tsx  s.usage.ctx': [1, '上下文 token 数'],
+      'views/chat2/Composer2.tsx  (sessionTokens ?? 0)': [2, '会话 token 数'],
+      'views/chat2/Composer2.tsx  (ctxTokens ?? 0)': [1, '上下文 token 数'],
+      'views/chat2/Composer2.tsx  (contextWindow ?? 0)': [1, '上下文窗口(token 数)'],
+      'views/chat2/Composer2.tsx  Math.round(runCost)': [3, '单次运行费用(数字)'],
+      'views/chat2/Composer2.tsx  costLimit': [3, '费用上限(数字)'],
+      'views/chat2/Composer2.tsx  outgoing.length': [1, '输入字数(数字)'],
+      'views/chat2/Composer2.tsx  MAX_INPUT_CHARS': [1, '输入字数上限常量(数字)'],
+      'amadeus/blocks/database/DatabaseEmbed.tsx  number': [1, '数字列的纯文本值(前面已判 number !== null)'],
+      'amadeus/blocks/database/DatabaseEmbed.tsx  v': [1, '数字列的纯文本值(前面已判 typeof v === \'number\')'],
     }
     const TIME_SRC = join(SRC, 'format', 'time.ts')
     /** 从 `.toLocaleString(` 往回取接收者表达式:标识符 / 成员访问 / `!` / 成对括号(`Math.round(x)`、`(a ?? 0)`)。 */
@@ -308,7 +310,11 @@ describe('i18n 覆盖', () => {
     // 防假绿:扫描确实命中了已登记的调用;登记表里的每一项都还在用(删了就把登记也删掉,别留死条目)。
     expect(found.length).toBeGreaterThan(0)
     const stale = Object.keys(NUMBER_OK).filter((k) => !found.includes(k))
+    const tally = new Map<string, number>()
+    for (const k of found) tally.set(k, (tally.get(k) ?? 0) + 1)
+    const miscount = Object.entries(NUMBER_OK).filter(([k, [n]]) => tally.has(k) && tally.get(k) !== n).map(([k, [n]]) => `${k}  登记 ${n} 处,源码 ${tally.get(k)} 处`)
     expect(stale, `登记了但源码里已经没有的项(删掉登记):\n  ${stale.join('\n  ')}`).toEqual([])
+    expect(miscount, `登记次数与源码不符 —— 多出来的那处先确认接收者是数字(是日期改走 format/time.ts),再改次数:\n  ${miscount.join('\n  ')}`).toEqual([])
     expect(bad, `未登记的 .toLocaleString( —— 是日期就改走 format/time.ts;确认是数字就进 NUMBER_OK 并写明理由:\n  ${bad.join('\n  ')}`).toEqual([])
   })
 })
