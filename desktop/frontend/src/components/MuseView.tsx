@@ -34,6 +34,8 @@ const hhmm = (ms: number): string => {
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
 
+const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? v : [])
+
 export const MuseView: React.FC<{
   cfg: TanguDesktopConfig
   sessions: SessionRecord[]
@@ -60,15 +62,16 @@ export const MuseView: React.FC<{
     const st = await getMuseStatus(cfg).catch(() => null)
     setStatus(st)
     void syncAgentSpace(cfg, 'muse', st?.spaceStamp) // 自建 Space 变了 → 只重载 agent-muse 插件(按戳去重)
-    const nextTodos = await getMuseTodos(cfg, 'pending').catch(() => [] as MuseTodo[])
+    // 各列表缺省一律补空数组:老引擎 / 外部后端可能回一个不是数组的壳,渲染里的 .filter / .length 会崩掉整个面板。
+    const nextTodos = arr<MuseTodo>(await getMuseTodos(cfg, 'pending').catch(() => []))
     setTodos(nextTodos)
     setSel((p) => new Set([...p].filter((id) => nextTodos.some((x) => x.id === id)))) // 已被处理/消失的 TODO 不留在选择集里
-    setTriggers(await getMuseTriggers(cfg).catch(() => []))
+    setTriggers(arr(await getMuseTriggers(cfg).catch(() => [])))
     // 旧引擎无此端点 → 404 → 空列表(读端兜底,面板不红)。
-    setApprovals(await listMuseApprovals(cfg, 'pending').catch(() => []))
-    setTracks(await getAgentSchedules(cfg).then((all) => (all.find((s) => s.slug === 'muse')?.entries || []).filter((e) => e.auto)).catch(() => []))
+    setApprovals(arr(await listMuseApprovals(cfg, 'pending').catch(() => [])))
+    setTracks(await getAgentSchedules(cfg).then((all) => arr<AgentScheduleEntry>(arr<{ slug: string; entries?: AgentScheduleEntry[] }>(all).find((s) => s.slug === 'muse')?.entries).filter((e) => e.auto)).catch(() => []))
     if (st?.sessionId) {
-      const ms = await listMessages(cfg, st.sessionId, 6).catch(() => [])
+      const ms = arr<{ role: string; content?: unknown }>(await listMessages(cfg, st.sessionId, 6).catch(() => []))
       const lastAssistant = [...ms].reverse().find((m) => m.role === 'assistant' || m.role === 'model')
       setThinking(String(lastAssistant?.content || '').slice(0, 4000))
     } else {

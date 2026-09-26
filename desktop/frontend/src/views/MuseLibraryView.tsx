@@ -85,10 +85,11 @@ export const MuseLibraryView: React.FC<ViewProps> = () => {
   const load = async (): Promise<void> => {
     try {
       const r = await getMuseLibrary(cfg)
-      setRoot(r.root)
-      setFiles(r.files)
+      const files = Array.isArray(r?.files) ? r.files : [] // 老引擎 / 外部后端回空壳:当空库,别让渲染里的 files.filter 崩
+      setRoot(r?.root || '')
+      setFiles(files)
       setErr('')
-      const list = orderFiles(r.files)
+      const list = orderFiles(files)
       const cur = list.find((f) => f.path === selRef.current)
       if (cur) {
         const done = loadedRef.current
