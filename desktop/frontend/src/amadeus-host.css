@@ -1576,7 +1576,7 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
    (astryx Theme 壳 display:contents,只能这么写),改名的症状只在移动端顶栏遮挡,桌面截图看不出来。 */
 .amx-todo { height: 100%; overflow-y: auto; background: transparent; color: var(--text); padding: 0 0 6px; } /* 透明融入侧栏底 */
 .amx-todo-empty { padding: 18px; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-meta, 12px); text-align: center; line-height: 1.7; }
-.amx-todo-empty code { padding: 1px 4px; border-radius: 4px; background: var(--bg-hover, var(--overlay-light)); font-size: var(--ui-font-caption, 11px); }
+.amx-todo-empty code { padding: 1px 4px; border-radius: 4px; background: var(--bg-hover, var(--overlay-light)); font-size: var(--ui-font-caption, 11px); white-space: nowrap; }
 
 .amx-todo-bar { display: flex; align-items: center; gap: 6px; padding: 8px 12px 6px; }
 .amx-todo-title { font-size: var(--ui-font-meta, 12px); font-weight: 600; color: var(--text); }
@@ -1649,6 +1649,9 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
  * U-12:小时轴 .amx-cal-ghours 是定位元素(relative + 被 syncGutter 平移 -scrollTop),而表头角 / 「全天」没定位 ——
  * 定位元素后绘制,滚动后刻度就盖进了表头角与「全天」格。给这两格定位并抬一层,让刻度从它们底下滑过。 */
 .amx-cal-gcorner, .amx-cal-gallday { position: relative; z-index: 1; }
+/* W-58(U-12 残留):没有全天事件时全天行只剩 ~5px,「全天」两字压在上下两条格线上。给日区全天格一个最小高度,
+ * 左轴 gallday 的高度是从它量出来的,两边一起变高、刻度照样对齐。 */
+.amx-cal-allday2 { min-height: 22px; }
 /* U-33:「一周开始于」设置行(日历设置右栏底部)。 */
 .amx-calcfg-weekstart { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 12px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
 .amx-calcfg-weekstart-label { flex: none; }

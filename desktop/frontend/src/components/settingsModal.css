@@ -72,6 +72,9 @@
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent 100%);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent 100%);
 }
+/* 深链打开靠下的子页时,scrollIntoView(nearest) 会把选中项贴着底边停下 —— 正好落进上面 28px 的渐隐,看着像禁用(W-15)。
+ * 给滚动留出渐隐那段的余量;顶部也留一点,分组标题不被切成半行。 */
+.settings-nav .settings-nav-list { scroll-padding: 12px 0 36px; }
 
 /* ── 设计语言缩略图(U-16) ── */
 /* 「Forsion」小字不再全大写(复制 / 读屏都拿原文;视觉只留一点字距)。 */

@@ -42,6 +42,8 @@ registerMessages({
   'wsview.noMatches': { zh: '没有匹配项', en: 'No matches' },
   'wsview.empty': { zh: '暂无内容', en: 'Nothing here yet' },
   'wsview.search': { zh: '搜索{source}', en: 'Search {source}' },
+  // 占位只写「搜索」:侧栏标题的选择器里已经有源名,英文长名在窄栏里会被硬裁成「Search Autom」(W-14)
+  'wsview.searchShort': { zh: '搜索', en: 'Search' },
   'wsview.clearSearch': { zh: '清空搜索', en: 'Clear search' },
   'wsview.filter': { zh: '筛选分类', en: 'Filter by category' },
   'wsview.clearFilter': { zh: '显示全部', en: 'Show all' },
@@ -500,7 +502,7 @@ export function PluginListBody({ src }: { src: ListSourceContribution }) {
       {(src.search || primary || secondary.length > 0) && <div className="t2sw-plug-toolbar">
         {src.search && <div className="t2s-search">
           <Search size={13} className="t2s-dim" />
-          <input ref={searchRef} aria-label={t('wsview.search', { source: src.title })} placeholder={t('wsview.search', { source: src.title })}
+          <input ref={searchRef} aria-label={t('wsview.search', { source: src.title })} placeholder={t('wsview.searchShort')}
             value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => {
               if (e.key === 'Escape' && query) { e.preventDefault(); e.stopPropagation(); setQuery('') }
               if (e.key === 'ArrowDown') { e.preventDefault(); listRef.current?.querySelector<HTMLButtonElement>('.t2s-srow')?.focus() }

@@ -21,7 +21,7 @@ import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension, type ExtendViewController } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
 import { allViews, getView, subscribeViews } from './viewRegistry'
-import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension } from './dockviewStore'
+import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension, markSelfTitled } from './dockviewStore'
 import { useNav } from './navStore'
 import { useCommandStore, commandHotkeyText } from './commandRegistry'
 import { useEngineI18n } from './i18nSeam'
@@ -57,7 +57,7 @@ function leafFromProps(props: IDockviewPanelProps): Leaf {
     type: (typeof __type === 'string' && __type) || (props.api as { component?: string }).component || '',
     loc: (__loc === 'left' || __loc === 'right' || __loc === 'bottom') ? __loc : 'main',
     params: userParams,
-    setTitle: (t) => props.api.setTitle(t),
+    setTitle: (t) => { markSelfTitled(props.api.id); props.api.setTitle(t) },
     // 走 store 那份 makeLeaf.setParams(读实时 panel.params + refreshTabs + 记账布局)。视图就地换文件
     // (编辑器认领笔记、阅读器换 PDF)走的是这里;此前只 updateParameters,mainTabs[].filePath 要等下一次
     // 结构事件才跟上 → 侧栏对话默认引用挂不上 / 挂旧的那篇(09-22 check:chatside 6/7)。

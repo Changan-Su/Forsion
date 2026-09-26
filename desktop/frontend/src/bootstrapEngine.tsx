@@ -5,7 +5,7 @@ import { registerOperationsViews } from './features/operations'
 import { hasNativeFeature, amadeusAvailable } from './features/runtime'
 import { registerMiniViews } from './mini/miniViews'
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
-import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelBottom, Code2, Trophy, Activity, AppWindow, Sun, TextCursorInput } from 'lucide-react'
+import { MessageCircle, Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelRight, PanelBottom, Code2, Trophy, Activity, AppWindow, Sun, TextCursorInput } from 'lucide-react'
 import type { LucideIcon, LucideProps } from 'lucide-react'
 import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, adoptSpaceLayoutCold, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, supportsMiniPanel, LCL_MESSAGES } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
@@ -28,7 +28,7 @@ import { openBtw } from './views/chat2/btwStore'
 import { PRODUCT } from './product'
 import { useTheme } from './stores/themeStore'
 import { notifyApp, useNotifications } from './stores/notificationStore'
-import { cycleLocale, registerMessages, translate, useI18n } from './i18n'
+import { cycleLocale, registerMessages, subscribeLocale, translate, useI18n } from './i18n'
 import { WorkspaceView, OutlineView } from './views/WorkspaceView'
 import { NewTabView } from './views/NewTabView'
 import { HomeEmptyView } from './views/HomeEmpty'
@@ -107,6 +107,8 @@ export function installEngine(): void {
   // 引擎自带的 lcl.* 文案先并进宿主字典,切语言走宿主 context 当场生效。
   registerMessages(LCL_MESSAGES)
   setEngineI18n(useI18n, translate)
+  // 标签页标题是建面板那一刻快照进布局的:切语言后没被视图改过名的面板(「主页」等)按新语言重取(W-10)
+  subscribeLocale(() => useWorkspace.getState().retitleDefaults?.())
 
   // 内置插件(浏览器 / 终端):默认开,可在 设置 → Forsion 插件 关掉。**放最前面**——它同时接管
   // 主进程回投的外链(app:open-url),排在几十个 registerView 之后的话,那些调用里任一处抛错
@@ -408,13 +410,13 @@ export function installEngine(): void {
       openFindBar()
     },
   })
-  addCommand({ id: 'toggle-right', icon: PanelLeft, checked: () => ws().rightVisible, title: () => app().tr('command.toggleRight'), keywords: 'sidebar 右栏', run: () => ws().toggleSidebar('right') })
+  addCommand({ id: 'toggle-right', icon: PanelRight, checked: () => ws().rightVisible, title: () => app().tr('command.toggleRight'), keywords: 'sidebar 右栏', run: () => ws().toggleSidebar('right') })
   // mod+j 与 VS Code 的面板热键对齐;app 命令表与编辑器 keymap 皆空闲(mod+/ 已被左栏占,见上)。
   // ⚠️仅桌面壳:移动单列壳没有底部面板,而 singleColumnStore.toggleSidebar 是
   // `side === 'left' ? 左 : 右` 的二元三目 —— 传 'bottom' 会**去开右抽屉**(命令面板在移动端也在,
   // 不 gate 就真能点到)。同理它的 bucketOf/sidebarDefaults 也没有 bottom 桶。
   if (UI_MODE !== 'mobile') addCommand({ id: 'toggle-bottom', icon: PanelBottom, checked: () => ws().bottomVisible, title: () => app().tr('command.toggleBottom'), keywords: 'panel bottom terminal 底部 面板 终端', hotkey: 'mod+j', run: () => ws().toggleSidebar('bottom') })
-  addCommand({ id: 'theme-mode', icon: Moon, title: () => app().tr('theme.changeMode'), keywords: 'theme dark 明暗', run: () => useTheme.getState().toggleMode() })
+  addCommand({ id: 'theme-mode', icon: ThemeModeIcon, title: () => app().tr('theme.changeMode'), keywords: 'theme dark 明暗', run: () => useTheme.getState().toggleMode() })
   addCommand({ id: 'theme-skin', title: () => app().tr('theme.changeSkin'), keywords: 'theme skin 配色', run: () => useTheme.getState().cycleSkin() })
   addCommand({ id: 'theme-lang', title: () => app().tr('theme.changeLanguage'), keywords: 'theme language genesis lovable soft', run: () => useTheme.getState().cycleLang() })
   // ⚠️别与上一条混:theme-lang = 主题的「语言层」(genesis/lovable/soft),这条才是界面中英文。

@@ -1882,7 +1882,8 @@ export const SettingsModal: React.FC<{
                         </label>
                         <div className="hint" style={{ marginBottom: 8 }}>{t('settings.forsion.autoSyncHint')}</div>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          <button className="btn primary sm" onClick={() => void doSyncNow()} disabled={syncing}>
+                          {/* 没登录点了必失败;整页主按钮只留「登录 Forsion」一个(W-02) */}
+                          <button className="btn sm" onClick={() => void doSyncNow()} disabled={syncing || !(authSt?.loggedIn && authSt?.tokenValid !== false)}>
                             {syncing ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />} {syncing ? t('settings.forsion.syncing') : t('settings.forsion.syncNow')}
                           </button>
                           <span className="hint">
@@ -2034,9 +2035,15 @@ export const SettingsModal: React.FC<{
                         {noteSync.enabled && (
                           <>
                             <div className="settings-inline-row" style={{ marginTop: 6 }}>
+                              {/* 未登录:给登录入口、禁掉「立即同步」,下面的红字错误行也不再重复同一句话(W-02) */}
+                              {noteSync.state === 'auth-required' && (
+                                <button className="btn primary sm" onClick={() => void doForsionLogin()} disabled={loggingIn}>
+                                  <LogIn size={12} /> {t('settings.forsion.login')}
+                                </button>
+                              )}
                               <button
                                 className="btn sm"
-                                disabled={noteSyncBusy || noteSync.state === 'syncing'}
+                                disabled={noteSyncBusy || noteSync.state === 'syncing' || noteSync.state === 'auth-required'}
                                 onClick={() => {
                                   setNoteSyncBusy(true)
                                   void window.amadeusSync!.syncNow().then(setNoteSync).finally(() => setNoteSyncBusy(false))
@@ -2054,7 +2061,7 @@ export const SettingsModal: React.FC<{
                                 })}
                               </span>
                             </div>
-                            {noteSync.error && <div className="hint" style={{ color: 'var(--danger, #c00)' }}>{ipcErrorText(noteSync.error)}</div>}
+                            {noteSync.error && noteSync.state !== 'auth-required' && <div className="hint" style={{ color: 'var(--danger, #c00)' }}>{ipcErrorText(noteSync.error)}</div>}
                             {(noteSync.pendingDeletions ?? 0) > 0 && (
                               <div className="hint" style={{ color: 'var(--danger, #c00)' }}>
                                 {t('settings.notes.cloudSyncPendingDel', { n: String(noteSync.pendingDeletions) })}{' '}
@@ -3481,14 +3488,17 @@ export const SettingsModal: React.FC<{
                       <div className="field">
                         <label style={{ color: 'var(--danger)' }}>{t('settings.clearData.label')}</label>
                         <div className="hint" style={{ marginBottom: 8 }}>{t('settings.clearData.hint')}</div>
-                        <label className="inline-check">
-                          <input type="checkbox" checked={clearTangu} onChange={(e) => setClearTangu(e.target.checked)} />
-                          {t('settings.clearData.tangu')}
-                        </label>
-                        <label className="inline-check" style={{ marginTop: 4 }}>
-                          <input type="checkbox" checked={clearDesktop} onChange={(e) => setClearDesktop(e.target.checked)} />
-                          {t('settings.clearData.desktop')}
-                        </label>
+                        {/* 两项各占一行(W-06):inline-check 是行内元素,中文串短时两个勾选框会挤进同一行、归属不清 */}
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+                          <label className="inline-check">
+                            <input type="checkbox" checked={clearTangu} onChange={(e) => setClearTangu(e.target.checked)} />
+                            {t('settings.clearData.tangu')}
+                          </label>
+                          <label className="inline-check">
+                            <input type="checkbox" checked={clearDesktop} onChange={(e) => setClearDesktop(e.target.checked)} />
+                            {t('settings.clearData.desktop')}
+                          </label>
+                        </div>
                         <div style={{ marginTop: 10 }}>
                           <button
                             className="btn danger sm"

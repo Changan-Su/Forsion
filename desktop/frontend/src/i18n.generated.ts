@@ -1502,8 +1502,8 @@ registerMessages({
     "en": "MCP servers ({count})"
   },
   "settings.advanced.note": {
-    "zh": "会话级配置（技能/工具启用、执行环境、审批档）在右侧面板与输入栏调整。快捷键：Ctrl/Cmd+N 新建会话，Ctrl/Cmd+, 打开设置。",
-    "en": "Session-level settings (skill/tool enablement, execution environment, approval level) are adjusted in the right panel and input bar. Shortcuts: Ctrl/Cmd+N for a new session, Ctrl/Cmd+, to open Settings."
+    "zh": "会话级配置（技能 / 工具启用、执行环境、审批档）在右侧面板与输入栏调整。",
+    "en": "Session-level settings (skill and tool enablement, execution environment, approval mode) are adjusted in the right panel and the input bar."
   },
   "onboarding.title": {
     "zh": "欢迎使用 {name}",

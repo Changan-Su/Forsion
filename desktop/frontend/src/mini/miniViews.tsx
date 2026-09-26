@@ -14,7 +14,7 @@ const Editor = lazy(() => import('../amadeusViews').then((m) => ({ default: m.Am
 const Todos = lazy(() => import('../views/TodoListView').then((m) => ({ default: m.TodoListView })))
 registerMessages({
   'mini.chat': { zh: '对话', en: 'Chat' },
-  'mini.newChat': { zh: '新对话', en: 'New chat' },
+  'mini.newChat': { zh: '新会话', en: 'New session' },
   'mini.notes': { zh: '笔记', en: 'Notes' },
   'mini.chooseNote': { zh: '选择笔记', en: 'Choose a note' },
   'mini.newNote': { zh: '新建笔记', en: 'New note' },

@@ -59,7 +59,7 @@ registerMessages({
   'unit.pairedRemove': { zh: '移除「{name}」的连接权限？', en: 'Revoke access for "{name}"?' },
   'unit.setEmoji': { zh: '设备图标（输入一个 emoji，留空恢复默认）', en: 'Device icon (one emoji; empty = default)' },
   'unit.switcher': { zh: 'Forsion Unit 切换', en: 'Switch Forsion Unit' },
-  'unit.notLoggedIn': { zh: '登录 Forsion 账号后可见你的其他设备', en: 'Sign in to see your other devices' },
+  'unit.notLoggedIn': { zh: '登录以查看你的其他设备', en: 'Sign in to see your other devices' },
 })
 
 function deviceIcon(u: { icon?: string | null; platform?: string | null }, size = 15): React.ReactNode {
@@ -311,7 +311,10 @@ export function UnitSwitcher({ expanded }: { expanded: boolean }): React.ReactEl
                   {current.key === 'cloud' && <Check size={14} className="unitsw-check" />}
                 </button>
               )}
-              {units === null && <div className="unitsw-empty">{t('unit.notLoggedIn')}</div>}
+              {/* 未登录:可点,直接去登录(W-02);原先是一行不可点的灰字,没有下一步 */}
+              {units === null && <button className="unitsw-row" onClick={() => { setOpen(false); useApp.getState().openSettings('forsion') }}>
+                <span className="unitsw-col"><span className="unitsw-desc">{t('unit.notLoggedIn')} ›</span></span>
+              </button>}
               {units?.filter((u) => u.id !== host?.unitId).flatMap((u) => {
                 // 一台设备 = 每条通路各一行。此前是一行 + 自动择路:LAN 探通就把「中转」那条路
                 // 悄悄顶掉,界面上等于不存在(用户找了两轮没找到)。拆开显式列,想走哪条点哪条。

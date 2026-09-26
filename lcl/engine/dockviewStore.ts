@@ -250,6 +250,24 @@ function panelType(p: IDockviewPanel): string {
   return t || (p as { component?: string }).component || ''
 }
 
+/** 视图自己 setTitle 过的面板(会话名、笔记名……):按语言重取默认名时跳过它们。不落盘 —— 重载后视图挂载时会再 setTitle。 */
+const selfTitled = new Set<string>()
+export function markSelfTitled(id: string): void { selfTitled.add(id) }
+/** 没被视图改过名的面板,标题按当前语言重取 displayName(W-10)。标题是建面板那一刻快照进布局的:
+ *  切了语言、或拿旧语言存下的布局重载后,「主页」这类静态名会一直停在旧语言。宿主在语言变更时调;
+ *  布局还原(fromJSON)之后引擎自己调。 */
+export function retitleDefaultPanels(api: DockviewApi | null = useWorkspace.getState().api): void {
+  if (!api) return
+  for (const p of api.panels) {
+    if (selfTitled.has(p.id)) continue
+    const def = getView(panelType(p))
+    if (!def) continue
+    const title = label(def.displayName)
+    if (p.title !== title) p.api.setTitle(title)
+  }
+  useWorkspace.getState().refreshTabs()
+}
+
 /** 把一个 Dockview panel 包装为引擎 Leaf。 */
 function makeLeaf(panel: IDockviewPanel): Leaf {
   const raw = (panel.params ?? {}) as Record<string, unknown>
@@ -260,7 +278,7 @@ function makeLeaf(panel: IDockviewPanel): Leaf {
     type: panelType(panel),
     loc: __loc ?? 'main',
     params: userParams,
-    setTitle: (t) => panel.api.setTitle(t),
+    setTitle: (t) => { selfTitled.add(panel.id); panel.api.setTitle(t) },
     // params 是布局的一部分(重建视图就靠它),改完必须记账 —— Dockview 的 onDidLayoutChange
     // 只认结构变化,不认参数变化,不主动存就会在下次结构事件前被旧快照覆盖(如「钉住会话」重启后又变回跟随档)。
     // ⚠️ 必须连 refreshTabs 一起发:视图**就地换自己指向的文件**(编辑器认领新笔记、阅读器换 PDF)
@@ -447,6 +465,8 @@ interface WorkspaceState {
   syncPanelState(): void
   /** 重算主区标签条 + 两侧侧栏图标(布局/激活变化时调)。 */
   refreshTabs(): void
+  /** 没被视图改过名的面板按当前语言重取标题(W-10);宿主在语言变更时调。单列 store 没有它,调用方用 `?.()`。 */
+  retitleDefaults(): void
   /** 顶栏标签点击 → 激活该 leaf。 */
   activateLeaf(id: string): void
   /** 顶栏标签关闭。 */
@@ -572,6 +592,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     }
   },
 
+  retitleDefaults: () => retitleDefaultPanels(get().api),
   refreshTabs: () => {
     const api = get().api
     if (!api) { if (get().mainTabs.length) set({ mainTabs: [] }); return }
@@ -1100,8 +1121,10 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     try {
       migrateLayoutBlob(blob)
       dismissExtensions()
+      selfTitled.clear() // 新布局会复用 leaf id(如 launcher#1),旧的「自己改过名」标记不能带过去
       api.fromJSON(blob.dockview as never)
       alignRegions(api)
+      retitleDefaultPanels()
       // 布局整体更换,旧 leaf id 全失效。⚠️ 放在 fromJSON **之后**:拆旧建新途中的激活事件也会让订阅方记账,
       // 挪到前面的话,途中记下的条目会留在新布局复用的 leaf id(如 launcher#1)上。
       useNav.getState().reset()
@@ -1199,8 +1222,10 @@ export function tryRestoreLayout(api: DockviewApi): boolean {
   if (!layoutViewsAllRegistered(layout.dockview)) return false
   const known = (v: PersistedPanel): boolean => !!getView(v.type) // 收起态 stash 也剔除未注册视图,防展开时重开死视图
   try {
+    selfTitled.clear()
     api.fromJSON(layout.dockview as never)
     alignRegions(api)
+    retitleDefaultPanels(api) // 恢复发生在 onReady 里,store 里的 api 可能还没挂上 → 直接传
     useWorkspace.setState({
       leftVisible: layout.sidebars.left.visible,
       rightVisible: layout.sidebars.right.visible,

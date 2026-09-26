@@ -20,7 +20,7 @@ import type { AgentConfig } from '../../types'
 registerMessages({
   'orbit.bar.solo': { zh: '私聊 · 工作区 = {name} 的 Library · 历史会话仅 Agent 可读', en: 'Direct · workspace = {name}’s Library · past sessions are readable by the agent only' },
   'orbit.bar.soloEngine': { zh: '私聊 · 工作区 = {name} 的 Library', en: 'Direct · workspace = {name}’s Library' },
-  'orbit.bar.newSession': { zh: '新会话（先总结记忆）', en: 'New session (summarize memory first)' },
+  'orbit.bar.newSession': { zh: '新会话（先总结记忆）', en: 'New session (save memory first)' },
   'orbit.bar.newSessionEngine': { zh: '新会话', en: 'New session' },
   'orbit.bar.raiseTeam': { zh: '组建团队', en: 'Start a team' },
   'orbit.bar.teamCreated': { zh: '已建立团队 {name}，对话在新标签继续', en: 'Team {name} created — the conversation continues in a new tab' },

@@ -51,7 +51,7 @@ registerMessages({
   'orbits.row.pin': { zh: '置顶', en: 'Pin to top' },
   'orbits.row.unpin': { zh: '取消置顶', en: 'Unpin' },
   'orbits.row.newSession': { zh: '新会话', en: 'New session' },
-  'orbits.row.newSessionMemory': { zh: '新会话（先总结记忆）', en: 'New session (summarize memory first)' },
+  'orbits.row.newSessionMemory': { zh: '新会话（先总结记忆）', en: 'New session (save memory first)' },
   'orbits.row.editTeam': { zh: '编辑团队', en: 'Edit team' },
   'orbits.row.deleteTeam': { zh: '删除团队', en: 'Delete team' },
   'orbits.team.deleted': { zh: '团队已删除（历史会话保留，只读）', en: 'Team deleted (past sessions are kept, read-only)' },

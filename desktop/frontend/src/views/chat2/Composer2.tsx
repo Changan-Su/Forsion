@@ -796,7 +796,8 @@ export const Composer2: React.FC<{
       }
     }
     for (const c of commandsFor('desktop')) {
-      if (c.name === '/stop' || c.name === '/think') continue // 上面已单独处理
+      // /stop 上面已单独处理。/think 留一条总入口:裸「/」只列它,选中后补成「/think 」再列七档(W-04)
+      if (c.name === '/stop') continue
       const run = handlers[c.name]
       if (!run) continue
       items.push({ cmd: c.arg ? `${c.name} ${c.arg}` : c.name, desc: describe(c.name), run })
@@ -848,7 +849,11 @@ export const Composer2: React.FC<{
         }))
     }
     const q = slash.token.toLowerCase()
-    return slashItems.filter((it) => it.cmd.toLowerCase().startsWith(q) || (q.length > 1 && it.desc.toLowerCase().includes(q.slice(1)))).slice(0, 10)
+    // 七档 /think <档位> 只在已敲出「/th」之后才展开;裸「/」或别的前缀下只露 /think 那一条总入口,
+    // 否则首屏 8 行里 7 行都是它,/new、/compact、/model 全被挤出去(W-04)。
+    const levels = q.startsWith('/th')
+    return slashItems.filter((it) => (levels || !it.cmd.startsWith('/think '))
+      && (it.cmd.toLowerCase().startsWith(q) || (q.length > 1 && it.desc.toLowerCase().includes(q.slice(1))))).slice(0, 10)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slash, slashItems, models, modelId])
   // 只有真弹出来的菜单才压住 @ / [[ ——「有个斜杠词」还不够:敲 `/Users/me/[[` 时命令词一直在,

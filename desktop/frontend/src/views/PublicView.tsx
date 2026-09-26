@@ -4,10 +4,11 @@
  *   3. Amadeus 协作共享的页面（同上 → pageShares）
  *  纯渲染端：每段独立加载，宿主能力缺失（Tangu Web 等）时降级为「不可用」占位，不崩。 */
 import { useCallback, useEffect, useState } from 'react'
-import { Rocket, Globe, FileText, Users, RotateCw, ExternalLink, Copy, Check, Trash2, Loader2, Store, CircleMinus } from 'lucide-react'
+import { Rocket, Globe, FileText, Users, RotateCw, ExternalLink, Copy, Check, Trash2, Loader2, Store, CircleMinus, LogIn } from 'lucide-react'
 import type { ViewProps } from '@lcl/engine'
 import { askString } from '@amadeus/components/askString'
 import { registerMessages, useI18n } from '../i18n'
+import { useApp } from '../stores/appStore'
 
 registerMessages({
   'publicview.opFailed': { zh: '操作失败', en: 'Something went wrong' },
@@ -238,8 +239,12 @@ export function PublicView(_: ViewProps) {
         </div>
         <button className="icon-btn" title={t('public.refresh')} onClick={refresh}><RotateCw size={15} /></button>
       </div>
-      {needLogin && sites?.length === 0 && <div className="pv-notice">{t('public.needLogin')}</div>}
-      <div className="pv-body">
+      {/* 没登录 = 不知道有没有发布过:别把三个分区画成「0 · 暂无内容」,给一个登录入口(W-02) */}
+      {needLogin && sites?.length === 0 && <div className="pv-notice">
+        {t('public.needLogin')}
+        <button className="btn sm" onClick={() => useApp.getState().openSettings('forsion')}><LogIn size={13} />{t('sidebar.account.login')}</button>
+      </div>}
+      {!(needLogin && sites?.length === 0) && <div className="pv-body">
         <Section
           icon={<Globe size={15} />} title={t('public.sites')} desc={t('public.sitesDesc')}
           loading={sitesLoading} unavailable={!hasConnect} rows={sites || []} copiedKey={copiedKey} onCopy={onCopy}
@@ -252,7 +257,7 @@ export function PublicView(_: ViewProps) {
           icon={<Users size={15} />} title={t('public.shared')} desc={t('public.sharedDesc')}
           loading={collabLoading} unavailable={!hasCollab} rows={shares || []} copiedKey={copiedKey} onCopy={onCopy}
         />
-      </div>
+      </div>}
     </div>
   )
 }

@@ -85,6 +85,11 @@ registerMessages({
     zh: '还没有日历事件。点「新建」，或在右栏添加一个含日期属性的多维表。',
     en: 'No calendar events yet. Click "New", or add a database with a date property in the right panel.',
   },
+  // 还没有可写的日历时:工具栏「新建」是禁用的,空态别再叫人点它(W-12)
+  'calview.emptyNoDb': {
+    zh: '还没有日历。在右栏点「添加日历」，选一个含日期属性的多维表。',
+    en: 'No calendars yet. Use "Add calendar" in the right panel to pick a database with a date property.',
+  },
   'calview.allDay': { zh: '全天', en: 'All-day' },
   'calview.a11yAllDayEvent': { zh: '{title}，全天事件', en: '{title}, all-day event' },
   'calview.allDayDragHint': { zh: '{title}（可拖入时间格设为定时）', en: '{title} (drag into a time slot to schedule it)' },
@@ -286,9 +291,22 @@ export function CalendarView() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  const n = mode === 'week' ? 7 : mode === '3day' ? 3 : 1
+  // 主区放不下 7 列(每列最窄 112,左轴 52)时,「周」按放得下的天数显示(3 天,再窄 1 天);「3 日」同理。
+  // 标题、可见区与右栏高亮都跟着 n 走,不再只露两天半、标题却写一整周(W-13)。列宽下限与 TimeScroll 的 minCol 一致。
+  const rootRef = useRef<HTMLDivElement>(null)
+  const [fit, setFit] = useState(7)
+  useLayoutEffect(() => {
+    const el = rootRef.current
+    if (!el) return
+    const measure = (): void => { const w = el.clientWidth - 52; setFit(w >= 7 * 112 ? 7 : w >= 3 * 132 ? 3 : 1) }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  const n = Math.min(mode === 'week' ? 7 : mode === '3day' ? 3 : 1, fit)
   return (
-    <div className="amx-cal">
+    <div className="amx-cal" ref={rootRef}>
       <AstryxScope>
         {/* 主任务优先:新建 / 回今天 / 翻页;视图与密度退到后面。双击空白仍保留为效率快捷方式。 */}
         <header className="amx-cal-bar">
@@ -338,7 +356,7 @@ export function CalendarView() {
       </AstryxScope>
 
       {visible.length === 0 && (
-        <div className="amx-cal-empty">{t('calview.empty')}</div>
+        <div className="amx-cal-empty">{t(defaultEntry ? 'calview.empty' : 'calview.emptyNoDb')}</div>
       )}
 
       {mode === 'month' ? (
