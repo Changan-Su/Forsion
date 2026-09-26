@@ -41,9 +41,13 @@
 .project-git-summary > div { display: flex; align-items: center; gap: 8px; min-width: 0; font-size: var(--ui-font-meta, 12px); }
 .project-git-summary > div > span:first-child { flex: 0 0 44px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .project-git-summary > div > strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
-.project-executor .team-member-open > strong { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.project-executor .team-member-open > strong > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 名字优先:标签组(英文「Current conversation」很长)放不下就整组换到下一行,不许把名字压成 0 宽;
+ * 名字自己一行也放不下才省略号。标签组封顶一行宽,再窄就让文字标签省略号、星标不缩,不横向溢出。 */
+.project-executor .team-member-open > strong { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 6px; min-width: 0; }
+.project-executor .team-member-open > strong > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.project-executor-tags { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
 .project-executor-tag { flex-shrink: 0; padding: 1px 6px; border-radius: 999px; background: var(--overlay-medium); color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); font-weight: 400; }
+.project-executor-tag.is-text { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 行内动作(执行者卡的两个动作 / Git 卡的四个动作):无边框小字按钮,窄栏里换行也不显重。 */
 .project-inline-actions { display: flex; flex-wrap: wrap; gap: 2px; justify-content: flex-end; padding-top: 6px; }
 .project-inline-actions.start { justify-content: flex-start; padding-top: 0; margin: 0 -7px; }

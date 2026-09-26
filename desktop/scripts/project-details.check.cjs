@@ -287,6 +287,13 @@ async function run(app, win, stub, seen, home) {
   await profile.locator('[data-project-executor]').first().waitFor()
   const enHead = await profile.evaluate((el) => ({ kind: (el.querySelector('.team-profile-identity h3') || {}).textContent, tabs: Array.from(el.querySelectorAll('.agent-section-nav [role=tab]')).map((b) => b.textContent) }))
   check('9 英文界面:标题 Project、标签 Agents / Settings / Git', enHead.kind === 'Project' && enHead.tabs.join(',') === 'Agents,Settings,Git', JSON.stringify(enHead))
+  // 英文「Current conversation」标签很长:名字曾被压成 0 宽,行里只剩标签和星标。名字必须完整可见(没被截断),标签放不下就换行
+  const names = await profile.locator('[data-project-executor] .team-member-open > strong > span:first-child').evaluateAll((els) => els.map((el) => ({ text: el.textContent, w: Math.round(el.getBoundingClientRect().width), need: el.scrollWidth })))
+  // 标签成组换行:当前会话标签与星标在同一行(星标单独掉到第三行 = 没成组)
+  const tagRows = await profile.locator('[data-project-executor="agent:xyra"] .project-executor-tag').evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().top)))
+  // 文字标签极窄时会省略号:完整状态要在悬停提示与按钮的无障碍名称里(Codex 评审)
+  const xyraA11y = await profile.locator('[data-project-executor="agent:xyra"]').evaluate((el) => ({ label: el.querySelector('.team-member-open').getAttribute('aria-label'), tip: el.querySelector('.project-executor-tag.is-text').title }))
+  check('9c 英文窄栏:每个执行者的名字都完整可见(标签不挤名字),标签成组换行;完整状态在 title 与 aria-label 里', names.length === 3 && names.every((n) => n.w > 0 && n.w >= n.need - 1) && tagRows.length === 2 && Math.abs(tagRows[0] - tagRows[1]) <= 2 && xyraA11y.tip === 'Current conversation' && /Xyra · Current conversation · /.test(xyraA11y.label), JSON.stringify({ names, tagRows, xyraA11y }))
   const overflowEn = []
   for (const tab of ['Agents', 'Settings', 'Git']) {
     await profile.getByRole('tab', { name: tab, exact: true }).click()
@@ -298,6 +305,24 @@ async function run(app, win, stub, seen, home) {
   check('9a 英文 × 暗色三页都不横向溢出', overflowEn.every(([, ok]) => ok), JSON.stringify(overflowEn))
   const dark = await win.evaluate(() => document.documentElement.getAttribute('data-mode'))
   check('9b 暗色确实生效(html[data-mode=dark])', dark === 'dark', String(dark))
+
+  // 9d 凑齐中英 × 亮暗:英文 × 亮色、中文 × 暗色各截一张 Agents 页(观感自查),名字照样完整、不溢出
+  const matrix = []
+  for (const [loc, theme] of [['en', 'light'], ['zh', 'dark']]) {
+    await win.evaluate(([l, m]) => { localStorage.setItem('tangu_locale', l); localStorage.setItem('forsion_theme_pref', m) }, [loc, theme])
+    await win.reload({ waitUntil: 'domcontentloaded' })
+    await win.waitForSelector('.t2sw, .t2s-side', { timeout: 30_000 })
+    await sleep(1000)
+    await openSession(win, 'Demo main', 'pd-main')
+    if (!(await details.count())) await win.locator('.dv-edge-right').click()
+    await profile.locator('[data-project-executor]').first().waitFor()
+    await win.waitForTimeout(300)
+    await dismissToasts(win)
+    const cut = await profile.locator('[data-project-executor] .team-member-open > strong > span:first-child').evaluateAll((els) => els.filter((el) => !(el.getBoundingClientRect().width > 0 && el.getBoundingClientRect().width >= el.scrollWidth - 1)).map((el) => el.textContent))
+    matrix.push({ loc, theme, mode: await win.evaluate(() => document.documentElement.getAttribute('data-mode')), cut, fits: await noOverflow(profile) })
+    await details.screenshot({ path: shots[`${loc}-${theme}-Agents`] = shot(`project-agents-${loc}-${theme}`) })
+  }
+  check('9d 英文 × 亮色、中文 × 暗色:主题生效,名字完整,Agents 页不横向溢出', matrix.every((m) => m.mode === m.theme && !m.cut.length && m.fits), JSON.stringify(matrix))
   return shots
 }
 
