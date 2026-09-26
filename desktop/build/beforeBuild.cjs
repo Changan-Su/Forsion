@@ -9,6 +9,7 @@
  */
 const { fetchPython } = require('./fetch-python.cjs');
 const { fetchNode } = require('./fetch-node.cjs');
+const { fetchOffice } = require('./fetch-office.cjs');
 
 exports.default = async function beforeBuild(context) {
   const productId = process.env.FORSION_PRODUCT || 'forsion';
@@ -18,5 +19,6 @@ exports.default = async function beforeBuild(context) {
   const archName = context.arch;                   // 'x64' | 'arm64' | 'armv7l'
   await fetchPython({ platformName, archName });
   await fetchNode({ platformName, archName });
+  fetchOffice({ platformName, archName });
   return true; // 保留 electron-builder 默认依赖安装/打包(见文件头警告)
 };

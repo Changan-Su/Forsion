@@ -109,6 +109,8 @@ module.exports = {
           // `lib/node_modules` 不受影响,所以这条只在 Windows 上救命,但三平台都带着无副作用
           // (fetch-node 保证目录恒在,非 Windows 为空)。删它之前先跑 desktop 的 bundled-node.test.ts。
           { from: 'build/node/node_modules', to: 'node/node_modules' },
+          // LibreOffice 转换引擎(fetch-office.cjs):同上,from 直接指向 node_modules 才不被过滤器丢掉。
+          { from: 'build/office/node_modules', to: 'office/node_modules' },
           // 设备页 web 构建(unitWeb 静态壳;webDistDir 读 resourcesPath/unit-web)
           { from: 'unit-web-dist', to: 'unit-web' },
           // 内置插件捆绑包(electron/builtinPlugins.ts 启动时播种进 <home>/plugins/):来源是 vendor/*.tgz 装进
