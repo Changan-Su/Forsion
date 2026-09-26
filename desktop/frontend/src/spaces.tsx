@@ -112,6 +112,9 @@ const inboxSpace: SpaceDefinition = {
   icon: Inbox,
   sidebarDefaults: INBOX_SIDE_VIEWS,
   autoWorkspaceMode: INBOX_WORKSPACE_MODE,
+  // 消息列表住在左栏:可拖宽 + 起手比黄金分割宽 30%(标题不再截到 8 个字),主区照样留足阅读宽度(U-10)。
+  resizableSides: { left: true },
+  sideDefaultScale: { left: 1.3 },
   build() {
     ws().setSidebarDefaults(INBOX_SIDE_VIEWS)
     ws().openView('inbox-reader', {}, 'main')

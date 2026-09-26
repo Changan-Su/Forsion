@@ -1,6 +1,7 @@
 /** 右上角通知堆叠宿主(升级自旧 .toast-wrap):framer-motion 右侧滑入/滑出 + layout 补位动画,
  *  hover 暂停计时,error 常驻手动关。位置钉在右栏图标条(36px dockview 标签条)之下;
  *  仅主窗 Root 挂载(DetachedRoot/MiniRoot 沿旧决策不挂 app 级浮层)。 */
+import { useEffect, useRef } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { X, Check, Info, AlertTriangle, AlertCircle } from 'lucide-react'
 import { useNotifications, type NotifyLevel } from '../stores/notificationStore'
@@ -15,9 +16,23 @@ export function NotificationHost() {
   const pause = useNotifications((s) => s.pause)
   const resume = useNotifications((s) => s.resume)
   const dismiss = useNotifications((s) => s.dismiss)
+  const paused = useNotifications((s) => s.paused)
   const inCalendar = useSpaceStore((s) => s.activeSpaceId === 'calendar')
+  const wrapRef = useRef<HTMLDivElement>(null)
+  // 悬停暂停的收尾:点了卡片上的「撤销」/ ×,卡片在指针下被移走 —— Chromium 不给这种情况补 mouseleave,
+  // paused 就一直挂着,之后所有通知都不再自己消失(check:layoutreset J 实测抓到)。暂停期间指针一出通知区、
+  // 或已没有卡片,就恢复计时。
+  useEffect(() => {
+    if (!paused) return
+    if (!items.length) { resume(); return }
+    const onMove = (e: PointerEvent): void => {
+      if (!wrapRef.current || !(e.target instanceof Node) || !wrapRef.current.contains(e.target)) resume()
+    }
+    document.addEventListener('pointermove', onMove, true)
+    return () => document.removeEventListener('pointermove', onMove, true)
+  }, [paused, items.length, resume])
   return (
-    <div className={`ntf-wrap${inCalendar ? ' ntf-wrap-calendar' : ''}`} aria-live="polite" onMouseEnter={pause} onMouseLeave={resume}>
+    <div ref={wrapRef} className={`ntf-wrap${inCalendar ? ' ntf-wrap-calendar' : ''}`} aria-live="polite" onMouseEnter={pause} onMouseLeave={resume}>
       {/* popLayout:退场卡片立即让出布局位,下方卡片经 layout 弹簧同步上移补位(toast 堆叠标准配方)。 */}
       <AnimatePresence initial={false} mode="popLayout">
         {items.map((n) => (

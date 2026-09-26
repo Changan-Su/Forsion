@@ -19,6 +19,8 @@ function check(name, ok) { assert.ok(ok, name); checks.push(name); console.log(`
 async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'tangu-memory-electron-'))
   process.env.TANGU_HOME = home
+  const SHOTS = process.env.SHOT_DIR || home // 截图落点(缺省留在隔离家目录里,随 ARTIFACTS 一起看)
+  fs.mkdirSync(SHOTS, { recursive: true }) // 自定义落点可能还不存在(Codex 第三轮 H2-4;Playwright 1.61 截图自己也会建父目录,这里不依赖它)
   const userData = path.join(home, 'userdata')
   for (const dir of [userData, `${userData}-dev`]) {
     fs.mkdirSync(dir, { recursive: true })
@@ -80,41 +82,48 @@ async function main() {
       if (await button.isVisible().catch(() => false)) { await button.click(); break }
     }
     await win.locator('.ob-hero-skip').waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {})
-    // 设置已是独立窗口(不再是主窗里的弹层):快捷键 / 命令面板打在主窗上,设置里的元素去新开的那个窗口里找。
-    // 「返回应用」会关掉设置窗,所以每次开设置都重新取一次;仍是单窗口的构建下 at(-1) 就是主窗,两种都走得通。
-    const mainWin = win
-    const openSettings = async () => {
-      await mainWin.keyboard.press('Meta+,')
-      await mainWin.waitForTimeout(800)
-      win = app.windows().at(-1)
-      await win.waitForSelector('#root')
-    }
+    // 记忆面板早已不在设置里(AgentsTab 退役):住在 Agents Space → Agent 详情 →「成长」标签 →「记忆」分段。
+    // 全程在主窗里走真 UI:Ribbon 进 Agents Space → 名册点 Agent → 成长 → 记忆。明暗 / 语言切换走命令面板。
     const palette = async (command) => {
-      win = mainWin
       await win.keyboard.press('Meta+k')
       await win.locator('.cmd-input:visible').fill(command)
       await win.locator('.cmd-item', { hasText: command }).click()
       await win.waitForTimeout(250)
     }
-    await openSettings()
-    const agentsNav = win.getByRole('button', { name: '智能体', exact: true }).first()
-    await agentsNav.click({ timeout: 15000 })
+    const enterAgentsSpace = async () => {
+      const slot = win.locator('.rb-slot[data-id="space:agents"] .rb-space').first()
+      if (await slot.count()) await slot.click()
+      else {
+        await win.locator('.rb-top .rb-more').first().hover()
+        await win.waitForTimeout(500)
+        await win.locator('.rb-fly .rb-space[aria-label="Agents"]').first().click()
+      }
+      await win.locator('.agents-roster').first().waitFor({ timeout: 15000 })
+    }
     const openAgent = async (slug) => {
-      const row = win.locator('.file-row').filter({ has: win.locator('b', { hasText: `Memory ${slug}` }) }).first()
-      await row.locator('button').filter({ has: win.locator('svg.lucide-book-open') }).click()
-      const panel = win.locator('[data-testid="agent-memory-panel"]')
+      await enterAgentsSpace()
+      await win.locator('.agents-roster-item').filter({ hasText: `Memory ${slug}` }).first().click()
+      await win.locator('.agent-section-nav [role="tab"][id$="-growth"]').first().click() // 成长 / Growth(按 id,不按文案)
+      await win.locator('.profile-segment button').first().click() // 记忆 / Memory
+      const panel = win.locator(`[data-testid="agent-memory-panel"][data-agent-slug="${slug}"]`)
       await panel.waitFor()
       await win.waitForTimeout(220)
       return panel
     }
+    const openDream = async (panel) => {
+      const d = panel.locator('details.profile-disclosure > summary', { hasText: 'Dream' }).first().locator('..')
+      if (!(await d.evaluate((el) => el.open))) await d.locator(':scope > summary').click()
+      return d
+    }
     let panel = await openAgent('alpha')
     await panel.getByText('Alpha 私有事实：偏好简洁中文。', { exact: false }).first().waitFor()
     check('Alpha panel excludes Beta facts', !(await panel.textContent()).includes('BLUE-SILK'))
-    await panel.screenshot({ path: path.join(home, 'memory-light.png') })
+    await panel.screenshot({ path: path.join(SHOTS, 'memory-light.png') })
     fs.writeFileSync(path.join(home, 'panel-text.txt'), await panel.textContent())
     check('Opening the panel does not mutate either Agent', alpha.snapshot().version === initialAlpha.version && beta.snapshot().version === initialBeta.version)
     const wait = async (predicate, label) => { for (let i = 0; i < 100; i++) { if (await predicate()) return; await win.waitForTimeout(40) } throw new Error(`Timed out: ${label}`) }
-    const summary = (text) => panel.locator('summary').filter({ hasText: new RegExp(`^${text}$`) })
+    // 成长页里的折叠标题可能在名字后面带一枚 <small>(版本号 / 自动·状态),按「以它开头」认。
+    const summary = (text) => panel.locator(':scope details > summary').filter({ hasText: new RegExp(`^${text}`) }).first()
     await summary('编辑原文').click()
     const editor = panel.getByRole('textbox', { name: '记忆原文', exact: true })
     const draft = `${initialAlpha.content}\n- UI 草稿需要保留。`
@@ -137,7 +146,7 @@ async function main() {
       const revisions = summary('版本记录')
       if (await revisions.evaluate((el) => el.parentElement.open)) await revisions.click()
       await revisions.click()
-      const record = panel.locator('summary').filter({ hasText: initialAlpha.version.slice(0, 8) }).locator('..')
+      const record = panel.locator('details details > summary', { hasText: initialAlpha.version.slice(0, 8) }).first().locator('..')
       await record.locator(':scope > summary').click()
       await record.getByRole('button', { name: '恢复此版本', exact: true }).click()
     }
@@ -159,6 +168,7 @@ async function main() {
     await summary('版本记录').click()
     await summary('添加记忆').click()
     // 自动整理默认开(09-19):进来就是勾着的;关掉只影响这一个 Agent,再开回来。
+    await openDream(panel)
     const dreamFile = (slug) => JSON.parse(fs.readFileSync(path.join(home, `agents/${slug}/.memory-dream.json`)))
     const betaBefore = JSON.stringify(dreamFile('beta').config)
     check('Automatic maintenance starts enabled', await panel.getByRole('checkbox', { name: '自动整理', exact: true }).isChecked())
@@ -168,37 +178,29 @@ async function main() {
     await panel.getByRole('checkbox', { name: '自动整理', exact: true }).click()
     await wait(() => dreamFile('alpha').config.enabled === true, 're-enable Alpha Dream')
     await panel.getByRole('button', { name: '立即整理', exact: true }).click()
-    await panel.getByText('整理完成', { exact: true }).waitFor({ timeout: 10000 })
+    // 成长页里整理状态写在 Dream 折叠标题的 <small> 里(「自动 · 整理完成」)。
+    await panel.locator('details.profile-disclosure > summary small', { hasText: '整理完成' }).first().waitFor({ timeout: 10000 })
     check('Dream UI starts and observes the real verified transaction', alpha.snapshot().content.includes('Alpha 私有事实'))
-    await panel.screenshot({ path: path.join(home, 'memory-completed.png') })
-    const card = panel.locator('..')
-    await card.locator('button').filter({ has: win.locator('svg.lucide-x') }).first().click()
+    await panel.screenshot({ path: path.join(SHOTS, 'memory-completed.png') })
     panel = await openAgent('beta')
     await panel.getByText('Beta 私有事实：工程代号 BLUE-SILK。', { exact: false }).first().waitFor()
     check('Switching to Beta shows only Beta memory', !(await panel.textContent()).includes('Alpha 私有事实'))
     check('All Alpha writes left Beta unchanged', beta.snapshot().version === initialBeta.version)
     const geometry = await panel.evaluate((el) => ({ width: el.getBoundingClientRect().width, scroll: el.scrollWidth, client: el.clientWidth }))
     check('Memory panel has no horizontal overflow', geometry.scroll <= geometry.client + 1)
-    await panel.locator('..').screenshot({ path: path.join(home, 'memory-modal-light.png') })
-    await panel.locator('..').locator('button').filter({ has: win.locator('svg.lucide-x') }).first().click()
-    await win.getByRole('button', { name: '返回应用', exact: true }).click()
+    await panel.screenshot({ path: path.join(SHOTS, 'memory-growth-light.png') })
     await palette('切换明暗模式')
-    await openSettings()
-    await win.locator('button[aria-controls="settings-nav-subitems-agents"]').click()
     panel = await openAgent('beta')
-    await panel.locator('..').screenshot({ path: path.join(home, 'memory-modal-dark.png') })
-    await panel.locator('..').locator('button').filter({ has: win.locator('svg.lucide-x') }).first().click()
-    await win.getByRole('button', { name: '返回应用', exact: true }).click()
+    await panel.screenshot({ path: path.join(SHOTS, 'memory-growth-dark.png') })
     await palette('切换语言')
-    await openSettings()
-    await win.locator('button[aria-controls="settings-nav-subitems-agents"]').click()
     panel = await openAgent('beta')
-    await panel.getByText('Dream · Memory maintenance', { exact: true }).waitFor()
-    await panel.locator('..').screenshot({ path: path.join(home, 'memory-modal-english.png') })
+    await openDream(panel)
+    await panel.locator('summary', { hasText: 'Dream · Memory maintenance' }).first().waitFor()
+    await panel.screenshot({ path: path.join(SHOTS, 'memory-growth-english.png') })
     await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.setMinimumSize(400, 500); w.setSize(480, 740) })
     await win.waitForTimeout(250)
     check('Narrow memory panel stays within its viewport', await panel.evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && el.getBoundingClientRect().right <= innerWidth))
-    await panel.locator('..').screenshot({ path: path.join(home, 'memory-modal-narrow.png') })
+    await panel.screenshot({ path: path.join(SHOTS, 'memory-growth-narrow.png') })
     check('Memory controls translate to English', await panel.getByRole('button', { name: 'Run now', exact: true }).count() === 1)
     fs.writeFileSync(path.join(home, 'result.json'), JSON.stringify({ checks, home }, null, 2))
     console.log(`ARTIFACTS ${home}`)

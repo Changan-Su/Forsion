@@ -4,6 +4,7 @@ import { useI18n } from '../i18n'
 import { Markdown } from '../components/Markdown'
 import type { ModelInfo } from '../types'
 import { isCoarsePointer } from '../touch'
+import './profileControls.css'
 
 /** Inline disclosure keeps the searchable picker inside narrow docked panels, including at UI zoom. */
 export function ProfileModelField({ models, value, onChange, label, disabled }: {
@@ -15,11 +16,14 @@ export function ProfileModelField({ models, value, onChange, label, disabled }: 
   const trigger = useRef<HTMLButtonElement>(null)
   const id = useId()
   const filtered = models.filter((m) => `${m.name} ${m.id}`.toLowerCase().includes(query.trim().toLowerCase()))
+  // 目录外的自定义 id 是支持的用法(下方「使用模型 ID」),不告警;只标一枚小签,免得像是目录名显示坏了(U-28a)。
+  const known = models.find((m) => m.id === value)
+  const custom = !!value && !known && models.length > 0
   const choose = (model: string) => { onChange(model); setOpen(false); setQuery(''); trigger.current?.focus() }
   return <div className="profile-model-field agent-field">
     <span id={`${id}-label`}>{label}</span>
     <button ref={trigger} className="profile-model-trigger" disabled={disabled} aria-labelledby={`${id}-label ${id}-value`} aria-expanded={open} aria-controls={`${id}-options`} onClick={() => setOpen(!open)}>
-      <span id={`${id}-value`}>{models.find((m) => m.id === value)?.name || value || t('agentProfile.default')}</span><ChevronDown size={15} />
+      <span id={`${id}-value`}>{known?.name || value || t('agentProfile.default')}{custom && <small className="profile-model-custom">{t('agentProfile.customModelId')}</small>}</span><ChevronDown size={15} />
     </button>
     {open && <div className="profile-model-options" id={`${id}-options`} onKeyDown={(e) => {
       if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); trigger.current?.focus(); return }

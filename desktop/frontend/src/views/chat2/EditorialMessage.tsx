@@ -10,7 +10,8 @@ import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, T
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { Markdown } from '../../components/Markdown'
-import { WikiText } from '../../components/ChatWikiLink'
+import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'
+import { RefChipView, splitLeadingRefs } from './RefChipView'
 import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
 import { SketchCards } from '../../components/SketchCard'
@@ -111,11 +112,11 @@ registerMessages({
   'rewind.both': { zh: '代码 + 对话都回退', en: 'Both code and conversation' },
   // 如实写覆盖范围:快照只挂在内置写文件工具上,终端命令与插件/MCP 工具的写入拿不到 pre-image。
   'rewind.scopeNote': {
-    zh: '只覆盖 agent 经内置写文件工具(write/edit/multi_edit/apply_patch)改过的文件;终端命令与插件/MCP 工具改的不在内。',
+    zh: '只覆盖 Agent 经内置写文件工具(write/edit/multi_edit/apply_patch)改过的文件;终端命令与插件/MCP 工具改的不在内。',
     en: 'Covers only files changed through the built-in file-writing tools (write/edit/multi_edit/apply_patch); changes made by shell commands or plugin/MCP tools are not included.',
   },
   'rewind.skippedNote': { zh: '另有 {n} 个文件当时太大未存快照,恢复不了。', en: '{n} file(s) were too large to snapshot and cannot be restored.' },
-  'rewind.keepNote': { zh: 'agent 新建、之后又被改动过的文件会原样保留,不会被删。', en: 'Files the agent created that changed afterwards are kept as-is, never deleted.' },
+  'rewind.keepNote': { zh: 'Agent 新建、之后又被改动过的文件会原样保留,不会被删。', en: 'Files the agent created that changed afterwards are kept as-is, never deleted.' },
 })
 
 /** 该不该给「重新登录」按钮:句式命中 **且** 当前模型确实来自订阅直连(模型 id 前缀就是 provider id,
@@ -135,7 +136,7 @@ export function ReloginChip({ error, modelId }: { error?: string; modelId?: stri
   const id = subLoginProvider(error, modelId)
   if (!id || !window.tangu?.providerLogin) return null
   return (
-    <button className="t2-relogin" onClick={() => useApp.getState().openSettings('model')}>
+    <button className="t2-relogin" onClick={() => useApp.getState().openSettings('model/m-providers')}>
       <LogIn size={12} /> {t('chat.err.relogin', { provider: SUB_PROVIDER_LABELS[id] })}
     </button>
   )
@@ -305,8 +306,12 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
       return <div ref={rootRef} className="t2-sys t2-interrupted">⏹ {t('msg.interrupted')}</div>
     }
     const name = userName || t('chat.you')
+    // 输入框「已选择」芯片发送时拼成正文第一行;气泡里还原成同一套芯片(U-11)。
+    // 目录标题用剥掉引用后的正文;复制 / 编辑仍拿原始 msg.content(发的是什么就是什么)。
+    const lead = splitLeadingRefs(msg.content)
+    const tocTitle = lead ? (lead.body.trim() || lead.refs.map((r) => r.name).join(' ')) : msg.content
     return (
-      <div ref={rootRef} className="t2-userwrap" id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={msg.content}>
+      <div ref={rootRef} className="t2-userwrap" id={`tocmsg-${msg.id}`} data-toc-msg-role="user" data-toc-title={tocTitle}>
         <div className="t2-user-col">
           <div className="t2-username">{name}</div>
           <div className="t2-user">
@@ -317,7 +322,16 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
                   : <span key={`${a.name}-${i}`} className="msg-attach-file" title={a.name}>📎 {a.name}</span>)}
               </div>
             )}
-            <WikiText text={msg.content} />
+            {lead && (
+              <div className="t2-user-refs">
+                {lead.refs.map((r, i) => (
+                  <RefChipView key={`${r.token}-${i}`} chip={r}>
+                    {r.wiki ? <ChatWikiLink inner={r.wiki} /> : undefined}
+                  </RefChipView>
+                ))}
+              </div>
+            )}
+            {lead ? (lead.body && <WikiText text={lead.body} />) : <WikiText text={msg.content} />}
           </div>
           <div className="t2-actions">
             <button className="t2-iconbtn" title={t('chat.action.copy')} onClick={() => handlers?.onCopy?.(msg.content)}><Copy size={14} /></button>
@@ -359,7 +373,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
     <div ref={rootRef} className="t2-asst" id={`tocmsg-${msg.id}`}>
       <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(msg.agentName || agentNameFallback || 'Tangu')}</div>
       <div className="t2-asst-col">
-        <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{(msg.agentName || agentNameFallback || 'Tangu').toUpperCase()}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
+        <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{msg.agentName || agentNameFallback || 'Tangu'}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
         {msg.systemPrompt && <SystemPromptBlock content={msg.systemPrompt} />}
         {msg.reasoning && <Thinking2 reasoning={msg.reasoning} />}
         {(() => {

@@ -8,6 +8,7 @@ import { getBackgroundSessions, getSessionDetail, listMessages, openTeamMemberSe
 import { registerMessages, useI18n } from '../../i18n'
 import { ChatView } from '../ChatView'
 import { useDeskGrip } from './AgentDesk'
+import { subChatRows } from './subChatRows'
 import './childChat.css'
 
 registerMessages({
@@ -23,21 +24,20 @@ export function SubChatStatus({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
   const live = useApp((s) => s.subChatsBySession[sessionId])
+  // Historian 开着时它的子会话由 HistorianStatus 那一行代表(U-04);合并 / 去重口径见 subChatRows。
+  const historianOn = useApp((s) => !!s.specialEnabled.historian)
   const [saved, setSaved] = useState<BackgroundSessionInfo[]>([])
   useEffect(() => {
     let disposed = false
     setSaved([])
     const load = () => void getBackgroundSessions(cfg, sessionId).then((rows) => {
-      if (!disposed) setSaved(rows.filter((r) => r.kind !== 'teamwork'))
+      if (!disposed) setSaved(rows)
     }).catch(() => {})
     load()
     const timer = setInterval(load, 4000)
     return () => { disposed = true; clearInterval(timer) }
   }, [cfg, sessionId])
-  const rows = saved.map((r) => ({ id: r.sessionId, title: r.title || r.kind, sessionId: r.sessionId, runId: r.runId || undefined, streaming: r.runStatus === 'running' || r.runStatus === 'queued' }))
-  for (const l of live || []) {
-    if (!rows.some((r) => r.sessionId === l.sessionId || (r.runId && r.runId === l.runId))) rows.push({ id: l.id, title: l.title, sessionId: l.sessionId!, runId: l.runId, streaming: l.streaming })
-  }
+  const rows = subChatRows(saved, live, historianOn)
   if (!rows.length) return null
   return <div className="t2o-team-status" data-subchat-status>
     {rows.map((r) => <button key={r.id} type="button" className="t2o-desk-row" onClick={() => useChildChat.getState().open(sessionId, r)}>

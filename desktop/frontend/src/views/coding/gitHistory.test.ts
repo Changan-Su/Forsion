@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { autoVersionName, historyMode, relativeTime, runEnded, sameProject } from './gitHistory'
+import { autoVersionName, historyMode, runEnded, sameProject } from './gitHistory'
 import { __dictSnapshot } from '../../i18n'
 import type { GitPanelStatus, GitRepoState } from '../../../../shared/products'
 import type { UiMessage } from '../../types'
@@ -79,29 +79,6 @@ describe('autoVersionName', () => {
   })
 })
 
-describe('relativeTime', () => {
-  const now = Date.UTC(2026, 8, 21, 12, 0, 0)
-  it('跟界面语言,不跟系统语言', () => {
-    expect(relativeTime(now - 3 * 60_000, 'zh-CN', now)).toContain('3')
-    expect(relativeTime(now - 3 * 60_000, 'en-GB', now)).toBe('3 minutes ago')
-    expect(relativeTime(now - 2 * 3600_000, 'en-GB', now)).toBe('2 hours ago')
-    expect(relativeTime(now - 5 * 86400_000, 'en-GB', now)).toBe('5 days ago')
-  })
-  it('刚提交完的版本按秒说话,不是「0 分钟前」', () => {
-    expect(relativeTime(now - 400, 'en-GB', now)).toBe('now')
-    expect(relativeTime(now - 2_000, 'en-GB', now)).toBe('2 seconds ago')
-  })
-  it('时间戳不可用时给空串,不给 Invalid Date', () => {
-    expect(relativeTime(Number.NaN, 'en-GB', now)).toBe('')
-  })
-  it('跨年的旧快照说「年」,不说「24 个月前」', () => {
-    const year = 31_536_000_000
-    expect(relativeTime(now - 2 * year, 'en-GB', now)).toBe('2 years ago')
-    expect(relativeTime(now - 2 * year, 'zh-CN', now)).toContain('年')
-    // 边界:不到一年仍按月说话,否则「11 个月前」会被含混成「去年」。
-    expect(relativeTime(now - 11 * 2_592_000_000, 'en-GB', now)).toBe('11 months ago')
-  })
-})
 
 /** 自动版本的沿判 + 「还是同一个项目」守卫:两者错了都**不会红**,只会静默多存 / 少存版本。 */
 describe('runEnded', () => {

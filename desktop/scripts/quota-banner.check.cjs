@@ -94,7 +94,7 @@ async function main() {
   await page.evaluate((bg) => window.__quotaHarness.setQuota({ dailyRemaining: 70, weeklyRemaining: 70, resetCards: 2, background: bg }), bgExhausted)
   // 上一步的主额度提示条还在:等换成后台那条再读,别在重渲前读到旧的
   await page.locator('.t2-quota-advisory[data-bucket="background"]').waitFor()
-  check('后台桶用尽占用同一个提醒位', (await banner.getAttribute('data-bucket')) === 'background' && (await banner.textContent()).includes('后台智能体今日额度已用尽,Muse 与自动化已暂停'))
+  check('后台桶用尽占用同一个提醒位', (await banner.getAttribute('data-bucket')) === 'background' && (await banner.textContent()).includes('后台 Agent 今日额度已用尽,Muse 与自动化已暂停'))
   check('始终只有一条提示条', await page.locator('.t2-quota-advisory').count() === 1)
   check('后台那条不挂重置卡', !(await banner.textContent()).includes('重置卡'))
   check('后台那条有转入与设置', await banner.getByText('从主额度转入 10%', { exact: true }).isVisible() && await banner.getByText('后台额度设置', { exact: true }).isVisible())

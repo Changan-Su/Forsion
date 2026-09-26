@@ -8,6 +8,7 @@ import { ChartCard, StatCard } from '../../views/dashDataCards'
 import { BROWSER_PARTITION } from '../../../../shared/browser'
 import { Webview } from '../../builtins/browserView'
 import { registerMessages, translate, useI18n } from '../../i18n'
+import { formatZonedClock } from '../../format/time'
 
 registerMessages({
   'dashwidget.sectionUntitled': { zh: '未命名分区', en: 'Untitled section' },
@@ -71,7 +72,7 @@ export function localTimeZone(): string {
 }
 
 function ClockWidget({ opts }: { opts: Record<string, string> }) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
     // 对齐到整秒再起跳,秒数不会因为挂载时刻不同而抖。
@@ -91,12 +92,10 @@ function ClockWidget({ opts }: { opts: Record<string, string> }) {
   let date: string
   let bad = false
   try {
-    time = new Intl.DateTimeFormat('zh-CN', { timeZone: tz, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(now)
-    date = new Intl.DateTimeFormat('zh-CN', { timeZone: tz, month: 'long', day: 'numeric', weekday: 'short' }).format(now)
+    ;({ time, date } = formatZonedClock(now, { locale, timeZone: tz }))
   } catch {
     bad = true
-    time = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(now)
-    date = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }).format(now)
+    ;({ time, date } = formatZonedClock(now, { locale }))
   }
   return (
     <div className="dash-widget dash-clock">

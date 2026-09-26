@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { Skeleton } from '@lcl/engine'
 import { useI18n } from '../i18n'
+import { formatDate as formatDateLabel } from '../format/time'
 import { useApp } from '../stores/appStore'
 import { Markdown } from './Markdown'
 import { listMarket, getMarketDetail, installMarket, listInstalled, onInstallProgress, type InstalledItem } from '../services/marketService'
@@ -88,7 +89,7 @@ function formatDate(value?: string | null): string {
   if (!value) return ''
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return ''
-  return new Intl.DateTimeFormat(undefined, { year: 'numeric', month: 'short', day: 'numeric' }).format(date)
+  return formatDateLabel(date, { year: 'always' })
 }
 
 export function MarketModal({ onClose }: { onClose?: () => void } = {}) {

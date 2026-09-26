@@ -25,7 +25,7 @@ import { splitSuggestions } from '../views/chat2/suggest'
 import type { ChatRef } from '../views/chat2/chatDragRef'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
 import { openWsFile } from '../views/wsFileNav'
-import type { Tab as SettingsTab } from '../components/SettingsModal'
+import type { SettingsTarget as SettingsTab } from '../components/SettingsModal'
 import { ONBOARDING_DISMISS_KEY, ONBOARDING_VERSION_KEY } from '../components/OnboardingWizard'
 import { track } from '../achievements/store'
 import { act } from '../activity/log'
@@ -423,6 +423,19 @@ export function resolveNewSessionWorkspace(
   }
 }
 
+/** 新对话发送那一刻会套用谁的**项目默认项**(默认 Agent / 默认团队 / 模型 …):返回项目路径,不套则 null。
+ *  send() 与新对话「Agent 选择条」的状态句共用这一处(Codex 第一轮 B2-1:状态句曾只看显式选的项目,
+ *  没显式选时漏掉隐式落点 = 默认工作区项目的默认团队,界面说「默认 Agent」、实际起了多人团队)。
+ *  口径:chat 预设不进项目;落点须是项目工作区(isProjectWorkspace,本地且有 path);家目录引擎拒收,跳过。 */
+export function newChatProjectPath(
+  s: Pick<AppState, 'sessionMode' | 'newChatWs' | 'desktopMode' | 'defaultWsDir' | 'homeDir' | 'tr'>,
+  platform: 'desktop' | 'web' | 'mobile',
+): string | null {
+  const ws = resolveNewSessionWorkspace(s, platform)
+  if (newSessionPreset(s.sessionMode, ws, platform) === 'chat') return null
+  return isProjectWorkspace(ws) && ws.path !== s.homeDir ? ws.path : null
+}
+
 const SESSION_MODE_KEY = 'forsion_tangu_session_mode'
 function loadSessionMode(): SessionMode | null {
   try { const v = localStorage.getItem(SESSION_MODE_KEY); return v === 'chat' || v === 'work' ? v : null } catch { return null }
@@ -675,7 +688,7 @@ export interface AppState {
   connectOnce(c: TanguDesktopConfig): Promise<void>
   refreshSpecialEnabled(c: TanguDesktopConfig): Promise<void>
   /** 把 Background Session(@讨论/Historian 辅助讨论等,经 /background 端点轮询)合并进该会话的子聊天列表。 */
-  mergeBackgroundSubChats(sessionId: string, items: Array<{ runId: string; title: string; status: string }>): void
+  mergeBackgroundSubChats(sessionId: string, items: Array<{ runId: string; title: string; status: string; kind?: string }>): void
   boot(): Promise<void>
   refreshAgents(): void
   /** 历史拉取在途(按会话):ChatView 据此显示会话骨架屏而非空状态(module 级 loadedHistory 不响应式)。 */
@@ -1672,6 +1685,9 @@ export const useApp = create<AppState>((set, get) => ({
     const t = get().tr
     const gen = ++connectGen
     const latest = (): boolean => gen === connectGen
+    // 换了连接目标(托管切外部、改外部地址 / 令牌):旧目标的 ok 不代表新目标连得上,结果回来前先退回「连接中」,
+    // 别让状态条在这段时间把新地址报成已连通(Codex 第三轮 R2-g-1)。同一目标的重连不动 ok。
+    if (get().connState === 'ok' && connectKey(c) !== lastOkConnectKey) set({ connState: 'idle', connMessage: '' })
     const r = await testConnection(c)
     if (!latest()) return // 已有更新的 connect 在飞/已完成:这条的结果(尤其老 token 的 401)一律作废
     set({ connState: r.ok ? 'ok' : 'err', connMessage: r.message })
@@ -1753,10 +1769,10 @@ export const useApp = create<AppState>((set, get) => ({
         const streaming = it.status === 'running' || it.status === 'queued'
         const idx = next.findIndex((x) => x.id === it.runId)
         if (idx < 0) {
-          next.push({ id: it.runId, kind: 'discussion', title: it.title, runId: it.runId, streaming, segs: [] })
+          next.push({ id: it.runId, kind: 'discussion', title: it.title, runId: it.runId, streaming, segs: [], ...(it.kind ? { bgKind: it.kind } : {}) })
           changed = true
-        } else if (next[idx].streaming !== streaming) {
-          next[idx] = { ...next[idx], streaming }
+        } else if (next[idx].streaming !== streaming || (it.kind && next[idx].bgKind !== it.kind)) {
+          next[idx] = { ...next[idx], streaming, ...(it.kind ? { bgKind: it.kind } : {}) }
           changed = true
         }
       }
@@ -2437,7 +2453,9 @@ export const useApp = create<AppState>((set, get) => ({
       // 落库,而输入栏显示的是 newChatModelId() —— 两边一错开就是「发送后药丸跳回默认模型」。
       // 项目默认项:缓存命中直接用(setActiveId / setNewChatWs 已预取);冷缓存 = 重启后第一次隐式新会话(默认工作区从不经 setNewChatWs)
       // → 等一次本地 GET(≤1.5s,同 createInWorkspace),否则默认工作区的项目默认项首条消息就漏掉(codex 评审 09-23)。家目录引擎拒收,跳过。
-      const projectDefaults = path && ws && isProjectWorkspace(ws) && path !== get().homeDir ? projectDefaultsForNewSession(await get().ensureProjectSettings(path).catch(() => null), get().teams) : { config: {} }
+      // 与选择条状态句同源(newChatProjectPath):非 chat 且落点是项目工作区时 path 恰为 ws.path(isProjectWorkspace 要求 local + path)。
+      const projectPath = newChatProjectPath(get(), currentPlatform())
+      const projectDefaults = projectPath ? projectDefaultsForNewSession(await get().ensureProjectSettings(projectPath).catch(() => null), get().teams) : { config: {} }
       const model_id = get().newChatModel || projectDefaults.model || newChatModelId(get())
       // 初始配置先算好、随建会话请求原子落库(老引擎忽略 agent_config → 回来为空 → 补 PUT;同 createInWorkspace)。
       // 显式选择(newChatCfg)> 项目默认 > 上次用的档位(newSessionConfig)。

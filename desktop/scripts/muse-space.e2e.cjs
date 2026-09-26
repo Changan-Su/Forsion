@@ -63,7 +63,7 @@ async function openChatSession(win) {
   await win.waitForTimeout(1000)
   await win.evaluate((names) => {
     const button = [...document.querySelectorAll('button.rb-space')]
-      .find((item) => names.some((name) => (item.getAttribute('title') || item.textContent || '').includes(name)))
+      .find((item) => names.some((name) => (item.getAttribute('aria-label') || item.getAttribute('title') || item.textContent || '').includes(name)))
     if (button) button.click()
   }, ['Agent', 'Tangu'])
   await win.waitForTimeout(1500)
@@ -196,7 +196,7 @@ async function main() {
 
     // ④ Muse Space
     const clicked = await win.evaluate(() => {
-      const button = [...document.querySelectorAll('button.rb-space')].find((item) => (item.getAttribute('title') || item.textContent || '').trim() === 'Muse')
+      const button = [...document.querySelectorAll('button.rb-space')].find((item) => (item.getAttribute('aria-label') || item.getAttribute('title') || item.textContent || '').trim() === 'Muse')
       if (button) { button.click(); return true }
       return false
     })

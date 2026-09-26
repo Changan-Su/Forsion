@@ -8,6 +8,7 @@ import { useWorkspace } from '@lcl/engine'
 import { listAgents, saveAgentDef, deleteAgentDef, listModels, uploadAgentAvatar, fetchAgentAvatar, deleteAgentAvatar, getAgentsMeta, putAgentsMeta, getUserProfile, putUserProfile, fetchToolCatalog } from '../services/backendService'
 import { AgentMemoryModal } from './AgentMemoryModal'
 import { THINKING_LEVELS } from '../types'
+import { thinkingLabel } from './thinkingLabel'
 import type { ModelInfo, NormalAgentDef, TanguDesktopConfig, ThinkingLevel } from '../types'
 import { registerMessages, translate, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
@@ -278,7 +279,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
             <label>{t('settings.agents.thinking')}</label>
             <select value={editing.thinkingLevel} onChange={(e) => setEditing({ ...editing, thinkingLevel: e.target.value as Draft['thinkingLevel'] })}>
               <option value="">{t('settings.agents.inherit')}</option>
-              {THINKING_LEVELS.map((lv) => <option key={lv} value={lv}>{lv}</option>)}
+              {THINKING_LEVELS.map((lv) => <option key={lv} value={lv}>{thinkingLabel(lv, t)}</option>)}
             </select>
           </div>
           <div className="field">

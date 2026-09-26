@@ -29,7 +29,7 @@
  *     切回 idle 恢复旧行为;零条目时切模式不重挂
  *  5  startChat:send:false → 预填 + 选中 Agent、不起 run;send:true 自家 Agent → run 的 agentSlug 对;
  *     send:true 别家 Agent → 只预填不起 run;未知 Agent → 报错;5e 清单里有但没有播种标记(撞名)→ 只预填
- *  6  截图(亮 / 暗):草稿卡 + 伴随面;always 模式展开侧板
+ *  6  截图(亮 / 暗):草稿卡 + 伴随面;always 模式展开侧板(6k 宽容器小坞走键盘放大;6n 窄容器不出现按钮嵌按钮)
  *  7  全程没有 [desk-companion] 控制台错误 / 渲染进程异常
  *  8  desk_screenshot × 伴随面(09-19 下午,用户实测 agent 看不到 Desk 上的形象):假引擎推 desk_capture_request,
  *     记下渲染层 POST 回来的图。idle 零条目 / always(先 desk_present 被吞)→ 截到形象且带 companion = 伴随面 key;
@@ -682,7 +682,52 @@ async function shotAlwaysPanel(win, stub, shots, name, keyOrPrefix, isProbe) {
   await sleep(1500)
   if (isProbe) await win.evaluate(() => window.__deskProbeSetMode('always'))
   await sleep(400)
-  await win.locator(btnSel('.agent-desk-card[data-desk-session^="dc-s"]', T.expand)).first().click().catch(() => {})
+  // 新会话零条目 + always = U-18 小坞:头行(含「展开」钮)被 CSS 藏掉,点它必然落空(原来 .catch 吞掉 → 本条恒红)。
+  // 小坞本身是 role=button(uiux-g):走键盘 —— 聚焦小坞按 Enter 放大,顺带钉住「键盘够得到放大」。
+  const cardSel = '.agent-desk-card[data-desk-session^="dc-s"]'
+  if (isProbe) {
+    // 6n(集成遗留 L-4 的回归钉):小坞兼任 role=button 只在它的头行(含真按钮)被藏时成立。查询容器 <760px 时
+    // chat2.css 把整张卡 display:none —— 不可见也不可聚焦,不存在「按钮里嵌按钮、两个 Tab 停点」。
+    // 钉住这条不变量:窄容器里卡片要么整张不显示、要么头行可见且整卡不带 role=button。以后谁让卡片在窄栏里露出来,这里就红。
+    const narrow = async (on) => win.evaluate(([sel, flag]) => {
+      const card = document.querySelector(sel)
+      let box = card && card.parentElement
+      while (box && getComputedStyle(box).containerType === 'normal') box = box.parentElement
+      if (!box) return null
+      box.style.maxWidth = flag ? '700px' : ''
+      return box.getBoundingClientRect().width
+    }, [cardSel, on])
+    const w = await narrow(true)
+    await sleep(500)
+    const nar = await win.evaluate((sel) => {
+      const card = document.querySelector(sel)
+      if (!card) return null
+      const head = card.querySelector('.agent-desk-card-head')
+      const shown = getComputedStyle(card).display !== 'none'
+      card.focus()
+      const focusable = document.activeElement === card
+      card.blur()
+      return { shown, focusable, role: card.getAttribute('role'), idle: card.hasAttribute('data-idle'),
+        headButtons: head ? [...head.querySelectorAll('button')].filter((b) => { const r = b.getBoundingClientRect(); return r.width > 0 && r.height > 0 }).length : 0 }
+    }, cardSel)
+    const ok = !!w && !!nar && nar.idle && (nar.shown ? (nar.headButtons > 0 && nar.role === null && !nar.focusable) : !nar.focusable)
+    check(`6n ${name}:容器窄于 760 时零条目卡片不会成为「嵌着按钮的按钮」(整张隐藏且不可聚焦,或头行可见且整卡不当按钮)`, ok, JSON.stringify({ w, nar }))
+    await narrow(false)
+    await sleep(500)
+  }
+  const headBtn = win.locator(btnSel(cardSel, T.expand)).first()
+  if (await headBtn.isVisible().catch(() => false)) await headBtn.click().catch(() => {})
+  else {
+    const dock = win.locator(`${cardSel}[data-idle][role="button"][tabindex="0"]`).first()
+    const dockOk = (await dock.count()) > 0 && !!(await dock.getAttribute('aria-label'))
+    check(`6k ${name}:零条目小坞是可聚焦的按钮(role=button、tabindex=0、有可访问名)`, dockOk)
+    if (dockOk) {
+      await dock.focus()
+      await sleep(200)
+      await shoot(win, shots, `${name}-dock-focus`) // 焦点环画在盒内(outline-offset:-2px),车道不裁
+      await win.keyboard.press('Enter')
+    }
+  }
   const sel = isProbe ? `[data-companion="${keyOrPrefix}"]` : `[data-companion^="${keyOrPrefix}"]`
   const up = await waitFor(win, (s) => !!document.querySelector(`.agent-desk.open ${s}[data-surface="desk-panel"] canvas`), sel, 10_000)
   await sleep(isProbe ? 900 : 3500)

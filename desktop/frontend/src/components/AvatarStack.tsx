@@ -12,11 +12,13 @@
  *    `<img>` 会按原始 32/48px 撑爆行,而几何断言在套了容器的台架里照样全绿。
  * 3. 根节点带 `data-n`(= 传入人数,不是渲染出的格数),给 `check:orbitside` 当锚点。
  *
- * 缺头像的格退首字,底色按 slug 稳定派生:优先吃 `--c1..--c6` 六档色板,色板未定义时回落
- * `--accent-ink` 18% 混色(CSS 变量的第二参数就是 fallback,不需要运行时探测)。
+ * 缺头像的格退首字,**中性底色**(09-25 用户拍板:Orbit 侧栏首字头像不按 slug 上彩色);
+ * 格底取 `--overlay-strong`,比外框的 `--overlay-medium` 深一档,n≥2 时各格才不会糊进外框。
+ * 取字走 `initialFor`(与选择条 / 私聊行同一规则):同一组成员首字相同时跳过公共前缀。
  */
 import React from 'react'
 import { registerMessages, useI18n } from '../i18n'
+import { initialFor } from './agentInitial'
 
 registerMessages({
   'avatarStack.members': { zh: '{n} 位成员', en: '{n} members' },
@@ -45,8 +47,6 @@ export const AVATAR_STACK_PAD = 2
 const AVATAR_STACK_RADIUS = 9
 /** 2×2 格的格距。 */
 const GRID_GAP = 2
-/** 色板档数(`--c1` … `--c6`)。 */
-const PALETTE_SLOTS = 6
 
 /**
  * 纯几何:n 个头像在 `inner` 见方的内区里怎么摆。
@@ -84,29 +84,6 @@ export function avatarStackLayout(n: number, inner = 26): AvatarStackCell[] {
   // 恰好 4 人 = 四张脸,没有徽章;>4 才把第 4 格让给「+N」(N = 未画出来的人数 = n - 3)。
   if (count > 4) cells[3] = { x: step, y: step, size, more: count - 3 }
   return cells
-}
-
-/** slug → 色板档位 1..6(与 `appStore.groupColor` 同一个 31 进制哈希,只是取模到六档)。 */
-export function avatarColorIndex(slug: string): number {
-  let h = 0
-  for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0
-  return (h % PALETTE_SLOTS) + 1
-}
-
-/** slug → 色相(与 appStore.groupColor / OrbitsView.slugTint 同一个 31 进制哈希):群聊发言人徽章与私聊头像底色必须同色相。 */
-export function slugTint(slug: string): string {
-  let h = 0
-  for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0
-  return `hsl(${h % 360} 62% 45%)`
-}
-/** 无头像时的底色:slug 色相 18% 混色(仓内没有 --c1..--c6 这套色板,别再引)。 */
-function initialBackground(slug: string): string {
-  return `color-mix(in srgb, ${slugTint(slug)} 18%, transparent)`
-}
-
-function firstChar(name: string): string {
-  const s = (name || '').trim()
-  return s ? Array.from(s)[0].toUpperCase() : '?'
 }
 
 /** 首字字号:26 格 13px(方案 §3.2),小格收到 8px(= 「+N」徽章那一档),两端夹住。 */
@@ -225,14 +202,14 @@ export const AvatarStack: React.FC<{
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  background: initialBackground(item.slug),
-                  color: 'var(--text)',
+                  background: 'var(--overlay-strong)',
+                  color: 'var(--text-muted)',
                   fontSize: initialFontSize(cell.size),
                   fontWeight: 600,
                   lineHeight: 1,
                 }}
               >
-                {firstChar(item.name)}
+                {initialFor(item.name, items.map((x) => x.name))}
               </span>
             )
           })

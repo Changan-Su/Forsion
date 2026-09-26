@@ -239,6 +239,24 @@ ctx.registerCommand({
 3. **插件命令只在桌面存在**(web 与 mobile 的 `listPlugins` 都返回 `[]`)。声明了 `invoke` 也不会
    出现在手机的目录里 —— 这是正确行为,不是 bug,别为此写特例。
 
+#### `checked`:开关类命令的当前状态(2026-09-25)
+
+用户可以把任意命令钉进 Ribbon 命令区。**开关类**命令(开 / 关某个模式)声明 `checked`,钉上去的按钮
+就带 `aria-pressed` 并在开着时高亮,一眼看得出现在是开是关;不声明就是普通动作钮。
+
+```js
+ctx.registerCommand({
+  id: 'myplugin-focus-mode',
+  title: () => t('专注模式'),
+  run: () => setFocus(!isFocus()),
+  checked: () => isFocus(),   // 渲染期求值:要便宜、无副作用
+})
+```
+
+- **只给真开关用**。「打开报告」这种动作声明了 `checked` 会被读屏报成「未按下」。
+- 宿主**不订阅**你的状态:Ribbon 在点击后、悬停进出时重读;别处(快捷键、设置页)改了状态,
+  按钮要等下一次重渲才跟上。旧宿主没有这个字段 = 静默忽略,不用做特性检测。
+
 | `registerSettingsView` | 详情页里自己画的面板 | 会被反复挂载卸载,状态别放模块级单例 |
 | `registerReadiness` | onboarding 检查卡上的一行 `check` | 2026-09-21 起;**必须 `ctx.registerReadiness?.(…)`**;拿不准回 `'unknown'`,见下「前置条件」 |
 | `registerEditorExtension` | 笔记编辑器的按键 / 装饰 | `'high'` 档不处理**必须 `return false`** |
@@ -449,6 +467,9 @@ refresh = (rows) => h.update({ ...spec, rows })   // 数据刷新走 update:排�
   (try/catch 照不到),列表就此定格为空。宿主挂载列表面 / 切库都会重订阅,这是重读的门。
   (青鸟 2026-08-28 实报「明明有记录却是空」,根因即此。)
 - 行首图标 `iconUrl`(favicon 等)与 `icon`(词表键)**两个都给**:老宿主 / 取不到图时退 `icon`。
+- `actions` / `itemMenu()` 的每一项是 `{ id, label, primary?, danger?, run }`:`primary` 留在工具条外面(缺省第一项),其余收进「⋯」;
+  `danger: true`(2026-09-25 起)= 不可逆动作(删除 / 移除),宿主在右键菜单和「⋯」里都用危险色画它。**只管配色,确认仍由插件自己在 `run()` 里做**
+  (宿主不替你弹框);惯例把它排在最后一项。老宿主忽略该字段。
 - 行可带 `unread: true`(2026-09-11 起):宿主在行首图标角上画与未读会话同一个点;老宿主忽略。
   宿主自己的收件箱就是这么接进统一左栏的(`plugin:inbox:messages`,分组 = 未读 / 发信人 / 已归档),可当参考实现。
 - `drop` 不声明就完全没有拖放;声明了也是宿主判形点亮、插件决定接不接。

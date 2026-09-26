@@ -18,7 +18,7 @@ const addDays = (d, n) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + 
 async function clickSpace(win, names) {
   const clicked = await win.evaluate((labels) => {
     const buttons = [...document.querySelectorAll('button.rb-space')]
-    const hit = buttons.find((b) => labels.includes((b.getAttribute('title') || b.textContent || '').trim()))
+    const hit = buttons.find((b) => labels.includes((b.getAttribute('aria-label') || b.getAttribute('title') || b.textContent || '').trim()))
     if (!hit) return false
     hit.click()
     return true

@@ -56,7 +56,7 @@ async function openChatSession(win) {
   await win.waitForTimeout(1000)
   await win.evaluate((names) => {
     const button = [...document.querySelectorAll('button.rb-space')]
-      .find((item) => names.some((name) => (item.getAttribute('title') || item.textContent || '').includes(name)))
+      .find((item) => names.some((name) => (item.getAttribute('aria-label') || item.getAttribute('title') || item.textContent || '').includes(name)))
     button?.click()
   }, ['Agent', 'Tangu'])
   await win.waitForTimeout(1500)

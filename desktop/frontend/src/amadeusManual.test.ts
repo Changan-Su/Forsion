@@ -173,4 +173,9 @@ describe('Amadeus 使用手册 · 画布几何', () => {
       }
     }
   }, CANVAS_T)
+  it('K. 中文手册按 genesis-ui 术语表:不写「智能体」,正文里不写小写的 agent(代码 / 行内代码除外)', () => {
+    const prose = stripFences(ZH).replace(/`[^`\n]*`/g, '')
+    expect(prose.match(/智能体/g), '中文手册里的「智能体」→ 改写成 Agent').toBeNull()
+    expect(prose.match(/(?<![A-Za-z_-])agent(?![A-Za-z_-])/g), '中文手册正文里的小写 agent → 改写成 Agent').toBeNull()
+  })
 })

@@ -4,7 +4,7 @@
  */
 import { create } from 'zustand'
 import type { Command } from './types'
-import { useShortcuts, effectiveHotkey } from './shortcutStore'
+import { useShortcuts, effectiveHotkey, formatHotkey, isMacPlatform } from './shortcutStore'
 
 interface CommandState {
   commands: Command[]
@@ -40,6 +40,14 @@ export const removeCommand = (id: string): void => useCommandStore.getState().re
 export const openCommandPalette = (): void => useCommandStore.getState().setPaletteOpen(true)
 /** 以选取模式打开命令面板:用户挑一条命令后回调其 id(不执行)。 */
 export const openCommandPicker = (cb: (id: string) => void): void => useCommandStore.setState({ pickCb: cb, paletteOpen: true })
+
+/** 命令**当前生效**快捷键的显示文本(按平台格式化;命令不存在 / 没绑键 / 被用户解绑 → '')。
+ *  tooltip 里拼「名称(快捷键)」用 —— 写死 `(⌘/Ctrl+⇧+[)` 既不分平台,用户改了键也不跟。 */
+export function commandHotkeyText(id: string): string {
+  const cmd = useCommandStore.getState().commands.find((c) => c.id === id)
+  const hk = cmd ? effectiveHotkey(cmd) : ''
+  return hk ? formatHotkey(hk, isMacPlatform()) : ''
+}
 
 /** shift 按下时 e.key 给的是 '{'/'}'(US 布局),归一为 '['/']' —— 存储格式统一用 bracket,
  *  'mod+shift+[' 才能直配 Ctrl/⌘+{。 */

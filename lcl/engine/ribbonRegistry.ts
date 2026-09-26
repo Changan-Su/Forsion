@@ -216,10 +216,15 @@ export function moveTo(list: string[], movedId: string, to: number): string[] {
 
 /** feature 层注入的 ribbon 动作(引擎不 import feature 代码):
  *  - newSpace: 「新建 Space」入口(缺省 = 菜单不显示该项;Tangu Web 无落盘能力不注入)。
- *  - prompt: 文本输入(桌面注入 askString;缺省回落 window.prompt,Electron 下 prompt 是坏的)。 */
+ *  - prompt: 文本输入(桌面注入 askString;缺省回落 window.prompt,Electron 下 prompt 是坏的)。
+ *  - notify: 一次性提示 + 可选动作钮(桌面注入右上角通知)。 */
 export interface RibbonActions {
   newSpace?: () => void
   prompt?: (title: string, initial?: string) => Promise<string | null>
+  /** 引擎的一次性提示(可带一个动作钮),如「已恢复本 Space 默认布局 · 撤销」。缺省 = 不提示
+   *  (动作照样生效,只是没有撤销入口)。桌面注入宿主通知系统。
+   *  可返回一个收回函数:动作失效时(如撤销快照已作废)引擎用它把提示连同按钮撤掉。 */
+  notify?: (text: string, action?: { label: string; run(): void }) => (() => void) | void
 }
 export const ribbonActions: RibbonActions = {}
 export const setRibbonActions = (a: RibbonActions): void => { Object.assign(ribbonActions, a) }

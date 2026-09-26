@@ -60,7 +60,7 @@ async function openChatSession(win) {
   await win.waitForTimeout(1000)
   await win.evaluate((names) => {
     const button = [...document.querySelectorAll('button.rb-space')]
-      .find((item) => names.some((name) => (item.getAttribute('title') || item.textContent || '').includes(name)))
+      .find((item) => names.some((name) => (item.getAttribute('aria-label') || item.getAttribute('title') || item.textContent || '').includes(name)))
     button?.click()
   }, ['Agent', 'Tangu'])
   await win.waitForTimeout(1500)
@@ -146,12 +146,12 @@ async function main() {
     await sp.waitForLoadState('domcontentloaded')
     await sp.waitForSelector('.settings-main', { timeout: 30_000 })
     const nav = sp.locator('.settings-nav')
-    const general = nav.getByRole('button', { name: '常规设置', exact: true }).first()
+    const general = nav.getByRole('button', { name: '常规', exact: true }).first()
     if (await general.count().catch(() => 0)) { await general.click().catch(() => {}); await sp.waitForTimeout(600) }
     const panel = sp.locator('.settings-panel', { hasText: '有会话运行时阻止休眠' }).first()
     await panel.scrollIntoViewIfNeeded()
     const sw = panel.locator('[role="switch"]').first()
-    check('T2a 常规设置里有这张卡,开关初值为关', (await panel.count()) === 1 && (await sw.getAttribute('aria-checked')) === 'false')
+    check('T2a 常规里有这张卡,开关初值为关', (await panel.count()) === 1 && (await sw.getAttribute('aria-checked')) === 'false')
     await panel.screenshot({ path: path.join(SHOT_DIR, 'keepawake-panel-off.png') })
     await sp.screenshot({ path: path.join(SHOT_DIR, 'keepawake-general-page.png') })
     await sw.click()

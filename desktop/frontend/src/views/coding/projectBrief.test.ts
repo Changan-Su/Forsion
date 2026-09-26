@@ -33,7 +33,7 @@ describe('readable project drafts', () => {
     expect(draft).toContain(`要求：${brief.constraints}`)
     expect(draft).toContain('AI 对话、图像生成、Forsion 账号')
     expect(draft.match(/AI 对话/g)).toHaveLength(1)
-    expect(draft).not.toContain('智能体工作流')
+    expect(draft).not.toContain('Agent 工作流')
     expect(draft).toContain('先列出简短步骤')
     expect(draft).toContain('计划模式下先给出方案')
     expect(draft).not.toContain('window.forsion')

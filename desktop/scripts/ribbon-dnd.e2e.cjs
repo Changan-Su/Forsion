@@ -231,7 +231,8 @@ async function main() {
       window.__rb.getState().setFolderItems(fs[fs.length - 1].id, ['tA', 'rb-retired-ghost'])
     })
     await page.waitForTimeout(120)
-    const folderTitle = await page.$eval('.rb-top .rb-folder', (e) => e.title)
+    // 收纳夹钮 09-25 起不挂原生 title(收起态走自绘浮签,收纳夹悬停直接弹浮层),名字 + 计数在 aria-label
+    const folderTitle = await page.$eval('.rb-top .rb-folder', (e) => e.getAttribute('aria-label') || e.title)
     check('L6 收纳夹计数只算活成员(1 而非 2)', /\(1\)$/.test(folderTitle), folderTitle)
     await page.evaluate(() => {
       const s = window.__rb.getState()
@@ -301,6 +302,57 @@ async function main() {
       geo.badge.l <= geo.icon.r && geo.badge.t < (geo.row.t + geo.row.b) / 2,
       `badge.l=${Math.round(geo.badge.l)} icon.r=${Math.round(geo.icon.r)} badge.t=${Math.round(geo.badge.t)} rowMid=${Math.round((geo.row.t + geo.row.b) / 2)}`,
     )
+
+    // O. 收起态自绘浮签(取代原生 title,09-25 U-21):悬停 1s 弹、0.1s 内换图标立刻弹、拖动 / 按下即收;
+    //    开关类命令(Command.checked)钉进命令区后按钮带 aria-pressed / .is-on。
+    await fresh(page)
+    const titles = await page.$$eval('.rb-top .rb-btn, .rb-bottom .rb-btn, .rb-head .rb-toggle', (els) => els.filter((e) => e.title).map((e) => e.className))
+    check('O1 收起态 Ribbon 钮不挂原生 title(否则与浮签叠成两层)', titles.length === 0, titles.join('|'))
+    const tipText = () => page.evaluate(() => document.querySelector('.rb-tip')?.textContent ?? null)
+    const center = async (sel) => { const b = await page.$eval(sel, (e) => { const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } }); return b }
+    let c = await center('.rb-top .rb-slot[data-id="tA"] .rb-btn')
+    await page.mouse.move(c.x, c.y)
+    await page.waitForTimeout(500)
+    const early = await tipText()
+    await page.waitForTimeout(700)
+    const late = await tipText()
+    check('O2 悬停 0.5s 还不弹、1.2s 弹出且是该钮的名字', early === null && late === 'Top A', `0.5s=${early} 1.2s=${late}`)
+    const tipGeo = await page.evaluate(() => {
+      const t = document.querySelector('.rb-tip')?.getBoundingClientRect()
+      const b = document.querySelector('.rb-top .rb-slot[data-id="tA"] .rb-btn')?.getBoundingClientRect()
+      const rb = document.querySelector('.rb')?.getBoundingClientRect()
+      return t && b && rb ? { dy: Math.abs((t.top + t.bottom) / 2 - (b.top + b.bottom) / 2), gap: t.left - rb.right } : null
+    })
+    check('O3 浮签贴在 Ribbon 右侧、与按钮垂直居中', !!tipGeo && tipGeo.dy <= 1.5 && tipGeo.gap >= 2 && tipGeo.gap <= 12, JSON.stringify(tipGeo))
+    c = await center('.rb-top .rb-slot[data-id="tB"] .rb-btn')
+    await page.mouse.move(c.x, c.y)
+    await page.waitForTimeout(60)
+    check('O4 已弹过后换到相邻钮立刻弹(skip-delay)', (await tipText()) === 'Top B', String(await tipText()))
+    await page.mouse.down()
+    await page.waitForTimeout(30)
+    check('O5 按下鼠标即收', (await tipText()) === null, String(await tipText()))
+    await page.mouse.up()
+    await page.waitForTimeout(1300)
+    check('O5b 点完鼠标还停在原钮上不再重新弹', (await tipText()) === null, String(await tipText()))
+    await page.mouse.move(400, 400)
+    await page.evaluate(() => window.__rb.getState().toggleExpanded())
+    await page.waitForTimeout(80)
+    c = await center('.rb-top .rb-slot[data-id="tA"] .rb-btn')
+    await page.mouse.move(c.x, c.y)
+    await page.waitForTimeout(1200)
+    check('O6 展开态(名称已可见)不弹浮签', (await tipText()) === null, String(await tipText()))
+    await page.evaluate(() => window.__rb.getState().toggleExpanded())
+    await page.mouse.move(400, 400)
+    await page.evaluate(() => window.__rb.getState().addCommandItem('h-toggle'))
+    await page.waitForTimeout(80)
+    const tgl = '.rb-bottom .rb-slot[data-id="cmd:h-toggle"] .rb-btn'
+    const before = await page.$eval(tgl, (e) => ({ pressed: e.getAttribute('aria-pressed'), on: e.classList.contains('is-on') }))
+    await page.click(tgl)
+    await page.waitForTimeout(60)
+    const after = await page.$eval(tgl, (e) => ({ pressed: e.getAttribute('aria-pressed'), on: e.classList.contains('is-on') }))
+    check('O7 开关类命令钉进命令区:点前 aria-pressed=false、点后 true 且 .is-on', before.pressed === 'false' && !before.on && after.pressed === 'true' && after.on, `${JSON.stringify(before)} → ${JSON.stringify(after)}`)
+    const plain = await page.$eval('.rb-bottom .rb-slot[data-id="bA"] .rb-btn', (e) => e.hasAttribute('aria-pressed'))
+    check('O8 非开关项不带 aria-pressed(不然读屏报「未按下」)', !plain)
   } finally {
     await browser.close()
     if (vite) vite.kill()

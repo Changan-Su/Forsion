@@ -8,6 +8,7 @@ import { useWorkspace } from './singleColumnStore'
 import { supportsMiniPanel, showInMainPanel } from './miniPanel'
 import { ViewErrorBoundary } from './Skeleton'
 import './miniCard.css'
+import { useEngineI18n } from './i18nSeam'
 
 interface DirectMiniViewTarget { type: string; params?: Record<string, unknown> }
 
@@ -23,7 +24,7 @@ export const MiniColumnHost: React.FC<{
   const space = spaces.find((s) => s.id === activeId)
   const active = useWorkspace((s) => s.mainLeaves.find((r) => r.id === s.activeMainId))
   const [menu, setMenu] = useState(false)
-  const zh = document.documentElement.lang.startsWith('zh')
+  const { t } = useEngineI18n()
   const Icon = space?.icon
   const directDef = direct ? getView(direct.view.type) : undefined
   const directSeen = useRef(false)
@@ -65,24 +66,24 @@ export const MiniColumnHost: React.FC<{
   return (
     <div className="mini-card-shell" data-space={direct ? 'direct' : space?.id}>
       <header className="mini-card-chrome">
-        <button className="mini-card-space" aria-label={zh ? '切换空间' : 'Switch space'} aria-expanded={menu}
+        <button className="mini-card-space" aria-label={t('lcl.mini.switchSpace')} aria-expanded={menu}
           disabled={!!direct || spaces.length < 2} onClick={() => setMenu(!menu)}>
           {!direct && Icon && <Icon size={15} />}<span>{name}</span>{!direct && spaces.length > 1 && <ChevronDown size={12} />}
         </button>
         <div className="mini-card-drag-title" />
-        <button className="mini-card-action" aria-label={zh ? '在主面板显示' : 'Show in main panel'}
-          title={zh ? '在主面板显示' : 'Show in main panel'} disabled={!direct && !space} onClick={showMain}><ExternalLink size={15} /></button>
-        <button className="mini-card-action mini-card-close" aria-label={zh ? '关闭 Mini Panel' : 'Close Mini Panel'}
+        <button className="mini-card-action" aria-label={t('lcl.mini.showMain')}
+          title={t('lcl.mini.showMain')} disabled={!direct && !space} onClick={showMain}><ExternalLink size={15} /></button>
+        <button className="mini-card-action mini-card-close" aria-label={t('lcl.mini.close')}
           onClick={() => window.tangu?.closeSelf?.()}><X size={15} /></button>
       </header>
       <main className="mini-card-main">
         {leaf && view ? <div className="mini-panel-view" data-view={leaf.type} key={`${leaf.id}:${leaf.type}`}>
           <ViewErrorBoundary><Suspense fallback={null}>{view.factory({ leaf, params: leaf.params })}</Suspense></ViewErrorBoundary>
-        </div> : <div className="mini-panel-empty">{zh ? '暂无已适配的空间' : 'No Mini Panel spaces available'}</div>}
+        </div> : <div className="mini-panel-empty">{t('lcl.mini.empty')}</div>}
       </main>
       {menu && <>
-        <button className="mini-card-dismiss" aria-label={zh ? '关闭菜单' : 'Close menu'} onClick={() => setMenu(false)} />
-        <section className="mini-card-popover" aria-label={zh ? '切换空间' : 'Switch space'}>
+        <button className="mini-card-dismiss" aria-label={t('lcl.mini.closeMenu')} onClick={() => setMenu(false)} />
+        <section className="mini-card-popover" aria-label={t('lcl.mini.switchSpace')}>
           <div className="mini-card-popover-list">{spaces.map((item) => {
             const ItemIcon = item.icon
             return <button key={item.id} className={`mini-card-row${item.id === activeId ? ' active' : ''}`}

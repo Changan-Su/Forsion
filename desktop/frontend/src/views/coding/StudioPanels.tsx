@@ -6,7 +6,8 @@ import { useCodeStudio } from '../../stores/codeStudioStore'
 import { buildStudioDraft, type StudioBrief } from './projectBrief'
 import { saveStudioBriefFile } from './briefFile'
 import { flushStudioEditors, hasUnsavedStudioEditors } from './editorSession'
-import { historyMode, relativeTime } from './gitHistory'
+import { historyMode } from './gitHistory'
+import { formatDateTime, formatRelative } from '../../format/time'
 import { projectName, normPath } from './studioModel'
 import type { CodeStudioSnapshotSummary } from '../../../../shared/codeStudio'
 import type { GitPanelStatus, GitVersion } from '../../../../shared/products'
@@ -126,7 +127,6 @@ function GitInstall({ onRecheck }: { onRecheck(): void }) {
  *  没装 git → 安装引导;仓不归我们管 → 只读;启用 git 之前的旧快照另开一节,只能恢复不能新增。 */
 export function HistoryPanel({ root, running, onRestored, refreshNonce = 0 }: { root: string; running: boolean; onRestored(): void; refreshNonce?: number }) {
   const { t, locale } = useI18n()
-  const tag = locale === 'zh' ? 'zh-CN' : 'en-GB'
   const [status, setStatus] = useState<GitPanelStatus | null>(null)
   const [versions, setVersions] = useState<GitVersion[]>([])
   const [legacy, setLegacy] = useState<CodeStudioSnapshotSummary[]>([])
@@ -177,7 +177,7 @@ export function HistoryPanel({ root, running, onRestored, refreshNonce = 0 }: { 
     try {
       await guard()
       // untitled 是**落盘产物命名**(提交标题写下就不可变),所以在按下保存这一刻按当前界面语言求值。
-      const version = await window.tangu!.codeStudioGitCommit!(root, { name: name.trim() || `${projectName(root)} · ${new Date().toLocaleString(tag)}`, auto: false, untitled: t('studio.history.untitled') })
+      const version = await window.tangu!.codeStudioGitCommit!(root, { name: name.trim() || `${projectName(root)} · ${formatDateTime(Date.now(), { locale, year: 'always' })}`, auto: false, untitled: t('studio.history.untitled') })
       // null = 与上一版一字不差,不是失败 —— 别让用户以为保存坏了。
       if (!version) { setNotice(t('studio.history.noChanges')); return }
       setName(''); setNotice(t('studio.versionSaved')); reload()
@@ -210,7 +210,7 @@ export function HistoryPanel({ root, running, onRestored, refreshNonce = 0 }: { 
   }
   /** git 版本与旧快照共用一种行:恢复前一律先让用户确认(恢复是破坏性的,哪怕它可撤销)。 */
   const row = (version: { id: string; name: string; createdAt: number; files: number; auto?: boolean }, act: (id: string) => Promise<void>, confirmKey: string, canRestore: boolean) =>
-    <div className="csu-version" key={version.id}><History size={15} /><div><strong>{version.name}</strong><small>{relativeTime(version.createdAt, tag)} · {t('studio.history.files', { count: version.files })}{version.auto ? <span className="csu-version-auto">{t('studio.history.auto')}</span> : null}</small>
+    <div className="csu-version" key={version.id}><History size={15} /><div><strong>{version.name}</strong><small>{formatRelative(version.createdAt, { locale })} · {t('studio.history.files', { count: version.files })}{version.auto ? <span className="csu-version-auto">{t('studio.history.auto')}</span> : null}</small>
       {confirm === version.id && <div className="csu-restore-confirm"><p>{t(confirmKey)}</p><button className="csu-primary" disabled={busy || running} onClick={() => void act(version.id)}>{t('studio.restore')}</button><button disabled={busy} onClick={() => setConfirm(null)}>{t('studio.cancel')}</button></div>}
     </div>{canRestore && <button disabled={busy || running} aria-label={`${t('studio.restore')} ${version.name}`} onClick={() => setConfirm(version.id)}><Undo2 size={15} /></button>}</div>
   // 首次加载完才挂 data-history-mode:挂早了,仪器会把「还没问到宿主」读成 unsupported(假红)。

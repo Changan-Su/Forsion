@@ -1,7 +1,8 @@
 /**
- * 自动汇总:全量翻译批次(14 个组件)产出的 i18n 片段。
- * 由 tangu-i18n-sweep workflow 生成,在 main.tsx 顶部 import 以在渲染前注册。
- * 勿手改;新增文案请加在对应组件并补到此处(或下次重跑批次)。
+ * i18n 词条片段(历史上由一次性的全量翻译批次 tangu-i18n-sweep 汇总产出;那个生成器**不在仓内**,也不会再重跑)。
+ * 现状:本文件**人工维护** —— 改值直接改这里,zh / en 成对改;在 main.tsx 等入口顶部 import,渲染前注册。
+ * 新增文案优先放进对应组件的模块级 registerMessages 片段或该包的 *Messages.ts,不必再往这里堆。
+ * ⚠️ 同一个键若也在 i18n.tsx 里,**本文件的值生效**(后注册覆盖);i18nCoverage.test.ts 管 zh/en 成对与禁用词。
  */
 import { registerMessages } from "./i18n"
 
@@ -36,11 +37,11 @@ registerMessages({
   },
   "app.defaultWorkspace": {
     "zh": "Tangu 默认工作区",
-    "en": "Tangu Default Workspace"
+    "en": "Tangu default workspace"
   },
   "app.cloudWorkspace": {
     "zh": "Cloud 工作区",
-    "en": "Cloud Workspace"
+    "en": "Cloud workspace"
   },
   "app.workspace": {
     "zh": "工作区",
@@ -107,8 +108,8 @@ registerMessages({
     "en": "Add local workspace"
   },
   "sidebar.archived": {
-    "zh": "已归档 ({count})",
-    "en": "Archived ({count})"
+    "zh": "已归档",
+    "en": "Archived"
   },
   "sidebar.rename": {
     "zh": "重命名",
@@ -195,8 +196,8 @@ registerMessages({
     "en": "Max"
   },
   "input.slash.thinkSet": {
-    "zh": "思考强度已设为 {level}（模型不支持时自动降档）",
-    "en": "Thinking level set to {level} (auto-clamped if the model can't do it)"
+    "zh": "思考档位已设为「{level}」（模型不支持时自动降档）",
+    "en": "Thinking effort set to {level} (auto-clamped if the model can't do it)"
   },
   "input.slash.thinkUsage": {
     "zh": "用法：/think {levels}",
@@ -231,8 +232,8 @@ registerMessages({
     "en": "Turn on plan mode (read-only research → submit plan for approval)"
   },
   "input.slash.thinkDesc": {
-    "zh": "思考深度设为 {level}",
-    "en": "Set thinking depth to {level}"
+    "zh": "思考档位设为「{level}」",
+    "en": "Set thinking effort to {level}"
   },
   "input.slash.current": {
     "zh": "(当前)",
@@ -263,7 +264,7 @@ registerMessages({
     "en": "Direct · "
   },
   "input.tooLong": {
-    "zh": "消息过长({len} 字符,上限 {max})——大段材料请保存为文件,让 agent 用工具按需读取,整段粘贴会按轮数翻倍烧 token。",
+    "zh": "消息过长({len} 字符,上限 {max})——大段材料请保存为文件,让 Agent 用工具按需读取,整段粘贴会按轮数翻倍烧 token。",
     "en": "Message too long ({len} chars, limit {max}) — save large material as a file and let the agent read it on demand with tools; pasting it inline burns tokens multiplied by the number of turns."
   },
   "input.skip.notImage": {
@@ -311,7 +312,7 @@ registerMessages({
     "en": "Connect a backend in settings first…"
   },
   "input.placeholder": {
-    "zh": "输入消息,输入 / 唤起技能(Enter 发送,Shift+Enter 换行)",
+    "zh": "输入消息，输入 / 唤起技能（Enter 发送，Shift+Enter 换行）",
     "en": "Type a message, type / to invoke skills (Enter to send, Shift+Enter for a new line)"
   },
   "input.addContent": {
@@ -371,7 +372,7 @@ registerMessages({
     "en": "Queued messages"
   },
   "input.steer.hint": {
-    "zh": "等 agent 到达可读取点后插入 · ↑ 取回编辑",
+    "zh": "等 Agent 到达可读取点后插入 · ↑ 取回编辑",
     "en": "Delivered at the next boundary · ↑ to recall"
   },
   "input.steer.now": {
@@ -431,19 +432,19 @@ registerMessages({
     "en": "Uses permissions defined in config.json"
   },
   "input.modelChipTitle": {
-    "zh": "本会话模型与思考深度",
-    "en": "Model and thinking depth for this session"
+    "zh": "本会话模型与思考档位",
+    "en": "Model and thinking effort for this session"
   },
   "input.thinkingSection": {
-    "zh": "思考深度",
-    "en": "Thinking depth"
+    "zh": "思考档位",
+    "en": "Thinking effort"
   },
   "chat.emptyTitle": {
-    "zh": "纸上得来终觉浅,绝知此事要躬行。",
+    "zh": "纸上得来终觉浅，绝知此事要躬行。",
     "en": "What's learned on paper stays shallow; true knowing comes from doing."
   },
   "chat.emptyHint": {
-    "zh": "输入一句话,让 Tangu 开始干活。",
+    "zh": "输入一句话，让 Tangu 开始干活。",
     "en": "Type a message to put Tangu to work."
   },
   "chat.thinking": {
@@ -523,7 +524,7 @@ registerMessages({
     "en": "Sub-chats"
   },
   "panel.subchats.empty": {
-    "zh": "暂无子聊天（agent 发起讨论或子代理任务时会出现在这里）",
+    "zh": "暂无子聊天（Agent 发起讨论或子代理任务时会出现在这里）",
     "en": "No sub-chats yet (discussions or subagent tasks the agent starts appear here)"
   },
   "panel.subchats.live": {
@@ -559,7 +560,7 @@ registerMessages({
     "en": "Session files"
   },
   "panel.noFilesYet": {
-    "zh": "暂无文件。agent 产出与拖入的文件都会出现在这里。",
+    "zh": "暂无文件。Agent 产出与拖入的文件都会出现在这里。",
     "en": "No files yet. Agent outputs and dropped files will appear here."
   },
   "panel.activityLog": {
@@ -619,7 +620,7 @@ registerMessages({
     "en": "Folder name (Enter to create)"
   },
   "panel.preview.tooLarge": {
-    "zh": "文件较大({size}),不在面板预览;请用编辑器打开或让 agent 按需读取。",
+    "zh": "文件较大({size}),不在面板预览;请用编辑器打开或让 Agent 按需读取。",
     "en": "File is large ({size}); not previewed in the panel. Open it in an editor or have the agent read it on demand."
   },
   "panel.preview.binaryNoPreview": {
@@ -732,7 +733,7 @@ registerMessages({
   },
   "settings.tab.model": {
     "zh": "模型/Provider",
-    "en": "Model / Provider"
+    "en": "Model / provider"
   },
   "settings.tab.skills": {
     "zh": "技能",
@@ -836,7 +837,7 @@ registerMessages({
     "en": "Choose…"
   },
   "settings.workspace.hint": {
-    "zh": "侧栏「Tangu 默认工作区」新建会话用的本机目录;留空默认用笔记库内的 Sessions 文件夹(无笔记库时 ~/Forsion)。改后关闭设置即刷新侧栏工作区。",
+    "zh": "侧栏「Tangu 默认工作区」新建会话用的本机目录；留空默认用笔记库内的 Sessions 文件夹（无笔记库时 ~/Forsion）。改后关闭设置即刷新侧栏工作区。",
     "en": "Local directory used by the sidebar \"Tangu default workspace\" for new sessions; leave empty to use the Sessions folder inside your notes library (or ~/Forsion without one). After changing, close Settings to refresh the sidebar workspace."
   },
   "settings.token.label": {
@@ -916,7 +917,7 @@ registerMessages({
     "en": "No image models found. Enable image models in the Forsion admin, or fill in \"Image models\" under Custom Provider below."
   },
   "settings.model.imageHelp": {
-    "zh": "选中即设为默认生图模型;agent 调 generate_image 时自动使用(也可在调用里指定 model)。",
+    "zh": "选中即设为默认生图模型;Agent 调 generate_image 时自动使用(也可在调用里指定 model)。",
     "en": "Selecting one sets it as the default; the agent uses it automatically when calling generate_image (it can also specify a model)."
   },
   "settings.model.asrModelsLabel": {
@@ -968,7 +969,7 @@ registerMessages({
     "en": "Auxiliary model · LLM"
   },
   "settings.aux.llmHint": {
-    "zh": "后台/特殊 agent(Muse、Historian)用的模型,与主模型分开挑,便宜档就够。不选=跟随 Forsion 后台的默认。",
+    "zh": "后台/特殊 Agent(Muse、Historian)用的模型,与主模型分开挑,便宜档就够。不选=跟随 Forsion 后台的默认。",
     "en": "Model used by background agents (Muse, Historian). Picked separately from your main model — a cheap tier is plenty. Unset = follow the Forsion admin default."
   },
   "settings.aux.visionLabel": {
@@ -1301,7 +1302,7 @@ registerMessages({
   },
   "settings.mcp.add": {
     "zh": "添加 MCP Server",
-    "en": "Add MCP Server"
+    "en": "Add MCP server"
   },
   "settings.mcp.nameLabel": {
     "zh": "名称(工具前缀)",
@@ -1324,7 +1325,7 @@ registerMessages({
     "en": "Command (stdio; choose either this or URL)"
   },
   "settings.mcp.urlLabel": {
-    "zh": "URL(HTTP/SSE)",
+    "zh": "URL（HTTP/SSE）",
     "en": "URL (HTTP/SSE)"
   },
   "settings.mcp.envLabel": {
@@ -1341,7 +1342,7 @@ registerMessages({
   },
   "settings.theme.modeLabel": {
     "zh": "明暗",
-    "en": "Light / Dark"
+    "en": "Light / dark"
   },
   "settings.theme.light": {
     "zh": "亮色",
@@ -1377,7 +1378,7 @@ registerMessages({
   "settings.forsion.expired": { "zh": "登录已过期,请重新登录(否则后端无法连接)。", "en": "Session expired — please re-login (the backend can't connect otherwise)." },
   "settings.forsion.relogin": { "zh": "重新登录", "en": "Re-login" },
   "settings.skills.libraryHintPrefix": {
-    "zh": "按来源渠道(agent 文件夹)分组。本地技能放 ",
+    "zh": "按来源渠道(Agent 文件夹)分组。本地技能放 ",
     "en": "Grouped by source channel (agent folder). Put local skills in "
   },
   "settings.skills.libraryHintSuffix": {
@@ -1497,8 +1498,8 @@ registerMessages({
     "en": "Skills ({count})"
   },
   "settings.discovery.mcpCount": {
-    "zh": "MCP Server({count})",
-    "en": "MCP Servers ({count})"
+    "zh": "MCP 服务器（{count}）",
+    "en": "MCP servers ({count})"
   },
   "settings.advanced.note": {
     "zh": "会话级配置(技能/工具启用、执行环境、审批档)在右侧面板与输入栏调整。快捷键:Ctrl/Cmd+N 新建会话,Ctrl/Cmd+, 打开设置。",
@@ -1645,8 +1646,8 @@ registerMessages({
     "en": "Done 🎉"
   },
   "onboarding.done.line1": {
-    "zh": "· 输入栏可随时切换模型与思考深度;选择「本机」执行真实文件操作(带审批)",
-    "en": "· Switch models and thinking depth anytime from the input bar; choose \"Local\" to run real file operations (with approval)"
+    "zh": "· 输入栏可随时切换模型与思考档位；选择「本机」执行真实文件操作（带审批）",
+    "en": "· Switch models and thinking effort anytime from the input bar; choose \"Local\" to run real file operations (with approval)"
   },
   "onboarding.done.line2": {
     "zh": "· 已有 Claude Code / Codex / Hermes?设置 → 高级 → 「从其他 Agent 导入」一键迁移技能与 MCP",
@@ -1734,11 +1735,11 @@ registerMessages({
   },
   "inquiry.planProposal": {
     "zh": "计划提案",
-    "en": "Plan Proposal"
+    "en": "Plan proposal"
   },
   "inquiry.todoList": {
     "zh": "任务清单",
-    "en": "To-do List"
+    "en": "To-do list"
   },
   "thinking.thinking": {
     "zh": "思考中…",
@@ -1795,12 +1796,12 @@ registerMessages({
   "group.vote.round": { "zh": "第 {round} 轮投票", "en": "Round {round} vote" },
   "group.vote.tally": { "zh": "{end}/{total} 赞成结束", "en": "{end}/{total} to end" },
   "group.voting.inProgress": { "zh": "正在投票…", "en": "Voting…" },
-  "input.mention.groupNote": { "zh": "群内 Agent · 优先发言", "en": "Agents in group · speaks first" },
+  "input.mention.groupNote": { "zh": "团队内 Agent · 优先发言", "en": "Team agents · speak first" },
   "input.mention.delegateNote": { "zh": "委派给 Agent · 作为 subagent 处理", "en": "Delegate to agent · runs as subagent" },
   "group.setup.title": { "zh": "团队模式", "en": "Team mode" },
   "group.setup.close": { "zh": "关闭", "en": "Close" },
   "group.setup.participants": { "zh": "参与者({n} 已选)", "en": "Participants ({n} selected)" },
-  "group.setup.noAgents": { "zh": "还没有 Agent。先到设置 → Agents 创建几个不同人格的 Agent。", "en": "No agents yet. Create a few in Settings → Agents first." },
+  "group.setup.noAgents": { "zh": "还没有 Agent。先到设置 → Agent 创建几个不同人格的 Agent。", "en": "No agents yet. Create a few in Settings → Agents first." },
   "group.setup.intensity": { "zh": "讨论强度", "en": "Discussion intensity" },
   "group.setup.roundsUnit": { "zh": "轮", "en": "r" },
   "group.setup.customRounds": { "zh": "自定义轮数", "en": "Custom rounds" },
@@ -1815,7 +1816,7 @@ registerMessages({
   "group.setup.addTemp": { "zh": "新建临时 Agent", "en": "New temporary agent" },
   "group.setup.tempBadge": { "zh": "· 临时", "en": "· temp" },
   "group.setup.tempSave": { "zh": "添加", "en": "Add" },
-  "group.setup.tempFormHint": { "zh": "临时 Agent 字段与普通 Agent 一样,但只用于本会话、不会保存到设置 → Agents。", "en": "A temporary agent has the same fields as a normal one, but is used only in this session — not saved to Settings → Agents." },
+  "group.setup.tempFormHint": { "zh": "临时 Agent 字段与普通 Agent 一样,但只用于本会话、不会保存到设置 → Agent。", "en": "A temporary agent has the same fields as a normal one, but is used only in this session — not saved to Settings → Agents." },
   "group.intensity.relaxed": { "zh": "轻松", "en": "Relaxed" },
   "group.intensity.medium": { "zh": "中等", "en": "Medium" },
   "group.intensity.intense": { "zh": "激烈", "en": "Intense" },
@@ -1824,14 +1825,14 @@ registerMessages({
 
 // ── 当前 Agent 记忆 + 新建标签页启动器(2026-06-28 UI 优化;见文件头说明)──
 registerMessages({
-  "panel.memory.currentAgent": { "zh": "当前 Agent 记忆", "en": "Current Agent Memory" },
-  "panel.memory.recentLogs": { "zh": "最近日志", "en": "Recent Logs" },
+  "panel.memory.currentAgent": { "zh": "当前 Agent 记忆", "en": "Current agent memory" },
+  "panel.memory.recentLogs": { "zh": "最近日志", "en": "Recent logs" },
   "panel.log.none": { "zh": "暂无日志", "en": "No logs yet" },
-  "newtab.title": { "zh": "新建标签页", "en": "New Tab" },
-  "newtab.mainSection": { "zh": "主区视图", "en": "Main Area" },
-  "newtab.sideSection": { "zh": "侧栏视图", "en": "Side Panel" },
+  "newtab.title": { "zh": "新建标签页", "en": "New tab" },
+  "newtab.mainSection": { "zh": "主区视图", "en": "Main area" },
+  "newtab.sideSection": { "zh": "侧栏视图", "en": "Side panel" },
   "newtab.recentSection": { "zh": "最近使用", "en": "Recent" },
-  "newtab.newNote": { "zh": "新建笔记", "en": "New Note" },
+  "newtab.newNote": { "zh": "新建笔记", "en": "New note" },
   "newtab.today": { "zh": "今天", "en": "Today" },
 })
 
@@ -1840,8 +1841,8 @@ registerMessages({
   "onboarding.welcome.title": { "zh": "欢迎使用 {name}", "en": "Welcome to {name}" },
   "onboarding.welcome.version": { "zh": "版本 {v}", "en": "Version {v}" },
   "onboarding.welcome.continue": { "zh": "继续", "en": "Continue" },
-  "onboarding.welcome.viewChangelog": { "zh": "查看更新内容", "en": "What's New" },
-  "onboarding.welcome.changelogTitle": { "zh": "更新内容", "en": "What's New" },
+  "onboarding.welcome.viewChangelog": { "zh": "查看更新内容", "en": "What's new" },
+  "onboarding.welcome.changelogTitle": { "zh": "更新内容", "en": "What's new" },
   "onboarding.welcome.noChangelog": { "zh": "暂无更新记录", "en": "No release notes yet" },
   "onboarding.connect.benefitsTitle": { "zh": "登录 Forsion 账号即可", "en": "With a Forsion account" },
   "onboarding.connect.benefitSync": { "zh": "云端同步:记忆、会话、设置多端一致", "en": "Cloud sync — memory, sessions and settings stay consistent across devices" },
@@ -1863,12 +1864,12 @@ registerMessages({
   "command.navBack": { "zh": "后退(本标签页)", "en": "Back (this tab)" },
   "command.navForward": { "zh": "前进(本标签页)", "en": "Forward (this tab)" },
   "view.workspace": { "zh": "工作区", "en": "Workspace" },
-  "market.tab.spaces": { "zh": "空间", "en": "Spaces" },
-  "market.spaceInstalled": { "zh": "已安装「{name}」,Space 已出现在左侧功能条顶部", "en": "Installed \"{name}\" — the space is now on the ribbon" },
+  "market.tab.spaces": { "zh": "Space", "en": "Spaces" },
+  "market.spaceInstalled": { "zh": "已安装「{name}」,Space 已出现在左侧功能条顶部", "en": "Installed \"{name}\" — the Space is now on the ribbon" },
   "command.saveAsSpace": { "zh": "将当前布局另存为 Space", "en": "Save current layout as a Space" },
-  "spaces.namePrompt": { "zh": "新 Space 名称", "en": "New space name" },
-  "spaces.saved": { "zh": "已另存为 Space「{name}」(见左侧功能条顶部)", "en": "Saved as space \"{name}\" (see the ribbon top)" },
-  "spaces.deleteConfirm": { "zh": "删除 Space「{name}」?其布局配方将从磁盘移除。", "en": "Delete space \"{name}\"? Its recipe will be removed from disk." },
+  "spaces.namePrompt": { "zh": "新 Space 名称", "en": "New Space name" },
+  "spaces.saved": { "zh": "已另存为 Space「{name}」(见左侧功能条顶部)", "en": "Saved as Space \"{name}\" (see the ribbon top)" },
+  "spaces.deleteConfirm": { "zh": "删除 Space「{name}」?其布局配方将从磁盘移除。", "en": "Delete Space \"{name}\"? Its recipe will be removed from disk." },
   "view.outline": { "zh": "大纲", "en": "Outline" },
   "workspace.mode.auto": { "zh": "自动", "en": "Auto" },
   "workspace.mode.autoTip": { "zh": "跟随主视图自动切换(对话→会话/文件,笔记→笔记/文件)", "en": "Follows the focused main view (chat → sessions/files, note → notes/files)" },
@@ -1931,7 +1932,7 @@ registerMessages({
   "settings.tts.testOk": { "zh": "合成成功,正在播放", "en": "Synthesized, playing" },
   "settings.tts.testText": { "zh": "你好呀,我是 Tangu。今天过得怎么样?", "en": "Hi, I'm Tangu. How is your day going?" },
   "settings.notes.cloudSyncLabel": { "zh": "在线同步(Cloud Vault)", "en": "Online sync (Cloud Vault)" },
-  "settings.notes.cloudSyncHint": { "zh": "工作区顶部「本地 | 云端」滑块的云端侧即云端库:与你的云端 vault 双向持续同步(需登录 Forsion 账号),网页端与云端 agent 实时可见。本地侧的笔记永不上云。单文件上限:笔记 5MB,附件随会员档位(免费版 5MB)。", "en": "The Cloud side of the Local | Cloud switch at the top of the workspace is your cloud vault — continuously two-way synced (Forsion login required) and live-visible to the web app and cloud agents. Notes on the Local side never leave this device. Per-file limit: 5 MB for notes; attachments depend on your plan (5 MB on Free)." },
+  "settings.notes.cloudSyncHint": { "zh": "工作区顶部「本地 | 云端」滑块的云端侧即云端库:与你的云端 vault 双向持续同步(需登录 Forsion 账号),网页端与云端 Agent 实时可见。本地侧的笔记永不上云。单文件上限:笔记 5MB,附件随会员档位(免费版 5MB)。", "en": "The Cloud side of the Local | Cloud switch at the top of the workspace is your cloud vault — continuously two-way synced (Forsion login required) and live-visible to the web app and cloud agents. Notes on the Local side never leave this device. Per-file limit: 5 MB for notes; attachments depend on your plan (5 MB on Free)." },
   "notes.cloud.loginHint": { "zh": "登录 Forsion 账号后,这里会与你的云端 vault 自动双向同步。", "en": "Sign in to Forsion and this vault will two-way sync with your cloud vault automatically." },
   "notes.cloud.loginBtn": { "zh": "登录", "en": "Sign in" },
   "notes.cloud.local": { "zh": "本地", "en": "Local" },

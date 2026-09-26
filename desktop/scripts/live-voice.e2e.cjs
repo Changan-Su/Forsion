@@ -213,7 +213,8 @@ async function main() {
     await win.waitForTimeout(800)
 
     // ── 第五幕(评审 r3):空白新对话里开着通话,点开已有会话 → 挂断(旧版 `prev &&` 放过了 null→A) ──
-    await win.locator('text=新对话').first().click().catch(() => {})
+    // 入口按 data-act 锚点找,别按文案(09-25 起「新对话」统一改叫「新会话 / New session」)。
+    await win.locator('button[data-act="new-chat"]').first().click().catch(() => {})
     await win.waitForTimeout(1200)
     await win.locator('.t2c-live-control').first().click()
     await until(() => win.locator('.t2c-voicebar').first().isVisible().catch(() => false), 5000)
@@ -271,7 +272,7 @@ async function main() {
     })
     await win.locator('.rb-home').first().click().catch(() => {})
     await win.waitForTimeout(600)
-    await win.locator('text=新对话').first().click().catch(() => {}) // 空白新对话:它自己的 sessionId===null → handoffOnSend
+    await win.locator('button[data-act="new-chat"]').first().click().catch(() => {}) // 空白新对话:它自己的 sessionId===null → handoffOnSend
     await until(() => win.locator('.t2c-live-control').first().isVisible().catch(() => false), 10_000)
     const runsBefore8 = stub.seen.runs.length
     stub.state.runDelayMs = 12_000 // 第一句发送途中(promise 未 resolve)= 交接槽那条分支的触发条件

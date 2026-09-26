@@ -78,7 +78,7 @@ async function main() {
       if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break }
     }
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
-    const space = (title) => win.locator(`.rb-space[title="${title}"]`).first().click({ timeout: 15_000 })
+    const space = (title) => win.locator(`.rb-space[aria-label="${title}"]`).first().click({ timeout: 15_000 })
     await space('Note')
     await win.waitForSelector('.t2s-srow:has-text("Dash-one")', { timeout: 20_000 })
 

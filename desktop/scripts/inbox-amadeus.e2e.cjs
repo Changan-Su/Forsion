@@ -73,7 +73,7 @@ const APPROVAL = { id: 'apv-1', session_id: 'S', run_id: 'R', agent_slug: 'muse'
 
 async function clickInboxSpace(win) {
   const ok = await win.evaluate(() => {
-    const b = [...document.querySelectorAll('button.rb-space')].find((x) => /收件箱|inbox/i.test(x.getAttribute('title') || x.textContent || ''))
+    const b = [...document.querySelectorAll('button.rb-space')].find((x) => /收件箱|inbox/i.test(x.getAttribute('aria-label') || x.getAttribute('title') || x.textContent || ''))
     if (b) b.click()
     return !!b
   })
@@ -239,8 +239,8 @@ async function main() {
       }
     })
     check('收件箱 Space 左栏 = 统一工作区(自动 · 收件箱):5 行、未读点 4 个且贴在图标右下角,旧 Gmail 式列表 0 个', spaced && ws.trigger.includes('收件箱') && ws.rows === 5 && ws.dots === 4 && ws.dotInCorner && ws.oldRows === 0, JSON.stringify({ spaced, ...ws }))
-    check('工作区分组:全部 / 未读 / Forsion / 自动化 / 智能体 / 已归档,不显示任何 automation 规则 id',
-      ['全部', '未读', 'Forsion', '自动化', '智能体', '已归档'].every((g) => ws.groups.includes(g)) && !ws.groups.some((g) => /automation:|w-[a-z0-9]/i.test(g || '')), JSON.stringify(ws.groups))
+    check('工作区分组:全部 / 未读 / Forsion / 自动化 / Agent / 已归档,不显示任何 automation 规则 id',
+      ['全部', '未读', 'Forsion', '自动化', 'Agent', '已归档'].every((g) => ws.groups.includes(g)) && !ws.groups.some((g) => /automation:|w-[a-z0-9]/i.test(g || '')), JSON.stringify(ws.groups))
     await win.locator('.capability-menu').evaluate((el) => Promise.all(el.getAnimations({ subtree: true }).map((animation) => animation.finished)))
     await win.screenshot({ path: path.join(path.dirname(SHOT), 'workspace-filter-zh.png') })
     await win.keyboard.press('Escape')
@@ -319,12 +319,12 @@ async function main() {
     const listRows = () => win.locator('.t2sw-plug-list .t2s-srow').count()
     await clickGroup('未读'); const unreadRows = await listRows()
     await clickGroup('自动化'); const automationRows = await listRows()
-    await clickGroup('智能体'); const agentRows = await listRows()
+    await clickGroup('Agent'); const agentRows = await listRows()
     await clickGroup('已归档'); const archivedRows = await listRows()
     await openMessage(win, '已归档的旧消息')
     const archivedTitle = await win.locator('.ibx-reader-title').first().textContent().catch(() => '')
     await clickGroup('全部'); const allRows = await listRows()
-    check('分组筛选:未读剩 3(刚读的那封掉出)/ 自动化 2 / 智能体 2(不含已归档)/ 已归档 1 封且点得开 / 回到全部 5;已归档是单独拉的(filter=archived)',
+    check('分组筛选:未读剩 3(刚读的那封掉出)/ 自动化 2 / Agent 2(不含已归档)/ 已归档 1 封且点得开 / 回到全部 5;已归档是单独拉的(filter=archived)',
       unreadRows === 3 && automationRows === 2 && agentRows === 2 && archivedRows === 1 && archivedTitle === '已归档的旧消息' && allRows === 5 && seen.filters.includes('archived'),
       JSON.stringify({ unreadRows, automationRows, agentRows, archivedRows, archivedTitle, allRows, filters: seen.filters }))
 
@@ -522,7 +522,7 @@ async function main() {
       await win.reload({ waitUntil: 'domcontentloaded' })
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1000, 820))
       await win.setViewportSize({ width: 1000, height: 820 })
-      await win.locator('button.rb-space[title="Inbox"]').click()
+      await win.locator('button.rb-space[aria-label^="Inbox"]').click()
       await win.locator('.t2sw-plug-list .t2s-srow').first().waitFor()
       check('英文窄窗口共享列表无横向溢出', await win.locator('.t2sw-plug').evaluate((el) => innerWidth <= 1000 && el.scrollWidth <= el.clientWidth + 1))
       check('共享工具栏跟随英文', await win.getByRole('textbox', { name: 'Search Inbox', exact: true }).count() === 1)

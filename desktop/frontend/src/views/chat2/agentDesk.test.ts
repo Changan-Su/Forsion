@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { deskCardGone, deskCardPlan } from './AgentDesk'
+import { deskCardGone, deskCardIdle, deskCardPlan } from './AgentDesk'
 import { DESK_DRAFT_KEY, packDeskMap } from '../../stores/deskPlan'
 
 describe('deskCardGone', () => {
@@ -50,6 +50,24 @@ describe('deskCardPlan', () => {
   it('always + 草稿:没有侧板可展开,卡片永不退场', () => {
     expect(plan(undefined, 0, 'always', true)).toEqual({ gone: false, showCompanion: true, expandable: false, clearable: false })
     expect(plan('open', 0, 'always', true).gone).toBe(false)
+  })
+})
+
+describe('deskCardIdle(U-18 零条目小坞)', () => {
+  it('草稿 / 空会话零条目 → 小坞', () => {
+    expect(deskCardIdle(deskCardPlan({ mode: undefined, itemCount: 0, companion: null, draft: true }), 0)).toBe(true)
+    expect(deskCardIdle(deskCardPlan({ mode: undefined, itemCount: 0, companion: null, draft: false }), 0)).toBe(true)
+  })
+  it('有条目 → 回到半高卡', () => {
+    expect(deskCardIdle(deskCardPlan({ mode: undefined, itemCount: 1, companion: null, draft: false }), 1)).toBe(false)
+  })
+  it('卡片已退场(侧板在演)不算小坞 —— 否则 :not(.gone) 之外又多一个让位分支', () => {
+    const plan = deskCardPlan({ mode: 'open', itemCount: 0, companion: 'always', draft: false })
+    expect(plan.gone).toBe(true)
+    expect(deskCardIdle(plan, 0)).toBe(false)
+  })
+  it('伴随面在场、零条目仍是小坞(伴随面同 surface 缩进坞里,不重挂)', () => {
+    expect(deskCardIdle(deskCardPlan({ mode: undefined, itemCount: 0, companion: 'idle', draft: false }), 0)).toBe(true)
   })
 })
 

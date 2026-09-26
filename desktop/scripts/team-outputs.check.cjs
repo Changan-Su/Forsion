@@ -67,7 +67,8 @@ async function main() {
     await chat.locator('.sketch-card').waitFor()
     assert.equal(await chat.locator('.sketch-card').count(), 1)
     await chat.frameLocator('.sketch-frame').getByRole('button', { name: 'Inspect workflow' }).waitFor()
-    await win.getByTitle('切换明暗模式').click()
+    // 按 ribbon 槽 id 点明暗钮:U-21 起收起态不挂原生 title(改自绘浮签 data-rb-tip),getByTitle 永远找不到。
+    await win.locator('.rb-slot[data-id="rb-mode"] .rb-btn').click()
     await win.waitForTimeout(400)
     await win.screenshot({ path: path.join(home, 'outputs-dark.png') })
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(820, 900))

@@ -7,7 +7,7 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Folder, PanelsTopLeft, Users, Sparkles,
+  ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, FileText, Users, Sparkles,
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { useLiveVoice, useLiveVoiceEnabled } from '../../hooks/useLiveVoice'
@@ -23,6 +23,7 @@ import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord,
 import { useEdgeNudge, useWorkspace } from '@lcl/engine'
 import { ModelPill, type ModelPillGroup } from '../../components/ModelPill'
 import { registerMessages, useI18n } from '../../i18n'
+import { displaySessionTitle } from '../../sessionTitle'
 import { groupModelsByProvider } from '../../components/ModelGroupList'
 import { GroupChatSetup } from '../../components/GroupChatSetup'
 import { track } from '../../achievements/store'
@@ -32,11 +33,14 @@ import { noteRefInsert } from '../../components/wikiChat'
 import { refToText, type ChatRef } from './chatDragRef'
 import { useApp } from '../../stores/appStore'
 import { ApprovalRulesModal } from '../../components/ApprovalRulesModal'
+import { thinkingLabel } from '../../components/thinkingLabel'
 import { commandsFor } from '../../commandCatalog'
 import { getCustomCommands, expandCustomCommand, listMessages, type CustomCommandInfo } from '../../services/backendService'
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
 import { NormalModeItem } from './NormalModeItem'
 import { mainReferenceKey } from './mainReference'
+import { disarmTip, tipProps } from '../../hoverTip'
+import { RefChipView } from './RefChipView'
 import './composer2.css'
 
 registerMessages({
@@ -66,9 +70,9 @@ const WAIT_TIP_KEYS = [
 // 触屏端(Android 壳复用本组件)只留与键盘 / 悬停 / 拖拽 / 侧栏无关的
 const TOUCH_TIP_KEYS = [STEER_TIP, 'input.tip.wikiRef']
 registerMessages({
-  'input.tip': { zh: '小贴士:{tip}', en: 'Tip: {tip}' },
+  'input.tip': { zh: '小贴士：{tip}', en: 'Tip: {tip}' },
   'input.runningPlaceholder': { zh: '运行中，可继续输入…', en: 'Working… You can keep typing' },
-  'input.tip.steer': { zh: '运行中也能继续发消息,会在下一步交给 Agent', en: 'You can send while it runs: the agent reads it at the next step' },
+  'input.tip.steer': { zh: '运行中也能继续发消息，会在下一步交给 Agent', en: 'You can send while it runs: the agent reads it at the next step' },
   'input.tip.switchChat': { zh: '可以先切去别的会话,运行不会中断,侧栏圆点标出运行中', en: 'Switch chats meanwhile; this run keeps going, marked by a sidebar dot' },
   'input.tip.quote': { zh: '划选回复里的文字,点「引用」即可带进下一条消息', en: 'Select text in a reply and click Quote to cite it in your next message' },
   'input.tip.dropFiles': { zh: '文件可拖到聊天区任意位置,截图可直接粘贴进输入框', en: 'Drop files anywhere in the chat, or paste a screenshot into the box' },
@@ -718,7 +722,7 @@ export const Composer2: React.FC<{
       '/plugins': () => { app().openSettings('plugins'); close() },
       '/memory': () => { app().openSettings('sync'); close() },
       '/config': () => { app().openSettings('general'); close() },
-      '/login': () => { app().openSettings('connection'); close() },
+      '/login': () => { app().openSettings('forsion'); close() },
       // Historian / Muse 的桌面入口在「特殊 Agent」名册页(没有各自独立的视图)。
       '/historian': () => { app().setActiveSpecial('agents'); close() },
       '/muse': () => { app().setActiveSpecial('agents'); close() },
@@ -785,7 +789,7 @@ export const Composer2: React.FC<{
         const unsupported = !!supported && !supported.includes(lv)
         items.push({
           cmd: `/think ${lv}`,
-          desc: `${t('input.slash.thinkDesc', { level: lv })}${unsupported ? ` ${t('pill.thinkUnsupported')}` : ''}${thinkingLevel === lv ? t('input.slash.current') : ''}`,
+          desc: `${t('input.slash.thinkDesc', { level: thinkingLabel(lv, t) })}${unsupported ? ` ${t('pill.thinkUnsupported')}` : ''}${thinkingLevel === lv ? t('input.slash.current') : ''}`,
           run: () => { onThinkingChange(lv); close() },
         })
       }
@@ -964,7 +968,7 @@ export const Composer2: React.FC<{
       ...chatSessions
         .filter((s) => s.id !== activeSessionId)
         .slice(0, 300)
-        .map((s) => ({ p: s.title || 'New Chat', session: { id: s.id, title: s.title || 'New Chat', summary: s.summary } })),
+        .map((s) => ({ p: displaySessionTitle(s.title, t), session: { id: s.id, title: displaySessionTitle(s.title, t), summary: s.summary } })),
     ]
     const pool = q ? cands.filter((c) => c.p.toLowerCase().includes(q)) : cands
     // 文件名前缀命中 > 文件名包含 > 仅路径包含;同档路径短者先。
@@ -973,7 +977,7 @@ export const Composer2: React.FC<{
       return (base.startsWith(q) ? 0 : base.includes(q) ? 1 : 2) * 10000 + c.p.length
     }
     return [...pool].sort((a, b) => score(a) - score(b)).slice(0, 10)
-  }, [fileRefCtx, refFiles, vaultPages, chatSessions, activeSessionId, isHost])
+  }, [fileRefCtx, refFiles, vaultPages, chatSessions, activeSessionId, isHost, t])
   const refActive = !!fileRefCtx && refMatches.length > 0
   useEffect(() => { setRefIndex(0) }, [fileRefCtx?.start, fileRefCtx?.query])
 
@@ -1100,7 +1104,7 @@ export const Composer2: React.FC<{
       const lv = (thinkMatch[1] || '').toLowerCase() as NonNullable<AgentConfig['thinkingLevel']>
       if (THINKING_LEVELS.includes(lv)) {
         onThinkingChange(lv)
-        setHint(t('input.slash.thinkSet', { level: lv }))
+        setHint(t('input.slash.thinkSet', { level: thinkingLabel(lv, t) }))
       } else {
         setHint(t('input.slash.thinkUsage', { levels: THINKING_LEVELS.join('|') }))
       }
@@ -1277,6 +1281,9 @@ export const Composer2: React.FC<{
     : planMode && !isChat ? ClipboardList
     : isHost ? curApproval.Icon
     : MessageSquare
+  // 「完全放行」药丸自身也要带风险色(U-07):与 modeLabel 同源判定 —— 只有药丸**正在显示**审批档
+  // 且那一档是 full-auto 时才染;群聊 / 计划 / Chat / 非 host 显示的是别的东西,不染。
+  const dangerPill = !groupActive && !(planMode && !isChat) && !isChat && isHost && curApproval.id === 'full-auto'
   // Chat 是轻量对话，不露出 Work 才需要的计划/群聊/审批模式入口。
   const showModeChip = !isChat && (!!onPlanModeChange || isHost || !!onGroupChange || !!onAgentSwitch)
   const currentEngine = (engines || []).find((e) => e.id === engineId)
@@ -1338,24 +1345,16 @@ export const Composer2: React.FC<{
             <div className="t2c-chiprow t2c-refrow" role="group" aria-label={t('input.ref.selected')}>
               <span className="t2c-reflabel">{t('input.ref.selected')}</span>
               {allRefChips.map((c) => (
-                <span className="attach-chip" key={c.token} title={c.token}>
-                  {c.kind === 'session'
-                    ? <MessageSquare size={13} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />
-                    : c.kind === 'folder'
-                    ? <Folder size={13} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />
-                    : c.kind === 'view'
-                    ? <PanelsTopLeft size={13} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />
-                    : <FileText size={13} style={{ color: 'var(--accent-ink)', flexShrink: 0 }} />}
-                  <span>{c.name}</span>
-                  <button
-                    title={t('input.remove')}
-                    onClick={() => {
-                      // 自动那条不在 refChips 里,× 它 = 记下「这一篇先别挂」(换篇即复活)。
-                      if (autoChip && c.token === autoChip.token) setAutoRefOff(c.token)
-                      else setRefChips((prev) => prev.filter((x) => x.token !== c.token))
-                    }}
-                  ><X size={12} /></button>
-                </span>
+                <RefChipView
+                  key={c.token}
+                  chip={c}
+                  removeTitle={t('input.remove')}
+                  onRemove={() => {
+                    // 自动那条不在 refChips 里,× 它 = 记下「这一篇先别挂」(换篇即复活)。
+                    if (autoChip && c.token === autoChip.token) setAutoRefOff(c.token)
+                    else setRefChips((prev) => prev.filter((x) => x.token !== c.token))
+                  }}
+                />
               ))}
             </div>
           )}
@@ -1574,7 +1573,8 @@ export const Composer2: React.FC<{
               <span className={`mode-pill-wrap t2c-capsule-peer${openMenu === 'mode' ? ' is-open' : ''}`} data-cmenu>
                 <button
                   className={`t2c-pill mode-pill-btn${openMenu === 'mode' ? ' is-open' : ''}${planMode && !isChat ? ' active' : ''}`}
-                  title={t('input.modeChipTitle')}
+                  data-danger={dangerPill || undefined}
+                  title={dangerPill ? t('input.approval.fullAutoDesc') : t('input.modeChipTitle')}
                   aria-expanded={openMenu === 'mode'}
                   onClick={() => setOpenMenu((m) => (m === 'mode' ? null : 'mode'))}
                 >
@@ -1663,7 +1663,10 @@ export const Composer2: React.FC<{
                     className="t2c-ctxring-btn"
                     aria-expanded={openMenu === 'ctx'}
                     aria-label={`${t('input.ctxLabel')} ${pct}%`}
-                    onClick={() => setOpenMenu((m) => (m === 'ctx' ? null : 'ctx'))}
+                    // 空心环保持原样(09-25 用户拍板),只补悬停说明免得被当成加载转圈(U-24);
+                    // 详情浮层仍是点击触发(ctxring.check 钉着),浮层开着时不再叠一层提示。
+                    {...tipProps(() => (openMenu === 'ctx' ? null : [`${t('input.ctxLabel')} ${pct}%`]))}
+                    onClick={() => { disarmTip(); setOpenMenu((m) => (m === 'ctx' ? null : 'ctx')) }}
                   >
                     <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
                       <circle className="t2c-ctxring-track" cx="12" cy="12" r={R} />

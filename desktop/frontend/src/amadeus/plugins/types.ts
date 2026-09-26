@@ -62,6 +62,13 @@ export interface CommandContribution {
   run(args?: Record<string, unknown>): void | Promise<void>
   keywords?: string
   /**
+   * Toggle state, for on/off commands only. When declared, a copy of this command pinned to the
+   * Ribbon command zone renders as a toggle (`aria-pressed` + highlighted while on). Evaluated at
+   * render time — keep it cheap and side-effect free; the Ribbon re-reads it after a click and on
+   * hover. Leave it out for anything that is not a switch (screen readers would announce "not pressed").
+   */
+  checked?: () => boolean
+  /**
    * Agent opt-in. Declaring it puts this command in the model's `list_ui_commands` catalog and
    * lets `run_ui_command` dispatch it; without it the command stays human-only.
    *
@@ -507,6 +514,10 @@ export interface ListAction {
   /** Keep this action in the compact toolbar; remaining actions live in its menu.
    *  When omitted by every action, the host keeps the first action visible. Older hosts ignore it. */
   primary?: boolean
+  /** Irreversible action (delete, remove…): the host paints it in the danger color in every menu it
+   *  lands in (2026-09-25+). Presentation only — confirming stays the plugin's job inside `run()`.
+   *  Older hosts ignore it. */
+  danger?: boolean
   run(): void
 }
 

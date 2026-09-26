@@ -44,7 +44,8 @@ import { usePageStore } from '../amadeus/store/pageStore'
 import { ProjectSelector } from '../components/ProjectSelector'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
 import { Composer2 } from './chat2/Composer2'
-import { useI18n } from '../i18n'
+import { useI18n, type Locale } from '../i18n'
+import { formatLongDate, formatTime } from '../format/time'
 import { useShallow } from 'zustand/react/shallow'
 import {
   clearCustomWallpaper, fetchBingWallpapers, loadHomepageWallpaperPrefs, readCustomWallpaper,
@@ -407,13 +408,13 @@ function SortableFolderMember({
 }
 
 /** 时钟。`setV` 回同一个对象引用时 React 直接跳过重渲 —— 于是 1s 轮询也只在**分钟真的变了**时才画一次。 */
-function useClock(locale: string): { time: string; date: string; hour: number } {
+function useClock(locale: Locale): { time: string; date: string; hour: number } {
   const calc = (): { time: string; date: string; hour: number } => {
     const d = new Date()
     return {
-      time: d.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit', hour12: false }),
-      // 分两趟拼:zh-CN 的 { month, day, weekday } 会连成「8月27日星期四」,中间要留一口气。
-      date: `${d.toLocaleDateString(locale, { month: 'long', day: 'numeric' })} ${d.toLocaleDateString(locale, { weekday: 'long' })}`,
+      time: formatTime(d),
+      // 月日与星期之间留一口气(「8月27日 星期四」),见 format/time 的 formatLongDate。
+      date: formatLongDate(d, { locale }),
       hour: d.getHours(),
     }
   }
@@ -485,7 +486,7 @@ interface MenuState { x: number; y: number; kind: 'folder' | 'member'; id?: stri
 export function HomepageView(_props: ViewProps) {
   const { t, locale } = useI18n()
   const zh = locale === 'zh'
-  const clock = useClock(zh ? 'zh-CN' : 'en-US')
+  const clock = useClock(locale)
   const name = useAccountName()
   const spaces = useSpaceStore((s) => s.spaces)
   const ribbonItems = useRibbonStore((s) => s.items)

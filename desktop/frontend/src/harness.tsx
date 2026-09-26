@@ -38,7 +38,7 @@ import './views/chat2/composer2.css'
 import { Ribbon } from '@lcl/engine/Ribbon'
 import { WorkspaceHost } from '@lcl/engine/WorkspaceHost'
 import { presentDockedExtension } from '@lcl/engine/dockviewStore'
-import { addRibbonIcon, installHotkeys, recordNav, registerView, useNav, useRibbonStore, useWorkspace } from '@lcl/engine'
+import { addCommand, addRibbonIcon, installHotkeys, recordNav, registerView, useNav, useRibbonStore, useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine/types'
 import '@lcl/engine/engine.css'
 import { usePageStore, pageStoreFor } from './amadeus/store/pageStore'
@@ -678,6 +678,10 @@ if (new URLSearchParams(location.search).has('dock')) {
   for (const n of ['A', 'B', 'C', 'D']) mk(`t${n}`, 'top', `Top ${n}`)
   for (const n of ['A', 'B', 'C']) mk(`b${n}`, 'bottom', `Bot ${n}`)
   useRibbonStore.setState({ order: ['tA', 'tB', 'tC', 'tD'], bottomOrder: ['bA', 'bB', 'bC'] })
+  // 开关类命令(Command.checked):钉进命令区后按钮要带 aria-pressed / .is-on(ribbon-dnd.e2e 的 O 组)。
+  const toggle = { on: false }
+  ;(window as unknown as { __rbToggle: typeof toggle }).__rbToggle = toggle
+  addCommand({ id: 'h-toggle', title: 'Harness toggle', checked: () => toggle.on, run: () => { toggle.on = !toggle.on } })
   // &unit:Unit 切换器(head 常驻件)上架。stub 最小 host 面(getConfig/setConfig/名册/配对/
   // openExternal 记账)+ amadeusSync 布尔门 —— 这支仪器验切换器的 DOM/开合/两态几何与「设备行 =
   // 打开对方页面」的 URL 组装,不验真隧道/真配对(那半在 server relay.test.ts 与 electron/unitWeb.test.ts)。

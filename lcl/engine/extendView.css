@@ -6,7 +6,7 @@
 .wb-extend-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-body, 13px); font-weight: 600; color: var(--text); }
 .wb-extend-close { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); cursor: pointer; }
 .wb-extend-close:hover { background: var(--bg-hover); color: var(--text); }
-.wb-extend-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.wb-extend-close:focus-visible { outline: var(--focus-ring, 1px) solid var(--accent-ink, var(--accent)); outline-offset: 1px; }
 .wb-extend-body { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; overflow: auto; overscroll-behavior: contain; }
 .wb-extend-mount { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 

@@ -15,6 +15,11 @@ import { useApp } from '../stores/appStore'
 import { openNewChat } from '../sessionNav'
 import type { AgentScheduleEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, PendingApprovalInfo, SessionRecord, TanguDesktopConfig } from '../types'
 import { registerMessages, useI18n } from '../i18n'
+import { formatDateTime } from '../format/time'
+import { fmtCalDateYL } from '@amadeus/lib/calDateFmt'
+import { parseCalDate } from '@amadeus-shared/db/calDate'
+import { useAutomation } from '../stores/automationStore'
+import '../views/automation/messages' // automation.deleteConfirm(与自动化 Space 删除同一句确认)
 
 registerMessages({
   'special.muse.sleeping': { zh: '休眠至 {time}', en: 'Sleeping until {time}' },
@@ -119,11 +124,29 @@ export const MuseView: React.FC<{
   const setTodoStatus = async (id: string, status: MuseTodo['status']): Promise<void> => {
     try { await patchMuseTodo(cfg, id, status); setTodos((p) => p.filter((x) => x.id !== id)); setSel((p) => { const n = new Set(p); n.delete(id); return n }) } catch (e) { fail(e) }
   }
-  const removeTrigger = async (id: string): Promise<void> => {
-    try { await deleteMuseTrigger(cfg, id); setTriggers((p) => p.filter((x) => x.id !== id)) } catch (e) { fail(e) }
+  // 规则 / 跟踪日程是引擎硬删(与 U-03 自动化删除同一类数据):先确认;成功后同步收拾自动化 Space 指向它的选中
+  // 并让其列表重拉,免得那边落到孤儿详情页。
+  const removeTrigger = async (id: string, name: string): Promise<void> => {
+    if (!window.confirm(t('automation.deleteConfirm', { name }))) return
+    try {
+      await deleteMuseTrigger(cfg, id)
+      setTriggers((p) => p.filter((x) => x.id !== id))
+      setMsg('')
+      const auto = useAutomation.getState()
+      if (auto.sel?.kind === 'trigger' && auto.sel.triggerId === id) auto.setSel(null)
+      auto.bump()
+    } catch (e) { fail(e) }
   }
-  const removeTrack = async (id: string): Promise<void> => {
-    try { await deleteAgentScheduleEntry(cfg, 'muse', id); setTracks((p) => p.filter((x) => x.id !== id)) } catch (e) { fail(e) }
+  const removeTrack = async (id: string, name: string): Promise<void> => {
+    if (!window.confirm(t('automation.deleteConfirm', { name }))) return
+    try {
+      await deleteAgentScheduleEntry(cfg, 'muse', id)
+      setTracks((p) => p.filter((x) => x.id !== id))
+      setMsg('')
+      const auto = useAutomation.getState()
+      if (auto.sel?.kind === 'schedule' && auto.sel.slug === 'muse' && auto.sel.rowId === id) auto.setSel(null)
+      auto.bump()
+    } catch (e) { fail(e) }
   }
   const decide = async (a: PendingApprovalInfo, decision: 'approve' | 'reject'): Promise<void> => {
     setBusy(a.id)
@@ -224,11 +247,11 @@ export const MuseView: React.FC<{
             <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
               <b>{e.name}</b>
               <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
-                {e.date.replace('T', ' ')}{e.repeat ? ` · every ${e.repeat}` : ''}{e.lastRun ? ` · ${t('special.muse.trigFired', { t: new Date(e.lastRun).toLocaleString() })}` : ''}
+                {fmtCalDateYL(parseCalDate(e.date)) || e.date}{e.repeat ? ` · ${t('automation.schedule.every', { ivl: e.repeat })}` : ''}{e.lastRun ? ` · ${t('special.muse.trigFired', { t: formatDateTime(e.lastRun) })}` : ''}
                 {e.description && <div>{e.description}</div>}
               </div>
             </span>
-            <button className="icon-btn" title={t('special.muse.trackDelete')} onClick={() => void removeTrack(e.id)}><Trash2 size={13} /></button>
+            <button className="icon-btn" title={t('special.muse.trackDelete')} onClick={() => void removeTrack(e.id, e.name)}><Trash2 size={13} /></button>
           </div>
         ))}
       </div>
@@ -251,10 +274,10 @@ export const MuseView: React.FC<{
             <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
               <b>{tg.desc}</b>
               <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
-                {condText(tg)}{tg.lastFiredAt ? ` · ${t('special.muse.trigFired', { t: new Date(tg.lastFiredAt).toLocaleString() })}` : ''}
+                {condText(tg)}{tg.lastFiredAt ? ` · ${t('special.muse.trigFired', { t: formatDateTime(tg.lastFiredAt) })}` : ''}
               </div>
             </span>
-            <button className="icon-btn" title={t('special.muse.watchDelete')} onClick={() => void removeTrigger(tg.id)}><Trash2 size={13} /></button>
+            <button className="icon-btn" title={t('special.muse.watchDelete')} onClick={() => void removeTrigger(tg.id, tg.desc)}><Trash2 size={13} /></button>
           </div>
         ))}
       </div>

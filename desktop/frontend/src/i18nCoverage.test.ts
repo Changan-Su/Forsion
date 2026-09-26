@@ -15,9 +15,13 @@ import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import './i18n.generated' // 必须先注册,否则只看到 i18n.tsx 里的基础键
 import { __dictSnapshot } from './i18n'
+// LCL 引擎自带的文案表(宿主装配期 registerMessages 进来;见 lcl/engine/i18nSeam.ts)。纯字面量,直接 import。
+import { LCL_MESSAGES } from '../../../lcl/engine/engineMessages'
 
 const HAN = /[一-龥]/
 const SRC = __dirname
+/** 引擎源码:以前只扫 desktop,lcl 里的 t('…') / engineTr('…') 缺键没人管(U-45)。 */
+const LCL_ENGINE = join(__dirname, '../../../lcl/engine')
 
 /**
  * 15 个组件在**模块作用域**自带 `registerMessages({...})` 片段,只有 import 了那个组件才会进字典。
@@ -64,9 +68,12 @@ function collectFragments(files: string[]): { zh: Record<string, string>; en: Re
 
 const base = __dictSnapshot()
 const ALL_SRC = walk(SRC)
+const ENGINE_SRC = walk(LCL_ENGINE)
 const frag = collectFragments(ALL_SRC.filter((f) => readFileSync(f, 'utf8').includes('registerMessages(')))
-const zh = { ...base.zh, ...frag.zh }
-const en = { ...base.en, ...frag.en }
+const lclZh = Object.fromEntries(Object.entries(LCL_MESSAGES).map(([k, v]) => [k, v.zh]))
+const lclEn = Object.fromEntries(Object.entries(LCL_MESSAGES).map(([k, v]) => [k, v.en]))
+const zh = { ...base.zh, ...frag.zh, ...lclZh }
+const en = { ...base.en, ...frag.en, ...lclEn }
 
 /** 值里带汉字却**故意**如此的键:产品名/品牌/中文专有名词在英文界面下也该保持原样。 */
 const EN_MAY_CONTAIN_HAN = new Set<string>([
@@ -90,6 +97,16 @@ describe('i18n 覆盖', () => {
     // 防假绿:collectFragments 若因格式变化一个都没解析出来,A/B/C 会全绿但什么都没查。
     expect(frag.scanned, '一个 registerMessages 片段都没解析出来 —— 仪器已失效,先修解析').toBeGreaterThanOrEqual(15)
     expect(Object.keys(frag.zh).length).toBeGreaterThan(100)
+  })
+
+  it('0b. 仪器自检:引擎源码与引擎文案表确实被收进来了', () => {
+    expect(ENGINE_SRC.length, 'lcl/engine 一个源文件都没扫到 —— 路径变了先来改 LCL_ENGINE').toBeGreaterThan(20)
+    expect(Object.keys(LCL_MESSAGES).length).toBeGreaterThan(20)
+  })
+
+  it('D2. 引擎文案表的键不与宿主字典撞车(撞了 registerMessages 会静默改掉宿主那条)', () => {
+    const clash = Object.keys(LCL_MESSAGES).filter((k) => k in base.zh || k in frag.zh).sort()
+    expect(clash, `引擎键与宿主键同名:\n    ${clash.join('\n    ')}`).toEqual([])
   })
 
   it('D. 没有两个文件用同一个键注册不同文案(并行加词条时的静默互踩)', () => {
@@ -116,9 +133,9 @@ describe('i18n 覆盖', () => {
 
   it('C. 源码里用到的字面量键都在字典里(缺键会把 key 本身渲染出来)', () => {
     // t('a.b') / translate('a.b') / tr('a.b');只收字面量,模板串与变量键跳过(静态判不了)。
-    const USE = /\b(?:t|tr|translate)\(\s*(['"])([\w.-]+)\1/g
+    const USE = /\b(?:t|tr|translate|engineTr)\(\s*(['"])([\w.-]+)\1/g
     const unknown = new Map<string, string[]>()
-    for (const file of ALL_SRC) {
+    for (const file of [...ALL_SRC, ...ENGINE_SRC]) {
       const text = readFileSync(file, 'utf8')
       for (const m of text.matchAll(USE)) {
         const key = m[2]
@@ -132,5 +149,172 @@ describe('i18n 覆盖', () => {
     }
     const report = [...unknown.entries()].map(([k, files]) => `${k}  <- ${[...new Set(files)].join(', ')}`).sort()
     expect(report, `字典里没有这些键,界面会直接渲染键名:\n  ${report.join('\n  ')}`).toEqual([])
+  })
+
+  it('G. 术语表:zh 不许出现已收口的旧叫法(U-27,见 genesis-ui skill「术语表」)', () => {
+    // Agent 这个概念一律写「Agent」;Space 这个容器一律写「Space」;Agents 这个 Space 就叫「Agents」;
+    // 「工作区」只指工作目录 / 项目文件夹;「工作空间」不再使用(指整个 app 时直接写 Forsion 或改写)。
+    const BANNED: Array<{ re: RegExp; fix: string; allow?: Record<string, string> }> = [
+      { re: /智能体/, fix: '写「Agent」' },
+      // zh 里 Agent 是专名,一律大写;`manage_agent`、`{agent}`、`agent=xx`、`.agents/` 这类代码 / 占位符不算。
+      { re: /(^|[^A-Za-z_{=./-])agents?(?=[^A-Za-z_}=/-]|$)/, fix: '写「Agent」(专名大写)' },
+      { re: /工作空间/, fix: '指 Space 写「Space」,指整个 app 写「Forsion」或改写,指目录写「工作区」' },
+      { re: /Agent Space|Agents space|智能体空间/, fix: 'Agents 这个 Space 就叫「Agents」' },
+      {
+        re: /空间/, fix: '指 Space 这个容器时写「Space」',
+        allow: {
+          'autocompact.hint': '「腾出空间」= 上下文余量,不指 Space',
+          'imageStudio.ai.hint.expand': '「留出空间」= 画布四周的空白,不指 Space',
+        },
+      },
+    ]
+    const bad: string[] = []
+    for (const [k, v] of Object.entries(zh)) {
+      for (const b of BANNED) if (b.re.test(v) && !b.allow?.[k]) bad.push(`${k} = ${v}  → ${b.fix}`)
+    }
+    for (const [k, v] of Object.entries(en)) if (/Agent Space|Agents space/.test(v)) bad.push(`${k}(en) = ${v}  → Agents 这个 Space 写 "Agents" / "the Agents Space"`)
+    expect(bad.sort(), `术语没收口:\n  ${bad.join('\n  ')}`).toEqual([])
+  })
+
+  it('F. zh 词条不是纯拉丁文(U-30:中文界面残留英文),品牌 / 专名 / 格式串逐条登记理由', () => {
+    // 术语表里「zh 不译」的专名:由这些词拼成的 zh 值算合规(如「Agent」「Space ×{n}」「Muse Space」)。
+    // ⚠️ 复数 Agents / Spaces 不在这里:它们只在作 Space 名时合规,见下面逐键登记。
+    const TERMS = new Set([
+      'Agent', 'Space', 'MCP', 'Hooks', 'Git', 'AI', 'Python', 'Vault', 'Sandbox', 'Provider', 'ID', 'URL', 'HTTP', 'SSE', 'DEV', 'P2P',
+      'Forsion', 'Tangu', 'Muse', 'Amadeus', 'Note', 'Chat', 'Work', 'Desk', 'QQ', 'Telegram', 'OpenAI', 'Codex', 'OpenCode', 'Claude', 'Code',
+      'CosyVoice', 'JetBrains', 'Mono', 'Hack2Gate', 'English', 'Computer', 'Use', 'Bot', 'Token', 'tokens',
+    ])
+    // 逐键登记:不是由术语拼成、但刻意保留拉丁文的值。
+    const ALLOW: Record<string, string> = {
+      'achievements.a.first-login.title': '成就标题,化用论文名的英文梗',
+      'achievements.a.first-message.title': '成就标题,英文梗',
+      'agentProfile.space': 'Space 名「Agents」(与 Spaces 同为专名)',
+      'onboarding.guide.moreAgentsPath': '指向 Space 名「Agents」',
+      'home.spaces': '「Spaces」是主页 Space 架的专名(U-27 拍板 #1 的先例)',
+      'approvalRules.allowPh': '工具名示例(代码),不可译',
+      'approvalRules.askPh': '工具名示例(代码),不可译',
+      'approvalRules.denyPh': '工具名示例(代码),不可译',
+      'team.editor.docPlaceholder': 'TEAM.md 骨架,给模型读的 Markdown 标题',
+      'settings.developer.cloudUrlPlaceholder': 'URL 示例',
+    }
+    const bad: string[] = []
+    for (const [k, v] of Object.entries(zh)) {
+      if (HAN.test(v) || !/[A-Za-z]/.test(v) || ALLOW[k]) continue
+      const words = v.replace(/\{\w+\}/g, ' ').match(/[A-Za-z][A-Za-z0-9]*/g) ?? []
+      if (words.every((w) => TERMS.has(w))) continue
+      bad.push(`${k} = ${v}`)
+    }
+    expect(bad.sort(), `zh 值是纯英文:翻成中文,或确属品牌 / 专名就进 TERMS / ALLOW 并写明理由:\n  ${bad.join('\n  ')}`).toEqual([])
+  })
+
+  it('E. zh 标点(报告模式,U-32):半角 , ; : ( ) ? ! 紧挨汉字的计数与样例,不让测试变红', () => {
+    // 规则见 genesis-ui skill「中文标点」:句内全角;{var}、反引号代码、URL、路径、快捷键、HH:mm 除外。
+    // 全仓 codemod 另立项(要排除落盘 / 按值识别的键,先 grep 按中文文案选元素的台架)。清零后把这里改成硬断言。
+    const strip = (v: string): string => v
+      .replace(/\{\w+\}/g, '□')
+      .replace(/`[^`]*`/g, '□')
+      .replace(/https?:\/\/\S+/g, '□')
+      .replace(/(?:~|\.{1,2})?\/[\w./*~-]+/g, '□')
+      .replace(/(?:⌘|Ctrl|Cmd|Shift|Alt|Option|Meta)[+\w⇧⌥⌘,.]*/g, '□')
+      .replace(/\d{1,2}:\d{2}/g, '□')
+    const PUNCT = /[一-龥][,;:()?!]|[,;:()?!][一-龥]/g
+    let hits = 0
+    const keys: string[] = []
+    for (const [k, v] of Object.entries(zh)) {
+      const n = (strip(v).match(PUNCT) ?? []).length
+      if (n) { hits += n; keys.push(`${k} = ${v.slice(0, 60)}`) }
+    }
+    console.info(`[i18n E] zh 半角标点紧挨汉字:${hits} 处 / ${keys.length} 个键(总 ${Object.keys(zh).length})。样例:\n  ${keys.slice(0, 8).join('\n  ')}`)
+    // 防假绿:扫描确实跑过(字典非空);已手修的高曝光几条不许回退。
+    expect(Object.keys(zh).length).toBeGreaterThan(1000)
+    for (const k of ['input.placeholder', 'chat.emptyTitle', 'chat.emptyHint', 'settings.workspace.hint', 'onboarding.workspace.hint', 'input.tip.steer', 'sidebar.mode.tip']) {
+      expect(strip(zh[k]).match(PUNCT), `${k} 已手修成全角,别改回半角:${zh[k]}`).toBeNull()
+    }
+  })
+
+  it('H. 日期 / 时间显示只走 format/time.ts 单源(U-29:不许再跟系统区域走)', () => {
+    // 硬断言覆盖两类可静态判定的写法:toLocaleDateString / toLocaleTimeString,以及 new Intl.DateTimeFormat /
+    // new Intl.RelativeTimeFormat。裸 `.toLocaleString()` 数字也在用(千分位),静态分不清,所以只拦
+    // `new Date(…).toLocaleString(` 这一种明确是日期的形状;其余(变量接收者)由下面 H2 逐项登记兜住。
+    // `Intl.DateTimeFormat().resolvedOptions()` 取本机时区不是格式化,不在拦截范围(不带 new)。
+    const BAD = /\btoLocale(?:Date|Time)String\(|new Intl\.(?:DateTimeFormat|RelativeTimeFormat)\(|new Date\([^()]*\)\.toLocaleString\(/
+    const TIME_SRC = join(SRC, 'format', 'time.ts')
+    const hits: string[] = []
+    for (const file of [...ALL_SRC, ...ENGINE_SRC]) {
+      if (file === TIME_SRC) continue
+      readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+        if (BAD.test(line) && !/^\s*(\/\/|\*)/.test(line)) hits.push(`${relative(SRC, file)}:${i + 1}  ${line.trim().slice(0, 120)}`)
+      })
+    }
+    expect(hits, `这些地方绕过了 format/time.ts(不传 locale = 跟系统区域走,中文界面会冒出 17/09/2026):\n  ${hits.join('\n  ')}`).toEqual([])
+  })
+
+  it('H2. 任何 `x.toLocaleString(` 都要逐项登记(Codex 第三轮 R2-e2-2)', () => {
+    // H 只拦得住 `new Date(…).toLocaleString(`;先赋给变量再 `at.toLocaleString()` 就漏过去,照样随系统区域显示日期。
+    // 静态分不清接收者是日期还是数字,所以反过来:**全部**调用都按「文件 + 接收者表达式」登记,只放行确认是数字
+    // (千分位)的那几处,并写明理由。新增的一律变红 —— 是日期就改走 format/time.ts,是数字就来这里登记。
+    // 每项还记**次数**:只按「文件 + 接收者」放行时,同文件再来一个同名接收者(如 DatabaseEmbed 里另一个 `v` 是日期)
+    // 会被已有登记顺手放过;次数对不上即红,新增的那处得自己来登记。
+    const NUMBER_OK: Record<string, [count: number, reason: string]> = {
+      'stores/appStore.ts  Math.round(runCost)': [1, '单次运行费用(数字千分位)'],
+      'stores/appStore.ts  costLimit': [1, '费用上限(数字)'],
+      'stores/appStore.ts  (Number(pl.savedChars) || 0)': [1, '压缩省下的字数(数字)'],
+      'components/FeedbackModal.tsx  text.trim().length': [1, '反馈字数(数字)'],
+      'components/FeedbackModal.tsx  FEEDBACK_TEXT_LIMIT': [1, '字数上限常量(数字)'],
+      'components/ModelPickerSettings.tsx  model.maxContextWindow!': [1, '上下文窗口上限(token 数)'],
+      'components/ModelPickerSettings.tsx  (model.contextWindow ?? 0)': [1, '上下文窗口(token 数)'],
+      'views/AgentProfileView.tsx  s.usage.ctx': [1, '上下文 token 数'],
+      'views/chat2/Composer2.tsx  (sessionTokens ?? 0)': [2, '会话 token 数'],
+      'views/chat2/Composer2.tsx  (ctxTokens ?? 0)': [1, '上下文 token 数'],
+      'views/chat2/Composer2.tsx  (contextWindow ?? 0)': [1, '上下文窗口(token 数)'],
+      'views/chat2/Composer2.tsx  Math.round(runCost)': [3, '单次运行费用(数字)'],
+      'views/chat2/Composer2.tsx  costLimit': [3, '费用上限(数字)'],
+      'views/chat2/Composer2.tsx  outgoing.length': [1, '输入字数(数字)'],
+      'views/chat2/Composer2.tsx  MAX_INPUT_CHARS': [1, '输入字数上限常量(数字)'],
+      'amadeus/blocks/database/DatabaseEmbed.tsx  number': [1, '数字列的纯文本值(前面已判 number !== null)'],
+      'amadeus/blocks/database/DatabaseEmbed.tsx  v': [1, '数字列的纯文本值(前面已判 typeof v === \'number\')'],
+    }
+    const TIME_SRC = join(SRC, 'format', 'time.ts')
+    /** 从 `.toLocaleString(` 往回取接收者表达式:标识符 / 成员访问 / `!` / 成对括号(`Math.round(x)`、`(a ?? 0)`)。 */
+    const receiverBefore = (line: string, dot: number): string => {
+      let i = dot - 1
+      while (i >= 0) {
+        const c = line[i]
+        if (c === ')') {
+          let depth = 0
+          for (; i >= 0; i--) {
+            if (line[i] === ')') depth++
+            else if (line[i] === '(' && --depth === 0) break
+          }
+          i--
+          continue
+        }
+        if (/[\w$.!]/.test(c)) { i--; continue }
+        break
+      }
+      return line.slice(i + 1, dot)
+    }
+    const found: string[] = []
+    const bad: string[] = []
+    for (const file of [...ALL_SRC, ...ENGINE_SRC]) {
+      if (file === TIME_SRC) continue
+      readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+        if (/^\s*(\/\/|\*)/.test(line)) return
+        for (const m of line.matchAll(/\.toLocaleString\(/g)) {
+          const key = `${relative(SRC, file)}  ${receiverBefore(line, m.index!)}`
+          found.push(key)
+          if (!NUMBER_OK[key]) bad.push(`${relative(SRC, file)}:${i + 1}  ${key.split('  ')[1]}  ← ${line.trim().slice(0, 100)}`)
+        }
+      })
+    }
+    // 防假绿:扫描确实命中了已登记的调用;登记表里的每一项都还在用(删了就把登记也删掉,别留死条目)。
+    expect(found.length).toBeGreaterThan(0)
+    const stale = Object.keys(NUMBER_OK).filter((k) => !found.includes(k))
+    const tally = new Map<string, number>()
+    for (const k of found) tally.set(k, (tally.get(k) ?? 0) + 1)
+    const miscount = Object.entries(NUMBER_OK).filter(([k, [n]]) => tally.has(k) && tally.get(k) !== n).map(([k, [n]]) => `${k}  登记 ${n} 处,源码 ${tally.get(k)} 处`)
+    expect(stale, `登记了但源码里已经没有的项(删掉登记):\n  ${stale.join('\n  ')}`).toEqual([])
+    expect(miscount, `登记次数与源码不符 —— 多出来的那处先确认接收者是数字(是日期改走 format/time.ts),再改次数:\n  ${miscount.join('\n  ')}`).toEqual([])
+    expect(bad, `未登记的 .toLocaleString( —— 是日期就改走 format/time.ts;确认是数字就进 NUMBER_OK 并写明理由:\n  ${bad.join('\n  ')}`).toEqual([])
   })
 })

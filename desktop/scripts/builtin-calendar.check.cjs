@@ -44,7 +44,7 @@ function check(name, ok, detail) {
 /** ribbon 上的 Space 名(折叠态在 title,展开态在 .rb-label)+ 日历视图可见性 + 活动 Space。 */
 const SNAP = `(() => {
   const names = [...document.querySelectorAll('.rb-space')]
-    .map((b) => b.getAttribute('title') || b.querySelector('.rb-label')?.textContent || '')
+    .map((b) => b.getAttribute('aria-label') || b.getAttribute('title') || b.querySelector('.rb-label')?.textContent || '')
   const vis = (sel) => [...document.querySelectorAll(sel)].filter((e) => e.getBoundingClientRect().width > 0).length
   return {
     spaces: names,
@@ -79,18 +79,54 @@ async function boot() {
   return { app, win }
 }
 
-/** 点 ribbon 上某个 Space(折叠/展开两种形态都认),等 lazy 分块到位。 */
-async function enterSpace(win, names) {
-  const hit = await win.evaluate(`(() => {
-    const b = [...document.querySelectorAll('.rb-space')].find((x) =>
-      ${JSON.stringify(names)}.includes(x.getAttribute('title') || x.querySelector('.rb-label')?.textContent || ''))
+/** 点 ribbon 上某个 Space,等 lazy 分块到位。
+ *  ① 先按 Space id 找(条上每格 .rb-slot 带 data-id="space:<id>"):显示名会随文案口径变 —— Tangu Space
+ *     曾叫「Agent」,U-27 后叫回「Tangu」,旧写法 enterSpace(['Agent']) 一个都点不中,第 5/6 条就停在
+ *     Note 里「切回去不炸」地假绿。② 条上没有 → 可能被收进「…」溢出浮层:插件关了再开,addRibbonIcon
+ *     是**追加**,日历排到上区末尾;Space 一多(Image Studio / 自动化 / Muse / 发布)就落进「…」,
+ *     第 3/7 条因此恒红(与 check:homepage 的 ribbonSpaces 同一个坑)。
+ *  点不中就抛:夹具半成品不许混进断言。 */
+async function enterSpace(win, names, id) {
+  const byId = id ? await win.evaluate(`(() => {
+    const b = document.querySelector('.rb-slot[data-id="space:${id}"] .rb-space')
     if (b) { b.click(); return true }
     return false
-  })()`)
+  })()`) : false
+  const byName = (root) => `(() => {
+    const b = [...document.querySelectorAll('${root} .rb-space')].find((x) =>
+      ${JSON.stringify(names)}.includes(x.getAttribute('aria-label') || x.getAttribute('title') || x.querySelector('.rb-label')?.textContent || ''))
+    if (b) { b.click(); return true }
+    return false
+  })()`
+  let hit = byId || await win.evaluate(byName('.rb-top')) || await win.evaluate(byName('.rb-home'))
+  if (!hit) {
+    const more = win.locator('.rb-top .rb-more').first()
+    if (await more.count().catch(() => 0)) {
+      await more.hover()
+      await win.waitForTimeout(500)
+      hit = await win.evaluate(byName('.rb-fly'))
+      await win.mouse.move(700, 700)
+    }
+  }
+  if (!hit) throw new Error(`enterSpace: ribbon 上找不到 ${id || ''} ${JSON.stringify(names)}`)
   await win.waitForTimeout(1800)
   return hit
 }
-const enterCalendar = (win) => enterSpace(win, ['日历', 'Calendar'])
+const enterCalendar = (win) => enterSpace(win, ['日历', 'Calendar'], 'calendar')
+/** ribbon 上**全部** Space 名 = 条上 + 主位槽 + 「…」溢出浮层(只数条上会把落进「…」的日历算成「没回来」)。 */
+async function ribbonSpaceNames(win) {
+  const read = (root) => `[...document.querySelectorAll('${root} .rb-space')].map((b) => b.getAttribute('aria-label') || b.getAttribute('title') || b.querySelector('.rb-label')?.textContent || '')`
+  const shown = [...await win.evaluate(read('.rb-top')), ...await win.evaluate(read('.rb-home'))]
+  const more = win.locator('.rb-top .rb-more').first()
+  if (!(await more.count().catch(() => 0))) return shown
+  await more.hover()
+  await win.waitForTimeout(500)
+  const hidden = await win.evaluate(read('.rb-fly'))
+  await win.mouse.move(700, 700)
+  await win.waitForTimeout(400)
+  return [...shown, ...hidden]
+}
+const calIcons = (names) => names.filter((n) => n === '日历' || n === 'Calendar').length
 
 /** 开启动器并**确认它真的开出来了**:点击失败或没挂载就直接判失败 ——
  *  否则 launcher=[] 会让「入口没了」的断言空跑通过(Codex 评审 medium 抓的假绿)。 */
@@ -130,7 +166,8 @@ async function main() {
     await win.waitForTimeout(1500)
     await openLauncher(win) // 开启动器,看入口有没有一起消失(开不出来 = 直接抛,不许空跑)
     const off = await win.evaluate(SNAP)
-    const noEntry = !off.launcher.some((n) => ['日历', 'Calendar', '待办清单', 'To-Do List'].includes(n))
+    off.calIcon = calIcons(await ribbonSpaceNames(win))
+    const noEntry = !off.launcher.some((n) => ['日历', 'Calendar', '待办清单', 'To-do list'].includes(n))
     check(
       '2 关掉:图标/视图/Space 全撤,启动器入口也没了',
       off.calIcon === 0 && off.calView === 0 && off.active !== 'calendar' && noEntry,
@@ -139,22 +176,23 @@ async function main() {
 
     await win.evaluate(toggle(true))
     await win.waitForTimeout(1200)
+    const onIcons = calIcons(await ribbonSpaceNames(win))
     await enterCalendar(win)
     const on = await win.evaluate(SNAP)
-    check('3 开回来:图标回来且还能进去', on.calIcon === 1 && on.calView === 1, JSON.stringify(on))
+    check('3 开回来:图标回来且还能进去', onIcons === 1 && on.calView === 1 && on.active === 'calendar', JSON.stringify({ ...on, calIcon: onIcons }))
 
     // 5 别的 Space 的**命名布局**里留着日历面板:关插件后切回去不许炸。
     //   造夹具全靠点击(不合成拖拽):Tangu Space → 启动器 → 「日历」卡 = 在主区开一张日历,
     //   再切走(切走即 saveNamed('space:tangu'),那份布局里就带着 calendar 面板了)。
-    await enterSpace(win, ['Agent'])
+    await enterSpace(win, ['Tangu'], 'tangu')
     await openLauncher(win)
     const carded = await clickCard(win, ['日历', 'Calendar'])
     const planted = await win.evaluate(SNAP)
-    await enterSpace(win, ['Note'])
+    await enterSpace(win, ['Note'], 'amadeus')
     await win.evaluate(toggle(false))
     await win.waitForTimeout(1500)
     errs.length = 0
-    await enterSpace(win, ['Agent']) // ← applyNamed 吃到含 calendar 的命名布局
+    await enterSpace(win, ['Tangu'], 'tangu') // ← applyNamed 吃到含 calendar 的命名布局
     await win.waitForTimeout(1200)
     const back = await win.evaluate(SNAP)
     const aliveNow = await win.evaluate(`(() => ({
@@ -163,7 +201,7 @@ async function main() {
     }))()`)
     check(
       '5 别的 Space 命名布局里留着日历面板:关插件后切回去不炸',
-      carded && planted.calView === 1 && back.calView === 0 && aliveNow.groups > 0 && aliveNow.spaces > 0 && errs.length === 0,
+      carded && planted.calView === 1 && back.active === 'tangu' && back.calView === 0 && aliveNow.groups > 0 && aliveNow.spaces > 0 && errs.length === 0,
       JSON.stringify({ carded, planted: planted.calView, back: back.calView, ...aliveNow, errs: errs.slice(0, 2) }),
     )
     await win.evaluate(toggle(true))
@@ -172,7 +210,7 @@ async function main() {
     // 6 侧栏面板那半:把引擎刚存下的 space:calendar 布局(左 todo-list / 右 calendar-config)
     //   搬进 space:tangu 的命名槽 —— 真实 blob,不手搓;再关插件、切回 Tangu 让 applyNamed 吃它。
     await enterCalendar(win)
-    await enterSpace(win, ['Note']) // 切走 = saveNamed('space:calendar')
+    await enterSpace(win, ['Note'], 'amadeus') // 切走 = saveNamed('space:calendar')
     const cloned = await win.evaluate(`(() => {
       const KEY = 'tangu2_named_layouts'
       const m = JSON.parse(localStorage.getItem(KEY) || '{}')
@@ -187,7 +225,7 @@ async function main() {
     await win.evaluate(toggle(false))
     await win.waitForTimeout(1500)
     errs.length = 0
-    await enterSpace(win, ['Agent'])
+    await enterSpace(win, ['Tangu'], 'tangu')
     await win.waitForTimeout(1500)
     const side = await win.evaluate(SNAP)
     const aliveSide = await win.evaluate(`(() => ({
@@ -198,7 +236,7 @@ async function main() {
     check(
       '6 侧栏面板版:同上,切回去仍不炸(applyNamed 必须挡掉未注册视图)',
       cloned.ok && (cloned.panelTypes || []).includes('calendar')
-        && side.calView === 0 && aliveSide.groups > 0 && aliveSide.spaces > 0 && errs.length === 0,
+        && side.active === 'tangu' && side.calView === 0 && aliveSide.groups > 0 && aliveSide.spaces > 0 && errs.length === 0,
       JSON.stringify({ cloned, calView: side.calView, ...aliveSide, errs: errs.slice(0, 2) }),
     )
     await win.evaluate(toggle(true))
@@ -222,7 +260,7 @@ async function main() {
       }
     })()`)
     await win.waitForTimeout(1500)
-    await enterSpace(win, ['Note'])
+    await enterSpace(win, ['Note'], 'amadeus')
     const stashFix = await win.evaluate(`(() => {
       const KEY = 'tangu2_named_layouts'
       const m = JSON.parse(localStorage.getItem(KEY) || '{}')
@@ -241,7 +279,7 @@ async function main() {
     await win.evaluate(toggle(false))
     await win.waitForTimeout(1500)
     errs.length = 0
-    await enterSpace(win, ['Agent'])   // applyNamed 成功(活体都在),stash 悄悄带着死视图
+    await enterSpace(win, ['Tangu'], 'tangu')   // applyNamed 成功(活体都在),stash 悄悄带着死视图
     await win.waitForTimeout(1200)
     await win.click('.dv-edge-right') // ← 展开:stash 里的死视图会被 openView
     await win.waitForTimeout(1500)
@@ -249,7 +287,7 @@ async function main() {
       groups: document.querySelectorAll('.dv-groupview').length,
       spaces: document.querySelectorAll('.rb-space').length,
       deadTabs: [...document.querySelectorAll('.wb-tab-name')].filter((e) =>
-        ['日历', 'Calendar', '待办清单', 'To-Do List', '日历设置', 'Calendar Settings'].includes((e.textContent || '').trim())).length,
+        ['日历', 'Calendar', '待办清单', 'To-do list', '日历设置', 'Calendar settings'].includes((e.textContent || '').trim())).length,
     }))()`)
     check(
       '7 折叠侧栏 stash 里的日历视图:关插件后展开侧栏不许开出死视图',

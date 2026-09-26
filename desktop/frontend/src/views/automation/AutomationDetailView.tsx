@@ -11,10 +11,10 @@ import type { ViewProps } from '@lcl/engine'
 import { CapabilityMenu } from '../../components/CapabilityMenu'
 import { AutomationExtension } from './AutomationExtension'
 import { automationListSource, subscribeAutomation } from './automationListSource'
-import { CalendarClock, History, Pencil, Play, Settings, Sparkles, Trash2, Zap } from 'lucide-react'
+import { CalendarClock, History, Pencil, Play, Settings, Sparkles, Zap } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
 import { useAutomation, sessionForTrigger } from '../../stores/automationStore'
-import { deleteAgentScheduleEntry, fireAutomationTrigger, getHistorianActivity, saveAgentScheduleEntry } from '../../services/backendService'
+import { fireAutomationTrigger, getHistorianActivity, saveAgentScheduleEntry } from '../../services/backendService'
 import { useI18n } from '../../i18n'
 import { Markdown } from '../../components/Markdown'
 import { useDbStore } from '../../amadeus/store/dbStore'
@@ -184,22 +184,14 @@ const ScheduleEditor: React.FC<{ slug: string; en: AgentScheduleEntry; onDone: (
 /** 日程条目详情(与规则详情同构:卡片+编辑/删除+触发记录)。key 按条目挂载,切换即重置编辑态。 */
 const ScheduleDetail: React.FC<{ slug: string; rowId: string; onRuns: () => void }> = ({ slug, rowId, onRuns }) => {
   const { t } = useI18n()
-  const cfg = useApp((s) => s.cfg)
   const st = useAutomation()
   const [editing, setEditing] = useState(false)
   const sched = st.schedules.find((s) => s.slug === slug)
   const en = sched?.entries.find((e) => e.id === rowId)
   if (!sched || !en) return <div className="auto-detail-empty">{t('automation.detail.empty')}</div>
   const sessionId = sessionForTrigger(st.autoSessions, `sched:${slug}:${rowId}`)
-  const remove = async (): Promise<void> => {
-    try {
-      await deleteAgentScheduleEntry(cfg, slug, rowId)
-      st.bump()
-      st.setSel(null)
-    } catch (e: any) {
-      useApp.getState().toast(String(e?.message || e), true)
-    }
-  }
+  // 暂停 / 删除走列表源的同一份 itemMenu(删除带确认、删后清选中);删除排最后并标 danger,不再紧挨「编辑」裸放。
+  const menu = automationListSource.itemMenu?.({ key: JSON.stringify({ kind: 'schedule', slug, rowId }), title: en.name }) || []
   return (
     <div className="auto-detail">
       {editing ? (
@@ -211,7 +203,7 @@ const ScheduleDetail: React.FC<{ slug: string; rowId: string; onRuns: () => void
             <div className="auto-card-title">{en.name}</div>
             <button className="btn ghost sm" onClick={onRuns}><History size={13} />{t('automation.ux.runResults')}</button>
             <button className="btn ghost sm" onClick={() => setEditing(true)}><Pencil size={12} /> {t('common.edit')}</button>
-            <button className="btn ghost sm" title={t('common.delete')} onClick={() => void remove()}><Trash2 size={12} /></button>
+            <CapabilityMenu label={t('automation.ux.actions')} items={menu.map((a) => ({ id: a.id, label: a.label, danger: a.danger, onSelect: a.run }))} />
           </div>
           <div className="auto-facts">
             <span className="auto-fact"><b>{t('automation.fact.trigger')}</b>{en.date.replace('/', ' → ').replace(/T/g, ' ')}{en.repeat ? ` · ${t('automation.schedule.every', { ivl: en.repeat })}` : ` · ${t('automation.schedule.once')}`}</span>
@@ -332,7 +324,7 @@ const AutomationDetailContent: React.FC<Pick<ViewProps, 'extendView'> & { onRuns
           <button className="btn ghost sm" onClick={() => st.openBuilder(tr.id)}>{t('common.edit')}</button>
           <button className="btn ghost sm" onClick={onRuns}><History size={13} />{t('automation.ux.runResults')}</button>
           <CapabilityMenu label={t('automation.ux.actions')} items={(automationListSource.itemMenu?.({ key: JSON.stringify({ kind: 'trigger', triggerId: tr.id }), title: tr.desc }) || [])
-            .filter((a) => a.id !== 'edit').map((a) => ({ id: a.id, label: a.label, danger: a.id === 'delete', onSelect: a.run }))} />
+            .filter((a) => a.id !== 'edit').map((a) => ({ id: a.id, label: a.label, danger: a.danger, onSelect: a.run }))} />
         </div>
         <details className="auto-properties"><summary>{t('automation.ux.properties')}</summary><div className="auto-facts">
           {isFinishedTrigger(tr) && <span className="auto-fact"><b>{t('automation.fact.status')}</b>{t('automation.finishedHint')}</span>}

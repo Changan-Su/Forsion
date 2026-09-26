@@ -2,7 +2,7 @@
 .ims button, .ims-panel button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 32px; padding: 6px 9px; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer; }
 .ims button:hover, .ims-panel button:hover { background: var(--overlay-light); color: var(--text); }
 .ims button:disabled, .ims-panel button:disabled { opacity: .35; cursor: default; }
-.ims button:focus-visible, .ims-panel button:focus-visible, .ims-stage:focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+.ims button:focus-visible, .ims-panel button:focus-visible, .ims-stage:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 2px; }
 .ims .ims-primary, .ims-panel .ims-primary { background: var(--action-fill); color: var(--on-action); padding-inline: 12px; }
 .ims .ims-primary:hover, .ims-panel .ims-primary:hover { background: var(--action-fill-hover); color: var(--on-action); }
 .ims-header { display: flex; align-items: center; gap: 18px; padding: 12px 18px; flex-shrink: 0; border-bottom: 1px solid var(--border); }

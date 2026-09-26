@@ -136,7 +136,7 @@ async function main() {
     }
     let seeded = { ok: false }
     try {
-      await groupAdd(/不在项目中工作|Not in a project|Don't work in a project|Without a project/i).click({ timeout: 10_000 })
+      await groupAdd(/无项目会话|No project|不在项目中工作|Not in a project|Don't work in a project|Without a project/i).click({ timeout: 10_000 })
       await win.waitForSelector('.t2s-side .t2s-srow.active', { timeout: 20_000 })
       await rename('CHAT 会话')
       // 第二个:任一云项目组(默认 Tangu);没有云项目组就用默认本地工作区组

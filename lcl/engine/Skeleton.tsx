@@ -7,6 +7,7 @@
  */
 import React, { Component, type ReactNode } from 'react'
 import './skeleton.css'
+import { engineTr } from './i18nSeam'
 
 export type SkeletonVariant = 'list' | 'document' | 'chat'
 
@@ -89,13 +90,12 @@ export class ViewErrorBoundary extends Component<{ children: ReactNode }, GuardS
   render() {
     const { err, n } = this.state
     if (!err) return <React.Fragment key={n}>{this.props.children}</React.Fragment>
-    const zh = document.documentElement.lang.startsWith('zh')
     return (
       <div className="sk-error" role="alert">
-        <div className="sk-error-title">{zh ? '此视图加载失败' : 'Failed to load this view'}</div>
+        <div className="sk-error-title">{engineTr('lcl.view.loadFailed')}</div>
         <div className="sk-error-msg">{String(err?.message || err)}</div>
         <button className="sk-error-btn" onClick={() => this.setState((s) => ({ err: null, n: s.n + 1 }))}>
-          {zh ? '重试' : 'Retry'}
+          {engineTr('lcl.view.retry')}
         </button>
       </div>
     )

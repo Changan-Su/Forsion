@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { executorOf, projectExecutors, relativeTimeOf, shortenPath } from './projectProfileState'
+import { executorOf, projectExecutors, shortenPath } from './projectProfileState'
 import { fillProjectDefaults, isProjectWorkspace, newSessionConfig, projectDefaultsForNewSession } from '../stores/projectSettings'
 import type { SessionRecord, TeamDef } from '../types'
 
@@ -84,12 +84,9 @@ describe('project defaults', () => {
 })
 
 describe('display helpers', () => {
-  it('shortenPath 只缩家目录前缀;relativeTimeOf 跟界面语言', () => {
+  it('shortenPath 只缩家目录前缀', () => {
     expect(shortenPath('/Users/me/Code/x', '/Users/me')).toBe('~/Code/x')
     expect(shortenPath('/Users/meow/x', '/Users/me')).toBe('/Users/meow/x')
     expect(shortenPath('C:\\Users\\me\\x', 'C:\\Users\\me')).toBe('~/x')
-    const now = Date.parse('2026-09-22T12:00:00Z')
-    expect(relativeTimeOf(now - 3 * 86400_000, now, 'zh-CN')).toBe('3天前')
-    expect(relativeTimeOf(now - 3 * 86400_000, now, 'en')).toBe('3 days ago')
   })
 })

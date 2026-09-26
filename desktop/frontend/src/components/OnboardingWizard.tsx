@@ -12,6 +12,7 @@ import { PRODUCT, PRODUCT_DISPLAY_NAME } from '../product'
 import { listLanguages, listSkins, skinSwatch, backgroundSwatch, forcedSchemeForLanguage } from '../theme/registry'
 import { useTheme } from '../stores/themeStore'
 import { ThemeCard } from './ThemeCard'
+import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
 import { ThemePreview } from './ThemePreview'
 import { BrandLogo } from './BrandLogo'
 import { LocaleToggle } from './LocaleToggle'
@@ -432,12 +433,13 @@ export const OnboardingWizard: React.FC<{
                 <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <Palette size={13} /> {t('onboarding.guide.styleLabel')}
                 </label>
-                <div className="theme-grid">
-                  {listLanguages().map((th) => (
+                <div className="theme-grid" role="radiogroup" aria-label={t('onboarding.guide.styleLabel')} onKeyDown={onRadioGroupKeyDown}>
+                  {listLanguages().map((th, i, all) => (
                     <ThemeCard
                       key={th.manifest.id}
                       entry={th}
                       active={th.manifest.id === themeLang}
+                      tabIndex={radioTabIndex(th.manifest.id === themeLang, i, all.some((x) => x.manifest.id === themeLang))}
                       onSelect={() => onThemeChange(th.manifest.id, themeSkin, themeModePref)}
                     />
                   ))}

@@ -1,6 +1,6 @@
 import { registerMessages } from '../../i18n'
 registerMessages({
-  'studio.openTool': { zh: 'Coding Studio · 打开项目工具', en: 'Coding Studio · Open project tool' },
+  'studio.openTool': { zh: '编码工作室 · 打开项目工具', en: 'Coding Studio · Open project tool' },
   'studio.projectTools': { zh: '项目工具', en: 'Project tools' },
   'studio.panelPosition': { zh: '面板位置', en: 'Panel position' },
   'studio.move.left': { zh: '移至左侧面板', en: 'Move to left panel' },
@@ -140,7 +140,7 @@ registerMessages({
   'studio.history.files': { zh: '{count} 个文件', en: '{count} files' },
   'studio.history.auto': { zh: '自动', en: 'Auto' },
   'studio.history.autoFallback': { zh: 'AI 改动', en: 'Agent changes' },
-  'studio.history.autoFooter': { zh: '这个项目在编码空间里打开时，每轮 AI 改动结束后都会自动存一个版本。', en: 'Automatic versions are created after each agent run while this project is open in Coding Space.' },
+  'studio.history.autoFooter': { zh: '这个项目在编码工作室里打开时，每轮 AI 改动结束后都会自动存一个版本。', en: 'Automatic versions are created after each agent run while this project is open in Coding Studio.' },
   'studio.history.confirmRestore': { zh: '恢复到这个版本？当前状态会先存成一个备份版本，所以这次恢复本身也能撤销。', en: 'Restore this version? The current state is saved as a backup version first, so restoring is itself undoable.' },
   'studio.history.restored': { zh: '已恢复到该版本；恢复前的状态已存为备份版本。', en: 'Restored. The previous state was saved as a backup version.' },
   'studio.history.restoredClean': { zh: '已恢复到该版本。', en: 'Restored to this version.' },

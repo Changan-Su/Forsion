@@ -139,7 +139,7 @@
 .dash3-card-open:hover { color: var(--text); background: var(--overlay-light); }
 .dash3-card-open:focus-visible {
   opacity: 1;
-  outline: 1.5px solid var(--primary);
+  outline: var(--focus-ring) solid var(--primary);
   outline-offset: 1px;
 }
 
@@ -215,7 +215,7 @@ button.dash-compact-row:hover { color: var(--primary); background: color-mix(in 
   background: color-mix(in srgb, var(--overlay-light, rgba(127, 127, 127, 0.06)) 50%, transparent);
 }
 .dash3-shield:focus-visible {
-  outline: 1.5px solid var(--primary);
+  outline: var(--focus-ring) solid var(--primary);
   outline-offset: -2px;
 }
 /* 交互态(双击进入):撤罩之外给一圈 primary 描边,标出「这张卡现在归内容」。 */
@@ -280,7 +280,7 @@ button.dash-compact-row:hover { color: var(--primary); background: color-mix(in 
 .dash3-card-del:hover { color: var(--danger); background: var(--overlay-light); }
 .dash3-card-btn:focus-visible {
   opacity: 1;
-  outline: 1.5px solid var(--primary);
+  outline: var(--focus-ring) solid var(--primary);
   outline-offset: 1px;
 }
 
@@ -369,7 +369,7 @@ button.dash-compact-row:hover { color: var(--primary); background: color-mix(in 
   background: color-mix(in srgb, var(--primary) 3%, var(--bg));
 }
 .dash3-template:active { transform: translateY(0); }
-.dash3-template:focus-visible { outline: 1.5px solid var(--primary); outline-offset: 2px; }
+.dash3-template:focus-visible { outline: var(--focus-ring) solid var(--primary); outline-offset: 2px; }
 .dash3-template-icon {
   width: 32px;
   height: 32px;

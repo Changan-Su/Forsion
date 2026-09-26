@@ -18,6 +18,7 @@ import { useWorkspace } from '@lcl/engine'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { ListGroup, ListItem, ListSourceContribution } from '@amadeus/plugins/types'
 import { translate } from '../../i18n'
+import { formatListTime } from '../../format/time'
 import { useApp } from '../../stores/appStore'
 import { useInbox, isAutomationSender, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
 import { INBOX_WORKSPACE_MODE } from '../workspaceMode'
@@ -36,17 +37,8 @@ const SOURCE_GROUPS: Array<{ kind: SourceKind; titleKey: string; icon?: string }
   { kind: 'system', titleKey: 'inbox.sender.system', icon: 'info' },
 ]
 
-/** 相对时间;>7 天转日期。 */
-function timeAgo(iso: string | null): string {
-  const d = parseUtc(iso)
-  if (!d) return ''
-  const diff = Date.now() - d.getTime()
-  if (diff < 60_000) return translate('inbox.time.now')
-  if (diff < 3600_000) return translate('inbox.time.minutes', { n: Math.floor(diff / 60_000) })
-  if (diff < 86400_000) return translate('inbox.time.hours', { n: Math.floor(diff / 3600_000) })
-  if (diff < 7 * 86400_000) return translate('inbox.time.days', { n: Math.floor(diff / 86400_000) })
-  return d.toLocaleDateString()
-}
+/** 列表行尾时间:7 天内相对时间,更早显示日期(单源 format/time,跟界面语言不跟系统区域)。 */
+const timeAgo = (iso: string | null): string => formatListTime(parseUtc(iso))
 
 const sourceKind = (m: InboxMessage): SourceKind => {
   if (m.sender_kind === 'server') return 'forsion'
@@ -128,7 +120,7 @@ export const inboxListSource: ListSourceContribution = {
     return [
       { id: 'read', label: translate(m.read_at ? 'inbox.action.markUnread' : 'inbox.action.markRead'), run: () => st.markRead(m.id, !m.read_at) },
       { id: 'archive', label: translate(m.archived_at ? 'inbox.action.unarchive' : 'inbox.action.archive'), run: () => st.markArchived(m.id, !m.archived_at) },
-      { id: 'delete', label: translate('inbox.action.delete'), run: () => { if (window.confirm(translate('inbox.deleteConfirm', { title: m.title }))) st.remove(m.id) } },
+      { id: 'delete', label: translate('inbox.action.delete'), danger: true, run: () => { if (window.confirm(translate('inbox.deleteConfirm', { title: m.title }))) st.remove(m.id) } },
     ]
   },
 }

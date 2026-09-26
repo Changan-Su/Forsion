@@ -487,11 +487,11 @@ export function PluginListBody({ src }: { src: ListSourceContribution }) {
           if (!actions.length) return
           e.preventDefault(); e.stopPropagation()
           menuOpener.current = e.currentTarget
-          setMenu({ x: e.clientX, y: e.clientY, items: actions.map((action) => ({ label: action.label, run: action.run })) })
+          setMenu({ x: e.clientX, y: e.clientY, items: actions.map((action) => ({ label: action.label, danger: action.danger, run: action.run })) })
         }}
       ><span className="t2s-srow-title">{it.title}</span></SidebarRow>
       {!!actions.length && <CapabilityMenu label={t('wsview.itemActions', { title: it.title })} className="t2sw-plug-row-menu"
-        items={actions.map((action) => ({ id: action.id, label: action.label, onSelect: action.run }))}><MoreHorizontal size={14} /></CapabilityMenu>}
+        items={actions.map((action) => ({ id: action.id, label: action.label, danger: action.danger, onSelect: action.run }))}><MoreHorizontal size={14} /></CapabilityMenu>}
     </div>
   }
 
@@ -510,7 +510,7 @@ export function PluginListBody({ src }: { src: ListSourceContribution }) {
         </div>}
         {primary && <button type="button" className="t2sw-plug-btn" title={primary.label} onClick={() => primary.run()}>{primary.label}</button>}
         {!!secondary.length && <CapabilityMenu label={t('wsview.actions', { source: src.title })} className="t2sw-plug-overflow"
-          items={secondary.map((action) => ({ id: action.id, label: action.label, onSelect: action.run }))}><MoreHorizontal size={15} /></CapabilityMenu>}
+          items={secondary.map((action) => ({ id: action.id, label: action.label, danger: action.danger, onSelect: action.run }))}><MoreHorizontal size={15} /></CapabilityMenu>}
       </div>}
       {!!groups.length && <div className="t2sw-plug-filterbar">
         <CapabilityMenu label={t('wsview.filter')} className="t2sw-plug-filter" selection acceptsDrag={src.drop ? canTake : undefined}

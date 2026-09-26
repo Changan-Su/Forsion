@@ -121,6 +121,9 @@
   color: var(--text-faint);
   font-size: var(--ui-font-body, 13px);
 }
+.ibx-reader-empty-title { color: var(--text); font-size: var(--ui-font-heading, 14px); font-weight: 600; }
+.ibx-reader-empty-hint { font-size: var(--ui-font-meta, 12px); }
+.ibx-reader-empty-actions { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
 
 /* ── 广播附件(物品奖励)── */
 .ibx-expire { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }

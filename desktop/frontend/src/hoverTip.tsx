@@ -10,6 +10,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { create } from 'zustand'
 import { useApp } from './stores/appStore'
 import './hoverTip.css'
+import { formatDateTime } from './format/time'
 
 const SHOW_DELAY = 1000
 const SKIP_DELAY = 100
@@ -63,19 +64,35 @@ export function disarmTip(): void {
   useTip.getState().close()
 }
 
-/** 给行元素的 props;直接摊进 JSX 即可。 */
-export function tipProps(load: Loader): { onMouseEnter: (e: React.MouseEvent<HTMLElement>) => void; onMouseLeave: () => void } {
-  return {
+type TipHandlers = {
+  onMouseEnter: (e: React.MouseEvent<HTMLElement>) => void
+  onMouseLeave: () => void
+  onFocus?: (e: React.FocusEvent<HTMLElement>) => void
+  onBlur?: () => void
+}
+
+/** 给行元素的 props;直接摊进 JSX 即可。
+ *  opts.focus:键盘聚焦(:focus-visible)时也弹、失焦收起 —— 提示里有**独有信息**的行用(Orbit 一级行的「类型 · 相对时间」,
+ *  Codex 第一轮 B2-4);鼠标点击带来的焦点不弹,免得点一下就冒提示。 */
+export function tipProps(load: Loader, opts?: { focus?: boolean }): TipHandlers {
+  const handlers: TipHandlers = {
     onMouseEnter: (e) => armTip(e.currentTarget, load),
     onMouseLeave: disarmTip,
   }
+  if (opts?.focus) {
+    handlers.onFocus = (e) => {
+      let keyboard = true
+      try { keyboard = e.currentTarget.matches(':focus-visible') } catch { /* 老内核不认伪类:按键盘处理 */ }
+      if (keyboard) armTip(e.currentTarget, load)
+    }
+    handlers.onBlur = disarmTip
+  }
+  return handlers
 }
 
-/** 时间戳 → 本地「年-月-日 时:分」(跟随系统区域;秒是噪音,不显示)。 */
+/** 时间戳 → 「2026年9月17日 14:05」/「Sep 17, 2026, 14:05」(跟界面语言;秒是噪音,不显示)。 */
 export function fmtTime(ms: number): string {
-  return new Date(ms).toLocaleString(undefined, {
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  })
+  return formatDateTime(ms, { year: 'always' })
 }
 
 /** 文案:loader 跑在事件回调里(非渲染),故走 store 取 tr,免得给一堆无 i18n 的文件塞 hook。 */

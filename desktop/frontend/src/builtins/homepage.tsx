@@ -48,7 +48,7 @@ registerMessages({
   'home.greet.night.named': { zh: '夜深了,{name}', en: 'Working late, {name}' },
   'home.spaces': { zh: 'Spaces', en: 'Spaces' },
   'home.pinnedSpaces': { zh: '前置 Space', en: 'Pinned Spaces' },
-  'home.spaceCount': { zh: '{n} 个空间', en: '{n} spaces' },
+  'home.spaceCount': { zh: '{n} 个 Space', en: '{n} Spaces' },
   'home.newFolder': { zh: '新建收纳夹', en: 'New folder' },
   'home.showAll': { zh: '全部 Spaces', en: 'All Spaces' },
   'home.organizer.title': { zh: 'Space 收纳', en: 'Space organizer' },
@@ -81,7 +81,7 @@ registerMessages({
   'home.wallpaper.tooLarge': { zh: '图片超过 32 MB,请先压缩后再试', en: 'The image is over 32 MB. Compress it and try again.' },
   'home.wallpaper.focusBlur': { zh: '聚焦景深', en: 'Focus depth' },
   'home.wallpaper.focusBlurHint': { zh: '操作输入框、模型或模式等控件时柔化背景', en: 'Soften the stage while using the chat input, model, mode, or related controls' },
-  'home.wallpaper.vignette': { zh: '边缘压暗', en: 'Edge vignette' },
+  'home.wallpaper.vignette': { zh: '压暗背景', en: 'Dim background' },
   'home.wallpaper.vignetteHint': { zh: '让文字和控件在明亮壁纸上保持清晰', en: 'Keep text and controls legible on bright images' },
 })
 

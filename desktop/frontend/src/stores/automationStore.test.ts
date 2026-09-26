@@ -27,3 +27,10 @@ it('an in-flight old poll cannot erase a newly saved rule', async () => {
   expect(useAutomation.getState().sel).toEqual({ kind: 'trigger', triggerId: trigger.id })
   expect(useAutomation.getState().triggers).toEqual([trigger])
 })
+
+it('a response without the list field keeps the previous list instead of storing undefined', async () => {
+  useAutomation.setState({ triggers: [trigger] })
+  vi.mocked(getMuseTriggers).mockResolvedValueOnce(undefined as unknown as MuseTriggerInfo[])
+  await useAutomation.getState().refresh({} as TanguDesktopConfig)
+  expect(useAutomation.getState().triggers).toEqual([trigger])
+})

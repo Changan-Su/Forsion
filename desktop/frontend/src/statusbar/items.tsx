@@ -7,8 +7,11 @@ import { AlertCircle, Check, CloudOff, Inbox, Link2, RefreshCw } from 'lucide-re
 import {
   StatusBar, activeMainPanel, addStatusItem, getActiveSpace, label,
   openCommandPalette, setActiveSpace, useSpaceStore, useWorkspace,
+  effectiveHotkey, formatHotkey, isMacPlatform, useShortcuts,
 } from '@lcl/engine'
+import type { StatusItem } from '@lcl/engine'
 import { useI18n } from '../i18n'
+import '../shellMessages'
 import { useApp } from '../stores/appStore'
 import { useInbox } from '../stores/inboxStore'
 import { ensureEntrySyncSubscribed, useEntrySync } from '../stores/entrySyncStore'
@@ -27,17 +30,23 @@ function useActiveMainType(): string | null {
   return am ? (((am.params ?? {}) as { __type?: string }).__type ?? null) : null
 }
 
-/** 左:当前 Space(图标 + 名);点击开命令面板(切 Space/开视图都在里面)。 */
+/** 左:当前 Space(图标 + 名);点击开命令面板(切 Space/开视图都在里面)。
+ *  可点项一律 <button>:原来是 span+onClick,键盘 Tab 不到、读屏也不知道能点。 */
 function SpaceItem() {
+  const { t } = useI18n()
   useSpaceStore((s) => s.activeSpaceId)
+  useShortcuts((s) => s.overrides)
   const space = getActiveSpace()
   if (!space) return null
   const Icon = space.icon
+  // 快捷键与 installHotkeys 同源(command-palette 缺省 mod+k,用户可改键 / 解绑)
+  const hk = effectiveHotkey({ id: 'command-palette', hotkey: 'mod+k' })
+  const title = hk ? t('lcl.withHotkey', { label: t('sb.switchSpace'), key: formatHotkey(hk, isMacPlatform()) }) : t('sb.switchSpace')
   return (
-    <span className="sb-click" onClick={() => openCommandPalette()}>
+    <button type="button" className="sb-click" title={title} onClick={() => openCommandPalette()}>
       {Icon && <Icon size={11} />}
       {label(space.name)}
-    </span>
+    </button>
   )
 }
 
@@ -101,10 +110,16 @@ function SyncItem() {
     : syncing ? (pending > 0 ? t('sb.syncing', { n: pending }) : t('sb.syncingPlain'))
     : offline ? t('sb.syncOffline')
     : t('sb.synced')
+  const status = (err && mirror?.error ? ipcErrorText(mirror.error) : undefined) || (rp?.key ? `${text} · ${rp.key}` : text)
+  // 点了真会触发一轮同步时才说「点击立即同步」:只开了按条目同步、未登录(auth-required)、远程正在跑时点它什么也不做,
+  // 这时再许诺「立即同步」就是误导。条件与下面 onClick 的两条分支同源。
+  const canSync = (mirrorOn && mirror?.state !== 'auth-required') || (!!remote?.configured && !remote.running)
   return (
-    <span
+    <button
+      type="button"
       className="sb-click"
-      title={(err && mirror?.error ? ipcErrorText(mirror.error) : undefined) || (rp?.key ? `${text} · ${rp.key}` : text)}
+      // 点它会**立刻触发一轮同步** —— 原来只写状态,用户不知道点了会发生什么。
+      title={canSync ? `${status} · ${t('sb.clickToSync')}` : status}
       onClick={() => {
         if (mirrorOn) void window.amadeusSync?.syncNow?.().catch(() => {})
         if (remote?.configured && !remote.running) void window.remoteSync?.run?.().catch(() => {})
@@ -112,7 +127,7 @@ function SyncItem() {
     >
       {icon}
       {text}
-    </span>
+    </button>
   )
 }
 
@@ -134,10 +149,10 @@ function BacklinksItem() {
   }, [activePage, ver])
   if (type !== 'amadeus-editor' || !activePage || count == null) return null
   return (
-    <span className="sb-click" onClick={() => useWorkspace.getState().openView('amadeus-backlinks', {}, 'main')}>
+    <button type="button" className="sb-click" title={t('sb.openBacklinks')} onClick={() => useWorkspace.getState().openView('amadeus-backlinks', {}, 'main')}>
       <Link2 size={11} />
       {t('sb.backlinks', { n: count })}
-    </span>
+    </button>
   )
 }
 
@@ -150,15 +165,19 @@ function WordCountItem() {
   return <span className="sb-plain">{t('sb.chars', { n: chars })}</span>
 }
 
-/** 右:收件箱未读数(0 时隐藏);点击进 Inbox Space。 */
+/** 右:收件箱未读数(0 时隐藏);点击进 Inbox Space。只显示一个数字 → 名字与含义放进可访问名 / 悬停说明
+ *  (与 Ribbon 收件箱角标同一句 ribbon.spaceUnread)。新用户缺省隐藏(与 Ribbon 角标重复,见 prefs.ts)。 */
 function InboxItem() {
+  const { t } = useI18n()
   const n = useInbox((s) => s.unreadCount)
+  const inbox = useSpaceStore((s) => s.spaces.find((x) => x.id === 'inbox'))
   if (!n) return null
+  const desc = t('ribbon.spaceUnread', { name: inbox ? label(inbox.name) : t('sb.item.inbox'), n })
   return (
-    <span className="sb-click" onClick={() => setActiveSpace('inbox')}>
+    <button type="button" className="sb-click" title={desc} aria-label={desc} onClick={() => setActiveSpace('inbox')}>
       <Inbox size={11} />
       {n}
-    </span>
+    </button>
   )
 }
 
@@ -189,6 +208,7 @@ export function installStatusBarItems(): void {
  *  显示时置 --sb-h 给 main/right 视图让位(见 engine.css .wb-view--main/--right);隐藏/卸载即清 →
  *  工作区满高(detached/mini 窗不渲染本组件 → 无 --sb-h → 视图不缩,零副作用)。 */
 export function DesktopStatusBar() {
+  const { t } = useI18n()
   const enabled = useSbPrefs((s) => s.enabled)
   const hidden = useSbPrefs((s) => s.hidden)
   const order = useSbPrefs((s) => s.order)
@@ -198,5 +218,8 @@ export function DesktopStatusBar() {
     return () => { document.documentElement.style.removeProperty('--sb-h') }
   }, [enabled])
   if (!enabled) return null
-  return <StatusBar hidden={hidden} order={order} />
+  return <StatusBar hidden={hidden} order={order} trailing={isPluginItem} label={t('sb.label')} />
 }
+
+/** 插件项(pluginStatusBridge 的 id 命名空间):无自定义顺序时归到所在侧的末尾,与内置项之间画分隔。 */
+const isPluginItem = (i: StatusItem): boolean => i.id.startsWith('plugin:')

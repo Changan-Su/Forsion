@@ -116,7 +116,7 @@ const BundleChips: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
 }
 
 const badge: React.CSSProperties = {
-  fontSize: 10.5, color: 'var(--text-faint)', border: 'var(--border-width) solid var(--overlay-medium, rgba(127,127,127,.12))',
+  fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', border: 'var(--border-width) solid var(--overlay-medium, rgba(127,127,127,.12))',
   borderRadius: 4, padding: '0 4px', whiteSpace: 'nowrap',
 }
 
@@ -445,10 +445,10 @@ const PluginDetail: React.FC<{
       </div>
       {/* 开发态说明:它**不是**隔离沙箱,用户有权在启用它之前知道这件事 */}
       {p.dev && (
-        <div className="plugin-card" style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 }}>
+        <div className="plugin-card" style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 'var(--ui-font-meta, 12px)' }}>
           <div>{t('settings.amadeusPlugins.devHint')}</div>
-          {p.devRoot && <div style={{ color: 'var(--text-faint)', fontSize: 11 }}>{t('settings.amadeusPlugins.devProject', { path: p.devRoot })}</div>}
-          {p.shadowsInstalled && <div style={{ color: 'var(--warn, #b8860b)', fontSize: 11 }}>{t('settings.amadeusPlugins.devShadows')}</div>}
+          {p.devRoot && <div style={{ color: 'var(--text-faint)', fontSize: 'var(--ui-font-caption, 11px)' }}>{t('settings.amadeusPlugins.devProject', { path: p.devRoot })}</div>}
+          {p.shadowsInstalled && <div style={{ color: 'var(--warn, #b8860b)', fontSize: 'var(--ui-font-caption, 11px)' }}>{t('settings.amadeusPlugins.devShadows')}</div>}
         </div>
       )}
       {p.bundle && (

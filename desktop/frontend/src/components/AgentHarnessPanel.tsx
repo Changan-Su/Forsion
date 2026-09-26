@@ -8,6 +8,7 @@ import { Loader2, NotebookPen, Sprout, Undo2 } from 'lucide-react'
 import { getAgentHarness, rollbackHarnessEntry, type HarnessEntry, type HarnessJournalLine } from '../services/backendService'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
+import { formatDate, formatDateTime, formatRelative } from '../format/time'
 import '../views/agentProfile.css'
 
 const MAX_ENTRIES = 30 // 与引擎 harnessStore.MAX_ENTRIES 同值(写入时封顶)
@@ -24,21 +25,11 @@ type Props = {
   onCandidates?: (count: number) => void
 }
 
-/** 「2 天前」/「2 days ago」:跟随界面语言,不跟系统语言。 */
-function ago(iso: string, tag: string): string {
-  const s = (Date.parse(iso) - Date.now()) / 1000
-  if (!Number.isFinite(s)) return ''
-  const a = Math.abs(s)
-  const [n, unit]: [number, Intl.RelativeTimeFormatUnit] = a < 3600 ? [s / 60, 'minute'] : a < 86400 ? [s / 3600, 'hour'] : a < 2592000 ? [s / 86400, 'day'] : [s / 2592000, 'month']
-  return new Intl.RelativeTimeFormat(tag, { numeric: 'auto' }).format(Math.round(n), unit)
-}
-
 /** 换后端 / 账号 / Agent 整体重挂,旧请求画不进新身份。 */
 export const AgentHarnessPanel: React.FC<Props> = (props) => <AgentHarnessBody key={JSON.stringify([props.cfg.backendUrl, props.cfg.token, props.slug])} {...props} />
 
 const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCandidates }) => {
   const { t, locale } = useI18n()
-  const tag = locale === 'en' ? 'en' : 'zh-CN'
   const [entries, setEntries] = useState<HarnessEntry[] | null>(null)
   const [journal, setJournal] = useState<HarnessJournalLine[]>([])
   const [candidates, setCandidates] = useState<string[]>([]) // Historian 自动档的提名,还不是笔记;/refine 时才被 Agent 审阅
@@ -87,14 +78,10 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
       : l.action === 'rollback' ? t('settings.agents.harnessActRollback')
         : l.before === null ? t('settings.agents.harnessActCreate') : t('settings.agents.harnessActUpdate')
   const kindLabel = (kind: string): string => kind === 'note' ? t('settings.agents.harnessKindNote') : kind === 'recipe' ? t('settings.agents.harnessKindRecipe') : kind
-  // 条目日期是引擎按 UTC 写的 YYYY-MM-DD,按 UTC 解读才不会串到前后一天;journal ts 是完整 ISO,按本地时区显示。
+  // 条目日期是引擎写的 YYYY-MM-DD(纯日期,单源按本地那一天解读,不串到前后一天);journal ts 是完整 ISO,按本地时区显示。
   // HARNESS.md 允许手改,解析不了的原样显示,绝不渲出「Invalid Date」。
-  const day = (d: string): string => {
-    const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(d)
-    const ms = Date.parse(dateOnly ? `${d}T00:00:00Z` : d)
-    return Number.isFinite(ms) ? new Date(ms).toLocaleDateString(tag, { month: 'short', day: 'numeric', ...(dateOnly ? { timeZone: 'UTC' } : {}) }) : d
-  }
-  const stamp = (iso: string): string => Number.isFinite(Date.parse(iso)) ? new Date(iso).toLocaleString(tag, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : iso
+  const day = (d: string): string => formatDate(d, { locale }) || d
+  const stamp = (iso: string): string => formatDateTime(iso, { locale }) || iso
   // 收件箱原始行 `- [YYYY-MM-DD s:xxxxxxxx] 正文`(harnessStore.appendHarnessCandidates 的形状):日期留下,会话标签是内部记号,不上屏。
   const candidate = (line: string): { date: string; text: string } => {
     const m = line.match(/^-\s*\[(\d{4}-\d{2}-\d{2})(?:\s+s:[A-Za-z0-9-]*)?\]\s*(.*)$/)
@@ -114,7 +101,7 @@ const AgentHarnessBody: React.FC<Props> = ({ cfg, slug, running, onRefine, onCan
       </div>
         : <>
           <div className="harness-summary">
-            <span>{t('settings.agents.harnessCount', { count: entries.length, max: MAX_ENTRIES })}{rev[0] && <> · <time dateTime={rev[0].ts} title={stamp(rev[0].ts)}>{t('settings.agents.harnessLastChange', { time: ago(rev[0].ts, tag) })}</time></>}</span>
+            <span>{t('settings.agents.harnessCount', { count: entries.length, max: MAX_ENTRIES })}{rev[0] && <> · <time dateTime={rev[0].ts} title={stamp(rev[0].ts)}>{t('settings.agents.harnessLastChange', { time: formatRelative(rev[0].ts, { locale }) })}</time></>}</span>
             {refineButton(false)}
           </div>
           <ul className="harness-entries">{entries.map((e) => <li key={e.id} className="harness-entry" data-harness-entry={e.id}>

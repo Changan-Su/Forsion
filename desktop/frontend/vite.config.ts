@@ -9,6 +9,9 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig({
   plugins: [react()],
+  // worktree 软链主检出 node_modules 时,缺省 cacheDir(node_modules/.vite)是共享的:
+  // 配置哈希不同会把主检出 dev 的 deps 整份重优化掉。worktree 里起 harness 设这个变量。
+  cacheDir: process.env.FORSION_VITE_CACHE_DIR || undefined,
   resolve: {
     // 与 Electron renderer 保持一致：浏览器预览/Vitest 也会穿过 lcl workspace，
     // 独立 worktree 下必须强制宿主和链接源共用一份 React。

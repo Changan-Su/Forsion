@@ -2,18 +2,25 @@
 // 这两处当年是模块级中文常量 —— WEEKDAYS 还被 CalendarView / CalendarConfigView 当 React key 直接渲染,
 // 所以改成函数是**跨三个文件**的联动;姊妹测试 dateUtils.test.ts 只钉 zh 那侧,退回硬编码它不会红,这里会。
 import { describe, expect, it } from 'vitest'
-import { weekdays, dowLabel, fmtDur } from './dateUtils'
+import { weekdays, dowLabel, fmtDur, useWeekStartPref } from './dateUtils'
 import { setLocaleGlobal } from '../../i18n'
 
 describe('日历日期文案跟随语言', () => {
   it('星期短名 + 「周X」标签', () => {
+    // 表头已按周首日旋转:zh 缺省周一起,en 缺省周日起(U-33)。
     setLocaleGlobal('zh')
-    expect(weekdays()).toEqual(['日', '一', '二', '三', '四', '五', '六'])
+    expect(weekdays()).toEqual(['一', '二', '三', '四', '五', '六', '日'])
     expect(dowLabel(3)).toBe('周三')
     setLocaleGlobal('en')
     expect(weekdays()).toEqual(['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'])
     expect(dowLabel(3)).toBe('Wed') // ⚠️ 不是「周Wed」:en 的 dowLabel 模板没有前缀
+    // 用户覆盖压过语言缺省
+    useWeekStartPref.getState().setPref(1)
+    expect(weekdays()).toEqual(['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'])
+    useWeekStartPref.getState().setPref(0)
     setLocaleGlobal('zh')
+    expect(weekdays()).toEqual(['日', '一', '二', '三', '四', '五', '六'])
+    useWeekStartPref.getState().setPref('auto')
   })
 
   it('时长摘要', () => {

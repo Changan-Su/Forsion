@@ -66,7 +66,7 @@ function request(url, { method = 'GET', token, body } = {}) {
 async function clickSpace(win, names) {
   const clicked = await win.evaluate((labels) => {
     const buttons = [...document.querySelectorAll('button.rb-space')]
-    const hit = buttons.find((b) => labels.includes((b.getAttribute('title') || b.textContent || '').trim()))
+    const hit = buttons.find((b) => labels.includes((b.getAttribute('aria-label') || b.getAttribute('title') || b.textContent || '').trim()))
     if (!hit) return false
     hit.click()
     return true
@@ -141,7 +141,7 @@ async function main() {
     await win.waitForSelector('.dv-groupview', { timeout: 40_000 })
 
     // ── S1 bundle Space 从磁盘进 ribbon ─────────────────────────────────────────
-    const hasSpace = await until(() => win.evaluate(() => [...document.querySelectorAll('button.rb-space')].some((b) => /电脑销售ERP|PC Sales ERP/.test(b.getAttribute('title') || b.textContent || ''))), 30_000)
+    const hasSpace = await until(() => win.evaluate(() => [...document.querySelectorAll('button.rb-space')].some((b) => /电脑销售ERP|PC Sales ERP/.test(b.getAttribute('aria-label') || b.getAttribute('title') || b.textContent || ''))), 30_000)
     check('S1 ribbon 出现「电脑销售ERP」Space(bundle spaces/ 从磁盘装载)', hasSpace)
 
     // ── S2 进 Amadeus 让 vault 落地 → 插件按库播种 ───────────────────────────────

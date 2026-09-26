@@ -38,7 +38,7 @@ const hmAgo = (n) => { const t = new Date(Date.now() - n * 60_000); return `${ym
 async function clickSpace(win, names) {
   const clicked = await win.evaluate((labels) => {
     const buttons = [...document.querySelectorAll('button.rb-space')]
-    const hit = buttons.find((b) => labels.includes((b.getAttribute('title') || b.textContent || '').trim()))
+    const hit = buttons.find((b) => labels.includes((b.getAttribute('aria-label') || b.getAttribute('title') || b.textContent || '').trim()))
     if (!hit) return false
     hit.click()
     return true

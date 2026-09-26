@@ -10,7 +10,7 @@ import { publishAccountQuota, subscribeAccountQuota, type AccountQuotaView } fro
 import './specialAgents.css'
 
 registerMessages({
-  'specialUi.intro': { zh: '管理在后台整理记忆与推进工作的智能体。选择一个智能体调整它的工作方式。', en: 'Manage the agents that organize memory and work in the background. Choose one to adjust how it works.' },
+  'specialUi.intro': { zh: '管理在后台整理记忆与推进工作的 Agent。选择一个 Agent 调整它的工作方式。', en: 'Manage the agents that organize memory and work in the background. Choose one to adjust how it works.' },
   'specialUi.historianSummary': { zh: '整理会话与记忆', en: 'Organizes conversations and memory' },
   'specialUi.museSummary': { zh: '按节奏主动工作', en: 'Works proactively on a schedule' },
   'specialUi.saved': { zh: '更改已保存', en: 'Changes saved' },
@@ -19,7 +19,7 @@ registerMessages({
   'specialUi.discard': { zh: '放弃修改', en: 'Discard changes' },
   'specialUi.saveHint': { zh: '修改后保存，新的设置才会生效。', en: 'Save your changes to apply the new settings.' },
   'specialUi.retry': { zh: '重新加载', en: 'Try again' },
-  'specialUi.loadFailed': { zh: '暂时无法读取后台智能体设置。', en: 'Background agent settings could not be loaded.' },
+  'specialUi.loadFailed': { zh: '暂时无法读取后台 Agent 设置。', en: 'Background agent settings could not be loaded.' },
   'specialUi.advanced': { zh: '高级设置', en: 'Advanced settings' },
   'specialUi.memory': { zh: '记忆与进化', en: 'Memory and growth' },
   'specialUi.resetPrompt': { zh: '恢复默认提示词', en: 'Restore default prompt' },

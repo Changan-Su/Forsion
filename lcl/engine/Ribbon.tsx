@@ -4,14 +4,15 @@
  *  - 收纳夹:同区图标拖到夹上收入;悬停夹图标在右侧浮层展开(icon + 文字),浮层内可重排/拖出。
  *  - 区内放不下时尾部收进「…」,悬停展开,行为同收纳夹;两区高度弹性分配,都挤时各保一半。
  *  - 右键空白/两区 + 号 = 新建 Space / 添加命令(从命令面板选)/ 新建收纳夹;账号卡(pinned)钉死最底。 */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { PanelLeftClose, PanelLeftOpen, Folder as FolderIcon, MoreHorizontal, Plus, Zap } from 'lucide-react'
+import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
+import { ChevronsLeft, ChevronsRight, Folder as FolderIcon, MoreHorizontal, Plus, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useRibbonStore, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
 import { RIBBON_ICON_NAMES, iconByName } from './ribbonIcons'
 import { useCommandStore, openCommandPicker, addCommand, removeCommand } from './commandRegistry'
 import { setActiveSpace } from './spaceRegistry'
-import { effectiveHotkey, formatHotkey, useShortcuts } from './shortcutStore'
+import { effectiveHotkey, formatHotkey, isMacPlatform, useShortcuts } from './shortcutStore'
+import { engineTr, useEngineI18n } from './i18nSeam'
 import { label } from './types'
 import type { Command, RibbonItem } from './types'
 import { OverlayAt, zoomOf } from './menuAnchor'
@@ -27,14 +28,15 @@ interface FlyState { key: string; zone: RibbonZone; folderId?: string; top: numb
 interface MenuState { x: number; y: number; entries: { label: string; onClick(): void }[] }
 
 const GAP = 4
-const zh = (): boolean => document.documentElement.lang.startsWith('zh')
-/** 与 desktop 的 ShortcutsTab 同一判据(宿主启动时写 data-platform)。 */
-const isMac = (): boolean => { try { return document.documentElement.dataset.platform === 'mac' } catch { return false } }
+/** 收起态浮签时序 = desktop hoverTip 已拍板的那套(引擎不能 import 宿主,只能同值抄一份):
+ *  悬停 1s 弹;刚收起 0.1s 内移到下一枚 → 立刻弹(连续扫图标时不必每枚重等 1s)。 */
+const TIP_SHOW_DELAY = 1000
+const TIP_SKIP_DELAY = 100
 /** 上区第 n 个槽(0 基)的快捷键显示文本;已解绑/超出前 9 个 → 空串(什么都不画)。 */
 function slotHint(i: number): string {
   if (i >= 9) return ''
   const hk = effectiveHotkey({ id: `space-slot-${i + 1}`, hotkey: `mod+${i + 1}` })
-  return hk ? formatHotkey(hk, isMac()) : ''
+  return hk ? formatHotkey(hk, isMacPlatform()) : ''
 }
 
 function RibbonItemView({ item, expanded }: { item: RibbonItem; expanded: boolean }) {
@@ -44,8 +46,9 @@ function RibbonItemView({ item, expanded }: { item: RibbonItem; expanded: boolea
   }
   const Icon = item.icon
   const name = item.tooltip ? label(item.tooltip) : ''
+  // 收起态不用原生 title(会与 Ribbon 自绘浮签叠成两层提示):名字走 aria-label,浮签读 data-rb-tip。
   return (
-    <button className="rb-btn" title={expanded ? undefined : name} onClick={item.onClick}>
+    <button className="rb-btn" aria-label={name || undefined} data-rb-tip={expanded ? undefined : name || undefined} onClick={item.onClick}>
       {Icon && <Icon size={18} />}
       {expanded && <span className="rb-label">{name}</span>}
     </button>
@@ -53,10 +56,27 @@ function RibbonItemView({ item, expanded }: { item: RibbonItem; expanded: boolea
 }
 
 function CmdItemView({ cmd, expanded, overrideIcon }: { cmd: Command; expanded: boolean; overrideIcon?: LucideIcon }) {
+  // 开关类命令(声明了 checked):渲染期读状态。引擎不订阅宿主状态 → 点完、悬停进出时各重读一次。
+  const [, recheck] = useReducer((n: number) => n + 1, 0)
   const Icon = overrideIcon ?? cmd.icon ?? Zap
   const name = label(cmd.title)
+  let on: boolean | undefined
+  if (cmd.checked) { try { on = !!cmd.checked() } catch { on = undefined } }
   return (
-    <button className="rb-btn" title={expanded ? undefined : name} onClick={() => cmd.run()}>
+    <button
+      className={`rb-btn${on ? ' is-on' : ''}`}
+      aria-pressed={on}
+      aria-label={name}
+      data-rb-tip={expanded ? undefined : name}
+      onMouseEnter={cmd.checked ? recheck : undefined}
+      onMouseLeave={cmd.checked ? recheck : undefined}
+      onClick={() => {
+        const r = cmd.run()
+        if (!cmd.checked) return
+        recheck()
+        if (r && typeof (r as Promise<void>).then === 'function') void (r as Promise<void>).then(recheck, recheck)
+      }}
+    >
       <Icon size={18} />
       {expanded && <span className="rb-label">{name}</span>}
     </button>
@@ -73,6 +93,7 @@ export function Ribbon() {
   const commandIcons = useRibbonStore((s) => s.commandIcons)
   const commands = useCommandStore((s) => s.commands)
   useShortcuts((s) => s.overrides) // 设置里改了键 → 槽位上的快捷键提示当场跟着变
+  const { t } = useEngineI18n()
   const st = () => useRibbonStore.getState()
 
   const [drag, setDrag] = useState<DragState | null>(null)
@@ -91,6 +112,39 @@ export function Ribbon() {
   const flyRef = useRef<HTMLDivElement>(null)
   const flyTimer = useRef<number | null>(null)
   const geom = useRef<{ top: number; pitch: number; grabDy: number } | null>(null) // 落点几何(dragstart 拍一次)
+
+  // ---- 收起态浮签(取代原生 title):根上事件委托,认 [data-rb-tip]。时序同 hoverTip(1s / 0.1s skip)。
+  //      拖动、菜单、图标选择器、收纳夹浮层任一打开时不弹且立刻收;按下鼠标即收(点完别挂着)。 ----
+  const [tip, setTip] = useState<{ text: string; mid: number } | null>(null)
+  const tipFor = useRef<HTMLElement | null>(null) // 当前悬停(已弹或计时中)的按钮
+  const tipTimer = useRef<number | undefined>(undefined)
+  const tipShown = useRef(false)
+  const tipHiddenAt = useRef(0)
+  const hideTip = (): void => {
+    window.clearTimeout(tipTimer.current)
+    tipFor.current = null
+    if (tipShown.current) { tipShown.current = false; tipHiddenAt.current = Date.now() }
+    setTip(null)
+  }
+  const blockTip = !!drag || !!menu || !!iconPick || !!fly
+  useEffect(() => { if (blockTip || expanded) hideTip() }, [blockTip, expanded]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => window.clearTimeout(tipTimer.current), [])
+  const onTipOver = (e: React.MouseEvent): void => {
+    const el = (e.target as Element).closest('[data-rb-tip]') as HTMLElement | null
+    if (el === tipFor.current) return
+    const warm = tipShown.current || Date.now() - tipHiddenAt.current <= TIP_SKIP_DELAY
+    hideTip()
+    if (!el || blockTip || expanded) return
+    tipFor.current = el
+    const fire = (): void => {
+      if (tipFor.current !== el || !el.isConnected || !el.dataset.rbTip) return
+      const r = el.getBoundingClientRect() // 视口 px;渲染时再按 zoom 折算
+      tipShown.current = true
+      setTip({ text: el.dataset.rbTip, mid: r.top + r.height / 2 })
+    }
+    if (warm) fire()
+    else tipTimer.current = window.setTimeout(fire, TIP_SHOW_DELAY)
+  }
 
   // ---- 数据整形:两区各自的顶层条目(收纳夹成员从条上隐藏,byId 供浮层反查) ----
   const inFolder = new Set(folders.flatMap((f) => f.items))
@@ -227,7 +281,7 @@ export function Ribbon() {
       if (n > slotCount) { removeCommand(`space-slot-${n}`); continue }
       addCommand({
         id: `space-slot-${n}`,
-        title: () => (zh() ? `切到第 ${n} 个 Space` : `Switch to Space ${n}`),
+        title: () => engineTr('lcl.ribbon.switchSpace', { n }),
         keywords: `space switch ${n} 切换 空间`,
         hotkey: `mod+${n}`,
         run: () => runSlot.current(n - 1),
@@ -298,15 +352,15 @@ export function Ribbon() {
   // ---- 菜单(右键 / + 号共用) ----
   const ask = ribbonActions.prompt ?? ((t: string, i?: string) => Promise.resolve(window.prompt(t, i)))
   const createFolder = (zone: RibbonZone): void => {
-    void ask(zh() ? '新建收纳夹' : 'New folder', zh() ? '收纳夹' : 'Folder').then((v) => {
+    void ask(t('lcl.ribbon.newFolder'), t('lcl.ribbon.folderDefaultName')).then((v) => {
       const name = v?.trim()
       if (name) st().addFolder(zone, name)
     })
   }
   const zoneMenu = (zone: RibbonZone): MenuState['entries'] => [
-    ...(zone === 'top' && ribbonActions.newSpace ? [{ label: zh() ? '新建 Space' : 'New Space', onClick: ribbonActions.newSpace }] : []),
-    ...(zone === 'bottom' ? [{ label: zh() ? '添加命令' : 'Add command', onClick: () => openCommandPicker((id) => st().addCommandItem(id)) }] : []),
-    { label: zh() ? (zone === 'top' ? '新建收纳夹(Space 区)' : '新建收纳夹(命令区)') : zone === 'top' ? 'New folder (Spaces)' : 'New folder (commands)', onClick: () => createFolder(zone) },
+    ...(zone === 'top' && ribbonActions.newSpace ? [{ label: t('lcl.ribbon.newSpace'), onClick: ribbonActions.newSpace }] : []),
+    ...(zone === 'bottom' ? [{ label: t('lcl.ribbon.addCommand'), onClick: () => openCommandPicker((id) => st().addCommandItem(id)) }] : []),
+    { label: t(zone === 'top' ? 'lcl.ribbon.newFolderSpaces' : 'lcl.ribbon.newFolderCommands'), onClick: () => createFolder(zone) },
   ]
   const onZoneCtx = (zone: RibbonZone) => (e: React.MouseEvent): void => {
     if (e.defaultPrevented) return // 图标级菜单(用户 Space 删除/收纳夹/命令)优先
@@ -329,9 +383,9 @@ export function Ribbon() {
     const x = e.clientX, y = e.clientY
     setMenu({
       x, y, entries: [
-        { label: zh() ? '更换图标' : 'Change icon', onClick: () => pickIcon(x, y, f.icon, (name) => st().setFolderIcon(f.id, name)) },
-        { label: zh() ? '重命名' : 'Rename', onClick: () => { void ask(zh() ? '重命名收纳夹' : 'Rename folder', f.name).then((v) => { const n = v?.trim(); if (n) st().renameFolder(f.id, n) }) } },
-        { label: zh() ? '解散收纳夹' : 'Dissolve folder', onClick: () => st().removeFolder(f.id) },
+        { label: t('lcl.ribbon.changeIcon'), onClick: () => pickIcon(x, y, f.icon, (name) => st().setFolderIcon(f.id, name)) },
+        { label: t('lcl.ribbon.rename'), onClick: () => { void ask(t('lcl.ribbon.renameFolder'), f.name).then((v) => { const n = v?.trim(); if (n) st().renameFolder(f.id, n) }) } },
+        { label: t('lcl.ribbon.dissolveFolder'), onClick: () => st().removeFolder(f.id) },
       ],
     })
   }
@@ -340,8 +394,8 @@ export function Ribbon() {
     e.stopPropagation()
     const x = e.clientX, y = e.clientY
     setMenu({ x, y, entries: [
-      { label: zh() ? '设置图标' : 'Set icon', onClick: () => pickIcon(x, y, st().commandIcons[cmdId], (name) => st().setCommandIcon(cmdId, name)) },
-      { label: zh() ? '从 Ribbon 移除' : 'Remove from ribbon', onClick: () => st().removeCommandItem(cmdId) },
+      { label: t('lcl.ribbon.setIcon'), onClick: () => pickIcon(x, y, st().commandIcons[cmdId], (name) => st().setCommandIcon(cmdId, name)) },
+      { label: t('lcl.ribbon.removeCommand'), onClick: () => st().removeCommandItem(cmdId) },
     ] })
   }
 
@@ -354,7 +408,7 @@ export function Ribbon() {
         // 记下按钮元素:mod+N 打开这个收纳夹时要拿它当浮层锚点(键盘路径没有 currentTarget)。
         ref={(el) => { el ? folderBtns.current.set(f.id, el) : folderBtns.current.delete(f.id) }}
         className={`rb-btn rb-folder${overFolder === f.id ? ' drag-into' : ''}`}
-        title={expanded ? undefined : `${f.name} (${liveCount(f)})`}
+        aria-label={`${f.name} (${liveCount(f)})`} /* 悬停即弹浮层(浮层头就是名字)→ 不再挂浮签 */
         onMouseEnter={(e) => openFly(f.id, f.zone, e.currentTarget, f.id)}
         onMouseLeave={scheduleClose}
         onContextMenu={folderCtx(f)}
@@ -372,7 +426,7 @@ export function Ribbon() {
   const renderMoreBtn = (zone: RibbonZone): React.ReactNode => (
     <button
       className={`rb-btn rb-more${overFolder === `more:${zone}` ? ' drag-into' : ''}`}
-      title={expanded ? undefined : zh() ? '更多' : 'More'}
+      aria-label={t('lcl.ribbon.more')}
       onMouseEnter={(e) => openFly(`more:${zone}`, zone, e.currentTarget)}
       onMouseLeave={scheduleClose}
       onDragOver={(e) => acceptOver(e, !!drag && drag.zone === zone, () => { setOver(null); setOverFolder(`more:${zone}`) })}
@@ -381,7 +435,7 @@ export function Ribbon() {
       onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropOnBar(zone, zone === 'bottom' ? (botE[0]?.id ?? null) : null) }}
     >
       <MoreHorizontal size={18} />
-      {expanded && <span className="rb-label">{zh() ? '更多' : 'More'}</span>}
+      {expanded && <span className="rb-label">{t('lcl.ribbon.more')}</span>}
     </button>
   )
   const renderEntry = (e: Entry, forceExpanded?: boolean): React.ReactNode => {
@@ -413,17 +467,20 @@ export function Ribbon() {
       </div>
     )
   }
+  // 两个 ＋ 各说各的:上区 = 新建 Space / 收纳夹,命令区 = 添加命令(原来都叫「添加」,分不清)。
+  const plusName = (zone: RibbonZone): string => t(zone === 'top' ? 'lcl.ribbon.addSpaceOrFolder' : 'lcl.ribbon.addCommand')
   const renderPlusBtn = (zone: RibbonZone): React.ReactNode => (
     <button
       className="rb-btn rb-plus"
-      title={expanded ? undefined : zh() ? '添加' : 'Add'}
+      aria-label={plusName(zone)}
+      data-rb-tip={expanded ? undefined : plusName(zone)}
       onClick={(e) => {
         const r = e.currentTarget.getBoundingClientRect()
         setMenu({ x: r.right + 6, y: r.top, entries: zoneMenu(zone) })
       }}
     >
       <Plus size={16} />
-      {expanded && <span className="rb-label">{zh() ? '添加' : 'Add'}</span>}
+      {expanded && <span className="rb-label">{plusName(zone)}</span>}
     </button>
   )
   // 命令区靠下贴账号卡,整组 = Spaces 区的镜像:[＋ / 「…」/ 图标…] ↔ [图标… / 「…」/ ＋],
@@ -458,6 +515,7 @@ export function Ribbon() {
   const flyRow = (e: Entry, folder: RibbonFolder | null, at: number, list: string[]): React.ReactNode => (
     <div
       key={e.id}
+      data-id={e.id} /* 同条上格子的 data-id:台架按稳定 id 定位溢出行(未读角标会改可访问名;Codex 第三轮 H2-2) */
       className={`rb-fly-row${drag?.id === e.id ? ' dragging' : ''}${overId === e.id && drag?.id !== e.id ? ` drag-over${drag && list.indexOf(drag.id) >= 0 && list.indexOf(drag.id) < at ? ' below' : ''}` : ''}`}
       draggable
       onDragStart={(ev) => { ev.stopPropagation(); startDrag(ev, e.id, folder?.zone ?? fly!.zone, folder?.id ?? null) }}
@@ -473,7 +531,7 @@ export function Ribbon() {
       onContextMenu={e.kind === 'cmd' ? cmdCtx(e.cmd.id) : folder ? (ev) => {
         ev.preventDefault()
         ev.stopPropagation()
-        setMenu({ x: ev.clientX, y: ev.clientY, entries: [{ label: zh() ? '移出收纳夹' : 'Move out', onClick: () => { st().moveOutOfFolder(e.id); const persisted = folder.zone === 'top' ? st().order : st().bottomOrder; st().setZoneOrder(folder.zone, [...reorderBase(persisted, (folder.zone === 'top' ? topE : botE).map((x) => x.id), e.id), e.id]) } }] })
+        setMenu({ x: ev.clientX, y: ev.clientY, entries: [{ label: t('lcl.ribbon.moveOut'), onClick: () => { st().moveOutOfFolder(e.id); const persisted = folder.zone === 'top' ? st().order : st().bottomOrder; st().setZoneOrder(folder.zone, [...reorderBase(persisted, (folder.zone === 'top' ? topE : botE).map((x) => x.id), e.id), e.id]) } }] })
       } : undefined}
     >
       {renderEntry(e, true)}
@@ -487,6 +545,13 @@ export function Ribbon() {
       ref={rootRef}
       className={`rb${expanded ? ' rb-expanded' : ''}${drag ? ' rb-dragging' : ''}`}
       onContextMenu={onRootCtx}
+      onMouseOver={onTipOver}
+      onMouseLeave={hideTip}
+      onMouseDownCapture={(e) => {
+        // 点下即收;记住这枚按钮 → 点完鼠标还停在它上面时不再重新计时弹出(移到别处才重新武装)。
+        hideTip()
+        tipFor.current = (e.target as Element).closest('[data-rb-tip]') as HTMLElement | null
+      }}
       /* 兜底:两区之间的空隙、head、边距……凡是没被组接住的地方也放行 drop,一律落到**当前预览**
        * 那格。少了这层,松手差几像素落在组外就静默弹回 = 用户报的「显示了落点却没落过去」。 */
       onDragOver={(e) => acceptOver(e, !!drag)}
@@ -500,9 +565,16 @@ export function Ribbon() {
       }}
     >
       <div ref={headRef} className="rb-head">
-        <button className="rb-btn rb-toggle" title={expanded ? undefined : (zh() ? '展开' : 'Expand')} onClick={() => st().toggleExpanded()}>
-          {expanded ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
-          {expanded && <span className="rb-label">{zh() ? '折叠侧栏' : 'Collapse'}</span>}
+        {/* 切的是 Ribbon 自己「带不带名称」,不是侧栏:文案说动作结果,图标用 Chevrons(PanelLeft* 与标签条的左栏钮撞脸)。 */}
+        <button
+          className="rb-btn rb-toggle"
+          aria-label={t(expanded ? 'lcl.ribbon.iconsOnly' : 'lcl.ribbon.showLabels')}
+          aria-expanded={expanded}
+          data-rb-tip={expanded ? undefined : t('lcl.ribbon.showLabels')}
+          onClick={() => st().toggleExpanded()}
+        >
+          {expanded ? <ChevronsLeft size={18} /> : <ChevronsRight size={18} />}
+          {expanded && <span className="rb-label">{t('lcl.ribbon.iconsOnly')}</span>}
         </button>
         {headItems.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}
       </div>
@@ -528,8 +600,8 @@ export function Ribbon() {
           onDragOver={(e) => acceptOver(e, !!drag && drag.zone === fly.zone && !!flyFolder && !drag.id.startsWith('folder:') && e.target === e.currentTarget)}
           onDrop={(e) => { if (flyFolder && e.target === e.currentTarget) { e.preventDefault(); dropIntoFolder(flyFolder) } }}
         >
-          <div className="rb-fly-head">{flyFolder ? flyFolder.name : zh() ? '更多' : 'More'}</div>
-          {flyFolder && liveCount(flyFolder) === 0 && <div className="rb-fly-empty">{zh() ? '拖动图标到收纳夹图标放入' : 'Drag icons onto the folder to collect'}</div>}
+          <div className="rb-fly-head">{flyFolder ? flyFolder.name : t('lcl.ribbon.more')}</div>
+          {flyFolder && liveCount(flyFolder) === 0 && <div className="rb-fly-empty">{t('lcl.ribbon.folderEmpty')}</div>}
           {flyFolder
             ? flyFolder.items.map((id, i) => { const e = byId.get(id); return e ? flyRow(e, flyFolder, i, flyFolder.items) : null })
             : flyTail?.map((e) => e.kind === 'folder'
@@ -554,6 +626,17 @@ export function Ribbon() {
         </div>
       )}
 
+      {tip && !expanded && (
+        <div
+          className="rb-tip"
+          role="tooltip"
+          /* 同 .rb-fly:rect 是视口 px,fixed 的 left/top 会被祖先 zoom 再乘一遍 → 先除掉(见 menuAnchor.tsx)。 */
+          style={(() => { const z = zoomOf(rootRef.current); return { left: ((rootRef.current?.getBoundingClientRect().right ?? 44) + 6) / z, top: tip.mid / z } })()}
+        >
+          {tip.text}
+        </div>
+      )}
+
       {menu && (
         <div className="rb-menu-backdrop" onMouseDown={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null) }}>
           <OverlayAt className="rb-menu" x={menu.x} y={menu.y} onMouseDown={(e) => e.stopPropagation()}>
@@ -568,7 +651,7 @@ export function Ribbon() {
         <div className="rb-menu-backdrop" onMouseDown={() => setIconPick(null)} onContextMenu={(e) => { e.preventDefault(); setIconPick(null) }}>
           <OverlayAt className="rb-iconpick" x={iconPick.x} y={iconPick.y} onMouseDown={(e) => e.stopPropagation()}>
             {/* 「默认」= 清除覆盖,回落各自默认图标 */}
-            <button className="rb-iconpick-reset" onClick={() => { const a = iconPick.apply; setIconPick(null); a('') }}>{zh() ? '默认图标' : 'Default'}</button>
+            <button className="rb-iconpick-reset" onClick={() => { const a = iconPick.apply; setIconPick(null); a('') }}>{t('lcl.ribbon.defaultIcon')}</button>
             <div className="rb-iconpick-grid">
               {RIBBON_ICON_NAMES.map((name) => {
                 const I = iconByName(name)!

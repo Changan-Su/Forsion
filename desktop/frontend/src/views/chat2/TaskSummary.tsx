@@ -30,7 +30,7 @@ registerMessages({
   'tsum.scope.add': { zh: '添加工作文件夹', en: 'Add working folder' },
   'tsum.scope.remove': { zh: '移出工作范围', en: 'Remove from scope' },
   'tsum.scope.hint': {
-    zh: '加进来的文件夹 agent 可直接读写、不再逐次弹审批;相对路径仍只相对默认目录解析。',
+    zh: '加进来的文件夹 Agent 可直接读写、不再逐次弹审批;相对路径仍只相对默认目录解析。',
     en: 'Added folders are readable/writable without per-call approval; relative paths still resolve against the default folder.',
   },
   'tsum.sources': { zh: '来源', en: 'Sources' },

@@ -86,7 +86,7 @@ async function main() {
       if (await b.count().catch(() => 0)) { await b.click().catch(() => {}); break }
     }
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
-    await win.locator('.rb-space[title="Note"]').first().click({ timeout: 15_000 })
+    await win.locator('.rb-space[aria-label="Note"]').first().click({ timeout: 15_000 })
     await win.waitForSelector('.t2s-srow:has-text("Gamma")', { timeout: 20_000 })
     await win.waitForTimeout(2500)
     const f0 = await state()
@@ -145,8 +145,8 @@ async function main() {
     // ⚠️ 组头的「+」一律开在主区第一组,点哪一组的都一样(实测);要把新标签放进哪组只能靠这个顺序安排。
     const mod = process.platform === 'darwin' ? 'Meta' : 'Control'
     const roundTrip = async () => {
-      await win.locator('.rb-space[title="Tangu"]').first().click({ timeout: 15_000 }); await win.waitForTimeout(2500)
-      await win.locator('.rb-space[title="Note"]').first().click({ timeout: 15_000 }); await win.waitForTimeout(3000)
+      await win.locator('.rb-space[aria-label="Tangu"]').first().click({ timeout: 15_000 }); await win.waitForTimeout(2500)
+      await win.locator('.rb-space[aria-label="Note"]').first().click({ timeout: 15_000 }); await win.waitForTimeout(3000)
     }
     // F8:单组 [Gamma, 新标签页],前台切到新标签页再往返 → 主区没有前台编辑器,Gamma 只在后台
     await win.locator('.wb-tab', { hasText: '新建标签页' }).first().click(); await win.waitForTimeout(800)

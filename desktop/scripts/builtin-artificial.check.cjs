@@ -72,7 +72,7 @@ function check(name, ok, detail) {
 
 /** ribbon 上**全部** Space 名 = 上区条上的 + 「…」溢出浮层里的 + 主位槽里的那一个(同 check:homepage)。 */
 async function ribbonSpaces(win) {
-  const read = (root) => `[...document.querySelectorAll('${root} .rb-space')].map((b) => b.getAttribute('title') || b.querySelector('.rb-label')?.textContent || '')`
+  const read = (root) => `[...document.querySelectorAll('${root} .rb-space')].map((b) => b.getAttribute('aria-label') || b.getAttribute('title') || b.querySelector('.rb-label')?.textContent || '')`
   const bar = await win.evaluate(read('.rb-top'))
   const slot = await win.evaluate(read('.rb-home'))
   const more = win.locator('.rb-top .rb-more').first()
@@ -89,7 +89,7 @@ async function ribbonSpaces(win) {
 async function enterSpace(win, names) {
   const click = (root) => `(() => {
     const b = [...document.querySelectorAll('${root} .rb-space')].find((x) =>
-      ${JSON.stringify(names)}.includes(x.getAttribute('title') || x.querySelector('.rb-label')?.textContent || ''))
+      ${JSON.stringify(names)}.includes(x.getAttribute('aria-label') || x.getAttribute('title') || x.querySelector('.rb-label')?.textContent || ''))
     if (b) { b.click(); return true }
     return false
   })()`

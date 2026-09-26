@@ -19,7 +19,11 @@ import { useSpaceStore, useRibbonStore, addRibbonIcon, label, OverlayAt } from '
 import type { SpaceDefinition } from '@lcl/engine'
 import { SpaceButton } from './components/SpaceButton'
 import { PRODUCT } from './product'
-import { currentLocale } from './i18n'
+import { registerMessages, useI18n } from './i18n'
+
+registerMessages({
+  'homeSlot.menuHead': { zh: '主位放哪个 Space', en: 'Space in the home slot' },
+})
 
 export const HOME_SLOT_KEY = 'forsion_home_slot_space'
 /** 缺省主位 = 主页 Space。插件关掉 / 单品档案没有它时,由 homeSlotSpaceId 的回落链兜。 */
@@ -47,7 +51,7 @@ export function setHomeSlotSpace(id: string): void {
 function HomeSlotButton({ space, expanded }: { space: SpaceDefinition; expanded: boolean }) {
   const spaces = useSpaceStore((s) => s.spaces)
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
-  const zh = currentLocale() === 'zh'
+  const { t } = useI18n()
   // 关菜单走 window 监听(与 amadeusViews 的 ctx-menu 同款),不铺 scrim:
   // ribbon 整条是 -webkit-app-region:drag,盖一张全屏 div 会顺手把拖窗区也挡掉。
   useEffect(() => {
@@ -66,7 +70,7 @@ function HomeSlotButton({ space, expanded }: { space: SpaceDefinition; expanded:
       <SpaceButton space={space} expanded={expanded} />
       {menu && createPortal(
         <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
-          <div className="ctx-head">{zh ? '主位放哪个 Space' : 'Space in the home slot'}</div>
+          <div className="ctx-head">{t('homeSlot.menuHead')}</div>
           {spaces.map((sp) => (
             <button key={sp.id} onClick={() => { setHomeSlotSpace(sp.id); setMenu(null) }}>
               {sp.icon ? <sp.icon size={13} /> : <span style={{ width: 13 }} />}

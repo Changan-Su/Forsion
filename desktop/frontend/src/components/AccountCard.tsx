@@ -20,7 +20,7 @@ import { publishAccountQuota, type BackgroundQuotaView } from '../services/accou
 import { ResetCardCeremony, type ResetCardResult } from './ResetCardCeremony'
 
 registerMessages({
-  'sidebar.account.menu.background': { zh: '后台智能体', en: 'Background agents' },
+  'sidebar.account.menu.background': { zh: '后台 Agent', en: 'Background agents' },
   'sidebar.account.menu.backgroundHint': {
     zh: '主额度之外额外的一份,只计 Muse 与自动化用云端默认后台模型的用量',
     en: 'An extra allowance on top of your main quota, used only by Muse and automations on the cloud default background model',

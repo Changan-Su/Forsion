@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import { ArrowLeft, Bot, Check, ChevronRight, Copy, ExternalLink, FileText, Folder, FolderGit2, FolderOpen, GitBranch, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Sparkles, Star, TerminalSquare, Users, X } from 'lucide-react'
+import { ArrowLeft, Check, ChevronRight, Copy, ExternalLink, FileText, Folder, FolderGit2, FolderOpen, GitBranch, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Sparkles, Star, TerminalSquare, Users, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
@@ -11,10 +11,13 @@ import { AvatarStack } from '../components/AvatarStack'
 import { openSpecial } from './SpecialViews'
 import { openTerminal } from '../builtins'
 import { isProjectWorkspace, type ProjectWorkspace } from '../stores/projectSettings'
-import { projectExecutors, relativeTimeOf, shortenPath, type ProjectExecutor } from './projectProfileState'
+import { projectExecutors, shortenPath, type ProjectExecutor } from './projectProfileState'
+import { formatRelative } from '../format/time'
 import './projectProfileMessages'
 import './teamProfile.css'
 import './projectProfile.css'
+import { AgentAvatar } from '../components/AgentAvatar'
+import { thinkingLabel } from '../components/thinkingLabel'
 
 type Tab = 'agents' | 'settings' | 'git'
 const TABS: Array<{ id: Tab; icon: typeof Users }> = [{ id: 'agents', icon: Users }, { id: 'settings', icon: Settings2 }, { id: 'git', icon: GitBranch }]
@@ -192,7 +195,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     : ex.kind === 'party' ? ex.sessions[0]?.title || t('projectProfile.party')
     : s.engines.find((e) => e.id === ex.id)?.name || ex.id
   const executorPortrait = (ex: ProjectExecutor): ReactNode => {
-    if (ex.kind === 'agent') return s.avatars[ex.id] ? <img src={s.avatars[ex.id]} alt="" /> : <Bot size={42} strokeWidth={1} />
+    if (ex.kind === 'agent') return <AgentAvatar name={agentOf(ex.id)?.name || ex.id} url={s.avatars[ex.id]} fill />
     if (ex.kind === 'engine') return <TerminalSquare size={26} strokeWidth={1.2} />
     const team = ex.kind === 'team' ? teamOf(ex.id) : undefined
     if (team && s.teamAvatars[team.slug] && isTeamImageAvatar(team.avatar)) return <img src={s.teamAvatars[team.slug]} alt="" />
@@ -249,7 +252,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
           {picker && <div className="team-candidate-picker"><div className="team-candidate-heading"><label className="agents-search"><Search size={13} /><input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} aria-label={t('agentProfile.search')} placeholder={t('agentProfile.search')} /></label><button aria-label={t('projectProfile.closePicker')} onClick={() => setPicker(false)}><X size={14} /></button></div>
             <p className="team-profile-caption">{t('projectProfile.addHint')}</p>
             <div className="team-candidates project-candidates">
-              {agentCandidates.map((a) => <button key={a.slug} onClick={() => startWith({ kind: 'agent', slug: a.slug })}>{s.avatars[a.slug] ? <img src={s.avatars[a.slug]} alt="" width={16} height={16} style={{ borderRadius: 4 }} /> : <Bot size={16} />}<span><strong>{a.name}</strong><small>{a.description}</small></span><MessageSquarePlus size={14} /></button>)}
+              {agentCandidates.map((a) => <button key={a.slug} onClick={() => startWith({ kind: 'agent', slug: a.slug })}><AgentAvatar name={a.name || a.slug} url={s.avatars[a.slug]} size={16} className="agent-avatar-mini" /><span><strong>{a.name}</strong><small>{a.description}</small></span><MessageSquarePlus size={14} /></button>)}
               {teamCandidates.map((team) => <button key={team.slug} onClick={() => startWith({ kind: 'team', team })}><Users size={16} /><span><strong>{team.name}</strong><small>{team.description || team.members.map((m) => agentOf(m.slug)?.name || m.slug).join(' · ')}</small></span><MessageSquarePlus size={14} /></button>)}
               {!agentCandidates.length && !teamCandidates.length && <p className="agent-profile-muted">{t('projectProfile.noCandidates')}</p>}
             </div></div>}
@@ -260,7 +263,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               <button className="team-member-open" disabled={!canOpen} onClick={() => open(ex.key)} aria-label={`${t('projectProfile.inspect')} ${executorLabel(ex)}`}>
                 <span className="team-member-portrait">{executorPortrait(ex)}</span>
                 <strong><span>{executorLabel(ex)}</span>{ex.current && <em className="project-executor-tag">{t('projectProfile.current')}</em>}{isDefault(ex) && <em className="project-executor-tag" title={t('projectProfile.isDefault')}><Star size={10} /></em>}</strong>
-                <span className={`team-member-status ${ex.running ? 'working' : 'idle'}`}>{t(ex.running ? 'projectProfile.status.working' : ex.kind === 'party' ? 'projectProfile.party' : ex.kind === 'engine' ? 'projectProfile.engine' : 'projectProfile.status.idle')} · {t('projectProfile.sessions', { count: ex.sessions.length })}{ex.lastActive ? ` · ${t('projectProfile.lastActive', { time: relativeTimeOf(ex.lastActive, now, locale) })}` : ''}</span>
+                <span className={`team-member-status ${ex.running ? 'working' : 'idle'}`}>{t(ex.running ? 'projectProfile.status.working' : ex.kind === 'party' ? 'projectProfile.party' : ex.kind === 'engine' ? 'projectProfile.engine' : 'projectProfile.status.idle')} · {t('projectProfile.sessions', { count: ex.sessions.length })}{ex.lastActive ? ` · ${t('projectProfile.lastActive', { time: formatRelative(ex.lastActive, { now, locale }) })}` : ''}</span>
                 {canOpen && <ChevronRight size={14} className="team-member-chevron" />}
               </button>
               {(ex.kind === 'agent' || (ex.kind === 'team' && team)) && <div className="project-inline-actions">
@@ -300,7 +303,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
           </section>
           {ctx.plans.length > 0 && <section className="project-card" data-project-plans>
             <div className="project-card-head"><div><h3>{t('projectProfile.plans')}</h3><small>{t('projectProfile.plansHint', { dir: `${ctx.workspaceDirName}/plans` })}</small></div></div>
-            <div className="project-list">{ctx.plans.map((plan) => <button type="button" key={plan.path} className="project-row" title={plan.path} onClick={() => void window.tangu?.openHostPath?.(plan.path)}><strong>{plan.title || plan.name}</strong><small>{relativeTimeOf(plan.mtimeMs, now, locale)}</small></button>)}</div>
+            <div className="project-list">{ctx.plans.map((plan) => <button type="button" key={plan.path} className="project-row" title={plan.path} onClick={() => void window.tangu?.openHostPath?.(plan.path)}><strong>{plan.title || plan.name}</strong><small>{formatRelative(plan.mtimeMs, { now, locale })}</small></button>)}</div>
           </section>}
           <section className="project-card" data-project-defaults>
             <div className="project-card-head"><div><h3>{t('projectProfile.defaults')}</h3><small>{t('projectProfile.defaultsHint')}</small></div></div>
@@ -316,7 +319,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
             <ProfileModelField models={(s.models || []).filter((m) => (m.modelType || 'llm') === 'llm')} value={settingsDraft.model || ''} label={t('agentProfile.model')} onChange={(model) => patchSettings({ model: model || undefined })} />
             <label className="project-field">{t('agentProfile.thinking')}<select value={settingsDraft.thinkingLevel || ''} onChange={(e) => patchSettings({ thinkingLevel: (e.target.value || undefined) as ProjectSettings['thinkingLevel'] })}>
               <option value="">{t('projectProfile.inherit')}</option>
-              {THINKING_LEVELS.map((lv) => <option key={lv} value={lv}>{t(`input.thinkingShort.${lv}`)}</option>)}
+              {THINKING_LEVELS.map((lv) => <option key={lv} value={lv}>{thinkingLabel(lv, t)}</option>)}
             </select></label>
           </section>
         </div>}
@@ -345,7 +348,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
           </section>}
           {git.repo && !!git.commits?.length && <section className="project-card" data-project-git-commits>
             <div className="project-card-head"><div><h3>{t('projectProfile.git.commits')}</h3></div></div>
-            <div className="project-list">{git.commits.map((c) => <div key={c.sha} className="project-row project-row-static project-git-commit" title={c.sha}><strong>{c.subject}</strong><small>{relativeTimeOf(c.at, now, locale)}</small><code>{c.short}</code></div>)}</div>
+            <div className="project-list">{git.commits.map((c) => <div key={c.sha} className="project-row project-row-static project-git-commit" title={c.sha}><strong>{c.subject}</strong><small>{formatRelative(c.at, { now, locale })}</small><code>{c.short}</code></div>)}</div>
           </section>}
         </div>}
         {!ctx && !loadError && <p className="agent-profile-muted" style={{ paddingTop: 16 }}><Loader2 size={14} className="spin" /> {t('projectProfile.loading')}</p>}
