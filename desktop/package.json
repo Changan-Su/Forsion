@@ -144,6 +144,7 @@
     "dist": "npm run build:unitweb && electron-builder --config electron-builder.config.cjs",
     "fetch-python": "node build/fetch-python.cjs",
     "fetch-node": "node build/fetch-node.cjs",
+    "fetch-office": "node build/fetch-office.cjs",
     "typecheck": "tsc --noEmit && node ../tangu-agent/scripts/sync-command-catalog.mjs --check",
     "predev:amadeus": "node scripts/dev-version.check.cjs",
     "dev:amadeus": "FORSION_PRODUCT=amadeus electron-vite dev --noSandbox",

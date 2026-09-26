@@ -1,0 +1,41 @@
+# 干净 Windows(藏掉 VC++ 运行库)上验随包 Python / LibreOffice(09-26)。
+# GitHub runner 自带 VC++,build-desktop 里 afterPack 的两道闸测不出「用户机器没装 VC++ 运行库」。
+# 测的是**本提交或最近祖先提交**成功的 build-desktop 产物(forsion-windows-2022):先对该提交跑 build-desktop,再触发这里。
+# 触发:合入 main 后 Actions 里手动跑;合入前推一个 probe/bundled-runtimes* 分支(workflow_dispatch 只认默认分支上的文件)。
+# 细节见 desktop/scripts/bundled-runtimes.windows-probe.cjs 头注释。
+name: probe-bundled-runtimes
+on:
+  workflow_dispatch:
+  push:
+    branches: ['probe/bundled-runtimes*']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  clean-windows:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 30
+      - name: Find nearest commit with a successful build-desktop run
+        id: build
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for sha in $(git log --format=%H -n 30); do
+            id=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build-desktop.yml --commit "$sha" --status success -L 1 --json databaseId -q '.[0].databaseId')
+            if [ -n "$id" ]; then echo "run=$id" >> "$GITHUB_OUTPUT"; echo "测 $sha 的 build-desktop run $id"; exit 0; fi
+          done
+          echo "::error::最近 30 个提交都没有成功的 build-desktop 产物,先跑 build-desktop"; exit 1
+      - uses: actions/download-artifact@v4
+        with:
+          name: forsion-windows-2022
+          run-id: ${{ steps.build.outputs.run }}
+          github-token: ${{ github.token }}
+          path: art
+      - name: Probe bundled runtimes without VC++ runtime
+        shell: pwsh
+        run: node desktop/scripts/bundled-runtimes.windows-probe.cjs art

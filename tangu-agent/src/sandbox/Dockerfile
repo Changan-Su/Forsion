@@ -1,6 +1,7 @@
 # Tangu Agent run_python 沙箱镜像。
 # 在 python:3.12-slim 上预装「离线文档/数据处理」常用库——因为运行时容器是 --network none，
 # 无法 pip install，必须在 build 期装好。覆盖 docx/xlsx/pptx/pdf 生成 + 数据/绘图。
+# ⚠️ 下面的 pip 清单与桌面端内置 Python 的 desktop/build/python-requirements.txt 逐行一致，改一边就改另一边。
 #
 # 构建：  docker build -t forsion-agent-sandbox:py312 server/microserver/agent-core/sandbox
 # 或：    npm run sandbox:build   (见 package.json)

@@ -29,6 +29,9 @@
  *   npm run live:harness -- --only coding                    # 改 agents/codingPrompt.ts / skills/forsion-plugin 后跑:Coding 人格面对插件项目须指向 Sandbox 面板、且不自己动手 git init/commit(版本由宿主管)
  *   npm run live:harness -- --only refine                    # 自进化闭环(09-18):Historian 自动档提名 → 收件箱 → /refine 采纳写 HARNESS.md → 新会话系统提示带上;改 REFINE_DIRECTIVE / harnessStore / 判官 harness 字段 / 注入槽后跑
  *   npm run live:harness -- --only browsertabs              # 读用户已打开的浏览器标签(09-24):起临时 headless Chrome 冒充用户浏览器;改 browser_tabs / 浏览器提示词后跑(CHROME_BIN 可指定)
+ *   npm run live:harness -- --only officedoc                # 桌面随包 LibreOffice(09-26):read_document 读 3 页 docx 按真页答出第 3 页的码;改 read_document / fetch-office 后跑。
+ *                                                           #   前置:desktop 里 npm run fetch-office;台架须跑在 Node ≥22.19(kit 的 engines,Bash 默认的 fnm v20 不行)
+ *                                                           #   负对照:TANGU_OFFICE_KIT=/nonexistent npm run live:harness -- --only officedoc(引擎日志断言须红)
  *   node scripts/live-harness.mjs --selftest                 # 纯判据(done 锚点 / load_tools 措辞 / 子代理归属 / 团队激活窗与真并行)的负对照;不起引擎、不需凭证
  *
  * 凭证:把 ~/.forsion-dev/provider-auth.json(--auth 可改)**软链**进隔离共享域 —— 引擎自己读,本脚本不读;
@@ -46,6 +49,7 @@ import { randomUUID } from 'node:crypto';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { fromDb, report as timelineReport } from './stall-timeline.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -58,7 +62,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -67,7 +71,7 @@ const FILLER = Math.max(0, Math.floor(Number(opt('filler', 0)) || 0));
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -335,6 +339,10 @@ const TOKEN = randomUUID(); // 每次随机:撞上别的台架/引擎也只会 4
 const port = await new Promise((r) => { const srv = createServer(); srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => r(p)); }); });
 const base = `http://127.0.0.1:${port}`;
 const engineLog = join(OUT, 'engine.log');
+// officedoc:桌面随包 LibreOffice 的入口(backendManager 给引擎的就是这个 env)。夹具 docx 用缺省位置那份 kit 自带的
+// fflate 拼;引擎侧可被 TANGU_OFFICE_KIT 覆盖成坏路径做负对照。
+const DEFAULT_OFFICE_KIT = join(root, '..', 'desktop', 'build', 'office', 'node_modules', '@deepseek-ai', 'libreoffice-kit', 'lib', 'index.js');
+const OFFICE_KIT = process.env.TANGU_OFFICE_KIT || DEFAULT_OFFICE_KIT;
 const startedAt = new Date().toISOString();
 
 // browsertabs(09-24):起一个临时 headless Chrome 冒充「用户正在用的浏览器」,经 TANGU_BROWSER_CDP 指给引擎。
@@ -370,6 +378,7 @@ const child = spawn(process.execPath, [
   TANGU_BROWSER_CDP: userChromeWs || 'off',
   // --window:只钉台架模型的窗口(contextBudget 的 env 覆盖表,最高优先级),别的模型不受影响
   ...(WINDOW ? { TANGU_MODEL_CONTEXT_WINDOWS: JSON.stringify({ [MODEL]: WINDOW }) } : {}),
+  ...(ONLY.has('officedoc') ? { TANGU_OFFICE_KIT: OFFICE_KIT } : {}),
 }, stdio: ['ignore', 'pipe', 'pipe'] });
 child.stdout.on('data', (d) => appendFileSync(engineLog, d));
 child.stderr.on('data', (d) => appendFileSync(engineLog, d));
@@ -1283,6 +1292,43 @@ try {
       detail: ev.error || (hit ? `用上了预置记忆(${SEED_TOKEN})` : `没用记忆,答的是:${ev.content.slice(0, 90)}`),
       output: `【预置记忆】${SEED_FACT}\n\n【回答】${ev.content}`,
       ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
+    };
+  });
+
+  // ── officedoc(09-26,opt-in):桌面随包 LibreOffice(@deepseek-ai/libreoffice-kit)× read_document。
+  // 门:read_document 成功、按真页(≥3 页,不是 docx 纯文本兜底)解析出**第 3 页**上的码 + 模型答对页码与码 +
+  // 引擎日志里有「随包 LibreOffice 转 PDF ✓」。最后这条不能省:本机装了系统 LibreOffice 时 liteparse 自己也能分页,
+  // 只看分页分不出走的是随包引擎还是系统 soffice。
+  await scenario('officedoc', '随包 LibreOffice:read_document 读 3 页 docx,答出第 3 页的验证码', async () => {
+    const [maj, min] = process.versions.node.split('.').map(Number);
+    if (maj < 22 || (maj === 22 && min < 19)) return { ok: false, skipped: true, detail: `台架跑在 Node ${process.versions.node};kit 要 ≥22.19(引擎用同一个 node)` };
+    if (!existsSync(DEFAULT_OFFICE_KIT)) return { ok: false, skipped: true, detail: `缺 ${DEFAULT_OFFICE_KIT};先 cd desktop && npm run fetch-office` };
+    const { zipSync, strToU8 } = createRequire(DEFAULT_OFFICE_KIT)('fflate');
+    const code = `OFFICE-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    const para = (t) => `<w:p><w:r><w:t xml:space="preserve">${t}</w:t></w:r></w:p>`;
+    const pageBreak = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+    const xml = (x) => strToU8('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' + x);
+    writeFileSync(join(workspace, 'office-report.docx'), zipSync({
+      '[Content_Types].xml': xml('<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>'),
+      '_rels/.rels': xml('<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'),
+      'word/document.xml': xml(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${[
+        para('Quarterly operations report. Page one: summary of the quarter.'), pageBreak,
+        para('Page two: methodology and data sources.'), pageBreak,
+        para(`Page three: appendix. The verification code is ${code}.`),
+      ].join('')}</w:body></w:document>`),
+    }));
+    const ev = await run(`live-officedoc-${Date.now()}`,
+      'Use read_document on ./office-report.docx in the workspace. On which page is the verification code stated, and what is the code?', 300_000);
+    const doc = ev.toolResults.find((r) => r.name === 'read_document' && !r.isError && r.full.includes(code));
+    const pages = Number(doc?.full.match(/\((\d+) pages/)?.[1] || 0);
+    const plain = !!doc?.full.includes('plain text only');
+    const kitLog = readFileSync(engineLog, 'utf8').split('\n').filter((l) => l.includes('[read_document] 随包 LibreOffice'));
+    const kitOk = kitLog.some((l) => l.includes('转 PDF ✓ office-report.docx'));
+    const answered = ev.content.includes(code) && /\b3\b|three|third|第\s*3|第三/i.test(ev.content);
+    return {
+      ok: !ev.error && !!doc && pages >= 3 && !plain && kitOk && answered,
+      detail: `工具序列 [${ev.toolCalls.join(' → ') || '无'}];read_document ${doc ? `成功,${pages} 页${plain ? '(纯文本兜底!)' : ''}` : '没解析出码(报错/没调用)'};引擎日志 ${kitLog.length ? kitLog.map((l) => l.trim().slice(0, 120)).join(' | ') : '无随包引擎记录'};回答${answered ? '含码与第 3 页' : '未答全'}${ev.error ? ';' + ev.error : ''}`,
+      output: `read_document 结果:${(ev.toolResults.find((r) => r.name === 'read_document') || {}).result?.slice(0, 600) || '(没调用)'}\n\n${ev.content}`,
     };
   });
 

@@ -14,6 +14,7 @@ import { hostSandboxFs, parseHostDocument } from '../sandbox/hostSandboxFs.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { ToolContext, ToolImpl } from './toolTypes.js';
 import type { ToolProvider } from './toolRegistry.js';
 import { checkWritePath } from './fsPolicy.js';
@@ -52,6 +53,37 @@ function vaultRootOrNull(): string | null {
 /** 上一次 read_document 的解析结果（键=路径+mtime+size+ino+ocr）。定位→读页是两趟调用，别重解析整本书。
  *  plainText = 没走 LibreOffice 的 docx 纯文本兜底（整篇算一页，没有排版页）。 */
 let docMemo: { key: string; pages: DocPage[]; plainText?: boolean } | null = null;
+
+/** 随包 LibreOffice 转换引擎能吃的格式(@deepseek-ai/libreoffice-kit 的 CONVERSION_FORMATS → pdf)。 */
+const OFFICE_KIT_EXT = /\.(docx?|odt|xlsx?|ods|pptx?|odp)$/i;
+
+/**
+ * 桌面端随包的 LibreOffice 转换引擎(宿主经 TANGU_OFFICE_KIT 给入口模块)把 Office 文档转成临时 PDF,
+ * 让没装 LibreOffice 的机器也能按真页读。没有随包引擎 / 格式不认 → null;引擎在但这次失败(含老 Node
+ * 起不来 kit、取消、超时)→ 'failed'。两种都由调用方照旧走 liteparse→系统 soffice→docx 纯文本 那条链。
+ * 返回的临时目录由调用方删。
+ */
+async function officeKitPdf(abs: string, signal?: AbortSignal): Promise<{ pdf: string; dir: string } | 'failed' | null> {
+  const kit = process.env.TANGU_OFFICE_KIT;
+  if (!kit || !OFFICE_KIT_EXT.test(abs)) return null;
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'tangu-office-'));
+  try {
+    const { createConverter } = await import(pathToFileURL(kit).href);
+    // 首个 docx 要建字体索引(本机实测 ~8s,之后落盘复用),linux 走 WASM 更慢;但得在工具的 120s 预算里
+    // 给回落链留出余量。signal = 用户取消 + 工具超时(executeTool 已并入),转换跟着停。
+    const converter = await createConverter({ timeoutMs: 90_000 });
+    const pdf = path.join(dir, 'document.pdf'); // kit 要求输出路径不存在:全新临时目录里的固定名
+    const t0 = Date.now();
+    try { await converter.render({ inputPath: abs, outputPath: pdf }, signal); } finally { await converter.dispose(); }
+    // 这两行日志是 live 台架区分「走了随包引擎」还是「回落到系统 soffice」的唯一证据,也是用户机上排查的入口
+    console.log(`[read_document] 随包 LibreOffice 转 PDF ✓ ${path.basename(abs)} ${Date.now() - t0}ms`);
+    return { pdf, dir };
+  } catch (e: any) {
+    console.warn(`[read_document] 随包 LibreOffice 转换失败,回落原链路:${e?.code || ''} ${e?.message || e}`);
+    await fs.rm(dir, { recursive: true, force: true });
+    return 'failed';
+  }
+}
 
 /** 按扩展名判定是否受支持的图片;非图片返回 null。 */
 function imageMimeForPath(p: string): string | null {
@@ -565,7 +597,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
         name: 'read_document',
         description:
           'Extract the text/markdown content of a document so you can actually read it — use this instead of read_file for binary documents (read_file would return garbled bytes). ' +
-          'PDF works out of the box; xlsx/pptx need LibreOffice installed on the machine, and without it docx is read as plain text (no page layout). Path resolved relative to the current working directory. ' +
+          'PDF works out of the box. docx/xlsx/pptx are converted through LibreOffice, which the Forsion desktop app bundles (elsewhere it must be installed on the machine); without it docx is read as plain text (no page layout). Path resolved relative to the current working directory. ' +
           'The text is split into pages marked "--- page N ---" (N is the real page number). A whole long document comes back truncated, so for a big file work in two steps: ' +
           'search:"phrase" to find where something is (literal case-insensitive substring, NOT semantic — retry with other wordings if it misses), then pages:"12-18" to read that part in full. ' +
           'When you tell the user something you read here, cite the spot as a wikilink — copy the exact form printed in this tool\'s output header (e.g. [[papers/report.pdf#page=12]]) and only change the page number. ' +
@@ -614,6 +646,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       // 备忘键带 size+ino:同步/备份还原可以保留原 mtime 换掉内容,只认 mtime 会一直吐旧正文(Codex)。
       const memoKey = `${abs}|${stat.mtimeMs}|${stat.size}|${stat.ino}|${args.ocr === true}`;
       let memo = docMemo?.key === memoKey ? docMemo : null;
+      let transient = false; // 随包引擎这次失败了:回落结果不进备忘,下次读同一文件还给引擎机会(Codex)
       if (!memo) {
         try {
           const options = { outputFormat: 'markdown', ocrEnabled: args.ocr === true, quiet: true, maxPages: READ_DOC_MAX_PAGES };
@@ -622,7 +655,16 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
             result = await parseHostDocument(ctx, abs, options);
           } else {
             const { LiteParse } = await import('@llamaindex/liteparse');
-            result = await new LiteParse(options as any).parse(abs);
+            const office = await officeKitPdf(abs, ctx.signal);
+            // 取消 / 工具超时打断的转换不是「引擎坏了」:别再起一轮收不回来的 liteparse 回落(Codex)。
+            if (office === 'failed' && ctx.signal?.aborted) return 'Error: read_document was cancelled or timed out.';
+            transient = office === 'failed';
+            const kitPdf = office === 'failed' ? null : office;
+            try {
+              result = await new LiteParse(options as any).parse(kitPdf?.pdf ?? abs);
+            } finally {
+              if (kitPdf) await fs.rm(kitPdf.dir, { recursive: true, force: true });
+            }
           }
           const md = String(typeof result === 'string' ? result : result?.text ?? result?.markdown ?? '').trim();
           const parsed = Array.isArray(result?.pages) ? result.pages : [];
@@ -636,10 +678,10 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
           // 脚本去啃(2026-09-11 Windows 实报,连环出错)。装了就走上面那条:真分页优先。
           // 纯文本也抽不出字(坏档 / 通篇是图)才报原错 —— 那种情况装 LibreOffice(+ocr)确实是出路。
           const text = /\.docx$/i.test(abs) ? await hostSandboxFs(ctx).readFile(abs).then(docxText).catch(() => '') : '';
-          if (!text) return `Error: document parsing failed (${e?.message || e}). docx/xlsx/pptx require LibreOffice installed on this machine.`;
+          if (!text) return `Error: document parsing failed (${e?.message || e}). docx/xlsx/pptx need LibreOffice (bundled with the Forsion desktop app; otherwise install it on this machine).`;
           memo = { key: memoKey, pages: [{ page: 1, text }], plainText: true };
         }
-        docMemo = memo;
+        if (!transient) docMemo = memo;
       }
       const { pages } = memo;
       if (!pages.length || !pages.some((p) => p.text)) {
