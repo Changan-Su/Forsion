@@ -7,8 +7,8 @@ import { amadeus } from '../api'
 import { registerMessages, useI18n } from '../../i18n'
 
 registerMessages({
-  'mediaplayer.grabTitle': { zh: '把当前画面存成图片,并在下方插入回源时间戳', en: 'Save the current frame as an image and insert a timestamp link back to this moment' },
-  'mediaplayer.grabUnavailable': { zh: '本端拿不到帧(视频以无跨源模式加载)', en: 'Frames are unavailable here — the video loaded without cross-origin access' },
+  'mediaplayer.grabTitle': { zh: '把当前画面存成图片，并在下方插入回源时间戳', en: 'Save the current frame as an image and insert a timestamp link back to this moment' },
+  'mediaplayer.grabUnavailable': { zh: '本端拿不到帧（视频以无跨源模式加载）', en: 'Frames are unavailable here — the video loaded without cross-origin access' },
   'mediaplayer.grabbing': { zh: '截帧中…', en: 'Capturing…' },
   'mediaplayer.grab': { zh: '✂ 截这一帧', en: '✂ Capture this frame' },
   'mediaplayer.errCrossOrigin': { zh: '跨源视频无法截帧', en: 'Cannot capture a frame from a cross-origin video' },

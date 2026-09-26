@@ -13,7 +13,7 @@ import { widgetSource } from '@amadeus-shared/dashboard'
 import { registerMessages, useI18n } from '../i18n'
 
 registerMessages({
-  'viewcard.missingType': { zh: '卡片源码里缺 `type:`(视图注册键)', en: 'The card source is missing `type:` (the view registration key)' },
+  'viewcard.missingType': { zh: '卡片源码里缺 `type:`（视图注册键）', en: 'The card source is missing `type:` (the view registration key)' },
   'viewcard.unavailable': { zh: '视图「{type}」不可用 —— 可能来自未启用的插件', en: 'View "{type}" is unavailable — it may come from a plugin that is not enabled' },
 })
 

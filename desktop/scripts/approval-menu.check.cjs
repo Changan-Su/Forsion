@@ -38,10 +38,10 @@ const COMPOSER_CSS = fs.readFileSync(path.join(__dirname, '../frontend/src/views
 
 // 复刻 Composer2 的真实结构与文案。
 const ROWS = [
-  { id: 'readonly', title: '询问我批准', desc: '改文件、跑命令、联网,每次都先问我' },
-  { id: 'auto-edit', title: '替我批准', desc: '工作区内可直接改文件,跑命令才问我', active: true },
+  { id: 'readonly', title: '询问我批准', desc: '改文件、跑命令、联网，每次都先问我' },
+  { id: 'auto-edit', title: '替我批准', desc: '工作区内可直接改文件，跑命令才问我', active: true },
   { id: 'full-auto', title: '完全放行', desc: '不受限地访问网络和你电脑上的任何文件', danger: true },
-  { id: 'custom', title: '自定义(config.json)', desc: '按 config.json 的 approval 段(allow / ask / deny)判定' },
+  { id: 'custom', title: '自定义（config.json）', desc: '按 config.json 的 approval 段（allow / ask / deny）判定' },
 ]
 
 const html = `<!doctype html><html><head><meta charset="utf-8"><style>

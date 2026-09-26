@@ -19,12 +19,12 @@ import { formatDateTime } from '../format/time'
 import { fmtCalDateYL } from '@amadeus/lib/calDateFmt'
 import { parseCalDate } from '@amadeus-shared/db/calDate'
 import { useAutomation } from '../stores/automationStore'
-import '../views/automation/messages' // automation.deleteConfirm(与自动化 Space 删除同一句确认)
+import { deleteWithUndo, isPendingDelete } from '../views/automation/automationListSource'
 
 registerMessages({
   'special.muse.sleeping': { zh: '休眠至 {time}', en: 'Sleeping until {time}' },
   'special.muse.sleepingTitle': {
-    zh: 'Muse 判断暂时没事可做,跳过心跳到这个时刻;你一有动作、规则命中或日程到期都会提前叫醒它。理由:{reason}',
+    zh: 'Muse 判断暂时没事可做，跳过心跳到这个时刻；你一有动作、规则命中或日程到期都会提前叫醒它。理由：{reason}',
     en: 'Muse found nothing to do and skips its heartbeat until then; your activity, a rule or a due schedule wakes it earlier. Reason: {reason}',
   },
 })
@@ -33,6 +33,8 @@ const hhmm = (ms: number): string => {
   const d = new Date(ms)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }
+
+const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? v : [])
 
 export const MuseView: React.FC<{
   cfg: TanguDesktopConfig
@@ -52,21 +54,24 @@ export const MuseView: React.FC<{
   const [busy, setBusy] = useState<string>('') // 正在裁决的审批 id(approve 会同步执行工具)
   // 本面板只管 Muse 唤醒式规则(无动作链/无执行者;legacy 落盘可能有显式 agentSlug:'muse'=同义);
   // 带动作的自动化在自动化 Space 统一管理
-  const museTriggers = triggers.filter((tg) => !tg.actions?.length && (!tg.agentSlug || tg.agentSlug === 'muse'))
+  useAutomation((s) => s.refreshNonce) // 删除进入 / 撤出撤销窗口时重渲
+  const museTriggers = triggers.filter((tg) => !tg.actions?.length && (!tg.agentSlug || tg.agentSlug === 'muse') && !isPendingDelete({ kind: 'trigger', triggerId: tg.id }))
+  const shownTracks = tracks.filter((e) => !isPendingDelete({ kind: 'schedule', slug: 'muse', rowId: e.id }))
 
   const load = async (): Promise<void> => {
     const st = await getMuseStatus(cfg).catch(() => null)
     setStatus(st)
     void syncAgentSpace(cfg, 'muse', st?.spaceStamp) // 自建 Space 变了 → 只重载 agent-muse 插件(按戳去重)
-    const nextTodos = await getMuseTodos(cfg, 'pending').catch(() => [] as MuseTodo[])
+    // 各列表缺省一律补空数组:老引擎 / 外部后端可能回一个不是数组的壳,渲染里的 .filter / .length 会崩掉整个面板。
+    const nextTodos = arr<MuseTodo>(await getMuseTodos(cfg, 'pending').catch(() => []))
     setTodos(nextTodos)
     setSel((p) => new Set([...p].filter((id) => nextTodos.some((x) => x.id === id)))) // 已被处理/消失的 TODO 不留在选择集里
-    setTriggers(await getMuseTriggers(cfg).catch(() => []))
+    setTriggers(arr(await getMuseTriggers(cfg).catch(() => [])))
     // 旧引擎无此端点 → 404 → 空列表(读端兜底,面板不红)。
-    setApprovals(await listMuseApprovals(cfg, 'pending').catch(() => []))
-    setTracks(await getAgentSchedules(cfg).then((all) => (all.find((s) => s.slug === 'muse')?.entries || []).filter((e) => e.auto)).catch(() => []))
+    setApprovals(arr(await listMuseApprovals(cfg, 'pending').catch(() => [])))
+    setTracks(await getAgentSchedules(cfg).then((all) => arr<AgentScheduleEntry>(arr<{ slug: string; entries?: AgentScheduleEntry[] }>(all).find((s) => s.slug === 'muse')?.entries).filter((e) => e.auto)).catch(() => []))
     if (st?.sessionId) {
-      const ms = await listMessages(cfg, st.sessionId, 6).catch(() => [])
+      const ms = arr<{ role: string; content?: unknown }>(await listMessages(cfg, st.sessionId, 6).catch(() => []))
       const lastAssistant = [...ms].reverse().find((m) => m.role === 'assistant' || m.role === 'model')
       setThinking(String(lastAssistant?.content || '').slice(0, 4000))
     } else {
@@ -124,30 +129,12 @@ export const MuseView: React.FC<{
   const setTodoStatus = async (id: string, status: MuseTodo['status']): Promise<void> => {
     try { await patchMuseTodo(cfg, id, status); setTodos((p) => p.filter((x) => x.id !== id)); setSel((p) => { const n = new Set(p); n.delete(id); return n }) } catch (e) { fail(e) }
   }
-  // 规则 / 跟踪日程是引擎硬删(与 U-03 自动化删除同一类数据):先确认;成功后同步收拾自动化 Space 指向它的选中
-  // 并让其列表重拉,免得那边落到孤儿详情页。
-  const removeTrigger = async (id: string, name: string): Promise<void> => {
-    if (!window.confirm(t('automation.deleteConfirm', { name }))) return
-    try {
-      await deleteMuseTrigger(cfg, id)
-      setTriggers((p) => p.filter((x) => x.id !== id))
-      setMsg('')
-      const auto = useAutomation.getState()
-      if (auto.sel?.kind === 'trigger' && auto.sel.triggerId === id) auto.setSel(null)
-      auto.bump()
-    } catch (e) { fail(e) }
-  }
-  const removeTrack = async (id: string, name: string): Promise<void> => {
-    if (!window.confirm(t('automation.deleteConfirm', { name }))) return
-    try {
-      await deleteAgentScheduleEntry(cfg, 'muse', id)
-      setTracks((p) => p.filter((x) => x.id !== id))
-      setMsg('')
-      const auto = useAutomation.getState()
-      if (auto.sel?.kind === 'schedule' && auto.sel.slug === 'muse' && auto.sel.rowId === id) auto.setSel(null)
-      auto.bump()
-    } catch (e) { fail(e) }
-  }
+  // 规则 / 跟踪日程是引擎硬删(与 U-03 自动化删除同一类数据):走同一套「先藏起来、撤销窗口过了才真删」,
+  // 自动化 Space 指向它的选中与列表由 deleteWithUndo 一并收拾。
+  const removeTrigger = (id: string, name: string): void =>
+    deleteWithUndo({ kind: 'trigger', triggerId: id }, name, () => deleteMuseTrigger(cfg, id), () => { setTriggers((p) => p.filter((x) => x.id !== id)); setMsg('') })
+  const removeTrack = (id: string, name: string): void =>
+    deleteWithUndo({ kind: 'schedule', slug: 'muse', rowId: id }, name, () => deleteAgentScheduleEntry(cfg, 'muse', id), () => { setTracks((p) => p.filter((x) => x.id !== id)); setMsg('') })
   const decide = async (a: PendingApprovalInfo, decision: 'approve' | 'reject'): Promise<void> => {
     setBusy(a.id)
     try {
@@ -241,8 +228,8 @@ export const MuseView: React.FC<{
       {/* 追踪中:Muse 自己 SCHEDULE.db 的 auto 条目(任务卡「交给 Muse 追踪」/ Muse 自己排的后续),到期回灌它的周期;Calendar 同源可见。 */}
       <div className="field">
         <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}><Repeat size={13} /> {t('special.muse.tracks')}</label>
-        {tracks.length === 0 && <div className="hint">{t('special.muse.tracksEmpty')}</div>}
-        {tracks.map((e) => (
+        {shownTracks.length === 0 && <div className="hint">{t('special.muse.tracksEmpty')}</div>}
+        {shownTracks.map((e) => (
           <div key={e.id} className="file-row" style={{ cursor: 'default', alignItems: 'flex-start' }}>
             <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
               <b>{e.name}</b>
@@ -251,7 +238,7 @@ export const MuseView: React.FC<{
                 {e.description && <div>{e.description}</div>}
               </div>
             </span>
-            <button className="icon-btn" title={t('special.muse.trackDelete')} onClick={() => void removeTrack(e.id, e.name)}><Trash2 size={13} /></button>
+            <button className="icon-btn" title={t('special.muse.trackDelete')} onClick={() => removeTrack(e.id, e.name)}><Trash2 size={13} /></button>
           </div>
         ))}
       </div>
@@ -277,7 +264,7 @@ export const MuseView: React.FC<{
                 {condText(tg)}{tg.lastFiredAt ? ` · ${t('special.muse.trigFired', { t: formatDateTime(tg.lastFiredAt) })}` : ''}
               </div>
             </span>
-            <button className="icon-btn" title={t('special.muse.watchDelete')} onClick={() => void removeTrigger(tg.id, tg.desc)}><Trash2 size={13} /></button>
+            <button className="icon-btn" title={t('special.muse.watchDelete')} onClick={() => removeTrigger(tg.id, tg.desc)}><Trash2 size={13} /></button>
           </div>
         ))}
       </div>

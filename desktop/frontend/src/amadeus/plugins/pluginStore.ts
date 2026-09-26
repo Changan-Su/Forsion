@@ -75,7 +75,7 @@ import { openWebFloatingPanel } from '../../pluginPanelSeam'
 registerMessages({
   'pluginhost.workFolder.label': { zh: '工作文件夹', en: 'Working folder' },
   'pluginhost.workFolder.desc': {
-    zh: '本插件在笔记库内读写文件的文件夹(相对库根;留空恢复默认=插件名)',
+    zh: '本插件在智库内读写文件的文件夹（相对库根；留空恢复默认=插件名）',
     en: 'Folder inside the vault where this plugin reads and writes files (relative to the vault root; leave empty to fall back to the plugin name)',
   },
   'pluginhost.setupFailed': { zh: '插件「{name}」加载失败', en: 'Plugin "{name}" failed to load' },
@@ -1011,6 +1011,28 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 通用宿主 UI 原语。Floating TOC 是非接管式挂载:插件继续拥有正文 DOM,宿主只在 shell 上叠一层。
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。
     ...(typeof document !== 'undefined' ? { ui: {
+      mountChatBox: (el, opts) => {
+        if (!ctxAlive) return { update() {}, focus() {}, dispose() {} }
+        if (!(el instanceof HTMLElement)) throw new TypeError('mountChatBox needs an HTMLElement')
+        if (typeof opts?.onSubmit !== 'function') throw new TypeError('mountChatBox needs onSubmit')
+        let mounted: import('../../../../shared/chatBox').PluginChatBoxHandle | null = null
+        let cancelled = false, focusPending = false
+        const pending = { ...opts }
+        const dispose = (): void => {
+          cancelled = true; uiMounts.delete(dispose); mounted?.dispose(); mounted = null
+        }
+        uiMounts.add(dispose)
+        void import('./chatBoxSurface').then(m => {
+          if (cancelled) return
+          mounted = m.mountPluginChatBox(el, pending)
+          if (focusPending) requestAnimationFrame(() => mounted?.focus())
+        }).catch(e => { console.error(`[amadeus] plugin "${pluginId}" Chat Box mount failed`, e) })
+        return {
+          update(patch) { if (!cancelled) { Object.assign(pending, patch); mounted?.update(patch) } },
+          focus() { if (!cancelled) { focusPending = true; mounted?.focus() } },
+          dispose,
+        }
+      },
       mountFloatingToc: (shell, opts) => {
         if (!(shell instanceof HTMLElement)) throw new TypeError('mountFloatingToc shell must be an HTMLElement')
         if (!opts || !(opts.scrollContainer instanceof HTMLElement)) throw new TypeError('mountFloatingToc scrollContainer must be an HTMLElement')

@@ -42,19 +42,19 @@ import { publishAccountQuota } from '../services/accountQuota'
 registerMessages({
   'appstore.dispatchStarted': { zh: '已在 {name} 新建会话开工', en: 'Started a session in {name}' },
   'app.ctxWindowSaveFail': { zh: '上下文上限没保存：{e}', en: 'Could not save the context limit: {e}' },
-  'solo.engineTooOld': { zh: '当前引擎版本不支持私聊/团队会话,请升级引擎', en: 'This engine version does not support direct or team sessions; please update the engine' },
-  'solo.rotateBusy': { zh: '这条私聊还在运行中,等它结束再开新会话', en: 'This direct chat is still running; wait for it to finish before starting a new session' },
+  'solo.engineTooOld': { zh: '当前引擎版本不支持私聊/团队会话，请升级引擎', en: 'This engine version does not support direct or team sessions; please update the engine' },
+  'solo.rotateBusy': { zh: '这条私聊还在运行中，等它结束再开新会话', en: 'This direct chat is still running; wait for it to finish before starting a new session' },
   'group.ended.done': { zh: '全员表示已完成', en: 'All members are done' },
-  'group.ended.settled': { zh: '没有新的发言了,讨论结束', en: 'No new remarks; the discussion ended' },
-  'appstore.contentTruncated': { zh: '[输出过长,界面已截断显示]', en: '[Output too long, truncated for display]' },
+  'group.ended.settled': { zh: '没有新的发言了，讨论结束', en: 'No new remarks; the discussion ended' },
+  'appstore.contentTruncated': { zh: '[输出过长，界面已截断显示]', en: '[Output too long, truncated for display]' },
   'appstore.stopping': { zh: '正在停止，等待任务退出…', en: 'Stopping; waiting for the run to exit…' },
   'appstore.stopFailed': { zh: '停止尚未确认：{e}', en: 'Stop not confirmed: {e}' },
   'appstore.steerQueued': { zh: '插话已请求，将在安全边界接入；原任务继续保留。', en: 'Steering requested at the next safe boundary; the original task is preserved.' },
   'appstore.steerFailed': { zh: '暂未加速插话，消息仍保留在等待区：{e}', en: 'Could not expedite steering; your message remains queued: {e}' },
   'appstore.steerDiscardedCall': { zh: '插话中断了此工具调用的生成；工具尚未执行。', en: 'Steering interrupted this tool call during generation; it was not executed.' },
   // 审批档 PUT 失败:引擎按存值审批,没存上就不能停在新档上
-  'appstore.approvalSaveFailed': { zh: '审批档没能保存,已恢复为原来的档({e})', en: 'Couldn’t save the approval mode; restored the previous one ({e})' },
-  'appstore.approvalSaveRaced': { zh: '审批档被更早的一次保存覆盖,已改为实际生效的档', en: 'An earlier save overwrote the approval mode; now showing the one in effect' },
+  'appstore.approvalSaveFailed': { zh: '审批档没能保存，已恢复为原来的档（{e}）', en: 'Couldn’t save the approval mode; restored the previous one ({e})' },
+  'appstore.approvalSaveRaced': { zh: '审批档被更早的一次保存覆盖，已改为实际生效的档', en: 'An earlier save overwrote the approval mode; now showing the one in effect' },
 })
 
 export type { SettingsTab }

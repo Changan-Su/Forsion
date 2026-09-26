@@ -33,9 +33,9 @@ import './findInPage.css'
 
 registerMessages({
   'find.placeholder': { zh: '在本页查找…', en: 'Find in page…' },
-  'find.prev': { zh: '上一个(Shift+Enter)', en: 'Previous (Shift+Enter)' },
-  'find.next': { zh: '下一个(Enter)', en: 'Next (Enter)' },
-  'find.close': { zh: '关闭(Esc)', en: 'Close (Esc)' },
+  'find.prev': { zh: '上一个（Shift+Enter）', en: 'Previous (Shift+Enter)' },
+  'find.next': { zh: '下一个（Enter）', en: 'Next (Enter)' },
+  'find.close': { zh: '关闭（Esc）', en: 'Close (Esc)' },
 })
 
 /** 浏览器支不支持 CSS 自定义高亮。不支持就不抢 mod+f,交还给浏览器原生查找。 */

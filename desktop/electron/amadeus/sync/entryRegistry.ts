@@ -108,6 +108,6 @@ export function validateCloudName(name: string, otherNames: string[]): string | 
   if (!n || n !== name.normalize('NFC').trim()) return '名称不合法'
   if (n.includes('/')) return '名称不能包含 /'
   if (n === SHARED_DIR) return `「${SHARED_DIR}」是保留名称`
-  if (otherNames.includes(n)) return '该名称已被其他 Vault 的云同步占用'
+  if (otherNames.includes(n)) return '该名称已被其他智库的云同步占用'
   return null
 }

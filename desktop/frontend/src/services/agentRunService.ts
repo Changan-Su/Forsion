@@ -10,7 +10,7 @@ import { authFetch } from './http'
 import { buildCommandCatalog, readUiSettings } from '../agentCommands'
 
 registerMessages({
-  'agentrun.authFailed': { zh: '鉴权失败(401):令牌无效或已过期', en: 'Authentication failed (401): the token is invalid or has expired' },
+  'agentrun.authFailed': { zh: '鉴权失败（401）：令牌无效或已过期', en: 'Authentication failed (401): the token is invalid or has expired' },
   'agentrun.connected': { zh: '已连接 · sandbox={sandbox}', en: 'Connected · sandbox={sandbox}' },
   'agentrun.connectFailed': { zh: '连接失败', en: 'Connection failed' },
   'agentrun.subscribeFailed': { zh: '订阅失败 ({status})', en: 'Event stream subscription failed ({status})' },

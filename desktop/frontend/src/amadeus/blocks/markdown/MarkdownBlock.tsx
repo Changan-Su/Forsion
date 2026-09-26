@@ -50,6 +50,7 @@ import {
 import { blankLineRemark, softBreakRemark, stripEmptyLineBr } from './softBreak'
 import { tabIndent, tabOutdent } from './tabIndent'
 import { commonmarkWithIndent, setTextAlignment, type TextAlignment } from './paragraphIndent'
+import { structuralIndentRemark } from './structuralIndent'
 import { clipboard } from '@milkdown/kit/plugin/clipboard'
 import { history } from '@milkdown/kit/plugin/history'
 import { listener, listenerCtx } from '@milkdown/kit/plugin/listener'
@@ -94,7 +95,7 @@ import { fuzzyScore } from '../../lib/fuzzy'
 import { WikiSuggest } from './WikiSuggest'
 import { BLANK_BUTTON_BLOCK } from '../button/format'
 import { taskCheckboxPlugin } from './taskList'
-import { calloutPlugin, unescapeCalloutToken } from './callout'
+import { calloutPlugin, calloutTitleRemark, handleFoldKeyDown, unescapeCalloutToken } from './callout'
 import { codeBlockPlugin } from './codeBlock'
 import { askString } from '../../components/askString'
 import { linkInputRule, normalizeHref } from './linkHref'
@@ -112,7 +113,7 @@ registerMessages({
   // ⚠️ 这些会变成**真实文件名 / 文档标题**。跟随语言,不是标识符 —— 全库无一处比较它们
   //    (对照真 hazard:同文件的列 id 是 frontmatter 键、状态选项是被 `v === opt` 比较的落盘值)。
   'mdblock.default.childNote': { zh: '未命名', en: 'Untitled' },
-  'mdblock.default.database': { zh: '未命名数据库', en: 'Untitled database' },
+  'mdblock.default.database': { zh: '未命名多维表', en: 'Untitled database' },
   'mdblock.default.drawing': { zh: '画板', en: 'Drawing' },
   'mdblock.default.noteViewFolder': { zh: '笔记视图', en: 'Note view' },
   'mdblock.default.noteView': { zh: '未命名视图', en: 'Untitled view' },
@@ -144,9 +145,9 @@ registerMessages({
   'mdblock.slash.image': { zh: '图片', en: 'Image' },
   'mdblock.slash.columns': { zh: '分栏', en: 'Columns' },
   'mdblock.slash.page': { zh: '页面', en: 'Page' },
-  'mdblock.slash.database': { zh: '数据库', en: 'Database' },
+  'mdblock.slash.database': { zh: '多维表', en: 'Database' },
   'mdblock.slash.drawing': { zh: '画板', en: 'Drawing' },
-  'mdblock.slash.linkdb': { zh: '链接数据库', en: 'Link database' },
+  'mdblock.slash.linkdb': { zh: '链接多维表', en: 'Link database' },
   'mdblock.slash.noteview': { zh: '笔记视图', en: 'Note view' },
   'mdblock.slash.template': { zh: '模板', en: 'Template' },
   'mdblock.slash.embed': { zh: '嵌入块引用', en: 'Embed block' },
@@ -154,16 +155,16 @@ registerMessages({
   'mdblock.slash.button': { zh: '按钮', en: 'Button' },
   // 弹框(askString)
   'mdblock.link.title': { zh: '插入链接', en: 'Insert link' },
-  'mdblock.link.label': { zh: '输入或粘贴地址(裸域名会自动补 https://)', en: 'Type or paste an address (a bare domain gets https:// added)' },
+  'mdblock.link.label': { zh: '输入或粘贴地址（裸域名会自动补 https://)', en: 'Type or paste an address (a bare domain gets https:// added)' },
   'mdblock.bookmark.title': { zh: '插入书签', en: 'Insert bookmark' },
-  'mdblock.bookmark.label': { zh: '粘贴链接地址(https:// 开头);YouTube 链接会直接内嵌播放器。', en: 'Paste a link (starting with https://); a YouTube link embeds the player directly.' },
+  'mdblock.bookmark.label': { zh: '粘贴链接地址（https:// 开头）；YouTube 链接会直接内嵌播放器。', en: 'Paste a link (starting with https://); a YouTube link embeds the player directly.' },
   'mdblock.embed.title': { zh: '嵌入块引用', en: 'Embed a block reference' },
-  'mdblock.embed.label': { zh: '形如 笔记名#块ID(块菜单「复制嵌入引用」可得);也可只填笔记名嵌整篇首块。', en: 'Shaped like note-name#block-id (the block menu’s “Copy embed reference” gives you one); a note name alone embeds that note’s first block.' },
+  'mdblock.embed.label': { zh: '形如 笔记名#块ID（块菜单「复制嵌入引用」可得）；也可只填笔记名嵌整篇首块。', en: 'Shaped like note-name#block-id (the block menu’s “Copy embed reference” gives you one); a note name alone embeds that note’s first block.' },
   'mdblock.embed.confirm': { zh: '嵌入', en: 'Embed' },
   // 提示条
   'mdblock.toast.staleTarget': { zh: '文件已创建，但原插入位置已失效（笔记已切换或块已删除）', en: 'The file was created, but the original insert position is gone (the note changed or the block was deleted)' },
   'mdblock.toast.slashFailed': { zh: '「{label}」失败：{message}', en: '“{label}” failed: {message}' },
-  'mdblock.plugin.runNotString': { zh: 'run() 必须返回字符串,实际是 {type}', en: 'run() must return a string, but it returned {type}' },
+  'mdblock.plugin.runNotString': { zh: 'run() 必须返回字符串，实际是 {type}', en: 'run() must return a string, but it returned {type}' },
   'mdblock.plugin.runTooLong': { zh: 'run() 返回内容过长', en: 'run() returned too much content' },
   'mdblock.plugin.runControlChars': { zh: 'run() 返回内容含控制字符', en: 'run() returned content containing control characters' },
   // 「粘贴为」菜单
@@ -175,7 +176,7 @@ registerMessages({
   'mdblock.pasteAs.embedHint': { zh: '播放器 / 网页', en: 'Player / web page' },
   // 菜单空态与脚注
   'mdblock.menu.noMatch': { zh: '无匹配项', en: 'No matches' },
-  'mdblock.menu.noDatabase': { zh: '库里还没有数据库(用 /数据库 新建一个)', en: 'No databases in this vault yet (create one with /database)' },
+  'mdblock.menu.noDatabase': { zh: '库里还没有多维表（用 /多维表 新建一个）', en: 'No databases in this vault yet (create one with /database)' },
   'mdblock.foot.select': { zh: '↑↓ 选择', en: '↑↓ Select' },
   'mdblock.foot.confirm': { zh: '↵ 确认', en: '↵ Confirm' },
   'mdblock.foot.insert': { zh: '↵ 插入', en: '↵ Insert' },
@@ -566,6 +567,10 @@ export function MilkdownInner({
         }
       }
 
+      if (handleFoldKeyDown(view, event)) {
+        event.preventDefault()
+        return true
+      }
       if (event.key === 'Enter') {
         if (event.shiftKey) {
           // unified:放行 PM 原生 = 段内硬换行(Notion 语义);块世界才是「切块」。
@@ -859,6 +864,7 @@ export function MilkdownInner({
       .use(pluginEditorExtensions('high', { pagePath: () => pagePathRef.current }))
       .use(commonmarkWithIndent)
       .use(gfm)
+      .use(structuralIndentRemark)
       // `**注意：**后面` 这类 CJK 标点贴定界符的串按 CJK 友好规则解析(否则字面 + 保存转义)。须紧跟 gfm,见 ./cjkFriendly。
       .use(cjkFriendlyRemark)
       // 自定义行内标记:下划线/文字色/背景色(schema mark + remark HTML 桥,见 ./marks)。
@@ -873,6 +879,7 @@ export function MilkdownInner({
       // unified(v4)不挂 softBreakRemark:标准 md 分段落盘,软换行由 Milkdown 原生 break 节点原样往返。
       // 换 blankLineRemark —— 只补读侧的「空行 → 空段落」还原(写侧本来就落成空行,见 softBreak.ts 顶注)。
       .use(unified ? blankLineRemark : softBreakRemark)
+      .use(calloutTitleRemark)
       .use(underlineSchema)
       .use(colorSchema)
       .use(bgSchema)
@@ -933,8 +940,8 @@ export function MilkdownInner({
           'Mod-r': (state, dispatch) => setTextAlignment(state, dispatch, 'right'),
         }),
       ))
-      // Tab 缩进(与 v4 blockLayer 共用 tabIndent.ts 的同一份阶梯):列表 sink/lift、代码块两空格、
-      // 段落并入前列表/自转 bullet、表格让位 gfm 跳格、其余吞键防焦点逃逸 —— v3 此前段落里按 Tab
+      // Tab 缩进(与 v4 blockLayer 共用 tabIndent.ts 的同一份阶梯):列表嵌套/首项视觉档、代码块两空格、
+      // 段落与结构块视觉档、表格跳格、其余吞键防焦点逃逸 —— v3 此前段落里按 Tab
       // 会直接把焦点抛出编辑器(用户实报「没做缩进」)。unified 让位:v4 由 blockLayer 带折叠钩子接管。
       .use($prose(() =>
         keymap({
@@ -1914,9 +1921,9 @@ export const SLASH_ITEMS: SlashSeed[] = [
   { key: 'image', labelKey: 'mdblock.slash.image', hint: '', icon: <ImageIcon />, groupKey: 'mdblock.group.advanced', scaffold: IMAGE_SENTINEL, kw: 'image picture photo 图片 tupian 插图' },
   { key: 'columns', labelKey: 'mdblock.slash.columns', hint: '⫿', icon: <LayoutIcon />, groupKey: 'mdblock.group.advanced', scaffold: COLUMN_SENTINEL, kw: 'column split 分栏 分列 fenlan 并排' },
   { key: 'page', labelKey: 'mdblock.slash.page', hint: '.fd', icon: <NewPageIcon />, groupKey: 'mdblock.group.advanced', scaffold: PAGE_SENTINEL, kw: 'page 页面 子页面 subpage child yemian xinjian 新建页面 notion' },
-  { key: 'database', labelKey: 'mdblock.slash.database', hint: '.db', icon: <DatabaseTableViewIcon />, groupKey: 'mdblock.group.advanced', scaffold: DATABASE_SENTINEL, kw: 'database db 数据库 shujuku 表格 base notion' },
+  { key: 'database', labelKey: 'mdblock.slash.database', hint: '.db', icon: <DatabaseTableViewIcon />, groupKey: 'mdblock.group.advanced', scaffold: DATABASE_SENTINEL, kw: 'database db 多维表 duoweibiao 数据库 shujuku 表格 base notion' },
   { key: 'drawing', labelKey: 'mdblock.slash.drawing', hint: 'Excalidraw', icon: <PenIcon />, groupKey: 'mdblock.group.advanced', scaffold: DRAWING_SENTINEL, kw: 'drawing draw excalidraw 画板 huaban 手绘 白板 whiteboard 草图 sketch 流程图' },
-  { key: 'linkdb', labelKey: 'mdblock.slash.linkdb', hint: '![[.db]]', icon: <DatabaseTableViewIcon />, groupKey: 'mdblock.group.advanced', scaffold: LINKDB_SENTINEL, kw: 'link database db 链接数据库 引用数据库 嵌入数据库 已有 lianjie shujuku' },
+  { key: 'linkdb', labelKey: 'mdblock.slash.linkdb', hint: '![[.db]]', icon: <DatabaseTableViewIcon />, groupKey: 'mdblock.group.advanced', scaffold: LINKDB_SENTINEL, kw: 'link database db 链接多维表 链接数据库 引用数据库 嵌入数据库 已有 lianjie duoweibiao shujuku' },
   { key: 'noteview', labelKey: 'mdblock.slash.noteview', hint: 'Bases', icon: <DatabaseListViewIcon />, groupKey: 'mdblock.group.advanced', scaffold: NOTEVIEW_SENTINEL, kw: 'noteview bases 笔记视图 bijishitu 行即笔记 folder page 多维表 notion' },
   { key: 'template', labelKey: 'mdblock.slash.template', hint: 'templates/', icon: <TemplateIcon />, groupKey: 'mdblock.group.advanced', scaffold: TEMPLATE_SENTINEL, kw: 'template 模板 muban 套用' },
   { key: 'embed', labelKey: 'mdblock.slash.embed', hint: '![[ ]]', icon: <EmbedIcon />, groupKey: 'mdblock.group.advanced', scaffold: EMBED_SENTINEL, kw: 'embed 嵌入 引用 transclude block 块 qianru yinyong 复用' },

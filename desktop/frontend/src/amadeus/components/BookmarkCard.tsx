@@ -11,11 +11,11 @@ import { registerMessages, useI18n } from '../../i18n'
 
 registerMessages({
   'bmcard.embedVideo': { zh: '内嵌播放器', en: 'Embed the player' },
-  'bmcard.embedPage': { zh: '内嵌这个网页(活页,默认冻结)', en: 'Embed this page (live page, frozen by default)' },
+  'bmcard.embedPage': { zh: '内嵌这个网页（活页，默认冻结）', en: 'Embed this page (live page, frozen by default)' },
   'bmcard.editUrl': { zh: '编辑链接地址', en: 'Edit link URL' },
   'bmcard.startAt': { zh: '起播时刻', en: 'Start time' },
   'bmcard.openInBrowser': { zh: '在浏览器打开', en: 'Open in browser' },
-  'bmcard.toCardTitle': { zh: '改回裸 URL 一行(书签卡)', en: 'Change back to a plain URL line (bookmark card)' },
+  'bmcard.toCardTitle': { zh: '改回裸 URL 一行（书签卡）', en: 'Change back to a plain URL line (bookmark card)' },
   'bmcard.toCard': { zh: '转为书签卡', en: 'Convert to bookmark card' },
 })
 

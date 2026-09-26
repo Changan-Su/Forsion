@@ -128,7 +128,7 @@ async function run(app, win, stub, seen, home) {
   const emblem = profile.locator('.team-profile-hero .team-profile-emblem')
   const emblemIcon = emblem.locator(':scope > img, :scope > span:not(.agent-portrait-badge)')
   const wsHead = win.locator('.t2s-folder-row').filter({ hasText: 'Demo Project' }).first().locator('.t2s-lead')
-  const defaultHead = win.locator('.t2s-folder-row').filter({ hasText: '默认工作区' }).first().locator('.t2s-lead')
+  const defaultHead = win.locator('.t2s-folder-row').filter({ hasText: '默认项目' }).first().locator('.t2s-lead')
   check('1b 未设图标:头部 = 仓库文件夹图标,侧栏组头 = 文件夹图标', await emblem.locator(':scope > svg').count() === 1 && await emblemIcon.count() === 0 && await wsHead.count() === 1 && await wsHead.locator('.t2s-project-icon').count() === 0)
   const pickBtn = profile.locator('[data-project-icon-emoji]')
   const picker = win.locator('body > .amx-db-popwrap .amx-iconpick')
@@ -263,7 +263,7 @@ async function run(app, win, stub, seen, home) {
     const p = el.querySelector('[data-project-profile]'), name = p && p.querySelector('.team-profile-name')
     return p ? { path: p.getAttribute('data-project-profile'), name: name && name.value, readOnly: !!(name && name.readOnly) } : null
   })
-  check('8b 默认工作区的会话 → 右栏是 PROJECT 详情(默认目录),名称只读', !!def && /[\\/]Sessions$/.test(def.path) && /默认工作区/.test(def.name || '') && def.readOnly, JSON.stringify(def))
+  check('8b 默认工作区的会话 → 右栏是 PROJECT 详情(默认目录),名称只读', !!def && /[\\/]Sessions$/.test(def.path) && /默认项目/.test(def.name || '') && def.readOnly, JSON.stringify(def))
 
   // ── 8c/8d 默认组里的旧别名会话:面板跟会话自己的目录;别名是家目录 → Agent 详情 ────────
   await openSession(win, 'Old default chat', 'pd-alias')
@@ -347,7 +347,7 @@ async function run(app, win, stub, seen, home) {
   await win.screenshot({ path: shots.removeDialogEn = shot('remove-project-dialog-en-dark') })
   await dialog.locator('.dialog-btn').first().click()
   await dialog.waitFor({ state: 'detached' })
-  check('11a 英文:「Remove workspace」对话框(3 个会话、项目文件夹不删、勾选项缺省不勾);取消后什么都没删', /Remove workspace "Demo Project"/.test(enDialog.title) && /3 session/.test(enDialog.msg) && /folder on disk is not deleted/.test(enDialog.msg) && enDialog.check && !seen.sessionDeletes.length, JSON.stringify(enDialog))
+  check('11a 英文:「Remove project」对话框(3 个会话、项目文件夹不删、勾选项缺省不勾);取消后什么都没删', /Remove project "Demo Project"/.test(enDialog.title) && /3 session/.test(enDialog.msg) && /folder on disk is not deleted/.test(enDialog.msg) && enDialog.check && !seen.sessionDeletes.length, JSON.stringify(enDialog))
 
   await win.evaluate(() => { localStorage.setItem('tangu_locale', 'zh'); localStorage.setItem('forsion_theme_pref', 'light') })
   await win.reload({ waitUntil: 'domcontentloaded' })
@@ -413,7 +413,7 @@ async function run(app, win, stub, seen, home) {
   // 重载:会话是真从引擎删掉了,不是只在本地列表里藏起来
   await win.reload({ waitUntil: 'domcontentloaded' })
   await win.waitForSelector('.t2sw, .t2s-side', { timeout: 30_000 })
-  await groupHead('Tangu 默认工作区').waitFor({ timeout: 15_000 }).catch(() => {})
+  await groupHead('Tangu 默认项目').waitFor({ timeout: 15_000 }).catch(() => {})
   gone.afterReload = await groupHead('Demo Project').count()
   check('11f 移除工作区 + 勾选删文件:三个会话 DELETE、.tangu 进废纸篓、项目文件夹还在、侧栏组消失且重载后不回来', gone.deletes.join() === 'pd-coder,pd-main,pd-team' && !gone.tangu && gone.dir && gone.trashed === 1 && gone.head === 0 && gone.afterReload === 0, JSON.stringify(gone))
   return shots

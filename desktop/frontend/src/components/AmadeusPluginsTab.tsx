@@ -37,7 +37,7 @@ registerMessages({
   // Forsion Sandbox(开发态加载)。**不是隔离沙箱** —— 文案必须把这件事说明白,别让用户以为开发副本被关在笼子里。
   'settings.amadeusPlugins.devBadge': { zh: 'DEV', en: 'DEV' },
   'settings.amadeusPlugins.devHint': {
-    zh: '开发态加载：直接运行在当前应用与真实笔记库中，权限与已安装插件完全相同。',
+    zh: '开发态加载：直接运行在当前应用与真实智库中，权限与已安装插件完全相同。',
     en: 'Development load: runs in this app on your real vault, with the same privileges as an installed plugin.',
   },
   'settings.amadeusPlugins.devProject': { zh: '项目：{path}', en: 'Project: {path}' },

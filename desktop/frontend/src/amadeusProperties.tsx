@@ -21,11 +21,11 @@ registerMessages({
   'amprops.addLabel': { zh: '写入笔记 frontmatter 的键名', en: 'Key name written to the note frontmatter' },
   'amprops.reservedKey': { zh: 'amadeus_* 是保留键', en: 'amadeus_* keys are reserved' },
   'amprops.pluginManaged': { zh: '该键由插件管理', en: 'This key is managed by a plugin' },
-  'amprops.chipRaw': { zh: '属性(原文)', en: 'Properties (raw)' },
+  'amprops.chipRaw': { zh: '属性（原文）', en: 'Properties (raw)' },
   'amprops.chipCount': { zh: '属性 {n}', en: 'Properties {n}' },
   'amprops.empty': { zh: '还没有属性。', en: 'No properties yet.' },
   'amprops.delete': { zh: '删除属性', en: 'Delete property' },
-  'amprops.pluginKeysWarn': { zh: '⚠️ 本文件含插件数据键({keys}),修复 YAML 时请勿改动那几行。', en: '⚠️ This file contains plugin data keys ({keys}) — leave those lines untouched while fixing the YAML.' },
+  'amprops.pluginKeysWarn': { zh: '⚠️ 本文件含插件数据键（{keys}），修复 YAML 时请勿改动那几行。', en: '⚠️ This file contains plugin data keys ({keys}) — leave those lines untouched while fixing the YAML.' },
   'amprops.nestedHint': { zh: '嵌套结构请在源码模式编辑', en: 'Edit nested values in source mode' },
   'amprops.chipsPlaceholder': { zh: '回车添加…', en: 'Press Enter to add…' },
 })

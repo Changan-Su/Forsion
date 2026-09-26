@@ -13,7 +13,7 @@ import { isNoiseTranscript, startLiveCapture, type LiveCapture } from './liveCap
 import { wavBase64 } from './useVoiceInput' // 同时注册了 voiceinput.* 报错文案
 
 registerMessages({
-  'livevoice.start': { zh: '实时语音对话(免手:说完停顿一下自动发送)', en: 'Live voice conversation (hands-free: pause after speaking to send)' },
+  'livevoice.start': { zh: '实时语音对话（免手：说完停顿一下自动发送）', en: 'Live voice conversation (hands-free: pause after speaking to send)' },
   'livevoice.stop': { zh: '结束实时对话', en: 'End live conversation' },
   'livevoice.asrTimeout': { zh: '语音识别超时', en: 'Speech recognition timed out' },
 })

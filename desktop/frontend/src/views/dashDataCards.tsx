@@ -25,15 +25,15 @@ import { registerMessages, useI18n } from '../i18n'
 import './dashData.css'
 
 registerMessages({
-  'dashcards.statError': { zh: '数字卡:{err}', en: 'Stat card: {err}' },
-  'dashcards.chartError': { zh: '图表卡:{err}', en: 'Chart card: {err}' },
+  'dashcards.statError': { zh: '数字卡：{err}', en: 'Stat card: {err}' },
+  'dashcards.chartError': { zh: '图表卡：{err}', en: 'Chart card: {err}' },
   'dashcards.loading': { zh: '加载中…', en: 'Loading…' },
   'dashcards.missing': { zh: '找不到「{source}」', en: 'Can’t find “{source}”' },
-  'dashcards.corrupt': { zh: '「{source}」读不出来:{err}', en: 'Can’t read “{source}”: {err}' },
+  'dashcards.corrupt': { zh: '「{source}」读不出来：{err}', en: 'Can’t read “{source}”: {err}' },
   'dashcards.noData': { zh: '无数据', en: 'No data' },
   'dashcards.noMatch': { zh: '没有符合条件的数据', en: 'No data matches the filters' },
   'dashcards.rowCount': { zh: '行数', en: 'Row count' },
-  'dashcards.filteredRows': { zh: '共 {n} 行(已按页面筛选)', en: '{n} rows (page filters applied)' },
+  'dashcards.filteredRows': { zh: '共 {n} 行（已按页面筛选）', en: '{n} rows (page filters applied)' },
   'dashcards.aggCount': { zh: '计数', en: 'Count' },
   'dashcards.aggSum': { zh: '{col} 求和', en: 'Sum of {col}' },
   'dashcards.aggAvg': { zh: '{col} 平均', en: 'Average of {col}' },

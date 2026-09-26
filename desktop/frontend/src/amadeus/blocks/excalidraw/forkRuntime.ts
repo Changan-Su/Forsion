@@ -23,7 +23,7 @@ import { getBoardUiMode } from './boardUiMode'
 
 registerMessages({
   'boardengine.assetLoadFailed': {
-    zh: '画板引擎资源加载失败:{url}(自托管副本缺失?重跑 npm run postinstall)',
+    zh: '画板引擎资源加载失败：{url}（自托管副本缺失？重跑 npm run postinstall）',
     en: 'Whiteboard engine assets failed to load: {url} (self-hosted copy missing? Re-run npm run postinstall)',
   },
   'boardengine.libMissing': {

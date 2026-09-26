@@ -25,14 +25,16 @@ export function AccountSwitcher({ busy, onSelect, onAdd, menu = false }: {
   const { t } = useI18n()
   const [accounts, setAccounts] = useState<AuthAccountInfo[]>([])
   const [failed, setFailed] = useState(false)
+  const [loaded, setLoaded] = useState(false)
   useEffect(() => {
     let version = 0
     const read = (): void => {
       const request = ++version
       setAccounts([])
       setFailed(false)
+      setLoaded(false)
       void window.tangu?.authAccounts?.().then((items) => {
-        if (request === version) setAccounts(items)
+        if (request === version) { setAccounts(items); setLoaded(true) }
       }).catch(() => { if (request === version) setFailed(true) })
     }
     read()
@@ -40,10 +42,13 @@ export function AccountSwitcher({ busy, onSelect, onAdd, menu = false }: {
     return () => { ++version; off?.() }
   }, [])
   if (!window.tangu?.forsionLogin) return null
+  // 宿主能列账号、且一个已存账号都没有 = 还没登录过:这时「切换账号 · 登录其他账号」是错的,由调用方给「登录 Forsion」(W-01)。
+  // 列表还没回来时也先不画,免得未登录用户看到它闪一下;宿主没有列表接口(精简 Unit)时照旧给「登录其他账号」。
+  if (window.tangu?.authAccounts && !failed && (!loaded || accounts.length === 0)) return null
   const itemClass = menu ? 'ap-item' : 'btn ghost sm'
   return (
     <div className={menu ? 'ap-accounts' : 'field'} aria-label={t('accountSwitcher.title')}>
-      <div className={menu ? 'ap-head' : 'hint'}>{t('accountSwitcher.title')}</div>
+      <div className={menu ? 'ap-sec' : 'hint'}>{t('accountSwitcher.title')}</div>
       {failed && <div className="hint" role="status">{t('accountSwitcher.loadFailed')}</div>}
       <div style={menu ? undefined : { display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
         {accounts.map((account) => (

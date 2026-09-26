@@ -19,7 +19,7 @@ import { registerMessages, translate } from '../../i18n'
 
 registerMessages({
   'dbagg.confirmDeleteNote': {
-    zh: '删除此事件会一并删除对应的笔记文件,确定?',
+    zh: '删除此事件会一并删除对应的笔记文件，确定？',
     en: 'Deleting this event also deletes its note file. Continue?',
   },
 })

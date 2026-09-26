@@ -859,7 +859,9 @@ a:hover { color: var(--accent-ink); }
   font-size: var(--menu-text-size);
   line-height: 1.4;
   color: var(--text-light);
+  text-align: left; /* 长项折行时左对齐,不按 button 缺省居中(W-08) */
 }
+.ctx-menu button > svg { flex-shrink: 0; } /* 折行时图标别被挤成小点 */
 .ctx-menu button:hover { background: var(--menu-hover); color: var(--text); }
 .ctx-menu button.danger { color: var(--danger); }
 .ctx-menu button.danger:hover { background: var(--danger-light); }
@@ -1812,6 +1814,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 /* ⚠️ 子面板绝对定位到菜单**外面**,故此变体必须 overflow:visible —— 通用 .composer-menu 的
    overflow-y:auto 会把它整块裁掉(表现为「点了行没反应」)。 */
 .composer-menu--model { right: 0; width: var(--menu-select-width); min-width: 0; max-width: none; max-height: none; overflow: visible; }
+.composer-menu--portal { position: fixed; right: auto; bottom: auto; margin: 0; pointer-events: auto; }
 .cm-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: var(--menu-item-min-height); padding: var(--menu-item-pad-block) var(--menu-item-pad-inline); border-radius: var(--radius-md); font-size: var(--t2c-font-control, 12px); line-height: 1.4; color: var(--text-light); text-align: left; }
 .cm-row:hover, .cm-row.is-open { background: var(--menu-hover); color: var(--text); }
 .cm-row-k { flex: none; }
@@ -1997,6 +2000,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 }
 .cm-sub.left { left: auto; right: calc(100% + 6px); }
 .cm-sub.stacked { top: auto; bottom: calc(100% + 6px); left: auto; right: 0; }
+.composer-menu--portal .cm-sub.stacked { top: var(--cm-sub-top, 0px); bottom: auto; }
 .cm-sub .menu-item { white-space: nowrap; }
 .cm-sub .menu-item .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
@@ -2145,6 +2149,11 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .btn.danger { border-color: var(--danger); color: var(--danger); background: none; }
 .btn.danger:hover { background: var(--danger-light); }
 .btn.sm { padding: 4px 10px; font-size: var(--ui-font-meta, 12px); }
+/* 裸 .btn(没挂 primary / ghost / danger)原先描边透明、无底色 = 一段文字(W-05)。DESIGN §5:按钮靠描边成形。
+   :where 把特异性压回 (0,1,0),各处 `.xxx .btn` 的局部覆盖照样赢。禁用态统一降不透明度(primary 有自己的禁用色)。 */
+.btn:where(:not(.primary, .ghost, .danger)) { border-color: var(--overlay-strong); color: var(--text); }
+.btn:where(:not(.primary, .ghost, .danger)):hover:not(:disabled) { border-color: var(--accent-ink); color: var(--accent-ink); }
+.btn:where(:not(.primary)):disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ─── 空态 ─── */
 .empty-state {
@@ -2238,7 +2247,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   box-shadow: var(--card-shadow);
 }
 .floating-panel-window.compact { width: min(720px, calc(100vw - 56px)); }
-.floating-panel-window.narrow { width: min(460px, calc(100vw - 56px)); height: min(680px, calc(100dvh - 56px)); }
+.floating-panel-window.narrow { width: min(480px, calc(100vw - 56px)); height: min(580px, calc(100dvh - 56px)); }
 .floating-panel-chrome {
   flex: 0 0 42px;
   display: flex;
@@ -2255,18 +2264,24 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .floating-panel-chrome > span { flex: 1; text-align: center; }
 .floating-panel-content { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
 
-.floating-native-root { width: 100vw; height: 100dvh; min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
+/* Native panels are separate BrowserWindows but share body.zoom. Viewport units stay at the physical
+ * window size under CSS zoom, so compensate both axes or 120% clips and 80% leaves blank space. */
+.floating-native-root { width: calc(100vw / var(--uiz, 1)); height: calc(100dvh / var(--uiz, 1)); min-width: 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--bg); }
 .floating-native-chrome {
   flex: 0 0 38px;
   display: flex;
   align-items: center;
   justify-content: center;
+  /* hiddenInset 的系统窗口按钮占左侧标题栏；两侧留同宽安全区让标题保持真正居中。 */
+  box-sizing: border-box;
+  padding-inline: 80px;
   border-bottom: var(--border-width) solid var(--border);
   color: var(--text-muted);
   font-size: var(--ui-font-meta, 12px);
   font-weight: 650;
   -webkit-app-region: drag;
 }
+.floating-native-chrome > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .floating-native-content { flex: 1; min-width: 0; min-height: 0; display: flex; overflow: hidden; }
 .floating-native-root .settings-nav-top { padding-top: 14px; }
 .floating-plugin-view { width: 100%; height: 100%; min-width: 0; min-height: 0; overflow: auto; }
@@ -4063,6 +4078,8 @@ html.dark .brand-logo--dark { display: inline-block; }
 .account-pop .ap-row b { font-weight: 600; }
 .account-pop .ap-sub-item { padding-left: 32px; }
 .account-pop .ap-dim { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+/* 菜单里的分组小标题(「切换账号」):灰色小字,不带分隔线,别长得像可点的行(W-01) */
+.account-pop .ap-sec { padding: 6px 9px 2px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
 
 /* ── 文件区:选中 / 拖入目标 / OS 文件悬停 ── */
 .file-row.selected { background: var(--accent-light); }
@@ -4662,7 +4679,7 @@ body[data-file-drag] .shell-work::after {
 .pv-titles { flex: 1; min-width: 0; }
 .pv-title { font-size: var(--ui-font-body, 13px); font-weight: 600; color: var(--text); }
 .pv-subtitle { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); margin-top: 1px; }
-.pv-notice { margin: 12px 16px 0; padding: 10px 12px; font-size: var(--ui-font-meta, 12px); color: var(--accent-ink); background: var(--overlay-light); border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); }
+.pv-notice { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 16px 0; padding: 10px 12px; font-size: var(--ui-font-meta, 12px); color: var(--accent-ink); background: var(--overlay-light); border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); }
 .pv-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px 24px; display: flex; flex-direction: column; gap: 18px; }
 .pv-section { border: var(--border-width) solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
 .pv-sec-head { display: flex; align-items: center; gap: 10px; padding: 11px 14px; background: var(--overlay-light); color: var(--text); }

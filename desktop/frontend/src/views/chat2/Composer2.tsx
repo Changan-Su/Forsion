@@ -39,6 +39,7 @@ import { getCustomCommands, expandCustomCommand, listMessages, type CustomComman
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
 import { NormalModeItem } from './NormalModeItem'
 import { mainReferenceKey } from './mainReference'
+import { ChatBoxSurface, ChatBoxInput, ChatBoxToolbar, ChatBoxSubmit } from '@lcl/components'
 import { disarmTip, tipProps } from '../../hoverTip'
 import { RefChipView } from './RefChipView'
 import './composer2.css'
@@ -50,7 +51,7 @@ registerMessages({
   'input.normalWork': { zh: '普通模式', en: 'Normal mode' },
   'input.presetChat': { zh: 'Chat', en: 'Chat' }, // 产品词,中英同形(与侧栏胶囊 sidebar.mode.* 同一套)
   'input.presetWork': { zh: 'Work', en: 'Work' },
-  'input.presetLocked': { zh: '模式在创建会话时确定;换模式请新建会话', en: 'Mode is fixed when the session is created; start a new session to change it' },
+  'input.presetLocked': { zh: '模式在创建会话时确定；换模式请新建会话', en: 'Mode is fixed when the session is created; start a new session to change it' },
   // 团队成员子聊天:审批档读写的都是团队会话,选了对全队生效。
   'input.approvalSection.team': { zh: '团队审批档 · 改动对全队生效', en: 'Approval mode for the whole team' },
   // /export 导出的 markdown 里,用户那一侧消息的小标题(助手侧固定是品牌名 Tangu,不翻译)。
@@ -73,17 +74,17 @@ registerMessages({
   'input.tip': { zh: '小贴士：{tip}', en: 'Tip: {tip}' },
   'input.runningPlaceholder': { zh: '运行中，可继续输入…', en: 'Working… You can keep typing' },
   'input.tip.steer': { zh: '运行中也能继续发消息，会在下一步交给 Agent', en: 'You can send while it runs: the agent reads it at the next step' },
-  'input.tip.switchChat': { zh: '可以先切去别的会话,运行不会中断,侧栏圆点标出运行中', en: 'Switch chats meanwhile; this run keeps going, marked by a sidebar dot' },
-  'input.tip.quote': { zh: '划选回复里的文字,点「引用」即可带进下一条消息', en: 'Select text in a reply and click Quote to cite it in your next message' },
-  'input.tip.dropFiles': { zh: '文件可拖到聊天区任意位置,截图可直接粘贴进输入框', en: 'Drop files anywhere in the chat, or paste a screenshot into the box' },
-  'input.tip.wikiRef': { zh: '输入 [[ 可引用历史会话,本机项目里还能引用笔记和文件', en: 'Type [[ to reference past chats, or notes and files in local projects' },
-  'input.tip.dragSession': { zh: '把侧栏的会话拖进对话区,即可挂为引用随消息发送', en: 'Drag a chat from the sidebar into the conversation to cite it' },
-  'input.tip.branch': { zh: '悬停已完成的回复,点分支图标即可从此处开出新会话', en: 'Hover a finished reply and click the branch icon to fork a new chat' },
-  'input.tip.newTab': { zh: '⌘/Ctrl 点击侧栏里的会话,会在新标签页打开', en: '⌘/Ctrl-click a session in the sidebar to open it in a new tab' },
-  'input.tip.palette': { zh: '按 ⌘/Ctrl+K 打开命令面板,搜索并执行命令', en: 'Press ⌘/Ctrl+K to open the command palette and run commands' },
-  'input.tip.quickFind': { zh: '⌘/Ctrl+P 快速查找,按名称跳到会话', en: '⌘/Ctrl+P opens quick find: jump to a session by name' },
+  'input.tip.switchChat': { zh: '可以先切去别的会话，运行不会中断，侧栏圆点标出运行中', en: 'Switch chats meanwhile; this run keeps going, marked by a sidebar dot' },
+  'input.tip.quote': { zh: '划选回复里的文字，点「引用」即可带进下一条消息', en: 'Select text in a reply and click Quote to cite it in your next message' },
+  'input.tip.dropFiles': { zh: '文件可拖到聊天区任意位置，截图可直接粘贴进输入框', en: 'Drop files anywhere in the chat, or paste a screenshot into the box' },
+  'input.tip.wikiRef': { zh: '输入 [[ 可引用历史会话，本机项目里还能引用笔记和文件', en: 'Type [[ to reference past chats, or notes and files in local projects' },
+  'input.tip.dragSession': { zh: '把侧栏的会话拖进对话区，即可挂为引用随消息发送', en: 'Drag a chat from the sidebar into the conversation to cite it' },
+  'input.tip.branch': { zh: '悬停已完成的回复，点分支图标即可从此处开出新会话', en: 'Hover a finished reply and click the branch icon to fork a new chat' },
+  'input.tip.newTab': { zh: '⌘/Ctrl 点击侧栏里的会话，会在新标签页打开', en: '⌘/Ctrl-click a session in the sidebar to open it in a new tab' },
+  'input.tip.palette': { zh: '按 ⌘/Ctrl+K 打开命令面板，搜索并执行命令', en: 'Press ⌘/Ctrl+K to open the command palette and run commands' },
+  'input.tip.quickFind': { zh: '⌘/Ctrl+P 快速查找，按名称跳到会话', en: '⌘/Ctrl+P opens quick find: jump to a session by name' },
   'input.tip.findInChat': { zh: '⌘/Ctrl+F 在当前对话里查找文字', en: 'Press ⌘/Ctrl+F to find text in the current conversation' },
-  'input.tip.toc': { zh: '悬停对话左侧的短横线展开目录,点击即可跳回任意一轮提问', en: "Hover the bars on the chat's left edge, then click to jump to a turn" },
+  'input.tip.toc': { zh: '悬停对话左侧的短横线展开目录，点击即可跳回任意一轮提问', en: "Hover the bars on the chat's left edge, then click to jump to a turn" },
 })
 
 interface SlashItem { cmd: string; desc: string; run: () => void }
@@ -703,7 +704,8 @@ export const Composer2: React.FC<{
       '/verify': isHost && onVerifyCommandChange
         ? () => { replaceSlash('/verify '); setSlashIndex(0) }
         : undefined,
-      '/think': onThinkingChange ? () => { replaceSlash('/think '); setSlashIndex(0) } : undefined,
+      // 补成不带空格的「/think」:斜杠词还在,菜单保持打开并列出七档(带空格的话斜杠词就断了,菜单直接关掉 —— Codex r3a-4)
+      '/think': onThinkingChange ? () => { replaceSlash('/think'); setSlashIndex(0) } : undefined,
       // /refine:插入原文让用户可补充说明,回车走普通发送——引擎检测 /refine 前缀注入复盘指令(agentLoop)。
       // 仅 host 会话(工作笔记写在本机 agent 目录,manage_harness 也是 host-only);运行中不露出——
       // 此时发送会变成 steer 注入,引擎的 refine 检测只在 run 开头跑一次,steer 进去的 /refine 不生效。
@@ -795,7 +797,8 @@ export const Composer2: React.FC<{
       }
     }
     for (const c of commandsFor('desktop')) {
-      if (c.name === '/stop' || c.name === '/think') continue // 上面已单独处理
+      // /stop 上面已单独处理。/think 留一条总入口:裸「/」只列它,选中后补成「/think 」再列七档(W-04)
+      if (c.name === '/stop') continue
       const run = handlers[c.name]
       if (!run) continue
       items.push({ cmd: c.arg ? `${c.name} ${c.arg}` : c.name, desc: describe(c.name), run })
@@ -847,7 +850,11 @@ export const Composer2: React.FC<{
         }))
     }
     const q = slash.token.toLowerCase()
-    return slashItems.filter((it) => it.cmd.toLowerCase().startsWith(q) || (q.length > 1 && it.desc.toLowerCase().includes(q.slice(1)))).slice(0, 10)
+    // 七档 /think <档位> 只在已敲出「/th」之后才展开;裸「/」或别的前缀下只露 /think 那一条总入口,
+    // 否则首屏 8 行里 7 行都是它,/new、/compact、/model 全被挤出去(W-04)。
+    const levels = q.startsWith('/th')
+    return slashItems.filter((it) => (levels || !it.cmd.startsWith('/think '))
+      && (it.cmd.toLowerCase().startsWith(q) || (q.length > 1 && it.desc.toLowerCase().includes(q.slice(1))))).slice(0, 10)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slash, slashItems, models, modelId])
   // 只有真弹出来的菜单才压住 @ / [[ ——「有个斜杠词」还不够:敲 `/Users/me/[[` 时命令词一直在,
@@ -1332,7 +1339,7 @@ export const Composer2: React.FC<{
             </div>
           </div>
         )}
-        <div ref={cardRef} className={`t2c-card${dragOver ? ' dragover' : ''}`}>
+        <ChatBoxSurface ref={cardRef} className={dragOver ? 'dragover' : undefined}>
           {advisory}
           {hint && <div className="t2c-hint">{hint}</div>}
           {quotedText && (
@@ -1394,7 +1401,8 @@ export const Composer2: React.FC<{
               ))}
             </div>
           )}
-          <textarea
+          <ChatBoxInput
+            autoSize={false}
             ref={taRef}
             className="t2c-ta"
             rows={1}
@@ -1548,7 +1556,7 @@ export const Composer2: React.FC<{
             </div>
           )}
 
-          <div className="t2c-row">
+          <ChatBoxToolbar>
             <AddContentMenu
               open={openMenu === 'add'}
               disabled={disabled}
@@ -1770,23 +1778,23 @@ export const Composer2: React.FC<{
             {running ? (
               <>
                 {(!!draft.trim() || allRefChips.length > 0) && (
-                  <button className="t2c-send" onClick={send} disabled={disabled} title={t('input.send')}><ArrowUp size={16} /></button>
+                  <ChatBoxSubmit onClick={send} disabled={disabled} title={t('input.send')} aria-label={t('input.send')} />
                 )}
                 <button className="t2c-stop" onClick={onStop} title={t('input.stop')} aria-label={t('input.stop')}><Square size={10} /><span className="t2c-stop-label">{t('input.stop')}</span></button>
               </>
             ) : (
               // 只挂了引用、一个字没写也可发(与 send() 的放行条件同源;不同步的话按钮灰着 = 哑火)
-              <button className="t2c-send" onClick={send} disabled={disabled || (!draft.trim() && !allRefChips.length)} title={t('input.send')}><ArrowUp size={16} /></button>
+              <ChatBoxSubmit onClick={send} disabled={disabled || (!draft.trim() && !allRefChips.length)} title={t('input.send')} aria-label={t('input.send')} />
             )}
             </>)}
-          </div>
+          </ChatBoxToolbar>
           {voice.error && !voice.recording && !voice.busy && !live.active && (
             <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{voice.error}</div>
           )}
           {live.error && (live.active || !voice.error) && (
             <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{live.error}</div>
           )}
-        </div>
+        </ChatBoxSurface>
       </div>
       {rulesOpen && <ApprovalRulesModal cfg={liveCfg} onClose={() => setRulesOpen(false)} />}
     </div>

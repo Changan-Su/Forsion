@@ -25,8 +25,8 @@ registerMessages({
   'ics.externalCalendar': { zh: '外部日历', en: 'External calendar' },
   'ics.errUnsupported': { zh: '当前端不支持订阅外部日历', en: 'This client cannot subscribe to external calendars' },
   'ics.errFetchFailed': { zh: '拉取失败', en: 'Fetch failed' },
-  'ics.errNotCalendar': { zh: '返回的不是日历文件(地址可能已失效)', en: 'The response is not a calendar file (the address may no longer be valid)' },
-  'ics.untitledEvent': { zh: '(无标题)', en: '(untitled)' },
+  'ics.errNotCalendar': { zh: '返回的不是日历文件（地址可能已失效）', en: 'The response is not a calendar file (the address may no longer be valid)' },
+  'ics.untitledEvent': { zh: '（无标题）', en: '(untitled)' },
 })
 
 export interface IcsSub {

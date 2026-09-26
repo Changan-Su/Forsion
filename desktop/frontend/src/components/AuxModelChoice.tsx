@@ -28,7 +28,7 @@ registerMessages({
   'aux.visionMode.always': { zh: '总是 — 所有图都先转成文字', en: 'Always — transcribe every image first' },
   'aux.visionMode.off': { zh: '关闭 — 图直接发给主模型', en: 'Off — send images straight to the main model' },
   'aux.visionModeAutoWarn': {
-    zh: '「自动」靠一份内置名单判断主模型有没有视觉,名单外的纯文本模型会被当成能看图。图发过去没反应就改选「总是」。',
+    zh: '「自动」靠一份内置名单判断主模型有没有视觉，名单外的纯文本模型会被当成能看图。图发过去没反应就改选「总是」。',
     en: 'Auto relies on a built-in list to tell whether the main model has vision; text-only models outside that list are assumed to have it. If images get ignored, switch to Always.',
   },
 })

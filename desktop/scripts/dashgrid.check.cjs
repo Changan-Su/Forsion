@@ -553,7 +553,7 @@ async function main() {
     await page.locator('.amx-toolbar button[title^="编辑布局"]').click()
     await page.waitForTimeout(250)
     await page.locator('.amx-toolbar button[title="添加卡片"]').click()
-    await page.locator('.dash-add-menu button', { hasText: '图表(多维表)' }).click()
+    await page.locator('.dash-add-menu button', { hasText: '图表（多维表）' }).click()
     await page.waitForTimeout(250)
     await page.locator('.amx-qf-row').first().click()
     await page.waitForTimeout(400)

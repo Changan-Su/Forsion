@@ -37,7 +37,7 @@ registerMessages({
   // 小节标题与说明已上移到插件页统一的「内置插件」区(settings.amadeusPlugins.builtinTitle/builtinHint),
   // 那一区同时管宿主原生能力和编辑器内置插件,不能只说宿主这一半。
   'browser.title': { zh: '浏览器', en: 'Browser' },
-  'browser.desc': { zh: '在应用内打开网页与本地 HTML,不用切出去。', en: 'Open web pages and local HTML inside the app.' },
+  'browser.desc': { zh: '在应用内打开网页与本地 HTML，不用切出去。', en: 'Open web pages and local HTML inside the app.' },
   'browser.open': { zh: '打开浏览器', en: 'Open browser' },
   'browser.back': { zh: '后退', en: 'Back' },
   'browser.forward': { zh: '前进', en: 'Forward' },
@@ -45,14 +45,14 @@ registerMessages({
   'browser.stop': { zh: '停止', en: 'Stop' },
   'browser.placeholder': { zh: '输入网址或搜索词', en: 'Enter a URL or search' },
   'browser.openExternal': { zh: '用系统浏览器打开', en: 'Open in system browser' },
-  'browser.failed': { zh: '加载失败:{msg}', en: 'Load failed: {msg}' },
+  'browser.failed': { zh: '加载失败：{msg}', en: 'Load failed: {msg}' },
   'browser.inAppLinks': { zh: '应用内链接用内置浏览器打开', en: 'Open in-app links in the built-in browser' },
   'terminal.title': { zh: '终端', en: 'Terminal' },
-  'terminal.desc': { zh: '应用内的真终端(登录 shell,支持 vim/top/ssh)。', en: 'A real terminal inside the app (login shell; vim/top/ssh work).' },
+  'terminal.desc': { zh: '应用内的真终端（登录 shell，支持 vim/top/ssh）。', en: 'A real terminal inside the app (login shell; vim/top/ssh work).' },
   'terminal.open': { zh: '打开终端', en: 'Open terminal' },
-  'terminal.exited': { zh: '进程已退出(code {code})', en: 'Process exited (code {code})' },
+  'terminal.exited': { zh: '进程已退出（code {code}）', en: 'Process exited (code {code})' },
   'terminal.restart': { zh: '重新启动', en: 'Restart' },
-  'terminal.unavailable': { zh: '终端不可用:node-pty 原生模块未就绪。', en: 'Terminal unavailable: the node-pty native module is not ready.' },
+  'terminal.unavailable': { zh: '终端不可用：node-pty 原生模块未就绪。', en: 'Terminal unavailable: the node-pty native module is not ready.' },
 })
 
 const tr = (k: string, vars?: Record<string, unknown>): string => useApp.getState().tr(k, vars)

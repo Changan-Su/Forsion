@@ -15,10 +15,10 @@ import './ganttBody.css'
 registerMessages({
   'gantt.scaleDay': { zh: '日', en: 'Day' },
   'gantt.scaleWeek': { zh: '周', en: 'Week' },
-  'gantt.needDateCol': { zh: '甘特图需要一个日期列(日历日期)。', en: 'The Gantt view needs a date column (calendar date).' },
+  'gantt.needDateCol': { zh: '甘特图需要一个日期列（日历日期）。', en: 'The Gantt view needs a date column (calendar date).' },
   'gantt.addDateCol': { zh: '＋ 添加「日期」列', en: '+ Add a "Date" column' },
   'gantt.today': { zh: '今天', en: 'Today' },
-  'gantt.colHint': { zh: '甘特所用的起止列(在视图 tab 菜单里换)', en: 'Start and end columns used by the Gantt view (change them in the view tab menu)' },
+  'gantt.colHint': { zh: '甘特所用的起止列（在视图 tab 菜单里换）', en: 'Start and end columns used by the Gantt view (change them in the view tab menu)' },
   'gantt.nameFallback': { zh: '名称', en: 'Name' },
   'gantt.noDate': { zh: '无日期', en: 'No date' },
 })

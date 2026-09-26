@@ -54,7 +54,7 @@ function button(text: string): HTMLButtonElement {
 
 it('shows the tighter quota period with upgrade and reset actions', async () => {
   await mount()
-  expect(host.textContent).toContain('本周托管 AI 额度即将用尽,仅剩 8%')
+  expect(host.textContent).toContain('本周托管 AI 额度即将用尽，仅剩 8%')
   expect(button('升级会员')).toBeTruthy()
   expect(button('使用重置卡 (2)')).toBeTruthy()
   await act(async () => button('升级会员').click())
@@ -117,14 +117,14 @@ describe('background quota (Muse / automations)', () => {
     await mount()
     const banner = host.querySelector('.t2-quota-advisory')
     expect(banner?.getAttribute('data-bucket')).toBe('background')
-    expect(host.textContent).toContain('后台 Agent 今日额度已用尽,Muse 与自动化已暂停')
+    expect(host.textContent).toContain('后台 Agent 今日额度已用尽，Muse 与自动化已暂停')
     expect(host.textContent).not.toContain('使用重置卡')
     await act(async () => button('从主额度转入 10%').click())
     expect((window.tangu as any).accountBgConvert).not.toHaveBeenCalled()
     await act(async () => button('再次点击确认').click())
     await tick()
     expect((window.tangu as any).accountBgConvert).toHaveBeenCalledWith(10)
-    expect(onToast).toHaveBeenCalledWith('已从主额度转入 10%,本周期有效')
+    expect(onToast).toHaveBeenCalledWith('已从主额度转入 10%，本周期有效')
     expect(host.querySelector('.t2-quota-advisory')).toBeNull()
   })
 
@@ -132,7 +132,7 @@ describe('background quota (Muse / automations)', () => {
     window.tangu!.accountQuota = vi.fn().mockResolvedValue(bgQuota({ autoMain: true })) as any
     ;(window.tangu as any).backendStatus = vi.fn()
     await mount()
-    expect(host.textContent).toContain('后台 Agent 今日额度已用尽,正在用主额度继续')
+    expect(host.textContent).toContain('后台 Agent 今日额度已用尽，正在用主额度继续')
   })
 
   it('never shows the background bucket where Muse cannot run (no local engine)', async () => {

@@ -60,7 +60,7 @@ registerMessages({
   'studio.sandbox.blockedApi': { zh: '宿主拒绝加载：manifest.json 的 apiVersion 不是这个版本的 Forsion 支持的值（目前为 1）。', en: 'The host refused to load it: the apiVersion in manifest.json is not supported by this version of Forsion (currently 1).' },
   'studio.sandbox.blockedMinApp': { zh: '宿主拒绝加载：manifest.json 的 minAppVersion 高于当前 Forsion 的版本。', en: 'The host refused to load it: the minAppVersion in manifest.json is newer than this version of Forsion.' },
   'studio.sandbox.blockedOther': { zh: '宿主拒绝加载：{reason}', en: 'The host refused to load it: {reason}' },
-  'studio.sandbox.trust': { zh: '这不是隔离沙箱：开发副本就跑在这个真应用、你的真笔记库上，与已安装插件同权。试验期间别写、挪、删你的数据；定时器与监听必须在 disposer 里清掉——每次保存都会重跑一遍 setup，漏清一次就叠一层。', en: 'This is not an isolated sandbox: the dev copy runs in this real app, on your real notes, with the same privileges as an installed plugin. Do not write, move or delete your data while experimenting, and release every timer and listener in the disposer, because each save runs setup again and anything left behind stacks up.' },
+  'studio.sandbox.trust': { zh: '这不是隔离沙箱：开发副本就跑在这个真应用、你的真智库上，与已安装插件同权。试验期间别写、挪、删你的数据；定时器与监听必须在 disposer 里清掉——每次保存都会重跑一遍 setup，漏清一次就叠一层。', en: 'This is not an isolated sandbox: the dev copy runs in this real app, on your real notes, with the same privileges as an installed plugin. Do not write, move or delete your data while experimenting, and release every timer and listener in the disposer, because each save runs setup again and anything left behind stacks up.' },
   'studio.sandbox.shadow': { zh: '这个插件已安装的副本在开发副本加载期间被顶替；期间它的「卸载」不可用。', en: 'The installed copy of this plugin is replaced while the dev copy is loaded, and Uninstall is unavailable meanwhile.' },
   'studio.sandbox.load': { zh: '在 Forsion 中加载', en: 'Load into Forsion' },
   'studio.sandbox.loading': { zh: '正在加载…', en: 'Loading…' },
@@ -135,7 +135,7 @@ registerMessages({
   // —— 下面三条是**落盘产物命名**:它们会变成永久的 git 提交标题,所以在写入那一刻按当前界面语言求值。——
   'studio.history.untitled': { zh: '未命名版本', en: 'Untitled version' },
   'studio.history.backupName': { zh: '恢复前的备份', en: 'Backup before restore' },
-  'studio.history.restorePrefix': { zh: '恢复到:', en: 'Restore:' },
+  'studio.history.restorePrefix': { zh: '恢复到：', en: 'Restore:' },
   'studio.history.noChanges': { zh: '与上一个版本相比没有改动。', en: 'No changes since the last version.' },
   'studio.history.files': { zh: '{count} 个文件', en: '{count} files' },
   'studio.history.auto': { zh: '自动', en: 'Auto' },

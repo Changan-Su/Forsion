@@ -35,9 +35,9 @@ import { isCoarsePointer } from '../../touch'
 import { registerMessages, subscribeLocale, translate } from '../../i18n'
 
 registerMessages({
-  'blocklayer.dragHandle': { zh: '点击打开菜单,按住拖动', en: 'Click for menu, hold to drag' },
+  'blocklayer.dragHandle': { zh: '点击打开菜单，按住拖动', en: 'Click for menu, hold to drag' },
   'blocklayer.addBelow': { zh: '在下方插入块', en: 'Add block below' },
-  'blocklayer.cardGrab': { zh: '选中所在卡片,按住拖动整卡', en: 'Select card, hold to drag it' },
+  'blocklayer.cardGrab': { zh: '选中所在卡片，按住拖动整卡', en: 'Select card, hold to drag it' },
   'blocklayer.expandChildren': { zh: '展开子项', en: 'Expand children' },
   'blocklayer.foldChildren': { zh: '折叠子项', en: 'Collapse children' },
   'blocklayer.expandSection': { zh: '展开小节', en: 'Expand section' },
@@ -220,6 +220,9 @@ function scrollParentOf(el: HTMLElement): HTMLElement | null {
 export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
   let viewRef: EditorView | null = null
   let activeRef: ActiveBlock | null = null
+  // 普通 TextSelection 与空白框选/把手选子树共用 PM 选区，只在手势来源上区分呈现。
+  // 不把模式挂 DOM:焦点、回灌等事务会重算装饰，模式必须随编辑器状态一起迁移/清除。
+  const blockSelectionKey = new PluginKey<boolean>('amx-block-selection-mode')
 
   // ── 分栏配对态(拖到块左右缘 ≤28px):竖直指示线 + 捕获期 drop 单点路由(Codex B5:
   // pair 命中即 preventDefault+stopPropagation,横向落点/PM 默认 drop 都不再跑,一次 drop 只消费一次)。
@@ -929,7 +932,9 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           const sub = indentSubtreeOf(view, a.pos, a.node)
           if (sub) {
             const doc = view.state.doc
-            view.dispatch(view.state.tr.setSelection(TextSelection.between(doc.resolve(sub.from + 1), doc.resolve(sub.to - 1))))
+            view.dispatch(view.state.tr
+              .setSelection(TextSelection.between(doc.resolve(sub.from + 1), doc.resolve(sub.to - 1)))
+              .setMeta(blockSelectionKey, true))
             view.focus()
             return
           }
@@ -1199,6 +1204,25 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           }
           return out
         }
+        // 段落盒宽通常铺满正文列;文字右侧看着是空白,不能按整只 p 的 rect 把框选挡掉。
+        // 只在真实字形/已渲染 widget 上交给原生拖字或组件;隐藏的双链源码没有 rect。
+        const contentAt = (el: HTMLElement, x: number, y: number): boolean => {
+          const box = el.getBoundingClientRect()
+          if (x < box.left || x > box.right || y < box.top || y > box.bottom) return false
+          if (el.matches('hr, table, pre, .amx-ucard')) return true
+          const inside = (r: DOMRect): boolean => x >= r.left - 2 && x <= r.right + 2 && y >= r.top - 2 && y <= r.bottom + 2
+          for (const widget of el.querySelectorAll<HTMLElement>('.unified-embed, .wiki-inline-img-wrap, .wikilink, img, video, iframe, canvas')) {
+            if (inside(widget.getBoundingClientRect())) return true
+          }
+          const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+          for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+            if (!node.textContent?.length) continue
+            const range = document.createRange()
+            range.selectNodeContents(node)
+            for (const r of range.getClientRects()) if (inside(r)) return true
+          }
+          return false
+        }
         const onMqDown = (e: PointerEvent): void => {
           if (e.button !== 0 || e.pointerType === 'touch') return
           // ⚠️ 画布模式整片让路给舞台自己的框选(canvasStage)。root 是 `.unified-body` —— 舞台是它的
@@ -1209,11 +1233,8 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           const t = e.target as HTMLElement | null
           if (!t || t.closest('.unified-gutter') || t.closest('.amx-embed') || t.closest('button, input, textarea, a')) return
           if (!editorView.editable) return
-          // 命中任一块的矩形 = 正文上按下,走原生文字选区;只有落在块与块之间/两侧留白才起框。
-          if (topBlockEls().some((el) => {
-            const r = el.getBoundingClientRect()
-            return e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom
-          })) return
+          if (topBlockEls().some((el) => contentAt(el, e.clientX, e.clientY))) return
+          e.preventDefault() // 空白处手势由框选接管,不让浏览器同时起原生文字拖选。
           mqFrom = { x: e.clientX, y: e.clientY }
           marquee = document.createElement('div')
           marquee.className = 'amx-marquee'
@@ -1228,19 +1249,33 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           const w = Math.abs(e.clientX - mqFrom.x), h = Math.abs(e.clientY - mqFrom.y)
           Object.assign(marquee.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px` })
           const hit: number[] = []
+          const hitEls: HTMLElement[] = []
           for (const el of topBlockEls()) {
             const r = el.getBoundingClientRect()
             if (r.bottom < y || r.top > y + h || r.right < x || r.left > x + w) continue
             try {
               hit.push(editorView.posAtDOM(el, 0))
+              hitEls.push(el)
             } catch { /* 元素刚被换掉:跳过 */ }
           }
           if (!hit.length) return
+          const doc = editorView.state.doc
+          if (hitEls.length === 1) {
+            // 单块框选也必须是整块选区;TextSelection 只选光内容,Delete 会留下空段壳。
+            const el = hitEls[0]
+            try {
+              const index = Array.prototype.indexOf.call(el.parentNode?.childNodes, el)
+              const at = editorView.posAtDOM(el.parentNode!, index)
+              const node = doc.nodeAt(at)
+              if (node && NodeSelection.isSelectable(node)) {
+                const sel = NodeSelection.create(doc, at)
+                if (!sel.eq(editorView.state.selection)) editorView.dispatch(editorView.state.tr.setSelection(sel))
+                return
+              }
+            } catch { /* 元素刚被换掉:继续走文字范围兜底 */ }
+          }
           const a = Math.min(...hit)
-          const bEl = topBlockEls().filter((el) => {
-            const r = el.getBoundingClientRect()
-            return !(r.bottom < y || r.top > y + h || r.right < x || r.left > x + w)
-          }).pop()
+          const bEl = hitEls[hitEls.length - 1]
           if (!bEl) return
           let b = a
           try {
@@ -1248,9 +1283,10 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
             const node = editorView.state.doc.nodeAt(p - 1)
             b = node ? p + node.content.size : p
           } catch { /* 同上 */ }
-          const doc = editorView.state.doc
           const sel = TextSelection.between(doc.resolve(Math.min(a, doc.content.size)), doc.resolve(Math.min(b, doc.content.size)))
-          if (!sel.eq(editorView.state.selection)) editorView.dispatch(editorView.state.tr.setSelection(sel))
+          if (!sel.eq(editorView.state.selection) || !blockSelectionKey.getState(editorView.state)) {
+            editorView.dispatch(editorView.state.tr.setSelection(sel).setMeta(blockSelectionKey, true))
+          }
         }
         const onMqUp = (e?: PointerEvent): void => {
           window.removeEventListener('pointermove', onMqMove)
@@ -2085,15 +2121,22 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
     }),
   )
 
-  // ── 多块选中的呈现(AFFiNE 对齐)。─────────────────────────────────────────────
-  // 跨块拖选,PM 原生画的是「按行参差的文字高亮」,AFFiNE 画的是整块矩形淡底。这里**只换呈现**:
-  // 选区语义仍是原生 TextSelection —— 删除/复制/序列化/撤销全走 PM 与 clipboardTextSerializer
-  // 既有的路,不另造一套「块选中 store」(v3 那套是块世界的产物,单实例里没有块 id 可挂)。
-  // 覆盖到的每个**顶层块**(doc 或 cell 的直接子节点)加一层节点装饰;列内选中逐块给,不给整行。
-  const multiBlockRanges = (state: EditorState): Array<[number, number]> => {
+  // ── 跨块文字选区只按实际字符呈现;空白框选/把手子树才整块着色。──────────────
+  // 两者都是 PM TextSelection,复制/删除继续读原选区。已渲染的结构块(列表/表/图片/双链等)
+  // 本身没有连续可着色的文字表面,普通跨块选区碰到它时仍给整块淡底。
+  const selectedRanges = (state: EditorState): Array<[number, number, boolean]> => {
     const sel = state.selection
     if (!(sel instanceof TextSelection) || sel.empty) return []
-    const hits: Array<[number, number]> = []
+    const blockMode = !!blockSelectionKey.getState(state)
+    // 单块内编辑嵌入源码/列表文字仍按字符选;渲染块整体反馈只用于跨块文字选区。
+    if (!blockMode && sel.$from.sameParent(sel.$to)) return []
+    const hits: Array<[number, number, boolean]> = []
+    const rendered = (node: ProseNode): boolean => {
+      if (['bullet_list', 'ordered_list', 'table', 'blockquote', 'horizontal_rule', 'code_block', 'amadeusCanvasCard'].includes(node.type.name)) return true
+      if (node.type.name !== 'paragraph') return false
+      const text = node.textContent.trim()
+      return /^!?\[\[[^\]\n]+\]\]$/.test(text) || node.childCount === 1 && node.firstChild?.type.name === 'image'
+    }
     const collect = (node: ProseNode, contentStart: number): void => {
       node.forEach((child, offset) => {
         const from = contentStart + offset
@@ -2103,23 +2146,33 @@ export function createBlockLayer(hooks: BlockLayerHooks): BlockLayer {
           child.forEach((cell, off2) => collect(cell, from + 1 + off2 + 1))
           return
         }
-        hits.push([from, to])
+        if (blockMode || rendered(child)) hits.push([from, to, blockMode])
       })
     }
     collect(state.doc, 0)
-    return hits.length >= 2 ? hits : [] // 块内选几个字仍归原生文字高亮
+    return hits
   }
   const blockSelDeco = $prose(() =>
     new Plugin({
+      key: blockSelectionKey,
+      state: {
+        init: () => false,
+        apply: (tr, blockMode, oldState) => {
+          if (tr.getMeta(blockSelectionKey) === true) return true
+          if (tr.docChanged || tr.selectionSet && !tr.selection.eq(oldState.selection)) return false
+          return blockMode
+        },
+      },
       props: {
         decorations: (state) => {
-          const hits = multiBlockRanges(state)
+          const hits = selectedRanges(state)
           if (!hits.length) return null
-          return DecorationSet.create(state.doc, hits.map(([f, t]) => Decoration.node(f, t, { class: 'amx-block-selected' })))
+          return DecorationSet.create(state.doc, hits.map(([f, t, block]) =>
+            Decoration.node(f, t, { class: block ? 'amx-block-selected' : 'amx-rendered-selected' })))
         },
-        // 开关位:接管期把原生 ::selection 涂透明(CSS 单处,见 styles.css)。
+        // 只有真正的整块手势才压掉原生文字高亮;普通跨块拖字必须看见真实端点。
         attributes: (state): Record<string, string> =>
-          multiBlockRanges(state).length ? { 'data-blocksel': 'true' } : {},
+          blockSelectionKey.getState(state) && selectedRanges(state).length ? { 'data-blocksel': 'true' } : {},
       },
     }),
   )

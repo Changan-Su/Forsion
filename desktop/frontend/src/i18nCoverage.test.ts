@@ -160,6 +160,10 @@ describe('i18n 覆盖', () => {
       { re: /(^|[^A-Za-z_{=./-])agents?(?=[^A-Za-z_}=/-]|$)/, fix: '写「Agent」(专名大写)' },
       { re: /工作空间/, fix: '指 Space 写「Space」,指整个 app 写「Forsion」或改写,指目录写「工作区」' },
       { re: /Agent Space|Agents space|智能体空间/, fix: 'Agents 这个 Space 就叫「Agents」' },
+      // 09-26 用户拍板(UI/UX 走查 W-09 / W-19):侧栏那个文件夹对象叫「项目」;笔记库 / Vault 在中文里叫「智库」;数据库叫「多维表」。
+      { re: /(默认|本地|重命名|移除|添加本地|筛选)工作区/, fix: '文件夹对象写「项目」(「工作区」只指工作区面板与可写范围)' },
+      { re: /笔记库|本地库|云端库|(?<![\w/-])[Vv]ault(?![\w/-])/, fix: '写「智库」(en 仍是 vault)' },
+      { re: /数据库/, fix: '写「多维表」' },
       {
         re: /空间/, fix: '指 Space 这个容器时写「Space」',
         allow: {
@@ -207,9 +211,9 @@ describe('i18n 覆盖', () => {
     expect(bad.sort(), `zh 值是纯英文:翻成中文,或确属品牌 / 专名就进 TERMS / ALLOW 并写明理由:\n  ${bad.join('\n  ')}`).toEqual([])
   })
 
-  it('E. zh 标点(报告模式,U-32):半角 , ; : ( ) ? ! 紧挨汉字的计数与样例,不让测试变红', () => {
+  it('E. zh 标点(U-32):半角 , ; : ( ) ? ! 不许紧挨汉字', () => {
     // 规则见 genesis-ui skill「中文标点」:句内全角;{var}、反引号代码、URL、路径、快捷键、HH:mm 除外。
-    // 全仓 codemod 另立项(要排除落盘 / 按值识别的键,先 grep 按中文文案选元素的台架)。清零后把这里改成硬断言。
+    // 红了跑 `node scripts/zh-punct.codemod.cjs`(幂等,与这里同一套排除;amadeus.default.* 是落盘命名,脚本不碰)。
     const strip = (v: string): string => v
       .replace(/\{\w+\}/g, '□')
       .replace(/`[^`]*`/g, '□')
@@ -217,19 +221,12 @@ describe('i18n 覆盖', () => {
       .replace(/(?:~|\.{1,2})?\/[\w./*~-]+/g, '□')
       .replace(/(?:⌘|Ctrl|Cmd|Shift|Alt|Option|Meta)[+\w⇧⌥⌘,.]*/g, '□')
       .replace(/\d{1,2}:\d{2}/g, '□')
-    const PUNCT = /[一-龥][,;:()?!]|[,;:()?!][一-龥]/g
-    let hits = 0
-    const keys: string[] = []
-    for (const [k, v] of Object.entries(zh)) {
-      const n = (strip(v).match(PUNCT) ?? []).length
-      if (n) { hits += n; keys.push(`${k} = ${v.slice(0, 60)}`) }
-    }
-    console.info(`[i18n E] zh 半角标点紧挨汉字:${hits} 处 / ${keys.length} 个键(总 ${Object.keys(zh).length})。样例:\n  ${keys.slice(0, 8).join('\n  ')}`)
-    // 防假绿:扫描确实跑过(字典非空);已手修的高曝光几条不许回退。
-    expect(Object.keys(zh).length).toBeGreaterThan(1000)
-    for (const k of ['input.placeholder', 'chat.emptyTitle', 'chat.emptyHint', 'settings.workspace.hint', 'onboarding.workspace.hint', 'input.tip.steer', 'sidebar.mode.tip']) {
-      expect(strip(zh[k]).match(PUNCT), `${k} 已手修成全角,别改回半角:${zh[k]}`).toBeNull()
-    }
+      .replace(/!\[\[?/g, '□')
+      .replace(/!?\[[^\]\n]*\]\((?:[^()\n]|\([^()\n]*\))*\)/g, '□') // Markdown 链接语法示例(目标里允许一层括号,同 codemod)
+    const PUNCT = /[一-龥][,;:()?!]|[,;:()?!][一-龥]/
+    const bad = Object.entries(zh).filter(([k, v]) => !k.startsWith('amadeus.default.') && PUNCT.test(strip(v))).map(([k, v]) => `${k} = ${v.slice(0, 60)}`)
+    expect(Object.keys(zh).length).toBeGreaterThan(1000) // 防假绿:扫描确实跑过
+    expect(bad, `zh 词条里半角标点紧挨汉字,跑 node scripts/zh-punct.codemod.cjs:\n  ${bad.join('\n  ')}`).toEqual([])
   })
 
   it('H. 日期 / 时间显示只走 format/time.ts 单源(U-29:不许再跟系统区域走)', () => {

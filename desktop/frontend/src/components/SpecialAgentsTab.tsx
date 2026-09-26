@@ -29,7 +29,7 @@ registerMessages({
   'specialUi.searchModels': { zh: '搜索模型', en: 'Search models' },
   'bgQuota.title': { zh: '后台额度', en: 'Background quota' },
   'bgQuota.lead': {
-    zh: '主额度之外额外送的一份,相当于你额度的 {share}%;只计 Muse 与自动化用云端默认后台模型({model})的用量。这里的改动立即生效。',
+    zh: '主额度之外额外送的一份，相当于你额度的 {share}%；只计 Muse 与自动化用云端默认后台模型（{model}）的用量。这里的改动立即生效。',
     en: 'An extra allowance on top of your main quota, worth {share}% of your limit. Only Muse and automations running on the cloud default background model ({model}) draw from it. Changes here apply immediately.',
   },
   'bgQuota.daily': { zh: '今日', en: 'Today' },
@@ -37,23 +37,23 @@ registerMessages({
   'bgQuota.remaining': { zh: '剩余 {percent}%', en: '{percent}% left' },
   'bgQuota.unlimited': { zh: '不限', en: 'Unlimited' },
   'bgQuota.otherModel': {
-    zh: 'Muse 当前用的是 {model},不计入后台额度,会消耗主额度。',
+    zh: 'Muse 当前用的是 {model}，不计入后台额度，会消耗主额度。',
     en: 'Muse is set to {model}, which does not count toward the background quota and uses your main quota instead.',
   },
   'bgQuota.autoMain': { zh: '用完后改用主额度继续', en: 'Continue on main quota when used up' },
   'bgQuota.autoMainHint': {
-    zh: '关闭时,后台额度用完后 Muse 与自动化会暂停到下个周期。',
+    zh: '关闭时，后台额度用完后 Muse 与自动化会暂停到下个周期。',
     en: 'When off, Muse and automations pause until the next period once the background quota runs out.',
   },
   'bgQuota.convert': { zh: '从主额度转入', en: 'Move from main quota' },
   'bgQuota.convertHint': {
-    zh: '按你额度的百分比等额转入,仅本周期有效,不超过主额度剩余。',
+    zh: '按你额度的百分比等额转入，仅本周期有效，不超过主额度剩余。',
     en: 'Moves an equal amount, as a share of your limit, for this period only and never more than your main quota has left.',
   },
   'bgQuota.confirm': { zh: '再点确认', en: 'Click to confirm' },
-  'bgQuota.converted': { zh: '已转入,本周期有效', en: 'Moved for this period' },
-  'bgQuota.noMain': { zh: '主额度已用完,没有可转入的额度', en: 'Your main quota is used up; there is nothing to move' },
-  'bgQuota.failed': { zh: '操作失败:{e}', en: 'Action failed: {e}' },
+  'bgQuota.converted': { zh: '已转入，本周期有效', en: 'Moved for this period' },
+  'bgQuota.noMain': { zh: '主额度已用完，没有可转入的额度', en: 'Your main quota is used up; there is nothing to move' },
+  'bgQuota.failed': { zh: '操作失败：{e}', en: 'Action failed: {e}' },
 })
 
 /** 转入档位(限额的百分比);横幅上的一键转入固定用 10。 */

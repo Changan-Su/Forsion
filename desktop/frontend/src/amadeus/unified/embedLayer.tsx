@@ -44,12 +44,12 @@ import { registerMessages, subscribeLocale, translate } from '../../i18n'
 registerMessages({
   'uembed.openInTab': { zh: '在 Forsion 标签页中打开', en: 'Open in a Forsion tab' },
   'uembed.openWithSystem': { zh: '用系统默认程序打开', en: 'Open with the system default app' },
-  'uembed.openPdfInTab': { zh: '在 Forsion 标签页中打开(可批注)', en: 'Open in a Forsion tab (with annotations)' },
+  'uembed.openPdfInTab': { zh: '在 Forsion 标签页中打开（可批注）', en: 'Open in a Forsion tab (with annotations)' },
   'uembed.open': { zh: '打开 ↗', en: 'Open ↗' },
   'uembed.startAt': { zh: '起播时刻', en: 'Start time' },
   'uembed.badAnchor': { zh: '锚点无效 · 从 0 秒起播', en: 'Invalid anchor · playing from 0:00' },
   'uembed.badAnchorTip': {
-    zh: '只认 #t=95 / #t=01:35 / #t=1:02:30(MM 与 SS 须两位)',
+    zh: '只认 #t=95 / #t=01:35 / #t=1:02:30（MM 与 SS 须两位）',
     en: 'Only #t=95 / #t=01:35 / #t=1:02:30 are recognized (MM and SS must be two digits)',
   },
   'uembed.collapse': { zh: '收起', en: 'Collapse' },

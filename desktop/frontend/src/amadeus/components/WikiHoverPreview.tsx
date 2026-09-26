@@ -12,7 +12,7 @@ import { OverlayAt } from '../lib/clampMenu'
 import { registerMessages, translate } from '../../i18n'
 
 registerMessages({
-  'wikihover.emptyNote': { zh: '(空笔记)', en: '(Empty note)' },
+  'wikihover.emptyNote': { zh: '（空笔记）', en: '(Empty note)' },
 })
 
 const SHOW_DELAY = 400

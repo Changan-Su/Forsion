@@ -11,7 +11,7 @@
  * 【定则】视口坐标 x 要落地 → 写 `left: x / 元素自身的 currentCSSZoom`;跟视口尺寸比大小前,
  * 局部 px 先 `× zoom`。别自己再写一遍,一律走这里。仪器:`npm run check:overlay`。
  */
-import { useLayoutEffect, useRef, useState, type CSSProperties, type HTMLAttributes, type ReactNode, type RefObject } from 'react'
+import React, { useLayoutEffect, useRef, useState, type CSSProperties, type HTMLAttributes, type ReactNode, type RefObject } from 'react'
 
 /** 端级 UI 缩放变更事件:改 zoom 不会触发 window.resize,浮层收不到通知就会停在按旧 zoom 算的位置。
  *  由 app 的 uiZoom.apply() 派发(引擎不反向依赖 app,只约定事件名)。 */

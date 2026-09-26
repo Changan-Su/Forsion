@@ -9,8 +9,9 @@ import { ModelMetadata } from './ModelMetadata'
  * 在后续会话继续继承。外部 ACP 引擎没有 Tangu 推理档与辅助模型时，保留单独的模型选择行。
  */
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronRight, Bot, Search } from 'lucide-react'
-import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge } from '@lcl/engine'
+import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, OverlayAt } from '@lcl/engine'
 import type { NestedPanelPlacement } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'
@@ -89,8 +90,48 @@ const MarqueeLabel: React.FC<{ text: string }> = ({ text }) => {
   )
 }
 
+/** Prompt hosts can sit anywhere in a scrolling View; their menus escape its clipping context. */
+function ModelMenuSurface({ portal, anchorRef, innerRef, style, children }: {
+  portal: boolean
+  anchorRef: React.RefObject<HTMLSpanElement | null>
+  innerRef(el: HTMLDivElement | null): void
+  style: React.CSSProperties
+  children: React.ReactNode
+}) {
+  const [anchor, setAnchor] = useState({ x: 0, y: 0, top: 0 })
+  useLayoutEffect(() => {
+    if (!portal) return
+    const update = () => {
+      const el = anchorRef.current
+      if (!el) return
+      const r = el.getBoundingClientRect()
+      const next = { x: r.left, y: r.bottom + 8, top: r.top - 8 }
+      setAnchor(prev => prev.x === next.x && prev.y === next.y && prev.top === next.top ? prev : next)
+    }
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener(UI_ZOOM_EVENT, update)
+    document.addEventListener('scroll', update, true)
+    const ro = new ResizeObserver(update)
+    if (anchorRef.current) ro.observe(anchorRef.current)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener(UI_ZOOM_EVENT, update)
+      document.removeEventListener('scroll', update, true)
+      ro.disconnect()
+    }
+  }, [portal, anchorRef])
+  if (!portal) return <div ref={innerRef} className="composer-menu composer-menu--model" style={style}>{children}</div>
+  return createPortal(<div className="ui-popover-backdrop" style={{ pointerEvents: 'none' }} data-cmenu>
+    <OverlayAt x={anchor.x} y={anchor.y} anchorTop={anchor.top} prefer="above" innerRef={innerRef}
+      className="composer-menu composer-menu--model composer-menu--portal">{children}</OverlayAt>
+  </div>, document.body)
+}
+
 export const ModelPill: React.FC<{
   className?: string
+  /** Escape a prompt host's scrolling/clipping context and flip vertically when needed. */
+  menuPortal?: boolean
   /** Composer2 传入时由三颗胶囊共用一个排他开关；harness / 独立用法仍可不受控。 */
   open?: boolean
   onOpenChange?: (open: boolean) => void
@@ -115,7 +156,7 @@ export const ModelPill: React.FC<{
   footnote?: string
   title?: string
 }> = ({
-  className, open: controlledOpen, onOpenChange,
+  className, menuPortal = false, open: controlledOpen, onOpenChange,
   disabled, modelId, groups, onSelect, thinkingLevel, onThinkingChange, supportedThinking, effectiveThinking,
   modelsResponse, defaultModelIds, onDefaultModelChange, onContextWindowChange, emptyLabel, footnote, title,
 }) => {
@@ -125,6 +166,7 @@ export const ModelPill: React.FC<{
   const [internalOpen, setInternalOpen] = useState(false)
   const open = controlledOpen ?? internalOpen
   const setPillOpen = (next: boolean): void => {
+    if (!next && menuRef.current?.contains(document.activeElement)) wrapRef.current?.querySelector('button')?.focus({ preventScroll: true })
     if (controlledOpen === undefined) setInternalOpen(next)
     onOpenChange?.(next)
   }
@@ -135,12 +177,12 @@ export const ModelPill: React.FC<{
   const wrapRef = useRef<HTMLSpanElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
   const subRef = useRef<HTMLDivElement>(null)
-  const menuFix = useEdgeNudge(open, { boundary: '.t2-chat-view' })
+  const menuFix = useEdgeNudge(open && !menuPortal, { boundary: '.t2-chat-view' })
   const subFix = useEdgeNudge(pane ? `${pane}:${placement}` : '', { boundary: '.t2-chat-view' })
 
   useEffect(() => {
     if (!open) { setPane(null); setAdvanced(false); setQuery(''); return }
-    const onDown = (e: MouseEvent) => { if (!wrapRef.current?.contains(e.target as Node)) setPillOpen(false) }
+    const onDown = (e: MouseEvent) => { if (!wrapRef.current?.contains(e.target as Node) && !menuRef.current?.contains(e.target as Node)) setPillOpen(false) }
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPillOpen(false) }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
@@ -157,9 +199,7 @@ export const ModelPill: React.FC<{
       const viewRect = menu.closest('.t2-chat-view')?.getBoundingClientRect()
       const triggerRect = menu.querySelector<HTMLElement>(`[data-pane-trigger="${pane}"]`)?.getBoundingClientRect()
       const zoom = zoomOf(sub)
-      const next = boundaryRect
-        ? nestedPanelPlacement(menuRect.left, menuRect.right, sub.offsetWidth, boundaryRect.left, boundaryRect.right, zoom)
-        : 'right'
+      const next = nestedPanelPlacement(menuRect.left, menuRect.right, sub.offsetWidth, boundaryRect?.left ?? 0, boundaryRect?.right ?? window.innerWidth, zoom)
       setPlacement((prev) => prev === next ? prev : next)
       if (triggerRect) {
         const nextTop = nestedPanelTop(
@@ -257,10 +297,11 @@ export const ModelPill: React.FC<{
 
   return (
     <span ref={wrapRef} className={`model-pill-wrap${open ? ' is-open' : ''}${className ? ` ${className}` : ''}`} data-cmenu>
-      <button
+      <button type="button"
         className={`composer-chip model-pill-btn${open ? ' is-open' : ''}${isMax ? ' is-max' : ''}`}
         title={title || t('input.modelChipTitle')}
         disabled={disabled}
+        aria-expanded={open}
         onClick={() => setPillOpen(!open)}
       >
         <Bot size={13} />
@@ -268,9 +309,10 @@ export const ModelPill: React.FC<{
         <ChevronDown size={10} />
       </button>
       {open && (
-        <div
-          ref={(el) => { menuRef.current = el; menuFix.ref.current = el }}
-          className="composer-menu composer-menu--model"
+        <ModelMenuSurface
+          portal={menuPortal}
+          anchorRef={wrapRef}
+          innerRef={(el) => { menuRef.current = el; menuFix.ref.current = el }}
           style={menuFix.style}
         >
           {onThinkingChange && (
@@ -284,7 +326,7 @@ export const ModelPill: React.FC<{
                       <span className={`cm-row-v${isMax ? ' is-max' : ''}`}>{effortText}{effectiveText}</span>
                     </div>
                     {onDefaultModelChange && slotRows.map(({ slot, label: rowLabel }) => (
-                      <button
+                      <button type="button"
                         key={slot}
                         className={`cm-row${pane === slot ? ' is-open' : ''}`}
                         data-pane-trigger={slot}
@@ -301,7 +343,7 @@ export const ModelPill: React.FC<{
                 </div>
               </div>
               {/* 第一行：高级；它本身仍留在模型和 Effort 上方。 */}
-              <button
+              <button type="button"
                 className={`cm-row cm-advanced-toggle${advanced ? ' is-open' : ''}`}
                 aria-expanded={advanced}
                 onClick={() => { setAdvanced((v) => !v); setPane(null) }}
@@ -315,7 +357,7 @@ export const ModelPill: React.FC<{
 
           {/* 高级与模型之间：上下文上限(只对窗口超过缺省上限的模型露出)。 */}
           {ctx && (
-            <button
+            <button type="button"
               className={`cm-row${pane === 'context' ? ' is-open' : ''}`}
               data-pane-trigger="context"
               onMouseEnter={showPane('context')}
@@ -329,7 +371,7 @@ export const ModelPill: React.FC<{
           )}
 
           {/* 第二行：保留原有按 provider 分组的模型选择器。 */}
-          <button
+          <button type="button"
             className={`cm-row cm-model-row${pane === 'model' ? ' is-open' : ''}`}
             data-pane-trigger="model"
             onMouseEnter={showPane('model')}
@@ -394,12 +436,12 @@ export const ModelPill: React.FC<{
             >
               {pane === 'context' && ctx ? (
                 <>
-                  <button className={`menu-item${ctx.selected === 'default' ? ' active' : ''}`} onClick={() => pickContext(null)}>
+                  <button type="button" className={`menu-item${ctx.selected === 'default' ? ' active' : ''}`} onClick={() => pickContext(null)}>
                     <span className="grow">{t('pill.ctxDefault', { n: fmtWindow(ctx.defaultTokens) })}</span>
                     <span className="mi-check">{ctx.selected === 'default' ? '✓' : ''}</span>
                   </button>
                   {ctx.maxTokens && (
-                    <button className={`menu-item${ctx.selected === 'max' ? ' active' : ''}`} onClick={() => pickContext(ctx.maxTokens!)}>
+                    <button type="button" className={`menu-item${ctx.selected === 'max' ? ' active' : ''}`} onClick={() => pickContext(ctx.maxTokens!)}>
                       <span className="grow">{t('pill.ctxMax', { n: fmtWindow(ctx.maxTokens) })}</span>
                       <span className="mi-check">{ctx.selected === 'max' ? '✓' : ''}</span>
                     </button>
@@ -410,7 +452,7 @@ export const ModelPill: React.FC<{
                 <>
                   {rawPaneGroups.reduce((n, g) => n + g.options.length, 0) >= 8 && <label className="model-picker-search"><Search size={12} /><input aria-label={t('model.searchPlaceholder')} placeholder={t('model.searchPlaceholder')} value={query} onChange={(e) => setQuery(e.target.value)} /></label>}
                   {slot && (
-                    <button
+                    <button type="button"
                       className={`menu-item${paneValue ? '' : ' active'}`}
                       onClick={() => selectDefault(slot, '')}
                     >
@@ -423,7 +465,7 @@ export const ModelPill: React.FC<{
                       {g.source && paneGroups[index - 1]?.source !== g.source && <div className="menu-source">{t(g.source === 'forsion' ? 'model.group.forsion' : 'model.group.direct')}</div>}
                       {g.label && <div className="menu-section">{g.label}</div>}
                       {g.options.map((m) => (
-                        <button
+                        <button type="button"
                           key={m.id}
                           className={`menu-item${m.id === paneValue ? ' active' : ''}`}
                           title={m.description}
@@ -444,7 +486,7 @@ export const ModelPill: React.FC<{
               )}
             </div>
           )}
-        </div>
+        </ModelMenuSurface>
       )}
     </span>
   )

@@ -9,7 +9,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { OverlayAt } from '@lcl/engine'
-import { LogOut, Loader2, Gauge, ChevronDown, ChevronRight, Send, UserRound, ExternalLink, RotateCcw } from 'lucide-react'
+import { LogIn, LogOut, Loader2, Gauge, ChevronDown, ChevronRight, Send, UserRound, ExternalLink, RotateCcw } from 'lucide-react'
 import type { AuthStatusInfo } from '../types'
 import { registerMessages, useI18n } from '../i18n'
 import { TierBadge } from './TierBadge'
@@ -21,8 +21,9 @@ import { ResetCardCeremony, type ResetCardResult } from './ResetCardCeremony'
 
 registerMessages({
   'sidebar.account.menu.background': { zh: '后台 Agent', en: 'Background agents' },
+  'sidebar.account.notSignedIn': { zh: '未登录', en: 'Not signed in' },
   'sidebar.account.menu.backgroundHint': {
-    zh: '主额度之外额外的一份,只计 Muse 与自动化用云端默认后台模型的用量',
+    zh: '主额度之外额外的一份，只计 Muse 与自动化用云端默认后台模型的用量',
     en: 'An extra allowance on top of your main quota, used only by Muse and automations on the cloud default background model',
   },
 })
@@ -284,9 +285,13 @@ export const AccountCard: React.FC<{
     >
       <div className="ap-head">
         {avatarEl}
-        <span className="ap-name">{display}</span>
-        <TierBadge tier={auth?.membershipTier} />
+        {/* 没登录时别把品牌名当账号名写在头部 —— 看着像「已用名为 Forsion 的账号登录」(W-01) */}
+        <span className="ap-name">{loggedIn ? display : t('sidebar.account.notSignedIn')}</span>
+        {loggedIn && <TierBadge tier={auth?.membershipTier} />}
       </div>
+      {!loggedIn && !engineDown && <button className="ap-item" disabled={loggingIn} onClick={() => { setMenu(null); void login() }}>
+        <LogIn size={14} /><span>{t('sidebar.account.login')}</span>
+      </button>}
       {engineDown && <button className="ap-item" onClick={() => { setMenu(null); void window.tangu?.backendRestart?.().finally(refresh) }}>
         <RotateCcw size={14} /><span>{t('sidebar.account.engineDown')}</span>
       </button>}

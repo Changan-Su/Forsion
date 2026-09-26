@@ -218,8 +218,11 @@ async function main() {
   ]) {
     p = await fresh(seed)
     check(`C8 ${label} 默认不露令牌`, (await tokenW(p)) === 0, `w=${await tokenW(p)}`)
-    await dblTitle(p)
-    check(`C8 ${label} 双击 → 令牌浮现`, (await tokenW(p)) > 10, `w=${await tokenW(p)}`)
+    if (seed.includes('[!fold]')) {
+      await p.locator(HEAD).hover()
+      await p.locator('.callout-source').click()
+    } else await dblTitle(p)
+    check(`C8 ${label} 源码入口 → 令牌浮现`, (await tokenW(p)) > 10, `w=${await tokenW(p)}`)
     await p.close()
   }
 

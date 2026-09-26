@@ -29,7 +29,7 @@ import { PATHS_MIME as DRAG_MIME, REF_MIME } from './chatDragRef' // 行拖载�
 import './sidebar2.css'
 
 registerMessages({
-  'panel.files.showAllWs': { zh: '显示全部工作区', en: 'Show all workspaces' },
+  'panel.files.showAllWs': { zh: '显示全部项目', en: 'Show all projects' },
 })
 
 interface Entry { name: string; isDir: boolean; size: number; path: string }

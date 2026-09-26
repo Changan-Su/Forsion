@@ -11,14 +11,15 @@
  *  $node 对同名节点 filter+append —— paragraph 被挪到 schema 节点序**尾部**,heading 顶替它成为
  *  缺省块类型,新建/切分块全部变 H1(实测 e2e 栽过,两种错法都别再犯)。
  */
-import { commonmark, headingAttr, headingIdGenerator, headingSchema, paragraphAttr, paragraphSchema } from '@milkdown/kit/preset/commonmark'
+import { blockquoteSchema, bulletListSchema, commonmark, headingAttr, headingIdGenerator, headingSchema, orderedListSchema, paragraphAttr, paragraphSchema } from '@milkdown/kit/preset/commonmark'
 import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
 import type { ResolvedPos } from '@milkdown/kit/prose/model'
 import { MAX_INDENT } from '@amadeus-shared/indentIo'
+import { indentedBlockquoteSchema, indentedBulletListSchema, indentedOrderedListSchema, indentMarker, markdownBlockIndent } from './structuralIndent'
 
 export const clampIndent = (n: number): number => Math.max(0, Math.min(MAX_INDENT, Math.floor(n) || 0))
 
-type MdNode = { type: string; value?: string; children?: MdNode[] }
+type MdNode = { type: string; value?: string; children?: MdNode[]; data?: { amadeusIndent?: number } }
 export type TextAlignment = 'left' | 'center' | 'right'
 
 const ALIGN_MARK = /^<span data-amadeus-align="(left|center|right)"><\/span>$/
@@ -103,31 +104,33 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
   }
 })
 
-/** 标题与段落共享同一对齐 attr / Markdown 标记，避免“正文能居中，标题切一下就丢”。 */
+/** 标题与段落共享对齐 attr；标题另存可缩进档位，避免切到标题后 Tab 失效。 */
 const headingAlignmentSchema = headingSchema.extendSchema((prev) => (ctx) => {
   const base = prev(ctx)
   const getId = ctx.get(headingIdGenerator.key)
   return {
     ...base,
-    attrs: { ...(base.attrs ?? {}), align: { default: 'left' } },
+    attrs: { ...(base.attrs ?? {}), align: { default: 'left' }, indent: { default: 0 } },
     parseDOM: [1, 2, 3, 4, 5, 6].map((level) => ({
       tag: `h${level}`,
       getAttrs: (dom: Node | string) => {
         const el = dom as HTMLElement
-        return { level, id: el.id, align: normalizeTextAlignment(el.getAttribute('data-align') || el.style.textAlign) }
+        return { level, id: el.id, align: normalizeTextAlignment(el.getAttribute('data-align') || el.style.textAlign), indent: clampIndent(Number(el.dataset.indent)) }
       },
     })),
     toDOM: (node) => {
       const attrs = { ...ctx.get(headingAttr.key)(node), id: node.attrs.id || getId(node) } as Record<string, string>
       const align = normalizeTextAlignment(node.attrs.align)
       if (align !== 'left') attrs['data-align'] = align
+      const indent = clampIndent(node.attrs.indent as number)
+      if (indent) attrs['data-indent'] = String(indent)
       return [`h${node.attrs.level}`, attrs, 0]
     },
     parseMarkdown: {
       match: base.parseMarkdown.match,
       runner: (state, node, type) => {
         const marked = takeAlignMarker(node.children as MdNode[] | undefined)
-        state.openNode(type, { level: node.depth as number, ...(marked.align !== 'left' ? { align: marked.align } : {}) })
+        state.openNode(type, { level: node.depth as number, ...(marked.align !== 'left' ? { align: marked.align } : {}), indent: markdownBlockIndent(node as MdNode) })
         if (marked.children?.length) state.next(marked.children as never)
         state.closeNode()
       },
@@ -135,6 +138,8 @@ const headingAlignmentSchema = headingSchema.extendSchema((prev) => (ctx) => {
     toMarkdown: {
       match: base.toMarkdown.match,
       runner: (state, node) => {
+        const indent = clampIndent(node.attrs.indent as number)
+        if (indent) state.addNode('html', undefined, indentMarker(indent))
         const align = normalizeTextAlignment(node.attrs.align)
         if (align === 'left') return void base.toMarkdown.runner(state, node)
         state.openNode('heading', undefined, { depth: node.attrs.level })
@@ -154,6 +159,12 @@ export const commonmarkWithIndent = commonmark.map((p) =>
   : (p as unknown) === (paragraphSchema.ctx as unknown) ? paragraphIndentSchema.ctx
   : (p as unknown) === (headingSchema.node as unknown) ? headingAlignmentSchema.node
   : (p as unknown) === (headingSchema.ctx as unknown) ? headingAlignmentSchema.ctx
+  : (p as unknown) === (blockquoteSchema.node as unknown) ? indentedBlockquoteSchema.node
+  : (p as unknown) === (blockquoteSchema.ctx as unknown) ? indentedBlockquoteSchema.ctx
+  : (p as unknown) === (bulletListSchema.node as unknown) ? indentedBulletListSchema.node
+  : (p as unknown) === (bulletListSchema.ctx as unknown) ? indentedBulletListSchema.ctx
+  : (p as unknown) === (orderedListSchema.node as unknown) ? indentedOrderedListSchema.node
+  : (p as unknown) === (orderedListSchema.ctx as unknown) ? indentedOrderedListSchema.ctx
   : p)
 
 /** 缩进档的适用面:列表项/引用块的**任意深度祖先**内一律不适用 —— 列表是 sink/lift 的地盘;

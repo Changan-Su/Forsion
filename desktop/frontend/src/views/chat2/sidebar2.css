@@ -572,7 +572,7 @@
   border: 0; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text-light);
   font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer;
 }
-.t2sw-plug-btn { display: block; max-width: 42%; padding: 4px 6px; flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.t2sw-plug-btn { display: block; max-width: 42%; padding: 3px 8px; flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
 .t2sw-plug-overflow, .t2sw-plug-reset { flex: none; width: 26px; padding: 0; }
 .t2sw-plug-filterbar { display: flex; align-items: center; gap: 2px; padding: 3px 8px 5px; flex-shrink: 0; min-width: 0; }
 .t2sw-plug-filter { justify-content: flex-start; min-width: 0; max-width: 75%; padding: 3px 5px; }
@@ -622,3 +622,6 @@
 .t2s-side .t2s-vaultseg.t2s-mode button { padding: 0; font-size: var(--ui-font-caption, 11px); line-height: 16px; }
 /* 平铺(Chat 模式)的会话列表:没有组头,与新对话行之间留一口气。 */
 .t2s-flat { padding-top: 2px; }
+
+/* 工作区共享列表的主动作要看得出是按钮(W-14):共用规则里 border:0,单独给它描边。 */
+.t2sw-plug-btn { border: var(--border-width) solid var(--overlay-strong); }

@@ -11,16 +11,16 @@ import './chat2.css'
 
 // ⚠️ 样例数据必须在渲染期用 t() 求值:模块作用域的字面量会在模块加载时冻结,切语言不再更新。
 registerMessages({
-  'chatpreview.msg.ask': { zh: '帮我把 LCL 的 hash 路由分支理一下,再决定要不要抽成表。', en: 'Walk me through the hash route branches in LCL, then decide whether to pull them into a table.' },
-  'chatpreview.msg.reasoning': { zh: '先看 main.tsx 的 hash 分支顺序,确认 #/aion 与 #/tangu 不会被前面的 frame 分支吞掉,再决定是否抽一个 routes 表。整体规模还小,优先可读性。', en: 'Start with the order of the hash branches in main.tsx, confirm that #/aion and #/tangu are not swallowed by the earlier frame branch, then decide whether to extract a routes table. The whole thing is still small, so readability wins.' },
+  'chatpreview.msg.ask': { zh: '帮我把 LCL 的 hash 路由分支理一下，再决定要不要抽成表。', en: 'Walk me through the hash route branches in LCL, then decide whether to pull them into a table.' },
+  'chatpreview.msg.reasoning': { zh: '先看 main.tsx 的 hash 分支顺序，确认 #/aion 与 #/tangu 不会被前面的 frame 分支吞掉，再决定是否抽一个 routes 表。整体规模还小，优先可读性。', en: 'Start with the order of the hash branches in main.tsx, confirm that #/aion and #/tangu are not swallowed by the earlier frame branch, then decide whether to extract a routes table. The whole thing is still small, so readability wins.' },
   'chatpreview.todo.read': { zh: '读 main.tsx 路由分支', en: 'Read the route branches in main.tsx' },
   'chatpreview.todo.addRoute': { zh: '加 #/tangu 分支', en: 'Add the #/tangu branch' },
   'chatpreview.todo.navLink': { zh: '补 Navigator 链接', en: 'Add the Navigator link' },
   'chatpreview.todo.build': { zh: '跑 tsc / build', en: 'Run tsc / build' },
   'chatpreview.plan': { zh: '1. 检查 hash 分支顺序\n2. 补路由与导航\n3. 运行 typecheck / build', en: '1. Check the order of the hash branches\n2. Add the route and the navigation link\n3. Run typecheck / build' },
-  'chatpreview.msg.answer': { zh: '看完了。当前是 5 条 `if (route.view === …)` 顺序分支,`frame` 在前、`aion/tangu` 在后,互不吞。\n\n```ts\nif (route.view === \'frame\') return <Frame/>\nif (route.view === \'tangu\') return <Tangu/>\n```\n\n规模还小,**暂不必抽表**——超过 ~8 条再说。', en: 'Had a look. Right now there are 5 sequential `if (route.view === …)` branches — `frame` first, then `aion/tangu` — and none of them swallows another.\n\n```ts\nif (route.view === \'frame\') return <Frame/>\nif (route.view === \'tangu\') return <Tangu/>\n```\n\nAt this size a table is **not worth extracting yet** — revisit past ~8 branches.' },
+  'chatpreview.msg.answer': { zh: '看完了。当前是 5 条 `if (route.view === …)` 顺序分支，`frame` 在前、`aion/tangu` 在后，互不吞。\n\n```ts\nif (route.view === \'frame\') return <Frame/>\nif (route.view === \'tangu\') return <Tangu/>\n```\n\n规模还小，**暂不必抽表**——超过 ~8 条再说。', en: 'Had a look. Right now there are 5 sequential `if (route.view === …)` branches — `frame` first, then `aion/tangu` — and none of them swallows another.\n\n```ts\nif (route.view === \'frame\') return <Frame/>\nif (route.view === \'tangu\') return <Tangu/>\n```\n\nAt this size a table is **not worth extracting yet** — revisit past ~8 branches.' },
   'chatpreview.msg.buildFirst': { zh: '我先跑一遍构建确认。', en: 'Let me run a build first to confirm.' },
-  'chatpreview.inquiry.question': { zh: '路由是抽成表驱动,还是保持 if 分支?', en: 'Should routing become table-driven, or stay as if branches?' },
+  'chatpreview.inquiry.question': { zh: '路由是抽成表驱动，还是保持 if 分支？', en: 'Should routing become table-driven, or stay as if branches?' },
   'chatpreview.inquiry.optTable': { zh: '抽成 routes 表', en: 'Extract a routes table' },
   'chatpreview.inquiry.optIf': { zh: '保持 if 分支', en: 'Keep the if branches' },
   'chatpreview.session.routing': { zh: '重构 LCL 路由层', en: 'Refactor the LCL routing layer' },

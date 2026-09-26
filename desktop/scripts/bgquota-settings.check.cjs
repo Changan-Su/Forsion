@@ -57,13 +57,13 @@ async function main() {
   await block.getByRole('button', { name: '+10%' }).click()
   check('转入需要二次确认', await block.getByRole('button', { name: '再点确认' }).isVisible())
   await block.getByRole('button', { name: '再点确认' }).click()
-  await block.getByText('已转入,本周期有效').waitFor()
+  await block.getByText('已转入，本周期有效').waitFor()
   const converted = await page.evaluate(() => window.__bgHarness.converted)
   check('确认后按 10% 转入并刷新余量', converted.length === 1 && converted[0] === 10 && (await block.textContent()).includes('剩余 48%'), converted)
   check('账号级操作不弄脏引擎设置的草稿', (await page.locator('.special-save').textContent()).includes('修改后保存'))
 
   await open('?other')
-  check('Muse 显式选了别的模型 → 提示会走主额度', (await page.locator('.special-bgquota').textContent()).includes('Muse 当前用的是 Opus 5.5,不计入后台额度'))
+  check('Muse 显式选了别的模型 → 提示会走主额度', (await page.locator('.special-bgquota').textContent()).includes('Muse 当前用的是 Opus 5.5，不计入后台额度'))
 
   await page.setViewportSize({ width: 420, height: 1100 })
   const narrow = await page.locator('.special-bgquota').evaluate((el) => {

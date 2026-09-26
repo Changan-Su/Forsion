@@ -33,10 +33,10 @@ registerMessages({
   'evcard.name': { zh: '名称', en: 'Name' },
   'evcard.done': { zh: '完成', en: 'Done' },
   'evcard.openNote': { zh: '打开笔记', en: 'Open note' },
-  'evcard.openDb': { zh: '打开数据库', en: 'Open database' },
+  'evcard.openDb': { zh: '打开多维表', en: 'Open database' },
   'evcard.delete': { zh: '删除', en: 'Delete' },
   'evcard.rowlinkReadonly': { zh: '关联表列请在表格里编辑', en: 'Edit related rows in the table' },
-  'evcard.noOptions': { zh: '（无选项,请在表格里添加）', en: '(No options — add them in the table)' },
+  'evcard.noOptions': { zh: '（无选项，请在表格里添加）', en: '(No options — add them in the table)' },
 })
 
 export interface Anchor { left: number; top: number; right: number; bottom: number; zoom?: number }

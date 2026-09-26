@@ -2,6 +2,7 @@ import { PRODUCT } from '../product'
 import { ModelPickerSettings } from './ModelPickerSettings'
 import { AutoCompactSetting } from './AutoCompactSetting'
 import { HostSandboxSettings } from './HostSandboxSettings'
+import { ErrorBoundary } from './ErrorBoundary'
 /**
  * 设置页:连接 / 模型 / MCP / Browser / WeChat / 主题 / 高级。
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
@@ -40,10 +41,10 @@ import { LocaleToggle } from './LocaleToggle'
 import { BrandLogo } from './BrandLogo'
 import { ThemePreview } from './ThemePreview'
 import { RemoteSyncSection } from './RemoteSyncSection'
-import { APP_VERSION, CHANGELOG } from '../changelog'
+import { APP_VERSION } from '../changelog'
 import { Markdown } from './Markdown'
 import { UpdateActions } from './UpdateActions'
-import { openChangelogTab } from '../views/ChangelogView'
+import { ChangelogEntries, openChangelogTab, releaseNotesFor } from '../views/ChangelogView'
 import { ModelSelect } from './ModelSelect'
 import { AsrModelChoice } from './AsrModelChoice'
 import { AuxModelChoice } from './AuxModelChoice'
@@ -137,7 +138,7 @@ registerMessages({
   'settingsmodal.model.providerSep': { zh: '、', en: ', ' },
   'settingsmodal.advanced.resetLayout': { zh: '恢复默认布局', en: 'Restore default layout' },
   'settingsmodal.advanced.resetLayoutHint': {
-    zh: '把工作区面板还原为默认黄金分割布局(中间 0.618 / 左右各 0.191),并清除已保存的自定义布局。',
+    zh: '把工作区面板还原为默认黄金分割布局（中间 0.618 / 左右各 0.191），并清除已保存的自定义布局。',
     en: 'Restores the workspace panels to the default golden-ratio layout (0.618 in the middle, 0.191 on each side) and clears any saved custom layout.',
   },
   'settingsmodal.advanced.experimental': { zh: '测试性功能', en: 'Experimental features' },
@@ -151,19 +152,19 @@ registerMessages({
     en: 'Show context upload, first-frame wait and elapsed time at the end of Agent messages for diagnosing model response latency.',
   },
   // 系统音色候选的显示名。⚠️ 只有**标签**进字典,音色 id(Cherry/Dylan/alloy…)是接口标识符,永不翻译。
-  'settingsmodal.tts.voice.cherry': { zh: '百炼 芊悦(女)', en: 'Bailian · Qianyue (female)' },
-  'settingsmodal.tts.voice.serena': { zh: '百炼 苏瑶(女)', en: 'Bailian · Suyao (female)' },
-  'settingsmodal.tts.voice.ethan': { zh: '百炼 晨煦(男)', en: 'Bailian · Chenxu (male)' },
-  'settingsmodal.tts.voice.chelsie': { zh: '百炼 千雪(女)', en: 'Bailian · Qianxue (female)' },
-  'settingsmodal.tts.voice.nofish': { zh: '百炼(男·不会翘舌)', en: 'Bailian (male, no retroflex)' },
-  'settingsmodal.tts.voice.jennifer': { zh: '百炼(英语女)', en: 'Bailian (English, female)' },
-  'settingsmodal.tts.voice.ryan': { zh: '百炼(英语男)', en: 'Bailian (English, male)' },
-  'settingsmodal.tts.voice.katerina': { zh: '百炼(俄语女)', en: 'Bailian (Russian, female)' },
+  'settingsmodal.tts.voice.cherry': { zh: '百炼 芊悦（女）', en: 'Bailian · Qianyue (female)' },
+  'settingsmodal.tts.voice.serena': { zh: '百炼 苏瑶（女）', en: 'Bailian · Suyao (female)' },
+  'settingsmodal.tts.voice.ethan': { zh: '百炼 晨煦（男）', en: 'Bailian · Chenxu (male)' },
+  'settingsmodal.tts.voice.chelsie': { zh: '百炼 千雪（女）', en: 'Bailian · Qianxue (female)' },
+  'settingsmodal.tts.voice.nofish': { zh: '百炼（男·不会翘舌）', en: 'Bailian (male, no retroflex)' },
+  'settingsmodal.tts.voice.jennifer': { zh: '百炼（英语女）', en: 'Bailian (English, female)' },
+  'settingsmodal.tts.voice.ryan': { zh: '百炼（英语男）', en: 'Bailian (English, male)' },
+  'settingsmodal.tts.voice.katerina': { zh: '百炼（俄语女）', en: 'Bailian (Russian, female)' },
   'settingsmodal.tts.voice.dylan': { zh: '百炼 北京话', en: 'Bailian · Beijing dialect' },
   'settingsmodal.tts.voice.jada': { zh: '百炼 上海话', en: 'Bailian · Shanghai dialect' },
   'settingsmodal.tts.voice.sunny': { zh: '百炼 四川话', en: 'Bailian · Sichuan dialect' },
   'settingsmodal.tts.voice.rocky': { zh: '百炼 粤语', en: 'Bailian · Cantonese' },
-  'settingsmodal.tts.voice.kiki': { zh: '百炼 粤语(女)', en: 'Bailian · Cantonese (female)' },
+  'settingsmodal.tts.voice.kiki': { zh: '百炼 粤语（女）', en: 'Bailian · Cantonese (female)' },
   'settingsmodal.tts.voice.marcus': { zh: '百炼 陕西话', en: 'Bailian · Shaanxi dialect' },
   'settingsmodal.tts.voice.roy': { zh: '百炼 闽南语', en: 'Bailian · Hokkien' },
   'settingsmodal.tts.voice.peter': { zh: '百炼 天津话', en: 'Bailian · Tianjin dialect' },
@@ -1485,6 +1486,8 @@ export const SettingsModal: React.FC<{
         <PanelNotice />
         <div className="settings-body">
           {/* key 变 → 重挂 → CSS 入场动画重跑(方向由 data-dir 给);正文块自己按 activeSub 取舍。 */}
+          {/* 每个子页一个崩溃兜底:一页渲染抛错只占正文区,左侧导航照常能切走(原先只有整窗那一层,一页崩了整个设置窗就废了)。 */}
+          <ErrorBoundary key={`${tab}:${activeSub}`}>
           <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} data-dir={subDir} data-settings-sub={activeSub || undefined}>
                 {tab === 'permissions' && hasDesktopPermissions() && <DesktopPermissions mode={p.themeMode} />}
                 {/* 小节标题不在正文重复；当前子页面由左侧/移动首页的折叠子项标明。 */}
@@ -1879,7 +1882,8 @@ export const SettingsModal: React.FC<{
                         </label>
                         <div className="hint" style={{ marginBottom: 8 }}>{t('settings.forsion.autoSyncHint')}</div>
                         <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          <button className="btn primary sm" onClick={() => void doSyncNow()} disabled={syncing}>
+                          {/* 没登录点了必失败;整页主按钮只留「登录 Forsion」一个(W-02) */}
+                          <button className="btn sm" onClick={() => void doSyncNow()} disabled={syncing || !(authSt?.loggedIn && authSt?.tokenValid !== false)}>
                             {syncing ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />} {syncing ? t('settings.forsion.syncing') : t('settings.forsion.syncNow')}
                           </button>
                           <span className="hint">
@@ -2031,9 +2035,15 @@ export const SettingsModal: React.FC<{
                         {noteSync.enabled && (
                           <>
                             <div className="settings-inline-row" style={{ marginTop: 6 }}>
+                              {/* 未登录:给登录入口、禁掉「立即同步」,下面的红字错误行也不再重复同一句话(W-02) */}
+                              {noteSync.state === 'auth-required' && (
+                                <button className="btn primary sm" onClick={() => void doForsionLogin()} disabled={loggingIn}>
+                                  <LogIn size={12} /> {t('settings.forsion.login')}
+                                </button>
+                              )}
                               <button
                                 className="btn sm"
-                                disabled={noteSyncBusy || noteSync.state === 'syncing'}
+                                disabled={noteSyncBusy || noteSync.state === 'syncing' || noteSync.state === 'auth-required'}
                                 onClick={() => {
                                   setNoteSyncBusy(true)
                                   void window.amadeusSync!.syncNow().then(setNoteSync).finally(() => setNoteSyncBusy(false))
@@ -2051,7 +2061,7 @@ export const SettingsModal: React.FC<{
                                 })}
                               </span>
                             </div>
-                            {noteSync.error && <div className="hint" style={{ color: 'var(--danger, #c00)' }}>{ipcErrorText(noteSync.error)}</div>}
+                            {noteSync.error && noteSync.state !== 'auth-required' && <div className="hint" style={{ color: 'var(--danger, #c00)' }}>{ipcErrorText(noteSync.error)}</div>}
                             {(noteSync.pendingDeletions ?? 0) > 0 && (
                               <div className="hint" style={{ color: 'var(--danger, #c00)' }}>
                                 {t('settings.notes.cloudSyncPendingDel', { n: String(noteSync.pendingDeletions) })}{' '}
@@ -3478,14 +3488,17 @@ export const SettingsModal: React.FC<{
                       <div className="field">
                         <label style={{ color: 'var(--danger)' }}>{t('settings.clearData.label')}</label>
                         <div className="hint" style={{ marginBottom: 8 }}>{t('settings.clearData.hint')}</div>
-                        <label className="inline-check">
-                          <input type="checkbox" checked={clearTangu} onChange={(e) => setClearTangu(e.target.checked)} />
-                          {t('settings.clearData.tangu')}
-                        </label>
-                        <label className="inline-check" style={{ marginTop: 4 }}>
-                          <input type="checkbox" checked={clearDesktop} onChange={(e) => setClearDesktop(e.target.checked)} />
-                          {t('settings.clearData.desktop')}
-                        </label>
+                        {/* 两项各占一行(W-06):inline-check 是行内元素,中文串短时两个勾选框会挤进同一行、归属不清 */}
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4 }}>
+                          <label className="inline-check">
+                            <input type="checkbox" checked={clearTangu} onChange={(e) => setClearTangu(e.target.checked)} />
+                            {t('settings.clearData.tangu')}
+                          </label>
+                          <label className="inline-check">
+                            <input type="checkbox" checked={clearDesktop} onChange={(e) => setClearDesktop(e.target.checked)} />
+                            {t('settings.clearData.desktop')}
+                          </label>
+                        </div>
                         <div style={{ marginTop: 10 }}>
                           <button
                             className="btn danger sm"
@@ -3722,9 +3735,9 @@ export const SettingsModal: React.FC<{
                         <div style={{ fontWeight: 600 }}>{t('about.update.available', { version: upd.version || '' })}</div>
                         {/* 更新说明来自仓库 CHANGELOG.md 那一节(见 electron/updater.ts),是 markdown ——
                             按 .md-body 正典渲染,别再当纯文本 pre-wrap 摊开。 */}
-                        {upd.releaseNotes ? (
+                        {releaseNotesFor(upd, locale) ? (
                           <div className="md-body" style={{ marginTop: 4, maxHeight: 260, overflow: 'auto' }}>
-                            <Markdown content={upd.releaseNotes} />
+                            <Markdown content={releaseNotesFor(upd, locale)!} />
                           </div>
                         ) : null}
                       </div>
@@ -3795,19 +3808,13 @@ export const SettingsModal: React.FC<{
                     <div className="field">
                       <label>{t('about.changelogTitle')}</label>
                       <div className="changelog">
-                        {CHANGELOG.map((c) => (
-                          <div key={c.version} className="changelog-entry md-body">
-                            <div className="changelog-ver">
-                              {c.version} <span className="changelog-date">{c.date}</span>
-                            </div>
-                            <Markdown content={c.lines.map((l) => `- ${l}`).join('\n')} />
-                          </div>
-                        ))}
+                        <ChangelogEntries />
                       </div>
                     </div>
                   </>
                 )}
           </div>
+          </ErrorBoundary>
         </div>
       </section>
     </div>

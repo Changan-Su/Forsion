@@ -42,6 +42,8 @@ registerMessages({
   'wsview.noMatches': { zh: '没有匹配项', en: 'No matches' },
   'wsview.empty': { zh: '暂无内容', en: 'Nothing here yet' },
   'wsview.search': { zh: '搜索{source}', en: 'Search {source}' },
+  // 占位只写「搜索」:侧栏标题的选择器里已经有源名,英文长名在窄栏里会被硬裁成「Search Autom」(W-14)
+  'wsview.searchShort': { zh: '搜索', en: 'Search' },
   'wsview.clearSearch': { zh: '清空搜索', en: 'Clear search' },
   'wsview.filter': { zh: '筛选分类', en: 'Filter by category' },
   'wsview.clearFilter': { zh: '显示全部', en: 'Show all' },
@@ -51,7 +53,7 @@ registerMessages({
   // 新旧两个会话档并存:新档(轨道侧栏)占「会话」这个名字,旧档降为「会话(旧)」——
   // 档位 id 仍是 'sessions'(布局持久化键,发版即冻结),只改文案。
   'workspace.mode.orbits': { zh: '会话', en: 'Sessions' },
-  'workspace.mode.sessionsLegacy': { zh: '会话(旧)', en: 'Sessions (legacy)' },
+  'workspace.mode.sessionsLegacy': { zh: '会话（旧）', en: 'Sessions (legacy)' },
   // 旧档顶部的升级提示条(存量用户手选过旧档 → 不迁移 params.mode,只给一条可点的路,方案 §11 ⑥)。
   'workspace.legacyHint': { zh: '已有新版会话侧栏', en: 'A new sessions sidebar is available' },
   'workspace.legacyHint.switch': { zh: '切换', en: 'Switch' },
@@ -500,7 +502,7 @@ export function PluginListBody({ src }: { src: ListSourceContribution }) {
       {(src.search || primary || secondary.length > 0) && <div className="t2sw-plug-toolbar">
         {src.search && <div className="t2s-search">
           <Search size={13} className="t2s-dim" />
-          <input ref={searchRef} aria-label={t('wsview.search', { source: src.title })} placeholder={t('wsview.search', { source: src.title })}
+          <input ref={searchRef} aria-label={t('wsview.search', { source: src.title })} placeholder={t('wsview.searchShort')}
             value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => {
               if (e.key === 'Escape' && query) { e.preventDefault(); e.stopPropagation(); setQuery('') }
               if (e.key === 'ArrowDown') { e.preventDefault(); listRef.current?.querySelector<HTMLButtonElement>('.t2s-srow')?.focus() }

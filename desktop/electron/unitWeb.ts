@@ -443,7 +443,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     // ── 本地 vault 面(v2.1):设备页里的 Amadeus 显示/编辑本机笔记库 ──
     if (path.startsWith('/vault/')) {
       const vault = deps.vault()
-      if (!vault) { json(res, 503, { detail: '本机笔记库面未就绪', code: 'VAULT_NOT_READY' }); return }
+      if (!vault) { json(res, 503, { detail: '本机智库面未就绪', code: 'VAULT_NOT_READY' }); return }
       const q = new URL(url, 'http://x').searchParams
       const at = String(q.get('at') || '')
       const assetAuthed = (): boolean => (at !== '' && assetTokenLive(at)) || authed(req)

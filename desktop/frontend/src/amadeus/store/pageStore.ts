@@ -33,7 +33,7 @@ registerMessages({
   'pagestore.error.fdNameTaken': { zh: '目标名称已被同名 .fd 文件夹占用', en: 'That name is already taken by a .fd folder' },
   'pagestore.error.moveIntoOwnSubpage': { zh: '不能移动到该笔记自己的子页面里', en: "A note can't be moved into its own subpages" },
   'pagestore.error.fdExistsAtDest': { zh: '目标位置已存在同名 .fd 文件夹', en: 'A .fd folder with the same name already exists at the destination' },
-  'pagestore.error.fdMoveFailed': { zh: '子页面文件夹未跟随移动:{err}', en: "The subpage folder didn't move along with the note: {err}" },
+  'pagestore.error.fdMoveFailed': { zh: '子页面文件夹未跟随移动：{err}', en: "The subpage folder didn't move along with the note: {err}" },
   'pagestore.notify.movedToTrash': { zh: '已移入回收站', en: 'Moved to trash' },
   'pagestore.confirm.deleteEmbeddedBlock': {
     zh: '有 {n} 处笔记嵌入了这个块，删除后那些嵌入会显示「丢失」。仍要删除？',

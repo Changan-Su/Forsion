@@ -19,6 +19,7 @@ import { windowKind } from '../../windowKind'
 registerMessages({
   'btw.title': { zh: '顺便问', en: 'By the way' },
   'btw.windowTitle': { zh: '顺便问 · {title}', en: 'By the way · {title}' },
+  'btw.context': { zh: '当前对话', en: 'Conversation' },
   'btw.hint': { zh: '带着本会话上下文提问，不会加入对话，也不打断正在跑的任务', en: 'Uses this conversation as context. Not added to it, and never interrupts a running task.' },
   'btw.empty': { zh: '问点与当前对话有关的事：概念、代码、刚才那步为什么这么做……', en: 'Ask about anything in this conversation: a concept, some code, why a step was taken…' },
   'btw.placeholder': { zh: '顺便问点什么…', en: 'Ask a side question…' },

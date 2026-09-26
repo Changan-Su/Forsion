@@ -18,7 +18,7 @@
   overflow: clip;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
   padding: 6px;
   border: var(--border-width, 1px) solid transparent;
   border-radius: var(--radius-md, 12px);
@@ -28,8 +28,10 @@
 }
 .lcl-ftoc-frame[data-side='right'] .lcl-ftoc { left: auto; right: 8px; }
 .lcl-ftoc-frame.is-sticky .lcl-ftoc { top: 0; }
+.lcl-ftoc:not(.open) .lcl-ftoc-item { flex: 1 1 0; min-height: 0; }
 .lcl-ftoc.open {
   width: min(248px, calc(100% - 16px));
+  max-height: 56vh;
   gap: 2px;
   padding: 8px;
   overflow-y: auto;

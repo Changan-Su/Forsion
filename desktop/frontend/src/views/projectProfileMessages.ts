@@ -8,7 +8,7 @@ registerMessages({
   'projectProfile.open': { zh: '在项目页中打开', en: 'Open project page' },
   'projectProfile.name': { zh: '项目名称', en: 'Project name' },
   'projectProfile.iconChange': { zh: '导入图片作为项目图标', en: 'Import an image as the project icon' },
-  'projectProfile.iconImageHint': { zh: '点击导入图片(存进项目的 {dir}/ 目录)', en: 'Click to import an image (saved in the project\'s {dir}/ folder)' },
+  'projectProfile.iconImageHint': { zh: '点击导入图片（存进项目的 {dir}/ 目录）', en: 'Click to import an image (saved in the project\'s {dir}/ folder)' },
   'projectProfile.iconEmoji': { zh: '设置 Emoji 图标', en: 'Set an emoji icon' },
   'projectProfile.iconSaved': { zh: '图标已更新', en: 'Icon updated' },
   'projectProfile.iconRemoved': { zh: '已恢复默认图标', en: 'Default icon restored' },

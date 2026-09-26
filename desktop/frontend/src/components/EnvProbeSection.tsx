@@ -26,7 +26,7 @@ registerMessages({
   },
   'env.summaryReady': { zh: '{count} 项工具均已就绪', en: 'All {count} tools are ready' },
   'env.summaryMissing': { zh: '{count} 项未检测到', en: '{count} not detected' },
-  'env.checkFailed': { zh: '检测失败:{error}', en: 'Check failed: {error}' },
+  'env.checkFailed': { zh: '检测失败：{error}', en: 'Check failed: {error}' },
   'env.bundled': { zh: '内置', en: 'Bundled' },
   'env.optional': { zh: '可选', en: 'Optional' },
   'env.withNode': { zh: '随 Node.js 安装', en: 'Installed with Node.js' },

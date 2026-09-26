@@ -22,7 +22,7 @@ registerMessages({
   'tsum.state.stopped': { zh: '已停止', en: 'Stopped' },
   'tsum.state.done': { zh: '已完成', en: 'Done' },
   'tsum.elapsed': { zh: '已运行 {t}', en: 'Running {t}' },
-  'tsum.attention.approval': { zh: '需要批准:{name}', en: 'Approval needed: {name}' },
+  'tsum.attention.approval': { zh: '需要批准：{name}', en: 'Approval needed: {name}' },
   'tsum.attention.inquiry': { zh: '需要你回答', en: 'Needs your answer' },
   'tsum.plan': { zh: '计划', en: 'Plan' },
   'tsum.scope': { zh: '工作范围', en: 'Scope' },
@@ -30,7 +30,7 @@ registerMessages({
   'tsum.scope.add': { zh: '添加工作文件夹', en: 'Add working folder' },
   'tsum.scope.remove': { zh: '移出工作范围', en: 'Remove from scope' },
   'tsum.scope.hint': {
-    zh: '加进来的文件夹 Agent 可直接读写、不再逐次弹审批;相对路径仍只相对默认目录解析。',
+    zh: '加进来的文件夹 Agent 可直接读写、不再逐次弹审批；相对路径仍只相对默认目录解析。',
     en: 'Added folders are readable/writable without per-call approval; relative paths still resolve against the default folder.',
   },
   'tsum.sources': { zh: '来源', en: 'Sources' },
@@ -160,11 +160,12 @@ export function TaskSummary({ messages, running, cwd, hostCwd, onJumpToAttention
     // 卡本身不再单列标题(对齐 Codex:开篇即第一个分区),标题降级为无障碍名。
     <aside className={`t2-tsum${hasFacts(f) || teamStatus ? ' show' : ''}`} aria-hidden={!hasFacts(f) && !teamStatus} aria-busy={f.state === 'running'} aria-label={t('tsum.title')}>
       <div className="t2-tsum-in">
-        <div className={`t2-tsum-state ${f.state}`} role="status" aria-live="polite">
+        {/* 助手一句都没回过的会话不报「已完成」:空会话是 idle、只有用户消息的是 done,原先都显示「已完成」(W-03 / Codex r3a-3) */}
+        {!((f.state === 'idle' || f.state === 'done') && !messages.some((m) => m.role === 'assistant')) && <div className={`t2-tsum-state ${f.state}`} role="status" aria-live="polite">
           {StateIcon && <StateIcon size={14} />}
           <span className={`t2-tsum-state-tx${f.state === 'running' ? ' chat-run-shimmer-text' : ''}`}>{t(`tsum.state.${f.state === 'idle' ? 'done' : f.state}`)}</span>
           {f.todos.length > 0 && <span className="t2-tsum-count">{done}/{f.todos.length}</span>}
-        </div>
+        </div>}
         {teamStatus}
         {elapsed >= 30_000 && <div className="t2-tsum-sub">{t('tsum.elapsed', { t: fmtDur(elapsed) })}</div>}
         {act && <div className="t2-tsum-sub" title={act.target}>{act.verbKey ? t(act.verbKey) : f.action!.name} {act.target}</div>}

@@ -10,7 +10,7 @@ import { THINKING_LEVELS } from '../types'
 import { thinkingLabel } from './thinkingLabel'
 
 registerMessages({
-  'group.setup.selfPacedHint': { zh: '发消息后成员同时开工,可相互 @ 交接;每位成员自己决定何时收尾,全员完成即结束,没有轮数上限。', en: 'After you send, members work in parallel and can @-mention each other; each decides when they are done, and the team stops once everyone is — no round limit.' },
+  'group.setup.selfPacedHint': { zh: '发消息后成员同时开工，可相互 @ 交接；每位成员自己决定何时收尾，全员完成即结束，没有轮数上限。', en: 'After you send, members work in parallel and can @-mention each other; each decides when they are done, and the team stops once everyone is — no round limit.' },
 })
 import type { ModelInfo, NormalAgentDef, ThinkingLevel } from '../types'
 

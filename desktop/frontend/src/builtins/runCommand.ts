@@ -12,10 +12,10 @@ import { registerMessages, translate } from '../i18n'
 
 registerMessages({
   'terminal.runTitle': { zh: '在内置终端运行', en: 'Run in the built-in terminal' },
-  'terminal.runResult': { zh: '在终端执行了命令(退出码 {code}):', en: 'Ran the command in the terminal (exit code {code}):' },
-  'terminal.runOutput': { zh: '输出(末尾 {n} 行):', en: 'Output (last {n} lines):' },
-  'terminal.runOutputAll': { zh: '输出:', en: 'Output:' },
-  'terminal.runNoOutput': { zh: '(无输出)', en: '(no output)' },
+  'terminal.runResult': { zh: '在终端执行了命令（退出码 {code}）：', en: 'Ran the command in the terminal (exit code {code}):' },
+  'terminal.runOutput': { zh: '输出（末尾 {n} 行）：', en: 'Output (last {n} lines):' },
+  'terminal.runOutputAll': { zh: '输出：', en: 'Output:' },
+  'terminal.runNoOutput': { zh: '（无输出）', en: '(no output)' },
 })
 
 export interface RunResult { cmd: string; cwd?: string; code: number; output: string }

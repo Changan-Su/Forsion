@@ -11,7 +11,7 @@
  *   1 默认开:ribbon 有主页图标,点进去主区是主页视图
  *   2 收纳架默认只露一排(6 项 + 全部),「全部」进入二级收纳层 = spaceRegistry 的完整投影
  *   3 输入区字面复用 ChatView 的 ProjectSelector + Composer2：发送前明示会话落在哪个项目，
- *     可切到「不在项目中工作」并即时回显；菜单遵循选择面等宽/28px 行/圆角分组/渐进搜索，
+ *     可切到「不在项目中工作」并即时回显；菜单遵循选择面等宽/32px 行/圆角分组/渐进搜索，
  *     支持 Home/方向键/Escape 与焦点归还；模式/模型/附件/发送全在，旧浏览器搜索选择器完全不在
  *   4 切走后 space:home 命名布局里仍然只有 homepage、没有 chat
  *   5 收纳:坞 = ribbon 上区的**另一个投影** —— 造一份「收纳夹装着日历+编码」的 ribbon 存档,
@@ -46,6 +46,7 @@ const path = require('path')
 const { _electron: electron } = require('playwright-core')
 
 const ROOT = path.join(__dirname, '..')
+const APP_ROOT = process.env.FORSION_APP_ROOT || ROOT
 const SHOT = process.argv.includes('--shot')
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-homeplugin-'))
 const UD = path.join(home, 'userdata') // 同一份 user-data-dir = 同一份 localStorage,重启那程才谈得上「关着」
@@ -118,7 +119,7 @@ const toggle = (on) => `(() => {
 
 async function boot() {
   const app = await electron.launch({
-    args: [`--user-data-dir=${UD}`, '--lang=zh-CN', ROOT],
+    args: [`--user-data-dir=${UD}`, '--lang=zh-CN', APP_ROOT],
     cwd: ROOT,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: 'http://127.0.0.1:1' },
   })
@@ -278,7 +279,7 @@ const layoutTypes = (id) => `(() => {
 })()`
 
 async function main() {
-  if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) {
+  if (!fs.existsSync(path.join(APP_ROOT, 'out/main/main.js'))) {
     console.error('缺 out/main/main.js —— 先跑 npm run build')
     process.exit(1)
   }

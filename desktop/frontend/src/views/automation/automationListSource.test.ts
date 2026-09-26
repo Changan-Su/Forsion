@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { automationListSource as source, subscribeAutomation } from './automationListSource'
 import { useAutomation } from '../../stores/automationStore'
 import { useApp } from '../../stores/appStore'
+import { useNotifications } from '../../stores/notificationStore'
 import * as backend from '../../services/backendService'
 import type { MuseTriggerInfo } from '../../types'
 
@@ -69,23 +70,47 @@ describe('native automation workspace source', () => {
     useAutomation.getState().openBuilder()
     expect(source.activeKey!()).toBeNull()
   })
-  it('⚠️delete asks first, marks itself danger, and clears the selection only after a confirmed delete', async () => {
+  it('⚠️delete hides the row at once; the engine delete waits until the undo receipt has been on screen, and Undo keeps the rule', async () => {
+    vi.useFakeTimers()
+    const ntf = useNotifications.getState()
+    ntf.dismissAll()
     const del = vi.spyOn(backend, 'deleteMuseTrigger').mockResolvedValue(undefined as never)
-    const confirm = vi.fn(() => false)
-    vi.stubGlobal('window', { confirm })
-    try {
-      useAutomation.getState().setSel({ kind: 'trigger', triggerId: trigger.id })
-      const action = source.itemMenu!(source.items({ group: 'rules' })[0]).find((a) => a.id === 'delete')!
-      expect(action.danger).toBe(true)
-      action.run()
-      await Promise.resolve()
-      expect(confirm).toHaveBeenCalledWith(expect.stringContaining('Inventory'))
-      expect(del).not.toHaveBeenCalled()
-      expect(useAutomation.getState().sel).toEqual({ kind: 'trigger', triggerId: trigger.id })
-      confirm.mockReturnValue(true)
-      action.run()
-      await vi.waitFor(() => expect(useAutomation.getState().sel).toBeNull())
-      expect(del).toHaveBeenCalledWith(expect.anything(), trigger.id)
-    } finally { vi.unstubAllGlobals() }
+    const receipt = () => [...useNotifications.getState().items, ...useNotifications.getState().queue].find((n) => n.dedupeKey?.startsWith('automation.delete:'))
+    const titles = () => source.items().map((item) => item.title)
+    useAutomation.getState().setSel({ kind: 'trigger', triggerId: trigger.id })
+    const action = source.itemMenu!(source.items({ group: 'rules' })[0]).find((a) => a.id === 'delete')!
+    expect(action.danger).toBe(true)
+
+    // Undo(NotificationHost 点动作钮 = run + dismiss):永不删,行回来,回执也走了
+    action.run()
+    expect(titles()).not.toContain('Inventory')
+    expect(useAutomation.getState().sel).toBeNull()
+    const r = receipt()!
+    r.action!.run(); ntf.dismiss(r.id)
+    vi.advanceTimersByTime(10_000)
+    expect(del).not.toHaveBeenCalled()
+    expect(receipt()).toBeUndefined()
+    expect(titles()).toContain('Inventory')
+
+    // 通知栈满:回执排队,没上屏就不计时
+    for (let i = 0; i < 4; i++) ntf.notify({ text: `busy ${i}`, sticky: true })
+    action.run()
+    vi.advanceTimersByTime(20_000)
+    expect(del).not.toHaveBeenCalled()
+    for (const n of useNotifications.getState().items.filter((x) => x.text.startsWith('busy'))) ntf.dismiss(n.id)
+
+    // 上屏后悬停暂停:照样不删;移开后走完剩余时长才删
+    ntf.pause()
+    vi.advanceTimersByTime(20_000)
+    expect(del).not.toHaveBeenCalled()
+    ntf.resume()
+    vi.advanceTimersByTime(4999)
+    expect(del).not.toHaveBeenCalled()
+    const nonce = useAutomation.getState().refreshNonce
+    vi.advanceTimersByTime(1)
+    expect(del).toHaveBeenCalledWith(expect.anything(), trigger.id)
+    expect(receipt()).toBeUndefined()
+    await vi.waitFor(() => expect(useAutomation.getState().refreshNonce).toBeGreaterThanOrEqual(nonce + 2)) // 删完 bump + 落定 bump
+    expect(titles()).not.toContain('Inventory') // 删掉了就一直藏着,不等下一次拉取
   })
 })

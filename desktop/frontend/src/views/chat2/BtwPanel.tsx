@@ -104,7 +104,10 @@ export function BtwPanel({ seed, onClose, onQuoted }: { seed: BtwSeed; onClose?:
   return (
     <div className="btw-panel" data-btw-session={sessionId}>
       <div className="btw-bar">
-        <span className="btw-hint">{t('btw.hint')}</span>
+        <div className="btw-bar-copy">
+          <div className="btw-context"><span>{t('btw.context')}</span><strong title={seed.title || t('btw.title')}>{seed.title || t('btw.title')}</strong></div>
+          <span className="btw-hint">{t('btw.hint')}</span>
+        </div>
         {turns.length > 0 && (
           <button type="button" className="icon-btn" title={t('btw.clear')} aria-label={t('btw.clear')} onClick={() => useBtw.getState().clear(sessionId)}>
             <Eraser size={14} />

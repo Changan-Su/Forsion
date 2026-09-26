@@ -4,7 +4,49 @@
  * 渲染那一半(正则漏 `]` 导致 callout 从来没生效)由 editor-triggers e2e 的 T34 钉。
  */
 import { describe, expect, it } from 'vitest'
-import { unescapeCalloutToken } from './callout'
+import { splitCalloutTitle, unescapeCalloutToken } from './callout'
+
+describe('splitCalloutTitle', () => {
+  const paragraph = (value: string) => ({ type: 'paragraph', position: {}, children: [{ type: 'text', value }] })
+  it('标准单换行 callout 拆开标题与正文，嵌套同样处理', () => {
+    const nested = { type: 'blockquote', children: [paragraph('[!fold]- 内层\n内容')] }
+    const tree = { type: 'blockquote', children: [paragraph('[!fold]+ 标题\n正文'), nested] }
+    splitCalloutTitle(tree)
+    expect(tree.children).toHaveLength(3)
+    expect(tree.children[0].children?.[0]).toMatchObject({ value: '[!fold]+ 标题' })
+    expect(tree.children[1].children?.[0]).toMatchObject({ value: '正文' })
+    expect(nested.children).toHaveLength(2)
+  })
+  it('标题粗体及正文内联格式不丢失', () => {
+    const bold = { type: 'strong', children: [{ type: 'text', value: '重要' }] }
+    const tree = { type: 'blockquote', children: [{ type: 'paragraph', position: {}, children: [
+      { type: 'text', value: '[!fold]+ ' }, bold, { type: 'break' }, { type: 'text', value: '内容' },
+    ] }] }
+    splitCalloutTitle(tree)
+    expect(tree.children).toHaveLength(2)
+    expect(tree.children[0].children[1]).toEqual(bold)
+  })
+  it('普通引用、普通段落与正文段落的软换行不变', () => {
+    const tree = { type: 'root', children: [
+      paragraph('一\n二'),
+      { type: 'blockquote', children: [paragraph('普通引用\n换行')] },
+      { type: 'blockquote', children: [paragraph('[!fold]+ 标题'), paragraph('正文\n换行')] },
+    ] }
+    const before = JSON.stringify(tree)
+    splitCalloutTitle(tree)
+    expect(JSON.stringify(tree)).toBe(before)
+  })
+  it('序列化树无 position 时保持原样，重复读取幂等', () => {
+    const tree = { type: 'blockquote', children: [{ type: 'paragraph', children: [{ type: 'text', value: '[!fold]+ 标题\n正文' }] }] }
+    splitCalloutTitle(tree)
+    expect(tree.children).toHaveLength(1)
+    const parsed = { type: 'blockquote', children: [paragraph('[!note]- 标题\n内容')] }
+    splitCalloutTitle(parsed)
+    const once = JSON.stringify(parsed)
+    splitCalloutTitle(parsed)
+    expect(JSON.stringify(parsed)).toBe(once)
+  })
+})
 
 describe('unescapeCalloutToken', () => {
   it('引用行首的令牌去转义', () => {

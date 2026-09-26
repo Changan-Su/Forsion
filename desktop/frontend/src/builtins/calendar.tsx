@@ -37,7 +37,7 @@ const CalendarConfigView = lazyRetry(() => import('../views/CalendarConfigView')
 
 registerMessages({
   'calendar.builtinDesc': {
-    zh: '日历 Space:汇总全库多维表的日期与待办属性,支持 .ics 订阅。',
+    zh: '日历 Space：汇总全库多维表的日期与待办属性，支持 .ics 订阅。',
     en: 'Calendar Space: aggregates date and to-do properties across your vault, with .ics subscriptions.',
   },
 })
@@ -72,6 +72,8 @@ export const calendarAvailable = (): boolean => hasNativeFeature('calendar') && 
 
 /** 三个视图的注册(启动 + 运行时开启共用)。 */
 export function installCalendarViews(): void {
+  // ⚠️ 日历三个 View 不空闲预热:它们经 AstryxScope 带进 @astryxdesign/core/reset.css(`:where(*)` 全局重置),
+  // 预热 = 每次启动就把它注入全局,别处样式跟着变(check:projectdetails 9c 实测错位 4px)。等 Astryx 重置收进作用域再开。
   if (!calendarAvailable()) return
   // ⚠️ 待办视图**吃 params 且非 singleton**(与另外两个不同,刻意的):
   //  · factory 必须把 params 透传下去 —— 从前写的是 `() => <TodoListView />`,把 ViewProps 整个丢了,

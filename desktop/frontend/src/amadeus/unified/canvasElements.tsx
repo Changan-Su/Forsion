@@ -26,8 +26,8 @@ registerMessages({
   'canvasel.attach.count': { zh: '{n} 张', en: '{n} cards' },
   'canvasel.attach.child': { zh: '设为子节点', en: 'Attach as child' },
   'canvasel.attach.sibling': { zh: '设为同级节点', en: 'Attach as sibling' },
-  'canvasel.add.child': { zh: '新建子卡片(Tab)', en: 'New child card (Tab)' },
-  'canvasel.add.sibling': { zh: '新建兄弟卡片(回车)', en: 'New sibling card (Enter)' },
+  'canvasel.add.child': { zh: '新建子卡片（Tab）', en: 'New child card (Tab)' },
+  'canvasel.add.sibling': { zh: '新建兄弟卡片（回车）', en: 'New sibling card (Enter)' },
 })
 
 export interface ElBox { x: number; y: number; w: number; h: number }

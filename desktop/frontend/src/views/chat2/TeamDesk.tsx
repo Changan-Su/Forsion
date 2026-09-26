@@ -15,7 +15,7 @@ registerMessages({
   'teamdesk.status.failed': { zh: '失败', en: 'Failed' },
   'teamdesk.thinking': { zh: '思考中', en: 'Thinking' },
   'teamdesk.noWork': { zh: '还没有工作记录', en: 'No work yet' },
-  'teamdesk.task': { zh: '任务:{task}', en: 'Task: {task}' },
+  'teamdesk.task': { zh: '任务：{task}', en: 'Task: {task}' },
   'teamdesk.live': { zh: '直播中', en: 'Live' },
   'teamdesk.connecting': { zh: '连接中', en: 'Connecting' },
   'teamdesk.expand': { zh: '展开团队工作台', en: 'Expand Team Desk' },

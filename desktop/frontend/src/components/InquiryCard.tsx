@@ -11,15 +11,15 @@ import { useI18n, registerMessages } from '../i18n'
 registerMessages({
   'plan.approveGo': { zh: '批准并开始执行', en: 'Approve & start' },
   'plan.approveEditedGo': { zh: '按我改的批准并执行', en: 'Approve my edits & start' },
-  'plan.approveManual': { zh: '批准,手动开始', en: 'Approve, start manually' },
+  'plan.approveManual': { zh: '批准，手动开始', en: 'Approve, start manually' },
   'plan.edit': { zh: '编辑计划', en: 'Edit plan' },
   'plan.sendBack': { zh: '打回', en: 'Request changes' },
   'plan.reject': { zh: '拒绝', en: 'Reject' },
-  'plan.feedbackPlaceholder': { zh: '要改哪里?(反馈会发给 Agent 重做计划)', en: 'What should change? (sent to the agent to revise the plan)' },
+  'plan.feedbackPlaceholder': { zh: '要改哪里？（反馈会发给 Agent 重做计划）', en: 'What should change? (sent to the agent to revise the plan)' },
   'plan.sendFeedback': { zh: '发送反馈', en: 'Send feedback' },
   'plan.doneApproved': { zh: '已批准', en: 'Approved' },
-  'plan.doneRevised': { zh: '已批准(按你修订的版本)', en: 'Approved (your revised version)' },
-  'plan.doneRejected': { zh: '已打回:{answer}', en: 'Sent back: {answer}' },
+  'plan.doneRevised': { zh: '已批准（按你修订的版本）', en: 'Approved (your revised version)' },
+  'plan.doneRejected': { zh: '已打回：{answer}', en: 'Sent back: {answer}' },
 })
 
 export const InquiryCard: React.FC<{

@@ -68,7 +68,7 @@ export function FloatingRoot() {
   const onAchievementsClose = (): void => { app.closeAchievements(); close() }
   const onFeedbackClose = (): void => { app.closeFeedback(); close() }
   return <div className="floating-native-root">
-    {window.tangu?.platform === 'darwin' && <header className="floating-native-chrome">{target.title}</header>}
+    {window.tangu?.platform === 'darwin' && <header className="floating-native-chrome"><span title={target.title}>{target.builtin === 'btw' ? t('btw.title') : target.title}</span></header>}
     <main className="floating-native-content">
       {target.builtin === 'settings' && <SettingsModal key={JSON.stringify(target.params ?? {})}
         open initialTab={typeof target.params?.tab === 'string' ? target.params.tab as never : undefined}

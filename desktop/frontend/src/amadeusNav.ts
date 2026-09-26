@@ -22,19 +22,19 @@ import { registerMessages, translate } from './i18n'
 // 本文件自己的文案(命名空间 `amnav.*`,勿与 i18n.tsx 的 `amadeus.*` 基础词条混用)。
 registerMessages({
   'amnav.dashboardCreateFailedRenamed': {
-    zh: '新建仪表盘失败:文件名被占用,系统改成了「{name}」(后缀已破)。请换个名字重试。',
+    zh: '新建仪表盘失败：文件名被占用，系统改成了「{name}」（后缀已破）。请换个名字重试。',
     en: 'Could not create the dashboard: that name is taken, so it was saved as “{name}” and the suffix is no longer valid. Try a different name.',
   },
   'amnav.dashboardCreateFailed': {
-    zh: '新建仪表盘失败:{msg}',
+    zh: '新建仪表盘失败：{msg}',
     en: 'Could not create the dashboard: {msg}',
   },
   'amnav.drawingRenamedSuffixBroken': {
-    zh: '已存在同名文件,新建的白板被改名成「{name}」,后缀已破坏。请重命名为 .excalidraw.md 后再打开。',
+    zh: '已存在同名文件，新建的白板被改名成「{name}」，后缀已破坏。请重命名为 .excalidraw.md 后再打开。',
     en: 'A file with that name already exists, so the new whiteboard was saved as “{name}” and its suffix is broken. Rename it to .excalidraw.md before opening it.',
   },
   'amnav.drawingCreateFailed': {
-    zh: '新建白板失败:{msg}',
+    zh: '新建白板失败：{msg}',
     en: 'Could not create the whiteboard: {msg}',
   },
 })
