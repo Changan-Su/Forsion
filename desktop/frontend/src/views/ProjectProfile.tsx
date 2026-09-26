@@ -262,7 +262,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
             return <article className="team-member project-executor" key={ex.key} data-project-executor={ex.key}>
               <button className="team-member-open" disabled={!canOpen} onClick={() => open(ex.key)} aria-label={`${t('projectProfile.inspect')} ${executorLabel(ex)}`}>
                 <span className="team-member-portrait">{executorPortrait(ex)}</span>
-                <strong><span>{executorLabel(ex)}</span>{ex.current && <em className="project-executor-tag">{t('projectProfile.current')}</em>}{isDefault(ex) && <em className="project-executor-tag" title={t('projectProfile.isDefault')}><Star size={10} /></em>}</strong>
+                <strong><span>{executorLabel(ex)}</span>{(ex.current || isDefault(ex)) && <span className="project-executor-tags">{ex.current && <em className="project-executor-tag is-text">{t('projectProfile.current')}</em>}{isDefault(ex) && <em className="project-executor-tag" title={t('projectProfile.isDefault')}><Star size={10} /></em>}</span>}</strong>
                 <span className={`team-member-status ${ex.running ? 'working' : 'idle'}`}>{t(ex.running ? 'projectProfile.status.working' : ex.kind === 'party' ? 'projectProfile.party' : ex.kind === 'engine' ? 'projectProfile.engine' : 'projectProfile.status.idle')} · {t('projectProfile.sessions', { count: ex.sessions.length })}{ex.lastActive ? ` · ${t('projectProfile.lastActive', { time: formatRelative(ex.lastActive, { now, locale }) })}` : ''}</span>
                 {canOpen && <ChevronRight size={14} className="team-member-chevron" />}
               </button>
