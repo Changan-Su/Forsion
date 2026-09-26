@@ -18,7 +18,6 @@ import { VoiceRecordingBar } from './VoiceRecordingBar'
 import { THINKING_LEVELS } from '../../types'
 
 // context 视图已知注入段 key(与引擎 agentLoop ctxMark 调用一一对应);未知 key 显示原样
-const CTX_SEC_KEYS = new Set(['persona', 'harness', 'guidance', 'profile', 'project', 'agentFolder', 'memory', 'skills', 'environment', 'hooks', 'plan'])
 import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../types'
 import { useEdgeNudge, useWorkspace } from '@lcl/engine'
 import { ModelPill, type ModelPillGroup } from '../../components/ModelPill'
@@ -42,6 +41,7 @@ import { mainReferenceKey } from './mainReference'
 import { ChatBoxSurface, ChatBoxInput, ChatBoxToolbar, ChatBoxSubmit } from '@lcl/components'
 import { disarmTip, tipProps } from '../../hoverTip'
 import { RefChipView } from './RefChipView'
+import { ContextUsagePop } from './ContextUsagePop'
 import './composer2.css'
 
 registerMessages({
@@ -206,9 +206,7 @@ export function pickRecall(hist: string[], pos: number, older: boolean, stash: s
   return { pos: next, val: next === 0 ? stash : hist[hist.length - next] }
 }
 
-/** token 计数进位:满千 k、满百万 M,一位小数。截断而非四舍五入 —— 999,999 是 999.9k,不是 1000k。 */
-export const fmtTokens = (n: number): string =>
-  n >= 1e6 ? `${Math.floor(n / 1e5) / 10}M` : n >= 1e3 ? `${Math.floor(n / 100) / 10}k` : String(n)
+export { fmtTokens } from './ContextUsagePop'
 
 /**
  * 输入框 autosize 的目标 style.height。**scrollHeight ≤ 0 = 元素当前没被布局**
@@ -1681,54 +1679,18 @@ export const Composer2: React.FC<{
                       <circle className="t2c-ctxring-fill" cx="12" cy="12" r={R} style={{ strokeDasharray: CIRC, strokeDashoffset: CIRC * (1 - pct / 100) }} />
                     </svg>
                   </button>
-                  {/* 点击详情:token 占用 / 会话累计 / 压缩(替代旧的横条+文字,平时只留进度圈) */}
+                  {/* 点击详情(09-26 对标 Claude 的 Context window 面板):分段条 + 分项 + 登录后的 Forsion 额度,见 ContextUsagePop */}
                   <span ref={ctxPopFix.ref} className="t2c-ctxring-pop" style={ctxPopFix.style}>
-                    <span className="t2c-ctxring-pct">{t('input.ctxLabel')} {pct}%</span>
-                    <span>{fmtTokens(ctxTokens || 0)} / {fmtTokens(contextWindow)} tokens</span>
-                    {/* 触发线用引擎算好的 compactAt(窗口 − 预留,再被设置里的百分比往下拉),不在客户端另算一份 */}
-                    {!!ctxInfo?.compactAt && <span>{t('ctx.compactAt', { n: fmtTokens(ctxInfo.compactAt), pct: Math.round((ctxInfo.compactAt / contextWindow) * 100) })}</span>}
-                    {!!sessionTokens && sessionTokens > 0 && <span>{t('input.sessionTokens', { n: fmtTokens(sessionTokens) })}</span>}
-                    {runCost != null && costLimit != null && costLimit > 0 && (
-                      <span data-warn={runCost >= costLimit * 0.8 || undefined}>{t('input.runCost', { used: Math.round(runCost).toLocaleString(), limit: costLimit.toLocaleString() })}</span>
-                    )}
-                    {/* context 视图(H5/H8/B2):窗口来源(family/default=猜的要标注)、注入段分解、指令文件、历史 */}
-                    {ctxInfo && (
-                      <>
-                        <span className="t2c-ctxinfo-src">
-                          {t(`ctx.windowSource.${['override', 'model', 'learned', 'family', 'default'].includes(ctxInfo.ctxWindowSource) ? ctxInfo.ctxWindowSource : 'default'}`)}
-                        </span>
-                        {/* 被缺省上限封了顶(模型本身更大、没手动覆盖):说清楚分母为什么不是模型窗口 */}
-                        {ctxInfo.ctxWindowSource !== 'override' && (ctxInfo.ctxWindowMax ?? 0) > ctxInfo.ctxWindow && (
-                          <span className="t2c-ctxinfo-src">{t('ctx.windowCapped', { max: fmtTokens(ctxInfo.ctxWindowMax!), n: fmtTokens(ctxInfo.ctxWindow) })}</span>
-                        )}
-                        {(ctxInfo.sections.length > 0 || ctxInfo.historyTokens > 0) && (
-                          <div className="t2c-ctxinfo-secs">
-                            {[...ctxInfo.sections].sort((a, b) => b.tokens - a.tokens).map((sec) => (
-                              <span key={sec.k} className="t2c-ctxinfo-row">
-                                {/* 未来引擎新增的段 key 直接显示 key 本身,别渲染成 'ctx.sec.xxx' 原始键 */}
-                                <span>{CTX_SEC_KEYS.has(sec.k) ? t(`ctx.sec.${sec.k}`) : sec.k}</span><span>~{fmtTokens(sec.tokens)}</span>
-                              </span>
-                            ))}
-                            {ctxInfo.historyTokens > 0 && (
-                              <span className="t2c-ctxinfo-row">
-                                <span>{t('ctx.sec.history', { n: ctxInfo.historyCount })}</span><span>~{fmtTokens(ctxInfo.historyTokens)}</span>
-                              </span>
-                            )}
-                          </div>
-                        )}
-                        {/* 空态也要说话:不显示这一节时,「这个工作区没有指令文件」和「这功能坏了」长得一模一样
-                            —— 2026-08-18 真机走查就据此报了一条假 ❌。 */}
-                        <div className="t2c-ctxinfo-files">
-                          <span className="t2c-ctxinfo-label">{t('ctx.files.label')}{ctxInfo.filesTruncated ? ` ${t('ctx.files.truncated')}` : ''}</span>
-                          {ctxInfo.files.length > 0
-                            ? ctxInfo.files.map((f) => (
-                              <span key={f} className="t2c-ctxinfo-file" title={f}>{f.split(/[/\\]/).slice(-2).join('/')}</span>
-                            ))
-                            : <span className="t2c-ctxinfo-file dim">{t('ctx.files.none')}</span>}
-                        </div>
-                      </>
-                    )}
-                    {onCompact && <button className="t2c-ctxring-compact" onClick={() => { onCompact(); setOpenMenu(null) }}>{t('input.slash.compact')}</button>}
+                    <ContextUsagePop
+                      open={openMenu === 'ctx'}
+                      contextWindow={contextWindow}
+                      ctxTokens={ctxTokens}
+                      sessionTokens={sessionTokens}
+                      runCost={runCost}
+                      costLimit={costLimit}
+                      ctxInfo={ctxInfo}
+                      onCompact={onCompact ? () => { onCompact(); setOpenMenu(null) } : undefined}
+                    />
                   </span>
                 </span>
               )
