@@ -6,7 +6,8 @@
  *   GET  /agent/project-context/settings?sessionId=|cwd= → { settings }(桌面建会话前的轻量预取;cwd 形态给没有会话可借的项目)
  *   PUT  /agent/project-context/settings        { sessionId, settings }                    → 用户侧项目默认项
  *   POST /agent/project-context/skills          { sessionId, slug, name, description, content } → 建项目技能
- *   POST   /agent/project-context/icon          { sessionId, data, mimeType }             → 导入图标图片进 .tangu/,返回 { settings }
+ *   POST   /agent/project-context/icon          { sessionId, data } | { sessionId, emoji } → 导入图片进 .tangu/ 或设 emoji,返回 { settings }
+ *          (图标只经这组端点改;PUT settings 保留 icon 现值)
  *   GET    /agent/project-context/icon?sessionId=|cwd=                                    → 图标图片二进制(settings.icon 是 emoji / 空 → 404)
  *   DELETE /agent/project-context/icon?sessionId=                                         → 移除图标(emoji 或图片),返回 { settings }
  *
@@ -19,7 +20,7 @@ import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
 import {
   canonicalProjectPath, createProjectSkill, deleteProjectIcon, initProjectWorkspace, projectContext, readProjectIcon, readProjectSettings,
-  saveProjectIcon, writeProjectDoc, writeProjectSettings,
+  saveProjectIcon, setProjectIconEmoji, writeProjectDoc, writeProjectSettings,
 } from '../services/projectContext.js';
 
 const router = Router();
@@ -121,9 +122,10 @@ router.post('/agent/project-context/icon', authMiddleware, async (req: AuthReque
   try {
     const cwd = await projectDirOf(req, res, req.body?.sessionId);
     if (!cwd) return;
-    const { data, mimeType } = req.body || {};
-    if (typeof data !== 'string' || typeof mimeType !== 'string') return res.status(400).json({ detail: 'data and mimeType are required' });
-    res.json({ settings: await saveProjectIcon(cwd, data, mimeType) });
+    const { data, emoji } = req.body || {};
+    if (typeof data === 'string') return res.json({ settings: await saveProjectIcon(cwd, data) });
+    if (typeof emoji === 'string') return res.json({ settings: await setProjectIconEmoji(cwd, emoji) });
+    res.status(400).json({ detail: 'data or emoji is required' });
   } catch (e: any) {
     fail(res, e, 'save project icon failed');
   }

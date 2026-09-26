@@ -142,22 +142,22 @@ async function run(app, win, stub, seen, home) {
   const emojiA = (await items.nth(0).textContent()).trim(), emojiB = (await items.nth(1).textContent()).trim()
   await items.nth(0).click()
   await win.waitForTimeout(500)
-  check('1d 选 emoji → PUT settings { icon } 立即落盘(不经保存栏);头部与侧栏组头都换成它,默认工作区组头不受影响', seen.settingsPuts.at(-1)?.settings.icon === emojiA && (await emblemIcon.textContent()) === emojiA && (await wsHead.locator('.t2s-project-icon').textContent()) === emojiA && await defaultHead.locator('.t2s-project-icon').count() === 0 && await profile.locator('.agent-profile-save button.primary').count() === 0, JSON.stringify({ put: seen.settingsPuts.at(-1), emojiA }))
+  check('1d 选 emoji → POST icon { emoji } 立即落盘(不经保存栏、不走 PUT settings);头部与侧栏组头都换成它,默认工作区组头不受影响', seen.iconPosts.at(-1)?.emoji === emojiA && !seen.settingsPuts.length && (await emblemIcon.textContent()) === emojiA && (await wsHead.locator('.t2s-project-icon').textContent()) === emojiA && await defaultHead.locator('.t2s-project-icon').count() === 0 && await profile.locator('.agent-profile-save button.primary').count() === 0, JSON.stringify({ post: seen.iconPosts.at(-1), puts: seen.settingsPuts.length, emojiA }))
   await profile.locator('.team-profile-hero input[type=file]').setInputFiles({ name: 'logo.png', mimeType: 'image/png', buffer: ICON_PNG })
   await emblem.locator(':scope > img').waitFor({ timeout: 5_000 }).catch(() => {})
   await wsHead.locator('img.t2s-project-icon').waitFor({ timeout: 5_000 }).catch(() => {})
   const post = seen.iconPosts.at(-1)
   const loaded = (loc) => loc.evaluate((img) => img.complete && img.naturalWidth > 0).catch(() => false)
-  check('1e 导入图片 → POST /agent/project-context/icon { sessionId, dataURL, mimeType };头部与侧栏组头显示该图(已解码),emoji 退场', !!post && post.sessionId === 'pd-main' && post.mimeType === 'image/png' && /^data:image\/png;base64,/.test(post.data) && await loaded(emblem.locator(':scope > img')) && await loaded(wsHead.locator('img.t2s-project-icon')) && await emblem.locator(':scope > span:not(.agent-portrait-badge)').count() === 0, JSON.stringify({ post: post && { ...post, data: post.data.slice(0, 30) }, gets: seen.iconGets }))
+  check('1e 导入图片 → POST /agent/project-context/icon { sessionId, dataURL };头部与侧栏组头显示该图(已解码),emoji 退场', !!post && post.sessionId === 'pd-main' && /^data:image\/png;base64,/.test(post.data) && await loaded(emblem.locator(':scope > img')) && await loaded(wsHead.locator('img.t2s-project-icon')) && await emblem.locator(':scope > span:not(.agent-portrait-badge)').count() === 0, JSON.stringify({ post: post && { ...post, data: post.data.slice(0, 30) }, gets: seen.iconGets }))
   await win.screenshot({ path: shots.iconImage = shot('project-icon-image-zh-light') })
   await openPicker()
   await items.nth(1).click()
   await win.waitForTimeout(500)
-  check('1f 有图时选 emoji → 先 DELETE 图片(不留孤儿文件)再 PUT { icon };头部与侧栏换成新 emoji', seen.iconDeletes.join() === 'pd-main' && seen.settingsPuts.at(-1)?.settings.icon === emojiB && (await emblemIcon.textContent()) === emojiB && (await wsHead.locator('.t2s-project-icon').textContent()) === emojiB, JSON.stringify({ dels: seen.iconDeletes, put: seen.settingsPuts.at(-1) }))
+  check('1f 有图时选 emoji → 一笔 POST icon { emoji }(旧图由引擎删);头部与侧栏换成新 emoji、图片退场', !seen.iconDeletes.length && seen.iconPosts.at(-1)?.emoji === emojiB && (await emblemIcon.textContent()) === emojiB && (await wsHead.locator('.t2s-project-icon').textContent()) === emojiB && await wsHead.locator('img').count() === 0, JSON.stringify({ dels: seen.iconDeletes, post: seen.iconPosts.at(-1) }))
   await openPicker()
   await picker.locator('.amx-db-opt-clear').click()
   await win.waitForTimeout(500)
-  check('1g 选择器「移除图标」→ DELETE;头部与侧栏组头回到文件夹图标', seen.iconDeletes.length === 2 && await emblemIcon.count() === 0 && await emblem.locator(':scope > svg').count() === 1 && await wsHead.locator('.t2s-project-icon').count() === 0, JSON.stringify(seen.iconDeletes))
+  check('1g 选择器「移除图标」→ DELETE;头部与侧栏组头回到文件夹图标', seen.iconDeletes.join() === 'pd-main' && await emblemIcon.count() === 0 && await emblem.locator(':scope > svg').count() === 1 && await wsHead.locator('.t2s-project-icon').count() === 0, JSON.stringify(seen.iconDeletes))
   // 留一个 emoji 给后面的英文 × 暗色截图看观感
   await openPicker()
   await items.nth(0).click()
@@ -329,9 +329,10 @@ async function main() {
     if (route === '/agent/sessions' && method === 'GET' && url.searchParams.get('archived') === 'true') return { sessions: [] }
     // 带 body 的写接口:override 在 handle 之前跑且能读 body(handle 的 body() 只能读一次,GET 分支已用掉 sessionId 的读取)
     if (route === '/agent/project-context/doc' && method === 'PUT') { const b = await body(); seen.docPuts.push(b); ctx.doc = { ...ctx.doc, exists: true, content: b.content, mtimeMs: 2000 }; return { path: ctx.doc.path, mtimeMs: 2000 } }
-    if (route === '/agent/project-context/settings' && method === 'PUT') { const b = await body(); seen.settingsPuts.push(b); ctx.settings = b.settings; return { settings: b.settings } }
+    // 同引擎:PUT settings 不改 icon,保留现值
+    if (route === '/agent/project-context/settings' && method === 'PUT') { const b = await body(); seen.settingsPuts.push(b); const { icon: _ignored, ...rest } = b.settings || {}; ctx.settings = ctx.settings?.icon ? { ...rest, icon: ctx.settings.icon } : rest; return { settings: ctx.settings } }
     if (route === '/agent/project-context/skills' && method === 'POST') { const b = await body(); seen.skills.push(b); const skill = { id: `local:${b.slug}`, name: b.name, description: b.description, path: path.join(projectDir, '.tangu', 'skills', b.slug), legacy: false }; ctx.skills.push(skill); return { skill } }
-    if (route === '/agent/project-context/icon' && method === 'POST') { const b = await body(); seen.iconPosts.push(b); ctx.settings = { ...(ctx.settings || {}), icon: 'icon.png' }; return { settings: ctx.settings } }
+    if (route === '/agent/project-context/icon' && method === 'POST') { const b = await body(); seen.iconPosts.push(b); ctx.settings = { ...(ctx.settings || {}), icon: typeof b.emoji === 'string' ? b.emoji : 'icon.png' }; return { settings: ctx.settings } }
     if (route === '/agent/project-context/icon' && method === 'DELETE') { seen.iconDeletes.push(url.searchParams.get('sessionId')); const { icon: _drop, ...rest } = ctx.settings || {}; ctx.settings = Object.keys(rest).length ? rest : null; return { settings: ctx.settings } }
     if (route === '/agent/project-context/icon' && method === 'GET') {
       seen.iconGets += 1

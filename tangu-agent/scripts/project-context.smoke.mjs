@@ -73,16 +73,19 @@ try {
   check('坏 slug → 400,不落盘', bad.status === 400 && !existsSync(join(OUT, 'evil')), String(bad.status));
   // 项目图标:图片进 .tangu/icon.<ext>、指针进用户侧 settings;GET 出二进制(sessionId 与 cwd 两种定位);整份 PUT 不抹 icon;DELETE 连文件带指针
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
-  const up = await api('/agent/project-context/icon', { method: 'POST', body: JSON.stringify({ sessionId: sid, data: `data:image/png;base64,${png.toString('base64')}`, mimeType: 'image/png' }) });
+  const up = await api('/agent/project-context/icon', { method: 'POST', body: JSON.stringify({ sessionId: sid, data: `data:image/png;base64,${png.toString('base64')}` }) });
   const bin = async (q) => { const r = await fetch(`${base}/agent/project-context/icon?${q}`, { headers: { Authorization: `Bearer ${TOKEN}` } }); return { status: r.status, type: r.headers.get('content-type'), bytes: Buffer.from(await r.arrayBuffer()) }; };
   const g1 = await bin(`sessionId=${sid}`); const g2 = await bin(`cwd=${encodeURIComponent(proj)}`);
   check('POST icon → .tangu/icon.png 落盘、settings.icon 指向它(别的默认项保留);GET 按 sessionId / cwd 都回原字节', up.status === 200 && up.body.settings.icon === 'icon.png' && up.body.settings.defaultAgent === 'xyra' && readFileSync(join(proj, '.tangu', 'icon.png')).equals(png) && g1.status === 200 && g1.type === 'image/png' && g1.bytes.equals(png) && g2.status === 200 && g2.bytes.equals(png), JSON.stringify({ up: up.status, settings: up.body?.settings, g1: g1.status, g2: g2.status }));
-  const keep = await api('/agent/project-context/settings', { method: 'PUT', body: JSON.stringify({ sessionId: sid, settings: { ...up.body.settings, model: 'm-x' } }) });
-  const badType = await api('/agent/project-context/icon', { method: 'POST', body: JSON.stringify({ sessionId: sid, data: png.toString('base64'), mimeType: 'image/svg+xml' }) });
-  check('整份 PUT settings 带着 icon 不被抹;svg → 400', keep.body?.settings?.icon === 'icon.png' && badType.status === 400, JSON.stringify({ keep: keep.body?.settings, badType: badType.status }));
+  const keep = await api('/agent/project-context/settings', { method: 'PUT', body: JSON.stringify({ sessionId: sid, settings: { defaultAgent: 'xyra', approvalMode: 'full-auto', model: 'm-x', icon: '🙈' } }) });
+  const badType = await api('/agent/project-context/icon', { method: 'POST', body: JSON.stringify({ sessionId: sid, data: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"/>').toString('base64') }) });
+  check('整份 PUT settings 不改 icon(旧草稿不带 / 带别的值都保留落盘现值);svg → 400', keep.body?.settings?.icon === 'icon.png' && keep.body.settings.model === 'm-x' && badType.status === 400 && existsSync(join(proj, '.tangu', 'icon.png')), JSON.stringify({ keep: keep.body?.settings, badType: badType.status }));
+  const emo = await api('/agent/project-context/icon', { method: 'POST', body: JSON.stringify({ sessionId: sid, emoji: '🚀' }) });
+  const g4 = await bin(`sessionId=${sid}`);
+  check('POST icon { emoji } → settings.icon = emoji,原图片删掉;GET 图片 → 404', emo.status === 200 && emo.body.settings.icon === '🚀' && !existsSync(join(proj, '.tangu', 'icon.png')) && g4.status === 404, JSON.stringify({ emo: emo.status, settings: emo.body?.settings, g4: g4.status }));
   const del = await api(`/agent/project-context/icon?sessionId=${sid}`, { method: 'DELETE' });
   const g3 = await bin(`sessionId=${sid}`);
-  check('DELETE icon → 文件删掉、settings 去掉 icon;GET → 404', del.status === 200 && !('icon' in (del.body.settings || {})) && !existsSync(join(proj, '.tangu', 'icon.png')) && g3.status === 404, JSON.stringify({ del: del.status, settings: del.body?.settings, g3: g3.status }));
+  check('DELETE icon → settings 去掉 icon;GET → 404', del.status === 200 && !('icon' in (del.body.settings || {})) && g3.status === 404, JSON.stringify({ del: del.status, settings: del.body?.settings, g3: g3.status }));
 } finally {
   child.kill('SIGTERM');
   await sleep(500);

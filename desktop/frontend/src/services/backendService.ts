@@ -1075,9 +1075,12 @@ export const putProjectSettings = (cfg: TanguDesktopConfig, sessionId: string, s
   request<{ settings: ProjectSettings | null }>(cfg, '/agent/project-context/settings', { method: 'PUT', body: JSON.stringify({ sessionId, settings }) }).then((r) => r.settings ?? null)
 export const createProjectSkill = (cfg: TanguDesktopConfig, sessionId: string, input: { slug: string; name: string; description: string; content: string }) =>
   request<{ skill: ProjectSkillInfo }>(cfg, '/agent/project-context/skills', { method: 'POST', body: JSON.stringify({ sessionId, ...input }) }).then((r) => r.skill)
-/** 导入图标图片(引擎写进项目的 `.tangu/icon.<ext>`);返回落盘后的默认项(icon 已指向它)。 */
-export const uploadProjectIcon = (cfg: TanguDesktopConfig, sessionId: string, data: string, mimeType: string) =>
-  request<{ settings: ProjectSettings | null }>(cfg, '/agent/project-context/icon', { method: 'POST', body: JSON.stringify({ sessionId, data, mimeType }) }).then((r) => r.settings ?? null)
+/** 图标只经这组端点改(PUT settings 保留 icon 现值)。导入图片:引擎按文件头认类型,写进项目的 `.tangu/icon.<ext>`;返回落盘后的默认项。 */
+export const uploadProjectIcon = (cfg: TanguDesktopConfig, sessionId: string, data: string) =>
+  request<{ settings: ProjectSettings | null }>(cfg, '/agent/project-context/icon', { method: 'POST', body: JSON.stringify({ sessionId, data }) }).then((r) => r.settings ?? null)
+/** 设 emoji 图标(原来指向的图片由引擎删掉)。 */
+export const setProjectIconEmoji = (cfg: TanguDesktopConfig, sessionId: string, emoji: string) =>
+  request<{ settings: ProjectSettings | null }>(cfg, '/agent/project-context/icon', { method: 'POST', body: JSON.stringify({ sessionId, emoji }) }).then((r) => r.settings ?? null)
 /** 移除图标(emoji 或图片都清)。 */
 export const deleteProjectIcon = (cfg: TanguDesktopConfig, sessionId: string) =>
   request<{ settings: ProjectSettings | null }>(cfg, `/agent/project-context/icon?sessionId=${encodeURIComponent(sessionId)}`, { method: 'DELETE' }).then((r) => r.settings ?? null)

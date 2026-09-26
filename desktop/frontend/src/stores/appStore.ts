@@ -386,6 +386,9 @@ export const rootlessWs = (t: AppState['tr']): WorkspaceDescriptor =>
   ({ key: ROOTLESS_WORKSPACE_KEY, name: t('input.project.dontWork'), kind: 'rootless', path: null, system: true })
 
 /** 引擎有真实 host FS:managed 桌面,或设备页(unitPage,引擎是对方的 managed 引擎)。 */
+/** loadProjectIcon 按项目路径的请求代数(只认最后一次的结果)。 */
+const projectIconLoads = new Map<string, number>()
+
 /** 项目端点的定位:优先借该项目的任一会话(按 sessionId 绑定);一个会话都没有(会话删光后又添加回来)就按路径读用户侧记录。 */
 const projectRef = (s: Pick<AppState, 'sessions' | 'archivedSessions'>, path: string): { sessionId: string } | { cwd: string } => {
   const carrier = [...s.sessions, ...s.archivedSessions].find((x) => x.project_path === path && !x.projectless)
@@ -1754,12 +1757,19 @@ export const useApp = create<AppState>((set, get) => ({
   loadProjectIcon: async (path, force) => {
     // 不设 host 门:只有 settings.icon 已指向图片才会走到这里(那份记录本就来自能读项目的引擎);external 模式连本机引擎也要能显示
     if (!force && path in get().projectIconUrls) return
+    const gen = (projectIconLoads.get(path) ?? 0) + 1
+    projectIconLoads.set(path, gen)
     set((st) => ({ projectIconUrls: { ...st.projectIconUrls, [path]: st.projectIconUrls[path] ?? '' } })) // 在途占位:两个侧栏实例不双发
     const url = await api.fetchProjectIcon(get().cfg, projectRef(get(), path))
+    // 换图后的强制重拉与更早的一次并发时,先发的晚到不能盖掉新图
+    if (projectIconLoads.get(path) !== gen) { if (url) URL.revokeObjectURL(url); return }
     set((st) => {
       const old = st.projectIconUrls[path]
       if (old) URL.revokeObjectURL(old)
-      return { projectIconUrls: { ...st.projectIconUrls, [path]: url || '' } }
+      const next = { ...st.projectIconUrls }
+      if (url) next[path] = url
+      else delete next[path] // 没图 / 拉失败不占缓存:下次挂载或重连再拉
+      return { projectIconUrls: next }
     })
   },
   hydrateTeamWork: async (sessionId) => {

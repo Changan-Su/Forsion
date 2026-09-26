@@ -4,9 +4,9 @@ import { ArrowLeft, Check, ChevronRight, Copy, ExternalLink, FileText, Folder, F
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { createProjectSkill, deleteProjectIcon, getProjectContext, initProjectContext, putProjectDoc, putProjectSettings, uploadProjectIcon } from '../services/backendService'
+import { createProjectSkill, deleteProjectIcon, getProjectContext, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon } from '../services/backendService'
 import type { AgentConfig, NormalAgentDef, ProjectContext, ProjectSettings, SessionRecord, TeamDef } from '../types'
-import { isProjectIconFile, isTeamImageAvatar, sessionWorkspaceKey, THINKING_LEVELS } from '../types'
+import { isTeamImageAvatar, sessionWorkspaceKey, THINKING_LEVELS } from '../types'
 import { ProfileModelField, ProfileTextEditor } from './profileControls'
 import { AvatarStack } from '../components/AvatarStack'
 import { openSpecial } from './SpecialViews'
@@ -135,30 +135,27 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     }
     setPicker(false); setQuery('')
   }
-  /** 行内星标 / emoji 图标立即落盘。默认项是**一条**记录:配置页里还没保存的草稿一并带上(分开写会互相盖掉 —— 星标写完再点保存,
-   *  旧草稿会把星标写回去),写完草稿即与落盘一致,保存栏收起。 */
-  const persistSettings = async (value: Partial<ProjectSettings>) => {
-    const saved = await putProjectSettings(s.cfg, session.id, { ...(settingsDirty ? settingsDraft : ctx?.settings || {}), ...value })
-    setCtx((c) => (c ? { ...c, settings: saved } : c))
-    setSettingsDraft(saved ?? {}); setSettingsDirty(false)
-    useApp.getState().rememberProjectSettings(dir, saved)
-  }
+  /** 行内星标立即落盘。默认项是**一条**记录:配置页里还没保存的草稿一并带上(分开写会互相盖掉 —— 星标写完再点保存,旧草稿会把星标写回去),
+   *  写完草稿即与落盘一致,保存栏收起。 */
   const saveDefaultExecutor = async (value: Pick<ProjectSettings, 'defaultAgent' | 'defaultTeam'>) => {
     if (busy) return
     setBusy('default'); clear()
     try {
-      await persistSettings({ defaultAgent: undefined, defaultTeam: undefined, ...value })
+      const saved = await putProjectSettings(s.cfg, session.id, { ...(settingsDirty ? settingsDraft : ctx?.settings || {}), defaultAgent: undefined, defaultTeam: undefined, ...value })
+      setCtx((c) => (c ? { ...c, settings: saved } : c))
+      setSettingsDraft(saved ?? {}); setSettingsDirty(false)
+      useApp.getState().rememberProjectSettings(dir, saved)
       setNotice(t('projectProfile.saved'))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
   }
-  // 图标即时落盘(与名称同一习惯,不走保存栏)。图片端点只动 icon 一个键:只把它并进草稿,保存栏里没提交的别的改动留着,
-  // 也免得那份旧草稿一保存把 icon 写回去。
+  // 图标即时落盘(与名称同一习惯,不走保存栏),只经 icon 端点改 —— PUT settings 在引擎侧保留 icon 现值,保存栏里的草稿碰不到它;
+  // 这里只把 icon 并进草稿,别的未保存改动留着。
   const icon = ctx?.settings?.icon
   const applyIcon = (saved: ProjectSettings | null) => {
     setCtx((c) => (c ? { ...c, settings: saved } : c))
     setSettingsDraft((d) => ({ ...d, icon: saved?.icon }))
     useApp.getState().rememberProjectSettings(dir, saved)
-    if (isProjectIconFile(saved?.icon)) void useApp.getState().loadProjectIcon(dir, true)
+    void useApp.getState().loadProjectIcon(dir, true) // 换图 → 拉新图;换 emoji / 移除 → 404,旧 objectURL 随之回收
   }
   const pickIconImage = async (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -173,18 +170,17 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
         reader.onerror = () => reject(reader.error || new Error('read failed'))
         reader.readAsDataURL(file)
       })
-      applyIcon(await uploadProjectIcon(s.cfg, session.id, dataUrl, file.type))
+      applyIcon(await uploadProjectIcon(s.cfg, session.id, dataUrl))
       setNotice(t('projectProfile.iconSaved'))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
   }
-  /** emoji → 写 settings.icon;null(选择器里的「移除图标」)→ 回默认。原来是导入的图片就先删掉它:图片住在项目目录里,不留孤儿文件。 */
+  /** emoji → 设为图标;null(选择器里的「移除图标」)→ 回默认。原来是导入的图片由引擎一并删掉(图片住在项目目录里,不留孤儿文件)。 */
   const pickIconEmoji = async (emoji: string | null) => {
     setIconPick(null)
     if (busy || (emoji ?? undefined) === icon) return
     setBusy('icon'); clear()
     try {
-      if (!emoji || isProjectIconFile(icon)) applyIcon(await deleteProjectIcon(s.cfg, session.id))
-      if (emoji) await persistSettings({ icon: emoji })
+      applyIcon(await (emoji ? setProjectIconEmoji(s.cfg, session.id, emoji) : deleteProjectIcon(s.cfg, session.id)))
       setNotice(t(emoji ? 'projectProfile.iconSaved' : 'projectProfile.iconRemoved'))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
   }
