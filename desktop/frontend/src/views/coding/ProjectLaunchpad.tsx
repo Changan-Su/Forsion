@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEvent } from 'react'
 import { ArrowLeft, ArrowRight, Bot, Check, ChevronDown, Code2, Folder, FolderOpen, Image, LayoutDashboard, Lightbulb, Loader2, MessageSquare, Palette, Plus, Puzzle, Search, UserRound, WandSparkles, X, RotateCw } from 'lucide-react'
 import { useI18n } from '../../i18n'
+import { formatDate } from '../../format/time'
 import { ChatBox, useChatBoxSelection, type ChatBoxSelection } from '../../components/chatbox'
 import { projectBasename, STUDIO_CAPABILITIES, STUDIO_TEMPLATES, validateProjectName, type StudioBrief, type StudioCapability, type StudioTemplate } from './projectBrief'
 import { useLaunchNavigation } from './launchpadNavigation'
@@ -102,7 +103,7 @@ export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: Pro
       && (!q || `${p.name} ${p.description || ''} ${p.path}`.toLocaleLowerCase().includes(q)))
   }, [allProjects, filter, search, root])
   const formatOpened = (timestamp?: number) => timestamp && Number.isFinite(timestamp)
-    ? new Intl.DateTimeFormat(locale === 'zh' ? 'zh-CN' : 'en', { year: 'numeric', month: 'short', day: 'numeric' }).format(timestamp)
+    ? formatDate(timestamp, { locale, year: 'always' })
     : t('csl.notOpened')
 
   function chooseTemplate(template: StudioTemplate) {
