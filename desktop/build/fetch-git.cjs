@@ -50,11 +50,12 @@ async function download(url) {
   }
 }
 
-/** mac 的包装脚本:`$0` 经 PATH 查到时就是绝对路径;pwd -P 解软链,装在带空格的路径下也成立。 */
+/** mac 的包装脚本:`$0` 经 PATH 查到时就是绝对路径;pwd -P 解软链,装在带空格的路径下也成立;
+ *  CDPATH 置空:相对路径调用(`./git`)时 cd 否则会把目录打印到 stdout,混进 d。 */
 const WRAPPER = `#!/bin/sh
 # Forsion bundled git (dugite-native). Exec path is set here only, never in the engine env:
 # a user's own git inheriting GIT_EXEC_PATH would load this version's git-core.
-d="$(cd "$(dirname "$0")/.." && pwd -P)"
+d="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"
 GIT_EXEC_PATH="$d/libexec/git-core"
 GIT_TEMPLATE_DIR="\${GIT_TEMPLATE_DIR:-$d/share/git-core/templates}"
 export GIT_EXEC_PATH GIT_TEMPLATE_DIR

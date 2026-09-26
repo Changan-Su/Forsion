@@ -318,9 +318,15 @@ async function runEnvCheck(): Promise<EnvProbe[]> {
     await useBundled('node', nodeRt.nodeBin)
     await useBundled('npm', nodeRt.npmBin)
   }
-  // 内置 git:同上只兜底(Windows 追加在 PATH 末尾;mac 只在没有真 git 时前置,见 withBundledGit)。
+  // 内置 git:同上只兜底(Windows 追加在 PATH 末尾;mac 只在 PATH 查到的 git 不能用时前置,见 withBundledGit)。
+  // 比 Node 严一格:得真跑通 --version 才算有 —— 文件在、起不来(权限丢了 / 被拦)时照旧报未装、留着安装建议。
   const gitRt = resolveBundledGit()
-  if (gitRt) await useBundled('git', gitRt.gitBin)
+  const gitIdx = out.findIndex((o) => o.tool === 'git')
+  if (gitRt && gitIdx >= 0 && !out[gitIdx].found) {
+    // Windows 下 probeVersion 走 cmd.exe 拼串:装在 Program Files 这类带空格的路径里,不加引号会被拆开
+    const v = await probeVersion(process.platform === 'win32' ? `"${gitRt.gitBin}"` : gitRt.gitBin, ['--version'])
+    if (v) out[gitIdx] = { tool: 'git', found: true, version: `${v} · bundled`, installId: null, installCommand: null, downloadUrl: null }
+  }
   // tangu CLI:App 启动时自装的终端命令(report-only,无安装按钮——ensureCliInstalled 每次启动自愈)。
   const shim = join(tanguHomeDir(), 'bin', process.platform === 'win32' ? 'tangu.cmd' : 'tangu')
   out.push({

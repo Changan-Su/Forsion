@@ -3,11 +3,11 @@
  * yt-dlp 报 `ffprobe and ffmpeg not found`(青鸟收藏夹转录整条挂掉),而设置页的环境探测显示 ffmpeg 已装
  * —— 探测补了 PATH,托管引擎 spawn 没补。dev 从终端起继承完整 PATH,复现不出来。
  */
-import { describe, it, expect } from 'vitest'
+import { afterEach, beforeEach, describe, it, expect } from 'vitest'
 import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
-import { appendUserBinDirs, composeEnginePath, userBinDirs, withBundledGit } from './envPath'
+import { appendUserBinDirs, composeEnginePath, darwinPathGitWorks, userBinDirs, withBundledGit } from './envPath'
 
 const GUI_PATH = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(delimiter) // GUI 启动的 mac app 实拿到的那份
 
@@ -38,33 +38,47 @@ describe('composeEnginePath 顺序即策略', () => {
 })
 
 describe('withBundledGit 只兜底、不抢用户的 git', () => {
-  const noGit = () => false
-  const hasGit = () => true
+  const broken = () => false
+  const works = () => true
 
   it('Windows:追加在末尾,用户装的 Git for Windows 先命中', () => {
     // 分隔符用宿主的 delimiter(函数按它拼);这里钉的是顺序,不是 Windows 路径格式
-    expect(withBundledGit(GUI_PATH, ['/res/git/cmd'], 'win32', hasGit)).toBe([GUI_PATH, '/res/git/cmd'].join(delimiter))
+    expect(withBundledGit(GUI_PATH, ['/res/git/cmd'], 'win32', works)).toBe([GUI_PATH, '/res/git/cmd'].join(delimiter))
   })
 
-  it('mac 没有真 git:前置,压过 /usr/bin/git 那个会弹「安装开发者工具」的 shim', () => {
-    expect(withBundledGit(GUI_PATH, ['/res/git/bin'], 'darwin', noGit).split(delimiter)[0]).toBe('/res/git/bin')
+  it('mac PATH 查到的 git 不能用:前置,压过 /usr/bin/git 那个会弹「安装开发者工具」的 shim', () => {
+    expect(withBundledGit(GUI_PATH, ['/res/git/bin'], 'darwin', broken).split(delimiter)[0]).toBe('/res/git/bin')
   })
 
-  it('mac 有真 git(CLT / homebrew):完全不挂,原 PATH 一字不动', () => {
-    expect(withBundledGit(GUI_PATH, ['/res/git/bin'], 'darwin', hasGit)).toBe(GUI_PATH)
+  it('mac PATH 查到的 git 能用:完全不挂,原 PATH 一字不动', () => {
+    expect(withBundledGit(GUI_PATH, ['/res/git/bin'], 'darwin', works)).toBe(GUI_PATH)
   })
 
   it('没有内置 git(Linux / 降级):原样返回', () => {
-    expect(withBundledGit(GUI_PATH, [], 'darwin', noGit)).toBe(GUI_PATH)
+    expect(withBundledGit(GUI_PATH, [], 'darwin', broken)).toBe(GUI_PATH)
+  })
+})
+
+describe('darwinPathGitWorks 看 PATH 实际命中的那份', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'path-git-'))
+    writeFileSync(join(dir, 'git'), '#!/bin/sh\n'); chmodSync(join(dir, 'git'), 0o755)
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+
+  it('排在 /usr/bin 前面的真 git → 能用', () => {
+    expect(darwinPathGitWorks([dir, GUI_PATH].join(delimiter), [])).toBe(true)
   })
 
-  it('mac 缺省判定走 findGit:/usr/bin 里的 shim 不算真 git', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'bundled-git-'))
-    try {
-      const fake = join(dir, 'git')
-      writeFileSync(fake, '#!/bin/sh\n'); chmodSync(fake, 0o755)
-      // PATH 上有一个真 git → 不挂;这条不依赖本机装没装 CLT(findGit 命中 PATH 里这份就停)
-      expect(withBundledGit([dir, GUI_PATH].join(delimiter), ['/res/git/bin'], 'darwin')).toBe([dir, GUI_PATH].join(delimiter))
-    } finally { rmSync(dir, { recursive: true, force: true }) }
+  it('PATH 上一份 git 都没有 → 不能用', () => {
+    const empty = mkdtempSync(join(tmpdir(), 'path-nogit-'))
+    try { expect(darwinPathGitWorks(empty, [])).toBe(false) } finally { rmSync(empty, { recursive: true, force: true }) }
+  })
+
+  // Homebrew 有 git、没装 CLT:PATH 先命中 /usr/bin/git shim。旧判定「机器上有真 git 就不挂」在这里会弹框(Codex 评审 P1)。
+  it.runIf(existsSync('/usr/bin/git'))('先命中 /usr/bin/git 时只看 CLT / Xcode,排在后面的真 git 不算', () => {
+    expect(darwinPathGitWorks(['/usr/bin', dir].join(delimiter), [])).toBe(false)
+    expect(darwinPathGitWorks(['/usr/bin', dir].join(delimiter), [join(dir, 'git')])).toBe(true)
   })
 })

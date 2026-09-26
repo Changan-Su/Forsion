@@ -8,7 +8,8 @@
  *   ② 随包 LibreOffice:Forsion.exe 以 ELECTRON_RUN_AS_NODE 把现拼的 docx 转 PDF(afterPack 的 OFFICE_GATE)
  *   ③ 负对照:把 kit 引擎旁的 app-local VC++ DLL 挪走,② 必须红 —— 否则系统 DLL 没藏干净,①② 是假绿。
  *   ④ 内置 git(MinGit):smokeGit 真跑 init/commit/https 助手;再经 cmd.exe 按 PATH 找 `git`
- *      (引擎 run_bash 就是这么调的,PATH 里只有系统目录 + 内置 cmd/,runner 自带的 Git 不在)。
+ *      (引擎 run_bash 就是这么调的,PATH 里只有系统目录 + 内置 cmd/,runner 自带的 Git 不在);
+ *      再按设置页环境检测的写法从带空格的路径调一次。
  *
  * 用法:node desktop/scripts/bundled-runtimes.windows-probe.cjs <含安装包 .exe 的目录>
  * 由 .github/workflows/probe-bundled-runtimes.yml 调用;本机(非 Windows)跑不了。
@@ -84,7 +85,13 @@ try {
   const out = execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'git --version'],
     { encoding: 'utf8', env: { ...process.env, PATH: `${process.env.PATH};${path.join(resources, 'git', 'cmd')}` } });
   console.log(`  cmd.exe 经 PATH 找到:${out.trim()}`);
-  results.git = /^git version/.test(out.trim());
+  // 设置页环境检测的写法(main.ts probeVersion):execFile + shell:true + 路径加引号。装进 Program Files 这类
+  // 带空格的目录时引号不对就会被 cmd.exe 拆开 —— 借一个带空格的目录联接模拟(runner 一次性,联接不收拾)。
+  const spaced = path.join(os.tmpdir(), 'Forsion Probe Git');
+  fs.symlinkSync(path.join(resources, 'git'), spaced, 'junction');
+  const quoted = execFileSync(`"${path.join(spaced, 'cmd', 'git.exe')}"`, ['--version'], { shell: true, encoding: 'utf8', windowsHide: true });
+  console.log(`  带空格路径经 cmd.exe:${quoted.trim()}`);
+  results.git = /^git version/.test(out.trim()) && /^git version/.test(quoted.trim());
 } catch (e) { console.log(`  失败:${String(e.message).split('\n')[0]}`); results.git = false; }
 
 console.log('\n结果', JSON.stringify(results));

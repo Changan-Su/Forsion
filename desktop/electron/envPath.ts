@@ -8,10 +8,9 @@
  * 因为探测(main.ts `env:check`)补了 PATH,托管引擎 spawn(backendManager)没补,
  * agent 的 run_bash 继承的就是没补的那份。补全逻辑集中在这里,三处共用一份清单。
  */
-import { existsSync } from 'node:fs'
+import { accessSync, constants as fsConstants, existsSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join, delimiter } from 'node:path'
-import { findGit } from './gitHistory'
+import { delimiter, dirname, join, resolve } from 'node:path'
 
 /** 用户态包管理器/版本管理器最常见的安装位置(存在才补)。 */
 export function userBinDirs(): string[] {
@@ -67,20 +66,39 @@ export function composeEnginePath(base: string, pythonDirs: string[], nodeDirs: 
   return [...pythonDirs, appendUserBinDirs(base), ...nodeDirs].filter(Boolean).join(delimiter)
 }
 
+/** Apple 的 /usr/bin/git shim 背后真正的 git:装了 CLT 或 Xcode 才有,shim 才不弹「安装开发者工具」。
+ *  ponytail: 只认默认安装位置;xcode-select 指到别处(Xcode-beta.app)时判成没有 → 多挂一份内置 git,照样能用。 */
+const DARWIN_DEVTOOLS_GIT = ['/Library/Developer/CommandLineTools/usr/bin/git', '/Applications/Xcode.app/Contents/Developer/usr/bin/git']
+
+function isExecutableFile(file: string): boolean {
+  try {
+    if (!statSync(file).isFile()) return false
+    accessSync(file, fsConstants.X_OK)
+    return true
+  } catch { return false }
+}
+
+/** darwin:按 PATH 查 `git` **实际会命中**的那份能不能用。命中 /usr/bin/git(shim)时看 CLT / Xcode 在不在;
+ *  光问「机器上有没有真 git」不够 —— Homebrew 的 git 排在 /usr/bin 后面,run_bash 里照样先撞上 shim。 */
+export function darwinPathGitWorks(pathValue: string, devToolsGit: string[] = DARWIN_DEVTOOLS_GIT): boolean {
+  const hit = pathValue.split(delimiter).filter(Boolean).map((dir) => join(dir, 'git')).find(isExecutableFile)
+  if (!hit) return false
+  return resolve(dirname(hit)) !== '/usr/bin' || devToolsGit.some(isExecutableFile)
+}
+
 /**
  * 内置 git 挂到 PATH 上 —— 只当兜底,绝不抢用户自己的 git(他的凭据助手、配置、更新的版本都挂在那份上):
  *   - 非 darwin:追加在末尾,用户装的 Git for Windows 排在前面自然先命中。
- *   - darwin:**只在找不到任何真 git 时前置**。`/usr/bin/git` 是 Apple 的 shim,恒在 PATH 上且排在前面 ——
- *     内置那份追加在后面等于没装,没 Command Line Tools 的机器一跑 git 就弹「安装开发者工具」。
- *     「真 git」按 findGit 的口径(PATH 里除 /usr/bin 外的 + homebrew/CLT/Xcode 固定位置)。
+ *   - darwin:只在 PATH 查到的 git 不能用时**前置**(见 darwinPathGitWorks)。/usr/bin/git 恒在 PATH 上且靠前,
+ *     内置那份追加在后面等于没装,没 CLT 的机器一跑 git 就弹「安装开发者工具」。
  */
 export function withBundledGit(
   pathValue: string,
   gitDirs: string[],
   platform: NodeJS.Platform = process.platform,
-  hasSystemGit: (pathValue: string) => boolean = (p) => findGit({ PATH: p }, platform) !== null,
+  pathGitWorks: (pathValue: string) => boolean = darwinPathGitWorks,
 ): string {
   if (!gitDirs.length) return pathValue
   if (platform !== 'darwin') return [pathValue, ...gitDirs].filter(Boolean).join(delimiter)
-  return hasSystemGit(pathValue) ? pathValue : [...gitDirs, pathValue].filter(Boolean).join(delimiter)
+  return pathGitWorks(pathValue) ? pathValue : [...gitDirs, pathValue].filter(Boolean).join(delimiter)
 }
