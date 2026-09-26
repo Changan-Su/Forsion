@@ -457,7 +457,7 @@ function AgentProfile({ agent, compact = false, sessionId, evolutionJumpAt = 0, 
   </>
   const agentConfiguration = <>
     <ProfileGroup title={t('agentProfile.instructions')} hint={t('agentProfile.instructionsHint')}>
-      <ProfileTextEditor label={t('agentProfile.prompt')} value={draft.systemPrompt} onChange={(systemPrompt) => patch({ systemPrompt })} />
+      <ProfileTextEditor label={t('agentProfile.prompt')} value={draft.systemPrompt || ''} onChange={(systemPrompt) => patch({ systemPrompt })} />
       <ProfileTextEditor label={t('agentProfile.soul')} value={draft.soul || ''} onChange={(soul) => patch({ soul })} />
     </ProfileGroup>
     <details className="profile-disclosure"><summary>{t('agentProfile.permissions')}</summary><div className="agent-config-fields">
