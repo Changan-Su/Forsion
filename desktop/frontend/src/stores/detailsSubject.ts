@@ -22,10 +22,11 @@ const expire = (): void => {
   const sub = useDetailsSubject.getState().subject
   if (sub && sub.from !== mainSessionIdNow()) useDetailsSubject.setState({ subject: null })
 }
-useApp.subscribe(expire)
-useWorkspace.subscribe(expire)
+// 第一次「查看详情」时才订阅(subject 只能经 showDetails 设下):模块导入不带副作用,mock 了 store 的测试照常能 import
+let watching = false
 
 export function showDetails(subject: DetailsSubject): void {
+  if (!watching) { watching = true; useApp.subscribe(expire); useWorkspace.subscribe(expire) }
   useDetailsSubject.setState({ subject: { ...subject, from: mainSessionIdNow() } })
   revealRight(5)
 }
