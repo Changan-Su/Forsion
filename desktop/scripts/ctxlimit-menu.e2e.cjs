@@ -112,6 +112,13 @@ async function main() {
     const pop1 = await ringPop()
     check('T7 被封顶的 1M 模型:环弹层写明「模型最大 1M,默认只用到 272k」,分母 272k', /模型最大 1M，默认只用到 272k/.test(pop1) && /\/ 272k tokens/.test(pop1), JSON.stringify(pop1.slice(0, 200)))
     await win.screenshot({ path: path.join(OUT, 'ctxlimit-3-ring.png') })
+    // T7b(09-27 弹层对标 Claude):点头部展开分项 —— 弹层里的点击不能被 Composer2 的外点关闭误关
+    await win.locator('.t2c-ctxring.is-open .t2c-cu-head').first().click()
+    await win.waitForTimeout(300)
+    const popDetail = await win.locator('.t2c-ctxring.is-open .t2c-ctxring-pop').first().innerText().catch(() => '')
+    check('T7b 点头部展开分项:弹层仍开着、列出「工具与本轮 / 剩余可用」', /工具与本轮/.test(popDetail) && /剩余可用/.test(popDetail) && (await win.locator('.t2c-ctxring.is-open .t2c-cu-legend').count()) === 1, JSON.stringify(popDetail.slice(0, 200)))
+    await win.screenshot({ path: path.join(OUT, 'ctxlimit-3b-ring-detail.png') })
+    await win.locator('.t2c-cu-head').first().click() // 收回详情,别影响后面 T8/T9 读的文字
     await win.locator('.t2c-ctxring-btn').first().click() // 收起
     await win.waitForTimeout(300)
     await win.locator('.model-pill-btn:visible').first().click()
