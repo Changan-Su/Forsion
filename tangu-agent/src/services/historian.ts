@@ -13,6 +13,8 @@ import { historianConfig } from './historianConfig.js';
 import { enterRunContext } from '../seams/runContext.js';
 import { cloudGetAgent } from '../agents/cloudAgentStore.js';
 import { resolveMemorySlug } from '../agents/agentRegistry.js';
+import { redactSecrets } from '../core/redact.js';
+import { REMEMBER_FACT_MAX_CHARS } from '../tools/builtin/memoryLog.js';
 
 // ── 注入依赖的 lazy 别名(保持下方调用点不变)──
 const resolveModelAndKey = (modelId: string) => deps().brain.llm.resolveModelAndKey(modelId);
@@ -26,6 +28,11 @@ const appendLogEntry = (userId: string, text: string) => deps().brain.memory.app
 
 const BATCH = 20;
 const MAX_TRANSCRIPT_CHARS = 6000;
+// 只复盘近 24h 有活动的会话:开关打开那一刻,historian_last_summary_at 为空的历史会话全都满足谓词,
+// 不设回看窗就会把几个月前的会话重新起标题、把旧对话当「今天」写进 LOG。
+const LOOKBACK_MINUTES = 24 * 60;
+const MEMORY_MAX_PER_PASS = 3;
+const MEMORY_CONTEXT_CHARS = 3000; // 注入现有记忆的**尾部**(最新条目),防重复;头部是最老的条目
 const HISTORIAN_CHARGE_USER = false; // 背景任务默认不扣用户配额；置 true 则按 cost 扣
 
 const HISTORIAN_PROMPT =
@@ -52,7 +59,8 @@ export function stopHistorian(): void {
   if (timer) { clearInterval(timer); timer = null; }
 }
 
-async function tick(): Promise<void> {
+/** 单趟扫描(startHistorian 的定时体;导出供台架直接驱动)。 */
+export async function tick(): Promise<void> {
   const cfg = historianConfig();
   if (!cfg.enabled || !cfg.modelId) return; // admin 未开启 / 未配模型 → 空跑
   if (running) return; // 防 tick 重叠
@@ -64,6 +72,7 @@ async function tick(): Promise<void> {
         WHERE s.app_id = 'ai-studio'
           AND s.archived = FALSE
           AND ${getOlderThanSql('s.updated_at', cfg.idleMinutes)}
+          AND NOT (${getOlderThanSql('s.updated_at', LOOKBACK_MINUTES)})
           AND (s.historian_last_summary_at IS NULL OR s.historian_last_summary_at < s.updated_at)
         ORDER BY s.updated_at ASC
         LIMIT ?`,
@@ -78,6 +87,7 @@ async function tick(): Promise<void> {
           AND s.archived = FALSE
           AND (s.kind IS NULL OR s.kind = 'user')
           AND ${getOlderThanSql('s.updated_at', cfg.idleMinutes)}
+          AND NOT (${getOlderThanSql('s.updated_at', LOOKBACK_MINUTES)})
           AND (s.historian_last_summary_at IS NULL OR s.historian_last_summary_at < s.updated_at)
         ORDER BY s.updated_at ASC
         LIMIT ?`,
@@ -175,26 +185,38 @@ async function summarizeSession(sessionId: string, userId: string, modelId: stri
   await markPass(sessionId); // 无论是否写日志都标记本趟
 }
 
-// ── tangu 云端会话(web/安卓 Tangu Space)的空闲复盘:标题 + 日志两件套 ─────────────
+// ── tangu 云端会话(web/安卓 Tangu Space)的空闲复盘:标题 + 日志 + 长期记忆 ─────────────
 // 桌面 localHistorian(按轮触发)的云端等价物:worker 无共享库跑不了按轮版,网关定时扫描补位。
-// memory 整文覆盖刻意不做(空闲版上下文不足以安全改写长期记忆,交桌面按轮版)。
+// 记忆只追加、不改写:候选过与桌面同款的 No-op 门,经 seam 的 appendMemoryEntry(去重 + 软上限)落库;
+// 云端没有桌面的 raw 层 + Dream 整固,所以每趟限 3 条、并把现有记忆尾部喂给判官防重复。
 
 const TANGU_HISTORIAN_PROMPT =
   'You are a "historian" maintaining a chat session between a user and an AI assistant. ' +
-  'Based on the recent conversation below, output STRICT JSON (no markdown fence): {"title": string, "log": string}\n' +
+  'Based on the recent conversation below, output STRICT JSON (no markdown fence): {"title": string, "log": string, "memory": string[]}\n' +
   '- "title": a concise session title in the user\'s language (at most 20 characters, no quotes or decoration). ' +
   'Output an empty string if the current title already fits the conversation.\n' +
   '- "log": if the conversation contains facts, conclusions, completed tasks, or clear long-term preferences worth recording, ' +
   "write ONE concise log entry in the user's language (at most 60 characters, no pleasantries); otherwise an empty string.\n" +
+  '- "memory": NEW long-term memory entries about the user (usually an empty array). ' +
+  'Include an entry ONLY if a future conversation would plausibly go better because of it: stable facts or preferences the user stated or enforced, ' +
+  'high-leverage procedural knowledge proven to work, landmines to avoid. ' +
+  'Never include: one-off requests, temporary or task-status facts, summaries of what happened (that is the log), restated common knowledge, ' +
+  'or anything already covered by [Existing memory]. ' +
+  "One short self-contained sentence per entry, in the user's language; replace any token/key/password with [REDACTED]. " +
+  `At most ${MEMORY_MAX_PER_PASS} entries. When in doubt, leave it out — an empty array is the normal outcome.\n` +
   'Output nothing other than the JSON object.';
 
 /** 容错解析模型 JSON 输出(剥 ``` 围栏;失败 → null)。 */
-function parseTitleLog(raw: string): { title: string; log: string } | null {
+function parseJudgement(raw: string): { title: string; log: string; memory: string[] } | null {
   let s = String(raw || '').trim();
   if (s.startsWith('```')) s = s.replace(/^```[a-z]*\s*/i, '').replace(/```\s*$/, '').trim();
   try {
     const j = JSON.parse(s);
-    return { title: String(j?.title ?? '').trim(), log: String(j?.log ?? '').trim() };
+    const memory = (Array.isArray(j?.memory) ? j.memory : [])
+      .map((c: unknown) => redactSecrets(String(c ?? '').replace(/\s*[\r\n]+\s*/g, '; ').trim()))
+      .filter((c: string) => c.length >= 4 && c.length <= REMEMBER_FACT_MAX_CHARS && c.toUpperCase() !== 'NOTHING')
+      .slice(0, MEMORY_MAX_PER_PASS);
+    return { title: String(j?.title ?? '').trim(), log: String(j?.log ?? '').trim(), memory };
   } catch {
     return null;
   }
@@ -210,8 +232,8 @@ async function summarizeTanguSession(
   const transcript = await buildTranscript(sessionId);
   if (!transcript) { await markPass(sessionId); return; }
 
-  // 会话绑定 agent → LOG 落该 agent 的记忆域(经云端 agent 定义折叠 shareDefaultMemory);
-  // 解析失败/未绑定 → 全局日志。seams 的 memory 实现读 runContext 的 currentAgentSlug。
+  // 会话绑定 agent → LOG/记忆落该 agent 的记忆域(cloudGetAgent 含内置预设兜底,resolveMemorySlug 折叠 shareDefaultMemory);
+  // 解析失败/未绑定 → 默认记忆域。seams 的 memory 实现读 runContext 的 currentAgentSlug。
   let memSlug: string | undefined;
   try {
     const raw = row.agent_config;
@@ -221,19 +243,25 @@ async function summarizeTanguSession(
       if (def) memSlug = resolveMemorySlug(def);
     }
   } catch { /* ignore */ }
+  // 每个会话都重设:enterWith 改的是 tick 整条异步链,上一个会话的 slug 会漏给下一个未绑定 agent 的会话。
+  enterRunContext(userId, undefined, memSlug);
+
+  let existingMemory = '';
+  try { existingMemory = String((await deps().brain.memory.getMemory(userId)).content || '').slice(-MEMORY_CONTEXT_CHARS); } catch { /* 读不到就不给 */ }
 
   const { model, apiKey, baseUrl, apiModelId } = resolved;
   const sys = `${TANGU_HISTORIAN_PROMPT}\nCurrent session title: ${JSON.stringify(String(row.title || ''))}`;
   const messages = [
     { role: 'system', content: sys },
-    { role: 'user', content: transcript },
+    { role: 'user', content: `[Existing memory]\n${existingMemory || '(empty)'}\n\n[Conversation]\n${transcript}` },
   ] as ChatMessage[];
   const payload = await buildProviderPayload({
     model, apiModelId, messages,
     projectSource: '',
     temperature: 0.3,
-    maxTokens: 300,
+    maxTokens: 800,
     stream: true,
+    thinkingLevel: 'low', // 缺省档在 DeepSeek 类端点 = high,推理吃光 maxTokens 就只剩空正文
   });
   const res = await streamProviderCompletion({ apiKey, baseUrl, payload });
 
@@ -247,17 +275,24 @@ async function summarizeTanguSession(
     if (HISTORIAN_CHARGE_USER) await consumeTokenPoints(userId, cost).catch(() => {});
   } catch { /* 记账失败不阻断复盘 */ }
 
-  const j = parseTitleLog(String(res.content || ''));
+  const j = parseJudgement(String(res.content || ''));
+  if (!j) console.warn(`[historian] tangu session ${sessionId} 判断输出不是 JSON: "${String(res.content || '').slice(0, 80)}"`);
   if (j) {
     const title = j.title.replace(/^["'《「]+|["'》」]+$/g, '').slice(0, 60);
     if (title && title.length >= 2) {
-      await query(`UPDATE chat_sessions SET title = ? WHERE id = ?`, [title, sessionId])
+      // CAS:扫描到写回之间用户手改过标题就不覆盖。
+      await query(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') = ?`, [title, sessionId, String(row.title || '')])
         .catch((e: any) => console.warn('[historian] tangu 标题更新失败:', e?.message || e));
     }
     const logText = j.log;
     if (logText && logText.length >= 2 && logText.length <= 200) {
-      if (memSlug) enterRunContext(userId, undefined, memSlug);
       await appendLogEntry(userId, logText).catch((e: any) => console.warn('[historian] tangu appendLog failed:', e?.message || e));
+    }
+    for (const fact of j.memory) {
+      const r = await deps().brain.memory.appendMemoryEntry(userId, fact, { dedup: true })
+        .catch((e: any) => { console.warn('[historian] tangu appendMemory failed:', e?.message || e); return null; });
+      if (r?.appended) console.log(`[historian] tangu session ${sessionId.slice(0, 8)} 记入长期记忆(${memSlug || 'default'}): ${fact.slice(0, 60)}`);
+      if (r?.reason === 'full') break;
     }
   }
   await markPass(sessionId);
