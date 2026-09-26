@@ -4,6 +4,8 @@ const fs = require('node:fs')
 const path = require('node:path')
 const asar = require('@electron/asar')
 const { execFileSync } = require('node:child_process')
+const crypto = require('node:crypto')
+const os = require('node:os')
 
 const desktop = path.resolve(__dirname, '..')
 const expectedVersion = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8')).version
@@ -66,6 +68,27 @@ for (const dir of resources) {
   // afterPack --deep signing from replacing the helper's original identity.
   try { execFileSync(process.execPath, [path.join(cu, 'scripts', 'verify-macos-bundles.mjs')], { stdio: 'pipe' }) }
   catch (error) { errors.push(`Invalid sealed CU app bundle: ${error.stderr?.toString() || error.message}`) }
+  // The bundled helper must be signed by CU's release certificate (releaseCertSha1 in its macos-bundle.mjs).
+  // An ad-hoc or differently signed helper changes the designated requirement, and every Mac user
+  // would lose the Accessibility and Screen Recording grants. Never bundle a local `build:native` output.
+  if (process.platform === 'darwin') {
+    const pin = /releaseCertSha1 = '([0-9a-f]{40})'/.exec(fs.readFileSync(path.join(cu, 'scripts', 'macos-bundle.mjs'), 'utf8'))?.[1]
+    check(!!pin, 'CU release certificate pin missing from the bundled package')
+    for (const arch of pin ? ['arm64', 'x64'] : []) {
+      const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cu-signer-'))
+      try {
+        execFileSync('/usr/bin/ditto', ['-x', '-k', path.join(cu, 'prebuilt', 'macos', arch, 'tangu-computer-use.app.zip'), temp])
+        execFileSync('/usr/bin/codesign', ['-d', `--extract-certificates=${path.join(temp, 'signer')}`, path.join(temp, 'tangu-computer-use.app')], { stdio: 'pipe' })
+        const leaf = path.join(temp, 'signer0')
+        const signer = fs.existsSync(leaf) ? crypto.createHash('sha1').update(fs.readFileSync(leaf)).digest('hex') : 'ad-hoc'
+        check(signer === pin, `Bundled CU macOS ${arch} helper is signed by ${signer}, not the CU release certificate ${pin}`)
+      } catch (error) {
+        errors.push(`Cannot inspect bundled CU macOS ${arch} helper: ${error.message}`)
+      } finally {
+        fs.rmSync(temp, { recursive: true, force: true })
+      }
+    }
+  }
   for (const platform of ['windows', 'linux']) {
     check(!fs.existsSync(path.join(cu, 'native', platform, 'bridge-rs', 'target')), `Rust build cache leaked into packaged CU (${platform})`)
   }
