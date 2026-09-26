@@ -235,7 +235,7 @@ describe('i18n 覆盖', () => {
   it('H. 日期 / 时间显示只走 format/time.ts 单源(U-29:不许再跟系统区域走)', () => {
     // 硬断言覆盖两类可静态判定的写法:toLocaleDateString / toLocaleTimeString,以及 new Intl.DateTimeFormat /
     // new Intl.RelativeTimeFormat。裸 `.toLocaleString()` 数字也在用(千分位),静态分不清,所以只拦
-    // `new Date(…).toLocaleString(` 这一种明确是日期的形状;其余靠 code review。
+    // `new Date(…).toLocaleString(` 这一种明确是日期的形状;其余(变量接收者)由下面 H2 逐项登记兜住。
     // `Intl.DateTimeFormat().resolvedOptions()` 取本机时区不是格式化,不在拦截范围(不带 new)。
     const BAD = /\btoLocale(?:Date|Time)String\(|new Intl\.(?:DateTimeFormat|RelativeTimeFormat)\(|new Date\([^()]*\)\.toLocaleString\(/
     const TIME_SRC = join(SRC, 'format', 'time.ts')
@@ -247,5 +247,68 @@ describe('i18n 覆盖', () => {
       })
     }
     expect(hits, `这些地方绕过了 format/time.ts(不传 locale = 跟系统区域走,中文界面会冒出 17/09/2026):\n  ${hits.join('\n  ')}`).toEqual([])
+  })
+
+  it('H2. 任何 `x.toLocaleString(` 都要逐项登记(Codex 第三轮 R2-e2-2)', () => {
+    // H 只拦得住 `new Date(…).toLocaleString(`;先赋给变量再 `at.toLocaleString()` 就漏过去,照样随系统区域显示日期。
+    // 静态分不清接收者是日期还是数字,所以反过来:**全部**调用都按「文件 + 接收者表达式」登记,只放行确认是数字
+    // (千分位)的那几处,并写明理由。新增的一律变红 —— 是日期就改走 format/time.ts,是数字就来这里登记。
+    const NUMBER_OK: Record<string, string> = {
+      'stores/appStore.ts  Math.round(runCost)': '单次运行费用(数字千分位)',
+      'stores/appStore.ts  costLimit': '费用上限(数字)',
+      'stores/appStore.ts  (Number(pl.savedChars) || 0)': '压缩省下的字数(数字)',
+      'components/FeedbackModal.tsx  text.trim().length': '反馈字数(数字)',
+      'components/FeedbackModal.tsx  FEEDBACK_TEXT_LIMIT': '字数上限常量(数字)',
+      'components/ModelPickerSettings.tsx  model.maxContextWindow!': '上下文窗口上限(token 数)',
+      'components/ModelPickerSettings.tsx  (model.contextWindow ?? 0)': '上下文窗口(token 数)',
+      'views/AgentProfileView.tsx  s.usage.ctx': '上下文 token 数',
+      'views/chat2/Composer2.tsx  (sessionTokens ?? 0)': '会话 token 数',
+      'views/chat2/Composer2.tsx  (ctxTokens ?? 0)': '上下文 token 数',
+      'views/chat2/Composer2.tsx  (contextWindow ?? 0)': '上下文窗口(token 数)',
+      'views/chat2/Composer2.tsx  Math.round(runCost)': '单次运行费用(数字)',
+      'views/chat2/Composer2.tsx  costLimit': '费用上限(数字)',
+      'views/chat2/Composer2.tsx  outgoing.length': '输入字数(数字)',
+      'views/chat2/Composer2.tsx  MAX_INPUT_CHARS': '输入字数上限常量(数字)',
+      'amadeus/blocks/database/DatabaseEmbed.tsx  number': '数字列的纯文本值(前面已判 number !== null)',
+      'amadeus/blocks/database/DatabaseEmbed.tsx  v': '数字列的纯文本值(前面已判 typeof v === \'number\')',
+    }
+    const TIME_SRC = join(SRC, 'format', 'time.ts')
+    /** 从 `.toLocaleString(` 往回取接收者表达式:标识符 / 成员访问 / `!` / 成对括号(`Math.round(x)`、`(a ?? 0)`)。 */
+    const receiverBefore = (line: string, dot: number): string => {
+      let i = dot - 1
+      while (i >= 0) {
+        const c = line[i]
+        if (c === ')') {
+          let depth = 0
+          for (; i >= 0; i--) {
+            if (line[i] === ')') depth++
+            else if (line[i] === '(' && --depth === 0) break
+          }
+          i--
+          continue
+        }
+        if (/[\w$.!]/.test(c)) { i--; continue }
+        break
+      }
+      return line.slice(i + 1, dot)
+    }
+    const found: string[] = []
+    const bad: string[] = []
+    for (const file of [...ALL_SRC, ...ENGINE_SRC]) {
+      if (file === TIME_SRC) continue
+      readFileSync(file, 'utf8').split('\n').forEach((line, i) => {
+        if (/^\s*(\/\/|\*)/.test(line)) return
+        for (const m of line.matchAll(/\.toLocaleString\(/g)) {
+          const key = `${relative(SRC, file)}  ${receiverBefore(line, m.index!)}`
+          found.push(key)
+          if (!NUMBER_OK[key]) bad.push(`${relative(SRC, file)}:${i + 1}  ${key.split('  ')[1]}  ← ${line.trim().slice(0, 100)}`)
+        }
+      })
+    }
+    // 防假绿:扫描确实命中了已登记的调用;登记表里的每一项都还在用(删了就把登记也删掉,别留死条目)。
+    expect(found.length).toBeGreaterThan(0)
+    const stale = Object.keys(NUMBER_OK).filter((k) => !found.includes(k))
+    expect(stale, `登记了但源码里已经没有的项(删掉登记):\n  ${stale.join('\n  ')}`).toEqual([])
+    expect(bad, `未登记的 .toLocaleString( —— 是日期就改走 format/time.ts;确认是数字就进 NUMBER_OK 并写明理由:\n  ${bad.join('\n  ')}`).toEqual([])
   })
 })
