@@ -9,6 +9,7 @@ import { create } from 'zustand'
 import type { ExtendViewPresenter } from './extendView'
 import { nativeExtendTargets } from './nativeExtendView'
 import { withoutTransientPanels } from './transientLayout'
+import { layoutMetrics, sameLayoutMetrics, type LayoutMetrics } from './layoutMetrics'
 import { alignWorkspaceRegions, captureRegionTree, restoreRegionProportions, type RegionTree } from './regionLayout'
 import type { DockviewApi, IDockviewPanel } from 'dockview-react'
 import type { DockSide, Leaf, SidebarDefaults, ViewLocation } from './types'
@@ -333,14 +334,22 @@ function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 
 }
 
 /** resetLayout 的撤销快照(一次性)。profile = 拍快照时的 Space 画像键(sideProfileKey),api = 当时的 Dockview 实例;
- *  shape = 重置刚完成时的布局结构指纹(layoutShape),dismiss = 收回那条「撤销」提示。 */
+ *  shape = 重置刚完成时的布局结构指纹(layoutShape),metrics = 尺寸 / 排列指纹(layoutMetrics,不含侧栏宽度),
+ *  settleUntil = 重置自身的布局沉降窗口(这段里的回调只刷新 metrics 基线,不判作废),dismiss = 收回那条「撤销」提示。 */
 let layoutUndo: {
   env: LayoutEnvelopeV4; api: DockviewApi; profile: string | null; stashActive: WorkspaceState['stashActive']
-  shape: string; dismiss?: () => void
+  shape: string; metrics: LayoutMetrics; settleUntil: number; dismiss?: () => void
 } | null = null
+/** 重置后多久内的布局回调算「重置自己在沉降」(默认布局建完后 Dockview 异步派发的那批 + 双 raf 钉侧栏宽)。 */
+const RESET_SETTLE_MS = 600
+/** 撤销快照是否仍对应当前布局:结构一致,且(沉降窗口过后)尺寸 / 排列在容差内一致。 */
+function undoStillMatches(u: NonNullable<typeof layoutUndo>, api: DockviewApi): boolean {
+  if (u.api !== api || layoutShape(api) !== u.shape) return false
+  return Date.now() < u.settleUntil || sameLayoutMetrics(layoutMetrics(api), u.metrics)
+}
 
-/** 布局结构指纹:每个组里有哪些面板(id,按组内顺序)。不含尺寸 —— 拖宽侧栏不算「改了布局」;新开 / 关掉标签、
- *  分屏、挪组都会变。重置后用它判断用户是否已在默认布局上动过手(Codex 第一轮 C-1)。 */
+/** 布局结构指纹:每个组里有哪些面板(id,按组内顺序)。不含尺寸(尺寸 / 排列另由 layoutMetrics 管,且不含侧栏宽度);
+ *  新开 / 关掉标签、分屏、挪组都会变。重置后用它判断用户是否已在默认布局上动过手(Codex 第一轮 C-1)。 */
 function layoutShape(api: DockviewApi): string {
   try { return api.groups.map((g) => g.panels.map((p) => p.id).join(',')).join('|') } catch { return '' }
 }
@@ -784,7 +793,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (snap) {
       // 指纹在默认布局同步建完这一刻取:Dockview 的 onDidLayoutChange 是批量异步派发,重置本身引起的那批
       // 回调稍后才到 —— 它们的结构与这里一致,不会误伤撤销;之后真变了才作废。
-      const undo: NonNullable<typeof layoutUndo> = { ...snap, shape: layoutShape(api) }
+      const undo: NonNullable<typeof layoutUndo> = { ...snap, shape: layoutShape(api), metrics: layoutMetrics(api), settleUntil: Date.now() + RESET_SETTLE_MS }
       layoutUndo = undo
       const dismiss = ribbonActions.notify?.(engineTr('lcl.layout.restored'), { label: engineTr('lcl.layout.undo'), run: () => { get().undoResetLayout() } })
       if (typeof dismiss === 'function' && layoutUndo === undo) undo.dismiss = dismiss
@@ -795,7 +804,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const u = layoutUndo
     if (!u) return
     const api = get().api
-    if (!api || u.api !== api || layoutShape(api) !== u.shape) dropLayoutUndo()
+    if (!api || !undoStillMatches(u, api)) { dropLayoutUndo(); return }
+    // 沉降窗口里(重置自己引起的回调):尺寸以沉降后的为准,刷新基线;之后用户再拖分隔线才算改了布局(Codex 第三轮 H1-3)。
+    if (Date.now() < u.settleUntil) u.metrics = layoutMetrics(api)
   },
 
   undoResetLayout() {
@@ -803,8 +814,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     layoutUndo = null
     const api = get().api
     // 快照只对拍它的那份 api、那个 Space 有效:切过 Space 再点通知里的「撤销」= 静默作废,不把别的 Space 的布局灌进来。
-    // 重置后布局结构已被用户改过(布局回调还没来得及作废它时)同样作废。
-    if (!u || !api || u.api !== api || u.profile !== get().sideProfileKey || layoutShape(api) !== u.shape) return false
+    // 重置后布局结构 / 分屏尺寸已被用户改过(布局回调还没来得及作废它时)同样作废;只拖侧栏宽不算(Codex 第三轮 H1-3)。
+    if (!u || !api || u.profile !== get().sideProfileKey || !undoStillMatches(u, api)) return false
     const ok = get().applyLayout(u.env)
     if (ok) {
       set({ stashActive: u.stashActive }) // 信封不带它:不还原的话,展开收起的侧栏会落到第一个视图而不是原来选中的那个
