@@ -71,12 +71,18 @@ describe('read_document × 随包 LibreOffice 转换引擎', () => {
     expect(existsSync(path.dirname(call.outputPath))).toBe(false);
   });
 
-  it('kit 失败 → 原文件交回原链路(liteparse 按内容嗅探出纯文本照读),临时目录同样删掉', async () => {
+  it('kit 失败 → 原文件交回原链路,kit 的错不外露,临时目录同样删掉', async () => {
     const { cwd, ctx, readCall } = await fixture('throw');
     await fs.writeFile(path.join(cwd, 'broken.xlsx'), 'not really an xlsx');
     const out = await HOST_TOOLS.read_document.execute({ path: 'broken.xlsx' }, ctx);
-    expect(out).toContain('not really an xlsx');
+    // 原链路的结局看机器:装了 LibreOffice 的 liteparse 把它当文本读出来,没装(CI)就报解析失败 —— 两种都算回落成功。
+    expect(out).toMatch(/not really an xlsx|^Error: document parsing failed/);
+    expect(out).not.toContain('engine unavailable');
     expect(existsSync(path.dirname((await readCall()).outputPath))).toBe(false);
+    // 失败那次的回落结果不进备忘:同一文件再读,还会再给引擎一次机会
+    await fs.rm(path.join(path.dirname(cwd), 'calls.json'));
+    await HOST_TOOLS.read_document.execute({ path: 'broken.xlsx' }, ctx);
+    expect(existsSync(path.join(path.dirname(cwd), 'calls.json'))).toBe(true);
   });
 
   it('非 Office 格式不碰 kit', async () => {

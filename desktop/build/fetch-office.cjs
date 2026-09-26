@@ -30,7 +30,12 @@ const VC_DLLS = ['msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll', 'vcruntime1
 function vcRedistDir(archName) {
   if (process.env.TANGU_VC_REDIST_DIR) return process.env.TANGU_VC_REDIST_DIR;
   const vswhere = path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Microsoft Visual Studio', 'Installer', 'vswhere.exe');
-  const vs = execFileSync(vswhere, ['-latest', '-products', '*', '-property', 'installationPath'], { encoding: 'utf8' }).trim();
+  // -requires:只挑装了对应 C++ 工具集(带 Redist)的实例,别被更新但没装 C++ 的实例抢走(微软 Find-VC 示例的写法);
+  // -utf8:输出进管道时默认按控制台代码页编码,安装路径含中文会被解坏。
+  const tools = archName === 'arm64' ? 'Microsoft.VisualStudio.Component.VC.Tools.ARM64' : 'Microsoft.VisualStudio.Component.VC.Tools.x86.x64';
+  const vs = execFileSync(vswhere, ['-latest', '-products', '*', '-requires', tools, '-property', 'installationPath', '-utf8'],
+    { encoding: 'utf8' }).trim();
+  if (!vs) throw new Error(`[fetch-office] vswhere 没找到装了 ${tools} 的 Visual Studio;可设 TANGU_VC_REDIST_DIR`);
   const root = path.join(vs, 'VC', 'Redist', 'MSVC');
   const num = (v) => v.split('.').map(Number);
   const ver = readdirSync(root).filter((d) => /^\d+\.\d+\.\d+$/.test(d))
