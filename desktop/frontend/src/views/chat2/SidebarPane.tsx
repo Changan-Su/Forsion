@@ -6,10 +6,13 @@
  * 样式全在 sidebar2.css(t2s- 前缀,token 驱动);右键菜单复用 base.css 的 .ctx-menu。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Pin, PinOff } from 'lucide-react'
+import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Pin, PinOff, Info } from 'lucide-react'
 import { folderPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
 import { moveTo } from '@lcl/engine'
+import { ProjectIcon } from '../../components/ProjectIcon'
+import { RemoveDialog } from '../../components/RemoveDialog'
+import { isProjectWorkspace } from '../../stores/projectSettings'
 import { sessionWorkspaceKey, type ChannelKind, type SessionRecord, type TanguDesktopConfig, type WorkspaceDescriptor } from '../../types'
 import { AnimatedCollapse } from '../../components/AnimatedUI'
 import { registerMessages, useI18n } from '../../i18n'
@@ -37,6 +40,11 @@ registerMessages({
   'sidebar.mode.tip': { zh: 'Chat：轻聊天，只列聊天会话；Work：完整工具面，列出全部项目', en: 'Chat: light conversations, chat sessions only. Work: full toolset, all projects' },
   'sidebar.pin': { zh: 'Pin 到顶部', en: 'Pin to top' },
   'sidebar.unpin': { zh: '取消 Pin', en: 'Unpin' },
+  'sidebar.ws.details': { zh: '查看详情', en: 'View details' },
+  'sidebar.ws.removeTitle': { zh: '移除工作区「{name}」？', en: 'Remove workspace "{name}"?' },
+  'sidebar.ws.removeMsg': { zh: '会从侧栏移除它，并删除其中的 {count} 个会话，不可撤销。磁盘上的项目文件夹不会删除。', en: 'It is removed from the sidebar and its {count} session(s) are deleted. This cannot be undone. The project folder on disk is not deleted.' },
+  'sidebar.ws.removeFiles': { zh: '同时删除相关文件：项目里的 .tangu 文件夹（Tangu 的指令、技能、计划），移到废纸篓', en: "Also delete related files: the project's .tangu folder (Tangu instructions, skills and plans), moved to the Trash" },
+  'sidebar.ws.removeAction': { zh: '移除', en: 'Remove' },
 })
 
 const COLLAPSE_KEY = 'forsion_tangu_collapsed_projects'
@@ -71,7 +79,9 @@ export interface SidebarPaneProps {
   onNewInWorkspace: (ws: WorkspaceDescriptor) => void
   onAddWorkspace: () => void
   onRenameWorkspace: (ws: WorkspaceDescriptor, name: string) => void
-  onRemoveWorkspace: (ws: WorkspaceDescriptor) => void
+  onRemoveWorkspace: (ws: WorkspaceDescriptor, opts?: { deleteFiles?: boolean }) => void
+  /** 组头菜单「查看详情」:右栏临时显示这个项目(不切会话)。只对本地 Project 出现。 */
+  onShowWorkspaceDetails?: (ws: WorkspaceDescriptor) => void
   onRename: (id: string, title: string) => void
   onArchive: (id: string, archived: boolean) => void
   onDelete: (id: string) => void
@@ -163,6 +173,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   const renameRef = useRef<HTMLInputElement>(null)
   const didMountActiveWorkspace = useRef(false)
   const [wsMenu, setWsMenu] = useState<{ ws: WorkspaceDescriptor; x: number; y: number } | null>(null)
+  const [wsRemoving, setWsRemoving] = useState<WorkspaceDescriptor | null>(null)
   const [wsRenaming, setWsRenaming] = useState<string | null>(null)
   const [wsDraft, setWsDraft] = useState('')
   const wsRenameRef = useRef<HTMLInputElement>(null)
@@ -286,12 +297,13 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   }
 
   /** 工作区组头的前导槽:图标 ↔ hover 换箭头(与笔记树文件夹行同一套)。三个变体(重命名中/微信/普通)共用。
-   *  本地工作区用 Folder/FolderOpen 表达展开态 —— 箭头默认不显,总得有东西担起「展开了没」。 */
+   *  本地工作区用 Folder/FolderOpen 表达展开态 —— 箭头默认不显,总得有东西担起「展开了没」。
+   *  Project 设了图标(PROJECT 详情里换的 emoji / 图片)就换成它:展开态只剩 hover 箭头表达,与笔记树带 emoji 的文件夹同理。 */
   const wsLead = (ws: WorkspaceDescriptor, collapsed: boolean) => {
     const Ic = ws.kind === 'channel' ? CHANNEL_ICONS[ws.channel || 'wechat'] : ws.kind === 'cloud' ? Cloud : ws.kind === 'rootless' ? MessagesSquare : collapsed ? Folder : FolderOpen
     return (
       <span className="t2s-lead">
-        <Ic className="t2s-lead-icon" />
+        {isProjectWorkspace(ws) ? <ProjectIcon path={ws.path} className="amx-page-emoji t2s-project-icon" fallback={<Ic className="t2s-lead-icon" />} /> : <Ic className="t2s-lead-icon" />}
         <span className={`t2s-chev t2s-lead-chev${collapsed ? '' : ' open'}`} onClick={(e) => { e.stopPropagation(); toggleGroup(ws.key) }}>
           <ChevronRight size={12} />
         </span>
@@ -472,7 +484,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                       </button>
                     )}
                     {/* 行尾顺序:… 在左、+ 在右(同笔记树)。 */}
-                    {(!ws.system || p.onTogglePinned) && (
+                    {(!ws.system || p.onTogglePinned || (p.onShowWorkspaceDetails && isProjectWorkspace(ws))) && (
                       <button type="button" className="t2s-group-add" title={t('sidebar.ws.menu')} onClick={(e) => openWsMenu(e, ws)}><MoreHorizontal size={14} /></button>
                     )}
                     <button type="button" className="t2s-group-add" title={t('sidebar.newChatIn', { name: workspaceGroupLabel(ws, t) })} onClick={() => p.onNewInWorkspace(ws)}><Plus size={14} /></button>
@@ -577,22 +589,33 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
               </button>
             )
           })()}
+          {/* 详情按 sessionId 取项目上下文:没有一条会话能借的项目(如空的默认工作区)不给这一项,免得点了没反应 */}
+          {p.onShowWorkspaceDetails && isProjectWorkspace(wsMenu.ws) && [...allSessions, ...allArchived].some((s) => s.project_path === wsMenu.ws.path && !s.projectless) && (
+            <button data-act="ws-details" onClick={() => { const ws = wsMenu.ws; setWsMenu(null); p.onShowWorkspaceDetails?.(ws) }}>
+              <Info size={13} /> {t('sidebar.ws.details')}
+            </button>
+          )}
           {!wsMenu.ws.system && (
             <>
               <button onClick={() => { setWsDraft(wsMenu.ws.name); setWsRenaming(wsMenu.ws.key); setWsMenu(null) }}>
                 <Pencil size={13} /> {t('sidebar.ws.rename')}
               </button>
-              <button className="danger" onClick={() => {
-                const ws = wsMenu.ws
-                const count = [...allSessions, ...allArchived].filter((s) => s.project_path === ws.key).length
-                setWsMenu(null)
-                if (window.confirm(t('sidebar.ws.removeConfirm', { name: ws.name, count }))) p.onRemoveWorkspace(ws)
-              }}>
+              <button className="danger" data-act="ws-remove" onClick={() => { setWsRemoving(wsMenu.ws); setWsMenu(null) }}>
                 <Trash2 size={13} /> {t('sidebar.ws.remove')}
               </button>
             </>
           )}
         </OverlayAt>
+      )}
+      {wsRemoving && (
+        <RemoveDialog
+          title={t('sidebar.ws.removeTitle', { name: wsRemoving.name })}
+          message={t('sidebar.ws.removeMsg', { count: [...allSessions, ...allArchived].filter((s) => s.project_path === wsRemoving.key).length })}
+          confirmLabel={t('sidebar.ws.removeAction')}
+          filesLabel={wsRemoving.kind === 'local' && window.tangu?.trashHostPath ? t('sidebar.ws.removeFiles') : undefined}
+          onConfirm={(deleteFiles) => p.onRemoveWorkspace(wsRemoving, { deleteFiles })}
+          onClose={() => setWsRemoving(null)}
+        />
       )}
     </aside>
   )

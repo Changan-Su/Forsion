@@ -584,8 +584,9 @@ export const saveAgentDef = (cfg: TanguDesktopConfig, def: Omit<Partial<NormalAg
     { method: slug ? 'PATCH' : 'POST', body: JSON.stringify(def) },
   ).then((r) => r.agent)
 
-export const deleteAgentDef = (cfg: TanguDesktopConfig, slug: string) =>
-  request<{ ok: boolean }>(cfg, `/agent/agents/${encodeURIComponent(slug)}`, { method: 'DELETE' })
+/** keepFiles:只从名册移除,本机引擎把整个目录挪进 agents/.removed/ 并返回 keptAt(云端引擎忽略)。 */
+export const deleteAgentDef = (cfg: TanguDesktopConfig, slug: string, opts?: { keepFiles?: boolean }) =>
+  request<{ ok: boolean; keptAt?: string }>(cfg, `/agent/agents/${encodeURIComponent(slug)}${opts?.keepFiles ? '?keepFiles=1' : ''}`, { method: 'DELETE' })
 
 /** 改 slug(= 文件夹名)。拒绝时 err.code = 引擎 agentRename.ts 的原因(builtin / exists / cloud_synced / plugin_seeded / busy …)。 */
 export const renameAgentDef = (cfg: TanguDesktopConfig, slug: string, next: string) =>
@@ -1075,3 +1076,21 @@ export const putProjectSettings = (cfg: TanguDesktopConfig, sessionId: string, s
   request<{ settings: ProjectSettings | null }>(cfg, '/agent/project-context/settings', { method: 'PUT', body: JSON.stringify({ sessionId, settings }) }).then((r) => r.settings ?? null)
 export const createProjectSkill = (cfg: TanguDesktopConfig, sessionId: string, input: { slug: string; name: string; description: string; content: string }) =>
   request<{ skill: ProjectSkillInfo }>(cfg, '/agent/project-context/skills', { method: 'POST', body: JSON.stringify({ sessionId, ...input }) }).then((r) => r.skill)
+/** 图标只经这组端点改(PUT settings 保留 icon 现值)。导入图片:引擎按文件头认类型,写进项目的 `.tangu/icon.<ext>`;返回落盘后的默认项。 */
+export const uploadProjectIcon = (cfg: TanguDesktopConfig, sessionId: string, data: string) =>
+  request<{ settings: ProjectSettings | null }>(cfg, '/agent/project-context/icon', { method: 'POST', body: JSON.stringify({ sessionId, data }) }).then((r) => r.settings ?? null)
+/** 设 emoji 图标(原来指向的图片由引擎删掉)。 */
+export const setProjectIconEmoji = (cfg: TanguDesktopConfig, sessionId: string, emoji: string) =>
+  request<{ settings: ProjectSettings | null }>(cfg, '/agent/project-context/icon', { method: 'POST', body: JSON.stringify({ sessionId, emoji }) }).then((r) => r.settings ?? null)
+/** 移除图标(emoji 或图片都清)。 */
+export const deleteProjectIcon = (cfg: TanguDesktopConfig, sessionId: string) =>
+  request<{ settings: ProjectSettings | null }>(cfg, `/agent/project-context/icon?sessionId=${encodeURIComponent(sessionId)}`, { method: 'DELETE' }).then((r) => r.settings ?? null)
+/** 图标图片 → objectURL;没有图片 / 云端引擎 / 网络错 → null。 */
+export async function fetchProjectIcon(cfg: TanguDesktopConfig, ref: { sessionId: string } | { cwd: string }): Promise<string | null> {
+  try {
+    const q = 'sessionId' in ref ? `sessionId=${encodeURIComponent(ref.sessionId)}` : `cwd=${encodeURIComponent(ref.cwd)}`
+    const response = await authFetch(`${cfg.backendUrl}/agent/project-context/icon?${q}`, { headers: headers(cfg.token) })
+    if (!response.ok) return null
+    return URL.createObjectURL(await response.blob())
+  } catch { return null }
+}

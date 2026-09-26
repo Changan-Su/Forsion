@@ -650,7 +650,10 @@ export interface ProjectSettings {
   model?: string
   thinkingLevel?: ThinkingLevel
   approvalMode?: NonNullable<AgentConfig['approvalMode']>
+  /** 项目图标:emoji,或 `icon.<ext>` = 导入的图片(存在项目的 `.tangu/` 里,经引擎读出)。 */
+  icon?: string
 }
+export const isProjectIconFile = (icon?: string): boolean => /^icon\.(png|jpe?g|gif|webp)$/i.test(icon || '')
 export interface ProjectDocInfo {
   /** 「这个项目的指令文件」:cwd 层首个命中的候选名;一个都没有时 = 待创建的 `<cwd>/.tangu/AGENTS.md`。 */
   path: string

@@ -21,6 +21,7 @@ import { tanguHome, WORKSPACE_DIR_NAME } from '../core/tanguHome.js';
 import { PROJECT_DOC_FILENAMES, isPlainFileUnder, loadProjectDocSafe } from './projectDoc.js';
 import { listProjectSkills } from '../skills/localSkills.js';
 import { runGit } from './runtimeContext.js';
+import { AVATAR_EXT_MIME, AVATAR_MAX_BYTES } from '../agents/agentRegistry.js';
 
 export interface ProjectSettings {
   /** 新会话预填的 Agent;与 defaultTeam 二选一。 */
@@ -30,6 +31,8 @@ export interface ProjectSettings {
   model?: string;
   thinkingLevel?: string;
   approvalMode?: string;
+  /** 项目图标:emoji(任意短文本)或 `icon.<ext>` = 用户导入、存在 `<cwd>/.tangu/` 里的图片(同团队头像的单字段约定)。 */
+  icon?: string;
 }
 export interface ProjectDocInfo {
   /** 「这个项目的指令文件」:cwd 层首个命中的候选名;一个都没有时 = 待创建的 `<cwd>/.tangu/AGENTS.md`。 */
@@ -147,7 +150,7 @@ export async function assertSafeChain(base: string, rel: string, wantFile: boole
 }
 
 /** 新建文件:O_EXCL 独占(已存在 → EEXIST,绝不覆盖)+ O_NOFOLLOW(lstat 与 open 之间的窗口交给内核把关;Windows 无此常量退化)。 */
-async function writeNew(file: string, text: string): Promise<void> {
+async function writeNew(file: string, text: string | Buffer): Promise<void> {
   const fd = await fs.open(file, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | (fsConstants.O_NOFOLLOW ?? 0), 0o644);
   try { await fd.writeFile(text, 'utf8'); } finally { await fd.close(); }
 }
@@ -234,6 +237,8 @@ export function sanitizeProjectSettings(input: unknown): ProjectSettings | null 
   if (thinking && THINKING.has(thinking)) out.thinkingLevel = thinking;
   const approval = str(src.approvalMode, 16);
   if (approval && APPROVAL.has(approval)) out.approvalMode = approval;
+  const icon = str(src.icon, 32);
+  if (icon && !/[\u0000-\u001f]/.test(icon)) out.icon = icon;
   return Object.keys(out).length ? out : null;
 }
 
@@ -264,12 +269,18 @@ function serialized<T>(key: string, task: () => Promise<T>): Promise<T> {
   return result;
 }
 
-/** 写默认项(整份读改写 + 临时文件 rename 原子落盘,整个 RMW 串行);settings 为 null / 无有效键 = 删除该项目的记录。返回落盘后的值。 */
+/** 写默认项(整份读改写 + 临时文件 rename 原子落盘,整个 RMW 串行);settings 为 null / 无有效键 = 删除该项目的记录。返回落盘后的值。
+ *  icon 不经这里改,一律保留落盘现值(图标只走下面的图标函数):否则另一个窗口拿着旧草稿的整份 PUT 会把刚换 / 刚删的图标写回去(Codex 评审)。 */
 export function writeProjectSettings(cwd: string, settings: unknown): Promise<ProjectSettings | null> {
+  return updateProjectSettings(cwd, (cur) => ({ ...(settings && typeof settings === 'object' ? settings : {}), icon: cur?.icon }));
+}
+
+/** 按当前记录改一处(图标上传 / 移除只动 icon 一个键):读当前值与写回在同一个串行段里,不和并发的整份 PUT 交错。 */
+export function updateProjectSettings(cwd: string, next: (current: ProjectSettings | null) => unknown): Promise<ProjectSettings | null> {
   return serialized(projectSettingsFile(), async () => {
     const key = await fs.realpath(cwd).catch(() => path.resolve(cwd));
-    const clean = sanitizeProjectSettings(settings);
     const file = await readSettingsFile();
+    const clean = sanitizeProjectSettings(next(sanitizeProjectSettings(file.projects[key])));
     if (clean) file.projects[key] = clean;
     else delete file.projects[key];
     const target = projectSettingsFile();
@@ -340,6 +351,89 @@ export async function createProjectSkill(cwd: string, input: { slug?: unknown; n
   // 值一律 JSON 双引号串(合法 YAML 标量),parseFrontmatter 会剥掉引号;冒号 / 井号在裸值里会被别的解析器读歪。
   await writeNew(path.join(dir, 'SKILL.md'), `---\nname: ${JSON.stringify(name)}\ndescription: ${JSON.stringify(description)}\n---\n\n${body}\n`);
   return { id: `local:${slug}`, name, description, path: dir, legacy: false };
+}
+
+// ── 项目图标 ───────────────────────────────────────────────────────────────
+// 指针(settings.icon)住用户侧,图片住项目的 `.tangu/`(用户拍板:导入的图标文件放项目自己的目录里)。
+
+export const PROJECT_ICON_FILE = /^icon\.(png|jpe?g|gif|webp)$/i;
+
+/** 按文件头认图片类型,不信客户端报的 mime(标错的导入会存成一张打不开的图标)。 */
+function sniffImage(buf: Buffer): string | null {
+  if (buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return 'png';
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'jpg';
+  if (buf.subarray(0, 4).toString('latin1') === 'GIF8') return 'gif';
+  if (buf.subarray(0, 4).toString('latin1') === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WEBP') return 'webp';
+  return null;
+}
+
+/** 删 `.tangu/<name>`,只认 icon.<ext> 名。`.tangu` 是软链 → 拒;rm 碰到软链只删链本身。 */
+async function removeIconFile(cwd: string, name: string | undefined): Promise<void> {
+  if (!name || !PROJECT_ICON_FILE.test(name)) return;
+  await assertSafeChain(cwd, WORKSPACE_DIR_NAME, false);
+  await fs.rm(path.join(cwd, WORKSPACE_DIR_NAME, name), { force: true });
+}
+
+const iconQueue = (cwd: string): string => `icon:${path.resolve(cwd)}`;
+
+/** 导入图片:`<cwd>/.tangu/icon.<ext>`(按文件头认 png/jpeg/gif/webp,≤1MB),settings.icon 指过去,再删**上一张**。
+ *  只删自己指向过的那张:`.tangu/` 里别的 icon.*(比如队友提交进仓的)不碰;同名那张就是图标槽位,覆盖。返回落盘后的默认项。 */
+export function saveProjectIcon(cwd: string, base64: string): Promise<ProjectSettings | null> {
+  const raw = base64.trimStart().startsWith('data:') ? base64.slice(base64.indexOf(',') + 1) : base64;
+  const buf = Buffer.from(raw, 'base64');
+  if (!buf.length) return Promise.reject(new Error('empty image'));
+  if (buf.length > AVATAR_MAX_BYTES) return Promise.reject(new Error('image too large (max 1MB)'));
+  const ext = sniffImage(buf);
+  if (!ext) return Promise.reject(new Error('unsupported image type (png/jpeg/gif/webp only)'));
+  const filename = `icon.${ext}`;
+  // 同一项目的图标写串行:删同名 + O_EXCL 新建之间不能被另一笔插队(否则后者 EEXIST),「上一张」也要读到前一笔落盘后的值
+  return serialized(iconQueue(cwd), async () => {
+    const prev = (await readProjectSettings(cwd))?.icon;
+    await assertSafeChain(cwd, `${WORKSPACE_DIR_NAME}/${filename}`, true);
+    await fs.mkdir(path.join(cwd, WORKSPACE_DIR_NAME), { recursive: true });
+    await fs.rm(path.join(cwd, WORKSPACE_DIR_NAME, filename), { force: true });
+    await writeNew(path.join(cwd, WORKSPACE_DIR_NAME, filename), buf);
+    const saved = await updateProjectSettings(cwd, (cur) => ({ ...cur, icon: filename }));
+    if (prev !== filename) await removeIconFile(cwd, prev);
+    return saved;
+  });
+}
+
+/** 设 emoji 图标;原来指向的图片随之删掉(图片住在项目目录里,不留孤儿文件)。 */
+export function setProjectIconEmoji(cwd: string, emoji: unknown): Promise<ProjectSettings | null> {
+  const text = typeof emoji === 'string' ? emoji.trim() : '';
+  if (!text || text.length > 32 || /[\u0000-\u001f]/.test(text) || PROJECT_ICON_FILE.test(text)) return Promise.reject(new Error('invalid emoji icon'));
+  return serialized(iconQueue(cwd), async () => {
+    const prev = (await readProjectSettings(cwd))?.icon;
+    const saved = await updateProjectSettings(cwd, (cur) => ({ ...cur, icon: text }));
+    await removeIconFile(cwd, prev);
+    return saved;
+  });
+}
+
+/** 移除图标(emoji 或图片):清 settings.icon,指向过的图片一并删掉。 */
+export function deleteProjectIcon(cwd: string): Promise<ProjectSettings | null> {
+  return serialized(iconQueue(cwd), async () => {
+    const prev = (await readProjectSettings(cwd))?.icon;
+    const saved = await updateProjectSettings(cwd, (cur) => ({ ...cur, icon: undefined }));
+    await removeIconFile(cwd, prev);
+    return saved;
+  });
+}
+
+/** 读图标图片:只在用户自己的 settings.icon 指向 `icon.<ext>` 时才出这一个固定名文件;逐段拒软链 + O_NOFOLLOW + 大小封顶。 */
+export async function readProjectIcon(cwd: string): Promise<{ data: Buffer; mimeType: string } | null> {
+  const icon = (await readProjectSettings(cwd))?.icon;
+  if (!icon || !PROJECT_ICON_FILE.test(icon)) return null;
+  const rel = `${WORKSPACE_DIR_NAME}/${icon}`;
+  try { await assertSafeChain(cwd, rel, true); } catch { return null; }
+  const fd = await fs.open(path.join(cwd, rel), fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)).catch(() => null);
+  if (!fd) return null;
+  try {
+    const st = await fd.stat();
+    if (!st.isFile() || st.size > AVATAR_MAX_BYTES) return null;
+    return { data: await fd.readFile(), mimeType: AVATAR_EXT_MIME[icon.split('.').pop()!.toLowerCase()] || 'application/octet-stream' };
+  } finally { await fd.close(); }
 }
 
 // ── git ────────────────────────────────────────────────────────────────────

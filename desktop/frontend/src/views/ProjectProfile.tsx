@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import { ArrowLeft, Check, ChevronRight, Copy, ExternalLink, FileText, Folder, FolderGit2, FolderOpen, GitBranch, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Sparkles, Star, TerminalSquare, Users, X } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type CSSProperties, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
+import { ArrowLeft, Check, ChevronRight, Copy, ExternalLink, FileText, Folder, FolderGit2, FolderOpen, GitBranch, ImageUp, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Users, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
-import { createProjectSkill, getProjectContext, initProjectContext, putProjectDoc, putProjectSettings } from '../services/backendService'
+import { createProjectSkill, deleteProjectIcon, getProjectContext, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon } from '../services/backendService'
 import type { AgentConfig, NormalAgentDef, ProjectContext, ProjectSettings, SessionRecord, TeamDef } from '../types'
 import { isTeamImageAvatar, sessionWorkspaceKey, THINKING_LEVELS } from '../types'
 import { ProfileModelField, ProfileTextEditor } from './profileControls'
@@ -17,6 +18,8 @@ import './projectProfileMessages'
 import './teamProfile.css'
 import './projectProfile.css'
 import { AgentAvatar } from '../components/AgentAvatar'
+import { ProjectIcon } from '../components/ProjectIcon'
+import { IconPicker } from '@amadeus/chrome/pageChrome'
 import { thinkingLabel } from '../components/thinkingLabel'
 
 type Tab = 'agents' | 'settings' | 'git'
@@ -28,6 +31,8 @@ type Props = {
   workspace: ProjectWorkspace
   renderAgent: (agent: NormalAgentDef, sessionId?: string | null) => ReactNode
   renderTeam: (session: SessionRecord, config: AgentConfig) => ReactNode
+  /** 「当前会话」标记跟谁:缺省 = session。侧栏「查看详情」打开时 session 只是借来的载体(引擎端点按 sessionId 绑定),传真正的当前会话。 */
+  currentSessionId?: string | null
 }
 
 /** 当前会话所属的 Project(侧栏分组口径:非系统的本地目录);不是 → null。选择器只吐一个字符串签名,`workspaces()` 每次都造新对象,
@@ -44,10 +49,25 @@ export function useProjectWorkspace(session?: SessionRecord | null): ProjectWork
   return useMemo(() => (signature ? { ...(JSON.parse(signature) as Omit<ProjectWorkspace, 'kind'>), kind: 'local' as const } : null), [signature])
 }
 
+/** 侧栏「查看详情」指定的项目(不看当前会话):按路径找工作区,借它最近的一条会话当载体。没有会话可借 → null。 */
+export function useProjectSubject(path: string | null): { workspace: ProjectWorkspace; carrierId: string } | null {
+  const signature = useApp((a) => {
+    if (!path || path === a.homeDir) return ''
+    const ws = a.workspaces().find((w) => w.path === path)
+    const carrier = [...a.sessions, ...a.archivedSessions].find((x) => x.project_path === path && !x.projectless)
+    return isProjectWorkspace(ws) && carrier ? JSON.stringify({ ws: { key: ws.key, name: ws.name, path: ws.path, system: ws.system, isDefault: ws.isDefault, sessionKeys: ws.sessionKeys }, carrierId: carrier.id }) : ''
+  })
+  return useMemo(() => {
+    if (!signature) return null
+    const v = JSON.parse(signature) as { ws: Omit<ProjectWorkspace, 'kind'>; carrierId: string }
+    return { workspace: { ...v.ws, kind: 'local' as const }, carrierId: v.carrierId }
+  }, [signature])
+}
+
 /** PROJECT 详情:骨架与 TEAM 详情同一套(头部即基本信息 / 滑块导航 / 一个滚动体 / 底部保存栏),内容换成项目的三面:
  *  Agents(谁在这里工作过)/ 配置(指令文件 · 项目技能 · 计划 · 本机默认项)/ Git(现场)。数据全部来自引擎的 project-context,
  *  它读到什么就显示什么 —— 这个面板存在的意义就是回答「Tangu 到底看没看见这个项目的约定」。 */
-export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam }: Props) {
+export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam, currentSessionId }: Props) {
   const { t, locale } = useI18n()
   const s = useApp(useShallow((a) => ({
     cfg: a.cfg, agents: a.agentDefs, avatars: a.agentAvatars, teams: a.teams, teamAvatars: a.teamAvatars, engines: a.engines, models: a.modelsResp?.models,
@@ -71,15 +91,17 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [settingsDraft, setSettingsDraft] = useState<ProjectSettings>({})
   const [settingsDirty, setSettingsDirty] = useState(false)
   const [skillForm, setSkillForm] = useState<{ slug: string; name: string; description: string; content: string } | null>(null)
+  const [iconPick, setIconPick] = useState<{ x: number; y: number } | null>(null)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const now = Date.now()
 
+  const current = currentSessionId === undefined ? session.id : currentSessionId
   const executors = useMemo(() => projectExecutors({
     sessions: [...s.sessions, ...s.archived], projectPath: dir, aliases: workspace.sessionKeys, configBySession: s.configBySession,
-    runningBySession: s.runningBySession, defaultSlug: s.defaultSlug, currentSessionId: session.id,
-  }), [s.sessions, s.archived, s.configBySession, s.runningBySession, s.defaultSlug, dir, workspace.sessionKeys, session.id])
+    runningBySession: s.runningBySession, defaultSlug: s.defaultSlug, currentSessionId: current,
+  }), [s.sessions, s.archived, s.configBySession, s.runningBySession, s.defaultSlug, dir, workspace.sessionKeys, current])
   const running = executors.some((e) => e.running)
   const sessionRunning = !!s.runningBySession[session.id]
 
@@ -144,6 +166,42 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
       setNotice(t('projectProfile.saved'))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
   }
+  // 图标即时落盘(与名称同一习惯,不走保存栏),只经 icon 端点改 —— PUT settings 在引擎侧保留 icon 现值,保存栏里的草稿碰不到它;
+  // 这里只把 icon 并进草稿,别的未保存改动留着。
+  const icon = ctx?.settings?.icon
+  const applyIcon = (saved: ProjectSettings | null) => {
+    setCtx((c) => (c ? { ...c, settings: saved } : c))
+    setSettingsDraft((d) => ({ ...d, icon: saved?.icon }))
+    useApp.getState().rememberProjectSettings(dir, saved)
+    void useApp.getState().loadProjectIcon(dir, true) // 换图 → 拉新图;换 emoji / 移除 → 404,旧 objectURL 随之回收
+  }
+  const pickIconImage = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file || busy) return
+    if (file.size > 1_048_576) { setError(t('projectProfile.iconTooLarge')); return }
+    setBusy('icon'); clear()
+    try {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(String(reader.result))
+        reader.onerror = () => reject(reader.error || new Error('read failed'))
+        reader.readAsDataURL(file)
+      })
+      applyIcon(await uploadProjectIcon(s.cfg, session.id, dataUrl))
+      setNotice(t('projectProfile.iconSaved'))
+    } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
+  }
+  /** emoji → 设为图标;null(选择器里的「移除图标」)→ 回默认。原来是导入的图片由引擎一并删掉(图片住在项目目录里,不留孤儿文件)。 */
+  const pickIconEmoji = async (emoji: string | null) => {
+    setIconPick(null)
+    if (busy || (emoji ?? undefined) === icon) return
+    setBusy('icon'); clear()
+    try {
+      applyIcon(await (emoji ? setProjectIconEmoji(s.cfg, session.id, emoji) : deleteProjectIcon(s.cfg, session.id)))
+      setNotice(t(emoji ? 'projectProfile.iconSaved' : 'projectProfile.iconRemoved'))
+    } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
+  }
   const init = async () => {
     if (busy) return
     setBusy('init'); clear()
@@ -156,6 +214,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const generate = () => {
     if (!ctx || sessionRunning) return
     clear()
+    // 从侧栏「查看详情」进来时载体不是当前会话:先切过去,生成过程用户看得见(切会话会让右栏回到跟随,仍是这个项目)
+    if (current !== session.id) useApp.getState().setActiveId(session.id)
     void useApp.getState().send(t('projectProfile.generatePrompt', { file: relDoc }), [], undefined, undefined, undefined, session.id)
     setNotice(t('projectProfile.generateSent'))
   }
@@ -215,11 +275,14 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     : <>{ctx.doc.truncated ? <span className="project-chip warn">{t('projectProfile.docTruncated')}</span> : <span className="project-chip ok"><Check size={11} />{t('projectProfile.docActive')}</span>}
       {ctx.doc.sources.length > 1 && <span className="project-chip" title={ctx.doc.sources.filter((p) => p !== ctx.doc.path).join('\n')}>{t('projectProfile.docOthers', { count: ctx.doc.sources.length - 1 })}</span>}</>
 
+  // 「当前会话」那一行点开 = 真正的当前会话:跟随模式下就是 session(用传进来的实时 config);侧栏「查看详情」时 session 只是借来的载体
+  const currentOf = (ex: ProjectExecutor): SessionRecord | undefined => (!ex.current ? undefined : current === session.id ? session : ex.sessions.find((x) => x.id === current))
   const detailFor = (ex: ProjectExecutor): ReactNode => {
-    if (ex.kind === 'agent') { const agent = agentOf(ex.id); return agent ? renderAgent(agent, ex.current ? session.id : ex.sessions[0]?.id) : null }
+    const cur = currentOf(ex)
+    if (ex.kind === 'agent') { const agent = agentOf(ex.id); return agent ? renderAgent(agent, cur ? cur.id : ex.sessions[0]?.id) : null }
     if (ex.kind === 'team' || ex.kind === 'party') {
-      const target = ex.current ? session : ex.sessions[0]
-      return target ? renderTeam(target, (ex.current ? config : s.configBySession[target.id]) || target.agent_config || {}) : null
+      const target = cur || ex.sessions[0]
+      return target ? renderTeam(target, (target === session ? config : s.configBySession[target.id]) || target.agent_config || {}) : null
     }
     return null
   }
@@ -227,7 +290,17 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   return <section className="team-profile project-profile" data-project-profile={dir}>
     <div className="team-profile-main" hidden={!!selected}>
       <header className="team-profile-hero">
-        <span className="team-profile-emblem" aria-hidden="true">{git?.repo ? <FolderGit2 size={26} strokeWidth={1.5} /> : <Folder size={26} strokeWidth={1.5} />}</span>
+        {/* 图标与 TEAM 头部同一套:点图标导入图片(存进项目的 .tangu/),角上笑脸开 emoji 选择器(内含「移除图标」)。 */}
+        <div className="agent-portrait-slot">
+          <label className="team-profile-emblem agent-portrait-edit" title={t('projectProfile.iconImageHint', { dir: ctx?.workspaceDirName || '.tangu' })} aria-busy={busy === 'icon' || undefined}>
+            <ProjectIcon path={dir} fallback={git?.repo ? <FolderGit2 size={26} strokeWidth={1.5} /> : <Folder size={26} strokeWidth={1.5} />} />
+            <span className="agent-portrait-badge" aria-hidden="true">{busy === 'icon' ? <Loader2 size={10} className="spin" /> : <ImageUp size={10} />}</span>
+            <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" aria-label={t('projectProfile.iconChange')} disabled={!!busy || !ctx} onChange={(e) => void pickIconImage(e)} />
+          </label>
+          <button type="button" className="agent-portrait-remove" data-project-icon-emoji title={t('projectProfile.iconEmoji')} aria-label={t('projectProfile.iconEmoji')} disabled={!!busy || !ctx} onClick={(e) => setIconPick({ x: e.clientX, y: e.clientY })}><Smile size={10} /></button>
+        </div>
+        {/* 选择器自身是 position:fixed 却不 portal;右栏祖先带 backdrop-filter 会把 fixed 的参照系换掉 → 挂到 body。 */}
+        {iconPick && createPortal(<IconPicker x={iconPick.x} y={iconPick.y} current={icon ?? null} onPick={(em) => void pickIconEmoji(em)} onClose={() => setIconPick(null)} />, document.body)}
         <div className="team-profile-identity"><h3>{t('projectProfile.kind')}</h3>
           <input className="agent-character-name team-profile-name" aria-label={t('projectProfile.name')} title={workspace.name} value={nameDraft} maxLength={100} disabled={!!busy} readOnly={!!workspace.system}
             onChange={(e) => setNameDraft(e.target.value)} onBlur={() => void commitName()} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') { setNameDraft(workspace.name); e.currentTarget.blur() } }} />
@@ -260,9 +333,9 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
             const canOpen = ex.kind !== 'engine' && (ex.kind !== 'agent' || !!agentOf(ex.id))
             const team = ex.kind === 'team' ? teamOf(ex.id) : undefined
             return <article className="team-member project-executor" key={ex.key} data-project-executor={ex.key}>
-              <button className="team-member-open" disabled={!canOpen} onClick={() => open(ex.key)} aria-label={`${t('projectProfile.inspect')} ${executorLabel(ex)}`}>
+              <button className="team-member-open" disabled={!canOpen} onClick={() => open(ex.key)} aria-label={[`${t('projectProfile.inspect')} ${executorLabel(ex)}`, ex.current && t('projectProfile.current'), isDefault(ex) && t('projectProfile.isDefault')].filter(Boolean).join(' · ')}>
                 <span className="team-member-portrait">{executorPortrait(ex)}</span>
-                <strong><span>{executorLabel(ex)}</span>{ex.current && <em className="project-executor-tag">{t('projectProfile.current')}</em>}{isDefault(ex) && <em className="project-executor-tag" title={t('projectProfile.isDefault')}><Star size={10} /></em>}</strong>
+                <strong><span>{executorLabel(ex)}</span>{(ex.current || isDefault(ex)) && <span className="project-executor-tags">{ex.current && <em className="project-executor-tag is-text" title={t('projectProfile.current')}>{t('projectProfile.current')}</em>}{isDefault(ex) && <em className="project-executor-tag" title={t('projectProfile.isDefault')}><Star size={10} /></em>}</span>}</strong>
                 <span className={`team-member-status ${ex.running ? 'working' : 'idle'}`}>{t(ex.running ? 'projectProfile.status.working' : ex.kind === 'party' ? 'projectProfile.party' : ex.kind === 'engine' ? 'projectProfile.engine' : 'projectProfile.status.idle')} · {t('projectProfile.sessions', { count: ex.sessions.length })}{ex.lastActive ? ` · ${t('projectProfile.lastActive', { time: formatRelative(ex.lastActive, { now, locale }) })}` : ''}</span>
                 {canOpen && <ChevronRight size={14} className="team-member-chevron" />}
               </button>

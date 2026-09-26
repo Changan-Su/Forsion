@@ -814,13 +814,18 @@ export async function saveAgent(input: SaveAgentInput): Promise<NormalAgentDef> 
   return def;
 }
 
-export async function deleteAgent(slug: string): Promise<boolean> {
+function agentDeletable(slug: string): boolean {
   if (!isValidSlug(slug)) return false;
   if (slug === DEFAULT_AGENT_SLUG) return false; // 不允许删默认 agent(含其记忆/日志)
   if (slug === MUSE_AGENT_SLUG) {
     // Muse 启用期间禁删(supervisor 会自愈重建,删了也白删且丢记忆);关闭 Muse 后允许删。
     try { if (loadSpecialAgentsConfig().muse.enabled) return false; } catch { /* 配置读失败不阻删 */ }
   }
+  return true;
+}
+
+export async function deleteAgent(slug: string): Promise<boolean> {
+  if (!agentDeletable(slug)) return false;
   try {
     await fs.rm(path.join(agentsDir(), slug), { recursive: true, force: true });
     await fs.rm(path.join(agentsDir(), `${slug}.md`), { force: true }).catch(() => { /* 清理可能的遗留扁平 */ });
@@ -828,6 +833,27 @@ export async function deleteAgent(slug: string): Promise<boolean> {
     return true;
   } catch {
     return false;
+  }
+}
+
+/** 移除 Agent 但保留它的文件:整个目录(定义、记忆、Library)挪进 `agents/.removed/<slug>-<时间戳>/` —— 名册只认合法 slug,
+ *  点开头的目录不会再被加载。返回挪到的位置:桌面勾了「同时删除相关文件」时再把它移进系统废纸篓
+ *  (先挪后删:默认 Agent / 启用中的 Muse 被拒时,文件不会先没了)。 */
+export async function removeAgentKeepFiles(slug: string): Promise<{ ok: boolean; keptAt?: string }> {
+  if (!agentDeletable(slug)) return { ok: false };
+  const dest = path.join(agentsDir(), '.removed', `${slug}-${new Date().toISOString().replace(/[:.]/g, '-')}`);
+  const moved = async (from: string, to: string): Promise<boolean> => fs.rename(from, to).then(() => true, (e: NodeJS.ErrnoException) => { if (e?.code === 'ENOENT') return false; throw e; });
+  try {
+    await fs.mkdir(path.dirname(dest), { recursive: true });
+    const dir = await moved(path.join(agentsDir(), slug), dest);
+    // 遗留的扁平 <slug>.md 也一起挪走:留在原地下次启动 migrateFlatAgentsOnce 会把这个 Agent 迁回来;只剩它时也不能删
+    if (!dir) await fs.mkdir(dest, { recursive: true });
+    const flat = await moved(path.join(agentsDir(), `${slug}.md`), path.join(dest, `${slug}.md`));
+    cache = null;
+    if (!dir && !flat) { await fs.rmdir(dest).catch(() => { /* ignore */ }); return { ok: true }; } // 本来就不在了
+    return { ok: true, keptAt: dest };
+  } catch {
+    return { ok: false };
   }
 }
 

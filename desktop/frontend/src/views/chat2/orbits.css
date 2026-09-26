@@ -242,6 +242,8 @@
   border-radius: var(--radius-sm, 6px);
   background: var(--overlay-light, rgba(127, 127, 127, 0.08));
 }
+/* Project 导入的图片图标铺满 30px 方块(与私聊头像同档),emoji 照旧 1em 居中。 */
+.t2o .t2s-group .t2s-folder-row .t2s-lead img.t2s-project-icon { width: 100%; height: 100%; border-radius: inherit; }
 /* hover 换出的箭头是 JSX 硬写的 `size={12}`(表现属性,CSS 压得过):30px 槽里 12px 太细,
  * 用作用域 CSS 抬到 16px,**不新增 JSX size 传参**(§10 纪律)。 */
 .t2o .t2s-group .t2s-folder-row .t2s-lead-chev > svg {

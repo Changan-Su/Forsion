@@ -6,6 +6,10 @@
  *   GET  /agent/project-context/settings?sessionId=|cwd= → { settings }(桌面建会话前的轻量预取;cwd 形态给没有会话可借的项目)
  *   PUT  /agent/project-context/settings        { sessionId, settings }                    → 用户侧项目默认项
  *   POST /agent/project-context/skills          { sessionId, slug, name, description, content } → 建项目技能
+ *   POST   /agent/project-context/icon          { sessionId, data } | { sessionId, emoji } → 导入图片进 .tangu/ 或设 emoji,返回 { settings }
+ *          (图标只经这组端点改;PUT settings 保留 icon 现值)
+ *   GET    /agent/project-context/icon?sessionId=|cwd=                                    → 图标图片二进制(settings.icon 是 emoji / 空 → 404)
+ *   DELETE /agent/project-context/icon?sessionId=                                         → 移除图标(emoji 或图片),返回 { settings }
  *
  * 只对本地引擎开放(hostExec):云端 microserver 没有用户磁盘。**cwd 不从客户端收**:请求按 sessionId 绑定,只认本人会话行上的
  * project_path(桌面项目分组键)—— 能写的只有用户已经在里面工作的目录,`hostExec` 说明的是引擎形态,不是路径授权(codex 评审)。
@@ -15,7 +19,8 @@ import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
 import {
-  canonicalProjectPath, createProjectSkill, initProjectWorkspace, projectContext, readProjectSettings, writeProjectDoc, writeProjectSettings,
+  canonicalProjectPath, createProjectSkill, deleteProjectIcon, initProjectWorkspace, projectContext, readProjectIcon, readProjectSettings,
+  saveProjectIcon, setProjectIconEmoji, writeProjectDoc, writeProjectSettings,
 } from '../services/projectContext.js';
 
 const router = Router();
@@ -37,6 +42,16 @@ async function projectDirOf(req: AuthRequest, res: Response, sessionId: unknown)
 }
 
 const fail = (res: Response, e: any, fallback: string): void => { res.status(400).json({ detail: e?.message || fallback }); };
+
+/** 只读端点的目录解析:`?sessionId=` 照常绑定;也接 `?cwd=` —— 项目会话全删光再添加回来时没有会话可借,
+ *  而这里读的只是用户家目录里自己的记录(图标图片也只在那份记录指向它时才出),不碰别的项目内容。 */
+async function readableDirOf(req: AuthRequest, res: Response): Promise<string | null> {
+  if (typeof req.query.cwd === 'string' && req.query.cwd && !req.query.sessionId) {
+    if (!deps().profile.capabilities.hostExec) { res.status(404).json({ detail: 'Project context is only available on a local engine' }); return null; }
+    try { return await canonicalProjectPath(req.query.cwd); } catch (e: any) { res.status(400).json({ detail: e?.message || 'invalid project path' }); return null; }
+  }
+  return projectDirOf(req, res, req.query.sessionId);
+}
 
 router.get('/agent/project-context', authMiddleware, async (req: AuthRequest, res) => {
   try {
@@ -72,19 +87,11 @@ router.put('/agent/project-context/doc', authMiddleware, async (req: AuthRequest
   }
 });
 
-/** 轻量读:桌面建会话前预取项目默认项用(全量 context 会跑 git,预取不值得)。
- *  也接 `?cwd=`(只此一个端点):项目里的会话全删光再添加回来时没有会话可借,而用户侧的默认项记录还在 —— 这条只读用户家目录里
- *  自己的记录,不碰项目目录(canonicalProjectPath 仍要求真实目录且非禁区)。 */
+/** 轻量读:桌面建会话前预取项目默认项用(全量 context 会跑 git,预取不值得)。 */
 router.get('/agent/project-context/settings', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    let cwd: string | null;
-    if (typeof req.query.cwd === 'string' && req.query.cwd && !req.query.sessionId) {
-      if (!deps().profile.capabilities.hostExec) return res.status(404).json({ detail: 'Project context is only available on a local engine' });
-      try { cwd = await canonicalProjectPath(req.query.cwd); } catch (e: any) { return res.status(400).json({ detail: e?.message || 'invalid project path' }); }
-    } else {
-      cwd = await projectDirOf(req, res, req.query.sessionId);
-      if (!cwd) return;
-    }
+    const cwd = await readableDirOf(req, res);
+    if (!cwd) return;
     res.json({ settings: await readProjectSettings(cwd) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'read project settings failed' });
@@ -108,6 +115,43 @@ router.post('/agent/project-context/skills', authMiddleware, async (req: AuthReq
     res.json({ skill: await createProjectSkill(cwd, req.body || {}) });
   } catch (e: any) {
     fail(res, e, 'create project skill failed');
+  }
+});
+
+router.post('/agent/project-context/icon', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const cwd = await projectDirOf(req, res, req.body?.sessionId);
+    if (!cwd) return;
+    const { data, emoji } = req.body || {};
+    if (typeof data === 'string') return res.json({ settings: await saveProjectIcon(cwd, data) });
+    if (typeof emoji === 'string') return res.json({ settings: await setProjectIconEmoji(cwd, emoji) });
+    res.status(400).json({ detail: 'data or emoji is required' });
+  } catch (e: any) {
+    fail(res, e, 'save project icon failed');
+  }
+});
+
+router.get('/agent/project-context/icon', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const cwd = await readableDirOf(req, res);
+    if (!cwd) return;
+    const icon = await readProjectIcon(cwd);
+    if (!icon) return res.status(404).json({ detail: 'no icon image' });
+    res.setHeader('Content-Type', icon.mimeType);
+    res.setHeader('Cache-Control', 'no-cache');
+    res.send(icon.data);
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'read project icon failed' });
+  }
+});
+
+router.delete('/agent/project-context/icon', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const cwd = await projectDirOf(req, res, req.query.sessionId);
+    if (!cwd) return;
+    res.json({ settings: await deleteProjectIcon(cwd) });
+  } catch (e: any) {
+    fail(res, e, 'remove project icon failed');
   }
 });
 
