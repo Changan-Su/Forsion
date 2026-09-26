@@ -557,9 +557,8 @@
   /* 两卡高度固定 50/50(用户定稿):概览卡撑满上半(内容内滚),Desk 卡固定下半;
    * 概览不在场时 Desk 卡靠 margin-top:auto 仍钉在下半。.gone=展开侧板期间卡片隐身
    * (元素常驻才有进出动画),此时概览拿回 hug 全高。 */
-  /* [data-idle] = 零条目的小坞(U-18):不占下半格,概览照 hug 全高 */
-  .t2-rail:has(.agent-desk-card:not(.gone):not([data-idle])) .t2-tsum.show { flex: 0 0 calc(50% - 5px); align-items: stretch; }
-  .t2-rail:has(.agent-desk-card:not(.gone):not([data-idle])) .t2-tsum.show .t2-tsum-in { height: 100%; }
+  .t2-rail:has(.agent-desk-card:not(.gone)) .t2-tsum.show { flex: 0 0 calc(50% - 5px); align-items: stretch; }
+  .t2-rail:has(.agent-desk-card:not(.gone)) .t2-tsum.show .t2-tsum-in { height: 100%; }
   .agent-desk-card { flex: 0 0 calc(50% - 5px); margin-top: auto; }
 }
 /* 正文被车道叠住的部分要让出来,输入框/「回到底部」同步让位,否则中线歪。
@@ -588,7 +587,7 @@
    * 补间停了 padding 还在动 44px —— 就是用户报的「面板停了字还在窜」。别把它挪出容器查询。
    * 曲线取苹果那条低回弹 spring 的贝塞尔近似;比卡片自身的 0.3s 慢一档(布局比卡片重)。 */
   .t2-stream, .composer-anchor, .t2-chat-col > .t2-empty, .t2-jump {
-    transition-property: padding-left, padding-right, right;
+    transition-property: padding-right, right;
     transition-duration: 0.45s;
     transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
   }
@@ -597,13 +596,12 @@
     transition-property: right, color, border-color;
     transition-duration: 0.45s, var(--duration-fast, 0.15s), var(--duration-fast, 0.15s);
   }
-  /* .gone(展开侧板期间)不算在场:否则侧板占位 + 车道让位双重挤压正文;
-   * [data-idle](零条目小坞,U-18)也不让整条车道 —— 它只要输入卡别压上来,见文件末尾 uiux-b1 块 */
-  .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone):not([data-idle])) .t2-stream { padding-right: var(--tsum-w); }
-  .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone):not([data-idle])) .composer-anchor { padding-right: var(--tsum-w); }
+  /* .gone(展开侧板期间)不算在场:否则侧板占位 + 车道让位双重挤压正文 */
+  .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone)) .t2-stream { padding-right: var(--tsum-w); }
+  .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone)) .composer-anchor { padding-right: var(--tsum-w); }
   /* 欢迎区与输入框共用可用宽度和让位动效,避免 Logo 仍以包含右侧车道的整列居中。 */
-  .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone):not([data-idle])) .t2-chat-col > .t2-empty { right: var(--tsum-w); }
-  .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone):not([data-idle])) .t2-jump { right: calc(var(--tsum-w) + 22px); }
+  .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone)) .t2-chat-col > .t2-empty { right: var(--tsum-w); }
+  .t2-chat-view:has(.t2-tsum.show, .agent-desk-card:not(.gone)) .t2-jump { right: calc(var(--tsum-w) + 22px); }
 }
 /* 退场那一刻卡片还没 display:none(等动画跑完),但已经不该吃点击 */
 @container (max-width: 759.9px) {
@@ -991,31 +989,7 @@
   .t2-quota-action { padding-inline: 5px; }
 }
 
-/* uiux-b1: U-18 Agent Desk 零条目 → 72px 小坞 ================================
- * 卡片仍是同一个元素、伴随面仍是 surface="desk-card"(不重挂 WebGL),只是盒子缩成右下角 72px 方块,
- * 底缘仍与输入框底线同线(车道 padding-bottom 不动,margin-top:auto 照旧钉底)。
- * 正文 / 欢迎区 / 回到底部不再为它让出 --tsum-w(上面的让位选择器带 :not([data-idle]))。
- * 输入区只在窄容器里会压到小坞:两侧**对称**各留 dock + gut(= 88px)—— 对称才不歪中线。量的是 .t2c-inner
- * 整盒而不是里面的卡:它的 28px 内边距也吃点击(pointer-events:auto),压在坞上就点不着坞。
- * 容器 ≥1056px 时 880px 的 .t2c-inner 本来就够不着这 88px,等于没让。
- * 放文件末尾:[data-idle] 规则要压过前面同层的 .agent-desk-card / -head / -body(DESIGN §7.2)。 */
-.t2-chat-view { --desk-dock: 72px; }
-@container (min-width: 760px) {
-  .agent-desk-card[data-idle] { flex: 0 0 var(--desk-dock); width: var(--desk-dock); align-self: flex-end; margin-top: auto; }
-  .agent-desk-card[data-idle] .agent-desk-card-head { display: none; }
-  .agent-desk-card[data-idle] .agent-desk-card-body { border-top-color: transparent; }
-  .agent-desk-card[data-idle] .agent-desk-card-empty > span { display: none; }
-  .t2-chat-view:has(.agent-desk-card[data-idle]:not(.gone)):not(:has(.t2-tsum.show)) .composer-anchor {
-    padding-inline: calc(var(--desk-dock) + var(--tsum-gut));
-  }
-}
-
 /* uiux-b1: U-11 用户气泡开头的引用芯片(与输入框「已选择」条同一个 RefChipView) */
 .t2-user-refs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; white-space: normal; }
 .t2-user-refs:last-child { margin-bottom: 0; }
 .t2-user-refs .attach-chip { max-width: 240px; }
-
-/* uiux-g: U-18 小坞兼任放大按钮(role=button)时的焦点环画在盒**外**:小坞恒有伴随面(always 才可放大),
- * 它的 canvas 铺满正文且自成合成层,画在盒内的圈(offset<0)会被整个盖住、实拍看不见;车道四周有 16px /
- * --tsum-gut 留白、无 overflow 裁切,外扩 2px 不会被裁。放文件末尾,压过全局 :where([role=button])。 */
-.agent-desk-card[data-idle][role='button']:focus-visible { outline: var(--focus-ring) solid var(--accent-ink); outline-offset: 2px; }

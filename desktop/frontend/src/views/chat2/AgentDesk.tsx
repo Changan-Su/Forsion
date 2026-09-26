@@ -292,15 +292,10 @@ export function deskCardPlan(o: { mode: string | undefined; itemCount: number; c
   }
 }
 
-/** 小坞判据(U-18):卡片在场且 Desk 零条目。与会话是否在跑无关 —— 若按运行态切,空 Desk 的会话每发
- *  一条消息输入框就会先让位、跑完再归位,来回抽一次。 */
-export const deskCardIdle = (plan: { gone: boolean }, itemCount: number): boolean => !plan.gone && itemCount === 0
-
 /** 卡片态(默认态):Pin Summary 下方的常驻预览小卡,上下各占右侧车道一半(严格 50/50)。
  *  正文 pointer-events:none —— 卡片是"预览",点整卡=放大成侧板;交互(编辑/按钮)只在 open 态。
- *  卡片不可关闭(用户裁决);09-25 改判(UIUX 评审 U-18):Desk **零条目**时只用 CSS 缩成 72px 小坞
- *  (data-idle),底线不变、正文与输入框不再为它让出整条车道。元素与伴随面都不换 —— DeskCompanionHost
- *  的挂载键含 surface,改 surface = 重建 WebGL,所以小坞仍是 surface="desk-card",只是盒子变小。
+ *  卡片不可关闭(用户裁决):空态也常驻当预览位,收/放只在卡片↔侧板之间切。
+ *  (09-25 UIUX 评审 U-18 曾把零条目卡缩成 72px 小坞、输入框不再让位;09-26 用户看过后改判撤回 —— 空态照旧整卡,勿再提。)
  *  新对话草稿用 DESK_DRAFT_KEY 当会话键;ChatView 不给本组件挂 key,首条消息发出(草稿 → 真 id)
  *  是同一个实例,伴随面只按自己的 key 挂载 → 不重挂。 */
 export function DeskCard({ sessionId }: { sessionId: string }) {
@@ -314,27 +309,9 @@ export function DeskCard({ sessionId }: { sessionId: string }) {
   const gone = plan.gone
   const expand = plan.expandable ? () => useApp.getState().patchDesk(sessionId, { mode: 'open' }) : undefined
   const companion = plan.showCompanion ? comp : null
-  const idle = deskCardIdle(plan, items.length)
-  // 小坞把头行(含放大钮)藏了:companion='always' 且零条目时,放大只能靠整卡 onClick → 键盘够不到。
-  // 此时让小坞本身当按钮(仅 expand 有定义时),Enter / Space 放大。
-  const dockButton = idle && !!expand
 
   return (
-    <div
-      data-desk-session={sessionId}
-      data-idle={idle || undefined}
-      className={`agent-desk-card${expand ? ' act' : ''}${gone ? ' gone' : ''}`}
-      onClick={expand}
-      role={dockButton ? 'button' : undefined}
-      tabIndex={dockButton ? 0 : undefined}
-      aria-label={dockButton ? `${t('desk.title')} · ${t('desk.expand')}` : undefined}
-      onKeyDown={dockButton ? (e) => {
-        if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return
-        e.preventDefault()
-        expand!()
-      } : undefined}
-      title={expand ? t('desk.expand') : idle ? `${t('desk.title')} · ${t('desk.empty')}` : undefined}
-    >
+    <div data-desk-session={sessionId} className={`agent-desk-card${expand ? ' act' : ''}${gone ? ' gone' : ''}`} onClick={expand} title={expand ? t('desk.expand') : undefined}>
       <div className="agent-desk-card-head">
         <Sparkles size={12} className="agent-desk-spark" />
         <span className="agent-desk-card-title">{companion ? t('desk.title') : items[0]?.name || t('desk.title')}</span>

@@ -18,11 +18,6 @@
  *  ⑥ 伴随面撑满:卡片正文挂 .companion 后 zoom 归 1(文件末尾的覆盖块压过 0.75 缩镜),
  *     伴随面挂载槽(DeskCompanionHost 的行内布局)铺满正文;另跑一次不带 .companion 的负对照。
  *
- * 2026-09-25 追加(UIUX 评审 U-18):
- *  ⑦ Desk 零条目 → [data-idle] 72px 小坞:仍钉右下、底缘仍与输入框底线同线;正文 / 欢迎区 / 输入卡 /
- *     选择条中线回到**整列**中线(不再让 --tsum-w);窄到 780 时输入区(.t2c-inner 整盒,含吃点击的内边距)也不压小坞(对称让 88px);
- *     概览在场时概览 hug 全高、让位照旧满额。负对照:拿掉输入卡的对称让位,780 必须压上小坞。
- *
  * 跑:node scripts/desk-rail.check.cjs   (playwright-core 自装 chromium;CHROMIUM_EXE 可覆盖)
  */
 const fs = require('fs')
@@ -256,44 +251,6 @@ async function at(p, width, tsumCls, cardCls = 'agent-desk-card') {
   const old = await draftAt(p, 1400)
   check('负对照:pickers 在 anchor 外时中线分叉(本组断言有分辨力)', Math.abs(old.barCx - old.composerCx) > 50,
     `bar=${old.barCx} composer=${old.composerCx}`)
-
-  // ⑦ 零条目小坞(pickers 放回 anchor 里,复位成真实结构)
-  await p.setContent(DRAFT_HTML)
-  await p.evaluate(() => document.getElementById('card').setAttribute('data-idle', ''))
-  for (const width of [1400, 900, 780]) {
-    const d = await draftAt(p, width)
-    const g = await p.evaluate(() => {
-      const card = document.getElementById('card').getBoundingClientRect()
-      const col = document.getElementById('col').getBoundingClientRect()
-      return { w: card.width, h: card.height, bottom: card.bottom, right: card.right, colBottom: col.bottom, colRight: col.right,
-        colCx: +(col.left + col.width / 2).toFixed(1),
-        headShown: getComputedStyle(document.querySelector('#card .agent-desk-card-head')).display !== 'none' }
-    })
-    check(`⚠️小坞 72×72、钉右下、底缘=输入框底线 @${width}`, d.cardShown && Math.abs(g.w - 72) <= 1 && Math.abs(g.h - 72) <= 1
-      && Math.abs(g.bottom - (g.colBottom - 16)) <= 1 && Math.abs(g.right - (g.colRight - 16)) <= 1 && !g.headShown,
-      `${g.w.toFixed(1)}×${g.h.toFixed(1)} bottom=${g.bottom.toFixed(1)}/${(g.colBottom - 16).toFixed(1)} right=${g.right.toFixed(1)}/${(g.colRight - 16).toFixed(1)} head=${g.headShown}`)
-    const xs = [d.barCx, d.emptyCx, d.composerCx, d.streamCx]
-    check(`⚠️小坞不让车道:四条中线回到整列中线 @${width}`, Math.max(...xs.map((x) => Math.abs(x - g.colCx))) <= 1,
-      `col=${g.colCx} bar=${d.barCx} empty=${d.emptyCx} composer=${d.composerCx} stream=${d.streamCx}`)
-    check(`⚠️小坞不被选择条/欢迎区/项目条/输入卡压住 @${width}`, d.overlaps.length === 0, d.overlaps.join(',') || 'none')
-  }
-  // 概览在场 + 小坞:概览不再被钉成半高(hug),让位按概览照旧满额
-  await p.evaluate(() => { document.getElementById('tsum').className = 't2-tsum show'; document.querySelector('#tsum .t2-tsum-in').style.height = '60px' })
-  await p.waitForTimeout(700)
-  const withTsum = await p.evaluate(() => {
-    const t = document.getElementById('tsum').getBoundingClientRect()
-    const rail = document.getElementById('rail').getBoundingClientRect()
-    return { tsumH: t.height, railH: rail.height, pad: getComputedStyle(document.getElementById('anchor')).paddingRight }
-  })
-  check('小坞 + 概览:概览 hug(不占半高)、输入框按概览满额让位', withTsum.tsumH < withTsum.railH / 3 && withTsum.pad === '296px',
-    `tsum=${withTsum.tsumH.toFixed(1)} rail=${withTsum.railH.toFixed(1)} anchor.padding-right=${withTsum.pad}`)
-  // 负对照:去掉输入卡的对称让位 → 780 时输入卡必须压上小坞(否则上面「不压」那条没有分辨力)
-  await p.evaluate(() => {
-    document.getElementById('tsum').className = 't2-tsum'
-    document.getElementById('anchor').style.setProperty('padding-inline', '0px', 'important')
-  })
-  const ctlDock = await draftAt(p, 780)
-  check('负对照:不让 88px 时 780 输入卡压上小坞(本组断言有分辨力)', ctlDock.overlaps.includes('composer'), ctlDock.overlaps.join(',') || 'none')
 
   await browser.close()
   const fails = results.filter((x) => !x.ok).length
