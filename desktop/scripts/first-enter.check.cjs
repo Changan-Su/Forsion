@@ -1,9 +1,10 @@
 /**
- * U-40「每次启动后第一次进日历 / 造物,三栏同时出骨架」的基线仪器(真 Electron + 桩引擎)。
+ * U-40「每次启动后第一次进日历 / 造物,三栏同时出骨架」的仪器(真 Electron + 桩引擎)。
  * 正典:docs/ToBeImproved/UIUX评审_2026-09-25.md U-40(FEEL-4)。
  *
- * 这是 lazy chunk 首次加载;加载过一次就缓存,只影响每次启动后的第一次进入。评审要求**先量基线**,
- * 再决定要不要在桌面端空闲时预取 —— 所以本仪器不改业务代码,只在页内打点:
+ * 成因(09-26 定位):React.lazy 首次渲染**总会**挂起一次(哪怕分块早已下载),再叠 React 19 的 Suspense
+ * 揭示节流,首进就是一闪骨架 —— 所以当初「只 import() 预取分块」实测省不下来。修法在 lazyRetry:模块到手后
+ * 新挂载的实例直接渲染真组件;宿主在 Electron 主窗空闲时对日历 / 造物的 View 调 preload()。本仪器只在页内打点:
  *   - 真实点击那一刻(捕获阶段的 pointerdown,落在 Space 钮 / 溢出行上)performance.mark('u40:<space>:<n>')
  *     (n=1 首进 / 2 同次启动再进)。不在查按钮之前打点:溢出区要先 hover 500ms,会算进「点击→撤下」(Codex 第一轮 F-3)
  *   - 逐帧采样 `.sk` 骨架,按所在区(左 / 主 / 右,看水平位置)分别记**挂载**(盒子非零)与**可见**(再加 computed
@@ -19,34 +20,30 @@
  * 每轮 = 一次全新启动(落在 Tangu)→ 日历首进 → 回 Tangu → 日历再进 → 造物首进 → 回 Tangu → 造物再进。
  * 跑 U40_RUNS 轮(缺省 3),打印每轮明细与 中位 / 最小 / 最大。
  *
- * 断言只钉「量到了」与「缓存有效」两件事(基线本身不设阈值,数字交给拍板):
- *   1 两个 Space 都点进去了,首进确实**拉了它自己的 lazy 分块**(CalendarView / ArtificialView,Codex 第一轮 F-4:
- *     造物读产物时自己也会出 .sk,光看骨架证明不了走了 lazy),且挂出过骨架
+ * 断言:
+ *   1 两个 Space 都点进去了,首进没有可见骨架(≥150ms)且 150ms 内落定 —— 空闲预热生效。
+ *     基线组(U40_BASELINE=1,关掉预热)改判「首进确实**拉了它自己的 lazy 分块**(CalendarView / ArtificialView,
+ *     Codex 第一轮 F-4:造物读产物时自己也会出 .sk,光看骨架证明不了走了 lazy)且挂出过骨架」。
  *   2 同次启动再进:没有可见骨架(≥150ms)—— 分块缓存生效;失败说明每次进入都在重拉分块
- * 负对照:U40_NEGATIVE=1 先把分块预取进缓存、但按基线组判 —— 断言 1 必须红(证明它真在看分块请求)。
- *   负对照自己先过一道前置(Codex 第三轮 H2-1):预取全部成功、首进零分块请求。预取的 import() 若失败,首进照常
- *   拉 lazy 分块、挂骨架,断言 1 反而全绿 —— 那是假绿的「负对照没红」,前置会先把它标出来。
+ * 负对照:U40_NEGATIVE=1 关掉预热、但按已修组判 —— 断言 1 必须红(证明它真在看骨架)。
  *
  * ⚠️ 本脚本额外覆写 `HOME`(同 check:artificial):造物托管根 = <HOME>/Forsion-Dev/Project,不覆写会读用户真目录。
  * 跑法:npx electron-vite build && npm run check:firstenter
- * 旋钮:U40_RUNS(启动几轮,缺省 3)/ U40_PREFETCH=1(对照组:进入前先 import() JS 分块 + 挂上它们的 CSS 依赖,
- *   看预取能省多少;对照组自己也有断言:首进时一个分块都不许再拉,否则对照不完整、结论作废)/ U40_VERBOSE=1(列出首进拉了哪些分块)/ SHOT_DIR(首进骨架截图落点)
+ * 旋钮:U40_RUNS(启动几轮,缺省 3)/ U40_BASELINE=1(关掉预热量基线)/ U40_VERBOSE=1(列出首进拉了哪些分块)/ SHOT_DIR(首进骨架截图落点)
  */
-const fs = require('fs')
 const path = require('path')
 const { ROOT, sleep, shotDir, makeReporter, launch, boot, enterSpace, activeSpace, captureWindow } = require('./lib/uiux-electron.cjs')
 
 const RUNS = Math.max(1, Number(process.env.U40_RUNS || 3)) // 0 轮 = 什么都没量却全绿,不允许
-/** U40_PREFETCH=1:进 Space 前先在页内 import() 相关分块(预取方案的对照组)。 */
-const PREFETCH = !!process.env.U40_PREFETCH
-/** 负对照:照样预取分块,但断言按基线组判(见文件头)。 */
+/** U40_BASELINE=1:关掉宿主的空闲预热(localStorage forsion_no_idle_preload),量改之前的基线。 */
+const BASELINE = !!process.env.U40_BASELINE
+/** 负对照:同样关掉预热,但按「已修」组判 —— 断言 1 必须红(证明它真在看骨架)。 */
 const NEGATIVE = !!process.env.U40_NEGATIVE
+const NO_PRELOAD = BASELINE || NEGATIVE
 /** 首进必须拉到的 lazy 分块(去掉 hash 后的名字前缀)。 */
 const LAZY_CHUNK = { calendar: /^CalendarView\.js$/, artificial: /^ArtificialView\.js$/ }
 const VISIBLE_MS = 150
 const R = makeReporter()
-/** 预取对照组每轮实际预取成功了几个(JS / CSS),写进断言 3。 */
-const prefetchLog = []
 
 /** 页内长任务观察器(只装一次)。骨架本身按帧采样(见 COLLECT),不用 MutationObserver:
  *  dockview 会把面板 DOM 挪进挪出,增删记录对不上号(实测漏记「撤下」,把 230ms 的骨架量成 750ms)。 */
@@ -172,28 +169,15 @@ async function oneLaunch(run, shots) {
     await boot(env.app, env.win, { space: 'tangu', width: 1440, height: 900 })
     await sleep(1500)
     await env.win.evaluate(INSTALL)
-    if (PREFETCH || NEGATIVE) {
-      // 模拟「空闲时预取分块」:JS 模块 import() 进缓存,但 React.lazy 的 payload 仍是未解析态。
-      // Vite 的 __vitePreload 解析 lazy 分块前还会等它的 CSS 依赖 <link> 加载完;只 import() JS 的话首进仍要拉 CSS,
-      // 对照不完整。这里把 CSS 依赖也挂上(preload 见到同 href 的 link 就跳过)。名单按实测首进拉的分块定,
-      // 分块改名后对照断言(3)会红,照 U40_VERBOSE 的「分块」列补正则。
-      const assets = fs.readdirSync(path.join(ROOT, 'out/renderer/assets'))
-      const js = assets.filter((f) => /^(CalendarView|TodoListView|CalendarConfigView|ArtificialView)-.*\.js$/.test(f))
-      const css = assets.filter((f) => /^(astryxBridge|artificial)-.*\.css$/.test(f))
-      const res = await env.win.evaluate(async ({ js: js_, css: css_ }) => {
-        const jsOk = await Promise.all(js_.map((f) => import(`./assets/${f}`).then(() => true, () => false)))
-        const cssOk = await Promise.all(css_.map((f) => new Promise((resolve) => {
-          const l = document.createElement('link')
-          l.rel = 'stylesheet'
-          l.href = new URL(`./assets/${f}`, location.href).href
-          l.onload = () => resolve(true); l.onerror = () => resolve(false)
-          document.head.appendChild(l)
-        })))
-        return { jsOk, cssOk }
-      }, { js, css })
-      prefetchLog.push({ js: js.length, jsOk: res.jsOk.filter(Boolean).length, css: css.length, cssOk: res.cssOk.filter(Boolean).length })
-      await sleep(800)
+    if (NO_PRELOAD) {
+      await env.win.evaluate(() => localStorage.setItem('forsion_no_idle_preload', '1'))
+      await env.win.reload({ waitUntil: 'domcontentloaded' })
+      await env.win.waitForSelector('.dv-groupview', { timeout: 30_000 })
+      await sleep(1500)
+      await env.win.evaluate(INSTALL)
     }
+    // 空闲预热由 requestIdleCallback(timeout 5s)触发:等够它的上限再点,免得量到「还没来得及预热」。
+    await sleep(4000)
     const net = netRecorder(env.win)
     for (const space of ['calendar', 'artificial']) {
       out.push(await enterAndMeasure(env.app, env.win, space, 1, shots, run, net))
@@ -239,24 +223,16 @@ async function main() {
   for (const space of ['calendar', 'artificial']) {
     const first = all.filter((r) => r.space === space && r.n === 1)
     const again = all.filter((r) => r.space === space && r.n === 2)
-    // 预取对照组里骨架消失正是「预取有效」的结果,不能判红;只在基线组要求首进挂出过骨架。
     const lazyHit = (r) => r.net.assets.names.some((nm) => LAZY_CHUNK[space].test(nm))
-    R.check(PREFETCH
-      ? `1 ${space}:${first.length} 轮都点进去了(对照组:骨架出没出现只记数、不判)`
-      : `1 ${space}:${first.length} 轮都点进去了,首进拉了自己的 lazy 分块(${LAZY_CHUNK[space].source})且挂出过骨架`,
-      first.length === RUNS && first.every((r) => r.hit && r.active === space && !r.noClick && (PREFETCH || (lazyHit(r) && r.mountedSpans.length > 0))),
-      JSON.stringify(first.map((r) => ({ hit: r.hit, active: r.active, lazyChunk: lazyHit(r), mounted: r.mountedSpans.length, noClick: !!r.noClick }))))
+    R.check(BASELINE
+      ? `1 ${space}(基线):${first.length} 轮都点进去了,首进拉了自己的 lazy 分块(${LAZY_CHUNK[space].source})且挂出过骨架`
+      : `1 ${space}:${first.length} 轮都点进去了,首进没有可见骨架(≥${VISIBLE_MS}ms)且 ${VISIBLE_MS}ms 内落定 —— 空闲预热生效`,
+      first.length === RUNS && first.every((r) => r.hit && r.active === space && !r.noClick && (BASELINE ? lazyHit(r) && r.mountedSpans.length > 0 : r.maxVisible < VISIBLE_MS && r.settled < VISIBLE_MS)),
+      // ↑ 造物的骨架多半在 150ms 透明期内就撤,光看「可见」分不出修没修;落定(点击→最后一块骨架撤下)分得出:无预热约 250ms,有预热个位数
+      JSON.stringify(first.map((r) => ({ hit: r.hit, active: r.active, lazyChunk: lazyHit(r), visible: r.maxVisible, settled: r.settled, noClick: !!r.noClick }))))
     R.check(`2 ${space}:同次启动再进没有可见骨架(≥${VISIBLE_MS}ms)—— 分块缓存生效`,
       again.length === RUNS && again.every((r) => r.hit && r.active === space && r.maxVisible < VISIBLE_MS),
       JSON.stringify(again.map((r) => r.maxVisible)))
-  }
-  if (PREFETCH || NEGATIVE) {
-    // 对照组自证:预取全部成功,且首进一个分块都没再拉 —— 否则「预取省不省时间」的结论没有依据。
-    // 负对照同样先过这一道:预取没生效时断言 1 本来就该绿,「负对照没变红」就成了假信号。
-    const firsts = all.filter((r) => r.n === 1)
-    R.check(`${NEGATIVE ? '负对照前置' : '3 预取对照组完整'}:JS / CSS 依赖全部预取成功,首进零分块请求`,
-      prefetchLog.length === RUNS && prefetchLog.every((p) => p.js > 0 && p.css > 0 && p.jsOk === p.js && p.cssOk === p.css) && firsts.length > 0 && firsts.every((r) => r.net.assets.n === 0),
-      JSON.stringify({ prefetchLog, firstEntryAssets: firsts.map((r) => `${r.space}:${r.net.assets.names.join('+') || 0}`) }))
   }
   console.log(`SHOTS ${shots}`)
   process.exit(R.summary() ? 1 : 0)

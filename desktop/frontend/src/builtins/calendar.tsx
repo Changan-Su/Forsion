@@ -24,7 +24,7 @@ import {
   setActiveSpace, useSpaceStore, useWorkspace, Skeleton,
 } from '@lcl/engine'
 import type { SpaceDefinition, PersistedPanel } from '@lcl/engine'
-import { lazyRetry } from '../lazyRetry'
+import { lazyRetry, preloadWhenIdle } from '../lazyRetry'
 import { registerMessages } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { PRODUCT } from '../product'
@@ -72,6 +72,7 @@ export const calendarAvailable = (): boolean => hasNativeFeature('calendar') && 
 
 /** 三个视图的注册(启动 + 运行时开启共用)。 */
 export function installCalendarViews(): void {
+  preloadWhenIdle(CalendarView, TodoListView, CalendarConfigView)
   if (!calendarAvailable()) return
   // ⚠️ 待办视图**吃 params 且非 singleton**(与另外两个不同,刻意的):
   //  · factory 必须把 params 透传下去 —— 从前写的是 `() => <TodoListView />`,把 ViewProps 整个丢了,

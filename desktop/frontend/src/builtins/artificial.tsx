@@ -23,7 +23,7 @@ import {
   setActiveSpace, useSpaceStore, useWorkspace, Skeleton,
 } from '@lcl/engine'
 import type { SpaceDefinition, SidebarDefaults } from '@lcl/engine'
-import { lazyRetry } from '../lazyRetry'
+import { lazyRetry, preloadWhenIdle } from '../lazyRetry'
 import { useApp } from '../stores/appStore'
 import { PRODUCT } from '../product'
 import { windowKind } from '../windowKind'
@@ -65,6 +65,7 @@ let unregisterProductLink: (() => void) | null = null
 
 /** 视图注册(启动 + 运行时开启共用)。 */
 export function installArtificialViews(): void {
+  preloadWhenIdle(ArtificialView, ProductView)
   registerView({
     type: 'artificial', kind: 'page',
     displayName: () => app().tr('view.artificial'), icon: Blocks,
