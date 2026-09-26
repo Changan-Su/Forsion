@@ -7,7 +7,7 @@ import { HostSandboxSettings } from './HostSandboxSettings'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling, Coffee } from 'lucide-react'
+import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling, Coffee, MonitorCheck } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { AccountSwitcher } from './AccountSwitcher'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
@@ -90,6 +90,10 @@ import { ipcErrorText } from '../ipcError'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
+  'settings.tools.title': { zh: '开发工具', en: 'Developer tools' },
+  'settings.tools.description': { zh: '检测编码任务需要的本机工具，缺少时可一键安装。', en: 'Check the local tools coding tasks need, and install missing ones in one step.' },
+  'settings.runtime.backendTitle': { zh: '内置后端', en: 'Built-in backend' },
+  'settings.runtime.externalNote': { zh: '当前连接的是外部后端。代码沙箱、Python 与下载源请在对方机器上配置。', en: 'You are connected to an external backend. Configure its sandbox, Python and download source on that machine.' },
   'settingsmodal.keepAwake.title': { zh: '有会话运行时阻止休眠', en: 'Stay awake while sessions run' },
   'settingsmodal.keepAwake.description': {
     zh: '会话运行期间阻止电脑因闲置自动休眠，全部结束后恢复；屏幕仍会熄灭。合盖、手动睡眠照常生效；Windows 笔记本用电池时，系统仍可能按电源策略休眠。',
@@ -770,6 +774,7 @@ export const SettingsModal: React.FC<{
   const setMode = (m: 'managed' | 'external') => {
     void window.tangu!.setConfig({ mode: m }).then(setStored)
   }
+  const [probeKey, setProbeKey] = useState(0)
   const saveManaged = () => {
     if (!stored) return
     void window.tangu!.setConfig({
@@ -779,7 +784,7 @@ export const SettingsModal: React.FC<{
       hostSandbox: hostSandboxDraft ?? stored.hostSandbox,
       pythonMode: stored.pythonMode || 'bundled',
       mirror: stored.mirror || 'default',
-    }).then(setStored).catch((e: any) => setTestResult(`${t('settings.toast.saveFailed')}${e?.message || e}`))
+    }).then((next) => { setStored(next); setProbeKey((k) => k + 1) }).catch((e: any) => setTestResult(`${t('settings.toast.saveFailed')}${e?.message || e}`))
   }
 
   // 浏览器工具设置保存(原与微信共用;微信设置已迁「通道」tab,走引擎 /agent/channels)。
@@ -886,6 +891,8 @@ export const SettingsModal: React.FC<{
   const subItemsByTab = ({
     general: [
       ['g-conn', t('settings.sub.connection')],
+      // 本机运行环境单列(原先埋在「连接」页最底部,2.11.4 用户找不到);条件与下方正文块一致。
+      ...(isDesktop && stored ? [['g-runtime', t('settings.runtime.title')] as [string, string]] : []),
       ...(isDesktop ? [['g-forsion', 'Forsion'] as [string, string]] : []),
       ...(isDesktop && stored ? [['g-inbox', t('settings.inbox.title')] as [string, string]] : []),
     ],
@@ -1282,11 +1289,58 @@ export const SettingsModal: React.FC<{
                       />
                     )}
 
-                    {isDesktop && mode === 'managed' && stored && (
+                    {(!isDesktop || mode === 'external') && !cloudWeb && (
+                      <section className="settings-panel settings-external-panel">
+                        <div className="settings-panel-head">
+                          <span className="settings-panel-icon"><Plug size={16} /></span>
+                          <div><strong>{t('settings.external.title')}</strong><p>{t('settings.external.description')}</p></div>
+                        </div>
+                        <div className="field">
+                          <label>{t('settings.external.urlLabel')}</label>
+                          <input
+                            type="text"
+                            value={draft.backendUrl}
+                            onChange={(e) => setDraft({ ...draft, backendUrl: e.target.value })}
+                            placeholder="http://localhost:8787"
+                          />
+                          <div className="hint">{t('settings.external.urlHint')}</div>
+                        </div>
+                        <div className="field">
+                          <label>{t('settings.external.tokenLabel')}</label>
+                          <input
+                            type="password"
+                            value={draft.token}
+                            onChange={(e) => setDraft({ ...draft, token: e.target.value })}
+                            placeholder={t('settings.external.tokenPlaceholder')}
+                          />
+                        </div>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                          <button className="btn ghost sm" onClick={test} disabled={testing}>
+                            {testing ? <Loader2 size={13} className="spin" /> : null} {t('settings.btn.testConnection')}
+                          </button>
+                          <button className="btn primary sm" onClick={saveConnection}>
+                            {t('settings.btn.saveConnect')}
+                          </button>
+                          <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{testResult}</span>
+                        </div>
+                      </section>
+                    )}
+                  </>
+                )}
+
+                {tab === 'general' && activeSub === 'g-runtime' && isDesktop && stored && (
+                  <>
+                    {window.tangu?.envCheck && (
+                      <SettingsPanel className="settings-tools-panel" icon={<MonitorCheck size={16} />} title={t('settings.tools.title')} description={t('settings.tools.description')}>
+                        {/* 与首启向导「本机环境」步同一个组件;key 在保存后端设置后递增 → 按新下载源重测。 */}
+                        <div className="settings-tools-body"><EnvProbeSection key={probeKey} onLeave={() => useApp.getState().closeSettings()} /></div>
+                      </SettingsPanel>
+                    )}
+                    {mode === 'managed' ? (
                       <section className="settings-panel settings-runtime-panel">
                         <div className="settings-panel-head">
-                          <span className="settings-panel-icon"><Wrench size={16} /></span>
-                          <div><strong>{t('settings.runtime.title')}</strong><p>{t('settings.runtime.description')}</p></div>
+                          <span className="settings-panel-icon"><Server size={16} /></span>
+                          <div><strong>{t('settings.runtime.backendTitle')}</strong><p>{t('settings.runtime.description')}</p></div>
                         </div>
                         <div className="field-row">
                           <div className="field" style={{ maxWidth: 260 }}>
@@ -1378,8 +1432,6 @@ export const SettingsModal: React.FC<{
                             {t('settings.backend.staleDist')}
                           </div>
                         )}
-                        {/* 环境检测(与首启向导第③步同一个组件):事后回来补装 node/git 的地方。 */}
-                        <div className="settings-runtime-probe"><EnvProbeSection onLeave={() => useApp.getState().closeSettings()} /></div>
                         <div className="field settings-runtime-logs">
                           <button
                             className="btn ghost sm"
@@ -1399,43 +1451,8 @@ export const SettingsModal: React.FC<{
                           )}
                         </div>
                       </section>
-                    )}
-
-                    {(!isDesktop || mode === 'external') && !cloudWeb && (
-                      <section className="settings-panel settings-external-panel">
-                        <div className="settings-panel-head">
-                          <span className="settings-panel-icon"><Plug size={16} /></span>
-                          <div><strong>{t('settings.external.title')}</strong><p>{t('settings.external.description')}</p></div>
-                        </div>
-                        <div className="field">
-                          <label>{t('settings.external.urlLabel')}</label>
-                          <input
-                            type="text"
-                            value={draft.backendUrl}
-                            onChange={(e) => setDraft({ ...draft, backendUrl: e.target.value })}
-                            placeholder="http://localhost:8787"
-                          />
-                          <div className="hint">{t('settings.external.urlHint')}</div>
-                        </div>
-                        <div className="field">
-                          <label>{t('settings.external.tokenLabel')}</label>
-                          <input
-                            type="password"
-                            value={draft.token}
-                            onChange={(e) => setDraft({ ...draft, token: e.target.value })}
-                            placeholder={t('settings.external.tokenPlaceholder')}
-                          />
-                        </div>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                          <button className="btn ghost sm" onClick={test} disabled={testing}>
-                            {testing ? <Loader2 size={13} className="spin" /> : null} {t('settings.btn.testConnection')}
-                          </button>
-                          <button className="btn primary sm" onClick={saveConnection}>
-                            {t('settings.btn.saveConnect')}
-                          </button>
-                          <span style={{ fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{testResult}</span>
-                        </div>
-                      </section>
+                    ) : (
+                      <SettingsPanel icon={<Server size={16} />} title={t('settings.runtime.backendTitle')} description={t('settings.runtime.externalNote')} />
                     )}
                   </>
                 )}

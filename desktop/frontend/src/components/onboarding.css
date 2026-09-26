@@ -126,6 +126,24 @@
 .ob-next-steps > div { display: flex; align-items: flex-start; gap: 14px; margin-top: 22px; }
 .ob-next-steps svg { flex: none; color: var(--text-muted); }
 .ob-next-steps small { display: block; margin-top: 4px; color: var(--text-muted); }
+/* 本机环境:左侧是下载源决策(可点的选项卡,带边框),右侧是工具清单(内容区,不描边)。 */
+.ob-env-layout { display: grid; grid-template-columns: minmax(220px, .85fr) minmax(0, 1.35fr); gap: 28px; align-items: start; padding-top: 4px; }
+.ob-env-source { min-width: 0; }
+.ob-env-source > h2 { margin-bottom: 12px; font-size: var(--ui-font-heading, 14px); }
+.ob-env-options { display: grid; gap: 10px; }
+.ob-env-option { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius-md); background: transparent; color: var(--text); text-align: left; font: inherit; cursor: pointer; }
+.ob-env-option > svg { flex: none; margin-top: 1px; color: var(--text-muted); }
+.ob-env-option > span { flex: 1; min-width: 0; }
+.ob-env-option strong { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: var(--ui-font-body, 13px); font-weight: 500; }
+.ob-env-option strong em { padding: 1px 7px; border-radius: var(--radius-pill, 999px); background: var(--accent-light); color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); font-style: normal; font-weight: 500; }
+.ob-env-option small { display: block; margin-top: 4px; color: var(--text-muted); }
+.ob-env-option.selected > svg { color: var(--accent-ink); }
+.ob-env-option:disabled { cursor: progress; }
+.ob-env-test { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 14px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.ob-env-test > span { display: inline-flex; align-items: center; gap: 4px; }
+.ob-env-test > span.fail { color: var(--danger); }
+.ob-flow .ob-env-source > .ob-muted { margin: 12px 0 0; }
+.ob-env-tools { min-width: 0; padding: 16px 20px; border-radius: var(--radius-lg); background: var(--overlay-subtle); }
 .ob-changelog { width: min(560px, calc(100% - 32px)); max-height: calc(100% - 40px); padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-card, var(--bg)); color: var(--text); box-shadow: var(--card-shadow); }
 .ob-changelog::backdrop { background: var(--overlay-medium); }
 .ob-changelog-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; }
@@ -142,6 +160,8 @@
   .ob-flow .theme-card .theme-preview { height: 46px; }
   .ob-flow .field { margin-bottom: 12px; }
   .ob-flow .desktop-permissions-section { padding-block: 8px; }
+  .ob-env-option { padding-block: 10px; }
+  .ob-env-tools { padding-block: 12px; }
 }
 @media (max-width: 1100px) {
   .ob-shell.ob-flow { grid-template-columns: 164px minmax(0, 1fr); }
@@ -151,6 +171,9 @@
   .ob-connect-option { padding: 14px; gap: 10px; }
   .ob-appearance-layout { grid-template-columns: minmax(0, 1fr) minmax(0, .85fr); gap: 20px; }
   .ob-model-browser { grid-template-columns: 142px minmax(0, 1fr); gap: 12px; }
+  .ob-env-layout { grid-template-columns: minmax(190px, .8fr) minmax(0, 1.2fr); gap: 18px; }
+  .ob-env-option { padding-inline: 12px; gap: 10px; }
+  .ob-env-tools { padding-inline: 14px; }
   .ob-footer-hint { visibility: hidden; min-width: 0; width: 0; overflow: hidden; }
 }
 @media (max-width: 760px) {
@@ -185,6 +208,13 @@
   .ob-model-selection > .ob-muted { display: none; }
   .ob-flow .theme-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .ob-flow .theme-card .theme-preview { height: 56px; }
+  .ob-env-layout { grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .ob-env-options { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .ob-env-option { padding: 10px; }
+  .ob-env-option small, .ob-flow .ob-env-source > .ob-muted, .ob-env-source > h2 { display: none; }
+  .ob-env-test { margin-top: 10px; }
+  .ob-env-tools { padding: 12px 14px; }
+  .ob-flow .env-probe-name small { display: none; }
 }
 @media (max-width: 520px) {
   .ob-welcome-layout, .ob-workspace-layout, .ob-done-layout { grid-template-columns: minmax(0, 1fr); align-content: center; }

@@ -27,6 +27,7 @@ import { homedir, hostname, networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
 import { BackendManager, bundledPythonBin, resolveBundledNode, type BackendStatus } from './backendManager'
 import { envWithFullPath } from './envPath'
+import { downloadUrlFor, installCommandFor, requiredProgram } from './envInstall'
 import { createKeepAwake } from './keepAwake'
 import { createMcpLifecycle, startForsionMcp } from './mcpServer'
 import { randomBytes } from 'node:crypto'
@@ -216,6 +217,8 @@ interface EnvProbe {
   /** 缺失时的安装命令(按平台);经 env:check 登记,env:run 只认 opaque id——renderer 不能传任意命令。 */
   installId: string | null
   installCommand: string | null
+  /** 缺失时的手动下载页(包管理器不在 / 一键装得慢时的退路)。 */
+  downloadUrl: string | null
 }
 
 /** env:check 登记的可执行安装命令(id → command);env:run 仅从此表取,防 renderer 注入任意命令。 */
@@ -233,6 +236,17 @@ function chinaInstallEnv(): Record<string, string> {
   }
 }
 
+/** 命令依赖的程序(winget/brew/apt-get/curl)在不在。只认「确实找不到」;超时、非零退出这类含糊情况一律当在 ——
+ *  宁可让「安装」跑出一条错误日志,也别因为机器一时卡顿把能用的按钮藏掉(评审指出 probeVersion 是失败即判无)。
+ *  Windows 用 where.exe:exit 1 = PATH 上没有;cmd /c 对缺失程序也只回 1,和程序自身报错分不开,所以不走 shell。 */
+function programExists(prog: string): Promise<boolean> {
+  const win = process.platform === 'win32'
+  return new Promise((resolve) => {
+    execFile(win ? 'where.exe' : prog, win ? [prog] : ['--version'], { timeout: 8000, env: envWithFullPath(), windowsHide: true },
+      (err) => resolve(!err || (win ? (err as { code?: unknown }).code !== 1 : (err as { code?: unknown }).code !== 'ENOENT')))
+  })
+}
+
 function probeVersion(cmd: string, args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
     // Windows:npm/docker/python 等多为 .cmd/.bat shim,execFile 不带 shell 无法执行(npm 根本没有 npm.exe)→ 一律
@@ -243,35 +257,6 @@ function probeVersion(cmd: string, args: string[]): Promise<string | null> {
     })
     p.on('error', () => resolve(null))
   })
-}
-
-function installCommandFor(tool: string, mirror: 'default' | 'china'): string | null {
-  const platform = process.platform
-  const cn = mirror === 'china'
-  const byTool: Record<string, Record<string, string>> = {
-    node: {
-      linux: 'sudo apt-get install -y nodejs npm',
-      darwin: 'brew install node',
-      win32: 'winget install OpenJS.NodeJS.LTS',
-    },
-    python3: {
-      linux: 'sudo apt-get install -y python3 python3-pip',
-      darwin: 'brew install python',
-      win32: 'winget install Python.Python.3.12',
-    },
-    git: {
-      linux: 'sudo apt-get install -y git',
-      darwin: 'brew install git',
-      win32: 'winget install Git.Git',
-    },
-    docker: {
-      // 官方安装脚本原生支持 --mirror Aliyun(中国网络直连 get.docker.com/Docker CDN 极慢)。
-      linux: cn ? 'curl -fsSL https://get.docker.com | sh -s -- --mirror Aliyun' : 'curl -fsSL https://get.docker.com | sh',
-      darwin: 'brew install --cask docker',
-      win32: 'winget install Docker.DockerDesktop',
-    },
-  }
-  return byTool[tool]?.[platform] ?? null
 }
 
 async function runEnvCheck(): Promise<EnvProbe[]> {
@@ -287,23 +272,32 @@ async function runEnvCheck(): Promise<EnvProbe[]> {
     { tool: 'docker', cmd: 'docker', args: ['--version'] },
   ]
   const out: EnvProbe[] = []
+  // 命令依赖的程序(winget/brew/apt-get/curl)本身不在,就不给「安装」—— 只给下载页。每次检测只探一次。
+  const programOk = new Map<string, Promise<boolean>>()
+  const programAvailable = (command: string): Promise<boolean> => {
+    const prog = requiredProgram(command)
+    if (!programOk.has(prog)) programOk.set(prog, programExists(prog))
+    return programOk.get(prog)!
+  }
   for (const p of probes) {
     const version = await probeVersion(p.cmd, p.args)
     // npm 跟随 node 装,无独立安装命令
-    const installCommand = version === null && p.tool !== 'npm' ? installCommandFor(p.tool, mirror) : null
+    let installCommand = version === null && p.tool !== 'npm' ? installCommandFor(p.tool, process.platform, mirror) : null
+    if (installCommand && !(await programAvailable(installCommand))) installCommand = null
     let installId: string | null = null
     if (installCommand) {
       installId = `env_${p.tool}_${Date.now().toString(36)}`
       pendingInstallCommands.set(installId, installCommand)
     }
-    out.push({ tool: p.tool, found: version !== null, version, installId, installCommand })
+    const downloadUrl = version === null ? downloadUrlFor(p.tool, process.platform, mirror) : null
+    out.push({ tool: p.tool, found: version !== null, version, installId, installCommand, downloadUrl })
   }
   // 内置 Python:默认 pythonMode=bundled 时 agent 用内置解释器,故 python 视为已满足(展示内置版本、无需系统安装)。
   const pyBin = bundledPythonBin()
   if (pyBin) {
     const v = await probeVersion(pyBin, ['--version'])
     const idx = out.findIndex((o) => o.tool === 'python3')
-    const entry: EnvProbe = { tool: 'python3', found: true, version: `${v || 'Python'} · bundled`, installId: null, installCommand: null }
+    const entry: EnvProbe = { tool: 'python3', found: true, version: `${v || 'Python'} · bundled`, installId: null, installCommand: null, downloadUrl: null }
     if (idx >= 0) out[idx] = entry; else out.push(entry)
   }
   // 内置 Node:系统没装时 agent 的 PATH 里仍有这份内置 node/npm(backendManager 追加在 PATH 末尾),
@@ -315,7 +309,7 @@ async function runEnvCheck(): Promise<EnvProbe[]> {
       const idx = out.findIndex((o) => o.tool === tool)
       if (idx < 0 || out[idx].found || !existsSync(bin)) return
       const v = await probeVersion(bin, ['--version'])
-      out[idx] = { tool, found: true, version: `${v || tool} · bundled`, installId: null, installCommand: null }
+      out[idx] = { tool, found: true, version: `${v || tool} · bundled`, installId: null, installCommand: null, downloadUrl: null }
     }
     await useBundled('node', nodeRt.nodeBin)
     await useBundled('npm', nodeRt.npmBin)
@@ -328,6 +322,7 @@ async function runEnvCheck(): Promise<EnvProbe[]> {
     version: existsSync(shim) ? `CLI · v${app.getVersion()}` : null,
     installId: null,
     installCommand: null,
+    downloadUrl: null,
   })
   return out
 }
@@ -2621,7 +2616,10 @@ app.whenReady().then(async () => {
     // 否则「切了镜像」对引导安装完全不生效(brew bottles/GitHub 直连在国内基本走不通)。
     const mirrorEnv = (await loadConfig()).mirror === 'china' ? chinaInstallEnv() : {}
     return await new Promise<{ exitCode: number }>((resolve) => {
-      const child = spawn(command, { shell: true, env: envWithFullPath(mirrorEnv) })
+      // stdin 一律关掉:安装器/包管理器一旦停下来要输入(winget 源协议、sudo 密码),关着的 stdin 让它立刻失败
+      // 并把原因打进日志;开着的管道没人写,它就永远等下去、界面永远转圈(2026-09-25 Windows 实测)。
+      // 不加 windowsHide:runner 是管理员、测不到 UAC,藏起控制台后提权弹窗会不会退到任务栏闪烁没验证过,保持原样。
+      const child = spawn(command, { shell: true, env: envWithFullPath(mirrorEnv), stdio: ['ignore', 'pipe', 'pipe'] })
       const emit = (line: string): void => {
         if (!wc.isDestroyed()) wc.send('env:output', { installId, line })
       }
@@ -2640,9 +2638,10 @@ app.whenReady().then(async () => {
   })
   // ── Forsion 插件依赖应用一键安装:白名单表(shared/knownApps)查命令 → 登记 opaque id,
   // 执行/流式输出复用 env:run 通道。插件只能声明 id,命令文本永远在宿主,无注入面。──
-  ipcMain.handle('plugin:request-install', (_e, appId: string) => {
+  ipcMain.handle('plugin:request-install', async (_e, appId: string) => {
     const cmd = KNOWN_APPS[String(appId)]?.install[process.platform as 'darwin' | 'win32' | 'linux']
-    if (!cmd) return null // 表外 id / 本平台无一键命令 → 前端降级「打开官网」
+    // 表外 id / 本平台无一键命令 / 命令依赖的 winget、brew 不在 → 前端降级「打开官网」
+    if (!cmd || !(await programExists(requiredProgram(cmd)))) return null
     const installId = `app_${String(appId)}_${Date.now().toString(36)}`
     pendingInstallCommands.set(installId, cmd)
     return { installId, command: cmd }

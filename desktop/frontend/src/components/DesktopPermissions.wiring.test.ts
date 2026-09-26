@@ -117,6 +117,8 @@ it('offers optional permissions after the essential desktop choices and allows s
   await click('onboarding.nav.next')
   await click('onboarding.nav.next')
   await click('onboarding.nav.next')
+  expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('onboarding.step.env.title'))
+  await click('onboarding.nav.next')
   expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('desktopPermissions.title'))
   expect(host.querySelector('[aria-current="step"]')?.textContent).toBe(translate('onboarding.guide.permissions'))
   let resolve!: (value: DesktopPermissionsSnapshot) => void
@@ -218,4 +220,32 @@ it('keeps the model draft and current step after a save failure, then retries', 
   expect(host.querySelector('.ob-model-option[aria-pressed="true"]')?.textContent).toContain('My model')
   await click('onboarding.nav.next')
   expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('theme')
+})
+
+it('saves the download source before re-checking local tools, and keeps the step on failure', async () => {
+  window.tangu!.envCheck = vi.fn()
+  window.tangu!.getConfig = vi.fn().mockResolvedValue({ ...cfg, mirror: 'default' })
+  let resolve!: () => void
+  const save = vi.fn().mockImplementation(() => new Promise<void>((r) => { resolve = r }))
+  window.tangu!.setConfig = save
+  await render(wizard())
+  await click('onboarding.welcome.continue'); await click('onboarding.connect.skipForNow')
+  await act(async () => resolve?.())
+  for (let i = 0; i < 3; i++) { await click('onboarding.nav.next'); await act(async () => resolve?.()) }
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('env')
+  const china = () => [...host.querySelectorAll<HTMLButtonElement>('.ob-env-option')].find((b) => b.textContent?.includes(translate('onboarding.guide.sourceChina')))!
+  expect(china().getAttribute('aria-checked')).toBe('false')
+  await act(async () => china().click())
+  expect(save).toHaveBeenLastCalledWith({ mirror: 'china' })
+  // 存盘完成前不切选中态、不放行下一步 —— 否则安装命令会按旧源生成
+  expect(china().getAttribute('aria-checked')).toBe('false')
+  expect(host.querySelector<HTMLButtonElement>('.ob-footer .primary')?.disabled).toBe(true)
+  await act(async () => resolve())
+  expect(china().getAttribute('aria-checked')).toBe('true')
+  expect(host.querySelector<HTMLButtonElement>('.ob-footer .primary')?.disabled).toBe(false)
+  save.mockRejectedValueOnce(new Error('disk unavailable'))
+  const official = [...host.querySelectorAll<HTMLButtonElement>('.ob-env-option')].find((b) => b !== china())!
+  await act(async () => official.click())
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('disk unavailable')
+  expect(china().getAttribute('aria-checked')).toBe('true')
 })

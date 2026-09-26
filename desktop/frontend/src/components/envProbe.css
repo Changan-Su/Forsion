@@ -1,0 +1,30 @@
+/* 本机工具检测(向导与设置共用)。行是内容列表,不是动作卡:只用分隔线,不画卡框(DESIGN §5)。
+   单行布局是给向导 900×640 一屏放下六项留的预算,别改回「名称 / 用途」两行。 */
+.env-probe { display: flex; flex-direction: column; min-width: 0; color: var(--text); }
+.env-probe-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding-bottom: 8px; }
+.env-probe-summary { display: inline-flex; align-items: center; gap: 7px; flex: 1 1 160px; min-width: 0; font-size: var(--ui-font-body, 13px); font-weight: 500; color: var(--text); }
+.env-probe-summary > svg { flex: none; color: var(--green); }
+.env-probe-summary.is-missing > svg { color: var(--warning); }
+.env-probe-summary.is-error { color: var(--danger); overflow-wrap: anywhere; }
+.env-probe-summary.is-error > svg { color: var(--danger); }
+.env-probe-summary > .spin { color: var(--text-muted); }
+.env-probe-list { list-style: none; margin: 0; padding: 0; }
+.env-probe-row { display: grid; grid-template-columns: 18px minmax(0, 1fr) auto; align-items: center; column-gap: 10px; row-gap: 4px; min-height: 36px; padding-block: 6px; border-top: var(--border-width, 1px) solid var(--border); }
+.env-probe-icon { display: grid; place-items: center; color: var(--green); }
+.env-probe-row[data-state='missing'] .env-probe-icon { color: var(--warning); }
+.env-probe-row[data-state='optional'] .env-probe-icon { color: var(--text-faint); }
+.env-probe-name { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.env-probe-name strong { flex: none; font-size: var(--ui-font-body, 13px); font-weight: 500; }
+.env-probe-name small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.env-probe-version { display: inline-flex; align-items: center; gap: 6px; justify-self: end; font-family: var(--font-mono); font-size: var(--ui-font-meta, 12px); color: var(--text-muted); white-space: nowrap; }
+.env-probe-row[data-state='missing'] .env-probe-version,
+.env-probe-row[data-state='optional'] .env-probe-version { font-family: var(--font-ui); }
+.env-probe-version em { padding: 1px 6px; border-radius: var(--radius-pill, 999px); background: var(--overlay-subtle); color: var(--text-muted); font-family: var(--font-ui); font-size: var(--ui-font-caption, 11px); font-style: normal; }
+/* 缺失行的动作按钮落在第二行(名称列对齐),不挤压版本列。 */
+.env-probe-actions { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.env-probe-result { grid-column: 2 / -1; display: flex; align-items: center; gap: 6px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); overflow-wrap: anywhere; }
+.env-probe-result[data-state='ok'] { color: var(--green); }
+.env-probe-result[data-state='fail'] { color: var(--danger); }
+.env-probe-result > svg { flex: none; }
+.env-probe-log { margin: 8px 0 0; max-height: 132px; overflow: auto; padding: 8px 10px; border-radius: var(--radius-sm); background: var(--overlay-subtle); font-family: var(--font-mono); font-size: var(--ui-font-caption, 11px); line-height: 1.5; white-space: pre-wrap; word-break: break-all; }
+.env-probe-hint { margin: 6px 0 0; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.5; }

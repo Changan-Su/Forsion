@@ -1,0 +1,42 @@
+# 引导安装链路的 Windows 真机台架(手动触发:Actions → probe-env-install → Run workflow,选分支)。
+# 当前分支现场构建 → 卸掉 runner 自带的 Git → 走 app 自己的 envCheck → envRun(git) → envCheck。
+#   windows-2025:有 winget、msstore 协议未同意(= 新机器)→ 必须装上并在不重启的情况下认出;
+#   windows-2022:没有 winget → 必须不给安装命令、只给下载页。
+# 2026-09-25 就是它抓到「winget 停在源协议提示上、界面永远转圈」(见 desktop/electron/envInstall.ts 头注释)。
+# runner 以管理员运行,测不到普通用户的 UAC 弹窗。
+name: probe-env-install
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            pm: winget
+          - os: windows-2022
+            pm: none
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build desktop (unpackaged)
+        working-directory: desktop
+        shell: bash
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+      - name: Remove Git (simulate a machine without it)
+        shell: pwsh
+        run: |
+          $u = Get-ChildItem 'C:\Program Files\Git' -Filter 'unins*.exe' | Select-Object -First 1
+          $p = Start-Process $u.FullName -ArgumentList '/VERYSILENT','/NORESTART','/SUPPRESSMSGBOXES' -PassThru; $null = $p.Handle; $p.WaitForExit()
+          "uninstall exit: $($p.ExitCode); Git\cmd exists: $(Test-Path 'C:\Program Files\Git\cmd')"
+          exit 0
+      - name: envCheck → envRun(git) → envCheck
+        shell: pwsh
+        run: node desktop/scripts/env-install.windows-probe.cjs desktop ${{ matrix.pm }}
