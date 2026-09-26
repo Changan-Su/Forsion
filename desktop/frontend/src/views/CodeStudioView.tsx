@@ -96,6 +96,15 @@ export function CodeStudioView({ extendView, leaf }: ViewProps) {
       .map(panel => (panel.params as { __type?: string } | undefined)?.__type) ?? []
     if (leftTypes.includes(desired) && !leftTypes.includes(previous)) return
     if (!ws.leftVisible && ws.stash.left.some(view => view.type === desired) && !ws.stash.left.some(view => view.type === previous)) return
+    // 左栏是用户收起的:只把暂存里的旧视图换成新的,保持收起,等用户自己展开(Codex 评审:原先切项目会把左栏强行弹出来)
+    if (!ws.leftVisible && !leftTypes.length) {
+      const next = root
+        ? { type: 'chat', params: { followActive: true, reuseKey: 'primary', studio: true } }
+        : { type: 'coding-navigation', params: {} }
+      const kept = ws.stash.left.filter(view => view.type !== previous && view.type !== desired)
+      useWorkspace.setState({ stash: { ...ws.stash, left: [next, ...kept] } })
+      return
+    }
     // Older saved Coding layouts still have Chat in the left slot. Replace that View
     // with navigation on the launchpad, and restore the real Chat View for a project.
     if (root) {

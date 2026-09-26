@@ -540,7 +540,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   sideScale: { left: 1, right: 1 },
   sideProfileKey: null,
 
-  setApi: (api) => set({ api }),
+  setApi: (api) => {
+    // 面板关掉后 id 会被 nextId 复用:别让新面板继承旧面板「自己改过名」的标记(Codex r3a-2)
+    api?.onDidRemovePanel?.((p) => selfTitled.delete(p.id))
+    set({ api })
+  },
   setDefaultBuilder: (fn) => set({ defaultBuilder: fn }),
   // bottom 显式兜底成 []:不能写 `{ bottom: [], ...defaults }` —— 若调用方带了 `bottom: undefined`
   // 这个**存在但为 undefined** 的键,展开时 `sidebarDefaults[side].filter` 会当场炸。
@@ -921,6 +925,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const cleared: Record<string, unknown> = {}
     for (const k of Object.keys(old)) cleared[k] = undefined
     panel.api.updateParameters({ ...cleared, ...params, __loc: old.__loc ?? 'main', __type: type })
+    selfTitled.delete(panel.id) // 换成的新视图还没自己改过名(Codex r3a-2)
     panel.api.setTitle(label(def.displayName))
     panel.api.setActive()
     // 就地切换不触发 onDidActivePanelChange(panel 未变)→ 自补簿记。

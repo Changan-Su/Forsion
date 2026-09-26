@@ -36,6 +36,15 @@ describe('splitCalloutTitle', () => {
     splitCalloutTitle(tree)
     expect(JSON.stringify(tree)).toBe(before)
   })
+  it('只拆标题后的第一个换行:正文里的软换行 / 硬换行留在同一段(Codex 评审)', () => {
+    const tree = { type: 'blockquote', children: [{ type: 'paragraph', position: {}, children: [
+      { type: 'text', value: '[!fold]+ 标题\n第一行' }, { type: 'break' }, { type: 'text', value: '第二行\n第三行' },
+    ] }] }
+    splitCalloutTitle(tree)
+    expect(tree.children).toHaveLength(2)
+    expect(tree.children[0].children).toEqual([{ type: 'text', value: '[!fold]+ 标题' }])
+    expect(tree.children[1].children).toEqual([{ type: 'text', value: '第一行' }, { type: 'break' }, { type: 'text', value: '第二行\n第三行' }])
+  })
   it('序列化树无 position 时保持原样，重复读取幂等', () => {
     const tree = { type: 'blockquote', children: [{ type: 'paragraph', children: [{ type: 'text', value: '[!fold]+ 标题\n正文' }] }] }
     splitCalloutTitle(tree)

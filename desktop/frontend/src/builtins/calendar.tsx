@@ -24,7 +24,7 @@ import {
   setActiveSpace, useSpaceStore, useWorkspace, Skeleton,
 } from '@lcl/engine'
 import type { SpaceDefinition, PersistedPanel } from '@lcl/engine'
-import { lazyRetry, preloadWhenIdle } from '../lazyRetry'
+import { lazyRetry } from '../lazyRetry'
 import { registerMessages } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { PRODUCT } from '../product'
@@ -72,7 +72,8 @@ export const calendarAvailable = (): boolean => hasNativeFeature('calendar') && 
 
 /** 三个视图的注册(启动 + 运行时开启共用)。 */
 export function installCalendarViews(): void {
-  preloadWhenIdle(CalendarView, TodoListView, CalendarConfigView)
+  // ⚠️ 日历三个 View 不空闲预热:它们经 AstryxScope 带进 @astryxdesign/core/reset.css(`:where(*)` 全局重置),
+  // 预热 = 每次启动就把它注入全局,别处样式跟着变(check:projectdetails 9c 实测错位 4px)。等 Astryx 重置收进作用域再开。
   if (!calendarAvailable()) return
   // ⚠️ 待办视图**吃 params 且非 singleton**(与另外两个不同,刻意的):
   //  · factory 必须把 params 透传下去 —— 从前写的是 `() => <TodoListView />`,把 ViewProps 整个丢了,

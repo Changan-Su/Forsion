@@ -347,7 +347,7 @@ async function run(app, win, stub, seen, home) {
   await win.screenshot({ path: shots.removeDialogEn = shot('remove-project-dialog-en-dark') })
   await dialog.locator('.dialog-btn').first().click()
   await dialog.waitFor({ state: 'detached' })
-  check('11a 英文:「Remove workspace」对话框(3 个会话、项目文件夹不删、勾选项缺省不勾);取消后什么都没删', /Remove workspace "Demo Project"/.test(enDialog.title) && /3 session/.test(enDialog.msg) && /folder on disk is not deleted/.test(enDialog.msg) && enDialog.check && !seen.sessionDeletes.length, JSON.stringify(enDialog))
+  check('11a 英文:「Remove project」对话框(3 个会话、项目文件夹不删、勾选项缺省不勾);取消后什么都没删', /Remove project "Demo Project"/.test(enDialog.title) && /3 session/.test(enDialog.msg) && /folder on disk is not deleted/.test(enDialog.msg) && enDialog.check && !seen.sessionDeletes.length, JSON.stringify(enDialog))
 
   await win.evaluate(() => { localStorage.setItem('tangu_locale', 'zh'); localStorage.setItem('forsion_theme_pref', 'light') })
   await win.reload({ waitUntil: 'domcontentloaded' })

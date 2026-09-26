@@ -704,7 +704,8 @@ export const Composer2: React.FC<{
       '/verify': isHost && onVerifyCommandChange
         ? () => { replaceSlash('/verify '); setSlashIndex(0) }
         : undefined,
-      '/think': onThinkingChange ? () => { replaceSlash('/think '); setSlashIndex(0) } : undefined,
+      // 补成不带空格的「/think」:斜杠词还在,菜单保持打开并列出七档(带空格的话斜杠词就断了,菜单直接关掉 —— Codex r3a-4)
+      '/think': onThinkingChange ? () => { replaceSlash('/think'); setSlashIndex(0) } : undefined,
       // /refine:插入原文让用户可补充说明,回车走普通发送——引擎检测 /refine 前缀注入复盘指令(agentLoop)。
       // 仅 host 会话(工作笔记写在本机 agent 目录,manage_harness 也是 host-only);运行中不露出——
       // 此时发送会变成 steer 注入,引擎的 refine 检测只在 run 开头跑一次,steer 进去的 /refine 不生效。

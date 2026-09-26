@@ -232,6 +232,7 @@ export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: Pro
                 <div className="csl-details-body">
                   <label htmlFor={`${id}-audience`}>{t('csl.audience')}</label>
                   <input id={`${id}-audience`} value={audience} onChange={(e) => setAudience(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void create() } }}
                     maxLength={500} placeholder={t('csl.audiencePlaceholder')} disabled={!!busy} />
                   <label htmlFor={`${id}-constraints`}>{t('csl.constraints')}</label>
                   <textarea id={`${id}-constraints`} value={constraints} onChange={(e) => setConstraints(e.target.value)}
@@ -258,6 +259,8 @@ export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: Pro
                   <label htmlFor={`${id}-name`}>{t('csl.projectName')}</label>
                   <input id={`${id}-name`} placeholder={t('csl.projectNamePlaceholder')} value={name}
                     onChange={(e) => { setName(e.target.value); setErrorKey(null) }} onBlur={() => setNameTouched(true)}
+                    // 表单里没有 submit 按钮(ChatBox 的发送钮是 type=button),单行输入框按回车不会触发隐式提交 —— 在这里接上(Codex 评审)
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void create() } }}
                     aria-invalid={!!nameIssue} aria-describedby={nameIssue ? `${id}-name-error` : undefined} disabled={!!busy} maxLength={110} />
                 </div>
               </div>

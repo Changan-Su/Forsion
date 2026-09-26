@@ -2,6 +2,8 @@
  * U-40「每次启动后第一次进日历 / 造物,三栏同时出骨架」的仪器(真 Electron + 桩引擎)。
  * 正典:docs/ToBeImproved/UIUX评审_2026-09-25.md U-40(FEEL-4)。
  *
+ * ⚠️ 只预热造物;日历三个 View 带 Astryx 全局重置样式,预热会让它每次启动就作用于整页(check:projectdetails 9c 抓到),
+ *    所以日历仍按基线判(首进拉分块、挂骨架),等 Astryx 重置收进作用域再开。
  * 成因(09-26 定位):React.lazy 首次渲染**总会**挂起一次(哪怕分块早已下载),再叠 React 19 的 Suspense
  * 揭示节流,首进就是一闪骨架 —— 所以当初「只 import() 预取分块」实测省不下来。修法在 lazyRetry:模块到手后
  * 新挂载的实例直接渲染真组件;宿主在 Electron 主窗空闲时对日历 / 造物的 View 调 preload()。本仪器只在页内打点:
@@ -43,6 +45,8 @@ const NO_PRELOAD = BASELINE || NEGATIVE
 /** 首进必须拉到的 lazy 分块(去掉 hash 后的名字前缀)。 */
 const LAZY_CHUNK = { calendar: /^CalendarView\.js$/, artificial: /^ArtificialView\.js$/ }
 const VISIBLE_MS = 150
+/** 宿主空闲预热的 Space。日历不在内:它带 Astryx 全局重置样式,预热会让它每次启动就生效(见 builtins/calendar.tsx)。 */
+const PRELOADED = new Set(['artificial'])
 /** 主区真内容的根:进了 Space 却只剩错误态 / 空白时它不在。 */
 const CONTENT = { calendar: '.amx-cal', artificial: '[data-artificial-root]' }
 const R = makeReporter()
@@ -233,10 +237,11 @@ async function main() {
     const first = all.filter((r) => r.space === space && r.n === 1)
     const again = all.filter((r) => r.space === space && r.n === 2)
     const lazyHit = (r) => r.net.assets.names.some((nm) => LAZY_CHUNK[space].test(nm))
-    R.check(BASELINE
-      ? `1 ${space}(基线):${first.length} 轮都点进去了,首进拉了自己的 lazy 分块(${LAZY_CHUNK[space].source})且挂出过骨架`
+    const expectBaseline = BASELINE || !PRELOADED.has(space)
+    R.check(expectBaseline
+      ? `1 ${space}(${BASELINE ? '基线' : '不预热'}):${first.length} 轮都点进去了,首进拉了自己的 lazy 分块(${LAZY_CHUNK[space].source})且挂出过骨架`
       : `1 ${space}:${first.length} 轮都点进去了,首进没有可见骨架(≥${VISIBLE_MS}ms)且 ${VISIBLE_MS}ms 内落定 —— 空闲预热生效`,
-      first.length === RUNS && first.every((r) => r.hit && r.active === space && !r.noClick && (BASELINE ? lazyHit(r) && r.mountedSpans.length > 0 : r.maxVisible < VISIBLE_MS && r.settled < VISIBLE_MS) && r.content.mounted && !r.content.error),
+      first.length === RUNS && first.every((r) => r.hit && r.active === space && !r.noClick && (expectBaseline ? lazyHit(r) && r.mountedSpans.length > 0 : r.maxVisible < VISIBLE_MS && r.settled < VISIBLE_MS) && r.content.mounted && !r.content.error),
       // ↑ 造物的骨架多半在 150ms 透明期内就撤,光看「可见」分不出修没修;落定(点击→最后一块骨架撤下)分得出:无预热约 250ms,有预热个位数
       JSON.stringify(first.map((r) => ({ hit: r.hit, active: r.active, lazyChunk: lazyHit(r), visible: r.maxVisible, settled: r.settled, content: r.content, noClick: !!r.noClick }))))
     R.check(`2 ${space}:同次启动再进没有可见骨架(≥${VISIBLE_MS}ms)—— 分块缓存生效`,

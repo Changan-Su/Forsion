@@ -437,8 +437,9 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
       lastTitle.current = label
       if (titleRef.current) titleRef.current.textContent = label
     }
-    if (i !== lastRangeI.current) {
-      lastRangeI.current = i
+    // 缓存键带上 n:窄窗下天数从 7 变 3 而左起日期不变时,右栏高亮也得跟着缩(Codex r3a-5)
+    if (i * 8 + n !== lastRangeI.current) {
+      lastRangeI.current = i * 8 + n
       setVisibleRange(fmtStamp(days[i], true), fmtStamp(days[Math.min(days.length - 1, i + n - 1)], true))
     }
   }

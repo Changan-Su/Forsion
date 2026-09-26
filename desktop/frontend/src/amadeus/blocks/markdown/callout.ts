@@ -26,10 +26,27 @@ export function splitCalloutTitle(tree: CalloutAst): void {
   const first = tree.children?.[0]
   if (tree.type === 'blockquote' && first?.type === 'paragraph' && first.position
     && /^\[![a-z]+\][+-]?/i.test(first.children?.[0]?.value ?? '')) {
-    const parts: CalloutAst[] = splitParagraph(first)
+    const parts: CalloutAst[] = splitAtTitle(first)
     if (parts.length > 1) tree.children!.splice(0, 1, ...parts)
   }
   tree.children?.forEach(splitCalloutTitle)
+}
+/** 只在标题后的**第一个**换行处拆成两段:正文里其余的软换行 / 硬换行原样留在第二段,重开保存不改写正文结构。
+ *  (整段交给 splitParagraph 会把每一行都拆成段落,硬换行语义就丢了 —— Codex 评审。)首个换行是行内 <br> 时仍走 splitParagraph。 */
+function splitAtTitle(p: CalloutAst): CalloutAst[] {
+  const kids = p.children ?? []
+  const pair = (a: CalloutAst[], b: CalloutAst[]): CalloutAst[] => (b.length ? [{ ...p, children: a }, { ...p, children: b }] : [p])
+  for (let i = 0; i < kids.length; i++) {
+    const k = kids[i]
+    if (k.type === 'break') return pair(kids.slice(0, i), kids.slice(i + 1))
+    if (k.type === 'text' && typeof k.value === 'string' && k.value.includes('\n')) {
+      const at = k.value.indexOf('\n')
+      const head = k.value.slice(0, at), tail = k.value.slice(at + 1)
+      return pair([...kids.slice(0, i), ...(head ? [{ ...k, value: head }] : [])], [...(tail ? [{ ...k, value: tail }] : []), ...kids.slice(i + 1)])
+    }
+    if (k.type === 'html') return splitParagraph(p)
+  }
+  return [p]
 }
 export const calloutTitleRemark = $remark('amadeusCalloutTitle', () => () => splitCalloutTitle)
 
