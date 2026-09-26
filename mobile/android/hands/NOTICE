@@ -1,0 +1,26 @@
+Forsion Hands (com.forsion.tangu.hands)
+Copyright 2026 Forsion.
+
+This module's screen-input helpers adapt techniques from two Apache-2.0 projects:
+
+  PokeClaw — https://github.com/agents-io/PokeClaw
+  Copyright 2026 agents.io
+  Licensed under the Apache License, Version 2.0.
+
+  ApkClaw — https://github.com/apkclaw-team/ApkClaw
+  Copyright 2026 apkclaw-team
+  Licensed under the Apache License, Version 2.0.
+  (PokeClaw derives its control layer from ApkClaw; the original ApkClaw
+   source carried no copyright header. Both are credited here per the
+   Apache-2.0 attribution requirement.)
+
+Specifically, the text-input fallback chain (ACTION_SET_TEXT → retry →
+clipboard + ACTION_PASTE) in Actions.setText and the "click self, else a
+clickable ancestor, else a gesture at the node centre" approach in
+Actions.click are adapted from PokeClaw's tool/impl/InputTextTool.java and
+service/ClawAccessibilityService.java.
+
+What was NOT taken from those projects: their automatic tapping of system
+"Allow" / permission dialogs, their type-all-input-masks behaviour,
+QUERY_ALL_PACKAGES, and their debug HTTP server. Forsion Hands does none of
+these; it neither auto-confirms system prompts nor exposes any network surface.

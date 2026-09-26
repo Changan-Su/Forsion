@@ -1,0 +1,25 @@
+// 手机操控 T2:app 与 hands 两个 APK **必须同一签名**(伴随包 checkSignatures 是硬防线)。
+// 把签名配置抽到这里,两个模块都 `apply from: '../signing.gradle'`,保证一次 gradle 调用里两包用同一把钥匙:
+//   - CI(build-desktop.yml)配了 ANDROID_KEYSTORE_* → release 用同一 keystore;
+//   - 没配 secrets / 本地 debug → 两包都用 ~/.android/debug.keystore(AGP 自动生成的同一把),签名天然一致。
+// ⚠️ 必须在各模块的 android {} 块之后 apply(需要 signingConfigs 容器已存在)。
+android {
+    signingConfigs {
+        release {
+            if (System.getenv("ANDROID_KEYSTORE_PATH")) {
+                storeFile file(System.getenv("ANDROID_KEYSTORE_PATH"))
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+    buildTypes {
+        release {
+            // 变量缺席时不挂签名(CI 那时改出 debug 包);两包同样处理,保持对称。
+            if (System.getenv("ANDROID_KEYSTORE_PATH")) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+}

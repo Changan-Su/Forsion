@@ -48,12 +48,31 @@ final class PhoneVerbs {
 
     enum Tier { R1, R2, R3 }
 
-    /** 本机 verb 表(契约 §4)。不在表里的 op:校验阶段就丢弃(不 claim、不回执)。 */
+    /**
+     * 本机 verb 表(契约 §4 = T1;§9.2 = T2)。不在表里的 op:校验阶段就丢弃(不 claim、不回执)。
+     * ⚠️ T2 的 observe/tap/type/scroll/key 必须在此,否则 parseCommand 返回 null → 不 claim → 引擎 not_picked_up。
+     */
     static final Set<String> OPS = set("launch", "view", "sendto", "dial", "send", "insert_event",
-        "alarm", "timer", "settings", "media", "volume", "torch", "clip");
+        "alarm", "timer", "settings", "media", "volume", "torch", "clip",
+        "observe", "tap", "type", "scroll", "key");
+    /** T2 屏幕操作 op(转交伴随包;不受前台约束,受租约 + 策略约束,契约 §9.2)。 */
+    static final Set<String> UI_OPS = set("observe", "tap", "type", "scroll", "key");
     /** 要启动 Activity 的 op:Forsion 不在前台 → needs_foreground(后台启动 Activity 会被系统拦)。 */
     static final Set<String> ACTIVITY_OPS = set("launch", "view", "sendto", "dial", "send", "insert_event",
         "alarm", "timer", "settings");
+    /**
+     * 主包在后台时可委托伴随包启动的 op(无障碍服务享后台启动豁免,契约 §9.2 / §9.7)。startFirst 类(sendto / dial /
+     * send / insert_event / alarm / timer / settings)不委托;R3 的 view 仍要前台(确认框开在 Forsion 里)。
+     */
+    static final Set<String> DELEGABLE_OPS = set("launch", "view");
+
+    /**
+     * 早筛:这条 op 此刻是否只能回 needs_foreground。要启动 Activity、Forsion 不在前台,且不是「伴随包就绪的 launch / view」。
+     * ⚠️ 09-26 评审:原来对全部 ACTIVITY_OPS 一律早筛,§9.2 的后台委托永远走不到(死代码)。
+     */
+    static boolean mustBeForeground(String op, boolean foreground, boolean handsReady) {
+        return ACTIVITY_OPS.contains(op) && !foreground && !(handsReady && DELEGABLE_OPS.contains(op));
+    }
 
     /**
      * view 一律拒绝的 scheme。契约列的五个之外加了 android-app:它就是 intent: 的另一种写法(Intent.parseUri 认)。
@@ -453,13 +472,19 @@ final class PhoneVerbs {
         return clean(auth.isEmpty() ? scheme + ":" : scheme + "://" + auth, 80);
     }
 
-    /** configure.strings 的必需键(契约 §6)。 */
+    /** configure.strings 的必需键(契约 §6)。前八个 = T1;后六个 = T2 租约浮层 / 停止药丸(转交伴随包)。
+     *  JS(mobile/src/phoneControl.ts)同版推齐全部十四个;缺任何一个整份 configure 作废(T1 确认框也跟着失效)。 */
     static final List<String> STRING_KEYS = Collections.unmodifiableList(Arrays.asList(
-        "enableTitle", "enableBody", "enableConfirm", "cancel", "confirmTitle", "confirmBody", "confirmAllow", "confirmDeny"));
+        "enableTitle", "enableBody", "enableConfirm", "cancel", "confirmTitle", "confirmBody", "confirmAllow", "confirmDeny",
+        "leaseTitle", "leaseBody", "leaseAllow", "leaseDeny", "pillLabel", "pillStop"));
+
+    /** 转交伴随包的 T2 文案键子集(§6)。 */
+    static final List<String> HANDS_STRING_KEYS = Collections.unmodifiableList(Arrays.asList(
+        "leaseTitle", "leaseBody", "leaseAllow", "leaseDeny", "pillLabel", "pillStop"));
 
     /**
-     * 校验 configure 下发的文案:八个键齐全、非空、≤2000 字;confirmBody 必须同时含 {app} 与 {target}
-     * (事实由原生填,翻译过的外壳藏不住事实)。不合格 → 返回原因(英文,进 reject),合格 → null。
+     * 校验 configure 文案:全部键齐全、非空、≤2000 字;confirmBody 必须含 {app} 与 {target},leaseBody 必须含 {minutes}
+     * (事实 / 时长由原生填,翻译过的外壳藏不住)。不合格 → 返回原因(英文,进 reject),合格 → null。
      */
     static String checkStrings(Map<String, String> s) {
         for (String k : STRING_KEYS) {
@@ -469,6 +494,7 @@ final class PhoneVerbs {
         }
         String body = s.get("confirmBody");
         if (!body.contains("{app}") || !body.contains("{target}")) return "confirmBody must contain {app} and {target}";
+        if (!s.get("leaseBody").contains("{minutes}")) return "leaseBody must contain {minutes}";
         return null;
     }
 
@@ -610,6 +636,46 @@ final class PhoneVerbs {
         synchronized boolean add(String ackId) {
             if (seen.containsKey(ackId)) return false;
             seen.put(ackId, Boolean.TRUE);
+            return true;
+        }
+    }
+
+    /**
+     * T2 租约的**账号键**(契约 §9.5 / §9.7):伴随包的租约认它,另一个账号的第一条 T2 op 一定重新弹同意。
+     * 取当前登录 token 的域分离 sha256,截 32 位 hex —— 伴随包永不见 token 本身(它不联网、不持 token,§9.1)。
+     * 没登录 → null(调用方 fail closed)。token 续期换新也会换键,与 HandsClient 的 tokenWatch 撤租约同一口径。
+     */
+    static String leaseKey(String token) {
+        if (token == null || token.isEmpty()) return null;
+        return sha256Hex("forsion-hands-lease-v1\n" + token).substring(0, 32);
+    }
+
+    /**
+     * 欠伴随包的一发 cancelAll(契约 §9.5,09-26 评审 P1)。纯 Java,可 JUnit(PhoneVerbsTest)。
+     * 换号 / 登出 / 关开关时主包要撤伴随包的租约,可那一刻未必绑着(懒绑定、binder 刚死):原来直接 return,这发撤销就丢了。
+     * 现在先记账(owe),绑上之后、公开 binder 之前还清(settle);每次转交指令之前也先 settle —— 还不上就不转交。
+     */
+    static final class PendingCancel {
+        interface Sender {
+            /** 发一次 cancelAll;成功 true。 */
+            boolean send();
+        }
+
+        private boolean owed;
+
+        synchronized void owe() {
+            owed = true;
+        }
+
+        synchronized boolean owed() {
+            return owed;
+        }
+
+        /** 欠着就先发,发成功才销账。返回 true = 不欠了(可以转交指令);false = 发失败,调用方别转交任何指令。 */
+        synchronized boolean settle(Sender s) {
+            if (!owed) return true;
+            if (!s.send()) return false;
+            owed = false;
             return true;
         }
     }

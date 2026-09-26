@@ -21,6 +21,7 @@ import { APP_VERSION } from '@/changelog'
 import { isNewer } from '../../desktop/shared/updateVersion'
 import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudAccountCache'
 import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken } from './capacitorAuth'
+import { pickAndroidApk } from './releaseApk'
 
 const TOKEN_KEY = 'forsion_token'
 // 本机偏好(默认模型 / 生图模型 / 上次审批档与思考档…)。移动端没有引擎的 ~/.tangu/config.json,
@@ -205,7 +206,8 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
       if (rel) {
         answered += 1
         const ghVer = String(rel?.tag_name || '').replace(/^v/i, '').trim()
-        const asset = (rel?.assets || []).find((a: any) => /-android(-debug)?\.apk$/i.test(String(a?.name || '')))
+        // ⚠️ 同一 release 还挂着手机操控伴随包(Hands):排除它、优先 Forsion-Tangu,见 releaseApk.ts。
+        const asset = pickAndroidApk(rel?.assets)
         // 没有 APK 资产 = 这个 tag 的 build-android 挂了(它不阻断发版),别报一个下不到的新版本。
         if (ghVer && asset?.browser_download_url) cands.push({ version: ghVer, url: String(asset.browser_download_url) })
       }

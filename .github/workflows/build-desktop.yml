@@ -251,6 +251,8 @@ jobs:
         run: |
           npm install --no-audit --no-fund
           npm run typecheck
+          # 更新检查不许挑到伴随包,且本文件里伴随包的资产名不许被旧客户端的正则认成本体(契约 §9.1)。
+          npm run test:releaseapk
 
       - name: Build web bundle + cap sync
         working-directory: mobile
@@ -284,15 +286,21 @@ jobs:
           npm run e2e:settingscfg
           npm run e2e:update
 
-      # 原生纯逻辑单测(JVM,不起设备):手机操控的指令校验 / R1-R3 分级 / 号码清洗 / Intent 规划(PhoneVerbsTest)。
-      # 原生其余部分(真正调系统 API 的 PhoneControlPlugin)CI 只有编译覆盖,设备行为靠 scripts/phone-control-emu.cjs。
-      - name: Android unit tests
+      # 原生纯逻辑单测(JVM,不起设备):主包 PhoneVerbsTest(指令校验 / R1-R3 分级 / 号码清洗 / Intent 规划)
+      # 与伴随包 hands 的 TreeSerializer / Policy / HandsVerbs 测试。testDebugUnitTest 会在两个模块上各跑一遍。
+      # 真正调系统 API 的部分(PhoneControlPlugin / HandsBridgeService 等)CI 只有编译覆盖,设备行为靠 scripts/phone-control-emu.cjs。
+      - name: Android unit tests (app + hands)
         working-directory: mobile/android
         run: |
           chmod +x gradlew
           ./gradlew testDebugUnitTest --no-daemon
 
-      - name: Build APK
+      # 本体 + 手机操控 T2 伴随包(hands),**同一签名**(../signing.gradle):assembleRelease/Debug 一次构建两个模块。
+      # ⚠️ 伴随包资产名必须含 `Hands`(契约 §9.1):设置页引导按此认,server pickReleaseAssets 也按 /hands/i 排除本体。
+      # ⚠️ 且**绝不能**以 `-android(-debug).apk` 结尾:已装机的每个旧版客户端更新检查(mobileShim GitHub 兜底)
+      #    取第一个匹配 /-android(-debug)?\.apk$/i 的资产,Forsion-Hands 排在 Forsion-Tangu 前面 → 旧客户端会把伴随包当本体更新。
+      #    这条由 mobile 的 `npm run test:releaseapk` 读本文件钉住。
+      - name: Build APKs (app + hands)
         working-directory: mobile/android
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
@@ -309,17 +317,20 @@ jobs:
             export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/release.keystore"
             ./gradlew assembleRelease --no-daemon
             cp app/build/outputs/apk/release/app-release.apk "Forsion-Tangu-${VN}-android.apk"
+            cp hands/build/outputs/apk/release/hands-release.apk "Forsion-Hands-${VN}.apk"
           else
             echo "::notice::未配置 ANDROID_KEYSTORE_B64,产出 debug 签名 APK(可安装;配齐四个 secrets 后自动改出正式签名包)"
             ./gradlew assembleDebug --no-daemon
             cp app/build/outputs/apk/debug/app-debug.apk "Forsion-Tangu-${VN}-android-debug.apk"
+            cp hands/build/outputs/apk/debug/hands-debug.apk "Forsion-Hands-${VN}-debug.apk"
           fi
 
-      - name: Upload APK
+      - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
           name: forsion-android
-          path: mobile/android/Forsion-Tangu-*.apk
+          # 本体 + 伴随包一起传;release 作业按 tag 收进 GitHub Release。
+          path: mobile/android/Forsion-*.apk
 
   # 仅在打 v* tag 时:收集三平台产物(+APK)→ 创建/更新对应 Release 并附件。
   # APK 是「顺便」:build-android 失败不挡桌面发版(always + 只硬依赖 build 成功)。

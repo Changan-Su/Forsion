@@ -60,10 +60,20 @@
          (CameraManager.setTorchMode 不需要)。见 Forsion-Genesis/tangu-agent/docs/phone-control.md。 -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
 
+    <!-- 手机操控 T2:驱动伴随包(com.forsion.tangu.hands)的 signature 权限。两包各声明一份、同签名可共存;
+         异签名安装会因重复权限被拒(= 伴随包签名不符的另一种表现)。主包持 uses-permission 才能绑 bridge。
+         见 Forsion-Genesis/tangu-agent/docs/phone-control.md §9.1。 -->
+    <permission
+        android:name="com.forsion.tangu.permission.DRIVE_HANDS"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.forsion.tangu.permission.DRIVE_HANDS" />
+
     <!-- 手机操控的包可见性(Android 11+):只声明要用的几类 Intent,不申请 QUERY_ALL_PACKAGES。
          LAUNCHER 让「按名字打开 App」与目标 App 的显示名可见;其余让 resolveActivity 能判定接手者(R1/R3 分级)。
          ⚠️ 带 <data> 的过滤器只匹配同样带 data 的查询:DIAL/SENDTO 必须写 scheme,SEND 必须写 mimeType。 -->
     <queries>
+        <!-- 手机操控 T2:伴随包按包名可见(判装没装 / 签名 / 绑定 bridge)。契约 §9.1。 -->
+        <package android:name="com.forsion.tangu.hands" />
         <intent>
             <action android:name="android.intent.action.MAIN" />
             <category android:name="android.intent.category.LAUNCHER" />

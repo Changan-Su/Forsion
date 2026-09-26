@@ -14,9 +14,12 @@ import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
 import android.media.AudioManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.provider.Settings;
+import android.util.Base64;
 import android.util.Log;
 import android.view.KeyEvent;
 
@@ -29,6 +32,7 @@ import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.time.ZoneId;
@@ -71,6 +75,7 @@ public class PhoneControlPlugin extends Plugin {
     private static final String TAG = "PhoneControl";
     static final int PROTO = 1;
     static final String CAP_INTENTS = "phone.intents";
+    static final String CAP_UI = "phone.ui";
     private static final String PREFS = "forsion_phone_control";
     private static final String KEY_ENABLED = "enabled";
     private static final long DEADLINE_MARGIN_MS = PhoneVerbs.DEADLINE_MARGIN_MS;
@@ -86,6 +91,8 @@ public class PhoneControlPlugin extends Plugin {
     private final Handler main = new Handler(Looper.getMainLooper());
     private volatile boolean foreground;
     private volatile Map<String, String> strings;
+    /** 伴随包客户端(T2)。懒建;绑定 / 状态判定都在里面(契约 §9.1)。 */
+    private volatile HandsClient hands;
     /** 见过的 ackId(契约 §3.1 的本机 LRU)。校验通过的那一刻就占位 —— 重复转交在 claim 发出之前就被挡掉。 */
     private final PhoneVerbs.SeenAcks seenAcks = new PhoneVerbs.SeenAcks(LRU_SIZE);
 
@@ -124,14 +131,46 @@ public class PhoneControlPlugin extends Plugin {
     @PluginMethod
     public void status(PluginCall call) {
         boolean on = isEnabled();
+        // hands 状态如实报告(与开关无关,契约 §6):没装 / 签名 / 无障碍 / proto。可能懒绑定,故不在主线程调
+        //(Capacitor 插件方法默认在线程池上跑,阻塞 ≤1.5s 可接受)。
+        HandsClient.State hs = hands().state();
         JSObject r = new JSObject();
         r.put("enabled", on);
         JSArray caps = new JSArray();
-        if (on) caps.put(CAP_INTENTS);
+        if (on) {
+            caps.put(CAP_INTENTS);
+            if (hs == HandsClient.State.READY) caps.put(CAP_UI); // §9.1:开关开 ∧ 伴随包就绪
+        }
         r.put("capabilities", caps);
         r.put("foreground", foreground);
         r.put("proto", PROTO);
+        r.put("hands", HandsClient.stateName(hs));
+        r.put("sdk", Build.VERSION.SDK_INT);
         call.resolve(r);
+    }
+
+    /** 打开系统无障碍设置页(设置页「打开无障碍设置」调用,契约 §6)。 */
+    @PluginMethod
+    public void openAccessibilitySettings(PluginCall call) {
+        Intent i = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        Activity a = getActivity();
+        try {
+            (a != null ? a : getContext()).startActivity(i);
+            call.resolve();
+        } catch (RuntimeException e) {
+            call.reject("cannot open accessibility settings");
+        }
+    }
+
+    private HandsClient hands() {
+        HandsClient h = hands;
+        if (h == null) {
+            synchronized (this) {
+                if (hands == null) hands = new HandsClient(getContext());
+                h = hands;
+            }
+        }
+        return h;
     }
 
     @PluginMethod
@@ -143,6 +182,8 @@ public class PhoneControlPlugin extends Plugin {
         }
         if (!want) {
             prefs().edit().putBoolean(KEY_ENABLED, false).apply();
+            // 关开关 = 连同伴随包的租约一起撤(药丸、事件订阅):否则「已关闭」之后 10 分钟内药丸还挂着、租约还能被沿用。
+            hands().cancelAll();
             resolveEnabled(call, false);
             return;
         }
@@ -202,7 +243,16 @@ public class PhoneControlPlugin extends Plugin {
             return;
         }
         strings = Collections.unmodifiableMap(s);
+        // T2:把租约浮层 / 药丸文案转交伴随包(§6)。伴随包除无障碍 label/description 外没有用户可见字面量。
+        pushHandsStrings(s);
         call.resolve();
+    }
+
+    /** 把 T2 文案子集下发给伴随包(缓存于 HandsClient,绑定成功后自动补推)。 */
+    private void pushHandsStrings(Map<String, String> s) {
+        JSONObject o = new JSONObject();
+        for (String k : PhoneVerbs.HANDS_STRING_KEYS) put(o, k, s.get(k));
+        hands().configure(o.toString());
     }
 
     @PluginMethod
@@ -231,6 +281,8 @@ public class PhoneControlPlugin extends Plugin {
         PhoneClaim wire = new PhoneClaim(getContext(), apiBase, cmd.runId, cmd.ackId);
         PhoneClaim.Claimed claimed = wire.claim(PhoneVerbs.sha256Hex(cmd.body));
         if (claimed == null) return; // 伪造 / 重放 / 过期 / 他人的 run:不执行、不回执
+        // 急停要 abort 的是「正在驱动手机的 run」:claim 成功即记,不随单条 op 清掉 —— 用户多半在两步之间(模型思考时)点停止(§9.5)。
+        hands().noteRun(cmd.runId);
         // ⚠️ 锚在成功那次响应的到达时刻,不是第一次发出:丢响应重试时引擎回的是剩余时长(见 PhoneVerbs.localDeadline)。
         long deadline = PhoneVerbs.localDeadline(claimed.receivedAt, claimed.execMs);
         JSONObject result;
@@ -246,6 +298,8 @@ public class PhoneControlPlugin extends Plugin {
     /** 返回 null = 不执行也不回执(过了本地期限 / commit 被引擎拒绝:引擎那边已经兑现了超时或 abort)。 */
     private JSONObject perform(PhoneVerbs.Command cmd, long deadline, PhoneClaim wire, String nonce) throws Exception {
         if (!isEnabled()) return disabled();
+        // T2 屏幕操作:转交伴随包(不受前台约束,受租约 + 策略约束)。走 lease → commit → run 两段(契约 §9.5)。
+        if (PhoneVerbs.UI_OPS.contains(cmd.op)) return uiOp(cmd, deadline, wire, nonce);
         PhoneVerbs.Plan plan;
         try {
             plan = PhoneVerbs.plan(cmd.op, cmd.args, getContext().getPackageName(), ZoneId.systemDefault());
@@ -253,7 +307,10 @@ public class PhoneControlPlugin extends Plugin {
             return fail(r.code, r.getMessage());
         }
         // 早筛:不在前台就别排队、别弹确认框。真正的判定在主线程 startActivity 前一刻(start)。
-        if (plan.needsForeground() && !(foreground && getActivity() != null)) return needsForeground();
+        // launch / view 在伴随包就绪时放行:后台由伴随包代劳启动(§9.2);state() 可能懒绑定(≤1.5s),只在需要时问。
+        boolean fg = foreground && getActivity() != null;
+        boolean handsReady = !fg && PhoneVerbs.DELEGABLE_OPS.contains(plan.op) && hands().state() == HandsClient.State.READY;
+        if (PhoneVerbs.mustBeForeground(plan.op, fg, handsReady)) return needsForeground();
         if (expired(deadline)) return null;
         // 执行道:排到本地期限还没轮到 → 什么都没做,如实回执(期限余量正好留给这一枪)。
         // ⚠️ 不能不吭声:引擎会按 no_report 告诉模型「可能已经发生」—— 比修之前 claim 被堵时的 not_picked_up 还失真。
@@ -261,9 +318,11 @@ public class PhoneControlPlugin extends Plugin {
             return fail("busy", "Another phone action was still waiting for the user, so this one ran out of time before it could start. Nothing was done.");
         }
         try {
-            // 排队期间状态可能变了:开关、期限、前台都再查一遍。
+            // 排队期间状态可能变了:开关、期限、前台都再查一遍。launch / view 不在这里判前台:
+            // start() 在主线程现查,后台 → delegateStart(伴随包不就绪时它自己回 needs_foreground)。
             if (!isEnabled()) return disabled();
-            switch (PhoneVerbs.gate(SystemClock.elapsedRealtime(), deadline, plan.needsForeground(), foreground && getActivity() != null)) {
+            boolean needFg = plan.needsForeground() && !PhoneVerbs.DELEGABLE_OPS.contains(plan.op);
+            switch (PhoneVerbs.gate(SystemClock.elapsedRealtime(), deadline, needFg, foreground && getActivity() != null)) {
                 case EXPIRED: return null;
                 case NEEDS_FOREGROUND: return needsForeground();
                 default: break;
@@ -320,7 +379,10 @@ public class PhoneControlPlugin extends Plugin {
         String app = appLabel(resolve(i));
         Started s = start(i, deadline);
         if (s == Started.STARTED) return handoff(app, null);
-        return s == Started.NO_HANDLER ? fail("no_handler", "That app could not be opened.") : notStarted(s);
+        if (s == Started.NO_HANDLER) return fail("no_handler", "That app could not be opened.");
+        // 后台 + 伴随包就绪 → 委托伴随包启动(§9.2);否则 needs_foreground / null。
+        if (s == Started.BACKGROUND) return delegateStart(i, pkg, app, deadline);
+        return notStarted(s);
     }
 
     /**
@@ -347,8 +409,11 @@ public class PhoneControlPlugin extends Plugin {
             // 单一接手者:钉死包名 —— 用户确认的是哪个 App,启动的就是哪个 App。
             if (handlers.size() == 1) i.setPackage(pkgs.get(0));
             String app = joinLabels(labels);
-            if (PhoneVerbs.tierForView(PhoneVerbs.schemeOf(spec.data), pkgs) == PhoneVerbs.Tier.R3) {
+            boolean r3 = PhoneVerbs.tierForView(PhoneVerbs.schemeOf(spec.data), pkgs) == PhoneVerbs.Tier.R3;
+            if (r3) {
                 if (strings == null) return fail("error", "Phone control is not set up yet; ask the user to reopen Forsion.");
+                // R3 的确认框开在 Forsion 里:后台弹不出来(挂在暂停的 Activity 上干等到期),不委托伴随包。
+                if (!(foreground && getActivity() != null)) return needsForeground();
                 if (!confirm(app, PhoneVerbs.targetOf(spec.data), deadline)) {
                     return SystemClock.elapsedRealtime() > deadline + DEADLINE_MARGIN_MS ? null
                         : fail("declined", "The user did not allow opening " + PhoneVerbs.clean(app, 60) + ".");
@@ -360,9 +425,124 @@ public class PhoneControlPlugin extends Plugin {
             }
             Started s = start(i, deadline);
             if (s == Started.STARTED) return handoff(app, null);
+            // §9.2 委托只给 R1;R3 确认之后用户按了 Home → needs_foreground,不在后台把 App 顶到用户眼前(台架 case 15)。
+            // 单一接手者时钉死的包名一并交给伴随包,它据此判「目标真到前台」;多个接手者(系统选择器)时为 null。
+            if (s == Started.BACKGROUND) return r3 ? needsForeground() : delegateStart(i, i.getPackage(), app, deadline);
             if (s != Started.NO_HANDLER) return notStarted(s);
+            // NO_HANDLER:试下一个候选
         }
         return fail("no_handler", "No app on this phone can open these links.");
+    }
+
+    // ───────────────────────────── T2:屏幕操作(转交伴随包,契约 §9) ─────────────────────────────
+
+    /**
+     * 一条 T2 op 的两段流程:lease(判租约,首条弹浮层)→(needsCommit 时)commit → run(执行 + 回新 observation)。
+     * ⚠️ 只有主包能 claim / commit;伴随包做浮层与执行。deadline(elapsedRealtime)一并传入,两进程同一时钟。
+     */
+    private JSONObject uiOp(PhoneVerbs.Command cmd, long deadline, PhoneClaim wire, String nonce) throws Exception {
+        HandsClient hc = hands();
+        switch (hc.state()) {
+            case MISSING: return fail("hands_missing", "The companion app (Forsion Hands) is not installed on this phone.");
+            case SIGNATURE_MISMATCH: return fail("hands_signature_mismatch", "The installed companion app is not signed by Forsion, so it will not be used.");
+            case DISABLED: return fail("hands_disabled", "The companion app's accessibility service is not turned on.");
+            case PROTO_MISMATCH: return fail("hands_disabled", "The companion app version does not match this Forsion; ask the user to update both.");
+            default: break; // READY
+        }
+        if (expired(deadline)) return null;
+        // 执行道:与 R3 同一条;排到本地期限还没轮到 → 什么都没做,如实回 busy(不能沉默 → no_report)。
+        if (!lane.tryAcquire(Math.max(0, deadline - SystemClock.elapsedRealtime()), TimeUnit.MILLISECONDS)) {
+            return fail("busy", "Another phone action was still waiting for the user, so this one ran out of time before it could start. Nothing was done.");
+        }
+        try {
+            if (!isEnabled()) return disabled();
+            if (expired(deadline)) return null;
+            // 账号键(§9.5 / §9.7):伴随包的租约认它,换号后的第一条 T2 op 一定重新弹同意。只给 token 的摘要,不给 token。
+            String acct = PhoneVerbs.leaseKey(NativeConfig.token(getContext()));
+            if (acct == null) return fail("error", "Forsion is not signed in on this phone.");
+            // lease 阶段:租约期内直接放行;否则弹浮层等用户(浮层到期自动关 = declined)。
+            JSONObject lease = execHands(hc, stage("lease", cmd, deadline, null, null, null).put("acct", acct));
+            if (lease == null) return fail("error", "The companion app did not respond.");
+            if (lease.optBoolean("expired", false)) return null;
+            if (!lease.optBoolean("granted", false)) {
+                String code = lease.optString("code", "lease_declined");
+                return fail(code, uiCodeMessage(code));
+            }
+            if (lease.optBoolean("needsCommit", false)) {
+                if (expired(deadline)) return null;
+                if (!wire.commit(nonce)) return null; // 引擎已 abort / 超时
+                if (expired(deadline)) return null;   // commit 阻塞回来可能已过期
+            }
+            // ⚠️ 发 run 之前再认一次开关(09-26 评审 P1):等浮层 / commit 的这段时间里用户可能关了开关 ——
+            //    关开关会 cancelAll,但那一发可能输给这里;伴随包的撤销代数兜住它那一侧,这里兜住主包这一侧。
+            if (!isEnabled()) return disabled();
+            // run 阶段
+            JSONObject res = execHands(hc, stage("run", cmd, deadline, null, null, null).put("acct", acct));
+            if (res == null) return fail("error", "The companion app did not respond.");
+            if (res.optBoolean("expired", false)) return null;
+            // 截图回填:伴随包只给 token,字节经管道单独拉,base64 成 data URI(引擎按 image 消毒,上限 2.5MB)。
+            String token = res.optString("image_pending", "");
+            if (!token.isEmpty()) {
+                res.remove("image_pending");
+                byte[] img = hc.readImage(token);
+                if (img != null) put(res, "image", "data:image/jpeg;base64," + Base64.encodeToString(img, Base64.NO_WRAP));
+            }
+            return res;
+        } finally {
+            lane.release();
+        }
+    }
+
+    /** hc.exec 的 JSON 封装:null(绑不上 / binder 死)→ null。 */
+    private static JSONObject execHands(HandsClient hc, JSONObject stageJson) {
+        String out = hc.exec(stageJson.toString());
+        if (out == null) return null;
+        try {
+            return new JSONObject(out);
+        } catch (JSONException e) {
+            return null;
+        }
+    }
+
+    /** 组装转交伴随包的 exec body。intentUri / pkg / app 仅 start 阶段用(§9.2 委托)。 */
+    private static JSONObject stage(String stageName, PhoneVerbs.Command cmd, long deadline,
+                                    String intentUri, String pkg, String app) {
+        JSONObject o = new JSONObject();
+        put(o, "stage", stageName);
+        if (cmd != null) {
+            put(o, "op", cmd.op);
+            put(o, "args", cmd.args);
+        }
+        put(o, "deadline", deadline);
+        if (intentUri != null) put(o, "intent", intentUri);
+        if (pkg != null) put(o, "pkg", pkg);
+        if (app != null) put(o, "app", app);
+        return o;
+    }
+
+    private static String uiCodeMessage(String code) {
+        switch (code) {
+            case "lease_declined": return "The user did not allow Tangu to operate the screen.";
+            case "locked": return "The phone screen is off or locked.";
+            default: return "Screen control could not start (" + code + ").";
+        }
+    }
+
+    /**
+     * §9.2 委托:主包在后台(needs_foreground)且伴随包就绪时,把启动 Activity 交给伴随包(无障碍绑定享后台启动豁免)。
+     * 伴随包不就绪 → 保持老行为 needs_foreground。OEM 拦截框 / 起不来 → needs_user(不谎报成功)。
+     * pkg = 目标包(已知就给:伴随包按「它到了前台」判成功;null 时只能按「前台换了人」判)。
+     */
+    private JSONObject delegateStart(Intent i, String pkg, String app, long deadline) {
+        HandsClient hc = hands();
+        if (hc.state() != HandsClient.State.READY) return needsForeground();
+        if (expired(deadline)) return null;
+        JSONObject r = execHands(hc, stage("start", null, deadline, i.toUri(Intent.URI_INTENT_SCHEME), pkg, app));
+        if (r == null) return needsForeground(); // 连不上伴随包:回落老行为
+        if (r.optBoolean("expired", false)) return null;
+        if (r.optBoolean("ok", false)) return handoff(app, null);
+        String code = r.optString("code", "needs_user");
+        return fail(code, r.optString("error", "The app could not be opened from the background."));
     }
 
     /**

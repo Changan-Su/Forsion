@@ -53,6 +53,7 @@ import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, onUserRunStart, type HistorianForkSeed } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
 import { describeImages, resolveVisionModelId, shouldDescribeImages } from './visionService.js';
+import { toolImageMessages, type ToolImage } from './toolImages.js';
 import { replayAssistantHistory, stepLlmResponse, loadReplaySteps, dropCoveredCalls } from './historyReplay.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { isRetryableLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
@@ -1755,7 +1756,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
     // view_image 等工具产出的图片回流:工具把 data URL 交回这里,本轮工具跑完后物化成一条
     // user 图像消息追加到对话尾部(尾部追加 → 不动前缀,缓存安全;复用 toImageParts)。
-    const pendingToolImages: { url: string }[] = [];
+    // phone_observe 的截图带 `untrusted` 前言(别的 App 的屏幕),物化时单独成条、标不可信(toolImages.ts)。
+    const pendingToolImages: ToolImage[] = [];
     const MAX_TOOL_IMAGES_PER_ROUND = 8;
     // display_file / generate_image / 表情包:工具要展示给**用户**的文件。即时 publish 让桌面内联渲染;
     // 累积到下一次 finalize 时随 assistant 消息落库(刷新会话仍在)。不回灌模型上下文、不计费。
@@ -1795,7 +1797,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       agentSlug: activeAgentSlug,
       collectImage: (img) => {
         if (img && typeof img.url === 'string' && img.url && pendingToolImages.length < MAX_TOOL_IMAGES_PER_ROUND) {
-          pendingToolImages.push({ url: img.url });
+          pendingToolImages.push({ url: img.url, ...(typeof img.untrusted === 'string' && img.untrusted ? { untrusted: img.untrusted } : {}) });
         }
       },
       displayFile: (item) => {
@@ -2622,25 +2624,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       if (pendingToolImages.length) {
         const imgs = pendingToolImages.splice(0);
         // 主模型没有原生视觉 → 图直接塞过去只会被 provider 拒(或静默忽略)。先交给「辅助模型 ·
-        // 图像识别」转成文字再入上下文;没配槽/识别失败 → 退回原来的塞图行为(宁可让 provider
-        // 报错也不静默丢内容)。判定与转写都做过 60s 缓存/单次调用,不在热路径上放大开销。
+        // 图像识别」转成文字再入上下文;没配槽/识别失败 → 可信图退回原来的塞图行为(宁可让 provider
+        // 报错也不静默丢内容),不可信图(手机截图)丢图留说明(见 toolImages.ts)。判定与转写都做过
+        // 60s 缓存/单次调用,不在热路径上放大开销。
         // 已中止就整段跳过:这里有两三次不吃 run signal 的云请求(目录/解析),中止后还去排队等
         // 60s 会把「停止」拖成肉眼可见的卡顿(2026-07-27 Codex 评审)。
-        let described = '';
-        if (!ac.signal.aborted && (await shouldDescribeImages(modelId, appId, agentConfig.visionMode as string | undefined))) {
-          try {
-            const visionModelId = await resolveVisionModelId(toolCtx.visionModelId, appId);
-            described = await describeImages(imgs, { modelId: visionModelId, userId, appId, signal: ac.signal });
-          } catch (e: any) {
-            console.warn(`[agent-core] run=${runId} 图像识别降级失败(退回直接送图):`, e?.message || e);
-          }
-        }
-        workingMessages.push({
-          role: 'user',
-          content: described
-            ? `(The images read by the tools above were transcribed by the vision assistant model, because the current model has no native image input. Description follows.)\n\n${described}`
-            : toImageParts('(The images read by the tools above are shown below; analyze them accordingly)', imgs),
-        } as ChatMessage);
+        const needDescribe = !ac.signal.aborted && (await shouldDescribeImages(modelId, appId, agentConfig.visionMode as string | undefined));
+        // ⚠️ 这一行被 toolImages.test.ts 按源码文本钉住(物化的装配没有可跑的测试路径)。
+        workingMessages.push(...await toolImageMessages(imgs, needDescribe
+          ? async (batch) => describeImages(batch, { modelId: await resolveVisionModelId(toolCtx.visionModelId, appId), userId, appId, signal: ac.signal })
+          : null, (e: any) => console.warn(`[agent-core] run=${runId} 图像识别降级失败(可信图退回直接送图,不可信图丢弃):`, e?.message || e)));
       }
       allToolResults.push(...toolResults);
 

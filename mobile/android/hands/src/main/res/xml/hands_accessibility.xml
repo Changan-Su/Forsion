@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  手机操控 T2 无障碍服务配置(契约 §9.1)。
+  - 事件类型只订窗口状态 / 内容变化(判界面稳定 settle);运行时未租约时 setServiceInfo 置 0,不收任何事件。
+  - flagRetrieveInteractiveWindows:getWindows() 拿到全部可交互窗口(含输入法 / 浮层),observe 才看得全。
+  - flagReportViewIds:节点带 resource-id(纯图标按钮兜底 id=short 名)。
+  - canRetrieveWindowContent:读节点树。canTakeScreenshot:observe 的可选截图(API 30+)。
+  - description 必须写明:屏幕内容会发送到 Forsion 云端(§9,用户在系统页看到的就是这段)。
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows"
+    android:canRetrieveWindowContent="true"
+    android:canTakeScreenshot="true"
+    android:description="@string/hands_a11y_description"
+    android:label="@string/hands_a11y_label"
+    android:notificationTimeout="100" />

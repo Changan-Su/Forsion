@@ -1,0 +1,18 @@
+{
+  "pkg": "com.android.launcher3",
+  "label": "桌面",
+  "aliases": ["桌面", "Launcher", "Home"],
+  "start": "home",
+  "screens": {
+    "home": {
+      "nodes": [
+        { "cls": "TextView", "text": "9月26日 周六 · 晴 22°C" },
+        { "cls": "TextView", "text": "设置", "clk": true, "goto": "@com.android.settings", "x": 150, "y": 1900 },
+        { "cls": "TextView", "text": "哔哩哔哩", "clk": true, "goto": "@tv.danmaku.bili", "x": 410, "y": 1900 },
+        { "cls": "TextView", "text": "美团", "clk": true, "goto": "@com.sankuai.meituan", "x": 670, "y": 1900 },
+        { "cls": "TextView", "text": "小红书", "clk": true, "goto": "@com.xingin.xhs", "x": 930, "y": 1900 },
+        { "cls": "TextView", "text": "Forsion", "clk": true, "goto": "@com.forsion.tangu", "x": 150, "y": 2150 }
+      ]
+    }
+  }
+}

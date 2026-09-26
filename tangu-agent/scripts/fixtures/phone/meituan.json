@@ -1,0 +1,52 @@
+{
+  "pkg": "com.sankuai.meituan",
+  "label": "美团",
+  "aliases": ["美团", "Meituan", "meituan"],
+  "start": "home",
+  "state": { "cart": 0, "shop_logo": 0 },
+  "screens": {
+    "home": {
+      "nodes": [
+        { "cls": "TextView", "text": "搜索商家或商品", "id": "search_entry", "clk": true, "goto": "search" },
+        { "cls": "TextView", "text": "外卖", "clk": true },
+        { "cls": "TextView", "text": "美食", "clk": true },
+        { "cls": "TextView", "text": "酒店民宿", "clk": true },
+        { "cls": "TextView", "text": "休闲玩乐", "clk": true },
+        { "cls": "LinearLayout", "text": "附近好店 · 喜茶(国贸店) 4.8分", "clk": true }
+      ]
+    },
+    "search": {
+      "nodes": [
+        { "cls": "ImageButton", "text": "", "desc": "返回", "clk": true, "goto": "<back>", "x": 60, "y": 160 },
+        { "cls": "EditText", "text": "", "hint": "搜索商家或商品", "edit": true, "focused": true, "field": "q" },
+        { "cls": "TextView", "text": "搜索", "clk": true, "goto": "results", "requires": "q", "x": 1000, "y": 160 }
+      ]
+    },
+    "results": {
+      "nodes": [
+        { "cls": "ImageButton", "text": "", "desc": "返回", "clk": true, "goto": "<back>", "x": 60, "y": 160 },
+        { "cls": "EditText", "text": "", "edit": true, "field": "q" },
+        { "cls": "TextView", "text": "搜索", "clk": true, "goto": "results", "requires": "q", "x": 1000, "y": 160 },
+        { "cls": "ImageView", "clk": true, "inc": "shop_logo", "x": 90 },
+        { "cls": "TextView", "text": "瑞幸咖啡(国贸三期店) · 4.9分 · 月售9999+ · 距你350m · 配送费¥2" },
+        { "cls": "TextView", "text": "生椰拿铁 大杯 · 券后¥9.9" },
+        { "cls": "Button", "text": "", "desc": "加入购物车:生椰拿铁", "clk": true, "inc": "cart", "x": 980 },
+        { "cls": "TextView", "text": "星巴克(国贸中心店) · 4.8分 · 月售3000+ · 距你600m" },
+        { "cls": "TextView", "text": "燕麦拿铁 大杯 · ¥33" },
+        { "cls": "Button", "text": "", "desc": "加入购物车:燕麦拿铁", "clk": true, "inc": "cart", "x": 980 },
+        { "cls": "TextView", "text": "已选 {cart} 件" },
+        { "cls": "Button", "text": "去结算", "clk": true, "goto": "confirm", "x": 900, "y": 2280 }
+      ]
+    },
+    "confirm": {
+      "nodes": [
+        { "cls": "ImageButton", "text": "", "desc": "返回", "clk": true, "goto": "<back>", "x": 60, "y": 160 },
+        { "cls": "TextView", "text": "确认订单" },
+        { "cls": "TextView", "text": "送至 国贸三期 A 座 18 层 · 预计 30 分钟送达" },
+        { "cls": "TextView", "text": "生椰拿铁 大杯 ×1 · ¥9.9" },
+        { "cls": "TextView", "text": "配送费 ¥2 · 实付 ¥11.9" },
+        { "cls": "Button", "text": "提交订单", "clk": true, "x": 900, "y": 2280 }
+      ]
+    }
+  }
+}

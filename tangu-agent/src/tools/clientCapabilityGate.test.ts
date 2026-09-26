@@ -16,6 +16,8 @@ import type { AppProfile } from '../seams/appProfile.js';
 const stub: any = new Proxy({}, { get: () => () => { throw new Error('stub'); } });
 const cloud = createAiStudioProfile();
 const PHONE = ['phone_open', 'phone_navigate', 'phone_compose', 'phone_system', 'phone_control'];
+/** T2 屏幕操作(phone.ui,伴随包健康时才声明)。 */
+const PHONE_UI_TOOLS = ['phone_observe', 'phone_tap', 'phone_type', 'phone_scroll', 'phone_key'];
 
 const fakeTool = (name: string, clientCapability?: string, deferred = false): any => ({
   name, mode: 'both', ...(clientCapability !== undefined ? { clientCapability } : {}), ...(deferred ? { deferred: true } : {}),
@@ -156,6 +158,56 @@ describe('resolveTools × 预设 × 来源', () => {
       { ...base, client: 'desktop/2.12.0', clientCapabilities: ['phone.intents'] });
     expect(r.isError).toBe(true);
     expect(r.result).toMatch(/not available in this session/);
+  });
+});
+
+/**
+ * T2(phone.ui)各自一道闸:只声明 phone.intents 的手机(伴随包没装 / 无障碍没开)绝不能看见屏幕工具 ——
+ * 否则模型调 phone_tap,原生回 unsupported / hands_missing,更糟的是描述里「你看得见屏幕」会让它对用户过度承诺。
+ */
+describe('phone.ui 闸(T2 五件)', () => {
+  const both: ToolContext = { ...base, client: 'mobile/2.12.0', clientCapabilities: ['phone.intents', 'phone.ui'] };
+  it('只声明 phone.intents → 一个 T2 工具都没有(目录 / 可见集 / 按名执行)', async () => {
+    for (const preset of [undefined, 'chat', 'coding'] as const) {
+      const ctx = { ...mobile, preset };
+      expect(visible(ctx).filter((n) => PHONE_UI_TOOLS.includes(n)), String(preset)).toEqual([]);
+      expect(catalog(ctx).filter((n) => PHONE_UI_TOOLS.includes(n)), String(preset)).toEqual([]);
+    }
+    const r = await executeTool({ id: 'c', type: 'function', function: { name: 'phone_observe', arguments: '{}' } } as any, mobile);
+    expect(r.isError).toBe(true);
+    expect(r.result).toMatch(/not available in this session/);
+  });
+  it('phone.intents + phone.ui → 十件都在目录(同组 phone、各自短 hint),常驻 defs 与不带能力时逐字节相同', () => {
+    for (const preset of [undefined, 'chat', 'coding'] as const) {
+      const ctx = { ...both, preset };
+      const cat = catalog(ctx);
+      for (const n of [...PHONE, ...PHONE_UI_TOOLS]) expect(cat, `${preset}:${n}`).toContain(n);
+      expect(JSON.stringify(getToolDefinitions(ctx)), String(preset)).toBe(JSON.stringify(getToolDefinitions({ ...base, client: 'mobile/2.12.0', preset })));
+    }
+    const lines = listDeferredTools(both).filter((d) => PHONE_UI_TOOLS.includes(d.name));
+    expect(lines).toHaveLength(5);
+    for (const d of lines) {
+      expect(d.group).toBe('phone');
+      expect(d.hint.length, d.name).toBeLessThanOrEqual(100);
+    }
+  });
+  it('只声明 phone.ui → T2 在、T1 不在(两个能力互不连带)', () => {
+    const v = visible({ ...base, client: 'mobile/2.12.0', clientCapabilities: ['phone.ui'] });
+    for (const n of PHONE_UI_TOOLS) expect(v).toContain(n);
+    expect(v.filter((n) => PHONE.includes(n))).toEqual([]);
+  });
+  it('负对照:桌面 / web / Muse 带 phone.ui、子代理 / 计划 / 通道 / 讨论 → 一个 T2 都没有', () => {
+    for (const ctx of [
+      { ...base, client: 'desktop/2.12.0', clientCapabilities: ['phone.intents', 'phone.ui'] },
+      { ...base, client: 'web/2.12.0', clientCapabilities: ['phone.ui'] },
+      { ...base, client: 'muse/1', clientCapabilities: ['phone.ui'], muse: true },
+      { ...both, subAgentDepth: 1 },
+      { ...both, planMode: true },
+      { ...both, channelSession: true },
+      { ...both, inDiscussion: true },
+    ] as ToolContext[]) {
+      expect(visible(ctx).filter((n) => PHONE_UI_TOOLS.includes(n)), JSON.stringify({ c: ctx.client, s: ctx.subAgentDepth, p: ctx.planMode })).toEqual([]);
+    }
   });
 });
 

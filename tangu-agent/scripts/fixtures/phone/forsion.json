@@ -1,0 +1,17 @@
+{
+  "pkg": "com.forsion.tangu",
+  "label": "Forsion",
+  "aliases": ["Forsion", "扶桑", "Tangu"],
+  "protected": true,
+  "start": "chat",
+  "screens": {
+    "chat": {
+      "nodes": [
+        { "cls": "TextView", "text": "Tangu" },
+        { "cls": "TextView", "text": "正在思考…" },
+        { "cls": "EditText", "text": "", "hint": "发消息…", "edit": true, "field": "forsion_input" },
+        { "cls": "ImageButton", "text": "", "id": "send_btn", "clk": true }
+      ]
+    }
+  }
+}

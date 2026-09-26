@@ -1,0 +1,28 @@
+{
+  "pkg": "com.android.systemui",
+  "label": "系统界面",
+  "aliases": [],
+  "start": "shade",
+  "state": { "wifi": true, "bt": false, "torch": false },
+  "screens": {
+    "shade": {
+      "nodes": [
+        { "cls": "TextView", "text": "9月26日 周六" },
+        { "cls": "Switch", "text": "WLAN", "clk": true, "toggle": "wifi" },
+        { "cls": "Switch", "text": "蓝牙", "clk": true, "toggle": "bt" },
+        { "cls": "Switch", "text": "手电筒", "clk": true, "toggle": "torch" },
+        { "cls": "LinearLayout", "text": "顺丰速运 · 您的快递已放入国贸丰巢柜,取件码 8848,请于 24 小时内取件", "clk": true },
+        { "cls": "LinearLayout", "text": "日历 · 15:00 周会(3 号会议室)", "clk": true },
+        { "cls": "LinearLayout", "text": "微信 · 张三: 明天的会改到下午了", "clk": true },
+        { "cls": "Button", "text": "全部清除", "clk": true, "danger": true }
+      ]
+    },
+    "recents": {
+      "nodes": [
+        { "cls": "TextView", "text": "最近使用的应用" },
+        { "cls": "LinearLayout", "text": "Forsion", "clk": true, "goto": "@com.forsion.tangu" },
+        { "cls": "LinearLayout", "text": "设置", "clk": true, "goto": "@com.android.settings" }
+      ]
+    }
+  }
+}

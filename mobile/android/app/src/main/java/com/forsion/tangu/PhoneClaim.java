@@ -144,6 +144,40 @@ final class PhoneClaim {
         return null;
     }
 
+    /**
+     * 急停(手机操控 T2,契约 §9.5):药丸「停止」被点 → 伴随包 onStop → 主包用**自持 token** 直接
+     * `POST {apiBase}/agent/runs/:runId/abort`。不依赖 JS 活着;失败只记日志(用户已经点了停止,尽力而为)。
+     */
+    static void abort(Context ctx, String apiBase, String runId) {
+        String token = NativeConfig.token(ctx.getApplicationContext());
+        if (token == null) {
+            Log.w(TAG, "[phone] abort skipped: not signed in");
+            return;
+        }
+        String url = apiBase + "/agent/runs/" + enc(runId) + "/abort";
+        HttpURLConnection c = null;
+        try {
+            c = (HttpURLConnection) new URL(url).openConnection();
+            c.setConnectTimeout(CONNECT_MS);
+            c.setReadTimeout(READ_MS);
+            c.setRequestMethod("POST");
+            c.setDoOutput(true);
+            c.setInstanceFollowRedirects(false);
+            c.setRequestProperty("Content-Type", "application/json; charset=utf-8");
+            c.setRequestProperty("Authorization", "Bearer " + token);
+            byte[] bytes = "{}".getBytes(StandardCharsets.UTF_8);
+            c.setFixedLengthStreamingMode(bytes.length);
+            try (OutputStream os = c.getOutputStream()) {
+                os.write(bytes);
+            }
+            Log.i(TAG, "[phone] abort → " + c.getResponseCode() + " (" + runId + ")");
+        } catch (Exception e) {
+            Log.w(TAG, "[phone] abort failed: " + e.getClass().getSimpleName());
+        } finally {
+            if (c != null) c.disconnect();
+        }
+    }
+
     private static String read(InputStream in) throws IOException {
         try (InputStream s = in) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();

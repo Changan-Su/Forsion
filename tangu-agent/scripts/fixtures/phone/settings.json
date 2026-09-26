@@ -1,0 +1,50 @@
+{
+  "pkg": "com.android.settings",
+  "label": "设置",
+  "aliases": ["设置", "Settings", "系统设置"],
+  "start": "home",
+  "pages": { "main": "home", "display": "display", "accessibility": "a11y" },
+  "state": { "auto_brightness": true, "auto_rotate": false, "dark_theme": false },
+  "screens": {
+    "home": {
+      "nodes": [
+        { "cls": "TextView", "text": "设置" },
+        { "cls": "EditText", "text": "", "hint": "搜索设置", "edit": true, "field": "settings_q" },
+        { "cls": "LinearLayout", "text": "网络和互联网", "clk": true },
+        { "cls": "LinearLayout", "text": "已连接的设备", "clk": true },
+        { "cls": "LinearLayout", "text": "应用", "clk": true },
+        { "cls": "LinearLayout", "text": "通知", "clk": true },
+        { "cls": "LinearLayout", "text": "电池", "clk": true },
+        { "cls": "LinearLayout", "text": "存储", "clk": true },
+        { "cls": "LinearLayout", "text": "声音和振动", "clk": true },
+        { "cls": "LinearLayout", "text": "显示", "clk": true, "goto": "display" },
+        { "cls": "LinearLayout", "text": "壁纸和样式", "clk": true },
+        { "cls": "LinearLayout", "text": "无障碍", "clk": true, "goto": "a11y" },
+        { "cls": "LinearLayout", "text": "安全和隐私", "clk": true },
+        { "cls": "LinearLayout", "text": "系统", "clk": true },
+        { "cls": "RecyclerView", "text": "", "id": "settings_list", "scroll": true }
+      ]
+    },
+    "display": {
+      "nodes": [
+        { "cls": "ImageButton", "text": "", "desc": "向上导航", "clk": true, "goto": "<back>", "x": 60, "y": 160 },
+        { "cls": "TextView", "text": "显示" },
+        { "cls": "LinearLayout", "text": "亮度级别", "clk": true },
+        { "cls": "Switch", "text": "自动调节亮度", "clk": true, "toggle": "auto_brightness", "x": 980 },
+        { "cls": "Switch", "text": "深色主题", "clk": true, "toggle": "dark_theme", "x": 980 },
+        { "cls": "LinearLayout", "text": "屏幕超时 · 30 秒无操作后", "clk": true },
+        { "cls": "Switch", "text": "自动旋转屏幕", "clk": true, "toggle": "auto_rotate", "x": 980 },
+        { "cls": "LinearLayout", "text": "字体大小和文字", "clk": true }
+      ]
+    },
+    "a11y": {
+      "protected": true,
+      "nodes": [
+        { "cls": "ImageButton", "text": "", "desc": "向上导航", "clk": true, "goto": "<back>", "x": 60, "y": 160 },
+        { "cls": "TextView", "text": "无障碍" },
+        { "cls": "LinearLayout", "text": "Forsion Hands · 已开启", "clk": true },
+        { "cls": "LinearLayout", "text": "TalkBack · 已关闭", "clk": true }
+      ]
+    }
+  }
+}

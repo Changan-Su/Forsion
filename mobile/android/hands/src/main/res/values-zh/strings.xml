@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 手机操控 T2 伴随包的中文文案(系统无障碍 / 应用信息页显示)。英文在 values/strings.xml。 -->
+<resources>
+    <string name="app_name">扶桑之手</string>
+    <string name="hands_a11y_label">扶桑之手</string>
+    <string name="hands_a11y_description">在这台手机上，当你让 Tangu 操作时，它可以读取屏幕内容，并在其他 App 里点按、输入和滑动。屏幕上的文字会发送到 Forsion 云端，并保存在对话记录里。仅在使用 Forsion 时开启；随时可以在这里关闭。</string>
+</resources>

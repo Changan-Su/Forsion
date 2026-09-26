@@ -2,7 +2,8 @@
  * Dev-only 移动设置视觉台架:
  *   PORT=5284 npm run dev → /settings-harness.html (加 ?dark 看暗色，?desktop 看桌面设置侧栏，
  *   ?onboarding 看首启引导——台架 window.tangu 无 envCheck，走的正是 web/移动端的收缩步骤序)
- *   ?phone 看「高级 → 测试性功能」里的手机操控设置行(真机才注册;台架给 PhoneControl 挂假 web 实现)
+ *   ?phone 看「高级 → 测试性功能」里的手机操控设置行(真机才注册;台架给 PhoneControl 挂假 web 实现);
+ *   ?phone=missing|signature_mismatch|disabled|proto_mismatch|ready 开关预置为开,并按该伴随包状态出 T2 小节(&sdk=31 看无受限设置引导)
  *
  * 裸挂生产 SettingsModal + 生产主题/CSS,绕过移动端登录与后端启动,供两层 IA 截图和触控回归。
  * Vite 的 build 入口只有 index.html,本文件不进 APK 产物。
@@ -24,6 +25,8 @@ const dark = new URLSearchParams(location.search).has('dark')
 const desktop = new URLSearchParams(location.search).has('desktop')
 const onboarding = new URLSearchParams(location.search).has('onboarding')
 const phone = new URLSearchParams(location.search).has('phone')
+const phoneHands = new URLSearchParams(location.search).get('phone') || '' // 空 = 老原生(不带 hands 字段)
+const phoneSdk = Number(new URLSearchParams(location.search).get('sdk')) || 35
 const initialMode = dark ? 'dark' : 'light'
 const initialLang = resolveInitialLang()
 const initialSkin = resolveInitialSkin()
@@ -122,18 +125,26 @@ function SettingsHarness() {
  * 假 web 实现(Capacitor 同名插件先注册者赢),再按生产的组件与状态源登记 surface —— 开关读的仍是「原生」回报。
  */
 async function mountPhoneRow(): Promise<void> {
-  let enabled = false
+  let enabled = !!phoneHands
+  const t2 = phoneHands ? { hands: phoneHands, sdk: phoneSdk } : {}
   registerPlugin('PhoneControl', {
     web: {
-      status: async () => ({ enabled, capabilities: enabled ? ['phone.intents'] : [], foreground: true, proto: 1 }),
+      status: async () => ({
+        enabled,
+        capabilities: enabled ? ['phone.intents', ...(phoneHands === 'ready' ? ['phone.ui'] : [])] : [],
+        foreground: true,
+        proto: 1,
+        ...t2,
+      }),
       setEnabled: async (o: { enabled: boolean }) => { enabled = o.enabled; return { enabled } },
       configure: async () => ({}),
       exec: async () => ({ accepted: false }),
+      openAccessibilitySettings: async () => { console.info('[harness] openAccessibilitySettings') },
     },
   })
   const [{ setPhoneControlEnabled }, { PhoneControlRow }] = await Promise.all([import('./phoneControl'), import('./PhoneControlRow')])
   registerClientSurface('phone', { capabilities: () => [], exec: () => undefined, SettingsRow: PhoneControlRow })
-  await setPhoneControlEnabled(false) // 顺带拉一次状态
+  await setPhoneControlEnabled(enabled) // 顺带拉一次状态
 }
 
 void (phone ? mountPhoneRow() : Promise.resolve()).finally(() => {

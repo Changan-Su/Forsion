@@ -1,0 +1,47 @@
+// 手机操控 T2 伴随包 com.forsion.tangu.hands(契约 §9)。
+// 纯 Java、只含无障碍服务 + 一个导出的 bound service;不联网、不持 token、不申请 INTERNET / QUERY_ALL_PACKAGES。
+// 与主包同版本号、**同一签名**(../signing.gradle),伴随包 checkSignatures 才认。
+apply plugin: 'com.android.application'
+
+android {
+    namespace "com.forsion.tangu.hands"
+    compileSdk rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.forsion.tangu.hands"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        // 与主包同口径:CI 注入 run_number/tag,本地缺省 1/"1.0"。两包版本号必须一起走。
+        versionCode Integer.parseInt(System.getenv("ANDROID_VERSION_CODE") ?: "1")
+        versionName (System.getenv("ANDROID_VERSION_NAME") ?: "1.0")
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+    // 与主包共享同一份 AIDL:生成同一个 IHands 接口,包名一致才能跨进程互认。
+    buildFeatures {
+        aidl true
+    }
+    sourceSets {
+        main {
+            aidl.srcDirs += '../aidl'
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+        }
+    }
+}
+
+// app 与 hands 共用一把签名钥匙(../signing.gradle);debug 也共用 AGP 的 ~/.android/debug.keystore,天然一致。
+apply from: '../signing.gradle'
+
+dependencies {
+    // 纯 Java、无 androidx:overlay 用平台 View,服务不需要 AppCompat。
+    testImplementation "junit:junit:$junitVersion"
+    // TreeSerializer / Policy / HandsVerbs 的纯逻辑单测在 JVM 上跑,需要真的 org.json(android.jar 里的是桩)。
+    testImplementation 'org.json:json:20231013'
+}

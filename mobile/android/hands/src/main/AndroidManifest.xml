@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  手机操控 T2 伴随包 com.forsion.tangu.hands(契约 §9)。只有无障碍服务 + 一个 signature 权限保护的 bound service。
+  ⚠️ 不申请 INTERNET / QUERY_ALL_PACKAGES / 任何危险权限(aapt2 dump 会核这一条):伴随包不联网、不持 token。
+  无 launcher Activity:服务经系统「无障碍」页启用,不需要图标入口。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- 与主包同名、同 protectionLevel 的驱动权限。两包各声明一份:同签名可共存;异签名安装会因重复权限被拒
+         (= 伴随包签名不符的另一种表现,主包侧也会 checkSignatures 兜住)。 -->
+    <permission
+        android:name="com.forsion.tangu.permission.DRIVE_HANDS"
+        android:protectionLevel="signature" />
+    <uses-permission android:name="com.forsion.tangu.permission.DRIVE_HANDS" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@android:drawable/sym_def_app_icon"
+        android:label="@string/app_name"
+        android:supportsRtl="true">
+
+        <!-- 无障碍服务:系统绑定,exported=true + BIND_ACCESSIBILITY_SERVICE。事件类型运行时按租约开合(§9.1)。 -->
+        <service
+            android:name=".HandsAccessibilityService"
+            android:exported="true"
+            android:label="@string/hands_a11y_label"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/hands_accessibility" />
+        </service>
+
+        <!-- 跨进程门面:仅同签名的主包(持 DRIVE_HANDS)能绑;每次调用再 checkSignatures(§9.1)。 -->
+        <service
+            android:name=".HandsBridgeService"
+            android:exported="true"
+            android:permission="com.forsion.tangu.permission.DRIVE_HANDS" />
+    </application>
+</manifest>

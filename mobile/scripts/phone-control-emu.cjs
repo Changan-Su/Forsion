@@ -1,22 +1,30 @@
 /**
- * 手机操控(T1)模拟器台架 —— 假引擎 + CDP,直测「原生 claim → 执行 → result」这条链。
+ * 手机操控(T1 + T2)模拟器台架 —— 假引擎 + CDP,直测「原生 claim → 执行 → result」这条链。
  * 契约:tangu-agent/docs/phone-control.md。渲染层的 G2/G3 早筛由 desktop vitest 覆盖,这里只测原生侧。
  *
  * 前置(一次):
  *   AVD 已开机(emulator -avd Forsion_API_35),adb 在 $ANDROID_HOME/platform-tools
  *   cd mobile && rm -rf dist && VITE_API_ORIGIN=http://localhost:8787 npm run build && npx cap sync android \
- *     && (cd android && ./gradlew assembleDebug) && adb install -r android/app/build/outputs/apk/debug/app-debug.apk
+ *     && (cd android && ./gradlew :app:assembleDebug :hands:assembleDebug) \
+ *     && adb install -r android/app/build/outputs/apk/debug/app-debug.apk \
+ *     && adb install -r android/hands/build/outputs/apk/debug/hands-debug.apk
  *   (debug 包带 network_security_config,只对 localhost 放行明文;release 不受影响)
  *
+ * ⚠️ T2 的屏幕操作用例需要**用户手动**启用伴随包的无障碍服务(改系统安全设置,台架不代劳):
+ *      adb shell settings put secure enabled_accessibility_services com.forsion.tangu.hands/com.forsion.tangu.hands.HandsAccessibilityService
+ *      adb shell settings put secure accessibility_enabled 1
+ *    没启用时,这些用例记为 SKIP(不算失败),台架会把这两条命令打出来。安装 / 签名 / hands 状态类用例不需要它,照常跑。
+ *
  * 用法:
- *   node scripts/phone-control-emu.cjs           全部用例
+ *   node scripts/phone-control-emu.cjs           全部用例(T1 + 可跑的 T2 + 需服务的 T2 视启用与否跑或跳)
  *   node scripts/phone-control-emu.cjs soak 300  中继存活:Clock 在前台 300 秒,WebView 里的 SSE 循环每 10s 转交一条 volume 指令
  *
- * 判据只认假引擎这一侧的账(收到几次 claim / result、结果码),辅以 logcat 的 START 与顶层 Activity ——
+ * 判据只认假引擎这一侧的账(收到几次 claim / result / abort、结果码),辅以 logcat 的 START 与顶层 Activity ——
  * 「调用没抛」不算数(见 memory:浏览器台架打返回键那一课)。
  */
 const { execFileSync } = require('node:child_process')
 const crypto = require('node:crypto')
+const fs = require('node:fs')
 const http = require('node:http')
 const os = require('node:os')
 const path = require('node:path')
@@ -24,14 +32,23 @@ const path = require('node:path')
 const sdk = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || path.join(os.homedir(), 'Library/Android/sdk')
 const adb = (...args) => execFileSync(path.join(sdk, 'platform-tools/adb'), args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
 const PKG = process.env.PKG || 'com.forsion.tangu'
+const HANDS_PKG = 'com.forsion.tangu.hands'
+const HANDS_A11Y = `${HANDS_PKG}/${HANDS_PKG}.HandsAccessibilityService`
+const ANDROID_DIR = path.join(__dirname, '..', 'android')
+const HANDS_APK = path.join(ANDROID_DIR, 'hands/build/outputs/apk/debug/hands-debug.apk')
+const BUILD_TOOLS = path.join(sdk, 'build-tools/34.0.0')
 const ENGINE_PORT = 8787
 const CDP_PORT = 9341
 const TOKEN = 'phone-emu-token'
+// 第二个账号的 token(T2 换号用例):假引擎两个都认,原生据此算出不同的租约账号键(契约 §9.5)
+const TOKEN2 = 'phone-emu-token-2'
+const TOKENS = new Set([`Bearer ${TOKEN}`, `Bearer ${TOKEN2}`])
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 // ───────────────────────────── 假引擎 ─────────────────────────────
 const pending = new Map() // ackId -> { runId, body, digest, state, nonce, claims, results, t0 }
 const ledger = [] // { t, ackId, phase, status, body }
+const aborts = [] // { t, runId } —— T2 急停(Stop 药丸 → 主包 POST /abort)
 let seq = 0
 const RUN = 'run_emu_1'
 
@@ -65,13 +82,25 @@ const server = http.createServer(async (req, res) => {
     req.on('close', () => sseClients.delete(res))
     return
   }
+  // 手机操控 T2 急停(契约 §9.5):药丸「停止」→ 主包用自持 token 直接 POST /abort。
+  const ab = url.pathname.match(/^\/api\/agent\/runs\/([^/]+)\/abort$/)
+  if (ab && req.method === 'POST') {
+    const [, runId] = ab.map(decodeURIComponent)
+    await readJson(req)
+    const authed = TOKENS.has(req.headers.authorization)
+    ledger.push({ t: Date.now(), ackId: '(abort)', phase: 'abort', status: authed ? 200 : 401, body: { runId } })
+    if (!authed) return send(401, { detail: 'bad token' })
+    if (runId !== RUN) return send(404, { detail: 'Run not found' })
+    aborts.push({ t: Date.now(), runId })
+    return send(200, { ok: true })
+  }
   const m = url.pathname.match(/^\/api\/agent\/runs\/([^/]+)\/inquiries\/([^/]+)$/)
   if (m && req.method === 'POST') {
     const [, runId, ackId] = m.map(decodeURIComponent)
     const b = await readJson(req)
     const p = pending.get(ackId)
     const log = (status) => ledger.push({ t: Date.now(), ackId, phase: b.phase, status, body: b })
-    if (req.headers.authorization !== `Bearer ${TOKEN}`) { log(401); return send(401, { detail: 'bad token' }) }
+    if (!TOKENS.has(req.headers.authorization)) { log(401); return send(401, { detail: 'bad token' }) }
     if (runId !== RUN) { log(404); return send(404, { detail: 'Run not found' }) }
     // LAX=1:负对照 —— 假装引擎对没签发过的 ackId 也放行 claim,伪造用例必须因此变红
     if (!p && process.env.LAX === '1' && b.phase === 'claim') { log(200); return send(200, { ok: true, nonce: 'lax', execMs: 20000 }) }
@@ -147,6 +176,21 @@ const topActivity = () => (adb('shell', 'dumpsys', 'activity', 'activities').mat
 function launchForsion() {
   adb('shell', 'am', 'start', '-n', `${PKG}/.MainActivity`)
 }
+/** 只看不点:uiautomator dump 里出现匹配的 text 就返回 true(等浮层出现 / 确认它已消失)。 */
+async function screenHasText(re, ms = 8000) {
+  const t = Date.now()
+  do {
+    try {
+      adb('shell', 'uiautomator', 'dump', '/sdcard/ui.xml')
+      const xml = adb('shell', 'cat', '/sdcard/ui.xml')
+      for (const m of xml.matchAll(/<node [^>]*text="([^"]*)"/g)) if (re.test(m[1])) return true
+    } catch { /* dump 偶发失败,重试 */ }
+    if (ms > 0) await sleep(400)
+  } while (Date.now() - t < ms)
+  return false
+}
+const setToken = (tok) => evaluate(`Capacitor.Plugins.Preferences.set({ key: 'forsion_token', value: ${JSON.stringify(tok)} })`)
+
 async function tapButtonWithText(re, ms = 8000) {
   const t = Date.now()
   while (Date.now() - t < ms) {
@@ -171,6 +215,49 @@ const results = []
 function check(name, ok, detail) {
   results.push({ name, ok: !!ok, detail })
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  — ${typeof detail === 'string' ? detail : JSON.stringify(detail)}` : ''}`)
+}
+const skipped = []
+function skip(name, detail) {
+  skipped.push({ name, detail })
+  console.log(`SKIP  ${name}${detail ? `  — ${detail}` : ''}`)
+}
+
+// ── 伴随包 / 无障碍(T2)设备工具 ──
+function handsA11yEnabled() {
+  try {
+    if (adb('shell', 'settings', 'get', 'secure', 'accessibility_enabled').trim() !== '1') return false
+    const svcs = adb('shell', 'settings', 'get', 'secure', 'enabled_accessibility_services').trim()
+    return svcs.split(':').some((s) => s.toLowerCase() === HANDS_A11Y.toLowerCase())
+  } catch {
+    return false
+  }
+}
+function handsInstalled() {
+  try {
+    return adb('shell', 'pm', 'list', 'packages', HANDS_PKG).includes(HANDS_PKG)
+  } catch {
+    return false
+  }
+}
+function installHands() {
+  adb('install', '-r', HANDS_APK)
+}
+function uninstallHands() {
+  try { adb('uninstall', HANDS_PKG) } catch { /* 已不在 */ }
+}
+/** 用一把一次性钥匙重签 hands 的副本(异签名),供签名不符用例。返回副本路径。 */
+function buildSignatureVariant(scratch) {
+  const ks = path.join(scratch, 'throwaway.ks')
+  const out = path.join(scratch, 'hands-variant.apk')
+  const keytool = process.env.JAVA_HOME ? path.join(process.env.JAVA_HOME, 'bin/keytool') : 'keytool'
+  if (!fs.existsSync(ks)) {
+    execFileSync(keytool, ['-genkeypair', '-keystore', ks, '-storepass', 'test123', '-keypass', 'test123',
+      '-alias', 't', '-keyalg', 'RSA', '-keysize', '2048', '-validity', '30', '-dname', 'CN=throwaway'], { stdio: 'ignore' })
+  }
+  fs.copyFileSync(HANDS_APK, out)
+  execFileSync(path.join(BUILD_TOOLS, 'apksigner'), ['sign', '--ks', ks, '--ks-pass', 'pass:test123',
+    '--key-pass', 'pass:test123', '--ks-key-alias', 't', out], { stdio: 'ignore' })
+  return out
 }
 
 async function runCases() {
@@ -345,7 +432,285 @@ async function runCases() {
   check('queued behind a dialog past its deadline → busy "Nothing was done" before engine timeout', dlgUp && rBusy && rBusy.ok === false && rBusy.code === 'busy' && /Nothing was done/.test(rBusy.error || '') && rBusy.dt < 6000,
     { dlgUp, rBusy })
 
+  // ═══════════════════════ T2:屏幕操作(phone.ui,伴随包无障碍) ═══════════════════════
+  await runT2()
+
   launchForsion()
+}
+
+/** T2 用例。安装 / 签名 / hands 状态类不需要无障碍服务;真正的屏幕操作类需要,未启用则 SKIP。 */
+async function runT2() {
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'phone-emu-'))
+
+  // 18 · 伴随包已装、无障碍未开 → status.hands=disabled、不声明 phone.ui;observe → hands_disabled
+  if (!handsInstalled()) installHands()
+  launchForsion(); await sleep(2500)
+  let st = await evaluate(`${PC}.status()`)
+  check('hands installed + a11y off → status.hands=disabled, no phone.ui',
+    st && st.hands === 'disabled' && !(st.capabilities || []).includes('phone.ui'), st)
+  let c = issue('observe', {})
+  await exec(c)
+  let r = await waitResult(c.ackId)
+  check('observe while a11y off → hands_disabled', r && r.ok === false && r.code === 'hands_disabled', r)
+
+  // 19 · 伴随包未装 → status.hands=missing;observe → hands_missing
+  uninstallHands()
+  await sleep(1000)
+  st = await evaluate(`${PC}.status()`)
+  check('hands uninstalled → status.hands=missing, no phone.ui',
+    st && st.hands === 'missing' && !(st.capabilities || []).includes('phone.ui'), st)
+  c = issue('observe', {})
+  await exec(c)
+  r = await waitResult(c.ackId)
+  check('observe while hands missing → hands_missing', r && r.ok === false && r.code === 'hands_missing', r)
+
+  // 20 · 异签名伴随包:安装被拒(重复权限)或装上后 status.hands=signature_mismatch —— 两者都合规,记录实际
+  try {
+    const variant = buildSignatureVariant(scratch)
+    let installErr = ''
+    try { adb('install', '-r', variant) } catch (e) { installErr = String((e && e.stderr) || (e && e.message) || '') }
+    if (!handsInstalled()) {
+      const why = (installErr.match(/INSTALL_FAILED_[A-Z_]+/) || ['refused'])[0]
+      check('different-signature hands → install refused, no phone.ui', /DUPLICATE_PERMISSION|SIGNATURE|refused/i.test(installErr) || why !== 'refused', { outcome: 'install refused', why })
+    } else {
+      st = await evaluate(`${PC}.status()`)
+      check('different-signature hands → status.hands=signature_mismatch, no phone.ui',
+        st && st.hands === 'signature_mismatch' && !(st.capabilities || []).includes('phone.ui'), st)
+      c = issue('observe', {})
+      await exec(c)
+      r = await waitResult(c.ackId)
+      check('observe with mismatched signature → hands_signature_mismatch', r && r.code === 'hands_signature_mismatch', r)
+    }
+  } catch (e) {
+    check('signature-variant test setup (keytool/apksigner)', false, e.message)
+  } finally {
+    uninstallHands()
+    installHands() // 恢复正牌同签名 hands
+    await sleep(1000)
+  }
+  st = await evaluate(`${PC}.status()`)
+  check('after restoring proper hands → status.hands back to disabled', st && st.hands === 'disabled', st)
+
+  // 20b · §9.2 后台委托只在伴随包就绪时才有:这里无障碍没开 → 后台 launch 仍回 needs_foreground,且什么都没启动
+  //(就绪时的正向用例在 runT2Gated 的 T-bg-launch)
+  adb('shell', 'input', 'keyevent', 'KEYCODE_HOME'); await sleep(1500)
+  adb('logcat', '-c')
+  c = issue('launch', { pkg: 'com.android.settings' })
+  await exec(c)
+  r = await waitResult(c.ackId)
+  await sleep(800)
+  const bgStarted = /START u0 \{[^}]*cmp=com\.android\.settings\//.test(adb('logcat', '-d'))
+  check('launch while backgrounded, hands not ready → needs_foreground, nothing started', r && r.code === 'needs_foreground' && !bgStarted, { r, bgStarted })
+  launchForsion(); await sleep(2000)
+
+  // 21+ · 真正的屏幕操作:需伴随包无障碍服务已启用(改系统安全设置,台架不代劳)
+  if (!handsA11yEnabled()) {
+    skip('T2 screen ops (lease/observe-tree/screenshot/tap/type/type-without-focus/scroll/key/stale/commit_target by handle+coords/protected_app/account-change re-ask/cancel-during-consent/stop→abort/locked)',
+      'accessibility service not enabled. Enable it (system security setting — do it yourself), then re-run:\n' +
+      `    adb shell settings put secure enabled_accessibility_services ${HANDS_A11Y}\n` +
+      '    adb shell settings put secure accessibility_enabled 1')
+    return
+  }
+  await runT2Gated()
+}
+
+/** 需无障碍服务的 T2 用例(未启用时被 runT2 跳过)。断言只认假引擎的 result / abort 与 observation 内容。 */
+async function runT2Gated() {
+  const acceptLease = () => tapButtonWithText(/^(允许|Allow)$/, 8000)
+  const denyLease = () => tapButtonWithText(/^(暂不|Not now)$/, 8000)
+  const openSettings = () => { adb('shell', 'am', 'start', '-a', 'android.settings.SETTINGS'); }
+
+  // L1 · 首条 T2 指令弹租约浮层,拒绝 → lease_declined,什么都没做
+  openSettings(); await sleep(2000)
+  let c = issue('observe', {}, { execMs: 90000 })
+  await exec(c)
+  const declined = !!(await denyLease())
+  let r = await waitResult(c.ackId, 12000)
+  check('T2 first op → lease overlay; deny → lease_declined', declined && r && r.code === 'lease_declined', { declined, r })
+
+  // L2 · 再来一条,允许 → observe 回一棵带句柄的树
+  openSettings(); await sleep(1500)
+  c = issue('observe', {}, { execMs: 90000 })
+  await exec(c)
+  const allowed = !!(await acceptLease())
+  r = await waitResult(c.ackId, 15000)
+  const hasHandles = !!(r && r.ok && /\[\d+\]/.test(r.text || '') && /^app: /.test(r.text || ''))
+  check('lease allow → observe returns a tree with handles', allowed && hasHandles, { allowed, head: (r && r.text || '').split('\n')[0] })
+
+  // P-modal · 租约期间药丸不能是模态窗口(09-26 评审 P1):药丸之外的点按与返回键必须到达下面的 App。
+  // flags=0 时药丸拿走整屏触摸与按键焦点 —— 下面这一点、一按都被它吞掉,Settings 纹丝不动。放在所有屏幕操作用例之前。
+  {
+    const top0 = topActivity()
+    const tappedRow = await tapButtonWithText(/^(Network & internet|网络和互联网|Display|显示)$/, 6000)
+    await sleep(1500)
+    const top1 = topActivity()
+    adb('shell', 'input', 'keyevent', 'KEYCODE_BACK'); await sleep(1500)
+    const top2 = topActivity()
+    check('lease pill is not modal: a tap outside it and Back both reach the app underneath',
+      !!tappedRow && top1 !== top0 && /SubSettings/.test(top1) && top2 !== top1, { tappedRow, top0, top1, top2 })
+  }
+  // G-shot · observe 带截图:稳定的设置页必须真回一张图(09-26 二轮评审 P1 #1 加了截前 / 截后两道窗口核对,
+  // 这条防它把正常截图也一律丢掉 —— 丢图不报错,只看文本树的用例抓不到)
+  openSettings(); await sleep(1500)
+  c = issue('observe', { screenshot: true })
+  await exec(c); r = await waitResult(c.ackId, 15000)
+  check('observe {screenshot} on a stable screen → image attached', r && r.ok === true && /^data:image\/jpeg;base64,/.test(r.image || ''),
+    { code: r && r.code, image: r && r.image ? `${r.image.length} chars` : null })
+
+  openSettings(); await sleep(1500)
+  c = issue('observe', {})
+  await exec(c); r = await waitResult(c.ackId, 12000)
+
+  // T-tap · 点第一个可点句柄 → 界面变化,回新 observation(租约期内不再弹浮层)
+  const firstHandle = (r && (r.text.match(/\[(\d+)\][^\n]*\{[^}]*clk/) || [])[1]) || '1'
+  c = issue('tap', { node: Number(firstHandle) })
+  await exec(c)
+  r = await waitResult(c.ackId, 15000)
+  check('tap a handle → ok, fresh observation', r && r.ok === true && /obs \d+/.test(r.text || ''), { code: r && r.code })
+
+  // T-type · 打开搜索并输入(靠系统设置的搜索框)
+  openSettings(); await sleep(1500)
+  c = issue('observe', {})
+  await exec(c); r = await waitResult(c.ackId, 12000)
+  const searchNode = (r && (r.text.match(/\[(\d+)\][^\n]*\{[^}]*edit/) || r.text.match(/\[(\d+)\][^\n]*[Ss]earch/) || [])[1])
+  if (searchNode) {
+    c = issue('tap', { node: Number(searchNode) }); await exec(c); await waitResult(c.ackId, 10000)
+    c = issue('type', { text: 'wifi' }); await exec(c); r = await waitResult(c.ackId, 12000)
+    check('type into Settings search → ok', r && r.ok === true, { code: r && r.code })
+  } else {
+    skip('type into Settings search', 'no editable search field found in observation')
+  }
+
+  // T-scroll · 下滑
+  c = issue('scroll', { direction: 'down' })
+  await exec(c); r = await waitResult(c.ackId, 12000)
+  check('scroll down → ok', r && r.ok === true, { code: r && r.code })
+
+  // T-key · 返回键
+  c = issue('key', { key: 'back' })
+  await exec(c); r = await waitResult(c.ackId, 12000)
+  check('key back → ok', r && r.ok === true, { code: r && r.code })
+
+  // T-type-button · 往非输入框(按钮 / 可点行)里 type → invalid_args,什么都不点(09-26 评审 P1:setText 会先 ACTION_CLICK,
+  // 指向「支付」的 type 等于绕过提交词表的一次点击)
+  openSettings(); await sleep(1500)
+  c = issue('observe', {}); await exec(c); r = await waitResult(c.ackId, 12000)
+  {
+    const obsNo = Number(((r && r.text) || '').split('\n')[0].match(/· obs (\d+)$/)?.[1])
+    const btn = ((r && r.text) || '').split('\n').map((l) => l.match(/^\[(\d+)\][^\n]*\{[^}]*clk[^}]*\}/)).find((m) => m && !/\bedit\b/.test(m[0]))
+    if (btn && obsNo) {
+      const top0 = topActivity()
+      c = issue('type', { node: Number(btn[1]), obs: obsNo, text: 'x' }); await exec(c); r = await waitResult(c.ackId, 12000)
+      await sleep(800)
+      check('type into a non-editable target → invalid_args, nothing tapped', r && r.code === 'invalid_args' && topActivity() === top0, { code: r && r.code, line: btn[0] })
+    } else {
+      skip('type into a non-editable target', 'no clickable non-editable handle in the Settings observation')
+    }
+  }
+
+  // G-type-nofocus · 无句柄 type、屏上没有获得焦点的输入框 → invalid_args(要句柄),不往「第一个输入框」里打(09-26 二轮评审 P2 #8)
+  openSettings(); await sleep(1500)
+  c = issue('observe', {}); await exec(c); r = await waitResult(c.ackId, 12000)
+  if (r && r.ok && !/\{[^}]*focused[^}]*\}/.test(r.text || '')) {
+    const top0 = topActivity()
+    c = issue('type', { text: 'x' }); await exec(c); r = await waitResult(c.ackId, 12000)
+    check('type without a node while nothing is focused → invalid_args, nothing typed', r && r.code === 'invalid_args' && topActivity() === top0, { code: r && r.code, error: r && r.error })
+  } else {
+    skip('type without a node while nothing is focused', 'something on the Settings home screen already has focus')
+  }
+
+  // T-stale · 用一个明显过期/越界的 obs+node → stale_handle,并附新树
+  c = issue('tap', { node: 240, obs: 1 })
+  await exec(c); r = await waitResult(c.ackId, 12000)
+  check('stale handle → stale_handle with fresh tree', r && (r.code === 'stale_handle') && /\[\d+\]/.test(r.text || ''), { code: r && r.code })
+
+  // T-commit · 命中提交词的目标(Messages 撰写页的「发送 / Send」)→ commit_target,交还用户
+  adb('shell', 'am', 'start', '-a', 'android.intent.action.SENDTO', '-d', 'smsto:10086'); await sleep(2500)
+  c = issue('observe', {}); await exec(c); r = await waitResult(c.ackId, 12000)
+  const sendLine = r && (r.text.match(/\[(\d+)\][^\n]*(发送|Send)[^\n]*\((\d+),(\d+)\)/) || null)
+  const sendNode = sendLine && sendLine[1]
+  if (sendNode) {
+    c = issue('tap', { node: Number(sendNode) }); await exec(c); r = await waitResult(c.ackId, 12000)
+    check('tap a Send/发送 target → commit_target (handed back)', r && r.code === 'commit_target', { code: r && r.code })
+    // G-coord-commit · 同一颗按钮按坐标点:在接住触摸的窗口的整棵树里命中测试(09-26 二轮评审 P1 #2),同样交还用户
+    c = issue('tap', { x: Number(sendLine[3]), y: Number(sendLine[4]) }); await exec(c); r = await waitResult(c.ackId, 12000)
+    check('tap the Send/发送 target by coordinates → commit_target', r && r.code === 'commit_target', { code: r && r.code, at: [sendLine[3], sendLine[4]] })
+  } else {
+    skip('commit_target refusal', 'no Send/发送 target visible in the SMS compose screen')
+  }
+
+  // T-protected · 在 Forsion 自己里操作 → protected_app
+  launchForsion(); await sleep(2000)
+  c = issue('observe', {}); await exec(c); r = await waitResult(c.ackId, 12000)
+  // observe 在保护包上仍允许;变更类才拒。取任一句柄尝试 tap。
+  const anyHandle = r && r.ok && (r.text.match(/\[(\d+)\]/) || [])[1]
+  if (anyHandle) {
+    c = issue('tap', { node: Number(anyHandle) }); await exec(c); r = await waitResult(c.ackId, 12000)
+    check('tap inside Forsion itself → protected_app', r && r.code === 'protected_app', { code: r && r.code })
+  } else {
+    skip('protected_app (acting inside Forsion)', 'no handle observed inside Forsion')
+  }
+
+  // T-bg-launch · §9.2 后台委托:Forsion 不在前台、伴随包就绪 → launch 由伴随包启动,回 ok + handoff,目标真到前台
+  adb('shell', 'input', 'keyevent', 'KEYCODE_HOME'); await sleep(1500)
+  c = issue('launch', { pkg: 'com.android.settings' }); await exec(c); r = await waitResult(c.ackId, 12000)
+  await sleep(1000)
+  check('launch while backgrounded + hands ready → delegated, ok handoff, Settings in front',
+    r && r.ok === true && r.handoff === true && /com\.android\.settings\//.test(topActivity()), { r, top: topActivity() })
+
+  // G-account · 换号(forsion_token 变了)之后的第一条 T2 op 必须重新弹同意,不沿用上一个账号的租约(09-26 二轮评审 P1 #5)。
+  // 两道防线:主包 cancelAll(没绑上时记账、绑上先还)+ 伴随包租约认账号键(token 摘要)。这里走真链路,断言只认「又弹了浮层」。
+  await setToken(TOKEN2); await sleep(800)
+  openSettings(); await sleep(1500)
+  c = issue('observe', {}, { execMs: 90000 }); await exec(c)
+  const reaskedAcct = !!(await denyLease())
+  r = await waitResult(c.ackId, 12000)
+  check('account change → next T2 op asks again (deny → lease_declined)', reaskedAcct && r && r.code === 'lease_declined', { reaskedAcct, r })
+  await setToken(TOKEN); await sleep(800)
+  // 重新拿到租约,给下面的急停用例用
+  c = issue('observe', {}, { execMs: 90000 }); await exec(c)
+  const regranted = !!(await acceptLease())
+  r = await waitResult(c.ackId, 15000)
+  check('re-grant after account switch-back → observe ok', regranted && r && r.ok === true, { regranted, code: r && r.code })
+
+  // T-stop · 药丸「停止」→ 撤租约 + 主包 POST /abort 到达假引擎。
+  // ⚠️ 这里的停止是在两条 op **之间**点的(observe 已回执):旧实现只在 op 执行中记 run,这时 abort 根本不发(09-26 评审 P1)。
+  openSettings(); await sleep(1500)
+  c = issue('observe', {}); await exec(c); await waitResult(c.ackId, 12000)
+  const before = aborts.length
+  const stopped = !!(await tapButtonWithText(/^(停止|Stop)$/, 6000))
+  await sleep(1500)
+  check('Stop pill between ops → abort POST reaches engine', stopped && aborts.length > before && aborts[aborts.length - 1].runId === RUN, { stopped, aborts: aborts.length })
+  // 停止即撤租约:下一条 T2 op 重新弹同意浮层(拒绝 → lease_declined),不沿用
+  c = issue('observe', {}, { execMs: 90000 }); await exec(c)
+  const reasked = !!(await denyLease())
+  r = await waitResult(c.ackId, 12000)
+  check('after Stop the lease is gone → next op asks again (deny → lease_declined)', reasked && r && r.code === 'lease_declined', { reasked, r })
+
+  // G-cancel-consent · 同意浮层挂着时撤销(换号 → cancelAll):浮层撤掉、这条 op 当场回 lease_declined,不等到 90s 期限;
+  // 执行道随之放行,下一条 op 立刻又能弹浮层(09-26 二轮评审 P2 #9 / P1 #6)。旧实现只 removeView 不放行等待:这条要 ~88s 才回执、
+  // 下一条排执行道到期 → busy。
+  openSettings(); await sleep(1500)
+  c = issue('observe', {}, { execMs: 90000 }); await exec(c)
+  const consentUp = await screenHasText(/^(允许|Allow)$/, 8000)
+  const tCancel = Date.now()
+  await setToken(TOKEN2)
+  r = await waitResult(c.ackId, 12000)
+  const releasedMs = r ? Date.now() - tCancel : null
+  const consentGone = !(await screenHasText(/^(允许|Allow)$/, 0))
+  check('cancel while the lease consent is up → overlay gone, lease_declined within seconds', consentUp && r && r.code === 'lease_declined' && consentGone && releasedMs < 10000,
+    { consentUp, code: r && r.code, releasedMs, consentGone })
+  c = issue('observe', {}); await exec(c) // 缺省 execMs 20s:执行道若还被占着就会 busy
+  const askedAgain = !!(await denyLease())
+  r = await waitResult(c.ackId, 12000)
+  check('after cancel-during-consent the lane is free → next op asks again (deny → lease_declined)', askedAgain && r && r.code === 'lease_declined', { askedAgain, r })
+  await setToken(TOKEN); await sleep(800)
+
+  // T-locked · 熄屏 → locked(随后唤醒复位)
+  adb('shell', 'input', 'keyevent', 'KEYCODE_SLEEP'); await sleep(1500)
+  c = issue('observe', {}); await exec(c); r = await waitResult(c.ackId, 12000)
+  check('screen off → locked', r && r.code === 'locked', { code: r && r.code })
+  adb('shell', 'input', 'keyevent', 'KEYCODE_WAKEUP'); await sleep(800)
 }
 
 async function soak(seconds, island) {
@@ -385,6 +750,7 @@ async function soak(seconds, island) {
   }
   server.close()
   const failed = results.filter((r) => !r.ok)
-  console.log(`\n${results.length - failed.length}/${results.length} passed`)
+  console.log(`\n${results.length - failed.length}/${results.length} passed${skipped.length ? `, ${skipped.length} skipped` : ''}`)
+  if (skipped.length) console.log('(SKIP = precondition not met on this device; see the note printed above each)')
   process.exit(failed.length ? 1 : 0)
 })()

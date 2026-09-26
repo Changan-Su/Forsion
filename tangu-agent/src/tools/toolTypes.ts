@@ -105,8 +105,11 @@ export interface ToolContext {
    * 工具产出图片的回流闸(view_image 用):工具把图片 data URL 交回 loop,
    * loop 在本轮工具执行完后把它物化成一条 user 图像消息追加到对话尾部,让模型"看见"图片。
    * 缺省(未装配此闸的运行环境)时工具应优雅降级,不要假定一定可用。
+   * `untrusted`:图里是**第三方内容**(如 phone_observe 截到的别的 App 屏幕)时,传一句前言(英文,给模型读)。
+   * loop 会把这类图单独成条、用这句前言标成不可信,视觉转写也圈进围栏(services/toolImages.ts)。
+   * ⚠️ 这类图只能进 user 角色消息,不标就等于把屏幕上的注入以用户权威送进上下文。
    */
-  collectImage?: (img: { url: string; name?: string }) => void;
+  collectImage?: (img: { url: string; name?: string; untrusted?: string }) => void;
   /**
    * 「在对话区展示文件」闸(display_file / generate_image / 表情包用):工具把要展示给**用户**的
    * 文件交给 loop,loop 即时 publish 'display_file' 事件(桌面端内联渲染、图片可点击放大),并在

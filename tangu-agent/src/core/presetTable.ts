@@ -81,8 +81,9 @@ export const CHAT_PRESET_DEFERRED: ReadonlySet<string> = new Set([
   'search_sessions', 'read_session', 'todo_write', 'todo_read', 'search_files', 'glob_files',
   'amadeus_list_notes', 'amadeus_read_note', 'amadeus_list_calendars', 'amadeus_list_events',
   'calculator', 'generate_image', 'edit_image', 'read_log', 'log_event',
-  // 手机操控 T1(clientCapability 中央闸另管可见性;带能力的工具在 chat 面按能力放行,这里列名是让内置五件按需装载)
+  // 手机操控 T1 / T2(clientCapability 中央闸另管可见性;带能力的工具在 chat 面按能力放行,这里列名是让内置十件按需装载)
   'phone_open', 'phone_navigate', 'phone_compose', 'phone_system', 'phone_control',
+  'phone_observe', 'phone_tap', 'phone_type', 'phone_scroll', 'phone_key',
 ]);
 
 /** D11 形态:chat 落在 host execMode 时(桌面 standalone 的 rootless 会话仍是 sandbox,这里是纵深防御),

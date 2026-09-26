@@ -17,28 +17,25 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
-    signingConfigs {
-        // 正式签名走环境变量(CI 由 secrets 注入,见 build-desktop.yml);变量缺席时该配置为空、
-        // release 不挂签名(CI 那时改出 debug 包),本地 Android Studio 流程不受影响。
-        release {
-            if (System.getenv("ANDROID_KEYSTORE_PATH")) {
-                storeFile file(System.getenv("ANDROID_KEYSTORE_PATH"))
-                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD")
-                keyAlias System.getenv("ANDROID_KEY_ALIAS")
-                keyPassword System.getenv("ANDROID_KEY_PASSWORD")
-            }
+    // 手机操控 T2:与伴随包 hands 共享同一份 AIDL(../aidl),两个模块生成同一 IHands stub/proxy(契约 §9.1)。
+    buildFeatures {
+        aidl true
+    }
+    sourceSets {
+        main {
+            aidl.srcDirs += '../aidl'
         }
     }
     buildTypes {
         release {
-            if (System.getenv("ANDROID_KEYSTORE_PATH")) {
-                signingConfig signingConfigs.release
-            }
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
     }
 }
+
+// 签名配置抽到 ../signing.gradle,app 与 hands 共用一把钥匙(伴随包按签名互认,必须一致)。
+apply from: '../signing.gradle'
 
 repositories {
     flatDir{

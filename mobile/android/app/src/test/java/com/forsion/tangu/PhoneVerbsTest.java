@@ -188,6 +188,7 @@ public class PhoneVerbsTest {
         Map<String, String> s = new HashMap<>();
         for (String k : PhoneVerbs.STRING_KEYS) s.put(k, "x");
         s.put("confirmBody", "Tangu wants to open {app} ({target}).");
+        s.put("leaseBody", "For {minutes} minutes Tangu can act."); // T2 键必含 {minutes}(§6)
         return s;
     }
 
@@ -206,6 +207,10 @@ public class PhoneVerbsTest {
         s = strings();
         s.put("cancel", "  ");
         assertNotNull("blank value", PhoneVerbs.checkStrings(s));
+        // T2:leaseBody 缺 {minutes} 必须被拒(时长由原生填,§6)
+        s = strings();
+        s.put("leaseBody", "For ten minutes Tangu can act.");
+        assertNotNull("missing {minutes}", PhoneVerbs.checkStrings(s));
     }
 
     @Test
@@ -484,10 +489,62 @@ public class PhoneVerbsTest {
         }
     }
 
+    /** §9.2 后台委托(09-26 评审):早筛曾对全部 ACTIVITY_OPS 一律回 needs_foreground,委托成了死代码。 */
+    @Test
+    public void backgroundDelegationGate() {
+        // 伴随包就绪:后台的 launch / view 放行(交给伴随包启动)
+        assertFalse(PhoneVerbs.mustBeForeground("launch", false, true));
+        assertFalse(PhoneVerbs.mustBeForeground("view", false, true));
+        // 伴随包不就绪:老行为
+        assertTrue(PhoneVerbs.mustBeForeground("launch", false, false));
+        assertTrue(PhoneVerbs.mustBeForeground("view", false, false));
+        // startFirst 类从不委托
+        for (String op : new String[] {"settings", "dial", "sendto", "send", "insert_event", "alarm", "timer"}) {
+            assertTrue(op, PhoneVerbs.mustBeForeground(op, false, true));
+        }
+        // 前台、或不启动 Activity 的 op:不拦
+        assertFalse(PhoneVerbs.mustBeForeground("launch", true, false));
+        assertFalse(PhoneVerbs.mustBeForeground("volume", false, false));
+        assertFalse(PhoneVerbs.mustBeForeground("observe", false, false));
+    }
+
     // ───────── 工具 ─────────
 
     private static PhoneVerbs.Plan plan(String op, String args) throws Exception {
         return PhoneVerbs.plan(op, new JSONObject(args), OWN, SH);
+    }
+
+    // ───────────── T2 租约:账号键 + 欠着的 cancelAll(09-26 二轮评审 P1 #5)─────────────
+
+    @Test
+    public void leaseKey_isStableHexAndNeverTheToken() {
+        String t1 = "eyJhbGciOiJIUzI1NiJ9.eyJpZCI6InVfMSJ9.sig1";
+        String k1 = PhoneVerbs.leaseKey(t1);
+        assertNotNull(k1);
+        assertTrue(k1.matches("^[0-9a-f]{32}$")); // 伴随包 HandsVerbs.acct 只收这个格式
+        assertEquals(k1, PhoneVerbs.leaseKey(t1));
+        assertFalse(k1.equals(PhoneVerbs.leaseKey(t1 + "x")));   // 换号 / 换 token → 换键 → 伴随包重新弹同意
+        assertFalse(k1.contains("eyJ"));
+        assertFalse(PhoneVerbs.sha256Hex(t1).startsWith(k1));    // 域分离:不是裸 sha256(token)
+        assertNull(PhoneVerbs.leaseKey(null));
+        assertNull(PhoneVerbs.leaseKey(""));
+    }
+
+    @Test
+    public void pendingCancel_owedWhileUnboundIsSentBeforeAnythingElse() {
+        PhoneVerbs.PendingCancel pc = new PhoneVerbs.PendingCancel();
+        AtomicInteger sent = new AtomicInteger();
+        assertTrue(pc.settle(() -> { sent.incrementAndGet(); return true; })); // 不欠:不发
+        assertEquals(0, sent.get());
+        pc.owe();                                  // 换号时没绑着:原来直接 return,这发撤销就丢了
+        assertTrue(pc.owed());
+        assertFalse(pc.settle(() -> false));       // 绑上了但发失败:仍欠着,调用方不许转交指令
+        assertTrue(pc.owed());
+        assertTrue(pc.settle(() -> { sent.incrementAndGet(); return true; }));
+        assertEquals(1, sent.get());
+        assertFalse(pc.owed());
+        assertTrue(pc.settle(() -> { sent.incrementAndGet(); return true; })); // 还清后不再重发
+        assertEquals(1, sent.get());
     }
 
     private static IntentSpec only(PhoneVerbs.Plan p) {

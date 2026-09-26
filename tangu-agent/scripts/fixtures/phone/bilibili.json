@@ -1,0 +1,55 @@
+{
+  "pkg": "tv.danmaku.bili",
+  "label": "哔哩哔哩",
+  "aliases": ["哔哩哔哩", "B站", "b站", "bilibili", "Bilibili"],
+  "start": "home",
+  "screens": {
+    "home": {
+      "nodes": [
+        { "cls": "TextView", "text": "搜索视频、番剧或up主", "id": "search_bar", "clk": true, "goto": "search" },
+        { "cls": "TextView", "text": "推荐", "clk": true },
+        { "cls": "TextView", "text": "热门", "clk": true },
+        { "cls": "LinearLayout", "text": "【4K】秋日城市漫步 · 播放 23.1万", "clk": true, "goto": "video" },
+        { "cls": "LinearLayout", "text": "三分钟看懂量子纠缠 · 播放 88.6万", "clk": true, "goto": "video" },
+        { "cls": "TextView", "text": "首页", "clk": true },
+        { "cls": "TextView", "text": "动态", "clk": true },
+        { "cls": "TextView", "text": "我的", "clk": true }
+      ]
+    },
+    "search": {
+      "nodes": [
+        { "cls": "ImageButton", "text": "", "desc": "返回", "clk": true, "goto": "<back>", "x": 60, "y": 160 },
+        { "cls": "EditText", "text": "", "hint": "搜索视频、番剧或up主", "edit": true, "focused": true, "field": "q" },
+        { "cls": "TextView", "text": "搜索", "clk": true, "goto": "results", "requires": "q", "x": 1000, "y": 160 },
+        { "cls": "TextView", "text": "搜索历史" },
+        { "cls": "TextView", "text": "黑神话悟空 新 DLC", "clk": true },
+        { "cls": "TextView", "text": "秋季新番导视", "clk": true }
+      ]
+    },
+    "results": {
+      "nodes": [
+        { "cls": "ImageButton", "text": "", "desc": "返回", "clk": true, "goto": "<back>", "x": 60, "y": 160 },
+        { "cls": "EditText", "text": "", "edit": true, "field": "q" },
+        { "cls": "TextView", "text": "搜索", "clk": true, "goto": "results", "requires": "q", "x": 1000, "y": 160 },
+        { "cls": "TextView", "text": "综合", "clk": true },
+        { "cls": "TextView", "text": "最多播放", "clk": true },
+        { "cls": "LinearLayout", "text": "{q}全解析:技能机制与配队推荐 · UP 提瓦特攻略组 · 播放 132.5万", "clk": true, "goto": "video" },
+        { "cls": "LinearLayout", "text": "【实机演示】{q}首曝,一分钟看完 · UP 原神 · 播放 356.2万", "clk": true, "goto": "video" },
+        { "cls": "LinearLayout", "text": "抽不抽?{q}强度锐评 · UP 阿明的游戏日常 · 播放 48.9万", "clk": true, "goto": "video" },
+        { "cls": "TextView", "text": "提瓦特攻略组 · UP主 · 粉丝 203.4万" },
+        { "cls": "Button", "text": "关注", "clk": true, "inc": "follow_a", "x": 960 },
+        { "cls": "TextView", "text": "阿明的游戏日常 · UP主 · 粉丝 12.8万" },
+        { "cls": "Button", "text": "关注", "clk": true, "inc": "follow_b", "x": 960 },
+        { "cls": "RecyclerView", "text": "", "id": "result_list", "scroll": true }
+      ]
+    },
+    "video": {
+      "nodes": [
+        { "cls": "ImageButton", "text": "", "desc": "返回", "clk": true, "goto": "<back>", "x": 60, "y": 160 },
+        { "cls": "TextView", "text": "视频播放中 00:03 / 12:41" },
+        { "cls": "TextView", "text": "点赞", "clk": true },
+        { "cls": "TextView", "text": "投币", "clk": true }
+      ]
+    }
+  }
+}

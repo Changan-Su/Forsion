@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  手机操控 T2 伴随包的**唯一**用户可见字面量(契约 §9:除此之外没有,浮层文案经主包 configure 下发)。
+  系统「无障碍」页与「应用信息」页读它们。zh 版在 values-zh。⚠️ description 必须写明屏幕内容发往 Forsion 云端。
+-->
+<resources>
+    <string name="app_name">Forsion Hands</string>
+    <string name="hands_a11y_label">Forsion Hands</string>
+    <string name="hands_a11y_description">Lets Tangu read the screen and tap, type and scroll in other apps when you ask it to on this phone. Screen content is sent to Forsion cloud and stored in the conversation. Turn this on only if you use Forsion; you can turn it off here at any time.</string>
+</resources>
