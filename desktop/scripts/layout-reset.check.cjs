@@ -11,7 +11,7 @@
  *  I 恢复后只拖了左侧栏的分隔线 → 撤销入口还在,点了照样逐项复原(侧栏宽度不算「改了布局」;Codex 第三轮 H1-3)。
  *    在收件箱 Space 里做:它的默认布局带一条可自由拖宽的左栏(主页的默认布局没有侧栏)。
  *    拖主区分屏线作废撤销那半只能在默认布局里造出分屏 = 结构先变,由 lcl 单测 layoutResetUndo ⑦ 锁
- *  J 撤销提示到期自己消失:指针不在通知上(悬停会暂停计时),6.5 秒时仍在、约 8 秒后收走(不超过 10.5 秒;Codex 第三轮 R2-g-4)
+ *  J 撤销提示到期自己消失:指针不在通知上(悬停会暂停计时),7.5 秒时仍在(回归成 7 秒会红)、约 8 秒后收走(不超过 10.5 秒;Codex 第三轮 R2-g-4)
  *
  * 需要先在本目录 `npx electron-vite build`(读 out/)。跑:npm run check:layoutreset
  * ⚠️ 独立 --user-data-dir + TANGU_HOME:不碰开发者自己的实例与 ~/.forsion。
@@ -195,14 +195,14 @@ async function main() {
     await card4.waitFor({ timeout: 3000 }).catch(() => {})
     const hovered = () => card4.evaluate((el) => el.matches(':hover')).catch(() => false)
     check('J 前置:撤销提示出现,且指针不在它上面(悬停会暂停计时)', (await card4.count()) > 0 && !(await hovered()))
-    await win.waitForTimeout(Math.max(0, 6500 - (Date.now() - shownAt)))
-    check('J 6.5 秒时撤销提示仍在', (await card4.count()) > 0 && !(await hovered()))
+    await win.waitForTimeout(Math.max(0, 7500 - (Date.now() - shownAt)))
+    check('J 7.5 秒时撤销提示仍在(停留 ≈8 秒,回归成 7 秒这里就红)', (await card4.count()) > 0 && !(await hovered()), `at=${Date.now() - shownAt}ms`)
     let goneAt = 0
     while (Date.now() - shownAt < 10_500) {
       if ((await card4.count()) === 0) { goneAt = Date.now() - shownAt; break }
       await win.waitForTimeout(100)
     }
-    check('J 撤销提示约 8 秒后自己收走(≤10.5 秒)', goneAt > 6500 && goneAt <= 10_500, `goneAt=${goneAt}ms`)
+    check('J 撤销提示约 8 秒后自己收走(≤10.5 秒)', goneAt > 7500 && goneAt <= 10_500, `goneAt=${goneAt}ms`)
   } finally {
     await app.close().catch(() => {})
     fs.rmSync(home, { recursive: true, force: true })
