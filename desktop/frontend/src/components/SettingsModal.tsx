@@ -2,6 +2,7 @@ import { PRODUCT } from '../product'
 import { ModelPickerSettings } from './ModelPickerSettings'
 import { AutoCompactSetting } from './AutoCompactSetting'
 import { HostSandboxSettings } from './HostSandboxSettings'
+import { ErrorBoundary } from './ErrorBoundary'
 /**
  * 设置页:连接 / 模型 / MCP / Browser / WeChat / 主题 / 高级。
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
@@ -1485,6 +1486,8 @@ export const SettingsModal: React.FC<{
         <PanelNotice />
         <div className="settings-body">
           {/* key 变 → 重挂 → CSS 入场动画重跑(方向由 data-dir 给);正文块自己按 activeSub 取舍。 */}
+          {/* 每个子页一个崩溃兜底:一页渲染抛错只占正文区,左侧导航照常能切走(原先只有整窗那一层,一页崩了整个设置窗就废了)。 */}
+          <ErrorBoundary key={`${tab}:${activeSub}`}>
           <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} data-dir={subDir} data-settings-sub={activeSub || undefined}>
                 {tab === 'permissions' && hasDesktopPermissions() && <DesktopPermissions mode={p.themeMode} />}
                 {/* 小节标题不在正文重复；当前子页面由左侧/移动首页的折叠子项标明。 */}
@@ -3808,6 +3811,7 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
           </div>
+          </ErrorBoundary>
         </div>
       </section>
     </div>

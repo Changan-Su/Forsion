@@ -70,7 +70,11 @@ export const HooksTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => {
   const [editKey, setEditKey] = useState<string | null>(null)
   const [err, setErr] = useState('')
 
-  const reload = useCallback(() => { getHooks(cfg).then(setData).catch((e) => setErr(String(e?.message || e))) }, [cfg])
+  // 字段缺省一律补空:老引擎 / 外部后端可能回一个不带 discovered 的壳,直接索引会让整页崩掉。
+  const reload = useCallback(() => {
+    getHooks(cfg).then((d) => setData({ events: d?.events || {}, discovered: d?.discovered || {}, eventNames: Array.isArray(d?.eventNames) ? d.eventNames : [] }))
+      .catch((e) => setErr(String(e?.message || e)))
+  }, [cfg])
   useEffect(() => { reload() }, [reload])
 
   const allRows = (): Row[] =>
