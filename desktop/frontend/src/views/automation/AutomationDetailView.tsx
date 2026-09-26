@@ -6,7 +6,11 @@
  *   Historian → special_agent_log 活动流;
  *   Muse 老路规则(无 agentSlug)→ 提示内容在「Muse 巡检」的会话里。
  */
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
+import type { ViewProps } from '@lcl/engine'
+import { CapabilityMenu } from '../../components/CapabilityMenu'
+import { AutomationExtension } from './AutomationExtension'
+import { automationListSource, subscribeAutomation } from './automationListSource'
 import { CalendarClock, History, Pencil, Play, Settings, Sparkles, Trash2, Zap } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
 import { useAutomation, sessionForTrigger } from '../../stores/automationStore'
@@ -16,6 +20,9 @@ import { Markdown } from '../../components/Markdown'
 import { useDbStore } from '../../amadeus/store/dbStore'
 import { actionsText, condText, fmtTime, isFinishedTrigger, watchedColumnIds, whereText } from './lib'
 import { AutomationBuilder } from './AutomationBuilder'
+import { AutomationHome } from './AutomationHome'
+import { AutomationRunsView } from './AutomationRunsView'
+import './messages'
 import type { AgentScheduleEntry, HistorianActivityItem, MuseTriggerInfo } from '../../types'
 import './automation.css'
 
@@ -28,12 +35,14 @@ const WatchedColumns: React.FC<{ cond: Extract<MuseTriggerInfo['cond'], { type: 
 }
 
 /** 试跑按钮:同一执行器立即执行动作链(旧式规则=起一次无人值守 run),结果行内展示。 */
-const FireButton: React.FC<{ tr: MuseTriggerInfo }> = ({ tr }) => {
+const FireButton: React.FC<{ tr: MuseTriggerInfo; onResult: () => void }> = ({ tr, onResult }) => {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
   const st = useAutomation()
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState('')
+  const mounted = useRef(true)
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
   // Muse 唤醒类(含 legacy 显式 agentSlug:'muse')没有独立动作,引擎会 400——不给按钮
   if (!tr.actions?.length && (!tr.agentSlug || tr.agentSlug === 'muse')) return null
   const fire = async (): Promise<void> => {
@@ -47,6 +56,7 @@ const FireButton: React.FC<{ tr: MuseTriggerInfo }> = ({ tr }) => {
       setResult(t('automation.fire.fail', { status: String(e?.message || e).slice(0, 80) }))
     } finally {
       setBusy(false)
+      if (mounted.current) onResult()
     }
   }
   return (
@@ -54,7 +64,7 @@ const FireButton: React.FC<{ tr: MuseTriggerInfo }> = ({ tr }) => {
       <button className="btn ghost sm" disabled={busy} title={t('automation.fire.hint')} onClick={() => void fire()}>
         <Play size={12} /> {busy ? '…' : t('automation.fire.btn')}
       </button>
-      {result && <span className="auto-fire-result">{result}</span>}
+      {result && <span className="auto-fire-result" role="status">{result}</span>}
     </>
   )
 }
@@ -172,7 +182,7 @@ const ScheduleEditor: React.FC<{ slug: string; en: AgentScheduleEntry; onDone: (
 }
 
 /** 日程条目详情(与规则详情同构:卡片+编辑/删除+触发记录)。key 按条目挂载,切换即重置编辑态。 */
-const ScheduleDetail: React.FC<{ slug: string; rowId: string }> = ({ slug, rowId }) => {
+const ScheduleDetail: React.FC<{ slug: string; rowId: string; onRuns: () => void }> = ({ slug, rowId, onRuns }) => {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
   const st = useAutomation()
@@ -199,6 +209,7 @@ const ScheduleDetail: React.FC<{ slug: string; rowId: string }> = ({ slug, rowId
           <div className="auto-card-head">
             <CalendarClock size={17} />
             <div className="auto-card-title">{en.name}</div>
+            <button className="btn ghost sm" onClick={onRuns}><History size={13} />{t('automation.ux.runResults')}</button>
             <button className="btn ghost sm" onClick={() => setEditing(true)}><Pencil size={12} /> {t('common.edit')}</button>
             <button className="btn ghost sm" title={t('common.delete')} onClick={() => void remove()}><Trash2 size={12} /></button>
           </div>
@@ -219,7 +230,23 @@ const ScheduleDetail: React.FC<{ slug: string; rowId: string }> = ({ slug, rowId
   )
 }
 
-export const AutomationDetailView: React.FC = () => {
+export const AutomationDetailView: React.FC<Partial<ViewProps>> = ({ extendView }) => {
+  const { t } = useI18n()
+  const [runsOpen, setRunsOpen] = useState(false)
+  const selection = useAutomation((s) => s.sel)
+  const builder = useAutomation((s) => s.builder)
+  useEffect(() => subscribeAutomation(() => {}), [])
+  useEffect(() => setRunsOpen(false), [selection, builder])
+  return <>
+    <div className="auto-detail-owner" hidden={runsOpen && !extendView}><AutomationDetailContent extendView={extendView} onRuns={() => setRunsOpen(true)} /></div>
+    <AutomationExtension controller={extendView} open={runsOpen} title={t('automation.ux.runResults')} onClose={() => setRunsOpen(false)}>
+      {!extendView && <button className="btn ghost sm" onClick={() => setRunsOpen(false)}>{t('common.close')}</button>}
+      <AutomationRunsView renderSession={(sessionId) => <SessionTranscript sessionId={sessionId} />} />
+    </AutomationExtension>
+  </>
+}
+
+const AutomationDetailContent: React.FC<Pick<ViewProps, 'extendView'> & { onRuns: () => void }> = ({ extendView, onRuns }) => {
   const { t } = useI18n()
   const agentDefs = useApp((s) => s.agentDefs)
   const st = useAutomation()
@@ -227,14 +254,14 @@ export const AutomationDetailView: React.FC = () => {
   if (st.builder) {
     const editing = st.builder.editingId ? st.triggers.find((x) => x.id === st.builder!.editingId) : undefined
     return (
-      <div className="auto-detail">
-        <AutomationBuilder key={st.builder.editingId || 'new'} editing={editing} />
+      <div className="auto-detail auto-editor-detail">
+        <AutomationBuilder key={st.builder.editingId || st.builder.starter || 'new'} editing={editing} starter={st.builder.starter} extendView={extendView} />
       </div>
     )
   }
 
   const sel = st.sel
-  if (!sel) return <div className="auto-detail-empty">{t('automation.detail.empty')}</div>
+  if (!sel) return <div className="auto-detail"><AutomationHome /></div>
 
   if (sel.kind === 'muse') {
     const muse = st.specialCfg?.muse
@@ -244,6 +271,7 @@ export const AutomationDetailView: React.FC = () => {
           <div className="auto-card-head">
             <Sparkles size={17} />
             <div className="auto-card-title">{t('automation.muse.title')}</div>
+            <button className="btn ghost sm" onClick={onRuns}><History size={13} />{t('automation.ux.runResults')}</button>
             <button className="btn ghost sm" onClick={() => useApp.getState().openSettings('agents')}>
               <Settings size={12} /> {t('automation.deepConfig')}
             </button>
@@ -270,6 +298,7 @@ export const AutomationDetailView: React.FC = () => {
           <div className="auto-card-head">
             <History size={17} />
             <div className="auto-card-title">{t('automation.historian.title')}</div>
+            <button className="btn ghost sm" onClick={onRuns}><History size={13} />{t('automation.ux.runResults')}</button>
             <button className="btn ghost sm" onClick={() => useApp.getState().openSettings('agents')}>
               <Settings size={12} /> {t('automation.deepConfig')}
             </button>
@@ -286,12 +315,11 @@ export const AutomationDetailView: React.FC = () => {
   }
 
   if (sel.kind === 'schedule') {
-    return <ScheduleDetail key={`${sel.slug}:${sel.rowId}`} slug={sel.slug} rowId={sel.rowId} />
+    return <ScheduleDetail key={`${sel.slug}:${sel.rowId}`} slug={sel.slug} rowId={sel.rowId} onRuns={onRuns} />
   }
 
   const tr = st.triggers.find((x) => x.id === sel.triggerId)
   if (!tr) return <div className="auto-detail-empty">{t('automation.detail.empty')}</div>
-  const sessionId = sessionForTrigger(st.autoSessions, tr.id)
   const hasOwnAction = !!tr.actions?.length || (!!tr.agentSlug && tr.agentSlug !== 'muse')
   return (
     <div className="auto-detail">
@@ -299,10 +327,14 @@ export const AutomationDetailView: React.FC = () => {
         <div className="auto-card-head">
           <Zap size={17} />
           <div className="auto-card-title">{tr.desc}</div>
-          <FireButton tr={tr} />
+          <span className={`auto-status-label ${tr.enabled ? 'on' : ''}`}>{t(tr.enabled ? 'automation.ux.on' : 'automation.ux.off')}</span>
+          <FireButton key={tr.id} tr={tr} onResult={onRuns} />
           <button className="btn ghost sm" onClick={() => st.openBuilder(tr.id)}>{t('common.edit')}</button>
+          <button className="btn ghost sm" onClick={onRuns}><History size={13} />{t('automation.ux.runResults')}</button>
+          <CapabilityMenu label={t('automation.ux.actions')} items={(automationListSource.itemMenu?.({ key: JSON.stringify({ kind: 'trigger', triggerId: tr.id }), title: tr.desc }) || [])
+            .filter((a) => a.id !== 'edit').map((a) => ({ id: a.id, label: a.label, danger: a.id === 'delete', onSelect: a.run }))} />
         </div>
-        <div className="auto-facts">
+        <details className="auto-properties"><summary>{t('automation.ux.properties')}</summary><div className="auto-facts">
           {isFinishedTrigger(tr) && <span className="auto-fact"><b>{t('automation.fact.status')}</b>{t('automation.finishedHint')}</span>}
           {/* 引擎自动停用(排空封顶断环 / tool_call 不可用)会写 disabledReason;用户手动启用即清。不显示的话用户只能从日志感知「规则怎么停了」 */}
           {!tr.enabled && tr.disabledReason && <span className="auto-fact auto-fact-warn"><b>{t('automation.fact.status')}</b>{t('automation.fact.disabledReason', { reason: tr.disabledReason })}</span>}
@@ -321,21 +353,14 @@ export const AutomationDetailView: React.FC = () => {
           )}
           <span className="auto-fact"><b>{t('automation.fact.lastRun')}</b>{fmtTime(tr.lastFiredAt)}</span>
           {tr.enabled && tr.nextRunAt && <span className="auto-fact"><b>{t('automation.fact.nextRun')}</b>{fmtTime(tr.nextRunAt)}</span>}
-        </div>
+        </div></details>
       </div>
-      <div className="auto-transcript-head">{t('automation.detail.latest')}</div>
-      {hasOwnAction
-        ? sessionId
-          ? <SessionTranscript sessionId={sessionId} />
-          : <div className="auto-runs-empty">{t('automation.trigger.neverFired')}</div>
-        : (
-          <div className="auto-runs-empty">
-            {t('automation.trigger.museNote')}{' '}
-            <a style={{ cursor: 'pointer', color: 'var(--accent-ink, var(--accent))' }} onClick={() => st.setSel({ kind: 'muse' })}>
-              {t('automation.muse.title')}
-            </a>
-          </div>
-        )}
+      <div className="auto-detail-flow">
+        <span><Zap size={14} />{condText(t, tr.cond)}</span>
+        {tr.actions?.map((step, i) => <React.Fragment key={i}><span aria-hidden="true">→</span><span>{i + 1}. {t(`automation.step.${step.type}`)}</span></React.Fragment>)}
+      </div>
+      {hasOwnAction && <p className="auto-hint">{t('automation.ux.runHint')}{tr.cond.type === 'db_changed' ? ` ${t('automation.ux.dbRunHint')}` : ''}</p>}
+
     </div>
   )
 }

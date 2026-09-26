@@ -17,9 +17,8 @@ import { localizedOnboarding, pluginDisplayName, AUTO_WORK_FOLDER_KEY } from '..
 import { useApp } from '../stores/appStore'
 import { SettingRow } from './AmadeusPluginsTab'
 import { listMarket, installMarket, listInstalled } from '../services/marketService'
-import { loadUserSpaces } from '../userSpaces'
+import { afterMarketInstall, canRestartBackend, restartBackend } from '../marketPostInstall'
 import { useTheme } from '../stores/themeStore'
-import { installAmadeusPlugins } from '../amadeusPlugins'
 import { requirementKey, type PluginOnboardingRecommend, type PluginRequirement } from '@amadeus-shared/ipc'
 import type { AmadeusPlugin } from '@amadeus/plugins/types'
 import type { MarketCard } from '../types'
@@ -31,6 +30,8 @@ const RecommendRow: React.FC<{ rec: PluginOnboardingRecommend; preInstalled: boo
   const [state, setState] = useState<'loading' | 'ready' | 'missing' | 'installing' | 'done'>(preInstalled ? 'done' : 'loading')
   // 失败原因就地显示:这张卡住在设置 / 市场浮窗里,全局 toast 在那儿不渲染(按钮只会默默变回「安装」)。
   const [err, setErr] = useState('')
+  // 装上了但引擎要重启才完整生效:同理就地说,并给「重启后端」(托管模式才有)。
+  const [restart, setRestart] = useState<'no' | 'needed' | 'running'>('no')
 
   useEffect(() => {
     if (preInstalled) return
@@ -55,14 +56,9 @@ const RecommendRow: React.FC<{ rec: PluginOnboardingRecommend; preInstalled: boo
       const effType = res?.type || rec.type
       // onPluginInstalled 自己吞异常:装后重扫失败只会走 notify 的 error 分支 —— 那时不能标「已安装」,留着按钮可重试(重装幂等)。
       let postFailed = false
-      if (effType === 'space') await loadUserSpaces() // 热注册,ribbon 实时出现
-      else if (effType === 'theme') await useTheme.getState().reloadThemes()
-      else if (effType === 'plugin') await useApp.getState().onPluginInstalled((text, error) => { if (error) { postFailed = true; setErr(text) } else useApp.getState().toast(text) })
-      else if (effType === 'amadeus-plugin' && window.amadeus) {
-        installAmadeusPlugins()
-        await usePluginStore.getState().reloadExternal()
-        await loadUserSpaces() // 捆绑包内嵌 Space → 热注册(此前只有 market 路径补了这步,引导卡装的会漏)
-      }
+      // 与市场同一套收尾:本窗热重载 + 通知主窗等其余窗口 + 判断要不要重启后端。
+      const after = await afterMarketInstall(effType, res, false, (text, error) => { if (error) { postFailed = true; setErr(text) } })
+      if (after.restart) setRestart('needed')
       setState(postFailed ? 'ready' : 'done')
     } catch (e: any) {
       setErr(t('market.installFail', { e: e?.message || String(e) }))
@@ -76,8 +72,16 @@ const RecommendRow: React.FC<{ rec: PluginOnboardingRecommend; preInstalled: boo
         <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{card?.name || rec.name || rec.slug}</div>
         {rec.reason && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{rec.reason}</div>}
         {err && <div role="alert" style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--danger)', overflowWrap: 'anywhere' }}>{err}</div>}
+        {restart !== 'no' && <div data-rec-restart-hint style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-muted)' }}>{t('market.pluginInstalledRestartHint')}</div>}
       </div>
-      {state === 'done' ? (
+      {state === 'done' && restart !== 'no' && canRestartBackend() ? (
+        <button className="btn sm primary" data-rec-restart disabled={restart === 'running'} onClick={() => {
+          setRestart('running')
+          void restartBackend().then((ok) => { setRestart(ok ? 'no' : 'needed'); setErr(ok ? '' : t('market.backendRestartFailed')) })
+        }}>
+          {restart === 'running' ? t('market.backendRestarting') : t('market.restartBackend')}
+        </button>
+      ) : state === 'done' ? (
         <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--ok, #3aa675)', whiteSpace: 'nowrap' }}>{t('plugin.onboarding.installed')}</span>
       ) : state === 'missing' ? (
         <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', whiteSpace: 'nowrap' }}>{t('plugin.onboarding.notFound')}</span>

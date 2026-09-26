@@ -29,7 +29,7 @@ const unwrapIpcError = (e: unknown): never => {
   throw resolve ? Object.assign(new Error(translate('marketsvc.resolveFailed', { detail: resolve[1] })), { stage: 'resolve' as const }) : new Error(msg)
 }
 
-export const installMarket = (id: string): Promise<{ ok: boolean; path: string; type: string; slug: string }> =>
+export const installMarket = (id: string): Promise<{ ok: boolean; path: string; type: string; slug: string; id?: string }> =>
   bridge().marketInstall!(id).catch(unwrapIpcError)
 
 /** 订阅安装进度(旧主进程没有这个事件 → 空退订,按钮退化成只转圈)。 */

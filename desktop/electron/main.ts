@@ -69,6 +69,7 @@ import { registerRemoteSync } from './remotesyncIpc'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
 import { createSampler, nativeProbe } from './activeWindow'
 import { KNOWN_APPS } from '../shared/knownApps'
+import { effectivePluginId } from '../shared/products'
 import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
 import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
@@ -3187,7 +3188,12 @@ app.whenReady().then(async () => {
         .catch((e: NodeJS.ErrnoException) => e?.code === 'ENOENT')
       if (staleMisinstall) await rm(otherDir, { recursive: true, force: true }).catch(() => {})
     }
-    return { ok: true, path: dest, files, type: effType, slug: info.installSlug }
+    // Forsion 插件带回装载器认的那个 id(manifest id 不合法时回落目录名,与 listPlugins 同一条规则):
+    // 渲染层要按 id 通知别的窗口重载 —— 同版本重装比不出版本差,只能点名。
+    const pluginId = effType === 'amadeus-plugin'
+      ? effectivePluginId(info.installSlug, await readFile(join(dest, 'manifest.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined))
+      : null
+    return { ok: true, path: dest, files, type: effType, slug: info.installSlug, ...(pluginId ? { id: pluginId } : {}) }
   })
 
   ipcMain.handle('market:installed', async () => {
@@ -3215,8 +3221,10 @@ app.whenReady().then(async () => {
     const dir = marketItemDir(tanguHomeDir(), type, slug)
     if (!dir) throw new Error('非法的卸载目标')
     if (!existsSync(dir)) throw new Error('该项不在已安装目录中')
+    // Space 带回配方 id(目录名可 ≠ id):各窗 ribbon 按它撤 —— loadUserSpaces 只增不撤用户 Space,删除一律走 space-removed。
+    const spaceId = type === 'space' ? await readFile(join(dir, 'space.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined) : undefined
     await rm(dir, { recursive: true, force: true })
-    return { ok: true, path: dir, type }
+    return { ok: true, path: dir, type, ...(typeof spaceId === 'string' && spaceId ? { id: spaceId } : {}) }
   })
 
   // ── 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(纯数据布局配方;market type='space' 装到同目录)──
@@ -3514,8 +3522,9 @@ app.whenReady().then(async () => {
     // 成就弹窗、撤 Space)用户还在设置浮窗里,别打断。
     if (req.action === 'onboarding' || req.action === 'chat-draft' || req.action === 'chat-quote' || req.action === 'open-agents' || req.action === 'open-agent') showMainWindow()
     const deliver = (): void => {
-      const recipients = req.action === 'skills-changed' || req.action === 'agents-changed'
-        ? [mainWindow, ...detachedWindows.values(), ...floatingWindows.values()]
+      // extensions-changed 也要到两扇 mini(手开的 / 自动弹的):它们和分离窗一样各握一份插件实例(见 amadeusPlugins.ts)。
+      const recipients = req.action === 'skills-changed' || req.action === 'agents-changed' || req.action === 'extensions-changed'
+        ? [mainWindow, miniWindow, autoMiniWindow, ...detachedWindows.values(), ...floatingWindows.values()]
         : [mainWindow]
       for (const win of recipients) if (win && !win.isDestroyed() && !win.webContents.isDestroyed() && win.webContents !== e.sender) {
         win.webContents.send('window:mainAction', req.action, req.payload)

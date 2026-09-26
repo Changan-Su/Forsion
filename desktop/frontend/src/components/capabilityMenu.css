@@ -12,6 +12,8 @@
 .capability-menu-items > button:hover, .capability-menu-items > button:focus-visible { outline: none; background: var(--menu-hover); }
 .capability-menu-items > button.danger { color: var(--danger); }
 .capability-menu-items > button:disabled { opacity: .4; cursor: default; }
+.capability-menu-hint { color: var(--text-faint); font-size: var(--ui-font-caption); font-variant-numeric: tabular-nums; }
+.capability-menu-items > button.capability-menu-drop { box-shadow: inset 0 0 0 1.5px var(--accent); background: var(--overlay-light); }
 .capability-menu-search { display: flex; align-items: center; gap: 7px; padding: 6px; color: var(--text-muted); }
 .capability-menu-search input { width: 100%; min-width: 0; font: inherit; }
 @media (prefers-reduced-motion: reduce) { .capability-menu { animation: none; } .capability-menu-trigger { transition: none; } }

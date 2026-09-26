@@ -58,10 +58,11 @@ export function normalizeFloatingPanelOpenOptions(raw: unknown): FloatingPanelOp
 
 /** 卫星窗(设置 / 反馈等浮窗)请主窗代办的动作:每个窗口一份 store,作用在工作台上的事必须由主窗自己做。
  *  带载荷的:space-removed = 已从磁盘删掉的 Space id(主窗撤注册 / ribbon);chat-draft = 预填进主窗聊天输入框的草稿
- *  (覆盖当前草稿);chat-quote = 挂成主窗聊天输入框的引用(不动草稿,旁聊把回答带回主对话用)。skills-changed / agents-changed 广播给所有窗口;open-agent = 要打开的 Agent slug。 */
-export type MainAction = 'onboarding' | 'dev-commands' | 'test-notification' | 'reset-layout' | 'achievement-toast' | 'space-removed' | 'chat-draft' | 'chat-quote' | 'skills-changed' | 'agents-changed' | 'open-agents' | 'open-agent'
-const MAIN_ACTIONS = new Set<MainAction>(['onboarding', 'dev-commands', 'test-notification', 'reset-layout', 'achievement-toast', 'space-removed', 'chat-draft', 'chat-quote', 'skills-changed', 'agents-changed', 'open-agents', 'open-agent'])
-const MAIN_ACTION_PAYLOAD_MAX: Partial<Record<MainAction, number>> = { 'space-removed': 256, 'chat-draft': 20000, 'chat-quote': 20000, 'open-agent': 64 }
+ *  (覆盖当前草稿);chat-quote = 挂成主窗聊天输入框的引用(不动草稿,旁聊把回答带回主对话用)。skills-changed / agents-changed / extensions-changed 广播给所有窗口;extensions-changed = JSON `{type, ids}`
+ *  (市场 / 设置浮窗装卸了插件 · Space · 主题,各窗按 id 自己重载);open-agent = 要打开的 Agent slug。 */
+export type MainAction = 'onboarding' | 'dev-commands' | 'test-notification' | 'reset-layout' | 'achievement-toast' | 'space-removed' | 'chat-draft' | 'chat-quote' | 'skills-changed' | 'agents-changed' | 'extensions-changed' | 'open-agents' | 'open-agent'
+const MAIN_ACTIONS = new Set<MainAction>(['onboarding', 'dev-commands', 'test-notification', 'reset-layout', 'achievement-toast', 'space-removed', 'chat-draft', 'chat-quote', 'skills-changed', 'agents-changed', 'extensions-changed', 'open-agents', 'open-agent'])
+const MAIN_ACTION_PAYLOAD_MAX: Partial<Record<MainAction, number>> = { 'space-removed': 256, 'chat-draft': 20000, 'chat-quote': 20000, 'open-agent': 64, 'extensions-changed': 20000 }
 
 /** 主进程转发前的闸:动作在白名单里;带载荷的要求非空字符串且不超长,不带载荷的动作丢掉载荷。 */
 export function normalizeMainAction(action: unknown, payload: unknown): { action: MainAction; payload?: string } | undefined {

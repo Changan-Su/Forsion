@@ -62,4 +62,13 @@ describe('收件箱列表源(统一工作区)', () => {
     useInbox.setState({ unreadCount: 8 })
     expect(cb).toHaveBeenCalledTimes(1)
   })
+  it('已归档列表的条目菜单保留取消归档入口', () => {
+    const original = useInbox.getState().markArchived
+    const markArchived = vi.fn()
+    useInbox.setState({ markArchived })
+    try {
+      src.itemMenu!(src.items({ group: 'archived' })[0]).find((action) => action.id === 'archive')!.run()
+      expect(markArchived).toHaveBeenCalledWith('4', false)
+    } finally { useInbox.setState({ markArchived: original }) }
+  })
 })

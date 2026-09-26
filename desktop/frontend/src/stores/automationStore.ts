@@ -4,6 +4,7 @@
  * 文案不在这里拼(i18n 归组件层),store 只存原始数据 + 选中态 + 构建器态。
  */
 import { create } from 'zustand'
+import type { Starter } from '../views/automation/experience'
 import {
   getAgentSchedules,
   getAutomationActions,
@@ -41,12 +42,13 @@ interface AutomationState {
   /** tool_call 动作目录(构建器工具选择器+参数表单生成;旧引擎无端点 → 空)。 */
   actionsCatalog: AutomationActionCatalogItem[]
   sel: AutomationSel | null
-  builder: null | { editingId?: string }
+  builder: null | { editingId?: string; starter?: Starter }
   /** 保存/启停/删除后 bump,右栏 runs 与列表跟着重拉。 */
   refreshNonce: number
   refresh(cfg: TanguDesktopConfig): Promise<void>
   setSel(sel: AutomationSel | null): void
-  openBuilder(editingId?: string): void
+  openBuilder(editingId?: string, starter?: Starter): void
+  acceptSaved(trigger: MuseTriggerInfo): void
   closeBuilder(): void
   bump(): void
 }
@@ -64,6 +66,7 @@ export const useAutomation = create<AutomationState>((set, get) => ({
   refreshNonce: 0,
 
   async refresh(cfg) {
+    const revision = get().refreshNonce
     // 六源并发,单源失败不阻断其余(旧引擎无 automation/schedule 端点 → 该项保持旧值/空)。
     const [special, status, triggers, autoSessions, schedules, actionsCatalog] = await Promise.all([
       getSpecialConfig(cfg).then((r) => r.config).catch(() => get().specialCfg),
@@ -73,6 +76,8 @@ export const useAutomation = create<AutomationState>((set, get) => ({
       getAgentSchedules(cfg).catch(() => get().schedules),
       getAutomationActions(cfg).catch(() => get().actionsCatalog),
     ])
+    // A poll started before a save must not erase the saved rule or its selection.
+    if (get().refreshNonce !== revision) return
     set({ specialCfg: special, museStatus: status, triggers, autoSessions, schedules, actionsCatalog, loaded: true })
     // 选中的规则/日程被删了 → 清选中
     const sel = get().sel
@@ -83,8 +88,12 @@ export const useAutomation = create<AutomationState>((set, get) => ({
   setSel(sel) {
     set({ sel, builder: null })
   },
-  openBuilder(editingId) {
-    set({ builder: { editingId } })
+  openBuilder(editingId, starter) {
+    set({ builder: { editingId, starter } })
+  },
+  acceptSaved(trigger) {
+    set((s) => ({ triggers: [...s.triggers.filter((t) => t.id !== trigger.id), trigger],
+      sel: { kind: 'trigger', triggerId: trigger.id }, builder: null, refreshNonce: s.refreshNonce + 1 }))
   },
   closeBuilder() {
     set({ builder: null })

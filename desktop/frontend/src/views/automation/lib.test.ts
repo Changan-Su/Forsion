@@ -4,7 +4,7 @@
  * 负对照口径:丢字段的失败形态是静默 undefined,正向断言容易假绿;toSpec 里删掉 rowFrom 那行本测试必须红(已实跑)。
  */
 import { describe, expect, it } from 'vitest'
-import type { MuseTriggerInfo } from '../../types'
+import type { AutomationActionCatalogItem, MuseTriggerInfo } from '../../types'
 import {
   actionsText, condText, cooldownPayload, hasUnsupportedParts, initialCooldown, stepsFrom, toSpec, triggerToUpsert,
   watchedColumnIds, whereDraftFrom, whereText, whereToUpsert,
@@ -32,6 +32,50 @@ const full: MuseTriggerInfo = {
 }
 
 describe('构建器 draft ↔ spec 往返', () => {
+  it('旧 Agent 规则保留执行者和 prompt，编辑后沿用既有 agent_run 转换语义', () => {
+    const legacy: MuseTriggerInfo = { ...full, cond: { type: 'daily_at', time: '09:00' }, actions: undefined,
+      agentSlug: 'researcher', prompt: '整理昨日笔记，并使用原有工具。', enabled: false }
+    expect(hasUnsupportedParts(legacy)).toBe(false)
+    expect(toSpec(stepsFrom(legacy), [])).toEqual([
+      { type: 'agent_run', agentSlug: legacy.agentSlug, prompt: legacy.prompt },
+    ])
+    expect(triggerToUpsert(legacy)).toMatchObject({ id: legacy.id, agent_slug: legacy.agentSlug,
+      prompt: legacy.prompt, actions: null, enabled: false, cond_type: 'daily_at', time: '09:00' })
+  })
+
+  it('旧 Muse 唤醒规则仍保持零动作和原 prompt，不套用新建模板', () => {
+    const legacy: MuseTriggerInfo = { ...full, cond: { type: 'event_seen', match: 'note.edit' }, actions: undefined,
+      prompt: '检查今日笔记', cooldownHours: 24 }
+    expect(hasUnsupportedParts(legacy)).toBe(false)
+    expect(stepsFrom(legacy)).toEqual([])
+    expect(triggerToUpsert(legacy)).toMatchObject({ id: legacy.id, cond_type: 'event_seen', match: 'note.edit',
+      prompt: legacy.prompt, actions: null, enabled: true, cooldown_hours: 24 })
+  })
+
+  const toolCatalog: AutomationActionCatalogItem[] = [{ name: 'existing_tool', description: '', parameters: {
+    required: ['enabled'], properties: { enabled: { type: 'boolean' }, limit: { type: 'number' },
+      text: { type: 'string' }, config: { type: 'object' }, ids: { type: 'array' } },
+  } }]
+
+  it('存量工具与 Agent 混合动作链往返保留顺序和参数类型，包括 false、0 和嵌套 JSON', () => {
+    const existing: MuseTriggerInfo = { ...full, cond: { type: 'manual' }, actions: [
+      { type: 'agent_run', agentSlug: 'researcher', prompt: '整理笔记 {{row.id}}' },
+      { type: 'tool_call', tool: 'existing_tool', args: { enabled: false, limit: 0, text: '  literal {{date}}  ',
+        config: { nested: { enabled: false, empty: null }, labels: ['甲', '乙'] }, ids: [0, 'r1'] } },
+      { type: 'notify', title: '已完成', body: '{{date}}' },
+    ] }
+    expect(hasUnsupportedParts(existing)).toBe(false)
+    expect(toSpec(stepsFrom(existing), toolCatalog)).toStrictEqual(existing.actions)
+    expect(triggerToUpsert(existing).actions).toBe(existing.actions)
+  })
+
+  it('未提供的可选工具参数不会在编辑时被补成 false 或空 JSON', () => {
+    const existing: MuseTriggerInfo = { ...full, actions: [
+      { type: 'tool_call', tool: 'existing_tool', args: { enabled: true } },
+    ] }
+    expect(toSpec(stepsFrom(existing), toolCatalog)).toStrictEqual(existing.actions)
+  })
+
   it('全字段规则 toSpec(stepsFrom(tr)) 深等于原 actions(where/rowFrom/match/skipIfEmpty 一个不丢)', () => {
     const steps = stepsFrom(full)
     expect(steps).toHaveLength(full.actions!.length)

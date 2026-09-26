@@ -13,10 +13,11 @@ import { useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { Markdown } from './Markdown'
 import { listMarket, getMarketDetail, installMarket, listInstalled, onInstallProgress, type InstalledItem } from '../services/marketService'
-import { loadUserSpaces } from '../userSpaces'
+import { forgetUserSpace, loadUserSpaces } from '../userSpaces'
 import { useTheme } from '../stores/themeStore'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
-import { installAmadeusPlugins } from '../amadeusPlugins'
+import { announceExtensionsChanged, reloadPluginsAndAnnounce } from '../amadeusPlugins'
+import { afterMarketInstall, canRestartBackend, restartBackend } from '../marketPostInstall'
 import { isGate, promptIfPending } from '../stores/pluginOnboardingStore'
 import { track } from '../achievements/store'
 import { act } from '../activity/log'
@@ -96,14 +97,26 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
   const close = onClose ?? storeClose
   // 市场住在独立浮窗(桌面)或全屏覆盖层(主窗)里:全局通知在浮窗不渲染、在主窗被 overlayOpen 挡住,
   // 所以安装/卸载的结果只能由市场自己说 —— 这条提示条就是那个出口(09-21 用户实报「点安装只转圈没反馈」)。
-  const [notice, setNotice] = useState<{ text: string; error: boolean; hint?: string } | null>(null)
+  // restart = 引擎只能重启后才生效的那几种(插件贡献了路由 / 原地更新 / 卸载):给按钮,别让用户自己去找「重启」。
+  const [notice, setNotice] = useState<{ text: string; error: boolean; hint?: string; restart?: 'idle' | 'running' } | null>(null)
   // 普通提示不覆盖还挂着的错误(并发安装时,后完成的「已安装」会在几百毫秒内把前一个的失败原因顶掉)。
   const toast = useCallback((text: string, error = false, hint?: string) => setNotice((cur) => (cur?.error && !error ? cur : { text, error, hint })), [])
   useEffect(() => {
-    if (!notice || notice.error) return // 错误常驻到手动关 / 下一条提示
+    if (!notice || notice.error || notice.restart) return // 错误与待点的重启常驻到手动关 / 下一条提示
     const timer = setTimeout(() => setNotice(null), 4000)
     return () => clearTimeout(timer)
   }, [notice])
+  const offerRestart = (text: string): void => {
+    // 与 toast 同一条规则:不顶掉并发安装还挂着的失败提示。
+    if (canRestartBackend()) setNotice((cur) => (cur?.error ? cur : { text, error: false, hint: t('market.restartBackendHint'), restart: 'idle' }))
+    else toast(text)
+  }
+  const onRestartBackend = async (): Promise<void> => {
+    setNotice((cur) => cur && { ...cur, restart: 'running' }) // 按钮留着、置灰,直到有结果
+    const ok = await restartBackend()
+    // 成功直接替换(它就是这条提示要解决的事);失败保留按钮,让「请重试」真的能重试。
+    setNotice(ok ? { text: t('market.backendRestarted'), error: false } : { text: t('market.backendRestartFailed'), error: true, restart: 'idle' })
+  }
   const [tab, setTab] = useState<Tab>('discover')
   const [catalog, setCatalog] = useState<MarketCard[]>([])
   const [catalogError, setCatalogError] = useState('')
@@ -194,35 +207,22 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
     setProgress((m) => omit(m, c.id))
     setFailed((m) => omit(m, c.id))
     setNotice(null) // 新一轮安装 = 用户已看过上一条(失败的那项按钮仍是「重试」)
+    const wasInstalled = isInstalled(c)
     try {
       const res = await installMarket(c.id)
       const effectiveType = ((res?.type as MarketType) || c.type)
       track('market.install')
       act('market.install', { id: c.id })
-      if (effectiveType === 'plugin') {
-        await useApp.getState().onPluginInstalled(toast)
-      } else if (effectiveType === 'space') {
-        await loadUserSpaces()
-        toast(t('market.spaceInstalled', { name: c.name }))
-      } else if (effectiveType === 'theme') {
-        await useTheme.getState().reloadThemes()
-        toast(t('market.themeInstalled', { name: c.name }))
-      } else if (effectiveType === 'amadeus-plugin') {
-        if (window.amadeus) {
-          installAmadeusPlugins()
-          const before = new Set(usePluginStore.getState().plugins.map((p) => p.id))
-          await usePluginStore.getState().reloadExternal()
-          const state = usePluginStore.getState()
-          const freshAll = state.plugins.filter((p) => !before.has(p.id))
-          if (state.plugins.some((p) => p.bundle?.enginePlugins?.length)) await useApp.getState().onPluginInstalled(toast)
-          await loadUserSpaces()
-          // 装完 = 注意力在场:逐个实测新插件(连 check),第一个确有未满足的才弹检查卡。
-          for (const p of freshAll) if (state.activeIds.includes(p.id) && isGate(p) && await promptIfPending(p.id)) break
-        }
-        toast(t('market.amadeusPluginInstalled', { name: c.name }))
-      } else {
-        toast(t('market.installOk', { name: c.name }))
-      }
+      // 本窗热重载 + 通知主窗等其余窗口(市场是独立浮窗)+ 判断要不要重启后端,与插件引导卡共用。
+      const { restart, fresh } = await afterMarketInstall(effectiveType, res, wasInstalled, toast)
+      // 装完 = 注意力在场:逐个实测新插件(连 check),第一个确有未满足的才弹检查卡。
+      const state = usePluginStore.getState()
+      for (const p of fresh) if (state.activeIds.includes(p.id) && isGate(p) && await promptIfPending(p.id)) break
+      if (restart) offerRestart(t('market.pluginInstalledRestartHint'))
+      else if (effectiveType === 'space') toast(t('market.spaceInstalled', { name: c.name }))
+      else if (effectiveType === 'theme') toast(t('market.themeInstalled', { name: c.name }))
+      else if (effectiveType === 'amadeus-plugin') toast(t('market.amadeusPluginInstalled', { name: c.name }))
+      else if (effectiveType !== 'plugin') toast(t('market.installOk', { name: c.name })) // 引擎插件的结果 onPluginInstalled 已经说过
       await scanCatalog()
     } catch (e: any) {
       setFailed((m) => ({ ...m, [c.id]: true }))
@@ -244,18 +244,28 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
     if (!window.confirm(t('market.uninstallConfirm', { name: c.name }) + (warn ? `\n\n${warn}` : ''))) return
     setUninstalling(c.id)
     try {
-      await window.tangu!.marketUninstall!(info.realType, c.installSlug)
+      const removedItem = await window.tangu!.marketUninstall!(info.realType, c.installSlug)
       act('market.uninstall', { id: c.id })
-      // 热重载与安装侧对称:装完刷新了什么,卸完就要刷新什么,否则界面上那一项还在。
-      if (info.realType === 'space') await loadUserSpaces()
-      else if (info.realType === 'theme') await useTheme.getState().reloadThemes()
-      else if (info.realType === 'amadeus-plugin') {
-        if (window.amadeus) { await usePluginStore.getState().reloadExternal(); await loadUserSpaces() }
-      }
+      // 热重载与安装侧对称:装完刷新了什么,卸完就要刷新什么,否则界面上那一项还在(其余窗口同理靠广播)。
       // 引擎插件的工具/路由**无法运行期反注册**,删目录后仍要重启后端才真正消失(同设置页卸载口径)。
-      toast(info.realType === 'plugin'
-        ? t('market.uninstalledNeedsRestart', { name: c.name })
-        : t('market.uninstalled', { name: c.name }))
+      let restart = info.realType === 'plugin'
+      if (info.realType === 'space') {
+        // loadUserSpaces 只增不撤用户 Space:按配方 id 走删除那条路(本窗撤 + 主窗 space-removed)。
+        if (removedItem?.id) { forgetUserSpace(removedItem.id); window.tangu?.requestMainAction?.('space-removed', removedItem.id) }
+        await loadUserSpaces(); announceExtensionsChanged('space')
+      }
+      else if (info.realType === 'theme') { await useTheme.getState().reloadThemes(); announceExtensionsChanged('theme') }
+      else if (info.realType === 'amadeus-plugin') {
+        if (window.amadeus) {
+          const { removed } = await reloadPluginsAndAnnounce()
+          restart = removed.some((p) => p.bundle?.enginePlugins?.length)
+          await loadUserSpaces()
+        }
+      } else if (info.realType === 'skill' || info.realType === 'agent') {
+        window.tangu?.requestMainAction?.(info.realType === 'skill' ? 'skills-changed' : 'agents-changed')
+      }
+      if (restart) offerRestart(t('market.uninstalledNeedsRestart', { name: c.name }))
+      else toast(t('market.uninstalled', { name: c.name }))
       await scanCatalog()
     } catch (e: any) {
       toast(t('market.uninstallFail', { e: e?.message || String(e) }), true)
@@ -453,6 +463,7 @@ export function MarketModal({ onClose }: { onClose?: () => void } = {}) {
           <div className={`mk-notice${notice.error ? ' is-error' : ''}`} role={notice.error ? 'alert' : 'status'}>
             {notice.error ? <AlertCircle size={15} /> : <Check size={15} />}
             <div className="mk-notice-body"><span>{notice.text}</span>{notice.hint && <small>{notice.hint}</small>}</div>
+            {notice.restart && <button className="btn sm primary" data-market-restart disabled={notice.restart === 'running'} onClick={() => void onRestartBackend()}>{notice.restart === 'running' ? t('market.backendRestarting') : t('market.restartBackend')}</button>}
             <button className="mk-notice-close" onClick={() => setNotice(null)} aria-label={t('common.close')}><X size={13} /></button>
           </div>
         )}
