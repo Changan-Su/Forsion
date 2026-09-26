@@ -2923,13 +2923,13 @@ The market has exactly two doors: the store icon at the bottom of the ribbon (to
 | Left nav group | What is in it |
 |---|---|
 | Discover | Store home: community pick, recently added, popular |
-| Categories | Skills, Agents, Plugins, Spaces, Themes, Web Apps |
+| Categories | Skills, Agents, Plugins, Spaces, Themes, Web apps |
 | Manage | Installed, Updates, Submit |
 
 - Installing: click "Install" on a card or detail page (it reads "Installing…" while it runs). An installed item's button becomes "Reinstall", or "Update" when a newer version exists. A Forsion plugin hot-loads the moment it lands — its views, commands and `/` entries work immediately; a bundled Space appears at the top of the ribbon; a plugin with a setup flow pops its card right away.
 - Uninstalling: the trash button on the card, confirmed with "Uninstall \"{name}\"? Its install directory will be deleted." Agents and skills add a warning line: an agent's memory and logs go with it and cannot be recovered; for a skill, your own edits go too.
 - Updating: the "Updates" page lists everything with a newer version, one click each. An item whose version is not plain numbers is not flagged here.
-- "Web Apps" are web apps other people built with Coding Space. "Open" runs one in the built-in browser, and the hint says AI features spend the visitor's own account quota. With the built-in Browser plugin turned off, it opens in your system browser instead.
+- "Web apps" are web apps other people built with Coding Space. "Open" runs one in the built-in browser, and the hint says AI features spend the visitor's own account quota. With the built-in Browser plugin turned off, it opens in your system browser instead.
 - "Submit" is only a signpost: "Open submission page" opens the web submission page in your system browser. The search box and sort control are hidden on that page.
 
 > [!warning] The "Plugins" category mixes Forsion plugins and Tangu engine plugins, and the card does not tell you which is which. The toast after installing does: "Forsion plugin \"{name}\" installed and loaded" is an interface plugin, "Plugin installed and enabled" is an engine plugin. They land in the two different sub-tabs of the plugin page.
