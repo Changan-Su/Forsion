@@ -25,6 +25,21 @@ describe('notificationStore', () => {
     expect(left[0].level).toBe('error')
   })
 
+  it('操作回执(receipt)不受总开关 / 事件开关过滤,也不跟发系统通知(Codex 第一轮 C-2)', () => {
+    const os = vi.fn()
+    vi.stubGlobal('window', { tangu: { notify: os } })
+    vi.stubGlobal('document', { hasFocus: () => false })
+    try {
+      useNotifications.getState().setEnabled(false)
+      useNotifications.setState((s) => ({ prefs: { ...s.prefs, events: { 'workspace.layout': false } } }))
+      expect(notifyApp({ text: 'plain', event: 'workspace.layout' })).toBeNull()
+      const id = notifyApp({ text: 'restored', event: 'workspace.layout', receipt: true, action: { label: 'Undo', run: () => {} } })
+      expect(id).not.toBeNull()
+      expect(useNotifications.getState().items.map((n) => n.text)).toEqual(['restored'])
+      expect(os).not.toHaveBeenCalled()
+    } finally { vi.unstubAllGlobals() }
+  })
+
   it('总开关关闭 → 静默;force 穿透(测试通知)', () => {
     useNotifications.getState().setEnabled(false)
     expect(notifyApp({ text: 'a' })).toBeNull()

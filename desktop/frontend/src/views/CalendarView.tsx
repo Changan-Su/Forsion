@@ -14,6 +14,7 @@ import {
   type PointerEvent as ReactPointerEvent,
   type MouseEvent as ReactMouseEvent,
   type RefObject,
+  type MutableRefObject,
 } from 'react'
 import { CalendarPlus, Check, ChevronLeft, ChevronRight, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react'
 import { Button } from '@astryxdesign/core/Button'
@@ -190,6 +191,10 @@ export function CalendarView() {
   const [card, setCard] = useState<{ key: string; at: Anchor } | null>(null)
   const titleRef = useRef<HTMLSpanElement>(null)
   const api = useRef<CalApi>(null)
+  // 月视图当前看的是哪个月:周首日一变,月视图按新周首日整块重挂(key 带 firstDow),重挂后回到这个月而不是跳回今天
+  // (Codex 第一轮 D-1)。切去周 / 日视图就作废 —— 从别的视图回月视图仍按老规矩落在今天。
+  const monthAnchor = useRef<MonthAnchor | null>(null)
+  useEffect(() => { if (mode !== 'month') monthAnchor.current = null }, [mode])
   const selRef = useRef<CalEvent | null>(null) // 常驻键盘 effect 读当前选中(避免 [] 闭包读旧值)
   const clipRef = useRef<{ db: AggDb; rowId: string } | null>(null) // 复制的事件(会话内内存剪贴板)
 
@@ -337,7 +342,7 @@ export function CalendarView() {
       )}
 
       {mode === 'month' ? (
-        <MonthScroll key={`dow${firstDow}`} ref={api} events={visible} selectedKey={card?.key ?? null} onPick={openCard} onCreate={(d, at) => void create(d, null, at)} titleRef={titleRef} />
+        <MonthScroll key={`dow${firstDow}`} ref={api} anchorRef={monthAnchor} events={visible} selectedKey={card?.key ?? null} onPick={openCard} onCreate={(d, at) => void create(d, null, at)} titleRef={titleRef} />
       ) : (
         <TimeScroll ref={api} n={n} events={visible} selectedKey={card?.key ?? null} onPick={openCard} onCreate={(d, min, at) => void create(d, min, at)} titleRef={titleRef} />
       )}
@@ -737,14 +742,18 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
 })
 
 // ── 月视图(纵向连续周行条)────────────────────────────────────────────────
+/** 月视图正在看的月份(y 年、m 月 0-11)= 标题显示的那个月。 */
+export interface MonthAnchor { y: number; m: number }
 interface MonthProps {
+  /** 父组件持有的「当前看的月」:本组件滚动时写入,挂载时若有值就回到这个月(周首日变化重挂时用)。 */
+  anchorRef?: MutableRefObject<MonthAnchor | null>
   events: CalEvent[]
   selectedKey: string | null
   onPick: (key: string, at: Anchor) => void
   onCreate: (day: Date, at: Anchor) => void
   titleRef: RefObject<HTMLSpanElement | null>
 }
-const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({ events, selectedKey, onPick, onCreate, titleRef }, ref) {
+export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({ anchorRef, events, selectedKey, onPick, onCreate, titleRef }, ref) {
   const { t } = useI18n()
   const wrap = useRef<HTMLDivElement>(null)
   const [rowH, setRowH] = useState(0)
@@ -765,7 +774,9 @@ const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({ events
     const el = wrap.current
     if (!el || !rowH) return
     const i = Math.max(0, Math.min(weeks.length - 1, Math.round(el.scrollTop / rowH)))
-    const label = monthLabel(addDays(weeks[i], 3))
+    const mid = addDays(weeks[i], 3)
+    const label = monthLabel(mid)
+    if (anchorRef) anchorRef.current = { y: mid.getFullYear(), m: mid.getMonth() }
     if (label !== lastTitle.current) {
       lastTitle.current = label
       if (titleRef.current) titleRef.current.textContent = label
@@ -792,7 +803,15 @@ const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({ events
     const el = wrap.current
     if (!el || !rowH || centered.current) return
     centered.current = true
-    el.scrollTop = idxOfMonth(today.getFullYear(), today.getMonth()) * rowH
+    const a = anchorRef?.current
+    if (a) {
+      // 回到重挂前看的那个月:按新周首日,该月 1 号所在周的「标题日」(周首 +3)可能还落在上个月 → 再往下一行。
+      let i = Math.max(0, Math.min(weeks.length - 1, idxOfMonth(a.y, a.m)))
+      if (addDays(weeks[i], 3).getMonth() !== a.m && i + 1 < weeks.length) i += 1
+      el.scrollTop = i * rowH
+    } else {
+      el.scrollTop = idxOfMonth(today.getFullYear(), today.getMonth()) * rowH
+    }
     updateTitle()
   }, [rowH]) // eslint-disable-line react-hooks/exhaustive-deps
 

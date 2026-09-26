@@ -72,7 +72,7 @@ export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: 
     const name = kind === 'agent' ? (soloAgent?.name || id) : (soloEngine?.name || id)
     const url = kind === 'agent' ? s.agentAvatars[id] : undefined
     return (
-      <div className="t2o-bar" role="status" data-orbit="solo">
+      <div className="t2o-bar" role="group" aria-label={name} data-orbit="solo">
         <span className="t2o-bar-lead">
           {kind === 'engine' ? <EngineIcon engineId={id} size={16} /> : <AgentAvatar name={name} url={url} size={18} className="t2o-bar-avatar" initialClassName="t2o-bar-avatar-text" />}
         </span>
@@ -111,9 +111,11 @@ export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: 
   if (!inTeamMode && !isTeam) return null
   const title = isTeam ? (team?.name || cfg.teamSlug!) : t('orbit.bar.teamMode')
   return (
-    <div className="t2o-bar" role="status" data-orbit={isTeam ? 'team' : 'teammode'}>
+    // 实时区域只包「人数 · 谁在工作 / 等审批」这一行(role=status 在 .t2o-bar-sub 上),整条是普通 group:
+    // 头像组的可访问名随工作状态变,放在实时区域里会被反复整句播报(集成遗留 L-5)。
+    <div className="t2o-bar" role="group" aria-label={title} data-orbit={isTeam ? 'team' : 'teammode'}>
       <span className="t2o-bar-title">{title}</span>
-      <span className="t2o-bar-sub">{t('orbit.bar.members', { n: members.length })}{workingCount ? ` · ${t('orbit.bar.working', { n: workingCount })}` : ''}{waitingNames.length ? ` · ${t('orbit.bar.waiting', { name: waitingNames.join('、') })}` : ''}</span>
+      <span className="t2o-bar-sub" role="status">{t('orbit.bar.members', { n: members.length })}{workingCount ? ` · ${t('orbit.bar.working', { n: workingCount })}` : ''}{waitingNames.length ? ` · ${t('orbit.bar.waiting', { name: waitingNames.join('、') })}` : ''}</span>
       <span
         className="t2o-bar-avatars"
         role="img"
@@ -143,7 +145,9 @@ export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: 
           }}><LogOut size={12} /> {t('orbit.bar.exit')}</button>
         )}
       </span>
-      {note && <span className="t2o-bar-note">{note}</span>}
+      {/* 常驻挂载、只换内容:读屏对「连同文字一起新插入」的实时区域通常不播,region 得先在,内容再变(复核补漏)。
+          空时由 orbits.css 的 .t2o-bar-note:empty 收成读屏专用尺寸,不占布局。 */}
+      <span className="t2o-bar-note" role="status">{note || ''}</span>
       {setupOpen && (
         <GroupChatSetup
           agents={s.agentDefs}

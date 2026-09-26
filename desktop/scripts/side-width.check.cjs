@@ -27,7 +27,7 @@
  *   U20_VERBOSE=1(总是打印写入日志)/ U20_NEGATIVE=1(负对照:中途删掉存档,2.x 必须红)。
  */
 const path = require('path')
-const { sleep, shotDir, makeReporter, launch, boot, enterSpace, SPACE_NAMES, activeSpace, captureWindow } = require('./lib/uiux-electron.cjs')
+const { sleep, shotDir, makeReporter, launch, boot, enterSpace, activeSpace, captureWindow } = require('./lib/uiux-electron.cjs')
 
 /** 复现用户实报那组数:拖到 345,窗口 1600 宽(黄金分割 0.191W 被钳在左栏上限 280 = 实报的「跳到 280」)。 */
 const TARGET = Number(process.env.U20_TARGET || 345)
@@ -122,11 +122,11 @@ const leftW = (st) => (st.store.tangu && typeof st.store.tangu.left === 'number'
 const near = (a, b) => typeof a === 'number' && Math.abs(a - b) <= TOL
 
 async function roundTrip(win, other, label, frames = true) {
-  const went = await enterSpace(win, SPACE_NAMES[other], { real: true })
+  const went = await enterSpace(win, other, { real: true })
   await sleep(1500)
   const away = await win.evaluate(MEASURE)
   const sampler = frames ? win.evaluate(sampleFrames(1600)) : null
-  const back = await enterSpace(win, SPACE_NAMES.tangu, { real: true })
+  const back = await enterSpace(win, 'tangu', { real: true })
   const seq = sampler ? await sampler : []
   await sleep(600)
   const st = await win.evaluate(MEASURE)
@@ -151,18 +151,21 @@ async function run(app, win, shots) {
   const W = st1.width
 
   // ── 1 设置浮窗 ──
-  const btn = win.locator('.rb-btn[title="设置"], .rb-btn[title="Settings"]').first()
+  // 规格指定走 Ribbon 设置钮(Codex 第一轮 F-5):按可访问名找(收起态没有 title,只有 aria-label),真鼠标点。
+  // 找不到就判红,不再悄悄改走 openFloatingPanel —— 那样 Ribbon 设置钮坏了本步也绿。直接调用只留给 U20_DIAG=1 的诊断路径。
+  const btn = win.locator('.rb-btn[aria-label="设置"], .rb-btn[aria-label="Settings"]').first()
   const opened = app.waitForEvent('window', { timeout: 15_000 }).catch(() => null)
   let via = 'ribbon'
   if (await btn.count().catch(() => 0)) await btn.click()
-  else { via = 'openFloatingPanel'; await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings' })) }
+  else if (process.env.U20_DIAG) { via = 'openFloatingPanel(诊断)'; await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings' })) }
+  else via = 'missing'
   const floating = await opened
   if (floating) { await floating.waitForSelector('.settings-page', { timeout: 20_000 }).catch(() => {}); await sleep(800) }
   const stOpen = await win.evaluate(MEASURE)
   if (floating) await floating.close().catch(() => {})
   await sleep(1200)
   const st2 = await win.evaluate(MEASURE)
-  R.check(`1 开设置浮窗(${via})→ 关掉:左栏宽不变`, !!floating && near(stOpen.width, W) && near(st2.width, W) && near(leftW(st2), W),
+  R.check(`1 开设置浮窗(${via})→ 关掉:左栏宽不变`, via === 'ribbon' && !!floating && near(stOpen.width, W) && near(st2.width, W) && near(leftW(st2), W),
     JSON.stringify({ floating: !!floating, whileOpen: stOpen.width, after: st2.width, stored: leftW(st2) }))
 
   // ── 2 收件箱往返 ×3 ──

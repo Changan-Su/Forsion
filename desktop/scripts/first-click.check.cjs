@@ -33,7 +33,7 @@
  *   U41_LIST_DELAY(给 GET /agent/sessions* 加多少 ms 延迟,模拟慢引擎:名册晚到时行会不会在手指下被整批重挂)
  */
 const path = require('path')
-const { sleep, shotDir, makeReporter, launch, boot, enterSpace, SPACE_NAMES, activeSpace, captureWindow } = require('./lib/uiux-electron.cjs')
+const { sleep, shotDir, makeReporter, launch, boot, enterSpace, activeSpace, captureWindow } = require('./lib/uiux-electron.cjs')
 
 const ROUNDS = Math.max(1, Number(process.env.U41_ROUNDS || 3)) // 0 轮 = 什么都没量却全绿,不允许
 const DELAYS = (process.env.U41_DELAYS || '0,50,150,300,600').split(',').map(Number)
@@ -143,7 +143,7 @@ async function ensureRowsVisible(win) {
 }
 
 async function trial(win, delay, title) {
-  await enterSpace(win, SPACE_NAMES.inbox, { real: true })
+  await enterSpace(win, 'inbox', { real: true })
   await sleep(1200)
   // 没真的切走 = 这一击不是「切 Space 后首击」,不能算 ok(否则普通点击也会把本仪器刷绿)。
   const away = await activeSpace(win)
@@ -152,7 +152,7 @@ async function trial(win, delay, title) {
   await win.evaluate(RESET)
   if (NEGATIVE_MODE) await win.evaluate(NEGATIVE_ARM(NEGATIVE_MODE))
   const t0 = Date.now()
-  await enterSpace(win, SPACE_NAMES.tangu, { real: true })
+  await enterSpace(win, 'tangu', { real: true })
   if (delay) await sleep(delay)
   // 行还没挂出来就轮询(d=0 时常见),记下等了多久 —— 用户的手指不会等,这段时长本身就是指纹之一。
   let loc = null

@@ -146,6 +146,36 @@ async function main() {
     await wsInput.fill(wsTarget)
     await wsInput.press('Tab')
     check('B4 工作目录失焦提交', await waitFor(async () => (await diskConfig()).defaultWorkspaceDir === wsTarget), (await diskConfig()).defaultWorkspaceDir)
+    // B5(Codex 第一轮 A-2):失焦提交写盘失败 → 就地提示 + 草稿保留 + 「重试」。把 TANGU_HOME 临时设成只读
+    // (config.json 与它的写锁都落在这里),真让主进程的 config:set 失败,再放开点重试。
+    const wsFail = path.join(home, 'ws-after-retry')
+    try {
+      fs.chmodSync(home, 0o555)
+      await wsInput.fill(wsFail)
+      await wsInput.press('Tab')
+      const errRow = fl.locator('[data-commit-error="defaultWorkspaceDir"]')
+      check('B5 写盘失败:工作目录旁就地出现「未保存」提示(role=alert)', await waitFor(async () => (await errRow.count()) === 1 && (await errRow.getAttribute('role')) === 'alert', 6000))
+      check('B5 失败后草稿仍在输入框、盘上仍是旧值', (await wsInput.inputValue()) === wsFail && (await diskConfig()).defaultWorkspaceDir === wsTarget)
+      await fl.screenshot({ path: path.join(shots, 'settings-commit-error.png') })
+      fs.chmodSync(home, 0o755)
+      await errRow.locator('button').click()
+      check('B5 点「重试」后写盘成功、提示消失', await waitFor(async () => (await diskConfig()).defaultWorkspaceDir === wsFail && (await errRow.count()) === 0, 6000))
+      // B6(复核补漏):失败后用户**改了新值、不失焦直接点「重试」**—— 点击先让输入框失焦提交新值,重试不能再把
+      // 失败那一刻的旧快照写回去(retry 闭包曾绑着旧 edits:盘上落旧值、新草稿被回执抹掉)。
+      const wsStale = path.join(home, 'ws-stale'), wsFresh = path.join(home, 'ws-fresh')
+      fs.chmodSync(home, 0o555)
+      await wsInput.fill(wsStale)
+      await wsInput.press('Tab')
+      const failedAgain = await waitFor(async () => (await errRow.count()) === 1, 6000)
+      fs.chmodSync(home, 0o755)
+      await wsInput.fill(wsFresh)
+      await errRow.locator('button').click()
+      await pause(1200)
+      check('B6 失败后改新值再点「重试」:盘上与输入框都是新值(不被旧快照覆盖)', failedAgain
+        && await waitFor(async () => (await diskConfig()).defaultWorkspaceDir === wsFresh, 4000)
+        && (await diskConfig()).defaultWorkspaceDir === wsFresh && (await wsInput.inputValue()) === wsFresh,
+      { disk: (await diskConfig()).defaultWorkspaceDir, input: await wsInput.inputValue() })
+    } finally { fs.chmodSync(home, 0o755) }
 
     // ── D 设置搜索 ──
     const search = fl.locator('.settings-nav-search input')
@@ -164,12 +194,19 @@ async function main() {
     await search.fill('镜像')
     check('D4 托管草稿下「镜像」结果出现', await waitFor(async () => (await fl.locator('[data-setting-result="mirror"]').count()) === 1, 3000))
     await fl.screenshot({ path: path.join(shots, 'settings-search.png') })
-    let reached = 0, skipped = []
+    // 本端此刻应可见的索引项(Codex 第一轮 A-4):桌面 + 已读回落盘配置 + 运行方式草稿=托管 →
+    // 只有 needs 含 'external' 的项(外部连接面板)按门控该藏。逐项要求**必须**搜得到,不再「搜不到就跳过、够 15 个就绿」——
+    // 否则某个本该可见的项消失 / 门控写错,只要其余凑够门槛照样全绿。
+    const expectHidden = (e) => (e.needs || []).includes('external')
+    let reached = 0
+    const missing = [], leaked = []
     for (const entry of SETTINGS_SEARCH_INDEX) {
       const query = entry.keywords.split(/\s+/)[0]
       await search.fill(query)
       const row = fl.locator(`[data-setting-result="${entry.id}"]`)
-      if (!(await row.count())) { skipped.push(entry.id); continue }
+      const present = await waitFor(async () => (await row.count()) > 0, 1500)
+      if (expectHidden(entry)) { if (present) leaked.push(entry.id); continue }
+      if (!present) { missing.push(entry.id); check(`D 结果 ${entry.id} 搜得到(本端应可见)`, false, { query }); continue }
       await row.click()
       if (entry.anchor) {
         const ok = await waitFor(async () => fl.evaluate((a) => {
@@ -185,7 +222,9 @@ async function main() {
       }
       reached++
     }
-    check('D 本端至少覆盖 15 个索引项', reached >= 15, { reached, skipped })
+    const expected = SETTINGS_SEARCH_INDEX.filter((e) => !expectHidden(e)).length
+    check(`D 本端应可见的 ${expected} 个索引项全部搜得到并落点`, missing.length === 0 && reached === expected, { reached, expected, missing })
+    check('D 按门控该藏的项(外部连接,托管草稿下)一个都没漏出来', leaked.length === 0, { leaked })
     await search.fill('')
     // 英文界面:新文案不漏中文
     await fl.evaluate(() => localStorage.setItem('tangu_locale', 'en'))

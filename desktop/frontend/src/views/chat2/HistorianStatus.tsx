@@ -17,6 +17,9 @@ registerMessages({
   'historian.status.viewTranscript': { zh: '查看完整记录', en: 'View full transcript' },
 })
 
+/** 展开后还没找到 Historian 子会话时,多久再查一次 /background。 */
+export const TRANSCRIPT_RETRY_MS = 3000
+
 /** Only model output and completed actions are shown; maintenance prompts stay in the background. */
 function readableRecord(content: string): string {
   try {
@@ -61,16 +64,24 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
   // 完整记录的入口改在这里:展开时现取,取不到(老引擎 / 还没跑过)就不露按钮。
   const [transcriptId, setTranscriptId] = useState<string | null>(null)
   useEffect(() => { setOpen(false); setData(null); setFailed(false); setTranscriptId(null); seen.current = null }, [sessionId])
-  // 展开期间首次生成子会话也要冒出入口:没找到之前随状态轮询(记录数 / 运行态变化)再取;找到就不再取。
-  const pollKey = `${data?.records?.length ?? 0}:${data?.activity?.length ?? 0}:${!!data?.running}`
+  // 展开期间首次生成子会话也要冒出入口:没找到(或一次查询失败)就定时再取,找到即停;收起 / 卸载时清掉定时器。
+  // 不再只挂在「记录数 / 运行态变化」上重试 —— 那几个值不变时一次瞬时失败就让入口一直缺席(Codex 第一轮 B1-3)。
   useEffect(() => {
     if (!open || !connected || transcriptId) return
     let disposed = false
-    void getBackgroundSessions(cfg, sessionId, 'historian')
-      .then((rows) => { if (!disposed) setTranscriptId(rows.find((r) => r.kind === 'historian')?.sessionId ?? null) })
-      .catch(() => {})
-    return () => { disposed = true }
-  }, [cfg, sessionId, open, connected, transcriptId, pollKey])
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const load = (): void => {
+      void getBackgroundSessions(cfg, sessionId, 'historian')
+        .then((rows) => rows.find((r) => r.kind === 'historian')?.sessionId ?? null, () => null)
+        .then((id) => {
+          if (disposed) return
+          if (id) setTranscriptId(id)
+          else timer = setTimeout(load, TRANSCRIPT_RETRY_MS)
+        })
+    }
+    load()
+    return () => { disposed = true; clearTimeout(timer) }
+  }, [cfg, sessionId, open, connected, transcriptId])
   useEffect(() => {
     if (!connected) return
     let disposed = false

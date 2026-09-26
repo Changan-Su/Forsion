@@ -88,6 +88,9 @@ export interface SubChat {
   title: string
   sessionId?: string
   runId?: string             // discussion:要订阅的 run(= id)
+  /** 由 /background 并进来的行:引擎给的后台会话 kind(historian / discussion …);实时 subagent 行没有。
+   *  右栏按它(而不是标题)认出 Historian 的旧 run —— 普通子会话也可能叫「Historian」。 */
+  bgKind?: string
   streaming: boolean
   segs: SubChatSeg[]         // subagent 内容随主流累积;discussion 由面板二开 SSE 现拉,segs 保持空
 }
@@ -1012,6 +1015,9 @@ export interface UpdaterStatusInfo {
 /** 主进程持久化的完整配置;getConfig 返回时 backendUrl/token 已折算为有效值(managed 就绪=托管子进程的)。 */
 export interface StoredDesktopConfig extends TanguDesktopConfig {
   mode: 'managed' | 'external'
+  /** 落盘的外部连接地址 / 令牌(backendUrl/token 在托管就绪时被折算成托管子进程的,这里不会)。
+   *  设置页从托管切到外部时用它填表(Codex 第一轮 A-1)。老主进程不给 → undefined。 */
+  externalConnection?: { backendUrl: string; token: string }
   /** 「允许其他设备连接本机」开关(起 unitWeb 局域网面 + unitHost 云通道,B 端渲染)。 */
   unitHostEnabled?: boolean
   cloudUrl: string

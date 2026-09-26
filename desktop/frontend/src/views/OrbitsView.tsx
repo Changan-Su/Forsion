@@ -232,10 +232,15 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   }, [s.sessions, s.configBySession])
   /** 一级行的悬停提示(U-19):名字一行 +「类型 · 相对时间」一行;从未有过会话只写类型。取代原生 title,免得两层提示叠在一起。
    *  类型词复用既有词条(私聊 = agentSelect.direct、主动式 = orbits.badge.proactive)。 */
-  const rowTip = (name: string, kindKey: string, identKey: string) => tipProps(() => {
+  const rowTipLine = (kindKey: string, identKey: string): string => {
     const at = activityByIdent.get(identKey) || 0
     const kind = tipT(kindKey)
-    return [name, at ? tipT('orbits.tip.line', { kind, when: formatRelative(at, { locale }) }) : kind]
+    return at ? tipT('orbits.tip.line', { kind, when: formatRelative(at, { locale }) }) : kind
+  }
+  // 同一行信息也给键盘与读屏(Codex 第一轮 B2-4):聚焦(:focus-visible)时照样弹提示;可访问描述带上「类型 · 相对时间」。
+  const rowTip = (name: string, kindKey: string, identKey: string) => ({
+    ...tipProps(() => [name, rowTipLine(kindKey, identKey)], { focus: true }),
+    'aria-description': rowTipLine(kindKey, identKey),
   })
   const agentNames = useMemo(() => agents.map((a) => a.name || a.slug), [agents])
 

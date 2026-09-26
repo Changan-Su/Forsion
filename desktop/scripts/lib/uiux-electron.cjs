@@ -152,36 +152,46 @@ async function boot(app, win, { space = 'tangu', width = 1440, height = 900 } = 
   }
 }
 
-/** 点 ribbon 上某个 Space(条上 / 主位槽 / 「…」溢出三处都找;名字认 title 或 .rb-label,zh/en 都给)。
- *  real=true 走真鼠标(hit-test 在内);否则 element.click()。返回是否点中。 */
-async function enterSpace(win, names, { real = false } = {}) {
-  const find = (root) => `(() => {
-    const b = [...document.querySelectorAll('${root} .rb-space')].find((x) =>
-      ${JSON.stringify(names)}.includes(x.getAttribute('title') || (x.querySelector('.rb-label')?.textContent || '').trim()))
-    if (!b) return null
-    const r = b.getBoundingClientRect()
-    if (!${real}) b.click()
-    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
-  })()`
-  let hit = (await win.evaluate(find('.rb-top'))) || (await win.evaluate(find('.rb-home')))
-  if (!hit) {
-    const more = win.locator('.rb-top .rb-more').first()
-    if (await more.count().catch(() => 0)) {
-      await more.hover()
-      await sleep(500)
-      hit = await win.evaluate(find('.rb-fly'))
-    }
-  }
-  if (hit && real) await win.mouse.click(hit.x, hit.y)
-  return !!hit
-}
-
+/** Space id → 显示名(zh/en;id 找不到时的后备,以及「…」溢出浮层里没有 data-id 的行)。 */
 const SPACE_NAMES = {
   tangu: ['Tangu'],
   inbox: ['收件箱', 'Inbox'],
   amadeus: ['Note', 'Amadeus'],
   calendar: ['日历', 'Calendar'],
   artificial: ['造物', 'Creations'],
+}
+
+/** 点 ribbon 上某个 Space,返回**是否真的切到了它**(活动 Space == id)。
+ *  定位优先级(Codex 第一轮 F-1):① 条上格子的 data-id="space:<id>" ② 可访问名 aria-label(收起态 Ribbon 只有它,
+ *  没有 title 也没有 .rb-label —— 以前只认后两者,默认收起的 Ribbon 上一个都点不中)③ 展开态的 .rb-label ④ 「…」溢出浮层。
+ *  real=true 走真鼠标(hit-test 在内);否则 element.click()。 */
+async function enterSpace(win, id, { real = false, timeout = 4000 } = {}) {
+  const names = SPACE_NAMES[id] || [id]
+  const find = (root, byId) => `(() => {
+    const byName = (x) => ${JSON.stringify(names)}.includes(x.getAttribute('aria-label') || x.getAttribute('title') || (x.querySelector('.rb-label')?.textContent || '').trim())
+    const b = ${byId ? `document.querySelector('.rb-slot[data-id="space:${id}"] .rb-space')` : `[...document.querySelectorAll('${root} .rb-space')].find(byName)`}
+    if (!b) return null
+    const r = b.getBoundingClientRect()
+    if (!${real}) b.click()
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+  })()`
+  let hit = (await win.evaluate(find(null, true))) || (await win.evaluate(find('.rb-top', false))) || (await win.evaluate(find('.rb-home', false)))
+  if (!hit) {
+    const more = win.locator('.rb-top .rb-more').first()
+    if (await more.count().catch(() => 0)) {
+      await more.hover()
+      await sleep(500)
+      hit = await win.evaluate(find('.rb-fly', false))
+    }
+  }
+  if (!hit) return false
+  if (real) await win.mouse.click(hit.x, hit.y)
+  const end = Date.now() + timeout
+  while (Date.now() < end) {
+    if ((await activeSpace(win)) === id) return true
+    await sleep(80)
+  }
+  return false
 }
 
 /** 当前活动 Space id(spaceRegistry 写的 localStorage 键)。 */

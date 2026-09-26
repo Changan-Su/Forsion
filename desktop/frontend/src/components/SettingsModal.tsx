@@ -90,12 +90,16 @@ import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWai
 import { ipcErrorText } from '../ipcError'
 import { resolveSettingsTarget } from './settingsTarget'
 import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery, type SettingsSearchEntry } from './settingsSearchIndex'
-import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, type SettingsEdits } from './settingsDraft'
+import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys, type SettingsEdits } from './settingsDraft'
+import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
 import { SettingsSaveBar } from './SettingsSaveBar'
 import './settingsModal.css'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
+  // 失焦自动保存失败(Codex 第一轮 A-2):就地提示并给重试,草稿保留。
+  'settingsmodal.commit.failed': { zh: '未保存：{error}', en: 'Not saved: {error}' },
+  'settingsmodal.commit.retry': { zh: '重试', en: 'Retry' },
   'settingsmodal.keepAwake.title': { zh: '有会话运行时阻止休眠', en: 'Stay awake while sessions run' },
   'settingsmodal.keepAwake.description': {
     zh: '会话运行期间阻止电脑因闲置自动休眠，全部结束后恢复；屏幕仍会熄灭。合盖、手动睡眠照常生效；Windows 笔记本用电池时，系统仍可能按电源策略休眠。',
@@ -426,14 +430,52 @@ export const SettingsModal: React.FC<{
   const [edits, setEdits] = useState<SettingsEdits>({})
   const stored = mergeEdits(savedCfg, edits)
   const edit = (patch: SettingsEdits): void => setEdits((prev) => ({ ...prev, ...patch }))
-  /** 提交草稿里的若干键:norm 可规整(trim 等);成功后只摘掉提交时那一份值。 */
+  /** 失焦自动保存失败的键 → 错误与重试(就地显示在该输入旁,Codex 第一轮 A-2)。草稿不动,可改完再失焦或点重试。 */
+  const [commitErrors, setCommitErrors] = useState<Partial<Record<keyof StoredDesktopConfig, { message: string; retry: () => void }>>>({})
+  /** 提交草稿里的若干键:norm 可规整(trim 等);成功后只摘掉提交时那一份值。失败记进 commitErrors(由 commitErrorHint 就地显示)。 */
   const commitEdits = (keys: Array<keyof StoredDesktopConfig>, norm?: (v: SettingsEdits) => SettingsEdits): Promise<void> => {
     const snapshot = pickEdits(edits, keys)
     if (!Object.keys(snapshot).length || !window.tangu?.setConfig) return Promise.resolve()
     return window.tangu.setConfig(norm ? norm(snapshot) : snapshot).then((next) => {
       setStored(next)
       setEdits((prev) => dropCommittedEdits(prev, snapshot))
-    }).catch((e: any) => setTestResult(`${t('settings.toast.saveFailed')}${e?.message || e}`))
+      setCommitErrors((prev) => withoutKeys(prev, keys))
+    }).catch((e: any) => {
+      const message = String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+      // 重试走 ref 取**最新一次渲染**的 commitEdits:直接闭包这一次的,读到的是失败那一刻的 edits —— 用户改了新值
+      // 再点「重试」时,失焦先提交新值、重试又把旧快照写回去,盘上落旧值、新草稿被回执抹掉(复核补漏)。
+      setCommitErrors((prev) => ({ ...prev, ...Object.fromEntries(keys.map((k) => [k, { message, retry: () => void commitEditsRef.current(keys, norm) }])) }))
+    })
+  }
+  const commitEditsRef = useRef(commitEdits)
+  commitEditsRef.current = commitEdits
+  /** 「选择目录」直接落盘(不经草稿);失败同样就地提示并可重试。 */
+  const savePickedWorkspace = (d: string): void => {
+    const typed = edits.defaultWorkspaceDir
+    void window.tangu!.setConfig({ defaultWorkspaceDir: d }).then((next) => {
+      setStored(next)
+      // 请求在路上时又手输了新路径 → 那份新草稿留着,不被选目录的回执抹掉。
+      setEdits((prev) => {
+        if (prev.defaultWorkspaceDir !== typed) return prev
+        const rest = { ...prev }
+        delete rest.defaultWorkspaceDir
+        return rest
+      })
+      setCommitErrors((prev) => withoutKeys(prev, ['defaultWorkspaceDir']))
+    }).catch((e: any) => {
+      const message = String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+      setCommitErrors((prev) => ({ ...prev, defaultWorkspaceDir: { message, retry: () => savePickedWorkspace(d) } }))
+    })
+  }
+  const commitErrorHint = (key: keyof StoredDesktopConfig): React.ReactNode => {
+    const err = commitErrors[key]
+    if (!err) return null
+    return (
+      <div className="hint settings-commit-error" role="alert" data-commit-error={key}>
+        <span>{t('settingsmodal.commit.failed', { error: err.message })}</span>
+        <button type="button" className="btn ghost sm" onClick={err.retry}>{t('settingsmodal.commit.retry')}</button>
+      </div>
+    )
   }
   // 后端运行方式的草稿(U-01):点卡片只改这里,真正切换走下方显式按钮。null = 跟随落盘值。
   const [modeDraft, setModeDraft] = useState<'managed' | 'external' | null>(null)
@@ -448,6 +490,8 @@ export const SettingsModal: React.FC<{
     if (p.open) return
     setHostSandboxDraft(null)
     setEdits({})
+    setCommitErrors({})
+    setExtDraft(null)
     setModeDraft(null)
   }, [p.open])
   const [backendSt, setBackendSt] = useState<BackendStatusInfo | null>(null)
@@ -841,6 +885,18 @@ export const SettingsModal: React.FC<{
     : (backendSt?.state === 'ready' ? 'ok' : backendSt?.state === 'crashed' ? 'err' : 'pending')
   const modePending = viewMode !== mode
   const pickModeDraft = (m: 'managed' | 'external'): void => setModeDraft(m === mode ? null : m)
+  // 外部连接表单的值(Codex 第一轮 A-1):已落盘为外部 → 就是 draft(p.cfg 即外部连接);**托管切外部**时 p.cfg 是
+  // 托管后端的临时地址 / 令牌,绝不能拿来填表(点「切换并重连」会把它写成外部配置)—— 改从落盘的外部连接取,
+  // 用户在此期间的编辑记在 extDraft。
+  const [extDraft, setExtDraft] = useState<{ backendUrl: string; token: string } | null>(null)
+  const switchingToExternal = isDesktop && mode !== 'external'
+  const connForm = switchingToExternal
+    ? (extDraft ?? { backendUrl: savedCfg?.externalConnection?.backendUrl ?? '', token: savedCfg?.externalConnection?.token ?? '' })
+    : { backendUrl: draft.backendUrl, token: draft.token }
+  const editConnForm = (patch: Partial<{ backendUrl: string; token: string }>): void => {
+    if (switchingToExternal) setExtDraft({ ...connForm, ...patch })
+    else setDraft({ ...draft, ...patch })
+  }
   // 托管运行组(改了要重启后端的键)。cloudUrl 也是 managedKey,但它住在 Forsion 页、有自己的显式保存,
   // 这里**不再**顺带落盘(以前会把 Forsion 页没保存的云端地址草稿一起写掉并触发 unit host 重建)。
   const RUNTIME_KEYS: Array<keyof StoredDesktopConfig> = ['sandbox', 'pythonMode', 'mirror']
@@ -940,13 +996,14 @@ export const SettingsModal: React.FC<{
 
   const test = async () => {
     setTesting(true)
-    const r = await testConnection(draft)
+    const r = await testConnection({ ...draft, ...connForm })
     setTestResult(r.message)
     setTesting(false)
   }
 
   const saveConnection = async (): Promise<void> => {
-    const patch = { backendUrl: draft.backendUrl.replace(/\/+$/, ''), token: draft.token }
+    // 只提交表单里的外部地址与令牌(托管切外部时它来自落盘的外部连接 + 用户编辑,见 connForm)。
+    const patch = { backendUrl: connForm.backendUrl.trim().replace(/\/+$/, ''), token: connForm.token }
     // 从托管切到外部是用户在这里**显式确认**的(U-01):先落 mode(主进程随之停掉内置后端),
     // 再走原有的 onConfigChange → onReconnect 顺序。
     if (isDesktop && mode !== 'external' && window.tangu?.setConfig) {
@@ -954,6 +1011,8 @@ export const SettingsModal: React.FC<{
         setStored(await window.tangu.setConfig({ mode: 'external' }))
         setModeDraft(null)
         setModeExpanded(false)
+        setExtDraft(null)
+        setDraft((d) => ({ ...d, ...patch }))
       } catch (e: any) {
         setTestResult(`${t('settings.toast.saveFailed')}${e?.message || e}`)
         return
@@ -1429,20 +1488,7 @@ export const SettingsModal: React.FC<{
                         />
                         <button
                           className="btn ghost sm"
-                          onClick={() => void window.tangu?.pickDirectory?.().then((d) => {
-                            if (!d) return
-                            const typed = edits.defaultWorkspaceDir
-                            void window.tangu!.setConfig({ defaultWorkspaceDir: d }).then((next) => {
-                              setStored(next)
-                              // 请求在路上时又手输了新路径 → 那份新草稿留着,不被选目录的回执抹掉。
-                              setEdits((prev) => {
-                                if (prev.defaultWorkspaceDir !== typed) return prev
-                                const rest = { ...prev }
-                                delete rest.defaultWorkspaceDir
-                                return rest
-                              })
-                            })
-                          })}
+                          onClick={() => void window.tangu?.pickDirectory?.().then((d) => { if (d) savePickedWorkspace(d) })}
                         >
                           {t('settings.workspace.pick')}
                         </button>
@@ -1450,6 +1496,7 @@ export const SettingsModal: React.FC<{
                       <div className="hint">
                         {t('settings.workspace.hint')}
                       </div>
+                      {commitErrorHint('defaultWorkspaceDir')}
                     </section>
                     <div data-setting-anchor="keep-awake">
                       <SettingsPanel
@@ -1503,13 +1550,13 @@ export const SettingsModal: React.FC<{
                         {(modeExpanded || modePending) && (
                           <>
                             <p className="settings-mode-desc">{t('settings.backend.modeDescription')}</p>
-                            <div className="settings-choice-grid" role="radiogroup" aria-label={t('settings.backend.modeLabel')}>
-                              <button type="button" role="radio" aria-checked={viewMode === 'managed'} className={`settings-choice-card${viewMode === 'managed' ? ' active' : ''}`} disabled={runtimeSaving} onClick={() => pickModeDraft('managed')}>
+                            <div className="settings-choice-grid" role="radiogroup" aria-label={t('settings.backend.modeLabel')} onKeyDown={onRadioGroupKeyDown}>
+                              <button type="button" role="radio" aria-checked={viewMode === 'managed'} tabIndex={radioTabIndex(viewMode === 'managed', 0, true)} className={`settings-choice-card${viewMode === 'managed' ? ' active' : ''}`} disabled={runtimeSaving} onClick={() => pickModeDraft('managed')}>
                                 <span className="settings-choice-icon"><Settings2 size={17} /></span>
                                 <span><strong>{t('settings.backend.modeManaged')}</strong><small>{t('settings.backend.modeManagedDescription')}</small></span>
                                 {viewMode === 'managed' && <Check size={15} className="settings-choice-check" />}
                               </button>
-                              <button type="button" role="radio" aria-checked={viewMode === 'external'} className={`settings-choice-card${viewMode === 'external' ? ' active' : ''}`} disabled={runtimeSaving} onClick={() => pickModeDraft('external')}>
+                              <button type="button" role="radio" aria-checked={viewMode === 'external'} tabIndex={radioTabIndex(viewMode === 'external', 1, true)} className={`settings-choice-card${viewMode === 'external' ? ' active' : ''}`} disabled={runtimeSaving} onClick={() => pickModeDraft('external')}>
                                 <span className="settings-choice-icon"><Globe2 size={17} /></span>
                                 <span><strong>{t('settings.backend.modeExternal')}</strong><small>{t('settings.backend.modeExternalDescription')}</small></span>
                                 {viewMode === 'external' && <Check size={15} className="settings-choice-check" />}
@@ -1668,8 +1715,8 @@ export const SettingsModal: React.FC<{
                           <label>{t('settings.external.urlLabel')}</label>
                           <input
                             type="text"
-                            value={draft.backendUrl}
-                            onChange={(e) => setDraft({ ...draft, backendUrl: e.target.value })}
+                            value={connForm.backendUrl}
+                            onChange={(e) => editConnForm({ backendUrl: e.target.value })}
                             placeholder="http://localhost:8787"
                           />
                           <div className="hint">{t('settings.external.urlHint')}</div>
@@ -1678,8 +1725,8 @@ export const SettingsModal: React.FC<{
                           <label>{t('settings.external.tokenLabel')}</label>
                           <input
                             type="password"
-                            value={draft.token}
-                            onChange={(e) => setDraft({ ...draft, token: e.target.value })}
+                            value={connForm.token}
+                            onChange={(e) => editConnForm({ token: e.target.value })}
                             placeholder={t('settings.external.tokenPlaceholder')}
                           />
                         </div>
@@ -1759,6 +1806,7 @@ export const SettingsModal: React.FC<{
                             {t('settings.forsion.save')}
                           </button>
                         </div>
+                        {commitErrorHint('cloudUrl')}
                         <div className="hint">{t('settings.forsion.cloudUrlHint')}</div>
                       </div>
                     )}
@@ -1847,6 +1895,7 @@ export const SettingsModal: React.FC<{
                                 aria-label={t('settings.notes.folderLabel')}
                               />
                             </div>
+                            {commitErrorHint('notesAttachmentFolder')}
                           </SettingsRow>
                         )}
                         <SettingsRow anchor="daily-notes" label={t('settings.notes.dailyLabel')} description={t('settings.notes.dailyHint')}>
@@ -1861,6 +1910,7 @@ export const SettingsModal: React.FC<{
                               aria-label={t('settings.notes.dailyLabel')}
                             />
                           </div>
+                          {commitErrorHint('notesDailyFolder')}
                         </SettingsRow>
                       </div>
                     </SettingsPanel>
@@ -2477,6 +2527,7 @@ export const SettingsModal: React.FC<{
                             onBlur={() => void commitEdits(['ttsModelId'], (v) => ({ ttsModelId: (v.ttsModelId || '').trim() }))}
                             placeholder={t('settings.tts.modelPlaceholder')}
                           />
+                          {commitErrorHint('ttsModelId')}
                         </div>
                         <div className="field">
                           <label>{t('settings.tts.voice')}</label>
@@ -2488,6 +2539,7 @@ export const SettingsModal: React.FC<{
                             onBlur={() => void commitEdits(['ttsVoice'], (v) => ({ ttsVoice: (v.ttsVoice || '').trim() }))}
                             placeholder={t('settings.tts.voicePlaceholder')}
                           />
+                          {commitErrorHint('ttsVoice')}
                           {/* 系统音色候选(可输可选;百炼无音色列表 API,静态表);复刻/设计音色经下方工作室「使用」自动填入 */}
                           <datalist id="tts-voice-options">
                             {TTS_VOICE_SUGGESTIONS.map(([v, labelKey]) => <option key={v} value={v} label={t(labelKey)} />)}
@@ -2855,12 +2907,13 @@ export const SettingsModal: React.FC<{
                           </button>
                         </div>
                       </div>
-                      <div className="theme-grid" role="radiogroup" aria-label={t('settings.theme.langLabel')}>
-                        {listLanguages().map((th) => (
+                      <div className="theme-grid" role="radiogroup" aria-label={t('settings.theme.langLabel')} onKeyDown={onRadioGroupKeyDown}>
+                        {listLanguages().map((th, i, all) => (
                           <ThemeCard
                             key={th.manifest.id}
                             entry={th}
                             active={th.manifest.id === p.themeLang}
+                            tabIndex={radioTabIndex(th.manifest.id === p.themeLang, i, all.some((x) => x.manifest.id === p.themeLang))}
                             onSelect={() => {
                               // 传明暗**偏好**(非落地明暗):换到锁定 colorScheme 的主题时由 setTheme 解析,
                               // 不在此处先按旧 mode 应用一次(会闪),交给 setTheme 一步到位。

@@ -52,7 +52,7 @@ function RightView({ view }: { view: View }) {
           if (stopped || !items.length) return
           mergeBackgroundSubChats(sessionId, items
             .filter((it) => !!it.runId)
-            .map((it) => ({ runId: it.runId!, title: it.title || it.kind, status: it.runStatus || 'unknown' })))
+            .map((it) => ({ runId: it.runId!, title: it.title || it.kind, status: it.runStatus || 'unknown', kind: it.kind })))
         })
         .catch(() => { /* 后端未升级/离线 → 静默 */ })
     }

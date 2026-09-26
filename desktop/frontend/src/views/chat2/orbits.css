@@ -326,3 +326,8 @@
 .t2o-historian-event { margin-block: 6px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); overflow-wrap: anywhere; }
 .historian-working { animation: t2o-pulse 1.2s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .historian-working { animation: none; } }
+
+/* 团队状态条的加入 / 退出提示(role=status)常驻挂载:空时收成读屏专用的 1px 盒、脱离 flex 流(不顶出一行、不吃 gap)。
+ * 不用 display:none —— 那会把实时区域从可访问树里摘掉,内容出现时又成了「新插入的 region」不被播报。
+ * 放文件末尾:与上面 .t2o-bar-note 同特异性,须压过它(DESIGN §7)。 */
+.t2o-bar-note:empty { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

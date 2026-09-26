@@ -15,18 +15,23 @@ import { useAutomation, sessionForTrigger } from '../../stores/automationStore'
 import { getAutomationExecutions, getAutomationRuns, getHistorianActivity } from '../../services/backendService'
 import { useI18n } from '../../i18n'
 import { fmtTime } from './lib'
-import type { AutomationExecutionInfo, AutomationRunInfo, HistorianActivityItem } from '../../types'
+import type { AutomationExecutionInfo, AutomationRunInfo, HistorianActivityItem, TanguDesktopConfig } from '../../types'
 import './automation.css'
 
 const dotClass = (status: string): string =>
   status === 'running' || status === 'queued' ? 'running' : status === 'completed' || status === 'done' ? 'on' : 'off'
 
 /** 执行账本的模块级缓存(U-39,stale-while-revalidate):面板重建 / 在规则间来回切时先画上次的记录,后台照常轮询。
- *  按连接配置对象分桶(WeakMap):换账号 / 换后端 = 换了 cfg,旧环境的记录绝不先画出来。 */
-const executionsCache = new WeakMap<object, Map<string, AutomationExecutionInfo[]>>()
-const cacheOf = (cfg: object): Map<string, AutomationExecutionInfo[]> => {
-  let bucket = executionsCache.get(cfg)
-  if (!bucket) { bucket = new Map(); executionsCache.set(cfg, bucket) }
+ *  按**连接 + 账号**分桶(executionsScope):换账号 / 换后端 = 换桶,旧环境的记录绝不先画出来;
+ *  cfg 里别的字段(默认模型、生图模型 …)变了不换桶 —— 以前按 cfg 对象引用分桶,在别处改个默认模型
+ *  appStore 就换一个新 cfg 对象,回来又是骨架(Codex 第一轮 D-2)。 */
+const executionsCache = new Map<string, Map<string, AutomationExecutionInfo[]>>()
+export function executionsScope(cfg: Pick<TanguDesktopConfig, 'backendUrl' | 'token'>, accountId: string | null | undefined): string {
+  return JSON.stringify([cfg.backendUrl.replace(/\/+$/, ''), cfg.token, accountId ?? ''])
+}
+const cacheOf = (scope: string): Map<string, AutomationExecutionInfo[]> => {
+  let bucket = executionsCache.get(scope)
+  if (!bucket) { bucket = new Map(); executionsCache.set(scope, bucket) }
   return bucket
 }
 
@@ -34,9 +39,11 @@ const cacheOf = (cfg: object): Map<string, AutomationExecutionInfo[]> => {
 export const ExecutionsList: React.FC<{ triggerId: string }> = ({ triggerId }) => {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
+  const accountId = useApp((s) => s.authInfo?.accountId ?? s.authInfo?.username ?? null)
+  const scope = executionsScope(cfg, accountId)
   const nonce = useAutomation((s) => s.refreshNonce)
-  const [rows, setRows] = useState<AutomationExecutionInfo[]>(() => cacheOf(cfg).get(triggerId) ?? [])
-  const [loading, setLoading] = useState(() => !cacheOf(cfg).has(triggerId))
+  const [rows, setRows] = useState<AutomationExecutionInfo[]>(() => cacheOf(scope).get(triggerId) ?? [])
+  const [loading, setLoading] = useState(() => !cacheOf(scope).has(triggerId))
   const [failed, setFailed] = useState(false)
   const [retry, setRetry] = useState(0)
   useEffect(() => {
@@ -45,7 +52,7 @@ export const ExecutionsList: React.FC<{ triggerId: string }> = ({ triggerId }) =
       try {
         const result = await getAutomationExecutions(cfg, triggerId)
         if (!alive) return // 已卸载 / 已换规则或配置:迟到的结果不进缓存也不上屏
-        cacheOf(cfg).set(triggerId, result)
+        cacheOf(scope).set(triggerId, result)
         setRows(result); setFailed(false)
       } catch { if (alive) setFailed(true) }
       finally { if (alive) setLoading(false) }
@@ -53,7 +60,7 @@ export const ExecutionsList: React.FC<{ triggerId: string }> = ({ triggerId }) =
     void pull()
     const timer = setInterval(() => void pull(), 8000)
     return () => { alive = false; clearInterval(timer) }
-  }, [cfg, triggerId, nonce, retry])
+  }, [cfg, scope, triggerId, nonce, retry])
   // 骨架自带 150ms 出现延迟(快的时候什么都不闪);读屏靠 sr-only 状态句。
   if (loading) return <div className="auto-runs-loading"><Skeleton variant="list" /><span className="auto-sr-only" role="status">{t('automation.ux.runLoading')}</span></div>
   if (failed) return <div className="auto-runs-empty" role="alert">{t('automation.ux.runError')} <button className="btn ghost sm" onClick={() => setRetry((n) => n + 1)}>{t('automation.ux.retry')}</button></div>

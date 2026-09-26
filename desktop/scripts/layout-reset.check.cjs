@@ -6,6 +6,8 @@
  *  C 点「撤销」→ 标签列表与三侧开合**逐项**回到重置前(一次性 / 换 Space 作废由 lcl 单测 layoutResetUndo.test 锁)
  *  E 右上角浮钮组压着的那条标签头让出了浮钮组宽度(.dv-under-edge + padding-right),任何 tab 都不再被钮盖住
  *  F 左 / 右 / 底部三枚开合钮都带 aria-pressed,且与实际开合一致
+ *  G 通知总开关关着也照样给「撤销」:它是那次操作的回执,不是一条普通通知(Codex 第一轮 C-2)
+ *  H 恢复后用户先新开了一张标签 → 撤销入口当场收回(不然再点会把重置前的快照灌回、吞掉新标签;Codex 第一轮 C-1)
  *
  * 需要先在本目录 `npx electron-vite build`(读 out/)。跑:npm run check:layoutreset
  * ⚠️ 独立 --user-data-dir + TANGU_HOME:不碰开发者自己的实例与 ~/.forsion。
@@ -121,6 +123,26 @@ async function main() {
     const keys = ['left', 'right', 'bottom', 'leftPanel', 'mainTabCount']
     check('C 撤销后三侧开合(及 aria-pressed)逐项复原', keys.every((k) => undone[k] === before[k]), keys.map((k) => `${k}:${before[k]}→${undone[k]}`).join(' '))
     if (SHOT_DIR) await win.screenshot({ path: path.join(SHOT_DIR, 'layoutreset-undone.png') })
+
+    // G 关掉通知总开关(与设置页同一份偏好)后重载,再恢复默认布局:撤销提示照样出现
+    await win.evaluate(() => localStorage.setItem('forsion.ntf.prefs', JSON.stringify({ enabled: false, osEnabled: false, events: {} })))
+    await win.reload()
+    await win.waitForSelector('.dv-edge-reset', { timeout: 30_000 })
+    await win.waitForTimeout(1500)
+    for (let i = 0; i < 2; i++) { await win.click('.dv-new-tab'); await win.waitForTimeout(350) }
+    await win.click('.dv-edge-reset')
+    await win.waitForTimeout(900)
+    const card2 = win.locator('.ntf').filter({ hasText: /恢复/ }).first()
+    check('G 通知总开关关着,「已恢复 · 撤销」仍出现', (await card2.count()) > 0 && (await card2.locator('.ntf-action').count()) > 0)
+
+    // H 撤销提示还挂着时先新开一张标签:提示当场收回,新标签留着
+    const afterReset = await snapshot(win)
+    await win.mouse.move(400, 500)
+    await win.click('.dv-new-tab')
+    await win.waitForTimeout(1200)
+    const afterNew = await snapshot(win)
+    check('H 重置后改了布局(新开标签)→ 撤销提示收回', (await card2.count()) === 0, `mainTabCount:${afterReset.mainTabCount}→${afterNew.mainTabCount}`)
+    check('H 新开的标签还在(没被旧快照吞掉)', afterNew.mainTabCount === afterReset.mainTabCount + 1, `${afterReset.mainTabCount}→${afterNew.mainTabCount}`)
   } finally {
     await app.close().catch(() => {})
     fs.rmSync(home, { recursive: true, force: true })

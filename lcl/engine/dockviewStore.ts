@@ -332,8 +332,25 @@ function envelope(api: DockviewApi, state: Pick<WorkspaceState, 'leftVisible' | 
   }
 }
 
-/** resetLayout 的撤销快照(一次性)。profile = 拍快照时的 Space 画像键(sideProfileKey),api = 当时的 Dockview 实例。 */
-let layoutUndo: { env: LayoutEnvelopeV4; api: DockviewApi; profile: string | null; stashActive: WorkspaceState['stashActive'] } | null = null
+/** resetLayout 的撤销快照(一次性)。profile = 拍快照时的 Space 画像键(sideProfileKey),api = 当时的 Dockview 实例;
+ *  shape = 重置刚完成时的布局结构指纹(layoutShape),dismiss = 收回那条「撤销」提示。 */
+let layoutUndo: {
+  env: LayoutEnvelopeV4; api: DockviewApi; profile: string | null; stashActive: WorkspaceState['stashActive']
+  shape: string; dismiss?: () => void
+} | null = null
+
+/** 布局结构指纹:每个组里有哪些面板(id,按组内顺序)。不含尺寸 —— 拖宽侧栏不算「改了布局」;新开 / 关掉标签、
+ *  分屏、挪组都会变。重置后用它判断用户是否已在默认布局上动过手(Codex 第一轮 C-1)。 */
+function layoutShape(api: DockviewApi): string {
+  try { return api.groups.map((g) => g.panels.map((p) => p.id).join(',')).join('|') } catch { return '' }
+}
+
+/** 作废撤销快照,并收回还挂着的「撤销」提示(免得留一个点了没反应的按钮)。 */
+function dropLayoutUndo(): void {
+  const u = layoutUndo
+  layoutUndo = null
+  try { u?.dismiss?.() } catch { /* 宿主收回失败不影响作废 */ }
+}
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 export function scheduleWorkspaceSave(): void {
@@ -448,6 +465,9 @@ interface WorkspaceState {
   /** 撤销最近一次 resetLayout(还原清空前的标签、分屏与侧栏开合)。快照一次性,换 Space / 换 api /
    *  应用命名布局后作废。还原成功 true。 */
   undoResetLayout(): boolean
+  /** 布局变更回调(WorkspaceHost 的 onDidLayoutChange 调):重置之后用户第一次动了布局结构(新开标签、分屏…),
+   *  撤销快照即作废 —— 否则再点仍挂着的「撤销」会把重置前的快照整份灌回,新开的标签连同未存的界面状态一起丢。 */
+  noteLayoutChange(): void
   /** 整份应用一个布局信封(applyNamed 与撤销共用)。成功 true;损坏 false。 */
   applyLayout(blob: LayoutEnvelopeV4): boolean
   /** 按当前容器宽把两侧栏重钉回目标宽(容器 resize 后调,补 dockview 不自动重算黄金分割的缺口)。 */
@@ -748,10 +768,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (!api) return
     // 清空前拍快照(同存档信封,不含临时扩展视图;另记收起侧栏的「当前项」),给「撤销」用。
     // 只有用户亲手重置才拍;拍不下来就不给撤销,重置照做。自动重置同时作废旧快照。
-    let snap: typeof layoutUndo = null
+    let snap: Omit<NonNullable<typeof layoutUndo>, 'shape' | 'dismiss'> | null = null
     if (opts?.undoable) {
       try { snap = { env: envelope(api, get()), api, profile: get().sideProfileKey, stashActive: { ...get().stashActive } } } catch { snap = null }
     }
+    dropLayoutUndo() // 旧快照(连同它的提示)先作废:自动重置不给撤销,手动重置换一份新的
     dismissExtensions()
     try { api.clear() } catch { /* ignore */ }
     clearLayout()
@@ -760,8 +781,21 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     set({ stash: { left: [], right: [], bottom: [] }, stashActive: { left: null, right: null, bottom: null }, leftVisible: true, rightVisible: true, bottomVisible: false, focusedChatLeafId: null })
     get().defaultBuilder?.() // 重建默认;openView 的 firstOfSide → sizeSide 按黄金分割钉宽
     scheduleWorkspaceSave()
-    layoutUndo = snap
-    if (snap) ribbonActions.notify?.(engineTr('lcl.layout.restored'), { label: engineTr('lcl.layout.undo'), run: () => { get().undoResetLayout() } })
+    if (snap) {
+      // 指纹在默认布局同步建完这一刻取:Dockview 的 onDidLayoutChange 是批量异步派发,重置本身引起的那批
+      // 回调稍后才到 —— 它们的结构与这里一致,不会误伤撤销;之后真变了才作废。
+      const undo: NonNullable<typeof layoutUndo> = { ...snap, shape: layoutShape(api) }
+      layoutUndo = undo
+      const dismiss = ribbonActions.notify?.(engineTr('lcl.layout.restored'), { label: engineTr('lcl.layout.undo'), run: () => { get().undoResetLayout() } })
+      if (typeof dismiss === 'function' && layoutUndo === undo) undo.dismiss = dismiss
+    }
+  },
+
+  noteLayoutChange() {
+    const u = layoutUndo
+    if (!u) return
+    const api = get().api
+    if (!api || u.api !== api || layoutShape(api) !== u.shape) dropLayoutUndo()
   },
 
   undoResetLayout() {
@@ -769,7 +803,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     layoutUndo = null
     const api = get().api
     // 快照只对拍它的那份 api、那个 Space 有效:切过 Space 再点通知里的「撤销」= 静默作废,不把别的 Space 的布局灌进来。
-    if (!u || !api || u.api !== api || u.profile !== get().sideProfileKey) return false
+    // 重置后布局结构已被用户改过(布局回调还没来得及作废它时)同样作废。
+    if (!u || !api || u.api !== api || u.profile !== get().sideProfileKey || layoutShape(api) !== u.shape) return false
     const ok = get().applyLayout(u.env)
     if (ok) {
       set({ stashActive: u.stashActive }) // 信封不带它:不还原的话,展开收起的侧栏会落到第一个视图而不是原来选中的那个
@@ -1044,7 +1079,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   applyNamed(name) {
     const blob = loadNamedLayout(name)
     if (!get().api || !blob) return false
-    layoutUndo = null // 换了一整份布局(切 Space 走这里):之前的「恢复默认」快照作废
+    dropLayoutUndo() // 换了一整份布局(切 Space 走这里):之前的「恢复默认」快照作废
     return get().applyLayout(blob)
   },
 

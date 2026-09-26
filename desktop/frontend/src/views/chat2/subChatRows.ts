@@ -11,9 +11,6 @@
 import type { BackgroundSessionInfo } from '../../services/backendService'
 import type { SubChat } from '../../types'
 
-/** 引擎给 historian 子会话写死的标题(tangu-agent/src/services/historianSession.ts)。 */
-const HISTORIAN_TITLE = 'Historian'
-
 export interface SubChatRow { id: string; title: string; sessionId: string; runId?: string; streaming: boolean }
 
 export function subChatRows(saved: readonly BackgroundSessionInfo[], live: readonly SubChat[] | undefined, historianOn: boolean): SubChatRow[] {
@@ -24,9 +21,9 @@ export function subChatRows(saved: readonly BackgroundSessionInfo[], live: reado
   for (const l of live || []) {
     if (hidden.some((h) => h.sessionId === l.sessionId || (!!h.runId && h.runId === l.runId))) continue
     // 并进 live 的行只带 runId、不带 sessionId,且 merge 只增不删:Historian 子会话跑过新 run 后,
-    // /background 只报最新 runId,旧 run 那条仍在 live 里。它的标题恒为引擎写死的 'Historian'
-    // (historianSession.ts),Historian 开着时按「无 sessionId + 该标题」一并藏掉(Codex 评审 09-25)。
-    if (historianOn && !l.sessionId && l.title === HISTORIAN_TITLE) continue
+    // /background 只报最新 runId,旧 run 那条仍在 live 里。按并入时记下的后台 kind 认它(Codex 评审 09-25);
+    // ⚠️ 不按标题认:实时 subagent 的标题是 Agent 名,完全可以叫「Historian」,那不是后台会话,不能藏。
+    if (historianOn && l.bgKind === 'historian') continue
     // 去重口径沿用原 SubChatStatus(含其对无 sessionId 行的既有行为),本条只加上面那道 hidden 闸。
     if (!rows.some((r) => r.sessionId === l.sessionId || (r.runId && r.runId === l.runId))) rows.push({ id: l.id, title: l.title, sessionId: l.sessionId!, runId: l.runId, streaming: l.streaming })
   }
