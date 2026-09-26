@@ -7,7 +7,10 @@
  *  D 新用户(无存档)缺省隐藏「收件箱未读」;已存偏好不动(写一份不隐藏的存档后重载,收件箱按钮真的可见)。
  *    桩引擎报 3 封未读 —— 未读为 0 时 InboxItem 返回 null、只剩空包装节点,只查包装节点 id 会假绿(Codex 第一轮 C-4)
  *  E 分组:隔离家目录装一个探针插件,左右各注册一个状态项;插件项排在所在侧内置项之后,交界处的分隔线**真的可见**
- *    (Codex 第一轮 C-5:以前采了 seps 不断言,且没插件项时整条跳过)
+ *    (Codex 第一轮 C-5:以前采了 seps 不断言,且没插件项时整条跳过)。「可见」按实际渲染判:display / visibility /
+ *    自身与祖先的 opacity / 盒子非零 / 有不透明的背景或边框(Codex 第三轮 H2-3:只看 display + 宽度时,
+ *    改成 visibility:hidden 或 opacity:0 照样绿)。负对照:SB_NEGATIVE=visibility|opacity 注入一段把 .sb-sep 藏起来的
+ *    样式,E 必须红。
  *
  * 需要先在本目录 `npx electron-vite build`(读 out/)。跑:npm run check:statusbar
  */
@@ -19,6 +22,11 @@ const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const SHOT_DIR = process.env.SHOT_DIR || ''
+if (SHOT_DIR) fs.mkdirSync(SHOT_DIR, { recursive: true })
+/** 负对照:把分隔线藏起来的方式(E 必须红)。 */
+const SB_NEGATIVE = process.env.SB_NEGATIVE || ''
+const NEGATIVE_CSS = { visibility: '.sb-sep { visibility: hidden !important; }', opacity: '.sb-sep { opacity: 0 !important; }' }
+if (SB_NEGATIVE && !NEGATIVE_CSS[SB_NEGATIVE]) { console.error(`SB_NEGATIVE 只认 ${Object.keys(NEGATIVE_CSS).join(' / ')}`); process.exit(2) }
 const results = []
 function check(name, ok, detail) {
   results.push({ name, ok })
@@ -114,9 +122,20 @@ async function main() {
     check(`D 已存偏好(不隐藏)原样生效:收件箱按钮真的可见且显示 ${UNREAD} 封未读`, !!inbox && inbox.w > 0 && inbox.h > 0 && inbox.text === String(UNREAD), JSON.stringify(inbox))
 
     // E 分组:探针插件左右各一项 → 各侧插件项排在内置项之后,交界处有一条可见的分隔线
+    if (SB_NEGATIVE) await win.addStyleTag({ content: NEGATIVE_CSS[SB_NEGATIVE] })
     const layout = await win.evaluate(() => {
+      /** 真的画出来了:display / visibility / 自身与祖先 opacity / 盒子非零 / 有不透明的背景色或边框。 */
+      const seen = (el) => {
+        const cs = getComputedStyle(el)
+        if (cs.display === 'none' || cs.visibility !== 'visible') return false
+        for (let n = el; n && n.nodeType === 1; n = n.parentElement) if (parseFloat(getComputedStyle(n).opacity) === 0) return false
+        const r = el.getBoundingClientRect()
+        if (r.width <= 0 || r.height <= 0) return false
+        const opaque = (c) => !!c && c !== 'transparent' && !/rgba\([^)]*,\s*0\)$/.test(c)
+        return opaque(cs.backgroundColor) || ['Left', 'Right', 'Top', 'Bottom'].some((k) => parseFloat(cs[`border${k}Width`]) > 0 && cs[`border${k}Style`] !== 'none' && opaque(cs[`border${k}Color`]))
+      }
       const side = (root) => [...root.children].map((el) => el.classList.contains('sb-sep')
-        ? { sep: true, visible: getComputedStyle(el).display !== 'none' && el.getBoundingClientRect().width > 0 }
+        ? { sep: true, visible: seen(el) }
         : { id: el.dataset.sbId || '', filled: !!el.childElementCount || !!el.textContent })
       const left = document.querySelector('.sb > .sb-group:not(.sb-right)')
       const right = document.querySelector('.sb .sb-right')
