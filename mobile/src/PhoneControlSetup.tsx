@@ -7,7 +7,6 @@
  * ⚠️ 返回的是一串 SettingsRow 的 fragment,不包 div:行间分隔线靠 `.settings-control-row + .settings-control-row`
  *    相邻兄弟选择器,包一层就静默断线(DESIGN §7 那一类)。
  */
-import { Browser } from '@capacitor/browser'
 import { useI18n, registerMessages } from '@/i18n'
 import { SettingsRow } from '@/components/SettingsPrimitives'
 import { openAccessibilitySettings, type HandsState, type PhoneControlStatus } from './phoneControl'
@@ -87,7 +86,9 @@ registerMessages({
 })
 
 function openRelease(): void {
-  void Browser.open({ url: RELEASE_URL }).catch((e) => console.warn('[phone-control] open release page failed:', e))
+  // ⚠️ 走 mobileShim 的 openExternal(底下就是 Capacitor Browser),别直接 import @capacitor/browser:
+  //    web 整份复用移动端的壳,web 构建的 capacitor 桩闸会把直接 import 当成红灯(09-26 三平台 CI 实翻)。
+  void window.tangu?.openExternal?.(RELEASE_URL)?.catch((e) => console.warn('[phone-control] open release page failed:', e))
 }
 
 export function PhoneControlSetup({ status }: { status: PhoneControlStatus }) {
