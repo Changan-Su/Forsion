@@ -121,18 +121,26 @@ async function fetchPython({ platformName, archName }) {
 const pythonBin = (dir) =>
   existsSync(path.join(dir, 'python.exe')) ? path.join(dir, 'python.exe') : path.join(dir, 'bin', 'python3');
 
-/** 构建机的 Python 环境不许漏进来:用户 site / PYTHONPATH 会让 pip 以为「已装」跳过、让 smoke 假绿;
- *  不写字节码 —— afterPack 里跑 smoke 时 .app 还没签名,写进去的 __pycache__ 会被一起封进包。 */
+/** 只放行网络类 pip 变量(大陆构建要走 PIP_INDEX_URL 镜像)。 */
+const PIP_NET = /^PIP_(INDEX_URL|EXTRA_INDEX_URL|TRUSTED_HOST|CERT|CLIENT_CERT|PROXY|TIMEOUT|RETRIES)$/i;
+
+/** 构建机的 Python/pip 环境不许漏进来:PIP_TARGET/PIP_PREFIX/配置文件里的 target 会把库装到别处,
+ *  用户 site / PYTHONPATH 会让 pip 以为「已装」跳过、让 smoke 假绿。所以 PYTHON 与 PIP_ 开头的变量全部丢掉(网络类除外),
+ *  pip 配置文件整体屏蔽(用 pip.conf 配镜像的构建机改设 PIP_INDEX_URL)。 */
 function pyEnv() {
-  const env = { ...process.env, PYTHONNOUSERSITE: '1', PYTHONDONTWRITEBYTECODE: '1', PIP_USER: '0', PIP_REQUIRE_VIRTUALENV: '0' };
-  delete env.PYTHONPATH;
-  delete env.PYTHONHOME;
-  return env;
+  const env = {};
+  for (const [k, v] of Object.entries(process.env)) if (!/^(PYTHON|PIP_)/i.test(k) || PIP_NET.test(k)) env[k] = v;
+  return { ...env, PYTHONNOUSERSITE: '1', PYTHONDONTWRITEBYTECODE: '1', PIP_CONFIG_FILE: require('node:os').devNull };
 }
 
-/** 预装库的真实 import(含 lxml/PIL/pdfium/matplotlib 的原生扩展)—— 只查 dist-info 抓不到 .so 被拷贝过滤器丢掉。 */
-const SMOKE = "import docx, pptx, openpyxl, xlsxwriter, pypdf, pdfplumber, reportlab.pdfgen.canvas, pandas, numpy, "
-  + "PIL.Image, lxml.etree, markdown, bs4, tabulate, matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot";
+/** 预装库的真实 import + 一次真渲染 —— 只查 dist-info 抓不到原生扩展被拷贝过滤器丢掉;
+ *  pdfium(pdfplumber 渲染页面图)、cryptography(加密 PDF)、Agg/ft2font(画图)都是用到才加载,得显式碰一下。 */
+const SMOKE = [
+  'import io, docx, pptx, openpyxl, xlsxwriter, pypdf, pdfplumber, pypdfium2, reportlab.pdfgen.canvas, pandas, numpy',
+  'import PIL.Image, lxml.etree, markdown, bs4, tabulate, cryptography.hazmat.primitives.ciphers',
+  "import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt",
+  "plt.plot([1, 2]); plt.savefig(io.BytesIO(), format='png')",
+].join('\n');
 
 /** 在 dir 下的内置 Python 里跑 import smoke;失败即抛。afterPack 对打包产物再跑一次。
  *  -I:不把 cwd 放进 sys.path(afterPack 的 cwd 是 desktop/,哪天多个同名目录就假绿)、不看用户 site/PYTHON* 环境;
@@ -148,11 +156,12 @@ function installPackages(dest) {
   const scripts = path.join(dest, existsSync(path.join(dest, 'python.exe')) ? 'Scripts' : 'bin');
   const before = new Set(existsSync(scripts) ? readdirSync(scripts) : []);
   const req = path.join(buildDir(), 'python-requirements.txt');
-  console.log(`[fetch-python] pip install -r ${path.basename(req)}`);
+  const lock = path.join(buildDir(), 'python-constraints.txt'); // 传递依赖也锁死:PyPI 上新版本不会悄悄进包
+  console.log(`[fetch-python] pip install -r ${path.basename(req)} -c ${path.basename(lock)}`);
   // --no-compile:electron-builder 的拷贝过滤器无条件丢 .pyc/__pycache__,编了也白编;
   // 运行时字节码由 backendManager 的 PYTHONPYCACHEPREFIX 引到包外。
   execFileSync(py, ['-m', 'pip', 'install', '--only-binary=:all:', '--no-compile', '--no-cache-dir',
-    '--disable-pip-version-check', '--no-warn-script-location', '-r', req], { stdio: 'inherit', env: pyEnv() });
+    '--disable-pip-version-check', '--no-warn-script-location', '-r', req, '-c', lock], { stdio: 'inherit', env: pyEnv() });
   // pip 生成的命令行脚本 shebang 写死了构建机路径,而这个目录在引擎 PATH 最前(composeEnginePath),
   // 留着会遮住用户自己装的同名命令(fonttools/f2py…)。删掉新增的;要用走 `python -m`。
   for (const f of existsSync(scripts) ? readdirSync(scripts) : []) {
