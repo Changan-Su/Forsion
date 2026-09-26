@@ -195,12 +195,17 @@ const blankRun = (run: string, at: number, all: string): string => {
   let cols = 0;
   for (const c of content) cols += c === '\t' ? 8 : 1;
   if (cols <= MAX_BLANK_COLS) return run;
-  const kind = /^ +$/.test(content) ? 'spaces' : /^\t+$/.test(content) ? 'tabs' : 'whitespace chars';
+  // 无损:按「同种字符」分段、保序写出种类与个数(`[1 tab + 25 spaces]` ≠ `[25 spaces + 1 tab]`)。
+  // 待写入的内容里空白的种类与顺序有语义(Makefile 配方行必须 tab 开头),旧版一律写成 `[N whitespace chars]` 会把两者显示成同一份(Codex 09-26 五轮)。
+  const label = (c: string, n: number): string =>
+    c === ' ' ? `${n} space${n === 1 ? '' : 's'}` : c === '\t' ? `${n} tab${n === 1 ? '' : 's'}` : `${n} × U+${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`;
+  const groups = content.match(/(.)\1*/gsu) || [];
+  const desc = groups.map((g) => label(g[0], g.length)).join(' + ');
   // 两侧各留一个空格与邻字隔开;行首 / 行尾不补
   const before = lead || (at === 0 || all[at - 1] === '\n' ? '' : ' ');
   const end = at + run.length;
   const after = end === all.length || all[end] === '\n' ? '' : ' ';
-  return `${before}[${content.length} ${kind}]${after}`;
+  return `${before}[${desc}]${after}`;
 };
 /** 审批预览的展示净化:保留换行、缩进与制表符,其余能伪装显示的字符换成可见转义(\x1B、\u202E);CRLF 归一为 \n、去掉末尾空白;
  *  宽过 MAX_BLANK_COLS 列的空白串换成 `[N spaces]`(见上方排版说明)。

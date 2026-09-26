@@ -299,10 +299,14 @@ describe('approvalPreview · 三轮:同档工具写全、长空白标出来、�
     );
     // 伪造的结构行只出现在带前缀的行里
     expect(p.split('\n').filter((l) => l.includes(fake)).every((l) => l.startsWith(G))).toBe(true);
-    // 标识字段(名字)与 run_bash 同样过这一道;tab 按 8 列算;混合空白写 whitespace chars
+    // 标识字段(名字)与 run_bash 同样过这一道;tab 按 8 列算;混合空白按种类分段保序写出
     expect(approvalPreview(call('manage_agent', { action: 'update', slug: 'bot', name: `Bot${' '.repeat(40)}x`, system_prompt: 'p' }))).toContain('"Bot [40 spaces] x"');
     expect(approvalPreview(call('run_bash', { command: `echo ok${'\t'.repeat(4)}; rm -rf ~` }))).toBe('$ echo ok [4 tabs] ; rm -rf ~');
-    expect(approvalPreview(call('run_bash', { command: `echo ok${' \u00a0'.repeat(20)}; rm -rf ~` }))).toBe('$ echo ok [40 whitespace chars] ; rm -rf ~');
+    // 五轮起无损:混合空白按种类分段保序写出(交替的空格 / NBSP 就逐段列出),不再折成 `[40 whitespace chars]`
+    const mixed = approvalPreview(call('run_bash', { command: `echo ok${' \u00a0'.repeat(20)}; rm -rf ~` }));
+    expect(mixed.startsWith('$ echo ok [1 space + 1 × U+00A0 + ')).toBe(true);
+    expect(mixed.endsWith('] ; rm -rf ~')).toBe(true);
+    expect(mixed).not.toContain('whitespace chars');
     // 阈值内原样:24 个空格的缩进、三个 tab、对齐用的空格
     const code = `def f():\n${' '.repeat(24)}return 1\n\t\t\tx = 1\nname      value`;
     expect(approvalPreview(call('run_bash', { command: code }))).toBe(`$ ${code}`);
