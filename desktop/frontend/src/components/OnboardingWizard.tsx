@@ -17,8 +17,8 @@ import { ThemePreview } from './ThemePreview'
 import { BrandLogo } from './BrandLogo'
 import { LocaleToggle } from './LocaleToggle'
 import { listFonts } from '../fontPresets'
-import { Markdown } from './Markdown'
-import { APP_VERSION, CHANGELOG } from '../changelog'
+import { APP_VERSION } from '../changelog'
+import { ChangelogEntries } from '../views/ChangelogView'
 import { track } from '../achievements/store'
 import { applyUiFonts, readFont, writeFont } from '../uiFont'
 import { OnboardingModelChoice } from './OnboardingModelChoice'
@@ -650,7 +650,7 @@ export const OnboardingWizard: React.FC<{
     <dialog ref={changelogRef} className="ob-changelog" onCancel={() => setShowChangelog(false)} onClick={(event) => { if (event.target === event.currentTarget) setShowChangelog(false) }}>
       <div className="ob-changelog-head"><h2>{t('onboarding.welcome.changelogTitle')}</h2><button className="icon-btn" aria-label={t('common.close')} onClick={() => setShowChangelog(false)}><X size={18} /></button></div>
       <div className="ob-changelog-body changelog">
-        {CHANGELOG.map((c) => <div key={c.version} className="changelog-entry md-body"><div className="changelog-ver">{c.version} <span className="changelog-date">{c.date}</span></div><Markdown content={c.lines.map((l) => `- ${l}`).join('\n')} /></div>)}
+        <ChangelogEntries />
       </div>
     </dialog>
   </div>

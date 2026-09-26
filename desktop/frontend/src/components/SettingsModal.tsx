@@ -41,10 +41,10 @@ import { LocaleToggle } from './LocaleToggle'
 import { BrandLogo } from './BrandLogo'
 import { ThemePreview } from './ThemePreview'
 import { RemoteSyncSection } from './RemoteSyncSection'
-import { APP_VERSION, CHANGELOG } from '../changelog'
+import { APP_VERSION } from '../changelog'
 import { Markdown } from './Markdown'
 import { UpdateActions } from './UpdateActions'
-import { openChangelogTab } from '../views/ChangelogView'
+import { ChangelogEntries, openChangelogTab, releaseNotesFor } from '../views/ChangelogView'
 import { ModelSelect } from './ModelSelect'
 import { AsrModelChoice } from './AsrModelChoice'
 import { AuxModelChoice } from './AuxModelChoice'
@@ -3725,9 +3725,9 @@ export const SettingsModal: React.FC<{
                         <div style={{ fontWeight: 600 }}>{t('about.update.available', { version: upd.version || '' })}</div>
                         {/* 更新说明来自仓库 CHANGELOG.md 那一节(见 electron/updater.ts),是 markdown ——
                             按 .md-body 正典渲染,别再当纯文本 pre-wrap 摊开。 */}
-                        {upd.releaseNotes ? (
+                        {releaseNotesFor(upd, locale) ? (
                           <div className="md-body" style={{ marginTop: 4, maxHeight: 260, overflow: 'auto' }}>
-                            <Markdown content={upd.releaseNotes} />
+                            <Markdown content={releaseNotesFor(upd, locale)!} />
                           </div>
                         ) : null}
                       </div>
@@ -3798,14 +3798,7 @@ export const SettingsModal: React.FC<{
                     <div className="field">
                       <label>{t('about.changelogTitle')}</label>
                       <div className="changelog">
-                        {CHANGELOG.map((c) => (
-                          <div key={c.version} className="changelog-entry md-body">
-                            <div className="changelog-ver">
-                              {c.version} <span className="changelog-date">{c.date}</span>
-                            </div>
-                            <Markdown content={c.lines.map((l) => `- ${l}`).join('\n')} />
-                          </div>
-                        ))}
+                        <ChangelogEntries />
                       </div>
                     </div>
                   </>

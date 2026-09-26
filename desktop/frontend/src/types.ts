@@ -1013,6 +1013,8 @@ export interface UpdaterStatusInfo {
   phase: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error' | 'unsupported'
   version?: string
   releaseNotes?: string
+  /** 同一节的英文版(CHANGELOG.en.md);没有就只有 releaseNotes */
+  releaseNotesEn?: string
   percent?: number
   error?: string
 }

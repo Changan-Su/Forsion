@@ -29,6 +29,8 @@ export interface UpdaterStatus {
   phase: UpdaterPhase
   version?: string
   releaseNotes?: string
+  /** 同一节的英文版(CHANGELOG.en.md);渲染层英文界面优先用它 */
+  releaseNotesEn?: string
   percent?: number
   error?: string
 }
@@ -60,8 +62,8 @@ function unsupported(): boolean {
  *  两条路都答不出「这个新版本到底更新了什么」,只能回源 CHANGELOG.md。
  *  按 **tag** 取(不是 main):tag 上那份必然含该版本那一节,也不会被后续提交改动影响。
  */
-async function notesFromChangelog(version: string): Promise<string | undefined> {
-  const url = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/v${version}/desktop/CHANGELOG.md`
+async function sectionFrom(file: string, version: string): Promise<string | undefined> {
+  const url = `https://raw.githubusercontent.com/${GH_OWNER}/${GH_REPO}/v${version}/desktop/${file}`
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) })
     if (!res.ok) return undefined
@@ -69,6 +71,11 @@ async function notesFromChangelog(version: string): Promise<string | undefined> 
   } catch {
     return undefined // 断网 / 私有仓 / tag 不存在:退回原来的说明,不影响升级本身
   }
+}
+/** 中英两份一起拉(英文 = CHANGELOG.en.md,节标题与中文相同;老 tag 上没有英文版就只有中文)。 */
+async function notesFromChangelog(version: string): Promise<{ zh?: string; en?: string }> {
+  const [zh, en] = await Promise.all([sectionFrom('CHANGELOG.md', version), sectionFrom('CHANGELOG.en.md', version)])
+  return { zh, en }
 }
 
 /**
@@ -80,10 +87,10 @@ async function notesFromChangelog(version: string): Promise<string | undefined> 
  */
 function announceAvailable(version: string, fallback?: string): void {
   broadcast({ phase: 'available', version, releaseNotes: fallback })
-  void notesFromChangelog(version).then((md) => {
-    if (!md || md === lastStatus.releaseNotes) return
+  void notesFromChangelog(version).then(({ zh, en }) => {
+    if ((!zh || zh === lastStatus.releaseNotes) && (!en || en === lastStatus.releaseNotesEn)) return
     if (lastStatus.version !== version) return // 已经在说另一个版本了
-    broadcast({ ...lastStatus, releaseNotes: md })
+    broadcast({ ...lastStatus, ...(zh ? { releaseNotes: zh } : {}), ...(en ? { releaseNotesEn: en } : {}) })
   })
 }
 
