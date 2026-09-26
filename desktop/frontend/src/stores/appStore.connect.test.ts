@@ -144,12 +144,12 @@ describe('appStore.connect:代数只认最新', () => {
     await tick()
     expect(useApp.getState().connState, '前置:旧目标已连通').toBe('ok')
     // 同一目标再连一次(如手动重连):结果回来前仍是 ok
-    void useApp.getState().connect({ backendUrl: 'http://127.0.0.1:1', token: 'old' })
+    void useApp.getState().connect({ backendUrl: 'http://127.0.0.1:1', token: 'old', modelId: '' })
     expect(useApp.getState().connState).toBe('ok')
     deferreds.get('old')!.resolve({ ok: true, message: 'managed ok' })
     await tick()
     // 切到外部地址:请求挂着 → 不许仍报 ok
-    void useApp.getState().connect({ backendUrl: 'https://ext.example', token: 'ext' })
+    void useApp.getState().connect({ backendUrl: 'https://ext.example', token: 'ext', modelId: '' })
     expect(useApp.getState().connState).not.toBe('ok')
     deferreds.get('ext')!.resolve({ ok: false, message: 'ECONNREFUSED' })
     await tick()
