@@ -777,7 +777,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     if (!api) return
     // 清空前拍快照(同存档信封,不含临时扩展视图;另记收起侧栏的「当前项」),给「撤销」用。
     // 只有用户亲手重置才拍;拍不下来就不给撤销,重置照做。自动重置同时作废旧快照。
-    let snap: Omit<NonNullable<typeof layoutUndo>, 'shape' | 'dismiss'> | null = null
+    let snap: Omit<NonNullable<typeof layoutUndo>, 'shape' | 'metrics' | 'settleUntil' | 'dismiss'> | null = null
     if (opts?.undoable) {
       try { snap = { env: envelope(api, get()), api, profile: get().sideProfileKey, stashActive: { ...get().stashActive } } } catch { snap = null }
     }
