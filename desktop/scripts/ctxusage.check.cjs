@@ -110,6 +110,15 @@ async function main() {
     await page.close()
   }
 
+  // ── genesis-glass:它的 theme.css 对 .t2c-ctxring-pop 有材质覆盖,看一眼别被盖花 ──
+  if (SHOT) {
+    page = await open('theme=genesis-glass')
+    await page.waitForSelector('.t2c-cu-limit')
+    await page.locator('.t2c-cu-head').click()
+    await page.locator('.t2c-ctxring-pop').screenshot({ path: path.join(OUT, 'glass-light.png') })
+    await page.close()
+  }
+
   // ── 边界 ──
   page = await open('noinfo')
   await page.waitForSelector('.t2c-cu-limit')
