@@ -8,6 +8,11 @@ const crypto = require('node:crypto')
 const os = require('node:os')
 
 const desktop = path.resolve(__dirname, '..')
+// Computer Use's release certificate (SHA-1), pinned here rather than read from the CU package: this check exists
+// to stop a helper signed by another certificate from shipping, so a CU release that changed both its certificate
+// and its own pin must still fail here. Changing this value costs every Mac user a new Accessibility and Screen
+// Recording grant.
+const CU_RELEASE_CERT_SHA1 = 'dab3a30e7568c7e2c021660b49398356a205a191'
 const expectedVersion = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8')).version
 const errors = []
 function check(ok, message) {
@@ -36,8 +41,10 @@ for (const dir of resources) {
   let pkg = {}
   try { pkg = JSON.parse(readArchive('package.json')) } catch { errors.push(`${archive}: invalid package.json`) }
   check(pkg.version === expectedVersion, `App version ${pkg.version} != ${expectedVersion}`)
-  // 内置 CU = npm 上钉死的精确版本(Dependabot 提 PR 升级);范围或本地 file: 依赖都会让安装包内容不可复现。
-  check(/^\d+\.\d+\.\d+$/.test(pkg.dependencies?.['@forsion/tangu-computer-use'] ?? ''), 'CU dependency must be an exact npm version')
+  // 内置 CU = npm 上钉死的精确正式版(Dependabot 提 PR 升级);范围或本地 file: 依赖都会让安装包内容不可复现。
+  // 刻意不收预发布版:播种按 cmpVersion 比版本,它把 0.5.9-rc.1 排在 0.5.9 之上,内置过预发布版,正式版就永远换不上去。
+  const cuPinned = pkg.dependencies?.['@forsion/tangu-computer-use'] ?? ''
+  check(/^\d+\.\d+\.\d+$/.test(cuPinned), `CU dependency must be an exact release version, got "${cuPinned}"`)
   const engine = readJson(path.join(dir, 'tangu-server', 'package.json'))
   check(engine.version === expectedVersion, `Engine version ${engine.version} != ${expectedVersion}`)
 
@@ -61,8 +68,7 @@ for (const dir of resources) {
   const cu = path.join(dir, 'bundled-plugins', 'tangu-computer-use')
   const manifest = readJson(path.join(cu, 'manifest.json'))
   const cuPkg = readJson(path.join(cu, 'package.json'))
-  const installed = readJson(path.join(desktop, 'node_modules', '@forsion', 'tangu-computer-use', 'package.json'))
-  check(manifest.version === installed.version && cuPkg.version === installed.version, 'Packaged CU version differs from build dependency')
+  check(manifest.version === cuPinned && cuPkg.version === cuPinned, `Packaged CU ${cuPkg.version} (manifest ${manifest.version}) differs from the pinned dependency ${cuPinned}`)
   check(fs.existsSync(path.join(cu, 'tangu-plugins', 'computer-use', 'dist', 'index.js')), 'CU engine bundle missing')
   check(fs.existsSync(path.join(cu, 'scripts', 'setup-helper.mjs')), 'CU setup script missing')
   // Verify sealed App ZIPs, not only loose bridge files. ZIP transport prevents
@@ -72,10 +78,12 @@ for (const dir of resources) {
   // The bundled helper must be signed by CU's release certificate (releaseCertSha1 in its macos-bundle.mjs).
   // An ad-hoc or differently signed helper changes the designated requirement, and every Mac user
   // would lose the Accessibility and Screen Recording grants. Never bundle a local `build:native` output.
+  let packagePin
+  try { packagePin = /releaseCertSha1 = '([0-9a-f]{40})'/.exec(fs.readFileSync(path.join(cu, 'scripts', 'macos-bundle.mjs'), 'utf8'))?.[1] } catch { /* reported below */ }
+  check(packagePin === CU_RELEASE_CERT_SHA1, `CU package pins certificate ${packagePin ?? '(none)'}, Desktop expects ${CU_RELEASE_CERT_SHA1}`)
   if (process.platform === 'darwin') {
-    const pin = /releaseCertSha1 = '([0-9a-f]{40})'/.exec(fs.readFileSync(path.join(cu, 'scripts', 'macos-bundle.mjs'), 'utf8'))?.[1]
-    check(!!pin, 'CU release certificate pin missing from the bundled package')
-    for (const arch of pin ? ['arm64', 'x64'] : []) {
+    const pin = CU_RELEASE_CERT_SHA1
+    for (const arch of ['arm64', 'x64']) {
       const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cu-signer-'))
       try {
         execFileSync('/usr/bin/ditto', ['-x', '-k', path.join(cu, 'prebuilt', 'macos', arch, 'tangu-computer-use.app.zip'), temp])
