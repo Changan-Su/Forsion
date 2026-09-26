@@ -1684,6 +1684,9 @@ export const useApp = create<AppState>((set, get) => ({
     const t = get().tr
     const gen = ++connectGen
     const latest = (): boolean => gen === connectGen
+    // 换了连接目标(托管切外部、改外部地址 / 令牌):旧目标的 ok 不代表新目标连得上,结果回来前先退回「连接中」,
+    // 别让状态条在这段时间把新地址报成已连通(Codex 第三轮 R2-g-1)。同一目标的重连不动 ok。
+    if (get().connState === 'ok' && connectKey(c) !== lastOkConnectKey) set({ connState: 'idle', connMessage: '' })
     const r = await testConnection(c)
     if (!latest()) return // 已有更新的 connect 在飞/已完成:这条的结果(尤其老 token 的 401)一律作废
     set({ connState: r.ok ? 'ok' : 'err', connMessage: r.message })

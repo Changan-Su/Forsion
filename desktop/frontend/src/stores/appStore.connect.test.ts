@@ -135,6 +135,27 @@ describe('appStore.connect:代数只认最新', () => {
     expect(useApp.getState().connState).toBe('idle')
   })
 
+  it('换连接目标(托管切外部):新目标的结果回来前 connState 不沿用旧目标的 ok;同一目标重连保持 ok(R2-g-1)', async () => {
+    arm()
+    const boot = useApp.getState().boot()
+    await tick(10)
+    await boot
+    deferreds.get('old')!.resolve({ ok: true, message: 'managed ok' })
+    await tick()
+    expect(useApp.getState().connState, '前置:旧目标已连通').toBe('ok')
+    // 同一目标再连一次(如手动重连):结果回来前仍是 ok
+    void useApp.getState().connect({ backendUrl: 'http://127.0.0.1:1', token: 'old' })
+    expect(useApp.getState().connState).toBe('ok')
+    deferreds.get('old')!.resolve({ ok: true, message: 'managed ok' })
+    await tick()
+    // 切到外部地址:请求挂着 → 不许仍报 ok
+    void useApp.getState().connect({ backendUrl: 'https://ext.example', token: 'ext' })
+    expect(useApp.getState().connState).not.toBe('ok')
+    deferreds.get('ext')!.resolve({ ok: false, message: 'ECONNREFUSED' })
+    await tick()
+    expect(useApp.getState().connState).toBe('err')
+  })
+
   it('external 模式切号:被 abort 的 run 订阅不走 endRun,runningBySession 必须一并清空(否则防休眠永远不放)', async () => {
     const { broadcastAuth } = arm()
     const boot = useApp.getState().boot()
