@@ -60,6 +60,13 @@ async function main() {
   fs.writeFileSync(path.join(userdata, 'amadeus-config.dev.json'), JSON.stringify({ localVault: vault, lastVault: vault }))
   fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ workspace: vault }))
   const stub = await startStubEngine()
+  // 落盘的外部连接(A-1):托管切外部时表单必须从这份填,而不是托管后端的临时地址 / 令牌。
+  // backendUrl / token 是 shell 键(userData 的 tangu-desktop-config.json);dev 下 userData 可能带 -dev 后缀,两处都写。
+  const EXT = { backendUrl: stub.url, token: 'ext-seed-token' }
+  for (const dir of [userdata, `${userdata}-dev`]) {
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify(EXT))
+  }
   let app, sw
   try {
     app = await electron.launch({ args: [`--user-data-dir=${userdata}`, '--lang=zh-CN', ROOT], cwd: ROOT,
@@ -139,12 +146,20 @@ async function main() {
     assert.equal((await win.evaluate(() => window.tangu.getConfig())).mode, 'managed', 'clicking the external card must not persist mode')
     assert.equal((await win.evaluate(() => window.tangu.backendStatus())).state, 'ready', 'clicking the external card must not stop the managed backend')
     const ext = sw.locator('.settings-external-panel')
-    await ext.locator('input[type="text"]').fill(stub.url)
+    // A-1(Codex 第一轮):不动表单直接切 —— 表单必须是落盘的外部连接,不是托管后端的临时地址 / 令牌。
+    const managedUrl = (await win.evaluate(() => window.tangu.getConfig())).backendUrl
+    assert.notEqual(managedUrl, EXT.backendUrl, 'precondition: the managed backend runs on its own address')
+    assert.equal(await ext.locator('input[type="text"]').inputValue(), EXT.backendUrl, 'external form shows the persisted external URL, not the managed one')
+    assert.equal(await ext.locator('input[type="password"]').inputValue(), EXT.token, 'external form shows the persisted external token, not the managed one')
     await ext.locator('button.btn.primary').filter({ hasText: 'Switch to external and reconnect' }).click()
     await poll(async () => (await win.evaluate(() => window.tangu.getConfig())).mode === 'external', 'explicit switch persists mode=external')
     await poll(async () => (await win.evaluate(() => window.tangu.backendStatus())).state !== 'ready', 'managed backend stops after switching to external')
+    await new Promise(resolve => setTimeout(resolve, 600))
+    const afterSwitch = await win.evaluate(() => window.tangu.getConfig())
+    assert.equal(afterSwitch.backendUrl, EXT.backendUrl, 'switching without editing keeps the persisted external URL')
+    assert.equal(afterSwitch.token, EXT.token, 'switching without editing keeps the persisted external token (managed token not written)')
     assert.equal(await sw.locator('.settings-mode-panel .settings-choice-card').count(), 0, 'mode cards collapse after the explicit switch')
-    console.log('PASS real settings: legacy default, mode/network controls, disk persistence, managed backend restart preserves drafts, reload, bilingual text and layout, explicit managed→external switch')
+    console.log('PASS real settings: legacy default, mode/network controls, disk persistence, managed backend restart preserves drafts, reload, bilingual text and layout, explicit managed→external switch keeps the persisted external connection')
   } catch (error) {
     if (app) await (await app.firstWindow()).screenshot({ path: '/tmp/forsion-host-sandbox-failure.png' }).catch(() => {})
     throw error

@@ -487,6 +487,7 @@ export const SettingsModal: React.FC<{
     setHostSandboxDraft(null)
     setEdits({})
     setCommitErrors({})
+    setExtDraft(null)
     setModeDraft(null)
   }, [p.open])
   const [backendSt, setBackendSt] = useState<BackendStatusInfo | null>(null)
@@ -880,6 +881,18 @@ export const SettingsModal: React.FC<{
     : (backendSt?.state === 'ready' ? 'ok' : backendSt?.state === 'crashed' ? 'err' : 'pending')
   const modePending = viewMode !== mode
   const pickModeDraft = (m: 'managed' | 'external'): void => setModeDraft(m === mode ? null : m)
+  // 外部连接表单的值(Codex 第一轮 A-1):已落盘为外部 → 就是 draft(p.cfg 即外部连接);**托管切外部**时 p.cfg 是
+  // 托管后端的临时地址 / 令牌,绝不能拿来填表(点「切换并重连」会把它写成外部配置)—— 改从落盘的外部连接取,
+  // 用户在此期间的编辑记在 extDraft。
+  const [extDraft, setExtDraft] = useState<{ backendUrl: string; token: string } | null>(null)
+  const switchingToExternal = isDesktop && mode !== 'external'
+  const connForm = switchingToExternal
+    ? (extDraft ?? { backendUrl: savedCfg?.externalConnection?.backendUrl ?? '', token: savedCfg?.externalConnection?.token ?? '' })
+    : { backendUrl: draft.backendUrl, token: draft.token }
+  const editConnForm = (patch: Partial<{ backendUrl: string; token: string }>): void => {
+    if (switchingToExternal) setExtDraft({ ...connForm, ...patch })
+    else setDraft({ ...draft, ...patch })
+  }
   // 托管运行组(改了要重启后端的键)。cloudUrl 也是 managedKey,但它住在 Forsion 页、有自己的显式保存,
   // 这里**不再**顺带落盘(以前会把 Forsion 页没保存的云端地址草稿一起写掉并触发 unit host 重建)。
   const RUNTIME_KEYS: Array<keyof StoredDesktopConfig> = ['sandbox', 'pythonMode', 'mirror']
@@ -979,13 +992,14 @@ export const SettingsModal: React.FC<{
 
   const test = async () => {
     setTesting(true)
-    const r = await testConnection(draft)
+    const r = await testConnection({ ...draft, ...connForm })
     setTestResult(r.message)
     setTesting(false)
   }
 
   const saveConnection = async (): Promise<void> => {
-    const patch = { backendUrl: draft.backendUrl.replace(/\/+$/, ''), token: draft.token }
+    // 只提交表单里的外部地址与令牌(托管切外部时它来自落盘的外部连接 + 用户编辑,见 connForm)。
+    const patch = { backendUrl: connForm.backendUrl.trim().replace(/\/+$/, ''), token: connForm.token }
     // 从托管切到外部是用户在这里**显式确认**的(U-01):先落 mode(主进程随之停掉内置后端),
     // 再走原有的 onConfigChange → onReconnect 顺序。
     if (isDesktop && mode !== 'external' && window.tangu?.setConfig) {
@@ -993,6 +1007,8 @@ export const SettingsModal: React.FC<{
         setStored(await window.tangu.setConfig({ mode: 'external' }))
         setModeDraft(null)
         setModeExpanded(false)
+        setExtDraft(null)
+        setDraft((d) => ({ ...d, ...patch }))
       } catch (e: any) {
         setTestResult(`${t('settings.toast.saveFailed')}${e?.message || e}`)
         return
@@ -1695,8 +1711,8 @@ export const SettingsModal: React.FC<{
                           <label>{t('settings.external.urlLabel')}</label>
                           <input
                             type="text"
-                            value={draft.backendUrl}
-                            onChange={(e) => setDraft({ ...draft, backendUrl: e.target.value })}
+                            value={connForm.backendUrl}
+                            onChange={(e) => editConnForm({ backendUrl: e.target.value })}
                             placeholder="http://localhost:8787"
                           />
                           <div className="hint">{t('settings.external.urlHint')}</div>
@@ -1705,8 +1721,8 @@ export const SettingsModal: React.FC<{
                           <label>{t('settings.external.tokenLabel')}</label>
                           <input
                             type="password"
-                            value={draft.token}
-                            onChange={(e) => setDraft({ ...draft, token: e.target.value })}
+                            value={connForm.token}
+                            onChange={(e) => editConnForm({ token: e.target.value })}
                             placeholder={t('settings.external.tokenPlaceholder')}
                           />
                         </div>

@@ -1123,12 +1123,15 @@ async function doRefreshUnitHost(): Promise<void> {
 }
 let unitPairedCache: PairedDevice[] = []
 
-/** renderer 视角的有效配置:managed 就绪时 backendUrl/token 来自托管子进程。 */
+/** renderer 视角的有效配置:managed 就绪时 backendUrl/token 来自托管子进程。
+ *  externalConnection = **落盘的**外部连接地址 / 令牌(不被托管折算覆盖):设置页从托管切到外部时用它填表,
+ *  不能拿托管后端的临时地址 / 令牌当外部配置写回去(Codex 第一轮 A-1)。 */
 async function effectiveConfig(): Promise<
   TanguStoredConfig & {
     backendState: BackendStatus
     homeDir: string
     forsionMcp: { running: boolean; url: string | null; token: string }
+    externalConnection: { backendUrl: string; token: string }
   }
 > {
   const stored = await loadConfig()
@@ -1139,10 +1142,11 @@ async function effectiveConfig(): Promise<
   const defaultWorkspaceDir = await ensureDefaultWorkspaceDir(stored)
   // 内置浏览器给隧道设备页注入 Authorization 的前缀(effectiveConfig 被 boot/配置变更高频调用,借道刷新)。
   unitTunnelPrefix = `${stored.cloudUrl.replace(/\/+$/, '')}/api/units/`
+  const externalConnection = { backendUrl: stored.backendUrl, token: stored.token }
   if (stored.mode === 'managed' && st.state === 'ready' && st.url) {
-    return { ...stored, backendUrl: st.url, token: backend.getToken(), backendState: st, homeDir, defaultWorkspaceDir, forsionMcp }
+    return { ...stored, backendUrl: st.url, token: backend.getToken(), backendState: st, homeDir, defaultWorkspaceDir, forsionMcp, externalConnection }
   }
-  return { ...stored, backendState: st, homeDir, defaultWorkspaceDir, forsionMcp }
+  return { ...stored, backendState: st, homeDir, defaultWorkspaceDir, forsionMcp, externalConnection }
 }
 
 // 串行化:连续 config:set(如先改 cloudUrl 再改 sandbox)触发的多次 ensureBackend
