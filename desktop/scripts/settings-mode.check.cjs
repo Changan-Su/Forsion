@@ -160,6 +160,21 @@ async function main() {
       fs.chmodSync(home, 0o755)
       await errRow.locator('button').click()
       check('B5 点「重试」后写盘成功、提示消失', await waitFor(async () => (await diskConfig()).defaultWorkspaceDir === wsFail && (await errRow.count()) === 0, 6000))
+      // B6(复核补漏):失败后用户**改了新值、不失焦直接点「重试」**—— 点击先让输入框失焦提交新值,重试不能再把
+      // 失败那一刻的旧快照写回去(retry 闭包曾绑着旧 edits:盘上落旧值、新草稿被回执抹掉)。
+      const wsStale = path.join(home, 'ws-stale'), wsFresh = path.join(home, 'ws-fresh')
+      fs.chmodSync(home, 0o555)
+      await wsInput.fill(wsStale)
+      await wsInput.press('Tab')
+      const failedAgain = await waitFor(async () => (await errRow.count()) === 1, 6000)
+      fs.chmodSync(home, 0o755)
+      await wsInput.fill(wsFresh)
+      await errRow.locator('button').click()
+      await pause(1200)
+      check('B6 失败后改新值再点「重试」:盘上与输入框都是新值(不被旧快照覆盖)', failedAgain
+        && await waitFor(async () => (await diskConfig()).defaultWorkspaceDir === wsFresh, 4000)
+        && (await diskConfig()).defaultWorkspaceDir === wsFresh && (await wsInput.inputValue()) === wsFresh,
+      { disk: (await diskConfig()).defaultWorkspaceDir, input: await wsInput.inputValue() })
     } finally { fs.chmodSync(home, 0o755) }
 
     // ── D 设置搜索 ──

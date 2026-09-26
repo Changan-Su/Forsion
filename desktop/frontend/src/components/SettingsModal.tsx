@@ -442,9 +442,13 @@ export const SettingsModal: React.FC<{
       setCommitErrors((prev) => withoutKeys(prev, keys))
     }).catch((e: any) => {
       const message = String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
-      setCommitErrors((prev) => ({ ...prev, ...Object.fromEntries(keys.map((k) => [k, { message, retry: () => void commitEdits(keys, norm) }])) }))
+      // 重试走 ref 取**最新一次渲染**的 commitEdits:直接闭包这一次的,读到的是失败那一刻的 edits —— 用户改了新值
+      // 再点「重试」时,失焦先提交新值、重试又把旧快照写回去,盘上落旧值、新草稿被回执抹掉(复核补漏)。
+      setCommitErrors((prev) => ({ ...prev, ...Object.fromEntries(keys.map((k) => [k, { message, retry: () => void commitEditsRef.current(keys, norm) }])) }))
     })
   }
+  const commitEditsRef = useRef(commitEdits)
+  commitEditsRef.current = commitEdits
   /** 「选择目录」直接落盘(不经草稿);失败同样就地提示并可重试。 */
   const savePickedWorkspace = (d: string): void => {
     const typed = edits.defaultWorkspaceDir
