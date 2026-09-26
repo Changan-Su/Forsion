@@ -14,7 +14,7 @@
  * 样式全在 `chat2/orbits.css`(`.t2o-` 前缀,不改 `sidebar2.css` 本体);几何见该文件头注。
  */
 import React, { useEffect, useMemo, useState } from 'react'
-import { MoreHorizontal, Pencil, Pin, PinOff, Plus, SquarePen, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
+import { Info, MoreHorizontal, Pencil, Pin, PinOff, Plus, SquarePen, Trash2, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { OverlayAt, setActiveSpace, useSpaceStore } from '@lcl/engine'
 import { SidebarPane, sessionActivityAt } from './chat2/SidebarPane'
@@ -27,11 +27,13 @@ import { AgentAvatar } from '../components/AgentAvatar'
 import { tipProps, tipT } from '../hoverTip'
 import { formatRelative } from '../format/time'
 import { TeamEditor } from '../components/TeamEditor'
+import { AgentRemoveDialog } from '../components/RemoveDialog'
+import { showDetails } from '../stores/detailsSubject'
 import * as api from '../services/backendService'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { sessionsInMode, workspacesInMode } from './sessionMode'
 import { registerMessages, useI18n } from '../i18n'
-import { isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, type SessionRecord, type TeamDef } from '../types'
+import { isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, type NormalAgentDef, type SessionRecord, type TeamDef } from '../types'
 import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
 import './chat2/orbits.css'
 
@@ -63,6 +65,8 @@ registerMessages({
   'orbits.gone.teamBadge': { zh: '已删除', en: 'Deleted' },
   'orbits.team.deleteBusy': { zh: '这个团队还有会话在运行,先停掉再删', en: 'This team still has a running session; stop it before deleting' },
   'orbits.row.editAgent': { zh: '编辑 Agent', en: 'Edit agent' },
+  'orbits.row.details': { zh: '查看详情', en: 'View details' },
+  'orbits.row.deleteAgent': { zh: '删除 Agent', en: 'Delete agent' },
   'orbits.badge.running': { zh: '运行中', en: 'Running' },
   'orbits.badge.proactive': { zh: '主动式', en: 'Proactive' },
   'orbits.engine.needsSignin': { zh: '待登录', en: 'Needs sign-in' },
@@ -115,6 +119,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     setSessionMode: state.setSessionMode,
     // Agent 轨道三源
     agentDefs: state.agentDefs,
+    defaultAgentSlug: state.defaultAgentSlug,
     agentAvatars: state.agentAvatars,
     engines: state.engines,
     configBySession: state.configBySession,
@@ -126,6 +131,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   // 旧的持久化快照 / 未刷新前可能没有 teams:按空表渲染,不让一个 undefined 把整块侧栏交给 ErrorBoundary。
   const teams = Array.isArray(s.teams) ? s.teams : []
   const [teamEditor, setTeamEditor] = useState<{ team: TeamDef | null } | null>(null)
+  const [agentRemoving, setAgentRemoving] = useState<NormalAgentDef | null>(null)
   const runningIds = useMemo(() => new Set(Object.keys(s.runningBySession)), [s.runningBySession])
   const activeSession = s.sessions.find((x) => x.id === s.activeId) || s.archivedSessions.find((x) => x.id === s.activeId) || null
   const amadeusRoot = usePageStore((state) => state.vaultRoot)
@@ -468,7 +474,8 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
           onNewInWorkspace={(ws) => void s.createInWorkspace(ws)}
           onAddWorkspace={() => void s.addLocalWorkspace()}
           onRenameWorkspace={(ws, name) => void s.renameWorkspace(ws, name)}
-          onRemoveWorkspace={(ws) => void s.removeWorkspace(ws)}
+          onRemoveWorkspace={(ws, o) => void s.removeWorkspace(ws, o)}
+          onShowWorkspaceDetails={(ws) => { if (ws.path) showDetails({ kind: 'project', path: ws.path }) }}
           onRename={(id, title) => void s.renameSession(id, title)}
           onArchive={(id, a) => void s.archiveSession(id, a)}
           onDelete={(id) => void s.deleteSession(id)}
@@ -513,9 +520,18 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
               <button type="button" onClick={() => { const slug = rowMenu.slug; setRowMenu(null); rotateSolo('agent', slug) }}>
                 <MessageSquarePlus size={13} /> {t('orbits.row.newSessionMemory')}
               </button>
+              <button type="button" data-act="agent-details" onClick={() => { const slug = rowMenu.slug; setRowMenu(null); showDetails({ kind: 'agent', slug }) }}>
+                <Info size={13} /> {t('orbits.row.details')}
+              </button>
               <button type="button" onClick={() => { setRowMenu(null); s.openSettings('agents') }}>
                 <Pencil size={13} /> {t('orbits.row.editAgent')}
               </button>
+              {/* 默认 Agent 引擎拒删(同名册的禁用口径) */}
+              {rowMenu.slug !== 'xyra' && rowMenu.slug !== s.defaultAgentSlug && (
+                <button type="button" className="danger" data-act="agent-delete" onClick={() => { const def = agents.find((a) => a.slug === rowMenu.slug) || null; setRowMenu(null); setAgentRemoving(def) }}>
+                  <Trash2 size={13} /> {t('orbits.row.deleteAgent')}
+                </button>
+              )}
             </>
           )}
           {rowMenu.kind === 'engine' && (
@@ -548,6 +564,11 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
             </>
           )}
         </OverlayAt>
+      )}
+      {agentRemoving && (
+        // 删掉的正是当前私聊的 Agent → 换到新对话,别让人继续往已删的 Agent 发消息(同删团队)
+        <AgentRemoveDialog agent={agentRemoving} onClose={() => setAgentRemoving(null)}
+          onDone={() => { if (s.activeId && s.configBySession[s.activeId]?.soloAgentSlug === agentRemoving.slug) openNewChat() }} />
       )}
       {teamEditor && (
         <TeamEditor

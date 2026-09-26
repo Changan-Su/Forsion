@@ -1,7 +1,7 @@
 // Small modal dialogs for file-management flows: confirm (delete), prompt (folder name),
 // and folder picker (move a page). They share the .dialog-* styles.
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { registerMessages, useI18n } from '../../i18n'
 
 registerMessages({
@@ -29,6 +29,7 @@ export function ConfirmDialog({
   danger = true,
   onConfirm,
   onClose,
+  children,
 }: {
   title: string
   message?: string
@@ -36,6 +37,8 @@ export function ConfirmDialog({
   danger?: boolean
   onConfirm: () => void
   onClose: () => void
+  /** 正文与按钮之间的附加内容(如移除确认里的「同时删除相关文件」勾选项)。 */
+  children?: ReactNode
 }) {
   useEscape(onClose)
   const { t } = useI18n()
@@ -44,6 +47,7 @@ export function ConfirmDialog({
       <div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="dialog-title">{title}</div>
         {message && <div className="dialog-msg">{message}</div>}
+        {children}
         <div className="dialog-actions">
           <button className="dialog-btn" onClick={onClose}>
             {t('amdlg.cancel')}

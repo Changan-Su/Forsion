@@ -584,8 +584,9 @@ export const saveAgentDef = (cfg: TanguDesktopConfig, def: Omit<Partial<NormalAg
     { method: slug ? 'PATCH' : 'POST', body: JSON.stringify(def) },
   ).then((r) => r.agent)
 
-export const deleteAgentDef = (cfg: TanguDesktopConfig, slug: string) =>
-  request<{ ok: boolean }>(cfg, `/agent/agents/${encodeURIComponent(slug)}`, { method: 'DELETE' })
+/** keepFiles:只从名册移除,本机引擎把整个目录挪进 agents/.removed/ 并返回 keptAt(云端引擎忽略)。 */
+export const deleteAgentDef = (cfg: TanguDesktopConfig, slug: string, opts?: { keepFiles?: boolean }) =>
+  request<{ ok: boolean; keptAt?: string }>(cfg, `/agent/agents/${encodeURIComponent(slug)}${opts?.keepFiles ? '?keepFiles=1' : ''}`, { method: 'DELETE' })
 
 /** 改 slug(= 文件夹名)。拒绝时 err.code = 引擎 agentRename.ts 的原因(builtin / exists / cloud_synced / plugin_seeded / busy …)。 */
 export const renameAgentDef = (cfg: TanguDesktopConfig, slug: string, next: string) =>

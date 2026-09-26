@@ -9,6 +9,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { currentPlatform } from '../services/agentRunService'
 import { effectiveSessionMode, sessionsInMode, workspacesInMode } from './sessionMode'
+import { showDetails } from '../stores/detailsSubject'
 
 /** sideFilter(工作区 view 左栏胶囊):cloud=只看云端(无 project_path 的会话+云端工作区),
  *  local=只看本地;undefined=不过滤(其他挂载点行为不变)。 */
@@ -92,7 +93,8 @@ export function SessionsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } 
       onNewInWorkspace={(ws) => void s.createInWorkspace(ws)}
       onAddWorkspace={() => void s.addLocalWorkspace()}
       onRenameWorkspace={(ws, name) => void s.renameWorkspace(ws, name)}
-      onRemoveWorkspace={(ws) => void s.removeWorkspace(ws)}
+      onRemoveWorkspace={(ws, o) => void s.removeWorkspace(ws, o)}
+      onShowWorkspaceDetails={(ws) => { if (ws.path) showDetails({ kind: 'project', path: ws.path }) }}
       onRename={(id, title) => void s.renameSession(id, title)}
       onArchive={(id, a) => void s.archiveSession(id, a)}
       onDelete={(id) => void s.deleteSession(id)}

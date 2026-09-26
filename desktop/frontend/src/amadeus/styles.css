@@ -2262,6 +2262,16 @@ body.amx-marquee-active * {
   background: var(--menu-hover);
   color: var(--text);
 }
+.am-app .dialog-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: var(--ui-font-body, 13px);
+  line-height: 1.5;
+  color: var(--text-sec);
+  cursor: pointer;
+}
+.am-app .dialog-check input { flex-shrink: 0; margin: 3px 0 0; accent-color: var(--danger, #e5484d); }
 .am-app .dialog-actions {
   display: flex;
   justify-content: flex-end;

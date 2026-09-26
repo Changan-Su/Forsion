@@ -13,7 +13,7 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
-import { listAgents, getAgent, saveAgent, deleteAgent, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN } from '../agents/agentRegistry.js';
+import { listAgents, getAgent, saveAgent, deleteAgent, removeAgentKeepFiles, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN } from '../agents/agentRegistry.js';
 import {
   cloudAgentsEnabled, cloudListAgents, cloudGetAgent, cloudSaveAgent, cloudDeleteAgent,
   cloudSaveAgentAvatar, cloudReadAgentAvatar, cloudDeleteAgentAvatar, cloudReadAgentsMeta, cloudWriteAgentsMeta,
@@ -164,11 +164,12 @@ router.delete('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, re
   }
   if (!ensureLocal(res)) return;
   try {
-    const ok = await deleteAgent(req.params.slug);
-    if (!ok && req.params.slug === MUSE_AGENT_SLUG) {
+    // ?keepFiles=1:只从名册移除,文件挪进 agents/.removed/(返回 keptAt,桌面再决定要不要进废纸篓)
+    const result = req.query.keepFiles === '1' ? await removeAgentKeepFiles(req.params.slug) : { ok: await deleteAgent(req.params.slug) };
+    if (!result.ok && req.params.slug === MUSE_AGENT_SLUG) {
       return res.status(400).json({ detail: 'Muse 正在启用中,请先在 设置·后台智能体 关闭 Muse 再删除' });
     }
-    res.json({ ok });
+    res.json(result);
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'delete agent failed' });
   }

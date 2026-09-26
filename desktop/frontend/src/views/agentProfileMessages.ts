@@ -59,7 +59,7 @@ registerMessages({
   'agentProfile.moveDown': { zh: '下移', en: 'Move down' },
   'agentProfile.makeDefault': { zh: '设为默认', en: 'Set as default' },
   'agentProfile.delete': { zh: '删除 Agent', en: 'Delete agent' },
-  'agentProfile.deleteConfirm': { zh: '删除「{name}」及其文件夹、技能与记忆？此操作不可撤销。', en: 'Delete “{name}” and its folder, skills, and memory? This cannot be undone.' },
+  'agentProfile.backToCurrent': { zh: '回到当前会话', en: 'Back to current session' },
   'agentProfile.deleteFailed': { zh: '无法删除此 Agent。请检查它是否仍在运行或被设为默认。', en: 'Could not delete this agent. Check whether it is running or set as default.' },
   'agentProfile.team': { zh: '团队', en: 'Team' },
   'agentProfile.context': { zh: '上下文', en: 'Context' },

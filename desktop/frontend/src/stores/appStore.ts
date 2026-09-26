@@ -722,7 +722,10 @@ export interface AppState {
   archiveSession(id: string, archived: boolean): Promise<void>
   deleteSession(id: string): Promise<void>
   renameWorkspace(ws: WorkspaceDescriptor, name: string): Promise<void>
-  removeWorkspace(ws: WorkspaceDescriptor): Promise<void>
+  /** deleteFiles = 同时把项目里的 `.tangu/` 移进系统废纸篓(项目文件夹本身不动)。 */
+  removeWorkspace(ws: WorkspaceDescriptor, opts?: { deleteFiles?: boolean }): Promise<void>
+  /** 删除 Agent(侧栏 / 名册共用);deleteFiles = 连它的文件(记忆、Library)一起移进系统废纸篓,否则留在引擎的 agents/.removed/。失败抛错。 */
+  removeAgent(agent: NormalAgentDef, deleteFiles: boolean): Promise<void>
   send(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null): Promise<boolean>
   /** 撤回一条等待中的插话(删除/↑取回)。返回消息文本;已注入或来不及则 null(等待区交给事件流收拾)。 */
   withdrawSteer(sessionId: string, msgId: string): Promise<string | null>
@@ -2308,7 +2311,7 @@ export const useApp = create<AppState>((set, get) => ({
     catch (e: any) { get().toast(t('app.wsRenameFail', { e: e?.message || e }), true) }
   },
 
-  removeWorkspace: async (ws) => {
+  removeWorkspace: async (ws, opts) => {
     const t = get().tr
     if (ws.system || ws.kind !== 'local') return
     const targets = [...get().sessions, ...get().archivedSessions].filter((s) => s.project_path === ws.key)
@@ -2319,11 +2322,36 @@ export const useApp = create<AppState>((set, get) => ({
       set((s) => ({ sessions: s.sessions.filter((x) => !ids.has(x.id)), archivedSessions: s.archivedSessions.filter((x) => !ids.has(x.id)) }))
       ids.forEach((id) => loadedHistory.delete(id))
       if (get().activeId && ids.has(get().activeId!)) get().setActiveId(null)
+      if (opts?.deleteFiles && ws.path) {
+        // 相关文件 = 项目里的 .tangu/(引擎 WORKSPACE_DIR_NAME:指令、技能、计划、图标);会话已删,文件进废纸篓可恢复
+        const sep = ws.path.includes('\\') ? '\\' : '/'
+        await window.tangu?.trashHostPath?.(`${ws.path.replace(/[\\/]+$/, '')}${sep}.tangu`)
+          .catch((e: any) => get().toast(t('app.wsTrashFail', { e: e?.message || e }), true))
+      }
       get().toast(t('app.wsRemoved', { name: ws.name }))
     } catch (e: any) {
       get().toast(t('app.wsRemoveFail', { e: e?.message || e }), true)
       void get().refreshSessions(get().cfg).catch(() => {})
     }
+  },
+
+  removeAgent: async (agent, deleteFiles) => {
+    const t = get().tr
+    // 本机 Agent(有 libraryDir):先让引擎把整个目录挪进 agents/.removed/,勾了「同时删除相关文件」再移进系统废纸篓 ——
+    // 先挪后删,引擎拒删(默认 Agent / 启用中的 Muse)时文件不会先没了;废纸篓失败文件还在 .removed,只提示。
+    // 没有废纸篓接口时退回引擎直接删;云端 Agent 没有本机文件,直接删。
+    const trash = window.tangu?.trashHostPath
+    const keep = !!agent.libraryDir && (!deleteFiles || !!trash)
+    const r = await api.deleteAgentDef(get().cfg, agent.slug, keep ? { keepFiles: true } : undefined)
+    if (!r?.ok) throw new Error(t('agentProfile.deleteFailed'))
+    if (keep && deleteFiles && r.keptAt) await trash!(r.keptAt).catch(() => get().toast(t('app.agentTrashFail', { path: r.keptAt! }), true))
+    set((s) => {
+      const agentDefs = s.agentDefs.filter((a) => a.slug !== agent.slug)
+      return { agentDefs, defaultAgentSlug: s.defaultAgentSlug === agent.slug ? (agentDefs[0]?.slug || 'xyra') : s.defaultAgentSlug }
+    })
+    get().refreshAgents()
+    window.dispatchEvent(new Event('forsion:agents-changed'))
+    window.tangu?.requestMainAction?.('agents-changed')
   },
 
   // ── Agent Desk:聊天右侧演出面板。会话级快照落 localStorage(persistDeskSoon),
