@@ -98,7 +98,7 @@ import './settingsModal.css'
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
   // 失焦自动保存失败(Codex 第一轮 A-2):就地提示并给重试,草稿保留。
-  'settingsmodal.commit.failed': { zh: '未保存:{error}', en: 'Not saved: {error}' },
+  'settingsmodal.commit.failed': { zh: '未保存：{error}', en: 'Not saved: {error}' },
   'settingsmodal.commit.retry': { zh: '重试', en: 'Retry' },
   'settingsmodal.keepAwake.title': { zh: '有会话运行时阻止休眠', en: 'Stay awake while sessions run' },
   'settingsmodal.keepAwake.description': {
