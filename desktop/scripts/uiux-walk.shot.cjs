@@ -2,7 +2,7 @@
  * UI/UX 走查截图机(真 Electron + 桩引擎):把菜单 / 浮层、各 Space 主区、Agents 详情标签、设置各子页
  * 在「明暗 × 中英 × 宽窄」组合下各拍一张,交给人或模型逐张看。正典:docs/ToBeImproved/UIUX评审_2026-09-25.md §4 / §7。
  *
- * 不断言观感(那是看图的事),只断言「组合真的生效了」:<html data-mode> 与期望明暗一致、界面语言确实切了
+ * 不断言观感(那是看图的事),只断言「组合真的生效了」,另把截图过程中渲染层抛的异常列出来并以非零退出(异步报错不一定画得出来):<html data-mode> 与期望明暗一致、界面语言确实切了
  * (英文组合下 zh 字样的「新会话」不许出现)—— 否则整组截图都是假的,直接退出。
  * 唯一的原生菜单是托盘菜单(electron/tray.ts),页面截图拍不到,不在清单里。
  *
@@ -98,11 +98,17 @@ async function main() {
   const dir = shotDir('uiux-walk')
   const done = []
   const skipped = []
+  const pageErrors = [] // 截图过程中渲染层抛的异常:没把页面画崩的异步报错,光看图会漏
   for (const c of COMBOS) {
     const { app, win, close } = await launch({ tag: `walk-${c.id}` })
+    let current = 'boot'
+    const onErr = (e) => pageErrors.push(`${c.id} ${current}: ${String((e && e.message) || e).slice(0, 160)}`)
+    win.on('pageerror', onErr)
+    app.on('window', (w) => w.on('pageerror', onErr))
     const shot = async (kind, id, fn, floating = false) => {
       if (!want(kind, id)) return
-      if (process.env.WALK_VERBOSE) console.log(`  → ${kind}-${id}`)
+      current = `${kind}-${id}`
+      if (process.env.WALK_VERBOSE) console.log(`  → ${current}`)
       const file = path.join(dir, `${c.id}__${kind}-${id.replace(/\//g, '_')}.png`)
       try {
         // 每个目标限时:某页挂住(一次 IPC 永不回来)不能拖死后面整组
@@ -164,6 +170,7 @@ async function main() {
   }
   console.log(`\n截了 ${done.length} 张 → ${dir}`)
   if (skipped.length) console.log(`跳过 ${skipped.length} 个:\n  ${skipped.join('\n  ')}`)
+  if (pageErrors.length) { console.log(`页面报错 ${pageErrors.length} 个(截图里未必看得出):\n  ${[...new Set(pageErrors)].join('\n  ')}`); process.exitCode = 1 }
 }
 
 main().catch((e) => { console.error(e); process.exit(1) })

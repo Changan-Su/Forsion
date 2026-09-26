@@ -36,9 +36,9 @@ const AgentScheduleBody: React.FC<Props> = ({ cfg, slug, running }) => {
     // 两个接口各自失败各自算:规则读不到不该把日程也抹掉。日程那半的 404 = 云端引擎(本地限定),换成本地化文案。
     const [sched, trig] = await Promise.allSettled([getAgentSchedules(cfg), getMuseTriggers(cfg)])
     if (!alive.current || mine !== seq.current) return
-    if (sched.status === 'fulfilled') { setEntries(sched.value.find((s) => s.slug === slug)?.entries || []); setError('') }
+    if (sched.status === 'fulfilled') { setEntries((Array.isArray(sched.value) ? sched.value : []).find((s) => s.slug === slug)?.entries || []); setError('') }
     else { setEntries([]); setError((sched.reason as any)?.status === 404 ? t('agentProfile.scheduleLocalOnly') : String((sched.reason as any)?.message || sched.reason)) }
-    setRules(trig.status === 'fulfilled' ? trig.value.filter((tr) => triggerWakes(tr, slug) && !isFinishedTrigger(tr)) : [])
+    setRules(trig.status === 'fulfilled' && Array.isArray(trig.value) ? trig.value.filter((tr) => triggerWakes(tr, slug) && !isFinishedTrigger(tr)) : [])
   }
   useEffect(() => { void load() }, [running]) // eslint-disable-line react-hooks/exhaustive-deps
 

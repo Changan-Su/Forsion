@@ -75,6 +75,8 @@ const section: React.CSSProperties = { borderTop: 'var(--border-width) solid var
 const sourceText = (source: AgentMemoryRevision['source'], label: string) => [label, source.sessionId, source.messageId, source.runId].filter(Boolean).join(' · ')
 
 /** Changing backend, account, or Agent remounts all state; an old request can never paint into a new identity. */
+const validDream = (d: AgentMemoryDream | null | undefined): AgentMemoryDream | null => (d?.status && d.config ? d : null)
+
 export const AgentMemoryPanel: React.FC<Props> = (props) => <AgentMemoryPanelBody key={JSON.stringify([props.cfg.backendUrl, props.cfg.token, props.slug, props.shareDefaultMemory])} {...props} />
 
 const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, organized = false }) => {
@@ -108,7 +110,8 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
     const results = await Promise.allSettled([getAgentMemorySnapshot(cfg, slug), getAgentMemoryDream(cfg, slug)])
     if (!alive.current) return
     if (results[0].status === 'fulfilled') { try { applySnapshot(results[0].value) } catch (e) { fail(e) } } else fail(results[0].reason)
-    if (results[1].status === 'fulfilled') { setDream(results[1].value); setConfigDraft(results[1].value.config) } else fail(results[1].reason)
+    // 老引擎 / 外部后端可能回一个不带 status / config 的壳:当作不支持 Dream,整块不画,别让下面的 dream.status.running 崩掉整页。
+    if (results[1].status === 'fulfilled') { const d = validDream(results[1].value); setDream(d); if (d) setConfigDraft(d.config) } else fail(results[1].reason)
   }
   const action = async (fn: () => Promise<void>) => {
     if (lock.current || !alive.current) return
@@ -130,8 +133,8 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
       try {
         const next = await getAgentMemoryDream(cfg, slug)
         if (cancelled || !alive.current) return
-        setDream(next)
-        if (!next.status.running) { applySnapshot(await getAgentMemorySnapshot(cfg, slug)); setRevisions(null) }
+        setDream(validDream(next))
+        if (!next?.status?.running) { applySnapshot(await getAgentMemorySnapshot(cfg, slug)); setRevisions(null) }
       } catch (e) { if (!cancelled) fail(e) }
     }, 2000)
     return () => { cancelled = true; clearTimeout(timer) }
