@@ -2700,7 +2700,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-runtime-test,
 .settings-runtime-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 11px 15px 0; }
 .settings-runtime-actions { padding-bottom: 13px; }
-.settings-runtime-probe { padding: 0 15px; border-top: var(--border-width) solid var(--border); }
+.settings-tools-body { padding: 10px 15px 13px; }
 .settings-runtime-logs { margin-top: 0 !important; }
 
 @media (prefers-reduced-motion: reduce) {

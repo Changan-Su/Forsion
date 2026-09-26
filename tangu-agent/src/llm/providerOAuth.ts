@@ -10,10 +10,10 @@
  */
 import http from 'node:http';
 import { createHash, randomBytes } from 'node:crypto';
-import { spawn } from 'node:child_process';
 import type { DirectProvider, DirectProviderProtocol } from './providerRegistry.js';
 import { buildGrokBuildHeaders } from './grokBuildCompat.js';
 import { loadProviderCreds, saveProviderCred, type OAuthTokens } from '../standalone/providerCreds.js';
+import { openBrowser } from '../utils/openBrowser.js';
 
 export interface OAuthProvider {
   id: string; // 也作 modelId 前缀:xai/grok-2
@@ -93,16 +93,6 @@ function pkce(): { verifier: string; challenge: string } {
   const verifier = randomBytes(32).toString('base64url');
   const challenge = createHash('sha256').update(verifier).digest('base64url');
   return { verifier, challenge };
-}
-
-function openBrowser(url: string): void {
-  try {
-    const cmd = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open';
-    const args = process.platform === 'win32' ? ['/c', 'start', '', url] : [url];
-    const p = spawn(cmd, args, { stdio: 'ignore', detached: true });
-    p.on('error', () => {});
-    p.unref();
-  } catch { /* 用户手动复制链接 */ }
 }
 
 async function resolveEndpoints(p: OAuthProvider): Promise<{ authorize: string; token: string }> {

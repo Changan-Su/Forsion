@@ -82,6 +82,23 @@ async function main() {
         await win.locator('.ob-sections button').nth(2).click(); await geometry(`${prefix}-font`)
         await next(); await geometry(`${prefix}-workspace`)
         await next()
+        // 本机环境:探测是真跑 node/git/docker --version,等行出来再量 —— 量「检测中…」空态会假绿。
+        await win.waitForSelector('.ob-env-tools .env-probe-row')
+        assert((await win.locator('.env-probe-row').count()) >= 5, 'env step lists the probed tools')
+        await geometry(`${prefix}-env`)
+        if (locale === 'zh' && dimensions[0] === 1280) {
+          // 换源即存盘,再重挂检测区(安装命令按检测时的源生成);存盘前选中态不许先翻过去。
+          const china = win.locator('.ob-env-option').nth(1)
+          await china.click()
+          await win.waitForFunction(() => document.querySelectorAll('.ob-env-option')[1]?.getAttribute('aria-checked') === 'true')
+          assert.equal(await win.evaluate(() => window.tangu.getConfig().then((c) => c.mirror)), 'china')
+          await win.waitForSelector('.ob-env-tools .env-probe-row')
+          await geometry(`${prefix}-env-china`)
+          await win.locator('.ob-env-option').first().click()
+          await win.waitForFunction(() => document.querySelectorAll('.ob-env-option')[0]?.getAttribute('aria-checked') === 'true')
+          assert.equal(await win.evaluate(() => window.tangu.getConfig().then((c) => c.mirror)), 'default')
+        }
+        await next()
         if (await win.locator('.ob-flow[data-step="permissions"]').count()) {
           await win.waitForSelector('.desktop-permissions-section')
           await geometry(`${prefix}-permissions`)
@@ -104,12 +121,39 @@ async function main() {
     await geometry('en-narrow-appearance')
     await win.locator('.ob-footer .btn.ghost').first().click(); await win.waitForSelector('.ob-model-choice'); await geometry('en-narrow-models')
     await size(1024, 720)
-    await next(); await next(); await next();
+    await next(); await next(); await next()
+    await win.waitForSelector('.ob-env-tools .env-probe-row')
+    await size(390, 844)
+    await geometry('en-narrow-env')
+    await size(1024, 720)
+    await next()
     if (await win.locator('.ob-flow[data-step="permissions"]').count()) await next()
     await next()
     await win.waitForSelector('.ob-flow', { state: 'detached' })
     assert.equal(await win.evaluate(() => localStorage.getItem('forsion_tangu_onboarding_done')), '1')
     assert.equal(errors.length, 0, errors.join('\n'))
+    // 完成页指向「设置 → 常规设置 → 本机运行环境」:这个子页必须真的存在,且工具清单排在最前(2.11.4 埋在「连接」页底部没人找得到)。
+    await win.locator('.ntf-close').evaluateAll((bs) => bs.forEach((b) => b.click())).catch(() => {})
+    const opened = app.waitForEvent('window')
+    await win.keyboard.press(process.platform === 'darwin' ? 'Meta+Comma' : 'Control+Comma')
+    const settings = await opened
+    await settings.waitForLoadState('domcontentloaded')
+    await settings.waitForSelector('.settings-main', { timeout: 30000 })
+    const nav = settings.locator('.settings-nav')
+    const runtimeLabel = await settings.evaluate(() => document.documentElement.lang?.startsWith('zh') ? '本机运行环境' : 'Local runtime')
+    let entry = nav.getByRole('button', { name: runtimeLabel, exact: true })
+    if (!(await entry.count())) await nav.getByRole('button', { name: /^(常规设置|General)$/ }).first().click()
+    entry = nav.getByRole('button', { name: runtimeLabel, exact: true })
+    await entry.first().click()
+    await settings.waitForSelector('.settings-tools-panel .env-probe-row', { timeout: 30000 })
+    const layout = await settings.evaluate(() => {
+      const panels = [...document.querySelectorAll('.settings-sub .settings-panel')]
+      return { first: panels[0]?.classList.contains('settings-tools-panel'), rows: document.querySelectorAll('.settings-tools-panel .env-probe-row').length,
+        connProbe: !!document.querySelector('.settings-runtime-panel .env-probe') }
+    })
+    assert(layout.first && layout.rows >= 5 && !layout.connProbe, `settings runtime page: ${JSON.stringify(layout)}`)
+    await settings.screenshot({ path: path.join(OUT, 'settings-runtime.png') })
+    console.log(`PASS settings → general → ${runtimeLabel}: tools panel first (${layout.rows} rows)`)
     console.log(`PASS finish + persistence + no renderer errors; ${results.length} layout cases`)
   } finally {
     fs.writeFileSync(path.join(OUT, 'results.json'), JSON.stringify(results, null, 2))
