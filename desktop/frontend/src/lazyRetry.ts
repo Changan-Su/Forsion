@@ -32,7 +32,7 @@ export function lazyRetry<T extends ComponentType<any>>(load: () => Promise<{ de
 }
 
 /** 桌面端空闲时预热这几个 View(U-40:消掉每次启动后首进 Space 的那一闪骨架)。
- *  ⚠️ 只给不带全局副作用样式的 View 用:预热会把分块的 CSS 依赖提前注入整页(日历带的 Astryx 全局重置就因此不预热)。
+ *  ⚠️ 只给不带全局副作用样式的 View 用:预热会把分块的 CSS 依赖提前注入整页(日历的 Astryx 重置因此先收进了 @scope,见 theme/astryxReset.css)。
  *  只在 Electron 主窗里做:web / 移动端按需加载省流量,浮窗 / 独立窗用不到这些 Space;预热失败无妨,真进入时照常 lazy 加载。 */
 export function preloadWhenIdle(...views: Array<{ preload(): Promise<unknown> }>): void {
   if (typeof navigator === 'undefined' || !navigator.userAgent.includes('Electron/') || windowKind() !== 'main') return

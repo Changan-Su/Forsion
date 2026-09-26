@@ -2,8 +2,8 @@
  * U-40「每次启动后第一次进日历 / 造物,三栏同时出骨架」的仪器(真 Electron + 桩引擎)。
  * 正典:docs/ToBeImproved/UIUX评审_2026-09-25.md U-40(FEEL-4)。
  *
- * ⚠️ 只预热造物;日历三个 View 带 Astryx 全局重置样式,预热会让它每次启动就作用于整页(check:projectdetails 9c 抓到),
- *    所以日历仍按基线判(首进拉分块、挂骨架),等 Astryx 重置收进作用域再开。
+ * 日历 / 造物都预热。日历三个 View 带 Astryx 重置样式,09-26 起收进 @scope(theme/astryxReset.css)才开的预热 ——
+ *    以前是全局 `:where(*)`,预热会让它每次启动就作用于整页(check:projectdetails 9c 抓到)。断言 3 钉住这一条。
  * 成因(09-26 定位):React.lazy 首次渲染**总会**挂起一次(哪怕分块早已下载),再叠 React 19 的 Suspense
  * 揭示节流,首进就是一闪骨架 —— 所以当初「只 import() 预取分块」实测省不下来。修法在 lazyRetry:模块到手后
  * 新挂载的实例直接渲染真组件;宿主在 Electron 主窗空闲时对日历 / 造物的 View 调 preload()。本仪器只在页内打点:
@@ -27,7 +27,10 @@
  *     基线组(U40_BASELINE=1,关掉预热)改判「首进确实**拉了它自己的 lazy 分块**(CalendarView / ArtificialView,
  *     Codex 第一轮 F-4:造物读产物时自己也会出 .sk,光看骨架证明不了走了 lazy)且挂出过骨架」。
  *   2 同次启动再进:没有可见骨架(≥150ms)—— 分块缓存生效;失败说明每次进入都在重拉分块
+ *   3 预热落地后(还没进过日历)Astryx 的分块样式已在页上,但重置不外溢:往 body 挂一个新 div,border-top-style 仍是 none
+ *     (全局重置会把它改成 solid;app 自己的 CSS 不碰它)。关掉预热的两组没有可判的样式,跳过。
  * 负对照:U40_NEGATIVE=1 关掉预热、但按已修组判 —— 断言 1 必须红(证明它真在看骨架)。
+ *   断言 3 的负对照:把 astryxBridge 的重置换回 `@astryxdesign/core/reset.css` 重建,必须红。
  *
  * ⚠️ 本脚本额外覆写 `HOME`(同 check:artificial):造物托管根 = <HOME>/Forsion-Dev/Project,不覆写会读用户真目录。
  * 跑法:npx electron-vite build && npm run check:firstenter
@@ -45,8 +48,10 @@ const NO_PRELOAD = BASELINE || NEGATIVE
 /** 首进必须拉到的 lazy 分块(去掉 hash 后的名字前缀)。 */
 const LAZY_CHUNK = { calendar: /^CalendarView\.js$/, artificial: /^ArtificialView\.js$/ }
 const VISIBLE_MS = 150
-/** 宿主空闲预热的 Space。日历不在内:它带 Astryx 全局重置样式,预热会让它每次启动就生效(见 builtins/calendar.tsx)。 */
-const PRELOADED = new Set(['artificial'])
+/** 宿主空闲预热的 Space(见 builtins/calendar.tsx、builtins/artificial.tsx)。 */
+const PRELOADED = new Set(['calendar', 'artificial'])
+/** 每轮预热落地后的外溢探针(断言 3)。 */
+const LEAKS = []
 /** 主区真内容的根:进了 Space 却只剩错误态 / 空白时它不在。 */
 const CONTENT = { calendar: '.amx-cal', artificial: '[data-artificial-root]' }
 const R = makeReporter()
@@ -191,6 +196,15 @@ async function oneLaunch(run, shots) {
     }
     // 空闲预热由 requestIdleCallback(timeout 5s)触发:等够它的上限再点,免得量到「还没来得及预热」。
     await sleep(4000)
+    if (!NO_PRELOAD) {
+      LEAKS.push(await env.win.evaluate(() => {
+        const bridge = [...document.styleSheets].some((sh) => (sh.href || '').includes('astryxBridge'))
+        const probe = document.body.appendChild(document.createElement('div'))
+        const style = getComputedStyle(probe).borderTopStyle
+        probe.remove()
+        return { bridge, style, entered: !!document.querySelector('.amx-cal') }
+      }))
+    }
     const net = netRecorder(env.win)
     for (const space of ['calendar', 'artificial']) {
       out.push(await enterAndMeasure(env.app, env.win, space, 1, shots, run, net))
@@ -247,6 +261,10 @@ async function main() {
     R.check(`2 ${space}:同次启动再进没有可见骨架(≥${VISIBLE_MS}ms)—— 分块缓存生效`,
       again.length === RUNS && again.every((r) => r.hit && r.active === space && r.maxVisible < VISIBLE_MS && r.content.mounted && !r.content.error),
       JSON.stringify(again.map((r) => r.maxVisible)))
+  }
+  if (!NO_PRELOAD) {
+    R.check(`3 预热后 Astryx 重置不外溢:${LEAKS.length} 轮都已载入样式分块、尚未进日历,body 下新 div 的 border-top-style 仍是 none`,
+      LEAKS.length === RUNS && LEAKS.every((l) => l.bridge && !l.entered && l.style === 'none'), JSON.stringify(LEAKS))
   }
   console.log(`SHOTS ${shots}`)
   process.exit(R.summary() ? 1 : 0)

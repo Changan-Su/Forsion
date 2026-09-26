@@ -1,9 +1,10 @@
 /** astryx(facebook/astryx 设计系统)接入桥 —— 全应用唯一入口。
  *  - CSS 三件套只在此 import 一次(reset→astryx-base→theme 的 layer 级联,顺序有讲究);
+ *    重置用本目录的 astryxReset.css(原件收进 @scope,只罩 AstryxScope 子树),不 import 原件的全局版;
  *  - lclTheme:astryx token 值直接引用 LCL CSS 变量 → 换肤/明暗零维护跟随;
  *  - <AstryxScope>:Theme + mode 镜像(themeStore),包住任何使用 astryx 组件的子树。
  *  评估期纪律:业务代码不直接 import '@astryxdesign/core/theme',一律经本模块。 */
-import '@astryxdesign/core/reset.css'
+import './astryxReset.css'
 import '@astryxdesign/core/astryx.css'
 import '@astryxdesign/theme-neutral/theme.css'
 import { useLayoutEffect, type ReactNode } from 'react'

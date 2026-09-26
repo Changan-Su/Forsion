@@ -66,6 +66,57 @@ async function alignWeekGrid(win, startHour) {
   await win.waitForTimeout(350)
 }
 
+// ── Astryx 重置作用域(theme/astryxReset.css)──────────────────────────────────────
+// 原版全局重置的原文:往页里再注入一份,日历内一切计算样式与盒子都不该变 = 作用域版对日历而言与全局版等价。
+const GLOBAL_RESET = fs.readFileSync(require.resolve('@astryxdesign/core/reset.css'), 'utf8')
+/** 注入原版全局重置前后,对日历三栏 + 打开的弹层逐元素比计算样式与盒子。
+ *  Astryx 包裹层(div[data-astryx-theme])的子孙逐属性全等;包裹层本身(display:contents,@scope 的根不被 `*` 命中)和包裹层外
+ *  只比看得见的:宽 0 边框的 style、tab-size、appearance、点按高亮看不出来;vertical-align 只对行内级盒子起作用
+ *  (flex 子项的计算值已被块化成 block)。盒子(rect)始终逐个比。 */
+async function resetParity(win, label) {
+  const r = await win.evaluate((css) => {
+    const PROPS = ['box-sizing', 'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width', 'border-top-style', 'border-left-style', 'border-top-color',
+      'margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'display', 'position', 'top', 'bottom',
+      'font-family', 'font-size', 'font-weight', 'font-style', 'line-height', 'color', 'background-color', 'background-image', 'text-decoration-line', 'text-indent',
+      'list-style-type', 'vertical-align', 'max-width', 'cursor', 'opacity', 'outline-style', 'resize', 'border-collapse', 'tab-size', 'appearance', 'color-scheme',
+      '-webkit-tap-highlight-color', '-webkit-font-smoothing']
+    const PSEUDO = { '::before': ['box-sizing', 'border-top-width', 'border-top-style', 'width', 'height'], '::after': ['box-sizing', 'border-top-width', 'border-top-style', 'width', 'height'] }
+    const roots = [...document.querySelectorAll('.amx-cal, .amx-todo, .amx-calside, [popover], [role="dialog"], .amx-cal-cardwrap')]
+    const els = [...new Set(roots.flatMap((x) => [x, ...x.querySelectorAll('*')]))]
+    const snap = () => els.map((el) => {
+      const cs = getComputedStyle(el)
+      const b = el.getBoundingClientRect()
+      const o = { rect: [b.x, b.y, b.width, b.height].map((v) => Math.round(v * 10) / 10).join(',') }
+      for (const p of PROPS) o[p] = cs.getPropertyValue(p)
+      for (const [pe, ps] of Object.entries(PSEUDO)) {
+        const pcs = getComputedStyle(el, pe)
+        if (pcs.content && pcs.content !== 'none') for (const p of ps) o[pe + p] = pcs.getPropertyValue(p)
+      }
+      if (el.matches('input, textarea')) { const ph = getComputedStyle(el, '::placeholder'); o.ph = ph.color + '|' + ph.opacity }
+      return o
+    })
+    const a = snap()
+    const st = document.createElement('style')
+    st.textContent = css
+    document.head.appendChild(st)
+    const b = snap()
+    st.remove()
+    const quiet = (o, k) => k === 'tab-size' || k === 'appearance' || k === '-webkit-tap-highlight-color' ||
+      (/border-\w+-style$/.test(k) && o[k.replace('-style', '-width')] === '0px') ||
+      (k === 'vertical-align' && !/^inline|^table-cell$/.test(o.display))
+    const diffs = []
+    els.forEach((el, i) => {
+      const inWrap = !!el.parentElement?.closest('div[data-astryx-theme]')
+      const keys = Object.keys(a[i]).filter((k) => a[i][k] !== b[i][k] && (inWrap || !quiet(a[i], k)))
+      if (keys.length) diffs.push(`${inWrap ? 'wrap' : 'out'} ${el.tagName.toLowerCase()}.${String(el.className && el.className.baseVal !== undefined ? el.className.baseVal : el.className).trim().split(/\s+/)[0]} ${keys.map((k) => `${k}: ${a[i][k]} → ${b[i][k]}`).join('; ')}`)
+    })
+    return { n: els.length, inWrap: els.filter((el) => el.closest('div[data-astryx-theme]')).length, open: document.querySelectorAll(':popover-open, [role="dialog"]').length, diffs }
+  }, GLOBAL_RESET)
+  check(`Astryx 重置作用域 ≡ 全局版(${label}):${r.n} 个元素(包裹层内 ${r.inWrap}、弹层 ${r.open})注入原版全局重置后样式与盒子不变`,
+    r.n > 0 && r.inWrap > 0 && r.diffs.length === 0, r.diffs.length ? `${r.diffs.length} 处:${r.diffs.slice(0, 6).join(' ‖ ')}` : '')
+  return r
+}
+
 async function main() {
   if (!fs.existsSync(path.join(ROOT, 'out/main/main.js'))) throw new Error('缺 out/main/main.js —— 先跑 npm run build')
   fs.mkdirSync(OUT, { recursive: true })
@@ -187,10 +238,26 @@ async function main() {
     check('事件文字跟随主题正文色，而非固定白字', overlaps && overlaps.color === overlaps.text, overlaps && `${overlaps.color} / ${overlaps.text}`)
     check('跨日事件使用连续条首尾样式', (await win.locator('.amx-cal-allday2 .continues-left.continues-right').count()) >= 1)
 
+    await resetParity(win, '周视图 + 待办 + 右栏')
+    const leak = await win.evaluate(() => {
+      const probe = (parent) => { const d = parent.appendChild(document.createElement('div')); const v = getComputedStyle(d).borderTopStyle; d.remove(); return v }
+      const wrap = document.querySelector('div[data-astryx-theme]')
+      return { outside: probe(document.body), inside: wrap ? probe(wrap) : null }
+    })
+    check('Astryx 重置只罩包裹层:日历开着时 body 下新 div 不受影响、包裹层里的新 div 受重置', leak.outside === 'none' && leak.inside === 'solid', JSON.stringify(leak))
+    await win.locator('.amx-cal-modes').getByRole('button', { name: '周', exact: true }).click()
+    await win.waitForFunction(() => document.querySelectorAll(':popover-open').length > 0, null, { timeout: 5000 })
+    const menuInWrap = await win.evaluate(() => [...document.querySelectorAll(':popover-open')].every((p) => !!p.closest('div[data-astryx-theme]')))
+    check('Astryx 下拉菜单走原生 popover,DOM 仍在包裹层里(作用域罩得到)', menuInWrap)
+    await resetParity(win, '视图下拉菜单打开')
+    await win.keyboard.press('Escape')
+    await win.waitForFunction(() => document.querySelectorAll(':popover-open').length === 0, null, { timeout: 5000 })
+
     const event = win.locator('.amx-cal-event[aria-label^="产品深度工作"]').first()
     await event.click()
     const dialog = win.getByRole('dialog', { name: /编辑事件/ })
     await dialog.waitFor({ timeout: 5000 })
+    await resetParity(win, '事件详情')
     check('事件详情具有 dialog 语义并自动聚焦标题', await win.evaluate(() => document.activeElement?.getAttribute('aria-label') === '名称'))
     check('事件详情提供打开数据库入口', (await dialog.getByRole('button', { name: /打开多维表/ }).count()) === 1)
     await win.keyboard.press('Escape')
@@ -214,6 +281,7 @@ async function main() {
     await more.waitFor({ timeout: 5000 })
     await more.click()
     check('月视图溢出入口可打开当日完整日程', (await win.locator('.amx-cal-agenda[role="dialog"]').count()) === 1 && (await win.locator('.amx-cal-agenda-list > button').count()) >= 4)
+    await resetParity(win, '月视图 + 当日日程')
     await win.keyboard.press('Escape')
     check('当日日程列表支持 Esc 关闭', (await win.locator('.amx-cal-agenda').count()) === 0)
     await win.keyboard.press('w')
@@ -313,6 +381,7 @@ async function main() {
 
     await forceMode(win, 'dark')
     await win.screenshot({ path: path.join(OUT, 'calendar-ui-dark.png') })
+    await resetParity(win, '深色')
     check('明暗主题截图均已产出', fs.existsSync(path.join(OUT, 'calendar-ui-light.png')) && fs.existsSync(path.join(OUT, 'calendar-ui-dark.png')), OUT)
     check('Calendar 主链无渲染异常', errors.length === 0, errors.join(' | '))
   } finally {

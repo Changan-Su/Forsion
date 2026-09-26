@@ -1,0 +1,178 @@
+/* Astryx 重置样式的作用域版 —— 照抄 @astryxdesign/core@0.1.4 的 src/reset.css(Copyright (c) Meta Platforms, Inc. and affiliates.)。
+ *
+ * 为什么不直接 import 原件:原件是 `@layer reset { :where(*) {…} }` 的全局重置,日历三个 View 一进来(或被空闲预热)
+ * 就作用到整个窗口,别处样式跟着变(check:projectdetails 9c 实测执行者标签错位 4px)。这里原样收进
+ * `@scope (div[data-astryx-theme])` —— 只罩 <AstryxScope> 渲染的 Theme 包裹层(display:contents)及其子树;
+ * Astryx 的下拉菜单走原生 popover 顶层,DOM 仍在包裹层里,同样罩得到。<html> 虽然也带 data-astryx-theme,
+ * 但选择器限定 div,不会把根元素当作用域根。
+ *
+ * 与原件的差别只有两处:
+ *  - 去掉 `:where(html)` / `:where(body)` / `html[data-theme…]` 那几条:作用域里匹配不到根元素和 body。
+ *    body 的 margin / 字体平滑、:root 的 color-scheme,base.css 本来就自己设了。
+ *  - 原件挂在 html 上、会继承下来的三项(tab-size / 点按高亮 / 字号自动放大)改挂作用域根,子树里的值与原来一致。
+ * 其余规则逐字照抄(包括原件里不太常规的 `:where(input::placeholder, …)`),别顺手「修」——那会改变日历现在的样子。
+ * 升级 @astryxdesign/core 时对照原件同步;astryxReset.test.ts 会在两者规则不一致时报错。
+ * 不支持 @scope 的环境(Chromium < 118)会整块丢弃:日历只是少了这层重置,不影响别处。 */
+
+@layer reset {
+  @scope (div[data-astryx-theme]) {
+    :where(:scope) {
+      tab-size: 4;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-text-size-adjust: 100%;
+    }
+
+    :where(*, *::before, *::after) {
+      box-sizing: border-box;
+    }
+
+    :where(*, *::before, *::after) {
+      border-width: 0;
+      border-style: solid;
+      border-color: currentColor;
+    }
+
+    :where(h1, h2, h3, h4, h5, h6) {
+      font-size: inherit;
+      font-weight: inherit;
+    }
+
+    :where(h1, h2, h3, h4, h5, h6, p, blockquote, figure, pre, dl, dd) {
+      margin: 0;
+    }
+
+    :where(a) {
+      color: inherit;
+      text-decoration: inherit;
+    }
+
+    :where(b, strong) {
+      font-weight: bolder;
+    }
+
+    :where(code, kbd, samp, pre) {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+        'Liberation Mono', 'Courier New', monospace;
+      font-size: 1em;
+    }
+
+    :where(small) {
+      font-size: 80%;
+    }
+
+    :where(sub, sup) {
+      font-size: 75%;
+      line-height: 0;
+      position: relative;
+      vertical-align: baseline;
+    }
+
+    :where(sub) {
+      bottom: -0.25em;
+    }
+
+    :where(sup) {
+      top: -0.5em;
+    }
+
+    :where(ol, ul, menu) {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+    }
+
+    :where(img, svg, video, canvas, audio, iframe, embed, object) {
+      display: block;
+      vertical-align: middle;
+    }
+
+    :where(img, video) {
+      max-width: 100%;
+      height: auto;
+    }
+
+    :where(button, input, optgroup, select, textarea) {
+      font: inherit;
+      color: inherit;
+      margin: 0;
+      padding: 0;
+    }
+
+    :where(button, [type='button'], [type='reset'], [type='submit']) {
+      -webkit-appearance: button;
+      appearance: button;
+      background-color: transparent;
+      background-image: none;
+    }
+
+    :where(button, [role='button']) {
+      cursor: pointer;
+    }
+
+    :where(:disabled) {
+      cursor: default;
+    }
+
+    :where(textarea) {
+      resize: vertical;
+    }
+
+    :where(input::placeholder, textarea::placeholder) {
+      opacity: 1;
+      color: var(--color-text-secondary, #9ca3af);
+    }
+
+    :where([type='search']::-webkit-search-decoration,
+           [type='search']::-webkit-search-cancel-button) {
+      -webkit-appearance: none;
+    }
+
+    :where(fieldset) {
+      margin: 0;
+      padding: 0;
+    }
+
+    :where(legend) {
+      padding: 0;
+    }
+
+    :where(table) {
+      text-indent: 0;
+      border-color: inherit;
+      border-collapse: collapse;
+    }
+
+    :where(hr) {
+      height: 0;
+      color: inherit;
+      border-top-width: 1px;
+    }
+
+    :where(summary) {
+      display: list-item;
+    }
+
+    :where(dialog) {
+      padding: 0;
+      outline: none;
+    }
+
+    :where([hidden]) {
+      display: none;
+    }
+
+    @media (hover: none) and (pointer: coarse) {
+      :where(:focus-visible) {
+        outline: none;
+      }
+    }
+
+    :where([data-astryx-media="dark"]) {
+      color-scheme: dark;
+    }
+
+    :where([data-astryx-media="light"]) {
+      color-scheme: light;
+    }
+  }
+}

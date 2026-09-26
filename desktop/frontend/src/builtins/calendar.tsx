@@ -24,7 +24,7 @@ import {
   setActiveSpace, useSpaceStore, useWorkspace, Skeleton,
 } from '@lcl/engine'
 import type { SpaceDefinition, PersistedPanel } from '@lcl/engine'
-import { lazyRetry } from '../lazyRetry'
+import { lazyRetry, preloadWhenIdle } from '../lazyRetry'
 import { registerMessages } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { PRODUCT } from '../product'
@@ -72,9 +72,10 @@ export const calendarAvailable = (): boolean => hasNativeFeature('calendar') && 
 
 /** 三个视图的注册(启动 + 运行时开启共用)。 */
 export function installCalendarViews(): void {
-  // ⚠️ 日历三个 View 不空闲预热:它们经 AstryxScope 带进 @astryxdesign/core/reset.css(`:where(*)` 全局重置),
-  // 预热 = 每次启动就把它注入全局,别处样式跟着变(check:projectdetails 9c 实测错位 4px)。等 Astryx 重置收进作用域再开。
   if (!calendarAvailable()) return
+  // 空闲预热(U-40)。分块的 CSS 会随之提前注入整页:Astryx 重置已收进 @scope(theme/astryxReset.css),
+  // 不再作用到日历以外 —— 以前是全局 `:where(*)`,预热会让别处样式跟着变(check:projectdetails 9c 错位 4px)。
+  preloadWhenIdle(CalendarView, TodoListView, CalendarConfigView)
   // ⚠️ 待办视图**吃 params 且非 singleton**(与另外两个不同,刻意的):
   //  · factory 必须把 params 透传下去 —— 从前写的是 `() => <TodoListView />`,把 ViewProps 整个丢了,
   //    于是 Dashboard 卡片上 `db:`/`src:` 这些键落了盘也没人读(dashboardViewCard 早就在传了)。
