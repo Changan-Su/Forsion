@@ -123,13 +123,41 @@ async function main() {
     await win.waitForSelector('.dv-groupview', { timeout: 40_000 })
 
     // Amadeus 编辑器先挂一次，让 vaultRoot 与全库扫描正式就绪。
-    await clickSpace(win, ['Note'])
+    await clickSpace(win, ['笔记', 'Note'])
     await win.waitForSelector('.am-app', { timeout: 30_000 })
     await win.waitForTimeout(2200)
     await clickSpace(win, ['日历', 'Calendar'])
     await win.waitForSelector('.amx-cal', { timeout: 30_000 })
     await win.waitForSelector('.amx-cal-event[aria-label^="产品深度工作"]', { timeout: 30_000 })
     await win.waitForTimeout(1200)
+
+    // W-74:「周」首列跟「一周开始于」(zh 缺省周一),不再从今天起排;今天落在这一周里。
+    const weekCols = await win.evaluate(() => {
+      const s = document.querySelector('.amx-cal-tscroll')?.getBoundingClientRect()
+      if (!s) return []
+      return [...document.querySelectorAll('.amx-cal-daycol2[data-date]')]
+        .filter((c) => { const r = c.getBoundingClientRect(); return r.right > s.left + 2 && r.left < s.right - 2 })
+        .map((c) => c.getAttribute('data-date'))
+    })
+    const now = new Date()
+    check('W-74 周视图首列=本周一且含今天', weekCols.length === 7 && weekCols[0] === ymd(addDays(now, -((now.getDay() + 6) % 7))) && weekCols.includes(ymd(now)), JSON.stringify(weekCols))
+    // 横向自由滚到周中后,只拉宽窗口(仍 7 列)不许被拽回周首日(Codex w7x-1)。
+    const firstCol = () => win.evaluate(() => {
+      const s = document.querySelector('.amx-cal-tscroll').getBoundingClientRect()
+      return [...document.querySelectorAll('.amx-cal-daycol2[data-date]')].find((c) => c.getBoundingClientRect().right > s.left + 2)?.getAttribute('data-date')
+    })
+    const nudge = (k) => win.evaluate((k) => {
+      const sc = document.querySelector('.amx-cal-tscroll')
+      sc.scrollLeft += k * document.querySelector('.amx-cal-daycol2').getBoundingClientRect().width
+      sc.dispatchEvent(new Event('scroll'))
+    }, k)
+    await nudge(2); await win.waitForTimeout(300)
+    const midBefore = await firstCol()
+    await win.setViewportSize({ width: 1520, height: 900 }); await win.waitForTimeout(700)
+    const midAfter = await firstCol()
+    await win.setViewportSize({ width: 1440, height: 900 }); await win.waitForTimeout(700)
+    await nudge(-2); await win.waitForTimeout(300)
+    check('W-74 周中自由滚动后拉宽窗口不被拽回周首日', midBefore === weekCols[2] && midAfter === midBefore, `${midBefore} → ${midAfter}`)
 
     const sticky = await win.evaluate(() => {
       const sc = document.querySelector('.amx-cal-tscroll')

@@ -79,7 +79,7 @@ async function main() {
     }
     await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
     const space = (title) => win.locator(`.rb-space[aria-label="${title}"]`).first().click({ timeout: 15_000 })
-    await space('Note')
+    await space('笔记')
     await win.waitForSelector('.t2s-srow:has-text("Dash-one")', { timeout: 20_000 })
 
     /** 读 DOM,不信 store 自证。箭头取第一组(主区)。 */
@@ -106,7 +106,7 @@ async function main() {
     const shows = (name) => (s) => s.active.some((x) => x.includes(name))
     const rowIs = (name) => (s) => s.row.length === 1 && s.row[0].includes(name)
 
-    const roundTrip = async () => { await space('Tangu'); await win.waitForTimeout(2500); await space('Note') }
+    const roundTrip = async () => { await space('Tangu'); await win.waitForTimeout(2500); await space('笔记') }
     const quickOpen = async (q) => {
       await win.keyboard.press(process.platform === 'darwin' ? 'Meta+P' : 'Control+P')
       await win.waitForSelector('.amx-qf-input', { timeout: 8000 })

@@ -156,7 +156,7 @@ async function boot(app, win, { space = 'tangu', width = 1440, height = 900 } = 
 const SPACE_NAMES = {
   tangu: ['Tangu'],
   inbox: ['收件箱', 'Inbox'],
-  amadeus: ['Note', 'Amadeus'],
+  amadeus: ['笔记', 'Note', 'Amadeus'],
   calendar: ['日历', 'Calendar'],
   artificial: ['造物', 'Creations'],
 }

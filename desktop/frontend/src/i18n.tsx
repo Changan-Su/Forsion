@@ -173,7 +173,7 @@ const zh: Dict = {
   // ── Space(空间):ribbon 顶部成组、单选切换 ──
   'space.home': '主页',
   'space.tangu': 'Tangu',
-  'space.amadeus': 'Note',
+  'space.amadeus': '笔记',
   // ── Calendar Space(日历)──
   'space.calendar': '日历',
   'view.todo': '待办清单',

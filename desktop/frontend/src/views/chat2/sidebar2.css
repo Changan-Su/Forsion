@@ -582,6 +582,8 @@
 .t2sw-plug-item { position: relative; }
 .t2sw-plug-item .t2s-srow { font-weight: 400; }
 .t2sw-plug-item .t2s-srow:is(.active, .is-unread) { font-weight: 500; }
+/* 行内子元素跟行走(DESIGN §6:普通行常规、未读/选中略加强);否则上面 `.t2sw *` 的 600 直接命中标题 span(W-73)。 */
+.t2sw-plug-item .t2s-srow * { font-weight: inherit; }
 .t2sw-plug-item .t2s-srow.has-actions { padding-right: 30px; }
 .t2sw-plug-item .t2s-count { font-weight: 400; background: transparent; padding: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2sw-plug-row-menu { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); min-height: 24px; width: 24px; padding: 0; opacity: 0; }

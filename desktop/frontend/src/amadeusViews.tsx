@@ -184,7 +184,7 @@ registerMessages({
   'amxv.toSource': { zh: '切换到源码 Markdown', en: 'Switch to Markdown source' },
   'amxv.retry': { zh: '重试', en: 'Retry' },
   'amxv.welcome.loadFailed': { zh: '📓 笔记加载失败', en: '📓 Could not load the note' },
-  'amxv.welcome.title': { zh: '📓 Amadeus 笔记', en: '📓 Amadeus notes' },
+  'amxv.welcome.title': { zh: '📓 笔记', en: '📓 Notes' },
   'amxv.welcome.pickNote': { zh: '从左栏选一篇笔记开始，或新建一篇。', en: 'Pick a note in the sidebar to get started, or create a new one.' },
   'amxv.welcome.noVault': { zh: '把任意文件夹选作你的智库就能开写 —— 所见即所得，像 Obsidian 一样用双链把想法连起来。', en: 'Choose any folder as your vault and start writing — WYSIWYG editing, with Obsidian-style wikilinks to connect your ideas.' },
   'amxv.welcome.tutorial': { zh: '使用教程', en: 'Tutorial' },

@@ -99,9 +99,13 @@ async function main() {
           title: row ? (row.textContent || '').trim() : '',
           markWidth: mark ? mark.width : '',
           markContent: mark ? mark.content : '',
+          // W-73:标题 span 的字重跟行走(DESIGN §6),不被 `.t2sw *` 的 600 命中。
+          plainW: getComputedStyle(rows.find((r) => !r.classList.contains('active') && !r.classList.contains('is-unread')).querySelector('.t2s-srow-title')).fontWeight,
+          activeW: row ? getComputedStyle(row.querySelector('.t2s-srow-title')).fontWeight : '',
         }
       })
       check(`${mode} activeKey → 唯一原生选中行 + 左侧色条`, active.count === 1 && active.title.includes('32px 图标') && active.markWidth === '2px' && active.markContent !== 'none', JSON.stringify(active))
+      check(`${mode} W-73 普通行标题常规字重、选中行略加强`, active.plainW === '400' && active.activeW === '500', `${active.plainW} / ${active.activeW}`)
       await page.close()
     }
     const page = await browser.newPage({ locale: 'zh-CN', viewport: { width: 520, height: 420 } })

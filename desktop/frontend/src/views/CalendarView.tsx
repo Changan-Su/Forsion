@@ -362,7 +362,7 @@ export function CalendarView() {
       {mode === 'month' ? (
         <MonthScroll key={`dow${firstDow}`} ref={api} anchorRef={monthAnchor} events={visible} selectedKey={card?.key ?? null} onPick={openCard} onCreate={(d, at) => void create(d, null, at)} titleRef={titleRef} />
       ) : (
-        <TimeScroll ref={api} n={n} events={visible} selectedKey={card?.key ?? null} onPick={openCard} onCreate={(d, min, at) => void create(d, min, at)} titleRef={titleRef} />
+        <TimeScroll ref={api} n={n} weekStartDow={mode === 'week' && n === 7 ? firstDow : null} events={visible} selectedKey={card?.key ?? null} onPick={openCard} onCreate={(d, min, at) => void create(d, min, at)} titleRef={titleRef} />
       )}
 
       {selected && card && <EventCard ev={selected} at={card.at} onClose={() => setCard(null)} />}
@@ -373,13 +373,15 @@ export function CalendarView() {
 // ── 时间网格(横向连续日列条)────────────────────────────────────────────────
 interface TimeProps {
   n: number
+  /** 「周」模式整周可见时 = 周首日(0/1):首列、「今天」与跳转都对齐到这一天(W-74);其余模式 null,按天滚动。 */
+  weekStartDow: number | null
   events: CalEvent[]
   selectedKey: string | null
   onPick: (key: string, at: Anchor) => void
   onCreate: (day: Date, min: number, at: Anchor) => void
   titleRef: RefObject<HTMLSpanElement | null>
 }
-const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events, selectedKey, onPick, onCreate, titleRef }, ref) {
+const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekStartDow, events, selectedKey, onPick, onCreate, titleRef }, ref) {
   const { t } = useI18n()
   const wrap = useRef<HTMLDivElement>(null)
   const gutterHours = useRef<HTMLDivElement>(null) // 表头/全天常驻；仅小时轴随正文纵向滚动。
@@ -396,7 +398,10 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
     const b = addDays(today, -DAY_HALF)
     return Array.from({ length: DAY_HALF * 2 + 1 }, (_, i) => addDays(b, i))
   }, [today])
+  // 把列下标退到所在周的周首日(不在周模式时原样返回)。
+  const alignIdx = (i: number): number => (weekStartDow == null ? i : Math.max(0, i - ((days[i].getDay() - weekStartDow + 7) % 7)))
   const firstIdx = useRef(DAY_HALF)
+  const alignedFor = useRef<number | null | undefined>(undefined) // 上次按哪个周首日对齐过;只在它变时对齐,单纯拉宽窗口不拽回
   const centered = useRef(false)
   const lastTitle = useRef('')
   const lastRangeI = useRef(-1)
@@ -475,10 +480,15 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
       const bodyTop = dc ? dc.offsetTop : HEAD_H + 14
       el.scrollTop = Math.max(0, bodyTop + (nowMin / 60) * hourPx - el.clientHeight / 2)
     }
-    el.scrollLeft = firstIdx.current * colw // 换 n(colw 变)时保持最左那天
+    // 换 n(colw 变)时保持最左那天;首挂、进周模式或改周首日时退到那一周的周首日。
+    if (alignedFor.current !== weekStartDow) {
+      alignedFor.current = weekStartDow
+      firstIdx.current = alignIdx(firstIdx.current)
+    }
+    el.scrollLeft = firstIdx.current * colw
     updateTitle()
     syncGutter()
-  }, [colw]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [colw, weekStartDow]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 缩放锚定:hourPx 变化时保持视口中心的时刻不动(顶栏 ± 按钮与 Ctrl+滚轮共用这一条路径)。
   const prevHourPx = useRef(hourPx)
@@ -512,13 +522,14 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, events
   useImperativeHandle(ref, () => ({
     prev: () => wrap.current?.scrollBy({ left: -n * colw, behavior: 'smooth' }),
     next: () => wrap.current?.scrollBy({ left: n * colw, behavior: 'smooth' }),
-    today: () => wrap.current?.scrollTo({ left: DAY_HALF * colw, behavior: 'smooth' }),
+    today: () => wrap.current?.scrollTo({ left: alignIdx(DAY_HALF) * colw, behavior: 'smooth' }),
     goto: (date: Date) => {
       if (!colw) return
-      const i = Math.max(0, Math.min(days.length - n, diffDays(startOfDay(date), days[0])))
+      // 先对齐再夹:日窗末端凑不满整周时,宁可不对齐也要让目标日可见。
+      const i = Math.min(days.length - n, alignIdx(Math.max(0, Math.min(days.length - 1, diffDays(startOfDay(date), days[0])))))
       wrap.current?.scrollTo({ left: i * colw, behavior: 'smooth' })
     },
-  }), [n, colw, days])
+  }), [n, colw, days, weekStartDow]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const down = (ev: CalEvent, e: ReactPointerEvent): void => {
     e.stopPropagation()

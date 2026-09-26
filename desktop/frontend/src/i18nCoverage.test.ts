@@ -183,9 +183,10 @@ describe('i18n 覆盖', () => {
   it('F. zh 词条不是纯拉丁文(U-30:中文界面残留英文),品牌 / 专名 / 格式串逐条登记理由', () => {
     // 术语表里「zh 不译」的专名:由这些词拼成的 zh 值算合规(如「Agent」「Space ×{n}」「Muse Space」)。
     // ⚠️ 复数 Agents / Spaces 不在这里:它们只在作 Space 名时合规,见下面逐键登记。
+    // Note 不在这里:笔记 Space 自 09-26 起中文写「笔记」(W-75)。
     const TERMS = new Set([
       'Agent', 'Space', 'MCP', 'Hooks', 'Git', 'AI', 'Python', 'Vault', 'Sandbox', 'Provider', 'ID', 'URL', 'HTTP', 'SSE', 'DEV', 'P2P',
-      'Forsion', 'Tangu', 'Muse', 'Amadeus', 'Note', 'Chat', 'Work', 'Desk', 'QQ', 'Telegram', 'OpenAI', 'Codex', 'OpenCode', 'Claude', 'Code',
+      'Forsion', 'Tangu', 'Muse', 'Amadeus', 'Chat', 'Work', 'Desk', 'QQ', 'Telegram', 'OpenAI', 'Codex', 'OpenCode', 'Claude', 'Code',
       'CosyVoice', 'JetBrains', 'Mono', 'Hack2Gate', 'English', 'Computer', 'Use', 'Bot', 'Token', 'tokens',
     ])
     // 逐键登记:不是由术语拼成、但刻意保留拉丁文的值。
