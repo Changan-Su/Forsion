@@ -39,6 +39,14 @@ it('头像组不在任何实时区域里;实时区域只有人数 / 工作状态
   expect(avatars.getAttribute('aria-label')).toContain('Ann')
   expect(avatars.closest('[role="status"], [aria-live]')).toBeNull()
   const live = [...host.querySelectorAll('[role="status"]')]
-  expect(live.map((el) => el.className)).toEqual(['t2o-bar-sub'])
+  expect(live.map((el) => el.className)).toEqual(['t2o-bar-sub', 't2o-bar-note'])
   expect(live[0].textContent).toContain('orbit.bar.working')
+})
+
+it('加入 / 退出提示的实时区域常驻挂载(空着也在),内容出现时才会被读屏播报', async () => {
+  await act(async () => root.render(React.createElement(OrbitBar, { sessionId: 's1', running: false, cfg: { groupChat: true, groupAgents: ['a', 'b'] } })))
+  const note = host.querySelector('.t2o-bar-note')
+  expect(note, '没有提示时也要先挂着(带内容新插入的 region 通常不播)').not.toBeNull()
+  expect(note!.getAttribute('role')).toBe('status')
+  expect(note!.textContent).toBe('')
 })

@@ -145,7 +145,9 @@ export function OrbitBar({ sessionId, cfg, running }: { sessionId: string; cfg: 
           }}><LogOut size={12} /> {t('orbit.bar.exit')}</button>
         )}
       </span>
-      {note && <span className="t2o-bar-note" role="status">{note}</span>}
+      {/* 常驻挂载、只换内容:读屏对「连同文字一起新插入」的实时区域通常不播,region 得先在,内容再变(复核补漏)。
+          空时由 orbits.css 的 .t2o-bar-note:empty 收成读屏专用尺寸,不占布局。 */}
+      <span className="t2o-bar-note" role="status">{note || ''}</span>
       {setupOpen && (
         <GroupChatSetup
           agents={s.agentDefs}
