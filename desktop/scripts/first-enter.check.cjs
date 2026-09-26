@@ -24,6 +24,8 @@
  *     造物读产物时自己也会出 .sk,光看骨架证明不了走了 lazy),且挂出过骨架
  *   2 同次启动再进:没有可见骨架(≥150ms)—— 分块缓存生效;失败说明每次进入都在重拉分块
  * 负对照:U40_NEGATIVE=1 先把分块预取进缓存、但按基线组判 —— 断言 1 必须红(证明它真在看分块请求)。
+ *   负对照自己先过一道前置(Codex 第三轮 H2-1):预取全部成功、首进零分块请求。预取的 import() 若失败,首进照常
+ *   拉 lazy 分块、挂骨架,断言 1 反而全绿 —— 那是假绿的「负对照没红」,前置会先把它标出来。
  *
  * ⚠️ 本脚本额外覆写 `HOME`(同 check:artificial):造物托管根 = <HOME>/Forsion-Dev/Project,不覆写会读用户真目录。
  * 跑法:npx electron-vite build && npm run check:firstenter
@@ -248,10 +250,11 @@ async function main() {
       again.length === RUNS && again.every((r) => r.hit && r.active === space && r.maxVisible < VISIBLE_MS),
       JSON.stringify(again.map((r) => r.maxVisible)))
   }
-  if (PREFETCH) {
+  if (PREFETCH || NEGATIVE) {
     // 对照组自证:预取全部成功,且首进一个分块都没再拉 —— 否则「预取省不省时间」的结论没有依据。
+    // 负对照同样先过这一道:预取没生效时断言 1 本来就该绿,「负对照没变红」就成了假信号。
     const firsts = all.filter((r) => r.n === 1)
-    R.check('3 预取对照组完整:JS / CSS 依赖全部预取成功,首进零分块请求',
+    R.check(`${NEGATIVE ? '负对照前置' : '3 预取对照组完整'}:JS / CSS 依赖全部预取成功,首进零分块请求`,
       prefetchLog.length === RUNS && prefetchLog.every((p) => p.js > 0 && p.css > 0 && p.jsOk === p.js && p.cssOk === p.css) && firsts.length > 0 && firsts.every((r) => r.net.assets.n === 0),
       JSON.stringify({ prefetchLog, firstEntryAssets: firsts.map((r) => `${r.space}:${r.net.assets.names.join('+') || 0}`) }))
   }
