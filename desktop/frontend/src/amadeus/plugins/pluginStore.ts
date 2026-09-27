@@ -437,9 +437,11 @@ const GESTURE_WINDOW_MS = 1500
 export function notePluginGesture(pluginId: string): void { lastGesture.set(pluginId, Date.now()) }
 /** agent 自建 Space 代码的 sourceURL:栈帧里写的就是它(行号比 main.js 多 2 —— new Function 在函数体前包了两行头)。
  *  builtins/agentSpaceSync 据此把挂载之后的运行时错误归到这个 Space 身上、回写给 agent。
- *  带加载序号:返回的是**当前这一版**的地址 —— 旧版漏清的定时器在重载后还会抛,不许算到新版头上(Codex 09-27)。 */
+ *  带加载序号,且只返回**正在运行的那一版**(没在跑 → null):旧版漏清的定时器在重载后还会抛,新版没跑起来(来源没了 /
+ *  被门禁挡)时也一样 —— 都不许算成「当前的 Space」(Codex 09-27 两轮)。setup 时登记,teardown 时摘掉。 */
 const agentLoads = new Map<string, number>()
-export const agentSpaceSourceUrl = (pluginId: string): string => `forsion-agent-space/${pluginId}/${agentLoads.get(pluginId) ?? 0}/main.js`
+const agentLive = new Map<string, string>()
+export const agentSpaceSourceUrl = (pluginId: string): string | null => agentLive.get(pluginId) ?? null
 
 /** reloadOne 的按 id 串行链。 */
 const reloadChains = new Map<string, Promise<void>>()
@@ -490,8 +492,15 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
       // 抛的错(宿主的 try/catch 与 mount 的 Promise 都罩不住)才能回写给 agent(09-27 live:选择器拿到 null,数据卡全空,
       // 报错只进控制台,Muse 一无所知)。
       if (!src.dev) {
-        if (src.agent) agentLoads.set(src.id, (agentLoads.get(src.id) ?? 0) + 1)
-        const fn = new Function('ctx', src.agent ? `${src.code}\n//# sourceURL=${agentSpaceSourceUrl(src.id)}` : src.code) as (c: PluginContext) => unknown
+        let code = src.code
+        if (src.agent) {
+          const n = (agentLoads.get(src.id) ?? 0) + 1
+          const url = `forsion-agent-space/${src.id}/${n}/main.js`
+          agentLoads.set(src.id, n)
+          agentLive.set(src.id, url)
+          code = `${src.code}\n//# sourceURL=${url}`
+        }
+        const fn = new Function('ctx', code) as (c: PluginContext) => unknown
         const d = fn(ctx)
         return typeof d === 'function' ? (d as () => void) : undefined
       }
@@ -1371,6 +1380,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
 
   /** Run disposer + drop contributions + mark inactive, WITHOUT touching the preference. */
   const teardown = (id: string): void => {
+    agentLive.delete(id) // 拆掉了就不再是「正在运行的那一版」(agentSpaceSourceUrl)
     try {
       get().disposers[id]?.()
     } catch (e) {

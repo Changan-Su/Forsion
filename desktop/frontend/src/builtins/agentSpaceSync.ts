@@ -102,9 +102,9 @@ export function agentSpaceRuntimeError(err: unknown, sourceUrl: string): string 
 /** 窗口级 error / unhandledrejection 的入口(导出给测试)。 */
 export function noteAgentSpaceRuntimeError(err: unknown): void {
   const cfg = runtimeCfg
-  const url = agentSpaceSourceUrl(agentPluginId('muse'))
-  const text = cfg && agentSpaceRuntimeError(err, url)
-  if (!cfg || !text) return
+  const url = agentSpaceSourceUrl(agentPluginId('muse')) // 没在跑 → null:旧版 / 没跑起来的版本留下的错一概不报
+  const text = cfg && url && agentSpaceRuntimeError(err, url)
+  if (!cfg || !url || !text) return
   if (url !== runtimeKey) { runtimeKey = url; runtimeSeen = new Set() } // 换了一版:重新计,旧版的记录不留
   const seen = runtimeSeen
   if (seen.has(text) || seen.size >= RUNTIME_MAX) return

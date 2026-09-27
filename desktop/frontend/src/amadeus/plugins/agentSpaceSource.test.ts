@@ -11,21 +11,31 @@ const env = vi.hoisted(() => ({ sources: [] as ExternalPluginSource[] }))
 vi.mock('../api', () => ({
   amadeus: { listPlugins: async () => env.sources, listPages: async () => [], listFiles: async () => [] },
 }))
+vi.mock('../../services/backendService', () => ({ postMuseFeedback: vi.fn(async () => ({ ok: true })) }))
 
 const { usePluginStore, agentSpaceSourceUrl } = await import('./pluginStore')
+const { syncAgentSpace, noteAgentSpaceRuntimeError, __resetAgentSpaceSync } = await import('../../builtins/agentSpaceSync')
+const posted = vi.mocked((await import('../../services/backendService')).postMuseFeedback)
 
 const source = (over: Partial<ExternalPluginSource> & { id: string }): ExternalPluginSource => ({
   name: over.id, version: '0.0.1', apiVersion: 1, code: '', ...over,
 })
-type Probe = { __agentThrow?: () => void; __plainThrow?: () => void }
+type Probe = { __agentThrow?: (k?: string) => void; __plainThrow?: () => void }
 const g = globalThis as unknown as Probe
 const stackOf = (fn: (() => void) | undefined): string => {
   try { fn?.() } catch (e) { return String((e as Error).stack) }
   return ''
 }
+const errorOf = (k: string): unknown => {
+  try { g.__agentThrow?.(k) } catch (e) { return e }
+  throw new Error('fixture did not throw')
+}
+const agentCode = "globalThis.__agentThrow = (k = 'boom') => { null[k] = 1 }"
 
 beforeEach(() => {
   usePluginStore.setState({ plugins: [], activeIds: [], disabledIds: [], disposers: {}, lastSetupError: {}, initialized: false })
+  posted.mockClear()
+  __resetAgentSpaceSync()
   env.sources = []
   delete g.__agentThrow
   delete g.__plainThrow
@@ -33,7 +43,6 @@ beforeEach(() => {
 
 describe('agent Space 的 sourceURL', () => {
   it('栈帧带当前这一版的地址(函数体第 1 行 = 源第 3 行);普通已安装插件不打;重载后序号变、新栈帧用新地址', async () => {
-    const agentCode = 'globalThis.__agentThrow = () => { null.boom = 1 }'
     env.sources = [
       source({ id: 'agent-muse', agent: 'muse', code: agentCode }),
       source({ id: 'plain', code: 'globalThis.__plainThrow = () => { null.boom = 1 }' }),
@@ -50,5 +59,45 @@ describe('agent Space 的 sourceURL', () => {
     const url2 = agentSpaceSourceUrl('agent-muse')
     expect(url2).not.toBe(url1)
     expect(stackOf(g.__agentThrow)).toContain(`${url2}:3:`)
+
+    env.sources = [] // 来源没了 → 拆掉:不再有「正在运行的那一版」
+    await usePluginStore.getState().reloadOne('agent-muse')
+    expect(agentSpaceSourceUrl('agent-muse')).toBeNull()
+  })
+
+  it('回写只认正在运行的那一版:同一条只报一次、每版最多 3 条、POST 失败撤销标记;重载后旧版漏清的定时器、拆掉后的残留都不报', async () => {
+    env.sources = [source({ id: 'agent-muse', agent: 'muse', code: agentCode })]
+    await usePluginStore.getState().loadExternal()
+    const oldThrow = errorOf('before-cfg')
+    noteAgentSpaceRuntimeError(oldThrow)
+    expect(posted).not.toHaveBeenCalled() // 还没见过 Muse 的 cfg(Muse 界面没开过):不报
+    void syncAgentSpace({} as never, 'muse', undefined) // 只为记下 cfg(没有戳 → 不重载)
+    const a = errorOf('a')
+    noteAgentSpaceRuntimeError(a)
+    noteAgentSpaceRuntimeError(a) // 定时器里反复抛同一条
+    expect(posted).toHaveBeenCalledTimes(1)
+    expect(posted.mock.calls[0][1]).toMatch(/went unhandled in your Space after it loaded \(main\.js line 1\): TypeError: Cannot set properties of null \(setting 'a'\)/)
+    posted.mockRejectedValueOnce(new Error('engine down'))
+    const b = errorOf('b')
+    noteAgentSpaceRuntimeError(b)
+    await new Promise((r) => setTimeout(r, 0))
+    noteAgentSpaceRuntimeError(b) // POST 失败那次撤销了标记,再报一次
+    noteAgentSpaceRuntimeError(errorOf('c'))
+    noteAgentSpaceRuntimeError(errorOf('d')) // 上限 3(a、b、c):d 不报
+    expect(posted.mock.calls.map((c) => String(c[1]).match(/setting '(\w)'/)?.[1])).toEqual(['a', 'b', 'b', 'c'])
+
+    const leaked = g.__agentThrow // 旧版的函数(比如漏清的定时器)重载后还在
+    env.sources = [source({ id: 'agent-muse', agent: 'muse', code: `${agentCode}\n// v2` })]
+    await usePluginStore.getState().reloadOne('agent-muse')
+    noteAgentSpaceRuntimeError((() => { try { leaked?.('old') } catch (e) { return e } })())
+    expect(posted).toHaveBeenCalledTimes(4) // 旧版的不算新版的
+    noteAgentSpaceRuntimeError(errorOf('new')) // 新版自己的:换版重新计
+    expect(posted).toHaveBeenCalledTimes(5)
+
+    const lastRun = g.__agentThrow // 拆掉前最后在跑的这一版(v2)的函数
+    env.sources = []
+    await usePluginStore.getState().reloadOne('agent-muse') // 拆掉了:连它自己的残留也不报
+    noteAgentSpaceRuntimeError((() => { try { lastRun?.('gone') } catch (e) { return e } })())
+    expect(posted).toHaveBeenCalledTimes(5)
   })
 })
