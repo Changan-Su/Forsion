@@ -2013,7 +2013,11 @@ app.whenReady().then(async () => {
     keepAwake.report(id, Number.isSafeInteger(count) && (count as number) > 0)
   })
   // Windows 在用户主动睡眠时终止电源请求,唤醒后手里的 id 已失效 → 重新申请(macOS 断言跨睡眠保留,重申无害)。
-  powerMonitor.on('resume', () => keepAwake.rearm())
+  // 设备互联通道:合盖期间的出站长连多半已是半开连接(不报错也收不到东西)→ 唤醒即重拨,别等 45s 读看门狗。
+  powerMonitor.on('resume', () => {
+    keepAwake.rearm()
+    unitHost?.reconnect('resume')
+  })
 
   ipcMain.handle('config:get', () => effectiveConfig())
   ipcMain.handle('config:set', async (_e, patch: Partial<TanguStoredConfig>) => {
