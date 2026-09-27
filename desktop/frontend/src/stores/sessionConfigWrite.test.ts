@@ -51,6 +51,12 @@ describe('会话配置 setter 只发自己的键', () => {
     expect(useApp.getState().configBySession.s1.ultra).toBeUndefined()
   })
 
+  it('切 Chat / Work:草稿里的档位与 Ultra 一起丢掉(留着的 ultra:false 会挡住目标槽的 lastUltra)', () => {
+    useApp.setState({ newChatCfg: { thinkingLevel: 'high', ultra: false, agentSlug: 'a' } })
+    useApp.getState().setSessionMode('work')
+    expect(useApp.getState().newChatCfg).toEqual({ agentSlug: 'a' })
+  })
+
   it('切外部引擎:连带清掉的键以 undefined 送去(上线为 null = 删键),本地同步清掉', () => {
     useApp.getState().setSessionEngine('codex', 's1')
     expect(sent()).toEqual([['s1', { engineId: 'codex', engineModelId: undefined, groupChat: false, groupAgents: undefined, agentSlug: undefined }]])

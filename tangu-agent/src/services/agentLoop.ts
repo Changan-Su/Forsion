@@ -845,7 +845,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 未显式设置的会话默认思考·中(2026-07-16 产品拍板);显式 'off' 仍关。UI 显示默认须同步(ModelPill)。
   // Ultra(会话键 ultra:true,对标 Codex Ultra 档)⇒ 思考恒 max,ultra 开着时存值里的 thinkingLevel 不看 ——
   // 换 Agent 时桌面会单独 PATCH thinkingLevel,「ultra + high」这种陈旧组合在这里自动失效。主动委派段见系统提示末尾。
-  const ultraRequested = agentConfig.ultra === true;
+  // 团队模式不吃 Ultra:成员各跑各的档,父 run 只做编排(桌面入口也不给,这里是引擎侧的同一口径)。
+  const ultraRequested = agentConfig.ultra === true && !agentConfig.groupChat;
   const thinkingLevel: ThinkingLevel = ultraRequested ? 'max' : (agentConfig.thinkingLevel || 'medium');
   const attachments = input.attachments || [];
   let imageInputs = normalizeImageAttachments(attachments);
@@ -1398,7 +1399,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           'A good plan names concrete files and verifiable steps (e.g. "add retry with backoff to fetchUser() in src/api/user.ts; verify via test/api.test.ts") — not a restatement of the task ("implement the feature, then test it").',
       );
     }
-    // Ultra 主动委派段(同 planMode:run 级、追加在末尾,只在开关那一刻动前缀)。三道闸缺一不可:会话开了 ultra;
+    // Ultra 主动委派段(与 planMode 同位:稳定段的末尾,变体 S 的易变记忆仍在它之后 —— 稳定的放前面对缓存更好;
+    // run 级,只在开关那一刻动前缀)。三道闸缺一不可:会话开了 ultra;
     // 不是 Muse / 自动化这类无人值守 run(抄了会话配置也不许无人看管地扇出 max 档子代理);本 run 真拿得到 delegate ——
     // hostExec / chat 正向面 / toolsMode 黑白名单 / 子代理深度都在 resolveTools 一处判,这里不重抄条件。
     if (ultraRequested && !deferBypass && resolveTools(profile, toolGateCtx as ToolContext).has('delegate')) {
@@ -2070,6 +2072,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     };
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       if (ac.signal.aborted) throw new AbortLikeError();
+      // 子代理(delegate)的花销在工具批里记进来:它们把 run 推过上限时,别再先发一次模型请求才收尾(creview 09-27 P1)。
+      // 主循环自己的越限仍在下方记账处判(那一刻才知道本轮的价)。
+      if (delegatedCost > 0 && isOverRunCost(costTotal + delegatedCost, runCostLimit)) {
+        const detail = `本 run 累计成本约 ${(costTotal + delegatedCost).toFixed(2)} 点，超过上限 ${runCostLimit} 点，已停止。可调 TANGU_MAX_RUN_COST（0 关闭）。`;
+        await publish(runId, 'error', { error: 'run_cost_exceeded', detail });
+        await drain(runId);
+        await updateRunStatus(runId, 'failed', { error: 'run_cost_exceeded', tokensTotal });
+        return;
+      }
       // load_tools 解锁后的 defs 重算(未解锁迭代零开销;解锁项按 registry 规则追加在内置 defs 末尾)
       if (toolDefsDirty) {
         toolDefs = getToolDefinitions(toolCtx);

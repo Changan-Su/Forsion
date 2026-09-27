@@ -1500,19 +1500,24 @@ try {
     const TASK = 'ultra/ 目录下有 billing、dates、strings 三个互不相关的模块,每个模块里有 5 个版本文件,其中恰好一个版本的主函数有 bug。'
       + '请分别查清每个模块是哪个文件、哪一行、为什么错、怎么改,最后汇总成一张表。只读,不要修改任何文件。';
     const delegates = (ev) => ev.toolCalls.filter((n) => n === 'delegate').length;
-    // 真并行:存在两个子代理,一个的 start 早于另一个的 done 且另一个的 start 早于它的 done
+    // 真并行:存在两个**正常收尾**的子代理,区间交叠。缺 done 事件 / 报错收尾的不算(否则 end=∞ 也能凑出交叠,creview 09-27)。
     const overlapped = (ev) => {
-      const spans = ev.subStarts.map((st) => ({ st: st.at, end: ev.subDones.find((d) => d.subId === st.subId)?.at ?? Infinity }));
+      const spans = ev.subStarts.flatMap((st) => {
+        const d = ev.subDones.find((x) => x.subId === st.subId);
+        return d && !d.error ? [{ st: st.at, end: d.at }] : [];
+      });
       return spans.some((a, i) => spans.some((b, j) => i !== j && a.st < b.end && b.st < a.end));
     };
     const ctxInfo = (ev) => ev.statuses.find((x) => x.phase === 'context_info') || {};
     const allMods = (text) => ['billing', 'dates', 'strings'].every((m) => text.includes(m));
-    const found3 = (text) => ['_v3'].every((v) => (text.match(new RegExp(v, 'g')) || []).length >= 3);
+    // 逐模块点名那个坏文件(只查模块名的话,错文件 / 错修法也能过)
+    const found3 = (text) => ['sumLineItems_v3', 'isWeekend_v3', 'capitalize_v3'].every((f) => text.includes(f));
 
-    const evUltra = await run(`live-ultra-on-${Date.now()}`, TASK, 420_000, { ultra: true, thinkingLevel: 'max', debugSystemPrompt: true });
+    // 存值故意给 high:证的是引擎「ultra ⇒ 请求档恒 max」,而不是客户端恰好发了 max
+    const evUltra = await run(`live-ultra-on-${Date.now()}`, TASK, 420_000, { ultra: true, thinkingLevel: 'high', debugSystemPrompt: true });
     const sysHas = (ev) => (ev.systemPrompt || '').includes('## Ultra Effort');
     const okUltra = !evUltra.error && sysHas(evUltra) && ctxInfo(evUltra).thinkingRequested === 'max'
-      && delegates(evUltra) >= 2 && evUltra.subStarts.length >= 2 && overlapped(evUltra) && allMods(evUltra.content);
+      && delegates(evUltra) >= 2 && evUltra.subStarts.length >= 2 && overlapped(evUltra) && allMods(evUltra.content) && found3(evUltra.content);
 
     const evTrivial = await run(`live-ultra-trivial-${Date.now()}`, '法国的首都是哪座城市?', 180_000, { ultra: true, thinkingLevel: 'max', debugSystemPrompt: true });
     const okTrivial = !evTrivial.error && sysHas(evTrivial) && delegates(evTrivial) === 0 && /巴黎|Paris/i.test(evTrivial.content);
@@ -1523,7 +1528,7 @@ try {
     const fmt = (ev) => `delegate ×${delegates(ev)};子代理 ${ev.subStarts.length} 个${ev.subStarts.length >= 2 ? (overlapped(ev) ? '(区间交叠=真并行)' : '(没有交叠=串行)') : ''};请求档 ${ctxInfo(ev).thinkingRequested || '?'}→${ctxInfo(ev).thinkingEffective || '?'};墙钟 ${sec(ev.wallMs)}${ev.error ? ';' + ev.error : ''}`;
     return {
       ok: okUltra && okTrivial && okPlain,
-      detail: `【Ultra】${fmt(evUltra)};Ultra 段 ${sysHas(evUltra) ? '在' : '缺!'};三模块 ${allMods(evUltra.content) ? '都报到' : '有漏'}${found3(evUltra.content) ? '(三处 _v3 都点名)' : ''}`
+      detail: `【Ultra(存值 high)】${fmt(evUltra)};Ultra 段 ${sysHas(evUltra) ? '在' : '缺!'};三模块 ${allMods(evUltra.content) ? '都报到' : '有漏'};坏文件 ${found3(evUltra.content) ? '三个都点对' : '没点全!'}`
         + ` 【琐碎题】${fmt(evTrivial)};答对 ${/巴黎|Paris/i.test(evTrivial.content) ? '是' : '否'}`
         + ` 【对照·不开 Ultra】${fmt(evPlain)};Ultra 段 ${sysHas(evPlain) ? '误注入!' : evPlain.systemPrompt === null ? '没拿到系统提示(debugSystemPrompt 失效)' : '无'}`,
       output: `【① Ultra】父工具序列:${evUltra.toolCalls.join(' → ') || '(无)'}\n子代理:${JSON.stringify(evUltra.subStarts.map((x) => ({ id: x.subId.slice(0, 6), at: x.at })))} / 收尾:${JSON.stringify(evUltra.subDones.map((x) => ({ id: x.subId.slice(0, 6), at: x.at })))}\n${evUltra.content}\n\n`

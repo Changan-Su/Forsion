@@ -445,6 +445,9 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
       cacheKey: `${parentCtx.sessionId}:sub:${subId}`,
     });
 
+    // 组 payload 是异步的,这段时间并行的兄弟子代理可能已把 run 推过上限:真发请求前再查一次(已在飞的请求只能让它跑完,
+    // 所以这是防失控的软上限,不是逐点预留的硬额度)。
+    if (parentCtx.runCostExceeded?.()) { overBudget = true; break; }
     const res = await llm.streamProviderCompletion({
       apiKey,
       baseUrl,

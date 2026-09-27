@@ -5,8 +5,8 @@
  *   ① ultra ⇒ 系统提示末尾带 Ultra 段、请求档恒 max(存值 high 也不看);
  *   ② 负对照:不开 ultra / chat 预设(没有 delegate)/ Muse 无人值守 / toolsMode 拒掉 delegate → 都不注入;
  *      云端形态(没有 hostExec)在 registry 层就拿不到 delegate;
- *   ③ 成本闸:子代理(noopBilling)每轮的计价记进父 run —— 同一脚本在改动前是 done,现在按 run_cost_exceeded 收尾;
- *      上限 0 = 关闭,照旧 done;子代理越限前自己停(调模型之前查,不是烧完才查)。
+ *   ③ 成本闸:子代理(noopBilling)每轮的计价记进父 run —— 同一脚本在改动前是 done,现在按 run_cost_exceeded 收尾,
+ *      且子代理把 run 推过上限后父 run 不再多调一次模型;上限 0 = 关闭,照旧 done;子代理越限前自己停(调模型之前查)。
  */
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -166,13 +166,14 @@ describe('子代理计入 run 成本闸(TANGU_MAX_RUN_COST)', () => {
     };
   };
 
-  it('主 2 点 + 子代理 2 点 = 4 > 上限 3 → run_cost_exceeded(不记子代理时只有 2 点,会是 done)', async () => {
+  it('主 1 点 + 子代理 2 点 = 3 > 上限 2.5 → run_cost_exceeded,且父 run 不再多调一次模型(不记子代理时主 2 点,会是 done)', async () => {
     await setupLoop();
     costPerCall = 1;
-    process.env.TANGU_MAX_RUN_COST = '3';
+    process.env.TANGU_MAX_RUN_COST = '2.5';
     fanOutScript();
     const r = await runOnce({});
     expect(payloads.filter(isSub)).toHaveLength(2); // 两个子代理确实各跑了一轮
+    expect(mainPayloads()).toHaveLength(1); // 工具批回来即判越限,不先发第二次主请求(creview 09-27 P1)
     expect(r.status).toBe('failed');
     expect(JSON.stringify(r)).toContain('run_cost_exceeded');
   });
@@ -199,10 +200,11 @@ describe('子代理计入 run 成本闸(TANGU_MAX_RUN_COST)', () => {
     const r = await runOnce({});
     // 主首轮 1 点;子代理 1→2→3 点各调一次,第 4 次前 1+3=4 > 3.5 停下。
     expect(payloads.filter(isSub)).toHaveLength(3);
-    const lastMain = mainPayloads()[mainPayloads().length - 1];
-    const toolMsg = (lastMain.messages || []).find((m: any) => m.role === 'tool');
-    expect(String(toolMsg?.content || '')).toContain('reached its cost ceiling');
-    expect(r.status).toBe('failed'); // 主 loop 第二轮记账后越限收尾
+    const results = await query<any[]>(`SELECT payload FROM agent_run_events WHERE run_id = ? AND type = 'tool_result'`, [r.id]);
+    const delegated = results.map((x) => (typeof x.payload === 'string' ? JSON.parse(x.payload) : x.payload)).find((p) => p?.name === 'delegate');
+    expect(String(delegated?.result || '')).toContain('reached its cost ceiling');
+    expect(mainPayloads()).toHaveLength(1); // 父 run 在下一次主请求前就收尾
+    expect(r.status).toBe('failed');
   });
 
   it('exhaustedReport:越限停下的报告即使没有任何工具记录也说明原因', () => {

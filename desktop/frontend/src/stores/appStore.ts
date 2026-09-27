@@ -15,7 +15,7 @@ import type { ProjectSettings,
   DefaultModelSlot, TeamDef } from '../types'
 import { DEFAULT_CLOUD_PROJECT, DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, cloudProjectKey, isIndependentOrbitConfig, isTeamImageAvatar, sessionWorkspaceKey, SHOW_SYSTEM_PROMPT_KEY, THINKING_LEVELS } from '../types'
 import * as api from '../services/backendService'
-import { isProjectWorkspace, newSessionConfig, projectDefaultsForNewSession } from './projectSettings'
+import { isProjectWorkspace, newSessionConfig, projectDefaultsForNewSession, settleUltra } from './projectSettings'
 import { effectiveSessionMode, type SessionMode } from '../views/sessionMode'
 import { abortRunAndWait, cancelSteer, currentPlatform, expediteSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents, testConnection } from '../services/agentRunService'
 import { speakMessage, stopSpeaking, ttsState } from '../services/ttsService'
@@ -2215,9 +2215,9 @@ export const useApp = create<AppState>((set, get) => ({
       const sticky = stickyDefaults(get().desktopConfig, !!path, preset)
       // 项目默认项(PROJECT 详情里定的,本机):只对用户自己添加的本地项目生效,夹在「上次用的档位」之上;等一次本地 GET 无妨,这里是按钮点击。
       const projectDefaults = path && isProjectWorkspace(ws) ? projectDefaultsForNewSession(await get().ensureProjectSettings(path).catch(() => null), get().teams) : { config: {} }
-      const init: AgentConfig = withAmadeusWorkspace(applyPreset(path
+      const init: AgentConfig = settleUltra(withAmadeusWorkspace(applyPreset(path
         ? { ...newSessionConfig(sticky, projectDefaults.config), execMode: 'host', cwd: path }
-        : { ...sticky, execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot())
+        : { ...sticky, execMode: 'sandbox', ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot()))
       // Chat 不提供 Agent 选择器：创建时就把当下默认 Agent 固化为会话事实，避免空会话期间
       // 全局默认异步刷新后首轮“换人”。Work 仍保留空态选择器，按原逻辑到发送时固化。
       if (preset === 'chat' && get().defaultAgentSlug) init.agentSlug = get().defaultAgentSlug
@@ -2521,9 +2521,9 @@ export const useApp = create<AppState>((set, get) => ({
       // 初始配置先算好、随建会话请求原子落库(老引擎忽略 agent_config → 回来为空 → 补 PUT;同 createInWorkspace)。
       // 显式选择(newChatCfg)> 项目默认 > 上次用的档位(newSessionConfig)。
       const draft = newSessionConfig(stickyDefaults(get().desktopConfig, !!path, preset), projectDefaults.config, get().newChatCfg)
-      const init: AgentConfig = withAmadeusWorkspace(applyPreset(path
+      const init: AgentConfig = settleUltra(withAmadeusWorkspace(applyPreset(path
         ? { ...draft, execMode: 'host', cwd: path }
-        : { ...draft, execMode: 'sandbox', cwd: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot())
+        : { ...draft, execMode: 'sandbox', cwd: undefined, ...(cloudProject ? { workspaceProject: cloudProject } : {}) }, preset), activeAmadeusRoot()))
       // 新会话生效的 agent 当场固化(默认兜底也算):不落库的话后续轮次会随易变的
       // defaultAgentSlug 重新解析,同一会话可能「换人」。
       if (!init.agentSlug && get().defaultAgentSlug) init.agentSlug = get().defaultAgentSlug
@@ -2578,6 +2578,8 @@ export const useApp = create<AppState>((set, get) => ({
     if (mentions?.priorityAgent) agentConfig.priorityAgent = mentions.priorityAgent
     if (mentions?.mentionAgents?.length) agentConfig.mentionedAgentSlugs = mentions.mentionAgents
     if (mentions?.mentionProjects?.length) agentConfig.mentionedProjects = mentions.mentionProjects // 私聊里 @项目派遣(run 事实,不落库)
+    // Ultra 的资格按本条 run 的实际配置结算(换过引擎 / 进了团队模式 / 档位不是 max 的会话不带它),与药丸显示同一口径。
+    agentConfig = settleUltra(agentConfig)
     if (!agentConfig.imageModelId && get().cfg.imageModelId) agentConfig.imageModelId = get().cfg.imageModelId
     // 辅助视觉模型:本端刚改完就生效(不必等引擎那边 config.json 的 60s 槽缓存过期)。
     if (!agentConfig.visionModelId && get().cfg.visionModelId) agentConfig.visionModelId = get().cfg.visionModelId
@@ -3107,7 +3109,7 @@ export const useApp = create<AppState>((set, get) => ({
 
   selectNewChatAgent: (slug) => {
     const def = slug ? get().agentDefs.find((a) => a.slug === slug) : null
-    set((s) => ({ newChatCfg: { ...s.newChatCfg, agentSlug: slug || undefined, ...(def?.thinkingLevel ? { thinkingLevel: def.thinkingLevel } : {}) } }))
+    set((s) => ({ newChatCfg: { ...s.newChatCfg, agentSlug: slug || undefined, ...(def?.thinkingLevel ? { thinkingLevel: def.thinkingLevel, ...(def.thinkingLevel !== 'max' ? { ultra: false } : {}) } : {}) } }))
     if (def?.model) set({ newChatModel: def.model })
   },
 
@@ -3118,7 +3120,8 @@ export const useApp = create<AppState>((set, get) => ({
     // chat 无项目 → 空态的工作区选择清空(选择器随之隐藏);work 从无根退回端默认工作区。
     // 思考档按 preset 分槽(D36):切模式就丢掉草稿里的档位,让目标槽的缺省生效(不能写 undefined,展开会把 sticky 压掉)。
     saveSessionMode(p)
-    const { thinkingLevel: _drop, ...rest } = s.newChatCfg
+    // Ultra 跟着档位一起丢:留着的 ultra:false 会挡住目标槽的 lastUltra(creview 09-27)。
+    const { thinkingLevel: _drop, ultra: _dropUltra, ...rest } = s.newChatCfg
     return {
       sessionMode: p,
       newChatWs: p === 'chat' || s.newChatWs?.kind === 'rootless' ? null : s.newChatWs,

@@ -24,6 +24,7 @@ import { EmptyState2 } from './chat2/EmptyState2'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
 import { useApp, stickyDefaults, activeChatModelId, withAmadeusWorkspace, applyPreset, newSessionPreset } from '../stores/appStore'
+import { settleUltra } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from './chat2/chatDragRef'
 import { useWorkspace, useSpaceStore, UI_MODE, Skeleton } from '@lcl/engine'
@@ -200,12 +201,13 @@ export function ChatView({ leaf, params }: ViewProps) {
         // 模式先于工作区:chat 会话恒 sandbox + 无根(方案 §2.1 接缝 0),与 send() 的建会话规则同源(newSessionPreset)。
         const preset = newSessionPreset(s.sessionMode, s.newChatWs, currentPlatform())
         const cloud = preset === 'chat' || s.newChatWs?.kind === 'cloud' || s.newChatWs?.kind === 'rootless'
-        return applyPreset({
+        // settleUltra:与建会话同一口径结算 Ultra(草稿换了云端 / 引擎 / 团队,或 Agent 自带非 max 档,药丸就不显示 Ultra)
+        return settleUltra(applyPreset({
           execMode: cloud ? 'sandbox' : 'host',
           ...stickyDefaults(s.desktopConfig, !cloud, preset),
           cwd: cloud ? undefined : (s.newChatWs?.path || undefined),
           ...s.newChatCfg,
-        }, preset) as AgentConfig
+        }, preset) as AgentConfig)
       })(), amadeusRoot)
   // 团队成员会话(子聊天里直接追问):审批闸只听团队会话此刻的档(引擎 agentLoop.approvalModeSessionId),
   // 成员会话自己的存值不算数 → 药丸显示团队档、改也改团队会话(与团队主区药丸同一条写路径)。

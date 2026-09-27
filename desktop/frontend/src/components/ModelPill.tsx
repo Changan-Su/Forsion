@@ -8,7 +8,7 @@ import { ModelMetadata } from './ModelMetadata'
  * 高级区复用 config.json 的默认辅助 / 生图 / 识图模型槽；Effort 与模型一样由 store 记住，
  * 在后续会话继续继承。外部 ACP 引擎没有 Tangu 推理档与辅助模型时，保留单独的模型选择行。
  */
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronRight, Bot, Search } from 'lucide-react'
 import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, OverlayAt } from '@lcl/engine'
@@ -272,6 +272,9 @@ export const ModelPill: React.FC<{
     if (isUltra && !prevUltra.current && open) setBurst((n) => n + 1)
     prevUltra.current = isUltra
   }, [isUltra, open])
+  // 动画没放完就关了菜单:元素卸载、onAnimationEnd 不会来,不清的话重开菜单会重播(creview 09-27)
+  useEffect(() => { if (!open) setBurst(0) }, [open])
+  const ultraNoteId = useId()
   // 能不能写由引擎说了算(桌面连外部 / 云端 worker 那边 PUT 404):别按宿主猜
   const ctx = onContextWindowChange && modelId && modelsResponse?.modelOverridesWritable
     ? contextLimitOptions(modelsResponse.models.find((m) => m.id === modelId), modelsResponse.contextWindowCap)
@@ -455,7 +458,9 @@ export const ModelPill: React.FC<{
                   step={1}
                   value={effortIndex}
                   aria-label={t('pill.reasoningStrength')}
-                  aria-valuetext={`${effortText}${supportedThinking && !supportedThinking.includes(effLevel) ? ` ${t('pill.thinkUnsupported')}` : ''}`}
+                  // Ultra 格念完整说明(含额度提示):title 读屏不可靠,可见说明行另经 aria-describedby 关联
+                  aria-valuetext={isUltra ? t('pill.ultraTitle') : `${effortText}${supportedThinking && !supportedThinking.includes(effLevel) ? ` ${t('pill.thinkUnsupported')}` : ''}`}
+                  aria-describedby={isUltra ? ultraNoteId : undefined}
                   title={isUltra ? t('pill.ultraTitle') : t(thinkingLabelKey(effLevel))}
                   onChange={(e) => {
                     const stop = effortStopAt(Number(e.currentTarget.value), allowUltra)
@@ -464,7 +469,7 @@ export const ModelPill: React.FC<{
                   }}
                 />
               </div>
-              {isUltra && <div className="cm-effort-note">{t('pill.ultraNote')}</div>}
+              {isUltra && <div id={ultraNoteId} className="cm-effort-note">{t('pill.ultraNote')}</div>}
             </div>
           )}
 

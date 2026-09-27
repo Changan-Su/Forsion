@@ -3,7 +3,7 @@
  * 钉的是单测够不着的接线与观感:
  *   U1 本机 work 会话:滑杆第 8 格是 Ultra;U2 sandbox 会话:没有这一格(Ultra 入口只给 host 会话,云端 / chat 都是 sandbox)
  *   U3 拖到 Ultra → PATCH 带 { thinkingLevel:'max', ultra:true },药丸与滑杆换 Ultra 皮,冲击波放一次
- *   U4 关掉菜单再开:冲击波不再放(只在「刚切进来」那一下)
+ *   U4 关掉菜单再开:冲击波不再放(只在「刚切进来」那一下);U4b 切进来 0.1s 内就关菜单(动画没放完)再开也不重播
  *   U5 发一句 → run 的 agent_config 带 ultra:true + max(引擎就靠这个键)
  *   U6 显式改回「深」→ PATCH 把 ultra 删掉(null),药丸回普通皮;U7 `/think ultra` 键盘路径能切回 Ultra
  * 截图落 ULTRA_SHOT_DIR(缺省 /tmp/ultra-effort-shots):药丸 + 展开的滑杆,自己看。
@@ -115,12 +115,14 @@ async function main() {
       note: document.querySelector('.cm-effort-note')?.textContent || '',
       streaks: document.querySelectorAll('.cm-effort-streaks i').length,
       burstLeft: document.querySelectorAll('.cm-effort-burst').length,
+      describedBy: (() => { const el = document.querySelector('.cm-effort-input'); const id = el?.getAttribute('aria-describedby'); return !!id && document.getElementById(id)?.textContent || '' })(),
     }))
     const patch = lastPatch(stub, 'local')
     check('U3a PATCH 带 { thinkingLevel:max, ultra:true }', patch?.thinkingLevel === 'max' && patch?.ultra === true, JSON.stringify(patch))
     check('U3b 滑杆与药丸换 Ultra 皮(值「Ultra」、四路光流、说明行)',
       /is-ultra/.test(ui.effort) && ui.value.trim() === 'Ultra' && ui.streaks === 4 && ui.note.length > 0 && /is-ultra/.test(ui.pill), JSON.stringify(ui))
     check('U3c 切进 Ultra 的那一下放了冲击波,动画完就卸载', burstSeen === 1 && ui.burstLeft === 0, `seen=${burstSeen} left=${ui.burstLeft}`)
+    check('U3d 滑杆经 aria-describedby 关联说明行(读屏念得到 Ultra 的作用)', ui.describedBy.length > 0 && ui.describedBy === ui.note, JSON.stringify(ui.describedBy))
     await win.screenshot({ path: path.join(SHOTS, 'ultra-menu.png') })
 
     // ── U4:关了再开,不再放冲击波
@@ -130,6 +132,19 @@ async function main() {
     await win.waitForTimeout(60)
     const burstAgain = await win.locator('.cm-effort-burst').count().catch(() => 0)
     check('U4 重开菜单不再放冲击波(只在刚切进来时放)', burstAgain === 0, `count=${burstAgain}`)
+    // U4b:先退回 Max 再切进 Ultra,冲击波还在放(<0.7s)就关菜单 → 重开不许重播
+    const input2 = win.locator('.cm-effort-input').first()
+    await input2.focus()
+    await win.keyboard.press('ArrowLeft')
+    await win.waitForTimeout(250)
+    await win.keyboard.press('End')
+    await win.waitForTimeout(60)
+    const midBurst = await win.locator('.cm-effort-burst').count().catch(() => 0)
+    await closePill(win)
+    await openPill(win)
+    await win.waitForTimeout(60)
+    const replay = await win.locator('.cm-effort-burst').count().catch(() => 0)
+    check('U4b 动画没放完就关菜单,重开不重播', midBurst === 1 && replay === 0, `mid=${midBurst} replay=${replay}`)
     await closePill(win)
 
     // ── U5:发一句,run 带 ultra

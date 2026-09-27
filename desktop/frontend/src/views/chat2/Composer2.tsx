@@ -569,7 +569,8 @@ export const Composer2: React.FC<{
   const thinkingLevel = sessionThinkingLevel || (groupChat ? undefined : agentDef?.thinkingLevel) || undefined
   // Ultra 入口只给真拿得到 delegate 的会话:本机(host)、非 chat、非外部引擎、非团队模式(团队成员各跑各的档)。
   const allowUltra = isHost && !isChat && !engineId && !groupChat
-  const ultraOn = allowUltra && !!ultra
+  // 与发送侧 settleUltra 同口径:只跟 max 同在(陈旧的「ultra + 别的档」不显示 Ultra,发送时也不带)
+  const ultraOn = allowUltra && !!ultra && thinkingLevel === 'max'
   // 视口兜底:这些菜单是 absolute-in-relative + 固定宽度,窄屏时仍可能被边缘夹住。
   // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
   const modeFix = useEdgeNudge(openMenu === 'mode', { boundary: '.t2-chat-view' })
@@ -1729,8 +1730,7 @@ export const Composer2: React.FC<{
                 supportedThinking={isEngine ? undefined : models?.find((m) => m.id === modelId)?.thinkingLevels}
                 effectiveThinking={
                   // 只在 requested 与当前选档一致时才显示生效档——刚改档还没跑新 run 时,旧 effective 不对应当前选择
-                  // Ultra 开着时引擎请求档恒 max(存值是什么都不看),比对口径跟着走
-                  isEngine ? undefined : (ctxInfo?.thinkingRequested === (ultra ? 'max' : thinkingLevel || 'medium') ? ctxInfo?.thinkingEffective : undefined)
+                  isEngine ? undefined : (ctxInfo?.thinkingRequested === (thinkingLevel || 'medium') ? ctxInfo?.thinkingEffective : undefined)
                 }
                 modelsResponse={isEngine ? undefined : modelsResponse}
                 defaultModelIds={isEngine ? undefined : defaultModelIds}
