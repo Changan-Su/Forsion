@@ -440,7 +440,8 @@ export async function gateToolCall(
     // 无人值守 run 本就不接管,也就不因此排队审批
     const userBrowser = mode !== 'full-auto' && USER_BROWSER_ACTIONS.has(name) && !ctx.approvalDeferral && await userBrowserBound();
     if (!toolNeedsApproval(name, mode, { userBrowser })) return { action: 'approve' };
-    if (isAlwaysAllowed(ctx.sessionId, name)) return { action: 'approve' };
+    // 改参重闸不走「总允许」捷径:同会话另一张卡刚点了总允许,也不能让这次改过的参数跳过下面的 hook(Codex 09-27 复审)。
+    if (!editedOnCard && isAlwaysAllowed(ctx.sessionId, name)) return { action: 'approve' };
   }
 
   // —— PermissionRequest hook：在弹审批 UI 前问 hook（host-only）。deny → 拒绝；allow → 跳过用户审批直接放行。——
