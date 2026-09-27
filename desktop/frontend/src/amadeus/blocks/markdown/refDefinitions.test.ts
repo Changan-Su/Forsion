@@ -34,6 +34,14 @@ describe('定义行 / 引用式链接逐字往返', () => {
     } finally { await b.destroy() }
   })
 
+  it('相邻几条定义一行一条(硬换行),不挤成一行', async () => {
+    const b = await bootEditor('[1]: http://a.example\n[c]: /c\n')
+    try {
+      const p = b.view.dom.querySelector('p')!
+      expect(p.innerHTML).toMatch(/http:\/\/a\.example<br[^]*?\[c\]: \/c/)
+    } finally { await b.destroy() }
+  })
+
   it('引用照常渲染成链接,对象 attr 不漏进 DOM', async () => {
     const b = await bootEditor('see [a][1]\n\n[1]: http://example.com\n')
     try {

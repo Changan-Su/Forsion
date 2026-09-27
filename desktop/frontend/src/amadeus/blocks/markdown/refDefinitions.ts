@@ -63,9 +63,15 @@ function literalParagraph(defs: MdNode[], parent: MdNode, source: string): MdNod
     raw = defs.map((d) => sliceOf(d, source) ?? rebuild(d)).join('\n')
   }
   raw = raw.replace(/\r\n?/g, '\n')
+  // 一行一个定义:行间用硬换行(渲染成 `<br>`)—— 软换行在笔记里按 CommonMark 渲染成空格,几条定义会挤成一行。
+  const children: MdNode[] = []
+  raw.split('\n').forEach((line, i) => {
+    if (i) children.push({ type: 'break' })
+    if (line) children.push({ type: 'text', value: line })
+  })
   return {
     type: 'paragraph',
-    children: [{ type: 'text', value: raw }],
+    children,
     data: { amadeusRaw: raw },
     ...(start && end ? { position: { start, end } } : {}),
   }
@@ -127,7 +133,7 @@ export function literalizeReferences(tree: MdNode, source: string): void {
 export const refDefinitionsRemark = $remark('amadeusRefDefinitions', () => () =>
   (tree: MdNode, file: MdNode): void => literalizeReferences(tree, String(file?.value ?? '')))
 
-/** 段落正文 ↔ 原文的比较口径:remark-line-break 会吃掉换行前的行尾空白。 */
+/** 段落正文 ↔ 原文的比较口径:行尾空白不计(v3 拆段 / 软换行路径会吃掉它)。 */
 const displayForm = (s: string): string => s.replace(/[\t ]+(?=\n|$)/g, '')
 
 /** 段落是「没被动过的定义原文」→ 返回要原样写回的原文;否则 null(按普通段落写)。 */
@@ -137,7 +143,7 @@ export function pristineRaw(node: PMNode): string | null {
   let plain = true
   node.forEach((c) => {
     if (c.marks.length) plain = false
-    else if (!c.isText && !(c.type.name === 'hardbreak' && c.attrs.isInline && c.attrs.html == null)) plain = false
+    else if (!c.isText && !(c.type.name === 'hardbreak' && c.attrs.html == null)) plain = false
   })
   return plain && displayForm(node.textContent) === displayForm(raw) ? raw : null
 }
