@@ -437,7 +437,7 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     await updateRunStatus(runId, 'done', { result: { content: finalContent } });
     // Historian 从会话解析记忆域；文件同步使用已捕获的展示身份，不能拿共享记忆桶替代。
     // 引擎私聊没有 Tangu 记忆:不跑 Historian(它找不到会话 Agent 会回落默认 Agent,把 Codex/PI 的对话写进 Xyra 的 LOG/MEMORY),也不同步 Agent 文件。
-    if (!engineSolo) void onUserRunDone(sessionId, userId).finally(() => scheduleAgentFilesSync(userId, displayAgentSlug));
+    if (!engineSolo) void onUserRunDone(sessionId, userId, undefined, undefined, !!(remoteOf(run.input) || effectiveRemote({ runId }))).finally(() => scheduleAgentFilesSync(userId, displayAgentSlug));
   } catch (err: any) {
     const aborted = err?.name === 'AbortError' || ac.signal.aborted;
     const status = aborted ? 'aborted' : 'failed';
@@ -1017,7 +1017,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       });
       // 群聊 run 也按轮触发 Historian(标题/LOG 维护)——原先此分支提前 return,群聊会话永远没有标题维护。
       // Historian 内部只数 done run 且有实质增量地板,失败/中止场景自然无害。
-      void onUserRunDone(sessionId, userId, memScopeSlug).finally(() => scheduleAgentFilesSync(userId, activeAgentSlug));
+      void onUserRunDone(sessionId, userId, memScopeSlug, undefined, !!(remote || effectiveRemote({ runId }))).finally(() => scheduleAgentFilesSync(userId, activeAgentSlug));
       return;
     }
 
@@ -1404,7 +1404,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         await drain(runId);
         await publish(runId, 'done', { content: reason });
         await updateRunStatus(runId, 'done', { result: { content: reason } });
-        void onUserRunDone(sessionId, userId, memScopeSlug).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
+        void onUserRunDone(sessionId, userId, memScopeSlug, undefined, !!(remote || effectiveRemote({ runId }))).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
         return;
       }
       const ut = hookContextText(uv);
@@ -2733,7 +2733,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       modelId,
       contextWindow: ctxWindowTokens,
     };
-    void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
+    void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed, !!(remote || effectiveRemote({ runId }))).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
     // 惰性检查点:下个 run 的 hydrate 窗口之外若还有未被摘要覆盖的老行,现在(不占下个 run 首帧)做一份。
     // 登记在飞:下个 run(排队中的可能立刻起跑)hydrate 前先等它,别让窗口起点越过还没落检查点的老行。
     {

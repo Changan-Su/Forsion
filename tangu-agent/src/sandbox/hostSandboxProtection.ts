@@ -1,8 +1,9 @@
 import path from 'node:path';
 import os from 'node:os';
-import { realpathSync, lstatSync, readlinkSync } from 'node:fs';
+import { realpathSync, lstatSync, readlinkSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { configFile, tanguHome, forsionSharedDir, agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
+import { getRawSection } from '../core/config.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../seams/runContext.js';
 
 /** Resolve the nearest existing ancestor too, so a missing config under a home symlink is protected.
@@ -110,7 +111,12 @@ export function credentialPaths(): string[] {
     // 通道令牌(微信 iLink bot token 只存在这里)与 Agent 自带浏览器的登录态(cookie jar)。09-27 终审 P2。
     out.push(path.join(h, 'wechat'), path.join(h, 'browser-use', 'chrome-profile'));
   }
+  // 微信状态目录与 channels/config.wechatStateDir 同一套解析(env > config.json 的 wechat.stateDir > 默认):配置成别处时令牌也在那里。
   if (process.env.TANGU_WECHAT_STATE_DIR) out.push(path.resolve(process.env.TANGU_WECHAT_STATE_DIR));
+  try {
+    const sd = (getRawSection('wechat') as any)?.stateDir;
+    if (typeof sd === 'string' && sd.trim()) out.push(path.resolve(sd.trim()));
+  } catch { /* 读不到配置 = 没配 */ }
   // 桌面 userData(自己的 + 兄弟的):tangu-desktop-config.json(设备通道密钥 / cloudToken)、remotesync(.dev).json、
   // Local Storage / Cookies(登录态)都在里面,整目录收。引擎不知道 Electron 的 userData,但宿主给的 FORSION_AMADEUS_CONFIG
   // 就住在 userData 里(backendManager.amadeusConfigPath),兄弟目录按同一个 appData 父目录推。
@@ -185,6 +191,22 @@ export function pluginSettingsTarget(abs: string): string | null {
   }
   return null;
 }
+/** 现存的插件设置文件(内容搜索打开之前按精确路径排除用;搜索回退扫描只认精确名,不认通配)。上限 2000 条,防病态目录。 */
+export function pluginSettingsFiles(): string[] {
+  const out: string[] = [];
+  const ls = (d: string): string[] => { try { return readdirSync(d); } catch { return []; } };
+  for (const h of tanguHomes()) {
+    const pc = path.join(h, 'plugins-config');
+    for (const id of ls(pc)) { out.push(path.join(pc, id, 'settings.json')); if (out.length > 2000) return out; }
+    const ag = path.join(h, 'agents');
+    for (const slug of ls(ag)) {
+      for (const f of ls(path.join(ag, slug, 'plugins'))) if (f.toLowerCase().endsWith('.json')) out.push(path.join(ag, slug, 'plugins', f));
+      if (out.length > 2000) return out;
+    }
+  }
+  return out;
+}
+
 /** 递归读取的根会不会扫到插件设置:根在 plugins-config 里或是它的祖先、根是某个 Agent 目录本身或其 plugins/ 子树、根是 agents/ 的祖先。
  *  Agent 的 Library(solo 会话的工作目录)不算 —— 别把日常 rg 误伤成要审批。 */
 export function pluginSettingsTreeTouched(abs: string): boolean {
@@ -354,17 +376,19 @@ export function remoteCwdForbidden(p: string): boolean {
 
 /** ~/Library 里用户自己的云端项目目录:网盘挂载(CloudStorage:Dropbox / OneDrive / Google Drive / Box)、iCloud Drive、
  *  以及各 iCloud 应用容器里用户可见的 Documents(如 Obsidian 库)。这些是项目,不是应用配置 —— 远程会话照常可用(09-27 终审 P2)。
- *  应用容器本身(不含 Documents 子树)与 ~/Library 其它部分照旧拒。受保护目录另由上面那条判,不受这个例外影响。 */
+ *  挂载根本身、iCloud 云盘根、应用容器及其 Documents 根照旧拒(整片 = 家目录同类);~/Library 其它部分照旧拒。
+ *  受保护目录另由上面那条判,不受这个例外影响。 */
 function inCloudProjectDir(f: string): boolean {
   const lib = withCanonical([path.join(os.homedir(), 'Library')]);
   const fc = (x: string) => (foldCase ? x.toLowerCase() : x);
   return lib.some((l) => {
     if (!pathWithin(f, l)) return false;
     const parts = path.relative(l, f).split(path.sep).filter(Boolean).map(fc);
-    if (parts[0] === fc('CloudStorage')) return parts.length >= 2;
+    // 只放行挂载 / 云盘**里面的文件夹**,不放行挂载根本身(整个 Dropbox、整个 iCloud 云盘、某应用的整个 Documents 与家目录同理)。
+    if (parts[0] === fc('CloudStorage')) return parts.length >= 3;
     if (parts[0] === fc('Mobile Documents')) {
-      if (parts[1] === fc('com~apple~CloudDocs')) return parts.length >= 2;
-      return parts.length >= 3 && parts[2] === fc('Documents');
+      if (parts[1] === fc('com~apple~CloudDocs')) return parts.length >= 3;
+      return parts.length >= 4 && parts[2] === fc('Documents');
     }
     return false;
   });

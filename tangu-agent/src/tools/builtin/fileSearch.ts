@@ -12,7 +12,7 @@ import { listWorkspaceMetas, readWorkspaceFileRaw, scopeOf } from '../fileWorksp
 import { runBoundedProcess } from '../../utils/boundedProcess.js';
 import { FileSearchWorker, checkSearchAbort, searchAbortError } from './fileSearchWorker.js';
 import path from 'node:path';
-import { canonicalFuturePath, credentialPaths, matchProtected, pathWithin, procCredentialTarget } from '../../sandbox/hostSandboxProtection.js';
+import { canonicalFuturePath, credentialPaths, credentialReadTarget, matchProtected, pathWithin, pluginSettingsFiles } from '../../sandbox/hostSandboxProtection.js';
 import { toolSubprocessEnv } from '../../sandbox/credentialEnv.js';
 
 /**
@@ -23,7 +23,8 @@ import { toolSubprocessEnv } from '../../sandbox/credentialEnv.js';
  * Linux 的 /proc 整棵按凭据目录对待(/proc/self/environ 就是引擎自己的 env;搜 /proc 从来不是正经需求)。
  */
 function credentialExclusions(baseDir: string): string[] | null {
-  const creds = [...credentialPaths(), ...(process.platform === 'linux' ? ['/proc'] : [])];
+  // 插件设置(可含 API key)散在各 Agent 目录下,按现存文件的精确路径加入(09-27 Codex:搜索曾能读出它们)。
+  const creds = [...credentialPaths(), ...pluginSettingsFiles(), ...(process.platform === 'linux' ? ['/proc'] : [])];
   const bases = [...new Set([path.resolve(baseDir), canonicalFuturePath(baseDir)])];
   if (bases.some((b) => matchProtected(b, creds))) return null;
   const rels = new Set<string>();
@@ -40,10 +41,9 @@ const CREDENTIAL_SEARCH_DENIED = 'Error: Access denied: this directory holds pro
 
 /** 第二道:结果行里若仍出现凭据文件(硬链接 / 大小写别名等),整行丢掉。 */
 function dropCredentialLines(text: string, baseDir: string): string {
-  const creds = credentialPaths();
   return text.split('\n').filter((line) => {
     const m = /^(.*?):\d+:/.exec(line);
-    return !m || !(matchProtected(path.resolve(baseDir, m[1]), creds) || procCredentialTarget(path.resolve(baseDir, m[1])));
+    return !m || !credentialReadTarget(path.resolve(baseDir, m[1]));
   }).join('\n');
 }
 
@@ -246,8 +246,7 @@ export const fileSearchProvider: ToolProvider = {
           if (!baseDir) return await cloudSearch(ctx, worker);
           const result = await worker.run<{ hits: SearchHit[]; capped: boolean }>({ type: 'scan', base: baseDir, exclude });
           // 同 dropCredentialLines:凭据文件的命中行不出工具结果(C4)。云端 / 会话工作区里没有它们,照样过一遍无害。
-          const creds = credentialPaths();
-          return formatHits(result.hits.filter((h) => !matchProtected(path.resolve(baseDir, h.file), creds)), result.capped);
+          return formatHits(result.hits.filter((h) => !credentialReadTarget(path.resolve(baseDir, h.file))), result.capped);
         } finally { await worker.dispose(); }
       }),
     },

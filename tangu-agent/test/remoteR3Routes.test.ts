@@ -358,6 +358,9 @@ describe('E11 C8 加固 + 派生项目会话', () => {
     ]) expect(remoteCwdForbidden(p), p).toBe(false);
     for (const p of [
       join(lib, 'CloudStorage'), join(lib, 'Mobile Documents'), join(lib, 'Mobile Documents', 'iCloud~md~obsidian'),
+      // 挂载 / 云盘的根本身不行(整片,与家目录同类),里面的文件夹才行
+      join(lib, 'CloudStorage', 'Dropbox'), join(lib, 'Mobile Documents', 'com~apple~CloudDocs'),
+      join(lib, 'Mobile Documents', 'iCloud~md~obsidian', 'Documents'),
       join(lib, 'Mobile Documents', 'iCloud~md~obsidian', 'Library'), chrome,
     ]) expect(remoteCwdForbidden(p), p).toBe(true);
   });

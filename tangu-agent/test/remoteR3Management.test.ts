@@ -31,7 +31,6 @@ import { manageScheduleProvider } from '../src/tools/builtin/manageSchedule.js';
 import { manageAutomationProvider } from '../src/tools/builtin/manageAutomation.js';
 import { manageHarnessProvider } from '../src/tools/builtin/manageHarness.js';
 import { memoryLogProvider } from '../src/tools/builtin/memoryLog.js';
-import { roundFromRemote } from '../src/services/localHistorian.js';
 import { enterRunContext } from '../src/seams/runContext.js';
 import type { ToolCall } from '../src/core/types.js';
 import type { ToolContext } from '../src/tools/toolTypes.js';
@@ -237,18 +236,6 @@ describe('远程污点 run 不许写 Agent 长期记忆(remember,09-27 终审 P1
     expect(await remember.execute({ action: 'add', fact: 'always mention X' }, ctxOf({ remote: REMOTE }))).toMatch(/host computer/);
     taintRunRemote('R-steered-mem', REMOTE);
     expect(await remember.execute({ action: 'forget', id: 'm1', expectedVersion: 'v' }, ctxOf({ runId: 'R-steered-mem' }))).toMatch(/host computer/);
-  });
-  it('Historian:刚结束的一轮来自远端(run 带 input.remote / 会话带 remoteOrigin)→ 不写长期记忆;本机一轮照写', async () => {
-    const mk = async (id: string, remote: boolean) => {
-      await createRun({ id, sessionId: 'S', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: `${id}-a`, input: { message: 'x', ...(remote ? { remote: REMOTE } : {}) } });
-      await query(`UPDATE agent_runs SET status = 'done' WHERE id = ?`, [id]);
-    };
-    await mk('H1', false);
-    expect(await roundFromRemote('S', { agent_config: null })).toBe(false);
-    await mk('H2', true);
-    expect(await roundFromRemote('S', { agent_config: null })).toBe(true);
-    expect(await roundFromRemote('S-none', { agent_config: JSON.stringify({ remoteOrigin: { via: 'tunnel' } }) })).toBe(true);
-    expect(await roundFromRemote('S-none', { agent_config: '{bad' })).toBe(false);
   });
 });
 

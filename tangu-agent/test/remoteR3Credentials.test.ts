@@ -10,7 +10,7 @@
  *   E9 channel_send_file / channel_send_image 发送前过 checkReadPath(凭据文件不许发给通道对端)。
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync, realpathSync, existsSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync, realpathSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, relative } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -187,6 +187,36 @@ describe('凭据读清单:通道令牌 / 插件设置 / Agent 浏览器登录态
     // 递归根会扫到插件设置 → 不免批
     expect(isKnownSafeBash('rg SECRET .', join(home, 'agents', 'a1'))).toBe(false);
     expect(isKnownSafeBash(`rg SECRET ${join(home, 'plugins-config')}`, repo)).toBe(false);
+  });
+
+  it('search_files 搜不出插件设置的内容(rg 与回退扫描两条路),同目录的普通文件照搜(Codex 09-27)', async () => {
+    const search = fileSearchProvider.tools().find((t) => t.name === 'search_files')!;
+    const agentDir = join(home, 'agents', 'a2');
+    mkdirSync(join(agentDir, 'plugins'), { recursive: true });
+    writeFileSync(join(agentDir, 'plugins', 'weather.json'), '{"apiKey":"SECRET-PLUGIN-R4"}');
+    writeFileSync(join(agentDir, 'notes.txt'), 'SECRET-PLUGIN-R4 is only a phrase here');
+    mkdirSync(join(home, 'plugins-config', 'maps'), { recursive: true });
+    writeFileSync(join(home, 'plugins-config', 'maps', 'settings.json'), '{"key":"SECRET-PLUGIN-R4"}');
+    for (const base of [agentDir, join(home, 'plugins-config'), join(home, 'agents')]) {
+      const out = String(await search.execute({ pattern: 'SECRET-PLUGIN-R4' }, ctxOf(base)));
+      expect(out, base).not.toMatch(/apiKey|"key"/);
+      expect(out, base).not.toMatch(/weather\.json|settings\.json/);
+    }
+    // 负对照:同目录的普通文件照常命中
+    expect(String(await search.execute({ pattern: 'SECRET-PLUGIN-R4' }, ctxOf(agentDir)))).toMatch(/notes\.txt/);
+  });
+
+  it('config.json 里配置的 wechat.stateDir 也在凭据清单里(与 channels 同一套解析)', () => {
+    const custom = realpathSync(mkdtempSync(join(tmpdir(), 'tangu-r4-wechat-')));
+    writeFileSync(join(custom, 'accounts.json'), '{"token":"SECRET-WX"}');
+    const cfgPath = join(home, 'config.json');
+    const prev = readFileSync(cfgPath, 'utf8');
+    writeFileSync(cfgPath, JSON.stringify({ ...JSON.parse(prev), wechat: { stateDir: custom } }));
+    try {
+      expect(checkReadPath(join(custom, 'accounts.json')).ok).toBe(false);
+      expect(isKnownSafeBash(`cat ${join(custom, 'accounts.json')}`, repo)).toBe(false);
+    } finally { writeFileSync(cfgPath, prev); rmSync(custom, { recursive: true, force: true }); }
+    expect(checkReadPath(join(custom, 'accounts.json')).ok).toBe(true); // 负对照:配置撤掉后不再是凭据目录
   });
 });
 
