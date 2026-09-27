@@ -173,15 +173,11 @@ router.post('/agent/sessions/:id/branch', authMiddleware, async (req: AuthReques
     const messageId = typeof req.body?.message_id === 'string' ? req.body.message_id : '';
     if (!messageId) return res.status(400).json({ detail: 'message_id required' });
     const title = typeof req.body?.title === 'string' ? req.body.title : undefined;
-    const r = await branchSession({ sourceSessionId: req.params.id, userId, appId: s.app_id, messageId, title });
-    if (!r) return res.status(404).json({ detail: 'branch source/message not found' });
-    // 分支照抄源会话 agent_config(源会话的远程标记随之继承);远端发起的分支自己再记一笔。
+    // 分支照抄源会话 agent_config(源会话的远程标记随之继承);远端发起的分支自己再记一笔 —— 随建会话的同一条 INSERT
+    // (见 BranchSessionInput.configOverlay:先插后补会留一个无标记的窗口,复制失败时就一直无标记)。
     const remote = parseRemoteOrigin(req.headers);
-    if (remote) {
-      const [row] = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = ?`, [r.id]);
-      const cfg = parseMaybeJson(row?.agent_config);
-      await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = ?`, [JSON.stringify({ ...(cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg : {}), remoteOrigin: remoteOriginMarker(remote) }), r.id]);
-    }
+    const r = await branchSession({ sourceSessionId: req.params.id, userId, appId: s.app_id, messageId, title, ...(remote ? { configOverlay: { remoteOrigin: remoteOriginMarker(remote) } } : {}) });
+    if (!r) return res.status(404).json({ detail: 'branch source/message not found' });
     const rows = await query<any[]>(`SELECT ${SESSION_COLS} FROM chat_sessions WHERE id = ?`, [r.id]);
     res.json({ session: rowToSession(rows[0]), copied: r.copied });
   } catch (e: any) {

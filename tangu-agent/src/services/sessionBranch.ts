@@ -28,6 +28,9 @@ export interface BranchSessionInput {
   lastN?: number;
   /** Background Session 父链接:指回来源会话(右栏「子聊天」经 /background 端点持久列出)。缺省 null。 */
   parentSessionId?: string;
+  /** 并进新会话 agent_config 的键(远端发起的分支传 { remoteOrigin }):随建会话的同一条 INSERT 落库 ——
+   *  先插无标记的行、复制完消息再补标记,中间(以及复制失败时)就有一条无标记的活动会话(桌面 D1 会把它的目录当本机会话根)。 */
+  configOverlay?: Record<string, unknown>;
 }
 
 /**
@@ -35,7 +38,7 @@ export interface BranchSessionInput {
  * 返回 { id, copied } 或 null(源会话不存在/非本人本 app,或 messageId 不属于该会话)。
  */
 export async function branchSession(input: BranchSessionInput): Promise<{ id: string; copied: number } | null> {
-  const { sourceSessionId, userId, appId, messageId, title, kind, lastN, parentSessionId } = input;
+  const { sourceSessionId, userId, appId, messageId, title, kind, lastN, parentSessionId, configOverlay } = input;
 
   // 1) 源会话 + owner/app 校验
   const srcRows = await query<any[]>(
@@ -57,11 +60,17 @@ export async function branchSession(input: BranchSessionInput): Promise<{ id: st
   // 3) 建新会话:克隆模型/配置/工程信息(archived/todos 走默认,从干净状态起;kind 可指定,缺省 'user')
   const newId = uuidv4();
   const newTitle = (typeof title === 'string' && title.trim() ? title.trim() : (src.title || 'New Chat')).slice(0, 200);
+  let cfgText = asJsonText(src.agent_config);
+  if (configOverlay) {
+    let base: any = src.agent_config;
+    if (typeof base === 'string') { try { base = JSON.parse(base); } catch { base = null; } }
+    cfgText = JSON.stringify({ ...(base && typeof base === 'object' && !Array.isArray(base) ? base : {}), ...configOverlay });
+  }
   await query(
     `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, emoji, agent_config, project_path, project_name, projectless, kind, parent_session_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [newId, userId, appId, newTitle, src.model_id, src.emoji,
-     asJsonText(src.agent_config), src.project_path, src.project_name, !!src.projectless, kind || 'user', parentSessionId || null],
+     cfgText, src.project_path, src.project_name, !!src.projectless, kind || 'user', parentSessionId || null],
   );
 
   // 4) 复制 timestamp <= 分支点 的消息:新 uuid,保留原 timestamp 与全部字段(lastN → 只取最近 N 条)

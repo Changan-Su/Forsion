@@ -6,6 +6,7 @@
  *   I1 远端 PATCH /agent/sessions/:id 把 project_path 改成别的目录 → 同一条 UPDATE 盖标记(已有标记原样保留;本机改 / 远端只改标题 / 路径没变 → 不盖)。
  *   I2 远程污点的 dispatchProjectSession(start_project_session 派生会话)→ 会话存值带标记;首个 run 的 agentConfig 不带(run 的污点是 input.remote)。
  *   I3 本机 PUT /agent/sessions/:id/config(整对象替换)/ PATCH null 抹不掉已有标记;本机写加标记不拦。
+ *   I5 远端发起的分支:标记随建会话的同一条 INSERT 落库 —— 复制消息中途失败,留下的新会话也带标记(Codex 集成评审 P1:先插后补有窗口)。
  *   I4 钉桩:桌面登记表 <userData>/unit-local-project-roots.json 落在 C4 凭据清单里 —— 远程写硬拒、本机写要批(完全通行也要)、结构化读硬拒。
  *      修复在引擎第三轮 E2(整片 userData 进 credentialPaths),这里只钉住桌面新文件确实被覆盖。
  *
@@ -15,7 +16,7 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import express from 'express';
 import type { Server } from 'node:http';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 
 vi.mock('../src/services/agentLoop.js', () => ({
@@ -46,6 +47,7 @@ let base: string;
 let home: string;
 let ws: string;
 let userData: string;
+let sqlite: { exec: (sql: string) => unknown };
 const prevAmadeus = process.env.FORSION_AMADEUS_CONFIG;
 const send = async (method: string, path: string, body: unknown, headers: Record<string, string> = {}): Promise<{ status: number; body: any }> => {
   const r = await fetch(`${base}${path}`, { method, headers: { Authorization: 'Bearer x', 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body) });
@@ -79,6 +81,7 @@ beforeAll(async () => {
   userData = realpathSync(mkdtempSync(join(tmpdir(), 'tangu-r3-integ-ud-')));
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: 'u1' });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
+  sqlite = db;
   configureTangu({ host, brain: {} as any, billing: {} as any, profile });
   await runMigration();
   const app = express(); app.use(express.json()); app.use(sessionsRouter);
@@ -190,6 +193,43 @@ describe('I3 本机写配置抹不掉已有标记', () => {
   });
 });
 
+describe('I5 远端分支的标记随 INSERT 落库', () => {
+  const addMsg = (id: string, sessionId: string, ts: number) =>
+    query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES (?, ?, 'user', 'hi', ?)`, [id, sessionId, ts]);
+  const branchesOf = async (title: string): Promise<Array<{ id: string; cfg: any }>> =>
+    (await query<any[]>(`SELECT id, agent_config FROM chat_sessions WHERE title = ? AND id <> ?`, [title, `${title}-src`])).map((r) => ({ id: r.id, cfg: json(r.agent_config) }));
+
+  it('复制消息中途失败:留下的新会话已带标记(修复前:先插无标记的行,补标记在复制之后,失败就一直无标记)', async () => {
+    await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, projectless, project_path, agent_config) VALUES ('I5a-src', 'u1', 'tangu', 'I5a', 'm1', 'user', 0, ?, ?)`,
+      [dir('I5a'), JSON.stringify({ agentSlug: 'a1' })]);
+    await addMsg('I5a-m1', 'I5a-src', 1000);
+    // 只拦复制进新会话的那条消息:源会话自己的插入不受影响
+    sqlite.exec(`CREATE TRIGGER i5_copy_fail BEFORE INSERT ON chat_messages WHEN NEW.session_id <> 'I5a-src' BEGIN SELECT RAISE(ABORT, 'copy failed'); END;`);
+    try {
+      const r = await send('POST', '/agent/sessions/I5a-src/branch', { message_id: 'I5a-m1' }, REMOTE_HDR);
+      expect(r.status).toBe(500);
+    } finally {
+      sqlite.exec(`DROP TRIGGER i5_copy_fail`);
+    }
+    const left = await branchesOf('I5a');
+    expect(left).toHaveLength(1);
+    expect(left[0].cfg).toEqual({ agentSlug: 'a1', remoteOrigin: { via: 'lan', marked: false, at: expect.any(String) } });
+  });
+
+  it('成功的远端分支带标记、消息照抄;正对照:本机分支无标记', async () => {
+    await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, projectless, project_path, agent_config) VALUES ('I5b-src', 'u1', 'tangu', 'I5b', 'm1', 'user', 0, ?, ?)`,
+      [dir('I5b'), JSON.stringify({ agentSlug: 'a1' })]);
+    await addMsg('I5b-m1', 'I5b-src', 1000);
+    const remote = await send('POST', '/agent/sessions/I5b-src/branch', { message_id: 'I5b-m1' }, REMOTE_HDR);
+    expect(remote.status).toBe(200);
+    expect(remote.body.copied).toBe(1);
+    expect(remote.body.session.agent_config).toEqual({ agentSlug: 'a1', remoteOrigin: { via: 'lan', marked: false, at: expect.any(String) } });
+    const local = await send('POST', '/agent/sessions/I5b-src/branch', { message_id: 'I5b-m1' });
+    expect(local.status).toBe(200);
+    expect(local.body.session.agent_config).toEqual({ agentSlug: 'a1' });
+  });
+});
+
 describe('I4 钉桩:桌面本机项目根登记表在 C4 凭据清单里', () => {
   it('<userData>/unit-local-project-roots.json:远程写硬拒、本机写(完全通行)要批、结构化读硬拒', async () => {
     process.env.FORSION_AMADEUS_CONFIG = join(userData, 'amadeus-config.json');
@@ -208,6 +248,15 @@ describe('I4 钉桩:桌面本机项目根登记表在 C4 凭据清单里', () =>
       expect(local.asked).toBe(true);
     } finally {
       delete process.env.FORSION_AMADEUS_CONFIG;
+    }
+  });
+
+  it('I4b 兄弟 userData 连同历史包名的 `-dev` 变体都在凭据清单里(与桌面 USERDATA_SIBLING_DIRS 同一展开口径)', () => {
+    const appData = process.platform === 'darwin' ? join(homedir(), 'Library', 'Application Support')
+      : process.platform === 'win32' ? (process.env.APPDATA?.trim() || join(homedir(), 'AppData', 'Roaming'))
+      : (process.env.XDG_CONFIG_HOME?.trim() || join(homedir(), '.config'));
+    for (const n of ['Forsion-dev', 'tangu-agent-desktop-dev', 'Tangu Agent 2.0-dev', 'Tangu Agent']) {
+      expect(checkReadPath(join(appData, n, 'tangu-desktop-config.json')).ok).toBe(false);
     }
   });
 });
