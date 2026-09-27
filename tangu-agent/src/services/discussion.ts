@@ -13,6 +13,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
 import { createRun, getRun } from './runStore.js';
+import type { RemoteInfo } from './remoteOrigin.js';
 import { subscribe } from './eventBus.js';
 import { getAgent } from '../agents/agentRegistry.js';
 // enqueueRun 走动态 import(见 startDiscussion):静态 import 会成环 discussion←discuss←registry←agentLoop,
@@ -40,6 +41,8 @@ export interface StartDiscussionParams {
   maxRounds?: number;
   /** Background Session 父链接:发起讨论的主会话 id(右栏「子聊天」经 /background 端点持久列出)。 */
   parentSessionId?: string;
+  /** 远程污点(契约 C5):讨论 run 照抄发起 run 的 input.remote。 */
+  remote?: RemoteInfo;
 }
 
 function isTerminal(status: string): boolean {
@@ -104,6 +107,7 @@ export async function startDiscussion(p: StartDiscussionParams): Promise<string>
         _discussion: true, // 标记:此 run 内禁再起讨论(防递归)
         execMode: 'host',
       },
+      ...(p.remote ? { remote: p.remote } : {}),
     },
   });
   const { enqueueRun } = await import('./agentLoop.js');

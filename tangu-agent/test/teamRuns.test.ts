@@ -125,6 +125,17 @@ describe('teamRuns', () => {
     expect(out2.text).toBe('second');
   });
 
+  it('远程污点(C5):成员子 run 的 input.remote 照抄团队 run 的(负对照:本机团队 run 的成员子 run 没有)', async () => {
+    childFinishes('ok');
+    const started: any[] = [];
+    await activateMember(await base({ remote: { via: 'tunnel', marked: true }, onStarted: (ids) => started.push(ids) }));
+    const input = (r: any) => (typeof r!.input === 'string' ? JSON.parse(r!.input) : r!.input);
+    expect(input(await getRun(started[0].runId)).remote).toEqual({ via: 'tunnel', marked: true });
+    childFinishes('ok');
+    await activateMember(await base({ onStarted: (ids) => started.push(ids) }));
+    expect(input(await getRun(started[1].runId)).remote).toBeUndefined();
+  });
+
   it('followSessionMode:激活时按团队会话此刻的档写成员会话与子 run(团队 run 启动后才切的「完全通行」也跟上)', async () => {
     await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = 'team-1'`, [JSON.stringify({ approvalMode: 'full-auto' })]);
     childFinishes('ok');

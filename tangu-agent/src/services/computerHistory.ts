@@ -18,6 +18,7 @@
 import { promises as fs, readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { forsionSharedDir } from '../core/tanguHome.js';
+import { effectiveRemote } from './remoteOrigin.js';
 import type { AppProfile } from '../seams/appProfile.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 
@@ -148,7 +149,7 @@ export function computerHistoryOn(s: ChState | null): boolean {
 const LOCAL_CLIENT_RE = /^(desktop|cli|tui|muse)\//;
 
 export type ChGateCtx = Pick<ToolContext,
-  'client' | 'remote' | 'channelSession' | 'teamSessionId' | 'inDiscussion' | 'ephemeral' | 'subAgentDepth'>;
+  'client' | 'remote' | 'runId' | 'channelSession' | 'teamSessionId' | 'inDiscussion' | 'ephemeral' | 'subAgentDepth'>;
 
 /**
  * read_computer_history 可见性(默认拒,全部满足才出现):本地引擎(profile.hostExec;chat 会话是 execMode=sandbox,
@@ -159,7 +160,7 @@ export type ChGateCtx = Pick<ToolContext,
  */
 export function computerHistoryGate(profile: Pick<AppProfile, 'capabilities'> | undefined, ctx: ChGateCtx, state?: ChState | null): boolean {
   if (!profile?.capabilities?.hostExec) return false;
-  if (ctx.remote || ctx.channelSession || ctx.teamSessionId || ctx.inDiscussion || ctx.ephemeral) return false;
+  if (effectiveRemote(ctx) || ctx.channelSession || ctx.teamSessionId || ctx.inDiscussion || ctx.ephemeral) return false;
   if ((ctx.subAgentDepth ?? 0) >= 1) return false;
   if (!LOCAL_CLIENT_RE.test(ctx.client || '')) return false;
   return computerHistoryOn(state === undefined ? readComputerHistoryState() : state);

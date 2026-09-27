@@ -1,26 +1,36 @@
 /**
  * host-exec 审批卡片(approval_request 事件 → 内嵌聊天流;run_bash 命令可编辑后批准)。
  * 文件修改类工具批准前渲染 diff 预览(B4:破坏发生前可见)。已兑现(approval_result/410)置灰。
+ *
+ * 设备页(远端来路,window.tangu.remoteCaller):引擎拒收远端改参数(C9 → 400 REMOTE_ARGS_OVERRIDE_FORBIDDEN)、把「总允许」
+ * 降成单次批准,所以这里命令只读、不给「总允许」—— 否则改了命令点批准什么都不发生,点「总允许」实际只批一次(Codex 终审 F#2)。
  */
 import React, { useMemo, useState } from 'react'
 import { ShieldQuestion, Check, CheckCheck, X } from 'lucide-react'
 import type { ApprovalRequest } from '../types'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
+import { alwaysAllowWorks, approvalReasonText, MODE_KEY } from '../approvalReason'
 
-/** 档位 id 是连字符(引擎口径),i18n 键是驼峰(既有) —— 映射写一处,别两边各拼各的。 */
-export const MODE_KEY: Record<string, string> = {
-  readonly: 'approval.mode.readonly',
-  'auto-edit': 'approval.mode.autoEdit',
-  'full-auto': 'approval.mode.fullAuto',
-}
+export { MODE_KEY }
+
+registerMessages({
+  'approval.remoteReadOnly': {
+    zh: '远程连接下只能原样批准或拒绝，要改命令请在那台设备本机上操作',
+    en: 'Over a remote connection you can only approve or reject as is. To change the command, use that device itself',
+  },
+})
+
+/** 本页驱动的是别的设备的引擎、且以远端身份(x-forsion-remote)调用:审批改参数 / 总允许都不兑现。 */
+export const isRemoteApprover = (): boolean => typeof window !== 'undefined' && !!window.tangu?.remoteCaller
 
 export const ApprovalCard: React.FC<{
   req: ApprovalRequest
   onDecide: (action: 'approve' | 'approve_always' | 'reject', argsOverride?: Record<string, any>) => void
 }> = ({ req, onDecide }) => {
   const { t } = useI18n()
+  const remote = isRemoteApprover()
   const isBash = req.name === 'run_bash'
   const initialCmd = (() => {
     if (!isBash || !req.arguments) return ''
@@ -30,21 +40,13 @@ export const ApprovalCard: React.FC<{
   const resolved = req.status !== 'pending'
   const diff = useMemo(() => (isBash ? null : toolDiffText(req.name, req.arguments)), [isBash, req.name, req.arguments])
 
-  // 引擎在这两种情形下**不会**把工具记进「总允许」(approvals.ts 明写:越界写每次都确认,
-  // custom 的 ask 是用户写死的「永远问我」)。按钮却照常显示 = 又一处「界面说一套引擎做一套」。
-  const alwaysWorks = req.reason?.kind !== 'escalate' && req.reason?.kind !== 'custom-ask'
-  const why = (() => {
-    const r = req.reason
-    if (!r) return ''
-    const m = r.mode && MODE_KEY[r.mode] ? t(MODE_KEY[r.mode] as any) : ''
-    if (r.kind === 'custom-ask') return t('approval.why.customAsk', { rule: r.rule || '' })
-    if (r.kind === 'escalate') return t('approval.why.escalate')
-    return m ? t('approval.why.mode', { mode: m }) : ''
-  })()
+  // 「总允许」对 escalate / custom-ask / protected 无效(引擎不落),按钮不给 —— 规则见 approvalReason.ts。
+  const alwaysWorks = alwaysAllowWorks(req.reason) && !remote
+  const why = approvalReasonText(req.reason, t as (k: string, v?: Record<string, unknown>) => string)
 
   const decide = (action: 'approve' | 'approve_always' | 'reject') => {
     if (resolved) return
-    const argsOverride = isBash && cmd.trim() && cmd !== initialCmd ? { command: cmd } : undefined
+    const argsOverride = isBash && !remote && cmd.trim() && cmd !== initialCmd ? { command: cmd } : undefined
     onDecide(action, action === 'reject' ? undefined : argsOverride)
   }
 
@@ -62,7 +64,7 @@ export const ApprovalCard: React.FC<{
       {/* B3「为什么问你」:判定分支在引擎里已经算过,不带出来客户端只能猜(尤其猜不到生效档)。
           注意这是**规则判定理由**,不是 Claude Code 那种模型生成的安全性论证 —— 便宜、且糊弄不了。 */}
       {why && <div className="approval-why">{why}</div>}
-      {isBash && !resolved ? (
+      {isBash && !resolved && !remote ? (
         <textarea
           className="approval-edit"
           value={cmd}
@@ -75,6 +77,7 @@ export const ApprovalCard: React.FC<{
           {/* preview 恒显:它是「⚠ 工作区外写入」等升级警示的唯一载体(引擎 approvals.ts 拼进字符串),diff 只能附加不能替换 */}
           <div className="approval-preview">{req.preview}</div>
           {diff && <div className="approval-diff"><DiffView text={diff} side={false} /></div>}
+          {remote && !resolved && <div className="approval-why" data-remote-readonly>{t('approval.remoteReadOnly')}</div>}
         </>
       )}
       {!resolved && (

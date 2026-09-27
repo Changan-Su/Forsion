@@ -388,13 +388,25 @@ export function onUserRunStart(sessionId: string, userId: string, message: strin
  * memScopeSlug = 记忆域 slug（runLoop 已折叠 shareDefaultMemory），Historian 的 MEMORY/LOG
  * 读写必须与 run 内 remember/log_event 落同一文件夹。
  */
-export async function onUserRunDone(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed): Promise<void> {
+/** 本轮是否来自远端:run 收尾时传入的标记(input.remote 或远端给本机 run 打的进程内污点),或会话本身由远端建 / 改过
+ *  (agent_config.remoteOrigin)。不按会话「最新 done run」反查 —— 那会被下一轮的完成时间带偏(Codex 09-27)。 */
+export function historianRoundRemote(sk: { agent_config?: unknown } | undefined, runRemote?: boolean): boolean {
+  if (runRemote) return true;
+  try {
+    const c = typeof sk?.agent_config === 'string' ? JSON.parse(sk.agent_config) : sk?.agent_config;
+    return !!(c && typeof c === 'object' && (c as any).remoteOrigin);
+  } catch { return false; }
+}
+
+/** @param runRemote 刚结束的这条 run 是否来自远端 —— 由 agentLoop 在 run **收尾时**算好传入(input.remote,或远端 steer / 询问 /
+ *  截屏 / ui_ 回执给本机 run 打的进程内污点;那张表随 run 收尾清掉,Historian 异步起来时已经查不到)。 */
+export async function onUserRunDone(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed, runRemote = false): Promise<void> {
   if (!isLocal()) return;
   // 会话级互斥:上一轮维护(judge/fork/整固)还在飞 → 整轮跳过(尽力而为,下个到点轮自然补)。
   // 加锁在首个 await 之前,并发 done 只有一个能进。
   if (historianBusySessions.has(sessionId)) { log(`会话 ${sessionId.slice(0, 8)} 上一轮维护尚在进行,跳过本轮`); return; }
   if (historianBusySessions.size >= 2) return; // bounded background work; never queue user turns
-  await runHistorianSlot(sessionId, () => runHistorianForSession(sessionId, userId, memScopeSlug, forkSeed));
+  await runHistorianSlot(sessionId, () => runHistorianForSession(sessionId, userId, memScopeSlug, forkSeed, { runRemote }));
 }
 
 /** 私聊「新会话(先总结记忆)」用(方案 §5.3 ②):绕过到点轮与增量地板,立刻对该会话采一次候选(标题/摘要/LOG/记忆候选),
@@ -425,7 +437,7 @@ async function runHistorianSlot(sessionId: string, fn: () => Promise<void>): Pro
   }
 }
 
-async function runHistorianForSession(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed, opts?: { force?: boolean }): Promise<void> {
+async function runHistorianForSession(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed, opts?: { force?: boolean; runRemote?: boolean }): Promise<void> {
   // 解析本 run 的记忆域:优先传入的 memScopeSlug;否则(外部引擎等未做激活的路径)从会话 agent_config.agentSlug
   // 兜底读——那存的是 active slug,须经 resolveMemorySlug 折叠 shareDefaultMemory 才与 run 内记忆读写同域。
   // 重注入 Historian 自己的异步上下文 → deps().brain.memory(动态本地库)读写落到该 agent 的文件夹(fire-and-forget
@@ -454,7 +466,8 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // Historian 关着 = 用户不要后台模型开销。Dream 默认开之后(09-19),这里不能再无条件拉起它 —— 那会让关掉 Historian 的人
     // 每个间隔白跑两次模型调用去重写没变过的记忆。只处理收件箱里攒够 / 放久了的旧候选(与开着时同一道阈值);
     // 只有显式记忆、没有候选的整理交给面板上的「立即整理」。
-    await maybeConsolidate(userId, effectiveSlug, '', sessionId).catch(() => {});
+    // 远程一轮不触发自动整固(旧候选留给本机轮 / 面板上的「立即整理」)。
+    if (!opts?.runRemote) await maybeConsolidate(userId, effectiveSlug, '', sessionId).catch(() => {});
     return;
   }
   // 模型解析:用户显式配置 > admin 后台默认槽 > 对话默认(未选模型=跟随云端)。
@@ -487,7 +500,11 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     const early = opts?.force ? undefined : earlyTitles.get(earlyKey);
     earlyTitles.delete(earlyKey);
     const titleDue = due && !(early && (await early));
-    const memoryDue = due;
+    // 远程来源的一轮不写长期记忆(09-27 终审 P1 延伸):记忆会注入之后每一次会话(含本机 full-auto),远端 run 自己的
+    // remember 已硬拒;Historian 的独立判官(候选 → Dream)与辅助讨论(主 Agent 自己 remember)是同一条旁路。标题 / 摘要 / 日志照常。
+    const remoteRound = historianRoundRemote(sk, opts?.runRemote);
+    if (remoteRound) log(`第 ${roundN} 轮来自远端设备,本轮不写长期记忆`);
+    const memoryDue = due && !remoteRound;
     const logDue = due;
     const summaryDue = due; // 摘要与标题同属 Historian 自有资产(非记忆资产):三种模式都由 judge 维护
 
@@ -646,7 +663,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // 整固到期检查(每个到点轮跑一次;raw 空/未攒够即刻返回,开销一次文件读)。
     // 辅助模式也查(09-19 放开):辅助模式只是「本轮不由 Historian 采集候选」,收件箱里已有的候选(首轮独立采的、chat 会话采的、
     // 切到辅助模式之前攒的)仍只有 Dream 这一条路进 MEMORY.md —— 从前这里跳过,辅助模式用户的候选就永远停在收件箱里。
-    await maybeConsolidate(userId, effectiveSlug, cfg.modelId, sessionId);
+    if (!remoteRound) await maybeConsolidate(userId, effectiveSlug, cfg.modelId, sessionId);
 
     // 辅助讨论只跟「记忆」周期(设置里的 每 Y 轮):此前挂在 logDue||memoryDue 上,而 logDue 跟随
     // 标题的高频周期(如 标题每2轮+记忆每3轮 → 讨论在 2,3,4,6,8,9… 轮触发),用户观感即「忽隔一轮

@@ -168,7 +168,9 @@ async function main() {
     })).catch((e) => `error:${e.message}`)
     check('S3e onBackendStatus 注册即回放:引擎已 ready 时新订阅者 3s 内收到 ready', replayed === 'ready', `got=${replayed}`)
     engineUrl = st.url.replace(/\/$/, '')
-    token = fs.readFileSync(path.join(home, 'desktop-local-token'), 'utf8').trim()
+    // 引擎令牌是每次启动随机生成的本机令牌(TANGU_LOCAL_TOKEN,不落盘,契约 C2):从渲染层的有效配置里取,
+    // 跟渲染层打引擎用的是同一枚。desktop-local-token 如今只是外部 agent 接 MCP 的密钥,拿它打引擎会 401。
+    token = await win.evaluate(() => window.tangu.getConfig().then((c) => c.token))
     const listRules = async () => {
       const r = await request(`${engineUrl}/agent/special/muse/triggers`, { token }).catch(() => null)
       return r && r.json && Array.isArray(r.json.triggers) ? r.json.triggers.filter((t) => String(t.id).startsWith('plugin:pc-erp:')) : null

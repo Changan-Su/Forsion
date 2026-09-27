@@ -12,7 +12,7 @@ import path from 'node:path';
 import { parse as parseToml } from 'smol-toml';
 import { parseFrontmatter } from '../skills/localSkills.js';
 import { skillsDir } from '../core/tanguHome.js';
-import { loadMcpConfig, mcpConfigFrom, type McpServerConfig } from '../mcp/config.js';
+import { isReservedServerName, loadRawMcpServers, rawMcpServersFrom, RESERVED_SERVER_ERROR, type McpServerConfig } from '../mcp/config.js';
 import { updateSection } from '../core/config.js';
 
 function expandHome(p: string): string {
@@ -43,6 +43,8 @@ export interface EngineMcpItem {
   args?: string[];
   url?: string;
   imported: boolean;
+  /** 名字占用设备 MCP 保留命名空间(`dev_*` / `dev`):导入会被拒绝,需在源引擎里改名。 */
+  reserved?: boolean;
 }
 export interface EngineAssets {
   skills: EngineSkillItem[];
@@ -100,13 +102,15 @@ export function listEngineAssets(engineId: string): EngineAssets {
     }
   }
 
-  const existing = loadMcpConfig().mcpServers;
+  // 按磁盘视图判「已导入」:运行时视图会跳过保留名,拿它判重 = 已在磁盘上的永远显示未导入
+  const existing = loadRawMcpServers();
   const mcp: EngineMcpItem[] = Object.entries(readEngineMcpServers(spec)).map(([name, s]: [string, any]) => ({
     name,
     command: typeof s?.command === 'string' ? s.command : undefined,
     args: Array.isArray(s?.args) ? s.args : undefined,
     url: typeof s?.url === 'string' ? s.url : undefined,
-    imported: !!existing[name],
+    imported: Object.hasOwn(existing, name),
+    ...(isReservedServerName(name) ? { reserved: true } : {}),
   }));
 
   return { skills, mcp };
@@ -131,16 +135,20 @@ export function importEngineSkill(engineId: string, name: string): ImportResult 
   return { ok: true };
 }
 
-/** 导入一个引擎 MCP:归一化写入 ~/.tangu/mcp.json(enabled:false)。已存在 → 拒绝。 */
+/**
+ * 导入一个引擎 MCP:归一化写入 ~/.tangu/mcp.json(enabled:false)。已存在 → 拒绝;名字占用设备 MCP 保留命名空间
+ * (方案 2026-09-26 §4.6-3)→ 拒绝并说明(导进去也只会在加载时被跳过)。
+ */
 export function importEngineMcp(engineId: string, name: string): ImportResult {
   const spec = SPECS[engineId];
   if (!spec?.mcp) return { ok: false, error: 'no mcp config' };
+  if (isReservedServerName(name)) return { ok: false, error: `"${name}": ${RESERVED_SERVER_ERROR} in the source engine first` };
   const server = readEngineMcpServers(spec)[name];
   if (!server) return { ok: false, error: 'server not found' };
   let exists = false;
   updateSection('mcp', (sec) => { // 锁内读改写:判重与写入看的是同一份,别的进程刚加的同名 server 不会被盖掉
-    const { mcpServers } = mcpConfigFrom(sec);
-    if (mcpServers[name]) { exists = true; return undefined; }
+    const mcpServers = rawMcpServersFrom(sec); // 磁盘视图:运行时视图跳过的 server 写回时不能被抹掉
+    if (Object.hasOwn(mcpServers, name)) { exists = true; return undefined; }
     return { mcpServers: { ...mcpServers, [name]: normalizeMcpServer(server) } };
   });
   return exists ? { ok: false, error: 'already exists' } : { ok: true };

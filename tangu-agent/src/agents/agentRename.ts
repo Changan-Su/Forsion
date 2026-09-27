@@ -16,6 +16,7 @@ import { loadTriggers, saveTriggers } from '../services/museTriggers.js';
 import { channelSettings, saveChannelSettings } from '../channels/config.js';
 import { BUNDLE_ORIGIN_FILE } from '../plugins/bundles.js';
 import { sessionHasActiveRun } from '../services/agentLoop.js';
+import { withKeyLock } from '../core/keyLock.js';
 
 export type AgentRenameCode = 'invalid_slug' | 'unchanged' | 'builtin' | 'not_found' | 'exists' | 'cloud_synced' | 'plugin_seeded' | 'busy' | 'unreadable';
 
@@ -69,7 +70,17 @@ export async function renameAgent(oldSlug: string, newSlug: string): Promise<{ a
   const meta = readAgentsMeta();
   // 无条件写:除了改顺序 / 默认,也顺手作废 agentRegistry 的列表缓存。
   await step('agents-meta', () => writeAgentsMeta({ order: meta.order.map((s) => (s === oldSlug ? newSlug : s)), defaultSlug: meta.defaultSlug === oldSlug ? newSlug : meta.defaultSlug }));
-  for (const s of sessions) await step(`session ${s.id}`, () => query('UPDATE chat_sessions SET agent_config = ? WHERE id = ?', [JSON.stringify(s.cfg), s.id]));
+  // 写的是**现读**的存值改名后的结果,不是上面的快照:快照到这里隔着 fs.rename / 写 meta 几次真 I/O,期间会话配置可能被改过
+  // (输入区切档、远端改项目路径盖上的 remoteOrigin 标记 —— 盖回快照 = 悄悄抹掉标记 / 放宽审批档)。与路由的配置写同一把锁。
+  for (const s of sessions) {
+    await step(`session ${s.id}`, () => withKeyLock(`session:config:${s.id}`, async () => {
+      const [row] = await query<Array<{ agent_config: unknown }>>('SELECT agent_config FROM chat_sessions WHERE id = ?', [s.id]);
+      let fresh: unknown;
+      try { fresh = typeof row?.agent_config === 'string' ? JSON.parse(row.agent_config) : row?.agent_config; } catch { return; }
+      const next = renameInAgentConfig(fresh, oldSlug, newSlug);
+      if (next) await query('UPDATE chat_sessions SET agent_config = ? WHERE id = ?', [JSON.stringify(next), s.id]);
+    }));
+  }
   await step('chat_messages', () => query('UPDATE chat_messages SET agent_slug = ? WHERE agent_slug = ?', [newSlug, oldSlug]));
   await step('pending_approvals', () => query('UPDATE pending_approvals SET agent_slug = ? WHERE agent_slug = ?', [newSlug, oldSlug]));
   await step('inbox_messages', () => query(`UPDATE inbox_messages SET sender_id = ? WHERE sender_kind = 'agent' AND sender_id = ?`, [newSlug, oldSlug]));

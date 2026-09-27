@@ -6,6 +6,7 @@ import path from 'node:path';
 import { protectedHostPaths, protectedAncestors, canonicalFuturePath } from './hostSandboxProtection.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 import { writableRoots } from '../tools/fsPolicy.js';
+import { toolSubprocessEnv } from './credentialEnv.js';
 
 export interface HostSandboxConfig {
   mode: 'off' | 'workspace-write' | 'read-only';
@@ -99,7 +100,8 @@ export function prepareHostCommand(ctx: Pick<ToolContext, 'cwd' | 'extraRoots' |
   if (!argv.length || argv.some((a) => typeof a !== 'string' || a.includes('\0'))) throw new Error('Invalid command argv');
   const config = normalizeHostSandbox(ctx.hostSandbox);
   const cwd = path.resolve(ctx.cwd || process.cwd());
-  if (config.mode === 'off') return { file: argv[0], args: argv.slice(1), options: { cwd, detached: process.platform !== 'win32' }, cleanup() {} };
+  // 沙箱关:照旧继承环境,但剥掉引擎凭据(C2 —— verifyCommand / runGit / 沙箱辅助进程都走这里);沙箱开:safeEnvironment 本就只留白名单。
+  if (config.mode === 'off') return { file: argv[0], args: argv.slice(1), options: { cwd, env: toolSubprocessEnv(), detached: process.platform !== 'win32' }, cleanup() {} };
   const backend = hostSandboxBackend();
   if (!backend.available || !backend.executable) throw new Error(`Host sandbox unavailable: ${backend.reason}`);
   const resolvedCwd = canonical(cwd);
@@ -145,6 +147,6 @@ export function spawnHostCommand(ctx: Pick<ToolContext, 'cwd' | 'extraRoots' | '
 
 /** Preserve Node's platform-specific shell quoting in compatibility mode. */
 export function spawnHostShell(ctx: Pick<ToolContext, 'cwd' | 'extraRoots' | 'hostSandbox'>, command: string): ChildProcess {
-  if (!hostSandboxEnabled(ctx)) return spawn(command, { cwd: ctx.cwd || process.cwd(), shell: true, detached: true });
+  if (!hostSandboxEnabled(ctx)) return spawn(command, { cwd: ctx.cwd || process.cwd(), shell: true, detached: true, env: toolSubprocessEnv() });
   return spawnHostCommand(ctx, ['/bin/sh', '-c', command]);
 }

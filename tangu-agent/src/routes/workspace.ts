@@ -15,6 +15,7 @@ import {
   type WorkspaceMeta, type WsScope,
 } from '../tools/fileWorkspace.js';
 import { getSessionDir, markSessionDirty, type SessionKey } from '../sandbox/sessionSandbox.js';
+import { canonicalFuturePath, pathWithin } from '../sandbox/hostSandboxProtection.js';
 
 const router = Router();
 
@@ -77,11 +78,22 @@ async function isCloudStorageUp(userId: string, appId: string): Promise<boolean>
   return cloudStorageUp;
 }
 
-/** 解析会话内相对路径为本地绝对路径;越界(..)返回 null。 */
+/** 解析会话内相对路径为本地绝对路径;越界(..)返回 null。只是字面判断 —— 真正落盘 / 读盘前还要过 insideWorkspace(软链)。 */
 function safeJoin(baseDir: string, p: string): string | null {
   const abs = path.resolve(baseDir, './' + String(p || '').replace(/^\/+/, ''));
   if (abs !== baseDir && !abs.startsWith(baseDir + path.sep)) return null;
   return abs;
+}
+
+/**
+ * 真实路径钳在会话工作区内(评审 A#7 / 设备能力方案 §6.6「只限该会话工作区、禁路径穿越」):工作区里的软链(agent 自己 ln -s 的、
+ * 解压出来的)指向 ~/.forsion/auth.json,字面上在工作区里,readFile / writeFile 却跟着它读写到外面 —— 远端的下载 / 上传就成了任意读写。
+ * 两侧都取 realpath(macOS 的 /tmp → /private/tmp 之类系统软链两边同规归一);目标不存在时解析最深已存在的祖先(软链的父目录照样抓得住)。
+ * 残余:判完到读写之间换成软链的竞态(TOCTOU)不在这层管。
+ */
+async function insideWorkspace(baseDir: string, abs: string): Promise<boolean> {
+  const realBase = await fs.realpath(baseDir).catch(() => path.resolve(baseDir));
+  return pathWithin(canonicalFuturePath(abs), realBase);
 }
 
 async function localList(key: SessionKey): Promise<WorkspaceMeta[]> {
@@ -93,6 +105,7 @@ async function localList(key: SessionKey): Promise<WorkspaceMeta[]> {
     for (const e of entries) {
       const r = rel ? `${rel}/${e.name}` : e.name;
       if (e.isDirectory()) await walk(r);
+      else if (e.isSymbolicLink() && !(await insideWorkspace(dir, path.join(dir, r)))) continue; // 指到工作区外的软链:不列(stat 会跟过去,大小 / 存在性都是外面的)
       else {
         const st = await fs.stat(path.join(dir, r)).catch(() => null);
         if (st) out.push({ path: '/' + r, size: st.size, mimeType: mimeForName(e.name), updatedAt: st.mtimeMs });
@@ -106,7 +119,7 @@ async function localList(key: SessionKey): Promise<WorkspaceMeta[]> {
 async function localRead(key: SessionKey, p: string): Promise<{ content: Buffer; mimeType: string } | null> {
   const dir = await getSessionDir(key);
   const abs = safeJoin(dir, p);
-  if (!abs) return null;
+  if (!abs || !(await insideWorkspace(dir, abs))) return null;
   const content = await fs.readFile(abs).catch(() => null);
   if (!content) return null;
   return { content, mimeType: mimeForName(path.basename(abs)) };
@@ -181,7 +194,8 @@ router.post('/agent/workspace/delete', authMiddleware, async (req: AuthRequest, 
       const dir = await getSessionDir(r.key);
       const abs = safeJoin(dir, p);
       ok = false;
-      if (abs) {
+      // 父目录按真实路径钳(父目录是软链 → unlink 删的是外面的文件);末段是软链本身没关系,unlink 只删链接。
+      if (abs && await insideWorkspace(dir, path.dirname(abs))) {
         ok = await fs.unlink(abs).then(() => true).catch(() => false);
         if (ok) markSessionDirty(r.key);
       }
@@ -215,8 +229,10 @@ router.post('/agent/workspace/upload', authMiddleware, async (req: AuthRequest, 
           // standalone:云存储不可用 → 写本地会话目录(与文件工具同一目录)。
           const dir = await getSessionDir(r.key);
           const abs = safeJoin(dir, f.path);
-          if (!abs) throw new Error('invalid path');
+          if (!abs || !(await insideWorkspace(dir, abs))) throw new Error('invalid path');
           await fs.mkdir(path.dirname(abs), { recursive: true });
+          // mkdir 之后再判一次:recursive 会沿已存在的软链目录往下建。
+          if (!(await insideWorkspace(dir, abs))) throw new Error('invalid path');
           await fs.writeFile(abs, buf);
           markSessionDirty(r.key);
         }

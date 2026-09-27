@@ -556,7 +556,7 @@ describe('read_computer_history 门禁矩阵(registry 级)', () => {
     expect(has({ ...base, client: undefined })).toBe(false); // TUI / 通道 / 派生 run 不带 tag
     expect(has({ ...base, client: 'automation/2.11.4', automationOrigin: 'rule-1' })).toBe(false);
     // Forsion Unit 设备页:client 自报 desktop/,只能靠代理盖的 remote 标记拒
-    expect(has({ ...base, remote: true })).toBe(false);
+    expect(has({ ...base, remote: { via: 'tunnel', marked: true } })).toBe(false);
     // agentConfig.muse 是请求体可控的:web/mobile/缺省客户端带 muse:true 也不放行(只认引擎自起的 muse/ 标签)
     expect(has({ ...base, client: 'web/1.0', muse: true })).toBe(false);
     expect(has({ ...base, client: undefined, muse: true })).toBe(false);
@@ -565,7 +565,7 @@ describe('read_computer_history 门禁矩阵(registry 级)', () => {
     expect(has({ ...museCtx, inDiscussion: true })).toBe(false);
     expect(has({ ...museCtx, teamSessionId: 'team-1' })).toBe(false);
     expect(has({ ...museCtx, subAgentDepth: 1 })).toBe(false);
-    expect(has({ ...museCtx, remote: true })).toBe(false);
+    expect(has({ ...museCtx, remote: { via: 'tunnel', marked: true } })).toBe(false);
     // 纯函数同一判定
     expect(computerHistoryGate(desktop, { client: 'desktop/1' }, { v: 1, enabled: true, pausedUntil: null, status: 'paused', since: 0, updatedAt: 0, platform: 'darwin' })).toBe(true);
   });
@@ -581,7 +581,7 @@ describe('read_computer_history 门禁矩阵(registry 级)', () => {
   it('召回藏匿开关与门禁同判:过不了门禁 → 藏调过本工具的会话', () => {
     expect(computerHistoryRecallHide(desktop, base)).toBeUndefined();
     expect(computerHistoryRecallHide(desktop, { ...base, channelSession: true })).toBe('read_computer_history');
-    expect(computerHistoryRecallHide(desktop, { ...base, remote: true })).toBe('read_computer_history');
+    expect(computerHistoryRecallHide(desktop, { ...base, remote: { via: 'tunnel', marked: true } })).toBe('read_computer_history');
     expect(computerHistoryRecallHide(undefined, base)).toBe('read_computer_history'); // 没 profile = 不认本机
     writeState({ enabled: false, status: 'off' });
     expect(computerHistoryRecallHide(desktop, base)).toBe('read_computer_history');

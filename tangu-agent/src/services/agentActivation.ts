@@ -7,6 +7,7 @@
  */
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { agentCapOf, builtinAgentDef, resolveActiveSlug, resolveMemorySlug, upgradeAriosoPersona, type NormalAgentDef } from '../agents/agentRegistry.js';
+import { clampApprovalMode, type CapMode } from './remoteOrigin.js';
 
 export interface AgentActivation {
   /** 人格 slug(start_discussion 分身、prompt section、Library 取用据此)。 */
@@ -44,6 +45,8 @@ export async function applyAgentActivation(
   userId: string,
   localGet: (slug: string) => Promise<NormalAgentDef | null>,
   agentsBrain?: AgentsBrainLike | null,
+  /** approvalCap:远程污点 run(契约 C3)—— Agent 定义里的审批档填进来时钳到这一档(远端不带 approvalMode 就继承本机 full-auto Agent 的洞)。 */
+  opts?: { approvalCap?: CapMode },
 ): Promise<AgentActivation> {
   let activeAgentSlug = DEFAULT_AGENT_SLUG;
   let memScopeSlug = DEFAULT_AGENT_SLUG;
@@ -76,7 +79,9 @@ export async function applyAgentActivation(
         if (cap != null) agentConfig.maxIterations = cap;
       }
       if (!agentConfig.thinkingLevel && def.thinkingLevel) agentConfig.thinkingLevel = def.thinkingLevel;
-      if (!agentConfig.approvalMode && def.approvalMode) agentConfig.approvalMode = def.approvalMode;
+      if (!agentConfig.approvalMode && def.approvalMode) {
+        agentConfig.approvalMode = opts?.approvalCap ? clampApprovalMode(def.approvalMode, opts.approvalCap) : def.approvalMode;
+      }
       if ((!agentConfig.enabledToolIds || !agentConfig.enabledToolIds.length) && def.tools.length) {
         agentConfig.enabledToolIds = def.tools;
       }

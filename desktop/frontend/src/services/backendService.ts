@@ -10,6 +10,7 @@ import { authFetch } from './http'
 import { AGENT_APP_ID } from './agentRunService'
 import { localInbox } from './localInbox' // 移动端(window.tangu?.mobile)下 inbox 走设备本地存储
 import { registerMessages, translate } from '../i18n'
+import { remoteRefusalMessage } from './localOnly'
 
 registerMessages({
   'backendsvc.downloadFailed': { zh: '下载失败 ({status})', en: 'Download failed ({status})' },
@@ -28,6 +29,10 @@ async function request<T>(cfg: TanguDesktopConfig, path: string, init?: RequestI
       const j = await r.json()
       detail = j?.detail || detail
       if (typeof j?.error === 'string') code = j.error // 机器可读错误码(如 claim_requirements_unmet),调用方据此本地化
+      // 设备页打到远端不许用的路由(unitWeb 403 LOCAL_ONLY)、或引擎拒了远端请求(400 REMOTE_CWD_FORBIDDEN /
+      // REMOTE_ARGS_OVERRIDE_FORBIDDEN)→ 换成本地化提示,而不是把英文 detail 原样上屏(见 services/localOnly.ts)
+      const refusal = remoteRefusalMessage(j?.code)
+      if (refusal) { detail = refusal; code = j.code }
     } catch { /* keep */ }
     throw Object.assign(new Error(detail), { status: r.status }, code ? { code } : {})
   }

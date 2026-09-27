@@ -14,6 +14,7 @@ import { skillsDir, agentsDir, DEFAULT_AGENT_SLUG } from '../../core/tanguHome.j
 import { slugify } from '../../agents/agentRegistry.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
 import { parseFrontmatter, isBuiltinSkillName, isUntouchedSeedMirror } from '../../skills/localSkills.js';
+import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
 
 const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const oneLine = (s: unknown) => String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -75,8 +76,11 @@ export const manageSkillProvider: ToolProvider = {
           },
         },
       },
-      execute: async (args) => {
+      execute: async (args, ctx) => {
         const action = String(args.action || '');
+        // 远程污点 run 只许 list(P0 第三轮 E5):技能下一次本机 run 就会被 use_skill 装载。
+        const remoteDenied = effectiveRemote(ctx) ? remoteManagementDenied('manage_skill', args.action) : null;
+        if (remoteDenied) return `Error: ${remoteDenied}`;
         const scope = args.scope === 'agent' ? 'agent' : 'user';
         const root = skillsRoot(scope);
         const scopeTag = scope === 'agent' ? '(agent 级)' : '';

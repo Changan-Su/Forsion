@@ -9,6 +9,7 @@ import http from 'node:http'
 import { createHash } from 'node:crypto'
 import type { AddressInfo } from 'node:net'
 import { attachHostChannel, memoryChannelPair, startP2pProxy, P2P_PROTO_V, type FrameChannel } from './unitP2p'
+import { startUnitWeb, type UnitWebDeps } from './unitWeb'
 
 const sha = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
 
@@ -88,7 +89,7 @@ async function boot(): Promise<{
 }> {
   const target = await fakeTarget()
   const [chA, chB] = memoryChannelPair()
-  const host = attachHostChannel(chB, { getUnitWeb: () => ({ url: target.url, internalSecret: 'INTERNAL' }), log: () => {} })
+  const host = attachHostChannel(chB, { getUnitWeb: () => ({ url: target.url, p2pSecret: 'P2P-SECRET' }), log: () => {} })
   const proxy = await startP2pProxy(chA)
   return {
     base: proxy.url.replace(/\/$/, ''),
@@ -103,14 +104,15 @@ const authed = (secret: string, extra?: Record<string, string>): Record<string, 
   ({ Authorization: `Bearer ${secret}`, ...(extra || {}) })
 
 describe('unitP2p', () => {
-  it('往返:POST 体直通,Authorization 剥离换 x-unit-internal', async () => {
+  it('往返:POST 体直通,Authorization 剥离换 P2P 专用密钥头 x-unit-p2p(不是隧道的 x-unit-internal)', async () => {
     const b = await boot()
     try {
       const r = await fetch(`${b.base}/unit/echo`, { method: 'POST', headers: authed(b.secret, { 'Content-Type': 'application/json' }), body: '{"a":1}' })
       expect(r.status).toBe(200)
       expect(await r.json()).toEqual({ echo: '{"a":1}', path: '/unit/echo' })
       const seen = b.target.seen[0]
-      expect(seen.headers['x-unit-internal']).toBe('INTERNAL')
+      expect(seen.headers['x-unit-p2p']).toBe('P2P-SECRET')
+      expect(seen.headers['x-unit-internal']).toBeUndefined()
       expect(seen.headers.authorization).toBeUndefined() // 身份声明不过信道(信封面口径)
       expect(seen.headers['content-type']).toBe('application/json')
     } finally { await b.close() }
@@ -212,7 +214,7 @@ describe('unitP2p', () => {
   it('零信用等待可被 abort 唤醒:泵不再悬挂,目标读取被掐(Codex H4)', async () => {
     const target = await fakeTarget()
     const [chA, chB] = memoryChannelPair()
-    const host = attachHostChannel(chB, { getUnitWeb: () => ({ url: target.url, internalSecret: 'I' }), log: () => {} })
+    const host = attachHostChannel(chB, { getUnitWeb: () => ({ url: target.url, p2pSecret: 'I' }), log: () => {} })
     let chunks = 0
     let aborted = false
     chA.onMessage((text) => {
@@ -293,5 +295,51 @@ describe('unitP2p', () => {
       const after = await fetch(`${b.base}/quick`, { headers: authed(b.secret) })
       expect(after.status).toBe(502)
     } finally { await b.close() }
+  })
+})
+
+describe('unitP2p × 真 unitWeb', () => {
+  it('P2P 通路进引擎盖 x-forsion-remote: p2p(与隧道分钥);deny 行照样 403 到不了引擎', async () => {
+    const seen: http.IncomingHttpHeaders[] = []
+    const paths: string[] = []
+    const engine = http.createServer((req, res) => {
+      seen.push(req.headers)
+      paths.push(req.url || '')
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end('{"runs":[]}')
+    })
+    await new Promise<void>((r) => engine.listen(0, '127.0.0.1', () => r()))
+    const enginePort = (engine.address() as AddressInfo).port
+    const nope = async (): Promise<never> => { throw new Error('not in this test') }
+    const deps: UnitWebDeps = {
+      getEngine: () => ({ url: `http://127.0.0.1:${enginePort}`, token: 'ENGINE_TOKEN', remoteMark: 'MARK' }),
+      confirmPair: async () => false,
+      pairedDevices: { list: () => [], add: nope },
+      readPlugins: async () => [], readSpaces: async () => [], readConfig: async () => ({}), writeConfig: async () => ({}),
+      readProviders: async () => [], readHostFile: async () => null, readHostDir: async () => null, readHostStat: async () => null,
+      meta: { instanceId: 'p2p-it', name: 'p2p', version: '0' },
+      webDistDir: () => null, vault: () => null, log: () => {},
+    }
+    const web = await startUnitWeb(deps, { port: 0, bindHost: '127.0.0.1' })
+    const [chA, chB] = memoryChannelPair()
+    // main.ts 的接线:P2P 执行器拿的是 p2pSecret(字段名刻意不同,传成 internalSecret 编译不过)
+    const host = attachHostChannel(chB, { getUnitWeb: () => ({ url: `http://127.0.0.1:${web.port}`, p2pSecret: web.p2pSecret }), log: () => {} })
+    const proxy = await startP2pProxy(chA)
+    try {
+      const r = await fetch(`${proxy.url}engine/agent/runs`, { headers: { Authorization: `Bearer ${proxy.secret}`, 'x-forsion-remote': 'tunnel' } })
+      expect(r.status).toBe(200)
+      expect(seen.at(-1)!['x-forsion-remote']).toBe('p2p')
+      expect(seen.at(-1)!['x-forsion-remote-mark']).toBe('MARK')
+      expect(seen.at(-1)!.authorization).toBe('Bearer ENGINE_TOKEN')
+      const denied = await fetch(`${proxy.url}engine/agent/plugins/install`, { method: 'POST', headers: { Authorization: `Bearer ${proxy.secret}` }, body: '{}' })
+      expect(denied.status).toBe(403)
+      expect(((await denied.json()) as { code?: string }).code).toBe('LOCAL_ONLY')
+      expect(paths).toEqual(['/agent/runs'])
+    } finally {
+      host.detach()
+      await proxy.close()
+      await web.close()
+      engine.close()
+    }
   })
 })

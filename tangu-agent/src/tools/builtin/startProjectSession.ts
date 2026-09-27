@@ -16,6 +16,8 @@ import { publish } from '../../services/eventBus.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { AppProfile } from '../../seams/appProfile.js';
 import type { ToolContext } from '../toolTypes.js';
+import { effectiveRemote, remoteOriginMarker, type RemoteInfo } from '../../services/remoteOrigin.js';
+import { remoteCwdForbidden } from '../../sandbox/hostSandboxProtection.js';
 
 // 只在「Agent 私聊 + 本轮 @ 了项目」的 run 里可见(agentLoop 把 realpath 放进 ctx.dispatchTargets);子代理 / 讨论 run / 云端不可见。
 const guard = (profile: AppProfile, ctx: ToolContext): boolean =>
@@ -34,12 +36,16 @@ export function isForbiddenProjectRoot(p: string): boolean {
 export interface DispatchInput {
   userId: string; appId: string; modelId: string; agentSlug?: string;
   projectPath: string; projectName?: string; title?: string; message: string; parentSessionId?: string;
-  /** 派遣方 run 来自远程设备页(ctx.remote):子 run 显式继承,否则它拿着 createRun 抄来的 desktop/ 标签就过了本机专属门禁。 */
-  remote?: boolean;
+  /** 远程污点(契约 C5):派遣出的项目会话首个 run 照抄 —— 项目默认审批档可能是完全通行。 */
+  remote?: RemoteInfo;
 }
 
 /** 建项目会话 + 首个 run(纯逻辑,路由/工具共用;不检查目录存在,调用方先验)。返回新会话与 run 的 id。 */
 export async function dispatchProjectSession(p: DispatchInput): Promise<{ sessionId: string; runId: string }> {
+  // 契约 C8 对派生会话同样成立(P0 第三轮 E11):远程污点的调用方派出的会话,cwd 就是这个项目目录 —— 与远程 POST /agent/sessions 同一道校验。
+  if (p.remote && remoteCwdForbidden(p.projectPath)) {
+    throw new Error(`A remote session cannot use ${p.projectPath} as a project folder (the home folder, app configuration folders and folders that contain protected configuration are not allowed).`);
+  }
   const sessionId = uuidv4();
   const projectName = (p.projectName || path.basename(p.projectPath) || 'Project').slice(0, 255);
   const title = (p.title || p.message).replace(/\s+/g, ' ').trim().slice(0, 80) || 'New Chat';
@@ -54,15 +60,18 @@ export async function dispatchProjectSession(p: DispatchInput): Promise<{ sessio
     ...(defaults?.thinkingLevel ? { thinkingLevel: defaults.thinkingLevel } : {}),
     ...(defaults?.approvalMode ? { approvalMode: defaults.approvalMode } : {}),
   };
+  // 远程污点的调用方派出的会话:存值盖远程标记(与远程 POST /agent/sessions 同口径)—— 项目目录来自远端 run 的 @ 提及,
+  // 桌面设备页的主机文件读范围不认带标记的会话目录(D1)。标记只进会话存值,不进首个 run 的 agentConfig(run 的污点是 input.remote)。
+  const storedConfig = p.remote ? { ...agentConfig, remoteOrigin: remoteOriginMarker(p.remote) } : agentConfig;
   await query(
     `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, project_path, project_name, projectless, agent_config, parent_session_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [sessionId, p.userId, p.appId, title, modelId || null, p.projectPath.slice(0, 1000), projectName, false, JSON.stringify(agentConfig), p.parentSessionId || null],
+    [sessionId, p.userId, p.appId, title, modelId || null, p.projectPath.slice(0, 1000), projectName, false, JSON.stringify(storedConfig), p.parentSessionId || null],
   );
   const runId = uuidv4();
   await createRun({
     id: runId, sessionId, userId: p.userId, appId: p.appId, modelId, assistantMessageId: uuidv4(),
-    input: { message: p.message, userMessageId: uuidv4(), attachments: [], agentConfig, ...(p.remote ? { remote: true } : {}) },
+    input: { message: p.message, userMessageId: uuidv4(), attachments: [], agentConfig, ...(p.remote ? { remote: p.remote } : {}) },
   });
   const { enqueueRun } = await import('../../services/agentLoop.js');
   enqueueRun(sessionId, runId);
@@ -111,13 +120,16 @@ export const dispatchProvider: ToolProvider = {
         try { real = realpathSync(projectPath); } catch { return 'Error: project_path does not exist'; }
         if (!(ctx.dispatchTargets || []).includes(real)) return 'Error: project_path must be one of the projects the user @-mentioned in this message';
         if (isForbiddenProjectRoot(real)) return 'Error: refusing to use the filesystem root or the home directory as a project';
+        if (effectiveRemote(ctx) && remoteCwdForbidden(real)) {
+          return 'Error: a remote session cannot start a project session in this folder (app configuration and folders that contain protected configuration are not allowed); ask the user to start it on the host computer';
+        }
         const modelId = ctx.modelId || ctx.profile?.defaultModelId || '';
         if (!modelId) return 'Error: no model available (the run carries no modelId)';
         try {
           const { sessionId, runId } = await dispatchProjectSession({
             userId: ctx.userId, appId: ctx.appId, modelId, agentSlug: ctx.agentSlug,
             projectPath: real, projectName: args.project_name ? String(args.project_name) : undefined, title: args.title ? String(args.title) : undefined,
-            message, parentSessionId: ctx.sessionId, remote: ctx.remote,
+            message, parentSessionId: ctx.sessionId, remote: effectiveRemote(ctx),
           });
           // 侧栏被告知(方案 §5.4 硬化 ②):前端据此刷新会话列表并提示;不等 listSessions 轮询(它没有轮询)。
           if (ctx.runId) void publish(ctx.runId, 'session_created', { sessionId, runId, projectPath, projectName: args.project_name ? String(args.project_name) : path.basename(projectPath) });

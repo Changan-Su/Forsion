@@ -50,10 +50,12 @@ import { getAgent, isValidSlug, DEFAULT_MAX_ITERATIONS, libDirOf, type NormalAge
 import { loadHarness, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
+import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, remoteApprovalCap, remoteOf, REMOTE_WRITABLE_CONFIG_KEYS } from './remoteOrigin.js';
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, onUserRunStart, type HistorianForkSeed } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
 import { describeImages, resolveVisionModelId, shouldDescribeImages } from './visionService.js';
+import { toolImageMessages, type ToolImage } from './toolImages.js';
 import { replayAssistantHistory, stepLlmResponse, loadReplaySteps, dropCoveredCalls } from './historyReplay.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { isRetryableLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
@@ -250,7 +252,8 @@ export function startRun(runId: string): void {
       if (sid && sessionActive.get(sid) === runId) advanceQueue(sid);
       setTimeout(() => cleanup(runId), 30_000);
     }
-  }).finally(() => { runTasks.delete(runId); });
+  // 远端 steer 染的色在**所有**收尾路径清掉(准备阶段失败 / 外部引擎分支不经 runLoop 的 finally —— Codex 二轮)。
+  }).finally(() => { runTasks.delete(runId); clearRunRemoteTaint(runId); });
   runTasks.set(runId, task);
 }
 
@@ -354,6 +357,15 @@ async function dispatchRun(runId: string, ac: AbortController): Promise<void> {
       const facts = await storedSessionFacts(run.session_id);
       const profile = resolveProfile((run as any).app_id) ?? deps().profile;
       const engines = deps().engines;
+      // 远程污点 run 不进外部引擎:ACP 引擎的工具 / 进程不经本引擎的审批闸与路径策略,远程档位上限对它无从生效(§4.7 剥 engineId 的同一理由)。
+      // 引擎私聊会话照样明确失败,绝不回落自有 loop(理由同下)。
+      if (remoteOf(input) && (facts.soloEngineId || input?.agentConfig?.engineId)) {
+        const error = 'engine_unavailable_remote';
+        await publish(runId, 'error', { error, detail: 'External engines cannot be driven from a remote device. Continue this chat on the host computer.' }).catch(() => {});
+        await drain(runId).catch(() => {});
+        await updateRunStatus(runId, 'failed', { error }).catch(() => {});
+        return;
+      }
       if (facts.soloEngineId) {
         // 引擎私聊是**强制**分支:引擎被移除 / 非 host 形态 → 明确失败,绝不回落 Tangu 自有 loop(否则「Codex 私聊」无提示地
         // 变成默认 Agent 的人格、工具和记忆 —— creview 09-16 P0)。请求里的 preset 也不看(存值 preset 恒 null)。
@@ -440,7 +452,7 @@ async function externalEngineLoop(runId: string, ac: AbortController, run: any, 
     await updateRunStatus(runId, 'done', { result: { content: finalContent } });
     // Historian 从会话解析记忆域；文件同步使用已捕获的展示身份，不能拿共享记忆桶替代。
     // 引擎私聊没有 Tangu 记忆:不跑 Historian(它找不到会话 Agent 会回落默认 Agent,把 Codex/PI 的对话写进 Xyra 的 LOG/MEMORY),也不同步 Agent 文件。
-    if (!engineSolo) void onUserRunDone(sessionId, userId).finally(() => scheduleAgentFilesSync(userId, displayAgentSlug));
+    if (!engineSolo) void onUserRunDone(sessionId, userId, undefined, undefined, !!(remoteOf(run.input) || effectiveRemote({ runId }))).finally(() => scheduleAgentFilesSync(userId, displayAgentSlug));
   } catch (err: any) {
     const aborted = err?.name === 'AbortError' || ac.signal.aborted;
     const status = aborted ? 'aborted' : 'failed';
@@ -705,14 +717,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 客户端面标识(desktop/2.7.9):/agent/runs 已过白名单闸后落 input.client。随每次 LLM 调用带下去,
   // 记进 api_usage_logs.client —— admin 的「API 用量」按 app × 端 × 版本看每一次调用。
   const clientTag = typeof input.client === 'string' ? input.client : undefined;
+  // 远程污点(契约 C1/C3/C5):只认 input.remote(路由解析 / 派生 run 显式抄写),审批档据此钳到上限。
+  const remote = remoteOf(input);
+  const remoteCap = remote ? remoteApprovalCap() : undefined;
   // 界面面(set_ui_setting / run_ui_command / list_ui_commands)的能力握手 + 目录快照。
   // 与 clientTag 同源同链;run 内冻结(prompt 缓存纪律,同 mcpTools)。
   const uiCommands = Array.isArray(input.uiCommands) ? input.uiCommands : undefined;
   // 有能力握手就物化成 {}:回执刷新(updateUiSettings)要有落点;list_ui_commands 对空对象与 undefined 输出一样。
   const uiSettings: ToolContext['uiSettings'] = input.uiSettings && typeof input.uiSettings === 'object'
     ? input.uiSettings : (uiCommands ? {} : undefined);
-  // 远程设备页标记(routes/runs 按代理盖的头落 input.remote;start_project_session 显式带给子 run):本机专属数据面据此拒。
-  const remoteRun = input.remote === true;
   setRunClientTag(clientTag);
   // Normal Agent 激活:会话 agent_config.agentSlug → 合并 agent 定义里「会话未显式覆盖」的字段。
   // 本地形态读 ~/.tangu/agents;云端 worker 本地目录为空 → applyAgentActivation 经 brain.agents 兜底水合。
@@ -758,16 +771,21 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
     const storedHasPreset = !!stored && Object.prototype.hasOwnProperty.call(stored, 'preset');
     const storedPreset = parsePreset(stored?.preset);
+    // 远程污点 run 不经这里改写既有会话的事实(P0 第三轮 E7):preset 不在远程写白名单(C7)里 —— 存值有就按存值跑(空白会话也一样),
+    // 没有就按请求跑这一轮、但不落库(本机下一次 run 再定)。远端建会话时要定 preset,走 POST /agent/sessions(那里经校验原子落库)。
+    const remoteRun = !!effectiveRemote({ remote, runId });
     if (!storedHasPreset || storedPreset !== preset) {
       const blank = (await deps().state.countSessionMessages(sessionId)) === 0;
-      if (!blank && storedHasPreset) {
-        console.warn(`[agent-core] run=${runId} preset locked: session=${storedPreset ?? 'work'} requested=${preset ?? 'work'} (session already has messages)`);
+      if ((!blank || remoteRun) && storedHasPreset) {
+        console.warn(`[agent-core] run=${runId} preset locked: session=${storedPreset ?? 'work'} requested=${preset ?? 'work'} (${remoteRun ? 'remote run' : 'session already has messages'})`);
         void publish(runId, 'status', { warning: 'preset_locked', preset: storedPreset ?? 'work', requested: preset ?? 'work' });
         preset = storedPreset;
-      } else {
+      } else if (!remoteRun) {
         patch.preset = preset ?? null; // null = 显式锁定为 work;只有缺键(老会话)才允许后来者改写一次
       }
     }
+    // 远程污点 run 的写回只剩 C7 白名单键(今天就是 agentSlug —— 远端本就能经 PATCH config 选 Agent)。
+    if (remoteRun) for (const k of Object.keys(patch)) if (!REMOTE_WRITABLE_CONFIG_KEYS.has(k)) delete patch[k];
     if (Object.keys(patch).length) {
       ac.signal.throwIfAborted();
       // 写前现读再合:上面读存值到这儿隔着几次 await(团队会话的 getTeam 是真文件 I/O),期间用户在输入区切的档(PUT)不能被旧对象整份盖回去 —— 审批闸现读的就是它(Codex 09-21 P1)。
@@ -813,6 +831,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     userId,
     inlineMemberDef ? async (slug: string) => (slug === inlineMemberDef.slug ? inlineMemberDef : getAgent(slug)) : getAgent,
     deps().brain.agents,
+    remoteCap ? { approvalCap: remoteCap } : undefined,
   );
   ac.signal.throwIfAborted();
   if (agentConfig.agentSlug && activeAgentSlug !== agentConfig.agentSlug) {
@@ -878,8 +897,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   setRunCwd(cwd); // 项目级技能 <cwd>/.forsion/skills 扫描据此(host 才有 cwd)
   // 额外工作文件夹(用户在「工作范围」里显式添加):只认 host、只认绝对路径,去重后封顶 8 个
   // —— 每个都要占一行系统提示,且都是免审批可写根,不该无节制。cwd 本身不重复列。
+  // 远程污点 run 没有额外可写根(路由已剥;这里兜住绕过路由抄进来的 —— 会话存值 / 派生配置)。
   const extraRoots: string[] =
-    execMode === 'host' && Array.isArray(agentConfig.extraRoots)
+    execMode === 'host' && !remote && Array.isArray(agentConfig.extraRoots)
       ? [
           ...new Set<string>(
             (agentConfig.extraRoots as unknown[])
@@ -890,8 +910,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           .filter((r) => !cwd || r !== path.resolve(cwd))
           .slice(0, 8)
       : [];
-  const approvalMode: ApprovalMode =
+  const requestedApprovalMode: ApprovalMode =
     agentConfig.approvalMode || (execMode === 'host' ? 'auto-edit' : 'full-auto');
+  // C3:远程污点 run 的快照档先钳一次(Agent 定义激活填进来的也在内);每次调用现读的会话存档由审批闸再钳。
+  const approvalMode: ApprovalMode = remoteCap ? clampApprovalMode(requestedApprovalMode, remoteCap) : requestedApprovalMode;
   // 会话档现读只在本机引擎形态(hostExec;含本机的沙箱会话 —— 它们的 MCP 工具也过闸):云端形态的状态层是 HTTP,
   // 每次 MCP 调用多一趟往返、瞬时失败还会落只读弹审批,而这次修的是本机的事 → 云端照旧用快照。
   // 成员身份以库里的父链接为准:agentConfig 来自请求体,分支会话(branchSession)也会把 teamMember 原样抄走 —— 不核实,
@@ -1007,7 +1029,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // chat 预设不进群聊(PRESET_TABLE.groupChat=false):参与者的工具面不带 preset,会绕过 chat 硬闸。
     if (agentConfig.groupChat && profile.capabilities.groupChat && ps.groupChat) {
       await runGroupChat({
-        runId, sessionId, userId, appId, modelId, execMode, cwd, extraRoots, wsProject, profile, agentConfig,
+        runId, sessionId, userId, appId, modelId, execMode, cwd, extraRoots, wsProject, profile, agentConfig, remote,
         followSessionMode: !!modeSessionId,
         message: input.message ? String(input.message) : '',
         userMessageId: input.userMessageId,
@@ -1020,7 +1042,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       });
       // 群聊 run 也按轮触发 Historian(标题/LOG 维护)——原先此分支提前 return,群聊会话永远没有标题维护。
       // Historian 内部只数 done run 且有实质增量地板,失败/中止场景自然无害。
-      void onUserRunDone(sessionId, userId, memScopeSlug).finally(() => scheduleAgentFilesSync(userId, activeAgentSlug));
+      void onUserRunDone(sessionId, userId, memScopeSlug, undefined, !!(remote || effectiveRemote({ runId }))).finally(() => scheduleAgentFilesSync(userId, activeAgentSlug));
       return;
     }
 
@@ -1271,7 +1293,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 跨会话历史段:本 run 过不了电脑历史门禁 → 藏起调过 read_computer_history 的会话(否则关掉功能后、或在通道会话里,
       // 召回会把别的会话里模型复述过的电脑历史原样注入)。门禁字段与下面 toolGateCtx 同源,改一处须两处同改。
       const hideSessionsWithTool = computerHistoryRecallHide(profile, {
-        client: clientTag, remote: remoteRun, channelSession,
+        client: clientTag, remote: effectiveRemote({ remote, runId }), runId, channelSession,
         teamSessionId: isTeamMember ? String(teamMember.teamSessionId) : undefined, inDiscussion: isTeamMember || undefined,
         ephemeral: !!inlineMemberDef || undefined, subAgentDepth: agentConfig.delegatedFrom ? 1 : undefined,
       });
@@ -1312,10 +1334,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ? agentConfig.mentionedProjects.map((p: any) => (p && typeof p.path === 'string' ? safeRealpath(p.path) : '')).filter(Boolean).slice(0, 8)
       : [];
     const toolGateCtx = {
-      userId, sessionId, appId, runId, client: clientTag, remote: remoteRun || undefined, channelSession, preset, uiCommands, uiSettings,
+      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings,
       dispatchTargets,
       hostSandbox: runHostSandbox,
       enabledSkillIds, execMode, cwd, extraRoots, approvalMode, approvalModeSessionId: modeSessionId, profile, modelId, planMode, wsProject,
+      remote,
       muse: !!agentConfig.muse,
       activityAccess: !!agentConfig.activityAccess,
       automationOrigin: typeof agentConfig.automationOrigin === 'string' ? agentConfig.automationOrigin : undefined,
@@ -1413,7 +1436,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         await drain(runId);
         await publish(runId, 'done', { content: reason });
         await updateRunStatus(runId, 'done', { result: { content: reason } });
-        void onUserRunDone(sessionId, userId, memScopeSlug).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
+        void onUserRunDone(sessionId, userId, memScopeSlug, undefined, !!(remote || effectiveRemote({ runId }))).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
         return;
       }
       const ut = hookContextText(uv);
@@ -1811,7 +1834,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
     // view_image 等工具产出的图片回流:工具把 data URL 交回这里,本轮工具跑完后物化成一条
     // user 图像消息追加到对话尾部(尾部追加 → 不动前缀,缓存安全;复用 toImageParts)。
-    const pendingToolImages: { url: string }[] = [];
+    // phone_observe 的截图带 `untrusted` 前言(别的 App 的屏幕),物化时单独成条、标不可信(toolImages.ts)。
+    const pendingToolImages: ToolImage[] = [];
     const MAX_TOOL_IMAGES_PER_ROUND = 8;
     // display_file / generate_image / 表情包:工具要展示给**用户**的文件。即时 publish 让桌面内联渲染;
     // 累积到下一次 finalize 时随 assistant 消息落库(刷新会话仍在)。不回灌模型上下文、不计费。
@@ -1853,7 +1877,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       agentSlug: activeAgentSlug,
       collectImage: (img) => {
         if (img && typeof img.url === 'string' && img.url && pendingToolImages.length < MAX_TOOL_IMAGES_PER_ROUND) {
-          pendingToolImages.push({ url: img.url });
+          pendingToolImages.push({ url: img.url, ...(typeof img.untrusted === 'string' && img.untrusted ? { untrusted: img.untrusted } : {}) });
         }
       },
       displayFile: (item) => {
@@ -1958,7 +1982,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 托盘 run:要问用户的调用挂起(park)——审批请求照发、不等,先给模型占位结果,拍板后在迭代边界兑现。
       const decision = await gateToolCall(runId, effCall, {
         sessionId, execMode, approvalMode, modeSessionId, cwd, extraRoots, profile,
-        approvalDeferral, userId, agentSlug: activeAgentSlug, park: approvalTray,
+        approvalDeferral, userId, agentSlug: activeAgentSlug, park: approvalTray, remote,
+        // 无人值守(自动化 / Muse):没人能答审批卡 —— 保护路径写入直接拒(Muse ask/agent 档另有 approvalDeferral 排队通道)。
+        unattended: (typeof agentConfig.automationOrigin === 'string' && !!agentConfig.automationOrigin) || input.background === 'muse',
       }, approvalTray ? parkAc.signal : ac.signal);
 
       if (ac.signal.aborted) throw new AbortLikeError();
@@ -2693,7 +2719,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         //    收尾前跑一遍;失败把输出尾巴回灌(不落库)逼模型修完再收。顺序刻意在完成度审计之后:
         //    先干完活(审计),再证明干对了(验证)。VERIFY_MAX_ROUNDS 兜底:最后一次仍红 → 在终稿
         //    尾部如实标注,绝不无限修。host-only:命令是用户自己配的,与 hooks 同级信任,不过审批闸。——
-        const verifyCommand = execMode === 'host' && typeof agentConfig.verifyCommand === 'string'
+        // 远程污点 run 不跑验证命令(它以 /bin/sh -c 执行、不过审批闸):路由已剥,这里兜住从会话存值 / 派生配置抄进来的,
+        // 以及起跑后才被远端 steer 染上的(现查 effectiveRemote)。
+        const verifyCommand = execMode === 'host' && !effectiveRemote({ remote, runId }) && typeof agentConfig.verifyCommand === 'string'
           ? String(agentConfig.verifyCommand).trim() : '';
         if (verifyCommand && usedTools && !planMode && !lastIter && verifyRounds < VERIFY_MAX_ROUNDS) {
           verifyRounds++;
@@ -2812,25 +2840,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       if (pendingToolImages.length) {
         const imgs = pendingToolImages.splice(0);
         // 主模型没有原生视觉 → 图直接塞过去只会被 provider 拒(或静默忽略)。先交给「辅助模型 ·
-        // 图像识别」转成文字再入上下文;没配槽/识别失败 → 退回原来的塞图行为(宁可让 provider
-        // 报错也不静默丢内容)。判定与转写都做过 60s 缓存/单次调用,不在热路径上放大开销。
+        // 图像识别」转成文字再入上下文;没配槽/识别失败 → 可信图退回原来的塞图行为(宁可让 provider
+        // 报错也不静默丢内容),不可信图(手机截图)丢图留说明(见 toolImages.ts)。判定与转写都做过
+        // 60s 缓存/单次调用,不在热路径上放大开销。
         // 已中止就整段跳过:这里有两三次不吃 run signal 的云请求(目录/解析),中止后还去排队等
         // 60s 会把「停止」拖成肉眼可见的卡顿(2026-07-27 Codex 评审)。
-        let described = '';
-        if (!ac.signal.aborted && (await shouldDescribeImages(modelId, appId, agentConfig.visionMode as string | undefined))) {
-          try {
-            const visionModelId = await resolveVisionModelId(toolCtx.visionModelId, appId);
-            described = await describeImages(imgs, { modelId: visionModelId, userId, appId, signal: ac.signal });
-          } catch (e: any) {
-            console.warn(`[agent-core] run=${runId} 图像识别降级失败(退回直接送图):`, e?.message || e);
-          }
-        }
-        workingMessages.push({
-          role: 'user',
-          content: described
-            ? `(The images read by the tools above were transcribed by the vision assistant model, because the current model has no native image input. Description follows.)\n\n${described}`
-            : toImageParts('(The images read by the tools above are shown below; analyze them accordingly)', imgs),
-        } as ChatMessage);
+        const needDescribe = !ac.signal.aborted && (await shouldDescribeImages(modelId, appId, agentConfig.visionMode as string | undefined));
+        // ⚠️ 这一行被 toolImages.test.ts 按源码文本钉住(物化的装配没有可跑的测试路径)。
+        workingMessages.push(...await toolImageMessages(imgs, needDescribe
+          ? async (batch) => describeImages(batch, { modelId: await resolveVisionModelId(toolCtx.visionModelId, appId), userId, appId, signal: ac.signal })
+          : null, (e: any) => console.warn(`[agent-core] run=${runId} 图像识别降级失败(可信图退回直接送图,不可信图丢弃):`, e?.message || e)));
       }
       allToolResults.push(...toolResults);
 
@@ -2881,7 +2900,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       modelId,
       contextWindow: ctxWindowTokens,
     };
-    void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
+    void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed, !!(remote || effectiveRemote({ runId }))).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
     // 惰性检查点:下个 run 的 hydrate 窗口之外若还有未被摘要覆盖的老行,现在(不占下个 run 首帧)做一份。
     // 登记在飞:下个 run(排队中的可能立刻起跑)hydrate 前先等它,别让窗口起点越过还没落检查点的老行。
     {
@@ -2934,6 +2953,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     steerWakeups.delete(runId);
     steerArrivals.delete(runId);
     steerClosed.delete(runId);
+    clearRunRemoteTaint(runId); // 远端 steer 染的色随 run 收尾(表长 = 在飞 run 数)
     runSession.delete(runId);
     advanceQueue(sessionId); // 推进同会话队列：起下一个排队 run（正常完成/失败/中止都经此）
     setTimeout(() => cleanup(runId), 30_000);

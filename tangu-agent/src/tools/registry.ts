@@ -8,6 +8,7 @@ import { deps } from '../seams/runtime.js';
 import { DockerCleanupError } from '../sandbox/dockerLifecycle.js';
 import { isHostSandboxRestricted, isHostSandboxToolAllowed, resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { executeCustomTool } from './customTools.js';
+import { mcpResultForModel } from '../mcp/toolBridge.js';
 import { registerToolProvider, resolveTools, isDeferredIn, isSubAgentDenied, canonicalToolName, type ToolDef } from './toolRegistry.js';
 import { presetOf } from '../core/presetTable.js';
 import { datetimeProvider, calculatorProvider } from './builtin/coreUtils.js';
@@ -389,10 +390,11 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<Too
   }
 
   // 第三级 fallback:MCP 工具(经 deps().mcp 调远端;仅 standalone/TUI 装配了 mcp)。
+  // 结果是第三方内容:文本已在 manager 圈进不可信围栏;图片经 collectImage 回灌并带不可信前言(M6)。
   const mcpTool = externalOk ? ctx.mcpTools?.get(name) : undefined;
   if (mcpTool && deps().mcp) {
     const r = await deps().mcp!.callTool(mcpTool, args, ctx.signal);
-    return { toolCallId: call.id, name, result: r.text, isError: r.isError };
+    return { toolCallId: call.id, name, result: mcpResultForModel(r, mcpTool, ctx.collectImage), isError: r.isError };
   }
 
   // 错误消息即提示词:说明「为什么不可用 + 下一步做什么」,不留死胡同(借 pi/Codex 的恢复导向文案)。

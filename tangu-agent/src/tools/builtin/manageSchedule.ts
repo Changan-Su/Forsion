@@ -17,6 +17,7 @@ import {
 } from '../../services/agentSchedule.js';
 import { getAgent } from '../../agents/agentRegistry.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
+import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
 
 function fmt(e: ScheduleEntry): string {
   const tags = [
@@ -68,6 +69,9 @@ export const manageScheduleProvider: ToolProvider = {
         },
       },
       execute: async (args, ctx) => {
+        // 远程污点 run 只许 list(P0 第三轮 E6):auto 条目到点以无人值守 run 执行,planning 条目也会注入本机 Agent 的提示词。
+        const remoteDenied = effectiveRemote(ctx) ? remoteManagementDenied('manage_schedule', args.action) : null;
+        if (remoteDenied) return `Error: ${remoteDenied}`;
         // 同 manage_automation 的信任边界:ask/agent 档的 Muse 只能管自己的日程(别人的 auto 条目到期是对方的 full-auto 会话)。
         if ((ctx as any).muse && ctx.approvalMode !== 'full-auto' && args.agent && String(args.agent) !== (ctx.agentSlug || 'muse')) {
           return 'Error: in your current permission tier you can only manage your own schedule (omit the agent parameter).';

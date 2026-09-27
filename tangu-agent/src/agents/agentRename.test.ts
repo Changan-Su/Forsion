@@ -8,12 +8,20 @@ import os from 'node:os';
 const h = vi.hoisted(() => ({
   calls: [] as Array<[string, unknown[]]>,
   sessions: [] as Array<{ id: string; agent_config: unknown }>,
+  /** 写回前现读的那一行(缺省 = 快照里的同一行);模拟快照之后、写回之前被别的写改过。 */
+  current: new Map<string, unknown>(),
   active: new Set<string>(),
 }));
 vi.mock('../core/db.js', () => ({
   query: vi.fn(async (sql: string, params: unknown[] = []) => {
     h.calls.push([sql, params]);
-    return sql.startsWith('SELECT id, agent_config') ? h.sessions : [];
+    if (sql.startsWith('SELECT id, agent_config')) return h.sessions;
+    if (sql.startsWith('SELECT agent_config FROM chat_sessions WHERE id = ?')) {
+      const id = params[0] as string;
+      const row = h.current.has(id) ? { agent_config: h.current.get(id) } : h.sessions.find((s) => s.id === id);
+      return row ? [row] : [];
+    }
+    return [];
   }),
 }));
 vi.mock('../services/agentLoop.js', () => ({ sessionHasActiveRun: (id: string) => h.active.has(id) }));
@@ -108,5 +116,20 @@ describe('renameAgent', () => {
     expect(existsSync(path.join(home, 'agents', 'new-bot'))).toBe(true);
     h.active.clear();
     expect(await code(renameAgent('new-bot', 'free-e'))).toBe('ok');
+  });
+
+  it('写回用现读的存值改名,不拿快照盖:快照之后远端改项目路径盖上的 remoteOrigin / 本机切的审批档都留着(P0 第三轮集成 Codex P1)', async () => {
+    const { saveAgent } = await import('./agentRegistry.js');
+    const { renameAgent } = await import('./agentRename.js');
+    await saveAgent({ slug: 'race-bot', name: 'Race', systemPrompt: 'x' });
+    h.calls = [];
+    h.sessions = [{ id: 'r1', agent_config: JSON.stringify({ agentSlug: 'race-bot', approvalMode: 'full-auto' }) }];
+    const marker = { via: 'lan', marked: true, at: '2026-09-27T00:00:00.000Z' };
+    h.current.set('r1', JSON.stringify({ agentSlug: 'race-bot', approvalMode: 'readonly', remoteOrigin: marker }));
+    const { warnings } = await renameAgent('race-bot', 'race-bot2');
+    expect(warnings).toEqual([]);
+    const writes = h.calls.filter(([sql]) => sql === 'UPDATE chat_sessions SET agent_config = ? WHERE id = ?');
+    expect(writes).toEqual([['UPDATE chat_sessions SET agent_config = ? WHERE id = ?', [JSON.stringify({ agentSlug: 'race-bot2', approvalMode: 'readonly', remoteOrigin: marker }), 'r1']]]);
+    h.current.clear();
   });
 });

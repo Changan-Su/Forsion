@@ -21,6 +21,7 @@ import { resolveInquiry } from '../services/inquiries.js';
 import { parseDeskShotBody, resolveDeskShot } from '../services/deskCapture.js';
 import { resolveUiAction } from '../services/uiAck.js';
 import { normalizeUiValues, sanitizeText } from './runs.js';
+import { parseRemoteOrigin, remoteArgsOverrideRejected, remoteArgsOverrideBody, taintRunRemote } from '../services/remoteOrigin.js';
 
 const router = Router();
 
@@ -99,12 +100,16 @@ router.post('/agent/runs/:runId/approvals/:approvalId', authMiddleware, async (r
     }
     const run = await getRunForUser(req.params.runId, userId);
     if (!run) return res.status(404).json({ detail: 'Run not found' });
+    // 契约 C9:远端(x-forsion-remote)答审批 —— 批准 / 拒绝照收(D1),但「总允许」按单次批准算(记下来 = 远端改了本机会话的
+    // 审批面,本机 run 随后也吃它;与 run 本身带不带远程污点无关,看的是**答复**从哪来),改参数一律 400。
+    if (remoteArgsOverrideRejected(req.headers, req.body)) return res.status(400).json(remoteArgsOverrideBody);
+    const remoteAnswer = !!parseRemoteOrigin(req.headers);
 
     const raw = req.body?.argsOverride;
     // 只收普通对象(typeof [] 也是 'object');改写后的参数由 gateToolCall 重新过闸,这里不做语义判定。
     const argsOverride = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : undefined;
     // 必须带上 URL 的 runId:getRunForUser 只证明这条 run 是调用者的,审批条目属于哪条 run 由登记表比对。
-    const ok = resolveApproval(req.params.approvalId, { action, argsOverride }, req.params.runId);
+    const ok = resolveApproval(req.params.approvalId, { action: remoteAnswer && action === 'approve_always' ? 'approve' : action, argsOverride }, req.params.runId);
     if (!ok) return res.status(410).json({ detail: 'approval is no longer pending' });
     res.json({ ok: true });
   } catch (e: any) {
@@ -137,14 +142,24 @@ router.post('/agent/runs/:runId/inquiries/:inquiryId', authMiddleware, async (re
         ...(settings ? { settings } : {}),
       });
       if (!okUi) return res.status(410).json({ detail: 'ui action is no longer pending' });
+      // 回执里的 error / state / settings 是远端给的自由文本,会进后续模型上下文 → 与询问、截屏、steer 同理染色(09-27 终审 P2)。
+      // 正常使用不受影响:界面动作只由发起这条 run 的渲染层执行并回执(G2),设备页不会替本机 run 回执。
+      const remoteUi = parseRemoteOrigin(req.headers);
+      if (remoteUi) taintRunRemote(req.params.runId, remoteUi);
       return res.json({ ok: true });
     }
+    // 契约 C9:询问没有「总允许」与改参数的概念;远端夹带 argsOverride 同样 400(与审批一个口径,免得哪天兑现侧开始认它)。
+    if (remoteArgsOverrideRejected(req.headers, req.body)) return res.status(400).json(remoteArgsOverrideBody);
     const answer = typeof req.body?.answer === 'string' ? req.body.answer.trim() : '';
     if (!answer) return res.status(400).json({ detail: 'answer required' });
     const run = await getRunForUser(req.params.runId, userId);
     if (!run) return res.status(404).json({ detail: 'Run not found' });
     const ok = resolveInquiry(req.params.inquiryId, answer.slice(0, 4000), req.params.runId);
     if (!ok) return res.status(410).json({ detail: 'inquiry is no longer pending' });
+    // 远端的答案(最长 4000 字自由文本)从这一刻起就在驱动这条 run —— 与远端 steer 同理染色(P0 第三轮 E8,评审 F#1):
+    // 之后的审批按远程钳、保护路径写入硬拒。只在兑现成功后登记;与 resolveInquiry 同一同步段,run 的续跑(微任务)必在其后。
+    const remote = parseRemoteOrigin(req.headers);
+    if (remote) taintRunRemote(req.params.runId, remote);
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'inquiry failed' });
@@ -161,6 +176,9 @@ router.post('/agent/runs/:runId/captures/:shotId', authMiddleware, async (req: A
     if (!run) return res.status(404).json({ detail: 'Run not found' });
     const ok = resolveDeskShot(req.params.runId, req.params.shotId, parseDeskShotBody(req.body));
     if (!ok) return res.status(410).json({ detail: 'capture is no longer pending' });
+    // 远端回的截图进了模型上下文(图里的文字同样能驱动 run)→ 同询问、steer 一样染色(P0 第三轮 E8)。
+    const remote = parseRemoteOrigin(req.headers);
+    if (remote) taintRunRemote(req.params.runId, remote);
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'capture failed' });

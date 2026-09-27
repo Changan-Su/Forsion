@@ -10,6 +10,7 @@ import { cp, chmod, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promise
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 import { scanAll } from './index'
+import { isReservedMcpServerName } from '../../shared/mcpNames'
 import type { DiscoveredSkill } from './types'
 
 /** id → 文件系统安全的目录名(防路径穿越/非法字符)。 */
@@ -65,7 +66,8 @@ export async function importSkills(ids: string[], tanguHome: string, home = home
   return { imported }
 }
 
-export async function importMcp(names: string[], tanguHome: string, home = homedir()): Promise<{ imported: string[] }> {
+/** reserved = 名字落在设备 MCP 保留命名空间(dev / dev_*,shared/mcpNames.ts)而被拒的,界面据此提示改名后手动添加。 */
+export async function importMcp(names: string[], tanguHome: string, home = homedir()): Promise<{ imported: string[]; reserved: string[] }> {
   const wanted = new Set(names)
   const { mcpServers } = await scanAll(home)
   const file = join(tanguHome, 'mcp.json')
@@ -77,9 +79,11 @@ export async function importMcp(names: string[], tanguHome: string, home = homed
     // 不存在/坏 JSON → 当空配置
   }
   const imported: string[] = []
+  const reserved: string[] = []
   for (const mcp of mcpServers) {
     if (!wanted.has(mcp.name)) continue
     wanted.delete(mcp.name) // 跨生态同名只取先扫到的,避免一次导入互相覆盖
+    if (isReservedMcpServerName(mcp.name)) { reserved.push(mcp.name); continue } // 冒充设备工具命名空间:不导
     let key = mcp.name
     if (key in existing) key = `${mcp.name}-imported` // 同名避让,不覆盖用户已有
     let n = 2
@@ -92,5 +96,5 @@ export async function importMcp(names: string[], tanguHome: string, home = homed
     await writeFile(file, JSON.stringify({ mcpServers: existing }, null, 2), 'utf8')
     await chmod(file, 0o600).catch(() => {}) // env/headers 可能含密钥
   }
-  return { imported }
+  return { imported, reserved }
 }

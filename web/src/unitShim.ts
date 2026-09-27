@@ -171,6 +171,9 @@ export async function installUnitShim(): Promise<boolean> {
   w.tangu = {
     /** 设备页标志:共享层据此知道「这是别的设备曝出来的面」(插件清单走 unit/plugins)。 */
     unitPage: true,
+    /** 远端身份:unitWeb 给本页的 /engine 请求盖 x-forsion-remote(工作区主人的本地投影除外,那是直通)。
+     *  审批卡据此不给改命令 / 总允许(引擎对远端不兑现这两样)。 */
+    remoteCaller: !local,
     hostFiles: !published,
     executionCapabilities: { host: local ? !!meta.localCapabilities?.host : !published },
     ...(cloud ? { cloudWeb: true } : {}),

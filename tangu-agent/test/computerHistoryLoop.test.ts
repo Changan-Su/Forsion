@@ -156,7 +156,7 @@ describe('跨会话召回不绕过电脑历史门禁', () => {
 
   it('开着但 run 来自远程设备页(input.remote):同样藏', async () => {
     chState(true);
-    expect((await runToSettled('R1', `${TERM} status?`, { client: 'desktop/1.0', remote: true })).status).toBe('done');
+    expect((await runToSettled('R1', `${TERM} status?`, { client: 'desktop/1.0', remote: { via: 'tunnel', marked: true } })).status).toBe('done');
     expect(wireText(llmPayloads[0])).toContain(PLAIN);
     expect(wireText(llmPayloads[0])).not.toContain(LEAK);
   }, 30_000);

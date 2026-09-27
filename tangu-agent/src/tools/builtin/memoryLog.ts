@@ -5,6 +5,7 @@
 import { deps } from '../../seams/runtime.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import { MemoryRepositoryError, MEMORY_CHAR_BUDGET, normalizeMemoryFact, type MemoryEntry, type MemorySnapshot } from '../../services/memoryRepository.js';
+import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
 
 /** 单条上限与 Historian 候选采集同口径(localHistorian `.slice(0, 300)`)。显式路径此前无闸:09-22 一份终端用户导出里
  *  41 条显式条目最长 1,477 字、21 条带日期、9 条是追加式「更正旧条目」——记忆被日志灌满,而候选路径 12 天只出 8 条一句话。 */
@@ -50,6 +51,8 @@ export const memoryLogProvider: ToolProvider = {
         const action = String(args.action ?? 'add');
         const brain = deps().brain.memory;
         if (!['add', 'list', 'update', 'forget'].includes(action)) return 'Error: unknown memory action';
+        const remoteDenied = effectiveRemote(ctx) ? remoteManagementDenied('remember', action) : null;
+        if (remoteDenied) return `Error: ${remoteDenied}`;
         if (action === 'list') {
           if (!brain.getMemorySnapshot) return 'Error: this memory backend does not support entry management.';
           const snapshot = await brain.getMemorySnapshot(ctx.userId);

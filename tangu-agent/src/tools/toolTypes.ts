@@ -16,10 +16,6 @@ export interface ToolContext {
   /** 客户端面标识(input.client,经 routes/runs 白名单:desktop|web|mobile|cli|tui/版本)。
    *  GUI 门禁工具(sketch)据此判定;TUI/通道/自动化/子代理 run 无 tag → 缺省即不可见(default-deny)。 */
   client?: string;
-  /** 本 run 经 Forsion Unit 设备页远程发起(unitWeb 代理盖 x-forsion-remote 头 → routes/runs 落 input.remote;
-   *  start_project_session 显式带给子 run,团队/讨论/子代理另有自己的闸)。设备页的 client 同样自报 desktop/…,
-   *  本机专属数据面(read_computer_history)只能看这个字段拒。 */
-  remote?: boolean;
   signal?: AbortSignal;
   /** 本次 run 的自定义工具（HTTP/JS），按工具名索引。 */
   customTools?: Map<string, LoadedCustomTool>;
@@ -42,6 +38,11 @@ export interface ToolContext {
   approvalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom';
   /** 审批时现读这个会话存着的档(gateToolCall.modeSessionId;子代理随父 run 走同一个)。缺省 = 只用 approvalMode 快照。 */
   approvalModeSessionId?: string;
+  /** 远程污点(契约 C1/C5:run.input.remote,经 unitWeb 隧道 / P2P / 局域网进来,或由这样的 run 派生)。
+   *  有值 → 审批档钳到 config.json remote.maxApprovalMode(C3)、保护路径写入硬拒(C4);派生 run(团队成员 / 讨论 / 项目会话)照抄。
+   *  子代理随 parentCtx 展开继承。run 中途被远端 steer 染色的见 services/remoteOrigin.effectiveRemote。
+   *  设备页的 client 同样自报 desktop/…,本机专属数据面(read_computer_history)也据此(effectiveRemote)拒。 */
+  remote?: import('../services/remoteOrigin.js').RemoteInfo;
   /** 本次 run 的 AppProfile(接缝①):工具门禁 isEnabledFor 据此过滤。缺省回退 deps().profile。 */
   profile?: AppProfile;
   /** delegate 子代理深度(0/缺省=主 loop,1=子代理内)。深度 ≥1 时 delegate 工具不可见,防递归裂变。 */
@@ -114,8 +115,11 @@ export interface ToolContext {
    * 工具产出图片的回流闸(view_image 用):工具把图片 data URL 交回 loop,
    * loop 在本轮工具执行完后把它物化成一条 user 图像消息追加到对话尾部,让模型"看见"图片。
    * 缺省(未装配此闸的运行环境)时工具应优雅降级,不要假定一定可用。
+   * `untrusted`:图里是**第三方内容**(如 phone_observe 截到的别的 App 屏幕)时,传一句前言(英文,给模型读)。
+   * loop 会把这类图单独成条、用这句前言标成不可信,视觉转写也圈进围栏(services/toolImages.ts)。
+   * ⚠️ 这类图只能进 user 角色消息,不标就等于把屏幕上的注入以用户权威送进上下文。
    */
-  collectImage?: (img: { url: string; name?: string }) => void;
+  collectImage?: (img: { url: string; name?: string; untrusted?: string }) => void;
   /**
    * 「在对话区展示文件」闸(display_file / generate_image / 表情包用):工具把要展示给**用户**的
    * 文件交给 loop,loop 即时 publish 'display_file' 事件(桌面端内联渲染、图片可点击放大),并在

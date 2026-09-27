@@ -11,6 +11,7 @@
 import { readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { mcpConfigFile, tanguHome } from '../core/tanguHome.js';
 import { getRawSection, saveSection } from '../core/config.js';
+import { sanitizePart } from './toolBridge.js';
 
 export interface McpServerConfig {
   /** stdio:子进程命令(如 npx);与 url 二选一。 */
@@ -39,29 +40,64 @@ export function inferTransport(cfg: McpServerConfig): 'stdio' | 'http' | 'sse' {
   return 'http'; // url 默认 Streamable HTTP(SSE 须显式声明)
 }
 
-function legacyLoadMcp(file: string): McpConfig {
+/**
+ * 设备 MCP 的保留命名空间(方案 2026-09-26 §4.6-3):`mcp__dev_<alias>__<tool>` 是引擎注入的设备工具,
+ * mcp.json 里的第三方 server 不得占用。按**桥接后**的形态判、不分大小写:`dev.x` / `DEV x` 经 sanitizePart
+ * 都会桥成 `mcp__dev_x__…`;恰好叫 `dev` 的 server 桥成 `mcp__dev__…`,同样落进 `mcp__dev_*` 规则的前缀。
+ */
+export const RESERVED_SERVER_PREFIX = 'dev_';
+const RESERVED_BRIDGED_PREFIX = `mcp__${RESERVED_SERVER_PREFIX}`;
+export function isReservedServerName(name: string): boolean {
+  return `mcp__${sanitizePart(name)}__`.toLowerCase().startsWith(RESERVED_BRIDGED_PREFIX);
+}
+export const RESERVED_SERVER_ERROR = `the server name is reserved for device MCP (names that bridge to "${RESERVED_BRIDGED_PREFIX}*"); rename it`;
+
+const warnedReserved = new Set<string>();
+/**
+ * 运行时视图:占用保留命名空间的 server **跳过并告警**(fail closed),不改名 —— 改名会让导入判重失效
+ * (每导一次多一份)、序号让 server 身份随删改漂移。只影响内存视图,磁盘原样:读改写一律走 rawMcpServersFrom。
+ */
+function withoutReserved(servers: Record<string, McpServerConfig>): Record<string, McpServerConfig> {
+  const out: Record<string, McpServerConfig> = Object.create(null); // 无原型:键名 `__proto__` / `constructor` 不串味
+  for (const n of Object.keys(servers)) {
+    if (!isReservedServerName(n)) { out[n] = servers[n]; continue; }
+    if (!warnedReserved.has(n)) {
+      warnedReserved.add(n);
+      console.warn(`[mcp] server "${n}" skipped: ${RESERVED_SERVER_ERROR}.`);
+    }
+  }
+  return out;
+}
+
+function legacyRawServers(file: string): Record<string, McpServerConfig> {
   try {
-    const parsed = JSON.parse(readFileSync(file, 'utf8'));
-    const servers = parsed?.mcpServers;
-    if (servers && typeof servers === 'object') return { mcpServers: servers };
-    return { mcpServers: {} };
+    const servers = JSON.parse(readFileSync(file, 'utf8'))?.mcpServers;
+    return servers && typeof servers === 'object' ? servers : {};
   } catch {
-    return { mcpServers: {} }; // 不存在/坏 JSON → 空配置(坏 JSON 由 desktop 编辑器另行提示)
+    return {}; // 不存在/坏 JSON → 空配置(坏 JSON 由 desktop 编辑器另行提示)
   }
 }
 
-/** 显式传 file → 读该文件(explicit/单测);否则 config.json 的 mcp 段优先,缺失回落 ~/.tangu/mcp.json。 */
-export function loadMcpConfig(file?: string): McpConfig {
-  if (file) return legacyLoadMcp(file);
-  return mcpConfigFrom(getRawSection('mcp'));
-}
-/** mcp 段原始值 → 配置(段缺失回落 ~/.tangu/mcp.json);给 updateSection('mcp', …) 在锁内用。 */
-export function mcpConfigFrom(sec: any): McpConfig {
+/** 磁盘视图(不跳过任何 server):mcp 段原始值 → servers(段缺失回落 ~/.tangu/mcp.json);读改写 / 判重用这份。 */
+export function rawMcpServersFrom(sec: any): Record<string, McpServerConfig> {
   if (sec !== undefined) {
     const servers = sec?.mcpServers;
-    return { mcpServers: servers && typeof servers === 'object' ? servers : {} };
+    return servers && typeof servers === 'object' ? servers : {};
   }
-  return legacyLoadMcp(mcpConfigFile());
+  return legacyRawServers(mcpConfigFile());
+}
+/** 磁盘视图:显式传 file → 读该文件;否则 config.json 的 mcp 段优先。manager 用它把保留名如实列成 error。 */
+export function loadRawMcpServers(file?: string): Record<string, McpServerConfig> {
+  return file ? legacyRawServers(file) : rawMcpServersFrom(getRawSection('mcp'));
+}
+
+/** 运行时视图(保留名已跳过):显式传 file → 读该文件(explicit/单测);否则 config.json 的 mcp 段优先,缺失回落 ~/.tangu/mcp.json。 */
+export function loadMcpConfig(file?: string): McpConfig {
+  return { mcpServers: withoutReserved(loadRawMcpServers(file)) };
+}
+/** mcp 段原始值 → 运行时视图(保留名已跳过)。⚠️ 别拿它做读改写:写回会把保留名的 server 从磁盘上抹掉。 */
+export function mcpConfigFrom(sec: any): McpConfig {
+  return { mcpServers: withoutReserved(rawMcpServersFrom(sec)) };
 }
 
 /** 显式传 file → 写该文件(legacy);否则写 config.json 的 mcp 段(唯一真源,chmod 600)。 */
