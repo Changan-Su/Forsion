@@ -1552,6 +1552,7 @@ export const useApp = create<AppState>((set, get) => ({
             ctxWindow: Number(pl.ctxWindow) || 0,
             ctxWindowSource: String(pl.ctxWindowSource || 'default'),
             ...(Number(pl.ctxWindowMax) > 0 ? { ctxWindowMax: Number(pl.ctxWindowMax) } : {}),
+            ...(pl.ultra === true ? { ultra: true } : {}),
             // 元素级清洗:事件会持久化重放,一条畸形 payload 不清洗=每次渲染都炸(弹层在 ErrorBoundary 外)
             sections: (Array.isArray(pl.sections) ? pl.sections : [])
               .filter((it: any) => it && typeof it === 'object')

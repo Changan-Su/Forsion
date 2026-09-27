@@ -160,13 +160,14 @@ function overrideWindow(modelId?: string | null): number | undefined {
  * 要到 950k 才压缩,生产实报一条会话顶着 387k 逐轮重读(09-20)。人填的覆盖不封顶:那就是「开启更高上下文」的开关
  * (聊天框模型菜单与设置页写的都是 modelOverrides)。max = 自动识别出的窗口(封顶前、不看覆盖),界面据此判断能开多大。
  * 摘要目标仍用 modelContextWindow(未封顶):它问的是摘要模型吃得下多少,不是会话预算。
+ * uncapped(09-27 用户:Ultra 会话「模型支持更高的上下文就自动拉满」):自动识别的不再封顶;人填的覆盖照旧说了算。
  */
-export function effectiveContextWindowInfo(modelId?: string | null, modelObj?: any): { tokens: number; source: CtxWindowSource; max: number } {
+export function effectiveContextWindowInfo(modelId?: string | null, modelObj?: any, uncapped = false): { tokens: number; source: CtxWindowSource; max: number } {
   const auto = autoContextWindowInfo(modelId, modelObj);
   const override = overrideWindow(modelId);
   return override
     ? { tokens: override, source: 'override', max: auto.tokens }
-    : { tokens: Math.min(auto.tokens, CONTEXT_WINDOW_TOKENS), source: auto.source, max: auto.tokens };
+    : { tokens: uncapped ? auto.tokens : Math.min(auto.tokens, CONTEXT_WINDOW_TOKENS), source: auto.source, max: auto.tokens };
 }
 
 /** 覆盖之外的自动识别链:模型自报 > 回学 > 族表 > 兜底。 */

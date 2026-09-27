@@ -25,6 +25,8 @@ import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
 import { enqueueRun } from '../src/services/agentLoop.js';
+import { CONTEXT_WINDOW_TOKENS } from '../src/services/contextBudget.js';
+import { resetModelOverridesForTest } from '../src/services/modelOverrides.js';
 
 const ULTRA_HEAD = ULTRA_SECTION.split('\n')[0];
 
@@ -34,6 +36,8 @@ let payloads: Payload[] = [];
 /** 每次 LLM 调用的出招;缺省一轮直接收尾。子代理的调用按 cacheKey 带 `:sub:` 区分。 */
 let respond: (p: Payload) => any = () => done('ok');
 let costPerCall = 0;
+/** 假模型对象上额外的字段(如 context_window:模型自报的窗口)。 */
+let modelExtra: Record<string, unknown> = {};
 
 const done = (content: string) => ({ content, reasoning: '', toolCalls: [], usage: { prompt_tokens: 5, completion_tokens: 5 }, finishReason: 'stop' });
 const call = (id: string, name: string, args: Record<string, unknown>) => ({
@@ -55,10 +59,12 @@ async function setupLoop(): Promise<void> {
   payloads = [];
   respond = () => done('ok');
   costPerCall = 0;
+  modelExtra = {};
+  resetModelOverridesForTest(); // 覆盖层钉成内存表:不读开发机 / 共享域里的 config.json
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: 'u1' });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
   const fakeLlm: any = {
-    resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test' }, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' }),
+    resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test', ...modelExtra }, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' }),
     buildProviderPayload: async (o: any) => ({ messages: o.messages.map((m: any) => ({ ...m })), tools: o.tools, thinkingLevel: o.thinkingLevel, cacheKey: o.cacheKey }),
     streamProviderCompletion: async (o: any) => { payloads.push(o.payload); return respond(o.payload); },
   };
@@ -149,6 +155,30 @@ describe('Ultra:提示段与思考档', () => {
     expect(resolveTools(cloud, ctx(cloud)).has('delegate')).toBe(false);
     expect(resolveTools(local, ctx(local)).has('delegate')).toBe(true);
     expect(resolveTools(local, { ...ctx(local), subAgentDepth: 1 }).has('delegate')).toBe(false); // 子代理看不见 → 也看不见 Ultra 段
+  });
+});
+
+describe('Ultra:模型支持更高的上下文就拉满(09-27,不封顶 272k)', () => {
+  const ctxInfo = async (runId: string) => {
+    const rows = await query<any[]>(`SELECT payload FROM agent_run_events WHERE run_id = ? AND type = 'status' ORDER BY seq`, [runId]);
+    return rows.map((x) => (typeof x.payload === 'string' ? JSON.parse(x.payload) : x.payload)).find((p) => p?.phase === 'context_info');
+  };
+
+  it('1M 模型:开 Ultra → 窗口与压缩线按 1M;不开 → 仍封顶(负对照)', async () => {
+    await setupLoop();
+    modelExtra = { context_window: 1_000_000 };
+    const on = await ctxInfo((await runOnce({ ultra: true, thinkingLevel: 'max' })).id);
+    expect(on).toMatchObject({ ctxWindow: 1_000_000, ctxWindowSource: 'model', ctxWindowMax: 1_000_000, ultra: true });
+    const off = await ctxInfo((await runOnce({ thinkingLevel: 'max' })).id);
+    expect(off).toMatchObject({ ctxWindow: CONTEXT_WINDOW_TOKENS, ctxWindowSource: 'model', ctxWindowMax: 1_000_000, ultra: false });
+    expect(on.compactAt).toBeGreaterThan(off.compactAt);
+  });
+
+  it('人填的覆盖照旧:本机把这个模型设成 500k,开 Ultra 也是 500k(覆盖可能正是在纠正报大了的目录值)', async () => {
+    await setupLoop();
+    modelExtra = { context_window: 1_000_000 };
+    resetModelOverridesForTest({ m1: { contextWindow: 500_000 } });
+    expect(await ctxInfo((await runOnce({ ultra: true, thinkingLevel: 'max' })).id)).toMatchObject({ ctxWindow: 500_000, ctxWindowSource: 'override' });
   });
 });
 

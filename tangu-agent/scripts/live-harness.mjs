@@ -24,6 +24,7 @@
  *   npm run live:harness -- --only deferred                  # E2 按需装载:load_tools 先于 read_document + 子代理 read_document 直通 + 子代理自己 load_tools 解锁 browser_snapshot
  *   npm run live:harness -- --only grant                     # 改 delegate.grantTools / 子代理管理面闸后跑:授予时子代理用得上 manage_schedule,不授予时照旧被拒(正负两跑,均 action=list 无副作用)
  *   npm run live:harness -- --only ultra --model xai/grok-4.7  # Ultra 档(09-27):改 ULTRA_SECTION / delegate 描述 / 子代理成本闸后跑:可并行的题一轮派 ≥2 个且真并行、琐碎题 0 个、不开 Ultra 的对照只记数
+ *   TANGU_CONTEXT_WINDOW_TOKENS=100000 npm run live:harness -- --only ultra --model codex/gpt-5.6-luna  # Ultra 拉满上下文(09-27):上限压到 100k,族表 272k 的模型 Ultra 两跑窗口须 272k、对照 100k
  *   npm run live:harness -- --only churn                     # 同会话 6 连发的后续调用命中画像(不设命中率阈值,六个 run 须跑完)
  *   npm run live:harness -- --only ttft --ttft-rounds 5      # 首 token 延迟:preset(chat|work)× 思考档(off|medium)2×2,每格 N 会话 × 2 轮(冷/热缓存),交错跑
  *   npm run live:harness -- --only agentapproval             # 审批档只归用户(09-27):模型被要求把一个 agent 调成完全放行,manage_agent 不收 approval_mode、用户设的只读原样保留;改 manage_agent / manage-agents-guide 后跑
@@ -1542,6 +1543,14 @@ try {
       return spans.some((a, i) => spans.some((b, j) => i !== j && a.st < b.end && b.st < a.end));
     };
     const ctxInfo = (ev) => ev.statuses.find((x) => x.phase === 'context_info') || {};
+    // 窗口(09-27):Ultra 下自动识别的窗口不封顶(= ctxWindowMax),不开的仍封顶到缺省上限;人填的覆盖两边都照旧。
+    // grok 等族表没收录的模型 max 就是上限本身,证不出「拉满」—— 要看到差别:TANGU_CONTEXT_WINDOW_TOKENS=100000 + 族表 272k 的 codex 模型。
+    const CAP = Number(process.env.TANGU_CONTEXT_WINDOW_TOKENS) >= 4_000 ? Math.floor(Number(process.env.TANGU_CONTEXT_WINDOW_TOKENS)) : 272_000;
+    const winOk = (ev, ultra) => {
+      const c = ctxInfo(ev);
+      if (!(c.ctxWindow > 0 && c.ctxWindowMax > 0)) return false;
+      return c.ctxWindowSource === 'override' || c.ctxWindow === (ultra ? c.ctxWindowMax : Math.min(c.ctxWindowMax, CAP));
+    };
     const allMods = (text) => ['billing', 'dates', 'strings'].every((m) => text.includes(m));
     // 逐模块点名那个坏文件(只查模块名的话,错文件 / 错修法也能过)
     const found3 = (text) => ['sumLineItems_v3', 'isWeekend_v3', 'capitalize_v3'].every((f) => text.includes(f));
@@ -1549,16 +1558,16 @@ try {
     // 存值故意给 high:证的是引擎「ultra ⇒ 请求档恒 max」,而不是客户端恰好发了 max
     const evUltra = await run(`live-ultra-on-${Date.now()}`, TASK, 420_000, { ultra: true, thinkingLevel: 'high', debugSystemPrompt: true });
     const sysHas = (ev) => (ev.systemPrompt || '').includes('## Ultra Effort');
-    const okUltra = !evUltra.error && sysHas(evUltra) && ctxInfo(evUltra).thinkingRequested === 'max'
+    const okUltra = !evUltra.error && sysHas(evUltra) && ctxInfo(evUltra).thinkingRequested === 'max' && winOk(evUltra, true)
       && delegates(evUltra) >= 2 && evUltra.subStarts.length >= 2 && overlapped(evUltra) && allMods(evUltra.content) && found3(evUltra.content);
 
     const evTrivial = await run(`live-ultra-trivial-${Date.now()}`, '法国的首都是哪座城市?', 180_000, { ultra: true, thinkingLevel: 'max', debugSystemPrompt: true });
-    const okTrivial = !evTrivial.error && sysHas(evTrivial) && delegates(evTrivial) === 0 && /巴黎|Paris/i.test(evTrivial.content);
+    const okTrivial = !evTrivial.error && sysHas(evTrivial) && delegates(evTrivial) === 0 && /巴黎|Paris/i.test(evTrivial.content) && winOk(evTrivial, true);
 
     const evPlain = await run(`live-ultra-off-${Date.now()}`, TASK, 420_000, { thinkingLevel: 'high', debugSystemPrompt: true });
-    const okPlain = !evPlain.error && evPlain.systemPrompt !== null && !sysHas(evPlain);
+    const okPlain = !evPlain.error && evPlain.systemPrompt !== null && !sysHas(evPlain) && winOk(evPlain, false);
 
-    const fmt = (ev) => `delegate ×${delegates(ev)};子代理 ${ev.subStarts.length} 个${ev.subStarts.length >= 2 ? (overlapped(ev) ? '(区间交叠=真并行)' : '(没有交叠=串行)') : ''};请求档 ${ctxInfo(ev).thinkingRequested || '?'}→${ctxInfo(ev).thinkingEffective || '?'};墙钟 ${sec(ev.wallMs)}${ev.error ? ';' + ev.error : ''}`;
+    const fmt = (ev) => `delegate ×${delegates(ev)};子代理 ${ev.subStarts.length} 个${ev.subStarts.length >= 2 ? (overlapped(ev) ? '(区间交叠=真并行)' : '(没有交叠=串行)') : ''};请求档 ${ctxInfo(ev).thinkingRequested || '?'}→${ctxInfo(ev).thinkingEffective || '?'};窗口 ${ctxInfo(ev).ctxWindow ?? '?'}/${ctxInfo(ev).ctxWindowMax ?? '?'}(${ctxInfo(ev).ctxWindowSource || '?'},上限 ${CAP});墙钟 ${sec(ev.wallMs)}${ev.error ? ';' + ev.error : ''}`;
     return {
       ok: okUltra && okTrivial && okPlain,
       detail: `【Ultra(存值 high)】${fmt(evUltra)};Ultra 段 ${sysHas(evUltra) ? '在' : '缺!'};三模块 ${allMods(evUltra.content) ? '都报到' : '有漏'};坏文件 ${found3(evUltra.content) ? '三个都点对' : '没点全!'}`

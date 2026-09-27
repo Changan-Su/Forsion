@@ -20,7 +20,7 @@ import { THINKING_LEVELS } from '../../types'
 // context 视图已知注入段 key(与引擎 agentLoop ctxMark 调用一一对应);未知 key 显示原样
 import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../types'
 import { useEdgeNudge, useWorkspace } from '@lcl/engine'
-import { ModelPill, type ModelPillGroup } from '../../components/ModelPill'
+import { ModelPill, contextRingWindow, type ModelPillGroup } from '../../components/ModelPill'
 import { UltraConfirmDialog, ultraConfirmSkipped } from './UltraConfirmDialog'
 import { registerMessages, useI18n } from '../../i18n'
 import { displaySessionTitle } from '../../sessionTitle'
@@ -572,6 +572,13 @@ export const Composer2: React.FC<{
   const allowUltra = isHost && !isChat && !engineId && !groupChat
   // 与发送侧 settleUltra 同口径:只跟 max 同在(陈旧的「ultra + 别的档」不显示 Ultra,发送时也不带)
   const ultraOn = allowUltra && !!ultra && thinkingLevel === 'max'
+  // 进度环分母(09-27 Ultra 拉满上下文,口径见 contextRingWindow):切了 Ultra 还没发下一条时按下一轮会用的窗口现算;
+  // 过时的那份 context_info 只丢窗口相关的(压缩线、封顶提示),注入段分解 / 指令文件照旧。
+  const { window: ringWindow, stale: ctxStale } = contextRingWindow({
+    ctxInfo, contextWindow, running, ultra: ultraOn,
+    model: modelsResponse?.models.find((m) => m.id === modelId), engineUncapped: modelsResponse?.ultraUncapped,
+  })
+  const ringCtxInfo = ctxStale && ctxInfo ? { ...ctxInfo, ctxWindow: ringWindow || ctxInfo.ctxWindow, compactAt: undefined } : ctxInfo
   // 开 Ultra 的所有入口(滑杆第 8 格 / `/think ultra` / 斜杠菜单)都过这里:没勾过「以后不再显示」就先弹确认(09-27 用户要求)。
   // 返回是否已当场生效(弹了确认就是 false,由确认框收尾)。
   const [ultraAsk, setUltraAsk] = useState(false)
@@ -751,7 +758,7 @@ export const Composer2: React.FC<{
       '/cost': () => {
         const st = app()
         st.pushNotice(
-          `${(sessionTokens ?? 0).toLocaleString()} tokens · ${t('input.ctxLabel')} ${(ctxTokens ?? 0).toLocaleString()}/${(contextWindow ?? 0).toLocaleString()}` +
+          `${(sessionTokens ?? 0).toLocaleString()} tokens · ${t('input.ctxLabel')} ${(ctxTokens ?? 0).toLocaleString()}/${(ringWindow ?? 0).toLocaleString()}` +
             (runCost != null && costLimit != null && costLimit > 0
               ? ` · ${t('input.runCost', { used: Math.round(runCost).toLocaleString(), limit: costLimit.toLocaleString() })}`
               : ''),
@@ -848,7 +855,7 @@ export const Composer2: React.FC<{
     }
     return items
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, isChat, onPresetChange, engineId, engineCommands, customCommands, describe, execConfig, agentDef, sessionTokens, ctxTokens, contextWindow, runCost, costLimit, ctxInfo, !!onBtw, allowUltra, ultraOn])
+  }, [running, onStop, planMode, voiceMode, onVoiceModeChange, thinkingLevel, maxIterations, onMaxIterationsChange, verifyCommand, onVerifyCommandChange, models, modelId, skills, onPlanModeChange, onThinkingChange, onModelChange, onNewSession, onBranch, onCompact, onGroupChange, isChat, onPresetChange, engineId, engineCommands, customCommands, describe, execConfig, agentDef, sessionTokens, ctxTokens, ringWindow, runCost, costLimit, ctxInfo, !!onBtw, allowUltra, ultraOn])
 
   const slash = useMemo(() => {
     if (disabled || slashDismissed) return null
@@ -1687,10 +1694,10 @@ export const Composer2: React.FC<{
               </span>
             )}
             <span className="t2c-grow" />
-            {!isChat && !!contextWindow && contextWindow > 0 && (() => {
-              const pct = Math.min(100, Math.round(((ctxTokens || 0) / contextWindow) * 100))
+            {!isChat && !!ringWindow && ringWindow > 0 && (() => {
+              const pct = Math.min(100, Math.round(((ctxTokens || 0) / ringWindow) * 100))
               // 预警跟着压缩线走:设置里把自动压缩调到 30% 时,环永远到不了 80%,按窗口判就再也不亮了
-              const warn = ctxInfo?.compactAt ? (ctxTokens || 0) >= ctxInfo.compactAt * 0.8 : pct >= 80
+              const warn = ringCtxInfo?.compactAt ? (ctxTokens || 0) >= ringCtxInfo.compactAt * 0.8 : pct >= 80
               const R = 9
               const CIRC = 2 * Math.PI * R
               return (
@@ -1714,12 +1721,12 @@ export const Composer2: React.FC<{
                   <span ref={ctxPopFix.ref} className="t2c-ctxring-pop" style={ctxPopFix.style}>
                     <ContextUsagePop
                       open={openMenu === 'ctx'}
-                      contextWindow={contextWindow}
+                      contextWindow={ringWindow}
                       ctxTokens={ctxTokens}
                       sessionTokens={sessionTokens}
                       runCost={runCost}
                       costLimit={costLimit}
-                      ctxInfo={ctxInfo}
+                      ctxInfo={ringCtxInfo}
                       onCompact={onCompact ? () => { onCompact(); setOpenMenu(null) } : undefined}
                     />
                   </span>

@@ -6,8 +6,8 @@ import { registerMessages, useI18n } from '../../i18n'
 registerMessages({
   'ultraConfirm.title': { zh: '开启 Ultra？', en: 'Turn on Ultra?' },
   'ultraConfirm.msg': {
-    zh: 'Ultra 会把思考拉满，并主动把能并行的活拆给多个子代理同时做。一次任务的 token 消耗可能是平时的数倍，适合大任务。',
-    en: 'Ultra maxes out thinking and proactively splits parallelizable work across several subagents. One task can use several times the usual tokens, so it suits big jobs.',
+    zh: 'Ultra 会把思考拉满、上下文用到模型支持的上限，并主动把能并行的活拆给多个子代理同时做。一次任务的 token 消耗可能是平时的数倍，适合大任务。',
+    en: "Ultra maxes out thinking, uses the model's full context window, and proactively splits parallelizable work across several subagents. One task can use several times the usual tokens, so it suits big jobs.",
   },
   'ultraConfirm.recommend': {
     zh: '推荐配合「完全放行」使用：多个子代理并行时，每个需要确认的操作都会停下来等你批准。',

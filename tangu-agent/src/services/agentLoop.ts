@@ -1022,7 +1022,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 本 run 的上下文预算基数:真实模型窗口(覆盖表/模型对象/族兜底),不再用 128k 全局常量——
     // 400k 族在 64k 就机械折叠会绞碎上下文+打断前缀缓存,长任务正确率与 token 双输(WB-Bench 取证)。
     // 09-22 起自动识别的窗口封顶 272k,更大的窗口只由人填的覆盖打开(effectiveContextWindowInfo)。
-    const { tokens: ctxWindowTokens, source: ctxWindowSource, max: ctxWindowMax } = effectiveContextWindowInfo(modelId, model);
+    // Ultra(09-27)不封顶:模型本身能到多大就用多大;人填的覆盖照旧(覆盖可能正是在纠正报大了的目录值)。
+    const { tokens: ctxWindowTokens, source: ctxWindowSource, max: ctxWindowMax } = effectiveContextWindowInfo(modelId, model, ultraRequested);
 
     // 入站预算闸门(Hermes 式窗口相对预算;2026-06-10 的 77 万 token 事故防线):
     // 估算超窗口 50% 直接失败(消息不落库,会话不被毒化),超 25% 放行但发警告事件。
@@ -1497,6 +1498,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ctxWindow: ctxWindowTokens,
       ctxWindowSource,
       ctxWindowMax, // 模型本身的窗口(封顶前):> ctxWindow 且非 override = 被缺省上限封了顶,环弹层据此说明
+      ultra: ultraRequested, // 这一轮的窗口是按 Ultra(不封顶)算的:客户端切了开关、还没发下一条时据此判断这份窗口已过时
       // 压缩触发线(窗口 − 预留,再被 thresholdPercent 往下拉)与本 run 生效的压缩旋钮来源:客户端进度环据此画「到这就会压」的刻度
       compactAt: compactionThreshold(ctxWindowTokens, compactionCfg.reserveTokens, compactionCfg.thresholdPercent, compactionCfg.keepRecentTokens),
       compactionEnabled: compactionCfg.enabled,
@@ -1822,6 +1824,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       getWorkingMessages: () => workingMessages.map((m) => ({ ...m })),
       getImageInputs: () => imageInputs,
       thinkingLevel,
+      contextWindow: ctxWindowTokens,
     };
     let toolDefs = getToolDefinitions(toolCtx);
     // A4:工具头字节量(load_tools 解锁后重算)随 usage 事件出账。**按本轮真实发出去的那份算**,
@@ -2707,6 +2710,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       tools: toolDefs,
       thinkingLevel,
       modelId,
+      contextWindow: ctxWindowTokens,
     };
     void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
     // 惰性检查点:下个 run 的 hydrate 窗口之外若还有未被摘要覆盖的老行,现在(不占下个 run 首帧)做一份。

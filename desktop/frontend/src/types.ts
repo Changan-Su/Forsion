@@ -625,6 +625,8 @@ export interface ModelsResponse {
   contextWindowCap?: number
   /** 该引擎能不能写本机模型覆盖(PUT /agent/models/overrides 同一道 hostExec 门)。false / 缺省 = 不露「上下文上限」。 */
   modelOverridesWritable?: boolean
+  /** 引擎的 Ultra run 不受缺省上限约束(09-27)。缺省 = 老引擎,Ultra 也封顶:界面别按拉满显示窗口。 */
+  ultraUncapped?: boolean
   /** 云端托管面诊断:empty=可达但 admin 没配模型;error=不可达/未授权/未部署 brain-api。 */
   forsion?: { status: 'ok' | 'empty' | 'error'; detail: string | null }
 }
@@ -847,6 +849,8 @@ export interface CtxInfo {
   ctxWindowSource: string
   /** 模型本身的窗口(封顶前)。> ctxWindow 且来源不是 override = 被缺省上限封了顶。 */
   ctxWindowMax?: number
+  /** 这一轮的窗口按 Ultra 算(自动识别的不封顶,09-27)。与会话当前的 Ultra 开关不一致 = 切了开关还没跑下一轮,窗口已过时。 */
+  ultra?: boolean
   sections: Array<{ k: string; tokens: number }>
   files: string[]
   filesTruncated: boolean
