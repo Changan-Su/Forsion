@@ -60,6 +60,17 @@ export function remoteOf(input: any): RemoteInfo | undefined {
   return { ...(VIAS.has(r.via) ? { via: r.via as RemoteVia } : {}), marked: r.marked === true };
 }
 
+/**
+ * 会话级远程标记 agent_config.remoteOrigin(§6.5 持久化对象继承污点)。谁盖:远端建的(POST /agent/sessions)、远端分支出的、
+ * 远端 PATCH 改了项目路径的、远程污点 run 经 start_project_session 派生出的会话;分支照抄 agent_config 即继承。
+ * 谁读:急停登记表 / P1 的远程活动面;桌面设备页的主机文件读范围(/unit/host*:带标记的会话的 project_path 不算会话根,P0 第三轮 D1)。
+ * ⚠️ 引擎侧**绝不**当授权依据:桌面会把存值当 agent_config 回传,引擎唯一认的污点是 run.input.remote(路由解析 + 派生 run 显式抄写)。
+ * 标记由引擎自己盖:远端写配置改不了它(不在 REMOTE_WRITABLE_CONFIG_KEYS 里),本机写配置(PUT 整对象替换)也抹不掉(见 sessions.ts writeSessionConfig)。
+ */
+export function remoteOriginMarker(remote: RemoteInfo): Record<string, unknown> {
+  return { ...(remote.via ? { via: remote.via } : {}), marked: remote.marked, at: new Date().toISOString() };
+}
+
 /** config.json `remote.maxApprovalMode`(每次现读,改完下一次工具调用即生效);非法 / 缺省 → auto-edit。 */
 export function remoteApprovalCap(): CapMode {
   const v = (getRawSection('remote') as any)?.maxApprovalMode;

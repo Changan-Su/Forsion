@@ -32,7 +32,7 @@ import { recoverTeamOutputs } from '../services/teamOutputs.js';
 import { withKeyLock } from '../core/keyLock.js';
 import { answerAside, normalizeAsideInput } from '../services/aside.js';
 import { normalizeClientTag } from './runs.js';
-import { parseRemoteOrigin, applyRemoteConfigWrite, remoteCwdViolation, remoteCwdErrorBody, type RemoteInfo } from '../services/remoteOrigin.js';
+import { parseRemoteOrigin, applyRemoteConfigWrite, remoteCwdViolation, remoteCwdErrorBody, remoteOriginMarker } from '../services/remoteOrigin.js';
 
 const router = Router();
 
@@ -85,13 +85,6 @@ function parseMaybeJson(v: any): any {
   if (v == null) return null;
   if (typeof v !== 'string') return v;
   try { return JSON.parse(v); } catch { return null; }
-}
-
-/** 会话级远程标记(§6.5 持久化对象继承污点):远端建的 / 分支出的会话记一笔,分支照抄 agent_config 即继承。
- *  ⚠️ 只作记录(急停登记表 / P1 的远程活动面读它),**绝不**当授权依据:桌面会把存值当 agent_config 回传,
- *  引擎唯一认的污点是 run.input.remote(路由解析 + 派生 run 显式抄写)。远端写配置改不了它(见 REMOTE_STRIPPED_CONFIG_KEYS)。 */
-export function remoteOriginMarker(remote: RemoteInfo): Record<string, unknown> {
-  return { ...(remote.via ? { via: remote.via } : {}), marked: remote.marked, at: new Date().toISOString() };
 }
 
 export function rowToSession(r: any): any {
@@ -273,7 +266,8 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     if (!s) return res.status(404).json({ detail: 'Session not found' });
     const { title, archived, model_id, emoji, project_path, project_name, projectless } = req.body || {};
     // 契约 C8:远端改会话的项目路径同样不许指到根 / 家目录 / 受保护目录(桌面据 project_path 给之后的 run 填 cwd)。
-    const badCwd = parseRemoteOrigin(req.headers) ? remoteCwdViolation(project_path) : null;
+    const remote = parseRemoteOrigin(req.headers);
+    const badCwd = remote ? remoteCwdViolation(project_path) : null;
     if (badCwd) return res.status(400).json(remoteCwdErrorBody(badCwd));
     const sets: string[] = [];
     const params: any[] = [];
@@ -287,8 +281,22 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     if (!sets.length) return res.status(400).json({ detail: 'nothing to update' });
     // `updated_at` 是会话列表的消息活动时间,不是通用行修改时间。改名、归档、换模型/项目
     // 都不能把项目顶到最近活动首位;它只由消息落库路径刷新。
-    params.push(req.params.id);
-    await query(`UPDATE chat_sessions SET ${sets.join(', ')} WHERE id = ?`, params);
+    // 远端把项目路径改成别的目录 → 同一条 UPDATE 里给会话盖远程标记(已有标记保留原样):桌面设备页的主机文件读范围
+    // 不认带标记的会话目录(D1)—— 否则远端 PATCH 一个本机会话的 project_path 就能把任意目录变成「本机会话根」。
+    // 读存值 → 合并 → 落库与 writeSessionConfig 同一把锁,不盖掉并发的配置写;分两条 UPDATE 会有「新路径、无标记」的窗口。
+    const newPath = typeof project_path === 'string' && project_path.trim() ? String(project_path).slice(0, 1000) : null;
+    if (remote && newPath && newPath !== s.project_path) {
+      await withKeyLock(`session:config:${req.params.id}`, async () => {
+        const [row] = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = ?`, [req.params.id]);
+        const cfg = parseMaybeJson(row?.agent_config);
+        const base = cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg : {};
+        const markSets = base.remoteOrigin != null ? [] : ['agent_config = ?'];
+        const markParams = base.remoteOrigin != null ? [] : [JSON.stringify({ ...base, remoteOrigin: remoteOriginMarker(remote) })];
+        await query(`UPDATE chat_sessions SET ${[...sets, ...markSets].join(', ')} WHERE id = ?`, [...params, ...markParams, req.params.id]);
+      });
+    } else {
+      await query(`UPDATE chat_sessions SET ${sets.join(', ')} WHERE id = ?`, [...params, req.params.id]);
+    }
     const rows = await query<any[]>(`SELECT ${SESSION_COLS} FROM chat_sessions WHERE id = ?`, [req.params.id]);
     res.json({ session: rowToSession(rows[0]) });
   } catch (e: any) {
@@ -774,7 +782,12 @@ async function writeSessionConfig(req: AuthRequest, res: Response, body: Record<
     const merged = applySessionFactLock(stored, merge ? mergeConfigPatch(stored, body) : body, msgCount);
     // 远程写(契约 C7):只收白名单键(agentSlug / 模型 / 思考档 / 标题 / 审批档),其余键保留存值;审批档不许抬过上限(C3)。
     const remote = parseRemoteOrigin(req.headers);
-    const cfg = remote ? applyRemoteConfigWrite(stored, merged) : merged;
+    // 远程标记是引擎盖的(见 services/remoteOrigin.remoteOriginMarker):远程写走白名单本就动不了它;本机写(尤其 PUT 整对象替换、
+    // 客户端拿不带标记的旧缓存写回)也不许把已有标记抹掉 —— 桌面设备页的主机文件读范围按它排除远端动过的会话目录(D1)。
+    // 本机写**加**标记不拦(只会收紧)。
+    const storedMarker = stored && typeof stored === 'object' && !Array.isArray(stored) ? (stored as any).remoteOrigin : undefined;
+    const cfg = remote ? applyRemoteConfigWrite(stored, merged)
+      : storedMarker != null ? { ...merged, remoteOrigin: storedMarker } : merged;
     // 锁合并之后再校验一次:请求体单看合法(只带 soloEngineId),合并回存值的 soloAgentSlug 就成了双身份 —— 这种写整条拒绝(creview 09-16 P0)。
     const mergedErr = validSessionFacts(cfg);
     if (mergedErr) return void res.status(400).json({ detail: mergedErr });

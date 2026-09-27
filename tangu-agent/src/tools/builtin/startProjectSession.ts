@@ -16,7 +16,7 @@ import { publish } from '../../services/eventBus.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { AppProfile } from '../../seams/appProfile.js';
 import type { ToolContext } from '../toolTypes.js';
-import { effectiveRemote, type RemoteInfo } from '../../services/remoteOrigin.js';
+import { effectiveRemote, remoteOriginMarker, type RemoteInfo } from '../../services/remoteOrigin.js';
 import { remoteCwdForbidden } from '../../sandbox/hostSandboxProtection.js';
 
 // 只在「Agent 私聊 + 本轮 @ 了项目」的 run 里可见(agentLoop 把 realpath 放进 ctx.dispatchTargets);子代理 / 讨论 run / 云端不可见。
@@ -60,10 +60,13 @@ export async function dispatchProjectSession(p: DispatchInput): Promise<{ sessio
     ...(defaults?.thinkingLevel ? { thinkingLevel: defaults.thinkingLevel } : {}),
     ...(defaults?.approvalMode ? { approvalMode: defaults.approvalMode } : {}),
   };
+  // 远程污点的调用方派出的会话:存值盖远程标记(与远程 POST /agent/sessions 同口径)—— 项目目录来自远端 run 的 @ 提及,
+  // 桌面设备页的主机文件读范围不认带标记的会话目录(D1)。标记只进会话存值,不进首个 run 的 agentConfig(run 的污点是 input.remote)。
+  const storedConfig = p.remote ? { ...agentConfig, remoteOrigin: remoteOriginMarker(p.remote) } : agentConfig;
   await query(
     `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, project_path, project_name, projectless, agent_config, parent_session_id)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [sessionId, p.userId, p.appId, title, modelId || null, p.projectPath.slice(0, 1000), projectName, false, JSON.stringify(agentConfig), p.parentSessionId || null],
+    [sessionId, p.userId, p.appId, title, modelId || null, p.projectPath.slice(0, 1000), projectName, false, JSON.stringify(storedConfig), p.parentSessionId || null],
   );
   const runId = uuidv4();
   await createRun({
