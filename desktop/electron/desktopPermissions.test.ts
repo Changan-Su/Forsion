@@ -14,7 +14,11 @@ vi.mock('electron', () => ({
 }))
 vi.mock('node:fs', () => ({ existsSync: m.exists, accessSync: vi.fn(), constants: { W_OK: 2 } }))
 vi.mock('node:child_process', () => ({ execFile: m.launch, spawn: m.spawn }))
-vi.mock('./builtinPlugins', () => ({ builtinBundleSources: () => ['/bundle/tangu-computer-use'], activeBundleDir: async (_root: string, source: string) => source }))
+// builtinBundleSources 自 09-27 起返回清单项(pkg / id / platforms / dir),权限引导按 id 找电脑操作那份
+vi.mock('./builtinPlugins', () => ({
+  builtinBundleSources: () => [{ pkg: '@forsion/tangu-computer-use', id: 'tangu-computer-use', platforms: ['darwin', 'win32'], dir: '/bundle/tangu-computer-use' }],
+  activeBundleDir: async (_root: string, source: string) => source,
+}))
 vi.mock('./forsionHome', () => ({ forsionHomeDir: () => '/home/.forsion-test' }))
 vi.mock('./computerUse', () => ({ helperSocketPath: () => '/tmp/test-cu.sock', askHelper: m.ask }))
 vi.mock('./permissionGuide', () => ({ PermissionGuide: class { show = m.show; close = m.close } }))
