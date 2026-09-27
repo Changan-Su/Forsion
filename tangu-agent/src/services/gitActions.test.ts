@@ -305,10 +305,38 @@ describe('仓库自带会执行程序的配置(gitTrust)', () => {
     expect(git(cwd, 'log', '-2', '--format=%s')).toBe('extra\nmine'); // 不猜、不撤:原样交给用户检查
   });
 
+  it.skipIf(process.platform === 'win32')('post-commit 钩子 amend 了这次提交 / 切了分支 → 认不准:commit_unverified,什么都不撤', async () => {
+    for (const [name, hook] of [
+      // amend 得真改点东西:同一秒内原样 amend 出来的是同一个提交对象,引用根本不动
+      ['hook-amend', '[ -f .amended ] && exit 0\ntouch .amended\necho extra >> a.txt\ngit add a.txt\ngit commit -q --amend --no-edit\n'],
+      ['hook-switch', 'git switch -q -c elsewhere\n'],
+    ] as const) {
+      const cwd = repo(name);
+      writeFileSync(path.join(cwd, 'a.txt'), 'a');
+      git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
+      const hooks = dir(`${name}/.githooks`);
+      git(cwd, 'config', 'core.hooksPath', '.githooks');
+      writeFileSync(path.join(hooks, 'post-commit'), `#!/bin/sh\n${hook}`, { mode: 0o755 });
+      writeFileSync(path.join(cwd, 'a.txt'), 'changed');
+      const err = await gitCommit(cwd, 'mine', true).catch((e) => e);
+      expect(err.code, name).toBe('commit_unverified');
+      expect(git(cwd, 'log', '-1', '--format=%s'), name).toBe('mine'); // 没去撤任何东西
+    }
+  });
+
+  it('改名的原路径也进指纹:同一个目标、来源换了 → 指纹不同', () => {
+    expect(changesToken([{ code: 'R ', path: 'new.txt', from: 'old1.txt' }])).not.toBe(changesToken([{ code: 'R ', path: 'new.txt', from: 'old2.txt' }]));
+  });
+
   it('改动类型也要对得上:看见的是删除,暂存时却成了修改(删掉的又被建回来)→ changes_changed', () => {
     const reviewed = reviewedStatuses([{ code: ' D', path: 'gone.txt' }, { code: 'R ', path: 'new.txt', from: 'old.txt' }, { code: '??', path: 'n.txt' }], false);
     expect([...reviewed]).toEqual([['gone.txt', 'D'], ['new.txt', 'A'], ['old.txt', 'D'], ['n.txt', 'A']]);
-    expect(() => assertWithinReviewed([{ status: 'D', path: 'gone.txt', mode: '000000', blob: '' }, { status: 'D', path: 'old.txt', mode: '000000', blob: '' }], reviewed)).not.toThrow();
+    const all = [{ status: 'D', path: 'gone.txt', mode: '000000', blob: '' }, { status: 'A', path: 'new.txt', mode: '100644', blob: 'x' }, { status: 'D', path: 'old.txt', mode: '000000', blob: '' }, { status: 'A', path: 'n.txt', mode: '100644', blob: 'y' }];
+    expect(() => assertWithinReviewed(all, reviewed)).not.toThrow();
+    // 双向:清单里的少了一条(被钩子 / 别的进程移出去)也算变了
+    const missing = (() => { try { assertWithinReviewed(all.slice(0, 3), reviewed) } catch (e) { return e as GitActionError } })();
+    expect(missing?.code).toBe('changes_changed');
+    expect(missing?.detail).toContain('- n.txt');
     const err = (() => { try { assertWithinReviewed([{ status: 'M', path: 'gone.txt', mode: '100644', blob: 'x' }], reviewed) } catch (e) { return e as GitActionError } })();
     expect(err?.code).toBe('changes_changed');
     expect(reviewedStatuses([{ code: 'M', path: 'a' }], true).get('a')).toBe('M');

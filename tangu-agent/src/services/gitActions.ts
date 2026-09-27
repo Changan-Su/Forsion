@@ -289,7 +289,7 @@ async function commitScope(cwd: string): Promise<{ files: PendingFile[]; paths: 
 
 /** 清单指纹:用户在提交框里看到的那份清单。提交时重算,对不上 = 看完之后又变了(changes_changed),让他重新过目。 */
 export function changesToken(files: PendingFile[]): string {
-  return createHash('sha256').update(files.map((f) => `${f.code}\t${f.path}`).sort().join('\n')).digest('hex').slice(0, 32);
+  return createHash('sha256').update(files.map((f) => `${f.code}\t${f.path}\t${f.from ?? ''}`).sort().join('\n')).digest('hex').slice(0, 32);
 }
 
 /** 面板的待提交清单(完整;超过上限时提交本来也会被拒)+ 指纹。 */
@@ -321,10 +321,13 @@ export function reviewedStatuses(files: PendingFile[], stagedOnly: boolean): Map
   return out;
 }
 
-/** 每条条目都得在用户过目的清单里、且改动类型一致(删掉的又被建回来 = 删除变修改,也算没过目)。 */
+/** 提交内容必须**正好**是用户过目的那份:每条都在清单里且改动类型一致(删掉的又被建回来 = 删除变修改,也算没过目),
+ *  清单里的也都得在(被钩子 / 别的进程移出去的也算变了)。 */
 export function assertWithinReviewed(entries: StagedEntry[], reviewed: Map<string, string>): void {
   const off = entries.filter((e) => reviewed.get(e.path) !== e.status).map((e) => `${e.status} ${e.path}`);
-  if (off.length) throw new GitActionError('changes_changed', 'The commit contains changes that were not in the reviewed list', off.slice(0, 10).join('\n'));
+  const present = new Set(entries.map((e) => e.path));
+  const missing = [...reviewed.keys()].filter((p) => !present.has(p)).map((p) => `- ${p}`);
+  if (off.length || missing.length) throw new GitActionError('changes_changed', 'The commit is different from the reviewed list', [...off, ...missing].slice(0, 10).join('\n'));
 }
 
 /** 提交。有已暂存的只提交它们;没有才 `add -A`(面板列出的全部改动)。信息走 stdin,不经命令行参数。
@@ -349,6 +352,9 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
   const reviewed = reviewedStatuses(scope.files, stagedOnly);
   const baseR = await readGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { timeoutMs: 5000 });
   const base = baseR.code === 0 ? baseR.stdout.trim() : null;
+  // 提交会落在哪个分支引用上(游离 HEAD 时就是 HEAD 本身);提交后据此认准「刚才这一个」并只撤这个引用
+  const refR = await readGit(cwd, ['symbolic-ref', '-q', 'HEAD'], { timeoutMs: 5000 });
+  const ref = refR.code === 0 && refR.stdout.trim() ? refR.stdout.trim() : 'HEAD';
   let addedByUs = false;
   if (!stagedOnly) {
     await assertCommittable(cwd, scope.changes!);
@@ -369,23 +375,31 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
     throw new GitActionError('no_identity', 'git does not know your name and email yet', tail(committed.stderr));
   }
   must(committed, 'commit');
-  // 认准「刚才这一个」提交:HEAD 的父提交必须正是提交前的基准(post-commit 钩子 / 别的进程又提交过 = 认不准,不猜不撤)
-  const line = must(await readGit(cwd, ['rev-list', '--parents', '-n', '1', 'HEAD']), 'rev-list').stdout.trim().split(/\s+/);
-  const [ours, ...parents] = line;
-  if (base ? parents.length !== 1 || parents[0] !== base : parents.length !== 0) {
-    throw new GitActionError('commit_unverified', 'The repository changed while committing; the result could not be verified', ours);
+  // 认准「刚才这一个」提交:还在原来的分支引用上;该引用最新一条 reflog 是一次普通提交(post-commit 钩子 amend / 再提交都会顶掉它);
+  // 父提交等于基准。认不准 / 提交后的任何读取失败都不猜:报 commit_unverified,界面说清楚并重读 —— 提交可能已经在了,只是没法复核。
+  let ours = '';
+  let final: StagedEntry[];
+  try {
+    const nowRef = await readGit(cwd, ['symbolic-ref', '-q', 'HEAD'], { timeoutMs: 5000 });
+    if ((nowRef.code === 0 && nowRef.stdout.trim() ? nowRef.stdout.trim() : 'HEAD') !== ref) throw new Error('the branch changed while committing');
+    const log = must(await readGit(cwd, ['reflog', 'show', '-n', '1', '--format=%H%x1f%gs', ref]), 'reflog').stdout.trim().split('\x1f');
+    ours = log[0] || '';
+    if (!ours || !/^commit(?: \(initial\))?:/.test(log[1] || '')) throw new Error('the latest update of the branch is not this commit');
+    const parents = must(await readGit(cwd, ['rev-list', '--parents', '-n', '1', ours]), 'rev-list').stdout.trim().split(/\s+/).slice(1);
+    if (base ? parents.length !== 1 || parents[0] !== base : parents.length !== 0) throw new Error('the commit has an unexpected parent');
+    const diff = must(await readGit(cwd, ['diff-tree', '-r', '--raw', '-z', '--no-renames', '--no-abbrev', '--no-commit-id', ...(base ? [base, ours] : ['--root', ours])], { maxOutputBytes: 8 * 1024 * 1024 }), 'diff-tree').stdout;
+    final = parseRaw(diff);
+  } catch (e) {
+    throw new GitActionError('commit_unverified', 'The commit could not be verified; check the repository', String((e as Error)?.message || e));
   }
-  const diff = must(await readGit(cwd, ['diff-tree', '-r', '--raw', '-z', '--no-renames', '--no-abbrev', ...(base ? [base, ours] : ['--root', ours])], { maxOutputBytes: 4 * 1024 * 1024 }), 'diff-tree').stdout;
-  // --root 的输出第一段是提交 id 本身,parseRaw 从第一个 ':' 条目开始读,顺手跳过它
-  const final = parseRaw(base ? diff : diff.slice(diff.indexOf(':')));
   try {
     assertWithinReviewed(final, reviewed);
     await assertStagedSafe(cwd, final);
   } catch (e) {
-    const undone = await runAction(cwd, base ? ['update-ref', '-m', 'forsion: undo commit', 'HEAD', base, ours] : ['update-ref', '-d', 'HEAD', ours]).catch(() => null);
+    const undone = await runAction(cwd, base ? ['update-ref', '-m', 'forsion: undo commit', ref, base, ours] : ['update-ref', '-d', ref, ours]).catch(() => null);
     if (!undone || undone.code !== 0) throw new GitActionError('commit_unverified', 'A commit hook changed the commit and it could not be undone; check the repository', tail(undone?.stderr || ''));
     const inner = e instanceof GitActionError ? e : null;
-    throw new GitActionError('hook_changed_commit', 'A git hook added changes that cannot be committed from here; the commit was undone', inner?.detail || String((e as Error)?.message || e));
+    throw new GitActionError('hook_changed_commit', 'A git hook changed the commit so it no longer matches the reviewed list; the commit was undone', inner?.detail || String((e as Error)?.message || e));
   }
   const head = must(await readGit(cwd, ['log', '-1', '--format=%H%x1f%s', ours]), 'log');
   const [sha, subject = ''] = head.stdout.trim().split('\x1f');

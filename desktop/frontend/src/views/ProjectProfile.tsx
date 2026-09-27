@@ -109,7 +109,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [commitDraft, setCommitDraft] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
   const [gitErr, setGitErr] = useState<GitErr | null>(null)
-  const [pending, setPending] = useState<{ files: Array<{ code: string; path: string }>; total: number; stagedOnly: boolean; token: string; tooMany?: boolean } | null>(null)
+  const [pending, setPending] = useState<{ files: Array<{ code: string; path: string; from?: string }>; total: number; stagedOnly: boolean; token: string; tooMany?: boolean } | null>(null)
   const genSeq = useRef(0)
   // 写动作的两处禁区(只读摘要照常):① 默认工作区 —— 所有不在项目里的对话共用、常在笔记库里,建仓 / 整目录提交 = 把整片笔记收进仓
   //   (引擎 gitActions 也拒,这里是第一道);② 编码工作室托管的项目(~/Forsion/Project/<项目>)—— 版本由宿主在「版本」面板里管,
@@ -556,7 +556,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
             <div className="project-card-head"><div><h3>{t('projectProfile.git.commitTitle', { count: pending?.total ?? changeCount })}</h3><small>{t('projectProfile.git.commitHint')}</small></div></div>
             {pending && !!pending.total && <div className="project-git-files" data-project-git-files>
               <small>{t(pending.stagedOnly ? 'projectProfile.git.filesStaged' : 'projectProfile.git.filesAll', { count: pending.total })}</small>
-              <ul>{pending.files.map((f) => <li key={`${f.code}${f.path}`} title={f.path}><code>{f.code.trim() || '·'}</code><span>{f.path}</span></li>)}</ul>
+              <ul>{pending.files.map((f) => { const label = f.from ? `${f.from} → ${f.path}` : f.path; return <li key={`${f.code}${f.path}`} title={label}><code>{f.code.trim() || '·'}</code><span>{label}</span></li> })}</ul>
               {pending.total > pending.files.length && <small>{t('projectProfile.git.more', { count: pending.total - pending.files.length })}</small>}
               {pending.tooMany && <p className="project-git-error" data-project-git-toomany>{t('projectProfile.git.tooManyToList')}</p>}
             </div>}

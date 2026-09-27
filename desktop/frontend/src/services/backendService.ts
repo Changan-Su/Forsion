@@ -1083,7 +1083,7 @@ export const gitTrustProject = (cfg: TanguDesktopConfig, sessionId: string) =>
   gitPost<{ trusted: boolean; context: ProjectContext | null }>(cfg, 'trust', { sessionId }).then(withContext)
 /** 这次会提交的文件(有已暂存的只列已暂存的,stagedOnly=true)。 */
 export const gitPendingProject = (cfg: TanguDesktopConfig, sessionId: string, trust = false) =>
-  gitPost<{ files: Array<{ code: string; path: string }>; total: number; stagedOnly: boolean; token: string; tooMany?: boolean }>(cfg, 'pending', { sessionId, trust })
+  gitPost<{ files: Array<{ code: string; path: string; from?: string }>; total: number; stagedOnly: boolean; token: string; tooMany?: boolean }>(cfg, 'pending', { sessionId, trust })
 /** 用会话自己的模型写一条提交信息(计入额度)。 */
 export const generateGitCommitMessage = (cfg: TanguDesktopConfig, sessionId: string, trust = false) =>
   gitPost<{ message: string }>(cfg, 'message', { sessionId, trust }, 120_000).then((r) => r.message)
