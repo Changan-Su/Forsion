@@ -33,11 +33,13 @@ async function main() {
 const BASE_INDEX = `import { Router } from 'express';
 import runsRouter from './routes/runs.js';
 import sessionsRouter from './routes/sessions.js';
+import mmRouter from './routes/mm.js';
 export function createTanguModule(d) {
   const userRouter = Router();
   userRouter.use(runsRouter);
   const dataRouter = Router();
   dataRouter.use(sessionsRouter);
+  dataRouter.use(mmRouter);
   const adminRouter = Router();
   return { userRouter, dataRouter, adminRouter };
 }
@@ -45,6 +47,8 @@ export function createTanguModule(d) {
 const BASE_ROUTES: Record<string, string> = {
   'runs.ts': `import { Router } from 'express';\nconst router = Router();\nrouter.post('/agent/runs', h);\nrouter.get('/agent/runs/:id/events', h);\nexport default router;\n`,
   'sessions.ts': `import { Router } from 'express';\nconst router = Router();\nrouter.get('/agent/sessions', h);\nexport default router;\n`,
+  // memoryMaintenance.ts 形态:前缀 + authMiddleware + 内联中间件的 router.use,之后按同一前缀挂路由
+  'mm.ts': `import { Router } from 'express';\nconst router = Router();\nconst base = '/agent/agents/:slug/memory/dream';\nrouter.use(base, authMiddleware, async (req: AuthRequest, res, next) => { next(); });\nrouter.get(base, h);\nexport default router;\n`,
 }
 
 /** 造一棵最小引擎源码树(与 tangu-agent/src 的 standalone/main.ts / index.ts / routes/*.ts 同形)。 */
@@ -62,7 +66,7 @@ describe('gen-engine-routes:认不出的挂载形态大声失败,不静默漏抽
   it('基线:最小源码树按今天的形态全部抽到(非空性 —— 下面的红不是因为夹具本身坏了)', async () => {
     const gen = await loadGen()
     const got = gen.extractEngineRoutes(fixture()).map((r) => `${r.method} ${r.path}`).sort()
-    expect(got).toEqual(['GET /agent/runs/:id/events', 'GET /agent/sessions', 'GET /health', 'POST /agent/runs'])
+    expect(got).toEqual(['GET /agent/agents/:slug/memory/dream', 'GET /agent/runs/:id/events', 'GET /agent/sessions', 'GET /health', 'POST /agent/runs'])
   })
 
   const cases: Array<[string, Parameters<typeof fixture>[0]]> = [
@@ -72,6 +76,11 @@ describe('gen-engine-routes:认不出的挂载形态大声失败,不静默漏抽
     ['main.ts 应用级 app.route(...)', { main: (s) => s.replace("app.get('/health'", "app.route('/x').get(h);\n  app.get('/health'") }],
     ['main.ts 把 app 交给别的函数挂路由:mountExtras(app)', { main: (s) => s.replace("app.get('/health'", "mountExtras(app);\n  app.get('/health'") }],
     ['main.ts 应用级路由的路径不是字面量:app.get(HEALTH_PATH, …)', { main: (s) => s.replace("app.get('/health'", "app.get(HEALTH_PATH") }],
+    // Codex r3 #4:前缀认得、后面还多挂一个 router 的多参调用(只看前缀会整条放行)
+    ['main.ts 多参 app.use(express.json(), extraRouter)', { main: (s) => s.replace("app.use(express.json({ limit: '25mb' }));", "app.use(express.json({ limit: '25mb' }), extraRouter);") }],
+    ['main.ts 多参 app.use(\'/\', mod.dataRouter, extraRouter)', { main: (s) => s.replace("app.use('/', mod.dataRouter);", "app.use('/', mod.dataRouter, extraRouter);") }],
+    ['main.ts 多参内联中间件 app.use((req, res, next) => …, extraRouter)', { main: (s) => s.replace("app.use((req, res, next) => { next(); });", "app.use((req, res, next) => { next(); }, extraRouter);") }],
+    ['路由文件 router.use(base, authMiddleware, 中间件, subRouter)', { routes: { 'mm.ts': `import { Router } from 'express';\nconst router = Router();\nconst base = '/agent/x';\nrouter.use(base, authMiddleware, async (req, res, next) => { next(); }, subRouter);\nrouter.get(base, h);\nexport default router;\n` } }],
     ['main.ts 挂 express.static(文件伺服面)', { main: (s) => s.replace("app.use((req, res, next)", "app.use(express.static(dir));\n  app.use((req, res, next)") }],
     ['index.ts 带路径前缀组合:dataRouter.use(\'/p\', sessionsRouter)', { index: (s) => s.replace('dataRouter.use(sessionsRouter);', "dataRouter.use('/p', sessionsRouter);") }],
     ['index.ts 组合一个现造的 router:dataRouter.use(makeRouter())', { index: (s) => s.replace('dataRouter.use(sessionsRouter);', 'dataRouter.use(sessionsRouter);\n  dataRouter.use(makeRouter());') }],
@@ -89,6 +98,6 @@ describe('gen-engine-routes:认不出的挂载形态大声失败,不静默漏抽
   it('注释里的挂载形态不算(剥注释后判)', async () => {
     const gen = await loadGen()
     const dir = fixture({ main: (s) => s.replace("app.get('/health'", "// app.use(mod.extraRouter);  /* app.all('/x') */\n  app.get('/health'") })
-    expect(gen.extractEngineRoutes(dir).length).toBe(4)
+    expect(gen.extractEngineRoutes(dir).length).toBe(5)
   })
 })

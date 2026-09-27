@@ -351,6 +351,35 @@ function blankStrings(src) {
 }
 
 const lineOf = (src, index) => src.slice(0, index).split('\n').length
+
+/**
+ * 调用的顶层实参区间:code = 已剥注释 + 剥字符串内容的源码(括号不会被字符串里的字符骗),open = 左括号之后的下标。
+ * 返回每个实参的 [起, 止)(原文同偏移,调用方拿原文判字面量)。括号不配平 → fail。
+ * 为什么要逐个实参判(Codex r3 #4):只看前缀,`app.use(express.json(), extraRouter)` 这种合法多参挂载会整条放行,extraRouter 静默漏抽。
+ */
+function callArgs(code, open, where) {
+  const args = []
+  let depth = 0
+  let start = open
+  for (let i = open; i < code.length; i++) {
+    const c = code[i]
+    if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') {
+      if (depth === 0) {
+        if (c !== ')') break
+        if (code.slice(start, i).trim()) args.push([start, i])
+        return args
+      }
+      depth--
+    } else if (c === ',' && depth === 0) {
+      args.push([start, i])
+      start = i + 1
+    }
+  }
+  fail(`${where}: unbalanced call arguments`)
+}
+const argTexts = (src, code, open, where) => callArgs(code, open, where).map(([a, b]) => src.slice(a, b).trim())
+const INLINE_MIDDLEWARE = /^(?:async\s+)?\(\s*[A-Za-z_$][\w$]*(?:\s*:\s*[A-Za-z_$][\w$]*)?\s*,\s*[A-Za-z_$][\w$]*\s*,\s*[A-Za-z_$][\w$]*\s*\)\s*=>/
 const IDENT = '[A-Za-z_$][\\w$]*'
 /** app 上不产生路由的调用(起服务 / 设置项)。 */
 const APP_NONROUTE = new Set(['listen', 'set', 'disable', 'enable'])
@@ -382,10 +411,12 @@ function assertAppUsesKnown(mainSrc) {
     }
     if (APP_NONROUTE.has(verb)) continue
     if (verb === 'use') {
-      if (/^express\s*\.\s*(?:json|urlencoded|raw|text)\s*\(/.test(rest)) continue
-      if (new RegExp(`^\\(\\s*${IDENT}\\s*,\\s*${IDENT}\\s*,\\s*${IDENT}\\s*\\)\\s*=>`).test(rest)) continue
-      if (new RegExp(`^(['"])[^'"\\n]*\\1\\s*,\\s*mod\\s*\\.\\s*${IDENT}\\s*\\)`).test(rest)) continue
-      fail(`${where}: unsupported app.use(...) form — only body parsers, an inline (req, res, next) middleware and app.use('/', mod.<router>) are modelled`)
+      // 逐个实参判:认得的只有「单个请求体解析器」「单个无路径内联中间件」「'<前缀>', mod.<router> 两参」三种
+      const args = argTexts(mainSrc, code, m.index + 3 + call[0].lastIndexOf('(') + 1, where)
+      if (args.length === 1 && /^express\s*\.\s*(?:json|urlencoded|raw|text)\s*\([^]*\)$/.test(args[0])) continue
+      if (args.length === 1 && INLINE_MIDDLEWARE.test(args[0])) continue
+      if (args.length === 2 && /^(['"])[^'"\n]*\1$/.test(args[0]) && new RegExp(`^mod\\s*\\.\\s*${IDENT}$`).test(args[1])) continue
+      fail(`${where}: unsupported app.use(...) form — only a single body parser, a single inline (req, res, next) middleware and app.use('/', mod.<router>) are modelled`)
     }
     fail(`${where}: unsupported app.${verb}(...)`)
   }
@@ -449,8 +480,10 @@ function routesOfFile(abs, root = ENGINE_SRC) {
     const where = `${rel}:${line}`
     const rest = src.slice(m.index + m[0].length)
     if (verb === 'use') {
-      // 只认「路径前缀 + authMiddleware」形态的中间件(memoryMaintenance.ts);其余(挂子 router 等)不认。
-      if (!/^(?:(['"])[^'"\n]*\1|[A-Za-z_$][\w$]*)\s*,\s*authMiddleware\b/.test(rest)) fail(`${where}: unsupported router.use(...) form`)
+      // 只认「路径前缀, authMiddleware, 内联中间件」三参(memoryMaintenance.ts);多挂一个子 router 之类一律不认(逐个实参判)。
+      const args = argTexts(src, blankStrings(src), m.index + m[0].length, where)
+      const ok = args.length === 3 && /^(?:(['"])[^'"\n]*\1|[A-Za-z_$][\w$]*)$/.test(args[0]) && args[1] === 'authMiddleware' && INLINE_MIDDLEWARE.test(args[2])
+      if (!ok) fail(`${where}: unsupported router.use(...) form`)
       continue
     }
     if (!METHODS.has(verb)) fail(`${where}: unsupported router.${verb}(...)`)
