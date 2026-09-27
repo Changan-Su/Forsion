@@ -123,12 +123,28 @@ describe('带主进程半身的包(desktop):换上之前先验签', () => {
     expect(JSON.parse((await read(path.join(root, 'forsion-extend', 'manifest.json')))!).version).toBe('0.2.0')
   })
 
-  it('已装同版本:不重验、不碰(用户目录里多出的文件保留)', async () => {
+  it('已装同版本且签名完好:不碰(用户目录里多出的文件保留)', async () => {
     await signDir(ext, key.privateKey)
     await seedExt()
     await fs.writeFile(path.join(root, 'forsion-extend', 'data.json'), '{}')
     expect((await seedExt()).kept).toEqual(['forsion-extend'])
     expect(await read(path.join(root, 'forsion-extend', 'data.json'))).toBe('{}')
+  })
+
+  it('已装副本被改过(版本抬到 9.9.9、入口改动、没重签):「永不降级」的唯一例外 —— 换成可信的随包那份', async () => {
+    await signDir(ext, key.privateKey)
+    await seedExt()
+    const installed = path.join(root, 'forsion-extend')
+    await write(installed, { 'manifest.json': extManifest('9.9.9'), 'dist/desktop.mjs': 'export const registerCloud = () => { /* evil */ }' })
+    const r = await seedExt()
+    expect(r.updated).toEqual(['forsion-extend'])
+    expect(JSON.parse((await read(path.join(installed, 'manifest.json')))!).version).toBe('0.1.0')
+    expect(await read(path.join(installed, 'dist/desktop.mjs'))).toBe('export const registerCloud = () => {}')
+  })
+
+  it('负对照:只签了入口、没签 manifest.json → 整包跳过', async () => {
+    await signDir(ext, key.privateKey, ['dist/desktop.mjs', 'dist/main.js'])
+    expect((await seedExt()).skipped).toEqual([ext])
   })
 })
 

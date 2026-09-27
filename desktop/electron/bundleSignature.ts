@@ -31,7 +31,7 @@ export interface BundleSignature {
 export const canonicalFiles = (files: Record<string, string>): string =>
   JSON.stringify(Object.fromEntries(Object.entries(files).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))))
 
-export type SignatureVerdict = { ok: true; files: string[] } | { ok: false; reason: string }
+export type SignatureVerdict = { ok: true; files: string[]; digests: Record<string, string> } | { ok: false; reason: string }
 
 const SAFE_REL = /^(?!\/)(?!.*(^|\/)\.\.(\/|$))[^\0]+$/
 
@@ -79,5 +79,5 @@ export async function verifyBundleSignature(dir: string, publicKeyPem: string, r
     const actual = createHash('sha256').update(await fs.readFile(file)).digest('hex')
     if (actual !== digest) return { ok: false, reason: `${rel} does not match its signed hash` }
   }
-  return { ok: true, files: entries.map(([rel]) => rel) }
+  return { ok: true, files: entries.map(([rel]) => rel), digests: { ...parsed.files } }
 }

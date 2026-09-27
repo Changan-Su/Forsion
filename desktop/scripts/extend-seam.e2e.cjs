@@ -6,7 +6,8 @@
  *  ① dev 随包(node_modules/@forsion/extend)播种进 <home>/plugins/forsion-extend/(含 SIGNATURE),[cloud-host] 装载成功;
  *  ② 渲染层 window.tangu.accountQuota / submitFeedback / cloudFetch / openPayCenter 都在;未登录 accountQuota → {status:401,json:null};
  *     cloudFetch 绝对 URL → bad_path(token 不出主进程、边界仍在);
- *  ③ 已装副本被改过(用户目录可写:版本抬高、入口改动、没重签)→ 播种不降级、装载器验签失败后退回随包那份,账号面仍在;
+ *  ③ 已装副本被改过(用户目录可写:版本抬高、入口改动、没重签)→ 下次启动播种把它换回可信的随包那份(永不降级的唯一例外),
+ *     装载的是换回来的已装副本,账号面仍在;
  *  ④ 负对照 --absent:随包缺席 → preload 按 cloud:present 删键,四个键全 undefined(渲染层门控自动隐藏,不是 reject)。
  *
  * 需先 npm run build(读 out/)。用法:npm run e2e:extend;负对照:node scripts/extend-seam.e2e.cjs --absent
@@ -77,8 +78,9 @@ async function launch(home, stubUrl) {
       fs.writeFileSync(path.join(installed, 'manifest.json'), JSON.stringify({ ...m, version: '9.9.9' }))
       const run2 = await launch(home, stub.url)
       await run2.app.close().catch(() => {})
-      const stillTampered = JSON.parse(fs.readFileSync(path.join(installed, 'manifest.json'), 'utf8')).version === '9.9.9'
-      check('③ 改过的已装副本:播种不降级(9.9.9 留着)、装载器验签失败后退回随包那份,账号面仍在', stillTampered && run2.logs().includes('验签失败') && run2.logs().includes(`[cloud-host] 已装载 forsion-extend@${bundledVersion}(${BUNDLED})`) && run2.bridge.accountQuota === 'function' && run2.bridge.quota?.status === 401, run2.logs().split('\n').filter((l) => l.includes('cloud-host')).join(' / ').slice(0, 400))
+      const healed = JSON.parse(fs.readFileSync(path.join(installed, 'manifest.json'), 'utf8')).version === bundledVersion
+        && !fs.readFileSync(path.join(installed, 'dist', 'desktop.mjs'), 'utf8').includes('// tampered')
+      check('③ 改过的已装副本:播种验签失败后换回随包那份(9.9.9 → 随包版本),装载的是换回来的已装副本,账号面仍在', healed && run2.logs().includes('已装副本验签失败') && run2.logs().includes(`[cloud-host] 已装载 forsion-extend@${bundledVersion}(${installed})`) && run2.bridge.accountQuota === 'function' && run2.bridge.quota?.status === 401, run2.logs().split('\n').filter((l) => l.includes('cloud-host') || l.includes('builtin-plugins] forsion')).join(' / ').slice(0, 400))
     }
   } catch (e) {
     check('台架本身没炸', false, String(e?.stack || e).slice(0, 400))

@@ -25,7 +25,8 @@ describe('verifyBundleSignature', () => {
   it('签过的目录:验过,files 列全;点名的入口在 files 里', async () => {
     await signDir(dir, key.privateKey)
     const v = await verifyBundleSignature(dir, key.publicKeyPem, ['dist/desktop.mjs'])
-    expect(v).toEqual({ ok: true, files: ['dist/desktop.mjs', 'dist/main.js', 'manifest.json'] })
+    expect(v).toMatchObject({ ok: true, files: ['dist/desktop.mjs', 'dist/main.js', 'manifest.json'] })
+    if (v.ok) expect(v.digests['dist/desktop.mjs']).toMatch(/^[0-9a-f]{64}$/)
   })
 
   it('canonical 形式与键的写入顺序无关(签名侧乱序写也能验过)', () => {

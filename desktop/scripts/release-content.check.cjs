@@ -27,7 +27,12 @@ function verifyBundleSignature(dir, publicKeyPem, required) {
   let sig
   try { sig = JSON.parse(fs.readFileSync(path.join(dir, 'SIGNATURE'), 'utf8')) } catch (e) { return `no readable SIGNATURE: ${e.message}` }
   if (sig.alg !== 'ed25519' || typeof sig.sig !== 'string' || !sig.files || typeof sig.files !== 'object') return 'SIGNATURE is malformed'
-  const canonical = JSON.stringify(Object.fromEntries(Object.entries(sig.files).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))))
+  const entries = Object.entries(sig.files)
+  if (entries.length === 0 || entries.length > 5000) return `SIGNATURE lists ${entries.length} files`
+  for (const [rel, digest] of entries) {
+    if (!/^(?!\/)(?!.*(^|\/)\.\.(\/|$))[^\0]+$/.test(rel) || rel === 'SIGNATURE' || !/^[0-9a-f]{64}$/.test(digest)) return `bad entry ${JSON.stringify(rel)}`
+  }
+  const canonical = JSON.stringify(Object.fromEntries(entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))))
   let ok = false
   try { ok = crypto.verify(null, Buffer.from(canonical, 'utf8'), crypto.createPublicKey(publicKeyPem), Buffer.from(sig.sig, 'base64')) } catch (e) { return `signature check failed: ${e.message}` }
   if (!ok) return 'signature does not match the pinned public key'
@@ -91,7 +96,7 @@ for (const dir of resources) {
     check(!fs.existsSync(path.join(bundleDir, 'node_modules')), `Packaged ${bundle.pkg} ships node_modules`)
     if (bundle.desktop) {
       check(fs.existsSync(path.join(bundleDir, ...bundle.desktop.entry.split('/'))), `${bundle.pkg} desktop entry ${bundle.desktop.entry} missing`)
-      const reason = verifyBundleSignature(bundleDir, bundle.desktop.signingKey, [bundle.desktop.entry])
+      const reason = verifyBundleSignature(bundleDir, bundle.desktop.signingKey, [bundle.desktop.entry, 'manifest.json'])
       check(!reason, `Packaged ${bundle.pkg} is not signed with the pinned key: ${reason}`)
     }
   }

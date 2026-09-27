@@ -98,8 +98,12 @@ export async function checkBuiltinUpdates(o: BuiltinUpdateOpts): Promise<string[
       }
       const pendingPath = pendingDirFor(o.pluginsRoot, src)
       const installedDir = await installedDirFor(o.pluginsRoot, bundled.id)
-      const have = [bundled, installedDir ? await readManifest(installedDir) : null, await readManifest(pendingPath)]
-        .filter((m): m is BundleManifest => !!m && m.id === bundled.id)
+      // 带主进程半身的包:已装 / 暂存那份验不过签名就不算「已经有的版本」(播种会把它换掉,装载器也不载它),
+      // 否则一份改了版本号的假副本会让更新器永远以为已是最新。
+      const counted = async (m: BundleManifest | null, dir: string): Promise<BundleManifest | null> =>
+        m && m.id === bundled.id && (!source.desktop || (await verifyBundleSignature(dir, source.desktop.signingKey, [source.desktop.entry, 'manifest.json'])).ok) ? m : null
+      const have = [bundled, installedDir ? await counted(await readManifest(installedDir), installedDir) : null, await counted(await readManifest(pendingPath), pendingPath)]
+        .filter((m): m is BundleManifest => !!m)
         .reduce((v, m) => (cmpVersion(m.version, v) > 0 ? m.version : v), '0.0.0')
       const latest = await resolveLatest(pkg, o.registries, o.fetch)
       if (!RELEASE_VERSION.test(latest.version)) {
@@ -138,7 +142,7 @@ export async function checkBuiltinUpdates(o: BuiltinUpdateOpts): Promise<string[
         }
         // 带主进程半身的包:落暂存区之前就验签,坏发布连暂存区都不进(播种时还会再核一次)。
         if (source.desktop) {
-          const v = await verifyBundleSignature(staging, source.desktop.signingKey, [source.desktop.entry])
+          const v = await verifyBundleSignature(staging, source.desktop.signingKey, [source.desktop.entry, 'manifest.json'])
           if (!v.ok) throw new Error(`signature: ${v.reason}`)
         }
         await fs.rm(retired, { recursive: true, force: true })

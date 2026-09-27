@@ -188,35 +188,37 @@ export async function seedBuiltinBundles(
         continue
       }
       // 带主进程半身的包:换上之前先验签。验不过的那份不用 —— 暂存的退回随包来源,随包的整包跳过。
-      const trusted = async (dir: string): Promise<boolean> => {
+      const trusted = async (dir: string, what: string): Promise<boolean> => {
         if (!signing) return true
-        const v = await verifyBundleSignature(dir, signing.signingKey, [signing.entry])
-        if (!v.ok) log(`[builtin-plugins] ${bundled.id} 验签失败,不用 ${dir}:${v.reason}`)
+        const v = await verifyBundleSignature(dir, signing.signingKey, [signing.entry, 'manifest.json'])
+        if (!v.ok) log(`[builtin-plugins] ${bundled.id} ${what}验签失败(${dir}):${v.reason}`)
         return v.ok
       }
       const pending = await readManifest(pendingPath)
       const usePending = !!pending && pending.id === bundled.id && cmpVersion(pending.version, bundled.version) > 0
-        && !gatePluginManifest(pending, opts.appVersion ?? null) && (await trusted(pendingPath))
+        && !gatePluginManifest(pending, opts.appVersion ?? null) && (await trusted(pendingPath, '暂存的新版'))
       const from = usePending ? pendingPath : src
       const offered = usePending ? pending! : bundled
       const how = usePending ? 'npm 更新' : '随 App 更新'
       const current = await installedDirFor(pluginsRoot, bundled.id)
       const installed = current ? await readManifest(current) : null
-      if (!installed || cmpVersion(offered.version, installed.version) > 0) {
-        if (!usePending && !(await trusted(src))) {
-          report.skipped.push(src)
-          continue
-        }
+      // 「永不降级」的唯一例外:已装那份是带主进程半身的包却验不过签名 —— 那不是我们发的字节,版本号写多高都不算数,
+      // 换成可信的那份(装载器本来就不会载它,更新器也不把它的版本当基线;不换掉它就会永远卡在那里)。
+      const installedTrusted = !installed || (await trusted(current!, '已装副本'))
+      const replace = !installed || !installedTrusted || cmpVersion(offered.version, installed.version) > 0
+      if (replace && !usePending && !(await trusted(src, '随包那份'))) {
+        report.skipped.push(src)
+        continue
       }
       if (!installed) {
         await fs.mkdir(pluginsRoot, { recursive: true })
         await replaceDir(from, path.join(pluginsRoot, bundled.id))
         report.installed.push(bundled.id)
         log(`[builtin-plugins] 已内置 ${bundled.id}@${offered.version}(${how})`)
-      } else if (cmpVersion(offered.version, installed.version) > 0) {
+      } else if (replace) {
         await replaceDir(from, current!)
         report.updated.push(bundled.id)
-        log(`[builtin-plugins] ${bundled.id} ${installed.version} → ${offered.version}(${how})`)
+        log(`[builtin-plugins] ${bundled.id} ${installed.version} → ${offered.version}(${how}${installedTrusted ? '' : ';已装副本验签失败,换掉'})`)
       } else {
         report.kept.push(bundled.id)
       }

@@ -200,6 +200,14 @@ describe('checkBuiltinUpdates', () => {
     }
     expect(await checkExt(serveExt(tgz(signed(files('0.2.0')))))).toEqual(['forsion-extend@0.2.0'])
     expect(JSON.parse(await fs.readFile(path.join(pend, 'SIGNATURE'), 'utf8')).alg).toBe('ed25519')
+
+    // 已装副本被改成 9.9.9 且验不过:不算「已有的版本」,照样下载正式版(否则更新器永远以为已是最新)
+    await fs.rm(pend, { recursive: true, force: true })
+    const installed = path.join(root, 'forsion-extend')
+    await fs.mkdir(path.join(installed, 'dist'), { recursive: true })
+    await fs.writeFile(path.join(installed, 'manifest.json'), manifest('forsion-extend', '9.9.9'))
+    await fs.writeFile(path.join(installed, 'dist', 'desktop.mjs'), 'evil')
+    expect(await checkExt(serveExt(tgz(signed(files('0.2.0')))))).toEqual(['forsion-extend@0.2.0'])
   })
 })
 

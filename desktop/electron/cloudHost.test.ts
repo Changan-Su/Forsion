@@ -30,9 +30,10 @@ const host: CloudHost = {
   isTrustedSender: () => true,
   log: (m) => logs.push(m),
 }
+const imported: string[] = []
 const load = () => loadBuiltinDesktopEntries({
-  pluginsRoot: root, sources: [source()], appVersion: '2.11.5', host, log: (m) => logs.push(m),
-  importer: (file) => import(/* @vite-ignore */ `${pathToFileURL(file).href}?t=${Date.now()}`),
+  pluginsRoot: root, sources: [source()], appVersion: '2.11.5', host, log: (m) => logs.push(m), tempRoot: tmp,
+  importer: (file) => { imported.push(file); return import(/* @vite-ignore */ `${pathToFileURL(file).href}?t=${Date.now()}`) },
 })
 
 beforeEach(async () => {
@@ -50,13 +51,23 @@ afterEach(async () => {
 })
 
 describe('loadBuiltinDesktopEntries', () => {
-  it('签过的随包副本:import 入口,registerCloud 拿到宿主接缝并注册通道', async () => {
+  it('签过的随包副本:验过的字节写进一次性私有临时文件再 import(不是从可写的插件目录 import),registerCloud 拿到宿主接缝并注册通道', async () => {
+    imported.length = 0
     expect(await load()).toEqual(['forsion-extend'])
     const g = (globalThis as Record<string, any>).__extendLoaded
     expect(g?.tag).toBe('bundled')
     expect(g?.host).toBe(host)
     expect(handled).toEqual(['account:quota'])
     expect(logs.join('\n')).toContain('已装载 forsion-extend@0.1.0')
+    expect(imported).toHaveLength(1)
+    expect(path.dirname(imported[0])).toMatch(new RegExp(`^${tmp.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/cloud-host-`))
+    expect(await fs.stat(imported[0]).then(() => true, () => false)).toBe(false) // 用完即删
+  })
+
+  it('负对照:manifest.json 没被签到(只签入口)→ 拒(未签的 minAppVersion / 版本号能改装载判断)', async () => {
+    await signDir(src, key.privateKey, ['dist/desktop.mjs', 'dist/main.js'])
+    expect(await load()).toEqual([])
+    expect(logs.join('\n')).toContain('manifest.json is not covered')
   })
 
   it('已装副本(npm 更新换上的新版)优先于随包:装已装那份', async () => {
@@ -96,7 +107,7 @@ describe('loadBuiltinDesktopEntries', () => {
 
   it('清单项没有 desktop 字段(电脑操作那类)→ 根本不碰', async () => {
     const { desktop: _d, ...cu } = source()
-    expect(await loadBuiltinDesktopEntries({ pluginsRoot: root, sources: [cu], appVersion: '2.11.5', host, log: (m) => logs.push(m) })).toEqual([])
+    expect(await loadBuiltinDesktopEntries({ pluginsRoot: root, sources: [cu], appVersion: '2.11.5', host, tempRoot: tmp, log: (m) => logs.push(m) })).toEqual([])
     expect(logs).toEqual([])
   })
 })

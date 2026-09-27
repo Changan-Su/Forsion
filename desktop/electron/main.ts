@@ -1945,7 +1945,7 @@ app.whenReady().then(async () => {
       isTrustedSender,
       log: (m) => console.log(m),
     }
-    const loaded = await loadBuiltinDesktopEntries({ pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources, appVersion: app.getVersion(), host })
+    const loaded = await loadBuiltinDesktopEntries({ pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources, appVersion: app.getVersion(), host, tempRoot: app.getPath('userData') })
     cloudPresent = loaded.includes('forsion-extend')
   }
   ipcMain.on('cloud:present', (e) => { e.returnValue = cloudPresent })
@@ -3142,6 +3142,10 @@ app.whenReady().then(async () => {
     // 否则装进错误目录后两边加载器都不认。返回 effType 让渲染层走对应的装后流程(引擎重扫 / amadeus 重载)。
     const effType = await detectMarketType(buf, info.type)
     const dest = join(tanguHomeDir(), MARKET_SUBDIR[effType], info.installSlug)
+    // 内置包(播种进 plugins/<id>)不许从市场再装:解压是原地覆盖,所以要在写入**之前**拒 —— 目标目录就是已播种的那份
+    // (slug = 内置 id,或目录里的 manifest 是内置 id)时,覆盖再回滚会把它连同用户数据一起删掉。
+    const occupant = await readFile(join(dest, 'manifest.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined)
+    if (builtinPluginIds().has(info.installSlug) || (typeof occupant === 'string' && builtinPluginIds().has(occupant))) throw new Error('install: builtin')
     const files = await extractZipToDir(buf, dest, MARKET_MANIFEST[effType] || [])
     // 插件家族:清掉同 slug 在「另一插件目录」里那份**误装的旧副本**(修复前 Forsion 插件被装进引擎位等),
     // 消除 split-brain 双份。⚠ 身份守卫:若那份带对方类型的合法 manifest(是恰好同 slug 的**另一个合法插件**),
@@ -3161,7 +3165,7 @@ app.whenReady().then(async () => {
     const pluginId = effType === 'amadeus-plugin'
       ? effectivePluginId(info.installSlug, await readFile(join(dest, 'manifest.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined))
       : null
-    // 内置包(播种进 plugins/<id>)的 id 不许从市场再装一份:目录名不同的第二份同 id 副本,两边加载器谁先扫到谁赢。
+    // 包内 manifest 的 id 是内置 id(slug 不同的第二份同 id 副本,两边加载器谁先扫到谁赢)→ 也拒;上面已保证 dest 不是内置那份,删它安全。
     if (pluginId && builtinPluginIds().has(pluginId)) {
       await rm(dest, { recursive: true, force: true }).catch(() => {})
       throw new Error('install: builtin')
