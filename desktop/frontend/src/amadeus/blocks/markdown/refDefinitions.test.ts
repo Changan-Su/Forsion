@@ -179,3 +179,21 @@ describe('引用离开定义 → 退行内链接,URL 不丢', () => {
     }
   })
 })
+
+describe('外来剪贴板 HTML 的 data-md-raw', () => {
+  it('首行不是定义的一律作废(这份原文会不经转义落盘);合法定义照旧逐字', async () => {
+    const b = await bootEditor('x\n')
+    try {
+      const { schema } = b.view.state
+      const paste = (html: string): string => {
+        const div = document.createElement('div')
+        div.innerHTML = html
+        const slice = DOMParser.fromSchema(schema).parseSlice(div)
+        b.view.dispatch(b.view.state.tr.replaceWith(0, b.view.state.doc.content.size, slice.content))
+        return b.md()
+      }
+      expect(paste('<p>前</p><p data-md-raw="&lt;b&gt;x&lt;/b&gt;">&lt;b&gt;x&lt;/b&gt;</p>')).toBe('前\n\n\\<b>x\\</b>\n')
+      expect(paste('<p>前</p><p data-md-raw="[1]: http://x.example">[1]: http://x.example</p>')).toBe('前\n\n[1]: http://x.example\n')
+    } finally { await b.destroy() }
+  })
+})

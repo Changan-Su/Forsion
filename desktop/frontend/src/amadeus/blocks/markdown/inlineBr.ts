@@ -30,6 +30,8 @@ type MdNode = any
 
 /** 单个 `<br…>` 标签(行内 html 节点的值恰是一个标签)。`<brx>` 这类不是 br。 */
 const INLINE_BR_RE = /^<br\b[^<>]*>$/i
+/** 外来的 `<br>` 原文(剪贴板 HTML 的 data-md-br)只收单个 br 标签,别的一律作废(null = 普通换行)。 */
+export const brSource = (v: string | null): string | null => (v != null && INLINE_BR_RE.test(v) ? v : null)
 /** 这些父节点下的 html 是块级 HTML,不归本插件管(整行 `<br>` = 空行编码)。 */
 const BLOCK_PARENTS = new Set(['root', 'blockquote', 'listItem', 'footnoteDefinition'])
 
@@ -71,8 +73,10 @@ export const hardbreakWithHtmlSchema = hardbreakSchema.extendSchema((prev) => (c
     ...base,
     attrs: { ...(base.attrs ?? {}), html: { default: null } },
     // 原文也进 DOM:粘贴走 plugin-clipboard 的「md → PM → DOM → parseSlice」,不带上它 `<br>` 在粘贴后退成 `\` 换行。
+    // ⚠️ 剪贴板 HTML 是外来的:属性值只认「恰是一个 `<br…>` 标签」,否则当普通换行 —— 这个值会原样写进 .md,
+    //    不验就是一条看不见的注入口(编辑器里只显示换行,落盘却是任意 HTML;评审返修 D-06-paste-trust)。
     parseDOM: [
-      { tag: 'br[data-md-br]', getAttrs: (dom) => ({ html: (dom as HTMLElement).getAttribute('data-md-br') }) },
+      { tag: 'br[data-md-br]', getAttrs: (dom) => ({ html: brSource((dom as HTMLElement).getAttribute('data-md-br')) }) },
       ...(base.parseDOM ?? []),
     ],
     toDOM: (node) => {

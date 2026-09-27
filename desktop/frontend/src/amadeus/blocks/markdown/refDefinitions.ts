@@ -163,6 +163,9 @@ const normLabel = (v: string): string => v.replace(/[\t\n\r ]+/g, ' ').replace(/
 /** 一行定义的开头:≤3 格缩进 + `[label]:`(label 里不许有未转义的方括号,同 CommonMark)。 */
 const DEF_START = /^[ \t]{0,3}(\[((?:[^\\[\]]|\\[\s\S])+)\]:)/
 
+/** 外来的定义原文(剪贴板 HTML 的 data-md-raw):首行得是定义的样子才收(这份原文会不经转义写进 .md)。 */
+export const literalRawFromDom = (v: string | null): string | null => (v != null && DEF_START.test(v.split('\n')[0]) ? v : null)
+
 /** 正在序列化的那份文档(doc 节点序列化器进出时登记,可重入);null = 序列化的不是整份文档。 */
 let serializeRoot: PMNode | null = null
 /** 每份文档:label → 该 label 首个定义那一行(从 `[` 起)。只认没被动过的定义段落 —— 动过的落盘是转义字面,不再是定义。 */

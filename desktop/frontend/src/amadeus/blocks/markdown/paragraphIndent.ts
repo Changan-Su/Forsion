@@ -18,7 +18,7 @@ import { MAX_INDENT } from '@amadeus-shared/indentIo'
 import { indentedBlockquoteSchema, indentedBulletListSchema, indentedOrderedListSchema, indentMarker, markdownBlockIndent } from './structuralIndent'
 import { hardbreakClearMarkKeepAttrs, hardbreakWithHtmlSchema, inlineBrRemark, keepsTrailingBr } from './inlineBr'
 import { mathEscapeRemark } from './mathLivePreview'
-import { docWithRefScope, linkWithRefSchema, pristineRaw, refDefinitionsRemark } from './refDefinitions'
+import { docWithRefScope, linkWithRefSchema, literalRawFromDom, pristineRaw, refDefinitionsRemark } from './refDefinitions'
 import { commonmarkMarkRuleReplacements } from './anchoredMarkRules'
 
 export const clampIndent = (n: number): number => Math.max(0, Math.min(MAX_INDENT, Math.floor(n) || 0))
@@ -55,7 +55,7 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
       getAttrs: (dom) => ({
         indent: clampIndent(Number((dom as HTMLElement).getAttribute('data-indent'))),
         align: normalizeTextAlignment((dom as HTMLElement).getAttribute('data-align') || (dom as HTMLElement).style.textAlign),
-        raw: (dom as HTMLElement).getAttribute('data-md-raw'), // 粘贴链路(md → PM → DOM → parseSlice)靠它带回原文
+        raw: literalRawFromDom((dom as HTMLElement).getAttribute('data-md-raw')), // 粘贴链路(md → PM → DOM → parseSlice)靠它带回原文;外来值须是定义行
       }),
     }],
     toDOM: (node) => {

@@ -45,6 +45,25 @@ describe('行内 <br> 逐字往返', () => {
     } finally { await b.destroy() }
   })
 
+  it('外来剪贴板 HTML 的 data-md-br 只收单个 br 标签:编辑器里只显示换行、落盘却是任意 HTML 的注入口被堵上', async () => {
+    const b = await bootEditor('x\n')
+    try {
+      const { schema } = b.view.state
+      const paste = (html: string): string => {
+        const div = document.createElement('div')
+        div.innerHTML = html
+        const slice = DOMParser.fromSchema(schema).parseSlice(div)
+        b.view.dispatch(b.view.state.tr.replaceWith(0, b.view.state.doc.content.size, slice.content))
+        return b.md()
+      }
+      const evil = paste('<p>甲<br data-md-br="&lt;img src=x onerror=alert(1)&gt;">乙</p>')
+      expect(evil).not.toContain('<img')
+      expect(evil).toBe('甲\\\n乙\n') // 当普通换行(preset 的 `\` 硬换行)
+      expect(paste('<p>甲<br data-md-br="&lt;br&gt;&lt;img src=x&gt;">乙</p>')).not.toContain('<img') // 标签后面再夹带也不行
+      expect(paste('<p>甲<br data-md-br="&lt;BR class=&quot;k&quot;&gt;">乙</p>')).toBe('甲<BR class="k">乙\n') // 合法变体照旧逐字
+    } finally { await b.destroy() }
+  })
+
   it('段落里独占一行的 <br />:仍是旧版空段落记号(v3 按行拆段 = a、空段、b;不多出空段)', async () => {
     const b = await bootEditor('a\n<br />\nb\n', { v3: true })
     try {
