@@ -111,7 +111,7 @@ export interface ToolContext {
    * loop 在本轮工具执行完后把它物化成一条 user 图像消息追加到对话尾部,让模型"看见"图片。
    * 缺省(未装配此闸的运行环境)时工具应优雅降级,不要假定一定可用。
    */
-  collectImage?: (img: { url: string; name?: string }) => void;
+  collectImage?: (img: { url: string; name?: string; untrusted?: string }) => void;
   /**
    * 「在对话区展示文件」闸(display_file / generate_image / 表情包用):工具把要展示给**用户**的
    * 文件交给 loop,loop 即时 publish 'display_file' 事件(桌面端内联渲染、图片可点击放大),并在

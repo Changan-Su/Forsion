@@ -4,6 +4,7 @@ import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
  *   - 进程启动时连接 ~/.tangu/mcp.json 启用的 server(stdio / Streamable HTTP / SSE)
  *   - listTools 缓存按 (server, tool) 字典序 → 工具 defs 字节级稳定(prompt 缓存纪律)
  *   - server 发 tools/list_changed → 后台刷新缓存,但**只对新 run 生效**(toolsForRun 每 run 取一次快照)
+ *   - 结果是第三方内容:文本圈进不可信围栏(截断在围栏内),图片取出交给调用方回灌(M6)
  *   - callTool 带超时;dispose 关闭全部连接(stdio 杀子进程),process.on('exit') 兜底
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -12,7 +13,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { loadMcpConfig, enabledServers, inferTransport, type McpServerConfig } from './config.js';
-import { bridgeTool, contentToText, type LoadedMcpTool } from './toolBridge.js';
+import { bridgeTool, contentToResult, fenceMcpText, type LoadedMcpTool, type McpImage } from './toolBridge.js';
 
 const DEFAULT_CALL_TIMEOUT_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 30_000;
@@ -25,6 +26,14 @@ export interface McpServerStatus {
   status: 'connected' | 'connecting' | 'error' | 'disabled';
   toolCount: number;
   error?: string;
+}
+
+export interface McpCallResult {
+  /** 已圈进不可信围栏的文本(或引擎自己的 `Error: …` 说明)。 */
+  text: string;
+  isError: boolean;
+  /** server 返回的图片(由调用方经 collectImage 回灌)。 */
+  images?: McpImage[];
 }
 
 interface ServerEntry {
@@ -41,7 +50,7 @@ interface ServerEntry {
 export interface McpManager {
   /** 本 run 的工具快照(已按 server 名过滤;Map 键=桥接名)。run 开始取一次,run 内不变。 */
   toolsForRun(enabledServerNames?: string[]): Map<string, LoadedMcpTool>;
-  callTool(bridged: LoadedMcpTool, args: Record<string, any>, signal?: AbortSignal): Promise<{ text: string; isError: boolean }>;
+  callTool(bridged: LoadedMcpTool, args: Record<string, any>, signal?: AbortSignal): Promise<McpCallResult>;
   listStatus(): McpServerStatus[];
   /** 连接(启动时调用一次;失败的 server 记错误不阻断其他)。 */
   start(): Promise<void>;
@@ -168,8 +177,8 @@ export function createMcpManager(configFile?: string): McpManager {
           undefined,
           { timeout: timeoutMs, ...(signal ? { signal } : {}) },
         );
-        const { text, isError } = contentToText(result);
-        return { text: text.length > RESULT_CAP_CHARS ? text.slice(0, RESULT_CAP_CHARS) + '\n…[truncated]' : text, isError };
+        const r = contentToResult(result);
+        return { text: fenceMcpText(entry.name, r.text, RESULT_CAP_CHARS), isError: r.isError, images: r.images };
       } catch (e: any) {
         // 凭证防漏:错误信息可能回显 headers/env,粗暴掐掉超长部分
         const msg = String(e?.message || e).slice(0, 500);

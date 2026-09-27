@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { schemaUsable, bridgeName, bridgeTool, contentToText } from './toolBridge.js';
+import { schemaUsable, bridgeName, bridgeTool, contentToText, contentToResult, fenceMcpText, MCP_IMAGES_PER_CALL, MCP_IMAGE_MAX_BYTES } from './toolBridge.js';
 
 describe('schemaUsable', () => {
   it('rejects null / non-object / $ref / non-object type', () => {
@@ -64,5 +64,39 @@ describe('contentToText', () => {
   it('summarizes image blocks', () => {
     const r = contentToText({ content: [{ type: 'image', mimeType: 'image/png', data: 'AAAA' }] });
     expect(r.text).toContain('[image: image/png');
+  });
+});
+
+describe('contentToResult(M6)', () => {
+  const png = 'iVBORw0KGgo=';
+  it('位图块取出为图片,不留占位', () => {
+    const r = contentToResult({ content: [{ type: 'text', text: 'cap' }, { type: 'image', mimeType: 'IMAGE/PNG', data: png }] });
+    expect(r).toEqual({ text: 'cap', isError: false, images: [{ mimeType: 'image/png', data: png }] });
+  });
+  it('矢量 / 非 base64 / 超 5MB → 不回灌,文本里给占位', () => {
+    const r = contentToResult({ content: [
+      { type: 'image', mimeType: 'image/svg+xml', data: png },
+      { type: 'image', mimeType: 'image/png', data: 'not base64!' },
+      { type: 'image', mimeType: 'image/png', data: 'A'.repeat(Math.ceil((MCP_IMAGE_MAX_BYTES + 10) * 4 / 3)) },
+    ] });
+    expect(r.images).toEqual([]);
+    expect(r.text.match(/\[image omitted/g)?.length).toBe(3);
+  });
+  it(`单次最多回灌 ${MCP_IMAGES_PER_CALL} 张`, () => {
+    const r = contentToResult({ content: Array.from({ length: MCP_IMAGES_PER_CALL + 2 }, () => ({ type: 'image', mimeType: 'image/png', data: png })) });
+    expect(r.images.length).toBe(MCP_IMAGES_PER_CALL);
+    expect(r.text).toContain('too many images');
+  });
+});
+
+describe('fenceMcpText(M6)', () => {
+  it('截断发生在围栏内,收尾标签完整;server 名消毒', () => {
+    const f = fenceMcpText('we"ird<srv>', 'x'.repeat(100), 10);
+    expect(f).toContain('<mcp_data server="we_ird_srv_">');
+    expect(f).toContain('…[truncated]');
+    expect(f.endsWith('</mcp_data>')).toBe(true);
+  });
+  it('空文本 → 空串', () => {
+    expect(fenceMcpText('s', '', 10)).toBe('');
   });
 });
