@@ -57,7 +57,9 @@ const AGENT_DATA = `ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 
 async function launch(home, stubUrl) {
   const app = await electron.launch({
-    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT],
+    // -ApplePersistenceIgnoreState YES:共用的 Electron.app 最近崩过(别的会话 / 台架),macOS 会在 ready 之前弹
+    // 「重新打开窗口时意外退出,要不要再试」的模态框把主线程卡死 —— 台架实例后台起、没人点,firstWindow 永远等不到(09-27 采样实证)
+    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'],
     cwd: ROOT,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stubUrl },
   })
