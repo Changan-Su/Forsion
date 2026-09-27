@@ -11,6 +11,8 @@
  *   U7 斜杠菜单点 `/think ultra` 同样先弹确认(U10 焦点留在确认框里,不被下一帧的输入框回焦抢走);
  *      勾「以后不再显示」确认 → 切回 Ultra;U8 之后再开不弹、直接生效
  *   U9 审批档已是「完全放行」时确认框不再推荐 / 不给那个勾选项(借 U7 那一轮验)
+ *   U11–U13 Ultra 下上下文窗口拉满(进度环分母 / 上限行立刻跟着变,切回 Max 复原)
+ *   U14 胶囊流星只在 agent 运行时出现:开跑渐快、结束渐慢,停稳后暂停
  * 截图落 ULTRA_SHOT_DIR(缺省 /tmp/ultra-effort-shots):药丸 + 展开的滑杆,自己看。
  *
  * 需先 npm run build。用法:npm run check:ultra
@@ -78,7 +80,8 @@ async function main() {
   })
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-ultra-'))
   const app = await electron.launch({
-    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT],
+    // -ApplePersistenceIgnoreState:开发版 Electron 被强杀过后,macOS 启动时会先弹「重新打开窗口」模态框把主线程卡住(放在 ROOT 之后)
+    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'],
     cwd: ROOT,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url },
   })
@@ -152,6 +155,7 @@ async function main() {
       pillTag: document.querySelector('.t2c-row .model-pill-btn .pill-ultra-tag')?.textContent || '',
       pillName: document.querySelector('.t2c-row .model-pill-btn .pill-marquee')?.textContent || '',
       ringAnim: (() => { const b = document.querySelector('.t2c-row .model-pill-btn'); return b ? `${getComputedStyle(b, '::before').animationName} | ${getComputedStyle(b, '::after').animationName}` : '' })(),
+      pillStreaks: document.querySelectorAll('.t2c-row .model-pill-btn .pill-ultra-streaks i').length,
       describedBy: (() => { const el = document.querySelector('.cm-effort-input'); const id = el?.getAttribute('aria-describedby'); return !!id && document.getElementById(id)?.textContent || '' })(),
     }))
     const patch = lastPatch(stub, 'local')
@@ -159,8 +163,9 @@ async function main() {
     check('U3b 滑杆与药丸换 Ultra 皮(值「Ultra」、四路光流、说明行)',
       /is-ultra/.test(ui.effort) && ui.value.trim() === 'Ultra' && ui.streaks === 4 && ui.note.length > 0 && /is-ultra/.test(ui.pill), JSON.stringify(ui))
     check('U3c 切进 Ultra 的那一下放了冲击波,动画完就卸载', burstSeen === 1 && ui.burstLeft === 0, `seen=${burstSeen} left=${ui.burstLeft}`)
-    check('U3g 胶囊:「Ultra」单独成标签、模型名不带「· Ultra」、底下两团柔光都在漂', ui.pillTag === 'Ultra' && !/Ultra/.test(ui.pillName) && /ultra-pill-aurora-a/.test(ui.ringAnim) && /ultra-pill-aurora-b/.test(ui.ringAnim),
-      JSON.stringify({ pillTag: ui.pillTag, pillName: ui.pillName, ringAnim: ui.ringAnim }))
+    check('U3g 胶囊:「Ultra」单独成标签、模型名不带「· Ultra」、底色是滑杆那条渐变在淡入、上面同一道光在流、挂着四路流星',
+      ui.pillTag === 'Ultra' && !/Ultra/.test(ui.pillName) && /ultra-pill-glow-in/.test(ui.ringAnim) && /effort-ultra-flow/.test(ui.ringAnim) && ui.pillStreaks === 4,
+      JSON.stringify({ pillTag: ui.pillTag, pillName: ui.pillName, ringAnim: ui.ringAnim, pillStreaks: ui.pillStreaks }))
     // U3h:名字被挤窄(Ultra 标签占位 / 窄栏)时跑马灯要重新量,位移 = 实际溢出量(原来只在文字变化时量、写死按 160px 框算)
     const marquee = await win.evaluate(async () => {
       const m = document.querySelector('.t2c-row .model-pill-btn .pill-marquee')
@@ -318,6 +323,35 @@ async function main() {
     await setMax()
     const ringBack = await ringDenominator()
     check('U13 切回 Max:上一轮那份 272k 又对得上,环回到 272k', ringBack === '272k', ringBack)
+    // U14 胶囊流星只在 agent 运行时出现(09-27 用户):空闲透明且暂停;开跑速率由慢渐快到 1,run 结束由快渐慢回 0 再暂停、透明
+    await openPill(win)
+    await win.locator('.cm-effort-input').first().focus()
+    await win.keyboard.press('End')
+    await win.waitForTimeout(400)
+    await closePill(win)
+    await win.waitForTimeout(1400)
+    const streakState = () => win.evaluate(() => {
+      const s = document.querySelector('.t2c-row .pill-ultra-streaks')
+      const a = s?.getAnimations({ subtree: true }) || []
+      return { n: a.length, op: s ? +(+getComputedStyle(s).opacity).toFixed(2) : -1, rate: a.length ? +a[0].playbackRate.toFixed(2) : -1, state: a[0]?.playState || '' }
+    })
+    const idle = await streakState()
+    stub.script([{ type: 'done', payload: {}, delay: 3000 }])
+    await ta.click()
+    await ta.fill('跑一会儿')
+    await win.keyboard.press('Enter')
+    const series = []
+    for (let i = 0; i < 36; i++) { await win.waitForTimeout(150); series.push(await streakState()) }
+    const peak = series.findIndex((x) => x.rate === 1 && x.op === 1)
+    const rising = series.slice(0, peak).filter((x) => x.rate > 0)
+    const falling = peak < 0 ? [] : series.slice(peak).filter((x) => x.rate > 0 && x.rate < 1)
+    const end = series[series.length - 1]
+    check('U14 流星:空闲时透明暂停;开跑由慢渐快到满速;run 结束由快渐慢、最后暂停透明',
+      idle.n === 4 && idle.op === 0 && idle.state === 'paused' &&
+      peak > 0 && rising.length >= 2 && rising.every((x, i) => i === 0 || x.rate >= rising[i - 1].rate) && rising[0].rate < 0.6 &&
+      falling.length >= 2 && falling.every((x, i) => i === 0 || x.rate <= falling[i - 1].rate) &&
+      end.rate === 0 && end.op === 0 && end.state === 'paused',
+      JSON.stringify({ idle, series: series.map((x) => `${x.rate}/${x.op}/${x.state[0]}`).join(' ') }))
   } finally {
     await app.close().catch(() => {})
     stub.close?.()
