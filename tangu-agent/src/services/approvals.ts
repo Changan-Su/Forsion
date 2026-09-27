@@ -476,13 +476,18 @@ export async function gateToolCall(
   }
   const d = await requestApproval(runId, call, preview, signal, reason);
   if (d.action === 'reject') return d;
+  let out: ApprovalDecision = { action: 'approve' };
+  if (d.argsOverride) {
+    // 批准时改了参数 → 真正要执行的是新参数,批准只覆盖卡上显示过的那份:按新参数把整道闸重过一遍
+    // (custom 规则 / known-safe / 越界升级 / PermissionRequest hook 都认新参数)。从前改写后直接执行,
+    // 改成工作区外路径或 deny 规则挡的命令都不再过闸。再次弹卡时批准者可能又改一次 → 取最后一次的参数。
+    const edited: ToolCall = { ...call, function: { ...call.function, arguments: JSON.stringify(d.argsOverride) } };
+    const again = await gateToolCall(runId, edited, ctx, signal, true);
+    if (again.action === 'reject') return again;
+    out = { action: 'approve', argsOverride: again.argsOverride ?? d.argsOverride };
+  }
+  // 「总允许」在重闸**之后**才记:先记的话,重闸那一趟被 isAlwaysAllowed 提前放行,改后的参数就绕过了 PermissionRequest hook(Codex 09-27)。
   // 越界写、custom 的 ask 规则都不进「总允许」:前者每次都确认,后者是用户写死的「永远问我」。
   if (d.action === 'approve_always' && !escalate && !forceAsk) allowAlways(ctx.sessionId, name);
-  if (!d.argsOverride) return { action: 'approve' };
-  // 批准时改了参数 → 真正要执行的是新参数,批准只覆盖卡上显示过的那份:按新参数把整道闸重过一遍
-  // (custom 规则 / known-safe / 越界升级 / PermissionRequest hook 都认新参数)。从前改写后直接执行,
-  // 改成工作区外路径或 deny 规则挡的命令都不再过闸。再次弹卡时批准者可能又改一次 → 取最后一次的参数。
-  const edited: ToolCall = { ...call, function: { ...call.function, arguments: JSON.stringify(d.argsOverride) } };
-  const again = await gateToolCall(runId, edited, ctx, signal, true);
-  return again.action === 'reject' ? again : { action: 'approve', argsOverride: again.argsOverride ?? d.argsOverride };
+  return out;
 }

@@ -100,6 +100,15 @@ describe('manage_agent · approval_mode 不对模型开放', () => {
     expect(def?.approvalMode).toBe('readonly');
   });
 
+  it('删掉用户设了审批档的 agent 再同 slug 重建 → 删除这一步就被拒(洗不掉 readonly)', async () => {
+    await saveAgent({ slug: 'bot-b', name: 'Bot B', systemPrompt: 'other', approvalMode: 'readonly' });
+    expect(await exec({ action: 'delete', slug: 'bot-b' })).toMatch(/^Error: agent "bot-b" has an approval level set by the user/);
+    expect((await getAgent('bot-b'))?.approvalMode).toBe('readonly');
+    // 没设档的 agent 照旧可删
+    await saveAgent({ slug: 'bot-d', name: 'Bot D', systemPrompt: 'x' });
+    expect(await exec({ action: 'delete', slug: 'bot-d' })).toMatch(/已删除 agent: bot-d/);
+  });
+
   it('工具定义里不再有 approval_mode 参数', () => {
     const params = (manageAgentProvider.tools()[0] as any).definition.function.parameters.properties;
     expect(params).not.toHaveProperty('approval_mode');

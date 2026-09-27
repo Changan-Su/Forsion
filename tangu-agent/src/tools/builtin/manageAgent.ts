@@ -66,6 +66,8 @@ export const manageAgentProvider: ToolProvider = {
             if (!slug) return 'Error: delete 需要 slug';
             // 不能删除自己:删了再 create 同 slug = 绕过下面的人格守卫(Codex 评审 #2)。
             if (isSelf(slug, ctx)) return 'Error: 不能删除自己(当前激活的 agent);请用户在设置里操作。';
+            // 用户给它设过审批档 → 不许删:删了再 create 同 slug = 新定义没有档,激活时回落会话档,等于把用户的收紧洗掉(Codex 09-27)。
+            if ((await getAgent(slug))?.approvalMode) return `Error: agent "${slug}" has an approval level set by the user, so only the user can delete it in Settings.`;
             const ok = await deleteAgent(slug);
             return ok ? `已删除 agent: ${slug}` : `未找到 agent: ${slug}`;
           }
