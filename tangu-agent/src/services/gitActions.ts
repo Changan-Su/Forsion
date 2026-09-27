@@ -402,10 +402,17 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
     assertWithinReviewed(final, reviewed);
     await assertStagedSafe(cwd, final);
   } catch (e) {
-    const inner = e instanceof GitActionError ? e : null;
-    throw new GitActionError('hook_changed_commit', 'A git hook changed the commit so it no longer matches the reviewed list; the commit was kept, check it before pushing', inner?.detail || String((e as Error)?.message || e));
+    throw postCommitFailure(e);
   }
   return { sha: ours, subject, stagedOnly };
+}
+
+const CONTENT_FAILURES = new Set(['changes_changed', 'too_many_files', 'embedded_repo', 'credential_files', 'large_files']);
+/** 提交后复核不过的归类:内容不合(钩子往提交里加了东西)→ hook_changed_commit;复核自己读失败(cat-file 之类)不等于钩子加了东西 → commit_unverified。 */
+export function postCommitFailure(e: unknown): GitActionError {
+  const inner = e instanceof GitActionError ? e : null;
+  if (inner && CONTENT_FAILURES.has(inner.code)) return new GitActionError('hook_changed_commit', 'A git hook changed the commit so it no longer matches the reviewed list; the commit was kept, check it before pushing', inner.detail || inner.message);
+  return new GitActionError('commit_unverified', 'The commit could not be verified; check the repository', inner?.detail || String((e as Error)?.message || e));
 }
 
 /** 把 index 退回 HEAD(还没有提交的新仓 = 清空)。只在「index 是我们刚 add -A 的」时用。 */

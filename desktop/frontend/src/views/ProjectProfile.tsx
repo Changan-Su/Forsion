@@ -310,8 +310,9 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     void gitRun('git-commit', (trust) => gitCommitProject(s.cfg, session.id, message, pending?.token, trust).catch(async (e) => {
       // 看完之后改动又变了:重新列出这次会提交的东西(保留已写好的信息),让用户再过目一次
       if (e?.code === 'changes_changed') await gitPendingProject(s.cfg, session.id).then(setPending).catch(() => {})
-      // 提交已经落下(复核不过 / 没法确认):收起提交框,再点一次 = 重复提交
-      if (e?.code === 'hook_changed_commit' || e?.code === 'commit_unverified') { setCommitDraft(null); setPending(null) }
+      // 提交可能已经落下(复核不过 / 没法确认 / 超时 / 断连 / 5xx):收起提交框,再点一次 = 重复提交
+      const landed = ['hook_changed_commit', 'commit_unverified', 'git_timeout'].includes(e?.code) || (typeof e?.code !== 'string' && !(e?.status && e.status < 500))
+      if (landed) { setCommitDraft(null); setPending(null) }
       throw e
     }), (r) => {
       applyContext(r.context); setCommitDraft(null); setPending(null)

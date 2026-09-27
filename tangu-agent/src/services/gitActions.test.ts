@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   DEFAULT_GITIGNORE, GitActionError, assertCommittable, assertStagedSafe, assertWithinReviewed, changesToken, cleanCommitMessage, commitMessageContext, commitMessagePrompt, reviewedStatuses,
-  gitCommit, gitCreateBranch, gitInit, gitPending, gitPush, isCredentialPath, serialized,
+  gitCommit, gitCreateBranch, gitInit, gitPending, gitPush, isCredentialPath, postCommitFailure, serialized,
 } from './gitActions.js';
 import { resetGitSettingsForTest } from './gitSettings.js';
 
@@ -349,6 +349,14 @@ describe('仓库自带会执行程序的配置(gitTrust)', () => {
     writeFileSync(path.join(cwd, 'a.txt'), 'b');
     expect(await codeOf(gitCommit(cwd, 'mine', true))).toBe('commit_unverified');
     expect(git(cwd, 'log', '-1', '--format=%s', 'refs/heads/other')).toBe('mine');
+  });
+
+  it('提交后复核不过的归类:内容不合 → hook_changed_commit(带点名);复核自己读失败 → commit_unverified', () => {
+    expect(postCommitFailure(new GitActionError('credential_files', 'x', '.env')).code).toBe('hook_changed_commit');
+    expect(postCommitFailure(new GitActionError('credential_files', 'x', '.env')).detail).toBe('.env');
+    expect(postCommitFailure(new GitActionError('changes_changed', 'x', 'A b.txt')).code).toBe('hook_changed_commit');
+    expect(postCommitFailure(new GitActionError('git_failed', 'git cat-file failed', 'fatal')).code).toBe('commit_unverified');
+    expect(postCommitFailure(new Error('boom')).code).toBe('commit_unverified');
   });
 
   it('标题里带 \\x1f 也原样返回(只按第一个分隔符切)', async () => {

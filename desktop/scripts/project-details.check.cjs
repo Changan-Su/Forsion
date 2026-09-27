@@ -348,6 +348,14 @@ async function run(app, win, stub, seen, home, ctx) {
   const hookText = (await gitError.textContent()) || ''
   const hookClosed = await until(async () => (await form.count()) === 0)
   check('6l2 钩子往提交里加了清单外的文件 → 「提交已完成…没有撤回」+ 点名 .env;提交框收起、重读状态', /提交已完成/.test(hookText) && /没有撤回/.test(hookText) && /\.env/.test(hookText) && hookClosed && seen.ctxGets.length > getsBeforeHook, hookText)
+  // 提交请求超时:可能已经落下 —— 「结果未确认」+ 提交框同样收起(再点 = 重复提交)
+  seen.commitTimeoutOnce = true
+  await writeRow.locator('[data-git-action="commit"]').click()
+  await form.waitFor()
+  await until(async () => (await form.locator('textarea').inputValue()).length > 0)
+  await form.locator('[data-git-action="commit-confirm"]').click()
+  const timeoutClosed = await until(async () => (await form.count()) === 0)
+  check('6l3 提交超时 → 「没能确认」+ 提交框收起', timeoutClosed && /没能确认/.test((await gitError.textContent().catch(() => '')) || ''), (await gitError.textContent().catch(() => '')) || '')
   check('6m Git 写动作之后仍不横向溢出', await noOverflow(profile), await overflowReport(profile))
 
   // ── 6n 设置 → Git:三项都落到 PUT /agent/git-settings(文本框失焦才写,开关立即写)──
@@ -610,6 +618,7 @@ async function main() {
       // 清单指纹对不上(用户看完之后又冒出文件)→ 引擎回 changes_changed;桌面应重新拉清单、保留信息,等用户再点
       if (seen.staleOnce) { seen.staleOnce = false; return { __code: 400, body: { detail: 'changed', error: 'changes_changed' } } }
       if (seen.hookOnce) { seen.hookOnce = false; return { __code: 400, body: { detail: 'hook', error: 'hook_changed_commit', info: 'A .env' } } }
+      if (seen.commitTimeoutOnce) { seen.commitTimeoutOnce = false; return { __code: 400, body: { detail: 'git commit timed out', error: 'git_timeout', info: 'timed out' } } }
       const subject = String(b.message).split('\n')[0]
       ctx.git = { ...ctx.git, staged: 0, unstaged: 0, untracked: 0, changesTotal: 0, changes: [], ahead: (ctx.git.ahead || 0) + 1, commits: [{ sha: 'c'.repeat(40), short: 'ccccccc', at: Date.now(), subject }, ...(ctx.git.commits || [])] }
       return { commit: { sha: 'c'.repeat(40), subject, stagedOnly: false }, context: ctx }
