@@ -96,6 +96,10 @@ function fakeUnitWeb(): Promise<{ url: string; hits: string[]; cut: string[]; cl
   const server = http.createServer((req, res) => {
     hits.push(req.url || '')
     if (req.url === '/small') { res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': 2 }); res.end('{}'); return }
+    if (req.url === '/silent') { // 事件流头已回、首块迟迟不来
+      res.on('close', () => { if (!res.writableEnded) cut.push(req.url || '') })
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' }); res.flushHeaders(); return
+    }
     res.on('close', () => { if (!res.writableEnded) cut.push(req.url || '') })
     res.writeHead(200, { 'Content-Type': 'text/event-stream' })
     res.write('data: one\n\n')
@@ -278,8 +282,31 @@ describe('UnitHost 通道看门狗 / 唤醒重连 / 信封中止', () => {
       hub.dispatch({ id: 'env-x', method: 'GET', path: '/hang-x', accept: 'text/event-stream' })
       expect(await until(() => stalled.length === 1)).toBe(true)
       expect(await until(() => web.cut.includes('/hang-x'), 3000)).toBe(true)
-      expect(logs.some((l) => l.includes('未连上网关'))).toBe(true)
+      expect(logs.some((l) => l.includes('未把首块写给网关'))).toBe(true)
       expect(h.abortEnvelope('env-x')).toBe(false) // 已摘除
+    } finally { h.stop(); web.close(); hub.close() }
+  })
+
+  it('流式回传:上传端只拉了第一块(首块还没到,请求头还没写出)不算连上,到时限照样中止(Codex 三轮 P1)', async () => {
+    const hub = await fakeHub()
+    const web = await fakeUnitWeb()
+    let pulledOnce = 0
+    const hubFetch = ((input: string, init?: RequestInit): Promise<Response> => {
+      if (!String(input).includes('/stream/')) return fetch(input, init)
+      // 模拟 undici:连接建立后先拉第一块,拿到之前请求头不写出;这里首块永远不来
+      const rd = (init!.body as ReadableStream<Uint8Array>).getReader()
+      pulledOnce++
+      void rd.read().catch(() => {})
+      return new Promise<Response>((_res, rej) => { init?.signal?.addEventListener('abort', () => rej(new Error('aborted'))) })
+    }) as typeof fetch
+    const { h, logs } = host(hub, web, 0, { requestTimeoutMs: 200, hubFetch })
+    try {
+      h.start()
+      expect(await until(() => hub.channels.length === 1)).toBe(true)
+      hub.dispatch({ id: 'env-q', method: 'GET', path: '/silent', accept: 'text/event-stream' })
+      expect(await until(() => pulledOnce === 1)).toBe(true)
+      expect(await until(() => web.cut.includes('/silent'), 3000)).toBe(true)
+      expect(logs.some((l) => l.includes('未把首块写给网关'))).toBe(true)
     } finally { h.stop(); web.close(); hub.close() }
   })
 

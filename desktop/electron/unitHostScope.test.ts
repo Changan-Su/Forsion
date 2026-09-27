@@ -5,11 +5,11 @@
  * 跑法:npx vitest run electron/unitHostScope.test.ts
  */
 import { describe, it, expect, beforeAll } from 'vitest'
-import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, rename, symlink, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildUnitScopeGuard, filterSessionRoots, isUnitProtected, resolveUnitHostPath, type UnitScopeGuard } from './unitHostScope'
+import { buildUnitScopeGuard, filterSessionRoots, isUnitProtected, openUnitHostFile, resolveUnitHostPath, withVerifiedUnitPath, type UnitScopeGuard } from './unitHostScope'
 
 let home = ''
 let guard: UnitScopeGuard
@@ -80,3 +80,49 @@ describe('unitHostScope:会话根 = 家目录也读不到凭据', () => {
     expect(read(join(home, '.forsion', 'tangu', 'agents', 'writer', 'HARNESS.md'), [lib])).toBeNull() // Library 之外不在根内
   })
 })
+
+describe('unitHostScope:校验与读取之间换软链(Codex 三轮 P1)', () => {
+  const roots = (): { base: string[]; session: string[] } => ({ base: [ws()], session: [] })
+  /** ws/<name>/auth.json 是个普通文件;swap() 把 ws/<name> 换成指向 ~/.forsion 的软链,back() 换回来。 */
+  async function racer(name: string): Promise<{ file: string; swap: () => Promise<void>; back: () => Promise<void> }> {
+    const dir = join(ws(), name)
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'auth.json'), '{"benign":true}')
+    return {
+      file: join(dir, 'auth.json'),
+      swap: async () => { await rename(dir, dir + '.real'); await symlink(join(home, '.forsion'), dir) },
+      back: async () => { await rename(dir, dir + '.link'); await rename(dir + '.real', dir) },
+    }
+  }
+  const readAll = async (o: Awaited<ReturnType<typeof openUnitHostFile>>): Promise<string | null> => {
+    if (!o) return null
+    try { return (await o.fh.readFile()).toString('utf8') } finally { await o.fh.close() }
+  }
+
+  it('没有竞态:照常读到', async () => {
+    const r = await racer('calm')
+    expect(await readAll(await openUnitHostFile(r.file, roots(), env, guard))).toBe('{"benign":true}')
+  })
+
+  it('校验后把中间目录换成软链:打开的是凭据,复核 realpath 落进受保护目录 → null', async () => {
+    const r = await racer('swap1')
+    const got = await readAll(await openUnitHostFile(r.file, roots(), env, guard, { beforeOpen: r.swap }))
+    expect(got).toBeNull()
+  })
+
+  it('换过去、打开、再换回来:路径复核看着正常,但 fd 的 (dev, ino) 对不上 → null', async () => {
+    const r = await racer('swap2')
+    const got = await readAll(await openUnitHostFile(r.file, roots(), env, guard, { beforeOpen: r.swap, afterOpen: r.back }))
+    expect(got).toBeNull()
+  })
+
+  it('目录列表:列之前换成软链(没换回来)→ null,不吐受保护目录的条目名', async () => {
+    const dir = join(ws(), 'lsdir')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'a.md'), 'x')
+    const swap = async (): Promise<void> => { await rename(dir, dir + '.real'); await symlink(join(home, '.forsion'), dir) }
+    expect(await withVerifiedUnitPath(dir, roots(), env, guard, true, (real) => readdir(real))).toEqual(['a.md'])
+    expect(await withVerifiedUnitPath(dir, roots(), env, guard, true, (real) => readdir(real), { beforeOpen: swap })).toBeNull()
+  })
+})
+

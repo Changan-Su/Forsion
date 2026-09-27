@@ -420,22 +420,25 @@ export class UnitHost {
     const url = `${apiBase(cloudUrl)}/units/${pairing.unitId}/stream/${dispatchId}?status=${engineResp.status}&ct=${encodeURIComponent(ct)}`
       + (csp ? `&csp=${encodeURIComponent(csp)}` : '')
       + (xcto ? `&xcto=${encodeURIComponent(xcto)}` : '')
-    // 「连上并开始上传」看门狗(评审 A-desktop#4):网关要等上行结束才回响应,fetch 的 promise 在整条流期间都不 resolve,
-    // 没法按响应头计时;改看 fetch 第一次**拉**请求体 —— undici 在连接建立、请求头写出之后才开始拉。
-    // highWaterMark 0 = 构造时不预拉,第一次 pull 必然来自上传端。拉到之后事件流可以一直开着,不再设限。
+    // 「连上并写出首块」看门狗(评审 A-desktop#4 + Codex 三轮 P1):网关要等上行结束才回响应,fetch 的 promise
+    // 在整条流期间都不 resolve,没法按响应头计时。改看 fetch 拉请求体的次数:undici(client-h1 writeIterable)
+    // 在连接上拉第一块,**拿到第一块才连同请求头一起写进 socket**,写完再拉第二块 —— 所以「第二次 pull」=
+    // 请求头 + 首块已经交给 socket。只看第一次 pull 不够:本机事件流还没吐首块时,请求头根本没发出去。
+    // highWaterMark 0 = 构造时不预拉。首块之后事件流可以一直开着,不再设限。
+    // ⚠️ 依赖首块很快到:引擎 / unitWeb 的事件流一开就写 `: open` / `: connected` 并 15s 心跳;新增 SSE 端点须照办。
     const src = engineResp.body
     if (!src) return
     const reader = src.getReader()
-    let started = false
+    let pulls = 0
     const ms = this.requestTimeoutMs
     const connectTimer = ms ? setTimeout(() => {
-      if (started) return
-      this.deps.log(`[unit-host] 流式回传 ${Math.round(ms / 1000)}s 未连上网关,中止本次派发`)
+      if (pulls >= 2) return
+      this.deps.log(`[unit-host] 流式回传 ${Math.round(ms / 1000)}s 未把首块写给网关,中止本次派发`)
       ctrl.abort()
     }, ms) : null
     const body = new ReadableStream<Uint8Array>({
       async pull(c) {
-        if (!started) { started = true; if (connectTimer) clearTimeout(connectTimer) }
+        if (++pulls === 2 && connectTimer) clearTimeout(connectTimer)
         const { done, value } = await reader.read()
         if (done) c.close()
         else c.enqueue(value)

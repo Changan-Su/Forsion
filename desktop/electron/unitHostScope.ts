@@ -9,7 +9,8 @@
  *   ② 受保护路径硬拒:不管从哪个根进来(工作区 / vault 也一样),落在受保护目录内一律 null。
  * 刻意零 electron 依赖:路径集合由 main.ts 注入,vitest 直测(electron/unitHostScope.test.ts)。
  */
-import { realpathSync } from 'node:fs'
+import { constants as fsConstants, realpathSync, type Stats } from 'node:fs'
+import { open, stat, type FileHandle } from 'node:fs/promises'
 import { isAbsolute, join, parse, relative, resolve } from 'node:path'
 
 export interface UnitScopeEnv {
@@ -131,4 +132,68 @@ export function resolveUnitHostPath(
   let real: string
   try { real = realpathSync(p) } catch { return null }
   return unitPathInScope(real, roots, env, guard, allowRoot) ? real : null
+}
+
+const sameObject = (a: Stats, b: Stats): boolean => a.dev === b.dev && a.ino === b.ino
+
+/** 测试接缝:在「校验通过」与「打开」之间 / 打开之后插一脚(模拟换软链的竞态)。生产不传。 */
+export interface UnitRaceHooks { beforeOpen?: () => unknown; afterOpen?: () => unknown }
+
+/**
+ * 文件读:校验与读取绑在同一个打开对象上(Codex 三轮 P1:realpath 校验之后再按路径 stat / readFile,
+ * 中间把某一段换成指向 ~/.forsion 的软链就能读走凭据)。
+ *   ① resolveUnitHostPath(realpath + 钳制);② open(O_NOFOLLOW,末段是软链直接失败);
+ *   ③ 打开之后再 realpath 一次重新钳制,并比对 fd 与该路径的 (dev, ino) —— 中间段被换、或换过去又换回来都对不上。
+ * 调用方只能经返回的 FileHandle 读,用完 close。残余:hard link(同引擎 C4,路径口径拦不住)。
+ */
+export async function openUnitHostFile(
+  p: unknown,
+  roots: { base: string[]; session: string[] },
+  env: Pick<UnitScopeEnv, 'home' | 'platform'>,
+  guard: UnitScopeGuard,
+  hooks?: UnitRaceHooks,
+): Promise<{ fh: FileHandle; real: string; st: Stats } | null> {
+  const real = resolveUnitHostPath(p, roots, env, guard, false)
+  if (!real) return null
+  await hooks?.beforeOpen?.()
+  let fh: FileHandle
+  try { fh = await open(real, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0)) } catch { return null }
+  try {
+    await hooks?.afterOpen?.()
+    const st = await fh.stat()
+    const again = resolveUnitHostPath(real, roots, env, guard, false)
+    if (again !== real || !sameObject(st, await stat(again))) { await fh.close(); return null }
+    return { fh, real, st }
+  } catch {
+    await fh.close().catch(() => {})
+    return null
+  }
+}
+
+/**
+ * 目录列表 / stat:没有按 fd 枚举目录的 API,改为「前后各核一次」—— 读之前记下对象身份,读完再 realpath 钳制并比对,
+ * 换过软链(没换回来)的一律 null。残余:换过去又在窗口内换回来,最多漏出受保护目录的**条目名 / 元数据**(不含内容)。
+ */
+export async function withVerifiedUnitPath<T>(
+  p: unknown,
+  roots: { base: string[]; session: string[] },
+  env: Pick<UnitScopeEnv, 'home' | 'platform'>,
+  guard: UnitScopeGuard,
+  allowRoot: boolean,
+  read: (real: string) => Promise<T>,
+  hooks?: UnitRaceHooks,
+): Promise<T | null> {
+  const real = resolveUnitHostPath(p, roots, env, guard, allowRoot)
+  if (!real) return null
+  try {
+    await hooks?.beforeOpen?.()
+    const before = await stat(real)
+    const out = await read(real)
+    await hooks?.afterOpen?.()
+    const again = resolveUnitHostPath(real, roots, env, guard, allowRoot)
+    if (again !== real || !sameObject(before, await stat(again))) return null
+    return out
+  } catch {
+    return null
+  }
 }
