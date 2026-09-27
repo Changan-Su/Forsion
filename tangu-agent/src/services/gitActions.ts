@@ -170,7 +170,7 @@ export async function gitInit(cwd: string): Promise<{ createdGitignore: boolean 
 
 // ── 待提交的东西 ──────────────────────────────────────────────────────────
 
-export interface PendingFile { code: string; path: string }
+export interface PendingFile { code: string; path: string; /** 改名 / 复制的原路径。 */ from?: string }
 interface StagedEntry { status: string; path: string; mode: string; blob: string }
 
 /** 全量改动(未跟踪文件逐个列出)。输出爆了上限 = 文件多到离谱,直接按「太多」拒。 */
@@ -186,10 +186,11 @@ async function pendingChanges(cwd: string): Promise<{ entries: PendingFile[]; un
     const field = fields[i];
     if (field.length < 4) continue;
     const code = field.slice(0, 2);
-    entries.push({ code, path: field.slice(3) });
-    paths.add(field.slice(3));
-    if (code === '??') untracked.push(field.slice(3));
-    if (/[RC]/.test(code)) { i++; if (fields[i]) paths.add(fields[i]); } // 改名 / 复制后面跟一个原路径字段
+    const entry: PendingFile = { code, path: field.slice(3) };
+    paths.add(entry.path);
+    if (code === '??') untracked.push(entry.path);
+    if (/[RC]/.test(code)) { i++; if (fields[i]) { entry.from = fields[i]; paths.add(fields[i]); } } // 改名 / 复制后面跟一个原路径字段
+    entries.push(entry);
   }
   return { entries, untracked, paths };
 }
@@ -302,11 +303,35 @@ export async function gitPending(cwd: string, trust?: boolean): Promise<{ files:
 
 // ── 提交 ──────────────────────────────────────────────────────────────────
 
+/** 用户过目的清单 → 每条路径「相对 HEAD 最终应是什么改动」(A / M / D / T;改名 = 新路径 A + 原路径 D)。
+ *  已暂存模式下清单本身就是 index 对 HEAD 的状态字母;全部改动模式下由 porcelain 两位码推出 `add -A` 之后的样子。 */
+export function reviewedStatuses(files: PendingFile[], stagedOnly: boolean): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const f of files) {
+    if (stagedOnly) { out.set(f.path, f.code.trim()); continue; }
+    const c = f.code;
+    if (c === '??') out.set(f.path, 'A');
+    else if (/R/.test(c)) { out.set(f.path, 'A'); if (f.from) out.set(f.from, 'D'); }
+    else if (/C/.test(c)) out.set(f.path, 'A');
+    else if (/D/.test(c)) out.set(f.path, 'D');
+    else if (/A/.test(c)) out.set(f.path, 'A');
+    else if (/T/.test(c)) out.set(f.path, 'T');
+    else out.set(f.path, 'M');
+  }
+  return out;
+}
+
+/** 每条条目都得在用户过目的清单里、且改动类型一致(删掉的又被建回来 = 删除变修改,也算没过目)。 */
+export function assertWithinReviewed(entries: StagedEntry[], reviewed: Map<string, string>): void {
+  const off = entries.filter((e) => reviewed.get(e.path) !== e.status).map((e) => `${e.status} ${e.path}`);
+  if (off.length) throw new GitActionError('changes_changed', 'The commit contains changes that were not in the reviewed list', off.slice(0, 10).join('\n'));
+}
+
 /** 提交。有已暂存的只提交它们;没有才 `add -A`(面板列出的全部改动)。信息走 stdin,不经命令行参数。
- *  expect = 提交框里那份清单的指纹:重算对不上就拒(changes_changed)—— 用户看完之后冒出来的文件不许悄悄进提交;
- *  `add -A` 之后再核一遍暂存进来的路径都在那份清单里(指纹核完到 add 之间新冒的文件也挡住)。
- *  提交后再核实际进提交的 tree:钩子(pre-commit 常见的 lint-staged 会改格式)改过内容时,对多出来的那部分重跑安全检查,
- *  不过关就撤回这次提交(工作区不动),而不是信「钩子信任过了」。 */
+ *  expect = 提交框里那份清单的指纹:重算对不上就拒(changes_changed)。
+ *  **权威复核在提交之后**:以「新提交 vs 提交前的基准」的全部改动为准 —— 每条都得在过目的清单里、类型一致,再过安全检查
+ *  (凭据 / 体量 / 嵌套仓)。钩子(lint-staged 之类在已确认路径内改格式照常放行)、别的 git 进程在检查与提交之间塞进来的东西都逃不过;
+ *  不过关就带旧值条件撤回这次提交(工作区与 index 保留原样)。提交前那几道只是省得白建提交的早退。 */
 export async function gitCommit(cwd: string, message: unknown, trust?: boolean, expect?: unknown): Promise<{ sha: string; subject: string; stagedOnly: boolean }> {
   const text = typeof message === 'string' ? message.replace(/\0/g, '').replace(/\r\n/g, '\n').trim() : '';
   if (!text) throw new GitActionError('empty_message', 'The commit message is empty');
@@ -320,44 +345,51 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
     throw new GitActionError('changes_changed', 'The changes are different from the list you reviewed');
   }
   if (scope.files.length > PENDING_LIST_MAX) throw new GitActionError('too_many_files', `${scope.files.length} changes would be committed; the list can only show ${PENDING_LIST_MAX}`, topDirs(scope.files.map((f) => f.path)).join('\n'));
-  const before = scope.staged;
+  const stagedOnly = scope.staged.length > 0;
+  const reviewed = reviewedStatuses(scope.files, stagedOnly);
+  const baseR = await readGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { timeoutMs: 5000 });
+  const base = baseR.code === 0 ? baseR.stdout.trim() : null;
   let addedByUs = false;
-  if (!before.length) {
-    const changes = scope.changes!;
-    await assertCommittable(cwd, changes);
+  if (!stagedOnly) {
+    await assertCommittable(cwd, scope.changes!);
     must(await runAction(cwd, ['add', '-A']), 'add');
     addedByUs = true;
   }
-  let checkedTree = '';
   try {
-    const staged = addedByUs ? await stagedEntries(cwd) : before;
+    const staged = addedByUs ? await stagedEntries(cwd) : scope.staged;
     if (!staged.length) throw new GitActionError('nothing_to_commit', 'There is nothing to commit');
-    if (addedByUs && staged.some((e) => !scope.paths.has(e.path))) throw new GitActionError('changes_changed', 'New changes appeared while committing');
+    assertWithinReviewed(staged, reviewed);
     await assertStagedSafe(cwd, staged);
-    checkedTree = must(await readGit(cwd, ['write-tree']), 'write-tree').stdout.trim();
   } catch (e) {
     if (addedByUs) await unstageAll(cwd); // 是我们暂存的就退回去:用户看到的仓库状态与点提交之前一致
     throw e;
   }
-  const hadHead = (await readGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { timeoutMs: 5000 })).code === 0;
   const committed = await runAction(cwd, ['commit', '-F', '-'], { input: `${text}\n` });
   if (committed.code !== 0 && /tell me who you are|unable to auto-detect email address|auto-detection is disabled/i.test(committed.stderr)) {
     throw new GitActionError('no_identity', 'git does not know your name and email yet', tail(committed.stderr));
   }
   must(committed, 'commit');
-  const committedTree = must(await readGit(cwd, ['rev-parse', 'HEAD^{tree}']), 'rev-parse').stdout.trim();
-  if (committedTree !== checkedTree) {
-    const extra = parseRaw(must(await readGit(cwd, ['diff-tree', '-r', '--raw', '-z', '--no-renames', '--no-abbrev', checkedTree, committedTree], { maxOutputBytes: 4 * 1024 * 1024 }), 'diff-tree').stdout);
-    try { await assertStagedSafe(cwd, extra); } catch (e) {
-      // 钩子往这次提交里塞进了不该进的东西:撤回提交(soft,工作区与 index 保留原样),把原因交给用户
-      await runAction(cwd, hadHead ? ['reset', '-q', '--soft', 'HEAD~1'] : ['update-ref', '-d', 'HEAD']).catch(() => {});
-      const inner = e instanceof GitActionError ? e : null;
-      throw new GitActionError('hook_changed_commit', 'A git hook added changes that cannot be committed from here; the commit was undone', inner?.detail || String((e as Error)?.message || e));
-    }
+  // 认准「刚才这一个」提交:HEAD 的父提交必须正是提交前的基准(post-commit 钩子 / 别的进程又提交过 = 认不准,不猜不撤)
+  const line = must(await readGit(cwd, ['rev-list', '--parents', '-n', '1', 'HEAD']), 'rev-list').stdout.trim().split(/\s+/);
+  const [ours, ...parents] = line;
+  if (base ? parents.length !== 1 || parents[0] !== base : parents.length !== 0) {
+    throw new GitActionError('commit_unverified', 'The repository changed while committing; the result could not be verified', ours);
   }
-  const head = must(await readGit(cwd, ['log', '-1', '--format=%H%x1f%s']), 'log');
+  const diff = must(await readGit(cwd, ['diff-tree', '-r', '--raw', '-z', '--no-renames', '--no-abbrev', ...(base ? [base, ours] : ['--root', ours])], { maxOutputBytes: 4 * 1024 * 1024 }), 'diff-tree').stdout;
+  // --root 的输出第一段是提交 id 本身,parseRaw 从第一个 ':' 条目开始读,顺手跳过它
+  const final = parseRaw(base ? diff : diff.slice(diff.indexOf(':')));
+  try {
+    assertWithinReviewed(final, reviewed);
+    await assertStagedSafe(cwd, final);
+  } catch (e) {
+    const undone = await runAction(cwd, base ? ['update-ref', '-m', 'forsion: undo commit', 'HEAD', base, ours] : ['update-ref', '-d', 'HEAD', ours]).catch(() => null);
+    if (!undone || undone.code !== 0) throw new GitActionError('commit_unverified', 'A commit hook changed the commit and it could not be undone; check the repository', tail(undone?.stderr || ''));
+    const inner = e instanceof GitActionError ? e : null;
+    throw new GitActionError('hook_changed_commit', 'A git hook added changes that cannot be committed from here; the commit was undone', inner?.detail || String((e as Error)?.message || e));
+  }
+  const head = must(await readGit(cwd, ['log', '-1', '--format=%H%x1f%s', ours]), 'log');
   const [sha, subject = ''] = head.stdout.trim().split('\x1f');
-  return { sha, subject, stagedOnly: !addedByUs };
+  return { sha, subject, stagedOnly };
 }
 
 /** 把 index 退回 HEAD(还没有提交的新仓 = 清空)。只在「index 是我们刚 add -A 的」时用。 */

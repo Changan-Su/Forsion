@@ -119,6 +119,7 @@ registerMessages({
   'projectProfile.git.err.changes_changed': { zh: '你看过清单之后，改动又变了。下面是最新的清单，确认后再点一次提交。', en: 'The changes are different from the list you reviewed. The list below is up to date; review it and commit again.' },
   'projectProfile.git.err.hook_changed_commit': { zh: '仓库的提交钩子往这次提交里加了不能从这里提交的东西（下面列出），这次提交已经撤回，你的改动都还在。', en: 'A commit hook added changes that cannot be committed from here (listed below), so the commit was undone. Your changes are all still there.' },
   'projectProfile.git.tooManyToList': { zh: '改动太多，清单列不全，这里不能提交。先把生成的文件加进 .gitignore，或者在终端里提交。', en: 'There are too many changes to list in full, so they cannot be committed from here. Add generated files to .gitignore first, or commit from a terminal.' },
+  'projectProfile.git.err.commit_unverified': { zh: '提交过程中仓库被别的东西改动了（比如钩子又提交了一次），没法确认这次提交的结果。已经重新读取状态，请先检查一下仓库。', en: 'The repository changed while committing (for example a hook made another commit), so the result could not be verified. The state has been reloaded; check the repository first.' },
   'projectProfile.git.err.git_too_old': { zh: '你的 git 版本太旧，不支持安全地改写远端历史（需要 2.30 以上）。请升级 git，或者在设置里关掉这一项。', en: 'Your git is too old to rewrite remote history safely (2.30 or later is needed). Update git or turn this off in Settings.' },
   'projectProfile.git.messageLabel': { zh: '提交信息', en: 'Commit message' },
   'projectProfile.git.messagePlaceholder': { zh: '写一句话说明这次改了什么', en: 'Describe what this change does' },

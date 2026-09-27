@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
-  DEFAULT_GITIGNORE, GitActionError, assertCommittable, assertStagedSafe, changesToken, cleanCommitMessage, commitMessageContext, commitMessagePrompt,
+  DEFAULT_GITIGNORE, GitActionError, assertCommittable, assertStagedSafe, assertWithinReviewed, changesToken, cleanCommitMessage, commitMessageContext, commitMessagePrompt, reviewedStatuses,
   gitCommit, gitCreateBranch, gitInit, gitPending, gitPush, isCredentialPath, serialized,
 } from './gitActions.js';
 import { resetGitSettingsForTest } from './gitSettings.js';
@@ -278,6 +278,40 @@ describe('仓库自带会执行程序的配置(gitTrust)', () => {
     rmSync(path.join(cwd, '.env')); git(cwd, 'reset', '-q');
     expect((await gitCommit(cwd, 'formatted by hook')).subject).toBe('formatted by hook');
     expect(git(cwd, 'show', 'HEAD:a.txt')).toBe('formatted');
+  });
+
+  it.skipIf(process.platform === 'win32')('钩子加了一个没过目的普通文件 → 撤回(按最终提交 vs 基准权威复核);首次提交也能撤', async () => {
+    const cwd = repo('hook-extra');
+    const hooks = dir('hook-extra/.githooks');
+    git(cwd, 'config', 'core.hooksPath', '.githooks');
+    writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\necho x > unreviewed.txt\ngit add unreviewed.txt\n', { mode: 0o755 });
+    writeFileSync(path.join(cwd, 'a.txt'), 'a');
+    const err = await gitCommit(cwd, 'first', true).catch((e) => e);
+    expect(err.code).toBe('hook_changed_commit');
+    expect(err.detail).toContain('unreviewed.txt');
+    expect(() => git(cwd, 'rev-parse', '--verify', 'HEAD')).toThrow(); // 首次提交撤回 = 回到还没有提交的样子
+  });
+
+  it.skipIf(process.platform === 'win32')('post-commit 钩子又提交了一次 → 认不准是哪个提交:commit_unverified,什么都不撤', async () => {
+    const cwd = repo('hook-post');
+    writeFileSync(path.join(cwd, 'a.txt'), 'a');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
+    const hooks = dir('hook-post/.githooks');
+    git(cwd, 'config', 'core.hooksPath', '.githooks');
+    writeFileSync(path.join(hooks, 'post-commit'), '#!/bin/sh\n[ -f .done ] && exit 0\ntouch .done\necho y > b.txt\ngit add b.txt .done\ngit commit -qm extra\n', { mode: 0o755 });
+    writeFileSync(path.join(cwd, 'a.txt'), 'changed');
+    const err = await gitCommit(cwd, 'mine', true).catch((e) => e);
+    expect(err.code).toBe('commit_unverified');
+    expect(git(cwd, 'log', '-2', '--format=%s')).toBe('extra\nmine'); // 不猜、不撤:原样交给用户检查
+  });
+
+  it('改动类型也要对得上:看见的是删除,暂存时却成了修改(删掉的又被建回来)→ changes_changed', () => {
+    const reviewed = reviewedStatuses([{ code: ' D', path: 'gone.txt' }, { code: 'R ', path: 'new.txt', from: 'old.txt' }, { code: '??', path: 'n.txt' }], false);
+    expect([...reviewed]).toEqual([['gone.txt', 'D'], ['new.txt', 'A'], ['old.txt', 'D'], ['n.txt', 'A']]);
+    expect(() => assertWithinReviewed([{ status: 'D', path: 'gone.txt', mode: '000000', blob: '' }, { status: 'D', path: 'old.txt', mode: '000000', blob: '' }], reviewed)).not.toThrow();
+    const err = (() => { try { assertWithinReviewed([{ status: 'M', path: 'gone.txt', mode: '100644', blob: 'x' }], reviewed) } catch (e) { return e as GitActionError } })();
+    expect(err?.code).toBe('changes_changed');
+    expect(reviewedStatuses([{ code: 'M', path: 'a' }], true).get('a')).toBe('M');
   });
 
   it.skipIf(process.platform === 'win32')('过滤器(read 级):未信任时连待提交清单都不读 —— clean 过滤器一次都没跑', async () => {
