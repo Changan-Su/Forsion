@@ -8,7 +8,7 @@ vi.mock('../services/backendService', () => ({ postMuseFeedback: vi.fn(async () 
 
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { postMuseFeedback } from '../services/backendService'
-import { syncAgentSpace, __resetAgentSpaceSync } from './agentSpaceSync'
+import { syncAgentSpace, reportAgentSpaceMountError, __resetAgentSpaceSync } from './agentSpaceSync'
 import type { TanguDesktopConfig } from '../types'
 
 const cfg = {} as TanguDesktopConfig
@@ -65,6 +65,14 @@ describe('syncAgentSpace 回写', () => {
     afterReload({ plugins: [{ ...muse, blocked: 'minApp' }], activeIds: [], views: [] })
     await run(4)
     expect(posted.mock.calls[0]?.[1]).toMatch(/blocked \(minApp\)/)
+  })
+
+  it('home 挂载抛错 → 回写一次(用户再进 Muse Space 不重报),别的 agent 不报', () => {
+    reportAgentSpaceMountError(cfg, 'muse', 'home', new Error('boom mount'))
+    reportAgentSpaceMountError(cfg, 'muse', 'home', new Error('boom mount'))
+    reportAgentSpaceMountError(cfg, 'other', 'home', new Error('x'))
+    expect(posted).toHaveBeenCalledTimes(1)
+    expect(posted.mock.calls[0][1]).toMatch(/mount\(\) threw.*boom mount/)
   })
 
   it('用户关掉了 / 目录空(没有来源)→ 都不报', async () => {

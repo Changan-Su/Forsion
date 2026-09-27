@@ -54,5 +54,17 @@ export async function syncAgentSpace(cfg: TanguDesktopConfig, slug: string, stam
   if (!now.views.some((o) => o.pluginId === id && o.item.id === 'home')) report(NO_HOME)
 }
 
+/** home 注册了、挂载时却抛错:宿主只在主区写一行「插件视图加载失败」—— 同样回写,否则又是一个只有用户看得见的失败。
+ *  同一份代码(戳)× 同一条错误只报一次:用户每进一次 Muse Space 就重挂一遍。 */
+const mountReported = new Map<string, string>()
+export function reportAgentSpaceMountError(cfg: TanguDesktopConfig, slug: string, viewId: string, e: unknown): void {
+  if (slug !== 'muse') return
+  const text = String((e as { message?: unknown } | null)?.message ?? e).slice(0, 300)
+  const key = `${loadedStamp.get(slug) ?? 0}|${viewId}|${text}`
+  if (mountReported.get(slug) === key) return
+  mountReported.set(slug, key)
+  void postMuseFeedback(cfg, `Space view "${viewId}" registered but its mount() threw, so the user sees "Plugin view failed to load": ${text}`).catch(() => {})
+}
+
 /** 测试用:清掉戳记忆。 */
-export function __resetAgentSpaceSync(): void { loadedStamp.clear(); reportedStamp.clear() }
+export function __resetAgentSpaceSync(): void { loadedStamp.clear(); reportedStamp.clear(); mountReported.clear() }

@@ -5,7 +5,8 @@
  *  ② 磁盘改 main.js + 戳变 → ≤12s 主区变 v2(热重载);
  *  ③ 写坏 main.js(setup 抛错)+ 戳变 → 主区回落空白态(Library 打底)+ POST /agent/special/muse/feedback 收到失败原因;
  *  ④ 修好(v4)后再写成「包成 function setup(ctx){…} 却不调用」(09-27 实机 16 天空白的形态:零注册零报错)
- *    → 主区回落空白态 + feedback 点名「没注册 home、要顶层 registerView」;再改回 v4;
+ *    → 主区回落空白态 + feedback 点名「没注册 home、要顶层 registerView」;再写成「home 注册了但 mount 抛错」
+ *    → 主区是「插件视图加载失败」+ feedback 点名 mount() threw;再改回 v4;
  *  ⑤ 退出 → 重启 → 点 Muse 图标 → 命名布局里存的是宿主类型 muse-library,恢复后直接是插件视图(不是 Tangu 内容 / 空框)。
  * 负对照 --nc:假引擎永不更新戳 → ② ③ ④ 必红。先 `npm run build`;跑法 `npm run e2e:museagentspace`;截图 $TMPDIR/forsion-muse-agentspace.png。
  */
@@ -30,6 +31,7 @@ return () => {}
 const BROKEN = `ctx.registerView({ id: 'home', title: 'x', mount(el) { el.textContent = 'never' } })\nthrow new Error('boom v3')\n`
 // 宿主把整个文件当 setup 的函数体跑:这里只声明了一个内部函数,registerView 永远不执行,也不抛错
 const WRAPPED = `function setup(ctx) {\n  ctx.registerView({ id: 'home', title: 'x', mount(el) { el.textContent = 'never' } })\n}\n`
+const MOUNT_THROWS = `ctx.registerView({ id: 'home', title: 'x', mount(el) { throw new Error('boom mount') } })\n`
 
 async function launch(home, stubUrl) {
   const app = await electron.launch({
@@ -135,6 +137,13 @@ async function main() {
     while (Date.now() - t1 < 12_000 && !noHome()) await win.waitForTimeout(300)
     check('main.js 包成 function setup(ctx){…} 不调用 → 主区回落空白态', wrappedEmpty)
     check('「装上了却没注册 home」经 feedback 回写,点名顶层 registerView', noHome(), JSON.stringify(feedback))
+    fs.writeFileSync(path.join(space, 'main.js'), MOUNT_THROWS, 'utf8'); bump()
+    const mountFailed = await win.waitForFunction(() => /插件视图加载失败|Plugin view failed to load/.test(document.querySelector('[data-muse-space="plugin"]')?.textContent || ''), null, { timeout: 12_000 }).then(() => true, () => false)
+    const mountFb = () => feedback.some((x) => /mount\(\) threw/.test(x) && /boom mount/.test(x))
+    const t2 = Date.now()
+    while (Date.now() - t2 < 8000 && !mountFb()) await win.waitForTimeout(300)
+    check('home 注册了但 mount 抛错 → 主区显示「插件视图加载失败」', mountFailed)
+    check('挂载失败经 feedback 回写给 Muse(从前只有用户看得见)', mountFb(), JSON.stringify(feedback))
     fs.writeFileSync(path.join(space, 'main.js'), mainJs(4), 'utf8'); bump()
     check('改回 v4 后 ≤12s 恢复', await visible(win, '.muse-space-hello[data-v="4"]', 12_000))
 

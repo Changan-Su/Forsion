@@ -22,7 +22,7 @@ import type { SpaceDefinition, PersistedPanel, ViewProps } from '@lcl/engine'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { PluginViewHost } from '../pluginViews'
 import { getMuseStatus } from '../services/backendService'
-import { agentPluginId, syncAgentSpace } from './agentSpaceSync'
+import { agentPluginId, reportAgentSpaceMountError, syncAgentSpace } from './agentSpaceSync'
 import { lazyRetry } from '../lazyRetry'
 import { useApp } from '../stores/appStore'
 import { PRODUCT } from '../product'
@@ -60,7 +60,8 @@ function MuseHome(props: ViewProps) {
     return () => { alive = false; if (timer) clearTimeout(timer) }
   }, [cfg])
   // pluginId 要带:Muse 主槽是另一条挂载路径(不经 pluginViews 的 factory),不带的话它挂失败就归不了属。
-  if (def) return <div data-muse-space="plugin" style={{ height: '100%', minHeight: 0 }}><PluginViewHost def={def} pluginId={agentPluginId('muse')} {...props} /></div>
+  // 挂载抛错也回写给 Muse(否则只有用户看得见那行「插件视图加载失败」)
+  if (def) return <div data-muse-space="plugin" style={{ height: '100%', minHeight: 0 }}><PluginViewHost def={def} pluginId={agentPluginId('muse')} onMountError={(e) => reportAgentSpaceMountError(cfg, 'muse', 'home', e)} {...props} /></div>
   return (
     <div data-muse-space="empty" style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <div className="hint" style={{ padding: '8px 14px 0', flex: 'none' }}>{tr('muse.spaceEmpty')}</div>
