@@ -20,6 +20,8 @@ export interface Booted {
   md(): string
   /** 用同一条解析链解析一段 md(粘贴 / 回灌 / 切换文件走的也是 parserCtx)。 */
   parse(md: string): PMNode
+  /** 宿主 serializerCtx 的**原始**输出(不经 normalizeSerializedMd):切块 / 剪贴板那条路径自己再规范化。 */
+  serialize(node: PMNode): string
   destroy(): Promise<void>
 }
 
@@ -45,6 +47,7 @@ export async function bootEditor(initial: string, opts: { v3?: boolean } = {}): 
     view,
     md: () => ed.action((ctx) => normalizeSerializedMd(ctx.get(serializerCtx)(ctx.get(editorViewCtx).state.doc))),
     parse: (md) => ed.action((ctx) => ctx.get(parserCtx)(md)) as PMNode,
+    serialize: (node) => ed.action((ctx) => ctx.get(serializerCtx)(node)),
     destroy: async () => { await ed.destroy(); root.remove() },
   }
 }

@@ -201,6 +201,14 @@ export function stampedFileName(kind: string): string {
 export function normalizeSerializedMd(markdown: string): string {
   return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(normalizeUrlLiterals(unescapeWikiOutsideFences(markdown)))))
 }
+/** 块内片段(切块切出的后半段 / 剪贴板结构化复制)的序列化结果 → markdown。
+ *  stripEmptyLineBr:空段落别落成 `<br />`(切块切出的那半段常以空段落打头,否则新块开头凭空多一个);
+ *  unescapeCalloutToken:切出来的那半段也可能带 callout 令牌;
+ *  unescapeMathSource:与落盘同一套公式反转义 —— 公式里读时补回的反斜杠(R-01)在 PM 里是字面,
+ *  不反转义就成了 `\\{`,切块后的新块再解析一次又翻一倍、剪贴板给外部应用的也是错的。 */
+export function normalizeFragmentMd(markdown: string): string {
+  return stripEmptyLineBr(unescapeCalloutToken(unescapeMathSource(markdown)))
+}
 // Sentinel slash scaffold: insert a cross-note embed cell from a copied `![[ ]]` ref.
 const EMBED_SENTINEL = '\u0000__amadeus_embed__'
 const LINKDB_SENTINEL = '\u0000__amadeus_linkdb__'
@@ -525,8 +533,7 @@ export function MilkdownInner({
   const serialize = (node: ProseNode): string => {
     let out = ''
     getInstance()?.action((ctx) => { out = ctx.get(serializerCtx)(node) })
-    // stripEmptyLineBr:空段落别落成 `<br />`(切块切出的那半段常以空段落打头,否则新块开头凭空多一个)
-    return stripEmptyLineBr(unescapeCalloutToken(out)) // 切块切出来的那半段也可能带 callout 令牌
+    return normalizeFragmentMd(out)
   }
 
   // 插件编辑器扩展(ctx.registerEditorExtension)的注册表代次。变了 = 有插件被启用/停用,

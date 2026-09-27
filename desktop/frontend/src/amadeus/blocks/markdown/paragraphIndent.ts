@@ -177,7 +177,7 @@ const headingAlignmentSchema = headingSchema.extendSchema((prev) => (ctx) => {
  *  (它按 `\n` 把 text 拆成新对象)、remark-inline-links、preserve-empty-line(它删行内 `<br>`)。 */
 const PARSE_FIDELITY = [
   ...inlineBrRemark, // D-06:行内 / 单元格里的 `<br>` → 带原文的 break(否则被 preserve-empty-line 删掉)
-  ...mathEscapeRemark, // R-01:公式里被 markdown 当转义吃掉的反斜杠补回(须在 inlineBr 之后:`<br>` 已是换行)
+  ...mathEscapeRemark, // R-01:公式里被 markdown 当转义吃掉的反斜杠补回(按源串认公式,与落盘 unescapeMathSource 同一口径)
   ...refDefinitionsRemark, // D-12:定义行 → 字面段落、引用 → 带 ref 的链接(须在 remark-inline-links 之前,它会删定义)
 ]
 const presetWithReplacements = commonmark.map((p) =>
