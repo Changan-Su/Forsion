@@ -16,7 +16,7 @@ import type { NestedPanelPlacement } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'
 import { thinkingLabel } from './thinkingLabel'
-import type { AgentConfig, DefaultModelSlot, ModelInfo, ModelsResponse } from '../types'
+import type { AgentConfig, CtxInfo, DefaultModelSlot, ModelInfo, ModelsResponse } from '../types'
 
 registerMessages({
   'pill.rowAdvanced': { zh: '高级', en: 'Advanced' },
@@ -57,6 +57,21 @@ const fmtWindow = (n: number): string => n >= 1e6 ? `${Math.floor(n / 1e5) / 10}
 export function ultraContextWindow(model: ModelInfo | undefined): number | undefined {
   if (!model?.contextWindow) return undefined
   return model.contextWindowSource === 'override' ? model.contextWindow : Math.max(model.contextWindow, model.maxContextWindow ?? 0)
+}
+
+/**
+ * 输入框进度环的分母(09-27 Ultra 拉满上下文)。上一轮 context_info 按另一种 Ultra 状态算的(切了开关、还没发下一条),
+ * 或还没有它而 Ultra 开着,就按下一轮会用的窗口现算;在飞的 run 照用它自己报的。stale = 那份 context_info 的窗口相关项
+ * (压缩线、封顶提示)已不作数。引擎没声明 ultraUncapped(老引擎 Ultra 也封顶、context_info 不带 ultra)时 Ultra 不影响窗口。
+ * 按 ctxInfo.ultra 判而不是切换时清 store:重放事件会把旧的那份原样放回来。
+ */
+export function contextRingWindow(o: {
+  ctxInfo?: CtxInfo | null; contextWindow?: number; running?: boolean; ultra: boolean; model?: ModelInfo; engineUncapped?: boolean
+}): { window?: number; stale: boolean } {
+  const ultra = o.ultra && !!o.engineUncapped
+  const stale = !!o.ctxInfo && !o.running && !!o.ctxInfo.ultra !== ultra
+  if (!stale && (o.ctxInfo || !ultra)) return { window: o.contextWindow, stale }
+  return { window: (ultra ? ultraContextWindow(o.model) : o.model?.contextWindow) || o.contextWindow, stale }
 }
 
 /** 「上下文上限」行:模型本身窗口 > 缺省上限才有得开;已手动覆盖过的也露(好改回默认)。老引擎不下发 max/cap → null。
@@ -295,7 +310,7 @@ export const ModelPill: React.FC<{
   const ultraNoteId = useId()
   // 能不能写由引擎说了算(桌面连外部 / 云端 worker 那边 PUT 404):别按宿主猜
   const ctx = onContextWindowChange && modelId && modelsResponse?.modelOverridesWritable
-    ? contextLimitOptions(modelsResponse.models.find((m) => m.id === modelId), modelsResponse.contextWindowCap, isUltra)
+    ? contextLimitOptions(modelsResponse.models.find((m) => m.id === modelId), modelsResponse.contextWindowCap, isUltra && !!modelsResponse.ultraUncapped)
     : null
   const pickContext = (tokens: number | null): void => {
     setPane(null)
@@ -515,7 +530,7 @@ export const ModelPill: React.FC<{
                     </button>
                   )}
                   <div className="menu-section cm-foot">
-                    {isUltra && ctx.selected === 'default' && ctx.maxTokens ? <div>{t('pill.ctxUltra', { n: fmtWindow(ctx.maxTokens) })}</div> : null}
+                    {isUltra && modelsResponse?.ultraUncapped && ctx.selected === 'default' && ctx.maxTokens ? <div>{t('pill.ctxUltra', { n: fmtWindow(ctx.maxTokens) })}</div> : null}
                     {t('pill.ctxHint', { n: fmtWindow(ctx.defaultTokens) })}
                   </div>
                 </>

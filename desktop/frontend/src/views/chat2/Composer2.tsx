@@ -20,7 +20,7 @@ import { THINKING_LEVELS } from '../../types'
 // context 视图已知注入段 key(与引擎 agentLoop ctxMark 调用一一对应);未知 key 显示原样
 import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../types'
 import { useEdgeNudge, useWorkspace } from '@lcl/engine'
-import { ModelPill, ultraContextWindow, type ModelPillGroup } from '../../components/ModelPill'
+import { ModelPill, contextRingWindow, type ModelPillGroup } from '../../components/ModelPill'
 import { UltraConfirmDialog, ultraConfirmSkipped } from './UltraConfirmDialog'
 import { registerMessages, useI18n } from '../../i18n'
 import { displaySessionTitle } from '../../sessionTitle'
@@ -572,13 +572,12 @@ export const Composer2: React.FC<{
   const allowUltra = isHost && !isChat && !engineId && !groupChat
   // 与发送侧 settleUltra 同口径:只跟 max 同在(陈旧的「ultra + 别的档」不显示 Ultra,发送时也不带)
   const ultraOn = allowUltra && !!ultra && thinkingLevel === 'max'
-  // 进度环分母(09-27 Ultra 拉满上下文):上一轮 context_info 按另一种 Ultra 状态算的(切了开关、还没发下一条),或还没有它而 Ultra 开着,
-  // 就按下一轮会用的窗口现算(ultraContextWindow 与引擎同口径);在飞的 run 照用它自己报的。过时的那份只丢窗口相关的
-  // (压缩线、封顶提示),注入段分解 / 指令文件照旧。按 ctxInfo.ultra 判而不是切换时清 store:重放事件会把旧的那份原样放回来。
-  const ctxStale = !!ctxInfo && !running && !!ctxInfo.ultra !== ultraOn
-  const listedModel = modelsResponse?.models.find((m) => m.id === modelId)
-  const nextWindow = (ultraOn ? ultraContextWindow(listedModel) : listedModel?.contextWindow) || contextWindow
-  const ringWindow = ctxStale || (!ctxInfo && ultraOn) ? nextWindow : contextWindow
+  // 进度环分母(09-27 Ultra 拉满上下文,口径见 contextRingWindow):切了 Ultra 还没发下一条时按下一轮会用的窗口现算;
+  // 过时的那份 context_info 只丢窗口相关的(压缩线、封顶提示),注入段分解 / 指令文件照旧。
+  const { window: ringWindow, stale: ctxStale } = contextRingWindow({
+    ctxInfo, contextWindow, running, ultra: ultraOn,
+    model: modelsResponse?.models.find((m) => m.id === modelId), engineUncapped: modelsResponse?.ultraUncapped,
+  })
   const ringCtxInfo = ctxStale && ctxInfo ? { ...ctxInfo, ctxWindow: ringWindow || ctxInfo.ctxWindow, compactAt: undefined } : ctxInfo
   // 开 Ultra 的所有入口(滑杆第 8 格 / `/think ultra` / 斜杠菜单)都过这里:没勾过「以后不再显示」就先弹确认(09-27 用户要求)。
   // 返回是否已当场生效(弹了确认就是 false,由确认框收尾)。

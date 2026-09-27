@@ -625,6 +625,8 @@ export interface ModelsResponse {
   contextWindowCap?: number
   /** 该引擎能不能写本机模型覆盖(PUT /agent/models/overrides 同一道 hostExec 门)。false / 缺省 = 不露「上下文上限」。 */
   modelOverridesWritable?: boolean
+  /** 引擎的 Ultra run 不受缺省上限约束(09-27)。缺省 = 老引擎,Ultra 也封顶:界面别按拉满显示窗口。 */
+  ultraUncapped?: boolean
   /** 云端托管面诊断:empty=可达但 admin 没配模型;error=不可达/未授权/未部署 brain-api。 */
   forsion?: { status: 'ok' | 'empty' | 'error'; detail: string | null }
 }

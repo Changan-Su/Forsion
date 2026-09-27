@@ -137,6 +137,9 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
       imageModelId: projectImageModelId,
       visionModelId: projectVisionModelId,
       contextWindowCap: CONTEXT_WINDOW_TOKENS, // 缺省上限:模型菜单「默认」档显示 min(maxContextWindow, 它)
+      // Ultra 的 run 不受缺省上限约束(09-27,agentLoop 按 ultraRequested 传 uncapped)。客户端只在引擎声明了它时才按拉满显示窗口:
+      // 老引擎 Ultra 照样封顶,context_info 也不带 ultra —— 不声明的话新桌面会把 272k 的 run 显示成 1M(Codex 09-27)。
+      ultraUncapped: true,
       // PUT /agent/models/overrides 在本进程能不能写(与它同一道 hostExec 门):桌面连外部 / 云端 worker 时为 false,
       // 模型菜单据此不露「上下文上限」—— 靠前端猜宿主(backendStatus)会在 external 模式下露出一个必然 404 的开关。
       modelOverridesWritable: deps().profile.capabilities.hostExec,

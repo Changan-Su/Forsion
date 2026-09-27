@@ -74,7 +74,7 @@ async function main() {
     sessionConfigs: { sandbox: { execMode: 'sandbox' } },
     // 1M 模型、缺省封在 272k(同真引擎 /agent/models 的形状):U11–U13 看 Ultra 下窗口拉满
     models: [{ id: 'm1', name: 'Stub 模型', provider: 'stub', contextWindow: 272_000, contextWindowSource: 'family', maxContextWindow: 1_000_000, thinkingLevels: ['off', 'low', 'medium', 'high', 'xhigh', 'max'] }],
-    modelsMeta: { contextWindowCap: 272_000, modelOverridesWritable: true },
+    modelsMeta: { contextWindowCap: 272_000, modelOverridesWritable: true, ultraUncapped: true },
   })
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-ultra-'))
   const app = await electron.launch({

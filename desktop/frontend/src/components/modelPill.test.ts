@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { catalogForDefaultSlot, contextLimitOptions, effortAt, effortStopAt, ultraContextWindow } from './ModelPill'
-import type { ModelInfo } from '../types'
+import { catalogForDefaultSlot, contextLimitOptions, contextRingWindow, effortAt, effortStopAt, ultraContextWindow } from './ModelPill'
+import type { CtxInfo, ModelInfo } from '../types'
 
 describe('Effort slider', () => {
   it('把拖动 index 精确映射到七档，并夹住越界值', () => {
@@ -64,5 +64,28 @@ describe('上下文上限行(模型窗口 > 缺省上限才露;选项写本机 m
     expect(ultraContextWindow(m({ contextWindow: 128_000, contextWindowSource: 'override', maxContextWindow: 1_000_000 }))).toBe(128_000)
     expect(ultraContextWindow(m({ contextWindow: cap, contextWindowSource: 'family' }))).toBe(cap) // 老引擎不下发 max:按原值
     expect(ultraContextWindow(undefined)).toBeUndefined()
+  })
+})
+
+describe('输入框进度环分母(09-27 Ultra 拉满:切了开关还没发下一条时按下一轮的窗口现算)', () => {
+  const model: ModelInfo = { id: 'm1', name: 'M', provider: 'p', source: 'forsion', contextWindow: 272_000, contextWindowSource: 'family', maxContextWindow: 1_000_000 }
+  const info = (over: Partial<CtxInfo>): CtxInfo => ({ ctxWindow: 272_000, ctxWindowSource: 'family', ctxWindowMax: 1_000_000, sections: [], files: [], filesTruncated: false, historyCount: 0, historyTokens: 0, ...over })
+  const base = { contextWindow: 272_000, model, engineUncapped: true }
+
+  it('上一轮不开 Ultra(272k):切进 Ultra → 1M 且那份标过时;没切 → 照用它', () => {
+    expect(contextRingWindow({ ...base, ctxInfo: info({}), ultra: true })).toEqual({ window: 1_000_000, stale: true })
+    expect(contextRingWindow({ ...base, ctxInfo: info({}), ultra: false })).toEqual({ window: 272_000, stale: false })
+  })
+  it('上一轮是 Ultra(1M):切回来 → 272k;在飞的 run 照用它自己报的', () => {
+    expect(contextRingWindow({ ...base, contextWindow: 1_000_000, ctxInfo: info({ ctxWindow: 1_000_000, ultra: true }), ultra: false })).toEqual({ window: 272_000, stale: true })
+    expect(contextRingWindow({ ...base, contextWindow: 272_000, ctxInfo: info({}), ultra: true, running: true })).toEqual({ window: 272_000, stale: false })
+  })
+  it('还没有 context_info:Ultra 开着 → 1M;不开 → 原值', () => {
+    expect(contextRingWindow({ ...base, ultra: true })).toEqual({ window: 1_000_000, stale: false })
+    expect(contextRingWindow({ ...base, ultra: false })).toEqual({ window: 272_000, stale: false })
+  })
+  it('老引擎(没声明 ultraUncapped,Ultra 也封顶、context_info 不带 ultra):Ultra 不改分母(Codex 09-27)', () => {
+    expect(contextRingWindow({ ...base, engineUncapped: undefined, ctxInfo: info({}), ultra: true })).toEqual({ window: 272_000, stale: false })
+    expect(contextRingWindow({ ...base, engineUncapped: undefined, ultra: true })).toEqual({ window: 272_000, stale: false })
   })
 })
