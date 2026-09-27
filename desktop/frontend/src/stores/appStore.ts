@@ -2843,8 +2843,16 @@ export const useApp = create<AppState>((set, get) => ({
     if (!sid) return
     const approval = (get().messagesBySession[sid] || []).find((m) => m.id === messageId)?.approvals?.find((a) => a.approvalId === approvalId)
     if (!approval?.runId) return
-    const r = await resolveApproval(get().cfg, approval.runId, approvalId, action, argsOverride)
+    let r: Awaited<ReturnType<typeof resolveApproval>>
+    try {
+      r = await resolveApproval(get().cfg, approval.runId, approvalId, action, argsOverride)
+    } catch (e: any) {
+      get().toast(get().tr('agentrun.approvalFailed', { e: e?.message || e }), true)
+      return
+    }
     if (r.gone) get().patchMessage(sid, messageId, (m) => ({ ...m, approvals: (m.approvals || []).map((a) => (a.approvalId === approvalId ? { ...a, status: 'expired' as const } : a)) }))
+    // 其余失败必须上屏(设备页改了命令 → 引擎 400 REMOTE_ARGS_OVERRIDE_FORBIDDEN;以前静默吞掉,卡片挂着、按钮像没反应)
+    else if (!r.ok) get().toast(get().tr('agentrun.approvalFailed', { e: r.message || '' }), true)
   },
 
   answerInquiry: async (messageId, inquiryId, answer, targetSessionId) => {

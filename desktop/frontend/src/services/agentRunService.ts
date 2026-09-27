@@ -7,6 +7,7 @@ import type { AgentConfig, AgentRunEvent, Attachment, StartRunResult, TanguDeskt
 import { APP_VERSION } from '../changelog'
 import { registerMessages, translate } from '../i18n'
 import { authFetch } from './http'
+import { httpErrorMessage } from './localOnly'
 import { buildCommandCatalog, readUiSettings } from '../agentCommands'
 
 registerMessages({
@@ -15,6 +16,7 @@ registerMessages({
   'agentrun.connectFailed': { zh: '连接失败', en: 'Connection failed' },
   'agentrun.subscribeFailed': { zh: '订阅失败 ({status})', en: 'Event stream subscription failed ({status})' },
   'agentrun.stopUnconfirmed': { zh: '尚未确认任务停止，请重试停止操作。', en: 'The run has not confirmed it stopped. Please try stopping it again.' },
+  'agentrun.approvalFailed': { zh: '审批没有送达：{e}', en: "The approval wasn't delivered: {e}" },
 })
 
 function headers(token: string): Record<string, string> {
@@ -96,7 +98,8 @@ export async function startRun(
       agent_config: params.agentConfig || {},
     }),
   })
-  if (!r.ok) throw new Error((await r.text().catch(() => '')) || `HTTP ${r.status}`)
+  // 远端拒绝码(设备页的工作目录落在受保护位置 → REMOTE_CWD_FORBIDDEN 等)换成本地化提示;其余照旧取 detail / 原文
+  if (!r.ok) throw Object.assign(new Error((await httpErrorMessage(r)).message), { status: r.status })
   return r.json()
 }
 
@@ -264,19 +267,22 @@ export async function sendDeskCapture(
   ).catch(() => {})
 }
 
-/** 兑现一次 host-exec 审批。410 = 已不在等待(过期/他端已处理)。 */
+/** 兑现一次 host-exec 审批。410 = 已不在等待(过期/他端已处理)。
+ *  其余非 2xx 带回 message(远端改参数 → REMOTE_ARGS_OVERRIDE_FORBIDDEN 等已本地化):调用方必须上屏,
+ *  否则点了「批准」什么都不发生、卡片一直挂着(Codex 终审 F#2)。 */
 export async function resolveApproval(
   cfg: TanguDesktopConfig,
   runId: string,
   approvalId: string,
   action: 'approve' | 'approve_always' | 'reject',
   argsOverride?: Record<string, any>,
-): Promise<{ ok: boolean; gone: boolean }> {
+): Promise<{ ok: boolean; gone: boolean; message?: string; code?: string }> {
   const r = await authFetch(
     `${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`,
     { method: 'POST', headers: headers(cfg.token), body: JSON.stringify({ action, argsOverride }) },
   )
-  return { ok: r.ok, gone: r.status === 410 }
+  if (r.ok || r.status === 410) return { ok: r.ok, gone: r.status === 410 }
+  return { ok: false, gone: false, ...(await httpErrorMessage(r)) }
 }
 
 /** 订阅 run 的 SSE 事件流;onEvent 收到每条 {seq,type,payload}。done/error 时返回。 */
