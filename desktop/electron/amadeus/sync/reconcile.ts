@@ -100,15 +100,6 @@ export function shouldTripMassDelete(delCount: number, tracked: number, absMax =
   return delCount >= absMax || (tracked >= 5 && delCount >= Math.max(5, Math.ceil(tracked / 2)))
 }
 
-/** 冲突副本路径:`a/b/Note.md` → `a/b/Note (conflict 2026-07-10 1532).md`。 */
-export function conflictCopyPath(serverPath: string, now: Date): string {
-  const slash = serverPath.lastIndexOf('/')
-  const dir = slash < 0 ? '' : serverPath.slice(0, slash + 1)
-  const base = slash < 0 ? serverPath : serverPath.slice(slash + 1)
-  const dot = base.lastIndexOf('.')
-  const stem = dot > 0 ? base.slice(0, dot) : base
-  const ext = dot > 0 ? base.slice(dot) : ''
-  const p = (n: number): string => String(n).padStart(2, '0')
-  const stamp = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} ${p(now.getHours())}${p(now.getMinutes())}`
-  return `${dir}${stem} (conflict ${stamp})${ext}`
-}
+/** 冲突副本路径:`a/b/Note.md` → `a/b/Note (conflict 2026-07-10 1532).md`。
+ *  正典挪到 shared(编辑器的「打字中外部改动 / CAS 拒写」冲突副本必须与云同步同名),这里只转出口。 */
+export { conflictCopyPath } from '@amadeus-shared/writeConflict'

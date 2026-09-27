@@ -16,16 +16,18 @@ const disposers: Array<() => void> = []
 afterEach(() => { while (disposers.length) disposers.pop()!() })
 
 function harness() {
-  const pipe = { retired: false, fm: '', body: 'Unsaved note', lastSaved: 'Old note', pending: true, timer: null, chain: Promise.resolve() }
+  const pipe = { retired: false, fm: '', body: 'Unsaved note', lastSaved: 'Old note', pending: true, timer: null, chain: Promise.resolve(), unpreserved: null as string | null }
   const writeTextFile = vi.fn<(path: string, content: string) => Promise<void>>()
+  // 写盘安全件(评审 D-03)在组件里住在 writeNow 前面,这里注入桩:只验 writeNow 的控制流。
+  const preserveExternal = vi.fn<(content: string) => Promise<void>>(async () => {})
   const script = writer + '\n({ writeNow, handle: { path, ' + flushProperty + ' retire() {} } })'
   const result = runInNewContext(transform(script, { transforms: ['typescript'] }).code, {
-    path: 'Note.md', pipe, composeFm, amadeus: { writeTextFile },
+    path: 'Note.md', pipe, composeFm, amadeus: { writeTextFile }, preserveExternal,
     scoped: { getState: () => ({ bumpLinkGraph: vi.fn() }) },
     syncFromEditor() {}, clearTimeout,
   }) as { writeNow: (strict?: boolean) => Promise<void>; handle: Parameters<typeof registerUnifiedPipe>[0] }
   disposers.push(registerUnifiedPipe(result.handle))
-  return { pipe, writeTextFile, ...result }
+  return { pipe, writeTextFile, preserveExternal, ...result }
 }
 
 describe('unified editor account-switch persistence barrier', () => {
@@ -63,5 +65,26 @@ describe('unified editor account-switch persistence barrier', () => {
     expect(h.pipe.pending).toBe(false)
     expect(h.pipe.lastSaved).toBe(composeFm('', 'Newer edit during write'))
     expect(h.writeTextFile).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('unified editor write safety (review 2026-09-27 D-03)', () => {
+  it('an external version about to be overwritten is saved as a conflict copy first', async () => {
+    const h = harness()
+    h.pipe.unpreserved = 'Written by an agent'
+    h.writeTextFile.mockResolvedValueOnce()
+    await h.writeNow()
+    expect(h.preserveExternal).toHaveBeenCalledWith('Written by an agent')
+    expect(h.preserveExternal.mock.invocationCallOrder[0]).toBeLessThan(h.writeTextFile.mock.invocationCallOrder[0])
+    expect(h.pipe).toMatchObject({ pending: false, unpreserved: null, lastSaved: composeFm('', 'Unsaved note') })
+  })
+
+  it('never overwrites the disk version when its conflict copy cannot be written', async () => {
+    const h = harness()
+    h.pipe.unpreserved = 'Theirs'
+    h.preserveExternal.mockRejectedValueOnce(new Error('ENOSPC'))
+    await h.writeNow()
+    expect(h.writeTextFile).not.toHaveBeenCalled()
+    expect(h.pipe).toMatchObject({ pending: true, unpreserved: 'Theirs' })
   })
 })

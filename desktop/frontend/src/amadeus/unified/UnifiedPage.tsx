@@ -40,6 +40,8 @@ import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, casc
 import '../../views/chat2/sidebar2.css'
 import { editorExtensionGen, subscribeEditorExtensions } from '../plugins/editorExtensions'
 import { registerUnifiedPipe, retireUnifiedPath } from './lifecycle'
+import { textFingerprint } from '@amadeus-shared/writeConflict'
+import { toastConflictCopy, writeConflictCopy } from './writeSafety'
 import { docHeadings } from './outline'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { useUiOverlay } from '../../amadeusOverlayStore'
@@ -210,6 +212,11 @@ interface Pipe {
   pending: boolean
   timer: ReturnType<typeof setTimeout> | null
   reconcileBusy: boolean
+  /** 待保全的盘上版本(D-03 / G1-01):即将被本地版本覆盖的外部内容。写盘前必须先落成冲突副本,副本没保住就不写。
+   *  单槽:只有「此刻盘上、我要盖掉的那一版」归本实例保全(更早的版本是被外部写者自己盖掉的)。 */
+  unpreserved: string | null
+  /** 已保全过的内容指纹:同一版本不出第二份冲突副本。 */
+  preserved: Set<string>
   dead: boolean
   /** 改名/删除/移动后本实例退休:任何后续写盘都会把旧路径的文件写回来(复活幽灵文件),一律禁止。 */
   retired: boolean
@@ -874,7 +881,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const pipeRef = useRef<Pipe | null>(null)
   if (!pipeRef.current) {
     const { fmText, body } = splitFm(initial)
-    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: false, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly }
+    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: false, unpreserved: null, preserved: new Set(), dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly }
   }
   const pipe = pipeRef.current
   const [fmVer, setFmVer] = useState(0) // fm 变更驱动 chrome 重渲(pipe 本身是 ref)
@@ -1289,6 +1296,19 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     return true
   }
 
+  // ── 写盘安全(评审 2026-09-27 波次 0a:D-03)。这几件被 writeNow 调用,但**刻意放在它前面**
+  //    (writeFailures.test 把 writeNow 那段源码切出来单独求值,这几件在测试里是注入的桩)。
+
+  /** 盘上那版要被本地版本盖掉 → 先落冲突副本(与云同步同名)+ error 级提示。写不进去就抛,writeNow 据此不写。 */
+  const preserveExternal = async (content: string): Promise<void> => {
+    const fp = textFingerprint(content)
+    if (pipe.preserved.has(fp)) return
+    const copy = await writeConflictCopy(path, content)
+    pipe.preserved.add(fp)
+    toastConflictCopy(path, copy)
+    void scoped.getState().refreshPages() // 副本是新文件:树 / 补全要看得见它
+  }
+
   const writeNow = (strict = false): Promise<void> => {
     if (pipe.readOnly) return Promise.resolve() // 只读实例:唯一的写盘出口在此封死(见 readOnly prop 注)
     const run = async (): Promise<void> => {
@@ -1299,6 +1319,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           return
         }
         try {
+          // 要盖掉的盘上版本还没保全(打字中外部改动)→ 先落冲突副本;落不下就当写失败,不许覆盖。
+          if (pipe.unpreserved != null && pipe.unpreserved !== text) await preserveExternal(pipe.unpreserved)
+          pipe.unpreserved = null
           await amadeus.writeTextFile(path, text)
           pipe.lastSaved = text
           scoped.getState().bumpLinkGraph() // v4 自写账本不经 store 的 save → 反链/图谱/![[嵌入]] 只能靠这一声
@@ -1446,9 +1469,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         if (raw == null || pipe.dead || pipe.retired) return // 读失败/已卸载:保持现状,绝不清空
         if (raw === pipe.lastSaved && !pipe.pending) return // 自写回声兜底
         if (pipe.pending) {
-          // 冲突策略(Codex P0「冻结期本地输入被吞」):本地有未落盘编辑 → **活动编辑器赢**。
-          // 只把基线换成盘上版本,不动编辑器;finally 的补发把本地内容写盘(外部那版被覆盖 ——
-          // 有损但显性一致,绝不静默丢用户正在打的字)。
+          // 冲突策略(Codex P0「冻结期本地输入被吞」):本地有未落盘编辑 → **活动编辑器赢**,不动编辑器、
+          // 不打断输入。但被盖掉的盘上版本**必须**留底(拍板 #6,评审 D-03:此前这里只换基线,外部那版静默
+          // 蒸发、零提示):登记为待保全,finally 的补发在写之前先落冲突副本 + error 级提示,副本没保住就不写。
+          if (raw !== composeFm(pipe.fm, pipe.body)) pipe.unpreserved = raw
           pipe.lastSaved = raw
           return
         }

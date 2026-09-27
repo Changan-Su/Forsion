@@ -1689,6 +1689,8 @@ if (new URLSearchParams(location.search).has('dock')) {
     vault,
     writes,
     probe: upageProbe,
+    /** 生产 lifecycle 模块(按路径路由的 insertMarkdown / flush 等,仪器直调;与 UnifiedPage 同一模块实例)。 */
+    lifecycle: null as unknown,
     switchFile(path: string, text?: string) {
       if (typeof text === 'string') vault.set(path, text)
       switchUPage?.(path)
@@ -1702,6 +1704,7 @@ if (new URLSearchParams(location.search).has('dock')) {
       void import('./amadeusOverlayStore').then(({ useUiOverlay }) => useUiOverlay.setState({ editorMode: m }))
     },
   }
+  void import('./amadeus/unified/lifecycle').then((m) => { (window as unknown as { __upage: { lifecycle: unknown } }).__upage.lifecycle = m })
   void import('./amadeus/unified/UnifiedPage').then(({ UnifiedPage }) => {
     // 改名重挂载宿主壳:镜像 amadeusViews 的 leaf 行为(onRenamed → 换参数,实例随 key 重建)。
     // ⚠️ 顶栏胶囊必须拿**宿主自己的笔记路径**喂 CanvasModeSeg —— 生产传的是 `barPath`,组件内
