@@ -12,6 +12,7 @@
  * 远程 host-exec（跨进程）需要的是 HTTP「租赁」端点（见架构 v2.0 §3.3 Lease），不在此文件范围。
  */
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { publish } from './eventBus.js';
 import { isOutsideWorkspace, writableRoots } from '../tools/fsPolicy.js';
 import { writeTargetsOf } from '../tools/writeTargets.js';
@@ -42,9 +43,9 @@ interface Pending {
 const pending = new Map<string, Pending>(); // approvalId -> resolver
 const alwaysAllow = new Map<string, Set<string>>(); // sessionId -> 本会话「总允许」的工具名
 
-let approvalSeq = 0;
+// 审批 id 就是兑现凭据:随机不可猜(旧版 时间戳+全局序号 可预测)。前缀 apv_ 保留,客户端只原样回传不解析。
 function nextApprovalId(): string {
-  return `apv_${Date.now().toString(36)}_${++approvalSeq}`;
+  return `apv_${randomUUID()}`;
 }
 
 /**
@@ -160,10 +161,16 @@ function requestApprovalNow(
   });
 }
 
-/** TUI 按键 / HTTP 审批端点调用：兑现某审批。返回 false 表示该 id 已不在等待（重复/过期）。 */
-export function resolveApproval(approvalId: string, decision: ApprovalDecision): boolean {
+/**
+ * TUI 按键 / 通道 / HTTP 审批端点调用：兑现某审批。返回 false 表示该 id 已不在等待（重复/过期）。
+ * ⚠️ HTTP 路由**必须**传 runId(同 uiAck.ts):路由只能证明 URL 里的 runId 属于调用者,证明不了这条审批属于那条 run
+ * —— 桌面引擎所有 run 都属于 'local',不比对 = 拿任意 run 的 URL 兑现任意 run 的审批。
+ * 进程内调用方(TUI / 通道)拿的是自己订阅的那条 run 事件流里的 id,可不传。
+ */
+export function resolveApproval(approvalId: string, decision: ApprovalDecision, runId?: string): boolean {
   const p = pending.get(approvalId);
-  if (!p) return false;
+  // runId 不匹配 → 一律当作「不在等待」,不泄露它是否存在。
+  if (!p || (runId !== undefined && p.runId !== runId)) return false;
   pending.delete(approvalId);
   p.resolve(decision);
   // 广播审批结果:SSE 回放/多端订阅者据此知道该审批已被消化(TUI 忽略未知事件类型,零影响)。
@@ -383,6 +390,8 @@ export async function gateToolCall(
     execAgentSlug?: string;
   },
   signal?: AbortSignal,
+  /** 内部用:这一趟是审批卡上**改过参数**的重闸(见函数末尾)。外部调用方不传。 */
+  editedOnCard = false,
 ): Promise<ApprovalDecision> {
   // 工具名**先归一**(旧别名 muse_watch → manage_automation):下面每一道判定都直接读
   // call.function.name —— custom 规则匹配(customVerdictDetailed/ruleMatches)、approvalPreview、
@@ -449,6 +458,9 @@ export async function gateToolCall(
   // 诚实性:这是 hook 挡的,不是用户拒的 —— 不写清楚,模型和用户都会以为「用户拒绝了该操作」
   if (permV.block) return { action: 'reject', rejectReason: 'Denied by a PermissionRequest hook.' };
   if (permV.allow) return { action: 'approve' };
+  // 改参重闸:「这个档位下这个工具要不要问」刚在审批卡上被答过(批准者就是在那张卡上改的参数),不问第二遍 ——
+  // 否则桌面 / TUI 改完 bash 命令还得再批一次。越界写与 custom ask 规则看的是**参数**,照新参数重问(上面的 deny 规则与 hook 也已按新参数判过)。
+  if (editedOnCard && !escalate && !forceAsk) return { action: 'approve' };
 
   const preview = escalate ? '⚠ 工作区外写入 · ' + approvalPreview(call) : approvalPreview(call);
   // 「为什么问你」(B3):优先级与判定同序 —— 用户自己写的规则 > 越界升级 > 档位本身。
@@ -463,11 +475,14 @@ export async function gateToolCall(
     return deferApproval(runId, call, preview, reason, ctx);
   }
   const d = await requestApproval(runId, call, preview, signal, reason);
-
-  if (d.action === 'approve_always') {
-    // 越界写、custom 的 ask 规则都不进「总允许」:前者每次都确认,后者是用户写死的「永远问我」。
-    if (!escalate && !forceAsk) allowAlways(ctx.sessionId, name);
-    return { action: 'approve', argsOverride: d.argsOverride };
-  }
-  return d;
+  if (d.action === 'reject') return d;
+  // 越界写、custom 的 ask 规则都不进「总允许」:前者每次都确认,后者是用户写死的「永远问我」。
+  if (d.action === 'approve_always' && !escalate && !forceAsk) allowAlways(ctx.sessionId, name);
+  if (!d.argsOverride) return { action: 'approve' };
+  // 批准时改了参数 → 真正要执行的是新参数,批准只覆盖卡上显示过的那份:按新参数把整道闸重过一遍
+  // (custom 规则 / known-safe / 越界升级 / PermissionRequest hook 都认新参数)。从前改写后直接执行,
+  // 改成工作区外路径或 deny 规则挡的命令都不再过闸。再次弹卡时批准者可能又改一次 → 取最后一次的参数。
+  const edited: ToolCall = { ...call, function: { ...call.function, arguments: JSON.stringify(d.argsOverride) } };
+  const again = await gateToolCall(runId, edited, ctx, signal, true);
+  return again.action === 'reject' ? again : { action: 'approve', argsOverride: again.argsOverride ?? d.argsOverride };
 }
