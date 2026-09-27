@@ -2,9 +2,11 @@
  * /unit/host{file,dir,stat} 的「会话根」只认**本机确认过**的项目目录(Codex 终审 out1 #2 / 评审 D1)。
  *
  * 旧口径:可读根 = 工作区 ∪ vault ∪ **所有 host 会话的 project_path**。project_path 远端改得动 ——
- *   · 远端 PATCH /agent/sessions/:id 改一个本机会话的 project_path(引擎不给它盖远程标记);
- *   · 远端 POST /agent/sessions 新建(引擎盖 agent_config.remoteOrigin);
- *   · 远端 run 带 mentionedProjects → start_project_session 派生一个新会话(引擎同样不盖标记)。
+ *   · 远端 PATCH /agent/sessions/:id 改一个本机会话的 project_path;
+ *   · 远端 POST /agent/sessions 新建;
+ *   · 远端 run 带 mentionedProjects → start_project_session 派生一个新会话。
+ * 集成后三条引擎都盖 agent_config.remoteOrigin(本机 PUT 整对象写回也抹不掉,见 tangu-agent/test/remoteR3Integration.test.ts);
+ * 但升级前留下的、老引擎上的会话没有标记 —— 所以这里不单靠标记,还要求落在本机根里(②)。
  * 受保护清单(unitHostScope.ts)只能枚举「已知的」凭据目录;把 project_path 改成 ~/Library/Application Support/<某浏览器>/Default
  * 这类不在清单里的目录,远端就能不起 run、不答审批地读走 Login Data / Cookies。
  *

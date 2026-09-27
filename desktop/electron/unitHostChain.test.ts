@@ -1,7 +1,8 @@
 /**
  * /unit/hostfile 读范围不被远端可写的会话路径放大(Codex 终审 out1 #2 / D1)—— 真 unitWeb 整链:
  *   局域网配对设备 → unitWeb /engine 反代(盖 x-forsion-remote)→ 假引擎(会话按**今天引擎的语义**存:
- *   远端 POST 建会话盖 agent_config.remoteOrigin,远端 PATCH project_path **不盖**)→ 同一设备 GET /unit/hostfile。
+ *   远端 POST 建会话盖 agent_config.remoteOrigin,远端 PATCH project_path **不盖** —— 升级前的老引擎就是这样;集成后的引擎会盖
+ *   (tangu-agent/test/remoteR3Integration.test.ts),这里刻意按最坏的引擎演,证明桌面不靠标记也拦得住)→ 同一设备 GET /unit/hostfile。
  * readHostFile 与 main.ts 同一套组合(composeUnitRoots + openUnitHostFile),根的来源、登记表、种子闸都是生产代码。
  *
  * 断言:
@@ -52,7 +53,7 @@ function fakeEngine(): Promise<{ url: string; rows: Row[]; hits: string[]; close
       if (m && req.method === 'PATCH') {
         const row = rows.find((r) => r.id === m[1])
         if (!row) return send(404, { detail: 'Session not found' })
-        if (typeof body.project_path === 'string' || body.project_path === null) row.project_path = body.project_path // 今天的引擎:不盖远程标记
+        if (typeof body.project_path === 'string' || body.project_path === null) row.project_path = body.project_path // 老引擎(最坏情形):不盖远程标记
         return send(200, { session: row })
       }
       send(404, { detail: 'fake engine' })
