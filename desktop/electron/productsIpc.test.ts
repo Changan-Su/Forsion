@@ -12,6 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { registerProductsIpc } from './productsIpc'
 import { findGit } from './gitHistory'
+import { readDevLoads } from './devLoadStore'
 import { PRODUCT_SIDECAR } from '../shared/products'
 
 type Handler = (e: unknown, ...args: unknown[]) => Promise<unknown>
@@ -41,7 +42,7 @@ beforeEach(async () => {
     broadcast: () => {},
   })
 })
-afterEach(async () => { await fs.rm(home, { recursive: true, force: true }) })
+afterEach(async () => { vi.restoreAllMocks(); await fs.rm(home, { recursive: true, force: true }) })
 
 describe('products IPC × 原地加入的外部造物', () => {
   it('原地加入:写身份 sidecar + 宿主侧登记;isCreation 按目录身份判;托管根的直接子目录不登记', async () => {
@@ -85,6 +86,26 @@ describe('products IPC × 原地加入的外部造物', () => {
     const fresh = (await call('products:list')).find((p: { root: string }) => p.root === child)
     await call('products:trash', fresh.id, { action: 'trash', dirId: fresh.dirId })
     expect(trashItem).toHaveBeenCalledWith(child)
+  })
+
+  it('⚠️改名写到一半目录被换了 → 整个调用失败,不授权开发态加载(授权绝不落到替换进来的目录上)', async () => {
+    const app = await folder(path.join(home, 'code', 'plug'))
+    await fs.writeFile(path.join(app, 'manifest.json'), JSON.stringify({ id: 'plug', main: 'main.js', apiVersion: 1 }))
+    const { product } = await call('products:register', app, app, false)
+    expect(product.kind).toBe('plugin')
+    await fs.copyFile(path.join(app, '.tangu', PRODUCT_SIDECAR), path.join(app, PRODUCT_SIDECAR)) // 两份副本 = 两次写
+    const real = fs.rename.bind(fs)
+    let swapped = false
+    vi.spyOn(fs, 'rename').mockImplementation(async (from, to) => {
+      await real(from, to)
+      if (swapped) return
+      swapped = true
+      await real(app, `${app}-moved`) // 第一份写进原目录之后,路径上换成另一个目录
+      await fs.mkdir(app)
+    })
+    await expect(call('products:update', product.id, { name: 'Renamed', devLoad: true })).rejects.toThrow(/changed/)
+    expect(readDevLoads(path.join(home, '.forsion-dev'))[product.id]).toBeUndefined()
+    expect(await fs.readdir(app)).toEqual([])
   })
 
   it.skipIf(!findGit())('git:外部造物还没有仓 → 可手动保存但不自动存;自动提交回 null、不建仓;不是造物的目录只读', async () => {

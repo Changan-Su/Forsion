@@ -494,17 +494,15 @@ export async function updateProduct(
     // 于是这一行在 updatedAt 倒序的栅格里凭空跳到最前面 —— 什么都没改,位置却动了。
     if (JSON.stringify(next) === JSON.stringify(hit.sidecar)) return hit
     // 每一份都写:只写一份的话,别处那份(比如刚在这次索引里修好的根目录)按读序赢回来,改动凭空丢失。
-    // 第一份(读序,下次读到的就是它)写不进 / 目录变了才算失败;之后的副本写不进只喊一声 —— 改动已经生效,别报「没改成」。
+    // 第一份(读序,下次读到的就是它)写不进才算失败;之后的副本写不进只喊一声 —— 改动已经生效,别报「没改成」。
     for (const [i, rel] of hit.targets.entries()) {
       const wrote = await writeInto(hit, next, rel).catch((e) => {
         if (i === 0) throw e
         warnOnce(`${hit.root}:${rel}`, `[products] 身份文件没能同步:${path.join(hit.root, rel)}`, e)
         return true
       })
-      if (!wrote) {
-        if (i === 0) throw new Error(`Product directory changed: ${hit.root}`)
-        break
-      }
+      // 目录被换了(哪怕第一份已写进原目录):原路径上已经不是这个产物 —— 不给它出摘要,调用方更不能拿它去授权开发态加载
+      if (!wrote) throw new Error(`Product directory changed: ${hit.root}`)
     }
     // 写完目录 mtime 变了,updatedAt 重新取一次,别让刚改完的产物在栅格里排到旧位置。
     const updatedAt = await fs.stat(hit.root).then((st) => st.mtimeMs).catch(() => hit.updatedAt)

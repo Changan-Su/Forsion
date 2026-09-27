@@ -368,14 +368,14 @@ describe('外部造物(原地加入)', () => {
     expect(await fs.readdir(ext)).toEqual([])
   })
 
-  it('⚠️改名写到一半目录被换了 → 后面那份不往替换进来的目录里写;已写好的读序第一份照样生效', async () => {
+  it('⚠️改名写到一半目录被换了 → 后面那份不往替换进来的目录里写,整个调用失败(不给替换进来的目录出摘要)', async () => {
     const ext = await outside('swap-update', { 'index.html': 'x' })
     const sc = JSON.stringify({ version: 1, id: 'p_111111111111', createdAt: 1 })
     await fs.writeFile(path.join(ext, PRODUCT_SIDECAR), sc)
     await writeSidecarFile(ext, sc)
     const entry = reg(ext)
     swapAfterFirstWrite(ext)
-    await updateProduct(root, 'p_111111111111', { name: 'Renamed' }, [entry])
+    await expect(updateProduct(root, 'p_111111111111', { name: 'Renamed' }, [entry])).rejects.toThrow(/changed/)
     expect(await fs.readdir(ext)).toEqual([])
     expect(JSON.parse(await fs.readFile(path.join(`${ext}-moved`, PRODUCT_SIDECAR), 'utf8')).name).toBe('Renamed')
   })
