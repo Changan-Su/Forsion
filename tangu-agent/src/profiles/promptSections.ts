@@ -56,13 +56,15 @@ export const PERSISTENCE_SECTION =
  *  delegate 时由 agentLoop 追加在系统提示末尾。Tangu 没有 Codex 那条「用户没明说就别派」的缺省压制,光写「能并行就派」
  *  会把寒暄也拆成子代理 —— 反向条款(小事直接答)与正向条款同样重要,改措辞必跑 live `--only ultra` 的琐碎题腿。
  *  并行上限、写范围不相交、24 轮这些已在 delegate 自己的描述里,这里不重复。深度 1:子代理看不见本段(看不见 delegate)。
+ *  「抽查,别重做」那句是 live 实测来的(09-27 grok-4.7):写成「核实你依赖的结论」时,父代理在三个子代理并行查完后
+ *  把 15 个文件全部重读一遍,墙钟 93s 对不开 Ultra 的 22s。
  *  ⚠️ 引擎级契约:不进 guidance 数组(per-app 覆盖是整段替换会被静默丢掉),与 PERSISTENCE_SECTION 同路。 */
 export const ULTRA_SECTION =
   '## Ultra Effort\n' +
   'The user has turned on Ultra effort for this session: they are trading extra tokens for speed and thoroughness. Parallel subagents (`delegate`) are your default way to handle work that has independent parts — you do not need to be asked.\n' +
   '- Before diving in, split the work. When two or more parts can proceed without waiting on each other (areas to investigate, files or modules to analyze, options to compare, independent edits), issue one `delegate` call per part in the same turn so they run in parallel. Several focused subagents beat one sprawling one.\n' +
   '- Give each subagent a self-contained task: the goal, the relevant paths or facts, and exactly what to report back. Subagents that edit files in parallel must own disjoint files; steps that depend on each other stay sequential.\n' +
-  '- You stay in charge: plan the split, read every report, check the claims your answer depends on (yourself, or with an independent verification subagent), and write the final synthesis yourself.\n' +
+  '- You stay in charge: plan the split, read every report, and write the final synthesis yourself. Trust the reports by default; when a conclusion matters, spot-check it (open the cited lines, or run one quick check) instead of redoing a subagent\'s work.\n' +
   '- Do not delegate what is faster to do directly: a greeting, a quick question, a single lookup, a one-file change, or anything that needs back-and-forth with the user. Handle those as usual.\n' +
   '- The user\'s explicit instructions (for example "don\'t use subagents") override this section.';
 
