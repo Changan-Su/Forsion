@@ -62,6 +62,7 @@ const ASYNC_OK = `ctx.registerView({ id: 'home', title: 'Muse', async mount(el) 
   const box = el.firstChild
   await new Promise((r) => setTimeout(r, Number(window.__museAsyncDelay || 0)))
   box.dataset.state = 'ready'
+  window.__museAsyncConnectedAtResolve = el.isConnected // 慢那步要证明:resolve 时视图确实已卸载(否则走的是普通清理路径)
   return () => { window.__museAsyncCleanups = (window.__museAsyncCleanups || 0) + 1 }
 } })
 `
@@ -211,15 +212,16 @@ async function main() {
     const cleanups = () => win.evaluate(() => window.__museAsyncCleanups || 0)
     await win.evaluate(() => { window.__museAsyncCleanups = 0; window.__museAsyncDelay = 0 })
     fs.writeFileSync(path.join(space, 'main.js'), ASYNC_OK, 'utf8'); bump()
-    check('async mount:渲染出来', await visible(win, '.muse-async[data-state="ready"]', 12_000))
+    check('async mount:渲染出来(resolve 时视图还挂着)', await visible(win, '.muse-async[data-state="ready"]', 12_000) && (await win.evaluate(() => window.__museAsyncConnectedAtResolve)) === true)
     const leftHome = await clickSpace(win, /主页|home/)
     check('async mount:切走 Space → resolve 出的清理执行一次', leftHome && (await cleanups()) === 1, `left=${leftHome} cleanups=${await cleanups()}`)
-    await win.evaluate(() => { window.__museAsyncDelay = 2500 })
-    await clickMuseSpace(win) // 重新挂载:这一版要 2.5 秒后才 resolve 清理
+    await win.evaluate(() => { window.__museAsyncDelay = 4000; window.__museAsyncConnectedAtResolve = undefined })
+    await clickMuseSpace(win) // 重新挂载:这一版要 4 秒后才 resolve 清理
     const loading = await attached('.muse-async[data-state="loading"]', 5_000)
-    await clickSpace(win, /主页|home/) // 还没 resolve 就卸载
-    await win.waitForTimeout(2500)
-    check('async mount:视图卸载后才 resolve 的清理当场执行', loading && (await cleanups()) === 2, `loading=${loading} cleanups=${await cleanups()}`)
+    await clickSpace(win, /主页|home/) // 还没 resolve 就卸载(约挂载后 1.3 秒;慢机器上来不及 → connectedAtResolve 为 true、判红,不会假绿)
+    await win.waitForTimeout(3500)
+    const connectedAtResolve = await win.evaluate(() => window.__museAsyncConnectedAtResolve)
+    check('async mount:视图卸载后才 resolve 的清理当场执行', loading && connectedAtResolve === false && (await cleanups()) === 2, `loading=${loading} connectedAtResolve=${connectedAtResolve} cleanups=${await cleanups()}`)
     await win.evaluate(() => { window.__museAsyncDelay = 0 })
     await clickMuseSpace(win)
     fs.writeFileSync(path.join(space, 'main.js'), ASYNC_THROWS, 'utf8'); bump()

@@ -596,7 +596,7 @@ function spaceKickoff(): string {
     '(manifest.json + main.js; load the "forsion-plugin" skill only if you need more of the plugin API than this). ' +
     'main.js runs as the body of setup(ctx), so call ctx.registerView({ id: "home", ... }) at the top level of the file. ' +
     'Do not wrap the file in function setup(ctx) { ... } — nothing calls it, so nothing registers and no error is raised. ' +
-    'Render live data instead of hardcoding it: ctx.agent.status() → { running, lastCycleAt, sleepUntil, mode, heartbeatMinutes, pendingApprovals } (times in epoch ms or null); ' +
+    'Render live data instead of hardcoding it (every ctx.agent call returns a Promise; status() can resolve to null): ctx.agent.status() → { running, lastCycleAt, sleepUntil, mode, heartbeatMinutes, pendingApprovals } (times in epoch ms or null); ' +
     'ctx.agent.todos("pending") → [{ id, title, detail, status, createdAt }] (no argument = every status, dismissed included); ' +
     'ctx.agent.schedule() → [{ name, date, repeat, auto, lastRun }]; ctx.agent.library.read(path) → the text of a Library file ' +
     '(e.g. "Journal/<date>.md"; .list() for the tree); ctx.agent.subscribe(cb) to refresh; ctx.agent.updateTodo(id, "done" | "dismissed") works only inside a click handler on your Space. ' +

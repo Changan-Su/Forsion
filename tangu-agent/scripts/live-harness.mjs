@@ -1189,12 +1189,13 @@ try {
     const spaceUsesAgent = (() => { try { return /ctx\.agent\./.test(readFileSync(join(home, 'agents', 'muse', 'Space', 'main.js'), 'utf8')); } catch { return false; } })();
     const skillLoads = await museSkillLoads().catch(() => '?');
     // 只记不判(09-27 dev):Space 用了宿主没有的 CSS 变量 → 落到它写死的兜底色(dev 上猜了 --panel,浅色主题下卡片标题看不见)。
-    // 宿主词表 = desktop styles/base.css 里定义的全部 token(DESIGN §2:它是缺省 + 首帧兜底,每个 token 在那儿都有缺省值)
+    // 宿主词表 = desktop styles/base.css 里 **:root 块**(含 :root.dark / html:root[data-mode=…])定义的 token(DESIGN §2:缺省 + 首帧兜底);
+    // 只在局部选择器上定义的(如弹窗的 --modal-w)插件视图拿不到,不算
     const unknownVars = (() => {
       try {
         const code = readFileSync(join(home, 'agents', 'muse', 'Space', 'main.js'), 'utf8');
         const hostCss = readFileSync(join(root, '..', 'desktop', 'frontend', 'src', 'styles', 'base.css'), 'utf8');
-        const host = new Set([...hostCss.matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1]));
+        const host = new Set([...hostCss.matchAll(/[^{}]*:root[^{}]*\{([^{}]*)\}/g)].flatMap((b) => [...b[1].matchAll(/(--[\w-]+)\s*:/g)].map((m) => m[1])));
         return [...new Set([...code.matchAll(/var\(\s*(--[\w-]+)/g)].map((m) => m[1]))].filter((v) => !host.has(v));
       } catch { return null; }
     })();
