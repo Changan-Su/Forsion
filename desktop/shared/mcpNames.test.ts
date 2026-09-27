@@ -17,7 +17,7 @@ describe('MCP 保留名', () => {
     expect(sanitizeMcpServerName('dev.phone x')).toBe('dev_phone_x')
   })
 
-  it('写入只拦新出现的保留名;盘上存量放行(引擎加载时改名兜底,不把用户锁在设置外)', () => {
+  it('写入只拦新出现的保留名;盘上存量放行(引擎加载时跳过并在状态里报错,不把用户锁在设置外)', () => {
     expect(newReservedMcpNames({ github: {}, 'dev.phone': {} }, { github: {} })).toEqual(['dev.phone'])
     expect(newReservedMcpNames({ dev_old: {}, github: {} }, { dev_old: {} })).toEqual([])
     expect(newReservedMcpNames({ DEV: {} }, undefined)).toEqual(['DEV'])
