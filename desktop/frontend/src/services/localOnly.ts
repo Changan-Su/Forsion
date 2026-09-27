@@ -16,8 +16,8 @@ registerMessages({
     en: 'This action is only available on that device itself, not over a remote connection',
   },
   'unitpage.remoteCwd': {
-    zh: '远程会话不能使用这个工作目录（文件系统根目录、主目录和存放受保护配置的文件夹都不行），请换一个项目文件夹',
-    en: "A remote session can't use this working folder (the filesystem root, the home folder and folders holding protected configuration aren't allowed). Pick a project folder instead",
+    zh: '远程会话不能使用这个工作目录（文件系统根目录、主目录、存放受保护配置的文件夹，以及应用自己的数据目录都不行；网盘和 iCloud 里的项目可以），请换一个项目文件夹',
+    en: "A remote session can't use this working folder (the filesystem root, the home folder, folders holding protected configuration and apps' own data folders aren't allowed; projects in cloud drives and iCloud are fine). Pick a project folder instead",
   },
   'unitpage.remoteArgsOverride': {
     zh: '远程连接下不能修改审批的参数，请原样批准或拒绝；要改命令请在那台设备本机上操作',
