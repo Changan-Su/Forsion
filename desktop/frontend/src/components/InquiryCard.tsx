@@ -1,9 +1,9 @@
 /**
  * 询问卡(ask_user / exit_plan_mode):问题 + 选项按钮 + 自由输入;answered/expired 显示灰态。
- * 视觉对齐 ApprovalCard(边框卡片,token CSS)。
+ * 视觉对齐 ApprovalCard(边框卡片,token CSS)。待答时在输入框上方的托盘里;对话流里只留已答 / 过期的记录。
  */
 import React, { useState } from 'react'
-import { CircleHelp, Send, CheckSquare, Square, Loader2, Check, Pencil, Undo2 } from 'lucide-react'
+import { CircleHelp, Send, CheckSquare, Square, Loader2, Check, Pencil, Undo2, ClipboardList } from 'lucide-react'
 import type { InquiryRequest, TodoItem } from '../types'
 import { Markdown } from './Markdown'
 import { useI18n, registerMessages } from '../i18n'
@@ -20,6 +20,8 @@ registerMessages({
   'plan.doneApproved': { zh: '已批准', en: 'Approved' },
   'plan.doneRevised': { zh: '已批准（按你修订的版本）', en: 'Approved (your revised version)' },
   'plan.doneRejected': { zh: '已打回：{answer}', en: 'Sent back: {answer}' },
+  'plan.pointer': { zh: '等你拍板 · 在输入框上方', en: 'Waiting for your decision · above the input box' },
+  'plan.decisionTitle': { zh: '计划等你拍板（正文见对话里的计划卡）', en: 'The plan needs your decision (full text in the plan card above)' },
 })
 
 export const InquiryCard: React.FC<{
@@ -104,40 +106,15 @@ function splitPlanAnswer(answer: string): { head: string; revised?: string } {
 }
 
 /**
- * 计划卡(P2):计划模式下 agent 提交的实施计划(plan 事件)+ 三态决策。
- * 有配对的 kind='plan' 询问时给按钮:批准(自动/手动开始)、编辑后批准、打回(带反馈)、拒绝;
- * 无询问(重载后的历史 / 已过期)则只渲染计划正文。
+ * 计划卡(P2):计划模式下 agent 提交的实施计划(plan 事件)。正文是要读的内容,留在对话流里;
+ * 拍板(批准 / 手动开始 / 编辑后批准 / 打回 / 拒绝)在输入框上方的托盘里(PlanDecision)。
+ * 待决时卡上只留一行指路;已兑现显示裁决,按修订版执行的就展示那一版。
  */
-export const PlanCard: React.FC<{
-  plan: string
-  req?: InquiryRequest
-  /** 返回 false = 没送达(网络/非 2xx)→ 解锁按钮让用户重试。 */
-  onAnswer?: (answer: string) => void | Promise<boolean | void>
-}> = ({ plan, req, onAnswer }) => {
+export const PlanCard: React.FC<{ plan: string; req?: InquiryRequest }> = ({ plan, req }) => {
   const { t } = useI18n()
-  const [draft, setDraft] = useState(plan)
-  const [editing, setEditing] = useState(false)
-  const [feedback, setFeedback] = useState('')
-  const [showFeedback, setShowFeedback] = useState(false)
-  // 本地已发标记:兑现要等 inquiry_result 事件回来才置灰,这中间不锁的话会重复提交(第二次 410)。
-  const [sent, setSent] = useState(false)
-  const pending = !!req && req.status === 'pending' && !!onAnswer && !sent
-  const answer = (a: string): void => {
-    setSent(true)
-    // 没送达就解锁:否则决策按钮永久置灰,这张卡成死路(状态只在 inquiry_result 回来时才变)。
-    void Promise.resolve(onAnswer!(a)).then((ok) => { if (ok === false) setSent(false) }, () => setSent(false))
-  }
   const answered = req?.status === 'answered' ? splitPlanAnswer(req.answer || '') : null
   // 已按修订版执行 → 卡里展示的就该是那一版(它才是正在执行的东西)。
-  const body = answered?.revised || (editing ? draft : plan)
-
-  const approve = (auto: boolean): void => {
-    if (!pending) return
-    const head = auto ? PLAN_APPROVE_AUTO : PLAN_APPROVE_MANUAL
-    const revised = editing && draft.trim() && draft !== plan ? draft.trim() : ''
-    answer(revised ? `${head}${PLAN_REVISION_MARK}${revised}` : head)
-  }
-
+  const body = answered?.revised || plan
   return (
     <div className="plan-card">
       <div className="tg-card-title">
@@ -151,7 +128,45 @@ export const PlanCard: React.FC<{
         )}
         {req?.status === 'expired' && <span className="plan-verdict">{t('inquiry.expired')}</span>}
       </div>
-      {editing ? (
+      {/* anchorPrefix 故意不传:计划标题不该混进这条消息的浮动目录。 */}
+      <div className="plan-body"><Markdown content={body} /></div>
+      {req?.status === 'pending' && (
+        <div className="t2-dim t2-apv-pointer" data-plan-pointer={req.inquiryId}>
+          <ClipboardList size={12} /> {t('plan.pointer')}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * 计划的拍板区(托盘里,见 views/chat2/ApprovalTray):批准(自动 / 手动开始)、编辑后批准、打回(带反馈)、拒绝。
+ * 回传的字面量与引擎 parsePlanAnswer 逐字对齐(见上方常量,planWire.test.ts 钉住)。
+ */
+export const PlanDecision: React.FC<{
+  plan: string
+  req: InquiryRequest
+  /** 已送出、等回执(锁在托盘层,卡片切走再切回也不丢);没送达时托盘会解锁。 */
+  busy?: boolean
+  onAnswer: (answer: string) => void
+}> = ({ plan, req, busy, onAnswer }) => {
+  const { t } = useI18n()
+  const [draft, setDraft] = useState(plan)
+  const [editing, setEditing] = useState(false)
+  const [feedback, setFeedback] = useState('')
+  const [showFeedback, setShowFeedback] = useState(false)
+  const pending = req.status === 'pending' && !busy
+  const answer = (a: string): void => { if (pending) onAnswer(a) }
+  const approve = (auto: boolean): void => {
+    if (!pending) return
+    const head = auto ? PLAN_APPROVE_AUTO : PLAN_APPROVE_MANUAL
+    const revised = editing && draft.trim() && draft !== plan ? draft.trim() : ''
+    answer(revised ? `${head}${PLAN_REVISION_MARK}${revised}` : head)
+  }
+  return (
+    <div className="plan-decision" data-plan-decision={req.inquiryId}>
+      <div className="plan-decision-title"><ClipboardList size={15} /> {t('plan.decisionTitle')}</div>
+      {editing && (
         <textarea
           className="approval-edit plan-edit"
           value={draft}
@@ -159,47 +174,40 @@ export const PlanCard: React.FC<{
           spellCheck={false}
           autoFocus
         />
-      ) : (
-        // anchorPrefix 故意不传:计划标题不该混进这条消息的浮动目录。
-        <div className="plan-body"><Markdown content={body} /></div>
       )}
-      {pending && (
-        <>
-          <div className="approval-actions">
-            <button className="btn primary sm" onClick={() => approve(true)}>
-              <Check size={13} /> {editing && draft !== plan ? t('plan.approveEditedGo') : t('plan.approveGo')}
-            </button>
-            <button className="btn ghost sm" onClick={() => approve(false)}>{t('plan.approveManual')}</button>
-            <button className="btn ghost sm" onClick={() => { setEditing((v) => !v); setDraft(plan) }}>
-              <Pencil size={13} /> {editing ? t('common.cancel') : t('plan.edit')}
-            </button>
-            <button className="btn ghost sm" onClick={() => setShowFeedback((v) => !v)}>
-              <Undo2 size={13} /> {t('plan.sendBack')}
-            </button>
-            <button className="btn danger sm" onClick={() => answer(PLAN_REJECT)}>{t('plan.reject')}</button>
-          </div>
-          {showFeedback && (
-            // 打回必须带反馈:光说「需要修改」模型拿不到可操作信息,下一版大概率照旧。
-            <div className="inquiry-input">
-              <input
-                type="text"
-                className="inline-input"
-                value={feedback}
-                placeholder={t('plan.feedbackPlaceholder')}
-                onChange={(e) => setFeedback(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && feedback.trim() && !e.nativeEvent.isComposing) {
-                    e.preventDefault()
-                    answer(feedback.trim())
-                  }
-                }}
-              />
-              <button className="btn primary sm" disabled={!feedback.trim()} onClick={() => feedback.trim() && answer(feedback.trim())}>
-                <Send size={12} /> {t('plan.sendFeedback')}
-              </button>
-            </div>
-          )}
-        </>
+      <div className="approval-actions">
+        <button className="btn primary sm" disabled={!pending} onClick={() => approve(true)}>
+          <Check size={13} /> {editing && draft !== plan ? t('plan.approveEditedGo') : t('plan.approveGo')}
+        </button>
+        <button className="btn ghost sm" disabled={!pending} onClick={() => approve(false)}>{t('plan.approveManual')}</button>
+        <button className="btn ghost sm" disabled={!pending} onClick={() => { setEditing((v) => !v); setDraft(plan) }}>
+          <Pencil size={13} /> {editing ? t('common.cancel') : t('plan.edit')}
+        </button>
+        <button className="btn ghost sm" disabled={!pending} onClick={() => setShowFeedback((v) => !v)}>
+          <Undo2 size={13} /> {t('plan.sendBack')}
+        </button>
+        <button className="btn danger sm" disabled={!pending} onClick={() => answer(PLAN_REJECT)}>{t('plan.reject')}</button>
+      </div>
+      {showFeedback && (
+        // 打回必须带反馈:光说「需要修改」模型拿不到可操作信息,下一版大概率照旧。
+        <div className="inquiry-input">
+          <input
+            type="text"
+            className="inline-input"
+            value={feedback}
+            placeholder={t('plan.feedbackPlaceholder')}
+            onChange={(e) => setFeedback(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && feedback.trim() && pending && !e.nativeEvent.isComposing) {
+                e.preventDefault()
+                answer(feedback.trim())
+              }
+            }}
+          />
+          <button className="btn primary sm" disabled={!feedback.trim() || !pending} onClick={() => feedback.trim() && answer(feedback.trim())}>
+            <Send size={12} /> {t('plan.sendFeedback')}
+          </button>
+        </div>
       )}
     </div>
   )

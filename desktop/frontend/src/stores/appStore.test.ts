@@ -8,6 +8,17 @@ import { translationValues } from '../i18n'
 
 // 助手消息身份还原:历史/重载的助手消息按「每条存的 agent_slug」显示真实作者,
 // 否则只能回退到「会话默认 agent」(就是 Christina 被显示成默认 Tangu Arioso 的 bug)。
+describe('recordToUi 挂起的工具调用', () => {
+  it('落库的占位结果带 parked → 重载后工具卡仍认得出是「当时挂起」', () => {
+    const m = recordToUi({
+      id: 'x', role: 'model', content: '', timestamp: 1,
+      tool_calls: [{ id: 'pk1', function: { name: 'run_bash', arguments: '{}' } }, { id: 'ok1', function: { name: 'read_file', arguments: '{}' } }],
+      tool_results: [{ tool_call_id: 'pk1', content: 'Waiting…', parked: true }, { tool_call_id: 'ok1', content: 'text' }],
+    })
+    expect(m.toolEvents?.map((e) => e.parked)).toEqual([true, undefined])
+  })
+})
+
 describe('recordToUi agent 身份', () => {
   const resolveGroup = (name: string) => (name === 'Host' ? { slug: '__host__', color: '#000' } : { color: '#111' })
   const resolveSlug = (slug: string) => ({ christina: 'Christina', xyra: 'Tangu Arioso' }[slug])
@@ -250,6 +261,44 @@ describe('appStore.reduceEvent', () => {
     expect(ref.current).toBe('a2')
     expect(state.subChatsBySession.s1[0]).toMatchObject({ id: 'sub1', streaming: false })
     expect(state.subChatsBySession.s1[0].segs).toHaveLength(2)
+  })
+
+  it('run 收尾(done / error)把本 run 挂在**更早段**上的待批审批与询问一并置过期,别的 run 的不碰', () => {
+    const pend = (id: string, runId: string) => ({ approvalId: id, runId, name: 'run_bash', preview: `$ ${id}`, status: 'pending' as const })
+    for (const terminal of ['done', 'error'] as const) {
+      useApp.setState({
+        runningBySession: { s1: 'r1' },
+        messagesBySession: { s1: [
+          { ...assistant(), id: 'seg1', status: 'done', approvals: [pend('early', 'r1'), pend('child', 'r-other')],
+            inquiries: [{ inquiryId: 'q-early', runId: 'r1', question: '?', options: [], status: 'pending' }] },
+          { ...assistant(), id: 'a1' },
+        ] },
+      })
+      useApp.getState().reduceEvent('s1', 'r1', { current: 'a1' }, { seq: 1, type: terminal, payload: terminal === 'done' ? { content: 'ok' } : { error: 'boom' } } as AgentRunEvent)
+      const seg1 = useApp.getState().messagesBySession.s1.find((m) => m.id === 'seg1')!
+      expect(seg1.approvals?.map((a) => [a.approvalId, a.status]), terminal).toEqual([['early', 'expired'], ['child', 'pending']])
+      expect(seg1.inquiries?.[0].status, terminal).toBe('expired')
+    }
+  })
+
+  it('挂起的调用:占位结果标 parked,切段之后迟到的真结果回填**原来那段**的工具卡', () => {
+    const ref = { current: 'a1' }
+    const emit = (type: string, payload: Record<string, unknown>) => useApp.getState().reduceEvent('s1', 'r1', ref, { seq: 1, type, payload } as AgentRunEvent)
+    emit('tool_call', { id: 'pk1', name: 'run_bash', arguments: '{"command":"npm publish"}' })
+    emit('tool_result', { id: 'pk1', name: 'run_bash', result: 'Waiting…', parked: true })
+    emit('approval_request', { approvalId: 'pa1', name: 'run_bash', preview: '$ npm publish', toolCallId: 'pk1' })
+    let a1 = useApp.getState().messagesBySession.s1.find((m) => m.id === 'a1')!
+    expect(a1.toolEvents?.[0]).toMatchObject({ id: 'pk1', parked: true, done: true })
+    expect(a1.approvals?.[0]).toMatchObject({ toolCallId: 'pk1', status: 'pending' })
+    emit('turn_boundary', { finalizedAssistantId: 'a1', finalizedContent: '', userMessages: [{ id: 'u9', content: '<approval_update>\n[approved] run_bash (call pk1) — $ npm publish\n</approval_update>' }], newAssistantId: 'a2' })
+    expect(ref.current).toBe('a2')
+    // 拍板时 run 已切到 a2:结果事件也得找回挂在 a1 上的那张卡,不然它会一直留在托盘里
+    emit('approval_result', { approvalId: 'pa1', action: 'approve' })
+    expect(useApp.getState().messagesBySession.s1.find((m) => m.id === 'a1')?.approvals?.[0].status).toBe('approved')
+    emit('tool_result', { id: 'pk1', name: 'run_bash', result: 'published' })
+    a1 = useApp.getState().messagesBySession.s1.find((m) => m.id === 'a1')!
+    expect(a1.toolEvents?.[0]).toMatchObject({ id: 'pk1', result: 'published', parked: undefined })
+    expect(useApp.getState().messagesBySession.s1.find((m) => m.id === 'a2')?.toolEvents ?? []).toHaveLength(0)
   })
 
   it('status llm_call 落 live(sending→accepted 续用 since);首帧/工具/收尾即清', () => {
@@ -503,10 +552,62 @@ vi.mock('../services/backendService', async (orig) => ({
   restoreCheckpoint: (...a: unknown[]) => restoreCpMock(...a),
   deleteMessages: (...a: unknown[]) => deleteMsgsMock(...a),
 }))
+const resolveApprovalMock = vi.hoisted(() => vi.fn())
+const resolveInquiryMock = vi.hoisted(() => vi.fn())
 vi.mock('../services/agentRunService', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   startRun: (...a: unknown[]) => startRunMock(...a),
+  resolveApproval: (...a: unknown[]) => resolveApprovalMock(...a),
+  resolveInquiry: (...a: unknown[]) => resolveInquiryMock(...a),
 }))
+
+// 托盘里同一项被点了两下:第二下必然 410(引擎第一次兑现就先发回执再回 200)。回执可能先到,那张早已是
+// 「已批准 / 已回答」—— 从前 410 分支无条件置「已过期」,把已送达的决定改判成没送达(评审 09-27)。
+describe('兑现请求回 410 只动仍在等的项', () => {
+  const msg = (apv: string, inq: string): UiMessage => ({
+    id: 'm1', role: 'assistant', content: '', status: 'streaming', timestamp: 1,
+    approvals: [{ approvalId: 'a1', runId: 'r1', name: 'run_bash', preview: '$ x', status: apv as 'pending' }],
+    inquiries: [{ inquiryId: 'q1', runId: 'r1', question: '?', options: [], status: inq as 'pending', ...(inq === 'answered' ? { answer: 'yes' } : {}) }],
+  })
+  const state = () => useApp.getState().messagesBySession.s1[0]
+  beforeEach(() => {
+    useApp.setState(initial, true)
+    useApp.setState({ tr: ((k: string) => k) as AppState['tr'], toast: () => {}, activeId: 's1' })
+    resolveApprovalMock.mockReset()
+    resolveInquiryMock.mockReset()
+  })
+
+  it('已批准 / 已回答的遇到 410 保持原状,且算送达(托盘不解锁重发)', async () => {
+    useApp.setState({ messagesBySession: { s1: [msg('approved', 'answered')] } })
+    resolveApprovalMock.mockResolvedValue({ ok: false, gone: true })
+    resolveInquiryMock.mockResolvedValue({ ok: false, gone: true })
+    expect(await useApp.getState().decideApproval('m1', 'a1', 'approve')).toBe(true)
+    expect(await useApp.getState().answerInquiry('m1', 'q1', 'yes')).toBe(true)
+    expect(state().approvals?.[0].status).toBe('approved')
+    expect(state().inquiries?.[0].status).toBe('answered')
+  })
+
+  it('还在等的遇到 410 → 置过期(原语义不变)', async () => {
+    useApp.setState({ messagesBySession: { s1: [msg('pending', 'pending')] } })
+    resolveApprovalMock.mockResolvedValue({ ok: false, gone: true })
+    resolveInquiryMock.mockResolvedValue({ ok: false, gone: true })
+    await useApp.getState().decideApproval('m1', 'a1', 'approve')
+    await useApp.getState().answerInquiry('m1', 'q1', 'yes')
+    expect(state().approvals?.[0].status).toBe('expired')
+    expect(state().inquiries?.[0].status).toBe('expired')
+  })
+
+  it('审批没送达(网络错 / 超时 / 非 2xx)→ 返回 false,托盘据此解锁重试', async () => {
+    useApp.setState({ messagesBySession: { s1: [msg('pending', 'pending')] } })
+    resolveApprovalMock.mockRejectedValueOnce(new Error('Request timed out'))
+    expect(await useApp.getState().decideApproval('m1', 'a1', 'approve')).toBe(false)
+    resolveApprovalMock.mockResolvedValueOnce({ ok: false, gone: false })
+    expect(await useApp.getState().decideApproval('m1', 'a1', 'approve')).toBe(false)
+    resolveApprovalMock.mockResolvedValueOnce({ ok: true, gone: false })
+    expect(await useApp.getState().decideApproval('m1', 'a1', 'approve')).toBe(true)
+    expect(state().approvals?.[0].status).toBe('pending') // 状态只等引擎的 approval_result 改
+  })
+})
 
 // 新会话必须**当场把模型写进会话**,而不是等用户显式选了才写:用户靠的是「上次用哪个下次还用哪个」
 // (cfg.modelId),此时 newChatModel 是空的。不写进去 → 引擎按 profile.defaultModelId 建库 →

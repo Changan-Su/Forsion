@@ -52,6 +52,7 @@ registerMessages({
   'appstore.steerQueued': { zh: '插话已请求，将在安全边界接入；原任务继续保留。', en: 'Steering requested at the next safe boundary; the original task is preserved.' },
   'appstore.steerFailed': { zh: '暂未加速插话，消息仍保留在等待区：{e}', en: 'Could not expedite steering; your message remains queued: {e}' },
   'appstore.steerDiscardedCall': { zh: '插话中断了此工具调用的生成；工具尚未执行。', en: 'Steering interrupted this tool call during generation; it was not executed.' },
+  'approval.sendFail': { zh: '审批没送达：{e}，请重试', en: 'Approval was not delivered: {e} — please retry' },
   // 审批档 PUT 失败:引擎按存值审批,没存上就不能停在新档上
   'appstore.approvalSaveFailed': { zh: '审批档没能保存，已恢复为原来的档（{e}）', en: 'Couldn’t save the approval mode; restored the previous one ({e})' },
   'appstore.approvalSaveRaced': { zh: '审批档被更早的一次保存覆盖，已改为实际生效的档', en: 'An earlier save overwrote the approval mode; now showing the one in effect' },
@@ -134,6 +135,7 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
         result: res ? String(res.content ?? '') : undefined, isError: res?.isError || false,
         startedAt: res?.startedAt, elapsedMs: res?.elapsedMs, outputChars: res?.outputChars,
         parallelGroup: res?.parallelGroup, artifactPath: res?.artifactPath, done: true,
+        ...(res?.parked === true ? { parked: true } : {}),
         contentOffset: typeof rawOffset === 'number' && Number.isInteger(rawOffset) && rawOffset >= 0 ? rawOffset : undefined,
       }
     })
@@ -747,7 +749,8 @@ export interface AppState {
    *  ⚠️ 不在 store 里直接调 openSession:sessionNav 依赖 store,反向 import 会成环。 */
   setJumpTarget(sessionId: string, messageId?: string): void
   clearJumpTarget(): void
-  decideApproval(messageId: string, approvalId: string, action: 'approve' | 'approve_always' | 'reject', argsOverride?: Record<string, any>, sessionId?: string | null): Promise<void>
+  /** false = 没送达(网络 / 超时 / 非 2xx),托盘据此解锁重试;已不在等待(410)也算送达过了。 */
+  decideApproval(messageId: string, approvalId: string, action: 'approve' | 'approve_always' | 'reject', argsOverride?: Record<string, any>, sessionId?: string | null): Promise<boolean>
   /** 兑现一次询问。返回 false = 没送达(网络/非 2xx)→ 调用方(计划卡)得解锁按钮重试。 */
   answerInquiry(messageId: string, inquiryId: string, answer: string, sessionId?: string | null): Promise<boolean>
   /** Agent Desk:接收 desk_present 事件(白名单校验/静音/档位策略都在这)。 */
@@ -1073,8 +1076,13 @@ export const useApp = create<AppState>((set, get) => ({
           return { ...m, toolEvents: evs, segments: pushToolSeg(m.segments, pl.id), ...(m.live ? { live: undefined } : {}) }
         })
         break
-      case 'tool_result':
-        patchMessage(sessionId, assistantId, (m) => {
+      case 'tool_result': {
+        // 挂起的调用(审批托盘)在用户拍板后才出真结果,那时 run 早切到了后面的段 —— 按工具 id 找回它所在的消息。
+        const list = get().messagesBySession[sessionId] || []
+        const owner = list.find((m) => m.id === assistantId)?.toolEvents?.some((tt) => tt.id === pl.id)
+          ? assistantId
+          : [...list].reverse().find((m) => m.toolEvents?.some((tt) => tt.id === pl.id))?.id ?? assistantId
+        patchMessage(sessionId, owner, (m) => {
           const evs = (m.toolEvents || []).slice()
           const i = evs.findIndex((tt) => tt.id === pl.id)
           if (i >= 0) {
@@ -1082,6 +1090,7 @@ export const useApp = create<AppState>((set, get) => ({
               ...evs[i], result: String(pl.result ?? ''), isError: !!pl.isError, done: true,
               startedAt: pl.startedAt ?? evs[i].startedAt, elapsedMs: pl.elapsedMs, outputChars: pl.outputChars,
               parallelGroup: pl.parallelGroup ?? evs[i].parallelGroup, artifactPath: pl.artifactPath,
+              parked: pl.parked === true || undefined,
             }
             // sketch 完成即上卡(挂 tool_result 不挂 tool_call:引擎尺寸闸拒掉的不画;callId 去重防 SSE 重放双画)
             const sk = sketchFromToolEvent(evs[i])
@@ -1094,6 +1103,7 @@ export const useApp = create<AppState>((set, get) => ({
         if (!pl.isError) get().deskAutoShow(sessionId, String(pl.id)) // 成功:磁盘真身顶格(覆盖直播格)
         get().deskLiveClear(sessionId, String(pl.id)) // 失败/未切换成功的直播格残留在此清场(成功路径上是 no-op)
         break
+      }
       case 'display_file':
         patchMessage(sessionId, assistantId, (m) => ({
           ...m, displayFiles: [...(m.displayFiles || []), { name: pl.name, mime: pl.mime, path: pl.path, dataUrl: pl.dataUrl }],
@@ -1158,18 +1168,21 @@ export const useApp = create<AppState>((set, get) => ({
         // 用闭包常量 assistantId 会落到一条不存在的消息上 —— 一律走 ref.current)。
         patchMessage(sessionId, targetOf(pl), (m) => ({
           ...m, live: undefined, work: m.work ? { ...m.work, waiting: true } : m.work,
-          approvals: [...(m.approvals || []), { approvalId: pl.approvalId, runId: String(pl.runId || runId), name: pl.name, arguments: pl.arguments, preview: pl.preview || '', status: 'pending' as const, ...(reason ? { reason } : {}) }],
+          approvals: [...(m.approvals || []), { approvalId: pl.approvalId, runId: String(pl.runId || runId), name: pl.name, arguments: pl.arguments, preview: pl.preview || '', status: 'pending' as const, ...(reason ? { reason } : {}), ...(typeof pl.toolCallId === 'string' ? { toolCallId: pl.toolCallId } : {}) }],
         }))
         if (typeof pl.agentSlug === 'string') setTeamStatus(sessionId, pl.agentSlug, 'waiting')
         break
       }
-      case 'approval_result':
-        patchMessage(sessionId, targetOf(pl), (m) => ({
+      case 'approval_result': {
+        // 挂起的审批(托盘 run)拍板时 run 往往已切到后面的段:按 approvalId 找回挂着它的消息,否则卡会一直留在托盘里(Codex 09-27)
+        const owner = (get().messagesBySession[sessionId] || []).find((m) => m.approvals?.some((a) => a.approvalId === pl.approvalId))?.id ?? targetOf(pl)
+        patchMessage(sessionId, owner, (m) => ({
           ...m, work: m.work ? { ...m.work, waiting: false } : m.work,
           approvals: (m.approvals || []).map((a) => a.approvalId === pl.approvalId ? { ...a, status: pl.action === 'reject' ? ('rejected' as const) : ('approved' as const) } : a),
         }))
         if (typeof pl.agentSlug === 'string') setTeamStatus(sessionId, pl.agentSlug, 'working')
         break
+      }
       case 'session_title':
         // Historian 在 run 起点只凭用户消息出了标题 → 不等 done 后 6s 那次刷新。
         void get().refreshSessions(get().cfg).catch(() => {})
@@ -1482,6 +1495,7 @@ export const useApp = create<AppState>((set, get) => ({
           // 计划「批准并自动开始」:**先**消费本 run 的标记(endRun 会兜底清掉一切终结 run 的标记),
           // 再 endRun 清 running,最后发 kickoff(此刻无活跃 run → 正常起新 run 而非误走 steer)。
           const autoKick = planAutoStart.delete(runId)
+          expireRunPrompts(set, sessionId, runId)
           endRun(set, get, sessionId, runId)
           if (autoKick) void get().send(t('plan.autoKickoff'), [], undefined, undefined, undefined, sessionId)
         }
@@ -1496,6 +1510,7 @@ export const useApp = create<AppState>((set, get) => ({
           approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
           inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
         }))
+        expireRunPrompts(set, sessionId, runId)
         endRun(set, get, sessionId, runId) // planAutoStart 的作废清理在 endRun 里统一做(含 stop/看门狗路径)
         // 托管模式下 token 过期不会让本地端点 401,而是表现为 run 出错(后端→云端 401)。做一次真实 whoami 复检,
         // 仅确认凭证已失效才提示重登录(避免把模型/网络错误误判为过期)。
@@ -1667,6 +1682,7 @@ export const useApp = create<AppState>((set, get) => ({
       })
       stoppedRuns.add(runId)
       ac.abort() // 停掉还在空转的 SSE 重连循环
+      expireRunPrompts(set, sessionId, runId) // 引擎查实已不跑:它那边的审批早没了,托盘里别留死卡
       endRun(set, get, sessionId, runId)
     })() }, 30000))
     void subscribeRunEvents(get().cfg, runId, (ev) => get().reduceEvent(sessionId, runId, assistantRef, ev), ac.signal)
@@ -2846,11 +2862,24 @@ export const useApp = create<AppState>((set, get) => ({
 
   decideApproval: async (messageId, approvalId, action, argsOverride, targetSessionId) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
-    if (!sid) return
+    if (!sid) return false
     const approval = (get().messagesBySession[sid] || []).find((m) => m.id === messageId)?.approvals?.find((a) => a.approvalId === approvalId)
-    if (!approval?.runId) return
-    const r = await resolveApproval(get().cfg, approval.runId, approvalId, action, argsOverride)
-    if (r.gone) get().patchMessage(sid, messageId, (m) => ({ ...m, approvals: (m.approvals || []).map((a) => (a.approvalId === approvalId ? { ...a, status: 'expired' as const } : a)) }))
+    if (!approval?.runId) return false
+    let r: { ok: boolean; gone: boolean }
+    try {
+      r = await resolveApproval(get().cfg, approval.runId, approvalId, action, argsOverride)
+    } catch (e: any) {
+      get().toast(get().tr('approval.sendFail', { e: e?.message || e }), true)
+      return false
+    }
+    // 410 = 已不在等待。只把**仍待批**的那张置过期:重复点击时第二下必然 410,而 approval_result 可能已先到,
+    // 那张早就是「已批准」了 —— 无条件覆盖会把已送达的决定改判成「已过期」(评审 09-27)。
+    if (r.gone) {
+      get().patchMessage(sid, messageId, (m) => ({ ...m, approvals: (m.approvals || []).map((a) => (a.approvalId === approvalId && a.status === 'pending' ? { ...a, status: 'expired' as const } : a)) }))
+      return true
+    }
+    if (!r.ok) { get().toast(get().tr('approval.sendFail', { e: 'HTTP' }), true); return false }
+    return true
   },
 
   answerInquiry: async (messageId, inquiryId, answer, targetSessionId) => {
@@ -2867,7 +2896,8 @@ export const useApp = create<AppState>((set, get) => ({
       return false // 没送达:卡片解锁,用户能重试(否则决策按钮永久置灰=死路)
     }
     if (r.gone) {
-      get().patchMessage(sid, messageId, (m) => ({ ...m, inquiries: (m.inquiries || []).map((q) => (q.inquiryId === inquiryId ? { ...q, status: 'expired' as const } : q)) }))
+      // 只把仍待答的置过期(理由同 decideApproval:重复提交的第二下 410,回执可能已先到)
+      get().patchMessage(sid, messageId, (m) => ({ ...m, inquiries: (m.inquiries || []).map((q) => (q.inquiryId === inquiryId && q.status === 'pending' ? { ...q, status: 'expired' as const } : q)) }))
       return true
     }
     if (!r.ok) { get().toast(t('inquiry.sendFail', { e: 'HTTP' }), true); return false }
@@ -3296,6 +3326,29 @@ export function steerAcceptPatch(
   const stillRunning = s.runningBySession[sessionId] === runId
   if (already || !stillRunning) return sent
   return { ...sent, steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: [...(s.steerPendingBySession[sessionId] || []), item] } }
+}
+
+/** run 已确定终结(done / error / 看门狗查实引擎不在跑):该 run 的待批审批与询问一律置过期。
+ *  按 runId 扫整个会话 —— 待批的不一定挂在当前气泡上(run 往后跑会切段,审批托盘从全会话收集),
+ *  只置灰当前气泡会在托盘里留下永远批不动的死卡。SSE 断流那条路不调:引擎可能还在等,卡得留着能批
+ *  (真死了点一下会 410 → decideApproval 自己置灰)。 */
+function expireRunPrompts(set: (fn: (s: AppState) => Partial<AppState>) => void, sessionId: string, runId: string): void {
+  set((s) => {
+    const list = s.messagesBySession[sessionId]
+    const live = (m: UiMessage): boolean =>
+      !!m.approvals?.some((a) => a.runId === runId && a.status === 'pending') || !!m.inquiries?.some((q) => q.runId === runId && q.status === 'pending')
+    if (!list?.some(live)) return {}
+    return {
+      messagesBySession: {
+        ...s.messagesBySession,
+        [sessionId]: list.map((m) => (!live(m) ? m : {
+          ...m,
+          approvals: m.approvals?.map((a) => (a.runId === runId && a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
+          inquiries: m.inquiries?.map((q) => (q.runId === runId && q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
+        })),
+      },
+    }
+  })
 }
 
 /** run 结束清理(对齐 App.tsx endRun):删句柄/订阅 + 清 running + 非活跃则标未读。 */

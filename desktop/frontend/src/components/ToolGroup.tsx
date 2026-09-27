@@ -5,15 +5,19 @@
  * 复用 .tool-card-body/.label 样式;+增/-删 best-effort(算不出就只显目标)。
  */
 import React, { useMemo, useState } from 'react'
-import { ChevronRight, ChevronDown, XCircle, CheckCircle2, Terminal } from 'lucide-react'
+import { ChevronRight, ChevronDown, XCircle, CheckCircle2, Terminal, PauseCircle } from 'lucide-react'
 import { AnimatedCollapse } from './AnimatedUI'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
 import { registerMessages, useI18n } from '../i18n'
-import type { ToolEvent } from '../types'
+import type { ApprovalRequest, ToolEvent } from '../types'
 import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
 
 registerMessages({
+  'tool.parked.waiting': { zh: '已挂起，等你在输入框上方批准。Agent 先做别的，拍板后结果会补在这里。', en: 'Parked until you approve it above the input box. The agent carries on meanwhile; the result lands here once you decide.' },
+  'tool.parked.past': { zh: '当时挂起等你批准，结局见后面的审批结果。', en: 'This call was parked for your approval; see the approval result further down.' },
+  // 不写「在输入框上方」:紧挨着的指路行 / 计划卡 / 团队 work 行已经说了在哪答,这里再写一遍是重复
+  'tool.waitingYou': { zh: '等你回复', en: 'Waiting for your reply' },
   'tool.verb.readComputerHistory': { zh: '读取电脑历史', en: 'Read computer history' },
   'tool.computerHistory.notSaved': {
     zh: '电脑历史摘录已交给模型，不会保存在对话记录里。',
@@ -30,6 +34,9 @@ function toolResultText(ev: ToolEvent, t: (key: string) => string): string {
   if (ev.name === COMPUTER_HISTORY_TOOL && !ev.isError) return t('tool.computerHistory.notSaved')
   return ev.result || t('tool.empty')
 }
+
+/** 这两个工具就是「问你」本身:调用挂着 = 在等你在托盘里答,不是在跑,别用流光装忙。 */
+const ASKS_YOU = new Set(['ask_user', 'exit_plan_mode'])
 
 type Kind = 'write' | 'edit' | 'run' | 'read' | 'search' | 'browse' | 'other'
 interface Desc { kind: Kind; verbKey: string; target: string; adds?: number; dels?: number; isFile: boolean }
@@ -111,7 +118,7 @@ const Stat: React.FC<{ d: Desc }> = ({ d }) =>
     </span>
   ) : null
 
-const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean }> = ({ ev, desc, running }) => {
+const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: boolean; asking?: boolean }> = ({ ev, desc, running, waiting, asking }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   // 只在展开时构造 diff(P1:文件修改类工具详情渲染 diff 而非裸 JSON)
@@ -119,7 +126,7 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean }> = ({ ev
   const verb = desc.verbKey ? t(desc.verbKey) : ev.name
   // 工具结果帧可能在用户停止 run 时来不及抵达。此时 ev.done 仍为 false，
   // 但父消息已不再运行，不能继续显示「正在执行」的流光或 busy 语义。
-  const active = running && !ev.done
+  const active = running && !ev.done && !asking
   return (
     <div className="tool-row">
       <button className="tool-row-head" aria-busy={active} onClick={() => setOpen((o) => !o)}>
@@ -132,7 +139,9 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean }> = ({ ev
         </span>
         <Stat d={desc} />
         <span className="tool-row-status">
-          {ev.done && ev.isError ? <XCircle size={11} style={{ color: 'var(--danger)' }} /> : null}
+          {asking ? <PauseCircle size={11} style={{ color: 'var(--accent-ink)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>
+            : ev.parked ? <PauseCircle size={11} style={{ color: waiting ? 'var(--accent-ink)' : 'var(--text-faint)' }} />
+            : ev.done && ev.isError ? <XCircle size={11} style={{ color: 'var(--danger)' }} /> : null}
         </span>
       </button>
       <AnimatedCollapse open={open}>
@@ -148,14 +157,22 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean }> = ({ ev
               )}
             </>
           ) : ev.arguments ? (<><div className="label">{t('tool.argsLabel')}</div>{fmtArgs(ev.arguments)}</>) : null}
-          {ev.result !== undefined && (<><div className="label">{t('tool.resultLabel')}</div>{toolResultText(ev, t)}</>)}
+          {/* 挂起的占位结果是写给模型的英文说明,对人换成一句本地化的状态 */}
+          {ev.parked ? (<><div className="label">{t('tool.resultLabel')}</div>{t(waiting ? 'tool.parked.waiting' : 'tool.parked.past')}</>)
+            : ev.result !== undefined && (<><div className="label">{t('tool.resultLabel')}</div>{toolResultText(ev, t)}</>)}
         </div>
       </AnimatedCollapse>
     </div>
   )
 }
 
-export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean }> = ({ events, running }) => {
+export const ToolGroup: React.FC<{
+  events: ToolEvent[]
+  running?: boolean
+  approvals?: ApprovalRequest[]
+  /** 这条消息有待答的提问 / 计划拍板(托盘里):挂着的 ask_user / exit_plan_mode 显示「等你回复」而不是在跑。 */
+  awaitingAnswer?: boolean
+}> = ({ events, running, approvals, awaitingAnswer }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   if (!events.length) return null
@@ -174,11 +191,16 @@ export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean }> = (
   const order: Kind[] = ['write', 'edit', 'run', 'read', 'search', 'browse', 'other']
   const summary = order.filter((k) => counts[k] > 0).map((k) => t(SUM[k], { n: counts[k] })).join(' · ')
 
+  const asksYou = (e: ToolEvent): boolean => !!awaitingAnswer && !!running && !e.done && ASKS_YOU.has(e.name)
   const allDone = groupedEvents.every((e) => e.done)
   const anyErr = groupedEvents.some((e) => e.isError)
-  const active = !!running && groupedEvents.length > 0 && !allDone
+  // 挂起的调用「还在等你」= 它那张审批仍 pending(审批与工具卡按 toolCallId 对上;重载后审批不在 → 只算「当时挂起」)
+  const waitingIds = new Set((approvals || []).filter((a) => a.status === 'pending' && a.toolCallId).map((a) => a.toolCallId!))
+  const anyParked = groupedEvents.some((e) => e.parked)
   // 运行中:展示第一个未完成的调用作为「当前」;都完成则无。
   const curIdx = running ? groupedEvents.findIndex((e) => !e.done) : -1
+  const curAsks = curIdx >= 0 && asksYou(groupedEvents[curIdx])
+  const active = !!running && groupedEvents.length > 0 && !allDone && !curAsks
   const curDesc = curIdx >= 0 ? descs[curIdx] : null
   const curVerb = curDesc ? (curDesc.verbKey ? t(curDesc.verbKey) : groupedEvents[curIdx].name) : ''
 
@@ -189,7 +211,11 @@ export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean }> = (
           <button className="tool-group-head" aria-busy={active} onClick={() => setOpen((o) => !o)}>
             {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
             <Terminal size={12} className="tool-group-ic" />
-            {!open && curDesc ? (
+            {!open && curAsks ? (
+              <span className="tool-group-cur" data-waiting-you="1">
+                <span className="tool-group-cur-copy">{t('tool.waitingYou')}</span>
+              </span>
+            ) : !open && curDesc ? (
               <span className="tool-group-cur">
                 <span className="tool-group-cur-copy chat-run-shimmer-text">
                   {curVerb}{' '}
@@ -200,12 +226,13 @@ export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean }> = (
               <span className={`tool-group-sum${active ? ' chat-run-shimmer-text' : ''}`}>{summary}</span>
             )}
             <span className="tool-group-status">
-              {allDone ? (anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} /> : <CheckCircle2 size={13} style={{ color: 'var(--green)' }} />) : null}
+              {anyParked ? <PauseCircle size={13} style={{ color: groupedEvents.some((e) => e.parked && waitingIds.has(e.id)) ? 'var(--accent-ink)' : 'var(--text-faint)' }} />
+                : allDone ? (anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} /> : <CheckCircle2 size={13} style={{ color: 'var(--green)' }} />) : null}
             </span>
           </button>
           <AnimatedCollapse open={open}>
             <div className="tool-group-list">
-              {groupedEvents.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} running={!!running} />)}
+              {groupedEvents.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} running={!!running} waiting={waitingIds.has(ev.id)} asking={asksYou(ev)} />)}
             </div>
           </AnimatedCollapse>
         </div>

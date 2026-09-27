@@ -884,6 +884,8 @@ export interface ToolEvent {
   artifactPath?: string
   /** 历史恢复锚点:工具调用发生前,终稿正文中的 UTF-16 偏移。旧消息没有。 */
   contentOffset?: number
+  /** 审批挂起(托盘 run):调用没跑,agent 先干别的;用户拍板后同一 id 的真结果到达即清掉。落库的占位结果重载后仍带着它。 */
+  parked?: boolean
 }
 
 /** 助手一条消息的「顺序段」(直播归约期填充;新历史消息也可由工具锚点重建):
@@ -903,6 +905,8 @@ export interface ApprovalRequest {
   status: 'pending' | 'approved' | 'rejected' | 'expired'
   /** 「这次为什么问你」(B3)。旧事件没有这个字段 → 卡上不显示解释,不是错误。 */
   reason?: ApprovalReason
+  /** 对应的工具调用 id(挂起的工具卡据此判断「还在等你」还是早已了结)。旧事件没有。 */
+  toolCallId?: string
 }
 
 /** 引擎给出的审批判定理由。kind 由 reducer 白名单清洗,渲染层可以信任。 */

@@ -91,6 +91,8 @@ export async function startRun(
       //    所以哪怕目录为空也要送(送空数组 ≠ 不送)。目录随端而异是正确行为。
       ui_commands: buildCommandCatalog(),
       ui_settings: readUiSettings(),
+      // 同类握手:本端有输入框上方的审批托盘(views/chat2/ApprovalTray),待批卡能攒多张、各自兑现。
+      approval_tray: true,
       message: params.message,
       attachments: params.attachments || [],
       agent_config: params.agentConfig || {},
@@ -216,6 +218,7 @@ export async function resolveInquiry(
   const r = await authFetch(
     `${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/inquiries/${encodeURIComponent(inquiryId)}`,
     { method: 'POST', headers: headers(cfg.token), body: JSON.stringify({ answer }) },
+    { timeoutMs: DECIDE_TIMEOUT_MS },
   )
   return { ok: r.ok, gone: r.status === 410 }
 }
@@ -265,6 +268,9 @@ export async function sendDeskCapture(
 }
 
 /** 兑现一次 host-exec 审批。410 = 已不在等待(过期/他端已处理)。 */
+/** 审批 / 询问的兑现请求超时:托盘在回执前锁着这一项,请求挂住不返回就永远解不了锁(按「没送达」解锁、提示重试)。 */
+const DECIDE_TIMEOUT_MS = 15_000
+
 export async function resolveApproval(
   cfg: TanguDesktopConfig,
   runId: string,
@@ -275,6 +281,7 @@ export async function resolveApproval(
   const r = await authFetch(
     `${cfg.backendUrl}/agent/runs/${encodeURIComponent(runId)}/approvals/${encodeURIComponent(approvalId)}`,
     { method: 'POST', headers: headers(cfg.token), body: JSON.stringify({ action, argsOverride }) },
+    { timeoutMs: DECIDE_TIMEOUT_MS },
   )
   return { ok: r.ok, gone: r.status === 410 }
 }

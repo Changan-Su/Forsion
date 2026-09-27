@@ -221,6 +221,23 @@
   -webkit-backdrop-filter: var(--gl-blur-float);
 }
 
+/* 审批托盘(输入卡上沿,同样悬浮在正文之上):与输入卡同一档薄玻璃,材质同样画在 ::before(理由见上)。 */
+[data-theme='genesis-glass'] .t2c-apv {
+  background: transparent;
+  isolation: isolate;
+}
+[data-theme='genesis-glass'] .t2c-apv::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background: var(--gl-sheen), var(--gl-thin);
+  backdrop-filter: var(--gl-blur-float);
+  -webkit-backdrop-filter: var(--gl-blur-float);
+}
+
 /* ═══ 4a 菜单 / popover:Chatbox 同款磨砂 ═══
  * 默认菜单只比输入卡厚 8 个百分点,并共享同一层高光和 blur/saturate;这样仍看得到被打散的背景,
  * 不会因 84% 染色几乎实心而被误认成「只有半透明、没有磨砂」。侧栏物理兜底在本段后单独覆盖。
@@ -422,6 +439,7 @@
 }
 /* base.css 的通配符不匹配伪元素；三类材质代理必须显式停掉滤镜，性能开关才名副其实。 */
 :root[data-theme='genesis-glass'][data-glass='off'] .t2c-card::before,
+:root[data-theme='genesis-glass'][data-glass='off'] .t2c-apv::before,
 :root[data-theme='genesis-glass'][data-glass='off'] .composer-menu:is(.composer-menu--model, .composer-menu--mode, .composer-menu--add)::before,
 :root[data-theme='genesis-glass'][data-glass='off'] .cmd-overlay::before {
   backdrop-filter: none;

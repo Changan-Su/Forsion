@@ -44,4 +44,18 @@ describe('ToolGroup running visuals', () => {
     expect(host.querySelector('.tool-row-head')?.getAttribute('aria-busy')).toBe('false')
     expect(host.querySelector('.tool-row-copy-text')?.classList.contains('chat-run-shimmer-text')).toBe(false)
   })
+
+  it('ask_user waiting in the tray: no shimmer, and "waiting for you" on the collapsed head and on the expanded row', async () => {
+    const ask: ToolEvent = { id: 'tool-ask', name: 'ask_user', arguments: JSON.stringify({ question: 'npm or pnpm?' }), done: false }
+    await act(async () => root.render(React.createElement(ToolGroup, { events: [ask], running: true, awaitingAnswer: true })))
+    expect(host.querySelector('.tool-group [data-waiting-you]')).not.toBeNull()
+    expect(host.querySelectorAll('.chat-run-shimmer-text')).toHaveLength(0)
+    await act(async () => { (host.querySelector('.tool-group-head') as HTMLButtonElement).click() })
+    expect(host.querySelector('.tool-row-head [data-waiting-you]'), 'expanded row lost the waiting mark').not.toBeNull()
+    expect(host.querySelector('.tool-row-head')?.getAttribute('aria-busy')).toBe('false')
+    // answered / expired → back to the ordinary running look
+    await act(async () => root.render(React.createElement(ToolGroup, { events: [ask], running: true, awaitingAnswer: false })))
+    expect(host.querySelector('[data-waiting-you]')).toBeNull()
+    expect(host.querySelectorAll('.chat-run-shimmer-text').length).toBeGreaterThan(0)
+  })
 })

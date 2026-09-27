@@ -13,7 +13,7 @@ import { PROTOCOL_MARK } from '../llm/openaiCompat.js';
 import { realpathSync } from 'node:fs';
 import { publish, drain, cleanup } from './eventBus.js';
 import { makeUiSettingsUpdater } from './uiAck.js';
-import { gateToolCall, requestApproval, type ApprovalDecision, type ApprovalMode } from './approvals.js';
+import { gateToolCall, requestApproval, setApprovalTray, type ApprovalDecision, type ApprovalMode } from './approvals.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
 import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } from '../seams/runContext.js';
 import path from 'node:path';
@@ -171,6 +171,19 @@ export const TURN_INTERRUPTED_MARKER =
   '<turn_interrupted>\n' +
   'The user interrupted this turn on purpose. Any tool calls that were aborted may have partially executed; the task above is likely unfinished.\n' +
   '</turn_interrupted>';
+
+/** 挂起审批(托盘客户端,见 approvals.ParkedApproval)给模型的占位工具结果:调用**没跑**,别重试,先干别的,
+ *  结局稍后以 <approval_update> 送达(真输出替换这条占位,不进那一行);没别的可干就正常收尾 —— 收尾闸门会等用户拍板再把它叫醒。
+ *  「书写顺序不是依赖」只对互相独立的步骤成立:真实的前置条件(先备份再删)必须等 —— 别为了让台架先干别的而删掉这半句。 */
+export function parkedToolResult(preview: string): string {
+  return `⏸ Waiting for the user's approval: ${preview}\n` +
+    'This call has NOT run yet. It is queued in the user\'s approval tray and they may take a while. Do not retry or re-issue it, and do not stop to wait for it. ' +
+    'Keep going right now with every remaining step that neither needs this call\'s output nor relies on it having already happened. The order the user listed independent steps in is not by itself a dependency, but a real precondition is (for example, a backup that must finish before a delete): hold such steps until the <approval_update> arrives. ' +
+    'As soon as the user decides you will receive an <approval_update> message: if approved, the call runs with these exact arguments (or the user\'s edited version) and this placeholder is replaced by its real output; if rejected, it never runs. ' +
+    'If everything left depends on it, end your turn with a brief note; you will be resumed automatically with the outcome.';
+}
+/** 挂起调用的结局回灌(user 行,落库 —— 后续 run 回放要看得到批准后那次执行的输出)。桌面按开头标记渲染成一行通知。 */
+export const APPROVAL_UPDATE_OPEN = '<approval_update>';
 
 // assistantTurnOf(续跑轮的 assistant 消息构造器)已移到 services/contextBudget.ts —— 子代理也要用它,
 // 而 agentLoop → tools/registry → builtin/delegate → subAgent 已是一条链,反向 import 会成环。
@@ -900,6 +913,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     input.background === 'muse' && (agentConfig.approvalDeferral === 'queue' || agentConfig.approvalDeferral === 'agent')
       ? agentConfig.approvalDeferral
       : undefined;
+  // 审批托盘(客户端握手,见 routes/runs.ts):待批卡攒在输入框上方各自兑现 → 本 run 的审批不再串行。
+  const approvalTray = input.approvalTray === true && !approvalDeferral;
 
   // 计划模式(类 Claude plan mode):工具集收敛为只读 + exit_plan_mode(toolRegistry 集中过滤),
   // custom/MCP 工具整体跳过;run 级冻结——批准退出后下一轮 run 才拿到完整工具集。
@@ -961,14 +976,22 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     allToolCalls.push(...calls.map((call) => ({ ...call, ui_content_offset })));
   };
   const allToolResults: any[] = [];
+  // 已落库、但还挂着没兑现的挂起调用的段(托盘 run):留一份快照,兑现后按同一 id 再 finalize 一次(upsert),
+  // 把真结果写回那一行 —— 重载 / 后续 run 回放看到的是真结果,不是占位。
+  const finalizedWithParked = new Map<string, { content: string; reasoning: string; toolCalls: any[]; toolResults: any[]; displayFiles: DisplayFileItem[] }>();
   // agent 在对话区展示给用户的文件(display_file/generate_image/表情包);函数级声明,使 catch(中止)路径也能持久化。
   const pendingDisplayFiles: DisplayFileItem[] = [];
+  // 挂起审批的寿命(托盘 run 的 gateToolCall 信号):随 run 中止,run 收尾(finally)也撤 —— 否则 run 都结束了,
+  // 用户再点「批准」还能拿到 200,界面说批了、却什么都不会发生。
+  const parkAc = new AbortController();
+  ac.signal.addEventListener('abort', () => parkAc.abort(), { once: true });
   // 当前正在累积的助手消息 id;steer 注入时 finalize 当前段、改用新 id 续接下一段(见迭代循环)。
   let currentAssistantId = run.assistant_message_id || uuidv4();
   // 压缩检查点的「段落库后补落」钩子:函数级声明,catch(中止落半截)路径也要调;真身在 workingMessages 就位后赋值。
   let settleCheckpointAfterFinalize: (messageId: string) => Promise<void> = async () => {};
 
   try {
+    if (approvalTray) setApprovalTray(runId, true);
     runHostSandbox = execMode === 'host' ? resolveHostSandboxPolicy() : undefined;
     await updateRunStatus(runId, 'running');
     await publish(runId, 'status', { state: 'running' });
@@ -1722,8 +1745,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const finalizedId = currentAssistantId;
       const finalizedContent = finalContent;
       if (finalContent.trim() || allToolCalls.length) {
-        await finalizeAssistantMessage(finalizedId, sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, pendingDisplayFiles.splice(0));
+        const files = pendingDisplayFiles.splice(0);
+        await finalizeAssistantMessage(finalizedId, sessionId, modelId, finalContent, finalReasoning, allToolCalls, allToolResults, files);
         await settleCheckpointAfterFinalize(finalizedId);
+        if (allToolResults.some((r) => r?.parked)) {
+          finalizedWithParked.set(finalizedId, { content: finalContent, reasoning: finalReasoning, toolCalls: [...allToolCalls], toolResults: [...allToolResults], displayFiles: files });
+        }
       }
       for (const m of msgs) {
         await deps().state.insertUserMessage({
@@ -1867,6 +1894,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       toolResult: any;
       toolMessage: ChatMessage;
     };
+    // 挂起的调用(托盘 run):tool_call id → 待兑现项。decided 兑现时记下决定与先后(seq),迭代边界按拍板先后执行。
+    // preCtxText:PreToolUse 在挂起前注入的上下文 —— 占位里带着它,兑现后写回的真结果也要带,否则原位替换时就丢了(Codex 09-27 第二轮)。
+    interface ParkedCall { call: ToolCall; effCall: ToolCall; preview: string; preCtxText: string; parallelGroup?: string; decision?: ApprovalDecision; seq?: number }
+    const parked = new Map<string, ParkedCall>();
+    let parkedSeq = 0;
+    let parkedWake: (() => void) | null = null; // 收尾闸门等拍板时挂的唤醒
     const MAX_PARALLEL_TOOL_CALLS = Math.max(1, Number(process.env.TANGU_TOOL_PARALLELISM) || 4);
     const canRunToolInParallel = (call: ToolCall): boolean => {
       const caps = getToolCapabilities(call.function.name, toolCtx);
@@ -1922,20 +1955,37 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const preCtxText = hookContextText(preV); // PreToolUse 注入的上下文 → 拼进本工具结果尾部（保序）
 
       // host-exec 审批闸门：execMode!=='host' 时立即放行（无 await、无事件）→ server/worker 零影响。
+      // 托盘 run:要问用户的调用挂起(park)——审批请求照发、不等,先给模型占位结果,拍板后在迭代边界兑现。
       const decision = await gateToolCall(runId, effCall, {
         sessionId, execMode, approvalMode, modeSessionId, cwd, extraRoots, profile,
-        approvalDeferral, userId, agentSlug: activeAgentSlug,
-      }, ac.signal);
+        approvalDeferral, userId, agentSlug: activeAgentSlug, park: approvalTray,
+      }, approvalTray ? parkAc.signal : ac.signal);
 
       if (ac.signal.aborted) throw new AbortLikeError();
+      if (decision.action === 'park') {
+        const entry: ParkedCall = { call, effCall, preview: decision.preview, preCtxText, parallelGroup };
+        parked.set(call.id, entry);
+        void decision.decided.then((d) => { entry.decision = d; entry.seq = ++parkedSeq; parkedWake?.(); });
+        const msg = parkedToolResult(decision.preview);
+        const elapsedMs = Date.now() - startedAt;
+        await publish(runId, 'tool_result', { id: call.id, name: call.function.name, result: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup });
+        return {
+          toolResult: { tool_call_id: call.id, name: call.function.name, content: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup },
+          toolMessage: { role: 'tool', content: preCtxText ? `${msg}\n\n${preCtxText}` : msg, tool_call_id: call.id } as ChatMessage,
+        };
+      }
       if (decision.action === 'reject') {
         // 规则自动拒绝时带上是哪条规则挡的(用户拒绝仍是原文案)
         return mkRejected(call, startedAt, parallelGroup, decision.rejectReason || '用户拒绝了该操作。');
       }
-      // 审批时用户改了参数（如修订 bash 命令）→ 用覆盖后的参数执行。
-      const execCall = decision.argsOverride
-        ? { ...effCall, function: { ...effCall.function, arguments: JSON.stringify(decision.argsOverride) } }
-        : effCall;
+      return runApprovedCall(call, withArgsOverride(effCall, decision), startedAt, parallelGroup, preCtxText);
+    };
+    // 审批时用户改了参数（如修订 bash 命令）→ 用覆盖后的参数执行。
+    const withArgsOverride = (effCall: ToolCall, d: ApprovalDecision): ToolCall => (d.argsOverride
+      ? { ...effCall, function: { ...effCall.function, arguments: JSON.stringify(d.argsOverride) } }
+      : effCall);
+    // 放行之后的执行段:执行 → 封顶 → tool_result → PostToolUse。常规调用与「挂起后被批准」的调用共用这一条路。
+    const runApprovedCall = async (call: ToolCall, execCall: ToolCall, startedAt: number, parallelGroup: string | undefined, preCtxText: string): Promise<ExecutedToolCall> => {
       const result = await executeTool(execCall, toolCtx);
       // 入列硬帽(写入即定型,append-only):各工具自有更小的帽,这里兜未封顶路径
       // (host list_dir 大目录、custom provider 等),保证单条结果不可能把上下文炸穿。
@@ -2017,6 +2067,86 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         i += batch.length;
       }
       return toolResults;
+    };
+    /** 挂起调用兑现后,把结果放回它原来的位置:模型面 = 工具消息原位(仍是工具数据,不升格成用户话);落库面 = 所在段的
+     *  tool_results(段还在累积 → 改累加器,随段落库;段已落库 → 用快照按同一 id 再 finalize,upsert 覆盖)。
+     *  返回模型上下文里还找不找得到那条工具消息(压缩可能已把它折进摘要)。 */
+    const putBackParkedResult = async (callId: string, done: ExecutedToolCall): Promise<boolean> => {
+      const i = workingMessages.findIndex((m) => m.role === 'tool' && (m as any).tool_call_id === callId);
+      // 原位改 content、**不换对象**:段落库后 settleCheckpointAfterFinalize 按对象身份给它挂了来源行(压缩边界靠它认
+      // 「这条已落库、属于哪一行」),换对象 = 丢标记,下次落库会被错标成后面那一段。
+      if (i >= 0) (workingMessages[i] as { content: unknown }).content = done.toolMessage.content;
+      const j = allToolResults.findIndex((r) => r?.tool_call_id === callId);
+      if (j >= 0) allToolResults[j] = done.toolResult;
+      else {
+        for (const [segId, snap] of finalizedWithParked) {
+          const k = snap.toolResults.findIndex((r) => r?.tool_call_id === callId);
+          if (k < 0) continue;
+          snap.toolResults[k] = done.toolResult;
+          await finalizeAssistantMessage(segId, sessionId, modelId, snap.content, snap.reasoning, snap.toolCalls, snap.toolResults, snap.displayFiles);
+          if (!snap.toolResults.some((r) => r?.parked)) finalizedWithParked.delete(segId);
+          break;
+        }
+      }
+      return i >= 0;
+    };
+    /** 用户已拍板的挂起调用:按拍板先后逐个兑现(批准 → 按原参数或用户改过的参数执行;拒绝 → 不执行)。真结果放回
+     *  各自的工具消息(putBackParkedResult);交给模型的 <approval_update> 只有引擎自己写的拍板结论,**绝不带工具输出**
+     *  —— 输出是不可信数据,拼进 user 消息等于给它用户的身份(Codex 09-27 P1)。
+     *  只在迭代边界调:与循环自己的工具串行。某一项执行抛错只记成该项失败,不连累已执行的那些(它们的结果已写回)。 */
+    const settleParkedCalls = async (): Promise<SteerMsg[]> => {
+      const ready = [...parked.values()].filter((e) => e.decision).sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+      if (!ready.length) return [];
+      const parts: string[] = [];
+      for (const e of ready) {
+        if (ac.signal.aborted) throw new AbortLikeError();
+        parked.delete(e.call.id);
+        const d = e.decision!;
+        let status: 'approved' | 'failed' | 'rejected';
+        let uncertain = false;
+        let done: ExecutedToolCall;
+        if (d.action === 'reject') {
+          status = 'rejected';
+          done = await mkRejected(e.call, Date.now(), e.parallelGroup, d.rejectReason || '用户拒绝了该操作。');
+        } else {
+          try {
+            done = await runApprovedCall(e.call, withArgsOverride(e.effCall, d), Date.now(), e.parallelGroup, e.preCtxText);
+            status = done.toolResult.isError ? 'failed' : 'approved';
+          } catch (err: any) {
+            if (ac.signal.aborted || err instanceof AbortLikeError) throw err;
+            // 抛到这里的(容器清理失败 / MCP 远端调用断连 / 执行完发布结果时出错)都发生在执行开始之后:它可能已经生效。
+            // 说成「失败」会诱导模型重试 → 副作用做两遍(Codex 09-27 第二轮 P1)。如实写「结局不确定,先核查再决定」。
+            status = 'failed';
+            uncertain = true;
+            done = await mkRejected(e.call, Date.now(), e.parallelGroup, `Error: ${err?.message || err}\nThe call was approved and started, but it raised an error before its result was recorded, so it may already have taken effect. Check the current state before retrying; do not repeat it blindly.`);
+          }
+        }
+        const inContext = await putBackParkedResult(e.call.id, done);
+        const said = status === 'rejected' ? 'It was NOT run; that call\'s result above now says so.'
+          : uncertain ? 'It was started but raised an error before its result was recorded, so it may already have taken effect; verify the current state before retrying.'
+          : status === 'failed' ? 'It ran and failed; the error is now that call\'s result above.'
+            : 'It has run; its output is now that call\'s result above.';
+        parts.push(`[${status}] ${e.call.function.name} (call ${e.call.id}) — ${e.preview.split('\n')[0].slice(0, 200)}\n${said}` +
+          (d.action !== 'reject' && d.argsOverride ? `\nThe user edited the arguments before approving; it ran with: ${JSON.stringify(d.argsOverride)}` : '') +
+          (inContext ? '' : '\n(That call is no longer in your context window; check the current state with a read-only tool if you need its result.)'));
+      }
+      return [{
+        id: uuidv4(),
+        content: `${APPROVAL_UPDATE_OPEN}\nThe user has decided on tool calls that were waiting for approval:\n\n${parts.join('\n\n')}\n</approval_update>`,
+      }];
+    };
+    /** 收尾闸门用:还有挂起项、模型已无别的可干 → 等到有东西可交(任一张拍板 / 用户插话);中止即抛。 */
+    const waitForParked = async (): Promise<void> => {
+      while (![...parked.values()].some((e) => e.decision) && !steerQueue.get(runId)?.length) {
+        await new Promise<void>((resolve, reject) => {
+          const settle = (): void => { parkedWake = null; ac.signal.removeEventListener('abort', onAbort); };
+          const onAbort = (): void => { settle(); reject(new AbortLikeError()); };
+          parkedWake = () => { settle(); resolve(); };
+          if (ac.signal.aborted) return onAbort();
+          ac.signal.addEventListener('abort', onAbort, { once: true });
+          void waitSteer(runId).then(() => parkedWake?.());
+        });
+      }
     };
 
     // 直连(BYOK/订阅)模型不依赖 Forsion 云端:未登录时 getUserById 打云端会 401,曾把纯本地
@@ -2119,8 +2249,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
       toolsOverhead = toolDefs?.length ? estimateTokensRough(toolsJson) : 0;
       // 迭代边界注入运行时转向消息(在压缩 / 模型调用之前 → 新 U 参与上下文与折叠 tail 计算)。
+      // 已拍板的挂起调用也在这里兑现:结局在前、插话在后,一次切段。
       const steered = drainSteer(runId);
-      if (steered.length) await applySteering(steered);
+      const outcomes = parked.size ? await settleParkedCalls() : [];
+      if (steered.length || outcomes.length) await applySteering([...outcomes, ...steered]);
 
       // 每轮前复查配额（多轮 run 可能远超首轮预估）
       const stepPre = await canConsumeTokenPoints(user.id, estCost);
@@ -2484,6 +2616,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           if (lastIter) iteration -= 1; // accepted input must be answered even at the final boundary
           continue;
         }
+        // 还有挂起的审批:模型已没别的可干(占位结果里叫它这时正常收尾),这里就是那声「自动唤醒」——
+        // 等用户拍板(任一张)或插话,把结局交回去续跑;停止即走中止路径。
+        if (parked.size) {
+          if (res.content || res.outputItems?.length) workingMessages.push(assistantTurnOf(res, res.content || ''));
+          void publish(runId, 'status', { phase: 'awaiting_approval', pending: parked.size }); // 时间线 / 台架的观测点(桌面不认的 status 直接忽略)
+          await waitForParked();
+          await applySteering([...(await settleParkedCalls()), ...drainSteer(runId)]);
+          if (lastIter) iteration -= 1; // 迟到的结局也必须有人读
+          continue;
+        }
         // —— Stop hook：run 自然收尾即触发（host-only；云端 no-op）。decision:block+reason → 复用 steer 机制
         //    强制续跑（非末轮），否则纯 side-effect（通知/webhook/日志）。——
         const stopV = await runHooks('Stop', {
@@ -2784,6 +2926,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   } finally {
     // 兜底 snapshot（失败/中止路径未走到成功段时）；会话沙箱保持温，由空闲 TTL reaper 回收。
     await flush();
+    parkAc.abort(); // 没等到拍板的挂起审批一并撤掉(登记表清空 → 事后点批准回 410)
+    setApprovalTray(runId, false);
     abortControllers.delete(runId);
     steerQueue.delete(runId); // 丢弃尚未注入的转向消息(run 已终结)
     immediateSteers.delete(runId);

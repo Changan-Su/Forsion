@@ -112,6 +112,42 @@ export function catalogForDefaultSlot(models: ModelInfo[], slot: DefaultModelSlo
 
 /** 仅当文本溢出才在 hover 时跑马灯。位移按实测溢出量(scrollWidth − clientWidth)走 --marquee-shift,宽度一变
  *  (展开、Ultra 标签占位、窄栏)就重新量 —— 原来写死按 160px 框算、只在文字变化时量,名字被挤窄时不滚或滚不到头(creview 09-27)。 */
+/** Ultra 胶囊的流星只在 agent 运行时出现:开跑由慢渐快、停下由快渐慢。
+ *  改 CSS 的 animation-duration 会让进度跳帧,所以逐帧改各条动画的 playbackRate(浏览器保持当前进度);
+ *  整组透明度随速率升降,停稳后暂停。中途反向从当前速率接着走。 */
+const STREAK_RAMP_MS = 1200
+function useStreakRamp(ref: React.RefObject<HTMLSpanElement | null>, active: boolean, mounted: boolean): void {
+  const rate = useRef(0)
+  const seen = useRef<HTMLSpanElement | null>(null)
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    if (seen.current !== el) { seen.current = el; rate.current = 0 } // 刚挂上的新动画从静止起步
+    // 每帧现取:减少动效开关一翻,CSS 会重建这几条动画,攥着旧对象就调不到新的(jsdom 没有 getAnimations)
+    const anims = (): Animation[] => el.getAnimations?.({ subtree: true }) ?? []
+    const from = rate.current
+    const to = active ? 1 : 0
+    const dur = STREAK_RAMP_MS * Math.abs(to - from)
+    // 跑 / 停交给 CSS 的 animation-play-state(data-on 放行):不调 play()/pause(),CSS 重建出来的动画也天然守规矩
+    anims().forEach((a) => { a.playbackRate = from })
+    if (active) el.dataset.on = ''
+    const t0 = performance.now()
+    let raf = 0
+    const step = (now: number): void => {
+      const p = dur ? Math.min(1, (now - t0) / dur) : 1
+      const r = from + (to - from) * p * p * (3 - 2 * p)
+      const list = anims()
+      rate.current = r
+      list.forEach((a) => { a.playbackRate = r })
+      el.style.opacity = String(Math.min(1, r * 2))
+      if (p < 1) raf = requestAnimationFrame(step)
+      else if (!active) delete el.dataset.on
+    }
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
+  }, [ref, active, mounted])
+}
+
 const MarqueeLabel: React.FC<{ text: string }> = ({ text }) => {
   const ref = useRef<HTMLSpanElement>(null)
   const [shift, setShift] = useState(0)
@@ -188,6 +224,8 @@ export const ModelPill: React.FC<{
   allowUltra?: boolean
   /** 会话的 Ultra 开关;allowUltra 时它压过 thinkingLevel 决定显示(引擎那边 ultra 也压过存值的档)。 */
   ultra?: boolean
+  /** agent 正在跑:Ultra 胶囊的流星只在这时出现(开跑渐快、停下渐慢)。 */
+  running?: boolean
   /** 当前模型支持的思考档；不支持的档仍可选，由引擎自动降档。 */
   supportedThinking?: string[]
   /** 本 run 实际生效档；与请求档不同则在推理强度摘要中显示降档。 */
@@ -204,7 +242,7 @@ export const ModelPill: React.FC<{
   title?: string
 }> = ({
   className, menuPortal = false, open: controlledOpen, onOpenChange,
-  disabled, modelId, groups, onSelect, thinkingLevel, onThinkingChange, allowUltra = false, ultra, supportedThinking, effectiveThinking,
+  disabled, modelId, groups, onSelect, thinkingLevel, onThinkingChange, allowUltra = false, ultra, running = false, supportedThinking, effectiveThinking,
   modelsResponse, defaultModelIds, onDefaultModelChange, onContextWindowChange, emptyLabel, footnote, title,
 }) => {
   const { t } = useI18n()
@@ -298,6 +336,8 @@ export const ModelPill: React.FC<{
     : ''
   const isMax = effLevel === 'max'
   const effortCls = `${isMax ? ' is-max' : ''}${isUltra ? ' is-ultra' : ''}`
+  const streaksRef = useRef<HTMLSpanElement>(null)
+  useStreakRamp(streaksRef, running, isUltra)
   // 冲击波只在菜单开着时「刚切进 Ultra」放一次(动画结束即卸载);重开菜单、启动时本来就是 Ultra 都不放。
   const [burst, setBurst] = useState(0)
   const prevUltra = useRef(isUltra)
@@ -368,6 +408,7 @@ export const ModelPill: React.FC<{
         aria-expanded={open}
         onClick={() => setPillOpen(!open)}
       >
+        {isUltra && <span ref={streaksRef} className="pill-ultra-streaks" aria-hidden="true">{[0, 1, 2, 3].map((i) => <i key={i} />)}</span>}
         <Bot size={13} />
         {/* Ultra:模型名照常字色,「Ultra」单独成渐变字标签(主次分明);包一层,展开态的三列网格(图标 | 标签 | 箭头)不被挤出第四列 */}
         {isUltra

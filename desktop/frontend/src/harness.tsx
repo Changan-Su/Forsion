@@ -753,6 +753,8 @@ if (new URLSearchParams(location.search).has('dock')) {
     // ?ultra 起步就在 Ultra 档;?allowultra 起步在「深」但滑杆带 Ultra 格(拍切进 Ultra 那一下的冲击波)
     const allowUltra = modelPillParams.has('ultra') || modelPillParams.has('allowultra')
     const [ultra, setUltra] = useState(modelPillParams.has('ultra'))
+    // ?running 起步就在跑;右下角「运行」按钮来回切,看流星渐快 / 渐慢
+    const [running, setRunning] = useState(modelPillParams.has('running'))
     const [defaults, setDefaults] = useState({ backgroundModelId: '', imageModelId: '', visionModelId: '' })
     // 「上下文上限」行:GLM-4.7 扮 1M 模型(缺省封在 272k);选「最大」= 本机覆盖成 1M(与真 store 同形)
     const [ctxOverride, setCtxOverride] = useState<number | null>(new URLSearchParams(location.search).has('ctxmax') ? 1_000_000 : null)
@@ -769,7 +771,7 @@ if (new URLSearchParams(location.search).has('dock')) {
       // t2-chat-view = 子面板落位的边界(nestedPanelPlacement / useEdgeNudge 都认它);缺了子面板一律压在菜单上
       <div className="am-app tangu-lovable t2-chat-view" style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end', padding: 24 }}>
         <div className="t2c-row" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button className="t2c-pill">模式</button>
+          <button className="t2c-pill" data-harness-running={running ? '1' : '0'} onClick={() => setRunning((r) => !r)}>{running ? '运行中' : '空闲'}</button>
           <ModelPill
             modelId={id}
             groups={GROUPS}
@@ -778,6 +780,7 @@ if (new URLSearchParams(location.search).has('dock')) {
             onThinkingChange={(l, u) => { setLv(l); if (u !== undefined) setUltra(u) }}
             allowUltra={allowUltra}
             ultra={ultra}
+            running={running}
             modelsResponse={modelsResponse}
             defaultModelIds={defaults}
             onDefaultModelChange={(slot, modelId) => setDefaults((d) => ({ ...d, [slot]: modelId }))}

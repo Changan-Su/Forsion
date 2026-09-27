@@ -189,4 +189,15 @@ describe('argsOverride 改写后的参数重新过闸', () => {
     await expect(decided).resolves.toEqual({ action: 'approve', argsOverride: { command: 'npm run lint' } });
     expect(requests()).toHaveLength(1);
   });
+
+  it('挂起(审批托盘)路径同样重闸:改参后的越界卡当场等,凭条的 decided 认它的结论(重闸再挂起就没人兑现了)', async () => {
+    const parked = await gateToolCall('r5', call('write_file', { path: join(outA, 'a.txt'), content: 'x' }), { ...ctx('auto-edit'), park: true });
+    if (parked.action !== 'park') throw new Error(`应当挂起,实际 ${parked.action}`);
+    await waitCards(1);
+    resolveApproval(requests()[0].approvalId, { action: 'approve', argsOverride: { path: join(outB, 'authorized_keys'), content: 'x' } });
+    await waitCards(2);
+    expect(requests()[1].reason.kind).toBe('escalate');
+    resolveApproval(requests()[1].approvalId, { action: 'reject' });
+    await expect(parked.decided).resolves.toEqual({ action: 'reject' });
+  });
 });

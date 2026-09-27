@@ -1985,9 +1985,12 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
    ModelPill 按「刚切进来」挂载)。
    动画以 transform / opacity 为主;辉光全是静态的,逐条登记在 shadow-contract 例外里。选择器都带 .is-max.is-ultra,压过上面的 Max 块。 */
 
-/* 输入框里的 Ultra 胶囊(09-27 用户:原版全粉、没主次;边框跑马灯、整层流动底色先后被否,从六个备选里挑了「极光晕染」):
-   胶囊本身保持普通质感,图标与模型名照常字色,只有「Ultra」加粗紫色;底下两团柔光(左紫右粉)各自缓慢漂移、交替靠拢。
-   只动 transform(合成层动画,不逐帧重绘);切进 Ultra 时柔光淡入。它挨着流式输出,节奏刻意放慢。 */
+/* 输入框里的 Ultra 胶囊(09-27 用户:原版全粉、没主次;边框跑马灯、整层流动底色、极光晕染及两轮备选都被否,
+   最后定为「把滑杆 Ultra 档的底色与流光搬到胶囊上,淡一些」):
+   - 底色 = 滑杆 Ultra 轨道同一条渐变,压到 22%(暗色 26%);上面同一道 effort-ultra-flow 高光在流,亮度减半。
+   - 流星 = 滑杆那四路光流,但**只在 agent 运行时出现**;开跑由慢渐快、停下由快渐慢 ——
+     速度由 ModelPill 的 useStreakRamp 逐帧改 playbackRate(改速率不跳帧),这里只给形状与基准节奏。
+   图标、模型名照常字色,「Ultra」加粗紫色。动画只动 transform / opacity。 */
 .composer-chip.model-pill-btn.is-max.is-ultra {
   position: relative;
   isolation: isolate;
@@ -1995,35 +1998,55 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   color: var(--text);
   background: var(--overlay-light, rgba(127, 127, 127, 0.1));
 }
-.composer-chip.model-pill-btn.is-max.is-ultra:hover,
-.composer-chip.model-pill-btn.is-max.is-ultra.is-open { background: var(--overlay-medium, rgba(127, 127, 127, 0.18)); }
-/* 两团光:z-index:-1 落在胶囊底色之上、文字之下(isolation 圈住);高 260% 从上下溢出,由 overflow 裁成胶囊形 */
-.composer-chip.model-pill-btn.is-max.is-ultra::before,
+/* 三层都 z-index:-1 落在底色之上、文字之下(isolation 圈住),按 DOM 序叠:渐变底 → 流星 → 高光 */
+.composer-chip.model-pill-btn.is-max.is-ultra::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(90deg, #4f7dff 0%, #8b6cf6 24%, #d946ef 48%, #ff5f8f 70%, #ff9a4d 88%);
+  opacity: 0.22;
+  pointer-events: none;
+  transition: opacity var(--duration-fast, 0.15s);
+  animation: ultra-pill-glow-in 0.6s ease-out 1;
+}
+:root[data-mode='dark'] .composer-chip.model-pill-btn.is-max.is-ultra::before { opacity: 0.26; }
+/* :root 前缀把特异性抬到与上面暗色那条相同、靠源码顺序压过它,否则暗色下悬停 / 展开不提亮 */
+:root .composer-chip.model-pill-btn.is-max.is-ultra:hover::before,
+:root .composer-chip.model-pill-btn.is-max.is-ultra.is-open::before { opacity: 0.32; }
 .composer-chip.model-pill-btn.is-max.is-ultra::after {
   content: '';
   position: absolute;
+  inset: 0 auto 0 0;
   z-index: -1;
-  top: -80%;
-  width: 70%;
-  height: 260%;
-  border-radius: 50%;
-  filter: blur(9px);
+  width: 200%;
+  background: linear-gradient(90deg,
+    transparent 0%, rgba(255, 255, 255, 0.3) 12%, transparent 25%, transparent 50%,
+    rgba(255, 255, 255, 0.3) 62%, transparent 75%, transparent 100%);
   opacity: 0.6;
   pointer-events: none;
+  animation: effort-ultra-flow 2.2s linear infinite;
 }
-.composer-chip.model-pill-btn.is-max.is-ultra::before {
-  left: -20%;
-  background: radial-gradient(circle, #8b5cf6, transparent 68%);
-  animation: ultra-pill-glow-in 0.6s ease-out 1, ultra-pill-aurora-a 5.5s ease-in-out infinite alternate;
-}
-.composer-chip.model-pill-btn.is-max.is-ultra::after {
-  right: -20%;
-  background: radial-gradient(circle, #ec4899, transparent 68%);
-  animation: ultra-pill-glow-in 0.6s ease-out 1, ultra-pill-aurora-b 6.5s ease-in-out infinite alternate;
-}
-@keyframes ultra-pill-aurora-a { to { transform: translateX(55%) scale(1.15); } }
-@keyframes ultra-pill-aurora-b { to { transform: translateX(-55%) scale(0.9); } }
 @keyframes ultra-pill-glow-in { from { opacity: 0; } }
+/* 流星:整组的 opacity 与速率都由 useStreakRamp 接管;缺省透明且暂停(不在跑就看不见、也不空转),data-on 才放行。
+   亮色胶囊底太浅,白色流星看不见,改用渐变上各段的色;暗色回到滑杆的白。 */
+.pill-ultra-streaks { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; opacity: 0; }
+.pill-ultra-streaks i {
+  position: absolute;
+  left: 0;
+  width: 100%;
+  height: 1px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent 0 30%, var(--pill-streak) 50%, transparent 50.6%);
+  animation: effort-ultra-streak 1.6s cubic-bezier(0.55, 0, 0.45, 1) infinite;
+  animation-play-state: paused;
+}
+.pill-ultra-streaks[data-on] i { animation-play-state: running; }
+.pill-ultra-streaks i:nth-child(1) { --pill-streak: rgba(79, 125, 255, 0.75); top: 26%; animation-duration: 1.5s; animation-delay: -0.2s; }
+.pill-ultra-streaks i:nth-child(2) { --pill-streak: rgba(139, 108, 246, 0.8); top: 43%; animation-duration: 1.8s; animation-delay: -0.95s; }
+.pill-ultra-streaks i:nth-child(3) { --pill-streak: rgba(217, 70, 239, 0.75); top: 59%; animation-duration: 1.35s; animation-delay: -0.55s; }
+.pill-ultra-streaks i:nth-child(4) { --pill-streak: rgba(255, 122, 69, 0.75); top: 75%; animation-duration: 1.7s; animation-delay: -1.25s; }
+:root[data-mode='dark'] .pill-ultra-streaks i { --pill-streak: rgba(255, 255, 255, 0.85); }
 .pill-ultra-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .model-pill-btn.is-open .pill-ultra-label { justify-content: center; width: 100%; }
 /* 展开态通用规则会把 .pill-marquee 撑满整行(居中单行文案用);Ultra 这里名字 + 标签要作为一组居中,名字不许撑开 */
@@ -2133,6 +2156,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   .cm-effort-streaks, .cm-effort-burst { display: none; }
   .composer-chip.model-pill-btn.is-max.is-ultra::before,
   .composer-chip.model-pill-btn.is-max.is-ultra::after { animation: none; }
+  .pill-ultra-streaks { display: none; }
 }
 .cm-foot { white-space: normal; letter-spacing: 0; margin-top: 4px; border-top: var(--border-width) solid var(--border); }
 .composer-menu--model .menu-item { font-size: var(--t2c-font-control, 12px); }

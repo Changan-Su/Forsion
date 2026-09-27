@@ -35,6 +35,14 @@ export interface ApprovalDecision {
   rejectReason?: string;
 }
 
+/** 挂起的审批(gateToolCall 带 park):审批请求已发出、**不等**用户,调用方先给模型一个占位结果继续干活,
+ *  decided 兑现(用户拍板 / run 结束被撤)后再在迭代边界执行。「总允许」已在 decided 里记好。 */
+export interface ParkedApproval {
+  action: 'park';
+  decided: Promise<ApprovalDecision>;
+  preview: string;
+}
+
 interface Pending {
   runId: string;
   resolve: (d: ApprovalDecision) => void;
@@ -112,6 +120,13 @@ export function approvalPreview(call: ToolCall): string {
 // 同 run 审批串行化(Codex 评审 07-30 #2):TUI 的审批 UI 是单槽,通道端收到首个决定即退订——
 // 并行子代理同时弹审批会互相顶掉,后到的一直挂到超时。同 run 的请求排队逐个发布。
 const approvalQueues = new Map<string, Promise<unknown>>(); // runId -> 队尾
+// 审批托盘客户端起的 run(POST /agent/runs 带 approval_tray,agentLoop 登记):桌面把待批卡攒在输入框上方、
+// 按 approvalId 各自兑现,不怕互相顶掉 → 同 run 的审批一起发出去,不再排队。TUI / 通道 / 其它入口照旧串行。
+const trayRuns = new Set<string>();
+export function setApprovalTray(runId: string, on: boolean): void {
+  if (on) trayRuns.add(runId);
+  else trayRuns.delete(runId);
+}
 
 /** 登记一次审批请求:同 run 内排队逐个发布(发事件 + await 决定)。中止信号触发时按拒绝兑现。 */
 export function requestApproval(
@@ -121,6 +136,7 @@ export function requestApproval(
   signal?: AbortSignal,
   reason?: ApprovalReason,
 ): Promise<ApprovalDecision> {
+  if (trayRuns.has(runId)) return requestApprovalNow(runId, call, preview, signal, reason);
   const tail = approvalQueues.get(runId) || Promise.resolve();
   const mine = tail.then(() => requestApprovalNow(runId, call, preview, signal, reason));
   const entry = mine.then(() => undefined, () => undefined);
@@ -157,6 +173,7 @@ function requestApprovalNow(
       arguments: call.function.arguments,
       preview,
       ...(reason ? { reason } : {}), // 旧客户端忽略未知字段;preview 一个字都没动(它是越界警示的唯一载体)
+      toolCallId: call.id, // 客户端据此把审批挂回对应的工具卡(挂起的调用在卡上显示「等你批准」)
     });
   });
 }
@@ -365,6 +382,22 @@ export function customVerdict(call: ToolCall, rules: CustomApprovalRules): 'allo
   return customVerdictDetailed(call, rules)?.verdict;
 }
 
+export interface GateCtx {
+  sessionId: string; execMode?: string; approvalMode?: ApprovalMode; cwd?: string; extraRoots?: string[]; profile?: AppProfile;
+  /** 审批档跟这个会话**此刻**存的设置走(run 中途在输入区切档当场生效;团队成员 = 团队会话);没存才用 approvalMode 快照。
+   *  只给「档位本就来自会话设置」的 run(见 agentLoop.approvalModeSessionId),通道 / Muse / 自动化各自定档,不给。 */
+  modeSessionId?: string;
+  /** 无人值守 run(Muse ask/agent 档):需要人决定时不 await 订阅者,改走 pendingApprovals(排队 / 代批)。 */
+  approvalDeferral?: 'queue' | 'agent'; userId?: string; agentSlug?: string;
+  /** 本次调用**此刻真正的执行身份**(具名子代理的展示 slug),与 agentSlug(run 的归属 agent)不同时才给。
+   *  两个用处:① PermissionRequest hook 的 agent_slug 用它(hook 按执行身份裁决);
+   *  ② pendingApprovals:ALS 作用域的工具不能排队等事后重放,否则会写到 agentSlug 那个 agent 头上。 */
+  execAgentSlug?: string;
+  /** 挂起而不等(托盘客户端的主循环,见 ParkedApproval):要问用户时发出请求就返回凭条。只有自己会在迭代边界
+   *  兑现的调用方才能给;子代理 / 引擎中继 / TUI / 通道都是当场要结果的,不给。 */
+  park?: boolean;
+}
+
 /**
  * loop 工具执行前的审批闸门。返回归一化决定（approve / reject）。
  *   - execMode!=='host' 且非 mcp__ → 立即 approve（**server/worker 零影响**）
@@ -374,25 +407,16 @@ export function customVerdict(call: ToolCall, rules: CustomApprovalRules): 'allo
  *   - 越界写(工作区外,非保护路径)→ 强制升级审批（auto-edit 也要批;full-auto 放行;不吃「总允许」）
  *   - 否则按档:不需审批 / 已「总允许」→ approve;否则 await 用户决定
  */
+export function gateToolCall(runId: string, call: ToolCall, ctx: GateCtx & { park?: false }, signal?: AbortSignal, editedOnCard?: boolean): Promise<ApprovalDecision>;
+export function gateToolCall(runId: string, call: ToolCall, ctx: GateCtx, signal?: AbortSignal): Promise<ApprovalDecision | ParkedApproval>;
 export async function gateToolCall(
   runId: string,
   call: ToolCall,
-  ctx: {
-    sessionId: string; execMode?: string; approvalMode?: ApprovalMode; cwd?: string; extraRoots?: string[]; profile?: AppProfile;
-    /** 审批档跟这个会话**此刻**存的设置走(run 中途在输入区切档当场生效;团队成员 = 团队会话);没存才用 approvalMode 快照。
-     *  只给「档位本就来自会话设置」的 run(见 agentLoop.approvalModeSessionId),通道 / Muse / 自动化各自定档,不给。 */
-    modeSessionId?: string;
-    /** 无人值守 run(Muse ask/agent 档):需要人决定时不 await 订阅者,改走 pendingApprovals(排队 / 代批)。 */
-    approvalDeferral?: 'queue' | 'agent'; userId?: string; agentSlug?: string;
-    /** 本次调用**此刻真正的执行身份**(具名子代理的展示 slug),与 agentSlug(run 的归属 agent)不同时才给。
-     *  两个用处:① PermissionRequest hook 的 agent_slug 用它(hook 按执行身份裁决);
-     *  ② pendingApprovals:ALS 作用域的工具不能排队等事后重放,否则会写到 agentSlug 那个 agent 头上。 */
-    execAgentSlug?: string;
-  },
+  ctx: GateCtx,
   signal?: AbortSignal,
   /** 内部用:这一趟是审批卡上**改过参数**的重闸(见函数末尾)。外部调用方不传。 */
   editedOnCard = false,
-): Promise<ApprovalDecision> {
+): Promise<ApprovalDecision | ParkedApproval> {
   // 工具名**先归一**(旧别名 muse_watch → manage_automation):下面每一道判定都直接读
   // call.function.name —— custom 规则匹配(customVerdictDetailed/ruleMatches)、approvalPreview、
   // PermissionRequest hook 的 tool_name、approval_request 事件、以及「总允许」的键。只归一一个局部变量
@@ -475,20 +499,24 @@ export async function gateToolCall(
     const { deferApproval } = await import('./pendingApprovals.js');
     return deferApproval(runId, call, preview, reason, ctx);
   }
-  const d = await requestApproval(runId, call, preview, signal, reason);
-  if (d.action === 'reject') return d;
-  let out: ApprovalDecision = { action: 'approve' };
-  if (d.argsOverride) {
-    // 批准时改了参数 → 真正要执行的是新参数,批准只覆盖卡上显示过的那份:按新参数把整道闸重过一遍
-    // (custom 规则 / known-safe / 越界升级 / PermissionRequest hook 都认新参数)。从前改写后直接执行,
-    // 改成工作区外路径或 deny 规则挡的命令都不再过闸。再次弹卡时批准者可能又改一次 → 取最后一次的参数。
-    const edited: ToolCall = { ...call, function: { ...call.function, arguments: JSON.stringify(d.argsOverride) } };
-    const again = await gateToolCall(runId, edited, ctx, signal, true);
-    if (again.action === 'reject') return again;
-    out = { action: 'approve', argsOverride: again.argsOverride ?? d.argsOverride };
-  }
-  // 「总允许」在重闸**之后**才记:先记的话,重闸那一趟被 isAlwaysAllowed 提前放行,改后的参数就绕过了 PermissionRequest hook(Codex 09-27)。
-  // 越界写、custom 的 ask 规则都不进「总允许」:前者每次都确认,后者是用户写死的「永远问我」。
-  if (d.action === 'approve_always' && !escalate && !forceAsk) allowAlways(ctx.sessionId, name);
-  return out;
+  const decided = requestApproval(runId, call, preview, signal, reason).then(async (d): Promise<ApprovalDecision> => {
+    if (d.action === 'reject') return d;
+    let out: ApprovalDecision = { action: 'approve' };
+    if (d.argsOverride) {
+      // 批准时改了参数 → 真正要执行的是新参数,批准只覆盖卡上显示过的那份:按新参数把整道闸重过一遍
+      // (custom 规则 / known-safe / 越界升级 / PermissionRequest hook 都认新参数)。从前改写后直接执行,
+      // 改成工作区外路径或 deny 规则挡的命令都不再过闸。再次弹卡时批准者可能又改一次 → 取最后一次的参数。
+      // 重闸一律当场等(park:false):挂起的那张卡正由这条 decided 兑现,重闸再挂一次就没人兑现了。
+      const edited: ToolCall = { ...call, function: { ...call.function, arguments: JSON.stringify(d.argsOverride) } };
+      const again = await gateToolCall(runId, edited, { ...ctx, park: false }, signal, true);
+      if (again.action === 'reject') return again;
+      out = { action: 'approve', argsOverride: again.argsOverride ?? d.argsOverride };
+    }
+    // 「总允许」在重闸**之后**才记:先记的话,重闸那一趟被 isAlwaysAllowed 提前放行,改后的参数就绕过了 PermissionRequest hook(Codex 09-27)。
+    // 越界写、custom 的 ask 规则都不进「总允许」:前者每次都确认,后者是用户写死的「永远问我」。
+    if (d.action === 'approve_always' && !escalate && !forceAsk) allowAlways(ctx.sessionId, name);
+    return out;
+  });
+  if (ctx.park) return { action: 'park', decided, preview };
+  return decided;
 }
