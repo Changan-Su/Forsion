@@ -26,8 +26,12 @@ export interface UnitScopeEnv {
   platform?: NodeJS.Platform
 }
 
-/** 另一实例 / 旧包名的 userData 目录名(main.ts readShellConfig 的迁移源 + 打包版 productName)。 */
+/** 另一实例 / 旧包名的 userData 目录名(main.ts readShellConfig 的迁移源 + 打包版 productName)。
+ *  与引擎 hostSandboxProtection.USERDATA_NAMES 同一张表(electron/unitUserDataNamesSync.test.ts 钉住),两边都再各配一个 `-dev` 变体
+ *  (main.ts 未打包时 setPath(userData + '-dev'):每个历史包名的开发版目录都可能在)。 */
 const USERDATA_SIBLINGS = ['Forsion', 'forsion-desktop', 'forsion-desktop-dev', 'tangu-agent-desktop', 'tangu-agent-desktop2', 'Tangu Agent', 'Tangu Agent 2.0']
+/** 兄弟 userData 目录名(含 `-dev` 变体),与引擎 desktopUserDataDirs 同一展开口径。 */
+export const USERDATA_SIBLING_DIRS: readonly string[] = [...new Set(USERDATA_SIBLINGS.flatMap((n) => [n, `${n}-dev`]))]
 
 /** 家目录下的通用凭据库(与 Forsion 无关,但远端读到同样是凭据外泄)。 */
 const HOME_CREDENTIAL_DIRS = [
@@ -69,7 +73,7 @@ export function buildUnitScopeGuard(env: UnitScopeEnv): UnitScopeGuard {
     join(h, '.forsion'), join(h, '.forsion-dev'), join(h, '.tangu'),
     tanguHome,
     ...(env.userData ? [env.userData] : []),
-    ...(env.appData ? USERDATA_SIBLINGS.map((d) => join(env.appData!, d)) : []),
+    ...(env.appData ? USERDATA_SIBLING_DIRS.map((d) => join(env.appData!, d)) : []),
     ...HOME_CREDENTIAL_DIRS.map((d) => join(h, d)),
   ]
   return { protectedPaths: [...new Set(raw.flatMap(bothForms))], libraryBases: bothForms(tanguHome) }
