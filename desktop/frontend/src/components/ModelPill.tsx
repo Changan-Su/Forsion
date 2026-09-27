@@ -87,16 +87,23 @@ export function catalogForDefaultSlot(models: ModelInfo[], slot: DefaultModelSlo
   return slot === 'visionModelId' ? llms.filter((m) => m.supportsVision !== false) : llms
 }
 
-/** 仅当文本溢出才在 hover 时跑马灯。 */
+/** 仅当文本溢出才在 hover 时跑马灯。位移按实测溢出量(scrollWidth − clientWidth)走 --marquee-shift,宽度一变
+ *  (展开、Ultra 标签占位、窄栏)就重新量 —— 原来写死按 160px 框算、只在文字变化时量,名字被挤窄时不滚或滚不到头(creview 09-27)。 */
 const MarqueeLabel: React.FC<{ text: string }> = ({ text }) => {
   const ref = useRef<HTMLSpanElement>(null)
-  const [over, setOver] = useState(false)
-  useEffect(() => {
+  const [shift, setShift] = useState(0)
+  useLayoutEffect(() => {
     const el = ref.current
-    if (el) setOver(el.scrollWidth > el.clientWidth + 2)
+    if (!el) return
+    const measure = (): void => setShift(Math.max(0, el.scrollWidth - el.clientWidth))
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
   }, [text])
   return (
-    <span ref={ref} className={`pill-marquee${over ? ' is-over' : ''}`}>
+    <span ref={ref} className={`pill-marquee${shift > 2 ? ' is-over' : ''}`} style={{ '--marquee-shift': `${shift}px` } as React.CSSProperties}>
       <span className="pill-marquee__inner">{text}</span>
     </span>
   )

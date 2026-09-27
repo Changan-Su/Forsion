@@ -159,6 +159,19 @@ async function main() {
     check('U3c 切进 Ultra 的那一下放了冲击波,动画完就卸载', burstSeen === 1 && ui.burstLeft === 0, `seen=${burstSeen} left=${ui.burstLeft}`)
     check('U3g 胶囊:「Ultra」单独成标签、模型名不带「· Ultra」、描边流光在转', ui.pillTag === 'Ultra' && !/Ultra/.test(ui.pillName) && ui.ringAnim === 'ultra-pill-spin',
       JSON.stringify({ pillTag: ui.pillTag, pillName: ui.pillName, ringAnim: ui.ringAnim }))
+    // U3h:名字被挤窄(Ultra 标签占位 / 窄栏)时跑马灯要重新量,位移 = 实际溢出量(原来只在文字变化时量、写死按 160px 框算)
+    const marquee = await win.evaluate(async () => {
+      const m = document.querySelector('.t2c-row .model-pill-btn .pill-marquee')
+      if (!m) return null
+      m.style.maxWidth = '24px'
+      await new Promise((r) => setTimeout(r, 250))
+      const out = { over: m.classList.contains('is-over'), shift: m.style.getPropertyValue('--marquee-shift'), overflow: m.scrollWidth - m.clientWidth }
+      m.style.maxWidth = ''
+      await new Promise((r) => setTimeout(r, 250))
+      return { ...out, overAfter: m.classList.contains('is-over') }
+    })
+    check('U3h 名字被挤窄时跑马灯重新量:进溢出态、位移等于实际溢出,放宽后复原', !!marquee && marquee.over && marquee.shift === `${marquee.overflow}px` && marquee.overflow > 0 && !marquee.overAfter,
+      JSON.stringify(marquee))
     check('U3d 滑杆经 aria-describedby 关联说明行(读屏念得到 Ultra 的作用)', ui.describedBy.length > 0 && ui.describedBy === ui.note, JSON.stringify(ui.describedBy))
     await win.screenshot({ path: path.join(SHOTS, 'ultra-menu.png') })
 

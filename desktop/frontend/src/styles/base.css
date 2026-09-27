@@ -1778,7 +1778,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .composer-chip .pill-marquee.is-over:hover .pill-marquee__inner { animation: pill-marquee 6s linear infinite; }
 @keyframes pill-marquee {
   0%, 12% { transform: translateX(0); }
-  88%, 100% { transform: translateX(calc(160px - 100%)); }
+  88%, 100% { transform: translateX(calc(-1 * var(--marquee-shift, 0px))); }
 }
 
 /* ── 模型菜单：高级 + 模型 + ChatGPT 式 Effort 拖动条；模型明细仍走左右子面板 ── */
@@ -2015,6 +2015,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   -webkit-mask-composite: xor;
   mask-composite: exclude;
   pointer-events: none;
+  /* ponytail: 注册属性的角度动画 = 这 1.25px 描边每帧重绘(面积约 140×28,合成层外);胶囊常驻时帧一直在出。
+     真从 paint 采样里看到开销,就换成「不转的遮罩壳 + 里层 transform 旋转的 conic」(要多一个元素),或只在 hover / 刚切进来时转。 */
   animation: ultra-pill-spin 5.2s linear infinite;
 }
 /* 外圈柔光:同色系外晕,z-index:-1 落在胶囊自己的背景之上、文字之下(isolation 圈住) */
