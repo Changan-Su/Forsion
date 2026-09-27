@@ -18,6 +18,7 @@ import { getRawSection } from '../../core/config.js';
 import { formatToolOutput } from '../outputPersist.js';
 import type { ToolDef, ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
+import { toolSubprocessEnv } from '../../sandbox/credentialEnv.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const NAVIGATE_TIMEOUT_MS = 60_000;
@@ -426,7 +427,7 @@ async function runBrowserCommand(
   const socketDir = browserSocketDir();
   await fs.mkdir(socketDir, { recursive: true });
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...toolSubprocessEnv(), // 剥引擎凭据(C2)
     AGENT_BROWSER_SOCKET_DIR: socketDir,
     // 接管态闲置 30 分钟才断:每次重连 Chrome 都要用户再点一次「允许」
     AGENT_BROWSER_IDLE_TIMEOUT_MS: process.env.AGENT_BROWSER_IDLE_TIMEOUT_MS || (cdp ? '1800000' : '600000'),

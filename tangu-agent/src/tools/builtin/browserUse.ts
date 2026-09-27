@@ -22,6 +22,7 @@ import { getRawSection } from '../../core/config.js';
 import { tanguHome } from '../../core/tanguHome.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
+import { toolSubprocessEnv } from '../../sandbox/credentialEnv.js';
 
 /** 钉死的 browser-use 版本(月更多次,必须固定);可经 browserUse.pin / TANGU_BROWSER_USE_PIN 覆盖。 */
 const PINNED_VERSION = '0.13.3';
@@ -259,7 +260,7 @@ async function runBrowserTask(ctx: ToolContext, args: Record<string, any>): Prom
 
   const runnerPath = await ensureRunner();
   const { cmd, preArgs, missingHint } = runnerCommand();
-  const env: NodeJS.ProcessEnv = { ...process.env, ANONYMIZED_TELEMETRY: 'false' };
+  const env: NodeJS.ProcessEnv = { ...toolSubprocessEnv(), ANONYMIZED_TELEMETRY: 'false' }; // 剥引擎凭据(C2);模型 key 下面单独给
   if (model.apiKey) env.LLM_API_KEY = model.apiKey;
   const timeoutMs = Number(cfg().timeoutMs) > 0 ? Number(cfg().timeoutMs) : DEFAULT_TASK_TIMEOUT_MS;
 

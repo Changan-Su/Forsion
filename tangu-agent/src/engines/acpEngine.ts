@@ -26,6 +26,7 @@ import type { ToolCall } from '../core/types.js';
 import type { ApprovalDecision } from '../services/approvals.js';
 import { envWithFullPath, type EngineDef } from './config.js';
 import type { EngineRunCtx, EngineResult, EngineCapabilities } from './manager.js';
+import { toolSubprocessEnv } from '../sandbox/credentialEnv.js';
 
 /** createAcpClient 需要的最小上下文（EngineRunCtx 结构上即满足）。 */
 export interface AcpClientCtx {
@@ -48,7 +49,8 @@ export function spawnEngine(def: EngineDef, opts?: { cwd?: string; detached?: bo
   return spawn(def.command, def.args ?? [], {
     cwd: opts?.cwd,
     stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'], // 元组字面量 → 非空 stdin/stdout 流类型
-    env: { ...envWithFullPath(process.env), ...(def.env ?? {}) },
+    // 剥引擎凭据(C2):外部 CLI 跑模型驱动的命令,拿到 forsion_token / 本机令牌就能绕过本引擎直调云端与本机端点。
+    env: { ...envWithFullPath(toolSubprocessEnv()), ...(def.env ?? {}) },
     shell: process.platform === 'win32',
     windowsHide: true,
     detached: opts?.detached ?? false,
