@@ -218,6 +218,8 @@ async function main() {
     // ── 场景 B:计划卡三态(P2)—— 批准发出的必须逐字是引擎认的那串
     // 计划正文留在流里的计划卡上;拍板区(五个决策按钮)在输入框上方的托盘里。
     stub.script([
+      // 与真引擎同序:exit_plan_mode 本身是工具调用,tool_call 先到,再是 plan 与询问(评审 09-27:桩里不发 tool_call 会让判据只在桩里成立)
+      { type: 'tool_call', payload: { id: 'tp1', name: 'exit_plan_mode', arguments: JSON.stringify({ plan: '# 实施计划' }) } },
       { type: 'plan', payload: { plan: '# 实施计划\n\n1. 先写测试\n2. 再改实现' } },
       { type: 'inquiry_request', payload: { inquiryId: 'q1', question: '计划已就绪(见上方计划卡)。是否批准并退出计划模式?', options: PLAN_OPTIONS, allowFreeText: true, kind: 'plan' } },
       { type: '__hold' }, // 真引擎此刻阻塞在 requestInquiry 上;桩收到回答时补发 inquiry_result + done(与真引擎同序)
@@ -235,10 +237,12 @@ async function main() {
         pointer: !!card?.querySelector('[data-plan-pointer]'),
         trayButtons: tray ? tray.querySelectorAll('.approval-actions .btn').length : 0,
         genericInquiry: document.querySelectorAll('.inquiry-card').length,
-        thinking: !!card?.closest('[id^="tocmsg-"]')?.querySelector('.chat-thinking-live'),
+        waitingYou: !!card?.closest('[id^="tocmsg-"]')?.querySelector('.tool-group [data-waiting-you]'),
+        shimmer: !!card?.closest('[id^="tocmsg-"]')?.querySelector('.tool-group .chat-run-shimmer-text'),
       }
     })
-    check('B1b 等你拍板时这条消息不显示「思考中」(指路那行已说明在等什么)', !planProbe.thinking, JSON.stringify({ thinking: planProbe.thinking }))
+    check('B1b 等你拍板时 exit_plan_mode 那行显示「等你回复」,不是流光装忙', !!planProbe.card && planProbe.waitingYou && !planProbe.shimmer,
+      JSON.stringify({ waitingYou: planProbe.waitingYou, shimmer: planProbe.shimmer }))
     check('B1 计划卡:markdown 正文留在流里(只留一行指路),五个决策按钮在输入框上方的托盘里',
       planProbe.card && planProbe.markdown && planProbe.cardButtons === 0 && planProbe.pointer && planProbe.trayButtons === 5, JSON.stringify(planProbe))
     check('B2 不再另起一张通用询问卡(计划询问归计划卡)', planProbe.genericInquiry === 0, JSON.stringify(planProbe))
@@ -248,17 +252,19 @@ async function main() {
     await win.waitForTimeout(400) // 换卡冷却(ApprovalTray ARM_MS)
     await win.locator('.t2c-apv [data-plan-decision] .approval-actions .btn').first().click()
     await win.waitForTimeout(1200)
-    check('B3 ⚠️「批准并开始执行」发出的是引擎逐字认的那串',
-      stub.seen.inquiries[0]?.answer === PLAN_APPROVE_AUTO, JSON.stringify(stub.seen.inquiries[0]))
+    check('B3 ⚠️「批准并开始执行」发出的是引擎逐字认的那串,且答的就是这条询问',
+      stub.seen.inquiries[0]?.answer === PLAN_APPROVE_AUTO && stub.seen.inquiries[0]?.inquiryId === 'q1', JSON.stringify(stub.seen.inquiries[0]))
     await win.waitForTimeout(600)
     const planAfter = await win.evaluate(() => ({
       trayPlan: !!document.querySelector('.t2c-apv [data-plan-decision]'),
       verdict: (document.querySelector('.plan-card .plan-verdict')?.textContent || '').trim(),
     }))
-    check('B4 引擎回执到了:计划离开托盘,流里的计划卡写上裁决', !planAfter.trayPlan && /已批准/.test(planAfter.verdict), JSON.stringify(planAfter))
+    // 判据只看裁决文字:桩发完回执紧跟 done,done 会让本 run 的待办统统过期,「托盘清空」本身证明不了回执对上了
+    check('B4 引擎回执到了:流里的计划卡写上「已批准」', /已批准/.test(planAfter.verdict), JSON.stringify(planAfter))
 
     // ── 场景 C:编辑后批准 —— 必须带修订标记 + 改后的全文(编辑框也在托盘里)
     stub.script([
+      { type: 'tool_call', payload: { id: 'tp2', name: 'exit_plan_mode', arguments: JSON.stringify({ plan: '# 旧计划' }) } },
       { type: 'plan', payload: { plan: '# 旧计划\n\n1. 随便做做' } },
       { type: 'inquiry_request', payload: { inquiryId: 'q2', question: '计划已就绪(见上方计划卡)。是否批准并退出计划模式?', options: PLAN_OPTIONS, allowFreeText: true, kind: 'plan' } },
       { type: '__hold' },
@@ -278,14 +284,15 @@ async function main() {
     await decision.locator('.approval-actions .btn').first().click()
     await win.waitForTimeout(1200)
     const ans = stub.seen.inquiries[0]?.answer || ''
-    check('C1 ⚠️编辑后批准:头部仍是批准选项,后面挂修订标记 + 改后的全文',
-      ans.startsWith(PLAN_APPROVE_AUTO) && ans.includes(PLAN_REVISION_MARK) && ans.includes('先补回滚方案'),
-      JSON.stringify(ans.slice(0, 80)))
+    check('C1 ⚠️编辑后批准:头部仍是批准选项,后面挂修订标记 + 改后的全文,且答的就是这条询问',
+      ans.startsWith(PLAN_APPROVE_AUTO) && ans.includes(PLAN_REVISION_MARK) && ans.includes('先补回滚方案') && stub.seen.inquiries[0]?.inquiryId === 'q2',
+      JSON.stringify({ id: stub.seen.inquiries[0]?.inquiryId, ans: ans.slice(0, 80) }))
     await win.waitForTimeout(600) // 回答一到桩就收尾这条 run,托盘清空,不串进后面的场景
 
     // ── 场景 Q:Agent 的提问(ask_user)进托盘 —— 待答时整张在输入框上方,流里只留一行指路;答完流里留问答记录
     stub.script([
       { type: 'token', payload: { delta: '开工前确认一下。' } },
+      { type: 'tool_call', payload: { id: 'ta1', name: 'ask_user', arguments: JSON.stringify({ question: '用哪个包管理器?', options: ['npm', 'pnpm'] }) } },
       { type: 'inquiry_request', payload: { inquiryId: 'qa1', question: '用哪个包管理器?', options: ['npm', 'pnpm'], allowFreeText: true } },
       { type: '__hold' },
     ])
@@ -298,22 +305,24 @@ async function main() {
         options: body ? body.querySelectorAll('.inquiry-opts .btn').length : 0,
         streamCards: document.querySelectorAll('.t2-stream .inquiry-card').length,
         pointer: !!document.querySelector('.t2-stream [data-inquiry-pointer]'),
+        waitingYou: !!document.querySelector('.t2-stream .tool-group [data-waiting-you]'),
       }
     })
-    check('Q1 提问整张进托盘(问题 + 选项),流里不插待答卡、只留一行指路',
-      askProbe.kind === 'inquiry' && /包管理器/.test(askProbe.question) && askProbe.options === 2 && askProbe.streamCards === 0 && askProbe.pointer,
+    check('Q1 提问整张进托盘(问题 + 选项),流里不插待答卡、只留一行指路;ask_user 那行显示「等你回复」',
+      askProbe.kind === 'inquiry' && /包管理器/.test(askProbe.question) && askProbe.options === 2 && askProbe.streamCards === 0 && askProbe.pointer && askProbe.waitingYou,
       JSON.stringify(askProbe))
     await win.screenshot({ path: process.env.ASK_SHOT || '/tmp/tray-ask.png' }).catch(() => {}) // 观感自查:提问在托盘
     stub.seen.inquiries.length = 0
     await win.locator('.t2c-apv .inquiry-opts .btn', { hasText: 'pnpm' }).first().click()
     await win.waitForTimeout(800)
-    check('Q2 在托盘里点选项 → 答案送达引擎', stub.seen.inquiries[0]?.answer === 'pnpm', JSON.stringify(stub.seen.inquiries[0]))
+    check('Q2 在托盘里点选项 → 答案送达引擎,答的就是这条询问', stub.seen.inquiries[0]?.answer === 'pnpm' && stub.seen.inquiries[0]?.inquiryId === 'qa1', JSON.stringify(stub.seen.inquiries[0]))
     await win.waitForTimeout(600)
     const askAfter = await win.evaluate(() => ({
       tray: document.querySelectorAll('[data-approval-tray]').length,
       record: (document.querySelector('.t2-stream .inquiry-card.resolved')?.textContent || '').trim(),
     }))
-    check('Q3 回执后托盘清空,流里留下问答记录', askAfter.tray === 0 && /pnpm/.test(askAfter.record), JSON.stringify(askAfter))
+    // 判据只看问答记录(理由同 B4:done 会让待办过期,托盘清空本身不算数)
+    check('Q3 回执后流里留下问答记录(问题 + 我的回答)', /包管理器/.test(askAfter.record) && /pnpm/.test(askAfter.record), JSON.stringify(askAfter))
 
     // ── 场景 F:sketch 卡(agent 在对话流里画可交互 HTML 卡片)
     // 钉四件:直播上卡(挂 tool_result 非 tool_call)/ 被引擎拒的不画 / 沙箱铁律(仅 allow-scripts

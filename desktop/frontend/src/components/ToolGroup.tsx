@@ -16,7 +16,11 @@ import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
 registerMessages({
   'tool.parked.waiting': { zh: '已挂起，等你在输入框上方批准。Agent 先做别的，拍板后结果会补在这里。', en: 'Parked until you approve it above the input box. The agent carries on meanwhile; the result lands here once you decide.' },
   'tool.parked.past': { zh: '当时挂起等你批准，结局见后面的审批结果。', en: 'This call was parked for your approval; see the approval result further down.' },
+  'tool.waitingYou': { zh: '等你回复 · 在输入框上方', en: 'Waiting for your reply · above the input box' },
 })
+
+/** 这两个工具就是「问你」本身:调用挂着 = 在等你在托盘里答,不是在跑,别用流光装忙。 */
+const ASKS_YOU = new Set(['ask_user', 'exit_plan_mode'])
 
 type Kind = 'write' | 'edit' | 'run' | 'read' | 'search' | 'browse' | 'other'
 interface Desc { kind: Kind; verbKey: string; target: string; adds?: number; dels?: number; isFile: boolean }
@@ -96,7 +100,7 @@ const Stat: React.FC<{ d: Desc }> = ({ d }) =>
     </span>
   ) : null
 
-const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: boolean }> = ({ ev, desc, running, waiting }) => {
+const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: boolean; asking?: boolean }> = ({ ev, desc, running, waiting, asking }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   // 只在展开时构造 diff(P1:文件修改类工具详情渲染 diff 而非裸 JSON)
@@ -104,7 +108,7 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
   const verb = desc.verbKey ? t(desc.verbKey) : ev.name
   // 工具结果帧可能在用户停止 run 时来不及抵达。此时 ev.done 仍为 false，
   // 但父消息已不再运行，不能继续显示「正在执行」的流光或 busy 语义。
-  const active = running && !ev.done
+  const active = running && !ev.done && !asking
   return (
     <div className="tool-row">
       <button className="tool-row-head" aria-busy={active} onClick={() => setOpen((o) => !o)}>
@@ -143,7 +147,13 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
   )
 }
 
-export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean; approvals?: ApprovalRequest[] }> = ({ events, running, approvals }) => {
+export const ToolGroup: React.FC<{
+  events: ToolEvent[]
+  running?: boolean
+  approvals?: ApprovalRequest[]
+  /** 这条消息有待答的提问 / 计划拍板(托盘里):挂着的 ask_user / exit_plan_mode 显示「等你回复」而不是在跑。 */
+  awaitingAnswer?: boolean
+}> = ({ events, running, approvals, awaitingAnswer }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   if (!events.length) return null
@@ -162,14 +172,16 @@ export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean; appro
   const order: Kind[] = ['write', 'edit', 'run', 'read', 'search', 'browse', 'other']
   const summary = order.filter((k) => counts[k] > 0).map((k) => t(SUM[k], { n: counts[k] })).join(' · ')
 
+  const asksYou = (e: ToolEvent): boolean => !!awaitingAnswer && !!running && !e.done && ASKS_YOU.has(e.name)
   const allDone = groupedEvents.every((e) => e.done)
   const anyErr = groupedEvents.some((e) => e.isError)
   // 挂起的调用「还在等你」= 它那张审批仍 pending(审批与工具卡按 toolCallId 对上;重载后审批不在 → 只算「当时挂起」)
   const waitingIds = new Set((approvals || []).filter((a) => a.status === 'pending' && a.toolCallId).map((a) => a.toolCallId!))
   const anyParked = groupedEvents.some((e) => e.parked)
-  const active = !!running && groupedEvents.length > 0 && !allDone
   // 运行中:展示第一个未完成的调用作为「当前」;都完成则无。
   const curIdx = running ? groupedEvents.findIndex((e) => !e.done) : -1
+  const curAsks = curIdx >= 0 && asksYou(groupedEvents[curIdx])
+  const active = !!running && groupedEvents.length > 0 && !allDone && !curAsks
   const curDesc = curIdx >= 0 ? descs[curIdx] : null
   const curVerb = curDesc ? (curDesc.verbKey ? t(curDesc.verbKey) : groupedEvents[curIdx].name) : ''
 
@@ -180,7 +192,11 @@ export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean; appro
           <button className="tool-group-head" aria-busy={active} onClick={() => setOpen((o) => !o)}>
             {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
             <Terminal size={12} className="tool-group-ic" />
-            {!open && curDesc ? (
+            {!open && curAsks ? (
+              <span className="tool-group-cur" data-waiting-you="1">
+                <span className="tool-group-cur-copy">{t('tool.waitingYou')}</span>
+              </span>
+            ) : !open && curDesc ? (
               <span className="tool-group-cur">
                 <span className="tool-group-cur-copy chat-run-shimmer-text">
                   {curVerb}{' '}
@@ -197,7 +213,7 @@ export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean; appro
           </button>
           <AnimatedCollapse open={open}>
             <div className="tool-group-list">
-              {groupedEvents.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} running={!!running} waiting={waitingIds.has(ev.id)} />)}
+              {groupedEvents.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} running={!!running} waiting={waitingIds.has(ev.id)} asking={asksYou(ev)} />)}
             </div>
           </AnimatedCollapse>
         </div>

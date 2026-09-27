@@ -364,8 +364,9 @@
   background: var(--t2c-card-surface, var(--bg-card, var(--bg)));
   transition: opacity var(--duration-fast, 0.15s);
 }
-/* 换卡冷却(ApprovalTray ARM_MS):刚顶上来的那项按钮不接收点击,淡一点提示「这是新的一项」 */
-.t2c-apv-body.is-arming :is(.approval-actions, .inquiry-opts, .inquiry-input) { pointer-events: none; opacity: 0.55; }
+/* 换卡冷却(ApprovalTray ARM_MS):刚顶上来的那项按钮不接收点击,淡一点提示「这是新的一项」;
+ * 已送出等回执(is-sent)同样锁住 —— 同一项送第二次必然 410 */
+.t2c-apv-body:is(.is-arming, .is-sent) :is(.approval-actions, .inquiry-opts, .inquiry-input) { pointer-events: none; opacity: 0.55; }
 .t2c-apv .inquiry-opts, .t2c-apv .inquiry-input { transition: opacity var(--duration-fast, 0.15s); }
 /* 计划拍板区(PlanDecision):正文在流里的计划卡上,这里只有标题 + 可选的编辑框 + 决策按钮 */
 .t2c-apv .plan-decision-title {

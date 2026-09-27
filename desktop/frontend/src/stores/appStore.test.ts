@@ -552,10 +552,62 @@ vi.mock('../services/backendService', async (orig) => ({
   restoreCheckpoint: (...a: unknown[]) => restoreCpMock(...a),
   deleteMessages: (...a: unknown[]) => deleteMsgsMock(...a),
 }))
+const resolveApprovalMock = vi.hoisted(() => vi.fn())
+const resolveInquiryMock = vi.hoisted(() => vi.fn())
 vi.mock('../services/agentRunService', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   startRun: (...a: unknown[]) => startRunMock(...a),
+  resolveApproval: (...a: unknown[]) => resolveApprovalMock(...a),
+  resolveInquiry: (...a: unknown[]) => resolveInquiryMock(...a),
 }))
+
+// 托盘里同一项被点了两下:第二下必然 410(引擎第一次兑现就先发回执再回 200)。回执可能先到,那张早已是
+// 「已批准 / 已回答」—— 从前 410 分支无条件置「已过期」,把已送达的决定改判成没送达(评审 09-27)。
+describe('兑现请求回 410 只动仍在等的项', () => {
+  const msg = (apv: string, inq: string): UiMessage => ({
+    id: 'm1', role: 'assistant', content: '', status: 'streaming', timestamp: 1,
+    approvals: [{ approvalId: 'a1', runId: 'r1', name: 'run_bash', preview: '$ x', status: apv as 'pending' }],
+    inquiries: [{ inquiryId: 'q1', runId: 'r1', question: '?', options: [], status: inq as 'pending', ...(inq === 'answered' ? { answer: 'yes' } : {}) }],
+  })
+  const state = () => useApp.getState().messagesBySession.s1[0]
+  beforeEach(() => {
+    useApp.setState(initial, true)
+    useApp.setState({ tr: ((k: string) => k) as AppState['tr'], toast: () => {}, activeId: 's1' })
+    resolveApprovalMock.mockReset()
+    resolveInquiryMock.mockReset()
+  })
+
+  it('已批准 / 已回答的遇到 410 保持原状,且算送达(托盘不解锁重发)', async () => {
+    useApp.setState({ messagesBySession: { s1: [msg('approved', 'answered')] } })
+    resolveApprovalMock.mockResolvedValue({ ok: false, gone: true })
+    resolveInquiryMock.mockResolvedValue({ ok: false, gone: true })
+    expect(await useApp.getState().decideApproval('m1', 'a1', 'approve')).toBe(true)
+    expect(await useApp.getState().answerInquiry('m1', 'q1', 'yes')).toBe(true)
+    expect(state().approvals?.[0].status).toBe('approved')
+    expect(state().inquiries?.[0].status).toBe('answered')
+  })
+
+  it('还在等的遇到 410 → 置过期(原语义不变)', async () => {
+    useApp.setState({ messagesBySession: { s1: [msg('pending', 'pending')] } })
+    resolveApprovalMock.mockResolvedValue({ ok: false, gone: true })
+    resolveInquiryMock.mockResolvedValue({ ok: false, gone: true })
+    await useApp.getState().decideApproval('m1', 'a1', 'approve')
+    await useApp.getState().answerInquiry('m1', 'q1', 'yes')
+    expect(state().approvals?.[0].status).toBe('expired')
+    expect(state().inquiries?.[0].status).toBe('expired')
+  })
+
+  it('审批没送达(网络错 / 超时 / 非 2xx)→ 返回 false,托盘据此解锁重试', async () => {
+    useApp.setState({ messagesBySession: { s1: [msg('pending', 'pending')] } })
+    resolveApprovalMock.mockRejectedValueOnce(new Error('Request timed out'))
+    expect(await useApp.getState().decideApproval('m1', 'a1', 'approve')).toBe(false)
+    resolveApprovalMock.mockResolvedValueOnce({ ok: false, gone: false })
+    expect(await useApp.getState().decideApproval('m1', 'a1', 'approve')).toBe(false)
+    resolveApprovalMock.mockResolvedValueOnce({ ok: true, gone: false })
+    expect(await useApp.getState().decideApproval('m1', 'a1', 'approve')).toBe(true)
+    expect(state().approvals?.[0].status).toBe('pending') // 状态只等引擎的 approval_result 改
+  })
+})
 
 // 新会话必须**当场把模型写进会话**,而不是等用户显式选了才写:用户靠的是「上次用哪个下次还用哪个」
 // (cfg.modelId),此时 newChatModel 是空的。不写进去 → 引擎按 profile.defaultModelId 建库 →

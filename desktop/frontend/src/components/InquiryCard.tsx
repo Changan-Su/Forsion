@@ -146,22 +146,17 @@ export const PlanCard: React.FC<{ plan: string; req?: InquiryRequest }> = ({ pla
 export const PlanDecision: React.FC<{
   plan: string
   req: InquiryRequest
-  /** 返回 false = 没送达(网络/非 2xx)→ 解锁按钮让用户重试。 */
-  onAnswer: (answer: string) => void | Promise<boolean | void>
-}> = ({ plan, req, onAnswer }) => {
+  /** 已送出、等回执(锁在托盘层,卡片切走再切回也不丢);没送达时托盘会解锁。 */
+  busy?: boolean
+  onAnswer: (answer: string) => void
+}> = ({ plan, req, busy, onAnswer }) => {
   const { t } = useI18n()
   const [draft, setDraft] = useState(plan)
   const [editing, setEditing] = useState(false)
   const [feedback, setFeedback] = useState('')
   const [showFeedback, setShowFeedback] = useState(false)
-  // 本地已发标记:兑现要等 inquiry_result 事件回来才离开托盘,这中间不锁的话会重复提交(第二次 410)。
-  const [sent, setSent] = useState(false)
-  const pending = req.status === 'pending' && !sent
-  const answer = (a: string): void => {
-    setSent(true)
-    // 没送达就解锁:否则决策按钮永久置灰,这张卡成死路(状态只在 inquiry_result 回来时才变)。
-    void Promise.resolve(onAnswer(a)).then((ok) => { if (ok === false) setSent(false) }, () => setSent(false))
-  }
+  const pending = req.status === 'pending' && !busy
+  const answer = (a: string): void => { if (pending) onAnswer(a) }
   const approve = (auto: boolean): void => {
     if (!pending) return
     const head = auto ? PLAN_APPROVE_AUTO : PLAN_APPROVE_MANUAL

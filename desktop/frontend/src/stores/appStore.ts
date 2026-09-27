@@ -52,6 +52,7 @@ registerMessages({
   'appstore.steerQueued': { zh: '插话已请求，将在安全边界接入；原任务继续保留。', en: 'Steering requested at the next safe boundary; the original task is preserved.' },
   'appstore.steerFailed': { zh: '暂未加速插话，消息仍保留在等待区：{e}', en: 'Could not expedite steering; your message remains queued: {e}' },
   'appstore.steerDiscardedCall': { zh: '插话中断了此工具调用的生成；工具尚未执行。', en: 'Steering interrupted this tool call during generation; it was not executed.' },
+  'approval.sendFail': { zh: '审批没送达：{e}，请重试', en: 'Approval was not delivered: {e} — please retry' },
   // 审批档 PUT 失败:引擎按存值审批,没存上就不能停在新档上
   'appstore.approvalSaveFailed': { zh: '审批档没能保存，已恢复为原来的档（{e}）', en: 'Couldn’t save the approval mode; restored the previous one ({e})' },
   'appstore.approvalSaveRaced': { zh: '审批档被更早的一次保存覆盖，已改为实际生效的档', en: 'An earlier save overwrote the approval mode; now showing the one in effect' },
@@ -746,7 +747,8 @@ export interface AppState {
    *  ⚠️ 不在 store 里直接调 openSession:sessionNav 依赖 store,反向 import 会成环。 */
   setJumpTarget(sessionId: string, messageId?: string): void
   clearJumpTarget(): void
-  decideApproval(messageId: string, approvalId: string, action: 'approve' | 'approve_always' | 'reject', argsOverride?: Record<string, any>, sessionId?: string | null): Promise<void>
+  /** false = 没送达(网络 / 超时 / 非 2xx),托盘据此解锁重试;已不在等待(410)也算送达过了。 */
+  decideApproval(messageId: string, approvalId: string, action: 'approve' | 'approve_always' | 'reject', argsOverride?: Record<string, any>, sessionId?: string | null): Promise<boolean>
   /** 兑现一次询问。返回 false = 没送达(网络/非 2xx)→ 调用方(计划卡)得解锁按钮重试。 */
   answerInquiry(messageId: string, inquiryId: string, answer: string, sessionId?: string | null): Promise<boolean>
   /** Agent Desk:接收 desk_present 事件(白名单校验/静音/档位策略都在这)。 */
@@ -2854,11 +2856,24 @@ export const useApp = create<AppState>((set, get) => ({
 
   decideApproval: async (messageId, approvalId, action, argsOverride, targetSessionId) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
-    if (!sid) return
+    if (!sid) return false
     const approval = (get().messagesBySession[sid] || []).find((m) => m.id === messageId)?.approvals?.find((a) => a.approvalId === approvalId)
-    if (!approval?.runId) return
-    const r = await resolveApproval(get().cfg, approval.runId, approvalId, action, argsOverride)
-    if (r.gone) get().patchMessage(sid, messageId, (m) => ({ ...m, approvals: (m.approvals || []).map((a) => (a.approvalId === approvalId ? { ...a, status: 'expired' as const } : a)) }))
+    if (!approval?.runId) return false
+    let r: { ok: boolean; gone: boolean }
+    try {
+      r = await resolveApproval(get().cfg, approval.runId, approvalId, action, argsOverride)
+    } catch (e: any) {
+      get().toast(get().tr('approval.sendFail', { e: e?.message || e }), true)
+      return false
+    }
+    // 410 = 已不在等待。只把**仍待批**的那张置过期:重复点击时第二下必然 410,而 approval_result 可能已先到,
+    // 那张早就是「已批准」了 —— 无条件覆盖会把已送达的决定改判成「已过期」(评审 09-27)。
+    if (r.gone) {
+      get().patchMessage(sid, messageId, (m) => ({ ...m, approvals: (m.approvals || []).map((a) => (a.approvalId === approvalId && a.status === 'pending' ? { ...a, status: 'expired' as const } : a)) }))
+      return true
+    }
+    if (!r.ok) { get().toast(get().tr('approval.sendFail', { e: 'HTTP' }), true); return false }
+    return true
   },
 
   answerInquiry: async (messageId, inquiryId, answer, targetSessionId) => {
@@ -2875,7 +2890,8 @@ export const useApp = create<AppState>((set, get) => ({
       return false // 没送达:卡片解锁,用户能重试(否则决策按钮永久置灰=死路)
     }
     if (r.gone) {
-      get().patchMessage(sid, messageId, (m) => ({ ...m, inquiries: (m.inquiries || []).map((q) => (q.inquiryId === inquiryId ? { ...q, status: 'expired' as const } : q)) }))
+      // 只把仍待答的置过期(理由同 decideApproval:重复提交的第二下 410,回执可能已先到)
+      get().patchMessage(sid, messageId, (m) => ({ ...m, inquiries: (m.inquiries || []).map((q) => (q.inquiryId === inquiryId && q.status === 'pending' ? { ...q, status: 'expired' as const } : q)) }))
       return true
     }
     if (!r.ok) { get().toast(t('inquiry.sendFail', { e: 'HTTP' }), true); return false }

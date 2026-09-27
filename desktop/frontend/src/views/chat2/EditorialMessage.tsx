@@ -21,6 +21,7 @@ registerMessages({
   'chat.team.working': { zh: '工作中 · {activity}', en: 'Working · {activity}' },
   'chat.team.workingIdle': { zh: '工作中', en: 'Working' },
   'chat.team.waiting': { zh: '等待你的审批', en: 'Waiting for your approval' },
+  'chat.team.waitingAnswer': { zh: '等你回答 · 在输入框上方', en: 'Waiting for your answer · above the input box' },
   'chat.team.done': { zh: '已完成', en: 'Done' },
   'chat.approval.pointer': { zh: '{name} 等你批准 · 在输入框上方', en: '{name} is waiting for your approval · above the input box' },
   'chat.approval.pointerN': { zh: '{n} 项操作等你批准 · 在输入框上方', en: '{n} actions are waiting for your approval · above the input box' },
@@ -376,6 +377,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   const planInq = pickPlanInquiry(msg)
   const pendingApv = (msg.approvals || []).filter((a) => a.status === 'pending')
   const pendingAsk = (msg.inquiries || []).filter((q) => q !== planInq && q.status === 'pending')
+  const awaitingAnswer = pendingAsk.length > 0 || planInq?.status === 'pending'
   const voiceMode = !!voice?.on && (msg.status === 'done' || msg.status === 'stopped')
   // 顺序段里已消费的 Sketch 不许再在底部画一次。旧历史/语音消息走尾部兼容路径。
   const availableSketchIds = new Set((msg.sketches || []).map((item) => item.callId))
@@ -418,7 +420,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
               return parts.length ? (
                 <Fragment key={i}>
                   {parts.map((part, j) => part.t === 'tools'
-                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${j}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} />
+                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${j}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
                     : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} />)}
                 </Fragment>
               ) : null
@@ -426,7 +428,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
           }
           return (
             <>
-              {!!msg.toolEvents?.length && <ToolGroup events={msg.toolEvents} running={msg.status === 'streaming'} approvals={msg.approvals} />}
+              {!!msg.toolEvents?.length && <ToolGroup events={msg.toolEvents} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />}
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} cfg={voice!.cfg} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
@@ -471,13 +473,14 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
         {msg.status === 'streaming' && msg.work && (
           <div className="t2-dim chat-thinking-live" role="status" aria-live="polite" data-team-work={msg.work.waiting ? 'waiting' : 'working'}>
             <span className={msg.work.waiting ? undefined : 'chat-run-shimmer-text'}>
-              {msg.work.waiting ? t('chat.team.waiting') : msg.work.activity ? t('chat.team.working', { activity: msg.work.activity }) : t('chat.team.workingIdle')}
+              {msg.work.waiting
+                // 成员在等的是提问 / 计划拍板而不是审批时,别写「等待你的审批」(托盘里展开的是个问题,人会找不到审批)
+                ? t(!pendingApv.length && awaitingAnswer ? 'chat.team.waitingAnswer' : 'chat.team.waiting')
+                : msg.work.activity ? t('chat.team.working', { activity: msg.work.activity }) : t('chat.team.workingIdle')}
             </span>
           </div>
         )}
-        {/* 在等你拍板 / 回答时不说「思考中」:流里那行指路已经说明了它在等什么 */}
-        {!body && msg.status === 'streaming' && !msg.work && !msg.toolEvents?.length && !msg.reasoning && (!msg.live || !showWaitDetails)
-          && !pendingApv.length && !pendingAsk.length && planInq?.status !== 'pending' && (
+        {!body && msg.status === 'streaming' && !msg.work && !msg.toolEvents?.length && !msg.reasoning && (!msg.live || !showWaitDetails) && (
           <div className="t2-dim chat-thinking-live chat-run-shimmer-text" role="status" aria-live="polite">
             {t('chat.thinking')}
           </div>

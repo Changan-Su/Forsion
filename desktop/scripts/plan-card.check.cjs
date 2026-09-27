@@ -121,9 +121,6 @@ const measure = () => {
     actionsRight: r('actions').right,
     bodyScrolls: body.scrollHeight > body.clientHeight + 1,
     bodyMaxH: parseFloat(getComputedStyle(body).maxHeight),
-    // 决策按钮不在计划卡里(更不在正文滚动区里):它们在输入框上方的托盘
-    actionsInsideCard: document.getElementById('card').contains(document.getElementById('actions')),
-    actionsInTray: document.getElementById('tray').contains(document.getElementById('actions')),
     trayRight: r('tray').right,
     menuTop: menu.getBoundingClientRect().top,
     menuH: menu.getBoundingClientRect().height,
@@ -154,8 +151,8 @@ const measure = () => {
 
   check('卡片吃阅读宽上限(700,不满铺)', m.cardW <= 701 && m.colW > 701, `cardW=${m.cardW.toFixed(1)} colW=${m.colW.toFixed(1)}`)
   check('⚠️长计划正文自己滚(不把整卡撑长)', m.bodyScrolls && m.bodyMaxH <= 400, `scrolls=${m.bodyScrolls} maxH=${m.bodyMaxH}`)
-  check('⚠️决策按钮不在计划卡里、在输入框上方的托盘(长计划下也看得见)', !m.actionsInsideCard && m.actionsInTray,
-    `insideCard=${m.actionsInsideCard} inTray=${m.actionsInTray}`)
+  // 「按钮不在计划卡里、在托盘里」是**结构**,这份手抄夹具断不了(恒真);真判据在 e2e:chatevents 的 B1(cardButtons=0 且 trayButtons=5)。
+  // 这里只钉 CSS:托盘里的决策按钮不溢出、窄栏换行。
   check('按钮不捅出托盘右缘', m.actionsRight <= m.trayRight + 1, `actions=${m.actionsRight.toFixed(1)} tray=${m.trayRight.toFixed(1)}`)
   check('⚠️回退菜单向下弹(不是 .composer-menu 默认的向上)', m.menuTop >= m.btnBottom - 1,
     `menuTop=${m.menuTop.toFixed(1)} btnBottom=${m.btnBottom.toFixed(1)}`)
