@@ -1,5 +1,5 @@
 /**
- * Muse 调度运行态(muse-state.json):上次周期时刻 + Muse 自己定的休眠(set_next_wake,2026-09-24)。
+ * Muse 调度运行态(muse-state.json):上次周期时刻 + 当前活动会话 + Muse 自己定的休眠(set_next_wake,2026-09-24)。
  *
  * 住**引擎自有状态域** ~/.tangu/(与 special-agents.json 同级),刻意**不**放 agents/muse/:那是 Muse 自己的可写根
  * (fsPolicy.writableRoots),调度控制态放在模型能写的地方,Muse 或一次提示注入把它写成远未来 = 把自己永久停掉
@@ -31,6 +31,9 @@ export interface MuseSleep {
 
 interface MuseStateShape {
   lastCycleAt?: number;
+  /** 当前活动的 Muse 会话(2026-09-27 起每个周期一个新会话):重启后 status 靠它指回最新那一轮 ——
+   *  本地 SQLite 的 created_at 只到秒,同一秒建的两个会话按时间排不出先后。 */
+  sessionId?: string;
   sleep?: MuseSleep | null;
 }
 
@@ -49,6 +52,12 @@ export async function readLastCycleAt(): Promise<number> {
   const v = Number((await readRaw()).lastCycleAt);
   // 晚于当前时刻的值只可能来自篡改或时钟回拨 → 当没跑过。宁可多跑一个周期,也不让一个坏值把 Muse 停死。
   return Number.isFinite(v) && v > 0 && v <= Date.now() ? v : 0;
+}
+
+/** 盘上记的活动会话 id(形状不对 → null,调用方回落到按 created_at 查)。 */
+export async function readMuseSessionId(): Promise<string | null> {
+  const v = (await readRaw()).sessionId;
+  return typeof v === 'string' && /^[A-Za-z0-9-]{8,64}$/.test(v) ? v : null;
 }
 
 /** 合法的休眠:setAt 不在未来、until 晚于 setAt 且不超过 24h;否则(篡改 / 时钟回拨 / 坏文件)当没睡。纯函数,单测钉。 */

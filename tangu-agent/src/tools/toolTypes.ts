@@ -152,6 +152,8 @@ export interface ToolContext {
   getWorkingMessages?: () => any[];
   /** Current user-provided image attachments, retained independently of vision/compaction. No history or disk fallback. */
   getImageInputs?: () => ReadonlyArray<{ url: string }>;
+  /** 本 run 实际用的上下文窗口(token;Ultra 不封顶)。self_brainstorm 的超窗护栏与主 loop 同一分母;只有主 agentLoop 装配。 */
+  contextWindow?: number;
 }
 
 /** Agent Desk 演出请求:views=从上到下的展示项(file=本地文件;view=已注册的桌面视图,含插件注册);

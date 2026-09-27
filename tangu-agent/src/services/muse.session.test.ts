@@ -32,6 +32,7 @@ import {
   shouldRotateMuseSession, MUSE_SESSION_MAX_MESSAGES, getMuseSessionId, ensureMuseSession,
   tokensInWindow, buildCycleMessages, museAgentConfig, readLastCycleAt, writeLastCycleAt, museStateFile,
 } from './muse.js';
+import { readMuseSessionId } from './museState.js';
 import { SPECIAL_AGENTS_DEFAULTS } from './specialAgentsConfig.js';
 import { protectedHostPaths } from '../sandbox/hostSandboxProtection.js';
 
@@ -43,11 +44,11 @@ beforeEach(() => {
 });
 
 describe('C1a 会话轮换', () => {
-  it('轮换判据:攒够 30 条就换,差一条不换', () => {
-    expect(MUSE_SESSION_MAX_MESSAGES).toBe(30);
+  it('轮换判据:每个周期一个新会话 —— 一有消息就换,空会话复用(09-27;从前攒满 30 条才换,每周期整段回放旧周期)', () => {
+    expect(MUSE_SESSION_MAX_MESSAGES).toBe(1);
     expect(shouldRotateMuseSession(0)).toBe(false);
-    expect(shouldRotateMuseSession(29)).toBe(false);
-    expect(shouldRotateMuseSession(30)).toBe(true);
+    expect(shouldRotateMuseSession(1)).toBe(true);
+    expect(shouldRotateMuseSession(2)).toBe(true); // 一个周期 = kickoff + 回复
     expect(shouldRotateMuseSession(120)).toBe(true);
   });
 
@@ -107,6 +108,10 @@ describe('C1a 预算口径:跨全部 Muse 会话', () => {
   });
 });
 
+// 落库 kickoff 的长度帽:防膨胀。09-27 从 2500 放到 3000 —— 加了 ctx.agent 契约;且每个周期一个新会话后它不再被
+// 逐周期回放,只随本周期发一次(多 200 来字符 ≈ 60 token,对 ~1.8 万的开局上下文可以忽略)。
+const MAX_KICKOFF = 3000;
+
 describe('C1b kickoff 拆分', () => {
   const cfg = { ...SPECIAL_AGENTS_DEFAULTS.muse, mode: 'ask' as const, escalateTo: '', notify: 'immediate' as const };
   const dynA = { extraKickoff: '\n\n[Watch rule fired] x', hint: '\n\n[User\'s long-term memory]\nsecret', pending: 3, quietSince: true };
@@ -119,7 +124,7 @@ describe('C1b kickoff 拆分', () => {
 
   it('落库的那条是短指令(仍带权限档 / Space / TODO 配额三条规矩)', () => {
     const { message } = buildCycleMessages(cfg, dynA);
-    expect(message.length).toBeLessThan(2500);
+    expect(message.length).toBeLessThan(MAX_KICKOFF);
     expect(message).toContain('Permission tier: ask');
     expect(message).toContain('Your Space:');
     expect(message).toContain('add_muse_todo');
@@ -131,7 +136,10 @@ describe('C1b kickoff 拆分', () => {
       expect(message).toMatch(/Library and your Space folder|authorized folders and your Space folder/);
       expect(message).toContain('call ctx.registerView({ id: "home", ... }) at the top level');
       expect(message).toContain('Do not wrap the file in function setup(ctx)');
-      expect(message.length).toBeLessThan(2500);
+      expect(message).toContain('ctx.agent.todos()'); // 09-27:从数据渲染,别写死
+      expect(message).toContain('never edit it just to refresh status or timestamps');
+      expect(message).toContain('works only inside a click handler');
+      expect(message.length).toBeLessThan(MAX_KICKOFF);
     }
   });
 
@@ -189,6 +197,19 @@ describe('C2 lastCycleAt 落盘', () => {
       // 晚于当前时刻的值只可能来自篡改或时钟回拨 → 当没跑过(最多多跑一个周期,而不是永久停摆)。
       await writeLastCycleAt(Date.now() + 86_400_000);
       expect(await readLastCycleAt()).toBe(0);
+    });
+  });
+
+  it('活动会话指针随周期时刻一起落盘(每个周期一个新会话:重启后 status 靠它指回最新那轮);形状不对 → null', async () => {
+    await withHome(async () => {
+      expect(await readMuseSessionId()).toBe(null);
+      await writeLastCycleAt(1_757_000_000_000, 'b1a2c3d4-0000-4000-8000-000000000001');
+      expect(await readMuseSessionId()).toBe('b1a2c3d4-0000-4000-8000-000000000001');
+      expect(await readLastCycleAt()).toBe(1_757_000_000_000);
+      await writeLastCycleAt(1_757_000_100_000); // 不带会话 id 的写不抹掉指针
+      expect(await readMuseSessionId()).toBe('b1a2c3d4-0000-4000-8000-000000000001');
+      await fsp.writeFile(museStateFile(), JSON.stringify({ sessionId: '../../etc' }), 'utf8');
+      expect(await readMuseSessionId()).toBe(null);
     });
   });
 

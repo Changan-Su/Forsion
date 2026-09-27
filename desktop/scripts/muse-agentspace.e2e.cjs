@@ -6,7 +6,8 @@
  *  ③ 写坏 main.js(setup 抛错)+ 戳变 → 主区回落空白态(Library 打底)+ POST /agent/special/muse/feedback 收到失败原因;
  *  ④ 修好(v4)后再写成「包成 function setup(ctx){…} 却不调用」(09-27 实机 16 天空白的形态:零注册零报错)
  *    → 主区回落空白态 + feedback 点名「没注册 home、要顶层 registerView」;再写成「home 注册了但 mount 抛错」
- *    → 主区是「插件视图加载失败」+ feedback 点名 mount() threw;再改回 v4;
+ *    → 主区是「插件视图加载失败」+ feedback 点名 mount() threw;再换成用 ctx.agent 从数据渲染的一版(2026-09-27)
+ *    → 渲染出待办数与 Journal、挂载时不经手势的 updateTodo 被拒、真点击才放行(引擎收到 done + from pending);再改回 v4;
  *  ⑤ 退出 → 重启 → 点 Muse 图标 → 命名布局里存的是宿主类型 muse-library,恢复后直接是插件视图(不是 Tangu 内容 / 空框)。
  * 负对照 --nc:假引擎永不更新戳 → ② ③ ④ 必红。先 `npm run build`;跑法 `npm run e2e:museagentspace`;截图 $TMPDIR/forsion-muse-agentspace.png。
  */
@@ -32,10 +33,33 @@ const BROKEN = `ctx.registerView({ id: 'home', title: 'x', mount(el) { el.textCo
 // 宿主把整个文件当 setup 的函数体跑:这里只声明了一个内部函数,registerView 永远不执行,也不抛错
 const WRAPPED = `function setup(ctx) {\n  ctx.registerView({ id: 'home', title: 'x', mount(el) { el.textContent = 'never' } })\n}\n`
 const MOUNT_THROWS = `ctx.registerView({ id: 'home', title: 'x', mount(el) { throw new Error('boom mount') } })\n`
+// ctx.agent:从数据渲染;挂载时直接 updateTodo(没有手势)必须被拒;按钮的 click 里才放行
+const AGENT_DATA = `ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
+  const box = document.createElement('div'); box.className = 'agent-data'; el.append(box)
+  ctx.agent.updateTodo('t1', 'done').then(() => { box.dataset.nogesture = 'accepted' }, () => { box.dataset.nogesture = 'rejected' })
+  // 借 Space 以外的点击偷偷标掉:宿主只认本视图里的真实交互 → 必须被拒
+  const onDoc = (e) => { if (!el.contains(e.target)) ctx.agent.updateTodo('t1', 'dismissed').then(() => { box.dataset.outside = 'accepted' }, () => { box.dataset.outside = 'rejected' }) }
+  document.addEventListener('click', onDoc, true)
+  const draw = async () => {
+    const [todos, journal] = await Promise.all([ctx.agent.todos('pending'), ctx.agent.library.read('Journal/today.md').catch(() => '')])
+    box.dataset.todos = String(todos.length); box.dataset.journal = journal.slice(0, 80)
+    box.replaceChildren(...todos.map((t) => {
+      const b = document.createElement('button'); b.className = 'agent-done'; b.textContent = t.title
+      b.onclick = () => ctx.agent.updateTodo(t.id, 'done').then(() => { box.dataset.clicked = 'ok' }, (e) => { box.dataset.clicked = String(e && e.message) })
+      return b
+    }))
+  }
+  draw()
+  const off = ctx.agent.subscribe(draw)
+  return () => { off(); document.removeEventListener('click', onDoc, true) }
+} })
+`
 
 async function launch(home, stubUrl) {
   const app = await electron.launch({
-    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT],
+    // -ApplePersistenceIgnoreState YES:共用的 Electron.app 最近崩过(别的会话 / 台架),macOS 会在 ready 之前弹
+    // 「重新打开窗口时意外退出,要不要再试」的模态框把主线程卡死 —— 台架实例后台起、没人点,firstWindow 永远等不到(09-27 采样实证)
+    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'],
     cwd: ROOT,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stubUrl },
   })
@@ -77,6 +101,8 @@ async function main() {
   let stamp = 1
   const bump = () => { if (!NEGATIVE_CONTROL) stamp += 1 }
   const feedback = []
+  let todos = []
+  const patches = []
   const walk = (dir, rel = '') => fs.readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
     const r = rel ? `${rel}/${e.name}` : e.name
     if (e.isDirectory()) return [{ path: r, size: 0, mtime: 0, dir: true }, ...walk(path.join(dir, e.name), r)]
@@ -86,11 +112,13 @@ async function main() {
   const stub = await startStubEngine({
     sessions: [], messages: [],
     models: [{ id: 'm1', name: 'Stub 模型', provider: 'stub', contextWindow: 128_000 }],
-    handle: async ({ path: p, method, body }) => {
+    handle: async ({ path: p, method, body, url }) => {
       if (p === '/agent/special/muse/status') return { status: { enabled: true, hasModel: true, running: false, restartsThisWindow: 0, maxRestartsPerWindow: 3, lastCycleAt: null, lastError: null, sessionId: null, mode: 'ask', heartbeatMinutes: 120, pendingApprovals: 0, libraryDir: lib, spaceDir: space, spaceStamp: stamp } }
       if (p === '/agent/special/muse/library') return { root: lib, files: walk(lib) }
       if (p === '/agent/special/approvals') return { approvals: [] }
-      if (p === '/agent/special/muse/todos') return { todos: [] }
+      if (p === '/agent/special/muse/todos') return { todos }
+      if (p.startsWith('/agent/special/muse/todos/') && method === 'PATCH') { patches.push({ id: p.split('/').pop(), ...(await body()) }); return { ok: true } }
+      if (p === '/agent/special/muse/library/file') return { path: url.searchParams.get('path'), content: fs.readFileSync(path.join(lib, url.searchParams.get('path') || 'x'), 'utf8') }
       if (p === '/agent/special/muse/triggers') return { triggers: [] }
       if (p === '/agent/special/schedule' && method === 'GET') return { schedules: [] }
       if (p === '/agent/special/muse/feedback' && method === 'POST') { feedback.push((await body()).text); return { ok: true } }
@@ -146,6 +174,24 @@ async function main() {
     check('挂载失败经 feedback 回写给 Muse(从前只有用户看得见)', mountFb(), JSON.stringify(feedback))
     fs.writeFileSync(path.join(space, 'main.js'), mainJs(4), 'utf8'); bump()
     check('改回 v4 后 ≤12s 恢复', await visible(win, '.muse-space-hello[data-v="4"]', 12_000))
+
+    // ctx.agent(2026-09-27):Space 从数据渲染;挂载时不经手势的 updateTodo 被拒;Playwright 真点击 = 真手势才放行
+    const attached = async (sel, timeout) => win.waitForSelector(sel, { timeout, state: 'attached' }).then(() => true, () => false)
+    todos = [{ id: 't1', title: 'Try X', detail: null, status: 'pending', source_session_id: null, created_at: '2026-09-27 10:00:00' }]
+    fs.writeFileSync(path.join(lib, 'Journal', 'today.md'), '- 01:45 · heartbeat · done\n', 'utf8')
+    fs.writeFileSync(path.join(space, 'main.js'), AGENT_DATA, 'utf8'); bump()
+    check('ctx.agent:Space 从数据渲染出待办数与 Journal', await attached('.agent-data[data-todos="1"][data-journal*="heartbeat"]', 12_000))
+    check('ctx.agent:挂载时不经手势的 updateTodo 被拒', await attached('.agent-data[data-nogesture="rejected"]', 5_000))
+    await win.click('text=当前思考') // Space 以外(右栏 Muse 面板)的真实点击
+    check('ctx.agent:借 Space 以外的点击调 updateTodo 被拒', await attached('.agent-data[data-outside="rejected"]', 5_000))
+    await win.waitForTimeout(1700) // 过了 1.5 秒手势窗口,下面那一下才是唯一的放行来源
+    await win.click('.agent-data .agent-done')
+    const t3 = Date.now()
+    while (Date.now() - t3 < 5000 && !patches.length) await win.waitForTimeout(200)
+    check('ctx.agent:Space 里真点击 → updateTodo 放行,引擎收到 done + from pending;别处点击那次没发出去', patches.length === 1 && patches[0].id === 't1' && patches[0].status === 'done' && patches[0].from === 'pending', JSON.stringify(patches))
+    todos = []
+    fs.writeFileSync(path.join(space, 'main.js'), mainJs(4), 'utf8'); bump()
+    check('改回 v4 后 ≤12s 恢复(ctx.agent 之后)', await visible(win, '.muse-space-hello[data-v="4"]', 12_000))
 
     // ⑤ 退出 → 重启 → 点进去就是插件视图(布局只存宿主类型 muse-library)
     await app.close()

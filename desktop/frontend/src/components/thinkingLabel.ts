@@ -5,7 +5,7 @@
  */
 import type { ThinkingLevel } from '../types'
 
-/** 档位的短名键(「标准 / 极简 / 浅 / 中 / 深 / 极深 / 拉满」)。 */
+/** 档位的短名键(Standard / Minimal / Low / Medium / High / X-high / Max —— 中文界面也写英文,09-27 用户拍板)。 */
 export const thinkingShortKey = (lv: ThinkingLevel): string => `input.thinkingShort.${lv}`
 
 /** 档位的短名(已翻译)。 */

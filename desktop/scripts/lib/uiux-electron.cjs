@@ -87,6 +87,7 @@ function startDelayProxy(stubUrl, delay) {
  *  - tag:临时目录前缀
  *  - overrideHome:true = 连 HOME 一起覆写(造物托管根 = <HOME>/Forsion-Dev/Project,不覆写会读用户真目录)
  *  - fixtures:{ agents, sessions }(缺省 defaultFixtures)
+ *  - messages:桩引擎对任一会话回的消息列表(缺省空)
  * 返回 { app, win, home, projectDir, stub, close }。
  */
 async function launch(opts = {}) {
@@ -111,7 +112,7 @@ async function launch(opts = {}) {
     try { fs.rmSync(home, { recursive: true, force: true }) } catch { /* ignore */ }
   }
   try {
-    stub = await startStubEngine({ agents: fx.agents, sessions: fx.sessions })
+    stub = await startStubEngine({ agents: fx.agents, sessions: fx.sessions, messages: opts.messages })
     proxy = opts.delay ? await startDelayProxy(stub.url, opts.delay) : null
     const backend = proxy ? proxy.url : stub.url
     // 未打包时主进程用 `<dir>-dev`,两份都种;笔记库也预置 —— 日历 Space 的可用性判定要 amadeusAvailable()。

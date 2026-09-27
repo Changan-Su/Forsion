@@ -943,6 +943,22 @@ export interface PluginContext {
   desk?: {
     registerCompanion(def: import('./deskCompanion').DeskCompanionContribution): import('./deskCompanion').DeskCompanionHandle
   }
+  /** agent 自建 Space 读写自家数据(2026-09-27+)。**只在 agent 自建的 Space 插件上存在** —— `<tangu>/agents/<slug>/Space/`
+   *  装成的 `agent-<slug>`,只能碰它自己这个 agent;别的插件、以及没有数据源的 agent(今天只有 Muse 有),整个没有 `ctx.agent`。
+   *  - 拉取式:`status()` / `todos()` / `schedule()` / `library.list()` / `library.read(path)`(Library 内文本文件,
+   *    相对路径,≤1MB;越界 / 隐藏文件 / 不存在 → reject)。后端没就绪也 reject,自己兜空态。
+   *  - `subscribe(cb)`:周期结束、睡醒、待批数变化、`updateTodo` 之后回调(宿主约 20 秒查一次);禁用/重载宿主统一收。
+   *  - `updateTodo(id, 'done' | 'dismissed')`:**只在用户手势里生效**(点击等瞬时激活),否则 reject —— 效果与 Muse 面板的
+   *    按钮相同,会以「用户处理了」的 [feedback] 回到 agent 日志;只改仍是 pending 的,别处已处理过的 reject。 */
+  agent?: {
+    slug: string
+    status(): Promise<import('./tanguSeam').TanguAgentSelfStatus | null>
+    todos(status?: import('./tanguSeam').TanguAgentTodoStatus): Promise<import('./tanguSeam').TanguAgentTodo[]>
+    updateTodo(id: string, status: 'done' | 'dismissed'): Promise<void>
+    schedule(): Promise<import('./tanguSeam').TanguAgentScheduleEntry[]>
+    library: { list(): Promise<import('./tanguSeam').TanguAgentLibraryEntry[]>; read(path: string): Promise<string> }
+    subscribe(cb: () => void): () => void
+  }
   /** 前台窗口采样(host-only 接缝)——「现在焦点在哪个 app」。**两道闸都过了才有值**:
    *  ① 插件在 manifest `capabilities` 里声明了 'activeWindow'(没声明 → `ctx.system` 整个不存在);
    *  ② 用户在 设置 → 开发者选项 打开了「前台窗口采样」(主进程配置,默认关)。

@@ -16,7 +16,7 @@ import type { NestedPanelPlacement } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'
 import { thinkingLabel } from './thinkingLabel'
-import type { AgentConfig, DefaultModelSlot, ModelInfo, ModelsResponse } from '../types'
+import type { AgentConfig, CtxInfo, DefaultModelSlot, ModelInfo, ModelsResponse } from '../types'
 
 registerMessages({
   'pill.rowAdvanced': { zh: '高级', en: 'Advanced' },
@@ -35,6 +35,7 @@ registerMessages({
   'pill.ctxDefault': { zh: '默认 · {n}', en: 'Default · {n}' },
   'pill.ctxMax': { zh: '最大 · {n}', en: 'Maximum · {n}' },
   'pill.ctxHint': { zh: '对本机这个模型的所有会话生效。超过 {n} 后每轮都要重发更多上下文，额度消耗随之上升。', en: 'Applies to every conversation with this model on this device. Past {n}, each turn resends more context, so usage rises with it.' },
+  'pill.ctxUltra': { zh: 'Ultra 下自动用满 {n}；关掉 Ultra 后按这里的设置。', en: 'Ultra uses the full {n} automatically. This setting applies again once Ultra is off.' },
   // Ultra 是对标 Codex 的模式专名(同 Chat / Work),中文界面也写 Ultra(i18nCoverage F 已逐键登记)。
   'pill.ultra': { zh: 'Ultra', en: 'Ultra' },
   'pill.ultraNote': { zh: '思考拉满，主动并行派子代理', en: 'Max thinking + parallel subagents' },
@@ -52,14 +53,36 @@ const effortDisplay = (lv: Thinking, t: (key: string) => string): string => thin
 /** 与输入框进度环同一写法(272k / 1M);环在 Composer2 里,这边反向 import 会成环。 */
 const fmtWindow = (n: number): string => n >= 1e6 ? `${Math.floor(n / 1e5) / 10}M` : `${Math.floor(n / 100) / 10}k`
 
-/** 「上下文上限」行:模型本身窗口 > 缺省上限才有得开;已手动覆盖过的也露(好改回默认)。老引擎不下发 max/cap → null。 */
-export function contextLimitOptions(model: ModelInfo | undefined, cap: number | undefined): { current: number; defaultTokens: number; maxTokens?: number; selected: 'default' | 'max' | null } | null {
+/** Ultra 会话实际用的窗口(与引擎 effectiveContextWindowInfo(…, uncapped) 同口径,09-27):没手动覆盖的不封顶,覆盖照旧。 */
+export function ultraContextWindow(model: ModelInfo | undefined): number | undefined {
+  if (!model?.contextWindow) return undefined
+  return model.contextWindowSource === 'override' ? model.contextWindow : Math.max(model.contextWindow, model.maxContextWindow ?? 0)
+}
+
+/**
+ * 输入框进度环的分母(09-27 Ultra 拉满上下文)。上一轮 context_info 按另一种 Ultra 状态算的(切了开关、还没发下一条),
+ * 或还没有它而 Ultra 开着,就按下一轮会用的窗口现算;在飞的 run 照用它自己报的。stale = 那份 context_info 的窗口相关项
+ * (压缩线、封顶提示)已不作数。引擎没声明 ultraUncapped(老引擎 Ultra 也封顶、context_info 不带 ultra)时 Ultra 不影响窗口。
+ * 按 ctxInfo.ultra 判而不是切换时清 store:重放事件会把旧的那份原样放回来。
+ */
+export function contextRingWindow(o: {
+  ctxInfo?: CtxInfo | null; contextWindow?: number; running?: boolean; ultra: boolean; model?: ModelInfo; engineUncapped?: boolean
+}): { window?: number; stale: boolean } {
+  const ultra = o.ultra && !!o.engineUncapped
+  const stale = !!o.ctxInfo && !o.running && !!o.ctxInfo.ultra !== ultra
+  if (!stale && (o.ctxInfo || !ultra)) return { window: o.contextWindow, stale }
+  return { window: (ultra ? ultraContextWindow(o.model) : o.model?.contextWindow) || o.contextWindow, stale }
+}
+
+/** 「上下文上限」行:模型本身窗口 > 缺省上限才有得开;已手动覆盖过的也露(好改回默认)。老引擎不下发 max/cap → null。
+ *  ultra:行上显示 Ultra 下实际用的窗口;两个选项与勾选仍描述本机存的按模型设置(关掉 Ultra 后照它)。 */
+export function contextLimitOptions(model: ModelInfo | undefined, cap: number | undefined, ultra = false): { current: number; defaultTokens: number; maxTokens?: number; selected: 'default' | 'max' | null } | null {
   const max = model?.maxContextWindow
   if (!model?.contextWindow || !max || !cap) return null
   const overridden = model.contextWindowSource === 'override'
   if (max <= cap && !overridden) return null
   return {
-    current: model.contextWindow,
+    current: (ultra && ultraContextWindow(model)) || model.contextWindow,
     defaultTokens: Math.min(max, cap),
     ...(max > cap ? { maxTokens: max } : {}),
     // 设置页手填的其它值(如 500000)两档都不打勾,行上照实显示当前值
@@ -87,16 +110,23 @@ export function catalogForDefaultSlot(models: ModelInfo[], slot: DefaultModelSlo
   return slot === 'visionModelId' ? llms.filter((m) => m.supportsVision !== false) : llms
 }
 
-/** 仅当文本溢出才在 hover 时跑马灯。 */
+/** 仅当文本溢出才在 hover 时跑马灯。位移按实测溢出量(scrollWidth − clientWidth)走 --marquee-shift,宽度一变
+ *  (展开、Ultra 标签占位、窄栏)就重新量 —— 原来写死按 160px 框算、只在文字变化时量,名字被挤窄时不滚或滚不到头(creview 09-27)。 */
 const MarqueeLabel: React.FC<{ text: string }> = ({ text }) => {
   const ref = useRef<HTMLSpanElement>(null)
-  const [over, setOver] = useState(false)
-  useEffect(() => {
+  const [shift, setShift] = useState(0)
+  useLayoutEffect(() => {
     const el = ref.current
-    if (el) setOver(el.scrollWidth > el.clientWidth + 2)
+    if (!el) return
+    const measure = (): void => setShift(Math.max(0, el.scrollWidth - el.clientWidth))
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
   }, [text])
   return (
-    <span ref={ref} className={`pill-marquee${over ? ' is-over' : ''}`}>
+    <span ref={ref} className={`pill-marquee${shift > 2 ? ' is-over' : ''}`} style={{ '--marquee-shift': `${shift}px` } as React.CSSProperties}>
       <span className="pill-marquee__inner">{text}</span>
     </span>
   )
@@ -280,7 +310,7 @@ export const ModelPill: React.FC<{
   const ultraNoteId = useId()
   // 能不能写由引擎说了算(桌面连外部 / 云端 worker 那边 PUT 404):别按宿主猜
   const ctx = onContextWindowChange && modelId && modelsResponse?.modelOverridesWritable
-    ? contextLimitOptions(modelsResponse.models.find((m) => m.id === modelId), modelsResponse.contextWindowCap)
+    ? contextLimitOptions(modelsResponse.models.find((m) => m.id === modelId), modelsResponse.contextWindowCap, isUltra && !!modelsResponse.ultraUncapped)
     : null
   const pickContext = (tokens: number | null): void => {
     setPane(null)
@@ -339,7 +369,10 @@ export const ModelPill: React.FC<{
         onClick={() => setPillOpen(!open)}
       >
         <Bot size={13} />
-        <MarqueeLabel text={label + effort} />
+        {/* Ultra:模型名照常字色,「Ultra」单独成渐变字标签(主次分明);包一层,展开态的三列网格(图标 | 标签 | 箭头)不被挤出第四列 */}
+        {isUltra
+          ? <span className="pill-ultra-label"><MarqueeLabel text={label} /><span className="pill-ultra-tag">{effortText}</span></span>
+          : <MarqueeLabel text={label + effort} />}
         <ChevronDown size={10} />
       </button>
       {open && (
@@ -496,7 +529,10 @@ export const ModelPill: React.FC<{
                       <span className="mi-check">{ctx.selected === 'max' ? '✓' : ''}</span>
                     </button>
                   )}
-                  <div className="menu-section cm-foot">{t('pill.ctxHint', { n: fmtWindow(ctx.defaultTokens) })}</div>
+                  <div className="menu-section cm-foot">
+                    {isUltra && modelsResponse?.ultraUncapped && ctx.selected === 'default' && ctx.maxTokens ? <div>{t('pill.ctxUltra', { n: fmtWindow(ctx.maxTokens) })}</div> : null}
+                    {t('pill.ctxHint', { n: fmtWindow(ctx.defaultTokens) })}
+                  </div>
                 </>
               ) : (
                 <>

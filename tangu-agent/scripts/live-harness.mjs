@@ -24,6 +24,7 @@
  *   npm run live:harness -- --only deferred                  # E2 按需装载:load_tools 先于 read_document + 子代理 read_document 直通 + 子代理自己 load_tools 解锁 browser_snapshot
  *   npm run live:harness -- --only grant                     # 改 delegate.grantTools / 子代理管理面闸后跑:授予时子代理用得上 manage_schedule,不授予时照旧被拒(正负两跑,均 action=list 无副作用)
  *   npm run live:harness -- --only ultra --model xai/grok-4.7  # Ultra 档(09-27):改 ULTRA_SECTION / delegate 描述 / 子代理成本闸后跑:可并行的题一轮派 ≥2 个且真并行、琐碎题 0 个、不开 Ultra 的对照只记数
+ *   TANGU_CONTEXT_WINDOW_TOKENS=100000 npm run live:harness -- --only ultra --model codex/gpt-5.6-luna  # Ultra 拉满上下文(09-27):上限压到 100k,族表 272k 的模型 Ultra 两跑窗口须 272k、对照 100k
  *   npm run live:harness -- --only churn                     # 同会话 6 连发的后续调用命中画像(不设命中率阈值,六个 run 须跑完)
  *   npm run live:harness -- --only ttft --ttft-rounds 5      # 首 token 延迟:preset(chat|work)× 思考档(off|medium)2×2,每格 N 会话 × 2 轮(冷/热缓存),交错跑
  *   npm run live:harness -- --only agentapproval             # 审批档只归用户(09-27):模型被要求把一个 agent 调成完全放行,manage_agent 不收 approval_mode、用户设的只读原样保留;改 manage_agent / manage-agents-guide 后跑
@@ -421,6 +422,24 @@ const summariesOf = async (sessionId) => {
   const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
   try { return db.prepare('SELECT summary, through_timestamp, through_message_id, through_tool_call_id FROM session_summaries WHERE session_id = ? ORDER BY through_timestamp').all(sessionId); }
   finally { db.close(); }
+};
+/** 每个 Muse 周期**第一次**模型调用的 prompt token(按周期先后):量开局上下文有没有把之前周期的对话整段带进来(09-27)。 */
+const museFirstPrompts = async () => {
+  const { default: Database } = await import('better-sqlite3');
+  const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+  try {
+    return db.prepare(`SELECT (SELECT json_extract(e.payload, '$.prompt') FROM agent_run_events e WHERE e.run_id = r.id AND e.type = 'usage' ORDER BY e.created_at, e.rowid LIMIT 1) AS p
+      FROM agent_runs r JOIN chat_sessions s ON s.id = r.session_id WHERE s.kind = 'muse' ORDER BY r.created_at`).all().map((x) => Number(x.p) || 0); // 0 = 这个周期还没有 usage;不滤,滤了周期序号会错位
+  } finally { db.close(); }
+};
+/** Muse 周期里加载 forsion-plugin 技能的次数(09-27:指令改成「只在要更多接口时才加载」,跨次比对用)。 */
+const museSkillLoads = async () => {
+  const { default: Database } = await import('better-sqlite3');
+  const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+  try {
+    return db.prepare(`SELECT COUNT(*) AS n FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id JOIN chat_sessions s ON s.id = r.session_id
+      WHERE s.kind = 'muse' AND e.type = 'tool_call' AND json_extract(e.payload, '$.name') = 'use_skill' AND e.payload LIKE '%forsion-plugin%'`).get().n;
+  } finally { db.close(); }
 };
 const asList = (x, key) => Array.isArray(x) ? x : Array.isArray(x?.[key]) ? x[key] : Array.isArray(x?.rows) ? x.rows : [];
 
@@ -1166,9 +1185,19 @@ try {
     // Space 判定**只记不判**:它是 Node 里对渲染进程的近似,两向都可能有偏差,不该把一个真跑通的模型场景判红;
     // 看 detail 里的「Space …」跨次比对即可(⚠️ = 判定为装不出 home,拿 scripts/muse-space-verdict.mjs 复核)。没写不算错。
     const space = await museSpaceVerdict(join(home, 'agents', 'muse', 'Space'), health?.version);
+    // 只记不判(09-27):Space 有没有改用 ctx.agent 从数据渲染、这两个周期加载了几次 84KB 的插件技能
+    const spaceUsesAgent = (() => { try { return /ctx\.agent\./.test(readFileSync(join(home, 'agents', 'muse', 'Space', 'main.js'), 'utf8')); } catch { return false; } })();
+    const skillLoads = await museSkillLoads().catch(() => '?');
     const spaceAsks = approvals.filter((a) => JSON.stringify(a).includes('/Space/')).length; // Space 目录三档免审:排进审批 = 提示词又把它说成「Library 外」
-    const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && !spaceAsks; // 审批队列是引擎真实状态,照判
-    return { ok, detail: `${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.ok ? '' : '⚠️'}${space.text};自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
+    // 开局上下文(09-27):每个周期一个新会话 → 周期 2 第一次调用不该带着周期 1 的整段对话(连工具结果)。
+    // 旧行为实测 ×2.6(1.8 万 → 4.6 万 token;实机攒到 17–20 万,2 小时心跳下每轮都按缓存未命中计费)。判据 ≤ ×1.5;
+    // 周期 2 已起却 60s 还没返回首轮 = 这次没量到 → 判红(写「?」),不拿「没量到」冒充通过(Codex 09-27)。
+    let firsts = [];
+    for (const t0 = Date.now(); Date.now() - t0 < 60_000; await sleep(2000)) { firsts = await museFirstPrompts().catch(() => []); if (firsts[1] > 0) break; }
+    const [p1, p2] = firsts;
+    const replayOk = !twoCycles || (!!(p1 && p2) && p2 <= p1 * 1.5); // 周期 2 没起另由 twoCycles 判红
+    const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && !spaceAsks && replayOk; // 审批队列、开局上下文都是引擎真实状态,照判
+    return { ok, detail: `${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};开局上下文 ${p1 || '?'}→${p2 || '?'} token${p1 && p2 ? `(×${(p2 / p1).toFixed(2)}${replayOk ? '' : ' ⚠️带着上一周期的对话'})` : twoCycles ? '(⚠️周期 2 首轮 60s 未返回,没量到)' : ''};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.ok ? '' : '⚠️'}${space.text}${space.built ? (spaceUsesAgent ? '(用 ctx.agent 取数)' : '(没用 ctx.agent)') : ''};插件技能加载 ${skillLoads} 次;自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
   });
   // ── musewake(09-24,opt-in,单独跑:`--only musewake`):「用户睡了、没事可做」时 Muse 会不会自己 set_next_wake,
   // 引擎会不会真的跳过心跳,用户一动能不能立刻醒。作息按**当前钟点**播:活跃窗口 = 现在 +6h 起 10 个小时(每天每小时一行,
@@ -1542,6 +1571,14 @@ try {
       return spans.some((a, i) => spans.some((b, j) => i !== j && a.st < b.end && b.st < a.end));
     };
     const ctxInfo = (ev) => ev.statuses.find((x) => x.phase === 'context_info') || {};
+    // 窗口(09-27):Ultra 下自动识别的窗口不封顶(= ctxWindowMax),不开的仍封顶到缺省上限;人填的覆盖两边都照旧。
+    // grok 等族表没收录的模型 max 就是上限本身,证不出「拉满」—— 要看到差别:TANGU_CONTEXT_WINDOW_TOKENS=100000 + 族表 272k 的 codex 模型。
+    const CAP = Number(process.env.TANGU_CONTEXT_WINDOW_TOKENS) >= 4_000 ? Math.floor(Number(process.env.TANGU_CONTEXT_WINDOW_TOKENS)) : 272_000;
+    const winOk = (ev, ultra) => {
+      const c = ctxInfo(ev);
+      if (!(c.ctxWindow > 0 && c.ctxWindowMax > 0)) return false;
+      return c.ctxWindowSource === 'override' || c.ctxWindow === (ultra ? c.ctxWindowMax : Math.min(c.ctxWindowMax, CAP));
+    };
     const allMods = (text) => ['billing', 'dates', 'strings'].every((m) => text.includes(m));
     // 逐模块点名那个坏文件(只查模块名的话,错文件 / 错修法也能过)
     const found3 = (text) => ['sumLineItems_v3', 'isWeekend_v3', 'capitalize_v3'].every((f) => text.includes(f));
@@ -1549,16 +1586,16 @@ try {
     // 存值故意给 high:证的是引擎「ultra ⇒ 请求档恒 max」,而不是客户端恰好发了 max
     const evUltra = await run(`live-ultra-on-${Date.now()}`, TASK, 420_000, { ultra: true, thinkingLevel: 'high', debugSystemPrompt: true });
     const sysHas = (ev) => (ev.systemPrompt || '').includes('## Ultra Effort');
-    const okUltra = !evUltra.error && sysHas(evUltra) && ctxInfo(evUltra).thinkingRequested === 'max'
+    const okUltra = !evUltra.error && sysHas(evUltra) && ctxInfo(evUltra).thinkingRequested === 'max' && winOk(evUltra, true)
       && delegates(evUltra) >= 2 && evUltra.subStarts.length >= 2 && overlapped(evUltra) && allMods(evUltra.content) && found3(evUltra.content);
 
     const evTrivial = await run(`live-ultra-trivial-${Date.now()}`, '法国的首都是哪座城市?', 180_000, { ultra: true, thinkingLevel: 'max', debugSystemPrompt: true });
-    const okTrivial = !evTrivial.error && sysHas(evTrivial) && delegates(evTrivial) === 0 && /巴黎|Paris/i.test(evTrivial.content);
+    const okTrivial = !evTrivial.error && sysHas(evTrivial) && delegates(evTrivial) === 0 && /巴黎|Paris/i.test(evTrivial.content) && winOk(evTrivial, true);
 
     const evPlain = await run(`live-ultra-off-${Date.now()}`, TASK, 420_000, { thinkingLevel: 'high', debugSystemPrompt: true });
-    const okPlain = !evPlain.error && evPlain.systemPrompt !== null && !sysHas(evPlain);
+    const okPlain = !evPlain.error && evPlain.systemPrompt !== null && !sysHas(evPlain) && winOk(evPlain, false);
 
-    const fmt = (ev) => `delegate ×${delegates(ev)};子代理 ${ev.subStarts.length} 个${ev.subStarts.length >= 2 ? (overlapped(ev) ? '(区间交叠=真并行)' : '(没有交叠=串行)') : ''};请求档 ${ctxInfo(ev).thinkingRequested || '?'}→${ctxInfo(ev).thinkingEffective || '?'};墙钟 ${sec(ev.wallMs)}${ev.error ? ';' + ev.error : ''}`;
+    const fmt = (ev) => `delegate ×${delegates(ev)};子代理 ${ev.subStarts.length} 个${ev.subStarts.length >= 2 ? (overlapped(ev) ? '(区间交叠=真并行)' : '(没有交叠=串行)') : ''};请求档 ${ctxInfo(ev).thinkingRequested || '?'}→${ctxInfo(ev).thinkingEffective || '?'};窗口 ${ctxInfo(ev).ctxWindow ?? '?'}/${ctxInfo(ev).ctxWindowMax ?? '?'}(${ctxInfo(ev).ctxWindowSource || '?'},上限 ${CAP});墙钟 ${sec(ev.wallMs)}${ev.error ? ';' + ev.error : ''}`;
     return {
       ok: okUltra && okTrivial && okPlain,
       detail: `【Ultra(存值 high)】${fmt(evUltra)};Ultra 段 ${sysHas(evUltra) ? '在' : '缺!'};三模块 ${allMods(evUltra.content) ? '都报到' : '有漏'};坏文件 ${found3(evUltra.content) ? '三个都点对' : '没点全!'}`

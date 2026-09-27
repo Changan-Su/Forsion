@@ -763,7 +763,7 @@ if (new URLSearchParams(location.search).has('dock')) {
         { id: 'ds-v32', name: 'DeepSeek-V3.2-Exp', provider: 'deepseek', source: 'forsion' as const, modelType: 'llm' as const },
         { id: 'gpt-image-1', name: 'GPT Image 1', provider: 'openai', source: 'forsion' as const, modelType: 'image_gen' as const },
       ],
-      directProviders: [], defaultModelId: 'glm-4.7', backgroundModelId: 'ds-v32', imageModelId: 'gpt-image-1', visionModelId: 'glm-4.7', contextWindowCap: 272_000, modelOverridesWritable: true,
+      directProviders: [], defaultModelId: 'glm-4.7', backgroundModelId: 'ds-v32', imageModelId: 'gpt-image-1', visionModelId: 'glm-4.7', contextWindowCap: 272_000, modelOverridesWritable: true, ultraUncapped: true,
     }
     return (
       // t2-chat-view = 子面板落位的边界(nestedPanelPlacement / useEdgeNudge 都认它);缺了子面板一律压在菜单上
