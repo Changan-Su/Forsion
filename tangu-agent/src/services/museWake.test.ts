@@ -169,7 +169,7 @@ describe('kickoff 与 Journal', () => {
     const b = buildCycleMessages(cfg, {});
     expect(a.message).toBe(b.message);
     expect(a.message).toContain('set_next_wake');
-    expect(a.message.length).toBeLessThan(2500);
+    expect(a.message.length).toBeLessThan(3000); // 与 muse.session.test 的 MAX_KICKOFF 同口径(09-27 放到 3000,理由见那边)
     expect(a.ephemeralHint).toContain('sleep until 08:30');
     expect(a.message).not.toContain('08:30');
   });

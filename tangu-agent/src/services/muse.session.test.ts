@@ -108,6 +108,10 @@ describe('C1a 预算口径:跨全部 Muse 会话', () => {
   });
 });
 
+// 落库 kickoff 的长度帽:防膨胀。09-27 从 2500 放到 3000 —— 加了 ctx.agent 契约;且每个周期一个新会话后它不再被
+// 逐周期回放,只随本周期发一次(多 200 来字符 ≈ 60 token,对 ~1.8 万的开局上下文可以忽略)。
+const MAX_KICKOFF = 3000;
+
 describe('C1b kickoff 拆分', () => {
   const cfg = { ...SPECIAL_AGENTS_DEFAULTS.muse, mode: 'ask' as const, escalateTo: '', notify: 'immediate' as const };
   const dynA = { extraKickoff: '\n\n[Watch rule fired] x', hint: '\n\n[User\'s long-term memory]\nsecret', pending: 3, quietSince: true };
@@ -120,7 +124,7 @@ describe('C1b kickoff 拆分', () => {
 
   it('落库的那条是短指令(仍带权限档 / Space / TODO 配额三条规矩)', () => {
     const { message } = buildCycleMessages(cfg, dynA);
-    expect(message.length).toBeLessThan(2500);
+    expect(message.length).toBeLessThan(MAX_KICKOFF);
     expect(message).toContain('Permission tier: ask');
     expect(message).toContain('Your Space:');
     expect(message).toContain('add_muse_todo');
@@ -132,7 +136,10 @@ describe('C1b kickoff 拆分', () => {
       expect(message).toMatch(/Library and your Space folder|authorized folders and your Space folder/);
       expect(message).toContain('call ctx.registerView({ id: "home", ... }) at the top level');
       expect(message).toContain('Do not wrap the file in function setup(ctx)');
-      expect(message.length).toBeLessThan(2500);
+      expect(message).toContain('ctx.agent.todos()'); // 09-27:从数据渲染,别写死
+      expect(message).toContain('never edit it just to refresh status or timestamps');
+      expect(message).toContain('works only inside a click handler');
+      expect(message.length).toBeLessThan(MAX_KICKOFF);
     }
   });
 

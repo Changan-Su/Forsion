@@ -67,11 +67,11 @@ describe('插件契约 ↔ 作者手册漂移', () => {
     expect(missing, `手册没提这些字段:${missing.join(', ')}`).toEqual([])
   })
 
-  it('①d ctx.tangu / ctx.desk 的嵌套方法都在 SKILL.md 露过面', () => {
+  it('①d ctx.tangu / ctx.desk / ctx.ui / ctx.agent 的嵌套方法都在 SKILL.md 露过面', () => {
     // 规则 ① 只认两空格缩进的顶层成员,给 ctx.tangu 这类**内联对象**加方法是静默绿(2026-09-19 加
     // agentStatus / startChat 时补的)。PluginAppApi 暂不纳入:getActivePage 等 6 个老方法手册本来就没写,
     // 本规则只在「现有成员全绿」的面上立。负对照(已实跑红):往 desk 块里临时加一个手册没提的方法 → 红。
-    for (const member of ['tangu', 'desk', 'ui']) {
+    for (const member of ['tangu', 'desk', 'ui', 'agent']) { // agent:2026-09-27 agent 自建 Space 读写自家数据
       const start = types.indexOf(`\n  ${member}?: {\n`)
       expect(start, `找不到 PluginContext.${member}`).toBeGreaterThan(0)
       const body = types.slice(start + 1)

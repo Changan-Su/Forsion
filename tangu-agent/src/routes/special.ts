@@ -25,6 +25,7 @@
  *   POST     /agent/special/approvals/:id/approve       用户批准 → 引擎按原参数执行(结果随响应回)
  *   POST     /agent/special/approvals/:id/reject        用户拒绝({ note? })
  *   GET      /agent/special/muse/library                Muse Library 目录树(桌面 Agent Space 左栏;含子目录)
+ *   GET      /agent/special/muse/library/file?path=     读 Library 里一个文本文件(Muse 自建 Space 的 ctx.agent.library.read)
  *   POST     /agent/special/muse/feedback { text }      往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等)
  *
  * 本地特性：profile.capabilities.hostExec=false（云端）一律 404；例外 = /agent/special/config(云端返回每用户的按轮 Historian 设置)。
@@ -641,6 +642,65 @@ router.get('/agent/special/muse/library', authMiddleware, async (_req: AuthReque
     res.json({ root, files: out });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'library failed' });
+  }
+});
+
+/** Library 单文件读取上限:Space 是拿来渲染的,再大就该自己分页 / 摘要,不该整份塞进渲染进程。 */
+const LIBRARY_READ_MAX = 1024 * 1024;
+
+// 读 Library 里一个文件(2026-09-27,Muse 自建 Space 的 ctx.agent.library.read)。只认 Library 内的普通文件:
+// 相对路径、不含 `..`、不读隐藏段(与目录树同口径);realpath 之后仍须在 Library 内 —— 软链指出去的一律不认。
+router.get('/agent/special/muse/library/file', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const rel = String(req.query.path || '').trim();
+    const segs = rel.split(/[\\/]/);
+    if (!rel || path.isAbsolute(rel) || segs.some((seg) => !seg || seg === '..' || seg.startsWith('.'))) {
+      return res.status(400).json({ detail: 'path must be a relative path inside the Library' });
+    }
+    const root = museLibraryDir();
+    let realRoot: string;
+    let real: string;
+    try {
+      realRoot = await fs.realpath(root);
+      real = await fs.realpath(path.resolve(root, rel));
+    } catch {
+      return res.status(404).json({ detail: 'not found' });
+    }
+    if (!real.startsWith(realRoot + path.sep)) return res.status(403).json({ detail: 'outside the Library' });
+    // 软链落到 Library 里的隐藏文件(public.md → .secret)也不认:隐藏段按**解析后**的真实路径再查一遍
+    if (path.relative(realRoot, real).split(path.sep).some((seg) => seg.startsWith('.'))) return res.status(403).json({ detail: 'hidden file' });
+    // 校验与读取之间换成软链(TOCTOU):O_NOFOLLOW 打开、大小与内容都走同一个句柄 —— 读到的就是刚才校验过的那个文件。
+    const fh = await fs.open(real, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0)).catch(() => null);
+    if (!fh) return res.status(404).json({ detail: 'not found' });
+    try {
+      const st = await fh.stat();
+      if (!st.isFile()) return res.status(404).json({ detail: 'not a file' });
+      // 中间目录在 realpath 与 open 之间被换成软链(O_NOFOLLOW 只管最后一段):打开之后再解析一次,
+      // 仍须落在 Library 内、不含隐藏段,且与打开的是同一个文件(dev+ino)—— 换过去又换回来也对不上号。
+      const again = await fs.realpath(real).catch(() => '');
+      const st2 = again ? await fs.stat(again).catch(() => null) : null;
+      if (!again.startsWith(realRoot + path.sep) || path.relative(realRoot, again).split(path.sep).some((seg) => seg.startsWith('.'))
+        || !st2 || st2.dev !== st.dev || st2.ino !== st.ino) {
+        return res.status(403).json({ detail: 'outside the Library' });
+      }
+      if (st.size > LIBRARY_READ_MAX) return res.status(413).json({ detail: `file too large (> ${LIBRARY_READ_MAX} bytes)` });
+      // 固定只读到上限 +1 字节、循环读到 EOF 或读满:stat 之后文件还在长(Muse 正往里追加)既不会整份读进内存,
+      // 也不会按旧大小截成半截还回 200(Codex 09-27)
+      const buf = Buffer.alloc(LIBRARY_READ_MAX + 1);
+      let n = 0;
+      while (n < buf.length) {
+        const { bytesRead } = await fh.read(buf, n, buf.length - n, n);
+        if (!bytesRead) break;
+        n += bytesRead;
+      }
+      if (n > LIBRARY_READ_MAX) return res.status(413).json({ detail: `file too large (> ${LIBRARY_READ_MAX} bytes)` });
+      res.json({ path: rel, content: buf.subarray(0, n).toString('utf8'), size: n, mtime: st.mtimeMs });
+    } finally {
+      await fh.close().catch(() => {});
+    }
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'library read failed' });
   }
 });
 

@@ -585,14 +585,18 @@ async function activityTailHint(): Promise<string> {
 
 /** Muse 自建 Space 的契约(每周期钉一次;绝对路径老用户的 config.toml 里没有)。写法交给 forsion-plugin 技能,这里只钉边界。
  *  「文件本身就是 setup 函数体、别包 function setup」必须明说:从前只写「a bare main.js setup body」,09-27 实机 Muse 每一版都
- *  包成 function setup(ctx){…} 却不调用 —— 零注册零报错,Space 从首建起一直空白。 */
+ *  包成 function setup(ctx){…} 却不调用 —— 零注册零报错,Space 从首建起一直空白。
+ *  ctx.agent(09-27):Space 从数据渲染,别再每周期把状态 / 时间戳写死重写一遍(实机 1.4.x 全是这种改动);核心契约写在这里,
+ *  84KB 的 forsion-plugin 技能只在要更多接口时才加载(实机 23 个周期里 13 次为改文案加载它)。 */
 function spaceKickoff(): string {
-  return `Your Space: the desktop's "Muse" Space renders the view you register from the Forsion plugin at ${museSpaceDir()} ` +
-    '(manifest.json + main.js — load the "forsion-plugin" skill before writing it). ' +
-    'main.js runs as the body of setup(ctx): ctx is already in scope, so call ctx.registerView({ id: "home", ... }) at the top level of the file for the main view. ' +
+  return `Your Space: the desktop's "Muse" Space shows the view registered by the Forsion plugin at ${museSpaceDir()} ` +
+    '(manifest.json + main.js; load the "forsion-plugin" skill only if you need more of the plugin API than this). ' +
+    'main.js runs as the body of setup(ctx), so call ctx.registerView({ id: "home", ... }) at the top level of the file. ' +
     'Do not wrap the file in function setup(ctx) { ... } — nothing calls it, so nothing registers and no error is raised. ' +
-    'Plain JS, no build step, no CDN, no capabilities; bundle subfolders are inert there. It starts empty — build it and keep improving it across cycles. ' +
-    'It is reloaded after your cycle ends; a load failure, or a main.js that registers no "home" view, reaches you as a [feedback] entry mentioning the Space.';
+    'Render live data instead of hardcoding it: ctx.agent.status(), ctx.agent.todos(), ctx.agent.schedule(), ctx.agent.library.read(path) ' +
+    '(your Library, e.g. "Journal/<date>.md"; .list() for the tree), ctx.agent.subscribe(cb) to refresh; ctx.agent.updateTodo(id, "done" | "dismissed") works only inside a click handler on your Space. ' +
+    'Plain JS, no build step, no CDN. It starts empty: build it, then improve what it shows across cycles — never edit it just to refresh status or timestamps. ' +
+    'It is reloaded after your cycle ends; a load failure or a missing "home" view reaches you as a [feedback] entry mentioning the Space.';
 }
 
 /**

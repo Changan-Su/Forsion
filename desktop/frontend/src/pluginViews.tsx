@@ -9,7 +9,7 @@ import { windowKind } from './windowKind'
  */
 import React, { useEffect, useLayoutEffect, useRef } from 'react'
 import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, type ViewProps } from '@lcl/engine'
-import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { notePluginGesture, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { recordDevMountError } from '@amadeus/plugins/devRecords'
 import { setDevViewBridge } from '@amadeus/plugins/devSandbox'
 import type { ViewContribution } from '@amadeus/plugins/types'
@@ -46,6 +46,10 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
     const kind = windowKind()
     const isMini = kind === 'mini'
     const isFloating = kind === 'floating' || !!el.closest('.floating-panel-window')
+    // 记下「用户刚在这个插件的视图里点过 / 按过键」(捕获阶段、只认 isTrusted):ctx.agent.updateTodo 的手势闸只认它
+    const gestureEvents = ['pointerdown', 'click', 'keydown'] as const
+    const onGesture = (e: Event): void => { if (e.isTrusted && pluginId) notePluginGesture(pluginId) }
+    for (const t of gestureEvents) el.addEventListener(t, onGesture, true)
     try {
       cleanup = def.mount(el, {
         extendView, surface: isMini ? 'mini' : isFloating ? 'floating' : 'main',
@@ -76,6 +80,7 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
       disposed = true
       alive = false
       listeners.current.clear()
+      for (const t of gestureEvents) el.removeEventListener(t, onGesture, true)
       try { if (typeof cleanup === 'function') cleanup() } catch (e) { console.error(`[plugin-view] cleanup "${def.id}" failed`, e) }
       el.replaceChildren()
     }
