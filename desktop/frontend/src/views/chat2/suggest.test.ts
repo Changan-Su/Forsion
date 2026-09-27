@@ -248,3 +248,38 @@ describe('任务卡 todo 头(Muse TODO 的收件箱投影,2026-09-11)', () => {
     expect(r.tasks[0].todo).toBeUndefined()
   })
 })
+
+describe('forsion-creation 作品卡', () => {
+  const CHAT: FenceKind[] = ['suggest', 'task', 'creation']
+  const card = (body: string): string => `做好了。\n\n${'`'.repeat(3)}forsion-creation\n${body}\n${'`'.repeat(3)}`
+
+  it('桌面聊天(kinds 带 creation)才摘成卡;缺省不认 → 原样留在正文当代码块', () => {
+    const r = splitSuggestions(card('name: 番茄钟'), { kinds: CHAT })
+    expect(r.creations).toEqual([{ name: '番茄钟' }])
+    expect(r.text).toBe('做好了。')
+    const plain = splitSuggestions(card('name: 番茄钟'))
+    expect(plain.creations).toEqual([])
+    expect(plain.text).toContain('forsion-creation')
+  })
+
+  it('path 可选(去掉包裹的引号);未知键忽略;写坏(非 key: value / 没有 name / 控制字符)→ 还回正文', () => {
+    expect(splitSuggestions(card('name: Pomodoro\npath: "games/pomodoro"\nextra: x'), { kinds: CHAT }).creations).toEqual([{ name: 'Pomodoro', path: 'games/pomodoro' }])
+    for (const bad of ['path: x', 'name: ok\njust prose', `name: a\u0007b`]) {
+      const r = splitSuggestions(card(bad), { kinds: CHAT })
+      expect(r.creations, bad).toEqual([])
+      expect(r.text, bad).toContain('forsion-creation')
+    }
+  })
+
+  it('每条消息最多一张;第二张还回正文,不凭空消失', () => {
+    const two = `${card('name: A')}\n\n${'`'.repeat(3)}forsion-creation\nname: B\n${'`'.repeat(3)}`
+    const r = splitSuggestions(two, { kinds: CHAT })
+    expect(r.creations).toEqual([{ name: 'A' }])
+    expect(r.text).toContain('name: B')
+  })
+
+  it('讲解写法时包在别的围栏里的示例不升格成真卡', () => {
+    const teach = `写法:\n\n${'`'.repeat(4)}markdown\n${'`'.repeat(3)}forsion-creation\nname: Demo\n${'`'.repeat(3)}\n${'`'.repeat(4)}`
+    expect(splitSuggestions(teach, { kinds: CHAT }).creations).toEqual([])
+  })
+})

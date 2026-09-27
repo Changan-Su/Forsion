@@ -73,6 +73,7 @@ const SKIP = {
   installMultiWindow: '移动端无卫星窗;实现本身对非 electron 天然 no-op',
   installAccountTransition: 'Electron 多窗口切号前保存握手;web/mobile 通过登录跳转和整页重载清理账号缓存,没有 auth:will-change IPC',
   installKeepAwakeReport: '「有会话运行时不休眠」靠主进程 powerSaveBlocker,手机 WebView 没有对应能力;实现本身缺 window.tangu.reportRunningSessions 即 no-op',
+  installCreationAutoVersion: '造物的 git 版本由桌面主进程在托管根(~/Forsion/Project)上做,手机端既没有这个目录也没有 codeStudio git IPC;实现本身缺 window.tangu.codeStudioGitCommit 即 no-op',
   windowKind: '多窗分流(?window=detached/mini);移动端只有一个 WebView',
   DetachedRoot: '同上:拖出来的独立窗',
   MiniRoot: '同上:悬浮 mini 卡片',

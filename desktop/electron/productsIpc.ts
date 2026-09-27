@@ -15,6 +15,7 @@ import { isDevLoaded, readDevLoads, setDevLoad } from './devLoadStore'
 import { allowExternalLaunch, gitOwners, isExternalLaunchAllowed, revokeExternalLaunch } from './productTrust'
 import { commitGitVersion, gitHistoryStatus, listGitVersions, restoreGitVersion } from './gitHistory'
 import { serveProductRoot, servePathRoot, setPreviewPersistence, type PreviewPersistedState } from './codePreview'
+import { AdoptError, adoptIntoProjects, createCreationDir } from './productAdopt'
 
 export interface ProductsIpcDeps {
   ipcMain: IpcMain
@@ -170,6 +171,22 @@ export function registerProductsIpc(d: ProductsIpcDeps): void {
     if (!isProductId(id)) return false
     const p = await getProduct(d.projectsRoot(), id).catch(() => null)
     return !!p && p.kind === 'web' && !!p.entry && isExternalLaunchAllowed(d.homeDir(), p)
+  }))
+  // 「进造物」(09-27):在托管根建一个新作品文件夹 / 把做好的文件夹复制进来,都当场铸身份再回摘要。
+  //   源目录来自聊天里模型写的作品卡:渲染层先限定在会话工作目录内,productAdopt 再过一遍目录闸(根 / 家目录 / 托管根及其上下级)。
+  //   可预期的失败按结果回 { ok:false, code, detail }(IPC 抛错只带得过 message,code 会丢),渲染层按 code 本地化。
+  d.ipcMain.handle('products:create', guard(async (name: unknown) => {
+    const made = await createCreationDir(d.projectsRoot(), typeof name === 'string' ? name : '')
+    return { dir: made.dir, name: made.name, product: withDevLoad(await ensureProduct(d.projectsRoot(), made.dir)) }
+  }))
+  d.ipcMain.handle('products:adopt', guard(async (source: unknown, name: unknown) => {
+    try {
+      const made = await adoptIntoProjects(d.projectsRoot(), String(source ?? ''), typeof name === 'string' ? name : '')
+      return { ok: true as const, dir: made.dir, name: made.name, files: made.files, product: withDevLoad(await ensureProduct(d.projectsRoot(), made.dir)) }
+    } catch (e) {
+      if (e instanceof AdoptError) return { ok: false as const, code: e.code, detail: e.detail }
+      throw e
+    }
   }))
   // 删除 = 移入系统回收站(可恢复)。目录来自注册表重解,不吃渲染层路径。
   d.ipcMain.handle('products:trash', guard(async (id: unknown) => {

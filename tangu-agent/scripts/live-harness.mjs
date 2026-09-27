@@ -27,6 +27,7 @@
  *   npm run live:harness -- --only ttft --ttft-rounds 5      # 首 token 延迟:preset(chat|work)× 思考档(off|medium)2×2,每格 N 会话 × 2 轮(冷/热缓存),交错跑
  *   npm run live:harness -- --only teamapproval              # 团队 × 完全通行(09-21 反馈):成员 config 自带 auto-edit / run 启动后才切档,两条都须 0 次审批;改审批闸 / teamRuns 档位后跑
  *   npm run live:harness -- --only coding                    # 改 agents/codingPrompt.ts / skills/forsion-plugin 后跑:Coding 人格面对插件项目须指向 Sandbox 面板、且不自己动手 git init/commit(版本由宿主管)
+ *   npm run live:harness -- --only creation                  # 进造物(09-27):要做「拿来用的东西」→ 回复带 forsion-creation 作品卡;只问概念 / 一次性脚本 → 不出卡。改 skills/forsion-creations 后跑
  *   npm run live:harness -- --only git                       # 「设置 → Git」(09-26):agent 自己起的分支名带前缀、提交照提交说明;PROJECT 详情「提交…」生成的信息也照做并能提交。
  *                                                           #   改 runtimeContext.gitPreferenceLines / gitActions 的提交信息提示词后跑;负对照 --git-prefs off(不写设置,须红)
  *   npm run live:harness -- --only refine                    # 自进化闭环(09-18):Historian 自动档提名 → 收件箱 → /refine 采纳写 HARNESS.md → 新会话系统提示带上;改 REFINE_DIRECTIVE / harnessStore / 判官 harness 字段 / 注入槽后跑
@@ -64,7 +65,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'git'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'git', 'creation'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -76,7 +77,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'git']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'git', 'creation']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -708,6 +709,27 @@ try {
       ok: !ev.error && ev.done && agentPrefix && agentTag && genTag && landed,
       detail: ev.error || `agent 分支 ${branch}(${agentPrefix ? '带' : '没带'} ${GIT_PREFIX});agent 提交「${subject}」(${agentTag ? '照' : '没照'}提交说明);面板生成「${message.split('\n')[0] || apiErr}」(${genTag ? '照做' : '没照做'});提交接口${landed ? '落盘' : '未落盘'}${apiErr ? `(${apiErr.slice(0, 160)})` : ''};设置${GIT_PREFS ? '已写' : '未写(负对照)'}`,
       output: `${ev.content}\n\n--- 面板生成的提交信息 ---\n${message}`, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
+    };
+  });
+
+  // 进造物(09-27,skills/forsion-creations):Tangu 对话里要做「以后会打开来用的东西」→ 动手前用 forsion-creation 作品卡提议,
+  // 用户点了宿主才建文件夹 / 挪会话;只问概念、写一次性脚本 → 不提。判据:正例回复里有合法的卡(name 必填)且出卡前没写文件;
+  // 两个负对照都不出卡。措辞与是否先 use_skill 不作判据,原话进报告。
+  await scenario('creation', 'creation 做拿来用的东西 → 作品卡;只问概念 / 一次性脚本 → 不出卡', async () => {
+    const CARD = /```forsion-creation[^\n]*\n([\s\S]*?)```/;
+    const WRITES = new Set(['write_file', 'edit_file', 'multi_edit', 'apply_patch']);
+    const ask = (msg) => run(`live-creation-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, msg, 240_000);
+    const build = await ask('帮我做一个番茄钟网页,能开始、暂停和重置。以后我每天都会打开它来用。');
+    const card = CARD.exec(build.content);
+    const name = card ? (/^\s*name\s*:\s*(.+)$/m.exec(card[1])?.[1] || '').trim() : '';
+    const wrote = build.toolCalls.filter((t) => WRITES.has(t));
+    const concept = await ask('番茄工作法是什么?简单说说就行。');
+    const script = await ask('帮我写个一次性的小脚本:把当前文件夹里的照片按拍摄日期重命名。');
+    const falseCards = [['概念', concept], ['脚本', script]].filter(([, ev]) => CARD.test(ev.content)).map(([k]) => k);
+    return {
+      ok: !build.error && !concept.error && !script.error && !!name && wrote.length === 0 && falseCards.length === 0,
+      detail: build.error || concept.error || script.error || `作品卡${name ? `「${name}」` : '没出'};出卡前${wrote.length ? `写了文件(${wrote.join(',')})` : '没写文件'};use_skill ${build.toolCalls.includes('use_skill') ? '调了' : '没调'};负对照${falseCards.length ? `误出卡:${falseCards.join('、')}` : '都没出卡'}`,
+      output: `${build.content}\n\n--- 概念 ---\n${concept.content}\n\n--- 脚本 ---\n${script.content}`, ttftMs: ttft(build), tokens: tokensOf(build), toolCalls: build.toolCalls,
     };
   });
 

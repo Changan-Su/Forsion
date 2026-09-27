@@ -124,6 +124,8 @@ registerMessages({
   'projectProfile.git.messageLabel': { zh: '提交信息', en: 'Commit message' },
   'projectProfile.git.messagePlaceholder': { zh: '写一句话说明这次改了什么', en: 'Describe what this change does' },
   'projectProfile.git.generating': { zh: '正在生成提交信息…', en: 'Writing a commit message…' },
+  'projectProfile.creation.addHint': { zh: '复制一份进造物（不带 .git 和 node_modules），这个项目和它的对话保持原样。', en: 'Copies this project into Creations (without .git and node_modules). This project and its conversations stay as they are.' },
+  'projectProfile.creation.added': { zh: '已复制进造物：{name}', en: 'Copied into Creations: {name}' },
   'projectProfile.git.regenerate': { zh: '重新生成', en: 'Regenerate' },
   'projectProfile.git.commitConfirm': { zh: '提交', en: 'Commit' },
   'projectProfile.git.committed': { zh: '已提交：{subject}', en: 'Committed: {subject}' },

@@ -1301,6 +1301,10 @@ declare global {
       /** fallbackName:产物名清洗后为空时用的桌面文件名(落盘产物命名,跟随当前语言)。 */
       productsShortcut?(id: string, fallbackName?: string): Promise<ShortcutResult>
       productsTrash?(id: string): Promise<{ ok: boolean }>
+      /** 在造物的托管根里建一个新作品文件夹(名字宿主清洗 + 撞名接序号)。 */
+      productsCreate?(name: string): Promise<{ dir: string; name: string; product: ProductSummary }>
+      /** 把一个做好的文件夹复制成新作品(不跟软链、跳过 .git / node_modules);失败带 code:invalid_source / forbidden_source / too_large。 */
+      productsAdopt?(source: string, name: string): Promise<{ ok: true; dir: string; name: string; files: number; product: ProductSummary } | { ok: false; code: 'invalid_source' | 'forbidden_source' | 'too_large'; detail?: string }>
       /** 这件产物能否**从应用外**(桌面快捷方式 / forsion:// 深链)拉起:存在、是网页、且用户为它建过快捷方式。 */
       productsExternalLaunchAllowed?(id: string): Promise<boolean>
       onDevPluginsChanged?(cb: (change: { pluginIds: string[] }) => void): () => void

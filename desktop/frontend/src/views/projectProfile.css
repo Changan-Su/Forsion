@@ -3,6 +3,8 @@
 .project-profile-path { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .project-profile-path > button { min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; transition: color 160ms ease; }
 .project-profile-path > button:hover { color: var(--accent-ink); }
+.project-profile-path > .project-creation-action { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+.project-profile-path > .project-creation-action:disabled { opacity: .45; cursor: default; }
 /* 三个标签在 215–300px 的右栏里排不下「图标 + 文字」一行(Agents 会被截成 Agen…):照紧凑 Agent 详情(.compact)的做法,图标上、文字下。 */
 .project-profile .agent-section-nav { --profile-nav-gap: 2px; --profile-nav-padding: 4px; }
 .project-profile .agent-section-nav button { flex-direction: column; gap: 5px; font-size: var(--ui-font-caption, 11px); padding: 7px 2px; }

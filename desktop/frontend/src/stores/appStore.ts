@@ -722,6 +722,9 @@ export interface AppState {
   archiveSession(id: string, archived: boolean): Promise<void>
   deleteSession(id: string): Promise<void>
   renameWorkspace(ws: WorkspaceDescriptor, name: string): Promise<void>
+  /** 把一条会话挪进另一个本地项目文件夹(「进造物」):改 project_path / name + 这条会话的工作目录。
+   *  私聊 / 独立团队(工作目录被身份锁住)与 Chat 预设(没有本机文件工具)挪不动 → 返回 false,调用方改为在那个文件夹开新对话。 */
+  moveSessionToProject(sessionId: string, dir: string, name: string): Promise<boolean>
   /** deleteFiles = 同时把项目里的 `.tangu/` 移进系统废纸篓(项目文件夹本身不动)。 */
   removeWorkspace(ws: WorkspaceDescriptor, opts?: { deleteFiles?: boolean }): Promise<void>
   /** 删除 Agent(侧栏 / 名册共用);deleteFiles = 连它的文件(记忆、Library)一起移进系统废纸篓,否则留在引擎的 agents/.removed/。失败抛错。 */
@@ -1463,7 +1466,7 @@ export const useApp = create<AppState>((set, get) => ({
             const msg = (st.messagesBySession[sessionId] || []).find((m) => m.id === assistantId)
             // 摘掉自动化建议围栏再念:手动朗读走的是 EditorialMessage 传来的 body,这里不摘就会
             // 把「forsion-suggest」和反引号念出来 —— 同一条消息两个入口读出两样东西。
-            const spoken = msg?.content ? splitSuggestions(msg.content).text : ''
+            const spoken = msg?.content ? splitSuggestions(msg.content, { kinds: ['suggest', 'task', 'creation'] }).text : ''
             if (spoken.trim()) {
               speakMessage(st.cfg, dc, assistantId, spoken).catch((e: any) => {
                 if (e?.message !== 'EMPTY') get().toast(get().tr('tts.failed', { e: e?.message || e }), true)
@@ -2309,6 +2312,24 @@ export const useApp = create<AppState>((set, get) => ({
     }))
     try { await Promise.all(targets.map((s) => api.updateSession(get().cfg, s.id, { project_name: newName }))) }
     catch (e: any) { get().toast(t('app.wsRenameFail', { e: e?.message || e }), true) }
+  },
+
+  moveSessionToProject: async (sessionId, dir, name) => {
+    const cur = get().sessions.find((x) => x.id === sessionId)
+    if (!cur) return false
+    const cfg = get().configBySession[sessionId] || cur.agent_config || {}
+    if (cfg.soloAgentSlug || cfg.teamSlug || cfg.preset === 'chat') return false
+    const prev = { project_path: cur.project_path, project_name: cur.project_name, projectless: cur.projectless }
+    set((s) => ({ sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, project_path: dir, project_name: name, projectless: false } : x)) }))
+    try {
+      await api.updateSession(get().cfg, sessionId, { project_path: dir, project_name: name, projectless: false })
+      get().setExecConfig({ cwd: dir, execMode: 'host' }, sessionId)
+      return true
+    } catch (e: any) {
+      set((s) => ({ sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, ...prev } : x)) }))
+      get().toast(get().tr('app.moveToProjectFail', { e: e?.message || e }), true)
+      return false
+    }
   },
 
   removeWorkspace: async (ws, opts) => {
