@@ -349,6 +349,34 @@ describe('仓库自带会执行程序的配置(gitTrust)', () => {
     expect(git(cwd, 'rev-parse', 'HEAD~1')).toBe(base);
   });
 
+  it.skipIf(process.platform === 'win32')('提交前 reflog 是空的(清过)→ 链没有前一条可接:钩子塞了文件只报 commit_unverified,不撤', async () => {
+    const cwd = repo('empty-reflog');
+    writeFileSync(path.join(cwd, 'a.txt'), 'a');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
+    git(cwd, 'reflog', 'expire', '--expire=now', '--all');
+    const hooks = dir('empty-reflog/.githooks');
+    git(cwd, 'config', 'core.hooksPath', '.githooks');
+    writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\necho x >> extra.txt\ngit add extra.txt\n', { mode: 0o755 });
+    writeFileSync(path.join(cwd, 'a.txt'), 'b');
+    expect(await codeOf(gitCommit(cwd, 'mine', true))).toBe('commit_unverified');
+    expect(git(cwd, 'log', '-1', '--format=%s')).toBe('mine');
+  });
+
+  it.skipIf(process.platform === 'win32')('钩子把分支改成指向别的分支的符号引用 → HEAD 解析变了:commit_unverified,两个分支都不动', async () => {
+    // 撤回那一步的 --no-deref 防的是「最后一次检查之后」才发生的同类并发改动(钩子造不出那个窗口,手动探针对照过:
+    // 不带它 update-ref 会顺着符号引用把 other 撤回基准)
+    const cwd = repo('undo-symref');
+    writeFileSync(path.join(cwd, 'a.txt'), 'a');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
+    const hooks = dir('undo-symref/.githooks');
+    git(cwd, 'config', 'core.hooksPath', '.githooks');
+    writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\necho x >> extra.txt\ngit add extra.txt\n', { mode: 0o755 });
+    writeFileSync(path.join(hooks, 'post-commit'), '#!/bin/sh\ngit branch other\ngit symbolic-ref refs/heads/main refs/heads/other\n', { mode: 0o755 });
+    writeFileSync(path.join(cwd, 'a.txt'), 'b');
+    expect(await codeOf(gitCommit(cwd, 'mine', true))).toBe('commit_unverified');
+    expect(git(cwd, 'log', '-1', '--format=%s', 'refs/heads/other')).toBe('mine');
+  });
+
   it('标题里带 \\x1f 也原样返回(只按第一个分隔符切)', async () => {
     const cwd = repo('sep-subject');
     writeFileSync(path.join(cwd, 'a.txt'), 'a');

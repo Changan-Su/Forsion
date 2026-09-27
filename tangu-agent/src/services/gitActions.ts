@@ -395,7 +395,8 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
       const [line, ...rest] = logAfter;
       if (!/^commit(?: \(initial\))?:/.test(line.slice(nthSep(line, 2) + 1))) throw new Error('the latest update of the branch is not this commit');
       if (rest.join('\n') !== logBefore!.join('\n')) throw new Error('the branch was updated more than once while committing');
-      ours = line.slice(0, nthSep(line, 1)); identified = true;
+      // 链得接在提交前那一条上才算认准:提交前没有 reflog(首次提交 / 清过)时这一条是谁写的证明不了
+      ours = line.slice(0, nthSep(line, 1)); identified = logBefore!.length > 0;
     } else {
       ours = must(await readGit(cwd, ['rev-parse', '--verify', ref]), 'rev-parse').stdout.trim();
     }
@@ -413,10 +414,10 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
     assertWithinReviewed(final, reviewed);
     await assertStagedSafe(cwd, final);
   } catch (e) {
-    // 只撤能证明是自己的、撤得干净的:分支上的非首次提交。首次提交(钩子删掉分支会连 reflog 一起抹掉,链证明不了)与游离 HEAD
-    // (撤回前 HEAD 若被切成分支,update-ref HEAD 会顺着改那个分支)一律不撤,交给用户看
-    if (!identified || !base || ref === 'HEAD') throw new GitActionError('commit_unverified', 'The commit does not match the reviewed list and could not be safely undone; check the repository', e instanceof GitActionError ? e.detail : String((e as Error)?.message || e));
-    const undone = await runAction(cwd, ['update-ref', '-m', 'forsion: undo commit', ref, base, ours]).catch(() => null);
+    // 只撤能证明是自己的、撤得干净的:认准了(见上;首次提交不算)且在分支上。游离 HEAD 不撤(撤回前 HEAD 若被切成分支,
+    // update-ref HEAD 会顺着改那个分支);分支本身也不跟随符号引用(--no-deref),撤回只动这一个引用
+    if (!identified || ref === 'HEAD') throw new GitActionError('commit_unverified', 'The commit does not match the reviewed list and could not be safely undone; check the repository', e instanceof GitActionError ? e.detail : String((e as Error)?.message || e));
+    const undone = await runAction(cwd, ['update-ref', '--no-deref', '-m', 'forsion: undo commit', ref, base!, ours]).catch(() => null);
     if (!undone || undone.code !== 0) throw new GitActionError('commit_unverified', 'A commit hook changed the commit and it could not be undone; check the repository', tail(undone?.stderr || ''));
     const inner = e instanceof GitActionError ? e : null;
     throw new GitActionError('hook_changed_commit', 'A git hook changed the commit so it no longer matches the reviewed list; the commit was undone', inner?.detail || String((e as Error)?.message || e));
