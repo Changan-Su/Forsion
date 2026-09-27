@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { catalogForDefaultSlot, contextLimitOptions, effortAt, effortStopAt } from './ModelPill'
+import { catalogForDefaultSlot, contextLimitOptions, effortAt, effortStopAt, ultraContextWindow } from './ModelPill'
 import type { ModelInfo } from '../types'
 
 describe('Effort slider', () => {
@@ -53,5 +53,16 @@ describe('上下文上限行(模型窗口 > 缺省上限才露;选项写本机 m
       .toEqual({ current: 128_000, defaultTokens: 200_000, selected: null })
     expect(contextLimitOptions(m({ contextWindow: 1_000_000, contextWindowSource: 'family' }), cap)).toBeNull()
     expect(contextLimitOptions(m({ contextWindow: cap, maxContextWindow: 1_000_000 }), undefined)).toBeNull()
+  })
+  it('Ultra(09-27):行上显示拉满后的窗口,勾选仍是本机存的设置;手动覆盖照旧;本来不超上限的不变', () => {
+    expect(contextLimitOptions(m({ contextWindow: cap, contextWindowSource: 'family', maxContextWindow: 1_000_000 }), cap, true))
+      .toEqual({ current: 1_000_000, defaultTokens: cap, maxTokens: 1_000_000, selected: 'default' })
+    expect(contextLimitOptions(m({ contextWindow: 500_000, contextWindowSource: 'override', maxContextWindow: 1_000_000 }), cap, true))
+      .toMatchObject({ current: 500_000, selected: null })
+    expect(ultraContextWindow(m({ contextWindow: cap, contextWindowSource: 'model', maxContextWindow: 1_000_000 }))).toBe(1_000_000)
+    expect(ultraContextWindow(m({ contextWindow: 200_000, contextWindowSource: 'family', maxContextWindow: 200_000 }))).toBe(200_000)
+    expect(ultraContextWindow(m({ contextWindow: 128_000, contextWindowSource: 'override', maxContextWindow: 1_000_000 }))).toBe(128_000)
+    expect(ultraContextWindow(m({ contextWindow: cap, contextWindowSource: 'family' }))).toBe(cap) // 老引擎不下发 max:按原值
+    expect(ultraContextWindow(undefined)).toBeUndefined()
   })
 })

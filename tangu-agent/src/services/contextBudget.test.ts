@@ -71,6 +71,14 @@ describe('effectiveContextWindowInfo — 自动识别的窗口封顶 272k,人填
   it('摘要目标用的 modelContextWindow 不封顶:它问的是摘要模型吃得下多少', () => {
     expect(modelContextWindow('claude-opus-5')).toBe(1_000_000)
   })
+  it('uncapped(Ultra):自动识别的拉满到模型本身的窗口;本来就不超上限的不变;人填的覆盖照旧说了算', () => {
+    expect(effectiveContextWindowInfo('claude-opus-5', undefined, true)).toEqual({ tokens: 1_000_000, source: 'family', max: 1_000_000 })
+    expect(effectiveContextWindowInfo('pr-glm', { context_window: 1_000_000 }, true)).toEqual({ tokens: 1_000_000, source: 'model', max: 1_000_000 })
+    expect(effectiveContextWindowInfo('claude-haiku-4-5', undefined, true)).toEqual({ tokens: 200_000, source: 'family', max: 200_000 })
+    expect(effectiveContextWindowInfo('whatever', undefined, true)).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'default', max: CONTEXT_WINDOW_TOKENS })
+    resetModelOverridesForTest({ 'kimi-k3': { contextWindow: 128_000 } })
+    expect(effectiveContextWindowInfo('kimi-k3', undefined, true)).toEqual({ tokens: 128_000, source: 'override', max: 1_000_000 })
+  })
 })
 
 describe('compactionThreshold — 窗口 − 预留(借 pi reserveTokens 的绝对余量口径)', () => {

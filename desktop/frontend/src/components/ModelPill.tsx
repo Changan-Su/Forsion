@@ -35,6 +35,7 @@ registerMessages({
   'pill.ctxDefault': { zh: '默认 · {n}', en: 'Default · {n}' },
   'pill.ctxMax': { zh: '最大 · {n}', en: 'Maximum · {n}' },
   'pill.ctxHint': { zh: '对本机这个模型的所有会话生效。超过 {n} 后每轮都要重发更多上下文，额度消耗随之上升。', en: 'Applies to every conversation with this model on this device. Past {n}, each turn resends more context, so usage rises with it.' },
+  'pill.ctxUltra': { zh: 'Ultra 下自动用满 {n}；关掉 Ultra 后按这里的设置。', en: 'Ultra uses the full {n} automatically. This setting applies again once Ultra is off.' },
   // Ultra 是对标 Codex 的模式专名(同 Chat / Work),中文界面也写 Ultra(i18nCoverage F 已逐键登记)。
   'pill.ultra': { zh: 'Ultra', en: 'Ultra' },
   'pill.ultraNote': { zh: '思考拉满，主动并行派子代理', en: 'Max thinking + parallel subagents' },
@@ -52,14 +53,21 @@ const effortDisplay = (lv: Thinking, t: (key: string) => string): string => thin
 /** 与输入框进度环同一写法(272k / 1M);环在 Composer2 里,这边反向 import 会成环。 */
 const fmtWindow = (n: number): string => n >= 1e6 ? `${Math.floor(n / 1e5) / 10}M` : `${Math.floor(n / 100) / 10}k`
 
-/** 「上下文上限」行:模型本身窗口 > 缺省上限才有得开;已手动覆盖过的也露(好改回默认)。老引擎不下发 max/cap → null。 */
-export function contextLimitOptions(model: ModelInfo | undefined, cap: number | undefined): { current: number; defaultTokens: number; maxTokens?: number; selected: 'default' | 'max' | null } | null {
+/** Ultra 会话实际用的窗口(与引擎 effectiveContextWindowInfo(…, uncapped) 同口径,09-27):没手动覆盖的不封顶,覆盖照旧。 */
+export function ultraContextWindow(model: ModelInfo | undefined): number | undefined {
+  if (!model?.contextWindow) return undefined
+  return model.contextWindowSource === 'override' ? model.contextWindow : Math.max(model.contextWindow, model.maxContextWindow ?? 0)
+}
+
+/** 「上下文上限」行:模型本身窗口 > 缺省上限才有得开;已手动覆盖过的也露(好改回默认)。老引擎不下发 max/cap → null。
+ *  ultra:行上显示 Ultra 下实际用的窗口;两个选项与勾选仍描述本机存的按模型设置(关掉 Ultra 后照它)。 */
+export function contextLimitOptions(model: ModelInfo | undefined, cap: number | undefined, ultra = false): { current: number; defaultTokens: number; maxTokens?: number; selected: 'default' | 'max' | null } | null {
   const max = model?.maxContextWindow
   if (!model?.contextWindow || !max || !cap) return null
   const overridden = model.contextWindowSource === 'override'
   if (max <= cap && !overridden) return null
   return {
-    current: model.contextWindow,
+    current: (ultra && ultraContextWindow(model)) || model.contextWindow,
     defaultTokens: Math.min(max, cap),
     ...(max > cap ? { maxTokens: max } : {}),
     // 设置页手填的其它值(如 500000)两档都不打勾,行上照实显示当前值
@@ -287,7 +295,7 @@ export const ModelPill: React.FC<{
   const ultraNoteId = useId()
   // 能不能写由引擎说了算(桌面连外部 / 云端 worker 那边 PUT 404):别按宿主猜
   const ctx = onContextWindowChange && modelId && modelsResponse?.modelOverridesWritable
-    ? contextLimitOptions(modelsResponse.models.find((m) => m.id === modelId), modelsResponse.contextWindowCap)
+    ? contextLimitOptions(modelsResponse.models.find((m) => m.id === modelId), modelsResponse.contextWindowCap, isUltra)
     : null
   const pickContext = (tokens: number | null): void => {
     setPane(null)
@@ -506,7 +514,10 @@ export const ModelPill: React.FC<{
                       <span className="mi-check">{ctx.selected === 'max' ? '✓' : ''}</span>
                     </button>
                   )}
-                  <div className="menu-section cm-foot">{t('pill.ctxHint', { n: fmtWindow(ctx.defaultTokens) })}</div>
+                  <div className="menu-section cm-foot">
+                    {isUltra && ctx.selected === 'default' && ctx.maxTokens ? <div>{t('pill.ctxUltra', { n: fmtWindow(ctx.maxTokens) })}</div> : null}
+                    {t('pill.ctxHint', { n: fmtWindow(ctx.defaultTokens) })}
+                  </div>
                 </>
               ) : (
                 <>

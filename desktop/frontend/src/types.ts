@@ -847,6 +847,8 @@ export interface CtxInfo {
   ctxWindowSource: string
   /** 模型本身的窗口(封顶前)。> ctxWindow 且来源不是 override = 被缺省上限封了顶。 */
   ctxWindowMax?: number
+  /** 这一轮的窗口按 Ultra 算(自动识别的不封顶,09-27)。与会话当前的 Ultra 开关不一致 = 切了开关还没跑下一轮,窗口已过时。 */
+  ultra?: boolean
   sections: Array<{ k: string; tokens: number }>
   files: string[]
   filesTruncated: boolean
