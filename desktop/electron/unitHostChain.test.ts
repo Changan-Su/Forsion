@@ -69,6 +69,7 @@ let ws = ''
 let proj = ''
 let picked = ''
 let browserProfile = ''
+let poisonedProfile = ''
 let guard: UnitScopeGuard
 let engine: Awaited<ReturnType<typeof fakeEngine>>
 let registry: LocalProjectRegistry
@@ -84,9 +85,13 @@ beforeAll(async () => {
   picked = join(home, 'code', 'picked')
   // 不在受保护清单里的第三方应用配置目录(浏览器登录库 / Cookies)
   browserProfile = join(home, 'Library', 'Application Support', 'SomeBrowser', 'Default')
+  // 升级前就被远端改过的会话目录(引擎不盖标记,种子分不出来):放在本平台的应用数据区里 —— 种子必须不收
+  poisonedProfile = process.platform === 'darwin' ? join(home, 'Library', 'Application Support', 'OtherBrowser', 'Default')
+    : process.platform === 'win32' ? join(home, 'AppData', 'Local', 'OtherBrowser', 'User Data', 'Default')
+    : join(home, '.local', 'share', 'OtherBrowser', 'Default')
   for (const [dir, file, body] of [
     [ws, 'doc.md', 'ws'], [proj, 'a.md', 'project file'], [picked, 'b.md', 'picked file'],
-    [browserProfile, 'Login Data', 'SAVED-PASSWORDS'], [join(home, '.forsion'), 'auth.json', '{"token":"T"}'],
+    [browserProfile, 'Login Data', 'SAVED-PASSWORDS'], [poisonedProfile, 'Login Data', 'OTHER-PASSWORDS'], [join(home, '.forsion'), 'auth.json', '{"token":"T"}'],
   ] as const) {
     await mkdir(dir, { recursive: true })
     await writeFile(join(dir, file), body)
@@ -96,9 +101,10 @@ beforeAll(async () => {
   // 升级前就有的本机会话(项目目录 proj)
   localSessionId = randomUUID()
   engine.rows.push({ id: localSessionId, project_path: proj, archived: false, agent_config: { execMode: 'host' } })
+  engine.rows.push({ id: randomUUID(), project_path: poisonedProfile, archived: false, agent_config: null }) // 升级前被远端改过、无标记
   registry = createFileProjectRegistry(join(home, 'AppData', 'Forsion', 'unit-local-project-roots.json'))
   const local = (): { url: string; token: string; remoteMark: string } => ({ url: engine.url, token: 'LOCAL', remoteMark: 'MARK' })
-  source = createUnitSessionRoots({ engine: local, registry, ttlMs: 0 }) // ttl 0:每次现拉,15s 缓存不许掩盖 PATCH
+  source = createUnitSessionRoots({ engine: local, registry, ttlMs: 0, home }) // ttl 0:每次现拉,15s 缓存不许掩盖 PATCH;home = 临时家目录(种子按它认应用数据区)
   const env = { home }
   web = await startUnitWeb({
     getEngine: seedGatedEngine(local, source),
@@ -136,7 +142,8 @@ describe('unit hostfile × 远端可写的会话路径(真 unitWeb 整链)', () 
     expect(engine.hits.filter((h) => h.startsWith('PATCH')).length).toBe(before)
     for (let i = 0; i < 50 && !source.seeded(); i++) await new Promise((res) => setTimeout(res, 20))
     expect(source.seeded()).toBe(true)
-    expect(registry.roots()).toEqual([proj]) // 种子 = 当时已有、无远程标记的本机会话目录
+    expect(registry.roots()).toEqual([proj]) // 种子 = 当时已有、无远程标记的本机会话目录;应用数据区里的那条不收
+    expect((await hostfile(join(poisonedProfile, 'Login Data'))).status).toBe(404)
     expect((await remoteEngine('GET', '/agent/sessions')).status).toBe(200)
   })
 

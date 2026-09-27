@@ -122,7 +122,8 @@ const api = {
     return () => ipcRenderer.removeListener('auth:will-change', listener)
   },
   /** 本机模式工作目录选择;取消返回 null。 */
-  pickDirectory: (): Promise<string | null> => ipcRenderer.invoke('dialog:pickDirectory'),
+  // purpose:'project' = 用户在「添加项目 / 导入项目」里选的目录 → 主进程登记为本机确认过的项目根(设备页文件面板据此放行)
+  pickDirectory: (opts?: { purpose?: 'project' }): Promise<string | null> => ipcRenderer.invoke('dialog:pickDirectory', opts),
   /** Chat Box 添加文件或文件夹；取消返回空数组。 */
   pickPaths: (): Promise<Array<{ path: string; isDirectory: boolean }>> => ipcRenderer.invoke('dialog:pickPaths'),
   /** 另存为文本文件(导出日志等);取消返回 { ok:false }。 */

@@ -154,7 +154,7 @@ export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: Pro
     if (inFlight.current || !window.tangu?.pickDirectory) return
     inFlight.current = true; setBusy('import'); setErrorKey(null)
     try {
-      const path = await window.tangu.pickDirectory()
+      const path = await window.tangu.pickDirectory({ purpose: 'project' })
       if (path) onOpen(path, projectBasename(path))
     } catch { setErrorKey('csl.importFailed') }
     finally { inFlight.current = false; setBusy(null) }

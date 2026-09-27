@@ -1,7 +1,7 @@
 import { unitConfigFace } from './unitConfigFace'
 import { MCP_NAME_RESERVED, newReservedMcpNames } from '../shared/mcpNames'
 import { buildUnitScopeGuard, openUnitHostFile, withVerifiedUnitPath } from './unitHostScope'
-import { composeUnitRoots, createFileProjectRegistry, createUnitSessionRoots, seedGatedEngine, type LocalProjectRegistry, type UnitSessionRootsSource } from './unitLocalRoots'
+import { composeUnitRoots, createFileProjectRegistry, createUnitSessionRoots, registerPickedDirectory, seedGatedEngine, type LocalProjectRegistry, type UnitSessionRootsSource } from './unitLocalRoots'
 import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/hostSandboxConfig'
 import { startMiniCursorFollow, readComputerUseForeground, cursorPanelTarget } from './miniCursorFollow'
 import { startMiniAutoPanel } from './miniAutoPanel'
@@ -2275,14 +2275,15 @@ app.whenReady().then(async () => {
     if (process.platform === 'darwin') app.setBadgeCount(Math.max(0, Math.floor(Number(count) || 0)))
   })
   // 本机模式的工作目录选择(host-exec 的 cwd)。
-  ipcMain.handle('dialog:pickDirectory', async () => {
+  ipcMain.handle('dialog:pickDirectory', async (_e, opts?: unknown) => {
     const win = BrowserWindow.getFocusedWindow() ?? mainWindow
     const r = win
       ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], title: '选择 Agent 工作目录' })
       : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'], title: '选择 Agent 工作目录' })
     if (r.canceled || !r.filePaths.length) return null
-    // 本机原生选择框选的目录 = 本机确认过的项目根(设备页没有这个桥):/unit/host* 才认开在这里的会话(unitLocalRoots.ts)。
-    await localProjectRegistry().add([r.filePaths[0]]).catch((e) => console.error('[unit] 登记本机项目根失败:', e))
+    // 「添加 / 导入项目」里本机原生选择框选的目录 = 本机确认过的项目根(设备页没有这个桥):/unit/host* 才认开在这里的会话
+    // (unitLocalRoots.ts)。技能导入 / 同步目录 / 额外可写根等别的用途不登记 —— 选了个目录不等于同意设备页浏览它(Codex r3 #2)。
+    await registerPickedDirectory(localProjectRegistry(), r.filePaths[0], opts).catch((e) => console.error('[unit] 登记本机项目根失败:', e))
     return r.filePaths[0]
   })
 

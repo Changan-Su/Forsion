@@ -1249,7 +1249,9 @@ declare global {
       onAuthWillChange?(cb: () => Promise<void>): () => void
       /** 截当前窗口的一块视口矩形(Agent Desk 截屏 → 引擎 desk_screenshot);失败返回 null。 */
       captureRect?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>
-      pickDirectory?(): Promise<string | null>
+      /** purpose:'project' = 添加 / 导入项目:主进程把选中的目录登记为本机确认过的项目根(设备页 /unit/host* 只认这些会话目录);
+       *  其余用途(技能导入、同步目录、额外可写根…)不传,不登记。 */
+      pickDirectory?(opts?: { purpose?: 'project' }): Promise<string | null>
       /** Chat Box 添加文件或文件夹；取消返回空数组。 */
       pickPaths?(): Promise<Array<{ path: string; isDirectory: boolean }>>
       /** 另存为文本文件(导出日志等);取消返回 { ok:false }。 */

@@ -18,6 +18,8 @@
  */
 import { realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import { writePrivateJson, createSerialQueue } from './configWrite'
 import { filterSessionRoots, isWithin, type UnitScopeEnv, type UnitScopeGuard } from './unitHostScope'
 
@@ -41,6 +43,27 @@ export function unmarkedProjectPaths(rows: SessionRowLike[]): string[] {
     if (real) out.add(real)
   }
   return [...out]
+}
+
+/**
+ * 应用数据区:别的软件的配置 / 登录库 / Cookie 住的地方(~/Library 除 iCloud Drive 与 CloudStorage 网盘、Windows AppData、
+ * Linux ~/.local/share、~/.var、~/snap、~/.mozilla …)。一次性种子**不收**落在这里的历史会话目录(Codex r3 #1):
+ * 升级前远端 PATCH 过、或远端 run 派生出来的会话都没有远程标记,种子分不出来 —— 别的软件的数据目录正是那种攻击的落点,
+ * 而真项目几乎不住这里。用户真要把项目开在这里,经「添加项目」的原生选择框登记即可(显式登记不受此限)。
+ */
+export function inAppDataArea(real: string, home: string, platform: NodeJS.Platform = process.platform): boolean {
+  const under = (p: string): boolean => isWithin(real, p, platform)
+  if (platform === 'darwin') {
+    const lib = join(home, 'Library')
+    return under(lib) && !under(join(lib, 'Mobile Documents')) && !under(join(lib, 'CloudStorage'))
+  }
+  if (platform === 'win32') return under(join(home, 'AppData'))
+  return ['.local/share', '.var', 'snap', '.mozilla', '.thunderbird', '.pki'].some((d) => under(join(home, d)))
+}
+
+/** 种子候选:无远程标记的会话目录,去掉应用数据区里的(见 inAppDataArea)。 */
+export function seedCandidates(rows: SessionRowLike[], home: string, platform: NodeJS.Platform = process.platform): string[] {
+  return unmarkedProjectPaths(rows).filter((r) => !inAppDataArea(r, home, platform))
 }
 
 /** 会话根 = 无远程标记 且 realpath 落在某个本机根里(含相等)。localRoots 须已 realpath、已过 filterSessionRoots。 */
@@ -92,6 +115,14 @@ export function createFileProjectRegistry(file: string): LocalProjectRegistry {
   }
 }
 
+/** 原生目录选择框的结果:只有「添加 / 导入项目」(opts.purpose === 'project')才登记为本机项目根。
+ *  技能导入 / 同步目录 / 额外可写根也走同一个选择框 —— 选了个目录不等于同意设备页浏览它(Codex r3 #2)。true = 已登记。 */
+export async function registerPickedDirectory(registry: LocalProjectRegistry, dir: string, opts: unknown): Promise<boolean> {
+  if ((opts as { purpose?: unknown } | null | undefined)?.purpose !== 'project') return false
+  await registry.add([dir])
+  return true
+}
+
 export interface EngineAccess { url: string | null; token: string; remoteMark?: string }
 
 export interface UnitSessionRootsSource {
@@ -113,6 +144,9 @@ export function createUnitSessionRoots(deps: {
   maxSeedFailures?: number
   /** 失败后至少隔这么久才再试(远端请求一来一个触发,别在一瞬间把连败次数刷满)。缺省 2000ms。 */
   seedRetryMs?: number
+  /** 种子排除应用数据区用(缺省 os.homedir() / process.platform)。 */
+  home?: string
+  platform?: NodeJS.Platform
 }): UnitSessionRootsSource {
   const ttl = deps.ttlMs ?? 15_000
   const doFetch = deps.fetchImpl ?? fetch
@@ -151,16 +185,18 @@ export function createUnitSessionRoots(deps: {
           if (Date.now() - lastFailureAt < (deps.seedRetryMs ?? 2000)) return false
           try {
             const rows = [...await list(url, token, false), ...await list(url, token, true)]
-            await deps.registry.markSeeded(unmarkedProjectPaths(rows))
+            await deps.registry.markSeeded(seedCandidates(rows, deps.home ?? homedir(), deps.platform ?? process.platform))
             deps.log?.(`[unit] 本机项目根种子完成(${deps.registry.roots().length} 个)`)
             return true
           } catch (e: any) {
             lastFailureAt = Date.now()
             if (++failures < (deps.maxSeedFailures ?? 5)) return false
             deps.log?.(`[unit] 本机项目根种子连败 ${failures} 次(${e?.message || e}),按空表完成:设备页只可读工作区 / 笔记库 / 本机选过的目录`)
-            await deps.registry.markSeeded([])
-            return true
+            await deps.registry.markSeeded([]).catch(() => {}) // 写盘也失败:保持未种子(闸继续 503),下次再试
+            return deps.registry.seeded()
           }
+        } catch {
+          return false // 调用方多是 void 触发:这里绝不抛(读盘 / 写盘失败 = 未完成)
         } finally { seeding = null }
       })())
     },

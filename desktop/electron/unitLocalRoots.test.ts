@@ -8,7 +8,7 @@ import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildUnitScopeGuard } from './unitHostScope'
-import { composeUnitRoots, confirmedSessionRoots, createFileProjectRegistry, createUnitSessionRoots, hasRemoteOrigin, seedGatedEngine, type SessionRowLike } from './unitLocalRoots'
+import { composeUnitRoots, confirmedSessionRoots, createFileProjectRegistry, createUnitSessionRoots, hasRemoteOrigin, inAppDataArea, registerPickedDirectory, seedGatedEngine, type SessionRowLike } from './unitLocalRoots'
 
 async function tmpHome(): Promise<string> { return realpathSync(await mkdtemp(join(tmpdir(), 'unit-local-'))) }
 
@@ -74,6 +74,42 @@ describe('unitLocalRoots', () => {
     await again.ready()
     expect(again.seeded()).toBe(true)
     expect([...again.roots()].sort()).toEqual([join(home, 'a'), join(home, 'b'), join(home, 'c')])
+  })
+
+  it('种子不收应用数据区里的历史会话目录(升级前远端 PATCH 过 / 派生出来的都没有标记);网盘目录照收', async () => {
+    const home = await tmpHome()
+    const proj = join(home, 'code', 'app')
+    const poisoned = join(home, 'Library', 'Application Support', 'SomeBrowser', 'Default')
+    const cloud = join(home, 'Library', 'CloudStorage', 'Dropbox', 'proj')
+    const icloud = join(home, 'Library', 'Mobile Documents', 'com~apple~CloudDocs', 'proj')
+    for (const d of [proj, poisoned, cloud, icloud]) await mkdir(d, { recursive: true })
+    const rows = [proj, poisoned, cloud, icloud].map((p) => ({ project_path: p, agent_config: null }))
+    const fetchImpl = (async (u: string) => new Response(JSON.stringify({ sessions: String(u).includes('archived=true') ? [] : rows }), { status: 200 })) as unknown as typeof fetch
+    const reg = createFileProjectRegistry(join(home, 'reg.json'))
+    const src = createUnitSessionRoots({ engine: () => ({ url: 'http://e', token: 't' }), registry: reg, fetchImpl, home, platform: 'darwin' })
+    expect(await src.ensureSeeded()).toBe(true)
+    expect([...reg.roots()].sort()).toEqual([proj, cloud, icloud].sort())
+  })
+
+  it('应用数据区判定:mac ~/Library(网盘除外)、Linux ~/.local/share 等;普通项目目录不算', () => {
+    expect(inAppDataArea('/Users/a/Library/Application Support/X', '/Users/a', 'darwin')).toBe(true)
+    expect(inAppDataArea('/Users/a/Library/Preferences', '/Users/a', 'darwin')).toBe(true)
+    expect(inAppDataArea('/Users/a/Library/CloudStorage/OneDrive/p', '/Users/a', 'darwin')).toBe(false)
+    expect(inAppDataArea('/Users/a/code/p', '/Users/a', 'darwin')).toBe(false)
+    expect(inAppDataArea('/home/a/.local/share/x', '/home/a', 'linux')).toBe(true)
+    expect(inAppDataArea('/home/a/snap/firefox/common', '/home/a', 'linux')).toBe(true)
+    expect(inAppDataArea('/home/a/src/p', '/home/a', 'linux')).toBe(false)
+  })
+
+  it('原生选择框:只有「添加 / 导入项目」(purpose=project)才登记;技能导入 / 同步目录等别的用途不登记', async () => {
+    const home = await tmpHome()
+    for (const d of ['skills', 'proj']) await mkdir(join(home, d))
+    const reg = createFileProjectRegistry(join(home, 'reg.json'))
+    expect(await registerPickedDirectory(reg, join(home, 'skills'), undefined)).toBe(false)
+    expect(await registerPickedDirectory(reg, join(home, 'skills'), { purpose: 'import' })).toBe(false)
+    expect(await registerPickedDirectory(reg, join(home, 'proj'), { purpose: 'project' })).toBe(true)
+    await reg.ready()
+    expect(reg.roots()).toEqual([join(home, 'proj')])
   })
 
   it('种子:引擎没起 = 未完成(闸继续 503);连败到上限按空表完成,失败间隔内不重试', async () => {

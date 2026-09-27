@@ -2243,7 +2243,7 @@ export const useApp = create<AppState>((set, get) => ({
   },
 
   addLocalWorkspace: async () => {
-    const dir = await window.tangu?.pickDirectory?.()
+    const dir = await window.tangu?.pickDirectory?.({ purpose: 'project' })
     if (!dir) return
     await get().createInWorkspace({ key: dir, name: dir.split('/').filter(Boolean).pop() || dir, kind: 'local', path: dir })
   },
