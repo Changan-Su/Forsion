@@ -23,6 +23,7 @@
  *   npm run live:harness -- --only recall-unprompted --ab-memory   # B1 行为闸:记忆易变段走 tail vs system 各跑一遍(两次引擎启动,顺序)
  *   npm run live:harness -- --only deferred                  # E2 按需装载:load_tools 先于 read_document + 子代理 read_document 直通 + 子代理自己 load_tools 解锁 browser_snapshot
  *   npm run live:harness -- --only grant                     # 改 delegate.grantTools / 子代理管理面闸后跑:授予时子代理用得上 manage_schedule,不授予时照旧被拒(正负两跑,均 action=list 无副作用)
+ *   npm run live:harness -- --only ultra --model xai/grok-4.7  # Ultra 档(09-27):改 ULTRA_SECTION / delegate 描述 / 子代理成本闸后跑:可并行的题一轮派 ≥2 个且真并行、琐碎题 0 个、不开 Ultra 的对照只记数
  *   npm run live:harness -- --only churn                     # 同会话 6 连发的后续调用命中画像(不设命中率阈值,六个 run 须跑完)
  *   npm run live:harness -- --only ttft --ttft-rounds 5      # 首 token 延迟:preset(chat|work)× 思考档(off|medium)2×2,每格 N 会话 × 2 轮(冷/热缓存),交错跑
  *   npm run live:harness -- --only teamapproval              # 团队 × 完全通行(09-21 反馈):成员 config 自带 auto-edit / run 启动后才切档,两条都须 0 次审批;改审批闸 / teamRuns 档位后跑
@@ -62,7 +63,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -71,7 +72,7 @@ const FILLER = Math.max(0, Math.floor(Number(opt('filler', 0)) || 0));
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -442,7 +443,7 @@ async function seedMemory() {
 async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {}, client, onApproval) {
   const t0 = Date.now();
   const { runId } = await api('/agent/runs', { method: 'POST', body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, client, agent_config: { ...AGENT_CONFIG, ...extraAgentConfig } }) });
-  const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], approvals: 0, approvalList: [], usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, firstTokenMs: null, wallMs: 0 };
+  const ev = { runId, tokens: 0, toolCalls: [], toolCallIds: [], toolOffsets: null, toolResults: [], subTools: [], subStarts: [], subDones: [], systemPrompt: null, approvals: 0, approvalList: [], usages: [], probes: [], statuses: [], content: '', error: null, done: false, group: { speakers: [], ended: null, starts: [], ends: [], summary: null, remarks: [], outputs: [] }, ttftMs: null, firstTokenMs: null, wallMs: 0 };
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), timeoutMs);
   try {
@@ -475,7 +476,11 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
           // 委派时授予了哪些管理工具(subAgent.ts 的 phase:'start' payload.grants)—— grant 场景**唯一**的
           // 观测点:「子代理没调成 manage_schedule」既可能是没授予、也可能是模型压根没试,只有这个字段
           // 分得开。字段缺席时记 null(老引擎 / 事件契约被改)—— 判据那边按红处理,绝不当成「肯定没授予」(Codex 09-15 #7)。
-          else if (e.type === 'subagent' && p.phase === 'start') ev.subStarts.push({ subId: String(p.subId || ''), grants: Array.isArray(p.grants) ? p.grants.map(String) : null });
+          else if (e.type === 'subagent' && p.phase === 'start') ev.subStarts.push({ subId: String(p.subId || ''), grants: Array.isArray(p.grants) ? p.grants.map(String) : null, at: Date.now() - t0 });
+          // 子代理收尾时刻:ultra 场景判「真并行」= 两个子代理的 [start, done] 区间交叠(光数 delegate 次数证不了并行)。
+          else if (e.type === 'subagent' && p.phase === 'done') ev.subDones.push({ subId: String(p.subId || ''), at: Date.now() - t0, error: p.error ? String(p.error) : null });
+          // agentConfig.debugSystemPrompt 时引擎回传本 run 组装好的系统提示:证「段真的进了提示词」,与模型配不配合无关。
+          else if (e.type === 'system_prompt') ev.systemPrompt = String(p.content || '');
           else if (e.type === 'approval_request') {
             ev.approvals += 1;
             ev.approvalList.push({ name: p.name, reason: p.reason?.kind, mode: p.reason?.mode, agent: p.agentSlug, args: String(p.arguments || '').slice(0, 300) });
@@ -1469,6 +1474,64 @@ try {
       subStarts: { granted: evYes.subStarts, plain: evNo.subStarts },
       ttftMs: ttft(evYes), tokens: (tokensOf(evYes) || 0) + (tokensOf(evNo) || 0) || null,
       toolCalls: [...evYes.toolCalls, ...evNo.toolCalls],
+    };
+  });
+
+  // ── ultra:思考档位 Ultra(09-27,对标 Codex Ultra = max + 主动并行委派)──
+  // 三腿:① 开 Ultra 做一道天然可拆的题(三个互不相关的多文件模块各藏一个 bug)→ 一轮派 ≥2 个 delegate、区间真交叠、
+  //       系统提示真带 Ultra 段、请求档是 max、三个模块都查到;② 开 Ultra 问一句琐碎题 → 0 个 delegate(反向条款);
+  //       ③ 不开 Ultra 做同一道题 → 系统提示里没有 Ultra 段(注入的负对照),委派数只记录不判(模型不开也可能自己派)。
+  await scenario('ultra', 'ultra Ultra 档:可并行的题主动并行派子代理,琐碎题不派', async () => {
+    const MODS = {
+      billing: { fn: 'sumLineItems', bug: '循环从 i = 1 开始,漏掉第一项', body: (i) => `  let total = 0;\n  for (let i = ${i === 3 ? 1 : 0}; i < items.length; i++) total += items[i].price * items[i].qty;\n  return total;` },
+      dates: { fn: 'isWeekend', bug: '周日是 getDay() === 0,写成了 7', body: (i) => `  const day = d.getDay();\n  return day === 6 || day === ${i === 3 ? 7 : 0};` },
+      strings: { fn: 'capitalize', bug: 'slice(0) 把首字母又拼了一遍,应为 slice(1)', body: (i) => `  if (!s) return s;\n  return s[0].toUpperCase() + s.slice(${i === 3 ? 0 : 1});` },
+    };
+    const root = join(workspace, 'ultra');
+    for (const [mod, spec] of Object.entries(MODS)) {
+      mkdirSync(join(root, mod), { recursive: true });
+      for (let i = 1; i <= 5; i++) {
+        // 每个模块 5 个文件、只有第 3 个是坏的;其余是同名函数的正确版本 + 填充,逼着真去读、去比,而不是扫一眼就答。
+        const filler = Array.from({ length: 30 }, (_, k) => `export function helper${i}_${k}(x) { return x * ${k + 1} + ${i}; }`).join('\n');
+        const arg = mod === 'dates' ? 'd' : mod === 'strings' ? 's' : 'items';
+        writeFileSync(join(root, mod, `${spec.fn}_v${i}.js`), `// ${mod} module, variant ${i}\n${filler}\n\nexport function ${spec.fn}(${arg}) {\n${spec.body(i)}\n}\n`);
+      }
+    }
+    const TASK = 'ultra/ 目录下有 billing、dates、strings 三个互不相关的模块,每个模块里有 5 个版本文件,其中恰好一个版本的主函数有 bug。'
+      + '请分别查清每个模块是哪个文件、哪一行、为什么错、怎么改,最后汇总成一张表。只读,不要修改任何文件。';
+    const delegates = (ev) => ev.toolCalls.filter((n) => n === 'delegate').length;
+    // 真并行:存在两个子代理,一个的 start 早于另一个的 done 且另一个的 start 早于它的 done
+    const overlapped = (ev) => {
+      const spans = ev.subStarts.map((st) => ({ st: st.at, end: ev.subDones.find((d) => d.subId === st.subId)?.at ?? Infinity }));
+      return spans.some((a, i) => spans.some((b, j) => i !== j && a.st < b.end && b.st < a.end));
+    };
+    const ctxInfo = (ev) => ev.statuses.find((x) => x.phase === 'context_info') || {};
+    const allMods = (text) => ['billing', 'dates', 'strings'].every((m) => text.includes(m));
+    const found3 = (text) => ['_v3'].every((v) => (text.match(new RegExp(v, 'g')) || []).length >= 3);
+
+    const evUltra = await run(`live-ultra-on-${Date.now()}`, TASK, 420_000, { ultra: true, thinkingLevel: 'max', debugSystemPrompt: true });
+    const sysHas = (ev) => (ev.systemPrompt || '').includes('## Ultra Effort');
+    const okUltra = !evUltra.error && sysHas(evUltra) && ctxInfo(evUltra).thinkingRequested === 'max'
+      && delegates(evUltra) >= 2 && evUltra.subStarts.length >= 2 && overlapped(evUltra) && allMods(evUltra.content);
+
+    const evTrivial = await run(`live-ultra-trivial-${Date.now()}`, '法国的首都是哪座城市?', 180_000, { ultra: true, thinkingLevel: 'max', debugSystemPrompt: true });
+    const okTrivial = !evTrivial.error && sysHas(evTrivial) && delegates(evTrivial) === 0 && /巴黎|Paris/i.test(evTrivial.content);
+
+    const evPlain = await run(`live-ultra-off-${Date.now()}`, TASK, 420_000, { thinkingLevel: 'high', debugSystemPrompt: true });
+    const okPlain = !evPlain.error && evPlain.systemPrompt !== null && !sysHas(evPlain);
+
+    const fmt = (ev) => `delegate ×${delegates(ev)};子代理 ${ev.subStarts.length} 个${ev.subStarts.length >= 2 ? (overlapped(ev) ? '(区间交叠=真并行)' : '(没有交叠=串行)') : ''};请求档 ${ctxInfo(ev).thinkingRequested || '?'}→${ctxInfo(ev).thinkingEffective || '?'};墙钟 ${sec(ev.wallMs)}${ev.error ? ';' + ev.error : ''}`;
+    return {
+      ok: okUltra && okTrivial && okPlain,
+      detail: `【Ultra】${fmt(evUltra)};Ultra 段 ${sysHas(evUltra) ? '在' : '缺!'};三模块 ${allMods(evUltra.content) ? '都报到' : '有漏'}${found3(evUltra.content) ? '(三处 _v3 都点名)' : ''}`
+        + ` 【琐碎题】${fmt(evTrivial)};答对 ${/巴黎|Paris/i.test(evTrivial.content) ? '是' : '否'}`
+        + ` 【对照·不开 Ultra】${fmt(evPlain)};Ultra 段 ${sysHas(evPlain) ? '误注入!' : evPlain.systemPrompt === null ? '没拿到系统提示(debugSystemPrompt 失效)' : '无'}`,
+      output: `【① Ultra】父工具序列:${evUltra.toolCalls.join(' → ') || '(无)'}\n子代理:${JSON.stringify(evUltra.subStarts.map((x) => ({ id: x.subId.slice(0, 6), at: x.at })))} / 收尾:${JSON.stringify(evUltra.subDones.map((x) => ({ id: x.subId.slice(0, 6), at: x.at })))}\n${evUltra.content}\n\n`
+        + `【② 琐碎题 · Ultra】父工具序列:${evTrivial.toolCalls.join(' → ') || '(无)'}\n${evTrivial.content}\n\n`
+        + `【③ 对照 · 不开 Ultra】父工具序列:${evPlain.toolCalls.join(' → ') || '(无)'}\n${evPlain.content}`,
+      toolCalls: [...evUltra.toolCalls, ...evTrivial.toolCalls, ...evPlain.toolCalls],
+      ultraDelegates: { ultra: delegates(evUltra), trivial: delegates(evTrivial), plain: delegates(evPlain) },
+      ttftMs: ttft(evUltra), tokens: (tokensOf(evUltra) || 0) + (tokensOf(evTrivial) || 0) + (tokensOf(evPlain) || 0) || null,
     };
   });
 

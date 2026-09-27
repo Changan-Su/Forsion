@@ -23,7 +23,8 @@ import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
 import { buildAgentRoster } from './agentRoster.js';
-import { AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
+import { AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
+import { resolveTools } from '../tools/toolRegistry.js';
 import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
 import { SKETCH_SECTION, sketchEnabledFor, sketchTurnSignalFor } from '../tools/builtin/sketch.js';
 import { loadTodos as loadSessionTodos, renderTodos, type TodoItem } from '../tools/builtin/todo.js';
@@ -842,7 +843,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const MAX_TRUNCATION_RECOVERY = 3;
   let truncationRecoveryUsed = 0;
   // 未显式设置的会话默认思考·中(2026-07-16 产品拍板);显式 'off' 仍关。UI 显示默认须同步(ModelPill)。
-  const thinkingLevel: ThinkingLevel = agentConfig.thinkingLevel || 'medium';
+  // Ultra(会话键 ultra:true,对标 Codex Ultra 档)⇒ 思考恒 max,ultra 开着时存值里的 thinkingLevel 不看 ——
+  // 换 Agent 时桌面会单独 PATCH thinkingLevel,「ultra + high」这种陈旧组合在这里自动失效。主动委派段见系统提示末尾。
+  const ultraRequested = agentConfig.ultra === true;
+  const thinkingLevel: ThinkingLevel = ultraRequested ? 'max' : (agentConfig.thinkingLevel || 'medium');
   const attachments = input.attachments || [];
   let imageInputs = normalizeImageAttachments(attachments);
   // host-exec（TUI/桌面本机模式）注入：execMode/cwd/approvalMode 只经 per-run agentConfig 传入。
@@ -1394,6 +1398,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           'A good plan names concrete files and verifiable steps (e.g. "add retry with backoff to fetchUser() in src/api/user.ts; verify via test/api.test.ts") — not a restatement of the task ("implement the feature, then test it").',
       );
     }
+    // Ultra 主动委派段(同 planMode:run 级、追加在末尾,只在开关那一刻动前缀)。三道闸缺一不可:会话开了 ultra;
+    // 不是 Muse / 自动化这类无人值守 run(抄了会话配置也不许无人看管地扇出 max 档子代理);本 run 真拿得到 delegate ——
+    // hostExec / chat 正向面 / toolsMode 黑白名单 / 子代理深度都在 resolveTools 一处判,这里不重抄条件。
+    if (ultraRequested && !deferBypass && resolveTools(profile, toolGateCtx as ToolContext).has('delegate')) {
+      systemParts.push(ULTRA_SECTION);
+    }
 
     // 变体 S(TANGU_MEMORY_VOLATILE=system-end):易变段仍在系统消息里,但挪到最末尾 —— 只失效最短后缀,
     // 又不改变「记忆是 system 角色」的权重。与 tail 档是 A/B 的两条腿。
@@ -1760,10 +1770,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let deskPresentCount = 0;
     // load_tools 解锁 → 置脏,下一迭代重算 defs(解锁那一刻打一次前缀缓存,之后稳定)。
     let toolDefsDirty = false;
+    // 子代理(delegate)的计价累计:它们走 noopBilling,不记这里的话 TANGU_MAX_RUN_COST 恰好看不见 Ultra 放大的那部分
+    // (并行 × 24 轮 × 继承的 max 档)。与 costTotal 分开记,只在越限判定与对外展示的 costTotal 处相加。
+    let delegatedCost = 0;
     const toolCtx: ToolContext = {
       // 门禁字段单源:与上面 listDeferredTools 拿到的是同一份,目录与工具面不会分叉。
       ...toolGateCtx,
       signal: ac.signal, customTools, mcpTools,
+      // costTotal / runCostLimit 在下面循环前才声明:两个闭包只在工具执行期被调(那时早已初始化),不会撞 TDZ。
+      chargeRunCost: (cost) => { if (Number.isFinite(cost) && cost > 0) delegatedCost += cost; },
+      runCostExceeded: () => isOverRunCost(costTotal + delegatedCost, runCostLimit),
       sayToTeam: isTeamMember ? async (text, requestReply) => {
         ac.signal.throwIfAborted();
         await publish(runId, 'team_speech', { text, requestReply });
@@ -2338,8 +2354,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         total: tokensTotal,
         cost,
         // 本 run 累计成本 + 上限(H3 成本闸可见:此前 TANGU_MAX_RUN_COST 只在越限失败时才现身)。
-        // costTotal 的正式累加在下方越限检查处,这里发「本轮记入后」的值,口径一致。
-        costTotal: costTotal + cost,
+        // costTotal 的正式累加在下方越限检查处,这里发「本轮记入后」的值,口径一致。含子代理那份(与越限判定同一口径);
+        // 桌面只拿这个字段当「本 run 花了多少」,带 phase 的 delegate 事件在消费端被拦掉,不会重复计。
+        costTotal: costTotal + delegatedCost + cost,
         costLimit: runCostLimit,
         iteration,
       });
@@ -2373,8 +2390,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 每-run 累计成本硬上限(多轮累计失控的护栏;入站闸门只挡单条入站)。越限即终止本 run，
       // 与 input_too_large 同款 publish→drain→failed→return(finally 仍会 flush + 推进队列)。
       costTotal += cost;
-      if (isOverRunCost(costTotal, runCostLimit)) {
-        const detail = `本 run 累计成本约 ${costTotal.toFixed(2)} 点，超过上限 ${runCostLimit} 点，已停止。可调 TANGU_MAX_RUN_COST（0 关闭）。`;
+      if (isOverRunCost(costTotal + delegatedCost, runCostLimit)) {
+        const detail = `本 run 累计成本约 ${(costTotal + delegatedCost).toFixed(2)} 点，超过上限 ${runCostLimit} 点，已停止。可调 TANGU_MAX_RUN_COST（0 关闭）。`;
         await publish(runId, 'error', { error: 'run_cost_exceeded', detail });
         await drain(runId);
         await updateRunStatus(runId, 'failed', { error: 'run_cost_exceeded', tokensTotal });
