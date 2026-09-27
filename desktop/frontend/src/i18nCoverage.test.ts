@@ -202,6 +202,13 @@ describe('i18n 覆盖', () => {
       'team.editor.docPlaceholder': 'TEAM.md 骨架,给模型读的 Markdown 标题',
       'settings.developer.cloudUrlPlaceholder': 'URL 示例',
       'pill.ultra': '思考档位 Ultra 是对标 Codex Ultra 的模式专名(同 Chat / Work 不译),用户口径即「Ultra」',
+      'input.thinkingShort.off': '思考档位各档名中文界面也写英文(09-27 用户拍板:与 Codex / 模型厂商的档名一致)',
+      'input.thinkingShort.minimal': '思考档位各档名中文界面也写英文(09-27 用户拍板:与 Codex / 模型厂商的档名一致)',
+      'input.thinkingShort.low': '思考档位各档名中文界面也写英文(09-27 用户拍板:与 Codex / 模型厂商的档名一致)',
+      'input.thinkingShort.medium': '思考档位各档名中文界面也写英文(09-27 用户拍板:与 Codex / 模型厂商的档名一致)',
+      'input.thinkingShort.high': '思考档位各档名中文界面也写英文(09-27 用户拍板:与 Codex / 模型厂商的档名一致)',
+      'input.thinkingShort.xhigh': '思考档位各档名中文界面也写英文(09-27 用户拍板:与 Codex / 模型厂商的档名一致)',
+      'input.thinkingShort.max': '思考档位各档名中文界面也写英文(09-27 用户拍板:与 Codex / 模型厂商的档名一致)',
     }
     const bad: string[] = []
     for (const [k, v] of Object.entries(zh)) {

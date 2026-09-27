@@ -146,6 +146,10 @@ async function main() {
       note: document.querySelector('.cm-effort-note')?.textContent || '',
       streaks: document.querySelectorAll('.cm-effort-streaks i').length,
       burstLeft: document.querySelectorAll('.cm-effort-burst').length,
+      // 胶囊:模型名照常字色,「Ultra」单独成标签(09-27 美化),名字里不再拼「· Ultra」
+      pillTag: document.querySelector('.t2c-row .model-pill-btn .pill-ultra-tag')?.textContent || '',
+      pillName: document.querySelector('.t2c-row .model-pill-btn .pill-marquee')?.textContent || '',
+      ringAnim: (() => { const b = document.querySelector('.t2c-row .model-pill-btn'); return b ? getComputedStyle(b, '::before').animationName : '' })(),
       describedBy: (() => { const el = document.querySelector('.cm-effort-input'); const id = el?.getAttribute('aria-describedby'); return !!id && document.getElementById(id)?.textContent || '' })(),
     }))
     const patch = lastPatch(stub, 'local')
@@ -153,6 +157,8 @@ async function main() {
     check('U3b 滑杆与药丸换 Ultra 皮(值「Ultra」、四路光流、说明行)',
       /is-ultra/.test(ui.effort) && ui.value.trim() === 'Ultra' && ui.streaks === 4 && ui.note.length > 0 && /is-ultra/.test(ui.pill), JSON.stringify(ui))
     check('U3c 切进 Ultra 的那一下放了冲击波,动画完就卸载', burstSeen === 1 && ui.burstLeft === 0, `seen=${burstSeen} left=${ui.burstLeft}`)
+    check('U3g 胶囊:「Ultra」单独成标签、模型名不带「· Ultra」、描边流光在转', ui.pillTag === 'Ultra' && !/Ultra/.test(ui.pillName) && ui.ringAnim === 'ultra-pill-spin',
+      JSON.stringify({ pillTag: ui.pillTag, pillName: ui.pillName, ringAnim: ui.ringAnim }))
     check('U3d 滑杆经 aria-describedby 关联说明行(读屏念得到 Ultra 的作用)', ui.describedBy.length > 0 && ui.describedBy === ui.note, JSON.stringify(ui.describedBy))
     await win.screenshot({ path: path.join(SHOTS, 'ultra-menu.png') })
 

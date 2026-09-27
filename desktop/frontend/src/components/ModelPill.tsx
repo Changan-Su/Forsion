@@ -339,7 +339,10 @@ export const ModelPill: React.FC<{
         onClick={() => setPillOpen(!open)}
       >
         <Bot size={13} />
-        <MarqueeLabel text={label + effort} />
+        {/* Ultra:模型名照常字色,「Ultra」单独成渐变字标签(主次分明);包一层,展开态的三列网格(图标 | 标签 | 箭头)不被挤出第四列 */}
+        {isUltra
+          ? <span className="pill-ultra-label"><MarqueeLabel text={label} /><span className="pill-ultra-tag">{effortText}</span></span>
+          : <MarqueeLabel text={label + effort} />}
         <ChevronDown size={10} />
       </button>
       {open && (

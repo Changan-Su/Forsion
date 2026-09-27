@@ -321,7 +321,8 @@ async function run(app, win, stub) {
   await sleep(600)
   const soloLabel = () => win.locator(`${mainPill} .t2c-pill-label`).textContent()
   const soloModel = await win.locator('.model-pill-btn:not(.child-chat-panel .model-pill-btn)').textContent()
-  check('5j 私聊会话没存档 → 药丸显示 Agent 缺省:审批「询问我批准」、思考「深」', (await soloLabel()).includes('询问我批准') && soloModel.includes('深'), JSON.stringify({ label: await soloLabel(), model: soloModel }))
+  // 思考档位名中文界面也写英文(09-27 用户拍板):「深」→ High、「中」→ Medium
+  check('5j 私聊会话没存档 → 药丸显示 Agent 缺省:审批「询问我批准」、思考 High', (await soloLabel()).includes('询问我批准') && soloModel.includes('High'), JSON.stringify({ label: await soloLabel(), model: soloModel }))
   await win.locator('.t2c-ta').fill('/status')
   await win.locator('.t2c-ta').press('Enter')
   await sleep(500)
@@ -338,7 +339,7 @@ async function run(app, win, stub) {
     JSON.stringify({ soloWrites, label: await soloLabel() }))
   await openTeamSession(win)
   const teamModel = await win.locator('.model-pill-btn:not(.child-chat-panel .model-pill-btn)').textContent()
-  check('5l 团队主会话没存思考档:不套钉住的 Agent(xyra 设了深)的缺省 —— 成员各用自己的思考档', teamModel.includes('中') && !teamModel.includes('深'), teamModel)
+  check('5l 团队主会话没存思考档:不套钉住的 Agent(xyra 设了 High)的缺省 —— 成员各用自己的思考档', teamModel.includes('Medium') && !teamModel.includes('High'), teamModel)
   await win.locator('[data-historian-status] > button').click()
   await win.getByText('已保存该会话的工作约定', { exact: false }).first().waitFor()
   check('6 Historian 有独立可展开的状态行', await win.locator('.t2-tsum [data-historian-work]').count() === 1, '')

@@ -1982,25 +1982,69 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 
 /* Ultra(Max 之后的第八格,Max + 主动并行派子代理)。Max 是星空,Ultra 是跃迁:星点换成四路并行光流(几路子代理同时在跑),
    轨道换成向暖色延伸的渐变并有一道高光持续流过,滑块外一圈缓转的渐变环,切进 Ultra 的那一下放一圈冲击波(一次性,由
-   ModelPill 按「刚切进来」挂载)。常驻输入框的胶囊只给静态渐变描边、不动 —— 它挨着流式输出,不许抢眼。
-   动画只动 transform / opacity;辉光全是静态的,逐条登记在 shadow-contract 例外里。选择器都带 .is-max.is-ultra,压过上面的 Max 块。 */
+   ModelPill 按「刚切进来」挂载)。
+   动画以 transform / opacity 为主;辉光全是静态的,逐条登记在 shadow-contract 例外里。选择器都带 .is-max.is-ultra,压过上面的 Max 块。 */
+
+/* 输入框里的 Ultra 胶囊(09-27 用户:原版全粉、没主次,要好看且要动效):模型名照常字色,「Ultra」单独成渐变字;
+   一圈沿边框缓缓流动的渐变光(注册的 --ultra-spin 角度,5.2s 一圈,只重绘这一圈描边)+ 外圈柔光呼吸(只动 opacity);
+   切进 Ultra 时柔光先亮一下再落回呼吸。它挨着流式输出,节奏刻意放慢、幅度刻意压低。 */
+@property --ultra-spin {
+  syntax: '<angle>';
+  inherits: false;
+  initial-value: 0deg;
+}
 .composer-chip.model-pill-btn.is-max.is-ultra {
   position: relative;
-  color: color-mix(in srgb, #e0409a 72%, var(--text));
-  background: color-mix(in srgb, #d946ef 11%, var(--overlay-light, rgba(127, 127, 127, 0.1)));
+  isolation: isolate;
+  color: var(--text);
+  background: color-mix(in srgb, #8b5cf6 9%, var(--overlay-light, rgba(127, 127, 127, 0.1)));
 }
+.composer-chip.model-pill-btn.is-max.is-ultra:hover {
+  background: color-mix(in srgb, #8b5cf6 14%, var(--overlay-medium, rgba(127, 127, 127, 0.18)));
+}
+.composer-chip.model-pill-btn.is-max.is-ultra > svg:first-child { color: #9d7bff; }
+/* 流光描边:conic 渐变沿边框转,遮罩只留 1.25px 的边(比 1px 在圆角上更实,不发虚) */
 .composer-chip.model-pill-btn.is-max.is-ultra::before {
   content: '';
   position: absolute;
   inset: 0;
-  padding: 1px;
+  padding: 1.25px;
   border-radius: inherit;
-  background: linear-gradient(90deg, #6d5dfc, #c04ce8 45%, #f0508f 72%, #ff9a4d);
+  background: conic-gradient(from var(--ultra-spin), #6d5dfc, #b44cf0 20%, #f0508f 40%, #ff9a4d 52%, #f0508f 64%, #b44cf0 80%, #6d5dfc);
   -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  opacity: 0.85;
   pointer-events: none;
+  animation: ultra-pill-spin 5.2s linear infinite;
+}
+/* 外圈柔光:同色系外晕,z-index:-1 落在胶囊自己的背景之上、文字之下(isolation 圈住) */
+.composer-chip.model-pill-btn.is-max.is-ultra::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  /* shadow-contract: effect — Ultra 胶囊的语义柔光，不表达空间高程。 */
+  box-shadow: 0 0 14px 1px rgba(180, 76, 240, 0.42);
+  opacity: 0.4;
+  pointer-events: none;
+  animation: ultra-pill-ignite 0.9s var(--ease-out) 1, ultra-pill-breathe 3.4s ease-in-out 0.9s infinite alternate;
+}
+@keyframes ultra-pill-spin { to { --ultra-spin: 360deg; } }
+@keyframes ultra-pill-breathe { from { opacity: 0.28; } to { opacity: 0.72; } }
+@keyframes ultra-pill-ignite { 0% { opacity: 0; } 35% { opacity: 1; } 100% { opacity: 0.28; } }
+.pill-ultra-label { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.model-pill-btn.is-open .pill-ultra-label { justify-content: center; width: 100%; }
+/* 展开态通用规则会把 .pill-marquee 撑满整行(居中单行文案用);Ultra 这里名字 + 标签要作为一组居中,名字不许撑开 */
+.model-pill-btn.is-open .pill-ultra-label .pill-marquee { width: auto; min-width: 0; }
+.pill-ultra-tag {
+  flex: none;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  background: linear-gradient(90deg, #8b6cf6, #d946ef 55%, #ff8a4c);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 .cm-row-v.is-max.is-ultra,
 .cm-effort.is-max.is-ultra .cm-effort-value {
@@ -2097,6 +2141,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   .cm-effort.is-max.is-ultra .cm-effort-thumb::before,
   .cm-effort-note { animation: none; }
   .cm-effort-streaks, .cm-effort-burst { display: none; }
+  .composer-chip.model-pill-btn.is-max.is-ultra::before,
+  .composer-chip.model-pill-btn.is-max.is-ultra::after { animation: none; }
 }
 .cm-foot { white-space: normal; letter-spacing: 0; margin-top: 4px; border-top: var(--border-width) solid var(--border); }
 .composer-menu--model .menu-item { font-size: var(--t2c-font-control, 12px); }

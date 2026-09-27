@@ -208,10 +208,11 @@
 /* 卡片够窄:模式 + 模型 同时收成纯图标(藏标签),配合 .t2c-row 的 nowrap 硬保发送不换第二行。
    ponytail: 单断点(用户确认「一起收」);480px 按 880 卡宽估,可调。 */
 @container (max-width: 480px) {
-  .t2c-pill-label, .t2c-row .composer-chip .pill-marquee { display: none; }
-  /* 收窄时只藏闭合态标签；当前展开胶囊仍要保留完整居中文案。 */
+  .t2c-pill-label, .t2c-row .composer-chip .pill-marquee, .t2c-row .composer-chip .pill-ultra-tag { display: none; }
+  /* 收窄时只藏闭合态标签；当前展开胶囊仍要保留完整居中文案。Ultra 的流光描边与柔光照留(只剩图标也看得出是 Ultra)。 */
   .mode-pill-btn.is-open .t2c-pill-label,
   .model-pill-btn.is-open .pill-marquee { display: block; }
+  .model-pill-btn.is-open .pill-ultra-tag { display: inline; }
 }
 
 /* 窄 Chat View 的排他展开：当前胶囊完整保留，其他胶囊 / 次要控制直接退出布局。
