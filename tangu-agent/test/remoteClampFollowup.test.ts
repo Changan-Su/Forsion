@@ -158,8 +158,8 @@ describe('#2 C7 远程字段', () => {
     const stored = { systemPrompt: 'mine', cwd: '/p', execMode: 'host', approvalMode: 'readonly' };
     expect(applyRemoteConfigWrite(stored, { ...stored, systemPrompt: 'evil', muse: true, cwd: '/', activityAccess: true, agentSlug: 'bo', thinkingLevel: 'high' }, 'auto-edit'))
       .toEqual({ systemPrompt: 'mine', cwd: '/p', execMode: 'host', approvalMode: 'readonly', agentSlug: 'bo', thinkingLevel: 'high' });
-    // PUT 整对象漏传非白名单键 = 想删:保留存值
-    expect(applyRemoteConfigWrite(stored, { thinkingLevel: 'low' }, 'auto-edit')).toEqual({ systemPrompt: 'mine', cwd: '/p', execMode: 'host', thinkingLevel: 'low' });
+    // PUT 整对象漏传非白名单键 = 想删:保留存值;审批档同样删不掉(P0 第三轮 E1:远端写审批档只许收紧,删键 = 交还缺省 = 可能放宽)
+    expect(applyRemoteConfigWrite(stored, { thinkingLevel: 'low' }, 'auto-edit')).toEqual({ systemPrompt: 'mine', cwd: '/p', execMode: 'host', approvalMode: 'readonly', thinkingLevel: 'low' });
   });
 });
 

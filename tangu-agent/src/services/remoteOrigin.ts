@@ -145,24 +145,43 @@ export const remoteArgsOverrideBody = {
 /**
  * 远程写会话配置(next = 合并 / 替换之后的整对象;契约 C7):只有白名单键取 next 的值,其余键一律保留存值
  * (远端既设不了、也删不掉 —— PATCH 的 null / PUT 的漏传都算「删」)。
- * 审批档:与存值相同 = 没改,原样留(老客户端 PUT 回写整对象不该把本机设的档降掉);改成别的值 → 钳到上限;
- * 改成 custom → 不收(custom 的 allow 规则放行面远端无从判断,本机会话随后的本机 run 会吃到它);删键(交还缺省)允许。
+ * 审批档(P0 第三轮 E1)**只许收紧**:存值是本机随后的 run 现读的档(gateToolCall 的 modeSessionId),远端把它放宽 = 远端替本机
+ * 放宽审批面(与桌面 lastApprovalMode 对远程只读同一口径)。
+ *   · 存值是 custom → 永不改写、永不删除(custom 的 deny / ask 规则是用户写死的约束,换成三档之一它们就不再生效);
+ *   · 删键(PATCH null / PUT 漏传)→ 保留存值,永不删键;
+ *   · 改成三档之一 → 只收 rank(next) ≤ rank(基线) 的(readonly < auto-edit < full-auto),再钳到上限;更宽的原样丢掉。
+ *     基线 = 存值;既有会话没有存值 → 基线按 readonly(本机那一侧的缺省来自各端自己的记忆档,远端看不到,只收最严的);
+ *   · 改成 custom → 不收。
+ * 新建会话(opts.create:远程 POST /agent/sessions,没有本机存值可放宽)→ 照旧钳到上限。
+ * ⚠️ 结果:远端建会话时没带审批档,日后设备页也只能把它设成 readonly;要更宽的档得在本机改。
  */
-export function applyRemoteConfigWrite(stored: unknown, next: Record<string, any>, cap: CapMode = remoteApprovalCap()): Record<string, any> {
+export function applyRemoteConfigWrite(stored: unknown, next: Record<string, any>, cap: CapMode = remoteApprovalCap(), opts: { create?: boolean } = {}): Record<string, any> {
   const prev = stored && typeof stored === 'object' && !Array.isArray(stored) ? (stored as Record<string, any>) : {};
   const has = (o: Record<string, any>, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
   const out: Record<string, any> = {};
   for (const k of Object.keys(prev)) if (!REMOTE_WRITABLE_CONFIG_KEYS.has(k)) out[k] = prev[k];
-  for (const k of REMOTE_WRITABLE_CONFIG_KEYS) if (has(next, k)) out[k] = next[k];
-  if (has(out, 'approvalMode') && out.approvalMode !== prev.approvalMode) {
-    if (out.approvalMode === 'custom' || typeof out.approvalMode !== 'string') {
-      if (has(prev, 'approvalMode')) out.approvalMode = prev.approvalMode;
-      else delete out.approvalMode;
-    } else {
-      out.approvalMode = clampApprovalMode(out.approvalMode, cap);
-    }
+  for (const k of REMOTE_WRITABLE_CONFIG_KEYS) if (k !== 'approvalMode' && has(next, k)) out[k] = next[k];
+  const want = next.approvalMode;
+  const three = (v: unknown): v is CapMode => v === 'readonly' || v === 'auto-edit' || v === 'full-auto';
+  let mode: unknown = prev.approvalMode;
+  if (opts.create) {
+    if (three(want)) mode = clampApprovalMode(want, cap);
+  } else if (prev.approvalMode !== 'custom' && three(want) && want !== prev.approvalMode) {
+    const baseline: CapMode = three(prev.approvalMode) ? prev.approvalMode : 'readonly';
+    if (RANK[want] <= RANK[baseline]) mode = clampApprovalMode(want, cap);
   }
+  if (mode !== undefined) out.approvalMode = mode;
   return out;
+}
+
+// ── P0 第三轮 E5 / E6:远程污点 run 不许动的持久化管理面。────────────────────────────────────────
+/** Agent 定义 / 技能 / 自动化规则 / 日程:它们在下一次**本机** run(或到点无人值守、强制 full-auto 的自动化 run)里生效,
+ *  远端借一条 run 改它们 = 把自己的指令种进本机。只放行 list;其余动作(create / update / delete / set / remove,以及明天新加的动作)
+ *  一律硬拒 —— 不进审批:按 D1 远端能批自己的卡,弹卡挡不住。审批闸与工具实现两处共用这一个判定。 */
+const REMOTE_READONLY_MANAGEMENT = new Set(['manage_agent', 'manage_skill', 'manage_automation', 'manage_schedule']);
+export function remoteManagementDenied(tool: string, action: unknown): string | null {
+  if (!REMOTE_READONLY_MANAGEMENT.has(tool) || action === 'list') return null;
+  return `Remote sessions cannot create, change or delete agents, skills, automations or schedules (${tool} action "${String(action ?? '')}"): they take effect in later runs on the host computer. Only action "list" is available here; ask the user to make this change on the host computer.`;
 }
 
 // ── 中途染色:远端对一个**本机**起的在飞 run 发 steer,注入的文字从下一个迭代起就在驱动它 → 这条 run 从此按远程钳制。

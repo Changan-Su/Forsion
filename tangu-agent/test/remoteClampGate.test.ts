@@ -5,8 +5,9 @@
  *   C1 头解析:x-forsion-remote 在场即远程(盖章只记录、不放宽);值不在契约内照样按远程(fail-closed)。
  *   C3 有效档:审批闸在现读会话存档之后钳 min(档, remote.maxApprovalMode);custom 的 allow 不越过上限;
  *      会话里本机点过的「总允许」不作数、远程的「总允许」不落;远端中途 steer 进本机 run → 从此按远程钳。
- *      持久化后续执行入口(manage_automation / manage_schedule)对远程按跑命令档审批。
- *   C4 凭据读硬拒(所有 run)+ known-safe 捷径不碰凭据;写凭据 / ~/.forsion 配置:远程硬拒(与宿主沙箱无关)、
+ *      持久化后续执行入口(manage_automation / manage_schedule)的写动作对远程硬拒(第三轮起;见 remoteR3Management)。
+ *   C4 凭据读:结构化读工具对所有 run 硬拒;shell 要审批(known-safe 捷径不碰凭据 —— 已接受的边界:审批过的命令照样能读,
+ *      隔离得靠宿主沙箱);写凭据 / ~/.forsion 配置:远程硬拒(与宿主沙箱无关)、
  *      本机完全通行也要问、无人值守直接拒。
  *   C2 工具子进程剥 TANGU_TOKEN / TANGU_LOCAL_TOKEN / TANGU_REMOTE_MARK_SECRET。
  */
@@ -116,12 +117,15 @@ describe('C1 远程头解析', () => {
     expect(out).toEqual({ approvalMode: 'auto-edit', thinkingLevel: 'low' });
   });
 
-  it('会话配置远程写:受保护键保留存值(设不了也删不掉);审批档抬不过上限、同值不降、custom 不收', () => {
+  it('会话配置远程写:受保护键保留存值(设不了也删不掉);审批档只许收紧、同值不降、custom 不收', () => {
     const stored = { approvalMode: 'full-auto', verifyCommand: 'npm test', extraRoots: ['/data'] };
     expect(applyRemoteConfigWrite(stored, { approvalMode: 'full-auto', thinkingLevel: 'high' }, 'auto-edit'))
       .toEqual({ approvalMode: 'full-auto', thinkingLevel: 'high', verifyCommand: 'npm test', extraRoots: ['/data'] }); // 回写同值:本机设的档不被远端降
+    // P0 第三轮 E1:放宽一律不收(从前钳到上限 = readonly 被远端抬成 auto-edit)
     expect(applyRemoteConfigWrite({ approvalMode: 'readonly' }, { approvalMode: 'full-auto', verifyCommand: 'echo pwned', devices: ['p'] }, 'auto-edit'))
-      .toEqual({ approvalMode: 'auto-edit' });
+      .toEqual({ approvalMode: 'readonly' });
+    expect(applyRemoteConfigWrite({ approvalMode: 'custom' }, { approvalMode: 'readonly' }, 'auto-edit')).toEqual({ approvalMode: 'custom' });
+    expect(applyRemoteConfigWrite({}, { approvalMode: 'full-auto' }, 'auto-edit', { create: true })).toEqual({ approvalMode: 'auto-edit' }); // 新建会话:照旧钳到上限
     expect(applyRemoteConfigWrite({ approvalMode: 'readonly' }, { approvalMode: 'custom' }, 'auto-edit')).toEqual({ approvalMode: 'readonly' });
     expect(applyRemoteConfigWrite(stored, { approvalMode: 'auto-edit' }, 'auto-edit')).toEqual({ approvalMode: 'auto-edit', verifyCommand: 'npm test', extraRoots: ['/data'] });
   });
@@ -209,16 +213,17 @@ describe('C3 审批闸有效档', () => {
     expect(Date.now() - t0).toBeLessThan(140);
   });
 
-  it('持久化后续执行入口:远程 auto-edit 下 manage_automation / manage_schedule 要批(本机同档不问)', async () => {
+  it('持久化后续执行入口:远程 run 的 manage_automation / manage_schedule 写动作硬拒、不弹卡(P0 第三轮 E6:远端能批自己的卡,「要批」挡不住);本机同档不问', async () => {
     expect(toolNeedsApproval('manage_automation', 'auto-edit')).toBe(false);
-    expect(toolNeedsApproval('manage_automation', 'auto-edit', { remote: true })).toBe(true);
-    expect(toolNeedsApproval('manage_schedule', 'auto-edit', { remote: true })).toBe(true);
-    expect((await gate(call('manage_automation', { action: 'create' }), { approvalMode: 'auto-edit', remote: REMOTE })).asked).toBe(true);
+    const r = await gate(call('manage_automation', { action: 'set' }), { approvalMode: 'auto-edit', remote: REMOTE });
+    expect(r.asked).toBe(false);
+    expect(r.decision).toMatchObject({ action: 'reject' });
+    expect((await gate(call('manage_schedule', { action: 'list' }), { approvalMode: 'auto-edit', remote: REMOTE })).decision.action).toBe('approve');
   });
 });
 
 describe('C4 凭据 / 本机配置', () => {
-  it('read_file / view_image(软链改名)/ read_document 读 auth.json 一律拒(负对照:普通文件照读)', async () => {
+  it('结构化读工具(read_file / view_image 软链改名 / read_document)读 auth.json 一律拒(负对照:普通文件照读;shell 读走审批,见下一条)', async () => {
     const ctx = { userId: 'u', sessionId: 'S', appId: 'tangu', execMode: 'host', cwd: home } as ToolContext;
     expect(await HOST_TOOLS.read_file.execute({ path: 'notes.txt' }, ctx)).toContain('appears in a normal note');
     const denied = await HOST_TOOLS.read_file.execute({ path: join(home, 'auth.json') }, ctx);

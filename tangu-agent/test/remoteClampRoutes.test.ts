@@ -4,7 +4,7 @@
  *   POST /agent/runs:input.remote 落库;agent_config 剥 verifyCommand / engineId / extraRoots / 设备能力,审批档钳到上限;
  *                    本机请求原样(负对照)。
  *   POST /agent/sessions:远程建会话的初始配置同样钳 + 记远程标记;分支:远端发起的分支记标记,源会话的标记随 agent_config 照抄。
- *   PATCH / PUT /agent/sessions/:id/config:远程抬不过上限、设不了 / 删不掉受保护键(verifyCommand / devices …)。
+ *   PATCH / PUT /agent/sessions/:id/config:远程改审批档只许收紧(第三轮 E1)、设不了 / 删不掉受保护键(verifyCommand / devices …)。
  *   POST /agent/runs/:id/steer:远端 steer 本机 run → 染色(之后按远程钳,闸那半见 remoteClampGate)。
  *   POST /agent/special/muse/todos/inject:注入 run 带污点、照抄的会话配置同样过钳。
  */
@@ -110,10 +110,10 @@ describe('会话路由', () => {
     expect(l.body.session.agent_config).toEqual(HOSTILE);
   });
 
-  it('PATCH config:远程改档抬不过上限、verifyCommand / devices 设不上也删不掉(负对照:本机照改)', async () => {
+  it('PATCH config:远程改档只许收紧(第三轮 E1)、verifyCommand / devices 设不上也删不掉(负对照:本机照改)', async () => {
     await addSession('C1', { approvalMode: 'readonly', verifyCommand: 'npm test' });
     expect((await send('PATCH', '/agent/sessions/C1/config', { approvalMode: 'full-auto', verifyCommand: 'echo pwned', devices: ['p'] }, REMOTE)).status).toBe(200);
-    expect(await cfgOf('C1')).toEqual({ approvalMode: 'auto-edit', verifyCommand: 'npm test' });
+    expect(await cfgOf('C1')).toEqual({ approvalMode: 'readonly', verifyCommand: 'npm test' });
     await send('PATCH', '/agent/sessions/C1/config', { verifyCommand: null }, REMOTE);
     expect((await cfgOf('C1')).verifyCommand).toBe('npm test');
     await send('PATCH', '/agent/sessions/C1/config', { approvalMode: 'full-auto', verifyCommand: 'make' });

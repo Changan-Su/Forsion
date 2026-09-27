@@ -27,6 +27,7 @@ import { readDbOrNull } from '../../services/amadeusDb.js';
 import { dropCursors } from '../../services/dbCursors.js';
 import { getAgent } from '../../agents/agentRegistry.js';
 import { amadeusVaultPath } from './amadeus.js';
+import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
 
 function fmt(t: MuseTrigger): string {
   const act = t.actions?.length
@@ -135,6 +136,9 @@ export const manageAutomationProvider: ToolProvider = {
       },
       execute: async (args, ctx) => {
         const action = String(args.action || '');
+        // 远程污点 run 只许 list(P0 第三轮 E6):规则到点起的 agent_run 强制 full-auto、不带远程污点 = 远端借自动化越过上限档。
+        const remoteDenied = effectiveRemote(ctx) ? remoteManagementDenied('manage_automation', args.action) : null;
+        if (remoteDenied) return `Error: ${remoteDenied}`;
         if (action === 'list') {
           const list = await loadTriggers();
           return list.length ? `${list.length} automation rule(s):\n${list.map(fmt).join('\n')}` : '(no automation rules)';
