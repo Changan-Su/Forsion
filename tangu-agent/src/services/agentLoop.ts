@@ -2023,7 +2023,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
      *  返回模型上下文里还找不找得到那条工具消息(压缩可能已把它折进摘要)。 */
     const putBackParkedResult = async (callId: string, done: ExecutedToolCall): Promise<boolean> => {
       const i = workingMessages.findIndex((m) => m.role === 'tool' && (m as any).tool_call_id === callId);
-      if (i >= 0) workingMessages[i] = { ...workingMessages[i], content: done.toolMessage.content } as ChatMessage;
+      // 原位改 content、**不换对象**:段落库后 settleCheckpointAfterFinalize 按对象身份给它挂了来源行(压缩边界靠它认
+      // 「这条已落库、属于哪一行」),换对象 = 丢标记,下次落库会被错标成后面那一段。
+      if (i >= 0) (workingMessages[i] as { content: unknown }).content = done.toolMessage.content;
       const j = allToolResults.findIndex((r) => r?.tool_call_id === callId);
       if (j >= 0) allToolResults[j] = done.toolResult;
       else {
