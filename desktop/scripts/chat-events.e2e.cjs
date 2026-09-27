@@ -216,34 +216,55 @@ async function main() {
     await win.waitForTimeout(500)
 
     // ── 场景 B:计划卡三态(P2)—— 批准发出的必须逐字是引擎认的那串
+    // 计划正文留在流里的计划卡上;拍板区(五个决策按钮)在输入框上方的托盘里。
     stub.script([
+      // 与真引擎同序:exit_plan_mode 本身是工具调用,tool_call 先到,再是 plan 与询问(评审 09-27:桩里不发 tool_call 会让判据只在桩里成立)
+      { type: 'tool_call', payload: { id: 'tp1', name: 'exit_plan_mode', arguments: JSON.stringify({ plan: '# 实施计划' }) } },
       { type: 'plan', payload: { plan: '# 实施计划\n\n1. 先写测试\n2. 再改实现' } },
       { type: 'inquiry_request', payload: { inquiryId: 'q1', question: '计划已就绪(见上方计划卡)。是否批准并退出计划模式?', options: PLAN_OPTIONS, allowFreeText: true, kind: 'plan' } },
-      { type: '__hold' }, // 真引擎此刻阻塞在 requestInquiry 上,run 未结束
+      { type: '__hold' }, // 真引擎此刻阻塞在 requestInquiry 上;桩收到回答时补发 inquiry_result + done(与真引擎同序)
     ])
     await send(win, '给个计划')
     await win.waitForTimeout(900)
 
     const planProbe = await win.evaluate(() => {
       const card = document.querySelector('.plan-card')
+      const tray = document.querySelector('.t2c-apv [data-plan-decision]')
       return {
         card: !!card,
         markdown: !!card?.querySelector('.plan-body h1, .plan-body ol, .plan-body li'),
-        buttons: card ? card.querySelectorAll('.approval-actions .btn').length : 0,
+        cardButtons: card ? card.querySelectorAll('.approval-actions .btn').length : 0,
+        pointer: !!card?.querySelector('[data-plan-pointer]'),
+        trayButtons: tray ? tray.querySelectorAll('.approval-actions .btn').length : 0,
         genericInquiry: document.querySelectorAll('.inquiry-card').length,
+        waitingYou: !!card?.closest('[id^="tocmsg-"]')?.querySelector('.tool-group [data-waiting-you]'),
+        shimmer: !!card?.closest('[id^="tocmsg-"]')?.querySelector('.tool-group .chat-run-shimmer-text'),
       }
     })
-    check('B1 计划卡:markdown 正文 + 五个决策按钮', planProbe.card && planProbe.markdown && planProbe.buttons === 5, JSON.stringify(planProbe))
+    check('B1b 等你拍板时 exit_plan_mode 那行显示「等你回复」,不是流光装忙', !!planProbe.card && planProbe.waitingYou && !planProbe.shimmer,
+      JSON.stringify({ waitingYou: planProbe.waitingYou, shimmer: planProbe.shimmer }))
+    check('B1 计划卡:markdown 正文留在流里(只留一行指路),五个决策按钮在输入框上方的托盘里',
+      planProbe.card && planProbe.markdown && planProbe.cardButtons === 0 && planProbe.pointer && planProbe.trayButtons === 5, JSON.stringify(planProbe))
     check('B2 不再另起一张通用询问卡(计划询问归计划卡)', planProbe.genericInquiry === 0, JSON.stringify(planProbe))
+    await win.screenshot({ path: process.env.PLAN_SHOT || '/tmp/tray-plan.png' }).catch(() => {}) // 观感自查:流里正文 + 托盘拍板
 
     stub.seen.inquiries.length = 0
-    await clickInView(win.locator('.plan-card .approval-actions .btn').first())
+    await win.waitForTimeout(400) // 换卡冷却(ApprovalTray ARM_MS)
+    await win.locator('.t2c-apv [data-plan-decision] .approval-actions .btn').first().click()
     await win.waitForTimeout(1200)
-    check('B3 ⚠️「批准并开始执行」发出的是引擎逐字认的那串',
-      stub.seen.inquiries[0]?.answer === PLAN_APPROVE_AUTO, JSON.stringify(stub.seen.inquiries[0]))
+    check('B3 ⚠️「批准并开始执行」发出的是引擎逐字认的那串,且答的就是这条询问',
+      stub.seen.inquiries[0]?.answer === PLAN_APPROVE_AUTO && stub.seen.inquiries[0]?.inquiryId === 'q1', JSON.stringify(stub.seen.inquiries[0]))
+    await win.waitForTimeout(600)
+    const planAfter = await win.evaluate(() => ({
+      trayPlan: !!document.querySelector('.t2c-apv [data-plan-decision]'),
+      verdict: (document.querySelector('.plan-card .plan-verdict')?.textContent || '').trim(),
+    }))
+    // 判据只看裁决文字:桩发完回执紧跟 done,done 会让本 run 的待办统统过期,「托盘清空」本身证明不了回执对上了
+    check('B4 引擎回执到了:流里的计划卡写上「已批准」', /已批准/.test(planAfter.verdict), JSON.stringify(planAfter))
 
-    // ── 场景 C:编辑后批准 —— 必须带修订标记 + 改后的全文
+    // ── 场景 C:编辑后批准 —— 必须带修订标记 + 改后的全文(编辑框也在托盘里)
     stub.script([
+      { type: 'tool_call', payload: { id: 'tp2', name: 'exit_plan_mode', arguments: JSON.stringify({ plan: '# 旧计划' }) } },
       { type: 'plan', payload: { plan: '# 旧计划\n\n1. 随便做做' } },
       { type: 'inquiry_request', payload: { inquiryId: 'q2', question: '计划已就绪(见上方计划卡)。是否批准并退出计划模式?', options: PLAN_OPTIONS, allowFreeText: true, kind: 'plan' } },
       { type: '__hold' },
@@ -251,21 +272,57 @@ async function main() {
     await send(win, '再给个计划')
     await win.waitForTimeout(900)
 
-    const cards = win.locator('.plan-card')
-    const last = cards.nth(await cards.count() - 1)
-    await clickInView(last.locator('.approval-actions .btn', { hasText: '编辑计划' }).first())
+    const decision = win.locator('.t2c-apv [data-plan-decision]').first()
+    await win.waitForTimeout(400) // 换卡冷却
+    await decision.locator('.approval-actions .btn', { hasText: '编辑计划' }).first().click()
     await win.waitForTimeout(500)
-    const ta = last.locator('textarea.plan-edit').first()
+    const ta = decision.locator('textarea.plan-edit').first()
     await ta.click()
     await ta.fill('# 我改过的计划\n\n1. 先补回滚方案')
     await win.waitForTimeout(300)
     stub.seen.inquiries.length = 0
-    await clickInView(last.locator('.approval-actions .btn').first())
+    await decision.locator('.approval-actions .btn').first().click()
     await win.waitForTimeout(1200)
     const ans = stub.seen.inquiries[0]?.answer || ''
-    check('C1 ⚠️编辑后批准:头部仍是批准选项,后面挂修订标记 + 改后的全文',
-      ans.startsWith(PLAN_APPROVE_AUTO) && ans.includes(PLAN_REVISION_MARK) && ans.includes('先补回滚方案'),
-      JSON.stringify(ans.slice(0, 80)))
+    check('C1 ⚠️编辑后批准:头部仍是批准选项,后面挂修订标记 + 改后的全文,且答的就是这条询问',
+      ans.startsWith(PLAN_APPROVE_AUTO) && ans.includes(PLAN_REVISION_MARK) && ans.includes('先补回滚方案') && stub.seen.inquiries[0]?.inquiryId === 'q2',
+      JSON.stringify({ id: stub.seen.inquiries[0]?.inquiryId, ans: ans.slice(0, 80) }))
+    await win.waitForTimeout(600) // 回答一到桩就收尾这条 run,托盘清空,不串进后面的场景
+
+    // ── 场景 Q:Agent 的提问(ask_user)进托盘 —— 待答时整张在输入框上方,流里只留一行指路;答完流里留问答记录
+    stub.script([
+      { type: 'token', payload: { delta: '开工前确认一下。' } },
+      { type: 'tool_call', payload: { id: 'ta1', name: 'ask_user', arguments: JSON.stringify({ question: '用哪个包管理器?', options: ['npm', 'pnpm'] }) } },
+      { type: 'inquiry_request', payload: { inquiryId: 'qa1', question: '用哪个包管理器?', options: ['npm', 'pnpm'], allowFreeText: true } },
+      { type: '__hold' },
+    ])
+    await send(win, '装一下依赖')
+    const askProbe = await win.evaluate(() => {
+      const body = document.querySelector('.t2c-apv .t2c-apv-body')
+      return {
+        kind: body?.getAttribute('data-tray-kind'),
+        question: (body?.querySelector('.inquiry-q')?.textContent || '').trim(),
+        options: body ? body.querySelectorAll('.inquiry-opts .btn').length : 0,
+        streamCards: document.querySelectorAll('.t2-stream .inquiry-card').length,
+        pointer: !!document.querySelector('.t2-stream [data-inquiry-pointer]'),
+        waitingYou: !!document.querySelector('.t2-stream .tool-group [data-waiting-you]'),
+      }
+    })
+    check('Q1 提问整张进托盘(问题 + 选项),流里不插待答卡、只留一行指路;ask_user 那行显示「等你回复」',
+      askProbe.kind === 'inquiry' && /包管理器/.test(askProbe.question) && askProbe.options === 2 && askProbe.streamCards === 0 && askProbe.pointer && askProbe.waitingYou,
+      JSON.stringify(askProbe))
+    await win.screenshot({ path: process.env.ASK_SHOT || '/tmp/tray-ask.png' }).catch(() => {}) // 观感自查:提问在托盘
+    stub.seen.inquiries.length = 0
+    await win.locator('.t2c-apv .inquiry-opts .btn', { hasText: 'pnpm' }).first().click()
+    await win.waitForTimeout(800)
+    check('Q2 在托盘里点选项 → 答案送达引擎,答的就是这条询问', stub.seen.inquiries[0]?.answer === 'pnpm' && stub.seen.inquiries[0]?.inquiryId === 'qa1', JSON.stringify(stub.seen.inquiries[0]))
+    await win.waitForTimeout(600)
+    const askAfter = await win.evaluate(() => ({
+      tray: document.querySelectorAll('[data-approval-tray]').length,
+      record: (document.querySelector('.t2-stream .inquiry-card.resolved')?.textContent || '').trim(),
+    }))
+    // 判据只看问答记录(理由同 B4:done 会让待办过期,托盘清空本身不算数)
+    check('Q3 回执后流里留下问答记录(问题 + 我的回答)', /包管理器/.test(askAfter.record) && /pnpm/.test(askAfter.record), JSON.stringify(askAfter))
 
     // ── 场景 F:sketch 卡(agent 在对话流里画可交互 HTML 卡片)
     // 钉四件:直播上卡(挂 tool_result 非 tool_call)/ 被引擎拒的不画 / 沙箱铁律(仅 allow-scripts
@@ -506,7 +563,7 @@ async function main() {
     // 还必须**藏掉「总允许」**——引擎对这两种情形是静默降级为单次批准的(approvals.ts 明写),
     // 按钮照常显示就又是一处「界面说一套引擎做一套」。
     stub.script([
-      // 排最前:D1-D5 取的是末三张;这张只给 D6-D8(长 diff 撑破 .approval-diff 的 320px 滚动盒)
+      // 排最前(托盘缺省展开它):D1-D5 点开的是后三张;这张只给 D6-D8(长 diff 撑破 .approval-diff 的滚动盒)
       { type: 'approval_request', payload: {
         approvalId: 'a0', name: 'write_file',
         arguments: JSON.stringify({ path: '/tmp/demo/tall.txt', content: Array.from({ length: 60 }, (_, i) => `line ${i + 1}`).join('\n') }),
@@ -528,12 +585,34 @@ async function main() {
     ])
     await send(win, '跑几个要批准的动作')
     await win.waitForTimeout(1200)
-    const apv = await win.evaluate(() => [...document.querySelectorAll('.approval-card')].map((c) => ({
-      why: (c.querySelector('.approval-why')?.textContent || '').trim(),
-      preview: (c.querySelector('.approval-preview')?.textContent || '').trim(),
-      btns: [...c.querySelectorAll('.approval-actions button')].map((b) => (b.textContent || '').trim()),
-    })))
-    const [ask, esc, mode] = apv.slice(-3)
+    // 审批卡在输入框上方的托盘里攒着(一次展开一张,其余缩成行),流里只留一行指路。先断托盘本身,再逐张点开读。
+    const tray = await win.evaluate(() => ({
+      count: document.querySelector('[data-approval-tray]')?.getAttribute('data-approval-tray'),
+      inComposer: !!document.querySelector('.composer-anchor .t2c-apv'),
+      streamCards: document.querySelectorAll('.t2-stream .approval-card').length,
+      pointer: document.querySelector('.t2-stream [data-approval-pointer]')?.getAttribute('data-approval-pointer'),
+      rows: document.querySelectorAll('.t2c-apv-row').length,
+    }))
+    check('D0 四个待批审批攒进输入框上方的托盘(一张展开 + 三行排队),流里不插整张卡、只留一行指路',
+      tray.count === '4' && tray.inComposer && tray.streamCards === 0 && tray.pointer === '4' && tray.rows === 3, JSON.stringify(tray))
+    // 观感自查:托盘在真实悬浮输入区里的整窗实景(DESIGN §8)
+    await win.screenshot({ path: process.env.TRAY_SHOT || '/tmp/approval-tray.png' }).catch(() => {})
+    const openTrayCard = async (rowText) => {
+      await win.locator('.t2c-apv-row', { hasText: rowText }).first().click().catch(() => {})
+      await win.waitForTimeout(250)
+      return win.evaluate(() => {
+        const c = document.querySelector('.t2c-apv .approval-card')
+        return c && {
+          why: (c.querySelector('.approval-why')?.textContent || '').trim(),
+          preview: (c.querySelector('.approval-preview')?.textContent || '').trim(),
+          btns: [...c.querySelectorAll('.approval-actions button')].map((b) => (b.textContent || '').trim()),
+        }
+      })
+    }
+    const ask = await openTrayCard('npm publish')
+    const esc = await openTrayCard('/etc/hosts')
+    const mode = await openTrayCard('make build')
+    const apv = [ask, esc, mode]
     check('D1 custom-ask 的卡解释「哪条规则要求问你」(带规则串)',
       !!ask && /run_bash:npm publish/.test(ask.why), JSON.stringify(ask))
     check('D2 escalate 的卡解释「要写工作区以外的文件」',
@@ -549,9 +628,9 @@ async function main() {
     // D6-D8(2026-09-21 实报「审批卡代码区异常显示、点不了批准」):d2h 行号格是 position:absolute,
     // 宿主不给定位祖先时它的包含块落到 .t2-chat-body —— 逃出 .approval-diff 与 .t2-stream 两层滚动盒,
     // 冻在未滚动的位置上压住别处的按钮。D6 是判别式(修前 gutter=0);D7/D8 是症状面。
-    const tall = win.locator('.approval-card', { hasText: 'tall.txt' }).first()
-    await tall.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' })).catch(() => {})
-    await win.waitForTimeout(400)
+    await win.locator('.t2c-apv-row', { hasText: 'tall.txt' }).first().click().catch(() => {})
+    await win.waitForTimeout(700) // 换卡冷却(ApprovalTray ARM_MS)过去,按钮才接收点击
+    const tall = win.locator('.t2c-apv .approval-card', { hasText: 'tall.txt' }).first()
     const gut = await tall.evaluate((card) => {
       const box = card.querySelector('.approval-diff')
       const tr = card.querySelectorAll('.d2h-diff-tbody tr')[5]
@@ -573,6 +652,75 @@ async function main() {
     await win.waitForTimeout(500)
     check('D8 真鼠标点得到「批准」且送达引擎', stub.seen.approvals.some((a) => a.approvalId === 'a0' && a.action === 'approve'),
       JSON.stringify(stub.seen.approvals))
+    // D9 换卡冷却:托盘里下一张会原地顶上来,连点两下「批准」不能把没看过的那张也批了 ——
+    // 展开的卡一换,按钮先不接收点击,片刻后才生效。
+    await win.locator('.t2c-apv-row').first().click().catch(() => {})
+    const armingNow = await win.evaluate(() => !!document.querySelector('.t2c-apv-body.is-arming'))
+    await win.waitForTimeout(700)
+    const armedLater = await win.evaluate(() => !document.querySelector('.t2c-apv-body.is-arming') && !!document.querySelector('.t2c-apv .approval-actions'))
+    check('D9 换卡冷却:刚换上的卡按钮先不接收点击,片刻后恢复', armingNow && armedLater, JSON.stringify({ armingNow, armedLater }))
+
+    // ── 场景 P:挂起审批(审批托盘 run)—— 要批的调用挂起、agent 接着干活;拍板后真结果回填**原**工具卡,
+    // 结局以一行通知进对话(<approval_update> 落库行,不是用户气泡、不进 ↑ 历史)。引擎那半在 tangu-agent
+    // test/agentLoopParkedApprovals.test.ts + live --only parked;这里钉渲染层对这套事件的接法。
+    // 先停掉场景 D 挂着的 run:run 终结,它的待批审批必须一并离开托盘(不留批不动的死卡)。
+    await win.locator('.t2c-stop').first().click({ timeout: 2000 }).catch(() => {})
+    await win.waitForTimeout(1500)
+    const traysAfterStop = await win.evaluate(() => document.querySelectorAll('[data-approval-tray]').length)
+    check('P0 上一个 run 终结后,它挂着的审批全部离开托盘', traysAfterStop === 0, `trays=${traysAfterStop}`)
+    const UPDATE = '<approval_update>\nThe user has decided on tool calls that were waiting for approval:\n\n' +
+      "[approved] run_bash (call pk1) — $ npm publish --dry-run\nIt has run; its output is now that call's result above.\n</approval_update>"
+    stub.script([
+      { type: 'token', payload: { delta: '先改 CHANGELOG,发布要你批。' } },
+      { type: 'tool_call', payload: { id: 'pk1', name: 'run_bash', arguments: JSON.stringify({ command: 'npm publish --dry-run' }) } },
+      { type: 'tool_result', payload: { id: 'pk1', name: 'run_bash', parked: true, result: "⏸ Waiting for the user's approval: $ npm publish --dry-run\nThis call has NOT run yet." } },
+      { type: 'approval_request', payload: {
+        approvalId: 'pa1', name: 'run_bash', arguments: JSON.stringify({ command: 'npm publish --dry-run' }),
+        preview: '$ npm publish --dry-run', reason: { kind: 'mode', mode: 'auto-edit' }, toolCallId: 'pk1',
+      } },
+      { type: 'tool_call', payload: { id: 'pk2', name: 'edit_file', arguments: JSON.stringify({ path: 'CHANGELOG.md', old_string: 'a', new_string: 'b' }) } },
+      { type: 'tool_result', payload: { id: 'pk2', name: 'edit_file', result: 'ok' } },
+      { type: 'token', payload: { delta: 'CHANGELOG 已改好,等你批准发布。' } },
+      // run 先切了一次段(空注入 = 纯切段):拍板时挂着审批的那一段已不是当前段 —— 结果事件得找回它(Codex 09-27 P1)
+      { type: 'turn_boundary', payload: { finalizedAssistantId: '(unknown → 回落当前段)', finalizedContent: '先改 CHANGELOG,发布要你批。CHANGELOG 已改好,等你批准发布。', userMessages: [], newAssistantId: 'pk-mid' } },
+      // ↓ 用户拍板之后引擎会发的那几条(剧本直接推进)
+      { type: 'approval_result', payload: { approvalId: 'pa1', action: 'approve' }, delay: 3000 },
+      { type: 'tool_result', payload: { id: 'pk1', name: 'run_bash', result: 'npm notice dry-run ok' } },
+      { type: 'turn_boundary', payload: { finalizedAssistantId: 'pk-mid', finalizedContent: '', userMessages: [{ id: 'au1', content: UPDATE }], newAssistantId: 'pk-next' } },
+      { type: 'token', payload: { delta: '发布演练通过。' } },
+      { type: 'done', payload: { content: '发布演练通过。' } },
+    ])
+    await send(win, '先改 CHANGELOG 再发布')
+    const mid = await win.evaluate(() => {
+      const icons = [...document.querySelectorAll('.tool-group-status svg')].map((x) => String(x.getAttribute('class') || ''))
+      return {
+        tray: document.querySelector('[data-approval-tray]')?.textContent || '',
+        pausedGroups: icons.filter((c) => /pause/.test(c)).length,
+        kept: document.body.innerText.includes('等你批准发布'),
+      }
+    })
+    check('P1 挂起的审批进托盘,它的工具卡是暂停态(不是完成对勾)', /npm publish --dry-run/.test(mid.tray) && mid.pausedGroups >= 1, JSON.stringify(mid))
+    check('P2 挂起期间 agent 没停:后面的工具与正文照样流出来', mid.kept, '')
+    await win.waitForTimeout(4200)
+    const fin = await win.evaluate(() => {
+      const icons = [...document.querySelectorAll('.tool-group-status svg')].map((x) => String(x.getAttribute('class') || ''))
+      return {
+        tray: document.querySelectorAll('[data-approval-tray]').length,
+        pausedGroups: icons.filter((c) => /pause/.test(c)).length,
+        update: document.querySelector('[data-approval-update]')?.textContent || '',
+        bubble: [...document.querySelectorAll('.t2-user')].some((b) => (b.textContent || '').includes('approval_update')),
+      }
+    })
+    check('P3 拍板后托盘清空、原工具卡不再是暂停态(真结果回填到了更早那一段)', fin.tray === 0 && fin.pausedGroups === 0, JSON.stringify(fin))
+    check('P4 结局是一行通知(已批准并执行 run_bash),不是用户气泡', /已批准并执行 run_bash/.test(fin.update) && !fin.bubble, JSON.stringify(fin))
+    const inputTa = win.locator('.t2c-ta').first()
+    await inputTa.click().catch(() => {})
+    await inputTa.fill('').catch(() => {})
+    await win.keyboard.press('ArrowUp')
+    await win.waitForTimeout(300)
+    const recalled = await inputTa.inputValue().catch(() => '')
+    check('P5 ↑ 召回拿到的是上一句真话,不是 <approval_update>', recalled === '先改 CHANGELOG 再发布', JSON.stringify(recalled))
+    await win.screenshot({ path: process.env.PARKED_SHOT || '/tmp/approval-parked.png' }).catch(() => {})
 
     // ── 场景 E:custom 规则编辑器(H2)。此前这套规则只能手写 config.json。
     // 钉三件:入口只在选了 custom 时出现 / 打开时把服务端已有规则读进来 / 保存发出的 PUT 是编辑后的内容。

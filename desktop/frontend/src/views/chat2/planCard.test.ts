@@ -1,6 +1,6 @@
 /** 计划卡与询问的配对:打回→重交那一环(同一条消息累积两条 plan 询问)。 */
 import { describe, it, expect } from 'vitest'
-import { pickPlanInquiry } from './EditorialMessage'
+import { pickPlanInquiry } from './approvalQueue'
 import type { InquiryRequest } from '../../types'
 
 const inq = (id: string, status: InquiryRequest['status']): InquiryRequest =>

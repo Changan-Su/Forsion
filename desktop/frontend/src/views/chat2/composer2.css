@@ -361,3 +361,81 @@
 .t2c-pill.mode-pill-btn[data-danger] { color: var(--danger); background: var(--danger-light); }
 .t2c-pill.mode-pill-btn[data-danger]:hover,
 .t2c-pill.mode-pill-btn[data-danger].is-open { background: color-mix(in srgb, var(--danger) 16%, transparent); }
+
+/* 审批托盘(ApprovalTray):待批审批攒在输入卡上沿。和输入卡一样悬浮在正文之上 → 底色必须不透明
+ * (正文从底下滚过去;glass 主题的磨砂在 genesis-glass/theme.css 3.5 段)。它是「需要用户拍板的动作卡」,
+ * 按 DESIGN §5 保留描边;内嵌的 .approval-card 去掉自己的框与影,免得卡套卡。 */
+.t2c-apv {
+  position: relative;
+  display: flex; flex-direction: column;
+  padding: 4px 12px 10px;
+  background: var(--t2c-card-surface, var(--bg-card, var(--bg)));
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-md, 12px);
+  box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.08));
+  animation: t2c-steer-in 0.18s var(--ease-out, ease);
+}
+@media (prefers-reduced-motion: reduce) { .t2c-apv { animation: none; } }
+.t2c-apv-head {
+  display: flex; align-items: center; gap: 6px; width: 100%;
+  padding: 6px 0; border: none; background: none; cursor: pointer; text-align: left;
+  color: var(--text-muted); font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px);
+}
+.t2c-apv-ic { flex-shrink: 0; color: var(--accent-ink); }
+.t2c-apv-title { flex: 1; min-width: 0; font-weight: 600; color: var(--text); }
+.t2c-apv-chev { flex-shrink: 0; transition: transform var(--duration-fast, 0.15s); }
+.t2c-apv-chev.is-collapsed { transform: rotate(-90deg); }
+.t2c-apv-head:has(.is-collapsed) { padding-bottom: 0; }
+/* 卡高有上限:diff / 长命令放不下时在托盘里滚,不把整条输入区顶到窗口外 */
+.t2c-apv-body { max-height: min(40vh, 400px); overflow-y: auto; }
+/* 托盘里的卡不再自带卡壳:三类选择器(主题包的 `.tangu-lovable .approval-card` 等是两类,同特异性会被后加载的反压) */
+.t2c-apv .t2c-apv-body > .approval-card,
+.t2c-apv .t2c-apv-body > .inquiry-card,
+.t2c-apv .t2c-apv-body > .plan-decision { border-color: transparent; box-shadow: none; background: transparent; padding: 0; opacity: 1; }
+.t2c-apv .approval-card .approval-title { margin-bottom: 6px; }
+/* 托盘里 diff 收矮一档(流里是 320px);卡还是放不下时按钮吸在托盘底边 —— 批准 / 拒绝永远不滚出视野 */
+.t2c-apv .approval-diff { max-height: min(24vh, 220px); }
+.t2c-apv .approval-actions {
+  position: sticky; bottom: 0; z-index: 1;
+  padding: 8px 0 2px; margin-top: -2px;
+  background: var(--t2c-card-surface, var(--bg-card, var(--bg)));
+  transition: opacity var(--duration-fast, 0.15s);
+}
+/* 换卡冷却(ApprovalTray ARM_MS):刚顶上来的那项按钮不接收点击,淡一点提示「这是新的一项」;
+ * 已送出等回执(is-sent)同样锁住 —— 同一项送第二次必然 410 */
+.t2c-apv-body:is(.is-arming, .is-sent) :is(.approval-actions, .inquiry-opts, .inquiry-input) { pointer-events: none; opacity: 0.55; }
+.t2c-apv .inquiry-opts, .t2c-apv .inquiry-input { transition: opacity var(--duration-fast, 0.15s); }
+/* 计划拍板区(PlanDecision):正文在流里的计划卡上,这里只有标题 + 可选的编辑框 + 决策按钮 */
+.t2c-apv .plan-decision-title {
+  display: flex; align-items: center; gap: 7px; margin-bottom: 8px;
+  font-size: var(--ui-font-body, 13px); font-weight: 600; color: var(--text);
+}
+.t2c-apv .plan-decision-title svg { flex-shrink: 0; color: var(--accent-ink); }
+.t2c-apv textarea.plan-edit {
+  display: block; width: 100%; box-sizing: border-box;
+  min-height: 140px; max-height: 30vh; margin-bottom: 8px; padding: 8px 10px;
+  font-family: var(--font-mono); font-size: var(--ui-font-meta, 12px); color: var(--text);
+  background: var(--bg-card); border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-sm, 8px);
+  resize: vertical; outline: none;
+}
+.t2c-apv textarea.plan-edit:focus { border-color: var(--accent-ink); }
+.t2c-apv .plan-decision .inquiry-input { margin-top: 8px; }
+.t2c-apv-from { font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); margin-bottom: 2px; }
+/* 排队的其余几张:在展开卡之上,排得再多也只占几行(多了在自己框里滚) */
+.t2c-apv-rest {
+  display: flex; flex-direction: column; gap: 1px;
+  max-height: 108px; overflow-y: auto;
+  margin: 0 -6px 8px; padding-bottom: 6px;
+  border-bottom: var(--border-width, 1px) solid var(--overlay-medium, rgba(127, 127, 127, 0.16));
+}
+.t2c-apv-row {
+  display: flex; align-items: center; gap: 8px; min-width: 0; width: 100%;
+  padding: 4px 6px; border: none; border-radius: var(--radius-sm, 8px); background: none; cursor: pointer; text-align: left;
+  font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); color: var(--text-muted);
+}
+.t2c-apv-row:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
+.t2c-apv-row-from { flex-shrink: 0; color: var(--text-faint, var(--text-muted)); }
+.t2c-apv-row-name { flex-shrink: 0; font-weight: 600; color: var(--text); }
+.t2c-apv-row-preview { flex: 1; min-width: 0; font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t2c-apv-row-ic { flex-shrink: 0; color: var(--accent-ink); }
+.t2c-apv-row-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

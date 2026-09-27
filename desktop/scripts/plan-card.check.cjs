@@ -3,7 +3,8 @@
  *
  * 为什么存在(三条都只有真浏览器能说话):
  *  ① `.plan-body` 有 `max-height + overflow-y:auto`。决策按钮**必须在滚动区外面**——一旦被塞进
- *     滚动容器里,长计划下用户根本看不到「批准」,而单测/typecheck 全绿。
+ *     滚动容器里,长计划下用户根本看不到「批准」,而单测/typecheck 全绿。09-27 起拍板区整个挪进输入框上方的
+ *     托盘(PlanDecision,计划卡只留正文 + 一行指路),这条改钉「按钮不在计划卡里、在托盘里」。
  *  ② 新的顶层卡类必须落在 chat2.css 的 `.t2-asst-col > …` 阅读宽白名单里(700px),否则满铺。
  *     卡壳复用 `.plan-card` 就是为了继承它,这条钉住「以后别改类名」。
  *  ③ 回退菜单借 `.composer-menu` 的卡壳,而那货默认 `bottom:100%`(向上弹,贴输入框)。消息行上
@@ -41,6 +42,7 @@ function check(name, ok, detail) {
 const ROOT = path.resolve(__dirname, '..')
 const BASE_CSS = fs.readFileSync(path.join(ROOT, 'frontend/src/styles/base.css'), 'utf8')
 const CHAT_CSS = fs.readFileSync(path.join(ROOT, 'frontend/src/views/chat2/chat2.css'), 'utf8')
+const COMPOSER_CSS = fs.readFileSync(path.join(ROOT, 'frontend/src/views/chat2/composer2.css'), 'utf8')
 
 const longPlan = Array.from({ length: 40 }, (_, i) => `<p>${i + 1}. 计划步骤 ${i + 1}:改点东西然后验证一下</p>`).join('')
 
@@ -49,6 +51,7 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
   html,body { margin:0; }
   ${BASE_CSS}
   ${CHAT_CSS}
+  ${COMPOSER_CSS}
 </style></head><body>
  <div class="t2-chat-view" style="width:1000px">
   <div class="t2-stream"><div class="t2-stream-inner" id="inner">
@@ -84,20 +87,28 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
     <div class="t2-asst"><div class="t2-avatar">T</div><div class="t2-asst-col" id="col">
       <div class="t2-content">好的,先给计划。</div>
       <div class="plan-card" id="card">
-        <div class="tg-card-title">📋 实施计划 <span class="plan-verdict">已批准</span></div>
+        <div class="tg-card-title">📋 实施计划</div>
         <div class="plan-body" id="body">${longPlan}</div>
-        <div class="approval-actions" id="actions">
-          <button class="btn primary sm">批准并开始执行</button>
-          <button class="btn ghost sm">批准,手动开始</button>
-          <button class="btn ghost sm">编辑计划</button>
-          <button class="btn ghost sm">打回</button>
-          <button class="btn danger sm">拒绝</button>
-        </div>
+        <div class="t2-dim t2-apv-pointer" data-plan-pointer="q1">等你拍板 · 在输入框上方</div>
       </div>
     </div></div>
   </div></div>
   <div class="composer-anchor" id="anchor"><div class="t2-composer-wrap" style="height:96px">输入框</div></div>
  </div>
+ <!-- 输入框上方托盘里的计划拍板区(ApprovalTray → PlanDecision 的真实结构) -->
+ <div class="t2c" id="traywrap" style="width:1000px"><div class="t2c-inner"><div class="t2c-apv" id="tray">
+   <button type="button" class="t2c-apv-head">等你处理 · 1</button>
+   <div class="t2c-apv-body" data-tray-kind="plan"><div class="plan-decision" id="decision" data-plan-decision="q1">
+     <div class="plan-decision-title">计划等你拍板（正文见对话里的计划卡）</div>
+     <div class="approval-actions" id="actions">
+       <button class="btn primary sm">批准并开始执行</button>
+       <button class="btn ghost sm">批准,手动开始</button>
+       <button class="btn ghost sm">编辑计划</button>
+       <button class="btn ghost sm">打回</button>
+       <button class="btn danger sm">拒绝</button>
+     </div>
+   </div></div>
+ </div></div></div>
 </body></html>`
 
 const measure = () => {
@@ -107,14 +118,10 @@ const measure = () => {
   return {
     cardW: r('card').width,
     colW: r('col').width,
-    cardRight: r('card').right,
     actionsRight: r('actions').right,
-    actionsTop: r('actions').top,
-    bodyBottom: r('body').bottom,
     bodyScrolls: body.scrollHeight > body.clientHeight + 1,
     bodyMaxH: parseFloat(getComputedStyle(body).maxHeight),
-    // 决策按钮在滚动区之外:actions 的 offsetParent 是卡片而非正文容器
-    actionsInsideBody: body.contains(document.getElementById('actions')),
+    trayRight: r('tray').right,
     menuTop: menu.getBoundingClientRect().top,
     menuH: menu.getBoundingClientRect().height,
     // 被上下同时定位压扁时高度会塌成一条缝,而「向下弹」的断言照样绿 → 必须单独钉住不压缩
@@ -144,9 +151,9 @@ const measure = () => {
 
   check('卡片吃阅读宽上限(700,不满铺)', m.cardW <= 701 && m.colW > 701, `cardW=${m.cardW.toFixed(1)} colW=${m.colW.toFixed(1)}`)
   check('⚠️长计划正文自己滚(不把整卡撑长)', m.bodyScrolls && m.bodyMaxH <= 400, `scrolls=${m.bodyScrolls} maxH=${m.bodyMaxH}`)
-  check('⚠️决策按钮在滚动区外(长计划下也看得见)', !m.actionsInsideBody && m.actionsTop >= m.bodyBottom - 1,
-    `insideBody=${m.actionsInsideBody} actionsTop=${m.actionsTop.toFixed(1)} bodyBottom=${m.bodyBottom.toFixed(1)}`)
-  check('按钮不捅出卡片右缘', m.actionsRight <= m.cardRight + 1, `actions=${m.actionsRight.toFixed(1)} card=${m.cardRight.toFixed(1)}`)
+  // 「按钮不在计划卡里、在托盘里」是**结构**,这份手抄夹具断不了(恒真);真判据在 e2e:chatevents 的 B1(cardButtons=0 且 trayButtons=5)。
+  // 这里只钉 CSS:托盘里的决策按钮不溢出、窄栏换行。
+  check('按钮不捅出托盘右缘', m.actionsRight <= m.trayRight + 1, `actions=${m.actionsRight.toFixed(1)} tray=${m.trayRight.toFixed(1)}`)
   check('⚠️回退菜单向下弹(不是 .composer-menu 默认的向上)', m.menuTop >= m.btnBottom - 1,
     `menuTop=${m.menuTop.toFixed(1)} btnBottom=${m.btnBottom.toFixed(1)}`)
   check('⚠️回退菜单没被上下同时定位压成缝(单类覆盖会被后面的 .composer-menu 反压)',
@@ -157,14 +164,14 @@ const measure = () => {
   check('⚠️.up 向上翻:落在按钮之上,不被悬浮输入卡盖住', m.upMenuBottom <= m.lowBtnTop + 1 && m.upMenuBottom <= m.anchorTop + 1,
     `menuBottom=${m.upMenuBottom.toFixed(1)} btnTop=${m.lowBtnTop.toFixed(1)} anchorTop=${m.anchorTop.toFixed(1)}`)
 
-  // 窄栏:5 个按钮必须换行而不是溢出(flex-wrap)
-  await p.evaluate(() => { document.querySelector('.t2-chat-view').style.width = '420px' })
+  // 窄栏:托盘里 5 个按钮必须换行而不是溢出(flex-wrap)
+  await p.evaluate(() => { document.querySelector('.t2-chat-view').style.width = '420px'; document.getElementById('traywrap').style.width = '420px' })
   await p.waitForTimeout(80)
   const narrow = await p.evaluate(measure)
-  check('⚠️窄栏按钮换行,不溢出卡片', narrow.lastBtnTop > narrow.firstBtnTop && narrow.actionsRight <= narrow.cardRight + 1,
-    `firstTop=${narrow.firstBtnTop.toFixed(1)} lastTop=${narrow.lastBtnTop.toFixed(1)} actionsRight=${narrow.actionsRight.toFixed(1)}`)
+  check('⚠️窄栏按钮换行,不溢出托盘', narrow.lastBtnTop > narrow.firstBtnTop && narrow.actionsRight <= narrow.trayRight + 1,
+    `firstTop=${narrow.firstBtnTop.toFixed(1)} lastTop=${narrow.lastBtnTop.toFixed(1)} actionsRight=${narrow.actionsRight.toFixed(1)} trayRight=${narrow.trayRight.toFixed(1)}`)
 
-  await p.evaluate(() => { document.querySelector('.t2-chat-view').style.width = '1000px' })
+  await p.evaluate(() => { document.querySelector('.t2-chat-view').style.width = '1000px'; document.getElementById('traywrap').style.width = '1000px' })
   await p.waitForTimeout(80)
   const shot = process.env.PLANCARD_SHOT || '/tmp/plan-card.png'
   await p.screenshot({ path: shot, fullPage: true })

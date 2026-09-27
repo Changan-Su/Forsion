@@ -137,7 +137,7 @@ export function normalizeUiValues(v: unknown): Record<string, string> | undefine
 router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
-    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings } = req.body || {};
+    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings, approval_tray } = req.body || {};
     if (agent_config != null && (typeof agent_config !== 'object' || Array.isArray(agent_config))) {
       return res.status(400).json({ detail: 'agent_config must be an object' });
     }
@@ -206,6 +206,8 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
         // 界面面能力握手:字段在场(哪怕空数组)= 渲染端够新,会处理 ui_cmd 事件。缺席 → 工具不注册。
         ...(uiCommandsNorm ? { uiCommands: uiCommandsNorm } : {}),
         ...(uiSettingsNorm ? { uiSettings: uiSettingsNorm } : {}),
+        // 同一类握手:在场 = 渲染端有输入框上方的审批托盘(能攒多张、run 往后跑了也兑现得了)。缺席照旧串行阻塞。
+        ...(approval_tray === true ? { approvalTray: true } : {}),
       },
     });
 

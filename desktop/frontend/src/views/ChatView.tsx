@@ -18,6 +18,8 @@ import { DESK_DRAFT_KEY, resolveDeskPath } from '../stores/deskPlan'
 import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage } from './chat2/EditorialMessage'
+import { ApprovalTray } from './chat2/ApprovalTray'
+import { APPROVAL_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
 import { RunStatsLine } from './chat2/RunStatsLine'
 import { inRunWindow } from '../stores/runStats'
 import { EmptyState2 } from './chat2/EmptyState2'
@@ -172,6 +174,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const activeCtxInfo = s.activeCtxInfo && (!s.activeCtxInfo.modelId || !activeModel || s.activeCtxInfo.modelId === activeModel.id) ? s.activeCtxInfo : null
   const activeUsage = s.activeUsage
   const activeMessages = s.activeMessages
+  const pendingApprovals = useMemo(() => pendingPromptsOf(activeMessages), [activeMessages])
   const running = s.running
   const execConfig = s.execConfig
   // Vault 切换会即时重算 Project 列表与系统工作根;不能只在 s.workspaces() 里 getState 快照,
@@ -236,7 +239,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   // composer ↑↓ 历史召回:本会话已发送的用户消息(旧→新)+ steer 入队即记的补充池(被删/撤回的插话
   // 仍可从 ↑ 找回;已注入的会同时出现在消息里,按文本去重)。打断标记是机器行,不进历史。
   const sentHistory = useMemo(() => {
-    const users = activeMessages.filter((m) => m.role === 'user' && !m.content.startsWith('<turn_interrupted>')).map((m) => m.content)
+    const users = activeMessages.filter((m) => m.role === 'user' && !m.content.startsWith('<turn_interrupted>') && !m.content.startsWith(APPROVAL_UPDATE_OPEN)).map((m) => m.content)
     const have = new Set(users)
     return [...users, ...s.steerSent.filter((x) => !have.has(x))]
   }, [activeMessages, s.steerSent])
@@ -376,12 +379,12 @@ export function ChatView({ leaf, params }: ViewProps) {
     if (stickToBottom.current && !s.jumpTarget) scrollToBottom()
   }, [activeMessages, historyLoading, scrollToBottom, compactingOn])
 
-  // 审批/询问属于必须看到的操作，首次出现时强制定位到底部。
+  // 新计划待拍板时强制定位到底部:拍板区在输入框上方的托盘里,但计划正文在流里,得让人看得到。
+  // 审批与普通提问不算:它们整张在托盘里恒可见,再把人拽到底部正是「打断阅读」的一半。
   useEffect(() => {
     let pending = 0
     for (const m of activeMessages) {
-      pending += m.approvals?.filter((a) => a.status === 'pending').length || 0
-      pending += m.inquiries?.filter((q) => q.status === 'pending').length || 0
+      pending += m.planProposal ? m.inquiries?.filter((q) => q.status === 'pending' && q.kind === 'plan').length || 0 : 0
     }
     if (pending > pendingCountRef.current) scrollToBottom(true)
     pendingCountRef.current = pending
@@ -533,8 +536,6 @@ export function ChatView({ leaf, params }: ViewProps) {
                       onBranch: params.childSurface ? undefined : () => void s.branchFromMessage(m.id, activeId),
                       onEdit: params.readOnly ? undefined : () => startEdit(m.id, m.content),
                       onRewind: params.readOnly ? undefined : (mode) => void s.rewindTo(m.id, mode, activeId),
-                      onApproval: (aid, action, args) => void s.decideApproval(m.id, aid, action, args, activeId),
-                      onInquiry: (iid, ans) => s.answerInquiry(m.id, iid, ans, activeId),
                       // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
                       onSuggest: params.readOnly ? undefined : (text) => void s.send(text, [], undefined, undefined, undefined, activeId),
                       onTask: (card, landing) => runTaskCard(card, landing, activeId),
@@ -661,6 +662,15 @@ export function ChatView({ leaf, params }: ViewProps) {
         </AnimatePresence>
         <Composer2
           sessionId={activeId}
+          approvalTray={pendingApprovals.length ? (
+            <ApprovalTray
+              // 每个会话一份托盘状态(收起 / 展开项 / 已送出锁),别从上一个会话带过来
+              key={activeId ?? ''}
+              items={pendingApprovals}
+              onDecide={(mid, aid, action, args) => s.decideApproval(mid, aid, action, args, activeId)}
+              onAnswer={(mid, iid, ans) => s.answerInquiry(mid, iid, ans, activeId)}
+            />
+          ) : undefined}
           advisory={!params.childSurface ? (
             <QuotaAdvisoryBanner
               loggedIn={!!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false}
