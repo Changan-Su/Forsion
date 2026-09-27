@@ -493,15 +493,17 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
       // 报错只进控制台,Muse 一无所知)。
       if (!src.dev) {
         let code = src.code
+        let url: string | null = null
         if (src.agent) {
           const n = (agentLoads.get(src.id) ?? 0) + 1
-          const url = `forsion-agent-space/${src.id}/${n}/main.js`
+          url = `forsion-agent-space/${src.id}/${n}/main.js`
           agentLoads.set(src.id, n)
-          agentLive.set(src.id, url)
           code = `${src.code}\n//# sourceURL=${url}`
         }
         const fn = new Function('ctx', code) as (c: PluginContext) => unknown
         const d = fn(ctx)
+        // 跑成功了才算「正在运行的那一版」:同步 setup 抛错 → 由加载失败那条回写负责,它残留的定时器不再另报(Codex 09-27 三轮)
+        if (url) agentLive.set(src.id, url)
         return typeof d === 'function' ? (d as () => void) : undefined
       }
       const fn = new Function('ctx', 'console', src.code) as (c: PluginContext, console: Console) => unknown

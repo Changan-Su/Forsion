@@ -100,4 +100,14 @@ describe('agent Space 的 sourceURL', () => {
     noteAgentSpaceRuntimeError((() => { try { lastRun?.('gone') } catch (e) { return e } })())
     expect(posted).toHaveBeenCalledTimes(5)
   })
+
+  it('setup 同步抛错的那一版不算「正在运行」:它先留下的函数(如已起的定时器)之后再抛也不报(加载失败另有回写)', async () => {
+    env.sources = [source({ id: 'agent-muse', agent: 'muse', code: `${agentCode}\nthrow new Error('setup boom')` })]
+    await usePluginStore.getState().loadExternal()
+    expect(usePluginStore.getState().lastSetupError['agent-muse']).toMatch(/setup boom/)
+    expect(agentSpaceSourceUrl('agent-muse')).toBeNull()
+    void syncAgentSpace({} as never, 'muse', undefined)
+    noteAgentSpaceRuntimeError(errorOf('leftover'))
+    expect(posted).not.toHaveBeenCalled()
+  })
 })
