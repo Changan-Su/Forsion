@@ -51,14 +51,26 @@ export function unmarkedProjectPaths(rows: SessionRowLike[]): string[] {
  * 升级前远端 PATCH 过、或远端 run 派生出来的会话都没有远程标记,种子分不出来 —— 别的软件的数据目录正是那种攻击的落点,
  * 而真项目几乎不住这里。用户真要把项目开在这里,经「添加项目」的原生选择框登记即可(显式登记不受此限)。
  */
-export function inAppDataArea(real: string, home: string, platform: NodeJS.Platform = process.platform): boolean {
-  const under = (p: string): boolean => isWithin(real, p, platform)
+export function inAppDataArea(
+  real: string,
+  home: string,
+  platform: NodeJS.Platform = process.platform,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  // 会话路径是 realpath 过的:家目录 / 数据目录本身是软链(或 Windows 联接)时,两种形态都得认,否则真实位置漏判(Codex r3 二轮)
+  const forms = (p: string | undefined): string[] => (p ? [...new Set([p, realOrNull(p) ?? p])] : [])
+  const under = (p: string | undefined): boolean => forms(p).some((f) => isWithin(real, f, platform))
+  const homes = forms(home)
   if (platform === 'darwin') {
-    const lib = join(home, 'Library')
-    return under(lib) && !under(join(lib, 'Mobile Documents')) && !under(join(lib, 'CloudStorage'))
+    return homes.some((h) => {
+      const lib = join(h, 'Library')
+      return under(lib) && !under(join(lib, 'Mobile Documents')) && !under(join(lib, 'CloudStorage'))
+    })
   }
-  if (platform === 'win32') return under(join(home, 'AppData'))
-  return ['.local/share', '.var', 'snap', '.mozilla', '.thunderbird', '.pki'].some((d) => under(join(home, d)))
+  // Windows:重定向过的 %APPDATA% / %LOCALAPPDATA% 也算(浏览器、各应用的配置都跟着它走)
+  if (platform === 'win32') return homes.some((h) => under(join(h, 'AppData'))) || under(env.APPDATA) || under(env.LOCALAPPDATA)
+  // Linux 等:XDG 数据目录(缺省 ~/.local/share,可被 XDG_DATA_HOME 挪走)+ Flatpak / Snap / 老式浏览器目录
+  return homes.some((h) => ['.local/share', '.var', 'snap', '.mozilla', '.thunderbird', '.pki'].some((d) => under(join(h, d)))) || under(env.XDG_DATA_HOME)
 }
 
 /** 种子候选:无远程标记的会话目录,去掉应用数据区里的(见 inAppDataArea)。 */

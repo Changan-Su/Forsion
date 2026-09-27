@@ -3,7 +3,7 @@
  * 跑法:npx vitest run electron/unitLocalRoots.test.ts
  */
 import { describe, it, expect } from 'vitest'
-import { mkdir, mkdtemp, readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, symlink } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -99,6 +99,22 @@ describe('unitLocalRoots', () => {
     expect(inAppDataArea('/home/a/.local/share/x', '/home/a', 'linux')).toBe(true)
     expect(inAppDataArea('/home/a/snap/firefox/common', '/home/a', 'linux')).toBe(true)
     expect(inAppDataArea('/home/a/src/p', '/home/a', 'linux')).toBe(false)
+  })
+
+  it('应用数据区判定认家目录软链的真实位置、也认挪走的 XDG_DATA_HOME / %APPDATA%(Codex r3 二轮)', async () => {
+    const root = await tmpHome()
+    const realHome = join(root, 'real-home')
+    const linkHome = join(root, 'link-home')
+    await mkdir(join(realHome, 'Library', 'Application Support', 'B', 'Default'), { recursive: true })
+    await symlink(realHome, linkHome)
+    // 会话路径是 realpath 过的(落在 real-home 下),而 os.homedir() 给的是软链那一侧
+    const poisoned = realpathSync(join(linkHome, 'Library', 'Application Support', 'B', 'Default'))
+    expect(inAppDataArea(poisoned, linkHome, 'darwin', {})).toBe(true)
+    const xdg = join(root, 'data')
+    await mkdir(join(xdg, 'browser'), { recursive: true })
+    expect(inAppDataArea(join(xdg, 'browser'), '/home/none', 'linux', {})).toBe(false)
+    expect(inAppDataArea(join(xdg, 'browser'), '/home/none', 'linux', { XDG_DATA_HOME: xdg })).toBe(true)
+    expect(inAppDataArea(join(xdg, 'browser'), '/home/none', 'win32', { LOCALAPPDATA: xdg })).toBe(true)
   })
 
   it('原生选择框:只有「添加 / 导入项目」(purpose=project)才登记;技能导入 / 同步目录等别的用途不登记', async () => {

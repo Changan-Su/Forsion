@@ -173,15 +173,24 @@ describe('unitHostScope:校验与读取之间换软链(Codex 三轮 P1)', () => 
     expect(got).toBeNull()
   })
 
-  it('换过去、列、换回来,再用 utimes 把父目录的 mtime 恢复原值 → 仍然 null(utimes 会刷 ctime,改不回去)', async () => {
-    const r = await dirRacer('lsutimes')
-    const parent = ws()
-    let saved: { atime: Date; mtime: Date } | null = null
-    const swap = async (): Promise<void> => { const st = await lstat(parent); saved = { atime: st.atime, mtime: st.mtime }; await r.swap() }
-    const backAndRestore = async (): Promise<void> => { await r.back(); await utimes(parent, saved!.atime, saved!.mtime) }
+  it('换过去、列、换回来,再用 utimes 把父目录的 mtime 精确恢复 → 仍然 null(utimes 会刷 ctime,macOS / Linux 改不回去)', async () => {
+    // 父目录单独一层(别的测试不往里写),先把时间定在整秒上 —— 之后能**逐纳秒**恢复,mtime 这一维看着毫无变化,只剩 ctime 露馅
+    const parent = join(ws(), 'utimes-parent')
+    await mkdir(parent, { recursive: true })
+    const dir = join(parent, 'd')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'a.md'), 'x')
+    const FIXED = 1_700_000_000
+    await utimes(parent, FIXED, FIXED)
+    const before = await lstat(parent, { bigint: true })
+    const swap = async (): Promise<void> => { await tick(); await rename(dir, dir + '.real'); await symlink(join(home, '.forsion'), dir) }
+    const backAndRestore = async (): Promise<void> => { await rename(dir, dir + '.link'); await rename(dir + '.real', dir); await utimes(parent, FIXED, FIXED) }
     let listed: string[] | null = null
-    const got = await withVerifiedUnitPath(r.dir, roots(), env, guard, true, async (real) => (listed = await readdir(real)), { beforeOpen: swap, afterOpen: backAndRestore })
+    const got = await withVerifiedUnitPath(dir, roots(), env, guard, true, async (real) => (listed = await readdir(real)), { beforeOpen: swap, afterOpen: backAndRestore })
+    const after = await lstat(parent, { bigint: true })
     expect(listed).toContain('auth.json') // 竞态打中了
+    expect(after.mtimeNs).toBe(before.mtimeNs) // mtime 逐纳秒恢复:只看 mtime 的指纹前后一致
+    expect(after.ctimeNs).not.toBe(before.ctimeNs) // ctime 恢复不了
     expect(got).toBeNull()
   })
 
