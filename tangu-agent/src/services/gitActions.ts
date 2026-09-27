@@ -289,7 +289,8 @@ async function commitScope(cwd: string): Promise<{ files: PendingFile[]; paths: 
 
 /** 清单指纹:用户在提交框里看到的那份清单。提交时重算,对不上 = 看完之后又变了(changes_changed),让他重新过目。 */
 export function changesToken(files: PendingFile[]): string {
-  return createHash('sha256').update(files.map((f) => `${f.code}\t${f.path}\t${f.from ?? ''}`).sort().join('\n')).digest('hex').slice(0, 32);
+  // JSON 逐条编码:文件名里的制表符 / 换行拼不出另一份清单的指纹
+  return createHash('sha256').update(files.map((f) => JSON.stringify([f.code, f.path, f.from ?? null])).sort().join('\n')).digest('hex').slice(0, 32);
 }
 
 /** 面板的待提交清单(完整;超过上限时提交本来也会被拒)+ 指纹。 */
@@ -370,22 +371,37 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
     if (addedByUs) await unstageAll(cwd); // 是我们暂存的就退回去:用户看到的仓库状态与点提交之前一致
     throw e;
   }
+  // 提交前该引用 reflog 的最新一条(首次提交 / 没开 reflog = 空):提交后要看到「正好多了我们这一条」。读失败 = null,之后按认不准处理
+  const logBefore = base ? await reflogTop(cwd, ref, 1).catch(() => null) : [];
   const committed = await runAction(cwd, ['commit', '-F', '-'], { input: `${text}\n` });
   if (committed.code !== 0 && /tell me who you are|unable to auto-detect email address|auto-detection is disabled/i.test(committed.stderr)) {
     throw new GitActionError('no_identity', 'git does not know your name and email yet', tail(committed.stderr));
   }
   must(committed, 'commit');
-  // 认准「刚才这一个」提交:还在原来的分支引用上;该引用最新一条 reflog 是一次普通提交(post-commit 钩子 amend / 再提交都会顶掉它);
-  // 父提交等于基准。认不准 / 提交后的任何读取失败都不猜:报 commit_unverified,界面说清楚并重读 —— 提交可能已经在了,只是没法复核。
+  // 认准「刚才这一个」提交:还在原来的分支引用上;该引用的 reflog 正好在提交前那条之上多了一条普通提交(post-commit 钩子 amend /
+  // 再提交 / reset 回基准再提交都会多出别的条目);父提交等于基准。认不准 / 提交后的任何读取失败都不猜:报 commit_unverified,
+  // 界面说清楚并重读 —— 提交可能已经在了,只是没法复核。
   let ours = '';
+  let subject = '';
   let final: StagedEntry[];
+  // 没有 reflog(core.logAllRefUpdates=false)时认不出别人动没动过引用:正常提交照样放行,只是万一要撤回时不敢撤(见下)
+  let identified = false;
   try {
     const nowRef = await readGit(cwd, ['symbolic-ref', '-q', 'HEAD'], { timeoutMs: 5000 });
     if ((nowRef.code === 0 && nowRef.stdout.trim() ? nowRef.stdout.trim() : 'HEAD') !== ref) throw new Error('the branch changed while committing');
-    const log = must(await readGit(cwd, ['reflog', 'show', '-n', '1', '--format=%H%x1f%gs', ref]), 'reflog').stdout.trim().split('\x1f');
-    ours = log[0] || '';
-    if (!ours || !/^commit(?: \(initial\))?:/.test(log[1] || '')) throw new Error('the latest update of the branch is not this commit');
-    const parents = must(await readGit(cwd, ['rev-list', '--parents', '-n', '1', ours]), 'rev-list').stdout.trim().split(/\s+/).slice(1);
+    const logAfter = logBefore ? await reflogTop(cwd, ref, logBefore.length + 1) : [];
+    if (logAfter.length) {
+      const [line, ...rest] = logAfter;
+      if (!/^commit(?: \(initial\))?:/.test(line.slice(nthSep(line, 2) + 1))) throw new Error('the latest update of the branch is not this commit');
+      if (rest.join('\n') !== logBefore!.join('\n')) throw new Error('the branch was updated more than once while committing');
+      ours = line.slice(0, nthSep(line, 1)); identified = true;
+    } else {
+      ours = must(await readGit(cwd, ['rev-parse', '--verify', ref]), 'rev-parse').stdout.trim();
+    }
+    if (!ours) throw new Error('the new commit could not be read');
+    const info = must(await readGit(cwd, ['log', '-1', '--format=%P%x1f%s', ours]), 'log').stdout.replace(/\n$/, '');
+    const parents = info.slice(0, nthSep(info, 1)).split(/\s+/).filter(Boolean);
+    subject = info.slice(nthSep(info, 1) + 1);
     if (base ? parents.length !== 1 || parents[0] !== base : parents.length !== 0) throw new Error('the commit has an unexpected parent');
     const diff = must(await readGit(cwd, ['diff-tree', '-r', '--raw', '-z', '--no-renames', '--no-abbrev', '--no-commit-id', ...(base ? [base, ours] : ['--root', ours])], { maxOutputBytes: 8 * 1024 * 1024 }), 'diff-tree').stdout;
     final = parseRaw(diff);
@@ -396,14 +412,27 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
     assertWithinReviewed(final, reviewed);
     await assertStagedSafe(cwd, final);
   } catch (e) {
+    if (!identified) throw new GitActionError('commit_unverified', 'The commit does not match the reviewed list, and without a reflog it could not be safely undone; check the repository', e instanceof GitActionError ? e.detail : String((e as Error)?.message || e));
     const undone = await runAction(cwd, base ? ['update-ref', '-m', 'forsion: undo commit', ref, base, ours] : ['update-ref', '-d', ref, ours]).catch(() => null);
     if (!undone || undone.code !== 0) throw new GitActionError('commit_unverified', 'A commit hook changed the commit and it could not be undone; check the repository', tail(undone?.stderr || ''));
     const inner = e instanceof GitActionError ? e : null;
     throw new GitActionError('hook_changed_commit', 'A git hook changed the commit so it no longer matches the reviewed list; the commit was undone', inner?.detail || String((e as Error)?.message || e));
   }
-  const head = must(await readGit(cwd, ['log', '-1', '--format=%H%x1f%s', ours]), 'log');
-  const [sha, subject = ''] = head.stdout.trim().split('\x1f');
-  return { sha, subject, stagedOnly };
+  return { sha: ours, subject, stagedOnly };
+}
+
+/** 引用 reflog 最新的 n 条(新的在前),每条「提交 \x1f 带时间的选择子 \x1f 说明」—— 带时间,前后两次读能逐条比对。
+ *  引用还不存在时 git 报错(调用方按空处理);存在但没有 reflog = 空。 */
+async function reflogTop(cwd: string, ref: string, n: number): Promise<string[]> {
+  const r = must(await readGit(cwd, ['reflog', 'show', '--date=raw', '-n', String(n), '--format=%H%x1f%gd%x1f%gs', ref], { timeoutMs: 5000 }), 'reflog');
+  return r.stdout.split('\n').filter(Boolean);
+}
+
+/** 第 k 个 \x1f 的位置(说明里也可能有 \x1f,只按前面几个切);没有就是串尾。 */
+function nthSep(s: string, k: number): number {
+  let i = -1;
+  for (let j = 0; j < k; j++) { i = s.indexOf('\x1f', i + 1); if (i < 0) return s.length; }
+  return i;
 }
 
 /** 把 index 退回 HEAD(还没有提交的新仓 = 清空)。只在「index 是我们刚 add -A 的」时用。 */

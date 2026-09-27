@@ -324,8 +324,45 @@ describe('仓库自带会执行程序的配置(gitTrust)', () => {
     }
   });
 
+  it.skipIf(process.platform === 'win32')('post-commit 钩子 reset 回基准再提交(同父、最新一条也是普通提交)→ reflog 多了不止一条:commit_unverified,不撤钩子的提交', async () => {
+    const cwd = repo('hook-reset-recommit');
+    writeFileSync(path.join(cwd, 'a.txt'), 'a');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
+    const base = git(cwd, 'rev-parse', 'HEAD');
+    const hooks = dir('hook-reset-recommit/.githooks');
+    git(cwd, 'config', 'core.hooksPath', '.githooks');
+    writeFileSync(path.join(hooks, 'post-commit'), '#!/bin/sh\n[ -f .done ] && exit 0\ntouch .done\ngit reset -q --soft HEAD~1\necho y > b.txt\ngit add b.txt .done\ngit commit -qm again\n', { mode: 0o755 });
+    writeFileSync(path.join(cwd, 'a.txt'), 'changed');
+    expect(await codeOf(gitCommit(cwd, 'mine', true))).toBe('commit_unverified');
+    expect(git(cwd, 'log', '-1', '--format=%s')).toBe('again'); // 钩子的提交原样留着
+    expect(git(cwd, 'rev-parse', 'HEAD~1')).toBe(base);
+  });
+
+  it('标题里带 \\x1f 也原样返回(只按第一个分隔符切)', async () => {
+    const cwd = repo('sep-subject');
+    writeFileSync(path.join(cwd, 'a.txt'), 'a');
+    expect((await gitCommit(cwd, 'a\x1fb')).subject).toBe('a\x1fb');
+  });
+
+  it.skipIf(process.platform === 'win32')('关了 reflog:正常提交照常成功;钩子塞了没过目的文件 → 认不准不敢撤,报 commit_unverified', async () => {
+    const cwd = repo('no-reflog');
+    git(cwd, 'config', 'core.logAllRefUpdates', 'false');
+    writeFileSync(path.join(cwd, 'a.txt'), 'a');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
+    writeFileSync(path.join(cwd, 'a.txt'), 'b');
+    expect((await gitCommit(cwd, 'normal')).subject).toBe('normal');
+    const hooks = dir('no-reflog/.githooks');
+    git(cwd, 'config', 'core.hooksPath', '.githooks');
+    writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\necho x > extra.txt\ngit add extra.txt\n', { mode: 0o755 });
+    writeFileSync(path.join(cwd, 'a.txt'), 'c');
+    expect(await codeOf(gitCommit(cwd, 'with extra', true))).toBe('commit_unverified');
+    expect(git(cwd, 'log', '-1', '--format=%s')).toBe('with extra'); // 没撤(认不准就不撤)
+  });
+
   it('改名的原路径也进指纹:同一个目标、来源换了 → 指纹不同', () => {
     expect(changesToken([{ code: 'R ', path: 'new.txt', from: 'old1.txt' }])).not.toBe(changesToken([{ code: 'R ', path: 'new.txt', from: 'old2.txt' }]));
+    // 文件名带制表符:拼接式编码下这两份清单指纹相同
+    expect(changesToken([{ code: 'R ', path: 'a\tb', from: 'c' }])).not.toBe(changesToken([{ code: 'R ', path: 'a', from: 'b\tc' }]));
   });
 
   it('改动类型也要对得上:看见的是删除,暂存时却成了修改(删掉的又被建回来)→ changes_changed', () => {
