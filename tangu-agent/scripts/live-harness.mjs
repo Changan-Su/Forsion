@@ -47,7 +47,7 @@ import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { tmpdir, homedir } from 'node:os';
-import { join, dirname, resolve, relative } from 'node:path';
+import { join, dirname, resolve, relative, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { fromDb, report as timelineReport } from './stall-timeline.mjs';
@@ -404,6 +404,59 @@ const appendUserActivity = (d = new Date(), what = 'note.edit f="Notes/harness.m
 };
 const hhmm = (ms) => { const d = new Date(Number(ms)); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
 const museLogTail = () => { try { return readFileSync(engineLog, 'utf8').split('\n').filter((l) => l.includes('[muse]')).slice(-6).join(' ⏎ '); } catch { return ''; } };
+/** PluginContext 顶层成员名(与 desktop contractDocs.test 同一抽法);读不到 → null。 */
+function pluginCtxMembers() {
+  try {
+    const src = readFileSync(join(root, '../desktop/frontend/src/amadeus/plugins/types.ts'), 'utf8');
+    const i = src.indexOf('export interface PluginContext ');
+    if (i < 0) return null;
+    const body = src.slice(i);
+    const names = [...body.slice(0, body.search(/\n\}\n/)).matchAll(/^ {2}([A-Za-z_]\w*)\??\s*[:(<]/gm)].map((m) => m[1]);
+    // agent Space 不带 capabilities → 能力闸成员不注入(desktop shared/amadeus/ipc.ts PLUGIN_CAPABILITIES;今天只有 activeWindow → ctx.system)
+    return names.length > 10 ? new Set(names.filter((n) => n !== 'system')) : null;
+  } catch { return null; }
+}
+/** 逐字抄 desktop shared/amadeus/ipc.ts cmpVersion(剥前缀 v、任意段数)。 */
+const cmpVer = (a, b) => {
+  const pa = String(a).replace(/^v/i, '').split('.').map((x) => parseInt(x, 10) || 0);
+  const pb = String(b).replace(/^v/i, '').split('.').map((x) => parseInt(x, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) { const d = (pa[i] || 0) - (pb[i] || 0); if (d) return d < 0 ? -1 : 1; }
+  return 0;
+};
+/** Muse 自建 Space 的装载判定,与桌面宿主同口径(desktop electron/amadeus/ipc.ts readAgentSpacePlugins + gatePluginManifest):
+ *  manifest 必须是 JSON 对象、apiVersion(缺省 1)=1、minAppVersion 不高于当前版本、代码取 manifest.main(相对、不含 ..)否则 main.js;
+ *  再把整个文件当 setup(ctx) 的函数体跑(new Function('ctx', code)(ctx)),数注册了哪些视图。
+ *  09-27 实机:每一版都包成 function setup(ctx){…} 不调用 = 零注册零报错,Space 空白 16 天。
+ *  ctx 只给 PluginContext 真有的顶层成员(深代理,怎么点都不炸),没有的是 undefined —— 不替模型凭空编出能力。
+ *  顶层碰浏览器全局是合法写法(宿主跑在渲染进程;09-27 auto 档 live 就是顶层注入 <style>),这些名字同样给深代理 ——
+ *  定时器回调不执行、fetch 不真发,异步里再炸也炸不到台架进程。
+ *  ponytail: 嵌套一层仍宽松(`ctx.app.不存在的东西` 会被判真);真撞上由桌面的「没注册 home」回写兜住。清单外的全局照实报抛错。 */
+const BROWSER_GLOBALS = ['document', 'window', 'self', 'location', 'navigator', 'localStorage', 'sessionStorage', 'fetch', 'setTimeout', 'setInterval', 'clearTimeout', 'clearInterval', 'requestAnimationFrame', 'cancelAnimationFrame', 'getComputedStyle', 'matchMedia', 'CSS', 'HTMLElement', 'customElements'];
+async function museSpaceVerdict(dir, appVersion) {
+  let m;
+  try { m = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')); } catch {
+    return existsSync(join(dir, 'main.js')) ? { built: true, ok: false, text: 'manifest.json 缺失或坏' } : { built: false, ok: true, text: '未建' };
+  }
+  if (!m || typeof m !== 'object' || Array.isArray(m)) return { built: true, ok: false, text: 'manifest.json 不是对象' };
+  if ((m.apiVersion === undefined ? 1 : m.apiVersion) !== 1) return { built: true, ok: false, text: `被门禁挡:apiVersion ${JSON.stringify(m.apiVersion)}` };
+  if (typeof m.minAppVersion === 'string' && m.minAppVersion && appVersion && cmpVer(appVersion, m.minAppVersion) < 0) return { built: true, ok: false, text: `被门禁挡:minAppVersion ${m.minAppVersion} > ${appVersion}` };
+  const main = typeof m.main === 'string' && m.main.trim() ? m.main.trim().slice(0, 120) : '';
+  const rel = main && !main.includes('..') && !isAbsolute(main) ? main : 'main.js';
+  let code;
+  try { code = readFileSync(join(dir, rel), 'utf8'); } catch { return { built: true, ok: false, text: `${rel} 读不到` }; }
+  const known = pluginCtxMembers();
+  const views = [];
+  const deep = () => new Proxy(function () {}, { get: (_, k) => (k === 'then' ? undefined : deep()), apply: () => deep() });
+  const ctx = new Proxy({}, { get: (_, k) => (k === 'registerView' ? (v) => { views.push(v?.id); return deep(); } : !known || known.has(k) ? deep() : undefined) });
+  let r;
+  try { r = new Function('ctx', ...BROWSER_GLOBALS, code)(ctx, ...BROWSER_GLOBALS.map(() => deep())); } catch (e) { return { built: true, ok: false, text: `求值抛错:${String(e?.message || e).slice(0, 160)}` }; }
+  // 宿主给 async setup 3 秒宽限(desktop builtins/agentSpaceSync HOME_GRACE_MS)再查 home:这里同样等它落定(封顶 3 秒),
+  // 再让一拍给没 return 的 async 续体。台架自己的 setTimeout 是真的,代码里的那个被上面的代理顶掉了。
+  const tick = (ms) => new Promise((res) => setTimeout(res, ms));
+  try { await Promise.race([Promise.resolve(r), tick(3000)]); } catch (e) { return { built: true, ok: false, text: `async setup 拒绝:${String(e?.message || e).slice(0, 160)}` }; }
+  await tick(50);
+  return { built: true, ok: views.includes('home'), text: `注册视图 [${views.join(',') || '无'}]${known ? '' : '(ctx 成员表读不到,宽松判定)'}` };
+}
 /** 直接读隔离 state.db 的压缩检查点(只读打开,引擎同时写着也安全);没有 HTTP 面,只能这么核。 */
 const summariesOf = async (sessionId) => {
   const { default: Database } = await import('better-sqlite3');
@@ -1129,8 +1182,11 @@ try {
     if (sid) { const list = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages'); museSays = list.filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n'); }
     const blockedBy = blocked();
     const twoCycles = advanced(second) && !blockedBy;
-    const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0);
-    return { ok, detail: `${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length};自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
+    // Space 写了就必须能装出 home;没写不算错(两个周期里有更要紧的事是正当结果),只记一笔供跨次比对。
+    const space = await museSpaceVerdict(join(home, 'agents', 'muse', 'Space'), health?.version);
+    const spaceAsks = approvals.filter((a) => JSON.stringify(a).includes('/Space/')).length; // Space 目录三档免审:排进审批 = 提示词又把它说成「Library 外」
+    const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && space.ok && !spaceAsks;
+    return { ok, detail: `${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.text};自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
   });
   // ── musewake(09-24,opt-in,单独跑:`--only musewake`):「用户睡了、没事可做」时 Muse 会不会自己 set_next_wake,
   // 引擎会不会真的跳过心跳,用户一动能不能立刻醒。作息按**当前钟点**播:活跃窗口 = 现在 +6h 起 10 个小时(每天每小时一行,

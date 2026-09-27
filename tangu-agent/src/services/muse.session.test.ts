@@ -125,6 +125,16 @@ describe('C1b kickoff 拆分', () => {
     expect(message).toContain('add_muse_todo');
   });
 
+  it('Space 契约写死两条(09-27 实机:包成 function setup 不调用=空白 16 天;以为 Space 要审批=只敢改文案)', () => {
+    for (const mode of ['ask', 'agent', 'auto'] as const) {
+      const { message } = buildCycleMessages({ ...cfg, mode }, {});
+      expect(message).toMatch(/Library and your Space folder|authorized folders and your Space folder/);
+      expect(message).toContain('call ctx.registerView({ id: "home", ... }) at the top level');
+      expect(message).toContain('Do not wrap the file in function setup(ctx)');
+      expect(message.length).toBeLessThan(2500);
+    }
+  });
+
   it('时点数据只在 ephemeralHint 里(顺序:安静 → 待批 → 触发 → 摘要)', () => {
     const { message, ephemeralHint } = buildCycleMessages(cfg, dynA);
     for (const mark of ['No new user messages', '3 of your earlier actions', 'Watch rule fired', "[User's long-term memory]"]) {
