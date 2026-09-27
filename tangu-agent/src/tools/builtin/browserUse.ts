@@ -23,6 +23,7 @@ import { tanguHome } from '../../core/tanguHome.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import { toolSubprocessEnv } from '../../sandbox/credentialEnv.js';
+import { effectiveRemote } from '../../services/remoteOrigin.js';
 
 /** 钉死的 browser-use 版本(月更多次,必须固定);可经 browserUse.pin / TANGU_BROWSER_USE_PIN 覆盖。 */
 const PINNED_VERSION = '0.13.3';
@@ -237,7 +238,11 @@ async function runBrowserTask(ctx: ToolContext, args: Record<string, any>): Prom
   const model = modelConfig();
   if (!model) return { success: false, error: notConfiguredHint() };
 
-  const profileMode = String(process.env.TANGU_BROWSER_USE_PROFILE || cfg().profile || 'system').toLowerCase();
+  // 远程污点 run(含被远端 steer 染上的)不借用户的已登录 Chrome profile(设备能力方案 §4.7 / §6.4-5:缺省不接管用户浏览器),
+  // 一律用引擎自己的独立 profile —— 驱动它的人不在这台电脑前,用户的登录态不该跟着远端走。
+  const profileMode = effectiveRemote(ctx)
+    ? 'dedicated'
+    : String(process.env.TANGU_BROWSER_USE_PROFILE || cfg().profile || 'system').toLowerCase();
   const maxSteps = Number.isFinite(Number(args.max_steps)) && Number(args.max_steps) > 0
     ? Number(args.max_steps)
     : (Number(cfg().maxSteps) > 0 ? Number(cfg().maxSteps) : DEFAULT_MAX_STEPS);

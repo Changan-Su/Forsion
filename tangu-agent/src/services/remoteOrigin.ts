@@ -13,6 +13,7 @@
  */
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { getRawSection } from '../core/config.js';
+import { remoteCwdForbidden } from '../sandbox/hostSandboxProtection.js';
 
 export type RemoteVia = 'tunnel' | 'p2p' | 'lan';
 export interface RemoteInfo {
@@ -73,17 +74,42 @@ export function clampApprovalMode(mode: string | undefined, cap: CapMode): CapMo
 }
 
 /**
- * 远程请求不许设 / 不许改的 agent_config 键(§4.7 请求字段钳制):
+ * 远程**起 run**(POST /agent/runs、TODO 注入照抄的会话配置)不许带的 agent_config 键(§4.7 请求字段钳制,契约 C1 + C7):
  *   verifyCommand —— 以 /bin/sh -c 在宿主执行且不过审批闸;
  *   engineId / soloEngineId —— 外部 ACP 引擎的工具与进程不经本引擎审批闸与路径策略;
  *   extraRoots —— 免审批可写根;
  *   clientCapabilities / client_capabilities —— 会给 run 注册手机能力,而回执打的是云端;
  *   devices —— 设备挂载(P1),远端不可改;
- *   remoteOrigin —— 会话的远程标记(路由侧盖),远端既不能伪造也不能抹掉。
+ *   remoteOrigin —— 会话的远程标记(路由侧盖),远端既不能伪造也不能抹掉;
+ *   muse / activityAccess / automationOrigin / approvalDeferral —— 引擎内部角色键:muse 让 run 看见 add_muse_todo / set_next_wake /
+ *     read_activity,TODO 被批准后排出的 Muse run **不带污点**(Muse 自动档是完全通行)= 远端借 Muse 起一条无钳制的后续执行;
+ *     其余几个改的是「有没有人在看、审批往哪排」;
+ *   delegatedFrom / delegatedBy / subAgentGrants —— 委派身份与授予(子代理管理工具的开口);
+ *   systemPrompt / soul —— 人格替换;toolsMode / toolsList —— 工具黑白名单(本机 Agent 定义的东西)。
+ * 这是**起 run** 的剥离名单(请求里其余键是这一轮的正常参数:execMode / preset / cwd / planMode …;cwd 另由 C8 校验)。
+ * 会话配置的远程**写**走白名单,见 REMOTE_WRITABLE_CONFIG_KEYS。
  */
-export const REMOTE_STRIPPED_CONFIG_KEYS = ['verifyCommand', 'engineId', 'soloEngineId', 'extraRoots', 'clientCapabilities', 'client_capabilities', 'devices', 'remoteOrigin'] as const;
+export const REMOTE_STRIPPED_CONFIG_KEYS = [
+  'verifyCommand', 'engineId', 'soloEngineId', 'extraRoots', 'clientCapabilities', 'client_capabilities', 'devices', 'remoteOrigin',
+  'muse', 'activityAccess', 'automationOrigin', 'approvalDeferral', 'delegatedFrom', 'delegatedBy', 'subAgentGrants',
+  'systemPrompt', 'soul', 'toolsMode', 'toolsList',
+] as const;
 
-/** 远程请求带来的 agent_config:剥掉受保护键、审批档钳到上限。返回新对象,不改入参。 */
+/**
+ * 契约 C7:远程**写会话配置**(PUT|PATCH /agent/sessions/:id/config、远程 POST /agent/sessions 的初始配置)只收这些键;
+ * 其余一律保留存值 —— 存值是本机下一次 run 会照抄的东西,远端改不了、也删不掉。白名单而不是黑名单:明天新加的配置键缺省就远端不可写。
+ *   agentSlug —— 选 Agent(其定义的审批档经激活时再钳,C3);
+ *   modelId / model —— 模型;thinkingLevel / ultra / effort / reasoningEffort —— 思考档一类;
+ *   title / name —— 标题一类;
+ *   approvalMode —— 钳到上限(C3),custom 不收(见 applyRemoteConfigWrite)。
+ * ⚠️ 远端新建的会话因此只存这几个键(execMode / preset / cwd 等不落库):远端那一轮不受影响(run 用请求里的 agent_config),
+ * 只是本机日后打开这个会话时看到的是缺省值。与桌面 unitWeb 路由表(engineRoutes.generated.ts)那条注释同一口径。
+ */
+export const REMOTE_WRITABLE_CONFIG_KEYS: ReadonlySet<string> = new Set([
+  'agentSlug', 'modelId', 'model', 'thinkingLevel', 'ultra', 'effort', 'reasoningEffort', 'title', 'name', 'approvalMode',
+]);
+
+/** 远程请求带来的 agent_config(起 run 用):剥掉受保护键、审批档钳到上限。返回新对象,不改入参。cwd 不在这里动 —— 由路由按 C8 校验、拒整条请求。 */
 export function sanitizeRemoteAgentConfig(cfg: Record<string, any>, cap: CapMode = remoteApprovalCap()): Record<string, any> {
   const out: Record<string, any> = { ...cfg };
   for (const k of REMOTE_STRIPPED_CONFIG_KEYS) delete out[k];
@@ -91,20 +117,43 @@ export function sanitizeRemoteAgentConfig(cfg: Record<string, any>, cap: CapMode
   return out;
 }
 
+/** 契约 C8 的错误码:远程请求的 cwd / project_path 落在根 / 家目录 / 受保护目录(或其祖先)。路由回 400 `{ code, detail }`。 */
+export const REMOTE_CWD_FORBIDDEN = 'REMOTE_CWD_FORBIDDEN';
+/** 远程请求带来的这些路径里有没有 C8 禁用的(空值 / 非字符串不算 —— 没带就是没设)。 */
+export function remoteCwdViolation(...paths: unknown[]): string | null {
+  for (const p of paths) if (typeof p === 'string' && p.trim() && remoteCwdForbidden(p.trim())) return p.trim();
+  return null;
+}
+export function remoteCwdErrorBody(p: string): { code: string; detail: string } {
+  return {
+    code: REMOTE_CWD_FORBIDDEN,
+    detail: `A remote session cannot use ${p} as its working directory (the filesystem root, the home folder, and folders that contain protected configuration are not allowed). Pick a project folder instead.`,
+  };
+}
+
+/** 契约 C9:远端(x-forsion-remote)答审批 / 询问 / 异步审批时夹带 argsOverride → 400。改参数 = 远端改写本机随后要执行的东西
+ *  (与设备审批 §6.1 同理,那边 body 只许三值)。「总允许」的降级在审批兑现路由里做(approve_always → approve)。 */
+export const REMOTE_ARGS_OVERRIDE_FORBIDDEN = 'REMOTE_ARGS_OVERRIDE_FORBIDDEN';
+export function remoteArgsOverrideRejected(headers: Record<string, string | string[] | undefined> | undefined, body: any): boolean {
+  return !!parseRemoteOrigin(headers) && body?.argsOverride != null;
+}
+export const remoteArgsOverrideBody = {
+  code: REMOTE_ARGS_OVERRIDE_FORBIDDEN,
+  detail: 'Editing the arguments of an approval is only available on the host computer. Approve or reject it as is.',
+};
+
 /**
- * 远程写会话配置(next = 合并 / 替换之后的整对象):受保护键一律保留存值(远端既设不了、也删不掉 ——
- * PATCH 的 null / PUT 的漏传都算「删」)。审批档:与存值相同 = 没改,原样留(老客户端 PUT 回写整对象不该把本机设的档降掉);
- * 改成别的值 → 钳到上限;改成 custom → 不收(custom 的 allow 规则放行面远端无从判断,本机会话随后的本机 run 会吃到它);
- * 删键(交还缺省)允许。
+ * 远程写会话配置(next = 合并 / 替换之后的整对象;契约 C7):只有白名单键取 next 的值,其余键一律保留存值
+ * (远端既设不了、也删不掉 —— PATCH 的 null / PUT 的漏传都算「删」)。
+ * 审批档:与存值相同 = 没改,原样留(老客户端 PUT 回写整对象不该把本机设的档降掉);改成别的值 → 钳到上限;
+ * 改成 custom → 不收(custom 的 allow 规则放行面远端无从判断,本机会话随后的本机 run 会吃到它);删键(交还缺省)允许。
  */
 export function applyRemoteConfigWrite(stored: unknown, next: Record<string, any>, cap: CapMode = remoteApprovalCap()): Record<string, any> {
   const prev = stored && typeof stored === 'object' && !Array.isArray(stored) ? (stored as Record<string, any>) : {};
   const has = (o: Record<string, any>, k: string): boolean => Object.prototype.hasOwnProperty.call(o, k);
-  const out: Record<string, any> = { ...next };
-  for (const k of REMOTE_STRIPPED_CONFIG_KEYS) {
-    if (has(prev, k)) out[k] = prev[k];
-    else delete out[k];
-  }
+  const out: Record<string, any> = {};
+  for (const k of Object.keys(prev)) if (!REMOTE_WRITABLE_CONFIG_KEYS.has(k)) out[k] = prev[k];
+  for (const k of REMOTE_WRITABLE_CONFIG_KEYS) if (has(next, k)) out[k] = next[k];
   if (has(out, 'approvalMode') && out.approvalMode !== prev.approvalMode) {
     if (out.approvalMode === 'custom' || typeof out.approvalMode !== 'string') {
       if (has(prev, 'approvalMode')) out.approvalMode = prev.approvalMode;

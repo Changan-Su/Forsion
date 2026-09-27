@@ -37,7 +37,7 @@ import { query } from '../core/db.js';
 import { isHistorianBusy } from '../services/localHistorian.js';
 import { hasHistorianTask } from '../services/historianSession.js';
 import { createRun } from '../services/runStore.js';
-import { parseRemoteOrigin, sanitizeRemoteAgentConfig } from '../services/remoteOrigin.js';
+import { parseRemoteOrigin, sanitizeRemoteAgentConfig, remoteCwdViolation, remoteCwdErrorBody, remoteArgsOverrideRejected, remoteArgsOverrideBody } from '../services/remoteOrigin.js';
 import { enqueueRun } from '../services/agentLoop.js';
 import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt, SPECIAL_AGENTS_DEFAULTS } from '../services/specialAgentsConfig.js';
 import { loadUserHistorianConfig, saveUserHistorianConfig, type UserHistorianConfig } from '../services/historianConfig.js';
@@ -288,6 +288,8 @@ router.post('/agent/special/muse/todos/inject', authMiddleware, async (req: Auth
     } catch { /* 坏 JSON → 空配置,与旧行为一致 */ }
     // 远程来源(契约 C1):注入 run 同样带污点、同样过字段钳制(它照抄会话存值当 agentConfig)。
     const remote = parseRemoteOrigin(req.headers);
+    const badCwd = remote ? remoteCwdViolation(sessionAgentConfig?.cwd) : null;
+    if (badCwd) return res.status(400).json(remoteCwdErrorBody(badCwd));
     if (remote) sessionAgentConfig = sanitizeRemoteAgentConfig(sessionAgentConfig);
 
     // 取选中 TODO（限本人）。
@@ -597,6 +599,8 @@ router.get('/agent/special/approvals/:id', authMiddleware, async (req: AuthReque
 
 router.post('/agent/special/approvals/:id/approve', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
+  // 契约 C9:异步审批只有 approve / reject 两个动作(没有「总允许」);远端夹带 argsOverride → 400。
+  if (remoteArgsOverrideRejected(req.headers, req.body)) return res.status(400).json(remoteArgsOverrideBody);
   try {
     const r = await decideApproval(String(req.params.id || ''), req.user!.userId, 'approve', 'user', req.body?.note);
     if (!r.ok) return res.status(r.status ? 409 : 404).json({ detail: r.error, status: r.status });
@@ -608,6 +612,7 @@ router.post('/agent/special/approvals/:id/approve', authMiddleware, async (req: 
 
 router.post('/agent/special/approvals/:id/reject', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
+  if (remoteArgsOverrideRejected(req.headers, req.body)) return res.status(400).json(remoteArgsOverrideBody);
   try {
     const r = await decideApproval(String(req.params.id || ''), req.user!.userId, 'reject', 'user', req.body?.note);
     if (!r.ok) return res.status(r.status ? 409 : 404).json({ detail: r.error, status: r.status });

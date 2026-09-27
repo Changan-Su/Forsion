@@ -12,7 +12,7 @@ import { realpathSync } from 'node:fs';
 import type { ToolContext } from './toolTypes.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../seams/runContext.js';
-import { protectedHostPaths, credentialPaths, forsionConfigPaths, matchProtected, credentialReadTarget, remoteForbiddenRoot, withinForsionDomains } from '../sandbox/hostSandboxProtection.js';
+import { protectedHostPaths, credentialPaths, forsionConfigPaths, matchProtected, credentialReadTarget, remoteForbiddenRoot, withinForsionDomains, remoteHomeStartupTarget, remoteCwdForbidden, foldCase } from '../sandbox/hostSandboxProtection.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
 
 /** agent 自己目录里的身份/自进化文件:generic 写工具(write_file/edit_file/apply_patch…)一律硬拒——
@@ -22,7 +22,12 @@ const SELF_PROTECTED_AGENT_FILES = new Set(['SOUL.md', 'config.toml', 'HARNESS.m
 
 /** 本次 run 的可写根:当前工作目录 + 当前 agent 的专属文件夹 + 用户显式添加的额外工作文件夹。 */
 export function writableRoots(ctx: ToolContext): string[] {
-  const roots = [path.resolve(ctx.cwd || process.cwd())];
+  const cwdRoot = path.resolve(ctx.cwd || process.cwd());
+  const remote = effectiveRemote(ctx);
+  // 远程污点 run 的 cwd 若是家目录 / 根 / 受保护目录的祖先(契约 C8),它不算可写根 —— 路由已对这种 cwd 回 400,
+  // 这里兜住绕过路由进来的(远端 steer 进本机 run、派生 run 抄来的 cwd、没带 cwd 回落到引擎进程目录):
+  // 写入一律按「工作区外」走越界审批,不再因为「在 cwd 里」就免批。
+  const roots = remote && remoteCwdForbidden(cwdRoot) ? [] : [cwdRoot];
   // agent 的 ~/.tangu/agents/<slug>/ 是它自己的私有目录(Library/ 在此):系统提示承诺它能主动
   // 往 Library 存取资料,故须可写,否则每次写都触发「越界写」审批 → agent 放弃使用 Library。
   // 两个 slug 都算:提示词按展示身份指路(agentLoop「Your Personal Folder」),共用默认记忆的 agent 记忆域却是 xyra ——
@@ -35,7 +40,7 @@ export function writableRoots(ctx: ToolContext): string[] {
   // 用户在「工作范围」里显式加的目录:等同工作区,不再逐次弹越界写审批。
   // 仍受 isProtected 约束(.git 内部、~/.ssh 等一律硬拒),加进来也提不了权。
   // 远程污点 run 没有额外可写根(C1 剥 extraRoots;起跑后才被远端 steer 染上的本机 run 也从此不认)。
-  if (effectiveRemote(ctx)) return roots;
+  if (remote) return roots;
   for (const r of ctx.extraRoots || []) {
     if (typeof r === 'string' && r.trim()) roots.push(path.resolve(r.trim()));
   }
@@ -70,6 +75,14 @@ function realResolve(abs: string): string {
   }
 }
 
+/** 路径里有 `.agents` / `.codex` 段(别的 agent 工具的技能 / 配置目录)。macOS / Windows 按大小写折叠:`.Agents` 就是 `.agents`(评审 B#4)。 */
+function isAgentMetadataPath(p: string): boolean {
+  return p.split(path.sep).some((part) => {
+    const seg = foldCase ? part.toLowerCase() : part;
+    return seg === '.agents' || seg === '.codex';
+  });
+}
+
 /** 受保护位置:.git 元数据目录内部 + 家目录凭据/密钥目录。 */
 function isProtected(abs: string): boolean {
   // 路径里出现 `.git` 段即视为 .git 内部(对齐 Codex forbidden_agent_metadata_write);
@@ -92,7 +105,11 @@ export interface WritePathVerdict {
  */
 export function protectedRemoteWrite(abs: string): string | null {
   const resolved = realResolve(abs);
-  if (resolved.split(path.sep).some((part) => part === '.agents' || part === '.codex')) return resolved;
+  if (isAgentMetadataPath(resolved)) return resolved;
+  // 家目录启动项(C8,远程专属):~/.zshrc、~/.gitconfig、~/.config/**、~/Library/LaunchAgents/**、任何位置的 shell rc ——
+  // 远端把它们写进去,下一次本机登录 / 开终端就以用户身份执行。
+  const startup = remoteHomeStartupTarget(abs);
+  if (startup) return startup;
   // Forsion 家目录 / 引擎 home / 桌面 userData 整片(Agent / 团队 / 引擎的 Library 除外),再加宿主沙箱那张表(引擎包、agent 身份文件)。
   const hit = remoteForbiddenRoot(abs) ?? matchProtected(abs, [...credentialPaths(), ...forsionConfigPaths(), ...protectedHostPaths()]);
   if (hit) return hit;
@@ -121,10 +138,10 @@ export function checkWritePath(ctx: ToolContext, abs: string): WritePathVerdict 
   const resolved = realResolve(abs);
   if (effectiveRemote(ctx)) {
     const hit = protectedRemoteWrite(abs);
-    if (hit) return { ok: false, hardDeny: true, reason: `Remote sessions cannot write protected configuration or credentials: ${resolved}` };
+    if (hit) return { ok: false, hardDeny: true, reason: `Remote sessions cannot write protected configuration, credentials or startup files: ${resolved}` };
   }
   if (ctx.hostSandbox && ctx.hostSandbox.mode !== 'off' && (
-    resolved.split(path.sep).some((part) => part === '.agents' || part === '.codex') ||
+    isAgentMetadataPath(resolved) ||
     protectedHostPaths().some((protectedPath) => isInside(resolved, protectedPath) || isInside(path.resolve(abs), protectedPath))
   )) return { ok: false, hardDeny: true, reason: `Host sandbox protects runtime configuration or metadata: ${resolved}` };
   if (isProtected(resolved)) {

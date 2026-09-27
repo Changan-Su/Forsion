@@ -32,7 +32,7 @@ import { recoverTeamOutputs } from '../services/teamOutputs.js';
 import { withKeyLock } from '../core/keyLock.js';
 import { answerAside, normalizeAsideInput } from '../services/aside.js';
 import { normalizeClientTag } from './runs.js';
-import { parseRemoteOrigin, sanitizeRemoteAgentConfig, applyRemoteConfigWrite, type RemoteInfo } from '../services/remoteOrigin.js';
+import { parseRemoteOrigin, applyRemoteConfigWrite, remoteCwdViolation, remoteCwdErrorBody, type RemoteInfo } from '../services/remoteOrigin.js';
 
 const router = Router();
 
@@ -139,9 +139,12 @@ router.post('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => 
     // 初始 agent_config 与建会话同一条 INSERT(原子):客户端不必再补一次 PUT——补 PUT 失败会留下没有 preset/execMode 的
     // chat 会话,重载后被当 work 初始化(creview 09-07 F2)。老客户端不传 → null,行为不变。
     const rawCfg = agent_config && typeof agent_config === 'object' && !Array.isArray(agent_config) ? agent_config : null;
-    // 远程建会话:初始配置同样过字段钳制 —— 否则远端种下的 verifyCommand / extraRoots 会被本机下一次打开这个会话时原样带进本机 run。
+    // 远程建会话(契约 C7):初始配置按远程写的白名单收(从空存值写起)—— 否则远端种下的 verifyCommand / extraRoots / muse / systemPrompt
+    // 会被本机下一次打开这个会话时原样带进本机 run。项目路径与 cwd 按 C8 校验。
     const remote = parseRemoteOrigin(req.headers);
-    const initCfg = remote ? { ...sanitizeRemoteAgentConfig(rawCfg || {}), remoteOrigin: remoteOriginMarker(remote) } : rawCfg;
+    const badCwd = remote ? remoteCwdViolation(project_path, rawCfg?.cwd) : null;
+    if (badCwd) return res.status(400).json(remoteCwdErrorBody(badCwd));
+    const initCfg = remote ? { ...applyRemoteConfigWrite({}, rawCfg || {}), remoteOrigin: remoteOriginMarker(remote) } : rawCfg;
     const factErr = validSessionFacts(initCfg);
     if (factErr) return res.status(400).json({ detail: factErr });
     const id = uuidv4();
@@ -266,6 +269,9 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     const s = await getOwnSession(req.params.id, userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
     const { title, archived, model_id, emoji, project_path, project_name, projectless } = req.body || {};
+    // 契约 C8:远端改会话的项目路径同样不许指到根 / 家目录 / 受保护目录(桌面据 project_path 给之后的 run 填 cwd)。
+    const badCwd = parseRemoteOrigin(req.headers) ? remoteCwdViolation(project_path) : null;
+    if (badCwd) return res.status(400).json(remoteCwdErrorBody(badCwd));
     const sets: string[] = [];
     const params: any[] = [];
     if (typeof title === 'string') { sets.push('title = ?'); params.push(title.trim().slice(0, 200)); }
@@ -763,7 +769,7 @@ async function writeSessionConfig(req: AuthRequest, res: Response, body: Record<
       if (active.length) return void res.status(409).json({ detail: 'session identity is locked while a run is active' });
     }
     const merged = applySessionFactLock(stored, merge ? mergeConfigPatch(stored, body) : body, msgCount);
-    // 远程写(契约 C1/C3):受保护键(verifyCommand / engineId / extraRoots / devices …)保留存值、审批档不许抬过上限。
+    // 远程写(契约 C7):只收白名单键(agentSlug / 模型 / 思考档 / 标题 / 审批档),其余键保留存值;审批档不许抬过上限(C3)。
     const remote = parseRemoteOrigin(req.headers);
     const cfg = remote ? applyRemoteConfigWrite(stored, merged) : merged;
     // 锁合并之后再校验一次:请求体单看合法(只带 soloEngineId),合并回存值的 soloAgentSlug 就成了双身份 —— 这种写整条拒绝(creview 09-16 P0)。

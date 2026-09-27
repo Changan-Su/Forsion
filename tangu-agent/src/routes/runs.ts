@@ -13,7 +13,7 @@ import { resolveProfile } from '../seams/appProfile.js';
 import { createRun, getRunForUser, listActiveRunsBySession, listEventsFrom } from '../services/runStore.js';
 import { enqueueRun, abortRun, enqueueSteer, expediteSteer, cancelSteer, waitForRunSettlement } from '../services/agentLoop.js';
 import { subscribe, type AgentEvent } from '../services/eventBus.js';
-import { parseRemoteOrigin, sanitizeRemoteAgentConfig, taintRunRemote } from '../services/remoteOrigin.js';
+import { parseRemoteOrigin, sanitizeRemoteAgentConfig, taintRunRemote, remoteCwdViolation, remoteCwdErrorBody } from '../services/remoteOrigin.js';
 
 const router = Router();
 
@@ -145,6 +145,9 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
     // 远程来源(契约 C1:unitWeb 盖的 x-forsion-remote):剥 verifyCommand / engineId / extraRoots / 设备能力,审批档钳到上限。
     // ⚠️ 手机分支的顶层 client_capabilities 握手合进来时,远程请求必须丢弃它:本机引擎给它注册的手机工具,回执打的是云端。
     const remote = parseRemoteOrigin(req.headers);
+    // 契约 C8:远程 run 的 cwd 不许是根 / 家目录 / 受保护目录(或其祖先)—— cwd 是 auto-edit 下免审批的可写根。
+    const badCwd = remote ? remoteCwdViolation(agent_config?.cwd) : null;
+    if (badCwd) return res.status(400).json(remoteCwdErrorBody(badCwd));
     const agentConfig = remote ? sanitizeRemoteAgentConfig(agent_config || {}) : agent_config || {};
     // 客户端面标识(desktop/2.7.4 等,统计维度,与 app_id 正交)。客户端自报,白名单校验后
     // 随 input 落库(不加列:input 本就是 JSONB,免动 stateStore 接缝);不合法静默丢弃。

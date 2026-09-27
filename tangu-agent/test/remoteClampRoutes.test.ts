@@ -103,7 +103,8 @@ describe('会话路由', () => {
   it('POST /agent/sessions:远程建会话的初始配置过钳 + 记远程标记(负对照:本机原样)', async () => {
     const r = await send('POST', '/agent/sessions', { title: 'x', agent_config: HOSTILE }, REMOTE);
     const cfg = r.body.session.agent_config;
-    expect(cfg).toMatchObject({ execMode: 'host', approvalMode: 'auto-edit', thinkingLevel: 'low', remoteOrigin: { via: 'tunnel', marked: false } });
+    // 契约 C7:远程写会话配置 = 白名单(execMode 这类非白名单键也不落库;远端那一轮用请求里的 agent_config,不受影响)
+    expect(cfg).toEqual({ approvalMode: 'auto-edit', thinkingLevel: 'low', remoteOrigin: { via: 'tunnel', marked: false, at: expect.any(String) } });
     for (const k of ['verifyCommand', 'engineId', 'extraRoots', 'clientCapabilities', 'devices']) expect(cfg[k]).toBeUndefined();
     const l = await send('POST', '/agent/sessions', { title: 'x', agent_config: HOSTILE });
     expect(l.body.session.agent_config).toEqual(HOSTILE);

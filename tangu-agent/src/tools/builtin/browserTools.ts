@@ -19,6 +19,7 @@ import { formatToolOutput } from '../outputPersist.js';
 import type { ToolDef, ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import { toolSubprocessEnv } from '../../sandbox/credentialEnv.js';
+import { effectiveRemote } from '../../services/remoteOrigin.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const NAVIGATE_TIMEOUT_MS = 60_000;
@@ -137,10 +138,15 @@ async function findUserBrowser(dirs: string[] = chromeUserDataDirs()): Promise<s
   return null;
 }
 
-/** 无人值守 run:Muse(ctx.muse,且自带 automationOrigin='muse')、自动化规则唤起的 agent run(automationOrigin,
- *  full-auto 且无人看着 —— Codex 09-24 #1)、异步审批档的 run(approvalDeferral)。子代理从父 ctx 继承这些字段。 */
-function isBackgroundRun(ctx: Pick<ToolContext, 'muse' | 'approvalDeferral' | 'automationOrigin'>): boolean {
-  return !!(ctx.muse || ctx.approvalDeferral || ctx.automationOrigin);
+/** 不接管用户浏览器的 run:
+ *  - 无人值守:Muse(ctx.muse,且自带 automationOrigin='muse')、自动化规则唤起的 agent run(automationOrigin,
+ *    full-auto 且无人看着 —— Codex 09-24 #1)、异步审批档的 run(approvalDeferral);
+ *  - 远程污点 run(设备能力方案 §4.7 / §6.4-5:缺省不接管用户浏览器 —— 用户的已登录页面就在这台电脑的屏幕上,
+ *    驱动它的人却不在;含起跑后被远端 steer 染上的,按 runId 现取)。
+ *  子代理从父 ctx 继承这些字段。 */
+type BackgroundCtx = Pick<ToolContext, 'muse' | 'approvalDeferral' | 'automationOrigin' | 'remote' | 'runId'>;
+function isBackgroundRun(ctx: BackgroundCtx): boolean {
+  return !!(ctx.muse || ctx.approvalDeferral || ctx.automationOrigin || effectiveRemote(ctx));
 }
 
 /**
@@ -148,7 +154,7 @@ function isBackgroundRun(ctx: Pick<ToolContext, 'muse' | 'approvalDeferral' | 'a
  * browser.cdp(env TANGU_BROWSER_CDP):'auto'(缺省,自动发现)| 'off' | 显式 ws 地址(台架 / 非常规安装)。
  * 后台 run(Muse、无人值守自动化)绝不碰用户的浏览器:它们开的标签、点的按钮会直接出现在用户眼前。
  */
-export async function userBrowserEndpoint(ctx: Pick<ToolContext, 'muse' | 'approvalDeferral' | 'automationOrigin'>): Promise<string | null> {
+export async function userBrowserEndpoint(ctx: BackgroundCtx): Promise<string | null> {
   if (isBackgroundRun(ctx)) return null;
   const v = String(process.env.TANGU_BROWSER_CDP ?? browserCfg().cdp ?? 'auto').trim();
   if (['off', '0', 'false'].includes(v.toLowerCase())) return null;

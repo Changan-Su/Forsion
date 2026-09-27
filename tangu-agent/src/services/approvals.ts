@@ -15,7 +15,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { publish } from './eventBus.js';
 import { isOutsideWorkspace, writableRoots, protectedLocalWrite, protectedRemoteWrite } from '../tools/fsPolicy.js';
-import { credentialPaths, matchProtected, pathWithin } from '../sandbox/hostSandboxProtection.js';
+import { credentialPaths, matchProtected, pathWithin, canonicalFuturePath } from '../sandbox/hostSandboxProtection.js';
 import { clampApprovalMode, effectiveRemote, remoteApprovalCap, type CapMode, type RemoteInfo } from './remoteOrigin.js';
 import { writeTargetsOf } from '../tools/writeTargets.js';
 import type { ToolCall } from '../core/types.js';
@@ -210,7 +210,10 @@ const SAFE_GIT_FLAGS = new Set([
 ]);
 
 /** Contract C4: a read-only shortcut must not reach credential files. Any path-like argument (resolved against cwd)
- * that is a credential file, lies inside a credential directory, or — for recursive readers — contains one, disqualifies. */
+ * that is a credential file, lies inside a credential directory, or — for recursive readers — contains one, disqualifies.
+ * Recursive roots are compared in both the literal and the realpath form: rg and `grep -r` follow a symlink given as a root
+ * (`rg SECRET link` with link -> ~/.forsion reads auth.json), so a lexical check alone lets that through (review B#1).
+ * Symlinks *inside* the tree are only followed with rg -L/--follow or grep -R — those flags are not on the safe list. */
 function touchesCredentials(program: string, args: string[], cwd: string): boolean {
   const creds = credentialPaths();
   const operands = args.filter((a) => a !== '--' && !a.startsWith('-'));
@@ -220,9 +223,19 @@ function touchesCredentials(program: string, args: string[], cwd: string): boole
   const roots = recursive && !paths.length ? [cwd] : paths;
   return roots.some((a) => {
     const abs = path.resolve(cwd, a);
-    return !!matchProtected(abs, creds) || (recursive && creds.some((c) => pathWithin(c, abs)));
+    if (matchProtected(abs, creds)) return true;
+    if (!recursive) return false;
+    const real = canonicalFuturePath(abs);
+    return creds.some((c) => pathWithin(c, abs) || pathWithin(c, real));
   });
 }
+
+/** Options a known-safe rg/grep may carry. Deliberately absent: rg `-L`/`--follow` and grep `-R` (they dereference symlinks
+ * inside the tree, which a root check cannot see), `--pre` and every option with side effects. Note grep's `-L` is
+ * --files-without-match (harmless) while rg's `-L` is --follow — hence per-program sets. */
+const SAFE_SEARCH_FLAGS = ['-n', '-i', '-l', '-c', '-r', '-v', '-w', '-F', '-E', '--files', '--hidden', '--no-ignore', '--no-config', '--line-number', '--ignore-case', '--fixed-strings', '--files-with-matches', '--count'];
+const SAFE_RG_FLAGS = new Set(SAFE_SEARCH_FLAGS);
+const SAFE_GREP_FLAGS = new Set([...SAFE_SEARCH_FLAGS, '-L']);
 
 /** Only simple unquoted word tokens are classified. Shell parsing remains the shell's job. */
 export function isKnownSafeBash(command: string, cwd: string = process.cwd()): boolean {
@@ -237,7 +250,7 @@ export function isKnownSafeBash(command: string, cwd: string = process.cwd()): b
   // rg can execute --pre helpers and read config containing --pre; remove that implicit input.
   // Even without --pre, arbitrary flags can gain new behavior, so only a bounded option set.
   if (program === 'rg' || program === 'grep') {
-    const flags = new Set(['-n', '-i', '-l', '-L', '-c', '-r', '-R', '-v', '-w', '-F', '-E', '--files', '--hidden', '--no-ignore', '--no-config', '--line-number', '--ignore-case', '--fixed-strings', '--files-with-matches', '--count']);
+    const flags = program === 'rg' ? SAFE_RG_FLAGS : SAFE_GREP_FLAGS;
     if (program === 'rg' && process.env.RIPGREP_CONFIG_PATH) return false;
     return args.every((a) => !a.startsWith('-') || a === '--' || flags.has(a));
   }
@@ -266,7 +279,7 @@ export async function storedApprovalMode(sessionId: string): Promise<ApprovalMod
 
 /** 越界写诊断:同 run 同目录只记一次(反馈包带后端日志;09-21 那份只剩工具名,答不了「它到底写哪儿了」)。 */
 const loggedEscalations = new Set<string>();
-function logEscalation(runId: string, call: ToolCall, ctx: { cwd?: string; extraRoots?: string[] }): void {
+function logEscalation(runId: string, call: ToolCall, ctx: { cwd?: string; extraRoots?: string[]; remote?: RemoteInfo }): void {
   const cwd = ctx.cwd || process.cwd();
   for (const t of writeTargetsOf(call)) {
     const dir = path.dirname(path.resolve(cwd, t));
@@ -274,17 +287,18 @@ function logEscalation(runId: string, call: ToolCall, ctx: { cwd?: string; extra
     if (loggedEscalations.has(key)) continue;
     if (loggedEscalations.size > 500) loggedEscalations.clear(); // ponytail: 只防无界增长,清空后最多重复记一行
     loggedEscalations.add(key);
-    console.warn(`[tangu] 越界写需审批 run=${runId.slice(0, 8)} dir=${dir} roots=${JSON.stringify(writableRoots({ cwd, extraRoots: ctx.extraRoots } as any))}`);
+    console.warn(`[tangu] 越界写需审批 run=${runId.slice(0, 8)} dir=${dir} roots=${JSON.stringify(writableRoots({ cwd, extraRoots: ctx.extraRoots, remote: ctx.remote } as any))}`);
   }
 }
 
 /** 写目标是否越界(工作区外,但非硬拒保护路径)→ 需升级审批。借 Codex writable-roots escalation。 */
-export function writeEscalationNeeded(call: ToolCall, ctx: { cwd?: string; extraRoots?: string[] }): boolean {
+export function writeEscalationNeeded(call: ToolCall, ctx: { cwd?: string; extraRoots?: string[]; remote?: RemoteInfo }): boolean {
   const targets = writeTargetsOf(call);
   if (!targets.length) return false;
   const cwd = ctx.cwd || process.cwd();
   // extraRoots 必须一起带上,否则用户在「工作范围」里加的目录仍会被判越界写、逐次弹审批。
-  const fakeCtx = { cwd, extraRoots: ctx.extraRoots } as any;
+  // remote 也要带:远程污点 run 的 cwd 若是家目录一类(C8),fsPolicy.writableRoots 不认它 —— 不带就等于没这道兜底。
+  const fakeCtx = { cwd, extraRoots: ctx.extraRoots, remote: ctx.remote } as any;
   return targets.some((t) => isOutsideWorkspace(fakeCtx, path.isAbsolute(t) ? t : path.resolve(cwd, t)));
 }
 
@@ -315,8 +329,9 @@ function parseCallArgs(call: ToolCall): any {
  * 判定分支在 gateToolCall 里已经算过一遍,不带出来客户端只能猜(而它猜不到引擎侧生效的 base 档)。
  */
 export interface ApprovalReason {
-  /** custom-ask=用户规则要求问 · escalate=工作区外写入升级 · mode=该档位本就需要审批 */
-  kind: 'custom-ask' | 'escalate' | 'mode';
+  /** custom-ask=用户规则要求问 · escalate=工作区外写入升级 · mode=该档位本就需要审批 ·
+   *  protected=写凭据 / ~/.forsion(-dev) 本机配置(契约 C4 / C6:完全通行也问、总允许不作数)。老客户端不认 protected → 按无理由渲染。 */
+  kind: 'custom-ask' | 'escalate' | 'mode' | 'protected';
   /** 命中的规则串(仅 custom-ask) */
   rule?: string;
   /** 引擎侧**生效**的档位(custom 未命中时是降解后的 base;客户端算不出来) */
@@ -443,7 +458,7 @@ export async function gateToolCall(
     for (const t of writeTargetsOf(call)) {
       const abs = path.isAbsolute(t) ? t : path.resolve(cwd, t);
       if (remote && protectedRemoteWrite(abs)) {
-        return { action: 'reject', rejectReason: `Remote sessions cannot write protected configuration or credential files (${abs}). Ask the user to make this change on the host computer.` };
+        return { action: 'reject', rejectReason: `Remote sessions cannot write protected configuration, credential or startup files (${abs}). Ask the user to make this change on the host computer.` };
       }
       if (!protectedAsk && protectedLocalWrite(abs)) protectedAsk = abs;
     }
@@ -474,7 +489,7 @@ export async function gateToolCall(
     // 模型面文本一律英文(项目约定:提示/工具结果英文,UI/日志中文)
     if (v?.verdict === 'deny') return { action: 'reject', rejectReason: `Denied by approval rule: ${v.rule}` };
     // allow 规则的放行面对远程污点 run 不超过上限档:上限档本身要问的,allow 也不代答(C3)。保护路径写入另说,总要问。
-    if (v?.verdict === 'allow' && !protectedAsk && !(cap && (await capWouldAsk(call, cap, ctx)))) return { action: 'approve' };
+    if (v?.verdict === 'allow' && !protectedAsk && !(cap && remote && (await capWouldAsk(call, cap, ctx, remote)))) return { action: 'approve' };
     forceAsk = v?.verdict === 'ask';
     askRule = forceAsk ? v!.rule : '';
     const base: CapMode = readFailed ? 'readonly' : rules.base;
@@ -485,9 +500,9 @@ export async function gateToolCall(
   if (!forceAsk && name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) return { action: 'approve' };
 
   // 越界写升级:工作区外写一律要批(full-auto 例外:用户已全信任)。远程污点 run 不认额外可写根(同 fsPolicy.writableRoots)。
-  const escCtx = remote ? { ...ctx, extraRoots: undefined } : ctx;
+  const escCtx = remote ? { ...ctx, extraRoots: undefined, remote } : ctx;
   const escalate = ctx.execMode === 'host' && mode !== 'full-auto' && writeEscalationNeeded(call, escCtx);
-  if (escalate) logEscalation(runId, call, ctx);
+  if (escalate) logEscalation(runId, call, escCtx);
 
   if (!escalate && !forceAsk && !protectedAsk) {
     // 接管态的点按类工具只能作用在绑定过的用户标签上 → 「有活绑定」即要批(与执行侧同一真源,不另探端口);
@@ -514,7 +529,7 @@ export async function gateToolCall(
   // 诚实性:这是 hook 挡的,不是用户拒的 —— 不写清楚,模型和用户都会以为「用户拒绝了该操作」
   if (permV.block) return { action: 'reject', rejectReason: 'Denied by a PermissionRequest hook.' };
   // hook 的 allow 对远程污点 run 同样不越过上限档(C3):上限档本身要问的,hook 也不代答;block 照常生效。
-  if (permV.allow && !protectedAsk && !(cap && (await capWouldAsk(call, cap, escCtx)))) return { action: 'approve' };
+  if (permV.allow && !protectedAsk && !(cap && remote && (await capWouldAsk(call, cap, escCtx, remote)))) return { action: 'approve' };
   // 改参重闸:「这个档位下这个工具要不要问」刚在审批卡上被答过(批准者就是在那张卡上改的参数),不问第二遍 ——
   // 否则桌面 / TUI 改完 bash 命令还得再批一次。越界写与 custom ask 规则看的是**参数**,照新参数重问(上面的 deny 规则与 hook 也已按新参数判过)。
   if (editedOnCard && !escalate && !forceAsk && !protectedAsk) return { action: 'approve' };
@@ -522,12 +537,15 @@ export async function gateToolCall(
   const preview = protectedAsk
     ? '⚠ 受保护的配置 / 凭据 · Protected config or credentials · ' + approvalPreview(call)
     : escalate ? '⚠ 工作区外写入 · ' + approvalPreview(call) : approvalPreview(call);
-  // 「为什么问你」(B3):优先级与判定同序 —— 用户自己写的规则 > 越界升级(保护路径同走这一类,卡片沿用已有文案) > 档位本身。
-  const reason: ApprovalReason = forceAsk
-    ? { kind: 'custom-ask', rule: askRule, mode }
-    : escalate || protectedAsk
-      ? { kind: 'escalate', mode }
-      : { kind: 'mode', mode };
+  // 「为什么问你」(B3):保护路径 > 用户自己写的规则 > 越界升级 > 档位本身。
+  // 保护路径排最前:它是「总允许在这里不作数、完全通行也要问」的那个理由,卡片据此说清(契约 C6,桌面映射 zh/en 文案)。
+  const reason: ApprovalReason = protectedAsk
+    ? { kind: 'protected', mode }
+    : forceAsk
+      ? { kind: 'custom-ask', rule: askRule, mode }
+      : escalate
+        ? { kind: 'escalate', mode }
+        : { kind: 'mode', mode };
   // 无人值守且没有异步审批通道(自动化 / Muse 完全通行档,被远端 steer 染色后才会走到这里):没人答,await 就是永久挂起 → 直接拒。
   if (ctx.unattended && !ctx.approvalDeferral) {
     return { action: 'reject', rejectReason: 'This unattended run cannot ask for approval, so the action was not performed.' };
@@ -561,11 +579,12 @@ async function capWouldAsk(
   call: ToolCall,
   cap: CapMode,
   ctx: { execMode?: string; cwd?: string; extraRoots?: string[]; approvalDeferral?: 'queue' | 'agent' },
+  remote: RemoteInfo,
 ): Promise<boolean> {
   if (cap === 'full-auto') return false;
   const name = call.function.name;
   if (name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) return false;
-  if (ctx.execMode === 'host' && writeEscalationNeeded(call, { cwd: ctx.cwd })) return true; // 远程不认额外可写根
+  if (ctx.execMode === 'host' && writeEscalationNeeded(call, { cwd: ctx.cwd, remote })) return true; // 远程不认额外可写根,也不认 C8 禁用的 cwd
   const userBrowser = USER_BROWSER_ACTIONS.has(name) && !ctx.approvalDeferral && await userBrowserBound();
   return toolNeedsApproval(name, cap, { userBrowser, remote: true });
 }
