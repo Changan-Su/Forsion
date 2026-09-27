@@ -4,6 +4,8 @@
  *
  * mode:'host' → 仅本地 host 会话可见；云端(sandbox 强制 + hostExec=false)永不暴露。
  * 写文件经 agentLoop 的审批闸门（与其它 host 写工具同档）。
+ * approval_mode 不对模型开放:审批档只归用户在设置里改;模型传了就报错、什么都不写(与 feat/commands-permissions 同口径)。
+ * 否则 agent 能把自己 / 任意 agent 调成 full-auto,下次激活时 agentActivation 把它填进 run = 自己给自己免审批。
  */
 import type { ToolProvider } from '../toolRegistry.js';
 import { listAgents, getAgent, saveAgent, deleteAgent, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN, DEFAULT_MAX_ITERATIONS } from '../../agents/agentRegistry.js';
@@ -46,7 +48,6 @@ export const manageAgentProvider: ToolProvider = {
               tools: { type: 'array', items: { type: 'string' }, description: 'Allowlist of enabled custom/MCP tool ids (optional)' },
               thinking_level: { type: 'string', enum: [...THINKING_LEVELS], description: 'Thinking intensity (optional)' },
               max_iterations: { type: 'number', description: `Maximum loop iterations per turn (optional, at least ${AGENT_MAX_ITERATIONS_MIN}; an agent may raise its own cap but never lower it)` },
-              approval_mode: { type: 'string', enum: ['readonly', 'auto-edit', 'full-auto'], description: 'Approval level (optional)' },
             },
             required: ['action'],
           },
@@ -65,10 +66,14 @@ export const manageAgentProvider: ToolProvider = {
             if (!slug) return 'Error: delete 需要 slug';
             // 不能删除自己:删了再 create 同 slug = 绕过下面的人格守卫(Codex 评审 #2)。
             if (isSelf(slug, ctx)) return 'Error: 不能删除自己(当前激活的 agent);请用户在设置里操作。';
+            // 用户给它设过审批档 → 不许删:删了再 create 同 slug = 新定义没有档,激活时回落会话档,等于把用户的收紧洗掉(Codex 09-27)。
+            if ((await getAgent(slug))?.approvalMode) return `Error: agent "${slug}" has an approval level set by the user, so only the user can delete it in Settings.`;
             const ok = await deleteAgent(slug);
             return ok ? `已删除 agent: ${slug}` : `未找到 agent: ${slug}`;
           }
           if (action === 'create' || action === 'update') {
+            // 错误语要告诉模型怎么改:捆绑技能等旧材料可能还教它传 approval_mode,别让它卡在这一步。
+            if (args.approval_mode !== undefined) return 'Error: approval_mode can only be changed by the user in Settings. Nothing was saved; call again without approval_mode.';
             if (!args.name || !args.system_prompt) return 'Error: create/update 需要 name 与 system_prompt';
             // slug 归一必须与 saveAgent 的落盘规则一致(非法 slug → slugify(name)),否则可以用
             // 大写等非法变体让守卫查不到 existing、saveAgent 却归一回自己的 slug(Codex 评审 #2)。
@@ -102,7 +107,8 @@ export const manageAgentProvider: ToolProvider = {
               thinkingLevel: args.thinking_level,
               // 省略 ≠ 清空:否则 update 只改 model 就把自己的 150 降回默认 90,上面的「不许自降」守卫形同虚设(Codex 09-13 #1)
               maxIterations: args.max_iterations != null ? Number(args.max_iterations) : (existing?.maxIterations ?? undefined),
-              approvalMode: args.approval_mode,
+              // 保留现值:saveAgent 把 undefined 落成 ''(= 不覆盖会话档),update 一次就把用户设的 readonly 悄悄清掉 —— 同样是放宽。
+              approvalMode: existing?.approvalMode || undefined,
               systemPrompt: String(args.system_prompt),
               soul: args.soul != null ? String(args.soul) : undefined,
               createdBy: 'agent',
