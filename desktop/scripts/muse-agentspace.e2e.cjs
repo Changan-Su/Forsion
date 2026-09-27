@@ -8,6 +8,8 @@
  *    → 主区回落空白态 + feedback 点名「没注册 home、要顶层 registerView」;再写成「home 注册了但 mount 抛错」
  *    → 主区是「插件视图加载失败」+ feedback 点名 mount() threw;再换成用 ctx.agent 从数据渲染的一版(2026-09-27)
  *    → 渲染出待办数与 Journal、挂载时不经手势的 updateTodo 被拒、真点击才放行(引擎收到 done + from pending);再改回 v4;
+ *    再换成 async mount(09-27 dev 上 Muse 真这么写):resolve 出的清理在切走 Space 时执行、视图卸载后才 resolve 的当场执行、
+ *    reject → 主区「插件视图加载失败」+ feedback 点名(从前 Promise 被当成「没有清理」丢掉,异步抛错只剩控制台一行);
  *  ⑤ 退出 → 重启 → 点 Muse 图标 → 命名布局里存的是宿主类型 muse-library,恢复后直接是插件视图(不是 Tangu 内容 / 空框)。
  * 负对照 --nc:假引擎永不更新戳 → ② ③ ④ 必红。先 `npm run build`;跑法 `npm run e2e:museagentspace`;截图 $TMPDIR/forsion-muse-agentspace.png。
  */
@@ -54,6 +56,17 @@ const AGENT_DATA = `ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
   return () => { off(); document.removeEventListener('click', onDoc, true) }
 } })
 `
+// async mount:先同步画个 loading 标记,等 __museAsyncDelay 毫秒再 resolve 清理(清理只数次数);box 在 await 前抓住,卸载后照样可写
+const ASYNC_OK = `ctx.registerView({ id: 'home', title: 'Muse', async mount(el) {
+  el.innerHTML = '<div class="muse-async" data-state="loading" style="padding:24px">async mount</div>'
+  const box = el.firstChild
+  await new Promise((r) => setTimeout(r, Number(window.__museAsyncDelay || 0)))
+  box.dataset.state = 'ready'
+  window.__museAsyncConnectedAtResolve = el.isConnected // 慢那步要证明:resolve 时视图确实已卸载(否则走的是普通清理路径)
+  return () => { window.__museAsyncCleanups = (window.__museAsyncCleanups || 0) + 1 }
+} })
+`
+const ASYNC_THROWS = `ctx.registerView({ id: 'home', title: 'x', async mount(el) { await null; throw new Error('boom async mount') } })\n`
 
 async function launch(home, stubUrl) {
   const app = await electron.launch({
@@ -74,15 +87,17 @@ async function launch(home, stubUrl) {
   await win.locator('.ntf-close').evaluateAll((bs) => bs.forEach((b) => b.click())).catch(() => {})
   return { app, win }
 }
-async function clickMuseSpace(win) {
-  const ok = await win.evaluate(() => {
-    const b = [...document.querySelectorAll('button.rb-space')].find((x) => /muse/i.test(x.getAttribute('aria-label') || x.getAttribute('title') || x.textContent || ''))
+async function clickSpace(win, re) {
+  const ok = await win.evaluate((src) => {
+    const r = new RegExp(src, 'i')
+    const b = [...document.querySelectorAll('button.rb-space')].find((x) => r.test(x.getAttribute('aria-label') || x.getAttribute('title') || x.textContent || ''))
     if (b) b.click()
     return !!b
-  })
+  }, re.source)
   await win.waitForTimeout(1200)
   return ok
 }
+const clickMuseSpace = (win) => clickSpace(win, /muse/)
 const visible = async (win, sel, timeout) => win.waitForSelector(sel, { timeout, state: 'visible' }).then(() => true, () => false)
 
 async function main() {
@@ -192,6 +207,32 @@ async function main() {
     todos = []
     fs.writeFileSync(path.join(space, 'main.js'), mainJs(4), 'utf8'); bump()
     check('改回 v4 后 ≤12s 恢复(ctx.agent 之后)', await visible(win, '.muse-space-hello[data-v="4"]', 12_000))
+
+    // async mount(2026-09-27):Promise 形的 mount 从前被当成「没有清理」—— 切走 Space 时订阅 / 监听不退,异步抛错也不回写
+    const cleanups = () => win.evaluate(() => window.__museAsyncCleanups || 0)
+    await win.evaluate(() => { window.__museAsyncCleanups = 0; window.__museAsyncDelay = 0 })
+    fs.writeFileSync(path.join(space, 'main.js'), ASYNC_OK, 'utf8'); bump()
+    check('async mount:渲染出来(resolve 时视图还挂着)', await visible(win, '.muse-async[data-state="ready"]', 12_000) && (await win.evaluate(() => window.__museAsyncConnectedAtResolve)) === true)
+    const leftHome = await clickSpace(win, /主页|home/)
+    check('async mount:切走 Space → resolve 出的清理执行一次', leftHome && (await cleanups()) === 1, `left=${leftHome} cleanups=${await cleanups()}`)
+    await win.evaluate(() => { window.__museAsyncDelay = 4000; window.__museAsyncConnectedAtResolve = undefined })
+    await clickMuseSpace(win) // 重新挂载:这一版要 4 秒后才 resolve 清理
+    const loading = await attached('.muse-async[data-state="loading"]', 5_000)
+    await clickSpace(win, /主页|home/) // 还没 resolve 就卸载(约挂载后 1.3 秒;慢机器上来不及 → connectedAtResolve 为 true、判红,不会假绿)
+    await win.waitForTimeout(3500)
+    const connectedAtResolve = await win.evaluate(() => window.__museAsyncConnectedAtResolve)
+    check('async mount:视图卸载后才 resolve 的清理当场执行', loading && connectedAtResolve === false && (await cleanups()) === 2, `loading=${loading} connectedAtResolve=${connectedAtResolve} cleanups=${await cleanups()}`)
+    await win.evaluate(() => { window.__museAsyncDelay = 0 })
+    await clickMuseSpace(win)
+    fs.writeFileSync(path.join(space, 'main.js'), ASYNC_THROWS, 'utf8'); bump()
+    const asyncFailed = await win.waitForFunction(() => /插件视图加载失败|Plugin view failed to load/.test(document.querySelector('[data-muse-space="plugin"]')?.textContent || ''), null, { timeout: 12_000 }).then(() => true, () => false)
+    const asyncFb = () => feedback.some((x) => /mount\(\) threw/.test(x) && /boom async mount/.test(x))
+    const t4 = Date.now()
+    while (Date.now() - t4 < 8000 && !asyncFb()) await win.waitForTimeout(300)
+    check('async mount reject → 主区显示「插件视图加载失败」', asyncFailed)
+    check('async mount reject 经 feedback 回写给 Muse', asyncFb(), JSON.stringify(feedback))
+    fs.writeFileSync(path.join(space, 'main.js'), mainJs(4), 'utf8'); bump()
+    check('改回 v4 后 ≤12s 恢复(async mount 之后)', await visible(win, '.muse-space-hello[data-v="4"]', 12_000))
 
     // ⑤ 退出 → 重启 → 点进去就是插件视图(布局只存宿主类型 muse-library)
     await app.close()

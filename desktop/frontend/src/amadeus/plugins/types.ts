@@ -447,8 +447,10 @@ export interface ViewContribution {
   /** Tab title shown in the workbench. */
   title: string
   /** Build the view's DOM into the host-provided element; called once per opened instance.
-   *  Return a cleanup to run when the instance closes (clear timers/observers here). */
-  mount(el: HTMLElement, view?: PluginViewContext): (() => void) | void
+   *  Return a cleanup to run when the instance closes (clear timers/observers here).
+   *  May be async (2026-09-27+): the resolved function is the cleanup (run at once if the view already
+   *  closed); a rejection counts as a mount failure, like a synchronous throw. Older hosts ignore the promise. */
+  mount(el: HTMLElement, view?: PluginViewContext): (() => void) | void | Promise<(() => void) | void>
   /** Default true: at most one instance app-wide (re-opening focuses the existing one). */
   singleton?: boolean
   /** Id of one of THIS plugin's list sources (2026-08-25+): while this view is the active main

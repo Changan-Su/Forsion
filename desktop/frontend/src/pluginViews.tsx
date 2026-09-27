@@ -50,8 +50,17 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
     const gestureEvents = ['pointerdown', 'click', 'keydown'] as const
     const onGesture = (e: Event): void => { if (e.isTrusted && pluginId) notePluginGesture(pluginId) }
     for (const t of gestureEvents) el.addEventListener(t, onGesture, true)
+    const fail = (e: unknown): void => {
+      console.error(`[plugin-view] mount "${def.id}" failed`, e)
+      if (pluginId) recordDevMountError(pluginId, def.id, e)
+      onError.current?.(e)
+      el.textContent = translate('pluginview.mountFailed')
+    }
+    const runCleanup = (fn: () => void): void => {
+      try { fn() } catch (e) { console.error(`[plugin-view] cleanup "${def.id}" failed`, e) }
+    }
     try {
-      cleanup = def.mount(el, {
+      const mounted = def.mount(el, {
         extendView, surface: isMini ? 'mini' : isFloating ? 'floating' : 'main',
         getParams: () => { check(); return { ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params) } },
         setParams: (patch) => { check(); current.current.leaf.setParams({ ...(useWorkspace.getState().leafById(current.current.leaf.id)?.params ?? current.current.params), ...patch }) },
@@ -68,11 +77,17 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
           else useWorkspace.getState().openView(current.current.leaf.type, params, 'main')
         } : undefined,
       })
+      // async mount(`async mount(el) { await load(); …; return () => … }`,agent 自建 Space 常这么写):Promise 不是函数,
+      // 从前被当成「没有清理」—— 每次切回视图订阅 / 监听多挂一份,异步里抛的错也只剩控制台一行、不回写。
+      // 现在:resolve 出的函数就是清理(视图已卸载就当场调用);reject 与同步抛错同一条失败路径(已卸载的不报)。
+      if (mounted && typeof (mounted as PromiseLike<unknown>).then === 'function') {
+        (mounted as PromiseLike<unknown>).then(
+          (d) => { if (typeof d !== 'function') return; if (alive) cleanup = d as () => void; else runCleanup(d as () => void) },
+          (e) => { if (alive) fail(e) },
+        )
+      } else cleanup = mounted as (() => void) | void
     } catch (e) {
-      console.error(`[plugin-view] mount "${def.id}" failed`, e)
-      if (pluginId) recordDevMountError(pluginId, def.id, e)
-      onError.current?.(e)
-      el.textContent = translate('pluginview.mountFailed')
+      fail(e)
     }
     let disposed = false
     const dispose = (): void => {
@@ -81,7 +96,7 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
       alive = false
       listeners.current.clear()
       for (const t of gestureEvents) el.removeEventListener(t, onGesture, true)
-      try { if (typeof cleanup === 'function') cleanup() } catch (e) { console.error(`[plugin-view] cleanup "${def.id}" failed`, e) }
+      if (typeof cleanup === 'function') runCleanup(cleanup)
       el.replaceChildren()
     }
     disposeBeforePaint.current = dispose

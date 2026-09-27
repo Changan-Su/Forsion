@@ -587,14 +587,22 @@ async function activityTailHint(): Promise<string> {
  *  「文件本身就是 setup 函数体、别包 function setup」必须明说:从前只写「a bare main.js setup body」,09-27 实机 Muse 每一版都
  *  包成 function setup(ctx){…} 却不调用 —— 零注册零报错,Space 从首建起一直空白。
  *  ctx.agent(09-27):Space 从数据渲染,别再每周期把状态 / 时间戳写死重写一遍(实机 1.4.x 全是这种改动);核心契约写在这里,
- *  84KB 的 forsion-plugin 技能只在要更多接口时才加载(实机 23 个周期里 13 次为改文案加载它)。 */
+ *  84KB 的 forsion-plugin 技能只在要更多接口时才加载(实机 23 个周期里 13 次为改文案加载它)。
+ *  返回字段与配色变量也得写在这里(09-27 dev 首个 ctx.agent 版 Space):技能不加载,它就只能猜 —— 猜了 status().status
+ *  (「当前状态」卡恒空)、猜了宿主没有的 --panel(卡片落到写死的深色兜底,浅色主题下标题深底深字看不见)。
+ *  变量表 = styles/base.css :root 与深色块都定义的那几个(--surface / --card 只在笔记作用域里有,插件视图拿不到)。 */
 function spaceKickoff(): string {
   return `Your Space: the desktop's "Muse" Space shows the view registered by the Forsion plugin at ${museSpaceDir()} ` +
     '(manifest.json + main.js; load the "forsion-plugin" skill only if you need more of the plugin API than this). ' +
     'main.js runs as the body of setup(ctx), so call ctx.registerView({ id: "home", ... }) at the top level of the file. ' +
     'Do not wrap the file in function setup(ctx) { ... } — nothing calls it, so nothing registers and no error is raised. ' +
-    'Render live data instead of hardcoding it: ctx.agent.status(), ctx.agent.todos(), ctx.agent.schedule(), ctx.agent.library.read(path) ' +
-    '(your Library, e.g. "Journal/<date>.md"; .list() for the tree), ctx.agent.subscribe(cb) to refresh; ctx.agent.updateTodo(id, "done" | "dismissed") works only inside a click handler on your Space. ' +
+    'Render live data instead of hardcoding it — these return Promises (status() can resolve to null): ctx.agent.status() → { running, lastCycleAt, sleepUntil, mode, heartbeatMinutes, pendingApprovals } (times in epoch ms or null); ' +
+    'ctx.agent.todos("pending") → [{ id, title, detail, status, createdAt }] (no argument = every status, dismissed included); ' +
+    'ctx.agent.schedule() → [{ name, date, repeat, auto, lastRun }]; ctx.agent.library.read(path) → the text of a Library file ' +
+    '(e.g. "Journal/<date>.md"; .list() for the tree). ctx.agent.subscribe(cb) returns an unsubscribe function right away (call it in your cleanup); ' +
+    'ctx.agent.updateTodo(id, "done" | "dismissed") works only inside a click handler on your Space. ' +
+    'Colors come only from the host theme variables var(--bg), var(--bg-card), var(--text), var(--text-muted), var(--border), var(--accent) — ' +
+    'no hex values, no other variable names — so light and dark themes both work; your view shares the app\'s page, so prefix every CSS selector with your own root class. ' +
     'Plain JS, no build step, no CDN. It starts empty: build it, then improve what it shows across cycles — never edit it just to refresh status or timestamps. ' +
     'It is reloaded after your cycle ends; a load failure or a missing "home" view reaches you as a [feedback] entry mentioning the Space.';
 }

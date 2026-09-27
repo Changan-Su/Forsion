@@ -332,13 +332,22 @@ function PlugViewHarness() {
     if (!el || !v) return
     el.textContent = ''
     let cleanup: (() => void) | void
+    let live = true
     try {
-      cleanup = v.item.mount(el)
+      const r = v.item.mount(el)
+      // async mount 与真宿主(pluginViews.tsx)同口径:resolve 出的是清理(已卸载就当场调用),reject 记进 __pvError
+      if (r && typeof (r as PromiseLike<unknown>).then === 'function') {
+        (r as PromiseLike<unknown>).then(
+          (d) => { if (typeof d !== 'function') return; if (live) cleanup = d as () => void; else try { (d as () => void)() } catch (e) { console.error('[plugview] cleanup failed', e) } },
+          (e) => { if (live) (window as unknown as { __pvError?: string }).__pvError = String(e) }, // 已卸载的迟到 reject 不记(同真宿主)
+        )
+      } else cleanup = r as (() => void) | void
     } catch (e) {
       ;(window as unknown as { __pvError?: string }).__pvError = String(e)
       throw e
     }
     return () => {
+      live = false
       try { cleanup?.() } catch (e) { console.error('[plugview] cleanup failed', e) }
     }
   }, [views, viewId, nonce])
