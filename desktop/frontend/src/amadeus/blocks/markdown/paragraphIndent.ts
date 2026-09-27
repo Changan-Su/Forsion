@@ -11,11 +11,12 @@
  *  $node 对同名节点 filter+append —— paragraph 被挪到 schema 节点序**尾部**,heading 顶替它成为
  *  缺省块类型,新建/切分块全部变 H1(实测 e2e 栽过,两种错法都别再犯)。
  */
-import { blockquoteSchema, bulletListSchema, commonmark, headingAttr, headingIdGenerator, headingSchema, orderedListSchema, paragraphAttr, paragraphSchema } from '@milkdown/kit/preset/commonmark'
+import { blockquoteSchema, bulletListSchema, commonmark, hardbreakClearMarkPlugin, hardbreakSchema, headingAttr, headingIdGenerator, headingSchema, orderedListSchema, paragraphAttr, paragraphSchema, remarkAddOrderInListPlugin } from '@milkdown/kit/preset/commonmark'
 import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
 import type { ResolvedPos } from '@milkdown/kit/prose/model'
 import { MAX_INDENT } from '@amadeus-shared/indentIo'
 import { indentedBlockquoteSchema, indentedBulletListSchema, indentedOrderedListSchema, indentMarker, markdownBlockIndent } from './structuralIndent'
+import { hardbreakClearMarkKeepAttrs, hardbreakWithHtmlSchema, inlineBrRemark, keepsTrailingBr } from './inlineBr'
 
 export const clampIndent = (n: number): number => Math.max(0, Math.min(MAX_INDENT, Math.floor(n) || 0))
 
@@ -91,12 +92,14 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
       runner: (state, node) => {
         const indent = clampIndent(node.attrs.indent as number)
         const align = normalizeTextAlignment(node.attrs.align)
-        if ((!indent && align === 'left') || node.content.size === 0 && align === 'left') return void base.toMarkdown.runner(state, node)
+        // 末尾是带原文的 `<br>`(D-06,见 ./inlineBr):不走 preset 的 serializeText,它会把尾随 hardbreak 掐掉。
+        const keepBr = keepsTrailingBr(node)
+        if (((!indent && align === 'left') || node.content.size === 0 && align === 'left') && !keepBr) return void base.toMarkdown.runner(state, node)
         state.openNode('paragraph')
         if (align !== 'left') state.addNode('html', undefined, alignMarker(align))
         if (indent) state.addNode('html', undefined, '&#9;'.repeat(indent))
         // serializeText 内联:尾部 hardbreak 掐掉(与基座 preset 同款,内部函数拿不到)
-        const lastIsBreak = node.lastChild?.type.name === 'hardbreak'
+        const lastIsBreak = node.lastChild?.type.name === 'hardbreak' && !keepBr
         state.next(lastIsBreak ? node.content.cut(0, node.content.size - node.lastChild!.nodeSize) : node.content)
         state.closeNode()
       },
@@ -141,10 +144,11 @@ const headingAlignmentSchema = headingSchema.extendSchema((prev) => (ctx) => {
         const indent = clampIndent(node.attrs.indent as number)
         if (indent) state.addNode('html', undefined, indentMarker(indent))
         const align = normalizeTextAlignment(node.attrs.align)
-        if (align === 'left') return void base.toMarkdown.runner(state, node)
+        const keepBr = keepsTrailingBr(node) // 同段落:带原文的尾随 `<br>` 不掐(D-06)
+        if (align === 'left' && !keepBr) return void base.toMarkdown.runner(state, node)
         state.openNode('heading', undefined, { depth: node.attrs.level })
-        state.addNode('html', undefined, alignMarker(align))
-        const lastIsBreak = node.lastChild?.type.name === 'hardbreak'
+        if (align !== 'left') state.addNode('html', undefined, alignMarker(align))
+        const lastIsBreak = node.lastChild?.type.name === 'hardbreak' && !keepBr
         state.next(lastIsBreak ? node.content.cut(0, node.content.size - node.lastChild!.nodeSize) : node.content)
         state.closeNode()
       },
@@ -153,8 +157,13 @@ const headingAlignmentSchema = headingSchema.extendSchema((prev) => (ctx) => {
 })
 
 /** commonmark preset 的原位替换版:paragraph 的 $ctx/$node 换成缩进扩展,**位置不动**
- *  (缺省块类型 = schema 节点序里第一个 block,位置一动 heading 就上位)。 */
-export const commonmarkWithIndent = commonmark.map((p) =>
+ *  (缺省块类型 = schema 节点序里第一个 block,位置一动 heading 就上位)。
+ *  读侧保真 remark(见 PARSE_FIDELITY)插在 preset 的 remark 链**最前面**:早于 remark-line-break
+ *  (它按 `\n` 把 text 拆成新对象)、remark-inline-links、preserve-empty-line(它删行内 `<br>`)。 */
+const PARSE_FIDELITY = [
+  ...inlineBrRemark, // D-06:行内 / 单元格里的 `<br>` → 带原文的 break(否则被 preserve-empty-line 删掉)
+]
+const presetWithReplacements = commonmark.map((p) =>
   (p as unknown) === (paragraphSchema.node as unknown) ? paragraphIndentSchema.node
   : (p as unknown) === (paragraphSchema.ctx as unknown) ? paragraphIndentSchema.ctx
   : (p as unknown) === (headingSchema.node as unknown) ? headingAlignmentSchema.node
@@ -165,7 +174,12 @@ export const commonmarkWithIndent = commonmark.map((p) =>
   : (p as unknown) === (bulletListSchema.ctx as unknown) ? indentedBulletListSchema.ctx
   : (p as unknown) === (orderedListSchema.node as unknown) ? indentedOrderedListSchema.node
   : (p as unknown) === (orderedListSchema.ctx as unknown) ? indentedOrderedListSchema.ctx
+  : (p as unknown) === (hardbreakSchema.node as unknown) ? hardbreakWithHtmlSchema.node
+  : (p as unknown) === (hardbreakSchema.ctx as unknown) ? hardbreakWithHtmlSchema.ctx
+  : (p as unknown) === (hardbreakClearMarkPlugin as unknown) ? hardbreakClearMarkKeepAttrs
   : p)
+export const commonmarkWithIndent = presetWithReplacements.flatMap((p) =>
+  (p as unknown) === (remarkAddOrderInListPlugin.options as unknown) ? [...PARSE_FIDELITY, p] : [p])
 
 /** 缩进档的适用面:列表项/引用块的**任意深度祖先**内一律不适用 —— 列表是 sink/lift 的地盘;
  *  引用块里的段落缩进 md 表示不了(序列化成 `> &#9;` 垃圾前缀,评审 P2),不给设。
