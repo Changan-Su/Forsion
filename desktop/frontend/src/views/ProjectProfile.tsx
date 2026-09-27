@@ -245,6 +245,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     if (e?.code === 'git_timeout') { setReloadAt((n) => n + 1); return { message: t('projectProfile.git.unconfirmed'), info: typeof e?.info === 'string' ? e.info : undefined } }
     // 提交已经落下但复核不过(钩子加了清单外的东西)/ 提交过程中仓库被别的东西改了、没法确认:不猜、不撤,说清楚并重读
     if (e?.code === 'commit_unverified' || e?.code === 'hook_changed_commit') { setReloadAt((n) => n + 1); return { message: t(`projectProfile.git.err.${e.code}`), info: typeof e?.info === 'string' ? e.info : undefined } }
+    // 5xx 先按状态判(哪怕带着机器码):动作可能已经做完
+    if (e?.status >= 500) { setReloadAt((n) => n + 1); return { message: t('projectProfile.git.unconfirmed'), info: String(e?.message || e) } }
     if (typeof e?.code === 'string') return {
       message: GIT_ERROR_CODES.has(e.code) ? t(`projectProfile.git.err.${e.code}`) : String(e?.message || e),
       info: typeof e?.info === 'string' && e.info ? e.info : undefined,
@@ -311,7 +313,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
       // 看完之后改动又变了:重新列出这次会提交的东西(保留已写好的信息),让用户再过目一次
       if (e?.code === 'changes_changed') await gitPendingProject(s.cfg, session.id).then(setPending).catch(() => {})
       // 提交可能已经落下(复核不过 / 没法确认 / 超时 / 断连 / 5xx):收起提交框,再点一次 = 重复提交
-      const landed = ['hook_changed_commit', 'commit_unverified', 'git_timeout'].includes(e?.code) || (typeof e?.code !== 'string' && !(e?.status && e.status < 500))
+      const landed = ['hook_changed_commit', 'commit_unverified', 'git_timeout'].includes(e?.code) || !(e?.status && e.status < 500)
       if (landed) { setCommitDraft(null); setPending(null) }
       throw e
     }), (r) => {
