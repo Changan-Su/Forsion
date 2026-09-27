@@ -1,15 +1,19 @@
 import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
 /**
  * MCP 管理器(仅 standalone/TUI 组装;deps().mcp 可选——microserver/worker 不构造,云端零影响):
- *   - 进程启动时连接 ~/.tangu/mcp.json 启用的 server(stdio / Streamable HTTP / SSE)
+ *   - 进程启动时连接 ~/.tangu/mcp.json 启用的 server(stdio / Streamable HTTP / SSE),并行、单个最多 30s
  *   - listTools 缓存按 (server, tool) 字典序 → 工具 defs 字节级稳定(prompt 缓存纪律)
  *   - server 发 tools/list_changed → 后台刷新缓存,但**只对新 run 生效**(toolsForRun 每 run 取一次快照)
- *   - 结果是第三方内容:文本圈进不可信围栏(截断在围栏内),图片取出交给调用方回灌(M6)
- *   - callTool 带超时;dispose 关闭全部连接(stdio 杀子进程),process.on('exit') 兜底
+ *   - 断线自愈(方案 2026-09-26 §3.3 M3):只认 client 的 onclose(stdio 子进程退出 / 显式关闭)——
+ *     transport 的 onerror 多是良性事件(SSE GET 流重试、405 等),绝不据此重建连接。断线 / 启动没连上的
+ *     server 进后台重试(退避 5s 起翻倍、封顶 5min),连上后进入**下一个** run 的快照,在飞 run 的工具集不动。
+ *     有状态 Streamable HTTP server 重启后旧 session 回 404(规范要求客户端重新 initialize):这是调用结果,
+ *     不是 onerror —— 就地重连并重发一次(404 说明 server 没处理这条请求)。
+ *   - callTool 带超时;dispose 关闭全部连接(stdio 杀子进程)并撤掉重试定时器,process.on('exit') 兜底
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { loadMcpConfig, enabledServers, inferTransport, type McpServerConfig } from './config.js';
@@ -19,6 +23,9 @@ const DEFAULT_CALL_TIMEOUT_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 30_000;
 const RESULT_CAP_CHARS = 50_000;
 const RECONNECT_COOLDOWN_MS = 15_000; // 懒重连冷却:死 server 不会每次调用都重连
+const RETRY_BASE_MS = 5_000; // 后台重试退避起点,逐次翻倍
+const RETRY_MAX_MS = 300_000; // 退避封顶
+const STABLE_MS = 60_000; // 连上后撑过这么久再断,才把退避清零(连上即崩的 server 不会 5s 一次地无限拉起)
 
 export interface McpServerStatus {
   name: string;
@@ -26,6 +33,14 @@ export interface McpServerStatus {
   status: 'connected' | 'connecting' | 'error' | 'disabled';
   toolCount: number;
   error?: string;
+}
+
+/** 时间常量覆写(单测用;生产不传)。 */
+export interface McpManagerOptions {
+  reconnectCooldownMs?: number;
+  retryBaseMs?: number;
+  retryMaxMs?: number;
+  connectTimeoutMs?: number;
 }
 
 export interface McpCallResult {
@@ -45,6 +60,11 @@ interface ServerEntry {
   status: McpServerStatus['status'];
   error?: string;
   lastReconnectAt?: number; // 上次懒重连尝试时刻(冷却用)
+  connecting: Promise<void> | null; // 在飞的连接(后台重试与懒重连共用一次)
+  retryTimer: ReturnType<typeof setTimeout> | null;
+  retryAttempt: number;
+  connectedAt: number;
+  configError: boolean; // 缺 command/url 之类的确定性错误:重试也没用
 }
 
 export interface McpManager {
@@ -52,14 +72,25 @@ export interface McpManager {
   toolsForRun(enabledServerNames?: string[]): Map<string, LoadedMcpTool>;
   callTool(bridged: LoadedMcpTool, args: Record<string, any>, signal?: AbortSignal): Promise<McpCallResult>;
   listStatus(): McpServerStatus[];
-  /** 连接(启动时调用一次;失败的 server 记错误不阻断其他)。 */
+  /** 连接(启动时调用一次;失败的 server 记错误不阻断其他,转后台重试)。 */
   start(): Promise<void>;
   dispose(): Promise<void>;
 }
 
-export function createMcpManager(configFile?: string): McpManager {
+/** 有状态 Streamable HTTP 的 session 失效:规范是 404;SDK 示例 server 对未知 session 回 400 且文案带 session。 */
+function sessionGone(e: unknown, hadSession: boolean): boolean {
+  if (!hadSession || !(e instanceof StreamableHTTPError)) return false;
+  return e.code === 404 || (e.code === 400 && /session/i.test(e.message));
+}
+
+export function createMcpManager(configFile?: string, opts: McpManagerOptions = {}): McpManager {
   const servers: ServerEntry[] = [];
   let exitHook = false;
+  let disposed = false;
+  const reconnectCooldownMs = opts.reconnectCooldownMs ?? RECONNECT_COOLDOWN_MS;
+  const retryBaseMs = opts.retryBaseMs ?? RETRY_BASE_MS;
+  const retryMaxMs = opts.retryMaxMs ?? RETRY_MAX_MS;
+  const connectTimeoutMs = opts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
 
   function buildTransport(name: string, cfg: McpServerConfig): StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport {
     const t = inferTransport(cfg);
@@ -101,22 +132,73 @@ export function createMcpManager(configFile?: string): McpManager {
     }
   }
 
-  async function connect(entry: ServerEntry): Promise<void> {
+  function clearRetry(entry: ServerEntry): void {
+    if (entry.retryTimer) clearTimeout(entry.retryTimer);
+    entry.retryTimer = null;
+  }
+
+  function scheduleRetry(entry: ServerEntry): void {
+    if (disposed || entry.configError || entry.retryTimer) return;
+    const delay = Math.min(retryMaxMs, retryBaseMs * 2 ** Math.min(entry.retryAttempt, 20));
+    entry.retryAttempt++;
+    entry.retryTimer = setTimeout(() => {
+      entry.retryTimer = null;
+      void connect(entry);
+    }, delay);
+    entry.retryTimer.unref?.();
+  }
+
+  /** client 的 onclose:只认当前那个 client(旧连接 / 连接失败时我们自己关掉的 client 不算)。 */
+  function onClientClosed(entry: ServerEntry, client: Client): void {
+    if (disposed || entry.client !== client) return;
+    entry.client = null;
+    entry.status = 'error';
+    entry.error = 'connection closed';
+    if (Date.now() - entry.connectedAt >= STABLE_MS) entry.retryAttempt = 0;
+    console.warn(`[mcp] ${entry.name}: 连接已断开,转后台重连`);
+    scheduleRetry(entry);
+  }
+
+  function connect(entry: ServerEntry): Promise<void> {
+    if (!entry.connecting) entry.connecting = doConnect(entry).finally(() => { entry.connecting = null; });
+    return entry.connecting;
+  }
+
+  async function doConnect(entry: ServerEntry): Promise<void> {
+    if (disposed) return;
+    clearRetry(entry);
+    const stale = entry.client;
+    entry.client = null;
+    if (stale) await stale.close().catch(() => {}); // entry.client 已换掉 → 它的 onclose 不会再触发重连
     entry.status = 'connecting';
+    let client: Client | null = null;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       if (isHostSandboxRestricted()) throw new Error('MCP servers are unavailable while the local sandbox is enabled');
-      const client = new Client({ name: 'tangu-agent', version: '1.0.0' });
-      const transport = buildTransport(entry.name, entry.cfg);
-      const timeout = new Promise<never>((_, rej) =>
-        setTimeout(() => rej(new Error(`connect 超时(${CONNECT_TIMEOUT_MS / 1000}s)`)), CONNECT_TIMEOUT_MS).unref?.(),
-      );
-      await Promise.race([client.connect(transport), timeout]);
-      entry.client = client;
+      let transport: ReturnType<typeof buildTransport>;
+      try {
+        transport = buildTransport(entry.name, entry.cfg);
+      } catch (e) {
+        entry.configError = true;
+        throw e;
+      }
+      const c = new Client({ name: 'tangu-agent', version: '1.0.0' });
+      client = c;
+      c.onclose = () => onClientClosed(entry, c);
+      const timeout = new Promise<never>((_, rej) => {
+        timer = setTimeout(() => rej(new Error(`connect 超时(${connectTimeoutMs / 1000}s)`)), connectTimeoutMs);
+        timer.unref?.();
+      });
+      await Promise.race([c.connect(transport), timeout]);
+      if (disposed) throw new Error('disposed');
+      entry.client = c;
+      entry.connectedAt = Date.now();
       // 工具列表变更通知:后台刷新(只影响之后开始的 run——toolsForRun 每 run 取快照)
-      client.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
-        await refreshTools(entry);
+      c.setNotificationHandler(ToolListChangedNotificationSchema, async () => {
+        if (entry.client === c) await refreshTools(entry);
       });
       await refreshTools(entry);
+      if (entry.client !== c) return; // 列工具期间就断了:onClientClosed 已记错误并排好重试
       entry.status = 'connected';
       entry.error = undefined;
       console.log(`[mcp] ${entry.name}(${entry.transport}) 已连接,${entry.tools.length} 个工具`);
@@ -124,7 +206,14 @@ export function createMcpManager(configFile?: string): McpManager {
       entry.status = 'error';
       entry.error = e?.message || String(e);
       entry.client = null;
-      console.warn(`[mcp] ${entry.name} 连接失败:`, entry.error);
+      // 超时 / 失败的 client 要关掉:否则超时后才起来的 stdio 子进程成了孤儿
+      if (client) await client.close().catch(() => {});
+      if (!disposed) {
+        console.warn(`[mcp] ${entry.name} 连接失败:`, entry.error);
+        scheduleRetry(entry);
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -132,9 +221,12 @@ export function createMcpManager(configFile?: string): McpManager {
     async start() {
       const cfg = loadMcpConfig(configFile);
       for (const [name, c] of enabledServers(cfg)) {
-        servers.push({ name, cfg: c, transport: inferTransport(c), client: null, tools: [], status: 'connecting' });
+        servers.push({
+          name, cfg: c, transport: inferTransport(c), client: null, tools: [], status: 'connecting',
+          connecting: null, retryTimer: null, retryAttempt: 0, connectedAt: 0, configError: false,
+        });
       }
-      // 失败互不阻断;并行连
+      // 失败互不阻断;并行连(没连上的转后台重试,不拖启动)
       await Promise.all(servers.map((s) => connect(s)));
       if (!exitHook && servers.some((s) => s.transport === 'stdio')) {
         exitHook = true;
@@ -158,11 +250,12 @@ export function createMcpManager(configFile?: string): McpManager {
       if (isHostSandboxRestricted()) return { text: 'Error: MCP is unavailable while the local sandbox is enabled', isError: true };
       const entry = servers.find((s) => s.name === bridged.serverName);
       if (!entry) return { text: `Error: MCP server "${bridged.serverName}" 未配置`, isError: true };
-      // 懒重连:server 启动后掉线 / 初次没连上时,调用前按冷却(15s)尝试重连一次——
+      // 懒重连:server 断线 / 初次没连上时,调用前按冷却(15s)尝试重连一次(后台重试正在连就搭它的车)——
       // 避免「server 挂了不重连、工具一直 hang 到 timeout」。冷却防对死 server 每调必连。
       if (entry.status !== 'connected' || !entry.client) {
         const now = Date.now();
-        if (now - (entry.lastReconnectAt || 0) >= RECONNECT_COOLDOWN_MS) {
+        if (entry.connecting) await entry.connecting;
+        else if (now - (entry.lastReconnectAt || 0) >= reconnectCooldownMs) {
           entry.lastReconnectAt = now;
           await connect(entry);
         }
@@ -171,12 +264,25 @@ export function createMcpManager(configFile?: string): McpManager {
         }
       }
       const timeoutMs = entry.cfg.timeoutMs && entry.cfg.timeoutMs > 0 ? entry.cfg.timeoutMs : DEFAULT_CALL_TIMEOUT_MS;
+      const invoke = (c: Client) => c.callTool(
+        { name: bridged.remoteName, arguments: args },
+        undefined,
+        { timeout: timeoutMs, ...(signal ? { signal } : {}) },
+      );
       try {
-        const result = await entry.client.callTool(
-          { name: bridged.remoteName, arguments: args },
-          undefined,
-          { timeout: timeoutMs, ...(signal ? { signal } : {}) },
-        );
+        const client = entry.client;
+        const hadSession = entry.transport === 'http' && !!client.transport?.sessionId;
+        let result;
+        try {
+          result = await invoke(client);
+        } catch (e) {
+          if (!sessionGone(e, hadSession)) throw e;
+          console.warn(`[mcp] ${entry.name}: session 已失效(server 重启?),重新 initialize 后重发一次`);
+          entry.lastReconnectAt = Date.now();
+          await connect(entry); // doConnect 先关掉旧 client(不会触发 onclose 重连)
+          if (entry.status !== 'connected' || !entry.client) throw e;
+          result = await invoke(entry.client);
+        }
         const r = contentToResult(result);
         return { text: fenceMcpText(entry.name, r.text, RESULT_CAP_CHARS), isError: r.isError, images: r.images };
       } catch (e: any) {
@@ -197,6 +303,8 @@ export function createMcpManager(configFile?: string): McpManager {
     },
 
     async dispose() {
+      disposed = true;
+      for (const s of servers) clearRetry(s);
       await Promise.all(servers.map((s) => s.client?.close().catch(() => {})));
       servers.length = 0;
     },
