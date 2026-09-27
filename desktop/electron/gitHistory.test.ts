@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { commitGitVersion, findGit, gitCandidates, gitHistoryStatus, listGitVersions, restoreGitVersion } from './gitHistory'
 import type { GitEnv, GitLabels } from './gitHistory'
-import { PRODUCT_SIDECAR } from '../shared/products'
+import { PRODUCT_SIDECAR, PRODUCT_SIDECAR_PATHS } from '../shared/products'
 
 const GIT = findGit()
 const PRODUCT = PRODUCT_SIDECAR
@@ -318,18 +318,19 @@ describe.skipIf(!GIT)('git version history', () => {
     expect(await text('.gitignore')).not.toContain('credentials.json') // 宿主策略住在 .git/info/exclude,不往用户文件里写
   })
 
-  it('restore never touches the product sidecars even if an old commit tracked them', async () => {
+  it('restore never touches the product sidecars even if an old commit tracked them (all three identity locations)', async () => {
     await put('index.html', 'one')
     const first = await commitGitVersion(root, { name: 'v1', auto: false }, g)
     // 有人(agent / 用户)曾经 add -f 过边车:下一次我方写入前会把它从索引里摘掉,磁盘上原样留着。
-    await put(PRODUCT, '{"id":"p_keep"}')
-    raw(root, 'add', '-f', PRODUCT)
-    raw(root, 'commit', '-m', 'tracked the sidecar by force')
+    // 身份文件现在住 `.tangu/`,兼容读 `.forsion/` 与根目录 —— 三个位置同样对待。
+    for (const rel of PRODUCT_SIDECAR_PATHS) { await put(rel, `{"id":"${rel}"}`); raw(root, 'add', '-f', rel) }
+    raw(root, 'commit', '-m', 'tracked the sidecars by force')
     await put('index.html', 'two')
     await commitGitVersion(root, { name: 'v2', auto: false }, g)
-    expect(raw(root, 'ls-files')).not.toContain(PRODUCT)
+    const tracked = lines(raw(root, 'ls-files'))
+    for (const rel of PRODUCT_SIDECAR_PATHS) expect(tracked).not.toContain(rel)
     await restoreGitVersion(root, first!.id, g)
-    expect(await text(PRODUCT)).toBe('{"id":"p_keep"}') // 目标版本里没有它 —— 也不许被删
+    for (const rel of PRODUCT_SIDECAR_PATHS) expect(await text(rel)).toBe(`{"id":"${rel}"}`) // 目标版本里没有它们 —— 也不许被删
     expect(await text('index.html')).toBe('one')
   })
 

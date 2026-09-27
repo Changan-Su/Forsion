@@ -12,7 +12,7 @@ import { execFile } from 'node:child_process'
 import { accessSync, constants as fsConstants, existsSync, promises as fs, statSync } from 'node:fs'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { PRODUCT_SIDECAR } from '../shared/products'
+import { PRODUCT_SIDECAR, PRODUCT_SIDECAR_PATHS } from '../shared/products'
 import type { GitHistoryStatus, GitRepoState, GitRestoreSummary, GitVersion } from '../shared/products'
 
 /** env = 调用方补全过 PATH 的环境(主进程的 envWithFullPath);gitPath 是测试/宿主的显式覆盖,null = 假装本机没有 git。 */
@@ -78,7 +78,8 @@ const DARWIN_EXTRA = [
 const CONNECT_SIDECAR = '.forsion-connect.json'
 /** 暂存与恢复一律把两个边车排除在 pathspec 之外:`.gitignore` 护不住**已经被跟踪**的文件(agent / 用户 `add -f` 过一次就算),
  *  而恢复到一个没有它的旧提交会把它从磁盘上删掉 —— 产物 id、快捷方式、稳定源一起断。 */
-const SIDECAR_EXCLUDES = [`:(exclude,top)${PRODUCT_SIDECAR}`, `:(exclude,top)${CONNECT_SIDECAR}`]
+const SIDECARS = [...PRODUCT_SIDECAR_PATHS, CONNECT_SIDECAR] // 身份文件的三个位置(`.tangu/` / `.forsion/` / 老版本的根目录)+ 发布标记
+const SIDECAR_EXCLUDES = SIDECARS.map((p) => `:(exclude,top)${p}`)
 /** 旧快照(codeStudioProjects)由宿主兜底排除的那几类文件名,git 这条路不能反而放行:提交是永久的,之后一 push 就泄露。
  *  判据与那边逐字同源(按分隔符成词,`secretSanta.tsx` 不算,`secrets.json` / `my-credentials.yml` 算)。 */
 const SENSITIVE_NAME = /(^|[._-])(secrets?|credentials?|private[-_]?key|service[-_]?account)([._-]|$)/i
@@ -86,7 +87,8 @@ const TOKEN_CREDENTIAL = /^(?:(?:access|refresh|auth|oauth|api)[._-])?tokens?(?:
 /** 单文件体积闸:自动版本每轮都跑,一个几 GB 的缓存 / 素材进了 `add -A` = 每轮哈希一遍,30s 超时还会留下一地松散对象。 */
 const MAX_TRACKED_BYTES = 10 * 1024 * 1024
 const NONCE = /^[0-9a-f]{32}$/
-/** 每次写之前都要在的**安全项**:密钥、环境变量、两个边车。用户 / agent 删了也补回来 —— 这几条是宿主对「不把秘密提交进历史」的兜底。 */
+/** 每次写之前都要在的**安全项**:密钥、环境变量、两个边车。用户 / agent 删了也补回来 —— 这几条是宿主对「不把秘密提交进历史」的兜底。
+ *  边车那行不带斜杠 = 任意层级都算,`.tangu/` 与 `.forsion/` 里的身份文件一并忽略(`.tangu/` 其余内容照常进版本)。 */
 const SAFETY_IGNORES = ['.env', '.env.*', '!.env.example', '*.pem', '*.key', PRODUCT_SIDECAR, CONNECT_SIDECAR]
 /** 只在 init 那一刻播一次的**便利项**。之后用户怎么改都尊重:比如插件项目要把 `dist/` 提交进仓(市场安装从不构建),
  *  把这一行删掉是正当需求 —— 每次写之前都补回来就是宿主在和用户抢 .gitignore(收尾检查抓到的)。 */
@@ -306,7 +308,7 @@ async function ensureSetup(c: Ctx): Promise<void> {
   // 边车若已被跟踪(有人 add -f 过):从索引里摘掉、磁盘上留着。之后它们既被忽略又不在 pathspec 里,恢复再也碰不到。
   // -f:索引里那份与 HEAD、与磁盘都不一样时(add -f 之后又改过)git 缺省拒绝摘除;失败必须点名 ——
   // 已跟踪的文件不吃 .gitignore,悄悄放过 = 紧接着的 `add -A` 把边车提交进去。
-  must(await write(c, 'rm', '--cached', '-f', '--ignore-unmatch', '-q', '--', PRODUCT_SIDECAR, CONNECT_SIDECAR), 'git could not untrack the project sidecars')
+  must(await write(c, 'rm', '--cached', '-f', '--ignore-unmatch', '-q', '--', ...SIDECARS), 'git could not untrack the project sidecars')
   await excludeRisky(c)
 }
 

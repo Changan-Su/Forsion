@@ -13,6 +13,9 @@ const { _electron: electron } = require('playwright-core')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 
 const ROOT = path.join(__dirname, '..')
+// macOS:一个 Electron 实例被强杀后,系统会在下一次启动时先弹「是否恢复窗口」的模态框(崩溃历史,所有未打包的 Electron 共用 com.github.Electron),
+// ready 永远等不到、firstWindow 超时。按进程关掉窗口恢复(Cocoa 的参数域,只作用于这个进程),台架不受上一次被杀的实例连累。
+const NO_RESTORE = process.platform === 'darwin' ? ['-ApplePersistenceIgnoreState', 'YES'] : []
 const FENCE = process.argv.includes('--nc') ? 'text' : 'forsion-creation'
 const results = []
 function check(name, ok, detail) {
@@ -167,7 +170,7 @@ async function main() {
     fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'e2e' }), 'utf8')
     fs.writeFileSync(path.join(dir, 'amadeus-config.dev.json'), JSON.stringify({ localVault: vault, lastVault: vault }), 'utf8')
   }
-  const app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, FORSION_E2E_TRASH_DIR: path.join(home, 'e2e-trash') } })
+  const app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT, ...NO_RESTORE], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, FORSION_E2E_TRASH_DIR: path.join(home, 'e2e-trash') } })
   const errors = []
   let shots = null
   try {

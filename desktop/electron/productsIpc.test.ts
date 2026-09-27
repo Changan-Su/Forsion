@@ -50,7 +50,7 @@ describe('products IPC × 原地加入的外部造物', () => {
     expect(await call('products:isCreation', app)).toBe(false)
     const r = await call('products:register', app, app, false)
     expect(r).toMatchObject({ ok: true, dir: app, product: { external: true } })
-    expect(existsSync(path.join(app, PRODUCT_SIDECAR))).toBe(true)
+    expect(existsSync(path.join(app, '.tangu', PRODUCT_SIDECAR))).toBe(true)
     expect(await call('products:isCreation', app)).toBe(true)
     expect(await call('products:isCreation', other)).toBe(false)
     expect((await call('products:list')).map((p: { root: string }) => p.root)).toContain(app)
@@ -69,7 +69,7 @@ describe('products IPC × 原地加入的外部造物', () => {
     await expect(call('products:trash', product.id, 'unregister')).rejects.toThrow(/changed/) // 没带目录身份:不认
     expect(await call('products:trash', product.id, { action: 'unregister', dirId: product.dirId })).toMatchObject({ ok: true, unregistered: true })
     expect(trashItem).not.toHaveBeenCalled()
-    expect(existsSync(path.join(app, 'index.html')) && existsSync(path.join(app, PRODUCT_SIDECAR))).toBe(true)
+    expect(existsSync(path.join(app, 'index.html')) && existsSync(path.join(app, '.tangu', PRODUCT_SIDECAR))).toBe(true)
     expect(await call('products:isCreation', app)).toBe(false)
 
     const child = await folder(path.join(root, 'game'))
@@ -79,7 +79,7 @@ describe('products IPC × 原地加入的外部造物', () => {
     // 用户看的是这个目录;确认之前它被挪走、同一个 id 的 sidecar 落进了路径上的另一个文件夹 → 不删那个新来的
     await fs.rename(child, path.join(home, 'moved-away'))
     await folder(child)
-    await fs.copyFile(path.join(home, 'moved-away', PRODUCT_SIDECAR), path.join(child, PRODUCT_SIDECAR))
+    await fs.copyFile(path.join(home, 'moved-away', '.tangu', PRODUCT_SIDECAR), path.join(child, PRODUCT_SIDECAR)) // 旧位置(根目录)照样认
     await expect(call('products:trash', managed.id, { action: 'trash', dirId: managed.dirId })).rejects.toThrow(/changed/)
     expect(existsSync(child)).toBe(true)
     const fresh = (await call('products:list')).find((p: { root: string }) => p.root === child)

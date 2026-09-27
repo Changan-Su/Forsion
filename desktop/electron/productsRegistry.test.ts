@@ -28,7 +28,14 @@ async function project(name: string, files: Record<string, string> = {}): Promis
   }
   return dir
 }
-const sidecarFile = (dir: string): string => path.join(dir, PRODUCT_SIDECAR)
+/** 身份文件现在的位置:`<项目>/.tangu/.forsion-product.json`(根目录 / `.forsion/` 是兼容读的旧位置)。 */
+const sidecarFile = (dir: string): string => path.join(dir, '.tangu', PRODUCT_SIDECAR)
+/** 测试里手写身份文件:`.tangu/` 可能还没有。 */
+const writeSidecarFile = async (dir: string, content: string): Promise<void> => {
+  await fs.mkdir(path.join(dir, '.tangu'), { recursive: true })
+  await fs.writeFile(sidecarFile(dir), content)
+}
+const copySidecar = async (from: string, to: string): Promise<void> => writeSidecarFile(to, await fs.readFile(sidecarFile(from), 'utf8'))
 const sidecarOf = async (dir: string): Promise<Record<string, unknown>> => JSON.parse(await fs.readFile(sidecarFile(dir), 'utf8'))
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => { setTimeout(resolve, ms) })
 
@@ -93,7 +100,7 @@ describe('产物身份(sidecar)', () => {
   it('version ≥ 1 的 sidecar 保住身份,只有解析不了 / 没 id 的才重铸', async () => {
     const dir = await project('v2', { 'index.html': 'x' })
     const first = await ensureProduct(root, dir)
-    await fs.writeFile(sidecarFile(dir), JSON.stringify({ ...(await sidecarOf(dir)), version: 2, future: 'keep' }, null, 2))
+    await writeSidecarFile(dir, JSON.stringify({ ...(await sidecarOf(dir)), version: 2, future: 'keep' }, null, 2))
     const before = (await fs.stat(sidecarFile(dir))).mtimeMs
 
     const listed = (await scanProducts(root)).find((p) => p.root === dir)!
@@ -107,7 +114,7 @@ describe('产物身份(sidecar)', () => {
 
     // version 不是数 / < 1 = 身份不齐,照旧重铸
     const zero = await project('v0', { 'index.html': 'x' })
-    await fs.writeFile(sidecarFile(zero), JSON.stringify({ version: 0, id: 'p_0123456789ab', createdAt: 1 }))
+    await writeSidecarFile(zero, JSON.stringify({ version: 0, id: 'p_0123456789ab', createdAt: 1 }))
     const minted = (await scanProducts(root)).find((p) => p.root === zero)!
     expect(minted.id).not.toBe('p_0123456789ab')
     expect(await sidecarOf(zero)).toMatchObject({ version: 1, id: minted.id })
@@ -280,7 +287,7 @@ describe('containment', () => {
       const dir = await project('escape-read', { 'index.html': 'x' })
       await fs.symlink(loot, path.join(dir, 'pub'))
       // 克隆 / 下载来的模板可以自带 sidecar —— 这条路从来不经过 updateProduct
-      await fs.writeFile(sidecarFile(dir), JSON.stringify({ version: 1, id: 'p_aaaaaaaaaaaa', createdAt: 1, entry: 'pub/loot.html' }))
+      await writeSidecarFile(dir, JSON.stringify({ version: 1, id: 'p_aaaaaaaaaaaa', createdAt: 1, entry: 'pub/loot.html' }))
 
       const product = (await scanProducts(root)).find((p) => p.root === dir)!
       expect(product.id).toBe('p_aaaaaaaaaaaa') // 身份是齐的,不该被重铸
@@ -296,7 +303,7 @@ describe('复制来的项目', () => {
     const first = await ensureProduct(root, original)
     await sleep(40) // 拉开目录 birthtime
     const copy = await project('alpha', { 'index.html': 'x' })
-    await fs.copyFile(sidecarFile(original), sidecarFile(copy)) // 访达里整个复制 = 连 id/createdAt 一起复制
+    await copySidecar(original, copy) // 访达里整个复制 = 连 id/createdAt 一起复制
 
     const list = await scanProducts(root)
     const zeta = list.find((p) => p.name === 'zeta')!
@@ -350,7 +357,7 @@ describe('外部造物(原地加入)', () => {
     const first = await ensureProduct(root, original)
     await sleep(40)
     const copy = await outside('copy', { 'index.html': 'x' })
-    await fs.copyFile(sidecarFile(original), sidecarFile(copy))
+    await copySidecar(original, copy)
     const list = await scanProducts(root, [reg(copy)])
     expect(list.find((p) => p.name === 'orig')!.id).toBe(first.id)
     const copied = list.find((p) => p.name === 'copy')!
@@ -383,10 +390,43 @@ describe('外部造物(原地加入)', () => {
   })
 })
 
+describe('身份文件的位置', () => {
+  it('老版本放在根目录 / .forsion/ 的身份照认、原地不动(老版本只认根目录那份,搬走它老版本会重铸 id);改名写回原位置', async () => {
+    const a = await project('legacy-root', { 'index.html': 'x' })
+    await fs.writeFile(path.join(a, PRODUCT_SIDECAR), JSON.stringify({ version: 1, id: 'p_0123456789ab', createdAt: 1, name: 'Root one' }))
+    const b = await project('legacy-forsion', { 'index.html': 'x' })
+    await fs.mkdir(path.join(b, '.forsion'))
+    await fs.writeFile(path.join(b, '.forsion', PRODUCT_SIDECAR), JSON.stringify({ version: 1, id: 'p_abcdefabcdef', createdAt: 1 }))
+    const list = await scanProducts(root)
+    expect(list.find((p) => p.name === 'Root one')!.id).toBe('p_0123456789ab')
+    expect(list.find((p) => p.name === 'legacy-forsion')!.id).toBe('p_abcdefabcdef')
+    expect(existsSync(path.join(a, '.tangu'))).toBe(false) // 没搬
+    expect(existsSync(path.join(a, PRODUCT_SIDECAR)) && existsSync(path.join(b, '.forsion', PRODUCT_SIDECAR))).toBe(true) // 没删
+    await updateProduct(root, 'p_0123456789ab', { name: 'Renamed' })
+    expect(JSON.parse(await fs.readFile(path.join(a, PRODUCT_SIDECAR), 'utf8'))).toMatchObject({ id: 'p_0123456789ab', name: 'Renamed' })
+    expect(existsSync(path.join(a, '.tangu'))).toBe(false)
+  })
+
+  it('新铸的身份只写进 .tangu/;.tangu 是软链(克隆来的仓可以自带 .tangu -> 别处)→ 不从那里读、不往那里写', async () => {
+    const fresh = await project('fresh', { 'index.html': 'x' })
+    await scanProducts(root)
+    expect(existsSync(sidecarFile(fresh))).toBe(true)
+    expect(existsSync(path.join(fresh, PRODUCT_SIDECAR))).toBe(false)
+    const target = path.join(home, 'link-target'); await fs.mkdir(target)
+    await fs.writeFile(path.join(target, PRODUCT_SIDECAR), JSON.stringify({ version: 1, id: 'p_ffffffffffff', createdAt: 1 }))
+    const linked = await project('linked', { 'index.html': 'x' })
+    await fs.symlink(target, path.join(linked, '.tangu'))
+    const list = await scanProducts(root)
+    expect(list.some((p) => p.id === 'p_ffffffffffff')).toBe(false) // 没跟着软链去读别处的身份
+    expect(list.some((p) => p.name === 'linked')).toBe(false)       // 写不了身份 = 不列(同只读盘)
+    expect(await fs.readdir(target)).toEqual([PRODUCT_SIDECAR])      // 也没往别处写
+  })
+})
+
 describe('坏 sidecar 与未知字段', () => {
   it('坏掉的 sidecar 当作没有,重铸而不抛', async () => {
     const dir = await project('corrupt', { 'index.html': 'x' })
-    await fs.writeFile(sidecarFile(dir), 'not json {')
+    await writeSidecarFile(dir, 'not json {')
     const list = await scanProducts(root)
     expect(list).toHaveLength(1)
     expect(isProductId(list[0].id)).toBe(true)
@@ -394,7 +434,7 @@ describe('坏 sidecar 与未知字段', () => {
 
     // 能解析但身份不合格(id 形状不对)→ 同样重铸,其余字段留着
     const bad = await project('bad-id', { 'index.html': 'x' })
-    await fs.writeFile(sidecarFile(bad), JSON.stringify({ version: 1, id: 'nope', createdAt: 1, name: 'Kept', custom: { keep: 'me' } }))
+    await writeSidecarFile(bad, JSON.stringify({ version: 1, id: 'nope', createdAt: 1, name: 'Kept', custom: { keep: 'me' } }))
     const second = (await scanProducts(root)).find((p) => p.root === bad)!
     expect(isProductId(second.id)).toBe(true)
     expect(second.name).toBe('Kept')
@@ -404,7 +444,7 @@ describe('坏 sidecar 与未知字段', () => {
   it('重写时保留未知字段', async () => {
     const dir = await project('extra', { 'index.html': 'x' })
     const product = await ensureProduct(root, dir)
-    await fs.writeFile(sidecarFile(dir), JSON.stringify({ ...(await sidecarOf(dir)), futureField: { a: 1 }, note: 'keep me' }))
+    await writeSidecarFile(dir, JSON.stringify({ ...(await sidecarOf(dir)), futureField: { a: 1 }, note: 'keep me' }))
     await updateProduct(root, product.id, { name: 'Renamed' })
     expect(await sidecarOf(dir)).toMatchObject({ id: product.id, name: 'Renamed', futureField: { a: 1 }, note: 'keep me' })
   })
@@ -418,10 +458,10 @@ describe('坏 sidecar 与未知字段', () => {
     const rtl = String.fromCharCode(0x202e) // U+202E,双向覆写
     const bad: unknown[] = [`report${rtl}gnp.lnk`, `bad${String.fromCharCode(1)}name`, '   ', 'x'.repeat(101), 42, null]
     for (const name of bad) {
-      await fs.writeFile(sidecarFile(dir), JSON.stringify({ ...base, name }))
+      await writeSidecarFile(dir, JSON.stringify({ ...base, name }))
       expect((await getProduct(root, id))?.name).toBe('folder-name')
     }
-    await fs.writeFile(sidecarFile(dir), JSON.stringify({ ...base, name: '  好名字 Good  ' }))
+    await writeSidecarFile(dir, JSON.stringify({ ...base, name: '  好名字 Good  ' }))
     expect((await getProduct(root, id))?.name).toBe('好名字 Good') // 合格的照常用,并且 trim
   })
 })
@@ -524,6 +564,6 @@ describe('边界', () => {
     expect(listed).toHaveLength(1)
     expect(listed[0].id).toBe(ensured.id)
     expect((await sidecarOf(dir)).id).toBe(ensured.id)
-    expect((await fs.readdir(dir)).filter((n) => n.startsWith(PRODUCT_SIDECAR))).toEqual([PRODUCT_SIDECAR]) // 没留下 tmp
+    expect((await fs.readdir(path.join(dir, '.tangu'))).filter((n) => n.startsWith(PRODUCT_SIDECAR))).toEqual([PRODUCT_SIDECAR]) // 没留下 tmp
   })
 })

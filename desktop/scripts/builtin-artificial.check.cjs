@@ -35,6 +35,9 @@ const path = require('path')
 const { _electron: electron } = require('playwright-core')
 
 const ROOT = path.join(__dirname, '..')
+// macOS:一个 Electron 实例被强杀后,系统会在下一次启动时先弹「是否恢复窗口」的模态框(崩溃历史,所有未打包的 Electron 共用 com.github.Electron),
+// ready 永远等不到、firstWindow 超时。按进程关掉窗口恢复(Cocoa 的参数域,只作用于这个进程),台架不受上一次被杀的实例连累。
+const NO_RESTORE = process.platform === 'darwin' ? ['-ApplePersistenceIgnoreState', 'YES'] : []
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-artificial-'))
 const UD = path.join(home, 'userdata') // 同一份 user-data-dir = 同一份 localStorage(开关要跨断言存活)
 const PROJECTS = path.join(home, 'Forsion-Dev', 'Project') // = defaultWorkspaceDir()/Project(dev)
@@ -56,7 +59,7 @@ fs.mkdirSync(PLUGIN, { recursive: true })
 fs.writeFileSync(path.join(PLUGIN, 'manifest.json'), JSON.stringify({ id: 'word-counter', name: 'Word counter', version: '0.1.0', apiVersion: 1, main: 'main.js' }))
 fs.writeFileSync(path.join(PLUGIN, 'main.js'), 'return () => {}\n')
 
-// 托管根之外的两个文件夹:一个原地加入造物;另一个自带一份 sidecar(像克隆 / 解压来的)但没在本机登记 —— 不该出现。
+// 托管根之外的两个文件夹:一个原地加入造物;另一个自带一份 sidecar(像克隆 / 解压来的,放在老版本的根目录位置)但没在本机登记 —— 不该出现。
 const EXTERNAL = path.join(home, 'code', 'Weather board')
 fs.mkdirSync(EXTERNAL, { recursive: true })
 fs.writeFileSync(path.join(EXTERNAL, 'index.html'), '<!doctype html><meta charset="UTF-8"><title>Weather board</title><h1>Weather board</h1>')
@@ -150,7 +153,7 @@ const SNAP = `(() => {
 
 async function boot() {
   const app = await electron.launch({
-    args: [`--user-data-dir=${UD}`, '--lang=zh-CN', ROOT],
+    args: [`--user-data-dir=${UD}`, '--lang=zh-CN', ROOT, ...NO_RESTORE],
     cwd: ROOT,
     // HOME 覆写见文件头的⚠️;TANGU_BACKEND_URL 指向死端口 = 不连任何引擎(本题不需要模型)。
     env: { ...process.env, HOME: home, TANGU_HOME: home, TANGU_BACKEND_URL: 'http://127.0.0.1:1' },
@@ -209,8 +212,8 @@ async function main() {
     const s1b = await win.evaluate(SNAP)
     const extCard = s1b.cards.find((c) => reg && reg.product && c.id === reg.product.id)
     check(
-      '2b 原地加入外部文件夹:登记成功、身份写进它自己的 sidecar、出现在栅格(网页组);只带 sidecar 没登记的不出现',
-      !!reg && reg.ok && reg.dir === EXT && fs.existsSync(path.join(EXT, '.forsion-product.json')) && isExt === true && isFake === false
+      '2b 原地加入外部文件夹:登记成功、身份写进它自己的 .tangu/.forsion-product.json(根目录不留)、出现在栅格(网页组);只带 sidecar 没登记的不出现',
+      !!reg && reg.ok && reg.dir === EXT && fs.existsSync(path.join(EXT, '.tangu', '.forsion-product.json')) && !fs.existsSync(path.join(EXT, '.forsion-product.json')) && isExt === true && isFake === false
         && !!extCard && extCard.group === 'web' && !s1b.cards.some((c) => c.name === 'Not added'),
       JSON.stringify({ reg, isExt, isFake, cards: s1b.cards.map((c) => c.name) }),
     )
@@ -227,7 +230,7 @@ async function main() {
     const stillCreation = await win.evaluate((dir) => window.tangu.productsIsCreation(dir), EXT)
     check(
       '2c 外部造物的菜单是「从造物移除」(不是移到废纸篓);移除 = 只取消登记:文件夹与 sidecar 都在,栅格里没了',
-      items.includes('从造物移除') && !items.includes('移到废纸篓') && fs.existsSync(path.join(EXT, 'index.html')) && fs.existsSync(path.join(EXT, '.forsion-product.json'))
+      items.includes('从造物移除') && !items.includes('移到废纸篓') && fs.existsSync(path.join(EXT, 'index.html')) && fs.existsSync(path.join(EXT, '.tangu', '.forsion-product.json'))
         && !s1c.cards.some((c) => extCard && c.id === extCard.id) && stillCreation === false,
       JSON.stringify({ items, cards: s1c.cards.map((c) => c.name), stillCreation }),
     )
