@@ -10,7 +10,7 @@
  *   ⑤ 在等拍板时停止 → run aborted、调用不执行、登记表清空(事后点批准回 false/410)
  *   ⑥ 没握手的 run(TUI / 通道 / 老客户端)照旧阻塞:没拍板前模型拿不到下一轮
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,6 +25,26 @@ import { createRun, getRun } from '../src/services/runStore.js';
 import { subscribe } from '../src/services/eventBus.js';
 import { resolveApproval, type ApprovalDecision } from '../src/services/approvals.js';
 import { enqueueRun, abortRun, APPROVAL_UPDATE_OPEN } from '../src/services/agentLoop.js';
+
+// ⑧⑨ 用:路径带 prectx → PreToolUse 注入上下文;参数带 boom → 执行抛错。其余一律透传原实现(①–⑦ 不受影响)。
+vi.mock('../src/hooks/index.js', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../src/hooks/index.js')>();
+  return {
+    ...orig,
+    runHooks: async (event: any, input: any, ctx: any) => (event === 'PreToolUse' && JSON.stringify(input?.tool_input ?? '').includes('prectx')
+      ? { additionalContext: ['PRECTX-MARK: this repo indents with tabs'], systemMessages: [], runs: [] }
+      : orig.runHooks(event, input, ctx)),
+  };
+});
+vi.mock('../src/tools/registry.js', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('../src/tools/registry.js')>();
+  return {
+    ...orig,
+    executeTool: async (call: any, ctx: any) => (String(call?.function?.arguments ?? '').includes('boom')
+      ? Promise.reject(new Error('remote link dropped'))
+      : orig.executeTool(call, ctx)),
+  };
+});
 
 const USER = 'u1';
 let home: string;
@@ -284,5 +304,34 @@ describe('挂起审批(托盘 run)', () => {
     expect(payloads.length).toBe(2);
     expect(toolMsgs(payloads[1]).some((t) => t.includes("Waiting for the user's approval"))).toBe(false);
     expect(existsSync(join(outside, 'block.txt'))).toBe(true);
+  }, 20_000);
+
+  it('⑧ PreToolUse 注入的上下文:占位里有,兑现后写回的真结果里也还在(不随原位替换丢掉)', async () => {
+    script = [outsideWrite('c-ctx', 'prectx.txt'), finalStep('Waiting for approval.'), finalStep('Done.')];
+    const r = await start(true);
+    const req = await r.nextApproval();
+    await until(() => payloads.length >= 2, '收尾轮');
+    expect(toolMsgs(payloads[1]).find((t) => t.includes("Waiting for the user's approval"))).toContain('PRECTX-MARK');
+    decide(req, { action: 'approve' });
+    expect((await r.settled()).status).toBe('done');
+    const msg = (payloads[2].messages as any[]).find((m) => m.role === 'tool' && m.tool_call_id === 'c-ctx');
+    expect(String(msg?.content)).not.toContain("Waiting for the user's approval");
+    expect(String(msg?.content)).toContain('PRECTX-MARK');
+  }, 20_000);
+
+  it('⑨ 批准后执行中途抛错 → 不说「执行失败」,而说「可能已生效、先核查再重试」(防模型重试把副作用做两遍)', async () => {
+    script = [outsideWrite('c-boom', 'boom.txt'), finalStep('Waiting for approval.'), finalStep('Will verify first.')];
+    const r = await start(true);
+    const req = await r.nextApproval();
+    await until(() => payloads.length >= 2, '收尾轮');
+    decide(req, { action: 'approve' });
+    expect((await r.settled()).status).toBe('done');
+    const update = userMsgs(payloads[2]).find((t) => t.startsWith(APPROVAL_UPDATE_OPEN));
+    expect(update).toContain('[failed] write_file (call c-boom)');
+    expect(update).toContain('may already have taken effect');
+    expect(update).not.toContain('It ran and failed');
+    const msg = (payloads[2].messages as any[]).find((m) => m.role === 'tool' && m.tool_call_id === 'c-boom');
+    expect(String(msg?.content)).toContain('remote link dropped');
+    expect(String(msg?.content)).toContain('Check the current state before retrying');
   }, 20_000);
 });

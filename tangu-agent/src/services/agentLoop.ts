@@ -170,12 +170,13 @@ export const TURN_INTERRUPTED_MARKER =
   '</turn_interrupted>';
 
 /** 挂起审批(托盘客户端,见 approvals.ParkedApproval)给模型的占位工具结果:调用**没跑**,别重试,先干别的,
- *  结局稍后以 <approval_update> 送达;没别的可干就正常收尾 —— 收尾闸门会等用户拍板再把它叫醒。 */
+ *  结局稍后以 <approval_update> 送达(真输出替换这条占位,不进那一行);没别的可干就正常收尾 —— 收尾闸门会等用户拍板再把它叫醒。
+ *  「书写顺序不是依赖」只对互相独立的步骤成立:真实的前置条件(先备份再删)必须等 —— 别为了让台架先干别的而删掉这半句。 */
 export function parkedToolResult(preview: string): string {
   return `⏸ Waiting for the user's approval: ${preview}\n` +
     'This call has NOT run yet. It is queued in the user\'s approval tray and they may take a while. Do not retry or re-issue it, and do not stop to wait for it. ' +
-    'Keep going right now with every remaining step that does not need this call\'s result, including steps the user listed after it: the order a request was written in is not a dependency. Only work that truly needs this call\'s output should wait. ' +
-    'As soon as the user decides you will receive an <approval_update> message: if approved, the call runs with these exact arguments (or the user\'s edited version) and its output is included there; if rejected, it never runs. ' +
+    'Keep going right now with every remaining step that neither needs this call\'s output nor relies on it having already happened. The order the user listed independent steps in is not by itself a dependency, but a real precondition is (for example, a backup that must finish before a delete): hold such steps until the <approval_update> arrives. ' +
+    'As soon as the user decides you will receive an <approval_update> message: if approved, the call runs with these exact arguments (or the user\'s edited version) and this placeholder is replaced by its real output; if rejected, it never runs. ' +
     'If everything left depends on it, end your turn with a brief note; you will be resumed automatically with the outcome.';
 }
 /** 挂起调用的结局回灌(user 行,落库 —— 后续 run 回放要看得到批准后那次执行的输出)。桌面按开头标记渲染成一行通知。 */
@@ -1852,7 +1853,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       toolMessage: ChatMessage;
     };
     // 挂起的调用(托盘 run):tool_call id → 待兑现项。decided 兑现时记下决定与先后(seq),迭代边界按拍板先后执行。
-    interface ParkedCall { call: ToolCall; effCall: ToolCall; preview: string; parallelGroup?: string; decision?: ApprovalDecision; seq?: number }
+    // preCtxText:PreToolUse 在挂起前注入的上下文 —— 占位里带着它,兑现后写回的真结果也要带,否则原位替换时就丢了(Codex 09-27 第二轮)。
+    interface ParkedCall { call: ToolCall; effCall: ToolCall; preview: string; preCtxText: string; parallelGroup?: string; decision?: ApprovalDecision; seq?: number }
     const parked = new Map<string, ParkedCall>();
     let parkedSeq = 0;
     let parkedWake: (() => void) | null = null; // 收尾闸门等拍板时挂的唤醒
@@ -1919,7 +1921,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
       if (ac.signal.aborted) throw new AbortLikeError();
       if (decision.action === 'park') {
-        const entry: ParkedCall = { call, effCall, preview: decision.preview, parallelGroup };
+        const entry: ParkedCall = { call, effCall, preview: decision.preview, preCtxText, parallelGroup };
         parked.set(call.id, entry);
         void decision.decided.then((d) => { entry.decision = d; entry.seq = ++parkedSeq; parkedWake?.(); });
         const msg = parkedToolResult(decision.preview);
@@ -2053,22 +2055,27 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         parked.delete(e.call.id);
         const d = e.decision!;
         let status: 'approved' | 'failed' | 'rejected';
+        let uncertain = false;
         let done: ExecutedToolCall;
         if (d.action === 'reject') {
           status = 'rejected';
           done = await mkRejected(e.call, Date.now(), e.parallelGroup, d.rejectReason || '用户拒绝了该操作。');
         } else {
           try {
-            done = await runApprovedCall(e.call, withArgsOverride(e.effCall, d), Date.now(), e.parallelGroup, '');
+            done = await runApprovedCall(e.call, withArgsOverride(e.effCall, d), Date.now(), e.parallelGroup, e.preCtxText);
             status = done.toolResult.isError ? 'failed' : 'approved';
           } catch (err: any) {
             if (ac.signal.aborted || err instanceof AbortLikeError) throw err;
+            // 抛到这里的(容器清理失败 / MCP 远端调用断连 / 执行完发布结果时出错)都发生在执行开始之后:它可能已经生效。
+            // 说成「失败」会诱导模型重试 → 副作用做两遍(Codex 09-27 第二轮 P1)。如实写「结局不确定,先核查再决定」。
             status = 'failed';
-            done = await mkRejected(e.call, Date.now(), e.parallelGroup, `Error: ${err?.message || err}`);
+            uncertain = true;
+            done = await mkRejected(e.call, Date.now(), e.parallelGroup, `Error: ${err?.message || err}\nThe call was approved and started, but it raised an error before its result was recorded, so it may already have taken effect. Check the current state before retrying; do not repeat it blindly.`);
           }
         }
         const inContext = await putBackParkedResult(e.call.id, done);
         const said = status === 'rejected' ? 'It was NOT run; that call\'s result above now says so.'
+          : uncertain ? 'It was started but raised an error before its result was recorded, so it may already have taken effect; verify the current state before retrying.'
           : status === 'failed' ? 'It ran and failed; the error is now that call\'s result above.'
             : 'It has run; its output is now that call\'s result above.';
         parts.push(`[${status}] ${e.call.function.name} (call ${e.call.id}) — ${e.preview.split('\n')[0].slice(0, 200)}\n${said}` +

@@ -136,8 +136,9 @@ export function ChatPreview() {
           approvalTray={empty ? undefined : (
             <ApprovalTray
               items={pendingPromptsOf(sample)}
-              onDecide={(_mid, _id, decision, args) => setAction(`approval:${decision}:${String(args?.command || '')}`)}
-              onAnswer={(_mid, _id, answer) => setAction(`inquiry:${answer}`)}
+              // 预览没有引擎回执、样例条目永不离开:返回 false(=没送达)让托盘解锁,可以反复点着看
+              onDecide={(_mid, _id, decision, args) => { setAction(`approval:${decision}:${String(args?.command || '')}`); return false }}
+              onAnswer={(_mid, _id, answer) => { setAction(`inquiry:${answer}`); return false }}
             />
           )}
           disabled={false}

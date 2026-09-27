@@ -122,7 +122,8 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
         </span>
         <Stat d={desc} />
         <span className="tool-row-status">
-          {ev.parked ? <PauseCircle size={11} style={{ color: waiting ? 'var(--accent-ink)' : 'var(--text-faint)' }} />
+          {asking ? <PauseCircle size={11} style={{ color: 'var(--accent-ink)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>
+            : ev.parked ? <PauseCircle size={11} style={{ color: waiting ? 'var(--accent-ink)' : 'var(--text-faint)' }} />
             : ev.done && ev.isError ? <XCircle size={11} style={{ color: 'var(--danger)' }} /> : null}
         </span>
       </button>
