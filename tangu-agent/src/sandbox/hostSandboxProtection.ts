@@ -272,14 +272,6 @@ function remoteCwdProtectedDirs(): string[] {
   ])];
 }
 
-/**
- * 契约 C8:远程请求带来的 cwd / 会话 project_path 能不能用。true = 拒(路由回 400 `REMOTE_CWD_FORBIDDEN`)。
- * 拒:realpath 是根目录 / 家目录 / 家目录的祖先(同 startProjectSession.isForbiddenProjectRoot —— 那边挂着整棵工具树,
- * 这层不能引它,三行判断照抄),或是任一受保护目录本身 / 它的祖先。
- * 为什么:cwd 是 auto-edit 下免审批的可写根 —— 远端把 cwd 设成 ~,~/.zshrc、~/Library/LaunchAgents 就都成了「工作区内」。
- * 字面与真实路径两种形态都判(软链指到家目录一样拒);路径不存在不抛(canonicalFuturePath 解析最深已存在的祖先)。
- * 相对路径按引擎进程 cwd 解析 —— 与 loop 里文件工具的解析口径一致。
- */
 /** 应用配置 / 数据区(P0 第三轮 E11,C8 加固):远程 cwd 落在它们**之内**也拒(不只是祖先)。
  *  ~/Library(macOS:Application Support / Preferences / Cookies / Keychains / LaunchAgents …)、~/AppData 与 %APPDATA% / %LOCALAPPDATA%
  *  (Windows)、XDG 配置 / 数据 / 状态目录(~/.config、~/.local/share、~/.local/state 及其 $XDG_* 覆盖)。
@@ -295,6 +287,14 @@ function remoteAppConfigDirs(): string[] {
   ]);
 }
 
+/**
+ * 契约 C8:远程请求带来的 cwd / 会话 project_path 能不能用。true = 拒(路由回 400 `REMOTE_CWD_FORBIDDEN`)。
+ * 拒:realpath 是根目录 / 家目录 / 家目录的祖先(同 startProjectSession.isForbiddenProjectRoot —— 那边挂着整棵工具树,
+ * 这层不能引它,三行判断照抄),或是任一受保护目录本身 / 它的祖先。
+ * 为什么:cwd 是 auto-edit 下免审批的可写根 —— 远端把 cwd 设成 ~,~/.zshrc、~/Library/LaunchAgents 就都成了「工作区内」。
+ * 字面与真实路径两种形态都判(软链指到家目录一样拒);路径不存在不抛(canonicalFuturePath 解析最深已存在的祖先)。
+ * 相对路径按引擎进程 cwd 解析 —— 与 loop 里文件工具的解析口径一致。
+ */
 export function remoteCwdForbidden(p: string): boolean {
   const forms = [...new Set([path.resolve(p), canonicalFuturePath(p)])];
   const homes = withCanonical([os.homedir()]);
