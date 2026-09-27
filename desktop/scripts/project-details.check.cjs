@@ -101,6 +101,12 @@ async function run(app, win, stub, seen, home, ctx) {
   await win.waitForSelector('#root', { timeout: 30_000 })
   await win.waitForSelector('.t2sw, .t2s-side', { timeout: 30_000 })
   await sleep(1200)
+  // 造物 IPC 在主进程里换成桩:台架的托管根是真实的 ~/Forsion(-Dev)/Project,「加入造物」不能往那里复制东西
+  await app.evaluate(({ ipcMain }, root) => {
+    globalThis.__adoptCalls = []
+    ipcMain.removeHandler('products:adopt')
+    ipcMain.handle('products:adopt', (_e, source, name) => { globalThis.__adoptCalls.push({ source, name }); return { ok: true, dir: `${root}/${name}`, name, files: 3, product: {} } })
+  }, path.join(home, 'Creations'))
   await openSession(win, 'Demo main', 'pd-main')
   await win.locator('.dv-edge-right').click()
   const details = win.locator('[data-tangu-details]')
@@ -123,6 +129,17 @@ async function run(app, win, stub, seen, home, ctx) {
   }))
   check('1 项目会话 → 右栏是 PROJECT 详情:头部 = 「项目」+ 可编辑名称 + 路径 + 状态行(会话数 + 分支*)、三个标签', head.kind === '项目' && head.name === 'Demo Project' && /Demo Project$/.test(head.pathText || '') && /3 个会话/.test(head.state) && /main\*/.test(head.state) && head.tabs.length === 3 && head.hasOpen, JSON.stringify(head))
   check('1a 项目上下文只按会话拉一次(GET /agent/project-context?sessionId=pd-main)', seen.ctxGets.length >= 1 && seen.ctxGets.every((id) => id === 'pd-main'), JSON.stringify(seen.ctxGets))
+
+  // ── 1h 加入造物:路径旁的按钮 → 复制进托管根;原项目与会话不动 ────────────────────
+  const addBtn = profile.locator('[data-project-creation="add"]')
+  const addLabel = (await addBtn.textContent().catch(() => '')) || ''
+  await addBtn.click().catch(() => {})
+  const doneBtn = profile.locator('[data-project-creation="done"]')
+  await doneBtn.waitFor({ timeout: 5_000 }).catch(() => {})
+  const adoptCalls = await app.evaluate(() => globalThis.__adoptCalls || [])
+  const adoptNotice = (await profile.locator('.profile-save-notice').textContent().catch(() => '')) || ''
+  await details.screenshot({ path: shots.creationAdded = shot('project-creation-added-zh-light') })
+  check('1h 路径旁「加入造物」→ products:adopt(项目目录, 项目名);按钮换成「在造物中查看」,提示已复制;会话目录不变', /加入造物/.test(addLabel) && adoptCalls.length === 1 && adoptCalls[0].source === ctx.cwd && adoptCalls[0].name === 'Demo Project' && /在造物中查看/.test((await doneBtn.textContent().catch(() => '')) || '') && /已复制进造物：Demo Project/.test(adoptNotice) && (await profile.getAttribute('data-project-profile')) === ctx.cwd, JSON.stringify({ addLabel, adoptCalls, adoptNotice }))
 
   // ── 1b–1g 项目图标:emoji(选择器)→ 导入图片 → 图片上换 emoji → 移除;头部与侧栏组头同一份 ───────
   const emblem = profile.locator('.team-profile-hero .team-profile-emblem')
@@ -410,6 +427,7 @@ async function run(app, win, stub, seen, home, ctx) {
   const defGit = details.locator('[data-project-profile] [data-project-git]')
   await defGit.waitFor()
   check('8b2 默认工作区的 Git 页:只读说明在场,没有任何写动作', await defGit.locator('[data-git-action]').count() === 0 && await defGit.locator('[data-project-git-readonly="shared"]').count() === 1, await defGit.textContent())
+  check('8b3 默认工作区没有「加入造物」(所有不在项目里的对话共用这个目录)', await details.locator('[data-project-creation]').count() === 0)
 
   // ── 8c/8d 默认组里的旧别名会话:面板跟会话自己的目录;别名是家目录 → Agent 详情 ────────
   await openSession(win, 'Old default chat', 'pd-alias')
