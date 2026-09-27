@@ -16,6 +16,9 @@
  *   - 应用级路由:standalone/main.ts 的 `app.get('/health', …)` 之类。
  *   - 路由文件里只认 `router.<get|post|put|patch|delete>(<字符串字面量 | 同文件 const 常量>, …)`;
  *     模板字符串、正则、`*`、`(…)`、`?`、`.route(`、`.all(`、嵌套子 router 一律报错。
+ *   - **覆盖断言**(Codex 终审 out1 #5):上面几种之外的挂载写法以前会被静默漏抽(表里没有 = 远端 403,--check 照样绿)。
+ *     现在 main.ts 里**每一处** `app`、index.ts 里被挂载的 module router 的**每一处**引用、路由文件里**每一个** Router() 都得是
+ *     认得的形态,否则失败 —— 见 assertAppUsesKnown / assertModuleRouterUsesKnown / assertSingleRouter。
  *   - 引擎插件经 registerRoutes 贡献的路由在构建期不可知 → 表里没有 → 运行时 default-deny(远端 403)。
  *
  * 用法(desktop 目录下):
@@ -323,6 +326,106 @@ function stripComments(src) {
   return out
 }
 
+/** 字符串字面量的内容换成空格(引号与长度保留、偏移不漂):扫描标识符时,字符串里的 `app` / `Router(` 不算。 */
+function blankStrings(src) {
+  let out = ''
+  let i = 0
+  const n = src.length
+  while (i < n) {
+    const c = src[i]
+    if (c === "'" || c === '"' || c === '`') {
+      let j = i + 1
+      while (j < n && src[j] !== c) {
+        if (src[j] === '\\') j++
+        else if (src[j] === '\n' && c !== '`') break
+        j++
+      }
+      out += c + src.slice(i + 1, Math.min(j, n)).replace(/[^\n]/g, ' ') + (j < n ? src[j] : '')
+      i = j + 1
+      continue
+    }
+    out += c
+    i++
+  }
+  return out
+}
+
+const lineOf = (src, index) => src.slice(0, index).split('\n').length
+const IDENT = '[A-Za-z_$][\\w$]*'
+/** app 上不产生路由的调用(起服务 / 设置项)。 */
+const APP_NONROUTE = new Set(['listen', 'set', 'disable', 'enable'])
+
+/**
+ * main.ts 覆盖断言:剥注释 + 剥字符串内容后,每一处 `app` 标识符都必须是下面之一 ——
+ *   `const app = express()`(恰好一次);`app.<get|post|put|patch|delete>('<字面量路径>', …)`;
+ *   `app.use(express.<json|urlencoded|raw|text>(…))`(请求体解析);`app.use((req, res, next) => …)`(无路径的内联中间件,CORS);
+ *   `app.use('<前缀>', mod.<router>)`(前缀由调用方再判);`app.<listen|set|disable|enable>(…)`。
+ * 其余(`app.all` / `app.route` / `app.use(mod.x)` / `app.use('/', someRouter)` / `app.use(express.static(…))` /
+ * 把 app 交给别的函数 / `app[...]` / 第二个 express())一律失败。main.ts 里也不许自己造 Router()。
+ */
+function assertAppUsesKnown(mainSrc) {
+  const code = blankStrings(mainSrc)
+  let decls = 0
+  for (const m of code.matchAll(/\bapp\b/g)) {
+    const where = `standalone/main.ts:${lineOf(code, m.index)}`
+    if (m.index > 0 && /[.$\w]/.test(code[m.index - 1])) continue // obj.app / $app 之类不是这个标识符
+    const before = code.slice(Math.max(0, m.index - 16), m.index)
+    const after = code.slice(m.index + 3)
+    if (/\b(?:const|let|var)\s+$/.test(before) && /^\s*=\s*express\s*\(\s*\)/.test(after)) { decls++; continue }
+    const call = new RegExp(`^\\s*\\.\\s*(${IDENT})\\s*\\(\\s*`).exec(after)
+    if (!call) fail(`${where}: unsupported use of \`app\` (only app.<verb>('<path>'), app.use(<body parser | (req, res, next) => … | '/', mod.<router>>) and app.${[...APP_NONROUTE].join('/')} are modelled) — extend the generator before mounting routes this way`)
+    const verb = call[1]
+    const rest = mainSrc.slice(m.index + 3 + call[0].length) // 原文(带字符串)判字面量
+    if (METHODS.has(verb)) {
+      if (!/^(['"])[^'"\n]+\1/.test(rest)) fail(`${where}: app.${verb}(...) route path must be a string literal`)
+      continue
+    }
+    if (APP_NONROUTE.has(verb)) continue
+    if (verb === 'use') {
+      if (/^express\s*\.\s*(?:json|urlencoded|raw|text)\s*\(/.test(rest)) continue
+      if (new RegExp(`^\\(\\s*${IDENT}\\s*,\\s*${IDENT}\\s*,\\s*${IDENT}\\s*\\)\\s*=>`).test(rest)) continue
+      if (new RegExp(`^(['"])[^'"\\n]*\\1\\s*,\\s*mod\\s*\\.\\s*${IDENT}\\s*\\)`).test(rest)) continue
+      fail(`${where}: unsupported app.use(...) form — only body parsers, an inline (req, res, next) middleware and app.use('/', mod.<router>) are modelled`)
+    }
+    fail(`${where}: unsupported app.${verb}(...)`)
+  }
+  if (decls !== 1) fail(`standalone/main.ts: expected exactly one \`const app = express()\`, found ${decls}`)
+  if ((code.match(/\bexpress\s*\(\s*\)/g) || []).length !== 1) fail('standalone/main.ts: a second express() app is not modelled')
+  if (/\bRouter\s*\(/.test(code)) fail('standalone/main.ts: creating a Router() here is not modelled')
+}
+
+/**
+ * index.ts 覆盖断言:被 main.ts 挂载的 module router(userRouter / dataRouter)的每一处引用都必须是
+ *   `const <name> = Router()`、`<name>.use(<./routes/* 导入>)`、接口里的类型声明 `<name>: Router;`、或 return 对象里的简写 `{ …, <name>, … }`。
+ * `<name>.use('/p', x)` / `<name>.use(makeRouter())` / `<name>.get(...)` / 把它交给别的函数 —— 一律失败。
+ */
+function assertModuleRouterUsesKnown(indexSrc, name, imports) {
+  const code = blankStrings(indexSrc)
+  for (const m of code.matchAll(new RegExp(`\\b${name}\\b`, 'g'))) {
+    const where = `index.ts:${lineOf(code, m.index)}`
+    if (m.index > 0 && /[.$\w]/.test(code[m.index - 1])) fail(`${where}: unsupported reference to module router ${name}`)
+    const before = code.slice(Math.max(0, m.index - 16), m.index)
+    const after = code.slice(m.index + name.length)
+    if (/\bconst\s+$/.test(before) && /^\s*=\s*Router\s*\(\s*\)/.test(after)) continue
+    const use = new RegExp(`^\\s*\\.\\s*use\\s*\\(\\s*(${IDENT})\\s*\\)`).exec(after)
+    if (use) {
+      if (!imports.has(use[1])) fail(`${where}: ${name}.use(${use[1]}) is not a ./routes/* import`)
+      continue
+    }
+    if (/^\s*:\s*Router\s*;/.test(after)) continue // 接口成员的类型声明
+    if (/[{,]\s*$/.test(before) && /^\s*[,}]/.test(after)) continue // return { userRouter, dataRouter, … } 简写
+    fail(`${where}: unsupported use of module router ${name} (only ${name}.use(<./routes/* import>) is modelled)`)
+  }
+}
+
+/** 路由文件覆盖断言:恰好一个 Router(),且绑定名就是 `router`(别名 router 上的路由会被 routesOfFile 漏掉)。 */
+function assertSingleRouter(src, rel) {
+  const code = blankStrings(src)
+  const all = [...code.matchAll(/\bRouter\s*\(/g)]
+  const named = [...code.matchAll(/\bconst\s+router\s*=\s*(?:express\s*\.\s*)?Router\s*\(\s*\)/g)]
+  if (all.length !== 1 || named.length !== 1) fail(`${rel}: expected exactly one \`const router = Router()\` (found ${all.length} Router() call(s)); other router instances are not modelled`)
+}
+
 function validatePath(path, where) {
   if (path === '/') return
   if (!path.startsWith('/')) fail(`${where}: path must start with '/': ${path}`)
@@ -332,13 +435,14 @@ function validatePath(path, where) {
 }
 
 /** 解析一个路由文件:router.<method>(<literal|const>, …)。 */
-function routesOfFile(abs) {
+function routesOfFile(abs, root = ENGINE_SRC) {
   const raw = readFileSync(abs, 'utf8')
   const src = stripComments(raw)
   const consts = new Map()
   for (const m of src.matchAll(/\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*(['"])([^'"\n]*)\2\s*;/g)) consts.set(m[1], m[3])
   const out = []
-  const rel = relative(ENGINE_SRC, abs).split('\\').join('/')
+  const rel = relative(root, abs).split('\\').join('/')
+  assertSingleRouter(src, rel)
   for (const m of src.matchAll(/\brouter\s*\.\s*([A-Za-z]+)\s*\(\s*/g)) {
     const verb = m[1]
     const line = src.slice(0, m.index).split('\n').length
@@ -369,6 +473,7 @@ export function extractEngineRoutes(engineSrc = ENGINE_SRC) {
   const mainSrc = stripComments(readFileSync(join(engineSrc, 'standalone/main.ts'), 'utf8'))
   const indexSrc = stripComments(readFileSync(join(engineSrc, 'index.ts'), 'utf8'))
   const routes = []
+  assertAppUsesKnown(mainSrc)
   // 应用级路由(/health)
   for (const m of mainSrc.matchAll(/\bapp\s*\.\s*(get|post|put|patch|delete)\s*\(\s*(['"])([^'"\n]+)\2/g)) {
     validatePath(m[3], 'standalone/main.ts')
@@ -385,13 +490,14 @@ export function extractEngineRoutes(engineSrc = ENGINE_SRC) {
     const name = m[3]
     if (imports.has(name)) { files.add(imports.get(name)); continue } // 直接导出的路由文件(adminRouter 形态)
     if (!new RegExp(`\\bconst\\s+${name}\\s*=\\s*Router\\(\\)`).test(indexSrc)) fail(`index.ts: cannot resolve module router ${name}`)
+    assertModuleRouterUsesKnown(indexSrc, name, imports)
     const uses = [...indexSrc.matchAll(new RegExp(`\\b${name}\\s*\\.\\s*use\\s*\\(\\s*([A-Za-z_$][\\w$]*)\\s*\\)`, 'g'))]
     for (const u of uses) {
       if (!imports.has(u[1])) fail(`index.ts: ${name}.use(${u[1]}) is not a ./routes/* import`)
       files.add(imports.get(u[1]))
     }
   }
-  for (const f of [...files].sort()) routes.push(...routesOfFile(join(engineSrc, f)))
+  for (const f of [...files].sort()) routes.push(...routesOfFile(join(engineSrc, f), engineSrc))
   const seen = new Set()
   for (const r of routes) {
     const k = `${r.method} ${r.path}`
