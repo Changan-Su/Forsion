@@ -18,7 +18,7 @@ export interface LoadedMcpTool {
 
 const NAME_MAX = 64;
 
-function sanitizePart(s: string): string {
+export function sanitizePart(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 

@@ -11,6 +11,7 @@
 import { readFileSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import { mcpConfigFile, tanguHome } from '../core/tanguHome.js';
 import { getRawSection, saveSection } from '../core/config.js';
+import { sanitizePart } from './toolBridge.js';
 
 export interface McpServerConfig {
   /** stdio:子进程命令(如 npx);与 url 二选一。 */
@@ -39,11 +40,45 @@ export function inferTransport(cfg: McpServerConfig): 'stdio' | 'http' | 'sse' {
   return 'http'; // url 默认 Streamable HTTP(SSE 须显式声明)
 }
 
+/**
+ * 设备 MCP 的保留前缀(方案 2026-09-26 §4.6-3):`mcp__dev_<alias>__<tool>` 是引擎注入的设备工具命名空间,
+ * mcp.json 里的第三方 server 不得占用。按**桥接后**的形态判、不分大小写:`dev.x` / `DEV x` 经 sanitizePart
+ * 都会桥成 `mcp__dev_x__…`(大小写不同也足以让模型与人混淆)。
+ */
+export const RESERVED_SERVER_PREFIX = 'dev_';
+export function isReservedServerName(name: string): boolean {
+  return sanitizePart(name).toLowerCase().startsWith(RESERVED_SERVER_PREFIX);
+}
+
+const warnedReserved = new Set<string>();
+/**
+ * 存量配置里占用保留前缀的 server:告警并改名为 `user_<原名>`(撞名再加 `_2`…),不静默丢弃 —— 用户的 server
+ * 照常可用,只是不再能冒充设备命名空间。按原名字典序处理 → 改名结果确定。只改内存视图,不回写磁盘;
+ * 读改写路径(engines/assets.ts 的 updateSection)会把改名后的键顺带写回。
+ */
+function renameReservedServers(servers: Record<string, McpServerConfig>): Record<string, McpServerConfig> {
+  const names = Object.keys(servers);
+  const reserved = names.filter(isReservedServerName).sort();
+  if (!reserved.length) return servers;
+  const out: Record<string, McpServerConfig> = Object.create(null); // 无原型:键名 `__proto__` / `constructor` 不串味
+  for (const n of names) if (!isReservedServerName(n)) out[n] = servers[n];
+  for (const n of reserved) {
+    let target = `user_${n}`;
+    for (let i = 2; target in out; i++) target = `user_${n}_${i}`;
+    out[target] = servers[n];
+    if (!warnedReserved.has(n)) {
+      warnedReserved.add(n);
+      console.warn(`[mcp] server "${n}" uses the reserved "${RESERVED_SERVER_PREFIX}" prefix (device MCP namespace); loaded as "${target}". Rename it in the MCP settings.`);
+    }
+  }
+  return out;
+}
+
 function legacyLoadMcp(file: string): McpConfig {
   try {
     const parsed = JSON.parse(readFileSync(file, 'utf8'));
     const servers = parsed?.mcpServers;
-    if (servers && typeof servers === 'object') return { mcpServers: servers };
+    if (servers && typeof servers === 'object') return { mcpServers: renameReservedServers(servers) };
     return { mcpServers: {} };
   } catch {
     return { mcpServers: {} }; // 不存在/坏 JSON → 空配置(坏 JSON 由 desktop 编辑器另行提示)
@@ -59,7 +94,7 @@ export function loadMcpConfig(file?: string): McpConfig {
 export function mcpConfigFrom(sec: any): McpConfig {
   if (sec !== undefined) {
     const servers = sec?.mcpServers;
-    return { mcpServers: servers && typeof servers === 'object' ? servers : {} };
+    return { mcpServers: servers && typeof servers === 'object' ? renameReservedServers(servers) : {} };
   }
   return legacyLoadMcp(mcpConfigFile());
 }
