@@ -81,6 +81,7 @@ export function reportAgentSpaceMountError(cfg: TanguDesktopConfig, slug: string
  *  栈里一帧都没有它的(宿主自己的定时器 reject)归不了。 */
 const RUNTIME_MAX = 3
 let runtimeCfg: TanguDesktopConfig | null = null
+let runtimePending: string[] = [] // 还没拿到 cfg 时认出的(每版至多 3 条),拿到就补发
 let runtimeKey = ''
 let runtimeSeen = new Set<string>()
 let runtimeHooked = false
@@ -101,24 +102,40 @@ export function agentSpaceRuntimeError(err: unknown, sourceUrl: string): string 
 
 /** 窗口级 error / unhandledrejection 的入口(导出给测试)。 */
 export function noteAgentSpaceRuntimeError(err: unknown): void {
-  const cfg = runtimeCfg
   const url = agentSpaceSourceUrl(agentPluginId('muse')) // 没在跑 → null:旧版 / 没跑起来的版本留下的错一概不报
-  const text = cfg && url && agentSpaceRuntimeError(err, url)
-  if (!cfg || !url || !text) return
+  const text = url && agentSpaceRuntimeError(err, url)
+  if (!url || !text) return
   if (url !== runtimeKey) { runtimeKey = url; runtimeSeen = new Set() } // 换了一版:重新计,旧版的记录不留
   const seen = runtimeSeen
   if (seen.has(text) || seen.size >= RUNTIME_MAX) return
   seen.add(text)
+  sendRuntime(text, seen)
+}
+
+function sendRuntime(text: string, seen: Set<string>): void {
+  const cfg = runtimeCfg
+  if (!cfg) { runtimePending.push(text); return }
   void postMuseFeedback(cfg, text).catch(() => { seen.delete(text) })
 }
 
-function hookRuntimeErrors(cfg: TanguDesktopConfig): void {
-  runtimeCfg = cfg
+function listenRuntimeErrors(): void {
   if (runtimeHooked || typeof window === 'undefined') return
   runtimeHooked = true
   window.addEventListener('error', (e) => noteAgentSpaceRuntimeError(e.error))
   window.addEventListener('unhandledrejection', (e) => noteAgentSpaceRuntimeError(e.reason))
 }
 
+function hookRuntimeErrors(cfg: TanguDesktopConfig): void {
+  runtimeCfg = cfg
+  const queued = runtimePending
+  runtimePending = []
+  for (const t of queued) sendRuntime(t, runtimeSeen)
+  listenRuntimeErrors()
+}
+
+// 模块加载就挂上(渲染进程):插件视图的挂载 effect 先于 MuseHome 自己的 effect 跑,首次 status 往返之前 Space 就可能抛了 ——
+// 等拿到 cfg 再挂会漏掉这一段(Codex 09-27)。这期间认出的先排队,首次同步 Muse 时补发。
+listenRuntimeErrors()
+
 /** 测试用:清掉戳记忆。 */
-export function __resetAgentSpaceSync(): void { loadedStamp.clear(); reportedStamp.clear(); mountReported = new WeakMap(); runtimeKey = ''; runtimeSeen = new Set(); runtimeCfg = null }
+export function __resetAgentSpaceSync(): void { loadedStamp.clear(); reportedStamp.clear(); mountReported = new WeakMap(); runtimeKey = ''; runtimeSeen = new Set(); runtimeCfg = null; runtimePending = [] }

@@ -32,7 +32,10 @@ const errorOf = (k: string): unknown => {
 }
 const agentCode = "globalThis.__agentThrow = (k = 'boom') => { null[k] = 1 }"
 
-beforeEach(() => {
+beforeEach(async () => {
+  // 上一条留下的 agent Space 走正规拆除(摘掉「正在运行的那一版」)—— 直接 setState 清 store 绕过 teardown,中途失败的用例会把地址漏给下一条
+  env.sources = []
+  await usePluginStore.getState().reloadOne('agent-muse').catch(() => {})
   usePluginStore.setState({ plugins: [], activeIds: [], disabledIds: [], disposers: {}, lastSetupError: {}, initialized: false })
   posted.mockClear()
   __resetAgentSpaceSync()
@@ -68,15 +71,14 @@ describe('agent Space 的 sourceURL', () => {
   it('回写只认正在运行的那一版:同一条只报一次、每版最多 3 条、POST 失败撤销标记;重载后旧版漏清的定时器、拆掉后的残留都不报', async () => {
     env.sources = [source({ id: 'agent-muse', agent: 'muse', code: agentCode })]
     await usePluginStore.getState().loadExternal()
-    const oldThrow = errorOf('before-cfg')
-    noteAgentSpaceRuntimeError(oldThrow)
-    expect(posted).not.toHaveBeenCalled() // 还没见过 Muse 的 cfg(Muse 界面没开过):不报
-    void syncAgentSpace({} as never, 'muse', undefined) // 只为记下 cfg(没有戳 → 不重载)
     const a = errorOf('a')
-    noteAgentSpaceRuntimeError(a)
-    noteAgentSpaceRuntimeError(a) // 定时器里反复抛同一条
+    noteAgentSpaceRuntimeError(a) // 还没拿到 Muse 的 cfg(首次 status 往返之前):先排队
+    expect(posted).not.toHaveBeenCalled()
+    void syncAgentSpace({} as never, 'muse', undefined) // 记下 cfg(没有戳 → 不重载)→ 补发排队的那条
     expect(posted).toHaveBeenCalledTimes(1)
     expect(posted.mock.calls[0][1]).toMatch(/went unhandled in your Space after it loaded \(main\.js line 1\): TypeError: Cannot set properties of null \(setting 'a'\)/)
+    noteAgentSpaceRuntimeError(a) // 定时器里反复抛同一条
+    expect(posted).toHaveBeenCalledTimes(1)
     posted.mockRejectedValueOnce(new Error('engine down'))
     const b = errorOf('b')
     noteAgentSpaceRuntimeError(b)
