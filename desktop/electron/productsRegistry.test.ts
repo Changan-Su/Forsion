@@ -4,6 +4,9 @@ import path from 'node:path'
 import os from 'node:os'
 import { PRODUCT_SIDECAR } from '../shared/products'
 import { detectKind, ensureProduct, getProduct, isProductId, scanProducts, updateProduct } from './productsRegistry'
+import { dirIdentity } from './dirIdentity'
+
+const reg = (root: string) => ({ root, dir: dirIdentity(root)! })
 
 let home: string
 let root: string // 托管根(~/Forsion/Project 的替身)
@@ -324,13 +327,13 @@ describe('外部造物(原地加入)', () => {
     const ext = await outside('app', { 'index.html': 'x' })
     await project('managed', { 'index.html': 'y' })
     expect((await scanProducts(root)).map((p) => p.name)).toEqual(['managed']) // 没登记:文件夹里有没有 sidecar 都不算
-    const list = await scanProducts(root, [ext])
+    const list = await scanProducts(root, [reg(ext)])
     const app = list.find((p) => p.name === 'app')!
     expect(app).toMatchObject({ root: ext, kind: 'web', entry: 'index.html', external: true })
     expect(list.find((p) => p.name === 'managed')!.external).toBeUndefined()
     expect((await sidecarOf(ext)).id).toBe(app.id)
-    expect((await ensureProduct(root, ext, [ext])).id).toBe(app.id)
-    expect(await getProduct(root, app.id, [ext])).toMatchObject({ root: ext })
+    expect((await ensureProduct(root, ext, [reg(ext)])).id).toBe(app.id)
+    expect(await getProduct(root, app.id, [reg(ext)])).toMatchObject({ root: ext })
     expect(await getProduct(root, app.id)).toBeNull() // 不在登记表里就解不到
     await expect(ensureProduct(root, ext)).rejects.toThrow() // 未登记的根外目录照旧拒绝
   })
@@ -338,8 +341,8 @@ describe('外部造物(原地加入)', () => {
   it('托管根还没建也照样列出外部造物', async () => {
     const ext = await outside('solo', { 'index.html': 'x' })
     await fs.rm(root, { recursive: true, force: true })
-    expect((await scanProducts(root, [ext])).map((p) => p.name)).toEqual(['solo'])
-    expect((await ensureProduct(root, ext, [ext])).name).toBe('solo')
+    expect((await scanProducts(root, [reg(ext)])).map((p) => p.name)).toEqual(['solo'])
+    expect((await ensureProduct(root, ext, [reg(ext)])).name).toBe('solo')
   })
 
   it('复制到别处再加入的同 id:托管的老项目留着 id,外部的新副本重铸;改名写回外部 sidecar', async () => {
@@ -348,18 +351,35 @@ describe('外部造物(原地加入)', () => {
     await sleep(40)
     const copy = await outside('copy', { 'index.html': 'x' })
     await fs.copyFile(sidecarFile(original), sidecarFile(copy))
-    const list = await scanProducts(root, [copy])
+    const list = await scanProducts(root, [reg(copy)])
     expect(list.find((p) => p.name === 'orig')!.id).toBe(first.id)
     const copied = list.find((p) => p.name === 'copy')!
     expect(copied.id).not.toBe(first.id)
-    const renamed = await updateProduct(root, copied.id, { name: 'My copy' }, [copy])
+    const renamed = await updateProduct(root, copied.id, { name: 'My copy' }, [reg(copy)])
     expect(renamed).toMatchObject({ name: 'My copy', external: true })
     expect((await sidecarOf(copy)).name).toBe('My copy')
   })
 
+  it('⚠️登记之后路径上换成了别的目录 → 不收,也不往替换进来的目录里写 sidecar', async () => {
+    const ext = await outside('swap', { 'index.html': 'x' })
+    const entry = reg(ext)
+    await fs.rename(ext, `${ext}-moved`) // 原目录还在(改了名、占着 inode),路径上新建的一定是另一个身份
+    await fs.mkdir(ext); await fs.writeFile(path.join(ext, 'index.html'), 'evil')
+    expect((await scanProducts(root, [entry])).some((p) => p.name === 'swap')).toBe(false)
+    expect(existsSync(sidecarFile(ext))).toBe(false)
+    await expect(ensureProduct(root, ext, [entry])).rejects.toThrow()
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('托管根读不了(权限)→ 托管的那部分没了,外部造物照样列出', async () => {
+    const ext = await outside('still', { 'index.html': 'x' })
+    await project('hidden', { 'index.html': 'y' })
+    await fs.chmod(root, 0o000)
+    try { expect((await scanProducts(root, [reg(ext)])).map((p) => p.name)).toEqual(['still']) } finally { await fs.chmod(root, 0o755) }
+  })
+
   it('登记表里混进托管根里面的路径 → 不重复列出', async () => {
     const inner = await project('inner', { 'index.html': 'x' })
-    expect((await scanProducts(root, [inner])).filter((p) => p.name === 'inner')).toHaveLength(1)
+    expect((await scanProducts(root, [reg(inner)])).filter((p) => p.name === 'inner')).toHaveLength(1)
   })
 })
 

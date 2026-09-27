@@ -9,6 +9,9 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, 
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { AdoptError, checkAdoptable, createCreationDir, safeCreationName } from './productAdopt'
+import { dirIdentity } from './dirIdentity'
+
+const reg = (root: string) => ({ root, dir: dirIdentity(root)! })
 
 let base: string
 let root: string
@@ -47,7 +50,7 @@ describe('checkAdoptable', () => {
   it('普通文件夹 → 真实路径、不是托管的;再加一次(已登记)照样放行', async () => {
     const app = path.join(home, 'code', 'app'); mkdirSync(app, { recursive: true })
     expect(await checkAdoptable(root, app, { within: app, home })).toEqual({ real: app, managed: false })
-    expect(await checkAdoptable(root, app, { within: app, home, externals: [app] })).toEqual({ real: app, managed: false })
+    expect(await checkAdoptable(root, app, { within: app, home, externals: [reg(app)] })).toEqual({ real: app, managed: false })
   })
 
   it('按真实路径限定在 within 里:工作目录里指向别处的软链 → outside;strict 时就是工作目录本身也不行;名字以 .. 开头的子目录合法', async () => {
@@ -79,8 +82,8 @@ describe('checkAdoptable', () => {
 
   it('与已加入的外部造物互相嵌套 → nested(两个预览根盖同一棵树、一个仓套在另一个里)', async () => {
     const outer = path.join(home, 'work', 'site'); const inner = path.join(outer, 'blog'); mkdirSync(inner, { recursive: true })
-    expect(await code(checkAdoptable(root, inner, { within: outer, home, externals: [outer] }))).toBe('nested')
-    expect(await code(checkAdoptable(root, outer, { within: outer, home, externals: [inner] }))).toBe('nested')
-    expect(await code(checkAdoptable(root, path.join(home, 'work'), { within: home, home, externals: [inner] }))).toBe('nested')
+    expect(await code(checkAdoptable(root, inner, { within: outer, home, externals: [reg(outer)] }))).toBe('nested')
+    expect(await code(checkAdoptable(root, outer, { within: outer, home, externals: [reg(inner)] }))).toBe('nested')
+    expect(await code(checkAdoptable(root, path.join(home, 'work'), { within: home, home, externals: [reg(inner)] }))).toBe('nested')
   })
 })

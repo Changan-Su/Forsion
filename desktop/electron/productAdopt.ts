@@ -12,6 +12,7 @@
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { dirIdentity, type DirIdentity } from './dirIdentity'
 
 const NAME_MAX = 100
 
@@ -53,39 +54,41 @@ export async function createCreationDir(projectsRoot: string, name: string): Pro
   throw new Error('could not reserve a folder name')
 }
 
-const inside = (child: string, parent: string): boolean => {
-  const rel = path.relative(parent, child)
-  // 只认整段的 `..`:`..draft` 是合法的子目录名
-  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel))
+const same = (a: DirIdentity | null, b: DirIdentity | null): boolean => !!a && !!b && a.dev === b.dev && a.ino === b.ino
+
+/** child 是 parent 本身或在它里面:沿 child(真实路径)逐级往上比**目录身份**,不比字符串 ——
+ *  大小写敏感 / 不敏感的卷都对(按平台猜大小写规则,在大小写敏感的 APFS 上会把 `App` 当成 `app`)。 */
+function within(child: string, parent: string): boolean {
+  const target = dirIdentity(parent)
+  if (!target) return false
+  for (let cur = child; ; cur = path.dirname(cur)) {
+    if (same(dirIdentity(cur), target)) return true
+    if (path.dirname(cur) === cur) return false
+  }
 }
 
-const CASE_INSENSITIVE_FS = process.platform === 'darwin' || process.platform === 'win32'
-const sameDir = (a: string, b: string): boolean => a === b || (CASE_INSENSITIVE_FS && a.toLowerCase() === b.toLowerCase())
-const fold = (p: string): string => (CASE_INSENSITIVE_FS ? p.toLowerCase() : p)
-
-/** 原地加入造物之前的目录闸(realpath 之后判)。返回源的真实路径;managed = 它本来就是托管根的直接子目录(不用登记)。
- *  within:源必须在它里面(strict = 不能就是它本身);externals:已登记的外部造物根(真实路径)。 */
-export async function checkAdoptable(projectsRoot: string, source: string, opts: { within: string; strict?: boolean; externals?: readonly string[]; home?: string }): Promise<{ real: string; managed: boolean }> {
-  const { within, strict = false, externals = [], home = os.homedir() } = opts
-  if (typeof source !== 'string' || !path.isAbsolute(source) || typeof within !== 'string' || !path.isAbsolute(within)) throw new AdoptError('invalid_source', 'The folder must be an absolute path')
+/** 原地加入造物之前的目录闸(realpath 之后判,包含关系一律按目录身份)。返回源的真实路径;managed = 它本来就是托管根的直接子目录(不用登记)。
+ *  within:源必须在它里面(strict = 不能就是它本身);externals:已登记的外部造物(真实路径 + 目录身份)。 */
+export async function checkAdoptable(projectsRoot: string, source: string, opts: { within: string; strict?: boolean; externals?: readonly { root: string; dir: DirIdentity }[]; home?: string }): Promise<{ real: string; managed: boolean }> {
+  const { within: inDir, strict = false, externals = [], home = os.homedir() } = opts
+  if (typeof source !== 'string' || !path.isAbsolute(source) || typeof inDir !== 'string' || !path.isAbsolute(inDir)) throw new AdoptError('invalid_source', 'The folder must be an absolute path')
   const real = await fs.realpath(source).catch(() => null)
   const st = real ? await fs.stat(real).catch(() => null) : null
   if (!real || !st?.isDirectory()) throw new AdoptError('invalid_source', 'The folder does not exist', source)
-  const withinReal = await fs.realpath(within).catch(() => null)
-  if (!withinReal || !inside(fold(real), fold(withinReal)) || (strict && sameDir(real, withinReal))) throw new AdoptError('outside', 'The folder is outside the working folder', real)
+  const withinReal = await fs.realpath(inDir).catch(() => null)
+  const me = dirIdentity(real)
+  if (!withinReal || !within(real, withinReal) || (strict && same(me, dirIdentity(withinReal)))) throw new AdoptError('outside', 'The folder is outside the working folder', real)
   const homeReal = await fs.realpath(home).catch(() => path.resolve(home))
   const rootReal = await fs.realpath(projectsRoot).catch(() => path.resolve(projectsRoot))
-  const [r, h, m] = [fold(real), fold(homeReal), fold(rootReal)]
-  // 根 / 家目录 / 家目录的上级 / 托管根本身及其上级
-  if (real === path.parse(real).root || inside(h, r) || inside(m, r)) throw new AdoptError('forbidden_source', 'This folder cannot be added to Creations', real)
-  if (inside(r, m)) {
-    if (sameDir(path.dirname(real), rootReal)) return { real, managed: true }
+  // 根 / 家目录 / 家目录的上级 / 托管根本身及其上级(托管根还没建时,沿它的路径往上找得到的上级照样算)
+  if (real === path.parse(real).root || within(homeReal, real) || within(rootReal, real)) throw new AdoptError('forbidden_source', 'This folder cannot be added to Creations', real)
+  if (within(real, rootReal)) {
+    if (same(dirIdentity(path.dirname(real)), dirIdentity(rootReal))) return { real, managed: true }
     throw new AdoptError('nested', 'This folder is inside another creation', real)
   }
-  for (const root of externals) {
-    const e = fold(root)
-    if (e === r) return { real, managed: false } // 已经加过:再加一次是幂等的
-    if (inside(r, e) || inside(e, r)) throw new AdoptError('nested', 'This folder is inside another creation, or contains one', root)
+  for (const e of externals) {
+    if (same(me, e.dir)) return { real, managed: false } // 已经加过:再加一次是幂等的
+    if (within(real, e.root) || within(e.root, real)) throw new AdoptError('nested', 'This folder is inside another creation, or contains one', e.root)
   }
   return { real, managed: false }
 }

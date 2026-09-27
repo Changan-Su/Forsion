@@ -136,6 +136,15 @@ describe.skipIf(!GIT)('git version history', () => {
     expect(await gitHistoryStatus(root, g)).toEqual({ available: true, state: 'owned', dirty: false })
   })
 
+  it('noInit:还没有仓时不建(返回 null,不留 .git);已是我方仓照常提交', async () => {
+    await put('index.html', '<h1>hi</h1>')
+    expect(await commitGitVersion(root, { name: 'auto', auto: true, noInit: true }, g)).toBeNull()
+    expect(existsSync(path.join(root, '.git'))).toBe(false)
+    expect(await commitGitVersion(root, { name: 'First version', auto: false }, g)).not.toBeNull() // 用户手动保存第一个版本才建
+    await put('index.html', '<h1>changed</h1>')
+    expect(await commitGitVersion(root, { name: 'auto', auto: true, noInit: true }, g)).not.toBeNull()
+  })
+
   it('appends only the missing ignore lines and leaves existing ones alone', async () => {
     const original = '# mine\nnode_modules/\n*.log\n'
     await put('.gitignore', original)

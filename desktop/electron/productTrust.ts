@@ -96,9 +96,17 @@ export function revokeExternalLaunch(homeDir: string, id: string): void {
 
 const sameDir = (a: DirIdentity, b: DirIdentity): boolean => a.dev === b.dev && a.ino === b.ino
 
-/** 本机登记过、此刻路径还在且目录身份对得上的外部造物根(真实路径)。改名 / 换了文件夹的条目不算。 */
-export function externalCreationRoots(homeDir: string): string[] {
-  return read(homeDir).externalCreations.filter((e) => matchesDirIdentity(e.root, e.dir)).map((e) => e.root)
+export interface ExternalCreation { root: string; dir: DirIdentity }
+
+/** 本机登记过、此刻路径还在且目录身份对得上的外部造物(真实路径 + 目录身份)。改名 / 换了文件夹的条目不算。 */
+export function externalCreations(homeDir: string): ExternalCreation[] {
+  return read(homeDir).externalCreations.filter((e) => matchesDirIdentity(e.root, e.dir)).map((e) => ({ root: e.root, dir: e.dir }))
+}
+
+/** dir 是不是一个此刻有效的外部造物:**按目录身份比,不比路径字符串**(大小写敏感的 APFS 上 `app` 与 `App` 是两个目录)。 */
+export function externalCreationFor(homeDir: string, dir: string): ExternalCreation | null {
+  const id = dirIdentity(dir)
+  return id ? externalCreations(homeDir).find((e) => sameDir(e.dir, id)) ?? null : null
 }
 
 /** 把 root(调用方给真实路径)登记成外部造物。同一个目录身份(改过名)/ 同一路径(换过文件夹)的旧条目先替换掉。 */

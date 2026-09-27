@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { addExternalCreation, allowExternalLaunch, externalCreationRoots, gitOwners, isExternalLaunchAllowed, removeExternalCreation, revokeExternalLaunch } from './productTrust'
+import { addExternalCreation, allowExternalLaunch, externalCreationFor, externalCreations, gitOwners, isExternalLaunchAllowed, removeExternalCreation, revokeExternalLaunch } from './productTrust'
+
+const externalCreationRoots = (home: string): string[] => externalCreations(home).map((e) => e.root)
 
 let home: string
 beforeEach(() => { home = mkdtempSync(path.join(os.tmpdir(), 'product-trust-')) })
@@ -74,6 +76,10 @@ describe('productTrust', () => {
     expect(externalCreationRoots(home)).toEqual([])
     addExternalCreation(home, moved)
     expect(externalCreationRoots(home)).toEqual([moved])
+    // 按目录身份认:同一个目录换个写法(这里经软链)也认得,别的目录不认
+    const alias = path.join(home, 'alias'); symlinkSync(moved, alias)
+    expect(externalCreationFor(home, alias)?.root).toBe(moved)
+    expect(externalCreationFor(home, renamed)).toBeNull()
     removeExternalCreation(home, moved)
     expect(externalCreationRoots(home)).toEqual([])
     expect(existsSync(moved)).toBe(true) // 取消登记不动文件夹

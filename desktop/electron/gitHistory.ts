@@ -343,12 +343,15 @@ async function identityArgs(c: Ctx): Promise<string[]> {
   return args
 }
 
-async function doCommit(c: Ctx, input: { name: string; auto: boolean; labels?: GitLabels }): Promise<GitVersion | null> {
+async function doCommit(c: Ctx, input: { name: string; auto: boolean; labels?: GitLabels; noInit?: boolean }): Promise<GitVersion | null> {
   // none 与 owned 之外一律只读。「有仓但读不出来」已经在 repoState 里被折成 foreign / nested,
   // 所以这里不再需要单独一条 'unreadable repository' 守卫(它只守 doCommit,status 早就先放行了)。
   const state = await repoState(c)
   if (state !== 'none' && state !== 'owned') throw new Error('read-only repository')
-  if (state === 'none') await initRepo(c)
+  if (state === 'none') {
+    if (input.noInit) return null // 调用方不许建仓(用户自己文件夹里的自动存版):没仓就当这轮没存
+    await initRepo(c)
+  }
   await ensureSetup(c)
   // 暂存不用给边车写排除 pathspec:ensureSetup 刚确保过它们「被忽略 + 不在索引里」,`add -A` 本来就碰不到
   // (而且 pathspec 里点名一个被忽略的路径,git 会直接报错拒绝)。排除 pathspec 留给 restore 用。
@@ -421,7 +424,8 @@ export async function listGitVersions(root: string, g?: GitEnv, limit = 200): Pr
 }
 
 /** 返回 null = 工作区没有任何改动,这一轮不产生版本(提交一旦落盘就绝不会是 null)。只读仓抛 'read-only repository'。 */
-export async function commitGitVersion(root: string, input: { name: string; auto: boolean; labels?: GitLabels }, g?: GitEnv): Promise<GitVersion | null> {
+/** noInit:还没有仓时不建(返回 null)—— 判定在提交队列里做,调用方先查过的状态到这里可能已经变了。 */
+export async function commitGitVersion(root: string, input: { name: string; auto: boolean; labels?: GitLabels; noInit?: boolean }, g?: GitEnv): Promise<GitVersion | null> {
   const c = await requireGit(root, g)
   return enqueue(c.root, () => doCommit(c, input))
 }
