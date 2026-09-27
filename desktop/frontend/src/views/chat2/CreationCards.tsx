@@ -29,14 +29,18 @@ registerMessages({
   'creation.card.add': { zh: '加入造物', en: 'Add to Creations' },
   'creation.card.done': { zh: '已在造物里：{name}', en: 'In Creations: {name}' },
   'creation.card.doneNewChat': {
-    zh: '已在造物里建好「{name}」，并在它里面开了一个新对话（这条对话的工作目录不能换）。',
-    en: 'Created “{name}” in Creations and opened a new conversation in it (this conversation cannot change its working folder).',
+    zh: '已在造物里建好「{name}」。这条对话没有挪过去，已切到在它里面新建对话。',
+    en: 'Created “{name}” in Creations. This conversation was not moved there, so a new conversation in it is ready.',
   },
   'creation.card.openStudio': { zh: '在编码工作室中打开', en: 'Open in Coding Studio' },
   'creation.card.openCreations': { zh: '在造物中查看', en: 'View in Creations' },
   'creation.continuePrompt': {
     zh: '作品文件夹「{name}」已经建好，这条对话的工作目录已经切过去了。请在这里接着做。',
     en: 'The creation folder “{name}” is ready and this conversation now works in it. Please continue building here.',
+  },
+  'creation.err.running': {
+    zh: '这条对话还在运行，等这一轮结束再点。',
+    en: 'This conversation is still running. Try again when this turn has finished.',
   },
   'creation.err.outside': {
     zh: '卡片里的文件夹不在这条对话的工作目录里，不能从这里加入。',
@@ -53,9 +57,10 @@ registerMessages({
   },
 })
 
-/** 把一个文件夹复制进造物(不带 .git / node_modules);失败抛出已翻译的原因。作品卡与 PROJECT 详情共用。 */
-export async function adoptIntoCreations(source: string, name: string): Promise<{ dir: string; name: string }> {
-  const r = await window.tangu!.productsAdopt!(source, name)
+/** 把一个文件夹复制进造物(不带 .git / node_modules);失败抛出已翻译的原因。作品卡与 PROJECT 详情共用。
+ *  within / strict:宿主按真实路径判「源在这个目录里(strict = 且不是它本身)」—— 字符串判定挡不住里面指向别处的软链。 */
+export async function adoptIntoCreations(source: string, name: string, within: string, strict: boolean): Promise<{ dir: string; name: string }> {
+  const r = await window.tangu!.productsAdopt!(source, name, within, strict)
   if (!r.ok) throw new Error(translate(`creation.err.${r.code}`))
   return { dir: r.dir, name: r.name }
 }
@@ -83,7 +88,8 @@ function CreationCardView({ card, sessionId }: { card: CreationCard; sessionId?:
   const adding = !!card.path
   const inCreation = !!root && !!cwd && normPath(cwd).replace(/\/[^/]*$/, '') === normPath(root)
   // 整个工作目录加入造物只对真项目放行;默认工作区是所有不在项目里的对话共用的大目录
-  const source = adding ? resolveInside(cwd, card.path!, !!cwd && normPath(cwd) !== normPath(defaultWs || '')) : null
+  const allowSelf = !!cwd && normPath(cwd) !== normPath(defaultWs || '')
+  const source = adding ? resolveInside(cwd, card.path!, allowSelf) : null
   const done = made ?? (inCreation ? { dir: cwd, name: session?.project_name || card.name, moved: true } : null)
 
   const accept = async (): Promise<void> => {
@@ -91,17 +97,19 @@ function CreationCardView({ card, sessionId }: { card: CreationCard; sessionId?:
     if (!api?.productsCreate || !api.productsAdopt || busy) return
     setBusy(true); setError('')
     try {
+      // 跑着的时候不动:agent 正往原目录写,挪过去后续话还会被当成插话塞进这一轮
+      if (sessionId && useApp.getState().runningBySession[sessionId]) throw new Error(t('creation.err.running'))
       let dir: string
       let name: string
       if (adding) {
         if (!source) throw new Error(t('creation.err.outside'))
-        ;({ dir, name } = await adoptIntoCreations(source, card.name))
+        ;({ dir, name } = await adoptIntoCreations(source, card.name, cwd, !allowSelf))
       } else {
         const r = await api.productsCreate(card.name)
         dir = r.dir; name = r.name
       }
       const app = useApp.getState()
-      const moved = sessionId ? await app.moveSessionToProject(sessionId, dir, name) : false
+      const moved = sessionId ? (await app.moveSessionToProject(sessionId, dir, name)) === 'moved' : false
       if (!moved) { app.setNewChatWs({ key: dir, name, kind: 'local', path: dir }); app.setActiveId(null) }
       setMade({ dir, name, moved })
       // 新做的作品:点按钮就是「好,做成作品」—— 替用户接一句,agent 下一轮就在作品文件夹里写(新的 cwd 在系统提示里)

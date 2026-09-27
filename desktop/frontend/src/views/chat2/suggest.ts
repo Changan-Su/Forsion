@@ -78,6 +78,8 @@ export interface SuggestState {
   kind: FenceKind | null
   /** 未收口的建议/任务围栏原文(含开栏行)——收口才认;没收口要么丢弃要么还回正文。 */
   pending: string[]
+  /** 前面各段已经收下的卡数:按段续读时上限按整条消息算(超出的还回正文,不在后面的段里凭空消失)。 */
+  taken?: { tasks: number; creations: number }
 }
 
 export interface Suggestions {
@@ -179,6 +181,8 @@ export function splitSuggestions(
   const kinds = opts?.kinds ?? DEFAULT_KINDS
   // 续读状态深拷贝 pending:调用方常把上一段的 state 存起来复用,这里就地 push 会污染它。
   const st: SuggestState = opts?.state ? { ...opts.state, pending: [...opts.state.pending] } : FRESH()
+  const taken = { tasks: 0, creations: 0, ...opts?.state?.taken }
+  st.taken = taken
   if (!st.fence && !raw.includes('forsion-suggest') && !raw.includes('forsion-task') && !raw.includes('forsion-approval') && !raw.includes('forsion-creation')) return { text: raw, items: [], tasks: [], approvals: [], creations: [], state: st } // 绝大多数消息走这条快路
   const body: string[] = []
   const items: string[] = []
@@ -195,7 +199,7 @@ export function splitSuggestions(
     if (st.kind === 'suggest') for (const l of st.pending.slice(1)) take(l)
     else if (st.kind === 'task') {
       const card = parseTaskCard(st.pending.slice(1), { todo: opts?.todo })
-      if (card && tasks.length < MAX_TASKS) tasks.push(card)
+      if (card && taken.tasks < MAX_TASKS) { tasks.push(card); taken.tasks += 1 }
       else body.push(...st.pending, closingLine) // 写坏的、或超过上限的:原样还回正文(Codex 09-11 P2:第三张不能凭空消失)
     } else if (st.kind === 'approval') {
       const id = parseApprovalId(st.pending.slice(1))
@@ -204,7 +208,7 @@ export function splitSuggestions(
       else body.push(...st.pending, closingLine)
     } else if (st.kind === 'creation') {
       const card = parseCreationCard(st.pending.slice(1))
-      if (card && creations.length < MAX_CREATIONS) creations.push(card)
+      if (card && taken.creations < MAX_CREATIONS) { creations.push(card); taken.creations += 1 }
       else body.push(...st.pending, closingLine)
     }
     st.pending = []

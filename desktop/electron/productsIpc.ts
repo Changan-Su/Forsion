@@ -175,14 +175,21 @@ export function registerProductsIpc(d: ProductsIpcDeps): void {
   // 「进造物」(09-27):在托管根建一个新作品文件夹 / 把做好的文件夹复制进来,都当场铸身份再回摘要。
   //   源目录来自聊天里模型写的作品卡:渲染层先限定在会话工作目录内,productAdopt 再过一遍目录闸(根 / 家目录 / 托管根及其上下级)。
   //   可预期的失败按结果回 { ok:false, code, detail }(IPC 抛错只带得过 message,code 会丢),渲染层按 code 本地化。
+  // 身份登记失败 = 半个作品(有目录没身份):删掉刚建的目录再报错
+  const register = async (dir: string) => {
+    try { return withDevLoad(await ensureProduct(d.projectsRoot(), dir)) } catch (e) { await fs.rm(dir, { recursive: true, force: true }).catch(() => {}); throw e }
+  }
   d.ipcMain.handle('products:create', guard(async (name: unknown) => {
-    const made = await createCreationDir(d.projectsRoot(), typeof name === 'string' ? name : '')
-    return { dir: made.dir, name: made.name, product: withDevLoad(await ensureProduct(d.projectsRoot(), made.dir)) }
+    if (typeof name !== 'string') throw new Error('invalid name')
+    const made = await createCreationDir(d.projectsRoot(), name)
+    return { dir: made.dir, name: made.name, product: await register(made.dir) }
   }))
-  d.ipcMain.handle('products:adopt', guard(async (source: unknown, name: unknown) => {
+  // within = 源必须在里面的目录(作品卡:会话工作目录;PROJECT 详情:项目目录本身),strict = 不能就是它(默认工作区)
+  d.ipcMain.handle('products:adopt', guard(async (source: unknown, name: unknown, within: unknown, strict: unknown) => {
+    if (typeof source !== 'string' || typeof name !== 'string' || typeof within !== 'string') throw new Error('invalid arguments')
     try {
-      const made = await adoptIntoProjects(d.projectsRoot(), String(source ?? ''), typeof name === 'string' ? name : '')
-      return { ok: true as const, dir: made.dir, name: made.name, files: made.files, product: withDevLoad(await ensureProduct(d.projectsRoot(), made.dir)) }
+      const made = await adoptIntoProjects(d.projectsRoot(), source, name, { within, strict: strict === true })
+      return { ok: true as const, dir: made.dir, name: made.name, files: made.files, product: await register(made.dir) }
     } catch (e) {
       if (e instanceof AdoptError) return { ok: false as const, code: e.code, detail: e.detail }
       throw e

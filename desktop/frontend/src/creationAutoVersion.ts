@@ -10,21 +10,31 @@ import { normPath } from './views/coding/studioModel'
  * 只认托管根(~/Forsion/Project)的直接子目录;写不写得了由 codeStudio:gitStatus 的 writable 判(没 git / 用户自己的仓 → 不写)。
  * web / 移动端没有这组 IPC → no-op。
  */
+// 大小写不敏感:APFS / NTFS 默认如此,Windows 盘符大小写也常不一致(多认只会去问一次宿主的 writable,不会误写)
+const key = (p: string): string => normPath(p).toLowerCase()
+
 export function isCreationDir(cwd: string, root: string): boolean {
-  return !!cwd && !!root && normPath(cwd).replace(/\/[^/]*$/, '') === normPath(root)
+  return !!cwd && !!root && key(cwd).replace(/\/[^/]*$/, '') === key(root)
 }
 
-export function installCreationAutoVersion(): void {
+const cwdOf = (s: ReturnType<typeof useApp.getState>, sid: string): string =>
+  s.configBySession[sid]?.cwd || s.sessions.find((x) => x.id === sid)?.project_path || ''
+
+/** 返回退订(测试用;应用里装一次不退)。 */
+export function installCreationAutoVersion(): (() => void) | undefined {
   const tangu = window.tangu
   if (!tangu?.codeStudioGitCommit || !tangu.codeStudioGitStatus || !tangu.codeProjectsRoot) return
   let root = ''
   void tangu.codeProjectsRoot().then((r) => { root = r || '' }).catch(() => {})
-  useApp.subscribe((s, prev) => {
+  return useApp.subscribe((s, prev) => {
     if (!root || s.runningBySession === prev.runningBySession) return
     for (const sid of Object.keys(prev.runningBySession)) {
       if (s.runningBySession[sid]) continue // 还在跑 / 刚换了 run:只认「跑着 → 停了」这一沿
-      const cwd = s.configBySession[sid]?.cwd || s.sessions.find((x) => x.id === sid)?.project_path || ''
-      if (isCreationDir(cwd, root)) void saveVersion(cwd, sid)
+      const cwd = cwdOf(s, sid)
+      if (!isCreationDir(cwd, root)) continue
+      // 同一作品里还有别的 run 在跑:它还在写,这时存会把半截改动一起提交 —— 等最后一个停下再存
+      if (Object.keys(s.runningBySession).some((other) => key(cwdOf(s, other)) === key(cwd))) continue
+      void saveVersion(cwd, sid)
     }
   })
 }

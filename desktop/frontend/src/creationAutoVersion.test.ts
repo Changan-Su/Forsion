@@ -39,15 +39,35 @@ describe('installCreationAutoVersion', () => {
       messagesBySession: { a: [{ id: 'u1', role: 'user', content: '加一个暂停按钮\n细节…' }] },
       runningBySession: { a: 'r1', b: 'r2', c: 'r3' },
     } as never)
-    installCreationAutoVersion()
+    const off = installCreationAutoVersion()
     await tick()
     useApp.setState({ runningBySession: { b: 'r2', c: 'r3' } } as never) // a 停了
     useApp.setState({ runningBySession: { c: 'r3' } } as never)          // b 停了(不是作品)
     useApp.setState({ runningBySession: {} } as never)                   // c 停了(不可写)
     await tick(); await tick()
+    off?.()
     expect(commit).toHaveBeenCalledTimes(1)
     expect(commit).toHaveBeenCalledWith(`${ROOT}/game`, expect.objectContaining({ name: '加一个暂停按钮', auto: true }))
     expect(status).toHaveBeenCalledWith(`${ROOT}/readonly`)
+  })
+
+  it('同一作品里两个会话并跑:先停的那个不存(另一个还在写),最后一个停下才存;路径大小写不同也算同一个', async () => {
+    const commit = vi.fn(async () => ({ id: 'x' }))
+    const status = vi.fn(async () => ({ available: true, state: 'owned', dirty: true, writable: true }))
+    ;(window as any).tangu = { codeStudioGitCommit: commit, codeStudioGitStatus: status, codeProjectsRoot: async () => ROOT }
+    useApp.setState({
+      sessions: [{ id: 'a', project_path: `${ROOT}/game` }, { id: 'b', project_path: `${ROOT}/Game/` }],
+      configBySession: {}, messagesBySession: {}, runningBySession: { a: 'r1', b: 'r2' },
+    } as never)
+    const off = installCreationAutoVersion()
+    await tick()
+    useApp.setState({ runningBySession: { b: 'r2' } } as never) // a 停了,b 还在写同一个文件夹
+    await tick(); await tick()
+    expect(commit).not.toHaveBeenCalled()
+    useApp.setState({ runningBySession: {} } as never)          // b 也停了
+    await tick(); await tick()
+    off?.()
+    expect(commit).toHaveBeenCalledTimes(1)
   })
 
   it('没有 git IPC(web / 移动端)→ 整个不装', () => {

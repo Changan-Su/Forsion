@@ -283,3 +283,20 @@ describe('forsion-creation 作品卡', () => {
     expect(splitSuggestions(teach, { kinds: CHAT }).creations).toEqual([])
   })
 })
+
+describe('按段续读:卡片上限按整条消息算', () => {
+  it('第二段里超出上限的作品卡 / 任务卡还回正文,不凭空消失', () => {
+    const creation = (n: string) => '```forsion-creation\nname: ' + n + '\n```'
+    const a = splitSuggestions(creation('A'), { kinds: ['creation'], streaming: true })
+    const b = splitSuggestions(creation('B'), { kinds: ['creation'], state: a.state })
+    expect(a.creations.map((c) => c.name)).toEqual(['A'])
+    expect(b.creations).toEqual([])
+    expect(b.text).toContain('name: B')
+    const task = (t: string) => '```forsion-task\ntitle: ' + t + '\n---\ndo ' + t + '\n```'
+    const t1 = splitSuggestions(`${task('one')}\n${task('two')}`, { streaming: true })
+    const t2 = splitSuggestions(task('three'), { state: t1.state })
+    expect(t1.tasks).toHaveLength(2)
+    expect(t2.tasks).toEqual([])
+    expect(t2.text).toContain('title: three')
+  })
+})

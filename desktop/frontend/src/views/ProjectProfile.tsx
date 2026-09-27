@@ -238,7 +238,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     if (busy) return
     setBusy('adopt'); clear()
     try {
-      const r = await adoptIntoCreations(dir, workspace.name)
+      const r = await adoptIntoCreations(dir, workspace.name, dir, false)
       setAdopted(r)
       setNotice(t('projectProfile.creation.added', { name: r.name }))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }

@@ -41,5 +41,6 @@ Then stop and wait. The user sees a card with one button:
 ## Rules
 
 - Keep `name` short and human: it becomes the folder name and the title in Creations. No slashes.
-- Never write into the Forsion projects folder yourself, never create `.forsion-product.json`, and never run `git init` or commit there. Forsion creates the creation's identity and owns its version history.
+- Only the card creates or copies a creation. Do not make folders in, or copy files into, the Forsion projects folder yourself. Once this conversation has moved into a creation, build there normally.
+- Never create `.forsion-product.json`, and never run `git init` or commit in a creation. Forsion creates its identity and owns its version history.
 - For a web app, keep `index.html` at the creation's root so Creations can open it. For a Forsion plugin, load the Forsion plugin skill before writing it.

@@ -105,7 +105,7 @@ async function run(app, win, stub, seen, home, ctx) {
   await app.evaluate(({ ipcMain }, root) => {
     globalThis.__adoptCalls = []
     ipcMain.removeHandler('products:adopt')
-    ipcMain.handle('products:adopt', (_e, source, name) => { globalThis.__adoptCalls.push({ source, name }); return { ok: true, dir: `${root}/${name}`, name, files: 3, product: {} } })
+    ipcMain.handle('products:adopt', (_e, source, name, within, strict) => { globalThis.__adoptCalls.push({ source, name, within, strict }); return { ok: true, dir: `${root}/${name}`, name, files: 3, product: {} } })
   }, path.join(home, 'Creations'))
   await openSession(win, 'Demo main', 'pd-main')
   await win.locator('.dv-edge-right').click()
@@ -139,7 +139,7 @@ async function run(app, win, stub, seen, home, ctx) {
   const adoptCalls = await app.evaluate(() => globalThis.__adoptCalls || [])
   const adoptNotice = (await profile.locator('.profile-save-notice').textContent().catch(() => '')) || ''
   await details.screenshot({ path: shots.creationAdded = shot('project-creation-added-zh-light') })
-  check('1h 路径旁「加入造物」→ products:adopt(项目目录, 项目名);按钮换成「在造物中查看」,提示已复制;会话目录不变', /加入造物/.test(addLabel) && adoptCalls.length === 1 && adoptCalls[0].source === ctx.cwd && adoptCalls[0].name === 'Demo Project' && /在造物中查看/.test((await doneBtn.textContent().catch(() => '')) || '') && /已复制进造物：Demo Project/.test(adoptNotice) && (await profile.getAttribute('data-project-profile')) === ctx.cwd, JSON.stringify({ addLabel, adoptCalls, adoptNotice }))
+  check('1h 路径旁「加入造物」→ products:adopt(项目目录, 项目名);按钮换成「在造物中查看」,提示已复制;会话目录不变', /加入造物/.test(addLabel) && adoptCalls.length === 1 && adoptCalls[0].source === ctx.cwd && adoptCalls[0].name === 'Demo Project' && adoptCalls[0].within === ctx.cwd && adoptCalls[0].strict === false && /在造物中查看/.test((await doneBtn.textContent().catch(() => '')) || '') && /已复制进造物：Demo Project/.test(adoptNotice) && (await profile.getAttribute('data-project-profile')) === ctx.cwd, JSON.stringify({ addLabel, adoptCalls, adoptNotice }))
 
   // ── 1b–1g 项目图标:emoji(选择器)→ 导入图片 → 图片上换 emoji → 移除;头部与侧栏组头同一份 ───────
   const emblem = profile.locator('.team-profile-hero .team-profile-emblem')

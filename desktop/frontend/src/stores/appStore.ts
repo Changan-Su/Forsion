@@ -722,9 +722,10 @@ export interface AppState {
   archiveSession(id: string, archived: boolean): Promise<void>
   deleteSession(id: string): Promise<void>
   renameWorkspace(ws: WorkspaceDescriptor, name: string): Promise<void>
-  /** 把一条会话挪进另一个本地项目文件夹(「进造物」):改 project_path / name + 这条会话的工作目录。
-   *  私聊 / 独立团队(工作目录被身份锁住)与 Chat 预设(没有本机文件工具)挪不动 → 返回 false,调用方改为在那个文件夹开新对话。 */
-  moveSessionToProject(sessionId: string, dir: string, name: string): Promise<boolean>
+  /** 把一条会话挪进另一个本地项目文件夹(「进造物」):改 project_path / name + 这条会话的工作目录,两处都落盘才算挪过去。
+   *  locked = 私聊 / 独立团队(工作目录被身份锁住)与 Chat 预设(没有本机文件工具);running = 还在跑(agent 正往原目录写);
+   *  failed = 保存失败(已回滚并提示)。非 moved 时调用方改为在那个文件夹开新对话。 */
+  moveSessionToProject(sessionId: string, dir: string, name: string): Promise<'moved' | 'locked' | 'running' | 'failed'>
   /** deleteFiles = 同时把项目里的 `.tangu/` 移进系统废纸篓(项目文件夹本身不动)。 */
   removeWorkspace(ws: WorkspaceDescriptor, opts?: { deleteFiles?: boolean }): Promise<void>
   /** 删除 Agent(侧栏 / 名册共用);deleteFiles = 连它的文件(记忆、Library)一起移进系统废纸篓,否则留在引擎的 agents/.removed/。失败抛错。 */
@@ -2316,19 +2317,34 @@ export const useApp = create<AppState>((set, get) => ({
 
   moveSessionToProject: async (sessionId, dir, name) => {
     const cur = get().sessions.find((x) => x.id === sessionId)
-    if (!cur) return false
+    if (!cur) return 'failed'
     const cfg = get().configBySession[sessionId] || cur.agent_config || {}
-    if (cfg.soloAgentSlug || cfg.teamSlug || cfg.preset === 'chat') return false
+    if (cfg.soloAgentSlug || cfg.teamSlug || cfg.preset === 'chat') return 'locked'
+    if (get().runningBySession[sessionId]) return 'running'
     const prev = { project_path: cur.project_path, project_name: cur.project_name, projectless: cur.projectless }
-    set((s) => ({ sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, project_path: dir, project_name: name, projectless: false } : x)) }))
+    const prevCfg = get().configBySession[sessionId]
+    const restore = () => set((s) => {
+      const configBySession = { ...s.configBySession }
+      if (prevCfg) configBySession[sessionId] = prevCfg; else delete configBySession[sessionId]
+      return { sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, ...prev } : x)), configBySession }
+    })
+    set((s) => ({
+      sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, project_path: dir, project_name: name, projectless: false } : x)),
+      configBySession: { ...s.configBySession, [sessionId]: { ...(prevCfg || {}), cwd: dir, execMode: 'host' } },
+    }))
+    // 两处都落盘才算挪过去:会话的 project_path(侧栏分组 / 详情)与会话配置的 cwd(引擎按它定工作目录)。
+    // 配置没存上就把已改的会话改回去(尽力),不留「分组在新目录、重载后 cwd 还是旧目录」的半截状态。
+    let sessionSaved = false
     try {
       await api.updateSession(get().cfg, sessionId, { project_path: dir, project_name: name, projectless: false })
-      get().setExecConfig({ cwd: dir, execMode: 'host' }, sessionId)
-      return true
+      sessionSaved = true
+      await saveSessionConfig(sessionId, { cwd: dir, execMode: 'host' })
+      return 'moved'
     } catch (e: any) {
-      set((s) => ({ sessions: s.sessions.map((x) => (x.id === sessionId ? { ...x, ...prev } : x)) }))
+      restore()
+      if (sessionSaved) void api.updateSession(get().cfg, sessionId, prev).catch(() => {})
       get().toast(get().tr('app.moveToProjectFail', { e: e?.message || e }), true)
-      return false
+      return 'failed'
     }
   },
 

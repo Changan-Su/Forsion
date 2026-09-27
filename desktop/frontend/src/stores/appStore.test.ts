@@ -494,12 +494,15 @@ const createSessionMock = vi.hoisted(() => vi.fn())
 const startRunMock = vi.hoisted(() => vi.fn())
 const restoreCpMock = vi.hoisted(() => vi.fn())
 const deleteMsgsMock = vi.hoisted(() => vi.fn())
+const updateSessionMock = vi.hoisted(() => vi.fn((..._a: unknown[]) => Promise.resolve({})))
+const patchConfigMock = vi.hoisted(() => vi.fn((..._a: unknown[]) => Promise.resolve({})))
 vi.mock('../services/backendService', async (orig) => ({
   ...(await orig<Record<string, unknown>>()),
   compactSession: (...a: unknown[]) => compactMock(...a),
   createSession: (...a: unknown[]) => createSessionMock(...a),
   putSessionConfig: () => Promise.resolve({}),
-  updateSession: () => Promise.resolve({}),
+  updateSession: (...a: unknown[]) => updateSessionMock(...a),
+  patchSessionConfig: (...a: unknown[]) => patchConfigMock(...a),
   restoreCheckpoint: (...a: unknown[]) => restoreCpMock(...a),
   deleteMessages: (...a: unknown[]) => deleteMsgsMock(...a),
 }))
@@ -920,5 +923,39 @@ describe('openFeedback 带上当前会话', () => {
     useApp.getState().openSettings('advanced')
     expect(openFloatingPanel.mock.calls[0][0].params).toMatchObject({ tab: 'advanced' })
     expect(openFloatingPanel.mock.calls[0][0].params.session.id).toBe('s2')
+  })
+})
+
+// 「进造物」挪会话:会话的 project_path 与会话配置的 cwd 两处都落盘才算挪过去;跑着的不挪;配置没存上整体回滚。
+describe('moveSessionToProject', () => {
+  const S = { id: 'm1', title: 't', project_path: '/w', project_name: 'w', projectless: false, created_at: '', updated_at: '' } as unknown as SessionRecord
+  beforeEach(() => {
+    useApp.setState(initial, true)
+    useApp.setState({ tr: ((k: string) => k) as AppState['tr'], toast: vi.fn() as unknown as AppState['toast'], sessions: [S], configBySession: { m1: { cwd: '/w', execMode: 'host' } }, runningBySession: {} })
+    updateSessionMock.mockReset().mockResolvedValue({})
+    patchConfigMock.mockReset().mockResolvedValue({})
+  })
+
+  it('两处都存上 → moved;会话与配置都指向新目录', async () => {
+    expect(await useApp.getState().moveSessionToProject('m1', '/c/app', 'app')).toBe('moved')
+    expect(updateSessionMock.mock.calls[0][2]).toEqual({ project_path: '/c/app', project_name: 'app', projectless: false })
+    expect(patchConfigMock.mock.calls[0][2]).toEqual({ cwd: '/c/app', execMode: 'host' })
+    expect(useApp.getState().configBySession.m1.cwd).toBe('/c/app')
+  })
+
+  it('还在跑 → running,什么都不动', async () => {
+    useApp.setState({ runningBySession: { m1: 'r1' } })
+    expect(await useApp.getState().moveSessionToProject('m1', '/c/app', 'app')).toBe('running')
+    expect(updateSessionMock).not.toHaveBeenCalled()
+    expect(useApp.getState().sessions[0].project_path).toBe('/w')
+  })
+
+  it('配置没存上 → failed:本地回滚,已改的会话也改回去', async () => {
+    patchConfigMock.mockRejectedValue(new Error('boom'))
+    expect(await useApp.getState().moveSessionToProject('m1', '/c/app', 'app')).toBe('failed')
+    const st = useApp.getState()
+    expect(st.sessions[0].project_path).toBe('/w')
+    expect(st.configBySession.m1.cwd).toBe('/w')
+    expect(updateSessionMock.mock.calls[1]?.[2]).toEqual({ project_path: '/w', project_name: 'w', projectless: false })
   })
 })

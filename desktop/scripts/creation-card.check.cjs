@@ -65,7 +65,7 @@ async function run(app, win, stub, seen, home, work, root) {
     for (const ch of ['codeProjects:root', 'products:create', 'products:adopt']) ipcMain.removeHandler(ch)
     ipcMain.handle('codeProjects:root', () => dir)
     ipcMain.handle('products:create', (_e, name) => { globalThis.__creations.create.push({ name }); return { dir: `${dir}/${name}`, name, product: {} } })
-    ipcMain.handle('products:adopt', (_e, source, name) => { globalThis.__creations.adopt.push({ source, name }); return { ok: true, dir: `${dir}/${name}`, name, files: 2, product: {} } })
+    ipcMain.handle('products:adopt', (_e, source, name, within, strict) => { globalThis.__creations.adopt.push({ source, name, within, strict }); return { ok: true, dir: `${dir}/${name}`, name, files: 2, product: {} } })
   }, root)
   const calls = () => app.evaluate(() => globalThis.__creations)
   const shots = {}
@@ -108,8 +108,8 @@ async function run(app, win, stub, seen, home, work, root) {
   await sleep(600)
   const adopted = await calls()
   const addPatch = seen.patches.find((p) => p.id === 'cc-add')
-  check('2a 点「加入造物」→ products:adopt(工作目录/pomodoro, Pomodoro)→ 会话挪到复制品;不替用户发消息',
-    adopted.adopt.length === 1 && adopted.adopt[0].source === path.join(work, 'pomodoro') && adopted.adopt[0].name === 'Pomodoro' && addPatch?.body.project_path === `${root}/Pomodoro` && stub.seen.runs.length === runsBeforeAdd,
+  check('2a 点「加入造物」→ products:adopt(工作目录/pomodoro, Pomodoro, within = 工作目录)→ 会话挪到复制品;不替用户发消息',
+    adopted.adopt.length === 1 && adopted.adopt[0].source === path.join(work, 'pomodoro') && adopted.adopt[0].name === 'Pomodoro' && adopted.adopt[0].within === work && adopted.adopt[0].strict === false && addPatch?.body.project_path === `${root}/Pomodoro` && stub.seen.runs.length === runsBeforeAdd,
     JSON.stringify({ adopted, addPatch, runs: stub.seen.runs.length - runsBeforeAdd }))
 
   // ── ③ path 爬出工作目录 ───────────────────────────────────────────────────
