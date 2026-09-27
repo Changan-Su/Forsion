@@ -348,6 +348,7 @@ async function run(app, win, stub, seen, home, ctx) {
   const hookText = (await gitError.textContent()) || ''
   const hookClosed = await until(async () => (await form.count()) === 0)
   check('6l2 钩子往提交里加了清单外的文件 → 「提交已完成…没有撤回」+ 点名 .env;提交框收起、重读状态', /提交已完成/.test(hookText) && /没有撤回/.test(hookText) && /\.env/.test(hookText) && hookClosed && seen.ctxGets.length > getsBeforeHook, hookText)
+  await details.screenshot({ path: shots.gitHookChanged = shot('project-git-hook-changed-zh-light') })
   // 提交请求超时:可能已经落下 —— 「结果未确认」+ 提交框同样收起(再点 = 重复提交)
   seen.commitTimeoutOnce = true
   await writeRow.locator('[data-git-action="commit"]').click()
