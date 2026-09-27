@@ -31,6 +31,7 @@ import runsRouter from '../src/routes/runs.js';
 import sessionsRouter from '../src/routes/sessions.js';
 import specialRouter from '../src/routes/special.js';
 import { effectiveRemote } from '../src/services/remoteOrigin.js';
+import { enqueueSteer } from '../src/services/agentLoop.js';
 
 let srv: Server;
 let base: string;
@@ -90,6 +91,11 @@ describe('POST /agent/runs', () => {
     expect(effectiveRemote({ runId: 'st-local' })).toBeUndefined();
     expect((await send('POST', '/agent/runs/st-remote/steer', { message: 'also do x' }, REMOTE)).status).toBe(200);
     expect(effectiveRemote({ runId: 'st-remote' })).toEqual({ via: 'tunnel', marked: false });
+    // 没入队成功(run 已结束 → 409)的远程 steer 不登记染色(Codex 评审:失败请求不许占表)
+    await query(`INSERT INTO agent_runs (id, session_id, user_id, status, input) VALUES ('st-done', 'ST1', 'u1', 'done', '{}')`);
+    (enqueueSteer as any).mockReturnValueOnce(false);
+    expect((await send('POST', '/agent/runs/st-done/steer', { message: 'x' }, REMOTE)).status).toBe(409);
+    expect(effectiveRemote({ runId: 'st-done' })).toBeUndefined();
   });
 });
 

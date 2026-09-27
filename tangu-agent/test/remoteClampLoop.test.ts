@@ -22,6 +22,7 @@ import { createRun, getRun } from '../src/services/runStore.js';
 import { subscribe } from '../src/services/eventBus.js';
 import { resolveApproval } from '../src/services/approvals.js';
 import { enqueueRun } from '../src/services/agentLoop.js';
+import { taintRunRemote, effectiveRemote } from '../src/services/remoteOrigin.js';
 
 const USER = 'u1';
 const REMOTE = { via: 'tunnel', marked: true };
@@ -81,9 +82,11 @@ afterEach(() => {
 
 let runSeq = 0;
 /** 跑到终态;approval_request 一律拒(记下来),返回 { asked, status, error }。 */
-async function run(agentConfig: Record<string, any>, remote: boolean): Promise<{ asked: any[]; status: string; error?: string }> {
+async function run(agentConfig: Record<string, any>, remote: boolean, steered = false): Promise<{ asked: any[]; status: string; error?: string; runId: string }> {
   const asked: any[] = [];
   const runId = `L${++runSeq}`;
+  // steered:本机起的 run,被远端 steer 染色(路由在 enqueueSteer 成功后登记;这里在起跑前登记 = 首个迭代边界就已染上)
+  if (steered) taintRunRemote(runId, { via: 'p2p', marked: false });
   await createRun({
     id: runId, sessionId: 'S', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: `${runId}-a`,
     input: { message: 'go', userMessageId: `${runId}-u`, attachments: [], agentConfig: { execMode: 'host', cwd: ws, ...agentConfig }, origin: 'client', ...(remote ? { remote: REMOTE } : {}) },
@@ -100,7 +103,7 @@ async function run(agentConfig: Record<string, any>, remote: boolean): Promise<{
   try {
     for (;;) {
       const r = await getRun(runId);
-      if (r && ['done', 'failed', 'aborted'].includes(String(r.status))) return { asked, status: String(r.status), error };
+      if (r && ['done', 'failed', 'aborted'].includes(String(r.status))) return { asked, status: String(r.status), error, runId };
       if (Date.now() - t0 > 15_000) throw new Error(`run 未结束(status=${r?.status})`);
       await new Promise((res) => setTimeout(res, 25));
     }
@@ -146,6 +149,22 @@ describe('远程污点 run × 真 loop', () => {
     script = [delegate('touch a file'), bash(`touch ${join(ws, 'sub-remote.txt')}`), final('sub done'), final()];
     expect((await run({ approvalMode: 'full-auto' }, true)).asked.map((a) => a.name)).toEqual(['run_bash']);
     expect(existsSync(join(ws, 'sub-remote.txt'))).toBe(false);
+  });
+
+  it('⑥ 本机 run 被远端 steer 染色后:verifyCommand 不再执行、额外可写根不再免批;run 收尾即清色(负对照:未染色的同一配置照跑)', async () => {
+    const extra = mkdtempSync(join(tmpdir(), 'tangu-remote-loop-extra-'));
+    try {
+      const cfg = (mark: string) => ({ approvalMode: 'auto-edit', verifyCommand: `touch ${join(ws, mark)}`, extraRoots: [extra] });
+      script = [write(join(extra, 'plain.txt')), final()];
+      expect((await run(cfg('v-plain.txt'), false)).asked).toHaveLength(0);
+      expect(existsSync(join(ws, 'v-plain.txt'))).toBe(true);
+      script = [write(join(extra, 'steered.txt')), final()];
+      const r = await run(cfg('v-steered.txt'), false, true);
+      expect(r.asked.map((a) => [a.name, a.reason?.kind])).toEqual([['write_file', 'escalate']]);
+      expect(existsSync(join(extra, 'steered.txt'))).toBe(false);
+      expect(existsSync(join(ws, 'v-steered.txt'))).toBe(false);
+      expect(effectiveRemote({ runId: r.runId })).toBeUndefined();
+    } finally { rmSync(extra, { recursive: true, force: true }); }
   });
 
   it('⑤ 远程 run 进不了外部引擎私聊会话:明确失败、不回落自有 loop(负对照:本机交给引擎)', async () => {

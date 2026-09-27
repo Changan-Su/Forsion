@@ -116,13 +116,15 @@ export function applyRemoteConfigWrite(stored: unknown, next: Record<string, any
 }
 
 // ── 中途染色:远端对一个**本机**起的在飞 run 发 steer,注入的文字从下一个迭代起就在驱动它 → 这条 run 从此按远程钳制。
-// 进程内表(run 只活在本进程的 loop 里);runId 唯一,终态后留着也无害,只防无界增长。
+// 进程内表(run 只活在本进程的 loop 里)。只登记**已成功入队**的 steer(路由里 enqueueSteer 成功之后才调),
+// 表项随 run 收尾由 agentLoop 清掉(clearRunRemoteTaint)—— 表长 ≤ 在飞 run 数,不做容量淘汰:
+// 按 FIFO 挤掉的若是仍在跑的 run,它就悄悄回到本机档位(Codex 评审)。
 const steeredRemote = new Map<string, RemoteInfo>();
-const MAX_STEERED = 1000;
 export function taintRunRemote(runId: string, info: RemoteInfo): void {
-  if (steeredRemote.has(runId)) return;
-  if (steeredRemote.size >= MAX_STEERED) steeredRemote.delete(steeredRemote.keys().next().value as string);
-  steeredRemote.set(runId, info);
+  if (!steeredRemote.has(runId)) steeredRemote.set(runId, info);
+}
+export function clearRunRemoteTaint(runId: string): void {
+  steeredRemote.delete(runId);
 }
 
 /** 本次工具调用 / 审批的有效远程污点:run 起跑时的 input.remote(经 ctx 传下),或之后被远端 steer 染上的。 */

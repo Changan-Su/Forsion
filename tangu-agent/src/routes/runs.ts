@@ -369,9 +369,6 @@ router.post('/agent/runs/:id/steer', authMiddleware, async (req: AuthRequest, re
     }
     const run = await getRunForUser(req.params.id, userId);
     if (!run) return res.status(404).json({ detail: 'Run not found' });
-    // 远端 steer 本机 run:注入的文字从下一迭代起驱动它 → 先染色,审批闸 / 路径策略从此按远程钳制(C3)。
-    const remote = parseRemoteOrigin(req.headers);
-    if (remote) taintRunRemote(req.params.id, remote);
     const userMessageId = uuidv4();
     const ok = enqueueSteer(req.params.id, {
       id: userMessageId,
@@ -379,6 +376,10 @@ router.post('/agent/runs/:id/steer', authMiddleware, async (req: AuthRequest, re
       attachments: Array.isArray(attachments) ? attachments : [],
     });
     if (!ok) return res.status(409).json({ detail: 'run not active', reason: 'not_active' });
+    // 远端 steer 本机 run:注入的文字从下一迭代起驱动它 → 染色,审批闸 / 路径策略 / 验证命令从此按远程钳制(C3)。
+    // 只在入队成功后登记(失败的 steer 不占表);与 enqueueSteer 同一同步段,loop 在迭代边界消费前必已染上。
+    const remote = parseRemoteOrigin(req.headers);
+    if (remote) taintRunRemote(req.params.id, remote);
     res.json({ ok: true, userMessageId });
   } catch (err: any) {
     res.status(500).json({ detail: err?.message || 'Failed to steer run' });

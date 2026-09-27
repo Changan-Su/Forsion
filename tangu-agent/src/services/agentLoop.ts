@@ -49,7 +49,7 @@ import { getAgent, isValidSlug, DEFAULT_MAX_ITERATIONS, libDirOf, type NormalAge
 import { loadHarness, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
-import { clampApprovalMode, remoteApprovalCap, remoteOf } from './remoteOrigin.js';
+import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, remoteApprovalCap, remoteOf } from './remoteOrigin.js';
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, onUserRunStart, type HistorianForkSeed } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
@@ -2541,8 +2541,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         //    收尾前跑一遍;失败把输出尾巴回灌(不落库)逼模型修完再收。顺序刻意在完成度审计之后:
         //    先干完活(审计),再证明干对了(验证)。VERIFY_MAX_ROUNDS 兜底:最后一次仍红 → 在终稿
         //    尾部如实标注,绝不无限修。host-only:命令是用户自己配的,与 hooks 同级信任,不过审批闸。——
-        // 远程污点 run 不跑验证命令(它以 /bin/sh -c 执行、不过审批闸):路由已剥,这里兜住从会话存值 / 派生配置抄进来的。
-        const verifyCommand = execMode === 'host' && !remote && typeof agentConfig.verifyCommand === 'string'
+        // 远程污点 run 不跑验证命令(它以 /bin/sh -c 执行、不过审批闸):路由已剥,这里兜住从会话存值 / 派生配置抄进来的,
+        // 以及起跑后才被远端 steer 染上的(现查 effectiveRemote)。
+        const verifyCommand = execMode === 'host' && !effectiveRemote({ remote, runId }) && typeof agentConfig.verifyCommand === 'string'
           ? String(agentConfig.verifyCommand).trim() : '';
         if (verifyCommand && usedTools && !planMode && !lastIter && verifyRounds < VERIFY_MAX_ROUNDS) {
           verifyRounds++;
@@ -2780,6 +2781,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     steerWakeups.delete(runId);
     steerArrivals.delete(runId);
     steerClosed.delete(runId);
+    clearRunRemoteTaint(runId); // 远端 steer 染的色随 run 收尾(表长 = 在飞 run 数)
     runSession.delete(runId);
     advanceQueue(sessionId); // 推进同会话队列：起下一个排队 run（正常完成/失败/中止都经此）
     setTimeout(() => cleanup(runId), 30_000);

@@ -484,8 +484,9 @@ export async function gateToolCall(
   // known-safe 只读 bash:免审批(碰凭据文件的不算 known-safe,见 isKnownSafeBash)。
   if (!forceAsk && name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) return { action: 'approve' };
 
-  // 越界写升级:工作区外写一律要批(full-auto 例外:用户已全信任)。
-  const escalate = ctx.execMode === 'host' && mode !== 'full-auto' && writeEscalationNeeded(call, ctx);
+  // 越界写升级:工作区外写一律要批(full-auto 例外:用户已全信任)。远程污点 run 不认额外可写根(同 fsPolicy.writableRoots)。
+  const escCtx = remote ? { ...ctx, extraRoots: undefined } : ctx;
+  const escalate = ctx.execMode === 'host' && mode !== 'full-auto' && writeEscalationNeeded(call, escCtx);
   if (escalate) logEscalation(runId, call, ctx);
 
   if (!escalate && !forceAsk && !protectedAsk) {
@@ -512,7 +513,8 @@ export async function gateToolCall(
   });
   // 诚实性:这是 hook 挡的,不是用户拒的 —— 不写清楚,模型和用户都会以为「用户拒绝了该操作」
   if (permV.block) return { action: 'reject', rejectReason: 'Denied by a PermissionRequest hook.' };
-  if (permV.allow && !protectedAsk) return { action: 'approve' };
+  // hook 的 allow 对远程污点 run 同样不越过上限档(C3):上限档本身要问的,hook 也不代答;block 照常生效。
+  if (permV.allow && !protectedAsk && !(cap && (await capWouldAsk(call, cap, escCtx)))) return { action: 'approve' };
   // 改参重闸:「这个档位下这个工具要不要问」刚在审批卡上被答过(批准者就是在那张卡上改的参数),不问第二遍 ——
   // 否则桌面 / TUI 改完 bash 命令还得再批一次。越界写与 custom ask 规则看的是**参数**,照新参数重问(上面的 deny 规则与 hook 也已按新参数判过)。
   if (editedOnCard && !escalate && !forceAsk && !protectedAsk) return { action: 'approve' };
@@ -526,6 +528,10 @@ export async function gateToolCall(
     : escalate || protectedAsk
       ? { kind: 'escalate', mode }
       : { kind: 'mode', mode };
+  // 无人值守且没有异步审批通道(自动化 / Muse 完全通行档,被远端 steer 染色后才会走到这里):没人答,await 就是永久挂起 → 直接拒。
+  if (ctx.unattended && !ctx.approvalDeferral) {
+    return { action: 'reject', rejectReason: 'This unattended run cannot ask for approval, so the action was not performed.' };
+  }
   // 无人值守 run:没有订阅者能应答 approval_request,await 就是永久卡死 → 排队 / 代批(动态 import 防模块环)。
   if (ctx.approvalDeferral) {
     const { deferApproval } = await import('./pendingApprovals.js');
@@ -559,7 +565,7 @@ async function capWouldAsk(
   if (cap === 'full-auto') return false;
   const name = call.function.name;
   if (name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) return false;
-  if (ctx.execMode === 'host' && writeEscalationNeeded(call, ctx)) return true;
+  if (ctx.execMode === 'host' && writeEscalationNeeded(call, { cwd: ctx.cwd })) return true; // 远程不认额外可写根
   const userBrowser = USER_BROWSER_ACTIONS.has(name) && !ctx.approvalDeferral && await userBrowserBound();
   return toolNeedsApproval(name, cap, { userBrowser, remote: true });
 }

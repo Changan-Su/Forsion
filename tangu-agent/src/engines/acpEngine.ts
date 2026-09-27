@@ -50,7 +50,8 @@ export function spawnEngine(def: EngineDef, opts?: { cwd?: string; detached?: bo
     cwd: opts?.cwd,
     stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'], // 元组字面量 → 非空 stdin/stdout 流类型
     // 剥引擎凭据(C2):外部 CLI 跑模型驱动的命令,拿到 forsion_token / 本机令牌就能绕过本引擎直调云端与本机端点。
-    env: { ...envWithFullPath(toolSubprocessEnv()), ...(def.env ?? {}) },
+    // 在**合成之后**再剥:引擎清单的 def.env 也不许把这些键加回来。
+    env: toolSubprocessEnv({ ...envWithFullPath(process.env), ...(def.env ?? {}) }),
     shell: process.platform === 'win32',
     windowsHide: true,
     detached: opts?.detached ?? false,

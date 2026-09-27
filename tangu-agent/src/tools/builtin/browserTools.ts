@@ -340,7 +340,7 @@ let npxBin: Promise<string | null> | null = null;
 function resolveNpxBin(): Promise<string | null> {
   npxBin ??= new Promise((resolve) => {
     if (process.platform === 'win32') { resolve(null); return; }
-    execFile('npx', ['-y', '-p', 'agent-browser', '-c', 'command -v agent-browser'], { timeout: 120_000 }, (err, stdout) => {
+    execFile('npx', ['-y', '-p', 'agent-browser', '-c', 'command -v agent-browser'], { timeout: 120_000, env: toolSubprocessEnv() }, (err, stdout) => {
       const link = String(stdout || '').trim().split('\n').pop();
       if (err || !link) { resolve(null); return; }
       void (async () => {

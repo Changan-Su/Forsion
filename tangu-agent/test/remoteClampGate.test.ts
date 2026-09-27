@@ -20,9 +20,10 @@ const state = vi.hoisted(() => ({
   rules: undefined as any,
   remote: undefined as any,
   storedMode: undefined as string | undefined,
+  hook: {} as any,
 }));
 vi.mock('../src/services/eventBus.js', async (orig) => ({ ...(await orig<any>()), publish: state.publish }));
-vi.mock('../src/hooks/index.js', () => ({ runHooks: vi.fn(async () => ({})) }));
+vi.mock('../src/hooks/index.js', () => ({ runHooks: vi.fn(async () => state.hook) }));
 vi.mock('../src/core/config.js', async (orig) => ({
   ...(await orig<typeof import('../src/core/config.js')>()),
   getRawSection: (name: string) => (name === 'approval' ? state.rules : name === 'remote' ? state.remote : undefined),
@@ -34,7 +35,7 @@ import { gateToolCall, isKnownSafeBash, isAlwaysAllowed, allowAlways, resolveApp
 import {
   parseRemoteOrigin, clampApprovalMode, sanitizeRemoteAgentConfig, applyRemoteConfigWrite, taintRunRemote, remoteApprovalCap,
 } from '../src/services/remoteOrigin.js';
-import { checkWritePath, checkReadPath } from '../src/tools/fsPolicy.js';
+import { checkWritePath, checkReadPath, writableRoots } from '../src/tools/fsPolicy.js';
 import { HOST_TOOLS } from '../src/tools/hostExec.js';
 import { fileSearchProvider } from '../src/tools/builtin/fileSearch.js';
 import { prepareHostCommand, spawnHostShell } from '../src/sandbox/hostSandbox.js';
@@ -83,7 +84,7 @@ afterAll(() => {
   delete process.env.TANGU_HOME;
   try { rmSync(home, { recursive: true, force: true }); rmSync(ws, { recursive: true, force: true }); } catch { /* ignore */ }
 });
-beforeEach(() => { state.rules = undefined; state.remote = undefined; state.storedMode = undefined; });
+beforeEach(() => { state.rules = undefined; state.remote = undefined; state.storedMode = undefined; state.hook = {}; });
 
 describe('C1 远程头解析', () => {
   it('无头 = 本机;在场即远程,盖章按密钥(sha256 + timingSafeEqual)判,错章 / 无章照样是远程', () => {
@@ -180,6 +181,34 @@ describe('C3 审批闸有效档', () => {
     expect((await p).action).toBe('reject');
   });
 
+  it('PermissionRequest hook 的 allow 不越过上限档(Codex 评审;负对照:本机 hook allow 照放),block 照常生效', async () => {
+    state.hook = { allow: true };
+    expect((await gate(call('run_bash', { command: 'touch x' }), { approvalMode: 'readonly' })).decision.action).toBe('approve');
+    expect((await gate(call('run_bash', { command: 'touch x' }), { approvalMode: 'full-auto', remote: REMOTE })).asked).toBe(true);
+    state.hook = { block: true };
+    expect((await gate(call('run_bash', { command: 'touch x' }), { approvalMode: 'full-auto', remote: REMOTE })).decision.action).toBe('reject');
+  });
+
+  it('额外可写根对远程(含起跑后被 steer 染上的)不作数:越界写要批(负对照:本机认额外根)', async () => {
+    const extra = mkdtempSync(join(tmpdir(), 'tangu-remote-extra-')); // 家目录之外(家目录对远程整片禁写,测不到额外根)
+    const ctx = { approvalMode: 'auto-edit', extraRoots: [extra] };
+    expect((await gate(call('write_file', { path: join(extra, 'x.txt'), content: 'x' }), ctx)).decision.action).toBe('approve');
+    expect((await gate(call('write_file', { path: join(extra, 'x.txt'), content: 'x' }), { ...ctx, remote: REMOTE })).asked).toBe(true);
+    taintRunRemote('R-steered-roots', REMOTE);
+    const base = { userId: 'u', sessionId: 'S', appId: 'tangu', execMode: 'host', cwd: ws, extraRoots: [extra] } as ToolContext;
+    expect(writableRoots(base)).toContain(extra);
+    expect(writableRoots({ ...base, runId: 'R-steered-roots' })).not.toContain(extra);
+  });
+
+  it('无人值守且没有异步审批通道的 run 被染色后:要问的直接拒,不挂死(负对照:同条件非无人值守会弹卡)', async () => {
+    const t0 = Date.now();
+    const r = await gate(call('run_bash', { command: 'touch x' }), { approvalMode: 'full-auto', remote: REMOTE, unattended: true });
+    expect(r.asked).toBe(false);
+    expect(r.decision).toMatchObject({ action: 'reject' });
+    expect(r.decision.rejectReason).toMatch(/unattended/);
+    expect(Date.now() - t0).toBeLessThan(140);
+  });
+
   it('持久化后续执行入口:远程 auto-edit 下 manage_automation / manage_schedule 要批(本机同档不问)', async () => {
     expect(toolNeedsApproval('manage_automation', 'auto-edit')).toBe(false);
     expect(toolNeedsApproval('manage_automation', 'auto-edit', { remote: true })).toBe(true);
@@ -203,11 +232,16 @@ describe('C4 凭据 / 本机配置', () => {
     expect(checkReadPath(join(home, 'notes.txt')).ok).toBe(true);
   });
 
-  it('search_files 不吐凭据文件的命中行(同一个词在普通文件里照样搜得到)', async () => {
+  it('search_files 打开前就排除凭据文件(同一个词在普通文件里照样搜得到);搜索根落在凭据目录里 → 整次拒', async () => {
     const tool = fileSearchProvider.tools().find((t) => t.name === 'search_files')!;
-    const out = await tool.execute({ pattern: 'SECRET-FORSION-TOKEN' }, { userId: 'u', sessionId: 'S', appId: 'tangu', execMode: 'host', cwd: home } as ToolContext);
+    const ctx = { userId: 'u', sessionId: 'S', appId: 'tangu', execMode: 'host', cwd: home } as ToolContext;
+    const out = await tool.execute({ pattern: 'SECRET-FORSION-TOKEN' }, ctx);
     expect(out).toContain('notes.txt');
     expect(out).not.toContain('auth.json');
+    expect(await tool.execute({ pattern: 'SECRET-FORSION-TOKEN', include: '*.json' }, ctx)).not.toContain('auth.json'); // include 压不过排除
+    mkdirSync(join(home, 'secrets'), { recursive: true });
+    writeFileSync(join(home, 'secrets', 'k.txt'), 'SECRET-FORSION-TOKEN');
+    expect(await tool.execute({ pattern: 'SECRET-FORSION-TOKEN' }, { ...ctx, cwd: join(home, 'secrets') })).toMatch(/^Error: Access denied/);
   });
 
   it('known-safe 捷径不碰凭据:cat 凭据 / 在含凭据的目录里递归 rg 都要走审批(负对照:普通文件照旧免批)', async () => {
@@ -280,11 +314,16 @@ describe('C2 工具子进程剥凭据环境变量', () => {
       expect(readFileSync(join(ws, 'bg.txt'), 'utf8')).toBe('');
       await runVerifyCommand('printf "%s" "$TANGU_LOCAL_TOKEN$TANGU_TOKEN" > verify.txt', ws);
       expect(readFileSync(join(ws, 'verify.txt'), 'utf8')).toBe('');
-      const child = spawnEngine({ id: 'probe', name: 'probe', command: process.execPath, args: ['-e', 'process.stdout.write(String(process.env.TANGU_TOKEN || "none"))'] } as any);
+      // 引擎清单的 def.env 也不许把凭据加回来(Codex 评审)
+      const child = spawnEngine({ id: 'probe', name: 'probe', command: process.execPath, args: ['-e', 'process.stdout.write(String(process.env.TANGU_TOKEN || "none"))'], env: { TANGU_TOKEN: 'from-def' } } as any);
       let got = '';
       child.stdout.on('data', (d) => { got += d.toString(); });
       await new Promise((r) => child.once('close', r));
       expect(got).toBe('none');
+      // 工具调用触发的 hook 子进程
+      const { executeHook } = await vi.importActual<typeof import('../src/hooks/runner.js')>('../src/hooks/runner.js');
+      await executeHook({ key: 'k', event: 'SessionStart', handler: { type: 'command', command: `printf "%s" "$TANGU_TOKEN$TANGU_LOCAL_TOKEN" > hook.txt` }, source: 'user', contentHash: 'h', trust: 'trusted', enabled: true, active: true } as any, {} as any, { cwd: ws, hostSandbox: { mode: 'off' } } as any);
+      expect(readFileSync(join(ws, 'hook.txt'), 'utf8')).toBe('');
     } finally { clear(); }
   });
 });

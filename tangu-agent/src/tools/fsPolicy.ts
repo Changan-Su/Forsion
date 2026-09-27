@@ -34,6 +34,8 @@ export function writableRoots(ctx: ToolContext): string[] {
   } catch { /* ignore */ }
   // 用户在「工作范围」里显式加的目录:等同工作区,不再逐次弹越界写审批。
   // 仍受 isProtected 约束(.git 内部、~/.ssh 等一律硬拒),加进来也提不了权。
+  // 远程污点 run 没有额外可写根(C1 剥 extraRoots;起跑后才被远端 steer 染上的本机 run 也从此不认)。
+  if (effectiveRemote(ctx)) return roots;
   for (const r of ctx.extraRoots || []) {
     if (typeof r === 'string' && r.trim()) roots.push(path.resolve(r.trim()));
   }

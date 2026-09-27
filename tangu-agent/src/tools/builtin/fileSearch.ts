@@ -12,11 +12,31 @@ import { listWorkspaceMetas, readWorkspaceFileRaw, scopeOf } from '../fileWorksp
 import { runBoundedProcess } from '../../utils/boundedProcess.js';
 import { FileSearchWorker, checkSearchAbort, searchAbortError } from './fileSearchWorker.js';
 import path from 'node:path';
-import { credentialPaths, matchProtected } from '../../sandbox/hostSandboxProtection.js';
+import { canonicalFuturePath, credentialPaths, matchProtected, pathWithin } from '../../sandbox/hostSandboxProtection.js';
 import { toolSubprocessEnv } from '../../sandbox/credentialEnv.js';
 
-/** 契约 C4:凭据文件对所有 run 读硬拒 —— 内容搜索同样不许把它们的行吐出来(cwd 在家目录时 rg 会走进
- *  ~/Library/Application Support/<桌面>/tangu-desktop-config.json;在 ~/.forsion 里则直接命中 auth.json)。 */
+/**
+ * 契约 C4:凭据文件对所有 run 读硬拒 —— 内容搜索**打开之前**就排除(cwd 在家目录时 rg 会走进
+ * ~/Library/Application Support/<桌面>/tangu-desktop-config.json;在 ~/.forsion 里则直接命中 auth.json)。
+ * 返回搜索根下凭据路径的相对 posix 形态(rg 用 `--iglob !/<rel>`、回退扫描按名跳过);根本身就在凭据路径里 → null(整次拒)。
+ */
+function credentialExclusions(baseDir: string): string[] | null {
+  const creds = credentialPaths();
+  const bases = [...new Set([path.resolve(baseDir), canonicalFuturePath(baseDir)])];
+  if (bases.some((b) => matchProtected(b, creds))) return null;
+  const rels = new Set<string>();
+  for (const b of bases) {
+    for (const c of creds) {
+      if (!pathWithin(c, b)) continue;
+      const rel = path.relative(b, c).split(path.sep).join('/');
+      if (rel && !rel.startsWith('..')) rels.add(rel);
+    }
+  }
+  return [...rels];
+}
+const CREDENTIAL_SEARCH_DENIED = 'Error: Access denied: this directory holds protected credential files and cannot be searched by agents.';
+
+/** 第二道:结果行里若仍出现凭据文件(硬链接 / 大小写别名等),整行丢掉。 */
 function dropCredentialLines(text: string, baseDir: string): string {
   const creds = credentialPaths();
   return text.split('\n').filter((line) => {
@@ -111,10 +131,12 @@ function formatHits(hits: SearchHit[], truncatedScan: boolean): string {
 }
 
 /** host 模式优先 ripgrep(ENOENT 回退 nodeSearch)。 */
-async function rgSearch(cwd: string, pattern: string, include?: string, signal?: AbortSignal, caseSensitive = false): Promise<string | null> {
+async function rgSearch(cwd: string, pattern: string, include?: string, signal?: AbortSignal, caseSensitive = false, exclude: string[] = []): Promise<string | null> {
   checkSearchAbort(signal);
   const args = ['-n', '--no-messages', '--max-count', '50', '--max-filesize', '1M', caseSensitive ? '--case-sensitive' : '--ignore-case', '-e', pattern];
   if (include) args.push('--glob', include);
+  // 排除放在 include 之后(rg 的 glob 后者优先);`!/rel` 锚定到搜索根,iglob 大小写不敏感(macOS / Windows 文件系统同名)。
+  for (const rel of exclude) args.push('--iglob', `!/${rel}`);
   args.push('.');
   const result = await runBoundedProcess('rg', args, { cwd, env: toolSubprocessEnv(), signal, timeoutMs: 30_000, maxOutputBytes: MAX_OUTPUT_CHARS * 4 });
   checkSearchAbort(signal);
@@ -207,15 +229,17 @@ export const fileSearchProvider: ToolProvider = {
         }
         const include = args.include ? globToRegExp(String(args.include)) : undefined;
         const baseDir = await resolveBaseDir(ctx);
+        const exclude = baseDir ? credentialExclusions(baseDir) : [];
+        if (exclude === null) return CREDENTIAL_SEARCH_DENIED;
         if (ctx.execMode === 'host') {
-          const viaRg = await rgSearch(baseDir!, pattern, args.include ? String(args.include) : undefined, ctx.signal, !!args.case_sensitive);
+          const viaRg = await rgSearch(baseDir!, pattern, args.include ? String(args.include) : undefined, ctx.signal, !!args.case_sensitive, exclude);
           if (viaRg !== null) return viaRg;
         }
         checkSearchAbort(ctx.signal);
         const worker = new FileSearchWorker({ pattern: regex.source, flags: regex.flags, include: include?.source }, ctx.signal);
         try {
           if (!baseDir) return await cloudSearch(ctx, worker);
-          const result = await worker.run<{ hits: SearchHit[]; capped: boolean }>({ type: 'scan', base: baseDir });
+          const result = await worker.run<{ hits: SearchHit[]; capped: boolean }>({ type: 'scan', base: baseDir, exclude });
           // 同 dropCredentialLines:凭据文件的命中行不出工具结果(C4)。云端 / 会话工作区里没有它们,照样过一遍无害。
           const creds = credentialPaths();
           return formatHits(result.hits.filter((h) => !matchProtected(path.resolve(baseDir, h.file), creds)), result.capped);
