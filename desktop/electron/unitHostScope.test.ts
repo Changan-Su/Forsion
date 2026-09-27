@@ -124,5 +124,59 @@ describe('unitHostScope:校验与读取之间换软链(Codex 三轮 P1)', () => 
     expect(await withVerifiedUnitPath(dir, roots(), env, guard, true, (real) => readdir(real))).toEqual(['a.md'])
     expect(await withVerifiedUnitPath(dir, roots(), env, guard, true, (real) => readdir(real), { beforeOpen: swap })).toBeNull()
   })
+
+  // ── Codex 终审 out1 #4:换过去、列 / stat、再换回来 —— 对象身份前后一致,旧实现照样吐出受保护目录的条目名 ──
+  /** ws/<name> 是个普通目录;swap() 换成指向 ~/.forsion 的软链,back() 换回原目录(每次调用都换,重试也照换)。 */
+  async function dirRacer(name: string, target = join(home, '.forsion')): Promise<{ dir: string; swap: () => Promise<void>; back: () => Promise<void> }> {
+    const dir = join(ws(), name)
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'a.md'), 'x')
+    return {
+      dir,
+      swap: async () => { await rename(dir, dir + '.real'); await symlink(target, dir) },
+      back: async () => { await rename(dir, dir + '.link'); await rename(dir + '.real', dir) },
+    }
+  }
+
+  it('目录列表:换过去、列、再换回来 → null(父目录 mtime 变了),不吐 auth.json 等条目名', async () => {
+    const r = await dirRacer('lsback')
+    expect(await withVerifiedUnitPath(r.dir, roots(), env, guard, true, (real) => readdir(real))).toEqual(['a.md'])
+    let listed: string[] | null = null
+    const got = await withVerifiedUnitPath(r.dir, roots(), env, guard, true, async (real) => (listed = await readdir(real)), { beforeOpen: r.swap, afterOpen: r.back })
+    expect(listed).toContain('auth.json') // 非空性:竞态确实打中了 —— 读到的是受保护目录
+    expect(got).toBeNull()
+    expect(await readdir(r.dir)).toEqual(['a.md']) // 换回来了:路径复核看着一切正常
+  })
+
+  it('stat:换过去、stat、再换回来 → null(不吐受保护目录的条目数 / 时间)', async () => {
+    const r = await dirRacer('statback')
+    const count = async (real: string): Promise<number> => (await readdir(real)).length
+    expect(await withVerifiedUnitPath(r.dir, roots(), env, guard, true, count)).toBe(1)
+    expect(await withVerifiedUnitPath(r.dir, roots(), env, guard, true, count, { beforeOpen: r.swap, afterOpen: r.back })).toBeNull()
+  })
+
+  it('换的是更上层的一段(ws/outer 换成软链、列 ws/outer/inner、再换回来)→ null', async () => {
+    const outer = join(ws(), 'outer')
+    await mkdir(join(outer, 'inner'), { recursive: true })
+    await writeFile(join(outer, 'inner', 'a.md'), 'x')
+    await mkdir(join(home, '.forsion', 'inner'), { recursive: true })
+    await writeFile(join(home, '.forsion', 'inner', 'secret.json'), '{}')
+    const swap = async (): Promise<void> => { await rename(outer, outer + '.real'); await symlink(join(home, '.forsion'), outer) }
+    const back = async (): Promise<void> => { await rename(outer, outer + '.link'); await rename(outer + '.real', outer) }
+    let listed: string[] | null = null
+    const got = await withVerifiedUnitPath(join(outer, 'inner'), roots(), env, guard, true, async (real) => (listed = await readdir(real)), { beforeOpen: swap, afterOpen: back })
+    expect(listed).toContain('secret.json')
+    expect(got).toBeNull()
+  })
+
+  it('正常并发写(列的时候同目录新建了一个文件):重试一次照常返回,不误判', async () => {
+    const dir = join(ws(), 'busy')
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, 'a.md'), 'x')
+    let n = 0
+    const sibling = async (): Promise<void> => { if (n++ === 0) await writeFile(join(ws(), `busy-sibling-${Date.now()}.md`), 'y') }
+    expect(await withVerifiedUnitPath(dir, roots(), env, guard, true, (real) => readdir(real), { afterOpen: sibling })).toEqual(['a.md'])
+    expect(n).toBe(2) // 第一次指纹不等(父目录 mtime 变了)→ 重试一次
+  })
 })
 
