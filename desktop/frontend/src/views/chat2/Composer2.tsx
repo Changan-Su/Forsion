@@ -21,6 +21,7 @@ import { THINKING_LEVELS } from '../../types'
 import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../types'
 import { useEdgeNudge, useWorkspace } from '@lcl/engine'
 import { ModelPill, type ModelPillGroup } from '../../components/ModelPill'
+import { UltraConfirmDialog, ultraConfirmSkipped } from './UltraConfirmDialog'
 import { registerMessages, useI18n } from '../../i18n'
 import { displaySessionTitle } from '../../sessionTitle'
 import { groupModelsByProvider } from '../../components/ModelGroupList'
@@ -571,6 +572,15 @@ export const Composer2: React.FC<{
   const allowUltra = isHost && !isChat && !engineId && !groupChat
   // 与发送侧 settleUltra 同口径:只跟 max 同在(陈旧的「ultra + 别的档」不显示 Ultra,发送时也不带)
   const ultraOn = allowUltra && !!ultra && thinkingLevel === 'max'
+  // 开 Ultra 的所有入口(滑杆第 8 格 / `/think ultra` / 斜杠菜单)都过这里:没勾过「以后不再显示」就先弹确认(09-27 用户要求)。
+  // 返回是否已当场生效(弹了确认就是 false,由确认框收尾)。
+  const [ultraAsk, setUltraAsk] = useState(false)
+  const applyThinking = (lv: NonNullable<AgentConfig['thinkingLevel']>, u?: boolean): boolean => {
+    if (!onThinkingChange) return false
+    if (u === true && !ultraOn && !ultraConfirmSkipped()) { setUltraAsk(true); return false }
+    onThinkingChange(lv, u)
+    return true
+  }
   // 视口兜底:这些菜单是 absolute-in-relative + 固定宽度,窄屏时仍可能被边缘夹住。
   // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
   const modeFix = useEdgeNudge(openMenu === 'mode', { boundary: '.t2-chat-view' })
@@ -580,10 +590,11 @@ export const Composer2: React.FC<{
   useEffect(() => {
     if (!openMenu) return
     const onDown = (e: MouseEvent) => {
-      if ((e.target as HTMLElement)?.closest?.('[data-cmenu]')) return
+      // data-keep-menus:从菜单里弹出的确认框(如开 Ultra)—— 点它、在它里面按 Esc 都不算离开菜单
+      if ((e.target as HTMLElement)?.closest?.('[data-cmenu], [data-keep-menus]')) return
       setOpenMenu(null)
     }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpenMenu(null) }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !(e.target as HTMLElement)?.closest?.('[data-keep-menus]')) setOpenMenu(null) }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
     return () => {
@@ -798,14 +809,14 @@ export const Composer2: React.FC<{
           cmd: `/think ${lv}`,
           desc: `${t('input.slash.thinkDesc', { level: thinkingLabel(lv, t) })}${unsupported ? ` ${t('pill.thinkUnsupported')}` : ''}${!ultraOn && thinkingLevel === lv ? t('input.slash.current') : ''}`,
           // 显式点一档 = 关掉 Ultra(Ultra 开着时引擎只认 max,不关的话这一下静默无效)。
-          run: () => { if (allowUltra) onThinkingChange(lv, false); else onThinkingChange(lv); close() },
+          run: () => { applyThinking(lv, allowUltra ? false : undefined); close() },
         })
       }
       if (allowUltra) {
         items.push({
           cmd: '/think ultra',
           desc: `${t('pill.ultraTitle')}${ultraOn ? t('input.slash.current') : ''}`,
-          run: () => { onThinkingChange('max', true); close() },
+          run: () => { applyThinking('max', true); close() },
         })
       }
     }
@@ -1123,11 +1134,10 @@ export const Composer2: React.FC<{
     if (thinkMatch && onThinkingChange) {
       const lv = (thinkMatch[1] || '').toLowerCase() as NonNullable<AgentConfig['thinkingLevel']>
       if (allowUltra && (lv as string) === 'ultra') {
-        onThinkingChange('max', true)
-        setHint(t('input.slash.thinkSet', { level: t('pill.ultra') }))
+        // 弹了确认框就不报「已设为」:还没生效,确认框本身就是反馈
+        if (applyThinking('max', true)) setHint(t('input.slash.thinkSet', { level: t('pill.ultra') }))
       } else if (THINKING_LEVELS.includes(lv)) {
-        if (allowUltra) onThinkingChange(lv, false)
-        else onThinkingChange(lv)
+        applyThinking(lv, allowUltra ? false : undefined)
         setHint(t('input.slash.thinkSet', { level: thinkingLabel(lv, t) }))
       } else {
         setHint(t('input.slash.thinkUsage', { levels: [...THINKING_LEVELS, ...(allowUltra ? ['ultra'] : [])].join('|') }))
@@ -1724,7 +1734,7 @@ export const Composer2: React.FC<{
                 groups={modelPillGroups}
                 onSelect={isEngine ? (id) => onEngineModelChange?.(id) : (id) => onModelChange?.(id)}
                 thinkingLevel={isEngine ? undefined : thinkingLevel}
-                onThinkingChange={isEngine ? undefined : onThinkingChange}
+                onThinkingChange={isEngine || !onThinkingChange ? undefined : (lv, u) => { applyThinking(lv, u) }}
                 allowUltra={allowUltra}
                 ultra={ultraOn}
                 supportedThinking={isEngine ? undefined : models?.find((m) => m.id === modelId)?.thinkingLevels}
@@ -1780,6 +1790,17 @@ export const Composer2: React.FC<{
         </ChatBoxSurface>
       </div>
       {rulesOpen && <ApprovalRulesModal cfg={liveCfg} onClose={() => setRulesOpen(false)} />}
+      {ultraAsk && (
+        <UltraConfirmDialog
+          offerFullAccess={isHost && !teamApproval && approval !== 'full-auto'}
+          onConfirm={({ fullAccess }) => {
+            // 不走 setApproval:它会顺手关掉模型菜单,确认后就看不到滑杆原地切进 Ultra
+            if (fullAccess) onExecConfigChange({ execMode: 'host', approvalMode: 'full-auto', cwd: execConfig.cwd })
+            onThinkingChange?.('max', true)
+          }}
+          onClose={() => setUltraAsk(false)}
+        />
+      )}
     </div>
   )
 }

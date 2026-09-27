@@ -2,10 +2,14 @@
  * 思考档位 Ultra(对标 Codex Ultra:max + 主动并行派子代理)的真 Electron 台架:真组件 / store × 可编剧假引擎。
  * 钉的是单测够不着的接线与观感:
  *   U1 本机 work 会话:滑杆第 8 格是 Ultra;U2 sandbox 会话:没有这一格(Ultra 入口只给 host 会话,云端 / chat 都是 sandbox)
- *   U3 拖到 Ultra → PATCH 带 { thinkingLevel:'max', ultra:true },药丸与滑杆换 Ultra 皮,冲击波放一次
+ *   U3 拖到 Ultra 先弹确认框(09-27 用户要求:说清 token 代价、推荐「完全放行」、「以后不再显示」):
+ *      U3e Esc 取消 → 一个 PATCH 都没发、模型菜单还开着;U3f 再拖、勾「同时切到完全放行」确认 → PATCH 审批档 full-auto 与
+ *      { thinkingLevel:'max', ultra:true },菜单原地切进 Ultra(皮 + 冲击波放一次)
  *   U4 关掉菜单再开:冲击波不再放(只在「刚切进来」那一下);U4b 切进来 0.1s 内就关菜单(动画没放完)再开也不重播
- *   U5 发一句 → run 的 agent_config 带 ultra:true + max(引擎就靠这个键)
- *   U6 显式改回「深」→ PATCH 把 ultra 删掉(null),药丸回普通皮;U7 `/think ultra` 键盘路径能切回 Ultra
+ *   U5 发一句 → run 的 agent_config 带 ultra:true + max + full-auto(引擎就靠这几个键)
+ *   U6 显式改回「深」→ PATCH 把 ultra 删掉(null),药丸回普通皮
+ *   U7 `/think ultra` 键盘路径同样先弹确认;勾「以后不再显示」确认 → 切回 Ultra;U8 之后再开不弹、直接生效
+ *   U9 审批档已是「完全放行」时确认框不再推荐 / 不给那个勾选项(借 U7 那一轮验)
  * 截图落 ULTRA_SHOT_DIR(缺省 /tmp/ultra-effort-shots):药丸 + 展开的滑杆,自己看。
  *
  * 需先 npm run build。用法:npm run check:ultra
@@ -103,10 +107,34 @@ async function main() {
     const input = win.locator('.cm-effort-input').first()
     const localMax = await input.getAttribute('max').catch(() => null)
     check('U1 本机 work 会话:滑杆第 8 格是 Ultra(max=7)', localMax === '7', `max=${localMax}`)
+    const dialog = win.locator('[data-ultra-confirm] .dialog')
+    const patchesBefore = stub.seen.configs.filter((c) => c.sessionId === 'local').length
     await input.focus()
     await win.keyboard.press('End')
+    await win.waitForTimeout(300)
+    const askShown = await dialog.count().catch(() => 0)
+    const offer = await win.locator('[data-ultra-full-access]').count().catch(() => 0)
+    await win.screenshot({ path: path.join(SHOTS, 'ultra-confirm.png') })
+    await win.keyboard.press('Escape')
+    await win.waitForTimeout(300)
+    const afterEsc = {
+      dialog: await dialog.count().catch(() => 0),
+      menuOpen: await win.locator('.cm-effort').count().catch(() => 0),
+      patches: stub.seen.configs.filter((c) => c.sessionId === 'local').length - patchesBefore,
+      value: await win.locator('.cm-effort-input').first().inputValue().catch(() => null),
+    }
+    check('U3e 拖到 Ultra 先弹确认框(带「推荐完全放行」勾选项);Esc 取消 → 不发 PATCH、滑杆没动、模型菜单还开着',
+      askShown === 1 && offer === 1 && afterEsc.dialog === 0 && afterEsc.menuOpen === 1 && afterEsc.patches === 0 && afterEsc.value !== '7',
+      JSON.stringify({ askShown, offer, ...afterEsc }))
+    await win.locator('.cm-effort-input').first().focus()
+    await win.keyboard.press('End')
+    await win.waitForTimeout(300)
+    await win.locator('[data-ultra-full-access] input').check()
+    await win.locator('[data-ultra-confirm] .dialog-btn[data-primary]').click()
     await win.waitForTimeout(120)
     const burstSeen = await win.locator('.cm-effort-burst').count().catch(() => 0)
+    const approvalPatch = stub.seen.configs.find((c) => c.sessionId === 'local' && c.method === 'PATCH' && c.config?.approvalMode === 'full-auto')
+    check('U3f 勾「同时切到完全放行」确认 → PATCH 审批档 full-auto', !!approvalPatch, JSON.stringify(approvalPatch?.config))
     await win.waitForTimeout(900)
     const ui = await win.evaluate(() => ({
       effort: document.querySelector('.cm-effort')?.className || '',
@@ -138,13 +166,17 @@ async function main() {
     await win.keyboard.press('ArrowLeft')
     await win.waitForTimeout(250)
     await win.keyboard.press('End')
+    await win.waitForTimeout(250)
+    // 还没勾「以后不再显示」:照样先弹确认,点确认后冲击波才放
+    const dialogInU4b = await dialog.count().catch(() => 0)
+    if (dialogInU4b) await win.locator('[data-ultra-confirm] .dialog-btn[data-primary]').click()
     await win.waitForTimeout(60)
     const midBurst = await win.locator('.cm-effort-burst').count().catch(() => 0)
     await closePill(win)
     await openPill(win)
     await win.waitForTimeout(60)
     const replay = await win.locator('.cm-effort-burst').count().catch(() => 0)
-    check('U4b 动画没放完就关菜单,重开不重播', midBurst === 1 && replay === 0, `mid=${midBurst} replay=${replay}`)
+    check('U4b 动画没放完就关菜单,重开不重播', midBurst === 1 && replay === 0, `mid=${midBurst} replay=${replay} dialog=${dialogInU4b}`)
     await closePill(win)
 
     // ── U5:发一句,run 带 ultra
@@ -155,8 +187,9 @@ async function main() {
     await win.keyboard.press('Enter')
     await win.waitForTimeout(1800)
     const run = stub.seen.runs[stub.seen.runs.length - 1]
-    check('U5 run 的 agent_config 带 ultra:true + thinkingLevel:max', run?.agentConfig?.ultra === true && run?.agentConfig?.thinkingLevel === 'max',
-      JSON.stringify({ ultra: run?.agentConfig?.ultra, thinkingLevel: run?.agentConfig?.thinkingLevel }))
+    check('U5 run 的 agent_config 带 ultra:true + thinkingLevel:max + approvalMode:full-auto',
+      run?.agentConfig?.ultra === true && run?.agentConfig?.thinkingLevel === 'max' && run?.agentConfig?.approvalMode === 'full-auto',
+      JSON.stringify({ ultra: run?.agentConfig?.ultra, thinkingLevel: run?.agentConfig?.thinkingLevel, approvalMode: run?.agentConfig?.approvalMode }))
 
     // ── U6:显式改回「深」(index 4)
     await openPill(win)
@@ -172,13 +205,37 @@ async function main() {
       && !/is-ultra/.test(offUi.effort) && !/is-ultra/.test(offUi.pill), JSON.stringify({ back, offUi }))
     await closePill(win)
 
-    // ── U7:键盘路径 /think ultra
+    // ── U7:键盘路径 /think ultra —— 同样先弹确认;这次勾「以后不再显示」
     await ta.click()
     await ta.fill('/think ultra')
     await win.keyboard.press('Enter')
-    await win.waitForTimeout(600)
+    await win.waitForTimeout(500)
+    const slashAsk = await dialog.count().catch(() => 0)
+    const offerAgain = await win.locator('[data-ultra-full-access]').count().catch(() => 0)
+    const preConfirm = lastPatch(stub, 'local')
+    if (slashAsk) {
+      await win.locator('[data-ultra-skip] input').check()
+      await win.locator('[data-ultra-confirm] .dialog-btn[data-primary]').click()
+      await win.waitForTimeout(500)
+    }
     const viaSlash = lastPatch(stub, 'local')
-    check('U7 `/think ultra` 切回 Ultra', viaSlash?.ultra === true && viaSlash?.thinkingLevel === 'max', JSON.stringify(viaSlash))
+    check('U7 `/think ultra` 先弹确认,确认后切回 Ultra', slashAsk === 1 && preConfirm?.ultra !== true && viaSlash?.ultra === true && viaSlash?.thinkingLevel === 'max',
+      JSON.stringify({ slashAsk, preConfirm, viaSlash }))
+    check('U9 审批档已是「完全放行」:确认框不再推荐、不给切换勾选项', offerAgain === 0, `offer=${offerAgain}`)
+
+    // ── U8:勾过「以后不再显示」,再开 Ultra 不弹、直接生效
+    await openPill(win)
+    await win.locator('.cm-effort-input').first().fill('4')
+    await win.waitForTimeout(400)
+    await win.locator('.cm-effort-input').first().focus()
+    await win.keyboard.press('End')
+    await win.waitForTimeout(400)
+    const noAsk = await dialog.count().catch(() => 0)
+    const direct = lastPatch(stub, 'local')
+    const stored = await win.evaluate(() => localStorage.getItem('forsion_ultra_confirm_off'))
+    check('U8 勾过「以后不再显示」:再开 Ultra 不弹确认、直接生效(本机 localStorage 记着)', noAsk === 0 && direct?.ultra === true && stored === '1',
+      JSON.stringify({ noAsk, direct, stored }))
+    await closePill(win)
   } finally {
     await app.close().catch(() => {})
     stub.close?.()
