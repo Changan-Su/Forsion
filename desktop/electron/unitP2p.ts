@@ -68,14 +68,19 @@ const SEC_HEADERS = ['content-security-policy', 'x-content-type-options'] as con
 // ── B 侧:帧 → 本机 unitWeb ─────────────────────────────────────────────────────
 
 export interface P2pHostDeps {
-  /** 本机 unitWeb(与 unitHost.getUnitWeb 同源):url=null → 503。 */
-  getUnitWeb: () => { url: string | null; internalSecret: string }
+  /** 本机 unitWeb:url=null → 503。p2pSecret = unitWeb 的 **P2P 专用** per-boot 密钥(UnitWebHandle.p2pSecret),
+   *  ⚠️ 不是隧道的 internalSecret —— 两条通路共用一把钥,unitWeb 就分不清来路,远端来源标记(x-forsion-remote)
+   *  会把 P2P 记成隧道(设备能力 MCP 方案 §6.2-8)。字段刻意叫 p2pSecret,接线处传错名字当场编译失败。 */
+  getUnitWeb: () => { url: string | null; p2pSecret: string }
   log: (m: string) => void
 }
 
+/** P2P 执行器盖的内部密钥头(与 unitWeb.UNIT_P2P_HEADER 同值;本文件零依赖,不 import unitWeb)。 */
+const P2P_INGRESS_HEADER = 'x-unit-p2p'
+
 /**
  * 把一条已建立的信道接到本机 unitWeb 上(B 侧执行器)。信封处理与 unitHost.handle 同构:
- * 盖 x-unit-internal、响应体全流式(P2P 没有「小响应整包省一跳」的动机,一条路简单)。
+ * 盖 x-unit-p2p(P2P 专用密钥)、响应体全流式(P2P 没有「小响应整包省一跳」的动机,一条路简单)。
  * 返回 detach(信道关闭/身份变化时调用,中止全部在飞请求)。
  */
 export function attachHostChannel(ch: FrameChannel, deps: P2pHostDeps): { detach: () => void; stats: () => { inflight: number; credits: number; uploads: number } } {
@@ -182,7 +187,7 @@ export function attachHostChannel(ch: FrameChannel, deps: P2pHostDeps): { detach
         send({ t: 'end', id: f.id })
         return
       }
-      const headers: Record<string, string> = { 'x-unit-internal': web.internalSecret }
+      const headers: Record<string, string> = { [P2P_INGRESS_HEADER]: web.p2pSecret }
       if (f.ct) headers['Content-Type'] = f.ct
       if (f.accept) headers.Accept = f.accept
       let r: Response

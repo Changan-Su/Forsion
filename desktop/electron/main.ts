@@ -1083,14 +1083,14 @@ async function doRefreshUnitHost(): Promise<void> {
     },
     vault: () => amadeusVaultFace,
     // P2P 应答(B 侧,方案 §12):acceptOffer 出 answer;DataChannel 开门后把信道接到本机 unitWeb
-    // (attachHostChannel 与 unitHost.handle 同构:盖 x-unit-internal,响应全流式)。
+    // (attachHostChannel 与 unitHost.handle 同构,但盖的是 P2P 专用密钥 x-unit-p2p,响应全流式)。
     // 打洞不成(waitOpen 超时)只收对端,不影响别的通路。
     p2pAnswer: async (offerSdp: string) => {
       const mgr = getP2p()
       const { peerId, sdp } = await mgr.acceptOffer(offerSdp)
       void mgr.waitOpen(peerId, 25_000).then(() => {
         attachHostChannel(mgr.channel(peerId), {
-          getUnitWeb: () => ({ url: unitWeb ? `http://127.0.0.1:${unitWeb.port}` : null, internalSecret: unitWeb?.internalSecret ?? '' }),
+          getUnitWeb: () => ({ url: unitWeb ? `http://127.0.0.1:${unitWeb.port}` : null, p2pSecret: unitWeb?.p2pSecret ?? '' }),
           log: (m) => console.log(m),
         })
       }).catch(() => mgr.closePeer(peerId))

@@ -173,6 +173,7 @@
     "check:splash": "node scripts/splash-loop.check.cjs",
     "check:parity": "node scripts/platform-parity.check.cjs",
     "check:unitswitcher": "node scripts/unit-switcher.check.cjs",
+    "gen:engineroutes": "node scripts/gen-engine-routes.mjs",
     "test:ics-tz": "for tz in Europe/London America/New_York Asia/Shanghai Australia/Lord_Howe UTC; do echo \"== $tz\"; TZ=$tz vitest run frontend/src/views/calendar/ics.test.ts || exit 1; done",
     "check:arrowtrap": "node scripts/arrow-trap.check.cjs",
     "check:bsfocus": "node scripts/backspace-focus.check.cjs",
