@@ -3,6 +3,7 @@ import type { GitPanelStatus, GitRestoreSummary, GitVersion, ProductKind, Produc
 /** standalone /agent 契约的前端类型(与包内 routes/eventBus 一致)。 */
 import type { ActiveWindowSample } from '../../shared/activeWindow'
 import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot } from '../../shared/desktopPermissions'
+import type { ComputerHistoryApi } from '../../shared/computerHistory'
 export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot, DesktopPermissionState } from '../../shared/desktopPermissions'
 
 /**
@@ -1159,6 +1160,8 @@ declare global {
       desktopPermissionsVerify?(): Promise<DesktopPermissionsSnapshot>
       /** 离开权限页关闭指导窗;main 同时处理尚未完成的 request 取消竞态。 */
       desktopPermissionsCloseGuide?(): Promise<void>
+      /** 电脑历史(主进程 electron/computerHistory.ts);无 agent 后端的产品形态没有这个键。 */
+      computerHistory?: ComputerHistoryApi
       /** Tangu Web(浏览器云端客户端)标志:由 web 垫片注入;共享组件据此解闸云端可用特性(如技能)。 */
       cloudWeb?: boolean
       /** 移动端(Capacitor/Android)标志:由 mobile 垫片注入;Inbox 等据此走设备本地存储实现。 */

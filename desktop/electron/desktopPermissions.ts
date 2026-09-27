@@ -68,6 +68,12 @@ const MAC_PANES: Record<DesktopPermissionId, string> = {
 const helperCommand = (cmd: string, args: Record<string, unknown> = {}, timeout = 2500): Promise<unknown> =>
   askHelper(helperSocketPath(), { cmd, ...args }, timeout)
 
+export interface DesktopPermissionsOptions {
+  /** Helper protocol an enabled feature needs from the RUNNING helper (Computer History: 13), or undefined.
+   *  Asked on every status read; only while it returns a number does a read spend one extra `diagnostics` call. */
+  requiredHelperProtocol?: () => number | undefined
+}
+
 export class DesktopPermissions {
   private verification?: { pid: number; granted: boolean }
   private verifiedAt = 0
@@ -77,8 +83,9 @@ export class DesktopPermissions {
   private verifyPending?: Promise<DesktopPermissionsSnapshot>
   private generation = 0
   private guide: PermissionGuide
+  private idleListeners = new Set<() => void>()
 
-  constructor(private computerUseAvailable: boolean, returnToApp: () => void) {
+  constructor(private computerUseAvailable: boolean, returnToApp: () => void, private readonly options: DesktopPermissionsOptions = {}) {
     this.guide = new PermissionGuide({
       read: () => this.read(), verify: (id) => id === 'computerScreen' ? this.verify() : this.read().then((r) => r.snapshot),
       // This button only reopens the selected pane. It cannot launch another installer/prompt.
@@ -89,6 +96,37 @@ export class DesktopPermissions {
   read(): Promise<{ snapshot: DesktopPermissionsSnapshot; settingsWindow?: Rect; settingsFrontmost?: boolean }> {
     this.readPending ??= this.readNow().finally(() => { this.readPending = undefined })
     return this.readPending
+  }
+
+  /** A permission action or helper install may be stopping/replacing the helper right now. Other launchers
+   *  (Computer History's reconnect) must not `open -n` it meanwhile: inside the shutdown -> install window
+   *  that starts the OLD bundle, which then holds the helper lock so the freshly installed one exits. */
+  helperBusy(): boolean { return this.actionPending || this.setupPending !== undefined }
+
+  /** Called once each time helperBusy() turns false. Returns an unsubscribe function. */
+  onHelperIdle(listener: () => void): () => void {
+    this.idleListeners.add(listener)
+    return () => { this.idleListeners.delete(listener) }
+  }
+
+  private notifyIfIdle(): void {
+    if (this.helperBusy()) return
+    for (const listener of [...this.idleListeners]) {
+      try { listener() } catch (error) { console.warn('[permissions] helper idle listener failed', error) }
+    }
+  }
+
+  /** The bytes on disk can already be current while the process that owns the socket is older: the
+   *  installer check passes and nothing would restart it. Only asked while a feature needs a newer
+   *  protocol, so Computer Use-only users never get a restart prompt for a protocol they do not use.
+   *  Unknown answers are not flagged: a restart prompt on uncertain data is worse than a missed one. */
+  private async runningProtocolTooOld(): Promise<boolean> {
+    const required = this.options.requiredHelperProtocol?.()
+    if (typeof required !== 'number') return false
+    try {
+      const diagnostics = await helperCommand('diagnostics') as { protocolVersion?: unknown }
+      return typeof diagnostics?.protocolVersion === 'number' && diagnostics.protocolVersion < required
+    } catch { return false }
   }
 
   private async readNow() {
@@ -122,6 +160,8 @@ export class DesktopPermissions {
       const raw = await helperCommand('permissionStatus') as HelperStatus
       snapshot.helperRunning = true
       if (raw.source?.attribution !== 'helper-app') snapshot.helperError = 'wrong-identity'
+      // 'outdated' makes the next explicit request go through prepareHelper's consented restart.
+      else if (await this.runningProtocolTooOld()) snapshot.helperError = 'outdated'
       // Never keep a green badge indefinitely after a live probe or across a helper restart.
       if (Date.now() - this.verifiedAt > 30_000) this.verification = undefined
       Object.assign(snapshot.permissions, helperPermissionStates(raw, this.verification))
@@ -153,7 +193,8 @@ export class DesktopPermissions {
     }))
     if (checkOnly) return work
     // A UI timeout must not interrupt staging/atomic replacement of the helper.
-    this.setupPending = work.finally(() => { this.setupPending = undefined })
+    // It can outlive the request that started it (the 180s UI race below), so it notifies on its own.
+    this.setupPending = work.finally(() => { this.setupPending = undefined; this.notifyIfIdle() })
     return this.setupPending
   }
 
@@ -254,7 +295,7 @@ export class DesktopPermissions {
       await this.openPane(id)
       if (current()) await this.guide.show(id, options)
       return (await this.read()).snapshot
-    } finally { this.actionPending = false }
+    } finally { this.actionPending = false; this.notifyIfIdle() }
   }
 
   /** Explicit user action only: never called by page polling or focus refresh. */
@@ -283,8 +324,8 @@ export function registerDesktopPermissions(opts: {
   isTrustedSender: (event: Electron.IpcMainInvokeEvent) => boolean
   computerUseAvailable: boolean
   returnToApp: () => void
-}): DesktopPermissions {
-  const permissions = new DesktopPermissions(opts.computerUseAvailable, opts.returnToApp)
+} & DesktopPermissionsOptions): DesktopPermissions {
+  const permissions = new DesktopPermissions(opts.computerUseAvailable, opts.returnToApp, { requiredHelperProtocol: opts.requiredHelperProtocol })
   let guideOwner: Electron.WebContents | undefined
   const closeOwnedGuide = () => {
     guideOwner?.removeListener('destroyed', closeOwnedGuide)

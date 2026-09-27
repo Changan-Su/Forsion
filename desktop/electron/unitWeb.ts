@@ -210,7 +210,9 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     const engine = deps.getEngine()
     if (!engine.url) { json(res, 503, { detail: '本机引擎未就绪', code: 'ENGINE_NOT_READY' }); return }
     const target = new URL(engine.url)
-    const headers: Record<string, string> = { Authorization: `Bearer ${engine.token}` }
+    // x-forsion-remote:设备页自报的 client 也是 desktop/,引擎靠这个头区分本机与远程(电脑历史等本机专属工具据此拒绝)。
+    // 头表从零重建,远端页剥不掉。
+    const headers: Record<string, string> = { Authorization: `Bearer ${engine.token}`, 'x-forsion-remote': 'unit' }
     for (const k of ['content-type', 'accept', 'content-length'] as const) {
       const v = req.headers[k]
       if (typeof v === 'string') headers[k] = v

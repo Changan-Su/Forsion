@@ -191,6 +191,22 @@ describe('Historian assist 模式', () => {
     expect(disc.length).toBe(0);
   });
 
+  it('会话调过 read_computer_history:到点轮也不起讨论(主 Agent 会在讨论里自己 remember)、不写 LOG;标题照常', async () => {
+    writeConfig('assist', 3);
+    await seedSession('SCH');
+    await seedMessages('SCH');
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp, tool_calls) VALUES ('SCH-ch', 'SCH', 'model', 'x', 1500, ?)`,
+      [JSON.stringify([{ id: 'c1', type: 'function', function: { name: 'read_computer_history', arguments: '{}' } }])]);
+    await seedDoneRuns('SCH', 3); // 对照 = 上面第一条用例(同配置、同轮次,没调过工具 → 起讨论)
+
+    await onUserRunDone('SCH', USER);
+
+    expect((await query<any[]>(`SELECT title FROM chat_sessions WHERE id = 'SCH'`))[0].title).toBe('新标题');
+    expect(appendedLogs).toEqual([]);
+    expect(await query<any[]>(`SELECT id FROM chat_sessions WHERE kind = 'discussion'`)).toHaveLength(0);
+    expect(await query<any[]>(`SELECT id FROM special_agent_log WHERE action = 'assist_discussion'`)).toHaveLength(0);
+  });
+
   it('首轮(roundN=1)在 assist 配置下仍走独立模式:写 LOG、不起讨论', async () => {
     writeConfig('assist');
     await seedSession('S1');

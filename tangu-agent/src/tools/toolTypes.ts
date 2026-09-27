@@ -16,6 +16,10 @@ export interface ToolContext {
   /** 客户端面标识(input.client,经 routes/runs 白名单:desktop|web|mobile|cli|tui/版本)。
    *  GUI 门禁工具(sketch)据此判定;TUI/通道/自动化/子代理 run 无 tag → 缺省即不可见(default-deny)。 */
   client?: string;
+  /** 本 run 经 Forsion Unit 设备页远程发起(unitWeb 代理盖 x-forsion-remote 头 → routes/runs 落 input.remote;
+   *  start_project_session 显式带给子 run,团队/讨论/子代理另有自己的闸)。设备页的 client 同样自报 desktop/…,
+   *  本机专属数据面(read_computer_history)只能看这个字段拒。 */
+  remote?: boolean;
   signal?: AbortSignal;
   /** 本次 run 的自定义工具（HTTP/JS），按工具名索引。 */
   customTools?: Map<string, LoadedCustomTool>;
@@ -194,6 +198,11 @@ export interface ToolCapabilities {
   /** 正向声明:允许作为自动化 tool_call 动作(不经 LLM 定参直执行)。缺省 false——
    *  插件工具不声明就不进动作目录(declaredAutomationSafe;内置另有 curated 白名单)。 */
   automationSafe?: boolean;
+  /** 结果不落库:本轮模型拿到全文(tool 消息),而 chat_messages.tool_results / agent_steps.tool_results /
+   *  tool_result 事件(agent_run_events,也是界面工具卡的数据)只存这句占位,下一轮回放也只见占位。
+   *  给数据自带保留期 / 清除语义的工具(read_computer_history:7 天 + 用户清除)—— 落库副本会绕过它。
+   *  出错结果照常落库(不含数据)。agentLoop 经 declaredPersistPlaceholder(name) 读,不走 ctx 门禁。 */
+  persistPlaceholder?: string;
 }
 
 export interface ToolImpl {

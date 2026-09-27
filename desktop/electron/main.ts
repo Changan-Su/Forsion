@@ -43,7 +43,7 @@ import type { WhoamiResult } from './forsionAuth'
 import { waitForAccountRenderers } from './accountTransition'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn } from './updater'
-import { createTray } from './tray'
+import { createTray, refreshTrayMenu, setTrayLocale, UI_LOCALE_PREF_KEY } from './tray'
 import { readThemesDir, seedDefaultThemes } from './themes'
 import { builtinBundleSources, seedBuiltinBundles } from './builtinPlugins'
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
@@ -57,8 +57,9 @@ import {
 } from './forsionConnect'
 import { transcribeViaOpenAI, transcribeViaForsion } from './asr'
 import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, transcribeLocal } from './asrLocal'
-import { computerUseLiveView } from './computerUse'
-import { registerDesktopPermissions } from './desktopPermissions'
+import { computerUseLiveView, helperSocketPath } from './computerUse'
+import { permissionHelperAppPath, registerDesktopPermissions } from './desktopPermissions'
+import { ComputerHistory, readSelfBundleId, registerComputerHistoryIpc, stopComputerHistoryForWipe, type ComputerHistoryConfig } from './computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import { UnitHost } from './unitHost'
@@ -419,6 +420,13 @@ interface TanguStoredConfig {
   ttsAutoSpeak: boolean
   /** 记录应用内活动日志(~/.forsion/activity;Muse 数据源+bug 排查导出);关=停止新记录。 */
   activityLogEnabled: boolean
+  /** 电脑历史(electron/computerHistory.ts):订阅 CU helper 记录全机 App / 标题 / URL / 输入差分,落 <forsionHome>/computer-history。
+   *  默认关(显式同意才开);不在开发者选项里。 */
+  computerHistoryEnabled: boolean
+  /** 暂停到的时刻(epoch ms);null = 没暂停。到点自动恢复。 */
+  computerHistoryPausedUntil: number | null
+  /** 用户排除表:bundle id + 域名(含子域)。随订阅下发给 helper。 */
+  computerHistoryExclude: { apps: string[]; domains: string[] }
   /** 对外 MCP 端点:开=主进程起本地 HTTP MCP server,外部 agent(Claude Code)可调桌面能力。默认关(信任边界,显式开启)。 */
   mcpEnabled: boolean
   /** 前台窗口采样接缝(electron/activeWindow.ts):开=插件可读「现在焦点在哪个 app」。
@@ -486,6 +494,9 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   ttsSpeed: 1,
   ttsAutoSpeak: false,
   activityLogEnabled: true,
+  computerHistoryEnabled: false,
+  computerHistoryPausedUntil: null,
+  computerHistoryExclude: { apps: [], domains: [] },
   mcpEnabled: false,
   activeWindowEnabled: false,
   keepAwakeWhileRunning: false,
@@ -521,6 +532,7 @@ const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
 
   'pythonMode', 'mirror', // 桌面专属(内置 python 是桌面才有的能力;镜像经后端 env 注入,不落 config.json 段)
   'activityLogEnabled', // 桌面专属(活动日志由 main 落盘)
+  'computerHistoryEnabled', 'computerHistoryPausedUntil', 'computerHistoryExclude', // 桌面专属(电脑历史由 main 订阅 helper 并落盘)
   'mcpEnabled', // 桌面专属(对外 MCP 端点由 main 起停)
   'activeWindowEnabled', // 桌面专属(前台窗口采样由 main 探)
   'keepAwakeWhileRunning', // 桌面专属(powerSaveBlocker 由 main 持有)
@@ -1342,6 +1354,13 @@ function createWindow(): void {
     deepLinkReady = false; mainPanelReady = false
     miniSession = { sessionId: null, runId: null }; miniAutoPanel?.refresh()
   })
+  // 托盘文案跟随界面语言:渲染层把结论落在 localStorage 这一个键(① 手选 / ③ IP 校正都写它;没写 = 跟随系统,
+  // 托盘的回落同口径)。只读不判,不在主进程另写一份语言判定;之后的切换经 ui:sync 转进来。
+  const localeWc = mainWindow.webContents
+  localeWc.on('did-finish-load', () => {
+    const read = `(() => { try { return localStorage.getItem(${JSON.stringify(UI_LOCALE_PREF_KEY)}) } catch { return null } })()`
+    localeWc.executeJavaScript(read, false).then(setTrayLocale, () => {})
+  })
 
   // 崩溃自愈:渲染进程被 OOM / GPU 崩溃杀死时,窗口只剩一张白页且不会自己恢复(React ErrorBoundary
   // 只接 JS 渲染异常,接不到进程级死亡)。这里监听进程死亡 + 无响应 + 加载失败,自动 reload 兜底。
@@ -1545,6 +1564,8 @@ let mainPanelReady = false
 let miniWindow: BrowserWindow | null = null
 let miniSession: MiniSessionContext = { sessionId: null, runId: null }
 let miniAutoPanel: ReturnType<typeof startMiniAutoPanel> | null = null
+/** 电脑历史控制器(只在带 agent 后端的形态建;见 electron/computerHistory.ts)。 */
+let computerHistory: ComputerHistory | null = null
 let autoMiniWindow: BrowserWindow | null = null
 let autoMiniSessionId: string | null = null
 let miniFollowing = false
@@ -1806,7 +1827,34 @@ if (process.platform !== 'darwin') {
 registerAmadeusAssetSchemes()
 
 app.whenReady().then(async () => {
-  registerDesktopPermissions({ isTrustedSender, computerUseAvailable: PRODUCT.agentBackend, returnToApp: showMainWindow })
+  const desktopPermissions = registerDesktopPermissions({
+    isTrustedSender, computerUseAvailable: PRODUCT.agentBackend, returnToApp: showMainWindow,
+    // 电脑历史开着时,运行中的 helper 协议太老也判「需要更新」→ 权限卡的「更新并重启助手」把老进程换掉
+    requiredHelperProtocol: () => computerHistory?.requiredHelperProtocol(),
+  })
+  // 电脑历史:IPC 先登记(设置页随时会问,handler 里等 ready),配置读完再 start(见下方活动日志那段)。
+  // 读者是 agent 工具 / Muse,没有 agent 后端的产品形态不建(preload 同步收掉 window.tangu.computerHistory)。
+  if (PRODUCT.agentBackend) {
+    const socketPath = helperSocketPath()
+    computerHistory = new ComputerHistory({
+      root: join(forsionHomeDir(), 'computer-history'),
+      platform: process.platform,
+      socketPath,
+      externalSocket: socketPath !== helperSocketPath({}),
+      helperAppPath: () => permissionHelperAppPath(),
+      // 权限页关停 / 重装 helper 期间不拉起(会拉起旧包);忙完立刻重连
+      helperBusy: () => desktopPermissions.helperBusy(),
+      onHelperIdle: (cb) => desktopPermissions.onHelperIdle(cb),
+      selfBundleId: process.platform === 'darwin' ? readSelfBundleId(process.execPath) : undefined,
+      persist: (patch) => saveConfig(patch),
+      openFolder: (dir) => shell.openPath(dir),
+      onChanged: (view) => {
+        for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('computerHistory:changed', view)
+        refreshTrayMenu()
+      },
+    })
+    registerComputerHistoryIpc(computerHistory, isTrustedSender)
+  }
   // Windows 系统通知前提(无 AppUserModelId 时 Notification 可能不弹);mac/linux 无副作用。
   app.setAppUserModelId('com.forsion.tangu')
   // 媒体权限(麦克风,语音输入):Electron 层放行——部分平台/版本默认拒 getUserMedia。callback(true) 沿用
@@ -1980,6 +2028,11 @@ app.whenReady().then(async () => {
     void pruneActivity()
     logActivity('app.start', { v: app.getVersion() })
   } catch { /* 装饰性,不阻塞启动 */ }
+  // 电脑历史:按配置开录 / 保持关闭;7 天保留期启动时与每小时各清一次。配置读挂了也要 start(IPC 在等 ready),按全关起步。
+  if (computerHistory) {
+    const ch = computerHistory
+    void loadConfig().then((cfg) => ch.start(cfg), () => ch.start({})).catch((e) => console.warn('[computer-history] start failed', e))
+  }
   // renderer 埋点入口:结构化 {event, detail},拼行/消毒只在 activityLog.ts(用户内容进不了行结构)。
   ipcMain.on('activity:append', (_e, payload: { event?: unknown; detail?: unknown }) => {
     if (!payload || typeof payload.event !== 'string') return
@@ -2010,7 +2063,7 @@ app.whenReady().then(async () => {
     keepAwake.report(id, Number.isSafeInteger(count) && (count as number) > 0)
   })
   // Windows 在用户主动睡眠时终止电源请求,唤醒后手里的 id 已失效 → 重新申请(macOS 断言跨睡眠保留,重申无害)。
-  powerMonitor.on('resume', () => keepAwake.rearm())
+  powerMonitor.on('resume', () => { keepAwake.rearm(); computerHistory?.recheck() }) // 睡眠会让「暂停到点」的计时器迟到
 
   ipcMain.handle('config:get', () => effectiveConfig())
   ipcMain.handle('config:set', async (_e, patch: Partial<TanguStoredConfig>) => {
@@ -2018,6 +2071,10 @@ app.whenReady().then(async () => {
     // before 与写入同一队位读出(见 saveConfig);下面的内存镜像紧跟本次落盘赋值,先于下一个排队的写 → 顺序与盘面一致。
     const before = await saveConfig(patch, accountCreds)
     if (patch.activityLogEnabled !== undefined) setActivityLogEnabled(patch.activityLogEnabled !== false)
+    // 渲染层直接改配置(正路是 window.tangu.computerHistory.*,那条自己落盘)→ 同步控制器内存态
+    const chPatch: ComputerHistoryConfig = {}
+    for (const k of ['computerHistoryEnabled', 'computerHistoryPausedUntil', 'computerHistoryExclude'] as const) if (k in patch) (chPatch as Record<string, unknown>)[k] = patch[k]
+    if (Object.keys(chPatch).length) computerHistory?.applyConfig(chPatch)
     if (patch.activeWindowEnabled !== undefined) {
       activeWindowOn = patch.activeWindowEnabled === true
       // 它的 ⌘K 入口注册在**主窗**的命令表里,而开关多半是从设置浮窗拨的(命令表每个渲染进程各一份)。
@@ -3085,6 +3142,9 @@ app.whenReady().then(async () => {
   //   desktop:userData 里的壳层配置(窗口/Amadeus)
   ipcMain.handle('app:clearData', async (_e, opts: { desktop?: boolean; tangu?: boolean }) => {
     isQuitting = true // 先封住排队中的拉起(ensureBackend 核对它):删库期间不能又被拉起来占住 state.db
+    // 电脑历史先停:断订阅、丢缓冲、store 关门、等在途那笔写落定(封顶 10s)(app.exit 不发 before-quit;不停的话 1s 批量落盘
+    // 会在删目录途中把 computer-history/events 建回来)。超时没落定的,删完目录后由 afterWipe 等它落定再删一次(见下)。
+    const chWipe = computerHistory ? await stopComputerHistoryForWipe(computerHistory) : null
     await backend.stop() // 释放 state.db 句柄,否则占用删不掉
     await ensureChain // 在途那次收尾(它可能正要重建默认工作区目录)再删
     // 与配置写入同排一队:在途的写先落完再删;删完同一拍就退出,排在后面的写来不及把 config.json(含 apiKey)写回来
@@ -3095,6 +3155,9 @@ app.whenReady().then(async () => {
         for (const p of [process.env.TANGU_HOME || forsionHomeDir(), forsionWorkspaceDir(), join(homedir(), '.tangu'), join(homedir(), 'Tangu')]) {
           await rm(p, { recursive: true, force: true }).catch(() => {})
         }
+        // 电脑历史根目录单独再删(显式 TANGU_HOME 时它不在上面删的目录里);在途写超时没落定的,等它落定后再删一次。
+        // 就在配置队列里做:删完同一拍退出的约束不破。
+        await chWipe?.afterWipe()
       }
       if (opts?.desktop) {
         for (const f of ['tangu-desktop-config.json', 'amadeus-config.json']) {
@@ -3599,6 +3662,7 @@ app.whenReady().then(async () => {
     if (!isTrustedSender(e)) return
     const state = normalizeUiSync(raw)
     if (!state) return
+    if (state.prefs && UI_LOCALE_PREF_KEY in state.prefs) setTrayLocale(state.prefs[UI_LOCALE_PREF_KEY]) // 托盘文案跟着切语言
     for (const w of BrowserWindow.getAllWindows()) {
       if (w.webContents !== e.sender && !w.webContents.isDestroyed()) w.webContents.send('ui:sync', state)
     }
@@ -3767,10 +3831,16 @@ app.whenReady().then(async () => {
   createWindow()
   void restoreDetachedWindows() // 恢复上次退出时的独立窗(位置/尺寸 + 各窗自恢复布局)
   // 系统托盘 / mac 菜单栏图标:显示窗口 / 检查更新 / 退出。
+  const ch = computerHistory
   createTray({
     show: showMainWindow,
     checkUpdates: () => { void checkForUpdates() },
     quit: () => { isQuitting = true; app.quit() },
+    computerHistory: ch ? {
+      state: () => ch.view().state,
+      pauseHour: () => { void ch.pause(3_600_000).catch(() => {}) },
+      resume: () => { void ch.resume().catch(() => {}) },
+    } : undefined,
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
   const { getVaultRoot, restartSync, stopSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow)
@@ -3794,6 +3864,7 @@ app.on('before-quit', (e) => {
   globalShortcut.unregisterAll() // 释放 mini 全局快捷键
   miniAutoPanel?.stop(); miniAutoPanel = null
   flushAllNoteEdits() // 活动日志:5 分钟合并窗口内未落盘的 note.edit 冲出去
+  void computerHistory?.dispose() // 电脑历史:断订阅、缓冲同步落盘、state 改成非录制态(同步部分当场做完,不等返回的 promise)
   // 优雅停后端(SIGTERM→3s→SIGKILL);停完再真正退出。
   const st = backend.getStatus().state
   if (st === 'ready' || st === 'starting') {

@@ -615,6 +615,8 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
     (await userMemoryHint(userId)) +
     (await recentActivityHint(userId)) +
     (await activityTailHint()) +
+    // 电脑历史摘要(Forsion 之外的活动)**不在这里拼**:ephemeralHint 会随 agent_runs.input 永久落库,
+    // 由 agentLoop 对 input.background==='muse' 的 run 现算注入(services/computerHistory.ts computerHistoryDigest)。
     (await recentSessionTitles(userId)) +
     (await folderHint(cfg.allowedFolders)) +
     (await existingTodoHint(userId)) +

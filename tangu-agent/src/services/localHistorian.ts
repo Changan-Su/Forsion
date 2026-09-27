@@ -45,6 +45,8 @@ import { appendHarnessCandidates } from '../agents/harnessStore.js';
 import { appendCandidates as appendRawCandidates, readCandidates as readRaw } from './memoryCandidates.js';
 import { startMemoryDream } from './memoryDream.js';
 import { MEMORY_CHAR_BUDGET } from './memoryRepository.js';
+import { sessionCalledTool } from './sessionSearchSql.js';
+import { COMPUTER_HISTORY_TOOL } from './computerHistory.js';
 export { parseRawLines } from './memoryCandidates.js';
 const historianSignal = new AsyncLocalStorage<AbortSignal>();
 
@@ -496,16 +498,26 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // chat 会话不拉辅助讨论:讨论 run 不带 preset,被空白会话锁按存值降成普通 chat 面的 run,讨论提示会以可见消息
     // 出现在用户会话里(creview 09-07 E2)。判据取会话事实 sk.agent_config(hook 否决路径不传 seed,靠 seed 会漏)。
     const sessionPreset = (() => { try { const c = typeof sk.agent_config === 'string' ? JSON.parse(sk.agent_config) : sk.agent_config; return c?.preset; } catch { return undefined; } })();
-    const assistMode = cfg.mode === 'assist' && roundN > 1 && sessionPreset !== 'chat';
+    // 电脑历史隔离:会话里调过 read_computer_history → 不做任何**自动**记忆提取(LOG / 记忆候选 / 工作笔记候选 / 辅助讨论)。
+    // 否则电脑历史经 .memory-raw.md → Dream → MEMORY.md 注入此后每个 run(含微信 / Telegram 通道会话),关掉或清除电脑历史也带不走。
+    // 按会话不按轮:追问轮会复述电脑历史而不再调工具(与召回面 computerHistoryRecallHide 同一判据、同一条 SQL)。
+    // 标题 / 摘要是会话自有资产(随会话生灭,召回面已把这类会话整段藏起)照常维护。查询失败按「调过」处理(默认拒)。
+    // 用户在对话里明确让 agent remember 的走 remember 工具,不经这里,不受影响。四个开关各自与 !chIsolated 相与 ——
+    // 只关 assistMode 的话 judgeLog / judgeMemory 反而会翻成 true。
+    const chIsolated = await sessionCalledTool(sessionId, COMPUTER_HISTORY_TOOL).then(
+      (hit) => { if (hit) log(`会话 ${sessionId.slice(0, 8)} 调过 ${COMPUTER_HISTORY_TOOL}:跳过自动记忆提取(只维护标题/摘要)`); return hit; },
+      (e: any) => { log(`会话 ${sessionId.slice(0, 8)} 的 ${COMPUTER_HISTORY_TOOL} 判定查询失败,按调过处理(跳过自动记忆提取): ${e?.message || e}`); return true; },
+    );
+    const assistMode = cfg.mode === 'assist' && roundN > 1 && sessionPreset !== 'chat' && !chIsolated;
     // fork 模式:快照缺席(群聊/外部引擎/hook 否决路径不传 seed)→ 自动回落 independent 判断。
     const forkMode = cfg.mode === 'fork' && !!forkSeed;
-    const judgeLog = logDue && !assistMode;
-    const judgeMemory = memoryDue && !assistMode;
+    const judgeLog = logDue && !assistMode && !chIsolated;
+    const judgeMemory = memoryDue && !assistMode && !chIsolated;
     // 自进化自动档(09-18 起默认开):judge 额外提名工作笔记候选 → 展示身份 slug 的 .harness-raw.md 收件箱。
     // 辅助模式也提名(09-19 放开):辅助模式让出的是 LOG / 记忆的**写入**(交主 Agent 定夺);提名只进收件箱、不写 HARNESS.md,
     // 采纳仍要 /refine + 审批,让出写入权的理由套不到它身上。判官这次调用在辅助模式下本来就为标题 / 摘要在跑,多的只是一个字段。
     // 从前挡在 !assistMode 后面 → 辅助模式用户每个会话只有首轮(恒走独立判断)会提名。
-    const judgeHarness = due && cfg.harnessCandidates;
+    const judgeHarness = due && cfg.harnessCandidates && !chIsolated;
     log(`第 ${roundN} 轮触发(${assistMode ? '辅助模式,' : forkMode ? '分身判官,' : ''}模型 ${cfg.modelId})`);
 
     const transcriptSnapshot = await recentTranscript(sessionId);

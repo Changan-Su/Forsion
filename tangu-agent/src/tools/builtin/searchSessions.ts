@@ -17,6 +17,8 @@ import {
   clip, dayArg, fmtDate, likePattern, searchSessions, snippetAround, splitTerms, tsDate,
   sessionToolScope, type SessionHit,
 } from '../../services/sessionSearch.js';
+import { computerHistoryRecallHide } from '../../services/computerHistory.js';
+import { deps } from '../../seams/runtime.js';
 
 // 纯函数面从服务层原样再导出:既有单测(searchSessions.test.ts)与其它 import 点不变。
 export { splitTerms, likePattern, snippetAround, fmtDate, dayArg, tsDate };
@@ -102,6 +104,8 @@ export const searchSessionsProvider: ToolProvider = {
           before,
           after,
           toolScope: sessionToolScope(ctx.agentSlug),
+          // 本 run 过不了电脑历史门禁 → 调过 read_computer_history 的会话不给搜(否则关掉 / 通道里照样能翻出复述过的内容)
+          excludeSessionsWithTool: computerHistoryRecallHide(ctx.profile ?? deps().profile, ctx),
           signal: ctx.signal,
         });
 

@@ -14,14 +14,14 @@ import { IPC } from '@amadeus-shared/ipc'
 import type { VaultFace } from './amadeus/ipc'
 import { startUnitWeb, VAULT_RPC_ALLOW, type PairedDevice, type UnitWebDeps } from './unitWeb'
 
-function fakeEngine(): Promise<{ url: string; gate: { release(): void }; seen: Array<{ path: string; auth: string; body: string }>; close(): void }> {
+function fakeEngine(): Promise<{ url: string; gate: { release(): void }; seen: Array<{ path: string; auth: string; remote: string; body: string }>; close(): void }> {
   let release: () => void = () => {}
-  const seen: Array<{ path: string; auth: string; body: string }> = []
+  const seen: Array<{ path: string; auth: string; remote: string; body: string }> = []
   const server = http.createServer((req, res) => {
     let body = ''
     req.on('data', (c) => { body += c })
     req.on('end', () => {
-      seen.push({ path: req.url || '', auth: String(req.headers.authorization || ''), body })
+      seen.push({ path: req.url || '', auth: String(req.headers.authorization || ''), remote: String(req.headers['x-forsion-remote'] || ''), body })
       if (req.url?.startsWith('/agent/sse')) {
         res.writeHead(200, { 'Content-Type': 'text/event-stream' })
         res.write('data: one\n\n')
@@ -203,6 +203,7 @@ describe('unitWeb', () => {
       expect(((await r.json()) as any).echo).toContain('扶桑')
       const hit = b.engine.seen.find((s) => s.path === '/agent/echo')!
       expect(hit.auth).toBe('Bearer ENGINE_TOKEN') // 盖的是引擎 token,不是配对令牌
+      expect(hit.remote).toBe('unit') // 引擎据此拒本机专属工具(电脑历史);设备页自己带 x-forsion-remote:'' 也覆盖不掉
       // 内部密钥豁免(测试即 loopback 来源)
       const r2 = await fetch(`${b.base}/unit/plugins`, { headers: { 'x-unit-internal': b.handle.internalSecret } })
       expect(r2.status).toBe(200)

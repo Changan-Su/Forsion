@@ -41,6 +41,7 @@ import { inboxSendProvider } from './builtin/inboxSend.js';
 import { browserUseProvider } from './builtin/browserUse.js';
 import { amadeusProvider } from './builtin/amadeus.js';
 import { readActivityProvider } from './builtin/readActivity.js';
+import { readComputerHistoryProvider } from './builtin/readComputerHistory.js';
 import { readSessionProvider } from './builtin/readSession.js';
 import { searchSessionsProvider } from './builtin/searchSessions.js';
 import { manageHarnessProvider } from './builtin/manageHarness.js';
@@ -182,6 +183,7 @@ registerToolProvider(uiCommandsProvider); // GUI 限定(ctx.client + 客户端�
 registerToolProvider(teamSayProvider); // 团队成员随时向主聊天发言(append 末尾,保前缀缓存)
 registerToolProvider(browserTabsProvider); // host-only:browser_tabs 看/读用户自己 Chrome 里开着的标签(远程调试接管;append 末尾,保前缀缓存)
 registerToolProvider(museWakeProvider); // 仅 Muse 周期(ctx.muse,子代理除外):set_next_wake 按作息跳过心跳省额度(append 末尾;普通 run 不可见,快照不变)
+registerToolProvider(readComputerHistoryProvider); // 电脑历史开着 ∧ 本机客户端 ∧ 非通道/团队/子代理:读用户在 Forsion 之外的电脑活动(默认关,append 末尾;快照两侧剔除,见 dump-tooldefs)
 // 插件(表情包/分段等)现为文件夹插件(plugins/),经 activateAllPlugins→ctx.registerPlugin 注册其工具,不在此处。
 
 /** ctx 自带 profile(loop 按 run.app_id 解析)优先;缺省回退本进程装配的 profile。 */

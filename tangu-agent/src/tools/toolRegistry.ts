@@ -148,11 +148,16 @@ const PLAN_MODE_TOOLS = new Set([
 
   'add_muse_todo', // Muse 唯一写权限,只读 planMode 下仍可用(可见性另由 ctx.muse 收口)
   'read_activity', // 只读用户活动日志;Muse 周期跑 planMode 故必须白名单(可见性另由 ctx.muse/activityAccess 收口)
+  'read_computer_history', // 只读电脑历史;可见性另由 computerHistoryGate 收口(开关 + 本机客户端 + 非通道/团队)
 ]);
 
 /** 名单不可及的基建工具:砍掉 exit_plan_mode 会让 planMode 死锁,ask_user 断交互,
  *  load_tools 会让 deferred 工具永久不可达。 */
 const LOADOUT_EXEMPT = new Set(['exit_plan_mode', 'ask_user', 'load_tools']);
+
+/** 有门禁、但**仍受**每-agent 黑白名单约束且进 UI 目录的工具:读用户隐私数据的面,全局开关打开后
+ *  用户要能对单个 agent(市场导入的第三方 agent)关掉它。allow 模式的 agent 不列即不可见(默认拒)。 */
+const LOADOUT_GATED = new Set(['read_computer_history']);
 
 /** 注册一个 provider。同 id 幂等覆盖(保持原位置,热加载安全)。 */
 export function registerToolProvider(p: ToolProvider): void {
@@ -213,10 +218,10 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string,
     if (face.face.size && (!isBuiltin || fromPlugin || !face.face.has(t.name))) return;
     if (host && face.hostDiskHidden.has(t.name)) return;
     if (isBuiltin && builtins !== 'all' && !builtins.includes(t.name)) return;
-    // 每-agent 内置工具黑白名单(config.toml tools_mode/tools_list):只约束**无门禁**的内置工具——
+    // 每-agent 内置工具黑白名单(config.toml tools_mode/tools_list):只约束**无门禁**的内置工具(外加 LOADOUT_GATED)——
     // 门禁工具(isEnabledFor)可见性归引擎逻辑且不在 UI 目录里(allow 模式不误伤 Muse/inbox 系);
     // 基建工具豁免;MCP/app 工具(isBuiltin=false)不受约束。范围与 listLoadoutTools() 严格一致。
-    if (isBuiltin && !t.isEnabledFor && !LOADOUT_EXEMPT.has(t.name)
+    if (isBuiltin && (!t.isEnabledFor || LOADOUT_GATED.has(t.name)) && !LOADOUT_EXEMPT.has(t.name)
       && (ctx.toolsMode === 'allow' || ctx.toolsMode === 'deny')) {
       const listed = !!ctx.toolsList?.includes(t.name);
       if (ctx.toolsMode === 'deny' ? listed : !listed) return;
@@ -229,13 +234,13 @@ export function resolveTools(profile: AppProfile, ctx: ToolContext): Map<string,
   return out;
 }
 
-/** 工具目录(agent 编辑 UI「工具黑白名单」的可勾选项)=名单能约束的范围:无门禁、非豁免的内置工具。
+/** 工具目录(agent 编辑 UI「工具黑白名单」的可勾选项)=名单能约束的范围:无门禁(外加 LOADOUT_GATED)、非豁免的内置工具。
  *  同名双版本(host/sandbox)按名字去重。description 取首行截断,供 UI 悬浮提示。 */
 export function listLoadoutTools(): { name: string; description: string }[] {
   const seen = new Map<string, string>();
   for (const p of providers) {
     for (const t of p.tools()) {
-      if (t.isEnabledFor || LOADOUT_EXEMPT.has(t.name)) continue;
+      if ((t.isEnabledFor && !LOADOUT_GATED.has(t.name)) || LOADOUT_EXEMPT.has(t.name)) continue;
       const d = t.definition?.function?.description || '';
       seen.set(t.name, d.split('\n')[0].slice(0, 160));
     }
@@ -254,6 +259,21 @@ export function declaredApproval(name: string): 'command' | undefined {
   for (const p of providers) {
     for (const t of p.tools()) {
       if (t.name === name && t.capabilities?.approval) found = t.capabilities.approval;
+    }
+  }
+  return found;
+}
+
+/**
+ * 工具自声明的「落库占位」(capabilities.persistPlaceholder)。与 declaredApproval 同款遍历语义。
+ * 刻意不经 resolveTools / isEnabledFor:read_computer_history 的门禁读 state.json,用户恰在工具执行完之后关掉功能时,
+ * 按 ctx 解析会解析不到它 → 丢了占位、全文落库 —— 正是「关闭后不留副本」要堵的那一刻。
+ */
+export function declaredPersistPlaceholder(name: string): string | undefined {
+  let found: string | undefined;
+  for (const p of providers) {
+    for (const t of p.tools()) {
+      if (t.name === name && typeof t.capabilities?.persistPlaceholder === 'string') found = t.capabilities.persistPlaceholder;
     }
   }
   return found;

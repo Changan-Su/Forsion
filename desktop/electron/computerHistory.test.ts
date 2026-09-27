@@ -1,0 +1,983 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import net from 'node:net'
+import os from 'node:os'
+import path from 'node:path'
+
+vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }))
+
+import {
+  applyExclude, buildPolicy, ComputerHistory, ComputerHistoryStore, DEFAULT_TITLE_ONLY_BUNDLE_IDS, foldSessions,
+  localDay, nextLocalMidnight, normalizeExclude, sanitizeEvent, stopComputerHistoryForWipe, tightenExclude,
+  type ComputerHistoryDeps, type ComputerHistoryPersistPatch,
+} from './computerHistory'
+import type { ComputerHistoryEvent, ComputerHistoryState } from '../shared/computerHistory'
+
+const DAY = 86_400_000
+const cleanups: Array<() => unknown> = []
+afterEach(async () => {
+  for (const fn of cleanups.splice(0).reverse()) await fn()
+})
+
+function tmpRoot(): string {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'ch-test-'))
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }))
+  return path.join(dir, 'computer-history')
+}
+const at = (y: number, mo: number, d: number, h: number, mi = 0): number => new Date(y, mo - 1, d, h, mi).getTime()
+const lines = (file: string): ComputerHistoryEvent[] =>
+  readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+const readState = (root: string): ComputerHistoryState => JSON.parse(readFileSync(path.join(root, 'state.json'), 'utf8'))
+const mode = (p: string): number => statSync(p).mode & 0o777
+
+async function waitFor(fn: () => boolean | Promise<boolean>, ms = 4_000): Promise<void> {
+  const end = Date.now() + ms
+  for (;;) {
+    if (await fn()) return
+    if (Date.now() > end) throw new Error('waitFor timed out')
+    await new Promise((r) => setTimeout(r, 20))
+  }
+}
+
+describe('ComputerHistoryStore', () => {
+  it('按事件本地日期分文件追加;目录 0700 / 文件 0600;只在首次建根目录时打 Time Machine 排除', async () => {
+    const root = tmpRoot()
+    const tm = vi.fn(async () => {})
+    const store = new ComputerHistoryStore(root, tm)
+    const a = { t: at(2026, 9, 26, 23, 59), kind: 'app', app: { name: 'Safari', bundleId: 'com.apple.Safari' }, title: 'A' } as ComputerHistoryEvent
+    const b = { t: at(2026, 9, 27, 0, 1), kind: 'text', app: { name: 'Safari', bundleId: 'com.apple.Safari' }, text: 'hi' } as ComputerHistoryEvent
+    await store.append([a, b])
+    await store.append([{ ...b, t: b.t + 1000 }])
+    expect(readdirSync(store.eventsDir).sort()).toEqual(['2026-09-26.jsonl', '2026-09-27.jsonl'])
+    expect(lines(path.join(store.eventsDir, '2026-09-26.jsonl'))).toEqual([a])
+    expect(lines(path.join(store.eventsDir, '2026-09-27.jsonl')).map((e) => e.t)).toEqual([b.t, b.t + 1000])
+    expect(mode(root)).toBe(0o700)
+    expect(mode(store.eventsDir)).toBe(0o700)
+    expect(mode(path.join(store.eventsDir, '2026-09-27.jsonl'))).toBe(0o600)
+    expect(tm).toHaveBeenCalledTimes(1)
+    expect(tm).toHaveBeenCalledWith(root)
+  })
+
+  it('保留期:整天早于 now-7d 的日文件与残留 .tmp 删掉,边界那天留着', async () => {
+    const root = tmpRoot()
+    const store = new ComputerHistoryStore(root)
+    await store.ensureRoot()
+    const now = at(2026, 9, 27, 12)
+    const names = [0, 6, 7, 8, 30].map((d) => `${localDay(now - d * DAY)}.jsonl`)
+    for (const n of names) writeFileSync(path.join(store.eventsDir, n), '{}\n')
+    writeFileSync(path.join(store.eventsDir, '2026-09-27.jsonl.123-x.tmp'), 'half')
+    const removed = await store.prune(now)
+    expect(removed.sort()).toEqual([names[3], names[4], '2026-09-27.jsonl.123-x.tmp'].sort())
+    expect(readdirSync(store.eventsDir).sort()).toEqual([names[0], names[1], names[2]].sort())
+  })
+
+  it('clear(since):跨界那天原子重写只留 t < since(残行一并删),之后的整天删,之前的不动', async () => {
+    const root = tmpRoot()
+    const store = new ComputerHistoryStore(root)
+    const ev = (t: number): ComputerHistoryEvent => ({ t, kind: 'app', app: { name: 'X', bundleId: 'x' } })
+    await store.append([ev(at(2026, 9, 25, 10)), ev(at(2026, 9, 26, 10)), ev(at(2026, 9, 26, 11)), ev(at(2026, 9, 26, 12)), ev(at(2026, 9, 27, 9))])
+    const mid = path.join(store.eventsDir, '2026-09-26.jsonl')
+    writeFileSync(mid, readFileSync(mid, 'utf8') + '{"t":17590\n', { flag: 'w' }) // 半截残行
+    const before = readFileSync(path.join(store.eventsDir, '2026-09-25.jsonl'), 'utf8')
+    await store.clear({ sinceMs: at(2026, 9, 26, 11, 30) })
+    expect(readdirSync(store.eventsDir).sort()).toEqual(['2026-09-25.jsonl', '2026-09-26.jsonl'])
+    expect(lines(mid).map((e) => e.t)).toEqual([at(2026, 9, 26, 10), at(2026, 9, 26, 11)])
+    expect(mode(mid)).toBe(0o600)
+    expect(readFileSync(path.join(store.eventsDir, '2026-09-25.jsonl'), 'utf8')).toBe(before)
+    expect(readdirSync(store.eventsDir).some((f) => f.endsWith('.tmp'))).toBe(false)
+  })
+
+  it('clear(all) 删光日文件;recentApps 新的在前、去重、跳过被排除的', async () => {
+    const root = tmpRoot()
+    const store = new ComputerHistoryStore(root)
+    const t0 = at(2026, 9, 26, 10)
+    await store.append([
+      { t: t0, kind: 'app', app: { name: 'Safari', bundleId: 'com.apple.Safari' } },
+      { t: t0 + 1, kind: 'app', app: { name: '1Password', bundleId: 'com.1password.1password', excluded: true } },
+      { t: t0 + 2, kind: 'text', app: { name: 'Notes', bundleId: 'com.apple.Notes' }, text: 'x' },
+      { t: at(2026, 9, 27, 9), kind: 'app', app: { name: 'Code', bundleId: 'com.microsoft.VSCode' } },
+      { t: at(2026, 9, 27, 9, 5), kind: 'app', app: { name: 'Safari', bundleId: 'com.apple.Safari' } },
+    ])
+    expect(await store.recentApps(10)).toEqual([
+      { name: 'Safari', bundleId: 'com.apple.Safari' },
+      { name: 'Code', bundleId: 'com.microsoft.VSCode' },
+    ])
+    await store.clear({ all: true })
+    expect(readdirSync(store.eventsDir)).toEqual([])
+  })
+
+  it('recentApps 有界:每个日文件只读尾部,总量封顶;截断的首行不误读', async () => {
+    const root = tmpRoot()
+    const store = new ComputerHistoryStore(root)
+    const t0 = at(2026, 9, 27, 9)
+    const filler = Array.from({ length: 200 }, (_, i) => ({ t: t0 + 1 + i, kind: 'text' as const, app: { name: 'Notes', bundleId: 'com.apple.Notes' }, text: 'x'.repeat(40) }))
+    await store.append([{ t: t0 - DAY, kind: 'app', app: { name: 'Old', bundleId: 'com.old' } }])
+    await store.append([{ t: t0, kind: 'app', app: { name: 'Early', bundleId: 'com.early' } }, ...filler, { t: t0 + 999, kind: 'app', app: { name: 'Late', bundleId: 'com.late' } }])
+    expect((await store.recentApps(10)).map((a) => a.bundleId)).toEqual(['com.late', 'com.early', 'com.old'])
+    expect((await store.recentApps(10, 1024 * 1024, 2_000)).map((a) => a.bundleId)).toEqual(['com.late', 'com.old']) // 今天那份只读了尾部
+    expect((await store.recentApps(10, 2_000, 2_000)).map((a) => a.bundleId)).toEqual(['com.late']) // 总预算用完就不再读更早的日文件
+  })
+
+  it('writeState:commit 否决时不落盘、不留临时文件', async () => {
+    const root = tmpRoot()
+    const store = new ComputerHistoryStore(root)
+    const s = (status: ComputerHistoryState['status']): ComputerHistoryState => ({ v: 1, enabled: true, pausedUntil: null, status, since: 0, updatedAt: 0, platform: 'darwin', dataGen: 0 })
+    await store.writeState(s('disconnected'))
+    await store.writeState(s('recording'), () => false)
+    expect(readState(root).status).toBe('disconnected')
+    expect(readdirSync(root).filter((f) => f.endsWith('.tmp'))).toEqual([])
+  })
+})
+
+describe('输入收敛 / 策略', () => {
+  it('sanitizeEvent:白名单字段 + 封顶;时间离谱丢;被排除 App 只留切换事实', () => {
+    const now = Date.now()
+    const ev = sanitizeEvent({ t: now, kind: 'text', app: { name: 'A', bundleId: 'a' }, text: 'x'.repeat(900), extra: 1, el: { role: 'AXTextArea', label: 'L' } }, now)!
+    expect(ev.text).toHaveLength(500)
+    expect(ev).not.toHaveProperty('extra')
+    expect(ev.el).toEqual({ role: 'AXTextArea', label: 'L' })
+    expect(sanitizeEvent({ t: now - 2 * DAY, kind: 'app' }, now)).toBeNull()
+    expect(sanitizeEvent({ t: now + 3_600_000, kind: 'app' }, now)).toBeNull()
+    expect(sanitizeEvent({ t: now, kind: 'screenshot' }, now)).toBeNull()
+    expect(sanitizeEvent({ t: now, kind: 'app', app: { name: 'P', excluded: true }, title: 'secret' }, now)).toEqual({ t: now, kind: 'app', app: { name: 'P', excluded: true } })
+  })
+
+  it('排除表 → 下发策略:收敛输入、默认 titleOnly(Forsion / 终端 / 本 App)合并,排除优先', () => {
+    const ex = normalizeExclude({
+      apps: [' com.x.App ', 'bad id!', 'com.x.App', 'com.apple.Terminal', 42],
+      domains: ['https://Mail.Example.com/inbox?x=1', '*.bank.cn', '.corp.local', 'not a domain', 'mail.example.com'],
+    })
+    expect(ex).toEqual({ apps: ['com.x.App', 'com.apple.Terminal'], domains: ['mail.example.com', 'bank.cn', 'corp.local'] })
+    const policy = buildPolicy(ex, 'com.github.Electron')
+    expect(policy.excludeBundleIds).toEqual(['com.x.App', 'com.apple.Terminal'])
+    expect(policy.excludeDomains).toEqual(['mail.example.com', 'bank.cn', 'corp.local'])
+    expect(policy.titleOnlyBundleIds).toContain('com.forsion.*')
+    expect(policy.titleOnlyBundleIds).toContain('com.googlecode.iterm2')
+    expect(policy.titleOnlyBundleIds).toContain('com.github.Electron')
+    expect(policy.titleOnlyBundleIds).not.toContain('com.apple.Terminal') // 被用户排除 → 不再只记标题,而是什么都不记
+    expect(policy).toMatchObject({ text: true, clicks: true, keys: true })
+    expect(buildPolicy({ apps: [], domains: [] }).titleOnlyBundleIds).toEqual([...DEFAULT_TITLE_ONLY_BUNDLE_IDS])
+  })
+
+  it('applyExclude:排除 App 只留不带标题的 app 切换(它的 window 事件整条丢);排除站点留一条不带内容的标记、同 App 连续不重复', () => {
+    const ex = { apps: ['com.bank'], domains: ['bank.cn'] }
+    const t = 1
+    const bank = { name: 'Bank', bundleId: 'com.bank' }
+    const chrome = { name: 'Chrome', bundleId: 'c' }
+    expect(applyExclude({ t, kind: 'app', app: bank, title: 'acct' }, ex))
+      .toEqual({ t, kind: 'app', app: { ...bank, excluded: true } })
+    // 排除 App 里换窗口 / 改标题:去掉标题也不留(落盘的时间与次数本身就在泄露)
+    expect(applyExclude({ t, kind: 'window', app: bank, title: 'Transfer' }, ex)).toBeNull()
+    expect(applyExclude({ t, kind: 'window', app: { name: 'Bank', bundleId: 'COM.BANK' } }, ex)).toBeNull()
+    expect(applyExclude({ t, kind: 'text', app: bank, text: 'pw' }, ex)).toBeNull()
+    // 排除站点:切进去那一下留一条标记(否则折叠把这段时间记到上一个页面头上)
+    expect(applyExclude({ t, kind: 'window', app: chrome, title: 'x', url: 'https://www.bank.cn/a' }, ex))
+      .toEqual({ t, kind: 'window', app: { ...chrome, excluded: true } })
+    expect(applyExclude({ t, kind: 'window', app: chrome, title: 'x', url: 'https://www.bank.cn/a' }, ex, { context: { bundleId: 'c', url: 'https://ok.example/', excluded: false } }))
+      .toEqual({ t, kind: 'window', app: { ...chrome, excluded: true } })
+    // 已在同一 App 的排除情境里:站内的标题 / 网址变化不再记
+    const onBank = { bundleId: 'c', url: 'https://www.bank.cn/a', excluded: true }
+    expect(applyExclude({ t, kind: 'window', app: chrome, title: 'y', url: 'https://www.bank.cn/b' }, ex, { context: onBank })).toBeNull()
+    expect(applyExclude({ t, kind: 'window', app: { ...chrome, excluded: true } }, ex, { context: onBank })).toBeNull() // helper 标的同理
+    // 切回这个 App 本身(app 事件)照留一条切换事实
+    expect(applyExclude({ t, kind: 'app', app: chrome, url: 'https://www.bank.cn/b' }, ex, { context: onBank }))
+      .toEqual({ t, kind: 'app', app: { ...chrome, excluded: true } })
+    expect(applyExclude({ t, kind: 'window', app: chrome, url: 'https://notbank.cn/' }, ex)).not.toBeNull()
+    expect(applyExclude({ t, kind: 'window', app: chrome, url: 'https://notbank.cn/' }, ex, { context: onBank })).not.toBeNull()
+  })
+
+  it('applyExclude:与 helper 同口径(不分大小写、`.*` 前缀通配);只记标题的 App 丢输入;不带 url 的输入按当前情境补判', () => {
+    const t = 1
+    const bank = { name: 'Bank', bundleId: 'com.bank.app' }
+    const chrome = { name: 'Chrome', bundleId: 'com.google.Chrome' }
+    const iterm = { name: 'iTerm', bundleId: 'com.googlecode.iterm2' }
+    // 用户规则 `com.Bank.*`:helper 那边命中,这里也得命中
+    expect(applyExclude({ t, kind: 'text', app: bank, text: 'pw' }, { apps: ['com.Bank.*'], domains: [] })).toBeNull()
+    expect(applyExclude({ t, kind: 'app', app: bank, title: 'acct' }, { apps: ['com.Bank.*'], domains: [] })?.app?.excluded).toBe(true)
+    expect(applyExclude({ t, kind: 'text', app: { name: 'X', bundleId: 'com.bankx.app' }, text: 'ok' }, { apps: ['com.bank.*'], domains: [] })).not.toBeNull()
+    // 只记标题:窗口事件照收,text / click / key 丢(包括 com.forsion.* 通配)
+    const titleOnly = buildPolicy({ apps: [], domains: [] }).titleOnlyBundleIds
+    const none = { apps: [], domains: [] }
+    expect(applyExclude({ t, kind: 'text', app: { ...iterm, bundleId: 'com.googlecode.ITERM2' }, text: 'export KEY=…' }, none, { titleOnly })).toBeNull()
+    expect(applyExclude({ t, kind: 'key', app: { name: 'Forsion', bundleId: 'com.forsion.desktop' }, keys: '⌘K' }, none, { titleOnly })).toBeNull()
+    expect(applyExclude({ t, kind: 'window', app: iterm, title: 'zsh' }, none, { titleOnly })).not.toBeNull()
+    // 情境在排除站点上:不带 url 的输入 / 点击丢;带了别的 App 的输入不受这个情境影响
+    const ex = { apps: [], domains: ['bank.cn'] }
+    const onBank = { bundleId: chrome.bundleId, url: 'https://www.bank.cn/login', excluded: false }
+    expect(applyExclude({ t, kind: 'text', app: chrome, text: 'pw' }, ex, { context: onBank })).toBeNull()
+    expect(applyExclude({ t, kind: 'click', app: chrome, el: { role: 'AXButton', label: 'Pay' } }, ex, { context: onBank })).toBeNull()
+    expect(applyExclude({ t, kind: 'text', app: { name: 'Notes', bundleId: 'com.apple.Notes' }, text: 'x' }, ex, { context: onBank })).not.toBeNull()
+    // 情境本身被排除(helper 标了 excluded):同 App 的输入丢
+    expect(applyExclude({ t, kind: 'text', app: chrome, text: 'x' }, none, { context: { bundleId: chrome.bundleId, excluded: true } })).toBeNull()
+    expect(applyExclude({ t, kind: 'text', app: chrome, text: 'x', url: 'https://ok.example/' }, ex, { context: onBank })).not.toBeNull() // 自己带 url 的按自己判
+  })
+})
+
+describe('foldSessions', () => {
+  const base = at(2026, 9, 27, 9)
+  const chrome = { name: 'Chrome', bundleId: 'com.google.Chrome' }
+  const e = (s: number, x: Partial<ComputerHistoryEvent>): ComputerHistoryEvent => ({ t: base + s * 1000, kind: 'app', ...x })
+  it('同 App+标题合段;打字归当前段;瞄一眼的短段吞掉并回;锁屏收尾;无字短段丢', () => {
+    const sessions = foldSessions([
+      e(0, { kind: 'app', app: chrome, title: 'Docs', url: 'https://docs.example.com/d/1' }),
+      e(5, { kind: 'text', app: chrome, text: 'hello   world' }),
+      e(6, { kind: 'text', app: chrome, text: 'by agent', origin: 'agent' }),
+      e(60, { kind: 'window', app: chrome, title: 'Mail' }),
+      e(62, { kind: 'app', app: { name: 'Finder', bundleId: 'com.apple.finder' }, title: 'Downloads' }),
+      e(65, { kind: 'app', app: chrome, title: 'Mail' }),
+      e(300, { kind: 'system', state: 'locked' }),
+      e(900, { kind: 'system', state: 'unlocked' }),
+      e(905, { kind: 'app', app: { name: 'Code', bundleId: 'com.microsoft.VSCode' }, title: 'main.ts' }),
+      e(1000, { kind: 'key', app: { name: 'Code', bundleId: 'com.microsoft.VSCode' }, keys: '⌘S' }),
+      e(1003, { kind: 'app', app: { name: 'Notes', bundleId: 'com.apple.Notes' }, title: 'n' }),
+      e(1004, { kind: 'text', app: { name: 'Notes', bundleId: 'com.apple.Notes' }, text: 'quick' }),
+    ])
+    expect(sessions.map((s) => [s.app, s.title, (s.start - base) / 1000, (s.end - base) / 1000, s.typed])).toEqual([
+      ['Chrome', 'Docs', 0, 60, ['hello world']],
+      ['Chrome', 'Mail', 60, 300, []],
+      ['Code', 'main.ts', 905, 1003, []],
+      ['Notes', 'n', 1003, 1004, ['quick']], // 短但打了字 → 保留
+    ])
+    expect(sessions[0].url).toBe('https://docs.example.com/d/1')
+    expect(sessions[0].bundleId).toBe('com.google.Chrome')
+  })
+
+  it('长时间没事件(Forsion 没开)不把空白算给上一个窗口', () => {
+    const s = foldSessions([e(0, { app: chrome, title: 'A' }), e(40, { kind: 'click', app: chrome }), e(5 * 3600, { app: chrome, title: 'B' }), e(5 * 3600 + 30, { kind: 'key', app: chrome, keys: '⌘T' })])
+    expect(s.map((x) => [x.title, (x.end - x.start) / 1000])).toEqual([['A', 40], ['B', 30]])
+  })
+})
+
+// ── 控制器 × 假 helper(unix socket) ────────────────────────────────────────
+
+type HelperMode = 'ok' | 'denied' | 'unknown' | 'old'
+let sockSeq = 0
+function fakeHelper() {
+  const sockPath = path.join(os.tmpdir(), `chs-${process.pid}-${++sockSeq}.sock`)
+  const conns = new Set<net.Socket>()
+  const requests: Array<Record<string, any>> = []
+  let accepted = 0
+  let helperMode: HelperMode = 'ok'
+  const server = net.createServer((sock) => {
+    accepted++
+    conns.add(sock)
+    sock.on('close', () => conns.delete(sock))
+    sock.on('error', () => {})
+    sock.setEncoding('utf8')
+    let buf = ''
+    sock.on('data', (chunk: string) => {
+      buf += chunk
+      const nl = buf.indexOf('\n')
+      if (nl < 0) return
+      const req = JSON.parse(buf.slice(0, nl))
+      buf = buf.slice(nl + 1)
+      requests.push(req)
+      const reply = helperMode === 'ok' ? { ok: true, result: { subscribed: true, protocolVersion: 13, axTrusted: true } }
+        : helperMode === 'old' ? { ok: true, result: { subscribed: true, protocolVersion: 12, axTrusted: true } }
+        : helperMode === 'denied' ? { ok: false, error: { code: 'accessibility_denied', message: 'Accessibility not granted' } }
+        : { ok: false, error: { code: 'unknown_command', message: "Unknown command 'recordSubscribe'" } }
+      sock.write(`${JSON.stringify({ id: req.id, ...reply })}\n`)
+    })
+  })
+  const h = {
+    sockPath,
+    requests,
+    get accepted() { return accepted },
+    get open() { return conns.size },
+    setMode: (m: HelperMode) => { helperMode = m },
+    listen: () => new Promise<void>((r) => server.listen(sockPath, () => r())),
+    push: (ev: unknown) => { for (const c of conns) c.write(`${JSON.stringify({ ev })}\n`) },
+    kick: () => { for (const c of conns) c.destroy() },
+    close: () => new Promise<void>((r) => { for (const c of conns) c.destroy(); server.close(() => r()) }),
+  }
+  cleanups.push(() => h.close().catch(() => {}))
+  cleanups.push(() => rmSync(sockPath, { force: true }))
+  return h
+}
+
+function makeController(sockPath: string, over: Partial<ComputerHistoryDeps> = {}) {
+  const root = over.root ?? tmpRoot()
+  const helperApp = path.join(path.dirname(root), 'tangu-computer-use.app')
+  const persist = vi.fn(async (_patch: ComputerHistoryPersistPatch): Promise<void> => {})
+  const onChanged = vi.fn()
+  const launchHelper = vi.fn(async () => {})
+  const ch = new ComputerHistory({
+    root, platform: 'darwin', socketPath: sockPath, externalSocket: false, helperAppPath: () => helperApp,
+    persist, onChanged, launchHelper, tmExclude: async () => {}, ...over,
+  })
+  cleanups.push(async () => { ch.dispose(); await ch.flush().catch(() => {}) }) // 等队列里的写落完再删临时目录
+  const installHelper = () => {
+    mkdirSync(path.join(helperApp, 'Contents', 'MacOS'), { recursive: true })
+    writeFileSync(path.join(helperApp, 'Contents', 'MacOS', 'bridge'), '')
+    chmodSync(path.join(helperApp, 'Contents', 'MacOS', 'bridge'), 0o755)
+  }
+  return { ch, root, persist, onChanged, launchHelper, installHelper }
+}
+
+describe('ComputerHistory × helper 订阅', () => {
+  it('开着:订阅(带策略)→ 事件流按 1s 批量落盘;state.json 跟着状态走', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const { ch, root } = makeController(helper.sockPath, { selfBundleId: 'com.github.Electron' })
+    await ch.start({ computerHistoryEnabled: true, computerHistoryExclude: { apps: ['com.bank'], domains: ['bank.cn'] } })
+    await waitFor(() => ch.view().state.status === 'recording')
+    expect(helper.requests[0]).toMatchObject({ cmd: 'recordSubscribe', policy: { excludeBundleIds: ['com.bank'], excludeDomains: ['bank.cn'] } })
+    expect(helper.requests[0].policy.titleOnlyBundleIds).toEqual(expect.arrayContaining(['com.forsion.*', 'com.github.Electron']))
+    const t = Date.now()
+    const safari = { name: 'Safari', bundleId: 'com.apple.Safari' }
+    helper.push({ t, kind: 'app', app: safari, title: 'Docs', url: 'https://example.com/a', junk: 1 })
+    helper.push({ t: t + 1, kind: 'text', app: safari, text: 'hello', el: { role: 'AXTextField' } })
+    helper.push({ t: t + 2, kind: 'text', app: { name: 'Bank', bundleId: 'com.bank' }, text: 'leak' }) // 防御纵深:主进程再滤一次
+    helper.push({ t: 5, kind: 'app', app: safari }) // 离谱时间戳
+    const file = path.join(root, 'events', `${localDay(t)}.jsonl`)
+    await waitFor(() => existsSync(file) && lines(file).length >= 2, 3_000) // 不手动 flush:1s 批量计时器自己落
+    await ch.flush()
+    expect(lines(file)).toEqual([
+      { t, kind: 'app', app: safari, title: 'Docs', url: 'https://example.com/a' },
+      { t: t + 1, kind: 'text', app: safari, text: 'hello', el: { role: 'AXTextField' } },
+    ])
+    expect(readState(root)).toMatchObject({ v: 1, enabled: true, pausedUntil: null, status: 'recording', platform: 'darwin' })
+    expect(mode(path.join(root, 'state.json'))).toBe(0o600)
+    expect((await ch.recent(1)).map((s) => s.title)).toEqual(['Docs'])
+    expect(await ch.recentApps()).toEqual([safari])
+  })
+
+  it('断线 → disconnected → 退避后重连回到 recording', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const { ch, root } = makeController(helper.sockPath)
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    helper.kick()
+    await waitFor(() => ch.view().state.status === 'disconnected')
+    await ch.flush()
+    expect(readState(root).status).toBe('disconnected')
+    await waitFor(() => ch.view().state.status === 'recording', 4_000)
+    expect(helper.requests.filter((r) => r.cmd === 'recordSubscribe')).toHaveLength(2)
+  })
+
+  it('老 helper:unknown_command / 协议 < 13 → helper_outdated', async () => {
+    for (const m of ['unknown', 'old'] as const) {
+      const helper = fakeHelper()
+      helper.setMode(m)
+      await helper.listen()
+      const { ch, root } = makeController(helper.sockPath)
+      await ch.start({ computerHistoryEnabled: true })
+      await waitFor(() => ch.view().state.status === 'helper_outdated')
+      await ch.flush()
+      expect(readState(root).status).toBe('helper_outdated')
+      await waitFor(() => helper.open === 0) // 我们关掉了连接,不留半开的订阅
+    }
+  })
+
+  it('accessibility_denied → no_permission;授权后重试自动转 recording', async () => {
+    const helper = fakeHelper()
+    helper.setMode('denied')
+    await helper.listen()
+    const { ch } = makeController(helper.sockPath)
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'no_permission')
+    helper.setMode('ok')
+    await waitFor(() => ch.view().state.status === 'recording', 4_000)
+  })
+
+  it('关着:绝不连 socket、不拉起 helper、不建目录', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const { ch, root, launchHelper } = makeController(helper.sockPath)
+    await ch.start({ computerHistoryEnabled: false })
+    await new Promise((r) => setTimeout(r, 300))
+    expect(helper.accepted).toBe(0)
+    expect(launchHelper).not.toHaveBeenCalled()
+    expect(existsSync(root)).toBe(false)
+    expect(ch.view().state.status).toBe('off')
+  })
+
+  it('非 darwin:恒 unsupported,开关拨不动,不碰 socket', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const { ch } = makeController(helper.sockPath, { platform: 'win32' })
+    await ch.start({ computerHistoryEnabled: true })
+    const v = await ch.setEnabled(true)
+    expect(v.state).toMatchObject({ status: 'unsupported', enabled: false })
+    await new Promise((r) => setTimeout(r, 200))
+    expect(helper.accepted).toBe(0)
+  })
+
+  it('socket 不在:装了 helper 就拉起再订阅;没装 → helper_missing 且不拉起', async () => {
+    const helper = fakeHelper()
+    const missing = makeController(helper.sockPath)
+    await missing.ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => missing.ch.view().state.status === 'helper_missing')
+    expect(missing.launchHelper).not.toHaveBeenCalled()
+    missing.ch.dispose()
+
+    const launchHelper = vi.fn(async () => { await helper.listen() })
+    const { ch, installHelper } = makeController(helper.sockPath, { launchHelper })
+    installHelper()
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    expect(launchHelper).toHaveBeenCalledTimes(1)
+  })
+
+  it('权限页关停 / 重装 helper 期间绝不拉起(拉起的会是旧包),也不占节流窗口;忙完立刻重连并拉起一次', async () => {
+    const helper = fakeHelper() // socket 不在:连接失败 → 走拉起
+    let busy = true
+    let idle: (() => void) | undefined
+    const onHelperIdle = vi.fn((cb: () => void) => { idle = cb; return () => { idle = undefined } })
+    const launchHelper = vi.fn(async () => { await helper.listen() })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    cleanups.push(() => warn.mockRestore())
+    const { ch, installHelper } = makeController(helper.sockPath, { launchHelper, helperBusy: () => busy, onHelperIdle })
+    installHelper()
+    await ch.start({ computerHistoryEnabled: true })
+    expect(onHelperIdle).toHaveBeenCalledTimes(1)
+    const busyAttempts = (): number => warn.mock.calls.filter((c) => c[1] === 'helper_busy').length
+    await waitFor(() => busyAttempts() >= 2, 3_000) // 首次 + 1s 退避后那次:重试计时器照常跑,只是不拉起
+    expect(launchHelper).not.toHaveBeenCalled()
+    expect(ch.view().state.status).toBe('disconnected')
+    // 忙完的回调要让它立刻连上,而不是等退避
+    busy = false
+    idle!()
+    await waitFor(() => ch.view().state.status === 'recording', 1_500) // 下一次退避重试在 idle 后 ~2s:此界内连上 = 是回调连的
+    expect(launchHelper).toHaveBeenCalledTimes(1)
+    expect(helper.requests.filter((r) => r.cmd === 'recordSubscribe')).toHaveLength(1)
+    await ch.dispose()
+    expect(idle).toBeUndefined() // dispose 取消订阅
+  })
+
+  it('requiredHelperProtocol:只在 darwin 且开着时要求 13(没开电脑历史的 CU 用户不会被提示重启)', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const off = makeController(helper.sockPath)
+    await off.ch.start({ computerHistoryEnabled: false })
+    expect(off.ch.requiredHelperProtocol()).toBeUndefined()
+    const on = makeController(helper.sockPath)
+    await on.ch.start({ computerHistoryEnabled: true })
+    expect(on.ch.requiredHelperProtocol()).toBe(13)
+    await on.ch.setEnabled(false)
+    expect(on.ch.requiredHelperProtocol()).toBeUndefined()
+    const win = makeController(helper.sockPath, { platform: 'win32' })
+    await win.ch.start({ computerHistoryEnabled: true })
+    expect(win.ch.requiredHelperProtocol()).toBeUndefined()
+  })
+
+  it('暂停:断订阅 + state.json 带 pausedUntil + 写回配置;恢复重连', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const { ch, root, persist, onChanged } = makeController(helper.sockPath)
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    const before = Date.now()
+    const v = await ch.pause(3_600_000)
+    expect(v.state.status).toBe('paused')
+    expect(v.state.pausedUntil).toBeGreaterThanOrEqual(before + 3_600_000)
+    expect(persist).toHaveBeenCalledWith({ computerHistoryPausedUntil: v.state.pausedUntil })
+    await waitFor(() => helper.open === 0)
+    await ch.flush()
+    expect(readState(root)).toMatchObject({ enabled: true, status: 'paused', pausedUntil: v.state.pausedUntil })
+    expect(onChanged).toHaveBeenCalledWith(expect.objectContaining({ state: expect.objectContaining({ status: 'paused' }) }))
+
+    await ch.resume()
+    expect(persist).toHaveBeenLastCalledWith({ computerHistoryPausedUntil: null })
+    await waitFor(() => ch.view().state.status === 'recording')
+    await ch.flush()
+    expect(readState(root)).toMatchObject({ status: 'recording', pausedUntil: null })
+  })
+
+  it('暂停到点自动恢复(时钟推进 + recheck);「到明天」= 下一个本地 0 点', async () => {
+    let clock = at(2026, 9, 27, 15)
+    const { ch, persist } = makeController(path.join(os.tmpdir(), `chs-none-${process.pid}.sock`), { now: () => clock })
+    await ch.start({ computerHistoryEnabled: true, computerHistoryPausedUntil: clock + 30 * 60_000 })
+    expect(ch.view().state.status).toBe('paused')
+    clock += 31 * 60_000
+    ch.recheck()
+    expect(ch.view().state.pausedUntil).toBeNull()
+    expect(ch.view().state.status).not.toBe('paused')
+    await waitFor(() => persist.mock.calls.some((c) => JSON.stringify(c) === JSON.stringify([{ computerHistoryPausedUntil: null }]))) // 落配置排在意愿队列里
+    const v = await ch.pause('tomorrow')
+    expect(v.state.pausedUntil).toBe(nextLocalMidnight(clock))
+    expect(v.state.pausedUntil).toBe(at(2026, 9, 28, 0))
+  })
+
+  it('clear(since):删盘上与缓冲里的新事件,并重开订阅(helper 丢差分基线)', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const { ch, root } = makeController(helper.sockPath)
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    const t = Date.now()
+    const app = { name: 'Notes', bundleId: 'com.apple.Notes' }
+    helper.push({ t: t - 60_000, kind: 'app', app, title: 'old' })
+    helper.push({ t, kind: 'text', app, text: 'secret' })
+    await waitFor(async () => (await ch.recent(1)).length > 0)
+    await ch.clear({ sinceMs: t - 1_000 })
+    await waitFor(() => helper.requests.length === 2)
+    await waitFor(() => ch.view().state.status === 'recording')
+    await ch.flush()
+    const file = path.join(root, 'events', `${localDay(t)}.jsonl`)
+    // 跨天边界跑这条时旧事件可能落在前一天的文件里;只断言「secret 不在任何文件里」+「old 还在」
+    const all = readdirSync(path.join(root, 'events')).flatMap((f) => lines(path.join(root, 'events', f)))
+    expect(all.map((e) => e.title ?? e.text)).toEqual(['old'])
+    expect(existsSync(file) || localDay(t - 60_000) !== localDay(t)).toBe(true)
+
+    await ch.clear({ all: true })
+    expect(readdirSync(path.join(root, 'events'))).toEqual([])
+  })
+
+  it('改排除表:写回配置 + 用新策略重订阅', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const { ch, persist } = makeController(helper.sockPath)
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    const v = await ch.setExclude({ apps: ['com.bank'], domains: ['https://bank.cn/x'] })
+    expect(v.exclude).toEqual({ apps: ['com.bank'], domains: ['bank.cn'] })
+    expect(persist).toHaveBeenCalledWith({ computerHistoryExclude: { apps: ['com.bank'], domains: ['bank.cn'] } })
+    await waitFor(() => helper.requests.length === 2 && ch.view().state.status === 'recording')
+    expect(helper.requests[1].policy).toMatchObject({ excludeBundleIds: ['com.bank'], excludeDomains: ['bank.cn'] })
+  })
+
+  it('清空数据(dispose discard):缓冲丢弃、计时器停,删掉目录后不会被 1s 批量落盘建回来', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const tmExclude = vi.fn(async () => {})
+    const { ch, root } = makeController(helper.sockPath, { tmExclude })
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    await ch.flush()
+    expect(tmExclude).toHaveBeenCalledTimes(1)
+    helper.push({ t: Date.now(), kind: 'text', app: { name: 'Notes', bundleId: 'com.apple.Notes' }, text: 'secret' })
+    await waitFor(async () => (await ch.recent(1)).length > 0) // 事件进了缓冲、1s 计时器已挂上
+    // 队列里有一笔在途的写:dispose 返回的 promise 要等它落定(main 等完才删目录)
+    let release: (() => void) | undefined
+    vi.spyOn(ch.store, 'ensureRoot').mockImplementationOnce(() => new Promise<void>((r) => { release = r }))
+    void ch.reveal()
+    await waitFor(() => release !== undefined) // 那笔写已开跑(还没开跑的,dispose 之后轮到就直接跳过)
+    let drained = false
+    const done = ch.dispose({ discard: true }).then(() => { drained = true })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(drained).toBe(false)
+    release!()
+    await done
+    // discard:缓冲不落盘、state 不改写(目录马上整删)
+    expect(readdirSync(path.join(root, 'events'))).toEqual([])
+    expect(readState(root).status).toBe('recording')
+    rmSync(root, { recursive: true, force: true })
+    helper.push({ t: Date.now(), kind: 'text', app: { name: 'Notes', bundleId: 'com.apple.Notes' }, text: 'late' })
+    await new Promise((r) => setTimeout(r, 1_500))
+    expect(existsSync(root)).toBe(false)
+    expect(tmExclude).toHaveBeenCalledTimes(1)
+    await waitFor(() => helper.open === 0)
+  })
+
+  it('退出(dispose 缺省):排队中的写不挡同步兜底,也盖不回「记录中」', async () => {
+    const helper = fakeHelper()
+    helper.setMode('denied')
+    await helper.listen()
+    const { ch, root } = makeController(helper.sockPath)
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'no_permission')
+    await ch.flush()
+    // 用一笔卡住的写把队列堵住:之后的 state 写(recording)只能排队
+    let release!: () => void
+    vi.spyOn(ch.store, 'ensureRoot').mockImplementationOnce(() => new Promise<void>((r) => { release = r }))
+    void ch.reveal()
+    helper.setMode('ok')
+    await waitFor(() => ch.view().state.status === 'recording', 4_000) // 退避重试连上 → writeState(recording) 排在卡住那笔后面
+    const t = Date.now()
+    const safari = { name: 'Safari', bundleId: 'com.apple.Safari' }
+    helper.push({ t, kind: 'app', app: safari, title: 'Docs' })
+    helper.push({ t: t + 1, kind: 'text', app: safari, text: 'hi' }) // 无字的 0 秒段会被折叠丢掉,带一条输入好让 recent() 看得见
+    await waitFor(async () => (await ch.recent(1)).length > 0)
+    const drained = ch.dispose()
+    release()
+    await drained
+    await ch.flush()
+    expect(readState(root).status).toBe('disconnected')
+    const all = readdirSync(path.join(root, 'events')).flatMap((f) => lines(path.join(root, 'events', f)))
+    expect(all.map((e) => e.title ?? e.text)).toEqual(['Docs', 'hi'])
+  })
+
+  it('清除时重写失败:错误照抛给设置页,但订阅照样重开(不会断着还显示「记录中」)', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const { ch, root } = makeController(helper.sockPath)
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    await ch.flush()
+    const now = Date.now()
+    const file = path.join(root, 'events', `${localDay(now)}.jsonl`)
+    writeFileSync(file, `${JSON.stringify({ t: now - 5, kind: 'app', app: { name: 'X', bundleId: 'x' } })}\n`, { mode: 0o600 })
+    chmodSync(file, 0o000)
+    cleanups.push(() => chmodSync(file, 0o600))
+    await expect(ch.clear({ sinceMs: now })).rejects.toThrow(/EACCES/)
+    await waitFor(() => helper.requests.length === 2 && ch.view().state.status === 'recording')
+    await waitFor(() => helper.open === 1)
+  })
+
+  it('写盘失败:整批退回缓冲重试;连续失败状态降级,恢复后补写且不重复', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const { ch, root } = makeController(helper.sockPath)
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    await ch.flush()
+    const events = path.join(root, 'events')
+    chmodSync(events, 0o500) // 建不了日文件
+    cleanups.push(() => chmodSync(events, 0o700))
+    const t = Date.now()
+    const safari = { name: 'Safari', bundleId: 'com.apple.Safari' }
+    helper.push({ t, kind: 'app', app: safari, title: 'Docs' })
+    helper.push({ t: t + 1, kind: 'text', app: safari, text: 'hi' })
+    await waitFor(async () => (await ch.recent(1)).length > 0)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await ch.flush()
+    expect(ch.view().state.status).toBe('recording') // 一次失败先不报
+    await ch.flush()
+    expect(ch.view().state.status).toBe('disconnected')
+    await ch.flush()
+    expect(readState(root).status).toBe('disconnected')
+    expect((await ch.recent(1)).map((s) => s.title)).toEqual(['Docs']) // 还在缓冲里
+    warn.mockRestore()
+    chmodSync(events, 0o700)
+    await ch.flush()
+    await ch.flush()
+    expect(ch.view().state.status).toBe('recording')
+    expect(readState(root).status).toBe('recording')
+    expect(lines(path.join(events, `${localDay(t)}.jsonl`)).map((e) => e.title ?? e.text)).toEqual(['Docs', 'hi'])
+  })
+
+  it('开 / 关落配置失败:开 = 什么都没变;关 = 立刻停录(断订阅、state 写 off),错误照抛', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const persist = vi.fn(async () => { throw new Error('EROFS') })
+    const off = makeController(helper.sockPath, { persist })
+    await off.ch.start({ computerHistoryEnabled: false })
+    await expect(off.ch.setEnabled(true)).rejects.toThrow('EROFS')
+    expect(off.ch.view().state).toMatchObject({ enabled: false, status: 'off' })
+    await expect(off.ch.resume()).rejects.toThrow('EROFS')
+    await new Promise((r) => setTimeout(r, 200))
+    expect(helper.accepted).toBe(0)
+
+    const on = makeController(helper.sockPath, { persist })
+    await on.ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => on.ch.view().state.status === 'recording')
+    await expect(on.ch.setEnabled(false)).rejects.toThrow('EROFS')
+    expect(on.ch.view().state).toMatchObject({ enabled: false, status: 'off' })
+    await waitFor(() => helper.open === 0)
+    await on.ch.flush()
+    expect(readState(on.root)).toMatchObject({ enabled: false, status: 'off' })
+  })
+
+  it('最近 App:事件流喂内存表;清除后不再列出被清掉的', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const { ch } = makeController(helper.sockPath)
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    const t = Date.now()
+    helper.push({ t: t - 2_000, kind: 'app', app: { name: 'Safari', bundleId: 'com.apple.Safari' }, title: 'a' })
+    helper.push({ t: t - 1_000, kind: 'app', app: { name: 'Code', bundleId: 'com.microsoft.VSCode' }, title: 'b' })
+    helper.push({ t, kind: 'app', app: { name: '1Password', bundleId: 'com.1password.1password', excluded: true } })
+    await waitFor(async () => (await ch.recentApps()).length === 2)
+    expect((await ch.recentApps()).map((a) => a.bundleId)).toEqual(['com.microsoft.VSCode', 'com.apple.Safari'])
+    await ch.clear({ sinceMs: t - 1_500 })
+    expect((await ch.recentApps()).map((a) => a.bundleId)).toEqual(['com.apple.Safari'])
+  })
+
+  it('排除落盘(creview #5):排除 App 只留一条不带标题的切换;排除站点只留切进去那条标记,站内变化与输入都不落', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const { ch, root } = makeController(helper.sockPath)
+    await ch.start({ computerHistoryEnabled: true, computerHistoryExclude: { apps: ['com.bank'], domains: ['bank.cn'] } })
+    await waitFor(() => ch.view().state.status === 'recording')
+    const t = Date.now()
+    const bank = { name: 'Bank', bundleId: 'com.bank' }
+    const chrome = { name: 'Chrome', bundleId: 'com.google.Chrome' }
+    for (const ev of [
+      { t, kind: 'app', app: bank, title: 'Accounts' },
+      { t: t + 1, kind: 'window', app: bank, title: 'Transfer' },
+      { t: t + 2, kind: 'text', app: bank, text: '1000' },
+      { t: t + 3, kind: 'app', app: chrome, title: 'Docs', url: 'https://docs.example.com/' },
+      { t: t + 4, kind: 'window', app: chrome, title: 'Login', url: 'https://www.bank.cn/login' },
+      { t: t + 5, kind: 'window', app: chrome, title: 'Balance', url: 'https://www.bank.cn/balance' },
+      { t: t + 6, kind: 'text', app: chrome, text: 'pw' },
+      { t: t + 7, kind: 'window', app: chrome, title: 'News', url: 'https://news.example.com/' },
+    ]) helper.push(ev)
+    const all = (): ComputerHistoryEvent[] => readdirSync(path.join(root, 'events')).flatMap((f) => lines(path.join(root, 'events', f)))
+    await waitFor(async () => { await ch.flush(); return all().some((e) => e.title === 'News') })
+    expect(all()).toEqual([
+      { t, kind: 'app', app: { ...bank, excluded: true } },
+      { t: t + 3, kind: 'app', app: chrome, title: 'Docs', url: 'https://docs.example.com/' },
+      { t: t + 4, kind: 'window', app: { ...chrome, excluded: true } },
+      { t: t + 7, kind: 'window', app: chrome, title: 'News', url: 'https://news.example.com/' },
+    ])
+  })
+
+  it('意愿按发出顺序生效(creview #1):落配置途中的旧「开 / 恢复」盖不掉之后的「关 / 暂停」', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const holdNextPersist = (persist: ReturnType<typeof makeController>['persist']): (() => void) => {
+      let release: (() => void) | undefined
+      persist.mockImplementationOnce(() => new Promise<void>((r) => { release = r }))
+      return () => release!()
+    }
+    // 开 → 关:在途的「开」回来时作废,盘上最后留下的是「关」
+    {
+      const { ch, persist } = makeController(helper.sockPath)
+      await ch.start({ computerHistoryEnabled: false })
+      const release = holdNextPersist(persist)
+      const enabling = ch.setEnabled(true)
+      await waitFor(() => persist.mock.calls.length === 1)
+      const disabling = ch.setEnabled(false)
+      release()
+      await Promise.all([enabling, disabling])
+      expect(ch.view().state).toMatchObject({ enabled: false, status: 'off' })
+      expect(persist.mock.calls.map((c) => c[0].computerHistoryEnabled)).toEqual([true, false])
+    }
+    // 恢复 → 暂停(设置页恢复途中,托盘点了暂停):恢复作废
+    {
+      const { ch, persist } = makeController(helper.sockPath)
+      await ch.start({ computerHistoryEnabled: true, computerHistoryPausedUntil: Date.now() + 3_600_000 })
+      const release = holdNextPersist(persist)
+      const resuming = ch.resume()
+      await waitFor(() => persist.mock.calls.length === 1)
+      const pausing = ch.pause(30 * 60_000)
+      release()
+      await Promise.all([resuming, pausing])
+      expect(ch.view().state.status).toBe('paused')
+      expect(persist.mock.calls.map((c) => c[0].computerHistoryPausedUntil)).toEqual([null, ch.view().state.pausedUntil])
+    }
+    // 开 → 暂停:只作废「开」里清暂停的那半,开本身照生效(内存与盘一致:开着 + 暂停中)
+    {
+      const { ch, persist } = makeController(helper.sockPath)
+      await ch.start({ computerHistoryEnabled: false })
+      const release = holdNextPersist(persist)
+      const enabling = ch.setEnabled(true)
+      await waitFor(() => persist.mock.calls.length === 1)
+      const pausing = ch.pause(30 * 60_000)
+      release()
+      await Promise.all([enabling, pausing])
+      expect(ch.view().state).toMatchObject({ enabled: true, status: 'paused' })
+    }
+    // 开 → config:set 直接关(渲染层另一条写配置的路):同样作废在途的「开」;关闭让数据代次 +1
+    {
+      const { ch, persist } = makeController(helper.sockPath)
+      await ch.start({ computerHistoryEnabled: true, computerHistoryPausedUntil: Date.now() + 3_600_000 })
+      const gen = ch.view().state.dataGen
+      const release = holdNextPersist(persist)
+      const enabling = ch.setEnabled(true) // 暂停中再拨「开」= 清暂停
+      await waitFor(() => persist.mock.calls.length === 1)
+      ch.applyConfig({ computerHistoryEnabled: false })
+      release()
+      await enabling
+      expect(ch.view().state).toMatchObject({ enabled: false, status: 'off' })
+      expect(ch.view().state.dataGen).toBe(gen + 1)
+    }
+    await new Promise((r) => setTimeout(r, 200))
+    expect(helper.accepted).toBe(0) // 四种交错都没开录过
+  })
+
+  it('改排除表(creview #2):新增的排除当场生效,落配置卡着也不再按旧策略记;移除的等落配置成功才放开', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const { ch, root, persist } = makeController(helper.sockPath)
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    await ch.flush()
+    let release: (() => void) | undefined
+    persist.mockImplementationOnce(() => new Promise<void>((r) => { release = r }))
+    const adding = ch.setExclude({ apps: ['com.bank'], domains: [] })
+    // 落配置还没回来:已按收紧后的策略重订,内存过滤已收紧
+    await waitFor(() => helper.requests.length === 2 && ch.view().state.status === 'recording' && release !== undefined)
+    expect(helper.requests[1].policy.excludeBundleIds).toEqual(['com.bank'])
+    expect(ch.view().exclude.apps).toEqual(['com.bank'])
+    const t = Date.now()
+    const bank = { name: 'Bank', bundleId: 'com.bank' }
+    helper.push({ t, kind: 'app', app: bank, title: 'Accounts' })
+    helper.push({ t: t + 1, kind: 'text', app: bank, text: 'secret' })
+    await new Promise((r) => setTimeout(r, 150))
+    await ch.flush()
+    const all = (): ComputerHistoryEvent[] => readdirSync(path.join(root, 'events')).flatMap((f) => lines(path.join(root, 'events', f)))
+    expect(all()).toEqual([{ t, kind: 'app', app: { ...bank, excluded: true } }])
+    release!()
+    await adding
+    expect(helper.requests).toHaveLength(2) // 落配置回来与收紧后的一致,不再重订
+
+    // 移除 = 放宽:落配置卡着时照旧排除
+    release = undefined
+    persist.mockImplementationOnce(() => new Promise<void>((r) => { release = r }))
+    const removing = ch.setExclude({ apps: [], domains: [] })
+    await waitFor(() => release !== undefined)
+    await new Promise((r) => setTimeout(r, 100))
+    expect(helper.requests).toHaveLength(2)
+    expect(ch.view().exclude.apps).toEqual(['com.bank'])
+    release!()
+    await removing
+    await waitFor(() => helper.requests.length === 3)
+    expect(helper.requests[2].policy.excludeBundleIds).toEqual([])
+    expect(tightenExclude({ apps: ['com.X.App'], domains: ['a.com'] }, { apps: ['com.x.app'], domains: ['a.com'] })).toBeNull() // 只是大小写不同不算新增
+  })
+
+  it('清空数据(creview #3):dispose discard 后,在途那笔写的后续步骤不再建日文件', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const { ch, root } = makeController(helper.sockPath)
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    await ch.flush()
+    helper.push({ t: Date.now(), kind: 'text', app: { name: 'Notes', bundleId: 'com.apple.Notes' }, text: 'secret' })
+    await waitFor(async () => (await ch.recent(1)).length > 0)
+    let release: (() => void) | undefined
+    vi.spyOn(ch.store, 'ensureRoot').mockImplementationOnce(() => new Promise<void>((r) => { release = r }))
+    void ch.flush() // 追加卡在 ensureRoot
+    await waitFor(() => release !== undefined)
+    const drained = ch.dispose({ discard: true })
+    release!()
+    await drained
+    expect(readdirSync(path.join(root, 'events'))).toEqual([])
+  })
+
+  it('清空数据(creview #3):在途写超过封顶仍未落定 → 删完目录后等它落定再删一次,慢写建回的目录不留', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const { ch, root } = makeController(helper.sockPath)
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    await ch.flush()
+    helper.push({ t: Date.now(), kind: 'text', app: { name: 'Notes', bundleId: 'com.apple.Notes' }, text: 'secret' })
+    await waitFor(async () => (await ch.recent(1)).length > 0)
+    // 已经派发出去、取消不了的慢写:300ms 后才落定,落定时把 events/ 与日文件建回来
+    let started = false
+    vi.spyOn(ch.store, 'append').mockImplementationOnce(async () => {
+      started = true
+      await new Promise((r) => setTimeout(r, 300))
+      mkdirSync(path.join(root, 'events'), { recursive: true })
+      writeFileSync(path.join(root, 'events', `${localDay(Date.now())}.jsonl`), '{"t":1,"kind":"text","text":"secret"}\n')
+    })
+    void ch.flush()
+    await waitFor(() => started)
+    const wipe = await stopComputerHistoryForWipe(ch, 200)
+    expect(wipe.drained).toBe(false) // 封顶到了还没落定
+    rmSync(root, { recursive: true, force: true }) // 调用方整删
+    await wipe.afterWipe()
+    expect(existsSync(root)).toBe(false)
+    await new Promise((r) => setTimeout(r, 300))
+    expect(existsSync(root)).toBe(false)
+  })
+
+  it('「关」落配置失败(creview #4):本次保持已停并在后台按退避补落,设置页看得到错误;补成即停;之后「开」落成则欠账作废', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    cleanups.push(() => vi.useRealTimers())
+    const settle = (): Promise<void> => new Promise((r) => setImmediate(r))
+    const advance = async (ms: number): Promise<void> => { await vi.advanceTimersByTimeAsync(ms); await settle() }
+    // 开着但暂停中:不碰 socket,计时器全是假的
+    const { ch, persist, onChanged } = makeController(path.join(os.tmpdir(), `chs-none-${process.pid}.sock`))
+    await ch.start({ computerHistoryEnabled: true, computerHistoryPausedUntil: Date.now() + 3_600_000 })
+    persist.mockRejectedValueOnce(new Error('EROFS')).mockRejectedValueOnce(new Error('EROFS again'))
+    await expect(ch.setEnabled(false)).rejects.toThrow('EROFS')
+    expect(ch.view().state).toMatchObject({ enabled: false, status: 'off' })
+    expect(ch.view().persistError).toBe('EROFS')
+    expect(onChanged.mock.lastCall?.[0]).toMatchObject({ persistError: 'EROFS' })
+    expect(persist).toHaveBeenCalledTimes(1)
+    await advance(4_999)
+    expect(persist).toHaveBeenCalledTimes(1)
+    await advance(1)
+    expect(persist).toHaveBeenCalledTimes(2) // 第一次补:又失败 → 错误原文更新、退避翻倍
+    expect(persist).toHaveBeenLastCalledWith({ computerHistoryEnabled: false, computerHistoryPausedUntil: null })
+    expect(ch.view().persistError).toBe('EROFS again')
+    await advance(9_999)
+    expect(persist).toHaveBeenCalledTimes(2)
+    await advance(1)
+    expect(persist).toHaveBeenCalledTimes(3) // 补成
+    expect(ch.view().persistError).toBeUndefined()
+    expect(onChanged.mock.lastCall?.[0]).not.toHaveProperty('persistError')
+    await advance(120_000)
+    expect(persist).toHaveBeenCalledTimes(3) // 补成就停
+
+    // 再关一次失败 → 欠账;随后「开」落成 → 欠账作废,补落不会把刚开的盖成关
+    persist.mockRejectedValueOnce(new Error('EROFS'))
+    await expect(ch.setEnabled(false)).rejects.toThrow('EROFS')
+    expect(ch.view().persistError).toBe('EROFS')
+    await ch.setEnabled(true)
+    expect(ch.view().persistError).toBeUndefined()
+    await advance(120_000)
+    expect(persist).toHaveBeenLastCalledWith({ computerHistoryEnabled: true, computerHistoryPausedUntil: null })
+    expect(ch.view().state.enabled).toBe(true)
+  })
+
+  it('state.json dataGen:接着盘上的往下数(老文件没有 = 0);清除前后各 +1 且夹住删除,改排除表 / 关闭各 +1', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const seed = (dataGen?: number): string => {
+      const root = tmpRoot()
+      mkdirSync(root, { recursive: true })
+      writeFileSync(path.join(root, 'state.json'), JSON.stringify({ v: 1, enabled: true, pausedUntil: null, status: 'recording', since: 0, updatedAt: 0, platform: 'darwin', ...(dataGen === undefined ? {} : { dataGen }) }))
+      return root
+    }
+    expect(makeController(helper.sockPath, { root: seed() }).ch.view().state.dataGen).toBe(0)
+    const { ch, root } = makeController(helper.sockPath, { root: seed(7) })
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    await ch.flush()
+    expect(readState(root).dataGen).toBe(7)
+    // 清除:删除执行那一刻盘上已是 +1,删完再 +1
+    const seen: number[] = []
+    const realClear = ch.store.clear.bind(ch.store)
+    vi.spyOn(ch.store, 'clear').mockImplementationOnce(async (o) => { seen.push(readState(root).dataGen); await realClear(o) })
+    await ch.clear({ all: true })
+    await ch.flush()
+    expect(seen).toEqual([8])
+    expect(readState(root).dataGen).toBe(9)
+    await ch.setExclude({ apps: ['com.bank'], domains: [] })
+    await ch.flush()
+    expect(readState(root).dataGen).toBe(10)
+    await ch.setExclude({ apps: ['com.bank'], domains: [] }) // 没变不加
+    await ch.setEnabled(false)
+    await ch.flush()
+    expect(readState(root)).toMatchObject({ enabled: false, status: 'off', dataGen: 11 })
+  })
+
+  it('View.rev:每份快照单调递增;写操作的回包比途中推送的都新', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const { ch, onChanged } = makeController(helper.sockPath)
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    const a = ch.view().rev
+    expect(ch.get().rev).toBeGreaterThan(a)
+    const before = onChanged.mock.calls.length
+    const v = await ch.pause(3_600_000)
+    const pushed = onChanged.mock.calls.slice(before).map((c) => c[0].rev as number)
+    expect(pushed.length).toBeGreaterThan(0)
+    expect(Math.max(...pushed)).toBeLessThan(v.rev)
+    const revs = onChanged.mock.calls.map((c) => c[0].rev as number)
+    expect(revs).toEqual([...revs].sort((x, y) => x - y))
+  })
+
+  it('助手更新中(creview ui #2):清除 / 改排除表的重订阅同样走 helperBusy 闸,不拉起 helper;忙完只拉起一次', async () => {
+    const helper = fakeHelper() // socket 不在:连接失败 → 走拉起
+    let busy = true
+    let idle: (() => void) | undefined
+    const onHelperIdle = vi.fn((cb: () => void) => { idle = cb; return () => { idle = undefined } })
+    const launchHelper = vi.fn(async () => { await helper.listen() })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    cleanups.push(() => warn.mockRestore())
+    const { ch, installHelper } = makeController(helper.sockPath, { launchHelper, helperBusy: () => busy, onHelperIdle })
+    installHelper()
+    await ch.start({ computerHistoryEnabled: true })
+    const busyAttempts = (): number => warn.mock.calls.filter((c) => c[1] === 'helper_busy').length
+    await waitFor(() => busyAttempts() >= 1)
+    const n = busyAttempts()
+    await ch.clear({ all: true })
+    await ch.setExclude({ apps: ['com.bank'], domains: [] })
+    await ch.clear({ sinceMs: Date.now() - 60_000 })
+    await waitFor(() => busyAttempts() > n) // 清除后的重订阅确实去连了,且撞在闸上
+    expect(launchHelper).not.toHaveBeenCalled()
+    busy = false
+    idle!()
+    await waitFor(() => ch.view().state.status === 'recording', 3_000)
+    expect(launchHelper).toHaveBeenCalledTimes(1)
+  })
+})

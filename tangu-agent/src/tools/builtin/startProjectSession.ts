@@ -34,6 +34,8 @@ export function isForbiddenProjectRoot(p: string): boolean {
 export interface DispatchInput {
   userId: string; appId: string; modelId: string; agentSlug?: string;
   projectPath: string; projectName?: string; title?: string; message: string; parentSessionId?: string;
+  /** 派遣方 run 来自远程设备页(ctx.remote):子 run 显式继承,否则它拿着 createRun 抄来的 desktop/ 标签就过了本机专属门禁。 */
+  remote?: boolean;
 }
 
 /** 建项目会话 + 首个 run(纯逻辑,路由/工具共用;不检查目录存在,调用方先验)。返回新会话与 run 的 id。 */
@@ -60,7 +62,7 @@ export async function dispatchProjectSession(p: DispatchInput): Promise<{ sessio
   const runId = uuidv4();
   await createRun({
     id: runId, sessionId, userId: p.userId, appId: p.appId, modelId, assistantMessageId: uuidv4(),
-    input: { message: p.message, userMessageId: uuidv4(), attachments: [], agentConfig },
+    input: { message: p.message, userMessageId: uuidv4(), attachments: [], agentConfig, ...(p.remote ? { remote: true } : {}) },
   });
   const { enqueueRun } = await import('../../services/agentLoop.js');
   enqueueRun(sessionId, runId);
@@ -115,7 +117,7 @@ export const dispatchProvider: ToolProvider = {
           const { sessionId, runId } = await dispatchProjectSession({
             userId: ctx.userId, appId: ctx.appId, modelId, agentSlug: ctx.agentSlug,
             projectPath: real, projectName: args.project_name ? String(args.project_name) : undefined, title: args.title ? String(args.title) : undefined,
-            message, parentSessionId: ctx.sessionId,
+            message, parentSessionId: ctx.sessionId, remote: ctx.remote,
           });
           // 侧栏被告知(方案 §5.4 硬化 ②):前端据此刷新会话列表并提示;不等 listSessions 轮询(它没有轮询)。
           if (ctx.runId) void publish(ctx.runId, 'session_created', { sessionId, runId, projectPath, projectName: args.project_name ? String(args.project_name) : path.basename(projectPath) });

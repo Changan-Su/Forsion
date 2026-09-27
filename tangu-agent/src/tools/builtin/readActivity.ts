@@ -24,15 +24,15 @@ export const readActivityProvider: ToolProvider = {
         type: 'function',
         function: {
           name: 'read_activity',
+          // 09-27:删掉旧描述里对 activitywatch 外部应用焦点行的承诺 —— 那份数据从来不存在,等于诱导模型编造;
+          // Forsion 之外的电脑活动归 read_computer_history(开着才在场,故只说「可用时」)。
           description:
-            "Read the user's activity log (compact, one event per line, oldest first): new/sent chats, note edits with line ranges, " +
-            'task/database rows, opened notes, installs, agent file edits, etc. Plugins may also write system-wide lines — e.g. with the ' +
-            'activitywatch plugin installed, `plugin:activitywatch:focus app=… m=<minutes> "window title"` records which external apps ' +
-            '(browser, IDE, chat…) the user focused, so the log is NOT limited to in-app events. ' +
+            "Read the user's in-app activity log for Forsion (compact, one event per line, oldest first): new/sent chats, note edits with line ranges, " +
+            'task/database rows, opened notes, installs, agent file edits, and lines written by Forsion plugins. ' +
             'Line format: `YYYYMMDDHHMM event key=value "snippet"` (local time). ' +
-            'Use it to understand what the user has been doing recently and to detect whether a task has started or finished. ' +
-            'If a small window comes back (nearly) empty, retry with a larger `hours` before concluding there was no activity; ' +
-            'app-focus lines land with a ~2 minute settling delay, so the very latest activity may not be visible yet.',
+            'Use it to understand what the user has been doing in Forsion recently and to detect whether a task has started or finished. ' +
+            'It does not record activity outside Forsion (other apps, browser, editors); if read_computer_history is available, use that for it. ' +
+            'If a small window comes back (nearly) empty, retry with a larger `hours` before concluding there was no activity.',
           parameters: {
             type: 'object',
             properties: {
@@ -55,7 +55,7 @@ export const readActivityProvider: ToolProvider = {
         const hours = Math.min(Math.max(1, Number(args.hours) || 24), 720);
         const widen = hours < 720 ? ` Older entries may exist outside this window — retry with a larger hours (e.g. ${Math.min(hours * 12, 720)}).` : '';
         if (!lines.length) {
-          return `(no activity recorded in the last ${hours}h — note app-focus lines land with a ~2 min settling delay.${widen})`;
+          return `(no activity recorded in the last ${hours}h.${widen})`;
         }
         const fewNote = lines.length <= 2 && widen ? `\n(only ${lines.length} event(s) in the last ${hours}h.${widen})` : '';
         return `${lines.length} events (oldest first):\n${lines.join('\n')}${fewNote}`;

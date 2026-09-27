@@ -1,0 +1,111 @@
+/*
+ * 电脑历史设置页(ComputerHistorySettings)。外壳复用 base.css 的 .settings-panel / .settings-control-row / .settings-inline-row,
+ * 这里只补页内结构;选择器一律挂 .ch-* 前缀,不覆盖 base.css 的同名规则(DESIGN §7.2)。
+ * 字号只用 --ui-font-* 六档;芯片 / 按钮的描边是形状(DESIGN §5),不加阴影。
+ */
+.ch-alert {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--danger-light);
+  color: var(--danger);
+  font-size: var(--ui-font-meta, 12px);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* 状态行:状态点 + 标签,点复用 base.css 的 .settings-status-dot(ok 绿;这里补等待处理的黄)。 */
+.ch-status { display: inline-flex; align-items: center; gap: 8px; }
+.ch-status .settings-status-dot.warn { background: var(--warning); }
+.ch-btn-row { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.ch-btn-row .btn,
+.ch-clear .btn,
+.ch-confirm-actions .btn { white-space: nowrap; }
+
+/* 权限卡 = 普通 .settings-panel(SettingsPanel className="ch-permission")+ 嵌入式 DesktopPermissions(desktopPermissions.css 的
+ * --embedded 段管行距);「刷新状态」挂在第一张面板的状态行,这里不再单独排版。 */
+
+/* 同意说明:左列小标题,右列正文;窄栏改成上下排。 */
+.ch-about { display: flex; flex-direction: column; margin: 0; }
+.ch-about-row { display: grid; grid-template-columns: minmax(84px, 7.5em) minmax(0, 1fr); gap: 4px 14px; padding: 10px 15px; }
+.ch-about-row + .ch-about-row { border-top: var(--border-width) solid var(--border); }
+.ch-about-row > dt { color: var(--text); font-size: var(--ui-font-meta, 12px); font-weight: 620; }
+.ch-about-row > dd { margin: 0; min-width: 0; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.55; overflow-wrap: anywhere; }
+.ch-tip { margin: 0; padding: 9px 15px 12px; border-top: var(--border-width) solid var(--border); color: var(--text-faint); font-size: var(--ui-font-caption, 11px); line-height: 1.5; }
+
+/* 今天的会话:时间段 | App + 标题 | 主机名。 */
+.ch-sessions { list-style: none; margin: 0; padding: 4px 0; }
+.ch-session { display: flex; align-items: baseline; gap: 12px; min-width: 0; padding: 6px 15px; }
+.ch-session-time { flex: 0 0 auto; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-variant-numeric: tabular-nums; }
+.ch-session-main { flex: 1 1 auto; min-width: 0; display: flex; align-items: baseline; gap: 8px; overflow: hidden; }
+.ch-session-main > strong { flex: 0 0 auto; max-width: 40%; overflow: hidden; color: var(--text); font-size: var(--ui-font-meta, 12px); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.ch-session-title { min-width: 0; overflow: hidden; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); text-overflow: ellipsis; white-space: nowrap; }
+.ch-session-host { flex: 0 1 auto; min-width: 0; max-width: 30%; overflow: hidden; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); text-overflow: ellipsis; white-space: nowrap; }
+.ch-more { margin: 0; padding: 8px 15px 12px; border-top: var(--border-width) solid var(--border); color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
+
+/* 排除表:芯片列表 + 添加行。 */
+.ch-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 12px 15px 10px; }
+.ch-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 2px 3px 2px 10px;
+  border: var(--border-width) solid var(--overlay-strong);
+  border-radius: var(--radius-pill, 999px);
+  color: var(--text);
+  font-size: var(--ui-font-meta, 12px);
+}
+.ch-chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-chip > button {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: var(--radius-pill, 999px);
+  color: var(--text-faint);
+  cursor: pointer;
+}
+.ch-chip > button:hover { background: var(--overlay-medium); color: var(--danger); }
+.ch-chip > button:disabled { cursor: not-allowed; opacity: .5; }
+.ch-empty { color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
+.ch-add { padding: 0 15px 13px; }
+.ch-add > select,
+.ch-add > input { max-width: 360px; }
+.ch-field-error { margin: 0; padding: 0 15px 12px; color: var(--danger); font-size: var(--ui-font-caption, 11px); }
+
+/* 清除:四档按钮 → 就地确认(不用原生 confirm);开启前的同意确认复用同一套。 */
+.ch-clear { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 12px 15px 13px; }
+.ch-cleared { margin-left: 4px; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
+.ch-confirm {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin: 12px 15px 13px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--danger-light);
+}
+.ch-confirm > div:first-child { flex: 1 1 240px; min-width: 0; }
+.ch-confirm strong { display: block; color: var(--text); font-size: var(--ui-font-meta, 12px); font-weight: 620; }
+/* 正文用 --text-light(= 82% 的 --text,随底色走):--text-muted 压在任何染色条上,暗色都到不了 4.5:1
+ * (同意条曾在 --accent-light 上只有 3.07:1 —— 暗色经典配色的 accent-light 是浅灰)。 */
+.ch-confirm p { margin: 3px 0 0; color: var(--text-light); font-size: var(--ui-font-caption, 11px); line-height: 1.5; }
+.ch-confirm-actions { display: flex; gap: 6px; margin-left: auto; }
+/* 开启前的同意确认:不是破坏性操作,中性表面(半透 overlay 叠在卡面上,任意配色 × 明暗都只是略深 / 略亮一档)。 */
+.ch-confirm--consent { background: var(--overlay-medium); }
+
+/* 对齐(放文件末尾,DESIGN §7.2):面板头的动作按钮与下方行里的控件同一右缘 —— base.css 给带动作的头 10px 右距,
+ * 行是 15px,整页差 5px;本页统一到 15px。添加行里按钮与输入框等高(.settings-inline-row 是垂直居中,按钮比输入框矮)。 */
+.ch-page .settings-panel-head--actions { padding-right: 15px; }
+.ch-add.settings-inline-row { align-items: stretch; }
+
+@media (max-width: 600px) {
+  .ch-about-row { grid-template-columns: minmax(0, 1fr); }
+  .ch-session { flex-wrap: wrap; row-gap: 2px; }
+  .ch-session-host { max-width: 100%; }
+}

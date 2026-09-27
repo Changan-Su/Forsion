@@ -11,6 +11,7 @@
 import type { ToolProvider } from '../toolRegistry.js';
 import { deps } from '../../seams/runtime.js';
 import { sessionToolScope } from '../../services/sessionSearch.js';
+import { computerHistoryRecallHide } from '../../services/computerHistory.js';
 
 /** 一条消息压成一行(工具调用只留名字;正文按 perMsg 截断)。
  *  ⚠️助手消息在库里 role='model'(不是 'assistant'),这里归一化,免得模型把它当成用户发言。 */
@@ -79,7 +80,10 @@ export const readSessionProvider: ToolProvider = {
         const transcript = await deps().state.readSessionTranscript({
           sessionId: sid, userId: ctx.userId, appId: ctx.appId, toolScope,
           limit, perMessageChars: perMsg, charOffset,
-          messageId: messageId || undefined, beforeMessageId: beforeId || undefined, signal: ctx.signal,
+          messageId: messageId || undefined, beforeMessageId: beforeId || undefined,
+          // 与 search_sessions 同一道:过不了电脑历史门禁的 run 读不到调过 read_computer_history 的会话(按「无此会话」答)
+          excludeSessionsWithTool: computerHistoryRecallHide(ctx.profile ?? deps().profile, ctx),
+          signal: ctx.signal,
         });
         ctx.signal?.throwIfAborted();
         if (!transcript.session) return `read_session: no session ${sid} (it may belong to someone else, or have been deleted).`;

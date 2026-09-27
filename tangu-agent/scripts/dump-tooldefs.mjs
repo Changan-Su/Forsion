@@ -58,4 +58,8 @@ const all = {
   all['ai-studio:sandbox+gui'] = getToolDefinitions({ ...base, client: 'web/0.0.0' }); // work 对照:sketch 在云端 work 也在场
   all['ai-studio:sandbox+gui+chat'] = getToolDefinitions({ ...base, client: 'web/0.0.0', preset: 'chat' }); // chat GUI 真形态:≤10,400 B
 }
+// 按**用户本机状态**门控的工具:read_computer_history 看 <共享域>/computer-history/state.json 是否开着 ——
+// 只有 `tangu-none:host+gui`(本机引擎 + desktop 客户端)过得了门禁,开过电脑历史的机器上会多出它。**只**从这一个键剔
+// (与 test/tooldefs.snapshot.test.ts 同改),别的键里出现它就是真漂移;定义字节由 src/services/computerHistory.test.ts 的哈希钉。
+all['tangu-none:host+gui'] = all['tangu-none:host+gui'].filter((t) => t?.function?.name !== 'read_computer_history');
 process.stdout.write(JSON.stringify(all, null, 2) + '\n');

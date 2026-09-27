@@ -29,6 +29,7 @@ let setMemoryCalls: string[];
 let memContent: string;
 let memQueue: string[]; // 非空则 getMemory 逐次 shift(模拟并发修改);空则恒返 memContent
 let memThrow: boolean;
+let appendedLogs: string[];
 
 function rawFile(): string {
   return join(agentsDir(), DEFAULT_AGENT_SLUG, '.memory-raw.md');
@@ -50,6 +51,7 @@ beforeEach(async () => {
   memContent = '- 旧条目:用户在学线性代数';
   memQueue = [];
   memThrow = false;
+  appendedLogs = [];
   resetHistorianConsolidationState();
 
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: USER });
@@ -73,7 +75,7 @@ beforeEach(async () => {
         return { content: memQueue.length ? memQueue.shift()! : memContent };
       },
       getLog: async () => ({ date: 'today', content: '' }),
-      appendLogEntry: async () => ({ date: 'd', time: 't' }),
+      appendLogEntry: async (_u: string, text: string) => { appendedLogs.push(text); return { date: 'd', time: 't' }; },
       // 记录并回写 memContent:连续整固语义可被验证(第二次整固读到第一次的产出)。
       setMemory: async (_u: string, content: string) => { setMemoryCalls.push(content); memContent = content; return {}; },
     },
@@ -299,6 +301,83 @@ describe('自进化自动档(harness_candidates,P3)', () => {
     expect(existsSync(join(agentsDir(), DEFAULT_AGENT_SLUG, '.harness-raw.md'))).toBe(false); // 也不错桶进默认 agent
     const act = await query<any[]>(`SELECT action FROM special_agent_log WHERE action = 'harness_candidates'`);
     expect(act.length).toBe(0);
+  });
+});
+
+// 电脑历史隔离:调过 read_computer_history 的会话不做任何自动记忆提取(LOG / 记忆候选 / 工作笔记候选),
+// 否则经 .memory-raw.md → Dream → MEMORY.md 注入此后每个 run(含通道会话),关掉 / 清除电脑历史也带不走。
+// 判官脚本**照样**吐候选与 LOG:钉的是代码闸,不是提示词(半服从模型硬给也不落盘)。
+describe('电脑历史隔离(read_computer_history 会话不进自动记忆)', () => {
+  const chCall = (name = 'read_computer_history') => JSON.stringify([{ id: 'c1', type: 'function', function: { name, arguments: '{"from":"-2h"}' } }]);
+  const everything = (): string => JSON.stringify({
+    title: '新标题', summary: '用户回顾了最近两小时在 Figma 里改路线图的过程。', log: '回顾了 Figma 路线图编辑',
+    memory_candidates: ['用户每天在 Figma 里改路线图'], harness_candidates: ['Check the computer history before asking'],
+  });
+  beforeEach(() => {
+    writeFileSync(join(home, 'config.json'), JSON.stringify({
+      specialAgents: { historian: { enabled: true, modelId: 'm1', everyRounds: 3, firstRoundTrigger: true, mode: 'independent', harnessCandidates: true } },
+    }), 'utf8');
+  });
+
+  for (const tainted of [false, true]) {
+    it(tainted
+      ? '会话调过工具(结果在追问轮被复述,本轮没再调):不写 LOG / 记忆候选 / 工作笔记候选;标题与摘要照常维护'
+      : '对照:同一份判官输出,没调过工具的会话照常采集', async () => {
+      // 工具调用在前一轮(ts 1500),m2 是追问轮的复述 —— 按会话判,不按「本轮有没有调」判
+      await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp, tool_calls) VALUES ('ch1', 'S', 'model', ?, 1500, ?)`,
+        ['你过去两小时主要在 Figma 里改路线图。', chCall(tainted ? 'read_computer_history' : 'read_activity')]);
+      llmScript = [everything()];
+      await onUserRunDone('S', USER);
+
+      expect(llmPayloads).toHaveLength(1); // 判官照跑(标题 / 摘要要维护)
+      const prompt = String(llmPayloads[0].messages.at(-1).content);
+      const s = await query<any[]>(`SELECT title, summary FROM chat_sessions WHERE id = 'S'`);
+      expect(s[0].title).toBe('新标题');
+      expect(s[0].summary).toContain('路线图');
+      const acts = (await query<any[]>(`SELECT action FROM special_agent_log WHERE agent = 'historian'`)).map((r) => r.action);
+      const harnessInbox = join(agentsDir(), DEFAULT_AGENT_SLUG, '.harness-raw.md');
+      if (tainted) {
+        expect(prompt).not.toContain('"memory_candidates": an array of NEW'); // 不向判官要这些字段
+        expect(prompt).not.toContain('"log": if this conversation');
+        expect(prompt).not.toContain('"harness_candidates": an array of NEW');
+        expect(existsSync(rawFile())).toBe(false);
+        expect(appendedLogs).toEqual([]);
+        expect(existsSync(harnessInbox)).toBe(false);
+        expect(acts).not.toEqual(expect.arrayContaining(['memory_candidates']));
+        expect(acts).not.toEqual(expect.arrayContaining(['log_appended']));
+        expect(acts).not.toEqual(expect.arrayContaining(['harness_candidates']));
+      } else {
+        expect(parseRawLines(readFileSync(rawFile(), 'utf8')).map((r) => r.text)).toEqual(['用户每天在 Figma 里改路线图']);
+        expect(appendedLogs).toEqual(['回顾了 Figma 路线图编辑']);
+        expect(readFileSync(harnessInbox, 'utf8')).toContain('Check the computer history before asking');
+        expect(acts).toEqual(expect.arrayContaining(['memory_candidates', 'log_appended', 'harness_candidates']));
+      }
+    });
+  }
+
+  it('私聊「新会话(先总结记忆)」的强制采集同样跳过', async () => {
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp, tool_calls) VALUES ('ch1', 'S', 'model', 'x', 1500, ?)`, [chCall()]);
+    llmScript = [everything()];
+    const { forceHistorianForSession } = await import('../src/services/localHistorian.js');
+    expect(await forceHistorianForSession('S', USER)).toBe(true);
+    expect(existsSync(rawFile())).toBe(false);
+    expect(appendedLogs).toEqual([]);
+  });
+
+  it('Muse 周期(kind=muse 会话,拿到了电脑历史摘要)根本不进 Historian:零判官调用、零候选', async () => {
+    await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind) VALUES ('M', ?, 'tangu', 'Muse', 'm1', 'muse')`, [USER]);
+    const long = '[computer-history:observed] 用户过去三小时在 Figma 里改路线图。'.repeat(6);
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES ('mu1', 'M', 'user', ?, 1000)`, [long]);
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES ('mu2', 'M', 'model', ?, 2000)`, [long]);
+    await createRun({ id: 'RM', sessionId: 'M', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: 'AM',
+      input: { message: 'x', userMessageId: 'UM', attachments: [], agentConfig: {}, background: 'muse' } as any });
+    await updateRunStatus('RM', 'done');
+    llmScript = [everything()];
+    await onUserRunDone('M', USER, 'muse');
+    expect(llmPayloads).toHaveLength(0);
+    expect(existsSync(rawFile())).toBe(false);
+    expect(existsSync(join(agentsDir(), 'muse', '.memory-raw.md'))).toBe(false);
+    expect(appendedLogs).toEqual([]);
   });
 });
 

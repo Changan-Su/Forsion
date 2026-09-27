@@ -20,6 +20,7 @@ import path from 'node:path';
 import { agentsDir, readUserMd, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery } from './runStore.js';
 import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, type ToolContext } from '../tools/registry.js';
+import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
 import { buildAgentRoster } from './agentRoster.js';
@@ -64,6 +65,7 @@ import { listPluginMetas } from '../plugins/registry.js';
 import { isPluginEnabledSync } from '../plugins/settingsStore.js';
 import { prepareAgentFilesForRun, scheduleAgentFilesSync } from './agentFileSync.js';
 import { buildAgentMemoryContext } from './memoryRecall.js';
+import { computerHistoryDigest, computerHistoryRecallHide } from './computerHistory.js';
 import { buildProbe, formatCwdListing, type ProbeSegment } from './promptHead.js';
 import { channelHub } from '../channels/hub.js';
 
@@ -695,6 +697,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 有能力握手就物化成 {}:回执刷新(updateUiSettings)要有落点;list_ui_commands 对空对象与 undefined 输出一样。
   const uiSettings: ToolContext['uiSettings'] = input.uiSettings && typeof input.uiSettings === 'object'
     ? input.uiSettings : (uiCommands ? {} : undefined);
+  // 远程设备页标记(routes/runs 按代理盖的头落 input.remote;start_project_session 显式带给子 run):本机专属数据面据此拒。
+  const remoteRun = input.remote === true;
   setRunClientTag(clientTag);
   // Normal Agent 激活:会话 agent_config.agentSlug → 合并 agent 定义里「会话未显式覆盖」的字段。
   // 本地形态读 ~/.tangu/agents;云端 worker 本地目录为空 → applyAgentActivation 经 brain.agents 兜底水合。
@@ -1235,8 +1239,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // ponytail:system 档(A/B 基线)整块一次 push,拆不出两段 → 这一档 memoryStable 覆盖整块记忆。
     segAt('system:memoryStable');
     try {
+      // 跨会话历史段:本 run 过不了电脑历史门禁 → 藏起调过 read_computer_history 的会话(否则关掉功能后、或在通道会话里,
+      // 召回会把别的会话里模型复述过的电脑历史原样注入)。门禁字段与下面 toolGateCtx 同源,改一处须两处同改。
+      const hideSessionsWithTool = computerHistoryRecallHide(profile, {
+        client: clientTag, remote: remoteRun, channelSession,
+        teamSessionId: isTeamMember ? String(teamMember.teamSessionId) : undefined, inDiscussion: isTeamMember || undefined,
+        ephemeral: !!inlineMemberDef || undefined, subAgentDepth: agentConfig.delegatedFrom ? 1 : undefined,
+      });
       const memoryContext = await buildAgentMemoryContext({ userId, appId, agentSlug: activeAgentSlug,
-        query: typeof input.message === 'string' ? input.message : '', excludeSessionId: sessionId, signal: ac.signal });
+        query: typeof input.message === 'string' ? input.message : '', excludeSessionId: sessionId, hideSessionsWithTool, signal: ac.signal });
       if (volatilePlacement === 'system') {
         if (memoryContext.content) systemParts.push(MEMORY_BLOCK_HEADER + memoryContext.content);
       } else {
@@ -1272,7 +1283,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ? agentConfig.mentionedProjects.map((p: any) => (p && typeof p.path === 'string' ? safeRealpath(p.path) : '')).filter(Boolean).slice(0, 8)
       : [];
     const toolGateCtx = {
-      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings,
+      userId, sessionId, appId, runId, client: clientTag, remote: remoteRun || undefined, channelSession, preset, uiCommands, uiSettings,
       dispatchTargets,
       hostSandbox: runHostSandbox,
       enabledSkillIds, execMode, cwd, extraRoots, approvalMode, approvalModeSessionId: modeSessionId, profile, modelId, planMode, wsProject,
@@ -1678,6 +1689,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     {
       const hint = typeof input.ephemeralHint === 'string' ? input.ephemeralHint.trim() : '';
       if (hint) appendToLastUserMessage(hint);
+      // 电脑历史摘要(Muse 周期专属,代码折叠最近 3h、≤1500 字):**在这里现算**,不经 muse.ts 塞进 input.ephemeralHint ——
+      // 那会随 agent_runs.input 永久落进 state.db(不受 7 天保留、清除、关闭约束)。只认引擎内部的 input.background,
+      // 请求体里的 agentConfig.muse 不算。日志只记长度(live 台架据此断言注入),绝不记正文。
+      if (input.background === 'muse') {
+        const digest = (await computerHistoryDigest()).trim();
+        if (digest) {
+          appendToLastUserMessage(digest);
+          console.log(`[muse] computer-history digest injected (${digest.length} chars)`);
+        }
+      }
     }
 
     // 运行时转向的「回合切分」:把当前累积的助手段 A 落库 → 持久化注入的用户消息 U(们) → 清空累加器、
@@ -1900,10 +1921,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const capped = capToolResult(result.result);
       const elapsedMs = Date.now() - startedAt;
       const artifactPath = artifactPathFromText(result.name, capped, result.artifactPath);
+      // 落库面(tool_result 事件 → agent_run_events、toolResult → agent_steps / chat_messages)与模型面(下面的 toolMessage)
+      // 在这里分叉:声明了 persistPlaceholder 的工具(read_computer_history)只落占位,全文只进本轮 workingMessages。
+      // 出错结果不含数据,照常落库。占位查询不走 ctx 门禁(见 declaredPersistPlaceholder)。
+      const stored = (!result.isError && declaredPersistPlaceholder(result.name)) || capped;
       const payload = {
         id: call.id,
         name: result.name,
-        result: capped,
+        result: stored,
         isError: result.isError,
         startedAt,
         elapsedMs,
@@ -1932,7 +1957,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         toolResult: {
           tool_call_id: call.id,
           name: result.name,
-          content: capped,
+          content: stored,
           isError: result.isError,
           startedAt,
           elapsedMs,

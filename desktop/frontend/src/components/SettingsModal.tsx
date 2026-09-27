@@ -8,7 +8,7 @@ import { ErrorBoundary } from './ErrorBoundary'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling, Coffee, MonitorCheck } from 'lucide-react'
+import { X, ArrowLeft, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Play, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, Scaling, Coffee, MonitorCheck, History } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { AccountSwitcher } from './AccountSwitcher'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
@@ -69,6 +69,7 @@ import { QrImage } from './QrImage'
 import { likelyMainlandChina } from './OnboardingWizard'
 import { EnvProbeSection } from './EnvProbeSection'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
+import { ComputerHistorySettings, computerHistoryApi } from './ComputerHistorySettings'
 import { debugFireToast } from '../achievements/store'
 import { useTheme } from '../stores/themeStore'
 import { setMobileUiCommand, MOBILE_UI_KEY } from '../mobileUiCommand'
@@ -174,6 +175,12 @@ registerMessages({
   'settingsmodal.tab.mcp': { zh: 'MCP 服务器', en: 'MCP servers' },
   // Hooks 与 MCP 一样是开发者术语(对标 Claude Code Hooks),刻意不译;只是走字典,不再是 JSX 字面量。
   'settingsmodal.tab.hooks': { zh: 'Hooks', en: 'Hooks' },
+  // 电脑历史:放「系统」组、紧挨设备权限(它要的辅助功能授权就在那一页);页内文案见 computerHistoryMessages.ts。
+  'settingsmodal.tab.computerHistory': { zh: '电脑历史', en: 'Computer history' },
+  'settingsmodal.page.computerHistory': {
+    zh: '在本机记录你在各个 App 里的活动，Agent 需要时可以查阅，帮你接上刚才的工作。',
+    en: 'Keep a local record of your activity across apps so agents can look it up and help you pick up where you left off.',
+  },
   'settingsmodal.navLabel': { zh: '设置导航', en: 'Settings navigation' },
   'settingsmodal.search.label': { zh: '搜索设置', en: 'Search settings' },
   'settingsmodal.search.results': { zh: '设置项', en: 'Settings' },
@@ -196,7 +203,7 @@ registerMessages({
   'settingsmodal.status.connErr': { zh: '连接失败', en: 'Connection failed' },
 })
 
-type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'permissions' | 'advanced' | 'developer' | 'about'
+type StaticTab = 'general' | 'connection' | 'forsion' | 'model' | 'mcp' | 'hooks' | 'skills' | 'agents' | 'plugins' | 'amadeus-plugins' | 'agent-clis' | 'browser' | 'channels' | 'notes' | 'sync' | 'spaces' | 'theme' | 'shortcuts' | 'notifications' | 'statusbar' | 'permissions' | 'computer-history' | 'advanced' | 'developer' | 'about'
 // 动态插件设置页用 `plugin:<id>`(Tangu 引擎插件)/ `fplugin:<id>`(Forsion 插件),都是 Obsidian 式一级入口。
 // ⚠️ 两套 id 空间会重名(deutschland-reiseglueck 引擎侧与 Forsion 侧各有一份),前缀必须分开。
 export type Tab = StaticTab | `plugin:${string}` | `fplugin:${string}`
@@ -222,6 +229,7 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   'amadeus-plugins': <Puzzle size={14} />,
   advanced: <Wrench size={14} />,
   permissions: <MonitorCog size={14} />,
+  'computer-history': <History size={14} />,
   developer: <Bug size={14} />,
   about: <Info size={14} />,
   model: <Brain size={14} />,
@@ -405,6 +413,8 @@ export const SettingsModal: React.FC<{
     ['statusbar', t('settings.tab.statusbar')],
     ['advanced', t('settings.tab.advanced')],
     ...(hasDesktopPermissions() ? ([['permissions', t('desktopPermissions.title')]] as Array<[Tab, string]>) : []),
+    // 不按 darwin 门控:非 mac 也列出来,页内说明「目前仅支持 macOS」,免得用户找不到入口。
+    ...(computerHistoryApi() ? ([['computer-history', t('settingsmodal.tab.computerHistory')]] as Array<[Tab, string]>) : []),
     ...((isDesktop || cloudWeb) && devMode ? ([['developer', t('settings.tab.developer')]] as Array<[Tab, string]>) : []),
     ['about', t('settings.tab.about')],
   ] as Array<[Tab, string]>
@@ -1064,6 +1074,7 @@ export const SettingsModal: React.FC<{
     'amadeus-plugins': PRODUCT.nativeFeatures !== undefined ? 'settings.amadeusPlugins.unitIntro' : 'settings.page.pluginsDescription',
     advanced: 'settings.page.advancedDescription',
     permissions: 'desktopPermissions.description',
+    'computer-history': 'settingsmodal.page.computerHistory',
     developer: 'settings.page.developerDescription',
     about: 'settings.page.aboutDescription',
   }
@@ -1167,7 +1178,7 @@ export const SettingsModal: React.FC<{
       { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme', 'shortcuts', 'notifications', 'statusbar'] },
       { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser'] },
       { key: 'extensions', label: t('settings.group.extensions'), tabs: ['amadeus-plugins'] },
-      { key: 'system', label: t('settings.group.system'), tabs: ['permissions', 'advanced', 'developer', 'about'] },
+      { key: 'system', label: t('settings.group.system'), tabs: ['permissions', 'computer-history', 'advanced', 'developer', 'about'] },
     ] },
   ]
   const navItemsForGroup = (grp: { key: string; tabs: Tab[] }): Array<[Tab, string]> => {
@@ -1490,6 +1501,7 @@ export const SettingsModal: React.FC<{
           <ErrorBoundary key={`${tab}:${activeSub}`}>
           <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} data-dir={subDir} data-settings-sub={activeSub || undefined}>
                 {tab === 'permissions' && hasDesktopPermissions() && <DesktopPermissions mode={p.themeMode} />}
+                {tab === 'computer-history' && <ComputerHistorySettings mode={p.themeMode} anchor="computer-history" />}
                 {/* 小节标题不在正文重复；当前子页面由左侧/移动首页的折叠子项标明。 */}
                 {/* 基本(U-14):用户常改的两项放第一屏;后端技术项挪到「连接」。 */}
                 {tab === 'general' && activeSub === 'g-basic' && isDesktop && stored && (

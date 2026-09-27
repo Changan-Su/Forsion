@@ -4,6 +4,7 @@
  */
 import type { ActiveWindowSample } from '../shared/activeWindow'
 import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot } from '../shared/desktopPermissions'
+import type { ComputerHistoryApi, ComputerHistoryView } from '../shared/computerHistory'
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import { PRODUCT } from './product'
 import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
@@ -26,6 +27,23 @@ const api = {
   desktopPermissionRequest: (id: DesktopPermissionId, options?: DesktopPermissionRequestOptions): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:request', id, options),
   desktopPermissionsVerify: (): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:verify'),
   desktopPermissionsCloseGuide: (): Promise<void> => ipcRenderer.invoke('permissions:closeGuide'),
+  /** 电脑历史:开关 / 暂停 / 清除 / 排除表 / 折叠预览(落盘与策略全在主进程 computerHistory.ts)。 */
+  computerHistory: {
+    get: () => ipcRenderer.invoke('computerHistory:get'),
+    setEnabled: (on) => ipcRenderer.invoke('computerHistory:setEnabled', on),
+    pause: (until) => ipcRenderer.invoke('computerHistory:pause', until),
+    resume: () => ipcRenderer.invoke('computerHistory:resume'),
+    clear: (opts) => ipcRenderer.invoke('computerHistory:clear', opts),
+    setExclude: (exclude) => ipcRenderer.invoke('computerHistory:setExclude', exclude),
+    recent: (hours) => ipcRenderer.invoke('computerHistory:recent', hours),
+    recentApps: () => ipcRenderer.invoke('computerHistory:recentApps'),
+    reveal: () => ipcRenderer.invoke('computerHistory:reveal'),
+    onChanged: (cb) => {
+      const listener = (_e: unknown, view: ComputerHistoryView): void => cb(view)
+      ipcRenderer.on('computerHistory:changed', listener)
+      return () => ipcRenderer.removeListener('computerHistory:changed', listener)
+    },
+  } satisfies ComputerHistoryApi,
   getConfig: (): Promise<any> => ipcRenderer.invoke('config:get'),
   setConfig: (patch: Record<string, any>): Promise<any> => ipcRenderer.invoke('config:set', patch),
   backendStatus: (): Promise<BackendStatus> => ipcRenderer.invoke('backend:getStatus'),
@@ -451,6 +469,7 @@ const AGENT_KEYS = [
   'pluginsUserInstalled', 'pluginsUninstall',
   'unitsList', 'unitsOpenInBrowser', 'unitsUpdate', 'unitsRemove', 'unitHostStatus', 'unitsPairedList', 'unitsPairedRemove', 'unitsProbeLan', 'unitsP2pOpen', // 设备互联依赖 agent 后端
   'act', 'exportActivity', // 活动日志喂后台 Muse;无 agent 后端的产品形态记了也没读者
+  'computerHistory', // 电脑历史同理:读者是 agent 工具与 Muse(主进程也只在 agentBackend 下建控制器)
   'reportRunningSessions', // 无 agent 后端就没有 run
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]

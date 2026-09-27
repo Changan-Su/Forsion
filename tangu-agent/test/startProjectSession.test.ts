@@ -78,6 +78,13 @@ describe('start_project_session', () => {
     expect(await waitRun(runId)).toBe('done');
     const msgs = await query<any[]>(`SELECT role, content FROM chat_messages WHERE session_id = ? ORDER BY timestamp`, [sid]);
     expect(msgs[0]).toMatchObject({ role: 'user', content: 'Write README' });
+    const inputOf = async (id: string) => { const i = (await getRun(id))!.input; return typeof i === 'string' ? JSON.parse(i) : i; };
+    expect((await inputOf(runId)).remote).toBeUndefined();
+    // 派遣方来自远程设备页(ctx.remote):子 run 显式带上 remote,否则它拿着抄来的 desktop/ 标签就过了本机专属门禁(read_computer_history)
+    const remoteOut = String(await tool().execute({ project_path: project, message: 'Write CHANGELOG' }, { ...ctx, remote: true }));
+    const remoteRun = remoteOut.match(/run (\S+)\)/)![1];
+    expect((await inputOf(remoteRun)).remote).toBe(true);
+    await waitRun(remoteRun);
   });
 
   it('参数校验:相对路径 / 不存在 / 非目录 / 不在本轮 @ 过的项目里 / 根目录与家目录 → 文本错误,不建会话', async () => {

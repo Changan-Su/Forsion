@@ -120,7 +120,8 @@ else describe('search_sessions execute × 真 sqlite', async () => {
   db.exec(`
     CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, user_id TEXT, app_id TEXT, title TEXT, summary TEXT,
       agent_config TEXT, archived INTEGER DEFAULT 0, kind TEXT DEFAULT 'user', updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
-    CREATE TABLE chat_messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp INTEGER);`);
+    CREATE TABLE chat_messages (id TEXT PRIMARY KEY, session_id TEXT, role TEXT, content TEXT, timestamp INTEGER, tool_calls TEXT);`);
+  // tool_calls 同生产 schema:过不了电脑历史门禁的 run(本文件的 ctx 就是)检索时带「调过 read_computer_history 的会话」排除谓词,要读这一列
   const ins = db.prepare('INSERT INTO chat_sessions (id,user_id,app_id,title,summary,archived,kind,updated_at) VALUES (?,?,?,?,?,?,?,?)');
   ins.run('s-plugin', 'u1', 'tangu', 'Forsion插件开发咨询', '聊了两类插件形态', 0, 'user', '2026-08-05 10:00:00');
   ins.run('s-game', 'u1', 'tangu', '3D卡丁车游戏', '做了个小游戏', 1, 'user', '2026-07-31 09:00:00');

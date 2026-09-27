@@ -22,6 +22,8 @@ const COVERED_TOOLS = new Set([
   'read_process_output', 'write_process_input', 'kill_process',
   // Trusted, Agent-scoped application-state brokers; no arbitrary filesystem arguments.
   'remember', 'log_event', 'read_log', 'search_sessions', 'read_session',
+  // 只读固定路径 <共享域>/computer-history/(不收模型给的路径);Muse 周期跑 execMode:host,开了宿主沙箱不列就整个没了。
+  'read_computer_history',
   'load_tools', 'ask_user', 'exit_plan_mode', 'todo_read', 'todo_write', 'get_datetime',
 ]);
 

@@ -33,6 +33,25 @@ export function sessionAgentPredicate(scope: SessionToolScope, alias = 's'): { s
   params: [DEFAULT_AGENT_SLUG, DEFAULT_AGENT_SLUG, slug] };
 }
 
+/** 「chat_messages tc 这行调过 tool」(tool_calls 两方言都 CAST 成文本比;工具名里的 _ 经 likePattern 转义)。
+ *  召回藏匿(noToolCallPredicate)与 Historian 跳过自动记忆提取(sessionCalledTool)共用这一个判据,改一处即两处。 */
+const toolCallMatch = (tool: string): { sql: string; params: string[] } =>
+  ({ sql: `LOWER(CAST(tc.tool_calls AS TEXT)) LIKE ? ESCAPE '\\'`, params: [likePattern(tool)] });
+
+/** 「有任一消息调过 tool 的会话」排除谓词。 */
+function noToolCallPredicate(tool: string, alias = 's'): { sql: string; params: string[] } {
+  const m = toolCallMatch(tool);
+  return { sql: `NOT EXISTS (SELECT 1 FROM chat_messages tc WHERE tc.session_id = ${alias}.id AND ${m.sql})`, params: m.params };
+}
+
+/** 该会话是否有任一消息调过 tool(按会话不按消息:追问轮会复述结果而不再调工具)。localHistorian 用它把
+ *  调过 read_computer_history 的会话挡在自动记忆提取之外;持库后端专属(Historian 本就只在本地形态跑)。 */
+export async function sessionCalledTool(sessionId: string, tool: string): Promise<boolean> {
+  const m = toolCallMatch(tool);
+  const rows = await query<any[]>(`SELECT 1 AS hit FROM chat_messages tc WHERE tc.session_id = ? AND ${m.sql} LIMIT 1`, [sessionId, ...m.params]);
+  return rows.length > 0;
+}
+
 /** No persistent index: edits/deletions/purge are visible on the next query without stale index resurrection.
  * Search only a bounded recent window, narrowed by dates. Never scan/index the complete message store.
  */
@@ -48,6 +67,10 @@ async function searchScopedSessions(input: SessionSearchInput): Promise<SessionH
   const conditions = ["s.user_id = ?", "s.app_id = ?", "s.kind = 'user'", ownership.sql];
   const params: unknown[] = [input.userId, input.appId, ...ownership.params];
   if (input.excludeSessionId) { conditions.push('s.id <> ?'); params.push(input.excludeSessionId); }
+  if (input.excludeSessionsWithTool) {
+    const hide = noToolCallPredicate(input.excludeSessionsWithTool);
+    conditions.push(hide.sql); params.push(...hide.params);
+  }
   if (input.before) { conditions.push('s.updated_at < ?'); params.push(input.before); }
   if (input.after) { conditions.push('s.updated_at >= ?'); params.push(input.after); }
   conditions.push("(COALESCE(s.title, '') <> '' OR COALESCE(s.summary, '') <> '')");
@@ -210,9 +233,10 @@ export async function readSessionTranscriptInDb(input: SessionTranscriptInput): 
   const messageId = String(input.messageId || '').trim();
   const beforeId = String(input.beforeMessageId || '').trim();
   input.signal?.throwIfAborted();
+  const hide = input.excludeSessionsWithTool ? noToolCallPredicate(input.excludeSessionsWithTool) : null;
   const sess = await query<any[]>(
-    `SELECT s.id, substr(s.title, 1, 500) AS title, substr(s.summary, 1, 2000) AS summary FROM chat_sessions s WHERE ${scope}`,
-    scopeParams,
+    `SELECT s.id, substr(s.title, 1, 500) AS title, substr(s.summary, 1, 2000) AS summary FROM chat_sessions s WHERE ${scope}${hide ? ` AND ${hide.sql}` : ''}`,
+    [...scopeParams, ...(hide ? hide.params : [])],
   );
   input.signal?.throwIfAborted();
   if (!sess.length) return { session: null, rows: [] };

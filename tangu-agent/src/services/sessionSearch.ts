@@ -144,6 +144,9 @@ export interface SessionSearchInput {
   signal?: AbortSignal;
   /** Runtime recall uses OR relevance; the search tool keeps its documented cross-message AND. */
   matchAny?: boolean;
+  /** Runtime-only(与 toolScope 同为可信调用方字段,模型实参给不了):有任一消息调过此工具的会话整段排除。
+   *  read_computer_history 过不了门禁的 run(关掉 / 通道 / 远程 / 团队…)用它藏起复述过电脑历史的会话,见 computerHistoryRecallHide。 */
+  excludeSessionsWithTool?: string;
   /** Trusted caller may choose smaller automatic-recall windows; never increases hard caps. */
   candidateLimit?: number;
   messagesPerSession?: number;
@@ -165,6 +168,8 @@ export interface SessionTranscriptInput {
   messageId?: string;
   /** 向前翻页锚点(同会话内更早的消息)。 */
   beforeMessageId?: string;
+  /** 同 SessionSearchInput.excludeSessionsWithTool:调过此工具的会话按「范围内无此会话」处理。 */
+  excludeSessionsWithTool?: string;
   signal?: AbortSignal;
 }
 export interface SessionTranscriptRow {

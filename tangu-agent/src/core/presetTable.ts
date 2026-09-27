@@ -64,15 +64,17 @@ export const CODING_PRESET_DEFERRED: ReadonlySet<string> = new Set([
   'amadeus_list_notes', 'amadeus_list_calendars', 'amadeus_list_events',
   'amadeus_create_event', 'amadeus_edit_event', 'amadeus_delete_event',
   'inbox_send', 'display_file', 'read_session', 'search_sessions', 'read_document',
-  'remember', 'log_event', 'read_log',
+  'remember', 'log_event', 'read_log', 'read_computer_history',
 ]);
 
 /** chat 常驻面(方案 §3.2 A 档):10 个 + GUI 端的 sketch。⚠️ 白名单只保证「不被 chat 砍掉」,不保证在场——
  *  run_python/pip_install 另受 profile.features.sandbox 门禁,sketch 另受 ctx.client 门禁,
- *  read_file/write_file/list_files 只认 mode:'sandbox' 的工作区版(host 版被 rejectHostMode 整族拒)。 */
+ *  read_file/write_file/list_files 只认 mode:'sandbox' 的工作区版(host 版被 rejectHostMode 整族拒)。
+ *  read_computer_history 另受 computerHistoryGate(电脑历史开着 + 本机客户端)门禁:放常驻不放 deferred ——
+ *  「我休息前在做什么」这种问法模型不会先想到 load_tools,关着时它本就不在场,不占 defs。 */
 export const CHAT_PRESET_RESIDENT: ReadonlySet<string> = new Set([
   'run_python', 'web_fetch', 'web_search', 'read_file', 'display_file', 'pip_install', 'write_file',
-  'load_tools', 'list_files', 'get_datetime', 'sketch', 'remember',
+  'load_tools', 'list_files', 'get_datetime', 'sketch', 'remember', 'read_computer_history',
 ]);
 
 /** chat 按需面(方案 §3.3 B 档):目录一行,load_tools 可解锁。

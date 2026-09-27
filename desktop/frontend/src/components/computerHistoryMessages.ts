@@ -1,0 +1,152 @@
+import { registerMessages } from '../i18n'
+
+// 电脑历史设置页文案(zh / en 成对)。导航标签与页说明在 SettingsModal 自己的片段里(settingsmodal.tab/page.computerHistory)。
+registerMessages({
+  'computerHistory.summary': { zh: '默认关闭，可随时暂停或清除。', en: 'Off by default. Pause or clear it at any time.' },
+  'computerHistory.enable': { zh: '记录电脑历史', en: 'Record computer history' },
+  'computerHistory.enableConfirm.title': { zh: '开始记录电脑历史？', en: 'Start recording computer history?' },
+  'computerHistory.enableConfirm.body': {
+    zh: 'Forsion 会在这台电脑上记录你在各个 App 里的窗口标题、网址和输入的文字，未加密保存 {days} 天。Agent 或 Muse 读取时，片段会发给它们所用的模型，可能是 Forsion 云端，也可能是第三方 Provider。清除历史只删记录本身：已经引用过它的对话和 Muse 自己的笔记与工作日志（Journal）不会随之删除，需要另行删除。详见下方说明。',
+    en: 'Forsion will record window titles, URLs, and text you type across apps on this computer, stored unencrypted for {days} days. When agents or Muse read it, excerpts are sent to their model, which may be Forsion cloud or a third-party provider. Clearing history deletes the records only. Conversations that already quoted them and Muse’s own notes and Journal stay until you delete them separately. Details are below.',
+  },
+  'computerHistory.enableConfirm.confirm': { zh: '开启记录', en: 'Turn on' },
+  'computerHistory.loading': { zh: '正在读取电脑历史状态…', en: 'Loading computer history status…' },
+  'computerHistory.loadFailed': { zh: '无法读取电脑历史状态：{error}', en: 'Couldn’t load computer history status: {error}' },
+  'computerHistory.retry': { zh: '重试', en: 'Retry' },
+  'computerHistory.actionFailed': { zh: '操作未完成：{error}', en: 'That didn’t work: {error}' },
+  'computerHistory.persistError': {
+    zh: '已停止记录，但「关闭」还没能保存（{error}），正在自动重试。保存成功前重启 Forsion，记录可能会重新开启。',
+    en: 'Recording stopped, but the Off setting couldn’t be saved ({error}). Retrying automatically. If Forsion restarts before it’s saved, recording may turn back on.',
+  },
+  'computerHistory.macOnly.title': { zh: '目前仅支持 macOS', en: 'macOS only for now' },
+  'computerHistory.macOnly.body': {
+    zh: '电脑历史依赖 macOS 的辅助功能接口，这台电脑的系统暂不支持。',
+    en: 'Computer history relies on the macOS Accessibility API, so it isn’t available on this system yet.',
+  },
+
+  'computerHistory.status.title': { zh: '当前状态', en: 'Status' },
+  'computerHistory.status.off': { zh: '已关闭', en: 'Off' },
+  'computerHistory.status.offHint': { zh: '打开上方开关后开始记录。', en: 'Turn on the switch above to start recording.' },
+  'computerHistory.status.recording': { zh: '记录中', en: 'Recording' },
+  'computerHistory.status.recordingHint': { zh: '自 {time} 起持续记录。', en: 'Recording since {time}.' },
+  'computerHistory.status.paused': { zh: '已暂停', en: 'Paused' },
+  'computerHistory.status.pausedHint': { zh: '暂停期间不记录任何内容，可随时恢复。', en: 'Nothing is recorded while paused. You can resume at any time.' },
+  'computerHistory.status.pausedUntil': { zh: '已暂停到 {time}', en: 'Paused until {time}' },
+  'computerHistory.status.pausedUntilHint': { zh: '到时间后自动恢复记录，也可以现在恢复。', en: 'Recording resumes automatically at that time, or you can resume now.' },
+  'computerHistory.status.noPermission': { zh: '需要辅助功能权限', en: 'Needs Accessibility access' },
+  'computerHistory.status.noPermissionHint': {
+    zh: '在下方为 tangu-computer-use 助手开启辅助功能权限；同一个授权也用于 Computer Use。',
+    en: 'Grant Accessibility access to the tangu-computer-use helper below. The same grant is used by Computer Use.',
+  },
+  'computerHistory.status.helperMissing': { zh: '未安装 Computer Use 助手', en: 'Computer Use helper not installed' },
+  'computerHistory.status.helperMissingHint': {
+    zh: '电脑历史由 Computer Use 助手采集。用下方按钮安装助手，再授予辅助功能权限。',
+    en: 'Computer history is captured by the Computer Use helper. Install it with the button below, then grant Accessibility access.',
+  },
+  'computerHistory.status.helperOutdated': { zh: 'Computer Use 助手需要更新', en: 'Computer Use helper needs an update' },
+  'computerHistory.status.helperOutdatedHint': {
+    zh: '正在运行的助手版本过旧。点下方权限卡上的按钮，Forsion 询问时选「更新并重启助手」。仍不消失的话，在「活动监视器」里退出 tangu-computer-use，再回到本页。',
+    en: 'The running helper is too old. Use the button in the card below and choose “Update and restart helper” if asked. If this stays, quit tangu-computer-use in Activity Monitor, then come back here.',
+  },
+  'computerHistory.status.disconnected': { zh: '连接中断', en: 'Disconnected' },
+  'computerHistory.status.disconnectedHint': {
+    zh: '与 Computer Use 助手的连接断开了，正在自动重连。',
+    en: 'Lost the connection to the Computer Use helper. Reconnecting automatically.',
+  },
+  'computerHistory.status.unsupported': { zh: '目前仅支持 macOS', en: 'macOS only for now' },
+  'computerHistory.status.unsupportedHint': { zh: '这台电脑的系统暂不支持电脑历史。', en: 'Computer history isn’t available on this system yet.' },
+  'computerHistory.status.refresh': { zh: '刷新状态', en: 'Refresh status' },
+  'computerHistory.helper.title': { zh: 'Computer Use 助手', en: 'Computer Use helper' },
+  'computerHistory.helper.hint': { zh: '电脑历史只需要它的辅助功能权限，不需要屏幕录制。', en: 'Computer history only needs its Accessibility access, not Screen Recording.' },
+
+  'computerHistory.pause.label': { zh: '暂停记录', en: 'Pause recording' },
+  'computerHistory.pause.hint': { zh: '到时间后自动恢复。', en: 'Recording resumes automatically when the time is up.' },
+  'computerHistory.pause.30m': { zh: '30 分钟', en: '30 minutes' },
+  'computerHistory.pause.1h': { zh: '1 小时', en: '1 hour' },
+  'computerHistory.pause.tomorrow': { zh: '到明天', en: 'Until tomorrow' },
+  'computerHistory.resume': { zh: '恢复记录', en: 'Resume' },
+
+  'computerHistory.about.title': { zh: '记录什么、存在哪里', en: 'What’s recorded and where it goes' },
+  'computerHistory.about.hint': { zh: '开启前请先读一遍。', en: 'Please read this before turning it on.' },
+  'computerHistory.about.recordedLabel': { zh: '会记录', en: 'Recorded' },
+  // ⌘ / ⌃ 后面用不换行空格(\u00a0)粘住下一个词:折行只会落在符号之前,行尾不会孤零零剩个 ⌃(像「收起」箭头)或 ⌘。
+  'computerHistory.about.recorded': {
+    zh: '前台切换到了哪个 App、窗口标题、浏览器网址、你在输入框里输入的文字、点击的按钮名称，以及按住 ⌘\u00a0或 ⌃\u00a0的快捷键（如 ⌘S）。只在 Forsion 运行且未暂停时记录。',
+    en: 'Which app is in front, window titles, browser URLs, text you type into focused fields, the names of buttons you click, and keyboard shortcuts that use ⌘\u00a0or ⌃\u00a0(such as ⌘S). Recording happens only while Forsion is running and not paused.',
+  },
+  'computerHistory.about.neverLabel': { zh: '不会记录', en: 'Never recorded' },
+  'computerHistory.about.never': {
+    zh: '原始按键和屏幕截图；密码管理器、钥匙串、密码输入框，以及无痕或隐私浏览窗口里的任何内容。',
+    en: 'Raw keystrokes and screenshots, and anything in password managers, Keychain, password fields, or private and incognito windows.',
+  },
+  'computerHistory.about.storageLabel': { zh: '存储', en: 'Storage' },
+  'computerHistory.about.storage': {
+    zh: '保存在这台电脑的 {path}，保留 {days} 天后自动删除。Forsion 不会自行上传或总结这些记录；只有 Agent 或 Muse 读取时，片段才会离开这台电脑。记录未加密，以你的账户运行的其他 App 也能读取。',
+    en: 'Stored on this computer at {path} and deleted automatically after {days} days. Forsion doesn’t upload or summarize these records on its own; excerpts leave this computer only when an agent or Muse reads them. Records are stored unencrypted, so other apps running under your account can read them.',
+  },
+  'computerHistory.about.accessLabel': { zh: '谁能读取', en: 'Who can read it' },
+  'computerHistory.about.access': {
+    zh: '你的 Agent 可以用工具读取这些记录，读到的片段会随对话发给当前会话所用的模型，可能是 Forsion 云端，也可能是你配置的第三方 Provider。Muse 运行时也会把最近几小时的简要会话摘要发给 Muse 所用的模型，同样可能是 Forsion 云端或第三方 Provider。',
+    en: 'Your agents can read these records with a tool, and the excerpts they read are sent with the conversation to that session’s model, which may be Forsion cloud or a third-party provider you configured. When Muse runs, it also sends a short digest of the last few hours to the model Muse uses, which may likewise be Forsion cloud or a third-party provider.',
+  },
+  'computerHistory.about.permissionLabel': { zh: '权限', en: 'Permission' },
+  'computerHistory.about.permission': {
+    zh: '只需要辅助功能权限，授给 tangu-computer-use 助手；同一个授权也让 Agent 能用 Computer Use 操作电脑。不需要屏幕录制权限。',
+    en: 'Only Accessibility access is needed, granted to the tangu-computer-use helper. The same grant also lets agents control your computer with Computer Use. Screen Recording isn’t required.',
+  },
+  'computerHistory.about.tip': {
+    zh: '建议排除健康、财务类 App；通话或聊天时，除非对方同意，请先暂停记录。',
+    en: 'Consider excluding health and finance apps, and pause recording during calls or chats unless the other person agrees.',
+  },
+  'computerHistory.reveal': { zh: '在访达中显示', en: 'Show in Finder' },
+
+  'computerHistory.recent.title': { zh: '今天的记录', en: 'Today' },
+  'computerHistory.recent.hint': { zh: '按 App 和窗口合并的连续活动，新的在前。', en: 'Continuous activity merged by app and window, newest first.' },
+  'computerHistory.recent.empty': { zh: '今天还没有记录。', en: 'Nothing recorded today.' },
+  'computerHistory.recent.refresh': { zh: '刷新', en: 'Refresh' },
+  'computerHistory.recent.more': { zh: '只显示最近 {n} 段。', en: 'Showing the latest {n} entries.' },
+
+  'computerHistory.apps.title': { zh: '排除的 App', en: 'Excluded apps' },
+  'computerHistory.apps.hint': {
+    zh: '这些 App 在前台时不记录任何内容，只留一条不带标题的切换记录。只对之后的活动生效，之前的记录请用下方「清除历史」删除。密码管理器和钥匙串始终排除；终端和 Forsion 自身只记录 App 与窗口标题。',
+    en: 'Nothing is recorded while these apps are in front, except an untitled app switch. This applies to new activity only; use Clear history below to remove earlier records. Password managers and Keychain are always excluded, and terminals and Forsion itself only record app and window titles.',
+  },
+  'computerHistory.apps.empty': { zh: '还没有排除任何 App。', en: 'No apps excluded yet.' },
+  'computerHistory.apps.add': { zh: '添加最近用过的 App…', en: 'Add a recently used app…' },
+  'computerHistory.apps.noRecent': { zh: '还没有记录到可添加的 App', en: 'No recently used apps to add' },
+  'computerHistory.apps.manualLabel': { zh: 'App 的 Bundle ID', en: 'App bundle ID' },
+  'computerHistory.apps.manualPlaceholder': { zh: '或输入 Bundle ID，例如 com.apple.Health', en: 'Or enter a bundle ID, e.g. com.apple.Health' },
+  'computerHistory.apps.manualAdd': { zh: '添加', en: 'Add' },
+  'computerHistory.apps.invalid': { zh: '请输入有效的 Bundle ID，例如 com.apple.Health。', en: 'Enter a valid bundle ID, such as com.apple.Health.' },
+  'computerHistory.apps.duplicate': { zh: '这个 App 已经在列表里了。', en: 'That app is already on the list.' },
+  'computerHistory.remove': { zh: '移除 {name}', en: 'Remove {name}' },
+
+  'computerHistory.sites.title': { zh: '排除的网站', en: 'Excluded sites' },
+  'computerHistory.sites.hint': {
+    zh: '浏览器正在显示这些域名（含子域名）时不记录任何内容。只对之后的活动生效，之前的记录请用下方「清除历史」删除。',
+    en: 'Nothing is recorded while a browser shows these domains, including their subdomains. This applies to new activity only; use Clear history below to remove earlier records.',
+  },
+  'computerHistory.sites.placeholder': { zh: '例如 example.com', en: 'e.g. example.com' },
+  'computerHistory.sites.add': { zh: '添加', en: 'Add' },
+  'computerHistory.sites.invalid': { zh: '请输入有效的域名，例如 example.com。', en: 'Enter a valid domain, such as example.com.' },
+  'computerHistory.sites.duplicate': { zh: '这个域名已经在列表里了。', en: 'That domain is already on the list.' },
+  'computerHistory.sites.empty': { zh: '还没有排除任何网站。', en: 'No sites excluded yet.' },
+
+  'computerHistory.clear.label': { zh: '清除历史', en: 'Clear history' },
+  'computerHistory.clear.hint': { zh: '删除后无法恢复。', en: 'Deleted history can’t be recovered.' },
+  'computerHistory.clear.10m': { zh: '最近 10 分钟', en: 'Last 10 minutes' },
+  'computerHistory.clear.1h': { zh: '最近 1 小时', en: 'Last hour' },
+  'computerHistory.clear.1d': { zh: '最近 1 天', en: 'Last day' },
+  'computerHistory.clear.all': { zh: '全部', en: 'All' },
+  'computerHistory.clear.confirm10m': { zh: '删除最近 10 分钟的电脑历史？', en: 'Delete the last 10 minutes of computer history?' },
+  'computerHistory.clear.confirm1h': { zh: '删除最近 1 小时的电脑历史？', en: 'Delete the last hour of computer history?' },
+  'computerHistory.clear.confirm1d': { zh: '删除最近 1 天的电脑历史？', en: 'Delete the last day of computer history?' },
+  'computerHistory.clear.confirmAll': { zh: '删除全部电脑历史？', en: 'Delete all computer history?' },
+  'computerHistory.clear.confirmNote': {
+    zh: '删除后无法恢复。已经引用过这些记录的对话，以及 Muse 自己的笔记与工作日志（Journal），不会随之删除；需要的话请另行删除这些对话。',
+    en: 'This can’t be undone. Conversations that already quoted this history, and Muse’s own notes and Journal, aren’t deleted. Delete those conversations separately if needed.',
+  },
+  'computerHistory.clear.confirmButton': { zh: '删除', en: 'Delete' },
+  'computerHistory.clear.done': { zh: '已清除。', en: 'Cleared.' },
+  'computerHistory.cancel': { zh: '取消', en: 'Cancel' },
+})

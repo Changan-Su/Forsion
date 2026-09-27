@@ -1,8 +1,9 @@
+import { EventEmitter } from 'node:events'
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const m = vi.hoisted(() => ({
   exists: vi.fn(), ask: vi.fn(), media: vi.fn(), requestMedia: vi.fn(), sources: vi.fn(),
-  open: vi.fn(), launch: vi.fn(), show: vi.fn(), close: vi.fn(), confirm: vi.fn(), handlers: new Map<string, (...args: any[]) => any>(),
+  open: vi.fn(), launch: vi.fn(), spawn: vi.fn(), show: vi.fn(), close: vi.fn(), confirm: vi.fn(), handlers: new Map<string, (...args: any[]) => any>(),
 }))
 vi.mock('electron', () => ({
   app: { isPackaged: true, getName: () => 'Forsion', getAppPath: () => '/app', on: vi.fn() },
@@ -12,7 +13,9 @@ vi.mock('electron', () => ({
   systemPreferences: { getMediaAccessStatus: m.media, askForMediaAccess: m.requestMedia },
 }))
 vi.mock('node:fs', () => ({ existsSync: m.exists, accessSync: vi.fn(), constants: { W_OK: 2 } }))
-vi.mock('node:child_process', () => ({ execFile: m.launch, spawn: vi.fn() }))
+vi.mock('node:child_process', () => ({ execFile: m.launch, spawn: m.spawn }))
+vi.mock('./builtinPlugins', () => ({ builtinBundleSources: () => ['/bundle/tangu-computer-use'], activeBundleDir: async (_root: string, source: string) => source }))
+vi.mock('./forsionHome', () => ({ forsionHomeDir: () => '/home/.forsion-test' }))
 vi.mock('./computerUse', () => ({ helperSocketPath: () => '/tmp/test-cu.sock', askHelper: m.ask }))
 vi.mock('./permissionGuide', () => ({ PermissionGuide: class { show = m.show; close = m.close } }))
 
@@ -210,5 +213,100 @@ describe('explicit permission actions', () => {
     expect(() => m.handlers.get('permissions:request')!({ trusted: true }, 'https://example.com')).toThrow('Unknown permission')
     expect(m.open).not.toHaveBeenCalled()
     expect(m.ask).not.toHaveBeenCalled()
+  })
+})
+
+describe('helper protocol required by Computer History', () => {
+  const withProtocol = (protocolVersion: unknown) => m.ask.mockImplementation((_socket, request) =>
+    Promise.resolve(request.cmd === 'diagnostics' ? { protocolVersion } : native))
+
+  it('a running helper answering protocol 12 is outdated while the feature is on, even when the installed bytes are current', async () => {
+    withProtocol(12)
+    const { snapshot } = await new DesktopPermissions(true, vi.fn(), { requiredHelperProtocol: () => 13 }).read()
+    expect(snapshot.helperError).toBe('outdated')
+    expect(snapshot.helperRunning).toBe(true)
+    expect(m.ask.mock.calls.map((call) => call[1].cmd)).toEqual(['permissionStatus', 'diagnostics'])
+    expect((DesktopPermissions.prototype as any).runInstaller).not.toHaveBeenCalled()
+  })
+
+  it('Computer Use-only users are not asked: no diagnostics call, no outdated flag', async () => {
+    withProtocol(12)
+    const { snapshot } = await new DesktopPermissions(true, vi.fn(), { requiredHelperProtocol: () => undefined }).read()
+    expect(snapshot.helperError).toBeUndefined()
+    expect(m.ask.mock.calls.map((call) => call[1].cmd)).toEqual(['permissionStatus'])
+  })
+
+  it.each([13, 14, undefined, 'x'])('protocol %s is not flagged (current, newer, or unknown)', async (protocolVersion) => {
+    withProtocol(protocolVersion)
+    const { snapshot } = await new DesktopPermissions(true, vi.fn(), { requiredHelperProtocol: () => 13 }).read()
+    expect(snapshot.helperError).toBeUndefined()
+  })
+
+  it('wrong identity still wins over the protocol check', async () => {
+    m.ask.mockImplementation((_socket, request) => Promise.resolve(request.cmd === 'diagnostics' ? { protocolVersion: 12 }
+      : { ...native, source: { attribution: 'caller', pid: 81 } }))
+    const { snapshot } = await new DesktopPermissions(true, vi.fn(), { requiredHelperProtocol: () => 13 }).read()
+    expect(snapshot.helperError).toBe('wrong-identity')
+  })
+
+  it('a consented update stops the old process, reinstalls, relaunches, then requests access', async () => {
+    withProtocol(12)
+    m.confirm.mockResolvedValue({ response: 1 })
+    const installer = vi.mocked((DesktopPermissions.prototype as any).runInstaller)
+    await new DesktopPermissions(true, vi.fn(), { requiredHelperProtocol: () => 13 }).request('computerAccessibility')
+    const cmds = m.ask.mock.calls.map((call) => call[1].cmd)
+    expect(m.confirm).toHaveBeenCalledOnce()
+    expect(cmds).toContain('shutdown')
+    expect(installer.mock.calls).toEqual([[]]) // full install, no --check first (outdated already implies install)
+    expect(m.launch).toHaveBeenCalledOnce()
+    expect(m.launch.mock.calls[0].slice(0, 2)).toEqual(['/usr/bin/open', expect.arrayContaining(['-n', '-g', 'serve'])])
+    expect(m.ask.mock.invocationCallOrder[cmds.indexOf('shutdown')]).toBeLessThan(installer.mock.invocationCallOrder[0])
+    expect(installer.mock.invocationCallOrder[0]).toBeLessThan(m.launch.mock.invocationCallOrder[0])
+    expect(m.ask.mock.calls.map((call) => call[1])).toContainEqual({ cmd: 'registerPermissions', kind: 'accessibility' })
+  })
+
+  it('busy spans the whole request plus a real installer run that outlives it; idle fires once when both are done', async () => {
+    vi.mocked((DesktopPermissions.prototype as any).runInstaller).mockRestore()
+    let install: (EventEmitter & { stdout: EventEmitter; stderr: EventEmitter }) | undefined
+    m.spawn.mockImplementation((_node: string, args: string[]) => {
+      const child = Object.assign(new EventEmitter(), { stdout: new EventEmitter(), stderr: new EventEmitter(), unref: vi.fn() })
+      if (args.includes('--check')) setImmediate(() => child.emit('close', 0))
+      else install = child
+      return child
+    })
+    const s = new DesktopPermissions(true, vi.fn())
+    const idle = vi.fn()
+    const off = s.onHelperIdle(idle)
+    expect(s.helperBusy()).toBe(false)
+    const action = s.request('microphone')
+    expect(s.helperBusy()).toBe(true)
+    await action
+    expect(s.helperBusy()).toBe(false)
+    expect(idle).toHaveBeenCalledTimes(1)
+    // A check-only run is not a replacement: it never marks the helper busy.
+    await expect((s as any).runInstaller(true)).resolves.toBe(true)
+    expect(s.helperBusy()).toBe(false)
+    // An installer still replacing the helper after the request returned (the 180s UI race) keeps it busy.
+    const installing = (s as any).runInstaller()
+    await vi.waitFor(() => expect(install).toBeDefined())
+    expect(m.spawn.mock.calls.at(-1)![1]).toEqual(['/bundle/tangu-computer-use/scripts/setup-helper.mjs', '--runtime'])
+    await s.request('microphone')
+    expect(s.helperBusy()).toBe(true)
+    expect(idle).toHaveBeenCalledTimes(1)
+    install!.emit('close', 0)
+    await expect(installing).resolves.toBe(true)
+    expect(s.helperBusy()).toBe(false)
+    expect(idle).toHaveBeenCalledTimes(2)
+    off()
+    await s.request('microphone')
+    expect(idle).toHaveBeenCalledTimes(2)
+  })
+
+  it('a throwing idle listener cannot break the request', async () => {
+    const s = new DesktopPermissions(true, vi.fn())
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    s.onHelperIdle(() => { throw new Error('boom') })
+    await expect(s.request('microphone')).resolves.toBeTruthy()
+    expect(warn).toHaveBeenCalled()
   })
 })

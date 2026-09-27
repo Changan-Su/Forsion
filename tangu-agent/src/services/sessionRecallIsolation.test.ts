@@ -105,6 +105,37 @@ for (const dialect of (sqlite ? ['sqlite', 'postgres'] : ['postgres'])) describe
     expect(bodies.flatMap((call) => call.rows).every((row) => row.content.length <= 4000)).toBe(true);
     expect(String(await read({ session_id: 'window-64', message_id: 'body-64', char_offset: 4000 }, 'window'))).toContain('tailneedle');
   });
+  it('excludeSessionsWithTool hides whole sessions whose messages called that tool (search, read, tools fail closed)', async () => {
+    // alpha-session:助手调过 read_computer_history 并在后续轮复述(追问轮不再调工具,所以按会话藏,不按消息藏)
+    await execute('INSERT INTO chat_messages(id,session_id,role,content,timestamp,tool_calls) VALUES(?,?,?,?,?,?)',
+      ['ch-call', 'alpha-session', 'model', 'You were editing the roadmap', 2000, JSON.stringify([{ id: 'c1', type: 'function', function: { name: 'read_computer_history', arguments: '{}' } }])]);
+    // 名字里的 _ 不是通配:别的工具名(readXcomputer…)不误伤
+    await session('alpha-2', 'alpha'); await message('alpha-2-message', 'alpha-2');
+    await execute('INSERT INTO chat_messages(id,session_id,role,content,timestamp,tool_calls) VALUES(?,?,?,?,?,?)',
+      ['near-miss', 'alpha-2', 'model', 'x', 2000, JSON.stringify([{ function: { name: 'readXcomputerXhistory' } }])]);
+    const hide = { excludeSessionsWithTool: 'read_computer_history' };
+    expect((await find('alpha')).map((s) => s.id).sort()).toEqual(['alpha-2', 'alpha-session']);
+    expect((await find('alpha', hide)).map((s) => s.id)).toEqual(['alpha-2']);
+    const direct = await (await import('../seams/runtime.js')).deps().state.readSessionTranscript({
+      sessionId: 'alpha-session', userId: 'u1', appId: 'tangu', toolScope: sessionToolScope('alpha'), limit: 10, perMessageChars: 200, charOffset: 0, ...hide,
+    });
+    expect(direct.session).toBeNull();
+    // 工具层:ctx 没有本机 profile / desktop client → 过不了电脑历史门禁 → 自动藏(默认拒)
+    expect(String(await read({ session_id: 'alpha-session' }))).toContain('no session');
+    expect(String(await read({ session_id: 'alpha-2' }))).toContain('插件发布');
+    const out = String(await searchSessionsProvider.tools()[0].execute({ query: '插件' }, ctx()));
+    expect(out).toContain('alpha-2'); expect(out).not.toContain('alpha-session');
+  });
+  it('sessionCalledTool (Historian skip) uses the same match as the recall hide, on both dialects', async () => {
+    const { sessionCalledTool } = await import('./sessionSearchSql.js');
+    await execute('INSERT INTO chat_messages(id,session_id,role,content,timestamp,tool_calls) VALUES(?,?,?,?,?,?)',
+      ['ch-call', 'alpha-session', 'model', 'x', 2000, JSON.stringify([{ id: 'c1', type: 'function', function: { name: 'READ_COMPUTER_HISTORY', arguments: '{}' } }])]);
+    await execute('INSERT INTO chat_messages(id,session_id,role,content,timestamp,tool_calls) VALUES(?,?,?,?,?,?)',
+      ['near-miss', 'beta-session', 'model', 'x', 2000, JSON.stringify([{ function: { name: 'readXcomputerXhistory' } }])]);
+    expect(await sessionCalledTool('alpha-session', 'read_computer_history')).toBe(true);
+    expect(await sessionCalledTool('beta-session', 'read_computer_history')).toBe(false); // _ 不是通配
+    expect(await sessionCalledTool('legacy', 'read_computer_history')).toBe(false); // tool_calls 为 NULL
+  });
   it('pre-cancelled search/read starts no query', async () => {
     const signal = AbortSignal.abort(); sqlCalls.length = 0;
     await expect(find('alpha', { signal })).rejects.toMatchObject({ name: 'AbortError' });

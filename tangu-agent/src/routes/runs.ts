@@ -144,6 +144,10 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
     // 客户端面标识(desktop/2.7.4 等,统计维度,与 app_id 正交)。客户端自报,白名单校验后
     // 随 input 落库(不加列:input 本就是 JSONB,免动 stateStore 接缝);不合法静默丢弃。
     const clientTag = normalizeClientTag(client);
+    // 远程设备页(Forsion Unit:LAN 或 server 隧道 → 桌面 unitWeb.proxyEngine → 本引擎)的 client 也自报 desktop/…,
+    // 单看 client 分不出本机与远程。代理从零重建请求头并盖上 `x-forsion-remote`(远端页剥不掉;本机客户端自己带只会拒自己)。
+    // 只认头、绝不认 body。本机专属数据面(read_computer_history 与召回里的电脑历史会话)据 input.remote 拒。
+    const remote = typeof req.headers['x-forsion-remote'] === 'string' && req.headers['x-forsion-remote'] !== '';
     const uiCommandsNorm = normalizeUiCommands(ui_commands);
     const uiSettingsNorm = normalizeUiSettings(ui_settings);
     // 接缝①(G1):app_id 经请求流入(缺省=本进程装配的 profile);未知 app_id 拒绝。
@@ -195,6 +199,7 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
       input: {
         message, userMessageId, attachments: attachments || [], agentConfig: agent_config || {},
         ...(clientTag ? { client: clientTag } : {}),
+        ...(remote ? { remote: true } : {}),
         // 直接来自客户端输入区(审批档据此在审批时现读会话设置,见 agentLoop.approvalModeSessionId)。
         // 不能拿 client 标签判:createRun 会把它抄进派生 run(团队成员 / 讨论),那些 run 的档不归自己的会话管。
         origin: 'client',

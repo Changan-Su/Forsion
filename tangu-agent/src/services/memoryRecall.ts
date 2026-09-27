@@ -12,6 +12,9 @@ export interface AgentMemoryContextInput {
   agentSlug: string;
   query: string;
   excludeSessionId?: string;
+  /** Trusted runtime decision: sessions where any message called this tool are left out of the history section
+   *  (read_computer_history when the run fails its gate). */
+  hideSessionsWithTool?: string;
   signal?: AbortSignal;
   /** Includes labels and evidence references; hard maximum 4,000 UTF-16 characters. */
   maxChars?: number;
@@ -155,7 +158,7 @@ export async function buildAgentMemoryContext(input: AgentMemoryContextInput): P
     try {
       history = await searchSessions({ userId: input.userId, appId: input.appId,
         toolScope: sessionToolScope(input.agentSlug), terms, limit: 3, matchAny: true,
-        excludeSessionId: input.excludeSessionId, signal: input.signal,
+        excludeSessionId: input.excludeSessionId, excludeSessionsWithTool: input.hideSessionsWithTool, signal: input.signal,
         candidateLimit: MEMORY_RECALL_HISTORY_SESSIONS, messagesPerSession: MEMORY_RECALL_HISTORY_MESSAGES,
         messageChars: MEMORY_RECALL_HISTORY_MESSAGE_CHARS });
     } catch (e: any) {

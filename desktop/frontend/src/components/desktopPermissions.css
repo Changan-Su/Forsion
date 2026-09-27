@@ -25,7 +25,30 @@
 .desktop-permissions .btn { white-space: normal; overflow-wrap: anywhere; max-width: 100%; justify-content: center; }
 .desktop-permissions .btn svg, .desktop-permissions h2 svg { flex: none; }
 
+/* 嵌入式(embedded):宿主是 .settings-panel(头与「刷新状态」由宿主画),这里只剩提示与权限行。
+ * 分区不再是卡片;行照 .settings-control-row 的节奏(10px 15px、12px 标题 / 11px 说明、右列操作),
+ * 与同页其他面板的行左右对齐。 */
+.desktop-permissions--embedded { gap: 0; }
+.desktop-permissions--embedded .desktop-permissions-section { padding: 0; border: 0; border-radius: 0; background: transparent; }
+.desktop-permissions--embedded > p,
+.desktop-permissions--embedded > .desktop-permissions-error { margin: 12px 15px 0; }
+.desktop-permissions--embedded > :last-child:not(section) { margin-bottom: 13px; }
+.desktop-permissions--embedded p.desktop-permissions-note,
+.desktop-permissions--embedded p.desktop-permissions-helper-error { margin: 0; padding: 12px 15px 0; }
+.desktop-permissions--embedded .desktop-permissions-list { margin: 0; }
+.desktop-permissions--embedded .desktop-permissions-row { min-height: 56px; align-items: center; gap: 16px; padding: 10px 15px; }
+.desktop-permissions--embedded .desktop-permissions-row + .desktop-permissions-row { border-top: var(--border-width) solid var(--border); }
+.desktop-permissions--embedded .desktop-permissions-copy h3 { margin: 0 0 2px; font-size: var(--ui-font-meta, 12px); font-weight: 620; }
+.desktop-permissions--embedded .desktop-permissions-copy p { font-size: var(--ui-font-caption, 11px); line-height: 1.4; color: var(--text-faint); }
+.desktop-permissions--embedded .desktop-permissions-row-actions { flex-direction: row; align-items: center; gap: 10px; }
+.desktop-permissions--embedded .btn { white-space: nowrap; }
+/* 断点同 base.css 的 .settings-control-row(820px):嵌入时跟宿主面板的行一起改上下排、控件靠左。 */
+@media (max-width: 820px) {
+  .desktop-permissions--embedded .desktop-permissions-row-actions { flex-basis: 100%; margin-left: 0; justify-content: flex-start; }
+}
+
 @media (max-width: 600px) {
   .desktop-permissions-section { padding-inline: 12px; }
   .desktop-permissions-row-actions { flex-basis: 100%; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; padding-left: 28px; }
+  .desktop-permissions--embedded .desktop-permissions-row-actions { padding-left: 0; }
 }

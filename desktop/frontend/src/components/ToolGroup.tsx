@@ -9,9 +9,27 @@ import { ChevronRight, ChevronDown, XCircle, CheckCircle2, Terminal } from 'luci
 import { AnimatedCollapse } from './AnimatedUI'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
 import type { ToolEvent } from '../types'
 import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
+
+registerMessages({
+  'tool.verb.readComputerHistory': { zh: '读取电脑历史', en: 'Read computer history' },
+  'tool.computerHistory.notSaved': {
+    zh: '电脑历史摘录已交给模型，不会保存在对话记录里。',
+    en: 'The computer history excerpt was passed to the model and isn’t saved in the conversation.',
+  },
+})
+
+/**
+ * 电脑历史:引擎只把占位句落库、也只把它推给渲染层(capabilities.persistPlaceholder;全文只进那一轮的模型上下文),
+ * 那句英文不给人看 —— 成功结果一律换成本地化说明。认工具名不认占位原文(引擎可以改措辞);出错结果照原样显示(那是真原因)。
+ */
+const COMPUTER_HISTORY_TOOL = 'read_computer_history'
+function toolResultText(ev: ToolEvent, t: (key: string) => string): string {
+  if (ev.name === COMPUTER_HISTORY_TOOL && !ev.isError) return t('tool.computerHistory.notSaved')
+  return ev.result || t('tool.empty')
+}
 
 type Kind = 'write' | 'edit' | 'run' | 'read' | 'search' | 'browse' | 'other'
 interface Desc { kind: Kind; verbKey: string; target: string; adds?: number; dels?: number; isFile: boolean }
@@ -75,6 +93,8 @@ export function describeTool(ev: ToolEvent): Desc {
       return { kind: 'search', verbKey: 'tool.verb.searched', target: String(a.query ?? ''), isFile: false }
     case 'web_fetch':
       return { kind: 'browse', verbKey: 'tool.verb.browsed', target: String(a.url ?? ''), isFile: false }
+    case COMPUTER_HISTORY_TOOL:
+      return { kind: 'read', verbKey: 'tool.verb.readComputerHistory', target: String(a.query ?? a.app ?? ''), isFile: false }
     default:
       if (ev.name.startsWith('browser_')) return { kind: 'browse', verbKey: 'tool.verb.browsed', target: String(a.url ?? a.text ?? ev.name.replace('browser_', '')), isFile: false }
       return { kind: 'other', verbKey: '', target: typeof a.command === 'string' ? a.command : typeof a.path === 'string' ? a.path : typeof a.query === 'string' ? a.query : (ev.arguments || '').slice(0, 80), isFile: false }
@@ -128,7 +148,7 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean }> = ({ ev
               )}
             </>
           ) : ev.arguments ? (<><div className="label">{t('tool.argsLabel')}</div>{fmtArgs(ev.arguments)}</>) : null}
-          {ev.result !== undefined && (<><div className="label">{t('tool.resultLabel')}</div>{ev.result || t('tool.empty')}</>)}
+          {ev.result !== undefined && (<><div className="label">{t('tool.resultLabel')}</div>{toolResultText(ev, t)}</>)}
         </div>
       </AnimatedCollapse>
     </div>
