@@ -1,6 +1,7 @@
 import { unitConfigFace } from './unitConfigFace'
 import { MCP_NAME_RESERVED, newReservedMcpNames } from '../shared/mcpNames'
 import { buildUnitScopeGuard, openUnitHostFile, withVerifiedUnitPath } from './unitHostScope'
+import { composeUnitRoots, createFileProjectRegistry, createUnitSessionRoots, seedGatedEngine, type LocalProjectRegistry, type UnitSessionRootsSource } from './unitLocalRoots'
 import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/hostSandboxConfig'
 import { startMiniCursorFollow, readComputerUseForeground, cursorPanelTarget } from './miniCursorFollow'
 import { startMiniAutoPanel } from './miniAutoPanel'
@@ -897,41 +898,37 @@ async function statPathImpl(p: string): Promise<{ isDir: boolean; mtimeMs: numbe
   } catch { return null }
 }
 
-/** host 会话的 project_path 集合(realpath 后):/unit/hostfile 的白名单根扩展。
- *  引擎在 loopback,15s 缓存防抖;引擎没起/拉取失败=空集(只剩工作区+vault 两根,不放大)。 */
-let unitSessionRootsCache: { at: number; roots: string[] } = { at: 0, roots: [] }
-async function unitSessionRoots(): Promise<string[]> {
-  if (Date.now() - unitSessionRootsCache.at < 15_000) return unitSessionRootsCache.roots
-  const roots: string[] = []
-  try {
-    const st = backend.getStatus()
-    if (st.state === 'ready' && st.url) {
-      const r = await fetch(`${st.url}/agent/sessions?limit=500`, {
-        headers: { Authorization: `Bearer ${backend.getToken()}` },
-        signal: AbortSignal.timeout(3000),
-      })
-      if (r.ok) {
-        const d = (await r.json()) as unknown
-        const rows = Array.isArray(d) ? d : ((d as { sessions?: unknown[] })?.sessions ?? [])
-        for (const row of rows as Array<{ project_path?: string | null }>) {
-          if (row?.project_path) { try { roots.push(realpathSync(row.project_path)) } catch { /* 目录已删 */ } }
-        }
-      }
-    }
-  } catch { /* 引擎不可达 = 空集 */ }
-  unitSessionRootsCache = { at: Date.now(), roots: [...new Set(roots)] }
-  return unitSessionRootsCache.roots
+/** 本机确认过的项目根(/unit/host* 会话根的准入,Codex 终审 out1 #2):原生目录选择框的结果 + 一次性种子。
+ *  存 userData 下独立文件 —— 不在 config:set / /unit/config 能写的配置里。规则见 unitLocalRoots.ts 文件头。 */
+let unitLocalRegistry: LocalProjectRegistry | null = null
+function localProjectRegistry(): LocalProjectRegistry {
+  return (unitLocalRegistry ??= createFileProjectRegistry(join(app.getPath('userData'), 'unit-local-project-roots.json')))
+}
+/** host 会话行的来源(引擎在 loopback,15s 缓存防抖;引擎没起 / 拉取失败 = 空集,只剩工作区 + vault 两根,不放大)。 */
+let unitRootsSource: UnitSessionRootsSource | null = null
+function unitSessionRootsSource(): UnitSessionRootsSource {
+  return (unitRootsSource ??= createUnitSessionRoots({
+    engine: () => {
+      const st = backend.getStatus()
+      return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken() }
+    },
+    registry: localProjectRegistry(),
+    log: (m) => console.log(m),
+  }))
 }
 
-/** /unit/host{file,dir,stat} 三端点共用的钳制上下文:roots = 工作区 ∪ vault ∪ host 会话根,default-deny。
- *  会话根是远端经允许清单可写的 project_path —— 过滤掉 `/`、家目录、受保护目录的祖先;受保护路径(Forsion 家目录 /
- *  引擎 home / userData / 通用凭据库)无条件拒(契约 C4,评审 A-desktop#1)。规则与「校验和读取绑同一对象」的
- *  竞态防线都在 unitHostScope.ts(vitest 直测):文件读走 openUnitHostFile,目录 / stat 走 withVerifiedUnitPath。 */
+/** /unit/host{file,dir,stat} 三端点共用的钳制上下文:roots = 工作区 ∪ vault ∪ **本机确认过的**会话根,default-deny。
+ *  会话根:无远程标记、且 realpath 落在本机根(工作区 / vault / Coding Studio 项目根 / 本机登记表)里的 project_path
+ *  (unitLocalRoots.ts);再过 `/`、家目录、受保护目录祖先的过滤;受保护路径(Forsion 家目录 / 引擎 home / userData /
+ *  通用凭据库)无条件拒(契约 C4,评审 A-desktop#1)。「校验和读取绑同一对象」的竞态防线在 unitHostScope.ts(vitest 直测):
+ *  文件读走 openUnitHostFile,目录 / stat 走 withVerifiedUnitPath。 */
 async function unitScopeCtx(): Promise<{ roots: { base: string[]; session: string[] }; env: { home: string }; guard: ReturnType<typeof buildUnitScopeGuard> }> {
   const stored = await loadConfig()
   const base: string[] = []
   try { base.push(realpathSync(await ensureDefaultWorkspaceDir(stored))) } catch { /* 无工作区 */ }
   try { const vr = amadeusVaultFace?.root(); if (vr) base.push(realpathSync(vr)) } catch { /* 无库 */ }
+  const localExtra: string[] = []
+  try { localExtra.push(realpathSync(join(forsionWorkspaceDir(), 'Project'))) } catch { /* Coding Studio 没建过项目 */ }
   const guard = buildUnitScopeGuard({
     home: homedir(),
     forsionHome: forsionHomeDir(),
@@ -939,7 +936,9 @@ async function unitScopeCtx(): Promise<{ roots: { base: string[]; session: strin
     userData: app.getPath('userData'),
     appData: app.getPath('appData'),
   })
-  return { roots: { base, session: await unitSessionRoots() }, env: { home: homedir() }, guard }
+  const env = { home: homedir() }
+  const roots = await composeUnitRoots({ base, localExtra, registry: localProjectRegistry(), source: unitSessionRootsSource(), env, guard })
+  return { roots, env, guard }
 }
 
 /** 按当前配置起停/重建 unitWeb + unitHost(开关/cloudUrl/账号变化后调;幂等)。
@@ -970,11 +969,13 @@ async function doRefreshUnitHost(): Promise<void> {
     instanceId = randomUUID()
     await saveConfig({ unitInstanceId: instanceId })
   }
+  // 本机项目根种子没做完之前,远端的 /engine 一律 503(seedGatedEngine):远端没有窗口抢在种子之前改 project_path。
+  void localProjectRegistry().ready().then(() => unitSessionRootsSource().ensureSeeded())
   const webDeps = {
-    getEngine: () => {
+    getEngine: seedGatedEngine(() => {
       const st = backend.getStatus()
       return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken(), remoteMark: backend.remoteMarkSecret() }
-    },
+    }, unitSessionRootsSource()),
     confirmPair: async (info: { name: string; code: string; ip: string }): Promise<boolean> => {
       // 开发测试后门:**双闸**——非打包(app.isPackaged=false)且显式 FORSION_UNIT_AUTO_PAIR=1,
       // 才自动批准免手点。任一缺失都走下面的真弹框。⚠️ 这道闸绝不能变成无条件/进发布包:
@@ -2279,7 +2280,10 @@ app.whenReady().then(async () => {
     const r = win
       ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'], title: '选择 Agent 工作目录' })
       : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'], title: '选择 Agent 工作目录' })
-    return r.canceled || !r.filePaths.length ? null : r.filePaths[0]
+    if (r.canceled || !r.filePaths.length) return null
+    // 本机原生选择框选的目录 = 本机确认过的项目根(设备页没有这个桥):/unit/host* 才认开在这里的会话(unitLocalRoots.ts)。
+    await localProjectRegistry().add([r.filePaths[0]]).catch((e) => console.error('[unit] 登记本机项目根失败:', e))
+    return r.filePaths[0]
   })
 
   // Chat Box「添加文件或文件夹」：一个系统面板允许多选文件 / 目录，并把类型一并回给 renderer。
