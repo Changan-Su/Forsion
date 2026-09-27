@@ -230,7 +230,7 @@ const api = {
   discoveryScan: (): Promise<any> => ipcRenderer.invoke('discovery:scan'),
   discoveryImportSkills: (ids: string[]): Promise<{ imported: string[] }> =>
     ipcRenderer.invoke('discovery:importSkills', ids),
-  discoveryImportMcp: (names: string[]): Promise<{ imported: string[] }> =>
+  discoveryImportMcp: (names: string[]): Promise<{ imported: string[]; reserved?: string[] }> =>
     ipcRenderer.invoke('discovery:importMcp', names),
   // ── 拖入式主题(~/.tangu/themes/;主进程读盘成字符串,渲染端 <style> 注入)──
   listThemes: (): Promise<Array<{ id: string; manifest: Record<string, any>; css: string }>> =>

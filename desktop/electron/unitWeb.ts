@@ -5,13 +5,19 @@
  * 双层通路共用这一个面:
  *   T1 局域网直连(无需 Forsion 登录):Bearer 配对令牌(6 位码双侧比对后发放,库存 hash,可回收);
  *   T2 server 隧道(unitHost 转发):per-boot 随机内部密钥头 + 仅接受 loopback 来源(server 已验 owner)。
+ *   P2P 直连(unitP2p 执行器转发):**另一把** per-boot 密钥头(x-unit-p2p),同样只认 loopback —— 与隧道分钥,
+ *   否则 unitWeb 分不清请求走的是哪条通路(设备能力 MCP 方案 §6.2-8)。
  * 安全铁律:引擎永远只听 127.0.0.1,本服务反代时盖引擎 token;配对令牌绝不进引擎。
+ * /engine/* 是 **default-deny 允许清单**(方案 §6.6):表由 scripts/gen-engine-routes.mjs 从引擎源码生成
+ * (engineRoutes.generated.ts),只放行 allow 行;其余一律 403 LOCAL_ONLY。放行的请求盖远端来源标记
+ * `x-forsion-remote: tunnel|p2p|lan` + `x-forsion-remote-mark`(per-boot 密钥,引擎据 TANGU_REMOTE_MARK_SECRET 验),
+ * 入站同名头一律不透传(契约 C1)。
  *
  * ⚠️ 刻意零 electron 依赖(deps 注入):vitest 直接跑真 HTTP 全链(scripts 之外的脊柱测试
  * electron/unitWeb.test.ts —— 配对/鉴权/反代盖章/SSE 直通都在那里钉)。
  */
 import http from 'node:http'
-import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto'
 import { extname, normalize, sep } from 'node:path'
 import { readFile, realpath } from 'node:fs/promises'
 import { createReadStream } from 'node:fs'
@@ -20,6 +26,7 @@ import type { Duplex } from 'node:stream'
 import { IPC } from '../shared/amadeus/ipc'
 import type { VaultFace } from './amadeus/ipc'
 import { PRODUCT, type ProductProfile } from './product'
+import { ENGINE_ROUTES } from './engineRoutes.generated'
 
 export interface PairedDevice { id: string; name: string; tokenHash: string; createdAt: number }
 
@@ -43,6 +50,86 @@ export const VAULT_RPC_ALLOW: ReadonlySet<string> = new Set([
   IPC.pluginDataRead, IPC.pluginDataWrite, IPC.patchMark,
 ])
 
+/** VAULT_RPC_ALLOW 里**只许本机**的子集:不可逆删除(清空废纸篓 / 彻底删除条目)。远端来路回 403 LOCAL_ONLY;
+ *  便携 Unit 的工作区主人(projection local)不受限(见 ownerProjection)。 */
+export const VAULT_RPC_LOCAL_ONLY: ReadonlySet<string> = new Set([IPC.emptyTrash, IPC.deleteTrashEntry])
+
+/** 进入本机 unitWeb 的三条远端通路(契约 C1 的 x-forsion-remote 取值)。 */
+export type UnitIngress = 'tunnel' | 'p2p' | 'lan'
+
+/** 隧道(unitHost)与 P2P 执行器(unitP2p)各自盖的内部密钥头。 */
+export const UNIT_INTERNAL_HEADER = 'x-unit-internal'
+export const UNIT_P2P_HEADER = 'x-unit-p2p'
+
+/** 引擎路由里远端不许用的回包(设备页据 code 出本地化提示,见 frontend services/localOnly.ts)。 */
+const LOCAL_ONLY_BODY = { code: 'LOCAL_ONLY', detail: 'This action is only available on the device itself' }
+
+/**
+ * 路径里**只认** RFC 3986 的 pchar(未保留字符 + sub-delims + `:` `@`)和 `/`,百分号必须带两位十六进制。
+ * 白名单而不是黑名单:匹配器与引擎 Express(parseurl)对同一串理解不同的来源都在白名单之外 ——
+ * `#`(parseurl 遇到它退回 url.parse,把 `#` 之后截成 hash,路由看到的是更短的路径)、空白 / 0xA0 / 0xFEFF
+ * (同样触发 url.parse,还会被 trim)、反斜杠(url.parse 改写成 `/`)、非 ASCII、控制字符。
+ */
+const ENGINE_PATH_CHARS = /^(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$/
+/** query 不参与路由、原样转发,但它和 path 一起进 http.request,再被引擎的 parseurl 解析:只许可见 ASCII
+ *  (`#` 另行整串拒)—— 空白 / 0xA0 / 0xFEFF / 非 ASCII 会让 parseurl 退回 url.parse 分支。比 path 宽:
+ *  浏览器的 WHATWG URL 不转义 query 里的 `{}|^[]` 等,收成 pchar 会误伤正常请求。 */
+const ENGINE_QUERY_CHARS = /^[\x21-\x7e]*$/
+
+/**
+ * /engine 之后的路径规整(匹配与转发**用同一份**,引擎看到的就是我们判过的):
+ * 折叠重复斜杠、去尾斜杠;保守字符集之外的任何字符(含 `#`)、编码斜杠 / 编码反斜杠 / 编码点、`.` `..` 段
+ * 一律拒(null)—— 这些是「匹配器与 Express 路由对同一串理解不同」的来源。大小写保留(参数里的 id 区分
+ * 大小写),匹配时再降。
+ */
+export function normalizeEnginePath(raw: string): string | null {
+  if (!ENGINE_PATH_CHARS.test(raw)) return null
+  if (/%(?:2f|5c|2e)/i.test(raw)) return null
+  const segs = raw.split('/').filter((x) => x !== '')
+  if (segs.some((x) => x === '.' || x === '..')) return null
+  return '/' + segs.join('/')
+}
+
+/**
+ * 远端 /engine 请求目标(`/engine` 之后、含 query)→ 转给引擎的那一串,或 null(400 BAD_PATH)。
+ * `#` 出现在请求目标的**任何位置**都拒:浏览器 / fetch 从不把片段发上线,只有手搓的原始 HTTP 客户端会,
+ * 而它正是 Express 与我们分歧的那个口子(评审 A-desktop#0:三条 deny 路由经 `#` 被打穿)。
+ * 返回值 = 被 engineRouteAccess 判过的 path + 原样 query;调用方只转发它,不再从 req.url 另取。
+ */
+export function engineTarget(rawAfterEngine: string): { path: string; query: string } | null {
+  if (rawAfterEngine.includes('#')) return null
+  const q = rawAfterEngine.indexOf('?')
+  const rawPath = q >= 0 ? rawAfterEngine.slice(0, q) : rawAfterEngine
+  const query = q >= 0 ? rawAfterEngine.slice(q) : ''
+  if (query && !ENGINE_QUERY_CHARS.test(query.slice(1))) return null
+  const path = normalizeEnginePath(rawPath)
+  return path ? { path, query } : null
+}
+
+const escapeRe = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+const COMPILED_ROUTES = ENGINE_ROUTES.map((r) => ({
+  method: r.method,
+  access: r.access,
+  re: new RegExp('^' + r.path.split('/').map((seg) => (seg.startsWith(':') ? '[^/]+' : escapeRe(seg.toLowerCase()))).join('/') + '$'),
+}))
+
+/**
+ * 规整后路径的远端可达性。HEAD 按 GET 行判(Express 同样把 HEAD 交给 GET 处理器)。
+ * 同一请求命中多行(字面段 vs :param)时**任一行是 deny 即拒** —— 不去复刻 Express 的注册顺序。
+ * unknown = 表里没有(拼错的路径、运行期插件贡献的路由):调用方同样按拒绝处理。
+ */
+export function engineRouteAccess(method: string, normPath: string): 'allow' | 'deny' | 'unknown' {
+  const m = method.toUpperCase() === 'HEAD' ? 'GET' : method.toUpperCase()
+  const p = normPath.toLowerCase()
+  let allowed = false
+  for (const r of COMPILED_ROUTES) {
+    if (r.method !== m || !r.re.test(p)) continue
+    if (r.access !== 'allow') return 'deny'
+    allowed = true
+  }
+  return allowed ? 'allow' : 'unknown'
+}
+
 /** RPC 里字节参数/返回值的 JSON 包裹形态(Uint8Array ↔ base64)。 */
 const decodeRpcArgs = (args: unknown[]): unknown[] =>
   args.map((a) => (a && typeof a === 'object' && typeof (a as { __u8?: unknown }).__u8 === 'string')
@@ -59,8 +146,9 @@ export interface UnitWebDeps {
   /** Optional generic backend contributions. true means the request was accepted. */
   routeRequest?: (req: http.IncomingMessage, res: http.ServerResponse) => boolean | Promise<boolean>
   routeUpgrade?: (req: http.IncomingMessage, socket: Duplex, head: Buffer) => boolean
-  /** 本机 managed 引擎(未就绪 url=null → /engine 回 503)。 */
-  getEngine: () => { url: string | null; token: string }
+  /** 本机 managed 引擎(未就绪 url=null → /engine 回 503)。token = 本机引擎令牌(TANGU_LOCAL_TOKEN,契约 C2);
+   *  remoteMark = 远端来源标记密钥(TANGU_REMOTE_MARK_SECRET,契约 C1),缺省则只盖来源不盖标记。 */
+  getEngine: () => { url: string | null; token: string; remoteMark?: string }
   /** B 侧原生确认框:展示设备名+6 位码,用户点允许=true。 */
   confirmPair: (info: { name: string; code: string; ip: string }) => Promise<boolean>
   pairedDevices: {
@@ -99,6 +187,8 @@ export interface UnitWebHandle {
   port: number
   /** 隧道(unitHost)豁免鉴权用的 per-boot 内部密钥;仅 loopback 来源有效。 */
   internalSecret: string
+  /** P2P 执行器(attachHostChannel)专用的 per-boot 密钥(x-unit-p2p);与隧道分钥,仅 loopback 有效。 */
+  p2pSecret: string
   close: () => Promise<void>
 }
 
@@ -122,6 +212,14 @@ const MIME: Record<string, string> = {
 const isLoopback = (addr: string | undefined): boolean =>
   addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'
 
+/** 内部密钥头比对(定长比较;缺头 / 多值头 / 长度不符一律不等)。 */
+const secretEq = (got: string | string[] | undefined, want: string): boolean => {
+  if (typeof got !== 'string' || !want) return false
+  const a = Buffer.from(got)
+  const b = Buffer.from(want)
+  return a.length === b.length && timingSafeEqual(a, b)
+}
+
 /** 缺 web 构建时的提示页(只会出现在 dev:打包链前置构建 + builder 缺产物即失败)。 */
 const PLACEHOLDER = `<!doctype html><meta charset="utf-8"><title>Forsion Unit</title>
 <body style="font-family:system-ui;max-width:560px;margin:80px auto;line-height:1.7">
@@ -136,6 +234,11 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     throw new Error('Projection basePath must be an absolute path ending in /')
   }
   const internalSecret = randomUUID()
+  const p2pSecret = randomBytes(32).toString('hex')
+  /** 便携 Unit 的本地投影(projection local)里,唯一能过鉴权的是工作区主人的访问密钥 —— 那是主人自己的界面,
+   *  不是「另一台设备」:/engine 维持直通、不盖远端标记,不可逆 vault 删除照常可用。桌面(main.ts)从不传 projection,
+   *  所以桌面的三条远端通路恒走允许清单(unitWeb.test 两个方向都钉住)。 */
+  const ownerProjection = deps.projection?.mode === 'local'
   const pending = new Map<string, PendingPair>()
   const pendingByIp = new Map<string, string>()
   // 短时资源令牌(<img>/EventSource 带不了 Authorization → ?at= 查询串;照 amadeus-cloud 先例)。
@@ -155,15 +258,18 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     for (const [t, rec] of assetTokens) if (rec.exp < now) assetTokens.delete(t)
   }
 
-  /** 鉴权:配对令牌(hash 比对)或「loopback + 内部密钥」(隧道,server 已验 owner)。
-   *  返回来路:internal=隧道;pairHash=命中的配对记录(回收后再验即失败)。 */
-  const authInfo = (req: http.IncomingMessage): { ok: boolean; pairHash: string | null } => {
-    if (req.headers['x-unit-internal'] === internalSecret && isLoopback(req.socket.remoteAddress)) return { ok: true, pairHash: null }
+  /** 鉴权:配对令牌(hash 比对)或「loopback + 内部密钥」(隧道 / P2P 各一把,server 已验 owner / 信令来路背书)。
+   *  返回来路:via=哪条通路;pairHash=命中的配对记录(回收后再验即失败;隧道与 P2P 为 null)。 */
+  const authInfo = (req: http.IncomingMessage): { ok: boolean; pairHash: string | null; via: UnitIngress | null } => {
+    if (isLoopback(req.socket.remoteAddress)) {
+      if (secretEq(req.headers[UNIT_INTERNAL_HEADER], internalSecret)) return { ok: true, pairHash: null, via: 'tunnel' }
+      if (secretEq(req.headers[UNIT_P2P_HEADER], p2pSecret)) return { ok: true, pairHash: null, via: 'p2p' }
+    }
     const m = /^Bearer (.+)$/.exec(String(req.headers.authorization || ''))
-    if (!m) return { ok: false, pairHash: null }
+    if (!m) return { ok: false, pairHash: null, via: null }
     const h = sha256(m[1])
     const hit = deps.pairedDevices.list().some((d) => d.tokenHash === h)
-    return { ok: hit, pairHash: hit ? h : null }
+    return { ok: hit, pairHash: hit ? h : null, via: hit ? 'lan' : null }
   }
   const authed = (req: http.IncomingMessage): boolean => authInfo(req).ok
 
@@ -205,8 +311,10 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       req.on('error', reject)
     })
 
-  /** /engine/* 反代:剥外来身份、盖本机引擎 token,请求/响应双向原始管道(SSE 天然直通)。 */
-  const proxyEngine = (req: http.IncomingMessage, res: http.ServerResponse, path: string): void => {
+  /** /engine/* 反代:剥外来身份、盖本机引擎 token,请求/响应双向原始管道(SSE 天然直通)。
+   *  via 非空 = 远端来路:盖 x-forsion-remote(+ 标记密钥)。头是**白名单拷贝**,入站的 x-forsion-remote*
+   *  (以及一切别的头)根本不会被带过去 —— 远端没法把自己伪装成别的通路或本机。 */
+  const proxyEngine = (req: http.IncomingMessage, res: http.ServerResponse, path: string, via: UnitIngress | null): void => {
     const engine = deps.getEngine()
     if (!engine.url) { json(res, 503, { detail: '本机引擎未就绪', code: 'ENGINE_NOT_READY' }); return }
     const target = new URL(engine.url)
@@ -214,6 +322,10 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     for (const k of ['content-type', 'accept', 'content-length'] as const) {
       const v = req.headers[k]
       if (typeof v === 'string') headers[k] = v
+    }
+    if (via) {
+      headers['x-forsion-remote'] = via
+      if (engine.remoteMark) headers['x-forsion-remote-mark'] = engine.remoteMark
     }
     const up = http.request({
       host: target.hostname,
@@ -410,7 +522,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       const p = String(new URL(url, 'http://x').searchParams.get('path') || '')
       // 隧道来的请求(unitHost 带内部密钥):响应还要整体再 base64 进 10MB 信封,原文超 ~4MB 就撑爆
       // → 传更小上限,超限走 tooLarge(渲染层有兜底 UI)而不是超时(Codex P2)。
-      const viaTunnel = typeof req.headers['x-unit-internal'] === 'string'
+      const viaTunnel = authInfo(req).via === 'tunnel'
       const f = await deps.readHostFile(p, viaTunnel ? 4 * 1024 * 1024 : undefined)
       if (!f) { json(res, 404, { detail: 'not readable' }); return }
       json(res, 200, f)
@@ -435,8 +547,15 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       return
     }
     if (path === '/engine' || path.startsWith('/engine/')) {
-      if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
-      proxyEngine(req, res, url.slice('/engine'.length) || '/')
+      const info = authInfo(req)
+      if (!info.ok) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
+      if (ownerProjection) { proxyEngine(req, res, url.slice('/engine'.length) || '/', null); return }
+      // default-deny 允许清单:规整后的路径既用来判,也原样转给引擎(query 不动)。判的是**整个请求目标**
+      // (url,不是按 `?` 切过的 path):`#` 可能藏在 query 之后,也可能藏在路径里。
+      const target = engineTarget(url.slice('/engine'.length))
+      if (!target) { json(res, 400, { detail: 'Ambiguous engine path', code: 'BAD_PATH' }); return }
+      if (engineRouteAccess(req.method || 'GET', target.path) !== 'allow') { json(res, 403, LOCAL_ONLY_BODY); return }
+      proxyEngine(req, res, target.path + target.query, info.via)
       return
     }
 
@@ -455,6 +574,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
         try { body = JSON.parse(await readBody(req, 32 * 1024 * 1024)) } catch { json(res, 400, { detail: 'bad body' }); return }
         const ch = String(body.ch || '')
         if (!VAULT_RPC_ALLOW.has(ch)) { json(res, 400, { detail: `通道不可远程调用: ${ch}`, code: 'VAULT_CH_DENIED' }); return }
+        if (!ownerProjection && VAULT_RPC_LOCAL_ONLY.has(ch)) { json(res, 403, LOCAL_ONLY_BODY); return }
         // 远端客户端自报 clientId → 事件 origin(回声按 origin 判);走 body 因为隧道信封不带自定义头;限长防注水。
         const origin = String(body.client || '').slice(0, 64) || null
         try {
@@ -510,7 +630,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
         const bearerInfo = viaAt ? null : authInfo(req)
         const stillAuthed = (): boolean => (viaAt ? assetTokenLive(at)
           : bearerInfo?.pairHash != null ? deps.pairedDevices.list().some((d) => d.tokenHash === bearerInfo.pairHash)
-          : true) // 内部密钥(隧道):per-boot 常量,server 已验 owner
+          : true) // 内部密钥(隧道 / P2P):per-boot 常量,server 已验 owner / 信令来路背书
         res.writeHead(200, {
           'Content-Type': 'text/event-stream',
           'Cache-Control': 'no-cache, no-transform',
@@ -560,6 +680,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       resolve({
         port,
         internalSecret,
+        p2pSecret,
         close: () => new Promise<void>((r) => { server.close(() => r()); for (const socket of sockets) socket.destroy() }),
       })
     })

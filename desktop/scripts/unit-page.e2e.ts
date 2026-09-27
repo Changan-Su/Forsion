@@ -43,10 +43,10 @@ function check(name: string, ok: boolean, detail?: string): void {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`)
 }
 
-function fakeEngine(): Promise<{ url: string; seen: Array<{ path: string; auth: string }>; close(): void }> {
-  const seen: Array<{ path: string; auth: string }> = []
+function fakeEngine(): Promise<{ url: string; seen: Array<{ path: string; auth: string; remote: string; mark: string }>; close(): void }> {
+  const seen: Array<{ path: string; auth: string; remote: string; mark: string }> = []
   const server = http.createServer((req, res) => {
-    seen.push({ path: req.url || '', auth: String(req.headers.authorization || '') })
+    seen.push({ path: req.url || '', auth: String(req.headers.authorization || ''), remote: String(req.headers['x-forsion-remote'] || ''), mark: String(req.headers['x-forsion-remote-mark'] || '') })
     if (req.url === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json' })
       res.end(JSON.stringify({ ok: true, sandbox: 'none', version: 'e2e' }))
@@ -106,7 +106,7 @@ async function main(): Promise<void> {
     return r
   }
   const handle = await startUnitWeb({
-    getEngine: () => ({ url: engine.url, token: 'ENGINE_TOKEN' }),
+    getEngine: () => ({ url: engine.url, token: 'ENGINE_TOKEN', remoteMark: 'E2E_REMOTE_MARK' }),
     confirmPair: async (info) => { pairCode = info.code; return true }, // B 侧自动点「允许」
     pairedDevices: { list: () => paired, add: async (d) => { paired.push(d) } },
     readPlugins: async () => {
@@ -183,6 +183,18 @@ async function main(): Promise<void> {
     for (let i = 0; i < 20 && engine.seen.length === 0; i++) await new Promise((r) => setTimeout(r, 500))
     const stamped = engine.seen.every((s) => s.auth === 'Bearer ENGINE_TOKEN')
     check('引擎调用到达且全部盖引擎 token', engine.seen.length > 0 && stamped, `hits=${engine.seen.length}`)
+    // 5b 远端来源标记(契约 C1):局域网配对来路 = lan,且带本机标记密钥(引擎据此认「远端」)
+    check('引擎调用全部盖远端来源标记 x-forsion-remote: lan + 标记密钥', engine.seen.every((s) => s.remote === 'lan' && s.mark === 'E2E_REMOTE_MARK'),
+      JSON.stringify([...new Set(engine.seen.map((s) => `${s.remote}|${s.mark}`))]))
+    // 5c default-deny 允许清单:页面里直接打「只许本机」的引擎路由 → 403 LOCAL_ONLY,一个字节都进不了引擎
+    const hitsBefore = engine.seen.length
+    const denied = await page.evaluate(async () => {
+      const token = (window as any).__FORSION_UNIT_TOKEN__ || '' // unitShim 挂出的本页配对令牌
+      const r = await fetch(new URL('engine/agent/plugins/install', document.baseURI), { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: '{}' })
+      return { status: r.status, code: ((await r.json().catch(() => ({}))) as { code?: string }).code }
+    })
+    check('设备页打「只许本机」引擎路由(装插件)→ 403 LOCAL_ONLY 且到不了引擎',
+      denied.status === 403 && denied.code === 'LOCAL_ONLY' && !engine.seen.slice(hitsBefore).some((s) => s.path.includes('plugins/install')), JSON.stringify(denied))
 
     // 6 本地 vault 面:真页面里经真桥(window.amadeus → RPC → 白名单 → 派发)读写 B 的笔记
     const vaultRt = await page.evaluate(async () => {

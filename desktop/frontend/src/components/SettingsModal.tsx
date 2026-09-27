@@ -89,6 +89,7 @@ import { canvasDoubleClickFocusEnabled, canvasOverviewZoom, setCanvasDoubleClick
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { setChatWaitDetailsEnabled, useChatWaitDetailsEnabled } from '../chatWaitDetails'
 import { ipcErrorText } from '../ipcError'
+import { newReservedMcpNames } from '../../../shared/mcpNames'
 import { resolveSettingsTarget } from './settingsTarget'
 import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery, type SettingsSearchEntry } from './settingsSearchIndex'
 import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys, type SettingsEdits } from './settingsDraft'
@@ -653,7 +654,7 @@ export const SettingsModal: React.FC<{
     void window.tangu!.writeMcpConfig!({ mcpServers: next }).then((c) => {
       setMcpServers(c.mcpServers)
       setMcpMsg(msg)
-    }).catch((e) => setMcpMsg(`${t('settings.toast.saveFailed')}${e?.message || e}`))
+    }).catch((e) => setMcpMsg(`${t('settings.toast.saveFailed')}${ipcErrorText(e)}`)) // 原因码(如 mcp-name-reserved)译成当前语言
   }
 
   const refreshAuth = (): void => {
@@ -785,7 +786,8 @@ export const SettingsModal: React.FC<{
         window.tangu?.requestMainAction?.('skills-changed')
       }
       if (r2.imported.length) refreshMcp() // MCP 页同步看到导入项(未启用)
-      setDiscMsg(t('settings.discovery.importOk', { skills: r1.imported.length, mcp: r2.imported.length }))
+      const reserved = 'reserved' in r2 && r2.reserved?.length ? ` ${t('settings.discovery.mcpReserved', { names: r2.reserved.join(', ') })}` : ''
+      setDiscMsg(t('settings.discovery.importOk', { skills: r1.imported.length, mcp: r2.imported.length }) + reserved)
     } catch (e: any) {
       setDiscMsg(`${t('settings.discovery.importFailed')}${e?.message || e}`)
     } finally {
@@ -2815,6 +2817,11 @@ export const SettingsModal: React.FC<{
                             className="btn primary sm"
                             disabled={!editMcp.name || (!editMcp.command && !editMcp.url)}
                             onClick={() => {
+                              // 设备 MCP 保留命名空间(dev / dev_*):新名字当场拦下,盘上存量的放行(同主进程口径)
+                              if (newReservedMcpNames({ [editMcp.name]: true }, mcpServers).length) {
+                                setMcpMsg(t('ipcerr.mcpNameReserved', { detail: editMcp.name }))
+                                return
+                              }
                               const env: Record<string, string> = {}
                               for (const line of editMcp.envText.split('\n')) {
                                 const i = line.indexOf('=')

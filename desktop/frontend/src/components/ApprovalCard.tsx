@@ -8,13 +8,9 @@ import type { ApprovalRequest } from '../types'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
 import { useI18n } from '../i18n'
+import { alwaysAllowWorks, approvalReasonText, MODE_KEY } from '../approvalReason'
 
-/** 档位 id 是连字符(引擎口径),i18n 键是驼峰(既有) —— 映射写一处,别两边各拼各的。 */
-export const MODE_KEY: Record<string, string> = {
-  readonly: 'approval.mode.readonly',
-  'auto-edit': 'approval.mode.autoEdit',
-  'full-auto': 'approval.mode.fullAuto',
-}
+export { MODE_KEY }
 
 export const ApprovalCard: React.FC<{
   req: ApprovalRequest
@@ -30,17 +26,9 @@ export const ApprovalCard: React.FC<{
   const resolved = req.status !== 'pending'
   const diff = useMemo(() => (isBash ? null : toolDiffText(req.name, req.arguments)), [isBash, req.name, req.arguments])
 
-  // 引擎在这两种情形下**不会**把工具记进「总允许」(approvals.ts 明写:越界写每次都确认,
-  // custom 的 ask 是用户写死的「永远问我」)。按钮却照常显示 = 又一处「界面说一套引擎做一套」。
-  const alwaysWorks = req.reason?.kind !== 'escalate' && req.reason?.kind !== 'custom-ask'
-  const why = (() => {
-    const r = req.reason
-    if (!r) return ''
-    const m = r.mode && MODE_KEY[r.mode] ? t(MODE_KEY[r.mode] as any) : ''
-    if (r.kind === 'custom-ask') return t('approval.why.customAsk', { rule: r.rule || '' })
-    if (r.kind === 'escalate') return t('approval.why.escalate')
-    return m ? t('approval.why.mode', { mode: m }) : ''
-  })()
+  // 「总允许」对 escalate / custom-ask / protected 无效(引擎不落),按钮不给 —— 规则见 approvalReason.ts。
+  const alwaysWorks = alwaysAllowWorks(req.reason)
+  const why = approvalReasonText(req.reason, t as (k: string, v?: Record<string, unknown>) => string)
 
   const decide = (action: 'approve' | 'approve_always' | 'reject') => {
     if (resolved) return

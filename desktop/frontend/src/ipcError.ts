@@ -19,6 +19,7 @@ const KEYS: Record<string, string> = {
   'invalid-plugin-id': 'ipcerr.invalidPluginId',
   'not-user-plugin': 'ipcerr.notUserPlugin',
   'plugin-not-found': 'ipcerr.pluginNotFound',
+  'mcp-name-reserved': 'ipcerr.mcpNameReserved',
 }
 
 export function ipcErrorText(e: unknown): string {

@@ -36,6 +36,7 @@ import { deskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { registerMessages, translate, translationValues } from '../i18n'
 import { publishAccountQuota } from '../services/accountQuota'
+import { sanitizeApprovalReason } from '../approvalReason'
 
 // 本文件自带的词条片段(命名空间 `appstore.*`,与其它文件不重叠)。
 // store 活在 React 之外,取词一律走模块级 `translate`,不能用 hook。
@@ -1146,14 +1147,7 @@ export const useApp = create<AppState>((set, get) => ({
         break
       case 'approval_request': {
         // reason 白名单清洗:审批事件会持久化重放,一条畸形 payload 不清洗 = 每次渲染都炸(同 context_info 纪律)
-        const rk = pl.reason?.kind
-        const reason = rk === 'custom-ask' || rk === 'escalate' || rk === 'mode'
-          ? {
-            kind: rk as 'custom-ask' | 'escalate' | 'mode',
-            ...(typeof pl.reason.rule === 'string' && pl.reason.rule ? { rule: String(pl.reason.rule).slice(0, 200) } : {}),
-            ...(['readonly', 'auto-edit', 'full-auto'].includes(pl.reason.mode) ? { mode: pl.reason.mode } : {}),
-          }
-          : undefined
+        const reason = sanitizeApprovalReason(pl.reason)
         // 落点:团队成员的转发事件带 messageId(它本次激活的占位气泡)与子 runId;普通 run 落当前气泡(群聊里首位发言人的占位已被改名成持久 id,
         // 用闭包常量 assistantId 会落到一条不存在的消息上 —— 一律走 ref.current)。
         patchMessage(sessionId, targetOf(pl), (m) => ({

@@ -1,28 +1,34 @@
 /**
  * unitWeb 脊柱测试(真 HTTP 全链,零 electron):配对流(6 位码/限速/拒绝/令牌一次性)、
  * 鉴权(配对令牌 hash / loopback+内部密钥豁免)、/engine 反代盖章 + 请求体直通 + SSE 边收边转、
- * index.html unit 标记注入、路径穿越拒绝、缺构建提示页。
+ * index.html unit 标记注入、路径穿越拒绝、缺构建提示页;/engine default-deny 允许清单(路由分类表与引擎源码
+ * 逐条对齐)+ 三入口分钥 + 远端来源标记(契约 C1)。
  * 跑法:npx vitest run electron/unitWeb.test.ts
  */
 import { describe, it, expect } from 'vitest'
 import http from 'node:http'
+import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { IPC } from '@amadeus-shared/ipc'
 import type { VaultFace } from './amadeus/ipc'
-import { startUnitWeb, VAULT_RPC_ALLOW, type PairedDevice, type UnitWebDeps } from './unitWeb'
+import { startUnitWeb, VAULT_RPC_ALLOW, VAULT_RPC_LOCAL_ONLY, engineRouteAccess, engineTarget, normalizeEnginePath, type PairedDevice, type UnitWebDeps } from './unitWeb'
+import { ENGINE_ROUTES } from './engineRoutes.generated'
+import { PRODUCT } from './product'
 
-function fakeEngine(): Promise<{ url: string; gate: { release(): void }; seen: Array<{ path: string; auth: string; body: string }>; close(): void }> {
+type Seen = { method: string; path: string; auth: string; body: string; headers: http.IncomingHttpHeaders }
+function fakeEngine(): Promise<{ url: string; gate: { release(): void }; seen: Seen[]; close(): void }> {
   let release: () => void = () => {}
-  const seen: Array<{ path: string; auth: string; body: string }> = []
+  const seen: Seen[] = []
   const server = http.createServer((req, res) => {
     let body = ''
     req.on('data', (c) => { body += c })
     req.on('end', () => {
-      seen.push({ path: req.url || '', auth: String(req.headers.authorization || ''), body })
-      if (req.url?.startsWith('/agent/sse')) {
+      seen.push({ method: req.method || '', path: req.url || '', auth: String(req.headers.authorization || ''), body, headers: req.headers })
+      if (req.url?.startsWith('/agent/runs/sse-run/events')) {
         res.writeHead(200, { 'Content-Type': 'text/event-stream' })
         res.write('data: one\n\n')
         void new Promise<void>((r) => { release = r }).then(() => { res.write('data: two\n\n'); res.end() })
@@ -51,7 +57,7 @@ interface Boot {
   close: () => void
 }
 
-async function boot(distDir: string | null = null, vaultRoot?: string, p2pAnswer?: (sdp: string) => Promise<string>): Promise<Boot> {
+async function boot(distDir: string | null = null, vaultRoot?: string, p2pAnswer?: (sdp: string) => Promise<string>, extra?: Partial<UnitWebDeps>): Promise<Boot> {
   const engine = await fakeEngine()
   const paired: PairedDevice[] = []
   let approveFn: (ok: boolean) => void = () => {}
@@ -75,7 +81,7 @@ async function boot(distDir: string | null = null, vaultRoot?: string, p2pAnswer
     root: () => vaultRoot || null,
   }
   const deps: UnitWebDeps = {
-    getEngine: () => ({ url: engine.url, token: 'ENGINE_TOKEN' }),
+    getEngine: () => ({ url: engine.url, token: 'ENGINE_TOKEN', remoteMark: 'REMOTE_MARK' }),
     confirmPair: () => new Promise<boolean>((r) => { approveFn = r }),
     pairedDevices: { list: () => paired, add: async (d) => { paired.push(d) } },
     readPlugins: async () => [{ id: 'demo' }],
@@ -91,6 +97,7 @@ async function boot(distDir: string | null = null, vaultRoot?: string, p2pAnswer
     webDistDir: () => distDir,
     vault: () => vault,
     log: () => {},
+    ...extra,
   }
   const handle = await startUnitWeb(deps, { port: 0, bindHost: '127.0.0.1' })
   return {
@@ -193,15 +200,15 @@ describe('unitWeb', () => {
   it('/engine 反代:未配对 401;配对后盖引擎 token + 请求体直通;内部密钥(loopback)豁免', async () => {
     const b = await boot()
     try {
-      expect((await fetch(`${b.base}/engine/agent/echo`, { method: 'POST', body: '{}' })).status).toBe(401)
+      expect((await fetch(`${b.base}/engine/agent/runs`, { method: 'POST', body: '{}' })).status).toBe(401)
       const req = await (await fetch(`${b.base}/unit/pair/request`, { method: 'POST', body: JSON.stringify({ name: 'A' }) })).json() as any
       b.approve(true)
       await tick()
       const { token } = await (await fetch(`${b.base}/unit/pair/poll?id=${req.requestId}`)).json() as any
-      const r = await fetch(`${b.base}/engine/agent/echo`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ hello: '扶桑' }) })
+      const r = await fetch(`${b.base}/engine/agent/runs`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ hello: '扶桑' }) })
       expect(r.status).toBe(200)
       expect(((await r.json()) as any).echo).toContain('扶桑')
-      const hit = b.engine.seen.find((s) => s.path === '/agent/echo')!
+      const hit = b.engine.seen.find((s) => s.path === '/agent/runs')!
       expect(hit.auth).toBe('Bearer ENGINE_TOKEN') // 盖的是引擎 token,不是配对令牌
       // 内部密钥豁免(测试即 loopback 来源)
       const r2 = await fetch(`${b.base}/unit/plugins`, { headers: { 'x-unit-internal': b.handle.internalSecret } })
@@ -269,7 +276,7 @@ describe('unitWeb', () => {
       b.approve(true)
       await tick()
       const { token } = await (await fetch(`${b.base}/unit/pair/poll?id=${req.requestId}`)).json() as any
-      const r = await fetch(`${b.base}/engine/agent/sse`, { headers: { Authorization: `Bearer ${token}` } })
+      const r = await fetch(`${b.base}/engine/agent/runs/sse-run/events`, { headers: { Authorization: `Bearer ${token}` } })
       expect(String(r.headers.get('content-type'))).toContain('text/event-stream')
       const reader = r.body!.getReader()
       const dec = new TextDecoder()
@@ -437,5 +444,183 @@ describe('unitWeb', () => {
       // RPC 也过不了闸
       expect((await fetch(`${b.base}/vault/rpc`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ ch: IPC.listPages, args: [] }) })).status).toBe(401)
     } finally { b.close() }
+  })
+
+  // ── /engine default-deny 允许清单(设备能力 MCP 方案 §6.6 / 附录 C,P0 ③)──────────────────────
+
+  it('路由分类表与引擎源码逐条对齐:新增路由未分类 / 表过期 / 分类孤儿一律红', () => {
+    // 生成器从 tangu-agent/src 现抽 standalone 挂载的全部路由,与提交的 engineRoutes.generated.ts 逐字比对。
+    // 红了:在 desktop 下跑 `node scripts/gen-engine-routes.mjs`,给新路由在 CLASSIFICATION 里写 allow|deny-remote。
+    const r = spawnSync(process.execPath, [resolve(__dirname, '../scripts/gen-engine-routes.mjs'), '--check', '--json'], { encoding: 'utf8' })
+    let report: { ok: boolean; stale: boolean; unclassified: string[]; orphans: string[]; routes: number }
+    try { report = JSON.parse(r.stdout) } catch { throw new Error(`gen-engine-routes --check did not report: ${r.stderr || r.stdout}`) }
+    expect(report.unclassified).toEqual([])
+    expect(report.orphans).toEqual([])
+    expect(report.stale).toBe(false)
+    expect(report.ok).toBe(true)
+    expect(report.routes).toBe(ENGINE_ROUTES.length)
+    expect(ENGINE_ROUTES.every((x) => x.access === 'allow' || x.access === 'deny-remote')).toBe(true)
+  })
+
+  it('分类口径:远程会话主干放行、审批(D1/D2)放行;方案点名的危险面全部 deny-remote', () => {
+    const access = (key: string): string | undefined => {
+      const [method, path] = key.split(' ')
+      return ENGINE_ROUTES.find((x) => x.method === method && x.path === path)?.access
+    }
+    for (const k of [
+      'GET /health', 'POST /agent/runs', 'GET /agent/runs/:id/events', 'POST /agent/runs/:id/abort', 'POST /agent/runs/:id/steer',
+      'POST /agent/runs/:runId/approvals/:approvalId', 'POST /agent/runs/:runId/inquiries/:inquiryId',
+      'POST /agent/special/approvals/:id/approve', 'POST /agent/special/approvals/:id/reject', 'POST /agent/special/muse/todos/:id/approve',
+      'GET /agent/sessions', 'POST /agent/sessions', 'PATCH /agent/sessions/:id/config', 'GET /agent/models', 'GET /agent/agents',
+      'GET /agent/workspace/list', 'GET /agent/workspace/read', 'GET /agent/workspace/download', 'POST /agent/workspace/upload',
+      'GET /agent/special/config', // 渲染层的鉴权探针(AUTH_PROBE_PATH),拒了设备页连接判定会走样
+    ]) expect(access(k), k).toBe('allow')
+    for (const k of [
+      'POST /agent/plugins/install', 'PUT /agent/engines/:id', 'PUT /agent/channels/:kind/config', 'POST /agent/channels/:kind/connect',
+      'POST /agent/wechat/login/start', 'PUT /agent/approval-rules', 'PUT /agent/hooks', 'PUT /agent/websearch', 'POST /agent/providers/fetch-models',
+      'PUT /agent/models/overrides', 'POST /agent/agents', 'PATCH /agent/agents/:slug', 'PUT /agent/agents/:slug/memory',
+      'POST /agent/agents/:slug/memory/entries', 'POST /agent/agents/:slug/harness/rollback', 'PUT /agent/project-context/doc',
+      'POST /agent/skills/catalog/import', 'POST /agent/skills/upload', 'POST /agent/sessions/:id/checkpoints/restore',
+      'POST /agent/workspace/delete', 'POST /agent/sync', 'POST /agent/special/config', 'POST /agent/special/muse/triggers',
+      'POST /agent/special/automation/triggers/:id/fire', 'POST /agent/special/automation/kick',
+      'POST /agent/special/schedule/:slug/entries', 'POST /agent/special/muse/todos/inject', 'PUT /agent/sessions/:id/config',
+    ]) expect(access(k), k).toBe('deny-remote')
+  })
+
+  it('路径规整:折叠重复斜杠 / 去尾斜杠 / 保留大小写;编码斜杠、编码点、点段、反斜杠一律拒', () => {
+    expect(normalizeEnginePath('//agent//Runs/AbC/')).toBe('/agent/Runs/AbC')
+    expect(normalizeEnginePath('')).toBe('/')
+    for (const bad of ['/agent/runs/..%2fplugins', '/agent/runs/%2F', '/agent/%2e%2e/plugins', '/agent/%2E/x', '/agent/runs/../plugins/install', '/agent/./runs', '/agent\\plugins', '/agent/runs%5cx']) {
+      expect(normalizeEnginePath(bad), bad).toBeNull()
+    }
+    expect(engineRouteAccess('GET', '/agent/sessions')).toBe('allow')
+    expect(engineRouteAccess('HEAD', '/agent/sessions')).toBe('allow') // HEAD 按 GET 行判
+    expect(engineRouteAccess('GET', '/AGENT/Sessions')).toBe('allow') // Express 路由不分大小写
+    expect(engineRouteAccess('POST', '/Agent/Plugins/Install')).toBe('deny')
+    expect(engineRouteAccess('POST', '/agent/plugins/install/extra')).toBe('unknown')
+    expect(engineRouteAccess('OPTIONS', '/agent/sessions')).toBe('unknown')
+    expect(engineRouteAccess('POST', '/agent/runs/r-1/approvals/apv-Xy')).toBe('allow')
+  })
+
+  it('保守字符集(评审 A-desktop#0):`#`、空白、NBSP、非 ASCII、坏百分号一律拒;query 里的 `#` / 空白同样整串拒', () => {
+    const nbsp = String.fromCharCode(0xa0)
+    for (const bad of ['/agent/special/muse/todos/inject#/approve', '/agent/teams/#/session/open', '/agent/x#', `/agent/x${nbsp}`, '/agent/x y', '/agent/x\ty',
+      '/agent/x"y', '/agent/x<y', '/agent/x{y}', '/agent/x|y', '/agent/x^y', '/agent/x`y', '/agent/%zz', '/agent/%4', '/agent/中文']) {
+      expect(normalizeEnginePath(bad), JSON.stringify(bad)).toBeNull()
+    }
+    // pchar 全集放行(UUID / slug / 百分号编码的中文 / encodeURIComponent 不转义的 !'()*)
+    expect(normalizeEnginePath("/agent/agents/a-b_c.d~e!$&'()*+,;=:@/x%E4%B8%AD")).toBe("/agent/agents/a-b_c.d~e!$&'()*+,;=:@/x%E4%B8%AD")
+    expect(engineTarget('/agent/sessions?limit=5&q=a%2Fb')).toEqual({ path: '/agent/sessions', query: '?limit=5&q=a%2Fb' })
+    expect(engineTarget('/agent/sessions?q={a}|[b]')).toEqual({ path: '/agent/sessions', query: '?q={a}|[b]' }) // 浏览器不转义 query 里的这些
+    for (const bad of ['/agent/sessions?q=1#x', '/agent/inbox#?a=1', '/agent/sessions?q=a b', `/agent/sessions?q=${nbsp}`, '/agent/sessions#']) {
+      expect(engineTarget(bad), JSON.stringify(bad)).toBeNull()
+    }
+  })
+
+  /** 原样发一个不经 fetch 规整的请求(fetch 会先把 `..` 吃掉,测不到服务端)。 */
+  const raw = (base: string, method: string, path: string, headers: Record<string, string>): Promise<{ status: number; body: string }> =>
+    new Promise((res, rej) => {
+      const u = new URL(base)
+      const r = http.request({ host: u.hostname, port: u.port, method, path, headers }, (resp) => {
+        let body = ''
+        resp.on('data', (c) => { body += c })
+        resp.on('end', () => res({ status: resp.statusCode || 0, body }))
+      })
+      r.on('error', rej)
+      r.end()
+    })
+
+  it('default-deny:危险路由 / 未知路由 403 LOCAL_ONLY 且到不了引擎;歧义路径 400;放行的路径以规整形态转发、query 不动', async () => {
+    const b = await boot()
+    try {
+      const token = await pairUp(b)
+      const h = { Authorization: `Bearer ${token}` }
+      const before = b.engine.seen.length
+      for (const [method, path] of [
+        ['POST', '/engine/agent/plugins/install'],
+        ['POST', '/engine/Agent/Plugins/Install/'], // 大小写 + 尾斜杠绕不过去
+        ['POST', '/engine/agent//plugins//install'], // 重复斜杠绕不过去
+        ['PUT', '/engine/agent/channels/wechat/config'],
+        ['GET', '/engine/agent/hooks'],
+        ['POST', '/engine/agent/nope'], // 表外(拼错 / 运行期插件路由)同样拒
+        ['OPTIONS', '/engine/agent/sessions'],
+      ] as const) {
+        const r = await raw(b.base, method, path, h)
+        expect(r.status, `${method} ${path}`).toBe(403)
+        expect(JSON.parse(r.body).code).toBe('LOCAL_ONLY')
+      }
+      for (const path of ['/engine/agent/runs/../plugins/install', '/engine/agent/runs/%2e%2e/plugins/install', '/engine/agent/sessions/x%2Fy']) {
+        const r = await raw(b.base, 'POST', path, h)
+        expect(r.status, path).toBe(400)
+        expect(JSON.parse(r.body).code).toBe('BAD_PATH')
+      }
+      expect(b.engine.seen.length).toBe(before) // 一个都没进引擎
+      const ok = await raw(b.base, 'GET', '/engine//agent/Sessions/?limit=5&q=a%2Fb', h)
+      expect(ok.status).toBe(200)
+      expect(b.engine.seen.at(-1)!.path).toBe('/agent/Sessions?limit=5&q=a%2Fb') // 判的与转的是同一串;query 原样
+      const head = await raw(b.base, 'HEAD', '/engine/agent/sessions', h)
+      expect(head.status).toBe(200)
+    } finally { b.close() }
+  })
+
+  it('远端来源标记(契约 C1):局域网配对=lan、隧道=tunnel、P2P=p2p,入站伪造的 x-forsion-remote* 不透传', async () => {
+    const b = await boot()
+    try {
+      const token = await pairUp(b)
+      const forged = { 'x-forsion-remote': 'tunnel', 'x-forsion-remote-mark': 'FORGED', 'x-forsion-remote-caller': 'evil' }
+      const last = (): http.IncomingHttpHeaders => b.engine.seen.at(-1)!.headers
+      expect((await fetch(`${b.base}/engine/agent/sessions`, { headers: { Authorization: `Bearer ${token}`, ...forged } })).status).toBe(200)
+      expect(last()['x-forsion-remote']).toBe('lan')
+      expect(last()['x-forsion-remote-mark']).toBe('REMOTE_MARK')
+      expect(last()['x-forsion-remote-caller']).toBeUndefined()
+      expect(last().authorization).toBe('Bearer ENGINE_TOKEN')
+      expect((await fetch(`${b.base}/engine/agent/sessions`, { headers: { 'x-unit-internal': b.handle.internalSecret, ...forged, 'x-forsion-remote': 'p2p' } })).status).toBe(200)
+      expect(last()['x-forsion-remote']).toBe('tunnel')
+      expect((await fetch(`${b.base}/engine/agent/sessions`, { headers: { 'x-unit-p2p': b.handle.p2pSecret, ...forged } })).status).toBe(200)
+      expect(last()['x-forsion-remote']).toBe('p2p')
+      // 三把钥互不通用:隧道密钥塞进 P2P 头、P2P 密钥塞进隧道头都不算数
+      expect(b.handle.p2pSecret).not.toBe(b.handle.internalSecret)
+      expect((await fetch(`${b.base}/engine/agent/sessions`, { headers: { 'x-unit-p2p': b.handle.internalSecret } })).status).toBe(401)
+      expect((await fetch(`${b.base}/engine/agent/sessions`, { headers: { 'x-unit-internal': b.handle.p2pSecret } })).status).toBe(401)
+    } finally { b.close() }
+  })
+
+  it('vault 不可逆删除(清空废纸篓 / 彻底删除条目)只许本机:远端 403 LOCAL_ONLY,handler 不被触达', async () => {
+    const b = await boot()
+    try {
+      const token = await pairUp(b)
+      expect([...VAULT_RPC_LOCAL_ONLY].sort()).toEqual([IPC.deleteTrashEntry, IPC.emptyTrash].sort())
+      for (const ch of VAULT_RPC_LOCAL_ONLY) {
+        const r = await fetch(`${b.base}/vault/rpc`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ ch, args: ['x.md'] }) })
+        expect(r.status, ch).toBe(403)
+        expect(((await r.json()) as any).code).toBe('LOCAL_ONLY')
+      }
+      expect(b.vaultCalls.length).toBe(0)
+      // 可恢复的删除(进废纸篓)照常
+      const t = await fetch(`${b.base}/vault/rpc`, { method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ ch: IPC.trashEntry, args: ['x.md'] }) })
+      expect(((await t.json()) as any).ok).toBe(true)
+    } finally { b.close() }
+  })
+
+  it('便携 Unit 的本地投影(工作区主人)不受允许清单约束、不盖远端标记;桌面(无 projection)恒受约束', async () => {
+    const ownerToken = 'owner-access-key'
+    const b = await boot(null, undefined, undefined, { projection: { mode: 'local', basePath: '/', product: PRODUCT } })
+    try {
+      b.paired.push({ id: 'owner', name: 'owner', tokenHash: createHash('sha256').update(ownerToken).digest('hex'), createdAt: 0 })
+      const h = { Authorization: `Bearer ${ownerToken}`, 'Content-Type': 'application/json' }
+      const r = await fetch(`${b.base}/engine/agent/plugins/install`, { method: 'POST', headers: h, body: '{}' })
+      expect(r.status).toBe(200)
+      const hit = b.engine.seen.at(-1)!
+      expect(hit.path).toBe('/agent/plugins/install')
+      expect(hit.headers['x-forsion-remote']).toBeUndefined()
+      expect(hit.headers['x-forsion-remote-mark']).toBeUndefined()
+      const empty = await fetch(`${b.base}/vault/rpc`, { method: 'POST', headers: h, body: JSON.stringify({ ch: IPC.emptyTrash, args: [] }) })
+      expect(((await empty.json()) as any).ok).toBe(true)
+    } finally { b.close() }
+    const desk = await boot()
+    try {
+      const token = await pairUp(desk)
+      expect((await fetch(`${desk.base}/engine/agent/plugins/install`, { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: '{}' })).status).toBe(403)
+    } finally { desk.close() }
   })
 })

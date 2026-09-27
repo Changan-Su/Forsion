@@ -39,3 +39,14 @@ describe('订阅登录过期', () => {
     expect(humanizeRunError('401 Unauthorized', t)).toContain('chat.err.auth')
   })
 })
+
+describe('远程设备驱动外部引擎(契约 C6)', () => {
+  it('engine_unavailable_remote 命中专门文案,原码留在括号里', () => {
+    const out = humanizeRunError('engine_unavailable_remote', t)
+    expect(out).toContain('chat.err.engineRemote')
+    expect(out).toContain('engine_unavailable_remote')
+  })
+  it('本机的 engine_unavailable:<id>(引擎被移除)不误判成远程', () => {
+    expect(humanizeRunError('engine_unavailable:codex', t)).not.toContain('chat.err.engineRemote')
+  })
+})

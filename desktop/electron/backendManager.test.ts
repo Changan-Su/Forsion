@@ -1,13 +1,14 @@
 /**
- * 托管引擎共享密钥的**快照纪律**单测。
+ * 托管引擎的凭据契约单测(设备能力 MCP 方案 §6.2-9,契约 C1 / C2)。
  *
- * 钉的是 2026-09-03 实测到的真 bug:auth.json 被 24h 滑动续期改写后(refreshAuthSliding 刻意不重启
- * 引擎),getToken() 若实时重读,就会把**新串**发给只认 spawn 时那枚 env 快照的引擎 —— unitWeb 的
- * /engine 反代是每请求现取,于是设备页 `/engine/agent/*` 整片 401、报「会话列表加载失败:Unauthorized」,
- * 而免鉴权的 /engine/health 照常 200(所以看着像「连上了但没权限」)。
+ * 本机端点鉴权用每次启动随机生成的本机令牌(TANGU_LOCAL_TOKEN),forsion_token 只作云端凭据(TANGU_TOKEN),
+ * 另给引擎一枚远端来源标记密钥(TANGU_REMOTE_MARK_SECRET)。
+ * 顺带钉死 2026-09-03 那类 bug 的结构性消失:以前本机令牌就是 forsion_token,auth.json 被 24h 滑动续期改写后,
+ * 每请求现取令牌的 /engine 反代把新串发给只认 spawn 快照的引擎 → 设备页 /engine/agent/* 整片 401。
+ * 现在 getToken() 与 auth.json 无关,续期怎么改都不漂。
  */
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -27,25 +28,72 @@ const { BackendManager } = await import('./backendManager')
 const writeAuth = (token: string): void =>
   writeFileSync(join(H.dir, 'auth.json'), JSON.stringify({ token }), 'utf8')
 
-describe('BackendManager.getToken', () => {
-  it('托管引擎在跑时恒返回 spawn 那枚 —— auth.json 被续期改写也不跟着漂', () => {
-    writeAuth('token-at-spawn')
-    const m = new BackendManager() as any
-    m.spawnToken = m.freshToken() // spawnOnce 里 env.TANGU_TOKEN 钉的就是这一枚
-    m.child = {}                  // 子进程活着 = 有个「只认旧串」的对面要对齐
+/** 假引擎:把收到的三枚凭据 env 落盘,再答 /health。 */
+function envDumpEngine(): { entry: string; dump: () => { local: string | null; cloud: string | null; mark: string | null } } {
+  const entry = join(H.dir, 'env-dump.cjs')
+  const out = join(H.dir, 'env-dump.json')
+  writeFileSync(entry, [
+    "const port = Number(process.argv[process.argv.indexOf('--port') + 1])",
+    `require('node:fs').writeFileSync(${JSON.stringify(out)}, JSON.stringify({ local: process.env.TANGU_LOCAL_TOKEN ?? null, cloud: process.env.TANGU_TOKEN ?? null, mark: process.env.TANGU_REMOTE_MARK_SECRET ?? null }))`,
+    "require('node:http').createServer((_q, s) => s.end('{}')).listen(port, '127.0.0.1')",
+  ].join('\n'), 'utf8')
+  return { entry, dump: () => JSON.parse(readFileSync(out, 'utf8')) }
+}
 
-    expect(m.getToken()).toBe('token-at-spawn')
-    writeAuth('token-after-sliding-refresh') // 24h 滑动续期改写 auth.json,引擎不重启
-    // ⚠️ 实时重读的写法在这一行会变成 token-after-sliding-refresh —— 那就是设备页整片 401 的根因
-    expect(m.getToken()).toBe('token-at-spawn')
-  })
+describe('BackendManager engine credentials (C1 / C2)', () => {
+  it('spawn 契约:TANGU_LOCAL_TOKEN = getToken()(≠ forsion_token),TANGU_TOKEN = forsion_token,TANGU_REMOTE_MARK_SECRET = remoteMarkSecret()', async () => {
+    writeAuth('forsion-jwt-at-spawn')
+    const eng = envDumpEngine()
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(eng.entry)
+    process.env.TANGU_NODE_BIN = process.execPath
+    const m = new BackendManager()
+    try {
+      await m.start({ cloudUrl: '', sandbox: 'none' })
+      expect(m.getStatus().state).toBe('ready')
+      const env = eng.dump()
+      expect(env.local).toBe(m.getToken())
+      expect(env.local).toMatch(/^[0-9a-f]{64}$/)
+      expect(m.getToken()).not.toBe('forsion-jwt-at-spawn') // 本机端点的钥匙不再是云端账号票
+      expect(env.cloud).toBe('forsion-jwt-at-spawn')
+      expect(env.mark).toBe(m.remoteMarkSecret())
+      expect(env.mark).not.toBe(env.local)
+      // 24h 滑动续期改写 auth.json、引擎不重启:本机令牌纹丝不动(= 09-03 设备页整片 401 那类 bug 不再可能)
+      writeAuth('forsion-jwt-after-sliding-refresh')
+      expect(m.getToken()).toBe(env.local)
+      // 引擎重启(ensureBackend)沿用同一枚本机令牌:渲染层缓存的 cfg.token 不失效;云端票按新 auth.json 走
+      await m.start({ cloudUrl: '', sandbox: 'none' })
+      const env2 = eng.dump()
+      expect(env2.local).toBe(env.local)
+      expect(env2.mark).toBe(env.mark)
+      expect(env2.cloud).toBe('forsion-jwt-after-sliding-refresh')
+    } finally { await m.stop() }
+  }, 30_000)
 
-  it('没有托管子进程时(external 形态 / 已停 / 重启窗口)回落实时值', () => {
-    writeAuth('live-1')
-    const m = new BackendManager() as any
-    expect(m.getToken()).toBe('live-1')
-    writeAuth('live-2')
-    expect(m.getToken()).toBe('live-2')
+  it('未登录:TANGU_TOKEN 显式为空串(压住 shell 继承的同名变量与 config.json 的 cloud.token 回退),本机令牌照样有 → 引擎能独立启动', async () => {
+    rmSync(join(H.dir, 'auth.json'), { force: true })
+    const eng = envDumpEngine()
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(eng.entry)
+    process.env.TANGU_NODE_BIN = process.execPath
+    process.env.TANGU_TOKEN = 'leaked-from-dev-shell'
+    const m = new BackendManager()
+    try {
+      await m.start({ cloudUrl: '', sandbox: 'none' })
+      const env = eng.dump()
+      expect(env.cloud).toBe('') // 不是 undefined:引擎 config.ts 是 `TANGU_TOKEN ?? cloud.token`,缺席会回退到 config.json 残留的云端票
+      expect(env.local).toBe(m.getToken())
+    } finally {
+      delete process.env.TANGU_TOKEN
+      await m.stop()
+    }
+  }, 30_000)
+
+  it('每次启动一枚:两个 BackendManager(= 两次 App 启动)的本机令牌与标记密钥都不同;MCP 外部密钥另是一枚稳定值', () => {
+    const a = new BackendManager()
+    const b = new BackendManager()
+    expect(a.getToken()).not.toBe(b.getToken())
+    expect(a.remoteMarkSecret()).not.toBe(b.remoteMarkSecret())
+    expect(a.localSecret()).toBe(b.localSecret()) // desktop-local-token:给外部 agent 的 MCP 密钥,持久化
+    expect(a.localSecret()).not.toBe(a.getToken())
   })
 })
 

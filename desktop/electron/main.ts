@@ -1,4 +1,6 @@
-import { UNIT_PREFERENCE_KEYS } from '../shared/unitPreferences'
+import { unitConfigFace } from './unitConfigFace'
+import { MCP_NAME_RESERVED, newReservedMcpNames } from '../shared/mcpNames'
+import { buildUnitScopeGuard, openUnitHostFile, withVerifiedUnitPath } from './unitHostScope'
 import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/hostSandboxConfig'
 import { startMiniCursorFollow, readComputerUseForeground, cursorPanelTarget } from './miniCursorFollow'
 import { startMiniAutoPanel } from './miniAutoPanel'
@@ -360,7 +362,7 @@ interface TanguStoredConfig {
   unitInstanceId: string
   /** 已配对设备(T1 局域网直连;令牌只存 hash,可在切换器里回收)。 */
   unitPairedDevices: PairedDevice[]
-  /** P2P 直连的 STUN 服务器(空=内置国内可达缺省)。纯连接基建,刻意不进 UNIT_CONFIG_RW。 */
+  /** P2P 直连的 STUN 服务器(空=内置国内可达缺省)。纯连接基建,刻意不进 UNIT_CONFIG_RW(unitConfigFace.ts)。 */
   unitP2pStun: string[]
   modelId: string
   /** 辅助模型 · LLM(后台/特殊 agent 用;落 config.json models.background;缺省=跟随 app 级槽)。 */
@@ -861,17 +863,7 @@ async function readSpacesList(): Promise<Array<{ slug: string; json: string; plu
   return out
 }
 
-/** 设备页可见的配置白名单(方案口径「完整 Forsion 体验」= UI 偏好跟随本机设置)。
- *  RW = 设备页可读可写回(纯 UI/体验/笔记偏好,写回无本机副作用);RO = 只读展示。
- *  ⚠️ default-deny:token/backendUrl/cloudUrl/mode/sandbox/unitHostEnabled/forsionMcp(含 token)
- *  等连接与本机治理键**读写都绝不透传**;browser 系/mirror/pythonMode 属 managedKeys(写=重启对方后端)只读不写。 */
-const UNIT_CONFIG_RW = UNIT_PREFERENCE_KEYS
-const UNIT_CONFIG_RO = ['homeDir', 'defaultWorkspaceDir', 'activityLogEnabled', 'browserSearchEngine'] as const
-function pickUnitConfig(src: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const k of keys) if (src[k] !== undefined) out[k] = src[k]
-  return out
-}
+/** 设备页可见的配置白名单(RW/RO 与远端只读的审批档)真身在 unitConfigFace.ts。 */
 
 /** listDir 唯一真源(fs:listDir IPC 与 /unit/hostdir 共用):2000 条 cap,目录在前按名排序。 */
 async function listDirImpl(dirPath: string): Promise<Array<{ name: string; isDir: boolean; size: number; path: string }>> {
@@ -931,24 +923,23 @@ async function unitSessionRoots(): Promise<string[]> {
   return unitSessionRootsCache.roots
 }
 
-/** /unit/host{file,dir,stat} 三端点共用的路径钳制:realpath 后判 roots(工作区∪vault∪host 会话根)内,
- *  default-deny。allowRoot:目录类操作(list/stat)可指根本身;文件读不可(根是目录)。
- *  relative 判定跨平台(win 反斜杠 realpath 下 '+/' 前缀恒 false 的坑,Codex P1)。 */
-async function unitResolveInScope(p: string, allowRoot: boolean): Promise<string | null> {
-  if (!p || typeof p !== 'string') return null
-  let real: string
-  try { real = realpathSync(p) } catch { return null }
+/** /unit/host{file,dir,stat} 三端点共用的钳制上下文:roots = 工作区 ∪ vault ∪ host 会话根,default-deny。
+ *  会话根是远端经允许清单可写的 project_path —— 过滤掉 `/`、家目录、受保护目录的祖先;受保护路径(Forsion 家目录 /
+ *  引擎 home / userData / 通用凭据库)无条件拒(契约 C4,评审 A-desktop#1)。规则与「校验和读取绑同一对象」的
+ *  竞态防线都在 unitHostScope.ts(vitest 直测):文件读走 openUnitHostFile,目录 / stat 走 withVerifiedUnitPath。 */
+async function unitScopeCtx(): Promise<{ roots: { base: string[]; session: string[] }; env: { home: string }; guard: ReturnType<typeof buildUnitScopeGuard> }> {
   const stored = await loadConfig()
-  const roots: string[] = []
-  try { roots.push(realpathSync(await ensureDefaultWorkspaceDir(stored))) } catch { /* 无工作区 */ }
-  try { const vr = amadeusVaultFace?.root(); if (vr) roots.push(realpathSync(vr)) } catch { /* 无库 */ }
-  for (const sp of await unitSessionRoots()) roots.push(sp)
-  const inRoot = (r: string): boolean => {
-    if (real === r) return allowRoot
-    const rel = relative(r, real)
-    return !!rel && !rel.startsWith('..') && !isAbsolute(rel)
-  }
-  return roots.some(inRoot) ? real : null
+  const base: string[] = []
+  try { base.push(realpathSync(await ensureDefaultWorkspaceDir(stored))) } catch { /* 无工作区 */ }
+  try { const vr = amadeusVaultFace?.root(); if (vr) base.push(realpathSync(vr)) } catch { /* 无库 */ }
+  const guard = buildUnitScopeGuard({
+    home: homedir(),
+    forsionHome: forsionHomeDir(),
+    tanguHome: process.env.TANGU_HOME || tanguDataDir(),
+    userData: app.getPath('userData'),
+    appData: app.getPath('appData'),
+  })
+  return { roots: { base, session: await unitSessionRoots() }, env: { home: homedir() }, guard }
 }
 
 /** 按当前配置起停/重建 unitWeb + unitHost(开关/cloudUrl/账号变化后调;幂等)。
@@ -982,7 +973,7 @@ async function doRefreshUnitHost(): Promise<void> {
   const webDeps = {
     getEngine: () => {
       const st = backend.getStatus()
-      return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken() }
+      return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken(), remoteMark: backend.remoteMarkSecret() }
     },
     confirmPair: async (info: { name: string; code: string; ip: string }): Promise<boolean> => {
       // 开发测试后门:**双闸**——非打包(app.isPackaged=false)且显式 FORSION_UNIT_AUTO_PAIR=1,
@@ -1020,16 +1011,10 @@ async function doRefreshUnitHost(): Promise<void> {
     },
     readPlugins: () => (amadeusReadPlugins ? amadeusReadPlugins() : Promise.resolve([])),
     readSpaces: () => readSpacesList(),
-    readConfig: async () => {
-      const c = (await effectiveConfig()) as unknown as Record<string, unknown>
-      return { ...pickUnitConfig(c, UNIT_CONFIG_RW), ...pickUnitConfig(c, UNIT_CONFIG_RO) }
-    },
-    writeConfig: async (patch: Record<string, unknown>) => {
-      const p = pickUnitConfig(patch as Record<string, unknown>, UNIT_CONFIG_RW)
-      if (Object.keys(p).length) await saveConfig(p as Partial<TanguStoredConfig>)
-      const c = (await effectiveConfig()) as unknown as Record<string, unknown>
-      return { ...pickUnitConfig(c, UNIT_CONFIG_RW), ...pickUnitConfig(c, UNIT_CONFIG_RO) }
-    },
+    ...unitConfigFace({
+      effective: async () => (await effectiveConfig()) as unknown as Record<string, unknown>,
+      save: async (p) => { await saveConfig(p as Partial<TanguStoredConfig>) },
+    }),
     // 直连 provider 元数据(模型选择器认直连模型用):**剥 apiKey/baseUrl** —— 密钥绝不出机,
     // 设备页只需要清单字段;代价=设备页朗读/生图直连不可用(它们要 key,本就该在对方机器上跑)。
     readProviders: async () => (await readProvidersFile()).map((p) => ({
@@ -1045,52 +1030,58 @@ async function doRefreshUnitHost(): Promise<void> {
     // 只钳默认工作区会让那些会话的 Desk/文件卡全 404;这些目录本就是 agent 的可达范围,只读不扩权)。
     // default-deny —— 越界/不存在一律 null(unitWeb 统一 404,不泄露存在性)。写/删一概不给(审计 C1)。
     readHostFile: async (p: string, maxBytes?: number) => {
-      const real = await unitResolveInScope(p, false) // 文件读:根本身是目录,不含
-      if (!real) return null
-      const st = await stat(real).catch(() => null)
-      if (!st?.isFile()) return null
-      // 上限:直连 50MB(同 fs:readFile);隧道路径由 unitWeb 按信封余量传入更小值(Codex P2:
-      // base64 双重膨胀,10MB 信封实际只装得下 ~4MB 原文,超了会超时而不是优雅 tooLarge)。
-      const UNIT_MAX_READ = Math.min(maxBytes || 50 * 1024 * 1024, 50 * 1024 * 1024)
-      const ext = (real.split('.').pop() || '').toLowerCase()
-      const UNIT_MIME: Record<string, string> = {
-        md: 'text/markdown', txt: 'text/plain', html: 'text/html', htm: 'text/html', css: 'text/css',
-        js: 'text/javascript', ts: 'text/plain', json: 'application/json', csv: 'text/csv',
-        png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
-        pdf: 'application/pdf', mp4: 'video/mp4', mp3: 'audio/mpeg', wav: 'audio/wav',
-      } // ponytail: fs:readFile 的 MIME_BY_EXT 是函数局部,先复制常用子集;要合并时把那张表提到模块级
-      const mimeType = UNIT_MIME[ext] || 'application/octet-stream'
-      if (st.size > UNIT_MAX_READ) return { mimeType, content: '', size: st.size, mtimeMs: st.mtimeMs, tooLarge: true }
-      const buf = await readFile(real)
-      return { mimeType, content: buf.toString('base64'), size: st.size, mtimeMs: st.mtimeMs }
+      const ctx = await unitScopeCtx()
+      // 文件读:根本身是目录,不含。校验与读取绑在同一个 FileHandle 上(换软链的竞态读不到凭据,Codex 三轮 P1)。
+      const opened = await openUnitHostFile(p, ctx.roots, ctx.env, ctx.guard)
+      if (!opened) return null
+      const { fh, real, st } = opened
+      try {
+        if (!st.isFile()) return null
+        // 上限:直连 50MB(同 fs:readFile);隧道路径由 unitWeb 按信封余量传入更小值(Codex P2:
+        // base64 双重膨胀,10MB 信封实际只装得下 ~4MB 原文,超了会超时而不是优雅 tooLarge)。
+        const UNIT_MAX_READ = Math.min(maxBytes || 50 * 1024 * 1024, 50 * 1024 * 1024)
+        const ext = (real.split('.').pop() || '').toLowerCase()
+        const UNIT_MIME: Record<string, string> = {
+          md: 'text/markdown', txt: 'text/plain', html: 'text/html', htm: 'text/html', css: 'text/css',
+          js: 'text/javascript', ts: 'text/plain', json: 'application/json', csv: 'text/csv',
+          png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+          pdf: 'application/pdf', mp4: 'video/mp4', mp3: 'audio/mpeg', wav: 'audio/wav',
+        } // ponytail: fs:readFile 的 MIME_BY_EXT 是函数局部,先复制常用子集;要合并时把那张表提到模块级
+        const mimeType = UNIT_MIME[ext] || 'application/octet-stream'
+        if (st.size > UNIT_MAX_READ) return { mimeType, content: '', size: st.size, mtimeMs: st.mtimeMs, tooLarge: true }
+        const buf = await fh.readFile()
+        return { mimeType, content: buf.toString('base64'), size: st.size, mtimeMs: st.mtimeMs }
+      } finally {
+        await fh.close().catch(() => {})
+      }
     },
     // 主机目录/条目只读面(工作台文件面板/悬停提示的数据源):钳制同 hostfile,目录类可指根本身。
     // 与 fs:listDir / fs:stat 共用唯一真源实现(listDirImpl/statPathImpl)。写/删仍一概不给。
     readHostDir: async (p: string) => {
-      const real = await unitResolveInScope(p, true)
-      if (!real) return null
-      const st = await stat(real).catch(() => null)
-      if (!st?.isDirectory()) return null
+      const ctx = await unitScopeCtx()
       // 枚举必须钉在**已验证的 real**上(拿 p 再列会在钳制后重新解引用软链 —— 竞态改指向即可
-      // 越界枚举,Codex 四轮 P2/TOCTOU);条目路径再改写回**请求方命名空间**(根是软链时,realpath
-      // 命名空间会让面板认不出自己的根,三轮 P2)。逐条读取仍各自 realpath,越界照旧 404。
-      return (await listDirImpl(real)).map((e) => ({ ...e, path: join(p, e.name) }))
+      // 越界枚举,Codex 四轮 P2/TOCTOU),且列完再核一次对象身份(withVerifiedUnitPath);条目路径再改写回
+      // **请求方命名空间**(根是软链时,realpath 命名空间会让面板认不出自己的根,三轮 P2)。逐条读取仍各自钳制。
+      return withVerifiedUnitPath(p, ctx.roots, ctx.env, ctx.guard, true, async (real) => {
+        const st = await stat(real).catch(() => null)
+        if (!st?.isDirectory()) return null
+        return (await listDirImpl(real)).map((e) => ({ ...e, path: join(p, e.name) }))
+      })
     },
     readHostStat: async (p: string) => {
-      const real = await unitResolveInScope(p, true)
-      if (!real) return null
-      return statPathImpl(real)
+      const ctx = await unitScopeCtx()
+      return withVerifiedUnitPath(p, ctx.roots, ctx.env, ctx.guard, true, (real) => statPathImpl(real))
     },
     vault: () => amadeusVaultFace,
     // P2P 应答(B 侧,方案 §12):acceptOffer 出 answer;DataChannel 开门后把信道接到本机 unitWeb
-    // (attachHostChannel 与 unitHost.handle 同构:盖 x-unit-internal,响应全流式)。
+    // (attachHostChannel 与 unitHost.handle 同构,但盖的是 P2P 专用密钥 x-unit-p2p,响应全流式)。
     // 打洞不成(waitOpen 超时)只收对端,不影响别的通路。
     p2pAnswer: async (offerSdp: string) => {
       const mgr = getP2p()
       const { peerId, sdp } = await mgr.acceptOffer(offerSdp)
       void mgr.waitOpen(peerId, 25_000).then(() => {
         attachHostChannel(mgr.channel(peerId), {
-          getUnitWeb: () => ({ url: unitWeb ? `http://127.0.0.1:${unitWeb.port}` : null, internalSecret: unitWeb?.internalSecret ?? '' }),
+          getUnitWeb: () => ({ url: unitWeb ? `http://127.0.0.1:${unitWeb.port}` : null, p2pSecret: unitWeb?.p2pSecret ?? '' }),
           log: (m) => console.log(m),
         })
       }).catch(() => mgr.closePeer(peerId))
@@ -1123,16 +1114,19 @@ async function doRefreshUnitHost(): Promise<void> {
     console.error('[unit-web] 启动失败:', e?.message || e)
     return
   }
-  unitHost = new UnitHost({
+  const host: UnitHost = new UnitHost({
     getCreds: () => ({ cloudUrl: unitHostCloudUrl, token: loadTanguCreds().token || '' }),
     getUnitWeb: () => ({ url: unitWeb ? `http://127.0.0.1:${unitWeb.port}` : null, internalSecret: unitWeb?.internalSecret ?? '' }),
     getLanUrl: () => unitLanUrl(),
     getPairing: () => unitHostPairing,
-    savePairing: async (p) => { unitHostPairing = p; await saveConfig({ unitHostId: p.unitId, unitHostSecret: p.secret }) },
-    clearPairing: async () => { unitHostPairing = null; await saveConfig({ unitHostId: '', unitHostSecret: '' }) },
+    // 入册回包到达时这个 host 已被 refreshUnitHost 换掉(停用 / 换账号):旧那一轮的配对不许落盘(Codex 评审 P1)。
+    // 残余窗口(检查通过后才换号)由通道 403/404 → clearPairing → 重新入册自愈。
+    savePairing: async (p) => { if (unitHost !== host) return; unitHostPairing = p; await saveConfig({ unitHostId: p.unitId, unitHostSecret: p.secret }) },
+    clearPairing: async () => { if (unitHost !== host) return; unitHostPairing = null; await saveConfig({ unitHostId: '', unitHostSecret: '' }) },
     log: (m) => console.log(m),
   })
-  unitHost.start()
+  unitHost = host
+  host.start()
 }
 let unitPairedCache: PairedDevice[] = []
 
@@ -2013,7 +2007,11 @@ app.whenReady().then(async () => {
     keepAwake.report(id, Number.isSafeInteger(count) && (count as number) > 0)
   })
   // Windows 在用户主动睡眠时终止电源请求,唤醒后手里的 id 已失效 → 重新申请(macOS 断言跨睡眠保留,重申无害)。
-  powerMonitor.on('resume', () => keepAwake.rearm())
+  // 设备互联通道:合盖期间的出站长连多半已是半开连接(不报错也收不到东西)→ 唤醒即重拨,别等 45s 读看门狗。
+  powerMonitor.on('resume', () => {
+    keepAwake.rearm()
+    unitHost?.reconnect('resume')
+  })
 
   ipcMain.handle('config:get', () => effectiveConfig())
   ipcMain.handle('config:set', async (_e, patch: Partial<TanguStoredConfig>) => {
@@ -2225,7 +2223,7 @@ app.whenReady().then(async () => {
         return { unitPairedDevices: unitPairedCache }
       })
     } finally {
-      // P2P 是站着的信道,建立后逐请求走 x-unit-internal——不收的话被撤销的设备继续全权访问,
+      // P2P 是站着的信道,建立后逐请求走 x-unit-p2p(unitWeb 的 per-boot p2pSecret,与隧道分钥)——不收的话被撤销的设备继续全权访问,
       // 直到信道偶然断开(Codex H2)。粗粒度全收(含账号态会话):撤销是低频动作,重连便宜。落盘失败也照收。
       // ponytail: 按主体(pairHash)定向收要把身份穿进 PeerEntry,撤销频率撑不起那台机器
       await closeAllP2p()
@@ -2744,18 +2742,23 @@ app.whenReady().then(async () => {
 
   // ── MCP server 管理(写 config.json 的 mcp 段;managed 模式保存后重启后端重连)──
   const mcpFile = (): string => join(tanguDataDir(), 'mcp.json') // legacy 文件在引擎域
-  ipcMain.handle('mcp:read', async () => {
+  /** 当前生效的 MCP server 表(mcp:read 与 mcp:write 的保留名比对共用:界面看到的就是比对的底)。 */
+  const readMcpServers = async (): Promise<Record<string, any>> => {
     const sec = (await readHomeConfig()).mcp
-    if (sec !== undefined) return { mcpServers: sec?.mcpServers && typeof sec.mcpServers === 'object' ? sec.mcpServers : {} }
+    if (sec !== undefined) return sec?.mcpServers && typeof sec.mcpServers === 'object' ? sec.mcpServers : {}
     try { // 回落 legacy mcp.json(后端 migrate 前的过渡)
       const parsed = JSON.parse(await readFile(mcpFile(), 'utf8'))
-      return { mcpServers: parsed?.mcpServers && typeof parsed.mcpServers === 'object' ? parsed.mcpServers : {} }
+      return parsed?.mcpServers && typeof parsed.mcpServers === 'object' ? parsed.mcpServers : {}
     } catch {
-      return { mcpServers: {} }
+      return {}
     }
-  })
+  }
+  ipcMain.handle('mcp:read', async () => ({ mcpServers: await readMcpServers() }))
   ipcMain.handle('mcp:write', async (_e, cfg: { mcpServers: Record<string, any> }) => {
     if (!cfg || typeof cfg.mcpServers !== 'object') throw new Error('非法 MCP 配置')
+    // dev / dev_* 是设备 MCP 的保留命名空间(shared/mcpNames.ts):新加的一律拒,盘上存量的放行(引擎改名兜底)
+    const reserved = newReservedMcpNames(cfg.mcpServers, await readMcpServers())
+    if (reserved.length) throw new Error(`${MCP_NAME_RESERVED}: ${reserved.join(', ')}`)
     await saveHomeSection('mcp', { mcpServers: cfg.mcpServers }) // 唯一真源:config.json mcp 段(chmod 600)
     const stored = await loadConfig()
     if (stored.mode === 'managed') void ensureBackend() // 重启后端重连 MCP(进程级冻结语义)
