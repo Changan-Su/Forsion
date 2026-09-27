@@ -737,7 +737,7 @@ export const deletePluginFile = (cfg: TanguDesktopConfig, id: string, scope: str
 
 // ── Special Agents（Historian / Muse;本地后端）──
 export const getSpecialConfig = (cfg: TanguDesktopConfig) =>
-  request<{ config: SpecialAgentsConfig; defaults?: { historianPrompt: string } }>(cfg, '/agent/special/config')
+  request<{ config: SpecialAgentsConfig; defaults?: { historianPrompt: string }; cloud?: boolean }>(cfg, '/agent/special/config')
 
 export const saveSpecialConfig = (cfg: TanguDesktopConfig, patch: { historian?: Partial<SpecialAgentsConfig['historian']>; muse?: Partial<SpecialAgentsConfig['muse']> }) =>
   request<{ config: SpecialAgentsConfig }>(cfg, '/agent/special/config', { method: 'POST', body: JSON.stringify(patch) }).then((r) => r.config)

@@ -20,6 +20,12 @@ import type {
   StepRow,
 } from '../../seams/stateStore.js';
 
+/** run 落成 done 的旁路通知。网关的云端 Historian(web/安卓按轮维护)在 startHistorian 时注册:
+ *  thin worker 跑完一轮经 state-API 把 done 写进这里,是云端唯一能看到「一轮结束」的地方。
+ *  worker(HttpStateStore)与 standalone(不启动云端 Historian)都不会有监听。 */
+let runDoneListener: ((runId: string) => void) | null = null;
+export function setRunDoneListener(fn: ((runId: string) => void) | null): void { runDoneListener = fn; }
+
 function safeParse(s: any): any {
   if (typeof s !== 'string') return s;
   try { return JSON.parse(s); } catch { return s; }
@@ -52,6 +58,7 @@ export function createSqlStateStore(): StateStore {
       if (extra?.tokensTotal !== undefined) { sets.push('tokens_total = ?'); params.push(extra.tokensTotal); }
       params.push(id);
       await query(`UPDATE agent_runs SET ${sets.join(', ')} WHERE id = ?`, params);
+      if (status === 'done') { try { runDoneListener?.(id); } catch { /* 监听方自己兜底,绝不影响 run 收尾 */ } }
     },
     async listActiveRunsBySession(sessionId, userId): Promise<ActiveRunRow[]> {
       return await query<any[]>(

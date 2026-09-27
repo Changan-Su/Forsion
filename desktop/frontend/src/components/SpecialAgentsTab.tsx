@@ -27,6 +27,10 @@ registerMessages({
   'specialUi.startHour': { zh: '开始时间（小时）', en: 'Start time (hour)' },
   'specialUi.endHour': { zh: '结束时间（小时）', en: 'End time (hour)' },
   'specialUi.searchModels': { zh: '搜索模型', en: 'Search models' },
+  'specialUi.cloudQuota': {
+    zh: '在云端运行：每到设定的轮数，用所选模型整理一次标题、日志和长期记忆，按实际用量计入你的 AI 额度；额度用完的那一轮会跳过。',
+    en: 'Runs in the cloud: every set number of rounds it updates the title, log and long-term memory with the chosen model, counted against your AI quota at actual usage. Rounds are skipped once your quota runs out.',
+  },
   'bgQuota.title': { zh: '后台额度', en: 'Background quota' },
   'bgQuota.lead': {
     zh: '主额度之外额外送的一份，相当于你额度的 {share}%；只计 Muse 与自动化用云端默认后台模型（{model}）的用量。这里的改动立即生效。',
@@ -175,6 +179,8 @@ export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktop
   const [agents, setAgents] = useState<NormalAgentDef[]>([])
   const [slotDefault, setSlotDefault] = useState('')
   const [active, setActive] = useState<'historian' | 'muse'>('historian')
+  // 云端(web/安卓):引擎只有按轮 Historian 的四项(开关 / 模型 / 轮数 / 首轮),Muse、模式、提示词都是本地特性。
+  const [cloud, setCloud] = useState(false)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -183,7 +189,7 @@ export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktop
   useEffect(() => {
     let alive = true
     setLoading(true); setError('')
-    getSpecialConfig(cfg).then((r) => { if (!alive) return; const cached = specialDrafts.get(draftKey); setConf(cached?.conf || r.config); setBaseline(cached?.baseline || r.config); setPromptDefault(r.defaults?.historianPrompt || ''); setPrompt(cached?.prompt ?? (r.config.historian.prompt || r.defaults?.historianPrompt || '')); setFolders(cached?.folders ?? r.config.muse.allowedFolders.join('\n')) }).catch(() => { if (alive) setError(t('specialUi.loadFailed')) }).finally(() => { if (alive) setLoading(false) })
+    getSpecialConfig(cfg).then((r) => { if (!alive) return; setCloud(!!r.cloud); const cached = specialDrafts.get(draftKey); setConf(cached?.conf || r.config); setBaseline(cached?.baseline || r.config); setPromptDefault(r.defaults?.historianPrompt || ''); setPrompt(cached?.prompt ?? (r.config.historian.prompt || r.defaults?.historianPrompt || '')); setFolders(cached?.folders ?? r.config.muse.allowedFolders.join('\n')) }).catch(() => { if (alive) setError(t('specialUi.loadFailed')) }).finally(() => { if (alive) setLoading(false) })
     listModels(cfg).then((r) => { if (alive) { setModels(r.models); setSlotDefault(r.backgroundModelId || r.defaultModelId || '') } }).catch(() => {})
     listAgents(cfg).then((r) => { if (alive) setAgents(r) }).catch(() => {})
     return () => { alive = false }
@@ -222,22 +228,23 @@ export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktop
   const escalation = agents.filter((a) => a.slug !== 'muse').map((a) => ({ id: a.slug, label: a.name || a.slug }))
   if (m.escalateTo && !escalation.some((a) => a.id === m.escalateTo)) escalation.push({ id: m.escalateTo, label: m.escalateTo })
   return <div className="special-agents">
-    <p className="special-intro">{t('specialUi.intro')}</p>
-    <div className="special-agent-nav" role="tablist" aria-label={t('settings.special.hint')}>
+    {!cloud && <p className="special-intro">{t('specialUi.intro')}</p>}
+    {!cloud && <div className="special-agent-nav" role="tablist" aria-label={t('settings.special.hint')}>
       {(['historian', 'muse'] as const).map((role) => { const Icon = role === 'historian' ? History : Sparkles; return <button key={role} id={`special-${role}-tab`} role="tab" aria-selected={active === role} aria-controls={`special-${role}`} tabIndex={active === role ? 0 : -1} onKeyDown={(e) => { if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) { e.preventDefault(); const next = e.key === 'Home' ? 'historian' : e.key === 'End' ? 'muse' : role === 'historian' ? 'muse' : 'historian'; setActive(next); document.getElementById(`special-${next}-tab`)?.focus() } }} onClick={() => setActive(role)}><Icon size={18} /><span><strong>{t(`settings.special.${role}`)}</strong><small>{t(role === 'historian' ? 'specialUi.historianSummary' : 'specialUi.museSummary')}</small></span><i className={conf[role].enabled ? 'on' : ''}>{t(conf[role].enabled ? 'settings.special.on' : 'settings.special.off')}</i></button> })}
-    </div>
+    </div>}
     <fieldset className="special-editor" disabled={busy}>
       <section key={active} id={`special-${active}`} role="tabpanel" aria-labelledby={`special-${active}-tab`} className="special-agent-content">
         <header className="special-agent-heading"><div><h3>{t(`settings.special.${active}`)}</h3><p>{t(active === 'historian' ? 'settings.special.historianDesc' : 'settings.special.museDesc')}</p></div><Toggle label={t(`settings.special.${active}`)} value={conf[active].enabled} onChange={(enabled) => active === 'historian' ? changeHistorian({ enabled }) : changeMuse({ enabled })} /></header>
         <Field label={t(hMode === 'fork' && active === 'historian' ? 'settings.special.h.fallbackModel' : 'settings.special.model')}>{model(conf[active].modelId, (modelId) => active === 'historian' ? changeHistorian({ modelId }) : changeMuse({ modelId }))}</Field>
         {active === 'historian' ? <>
-          <Field label={t('settings.special.h.mode')} hint={t(hMode === 'assist' ? 'settings.special.h.modeHintAssist' : hMode === 'fork' ? 'settings.special.h.modeHintFork' : 'settings.special.h.modeHintIndependent')}>
+          {!cloud && <Field label={t('settings.special.h.mode')} hint={t(hMode === 'assist' ? 'settings.special.h.modeHintAssist' : hMode === 'fork' ? 'settings.special.h.modeHintFork' : 'settings.special.h.modeHintIndependent')}>
             <div className="special-choices">{(['independent', 'assist', 'fork'] as const).map((mode) => <button type="button" key={mode} aria-pressed={hMode === mode} onClick={() => changeHistorian({ mode })}>{t(mode === 'assist' ? 'settings.special.h.modeAssist' : mode === 'fork' ? 'settings.special.h.modeFork' : 'settings.special.h.modeIndependent')}</button>)}</div>
-          </Field>
+          </Field>}
           <NumberField label={t('settings.special.h.rounds')} value={h.everyRounds} onChange={(everyRounds) => changeHistorian({ everyRounds })} min={1} max={100} />
           {toggleRow(t('settings.special.h.firstRound'), h.firstRoundTrigger, (firstRoundTrigger) => changeHistorian({ firstRoundTrigger }))}
-          <details className="special-disclosure"><summary>{t('specialUi.memory')}</summary>{toggleRow(t('settings.special.h.harnessCandidates'), h.harnessCandidates, (harnessCandidates) => changeHistorian({ harnessCandidates }), t('settings.special.h.harnessCandidatesHint'))}</details>
-          <details className="special-disclosure"><summary>{t('specialUi.advanced')}</summary><Field label={t('settings.special.h.prompt')}><textarea aria-label={t('settings.special.h.prompt')} rows={7} value={prompt} onChange={(e) => { setPrompt(e.target.value); setNotice('') }} /><button type="button" className="special-text-action" onClick={() => setPrompt(promptDefault)}>{t('specialUi.resetPrompt')}</button></Field></details>
+          {cloud && <p className="special-footnote">{t('specialUi.cloudQuota')}</p>}
+          {!cloud && <><details className="special-disclosure"><summary>{t('specialUi.memory')}</summary>{toggleRow(t('settings.special.h.harnessCandidates'), h.harnessCandidates, (harnessCandidates) => changeHistorian({ harnessCandidates }), t('settings.special.h.harnessCandidatesHint'))}</details>
+          <details className="special-disclosure"><summary>{t('specialUi.advanced')}</summary><Field label={t('settings.special.h.prompt')}><textarea aria-label={t('settings.special.h.prompt')} rows={7} value={prompt} onChange={(e) => { setPrompt(e.target.value); setNotice('') }} /><button type="button" className="special-text-action" onClick={() => setPrompt(promptDefault)}>{t('specialUi.resetPrompt')}</button></Field></details></>}
         </> : <>
           <Field label={t('settings.special.m.mode')} hint={t('settings.special.m.modeDesc')}>{choice(t('settings.special.m.mode'), museMode, [
             { id: 'ask', label: t('settings.special.m.modeAsk') }, { id: 'agent', label: t('settings.special.m.modeAgent') }, { id: 'auto', label: t('settings.special.m.modeAuto') },
