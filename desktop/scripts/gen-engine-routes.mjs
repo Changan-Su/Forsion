@@ -78,10 +78,10 @@ export const CLASSIFICATION = {
   'GET /agent/sessions/:id/background': [A, 'background child sessions'],
   'POST /agent/sessions/:id/team-members/:slug': [A, 'open a team member child session (taint propagates, C5)'],
   'GET /agent/sessions/:id/detail': [A, 'session detail'],
-  'PATCH /agent/sessions/:id': [A, 'rename / archive / model / project of a session (project_path: see P1 open issue)'],
-  'DELETE /agent/sessions/:id': [A, 'delete a session from the device page sidebar'],
+  'PATCH /agent/sessions/:id': [A, 'rename / archive / model / project of a session (a remote project_path never widens /unit/host* reads: only locally confirmed project roots count)'],
+  'DELETE /agent/sessions/:id': [D, 'irreversible hard delete of a local session (runs, messages, code checkpoints); remote uses archive (PATCH archived)'],
   'GET /agent/sessions/:id/messages': [A, 'session messages'],
-  'POST /agent/sessions/:id/messages/delete': [A, 'delete messages in a session'],
+  'POST /agent/sessions/:id/messages/delete': [D, 'irreversible deletion of local conversation history'],
   'GET /agent/sessions/:id/config': [A, 'read session config'],
   'PATCH /agent/sessions/:id/config': [A, 'session config patch (field subset + approval ceiling enforced engine-side, P0 ④ / C3)'],
   'PUT /agent/sessions/:id/config': [D, 'whole-config replace; remote uses PATCH'],
@@ -272,7 +272,7 @@ export const CLASSIFICATION = {
 
   // ── tts.ts ──
   'POST /agent/tts': [A, 'read aloud'],
-  'POST /agent/tts/voices/list': [A, 'list voices (read-only)'],
+  'POST /agent/tts/voices/list': [D, 'posts to a caller-chosen baseUrl from the host network and echoes the reply (SSRF pivot into the host LAN)'],
   'POST /agent/tts/voices/clone': [D, 'creates a provider voice'],
   'POST /agent/tts/voices/design': [D, 'creates a provider voice'],
   'POST /agent/tts/voices/delete': [D, 'deletes a provider voice'],

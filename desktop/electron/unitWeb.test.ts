@@ -484,7 +484,10 @@ describe('unitWeb', () => {
       'POST /agent/workspace/delete', 'POST /agent/sync', 'POST /agent/special/config', 'POST /agent/special/muse/triggers',
       'POST /agent/special/automation/triggers/:id/fire', 'POST /agent/special/automation/kick',
       'POST /agent/special/schedule/:slug/entries', 'POST /agent/special/muse/todos/inject', 'PUT /agent/sessions/:id/config',
+      // 不可逆删除本机会话 / 历史(归档 PATCH archived 仍是远端的收起方式);朗读音色列表会从本机网络 POST 到调用方给的 baseUrl(SSRF)
+      'DELETE /agent/sessions/:id', 'POST /agent/sessions/:id/messages/delete', 'POST /agent/tts/voices/list',
     ]) expect(access(k), k).toBe('deny-remote')
+    expect(access('PATCH /agent/sessions/:id'), 'archive stays the remote affordance').toBe('allow')
   })
 
   it('路径规整:折叠重复斜杠 / 去尾斜杠 / 保留大小写;编码斜杠、编码点、点段、反斜杠一律拒', () => {
@@ -543,6 +546,9 @@ describe('unitWeb', () => {
         ['PUT', '/engine/agent/channels/wechat/config'],
         ['GET', '/engine/agent/hooks'],
         ['POST', '/engine/agent/nope'], // 表外(拼错 / 运行期插件路由)同样拒
+        ['DELETE', '/engine/agent/sessions/s-1'], // 不可逆硬删本机会话(远端只能归档)
+        ['POST', '/engine/agent/sessions/s-1/messages/delete'],
+        ['POST', '/engine/agent/tts/voices/list'], // 调用方给 baseUrl、从本机网络发出(SSRF)
         ['OPTIONS', '/engine/agent/sessions'],
       ] as const) {
         const r = await raw(b.base, method, path, h)
