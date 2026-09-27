@@ -46,7 +46,7 @@ import type { ToolContext } from '../src/tools/toolTypes.js';
 
 const profile = createTanguProfile({ sandboxMode: 'none' });
 let home: string; // = 共享域(basename 不是 tangu → forsionSharedDir() 就是它)
-let ws: string;
+let ws: string; // 工作区在家目录之外(远程 run 在 Forsion 家目录里只许写 Library)
 const call = (name: string, args: Record<string, unknown>): ToolCall =>
   ({ id: 'c1', type: 'function', function: { name, arguments: JSON.stringify(args) } }) as ToolCall;
 const REMOTE = { via: 'tunnel' as const, marked: true };
@@ -70,8 +70,7 @@ async function gate(c: ToolCall, ctx: Record<string, any>): Promise<{ asked: boo
 beforeAll(() => {
   home = mkdtempSync(join(tmpdir(), 'tangu-remote-gate-'));
   process.env.TANGU_HOME = home;
-  ws = join(home, 'ws');
-  mkdirSync(ws, { recursive: true });
+  ws = mkdtempSync(join(tmpdir(), 'tangu-remote-gate-ws-'));
   writeFileSync(join(home, 'auth.json'), '{"token":"SECRET-FORSION-TOKEN"}');
   writeFileSync(join(home, 'notes.txt'), 'SECRET-FORSION-TOKEN appears in a normal note too');
   writeFileSync(join(ws, 'readme.md'), 'hello');
@@ -82,7 +81,7 @@ beforeAll(() => {
 });
 afterAll(() => {
   delete process.env.TANGU_HOME;
-  try { rmSync(home, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { rmSync(home, { recursive: true, force: true }); rmSync(ws, { recursive: true, force: true }); } catch { /* ignore */ }
 });
 beforeEach(() => { state.rules = undefined; state.remote = undefined; state.storedMode = undefined; });
 
@@ -214,7 +213,7 @@ describe('C4 凭据 / 本机配置', () => {
   it('known-safe 捷径不碰凭据:cat 凭据 / 在含凭据的目录里递归 rg 都要走审批(负对照:普通文件照旧免批)', async () => {
     expect(isKnownSafeBash(`cat ${join(home, 'notes.txt')}`, ws)).toBe(true);
     expect(isKnownSafeBash(`cat ${join(home, 'auth.json')}`, ws)).toBe(false);
-    expect(isKnownSafeBash('tail -n 5 ../auth.json', ws)).toBe(false);
+    expect(isKnownSafeBash('tail -n 5 ../auth.json', join(home, 'sub'))).toBe(false);
     expect(isKnownSafeBash('rg token', ws)).toBe(true);
     expect(isKnownSafeBash('rg token', home)).toBe(false);
     expect(isKnownSafeBash('grep token readme.md', home)).toBe(true);
@@ -232,6 +231,11 @@ describe('C4 凭据 / 本机配置', () => {
     const r = await gate(call('write_file', { path: cfg, content: '{}' }), { approvalMode: 'full-auto', remote: REMOTE });
     expect(r.decision).toMatchObject({ action: 'reject' });
     expect(r.decision.rejectReason).toMatch(/Remote sessions cannot write protected/);
+    // Forsion 家目录整片对远程是禁区(skills / plugins / 别的 Agent 的 config.toml 都会在本机下一次 run 生效),只有 Library 例外
+    expect(checkWritePath({ ...local, cwd: ws, remote: REMOTE }, join(home, 'skills', 'evil', 'SKILL.md')).hardDeny).toBe(true);
+    expect(checkWritePath({ ...local, cwd: ws, remote: REMOTE }, join(home, 'agents', 'other', 'config.toml')).hardDeny).toBe(true);
+    expect(checkWritePath({ ...local, cwd: ws, remote: REMOTE }, join(home, 'agents', 'bo', 'Library', 'note.md')).hardDeny).toBe(false);
+    expect(checkWritePath({ ...local, cwd: ws }, join(home, 'skills', 'evil', 'SKILL.md')).hardDeny).toBe(false); // 本机:照旧(越界写走审批)
     // 写工具本身也拒(闸被绕过时的第二道)
     expect(await HOST_TOOLS.write_file.execute({ path: cfg, content: '{}' }, { ...local, remote: REMOTE })).toMatch(/Remote sessions cannot write protected/);
     expect(existsSync(cfg)).toBe(false);

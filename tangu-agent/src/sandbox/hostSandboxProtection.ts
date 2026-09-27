@@ -99,3 +99,30 @@ export function matchProtected(abs: string, list: string[]): string | null {
 export function credentialReadTarget(abs: string): string | null {
   return matchProtected(abs, credentialPaths());
 }
+
+/** Electron userData(桌面配置 / 本地存储所在):宿主给的 FORSION_AMADEUS_CONFIG 就住在里面;没给(非桌面形态)→ null。 */
+function desktopUserDataDir(): string | null {
+  const amadeusCfg = process.env.FORSION_AMADEUS_CONFIG?.trim();
+  return amadeusCfg ? path.dirname(amadeusCfg) : null;
+}
+
+/**
+ * 远程污点 run 的写入禁区(契约 C4「~/.forsion(-dev) 配置」按整片理解):Forsion 共享域 / 正式与 dev 家目录 / 引擎 home /
+ * 桌面 userData 之内一律不许写 —— 那里的 skills/、plugins/、spaces/、别的 Agent 的 config.toml(approval_mode!)、
+ * state.db 都会在下一次**本机** run 里生效。唯一例外:agents|teams|engines/<名>/Library(私聊 / 团队 / 引擎会话的 cwd
+ * 就是它们,是工作区不是配置)。命中返回所在禁区根,否则 null。
+ */
+export function remoteForbiddenRoot(abs: string): string | null {
+  const homes = tanguHomes();
+  const roots = withCanonical([...forsionDomains(), ...homes, ...[desktopUserDataDir()].filter((d): d is string => !!d)]);
+  const libBases = withCanonical(homes);
+  const forms = [path.resolve(abs), canonicalFuturePath(abs)];
+  const inLibrary = forms.some((f) => libBases.some((h) => {
+    if (!pathWithin(f, h)) return false;
+    const parts = path.relative(foldCase ? h.toLowerCase() : h, foldCase ? f.toLowerCase() : f).split(path.sep);
+    return parts.length >= 3 && ['agents', 'teams', 'engines'].includes(parts[0]) && parts[1] !== '' && parts[2].toLowerCase() === 'library';
+  }));
+  if (inLibrary) return null;
+  for (const r of roots) if (forms.some((f) => pathWithin(f, r))) return r;
+  return null;
+}

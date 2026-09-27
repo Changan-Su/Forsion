@@ -38,8 +38,7 @@ const final = (text = 'ok') => () => ({ content: text, reasoning: '', toolCalls:
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'tangu-remote-loop-'));
   process.env.TANGU_HOME = home;
-  ws = join(home, 'ws');
-  mkdirSync(ws, { recursive: true });
+  ws = mkdtempSync(join(tmpdir(), 'tangu-remote-loop-ws-')); // 家目录之外:远程 run 在 Forsion 家目录里只许写 Library
   // Agent 定义把审批档设成完全通行:远端不带 approvalMode 时就是它被 applyAgentActivation 填进 run
   const dir = join(home, 'agents', 'yolo');
   mkdirSync(join(dir, 'Library'), { recursive: true });
@@ -77,7 +76,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   delete process.env.TANGU_HOME;
-  try { rmSync(home, { recursive: true, force: true }); } catch { /* ignore */ }
+  try { rmSync(home, { recursive: true, force: true }); rmSync(ws, { recursive: true, force: true }); } catch { /* ignore */ }
 });
 
 let runSeq = 0;
