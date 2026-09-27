@@ -1,4 +1,5 @@
 import { unitConfigFace } from './unitConfigFace'
+import { MCP_NAME_RESERVED, newReservedMcpNames } from '../shared/mcpNames'
 import { buildUnitScopeGuard, resolveUnitHostPath } from './unitHostScope'
 import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/hostSandboxConfig'
 import { startMiniCursorFollow, readComputerUseForeground, cursorPanelTarget } from './miniCursorFollow'
@@ -2736,18 +2737,23 @@ app.whenReady().then(async () => {
 
   // ── MCP server 管理(写 config.json 的 mcp 段;managed 模式保存后重启后端重连)──
   const mcpFile = (): string => join(tanguDataDir(), 'mcp.json') // legacy 文件在引擎域
-  ipcMain.handle('mcp:read', async () => {
+  /** 当前生效的 MCP server 表(mcp:read 与 mcp:write 的保留名比对共用:界面看到的就是比对的底)。 */
+  const readMcpServers = async (): Promise<Record<string, any>> => {
     const sec = (await readHomeConfig()).mcp
-    if (sec !== undefined) return { mcpServers: sec?.mcpServers && typeof sec.mcpServers === 'object' ? sec.mcpServers : {} }
+    if (sec !== undefined) return sec?.mcpServers && typeof sec.mcpServers === 'object' ? sec.mcpServers : {}
     try { // 回落 legacy mcp.json(后端 migrate 前的过渡)
       const parsed = JSON.parse(await readFile(mcpFile(), 'utf8'))
-      return { mcpServers: parsed?.mcpServers && typeof parsed.mcpServers === 'object' ? parsed.mcpServers : {} }
+      return parsed?.mcpServers && typeof parsed.mcpServers === 'object' ? parsed.mcpServers : {}
     } catch {
-      return { mcpServers: {} }
+      return {}
     }
-  })
+  }
+  ipcMain.handle('mcp:read', async () => ({ mcpServers: await readMcpServers() }))
   ipcMain.handle('mcp:write', async (_e, cfg: { mcpServers: Record<string, any> }) => {
     if (!cfg || typeof cfg.mcpServers !== 'object') throw new Error('非法 MCP 配置')
+    // dev / dev_* 是设备 MCP 的保留命名空间(shared/mcpNames.ts):新加的一律拒,盘上存量的放行(引擎改名兜底)
+    const reserved = newReservedMcpNames(cfg.mcpServers, await readMcpServers())
+    if (reserved.length) throw new Error(`${MCP_NAME_RESERVED}: ${reserved.join(', ')}`)
     await saveHomeSection('mcp', { mcpServers: cfg.mcpServers }) // 唯一真源:config.json mcp 段(chmod 600)
     const stored = await loadConfig()
     if (stored.mode === 'managed') void ensureBackend() // 重启后端重连 MCP(进程级冻结语义)

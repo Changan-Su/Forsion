@@ -3,7 +3,7 @@ import { setLocaleGlobal } from './i18n'
 import { ipcErrorText } from './ipcError'
 
 const CJK = /[㐀-鿿]/
-const CODES = ['not-logged-in', 'login-expired', 'vault-missing', 'mirror-missing', 'scan-failed', 'invalid-space-id', 'invalid-plugin-id', 'not-user-plugin', 'plugin-not-found']
+const CODES = ['not-logged-in', 'login-expired', 'vault-missing', 'mirror-missing', 'scan-failed', 'invalid-space-id', 'invalid-plugin-id', 'not-user-plugin', 'plugin-not-found', 'mcp-name-reserved']
 
 describe('ipcErrorText', () => {
   afterEach(() => setLocaleGlobal('zh'))
@@ -27,6 +27,10 @@ describe('ipcErrorText', () => {
     expect(ipcErrorText("Error invoking remote method 'spaces:delete': Error: invalid-space-id")).toBe('Invalid Space identifier')
     setLocaleGlobal('zh')
     expect(ipcErrorText('vault-missing: /Users/a/vault')).toBe('智库目录不存在：/Users/a/vault')
+    // mcp:write 拒保留名:细节是 server 名,两种语言都带出来
+    expect(ipcErrorText("Error invoking remote method 'mcp:write': Error: mcp-name-reserved: dev_phone")).toContain('dev_phone')
+    setLocaleGlobal('en')
+    expect(ipcErrorText("Error invoking remote method 'mcp:write': Error: mcp-name-reserved: dev_phone")).toMatch(/^The MCP server name "dev_phone" is reserved/)
   })
 
   it('不认识的原样透传(只剥前缀)', () => {

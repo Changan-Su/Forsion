@@ -1366,7 +1366,7 @@ declare global {
       writeMcpConfig?(cfg: { mcpServers: Record<string, McpServerConfigEntry> }): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
       discoveryScan?(): Promise<DiscoveryResult>
       discoveryImportSkills?(ids: string[]): Promise<{ imported: string[] }>
-      discoveryImportMcp?(names: string[]): Promise<{ imported: string[] }>
+      discoveryImportMcp?(names: string[]): Promise<{ imported: string[]; reserved?: string[] }>
       envCheck?(): Promise<EnvProbeResult[]>
       envRun?(installId: string): Promise<{ exitCode: number }>
       envTestMirror?(mirror?: 'default' | 'china'): Promise<MirrorTestResult>
