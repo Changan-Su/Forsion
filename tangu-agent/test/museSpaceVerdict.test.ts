@@ -59,6 +59,9 @@ describe('muse-space-verdict', { timeout: 30_000 }, () => {
     expect(verdict('strictthis', '"use strict"; const root = this || window; if (root.document) ctx.registerView({ id: "home", mount() {} })').ok).toBe(true);
     expect(verdict('sloppythis', 'if (this.document && window === self) ctx.registerView({ id: "home", mount() {} })').ok).toBe(true);
   });
+  it('浏览器才有的全局(window.addEventListener / ResizeObserver / navigator.clipboard)顶层用也不算错', () => {
+    expect(verdict('browser', "window.addEventListener('resize', () => {})\nnew ResizeObserver(() => {}).observe(document.body)\nnavigator.clipboard.writeText('x')\nctx.registerView({ id: 'home', mount() {} })").ok).toBe(true);
+  });
   it('特性探测不存在的 ctx 成员不会被编成真的', () => {
     expect(verdict('featdet', "if (ctx.system || ctx.noSuchThing) ctx.registerView({ id: 'home', mount() {} })").ok).toBe(false);
     expect(verdict('featreal', "if (ctx.registerCommand) ctx.registerView({ id: 'home', mount() {} })").ok).toBe(true); // 真有的照常

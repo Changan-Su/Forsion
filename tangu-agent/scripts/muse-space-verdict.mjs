@@ -11,10 +11,12 @@
  * 否则 main.js;整个文件当 setup(ctx) 的函数体跑(内层函数只有 ctx 一个形参,与宿主逐字同形);home 必须带 mount 函数
  * (ViewContribution.mount 必填,缺了宿主渲染「视图加载失败」);宿主给 async 注册 3 秒宽限(desktop builtins/agentSpaceSync),
  * 这里同样等到见着 home 或满 3 秒。ctx 只给 PluginContext 真有的顶层成员(读 desktop types.ts,读不到就宽松);agent Space
- * 不带 capabilities → 没有 ctx.system。浏览器全局(document/fetch…给深代理,window/self 就是 globalThis)**直接装在本进程的
- * globalThis 上**,再用与宿主逐字相同的 new Function('ctx', code)(ctx) 求值 —— 于是顶层 `const self = …` 是合法遮蔽、
- * strict 文件的 this 是 undefined、sloppy 的 this 是全局(=window),都与宿主一致(Codex 09-27 两轮:当形参注入会撞名,
- * 套壳 .call(this) 会把 strict 的 this 弄错)。本进程一次性、判完即退,污染全局无妨;定时器用真的,不留尾巴。
+ * 不带 capabilities → 没有 ctx.system。浏览器环境**直接做进本进程的全局**:window/self 就是 globalThis;浏览器才有的名字
+ * (document / addEventListener / ResizeObserver …)经 globalThis 原型链上的代理一律解析成惰性深代理,Node 自带的(定时器 /
+ * console / process)照旧是真的;fetch / navigator 显式盖成惰性的(不真发请求)。然后用与宿主逐字相同的
+ * new Function('ctx', code)(ctx) 求值 —— 顶层 `const self = …` 是合法遮蔽、strict 的 this 是 undefined、sloppy 的 this 是
+ * 全局(=window),都与宿主一致(Codex 09-27 三轮:当形参注入会撞名、套壳 .call(this) 弄错 strict 的 this、逐个补全局名单
+ * 永远补不全)。本进程一次性、判完即退,改全局无妨。代价:`if (window.根本不存在的东西)` 会被判真 —— 只会多放行,不会假红。
  * ponytail: 嵌套一层仍宽松(`ctx.app.不存在的东西` 会被判真);mount 只查在不在、不调用(要调就得在 Node 里仿一整套 DOM)——
  * 这两类真撞上,由桌面的「没注册 home」回写 / 视图挂载失败兜住。
  */
@@ -77,11 +79,9 @@ const deep = () => new Proxy(function () {}, {
 });
 const ctx = new Proxy({}, { get: (_, k) => (k === 'registerView' ? (v) => { views.push(v); return deep(); } : !known || known.has(k) ? deep() : undefined) });
 const homeOf = () => views.find((v) => v?.id === 'home');
-const browser = {
-  window: globalThis, self: globalThis, document: deep(), location: deep(), navigator: deep(), localStorage: deep(), sessionStorage: deep(),
-  fetch: deep(), getComputedStyle: deep(), matchMedia: deep(), CSS: deep(), HTMLElement: deep(), customElements: deep(),
-  requestAnimationFrame: (fn) => setTimeout(fn, 16), cancelAnimationFrame: clearTimeout,
-};
+const proto = Object.getPrototypeOf(globalThis);
+Object.setPrototypeOf(globalThis, new Proxy(proto, { has: () => true, get: (t, k, rcv) => (k in t ? Reflect.get(t, k, rcv) : deep()) }));
+const browser = { window: globalThis, self: globalThis, navigator: deep(), fetch: deep(), requestAnimationFrame: (fn) => setTimeout(fn, 16), cancelAnimationFrame: clearTimeout };
 for (const [k, v] of Object.entries(browser)) Object.defineProperty(globalThis, k, { value: v, configurable: true, writable: true });
 let r;
 try { r = new Function('ctx', code)(ctx); } catch (e) { done({ built: true, ok: false, text: `求值抛错:${msg(e)}` }); }
