@@ -15,6 +15,7 @@
  * - 绝不等交互:GIT_TERMINAL_PROMPT=0、ssh BatchMode;超时即报错。
  */
 import { constants as fsConstants, promises as fs } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { runBoundedProcess } from '../utils/boundedProcess.js';
 import { deps } from '../seams/runtime.js';
@@ -31,12 +32,11 @@ export const MAX_NEW_FILES = 1000;
 /** 单个文件的上限:GitHub 拒收 100MB 以上的文件,50MB 起就会告警。 */
 export const MAX_NEW_FILE_BYTES = 50 * 1024 * 1024;
 export const COMMIT_MESSAGE_MAX = 5000;
-/** 待提交清单最多回这么多条(面板完整列出;超过这个数提交本来也会被体量闸拦下)。 */
-const PENDING_LIST_MAX = 1000;
+/** 待提交清单的上限:面板完整列出;一次提交超过这么多条目直接拒 —— 列不全的东西不许提交。 */
+export const PENDING_LIST_MAX = 1000;
 /** 喂给模型写提交信息的 diff 上限。 */
 const DIFF_BUDGET = 12_000;
 const MESSAGE_MAX_TOKENS = 400;
-const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
 
 /** 建仓时没有 .gitignore 就放这一份(有就一个字不动)。 */
 export const DEFAULT_GITIGNORE = [
@@ -192,10 +192,16 @@ async function pendingChanges(cwd: string): Promise<{ entries: PendingFile[]; un
   return { entries, untracked };
 }
 
+/** 比较基准:有 HEAD 用 HEAD;还没有提交的新仓用空树 —— 空树 id 按仓库的对象格式现算(SHA-256 仓不是那串 SHA-1)。 */
+async function diffBase(cwd: string): Promise<string> {
+  if ((await readGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { timeoutMs: 5000 })).code === 0) return 'HEAD';
+  return must(await readGit(cwd, ['hash-object', '-t', 'tree', '--stdin'], { input: '', timeoutMs: 5000 }), 'hash-object').stdout.trim();
+}
+
 /** 已暂存的条目(index 对 HEAD;还没有提交的新仓对空树)。只读 index,不读工作区。 */
 async function stagedEntries(cwd: string): Promise<StagedEntry[]> {
-  const hasHead = (await readGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { timeoutMs: 5000 })).code === 0;
-  const r = must(await readGit(cwd, ['diff', '--cached', '--raw', '-z', '--no-renames', '--no-abbrev', ...(hasHead ? [] : [EMPTY_TREE])], { maxOutputBytes: 4 * 1024 * 1024 }), 'diff --cached');
+  const base = await diffBase(cwd);
+  const r = must(await readGit(cwd, ['diff', '--cached', '--raw', '-z', '--no-renames', '--no-abbrev', ...(base === 'HEAD' ? [] : [base])], { maxOutputBytes: 4 * 1024 * 1024 }), 'diff --cached');
   const out: StagedEntry[] = [];
   const fields = r.stdout.split('\0');
   for (let i = 0; i + 1 < fields.length; i += 2) {
@@ -238,7 +244,8 @@ export async function assertCommittable(cwd: string, changes: { untracked: strin
 }
 
 /** 提交前的第二道:按**最终 index** 复核(用户自己预先暂存的、过滤器处理后的大对象都逃不过)。 */
-export async function assertStagedSafe(cwd: string, staged: StagedEntry[], limits = { maxFiles: MAX_NEW_FILES, maxBytes: MAX_NEW_FILE_BYTES }): Promise<void> {
+export async function assertStagedSafe(cwd: string, staged: StagedEntry[], limits = { maxFiles: MAX_NEW_FILES, maxBytes: MAX_NEW_FILE_BYTES, maxEntries: PENDING_LIST_MAX }): Promise<void> {
+  if (staged.length > limits.maxEntries) throw new GitActionError('too_many_files', `${staged.length} changes would be committed; the list can only show ${limits.maxEntries}`, topDirs(staged.map((e) => e.path)).join('\n'));
   const live = staged.filter((e) => e.status !== 'D');
   const embedded = live.filter((e) => e.mode === '160000').map((e) => `${e.path}/`);
   if (embedded.length) throw new GitActionError('embedded_repo', 'The commit would contain another git repository', embedded.slice(0, 5).join('\n'));
@@ -264,30 +271,48 @@ function topDirs(files: string[]): string[] {
   return [...counts].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([dir, n]) => `${dir} (${n})`);
 }
 
-/** 面板的待提交清单:有已暂存的 → 只列已暂存的(提交也只提交它们);没有 → 全部改动(提交时 add -A)。 */
-export async function gitPending(cwd: string, trust?: boolean): Promise<{ files: PendingFile[]; total: number; stagedOnly: boolean }> {
+/** 这次提交会带上的东西:有已暂存的 → 只有已暂存的(提交也只提交它们);没有 → 全部改动(提交时 add -A)。 */
+async function commitScope(cwd: string): Promise<{ files: PendingFile[]; staged: StagedEntry[]; changes: { entries: PendingFile[]; untracked: string[] } | null }> {
+  const staged = await stagedEntries(cwd);
+  if (staged.length) return { files: staged.map((e) => ({ code: e.status, path: e.path })), staged, changes: null };
+  const changes = await pendingChanges(cwd);
+  return { files: changes.entries, staged, changes };
+}
+
+/** 清单指纹:用户在提交框里看到的那份清单。提交时重算,对不上 = 看完之后又变了(changes_changed),让他重新过目。 */
+export function changesToken(files: PendingFile[]): string {
+  return createHash('sha256').update(files.map((f) => `${f.code}\t${f.path}`).sort().join('\n')).digest('hex').slice(0, 32);
+}
+
+/** 面板的待提交清单(完整;超过上限时提交本来也会被拒)+ 指纹。 */
+export async function gitPending(cwd: string, trust?: boolean): Promise<{ files: PendingFile[]; total: number; stagedOnly: boolean; token: string }> {
   await requireRepoRoot(cwd);
   await requireTrust(cwd, 'read', trust);
-  const staged = await stagedEntries(cwd);
-  const files = staged.length ? staged.map((e) => ({ code: e.status, path: e.path })) : (await pendingChanges(cwd)).entries;
-  return { files: files.slice(0, PENDING_LIST_MAX), total: files.length, stagedOnly: staged.length > 0 };
+  const scope = await commitScope(cwd);
+  return { files: scope.files.slice(0, PENDING_LIST_MAX), total: scope.files.length, stagedOnly: scope.staged.length > 0, token: changesToken(scope.files) };
 }
 
 // ── 提交 ──────────────────────────────────────────────────────────────────
 
-/** 提交。有已暂存的只提交它们;没有才 `add -A`(面板列出的全部改动)。信息走 stdin,不经命令行参数。 */
-export async function gitCommit(cwd: string, message: unknown, trust?: boolean): Promise<{ sha: string; subject: string; stagedOnly: boolean }> {
+/** 提交。有已暂存的只提交它们;没有才 `add -A`(面板列出的全部改动)。信息走 stdin,不经命令行参数。
+ *  expect = 提交框里那份清单的指纹:重算对不上就拒(changes_changed)—— 用户看完之后冒出来的文件不许悄悄进提交。
+ *  ⚠️index 复核只保证到钩子运行之前:走到 commit 这一步时仓库的钩子已经是用户信任过的代码,pre-commit 再暂存什么由它负责。 */
+export async function gitCommit(cwd: string, message: unknown, trust?: boolean, expect?: unknown): Promise<{ sha: string; subject: string; stagedOnly: boolean }> {
   const text = typeof message === 'string' ? message.replace(/\0/g, '').replace(/\r\n/g, '\n').trim() : '';
   if (!text) throw new GitActionError('empty_message', 'The commit message is empty');
   if (text.length > COMMIT_MESSAGE_MAX) throw new GitActionError('message_too_long', `The commit message is longer than ${COMMIT_MESSAGE_MAX} characters`);
   await assertNotSharedWorkspace(cwd);
   await requireRepoRoot(cwd);
   await requireTrust(cwd, 'write', trust);
-  const before = await stagedEntries(cwd);
+  const scope = await commitScope(cwd);
+  if (!scope.files.length) throw new GitActionError('nothing_to_commit', 'There is nothing to commit');
+  if (typeof expect === 'string' && expect !== changesToken(scope.files)) {
+    throw new GitActionError('changes_changed', 'The changes are different from the list you reviewed');
+  }
+  const before = scope.staged;
   let addedByUs = false;
   if (!before.length) {
-    const changes = await pendingChanges(cwd);
-    if (!changes.entries.length) throw new GitActionError('nothing_to_commit', 'There is nothing to commit');
+    const changes = scope.changes!;
     await assertCommittable(cwd, changes);
     must(await runAction(cwd, ['add', '-A']), 'add');
     addedByUs = true;
@@ -373,10 +398,10 @@ export async function gitPush(cwd: string, trust?: boolean): Promise<{ remote: s
 export async function commitMessageContext(cwd: string, trust?: boolean): Promise<string> {
   const pending = await gitPending(cwd, trust);
   if (!pending.total) throw new GitActionError('nothing_to_commit', 'There is nothing to commit');
-  const hasHead = (await readGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { timeoutMs: 5000 })).code === 0;
+  const base = await diffBase(cwd);
+  const hasHead = base === 'HEAD';
   // 只提交已暂存的时候,diff 也只看已暂存的,别让模型描述不会进这次提交的改动
   const scope = pending.stagedOnly ? ['--cached'] : [];
-  const base = hasHead ? 'HEAD' : EMPTY_TREE;
   const [stat, patch, log] = await Promise.all([
     readGit(cwd, ['diff', ...scope, base, '--stat', '--no-color'], { timeoutMs: 10_000 }),
     readGit(cwd, ['diff', ...scope, base, '--no-color', '--no-ext-diff', '--no-textconv', '-U2'], { timeoutMs: 10_000 }),

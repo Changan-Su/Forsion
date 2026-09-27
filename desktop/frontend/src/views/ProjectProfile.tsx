@@ -70,7 +70,7 @@ export function useProjectSubject(path: string | null): { workspace: ProjectWork
 const GIT_ERROR_CODES = new Set([
   'git_unavailable', 'git_timeout', 'git_failed', 'not_repo', 'already_repo', 'nothing_to_commit', 'empty_message', 'message_too_long',
   'embedded_repo', 'too_many_files', 'large_files', 'no_identity', 'invalid_branch', 'detached', 'no_remote', 'ambiguous_remote', 'no_model', 'quota_exceeded',
-  'shared_workspace', 'nested_repo', 'untrusted_config', 'credential_files', 'git_too_old',
+  'shared_workspace', 'nested_repo', 'untrusted_config', 'credential_files', 'git_too_old', 'changes_changed',
 ])
 type GitErr = { message: string; info?: string; retry?: () => void }
 
@@ -109,7 +109,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [commitDraft, setCommitDraft] = useState<string | null>(null)
   const [generating, setGenerating] = useState(false)
   const [gitErr, setGitErr] = useState<GitErr | null>(null)
-  const [pending, setPending] = useState<{ files: Array<{ code: string; path: string }>; total: number; stagedOnly: boolean } | null>(null)
+  const [pending, setPending] = useState<{ files: Array<{ code: string; path: string }>; total: number; stagedOnly: boolean; token: string } | null>(null)
   const genSeq = useRef(0)
   // 写动作的两处禁区(只读摘要照常):① 默认工作区 —— 所有不在项目里的对话共用、常在笔记库里,建仓 / 整目录提交 = 把整片笔记收进仓
   //   (引擎 gitActions 也拒,这里是第一道);② 编码工作室托管的项目(~/Forsion/Project/<项目>)—— 版本由宿主在「版本」面板里管,
@@ -241,7 +241,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
    *  ③ 其余 4xx → 引擎原话;④ 超时 / 断连 / 5xx → 动作可能已经做完:如实说「结果未确认」并重读状态,别让用户照「失败」去重试
    *  (重试 = 重复提交、再跑一遍钩子)。 */
   const gitErrorOf = (e: any, retry?: () => void): GitErr => {
-    if (typeof e?.code === 'string') return {
+    // git 进程超时:提交 / 推送可能已经做完了 —— 与断连同样按「结果未确认」处理并重读
+    if (typeof e?.code === 'string' && e.code !== 'git_timeout') return {
       message: GIT_ERROR_CODES.has(e.code) ? t(`projectProfile.git.err.${e.code}`) : String(e?.message || e),
       info: typeof e?.info === 'string' && e.info ? e.info : undefined,
       ...(e.code === 'untrusted_config' && retry ? { retry } : {}),
@@ -303,7 +304,11 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const commit = () => {
     const message = commitDraft?.trim()
     if (!message) return
-    void gitRun('git-commit', (trust) => gitCommitProject(s.cfg, session.id, message, trust), (r) => {
+    void gitRun('git-commit', (trust) => gitCommitProject(s.cfg, session.id, message, pending?.token, trust).catch(async (e) => {
+      // 看完之后改动又变了:重新列出这次会提交的东西(保留已写好的信息),让用户再过目一次
+      if (e?.code === 'changes_changed') await gitPendingProject(s.cfg, session.id).then(setPending).catch(() => {})
+      throw e
+    }), (r) => {
       applyContext(r.context); setCommitDraft(null); setPending(null)
       setNotice(t(r.commit.stagedOnly ? 'projectProfile.git.committedStaged' : 'projectProfile.git.committed', { subject: r.commit.subject }))
     })

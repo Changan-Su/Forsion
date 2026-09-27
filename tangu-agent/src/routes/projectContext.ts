@@ -189,7 +189,7 @@ function gitWrite(pathName: string, action: (cwd: string, body: any) => Promise<
 const trusted = (body: any): boolean => body?.trust === true;
 gitWrite('init', (cwd) => gitInit(cwd));
 gitWrite('trust', (cwd) => gitTrustRepo(cwd));
-gitWrite('commit', async (cwd, body) => ({ commit: await gitCommit(cwd, body.message, trusted(body)) }));
+gitWrite('commit', async (cwd, body) => ({ commit: await gitCommit(cwd, body.message, trusted(body), body.expect) }));
 gitWrite('branch', (cwd, body) => gitCreateBranch(cwd, body.name, trusted(body)));
 gitWrite('push', (cwd, body) => gitPush(cwd, trusted(body)));
 

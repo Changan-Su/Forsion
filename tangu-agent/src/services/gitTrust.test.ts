@@ -6,7 +6,7 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { isRepoTrusted, repoConfigRisks, trustRepo } from './gitTrust.js';
@@ -57,13 +57,31 @@ describe('repoConfigRisks', () => {
     expect(risk.write).toEqual(expect.arrayContaining(['filter.lfs.clean', 'include.path', 'core.hookspath', 'core.sshcommand', 'credential.https://example.com.helper']));
   });
 
-  it.skipIf(process.platform === 'win32')('钩子目录:有执行位的真钩子算;.sample 与没执行位的不算', async () => {
+  it('推送的传输:ext:: 地址、放开协议、远端助手、URL 改写都算 write;worktreeConfig 按 read 级拦(不展开读 config.worktree)', async () => {
+    const cwd = repo('transport');
+    git(cwd, 'remote', 'add', 'origin', 'ext::sh -c touch% /tmp/x');
+    git(cwd, 'config', 'protocol.ext.allow', 'always');
+    git(cwd, 'config', 'remote.origin.vcs', 'evil');
+    git(cwd, 'config', 'url.ext::sh.insteadOf', 'https://');
+    const risk = (await repoConfigRisks(cwd))!;
+    expect(risk.write).toEqual(expect.arrayContaining(['protocol.ext.allow', 'remote.origin.vcs', 'url.ext::sh.insteadof']));
+    expect(risk.write.some((r) => r.startsWith('remote.origin.url=ext::'))).toBe(true);
+    expect(risk.read).toEqual([]);
+    const wt = repo('worktree-config');
+    git(wt, 'config', 'extensions.worktreeConfig', 'true');
+    expect((await repoConfigRisks(wt))!.read).toContain('extensions.worktreeconfig');
+  });
+
+  it.skipIf(process.platform === 'win32')('钩子目录:软链一律算(git 跟着它执行);有执行位的真钩子算;.sample 与没执行位的不算', async () => {
     const cwd = repo('hooks');
     const hooks = path.join(cwd, '.git', 'hooks');
     writeFileSync(path.join(hooks, 'post-checkout'), '#!/bin/sh\n', { mode: 0o755 });
     writeFileSync(path.join(hooks, 'pre-push'), '#!/bin/sh\n'); chmodSync(path.join(hooks, 'pre-push'), 0o644);
+    const target = path.join(root, 'outside-hook.sh'); writeFileSync(target, '#!/bin/sh\n', { mode: 0o755 });
+    symlinkSync(target, path.join(hooks, 'pre-commit'));
     const risk = (await repoConfigRisks(cwd))!;
     expect(risk.write).toContain('hooks/post-checkout');
+    expect(risk.write).toContain('hooks/pre-commit');
     expect(risk.write.some((r) => r.includes('pre-push') || r.endsWith('.sample'))).toBe(false);
     expect(risk.read).toEqual([]);
   });

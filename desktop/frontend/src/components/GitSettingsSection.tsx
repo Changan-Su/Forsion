@@ -31,8 +31,8 @@ registerMessages({
   },
   'gitSettings.lease': { zh: '推送时允许改写远端历史', en: 'Allow rewriting remote history when pushing' },
   'gitSettings.leaseHint': {
-    zh: '开启后推送会带上 --force-with-lease 和 --force-if-includes：修改过上一次提交这类改写了历史的分支也能推上去；远端有你本地还没合进来的提交时仍会拒绝。关闭时推送从不改写远端历史。',
-    en: 'Pushes then use --force-with-lease and --force-if-includes, so a branch whose history you rewrote (for example by amending the last commit) can still be pushed. The push is refused if the remote has commits you have not integrated locally. When off, pushes never rewrite remote history.',
+    zh: '开启后推送会带上 --force-with-lease 和 --force-if-includes，修改过上一次提交这类改写了历史的分支也能推上去。远端出现你本地从没见过的提交时仍会拒绝，但你见过、之后又自己丢掉的提交会被覆盖。只在确定要改写远端历史时打开；关闭时推送从不改写远端历史。',
+    en: 'Pushes then use --force-with-lease and --force-if-includes, so a branch whose history you rewrote (for example by amending the last commit) can still be pushed. The push is refused if the remote has commits you have never seen locally, but commits you saw and later dropped yourself are overwritten. Turn this on only when you mean to rewrite remote history; when off, pushes never rewrite it.',
   },
   'gitSettings.reset': { zh: '恢复默认', en: 'Reset to default' },
   'gitSettings.readonly': {
@@ -59,7 +59,7 @@ export function GitSettingsSection({ cfg }: { cfg: TanguDesktopConfig }) {
   const [instructions, setInstructions] = useState('')
   const [error, setError] = useState('')
   const [unavailable, setUnavailable] = useState(false)
-  const saveSeq = useRef(0)
+  const saveChain = useRef<Promise<void>>(Promise.resolve())
 
   useEffect(() => {
     let alive = true
@@ -76,19 +76,21 @@ export function GitSettingsSection({ cfg }: { cfg: TanguDesktopConfig }) {
   if (unavailable) return <SettingsPanel icon={<GitBranch size={16} />} title={t('gitSettings.title')} description={t('gitSettings.unavailable')} />
   if (!state) return null
   const locked = !state.writable
-  // ⚠️草稿只回写「这次保存的那一项、且框里还是发出去的那个值」:前缀的响应可能在用户已经开始写提交说明之后才回来,
-  //   整份回写会把正在打的字冲掉(台架 6n 把这个时序钉成了必现);同一个框保存途中又改了,也留着他新打的字。
-  //   开关等整份状态只认最后一次保存的响应,乱序回来的旧响应不许把显示倒回去。
-  const save = async (patch: { [K in keyof GitSettings]?: GitSettings[K] | null }) => {
-    const seq = ++saveSeq.current
-    try {
-      const settings = await setGitSettings(cfg, patch)
-      if (seq === saveSeq.current) setState((s) => (s ? { ...s, settings } : s))
-      const sent = (v: unknown, cur: string) => v == null || cur.trim() === v
-      if ('branchPrefix' in patch) setPrefix((cur) => (sent(patch.branchPrefix, cur) ? settings.branchPrefix : cur))
-      if ('commitInstructions' in patch) setInstructions((cur) => (sent(patch.commitInstructions, cur) ? settings.commitInstructions : cur))
-      setError('')
-    } catch (e: any) { setError(e?.message || String(e)) }
+  // ⚠️保存按顺序一个接一个发(串行):并发时后发的可能先落盘,旧请求最后写进去 —— 显示与真实配置分叉。串行后最后一次响应就是终态。
+  //   草稿只在「框里还是点保存那一刻的内容」时回写:前缀的响应可能在用户已经开始写提交说明之后才回来(台架 6n 把这个时序钉成了必现),
+  //   同一个框保存途中又改了、或点了恢复默认之后又打了字,都留着他新打的字。
+  const save = (patch: { [K in keyof GitSettings]?: GitSettings[K] | null }) => {
+    const draft = { prefix, instructions }
+    saveChain.current = saveChain.current.then(async () => {
+      try {
+        const settings = await setGitSettings(cfg, patch)
+        setState((s) => (s ? { ...s, settings } : s))
+        if ('branchPrefix' in patch) setPrefix((cur) => (cur === draft.prefix ? settings.branchPrefix : cur))
+        if ('commitInstructions' in patch) setInstructions((cur) => (cur === draft.instructions ? settings.commitInstructions : cur))
+        setError('')
+      } catch (e: any) { setError(e?.message || String(e)) }
+    })
+    return saveChain.current
   }
   const prefixBad = !PREFIX_OK.test(prefix.trim())
   const commitPrefix = () => { const v = prefix.trim(); if (!prefixBad && v !== state.settings.branchPrefix) void save({ branchPrefix: v }) }

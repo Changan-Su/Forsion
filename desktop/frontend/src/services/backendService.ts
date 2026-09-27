@@ -1083,12 +1083,13 @@ export const gitTrustProject = (cfg: TanguDesktopConfig, sessionId: string) =>
   gitPost<{ trusted: boolean; context: ProjectContext | null }>(cfg, 'trust', { sessionId }).then(withContext)
 /** 这次会提交的文件(有已暂存的只列已暂存的,stagedOnly=true)。 */
 export const gitPendingProject = (cfg: TanguDesktopConfig, sessionId: string, trust = false) =>
-  gitPost<{ files: Array<{ code: string; path: string }>; total: number; stagedOnly: boolean }>(cfg, 'pending', { sessionId, trust })
+  gitPost<{ files: Array<{ code: string; path: string }>; total: number; stagedOnly: boolean; token: string }>(cfg, 'pending', { sessionId, trust })
 /** 用会话自己的模型写一条提交信息(计入额度)。 */
 export const generateGitCommitMessage = (cfg: TanguDesktopConfig, sessionId: string, trust = false) =>
   gitPost<{ message: string }>(cfg, 'message', { sessionId, trust }, 120_000).then((r) => r.message)
-export const gitCommitProject = (cfg: TanguDesktopConfig, sessionId: string, message: string, trust = false) =>
-  gitPost<{ commit: { sha: string; subject: string; stagedOnly: boolean }; context: ProjectContext | null }>(cfg, 'commit', { sessionId, message, trust }, 120_000).then(withContext)
+/** expect = 提交框里那份清单的指纹:用户看完之后改动又变了,引擎回 changes_changed,不会悄悄多提交。 */
+export const gitCommitProject = (cfg: TanguDesktopConfig, sessionId: string, message: string, expect: string | undefined, trust = false) =>
+  gitPost<{ commit: { sha: string; subject: string; stagedOnly: boolean }; context: ProjectContext | null }>(cfg, 'commit', { sessionId, message, trust, ...(expect ? { expect } : {}) }, 120_000).then(withContext)
 export const gitCreateProjectBranch = (cfg: TanguDesktopConfig, sessionId: string, name: string, trust = false) =>
   gitPost<{ branch: string; context: ProjectContext | null }>(cfg, 'branch', { sessionId, name, trust }).then(withContext)
 export const gitPushProject = (cfg: TanguDesktopConfig, sessionId: string, trust = false) =>

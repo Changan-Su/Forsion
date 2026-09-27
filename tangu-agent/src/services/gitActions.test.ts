@@ -12,7 +12,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
-  DEFAULT_GITIGNORE, GitActionError, assertCommittable, assertStagedSafe, cleanCommitMessage, commitMessageContext, commitMessagePrompt,
+  DEFAULT_GITIGNORE, GitActionError, assertCommittable, assertStagedSafe, changesToken, cleanCommitMessage, commitMessageContext, commitMessagePrompt,
   gitCommit, gitCreateBranch, gitInit, gitPending, gitPush, isCredentialPath, serialized,
 } from './gitActions.js';
 import { resetGitSettingsForTest } from './gitSettings.js';
@@ -147,9 +147,35 @@ describe('gitCommit', () => {
     const cwd = repo('commit-final-index');
     writeFileSync(path.join(cwd, 'blob.bin'), Buffer.alloc(64));
     const blob = git(cwd, 'hash-object', '-w', 'blob.bin');
-    const err = await assertStagedSafe(cwd, [{ status: 'A', path: 'blob.bin', mode: '100644', blob }], { maxFiles: 10, maxBytes: 10 }).catch((e) => e);
+    const err = await assertStagedSafe(cwd, [{ status: 'A', path: 'blob.bin', mode: '100644', blob }], { maxFiles: 10, maxBytes: 10, maxEntries: 10 }).catch((e) => e);
     expect(err.code).toBe('large_files');
-    expect(await assertStagedSafe(cwd, [{ status: 'A', path: 'blob.bin', mode: '100644', blob }], { maxFiles: 10, maxBytes: 1024 })).toBeUndefined();
+    expect(await assertStagedSafe(cwd, [{ status: 'A', path: 'blob.bin', mode: '100644', blob }], { maxFiles: 10, maxBytes: 1024, maxEntries: 10 })).toBeUndefined();
+    // 条目多到清单列不全(改动也算,不只新文件)→ 拒:列不全的东西不许提交
+    const many = Array.from({ length: 3 }, (_, i) => ({ status: 'M', path: `f${i}.txt`, mode: '100644', blob }));
+    expect((await assertStagedSafe(cwd, many, { maxFiles: 10, maxBytes: 1024, maxEntries: 2 }).catch((e) => e)).code).toBe('too_many_files');
+  });
+
+  it('提交框清单与提交绑定:看完之后又冒出新文件 → changes_changed;拿新清单的指纹才提交', async () => {
+    const cwd = repo('commit-token');
+    writeFileSync(path.join(cwd, 'a.txt'), 'a');
+    const reviewed = await gitPending(cwd);
+    expect(reviewed.token).toBe(changesToken(reviewed.files));
+    writeFileSync(path.join(cwd, 'sneaky.txt'), 'not reviewed');
+    expect(await codeOf(gitCommit(cwd, 'x', undefined, reviewed.token))).toBe('changes_changed');
+    expect(git(cwd, 'diff', '--cached', '--name-only')).toBe('');
+    const fresh = await gitPending(cwd);
+    expect(fresh.files.map((f) => f.path).sort()).toEqual(['a.txt', 'sneaky.txt']);
+    expect((await gitCommit(cwd, 'reviewed', undefined, fresh.token)).subject).toBe('reviewed');
+  });
+
+  it('SHA-256 仓的首次提交:空树按对象格式现算(不是那串 SHA-1)', async () => {
+    const cwd = dir('commit-sha256');
+    try { git(cwd, 'init', '-q', '--object-format=sha256', '-b', 'main'); } catch { return; } // 老 git 不支持就跳过
+    writeFileSync(path.join(cwd, 'a.txt'), 'a');
+    expect((await gitPending(cwd)).total).toBe(1);
+    expect(await commitMessageContext(cwd)).toContain('first commit');
+    expect((await gitCommit(cwd, 'first')).subject).toBe('first');
+    expect(git(cwd, 'rev-parse', 'HEAD')).toHaveLength(64);
   });
 
   it('有已暂存的只提交已暂存的,没暂存的改动原样留着(不替用户推翻部分暂存)', async () => {

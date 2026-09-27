@@ -17,16 +17,24 @@ import { runBoundedProcess } from '../utils/boundedProcess.js';
 import { tanguHome } from '../core/tanguHome.js';
 import { GIT_SCRUBBED_ENV, READ_ONLY_GIT_ARGS, gitExecutable } from './gitExec.js';
 
-const READ_KEYS = [/^filter\..+\.(clean|smudge|process)$/i, /^include\.path$/i, /^includeif\..+\.path$/i];
+const READ_KEYS = [
+  /^filter\..+\.(clean|smudge|process)$/i, /^include\.path$/i, /^includeif\..+\.path$/i,
+  // 开了它 git 还读一份 config.worktree(里面也能放过滤器);这里不展开读 —— 按 read 级拦(fail closed,极少有仓用它)
+  /^extensions\.worktreeconfig$/i,
+];
 const WRITE_KEYS = [
   ...READ_KEYS,
   /^core\.(hookspath|fsmonitor|sshcommand|gitproxy|askpass)$/i,
   /^credential\.(.+\.)?helper$/i,
   /^diff\.external$/i, /^diff\..+\.(textconv|command)$/i, /^merge\..+\.driver$/i,
   /^gpg\.(.+\.)?program$/i,
-  /^uploadpack\.packobjectshook$/i, /^remote\..+\.(uploadpack|receivepack)$/i,
-  /^extensions\.worktreeconfig$/i, // 另有一份 config.worktree,这里不展开读 —— 当风险项,让用户过目
+  /^uploadpack\.packobjectshook$/i, /^remote\..+\.(uploadpack|receivepack|vcs)$/i,
+  // 推送的传输:放开 ext:: 之类的协议、改写 URL,都能让一次推送去执行仓库指定的程序
+  /^protocol\.(.+\.)?allow$/i, /^url\..+\.(insteadof|pushinsteadof)$/i,
 ];
+/** 远端地址用了 `<transport>::<address>` 写法(ext:: 直接是一条命令,其余会调 git-remote-<transport> 助手)。 */
+const HELPER_URL_KEY = /^remote\..+\.(url|pushurl)$/i;
+const HELPER_URL = /^[a-z][a-z0-9+.-]*::/i;
 
 export interface RepoRisk {
   /** git common dir 的绝对路径(信任按它记)。 */
@@ -52,13 +60,19 @@ export async function repoConfigRisks(cwd: string): Promise<RepoRisk | null> {
   const listed = await git(cwd, ['config', '--local', '--list', '-z']);
   // 读不出来(配置写坏了 / 超时)按有风险算:fail closed,别把一份看不懂的配置当成干净的
   if (listed.code !== 0 || listed.reason) return { commonDir, read: ['config (unreadable)'], write: ['config (unreadable)'] };
-  const keys = listed.stdout.split('\0').map((entry) => entry.split('\n')[0]).filter(Boolean);
-  const read = [...new Set(keys.filter((k) => READ_KEYS.some((re) => re.test(k))))];
-  const write = [...new Set(keys.filter((k) => WRITE_KEYS.some((re) => re.test(k))))];
-  // 钩子目录里真会被执行的文件:.sample 不算;POSIX 上还得有执行位(没有执行位 git 会跳过它)
+  const pairs = listed.stdout.split('\0').filter(Boolean).map((entry) => {
+    const cut = entry.indexOf('\n');
+    return cut < 0 ? { key: entry, value: '' } : { key: entry.slice(0, cut), value: entry.slice(cut + 1) };
+  });
+  const read = [...new Set(pairs.map((p) => p.key).filter((k) => READ_KEYS.some((re) => re.test(k))))];
+  const write = [...new Set(pairs.map((p) => p.key).filter((k) => WRITE_KEYS.some((re) => re.test(k))))];
+  for (const { key, value } of pairs) if (HELPER_URL_KEY.test(key) && HELPER_URL.test(value.trim())) write.push(`${key}=${value.trim().slice(0, 60)}`);
+  // 钩子目录里会被执行的:软链一律算(git 跟着它执行,指向哪里都一样);.sample 不算;POSIX 上的真文件还得有执行位
   const hooksDir = path.join(commonDir, 'hooks');
   for (const entry of await fs.readdir(hooksDir, { withFileTypes: true }).catch(() => [])) {
-    if (!entry.isFile() || entry.name.endsWith('.sample')) continue;
+    if (entry.name.endsWith('.sample')) continue;
+    if (entry.isSymbolicLink()) { write.push(`hooks/${entry.name}`); continue; }
+    if (!entry.isFile()) continue;
     if (process.platform !== 'win32') {
       const st = await fs.stat(path.join(hooksDir, entry.name)).catch(() => null);
       if (!st || !(st.mode & 0o111)) continue;

@@ -246,6 +246,7 @@ async function run(app, win, stub, seen, home, ctx) {
   check('6e 写动作行:提交… / 新建分支… / 推送（2）(领先 2 → 按钮带数)', writeLabels.length === 3 && /提交/.test(writeLabels[0]) && /新建分支/.test(writeLabels[1]) && /推送（2）/.test(writeLabels[2]), JSON.stringify(writeLabels))
   await writeRow.locator('[data-git-action="commit"]').click()
   const form = profile.locator('[data-project-git-commit-form]')
+  const gitError = profile.locator('[data-project-git-error]')
   await form.waitFor()
   const generated = await until(async () => (await form.locator('textarea').inputValue()).startsWith('feat: add git actions'))
   check('6f 点「提交…」→ 展开提交框;POST git/message 带 sessionId,生成的信息填进输入框', generated && seen.gitMessages.length === 1 && seen.gitMessages[0].sessionId === 'pd-main', JSON.stringify(seen.gitMessages))
@@ -257,10 +258,15 @@ async function run(app, win, stub, seen, home, ctx) {
   await dismissToasts(win)
   await details.screenshot({ path: shots.gitCommitForm = shot('project-git-commit-zh-light') })
   await form.locator('textarea').fill('fix: 手改过的提交信息')
+  seen.staleOnce = true
+  await form.locator('[data-git-action="commit-confirm"]').click()
+  await until(async () => seen.gitPendings.length === 2)
+  await gitError.waitFor()
+  check('6g0 改动在看过清单之后又变了 → 本地化说明、重新拉清单、提交框和写好的信息都还在', /改动又变了/.test(await gitError.textContent()) && seen.gitPendings.length === 2 && await form.count() === 1 && (await form.locator('textarea').inputValue()) === 'fix: 手改过的提交信息' && seen.gitCommits[0]?.expect === 'tok-1', JSON.stringify({ commits: seen.gitCommits, pendings: seen.gitPendings.length }))
   await form.locator('[data-git-action="commit-confirm"]').click()
   const closed = await until(async () => (await form.count()) === 0)
   const firstCommit = await profile.locator('[data-project-git-commits] .project-git-commit strong').first().textContent().catch(() => '')
-  check('6g 提交 → POST git/commit { sessionId, 手改后的信息 };提交框收起,最近提交第一条是它,改动清空', closed && seen.gitCommits.length === 1 && seen.gitCommits[0].sessionId === 'pd-main' && seen.gitCommits[0].message === 'fix: 手改过的提交信息' && firstCommit === 'fix: 手改过的提交信息' && await profile.locator('[data-project-git-changes]').count() === 0, JSON.stringify({ commits: seen.gitCommits, firstCommit }))
+  check('6g 再点提交 → POST git/commit { sessionId, 手改后的信息, expect = 新清单的指纹 };提交框收起,最近提交第一条是它,改动清空', closed && seen.gitCommits.length === 2 && seen.gitCommits[1].sessionId === 'pd-main' && seen.gitCommits[1].message === 'fix: 手改过的提交信息' && seen.gitCommits[1].expect === 'tok-2' && firstCommit === 'fix: 手改过的提交信息' && await profile.locator('[data-project-git-changes]').count() === 0, JSON.stringify({ commits: seen.gitCommits, firstCommit }))
   await writeRow.locator('[data-git-action="branch"]').click()
   const promptInput = win.locator('.dialog .dialog-input')
   await promptInput.waitFor()
@@ -274,7 +280,6 @@ async function run(app, win, stub, seen, home, ctx) {
   await promptInput.waitFor()
   await promptInput.fill('bad..name')
   await promptInput.press('Enter')
-  const gitError = profile.locator('[data-project-git-error]')
   await gitError.waitFor()
   const errText = await gitError.textContent()
   check('6i 非法分支名 → Git 卡片里本地化报错 + git 原文(不是引擎英文原句)', /这不是一个合法的分支名/.test(errText) && /bad\.\.name/.test(await gitError.locator('pre').textContent()) && !/That is not a valid/.test(errText), errText)
@@ -573,7 +578,7 @@ async function main() {
     if (route === '/agent/sessions' && method === 'GET' && url.searchParams.get('archived') === 'true') return { sessions: [] }
     // 带 body 的写接口:override 在 handle 之前跑且能读 body(handle 的 body() 只能读一次,GET 分支已用掉 sessionId 的读取)
     // Git 写动作:按引擎(services/gitActions.ts)的口径改 ctx.git,成功带回新上下文;失败回 400 { error: code, info }
-    if (route === '/agent/project-context/git/pending' && method === 'POST') { const b = await body(); seen.gitPendings.push(b); const files = (ctx.git.changes || []).map((c) => ({ code: c.code, path: c.path })); return { files, total: files.length, stagedOnly: false } }
+    if (route === '/agent/project-context/git/pending' && method === 'POST') { const b = await body(); seen.gitPendings.push(b); const files = (ctx.git.changes || []).map((c) => ({ code: c.code, path: c.path })); return { files, total: files.length, stagedOnly: false, token: `tok-${seen.gitPendings.length}` } }
     if (route === '/agent/project-context/git/trust' && method === 'POST') {
       const b = await body(); seen.gitTrusts.push(b)
       ctx.git = { ...ctx.git, changesUnread: undefined, trusted: true, changes: [{ code: ' M', path: 'a.txt' }], changesTotal: 1, staged: 0, unstaged: 1, untracked: 0 }
@@ -582,6 +587,8 @@ async function main() {
     if (route === '/agent/project-context/git/message' && method === 'POST') { const b = await body(); seen.gitMessages.push(b); await sleep(300); return { message: 'feat: add git actions to project details\n\nCommit, branch and push from the panel.' } }
     if (route === '/agent/project-context/git/commit' && method === 'POST') {
       const b = await body(); seen.gitCommits.push(b)
+      // 清单指纹对不上(用户看完之后又冒出文件)→ 引擎回 changes_changed;桌面应重新拉清单、保留信息,等用户再点
+      if (seen.staleOnce) { seen.staleOnce = false; return { __code: 400, body: { detail: 'changed', error: 'changes_changed' } } }
       const subject = String(b.message).split('\n')[0]
       ctx.git = { ...ctx.git, staged: 0, unstaged: 0, untracked: 0, changesTotal: 0, changes: [], ahead: (ctx.git.ahead || 0) + 1, commits: [{ sha: 'c'.repeat(40), short: 'ccccccc', at: Date.now(), subject }, ...(ctx.git.commits || [])] }
       return { commit: { sha: 'c'.repeat(40), subject, stagedOnly: false }, context: ctx }
