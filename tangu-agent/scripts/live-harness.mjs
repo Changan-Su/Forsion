@@ -431,6 +431,15 @@ const museFirstPrompts = async () => {
       FROM agent_runs r JOIN chat_sessions s ON s.id = r.session_id WHERE s.kind = 'muse' ORDER BY r.created_at`).all().map((x) => Number(x.p) || 0); // 0 = 这个周期还没有 usage;不滤,滤了周期序号会错位
   } finally { db.close(); }
 };
+/** Muse 周期里加载 forsion-plugin 技能的次数(09-27:指令改成「只在要更多接口时才加载」,跨次比对用)。 */
+const museSkillLoads = async () => {
+  const { default: Database } = await import('better-sqlite3');
+  const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+  try {
+    return db.prepare(`SELECT COUNT(*) AS n FROM agent_run_events e JOIN agent_runs r ON r.id = e.run_id JOIN chat_sessions s ON s.id = r.session_id
+      WHERE s.kind = 'muse' AND e.type = 'tool_call' AND json_extract(e.payload, '$.name') = 'use_skill' AND e.payload LIKE '%forsion-plugin%'`).get().n;
+  } finally { db.close(); }
+};
 const asList = (x, key) => Array.isArray(x) ? x : Array.isArray(x?.[key]) ? x[key] : Array.isArray(x?.rows) ? x.rows : [];
 
 // 桌面 work 会话的 per-run 配置(execMode/cwd 只经 agent_config 传,见 agentLoop.ts:581;appStore.ts:1553 同形)。
@@ -1175,6 +1184,9 @@ try {
     // Space 判定**只记不判**:它是 Node 里对渲染进程的近似,两向都可能有偏差,不该把一个真跑通的模型场景判红;
     // 看 detail 里的「Space …」跨次比对即可(⚠️ = 判定为装不出 home,拿 scripts/muse-space-verdict.mjs 复核)。没写不算错。
     const space = await museSpaceVerdict(join(home, 'agents', 'muse', 'Space'), health?.version);
+    // 只记不判(09-27):Space 有没有改用 ctx.agent 从数据渲染、这两个周期加载了几次 84KB 的插件技能
+    const spaceUsesAgent = (() => { try { return /ctx\.agent\./.test(readFileSync(join(home, 'agents', 'muse', 'Space', 'main.js'), 'utf8')); } catch { return false; } })();
+    const skillLoads = await museSkillLoads().catch(() => '?');
     const spaceAsks = approvals.filter((a) => JSON.stringify(a).includes('/Space/')).length; // Space 目录三档免审:排进审批 = 提示词又把它说成「Library 外」
     // 开局上下文(09-27):每个周期一个新会话 → 周期 2 第一次调用不该带着周期 1 的整段对话(连工具结果)。
     // 旧行为实测 ×2.6(1.8 万 → 4.6 万 token;实机攒到 17–20 万,2 小时心跳下每轮都按缓存未命中计费)。判据 ≤ ×1.5;
@@ -1184,7 +1196,7 @@ try {
     const [p1, p2] = firsts;
     const replayOk = !twoCycles || (!!(p1 && p2) && p2 <= p1 * 1.5); // 周期 2 没起另由 twoCycles 判红
     const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && !spaceAsks && replayOk; // 审批队列、开局上下文都是引擎真实状态,照判
-    return { ok, detail: `${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};开局上下文 ${p1 || '?'}→${p2 || '?'} token${p1 && p2 ? `(×${(p2 / p1).toFixed(2)}${replayOk ? '' : ' ⚠️带着上一周期的对话'})` : twoCycles ? '(⚠️周期 2 首轮 60s 未返回,没量到)' : ''};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.ok ? '' : '⚠️'}${space.text};自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
+    return { ok, detail: `${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};开局上下文 ${p1 || '?'}→${p2 || '?'} token${p1 && p2 ? `(×${(p2 / p1).toFixed(2)}${replayOk ? '' : ' ⚠️带着上一周期的对话'})` : twoCycles ? '(⚠️周期 2 首轮 60s 未返回,没量到)' : ''};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.ok ? '' : '⚠️'}${space.text}${space.built ? (spaceUsesAgent ? '(用 ctx.agent 取数)' : '(没用 ctx.agent)') : ''};插件技能加载 ${skillLoads} 次;自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
   });
   // ── musewake(09-24,opt-in,单独跑:`--only musewake`):「用户睡了、没事可做」时 Muse 会不会自己 set_next_wake,
   // 引擎会不会真的跳过心跳,用户一动能不能立刻醒。作息按**当前钟点**播:活跃窗口 = 现在 +6h 起 10 个小时(每天每小时一行,

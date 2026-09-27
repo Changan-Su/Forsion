@@ -798,6 +798,12 @@ export const postMuseFeedback = (cfg: TanguDesktopConfig, text: string) =>
 export const getMuseLibrary = (cfg: TanguDesktopConfig) =>
   request<{ root: string; files: MuseLibraryEntry[] }>(cfg, '/agent/special/muse/library', undefined, { timeoutMs: 30000 })
 
+/** 读 Library 里一个文本文件(Muse 自建 Space 的 ctx.agent.library.read;越界 / 隐藏 / 超 1MB 引擎侧拒)。 */
+export const getMuseLibraryFile = (cfg: TanguDesktopConfig, path: string) =>
+  request<{ path: string; content: string; size: number; mtime: number }>(
+    cfg, `/agent/special/muse/library/file?path=${encodeURIComponent(path)}`, undefined, { timeoutMs: 30000 },
+  )
+
 
 // ⚠️ 这两条是控制面(非流式),必须带超时:插件的「登记规则 / 停用规则」把它们放进了每插件串行链,
 // 后端半死时一笔永不 settle 的请求会把整条链焊住 —— 停用永远排不上,等于 codex 抓的那条 bug 换了触发条件。

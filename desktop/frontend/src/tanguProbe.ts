@@ -8,6 +8,7 @@
 import { setActiveSpace, useSpaceStore, useWorkspace } from '@lcl/engine'
 import {
   setTanguProbe,
+  type TanguAgentSelf,
   type TanguAgentInfo,
   type TanguAgentStatus,
   type TanguModelInfo,
@@ -18,6 +19,7 @@ import {
 import { activeChatModelId, stickyDefaults, useApp, type AppState } from './stores/appStore'
 import { agentStatusOf, statusKey } from './stores/agentStatus'
 import type { TanguDesktopConfig } from './types'
+import { getAgentSchedules, getMuseLibrary, getMuseLibraryFile, getMuseStatus, getMuseTodos, patchMuseTodo } from './services/backendService'
 
 function readActiveModel(): TanguModelInfo | null {
   const s = useApp.getState()
@@ -240,6 +242,41 @@ export async function startChat(o: TanguStartChatOptions): Promise<TanguStartCha
   return { ok: true, sessionId: st.sessions.find((x) => !known.has(x.id))?.id ?? st.activeId ?? undefined }
 }
 
+/** Muse 自建 Space 的数据源(ctx.agent,2026-09-27):都是 Muse 面板已经在用的引擎接口,只做字段收窄 ——
+ *  插件拿到的是契约里的那几个字段(不带 libraryDir / spaceDir 这类绝对路径)。后端没就绪 → reject,插件自己兜。 */
+function museSelf(): TanguAgentSelf {
+  const cfg = async (): Promise<TanguDesktopConfig> => {
+    const c = await waitBackend(15_000)
+    if (!c) throw new Error('backend not ready')
+    return c
+  }
+  return {
+    status: async () => {
+      const s = await getMuseStatus(await cfg())
+      if (!s) return null
+      return {
+        running: !!s.running, lastCycleAt: s.lastCycleAt ?? null, sleepUntil: s.sleepUntil ?? null, sleepReason: s.sleepReason ?? null,
+        mode: s.mode ?? 'ask', heartbeatMinutes: s.heartbeatMinutes ?? 120, pendingApprovals: s.pendingApprovals ?? 0,
+      }
+    },
+    todos: async (status) => (await getMuseTodos(await cfg(), status)).map((t) => ({
+      id: t.id, title: t.title, detail: t.detail ?? null, status: t.status, createdAt: t.created_at,
+    })),
+    updateTodo: async (id, status, alive) => {
+      const c = await cfg()
+      if (alive && !alive()) throw new Error('plugin disabled')
+      await patchMuseTodo(c, id, status, 'pending')
+    },
+    schedule: async () => {
+      const all = await getAgentSchedules(await cfg())
+      const own = (Array.isArray(all) ? all : []).find((x) => x.slug === 'muse')?.entries ?? []
+      return own.map((e) => ({ id: e.id, name: e.name, date: e.date, repeat: e.repeat, auto: e.auto, description: e.description, lastRun: e.lastRun }))
+    },
+    libraryList: async () => (await getMuseLibrary(await cfg())).files,
+    libraryRead: async (path) => (await getMuseLibraryFile(await cfg(), path)).content,
+  }
+}
+
 export function installTanguProbe(): void {
   setTanguProbe({
     hostExecution: () => window.tangu?.executionCapabilities?.host ?? (useApp.getState().desktopConfig?.mode === 'managed'),
@@ -253,6 +290,7 @@ export function installTanguProbe(): void {
     agentStatus: readAgentStatus,
     subscribeAgentStatus,
     startChat,
+    agentSelf: (slug) => (slug === 'muse' ? museSelf() : null),
     // ⚠️只在 (模型 id, Space id) 这对值**真变了**时才回调。useApp 在流式回答期间每收一个
     // SSE 增量就 set 一次 state,裸转发 = 把每个订阅插件按帧敲一遍(浮层类插件会当场掉帧)。
     subscribe: (cb) => {
