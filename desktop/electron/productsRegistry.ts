@@ -164,6 +164,19 @@ async function writeSidecar(dir: string, sidecar: Sidecar, at: string): Promise<
   }
 }
 
+/**
+ * 写进产物目录之前核一次:还是索引时那个真目录(不是软链、dev/ino 没变 —— 外部造物的登记绑的就是它),变了就返回 false、一个字节都不写。
+ * 每写一份核一次:索引与写之间、两份副本之间都可能被换成别的目录。
+ * ponytail: 核完到写之间仍有微秒级窗口 —— 能在这点时间里调包用户文件夹的,是一个以用户身份在跑的本机进程,
+ *           它本来就能往任何地方写;这里防的是不可信的目录**内容**(克隆 / 解压来的),不是并发的恶意进程。
+ */
+async function writeInto(r: { root: string; dir: DirIdentity }, sidecar: Sidecar, rel: string): Promise<boolean> {
+  const now = await fs.lstat(r.root).catch(() => null)
+  if (!now || now.isSymbolicLink() || now.dev !== r.dir.dev || now.ino !== r.dir.ino) return false
+  await writeSidecar(r.root, sidecar, rel)
+  return true
+}
+
 // ── 判型 ──────────────────────────────────────────────────────────────────────
 
 /**
@@ -329,14 +342,6 @@ async function index(rootReal: string | null, externals: readonly ExternalRoot[]
     for (const loser of group.slice(1)) losers.add(loser)
   }
 
-  // 外部造物:写之前再核一次这个路径还是刚才那个真目录(不是软链、身份没变)。
-  // ponytail: 核完到写之间仍有微秒级窗口 —— 能在这点时间里调包用户文件夹的,是一个以用户身份在跑的本机进程,
-  //           它本来就能往任何地方写;这里防的是不可信的目录**内容**(克隆 / 解压来的),不是并发的恶意进程。
-  const stillThere = async (f: Found): Promise<boolean> => {
-    if (!f.external) return true
-    const now = await fs.lstat(f.root).catch(() => null)
-    return !!now && !now.isSymbolicLink() && now.dev === f.dir.dev && now.ino === f.dir.ino
-  }
   const indexed: Indexed[] = []
   for (const f of found) {
     try {
@@ -345,17 +350,20 @@ async function index(rootReal: string | null, externals: readonly ExternalRoot[]
       // 已有的每一份身份文件都收敛到同一个身份(坏的、拷进来的、重复 id 的输家那几份一起):老版本只读根目录那份,
       // 别处留着的旧 id 也不许哪天冒出来。一份都没有 → 只写 `.tangu/`,不往根目录添文件。
       const targets = f.files.size ? [...f.files.keys()] : [PRODUCT_SIDECAR_NEW]
-      const stale = targets.filter((rel) => f.files.get(rel) !== sidecar.id)
-      if (stale.length && !(await stillThere(f))) continue
-      for (const rel of stale) {
-        try { await writeSidecar(f.root, sidecar, rel) } catch (e) {
-          // 新铸的必须落进读序第一份(下次读到的就是它),否则就是个落盘上不存在的临时身份 → 这一行不给(同只读盘);
-          // 已有身份时只是少同步了一份副本,不影响这一行
-          if (minted && rel === targets[0]) throw e
+      // 读序里排在赢家之前(含)的几份必须写成功,下次读到的就是它们:新铸的是第一份;已有身份时是它前面那几份坏文件 ——
+      // 修不好的话老版本读根目录会另铸一个,这边交出去的 id 迟早作废 → 这一行不给(同只读盘)。之后的副本写不进只喊一声。
+      const lead = minted ? 0 : targets.findIndex((rel) => f.files.get(rel) === sidecar.id)
+      let moved = false
+      for (const [i, rel] of targets.entries()) {
+        if (f.files.get(rel) === sidecar.id) continue
+        const wrote = await writeInto(f, sidecar, rel).catch((e) => {
+          if (i <= lead) throw e
           warnOnce(`${f.root}:${rel}`, `[products] 身份文件没能同步:${path.join(f.root, rel)}`, e)
-        }
+          return true
+        })
+        if (!wrote) { moved = true; break } // 期间目录被换了:这一轮不列,下次扫描重新认
       }
-      indexed.push({ root: f.root, name: f.name, sidecar, targets, updatedAt: f.updatedAt, external: f.external, dir: f.dir })
+      if (!moved) indexed.push({ root: f.root, name: f.name, sidecar, targets, updatedAt: f.updatedAt, external: f.external, dir: f.dir })
     } catch (e) {
       // 写不进 sidecar(只读盘/权限):跳过,别给出一个落盘上不存在的临时身份。
       // ponytail: 行为不改(这一行就是会从栅格里消失),但**至少喊一声** —— 否则用户看到的是产物凭空没了,
@@ -485,8 +493,19 @@ export async function updateProduct(
     // 一个字段都没变(空 patch = 渲染层一次没带字段的往返)就别写:原子写会换掉 inode、顶起目录 mtime,
     // 于是这一行在 updatedAt 倒序的栅格里凭空跳到最前面 —— 什么都没改,位置却动了。
     if (JSON.stringify(next) === JSON.stringify(hit.sidecar)) return hit
-    // 每一份都写:只写一份的话,别处那份(比如刚在这次索引里修好的根目录)按读序赢回来,改动凭空丢失
-    for (const rel of hit.targets) await writeSidecar(hit.root, next, rel)
+    // 每一份都写:只写一份的话,别处那份(比如刚在这次索引里修好的根目录)按读序赢回来,改动凭空丢失。
+    // 第一份(读序,下次读到的就是它)写不进 / 目录变了才算失败;之后的副本写不进只喊一声 —— 改动已经生效,别报「没改成」。
+    for (const [i, rel] of hit.targets.entries()) {
+      const wrote = await writeInto(hit, next, rel).catch((e) => {
+        if (i === 0) throw e
+        warnOnce(`${hit.root}:${rel}`, `[products] 身份文件没能同步:${path.join(hit.root, rel)}`, e)
+        return true
+      })
+      if (!wrote) {
+        if (i === 0) throw new Error(`Product directory changed: ${hit.root}`)
+        break
+      }
+    }
     // 写完目录 mtime 变了,updatedAt 重新取一次,别让刚改完的产物在栅格里排到旧位置。
     const updatedAt = await fs.stat(hit.root).then((st) => st.mtimeMs).catch(() => hit.updatedAt)
     return { ...hit, sidecar: next, updatedAt }
