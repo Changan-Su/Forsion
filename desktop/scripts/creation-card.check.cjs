@@ -2,7 +2,8 @@
  *  (台架的托管根是真实的 ~/Forsion(-Dev)/Project,不能往那里建东西)。钉住:
  *  ① 无 path 的卡「做成作品」→ products:create(名字)→ PATCH 会话 project_path / project_name + 会话配置 cwd 指过去
  *     → 替用户发「接着做」(POST /agent/runs,同一会话)→ 卡片完成态;围栏原文不进正文;
- *  ② 有 path 的卡「加入造物」→ products:adopt(工作目录内的绝对路径, 名字)→ 会话挪到复制品,不替用户发消息;
+ *  ② 有 path 的卡「加入造物」→ products:register(工作目录内的绝对路径, within = 工作目录)→ **原地**加入(不复制)
+ *     → 会话工作目录切到那个文件夹本身,不替用户发消息;完成态由 products:isCreation 判;
  *  ③ path 爬出工作目录 → 没有按钮,只有说明;
  *  ④ 截图(观感自查)。先 npm run build,再 npm run check:creationcard;--nc = 负对照(围栏换成 text,卡片不该出现 → 全红)。 */
 const fs = require('fs')
@@ -61,11 +62,15 @@ async function run(app, win, stub, seen, home, work, root) {
   await win.waitForSelector('.t2sw, .t2s-side', { timeout: 30_000 })
   await sleep(1200)
   await app.evaluate(({ ipcMain }, dir) => {
-    globalThis.__creations = { create: [], adopt: [] }
-    for (const ch of ['codeProjects:root', 'products:create', 'products:adopt']) ipcMain.removeHandler(ch)
-    ipcMain.handle('codeProjects:root', () => dir)
+    globalThis.__creations = { create: [], register: [], registered: [] }
+    for (const ch of ['products:create', 'products:register', 'products:isCreation']) ipcMain.removeHandler(ch)
     ipcMain.handle('products:create', (_e, name) => { globalThis.__creations.create.push({ name }); return { dir: `${dir}/${name}`, name, product: {} } })
-    ipcMain.handle('products:adopt', (_e, source, name, within, strict) => { globalThis.__creations.adopt.push({ source, name, within, strict }); return { ok: true, dir: `${dir}/${name}`, name, files: 2, product: {} } })
+    // 原地加入:回的目录就是来源本身(不复制)
+    ipcMain.handle('products:register', (_e, source, within, strict) => {
+      globalThis.__creations.register.push({ source, within, strict }); globalThis.__creations.registered.push(source)
+      return { ok: true, dir: source, name: source.split('/').pop(), product: {} }
+    })
+    ipcMain.handle('products:isCreation', (_e, d) => d.startsWith(`${dir}/`) || globalThis.__creations.registered.includes(d))
   }, root)
   const calls = () => app.evaluate(() => globalThis.__creations)
   const shots = {}
@@ -101,23 +106,26 @@ async function run(app, win, stub, seen, home, work, root) {
   const addCard = win.locator('[data-creation-card="add"]')
   await addCard.waitFor({ timeout: 8_000 }).catch(() => {})
   const addText = (await addCard.textContent().catch(() => '')) || ''
-  check('2 有 path 的卡:「加入造物：Pomodoro」,说明里点名要复制的文件夹', /加入造物：Pomodoro/.test(addText) && /「pomodoro」/.test(addText), addText.slice(0, 160))
+  check('2 有 path 的卡:「加入造物：Pomodoro」,说明里点名那个文件夹、说清原地加入', /加入造物：Pomodoro/.test(addText) && /「pomodoro」原地加入造物/.test(addText), addText.slice(0, 160))
   const runsBeforeAdd = stub.seen.runs.length
   await addCard.locator('[data-creation-accept]').click().catch(() => {})
   await addCard.locator('[data-creation-done]').waitFor({ timeout: 8_000 }).catch(() => {})
   await sleep(600)
-  const adopted = await calls()
+  const added = await calls()
   const addPatch = seen.patches.find((p) => p.id === 'cc-add')
-  check('2a 点「加入造物」→ products:adopt(工作目录/pomodoro, Pomodoro, within = 工作目录)→ 会话挪到复制品;不替用户发消息',
-    adopted.adopt.length === 1 && adopted.adopt[0].source === path.join(work, 'pomodoro') && adopted.adopt[0].name === 'Pomodoro' && adopted.adopt[0].within === work && adopted.adopt[0].strict === false && addPatch?.body.project_path === `${root}/Pomodoro` && stub.seen.runs.length === runsBeforeAdd,
-    JSON.stringify({ adopted, addPatch, runs: stub.seen.runs.length - runsBeforeAdd }))
+  const pomodoro = path.join(work, 'pomodoro')
+  check('2a 点「加入造物」→ products:register(工作目录/pomodoro, within = 工作目录)→ 会话工作目录切到那个文件夹本身(原地,不是复制品);不替用户发消息;卡片完成态',
+    added.register.length === 1 && added.register[0].source === pomodoro && added.register[0].within === work && added.register[0].strict === false && addPatch?.body.project_path === pomodoro && stub.seen.runs.length === runsBeforeAdd
+      && /已在造物里/.test((await addCard.locator('[data-creation-done]').textContent().catch(() => '')) || ''),
+    JSON.stringify({ added, addPatch, runs: stub.seen.runs.length - runsBeforeAdd }))
+  await win.screenshot({ path: shots.addDone = path.join(home, 'creation-card-add-done-zh-light.png') })
 
   // ── ③ path 爬出工作目录 ───────────────────────────────────────────────────
   await openSession(win, '越界卡对话', 'cc-outside')
   const outCard = win.locator('[data-creation-card="add"]')
   await outCard.waitFor({ timeout: 8_000 }).catch(() => {})
   const outText = (await outCard.textContent().catch(() => '')) || ''
-  check('3 path 爬出工作目录 → 没有按钮,只有说明;什么都没复制', await outCard.count() === 1 && await outCard.locator('[data-creation-accept]').count() === 0 && /不在这条对话的工作目录里/.test(outText) && (await calls()).adopt.length === 1, outText.slice(0, 160))
+  check('3 path 爬出工作目录 → 没有按钮,只有说明;什么都没加入', await outCard.count() === 1 && await outCard.locator('[data-creation-accept]').count() === 0 && /不在这条对话的工作目录里/.test(outText) && (await calls()).register.length === 1, outText.slice(0, 160))
   await win.screenshot({ path: shots.outside = path.join(home, 'creation-card-outside-zh-light.png') })
   return shots
 }

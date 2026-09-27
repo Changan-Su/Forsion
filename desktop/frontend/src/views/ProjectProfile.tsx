@@ -7,7 +7,7 @@ import { useI18n } from '../i18n'
 import { createProjectSkill, deleteProjectIcon, generateGitCommitMessage, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitPendingProject, gitPushProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon } from '../services/backendService'
 import { askString } from '../amadeus/components/askString'
 import { normPath } from './coding/studioModel'
-import { adoptIntoCreations } from './chat2/CreationCards'
+import { addToCreations } from './chat2/CreationCards'
 import { setActiveSpace } from '@lcl/engine'
 import type { AgentConfig, NormalAgentDef, ProjectContext, ProjectSettings, SessionRecord, TeamDef } from '../types'
 import { isTeamImageAvatar, sessionWorkspaceKey, THINKING_LEVELS } from '../types'
@@ -118,15 +118,28 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   //   这里再按用户口径提交 / 建分支 = 两个驱动方改同一个仓。
   const [managedRoot, setManagedRoot] = useState('')
   useEffect(() => { let alive = true; void window.tangu?.codeProjectsRoot?.().then((root) => { if (alive) setManagedRoot(root || '') }).catch(() => {}); return () => { alive = false } }, [])
+  // 这个项目是不是造物(托管根的直接子目录 / 原地加入的外部文件夹;宿主只读判,不铸身份)。null = 还没问到。
+  // 原地加入的外部造物开了版本历史(我方建的仓)= 版本由宿主管:Git 页同托管项目一样只读(② 那条理由)。
+  const [inCreations, setInCreations] = useState<boolean | null>(null)
+  const [hostVersions, setHostVersions] = useState(false)
+  useEffect(() => {
+    let alive = true
+    setInCreations(null); setHostVersions(false)
+    const api = window.tangu
+    void (async () => {
+      const yes = !!(await api?.productsIsCreation?.(dir).catch(() => false))
+      if (!alive) return
+      setInCreations(yes)
+      if (yes) { const st = await api?.codeStudioGitStatus?.(dir).catch(() => null); if (alive) setHostVersions(st?.state === 'owned') }
+    })()
+    return () => { alive = false }
+  }, [dir, reloadAt])
   // ③ 项目是更大仓库的子目录:写动作只在仓库根上做(add -A 会暂存整个父仓),引擎也拒(nested_repo)。
   const gitReadOnly: 'shared' | 'managed' | 'nested' | null = workspace.isDefault || workspace.system ? 'shared'
-    : managedRoot && normPath(dir).replace(/\/[^/]*$/, '') === normPath(managedRoot) ? 'managed'
+    : (managedRoot && normPath(dir).replace(/\/[^/]*$/, '') === normPath(managedRoot)) || hostVersions ? 'managed'
     : ctx?.git.nested ? 'nested' : null
-  // 加入造物:复制一份进托管根(原项目与它的对话不动)。已在托管根里的、默认工作区 / 系统目录不给
-  const inManaged = !!managedRoot && (normPath(dir) === normPath(managedRoot) || normPath(dir).startsWith(`${normPath(managedRoot)}/`))
-  const canAdopt = !!window.tangu?.productsAdopt && !!managedRoot && !inManaged && !workspace.isDefault && !workspace.system
-  const [adopted, setAdopted] = useState<{ dir: string; name: string } | null>(null)
-  useEffect(() => { setAdopted(null) }, [dir])
+  // 加入造物:原地登记(不复制、不移动);默认工作区 / 系统目录不给,已经是造物的给「在造物中查看」
+  const canAdopt = !!window.tangu?.productsRegister && inCreations === false && !workspace.isDefault && !workspace.system
   const now = Date.now()
 
   const current = currentSessionId === undefined ? session.id : currentSessionId
@@ -234,12 +247,12 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
       setNotice(t(emoji ? 'projectProfile.iconSaved' : 'projectProfile.iconRemoved'))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
   }
-  const addToCreations = async () => {
+  const joinCreations = async () => {
     if (busy) return
     setBusy('adopt'); clear()
     try {
-      const r = await adoptIntoCreations(dir, workspace.name, dir, false)
-      setAdopted(r)
+      const r = await addToCreations(dir, dir, false)
+      setInCreations(true)
       setNotice(t('projectProfile.creation.added', { name: r.name }))
     } catch (e: any) { setError(String(e?.message || e)) } finally { setBusy('') }
   }
@@ -451,9 +464,9 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
         <button className="profile-expand" title={t('projectProfile.open')} aria-label={t('projectProfile.open')} onClick={() => openSpecial('workspace', workspace.key)}><ExternalLink size={15} /></button>
       </header>
       <p className="team-profile-location project-profile-path"><button type="button" title={dir} onClick={() => reveal(dir)}>{shortenPath(dir, s.homeDir)}</button>
-        {canAdopt && (adopted
+        {inCreations
           ? <button type="button" className="project-creation-action" data-project-creation="done" onClick={() => setActiveSpace('artificial')}><AppWindow size={12} />{t('creation.card.openCreations')}</button>
-          : <button type="button" className="project-creation-action" data-project-creation="add" title={t('projectProfile.creation.addHint')} disabled={!!busy} onClick={() => void addToCreations()}>{busy === 'adopt' ? <Loader2 size={12} className="spin" /> : <FolderInput size={12} />}{t('creation.card.add')}</button>)}</p>
+          : canAdopt && <button type="button" className="project-creation-action" data-project-creation="add" title={t('projectProfile.creation.addHint')} disabled={!!busy} onClick={() => void joinCreations()}>{busy === 'adopt' ? <Loader2 size={12} className="spin" /> : <FolderInput size={12} />}{t('creation.card.add')}</button>}</p>
       <nav className="agent-section-nav" style={{ '--profile-tab-count': TABS.length, '--profile-tab-index': TABS.findIndex((item) => item.id === tab) } as CSSProperties} aria-label={t('projectProfile.navigation')} role="tablist" onKeyDown={(e) => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return
         e.preventDefault()

@@ -30,6 +30,8 @@ export interface ProductSummary {
   updatedAt: number
   /** 存在 `.forsion-connect.json` = 经 Forsion Connect 发布过。 */
   published: boolean
+  /** 原地加入造物的外部文件夹(不在托管根里):从造物移除 = 取消登记,文件夹不动。 */
+  external?: boolean
   /** kind==='plugin':manifest.json 里的插件 id。 */
   pluginId?: string
   /** kind==='plugin':已选择「在 Forsion 中加载」(开发态加载,非隔离)。 */
@@ -56,10 +58,13 @@ export interface GitHistoryStatus {
   dirty: boolean
 }
 
-/** History 面板用:writable = 本机有 git、项目在托管根(~/Forsion/Project)下、且仓是我方的或尚未建仓。
- *  根外导入的项目一律只读 —— 宿主绝不在用户随手导入的目录里 `git init` / `add -A`。 */
+/** History 面板用:writable = 本机有 git、项目是造物(托管根下 / 原地加入的外部文件夹)、且仓是我方的或尚未建仓。
+ *  不是造物的目录一律只读 —— 宿主绝不在用户随手打开的目录里 `git init` / `add -A`。 */
 export interface GitPanelStatus extends GitHistoryStatus {
   writable: boolean
+  /** 一轮 agent 跑完宿主会不会自动存一版。托管根里的 = writable;外部造物只在我方建的仓里自动存
+   *  (还没仓时要用户手动保存第一个版本,宿主绝不替用户在他的文件夹里自动 git init)。缺省按 writable。 */
+  auto?: boolean
 }
 
 export interface GitVersion {

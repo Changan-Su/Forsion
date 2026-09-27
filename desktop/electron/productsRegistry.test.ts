@@ -312,6 +312,57 @@ describe('复制来的项目', () => {
   })
 })
 
+describe('外部造物(原地加入)', () => {
+  async function outside(name: string, files: Record<string, string> = {}): Promise<string> {
+    const dir = path.join(home, 'elsewhere', name)
+    await fs.mkdir(dir, { recursive: true })
+    for (const [relative, content] of Object.entries(files)) await fs.writeFile(path.join(dir, relative), content)
+    return dir
+  }
+
+  it('只有传进来的(宿主已登记的)才列出;身份写进它自己的 sidecar,标成 external', async () => {
+    const ext = await outside('app', { 'index.html': 'x' })
+    await project('managed', { 'index.html': 'y' })
+    expect((await scanProducts(root)).map((p) => p.name)).toEqual(['managed']) // 没登记:文件夹里有没有 sidecar 都不算
+    const list = await scanProducts(root, [ext])
+    const app = list.find((p) => p.name === 'app')!
+    expect(app).toMatchObject({ root: ext, kind: 'web', entry: 'index.html', external: true })
+    expect(list.find((p) => p.name === 'managed')!.external).toBeUndefined()
+    expect((await sidecarOf(ext)).id).toBe(app.id)
+    expect((await ensureProduct(root, ext, [ext])).id).toBe(app.id)
+    expect(await getProduct(root, app.id, [ext])).toMatchObject({ root: ext })
+    expect(await getProduct(root, app.id)).toBeNull() // 不在登记表里就解不到
+    await expect(ensureProduct(root, ext)).rejects.toThrow() // 未登记的根外目录照旧拒绝
+  })
+
+  it('托管根还没建也照样列出外部造物', async () => {
+    const ext = await outside('solo', { 'index.html': 'x' })
+    await fs.rm(root, { recursive: true, force: true })
+    expect((await scanProducts(root, [ext])).map((p) => p.name)).toEqual(['solo'])
+    expect((await ensureProduct(root, ext, [ext])).name).toBe('solo')
+  })
+
+  it('复制到别处再加入的同 id:托管的老项目留着 id,外部的新副本重铸;改名写回外部 sidecar', async () => {
+    const original = await project('orig', { 'index.html': 'x' })
+    const first = await ensureProduct(root, original)
+    await sleep(40)
+    const copy = await outside('copy', { 'index.html': 'x' })
+    await fs.copyFile(sidecarFile(original), sidecarFile(copy))
+    const list = await scanProducts(root, [copy])
+    expect(list.find((p) => p.name === 'orig')!.id).toBe(first.id)
+    const copied = list.find((p) => p.name === 'copy')!
+    expect(copied.id).not.toBe(first.id)
+    const renamed = await updateProduct(root, copied.id, { name: 'My copy' }, [copy])
+    expect(renamed).toMatchObject({ name: 'My copy', external: true })
+    expect((await sidecarOf(copy)).name).toBe('My copy')
+  })
+
+  it('登记表里混进托管根里面的路径 → 不重复列出', async () => {
+    const inner = await project('inner', { 'index.html': 'x' })
+    expect((await scanProducts(root, [inner])).filter((p) => p.name === 'inner')).toHaveLength(1)
+  })
+})
+
 describe('坏 sidecar 与未知字段', () => {
   it('坏掉的 sidecar 当作没有,重铸而不抛', async () => {
     const dir = await project('corrupt', { 'index.html': 'x' })

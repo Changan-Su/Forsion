@@ -1,7 +1,8 @@
 /**
- * Creations(造物)Space 的产物注册表 —— 托管根(~/Forsion/Project)的每个直接子目录 = 一个产物。
+ * Creations(造物)Space 的产物注册表 —— 托管根(~/Forsion/Project)的每个直接子目录 = 一个产物;
+ * 另加本机「原地加入造物」的外部文件夹(宿主侧登记,见 productTrust.externalCreationRoots,由调用方传入)。
  * 身份落在项目目录里的 sidecar(`.forsion-product.json`)而**不在路径里**:改文件夹名 / 挪位置之后,
- * 桌面快捷方式与预览的稳定源都还认得同一个产物。
+ * 桌面快捷方式与预览的稳定源都还认得同一个产物。sidecar 只说明「它是谁」:外部文件夹是不是造物,只看宿主侧登记。
  *
  * 无 Electron 依赖(纯 node fs/path/crypto),宿主只负责 IPC 信任;containment 在这里,
  * 渲染层给的目录参数一律先过 `containedName`,落盘 entry 一律先过 `insideProject`。
@@ -176,7 +177,7 @@ export async function detectKind(dir: string): Promise<{ kind: ProductKind; entr
 
 // ── 索引(一遍扫全表)───────────────────────────────────────────────────────────
 
-interface Indexed { root: string; name: string; sidecar: Sidecar; updatedAt: number }
+interface Indexed { root: string; name: string; sidecar: Sidecar; updatedAt: number; external: boolean }
 
 /** 同一个目录只喊一次,别让每次 products:list 都往日志里刷同一行。 */
 const warned = new Set<string>()
@@ -235,27 +236,35 @@ function validName(value: unknown): string {
 const readName = (value: unknown, fallback: string): string => (nameIssue(value) ? fallback : (value as string).trim())
 
 /**
- * 扫一遍托管根:合法产物目录 + 身份。缺 sidecar 的当场补(老项目就是这样拿到身份的),
- * 重复 id 判一个赢家、输家重铸。**只读 sidecar,不判型** —— 判型走 summarize,别让每次 IPC 都去遍历目录树。
+ * 扫一遍托管根 + 外部造物:合法产物目录 + 身份。缺 sidecar 的当场补(老项目就是这样拿到身份的),
+ * 重复 id 判一个赢家、输家重铸(托管的与外部的一起判)。**只读 sidecar,不判型** —— 判型走 summarize,别让每次 IPC 都去遍历目录树。
+ * rootReal = null:托管根还没建,只扫外部造物。
  *
  * ponytail: 串行 fs 调用就够了(托管根下最多几百个目录),不做并发 / 不缓存 —— 用户在访达里改了东西
  * 就该立刻看见,缓存的失效逻辑比这几毫秒贵。
  */
-async function index(rootReal: string): Promise<Indexed[]> {
-  const dirents = await fs.readdir(rootReal, { withFileTypes: true })
-  interface Found { root: string; name: string; raw: Record<string, unknown> | null; sidecar: Sidecar | null; updatedAt: number; birth: number }
+async function index(rootReal: string | null, externals: readonly string[] = []): Promise<Indexed[]> {
+  interface Found { root: string; name: string; raw: Record<string, unknown> | null; sidecar: Sidecar | null; updatedAt: number; birth: number; external: boolean }
   const found: Found[] = []
-  for (const entry of dirents.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (entry.name.startsWith('.') || !entry.isDirectory() || entry.isSymbolicLink()) continue
-    const root = path.join(rootReal, entry.name)
+  const add = async (root: string, name: string, external: boolean): Promise<void> => {
     try {
       const st = await fs.lstat(root)
-      if (st.isSymbolicLink() || !st.isDirectory()) continue // 软链项目一律不认,绝不跟随
+      if (st.isSymbolicLink() || !st.isDirectory()) return // 软链项目一律不认,绝不跟随
       const raw = await readRaw(root)
       // ⚠️先 stat 再补 sidecar:写 sidecar 会顶起目录 mtime,updatedAt 要的是补写**之前**那个,
       //   否则首次扫描会把整个栅格按「刚才补了谁」重排。
-      found.push({ root, name: entry.name, raw, sidecar: identified(raw) ? raw : null, updatedAt: st.mtimeMs, birth: birthOf(st) })
+      found.push({ root, name, raw, sidecar: identified(raw) ? raw : null, updatedAt: st.mtimeMs, birth: birthOf(st), external })
     } catch { /* 单个项目坏掉(权限/竞态删除)不拖垮整张表 */ }
+  }
+  const dirents = rootReal ? await fs.readdir(rootReal, { withFileTypes: true }) : []
+  for (const entry of dirents.sort((a, b) => a.name.localeCompare(b.name))) {
+    if (entry.name.startsWith('.') || !entry.isDirectory() || entry.isSymbolicLink()) continue
+    await add(path.join(rootReal!, entry.name), entry.name, false)
+  }
+  // 外部造物(调用方已按目录身份核过登记)。落在托管根里面的不收 —— 登记时就拒了,这里再兜一次,免得同一个目录列两次。
+  for (const root of externals) {
+    if (rootReal && (root === rootReal || root.startsWith(rootReal + path.sep))) continue
+    await add(root, path.basename(root), true)
   }
 
   // 重复 id = 用户在访达里整个复制了一份项目(sidecar 连 createdAt 一起被复制,两边完全相同)。
@@ -282,7 +291,7 @@ async function index(rootReal: string): Promise<Indexed[]> {
         sidecar = mint(f.raw)
         await writeSidecar(f.root, sidecar)
       }
-      indexed.push({ root: f.root, name: f.name, sidecar, updatedAt: f.updatedAt })
+      indexed.push({ root: f.root, name: f.name, sidecar, updatedAt: f.updatedAt, external: f.external })
     } catch (e) {
       // 写不进 sidecar(只读盘/权限):跳过,别给出一个落盘上不存在的临时身份。
       // ponytail: 行为不改(这一行就是会从栅格里消失),但**至少喊一声** —— 否则用户看到的是产物凭空没了,
@@ -293,9 +302,10 @@ async function index(rootReal: string): Promise<Indexed[]> {
   return indexed
 }
 
-// 注册表按托管根串行。首启补 sidecar 时,渲染层的 products:list 会和预览那条 ensureProduct 撞在同一个
+// 注册表整体串行。首启补 sidecar 时,渲染层的 products:list 会和预览那条 ensureProduct 撞在同一个
 // 目录上:两边都看不到 sidecar → 各铸一个 id → 后一次 rename 赢,另一边手里的 id 落盘上根本不存在
-// (快捷方式与稳定源当场作废)。键用 realpath 后的根,不是原始字符串。
+// (快捷方式与稳定源当场作废)。外部造物不在托管根里、托管根也可能还没建,所以不按根分链:全表一把锁。
+const CHAIN = 'products'
 const chains = new Map<string, Promise<unknown>>()
 async function serialized<T>(key: string, operation: () => Promise<T>): Promise<T> {
   const next = (chains.get(key) ?? Promise.resolve()).catch(() => {}).then(operation)
@@ -324,6 +334,7 @@ async function summarize(record: Indexed): Promise<ProductSummary> {
     createdAt: sidecar.createdAt,
     updatedAt: record.updatedAt,
     published: existsSync(path.join(record.root, CONNECT_MARKER)),
+    ...(record.external ? { external: true } : {}),
     // pluginId 跟**生效后的** kind 走:sidecar 把 kind 改成 web 就不该再挂着插件 id,
     // 反过来一个没有清单的目录被标成 plugin 也变不出 id(那种 patch 已在 updateProduct 挡掉)。
     ...(kind === 'plugin' && detected.pluginId ? { pluginId: detected.pluginId } : {}),
@@ -334,11 +345,11 @@ async function summarize(record: Indexed): Promise<ProductSummary> {
 
 // ── 对外 API ──────────────────────────────────────────────────────────────────
 
-/** 托管根下的全部产物,updatedAt 倒序。缺 sidecar 的顺手补上;根不存在 / 单个项目坏掉都只是少一行,不抛。 */
-export async function scanProducts(projectsRoot: string): Promise<ProductSummary[]> {
+/** 托管根下的全部产物 + 外部造物,updatedAt 倒序。缺 sidecar 的顺手补上;根不存在 / 单个项目坏掉都只是少一行,不抛。 */
+export async function scanProducts(projectsRoot: string, externals: readonly string[] = []): Promise<ProductSummary[]> {
   const rootReal = await realRoot(projectsRoot).catch(() => null)
-  if (!rootReal) return [] // 托管根还没建 → 空表,不是错误
-  const records = await serialized(rootReal, () => index(rootReal)).catch(() => [] as Indexed[])
+  if (!rootReal && !externals.length) return [] // 托管根还没建、也没有外部造物 → 空表,不是错误
+  const records = await serialized(CHAIN, () => index(rootReal, externals)).catch(() => [] as Indexed[])
   const products: ProductSummary[] = []
   for (const record of records) {
     try { products.push(await summarize(record)) } catch { /* 同上:一个坏项目不该清空列表 */ }
@@ -347,28 +358,40 @@ export async function scanProducts(projectsRoot: string): Promise<ProductSummary
 }
 
 /** 按 id 取;id 形状不对 / 找不到 → null。 */
-export async function getProduct(projectsRoot: string, id: string): Promise<ProductSummary | null> {
+export async function getProduct(projectsRoot: string, id: string, externals: readonly string[] = []): Promise<ProductSummary | null> {
   if (!isProductId(id)) return null
   const rootReal = await realRoot(projectsRoot).catch(() => null)
-  if (!rootReal) return null
-  const records = await serialized(rootReal, () => index(rootReal)).catch(() => [] as Indexed[])
+  if (!rootReal && !externals.length) return null
+  const records = await serialized(CHAIN, () => index(rootReal, externals)).catch(() => [] as Indexed[])
   const record = records.find((r) => r.sidecar.id === id)
   return record ? summarize(record) : null
 }
 
-/** 给一个目录拿到(必要时铸出)它的产物身份。containment 不过一律抛;目录必须已经存在,这里不负责创建。 */
-export async function ensureProduct(projectsRoot: string, dir: string): Promise<ProductSummary> {
-  const rootReal = await realRoot(projectsRoot)
+const sameRoot = (a: string, b: string): boolean => a === b || (CASE_INSENSITIVE_FS && a.toLowerCase() === b.toLowerCase())
+
+/** 给一个目录拿到(必要时铸出)它的产物身份:托管根的直接子目录,或已登记的外部造物(externals 里的真实路径)。
+ *  containment 不过一律抛;目录必须已经存在,这里不负责创建。 */
+export async function ensureProduct(projectsRoot: string, dir: string, externals: readonly string[] = []): Promise<ProductSummary> {
+  const rootReal = await realRoot(projectsRoot).catch(() => null)
+  const real = await fs.realpath(dir).catch(() => null)
+  const external = real ? externals.find((root) => sameRoot(root, real)) : undefined
+  if (external) {
+    const records = await serialized(CHAIN, () => index(rootReal, externals))
+    const record = records.find((r) => r.external && sameRoot(r.root, external))
+    if (!record) throw new Error(`Product directory is unavailable: ${dir}`)
+    return summarize(record)
+  }
+  if (!rootReal) throw new Error(`Not a managed project: ${dir}`)
   const name = await containedName(rootReal, dir)
   // 走整张表而不是只补这一个目录:复制来的项目要在这里就把重复 id 判掉,否则稳定源先按旧 id 起、
   // 等某次 scan 重铸后又换一个源 —— 预览里存的本地数据会凭空消失。
-  const records = await serialized(rootReal, () => index(rootReal))
+  const records = await serialized(CHAIN, () => index(rootReal, externals))
   // ⚠️先精确匹配,再在大小写不敏感的卷上放宽:`<root>/DEMO` 在 APFS / NTFS 上 lstat 得到的是磁盘上的
   //   `demo`,containedName 放行、索引里却按 dirent 的 `demo` 记名,精确匹配会在这里假性失败 ——
   //   调用方(previewOriginFor)吞掉这一抛就退到一次性 origin,产物的 localStorage 活不到「启动」。
   //   顺序不能反:卷要真是大小写敏感的、`demo` 与 `DEMO` 同时存在时,精确的那个才是对的。
-  const record = records.find((r) => r.name === name)
-    ?? (CASE_INSENSITIVE_FS ? records.find((r) => r.name.toLowerCase() === name.toLowerCase()) : undefined)
+  const record = records.find((r) => !r.external && r.name === name)
+    ?? (CASE_INSENSITIVE_FS ? records.find((r) => !r.external && r.name.toLowerCase() === name.toLowerCase()) : undefined)
   if (!record) throw new Error(`Product directory is unavailable: ${name}`)
   return summarize(record)
 }
@@ -378,11 +401,12 @@ export async function updateProduct(
   projectsRoot: string,
   id: string,
   patch: { name?: string; entry?: string | null; kind?: ProductKind },
+  externals: readonly string[] = [],
 ): Promise<ProductSummary> {
   if (!isProductId(id)) throw new Error('Invalid product id')
-  const rootReal = await realRoot(projectsRoot)
-  const record = await serialized(rootReal, async () => {
-    const hit = (await index(rootReal)).find((r) => r.sidecar.id === id)
+  const rootReal = await realRoot(projectsRoot).catch(() => null)
+  const record = await serialized(CHAIN, async () => {
+    const hit = (await index(rootReal, externals)).find((r) => r.sidecar.id === id)
     if (!hit) throw new Error(`Unknown product: ${id}`)
     const next: Sidecar = { ...hit.sidecar } // 展开旧对象 = 未知字段原样留下
     if (patch.name !== undefined) next.name = validName(patch.name)

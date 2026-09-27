@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { mkdirSync, mkdtempSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { allowExternalLaunch, gitOwners, isExternalLaunchAllowed, revokeExternalLaunch } from './productTrust'
+import { addExternalCreation, allowExternalLaunch, externalCreationRoots, gitOwners, isExternalLaunchAllowed, removeExternalCreation, revokeExternalLaunch } from './productTrust'
 
 let home: string
 beforeEach(() => { home = mkdtempSync(path.join(os.tmpdir(), 'product-trust-')) })
@@ -47,11 +47,39 @@ describe('productTrust', () => {
     expect(isExternalLaunchAllowed(home, A)).toBe(true)
   })
 
-  it('⚠️坏文件 / 怪形状一律当空(fail closed):不认任何仓、不放行任何外部拉起', () => {
-    for (const raw of ['{ broken', '[]', '{"gitNonces":"x","externalLaunch":[]}', `{"gitNonces":[42,"zz"],"externalLaunch":{"__proto__":"/x","p_aaaaaaaaaaaa":"relative"}}`]) {
+  it('⚠️坏文件 / 怪形状一律当空(fail closed):不认任何仓、不放行任何外部拉起、不认任何外部造物', () => {
+    for (const raw of ['{ broken', '[]', '{"gitNonces":"x","externalLaunch":[],"externalCreations":{}}', `{"gitNonces":[42,"zz"],"externalLaunch":{"__proto__":"/x","p_aaaaaaaaaaaa":"relative"},"externalCreations":[{"root":"relative","dir":{"dev":1,"ino":2}},{"root":"${A.root.replace(/\\/g, '\\\\')}"}]}`]) {
       writeFileSync(path.join(home, 'product-trust.json'), raw)
       expect(gitOwners(home).has(NONCE)).toBe(false)
       expect(isExternalLaunchAllowed(home, A)).toBe(false)
+      expect(externalCreationRoots(home)).toEqual([])
     }
+  })
+
+  it('外部造物:登记 / 取消往返;改名后旧路径不再认,重加按目录身份替换旧条目;原路径换成别的文件夹不认', () => {
+    const ext = path.join(home, 'elsewhere', 'app'); mkdirSync(ext, { recursive: true })
+    expect(externalCreationRoots(home)).toEqual([])
+    addExternalCreation(home, ext)
+    expect(externalCreationRoots(home)).toEqual([ext])
+    const renamed = path.join(home, 'elsewhere', 'app-renamed')
+    renameSync(ext, renamed)
+    expect(externalCreationRoots(home)).toEqual([]) // 路径没了:不认(要重加一次)
+    addExternalCreation(home, renamed)
+    expect(externalCreationRoots(home)).toEqual([renamed])
+    const stored = JSON.parse(readFileSync(path.join(home, 'product-trust.json'), 'utf8')).externalCreations
+    expect(stored).toHaveLength(1) // 按 inode 替换,不留一条死的旧路径
+    // 原路径上换了个文件夹:原来那个还在(改了名)占着 inode,新建的这个一定是另一个身份
+    const moved = path.join(home, 'elsewhere', 'app-moved')
+    renameSync(renamed, moved); mkdirSync(renamed)
+    expect(externalCreationRoots(home)).toEqual([])
+    addExternalCreation(home, moved)
+    expect(externalCreationRoots(home)).toEqual([moved])
+    removeExternalCreation(home, moved)
+    expect(externalCreationRoots(home)).toEqual([])
+    expect(existsSync(moved)).toBe(true) // 取消登记不动文件夹
+    // 与另两类凭据互不覆盖
+    gitOwners(home).add(NONCE); allowExternalLaunch(home, A); addExternalCreation(home, moved)
+    expect(gitOwners(home).has(NONCE) && isExternalLaunchAllowed(home, A)).toBe(true)
+    expect(externalCreationRoots(home)).toEqual([moved])
   })
 })

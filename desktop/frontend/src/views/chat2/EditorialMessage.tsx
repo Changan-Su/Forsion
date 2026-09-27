@@ -357,7 +357,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   // 自动化建议围栏不属于正文:渲染/复制/朗读都用摘干净的 body,芯片单独摆一排。
   const streaming = msg.status === 'streaming'
   // 作品卡的按钮要宿主 IPC:只有桌面端认这种围栏,网页 / 手机端原样留在正文(不吞字)
-  const fenceKinds: FenceKind[] = window.tangu?.productsAdopt ? ['suggest', 'task', 'creation'] : ['suggest', 'task']
+  const fenceKinds: FenceKind[] = window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] : ['suggest', 'task']
   const { text: body, items: suggestions, tasks, creations } = splitSuggestions(msg.content, { streaming, kinds: fenceKinds })
   // 计划审阅的询问归计划卡(专属三态按钮),不再另起一张通用问答卡。
   const planInq = pickPlanInquiry(msg)

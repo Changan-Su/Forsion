@@ -1300,12 +1300,14 @@ declare global {
       productsServe?(id: string): Promise<{ origin: string; url: string; product: ProductSummary }>
       /** fallbackName:产物名清洗后为空时用的桌面文件名(落盘产物命名,跟随当前语言)。 */
       productsShortcut?(id: string, fallbackName?: string): Promise<ShortcutResult>
-      productsTrash?(id: string): Promise<{ ok: boolean }>
+      /** 托管根里的 = 移进废纸篓;原地加入的外部造物 = 只取消登记(unregistered),文件夹不动。 */
+      productsTrash?(id: string): Promise<{ ok: boolean; unregistered?: boolean }>
       /** 在造物的托管根里建一个新作品文件夹(名字宿主清洗 + 撞名接序号)。 */
       productsCreate?(name: string): Promise<{ dir: string; name: string; product: ProductSummary }>
-      /** 把一个做好的文件夹复制成新作品(不跟软链、跳过 .git / node_modules);失败带 code:invalid_source / forbidden_source / too_large。 */
-      /** within:源的真实路径必须在它里面(strict = 不能就是它本身)。 */
-      productsAdopt?(source: string, name: string, within: string, strict: boolean): Promise<{ ok: true; dir: string; name: string; files: number; product: ProductSummary } | { ok: false; code: 'invalid_source' | 'forbidden_source' | 'outside' | 'too_large'; detail?: string }>
+      /** 原地加入造物(不复制、不移动)。within:源的真实路径必须在它里面(strict = 不能就是它本身)。 */
+      productsRegister?(source: string, within: string, strict: boolean): Promise<{ ok: true; dir: string; name: string; product: ProductSummary } | { ok: false; code: 'invalid_source' | 'forbidden_source' | 'outside' | 'nested'; detail?: string }>
+      /** 这个目录是不是造物(托管根的直接子目录 / 原地加入的外部文件夹);只读,不铸身份。 */
+      productsIsCreation?(dir: string): Promise<boolean>
       /** 这件产物能否**从应用外**(桌面快捷方式 / forsion:// 深链)拉起:存在、是网页、且用户为它建过快捷方式。 */
       productsExternalLaunchAllowed?(id: string): Promise<boolean>
       onDevPluginsChanged?(cb: (change: { pluginIds: string[] }) => void): () => void
