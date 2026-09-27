@@ -15,7 +15,7 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { publish } from './eventBus.js';
 import { isOutsideWorkspace, writableRoots, protectedLocalWrite, protectedRemoteWrite } from '../tools/fsPolicy.js';
-import { credentialPaths, credentialReadTarget, pathWithin, canonicalFuturePath, procTreeTouched } from '../sandbox/hostSandboxProtection.js';
+import { credentialPaths, credentialReadTarget, pathWithin, canonicalFuturePath, procTreeTouched, pluginSettingsTreeTouched } from '../sandbox/hostSandboxProtection.js';
 import { existsSync } from 'node:fs';
 import { clampApprovalMode, effectiveRemote, remoteApprovalCap, remoteManagementDenied, type CapMode, type RemoteInfo } from './remoteOrigin.js';
 import { writeTargetsOf } from '../tools/writeTargets.js';
@@ -236,7 +236,7 @@ function touchesCredentials(program: string, args: string[], cwd: string): boole
     // credentialReadTarget = the credential list (literal + realpath) plus, on Linux, /proc/self/** and /proc/<pid>/environ & co.
     if (credentialReadTarget(abs)) return true;
     if (!recursive) return false;
-    if (procTreeTouched(abs)) return true;
+    if (procTreeTouched(abs) || pluginSettingsTreeTouched(abs)) return true;
     const real = canonicalFuturePath(abs);
     return creds.some((c) => pathWithin(c, abs) || pathWithin(c, real));
   });

@@ -386,6 +386,27 @@ export function onUserRunStart(sessionId: string, userId: string, message: strin
  * memScopeSlug = 记忆域 slug（runLoop 已折叠 shareDefaultMemory），Historian 的 MEMORY/LOG
  * 读写必须与 run 内 remember/log_event 落同一文件夹。
  */
+/** 本轮是否来自远端:会话本身由远端建 / 改过(agent_config.remoteOrigin),或刚结束的这条 run 带 input.remote(C1)。
+ *  被远端 steer 染色的本机 run 只在进程内表里记账、run 收尾即清,这里看不到 —— 已知残余,见设计文档 §6.8。 */
+export async function roundFromRemote(sessionId: string, sk: { agent_config?: unknown } | undefined): Promise<boolean> {
+  try {
+    const c = typeof sk?.agent_config === 'string' ? JSON.parse(sk.agent_config) : sk?.agent_config;
+    if (c && typeof c === 'object' && (c as any).remoteOrigin) return true;
+  } catch { /* 坏配置按非远程 */ }
+  try {
+    // created_at 只到秒:取「最后结束的那一秒」里的全部 run,有一条来自远端就算远端(同秒并列时从严)。
+    const rows = await query<any[]>(
+      `SELECT input FROM agent_runs WHERE session_id = ? AND status = 'done'
+         AND created_at = (SELECT MAX(created_at) FROM agent_runs WHERE session_id = ? AND status = 'done')`,
+      [sessionId, sessionId],
+    );
+    return rows.some((r) => {
+      try { const inp = typeof r?.input === 'string' ? JSON.parse(r.input) : r?.input; return !!(inp && typeof inp === 'object' && inp.remote); }
+      catch { return false; }
+    });
+  } catch { return false; }
+}
+
 export async function onUserRunDone(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed): Promise<void> {
   if (!isLocal()) return;
   // 会话级互斥:上一轮维护(judge/fork/整固)还在飞 → 整轮跳过(尽力而为,下个到点轮自然补)。
@@ -485,7 +506,11 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     const early = opts?.force ? undefined : earlyTitles.get(earlyKey);
     earlyTitles.delete(earlyKey);
     const titleDue = due && !(early && (await early));
-    const memoryDue = due;
+    // 远程来源的一轮不写长期记忆(09-27 终审 P1 延伸):记忆会注入之后每一次会话(含本机 full-auto),远端 run 自己的
+    // remember 已硬拒;Historian 的独立判官(候选 → Dream)与辅助讨论(主 Agent 自己 remember)是同一条旁路。标题 / 摘要 / 日志照常。
+    const remoteRound = await roundFromRemote(sessionId, sk);
+    if (remoteRound) log(`第 ${roundN} 轮来自远端设备,本轮不写长期记忆`);
+    const memoryDue = due && !remoteRound;
     const logDue = due;
     const summaryDue = due; // 摘要与标题同属 Historian 自有资产(非记忆资产):三种模式都由 judge 维护
 

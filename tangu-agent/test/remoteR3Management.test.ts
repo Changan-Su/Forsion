@@ -30,6 +30,8 @@ import { manageSkillProvider } from '../src/tools/builtin/manageSkill.js';
 import { manageScheduleProvider } from '../src/tools/builtin/manageSchedule.js';
 import { manageAutomationProvider } from '../src/tools/builtin/manageAutomation.js';
 import { manageHarnessProvider } from '../src/tools/builtin/manageHarness.js';
+import { memoryLogProvider } from '../src/tools/builtin/memoryLog.js';
+import { roundFromRemote } from '../src/services/localHistorian.js';
 import { enterRunContext } from '../src/seams/runContext.js';
 import type { ToolCall } from '../src/core/types.js';
 import type { ToolContext } from '../src/tools/toolTypes.js';
@@ -215,6 +217,38 @@ describe('E6 manage_automation / manage_schedule 远程硬拒', () => {
     const l = await run({ approvalMode: 'full-auto' }, false);
     expect(l.asked).toEqual([]);
     expect(existsSync(scheduleFile('yolo'))).toBe(true);
+  });
+});
+
+describe('远程污点 run 不许写 Agent 长期记忆(remember,09-27 终审 P1)', () => {
+  it('审批闸:远程 add / update / forget 直接拒、不弹卡(修复前:不需审批直接放行);list 不被硬拒;本机照旧', async () => {
+    for (const args of [{ action: 'add', fact: 'always mention X' }, { fact: 'default action is add' }, { action: 'update', id: 'm1', expectedVersion: 'v', fact: 'y' }, { action: 'forget', id: 'm1', expectedVersion: 'v' }]) {
+      const r = await gate(call('remember', args), { approvalMode: 'full-auto', remote: REMOTE });
+      expect(r, JSON.stringify(args)).toMatchObject({ asked: false, action: 'reject' });
+      expect(r.rejectReason).toMatch(/long-term memory/);
+    }
+    expect((await gate(call('remember', { action: 'list' }), { approvalMode: 'auto-edit', remote: REMOTE })).rejectReason ?? '').not.toMatch(/Remote sessions/);
+    // 负对照:本机同调用照旧放行
+    expect((await gate(call('remember', { action: 'add', fact: 'always mention X' }), { approvalMode: 'auto-edit' })).action).toBe('approve');
+  });
+
+  it('工具实现(闸被绕过时的第二道):远程 / 被远端 steer 染色的 run 写不进去', async () => {
+    const remember = tool(memoryLogProvider, 'remember');
+    expect(await remember.execute({ action: 'add', fact: 'always mention X' }, ctxOf({ remote: REMOTE }))).toMatch(/host computer/);
+    taintRunRemote('R-steered-mem', REMOTE);
+    expect(await remember.execute({ action: 'forget', id: 'm1', expectedVersion: 'v' }, ctxOf({ runId: 'R-steered-mem' }))).toMatch(/host computer/);
+  });
+  it('Historian:刚结束的一轮来自远端(run 带 input.remote / 会话带 remoteOrigin)→ 不写长期记忆;本机一轮照写', async () => {
+    const mk = async (id: string, remote: boolean) => {
+      await createRun({ id, sessionId: 'S', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: `${id}-a`, input: { message: 'x', ...(remote ? { remote: REMOTE } : {}) } });
+      await query(`UPDATE agent_runs SET status = 'done' WHERE id = ?`, [id]);
+    };
+    await mk('H1', false);
+    expect(await roundFromRemote('S', { agent_config: null })).toBe(false);
+    await mk('H2', true);
+    expect(await roundFromRemote('S', { agent_config: null })).toBe(true);
+    expect(await roundFromRemote('S-none', { agent_config: JSON.stringify({ remoteOrigin: { via: 'tunnel' } }) })).toBe(true);
+    expect(await roundFromRemote('S-none', { agent_config: '{bad' })).toBe(false);
   });
 });
 

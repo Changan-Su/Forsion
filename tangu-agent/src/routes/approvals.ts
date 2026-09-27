@@ -142,6 +142,10 @@ router.post('/agent/runs/:runId/inquiries/:inquiryId', authMiddleware, async (re
         ...(settings ? { settings } : {}),
       });
       if (!okUi) return res.status(410).json({ detail: 'ui action is no longer pending' });
+      // 回执里的 error / state / settings 是远端给的自由文本,会进后续模型上下文 → 与询问、截屏、steer 同理染色(09-27 终审 P2)。
+      // 正常使用不受影响:界面动作只由发起这条 run 的渲染层执行并回执(G2),设备页不会替本机 run 回执。
+      const remoteUi = parseRemoteOrigin(req.headers);
+      if (remoteUi) taintRunRemote(req.params.runId, remoteUi);
       return res.json({ ok: true });
     }
     // 契约 C9:询问没有「总允许」与改参数的概念;远端夹带 argsOverride 同样 400(与审批一个口径,免得哪天兑现侧开始认它)。

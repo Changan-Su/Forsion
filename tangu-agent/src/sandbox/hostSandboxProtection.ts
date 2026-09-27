@@ -105,7 +105,12 @@ export function credentialPaths(): string[] {
   }
   // 引擎配置 config.json(provider key、MCP headers / env 都在里面)不一定在共享域:纯 standalone 形态它就在 ~/.tangu 里。
   out.push(configFile());
-  for (const h of tanguHomes()) out.push(path.join(h, 'worker-key'), ...TANGU_SECRET_NAMES.map((n) => path.join(h, n)));
+  for (const h of tanguHomes()) {
+    out.push(path.join(h, 'worker-key'), ...TANGU_SECRET_NAMES.map((n) => path.join(h, n)));
+    // 通道令牌(微信 iLink bot token 只存在这里)与 Agent 自带浏览器的登录态(cookie jar)。09-27 终审 P2。
+    out.push(path.join(h, 'wechat'), path.join(h, 'browser-use', 'chrome-profile'));
+  }
+  if (process.env.TANGU_WECHAT_STATE_DIR) out.push(path.resolve(process.env.TANGU_WECHAT_STATE_DIR));
   // 桌面 userData(自己的 + 兄弟的):tangu-desktop-config.json(设备通道密钥 / cloudToken)、remotesync(.dev).json、
   // Local Storage / Cookies(登录态)都在里面,整目录收。引擎不知道 Electron 的 userData,但宿主给的 FORSION_AMADEUS_CONFIG
   // 就住在 userData 里(backendManager.amadeusConfigPath),兄弟目录按同一个 appData 父目录推。
@@ -160,9 +165,48 @@ export function matchProtected(abs: string, list: string[]): string | null {
   return null;
 }
 
-/** 读凭据文件?(结构化读工具对所有 run 一律拒;Linux 另含 /proc 的秘密条目)。 */
+/** 插件设置文件(可含 API key):全局 `<tanguHome>/plugins-config/<id>/settings.json`、按 Agent `<tanguHome>/agents/<slug>/plugins/<id>.json`。
+ *  散在各 Agent 目录下,按模式判,不进 credentialPaths 的前缀表。插件的 `<id>-files/` 数据目录不算。09-27 终审 P2。 */
+export function pluginSettingsTarget(abs: string): string | null {
+  const fc = (x: string) => (foldCase ? x.toLowerCase() : x);
+  for (const f of new Set([path.resolve(abs), canonicalFuturePath(abs)])) {
+    for (const h of tanguHomes()) {
+      const pc = path.join(h, 'plugins-config');
+      if (pathWithin(f, pc)) {
+        const parts = path.relative(pc, f).split(path.sep);
+        if (parts.length === 2 && fc(parts[1]) === 'settings.json') return f;
+      }
+      const ag = path.join(h, 'agents');
+      if (pathWithin(f, ag)) {
+        const parts = path.relative(ag, f).split(path.sep);
+        if (parts.length === 3 && fc(parts[1]) === 'plugins' && fc(parts[2]).endsWith('.json')) return f;
+      }
+    }
+  }
+  return null;
+}
+/** 递归读取的根会不会扫到插件设置:根在 plugins-config 里或是它的祖先、根是某个 Agent 目录本身或其 plugins/ 子树、根是 agents/ 的祖先。
+ *  Agent 的 Library(solo 会话的工作目录)不算 —— 别把日常 rg 误伤成要审批。 */
+export function pluginSettingsTreeTouched(abs: string): boolean {
+  const fc = (x: string) => (foldCase ? x.toLowerCase() : x);
+  for (const f of new Set([path.resolve(abs), canonicalFuturePath(abs)])) {
+    for (const h of tanguHomes()) {
+      const pc = path.join(h, 'plugins-config');
+      if (pathWithin(f, pc) || pathWithin(pc, f)) return true;
+      const ag = path.join(h, 'agents');
+      if (pathWithin(ag, f)) return true;
+      if (pathWithin(f, ag)) {
+        const parts = path.relative(ag, f).split(path.sep).filter(Boolean);
+        if (parts.length === 1 || fc(parts[1] ?? '') === 'plugins') return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** 读凭据文件?(结构化读工具对所有 run 一律拒;Linux 另含 /proc 的秘密条目;另含插件设置文件)。 */
 export function credentialReadTarget(abs: string): string | null {
-  return matchProtected(abs, credentialPaths()) ?? procCredentialTarget(abs);
+  return matchProtected(abs, credentialPaths()) ?? procCredentialTarget(abs) ?? pluginSettingsTarget(abs);
 }
 
 /** Electron userData(桌面配置 / 本地存储所在):宿主给的 FORSION_AMADEUS_CONFIG 就住在里面;没给(非桌面形态)→ null。 */
@@ -305,5 +349,23 @@ export function remoteCwdForbidden(p: string): boolean {
     || homes.some((h) => pathWithin(h, f)) // 家目录本身或其祖先(/Users、/home …)
     || protectedDirs.some((d) => pathWithin(d, f))
     // 应用配置区之内:引擎 home 的 Agent / 团队 / 引擎 Library 例外(引擎 home 被放进 ~/Library 时,私聊的 cwd 就在这里)
-    || (appDirs.some((d) => pathWithin(f, d)) && !inEngineLibrary(f)));
+    || (appDirs.some((d) => pathWithin(f, d)) && !inEngineLibrary(f) && !inCloudProjectDir(f)));
+}
+
+/** ~/Library 里用户自己的云端项目目录:网盘挂载(CloudStorage:Dropbox / OneDrive / Google Drive / Box)、iCloud Drive、
+ *  以及各 iCloud 应用容器里用户可见的 Documents(如 Obsidian 库)。这些是项目,不是应用配置 —— 远程会话照常可用(09-27 终审 P2)。
+ *  应用容器本身(不含 Documents 子树)与 ~/Library 其它部分照旧拒。受保护目录另由上面那条判,不受这个例外影响。 */
+function inCloudProjectDir(f: string): boolean {
+  const lib = withCanonical([path.join(os.homedir(), 'Library')]);
+  const fc = (x: string) => (foldCase ? x.toLowerCase() : x);
+  return lib.some((l) => {
+    if (!pathWithin(f, l)) return false;
+    const parts = path.relative(l, f).split(path.sep).filter(Boolean).map(fc);
+    if (parts[0] === fc('CloudStorage')) return parts.length >= 2;
+    if (parts[0] === fc('Mobile Documents')) {
+      if (parts[1] === fc('com~apple~CloudDocs')) return parts.length >= 2;
+      return parts.length >= 3 && parts[2] === fc('Documents');
+    }
+    return false;
+  });
 }

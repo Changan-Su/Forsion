@@ -164,6 +164,32 @@ describe('E2 凭据读清单补全', () => {
   });
 });
 
+describe('凭据读清单:通道令牌 / 插件设置 / Agent 浏览器登录态(09-27 终审 P2)', () => {
+  it('微信 iLink 令牌目录、插件设置文件、browser-use 的 chrome-profile 读硬拒、cat 不免批;插件数据目录与 Agent Library 照常', async () => {
+    const files = [
+      join(home, 'wechat', 'accounts.json'),
+      join(home, 'agents', 'a1', 'plugins', 'someplugin.json'),
+      join(home, 'plugins-config', 'p1', 'settings.json'),
+      join(home, 'browser-use', 'chrome-profile', 'Default', 'Cookies'),
+    ];
+    for (const f of files) {
+      mkdirSync(join(f, '..'), { recursive: true });
+      writeFileSync(f, 'SECRET-R3P2');
+      expect(checkReadPath(f).ok, f).toBe(false);
+      expect(await HOST_TOOLS.read_file.execute({ path: f }, ctxOf(home)), f).toMatch(/^Error: Access denied/);
+      expect(isKnownSafeBash(`cat ${f}`, repo), f).toBe(false);
+    }
+    // 负对照:插件的 -files 数据目录、Agent 的 Library(solo 会话工作目录)照读、照免批
+    const data = join(home, 'agents', 'a1', 'plugins', 'someplugin-files', 'note.txt');
+    const lib = join(home, 'agents', 'a1', 'Library', 'draft.md');
+    for (const f of [data, lib]) { mkdirSync(join(f, '..'), { recursive: true }); writeFileSync(f, 'plain'); expect(checkReadPath(f).ok, f).toBe(true); }
+    expect(isKnownSafeBash('rg plain .', join(home, 'agents', 'a1', 'Library'))).toBe(true);
+    // 递归根会扫到插件设置 → 不免批
+    expect(isKnownSafeBash('rg SECRET .', join(home, 'agents', 'a1'))).toBe(false);
+    expect(isKnownSafeBash(`rg SECRET ${join(home, 'plugins-config')}`, repo)).toBe(false);
+  });
+});
+
 describe('E3 known-safe git diff / show 不碰凭据、不越出仓库', () => {
   const G = 'git diff --no-ext-diff --no-textconv';
   it('绝对 / 相对 / 软链三种写法的凭据操作数都要审批(修复前:三种都 SAFE);cat 为负对照', () => {
