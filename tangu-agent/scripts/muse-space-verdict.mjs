@@ -29,7 +29,8 @@ const GRACE_MS = 3000;
 const here = dirname(fileURLToPath(import.meta.url));
 const dir = process.argv[2] || join(process.env.TANGU_HOME || join(homedir(), '.tangu'), 'agents', 'muse', 'Space');
 const appVersion = process.argv[3] || '';
-const done = (v) => { console.log(JSON.stringify(v)); process.exit(0); };
+const proc = process; // 下面会把全局 process 藏起来(渲染进程里没有它),本脚本自己用这份
+const done = (v) => { console.log(JSON.stringify(v)); proc.exit(0); };
 const msg = (e) => String(e?.message || e).slice(0, 160);
 
 /** PluginContext 顶层成员名(与 desktop contractDocs.test 同一抽法);读不到 → null。 */
@@ -80,8 +81,17 @@ const deep = () => new Proxy(function () {}, {
 const ctx = new Proxy({}, { get: (_, k) => (k === 'registerView' ? (v) => { views.push(v); return deep(); } : !known || known.has(k) ? deep() : undefined) });
 const homeOf = () => views.find((v) => v?.id === 'home');
 const proto = Object.getPrototypeOf(globalThis);
-Object.setPrototypeOf(globalThis, new Proxy(proto, { has: () => true, get: (t, k, rcv) => (k in t ? Reflect.get(t, k, rcv) : deep()) }));
-const browser = { window: globalThis, self: globalThis, navigator: deep(), fetch: deep(), requestAnimationFrame: (fn) => setTimeout(fn, 16), cancelAnimationFrame: clearTimeout };
+// 浏览器里本来就没有的名字必须照样不存在:UMD / CommonJS 守卫(`typeof exports !== 'undefined'` 就导出、否则 setup(ctx))
+// 在渲染进程(contextIsolation + 无 nodeIntegration)走 else 分支,这里若说「有」就会走错分支、假红(Codex 09-27 第七轮)。
+const NOT_BROWSER = ['exports', 'module', 'require', 'define', 'global', 'process', 'Buffer', 'setImmediate', 'clearImmediate', '__dirname', '__filename'];
+Object.setPrototypeOf(globalThis, new Proxy(proto, {
+  has: (t, k) => !NOT_BROWSER.includes(k) || k in t,
+  get: (t, k, rcv) => (k in t || NOT_BROWSER.includes(k) ? Reflect.get(t, k, rcv) : deep()),
+}));
+const browser = {
+  window: globalThis, self: globalThis, navigator: deep(), fetch: deep(), requestAnimationFrame: (fn) => setTimeout(fn, 16), cancelAnimationFrame: clearTimeout,
+  global: undefined, process: undefined, Buffer: undefined, setImmediate: undefined, clearImmediate: undefined, // Node 自带、渲染进程没有
+};
 for (const [k, v] of Object.entries(browser)) Object.defineProperty(globalThis, k, { value: v, configurable: true, writable: true });
 let r;
 try { r = new Function('ctx', code)(ctx); } catch (e) { done({ built: true, ok: false, text: `求值抛错:${msg(e)}` }); }
