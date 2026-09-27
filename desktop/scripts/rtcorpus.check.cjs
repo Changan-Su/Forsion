@@ -214,19 +214,23 @@ async function runEntry(browser, e) {
   const want = `${M}Z\n\n${ENTRY_BODY}`
   let out = null
   let page
+  let quiet = -1 // 入口动作之后、敲字之前的写盘次数:回灌 / 切换 / 打开都不许回声写
   if (e.kind === 'fire') {
     page = await open(browser, `${M}\n\n占位\n`, errs)
     await page.evaluate((md) => window.__upage.fire('Unified.md', md), `${M}\n\n${ENTRY_BODY}`)
     await page.waitForTimeout(1500)
+    quiet = await writeCount(page)
     out = (await typeAndSave(page, M, 'Z')).out
   } else if (e.kind === 'switch') {
     page = await open(browser, `${M}\n\n占位\n`, errs)
     await page.evaluate((md) => window.__upage.switchFile('Other.md', md), `${M}\n\n${ENTRY_BODY}`)
     await page.waitForTimeout(1500)
+    quiet = await writeCount(page)
     out = (await typeAndSave(page, M, 'Z')).out
   } else {
     // 粘贴:首段末回车出一个空段,把正文当 text/plain 粘进去(plugin-clipboard → parserCtx → 同一条 remark 链)
     page = await open(browser, `${M}\n`, errs)
+    quiet = await writeCount(page) // 粘贴本身就是编辑,这里只量打开
     await caretAfter(page, M)
     await page.keyboard.press('Enter')
     await page.evaluate((md) => {
@@ -238,7 +242,7 @@ async function runEntry(browser, e) {
     out = (await typeAndSave(page, M, 'Z')).out
   }
   await page.close()
-  return { id: e.id, bucket: V, rounds: [{ out, want }], openWrites: [0], errs }
+  return { id: e.id, bucket: V, rounds: [{ out, want }], openWrites: [quiet], errs }
 }
 
 async function pool(items, n, fn) {
