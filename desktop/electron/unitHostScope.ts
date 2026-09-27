@@ -10,8 +10,8 @@
  * 刻意零 electron 依赖:路径集合由 main.ts 注入,vitest 直测(electron/unitHostScope.test.ts)。
  */
 import { constants as fsConstants, realpathSync, type Stats } from 'node:fs'
-import { open, stat, type FileHandle } from 'node:fs/promises'
-import { isAbsolute, join, parse, relative, resolve } from 'node:path'
+import { lstat, open, stat, type FileHandle } from 'node:fs/promises'
+import { dirname, isAbsolute, join, parse, relative, resolve } from 'node:path'
 
 export interface UnitScopeEnv {
   home: string
@@ -170,9 +170,51 @@ export async function openUnitHostFile(
   }
 }
 
+/** real 所在的(最深的)可读根;没有 = null。 */
+function matchedUnitRoot(
+  real: string,
+  roots: { base: string[]; session: string[] },
+  env: Pick<UnitScopeEnv, 'home' | 'platform'>,
+  guard: UnitScopeGuard,
+): string | null {
+  const platform = env.platform ?? process.platform
+  const hits = [...roots.base, ...filterSessionRoots(roots.session, env, guard)].filter((r) => isWithin(real, r, platform))
+  return hits.sort((a, b) => b.length - a.length)[0] ?? null
+}
+
 /**
- * 目录列表 / stat:没有按 fd 枚举目录的 API,改为「前后各核一次」—— 读之前记下对象身份,读完再 realpath 钳制并比对,
- * 换过软链(没换回来)的一律 null。残余:换过去又在窗口内换回来,最多漏出受保护目录的**条目名 / 元数据**(不含内容)。
+ * 路径链指纹:从 real 一路往上到它所在的根(含),每一段记 (dev, ino),每一段的**父目录**记 (dev, ino, mtimeNs, ctimeNs)(lstat,不跟软链)。
+ * 「换过去、读、再换回来」要在某个父目录里至少改名 / 删建两次 —— 那个父目录的 mtime 必然变(macOS APFS 实测 2000/2000 次都变);
+ * 用 utimes 把 mtime 改回去也没用:utimes 本身会把 ctime 刷成「现在」,而 macOS / Linux 上 ctime 用户态设不回去(Codex r3 #3)。
+ * ⚠️ Windows 例外:SetFileInformationByHandle 能直接写 ChangeTime,有目录写权限的进程可以把两种时间都恢复 —— 写明的残余,见下。
+ * 所以读前读后指纹一致 = 读的那一刻路径上没有被换过。
+ */
+async function chainFingerprint(real: string, root: string, platform: NodeJS.Platform): Promise<string> {
+  const parts: string[] = []
+  let c = real
+  for (;;) {
+    const st = await lstat(c, { bigint: true })
+    const parent = dirname(c)
+    const ps = await lstat(parent, { bigint: true })
+    parts.push(`${st.dev}:${st.ino}|${ps.dev}:${ps.ino}:${ps.mtimeNs}:${ps.ctimeNs}`)
+    if (norm(c, platform) === norm(root, platform) || parent === c) break
+    c = parent
+  }
+  return parts.join('/')
+}
+
+/** 读前读后指纹对不上时的重试次数:路径上的父目录有正常写入(同目录新建 / 删除文件)也会让 mtime 变,不能一次就判死。 */
+const VERIFY_ATTEMPTS = 3
+
+/**
+ * 目录列表 / stat:Node 没有按 fd 枚举目录的 API(macOS 的 /dev/fd/N 对目录是 ENOTDIR,实测),改为「前后各核一次」——
+ * 读之前记下路径链指纹(每一段的对象身份 + 每个父目录的 mtime),读完再 realpath 钳制、再取指纹比对:
+ *   · 换过软链没换回来 → realpath 复核落进受保护目录 / 对象身份变了 → null;
+ *   · 换过去、读、又换回来(Codex 终审 out1 #4)→ 换的那一层父目录 mtime 变了 → 指纹不等 → 重试,仍不等 → null。
+ * 残余(写明):① 时间戳粒度粗的文件系统(Linux 多数 fs 按 jiffy 取时间,约 1–10ms)上,同一个时钟刻内完成的换过去 + 换回来
+ * 看不出来;② Windows 上能写 ChangeTime 的进程可以连 ctime 一起恢复;①② 最多漏出受保护目录的**条目名 / 大小 / 时间**
+ * (不含内容;文件内容走 openUnitHostFile 的 fd 绑定,不受此限),且都要求攻击者已能在本机跑代码、改工作区目录;
+ * ③ 硬链接(同引擎 C4,路径口径拦不住)。
  */
 export async function withVerifiedUnitPath<T>(
   p: unknown,
@@ -183,16 +225,22 @@ export async function withVerifiedUnitPath<T>(
   read: (real: string) => Promise<T>,
   hooks?: UnitRaceHooks,
 ): Promise<T | null> {
+  const platform = env.platform ?? process.platform
   const real = resolveUnitHostPath(p, roots, env, guard, allowRoot)
   if (!real) return null
+  const root = matchedUnitRoot(real, roots, env, guard)
+  if (!root) return null
   try {
-    await hooks?.beforeOpen?.()
-    const before = await stat(real)
-    const out = await read(real)
-    await hooks?.afterOpen?.()
-    const again = resolveUnitHostPath(real, roots, env, guard, allowRoot)
-    if (again !== real || !sameObject(before, await stat(again))) return null
-    return out
+    for (let attempt = 0; attempt < VERIFY_ATTEMPTS; attempt++) {
+      const before = await chainFingerprint(real, root, platform)
+      await hooks?.beforeOpen?.()
+      const out = await read(real)
+      await hooks?.afterOpen?.()
+      const again = resolveUnitHostPath(real, roots, env, guard, allowRoot)
+      if (again !== real) return null
+      if (before === (await chainFingerprint(real, root, platform))) return out
+    }
+    return null
   } catch {
     return null
   }

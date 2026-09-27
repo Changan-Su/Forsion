@@ -92,6 +92,8 @@ describe('project launchpad', () => {
     await mount()
     await act(async () => { (host.querySelector('.csl-import') as HTMLButtonElement).click() })
     expect(onOpen).toHaveBeenCalledWith('C:\\Users\\Jane\\Existing project', 'Existing project')
+    // 导入项目 = 本机确认过的项目根:主进程据 purpose 登记,设备页 /unit/host* 才认开在这里的会话(unitLocalRoots.ts)
+    expect(pickDirectory).toHaveBeenCalledWith({ purpose: 'project' })
     expect(mkdirHost).not.toHaveBeenCalled()
     expect(onCreate).not.toHaveBeenCalled()
   })

@@ -1176,6 +1176,9 @@ declare global {
       /** unit 设备页标志(B 端渲染,unitShim 注入):本页是另一台设备曝出来的 Forsion 面 ——
        *  插件清单走对方的 unit/plugins,无 vault 桥(本地 vault 面 = v2.1)。 */
       unitPage?: boolean
+      /** 设备页以**远端身份**驱动对方的引擎(unitShim 注入;便携 Unit 的工作区主人 projection=local 不算):
+       *  引擎按远程钳制 —— 审批改参数被拒(REMOTE_ARGS_OVERRIDE_FORBIDDEN)、「总允许」降成单次,界面据此收起这两样。 */
+      remoteCaller?: boolean
       /** A local engine sharing the active vault filesystem. Cloud/virtual vaults never qualify. */
       executionCapabilities?: { host: boolean }
       /** Explicit host filesystem availability; published cloud Units set false. */
@@ -1246,7 +1249,9 @@ declare global {
       onAuthWillChange?(cb: () => Promise<void>): () => void
       /** 截当前窗口的一块视口矩形(Agent Desk 截屏 → 引擎 desk_screenshot);失败返回 null。 */
       captureRect?(rect: { x: number; y: number; width: number; height: number }): Promise<string | null>
-      pickDirectory?(): Promise<string | null>
+      /** purpose:'project' = 添加 / 导入项目:主进程把选中的目录登记为本机确认过的项目根(设备页 /unit/host* 只认这些会话目录);
+       *  其余用途(技能导入、同步目录、额外可写根…)不传,不登记。 */
+      pickDirectory?(opts?: { purpose?: 'project' }): Promise<string | null>
       /** Chat Box 添加文件或文件夹；取消返回空数组。 */
       pickPaths?(): Promise<Array<{ path: string; isDirectory: boolean }>>
       /** 另存为文本文件(导出日志等);取消返回 { ok:false }。 */

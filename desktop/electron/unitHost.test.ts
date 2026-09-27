@@ -265,6 +265,71 @@ describe('UnitHost 通道看门狗 / 唤醒重连 / 信封中止', () => {
     } finally { h.stop(); web.close(); hub.close() }
   })
 
+  // ── Codex 终审 out1 #3:中止信封也要掐掉已经在上传的整包回包(否则最长还能挂 2 × requestTimeoutMs)──
+  it('abortEnvelope(id) 撤销正在上传的整包回包:/resp/ 请求立即被掐,不等 2 × requestTimeoutMs', async () => {
+    const hub = await fakeHub()
+    hub.holdResp = true // 网关收下 /resp/ 不回:回包一直在飞
+    const web = await fakeUnitWeb()
+    const { h, logs } = host(hub, web, 0, { requestTimeoutMs: 60_000 }) // 时限 120s:测试窗口内绝不会是超时掐的
+    try {
+      h.start()
+      expect(await until(() => hub.channels.length === 1)).toBe(true)
+      hub.dispatch({ id: 'env-r', method: 'GET', path: '/small' })
+      expect(await until(() => hub.streamed.some((p) => p.endsWith('/resp/env-r')))).toBe(true)
+      expect(hub.respClosed).toEqual([])
+      expect(h.abortEnvelope('env-r')).toBe(true) // 仍在飞(回包没完成)
+      expect(await until(() => hub.respClosed.some((p) => p.endsWith('/resp/env-r')), 1500)).toBe(true)
+      expect(logs.some((l) => l.includes('回包失败'))).toBe(false) // 撤销不是失败,不刷日志
+    } finally { h.stop(); web.close(); hub.close() }
+  })
+
+  it('通道拆除时正在上传的整包回包一并掐掉', async () => {
+    const hub = await fakeHub()
+    hub.holdResp = true
+    const web = await fakeUnitWeb()
+    const { h } = host(hub, web, 0, { requestTimeoutMs: 60_000 })
+    try {
+      h.start()
+      expect(await until(() => hub.channels.length === 1)).toBe(true)
+      hub.dispatch({ id: 'env-t', method: 'GET', path: '/small' })
+      expect(await until(() => hub.streamed.some((p) => p.endsWith('/resp/env-t')))).toBe(true)
+      hub.endChannel()
+      expect(await until(() => hub.respClosed.some((p) => p.endsWith('/resp/env-t')), 1500)).toBe(true)
+    } finally { h.stop(); web.close(); hub.close() }
+  })
+
+  it('信封在本机请求返回后、回包发出前就被撤销:根本不发 /resp/', async () => {
+    const hub = await fakeHub()
+    const web = await fakeUnitWeb()
+    const respPosts: string[] = []
+    let hostRef: UnitHost | null = null
+    const hubFetch = ((input: string, init?: RequestInit): Promise<Response> => {
+      if (String(input).includes('/resp/')) respPosts.push(String(input))
+      return fetch(input, init)
+    }) as typeof fetch
+    // 本机 unitWeb 的回包体读完那一刻撤销信封(模拟网关 cancel 帧恰好落在「本机已回、回包未发」之间)
+    const origFetch = globalThis.fetch
+    globalThis.fetch = (async (input: any, init?: RequestInit) => {
+      const r = await origFetch(input, init)
+      if (String(input).startsWith(web.url) && String(input).endsWith('/small')) {
+        const buf = await r.arrayBuffer()
+        hostRef?.abortEnvelope('env-p')
+        return new Response(buf, { status: r.status, headers: r.headers })
+      }
+      return r
+    }) as typeof fetch
+    const { h } = host(hub, web, 0, { requestTimeoutMs: 60_000, hubFetch })
+    hostRef = h
+    try {
+      h.start()
+      expect(await until(() => hub.channels.length === 1)).toBe(true)
+      hub.dispatch({ id: 'env-p', method: 'GET', path: '/small' })
+      expect(await until(() => web.hits.includes('/small'))).toBe(true)
+      await sleep(300)
+      expect(respPosts).toEqual([])
+    } finally { globalThis.fetch = origFetch; h.stop(); web.close(); hub.close() }
+  })
+
   it('流式回传连不上网关(请求体一直没被拉):到时限中止本次派发,本机引擎读取被掐', async () => {
     const hub = await fakeHub()
     const web = await fakeUnitWeb()

@@ -352,7 +352,7 @@ export class UnitHost {
   private async handle(env: Envelope, ctrl: AbortController): Promise<void> {
     const web = this.deps.getUnitWeb()
     if (!web.url) {
-      await this.respond(env.id, 503, 'application/json', Buffer.from(JSON.stringify({ detail: '本机互联服务未就绪', code: 'UNIT_WEB_NOT_READY' })))
+      await this.respond(env.id, 503, 'application/json', Buffer.from(JSON.stringify({ detail: '本机互联服务未就绪', code: 'UNIT_WEB_NOT_READY' })), undefined, ctrl.signal)
       return
     }
     const headers: Record<string, string> = { 'x-unit-internal': web.internalSecret }
@@ -368,7 +368,7 @@ export class UnitHost {
       })
     } catch (e: any) {
       if (ctrl.signal.aborted) return // 被本机中止(通道拆除 / abortEnvelope):网关那头已不等这份回包
-      await this.respond(env.id, 502, 'application/json', Buffer.from(JSON.stringify({ detail: `本机互联服务不可达: ${e?.message || e}` })))
+      await this.respond(env.id, 502, 'application/json', Buffer.from(JSON.stringify({ detail: `本机互联服务不可达: ${e?.message || e}` })), undefined, ctrl.signal)
       return
     }
     const ct = r.headers.get('content-type') || ''
@@ -390,23 +390,31 @@ export class UnitHost {
     if (stream) {
       await this.streamBack(env.id, r, ctrl, effCt, extra)
     } else {
-      await this.respond(env.id, r.status, effCt, Buffer.from(await r.arrayBuffer()), extra)
+      await this.respond(env.id, r.status, effCt, Buffer.from(await r.arrayBuffer()), extra, ctrl.signal)
     }
   }
 
-  /** 整包回包:有总时限(评审 A-desktop#4)—— 网关半开时不设时限,这次派发的在飞记录就一直挂着。 */
-  private async respond(dispatchId: string, status: number, ct: string, body: Buffer, extraHeaders?: Record<string, string>): Promise<void> {
+  /** 整包回包:有总时限(评审 A-desktop#4)—— 网关半开时不设时限,这次派发的在飞记录就一直挂着。
+   *  envSignal = 本信封的中止器(abortEnvelope / 通道拆除 / stop):与时限合并 —— 撤销的信封连已经在上传的回包也一并掐掉
+   *  (Codex 终审 out1 #3:只掐本机请求不掐回包,撤销后这份回包最长还能挂 2 × requestTimeoutMs);发出前已撤销则根本不发。 */
+  private async respond(dispatchId: string, status: number, ct: string, body: Buffer, extraHeaders?: Record<string, string>, envSignal?: AbortSignal): Promise<void> {
+    if (envSignal?.aborted) return // 网关那头已不等这份回包
     const { cloudUrl, token } = this.deps.getCreds()
     const pairing = this.deps.getPairing()
     if (!pairing) return
     const ms = this.requestTimeoutMs * 2
+    const signals = [...(ms ? [AbortSignal.timeout(ms)] : []), ...(envSignal ? [envSignal] : [])]
+    const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0]
     await this.hubFetch(`${apiBase(cloudUrl)}/units/${pairing.unitId}/resp/${dispatchId}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'X-Unit-Secret': pairing.secret, 'Content-Type': 'application/json' },
       body: JSON.stringify({ status, headers: { 'content-type': ct, ...extraHeaders }, bodyB64: body.toString('base64') }),
-      ...(ms ? { signal: AbortSignal.timeout(ms) } : {}),
+      ...(signal ? { signal } : {}),
     }).then((r) => { void r.body?.cancel().catch(() => {}) })
-      .catch((e) => this.deps.log(`[unit-host] 回包失败: ${e?.name === 'TimeoutError' ? `${Math.round(ms / 1000)}s 未完成` : e?.message || e}`))
+      .catch((e) => {
+        if (envSignal?.aborted) return // 撤销不是失败
+        this.deps.log(`[unit-host] 回包失败: ${e?.name === 'TimeoutError' ? `${Math.round(ms / 1000)}s 未完成` : e?.message || e}`)
+      })
   }
 
   /** 边收边回传(event-stream 与一切大响应);上行失败(客户端已断)→ 中止本机引擎读取。 */
