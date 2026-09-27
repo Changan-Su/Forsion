@@ -15,8 +15,8 @@ registerMessages({
   'computerHistory.retry': { zh: '重试', en: 'Retry' },
   'computerHistory.actionFailed': { zh: '操作未完成：{error}', en: 'That didn’t work: {error}' },
   'computerHistory.persistError': {
-    zh: '已停止记录，但「关闭」还没能保存（{error}），正在自动重试。保存成功前重启 Forsion，记录可能会重新开启。',
-    en: 'Recording stopped, but the Off setting couldn’t be saved ({error}). Retrying automatically. If Forsion restarts before it’s saved, recording may turn back on.',
+    zh: '关闭、暂停或新加的排除已经生效，但还没能保存（{error}），正在自动重试。保存成功前重启 Forsion，记录可能会重新开启，已排除的 App 或网站也可能再被记录。',
+    en: 'Your change to turn off, pause, or exclude is in effect, but it couldn’t be saved ({error}). Retrying automatically. If Forsion restarts before it’s saved, recording may turn back on and excluded apps or sites may be recorded again.',
   },
   'computerHistory.macOnly.title': { zh: '目前仅支持 macOS', en: 'macOS only for now' },
   'computerHistory.macOnly.body': {

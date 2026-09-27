@@ -58,17 +58,40 @@ describe('ComputerHistoryStore', () => {
     expect(tm).toHaveBeenCalledWith(root)
   })
 
-  it('保留期:整天早于 now-7d 的日文件与残留 .tmp 删掉,边界那天留着', async () => {
+  const evLine = (t: number): string => `${JSON.stringify({ t, kind: 'app', app: { name: 'X', bundleId: 'x' } })}\n`
+
+  it('保留期:整天早于 now-7d 的日文件与残留 .tmp 删掉;截止那天按事件时间重写,只留 t >= now-7d(creview F)', async () => {
     const root = tmpRoot()
     const store = new ComputerHistoryStore(root)
     await store.ensureRoot()
     const now = at(2026, 9, 27, 12)
+    const cutoffT = now - 7 * DAY // 9/20 12:00
     const names = [0, 6, 7, 8, 30].map((d) => `${localDay(now - d * DAY)}.jsonl`)
-    for (const n of names) writeFileSync(path.join(store.eventsDir, n), '{}\n')
+    for (const d of [0, 6, 8, 30]) writeFileSync(path.join(store.eventsDir, `${localDay(now - d * DAY)}.jsonl`), evLine(now - d * DAY))
+    // 截止那天:凌晨的已超过 7 天(旧实现要等到次日才删),下午的还在期内
+    writeFileSync(path.join(store.eventsDir, names[2]), evLine(cutoffT - 9 * 3_600_000) + evLine(cutoffT + 3_600_000))
     writeFileSync(path.join(store.eventsDir, '2026-09-27.jsonl.123-x.tmp'), 'half')
     const removed = await store.prune(now)
     expect(removed.sort()).toEqual([names[3], names[4], '2026-09-27.jsonl.123-x.tmp'].sort())
     expect(readdirSync(store.eventsDir).sort()).toEqual([names[0], names[1], names[2]].sort())
+    expect(lines(path.join(store.eventsDir, names[2])).map((e) => e.t)).toEqual([cutoffT + 3_600_000])
+  })
+
+  it('保留期精确边界(creview F):t = now-7d 留、早 1ms 删;残行删;原子重写 0600 不留 .tmp;一行不剩就删文件', async () => {
+    const root = tmpRoot()
+    const store = new ComputerHistoryStore(root)
+    await store.ensureRoot()
+    const now = at(2026, 9, 27, 12)
+    const cutoffT = now - 7 * DAY
+    const file = path.join(store.eventsDir, `${localDay(cutoffT)}.jsonl`)
+    writeFileSync(file, evLine(cutoffT - 1) + evLine(cutoffT) + '{"t":17\n' + evLine(cutoffT + 1), { mode: 0o600 })
+    expect(await store.prune(now)).toEqual([])
+    expect(lines(file).map((e) => e.t)).toEqual([cutoffT, cutoffT + 1])
+    expect(mode(file)).toBe(0o600)
+    expect(readdirSync(store.eventsDir).filter((f) => f.endsWith('.tmp'))).toEqual([])
+    // 再往后 2ms:剩下两条也都过期 → 整个文件删掉
+    expect(await store.prune(now + 2)).toEqual([path.basename(file)])
+    expect(existsSync(file)).toBe(false)
   })
 
   it('clear(since):跨界那天原子重写只留 t < since(残行一并删),之后的整天删,之前的不动', async () => {
@@ -245,6 +268,102 @@ describe('foldSessions', () => {
   it('长时间没事件(Forsion 没开)不把空白算给上一个窗口', () => {
     const s = foldSessions([e(0, { app: chrome, title: 'A' }), e(40, { kind: 'click', app: chrome }), e(5 * 3600, { app: chrome, title: 'B' }), e(5 * 3600 + 30, { kind: 'key', app: chrome, keys: '⌘T' })])
     expect(s.map((x) => [x.title, (x.end - x.start) / 1000])).toEqual([['A', 40], ['B', 30]])
+  })
+
+  it('排除标记自成一段(creview I):无标题页面与无标题排除标记不同键;不足 10s 的标记也挡住往回并段;排除段不收网址与打字', () => {
+    const marker = { ...chrome, excluded: true as const }
+    // (a) 无标题的正常页面 → 排除站点待了 4 分钟 → 别的页面:排除期间不能算到前一页(及其网址)头上
+    const a = foldSessions([
+      e(0, { kind: 'app', app: chrome, url: 'https://ok.example/' }),
+      e(30, { kind: 'click', app: chrome }),
+      e(60, { kind: 'window', app: marker }),
+      e(100, { kind: 'text', app: chrome, text: 'leak' }),
+      e(300, { kind: 'window', app: chrome, title: 'News', url: 'https://news.example.com/' }),
+      e(400, { kind: 'key', app: chrome, keys: '⌘R' }),
+    ])
+    expect(a.map((s) => [s.title, (s.start - base) / 1000, (s.end - base) / 1000, s.url, s.typed])).toEqual([
+      [undefined, 0, 60, 'https://ok.example/', []],
+      [undefined, 60, 300, undefined, []],
+      ['News', 300, 400, 'https://news.example.com/', []],
+    ])
+    // (b) 瞄了 5 秒排除站点又回到同一个无标题页面:标记太短被丢,但两边仍是两段,不并成一段把那 5 秒吞进去
+    const b = foldSessions([
+      e(0, { kind: 'app', app: chrome, url: 'https://ok.example/' }),
+      e(60, { kind: 'window', app: marker }),
+      e(65, { kind: 'window', app: chrome, url: 'https://ok.example/' }),
+      e(200, { kind: 'key', app: chrome, keys: '⌘S' }),
+    ])
+    expect(b.map((s) => [(s.start - base) / 1000, (s.end - base) / 1000])).toEqual([[0, 60], [65, 200]])
+  })
+
+  // helper 不发无痕窗口的任何事件、并对连着的同键情境事件去重:「A → 无痕 → 回到 A」落盘就是两条同键的 A
+  const pageA = { app: chrome, title: 'Docs', url: 'https://docs.example.com/a' }
+  const finder = { name: 'Finder', bundleId: 'com.apple.finder' }
+  const code = { name: 'Code', bundleId: 'com.microsoft.VSCode' }
+  const cols = (ss: ReturnType<typeof foldSessions>) => ss.map((s) => [s.app, s.title, (s.start - base) / 1000, (s.end - base) / 1000])
+
+  it('重复的相同情境事件 = 边界(无痕窗口):A 收在自己最后一条事件,不延到重复那条;不看 kind;同标题换网址不算重复', () => {
+    const s = foldSessions([
+      e(0, { kind: 'app', ...pageA }), // 激活 Chrome(普通窗口 A)
+      e(20, { kind: 'window', app: chrome, title: 'Docs', url: 'https://docs.example.com/b' }), // 同标题换网址:键变了,照常续段
+      e(25, { kind: 'window', ...pageA }), // 回到 a:与上一条不同键,不是重复
+      e(40, { kind: 'key', app: chrome, keys: '⌘F' }), // A 的最后一条事件 —— 之后进了无痕窗口 6 分钟,一条事件都没有
+      e(400, { kind: 'window', ...pageA }), // 从无痕回到 A:与上一条情境同键(kind 不同也算)
+      e(500, { kind: 'click', app: chrome }),
+      e(600, { kind: 'app', app: finder, title: 'Downloads' }),
+      e(700, { kind: 'app', app: code, title: 'main.ts' }),
+    ])
+    expect(cols(s)).toEqual([
+      ['Chrome', 'Docs', 0, 40], // 此前:0 → 600,把无痕那 6 分钟算给了 A
+      ['Chrome', 'Docs', 400, 600],
+      ['Finder', 'Downloads', 600, 700],
+    ])
+  })
+
+  it('重复边界挡住往回并段:缝隙 ≤ 60s 也不把两段 A 并回去;短的边界段也不让别的段跨过它往回并', () => {
+    // (a) 无痕只待了 30 秒:两段 A 之间只隔 30s,老的「≤ 60s 并回」会把这 30 秒算回 A
+    const a = foldSessions([
+      e(0, { kind: 'window', ...pageA }),
+      e(20, { kind: 'click', app: chrome }),
+      e(50, { kind: 'window', ...pageA }),
+      e(100, { kind: 'key', app: chrome, keys: '⌘S' }),
+      e(120, { kind: 'app', app: finder, title: 'Downloads' }),
+      e(200, { kind: 'app', app: code, title: 'main.ts' }),
+    ])
+    expect(cols(a)).toEqual([['Chrome', 'Docs', 0, 20], ['Chrome', 'Docs', 50, 120], ['Finder', 'Downloads', 120, 200]])
+    // (b) 编辑器 → 切到 A(0 秒)→ 无痕 25 秒 → 回 A 5 秒 → 回编辑器:两段 A 都短被丢,但编辑器两段不能跨过边界并成一段
+    const b = foldSessions([
+      e(0, { kind: 'app', app: code, title: 'main.ts' }),
+      e(30, { kind: 'app', ...pageA }),
+      e(55, { kind: 'window', ...pageA }),
+      e(60, { kind: 'app', app: code, title: 'main.ts' }),
+      e(200, { kind: 'key', app: code, keys: '⌘S' }),
+      e(210, { kind: 'app', app: finder, title: 'Downloads' }),
+    ])
+    expect(cols(b)).toEqual([['Code', 'main.ts', 0, 30], ['Code', 'main.ts', 60, 210]])
+  })
+
+  it('锁屏后 helper 重拍的同一情境不另算边界(锁屏本身已收尾,沿用 ≤ 60s 并回口径);dropped 不清「上一条情境」', () => {
+    const locked = foldSessions([
+      e(0, { kind: 'app', ...pageA }),
+      e(100, { kind: 'key', app: chrome, keys: '⌘S' }),
+      e(120, { kind: 'system', state: 'locked' }),
+      e(150, { kind: 'system', state: 'unlocked' }),
+      e(151, { kind: 'app', ...pageA }), // helper 解锁后清掉去重键并重拍前台
+      e(300, { kind: 'app', app: finder, title: 'Downloads' }),
+      e(400, { kind: 'app', app: code, title: 'main.ts' }),
+    ])
+    expect(cols(locked)).toEqual([['Chrome', 'Docs', 0, 300], ['Finder', 'Downloads', 300, 400]])
+    // helper 丢了事件(背压)之后又来一条同键的 A:中间可能切走过,照样当边界
+    const dropped = foldSessions([
+      e(0, { kind: 'app', ...pageA }),
+      e(40, { kind: 'click', app: chrome }),
+      e(90, { kind: 'system', state: 'dropped', count: 3 }),
+      e(95, { kind: 'window', ...pageA }),
+      e(200, { kind: 'app', app: finder, title: 'Downloads' }),
+      e(300, { kind: 'app', app: code, title: 'main.ts' }),
+    ])
+    expect(cols(dropped)).toEqual([['Chrome', 'Docs', 0, 40], ['Chrome', 'Docs', 95, 200], ['Finder', 'Downloads', 200, 300]])
   })
 })
 
@@ -979,5 +1098,118 @@ describe('ComputerHistory × helper 订阅', () => {
     idle!()
     await waitFor(() => ch.view().state.status === 'recording', 3_000)
     expect(launchHelper).toHaveBeenCalledTimes(1)
+  })
+
+  it('暂停 / 收紧排除表落配置失败(creview C):同「关」一样后台按退避补落最新意愿、设置页看得到;之后的意愿取代;放宽失败不欠', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    cleanups.push(() => vi.useRealTimers())
+    const settle = (): Promise<void> => new Promise((r) => setImmediate(r))
+    const advance = async (ms: number): Promise<void> => { await vi.advanceTimersByTimeAsync(ms); await settle() }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    cleanups.push(() => warn.mockRestore())
+    // 开着但暂停中:不碰 socket
+    const { ch, persist, onChanged } = makeController(path.join(os.tmpdir(), `chs-none-${process.pid}.sock`))
+    await ch.start({ computerHistoryEnabled: true, computerHistoryPausedUntil: Date.now() + 3_600_000 })
+
+    // 暂停落失败(托盘那条路还把错误吞了):本次保持暂停,后台补落这次的暂停值,补成提示消失、不再重试
+    persist.mockRejectedValueOnce(new Error('EROFS'))
+    await expect(ch.pause(30 * 60_000)).rejects.toThrow('EROFS')
+    const until = ch.view().state.pausedUntil
+    expect(ch.view().state.status).toBe('paused')
+    expect(ch.view().persistError).toBe('EROFS')
+    expect(onChanged.mock.lastCall?.[0]).toMatchObject({ persistError: 'EROFS' })
+    await advance(4_999)
+    expect(persist).toHaveBeenCalledTimes(1)
+    await advance(1)
+    expect(persist).toHaveBeenLastCalledWith({ computerHistoryPausedUntil: until })
+    expect(ch.view().persistError).toBeUndefined()
+    expect(onChanged.mock.lastCall?.[0]).not.toHaveProperty('persistError')
+    await advance(120_000)
+    expect(persist).toHaveBeenCalledTimes(2)
+
+    // 收紧排除表落失败:收紧的部分本次保留,后台补落内存里的排除表
+    persist.mockRejectedValueOnce(new Error('EROFS'))
+    await expect(ch.setExclude({ apps: ['com.bank'], domains: [] })).rejects.toThrow('EROFS')
+    expect(ch.view().exclude.apps).toEqual(['com.bank'])
+    expect(ch.view().persistError).toBe('EROFS')
+    await advance(5_000)
+    expect(persist).toHaveBeenLastCalledWith({ computerHistoryExclude: { apps: ['com.bank'], domains: [] } })
+    expect(ch.view().persistError).toBeUndefined()
+
+    // 放宽落失败 = 什么都没变,不欠、不补
+    persist.mockRejectedValueOnce(new Error('EROFS'))
+    await expect(ch.setExclude({ apps: [], domains: [] })).rejects.toThrow('EROFS')
+    expect(ch.view().exclude.apps).toEqual(['com.bank'])
+    expect(ch.view().persistError).toBeUndefined()
+    const afterRelax = persist.mock.calls.length
+    await advance(120_000)
+    expect(persist).toHaveBeenCalledTimes(afterRelax)
+
+    // 连着两次暂停都落失败:补落的是最后那次
+    persist.mockRejectedValueOnce(new Error('EROFS')).mockRejectedValueOnce(new Error('EROFS'))
+    await expect(ch.pause(30 * 60_000)).rejects.toThrow('EROFS')
+    await expect(ch.pause('tomorrow')).rejects.toThrow('EROFS')
+    const last = ch.view().state.pausedUntil
+    expect(last).toBe(nextLocalMidnight(Date.now()))
+    await advance(5_000)
+    expect(persist).toHaveBeenLastCalledWith({ computerHistoryPausedUntil: last })
+    expect(ch.view().persistError).toBeUndefined()
+
+    // 暂停落失败后又恢复成功:欠账还清,补落不会把已恢复的盖回暂停
+    persist.mockRejectedValueOnce(new Error('EROFS'))
+    await expect(ch.pause(30 * 60_000)).rejects.toThrow('EROFS')
+    expect(ch.view().persistError).toBe('EROFS')
+    await ch.resume()
+    expect(ch.view().persistError).toBeUndefined()
+    const afterResume = persist.mock.calls.length
+    await advance(120_000)
+    expect(persist).toHaveBeenCalledTimes(afterResume)
+    expect(persist).toHaveBeenLastCalledWith({ computerHistoryPausedUntil: null })
+  })
+
+  it('state.json 写失败(creview G):写成才算数、按退避重写;关闭那份写不进去就删掉 state.json 失败关门', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    cleanups.push(() => warn.mockRestore())
+    const eio = (): Error => Object.assign(new Error('EIO: i/o error, write'), { code: 'EIO' })
+    // 开着但暂停中:不碰 socket
+    const { ch, root } = makeController(path.join(os.tmpdir(), `chs-none-${process.pid}.sock`))
+    const statePath = path.join(root, 'state.json')
+    await ch.start({ computerHistoryEnabled: true, computerHistoryPausedUntil: Date.now() + 3_600_000 })
+    await ch.flush()
+    expect(readState(root)).toMatchObject({ enabled: true, status: 'paused' })
+    const writeState = vi.spyOn(ch.store, 'writeState')
+
+    // 非关门的一份(换暂停时长)写失败:文件不删(引擎照常读),但不算已写 —— 重试把新的 pausedUntil 补上
+    writeState.mockRejectedValueOnce(eio())
+    const v = await ch.pause(30 * 60_000)
+    await ch.flush()
+    expect(existsSync(statePath)).toBe(true)
+    expect(readState(root).pausedUntil).not.toBe(v.state.pausedUntil)
+    await waitFor(() => readState(root).pausedUntil === v.state.pausedUntil)
+
+    // 关闭那份写失败:当场删掉 state.json(引擎把没有 state.json 当关),之后重试写上 enabled:false
+    writeState.mockRejectedValueOnce(eio())
+    await ch.setEnabled(false)
+    expect(existsSync(statePath)).toBe(false)
+    await waitFor(() => existsSync(statePath))
+    expect(readState(root)).toMatchObject({ enabled: false, status: 'off' })
+  })
+
+  it('state.json 写失败 × 清除(creview G):dataGen+1 那份写不进去 → 删除执行时 state.json 已不在;删完那份写上后恢复', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    cleanups.push(() => warn.mockRestore())
+    const { ch, root } = makeController(path.join(os.tmpdir(), `chs-none-${process.pid}.sock`))
+    const statePath = path.join(root, 'state.json')
+    await ch.start({ computerHistoryEnabled: true, computerHistoryPausedUntil: Date.now() + 3_600_000 })
+    await ch.flush()
+    const gen = readState(root).dataGen
+    vi.spyOn(ch.store, 'writeState').mockRejectedValueOnce(Object.assign(new Error('ENOSPC'), { code: 'ENOSPC' }))
+    const seen: boolean[] = []
+    const realClear = ch.store.clear.bind(ch.store)
+    vi.spyOn(ch.store, 'clear').mockImplementationOnce(async (o) => { seen.push(existsSync(statePath)); await realClear(o) })
+    await ch.clear({ all: true })
+    await ch.flush()
+    expect(seen).toEqual([false]) // 读到一半的读者复核时拿不到 state → 整份作废;新来的读者当关
+    expect(readState(root)).toMatchObject({ enabled: true, status: 'paused', dataGen: gen + 2 })
   })
 })

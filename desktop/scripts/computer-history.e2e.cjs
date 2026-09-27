@@ -296,11 +296,38 @@ async function launchApp(home, sock, stubUrl, extraEnv = {}) {
   const env = { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stubUrl, ...extraEnv }
   if (sock) env.PI_CU_SOCKET_PATH = sock
   else delete env.PI_CU_SOCKET_PATH
-  const app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT], cwd: ROOT, env })
+  // -ApplePersistenceIgnoreState YES(放在 ROOT 之后,否则 YES 会被当成 app 路径):跳过 macOS 窗口恢复。
+  //  ① 任何一轮 Electron 崩过之后,macOS 对 com.github.Electron 弹「意外退出,是否重新打开窗口」模态
+  //     (sample:NSPersistentUIRestorer promptToIgnorePersistentStateWithCrashHistory → NSAlert runModal),
+  //     下一轮 firstWindow 干等 30s、主进程日志全空 —— 台架被上一轮的崩溃拖死;
+  //  ② T15 偶发主进程 SIGSEGV(台架经 inspector 对设置浮窗 setContentSize/center 之后第一次输入即崩,产品路径不改浮窗尺寸):
+  //     加了它之后同组合 0/10 复现(不加时 4/4;无同条件对照 —— 崩溃史让不加 flag 的启动卡在上面的模态)。
+  const app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'], cwd: ROOT, env })
   const mainLog = []
   app.process().stdout?.on('data', (d) => mainLog.push(String(d)))
   app.process().stderr?.on('data', (d) => mainLog.push(String(d)))
-  return { app, mainLog }
+  // 生命周期取证(T15 偶发「page closed」那次没留下分诊所需的证据):窗口关 / 渲染进程崩 / 主进程退(退出码 + 信号)各记一笔,
+  // 失败时连同主进程日志尾一起打出来 —— 分清是产品把窗关了、渲染层崩了,还是外部把 Electron 整个杀了(SIGTERM = 有人 pkill)。
+  const t0 = Date.now()
+  const life = []
+  const mark = (what) => life.push(`+${((Date.now() - t0) / 1000).toFixed(1)}s ${what}`)
+  const tag = (p) => { try { return /window=floating/.test(p.url()) ? 'floating' : 'main' } catch { return '?' } }
+  app.process().on('exit', (code, signal) => mark(`主进程退出 code=${code} signal=${signal}`))
+  app.on('close', () => mark('ElectronApplication close'))
+  const watchPage = (p) => {
+    p.on('close', () => mark(`窗口关闭(${tag(p)})`))
+    p.on('crash', () => mark(`渲染进程崩溃(${tag(p)})`))
+  }
+  app.windows().forEach(watchPage)
+  app.on('window', watchPage)
+  return { app, mainLog, life, mark }
+}
+
+/** 失败取证:生命周期时间线 + 主进程日志尾(不过滤:崩溃栈 / 信号 / 单实例锁提示都可能不含 error 字样)。 */
+function dumpLife(life, mainLog) {
+  console.error('生命周期时间线:\n  ' + (life.length ? life.join('\n  ') : '(无事件)'))
+  const tail = mainLog.join('').split('\n').filter(Boolean).slice(-40)
+  console.error('主进程日志尾(未过滤,最后 40 行):\n' + (tail.length ? tail.join('\n') : '(空)'))
 }
 
 async function closeApp(app) {
@@ -329,9 +356,9 @@ async function mainPhase(stub) {
     fs.mkdirSync(path.dirname(cfgPath), { recursive: true })
     fs.writeFileSync(cfgPath, JSON.stringify({ computerHistoryEnabled: true }))
   }
-  let app, mainLog = []
+  let app, mainLog = [], life = [], mark = () => {}, bodyFailed = false
   try {
-    ;({ app, mainLog } = await launchApp(home, sock, stub.url))
+    ;({ app, mainLog, life, mark } = await launchApp(home, sock, stub.url))
     const win = await app.firstWindow()
     watchErrors(win, 'main')
     await win.waitForSelector('#root', { timeout: 40_000 })
@@ -411,7 +438,9 @@ async function mainPhase(stub) {
     // ── ⑤ 手填 Bundle ID 排除 → 重订阅带新策略 ──
     const beforeEx = helper.subscribes().length
     await sp.locator('.ch-page [data-ch-add="app"] input').fill('com.apple.Health')
+    mark('T15 按 Enter 提交排除 App')
     await sp.locator('.ch-page [data-ch-add="app"] input').press('Enter')
+    mark('T15 Enter 已返回')
     const chip = await sp.locator('.ch-chip[data-bundle-id="com.apple.Health"]').first().waitFor({ timeout: 5_000 }).then(() => true, () => false)
     check('T15 排除表出现 com.apple.Health 芯片', chip)
     await until(() => helper.subscribes().length > beforeEx && helper.open().length === 1, 5_000)
@@ -547,6 +576,7 @@ async function mainPhase(stub) {
     if (rendererErrors.length) note(`渲染层其它报错 ${rendererErrors.length} 条(与本功能无关的噪音,仅供参考)`, rendererErrors.slice(0, 5).join(' ‖ '))
   } catch (e) {
     console.error('BODY ERROR:', (e && e.stack) || e)
+    bodyFailed = true
     check('脚本主体跑完没有抛错', false, String(e && e.message || e))
     try {
       const pages = app ? app.windows() : []
@@ -557,7 +587,9 @@ async function mainPhase(stub) {
       if (rendererErrors.length) console.error('渲染层报错:\n' + rendererErrors.slice(-10).join('\n'))
     } catch { /* 取证尽力而为 */ }
   } finally {
+    mark('台架 closeApp(此后的关闭 / 退出是台架自己收尾)')
     await closeApp(app)
+    if (bodyFailed) dumpLife(life, mainLog) // 收尾之后再打:主进程退出(码 + 信号)的回调此时一定已到
     await helper.close().catch(() => {})
     if (!KEEP) {
       fs.rmSync(home, { recursive: true, force: true })
@@ -585,9 +617,9 @@ async function missingPhase(stub) {
     fs.rmSync(home, { recursive: true, force: true })
     return
   }
-  let app, mainLog = []
+  let app, mainLog = [], life = []
   try {
-    ;({ app, mainLog } = await launchApp(home, null, stub.url, { HOME: home, PI_COMPUTER_USE_HELPER_APP_PATH: fakeApp }))
+    ;({ app, mainLog, life } = await launchApp(home, null, stub.url, { HOME: home, PI_COMPUTER_USE_HELPER_APP_PATH: fakeApp }))
     const win = await app.firstWindow()
     await win.waitForSelector('#root', { timeout: 40_000 })
     await skipOnboarding(win)
@@ -632,6 +664,7 @@ async function missingPhase(stub) {
     if (chLog.length) note('第二段主进程 [computer-history] 日志', chLog.slice(0, 5).join(' ‖ '))
   } catch (e) {
     console.error('MISSING PHASE ERROR:', (e && e.stack) || e)
+    dumpLife(life, mainLog)
     check('第二段(helper_missing)跑完没有抛错', false, String(e && e.message || e))
     try { for (const [i, p] of (app ? app.windows() : []).entries()) await p.screenshot({ path: path.join(SHOT_DIR, `FAIL-missing-window${i}.png`) }).catch(() => {}) } catch { /* ignore */ }
   } finally {

@@ -397,6 +397,9 @@ describe('ComputerHistorySettings', () => {
     expect(alert?.textContent).toContain('EROFS: read-only file system')
     expect(alert?.textContent).toContain('正在自动重试')
     expect(alert?.textContent).toContain('重启 Forsion')
+    // 暂停 / 收紧排除表落不成也走这条提示(creview C):文案不能只说「关闭」
+    expect(alert?.textContent).toContain('暂停')
+    expect(alert?.textContent).toContain('排除')
     await act(async () => pushChanged!(makeView({ enabled: false, status: 'off' })))
     expect(host.querySelector('[data-ch-persist-error]')).toBeNull()
   })

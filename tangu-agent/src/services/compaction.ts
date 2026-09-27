@@ -25,6 +25,7 @@ import {
 import { dropCoveredCalls, loadReplaySteps, replayAssistantHistory } from './historyReplay.js';
 import { DEFAULT_COMPACTION_SETTINGS, type CompactionSettings } from './compactionSettings.js';
 import { historyRevision } from './historyRevision.js';
+import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import type { ChatMessage, ThinkingLevel } from '../core/types.js';
 
 // 结构化交接(借 pi 的 checkpoint schema + Codex 的 handoff 框架):压缩摘要的消费者是「接手续做的
@@ -322,7 +323,10 @@ function transcriptEntries(msgs: ChatMessage[], fileOps: FileOps): { prevSummary
       }
     } else if (m.role === 'tool') {
       const name = callNames.get(String(m.tool_call_id ?? '')) || 'tool';
-      entries.push(`[Tool result: ${name}]\n${middle(text, TRANSCRIPT_TOOL_RESULT_HEAD, TRANSCRIPT_TOOL_RESULT_TAIL)}`);
+      // 声明了 persistPlaceholder 的工具(read_computer_history):run 内 workingMessages 里是全文,但摘要会落
+      // session_summaries —— 转写只给占位,与落库/回放同一形态,全文绝不借检查点落盘。
+      const placeholder = declaredPersistPlaceholder(name);
+      entries.push(`[Tool result: ${name}]\n${placeholder ?? middle(text, TRANSCRIPT_TOOL_RESULT_HEAD, TRANSCRIPT_TOOL_RESULT_TAIL)}`);
     }
   }
   return { prevSummary, entries };

@@ -177,6 +177,58 @@ describe('foldComputerHistory(段落、离开、10s 规则、片段)', () => {
     expect(formatItem(items[1])).toContain('| 2 event(s) by the agent');
   });
 
+  it('同一浏览器无标题允许页 → 排除站点(无标题标记,5 秒):边界保留、排除段不继承 URL、不计进前一页(评审 round2 P2)', () => {
+    const XCHROME = { ...CHROME, excluded: true as const };
+    const items = foldComputerHistory([
+      { t: at(12, 0), kind: 'app', app: CHROME, url: 'https://allowed.example/a' }, // 无标题的允许页
+      { t: at(12, 10), kind: 'window', app: XCHROME }, // 切到排除域名:helper 只发无标题标记
+      { t: at(12, 10, 5), kind: 'window', app: CHROME, url: 'https://allowed.example/b' }, // 5 秒后回到允许页(仍无标题)
+      { t: at(12, 20), kind: 'app', app: VSCODE, title: 'y' },
+    ], range);
+    expect(items.map((i) => (i.kind === 'span' ? `${i.app}${i.excluded ? '(x)' : ''}` : 'away'))).toEqual(['Google Chrome', 'Google Chrome(x)', 'Google Chrome', 'Code']);
+    const [a, x, b] = items as any[];
+    expect(formatItem(a)).toBe('09-27 12:00–12:10 (10m) Google Chrome [allowed.example/a]'); // 排除期间不计进它
+    expect(x.url).toBeUndefined();
+    expect(x.title).toBeUndefined();
+    expect(formatItem(x)).toBe('09-27 12:10–12:10 (<1m) Google Chrome (excluded)');
+    expect(formatItem(b)).toBe('09-27 12:10–12:20 (10m) Google Chrome [allowed.example/b]');
+  });
+
+  // helper 不发无痕窗口的任何事件、并对连着的同键情境事件去重:「A → 无痕 → 回到 A」落盘就是两条同键的 A
+  const DOCS = { app: CHROME, title: 'Docs', url: 'https://docs.example/a' };
+  it('重复的相同情境事件 = 边界(无痕窗口):A 收在自己最后一条事件,不延到重复那条、也不被合并并回;空白处不画标记', () => {
+    const items = foldComputerHistory([
+      { t: at(12, 0), kind: 'app', ...DOCS }, // 激活 Chrome(普通窗口 A)
+      { t: at(12, 1), kind: 'click', app: CHROME, el: { role: 'AXButton', label: 'Share' } },
+      { t: at(12, 5), kind: 'text', app: CHROME, text: 'hello' }, // A 的最后一条事件 —— 之后在无痕窗口 15 分钟,一条事件都没有
+      { t: at(12, 20), kind: 'window', ...DOCS }, // 从无痕回到 A:与上一条情境同键(kind 不同也算)
+      { t: at(12, 30), kind: 'app', app: VSCODE, title: 'x' },
+      { t: at(12, 40), kind: 'app', app: SLACK, title: 'y' },
+    ], range);
+    expect(items.map(formatItem)).toEqual([
+      '09-27 12:00–12:05 (5m) Google Chrome — Docs [docs.example/a] | typed: "hello" | clicks: Share', // 此前:12:00–12:30 (30m)
+      '09-27 12:20–12:30 (10m) Google Chrome — Docs [docs.example/a]',
+      '09-27 12:30–12:40 (10m) Code — x',
+      '09-27 12:40–12:40 (<1m) Slack — y',
+    ]);
+  });
+
+  it('重复边界段被 10s 规则丢掉时,边界顺延:两侧同键段不跨过它并成一段', () => {
+    // 编辑器 → 切到 A(0 秒)→ 无痕 10 分钟 → 回 A 5 秒 → 回编辑器:两段 A 都丢,但编辑器两段不能并成一段把中间吞掉
+    const items = foldComputerHistory([
+      { t: at(12, 0), kind: 'app', app: VSCODE, title: 'x' },
+      { t: at(12, 10), kind: 'app', ...DOCS },
+      { t: at(12, 20), kind: 'window', ...DOCS },
+      { t: at(12, 20, 5), kind: 'app', app: VSCODE, title: 'x' },
+      { t: at(12, 30), kind: 'app', app: SLACK, title: 'y' },
+    ], range);
+    expect(items.map(formatItem)).toEqual([
+      '09-27 12:00–12:10 (10m) Code — x', // 此前:12:00–12:30 (30m)
+      '09-27 12:20–12:30 (10m) Code — x',
+      '09-27 12:30–12:30 (<1m) Slack — y',
+    ]);
+  });
+
   it('displayUrl 剥 userinfo(URL 里内嵌的账号密码不进模型)', () => {
     expect(displayUrl('https://admin:hunter2@192.168.1.1/setup')).toBe('192.168.1.1/setup');
     expect(displayUrl('https://user@www.example.com/a/?q=1#x')).toBe('example.com/a');

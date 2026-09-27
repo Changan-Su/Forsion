@@ -56,9 +56,12 @@ const FAILS_BEFORE_DEGRADE = 2
 const RECENT_APPS_LIMIT = 60
 const RECENT_APPS_TAIL_BYTES = 256 * 1024
 const RECENT_APPS_SCAN_BYTES = 1024 * 1024
-/** 「关闭记录」落配置失败后的后台重试:5s 起、翻倍、封顶 60s,直到写成(或意愿被新的操作取代)。 */
+/** 「关闭 / 暂停 / 收紧排除表」落配置失败后的后台重试:5s 起、翻倍、封顶 60s,直到写成(或意愿被新的操作取代)。 */
 const PERSIST_RETRY_MIN_MS = 5_000
 const PERSIST_RETRY_MAX_MS = 60_000
+/** state.json 写失败后的重试:1s 起、翻倍、封顶 60s,直到盘上跟上最新一份。 */
+const STATE_RETRY_MIN_MS = 1_000
+const STATE_RETRY_MAX_MS = 60_000
 /** 应用内「清空数据」等在途写落定的上限(每段);见 stopComputerHistoryForWipe。 */
 const WIPE_CAP_MS = 10_000
 
@@ -252,38 +255,67 @@ export function readSelfBundleId(execPath: string): string | undefined {
 
 const snippet = (s: string): string => s.replace(/\s+/g, ' ').trim().slice(0, 80)
 
+/** 情境键:与 helper 的 recorderContextKey(activity_recorder.swift)同口径 —— App(bundleId,没有就名字)+ 排除标 + 标题 + 网址,
+ *  不看 kind / origin。helper 按它对连着的情境事件去重,所以落盘里连着两条同键 = 中间有被压掉的东西(见 foldSessions)。 */
+const contextKey = (ev: ComputerHistoryEvent): string =>
+  [ev.app?.bundleId || ev.app?.name || '', ev.app?.excluded ? 'x' : '', ev.title ?? '', ev.url ?? ''].join('\u001F')
+
 /**
  * 连续同 App + 同标题的事件合成一段。app / window 事件定义「当前窗口」;text / click / key 归入当前段
  * (同 App 时沿用当前标题)。锁屏 / 睡眠收尾当前段;两条事件间隔超 gapMs 视作中断(Forsion 没开 = 没记录,
  * 不能把整段空白算给上一个窗口)。同键段之间只夹着短段(总缝隙 ≤ 60s)的并回一段;最后丢掉短于 minMs 且没打字的段。
- * 输入须按 t 升序;输出按时间升序。
+ * 排除标记(app.excluded)自成一段:键里带排除状态(无标题的正常页面与紧随的无标题排除标记不同键),往回并段也绝不
+ * 跨过它 —— 哪怕它短于 minMs 最后被丢掉,边界照留,否则排除期间的时长会算到前一个页面(及其网址)头上。
+ * 排除段不收网址、不收打字。输入须按 t 升序;输出按时间升序。
+ *
+ * 重复的相同情境事件 = 会话边界:helper 对同一订阅者连着的同键 app / window 事件去重(键 = contextKey,与 helper 的
+ * recorderContextKey 同口径,不看 kind / origin),所以落盘里连着两条同键情境事件只可能是中间有被压掉的东西 —— 无痕窗口
+ * (进出都不发 window 事件:「普通窗口 A → 无痕 → 回到 A」到这里就是两条一模一样的 A),或(重)订阅补拍的快照。
+ * 中间那段时长未知:当前段收在它自己最后一条事件(不延到重复那条),重复那条另起一段且标 gapBefore;往回并段绝不跨过它,
+ * 否则两段 ≤ 60s 的并段会把无痕期间重新算回 A。锁屏 / 睡眠 / 解锁 / 唤醒清掉「上一条情境」:helper 解锁后会重拍一次前台,
+ * 锁屏本身已经收尾了当前段,那条重拍不另算边界。
  */
 export function foldSessions(events: readonly ComputerHistoryEvent[], opts: { minMs?: number; gapMs?: number } = {}): ComputerHistorySession[] {
   const minMs = opts.minMs ?? 10_000
   const gapMs = opts.gapMs ?? 30 * 60_000
-  type Span = ComputerHistorySession & { key: string; appKey: string; last: number; hasText: boolean }
+  type Span = ComputerHistorySession & { key: string; appKey: string; last: number; hasText: boolean; excluded: boolean; gapBefore: boolean }
   const spans: Span[] = []
   let cur: Span | null = null
+  let lastCtx: string | null = null
   const close = (at: number): void => { if (cur) { cur.end = Math.max(cur.start, at); cur = null } }
   for (const ev of events) {
     if (cur && ev.t - cur.last > gapMs) close(cur.last)
     if (ev.kind === 'system') {
       if (ev.state === 'locked' || ev.state === 'sleep') close(ev.t)
+      if (ev.state !== 'dropped') lastCtx = null
       continue
     }
     if (!ev.app) continue
+    let gapBefore = false
+    if (ev.kind === 'app' || ev.kind === 'window') {
+      const ctx = contextKey(ev)
+      if (ctx === lastCtx) {
+        gapBefore = true
+        if (cur) close(cur.last) // 收在它自己最后一条事件,中间那段不归它
+      }
+      lastCtx = ctx
+    }
     const appKey = ev.app.bundleId || ev.app.name
-    const title = ev.kind === 'app' || ev.kind === 'window' ? ev.title : cur && cur.appKey === appKey ? cur.title : ev.title
-    const key = `${appKey}\u0000${title ?? ''}`
+    // text / click / key 同 App 时归入当前段:标题与排除状态都沿用当前段的
+    const inherit = ev.kind !== 'app' && ev.kind !== 'window' && !!cur && cur.appKey === appKey
+    const title = inherit ? cur!.title : ev.title
+    const excluded = inherit ? cur!.excluded : ev.app.excluded === true
+    const key = `${appKey}\u0000${excluded ? 'x' : ''}\u0000${title ?? ''}`
     if (!cur || cur.key !== key) {
       close(ev.t)
-      const span: Span = { start: ev.t, end: ev.t, app: ev.app.name, typed: [], key, appKey, last: ev.t, hasText: false }
+      const span: Span = { start: ev.t, end: ev.t, app: ev.app.name, typed: [], key, appKey, last: ev.t, hasText: false, excluded, gapBefore }
       if (ev.app.bundleId) span.bundleId = ev.app.bundleId
       if (title) span.title = title
       spans.push(span)
       cur = span
     }
     cur.last = ev.t
+    if (cur.excluded) continue
     if (ev.url) cur.url = ev.url
     if (ev.kind === 'text' && ev.text && ev.origin !== 'agent') {
       cur.hasText = true
@@ -294,10 +326,11 @@ export function foldSessions(events: readonly ComputerHistoryEvent[], opts: { mi
   const short = (s: Span): boolean => s.end - s.start < minMs && !s.hasText
   const out: Span[] = []
   for (const s of spans) {
-    // 往回跳过夹在中间的短段(切出去瞄一眼又切回来),同键且总缝隙 ≤ 60s → 并回前一段,短段一并吞掉
+    // 往回跳过夹在中间的短段(切出去瞄一眼又切回来),同键且总缝隙 ≤ 60s → 并回前一段,短段一并吞掉;
+    // 排除标记与 gapBefore 段不跳过,gapBefore 段自己也不往回并(它前面是一段时长未知的空白)
     let j = out.length - 1
-    while (j >= 0 && short(out[j]) && out[j].key !== s.key) j--
-    const prev = out[j]
+    while (j >= 0 && short(out[j]) && !out[j].excluded && !out[j].gapBefore && out[j].key !== s.key) j--
+    const prev = s.gapBefore ? undefined : out[j]
     if (prev && prev.key === s.key && s.start - prev.end <= 60_000) {
       prev.end = s.end
       if (s.url) prev.url = s.url
@@ -308,7 +341,7 @@ export function foldSessions(events: readonly ComputerHistoryEvent[], opts: { mi
     }
     out.push(s)
   }
-  return out.filter((s) => !short(s)).map(({ key: _k, appKey: _a, last: _l, hasText: _h, ...s }) => s)
+  return out.filter((s) => !short(s)).map(({ key: _k, appKey: _a, last: _l, hasText: _h, excluded: _x, gapBefore: _g, ...s }) => s)
 }
 
 // ── 落盘 ─────────────────────────────────────────────────────────────────────
@@ -359,9 +392,12 @@ export class ComputerHistoryStore {
     try { return (await readdir(this.eventsDir)).filter((f) => DAY_FILE_RE.test(f)).sort() } catch { return [] }
   }
 
-  /** 删整天都早于 now - keepDays 的日文件 + 崩溃留下的重写临时文件。返回删掉的文件名。 */
+  /** 保留期:删整天都早于 now - keepDays 的日文件 + 崩溃留下的重写临时文件;截止时刻落在其中的那天按事件时间原子重写,
+   *  只留 t >= now - keepDays 的行(否则那天凌晨的事件要多留近一天)。返回删掉的文件名(重写的不算)。
+   *  不需要像清除那样挡 dispose 的同步追加:截止那天至少是 6 天前,sanitizeEvent 不收早于 1 天的事件,追加落不到它头上。 */
   async prune(now: number, keepDays = COMPUTER_HISTORY_KEEP_DAYS): Promise<string[]> {
-    const cutoff = localDay(now - keepDays * DAY_MS)
+    const cutoffT = now - keepDays * DAY_MS
+    const cutoff = localDay(cutoffT)
     let names: string[] = []
     try { names = await readdir(this.eventsDir) } catch { return [] }
     const removed: string[] = []
@@ -369,9 +405,32 @@ export class ComputerHistoryStore {
       if ((DAY_FILE_RE.test(f) && f.slice(0, 10) < cutoff) || f.endsWith('.tmp')) {
         await rm(path.join(this.eventsDir, f), { force: true })
         removed.push(f)
+      } else if (DAY_FILE_RE.test(f) && f.slice(0, 10) === cutoff) {
+        if (await this.rewriteKeeping(path.join(this.eventsDir, f), (t) => t >= cutoffT)) removed.push(f)
       }
     }
     return removed
+  }
+
+  /** 日文件只留 keep(t) 为真的行(解析不了的残行一并删),原子重写(tmp + rename);一行不剩就删文件,一行没丢就不动。
+   *  返回文件是否被删。调用方负责串行(单写者)。 */
+  private async rewriteKeeping(file: string, keep: (t: number) => boolean): Promise<boolean> {
+    const all = (await readFile(file, 'utf8')).split('\n').filter(Boolean)
+    const kept = all.filter((line) => {
+      const t = parseLine(line)?.t
+      return typeof t === 'number' && keep(t)
+    })
+    if (!kept.length) { await rm(file, { force: true }); return true }
+    if (kept.length === all.length) return false
+    const tmp = `${file}.${process.pid}-${randomUUID()}.tmp`
+    try {
+      await writeFile(tmp, kept.join('\n') + '\n', { encoding: 'utf8', mode: 0o600 })
+      await rename(tmp, file)
+    } catch (e) {
+      await rm(tmp, { force: true }).catch(() => {})
+      throw e
+    }
+    return false
   }
 
   /** all:删全部日文件;sinceMs:删 t >= sinceMs 的事件(整天落在范围内的直接删,跨界那天原子重写)。 */
@@ -385,19 +444,7 @@ export class ComputerHistoryStore {
       const since = opts.sinceMs as number
       if (!range || range[1] <= since) continue
       if (range[0] >= since) { await rm(file, { force: true }); continue }
-      const kept = (await readFile(file, 'utf8')).split('\n').filter((line) => {
-        const t = parseLine(line)?.t
-        return typeof t === 'number' && t < since // 解析不了的残行一并删(可能正是范围内事件的半截)
-      })
-      if (!kept.length) { await rm(file, { force: true }); continue }
-      const tmp = `${file}.${process.pid}-${randomUUID()}.tmp`
-      try {
-        await writeFile(tmp, kept.join('\n') + '\n', { encoding: 'utf8', mode: 0o600 })
-        await rename(tmp, file)
-      } catch (e) {
-        await rm(tmp, { force: true }).catch(() => {})
-        throw e
-      }
+      await this.rewriteKeeping(file, (t) => t < since) // 解析不了的残行一并删(可能正是范围内事件的半截)
     }
   }
 
@@ -652,7 +699,11 @@ export class ComputerHistory {
   private rev = 0
   /** >0 = 有操作按住连接(清除进行中):任何 refresh 都不重连,免得清除途中新事件落进来又被这次清除删掉。 */
   private holds = 0
-  /** 「关闭记录」落配置失败的错误原文(非空 = 还欠盘上一个 enabled:false,后台在重试)。 */
+  /** 欠着没落进配置的字段:「停录」侧的操作(关 / 暂停 / 收紧排除表)先改内存再落配置,落失败就记在这里,后台按退避
+   *  把这些字段的**当前内存值**补落(内存永远是最新的意愿,所以之后的操作天然取代之前的)。任何一次成功落了某字段 = 盘上
+   *  已跟上(之后再改内存的操作各自排着自己的落盘),从这里删掉;删空才算还清。 */
+  private readonly owed = new Set<keyof ComputerHistoryPersistPatch>()
+  /** 最近一次欠账落配置失败的错误原文(非空 = 有欠账,后台在重试;设置页据此提示重启可能恢复记录 / 丢掉新排除)。 */
   private persistError: string | null = null
   private persistRetryTimer?: ReturnType<typeof setTimeout>
   private persistRetryDelay = PERSIST_RETRY_MIN_MS
@@ -675,7 +726,14 @@ export class ComputerHistory {
   private seenAppsSeeded = false
   private seenAppsEpoch = 0
   private state: ComputerHistoryState
+  /** 最新一份状态的签名(去重 + 推送用;refresh 算出来就记)。 */
+  private lastSig = ''
+  /** 盘上 state.json 确认写成的那份签名 —— **写成才记**:写失败时它落后于 lastSig,重试计时器据此补写。 */
   private lastWritten = ''
+  /** 盘上 state.json 的 dataGen(写成才更新;失败关门删掉之后 = null)。关闭 / 代次变化的那份写不进去时据此判断要不要删。 */
+  private diskDataGen: number | null
+  private stateRetryTimer?: ReturnType<typeof setTimeout>
+  private stateRetryDelay = STATE_RETRY_MIN_MS
 
   /** 连接代号:每次主动断开 +1;旧代号的连接尝试 / 迟到事件一律作废。 */
   private gen = 0
@@ -704,6 +762,7 @@ export class ComputerHistory {
     const t = this.now()
     // 代次跨重启单调:接着盘上 state.json 的往下数(老文件没有这个字段 = 0)
     this.dataGen = readDataGen(this.store.statePath)
+    this.diskDataGen = this.dataGen
     this.state = { v: 1, enabled: false, pausedUntil: null, status: this.isDarwin() ? 'off' : 'unsupported', since: t, updatedAt: t, platform: d.platform, dataGen: this.dataGen }
   }
 
@@ -727,7 +786,7 @@ export class ComputerHistory {
     this.readConfig(cfg)
     if (this.pausedUntil !== null && this.pausedUntil <= this.now()) {
       this.pausedUntil = null
-      void this.ops(() => this.d.persist({ computerHistoryPausedUntil: null })).catch(() => {})
+      void this.ops(() => this.persistIntent({ computerHistoryPausedUntil: null }, false)).catch(() => {})
     }
     this.started = true
     this.armPauseTimer()
@@ -776,13 +835,12 @@ export class ComputerHistory {
    *  它也是一次意愿操作:推进对应字段的代号,在途的「开 / 恢复」回来时不得盖掉它。 */
   applyConfig(cfg: ComputerHistoryConfig): void {
     const wasEnabled = this.enabled
-    const hadPersistError = this.persistError !== null
-    if ('computerHistoryEnabled' in cfg) {
-      this.enableSeq++
-      this.clearPersistRetry() // 盘上的 enabled 刚由 config:set 写定,欠着的「关」不必再补
-    }
+    if ('computerHistoryEnabled' in cfg) this.enableSeq++
     if ('computerHistoryPausedUntil' in cfg) this.pauseSeq++
     if ('computerHistoryExclude' in cfg) this.excludeSeq++
+    // 这几个字段盘上刚由 config:set 写定(内存随即跟上),欠着的不必再补
+    for (const k of ['computerHistoryEnabled', 'computerHistoryPausedUntil', 'computerHistoryExclude'] as const) if (k in cfg) this.owed.delete(k)
+    const repaid = !this.owed.size && this.clearPersistRetry()
     const excludeChanged = this.readConfig(cfg)
     if (wasEnabled && !this.enabled) this.dataGen++
     if (excludeChanged) {
@@ -791,7 +849,7 @@ export class ComputerHistory {
     }
     this.armPauseTimer()
     this.refresh()
-    if (hadPersistError && this.persistError === null) this.emit()
+    if (repaid) this.emit()
   }
 
   view(): ComputerHistoryView {
@@ -820,8 +878,8 @@ export class ComputerHistory {
    *  - 开 / 恢复(要开始录):先落配置,成功了才改内存 —— 失败 = 什么都没变,错误抛给设置页;落配置期间有更新的
    *    意愿操作发出过(代号变了),回来时就不再改那个字段(见 enableSeq 注释);
    *  - 关 / 暂停(要停录):先改内存并立刻断订阅,再落配置 —— 用户要的是马上停,不能被一次配置写失败挡住;
-   *    落盘失败照样抛错,本次运行保持已停。「关」落不成还会在后台一直补(见 armPersistRetry),补成之前设置页挂着提示:
-   *    盘上还是 enabled:true,这时重启会恢复记录。
+   *    落盘失败照样抛错,本次运行保持已停,并在后台一直补(见 persistIntent / armPersistRetry),补成之前设置页挂着提示:
+   *    盘上还是旧值,这时重启会恢复记录。收紧排除表同理(见 setExclude)。
    * 落配置一律排进 ops,按发出顺序一个个落:盘上最后留下的是最后发出的意愿。
    */
   async setEnabled(on: boolean): Promise<ComputerHistoryView> {
@@ -836,26 +894,18 @@ export class ComputerHistory {
       this.backoff = BACKOFF_MIN_MS
       this.dataGen++ // 读者:读到一半被关了,结果作废
       this.refresh()
-      try {
-        await this.ops(() => this.d.persist(patch))
-      } catch (e) {
-        if (eop === this.enableSeq && !this.enabled && !this.disposed) this.persistFailed(e)
-        throw e
-      }
-      if (eop === this.enableSeq && this.clearPersistRetry()) this.emit()
+      // 失败不看代号一律记欠账:之后排着的操作成功了自会还清;若之后那个「开」也落失败,内存仍是关,照补
+      await this.ops(() => this.persistIntent(patch, true))
       await this.flush()
       return this.view()
     }
     try {
-      await this.ops(() => this.d.persist(patch))
+      await this.ops(() => this.persistIntent(patch, false))
     } catch (e) {
       this.refresh()
-      throw e // 什么都没变;欠着的「关」(若有)照旧在后台补
+      throw e // 什么都没变;欠着的(若有)照旧在后台补
     }
-    if (eop === this.enableSeq) {
-      this.enabled = true
-      this.clearPersistRetry() // 盘上已是这次的 enabled:true,欠着的「关」作废
-    }
+    if (eop === this.enableSeq) this.enabled = true
     if (pop === this.pauseSeq) {
       this.pausedUntil = null
       this.armPauseTimer()
@@ -878,15 +928,16 @@ export class ComputerHistory {
     this.pauseSeq++
     this.pausedUntil = untilMs
     this.armPauseTimer()
-    this.refresh() // 先断订阅,再落配置:暂停要立刻生效(落盘失败也保持已暂停,见 setEnabled 注释)
-    await this.ops(() => this.d.persist({ computerHistoryPausedUntil: untilMs }))
+    this.refresh() // 先断订阅,再落配置:暂停要立刻生效(落盘失败也保持已暂停并在后台补,见 setEnabled 注释)
+    await this.ops(() => this.persistIntent({ computerHistoryPausedUntil: untilMs }, true))
     await this.flush()
     return this.view()
   }
 
   async resume(): Promise<ComputerHistoryView> {
     const pop = ++this.pauseSeq
-    await this.ops(() => this.d.persist({ computerHistoryPausedUntil: null })) // 先落配置:失败 = 仍在暂停,错误抛给调用方
+    // 先落配置:失败 = 仍在暂停,错误抛给调用方(欠着的暂停若有,照旧在后台补)
+    await this.ops(() => this.persistIntent({ computerHistoryPausedUntil: null }, false))
     if (pop === this.pauseSeq) { // 落配置期间又暂停 / 开关过:那个更新的意愿说了算
       this.pausedUntil = null
       this.armPauseTimer()
@@ -896,7 +947,37 @@ export class ComputerHistory {
     return this.view()
   }
 
-  /** 「关」没落进配置:记下错误(设置页据此提示),后台按退避一直补,直到写成或被新的意愿取代。 */
+  /**
+   * 落配置(**只在 ops 里调**,欠账的记 / 还与落盘同在一个串行任务里,不会被下一笔插到中间)。
+   *  - 成功:这几个字段盘上已跟上 —— 之后再改内存的操作各自排着自己的落盘 —— 从欠账里删掉;删空即还清(提示消失)。
+   *  - 失败且 owe(「停录」侧:关 / 暂停 / 收紧排除表,内存已先改):记欠账,后台按退避补落这些字段的当前内存值。
+   *    「开始录」侧(开 / 恢复 / 放宽排除表)失败 = 什么都没变,不欠。
+   */
+  private async persistIntent(patch: ComputerHistoryPersistPatch, owe: boolean): Promise<void> {
+    const keys = Object.keys(patch) as Array<keyof ComputerHistoryPersistPatch>
+    try {
+      await this.d.persist(patch)
+    } catch (e) {
+      if (owe && !this.disposed) {
+        for (const k of keys) this.owed.add(k)
+        this.persistFailed(e)
+      }
+      throw e
+    }
+    for (const k of keys) this.owed.delete(k)
+    if (!this.owed.size && this.clearPersistRetry()) this.emit()
+  }
+
+  /** 欠账字段的当前内存值(内存永远是最新的意愿:补落的永远是最后发出的那个)。 */
+  private owedPatch(): ComputerHistoryPersistPatch {
+    const p: ComputerHistoryPersistPatch = {}
+    if (this.owed.has('computerHistoryEnabled')) p.computerHistoryEnabled = this.enabled
+    if (this.owed.has('computerHistoryPausedUntil')) p.computerHistoryPausedUntil = this.pausedUntil
+    if (this.owed.has('computerHistoryExclude')) p.computerHistoryExclude = { apps: [...this.exclude.apps], domains: [...this.exclude.domains] }
+    return p
+  }
+
+  /** 欠账落配置失败:记下错误(设置页据此提示),后台按退避一直补,直到写成或被新的意愿取代。 */
   private persistFailed(err: unknown): void {
     this.persistError = (err instanceof Error ? err.message : String(err)) || 'persist failed'
     this.armPersistRetry()
@@ -909,23 +990,16 @@ export class ComputerHistory {
     this.persistRetryDelay = Math.min(PERSIST_RETRY_MAX_MS, delay * 2)
     this.persistRetryTimer = setTimeout(() => {
       this.persistRetryTimer = undefined
-      // 排进 ops:在它前面发出的「开」先落完 —— 开成了会清掉这笔欠账(下面的判断就不再写);开失败了内存仍是关,照补
+      // 排进 ops:在它前面发出的操作先落完 —— 落成了会还掉对应字段(轮到这里时就不再写它们);补的是轮到时的内存值
       void this.ops(async () => {
-        if (this.persistError === null || this.enabled || this.disposed) return
-        try {
-          await this.d.persist({ computerHistoryEnabled: false, computerHistoryPausedUntil: this.pausedUntil })
-        } catch (e) {
-          if (this.persistError === null || this.enabled || this.disposed) return
-          this.persistFailed(e)
-          return
-        }
-        if (this.clearPersistRetry()) this.emit()
-      })
+        if (this.disposed || !this.owed.size) return
+        await this.persistIntent(this.owedPatch(), true)
+      }).catch(() => {})
     }, delay)
     this.persistRetryTimer.unref?.()
   }
 
-  /** 清掉欠账与重试计时器;返回之前是否欠着(调用方据此决定要不要推一次 View)。 */
+  /** 清掉提示与重试计时器(欠账已还清时调);返回之前是否挂着提示(调用方据此决定要不要推一次 View)。 */
   private clearPersistRetry(): boolean {
     clearTimeout(this.persistRetryTimer)
     this.persistRetryTimer = undefined
@@ -940,7 +1014,7 @@ export class ComputerHistory {
     if (this.disposed) return
     if (this.pausedUntil !== null && this.pausedUntil <= this.now()) {
       this.pausedUntil = null
-      void this.ops(() => this.d.persist({ computerHistoryPausedUntil: null })).catch(() => {})
+      void this.ops(() => this.persistIntent({ computerHistoryPausedUntil: null }, false)).catch(() => {})
       this.backoff = BACKOFF_MIN_MS
       this.refresh()
     }
@@ -994,14 +1068,15 @@ export class ComputerHistory {
   /**
    * 改排除表。**收紧当场生效**:落配置可能排在配置锁 / 慢盘后面,这段时间里刚排除的 App / 站点不能照旧被记 ——
    * 有新增项就先把内存过滤换成「旧 ∪ 新」,断掉按旧策略的订阅、按收紧后的策略重订,再落配置;
-   * 移除(放宽)等落配置成功才生效。落配置失败:错误抛给设置页,已收紧的部分本次运行保留(隐私取向,同「关 / 暂停」)。
+   * 移除(放宽)等落配置成功才生效。落配置失败:错误抛给设置页;有收紧的,已收紧的部分本次运行保留,并像「关 / 暂停」
+   * 一样在后台一直补落(补的是内存里的「旧 ∪ 新」:放宽那半没生效,不替用户落),否则重启后刚排除的又会被记。
    */
   async setExclude(raw: unknown): Promise<ComputerHistoryView> {
     const next = normalizeExclude(raw)
     const op = ++this.excludeSeq
     const tightened = tightenExclude(this.exclude, next)
     if (tightened) this.replaceExclude(tightened)
-    await this.ops(() => this.d.persist({ computerHistoryExclude: next }))
+    await this.ops(() => this.persistIntent({ computerHistoryExclude: next }, tightened !== null))
     if (op === this.excludeSeq && JSON.stringify(next) !== JSON.stringify(this.exclude)) this.replaceExclude(next)
     return this.view()
   }
@@ -1138,13 +1213,55 @@ export class ComputerHistory {
     }
     const sig = JSON.stringify([next.enabled, next.pausedUntil, next.status, next.dataGen])
     this.state = next
-    if (sig === this.lastWritten) return
-    this.lastWritten = sig
-    // 功能从没开过的机器不建目录:引擎把「没有 state.json」当关
-    if (next.enabled || existsSync(this.d.root)) {
-      void this.enqueue(() => this.store.writeState(next, () => !this.disposed)).catch((e) => console.warn('[computer-history] state write failed', e))
-    }
+    if (sig === this.lastSig) return
+    this.lastSig = sig
+    this.writeStateFile(next, sig)
     this.emit()
+  }
+
+  /**
+   * state.json 排进写队列(next 在入队时定下:清除靠「前后两次写夹住删除」,不能让后一份抢到删除前面去)。
+   * **写成才记 lastWritten**;写失败按退避重试最新一份。关闭(enabled:false)或代次变了(清除 / 改排除表 / 关闭)的
+   * 那份写不进去 → 同一个队列任务里删掉盘上的 state.json,失败关门:引擎把「没有 state.json」当关、读到一半的也整份作废,
+   * 不能让它照旧按盘上的 enabled:true / 旧代次放行。删在同一任务里,所以排在后面的清除执行时 state.json 已经不在了。
+   */
+  private writeStateFile(next: ComputerHistoryState, sig: string): void {
+    if (!next.enabled && !existsSync(this.d.root)) return // 功能从没开过的机器不建目录:引擎把「没有 state.json」当关
+    void this.enqueue(async () => {
+      try {
+        await this.store.writeState(next, () => !this.disposed)
+      } catch (e) {
+        if (this.disposed) return
+        console.warn('[computer-history] state write failed', errCode(e) || e)
+        if (!next.enabled || next.dataGen !== this.diskDataGen) {
+          try {
+            await rm(this.store.statePath, { force: true })
+            this.diskDataGen = null
+          } catch (re) { console.warn('[computer-history] state remove failed', errCode(re) || re) }
+        }
+        this.armStateRetry()
+        return
+      }
+      if (this.disposed) return // commit 被否决 = 没写
+      this.lastWritten = sig
+      this.diskDataGen = next.dataGen
+      if (sig === this.lastSig) {
+        clearTimeout(this.stateRetryTimer)
+        this.stateRetryTimer = undefined
+        this.stateRetryDelay = STATE_RETRY_MIN_MS
+      }
+    })
+  }
+
+  private armStateRetry(): void {
+    if (this.stateRetryTimer || this.disposed) return
+    const delay = this.stateRetryDelay
+    this.stateRetryDelay = Math.min(STATE_RETRY_MAX_MS, delay * 2)
+    this.stateRetryTimer = setTimeout(() => {
+      this.stateRetryTimer = undefined
+      if (!this.disposed && this.lastWritten !== this.lastSig) this.writeStateFile(this.state, this.lastSig)
+    }, delay)
+    this.stateRetryTimer.unref?.()
   }
 
   private emit(): void {
@@ -1278,6 +1395,8 @@ export class ComputerHistory {
       clearInterval(this.pruneTimer)
       clearTimeout(this.persistRetryTimer)
       this.persistRetryTimer = undefined
+      clearTimeout(this.stateRetryTimer)
+      this.stateRetryTimer = undefined
       this.offHelperIdle?.()
       this.offHelperIdle = undefined
       this.sub?.close()

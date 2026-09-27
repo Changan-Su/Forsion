@@ -341,6 +341,8 @@ export interface ChSpan {
   /** 其中由 agent(CU 代操作)产生的事件数。 */
   agent: number;
   last: number;
+  /** 本段由一条「重复的相同情境事件」开启:它前面是一段时长未知的空白(无痕窗口 / 重订阅),合并绝不跨过它。只在折叠内部用。 */
+  gapBefore?: true;
 }
 export interface ChAway {
   kind: 'away';
@@ -366,6 +368,12 @@ export function cleanObserved(v: unknown, max: number): string {
 
 function appKeyOf(e: ChEvent): string {
   return e.app?.bundleId || e.app?.name || '?';
+}
+
+/** 情境键:与 helper 的 recorderContextKey(CU 仓 native/macos/activity_recorder.swift)、桌面 foldSessions 的 contextKey 同口径 ——
+ *  App(bundleId,没有就名字)+ 排除标 + 标题 + 网址,不看 kind / origin。helper 按它对连着的情境事件去重。 */
+function contextKeyOf(e: ChEvent): string {
+  return [e.app?.bundleId || e.app?.name || '', e.app?.excluded ? 'x' : '', e.title ?? '', e.url ?? ''].join('\u001F');
 }
 
 function newSpan(e: ChEvent): ChSpan {
@@ -404,19 +412,29 @@ function hasText(s: ChSpan): boolean {
   return s.typed.length > 0 || s.typedMore > 0 || s.edits > 0;
 }
 
+/** 段键 = (App, 窗口标题, 是否排除)。排除标记不带标题:不把 excluded 算进键,同一浏览器里无标题的允许页 → 排除站点
+ *  会被当成同一段,排除期间继承前一页的 URL、计进它的时长。 */
 function sameKey(a: ChSpan, b: ChSpan): boolean {
-  return a.appKey === b.appKey && (a.title ?? '') === (b.title ?? '');
+  return a.appKey === b.appKey && (a.title ?? '') === (b.title ?? '') && !!a.excluded === !!b.excluded;
 }
 
 /**
  * 事件 → 段落:连续同 (App, 窗口标题) 合成一段(切换事件定段界,text/click/key 归当前前台段),
  * 锁屏/睡眠记为离开(解锁、唤醒或任何活动即回来)。然后裁到 [from, to]、丢掉 <10s 且没敲字的段、
  * 把因此变相邻的同键段并回去。openEnd:录制中且区间收在 now → 最后一段一直开到 now(前台没换过)。
+ *
+ * 重复的相同情境事件 = 边界:helper 对连着的同键情境事件去重(contextKeyOf),所以连着两条同键只可能是中间有被压掉的东西 ——
+ * 无痕窗口(进出都不发 window 事件,「A → 无痕 → 回到 A」到这里是两条一模一样的 A)或(重)订阅补拍的快照。中间时长未知:
+ * 当前段收在它自己最后一条事件(不延到重复那条),重复那条另起一段标 gapBefore,合并绝不跨过它(它被 10s 规则丢掉时标记
+ * 顺延给下一段保留下来的段)。空白处不画标记:away 只给有正面证据的状态(锁屏 / 睡眠事件);这段空白里本有一部分是真在看 A、
+ * 只是归属不了的时间,标成「没记录」反而是错的;列表里本来就有丢短段留下的缝。锁屏 / 睡眠 / 解锁 / 唤醒清掉「上一条情境」:
+ * helper 解锁后会重拍一次前台,离开本身已经是边界。
  */
 export function foldComputerHistory(events: ChEvent[], range: { from: number; to: number }, openEnd = false): ChItem[] {
   const raw: ChItem[] = [];
   let cur: ChSpan | null = null;
   let away: ChAway | null = null;
+  let lastCtx: string | null = null;
   const closeSpan = (t: number): void => {
     if (cur) { cur.end = Math.max(cur.start, t); raw.push(cur); cur = null; }
   };
@@ -430,10 +448,26 @@ export function foldComputerHistory(events: ChEvent[], range: { from: number; to
       } else if (e.state === 'unlocked' || (e.state === 'wake' && away?.reason === 'sleep')) {
         back(e.t);
       }
+      if (e.state !== 'dropped') lastCtx = null;
       continue; // dropped 计数只在 events 明细里出现
     }
     back(e.t); // 有活动 = 人回来了(漏了解锁事件也不至于一直「离开」)
     const switching = e.kind === 'app' || e.kind === 'window';
+    if (switching) {
+      const ctx = contextKeyOf(e);
+      const repeat = ctx === lastCtx;
+      lastCtx = ctx;
+      if (repeat) {
+        // 必须先于下面的「同键 → 续段」:否则重复那条只会把当前段拉长,中间的空白照样算给它
+        const open: ChSpan | null = cur;
+        if (open) closeSpan(open.last);
+        const s = newSpan(e);
+        s.gapBefore = true;
+        cur = s;
+        tally(s, e);
+        continue;
+      }
+    }
     const c: ChSpan | null = cur;
     if (switching) {
       const probe = newSpan(e);
@@ -474,23 +508,28 @@ export function foldComputerHistory(events: ChEvent[], range: { from: number; to
 
   // 裁剪 + 丢短段
   const kept: ChItem[] = [];
+  let gapPending = false; // 被丢掉的 gapBefore 段:边界顺延给下一段保留下来的段
   for (const it of raw) {
     if (it.kind === 'away') {
       if ((it.end ?? range.to) <= range.from || it.start > range.to) continue;
       kept.push({ ...it, start: Math.max(it.start, range.from) });
       continue;
     }
-    if (it.end <= range.from || it.start > range.to) continue;
+    const gap: boolean = gapPending || !!it.gapBefore;
+    if (it.end <= range.from || it.start > range.to) { gapPending = gap; continue; }
     const s: ChSpan = { ...it, start: Math.max(it.start, range.from), end: Math.min(it.end, range.to) };
-    // 10s 规则只管「路过」:末段后面没有切换,时长未知而不是短,照留
-    if (it !== tail && s.end - s.start < MIN_SPAN_MS && !hasText(s)) continue;
+    // 10s 规则只管「路过」:末段后面没有切换,时长未知而不是短,照留。排除段再短也留:它是边界,
+    // 丢了它两侧同键的允许段会并成一段,把排除期间算进允许页。
+    if (it !== tail && !it.excluded && s.end - s.start < MIN_SPAN_MS && !hasText(s)) { gapPending = gap; continue; }
+    if (gap) s.gapBefore = true;
+    gapPending = false;
     kept.push(s);
   }
-  // 合并相邻同键段(A → 路过 B 3 秒 → A 折成一段)
+  // 合并相邻同键段(A → 路过 B 3 秒 → A 折成一段);gapBefore 段不并进前一段
   const out: ChItem[] = [];
   for (const it of kept) {
     const prev = out[out.length - 1];
-    if (it.kind === 'span' && prev?.kind === 'span' && sameKey(prev, it)) {
+    if (it.kind === 'span' && !it.gapBefore && prev?.kind === 'span' && sameKey(prev, it)) {
       prev.end = it.end;
       prev.ongoing = it.ongoing;
       prev.url = it.url || prev.url;

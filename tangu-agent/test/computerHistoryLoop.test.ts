@@ -8,7 +8,7 @@
  * 跑:cd Forsion-Genesis/tangu-agent && npx vitest run test/computerHistoryLoop.test.ts
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, appendFileSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, appendFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configureTangu } from '../src/seams/runtime.js';
@@ -22,6 +22,7 @@ import { createRun, getRun } from '../src/services/runStore.js';
 import { enqueueRun } from '../src/services/agentLoop.js';
 import { setRunClientTag } from '../src/seams/runContext.js';
 import { computerHistoryDir, COMPUTER_HISTORY_PERSIST_PLACEHOLDER } from '../src/services/computerHistory.js';
+import { normalizeHooksConfig, saveHooksConfig, syncUserTrust } from '../src/hooks/index.js';
 
 const USER = 'u1';
 const TERM = 'hummingbird';
@@ -34,6 +35,11 @@ let llmPayloads: any[];
 /** 按 payload 定制模型回复(缺省 null = 一律答「好。」);beforeEach 复位。 */
 let llmScript: ((payload: any) => any) | null = null;
 let prevVolatile: string | undefined;
+/** 模型窗口(缺省不报 → 族表缺省窗口);压缩用例钉小,灌到触发线。beforeEach 复位。 */
+let ctxWindow: number | undefined;
+/** 压缩摘要调用的 payload(不进 llmPayloads);假摘要器把收到的转写原样回显进摘要,转写里有什么检查点里就有什么。 */
+let summaryPayloads: any[];
+const isSummaryCall = (p: any): boolean => String(p?.messages?.[0]?.content || '').includes('You are performing a context checkpoint compaction');
 
 function chState(enabled: boolean): void {
   mkdirSync(computerHistoryDir(), { recursive: true });
@@ -55,13 +61,21 @@ beforeEach(async () => {
   delete process.env.TANGU_MEMORY_VOLATILE;
   llmPayloads = [];
   llmScript = null;
+  ctxWindow = undefined;
+  summaryPayloads = [];
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: USER });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
   const fakeBrain: any = {
     llm: {
-      resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test' }, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' }),
+      resolveModelAndKey: async () => ({
+        model: { provider: 'test', name: 'test', ...(ctxWindow ? { context_window: ctxWindow } : {}) }, apiKey: 'k', baseUrl: 'b', apiModelId: 'm',
+      }),
       buildProviderPayload: async (o: any) => ({ messages: o.messages.map((m: any) => ({ ...m })) }),
       streamProviderCompletion: async (o: any) => {
+        if (isSummaryCall(o.payload)) {
+          summaryPayloads.push(o.payload);
+          return { content: `## Goal\nECHO\n${o.payload.messages[1]?.content ?? ''}`, reasoning: '', toolCalls: [], usage: { prompt_tokens: 50, completion_tokens: 20 }, finishReason: 'stop' };
+        }
         llmPayloads.push(o.payload);
         if (llmScript) return llmScript(o.payload);
         return { content: '好。', reasoning: '', toolCalls: [], usage: { prompt_tokens: 10, completion_tokens: 5 }, finishReason: 'stop' };
@@ -225,5 +239,64 @@ describe('read_computer_history 结果:本轮模型拿全文,会话库只存占�
     expect(replayedTool, '回放里 ch1 的 tool 消息还在(与 assistant 的 tool_calls 配对)').toBeTruthy();
     expect(textOf(replayedTool)).toBe(COMPUTER_HISTORY_PERSIST_PLACEHOLDER);
     expect(wireText(llmPayloads[0])).not.toContain(MARK);
+  }, 30_000);
+});
+
+describe('read_computer_history 全文不借压缩检查点 / PostToolUse hook 落盘(评审 round2)', () => {
+  const MARK = 'CH-COMPACT-MARK';
+  const usage = (prompt: number) => ({ prompt_tokens: prompt, completion_tokens: 5 });
+  beforeEach(() => {
+    chState(true);
+    chEvent({ t: Date.now() - 20 * 60_000, kind: 'app', app: { name: 'Code', bundleId: 'com.microsoft.VSCode' }, title: `${MARK}.md` });
+  });
+
+  it('run 内自动压缩:摘要输入里 CH 结果是占位,落库的检查点里没有全文', async () => {
+    const WINDOW = 40_000; // 触发线 = 40000 − max(2048, 5%) = 37952
+    ctxWindow = WINDOW;
+    // ① 调 read_computer_history → ② 看到结果后再调一个工具、实测 prompt 顶到线下 500 → ③ 迭代前越线,压缩第 ① 轮 → 收尾
+    const script = [
+      () => ({ content: '', reasoning: '', toolCalls: [{ id: 'ch1', type: 'function', function: { name: 'read_computer_history', arguments: '{}' } }], usage: usage(100), finishReason: 'tool_calls' }),
+      () => ({ content: 'Checking todos.', reasoning: '', toolCalls: [{ id: 't2', type: 'function', function: { name: 'todo_read', arguments: '{}' } }], usage: usage(WINDOW - 500), finishReason: 'tool_calls' }),
+      () => ({ content: 'Done.', reasoning: '', toolCalls: [], usage: usage(200), finishReason: 'stop' }),
+    ];
+    llmScript = () => { const step = script.shift(); if (!step) throw new Error('script exhausted'); return step(); };
+    const run = await runToSettled('C1', '我休息之前在做什么?', { client: 'desktop/1.0', agentConfig: { compaction: { reserveTokens: 2_048, keepRecentTokens: 300 } } });
+    expect(run.status).toBe('done');
+    const toolWire = (llmPayloads[1].messages as any[]).filter((m) => m.role === 'tool').map(textOf).join('\n');
+    expect(toolWire, '前提:第 ② 轮模型拿到的是全文(否则下面「不含标记」是空真的)').toContain(MARK);
+    expect(summaryPayloads.length, '前提:真的压缩了一次').toBe(1);
+
+    const transcript = textOf(summaryPayloads[0].messages[1]);
+    expect(transcript).toContain('[Tool result: read_computer_history]');
+    expect(transcript).toContain(COMPUTER_HISTORY_PERSIST_PLACEHOLDER);
+    expect(transcript).not.toContain(MARK);
+    expect(transcript).not.toContain('[computer-history:observed]');
+
+    const cps = await query<any[]>(`SELECT summary FROM session_summaries WHERE session_id = 'S'`);
+    expect(cps.length, '前提:检查点落库了(回显式摘要器 → 转写里有什么这里就有什么)').toBe(1);
+    expect(String(cps[0].summary)).toContain('ECHO');
+    expect(String(cps[0].summary)).toContain(COMPUTER_HISTORY_PERSIST_PLACEHOLDER);
+    expect(String(cps[0].summary)).not.toContain(MARK);
+  }, 30_000);
+
+  it('PostToolUse hook 的 tool_response 是占位,不是全文', async () => {
+    const out = join(home, 'post-tool-use.json');
+    saveHooksConfig(syncUserTrust(normalizeHooksConfig({
+      events: { PostToolUse: [{ matcher: 'read_computer_history', hooks: [{ type: 'command', command: `cat > '${out}'` }] }] },
+    })));
+    llmScript = (payload) => ((payload.messages as any[]).some((m) => m.role === 'tool')
+      ? { content: 'You were editing a markdown file.', reasoning: '', toolCalls: [], usage: usage(10), finishReason: 'stop' }
+      : { content: '', reasoning: '', toolCalls: [{ id: 'ch1', type: 'function', function: { name: 'read_computer_history', arguments: '{}' } }], usage: usage(10), finishReason: 'tool_calls' });
+    // hook 只在 execMode=host 跑;full-auto 免得读工具卡审批
+    const run = await runToSettled('K1', '我休息之前在做什么?', { client: 'desktop/1.0', agentConfig: { execMode: 'host', cwd: home, approvalMode: 'full-auto' } });
+    expect(run.status).toBe('done');
+    const toolWire = (llmPayloads[1].messages as any[]).filter((m) => m.role === 'tool').map(textOf).join('\n');
+    expect(toolWire, '前提:模型本轮拿到全文').toContain(MARK);
+    expect(existsSync(out), '前提:hook 真的跑了(否则下面是空真的)').toBe(true);
+    const got = JSON.parse(readFileSync(out, 'utf8'));
+    expect(got.hook_event_name).toBe('PostToolUse');
+    expect(got.tool_name).toBe('read_computer_history');
+    expect(got.tool_response).toBe(COMPUTER_HISTORY_PERSIST_PLACEHOLDER);
+    expect(JSON.stringify(got)).not.toContain(MARK);
   }, 30_000);
 });

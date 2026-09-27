@@ -1940,9 +1940,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       await publish(runId, 'tool_result', payload);
 
       // —— PostToolUse hook：跑格式化/lint/审计、把反馈或上下文喂回模型（host-only；云端 no-op）——
+      // tool_response 给落库形态(stored):hook 是用户配的外部命令,常把输入写进审计日志 —— 声明了 persistPlaceholder
+      // 的工具(read_computer_history)全文交给它就等于在 7 天保留 / 清除 / 关闭管不到的地方又落一份。
       const postV = await runHooks('PostToolUse', {
         tool_name: result.name, tool_input: hookParseArgs(execCall.function.arguments),
-        tool_response: capped, is_error: result.isError,
+        tool_response: stored, is_error: result.isError,
         session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug,
       }, hookCtx());
       // Pre/Post 注入上下文 + PostToolUse block 反馈 → 追加到本工具结果消息尾部
