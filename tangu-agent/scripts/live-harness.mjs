@@ -322,7 +322,8 @@ mkdirSync(home, { recursive: true }); mkdirSync(workspace, { recursive: true });
 // 只在 --only 带 mcp 时写进 config —— MCP 工具会进工具头,别的场景的前缀 / 缓存口径不该被它改掉。
 const MCP_MARK = `MCP-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 const MCP_PWN = `PWNED-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
-const MCP_DIGITS = String(1000 + Math.floor(Math.random() * 9000));
+// 相邻不重复:09-27 实测模型把「7988」读成「798」(连着的同形数字易被并成一个),判据要测的是「图到没到」而不是 OCR 细节。
+const MCP_DIGITS = (() => { let d = String(1 + Math.floor(Math.random() * 9)); while (d.length < 4) { const x = String(Math.floor(Math.random() * 10)); if (x !== d.at(-1)) d += x; } return d; })();
 /** RGB PNG(无滤波),pixel(x, y) → [r, g, b]。不引依赖:zlib deflate + 手写 CRC32。 */
 function rgbPng(w, h, pixel) {
   const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
@@ -339,7 +340,7 @@ function digitsPng(text) {
     4: ['00010', '00110', '01010', '10010', '11111', '00010', '00010'], 5: ['11111', '10000', '11110', '00001', '00001', '10001', '01110'],
     6: ['00110', '01000', '10000', '11110', '10001', '10001', '01110'], 7: ['11111', '00001', '00010', '00100', '01000', '01000', '01000'],
     8: ['01110', '10001', '10001', '01110', '10001', '10001', '01110'], 9: ['01110', '10001', '10001', '01111', '00001', '00010', '01100'] };
-  const S = 10, PAD = 2, CELL = 6; // 字宽 5 + 字距 1(点)
+  const S = 10, PAD = 2, CELL = 7; // 字宽 5 + 字距 2(点)
   const w = (text.length * CELL - 1 + PAD * 2) * S, h = (7 + PAD * 2) * S;
   return rgbPng(w, h, (x, y) => {
     const cx = Math.floor(x / S) - PAD, cy = Math.floor(y / S) - PAD;
