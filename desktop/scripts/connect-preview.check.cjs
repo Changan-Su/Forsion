@@ -20,8 +20,9 @@ const path = require('path')
 const { chromium } = require('playwright-core')
 
 const { servePathRoot, setForsionPreviewHooks, stopCodePreview } = require('../electron/codePreview')
-const { FORSION_CONNECT_LOCAL_SDK } = require('../electron/forsionConnectLocal')
-const { makePreviewProxy } = require('../electron/forsionConnect')
+// SDK 与代理自 0.2 起住在内置包 Forsion Extend(@forsion/extend)里,主进程运行时也是从它装载;这里从装进 node_modules 的
+// 同一个包取(Node ≥ 22.12 能 require ESM),接线与 cloudHost 装载后的一字不差。
+const { FORSION_CONNECT_LOCAL_SDK, makePreviewProxy } = require(require.resolve('@forsion/extend/dist/desktop.mjs', { paths: [path.join(__dirname, '..')] }))
 
 function findChromium() {
   if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE

@@ -29,6 +29,10 @@ const host: CloudHost = {
   openExternal: async () => {},
   isTrustedSender: () => true,
   log: (m) => logs.push(m),
+  projectsRoot: () => '/tmp/projects',
+  transpileForServe: () => null,
+  mimeOf: () => undefined,
+  setPreviewHooks: () => {},
 }
 const imported: string[] = []
 const load = () => loadBuiltinDesktopEntries({

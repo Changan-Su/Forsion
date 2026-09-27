@@ -11,6 +11,7 @@
  * ponytail: 只在启动时装一次,没有卸载 / 热重载 —— 更新本来就是下次启动生效(播种是唯一写点)。
  */
 import type { IpcMainInvokeEvent } from 'electron'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
@@ -27,11 +28,20 @@ export const signedEssentials = (entry: string): string[] => [entry, 'manifest.j
 export interface CloudHost {
   /** 当前账号的云端基址(无尾斜杠)与 token(空串=未登录)。token 只在主进程流转,绝不下发渲染层。 */
   getCloud(): Promise<{ base: string; token: string }>
-  /** 等价 ipcMain.handle。 */
+  /** 等价 ipcMain.handle;宿主记下通道名,preload 据此只保留有人接的桥键(cloud:present)。 */
   handle(channel: string, fn: (e: IpcMainInvokeEvent, ...args: any[]) => unknown): void
   openExternal(url: string): Promise<void>
   isTrustedSender(e: IpcMainInvokeEvent): boolean
   log(message: string): void
+  // ── 0.2 起(Forsion Connect 用)。新成员一律只增不改:Extend 用 hasXxxHost 探测,老宿主缺了就跳过那一块并 log ──
+  /** Coding Space 项目根(~/Forsion/Project;dev = ~/Forsion-Dev/Project)。 */
+  projectsRoot(): string
+  /** 与预览完全相同的转译器(发布产物 = 预览所见);不能转译的扩展名返回 null。 */
+  transpileForServe(code: string, ext: string, filePath?: string): string | null
+  /** 预览服务器的 MIME 表(按小写扩展名,含点);未知返回 undefined。 */
+  mimeOf(ext: string): string | undefined
+  /** codePreview 本地服务器的 Forsion 挂钩:/forsion-connect.js 的 SDK 源码 + /__forsion/* 的云端代理。 */
+  setPreviewHooks(h: { sdkJs?: string; proxy?: (req: IncomingMessage, res: ServerResponse) => void | Promise<void> }): void
 }
 export type RegisterCloud = (host: CloudHost) => void | Promise<void>
 

@@ -16,7 +16,7 @@ export interface StudioBrief {
 
 export const STUDIO_CAPABILITIES: readonly StudioCapability[] = ['chat', 'agent', 'images', 'account']
 
-/** Only APIs implemented by electron/forsionConnectLocal.ts belong here. */
+/** Only APIs implemented by the Forsion Connect preview SDK (@forsion/extend, src/desktop/connect.ts) belong here. */
 const CAPABILITY_INSTRUCTIONS: Record<StudioCapability, string> = {
   chat: 'AI chat: use window.forsion.ai.chat({ prompt, onDelta }) or { messages, onDelta }; consume the returned text. Do not invent a model ID; omit it to use the configured model.',
   agent: 'Agent workflow: use window.forsion.ai.agent({ input, session, onDelta }); preserve the returned session for follow-ups. The server manages tools and model routing; do not claim arbitrary client-side tool APIs exist.',

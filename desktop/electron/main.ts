@@ -11,7 +11,7 @@ import { normalizeUiSync } from '../shared/uiSync'
  * agent 调用由 renderer 直连 HTTP/SSE(localhost),不经主进程代理。
  */
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, net, powerMonitor, powerSaveBlocker, screen, globalShortcut, session, shell, nativeImage, Notification, systemPreferences, webContents } from 'electron'
-import { basename, dirname, isAbsolute, join, relative, sep } from 'path'
+import { basename, dirname, isAbsolute, join, relative } from 'path'
 import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
 import { writeHostTextFile } from './hostTextWrite'
@@ -48,13 +48,9 @@ import { builtinBundleSources, builtinPluginIds, seedBuiltinBundles } from './bu
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
 import { loadBuiltinDesktopEntries, type CloudHost } from './cloudHost'
 import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, type DownloadProgress } from './marketInstall'
-import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks } from './codePreview'
+import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks, transpileForServe, MIME } from './codePreview'
 import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudioSnapshots, restoreCodeStudioSnapshot } from './codeStudioProjects'
 import { installPreviewPersistence, previewOriginFor, registerProductsIpc } from './productsIpc'
-import { FORSION_CONNECT_LOCAL_SDK } from './forsionConnectLocal'
-import {
-  collectProjectFiles, readConnectMeta, writeConnectMeta, cloudJson, makePreviewProxy, type CloudCreds,
-} from './forsionConnect'
 import { transcribeViaOpenAI, transcribeViaForsion } from './asr'
 import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, transcribeLocal } from './asrLocal'
 import { computerUseLiveView, helperSocketPath } from './computerUse'
@@ -1980,7 +1976,8 @@ app.whenReady().then(async () => {
   const bundleSources = builtinBundleSources({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() })
   // 云端账号面(个人中心 / 会员 / 额度 / 反馈 / cloud:fetch)住在 Forsion Extend 的主进程半身里(cloudHost.ts):播种后、开窗前
   // 验签装载;缺席 / 验签失败就没有这一面,preload 按 `cloud:present` 删键,渲染层门控自动隐藏。
-  let cloudPresent = false
+  // 记下 Extend 实际注册的通道:preload 只保留有人接的桥键(账号面 / Connect 各自独立,Extend 版本与宿主接缝不同步时不会留下悬空键)。
+  const cloudChannels = new Set<string>()
   if (PRODUCT.agentBackend) {
     await seedBuiltinBundles(join(forsionHomeDir(), 'plugins'), bundleSources, { appVersion: app.getVersion() })
       .catch((e) => console.warn('[builtin-plugins] 播种失败(忽略):', (e as Error)?.message))
@@ -1990,15 +1987,20 @@ app.whenReady().then(async () => {
         const creds = loadTanguCreds()
         return { base: (stored.cloudUrl || creds.cloudUrl || DEFAULT_CLOUD_URL).replace(/\/+$/, ''), token: creds.token || '' }
       },
-      handle: (channel, fn) => ipcMain.handle(channel, fn),
+      handle: (channel, fn) => { ipcMain.handle(channel, fn); cloudChannels.add(channel) },
       openExternal: (url) => shell.openExternal(url),
       isTrustedSender,
       log: (m) => console.log(m),
+      // ── Forsion Connect(0.2 起):项目根、与预览同一份转译器 / MIME 表、codePreview 的 Forsion 挂钩 ──
+      projectsRoot: () => join(forsionWorkspaceDir(), 'Project'),
+      transpileForServe,
+      mimeOf: (ext) => MIME[ext],
+      setPreviewHooks: setForsionPreviewHooks,
     }
     const loaded = await loadBuiltinDesktopEntries({ pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources, appVersion: app.getVersion(), host, tempRoot: app.getPath('userData') })
-    cloudPresent = loaded.includes('forsion-extend')
+    if (!loaded.includes('forsion-extend')) cloudChannels.clear()
   }
-  ipcMain.on('cloud:present', (e) => { e.returnValue = cloudPresent })
+  ipcMain.on('cloud:present', (e) => { e.returnValue = [...cloudChannels] })
   // 内置捆绑包的 npm 更新(builtinUpdates.ts):启动 1 分钟后查一次、之后每 6 小时一次,新版只下载进暂存区,
   // 由下次启动的上面那次播种换上。只在打包版跑:dev 的随包来源就是 node_modules,跟着 npm install 走。
   if (PRODUCT.agentBackend && app.isPackaged) {
@@ -2426,12 +2428,8 @@ app.whenReady().then(async () => {
     return serveInlineHtml(html)
   })
 
-  // ── Forsion Connect:Coding Space 发布 + 预览态 AI 代理(token 只活在主进程)──
-  const resolveConnectCloud = async (): Promise<CloudCreds> => {
-    const cfg = await loadConfig()
-    return { base: (cfg.cloudUrl || DEFAULT_CLOUD_URL).replace(/\/+$/, ''), token: loadTanguCreds().token || '' }
-  }
-  setForsionPreviewHooks({ sdkJs: FORSION_CONNECT_LOCAL_SDK, proxy: makePreviewProxy(resolveConnectCloud) })
+  // Forsion Connect(Coding Space 发布 + 预览态 AI 代理)自 0.2 起住在内置包 Forsion Extend 的主进程半身里:
+  // connect:* 通道与 codePreview 的 /forsion-connect.js、/__forsion/* 挂钩都由它经 CloudHost 注册(cloudHost.ts)。
   // 造物 Space + Coding Studio git 版本:逻辑在 productsIpc / 各纯模块里,这里只注入 Electron 依赖。
   installPreviewPersistence(forsionHomeDir)
   registerProductsIpc({
@@ -2453,112 +2451,6 @@ app.whenReady().then(async () => {
     writeShortcutLink: process.platform === 'win32' ? (p, o) => shell.writeShortcutLink(p, 'create', o) : undefined,
   })
 
-  ipcMain.handle('connect:meta', (_e, dir: string) => (typeof dir === 'string' && dir ? readConnectMeta(dir) : {}))
-
-  ipcMain.handle('connect:list', async () => {
-    const c = await resolveConnectCloud()
-    if (!c.token) return { ok: false, code: 'not_logged_in', detail: '请先登录 Forsion 账号' }
-    try {
-      const { status, json } = await cloudJson(c, 'GET', '/api/connect/apps')
-      if (status === 401 || status === 403) return { ok: false, code: 'not_logged_in', detail: '登录已过期,请重新登录' }
-      if (status !== 200) return { ok: false, code: 'error', detail: json?.detail || `HTTP ${status}` }
-      return { ok: true, base: c.base, ...json }
-    } catch (e) {
-      return { ok: false, code: 'error', detail: (e as Error)?.message || String(e) }
-    }
-  })
-
-  ipcMain.handle('connect:publish', async (_e, p: { dir: string; name: string; slug: string; entry: string }) => {
-    if (!p || typeof p.dir !== 'string' || !p.dir || !p.name || !p.slug || !p.entry) {
-      return { ok: false, code: 'error', detail: '参数不完整' }
-    }
-    // 纵深防御：只能发布 Coding Space 项目根(~/Forsion/Project/<项目>)下、且 realpath 后仍在根内的目录
-    // （挡渲染层传任意路径 + 挡指向项目外的符号链接根）。
-    let realDir: string
-    try {
-      const projectsRoot = realpathSync(join(forsionWorkspaceDir(), 'Project'))
-      realDir = realpathSync(p.dir)
-      if (realDir !== projectsRoot && !realDir.startsWith(projectsRoot + sep)) {
-        return { ok: false, code: 'error', detail: '只能发布 Coding Space 项目目录' }
-      }
-    } catch {
-      return { ok: false, code: 'error', detail: '项目目录不存在或无法访问' }
-    }
-    const c = await resolveConnectCloud()
-    if (!c.token) return { ok: false, code: 'not_logged_in', detail: '请先登录 Forsion 账号' }
-    try {
-      const { files, totalBytes } = collectProjectFiles(realDir)
-      if (!files.some((f) => f.path === p.entry)) return { ok: false, code: 'error', detail: `入口文件不存在:${p.entry}` }
-      const { status, json } = await cloudJson(c, 'POST', '/api/connect/apps', { slug: p.slug, name: p.name, entry: p.entry, files }, 300_000)
-      if (status === 401) return { ok: false, code: 'not_logged_in', detail: '登录已过期,请重新登录' }
-      if (status !== 200) {
-        return { ok: false, code: json?.code || 'error', detail: json?.detail || `HTTP ${status}`, used: json?.used, limit: json?.limit }
-      }
-      writeConnectMeta(realDir, { slug: String(json.slug) })
-      return { ok: true, slug: json.slug, handle: json.handle, url: `${c.base}${json.url}`, totalBytes }
-    } catch (e) {
-      return { ok: false, code: 'error', detail: (e as Error)?.message || String(e) }
-    }
-  })
-
-  ipcMain.handle('connect:unpublish', async (_e, slug: string) => {
-    if (!slug || typeof slug !== 'string') return { ok: false, code: 'error', detail: '参数不完整' }
-    const c = await resolveConnectCloud()
-    if (!c.token) return { ok: false, code: 'not_logged_in', detail: '请先登录 Forsion 账号' }
-    try {
-      const { status, json } = await cloudJson(c, 'DELETE', `/api/connect/apps/${encodeURIComponent(slug)}`)
-      if (status === 401 || status === 403) return { ok: false, code: 'not_logged_in', detail: '登录已过期,请重新登录' }
-      if (status !== 200 && status !== 404) return { ok: false, code: 'error', detail: json?.detail || `HTTP ${status}` }
-      return { ok: true }
-    } catch (e) {
-      return { ok: false, code: 'error', detail: (e as Error)?.message || String(e) }
-    }
-  })
-
-  // ── 商店上架(发布零审核;上架应用市场需审,审核在服务端 admin) ──
-
-  ipcMain.handle('connect:listingApply', async (_e, p: { slug: string; summary: string }) => {
-    if (!p || typeof p.slug !== 'string' || !p.slug || typeof p.summary !== 'string' || !p.summary.trim()) {
-      return { ok: false, code: 'error', detail: '参数不完整' }
-    }
-    const c = await resolveConnectCloud()
-    if (!c.token) return { ok: false, code: 'not_logged_in', detail: '请先登录 Forsion 账号' }
-    try {
-      const { status, json } = await cloudJson(c, 'PUT', `/api/connect/apps/${encodeURIComponent(p.slug)}/listing`, { summary: p.summary })
-      if (status === 401) return { ok: false, code: 'not_logged_in', detail: '登录已过期,请重新登录' }
-      if (status !== 200) return { ok: false, code: json?.code || 'error', detail: json?.detail || `HTTP ${status}` }
-      return { ok: true, status: json.status }
-    } catch (e) {
-      return { ok: false, code: 'error', detail: (e as Error)?.message || String(e) }
-    }
-  })
-
-  ipcMain.handle('connect:listingWithdraw', async (_e, slug: string) => {
-    if (!slug || typeof slug !== 'string') return { ok: false, code: 'error', detail: '参数不完整' }
-    const c = await resolveConnectCloud()
-    if (!c.token) return { ok: false, code: 'not_logged_in', detail: '请先登录 Forsion 账号' }
-    try {
-      // 404(没有申请可撤)视同成功 —— 撤回是幂等操作,与 unpublish 同口径。
-      const { status, json } = await cloudJson(c, 'DELETE', `/api/connect/apps/${encodeURIComponent(slug)}/listing`)
-      if (status === 401) return { ok: false, code: 'not_logged_in', detail: '登录已过期,请重新登录' }
-      if (status !== 200 && status !== 404) return { ok: false, code: 'error', detail: json?.detail || `HTTP ${status}` }
-      return { ok: true }
-    } catch (e) {
-      return { ok: false, code: 'error', detail: (e as Error)?.message || String(e) }
-    }
-  })
-
-  // 应用市场「网站应用」公开列表(无需登录;有 token 也无妨,cloudJson 顺带附上)。
-  ipcMain.handle('connect:store', async () => {
-    const c = await resolveConnectCloud()
-    try {
-      const { status, json } = await cloudJson(c, 'GET', '/api/connect/store')
-      if (status !== 200) return { ok: false, detail: json?.detail || `HTTP ${status}` }
-      return { ok: true, base: c.base, items: Array.isArray(json.items) ? json.items : [] }
-    } catch (e) {
-      return { ok: false, detail: (e as Error)?.message || String(e) }
-    }
-  })
   // Coding Space 的项目根目录 = ~/Forsion/Project(与 Amadeus 的 ~/Forsion/Amadeus 同级;dev=~/Forsion-Dev/Project),
   // 每个项目一个子文件夹。返回时确保存在(子文件夹经 fs:mkdir 的 safeName 校验创建)。
   ipcMain.handle('codeProjects:root', async () => {

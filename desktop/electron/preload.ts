@@ -477,8 +477,16 @@ if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<str
 if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall'] as const) delete (api as Record<string, unknown>)[k]
 // 云端账号面(个人中心 / 会员页 / 额度与重置卡 / 反馈 / cloud:fetch)由内置包 Forsion Extend 的主进程半身提供
 // (electron/cloudHost.ts);没装载(验签失败 / 单品变体 / 没捆)就删键 —— 调了会 reject "No handler registered",
-// 删掉键渲染层按同一套 window.tangu?.X 门控自动隐藏。主进程在开窗前就答好 cloud:present,这里同步问一次。
-const CLOUD_KEYS = ['openAccountCenter', 'openPayCenter', 'accountQuota', 'accountUseResetCard', 'accountBgConvert', 'accountBgAutoMain', 'submitFeedback', 'cloudFetch'] as const
-if (ipcRenderer.sendSync('cloud:present') !== true) for (const k of CLOUD_KEYS) delete (api as Record<string, unknown>)[k]
+// 删掉键渲染层按同一套 window.tangu?.X 门控自动隐藏。主进程在开窗前就答好 cloud:present(Extend 实际注册的通道名),
+// 这里同步问一次,逐键按「它的通道有人接」保留 —— Extend 版本与宿主接缝不同步(比如老 Extend 没有 Connect)时不留悬空键。
+const CLOUD_KEYS: Record<string, string> = {
+  openAccountCenter: 'auth:openAccountCenter', openPayCenter: 'auth:openPayCenter',
+  accountQuota: 'account:quota', accountUseResetCard: 'account:useResetCard', accountBgConvert: 'account:bgConvert', accountBgAutoMain: 'account:bgAutoMain',
+  submitFeedback: 'feedback:submit', cloudFetch: 'cloud:fetch',
+  connectMeta: 'connect:meta', connectList: 'connect:list', connectPublish: 'connect:publish', connectUnpublish: 'connect:unpublish',
+  connectListingApply: 'connect:listingApply', connectListingWithdraw: 'connect:listingWithdraw', connectStore: 'connect:store',
+}
+const cloudPresent = new Set<string>(Array.isArray(ipcRenderer.sendSync('cloud:present')) ? ipcRenderer.sendSync('cloud:present') as string[] : [])
+for (const [k, channel] of Object.entries(CLOUD_KEYS)) if (!cloudPresent.has(channel)) delete (api as Record<string, unknown>)[k]
 
 contextBridge.exposeInMainWorld('tangu', api)
