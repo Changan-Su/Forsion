@@ -43,7 +43,8 @@
  * 退出码:有 FAIL 或整体超时(--timeout 毫秒,缺省 15 分钟;到点也出报告)= 1。
  * ponytail: 顺序跑、无重试、断言只钉「链路走通 + 事实命中」;模型答偏与引擎坏在 detail 里分开写,不自动重跑。
  */
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, appendFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
@@ -406,6 +407,14 @@ const appendUserActivity = (d = new Date(), what = 'note.edit f="Notes/harness.m
 };
 const hhmm = (ms) => { const d = new Date(Number(ms)); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
 const museLogTail = () => { try { return readFileSync(engineLog, 'utf8').split('\n').filter((l) => l.includes('[muse]')).slice(-6).join(' ⏎ '); } catch { return ''; } };
+/** Muse 自建 Space 能不能被桌面装出 home(判定口径与仪器本体见 scripts/muse-space-verdict.mjs)。放进**子进程**:插件代码里
+ *  没人接的 async 报错会直接打死所在进程(Codex 09-27 实测),不能让它打死整个台架。 */
+async function museSpaceVerdict(dir, appVersion) {
+  try {
+    const { stdout } = await promisify(execFile)(process.execPath, [join(root, 'scripts', 'muse-space-verdict.mjs'), dir, appVersion || ''], { timeout: 20_000 });
+    return JSON.parse(stdout.trim().split('\n').pop());
+  } catch (e) { return { built: true, ok: false, text: `判定子进程失败:${String(e?.message || e).slice(0, 160)}` }; }
+}
 /** 直接读隔离 state.db 的压缩检查点(只读打开,引擎同时写着也安全);没有 HTTP 面,只能这么核。 */
 const summariesOf = async (sessionId) => {
   const { default: Database } = await import('better-sqlite3');
@@ -1154,8 +1163,12 @@ try {
     if (sid) { const list = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages'); museSays = list.filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n'); }
     const blockedBy = blocked();
     const twoCycles = advanced(second) && !blockedBy;
-    const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0);
-    return { ok, detail: `${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length};自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
+    // Space 判定**只记不判**:它是 Node 里对渲染进程的近似,两向都可能有偏差,不该把一个真跑通的模型场景判红;
+    // 看 detail 里的「Space …」跨次比对即可(⚠️ = 判定为装不出 home,拿 scripts/muse-space-verdict.mjs 复核)。没写不算错。
+    const space = await museSpaceVerdict(join(home, 'agents', 'muse', 'Space'), health?.version);
+    const spaceAsks = approvals.filter((a) => JSON.stringify(a).includes('/Space/')).length; // Space 目录三档免审:排进审批 = 提示词又把它说成「Library 外」
+    const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && !spaceAsks; // 审批队列是引擎真实状态,照判
+    return { ok, detail: `${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.ok ? '' : '⚠️'}${space.text};自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
   });
   // ── musewake(09-24,opt-in,单独跑:`--only musewake`):「用户睡了、没事可做」时 Muse 会不会自己 set_next_wake,
   // 引擎会不会真的跳过心跳,用户一动能不能立刻醒。作息按**当前钟点**播:活跃窗口 = 现在 +6h 起 10 个小时(每天每小时一行,

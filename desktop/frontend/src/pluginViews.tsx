@@ -22,9 +22,12 @@ registerMessages({
 /** DOM-mount 宿主:div 交给插件的 mount(),卸载时跑其返回的清理函数。
  *  导出给 builtins/muse 的主槽复用:Muse Space 主区渲染 agent-muse 插件的 home 视图时走的就是这份契约。
  *  `pluginId` 只在经插件命名空间注册时有(见下方 factory);带上它,挂载失败才能按插件记账 —— 控制台里
- *  那行 `[plugin-view] mount failed` 谁都看得见,但开发者看不见「是我的插件炸的」。 */
-export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; pluginId?: string }> = ({ def, pluginId, extendView, leaf, params }) => {
+ *  那行 `[plugin-view] mount failed` 谁都看得见,但开发者看不见「是我的插件炸的」。
+ *  `onMountError`:挂载抛错时额外通知调用方(Muse Space 主槽拿它回写给 Muse);走 ref,换了回调身份不重挂。 */
+export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; pluginId?: string; onMountError?: (e: unknown) => void }> = ({ def, pluginId, onMountError, extendView, leaf, params }) => {
   const ref = useRef<HTMLDivElement>(null)
+  const onError = useRef(onMountError)
+  onError.current = onMountError
   const disposeBeforePaint = useRef<(() => void) | null>(null)
   const current = useRef({ leaf, params })
   current.current = { leaf, params }
@@ -64,6 +67,7 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
     } catch (e) {
       console.error(`[plugin-view] mount "${def.id}" failed`, e)
       if (pluginId) recordDevMountError(pluginId, def.id, e)
+      onError.current?.(e)
       el.textContent = translate('pluginview.mountFailed')
     }
     let disposed = false

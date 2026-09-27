@@ -251,13 +251,15 @@ function scheduleKickoff(due: ScheduleEntry[]): string {
 function tierKickoff(cfg: MuseConfig): string {
   const lib = museLibraryDir();
   const common = `Your workspace is your Library (${lib}): keep drafts, notes, plugin drafts and your daily journal (Journal/<date>.md) there — the user can browse it in the app. `;
+  // 「Space 目录免审」必须写进档位句本身:09-27 实机 Muse 只读到「Library 免审、别处排队」,把 Space 当成「Library 外」
+  // 等批准(实际 extraRoots 三档都放行),于是只敢改文案。
   if (cfg.mode === 'auto') {
-    return common + 'Permission tier: auto — you have full autonomy inside the authorized folders; every file edit is checkpointed so the user can rewind, but still avoid destructive or external actions.';
+    return common + 'Permission tier: auto — you have full autonomy inside the authorized folders and your Space folder; every file edit is checkpointed so the user can rewind, but still avoid destructive or external actions.';
   }
   if (cfg.mode === 'agent') {
-    return common + 'Permission tier: agent — writes inside your Library are free; writing anywhere else or running shell commands is first judged by the user\'s default agent on their behalf, and queued for the user if declined. Never retry a deferred action in this cycle.';
+    return common + 'Permission tier: agent — writes inside your Library and your Space folder are free; writing anywhere else or running shell commands is first judged by the user\'s default agent on their behalf, and queued for the user if declined. Never retry a deferred action in this cycle.';
   }
-  return common + 'Permission tier: ask — writes inside your Library are free; writing anywhere else or running shell commands is queued for the user\'s approval (the outcome shows up in your log next cycle as an [approval] entry). Never retry a deferred action in this cycle.';
+  return common + 'Permission tier: ask — writes inside your Library and your Space folder are free; writing anywhere else or running shell commands is queued for the user\'s approval (the outcome shows up in your log next cycle as an [approval] entry). Never retry a deferred action in this cycle.';
 }
 
 function log(msg: string): void {
@@ -563,12 +565,16 @@ async function activityTailHint(): Promise<string> {
   }
 }
 
-/** Muse 自建 Space 的契约(每周期钉一次;绝对路径老用户的 config.toml 里没有)。写法交给 forsion-plugin 技能,这里只钉边界。 */
+/** Muse 自建 Space 的契约(每周期钉一次;绝对路径老用户的 config.toml 里没有)。写法交给 forsion-plugin 技能,这里只钉边界。
+ *  「文件本身就是 setup 函数体、别包 function setup」必须明说:从前只写「a bare main.js setup body」,09-27 实机 Muse 每一版都
+ *  包成 function setup(ctx){…} 却不调用 —— 零注册零报错,Space 从首建起一直空白。 */
 function spaceKickoff(): string {
   return `Your Space: the desktop's "Muse" Space renders the view you register from the Forsion plugin at ${museSpaceDir()} ` +
-    '(manifest.json + a bare main.js setup body — load the "forsion-plugin" skill before writing it). Register the main view as registerView({ id: "home", ... }); ' +
-    'plain JS, no build step, no CDN, no capabilities; bundle subfolders are inert there. It starts empty — build it and keep improving it across cycles. ' +
-    'It is reloaded after your cycle ends; a load failure reaches you as a [feedback] entry mentioning the Space.';
+    '(manifest.json + main.js — load the "forsion-plugin" skill before writing it). ' +
+    'main.js runs as the body of setup(ctx): ctx is already in scope, so call ctx.registerView({ id: "home", ... }) at the top level of the file for the main view. ' +
+    'Do not wrap the file in function setup(ctx) { ... } — nothing calls it, so nothing registers and no error is raised. ' +
+    'Plain JS, no build step, no CDN, no capabilities; bundle subfolders are inert there. It starts empty — build it and keep improving it across cycles. ' +
+    'It is reloaded after your cycle ends; a load failure, or a main.js that registers no "home" view, reaches you as a [feedback] entry mentioning the Space.';
 }
 
 /**
