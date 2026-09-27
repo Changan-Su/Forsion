@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest'
 import { splitFm, composeFm, patchFm, setForeignFm, foreignFmObject, foreignFmText, setAmadeusStructure, layoutLineOf, canvasLineOf, fixStructKeys } from './fm'
 import { classifyPageSource } from '@amadeus-shared/compiler/v4'
 import { parseFrontmatter } from '@amadeus-shared/compiler/split'
+import { parse as parseYaml } from 'yaml'
 
 const FM = '---\nicon: "📘"\ncover: assets/x.png\ntags:\n  - a\n---\n'
 const BODY = '# Hi\n\n正文段落。\n'
@@ -291,5 +292,99 @@ describe('文件头 BOM(D-01)', () => {
     const fm = `${B}---\namadeus_schema: amadeus.page/4\namadeus_canvas: ${CANVAS}\n---\n`
     expect(canvasLineOf(fm)).toBe(CANVAS)
     expect(fixStructKeys(fm)).toBe(fm)
+  })
+})
+
+/** V-01(2026-09-27 评审 P0):外部 YAML 工具把单行 JSON 的结构键重排成块状多行(项目自己的 yaml 包缺省
+ *  配置往返一次就会)。修前 structLineOf 要求值与键同行 → 判成「没有这个键」,绕过 canvas.ts 的
+ *  「读不懂就逐字保留」;删键又只摘键行 → 缩进续行成孤儿,整块 fm 解析不了,画布/分栏几何与 tags 全丢。
+ *  契约:能读就读(画布/分栏照常显示),读不懂就逐字保留;删键连续行;任何写出的 fm 必须仍是合法 YAML。 */
+describe('块状 YAML 结构键(V-01)', () => {
+  const FLOW_CANVAS = '{"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":400},"cards":[{"ref":"k1","x":480,"y":0,"w":300}]}'
+  const BLOCK = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_canvas:', '  v: 1', '  mode: canvas', '  main:', '    x: 0', '    y: 0', '    w: 400',
+    '  cards:', '    - ref: k1', '      x: 480', '      y: 0', '      w: 300',
+    'tags:', '  - a', '  - b', '---', '',
+  ].join('\n')
+  const LAYOUT_BLOCK = [
+    '---', 'amadeus_schema: amadeus.page/4',
+    'amadeus_layout:', '  v: 4', '  rows:', '    - columns:', '        - refs:', '            - a1', '          width: 0.6',
+    '        - refs:', '            - a2', '          width: 0.4',
+    'tags:', '  - x', '---', '',
+  ].join('\n')
+  const inner = (fm: string): unknown => parseYaml(/^\uFEFF?---\n([\s\S]*?)---\n$/.exec(fm)![1])
+
+  it('读侧:块状 canvas/layout 折成单行 JSON(画布/分栏照常显示)', () => {
+    expect(canvasLineOf(BLOCK)).toBe(FLOW_CANVAS)
+    expect(JSON.parse(layoutLineOf(LAYOUT_BLOCK)!)).toEqual({ v: 4, rows: [{ columns: [{ refs: ['a1'], width: 0.6 }, { refs: ['a2'], width: 0.4 }] }] })
+  })
+
+  it('值没变 → 整块逐字不动(派生每击都跑,第一击不许把块状改写)', () => {
+    expect(setAmadeusStructure(BLOCK, layoutLineOf(BLOCK), canvasLineOf(BLOCK))).toBe(BLOCK)
+    expect(setAmadeusStructure(LAYOUT_BLOCK, layoutLineOf(LAYOUT_BLOCK), canvasLineOf(LAYOUT_BLOCK))).toBe(LAYOUT_BLOCK)
+    expect(fixStructKeys(BLOCK)).toBe(BLOCK)
+  })
+
+  it('值变了 → 该键改写成单行 JSON,续行一个不剩,其余块状键与外来键原样,整块仍是合法 YAML', () => {
+    const moved = FLOW_CANVAS.replace('"x":480', '"x":520')
+    const next = setAmadeusStructure(BLOCK, null, moved)
+    expect(next).toBe(['---', 'amadeus_schema: amadeus.page/4', `amadeus_canvas: ${moved}`, 'tags:', '  - a', '  - b', '---', ''].join('\n'))
+    expect(inner(next)).toMatchObject({ amadeus_canvas: JSON.parse(moved), tags: ['a', 'b'] })
+    // 分栏块状 + 画布新物化:分栏整块原样,画布单行
+    const both = setAmadeusStructure(LAYOUT_BLOCK, layoutLineOf(LAYOUT_BLOCK), FLOW_CANVAS)
+    expect(both).toContain(LAYOUT_BLOCK.split('\n').slice(2, 12).join('\n'))
+    expect(inner(both)).toMatchObject({ amadeus_layout: JSON.parse(layoutLineOf(LAYOUT_BLOCK)!), amadeus_canvas: JSON.parse(FLOW_CANVAS), tags: ['x'] })
+  })
+
+  it('删键(解散)连同续行一起删,不留孤儿', () => {
+    expect(setAmadeusStructure(BLOCK, null, null)).toBe('---\ntags:\n  - a\n  - b\n---\n')
+    expect(setAmadeusStructure(LAYOUT_BLOCK, null, null)).toBe('---\ntags:\n  - x\n---\n')
+  })
+
+  it('读不懂的块状值:非 null(键在场)、JSON 读不出 → 写入侧 fail-closed,整组逐字保留', () => {
+    // 块标量里是一段非 JSON 文本(YAML 合法、画布读不懂)
+    const scalar = '---\namadeus_schema: amadeus.page/4\namadeus_canvas: >-\n  not json: at all\n  second line\ntags: [a]\n---\n'
+    const v = canvasLineOf(scalar)
+    expect(v).toBe('not json: at all second line')
+    expect(() => JSON.parse(v!)).toThrow()
+    expect(setAmadeusStructure(scalar, null, v)).toBe(scalar)
+    // 旁边的分栏新物化:画布那组原样,整块仍合法
+    const LAYOUT = '{"v":4,"rows":[{"columns":[{"refs":["a1"],"width":0.5},{"refs":["a2"],"width":0.5}],"tail":"t1"}]}'
+    const next = setAmadeusStructure(scalar, LAYOUT, v)
+    expect(next).toContain('amadeus_canvas: >-\n  not json: at all\n  second line\n')
+    expect(inner(next)).toMatchObject({ amadeus_canvas: 'not json: at all second line', tags: ['a'] })
+    // YAML 本身就坏(引用了别的条目里的锚):返回整段原文,同样逐字保留
+    const alias = '---\namadeus_schema: amadeus.page/4\namadeus_canvas:\n  v: *nope\ntags: [a]\n---\n'
+    const raw = canvasLineOf(alias)
+    expect(raw).toBe('amadeus_canvas:\n  v: *nope')
+    expect(setAmadeusStructure(alias, null, raw)).toBe(alias)
+    expect(setAmadeusStructure(alias, LAYOUT, raw)).toContain('amadeus_canvas:\n  v: *nope\n')
+  })
+
+  it('重复键仍是后者胜(块状在后)', () => {
+    const dup = BLOCK.replace('amadeus_canvas:\n', 'amadeus_canvas: {"v":1,"cards":[]}\namadeus_canvas:\n')
+    expect(canvasLineOf(dup)).toBe(FLOW_CANVAS)
+    const next = setAmadeusStructure(dup, null, canvasLineOf(dup))
+    expect(next.match(/amadeus_canvas/g)).toHaveLength(1)
+    expect(canvasLineOf(next)).toBe(FLOW_CANVAS)
+  })
+
+  it('属性面板:外来区不带结构键续行(不再掉进「原文」模式),patchFm 不被拒,块状结构键原样', () => {
+    expect(foreignFmText(BLOCK)).toBe('tags:\n  - a\n  - b')
+    expect(foreignFmObject(BLOCK)).toEqual({ tags: ['a', 'b'] })
+    const next = patchFm(BLOCK, { icon: '📘' })
+    expect(next).toContain(BLOCK.split('\n').slice(2, 14).join('\n'))
+    expect(inner(next)).toMatchObject({ amadeus_canvas: JSON.parse(FLOW_CANVAS), tags: ['a', 'b'], icon: '📘' })
+    const committed = setForeignFm(BLOCK, 'tags: [z]')
+    expect(inner(committed)).toMatchObject({ amadeus_canvas: JSON.parse(FLOW_CANVAS), tags: ['z'] })
+  })
+
+  it('CRLF 源文的单行结构键照样读得到(修前 `(.+)$` 过不了行尾 \\r → 判成「没有」,首击剥掉几何)', () => {
+    const crlf = `---\r\namadeus_schema: amadeus.page/4\r\namadeus_canvas: ${FLOW_CANVAS}\r\ntags: [a]\r\n---\r\n`
+    expect(canvasLineOf(crlf)).toBe(FLOW_CANVAS)
+    const next = setAmadeusStructure(crlf, layoutLineOf(crlf), canvasLineOf(crlf))
+    expect(canvasLineOf(next)).toBe(FLOW_CANVAS)
+    expect(next).not.toContain('\r')
   })
 })

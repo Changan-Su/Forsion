@@ -198,6 +198,38 @@ async function main() {
     }, PM)
     record('C5c 非法 layout(refs 缺锚)fail-closed 回自然流', c5c.rows === 0 && c5c.text === true, JSON.stringify(c5c))
     await bad.close()
+
+    // C5d V-01(2026-09-27 评审 P0):外部 YAML 工具(项目自己的 yaml 包缺省配置即是)把单行 JSON 的
+    // amadeus_layout 重排成块状多行。修前打开就不成列(锚字面露出),打一个字只摘走键行、缩进续行成孤儿 →
+    // 整块 fm 解析不了,分栏与 tags 全丢。要求:打开照常成列;编辑后 fm 合法、分栏几何与外来键逐项在场。
+    const YAML = require('yaml')
+    const blockFm = '---\n' + YAML.stringify({ amadeus_schema: 'amadeus.page/4', amadeus_layout: { v: 4, rows: [{ columns: [{ refs: ['a1'], width: 0.6 }, { refs: ['a2'], width: 0.4 }] }] }, tags: ['x'] }) + '---\n'
+    const blk = await browser.newPage({ locale: 'zh-CN' })
+    blk.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await blk.goto(`${URL}?upage&useed=${encodeURIComponent(blockFm + '开场段。\n\n<!-- a a1 -->\n\n左列内容。\n\n<!-- a a2 -->\n\n右列内容。\n')}`, { waitUntil: 'domcontentloaded' })
+    await blk.waitForSelector(PM, { timeout: 20000 })
+    await blk.waitForTimeout(500)
+    const d0 = await blk.evaluate((s) => {
+      const el = document.querySelector(s)
+      return { rows: el.querySelectorAll('.amx-ucolrow').length, cells: [...el.querySelectorAll('.amx-ucolcell')].map((c) => c.textContent).join('|'), literal: (el.innerText ?? '').includes('<!--') }
+    }, PM)
+    await blk.evaluate((s) => {
+      const el = [...document.querySelectorAll(`${s} p`)].find((x) => x.textContent.includes('开场段'))
+      const r = document.createRange(); r.selectNodeContents(el); const b = r.getBoundingClientRect()
+      return { x: b.right - 1, y: b.top + b.height / 2 }
+    }, PM).then((c) => blk.mouse.click(c.x, c.y))
+    await blk.keyboard.type('改')
+    await blk.waitForTimeout(1400)
+    const dw = await blk.evaluate(() => window.__upage.writes.at(-1)?.text ?? '')
+    let dy = null
+    try { dy = YAML.parse(/^---\n([\s\S]*?)\n---\n/.exec(dw)[1]) } catch { /* 下面按 null 断言 */ }
+    const cols = dy?.amadeus_layout?.rows?.[0]?.columns ?? []
+    record('C5d 块状 amadeus_layout:打开即成列,打一个字后 fm 合法、分栏几何与 tags 全在(V-01)',
+      d0.rows === 1 && d0.cells === '左列内容。|右列内容。' && !d0.literal && dw.includes('开场段。改') && !!dy &&
+        dy.amadeus_schema === 'amadeus.page/4' && JSON.stringify(cols) === '[{"refs":["a1"],"width":0.6},{"refs":["a2"],"width":0.4}]' &&
+        JSON.stringify(dy.tags) === '["x"]',
+      JSON.stringify({ ...d0, yamlOk: !!dy, cols, tags: dy?.tags }))
+    await blk.close()
   }
 
   // C6:拖到块左缘 → 竖直指示线 + 成两列;落盘生出 fm layout。

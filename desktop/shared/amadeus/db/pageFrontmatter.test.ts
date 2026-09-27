@@ -9,6 +9,7 @@ import {
   deriveColumns,
 } from './pageFrontmatter'
 import { PAGE_NAME_KEY } from './schema'
+import { parse as parseYaml } from 'yaml'
 
 const V3 =
   '---\namadeus_page: pg_x\namadeus_schema: amadeus.page/3\namadeus_layout: {"type":"stack","children":[]}\n---\n\n<!-- a 1 -->\n\n# Hello\n'
@@ -66,6 +67,20 @@ describe('setFmExtraOnSource', () => {
     expect(out.endsWith('\n\nbody\n')).toBe(true)
     // 删空 → 块消失、BOM 仍在字节 0
     expect(setFmExtraOnSource('\uFEFF---\nx: 1\n---\nbody\n', { x: undefined })).toBe('\uFEFFbody\n')
+  })
+
+  // V-01:块状写法的结构键。修前逐行分:键行进保留区、缩进续行进外来区 → 外来 YAML 解析失败折成 {} →
+  // 改一个单元格就同时抹掉画布几何(只剩 `amadeus_canvas:` 空键)与全部外来键。
+  it('块状 amadeus_canvas 整组留在保留区,外来键照常合并,结果仍是合法 YAML', () => {
+    const src = [
+      '---', 'amadeus_schema: amadeus.page/4', 'amadeus_canvas:', '  v: 1', '  cards:', '    - ref: k1', '      x: 480',
+      'tags:', '  - a', 'status: todo', '---', '', 'body', '',
+    ].join('\n')
+    const out = setFmExtraOnSource(src, { status: 'done' })
+    expect(out).toContain('amadeus_canvas:\n  v: 1\n  cards:\n    - ref: k1\n      x: 480\n')
+    const fm = parseYaml(/^---\n([\s\S]*?)\n---\n/.exec(out)![1])
+    expect(fm).toMatchObject({ amadeus_canvas: { v: 1, cards: [{ ref: 'k1', x: 480 }] }, tags: ['a'], status: 'done' })
+    expect(out.endsWith('\n\nbody\n')).toBe(true)
   })
 
   it('BOM 无 fm:新块生在 BOM 之后', () => {
