@@ -141,6 +141,7 @@ describe('C1b kickoff 拆分', () => {
       // 09-27 dev 首个 ctx.agent 版 Space:不给返回字段就猜 status().status;不给变量表就用宿主没有的 --panel
       expect(message).toContain('ctx.agent.status() → { running, lastCycleAt');
       expect(message).toContain('var(--bg-card)');
+      expect(message).toContain('subscribe(cb) returns an unsubscribe function right away'); // 同步返回,不是 Promise(Codex 复核)
       expect(message).not.toMatch(/--panel|--surface|--card\b/);
       expect(message).toContain('never edit it just to refresh status or timestamps');
       expect(message).toContain('works only inside a click handler');

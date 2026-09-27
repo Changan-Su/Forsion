@@ -339,7 +339,7 @@ function PlugViewHarness() {
       if (r && typeof (r as PromiseLike<unknown>).then === 'function') {
         (r as PromiseLike<unknown>).then(
           (d) => { if (typeof d !== 'function') return; if (live) cleanup = d as () => void; else try { (d as () => void)() } catch (e) { console.error('[plugview] cleanup failed', e) } },
-          (e) => { (window as unknown as { __pvError?: string }).__pvError = String(e) },
+          (e) => { if (live) (window as unknown as { __pvError?: string }).__pvError = String(e) }, // 已卸载的迟到 reject 不记(同真宿主)
         )
       } else cleanup = r as (() => void) | void
     } catch (e) {
