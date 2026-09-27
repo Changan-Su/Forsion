@@ -652,16 +652,25 @@ router.get('/agent/special/automation/runs', authMiddleware, async (req: AuthReq
     const sessionId = String(req.query.sessionId || '');
     if (!sessionId) return res.status(400).json({ detail: 'sessionId required' });
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+    // 会话必须是请求者自己的:muse 会话要展开成该用户全部 muse 会话的运行,不校验归属就能拿别人的 id 读别人的历史
     const own = await query<any[]>(
-      `SELECT 1 FROM chat_sessions WHERE id = ? AND kind IN ('muse', 'automation') LIMIT 1`,
-      [sessionId],
+      `SELECT kind, user_id FROM chat_sessions WHERE id = ? AND user_id = ? AND kind IN ('muse', 'automation') LIMIT 1`,
+      [sessionId, req.user!.userId],
     );
     if (!own.length) return res.status(404).json({ detail: 'session not found' });
-    const rows = await query<any[]>(
-      `SELECT id, status, tokens_total, error, created_at, updated_at FROM agent_runs
-       WHERE session_id = ? ORDER BY created_at DESC LIMIT ${limit}`,
-      [sessionId],
-    );
+    // Muse 每个周期一个新会话(09-27):它的「历次运行」要跨该用户全部 muse 会话列,只按传进来的会话列就只剩最近一次。
+    const rows = own[0].kind === 'muse'
+      ? await query<any[]>(
+        `SELECT r.id, r.status, r.tokens_total, r.error, r.created_at, r.updated_at FROM agent_runs r
+         JOIN chat_sessions s ON s.id = r.session_id
+         WHERE s.kind = 'muse' AND s.user_id = ? ORDER BY r.created_at DESC LIMIT ${limit}`,
+        [own[0].user_id],
+      )
+      : await query<any[]>(
+        `SELECT id, status, tokens_total, error, created_at, updated_at FROM agent_runs
+         WHERE session_id = ? ORDER BY created_at DESC LIMIT ${limit}`,
+        [sessionId],
+      );
     res.json({ runs: rows || [] });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'automation runs failed' });

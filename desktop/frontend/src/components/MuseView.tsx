@@ -73,7 +73,10 @@ export const MuseView: React.FC<{
     if (st?.sessionId) {
       const ms = arr<{ role: string; content?: unknown }>(await listMessages(cfg, st.sessionId, 6).catch(() => []))
       const lastAssistant = [...ms].reverse().find((m) => m.role === 'assistant' || m.role === 'model')
-      setThinking(String(lastAssistant?.content || '').slice(0, 4000))
+      // 每个周期一个新会话(09-27):新周期**还在跑**、没写出回复时留着上一轮的思考,别闪成空的;
+      // 已经不在跑了还没有回复(周期失败)→ 清空,别把上一轮的当成「当前思考」一直挂着
+      if (lastAssistant?.content) setThinking(String(lastAssistant.content).slice(0, 4000))
+      else if (!st.running) setThinking('')
     } else {
       setThinking('')
     }
