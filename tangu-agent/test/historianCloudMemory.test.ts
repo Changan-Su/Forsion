@@ -133,6 +133,22 @@ describe('cloud per-round Historian (tangu sessions)', () => {
     expect(charged).toHaveLength(0);
   });
 
+  it('a failed pass (upstream error) is retried when the same round is re-reported; titles / logs are redacted', async () => {
+    let fail = true;
+    const llm = deps().brain.llm as any;
+    const orig = llm.streamProviderCompletion;
+    llm.streamProviderCompletion = async (...a: any[]) => { if (fail) { fail = false; throw new Error('upstream 502'); } return orig(...a); };
+    reply = JSON.stringify({ title: 'key sk-abcdefghijklmnopqrstuvwx1234', log: '配置了 sk-abcdefghijklmnopqrstuvwx1234', memory: [] });
+    await finishRun();
+    expect(logs).toHaveLength(0);
+    const run = (await query<any[]>(`SELECT id FROM agent_runs WHERE session_id = ? LIMIT 1`, [sid]))[0];
+    await deps().state.updateRunStatus(run.id, 'done');
+    await settle();
+    expect(logs).toHaveLength(1);
+    expect(logs[0].text).not.toContain('sk-abc');
+    expect((await query<any[]>(`SELECT title FROM chat_sessions WHERE id = ?`, [sid]))[0].title).not.toContain('sk-abc');
+  });
+
   it('a re-reported done for the same round does not run twice', async () => {
     await finishRun();
     const run = (await query<any[]>(`SELECT id FROM agent_runs WHERE session_id = ? LIMIT 1`, [sid]))[0];

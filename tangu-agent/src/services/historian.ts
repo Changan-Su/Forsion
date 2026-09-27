@@ -220,11 +220,12 @@ export async function onCloudRunDone(runId: string): Promise<void> {
     if ((lastRound.get(sessionId) || 0) >= round) return;
     if (busySessions.has(sessionId) || busySessions.size >= MAX_CONCURRENT) return;
     busySessions.add(sessionId);
-    if (lastRound.size > 50_000) lastRound.clear();
-    lastRound.set(sessionId, round);
     try {
       const modelId = await resolveModel(user.modelId, admin.modelId);
       if (modelId) await summarizeTanguSession({ ...s, user_id: userId }, modelId);
+      // 跑完才记轮次:超时 / 上游报错的这一轮,done 重报时还能再来(在飞期间的重报由 busySessions 挡)
+      if (lastRound.size > 50_000) lastRound.clear();
+      lastRound.set(sessionId, round);
     } finally {
       busySessions.delete(sessionId);
     }
@@ -340,15 +341,16 @@ async function judgeAndWrite(
   } catch { /* 记账失败不阻断维护 */ }
 
   const j = parseJudgement(String(res.content || ''));
-  if (!j) console.warn(`[historian] tangu session ${sessionId} 判断输出不是 JSON: "${String(res.content || '').slice(0, 80)}"`);
+  if (!j) console.warn(`[historian] tangu session ${sessionId} 判断输出不是 JSON(${String(res.content || '').length} 字,原文不进日志)`);
   if (j) {
-    const title = j.title.replace(/^["'《「]+|["'》」]+$/g, '').slice(0, 60);
+    // 标题 / LOG 也可能把对话里的令牌复述出来 → 同样脱敏(记忆候选另有整条丢的凭据闸)
+    const title = redactSecrets(j.title.replace(/^["'《「]+|["'》」]+$/g, '')).slice(0, 60);
     if (title && title.length >= 2) {
       // CAS:扫描到写回之间用户手改过标题就不覆盖。
       await query(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') = ?`, [title, sessionId, String(row.title || '')])
         .catch((e: any) => console.warn('[historian] tangu 标题更新失败:', e?.message || e));
     }
-    const logText = j.log;
+    const logText = redactSecrets(j.log);
     if (scopeKnown && logText && logText.length >= 2 && logText.length <= 200) {
       await appendLogEntry(userId, logText).catch((e: any) => console.warn('[historian] tangu appendLog failed:', e?.message || e));
     }
