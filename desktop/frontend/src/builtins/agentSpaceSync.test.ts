@@ -67,12 +67,27 @@ describe('syncAgentSpace 回写', () => {
     expect(posted.mock.calls[0]?.[1]).toMatch(/blocked \(minApp\)/)
   })
 
-  it('home 挂载抛错 → 回写一次(用户再进 Muse Space 不重报),别的 agent 不报', () => {
-    reportAgentSpaceMountError(cfg, 'muse', 'home', new Error('boom mount'))
-    reportAgentSpaceMountError(cfg, 'muse', 'home', new Error('boom mount'))
-    reportAgentSpaceMountError(cfg, 'other', 'home', new Error('x'))
-    expect(posted).toHaveBeenCalledTimes(1)
-    expect(posted.mock.calls[0][1]).toMatch(/mount\(\) threw.*boom mount/)
+  it('home 挂载抛错:同一份定义同一条错只报一次(切出切回不重报),交替的两种错各报一次,新代码再报,别的 agent 不报', async () => {
+    const home = { id: 'home' }
+    reportAgentSpaceMountError(cfg, 'muse', home, new Error('boom A'))
+    reportAgentSpaceMountError(cfg, 'muse', home, new Error('boom A')) // 用户又进了一次 Muse Space
+    reportAgentSpaceMountError(cfg, 'muse', home, new Error('boom B'))
+    reportAgentSpaceMountError(cfg, 'muse', home, new Error('boom A')) // A、B 交替:都不再报
+    reportAgentSpaceMountError(cfg, 'muse', home, new Error('boom B'))
+    reportAgentSpaceMountError(cfg, 'muse', { id: 'home' }, new Error('boom A')) // 新代码 = 新 def:照报
+    reportAgentSpaceMountError(cfg, 'other', home, new Error('x'))
+    expect(posted.mock.calls.map((c) => c[1])).toEqual([
+      expect.stringMatching(/mount\(\) threw.*boom A/), expect.stringMatching(/boom B/), expect.stringMatching(/boom A/),
+    ])
+  })
+
+  it('挂载失败的回写 POST 失败 → 撤销标记,下次挂载再报', async () => {
+    const home = { id: 'home' }
+    posted.mockRejectedValueOnce(new Error('engine down'))
+    reportAgentSpaceMountError(cfg, 'muse', home, new Error('boom'))
+    await vi.advanceTimersByTimeAsync(0)
+    reportAgentSpaceMountError(cfg, 'muse', home, new Error('boom'))
+    expect(posted).toHaveBeenCalledTimes(2)
   })
 
   it('用户关掉了 / 目录空(没有来源)→ 都不报', async () => {

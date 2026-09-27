@@ -55,16 +55,20 @@ export async function syncAgentSpace(cfg: TanguDesktopConfig, slug: string, stam
 }
 
 /** home 注册了、挂载时却抛错:宿主只在主区写一行「插件视图加载失败」—— 同样回写,否则又是一个只有用户看得见的失败。
- *  同一份代码(戳)× 同一条错误只报一次:用户每进一次 Muse Space 就重挂一遍。 */
-const mountReported = new Map<string, string>()
-export function reportAgentSpaceMountError(cfg: TanguDesktopConfig, slug: string, viewId: string, e: unknown): void {
+ *  去重按「这一份视图定义 × 错误文本」:def 对象只在插件重新 setup(= 装了新代码)时才换,用户切出切回 Space、冷启动后
+ *  首次拿到戳都还是同一个 def,不重报;同一份代码交替报两种错,各报一次;POST 失败撤销标记,下次挂载再报(Codex 09-27)。 */
+let mountReported = new WeakMap<object, Set<string>>()
+export function reportAgentSpaceMountError(cfg: TanguDesktopConfig, slug: string, def: { id: string }, e: unknown): void {
   if (slug !== 'muse') return
   const text = String((e as { message?: unknown } | null)?.message ?? e).slice(0, 300)
-  const key = `${loadedStamp.get(slug) ?? 0}|${viewId}|${text}`
-  if (mountReported.get(slug) === key) return
-  mountReported.set(slug, key)
-  void postMuseFeedback(cfg, `Space view "${viewId}" registered but its mount() threw, so the user sees "Plugin view failed to load": ${text}`).catch(() => {})
+  let seen = mountReported.get(def)
+  if (!seen) mountReported.set(def, (seen = new Set()))
+  if (seen.has(text)) return
+  seen.add(text)
+  const sent = seen
+  void postMuseFeedback(cfg, `Space view "${def.id}" registered but its mount() threw, so the user sees "Plugin view failed to load": ${text}`)
+    .catch(() => { sent.delete(text) })
 }
 
 /** 测试用:清掉戳记忆。 */
-export function __resetAgentSpaceSync(): void { loadedStamp.clear(); reportedStamp.clear(); mountReported.clear() }
+export function __resetAgentSpaceSync(): void { loadedStamp.clear(); reportedStamp.clear(); mountReported = new WeakMap() }
