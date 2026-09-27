@@ -15,7 +15,7 @@ import { join, resolve } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { IPC } from '@amadeus-shared/ipc'
 import type { VaultFace } from './amadeus/ipc'
-import { startUnitWeb, VAULT_RPC_ALLOW, VAULT_RPC_LOCAL_ONLY, engineRouteAccess, normalizeEnginePath, type PairedDevice, type UnitWebDeps } from './unitWeb'
+import { startUnitWeb, VAULT_RPC_ALLOW, VAULT_RPC_LOCAL_ONLY, engineRouteAccess, engineTarget, normalizeEnginePath, type PairedDevice, type UnitWebDeps } from './unitWeb'
 import { ENGINE_ROUTES } from './engineRoutes.generated'
 import { PRODUCT } from './product'
 
@@ -500,6 +500,21 @@ describe('unitWeb', () => {
     expect(engineRouteAccess('POST', '/agent/plugins/install/extra')).toBe('unknown')
     expect(engineRouteAccess('OPTIONS', '/agent/sessions')).toBe('unknown')
     expect(engineRouteAccess('POST', '/agent/runs/r-1/approvals/apv-Xy')).toBe('allow')
+  })
+
+  it('保守字符集(评审 A-desktop#0):`#`、空白、NBSP、非 ASCII、坏百分号一律拒;query 里的 `#` / 空白同样整串拒', () => {
+    const nbsp = String.fromCharCode(0xa0)
+    for (const bad of ['/agent/special/muse/todos/inject#/approve', '/agent/teams/#/session/open', '/agent/x#', `/agent/x${nbsp}`, '/agent/x y', '/agent/x\ty',
+      '/agent/x"y', '/agent/x<y', '/agent/x{y}', '/agent/x|y', '/agent/x^y', '/agent/x`y', '/agent/%zz', '/agent/%4', '/agent/中文']) {
+      expect(normalizeEnginePath(bad), JSON.stringify(bad)).toBeNull()
+    }
+    // pchar 全集放行(UUID / slug / 百分号编码的中文 / encodeURIComponent 不转义的 !'()*)
+    expect(normalizeEnginePath("/agent/agents/a-b_c.d~e!$&'()*+,;=:@/x%E4%B8%AD")).toBe("/agent/agents/a-b_c.d~e!$&'()*+,;=:@/x%E4%B8%AD")
+    expect(engineTarget('/agent/sessions?limit=5&q=a%2Fb')).toEqual({ path: '/agent/sessions', query: '?limit=5&q=a%2Fb' })
+    expect(engineTarget('/agent/sessions?q={a}|[b]')).toEqual({ path: '/agent/sessions', query: '?q={a}|[b]' }) // 浏览器不转义 query 里的这些
+    for (const bad of ['/agent/sessions?q=1#x', '/agent/inbox#?a=1', '/agent/sessions?q=a b', `/agent/sessions?q=${nbsp}`, '/agent/sessions#']) {
+      expect(engineTarget(bad), JSON.stringify(bad)).toBeNull()
+    }
   })
 
   /** 原样发一个不经 fetch 规整的请求(fetch 会先把 `..` 吃掉,测不到服务端)。 */

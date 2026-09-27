@@ -65,15 +65,45 @@ export const UNIT_P2P_HEADER = 'x-unit-p2p'
 const LOCAL_ONLY_BODY = { code: 'LOCAL_ONLY', detail: 'This action is only available on the device itself' }
 
 /**
+ * 路径里**只认** RFC 3986 的 pchar(未保留字符 + sub-delims + `:` `@`)和 `/`,百分号必须带两位十六进制。
+ * 白名单而不是黑名单:匹配器与引擎 Express(parseurl)对同一串理解不同的来源都在白名单之外 ——
+ * `#`(parseurl 遇到它退回 url.parse,把 `#` 之后截成 hash,路由看到的是更短的路径)、空白 / 0xA0 / 0xFEFF
+ * (同样触发 url.parse,还会被 trim)、反斜杠(url.parse 改写成 `/`)、非 ASCII、控制字符。
+ */
+const ENGINE_PATH_CHARS = /^(?:[A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$/
+/** query 不参与路由、原样转发,但它和 path 一起进 http.request,再被引擎的 parseurl 解析:只许可见 ASCII
+ *  (`#` 另行整串拒)—— 空白 / 0xA0 / 0xFEFF / 非 ASCII 会让 parseurl 退回 url.parse 分支。比 path 宽:
+ *  浏览器的 WHATWG URL 不转义 query 里的 `{}|^[]` 等,收成 pchar 会误伤正常请求。 */
+const ENGINE_QUERY_CHARS = /^[\x21-\x7e]*$/
+
+/**
  * /engine 之后的路径规整(匹配与转发**用同一份**,引擎看到的就是我们判过的):
- * 折叠重复斜杠、去尾斜杠;编码斜杠 / 反斜杠 / 编码点 / `.` `..` 段一律拒(null)—— 这些是
- * 「匹配器与 Express 路由对同一串理解不同」的来源。大小写保留(参数里的 id 区分大小写),匹配时再降。
+ * 折叠重复斜杠、去尾斜杠;保守字符集之外的任何字符(含 `#`)、编码斜杠 / 编码反斜杠 / 编码点、`.` `..` 段
+ * 一律拒(null)—— 这些是「匹配器与 Express 路由对同一串理解不同」的来源。大小写保留(参数里的 id 区分
+ * 大小写),匹配时再降。
  */
 export function normalizeEnginePath(raw: string): string | null {
-  if (/%(?:2f|5c|2e)/i.test(raw) || raw.includes('\\')) return null
+  if (!ENGINE_PATH_CHARS.test(raw)) return null
+  if (/%(?:2f|5c|2e)/i.test(raw)) return null
   const segs = raw.split('/').filter((x) => x !== '')
   if (segs.some((x) => x === '.' || x === '..')) return null
   return '/' + segs.join('/')
+}
+
+/**
+ * 远端 /engine 请求目标(`/engine` 之后、含 query)→ 转给引擎的那一串,或 null(400 BAD_PATH)。
+ * `#` 出现在请求目标的**任何位置**都拒:浏览器 / fetch 从不把片段发上线,只有手搓的原始 HTTP 客户端会,
+ * 而它正是 Express 与我们分歧的那个口子(评审 A-desktop#0:三条 deny 路由经 `#` 被打穿)。
+ * 返回值 = 被 engineRouteAccess 判过的 path + 原样 query;调用方只转发它,不再从 req.url 另取。
+ */
+export function engineTarget(rawAfterEngine: string): { path: string; query: string } | null {
+  if (rawAfterEngine.includes('#')) return null
+  const q = rawAfterEngine.indexOf('?')
+  const rawPath = q >= 0 ? rawAfterEngine.slice(0, q) : rawAfterEngine
+  const query = q >= 0 ? rawAfterEngine.slice(q) : ''
+  if (query && !ENGINE_QUERY_CHARS.test(query.slice(1))) return null
+  const path = normalizeEnginePath(rawPath)
+  return path ? { path, query } : null
 }
 
 const escapeRe = (x: string): string => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -520,12 +550,12 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       const info = authInfo(req)
       if (!info.ok) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
       if (ownerProjection) { proxyEngine(req, res, url.slice('/engine'.length) || '/', null); return }
-      // default-deny 允许清单:规整后的路径既用来判,也原样转给引擎(query 不动)。
-      const norm = normalizeEnginePath(path.slice('/engine'.length))
-      if (!norm) { json(res, 400, { detail: 'Ambiguous engine path', code: 'BAD_PATH' }); return }
-      if (engineRouteAccess(req.method || 'GET', norm) !== 'allow') { json(res, 403, LOCAL_ONLY_BODY); return }
-      const q = url.indexOf('?')
-      proxyEngine(req, res, norm + (q >= 0 ? url.slice(q) : ''), info.via)
+      // default-deny 允许清单:规整后的路径既用来判,也原样转给引擎(query 不动)。判的是**整个请求目标**
+      // (url,不是按 `?` 切过的 path):`#` 可能藏在 query 之后,也可能藏在路径里。
+      const target = engineTarget(url.slice('/engine'.length))
+      if (!target) { json(res, 400, { detail: 'Ambiguous engine path', code: 'BAD_PATH' }); return }
+      if (engineRouteAccess(req.method || 'GET', target.path) !== 'allow') { json(res, 403, LOCAL_ONLY_BODY); return }
+      proxyEngine(req, res, target.path + target.query, info.via)
       return
     }
 
