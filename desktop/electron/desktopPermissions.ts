@@ -27,10 +27,11 @@ interface HelperStatus {
  *  the engine runs a newer copy makes the two replace each other's helper, and every replacement of an
  *  ad-hoc signed helper costs the user a new macOS permission grant. */
 async function computerUseInstallerRoot(): Promise<string> {
-  const sources = builtinBundleSources({ isPackaged: app.isPackaged, appPath: app.getAppPath(), resourcesPath: process.resourcesPath })
+  // 按清单 id 选,不按文件名在所有内置包里找:第二个内置包一旦也带同名脚本,就会跑错家的安装器。
+  const cu = builtinBundleSources({ isPackaged: app.isPackaged, appPath: app.getAppPath(), resourcesPath: process.resourcesPath }).find((s) => s.id === 'tangu-computer-use')
   const pluginsRoot = path.join(forsionHomeDir(), 'plugins')
-  const active = await Promise.all(sources.map((source) => activeBundleDir(pluginsRoot, source)))
-  const root = [...active, ...sources].find((dir) => existsSync(path.join(dir, 'scripts/setup-helper.mjs')))
+  const candidates = cu ? [await activeBundleDir(pluginsRoot, cu.dir), cu.dir] : []
+  const root = candidates.find((dir) => existsSync(path.join(dir, 'scripts/setup-helper.mjs')))
   if (!root) throw new Error('The bundled Computer Use installer is missing. Reinstall Forsion and retry.')
   return root
 }

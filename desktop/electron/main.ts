@@ -13,7 +13,6 @@ import { normalizeUiSync } from '../shared/uiSync'
 import { app, BrowserWindow, desktopCapturer, dialog, ipcMain, Menu, net, powerMonitor, powerSaveBlocker, screen, globalShortcut, session, shell, nativeImage, Notification, systemPreferences, webContents } from 'electron'
 import { basename, dirname, isAbsolute, join, relative, sep } from 'path'
 import { pathToFileURL } from 'url'
-import { resolveCloudApiUrl } from './cloudApiPath.js'
 import { readFile, writeFile, mkdir, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
 import { writeHostTextFile } from './hostTextWrite'
 import { createSerialQueue, lockedUpdateJson, writePrivateJson } from './configWrite'
@@ -45,8 +44,9 @@ import { importMcp, importSkills, scanAll } from './discovery'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn } from './updater'
 import { createTray } from './tray'
 import { readThemesDir, seedDefaultThemes } from './themes'
-import { builtinBundleSources, seedBuiltinBundles } from './builtinPlugins'
+import { builtinBundleSources, builtinPluginIds, seedBuiltinBundles } from './builtinPlugins'
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
+import { loadBuiltinDesktopEntries, type CloudHost } from './cloudHost'
 import { extractZipToDir, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, type DownloadProgress } from './marketInstall'
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks } from './codePreview'
 import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudioSnapshots, restoreCodeStudioSnapshot } from './codeStudioProjects'
@@ -1925,15 +1925,30 @@ app.whenReady().then(async () => {
   await loadTanguEnvFile() // 先于一切 loadConfig(其 env 兜底读 TANGU_CLOUD_URL/TANGU_BACKEND_URL)
   await migrateCloudTokenToAuthJson() // config.json cloud.token(历史第二真源)并入 auth.json;须在首次 ensureBackend 前
   await seedDefaultThemes(themesDir()) // 首次运行种入 soft 示例主题(themes/ 已存在则跳过;内部吞错不阻塞启动)
-  // 内置插件捆绑包(电脑操作 等)播种进 <home>/plugins/:须在 ensureBackend 之前 await 完 —— 引擎只在启动时扫一次
-  // bundle 根;随包版本更新才替换,不降级;逐包吞错不阻塞启动(见 builtinPlugins.ts)。单品变体不捆引擎 → 不播。
+  // 内置插件捆绑包(电脑操作 / Forsion Extend)播种进 <home>/plugins/:须在 ensureBackend 之前 await 完 —— 引擎只在启动时扫一次
+  // bundle 根;随包版本更新才替换,不降级;逐包吞错不阻塞启动(见 builtinPlugins.ts)。单品变体不捆内置包 → 不播。
+  const bundleSources = builtinBundleSources({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() })
+  // 云端账号面(个人中心 / 会员 / 额度 / 反馈 / cloud:fetch)住在 Forsion Extend 的主进程半身里(cloudHost.ts):播种后、开窗前
+  // 验签装载;缺席 / 验签失败就没有这一面,preload 按 `cloud:present` 删键,渲染层门控自动隐藏。
+  let cloudPresent = false
   if (PRODUCT.agentBackend) {
-    await seedBuiltinBundles(
-      join(forsionHomeDir(), 'plugins'),
-      builtinBundleSources({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath() }),
-      { appVersion: app.getVersion() },
-    ).catch((e) => console.warn('[builtin-plugins] 播种失败(忽略):', (e as Error)?.message))
+    await seedBuiltinBundles(join(forsionHomeDir(), 'plugins'), bundleSources, { appVersion: app.getVersion() })
+      .catch((e) => console.warn('[builtin-plugins] 播种失败(忽略):', (e as Error)?.message))
+    const host: CloudHost = {
+      getCloud: async () => {
+        const stored = await loadConfig()
+        const creds = loadTanguCreds()
+        return { base: (stored.cloudUrl || creds.cloudUrl || DEFAULT_CLOUD_URL).replace(/\/+$/, ''), token: creds.token || '' }
+      },
+      handle: (channel, fn) => ipcMain.handle(channel, fn),
+      openExternal: (url) => shell.openExternal(url),
+      isTrustedSender,
+      log: (m) => console.log(m),
+    }
+    const loaded = await loadBuiltinDesktopEntries({ pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources, appVersion: app.getVersion(), host })
+    cloudPresent = loaded.includes('forsion-extend')
   }
+  ipcMain.on('cloud:present', (e) => { e.returnValue = cloudPresent })
   // 内置捆绑包的 npm 更新(builtinUpdates.ts):启动 1 分钟后查一次、之后每 6 小时一次,新版只下载进暂存区,
   // 由下次启动的上面那次播种换上。只在打包版跑:dev 的随包来源就是 node_modules,跟着 npm install 走。
   if (PRODUCT.agentBackend && app.isPackaged) {
@@ -1945,7 +1960,7 @@ app.whenReady().then(async () => {
         const stored = await loadConfig()
         await checkBuiltinUpdates({
           pluginsRoot: join(forsionHomeDir(), 'plugins'),
-          sources: builtinBundleSources({ isPackaged: true, resourcesPath: process.resourcesPath, appPath: app.getAppPath() }),
+          sources: bundleSources,
           appVersion: app.getVersion(),
           registries: registryOrder(stored.mirror),
           // 官方源走 net.fetch(认系统代理);npmmirror 在大陆直连,照旧 Node fetch —— 同 market:install 的口径。
@@ -2070,56 +2085,8 @@ app.whenReady().then(async () => {
   }
   ipcMain.handle('units:list', () => unitsApi('GET', '/units'))
 
-  /**
-   * 插件调 Forsion 云端 API 的**通用接缝**(`cloud:fetch`)。
-   *
-   * 为什么必须由 main 代打:`forsion_token` 刻意不下发渲染层(与 units 名册、/open 引导页同一铁律)。
-   * 而插件跑在渲染进程里,`getConfig().token` 在 managed 模式下是**托管子进程**的 token,
-   * 打云端一律 401 —— 这条不给,插件就只能去猜,猜出来的是个 404/401 的哑弹。
-   *
-   * 为什么是通用接缝而不是逐功能 IPC:Forsion 是壳,一切皆插件;把某个插件的后端路径写进主进程
-   * 就是焊进宿主。这里给的是「以当前用户身份调你自己的 Forsion 服务端」这一条能力,谁都能用。
-   *
-   * 边界(缺一条这就成了「拿用户云端 token 打任意主机」的枪):
-   *  · 只收**相对路径**,绝对 URL / 协议相对 `//host` 一律拒 —— 用 URL 解析后比对 origin,不靠正则;
-   *  · 解析后的 pathname 必须仍在 `/api/` 之下 —— 挡掉 `/../` 逃出前缀;
-   *  · token 只进请求头,绝不回给渲染层。
-   */
-  ipcMain.handle('cloud:fetch', async (e, raw: unknown) => {
-    if (!isTrustedSender(e)) return { status: 0, error: 'untrusted' }
-    const req = (raw ?? {}) as { path?: unknown; method?: unknown; body?: unknown; timeoutMs?: unknown }
-    const path = typeof req.path === 'string' ? req.path : ''
-    // 调用方可延长超时(带 base64 附件的反馈回复在慢网上 15s 不够),封顶 120s 防止挂死。
-    const timeoutMs = Math.min(120_000, Math.max(1_000, Number(req.timeoutMs) || 15_000))
-    const method = typeof req.method === 'string' ? req.method.toUpperCase() : 'GET'
-    if (!/^(GET|POST|PUT|PATCH|DELETE)$/.test(method)) return { status: 0, error: 'bad_method' }
-    if (!path.startsWith('/')) return { status: 0, error: 'bad_path' }
-
-    const stored = await loadConfig()
-    if (!String(stored.cloudUrl || '')) return { status: 0, error: 'no_cloud_url' }
-    const target = resolveCloudApiUrl(stored.cloudUrl, path) // 安全边界,见该函数注释
-    if (!target) return { status: 0, error: 'bad_path' }
-
-    const token = loadTanguCreds().token
-    if (!token) return { status: 401, error: 'not_signed_in' }
-
-    const hasBody = req.body !== undefined && method !== 'GET' && method !== 'DELETE'
-    const ctl = new AbortController()
-    const timer = setTimeout(() => ctl.abort(), timeoutMs)
-    try {
-      const r = await fetch(target, {
-        method,
-        headers: { Authorization: `Bearer ${token}`, ...(hasBody ? { 'Content-Type': 'application/json' } : {}) },
-        body: hasBody ? JSON.stringify(req.body) : undefined,
-        signal: ctl.signal,
-      })
-      return { status: r.status, json: await r.json().catch(() => null) }
-    } catch (err: any) {
-      return { status: 0, error: String(err?.message || err) }
-    } finally {
-      clearTimeout(timer)
-    }
-  })
+  // `cloud:fetch`(插件以当前用户身份调 Forsion 云端 API 的通用接缝)、个人中心 / 会员页、额度与重置卡、反馈提交
+  // 这一组云端账号 IPC 自 2026-09-27 起住在内置包 Forsion Extend 的主进程半身里(cloudHost.ts 装载,registerCloud(host) 注册)。
 
   /** 系统浏览器开中转引导页,main 代拼 `#token=`(auth.json 的 forsion_token 不下发渲染层)。
    *  fragment 不出网络/不进 server 日志(≠ query),引导页用完即 replaceState 剥掉;没有这一手,
@@ -3110,67 +3077,6 @@ app.whenReady().then(async () => {
     return { ok: true }
   })
 
-  // 打开 Forsion 个人中心(对齐 AI Studio:{cloudUrl}/account?token=…)。token 留在主进程,不下发渲染层。
-  // 可选 section → 追加 #<section>(如投稿页 #submission)。
-  ipcMain.handle('auth:openAccountCenter', async (_e, section?: string) => {
-    const stored = await loadConfig()
-    const creds = loadTanguCreds()
-    const cloudUrl = (stored.cloudUrl || creds.cloudUrl || '').replace(/\/+$/, '')
-    const token = creds.token || ''
-    if (!cloudUrl) return { ok: false }
-    const hash = section && /^[a-z0-9-]+$/i.test(section) ? `#${section}` : ''
-    const url = `${cloudUrl}/account${token ? `?token=${encodeURIComponent(token)}` : ''}${hash}`
-    await shell.openExternal(url)
-    return { ok: true }
-  })
-
-  // 打开会员购买页({cloudUrl}/pay 是独立静态页,只认 ?tab=,与 /account 的 #section 两套寻址)。
-  ipcMain.handle('auth:openPayCenter', async () => {
-    const stored = await loadConfig()
-    const creds = loadTanguCreds()
-    const cloudUrl = (stored.cloudUrl || creds.cloudUrl || '').replace(/\/+$/, '')
-    const token = creds.token || ''
-    if (!cloudUrl) return { ok: false }
-    const url = `${cloudUrl}/pay?tab=membership${token ? `&token=${encodeURIComponent(token)}` : ''}&redirect=${encodeURIComponent(`${cloudUrl}/account`)}`
-    await shell.openExternal(url)
-    return { ok: true }
-  })
-
-  // 头像菜单数据面:额度视图 + 重置卡使用。token 全留主进程,渲染层只拿结果。
-  const accountCloud = async (): Promise<CloudCreds> => {
-    const stored = await loadConfig()
-    const creds = loadTanguCreds()
-    return { base: (stored.cloudUrl || creds.cloudUrl || DEFAULT_CLOUD_URL).replace(/\/+$/, ''), token: creds.token || '' }
-  }
-  ipcMain.handle('account:quota', async () => {
-    const c = await accountCloud()
-    if (!c.token) return { status: 401, json: null }
-    try { return await cloudJson(c, 'GET', '/api/token-quota/my', undefined, 15_000) } catch (e: any) { return { status: 0, json: { detail: String(e?.message || e) } } }
-  })
-  ipcMain.handle('account:useResetCard', async (_e, type?: string) => {
-    const c = await accountCloud()
-    if (!c.token) return { status: 401, json: null }
-    // 缺省(旧渲染层)= both;给了但不合法就拒,别把打错的 type 静默当全额卡烧掉(codex3#7)
-    if (type !== undefined && type !== 'both' && type !== 'weekly') {
-      return { status: 400, json: { error: 'invalid_type', detail: `invalid reset card type: ${type}` } }
-    }
-    const scope = type ?? 'both'
-    try { return await cloudJson(c, 'POST', '/api/token-quota/reset-card/use', { type: scope }, 15_000) } catch (e: any) { return { status: 0, json: { detail: String(e?.message || e) } } }
-  })
-  // 后台额度(Muse / 自动化):从主额度等额转入(本周期)、用尽后改用主额度继续。与额度视图同一套取 cloudUrl 的回落链。
-  ipcMain.handle('account:bgConvert', async (_e, percent: unknown) => {
-    const c = await accountCloud()
-    if (!c.token) return { status: 401, json: null }
-    if (!Number.isInteger(percent) || (percent as number) < 1 || (percent as number) > 100) return { status: 400, json: { error: 'invalid_percent' } }
-    try { return await cloudJson(c, 'POST', '/api/token-quota/background/convert', { percent }, 15_000) } catch (e: any) { return { status: 0, json: { detail: String(e?.message || e) } } }
-  })
-  ipcMain.handle('account:bgAutoMain', async (_e, enabled: unknown) => {
-    const c = await accountCloud()
-    if (!c.token) return { status: 401, json: null }
-    if (typeof enabled !== 'boolean') return { status: 400, json: { error: 'invalid_request' } }
-    try { return await cloudJson(c, 'POST', '/api/token-quota/background/auto-main', { enabled }, 15_000) } catch (e: any) { return { status: 0, json: { detail: String(e?.message || e) } } }
-  })
-
   // ── Forsion Market ──
   // 浏览/详情/安装全在主进程:有 cloudUrl + 文件系统 + 免 CORS。浏览端点公开(无需 token)。
   const marketBase = async (): Promise<string> => {
@@ -3255,6 +3161,11 @@ app.whenReady().then(async () => {
     const pluginId = effType === 'amadeus-plugin'
       ? effectivePluginId(info.installSlug, await readFile(join(dest, 'manifest.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined))
       : null
+    // 内置包(播种进 plugins/<id>)的 id 不许从市场再装一份:目录名不同的第二份同 id 副本,两边加载器谁先扫到谁赢。
+    if (pluginId && builtinPluginIds().has(pluginId)) {
+      await rm(dest, { recursive: true, force: true }).catch(() => {})
+      throw new Error('install: builtin')
+    }
     return { ok: true, path: dest, files, type: effType, slug: info.installSlug, ...(pluginId ? { id: pluginId } : {}) }
   })
 
@@ -3316,52 +3227,6 @@ app.whenReady().then(async () => {
     if (!hit) throw new Error('not-user-plugin') // 内置/首方插件不可卸载
     await rm(join(tanguDataDir(), 'plugins', hit.slug), { recursive: true, force: true })
     return { ok: true }
-  })
-
-  // 提交反馈到 Forsion 反馈中心(token 留主进程,不下发渲染层)。会话日志 JSON 作附件随附,
-  // 超限在发送前拒绝,不再静默省略用户选择的附件(后端硬上限 5MB)。
-  ipcMain.handle('feedback:submit', async (
-    _e,
-    input: { description?: string; sessionLogJson?: string; sessionLogName?: string },
-  ) => {
-    const stored = await loadConfig()
-    const creds = loadTanguCreds()
-    const cloudUrl = (stored.cloudUrl || creds.cloudUrl || '').replace(/\/+$/, '')
-    const token = creds.token || ''
-    if (!cloudUrl || !token) return { ok: false, error: 'not-logged-in' }
-    const description = (input?.description || '').trim()
-    if (!description) return { ok: false, error: 'empty' }
-    if (description.length > 10000) return { ok: false, error: 'description-too-long' }
-
-    const attachments: Array<{ filename: string; mime_type: string; size: number; data_base64: string }> = []
-    const attachmentSkipped = false
-    if (input?.sessionLogJson) {
-      const buf = Buffer.from(input.sessionLogJson, 'utf8')
-      if (buf.length > 5 * 1024 * 1024) return { ok: false, error: 'attachment-too-large' }
-      else attachments.push({
-        filename: input.sessionLogName || 'tangu-session.json',
-        mime_type: 'application/json',
-        size: buf.length,
-        data_base64: buf.toString('base64'),
-      })
-    }
-    try {
-      const r = await fetch(`${cloudUrl}/api/feedback`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ description, attachments }),
-        signal: AbortSignal.timeout(20000),
-      })
-      if (!r.ok) {
-        let detail = `HTTP ${r.status}`
-        try { detail = (await r.json())?.detail || detail } catch { /* keep */ }
-        return { ok: false, error: detail }
-      }
-      const j: any = await r.json().catch(() => ({}))
-      return { ok: true, id: j?.id ?? null, attachmentSkipped }
-    } catch (e: any) {
-      return { ok: false, error: e?.message || String(e) }
-    }
   })
 
   // 登录成功后踢一次 Amadeus 云同步引擎(值由下方 registerAmadeusIpc 返回时赋上)。否则引擎状态卡在
