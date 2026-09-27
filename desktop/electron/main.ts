@@ -1,4 +1,4 @@
-import { UNIT_PREFERENCE_KEYS } from '../shared/unitPreferences'
+import { unitConfigFace } from './unitConfigFace'
 import { buildUnitScopeGuard, resolveUnitHostPath } from './unitHostScope'
 import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/hostSandboxConfig'
 import { startMiniCursorFollow, readComputerUseForeground, cursorPanelTarget } from './miniCursorFollow'
@@ -361,7 +361,7 @@ interface TanguStoredConfig {
   unitInstanceId: string
   /** 已配对设备(T1 局域网直连;令牌只存 hash,可在切换器里回收)。 */
   unitPairedDevices: PairedDevice[]
-  /** P2P 直连的 STUN 服务器(空=内置国内可达缺省)。纯连接基建,刻意不进 UNIT_CONFIG_RW。 */
+  /** P2P 直连的 STUN 服务器(空=内置国内可达缺省)。纯连接基建,刻意不进 UNIT_CONFIG_RW(unitConfigFace.ts)。 */
   unitP2pStun: string[]
   modelId: string
   /** 辅助模型 · LLM(后台/特殊 agent 用;落 config.json models.background;缺省=跟随 app 级槽)。 */
@@ -862,17 +862,7 @@ async function readSpacesList(): Promise<Array<{ slug: string; json: string; plu
   return out
 }
 
-/** 设备页可见的配置白名单(方案口径「完整 Forsion 体验」= UI 偏好跟随本机设置)。
- *  RW = 设备页可读可写回(纯 UI/体验/笔记偏好,写回无本机副作用);RO = 只读展示。
- *  ⚠️ default-deny:token/backendUrl/cloudUrl/mode/sandbox/unitHostEnabled/forsionMcp(含 token)
- *  等连接与本机治理键**读写都绝不透传**;browser 系/mirror/pythonMode 属 managedKeys(写=重启对方后端)只读不写。 */
-const UNIT_CONFIG_RW = UNIT_PREFERENCE_KEYS
-const UNIT_CONFIG_RO = ['homeDir', 'defaultWorkspaceDir', 'activityLogEnabled', 'browserSearchEngine'] as const
-function pickUnitConfig(src: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
-  const out: Record<string, unknown> = {}
-  for (const k of keys) if (src[k] !== undefined) out[k] = src[k]
-  return out
-}
+/** 设备页可见的配置白名单(RW/RO 与远端只读的审批档)真身在 unitConfigFace.ts。 */
 
 /** listDir 唯一真源(fs:listDir IPC 与 /unit/hostdir 共用):2000 条 cap,目录在前按名排序。 */
 async function listDirImpl(dirPath: string): Promise<Array<{ name: string; isDir: boolean; size: number; path: string }>> {
@@ -1021,16 +1011,10 @@ async function doRefreshUnitHost(): Promise<void> {
     },
     readPlugins: () => (amadeusReadPlugins ? amadeusReadPlugins() : Promise.resolve([])),
     readSpaces: () => readSpacesList(),
-    readConfig: async () => {
-      const c = (await effectiveConfig()) as unknown as Record<string, unknown>
-      return { ...pickUnitConfig(c, UNIT_CONFIG_RW), ...pickUnitConfig(c, UNIT_CONFIG_RO) }
-    },
-    writeConfig: async (patch: Record<string, unknown>) => {
-      const p = pickUnitConfig(patch as Record<string, unknown>, UNIT_CONFIG_RW)
-      if (Object.keys(p).length) await saveConfig(p as Partial<TanguStoredConfig>)
-      const c = (await effectiveConfig()) as unknown as Record<string, unknown>
-      return { ...pickUnitConfig(c, UNIT_CONFIG_RW), ...pickUnitConfig(c, UNIT_CONFIG_RO) }
-    },
+    ...unitConfigFace({
+      effective: async () => (await effectiveConfig()) as unknown as Record<string, unknown>,
+      save: async (p) => { await saveConfig(p as Partial<TanguStoredConfig>) },
+    }),
     // 直连 provider 元数据(模型选择器认直连模型用):**剥 apiKey/baseUrl** —— 密钥绝不出机,
     // 设备页只需要清单字段;代价=设备页朗读/生图直连不可用(它们要 key,本就该在对方机器上跑)。
     readProviders: async () => (await readProvidersFile()).map((p) => ({
