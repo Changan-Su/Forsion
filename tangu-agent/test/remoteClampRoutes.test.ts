@@ -117,6 +117,12 @@ describe('会话路由', () => {
     expect((await cfgOf('C1')).verifyCommand).toBe('npm test');
     await send('PATCH', '/agent/sessions/C1/config', { approvalMode: 'full-auto', verifyCommand: 'make' });
     expect(await cfgOf('C1')).toEqual({ approvalMode: 'full-auto', verifyCommand: 'make' });
+    // 会话的远程标记:远端既不能伪造也不能抹掉
+    await addSession('C1b', { remoteOrigin: { via: 'tunnel', marked: true } });
+    await send('PATCH', '/agent/sessions/C1b/config', { remoteOrigin: null }, REMOTE);
+    expect((await cfgOf('C1b')).remoteOrigin).toEqual({ via: 'tunnel', marked: true });
+    await send('PATCH', '/agent/sessions/C1/config', { remoteOrigin: { via: 'lan' } }, REMOTE);
+    expect((await cfgOf('C1')).remoteOrigin).toBeUndefined();
   });
 
   it('PUT config:远程整对象替换保留受保护键、同值不降档(老客户端回写整对象)', async () => {

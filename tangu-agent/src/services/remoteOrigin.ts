@@ -78,9 +78,10 @@ export function clampApprovalMode(mode: string | undefined, cap: CapMode): CapMo
  *   engineId / soloEngineId —— 外部 ACP 引擎的工具与进程不经本引擎审批闸与路径策略;
  *   extraRoots —— 免审批可写根;
  *   clientCapabilities / client_capabilities —— 会给 run 注册手机能力,而回执打的是云端;
- *   devices —— 设备挂载(P1),远端不可改。
+ *   devices —— 设备挂载(P1),远端不可改;
+ *   remoteOrigin —— 会话的远程标记(路由侧盖),远端既不能伪造也不能抹掉。
  */
-export const REMOTE_STRIPPED_CONFIG_KEYS = ['verifyCommand', 'engineId', 'soloEngineId', 'extraRoots', 'clientCapabilities', 'client_capabilities', 'devices'] as const;
+export const REMOTE_STRIPPED_CONFIG_KEYS = ['verifyCommand', 'engineId', 'soloEngineId', 'extraRoots', 'clientCapabilities', 'client_capabilities', 'devices', 'remoteOrigin'] as const;
 
 /** 远程请求带来的 agent_config:剥掉受保护键、审批档钳到上限。返回新对象,不改入参。 */
 export function sanitizeRemoteAgentConfig(cfg: Record<string, any>, cap: CapMode = remoteApprovalCap()): Record<string, any> {
