@@ -16,7 +16,8 @@
  *  D 日历(周视图+待办+右栏 / 下拉菜单 / 事件详情 / 月视图当日日程 / 深色)在 <html> 带与不带属性两种情况下逐元素全等 = 修法不改日历观感;
  *  E 包裹层内主题仍在:日历挂着时 prose 表在、包裹层上 --color-accent 有值(别拿「把样式表删了」当修法);
  *  F 注入者先卸:关掉主区日历(Astryx 原生注入时它是唯一登记了清理的 Theme),侧栏待办 / 日历设置还挂着 →
- *    两张表仍各一份、幸存包裹层逐元素 Astryx token 与字体不变;F0 负对照:停用运行时表,幸存者必变。
+ *    两张表仍各一份、幸存包裹层逐元素 Astryx token 与字体不变、包裹层内裸标签探针全部计算样式不变;
+ *    F0 负对照两张表各自停:token 表 → 幸存者 token 必变,prose 表 → 探针必变。
  * 两张表现由 theme/astryxBridge.tsx 在模块加载时常驻注入(日历分块空闲预热即加载),所以「启动后(未进过日历)」
  * 那行 NOTE 里 prose/comp 为 1 是预期 —— 表常驻但作用域根只有包裹层,靠 A/B 兜住不外溢。
  * 另覆盖会把属性写回去的路径:跨窗明暗 / 主题语言切换(设置浮窗 broadcastUi → syncFromWindow)、离开再回日历;
@@ -119,8 +120,30 @@ const HELPER = `window.__axs = (() => {
     else html.setAttribute('data-astryx-theme', themeName())
     return () => { if (had !== null) html.setAttribute('data-astryx-theme', had); else html.removeAttribute('data-astryx-theme') }
   }
-  const survivors = (sel = '.amx-todo, .amx-calside') => [...document.querySelectorAll(WRAP)].filter((w) => w.querySelector(sel)).flatMap((w) => [...w.querySelectorAll('*')]).filter(shown)
+  const survivors = (sel = '.amx-todo, .amx-calside') => [...document.querySelectorAll(WRAP)].filter((w) => w.querySelector(sel))
+    .flatMap((w) => [...w.querySelectorAll('*')]).filter((el) => shown(el) && !el.closest('[data-axs-wprobe]'))
   let held = null
+  const sheetOff = (sel) => () => {
+    const ss = [...document.querySelectorAll(sel)]
+    ss.forEach((x) => { x.sheet.disabled = true })
+    return () => ss.forEach((x) => { x.sheet.disabled = false })
+  }
+  const PROSE_SHEET = 'style[data-astryx-theme-prose]'
+  const TOKEN_SHEET = 'style[data-astryx-theme]'
+  const snapNoRect = (els) => snap(els).map(({ rect, ...o }) => o)
+  /** 包裹层**里面**的裸标签探针(prose 规则只罩包裹层内,幸存视图未必恰好有裸标签):挂在含 sel 的那个包裹层下。 */
+  const wrapProbe = (sel) => {
+    const w = [...document.querySelectorAll(WRAP)].find((x) => x.querySelector(sel))
+    if (!w) return []
+    let box = w.querySelector(':scope > [data-axs-wprobe]')
+    if (!box) {
+      box = w.appendChild(document.createElement('div'))
+      box.setAttribute('data-axs-wprobe', '')
+      box.style.cssText = 'position:absolute;left:0;top:0;width:320px;visibility:hidden;pointer-events:none'
+      box.innerHTML = '<h2>Heading two</h2><p>Body <small>small</small> <code>code</code></p><pre>pre block</pre><hr>'
+    }
+    return [box, ...box.querySelectorAll('*')]
+  }
   const withProbe = (fn) => {
     const box = document.body.appendChild(document.createElement('div'))
     box.setAttribute('data-axs-probe', '')
@@ -143,9 +166,25 @@ const HELPER = `window.__axs = (() => {
     probeSheets: () => withProbe((els) => measure(els, sheetsOff)),
     probeAttr: () => withProbe((els) => measure(els, flipAttr)),
     // F:侧栏幸存者(待办 / 日历设置两个包裹层)。hold 记下元素与快照,heldDiff 在关掉主区日历后对同一批元素重比。
-    survivorSheets: () => measure(survivors(), sheetsOff, snapTokens),
-    hold: (sel) => { const els = survivors(sel); const a = snapTokens(els), a2 = snapTokens(els); held = { els, a, noise: els.map((_, i) => new Set(Object.keys(a[i]).filter((k) => a[i][k] !== a2[i][k]))) }; return els.length },
-    heldDiff: () => { const { els, a, noise } = held; const d = diff(els, a, snapTokens(els), noise); return { total: els.length, gone: els.filter((el) => !el.isConnected).length, noisy: noise.filter((x) => x.size).length, changed: d.n, top: d.top, back: 0 } },
+    // F0 负对照分两张表各自停:token 表 → 幸存者 token / 字体必变;prose 表 → 包裹层内探针必变。
+    survivorTokenSheet: () => measure(survivors(), sheetOff(TOKEN_SHEET), snapTokens),
+    probeProseSheet: (sel) => measure(wrapProbe(sel), sheetOff(PROSE_SHEET), snapNoRect),
+    hold: (sel) => {
+      const pels = wrapProbe(sel)
+      const els = survivors(sel)
+      const noiseOf = (a, a2) => a.map((o, i) => new Set(Object.keys(o).filter((k) => o[k] !== a2[i][k])))
+      const a = snapTokens(els), pa = snapNoRect(pels)
+      held = { els, a, noise: noiseOf(a, snapTokens(els)), pels, pa, pnoise: noiseOf(pa, snapNoRect(pels)) }
+      return { els: els.length, probe: pels.length }
+    },
+    heldDiff: () => {
+      const { els, a, noise, pels, pa, pnoise } = held
+      const d = diff(els, a, snapTokens(els), noise)
+      const pd = diff(pels, pa, snapNoRect(pels), pnoise)
+      pels[0]?.remove()
+      return { total: els.length, gone: els.filter((el) => !el.isConnected).length, noisy: noise.filter((x) => x.size).length, changed: d.n, top: d.top, back: 0,
+        probe: { total: pels.length, noisy: 0, changed: pd.n, top: pd.top, back: 0 } }
+    },
     calendarAttr: () => { const els = calendar(); return { ...measure(els, flipAttr), outsideWrap: els.filter((el) => !el.closest(WRAP)).map(label).slice(0, 8), outsideWrapN: els.filter((el) => !el.closest(WRAP)).length } },
   }
 })(); true`
@@ -360,8 +399,10 @@ async function main() {
     await win.waitForSelector('.amx-cal-event', { timeout: 15_000 })
     await win.waitForSelector('.amx-todo .astryx-checkbox', { timeout: 10_000 })
     await sleep(800)
-    const neg = await win.evaluate(() => window.__axs.survivorSheets())
-    check('F0 负对照:停用运行时样式表,侧栏待办 / 日历设置的 token 与字体必变(比对看得见掉主题)', neg.changed > 0 && neg.back === 0, fmt(neg))
+    const negT = await win.evaluate(() => window.__axs.survivorTokenSheet())
+    check('F0 负对照:只停 token 表,侧栏待办 / 日历设置的 token 与字体必变', negT.changed > 0 && negT.back === 0, fmt(negT))
+    const negP = await win.evaluate(() => window.__axs.probeProseSheet('.amx-todo'))
+    check('F0 负对照:只停 prose 表,包裹层内裸标签探针必变', negP.total > 0 && negP.changed > 0 && negP.back === 0, fmt(negP))
     // 注入者是三个视图里哪一个,取决于挂载序(Space 首次 build 时是主区日历,从命名布局还原时常是侧栏)—— 不去猜,
     // 三个轮流先卸:每一步都有别的视图还挂着,盯住它们的 token 与字体。
     const unmountStep = async (label, keepSel, wantWraps, act, waitGone) => {
@@ -374,6 +415,7 @@ async function main() {
       check(`F ${label}:运行时 prose / token 表仍各一份,还剩 ${wantWraps} 个包裹层`, acted && s.prose === 1 && s.comp === 1 && s.wraps === wantWraps, JSON.stringify({ acted, ...s }))
       check(`F ${label}:还挂着的视图逐元素 Astryx token 与字体不变`, kept.total > 0 && kept.gone === 0 && kept.changed === 0,
         `${fmt(kept)}${kept.gone ? ` ‖ ${kept.gone} 个已脱离 DOM` : ''}`)
+      check(`F ${label}:还挂着的包裹层里裸标签探针计算样式不变(prose 表内容仍生效)`, kept.probe.total > 0 && kept.probe.changed === 0, fmt(kept.probe))
     }
     const leftToggle = () => win.evaluate(() => { const b = document.querySelector('.dv-edge-toggle:not(.dv-edge-right)'); if (b) b.click(); return !!b })
     await unmountStep('关掉主区日历', '.amx-todo, .amx-calside', 2, () => win.evaluate(() => {
