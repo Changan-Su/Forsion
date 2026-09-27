@@ -96,9 +96,9 @@ function CreationCardView({ card, sessionId }: { card: CreationCard; sessionId?:
     const api = window.tangu
     if (!api?.productsCreate || !api.productsAdopt || busy) return
     setBusy(true); setError('')
-    // 跑着的时候不动:agent 正往原目录写,挪过去后续话还会被当成插话塞进这一轮。从这里起到挪完(含复制那几秒)锁住这条会话,期间不许发新消息
-    if (sessionId && useApp.getState().runningBySession[sessionId]) { setError(t('creation.err.running')); setBusy(false); return }
-    if (sessionId) lockSessionMove(sessionId)
+    // 跑着 / 正在发送 / 另一张作品卡正在挪它的时候不动:agent 正往原目录写,挪过去续话还会被当成插话塞进这一轮。
+    // 占住之后到挪完(含复制那几秒)这条会话发不了新消息
+    if (sessionId && (useApp.getState().runningBySession[sessionId] || !lockSessionMove(sessionId))) { setError(t('creation.err.running')); setBusy(false); return }
     let moved = false
     let created = ''
     try {

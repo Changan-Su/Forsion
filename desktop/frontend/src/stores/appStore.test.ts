@@ -969,9 +969,18 @@ describe('moveSessionToProject', () => {
     expect((st.toast as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('app.moveToProjectHalf')
   })
 
-  it('挪的过程中(作品卡锁住会话)不许发新消息', async () => {
-    lockSessionMove('m1')
+  it('挪与发送互斥:挪的过程中不许发;发送还没结束(传附件中)或另一张卡在挪 → 占不住', async () => {
+    expect(lockSessionMove('m1')).toBe(true)
+    expect(lockSessionMove('m1')).toBe(false) // 第二张作品卡
     try { expect(await useApp.getState().send('hi', [], undefined, undefined, undefined, 'm1')).toBe(false) } finally { unlockSessionMove('m1') }
     expect((useApp.getState().toast as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('app.sessionMoving')
+    // 发送进行中(本体还没返回)→ 作品卡占不住;发送结束后才占得住
+    let release!: () => void
+    useApp.setState({ sendNow: () => new Promise<boolean>((r) => { release = () => r(true) }) } as never)
+    const sending = useApp.getState().send('hi', [], undefined, undefined, undefined, 'm1')
+    expect(lockSessionMove('m1')).toBe(false)
+    release(); await sending
+    expect(lockSessionMove('m1')).toBe(true)
+    unlockSessionMove('m1')
   })
 })

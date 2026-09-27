@@ -507,10 +507,21 @@ function rememberDefaults(patch: Partial<StoredDesktopConfig>): void {
  *  只有服务端按键合并才管得住,另开。 */
 const approvalWrites = new Map<string, { issued: number; pending: number; mode: AgentConfig['approvalMode']; stored: AgentConfig['approvalMode']; err: Error | null }>()
 /** 会话配置落库一律按键合并:只发这次改的键(api.patchSessionConfig);老引擎没有 PATCH → 回落整对象 PUT(本地最新整对象)。 */
-/** 正在「进造物」的会话(作品卡从点下到挪完,含复制那几秒):期间不许起新 run —— 否则这一轮写到旧目录,会话却已经指到新目录。 */
+/** 「进造物」挪会话与发送互斥:挪的一方(作品卡从点下到挪完,含复制那几秒)与发送的一方(从进入 send 到 run 起来 / 失败,
+ *  中间可能在传附件)谁先占住谁先做,另一方不动手 —— 否则这一轮带着旧目录的配置起跑,会话却已经指到新目录。 */
 const movingSessions = new Set<string>()
-export const lockSessionMove = (sid: string): void => { movingSessions.add(sid) }
+const sendingSessions = new Map<string, number>()
+/** 占住这条会话来挪;它正在发送,或已有一张作品卡在挪 → false(调用方什么都别做)。 */
+export const lockSessionMove = (sid: string): boolean => {
+  if (movingSessions.has(sid) || sendingSessions.has(sid)) return false
+  movingSessions.add(sid)
+  return true
+}
 export const unlockSessionMove = (sid: string): void => { movingSessions.delete(sid) }
+const markSending = (sid: string, delta: 1 | -1): void => {
+  const n = (sendingSessions.get(sid) ?? 0) + delta
+  if (n > 0) sendingSessions.set(sid, n); else sendingSessions.delete(sid)
+}
 
 function saveSessionConfig(sid: string, patch: Partial<AgentConfig>): Promise<unknown> {
   return api.patchSessionConfig(useApp.getState().cfg, sid, patch, () => useApp.getState().configBySession[sid] || {})
@@ -736,6 +747,8 @@ export interface AppState {
   /** 删除 Agent(侧栏 / 名册共用);deleteFiles = 连它的文件(记忆、Library)一起移进系统废纸篓,否则留在引擎的 agents/.removed/。失败抛错。 */
   removeAgent(agent: NormalAgentDef, deleteFiles: boolean): Promise<void>
   send(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null): Promise<boolean>
+  /** send 的本体;只给 send 用(send 在外面套了「作品卡挪会话」互斥,直接调它会绕过)。 */
+  sendNow(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null): Promise<boolean>
   /** 撤回一条等待中的插话(删除/↑取回)。返回消息文本;已注入或来不及则 null(等待区交给事件流收拾)。 */
   withdrawSteer(sessionId: string, msgId: string): Promise<string | null>
   /** 「立即插话」:打断当前 run,把等待区消息按序强发。 */
@@ -2530,10 +2543,16 @@ export const useApp = create<AppState>((set, get) => ({
     persistDeskSoon()
   },
   send: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId) => {
+    const sid = targetSessionId === undefined ? get().activeId : targetSessionId
+    if (sid && movingSessions.has(sid)) { get().toast(get().tr('app.sessionMoving'), true); return false }
+    if (sid) markSending(sid, 1)
+    try { return await get().sendNow(text, attachments, workspaceFiles, skillIds, mentions, targetSessionId) } finally { if (sid) markSending(sid, -1) }
+  },
+
+  sendNow: async (text, attachments, workspaceFiles, skillIds, mentions, targetSessionId) => {
     track('chat.send')
     const t = get().tr
     let sid = targetSessionId === undefined ? get().activeId : targetSessionId
-    if (sid && movingSessions.has(sid)) { get().toast(t('app.sessionMoving'), true); return false }
     const stopping = sid && get().stoppingBySession[sid]
     if (stopping && !(await stopRequests.get(stopping))) return false
     const wasNewChat = !sid
