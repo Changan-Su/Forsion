@@ -51,6 +51,7 @@ import { QuickFind, useQuickFind } from './quickFind'
 import { VIEW_FILE_MATCH } from './viewFileMatch'
 import { PAGE_SCHEMA } from '@amadeus-shared/compiler/types'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
+import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { parseBody } from '@amadeus-shared/compiler/markers'
 import { extractFrontmatterExtra, parseFrontmatter, stripFrontmatter } from '@amadeus-shared/compiler/split'
 import { parseLayout } from '@amadeus-shared/compiler/manifest'
@@ -1637,14 +1638,23 @@ if (new URLSearchParams(location.search).has('dock')) {
   vault.set('Unified.md', seedMd)
   vault.set('Embedded.md', EMBED_MD)
   const writes: Array<{ path: string; text: string }> = []
+  /** 被 CAS 拒掉的写(评审 G1-01 仪器):{path, text(想写的), current(盘上的)} —— 没落盘,不进 writes。 */
+  const casRejects: Array<{ path: string; text: string; current: string }> = []
   const listeners = new Set<(p: string) => void>()
   let switchUPage: ((path: string) => void) | null = null
   Object.assign(g.amadeus ?? (g.amadeus = {}), {
     readTextFile: (p: string) => Promise.resolve(vault.get(p) ?? null),
-    writeTextFile: (p: string, text: string) => {
+    // 与桌面主进程同一份契约(fs/vaultHandlers 的 writeTextFile):带 base 且盘上指纹不符 → 不写、回现文;
+    // 文件不在 = 无冲突;不带 base 回 undefined —— 早先这里静默吞掉第三个参数,CAS 一路在台架里根本造不出来。
+    writeTextFile: (p: string, text: string, opts?: { base?: string }) => {
+      const cur = vault.get(p)
+      if (typeof opts?.base === 'string' && cur != null && textFingerprint(cur) !== opts.base) {
+        casRejects.push({ path: p, text, current: cur })
+        return Promise.resolve({ ok: false, current: cur })
+      }
       vault.set(p, text)
       writes.push({ path: p, text })
-      return Promise.resolve()
+      return Promise.resolve(typeof opts?.base === 'string' ? { ok: true } : undefined)
     },
     onExternalChange: (cb: (p: string) => void) => {
       listeners.add(cb)
@@ -1685,10 +1695,17 @@ if (new URLSearchParams(location.search).has('dock')) {
   usePageStore.getState().setActiveNotePath('Unified.md')
   installPluginInjector()
   const upageProbe: Record<string, unknown> = {}
+  /** `&udual` 的第二个同路径实例(B)的探针(同窗双标签 / 分屏的形态,评审 G1-01)。 */
+  const upageProbe2: Record<string, unknown> = {}
+  let unmountB: (() => void) | null = null
   ;(window as unknown as { __upage: unknown }).__upage = {
     vault,
     writes,
+    casRejects,
     probe: upageProbe,
+    probe2: upageProbe2,
+    /** `&udual`:卸载第二个实例(= 关掉那个标签;走真卸载冲洗)。 */
+    unmountB() { unmountB?.(); unmountB = null },
     /** 生产 lifecycle 模块(按路径路由的 insertMarkdown / flush 等,仪器直调;与 UnifiedPage 同一模块实例)。 */
     lifecycle: null as unknown,
     switchFile(path: string, text?: string) {
@@ -1710,9 +1727,10 @@ if (new URLSearchParams(location.search).has('dock')) {
     // ⚠️ 顶栏胶囊必须拿**宿主自己的笔记路径**喂 CanvasModeSeg —— 生产传的是 `barPath`,组件内
     //    要拿它跟 store 自报的 path 比对。第一版图省事把 store 的 path 又喂回去,那道闸就恒真:
     //    「切到另一篇却显示上一篇的模式」「路径对不上导致胶囊不显示」两类真 bug 一个都测不到。
-    function UPageHost({ file }: { file?: string }): React.ReactElement {
+    function UPageHost({ file, probe = upageProbe }: { file?: string; probe?: Record<string, unknown> }): React.ReactElement {
       const [st, setSt] = useState({ path: file ?? 'Unified.md', initial: vault.get(file ?? 'Unified.md') ?? seedMd })
       useEffect(() => {
+        if (probe !== upageProbe) return // `&udual` 的第二实例不接 switchFile(那条只驱动主实例)
         switchUPage = (next) => {
           usePageStore.getState().setActiveNotePath(next)
           setSt({ path: next, initial: vault.get(next) ?? '' })
@@ -1741,7 +1759,7 @@ if (new URLSearchParams(location.search).has('dock')) {
             key={st.path}
             path={st.path}
             initial={st.initial}
-            probe={upageProbe}
+            probe={probe}
             // `&uro` = 只读实例(公开分享页的形态):仪器 scripts/unified-readonly.check.cjs 验「零写盘 + 舞台只能平移」。
             readOnly={new URLSearchParams(location.search).has('uro')}
             onRenamed={(np) => setSt({ path: np, initial: vault.get(np) ?? '' })}
@@ -1800,6 +1818,18 @@ if (new URLSearchParams(location.search).has('dock')) {
     // installEngine,所以这里手动挂条 + 把开条函数露出来给仪器直接调 —— 仪器验的是**查找引擎**
     // (扫描/计数/步进/定位/收尾),热键与命令注册那半在真 Electron 里人工过(见 DESIGN.md §8)。
     ;(window as unknown as { __openFind?: () => void }).__openFind = openFindBar
+    // `&udual`:同一篇再挂第二个生产实例(同窗双标签 / 分屏 / Mini 的形态,评审 G1-01)。独立 React 根,
+    // 能单独卸载(`__upage.unmountB()` = 关掉那个标签,走真卸载冲洗)。探针在 `__upage.probe2`。
+    if (new URLSearchParams(location.search).has('udual')) {
+      const hostB = document.createElement('div')
+      hostB.className = 'amadeus-root am-app'
+      hostB.dataset.instance = 'B'
+      hostB.style.cssText = 'max-width:720px;margin:40px auto;padding:16px;border-top:2px solid #8884'
+      document.body.appendChild(hostB)
+      const rootB = createRoot(hostB)
+      rootB.render(<UPageHost probe={upageProbe2} />)
+      unmountB = () => rootB.unmount()
+    }
     createRoot(document.getElementById('root')!).render(
       <>
         <FindBar />

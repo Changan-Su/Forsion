@@ -999,7 +999,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null): {
     return activateRoot(lastVault, true)
   })
 
-  registerVaultHandlers({ vault, index, handle, rememberPage, notifyAll, logActivity, logNoteEdit })
+  // 发给「发起窗口以外」的本机窗口(v4 笔记写盘后的跨窗回灌,G1-01)。只认渲染层起源:Unit RPC 的
+  // origin 是 null,那条的本机广播由 vaultFace.call 按 VAULT_WRITE_EVENTS 负责,这里不重复发。
+  const notifyPeers = (origin: unknown, channel: string, payload?: unknown): void => {
+    const sender = (origin as { sender?: unknown } | null)?.sender
+    if (!sender) return
+    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.webContents !== sender) w.webContents.send(channel, payload)
+  }
+  registerVaultHandlers({ vault, index, handle, rememberPage, notifyAll, notifyPeers, logActivity, logNoteEdit })
 
   handle(IPC.openAttachment, async (_e, pagePath: string, ref: string) => {
     const abs = await vault.resolveAttachment(pagePath, ref)

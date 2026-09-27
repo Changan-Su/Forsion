@@ -39,7 +39,8 @@ import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, casc
 // 这里再引是给**独立挂载**兜底(harness / 只挂 UnifiedPage 的场景,不引就是一排裸按钮)。
 import '../../views/chat2/sidebar2.css'
 import { editorExtensionGen, subscribeEditorExtensions } from '../plugins/editorExtensions'
-import { registerUnifiedPipe, retireUnifiedPath } from './lifecycle'
+import { announceUnifiedWrite, registerUnifiedPipe, retireUnifiedPath } from './lifecycle'
+import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { toastConflictCopy, writeConflictCopy } from './writeSafety'
 import { docHeadings } from './outline'
@@ -211,7 +212,9 @@ interface Pipe {
   lastSaved: string
   pending: boolean
   timer: ReturnType<typeof setTimeout> | null
-  reconcileBusy: boolean
+  /** 进行中的回灌**层数**(不是布尔):押后回灌期间冻结防抖保存。两次回灌重叠时(外部改动 + 同窗实例写盘通知),
+   *  布尔量会被先结束的那次清掉,后一次还在等静默时保存就解冻了 —— 正是「押后回灌必须冻结 save」要挡的那条。 */
+  reconcileBusy: number
   /** 待保全的盘上版本(D-03 / G1-01):即将被本地版本覆盖的外部内容。写盘前必须先落成冲突副本,副本没保住就不写。
    *  单槽:只有「此刻盘上、我要盖掉的那一版」归本实例保全(更早的版本是被外部写者自己盖掉的)。 */
   unpreserved: string | null
@@ -242,6 +245,9 @@ interface HostApi {
    *  markdownUpdated 有 200ms 防抖,pipe.body 可能落后最后几击(Codex A4:快打字后立刻
    *  改名/关页,不强制序列化就丢字)。 */
   serializeNow: () => string | null
+  /** stored md 经本编辑器 parse → 序列化一遍的结果(= 打开它、什么都不改时编辑器会写出的样子)。
+   *  判「本实例有没有用户自己的改动」用(G1-01 的 isPristine);编辑器未挂载 = null。 */
+  canonical: (stored: string) => string | null
   /** OS 拖入/上传按钮的文件:存附件 + 光标处插 `![[base]]`(经 lifecycle.insertFilesForPath 递入)。 */
   insertFiles: (files: File[]) => void
   /** 插一段 markdown(插件块表面的 v4 写口;经 lifecycle.unifiedInsertMarkdown 递入)。编辑器未挂载 = false。 */
@@ -318,6 +324,15 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
           const serializer = ctx.get(serializerCtx)
           // 必须与 markdownUpdated 监听器同一条规范化链(Codex 终审 P0:绕过=把 \[\[ 持久化成死链)。
           out = toStoredMarkdown(normalizeSerializedMd(serializer(view.state.doc)), pageDir)
+        })
+        return out
+      },
+      canonical: (stored) => {
+        let out: string | null = null
+        getInstance()?.action((ctx) => {
+          const doc = ctx.get(parserCtx)(toDisplayMarkdown(stored, pageDir))
+          if (!doc) return
+          out = toStoredMarkdown(normalizeSerializedMd(ctx.get(serializerCtx)(doc as ProseNode)), pageDir)
         })
         return out
       },
@@ -881,7 +896,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const pipeRef = useRef<Pipe | null>(null)
   if (!pipeRef.current) {
     const { fmText, body } = splitFm(initial)
-    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: false, unpreserved: null, preserved: new Set(), dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly }
+    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly }
   }
   const pipe = pipeRef.current
   const [fmVer, setFmVer] = useState(0) // fm 变更驱动 chrome 重渲(pipe 本身是 ref)
@@ -1296,8 +1311,24 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     return true
   }
 
-  // ── 写盘安全(评审 2026-09-27 波次 0a:D-03)。这几件被 writeNow 调用,但**刻意放在它前面**
+  // ── 写盘安全(评审 2026-09-27 波次 0a:D-03 / G1-01)。这几件被 writeNow 调用,但**刻意放在它前面**
   //    (writeFailures.test 把 writeNow 那段源码切出来单独求值,这几件在测试里是注入的桩)。
+
+  /** 本实例相对基线(lastSaved)**有没有用户自己的改动**:fm 逐字相同,且正文 = 编辑器对基线的规范化结果 → 没有。
+   *  用途:CAS 拒写时「让位回灌」还是「本地胜 + 保全」、卸载冲洗要不要写、押后回灌时 pending 是不是只因规范化。
+   *  判不出来(编辑器不在 / 有分栏画布结构键 —— 那两类的 parse 带折叠副作用,不拿来空跑)一律按「有改动」:
+   *  宁可多出一份冲突副本,也不把用户的字当规范化噪音让掉。 */
+  const isPristine = (): boolean => {
+    const base = splitFm(pipe.lastSaved)
+    if (base.fmText !== pipe.fm) return false
+    if (base.body === pipe.body) return true
+    if (layoutLineOf(pipe.fm) != null || canvasLineOf(pipe.fm) != null) return false
+    const canon = hostApi.current?.canonical(base.body)
+    return canon != null && canon === pipe.body
+  }
+  /** 回灌入口(住在下面的回灌 effect 里,按路径重装);CAS 让位与同窗通知从这里进。 */
+  const reconcileRef = useRef<(() => void) | null>(null)
+  const reconcileNow = (): void => { reconcileRef.current?.() }
 
   /** 盘上那版要被本地版本盖掉 → 先落冲突副本(与云同步同名)+ error 级提示。写不进去就抛,writeNow 据此不写。 */
   const preserveExternal = async (content: string): Promise<void> => {
@@ -1309,30 +1340,64 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     void scoped.getState().refreshPages() // 副本是新文件:树 / 补全要看得见它
   }
 
+  /** 写成功:通知同窗同路径的其它实例回灌(G1-01,跨窗那半在主进程)。 */
+  const noteWriteOk = (): void => {
+    announceUnifiedWrite(path, pipe)
+  }
+
   const writeNow = (strict = false): Promise<void> => {
     if (pipe.readOnly) return Promise.resolve() // 只读实例:唯一的写盘出口在此封死(见 readOnly prop 注)
     const run = async (): Promise<void> => {
+      let conflicts = 0
       while (!pipe.retired) {
         const text = composeFm(pipe.fm, pipe.body) // 执行时 compose:链上永远写「此刻」的状态
         if (text === pipe.lastSaved) {
           pipe.pending = false
           return
         }
+        let res: void | TextWriteResult
         try {
-          // 要盖掉的盘上版本还没保全(打字中外部改动)→ 先落冲突副本;落不下就当写失败,不许覆盖。
+          // 要盖掉的盘上版本还没保全(打字中外部改动 / CAS 拒写后本地胜)→ 先落冲突副本;落不下就当写失败,不许覆盖。
           if (pipe.unpreserved != null && pipe.unpreserved !== text) await preserveExternal(pipe.unpreserved)
           pipe.unpreserved = null
-          await amadeus.writeTextFile(path, text)
-          pipe.lastSaved = text
-          scoped.getState().bumpLinkGraph() // v4 自写账本不经 store 的 save → 反链/图谱/![[嵌入]] 只能靠这一声
-          // 只有「写的就是此刻的状态」才算清账(Codex A9):await 期间落进来的新编辑不能被
-          // 旧写入顺手抹掉 dirty 标志,否则回灌会把脏编辑器当干净实例覆盖。
-          if (composeFm(pipe.fm, pipe.body) === text) pipe.pending = false
+          // 比对交换写(G1-01):带上「我以为盘上是什么」的指纹。支持的宿主盘上不符就拒写、回现文;
+          // 不支持的宿主忽略它照旧写、回 void(= 写成了)。
+          res = await amadeus.writeTextFile(path, text, { base: textFingerprint(pipe.lastSaved) })
         } catch (error) {
           pipe.pending = true // 写失败保留草稿;严格切号屏障必须拒绝,不能随后 retire 丢掉待写内容。
           if (strict) throw error
           return // 普通自动保存仍按原行为,下一次编辑/卸载再试。
         }
+        if (res && res.ok === false) {
+          // CAS 拒写:盘上已不是本实例的基线 —— 同篇的另一个实例 / 窗口,或外部写者刚写过。
+          if (res.current === text) {
+            pipe.lastSaved = text // 殊途同归:别人写的正是这份
+            continue
+          }
+          if (++conflicts > 3) {
+            // 每轮都被拒 = 有人在持续写,或宿主写入时改写了内容;别无限循环地出副本,按写失败处理(留待下次再试)。
+            const error = new Error('The note kept changing on disk while saving')
+            pipe.pending = true
+            if (strict) throw error
+            return
+          }
+          if (isPristine()) {
+            // 本实例没有用户自己的改动(正文只是编辑器对旧基线的规范化):让位,走回灌吃盘上版本,不写不出副本。
+            pipe.pending = false
+            reconcileNow()
+            return
+          }
+          // 本地胜(拍板 #6):盘上那版登记为待保全,换基线再写一轮 —— 循环开头先落副本。
+          pipe.unpreserved = res.current
+          pipe.lastSaved = res.current
+          continue
+        }
+        pipe.lastSaved = text
+        scoped.getState().bumpLinkGraph() // v4 自写账本不经 store 的 save → 反链/图谱/![[嵌入]] 只能靠这一声
+        // 只有「写的就是此刻的状态」才算清账(Codex A9):await 期间落进来的新编辑不能被
+        // 旧写入顺手抹掉 dirty 标志,否则回灌会把脏编辑器当干净实例覆盖。
+        if (composeFm(pipe.fm, pipe.body) === text) pipe.pending = false
+        noteWriteOk()
         // 严格落盘同时排尽在途 I/O 期间新增的编辑;否则 pending=true 也会被成功 ack 后退休。
         if (!strict) return
       }
@@ -1462,16 +1527,18 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   // 外部回灌:等静默 → 重读 → fm 换状态 + 正文同实例最小差异。回灌期间冻结保存。
   useEffect(() => {
     const reconcile = async (): Promise<void> => {
-      pipe.reconcileBusy = true
+      pipe.reconcileBusy++
       try {
         await awaitTypingQuiet()
         const raw = await amadeus.readTextFile(path)
         if (raw == null || pipe.dead || pipe.retired) return // 读失败/已卸载:保持现状,绝不清空
         if (raw === pipe.lastSaved && !pipe.pending) return // 自写回声兜底
-        if (pipe.pending) {
+        if (pipe.pending) syncFromEditor() // 判「是不是真有用户改动」前先拉平防抖窗里的最后几击
+        if (pipe.pending && !isPristine()) {
           // 冲突策略(Codex P0「冻结期本地输入被吞」):本地有未落盘编辑 → **活动编辑器赢**,不动编辑器、
           // 不打断输入。但被盖掉的盘上版本**必须**留底(拍板 #6,评审 D-03:此前这里只换基线,外部那版静默
           // 蒸发、零提示):登记为待保全,finally 的补发在写之前先落冲突副本 + error 级提示,副本没保住就不写。
+          // (pending 却 isPristine = 只是编辑器把上一版规范化了一下,不算用户改动 → 照常回灌,不出副本。)
           if (raw !== composeFm(pipe.fm, pipe.body)) pipe.unpreserved = raw
           pipe.lastSaved = raw
           return
@@ -1501,10 +1568,12 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         pipe.pending = false
         syncSrcDraft() // 源码模式下回灌:textarea 草稿必须跟上,否则下一击键用旧草稿盖掉刚回灌的内容(Codex 终审 P0)
       } finally {
-        pipe.reconcileBusy = false
-        if (pipe.pending) void writeNow() // 冻结期被压下的保存补发
+        pipe.reconcileBusy--
+        // 冻结期被压下的保存补发 —— 只在**最后一层**回灌收尾时发(还有一层在等静默 = 仍在冻结期)。
+        if (pipe.reconcileBusy === 0 && pipe.pending) void writeNow()
       }
     }
+    reconcileRef.current = () => { void reconcile() }
     const off = amadeus.onExternalChange?.((p: string) => {
       if (p !== path) return
       void reconcile()
@@ -1512,7 +1581,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     // 路由读文件 → 本效应装订阅之间有一扇空窗(Codex P1):装完补读一次,
     // 空窗里若有外部写入,走同一条回灌路径;无变化则 raw===lastSaved 直接返回。
     void reconcile()
-    return off
+    return () => {
+      reconcileRef.current = null
+      off?.()
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
 
@@ -1522,6 +1594,15 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       syncFromEditor()
       if (pipe.timer) clearTimeout(pipe.timer)
       pipe.timer = null
+      if (pipe.readOnly) return
+      const text = composeFm(pipe.fm, pipe.body)
+      if (text === pipe.lastSaved) return
+      // G1-01:没有用户改动的实例(正文只是编辑器对基线的规范化)卸载时不写 —— 它若是同篇多开里的陈旧那个,
+      // 写下去就是拿旧全文盖掉别的实例 / 窗口刚写的新版。
+      if (isPristine()) {
+        pipe.pending = false
+        return
+      }
       void writeNow()
     }
     window.addEventListener('beforeunload', flush)
@@ -1538,6 +1619,8 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   useLayoutEffect(() => {
     return registerUnifiedPipe({
       path,
+      owner: pipe, // 同窗同篇通知时排除自己(announceUnifiedWrite)
+      peerWrote: () => reconcileNow(), // 同窗另一实例刚写盘:与外部改动同一条回灌路径
       flush: (strict = false) => {
         if (pipe.readOnly) return Promise.resolve() // 只读实例没有待写内容,换库/切号屏障不必等它
         syncFromEditor()
@@ -1837,7 +1920,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
                   schedule()
                   setFmVer((v) => v + 1) // 切源码场景:srcText 用拉平后的 pipe 重算,别显示旧草稿
                 }}
-                skipFinalFlush={() => pipe.reconcileBusy}
+                skipFinalFlush={() => pipe.reconcileBusy > 0}
                 apiRef={hostApi}
                 probe={probe}
                 extraPlugins={editorPlugins}

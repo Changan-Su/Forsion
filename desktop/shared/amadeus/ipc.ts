@@ -402,6 +402,10 @@ export type DbReadResult =
   | { status: 'missing' }
   | { status: 'corrupt'; path: string; message: string }
 
+/** `writeTextFile(…, { base })` 的比对交换结果(仅支持 CAS 的宿主、且调用方传了 base 时才有)。
+ *  ok:false = 盘上已不是调用方的基线(别的实例 / 窗口 / 外部写者刚写过),本次**没写**;current 是盘上现文。 */
+export type TextWriteResult = { ok: true } | { ok: false; current: string }
+
 /** `drawing:read` 的结果:同 DbReadResult 的「错误是数据」约定,但只回原文——
  *  解析/序列化是纯函数(shared/amadeus/excalidraw),放渲染端与编辑器同侧,主进程只管字节进出。 */
 export type DrawingReadResult =
@@ -620,8 +624,12 @@ export interface AmadeusApi {
   readTextFile(path: string): Promise<string | null>
   /** 原子写回 vault 内确切相对路径的 UTF-8 文本(供插件文件类型;记自写账本,同 writeDrawing)。
    *  `create: true` = 新建意图(素文件出生等):云桥据此绕过「本会话见过、现 404 = 别处删了」的重建禁令;
-   *  桌面/移动端本地写盘无此区分,忽略。 */
-  writeTextFile(path: string, text: string, opts?: { create?: boolean }): Promise<void>
+   *  桌面/移动端本地写盘无此区分,忽略。
+   *  `base` = 比对交换写(G1-01,同 dbWriteCas 的思路):调用方认为盘上现在的内容的 `textFingerprint`。
+   *  支持的宿主(桌面主进程 / 经它的 Unit RPC)比对不上就**不写**,回 `{ ok:false, current }` 交调用方
+   *  回灌或另存冲突副本;文件不在 = 无冲突照写。不支持的宿主(云桥 / 移动端 / 分享页)忽略它、照旧无条件写,
+   *  返回 void —— 调用方一律把 void 当「写成了」。不传 `base` 时所有宿主行为与从前逐字一致。 */
+  writeTextFile(path: string, text: string, opts?: { create?: boolean; base?: string }): Promise<void | TextWriteResult>
   /** 「笔记视图」:列出 folder 直属子级笔记的 path/title/frontmatter(行的实时数据源)。 */
   listPageProps(folder: string): Promise<PageProps[]>
   /** 外科式写笔记 frontmatter(值 = undefined 删该键):保留 amadeus_* 与正文,原子写。 */

@@ -34,6 +34,11 @@ export interface UnifiedPipeHandle {
    *  'cursor' = 光标所在**顶层块**之后(该块为空则原地替换)、'start' = 文首、'end' = 文末。
    *  实例退休(改名/删除/移动之后)一律 false —— 往幽灵路径写字比不写更糟。 */
   insertMarkdown?: (md: string, where: 'cursor' | 'start' | 'end') => boolean
+  /** 登记者身份(实例私有的任意对象):announceUnifiedWrite 靠它把发起者自己排除在外。 */
+  owner?: object
+  /** 同窗同路径的**另一个**实例刚把这篇写盘成功(G1-01):盘上已是它的新版,本实例去回灌
+   *  (与外部改动同一条回灌路径:等打字静默、有未落盘编辑则按冲突策略处理)。 */
+  peerWrote?: () => void
 }
 
 const handles = new Set<UnifiedPipeHandle>()
@@ -61,6 +66,13 @@ export function registerUnifiedPipe(h: UnifiedPipeHandle): () => void {
     handles.delete(h)
     bumpGen()
   }
+}
+
+/** 同篇多开(双标签 / 分屏 / Mini)的同窗通知(评审 G1-01):owner 刚把 path 写盘成功 → 其余同路径实例去回灌。
+ *  跨窗那半由主进程负责(writeTextFile 成功后给**发起窗口以外**的窗口发 externalChange);同窗的实例共用一个
+ *  渲染进程,主进程分不出来,只能在这里点名。不通知 = 另一个实例停在旧全文,下一次保存把这次写的整篇盖掉。 */
+export function announceUnifiedWrite(path: string, owner: object): void {
+  for (const h of [...handles]) if (h.path === path && h.owner !== owner) h.peerWrote?.()
 }
 
 /** 全部 unified 实例待写落盘(单实例失败不拖累别家)。 */

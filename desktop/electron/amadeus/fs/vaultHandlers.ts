@@ -16,6 +16,7 @@ import type { VaultManager } from './vaultManager'
 import type { VaultIndex } from './vaultIndex'
 import { withDbLock } from './dbLock'
 import { writeVaultText } from './pageWrite'
+import { textFingerprint } from '@amadeus-shared/writeConflict'
 
 const nowIso = (): string => new Date().toISOString()
 function dbVersion(text: string): string {
@@ -67,6 +68,23 @@ export interface VaultHandlerDependencies {
   notifyAll: (channel: string, payload?: unknown) => void
   logActivity?: (action: 'file.save', data: { f: string }) => void
   logNoteEdit?: (page: string, before: string, after: string) => void
+  /** 把一条回灌事件发给**除发起窗口以外**的本机窗口(G1-01 跨窗同篇)。origin = handler 收到的事件对象:
+   *  渲染层 IPC 起源是真 IpcMainInvokeEvent(带 sender),Unit RPC 起源是 null(那条由 vaultFace.call 的
+   *  VAULT_WRITE_EVENTS 映射负责,这里不插手)。缺省 = 不发(测试 / 无窗口宿主)。 */
+  notifyPeers?: (origin: unknown, channel: string, payload?: unknown) => void
+}
+
+/** 同一路径的文本写串行化(进程内)。CAS 的「读→比对→写」中间有两次 await,两个窗口的 invoke
+ *  会交错在它们之间 —— 两边都比对通过、先写的那份被后写的静默盖掉,等于没做 CAS。非 CAS 的写也进同一条
+ *  链,免得一发盲写插在别人的比对与落盘之间。引擎是另一个进程,不在这把锁里(它的改动走 watcher → 回灌)。 */
+const textWriteChains = new Map<string, Promise<unknown>>()
+function withTextWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const prev = textWriteChains.get(key) ?? Promise.resolve()
+  const run = prev.then(fn, fn)
+  const tail = run.catch(() => {})
+  textWriteChains.set(key, tail)
+  void tail.then(() => { if (textWriteChains.get(key) === tail) textWriteChains.delete(key) })
+  return run
 }
 
 export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
@@ -292,10 +310,25 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
       return null
     }
   })
-  handle(IPC.writeTextFile, async (_e, filePath: string, text: string) => {
-    // ⚠️ 必须走 writeVaultText:这是 **v4/unified 笔记唯一的落盘通道**,只写盘不更索引的话
-    //    图标/搜索/反链/tags 全部停在上次启动时的样子(见 pageWrite.ts 顶注)。
-    await writeVaultText(vault, index, filePath, text)
+  handle(IPC.writeTextFile, async (e, filePath: string, text: string, opts?: { create?: boolean; base?: string }) => {
+    const base = typeof opts?.base === 'string' ? opts.base : null // create 是云桥的语义,本地写盘不区分
+    return withTextWriteLock(vault.absPath(filePath), async () => {
+      if (base != null) {
+        // 比对交换写(G1-01):盘上已不是调用方的基线 → 不写,把现文交回去(回灌 / 冲突副本由渲染层定)。
+        // 文件不在 = 无冲突(与 dbWriteCas 同口径:删了再写 = 重建,不是覆盖别人)。
+        let cur: string | null = null
+        try { cur = await fs.readFile(vault.absPath(filePath), 'utf8') } catch { cur = null }
+        if (cur != null && textFingerprint(cur) !== base) return { ok: false as const, current: cur }
+      }
+      // ⚠️ 必须走 writeVaultText:这是 **v4/unified 笔记唯一的落盘通道**,只写盘不更索引的话
+      //    图标/搜索/反链/tags 全部停在上次启动时的样子(见 pageWrite.ts 顶注)。
+      await writeVaultText(vault, index, filePath, text)
+      // 同篇开在别的窗口:自写账本把 watcher 的回声压掉了(整个进程一本账),不补这一声它们永远停在旧内容,
+      // 下一次保存再把这次写的整篇盖掉。发起窗口不回发 —— 它自己的同窗实例由渲染层 lifecycle 通知。
+      // Unit RPC 起源(e = null)不走这里:它的本机广播由 vaultFace.call 按 VAULT_WRITE_EVENTS 负责。
+      if (e != null && vault.isPagePath(filePath)) deps.notifyPeers?.(e, IPC.externalChange, filePath)
+      return base != null ? { ok: true as const } : undefined
+    })
   })
 
   // 「笔记视图」(Bases):行 = 目标文件夹直属笔记,frontmatter 是唯一真源。

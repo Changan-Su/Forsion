@@ -289,7 +289,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     readFile: (p) => amadeus.readTextFile(p),
     assetUrl: (p) => toAssetUrl(p),
     hostPath: (p) => pluginHostPath(usePageStore.getState().vaultRoot, p, { executionCapabilities: { host: readTangu()?.hostExecution?.() ?? hostTangu()?.executionCapabilities?.host ?? false } }),
-    writeFile: (p, text) => (ok() ? amadeus.writeTextFile(p, text).finally(dropListCache) : Promise.resolve()),
+    // 插件契约是 Promise<void>:不带 base 的写宿主本就只回 void,这里显式抹平(CAS 结果类型不外泄给插件)。
+    writeFile: (p, text) => (ok() ? amadeus.writeTextFile(p, text).then(() => {}).finally(dropListCache) : Promise.resolve()),
     // 二进制读写(2026-09-19):路径口径与 writeFile 相同 —— 原样透传,越界由主进程 resolveInVault 钳死。
     // 桥缺席时整条方法不挂(同 watchFile 纪律)。⚠️saveVaultBytes 不记自写账本:同路径 watchFile 会收到回声。
     ...(amadeus?.saveVaultBytes
