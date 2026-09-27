@@ -17,6 +17,7 @@ import type { ResolvedPos } from '@milkdown/kit/prose/model'
 import { MAX_INDENT } from '@amadeus-shared/indentIo'
 import { indentedBlockquoteSchema, indentedBulletListSchema, indentedOrderedListSchema, indentMarker, markdownBlockIndent } from './structuralIndent'
 import { hardbreakClearMarkKeepAttrs, hardbreakWithHtmlSchema, inlineBrRemark, keepsTrailingBr } from './inlineBr'
+import { mathEscapeRemark } from './mathLivePreview'
 
 export const clampIndent = (n: number): number => Math.max(0, Math.min(MAX_INDENT, Math.floor(n) || 0))
 
@@ -162,6 +163,7 @@ const headingAlignmentSchema = headingSchema.extendSchema((prev) => (ctx) => {
  *  (它按 `\n` 把 text 拆成新对象)、remark-inline-links、preserve-empty-line(它删行内 `<br>`)。 */
 const PARSE_FIDELITY = [
   ...inlineBrRemark, // D-06:行内 / 单元格里的 `<br>` → 带原文的 break(否则被 preserve-empty-line 删掉)
+  ...mathEscapeRemark, // R-01:公式里被 markdown 当转义吃掉的反斜杠补回(须在 inlineBr 之后:`<br>` 已是换行)
 ]
 const presetWithReplacements = commonmark.map((p) =>
   (p as unknown) === (paragraphSchema.node as unknown) ? paragraphIndentSchema.node

@@ -85,10 +85,14 @@ const CASES = [
   { id: 'r01.matrix_block', bucket: V, md: `${M}\n\n$$\n\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}\n$$\n` },
   { id: 'r01.aligned_block', bucket: V, md: `${M}\n\n$$\n\\begin{aligned}\nx &= 1 \\\\\ny &= 2\n\\end{aligned}\n$$\n` },
   { id: 'r01.inline_brace', bucket: V, md: `${M}\n\nset $\\{x\\}$ here\n` },
-  { id: 'r01.inline_dollar', bucket: V, md: `${M}\n\nprice $\\$5$ here\n` },
+  // 行内公式里的 `\$`:scanMath 见 `$` 就收、不认 `\$`(mathLivePreview 顶注 ponytail),落盘侧认不出这个跨度;
+  // 解析侧补了反斜杠就会越存越多,所以两侧都不认、维持旧行为 —— 要逐字得连 scanMath / unescapeMathSource 一起改。
+  { id: 'r01.inline_dollar', bucket: P, why: 'R-01 余项:行内公式内的 `\\$`(scanMath 不认)', md: `${M}\n\nprice $\\$5$ here\n`, forbid: /\\\\\$/ },
   { id: 'r01.punct_mix', bucket: V, md: `${M}\n\n$a\\,b \\| c \\% d \\# e \\_ f \\{g\\}$ 尾\n` },
   { id: 'r01.set_matrix_cn', bucket: V, md: `${M}\n\n集合 $\\{a,b\\}$ 与 $\\begin{matrix}1 \\\\ 2\\end{matrix}$ 尾\n` },
   { id: 'r01.single_line_display', bucket: V, md: `${M}\n\nseed\n\n$$\\begin{pmatrix} a & b \\\\ c & d \\end{pmatrix}$$\n\nafter\n` },
+  { id: 'r01.display_escaped_dollar', bucket: V, md: `${M}\n\n$$a\\$b$$\n` },
+  { id: 'r01.containers', bucket: V, md: `${M}\n\n* 项 $\\{a\\}$\n\n> 引 $\\{b\\}$\n\n## 题 $\\{c\\}$\n` },
   { id: 'r01.control_cmds', bucket: V, md: `${M}\n\n$x_i + \\sum_{k} a*b$ ok\n\n$$\n\\frac{a}{b} + \\alpha_{1}\n$$\n` },
   { id: 'r01.escape_outside_math', bucket: V, why: '公式外的转义不许被补回(对照)', md: `${M}\n\nliteral \\*not em\\* and \\_x\\_ and $\\{y\\}$\n` },
   // 被转义的 `$` 不当定界符 —— 这条的旧病是 D-11(转义被剥,0b),但**绝不能**被本修复变成 `\\$x\\$`。
@@ -109,6 +113,15 @@ const CASES = [
   { id: 'tags.listItem', bucket: P, why: 'R-25 + D-05(0b)', md: `${M}\n\n- #todo 买菜\n- 普通 #tag\n` },
   { id: 'tags.quote', bucket: P, why: 'R-25(0b)', md: `${M}\n\n> #idea 想法\n` },
   { id: 'tags.onlyTag', bucket: P, why: 'R-25(0b)', md: `${M}\n\n#tag\n` },
+]
+
+// ── 入口:修复挂在 remark 管线(唯一咽喉)上 —— 加载之外,外部回灌 / 切换文件 / 粘贴也必须同样保真 ──
+// 用同一段混合正文(R-01 公式 + D-06 `<br>` + D-12 定义行)走三条入口,再在首段敲一个字,期望落盘逐字。
+const ENTRY_BODY = `$$\n\\begin{pmatrix} a \\\\ b \\end{pmatrix}\n$$\n\n行内 $\\{x\\}$ 与 a<br>b\n\n[重要]: 明天开会\n`
+const ENTRIES = [
+  { id: 'entry.fire', kind: 'fire' },
+  { id: 'entry.switch', kind: 'switch' },
+  { id: 'entry.paste', kind: 'paste' },
 ]
 
 function lineDiff(a, b) {
@@ -186,6 +199,38 @@ async function runCase(browser, c) {
   return r
 }
 
+async function runEntry(browser, e) {
+  const errs = []
+  const want = `${M}Z\n\n${ENTRY_BODY}`
+  let out = null
+  let page
+  if (e.kind === 'fire') {
+    page = await open(browser, `${M}\n\n占位\n`, errs)
+    await page.evaluate((md) => window.__upage.fire('Unified.md', md), `${M}\n\n${ENTRY_BODY}`)
+    await page.waitForTimeout(1500)
+    out = (await typeAndSave(page, M, 'Z')).out
+  } else if (e.kind === 'switch') {
+    page = await open(browser, `${M}\n\n占位\n`, errs)
+    await page.evaluate((md) => window.__upage.switchFile('Other.md', md), `${M}\n\n${ENTRY_BODY}`)
+    await page.waitForTimeout(1500)
+    out = (await typeAndSave(page, M, 'Z')).out
+  } else {
+    // 粘贴:首段末回车出一个空段,把正文当 text/plain 粘进去(plugin-clipboard → parserCtx → 同一条 remark 链)
+    page = await open(browser, `${M}\n`, errs)
+    await caretAfter(page, M)
+    await page.keyboard.press('Enter')
+    await page.evaluate((md) => {
+      const dt = new DataTransfer()
+      dt.setData('text/plain', md)
+      document.querySelector('.unified-body .ProseMirror').dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }))
+    }, ENTRY_BODY)
+    await page.waitForTimeout(300)
+    out = (await typeAndSave(page, M, 'Z')).out
+  }
+  await page.close()
+  return { id: e.id, bucket: V, rounds: [{ out, want }], openWrites: [0], errs }
+}
+
 async function pool(items, n, fn) {
   const out = new Array(items.length)
   let next = 0
@@ -197,8 +242,8 @@ async function pool(items, n, fn) {
 
 async function main() {
   const browser = await chromium.launch({ executablePath: findChromium(), headless: true })
-  const cases = CASES.filter((c) => !ONLY || c.id.includes(ONLY))
-  const results = await pool(cases, Number(process.env.RTCORPUS_JOBS || 4), (c) => runCase(browser, c))
+  const cases = [...CASES, ...ENTRIES.map((e) => ({ ...e, bucket: V }))].filter((c) => !ONLY || c.id.includes(ONLY))
+  const results = await pool(cases, Number(process.env.RTCORPUS_JOBS || 4), (c) => (c.kind ? runEntry(browser, c) : runCase(browser, c)))
   await browser.close()
 
   let red = 0

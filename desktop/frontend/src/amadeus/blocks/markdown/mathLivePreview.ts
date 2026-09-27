@@ -4,7 +4,7 @@
 //
 // 为什么用装饰而非节点:节点是原子,光标进不去、编辑=删了重打;装饰不动文档,源码就是原生文本,光标天然可编辑,
 // 序列化/撤销/其它插件全部无感。每个 Amadeus 块是独立 Milkdown 编辑器、文档极小 → 每次选区变化重算装饰的开销可忽略。
-import { $prose } from '@milkdown/kit/utils'
+import { $prose, $remark } from '@milkdown/kit/utils'
 import { Plugin, PluginKey, TextSelection, type EditorState } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import type { Node as PMNode } from '@milkdown/kit/prose/model'
@@ -157,6 +157,117 @@ export function unescapeMathSource(md: string): string {
     })
     .join('')
 }
+
+// ── 解析侧:公式里的「反斜杠 + 标点」逐字保留(R-01,评审 2026-09-27)────────────────────────────────
+//
+// 病:公式在编辑器里只是段落纯文本,micromark 解析时把 `\{`、`\\`、`\,`、`\|`、`\%`、`\#`、`\_` 当 markdown 转义
+// **吃掉了反斜杠** —— 矩阵 `\\` 塌成一个反斜杠、`\{a,b\}` 变 `{a,b}`。上面 unescapeMathSource 只管序列化一侧,
+// 于是「新写的公式首次保存是对的,重开后再编辑一次就坏了」。
+//
+// 修法:唯一咽喉 = remark 管线(加载 / 切换 / 回灌 / 粘贴都经 parserCtx 走它)。
+//  ① mdast-util-from-markdown 扩展:照抄默认的 characterEscapeValue 出口,顺手把「这个字符来自 `\X`」的 value
+//     下标记在 text 节点上(不猜、不对原文做平行扫描 —— 容器前缀 / 续行缩进 / 字符引用都不会错位)。
+//  ② transformer:每个段落 / 标题 / 单元格按 buildBlockString 同款规则拼串、scanMath 取公式跨度,落在跨度里的
+//     转义字符前把反斜杠补回。于是 PM 里的公式文本 === 磁盘原文,序列化再经 unescapeMathSource 对称还原。
+// ⚠️ 必须早于 remark-line-break(它按 `\n` 把 text 拆成新对象,记号随之丢失)—— 挂在 commonmarkWithIndent 的
+//    PARSE_FIDELITY 里,不是 .use() 追加。
+// ⚠️ 定界 `$` 本身被转义(`\$x\$`)= 用户明说「不是公式」,整段不补。
+// ponytail: 行内公式里的 `\$`(`$\$5$`)补不回 —— scanMath 不认 `\$`、见 `$` 就收(顶注),落盘侧的
+//    unescapeMathSource 于是认不出这个跨度;这边若补了就是越存越多的反斜杠,所以两侧都不认,维持旧行为。
+// ponytail: gfm 的 autolink-literal 在 fromMarkdown 内部就把含 URL 的 text 拆成新节点(不带记号)——
+//    公式里写网址 / 邮箱的转义不补,极边角。
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type MdNode = any
+const ESCAPES = 'amadeusEscapes'
+const ATOM = '\uFFFC'
+
+/** 默认 characterEscapeValue 出口(onexitdata)的照抄 + 记下转义字符在 text.value 里的下标。 */
+const escapeRecorder = {
+  exit: {
+    characterEscapeValue(this: any, token: any): void {
+      const tail = this.stack.pop()
+      ;((tail.data ||= {})[ESCAPES] ||= []).push(tail.value.length)
+      tail.value += this.sliceSerialize(token)
+      tail.position.end = { line: token.end.line, column: token.end.column, offset: token.end.offset }
+    },
+  },
+}
+
+const MARK_LIKE = new Set(['emphasis', 'strong', 'delete', 'link', 'linkReference'])
+
+/** 一个文本块(段落 / 标题 / 单元格)的公式里被 markdown 吃掉的反斜杠补回(就地改 text.value;导出供单测)。
+ *  扫描串**按原文的样子**拼:转义字符前带着它的反斜杠 —— 与落盘后 unescapeMathSource 扫到的串同形,两侧认出的公式
+ *  跨度才一致(不一致 = 这边补了、那边不还原,反斜杠越存越多)。 */
+export function restoreMathEscapes(block: MdNode): void {
+  let s = ''
+  /** 扫描串每一位对应的「转义字符」(text 节点 + value 下标);null = 不是转义字符。 */
+  const refs: Array<[MdNode, number] | null> = []
+  const texts: MdNode[] = []
+  const walk = (n: MdNode): void => {
+    if (n?.type === 'text' && typeof n.value === 'string') {
+      const esc = new Set<number>(n.data?.[ESCAPES] ?? [])
+      if (esc.size) texts.push(n)
+      for (let k = 0; k < n.value.length; k++) {
+        if (esc.has(k)) { s += '\\'; refs.push(null) }
+        s += n.value[k]
+        refs.push(esc.has(k) ? [n, k] : null)
+      }
+    } else if (n?.type === 'inlineCode') {
+      const len = String(n.value ?? '').length
+      s += ' '.repeat(len) // 同 buildBlockString:code 文本不参与公式匹配
+      for (let k = 0; k < len; k++) refs.push(null)
+    } else if (n?.type === 'break') {
+      s += '\n'
+      refs.push(null)
+    } else if (MARK_LIKE.has(n?.type)) {
+      for (const c of n.children ?? []) walk(c) // PM 里它们是 mark,不占位置
+    } else {
+      s += ATOM
+      refs.push(null)
+    }
+  }
+  for (const c of block.children ?? []) walk(c)
+  if (!texts.length) return
+  const restore = new Map<MdNode, number[]>()
+  for (const sp of scanMath(s)) {
+    const dl = sp.display ? 2 : 1
+    // 定界 `$` 本身是 `\$`:用户明说「这不是公式」(`\$x\$`),整段不补 —— 否则落盘成 `\\$x\$`。
+    let escapedDelim = false
+    for (let d = 0; d < dl; d++) if (refs[sp.from + d] || refs[sp.to - 1 - d]) escapedDelim = true
+    if (escapedDelim) continue
+    for (let i = sp.from + dl; i < sp.to - dl; i++) {
+      const r = refs[i]
+      if (!r) continue
+      const list = restore.get(r[0]) ?? []
+      list.push(r[1])
+      restore.set(r[0], list)
+    }
+  }
+  for (const [n, ks] of restore) {
+    let v: string = n.value
+    for (const k of ks.sort((a, b) => b - a)) v = v.slice(0, k) + '\\' + v.slice(k)
+    n.value = v
+  }
+  for (const n of texts) delete n.data[ESCAPES]
+}
+
+const TEXT_BLOCKS = new Set(['paragraph', 'heading', 'tableCell'])
+export function restoreMathEscapesInTree(tree: MdNode): void {
+  const walk = (n: MdNode): void => {
+    if (TEXT_BLOCKS.has(n?.type)) return restoreMathEscapes(n)
+    for (const c of n?.children ?? []) walk(c)
+  }
+  walk(tree)
+}
+
+/** remark 插件本体(单测直接 .use 它;生产经 mathEscapeRemark 挂进 commonmarkWithIndent)。 */
+export function remarkMathEscapes(this: any): (tree: MdNode) => void {
+  const data = this.data()
+  ;(data.fromMarkdownExtensions ||= []).push(escapeRecorder)
+  return (tree) => restoreMathEscapesInTree(tree)
+}
+export const mathEscapeRemark = $remark('amadeusMathEscapes', () => remarkMathEscapes)
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 const mathKey = new PluginKey<{ focus: boolean }>('amadeus-math-live-preview')
 
