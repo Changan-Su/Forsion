@@ -78,7 +78,7 @@ describe('CJK 友好解析 × 真 milkdown', () => {
 describe('装配', () => {
   it('MarkdownBlock:`.use(cjkFriendlyRemark)` 在 `.use(gfm)` 之后', () => {
     const src = readFileSync(join(__dirname, 'MarkdownBlock.tsx'), 'utf8')
-    const gfmAt = src.indexOf('.use(gfm)')
+    const gfmAt = src.search(/\.use\(gfm(WithAnchoredRules)?\)/) // gfm 的原位替换版(I-01,./anchoredMarkRules)也算
     expect(gfmAt).toBeGreaterThan(-1)
     expect(src.indexOf('.use(cjkFriendlyRemark)')).toBeGreaterThan(gfmAt)
   })

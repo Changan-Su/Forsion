@@ -19,6 +19,7 @@ import { indentedBlockquoteSchema, indentedBulletListSchema, indentedOrderedList
 import { hardbreakClearMarkKeepAttrs, hardbreakWithHtmlSchema, inlineBrRemark, keepsTrailingBr } from './inlineBr'
 import { mathEscapeRemark } from './mathLivePreview'
 import { linkWithRefSchema, pristineRaw, refDefinitionsRemark } from './refDefinitions'
+import { commonmarkMarkRuleReplacements } from './anchoredMarkRules'
 
 export const clampIndent = (n: number): number => Math.max(0, Math.min(MAX_INDENT, Math.floor(n) || 0))
 
@@ -195,6 +196,7 @@ const presetWithReplacements = commonmark.map((p) =>
   : (p as unknown) === (hardbreakClearMarkPlugin as unknown) ? hardbreakClearMarkKeepAttrs
   : (p as unknown) === (linkSchema.mark as unknown) ? linkWithRefSchema.mark
   : (p as unknown) === (linkSchema.ctx as unknown) ? linkWithRefSchema.ctx
+  : commonmarkMarkRuleReplacements.has(p) ? commonmarkMarkRuleReplacements.get(p) as typeof p // I-01:带锚 + 终点贴光标
   : p)
 export const commonmarkWithIndent = presetWithReplacements.flatMap((p) =>
   (p as unknown) === (remarkAddOrderInListPlugin.options as unknown) ? [...PARSE_FIDELITY, p] : [p])

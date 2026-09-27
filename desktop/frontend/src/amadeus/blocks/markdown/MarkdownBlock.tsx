@@ -28,7 +28,6 @@ import {
   serializerCtx,
   type CmdKey,
 } from '@milkdown/kit/core'
-import { gfm } from '@milkdown/kit/preset/gfm'
 import {
   toggleStrongCommand,
   toggleEmphasisCommand,
@@ -50,6 +49,7 @@ import {
 import { blankLineRemark, softBreakRemark, stripEmptyLineBr } from './softBreak'
 import { tabIndent, tabOutdent } from './tabIndent'
 import { commonmarkWithIndent, setTextAlignment, type TextAlignment } from './paragraphIndent'
+import { gfmWithAnchoredRules } from './anchoredMarkRules'
 import { structuralIndentRemark } from './structuralIndent'
 import { clipboard } from '@milkdown/kit/plugin/clipboard'
 import { history } from '@milkdown/kit/plugin/history'
@@ -863,7 +863,7 @@ export function MilkdownInner({
       // 契约:high 桶的插件不该自己处理的必须返回 false,否则内置行为在它手里静默消失。
       .use(pluginEditorExtensions('high', { pagePath: () => pagePathRef.current }))
       .use(commonmarkWithIndent)
-      .use(gfm)
+      .use(gfmWithAnchoredRules) // gfm 原位替换版:删除线输入规则带锚(I-01,见 ./anchoredMarkRules)
       .use(structuralIndentRemark)
       // `**注意：**后面` 这类 CJK 标点贴定界符的串按 CJK 友好规则解析(否则字面 + 保存转义)。须紧跟 gfm,见 ./cjkFriendly。
       .use(cjkFriendlyRemark)

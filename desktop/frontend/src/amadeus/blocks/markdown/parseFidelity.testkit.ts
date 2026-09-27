@@ -5,8 +5,8 @@
 import { Editor, defaultValueCtx, editorViewCtx, parserCtx, rootCtx, serializerCtx } from '@milkdown/kit/core'
 import type { Node as PMNode } from '@milkdown/kit/prose/model'
 import type { EditorView } from '@milkdown/kit/prose/view'
-import { gfm } from '@milkdown/kit/preset/gfm'
 import { commonmarkWithIndent } from './paragraphIndent'
+import { gfmWithAnchoredRules } from './anchoredMarkRules'
 import { structuralIndentRemark } from './structuralIndent'
 import { cjkFriendlyRemark } from './cjkFriendly'
 import { attentionSerializer } from './attentionFlanking'
@@ -33,7 +33,7 @@ export async function bootEditor(initial: string, opts: { v3?: boolean } = {}): 
       ctx.set(defaultValueCtx, initial)
     })
     .use(commonmarkWithIndent)
-    .use(gfm)
+    .use(gfmWithAnchoredRules)
     .use(structuralIndentRemark)
     .use(cjkFriendlyRemark)
     .use(attentionSerializer)
