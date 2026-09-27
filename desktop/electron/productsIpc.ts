@@ -16,6 +16,7 @@ import { addExternalCreation, allowExternalLaunch, externalCreationFor, external
 import { commitGitVersion, gitHistoryStatus, listGitVersions, restoreGitVersion } from './gitHistory'
 import { serveProductRoot, servePathRoot, setPreviewPersistence, type PreviewPersistedState } from './codePreview'
 import { AdoptError, checkAdoptable, createCreationDir } from './productAdopt'
+import { dirIdentity } from './dirIdentity'
 
 export interface ProductsIpcDeps {
   ipcMain: IpcMain
@@ -212,11 +213,14 @@ export function registerProductsIpc(d: ProductsIpcDeps): void {
     }
   }))
   // 删除 = 移入系统回收站(可恢复);原地加入的外部造物 = 只取消登记,文件夹一个字节都不动。目录来自注册表重解,不吃渲染层路径。
-  // expect = 用户在确认框里同意的那件事('trash' 移进废纸篓 / 'unregister' 只从造物移除),渲染层按卡片上的 external 选的文案。
-  // 宿主按 id 重解时情况变了(外部文件夹被挪进托管根、或反过来)→ 拒绝:别让用户确认的是一件事、宿主做的是另一件。
+  // expect = 用户在确认框里同意的那件事:action('trash' 移进废纸篓 / 'unregister' 只从造物移除,渲染层按卡片上的 external 选的文案)
+  // + dirId(卡片列出时那个目录的身份)。宿主按 id 重解时情况变了 —— 外部文件夹被挪进托管根或反过来、同一个 id 落到了另一个文件夹 ——
+  // 一律拒绝:别让用户确认的是一件事(那个目录)、宿主做的是另一件。
   d.ipcMain.handle('products:trash', guard(async (id: unknown, expect: unknown) => {
     const p = await product(id)
-    if (expect !== (p.external ? 'unregister' : 'trash')) throw new Error('This creation changed; refresh and try again')
+    const want = expect as { action?: unknown; dirId?: unknown } | null
+    const now = dirIdentity(p.root)
+    if (!want || want.action !== (p.external ? 'unregister' : 'trash') || !now || want.dirId !== `${now.dev}:${now.ino}`) throw new Error('This creation changed; refresh and try again')
     // 先撤权再删:开发副本的授权不撤,回收站里的代码下次启动照样以插件权限加载(目录被「放回原处」就更是了);
     // 已加载的实例也得当场全窗拆掉。
     const grant = readDevLoads(d.homeDir())[p.id]

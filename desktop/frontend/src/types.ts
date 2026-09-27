@@ -1301,8 +1301,8 @@ declare global {
       /** fallbackName:产物名清洗后为空时用的桌面文件名(落盘产物命名,跟随当前语言)。 */
       productsShortcut?(id: string, fallbackName?: string): Promise<ShortcutResult>
       /** 托管根里的 = 移进废纸篓;原地加入的外部造物 = 只取消登记(unregistered),文件夹不动。
-       *  expect = 用户在确认框里同意的那件事;宿主重解后对不上(期间被挪过位置)就拒绝,得刷新后重新确认。 */
-      productsTrash?(id: string, expect: 'trash' | 'unregister'): Promise<{ ok: boolean; unregistered?: boolean }>
+       *  expect = 用户在确认框里同意的那件事(动作 + 卡片列出时那个目录的身份);宿主重解后对不上(期间被挪过 / 换过)就拒绝,得刷新后重新确认。 */
+      productsTrash?(id: string, expect: { action: 'trash' | 'unregister'; dirId?: string }): Promise<{ ok: boolean; unregistered?: boolean }>
       /** 在造物的托管根里建一个新作品文件夹(名字宿主清洗 + 撞名接序号)。 */
       productsCreate?(name: string): Promise<{ dir: string; name: string; product: ProductSummary }>
       /** 原地加入造物(不复制、不移动)。within:源的真实路径必须在它里面(strict = 不能就是它本身)。 */

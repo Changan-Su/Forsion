@@ -103,7 +103,7 @@ export function ArtificialView() {
     if (!remove || !window.confirm(t(p.external ? 'artificial.remove.confirm' : 'artificial.trash.confirm', { name: p.name }))) return
     setBusy(p.id)
     try {
-      await remove(p.id, p.external ? 'unregister' : 'trash')
+      await remove(p.id, { action: p.external ? 'unregister' : 'trash', dirId: p.dirId })
       await load()
     } catch (e) {
       toast('artificial.toast.trashFailed', { detail: detail(e) }, true)

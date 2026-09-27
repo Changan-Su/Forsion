@@ -34,8 +34,6 @@ const WALK_ENTRIES = 20_000
 const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'out'])
 const HTML = /\.html?$/i
 const KINDS: readonly ProductKind[] = ['web', 'plugin', 'unknown']
-/** macOS / Windows 的卷默认大小写不敏感:`<root>/DEMO` 打开的就是磁盘上的 `demo`。 */
-const CASE_INSENSITIVE_FS = process.platform === 'darwin' || process.platform === 'win32'
 
 export function isProductId(v: unknown): v is string {
   return typeof v === 'string' && /^p_[0-9a-f]{12}$/.test(v)
@@ -181,7 +179,7 @@ export async function detectKind(dir: string): Promise<{ kind: ProductKind; entr
 
 // ── 索引(一遍扫全表)───────────────────────────────────────────────────────────
 
-interface Indexed { root: string; name: string; sidecar: Sidecar; updatedAt: number; external: boolean }
+interface Indexed { root: string; name: string; sidecar: Sidecar; updatedAt: number; external: boolean; dir: DirIdentity }
 
 /** 同一个目录只喊一次,别让每次 products:list 都往日志里刷同一行。 */
 const warned = new Set<string>()
@@ -248,7 +246,7 @@ const readName = (value: unknown, fallback: string): string => (nameIssue(value)
  * 就该立刻看见,缓存的失效逻辑比这几毫秒贵。
  */
 async function index(rootReal: string | null, externals: readonly ExternalRoot[] = []): Promise<Indexed[]> {
-  interface Found { root: string; name: string; raw: Record<string, unknown> | null; sidecar: Sidecar | null; updatedAt: number; birth: number; external: boolean }
+  interface Found { root: string; name: string; raw: Record<string, unknown> | null; sidecar: Sidecar | null; updatedAt: number; birth: number; external: boolean; dir: DirIdentity }
   const found: Found[] = []
   const add = async (root: string, name: string, external: boolean, expect?: DirIdentity): Promise<void> => {
     try {
@@ -259,7 +257,7 @@ async function index(rootReal: string | null, externals: readonly ExternalRoot[]
       const raw = await readRaw(root)
       // ⚠️先 stat 再补 sidecar:写 sidecar 会顶起目录 mtime,updatedAt 要的是补写**之前**那个,
       //   否则首次扫描会把整个栅格按「刚才补了谁」重排。
-      found.push({ root, name, raw, sidecar: identified(raw) ? raw : null, updatedAt: st.mtimeMs, birth: birthOf(st), external })
+      found.push({ root, name, raw, sidecar: identified(raw) ? raw : null, updatedAt: st.mtimeMs, birth: birthOf(st), external, dir: { dev: st.dev, ino: st.ino } })
     } catch { /* 单个项目坏掉(权限/竞态删除)不拖垮整张表 */ }
   }
   // 托管根读不了(权限)只少了托管的那部分,外部造物照样列
@@ -296,9 +294,16 @@ async function index(rootReal: string | null, externals: readonly ExternalRoot[]
     try {
       if (!sidecar || losers.has(f)) {
         sidecar = mint(f.raw)
+        // 外部造物:写之前再核一次这个路径还是刚才那个真目录(不是软链、身份没变)。
+        // ponytail: 核完到写之间仍有微秒级窗口 —— 能在这点时间里调包用户文件夹的,是一个以用户身份在跑的本机进程,
+        //           它本来就能往任何地方写;这里防的是不可信的目录**内容**(克隆 / 解压来的),不是并发的恶意进程。
+        if (f.external) {
+          const now = await fs.lstat(f.root).catch(() => null)
+          if (!now || now.isSymbolicLink() || now.dev !== f.dir.dev || now.ino !== f.dir.ino) continue
+        }
         await writeSidecar(f.root, sidecar)
       }
-      indexed.push({ root: f.root, name: f.name, sidecar, updatedAt: f.updatedAt, external: f.external })
+      indexed.push({ root: f.root, name: f.name, sidecar, updatedAt: f.updatedAt, external: f.external, dir: f.dir })
     } catch (e) {
       // 写不进 sidecar(只读盘/权限):跳过,别给出一个落盘上不存在的临时身份。
       // ponytail: 行为不改(这一行就是会从栅格里消失),但**至少喊一声** —— 否则用户看到的是产物凭空没了,
@@ -342,6 +347,7 @@ async function summarize(record: Indexed): Promise<ProductSummary> {
     updatedAt: record.updatedAt,
     published: existsSync(path.join(record.root, CONNECT_MARKER)),
     ...(record.external ? { external: true } : {}),
+    dirId: `${record.dir.dev}:${record.dir.ino}`,
     // pluginId 跟**生效后的** kind 走:sidecar 把 kind 改成 web 就不该再挂着插件 id,
     // 反过来一个没有清单的目录被标成 plugin 也变不出 id(那种 patch 已在 updateProduct 挡掉)。
     ...(kind === 'plugin' && detected.pluginId ? { pluginId: detected.pluginId } : {}),
@@ -391,12 +397,10 @@ export async function ensureProduct(projectsRoot: string, dir: string, externals
   // 走整张表而不是只补这一个目录:复制来的项目要在这里就把重复 id 判掉,否则稳定源先按旧 id 起、
   // 等某次 scan 重铸后又换一个源 —— 预览里存的本地数据会凭空消失。
   const records = await serialized(CHAIN, () => index(rootReal, externals))
-  // ⚠️先精确匹配,再在大小写不敏感的卷上放宽:`<root>/DEMO` 在 APFS / NTFS 上 lstat 得到的是磁盘上的
-  //   `demo`,containedName 放行、索引里却按 dirent 的 `demo` 记名,精确匹配会在这里假性失败 ——
-  //   调用方(previewOriginFor)吞掉这一抛就退到一次性 origin,产物的 localStorage 活不到「启动」。
-  //   顺序不能反:卷要真是大小写敏感的、`demo` 与 `DEMO` 同时存在时,精确的那个才是对的。
-  const record = records.find((r) => !r.external && r.name === name)
-    ?? (CASE_INSENSITIVE_FS ? records.find((r) => !r.external && r.name.toLowerCase() === name.toLowerCase()) : undefined)
+  // ⚠️按目录身份认,不比名字:`<root>/DEMO` 在大小写不敏感的卷上打开的就是磁盘上的 `demo`(同一个 inode,认得出);
+  //   大小写敏感的卷上 `App` 与 `app` 是两个目录,按平台转小写会把请求 `App` 的人交给 `app`(Codex 评审)。
+  const want = dirIdentity(path.join(rootReal, name))
+  const record = want ? records.find((r) => !r.external && r.dir.dev === want.dev && r.dir.ino === want.ino) : undefined
   if (!record) throw new Error(`Product directory is unavailable: ${name}`)
   return summarize(record)
 }

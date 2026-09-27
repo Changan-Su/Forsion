@@ -65,17 +65,25 @@ describe('products IPC × 原地加入的外部造物', () => {
   it('删除:外部造物只取消登记(文件夹与 sidecar 都在,不进废纸篓);托管的进废纸篓;确认的动作对不上 → 拒绝', async () => {
     const app = await folder(path.join(home, 'code', 'app'))
     const { product } = await call('products:register', app, app, false)
-    await expect(call('products:trash', product.id, 'trash')).rejects.toThrow(/changed/) // 确认框说的是「移到废纸篓」,实际是外部的
-    expect(await call('products:trash', product.id, 'unregister')).toMatchObject({ ok: true, unregistered: true })
+    await expect(call('products:trash', product.id, { action: 'trash', dirId: product.dirId })).rejects.toThrow(/changed/) // 确认框说的是「移到废纸篓」,实际是外部的
+    await expect(call('products:trash', product.id, 'unregister')).rejects.toThrow(/changed/) // 没带目录身份:不认
+    expect(await call('products:trash', product.id, { action: 'unregister', dirId: product.dirId })).toMatchObject({ ok: true, unregistered: true })
     expect(trashItem).not.toHaveBeenCalled()
     expect(existsSync(path.join(app, 'index.html')) && existsSync(path.join(app, PRODUCT_SIDECAR))).toBe(true)
     expect(await call('products:isCreation', app)).toBe(false)
 
     const child = await folder(path.join(root, 'game'))
     const managed = (await call('products:register', child, child, false)).product
-    await expect(call('products:trash', managed.id, 'unregister')).rejects.toThrow(/changed/) // 确认框说的是「只移除」,实际会删文件夹
+    await expect(call('products:trash', managed.id, { action: 'unregister', dirId: managed.dirId })).rejects.toThrow(/changed/) // 确认框说的是「只移除」,实际会删文件夹
     expect(existsSync(child)).toBe(true)
-    await call('products:trash', managed.id, 'trash')
+    // 用户看的是这个目录;确认之前它被挪走、同一个 id 的 sidecar 落进了路径上的另一个文件夹 → 不删那个新来的
+    await fs.rename(child, path.join(home, 'moved-away'))
+    await folder(child)
+    await fs.copyFile(path.join(home, 'moved-away', PRODUCT_SIDECAR), path.join(child, PRODUCT_SIDECAR))
+    await expect(call('products:trash', managed.id, { action: 'trash', dirId: managed.dirId })).rejects.toThrow(/changed/)
+    expect(existsSync(child)).toBe(true)
+    const fresh = (await call('products:list')).find((p: { root: string }) => p.root === child)
+    await call('products:trash', fresh.id, { action: 'trash', dirId: fresh.dirId })
     expect(trashItem).toHaveBeenCalledWith(child)
   })
 
