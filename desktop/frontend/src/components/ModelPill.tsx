@@ -128,7 +128,9 @@ function useStreakRamp(ref: React.RefObject<HTMLSpanElement | null>, active: boo
     const from = rate.current
     const to = active ? 1 : 0
     const dur = STREAK_RAMP_MS * Math.abs(to - from)
-    if (active) anims().forEach((a) => a.play())
+    // 跑 / 停交给 CSS 的 animation-play-state(data-on 放行):不调 play()/pause(),CSS 重建出来的动画也天然守规矩
+    anims().forEach((a) => { a.playbackRate = from })
+    if (active) el.dataset.on = ''
     const t0 = performance.now()
     let raf = 0
     const step = (now: number): void => {
@@ -139,7 +141,7 @@ function useStreakRamp(ref: React.RefObject<HTMLSpanElement | null>, active: boo
       list.forEach((a) => { a.playbackRate = r })
       el.style.opacity = String(Math.min(1, r * 2))
       if (p < 1) raf = requestAnimationFrame(step)
-      else if (!active) list.forEach((a) => a.pause())
+      else if (!active) delete el.dataset.on
     }
     raf = requestAnimationFrame(step)
     return () => cancelAnimationFrame(raf)

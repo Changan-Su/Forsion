@@ -2027,7 +2027,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   animation: effort-ultra-flow 2.2s linear infinite;
 }
 @keyframes ultra-pill-glow-in { from { opacity: 0; } }
-/* 流星:整组的 opacity 与速率都由 useStreakRamp 接管;缺省透明(不在跑就看不见)。
+/* 流星:整组的 opacity 与速率都由 useStreakRamp 接管;缺省透明且暂停(不在跑就看不见、也不空转),data-on 才放行。
    亮色胶囊底太浅,白色流星看不见,改用渐变上各段的色;暗色回到滑杆的白。 */
 .pill-ultra-streaks { position: absolute; inset: 0; z-index: -1; overflow: hidden; pointer-events: none; opacity: 0; }
 .pill-ultra-streaks i {
@@ -2038,7 +2038,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   border-radius: 999px;
   background: linear-gradient(90deg, transparent 0 30%, var(--pill-streak) 50%, transparent 50.6%);
   animation: effort-ultra-streak 1.6s cubic-bezier(0.55, 0, 0.45, 1) infinite;
+  animation-play-state: paused;
 }
+.pill-ultra-streaks[data-on] i { animation-play-state: running; }
 .pill-ultra-streaks i:nth-child(1) { --pill-streak: rgba(79, 125, 255, 0.75); top: 26%; animation-duration: 1.5s; animation-delay: -0.2s; }
 .pill-ultra-streaks i:nth-child(2) { --pill-streak: rgba(139, 108, 246, 0.8); top: 43%; animation-duration: 1.8s; animation-delay: -0.95s; }
 .pill-ultra-streaks i:nth-child(3) { --pill-streak: rgba(217, 70, 239, 0.75); top: 59%; animation-duration: 1.35s; animation-delay: -0.55s; }
