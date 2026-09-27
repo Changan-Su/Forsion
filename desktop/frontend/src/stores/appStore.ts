@@ -1740,7 +1740,8 @@ export const useApp = create<AppState>((set, get) => ({
     try {
       const r = await api.getSpecialConfig(c)
       if (generation !== authGeneration) return
-      set({ specialEnabled: { historian: !!r.config?.historian?.enabled, muse: !!r.config?.muse?.enabled } })
+      // 云端按轮 Historian 只在后台跑,没有本地的状态条 / 工作视图 / 子会话记录(那些端点在云端 404)→ 不点亮那些入口。
+      set({ specialEnabled: { historian: !!r.config?.historian?.enabled && !r.cloud, muse: !!r.config?.muse?.enabled && !r.cloud } })
     } catch {
       if (generation === authGeneration) set({ specialEnabled: { historian: false, muse: false } })
     }

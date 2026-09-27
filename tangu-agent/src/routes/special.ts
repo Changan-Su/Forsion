@@ -27,7 +27,7 @@
  *   GET      /agent/special/muse/library                Muse Library 目录树(桌面 Agent Space 左栏;含子目录)
  *   POST     /agent/special/muse/feedback { text }      往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等)
  *
- * 本地特性：profile.capabilities.hostExec=false（云端）一律 404。
+ * 本地特性：profile.capabilities.hostExec=false（云端）一律 404；例外 = /agent/special/config(云端返回每用户的按轮 Historian 设置)。
  */
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
@@ -38,7 +38,8 @@ import { isHistorianBusy } from '../services/localHistorian.js';
 import { hasHistorianTask } from '../services/historianSession.js';
 import { createRun } from '../services/runStore.js';
 import { enqueueRun } from '../services/agentLoop.js';
-import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt } from '../services/specialAgentsConfig.js';
+import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt, SPECIAL_AGENTS_DEFAULTS } from '../services/specialAgentsConfig.js';
+import { loadUserHistorianConfig, saveUserHistorianConfig, type UserHistorianConfig } from '../services/historianConfig.js';
 import { museStatus, kickMuse, getAutomationNotices } from '../services/muse.js';
 import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, type DbLike } from '../services/museTriggers.js';
 import { readDbOrNull } from '../services/amadeusDb.js';
@@ -72,8 +73,18 @@ async function appendMuseFeedback(userId: string, line: string): Promise<void> {
   } catch { /* 反馈写失败不阻断主流程 */ }
 }
 
-router.get('/agent/special/config', authMiddleware, async (_req: AuthRequest, res) => {
-  if (!ensureLocal(res)) return;
+/** 云端(web/安卓)只有按轮 Historian,每用户一份。回完整形状(Muse 等取缺省)让前端 dirty 判定稳定;cloud:true 让前端只露 Historian 的四项。 */
+const cloudConfigView = (h: UserHistorianConfig) => ({
+  config: { ...SPECIAL_AGENTS_DEFAULTS, historian: { ...SPECIAL_AGENTS_DEFAULTS.historian, ...h } },
+  defaults: { historianPrompt: '' },
+  cloud: true,
+});
+
+router.get('/agent/special/config', authMiddleware, async (req: AuthRequest, res) => {
+  if (!deps().profile.capabilities.hostExec) {
+    try { res.json(cloudConfigView(await loadUserHistorianConfig(req.user!.userId))); } catch (e: any) { res.status(500).json({ detail: e?.message || 'load config failed' }); }
+    return;
+  }
   try {
     res.json({
       config: loadSpecialAgentsConfig(),
@@ -87,7 +98,11 @@ router.get('/agent/special/config', authMiddleware, async (_req: AuthRequest, re
 });
 
 router.post('/agent/special/config', authMiddleware, async (req: AuthRequest, res) => {
-  if (!ensureLocal(res)) return;
+  if (!deps().profile.capabilities.hostExec) {
+    // 只收 historian 的四个键;旧版前端整包 POST 的 muse / mode / prompt 等一律忽略。
+    try { res.json(cloudConfigView(await saveUserHistorianConfig(req.user!.userId, (req.body || {}).historian || {}))); } catch (e: any) { res.status(400).json({ detail: e?.message || 'save config failed' }); }
+    return;
+  }
   try {
     const patch = req.body && typeof req.body === 'object' ? req.body : {};
     // 旧自定义 muse prompt 必须在保存前捕获:保存落盘的是 normalize 后的段(已不含 prompt 键)。

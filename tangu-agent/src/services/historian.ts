@@ -1,6 +1,9 @@
 /**
- * Historian：空闲会话复盘。开启后周期扫描「空闲超过 idleMinutes 且自上次复盘后有新活动」的
- * AI Studio 会话，用一个轻量模型判断这段对话是否有值得长期留痕的内容；有则往用户当天日志追加一条。
+ * 云端 Historian(网关进程跑;worker 恒 historian:false,本地形态由 localHistorian 负责)。两条路:
+ * ① AI Studio 会话:周期扫描「空闲超过 idleMinutes 且自上次复盘后有新活动」的会话,有值得留痕的就追加一条日志。
+ * ② tangu 会话(web/安卓):与桌面一样**按轮**触发 —— thin worker 跑完一轮经 state-API 把 run 写成 done,
+ *    SqlStateStore 的 run-done 监听回调 onCloudRunDone,按用户自己的设置(默认每 3 轮、首轮也触发)维护标题 / LOG / 记忆,
+ *    按实际用量扣用户主额度(与桌面 Historian 同一个桶)。
  *
  * 触发标记：每趟（含判定为「无内容」）都置 chat_sessions.historian_last_summary_at=NOW()，
  * 配合扫描谓词 `last IS NULL OR last < updated_at`，保证只在会话有**新活动**后才再扫，不重复处理。
@@ -10,7 +13,10 @@ import { query, getOlderThanSql } from '../core/db.js';
 import { deps } from '../seams/runtime.js';
 import type { ChatMessage } from '../core/types.js';
 import { historianConfig } from './historianConfig.js';
-import { enterRunContext } from '../seams/runContext.js';
+import { runWithUserAgentScope } from '../seams/runContext.js';
+import { loadUserHistorianConfig } from './historianConfig.js';
+import { setRunDoneListener } from './stateStore/sqlStateStore.js';
+import { isRoundDue } from './localHistorian.js';
 import { cloudGetAgent } from '../agents/cloudAgentStore.js';
 import { resolveMemorySlug } from '../agents/agentRegistry.js';
 import { redactSecrets } from '../core/redact.js';
@@ -22,6 +28,7 @@ const buildProviderPayload = (opts: any) => deps().brain.llm.buildProviderPayloa
 const streamProviderCompletion = (opts: any) => deps().brain.llm.streamProviderCompletion(opts);
 const calculateCost = (modelId: string, tin: number, tout: number, model?: any) => deps().billing.calculateCost(modelId, tin, tout, model);
 const consumeTokenPoints = (userId: string, amount: number) => deps().billing.consumeTokenPoints(userId, amount);
+const canConsumeTokenPoints = (userId: string, amount: number) => deps().billing.canConsumeTokenPoints(userId, amount);
 const logApiUsage = (...args: any[]) => (deps().billing.logApiUsage as any)(...args);
 const getUserById = (id: string) => deps().brain.users.getUserById(id);
 const appendLogEntry = (userId: string, text: string) => deps().brain.memory.appendLogEntry(userId, text);
@@ -36,7 +43,9 @@ const MEMORY_CONTEXT_CHARS = 3000; // 注入现有记忆的**尾部**(最新条�
 // redactSecrets 只认得出 sk-/ghp_ 之类的令牌形状;「数据库密码是 hunter2」这种自由文本靠提示词不可靠 → 提到凭据的候选整条丢。
 // ponytail: 关键词黑名单,会误杀「用户偏好用 1Password」这类无害条目;误杀只是少记一条,漏放是凭据进长期记忆。
 const CREDENTIAL_RE = /password|passwd|passphrase|secret|token|api[ _-]?key|private key|credential|密码|口令|密钥|私钥|令牌|验证码/i;
-const HISTORIAN_CHARGE_USER = false; // 背景任务默认不扣用户配额；置 true 则按 cost 扣
+const HISTORIAN_CHARGE_USER = false; // AI Studio 空闲复盘:背景任务默认不扣用户配额;置 true 则按 cost 扣(tangu 按轮版恒扣)
+const JUDGE_TIMEOUT_MS = 90_000; // 与桌面 Historian 的执行槽预算一致;上游挂住不能把网关的并发槽永久占住
+const MAX_CONCURRENT = 8;        // 全网关同时在跑的按轮维护上限;满了本轮跳过(不排队),下个到点轮再来
 
 const HISTORIAN_PROMPT =
   'You are a "historian". Below is a recent conversation between a user and an AI. ' +
@@ -50,16 +59,18 @@ type Resolved = Awaited<ReturnType<typeof resolveModelAndKey>>;
 let timer: ReturnType<typeof setInterval> | null = null;
 let running = false;
 
-/** 启动 historian 周期扫描（默认每 2min）。幂等；enabled=false 时每 tick 空跑。 */
+/** 启动 historian:AI Studio 周期扫描(默认每 2min)+ tangu 按轮监听。幂等;admin enabled=false 时两路都空跑。 */
 export function startHistorian(intervalMs = 120_000): void {
   if (timer) return;
   timer = setInterval(() => { void tick(); }, intervalMs);
   if (typeof timer.unref === 'function') timer.unref();
+  setRunDoneListener((runId) => { void onCloudRunDone(runId); });
 }
 
-/** 停止 historian 扫描器(dispose/热加载用)。 */
+/** 停止 historian(dispose/热加载用)。 */
 export function stopHistorian(): void {
   if (timer) { clearInterval(timer); timer = null; }
+  setRunDoneListener(null);
 }
 
 /** 单趟扫描(startHistorian 的定时体;导出供台架直接驱动)。 */
@@ -81,22 +92,7 @@ export async function tick(): Promise<void> {
         LIMIT ?`,
       [BATCH],
     );
-    // tangu 会话(web/安卓云端 Tangu Space):同谓词空闲扫描,但做「标题+日志」两件套维护
-    // (桌面 localHistorian 的云端等价物;memory 整文覆盖刻意不做——空闲版上下文不足,留桌面按轮版)。
-    const tanguRows = await query<any[]>(
-      `SELECT s.id, s.user_id, s.title, s.agent_config
-         FROM chat_sessions s
-        WHERE s.app_id = 'tangu'
-          AND s.archived = FALSE
-          AND (s.kind IS NULL OR s.kind = 'user')
-          AND ${getOlderThanSql('s.updated_at', cfg.idleMinutes)}
-          AND NOT (${getOlderThanSql('s.updated_at', LOOKBACK_MINUTES)})
-          AND (s.historian_last_summary_at IS NULL OR s.historian_last_summary_at < s.updated_at)
-        ORDER BY s.updated_at ASC
-        LIMIT ?`,
-      [BATCH],
-    );
-    if (!rows.length && !tanguRows.length) return;
+    if (!rows.length) return;
 
     // 整批共用一次模型解析；失败（如配置的模型被禁用）则本 tick 跳过，下 tick 重试（不标记，不丢会话）。
     let resolved: Resolved;
@@ -112,13 +108,6 @@ export async function tick(): Promise<void> {
         await summarizeSession(r.id, r.user_id, cfg.modelId, resolved);
       } catch (e: any) {
         console.warn(`[historian] session ${r.id} 复盘失败:`, e?.message || e);
-      }
-    }
-    for (const r of tanguRows) {
-      try {
-        await summarizeTanguSession(r, cfg.modelId, resolved);
-      } catch (e: any) {
-        console.warn(`[historian] tangu session ${r.id} 复盘失败:`, e?.message || e);
       }
     }
   } catch (e: any) {
@@ -188,10 +177,61 @@ async function summarizeSession(sessionId: string, userId: string, modelId: stri
   await markPass(sessionId); // 无论是否写日志都标记本趟
 }
 
-// ── tangu 云端会话(web/安卓 Tangu Space)的空闲复盘:标题 + 日志 + 长期记忆 ─────────────
-// 桌面 localHistorian(按轮触发)的云端等价物:worker 无共享库跑不了按轮版,网关定时扫描补位。
+// ── tangu 云端会话(web/安卓)的按轮 Historian:标题 + 日志 + 长期记忆 ─────────────────────
+// 桌面 localHistorian 挂在引擎的 run-done 钩子上;云端 run 在 thin worker 跑(无库、无持久文件),
+// 所以由网关在 worker 上报 done 时触发,轮次判定与桌面同一个 isRoundDue。
 // 记忆只追加、不改写:候选过与桌面同款的 No-op 门,经 seam 的 appendMemoryEntry(去重 + 软上限)落库;
 // 云端没有桌面的 raw 层 + Dream 整固,所以每趟限 3 条、并把现有记忆尾部喂给判官防重复。
+
+const busySessions = new Set<string>();
+// ponytail: 同一会话最后维护过的轮次,防 done 重报(重试的状态 POST)重复写 LOG/记忆;进程内 Map,单网关够用,
+// 多网关实例会各跑一次 —— 要跨实例去重得落库(如 special_agent_log 唯一键)。上限到了整表清空,代价是极少数重复一趟。
+const lastRound = new Map<string, number>();
+
+/** 模型:用户显式选的 → admin 配的 → tangu 的辅助模型槽 → tangu 对话默认。
+ *  不用 resolveBackgroundModelId:网关的 profile.appId 是 ai-studio 基线,查到的是别的 app 的槽。 */
+async function resolveModel(userModel: string, adminModel: string): Promise<string> {
+  if (userModel || adminModel) return userModel || adminModel;
+  try {
+    const r = await deps().brain.models.listModelsForProject?.('tangu');
+    return String(r?.backgroundModelId || r?.defaultModelId || '');
+  } catch { return ''; }
+}
+
+/** run 落成 done 的回调(SqlStateStore 监听,fire-and-forget,绝不抛)。到点轮才维护。 */
+export async function onCloudRunDone(runId: string): Promise<void> {
+  try {
+    const admin = historianConfig();
+    if (!admin.enabled) return; // 平台总开关
+    const run = (await query<any[]>(`SELECT session_id, user_id FROM agent_runs WHERE id = ? LIMIT 1`, [runId]))[0];
+    if (!run?.session_id) return;
+    const sessionId = String(run.session_id);
+    const userId = String(run.user_id);
+    const user = await loadUserHistorianConfig(userId);
+    if (!user.enabled) return;
+    const s = (await query<any[]>(
+      `SELECT id, title, agent_config, kind, app_id, archived FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`,
+      [sessionId, userId],
+    ))[0];
+    if (!s || s.app_id !== 'tangu' || (s.kind && s.kind !== 'user') || s.archived === true || s.archived === 1) return;
+    const n = await query<any[]>(`SELECT COUNT(*) AS n FROM agent_runs WHERE session_id = ? AND status = 'done'`, [sessionId]);
+    const round = Number(n[0]?.n) || 0;
+    if (!isRoundDue(round, user.everyRounds, user.firstRoundTrigger)) return;
+    if ((lastRound.get(sessionId) || 0) >= round) return;
+    if (busySessions.has(sessionId) || busySessions.size >= MAX_CONCURRENT) return;
+    busySessions.add(sessionId);
+    if (lastRound.size > 50_000) lastRound.clear();
+    lastRound.set(sessionId, round);
+    try {
+      const modelId = await resolveModel(user.modelId, admin.modelId);
+      if (modelId) await summarizeTanguSession({ ...s, user_id: userId }, modelId);
+    } finally {
+      busySessions.delete(sessionId);
+    }
+  } catch (e: any) {
+    console.warn(`[historian] tangu run ${runId} 维护失败:`, e?.message || e);
+  }
+}
 
 const TANGU_HISTORIAN_PROMPT =
   'You are a "historian" maintaining a chat session between a user and an AI assistant. ' +
@@ -228,12 +268,11 @@ function parseJudgement(raw: string): { title: string; log: string; memory: stri
 async function summarizeTanguSession(
   row: { id: string; user_id: string; title: any; agent_config: any },
   modelId: string,
-  resolved: Resolved,
 ): Promise<void> {
   const sessionId = String(row.id);
   const userId = String(row.user_id);
   const transcript = await buildTranscript(sessionId);
-  if (!transcript) { await markPass(sessionId); return; }
+  if (!transcript) return;
 
   // 会话绑定 agent → LOG/记忆落该 agent 的记忆域(cloudGetAgent 含内置预设兜底,resolveMemorySlug 折叠 shareDefaultMemory);
   // 解析失败/未绑定 → 默认记忆域。seams 的 memory 实现读 runContext 的 currentAgentSlug。
@@ -249,13 +288,29 @@ async function summarizeTanguSession(
       else scopeKnown = false;
     }
   } catch { scopeKnown = false; }
-  // 每个会话都重设:enterWith 改的是 tick 整条异步链,上一个会话的 slug 会漏给下一个未绑定 agent 的会话。
-  enterRunContext(userId, undefined, memSlug);
+  // 记忆域用 als.run 包住整段(不用 enterWith):回调跑在上报 done 的请求链上,不能改它的上下文,也不能串给别的会话。
+  await runWithUserAgentScope(userId, memSlug || '', () => judgeAndWrite(row, modelId, transcript, scopeKnown, memSlug));
+}
+
+async function judgeAndWrite(
+  row: { id: string; user_id: string; title: any },
+  modelId: string,
+  transcript: string,
+  scopeKnown: boolean,
+  memSlug: string | undefined,
+): Promise<void> {
+  const sessionId = String(row.id);
+  const userId = String(row.user_id);
+  const { model, apiKey, baseUrl, apiModelId } = await resolveModelAndKey(modelId);
+  // 额度预检:刚跑完一轮的用户可能正好用尽 —— 用尽就静默跳过这一轮(不报错、不欠费)。
+  const est = await calculateCost(modelId, (MEMORY_CONTEXT_CHARS + transcript.length + 2000) / 4, 800, model).catch(() => 0);
+  const pre = await canConsumeTokenPoints(userId, est).catch(() => ({ ok: false }));
+  if (!pre.ok) return;
 
   let existingMemory = '';
   try { existingMemory = String((await deps().brain.memory.getMemory(userId)).content || '').slice(-MEMORY_CONTEXT_CHARS); } catch { /* 读不到就不给 */ }
 
-  const { model, apiKey, baseUrl, apiModelId } = resolved;
+  const signal = AbortSignal.timeout(JUDGE_TIMEOUT_MS);
   const sys = `${TANGU_HISTORIAN_PROMPT}\nCurrent session title: ${JSON.stringify(String(row.title || ''))}`;
   const messages = [
     { role: 'system', content: sys },
@@ -267,19 +322,22 @@ async function summarizeTanguSession(
     temperature: 0.3,
     maxTokens: 800,
     stream: true,
+    signal,
     thinkingLevel: 'low', // 缺省档在 DeepSeek 类端点 = high,推理吃光 maxTokens 就只剩空正文
   });
-  const res = await streamProviderCompletion({ apiKey, baseUrl, payload });
+  const res = await streamProviderCompletion({ apiKey, baseUrl, payload, provider: (model as any)?.provider, signal });
 
+  // 按实际用量扣用户主额度(与桌面 Historian 同一个桶),不论判断能否解析 —— 模型已经跑了。
+  // 端列(client)留空:server 只认 muse/automation 后台标签,不给这里另造一个它解析不了的标签。
   try {
+    const cost = await calculateCost(modelId, res.usage.prompt_tokens, res.usage.completion_tokens, model);
+    await consumeTokenPoints(userId, cost).catch((e: any) => console.warn(`[historian] tangu 扣费失败 user=${userId} cost=${cost}:`, e?.message || e));
     const user = await getUserById(userId);
-    const cost = await calculateCost(modelId, res.usage.prompt_tokens, res.usage.completion_tokens);
     await logApiUsage(
       user?.username || userId, modelId, model.name, model.provider,
       res.usage.prompt_tokens, res.usage.completion_tokens, true, undefined, 'tangu-historian', cost,
     );
-    if (HISTORIAN_CHARGE_USER) await consumeTokenPoints(userId, cost).catch(() => {});
-  } catch { /* 记账失败不阻断复盘 */ }
+  } catch { /* 记账失败不阻断维护 */ }
 
   const j = parseJudgement(String(res.content || ''));
   if (!j) console.warn(`[historian] tangu session ${sessionId} 判断输出不是 JSON: "${String(res.content || '').slice(0, 80)}"`);
@@ -301,5 +359,4 @@ async function summarizeTanguSession(
       if (r?.reason === 'full') break;
     }
   }
-  await markPass(sessionId);
 }
