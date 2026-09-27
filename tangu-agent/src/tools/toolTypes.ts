@@ -57,6 +57,11 @@ export interface ToolContext {
    *  「不能删/改自己」守卫按**执行身份**判,具名子代理 B 在自己的 ALS 里跑时 A 就成了「别人」——
    *  A 借 B 之手删改 A 自己,等于子代理比父代理更强(Codex 09-15 复审 #1)。守卫因此同时保护本字段。 */
   subAgentDelegator?: string;
+  /** 父 run 的成本闸(TANGU_MAX_RUN_COST)接缝,主 loop 挂上、子代理随 parentCtx 拿到:子代理走 noopBilling,
+   *  它每轮的计价由这里记进父 run 的累计成本,越限后它自己停、父 run 下一轮按 run_cost_exceeded 收尾。
+   *  没挂(Muse 判官 / 测试替身等)= 不记账、不设闸,与改动前一致。 */
+  chargeRunCost?: (cost: number) => void;
+  runCostExceeded?: () => boolean;
   /** 本 run 激活的 Normal Agent 定义 slug(start_discussion 的「分身」据此取主 agent 人设;缺省=默认 agent)。 */
   agentSlug?: string;
   /** 讨论 run 标记:start_discussion 起的后台群聊 run 内,start_discussion/wait_discussion 不可见(防递归)。 */
@@ -151,6 +156,8 @@ export interface ToolContext {
   getWorkingMessages?: () => any[];
   /** Current user-provided image attachments, retained independently of vision/compaction. No history or disk fallback. */
   getImageInputs?: () => ReadonlyArray<{ url: string }>;
+  /** 本 run 实际用的上下文窗口(token;Ultra 不封顶)。self_brainstorm 的超窗护栏与主 loop 同一分母;只有主 agentLoop 装配。 */
+  contextWindow?: number;
 }
 
 /** Agent Desk 演出请求:views=从上到下的展示项(file=本地文件;view=已注册的桌面视图,含插件注册);

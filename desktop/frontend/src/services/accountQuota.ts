@@ -63,7 +63,7 @@ export function subscribeAccountQuota(listener: (quota: AccountQuotaView | null)
   return () => window.removeEventListener(ACCOUNT_QUOTA_EVENT, onQuota)
 }
 
-function remainingPercent(
+export function remainingPercent(
   limitValue: unknown,
   remainingValue: unknown,
   usedPercentValue: unknown,

@@ -140,59 +140,59 @@ registerMessages({
     "en": "Full access"
   },
   "input.thinking.off": {
-    "zh": "思考·关",
+    "zh": "思考 · Off",
     "en": "Thinking · Off"
   },
   "input.thinking.minimal": {
-    "zh": "思考·极简",
+    "zh": "思考 · Minimal",
     "en": "Thinking · Minimal"
   },
   "input.thinking.low": {
-    "zh": "思考·浅",
+    "zh": "思考 · Low",
     "en": "Thinking · Low"
   },
   "input.thinking.medium": {
-    "zh": "思考·中",
+    "zh": "思考 · Medium",
     "en": "Thinking · Medium"
   },
   "input.thinking.high": {
-    "zh": "思考·深",
+    "zh": "思考 · High",
     "en": "Thinking · High"
   },
   "input.thinking.xhigh": {
-    "zh": "思考·极深",
+    "zh": "思考 · Extra high",
     "en": "Thinking · Extra high"
   },
   "input.thinking.max": {
-    "zh": "思考·拉满",
+    "zh": "思考 · Max",
     "en": "Thinking · Max"
   },
   "input.thinkingShort.off": {
-    "zh": "标准",
+    "zh": "Standard",
     "en": "Standard"
   },
   "input.thinkingShort.minimal": {
-    "zh": "极简",
+    "zh": "Minimal",
     "en": "Minimal"
   },
   "input.thinkingShort.low": {
-    "zh": "浅",
+    "zh": "Low",
     "en": "Low"
   },
   "input.thinkingShort.medium": {
-    "zh": "中",
+    "zh": "Medium",
     "en": "Medium"
   },
   "input.thinkingShort.high": {
-    "zh": "深",
+    "zh": "High",
     "en": "High"
   },
   "input.thinkingShort.xhigh": {
-    "zh": "极深",
+    "zh": "X-high",
     "en": "X-high"
   },
   "input.thinkingShort.max": {
-    "zh": "拉满",
+    "zh": "Max",
     "en": "Max"
   },
   "input.slash.thinkSet": {

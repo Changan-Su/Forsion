@@ -15,7 +15,9 @@ Agent 也可能来自**插件捆绑包(bundle)播种**:安装带 `agents/` 子�
 
 `~/.tangu/agents/<slug>/`(slug = 小写字母数字与连字符):
 
-- **config.toml** — 参数 + `developer_instructions`(该 agent「做什么 / 怎么做 / 必读什么」的开发指令)。键:`name`、`description`、`model`(覆盖会话模型,可空)、`tools`(启用的工具 id 白名单,可空=继承)、`model_reasoning_effort`(off/low/medium/high)、`approval_mode`(readonly/auto-edit/full-auto)、`max_iterations`(1~200)、`library_order`(Library 优先阅读顺序)、`avatar`(Library 内头像文件名)。
+- **config.toml** — 参数 + `developer_instructions`(该 agent「做什么 / 怎么做 / 必读什么」的开发指令)。键:`name`、`description`、`model`(覆盖会话模型,可空)、`tools`(启用的工具 id 白名单,可空=继承)、`model_reasoning_effort`(off/low/medium/high)、`max_iterations`(1~200)、`library_order`(Library 优先阅读顺序)、`avatar`(Library 内头像文件名)。
+  **审批档只归用户**:agent 的审批档(config.toml 里的 `approval_mode`)只能由用户在设置里改 —— `manage_agent` 不接受 `approval_mode` 参数(传了会报错、什么都不写),
+  也不要用文件工具去改它。新建的 agent 没有自己的审批档,跟随会话;`update` 保留用户设的原值。
 - **SOUL.md** — 人格设定:语气、态度、价值观(区别于「做什么」的开发指令,这里塑造「怎么说话、是个怎样的存在」)。
 - **MEMORY.md** — 该 agent 自己的长期记忆(用 `remember` 工具写,跨会话保留):**世界是什么样**。
 - **HARNESS.md** — 该 agent 的「工作笔记」:**我该怎么干活**。这是 agent **唯一自有、可自我进化**的一层
@@ -46,7 +48,6 @@ Agent 也可能来自**插件捆绑包(bundle)播种**:安装带 `agents/` 子�
   "system_prompt": "你是一位资深代码审查员。聚焦正确性与边界条件、安全漏洞、并发与性能、可读性与命名、错误处理与测试覆盖;按「严重/建议/提示」分级给出可操作修改并解释原因。",
   "soul": "严谨、细心、对事不对人。不空泛表扬,只在确有问题时指出。",
   "thinking_level": "medium",
-  "approval_mode": "auto-edit",
   "max_iterations": 60
 }
 ```
@@ -68,7 +69,7 @@ Agent 也可能来自**插件捆绑包(bundle)播种**:安装带 `agents/` 子�
 2. **soul 塑造语气**:写得越具体生动越好;它决定 agent 的「人味」,与职责正交。
 3. **tools 白名单**:只给必需工具,留空=继承会话设置。
 4. **thinking_level**:off 快答 / low 日常(默认) / medium 复杂(代码审查) / high 研究型难题。
-5. **approval_mode**:readonly 只读 / auto-edit 自动小改 / full-auto 全自动(谨慎)。
+5. **审批档不归你管**:只能由用户在设置里改;需要更宽 / 更严的档,告诉用户去设置里调,别在 `manage_agent` 里传 `approval_mode`。
 6. **沉淀资料进 Library**:角色设定、长文档、工具手册等放进该 agent 的 `Library/`,并在 `developer_instructions` 里要求按需阅读;agent 自己也能用文件工具往 Library 写 / 读。
 7. **记忆与日志**:让 agent 用 `remember` 记长期事实 / 偏好、`log_event` 记当天产出——都落在该 agent 自己的 MEMORY.md / LOG/。
 8. **四层各就各位,别互相串**:`developer_instructions`(用户定的职责)/ SOUL.md(用户定的人格)/ MEMORY.md(记住的事实)

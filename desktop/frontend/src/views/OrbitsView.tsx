@@ -8,7 +8,7 @@
  * 作为 `extraRows` 交给 SidebarPane 与项目组按 `at` 合成一个列表(orderBy='activity');从未有过会话的沉底,同时间戳保持名册序。
  *
  * 三源分别取数、**不给 `WorkspaceDescriptor.kind` 加成员**(§D15:20+ 消费点全无穷举检查,加成员 tsc 零报错
- * 而行为异构漂移)。工作区固定 Work,胶囊只筛选 All / Agent / Team / Project;Agent 轨道为 host-only,
+ * 而行为异构漂移)。工作区固定 Work,胶囊只筛选 All / Agent / Team / Project;私聊为 host-only(云端 agent 行点击改开新对话),
  * 云端侧不列 Agent 轨道行(§3.5)。
  *
  * 样式全在 `chat2/orbits.css`(`.t2o-` 前缀,不改 `sidebar2.css` 本体);几何见该文件头注。
@@ -198,8 +198,11 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   // ── Agent 轨道 ───────────────────────────────────────────────────────────
   // 本地 agent:排除 createdBy:'system'(historian 之类的内建),但 Muse 例外 —— 它有自己的一行。
   // 顺序照 agentDefs 已有的顺序(= agents/.meta.json 的 order),不在这里另排一遍。
-  // host 闸:云端 agent 定义没有 libraryDir ⇒ 不能开私聊(D3 / §9 云端边界;引擎 solo 端点也是 404),不列;Muse 例外(它开的是 Space)。
-  const agents = useMemo(() => s.agentDefs.filter((a) => (a.createdBy !== 'system' || a.slug === 'muse') && (a.slug === 'muse' || !!a.libraryDir)), [s.agentDefs])
+  // 云端(web)的 agent 定义没有 libraryDir ⇒ 开不了私聊(引擎 solo 端点 404),但照样列出,点击改为「用该 Agent 开新对话」
+  // (09-27 用户报 web 看不到默认 Agent)。Muse 开的是 Space:web 上没注册它的 Space,只在本地(有 libraryDir)或 Space 已注册时列。
+  const hasMuseSpace = useSpaceStore((st) => st.spaces.some((x) => x.id === 'muse'))
+  const agents = useMemo(() => s.agentDefs.filter((a) => a.slug === 'muse' ? (hasMuseSpace || !!a.libraryDir) : a.createdBy !== 'system'), [s.agentDefs, hasMuseSpace])
+  const cloudAgent = (slug: string): boolean => !agents.find((a) => a.slug === slug)?.libraryDir
   const installedEngines = useMemo(() => s.engines.filter((e) => e.status !== 'not-installed'), [s.engines])
   /** 幽灵会话(creview 09-16):活动会话里带轨道身份、但对应实体已不在(agent 删了 / 引擎卸了 / 团队删了但会话未归档)——
    *  它们被 inOrbit 从项目区剔除,若不给一行入口,切走之后就再也回不去。每个身份一行「墓碑」,点击直接打开最新那条会话。 */
@@ -253,7 +256,6 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   // 高亮源 = 当前会话的轨道身份,不另造通道(§3.2)。
   const activeCfg = s.activeId ? s.configBySession[s.activeId] : undefined
   const activeSpaceId = useSpaceStore((st) => st.activeSpaceId)
-  const hasMuseSpace = useSpaceStore((st) => st.spaces.some((x) => x.id === 'muse'))
   // Agent workspaces are local-only; the cloud sidebar does not expose them.
   const showOrbitBlock = sideFilter !== 'cloud' && (agents.length > 0 || installedEngines.length > 0 || teams.length > 0 || tombstones.length > 0)
 
@@ -271,7 +273,8 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     const entryKey = `row:agent:${slug}`
     const url = s.agentAvatars[slug]
     const isMuse = slug === 'muse'
-    const active = isMuse ? activeSpaceId === 'muse' : activeCfg?.soloAgentSlug === slug
+    const cloud = !isMuse && cloudAgent(slug)
+    const active = isMuse ? activeSpaceId === 'muse' : cloud ? false : activeCfg?.soloAgentSlug === slug
     return (
       <button
         key={`agent:${slug}`}
@@ -279,7 +282,12 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
         className={`t2o-row${active ? ' active' : ''}`}
         data-pinned={isOrbitPinned(pinnedEntries, entryKey) ? 'true' : undefined}
         {...rowTip(name || slug, isMuse ? 'orbits.badge.proactive' : 'agentSelect.direct', `agent:${slug}`)}
-        onClick={() => { activatePinned(entryKey); isMuse ? openMuse() : openSolo('agent', slug) }}
+        onClick={() => {
+          activatePinned(entryKey)
+          if (isMuse) openMuse()
+          else if (cloud) { openNewChat(); useApp.getState().selectNewChatAgent(slug) }
+          else openSolo('agent', slug)
+        }}
         onContextMenu={(e) => openRowMenuAtPointer(e, 'agent', slug, entryKey)}
       >
         <span className="t2o-lead">
@@ -516,10 +524,12 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
           )}
           {rowMenu.kind === 'agent' && rowMenu.slug !== 'muse' && (
             <>
-              {/* 「新会话(先总结记忆)」= rotate 端点:归档旧私聊 + 建新,后台采记忆(§5.3)。 */}
-              <button type="button" onClick={() => { const slug = rowMenu.slug; setRowMenu(null); rotateSolo('agent', slug) }}>
-                <MessageSquarePlus size={13} /> {t('orbits.row.newSessionMemory')}
-              </button>
+              {/* 「新会话(先总结记忆)」= rotate 端点:归档旧私聊 + 建新,后台采记忆(§5.3)。云端 Agent 没有私聊,不给。 */}
+              {!cloudAgent(rowMenu.slug) && (
+                <button type="button" onClick={() => { const slug = rowMenu.slug; setRowMenu(null); rotateSolo('agent', slug) }}>
+                  <MessageSquarePlus size={13} /> {t('orbits.row.newSessionMemory')}
+                </button>
+              )}
               <button type="button" data-act="agent-details" onClick={() => { const slug = rowMenu.slug; setRowMenu(null); showDetails({ kind: 'agent', slug }) }}>
                 <Info size={13} /> {t('orbits.row.details')}
               </button>
@@ -527,7 +537,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
                 <Pencil size={13} /> {t('orbits.row.editAgent')}
               </button>
               {/* 默认 Agent 引擎拒删(同名册的禁用口径) */}
-              {rowMenu.slug !== 'xyra' && rowMenu.slug !== s.defaultAgentSlug && (
+              {rowMenu.slug !== 'xyra' && rowMenu.slug !== s.defaultAgentSlug && !cloudAgent(rowMenu.slug) && (
                 <button type="button" className="danger" data-act="agent-delete" onClick={() => { const def = agents.find((a) => a.slug === rowMenu.slug) || null; setRowMenu(null); setAgentRemoving(def) }}>
                   <Trash2 size={13} /> {t('orbits.row.deleteAgent')}
                 </button>

@@ -135,6 +135,34 @@ export interface TanguProbe {
   /** 用指定 Agent 开一个新对话(离开主页 Space → 新对话草稿 → 选 Agent → 预填或送出)。
    *  放行规则(send 只给自家捆绑 Agent、cwd 钳在库内)在 pluginStore 那层,这里只执行。 */
   startChat?(o: TanguStartChatOptions): Promise<TanguStartChatResult>
+  /** agent 自建 Space 读写自家数据(2026-09-27+);slug 没有数据源 → null(今天只有 muse)。
+   *  可选:台架假探针 / 纯 Amadeus 壳不给 = 插件那边整个没有 `ctx.agent`。 */
+  agentSelf?(slug: string): TanguAgentSelf | null
+}
+
+/** agent 自建 Space 读写自家数据(2026-09-27+):`ctx.agent` 的宿主实现。字段都是插件可见的契约,别塞绝对路径。 */
+export interface TanguAgentSelfStatus {
+  running: boolean
+  lastCycleAt: number | null
+  /** 自己定的休眠(心跳暂停到这个时刻);null = 醒着 */
+  sleepUntil: number | null
+  sleepReason: string | null
+  mode: 'ask' | 'agent' | 'auto'
+  heartbeatMinutes: number
+  pendingApprovals: number
+}
+export type TanguAgentTodoStatus = 'pending' | 'injected' | 'done' | 'dismissed'
+export interface TanguAgentTodo { id: string; title: string; detail: string | null; status: TanguAgentTodoStatus; createdAt: string }
+export interface TanguAgentScheduleEntry { id: string; name: string; date: string; repeat: string; auto: boolean; description: string; lastRun: string }
+export interface TanguAgentLibraryEntry { path: string; size: number; mtime: number; dir: boolean }
+export interface TanguAgentSelf {
+  status(): Promise<TanguAgentSelfStatus | null>
+  todos(status?: TanguAgentTodoStatus): Promise<TanguAgentTodo[]>
+  /** 只改 pending 的(CAS):别处已处理过的不许被一个旧界面改回去。alive() 为 false(插件等后端期间被停用)→ 不发请求、reject */
+  updateTodo(id: string, status: 'done' | 'dismissed', alive?: () => boolean): Promise<void>
+  schedule(): Promise<TanguAgentScheduleEntry[]>
+  libraryList(): Promise<TanguAgentLibraryEntry[]>
+  libraryRead(path: string): Promise<string>
 }
 
 let probe: TanguProbe | null = null

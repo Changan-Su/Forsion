@@ -461,6 +461,9 @@ export interface AgentConfig {
   engineModelId?: string
   maxIterations?: number
   thinkingLevel?: ThinkingLevel
+  /** Ultra 档(对标 Codex Ultra):思考恒 max + 主动把可并行的活拆给 delegate 子代理。会话键,与 thinkingLevel 分开存 ——
+   *  塞进 thinkingLevel 的话,读回时会被引擎的 normalizeThinkingLevel 归成 max,开关静默消失。只有本机非 chat 会话给入口。 */
+  ultra?: boolean
   enabledSkillIds?: string[]
   /** 本条消息经 /skill 显式点选的技能 id(per-message,加性:并入可用集 + 强制使用;不持久化、不收窄目录)。 */
   requestedSkillIds?: string[]
@@ -623,6 +626,8 @@ export interface ModelsResponse {
   contextWindowCap?: number
   /** 该引擎能不能写本机模型覆盖(PUT /agent/models/overrides 同一道 hostExec 门)。false / 缺省 = 不露「上下文上限」。 */
   modelOverridesWritable?: boolean
+  /** 引擎的 Ultra run 不受缺省上限约束(09-27)。缺省 = 老引擎,Ultra 也封顶:界面别按拉满显示窗口。 */
+  ultraUncapped?: boolean
   /** 云端托管面诊断:empty=可达但 admin 没配模型;error=不可达/未授权/未部署 brain-api。 */
   forsion?: { status: 'ok' | 'empty' | 'error'; detail: string | null }
 }
@@ -845,6 +850,8 @@ export interface CtxInfo {
   ctxWindowSource: string
   /** 模型本身的窗口(封顶前)。> ctxWindow 且来源不是 override = 被缺省上限封了顶。 */
   ctxWindowMax?: number
+  /** 这一轮的窗口按 Ultra 算(自动识别的不封顶,09-27)。与会话当前的 Ultra 开关不一致 = 切了开关还没跑下一轮,窗口已过时。 */
+  ultra?: boolean
   sections: Array<{ k: string; tokens: number }>
   files: string[]
   filesTruncated: boolean
@@ -1097,6 +1104,8 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   lastThinkingLevel?: ThinkingLevel
   /** chat 会话上次用的思考档 —— 与 work 的 lastThinkingLevel **分槽**(D36):chat 缺省「中」(09-19 前是 off);在 chat 里改档不污染下一个 work 会话。 */
   lastChatThinkingLevel?: ThinkingLevel
+  /** 上次在 work 会话里停在 Ultra 档(与 lastThinkingLevel='max' 同写;chat 槽没有 Ultra)。 */
+  lastUltra?: boolean
   backendState?: BackendStatusInfo
   /** 主进程附带的用户主目录(本机模式 cwd 兜底)。 */
   homeDir?: string

@@ -39,7 +39,7 @@ function check(name, ok, detail) {
 
 const CSS = fs.readFileSync(path.join(__dirname, '../frontend/src/views/chat2/composer2.css'), 'utf8')
 
-/** 复刻 Composer2 的进度圈结构(见 Composer2.tsx 的 t2c-ctxring 块)。 */
+/** 复刻 Composer2 的进度圈结构(见 Composer2.tsx 的 t2c-ctxring 块;弹层内容骨架见 ContextUsagePop.tsx)。 */
 const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
   :root { --bg-card:#fff; --bg:#fff; --border:#ddd; --border-width:1px; --overlay-light:#eee;
           --overlay-medium:#ddd; --text:#111; --text-muted:#666; --accent-ink:#4a6; --font-ui:system-ui; }
@@ -57,9 +57,9 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
         </svg>
       </button>
       <span class="t2c-ctxring-pop">
-        <span class="t2c-ctxring-pct">上下文 14%</span>
-        <span>17.6k / 128k tokens</span>
-        <button class="t2c-ctxring-compact" id="compact">压缩上下文</button>
+        <button type="button" class="t2c-cu-head" aria-expanded="false"><span class="t2c-cu-title">上下文窗口</span><span class="t2c-cu-num">17.6k / 128k tokens (14%)</span></button>
+        <span class="t2c-cu-bar"><span style="width:14%;background:#48c"></span></span>
+        <span class="t2c-cu-foot"><span>还剩 84.4k 触发自动压缩（102k，80%）</span><button class="t2c-ctxring-compact" id="compact">立即压缩</button></span>
       </span>
     </span>
   </div>

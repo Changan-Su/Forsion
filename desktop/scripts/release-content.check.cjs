@@ -13,10 +13,38 @@ const desktop = path.resolve(__dirname, '..')
 // and its own pin must still fail here. Changing this value costs every Mac user a new Accessibility and Screen
 // Recording grant.
 const CU_RELEASE_CERT_SHA1 = 'dab3a30e7568c7e2c021660b49398356a205a191'
+// The bundled-plugin list (electron/builtinBundles.json) is the single source: every entry must be pinned, packaged,
+// and (for packages with a main-process half) signed with the key pinned in that list. A package missing from
+// extraResources used to ship silently; now it fails here.
+const builtinBundles = require('../electron/builtinBundles.json')
 const expectedVersion = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8')).version
 const errors = []
 function check(ok, message) {
   if (!ok) errors.push(message)
+}
+/** Same rules as electron/bundleSignature.ts (kept in sync by hand: this script is CJS and cannot import it). */
+function verifyBundleSignature(dir, publicKeyPem, required) {
+  let sig
+  try { sig = JSON.parse(fs.readFileSync(path.join(dir, 'SIGNATURE'), 'utf8')) } catch (e) { return `no readable SIGNATURE: ${e.message}` }
+  if (sig.alg !== 'ed25519' || typeof sig.sig !== 'string' || !sig.files || typeof sig.files !== 'object') return 'SIGNATURE is malformed'
+  const entries = Object.entries(sig.files)
+  if (entries.length === 0 || entries.length > 5000) return `SIGNATURE lists ${entries.length} files`
+  for (const [rel, digest] of entries) {
+    if (!/^(?!\/)(?!.*(^|\/)\.\.(\/|$))[^\0]+$/.test(rel) || rel === 'SIGNATURE' || !/^[0-9a-f]{64}$/.test(digest)) return `bad entry ${JSON.stringify(rel)}`
+  }
+  const canonical = JSON.stringify(Object.fromEntries(entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))))
+  let ok = false
+  try { ok = crypto.verify(null, Buffer.from(canonical, 'utf8'), crypto.createPublicKey(publicKeyPem), Buffer.from(sig.sig, 'base64')) } catch (e) { return `signature check failed: ${e.message}` }
+  if (!ok) return 'signature does not match the pinned public key'
+  for (const rel of required) if (!(rel in sig.files)) return `${rel} is not covered by SIGNATURE`
+  for (const [rel, digest] of Object.entries(sig.files)) {
+    const file = path.join(dir, ...rel.split('/'))
+    let stat
+    try { stat = fs.lstatSync(file) } catch { return `${rel} is missing` }
+    if (!stat.isFile()) return `${rel} is not a regular file`
+    if (crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex') !== digest) return `${rel} does not match its signed hash`
+  }
+  return null
 }
 function findResources(dir, depth = 0) {
   if (fs.existsSync(path.join(dir, 'app.asar'))) return [dir]
@@ -41,10 +69,6 @@ for (const dir of resources) {
   let pkg = {}
   try { pkg = JSON.parse(readArchive('package.json')) } catch { errors.push(`${archive}: invalid package.json`) }
   check(pkg.version === expectedVersion, `App version ${pkg.version} != ${expectedVersion}`)
-  // 内置 CU = npm 上钉死的精确正式版(Dependabot 提 PR 升级);范围或本地 file: 依赖都会让安装包内容不可复现。
-  // 刻意不收预发布版:播种按 cmpVersion 比版本,它把 0.5.9-rc.1 排在 0.5.9 之上,内置过预发布版,正式版就永远换不上去。
-  const cuPinned = pkg.dependencies?.['@forsion/tangu-computer-use'] ?? ''
-  check(/^\d+\.\d+\.\d+$/.test(cuPinned), `CU dependency must be an exact release version, got "${cuPinned}"`)
   const engine = readJson(path.join(dir, 'tangu-server', 'package.json'))
   check(engine.version === expectedVersion, `Engine version ${engine.version} != ${expectedVersion}`)
 
@@ -55,7 +79,27 @@ for (const dir of resources) {
   }
   check(main.includes('[builtin-plugins]'), 'Builtin plugin seeding missing from main')
   check(main.includes('[builtin-updates]'), 'Builtin plugin npm updater missing from main')
+  check(main.includes('[cloud-host]') && preload.includes('cloud:present'), 'Builtin desktop-entry loader (cloudHost) missing from main/preload')
   check(preload.includes('desktopPermissionsStatus'), 'Permission status bridge missing')
+
+  // 每个内置包:npm 上钉死的精确正式版(Dependabot 提 PR 升级;范围或本地 file: 依赖都会让安装包内容不可复现;
+  // 刻意不收预发布版:播种按 cmpVersion 比版本,它把 0.5.9-rc.1 排在 0.5.9 之上,内置过预发布版,正式版就永远换不上去),
+  // 随包那份的 id / 版本对得上,带主进程半身的还要过清单里钉的公钥。
+  for (const bundle of builtinBundles) {
+    const pinned = pkg.dependencies?.[bundle.pkg] ?? ''
+    check(/^\d+\.\d+\.\d+$/.test(pinned), `${bundle.pkg} dependency must be an exact release version, got "${pinned}"`)
+    const bundleDir = path.join(dir, 'bundled-plugins', bundle.pkg.replace(/^@[^/]+\//, ''))
+    const manifest = readJson(path.join(bundleDir, 'manifest.json'))
+    const bundlePkg = readJson(path.join(bundleDir, 'package.json'))
+    check(manifest.id === bundle.id, `Packaged ${bundle.pkg} manifest id "${manifest.id}" != ${bundle.id}`)
+    check(manifest.version === pinned && bundlePkg.version === pinned, `Packaged ${bundle.pkg} ${bundlePkg.version} (manifest ${manifest.version}) differs from the pinned dependency ${pinned}`)
+    check(!fs.existsSync(path.join(bundleDir, 'node_modules')), `Packaged ${bundle.pkg} ships node_modules`)
+    if (bundle.desktop) {
+      check(fs.existsSync(path.join(bundleDir, ...bundle.desktop.entry.split('/'))), `${bundle.pkg} desktop entry ${bundle.desktop.entry} missing`)
+      const reason = verifyBundleSignature(bundleDir, bundle.desktop.signingKey, [bundle.desktop.entry, 'manifest.json'])
+      check(!reason, `Packaged ${bundle.pkg} is not signed with the pinned key: ${reason}`)
+    }
+  }
   let renderer = ''
   try {
     for (const entry of asar.listPackage(archive)) {
@@ -66,9 +110,6 @@ for (const dir of resources) {
   check(renderer.includes('desktopPermissions.title'), 'Permission UI missing from renderer')
 
   const cu = path.join(dir, 'bundled-plugins', 'tangu-computer-use')
-  const manifest = readJson(path.join(cu, 'manifest.json'))
-  const cuPkg = readJson(path.join(cu, 'package.json'))
-  check(manifest.version === cuPinned && cuPkg.version === cuPinned, `Packaged CU ${cuPkg.version} (manifest ${manifest.version}) differs from the pinned dependency ${cuPinned}`)
   check(fs.existsSync(path.join(cu, 'tangu-plugins', 'computer-use', 'dist', 'index.js')), 'CU engine bundle missing')
   check(fs.existsSync(path.join(cu, 'scripts', 'setup-helper.mjs')), 'CU setup script missing')
   // Verify sealed App ZIPs, not only loose bridge files. ZIP transport prevents

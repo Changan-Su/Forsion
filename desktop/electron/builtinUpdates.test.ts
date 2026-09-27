@@ -4,8 +4,11 @@ import { promises as fs, readFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { gzipSync } from 'node:zlib'
+import { sign } from 'node:crypto'
 import { checkBuiltinUpdates, registryOrder, tarballUrl, NPM_MIRROR, NPM_OFFICIAL, type RegistryFetch } from './builtinUpdates'
-import { seedBuiltinBundles, pendingDirFor, _resetBuiltinIdsForTest } from './builtinPlugins'
+import { seedBuiltinBundles, pendingDirFor, _resetBuiltinIdsForTest, type BuiltinSource } from './builtinPlugins'
+import { canonicalFiles } from './bundleSignature'
+import { testKeyPair } from './bundleSignature.testutil'
 
 const PKG = '@forsion/tangu-computer-use'
 const R1 = 'https://r1.test'
@@ -84,8 +87,9 @@ afterEach(async () => {
   await fs.rm(tmp, { recursive: true, force: true })
 })
 
+const cuSource = (): BuiltinSource => ({ pkg: PKG, id: 'tangu-computer-use', platforms: ['darwin', 'win32'], dir: src })
 const check = (fetch: RegistryFetch, extra: Partial<Parameters<typeof checkBuiltinUpdates>[0]> = {}) =>
-  checkBuiltinUpdates({ pluginsRoot: root, sources: [src], appVersion: '2.11.5', registries: [R1, R2], fetch, platform: 'darwin', log: (m) => logs.push(m), ...extra })
+  checkBuiltinUpdates({ pluginsRoot: root, sources: [cuSource()], appVersion: '2.11.5', registries: [R1, R2], fetch, log: (m) => logs.push(m), ...extra })
 const pending = (): string => pendingDirFor(root, src)
 
 describe('checkBuiltinUpdates', () => {
@@ -99,7 +103,7 @@ describe('checkBuiltinUpdates', () => {
     // 暂存区对两边加载器不可见:plugins/ 下除已装那份外只有点开头的目录
     expect((await fs.readdir(root)).filter((n) => !n.startsWith('.'))).toEqual(['tangu-computer-use'])
 
-    const r = await seedBuiltinBundles(root, [src], { platform: 'darwin', appVersion: '2.11.5', log: (m) => logs.push(m) })
+    const r = await seedBuiltinBundles(root, [src], { appVersion: '2.11.5', log: (m) => logs.push(m) })
     expect(r.updated).toEqual(['tangu-computer-use'])
     expect(await fs.readFile(path.join(root, 'tangu-computer-use', 'main.js'), 'utf8')).toBe('v0.5.6')
     expect(await fs.readdir(root)).toEqual(['tangu-computer-use'])
@@ -160,12 +164,50 @@ describe('checkBuiltinUpdates', () => {
     expect(reg.calls.filter((u) => u.endsWith('.tgz'))).toEqual([tarballUrl(R2, PKG, '0.5.6'), tarballUrl(R1, PKG, '0.5.6')])
   })
 
-  it('不播种的平台不查;镜像开关决定 registry 顺序', async () => {
-    const reg = registry(serve(R1, '0.5.6', tgz(pkgFiles('0.5.6'))))
-    expect(await check(reg.fetch, { platform: 'linux' })).toEqual([])
-    expect(reg.calls).toEqual([])
+  it('latest 是预发布版:不下载(cmpVersion 会把它排在同号正式版之上,进了暂存区正式版就永远换不上);镜像开关决定 registry 顺序', async () => {
+    const reg = registry(serve(R1, '0.5.6-rc.1', tgz(pkgFiles('0.5.6-rc.1'))))
+    expect(await check(reg.fetch)).toEqual([])
+    expect(reg.calls.filter((u) => u.endsWith('.tgz'))).toEqual([])
+    expect(logs.join('\n')).toContain('不是正式版')
     expect(registryOrder('china')).toEqual([NPM_MIRROR, NPM_OFFICIAL])
     expect(registryOrder(undefined)).toEqual([NPM_OFFICIAL, NPM_MIRROR])
+  })
+
+  it('带主进程半身的包:tarball 里的 SIGNATURE 用清单公钥验过才进暂存区;没签 / 签错 → 什么都不写', async () => {
+    const key = testKeyPair()
+    const EXT = '@forsion/extend'
+    const ext = path.join(tmp, 'bundled', 'extend')
+    await fs.mkdir(ext, { recursive: true })
+    await fs.writeFile(path.join(ext, 'manifest.json'), manifest('forsion-extend', '0.1.0'))
+    const extSource = (): BuiltinSource => ({ pkg: EXT, id: 'forsion-extend', platforms: ['darwin', 'win32', 'linux'], dir: ext, desktop: { entry: 'dist/desktop.mjs', signingKey: key.publicKeyPem } })
+    const files = (version: string): Record<string, string> => ({ 'manifest.json': manifest('forsion-extend', version), 'dist/main.js': '// r', 'dist/desktop.mjs': 'export const registerCloud = () => {}' })
+    const signed = (f: Record<string, string>, privateKey = key.privateKey): Record<string, string> => {
+      const digests = Object.fromEntries(Object.entries(f).map(([rel, body]) => [rel, createHash('sha256').update(body).digest('hex')]))
+      return { ...f, SIGNATURE: JSON.stringify({ alg: 'ed25519', files: digests, sig: sign(null, Buffer.from(canonicalFiles(digests), 'utf8'), privateKey).toString('base64') }) }
+    }
+    const serveExt = (buf: Buffer) => ({
+      [`${R1}/@forsion%2fextend`]: () => packument('0.2.0', sri(buf)),
+      [tarballUrl(R1, EXT, '0.2.0')]: () => new Response(new Uint8Array(buf)),
+    })
+    const checkExt = (routes: Record<string, () => Response>) =>
+      checkBuiltinUpdates({ pluginsRoot: root, sources: [extSource()], appVersion: '2.11.5', registries: [R1], fetch: registry(routes).fetch, log: (m) => logs.push(m) })
+    const pend = pendingDirFor(root, ext)
+    for (const [name, buf] of [['unsigned', tgz(files('0.2.0'))], ['other key', tgz(signed(files('0.2.0'), testKeyPair().privateKey))]] as const) {
+      logs = []
+      expect(await checkExt(serveExt(buf)), name).toEqual([])
+      expect(await fs.stat(pend).then(() => true, () => false), name).toBe(false)
+      expect(logs.join('\n'), name).toContain('signature')
+    }
+    expect(await checkExt(serveExt(tgz(signed(files('0.2.0')))))).toEqual(['forsion-extend@0.2.0'])
+    expect(JSON.parse(await fs.readFile(path.join(pend, 'SIGNATURE'), 'utf8')).alg).toBe('ed25519')
+
+    // 已装副本被改成 9.9.9 且验不过:不算「已有的版本」,照样下载正式版(否则更新器永远以为已是最新)
+    await fs.rm(pend, { recursive: true, force: true })
+    const installed = path.join(root, 'forsion-extend')
+    await fs.mkdir(path.join(installed, 'dist'), { recursive: true })
+    await fs.writeFile(path.join(installed, 'manifest.json'), manifest('forsion-extend', '9.9.9'))
+    await fs.writeFile(path.join(installed, 'dist', 'desktop.mjs'), 'evil')
+    expect(await checkExt(serveExt(tgz(signed(files('0.2.0')))))).toEqual(['forsion-extend@0.2.0'])
   })
 })
 

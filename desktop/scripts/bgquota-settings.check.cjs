@@ -73,6 +73,21 @@ async function main() {
   check('窄栏不横向溢出', narrow.left >= 0 && narrow.right <= narrow.viewport && narrow.scroll <= narrow.viewport, narrow)
   if (shot) await page.locator('.special-bgquota').screenshot({ path: path.join(out, 'bgquota-narrow.png') })
 
+  // ── 云端引擎(web/安卓):只有按轮 Historian 的开关 / 模型 / 轮数 / 首轮,外加额度说明(09-27)──
+  await page.setViewportSize({ width: 900, height: 1100 })
+  await page.goto(base.toString() + '?cloud')
+  await page.locator('.special-agent-content').waitFor()
+  const cloudText = await page.locator('.special-agents').textContent()
+  check('云端:没有 Muse 标签、没有模式选择、没有提示词', await page.locator('#special-muse-tab').count() === 0 && await page.locator('.special-choices').count() === 0 && await page.locator('textarea').count() === 0)
+  check('云端:写明按轮、计入 AI 额度、用完跳过', cloudText.includes('计入你的 AI 额度') && cloudText.includes('额度用完的那一轮会跳过'))
+  const rounds = page.getByRole('spinbutton').first()
+  await rounds.fill('4'); await rounds.press('Enter') // NumberField 失焦 / 回车才提交
+  await page.locator('.special-save .btn.primary').click()
+  await page.locator('.special-save').getByText('已保存').waitFor()
+  const posts = await page.evaluate(() => window.__bgHarness.posts)
+  check('云端:保存只发改动的 historian 键', posts.length === 1 && posts[0].historian && posts[0].historian.everyRounds === 4, posts)
+  if (shot) await page.locator('.special-agents').screenshot({ path: path.join(out, 'historian-cloud.png') })
+
   if (shot) {
     await page.setViewportSize({ width: 900, height: 1100 })
     await open('?dark&lang=en')

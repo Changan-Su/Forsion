@@ -25,9 +25,10 @@
  *   POST     /agent/special/approvals/:id/approve       用户批准 → 引擎按原参数执行(结果随响应回)
  *   POST     /agent/special/approvals/:id/reject        用户拒绝({ note? })
  *   GET      /agent/special/muse/library                Muse Library 目录树(桌面 Agent Space 左栏;含子目录)
+ *   GET      /agent/special/muse/library/file?path=     读 Library 里一个文本文件(Muse 自建 Space 的 ctx.agent.library.read)
  *   POST     /agent/special/muse/feedback { text }      往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等)
  *
- * 本地特性：profile.capabilities.hostExec=false（云端）一律 404。
+ * 本地特性：profile.capabilities.hostExec=false（云端）一律 404；例外 = /agent/special/config(云端返回每用户的按轮 Historian 设置)。
  */
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
@@ -38,7 +39,8 @@ import { isHistorianBusy } from '../services/localHistorian.js';
 import { hasHistorianTask } from '../services/historianSession.js';
 import { createRun } from '../services/runStore.js';
 import { enqueueRun } from '../services/agentLoop.js';
-import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt } from '../services/specialAgentsConfig.js';
+import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt, SPECIAL_AGENTS_DEFAULTS } from '../services/specialAgentsConfig.js';
+import { loadUserHistorianConfig, saveUserHistorianConfig, type UserHistorianConfig } from '../services/historianConfig.js';
 import { museStatus, kickMuse, getAutomationNotices } from '../services/muse.js';
 import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, type DbLike } from '../services/museTriggers.js';
 import { readDbOrNull } from '../services/amadeusDb.js';
@@ -72,8 +74,18 @@ async function appendMuseFeedback(userId: string, line: string): Promise<void> {
   } catch { /* 反馈写失败不阻断主流程 */ }
 }
 
-router.get('/agent/special/config', authMiddleware, async (_req: AuthRequest, res) => {
-  if (!ensureLocal(res)) return;
+/** 云端(web/安卓)只有按轮 Historian,每用户一份。回完整形状(Muse 等取缺省)让前端 dirty 判定稳定;cloud:true 让前端只露 Historian 的四项。 */
+const cloudConfigView = (h: UserHistorianConfig) => ({
+  config: { ...SPECIAL_AGENTS_DEFAULTS, historian: { ...SPECIAL_AGENTS_DEFAULTS.historian, ...h } },
+  defaults: { historianPrompt: '' },
+  cloud: true,
+});
+
+router.get('/agent/special/config', authMiddleware, async (req: AuthRequest, res) => {
+  if (!deps().profile.capabilities.hostExec) {
+    try { res.json(cloudConfigView(await loadUserHistorianConfig(req.user!.userId))); } catch (e: any) { res.status(500).json({ detail: e?.message || 'load config failed' }); }
+    return;
+  }
   try {
     res.json({
       config: loadSpecialAgentsConfig(),
@@ -87,7 +99,11 @@ router.get('/agent/special/config', authMiddleware, async (_req: AuthRequest, re
 });
 
 router.post('/agent/special/config', authMiddleware, async (req: AuthRequest, res) => {
-  if (!ensureLocal(res)) return;
+  if (!deps().profile.capabilities.hostExec) {
+    // 只收 historian 的四个键;旧版前端整包 POST 的 muse / mode / prompt 等一律忽略。
+    try { res.json(cloudConfigView(await saveUserHistorianConfig(req.user!.userId, (req.body || {}).historian || {}))); } catch (e: any) { res.status(400).json({ detail: e?.message || 'save config failed' }); }
+    return;
+  }
   try {
     const patch = req.body && typeof req.body === 'object' ? req.body : {};
     // 旧自定义 muse prompt 必须在保存前捕获:保存落盘的是 normalize 后的段(已不含 prompt 键)。
@@ -629,6 +645,65 @@ router.get('/agent/special/muse/library', authMiddleware, async (_req: AuthReque
   }
 });
 
+/** Library 单文件读取上限:Space 是拿来渲染的,再大就该自己分页 / 摘要,不该整份塞进渲染进程。 */
+const LIBRARY_READ_MAX = 1024 * 1024;
+
+// 读 Library 里一个文件(2026-09-27,Muse 自建 Space 的 ctx.agent.library.read)。只认 Library 内的普通文件:
+// 相对路径、不含 `..`、不读隐藏段(与目录树同口径);realpath 之后仍须在 Library 内 —— 软链指出去的一律不认。
+router.get('/agent/special/muse/library/file', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const rel = String(req.query.path || '').trim();
+    const segs = rel.split(/[\\/]/);
+    if (!rel || path.isAbsolute(rel) || segs.some((seg) => !seg || seg === '..' || seg.startsWith('.'))) {
+      return res.status(400).json({ detail: 'path must be a relative path inside the Library' });
+    }
+    const root = museLibraryDir();
+    let realRoot: string;
+    let real: string;
+    try {
+      realRoot = await fs.realpath(root);
+      real = await fs.realpath(path.resolve(root, rel));
+    } catch {
+      return res.status(404).json({ detail: 'not found' });
+    }
+    if (!real.startsWith(realRoot + path.sep)) return res.status(403).json({ detail: 'outside the Library' });
+    // 软链落到 Library 里的隐藏文件(public.md → .secret)也不认:隐藏段按**解析后**的真实路径再查一遍
+    if (path.relative(realRoot, real).split(path.sep).some((seg) => seg.startsWith('.'))) return res.status(403).json({ detail: 'hidden file' });
+    // 校验与读取之间换成软链(TOCTOU):O_NOFOLLOW 打开、大小与内容都走同一个句柄 —— 读到的就是刚才校验过的那个文件。
+    const fh = await fs.open(real, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0)).catch(() => null);
+    if (!fh) return res.status(404).json({ detail: 'not found' });
+    try {
+      const st = await fh.stat();
+      if (!st.isFile()) return res.status(404).json({ detail: 'not a file' });
+      // 中间目录在 realpath 与 open 之间被换成软链(O_NOFOLLOW 只管最后一段):打开之后再解析一次,
+      // 仍须落在 Library 内、不含隐藏段,且与打开的是同一个文件(dev+ino)—— 换过去又换回来也对不上号。
+      const again = await fs.realpath(real).catch(() => '');
+      const st2 = again ? await fs.stat(again).catch(() => null) : null;
+      if (!again.startsWith(realRoot + path.sep) || path.relative(realRoot, again).split(path.sep).some((seg) => seg.startsWith('.'))
+        || !st2 || st2.dev !== st.dev || st2.ino !== st.ino) {
+        return res.status(403).json({ detail: 'outside the Library' });
+      }
+      if (st.size > LIBRARY_READ_MAX) return res.status(413).json({ detail: `file too large (> ${LIBRARY_READ_MAX} bytes)` });
+      // 固定只读到上限 +1 字节、循环读到 EOF 或读满:stat 之后文件还在长(Muse 正往里追加)既不会整份读进内存,
+      // 也不会按旧大小截成半截还回 200(Codex 09-27)
+      const buf = Buffer.alloc(LIBRARY_READ_MAX + 1);
+      let n = 0;
+      while (n < buf.length) {
+        const { bytesRead } = await fh.read(buf, n, buf.length - n, n);
+        if (!bytesRead) break;
+        n += bytesRead;
+      }
+      if (n > LIBRARY_READ_MAX) return res.status(413).json({ detail: `file too large (> ${LIBRARY_READ_MAX} bytes)` });
+      res.json({ path: rel, content: buf.subarray(0, n).toString('utf8'), size: n, mtime: st.mtimeMs });
+    } finally {
+      await fh.close().catch(() => {});
+    }
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'library read failed' });
+  }
+});
+
 // 某会话的历次运行(muse 会话与自动化会话通用;只回自动化相关 kind,防任意会话被枚举 run 元数据)。
 
 router.get('/agent/special/automation/runs', authMiddleware, async (req: AuthRequest, res) => {
@@ -637,16 +712,25 @@ router.get('/agent/special/automation/runs', authMiddleware, async (req: AuthReq
     const sessionId = String(req.query.sessionId || '');
     if (!sessionId) return res.status(400).json({ detail: 'sessionId required' });
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+    // 会话必须是请求者自己的:muse 会话要展开成该用户全部 muse 会话的运行,不校验归属就能拿别人的 id 读别人的历史
     const own = await query<any[]>(
-      `SELECT 1 FROM chat_sessions WHERE id = ? AND kind IN ('muse', 'automation') LIMIT 1`,
-      [sessionId],
+      `SELECT kind, user_id FROM chat_sessions WHERE id = ? AND user_id = ? AND kind IN ('muse', 'automation') LIMIT 1`,
+      [sessionId, req.user!.userId],
     );
     if (!own.length) return res.status(404).json({ detail: 'session not found' });
-    const rows = await query<any[]>(
-      `SELECT id, status, tokens_total, error, created_at, updated_at FROM agent_runs
-       WHERE session_id = ? ORDER BY created_at DESC LIMIT ${limit}`,
-      [sessionId],
-    );
+    // Muse 每个周期一个新会话(09-27):它的「历次运行」要跨该用户全部 muse 会话列,只按传进来的会话列就只剩最近一次。
+    const rows = own[0].kind === 'muse'
+      ? await query<any[]>(
+        `SELECT r.id, r.status, r.tokens_total, r.error, r.created_at, r.updated_at FROM agent_runs r
+         JOIN chat_sessions s ON s.id = r.session_id
+         WHERE s.kind = 'muse' AND s.user_id = ? ORDER BY r.created_at DESC LIMIT ${limit}`,
+        [own[0].user_id],
+      )
+      : await query<any[]>(
+        `SELECT id, status, tokens_total, error, created_at, updated_at FROM agent_runs
+         WHERE session_id = ? ORDER BY created_at DESC LIMIT ${limit}`,
+        [sessionId],
+      );
     res.json({ runs: rows || [] });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'automation runs failed' });

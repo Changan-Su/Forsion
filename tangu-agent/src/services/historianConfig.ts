@@ -4,6 +4,7 @@
  * 仿 sandbox/sandboxConfig.ts，但值有 bool/num/str 三类（global_settings.value 是 TEXT）。
  */
 import { query } from '../core/db.js';
+import { SPECIAL_AGENTS_DEFAULTS } from './specialAgentsConfig.js';
 
 const K_ENABLED = 'agent_historian.enabled';
 const K_IDLE_MINUTES = 'agent_historian.idle_minutes';
@@ -76,4 +77,55 @@ export async function setHistorianConfig(p: Partial<HistorianConfig>): Promise<H
   if (p.idleMinutes != null) await writeStr(K_IDLE_MINUTES, String(clampInt(p.idleMinutes, 1, 1440)));
   if (p.modelId != null) await writeStr(K_MODEL_ID, String(p.modelId || ''));
   return loadHistorianConfig();
+}
+
+// ── 云端(web/安卓)每用户的按轮 Historian 设置 ────────────────────────────────────────
+// 桌面的同名设置落本机 config.json;云端没有本机文件,每用户一份存库。缺省与桌面一致:
+// 开、每 3 轮、首轮也触发、模型跟随云端。admin 的 agent_historian.enabled 仍是平台总开关。
+export interface UserHistorianConfig {
+  enabled: boolean;
+  modelId: string;        // '' = 跟随(admin 配的模型 → tangu 辅助模型槽 → 对话默认)
+  everyRounds: number;
+  firstRoundTrigger: boolean;
+}
+
+export const USER_HISTORIAN_DEFAULTS: UserHistorianConfig = {
+  enabled: true, // 桌面落盘缺省是 false,但升级迁移会一次性打开(applySpecialAgentEnableMigration)= 实际缺省开
+  modelId: SPECIAL_AGENTS_DEFAULTS.historian.modelId,
+  everyRounds: SPECIAL_AGENTS_DEFAULTS.historian.everyRounds,
+  firstRoundTrigger: SPECIAL_AGENTS_DEFAULTS.historian.firstRoundTrigger,
+};
+
+// ponytail: 每用户一行 global_settings(键带 userId),零迁移;每用户旋钮再多就该建 per-user 表。
+const userKey = (userId: string) => `agent_historian.user.${userId}`;
+
+function normalizeUser(raw: any): UserHistorianConfig {
+  const d = USER_HISTORIAN_DEFAULTS;
+  return {
+    enabled: typeof raw?.enabled === 'boolean' ? raw.enabled : d.enabled,
+    modelId: typeof raw?.modelId === 'string' ? raw.modelId.trim().slice(0, 200) : d.modelId,
+    everyRounds: raw?.everyRounds == null ? d.everyRounds : clampInt(Number(raw.everyRounds), 1, 100),
+    firstRoundTrigger: typeof raw?.firstRoundTrigger === 'boolean' ? raw.firstRoundTrigger : d.firstRoundTrigger,
+  };
+}
+
+/** 读失败 / 未设置 → 缺省。 */
+export async function loadUserHistorianConfig(userId: string): Promise<UserHistorianConfig> {
+  const v = await readStr(userKey(userId), '');
+  try { return normalizeUser(v ? JSON.parse(v) : {}); } catch { return { ...USER_HISTORIAN_DEFAULTS }; }
+}
+
+/** 只认四个键,其余字段(旧版前端整包 POST 的 muse / mode / prompt 等)忽略。 */
+export async function saveUserHistorianConfig(userId: string, patch: Partial<UserHistorianConfig>): Promise<UserHistorianConfig> {
+  const cur = await loadUserHistorianConfig(userId);
+  const p = patch && typeof patch === 'object' ? patch : {};
+  const next = normalizeUser({
+    ...cur,
+    ...('enabled' in p ? { enabled: p.enabled } : {}),
+    ...('modelId' in p ? { modelId: p.modelId } : {}),
+    ...('everyRounds' in p ? { everyRounds: p.everyRounds } : {}),
+    ...('firstRoundTrigger' in p ? { firstRoundTrigger: p.firstRoundTrigger } : {}),
+  });
+  await writeStr(userKey(userId), JSON.stringify(next));
+  return next;
 }

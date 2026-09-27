@@ -187,7 +187,8 @@ async function startStubEngine(data = {}) {
     }
     if (/^\/agent\/sessions\/[^/]+\/messages$/.test(p)) return json({ messages: state.messages });
     if (/^\/agent\/sessions\/[^/]+\/config$/.test(p)) {
-      const fixed = { execMode: 'host', approvalMode: 'auto-edit' };
+      // data.sessionConfigs[sid] 可给个别会话换存值(如云端 sandbox 会话);缺省 = 本机 host 会话。
+      const fixed = (data.sessionConfigs || {})[p.split('/')[3]] || { execMode: 'host', approvalMode: 'auto-edit' };
       if (req.method === 'PUT' || req.method === 'PATCH') {
         const config = await body();
         seen.configs.push({ sessionId: p.split('/')[3], method: req.method, config });

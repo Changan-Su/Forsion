@@ -51,7 +51,7 @@ jobs:
           npm run typecheck --prefix web
           npm run check:parity --prefix desktop
           cd desktop
-          npx vitest run electron/unit*.test.ts electron/backendRunner.test.ts electron/basicUnit.test.ts frontend/src/services/unitAccount.test.ts frontend/src/services/unitCloudTransport.test.ts frontend/src/features/nativeFeatures.test.ts
+          npx vitest run electron/unit*.test.ts electron/backendRunner.test.ts electron/basicUnit.test.ts electron/builtinBundles.test.ts frontend/src/services/unitAccount.test.ts frontend/src/services/unitCloudTransport.test.ts frontend/src/features/nativeFeatures.test.ts
       - name: Build independent Unit distribution
         run: node unit/build.mjs --package --local-plugins
       - uses: actions/upload-artifact@v4

@@ -8,7 +8,7 @@ import { ModelMetadata } from './ModelMetadata'
  * 高级区复用 config.json 的默认辅助 / 生图 / 识图模型槽；Effort 与模型一样由 store 记住，
  * 在后续会话继续继承。外部 ACP 引擎没有 Tangu 推理档与辅助模型时，保留单独的模型选择行。
  */
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronRight, Bot, Search } from 'lucide-react'
 import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, OverlayAt } from '@lcl/engine'
@@ -16,7 +16,7 @@ import type { NestedPanelPlacement } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'
 import { thinkingLabel } from './thinkingLabel'
-import type { AgentConfig, DefaultModelSlot, ModelInfo, ModelsResponse } from '../types'
+import type { AgentConfig, CtxInfo, DefaultModelSlot, ModelInfo, ModelsResponse } from '../types'
 
 registerMessages({
   'pill.rowAdvanced': { zh: '高级', en: 'Advanced' },
@@ -35,6 +35,11 @@ registerMessages({
   'pill.ctxDefault': { zh: '默认 · {n}', en: 'Default · {n}' },
   'pill.ctxMax': { zh: '最大 · {n}', en: 'Maximum · {n}' },
   'pill.ctxHint': { zh: '对本机这个模型的所有会话生效。超过 {n} 后每轮都要重发更多上下文，额度消耗随之上升。', en: 'Applies to every conversation with this model on this device. Past {n}, each turn resends more context, so usage rises with it.' },
+  'pill.ctxUltra': { zh: 'Ultra 下自动用满 {n}；关掉 Ultra 后按这里的设置。', en: 'Ultra uses the full {n} automatically. This setting applies again once Ultra is off.' },
+  // Ultra 是对标 Codex 的模式专名(同 Chat / Work),中文界面也写 Ultra(i18nCoverage F 已逐键登记)。
+  'pill.ultra': { zh: 'Ultra', en: 'Ultra' },
+  'pill.ultraNote': { zh: '思考拉满，主动并行派子代理', en: 'Max thinking + parallel subagents' },
+  'pill.ultraTitle': { zh: 'Ultra：思考拉满 + 主动并行派子代理（额度消耗会成倍增加）', en: 'Ultra: max thinking plus proactive parallel subagents (uses several times the quota)' },
 })
 
 export interface ModelPillOption extends Pick<ModelInfo, 'id' | 'name' | 'tags' | 'multiplier'> { description?: string; source?: ModelInfo['source'] }
@@ -48,14 +53,36 @@ const effortDisplay = (lv: Thinking, t: (key: string) => string): string => thin
 /** 与输入框进度环同一写法(272k / 1M);环在 Composer2 里,这边反向 import 会成环。 */
 const fmtWindow = (n: number): string => n >= 1e6 ? `${Math.floor(n / 1e5) / 10}M` : `${Math.floor(n / 100) / 10}k`
 
-/** 「上下文上限」行:模型本身窗口 > 缺省上限才有得开;已手动覆盖过的也露(好改回默认)。老引擎不下发 max/cap → null。 */
-export function contextLimitOptions(model: ModelInfo | undefined, cap: number | undefined): { current: number; defaultTokens: number; maxTokens?: number; selected: 'default' | 'max' | null } | null {
+/** Ultra 会话实际用的窗口(与引擎 effectiveContextWindowInfo(…, uncapped) 同口径,09-27):没手动覆盖的不封顶,覆盖照旧。 */
+export function ultraContextWindow(model: ModelInfo | undefined): number | undefined {
+  if (!model?.contextWindow) return undefined
+  return model.contextWindowSource === 'override' ? model.contextWindow : Math.max(model.contextWindow, model.maxContextWindow ?? 0)
+}
+
+/**
+ * 输入框进度环的分母(09-27 Ultra 拉满上下文)。上一轮 context_info 按另一种 Ultra 状态算的(切了开关、还没发下一条),
+ * 或还没有它而 Ultra 开着,就按下一轮会用的窗口现算;在飞的 run 照用它自己报的。stale = 那份 context_info 的窗口相关项
+ * (压缩线、封顶提示)已不作数。引擎没声明 ultraUncapped(老引擎 Ultra 也封顶、context_info 不带 ultra)时 Ultra 不影响窗口。
+ * 按 ctxInfo.ultra 判而不是切换时清 store:重放事件会把旧的那份原样放回来。
+ */
+export function contextRingWindow(o: {
+  ctxInfo?: CtxInfo | null; contextWindow?: number; running?: boolean; ultra: boolean; model?: ModelInfo; engineUncapped?: boolean
+}): { window?: number; stale: boolean } {
+  const ultra = o.ultra && !!o.engineUncapped
+  const stale = !!o.ctxInfo && !o.running && !!o.ctxInfo.ultra !== ultra
+  if (!stale && (o.ctxInfo || !ultra)) return { window: o.contextWindow, stale }
+  return { window: (ultra ? ultraContextWindow(o.model) : o.model?.contextWindow) || o.contextWindow, stale }
+}
+
+/** 「上下文上限」行:模型本身窗口 > 缺省上限才有得开;已手动覆盖过的也露(好改回默认)。老引擎不下发 max/cap → null。
+ *  ultra:行上显示 Ultra 下实际用的窗口;两个选项与勾选仍描述本机存的按模型设置(关掉 Ultra 后照它)。 */
+export function contextLimitOptions(model: ModelInfo | undefined, cap: number | undefined, ultra = false): { current: number; defaultTokens: number; maxTokens?: number; selected: 'default' | 'max' | null } | null {
   const max = model?.maxContextWindow
   if (!model?.contextWindow || !max || !cap) return null
   const overridden = model.contextWindowSource === 'override'
   if (max <= cap && !overridden) return null
   return {
-    current: model.contextWindow,
+    current: (ultra && ultraContextWindow(model)) || model.contextWindow,
     defaultTokens: Math.min(max, cap),
     ...(max > cap ? { maxTokens: max } : {}),
     // 设置页手填的其它值(如 500000)两档都不打勾,行上照实显示当前值
@@ -68,6 +95,14 @@ export function effortAt(index: number): Thinking {
   return THINKING_LEVELS[Math.max(0, Math.min(THINKING_LEVELS.length - 1, Math.round(index)))]
 }
 
+/** 带 Ultra 的滑杆:七档之后多一格。Ultra = { max, ultra:true };其余格 = 该档 + ultra:false(显式关)。
+ *  不把 'ultra' 塞进 THINKING_LEVELS —— 那张表还喂 Agent 档案 / 团队 / 项目设置等七八处下拉,它们都没有 Ultra。 */
+export function effortStopAt(index: number, allowUltra: boolean): { level: Thinking; ultra?: boolean } {
+  const i = Math.round(index)
+  if (allowUltra && i >= THINKING_LEVELS.length) return { level: 'max', ultra: true }
+  return { level: effortAt(i), ...(allowUltra ? { ultra: false } : {}) }
+}
+
 /** 高级区各模型槽的候选过滤规则（与设置页一致）。 */
 export function catalogForDefaultSlot(models: ModelInfo[], slot: DefaultModelSlot): ModelInfo[] {
   if (slot === 'imageModelId') return models.filter((m) => m.modelType === 'image_gen')
@@ -75,16 +110,23 @@ export function catalogForDefaultSlot(models: ModelInfo[], slot: DefaultModelSlo
   return slot === 'visionModelId' ? llms.filter((m) => m.supportsVision !== false) : llms
 }
 
-/** 仅当文本溢出才在 hover 时跑马灯。 */
+/** 仅当文本溢出才在 hover 时跑马灯。位移按实测溢出量(scrollWidth − clientWidth)走 --marquee-shift,宽度一变
+ *  (展开、Ultra 标签占位、窄栏)就重新量 —— 原来写死按 160px 框算、只在文字变化时量,名字被挤窄时不滚或滚不到头(creview 09-27)。 */
 const MarqueeLabel: React.FC<{ text: string }> = ({ text }) => {
   const ref = useRef<HTMLSpanElement>(null)
-  const [over, setOver] = useState(false)
-  useEffect(() => {
+  const [shift, setShift] = useState(0)
+  useLayoutEffect(() => {
     const el = ref.current
-    if (el) setOver(el.scrollWidth > el.clientWidth + 2)
+    if (!el) return
+    const measure = (): void => setShift(Math.max(0, el.scrollWidth - el.clientWidth))
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
   }, [text])
   return (
-    <span ref={ref} className={`pill-marquee${over ? ' is-over' : ''}`}>
+    <span ref={ref} className={`pill-marquee${shift > 2 ? ' is-over' : ''}`} style={{ '--marquee-shift': `${shift}px` } as React.CSSProperties}>
       <span className="pill-marquee__inner">{text}</span>
     </span>
   )
@@ -140,7 +182,12 @@ export const ModelPill: React.FC<{
   groups: ModelPillGroup[]
   onSelect: (id: string) => void
   thinkingLevel?: Thinking
-  onThinkingChange?: (lv: Thinking) => void
+  /** 第二参只在 allowUltra 时给:true = 停在 Ultra 格,false = 其余格(显式关 Ultra)。 */
+  onThinkingChange?: (lv: Thinking, ultra?: boolean) => void
+  /** 滑杆在 max 之后多一格 Ultra(本机 work 会话才给:delegate 只在本机引擎有)。 */
+  allowUltra?: boolean
+  /** 会话的 Ultra 开关;allowUltra 时它压过 thinkingLevel 决定显示(引擎那边 ultra 也压过存值的档)。 */
+  ultra?: boolean
   /** 当前模型支持的思考档；不支持的档仍可选，由引擎自动降档。 */
   supportedThinking?: string[]
   /** 本 run 实际生效档；与请求档不同则在推理强度摘要中显示降档。 */
@@ -157,7 +204,7 @@ export const ModelPill: React.FC<{
   title?: string
 }> = ({
   className, menuPortal = false, open: controlledOpen, onOpenChange,
-  disabled, modelId, groups, onSelect, thinkingLevel, onThinkingChange, supportedThinking, effectiveThinking,
+  disabled, modelId, groups, onSelect, thinkingLevel, onThinkingChange, allowUltra = false, ultra, supportedThinking, effectiveThinking,
   modelsResponse, defaultModelIds, onDefaultModelChange, onContextWindowChange, emptyLabel, footnote, title,
 }) => {
   const { t } = useI18n()
@@ -182,8 +229,11 @@ export const ModelPill: React.FC<{
 
   useEffect(() => {
     if (!open) { setPane(null); setAdvanced(false); setQuery(''); return }
-    const onDown = (e: MouseEvent) => { if (!wrapRef.current?.contains(e.target as Node) && !menuRef.current?.contains(e.target as Node)) setPillOpen(false) }
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setPillOpen(false) }
+    // data-keep-menus:从本菜单弹出的确认框(开 Ultra)—— 点它、在它里面按 Esc 都不算离开菜单
+    const keep = (t: EventTarget | null): boolean => !!(t as HTMLElement | null)?.closest?.('[data-keep-menus]')
+    const onDown = (e: MouseEvent) => { if (!keep(e.target) && !wrapRef.current?.contains(e.target as Node) && !menuRef.current?.contains(e.target as Node)) setPillOpen(false) }
+    // 确认框开着时 Esc 只关确认框(焦点被 Tab 到背景也一样),不连带关菜单
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !document.querySelector('[data-keep-menus]')) setPillOpen(false) }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
     return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey) }
@@ -234,19 +284,33 @@ export const ModelPill: React.FC<{
   const current = all.find((m) => m.id === modelId) || modelsResponse?.models.find((m) => m.id === modelId)
   const readonly = !onThinkingChange && !hasModels && !!emptyLabel
   const label = current?.name || emptyLabel || t('input.selectModel')
-  const effLevel: Thinking = thinkingLevel || 'medium'
-  const effortText = effortDisplay(effLevel, t)
+  const isUltra = allowUltra && !!ultra
+  // Ultra 开着时请求档恒 max(引擎同口径),存值是什么都不看。
+  const effLevel: Thinking = isUltra ? 'max' : thinkingLevel || 'medium'
+  const effortText = isUltra ? t('pill.ultra') : effortDisplay(effLevel, t)
   const effort = effLevel !== 'off' ? ` · ${effortText}` : ''
-  const effortIndex = Math.max(0, THINKING_LEVELS.indexOf(effLevel))
-  const effortPct = `${(effortIndex / (THINKING_LEVELS.length - 1)) * 100}%`
-  const effortThumbLeft = `calc(${effortPct} + ${(0.5 - effortIndex / (THINKING_LEVELS.length - 1)) * 25}px)`
+  const lastStop = THINKING_LEVELS.length - (allowUltra ? 0 : 1)
+  const effortIndex = isUltra ? lastStop : Math.max(0, THINKING_LEVELS.indexOf(effLevel))
+  const effortPct = `${(effortIndex / lastStop) * 100}%`
+  const effortThumbLeft = `calc(${effortPct} + ${(0.5 - effortIndex / lastStop) * 25}px)`
   const effectiveText = effectiveThinking && effectiveThinking !== effLevel
     ? ` → ${effortDisplay(effectiveThinking as Thinking, t)}`
     : ''
   const isMax = effLevel === 'max'
+  const effortCls = `${isMax ? ' is-max' : ''}${isUltra ? ' is-ultra' : ''}`
+  // 冲击波只在菜单开着时「刚切进 Ultra」放一次(动画结束即卸载);重开菜单、启动时本来就是 Ultra 都不放。
+  const [burst, setBurst] = useState(0)
+  const prevUltra = useRef(isUltra)
+  useEffect(() => {
+    if (isUltra && !prevUltra.current && open) setBurst((n) => n + 1)
+    prevUltra.current = isUltra
+  }, [isUltra, open])
+  // 动画没放完就关了菜单:元素卸载、onAnimationEnd 不会来,不清的话重开菜单会重播(creview 09-27)
+  useEffect(() => { if (!open) setBurst(0) }, [open])
+  const ultraNoteId = useId()
   // 能不能写由引擎说了算(桌面连外部 / 云端 worker 那边 PUT 404):别按宿主猜
   const ctx = onContextWindowChange && modelId && modelsResponse?.modelOverridesWritable
-    ? contextLimitOptions(modelsResponse.models.find((m) => m.id === modelId), modelsResponse.contextWindowCap)
+    ? contextLimitOptions(modelsResponse.models.find((m) => m.id === modelId), modelsResponse.contextWindowCap, isUltra && !!modelsResponse.ultraUncapped)
     : null
   const pickContext = (tokens: number | null): void => {
     setPane(null)
@@ -298,14 +362,17 @@ export const ModelPill: React.FC<{
   return (
     <span ref={wrapRef} className={`model-pill-wrap${open ? ' is-open' : ''}${className ? ` ${className}` : ''}`} data-cmenu>
       <button type="button"
-        className={`composer-chip model-pill-btn${open ? ' is-open' : ''}${isMax ? ' is-max' : ''}`}
+        className={`composer-chip model-pill-btn${open ? ' is-open' : ''}${effortCls}`}
         title={title || t('input.modelChipTitle')}
         disabled={disabled}
         aria-expanded={open}
         onClick={() => setPillOpen(!open)}
       >
         <Bot size={13} />
-        <MarqueeLabel text={label + effort} />
+        {/* Ultra:模型名照常字色,「Ultra」单独成渐变字标签(主次分明);包一层,展开态的三列网格(图标 | 标签 | 箭头)不被挤出第四列 */}
+        {isUltra
+          ? <span className="pill-ultra-label"><MarqueeLabel text={label} /><span className="pill-ultra-tag">{effortText}</span></span>
+          : <MarqueeLabel text={label + effort} />}
         <ChevronDown size={10} />
       </button>
       {open && (
@@ -323,7 +390,7 @@ export const ModelPill: React.FC<{
                   <div className="cm-advanced-list">
                     <div className="cm-row cm-row--static">
                       <span className="cm-row-k">{t('pill.reasoningStrength')}</span>
-                      <span className={`cm-row-v${isMax ? ' is-max' : ''}`}>{effortText}{effectiveText}</span>
+                      <span className={`cm-row-v${effortCls}`}>{effortText}{effectiveText}</span>
                     </div>
                     {onDefaultModelChange && slotRows.map(({ slot, label: rowLabel }) => (
                       <button type="button"
@@ -383,20 +450,25 @@ export const ModelPill: React.FC<{
             <ChevronRight size={13} />
           </button>
 
-          {/* 第三行：ChatGPT 式离散拖动条。Max 单独切换蓝紫渐变 + 星点层。 */}
+          {/* 第三行：ChatGPT 式离散拖动条。Max 单独切换蓝紫渐变 + 星点层；Ultra 把星点换成并行光流(几路子代理同时在跑)。 */}
           {onThinkingChange && (
-            <div className={`cm-effort${isMax ? ' is-max' : ''}`} data-effort={effLevel}>
+            <div className={`cm-effort${effortCls}`} data-effort={isUltra ? 'ultra' : effLevel}>
               <div className="cm-effort-head">
                 <span>{t('pill.rowEffort')}</span>
-                <span key={effLevel} className="cm-effort-value">{effortText}{effectiveText}</span>
+                <span key={isUltra ? 'ultra' : effLevel} className="cm-effort-value">{effortText}{effectiveText}</span>
               </div>
               <div className="cm-effort-ends"><span>{t('pill.faster')}</span><span>{t('pill.smarter')}</span></div>
               <div className="cm-effort-slider-wrap">
                 <span className="cm-effort-track" aria-hidden="true">
                   <span className="cm-effort-range" style={{ width: effortPct }} />
-                  {isMax && (
+                  {isMax && !isUltra && (
                     <span className="cm-effort-sparkles">
                       {Array.from({ length: 10 }, (_, i) => <i key={i} />)}
+                    </span>
+                  )}
+                  {isUltra && (
+                    <span className="cm-effort-streaks">
+                      {Array.from({ length: 4 }, (_, i) => <i key={i} />)}
                     </span>
                   )}
                   <span className="cm-effort-ticks">
@@ -404,25 +476,36 @@ export const ModelPill: React.FC<{
                       <i
                         key={lv}
                         className={`${i <= effortIndex ? ' is-on' : ''}${supportedThinking && !supportedThinking.includes(lv) ? ' is-unsupported' : ''}`}
-                        style={{ left: `${(i / (THINKING_LEVELS.length - 1)) * 100}%` }}
+                        style={{ left: `${(i / lastStop) * 100}%` }}
                       />
                     ))}
+                    {/* Ultra 格不按模型档位表标「不支持」:它上线就是 max,由引擎照常降档。 */}
+                    {allowUltra && <i key="ultra" className={`is-ultra-stop${isUltra ? ' is-on' : ''}`} style={{ left: '100%' }} />}
                   </span>
                 </span>
-                <span className="cm-effort-thumb" style={{ left: effortThumbLeft }} aria-hidden="true" />
+                <span className="cm-effort-thumb" style={{ left: effortThumbLeft }} aria-hidden="true">
+                  {burst > 0 && isUltra && <i key={burst} className="cm-effort-burst" onAnimationEnd={() => setBurst(0)} />}
+                </span>
                 <input
                   className="cm-effort-input"
                   type="range"
                   min={0}
-                  max={THINKING_LEVELS.length - 1}
+                  max={lastStop}
                   step={1}
                   value={effortIndex}
                   aria-label={t('pill.reasoningStrength')}
-                  aria-valuetext={`${effortText}${supportedThinking && !supportedThinking.includes(effLevel) ? ` ${t('pill.thinkUnsupported')}` : ''}`}
-                  title={t(thinkingLabelKey(effLevel))}
-                  onChange={(e) => onThinkingChange(effortAt(Number(e.currentTarget.value)))}
+                  // Ultra 格念完整说明(含额度提示):title 读屏不可靠,可见说明行另经 aria-describedby 关联
+                  aria-valuetext={isUltra ? t('pill.ultraTitle') : `${effortText}${supportedThinking && !supportedThinking.includes(effLevel) ? ` ${t('pill.thinkUnsupported')}` : ''}`}
+                  aria-describedby={isUltra ? ultraNoteId : undefined}
+                  title={isUltra ? t('pill.ultraTitle') : t(thinkingLabelKey(effLevel))}
+                  onChange={(e) => {
+                    const stop = effortStopAt(Number(e.currentTarget.value), allowUltra)
+                    if (allowUltra) onThinkingChange(stop.level, stop.ultra)
+                    else onThinkingChange(stop.level)
+                  }}
                 />
               </div>
+              {isUltra && <div id={ultraNoteId} className="cm-effort-note">{t('pill.ultraNote')}</div>}
             </div>
           )}
 
@@ -446,7 +529,10 @@ export const ModelPill: React.FC<{
                       <span className="mi-check">{ctx.selected === 'max' ? '✓' : ''}</span>
                     </button>
                   )}
-                  <div className="menu-section cm-foot">{t('pill.ctxHint', { n: fmtWindow(ctx.defaultTokens) })}</div>
+                  <div className="menu-section cm-foot">
+                    {isUltra && modelsResponse?.ultraUncapped && ctx.selected === 'default' && ctx.maxTokens ? <div>{t('pill.ctxUltra', { n: fmtWindow(ctx.maxTokens) })}</div> : null}
+                    {t('pill.ctxHint', { n: fmtWindow(ctx.defaultTokens) })}
+                  </div>
                 </>
               ) : (
                 <>

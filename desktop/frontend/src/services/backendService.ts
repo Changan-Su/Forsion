@@ -737,7 +737,7 @@ export const deletePluginFile = (cfg: TanguDesktopConfig, id: string, scope: str
 
 // ── Special Agents（Historian / Muse;本地后端）──
 export const getSpecialConfig = (cfg: TanguDesktopConfig) =>
-  request<{ config: SpecialAgentsConfig; defaults?: { historianPrompt: string } }>(cfg, '/agent/special/config')
+  request<{ config: SpecialAgentsConfig; defaults?: { historianPrompt: string }; cloud?: boolean }>(cfg, '/agent/special/config')
 
 export const saveSpecialConfig = (cfg: TanguDesktopConfig, patch: { historian?: Partial<SpecialAgentsConfig['historian']>; muse?: Partial<SpecialAgentsConfig['muse']> }) =>
   request<{ config: SpecialAgentsConfig }>(cfg, '/agent/special/config', { method: 'POST', body: JSON.stringify(patch) }).then((r) => r.config)
@@ -797,6 +797,12 @@ export const postMuseFeedback = (cfg: TanguDesktopConfig, text: string) =>
 /** Muse Library 目录树(Agent Space 左栏;root=绝对路径,files 为相对路径)。 */
 export const getMuseLibrary = (cfg: TanguDesktopConfig) =>
   request<{ root: string; files: MuseLibraryEntry[] }>(cfg, '/agent/special/muse/library', undefined, { timeoutMs: 30000 })
+
+/** 读 Library 里一个文本文件(Muse 自建 Space 的 ctx.agent.library.read;越界 / 隐藏 / 超 1MB 引擎侧拒)。 */
+export const getMuseLibraryFile = (cfg: TanguDesktopConfig, path: string) =>
+  request<{ path: string; content: string; size: number; mtime: number }>(
+    cfg, `/agent/special/muse/library/file?path=${encodeURIComponent(path)}`, undefined, { timeoutMs: 30000 },
+  )
 
 
 // ⚠️ 这两条是控制面(非流式),必须带超时:插件的「登记规则 / 停用规则」把它们放进了每插件串行链,

@@ -50,6 +50,8 @@ instructions = "always keep ticket ids and the failing test names"
 窗口本身另有一套:`modelOverrides.<id>.contextWindow` / 环境变量 `TANGU_MODEL_CONTEXT_WINDOWS` / 上游回学 / 族表(见 `contextBudget.ts` 头注)。
 09-22 起 run 用 `effectiveContextWindowInfo`(对标 Codex 目录的 `context_window` 272k / `max_context_window` 分离):**自动识别**出的窗口(模型自报 / 回学 / 族表 / 兜底)封顶 `CONTEXT_WINDOW_TOKENS`(272k,env `TANGU_CONTEXT_WINDOW_TOKENS` 同调兜底与上限);**人填的覆盖**(`modelOverrides` / env 表)不封顶 —— 桌面聊天框模型菜单的「上下文上限」与设置页窗口输入框写的都是 `modelOverrides`。`context_info` 多带 `ctxWindowMax`(封顶前的模型窗口),`/agent/models` 多带 `maxContextWindow` 与顶层 `contextWindowCap` / `modelOverridesWritable`(= PUT 覆盖的 hostExec 门,模型菜单据此露不露开关)。Historian fork 判官与自我脑暴分身的超窗护栏也按会话实际窗口算(它们是本会话的请求)。摘要目标(`resolveSummaryTarget` 换了摘要模型时)仍按未封顶的 `modelContextWindow` 算:它问的是摘要模型吃得下多少。
 
+**Ultra 不封顶(09-27)**:Ultra 会话(`agentConfig.ultra`,群聊不算,与思考档同一个 `ultraRequested`)自动识别的窗口不封顶,用到模型本身的上限(`effectiveContextWindowInfo(…, uncapped)`);人填的覆盖照旧说了算。触发线随之按大窗口算(1M → 950k,除非设了 `thresholdPercent`)。`context_info` 多带 `ultra`,`/agent/models` 顶层多带 `ultraUncapped:true` —— 桌面只在引擎声明了它时才按拉满显示窗口(老引擎 Ultra 照样封顶)。被 272k 遮住的「报大了的」目录 / 族表窗口在 Ultra 下会暴露成上游溢出 → 强制压缩重试 + 回学调小;要纠正用本机覆盖。实测:`TANGU_CONTEXT_WINDOW_TOKENS=100000 npm run live:harness -- --only ultra --model codex/gpt-5.6-luna`(Ultra 两跑 272000 / 对照 100000)。
+
 ## 事件
 
 **进度环在压缩之后读什么**(09-20 反馈「压缩完进度圈不更新,要发新消息才更新」)。环的缺省来源是「最近一条主循环 usage 的 prompt」,而三条压缩路径里只有 run 内那条之后才有 usage,还得等那次调用整轮跑完:

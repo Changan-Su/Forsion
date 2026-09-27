@@ -7,7 +7,7 @@
  * 文件夹、TODO 去重提示、本次触发原因）经 `input.ephemeralHint` 走尾部 user 通道注入：**不落库、不回放**
  * （2026-09-14：它是 5k 字符的时点摘要，落库后每个后续周期都要重发 N 份陈旧副本，缓存与窗口双输）。
  * 落库的 kickoff 只剩一段同配置下逐字不变的短指令 —— 会话内回放于是是稳定前缀。
- * 会话按消息数轮换（见 MUSE_SESSION_MAX_MESSAGES），运行态（lastCycleAt）落 ~/.tangu/muse-state.json（引擎自有状态域，**不在** Muse 可写的 agent 目录里）。
+ * **每个周期一个新会话**（见 MUSE_SESSION_MAX_MESSAGES），运行态（lastCycleAt）落 ~/.tangu/muse-state.json（引擎自有状态域，**不在** Muse 可写的 agent 目录里）。
  *
  * 运行形态（2026-09-10 权限档改版）：每个周期 = 在隔离的 kind='muse' 会话里起一个 run（经 agentLoop）。
  * Muse 不再跑只读 planMode,而是像普通 agent 一样按**权限档**工作(cfg.mode,与普通 agent 的审批档对齐):
@@ -43,7 +43,7 @@ import { loadSchedule, entriesOf, dueEntries, markEntryFired, type ScheduleEntry
 import { countPendingApprovals } from './pendingApprovals.js';
 import { sendInboxMessage, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
 import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
-import { museStateFile, readLastCycleAt, patchMuseState, getMuseSleep, setMuseSleep, type MuseSleep } from './museState.js';
+import { museStateFile, readLastCycleAt, readMuseSessionId, patchMuseState, getMuseSleep, setMuseSleep, type MuseSleep } from './museState.js';
 import { loadTriggers, evaluateTriggers, markTriggersFired, disableTriggers, disableTriggersWithReasons, buildTriggerKickoff, type MuseTrigger, type EventCursor, type DbLike } from './museTriggers.js';
 import { loadCursors, setCursors, pruneCursors } from './dbCursors.js';
 import { readDbOrNull } from './amadeusDb.js';
@@ -80,13 +80,24 @@ export function museJournalPath(date = localDate()): string {
 /** Muse 的运行态落盘(muse-state.json:lastCycleAt + set_next_wake 定的休眠)——实现与安全边界见 museState.ts。
  *  lastCycleAt 只住内存时**每次启动 app 都会在 15s 后必跑一个周期**(§3.4),开机频繁的用户等于把心跳配置架空。 */
 export { museStateFile, readLastCycleAt };
-export async function writeLastCycleAt(ms: number): Promise<void> {
-  try { await patchMuseState({ lastCycleAt: ms }); } catch (e: any) { log(`写 muse-state.json 失败:${e?.message || e}`); }
+export async function writeLastCycleAt(ms: number, sessionId?: string): Promise<void> {
+  try { await patchMuseState({ lastCycleAt: ms, ...(sessionId ? { sessionId } : {}) }); } catch (e: any) { log(`写 muse-state.json 失败:${e?.message || e}`); }
 }
 /** 进程内只读一次(tick 与 museStatus 都等它:桌面每 4s 轮询 status,比首个 tick 早 15 秒)。 */
 let stateLoad: Promise<void> | null = null;
 function loadMuseState(): Promise<void> {
-  if (!stateLoad) stateLoad = readLastCycleAt().then((v) => { if (v > lastCycleAt) lastCycleAt = v; });
+  if (!stateLoad) {
+    stateLoad = (async () => {
+      const v = await readLastCycleAt();
+      if (v > lastCycleAt) lastCycleAt = v;
+      // 活动会话指针(每个周期一个新会话):盘上记的那个还在库里才认,否则回落到按 created_at 查
+      const sid = await readMuseSessionId();
+      if (sid && !currentSessionId) {
+        const ok = await query<any[]>(`SELECT 1 FROM chat_sessions WHERE id = ? AND kind = 'muse' LIMIT 1`, [sid]).catch(() => []);
+        if (ok?.length && !currentSessionId) currentSessionId = sid;
+      }
+    })();
+  }
   return stateLoad;
 }
 export function localDate(d = new Date()): string {
@@ -251,13 +262,15 @@ function scheduleKickoff(due: ScheduleEntry[]): string {
 function tierKickoff(cfg: MuseConfig): string {
   const lib = museLibraryDir();
   const common = `Your workspace is your Library (${lib}): keep drafts, notes, plugin drafts and your daily journal (Journal/<date>.md) there — the user can browse it in the app. `;
+  // 「Space 目录免审」必须写进档位句本身:09-27 实机 Muse 只读到「Library 免审、别处排队」,把 Space 当成「Library 外」
+  // 等批准(实际 extraRoots 三档都放行),于是只敢改文案。
   if (cfg.mode === 'auto') {
-    return common + 'Permission tier: auto — you have full autonomy inside the authorized folders; every file edit is checkpointed so the user can rewind, but still avoid destructive or external actions.';
+    return common + 'Permission tier: auto — you have full autonomy inside the authorized folders and your Space folder; every file edit is checkpointed so the user can rewind, but still avoid destructive or external actions.';
   }
   if (cfg.mode === 'agent') {
-    return common + 'Permission tier: agent — writes inside your Library are free; writing anywhere else or running shell commands is first judged by the user\'s default agent on their behalf, and queued for the user if declined. Never retry a deferred action in this cycle.';
+    return common + 'Permission tier: agent — writes inside your Library and your Space folder are free; writing anywhere else or running shell commands is first judged by the user\'s default agent on their behalf, and queued for the user if declined. Never retry a deferred action in this cycle.';
   }
-  return common + 'Permission tier: ask — writes inside your Library are free; writing anywhere else or running shell commands is queued for the user\'s approval (the outcome shows up in your log next cycle as an [approval] entry). Never retry a deferred action in this cycle.';
+  return common + 'Permission tier: ask — writes inside your Library and your Space folder are free; writing anywhere else or running shell commands is queued for the user\'s approval (the outcome shows up in your log next cycle as an [approval] entry). Never retry a deferred action in this cycle.';
 }
 
 function log(msg: string): void {
@@ -273,11 +286,14 @@ function nowHour(): number {
   return new Date().getHours();
 }
 
-/** 轮换阈值:一个 Muse 会话攒够这么多条消息就换新的(2026-09-14 C1a)。
- *  从前取**最老**的那行永久复用 → 会话只涨不换,每个周期都在回放几十条陈旧周期,25/38 个周期在第 0 轮就撞压缩线。
- *  ponytail: 按**条数**而不是字节 —— 条数一眼可算、无需估 token。若 live 台架仍见第 0 轮压缩(工具结果嵌在
- *  assistant 行里、单条很肥),对策是把这个常数调小,不是改判据。 */
-export const MUSE_SESSION_MAX_MESSAGES = 30;
+/** 轮换阈值 = 1:会话里一有消息就换 → **每个周期一个新会话**(2026-09-27;09-14 C1a 定的是攒满 30 条)。
+ *  30 条时每个周期都把之前所有周期的对话连工具结果整段回放:实机开局上下文从 ~2.3 万 token 一路涨到 17–20 万,
+ *  而心跳间隔 2 小时、提示缓存撑不到下一轮 → 每个周期第一次调用就把这整段按未命中计费(24 个周期平均 ~15 万计费,
+ *  八成是在重放昨天的活动日志 / 旧 main.js / 技能全文)。连续性本来就不靠对话历史:kickoff 第一步 read_log
+ *  (每周期都有 log_event)、Journal、MEMORY、TODO 去重提示、[feedback]/[approval] 行。空会话(周期没写出消息就失败)照常复用。
+ *  ponytail: 留着轮换机制而不是删掉 —— 真要让间隔很近的规则周期共享上下文,把这个数调大即可。
+ *  仪器:live 台架 muse 场景的「开局上下文 周期1→周期2」(旧行为 ×2.6,判据 ≤ ×1.5)。 */
+export const MUSE_SESSION_MAX_MESSAGES = 1;
 
 /** 纯函数(单测钉):这个会话该退休了吗。 */
 export function shouldRotateMuseSession(messageCount: number): boolean {
@@ -312,10 +328,14 @@ export async function ensureMuseSession(userId: string, modelId: string): Promis
   return id;
 }
 
-async function isRunning(sessionId: string): Promise<boolean> {
+/** 该用户**任何** Muse 会话里有没有排队/运行中的 run。每个周期一个新会话(09-27)后不能只查「最新那行」:
+ *  本地 SQLite 的 created_at 只到秒,同一秒建的两个会话谁算最新不确定,会漏看正在跑的那个 → 重复起周期。
+ *  孤儿 running 行由引擎重启时的 failStaleRuns / recoverQueuedRuns 收掉,不会把 Muse 永久卡住(同 anyUserRunActive)。 */
+export async function anyMuseRunActive(userId: string): Promise<boolean> {
   const rows = await query<any[]>(
-    `SELECT 1 FROM agent_runs WHERE session_id = ? AND status IN ('queued', 'running') LIMIT 1`,
-    [sessionId],
+    `SELECT 1 FROM agent_runs r JOIN chat_sessions s ON s.id = r.session_id
+     WHERE s.kind = 'muse' AND s.user_id = ? AND r.status IN ('queued', 'running') LIMIT 1`,
+    [userId],
   );
   return !!rows.length;
 }
@@ -563,12 +583,20 @@ async function activityTailHint(): Promise<string> {
   }
 }
 
-/** Muse 自建 Space 的契约(每周期钉一次;绝对路径老用户的 config.toml 里没有)。写法交给 forsion-plugin 技能,这里只钉边界。 */
+/** Muse 自建 Space 的契约(每周期钉一次;绝对路径老用户的 config.toml 里没有)。写法交给 forsion-plugin 技能,这里只钉边界。
+ *  「文件本身就是 setup 函数体、别包 function setup」必须明说:从前只写「a bare main.js setup body」,09-27 实机 Muse 每一版都
+ *  包成 function setup(ctx){…} 却不调用 —— 零注册零报错,Space 从首建起一直空白。
+ *  ctx.agent(09-27):Space 从数据渲染,别再每周期把状态 / 时间戳写死重写一遍(实机 1.4.x 全是这种改动);核心契约写在这里,
+ *  84KB 的 forsion-plugin 技能只在要更多接口时才加载(实机 23 个周期里 13 次为改文案加载它)。 */
 function spaceKickoff(): string {
-  return `Your Space: the desktop's "Muse" Space renders the view you register from the Forsion plugin at ${museSpaceDir()} ` +
-    '(manifest.json + a bare main.js setup body — load the "forsion-plugin" skill before writing it). Register the main view as registerView({ id: "home", ... }); ' +
-    'plain JS, no build step, no CDN, no capabilities; bundle subfolders are inert there. It starts empty — build it and keep improving it across cycles. ' +
-    'It is reloaded after your cycle ends; a load failure reaches you as a [feedback] entry mentioning the Space.';
+  return `Your Space: the desktop's "Muse" Space shows the view registered by the Forsion plugin at ${museSpaceDir()} ` +
+    '(manifest.json + main.js; load the "forsion-plugin" skill only if you need more of the plugin API than this). ' +
+    'main.js runs as the body of setup(ctx), so call ctx.registerView({ id: "home", ... }) at the top level of the file. ' +
+    'Do not wrap the file in function setup(ctx) { ... } — nothing calls it, so nothing registers and no error is raised. ' +
+    'Render live data instead of hardcoding it: ctx.agent.status(), ctx.agent.todos(), ctx.agent.schedule(), ctx.agent.library.read(path) ' +
+    '(your Library, e.g. "Journal/<date>.md"; .list() for the tree), ctx.agent.subscribe(cb) to refresh; ctx.agent.updateTodo(id, "done" | "dismissed") works only inside a click handler on your Space. ' +
+    'Plain JS, no build step, no CDN. It starts empty: build it, then improve what it shows across cycles — never edit it just to refresh status or timestamps. ' +
+    'It is reloaded after your cycle ends; a load failure or a missing "home" view reaches you as a [feedback] entry mentioning the Space.';
 }
 
 /**
@@ -647,7 +675,7 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
   });
   currentSessionId = sessionId;
   lastCycleAt = Date.now();
-  void writeLastCycleAt(lastCycleAt); // 落盘:进程重启后不再「开机 15s 必跑一个周期」
+  void writeLastCycleAt(lastCycleAt, sessionId); // 落盘:进程重启后不再「开机 15s 必跑一个周期」;活动会话也记下(重启后 status 指回它)
   lastRunning = true;
   pendingJournal = { runId, sessionId, trigger, mode: cfg.mode, startedAt: lastCycleAt };
   enqueueRun(sessionId, runId);
@@ -748,7 +776,7 @@ async function tick(): Promise<void> {
     await sendDailyDigestIfDue(cfg, userId);
     // 后台让位：用户有进行中的 run → 不与之抢模型账号/速率，本轮跳过（下次巡检再来）。
     if (await anyUserRunActive()) { lastRunning = false; log('用户有进行中的 run，本轮让位'); return; }
-    // 起周期的三种理由(任一即可;都不豁免 isRunning/token/restarts 预算闸——防失控烧穿额度):
+    // 起周期的三种理由(任一即可;都不豁免 anyMuseRunActive/token/restarts 预算闸——防失控烧穿额度):
     //   ① 盯任务规则命中(museFired)② 自己 SCHEDULE.db 的到期条目(自触发/Track)③ 心跳到点(heartbeatHours,0=关)。
     // 2026-09-10 前的「无新用户消息就跳过」降为提示(quietSince 注入 kickoff):用户要的是「默认每 2 小时醒一次」,
     // 安静周期也要在 Journal 里留一笔,而不是静默消失。
@@ -763,8 +791,7 @@ async function tick(): Promise<void> {
       : dueMuse.length ? `schedule:${dueMuse.map((e) => e.name).join('+').slice(0, 60)}` : 'heartbeat';
 
     rollWindow(cfg);
-    const sid = currentSessionId || (await getMuseSessionId(userId));
-    if (sid && (await isRunning(sid))) { lastRunning = true; return; }
+    if (await anyMuseRunActive(userId)) { lastRunning = true; return; }
     lastRunning = false;
 
     // token 预算(两道,近 tokenBudgetWindowHours 小时、该用户全部 Muse 会话):任一超限本轮不起新周期。
@@ -873,7 +900,7 @@ export async function museStatus(): Promise<MuseStatus> {
   let running = lastRunning;
   try {
     sessionId = sessionId || (await getMuseSessionId(museUserId()));
-    running = sessionId ? await isRunning(sessionId) : false;
+    running = await anyMuseRunActive(museUserId());
   } catch { /* DB 不可用 → 回退进程内快照 */ }
   let pendingApprovals = 0;
   try { pendingApprovals = await countPendingApprovals(museUserId()); } catch { /* 表未建/DB 不可用 */ }

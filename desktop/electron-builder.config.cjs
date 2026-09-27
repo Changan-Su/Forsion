@@ -5,6 +5,9 @@
 const { readFileSync } = require('fs')
 const { join } = require('path')
 const { backendDependencyFilter } = require('./build/backend-dependencies.cjs')
+// 内置插件捆绑包清单(单一来源;electron/builtinPlugins.ts 播种、builtinUpdates 更新、release-content.check 核对都读它)。
+const builtinBundles = require('./electron/builtinBundles.json')
+const bundledDirName = (pkg) => pkg.replace(/^@[^/]+\//, '')
 
 const id = process.env.FORSION_PRODUCT || 'forsion'
 const product = JSON.parse(readFileSync(join(__dirname, 'products', `${id}.json`), 'utf8'))
@@ -71,7 +74,7 @@ module.exports = {
     '!node_modules/@rollup/**',
     '!node_modules/@types/**',
     // 内置插件捆绑包走 extraResources(见下),不进 asar 双份。
-    '!node_modules/@forsion/tangu-computer-use/**',
+    ...builtinBundles.map((b) => `!node_modules/${b.pkg}/**`),
   ],
   // sherpa-onnx-node(本地语音识别)是原生插件:.node + onnxruntime 动态库不能从 asar 内加载,整体解包。
   // node-pty(内置终端)同理,且它还要 **exec** spawn-helper / winpty-agent.exe —— asar 里的文件不能执行。
@@ -117,13 +120,14 @@ module.exports = {
           { from: 'unit-web-dist', to: 'unit-web' },
           // 内置插件捆绑包(electron/builtinPlugins.ts 启动时播种进 <home>/plugins/):来源是 package.json 钉死的 npm
           // 精确版本装进 node_modules 的包;放 resources 而非 asar —— 引擎是独立 node 进程,原地读 asar 里的目录读不到。
-          // 落点目录名 = 包名去 scope(builtinPlugins.bundledDirName),两边同一约定。
-          {
-            from: 'node_modules/@forsion/tangu-computer-use',
-            to: 'bundled-plugins/tangu-computer-use',
-            // CI 原生编译会留下数百 MB 的 Rust 中间文件；只交付 prebuilt 和源码。
+          // 落点目录名 = 包名去 scope(builtinPlugins.bundledDirName),两边同一约定;清单里每个包都要在,少了
+          // release-content.check 会红(不再静默漏包)。
+          ...builtinBundles.map((b) => ({
+            from: `node_modules/${b.pkg}`,
+            to: `bundled-plugins/${bundledDirName(b.pkg)}`,
+            // 电脑操作的 CI 原生编译会留下数百 MB 的 Rust 中间文件;只交付 prebuilt 和源码。别的包没有这个目录,过滤器无副作用。
             filter: ['**/*', '!native/**/target{,/**}'],
-          },
+          })),
         ]
       : []),
   ],

@@ -24,7 +24,8 @@ import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
 import { buildAgentRoster } from './agentRoster.js';
-import { AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
+import { AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
+import { resolveTools } from '../tools/toolRegistry.js';
 import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
 import { SKETCH_SECTION, sketchEnabledFor, sketchTurnSignalFor } from '../tools/builtin/sketch.js';
 import { loadTodos as loadSessionTodos, renderTodos, type TodoItem } from '../tools/builtin/todo.js';
@@ -846,7 +847,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const MAX_TRUNCATION_RECOVERY = 3;
   let truncationRecoveryUsed = 0;
   // 未显式设置的会话默认思考·中(2026-07-16 产品拍板);显式 'off' 仍关。UI 显示默认须同步(ModelPill)。
-  const thinkingLevel: ThinkingLevel = agentConfig.thinkingLevel || 'medium';
+  // Ultra(会话键 ultra:true,对标 Codex Ultra 档)⇒ 思考恒 max,ultra 开着时存值里的 thinkingLevel 不看 ——
+  // 换 Agent 时桌面会单独 PATCH thinkingLevel,「ultra + high」这种陈旧组合在这里自动失效。主动委派段见系统提示末尾。
+  // 团队模式不吃 Ultra:成员各跑各的档,父 run 只做编排(桌面入口也不给,这里是引擎侧的同一口径)。
+  const ultraRequested = agentConfig.ultra === true && !agentConfig.groupChat;
+  const thinkingLevel: ThinkingLevel = ultraRequested ? 'max' : (agentConfig.thinkingLevel || 'medium');
   const attachments = input.attachments || [];
   let imageInputs = normalizeImageAttachments(attachments);
   // host-exec（TUI/桌面本机模式）注入：execMode/cwd/approvalMode 只经 per-run agentConfig 传入。
@@ -1021,7 +1026,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 本 run 的上下文预算基数:真实模型窗口(覆盖表/模型对象/族兜底),不再用 128k 全局常量——
     // 400k 族在 64k 就机械折叠会绞碎上下文+打断前缀缓存,长任务正确率与 token 双输(WB-Bench 取证)。
     // 09-22 起自动识别的窗口封顶 272k,更大的窗口只由人填的覆盖打开(effectiveContextWindowInfo)。
-    const { tokens: ctxWindowTokens, source: ctxWindowSource, max: ctxWindowMax } = effectiveContextWindowInfo(modelId, model);
+    // Ultra(09-27)不封顶:模型本身能到多大就用多大;人填的覆盖照旧(覆盖可能正是在纠正报大了的目录值)。
+    const { tokens: ctxWindowTokens, source: ctxWindowSource, max: ctxWindowMax } = effectiveContextWindowInfo(modelId, model, ultraRequested);
 
     // 入站预算闸门(Hermes 式窗口相对预算;2026-06-10 的 77 万 token 事故防线):
     // 估算超窗口 50% 直接失败(消息不落库,会话不被毒化),超 25% 放行但发警告事件。
@@ -1405,6 +1411,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           'A good plan names concrete files and verifiable steps (e.g. "add retry with backoff to fetchUser() in src/api/user.ts; verify via test/api.test.ts") — not a restatement of the task ("implement the feature, then test it").',
       );
     }
+    // Ultra 主动委派段(与 planMode 同位:稳定段的末尾,变体 S 的易变记忆仍在它之后 —— 稳定的放前面对缓存更好;
+    // run 级,只在开关那一刻动前缀)。三道闸缺一不可:会话开了 ultra;
+    // 不是 Muse / 自动化这类无人值守 run(抄了会话配置也不许无人看管地扇出 max 档子代理);本 run 真拿得到 delegate ——
+    // hostExec / chat 正向面 / toolsMode 黑白名单 / 子代理深度都在 resolveTools 一处判,这里不重抄条件。
+    if (ultraRequested && !deferBypass && resolveTools(profile, toolGateCtx as ToolContext).has('delegate')) {
+      systemParts.push(ULTRA_SECTION);
+    }
 
     // 变体 S(TANGU_MEMORY_VOLATILE=system-end):易变段仍在系统消息里,但挪到最末尾 —— 只失效最短后缀,
     // 又不改变「记忆是 system 角色」的权重。与 tail 档是 A/B 的两条腿。
@@ -1496,6 +1509,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ctxWindow: ctxWindowTokens,
       ctxWindowSource,
       ctxWindowMax, // 模型本身的窗口(封顶前):> ctxWindow 且非 override = 被缺省上限封了顶,环弹层据此说明
+      ultra: ultraRequested, // 这一轮的窗口是按 Ultra(不封顶)算的:客户端切了开关、还没发下一条时据此判断这份窗口已过时
       // 压缩触发线(窗口 − 预留,再被 thresholdPercent 往下拉)与本 run 生效的压缩旋钮来源:客户端进度环据此画「到这就会压」的刻度
       compactAt: compactionThreshold(ctxWindowTokens, compactionCfg.reserveTokens, compactionCfg.thresholdPercent, compactionCfg.keepRecentTokens),
       compactionEnabled: compactionCfg.enabled,
@@ -1781,10 +1795,16 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     let deskPresentCount = 0;
     // load_tools 解锁 → 置脏,下一迭代重算 defs(解锁那一刻打一次前缀缓存,之后稳定)。
     let toolDefsDirty = false;
+    // 子代理(delegate)的计价累计:它们走 noopBilling,不记这里的话 TANGU_MAX_RUN_COST 恰好看不见 Ultra 放大的那部分
+    // (并行 × 24 轮 × 继承的 max 档)。与 costTotal 分开记,只在越限判定与对外展示的 costTotal 处相加。
+    let delegatedCost = 0;
     const toolCtx: ToolContext = {
       // 门禁字段单源:与上面 listDeferredTools 拿到的是同一份,目录与工具面不会分叉。
       ...toolGateCtx,
       signal: ac.signal, customTools, mcpTools,
+      // costTotal / runCostLimit 在下面循环前才声明:两个闭包只在工具执行期被调(那时早已初始化),不会撞 TDZ。
+      chargeRunCost: (cost) => { if (Number.isFinite(cost) && cost > 0) delegatedCost += cost; },
+      runCostExceeded: () => isOverRunCost(costTotal + delegatedCost, runCostLimit),
       sayToTeam: isTeamMember ? async (text, requestReply) => {
         ac.signal.throwIfAborted();
         await publish(runId, 'team_speech', { text, requestReply });
@@ -1825,6 +1845,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       getWorkingMessages: () => workingMessages.map((m) => ({ ...m })),
       getImageInputs: () => imageInputs,
       thinkingLevel,
+      contextWindow: ctxWindowTokens,
     };
     let toolDefs = getToolDefinitions(toolCtx);
     // A4:工具头字节量(load_tools 解锁后重算)随 usage 事件出账。**按本轮真实发出去的那份算**,
@@ -2081,6 +2102,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     };
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       if (ac.signal.aborted) throw new AbortLikeError();
+      // 子代理(delegate)的花销在工具批里记进来:它们把 run 推过上限时,别再先发一次模型请求才收尾(creview 09-27 P1)。
+      // 主循环自己的越限仍在下方记账处判(那一刻才知道本轮的价)。
+      if (delegatedCost > 0 && isOverRunCost(costTotal + delegatedCost, runCostLimit)) {
+        const detail = `本 run 累计成本约 ${(costTotal + delegatedCost).toFixed(2)} 点，超过上限 ${runCostLimit} 点，已停止。可调 TANGU_MAX_RUN_COST（0 关闭）。`;
+        await publish(runId, 'error', { error: 'run_cost_exceeded', detail });
+        await drain(runId);
+        await updateRunStatus(runId, 'failed', { error: 'run_cost_exceeded', tokensTotal });
+        return;
+      }
       // load_tools 解锁后的 defs 重算(未解锁迭代零开销;解锁项按 registry 规则追加在内置 defs 末尾)
       if (toolDefsDirty) {
         toolDefs = getToolDefinitions(toolCtx);
@@ -2365,8 +2395,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         total: tokensTotal,
         cost,
         // 本 run 累计成本 + 上限(H3 成本闸可见:此前 TANGU_MAX_RUN_COST 只在越限失败时才现身)。
-        // costTotal 的正式累加在下方越限检查处,这里发「本轮记入后」的值,口径一致。
-        costTotal: costTotal + cost,
+        // costTotal 的正式累加在下方越限检查处,这里发「本轮记入后」的值,口径一致。含子代理那份(与越限判定同一口径);
+        // 桌面只拿这个字段当「本 run 花了多少」,带 phase 的 delegate 事件在消费端被拦掉,不会重复计。
+        costTotal: costTotal + delegatedCost + cost,
         costLimit: runCostLimit,
         iteration,
       });
@@ -2400,8 +2431,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 每-run 累计成本硬上限(多轮累计失控的护栏;入站闸门只挡单条入站)。越限即终止本 run，
       // 与 input_too_large 同款 publish→drain→failed→return(finally 仍会 flush + 推进队列)。
       costTotal += cost;
-      if (isOverRunCost(costTotal, runCostLimit)) {
-        const detail = `本 run 累计成本约 ${costTotal.toFixed(2)} 点，超过上限 ${runCostLimit} 点，已停止。可调 TANGU_MAX_RUN_COST（0 关闭）。`;
+      if (isOverRunCost(costTotal + delegatedCost, runCostLimit)) {
+        const detail = `本 run 累计成本约 ${(costTotal + delegatedCost).toFixed(2)} 点，超过上限 ${runCostLimit} 点，已停止。可调 TANGU_MAX_RUN_COST（0 关闭）。`;
         await publish(runId, 'error', { error: 'run_cost_exceeded', detail });
         await drain(runId);
         await updateRunStatus(runId, 'failed', { error: 'run_cost_exceeded', tokensTotal });
@@ -2706,6 +2737,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       tools: toolDefs,
       thinkingLevel,
       modelId,
+      contextWindow: ctxWindowTokens,
     };
     void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
     // 惰性检查点:下个 run 的 hydrate 窗口之外若还有未被摘要覆盖的老行,现在(不占下个 run 首帧)做一份。

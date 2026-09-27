@@ -1,6 +1,6 @@
 /**
  * Dev-only visual harness:Muse 设置里的「后台额度」区块 —— 真 SpecialAgentsTab + 生产 CSS;引擎端点与账号额度都是桩,
- * 不连任何后端、不碰凭证。?dark / ?lang=en / ?other(Muse 显式选了不计入后台额度的模型)。
+ * 不连任何后端、不碰凭证。?dark / ?lang=en / ?other(Muse 显式选了不计入后台额度的模型)/ ?cloud(云端引擎:只露按轮 Historian 四项)。
  * 跑法:node scripts/e2e-editor.cjs --check=bgquota-settings --shot
  */
 import { createRoot } from 'react-dom/client'
@@ -30,7 +30,14 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Res
   const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
   if (!url.startsWith(BACKEND)) return realFetch(input, init)
   const path = new URL(url).pathname
-  if (path === '/agent/special/config') return json({ config, defaults: { historianPrompt: '' } })
+  if (path === '/agent/special/config') {
+    if (init?.method === 'POST') {
+      const body = JSON.parse(String(init.body || '{}'))
+      ;(window as unknown as { __bgHarness: { posts: unknown[] } }).__bgHarness.posts.push(body)
+      Object.assign(config.historian, body.historian || {})
+    }
+    return json({ config, defaults: { historianPrompt: '' }, ...(params.has('cloud') ? { cloud: true } : {}) })
+  }
   if (path === '/agent/models') {
     return json({ models: [{ id: 'm-cheap', name: 'Luna Lite', provider: 'forsion' }, { id: 'm-pro', name: 'Opus 5.5', provider: 'forsion' }], backgroundModelId: 'm-cheap', defaultModelId: 'm-pro' })
   }
@@ -63,7 +70,7 @@ window.tangu = {
     return { status: 200, json: { success: true, converted: { daily: d, weekly: w }, quota } }
   },
 } as unknown as NonNullable<Window['tangu']>
-;(window as unknown as { __bgHarness: { converted: number[] } }).__bgHarness = { converted: [] }
+;(window as unknown as { __bgHarness: { converted: number[]; posts: unknown[] } }).__bgHarness = { converted: [], posts: [] }
 
 createRoot(document.getElementById('root')!).render(
   <LocaleProvider>

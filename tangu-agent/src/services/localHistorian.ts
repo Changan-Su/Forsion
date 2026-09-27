@@ -249,6 +249,8 @@ export interface HistorianForkSeed {
   thinkingLevel?: string;
   /** 会话模型:fork 必须用它——换模型则前缀缓存不共享,「同人格顺手判断」也不成立。 */
   modelId: string;
+  /** 本 run 实际用的窗口(Ultra 不封顶):超窗护栏与主 loop 同一分母。缺省按模型现算(封顶 272k)。 */
+  contextWindow?: number;
 }
 
 /** 一次 fork 判官补全。超窗/失败/空产出/截断 → 返回 ''(调用方回落 independent 判断)。 */
@@ -260,8 +262,8 @@ async function forkJudge(
     if (!prefix.length) return '';
     const { model, apiKey, baseUrl, apiModelId } = await deps().brain.llm.resolveModelAndKey(seed.modelId);
     const est = prefix.reduce((n, m) => n + estimateMessageTokens(m), 0);
-    // 按会话实际用的窗口(自动识别的封顶 272k):fork 是本会话的请求,护栏与主 loop 同一分母,不按模型能到的 1M 放行
-    const win = effectiveContextWindowInfo(seed.modelId, model).tokens;
+    // 按会话实际用的窗口(自动识别的封顶 272k,Ultra 不封顶):fork 是本会话的请求,护栏与主 loop 同一分母
+    const win = seed.contextWindow || effectiveContextWindowInfo(seed.modelId, model).tokens;
     if (est > win * FORK_CONTEXT_HEADROOM) {
       log(`fork 判官:上下文超窗(~${est} > ${Math.floor(win * FORK_CONTEXT_HEADROOM)}/${win}),回落独立判断`);
       return '';

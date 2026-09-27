@@ -458,6 +458,7 @@ const AGENT_KEYS = [
   'backendStatus', 'backendLogs', 'backendRestart', 'onBackendStatus',
   'notifyInbox', 'notify', 'setInboxBadge', 'onInboxOpen',
   'authStatus', 'forsionLogin', 'forsionLogout', 'authProviders', 'providerLogin', 'openAccountCenter', 'onAuthDevice', 'onAuthChanged',
+  'authAccounts', 'forsionSwitchAccount', 'onAuthWillChange', // 多账号面也只在有 agent 后端的产品里有 UI
   'connectMeta', 'connectList', 'connectPublish', 'connectUnpublish',
   'connectListingApply', 'connectListingWithdraw', 'connectStore',
   'submitFeedback',
@@ -474,5 +475,10 @@ const AGENT_KEYS = [
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
 if (!PRODUCT.market) for (const k of ['marketList', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall'] as const) delete (api as Record<string, unknown>)[k]
+// 云端账号面(个人中心 / 会员页 / 额度与重置卡 / 反馈 / cloud:fetch)由内置包 Forsion Extend 的主进程半身提供
+// (electron/cloudHost.ts);没装载(验签失败 / 单品变体 / 没捆)就删键 —— 调了会 reject "No handler registered",
+// 删掉键渲染层按同一套 window.tangu?.X 门控自动隐藏。主进程在开窗前就答好 cloud:present,这里同步问一次。
+const CLOUD_KEYS = ['openAccountCenter', 'openPayCenter', 'accountQuota', 'accountUseResetCard', 'accountBgConvert', 'accountBgAutoMain', 'submitFeedback', 'cloudFetch'] as const
+if (ipcRenderer.sendSync('cloud:present') !== true) for (const k of CLOUD_KEYS) delete (api as Record<string, unknown>)[k]
 
 contextBridge.exposeInMainWorld('tangu', api)

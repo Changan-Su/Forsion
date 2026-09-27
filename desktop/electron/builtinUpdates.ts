@@ -17,7 +17,8 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { cmpVersion, gatePluginManifest } from '@amadeus-shared/ipc'
-import { BUILTIN_BUNDLE_PACKAGES, installedDirFor, pendingDirFor, readManifest, type BundleManifest } from './builtinPlugins'
+import { installedDirFor, pendingDirFor, readManifest, type BuiltinSource, type BundleManifest } from './builtinPlugins'
+import { verifyBundleSignature } from './bundleSignature'
 import { downloadZip, GZIP_MAGIC } from './marketInstall'
 import { stripTopDir, untar } from './minitar'
 
@@ -72,33 +73,43 @@ const incompatible = new Set<string>()
 
 export interface BuiltinUpdateOpts {
   pluginsRoot: string
-  /** 与 packages 一一对应的随包来源(builtinBundleSources);随包 manifest 是「这个包该是哪个 id」的锚。 */
-  sources: string[]
+  /** 当前平台的内置包(builtinBundleSources,已按 platforms 过滤);随包 manifest 是「这个包该是哪个 id」的锚。 */
+  sources: readonly BuiltinSource[]
   appVersion: string
   registries: string[]
   fetch: RegistryFetch
-  packages?: readonly string[]
-  platform?: NodeJS.Platform
   log?: (m: string) => void
 }
+
+/** 只认正式版:cmpVersion 把 0.5.9-rc.1 排在 0.5.9 之上,预发布一旦进了暂存区,同号正式版就永远换不上去。 */
+const RELEASE_VERSION = /^\d+\.\d+\.\d+$/
 
 /** 查一遍各内置包;有更新的下载进暂存区。返回暂存了的 `id@version`。逐包吞错,只进 log。 */
 export async function checkBuiltinUpdates(o: BuiltinUpdateOpts): Promise<string[]> {
   const log = o.log ?? ((m: string) => console.log(m))
-  const platform = o.platform ?? process.platform
-  if (platform !== 'darwin' && platform !== 'win32') return [] // 与播种同口径:不播的平台下了也用不上
   const staged: string[] = []
-  for (const [i, pkg] of (o.packages ?? BUILTIN_BUNDLE_PACKAGES).entries()) {
-    const src = o.sources[i]
+  for (const source of o.sources) {
+    const { pkg, dir: src } = source
     try {
-      const bundled = src ? await readManifest(src) : null
-      if (!bundled) continue
+      const bundled = await readManifest(src)
+      if (!bundled) {
+        log(`[builtin-updates] ${pkg} 随包来源缺失,跳过:${src}`)
+        continue
+      }
       const pendingPath = pendingDirFor(o.pluginsRoot, src)
       const installedDir = await installedDirFor(o.pluginsRoot, bundled.id)
-      const have = [bundled, installedDir ? await readManifest(installedDir) : null, await readManifest(pendingPath)]
-        .filter((m): m is BundleManifest => !!m && m.id === bundled.id)
+      // 带主进程半身的包:已装 / 暂存那份验不过签名就不算「已经有的版本」(播种会把它换掉,装载器也不载它),
+      // 否则一份改了版本号的假副本会让更新器永远以为已是最新。
+      const counted = async (m: BundleManifest | null, dir: string): Promise<BundleManifest | null> =>
+        m && m.id === bundled.id && (!source.desktop || (await verifyBundleSignature(dir, source.desktop.signingKey, [source.desktop.entry, 'manifest.json'])).ok) ? m : null
+      const have = [bundled, installedDir ? await counted(await readManifest(installedDir), installedDir) : null, await counted(await readManifest(pendingPath), pendingPath)]
+        .filter((m): m is BundleManifest => !!m)
         .reduce((v, m) => (cmpVersion(m.version, v) > 0 ? m.version : v), '0.0.0')
       const latest = await resolveLatest(pkg, o.registries, o.fetch)
+      if (!RELEASE_VERSION.test(latest.version)) {
+        log(`[builtin-updates] ${pkg} latest=${latest.version} 不是正式版,跳过`)
+        continue
+      }
       if (cmpVersion(latest.version, have) <= 0 || incompatible.has(`${pkg}@${latest.version}`)) continue
 
       const tgz = await downloadZip(latest.tarballs, o.fetch, undefined, GZIP_MAGIC)
@@ -128,6 +139,11 @@ export async function checkBuiltinUpdates(o: BuiltinUpdateOpts): Promise<string[
           await fs.mkdir(path.dirname(dest), { recursive: true })
           await fs.writeFile(dest, e.data)
           if (e.mode && process.platform !== 'win32') await fs.chmod(dest, e.mode) // helper 可执行位
+        }
+        // 带主进程半身的包:落暂存区之前就验签,坏发布连暂存区都不进(播种时还会再核一次)。
+        if (source.desktop) {
+          const v = await verifyBundleSignature(staging, source.desktop.signingKey, [source.desktop.entry, 'manifest.json'])
+          if (!v.ok) throw new Error(`signature: ${v.reason}`)
         }
         await fs.rm(retired, { recursive: true, force: true })
         await fs.rename(pendingPath, retired).catch((err: NodeJS.ErrnoException) => {

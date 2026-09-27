@@ -749,7 +749,10 @@ if (new URLSearchParams(location.search).has('dock')) {
   ]
   const PillHarness = (): React.ReactElement => {
     const [id, setId] = useState('glm-4.7')
-    const [lv, setLv] = useState<'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>(new URLSearchParams(location.search).has('max') ? 'max' : 'high')
+    const [lv, setLv] = useState<'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'>(modelPillParams.has('max') || modelPillParams.has('ultra') ? 'max' : 'high')
+    // ?ultra 起步就在 Ultra 档;?allowultra 起步在「深」但滑杆带 Ultra 格(拍切进 Ultra 那一下的冲击波)
+    const allowUltra = modelPillParams.has('ultra') || modelPillParams.has('allowultra')
+    const [ultra, setUltra] = useState(modelPillParams.has('ultra'))
     const [defaults, setDefaults] = useState({ backgroundModelId: '', imageModelId: '', visionModelId: '' })
     // 「上下文上限」行:GLM-4.7 扮 1M 模型(缺省封在 272k);选「最大」= 本机覆盖成 1M(与真 store 同形)
     const [ctxOverride, setCtxOverride] = useState<number | null>(new URLSearchParams(location.search).has('ctxmax') ? 1_000_000 : null)
@@ -760,7 +763,7 @@ if (new URLSearchParams(location.search).has('dock')) {
         { id: 'ds-v32', name: 'DeepSeek-V3.2-Exp', provider: 'deepseek', source: 'forsion' as const, modelType: 'llm' as const },
         { id: 'gpt-image-1', name: 'GPT Image 1', provider: 'openai', source: 'forsion' as const, modelType: 'image_gen' as const },
       ],
-      directProviders: [], defaultModelId: 'glm-4.7', backgroundModelId: 'ds-v32', imageModelId: 'gpt-image-1', visionModelId: 'glm-4.7', contextWindowCap: 272_000, modelOverridesWritable: true,
+      directProviders: [], defaultModelId: 'glm-4.7', backgroundModelId: 'ds-v32', imageModelId: 'gpt-image-1', visionModelId: 'glm-4.7', contextWindowCap: 272_000, modelOverridesWritable: true, ultraUncapped: true,
     }
     return (
       // t2-chat-view = 子面板落位的边界(nestedPanelPlacement / useEdgeNudge 都认它);缺了子面板一律压在菜单上
@@ -772,7 +775,9 @@ if (new URLSearchParams(location.search).has('dock')) {
             groups={GROUPS}
             onSelect={setId}
             thinkingLevel={lv}
-            onThinkingChange={setLv}
+            onThinkingChange={(l, u) => { setLv(l); if (u !== undefined) setUltra(u) }}
+            allowUltra={allowUltra}
+            ultra={ultra}
             modelsResponse={modelsResponse}
             defaultModelIds={defaults}
             onDefaultModelChange={(slot, modelId) => setDefaults((d) => ({ ...d, [slot]: modelId }))}

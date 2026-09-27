@@ -9,7 +9,7 @@ import { windowKind } from './windowKind'
  */
 import React, { useEffect, useLayoutEffect, useRef } from 'react'
 import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, type ViewProps } from '@lcl/engine'
-import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { notePluginGesture, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { recordDevMountError } from '@amadeus/plugins/devRecords'
 import { setDevViewBridge } from '@amadeus/plugins/devSandbox'
 import type { ViewContribution } from '@amadeus/plugins/types'
@@ -22,9 +22,12 @@ registerMessages({
 /** DOM-mount 宿主:div 交给插件的 mount(),卸载时跑其返回的清理函数。
  *  导出给 builtins/muse 的主槽复用:Muse Space 主区渲染 agent-muse 插件的 home 视图时走的就是这份契约。
  *  `pluginId` 只在经插件命名空间注册时有(见下方 factory);带上它,挂载失败才能按插件记账 —— 控制台里
- *  那行 `[plugin-view] mount failed` 谁都看得见,但开发者看不见「是我的插件炸的」。 */
-export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; pluginId?: string }> = ({ def, pluginId, extendView, leaf, params }) => {
+ *  那行 `[plugin-view] mount failed` 谁都看得见,但开发者看不见「是我的插件炸的」。
+ *  `onMountError`:挂载抛错时额外通知调用方(Muse Space 主槽拿它回写给 Muse);走 ref,换了回调身份不重挂。 */
+export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; pluginId?: string; onMountError?: (e: unknown) => void }> = ({ def, pluginId, onMountError, extendView, leaf, params }) => {
   const ref = useRef<HTMLDivElement>(null)
+  const onError = useRef(onMountError)
+  onError.current = onMountError
   const disposeBeforePaint = useRef<(() => void) | null>(null)
   const current = useRef({ leaf, params })
   current.current = { leaf, params }
@@ -43,6 +46,10 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
     const kind = windowKind()
     const isMini = kind === 'mini'
     const isFloating = kind === 'floating' || !!el.closest('.floating-panel-window')
+    // 记下「用户刚在这个插件的视图里点过 / 按过键」(捕获阶段、只认 isTrusted):ctx.agent.updateTodo 的手势闸只认它
+    const gestureEvents = ['pointerdown', 'click', 'keydown'] as const
+    const onGesture = (e: Event): void => { if (e.isTrusted && pluginId) notePluginGesture(pluginId) }
+    for (const t of gestureEvents) el.addEventListener(t, onGesture, true)
     try {
       cleanup = def.mount(el, {
         extendView, surface: isMini ? 'mini' : isFloating ? 'floating' : 'main',
@@ -64,6 +71,7 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
     } catch (e) {
       console.error(`[plugin-view] mount "${def.id}" failed`, e)
       if (pluginId) recordDevMountError(pluginId, def.id, e)
+      onError.current?.(e)
       el.textContent = translate('pluginview.mountFailed')
     }
     let disposed = false
@@ -72,6 +80,7 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
       disposed = true
       alive = false
       listeners.current.clear()
+      for (const t of gestureEvents) el.removeEventListener(t, onGesture, true)
       try { if (typeof cleanup === 'function') cleanup() } catch (e) { console.error(`[plugin-view] cleanup "${def.id}" failed`, e) }
       el.replaceChildren()
     }

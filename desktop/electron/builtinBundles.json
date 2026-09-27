@@ -1,0 +1,16 @@
+[
+  {
+    "pkg": "@forsion/tangu-computer-use",
+    "id": "tangu-computer-use",
+    "platforms": ["darwin", "win32"]
+  },
+  {
+    "pkg": "@forsion/extend",
+    "id": "forsion-extend",
+    "platforms": ["darwin", "win32", "linux"],
+    "desktop": {
+      "entry": "dist/desktop.mjs",
+      "signingKey": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAR7HV1LAPMME+MiPnSmpl7GxTiTA1K/DT6xvwIzLdlSI=\n-----END PUBLIC KEY-----\n"
+    }
+  }
+]

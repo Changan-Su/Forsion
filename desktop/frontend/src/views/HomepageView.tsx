@@ -38,6 +38,7 @@ import { rankIds, reorderBase, unionOrder } from '@lcl/engine/ribbonRegistry'
 import type { SpaceDefinition, RibbonFolder, RibbonItem, ViewProps } from '@lcl/engine'
 import { askString } from '@amadeus/components/askString'
 import { useApp, newChatModelId, stickyDefaults, withAmadeusWorkspace, applyPreset, newSessionPreset, resolveNewSessionWorkspace } from '../stores/appStore'
+import { settleUltra } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import type { Attachment } from '../types'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -144,12 +145,13 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
   ])
   const preset = newSessionPreset(s.sessionMode, targetWorkspace, platform)
   const cloud = preset === 'chat' || targetWorkspace.kind === 'cloud' || targetWorkspace.kind === 'rootless'
-  const config = useMemo(() => withAmadeusWorkspace(applyPreset({
+  // settleUltra:与建会话同一口径结算 Ultra,药丸显示什么首条消息就按什么跑
+  const config = useMemo(() => settleUltra(withAmadeusWorkspace(applyPreset({
     execMode: cloud ? 'sandbox' : 'host',
     ...stickyDefaults(s.desktopConfig, !cloud, preset),
     cwd: cloud ? undefined : (targetWorkspace.path || undefined),
     ...s.newChatCfg,
-  }, preset), vaultRoot), [cloud, preset, s.desktopConfig, s.newChatCfg, targetWorkspace.path, vaultRoot])
+  }, preset), vaultRoot)), [cloud, preset, s.desktopConfig, s.newChatCfg, targetWorkspace.path, vaultRoot])
   const modelId = newChatModelId(s) || ''
   const visibleModels = !s.modelsResp?.models
     ? null
@@ -212,7 +214,8 @@ function HomepageChatbox({ onDispatch, onInputModeChange }: { onDispatch: HomeDi
         onEngineModelChange={(id) => s.setNewChatCfg((c) => ({ ...c, engineModelId: id || undefined }))}
         engineCommands={config.engineId ? (s.engineCaps[config.engineId]?.commands ?? []) : undefined}
         thinkingLevel={config.thinkingLevel}
-        onThinkingChange={(level) => s.setSessionThinking(level, null)}
+        ultra={config.ultra}
+        onThinkingChange={(level, ultra) => s.setSessionThinking(level, null, undefined, ultra)}
         defaultModelIds={{
           backgroundModelId: s.desktopConfig?.backgroundModelId || '',
           imageModelId: s.cfg.imageModelId || '',

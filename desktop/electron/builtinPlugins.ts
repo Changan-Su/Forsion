@@ -16,8 +16,11 @@
  * 随包 npm 包复制);dev = `<appPath>/node_modules/<pkg>`(同一个包)。随包版本 = desktop/package.json 里钉死的
  * npm 精确版本,Dependabot 在 npm 发了新版时提 PR 升级。别用本地构建替换它:本地 build:native 是 ad-hoc 签名,
  * 会让 Mac 用户重新授权(release-content.check 会拦)。
- * 只在 darwin / win32 播种:这些捆绑包的引擎侧自己按平台门控(Linux helper 从未真机验收),
- * 在没有工具面的平台上多一张插件卡只是噪音。
+ * 内置包清单 = builtinBundles.json(单一来源:这里、builtinUpdates、electron-builder.config.cjs、release-content.check.cjs、
+ * dependabot 绑定测试都读它):每个包自己声明 platforms(电脑操作只 darwin / win32 —— 它的 Linux helper 从未真机验收,
+ * 在没有工具面的平台上多一张插件卡只是噪音;Forsion Extend 全平台),不在名单里的平台既不播种也不更新。
+ * 带 `desktop` 的包还有主进程半身:入口由 cloudHost.ts 在播种后 import 进主进程,所以来源(随包 / npm 暂存)
+ * 换上之前先用钉在清单里的公钥核包内签名(bundleSignature.ts),验不过的那份不换。
  *
  * 第二个来源 = npm 更新器(builtinUpdates.ts)下载好的新版,暂存在 `<pluginsRoot>/.pending/<随包目录名>/`:
  * 同 id、比随包新、过 gatePluginManifest(apiVersion / minAppVersion)才顶替随包来源,之后走同一套替换规则。
@@ -30,9 +33,23 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { cmpVersion, gatePluginManifest } from '@amadeus-shared/ipc'
+import bundlesJson from './builtinBundles.json'
+import { verifyBundleSignature } from './bundleSignature'
 
-/** 随 App 内置的捆绑包 npm 包名(dev 从 node_modules 取;打包版按包名的最后一段落在 resources/bundled-plugins/)。 */
-export const BUILTIN_BUNDLE_PACKAGES: readonly string[] = ['@forsion/tangu-computer-use']
+export interface BuiltinBundle {
+  /** npm 包名(dev 从 node_modules 取;打包版按包名去 scope 落在 resources/bundled-plugins/)。 */
+  pkg: string
+  /** 随包 manifest.json 必须是这个 id(release-content 核;cloudHost 装载前也核)。 */
+  id: string
+  /** 只在这些平台播种 / 更新。 */
+  platforms: readonly string[]
+  /** 主进程半身:entry 相对包根;signingKey = 核 SIGNATURE 的 ed25519 公钥(SPKI PEM)。有 desktop 就必须验签。 */
+  desktop?: { entry: string; signingKey: string }
+}
+
+/** 随 App 内置的捆绑包清单(builtinBundles.json)。 */
+export const BUILTIN_BUNDLES: readonly BuiltinBundle[] = bundlesJson
+export const BUILTIN_BUNDLE_PACKAGES: readonly string[] = BUILTIN_BUNDLES.map((b) => b.pkg)
 
 /** 打包版落点目录名 = 包名去掉 scope(与 electron-builder.config.cjs 的 extraResources `to` 同一约定)。 */
 export const bundledDirName = (pkg: string): string => pkg.replace(/^@[^/]+\//, '')
@@ -41,15 +58,23 @@ export interface BuiltinSourceOpts {
   isPackaged: boolean
   resourcesPath: string
   appPath: string
+  platform?: NodeJS.Platform
 }
 
-/** 播种来源目录(存在与否不在这里判,seedBuiltinBundles 逐个 stat)。 */
-export function builtinBundleSources(o: BuiltinSourceOpts): string[] {
-  return BUILTIN_BUNDLE_PACKAGES.map((pkg) =>
-    o.isPackaged
-      ? path.join(o.resourcesPath, 'bundled-plugins', bundledDirName(pkg))
-      : path.join(o.appPath, 'node_modules', ...pkg.split('/')),
-  )
+/** 清单项 + 随包来源目录。 */
+export interface BuiltinSource extends BuiltinBundle {
+  dir: string
+}
+
+/** 当前平台要播种的内置包及其随包来源目录(存在与否不在这里判,seedBuiltinBundles 逐个 stat)。 */
+export function builtinBundleSources(o: BuiltinSourceOpts): BuiltinSource[] {
+  const platform = o.platform ?? process.platform
+  return BUILTIN_BUNDLES.filter((b) => b.platforms.includes(platform)).map((b) => ({
+    ...b,
+    dir: o.isPackaged
+      ? path.join(o.resourcesPath, 'bundled-plugins', bundledDirName(b.pkg))
+      : path.join(o.appPath, 'node_modules', ...b.pkg.split('/')),
+  }))
 }
 
 const SAFE_PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
@@ -146,38 +171,54 @@ async function replaceDir(src: string, dest: string): Promise<void> {
  */
 export async function seedBuiltinBundles(
   pluginsRoot: string,
-  sources: string[],
-  opts: { platform?: NodeJS.Platform; log?: (m: string) => void; appVersion?: string | null } = {},
+  sources: ReadonlyArray<string | BuiltinSource>,
+  opts: { log?: (m: string) => void; appVersion?: string | null } = {},
 ): Promise<SeedBundlesReport> {
   const report: SeedBundlesReport = { installed: [], updated: [], kept: [], skipped: [] }
-  const platform = opts.platform ?? process.platform
   const log = opts.log ?? ((m: string) => console.log(m))
-  if (platform !== 'darwin' && platform !== 'win32') return report
-  for (const src of sources) {
+  for (const source of sources) {
+    const src = typeof source === 'string' ? source : source.dir
+    const signing = typeof source === 'string' ? undefined : source.desktop
     const pendingPath = pendingDirFor(pluginsRoot, src)
     try {
       const bundled = await readManifest(src)
       if (!bundled) {
         report.skipped.push(src)
-        continue // 没随包(单品变体 / 包没装)是常态,不是错
+        log(`[builtin-plugins] 随包来源缺失,跳过:${src}`) // 单品变体 / 包没装是常态;打包版由 release-content.check 拦
+        continue
+      }
+      // 带主进程半身的包:换上之前先验签。验不过的那份不用 —— 暂存的退回随包来源,随包的整包跳过。
+      const trusted = async (dir: string, what: string): Promise<boolean> => {
+        if (!signing) return true
+        const v = await verifyBundleSignature(dir, signing.signingKey, [signing.entry, 'manifest.json'])
+        if (!v.ok) log(`[builtin-plugins] ${bundled.id} ${what}验签失败(${dir}):${v.reason}`)
+        return v.ok
       }
       const pending = await readManifest(pendingPath)
       const usePending = !!pending && pending.id === bundled.id && cmpVersion(pending.version, bundled.version) > 0
-        && !gatePluginManifest(pending, opts.appVersion ?? null)
+        && !gatePluginManifest(pending, opts.appVersion ?? null) && (await trusted(pendingPath, '暂存的新版'))
       const from = usePending ? pendingPath : src
       const offered = usePending ? pending! : bundled
       const how = usePending ? 'npm 更新' : '随 App 更新'
       const current = await installedDirFor(pluginsRoot, bundled.id)
       const installed = current ? await readManifest(current) : null
+      // 「永不降级」的唯一例外:已装那份是带主进程半身的包却验不过签名 —— 那不是我们发的字节,版本号写多高都不算数,
+      // 换成可信的那份(装载器本来就不会载它,更新器也不把它的版本当基线;不换掉它就会永远卡在那里)。
+      const installedTrusted = !installed || (await trusted(current!, '已装副本'))
+      const replace = !installed || !installedTrusted || cmpVersion(offered.version, installed.version) > 0
+      if (replace && !usePending && !(await trusted(src, '随包那份'))) {
+        report.skipped.push(src)
+        continue
+      }
       if (!installed) {
         await fs.mkdir(pluginsRoot, { recursive: true })
         await replaceDir(from, path.join(pluginsRoot, bundled.id))
         report.installed.push(bundled.id)
         log(`[builtin-plugins] 已内置 ${bundled.id}@${offered.version}(${how})`)
-      } else if (cmpVersion(offered.version, installed.version) > 0) {
+      } else if (replace) {
         await replaceDir(from, current!)
         report.updated.push(bundled.id)
-        log(`[builtin-plugins] ${bundled.id} ${installed.version} → ${offered.version}(${how})`)
+        log(`[builtin-plugins] ${bundled.id} ${installed.version} → ${offered.version}(${how}${installedTrusted ? '' : ';已装副本验签失败,换掉'})`)
       } else {
         report.kept.push(bundled.id)
       }

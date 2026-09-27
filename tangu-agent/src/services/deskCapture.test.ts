@@ -14,7 +14,7 @@ const shotIdOf = (): string => {
 describe('deskCapture', () => {
   it('resolves with the posted image', async () => {
     const p = requestDeskShot('run1');
-    expect(resolveDeskShot(shotIdOf(), { dataUrl: 'data:image/png;base64,AAA', mode: 'open' })).toBe(true);
+    expect(resolveDeskShot('run1', shotIdOf(), { dataUrl: 'data:image/png;base64,AAA', mode: 'open' })).toBe(true);
     expect(await p).toEqual({ dataUrl: 'data:image/png;base64,AAA', mode: 'open' });
   });
 
@@ -24,7 +24,15 @@ describe('deskCapture', () => {
 
   it('a timed-out shot is no longer pending (late POST gets 410)', async () => {
     await requestDeskShot('run1', undefined, 5);
-    expect(resolveDeskShot(shotIdOf(), { dataUrl: 'data:image/png;base64,AAA' })).toBe(false);
+    expect(resolveDeskShot('run1', shotIdOf(), { dataUrl: 'data:image/png;base64,AAA' })).toBe(false);
+  });
+
+  it('a shotId only resolves for the run that requested it', async () => {
+    const p = requestDeskShot('victim-run', undefined, 20);
+    const id = shotIdOf();
+    expect(id).toMatch(/^shot_[0-9a-z]+_\d+_[\w-]{12}$/); // 带随机段,不能按时间戳+计数猜
+    expect(resolveDeskShot('attacker-run', id, { dataUrl: 'data:image/png;base64,EVIL' })).toBe(false);
+    expect(await p).toEqual({ error: 'no response from the desktop app' });
   });
 
   it('aborting the run resolves the wait', async () => {

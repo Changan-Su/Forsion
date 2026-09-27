@@ -426,6 +426,16 @@ export function readDisabledPluginIds(): string[] {
  *  过期的续体拿着它继续跑不会再抛一个与真因无关的 TypeError。 */
 const DEAD_HANDLE: (() => void) & { update(): void; dispose(): void } = Object.assign(() => {}, { update: () => {}, dispose: () => {} })
 
+/** ctx.agent.subscribe 的轮询间隔:agent 周期是小时级的,20 秒足够跟上「周期结束 / 睡醒 / 有新待办」。 */
+const AGENT_POLL_MS = 20_000
+
+/** 插件自己视图里最近一次**可信**用户交互(PluginViewHost 在视图容器上捕获 isTrusted 的 pointerdown/click/keydown 记这里)。
+ *  ctx.agent.updateTodo 只认这个:窗口级的 navigator.userActivation 会被别处的点击点亮(Codex 09-27),插件派发的合成事件
+ *  isTrusted=false 记不进来。 */
+const lastGesture = new Map<string, number>()
+const GESTURE_WINDOW_MS = 1500
+export function notePluginGesture(pluginId: string): void { lastGesture.set(pluginId, Date.now()) }
+
 /** reloadOne 的按 id 串行链。 */
 const reloadChains = new Map<string, Promise<void>>()
 
@@ -798,6 +808,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     let ctxAlive = true
     revokers[pluginId] = () => {
       ctxAlive = false
+      lastGesture.delete(pluginId) // 旧实例上的点击不许授权重载后的新实例(Codex 09-27)
       revokeDeskCompanions(pluginId)
       revokeSurface()
       for (const d of Array.from(dashMounts)) {
@@ -826,6 +837,68 @@ export const usePluginStore = create<PluginState>((set, get) => {
         try { d() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" font dispose failed`, e) }
       }
       fontDisposers.clear()
+    }
+    // agent 自建 Space 读写自家数据(2026-09-27):**只注入给 agent-<slug> 插件**(来源 <tangu>/agents/<slug>/Space/,
+    // plugin.agent = slug),只能碰它自己这个 agent;探针缺这条(纯 Amadeus 壳 / 台架)或该 agent 没有数据源 → 整个不注入。
+    // 写只在用户刚在**它自己的视图里**点过之后放行:插件代码是 agent 自己写的,不许它不经点击替用户处理 TODO ——
+    // 完成 / 忽略会以「用户处理了」的 [feedback] 回到 agent 日志,自己点自己 = 伪造反馈,它下个周期就按假信号校准。
+    // ⚠️这防的是「顺手写个定时器 / 挂载时就标掉」这类失误,**不是安全边界**:插件与宿主同一个渲染进程,
+    // 存心作恶的代码能拦 fetch 拿令牌直调引擎、能包 Function 截别的插件的 ctx(Codex 09-27)—— 要隔离得上 iframe / 独立进程。
+    const agentSurface = (): { agent?: PluginContext['agent'] } => {
+      const slug = get().plugins.find((p) => p.id === pluginId)?.agent
+      const self = slug ? readTangu()?.agentSelf?.(slug) : null
+      if (!slug || !self) return {}
+      const alive = <T,>(f: () => Promise<T>): Promise<T> => (ctxAlive ? f() : Promise.reject(new Error('plugin disabled')))
+      // 订阅:有人订才轮询,状态键(在跑 / 上次周期 / 休眠 / 待批数 / 待办数)变了才回调;updateTodo 之后立刻补一次。
+      const listeners = new Set<() => void>()
+      let timer: ReturnType<typeof setInterval> | null = null
+      let lastKey: string | null = null
+      const fire = (): void => {
+        for (const cb of Array.from(listeners)) {
+          try { cb() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" ctx.agent subscriber failed`, e) }
+        }
+      }
+      const check = async (): Promise<void> => {
+        if (!ctxAlive || !listeners.size) return
+        const [st, pending] = await Promise.all([self.status().catch(() => null), self.todos('pending').catch(() => null)])
+        if (!st || !pending || !ctxAlive) return
+        // 待办按 id 比而不是按条数:别处忽略一条、同时新长出一条,条数不变也得回调
+        const key = `${st.running}|${st.lastCycleAt}|${st.sleepUntil}|${st.pendingApprovals}|${pending.map((t) => t.id).sort().join(',')}`
+        if (lastKey !== null && key !== lastKey) fire()
+        lastKey = key
+      }
+      const gesture = (): boolean => Date.now() - (lastGesture.get(pluginId) ?? 0) <= GESTURE_WINDOW_MS
+      return {
+        agent: {
+          slug,
+          status: () => alive(() => self.status()),
+          todos: (status) => alive(() => self.todos(status)),
+          updateTodo: (id, status) => {
+            if (status !== 'done' && status !== 'dismissed') return Promise.reject(new Error("status must be 'done' or 'dismissed'"))
+            // 调用那一刻判:本插件视图里 1.5 秒内有过真实点击 / 按键;定时器 / 挂载时 / 别处的点击一律拒
+            if (!gesture()) return Promise.reject(new Error('ctx.agent.updateTodo only works right after the user clicks inside your own view (call it from a click handler)'))
+            // alive 传进去:等后端就绪那一拍里插件被停用,就别再把写发出去
+            return alive(() => self.updateTodo(String(id), status, () => ctxAlive)).then(() => { if (ctxAlive) fire() })
+          },
+          schedule: () => alive(() => self.schedule()),
+          library: {
+            list: () => alive(() => self.libraryList()),
+            read: (path: string) => alive(() => self.libraryRead(String(path))),
+          },
+          subscribe: (cb: () => void) => {
+            if (!ctxAlive) return () => {}
+            listeners.add(cb)
+            if (!timer) { void check(); timer = setInterval(() => void check(), AGENT_POLL_MS) }
+            const off = (): void => {
+              listeners.delete(cb)
+              tanguUnsubs.delete(off)
+              if (!listeners.size && timer) { clearInterval(timer); timer = null; lastKey = null }
+            }
+            tanguUnsubs.add(off)
+            return off
+          },
+        },
+      }
     }
     const ctx: PluginContext = {
     app: appApi,
@@ -1230,6 +1303,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
           },
         }
       : {}),
+    ...agentSurface(),
     // Agent Desk 伴随面(2026-09-19):**只在有 Agent Desk 的宿主上注入** —— 桌面 Tangu。判据与 ChatView 的
     // deskEnabled 同源:探针在(Tangu 宿主)+ 端判定单源 currentPlatform() === 'desktop'(web 的 getConfig 没有
     // agentDeskEnabled,Desk 永不出现)+ 不是单列移动壳。用户在设置里关了 Desk 不影响注入(注册照常成功,只是不显示)。

@@ -35,6 +35,9 @@ const EXEMPT = {
   'composer-menu @ components/ModelSelect.tsx':
     '设置页的模型下拉:.composer-menu--down/--up 是 left:0;right:0;max-width:none —— 宽度跟着表单字段走,' +
     '不是锚按钮的固定宽浮层,横向天生溢不出去(它的翻面逻辑只管上下)。',
+  't2c-ctxring-pop @ ctxusageHarness.tsx':
+    'dev-only 台架页(check:ctxusage):只为给 ContextUsagePop 套上真样式截图,弹层钉在舞台 left:40;' +
+    '产品里的渲染点是 Composer2,它的 useEdgeNudge 由本条扫描另行钉住。',
 }
 
 /** 递归收集 .tsx。 */

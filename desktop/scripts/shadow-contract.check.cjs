@@ -67,6 +67,9 @@ const EFFECT_EXCEPTIONS = new Map([
   ['frontend/src/styles/base.css|.cm-effort.is-max .cm-effort-range|box-shadow', 'Max 档位轨道辉光'],
   ['frontend/src/styles/base.css|.cm-effort.is-max .cm-effort-thumb|box-shadow', 'Max 档位滑块辉光'],
   ['frontend/src/styles/base.css|.cm-effort-sparkles i|box-shadow', 'Max 档位星点辉光'],
+  ['frontend/src/styles/base.css|.cm-row-v.is-max.is-ultra, .cm-effort.is-max.is-ultra .cm-effort-value|filter', 'Ultra 档位文字辉光'],
+  ['frontend/src/styles/base.css|.cm-effort.is-max.is-ultra .cm-effort-range|box-shadow', 'Ultra 档位轨道辉光'],
+  ['frontend/src/styles/base.css|.cm-effort.is-max.is-ultra .cm-effort-thumb|box-shadow', 'Ultra 档位滑块辉光'],
 ])
 
 const INTERACTION_EXCEPTIONS = new Map([
