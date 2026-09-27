@@ -32,22 +32,25 @@ export const lclTheme = defineTheme({
 export function AstryxScope({ children }: { children: ReactNode }) {
   const mode = useTheme((s) => s.mode)
   const lang = useTheme((s) => s.lang)
-  // astryx 的根 Theme(树里没有父 Theme 时)会把 data-theme="light|dark" 同步到 <html> 上,
-  // 覆盖 LCL 的 data-theme=<语言>;卸载时还把 data-theme/data-astryx-theme 整个移除(兄弟 Scope
-  // 还挂着也照删)→ 切 Space 主题退回 lovable 的根因。刻意不做 Root 全局包裹(曾试过:astryx 的
+  // astryx 的根 Theme(树里没有父 Theme 时)会把 data-theme="light|dark" 与 data-astryx-theme 同步到
+  // <html> 上;卸载时两个都移除(兄弟 Scope 还挂着也照删)。刻意不做 Root 全局包裹(曾试过:astryx 的
   // 继承样式/@layer reset prose 会放大到全应用,观感被用户否掉),改为每个 Scope 自己纠偏:
-  // - 挂载/更新:父级 layout effect 晚于子 Theme 执行,把 LCL 语言值抢回;data-astryx-theme 一并
-  //   补上(传送到 body 的浮层靠它命中 @scope 主题样式)。deps 带 mode,跟根 Theme 的重跑同步。
-  // - 卸载:React 删除树父 cleanup 先于子 Theme 的 removeAttribute → 微任务等整个提交结束后恢复
-  //   (幂等,与同一提交里新挂载的 Scope 互不打架)。
+  // - data-theme:LCL 用它存语言名,根 Theme 写 light|dark 会盖掉(切 Space 主题退回 lovable 的根因)→
+  //   父级 layout effect 晚于子 Theme 执行,把语言值抢回;卸载时微任务等整个提交结束后再恢复一次。
+  // - data-astryx-theme:**必须从 <html> 摘掉**。Theme 注入的运行时 CSS(prose 的 :where(h1..h6/p/small/
+  //   code,pre/hr) 与 :scope 上的整套 --color-*/--text-* token)都是 @scope ([data-astryx-theme="forsion-lcl"]),
+  //   <html> 带着它就成了作用域根 → 日历/待办视图与别的内容同窗时(侧栏停着待办、仪表盘嵌卡),整窗裸标签
+  //   吃 Astryx 字号行高:笔记正文 15→14px、行高 24→20px(check:astryxscope 实测)。Astryx 写它只为
+  //   让传送到 body 的浮层/toast 命中作用域;我们用的 Button/DropdownMenu/Kbd/CheckboxInput(含 Tooltip/
+  //   Layer)都没有 createPortal,浮层走原生 popover 留在包裹层里,摘掉零损失。以后引入会传送的组件,
+  //   给它的挂载点单独带属性,别再挂回 <html>。deps 带 mode,跟根 Theme 的重跑同步。
   useLayoutEffect(() => {
     const el = document.documentElement
     el.dataset.theme = lang
-    el.setAttribute('data-astryx-theme', lclTheme.name)
+    el.removeAttribute('data-astryx-theme')
     return () => {
       queueMicrotask(() => {
         document.documentElement.dataset.theme = useTheme.getState().lang
-        document.documentElement.setAttribute('data-astryx-theme', lclTheme.name)
       })
     }
   }, [lang, mode])
