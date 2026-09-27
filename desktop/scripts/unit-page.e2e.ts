@@ -142,6 +142,17 @@ async function main(): Promise<void> {
   })
   try {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } })
+    // 首启引导(OnboardingWizard)开着时外壳整片 visibility:hidden,`.rb` 永远不可见。设备页两条都会触发:
+    // 从没跳过过(ONBOARDING_DISMISS_KEY),以及 unitShim 给了 appVersion(= meta.version)而已看版本不同(ONBOARDING_VERSION_KEY)。
+    // 本仪器测的是配对 / 反代 / vault 桥,不是引导:两个键都预置(键名同 OnboardingWizard.tsx,版本同上面的 meta.version)。
+    // browser.newPage 每次是新 context(新 localStorage)→ 第 9 步的手机页同样要预置。
+    const skipOnboarding = (p: typeof page) => p.addInitScript(() => {
+      try {
+        localStorage.setItem('forsion_tangu_onboarding_done', '1')
+        localStorage.setItem('forsion_tangu_onboarding_version', '9.9.9')
+      } catch { /* 私密模式 */ }
+    })
+    await skipOnboarding(page)
     const pageErrors: string[] = []
     page.on('pageerror', (e) => pageErrors.push(e.message))
 
@@ -241,6 +252,7 @@ async function main(): Promise<void> {
     //   媒体查询不命中(实翻)—— 必须 hasTouch 的新 context(顺带重走一遍配对流,fake 恒允许)。
     //   触屏放宽不翻回桌面是设计(真机横屏仍是手机),故不设反向断言;桌面页不受影响由 1-8 步覆盖。
     const mpage = await browser.newPage({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 3 })
+    await skipOnboarding(mpage)
     await mpage.goto(pageBase, { waitUntil: 'domcontentloaded' })
     await mpage.waitForSelector('.mb-shell', { timeout: 60000 })
     const mobileState = await mpage.evaluate(() => ({
