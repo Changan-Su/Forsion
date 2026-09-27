@@ -4,7 +4,7 @@
  * 接 UiMessage,故可直接喂真实 store 数据(集成期用);回调可选(预览传空)。
  */
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
-import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX } from 'lucide-react'
+import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX, CircleHelp } from 'lucide-react'
 import * as api from '../../services/backendService'
 import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../types'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
@@ -24,6 +24,8 @@ registerMessages({
   'chat.team.done': { zh: '已完成', en: 'Done' },
   'chat.approval.pointer': { zh: '{name} 等你批准 · 在输入框上方', en: '{name} is waiting for your approval · above the input box' },
   'chat.approval.pointerN': { zh: '{n} 项操作等你批准 · 在输入框上方', en: '{n} actions are waiting for your approval · above the input box' },
+  'chat.inquiry.pointer': { zh: '有问题等你回答 · 在输入框上方', en: 'A question is waiting for your answer · above the input box' },
+  'chat.inquiry.pointerN': { zh: '{n} 个问题等你回答 · 在输入框上方', en: '{n} questions are waiting for your answer · above the input box' },
   'chat.approval.update.approved': { zh: '已批准并执行 {name}', en: 'Approved and ran {name}' },
   'chat.approval.update.failed': { zh: '已批准，{name} 执行出错', en: 'Approved; {name} ran with an error' },
   'chat.approval.update.rejected': { zh: '已拒绝 {name}（没有执行）', en: 'Rejected {name} (not run)' },
@@ -44,7 +46,7 @@ import { useEdgeNudge } from '@lcl/engine'
 import { splitSuggestions, type SuggestState, type TaskCard } from './suggest'
 
 import { TaskCards, type TaskLanding } from './TaskCards'
-import { APPROVAL_UPDATE_OPEN, parseApprovalUpdate } from './approvalQueue'
+import { APPROVAL_UPDATE_OPEN, parseApprovalUpdate, pickPlanInquiry } from './approvalQueue'
 export type { TaskLanding }
 import './chat2.css'
 
@@ -174,16 +176,6 @@ export function Thinking2({ reasoning }: { reasoning: string }) {
   )
 }
 
-/**
- * 计划卡该配对哪个询问:**待答的优先**,否则取最后一条。
- * 打回→重交会让同一条助手消息累积多个 kind='plan' 询问(第一条已答),而 planProposal 已被换成新一版
- * —— 取第一条 = 新计划配旧回执(卡上写着「已打回」却摆着新计划),取待答的才对得上。
- */
-export function pickPlanInquiry(msg: Pick<UiMessage, 'planProposal' | 'inquiries'>): InquiryRequest | undefined {
-  if (!msg.planProposal) return undefined
-  const plans = (msg.inquiries || []).filter((q) => q.kind === 'plan')
-  return plans.find((q) => q.status === 'pending') || plans[plans.length - 1]
-}
 
 export interface MessageHandlers {
   onCopy?: (text: string) => void
@@ -197,7 +189,6 @@ export interface MessageHandlers {
   /** 任务卡(```forsion-task)的落点点击:卡片本身什么也不做,点了才发消息 / 建 Muse 日程。
    *  返回 false = 没做成(卡片保留按钮);其余(true / void)= 做成,卡片定格。 */
   onTask?: (card: TaskCard, landing: TaskLanding) => boolean | void | Promise<boolean | void>
-  onInquiry?: (inquiryId: string, answer: string) => void | Promise<boolean | void>
   /** 回退到本条消息的时刻(B1):仅代码 / 仅对话 / 两者。 */
   onRewind?: (mode: 'code' | 'conversation' | 'both') => void
 }
@@ -384,6 +375,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   // 计划审阅的询问归计划卡(专属三态按钮),不再另起一张通用问答卡。
   const planInq = pickPlanInquiry(msg)
   const pendingApv = (msg.approvals || []).filter((a) => a.status === 'pending')
+  const pendingAsk = (msg.inquiries || []).filter((q) => q !== planInq && q.status === 'pending')
   const voiceMode = !!voice?.on && (msg.status === 'done' || msg.status === 'stopped')
   // 顺序段里已消费的 Sketch 不许再在底部画一次。旧历史/语音消息走尾部兼容路径。
   const availableSketchIds = new Set((msg.sketches || []).map((item) => item.callId))
@@ -467,12 +459,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
 
           // 配对 kind='plan' 的询问 → 计划卡自带三态决策(批准/编辑后批准/打回);
           // 没配上(重载后的历史、或 plan 事件缺失)就只渲染正文,询问仍走下面通用卡兜底。
-          <PlanCard
-            key={planInq?.inquiryId || 'plan'}
-            plan={msg.planProposal}
-            req={planInq}
-            onAnswer={planInq ? (ans) => handlers?.onInquiry?.(planInq.inquiryId, ans) : undefined}
-          />
+          <PlanCard key={planInq?.inquiryId || 'plan'} plan={msg.planProposal} req={planInq} />
         )}
         {!!msg.todos?.length && <TodoList todos={msg.todos} />}
         {/* 判空看 body 不看 msg.content:刚开始打建议围栏时 content 非空但正文为空,
@@ -488,7 +475,9 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
             </span>
           </div>
         )}
-        {!body && msg.status === 'streaming' && !msg.work && !msg.toolEvents?.length && !msg.reasoning && (!msg.live || !showWaitDetails) && (
+        {/* 在等你拍板 / 回答时不说「思考中」:流里那行指路已经说明了它在等什么 */}
+        {!body && msg.status === 'streaming' && !msg.work && !msg.toolEvents?.length && !msg.reasoning && (!msg.live || !showWaitDetails)
+          && !pendingApv.length && !pendingAsk.length && planInq?.status !== 'pending' && (
           <div className="t2-dim chat-thinking-live chat-run-shimmer-text" role="status" aria-live="polite">
             {t('chat.thinking')}
           </div>
@@ -509,7 +498,14 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
             {pendingApv.length === 1 ? t('chat.approval.pointer', { name: pendingApv[0].name }) : t('chat.approval.pointerN', { n: pendingApv.length })}
           </div>
         )}
-        {msg.inquiries?.filter((q) => q !== planInq).map((q) => <InquiryCard key={q.inquiryId} req={q} onAnswer={(ans) => handlers?.onInquiry?.(q.inquiryId, ans)} />)}
+        {/* 待答的问题在托盘里答(流里一行指路);答过 / 过期的留在流里当问答记录。 */}
+        {!msg.work && pendingAsk.length > 0 && (
+          <div className="t2-dim t2-apv-pointer" data-inquiry-pointer={pendingAsk.length}>
+            <CircleHelp size={12} />
+            {pendingAsk.length === 1 ? t('chat.inquiry.pointer') : t('chat.inquiry.pointerN', { n: pendingAsk.length })}
+          </div>
+        )}
+        {msg.inquiries?.filter((q) => q !== planInq && q.status !== 'pending').map((q) => <InquiryCard key={q.inquiryId} req={q} onAnswer={() => {}} />)}
         {msg.status === 'error' && (
           <div className="t2-tool err">
             <span className="t2-status-err">✕ {humanizeRunError(msg.error, t)}</span>

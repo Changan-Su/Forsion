@@ -181,13 +181,15 @@ async function main() {
     if (!m) return null
     const root = document.getElementById(`tocmsg-${m.id}`)
     const card = root?.querySelector('.plan-card')
-    const btns = [...(card?.querySelectorAll('.approval-actions button') || [])].map((b) => (b.textContent || '').trim())
+    // 拍板区在输入框上方的托盘里(09-27);按 data-tray-msg 锁到这条消息,理由同上(别的会话的托盘也可能挂在 DOM 上)
+    const tray = document.querySelector(`.t2c-apv-body[data-tray-msg="${m.id}"] [data-plan-decision]`)
+    const btns = [...(tray?.querySelectorAll('.approval-actions button') || [])].map((b) => (b.textContent || '').trim())
     return { mid: m.id, inDom: !!root, btns, body: (card?.querySelector('.plan-body')?.textContent || '').slice(0, 120) }
   }, REUSE ? 15_000 : 300_000, 1500, sid) // 被催一次的那轮要跑两遍模型,180s 不够(实测)
   const plan = found && found.btns.length >= 3 ? found : null
-  check('L3 ⭐ 计划卡出现(五按钮 + markdown 正文)', !!plan && plan.btns.length === 5,
+  check('L3 ⭐ 计划卡出现(流里 markdown 正文 + 输入框上方托盘里五个决策按钮)', !!plan && plan.btns.length === 5,
     plan ? JSON.stringify(plan) : (found
-      ? (found.inDom ? `消息在 DOM 但没有决策按钮:${JSON.stringify(found)}`
+      ? (found.inDom ? `消息在 DOM 但托盘里没有它的决策按钮(托盘可能展开着别的待办):${JSON.stringify(found)}`
         : `⚠️ 该会话的消息压根不在 DOM —— UI 多半停在别的 tab(并行测试/用户切走了),不是计划卡的问题`)
       : '引擎没给出待决的计划询问'))
   const MSG = found?.mid
@@ -204,11 +206,11 @@ async function main() {
   let edited = false
   if (plan) {
     // 同上:锁定到那条消息里的卡,别用全局选择器(否则可能点到别的会话的卡)
-    const btns = page.locator(`#tocmsg-${MSG} .plan-card .approval-actions button`)
+    const btns = page.locator(`.t2c-apv-body[data-tray-msg="${MSG}"] [data-plan-decision] .approval-actions button`)
     const editBtn = btns.filter({ hasText: /编辑/ }).first()
     await editBtn.waitFor({ state: 'visible', timeout: 15_000 })
     await editBtn.click()
-    const ta = page.locator(`#tocmsg-${MSG} textarea.plan-edit`).first() // textarea 自身带这个类,不是它的子元素
+    const ta = page.locator(`.t2c-apv-body[data-tray-msg="${MSG}"] textarea.plan-edit`).first() // textarea 自身带这个类,不是它的子元素
     await ta.waitFor({ state: 'visible', timeout: 10_000 })
     await ta.fill(`Append exactly one line to a.txt: ${MARK}`)
     const typed = await ta.inputValue()

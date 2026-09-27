@@ -5,7 +5,7 @@
  * 每个 token 都换引用,直接按 store 变化打原生会把通知更新打爆(系统每秒只收几条,多的静默丢掉)。
  */
 import type { SessionRecord, UiMessage } from '@/types'
-import { pendingApprovalsOf } from '@/views/chat2/approvalQueue'
+import { pendingPromptsOf } from '@/views/chat2/approvalQueue'
 
 export interface IslandState {
   sessionId: string
@@ -35,9 +35,10 @@ export function deriveIsland(
 ): IslandState | null {
   const items = Object.keys(running).map((sessionId) => {
     const m = lastAssistant(messages[sessionId])
-    // 审批按整个会话找:run 往后跑会切出新段,待批的那张不一定挂在末条助手消息上
-    const approval = pendingApprovalsOf(messages[sessionId])[0]?.req
-    const inquiry = m?.inquiries?.find((q) => q.status === 'pending')
+    // 审批 / 提问按整个会话找(与输入框上方的托盘同源):run 往后跑会切出新段,待办不一定挂在末条助手消息上
+    const prompts = pendingPromptsOf(messages[sessionId])
+    const approval = prompts.find((p) => p.kind === 'approval')?.req
+    const inquiry = prompts.find((p) => p.kind !== 'approval')?.req
     const tool = m?.toolEvents?.filter((t) => !t.done).pop()
     return {
       sessionId,

@@ -19,7 +19,7 @@ import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage } from './chat2/EditorialMessage'
 import { ApprovalTray } from './chat2/ApprovalTray'
-import { APPROVAL_UPDATE_OPEN, pendingApprovalsOf } from './chat2/approvalQueue'
+import { APPROVAL_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
 import { RunStatsLine } from './chat2/RunStatsLine'
 import { inRunWindow } from '../stores/runStats'
 import { EmptyState2 } from './chat2/EmptyState2'
@@ -173,7 +173,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const activeCtxInfo = s.activeCtxInfo && (!s.activeCtxInfo.modelId || !activeModel || s.activeCtxInfo.modelId === activeModel.id) ? s.activeCtxInfo : null
   const activeUsage = s.activeUsage
   const activeMessages = s.activeMessages
-  const pendingApprovals = useMemo(() => pendingApprovalsOf(activeMessages), [activeMessages])
+  const pendingApprovals = useMemo(() => pendingPromptsOf(activeMessages), [activeMessages])
   const running = s.running
   const execConfig = s.execConfig
   // Vault 切换会即时重算 Project 列表与系统工作根;不能只在 s.workspaces() 里 getState 快照,
@@ -377,12 +377,12 @@ export function ChatView({ leaf, params }: ViewProps) {
     if (stickToBottom.current && !s.jumpTarget) scrollToBottom()
   }, [activeMessages, historyLoading, scrollToBottom, compactingOn])
 
-  // 询问属于必须看到的操作，首次出现时强制定位到底部。审批不算:它在输入框上方的托盘里恒可见,
-  // 再把人拽到底部正是「审批打断阅读」的一半(托盘之前审批卡插在流里,才需要这一拽)。
+  // 新计划待拍板时强制定位到底部:拍板区在输入框上方的托盘里,但计划正文在流里,得让人看得到。
+  // 审批与普通提问不算:它们整张在托盘里恒可见,再把人拽到底部正是「打断阅读」的一半。
   useEffect(() => {
     let pending = 0
     for (const m of activeMessages) {
-      pending += m.inquiries?.filter((q) => q.status === 'pending').length || 0
+      pending += m.planProposal ? m.inquiries?.filter((q) => q.status === 'pending' && q.kind === 'plan').length || 0 : 0
     }
     if (pending > pendingCountRef.current) scrollToBottom(true)
     pendingCountRef.current = pending
@@ -534,7 +534,6 @@ export function ChatView({ leaf, params }: ViewProps) {
                       onBranch: params.childSurface ? undefined : () => void s.branchFromMessage(m.id, activeId),
                       onEdit: params.readOnly ? undefined : () => startEdit(m.id, m.content),
                       onRewind: params.readOnly ? undefined : (mode) => void s.rewindTo(m.id, mode, activeId),
-                      onInquiry: (iid, ans) => s.answerInquiry(m.id, iid, ans, activeId),
                       // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
                       onSuggest: params.readOnly ? undefined : (text) => void s.send(text, [], undefined, undefined, undefined, activeId),
                       onTask: (card, landing) => runTaskCard(card, landing, activeId),
@@ -662,7 +661,11 @@ export function ChatView({ leaf, params }: ViewProps) {
         <Composer2
           sessionId={activeId}
           approvalTray={pendingApprovals.length ? (
-            <ApprovalTray items={pendingApprovals} onDecide={(mid, aid, action, args) => void s.decideApproval(mid, aid, action, args, activeId)} />
+            <ApprovalTray
+              items={pendingApprovals}
+              onDecide={(mid, aid, action, args) => void s.decideApproval(mid, aid, action, args, activeId)}
+              onAnswer={(mid, iid, ans) => s.answerInquiry(mid, iid, ans, activeId)}
+            />
           ) : undefined}
           advisory={!params.childSurface ? (
             <QuotaAdvisoryBanner

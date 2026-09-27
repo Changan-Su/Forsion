@@ -76,6 +76,13 @@ check('7b 待批审批挂在更早的段上(run 往后跑切出了新段)照样�
   assert.equal(r.chip, 'island.chipApproval')
 })
 
+check('7c 待答的提问挂在更早的段上,同样上岛(与输入框上方的托盘同源)', () => {
+  const early = { ...asst({ inquiries: [{ inquiryId: 'q', runId: 'r1', question: '?', options: [], status: 'pending' }] }), id: 'm0', status: 'done' }
+  const r = deriveIsland({ a: 'r1' }, { a: [early, asst({ content: 'still working' })] }, sessions, since({}), tr)
+  assert.equal(r.text, 'island.inquiry')
+  assert.equal(r.chip, 'island.chipInquiry')
+})
+
 check('8 都没有待办 → 最近开跑的占岛', () => {
   const r = deriveIsland({ a: 'r1', b: 'r2', c: 'r3' }, {}, sessions, since({ a: 3, b: 7, c: 5 }), tr)
   assert.equal(r.sessionId, 'b')

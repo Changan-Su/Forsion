@@ -4,7 +4,7 @@ import type { SessionRecord, UiMessage, WorkspaceDescriptor } from '../../types'
 import { EditorialMessage } from './EditorialMessage'
 import { Composer2 } from './Composer2'
 import { ApprovalTray } from './ApprovalTray'
-import { pendingApprovalsOf } from './approvalQueue'
+import { pendingPromptsOf } from './approvalQueue'
 import { SidebarPane } from './SidebarPane'
 import { EmptyState2 } from './EmptyState2'
 import { RightPanel } from '../../components/RightPanel'
@@ -22,6 +22,7 @@ registerMessages({
   'chatpreview.plan': { zh: '1. 检查 hash 分支顺序\n2. 补路由与导航\n3. 运行 typecheck / build', en: '1. Check the order of the hash branches\n2. Add the route and the navigation link\n3. Run typecheck / build' },
   'chatpreview.msg.answer': { zh: '看完了。当前是 5 条 `if (route.view === …)` 顺序分支，`frame` 在前、`aion/tangu` 在后，互不吞。\n\n```ts\nif (route.view === \'frame\') return <Frame/>\nif (route.view === \'tangu\') return <Tangu/>\n```\n\n规模还小，**暂不必抽表**——超过 ~8 条再说。', en: 'Had a look. Right now there are 5 sequential `if (route.view === …)` branches — `frame` first, then `aion/tangu` — and none of them swallows another.\n\n```ts\nif (route.view === \'frame\') return <Frame/>\nif (route.view === \'tangu\') return <Tangu/>\n```\n\nAt this size a table is **not worth extracting yet** — revisit past ~8 branches.' },
   'chatpreview.msg.buildFirst': { zh: '我先跑一遍构建确认。', en: 'Let me run a build first to confirm.' },
+  'chatpreview.plan.question': { zh: '计划已就绪。是否批准？', en: 'The plan is ready. Approve it?' },
   'chatpreview.inquiry.question': { zh: '路由是抽成表驱动，还是保持 if 分支？', en: 'Should routing become table-driven, or stay as if branches?' },
   'chatpreview.inquiry.optTable': { zh: '抽成 routes 表', en: 'Extract a routes table' },
   'chatpreview.inquiry.optIf': { zh: '保持 if 分支', en: 'Keep the if branches' },
@@ -51,6 +52,8 @@ function buildSample(t: TFn): UiMessage[] {
         { status: 'pending', content: t('chatpreview.todo.build') },
       ] as UiMessage['todos'],
       planProposal: t('chatpreview.plan'),
+      // 计划待拍板:正文留在这条消息的计划卡上,拍板区进输入框上方的托盘
+      inquiries: [{ inquiryId: 'iqp', runId: 'r1', question: t('chatpreview.plan.question'), options: [], status: 'pending', kind: 'plan' }],
       content: t('chatpreview.msg.answer'),
     },
     {
@@ -124,9 +127,6 @@ export function ChatPreview() {
                 <EditorialMessage
                   key={m.id}
                   msg={m}
-                  handlers={{
-                    onInquiry: (_id, answer) => setAction(`inquiry:${answer}`),
-                  }}
                 />
               ))}
             </div>
@@ -134,7 +134,11 @@ export function ChatPreview() {
         )}
         <Composer2
           approvalTray={empty ? undefined : (
-            <ApprovalTray items={pendingApprovalsOf(sample)} onDecide={(_mid, _id, decision, args) => setAction(`approval:${decision}:${String(args?.command || '')}`)} />
+            <ApprovalTray
+              items={pendingPromptsOf(sample)}
+              onDecide={(_mid, _id, decision, args) => setAction(`approval:${decision}:${String(args?.command || '')}`)}
+              onAnswer={(_mid, _id, answer) => setAction(`inquiry:${answer}`)}
+            />
           )}
           disabled={false}
           running={false}
