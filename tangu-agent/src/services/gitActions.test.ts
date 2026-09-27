@@ -349,6 +349,21 @@ describe('仓库自带会执行程序的配置(gitTrust)', () => {
     expect(git(cwd, 'rev-parse', 'HEAD~1')).toBe(base);
   });
 
+  it.skipIf(process.platform === 'win32')('同一秒里两条一模一样的 reset(钩子 reset 回基准再提交)→ 前两条比不出来,条数比得出:commit_unverified,不撤钩子的提交', async () => {
+    const cwd = repo('same-second-reset');
+    const FIXED = '2026-01-01T00:00:00+0000'; // reflog 的时间取提交者时间:钉死它,两次 reset 格式化后逐字相同
+    writeFileSync(path.join(cwd, 'a.txt'), 'a');
+    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
+    git(cwd, 'commit', '-q', '--allow-empty', '-m', 'tmp');
+    execFileSync('git', ['-C', cwd, 'reset', '-q', '--soft', 'HEAD~1'], { stdio: 'pipe', env: { ...process.env, GIT_COMMITTER_DATE: FIXED } });
+    const hooks = dir('same-second-reset/.githooks');
+    git(cwd, 'config', 'core.hooksPath', '.githooks');
+    writeFileSync(path.join(hooks, 'post-commit'), `#!/bin/sh\n[ -f .git/hook-done ] && exit 0\ntouch .git/hook-done\nGIT_COMMITTER_DATE='${FIXED}' git reset -q --soft HEAD~1\necho y > extra.txt\ngit add extra.txt\ngit commit -qm again\n`, { mode: 0o755 });
+    writeFileSync(path.join(cwd, 'a.txt'), 'b');
+    expect(await codeOf(gitCommit(cwd, 'mine', true))).toBe('commit_unverified');
+    expect(git(cwd, 'log', '-1', '--format=%s')).toBe('again'); // 钩子的提交原样
+  });
+
   it.skipIf(process.platform === 'win32')('提交前 reflog 是空的(清过)→ 链没有前一条可接:钩子塞了文件只报 commit_unverified,不撤', async () => {
     const cwd = repo('empty-reflog');
     writeFileSync(path.join(cwd, 'a.txt'), 'a');

@@ -374,6 +374,7 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
   }
   // 提交前该引用 reflog 的最新一条(首次提交 / 没开 reflog = 空):提交后要看到「正好多了我们这一条」。读失败 = null,之后按认不准处理
   const logBefore = base ? await reflogTop(cwd, ref, 1).catch(() => null) : [];
+  const countBefore = logBefore?.length ? await reflogCount(cwd, ref).catch(() => null) : null;
   const committed = await runAction(cwd, ['commit', '-F', '-'], { input: `${text}\n` });
   if (committed.code !== 0 && /tell me who you are|unable to auto-detect email address|auto-detection is disabled/i.test(committed.stderr)) {
     throw new GitActionError('no_identity', 'git does not know your name and email yet', tail(committed.stderr));
@@ -395,8 +396,10 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
       const [line, ...rest] = logAfter;
       if (!/^commit(?: \(initial\))?:/.test(line.slice(nthSep(line, 2) + 1))) throw new Error('the latest update of the branch is not this commit');
       if (rest.join('\n') !== logBefore!.join('\n')) throw new Error('the branch was updated more than once while committing');
-      // 链得接在提交前那一条上才算认准:提交前没有 reflog(首次提交 / 清过)时这一条是谁写的证明不了
-      ours = line.slice(0, nthSep(line, 1)); identified = logBefore!.length > 0;
+      // 条数也得正好多一条:同一秒里两条一模一样的 reset(同一目标、同一说明)格式化后分不出来,条数分得出
+      if (countBefore !== null && await reflogCount(cwd, ref) !== countBefore + 1) throw new Error('the branch was updated more than once while committing');
+      // 链得接在提交前那一条上才算认准:提交前没有 reflog(首次提交 / 清过)或条数没读到时,这一条是谁写的证明不了
+      ours = line.slice(0, nthSep(line, 1)); identified = logBefore!.length > 0 && countBefore !== null;
     } else {
       ours = must(await readGit(cwd, ['rev-parse', '--verify', ref]), 'rev-parse').stdout.trim();
     }
@@ -430,6 +433,13 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
 async function reflogTop(cwd: string, ref: string, n: number): Promise<string[]> {
   const r = must(await readGit(cwd, ['reflog', 'show', '--date=raw', '-n', String(n), '--format=%H%x1f%gd%x1f%gs', ref], { timeoutMs: 5000 }), 'reflog');
   return r.stdout.split('\n').filter(Boolean);
+}
+
+/** 引用 reflog 的总条数(同一个提交出现几次就算几条)。 */
+async function reflogCount(cwd: string, ref: string): Promise<number> {
+  const n = Number(must(await readGit(cwd, ['rev-list', '--walk-reflogs', '--count', ref], { timeoutMs: 5000 }), 'rev-list').stdout.trim());
+  if (!Number.isInteger(n)) throw new Error('the reflog could not be counted');
+  return n;
 }
 
 /** 第 k 个 \x1f 的位置(说明里也可能有 \x1f,只按前面几个切);没有就是串尾。 */
