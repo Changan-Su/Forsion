@@ -6,11 +6,11 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, appendFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import {
   parseTimeArg, resolveRange, foldComputerHistory, formatItem, readComputerHistory, computerHistoryDigest,
   computerHistoryGate, computerHistoryRecallHide, computerHistoryDir, cleanObserved, displayUrl, type ChEvent, type ChState,
-  chTestSeams, CH_CHANGED_NOTICE, COMPUTER_HISTORY_PERSIST_PLACEHOLDER,
+  chTestSeams, CH_CHANGED_NOTICE, COMPUTER_HISTORY_PERSIST_PLACEHOLDER, CH_DESKTOP_CONFIG_ENV,
 } from './computerHistory.js';
 import { configureTangu } from '../seams/runtime.js';
 import { createAiStudioProfile, createTanguProfile } from '../profiles/index.js';
@@ -28,16 +28,34 @@ const hhmm = (t: number): string => { const d = new Date(t); return `${String(d.
 
 let home: string;
 let prevHome: string | undefined;
+let prevDesktopCfg: string | undefined;
+/** 第二道闸:桌面壳配置(生产在 Electron userData 下,由桌面经 FORSION_DESKTOP_CONFIG 传绝对路径给引擎)。 */
+let desktopCfg: string;
 beforeAll(() => {
   prevHome = process.env.TANGU_HOME;
+  prevDesktopCfg = process.env[CH_DESKTOP_CONFIG_ENV];
   home = mkdtempSync(join(tmpdir(), 'tangu-ch-'));
   process.env.TANGU_HOME = home; // basename 不是 tangu → 共享域 = home 自身
+  desktopCfg = join(home, 'userData', 'tangu-desktop-config.json');
 });
 afterAll(() => {
   if (prevHome === undefined) delete process.env.TANGU_HOME;
   else process.env.TANGU_HOME = prevHome;
+  if (prevDesktopCfg === undefined) delete process.env[CH_DESKTOP_CONFIG_ENV];
+  else process.env[CH_DESKTOP_CONFIG_ENV] = prevDesktopCfg;
   rmSync(home, { recursive: true, force: true });
 });
+// 缺省两道闸都开(用户开着电脑历史);只测第二道闸的用例自己改
+beforeEach(() => {
+  process.env[CH_DESKTOP_CONFIG_ENV] = desktopCfg;
+  writeDesktopConfig({ computerHistoryEnabled: true });
+});
+
+function writeDesktopConfig(o: Record<string, unknown> | null): void {
+  mkdirSync(join(home, 'userData'), { recursive: true });
+  if (o === null) { rmSync(desktopCfg, { force: true }); return; }
+  writeFileSync(desktopCfg, JSON.stringify({ mode: 'managed', activityLogEnabled: true, ...o }));
+}
 
 function writeState(p: Partial<ChState> | null): void {
   mkdirSync(computerHistoryDir(), { recursive: true });
@@ -229,6 +247,53 @@ describe('foldComputerHistory(段落、离开、10s 规则、片段)', () => {
     ]);
   });
 
+  it('resumed 断点(评审 round3 P2):A(标题 T,网址 a)→ 无痕(不发事件)→ B(标题 T,网址 b,resumed)= 两段,B 不继承 A 的敲字 / 时长 / 网址', () => {
+    const T = 'Inbox'; // 同 App 同标题:老判据(同键重复)与段键(App+标题)都认不出这是边界
+    const items = foldComputerHistory([
+      { t: at(12, 0), kind: 'app', app: CHROME, title: T, url: 'https://a.example/mail' },
+      { t: at(12, 5), kind: 'text', app: CHROME, text: 'typed-on-a' }, // A 的最后一条 —— 之后无痕窗口 15 分钟
+      { t: at(12, 20), kind: 'window', app: CHROME, title: T, url: 'https://b.example/mail', resumed: true },
+      { t: at(12, 30), kind: 'app', app: VSCODE, title: 'x' },
+    ], range);
+    expect(items.map(formatItem)).toEqual([
+      '09-27 12:00–12:05 (5m) Google Chrome — Inbox [a.example/mail] | typed: "typed-on-a"', // 此前:12:00–12:30 (30m) [b.example/mail]
+      '09-27 12:20–12:30 (10m) Google Chrome — Inbox [b.example/mail]',
+      '09-27 12:30–12:30 (<1m) Code — x',
+    ]);
+    // 标题不同也一样:A 收在自己最后一条事件,无痕那 15 分钟不算给 A
+    const other = foldComputerHistory([
+      { t: at(12, 0), kind: 'app', app: CHROME, title: T, url: 'https://a.example/mail' },
+      { t: at(12, 5), kind: 'text', app: CHROME, text: 'typed-on-a' },
+      { t: at(12, 20), kind: 'window', app: CHROME, title: 'Other', url: 'https://c.example/', resumed: true },
+      { t: at(12, 30), kind: 'app', app: VSCODE, title: 'x' },
+    ], range);
+    expect(formatItem(other[0])).toBe('09-27 12:00–12:05 (5m) Google Chrome — Inbox [a.example/mail] | typed: "typed-on-a"'); // 此前:12:00–12:20 (20m)
+    // 断点段只停 5 秒被 10s 规则丢掉:边界顺延,两侧的编辑器段不跨过它并成一段,无痕那 10 分钟谁也不算
+    const dropped = foldComputerHistory([
+      { t: at(12, 0), kind: 'app', app: VSCODE, title: 'x' },
+      { t: at(12, 10), kind: 'app', app: CHROME, title: T, url: 'https://a.example/mail' }, // 立刻进无痕 10 分钟
+      { t: at(12, 20), kind: 'window', app: CHROME, title: T, url: 'https://b.example/mail', resumed: true },
+      { t: at(12, 20, 5), kind: 'app', app: VSCODE, title: 'x' },
+      { t: at(12, 30), kind: 'app', app: SLACK, title: 'y' },
+    ], range);
+    expect(dropped.map(formatItem)).toEqual([
+      '09-27 12:00–12:10 (10m) Code — x',
+      '09-27 12:20–12:30 (10m) Code — x', // 此前:中间多一段 12:10–12:20 (10m) Google Chrome — Inbox [b.example/mail]
+      '09-27 12:30–12:30 (<1m) Slack — y',
+    ]);
+  });
+
+  it('排除段遇断点收到断点那一刻(排除标记就是起点,那段时间确实在被排除处,不是 <1m)', () => {
+    const PW = { name: '1Password', bundleId: 'com.1password.1password', excluded: true as const };
+    const items = foldComputerHistory([
+      { t: at(12, 0), kind: 'app', app: VSCODE, title: 'x' },
+      { t: at(12, 10), kind: 'app', app: PW },
+      { t: at(12, 20), kind: 'app', app: VSCODE, title: 'x', resumed: true },
+      { t: at(12, 30), kind: 'app', app: SLACK, title: 'y' },
+    ], range);
+    expect(items.map(formatItem)[1]).toMatch(/^09-27 12:10–12:20 \(10m\) 1Password/);
+  });
+
   it('displayUrl 剥 userinfo(URL 里内嵌的账号密码不进模型)', () => {
     expect(displayUrl('https://admin:hunter2@192.168.1.1/setup')).toBe('192.168.1.1/setup');
     expect(displayUrl('https://user@www.example.com/a/?q=1#x')).toBe('example.com/a');
@@ -350,6 +415,19 @@ describe('readComputerHistory(状态行、围栏、query、events、app)', () =>
       expect(await readComputerHistory({ query: 'budget' }, NOW)).toBe(CH_CHANGED_NOTICE);
     });
 
+    it('读的过程中桌面配置被关(state.json 没写成、代次也没动)→ 丢弃结果;Muse 摘要同理(评审 round3 P1)', async () => {
+      writeState({ dataGen: 4 });
+      chTestSeams.afterEventsRead = () => writeDesktopConfig({ computerHistoryEnabled: false });
+      expect(await readComputerHistory({}, NOW)).toBe(CH_CHANGED_NOTICE);
+      writeDesktopConfig({ computerHistoryEnabled: true });
+      expect(await readComputerHistory({ query: 'budget' }, NOW)).toBe(CH_CHANGED_NOTICE); // seam 仍在:中途又被关
+      const now = Date.now();
+      writeEvents([{ t: now - 20 * MIN, kind: 'app', app: VSCODE, title: 'DIGEST-MARK.md' }]);
+      writeState({ since: now - HOUR, dataGen: 4 });
+      writeDesktopConfig({ computerHistoryEnabled: true });
+      expect(await computerHistoryDigest(now)).toBe('');
+    });
+
     it('Muse 摘要同理:读的过程中变了 → 空串(这一周期不给)', async () => {
       const now = Date.now();
       writeEvents([{ t: now - 20 * MIN, kind: 'app', app: VSCODE, title: 'DIGEST-MARK.md' }]);
@@ -423,6 +501,38 @@ describe('read_computer_history 门禁矩阵(registry 级)', () => {
     expect(has(base)).toBe(false);
     writeState(null);
     expect(has(base)).toBe(false);
+  });
+
+  it('第二道闸(评审 round3 P1):state.json 开着,桌面配置关着 / 缺失 / 坏 / 非字面 true / 没传或非绝对路径 → 工具不在、读取与 Muse 摘要都给不出东西', async () => {
+    const now = Date.now();
+    writeEvents([{ t: now - 10 * MIN, kind: 'app', app: VSCODE, title: 'GATE2-MARK.md' }]);
+    writeState({ since: now - HOUR });
+    const call = { id: 'c2', type: 'function', function: { name: 'read_computer_history', arguments: '{}' } } as any;
+    // 对照:两道闸都开 → 在场、读得到
+    expect(has(base)).toBe(true);
+    expect(await readComputerHistory({}, now)).toContain('GATE2-MARK');
+    expect(await computerHistoryDigest(now)).toContain('GATE2-MARK');
+    const cases: Array<[string, () => void]> = [
+      ['用户关了(桌面配置写成了,state.json 没写成也没删掉)', () => writeDesktopConfig({ computerHistoryEnabled: false })],
+      ['缺键(从没开过)', () => writeDesktopConfig({})],
+      ['非字面 true', () => writeDesktopConfig({ computerHistoryEnabled: 'true' })],
+      ['半写 / 坏 JSON', () => writeFileSync(desktopCfg, '{"computerHistoryEnabled": tr')],
+      ['文件缺失', () => writeDesktopConfig(null)],
+      ['没传路径(不经桌面拉起的引擎)', () => { delete process.env[CH_DESKTOP_CONFIG_ENV]; }],
+      ['相对路径(指向的文件其实开着)', () => { process.env[CH_DESKTOP_CONFIG_ENV] = relative(process.cwd(), desktopCfg); }],
+    ];
+    for (const [label, apply] of cases) {
+      process.env[CH_DESKTOP_CONFIG_ENV] = desktopCfg;
+      writeDesktopConfig({ computerHistoryEnabled: true });
+      apply();
+      expect({ label, has: has(base) }).toEqual({ label, has: false });
+      expect({ label, hide: computerHistoryRecallHide(desktop, base) }).toEqual({ label, hide: 'read_computer_history' });
+      const out = await readComputerHistory({}, now);
+      expect(out, label).toMatch(/turned off/);
+      expect(out, label).not.toContain('GATE2-MARK');
+      expect(await computerHistoryDigest(now), label).toBe('');
+      expect((await executeTool(call, base)).isError, label).toBe(true);
+    }
   });
 
   it('默认拒:无 hostExec / 通道会话 / 团队成员 / 讨论 / 临时成员 / 子代理 / 远程或缺省客户端 / 自动化', () => {

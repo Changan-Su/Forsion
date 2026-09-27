@@ -60,6 +60,7 @@ import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, 
 import { computerUseLiveView, helperSocketPath } from './computerUse'
 import { permissionHelperAppPath, registerDesktopPermissions } from './desktopPermissions'
 import { ComputerHistory, readSelfBundleId, registerComputerHistoryIpc, stopComputerHistoryForWipe, type ComputerHistoryConfig } from './computerHistory'
+import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
 import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import { UnitHost } from './unitHost'
@@ -540,7 +541,8 @@ const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
   'summaryOpenIn', // 桌面专属(任务概览的文件打开去处,纯渲染层 UI)
   'lastApprovalMode', 'lastThinkingLevel', 'lastChatThinkingLevel', // 桌面专属(新会话起步档位的记忆,纯渲染层 UI;chat 单独一槽)
 ]
-const configPath = (): string => join(app.getPath('userData'), 'tangu-desktop-config.json')
+// 文件名是与引擎的契约(电脑历史第二道闸经 FORSION_DESKTOP_CONFIG 读它,见 shared/computerHistory.ts),改名三处同步
+const configPath = (): string => join(app.getPath('userData'), COMPUTER_HISTORY_DESKTOP_CONFIG_FILE)
 
 /** 前台窗口采样开关的**内存镜像**(真源 = config.activeWindowEnabled;启动时读一次,config:set 里跟着刷)。
  *  默认 false:配置读失败、或这行还没跑到,都必须是「关」。 */
@@ -2068,13 +2070,14 @@ app.whenReady().then(async () => {
   ipcMain.handle('config:get', () => effectiveConfig())
   ipcMain.handle('config:set', async (_e, patch: Partial<TanguStoredConfig>) => {
     const accountCreds = loadTanguCreds() // Capture before saveConfig's first await.
-    // before 与写入同一队位读出(见 saveConfig);下面的内存镜像紧跟本次落盘赋值,先于下一个排队的写 → 顺序与盘面一致。
-    const before = await saveConfig(patch, accountCreds)
-    if (patch.activityLogEnabled !== undefined) setActivityLogEnabled(patch.activityLogEnabled !== false)
-    // 渲染层直接改配置(正路是 window.tangu.computerHistory.*,那条自己落盘)→ 同步控制器内存态
+    // 渲染层直接改电脑历史的键(正路是 window.tangu.computerHistory.*,那条自己落盘):这次落盘与控制器的意愿操作 / 后台补落
+    // 排同一条队、发出即作废在途的「开 / 恢复」,落成后只同步仍是最新意愿的字段(见 ComputerHistory.configSet)
     const chPatch: ComputerHistoryConfig = {}
     for (const k of ['computerHistoryEnabled', 'computerHistoryPausedUntil', 'computerHistoryExclude'] as const) if (k in patch) (chPatch as Record<string, unknown>)[k] = patch[k]
-    if (Object.keys(chPatch).length) computerHistory?.applyConfig(chPatch)
+    const save = (): Promise<TanguStoredConfig> => saveConfig(patch, accountCreds)
+    // before 与写入同一队位读出(见 saveConfig);下面的内存镜像紧跟本次落盘赋值,先于下一个排队的写 → 顺序与盘面一致。
+    const before = computerHistory && Object.keys(chPatch).length ? await computerHistory.configSet(chPatch, save) : await save()
+    if (patch.activityLogEnabled !== undefined) setActivityLogEnabled(patch.activityLogEnabled !== false)
     if (patch.activeWindowEnabled !== undefined) {
       activeWindowOn = patch.activeWindowEnabled === true
       // 它的 ⌘K 入口注册在**主窗**的命令表里,而开关多半是从设置浮窗拨的(命令表每个渲染进程各一份)。

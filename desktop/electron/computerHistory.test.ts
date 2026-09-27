@@ -7,10 +7,11 @@ import path from 'node:path'
 vi.mock('electron', () => ({ ipcMain: { handle: vi.fn() } }))
 
 import {
-  applyExclude, buildPolicy, ComputerHistory, ComputerHistoryStore, DEFAULT_TITLE_ONLY_BUNDLE_IDS, foldSessions,
+  applyExclude, buildPolicy, ComputerHistory, ComputerHistoryStore, DEFAULT_TITLE_ONLY_BUNDLE_IDS, eventT, foldSessions,
   localDay, nextLocalMidnight, normalizeExclude, sanitizeEvent, stopComputerHistoryForWipe, tightenExclude,
   type ComputerHistoryDeps, type ComputerHistoryPersistPatch,
 } from './computerHistory'
+import { createSerialQueue } from './configWrite'
 import type { ComputerHistoryEvent, ComputerHistoryState } from '../shared/computerHistory'
 
 const DAY = 86_400_000
@@ -92,6 +93,66 @@ describe('ComputerHistoryStore', () => {
     // 再往后 2ms:剩下两条也都过期 → 整个文件删掉
     expect(await store.prune(now + 2)).toEqual([path.basename(file)])
     expect(existsSync(file)).toBe(false)
+  })
+
+  it('保留期每小时(creview3 #3):截止日已剪过(首行 >= 截止)→ 只读首行、不整读不重写;需要重写时不逐行 JSON.parse', async () => {
+    const root = tmpRoot()
+    const store = new ComputerHistoryStore(root)
+    await store.ensureRoot()
+    const now = at(2026, 9, 27, 12)
+    const cutoffT = now - 7 * DAY
+    const file = path.join(store.eventsDir, `${localDay(cutoffT)}.jsonl`)
+    // 首行已在期内;后面故意放一条更早的(乱序)和一行残行:只要整读重写过,文件就会变
+    const body = evLine(cutoffT + 60_000) + evLine(cutoffT + 120_000) + evLine(cutoffT - 1) + '{"t":17\n'
+    writeFileSync(file, body, { mode: 0o600 })
+    const rewrite = vi.spyOn(store as unknown as { rewriteKeeping: (...a: unknown[]) => Promise<boolean> }, 'rewriteKeeping')
+    const parse = vi.spyOn(JSON, 'parse')
+    cleanups.push(() => parse.mockRestore())
+    const parsedLines = (): number => parse.mock.calls.filter(([s]) => typeof s === 'string' && s.startsWith('{"t":')).length
+    expect(await store.prune(now)).toEqual([])
+    expect(rewrite).not.toHaveBeenCalled()
+    expect(readFileSync(file, 'utf8')).toBe(body)
+    expect(parsedLines()).toBe(0) // 首行也走前缀正则
+    // 截止挪过首行:这回要重写 —— 结果与完整解析同口径,但不逐行 JSON.parse(只剩残行那一次退回)
+    expect(await store.prune(now + 90_000)).toEqual([])
+    expect(parsedLines()).toBe(1)
+    expect(rewrite).toHaveBeenCalledTimes(1)
+    expect(lines(file).map((e) => e.t)).toEqual([cutoffT + 120_000])
+  })
+
+  it('保留期流式重写(creview3 #3):> 64KB、行跨块、多字节字符跨块、键序不同的行、残行 —— 留下的与逐行完整解析的结果逐字节一致', async () => {
+    const root = tmpRoot()
+    const store = new ComputerHistoryStore(root)
+    await store.ensureRoot()
+    const now = at(2026, 9, 27, 12)
+    const cutoffT = now - 7 * DAY
+    const file = path.join(store.eventsDir, `${localDay(cutoffT)}.jsonl`)
+    const rows: string[] = []
+    for (let i = 0; i < 1500; i++) {
+      const t = cutoffT - 750_000 + i * 1000
+      const title = `标题${'电脑历史'.repeat(1 + (i % 7))}-${i}`
+      rows.push(i % 97 === 5
+        ? JSON.stringify({ kind: 'window', t, app: { name: 'Chrome', bundleId: 'c' }, title }) // t 不在最前:退回完整解析
+        : JSON.stringify({ t, kind: 'window', app: { name: 'Chrome', bundleId: 'c' }, title }))
+      if (i === 900) rows.push(`{"t":${t},"kind":"window","title":"半截`) // 残行
+    }
+    writeFileSync(file, rows.join('\n') + '\n', { mode: 0o600 })
+    expect(statSync(file).size).toBeGreaterThan(3 * 64 * 1024)
+    const expected = rows.filter((l) => { try { return JSON.parse(l).t >= cutoffT } catch { return false } })
+    expect(expected.length).toBeGreaterThan(0)
+    expect(expected.length).toBeLessThan(rows.length - 1)
+    expect(await store.prune(now)).toEqual([])
+    expect(readFileSync(file, 'utf8')).toBe(expected.join('\n') + '\n')
+    expect(readdirSync(store.eventsDir).filter((f) => f.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('eventT:前缀正则取 t;键序不同 / 截断的行退回完整解析', () => {
+    expect(eventT('{"t":1759000000123,"kind":"app"}')).toBe(1759000000123)
+    expect(eventT('{"kind":"app","t":5}')).toBe(5)
+    expect(eventT('{"t":17')).toBeNull()
+    expect(eventT('{"t":17,"kind":"app","title":"半截')).toBeNull()
+    expect(eventT('')).toBeNull()
+    expect(eventT(null)).toBeNull()
   })
 
   it('clear(since):跨界那天原子重写只留 t < since(残行一并删),之后的整天删,之前的不动', async () => {
@@ -234,6 +295,35 @@ describe('输入收敛 / 策略', () => {
     expect(applyExclude({ t, kind: 'text', app: chrome, text: 'x' }, none, { context: { bundleId: chrome.bundleId, excluded: true } })).toBeNull()
     expect(applyExclude({ t, kind: 'text', app: chrome, text: 'x', url: 'https://ok.example/' }, ex, { context: onBank })).not.toBeNull() // 自己带 url 的按自己判
   })
+
+  it('断点标 resumed(creview3 #4):只认 app / window、排除 App 的切换上也留;排除标记带着它;「排除站点 → 无痕 → 同一排除站点」那条标记不丢', () => {
+    const now = Date.now()
+    const chrome = { name: 'Chrome', bundleId: 'com.google.Chrome' }
+    expect(sanitizeEvent({ t: now, kind: 'window', app: chrome, title: 'B', resumed: true }, now)?.resumed).toBe(true)
+    expect(sanitizeEvent({ t: now, kind: 'app', app: { name: 'P', excluded: true }, title: 'secret', resumed: true }, now))
+      .toEqual({ t: now, kind: 'app', app: { name: 'P', excluded: true }, resumed: true })
+    expect(sanitizeEvent({ t: now, kind: 'text', app: chrome, text: 'x', resumed: true }, now)).not.toHaveProperty('resumed')
+    expect(sanitizeEvent({ t: now, kind: 'window', app: chrome, resumed: 'yes' }, now)).not.toHaveProperty('resumed')
+
+    const t = 1
+    const ex = { apps: ['com.bank'], domains: ['bank.cn'] }
+    const onBank = { bundleId: chrome.bundleId, url: 'https://www.bank.cn/a', excluded: true }
+    const back = { t, kind: 'window' as const, app: chrome, title: 'x', url: 'https://www.bank.cn/a' }
+    // 老 helper 没有断点标:同 App 的排除情境里不重复标
+    expect(applyExclude(back, ex, { context: onBank })).toBeNull()
+    // 新 helper:无痕之后回到同一排除站点 → 留一条带断点标、不带内容的标记
+    expect(applyExclude({ ...back, resumed: true }, ex, { context: onBank }))
+      .toEqual({ t, kind: 'window', app: { ...chrome, excluded: true }, resumed: true })
+    expect(applyExclude({ ...back, app: { ...chrome, excluded: true }, title: undefined, url: undefined, resumed: true }, ex, { context: onBank }))
+      .toEqual({ t, kind: 'window', app: { ...chrome, excluded: true }, resumed: true })
+    // 普通情境 → 无痕 → 排除站点 / 排除 App:标记带着断点标
+    expect(applyExclude({ ...back, resumed: true }, ex, { context: { bundleId: chrome.bundleId, url: 'https://ok.example/', excluded: false } }))
+      .toEqual({ t, kind: 'window', app: { ...chrome, excluded: true }, resumed: true })
+    expect(applyExclude({ t, kind: 'app', app: { name: 'Bank', bundleId: 'com.bank' }, title: 'acct', resumed: true }, ex))
+      .toEqual({ t, kind: 'app', app: { name: 'Bank', bundleId: 'com.bank', excluded: true }, resumed: true })
+    // 普通事件原样过
+    expect(applyExclude({ t, kind: 'window', app: chrome, title: 'B', url: 'https://ok.example/b', resumed: true }, ex)?.resumed).toBe(true)
+  })
 })
 
 describe('foldSessions', () => {
@@ -263,6 +353,13 @@ describe('foldSessions', () => {
     ])
     expect(sessions[0].url).toBe('https://docs.example.com/d/1')
     expect(sessions[0].bundleId).toBe('com.google.Chrome')
+  })
+
+  it('排除段遇断点收到断点那一刻(排除标记就是起点,那段时间确实在被排除处,不是 0 秒)', () => {
+    const code = { name: 'Code', bundleId: 'com.microsoft.VSCode' }
+    const pw = { name: '1Password', bundleId: 'com.1password.1password', excluded: true as const }
+    const s = foldSessions([e(0, { app: code, title: 'x' }), e(600, { app: pw }), e(1200, { app: code, title: 'x', resumed: true }), e(1800, { app: chrome, title: 'y' })])
+    expect(s.map((x) => [x.app, (x.start - base) / 1000, (x.end - base) / 1000])).toEqual([['Code', 0, 600], ['1Password', 600, 1200], ['Code', 1200, 1800]])
   })
 
   it('长时间没事件(Forsion 没开)不把空白算给上一个窗口', () => {
@@ -365,6 +462,40 @@ describe('foldSessions', () => {
     ])
     expect(cols(dropped)).toEqual([['Chrome', 'Docs', 0, 40], ['Chrome', 'Docs', 95, 200], ['Finder', 'Downloads', 200, 300]])
   })
+
+  it('断点标 resumed = 边界(creview3 #4):A → 无痕 → 同标题换网址的 B,无痕时段不算给 A、B 不并回 A、A 的网址不被改写', () => {
+    const pageB = { app: chrome, title: 'Docs', url: 'https://docs.example.com/b' }
+    const s = foldSessions([
+      e(0, { kind: 'app', ...pageA }),
+      e(40, { kind: 'click', app: chrome }), // A 的最后一条事件,之后进了无痕窗口
+      e(400, { kind: 'window', ...pageB, resumed: true }), // 与 A 不同键(网址不同),老判法认不出
+      e(500, { kind: 'key', app: chrome, keys: '⌘S' }),
+      e(600, { kind: 'app', app: finder, title: 'Downloads' }),
+      e(700, { kind: 'app', app: code, title: 'main.ts' }),
+    ])
+    expect(cols(s)).toEqual([['Chrome', 'Docs', 0, 40], ['Chrome', 'Docs', 400, 600], ['Finder', 'Downloads', 600, 700]])
+    expect(s.map((x) => x.url)).toEqual(['https://docs.example.com/a', 'https://docs.example.com/b', undefined])
+    // 无痕只待了 20 秒(≤ 60s 并回口径之内)也不并回
+    const short = foldSessions([
+      e(0, { kind: 'app', ...pageA }),
+      e(30, { kind: 'click', app: chrome }),
+      e(50, { kind: 'window', ...pageB, resumed: true }),
+      e(100, { kind: 'app', app: finder, title: 'Downloads' }),
+      e(200, { kind: 'app', app: code, title: 'main.ts' }),
+    ])
+    expect(cols(short)).toEqual([['Chrome', 'Docs', 0, 30], ['Chrome', 'Docs', 50, 100], ['Finder', 'Downloads', 100, 200]])
+    // 排除站点 → 无痕 → 同一排除站点(标记带断点标)→ 普通页面:排除段收到断点那一刻(排除与无痕分不清,都不记内容,
+    // 时长归排除段;常见的「排除 App → 普通 App」因此报真实时长而不是 0),断点那条另起一段、不并回
+    const marker = { ...chrome, excluded: true as const }
+    const ex = foldSessions([
+      e(0, { kind: 'app', ...pageA }),
+      e(60, { kind: 'window', app: marker }),
+      e(400, { kind: 'window', app: marker, resumed: true }),
+      e(450, { kind: 'window', app: chrome, title: 'News', url: 'https://news.example.com/' }),
+      e(600, { kind: 'app', app: code, title: 'main.ts' }),
+    ])
+    expect(cols(ex)).toEqual([['Chrome', 'Docs', 0, 60], ['Chrome', undefined, 60, 400], ['Chrome', undefined, 400, 450], ['Chrome', 'News', 450, 600]])
+  })
 })
 
 // ── 控制器 × 假 helper(unix socket) ────────────────────────────────────────
@@ -422,7 +553,8 @@ function makeController(sockPath: string, over: Partial<ComputerHistoryDeps> = {
   const launchHelper = vi.fn(async () => {})
   const ch = new ComputerHistory({
     root, platform: 'darwin', socketPath: sockPath, externalSocket: false, helperAppPath: () => helperApp,
-    persist, onChanged, launchHelper, tmExclude: async () => {}, ...over,
+    // 函数形态的补丁(后台补落)在「写盘」这一刻求值 —— 这里就是调用那一刻;mock 记下的永远是对象
+    persist: (p) => persist(typeof p === 'function' ? p() : p), onChanged, launchHelper, tmExclude: async () => {}, ...over,
   })
   cleanups.push(async () => { ch.dispose(); await ch.flush().catch(() => {}) }) // 等队列里的写落完再删临时目录
   const installHelper = () => {
@@ -834,6 +966,30 @@ describe('ComputerHistory × helper 订阅', () => {
     ])
   })
 
+  it('断点标落盘(creview3 #4):「排除站点 → 无痕 → 同一排除站点」的第二条标记带 resumed 落盘;普通事件上的 resumed 原样落盘', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const { ch, root } = makeController(helper.sockPath)
+    await ch.start({ computerHistoryEnabled: true, computerHistoryExclude: { apps: [], domains: ['bank.cn'] } })
+    await waitFor(() => ch.view().state.status === 'recording')
+    const t = Date.now()
+    const chrome = { name: 'Chrome', bundleId: 'com.google.Chrome' }
+    for (const ev of [
+      { t, kind: 'app', app: chrome, title: 'Docs', url: 'https://docs.example.com/a' },
+      { t: t + 1, kind: 'window', app: chrome, title: 'Login', url: 'https://www.bank.cn/login' },
+      { t: t + 2, kind: 'window', app: chrome, title: 'Login', url: 'https://www.bank.cn/login', resumed: true }, // 中间进过无痕窗口
+      { t: t + 3, kind: 'window', app: chrome, title: 'Docs', url: 'https://docs.example.com/b', resumed: true },
+    ]) helper.push(ev)
+    const all = (): ComputerHistoryEvent[] => readdirSync(path.join(root, 'events')).flatMap((f) => lines(path.join(root, 'events', f)))
+    await waitFor(async () => { await ch.flush(); return all().length >= 4 })
+    expect(all()).toEqual([
+      { t, kind: 'app', app: chrome, title: 'Docs', url: 'https://docs.example.com/a' },
+      { t: t + 1, kind: 'window', app: { ...chrome, excluded: true } },
+      { t: t + 2, kind: 'window', app: { ...chrome, excluded: true }, resumed: true },
+      { t: t + 3, kind: 'window', app: chrome, title: 'Docs', url: 'https://docs.example.com/b', resumed: true },
+    ])
+  })
+
   it('意愿按发出顺序生效(creview #1):落配置途中的旧「开 / 恢复」盖不掉之后的「关 / 暂停」', async () => {
     const helper = fakeHelper()
     await helper.listen()
@@ -1167,6 +1323,141 @@ describe('ComputerHistory × helper 订阅', () => {
     expect(persist).toHaveBeenLastCalledWith({ computerHistoryPausedUntil: null })
   })
 
+  /** 仿 main:桌面配置文件 + configQueue(saveConfig:函数形态的补丁在队内、写盘前才求值);blockQueue 卡住队头(慢盘 / 锁)。 */
+  function fakeConfigStore() {
+    const disk: Record<string, unknown> = {}
+    const configQueue = createSerialQueue()
+    let writes = 0
+    const failAt = new Map<number, string>()
+    const saveConfig = (p: ComputerHistoryPersistPatch | (() => ComputerHistoryPersistPatch)): Promise<void> => configQueue(async () => {
+      const patch = typeof p === 'function' ? p() : p
+      const m = failAt.get(++writes)
+      if (m) throw new Error(m)
+      Object.assign(disk, JSON.parse(JSON.stringify(patch)))
+    })
+    const blockQueue = (): (() => void) => {
+      let open!: () => void
+      const gate = new Promise<void>((r) => { open = r })
+      void configQueue(() => gate)
+      return open
+    }
+    /** 从现在起第 n 笔执行的写失败(1 = 下一笔)。 */
+    const failWrite = (n: number, m: string): void => { failAt.set(writes + n, m) }
+    return { disk, saveConfig, blockQueue, failWrite, failNextWith: (m: string) => failWrite(1, m) }
+  }
+
+  it('config:set × 排除表补落(creview3 #1):新增排除 A 落失败 → config:set 落 A+B → 排着的补落不许把盘改回只有 A', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    cleanups.push(() => vi.useRealTimers())
+    const settle = (): Promise<void> => new Promise((r) => setImmediate(r))
+    const advance = async (ms: number): Promise<void> => { await vi.advanceTimersByTimeAsync(ms); await settle() }
+    const cfg = fakeConfigStore()
+    // 开着但暂停中:不碰 socket
+    const { ch } = makeController(path.join(os.tmpdir(), `chs-none-${process.pid}.sock`), { persist: cfg.saveConfig })
+    await ch.start({ computerHistoryEnabled: true, computerHistoryPausedUntil: Date.now() + 3_600_000 })
+    const A = { apps: ['com.a'], domains: [] }
+    const AB = { apps: ['com.a', 'com.b'], domains: [] }
+    cfg.failNextWith('EROFS')
+    await expect(ch.setExclude(A)).rejects.toThrow('EROFS')
+    expect(ch.view().persistError).toBe('EROFS')
+    // 配置写队列卡着;这时渲染层经 config:set 存 A+B(main 的 config:set 走 configSet),随后补落的计时器到点
+    const open = cfg.blockQueue()
+    const configSet = ch.configSet({ computerHistoryExclude: AB }, () => cfg.saveConfig({ computerHistoryExclude: AB }))
+    await advance(5_000)
+    open()
+    await configSet
+    await advance(0)
+    expect(cfg.disk.computerHistoryExclude).toEqual(AB)
+    expect(ch.view().exclude).toEqual(AB)
+    expect(ch.view().persistError).toBeUndefined()
+    await advance(120_000)
+    expect(cfg.disk.computerHistoryExclude).toEqual(AB) // 之后也没有补落再去改它
+  })
+
+  it('config:set 发出即作废在途的「开」(creview3 #1):开的落盘排在前面、config:set 关排在后面,开回来也不许开录(哪怕一瞬)', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const cfg = fakeConfigStore()
+    const { ch } = makeController(helper.sockPath, { persist: cfg.saveConfig })
+    await ch.start({ computerHistoryEnabled: false })
+    const open = cfg.blockQueue()
+    const enabling = ch.setEnabled(true)
+    const disabling = ch.configSet({ computerHistoryEnabled: false }, () => cfg.saveConfig({ computerHistoryEnabled: false }))
+    open()
+    await Promise.all([enabling, disabling])
+    await new Promise((r) => setTimeout(r, 200))
+    expect(cfg.disk.computerHistoryEnabled).toBe(false)
+    expect(ch.view().state).toMatchObject({ enabled: false, status: 'off' })
+    expect(helper.accepted).toBe(0)
+  })
+
+  it('config:set 作废了已落盘的「开」、自己却没落成(creview3 #1 边角):盘上不许留着「开」—— 挂提示并补落成内存里的「关」', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    cleanups.push(() => vi.useRealTimers())
+    const settle = (): Promise<void> => new Promise((r) => setImmediate(r))
+    const advance = async (ms: number): Promise<void> => { await vi.advanceTimersByTimeAsync(ms); await settle() }
+    const cfg = fakeConfigStore()
+    const { ch } = makeController(path.join(os.tmpdir(), `chs-none-${process.pid}.sock`), { persist: cfg.saveConfig })
+    await ch.start({ computerHistoryEnabled: false })
+    const open = cfg.blockQueue()
+    const enabling = ch.setEnabled(true)
+    const disabling = ch.configSet({ computerHistoryEnabled: false }, () => Promise.reject(new Error('EROFS')))
+    open()
+    await enabling
+    await expect(disabling).rejects.toThrow('EROFS')
+    expect(cfg.disk.computerHistoryEnabled).toBe(true) // 「开」那笔已落盘
+    expect(ch.view().state.enabled).toBe(false) // 被 config:set 作废,没开录
+    expect(ch.view().persistError).toBe('EROFS') // 盘上与内存不一致:提示重启可能恢复记录
+    await advance(5_000)
+    expect(cfg.disk.computerHistoryEnabled).toBe(false)
+    expect(ch.view().persistError).toBeUndefined()
+    // 连点两次「开」、第二次没落成:第一次已落盘却被第二次作废(内存没开)—— 同样挂提示、补成内存里的「关」
+    const open2 = cfg.blockQueue()
+    cfg.failWrite(2, 'EIO') // 第 1 笔 = 第一次「开」,第 2 笔 = 第二次「开」(卡队头的那笔不经 saveConfig,不计)
+    const first = ch.setEnabled(true)
+    const second = ch.setEnabled(true)
+    open2()
+    await first
+    await expect(second).rejects.toThrow('EIO')
+    expect(cfg.disk.computerHistoryEnabled).toBe(true)
+    expect(ch.view().state.enabled).toBe(false)
+    expect(ch.view().persistError).toBe('EIO')
+    await advance(5_000)
+    expect(cfg.disk.computerHistoryEnabled).toBe(false)
+    expect(ch.view().persistError).toBeUndefined()
+  })
+
+  it('main 的 config:set 走 configSet(creview3 #1):不许退回「先落盘、后 applyConfig」', () => {
+    const source = readFileSync(new URL('./main.ts', import.meta.url), 'utf8')
+    const handler = source.slice(source.indexOf("ipcMain.handle('config:set'"), source.indexOf("ipcMain.handle('config:set'") + 2_000)
+    expect(handler).toContain('computerHistory.configSet(chPatch, save)')
+    expect(handler).not.toContain('computerHistory?.applyConfig(')
+  })
+
+  it('补落在写盘那一刻才定补丁(creview3 #1):排在它前面的另一份写(绕过意愿队列的老路径)落成并同步内存后,补落不拿旧值盖回', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] })
+    cleanups.push(() => vi.useRealTimers())
+    const settle = (): Promise<void> => new Promise((r) => setImmediate(r))
+    const advance = async (ms: number): Promise<void> => { await vi.advanceTimersByTimeAsync(ms); await settle() }
+    const cfg = fakeConfigStore()
+    const { ch } = makeController(path.join(os.tmpdir(), `chs-none-${process.pid}.sock`), { persist: cfg.saveConfig })
+    await ch.start({ computerHistoryEnabled: true, computerHistoryPausedUntil: Date.now() + 3_600_000 })
+    const A = { apps: ['com.a'], domains: [] }
+    const AB = { apps: ['com.a', 'com.b'], domains: [] }
+    cfg.failNextWith('EROFS')
+    await expect(ch.setExclude(A)).rejects.toThrow('EROFS')
+    const open = cfg.blockQueue()
+    // 老的 config:set 次序:先落盘(排在补落前面),落成才同步内存
+    const legacy = cfg.saveConfig({ computerHistoryExclude: AB }).then(() => ch.applyConfig({ computerHistoryExclude: AB }))
+    await advance(5_000) // 补落到点:它的写排在 A+B 后面
+    open()
+    await legacy
+    await advance(0)
+    expect(cfg.disk.computerHistoryExclude).toEqual(AB)
+    expect(ch.view().exclude).toEqual(AB)
+    expect(ch.view().persistError).toBeUndefined()
+  })
+
   it('state.json 写失败(creview G):写成才算数、按退避重写;关闭那份写不进去就删掉 state.json 失败关门', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     cleanups.push(() => warn.mockRestore())
@@ -1193,6 +1484,29 @@ describe('ComputerHistory × helper 订阅', () => {
     expect(existsSync(statePath)).toBe(false)
     await waitFor(() => existsSync(statePath))
     expect(readState(root)).toMatchObject({ enabled: false, status: 'off' })
+  })
+
+  it('state.json 写不进也删不掉(creview3 #2):历史目录只读时关闭 —— 「关」照样落进桌面配置(引擎第二道闸),设置页看得到错误;恢复可写后补上并消失', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    cleanups.push(() => warn.mockRestore())
+    const { ch, root, persist, onChanged } = makeController(path.join(os.tmpdir(), `chs-none-${process.pid}.sock`))
+    await ch.start({ computerHistoryEnabled: true, computerHistoryPausedUntil: Date.now() + 3_600_000 })
+    await ch.flush()
+    expect(readState(root)).toMatchObject({ enabled: true })
+    chmodSync(root, 0o500) // 目录只读:建不了临时文件,也删不掉 state.json
+    cleanups.push(() => chmodSync(root, 0o700))
+    await ch.setEnabled(false)
+    await ch.flush()
+    expect(readState(root)).toMatchObject({ enabled: true }) // 盘上还是旧的「开」—— 只剩桌面配置这道闸
+    expect(persist).toHaveBeenLastCalledWith({ computerHistoryEnabled: false, computerHistoryPausedUntil: null })
+    const err = ch.view().stateError
+    expect(err).toMatch(/EACCES/)
+    expect(err!.split(';')).toHaveLength(2) // 写失败 + 删失败都在
+    expect(onChanged.mock.lastCall?.[0].stateError).toBe(err)
+    chmodSync(root, 0o700)
+    await waitFor(() => ch.view().stateError === undefined, 6_000)
+    expect(readState(root)).toMatchObject({ enabled: false, status: 'off' })
+    expect(onChanged.mock.lastCall?.[0]).not.toHaveProperty('stateError')
   })
 
   it('state.json 写失败 × 清除(creview G):dataGen+1 那份写不进去 → 删除执行时 state.json 已不在;删完那份写上后恢复', async () => {

@@ -404,6 +404,19 @@ describe('ComputerHistorySettings', () => {
     expect(host.querySelector('[data-ch-persist-error]')).toBeNull()
   })
 
+  it('state.json 没能更新(creview3 #2):页顶提示状态文件写不进、正在重试,附错误原文;写上后提示消失', async () => {
+    await mount()
+    await act(async () => pushChanged!({ ...makeView({ enabled: false, status: 'off' }), stateError: 'EACCES: permission denied, open; EACCES: permission denied, unlink' }))
+    const alert = host.querySelector('[data-ch-state-error]')
+    expect(alert?.getAttribute('role')).toBe('alert')
+    expect(alert?.textContent).toContain('EACCES: permission denied, unlink')
+    expect(alert?.textContent).toContain('state.json')
+    expect(alert?.textContent).toContain('正在自动重试')
+    expect(host.querySelector('[data-ch-persist-error]')).toBeNull() // 与「配置没保存」是两回事
+    await act(async () => pushChanged!(makeView({ enabled: false, status: 'off' })))
+    expect(host.querySelector('[data-ch-state-error]')).toBeNull()
+  })
+
   it('助手更新进行中(creview ui #2):清除与排除表控件锁住(它们会让主进程重订阅),回车提交也不写;结束后解锁', async () => {
     view = makeView({ status: 'helper_outdated' }, { apps: ['com.apple.Safari'], domains: ['example.com'] })
     await mount()

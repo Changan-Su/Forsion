@@ -11,11 +11,12 @@
  * 召回面(记忆召回 / search_sessions / read_session)用 computerHistoryRecallHide 藏起调过本工具的会话;
  * Historian 对调过本工具的会话不做自动记忆提取(localHistorian,同一条 SQL:sessionSearchSql.sessionCalledTool)。
  * 输出一律带来源标记 + 数据围栏:内容是屏幕上观测到的东西(别人发来的消息、网页标题都可能在里面),不是指令。
- * 两个消费者都在读完事件后复核 state.json(开关 + dataGen),读的过程中被清除 / 关闭 / 改排除表就整份丢弃;
+ * 开关两道闸(computerHistoryOn):state.json 开着 ∧ 桌面配置(FORSION_DESKTOP_CONFIG 指的文件)里 computerHistoryEnabled 也开着。
+ * 两个消费者都在读完事件后复核这两道闸与 dataGen,读的过程中被清除 / 关闭 / 改排除表就整份丢弃;
  * 工具结果落库只存占位(capabilities.persistPlaceholder → agentLoop.executeOneToolCall),全文只进当轮模型上下文。
  */
 import { promises as fs, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import { forsionSharedDir } from '../core/tanguHome.js';
 import type { AppProfile } from '../seams/appProfile.js';
 import type { ToolContext } from '../tools/toolTypes.js';
@@ -36,6 +37,9 @@ export interface ChEvent {
   state?: 'locked' | 'unlocked' | 'sleep' | 'wake' | 'dropped';
   count?: number;
   origin?: 'agent';
+  /** 断点:helper 在「刚才的情境没被记录」(无痕窗口 / 排除 App·站点)之后的第一条可记录情境事件(app|window)上打的标,
+   *  不带那段的时间与内容。折叠见到它必须切段、不跨过它合并(foldComputerHistory)。 */
+  resumed?: true;
 }
 
 /** state.json(主进程写,引擎只读)。 */
@@ -107,9 +111,33 @@ export function readComputerHistoryState(): ChState | null {
   }
 }
 
-/** 开着 = 字面 true(手改/半写的文件不算开)且桌面没判「本平台不支持」(darwin 裁决由桌面落在 status 上)。 */
+/**
+ * 第二道闸 = 桌面壳配置里的开关(开关真源:主进程先落这份,再写 state.json)。state.json 写不进、也删不掉
+ * (历史目录只读、桌面配置仍可写)时,「关」已经落在这份文件里 —— 只看 state.json 会继续开放读取(评审 round3 P1)。
+ * 名字镜像 desktop/shared/computerHistory.ts 的 COMPUTER_HISTORY_DESKTOP_CONFIG_ENV / _KEY(引擎 rootDir 不含 desktop/,
+ * 不 import;改名 = 桌面 main / backendManager / 这里三处同步)。文件在 Electron userData 下、随产品名与 dev 变,
+ * 引擎猜不到,由桌面拉起引擎时经这个环境变量传绝对路径。没传 / 不是绝对路径 / 读不到 / 坏 JSON / 键不是字面 true 一律按关:
+ * 不经桌面拉起的引擎(独立 CLI / TUI)因此读不到电脑历史 —— 宁可少给,不在用户关掉之后照读。
+ */
+export const CH_DESKTOP_CONFIG_ENV = 'FORSION_DESKTOP_CONFIG';
+const CH_DESKTOP_CONFIG_KEY = 'computerHistoryEnabled';
+
+/** 桌面配置里电脑历史开着(字面 true)。不缓存:几 KB,每次现读 —— 关掉后下一次门禁 / 复核就生效。 */
+export function computerHistoryDesktopEnabled(): boolean {
+  const file = process.env[CH_DESKTOP_CONFIG_ENV];
+  if (!file || !isAbsolute(file)) return false;
+  try {
+    const o = JSON.parse(readFileSync(file, 'utf8'));
+    return !!o && typeof o === 'object' && !Array.isArray(o) && (o as Record<string, unknown>)[CH_DESKTOP_CONFIG_KEY] === true;
+  } catch {
+    return false;
+  }
+}
+
+/** 开着 = state.json 字面 true(手改/半写的文件不算开)且桌面没判「本平台不支持」(darwin 裁决由桌面落在 status 上),
+ *  且第二道闸(桌面配置,computerHistoryDesktopEnabled)也开着。门禁 / 工具 / Muse 摘要 / 读后复核全走这一处。 */
 export function computerHistoryOn(s: ChState | null): boolean {
-  return !!s && s.enabled === true && s.status !== 'unsupported';
+  return !!s && s.enabled === true && s.status !== 'unsupported' && computerHistoryDesktopEnabled();
 }
 
 /**
@@ -341,7 +369,8 @@ export interface ChSpan {
   /** 其中由 agent(CU 代操作)产生的事件数。 */
   agent: number;
   last: number;
-  /** 本段由一条「重复的相同情境事件」开启:它前面是一段时长未知的空白(无痕窗口 / 重订阅),合并绝不跨过它。只在折叠内部用。 */
+  /** 本段由断点开启(带 resumed 的情境事件,或老 helper 的「重复的相同情境事件」):它前面是一段时长未知、没被记录的空白
+   *  (无痕窗口 / 排除 App·站点 / 重订阅),合并绝不跨过它。只在折叠内部用。 */
   gapBefore?: true;
 }
 export interface ChAway {
@@ -423,7 +452,11 @@ function sameKey(a: ChSpan, b: ChSpan): boolean {
  * 锁屏/睡眠记为离开(解锁、唤醒或任何活动即回来)。然后裁到 [from, to]、丢掉 <10s 且没敲字的段、
  * 把因此变相邻的同键段并回去。openEnd:录制中且区间收在 now → 最后一段一直开到 now(前台没换过)。
  *
- * 重复的相同情境事件 = 边界:helper 对连着的同键情境事件去重(contextKeyOf),所以连着两条同键只可能是中间有被压掉的东西 ——
+ * 断点(resumed):helper 在一段没被记录的情境(无痕窗口 / 排除 App·站点)之后的第一条可记录情境事件上打 resumed。
+ * 见到它:当前段收在它自己最后一条事件,resumed 那条另起一段标 gapBefore(下同)—— 哪怕与当前段同 App 同标题
+ * (「A 标题 T → 无痕 → B 标题 T、网址不同」),也不续段、不继承 URL / 敲字 / 时长。
+ *
+ * 老 helper 兜底 —— 重复的相同情境事件 = 边界:helper 对连着的同键情境事件去重(contextKeyOf),所以连着两条同键只可能是中间有被压掉的东西 ——
  * 无痕窗口(进出都不发 window 事件,「A → 无痕 → 回到 A」到这里是两条一模一样的 A)或(重)订阅补拍的快照。中间时长未知:
  * 当前段收在它自己最后一条事件(不延到重复那条),重复那条另起一段标 gapBefore,合并绝不跨过它(它被 10s 规则丢掉时标记
  * 顺延给下一段保留下来的段)。空白处不画标记:away 只给有正面证据的状态(锁屏 / 睡眠事件);这段空白里本有一部分是真在看 A、
@@ -455,12 +488,14 @@ export function foldComputerHistory(events: ChEvent[], range: { from: number; to
     const switching = e.kind === 'app' || e.kind === 'window';
     if (switching) {
       const ctx = contextKeyOf(e);
-      const repeat = ctx === lastCtx;
+      const cut = e.resumed === true || ctx === lastCtx; // resumed = helper 明说的断点;同键重复 = 老 helper 的兜底判据
       lastCtx = ctx;
-      if (repeat) {
-        // 必须先于下面的「同键 → 续段」:否则重复那条只会把当前段拉长,中间的空白照样算给它
+      if (cut) {
+        // 必须先于下面的「同键 → 续段」:否则断点那条只会把当前段拉长(或把 URL 换成它的),中间的空白照样算给当前段
         const open: ChSpan | null = cur;
-        if (open) closeSpan(open.last);
+        // 排除段例外:排除 App / 站点的标记本身就是起点,那段时间确实在被排除处(只是不记内容),收到断点那一刻;
+        // 只有无痕那种连起点都没有的空白才收在自己最后一条事件。
+        if (open) closeSpan(open.excluded ? e.t : open.last);
         const s = newSpan(e);
         s.gapBefore = true;
         cur = s;

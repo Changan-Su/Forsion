@@ -21,7 +21,7 @@ import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
 import { enqueueRun } from '../src/services/agentLoop.js';
 import { setRunClientTag } from '../src/seams/runContext.js';
-import { computerHistoryDir, COMPUTER_HISTORY_PERSIST_PLACEHOLDER } from '../src/services/computerHistory.js';
+import { computerHistoryDir, COMPUTER_HISTORY_PERSIST_PLACEHOLDER, CH_DESKTOP_CONFIG_ENV } from '../src/services/computerHistory.js';
 import { normalizeHooksConfig, saveHooksConfig, syncUserTrust } from '../src/hooks/index.js';
 
 const USER = 'u1';
@@ -46,6 +46,8 @@ function chState(enabled: boolean): void {
   writeFileSync(join(computerHistoryDir(), 'state.json'), JSON.stringify({
     v: 1, enabled, pausedUntil: null, status: enabled ? 'recording' : 'off', since: Date.now() - 3_600_000, updatedAt: Date.now(), platform: 'darwin',
   }));
+  // 第二道闸:桌面配置(桌面拉起引擎时经 FORSION_DESKTOP_CONFIG 传路径)与 state.json 同步开关
+  writeFileSync(process.env[CH_DESKTOP_CONFIG_ENV]!, JSON.stringify({ computerHistoryEnabled: enabled }));
 }
 function chEvent(e: Record<string, unknown>): void {
   const d = new Date(e.t as number);
@@ -57,6 +59,7 @@ function chEvent(e: Record<string, unknown>): void {
 beforeEach(async () => {
   home = mkdtempSync(join(tmpdir(), 'tangu-chloop-'));
   process.env.TANGU_HOME = home;
+  process.env[CH_DESKTOP_CONFIG_ENV] = join(home, 'tangu-desktop-config.json');
   prevVolatile = process.env.TANGU_MEMORY_VOLATILE;
   delete process.env.TANGU_MEMORY_VOLATILE;
   llmPayloads = [];
@@ -107,6 +110,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   delete process.env.TANGU_HOME;
+  delete process.env[CH_DESKTOP_CONFIG_ENV];
   if (prevVolatile === undefined) delete process.env.TANGU_MEMORY_VOLATILE;
   else process.env.TANGU_MEMORY_VOLATILE = prevVolatile;
   try { rmSync(home, { recursive: true, force: true }); } catch { /* ignore */ }

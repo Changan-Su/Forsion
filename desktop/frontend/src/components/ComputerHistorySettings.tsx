@@ -241,6 +241,7 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
     <div className="ch-page" data-ch-status={status}>
       {actionError !== null && <div className="ch-alert" role="alert">{t('computerHistory.actionFailed', { error: actionError })}</div>}
       {view.persistError != null && <div className="ch-alert" role="alert" data-ch-persist-error="">{t('computerHistory.persistError', { error: view.persistError })}</div>}
+      {view.stateError != null && <div className="ch-alert" role="alert" data-ch-state-error="">{t('computerHistory.stateError', { error: view.stateError })}</div>}
 
       <SettingsPanel
         anchor={anchor}

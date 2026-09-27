@@ -22,6 +22,9 @@ export interface ComputerHistoryEvent {
   state?: 'locked' | 'unlocked' | 'sleep' | 'wake' | 'dropped'
   count?: number
   origin?: 'agent'
+  /** 断点:helper 在「刚才的情境没被记录」(无痕窗口 / 排除 App·站点)之后的第一条可记录情境事件上打的标。
+   *  不带时间与内容;折叠器见到它必须切段,不许跨过它合并(否则无痕时段会被算进前后的普通页面)。 */
+  resumed?: true
 }
 
 export type ComputerHistoryStatus =
@@ -80,7 +83,22 @@ export interface ComputerHistoryView {
    *  按盘上旧值恢复记录、或重新记下刚排除的 App / 站点。值是落盘错误的原文。只在主进程 ↔ 设置页之间流转
    *  (引擎读的是 state.json,不看这里)。 */
   persistError?: string
+  /** state.json 没能写成(写失败;要关门的那份连删也失败时附上删除的错误):主进程按退避重写,盘上跟上最新一份即消失。
+   *  这期间引擎读到的记录状态可能是旧的 —— 关闭时靠第二道闸(桌面配置,见 COMPUTER_HISTORY_DESKTOP_CONFIG_*)兜底。 */
+  stateError?: string
 }
+
+/**
+ * 引擎的第二道闸 = 桌面壳配置里的开关(电脑历史开关的真源:主进程先落这里,再写 state.json)。
+ * state.json 写不进、也删不掉(历史目录只读,桌面配置仍可写)时,「关」已经落在这份文件里:引擎除了 state.json 的
+ * enabled,还要求这份文件里 `computerHistoryEnabled === true`,缺键 / 读不到 / 坏 JSON 一律按关。
+ * 文件在 Electron userData 下:`<userData>/tangu-desktop-config.json`(打包版 userData = appData/Forsion,
+ * dev = appData/forsion-desktop-dev,随产品名 / dev 变,**不在** forsionHome 下),所以桌面拉起引擎时经环境变量
+ * `FORSION_DESKTOP_CONFIG` 传绝对路径(同 FORSION_AMADEUS_CONFIG)。三个名字改动 = 桌面 main / backendManager / 引擎同步。
+ */
+export const COMPUTER_HISTORY_DESKTOP_CONFIG_FILE = 'tangu-desktop-config.json'
+export const COMPUTER_HISTORY_DESKTOP_CONFIG_KEY = 'computerHistoryEnabled'
+export const COMPUTER_HISTORY_DESKTOP_CONFIG_ENV = 'FORSION_DESKTOP_CONFIG'
 
 /** 原始事件保留天数(无摘要层 → 原始事件即历史;ChatGPT 是 48h 原始 + 永久摘要)。 */
 export const COMPUTER_HISTORY_KEEP_DAYS = 7

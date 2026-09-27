@@ -18,6 +18,10 @@ registerMessages({
     zh: '关闭、暂停或新加的排除已经生效，但还没能保存（{error}），正在自动重试。保存成功前重启 Forsion，记录可能会重新开启，已排除的 App 或网站也可能再被记录。',
     en: 'Your change to turn off, pause, or exclude is in effect, but it couldn’t be saved ({error}). Retrying automatically. If Forsion restarts before it’s saved, recording may turn back on and excluded apps or sites may be recorded again.',
   },
+  'computerHistory.stateError': {
+    zh: '电脑历史的状态文件 state.json 没能更新（{error}），正在自动重试。更新成功前，Agent 读到的记录状态可能是旧的；关闭记录后，Agent 仍会以已保存的设置为准。',
+    en: 'Couldn’t update the computer history status file, state.json ({error}). Retrying automatically. Until it’s updated, agents may see an outdated recording status. If you turned recording off, agents still follow your saved setting.',
+  },
   'computerHistory.macOnly.title': { zh: '目前仅支持 macOS', en: 'macOS only for now' },
   'computerHistory.macOnly.body': {
     zh: '电脑历史依赖 macOS 的辅助功能接口，这台电脑的系统暂不支持。',

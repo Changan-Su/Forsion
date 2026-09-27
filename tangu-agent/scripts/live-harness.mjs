@@ -32,7 +32,7 @@
  *   npm run live:harness -- --only officedoc                # 桌面随包 LibreOffice(09-26):read_document 读 3 页 docx 按真页答出第 3 页的码;改 read_document / fetch-office 后跑。
  *                                                           #   前置:desktop 里 npm run fetch-office;台架须跑在 Node ≥22.19(kit 的 engines,Bash 默认的 fnm v20 不行)
  *                                                           #   负对照:TANGU_OFFICE_KIT=/nonexistent npm run live:harness -- --only officedoc(引擎日志断言须红)
- *   npm run live:harness -- --only computerhistory          # 电脑历史(09-27):播事件+state.json → 默认聊天问「我休息之前在做什么?」须调 read_computer_history 答中文档与 PR;
+ *   npm run live:harness -- --only computerhistory          # 电脑历史(09-27):播事件+state.json+桌面配置(第二道闸)→ 默认聊天问「我休息之前在做什么?」须调 read_computer_history 答中文档与 PR;
  *                                                           #   负对照**在正例之后**跑(state.json 关 → 工具不在、不编造,且跨会话召回不把正例答案注进来);
  *                                                           #   第三腿开 Muse 等一个周期,核摘要注入(日志)且 agent_runs.input 里没有它。改工具 / 门禁 / 召回 / Muse 摘要后跑
  *                                                           #   另有一腿核 Historian:正例会话只维护标题/摘要,不采记忆候选 / LOG(改 localHistorian 电脑历史隔离后跑)
@@ -312,6 +312,9 @@ if (argv.includes('--ab-memory') && !process.env.TANGU_LIVE_AB_CHILD) {
 const shared = join(OUT, 'forsion');
 const home = join(shared, 'tangu'); // basename 必须是 tangu:forsionSharedDir() 才会到父目录找 provider-auth.json
 const workspace = join(OUT, 'workspace');
+// 桌面壳配置(电脑历史第二道闸,见 services/computerHistory.ts computerHistoryDesktopEnabled):生产在 Electron userData 下,
+// 桌面拉起引擎时经 FORSION_DESKTOP_CONFIG 传绝对路径。台架一律指向产物目录里的这份(不存在 = 关),不继承开发机 env 里的真路径。
+const desktopCfg = join(OUT, 'userData', 'tangu-desktop-config.json');
 mkdirSync(dirname(OUT), { recursive: true });
 try { mkdirSync(OUT); } catch (e) { console.error(e?.code === 'EEXIST' ? `产物目录已存在:${OUT}(旧 state.db/旧 MEMORY 会污染结论,换一个或删掉)` : String(e?.message || e)); process.exit(2); }
 mkdirSync(home, { recursive: true }); mkdirSync(workspace, { recursive: true });
@@ -380,6 +383,7 @@ const child = spawn(process.execPath, [
 ], { env: {
   ...process.env, TANGU_HOME: home, TANGU_DEFAULT_WORKSPACE: workspace, TANGU_CACHE_PROBE: '1',
   TANGU_BROWSER_CDP: userChromeWs || 'off',
+  FORSION_DESKTOP_CONFIG: desktopCfg,
   // --window:只钉台架模型的窗口(contextBudget 的 env 覆盖表,最高优先级),别的模型不受影响
   ...(WINDOW ? { TANGU_MODEL_CONTEXT_WINDOWS: JSON.stringify({ [MODEL]: WINDOW }) } : {}),
   ...(ONLY.has('officedoc') ? { TANGU_OFFICE_KIT: OFFICE_KIT } : {}),
@@ -1640,6 +1644,9 @@ try {
   const chState = (enabled) => {
     mkdirSync(chDir, { recursive: true });
     writeFileSync(join(chDir, 'state.json'), JSON.stringify({ v: 1, enabled, pausedUntil: null, status: enabled ? 'recording' : 'off', since: Date.now() - 3 * 3_600_000, updatedAt: Date.now(), platform: 'darwin' }));
+    // 第二道闸:桌面开关同步落桌面配置(真桌面先落这份再写 state.json);只写 state.json 的话引擎按关(fail closed)
+    mkdirSync(dirname(desktopCfg), { recursive: true });
+    writeFileSync(desktopCfg, JSON.stringify({ computerHistoryEnabled: enabled }));
   };
   const chSeed = () => {
     const now = Date.now(); const ago = (m) => now - m * 60_000;

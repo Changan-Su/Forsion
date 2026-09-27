@@ -14,7 +14,7 @@ import { join } from 'node:path'
 const H = vi.hoisted(() => ({ dir: '' }))
 H.dir = mkdtempSync(join(tmpdir(), 'forsion-bm-'))
 
-vi.mock('electron', () => ({ app: { isPackaged: false, getVersion: () => '0.0.0-test' } }))
+vi.mock('electron', () => ({ app: { isPackaged: false, getVersion: () => '0.0.0-test', getPath: (name: string) => join(H.dir, name) } }))
 vi.mock('./forsionHome', () => ({
   forsionHomeDir: () => H.dir,
   tanguDataDir: () => H.dir,
@@ -55,6 +55,29 @@ describe('BackendManager channel client attribution', () => {
     // 通道 run 不经 renderer startRun(),只有这个 spawn 契约能把真实 App 版本交给引擎。
     expect(source).toContain('env.TANGU_HOST_CLIENT = `desktop/${app.getVersion()}`')
   })
+})
+
+describe('BackendManager 电脑历史第二道闸', () => {
+  it('拉起引擎时经 FORSION_DESKTOP_CONFIG 传桌面壳配置的绝对路径(引擎据此复核开关;state.json 写不进也删不掉时「关」照样生效)', async () => {
+    const entry = join(H.dir, 'env-probe.cjs')
+    const out = join(H.dir, 'env-probe.json')
+    writeFileSync(entry, [
+      `require('node:fs').writeFileSync(${JSON.stringify(out)}, JSON.stringify({ v: process.env.FORSION_DESKTOP_CONFIG ?? null }))`,
+      "const port = Number(process.argv[process.argv.indexOf('--port') + 1])",
+      "require('node:http').createServer((_q, s) => s.end('{}')).listen(port, '127.0.0.1')",
+    ].join('\n'), 'utf8')
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(entry)
+    process.env.TANGU_NODE_BIN = process.execPath
+    delete process.env.FORSION_DESKTOP_CONFIG // 必须是 spawn 设的,不是从测试进程继承的
+    const m = new BackendManager()
+    await m.start({ cloudUrl: '', sandbox: 'none' })
+    try {
+      expect(m.getStatus().state).toBe('ready')
+      expect(JSON.parse(readFileSync(out, 'utf8')).v).toBe(join(H.dir, 'userData', 'tangu-desktop-config.json'))
+    } finally {
+      await m.stop()
+    }
+  }, 15_000)
 })
 
 describe('BackendManager startup exits', () => {
