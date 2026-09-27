@@ -326,7 +326,9 @@ function userEntryLabel(text: string): string {
 // 换成全角 `［`,其余字节不动(路径 / 报错原样留给 Facts 段)。「行首」容忍任意水平空白与零宽格式字符(三轮:
 // `\u200B[User]`、全角空格缩进肉眼看同样是行首);换行认 \n \r U+2028 U+2029(m 标志的 ^)。
 // ⚠️ 截断(middle)会在尾段前新插一个换行,把原本行中的 `x[User]` 变成行首 —— 截断之后必须再中和一次(三轮 P1)。
-const LEAD = String.raw`(?:[^\S\r\n\u2028\u2029]|[\u180E\u200B-\u200D\u2060\uFEFF])*`;
+// ⚠️ 单一字符类、不用 (A|B)* 交替:U+FEFF 同时属于 \s 与零宽集时,交替会在匹配失败时指数回溯(四轮 P1,
+// 28 个 U+FEFF 就卡 2.4s)。内容 = JS \s 去掉行终止符 + 零宽格式字符。
+const LEAD = String.raw`[\t\v\f \u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\uFEFF\u180E\u200B-\u200D\u2060]*`;
 const LABEL_LINE_RE = new RegExp(String.raw`^(${LEAD})\[(?=${LEAD}(?:(?:user|assistant|tool|existing summary|new conversation)\b|…))`, 'gimu');
 const defang = (s: string): string => s.replace(LABEL_LINE_RE, '$1［');
 /** 截断后的条目:首行是本函数自己写的标签,原样留;其后正文(含截断新造出的行首)再中和一次。 */
@@ -362,7 +364,8 @@ function transcriptEntries(msgs: ChatMessage[], fileOps: FileOps): { prevSummary
         entries.push(`[Assistant tool calls]\n${defang(calls.map(callLine).join('\n'))}`);
       }
     } else if (m.role === 'tool') {
-      const name = callNames.get(String(m.tool_call_id ?? '')) || 'tool';
+      // 调用名来自模型输出(兼容渠道只校验非空),可能夹换行 / `]`:进标签行前收成单行安全字符(四轮 P2)
+      const name = (callNames.get(String(m.tool_call_id ?? '')) || 'tool').replace(/[^A-Za-z0-9_.:-]/g, '_').slice(0, 64);
       entries.push(`[Tool result: ${name}]\n${defang(middle(text, TRANSCRIPT_TOOL_RESULT_HEAD, TRANSCRIPT_TOOL_RESULT_TAIL))}`);
     }
   }
