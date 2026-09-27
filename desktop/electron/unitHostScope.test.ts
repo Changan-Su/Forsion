@@ -5,7 +5,7 @@
  * 跑法:npx vitest run electron/unitHostScope.test.ts
  */
 import { describe, it, expect, beforeAll } from 'vitest'
-import { mkdir, mkdtemp, readdir, rename, symlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readdir, rename, symlink, utimes, writeFile } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -166,6 +166,18 @@ describe('unitHostScope:校验与读取之间换软链(Codex 三轮 P1)', () => 
     let listed: string[] | null = null
     const got = await withVerifiedUnitPath(join(outer, 'inner'), roots(), env, guard, true, async (real) => (listed = await readdir(real)), { beforeOpen: swap, afterOpen: back })
     expect(listed).toContain('secret.json')
+    expect(got).toBeNull()
+  })
+
+  it('换过去、列、换回来,再用 utimes 把父目录的 mtime 恢复原值 → 仍然 null(utimes 会刷 ctime,改不回去)', async () => {
+    const r = await dirRacer('lsutimes')
+    const parent = ws()
+    let saved: { atime: Date; mtime: Date } | null = null
+    const swap = async (): Promise<void> => { const st = await lstat(parent); saved = { atime: st.atime, mtime: st.mtime }; await r.swap() }
+    const backAndRestore = async (): Promise<void> => { await r.back(); await utimes(parent, saved!.atime, saved!.mtime) }
+    let listed: string[] | null = null
+    const got = await withVerifiedUnitPath(r.dir, roots(), env, guard, true, async (real) => (listed = await readdir(real)), { beforeOpen: swap, afterOpen: backAndRestore })
+    expect(listed).toContain('auth.json') // 竞态打中了
     expect(got).toBeNull()
   })
 

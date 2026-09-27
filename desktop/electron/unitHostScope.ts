@@ -183,8 +183,9 @@ function matchedUnitRoot(
 }
 
 /**
- * 路径链指纹:从 real 一路往上到它所在的根(含),每一段记 (dev, ino),每一段的**父目录**记 (dev, ino, mtimeNs)(lstat,不跟软链)。
- * 「换过去、读、再换回来」要在某个父目录里至少改名 / 删建两次 —— 那个父目录的 mtime 必然变(macOS APFS 实测 2000/2000 次都变),
+ * 路径链指纹:从 real 一路往上到它所在的根(含),每一段记 (dev, ino),每一段的**父目录**记 (dev, ino, mtimeNs, ctimeNs)(lstat,不跟软链)。
+ * 「换过去、读、再换回来」要在某个父目录里至少改名 / 删建两次 —— 那个父目录的 mtime 必然变(macOS APFS 实测 2000/2000 次都变);
+ * 用 utimes 把 mtime 改回去也没用:utimes 本身会把 ctime 刷成「现在」,而 ctime 用户态设不回去(Codex r3 #3)。
  * 所以读前读后指纹一致 = 读的那一刻路径上没有被换过。
  */
 async function chainFingerprint(real: string, root: string, platform: NodeJS.Platform): Promise<string> {
@@ -194,7 +195,7 @@ async function chainFingerprint(real: string, root: string, platform: NodeJS.Pla
     const st = await lstat(c, { bigint: true })
     const parent = dirname(c)
     const ps = await lstat(parent, { bigint: true })
-    parts.push(`${st.dev}:${st.ino}|${ps.dev}:${ps.ino}:${ps.mtimeNs}`)
+    parts.push(`${st.dev}:${st.ino}|${ps.dev}:${ps.ino}:${ps.mtimeNs}:${ps.ctimeNs}`)
     if (norm(c, platform) === norm(root, platform) || parent === c) break
     c = parent
   }
