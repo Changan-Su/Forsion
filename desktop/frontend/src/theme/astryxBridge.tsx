@@ -8,11 +8,12 @@ import './astryxReset.css'
 import '@astryxdesign/core/astryx.css'
 import '@astryxdesign/theme-neutral/theme.css'
 import { useLayoutEffect, type ReactNode } from 'react'
-import { Theme, defineTheme } from '@astryxdesign/core/theme'
+import { Theme, defineTheme, generateThemeCSS, type DefinedTheme } from '@astryxdesign/core/theme'
 import { useTheme } from '../stores/themeStore'
 
 // LCL → astryx token 桥:单值字符串引用 LCL 变量,明暗由 LCL 变量自身随 data-mode 流动。
-export const lclTheme = defineTheme({
+// __built:让 <Theme> 跳过自己的运行时注入,改由下面 injectThemeCSS 常驻注入(原因见那里)。
+export const lclTheme: DefinedTheme = { ...defineTheme({
   name: 'forsion-lcl',
   tokens: {
     '--color-accent': 'var(--accent, #6c5ce7)',
@@ -27,7 +28,26 @@ export const lclTheme = defineTheme({
     // Theme 包裹层(display:contents)会级联 font-family → 桥回 LCL 字体,否则全局 Scope 会换掉应用字体。
     '--font-family-body': 'var(--font-ui)',
   },
-})
+}), __built: true }
+
+/** Theme 的运行时注入(prose 表 + token 表)按主题名只注入一次,且**只有首个挂载的 Theme 实例**登记清理:
+ *  它一卸就删两张表,兄弟 Theme 还挂着也照删、之后也没人补 —— 关掉主区日历(注入者)、留着侧栏待办 / 日历设置,
+ *  剩下的包裹层全掉回 Astryx 默认:字体换成系统栈、勾选框强调色变蓝(check:astryxscope F)。
+ *  改为本模块加载时注入一次、永不移除;标签形状与 Astryx 原样一致(同属性、同 @layer 包法),日历观感不变。
+ *  ⚠️ 依赖 AstryxScope 把 <html> 上的 data-astryx-theme 摘掉(见下):表常驻后,<html> 若再成作用域根,
+ *  整窗裸标签从预热那刻起就一直吃 Astryx prose。两处改动必须一起走。 */
+function injectThemeCSS(theme: DefinedTheme): void {
+  if (typeof document === 'undefined') return
+  const { prose, component } = generateThemeCSS(theme)
+  for (const [attr, layer, css] of [['data-astryx-theme-prose', 'reset', prose], ['data-astryx-theme', 'astryx-theme', component]]) {
+    if (!css) continue
+    // HMR 重跑本模块时原地换内容,不叠第二份。
+    const el = document.head.querySelector(`style[${attr}="${theme.name}"]`) ?? document.head.appendChild(document.createElement('style'))
+    el.setAttribute(attr, theme.name)
+    el.textContent = `@layer ${layer} {\n${css}\n}`
+  }
+}
+injectThemeCSS(lclTheme)
 
 export function AstryxScope({ children }: { children: ReactNode }) {
   const mode = useTheme((s) => s.mode)
@@ -37,7 +57,7 @@ export function AstryxScope({ children }: { children: ReactNode }) {
   // 继承样式/@layer reset prose 会放大到全应用,观感被用户否掉),改为每个 Scope 自己纠偏:
   // - data-theme:LCL 用它存语言名,根 Theme 写 light|dark 会盖掉(切 Space 主题退回 lovable 的根因)→
   //   父级 layout effect 晚于子 Theme 执行,把语言值抢回;卸载时微任务等整个提交结束后再恢复一次。
-  // - data-astryx-theme:**必须从 <html> 摘掉**。Theme 注入的运行时 CSS(prose 的 :where(h1..h6/p/small/
+  // - data-astryx-theme:**必须从 <html> 摘掉**。运行时 CSS(injectThemeCSS 常驻注入的 prose :where(h1..h6/p/small/
   //   code,pre/hr) 与 :scope 上的整套 --color-*/--text-* token)都是 @scope ([data-astryx-theme="forsion-lcl"]),
   //   <html> 带着它就成了作用域根 → 日历/待办视图与别的内容同窗时(侧栏停着待办、仪表盘嵌卡),整窗裸标签
   //   吃 Astryx 字号行高:笔记正文 15→14px、行高 24→20px(check:astryxscope 实测)。Astryx 写它只为

@@ -14,7 +14,11 @@
  *  C 负对照:往 body 挂一组裸 h1/h2/h6/p/small/code/pre/hr 探针,给 <html> 补上 / 摘掉属性 → 探针必须变(证明 B 的比对看得见外溢);
  *    同一组探针停用运行时样式表前后必须不变(B 的内容无关版,不依赖页面恰好有裸标签);
  *  D 日历(周视图+待办+右栏 / 下拉菜单 / 事件详情 / 月视图当日日程 / 深色)在 <html> 带与不带属性两种情况下逐元素全等 = 修法不改日历观感;
- *  E 包裹层内主题仍在:日历挂着时 prose 表在、包裹层上 --color-accent 有值(别拿「把样式表删了」当修法)。
+ *  E 包裹层内主题仍在:日历挂着时 prose 表在、包裹层上 --color-accent 有值(别拿「把样式表删了」当修法);
+ *  F 注入者先卸:关掉主区日历(Astryx 原生注入时它是唯一登记了清理的 Theme),侧栏待办 / 日历设置还挂着 →
+ *    两张表仍各一份、幸存包裹层逐元素 Astryx token 与字体不变;F0 负对照:停用运行时表,幸存者必变。
+ * 两张表现由 theme/astryxBridge.tsx 在模块加载时常驻注入(日历分块空闲预热即加载),所以「启动后(未进过日历)」
+ * 那行 NOTE 里 prose/comp 为 1 是预期 —— 表常驻但作用域根只有包裹层,靠 A/B 兜住不外溢。
  * 另覆盖会把属性写回去的路径:跨窗明暗 / 主题语言切换(设置浮窗 broadcastUi → syncFromWindow)、离开再回日历;
  * 设置浮窗是独立文档,不该有运行时样式。截图落 SHOT_DIR(DESIGN §8:几何全绿 ≠ 看起来对)。
  *
@@ -71,6 +75,15 @@ const HELPER = `window.__axs = (() => {
     o.rect = [r.x, r.y, r.width, r.height].map((v) => Math.round(v * 10) / 10).join(',')
     return o
   })
+  // F 专用:只取 Astryx token(运行时 token 表定义的那批)+ 解析后的字体 —— 关掉主区日历会改掉右栏小月历的本周高亮,
+  // 全量比会把这种正常的状态变化也算进去;token 只随运行时表在不在而变。
+  const TOKEN = /^--(color|font-family|text|radius)-/
+  const snapTokens = (els) => els.map((el) => {
+    const cs = getComputedStyle(el)
+    const o = { 'font-family': cs.fontFamily }
+    for (let i = 0; i < cs.length; i++) { const p = cs[i]; if (TOKEN.test(p)) o[p] = cs.getPropertyValue(p) }
+    return o
+  })
   const label = (el) => el.tagName.toLowerCase() + (typeof el.className === 'string' && el.className.trim() ? '.' + el.className.trim().split(/\\s+/)[0] : '')
   const diff = (els, a, b, noise) => {
     const agg = new Map()
@@ -84,13 +97,13 @@ const HELPER = `window.__axs = (() => {
     return { n, top: [...agg].sort((x, y) => y[1] - x[1]).slice(0, 14).map(([k, c]) => c + '× ' + k) }
   }
   /** 改动 → 快照 → 复原。noise = 两次零改动快照之间就不同的键(光标 / 动画 / 时间戳),不计;back = 复原后仍不同的元素数。 */
-  const measure = (els, apply) => {
-    const a1 = snap(els), a2 = snap(els)
+  const measure = (els, apply, take = snap) => {
+    const a1 = take(els), a2 = take(els)
     const noise = els.map((_, i) => new Set(Object.keys(a1[i]).filter((k) => a1[i][k] !== a2[i][k])))
     const undo = apply()
-    const b = snap(els)
+    const b = take(els)
     undo()
-    const c = snap(els)
+    const c = take(els)
     const d = diff(els, a1, b, noise)
     return { total: els.length, noisy: noise.filter((s) => s.size).length, changed: d.n, top: d.top, back: diff(els, a1, c, noise).n }
   }
@@ -106,6 +119,8 @@ const HELPER = `window.__axs = (() => {
     else html.setAttribute('data-astryx-theme', themeName())
     return () => { if (had !== null) html.setAttribute('data-astryx-theme', had); else html.removeAttribute('data-astryx-theme') }
   }
+  const survivors = (sel = '.amx-todo, .amx-calside') => [...document.querySelectorAll(WRAP)].filter((w) => w.querySelector(sel)).flatMap((w) => [...w.querySelectorAll('*')]).filter(shown)
+  let held = null
   const withProbe = (fn) => {
     const box = document.body.appendChild(document.createElement('div'))
     box.setAttribute('data-axs-probe', '')
@@ -127,6 +142,10 @@ const HELPER = `window.__axs = (() => {
     outsideAttr: () => measure(outside(), flipAttr),
     probeSheets: () => withProbe((els) => measure(els, sheetsOff)),
     probeAttr: () => withProbe((els) => measure(els, flipAttr)),
+    // F:侧栏幸存者(待办 / 日历设置两个包裹层)。hold 记下元素与快照,heldDiff 在关掉主区日历后对同一批元素重比。
+    survivorSheets: () => measure(survivors(), sheetsOff, snapTokens),
+    hold: (sel) => { const els = survivors(sel); const a = snapTokens(els), a2 = snapTokens(els); held = { els, a, noise: els.map((_, i) => new Set(Object.keys(a[i]).filter((k) => a[i][k] !== a2[i][k]))) }; return els.length },
+    heldDiff: () => { const { els, a, noise } = held; const d = diff(els, a, snapTokens(els), noise); return { total: els.length, gone: els.filter((el) => !el.isConnected).length, noisy: noise.filter((x) => x.size).length, changed: d.n, top: d.top, back: 0 } },
     calendarAttr: () => { const els = calendar(); return { ...measure(els, flipAttr), outsideWrap: els.filter((el) => !el.closest(WRAP)).map(label).slice(0, 8), outsideWrapN: els.filter((el) => !el.closest(WRAP)).length } },
   }
 })(); true`
@@ -330,6 +349,45 @@ async function main() {
     check('再回 Tangu', await enterSpace(win, 'tangu'))
     await sleep(800)
     check('A 再回 Tangu:<html> 不带属性', (await st()).attr === null, JSON.stringify(await st()))
+
+    // ⑥ 注入者先卸(放最后:关 tab 会改写日历 Space 的命名布局)。先去一个没有 Astryx 视图的 Space(收件箱)把所有 Theme 卸光,
+    //   再进日历 = 从零挂载,Astryx 原生注入时首个挂载的是主区日历(它是唯一登记清理者)—— 从 Tangu(右栏停着待办)直接进,
+    //   注入者会是别的视图,关主区就测不到(负对照实跑踩过)。
+    check('去收件箱(卸光 Astryx 视图)', await enterSpace(win, 'inbox'))
+    await sleep(800)
+    note('收件箱(无 Astryx 视图)', JSON.stringify(await st()))
+    check('再进日历(F)', await enterSpace(win, 'calendar'))
+    await win.waitForSelector('.amx-cal-event', { timeout: 15_000 })
+    await win.waitForSelector('.amx-todo .astryx-checkbox', { timeout: 10_000 })
+    await sleep(800)
+    const neg = await win.evaluate(() => window.__axs.survivorSheets())
+    check('F0 负对照:停用运行时样式表,侧栏待办 / 日历设置的 token 与字体必变(比对看得见掉主题)', neg.changed > 0 && neg.back === 0, fmt(neg))
+    // 注入者是三个视图里哪一个,取决于挂载序(Space 首次 build 时是主区日历,从命名布局还原时常是侧栏)—— 不去猜,
+    // 三个轮流先卸:每一步都有别的视图还挂着,盯住它们的 token 与字体。
+    const unmountStep = async (label, keepSel, wantWraps, act, waitGone) => {
+      await win.evaluate((sel) => window.__axs.hold(sel), keepSel)
+      const acted = await act()
+      await win.waitForFunction(waitGone, null, { timeout: 5000 }).catch(() => {})
+      await sleep(1000)
+      const s = await st()
+      const kept = await win.evaluate(() => window.__axs.heldDiff())
+      check(`F ${label}:运行时 prose / token 表仍各一份,还剩 ${wantWraps} 个包裹层`, acted && s.prose === 1 && s.comp === 1 && s.wraps === wantWraps, JSON.stringify({ acted, ...s }))
+      check(`F ${label}:还挂着的视图逐元素 Astryx token 与字体不变`, kept.total > 0 && kept.gone === 0 && kept.changed === 0,
+        `${fmt(kept)}${kept.gone ? ` ‖ ${kept.gone} 个已脱离 DOM` : ''}`)
+    }
+    const leftToggle = () => win.evaluate(() => { const b = document.querySelector('.dv-edge-toggle:not(.dv-edge-right)'); if (b) b.click(); return !!b })
+    await unmountStep('关掉主区日历', '.amx-todo, .amx-calside', 2, () => win.evaluate(() => {
+      const btn = [...document.querySelectorAll('.dv-tab')].find((t) => t.textContent.trim() === '日历')?.querySelector('.wb-tab-close')
+      if (btn) btn.click()
+      return !!btn
+    }), () => !document.querySelector('.amx-cal'))
+    await captureWindow(app, path.join(SHOTS, 'calendar-main-closed.png'))
+    await unmountStep('再收起左栏待办', '.amx-calside', 1, leftToggle, () => !document.querySelector('.amx-todo'))
+    check('重新展开左栏待办', await leftToggle())
+    await win.waitForSelector('.amx-todo .astryx-checkbox', { timeout: 10_000 })
+    await sleep(800)
+    await unmountStep('再收起右栏日历设置', '.amx-todo', 1, () => win.evaluate(() => { const b = document.querySelector('.dv-edge-right'); if (b) b.click(); return !!b }), () => !document.querySelector('.amx-calside'))
+    await captureWindow(app, path.join(SHOTS, 'calendar-only-todo.png'))
     note('截图', SHOTS)
   } finally {
     await close()
