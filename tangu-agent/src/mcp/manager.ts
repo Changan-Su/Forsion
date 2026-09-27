@@ -9,6 +9,7 @@ import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
  *     server 进后台重试(退避 5s 起翻倍、封顶 5min),连上后进入**下一个** run 的快照,在飞 run 的工具集不动。
  *     有状态 Streamable HTTP server 重启后旧 session 回 404(规范要求客户端重新 initialize):这是调用结果,
  *     不是 onerror —— 就地重连并重发一次(404 说明 server 没处理这条请求)。
+ *   - 跨 server 撞名(消毒后同名)按 server 名字典序先到先得,后到者拒绝并告警,不静默覆盖(M4)
  *   - callTool 带超时;dispose 关闭全部连接(stdio 杀子进程)并撤掉重试定时器,process.on('exit') 兜底
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -91,6 +92,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
   const retryBaseMs = opts.retryBaseMs ?? RETRY_BASE_MS;
   const retryMaxMs = opts.retryMaxMs ?? RETRY_MAX_MS;
   const connectTimeoutMs = opts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
+  const warnedCollisions = new Set<string>();
 
   function buildTransport(name: string, cfg: McpServerConfig): StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport {
     const t = inferTransport(cfg);
@@ -118,7 +120,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
     if (!entry.client) return;
     try {
       const r = await entry.client.listTools();
-      const used = new Set<string>(); // 名字空间含 server 名,server 内去重即可
+      const used = new Set<string>(); // server 内去重(跨 server 撞名在 toolsForRun 处理)
       const tools: LoadedMcpTool[] = [];
       // (server, tool) 字典序 → defs 顺序确定性
       const sorted = [...(r.tools ?? [])].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
@@ -237,11 +239,21 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
     },
 
     toolsForRun(enabledServerNames?: string[]) {
+      // servers 按名字典序(enabledServers)→ 跨 server 撞名先到先得,与连接时序无关。
+      // 撞名的前者没进本快照(未连接 / 被 enabledServerNames 滤掉)时后者照常可用 —— 同名只可能指向一个 server。
       const out = new Map<string, LoadedMcpTool>();
       for (const s of servers) {
         if (s.status !== 'connected') continue;
         if (enabledServerNames && !enabledServerNames.includes(s.name)) continue;
-        for (const t of s.tools) out.set(t.name, t);
+        for (const t of s.tools) {
+          const prev = out.get(t.name);
+          if (!prev) { out.set(t.name, t); continue; }
+          const key = `${t.name}\u0000${s.name}\u0000${prev.serverName}`;
+          if (!warnedCollisions.has(key)) {
+            warnedCollisions.add(key);
+            console.warn(`[mcp] 工具名冲突:${s.name}/${t.remoteName} 桥接后与 ${prev.serverName}/${prev.remoteName} 同为 ${t.name},已拒绝后者(按 server 名字典序先到先得)。请给其中一个 server 改名。`);
+          }
+        }
       }
       return out;
     },

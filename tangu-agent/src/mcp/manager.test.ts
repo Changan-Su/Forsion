@@ -1,6 +1,6 @@
 /**
  * MCP 管理器 × 真 SDK 假 server(test/fixtures/fake-mcp-server.mjs;stdio 子进程 + 进程内 Streamable HTTP)。
- * 钉的是方案 2026-09-26 P0 ⑥ / §3.3 的 M3(断线自愈)、M6(结果围栏 + 图片取出)
+ * 钉的是方案 2026-09-26 P0 ⑥ / §3.3 的 M3(断线自愈)、M4(跨 server 撞名拒绝)、M6(结果围栏 + 图片取出)
  * 每条都在去掉对应修复的代码上实跑过、确认为红(负对照)。`dev_` 保留前缀见 config.test.ts。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -142,6 +142,24 @@ describe('M3 断线自愈', () => {
     expect(before.size).toBe(0);
     const r = await m.callTool(m.toolsForRun().get('mcp__late__echo')!, { text: 'hi' });
     expect(innerText(r.text)).toBe('late:hi');
+  }, 30_000);
+});
+
+describe('M4 跨 server 撞名', () => {
+  it('消毒后同名的两个 server:按名字典序先到先得,后到者拒绝并只告警一次', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const m = await managerFor({ a_b: stdio('B'), 'a.b': stdio('A') }); // 'a.b' < 'a_b'
+    const tools = m.toolsForRun();
+    const echo = tools.get('mcp__a_b__echo')!;
+    expect(echo.serverName).toBe('a.b');
+    expect(innerText((await m.callTool(echo, { text: 'x' })).text)).toBe('A:x');
+    const collisions = () => warn.mock.calls.filter((c) => String(c[0]).includes('mcp__a_b__echo')).length;
+    expect(collisions()).toBe(1);
+    m.toolsForRun();
+    expect(collisions()).toBe(1);
+    // 只要后者的 run(前者被 enabledServerNames 滤掉)→ 后者照常可用
+    expect(m.toolsForRun(['a_b']).get('mcp__a_b__echo')!.serverName).toBe('a_b');
   }, 30_000);
 });
 
