@@ -653,6 +653,16 @@ html:not(.sc-on) .am-app .milkdown .ProseMirror.ProseMirror-focused .callout-tog
   background: transparent; color: var(--text); font-family: var(--font-mono, ui-monospace, monospace);
   font-size: var(--ui-font-meta, 12px); line-height: 1.6; padding: 8px 10px;
 }
+/* 聚焦打字中同一字段被别处改了(C-01):草稿本地胜,底色 + 边色提示(title 讲明失焦覆盖、Esc 放弃)。
+ * (0,2,0)/(0,3,0) 压过 .amx-prop-input:hover/:focus 与 .amx-props-raw,不靠源码顺序。 */
+.amx-props .amx-prop-conflict,
+.amx-props .amx-prop-conflict:hover,
+.amx-props .amx-prop-conflict:focus {
+  background: color-mix(in srgb, var(--warn, #b26b00) 12%, transparent);
+  border-color: var(--warn, #b26b00);
+}
+/* 值框本身无边框(border:none):补一圈零模糊内环(描边不是高程,见 DESIGN §7.6);原文框靠上面的 border-color。 */
+.amx-props input.amx-prop-conflict { box-shadow: inset 0 0 0 1px var(--warn, #b26b00); }
 
 /* ── 拖拽分栏投放区:静止时零宽(保 Obsidian 左对齐),拖拽中(.stack[data-dnd])绝对定位浮进
  *    48px 页边距 → 无内容位移,拖到行两侧边缘即可裂出新列(与 styles.css 的 [data-over] 高亮配合)。 ── */
