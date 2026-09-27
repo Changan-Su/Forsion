@@ -10,6 +10,7 @@ import { authFetch } from './http'
 import { AGENT_APP_ID } from './agentRunService'
 import { localInbox } from './localInbox' // 移动端(window.tangu?.mobile)下 inbox 走设备本地存储
 import { registerMessages, translate } from '../i18n'
+import { LOCAL_ONLY_CODE, localOnlyMessage } from './localOnly'
 
 registerMessages({
   'backendsvc.downloadFailed': { zh: '下载失败 ({status})', en: 'Download failed ({status})' },
@@ -28,6 +29,8 @@ async function request<T>(cfg: TanguDesktopConfig, path: string, init?: RequestI
       const j = await r.json()
       detail = j?.detail || detail
       if (typeof j?.error === 'string') code = j.error // 机器可读错误码(如 claim_requirements_unmet),调用方据此本地化
+      // 设备页打到远端不许用的路由:unitWeb 回 403 LOCAL_ONLY → 换成本地化提示(见 services/localOnly.ts)
+      if (r.status === 403 && j?.code === LOCAL_ONLY_CODE) { detail = localOnlyMessage(); code = LOCAL_ONLY_CODE }
     } catch { /* keep */ }
     throw Object.assign(new Error(detail), { status: r.status }, code ? { code } : {})
   }

@@ -22,6 +22,7 @@
 import { IPC } from '@amadeus-shared/ipc'
 import type { AmadeusApi } from '@amadeus-shared/ipc'
 import { setAssetUrlBuilder } from '@amadeus-shared/assets'
+import { LOCAL_ONLY_CODE, localOnlyMessage } from '@/services/localOnly'
 
 export interface UnitBridgeCfg {
   /** 设备页基址(尾斜杠;局域网根或隧道子路径 —— 相对 base 两用)。 */
@@ -93,7 +94,8 @@ export async function createUnitAmadeusBridge(cfg: UnitBridgeCfg): Promise<Amade
     }
     if (res.status === 401) { cfg.onAuthError(); throw new Error('连接权限已被对方移除') }
     if (res.status === 413) throw new Error('内容过大:server 中转通道上限 10MB,同一局域网内直连不受限')
-    const body = (await res.json().catch(() => null)) as { ok?: boolean; result?: unknown; error?: string } | null
+    const body = (await res.json().catch(() => null)) as { ok?: boolean; result?: unknown; error?: string; code?: string } | null
+    if (res.status === 403 && body?.code === LOCAL_ONLY_CODE) throw new Error(localOnlyMessage()) // 不可逆删除只许本机
     if (!res.ok || !body) throw new Error(`设备端错误(HTTP ${res.status})`)
     if (!body.ok) throw new Error(body.error || '设备端调用失败')
     return dec(body.result) as T
