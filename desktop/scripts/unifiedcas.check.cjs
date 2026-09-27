@@ -12,6 +12,8 @@
 //   C3 陈旧且没改动的 B 被关掉 → 不许拿旧全文盖掉盘上新版(卸载冲洗的 isPristine 闸)
 //  D 组(D-03 打字中外部改动):100ms / 600ms / 连续打字中 fire → 本地胜 + 冲突副本 = 外部那版 + error 提示带「打开副本」;
 //   负对照:已落盘后 fire / 没改动时 fire → 照常回灌、零副本零提示
+//   假冲突(返修 B1,盘上没离开本实例基线):D6 打字中 fire 原样内容 · D7 标题回车改名后立刻打正文 ·
+//   D8 在途自写(盘先落 ack 晚回,`__upage.writeLagMs`)的回声 × 接着打字 → 一律零副本零提示、字照常落盘
 //  F 组(D-04 写失败):F1 首次失败即提示 + 页面「未保存」条 · F2 退避自动重试 · F3 online 信号立刻补写、条消失
 //   F4 失败中切走 → 草稿进本机、盘上不被覆盖 → 切回出「恢复草稿」条,点了才写 · F5 草稿 = 盘上内容时静默删掉
 //   F6 离开确认只在非 Electron 宿主、且真有写不进去的内容时拦 · F7 失败存草稿后又打字、重试成功 → 旧草稿删掉
@@ -244,6 +246,61 @@ async function groupD(browser) {
     await wait(2500)
     const d = await disk(p)
     record(`${k.label} → 照常回灌、零副本零提示`, d === EXT && (await copies(p)).length === 0 && (await toasts(p)).length === 0 && (await domText(p, 0)).includes('AGENT-WROTE-THIS'), JSON.stringify(d))
+    await p.close()
+  }
+  // D6–D8 假冲突负对照(评审 D-03 返修 B1):盘上**根本没离开**本实例的基线,只是手上有未落盘的字时回灌读回了
+  // 自己的那版 —— 绝不许生出冲突副本 / error 提示,且字照常落盘(断言盘上内容,不许靠「根本没存」蒙混过关)。
+  {
+    // D6 回灌事件到了、盘上内容没变(watcher 假回声 / 跨窗通知落到没动过的同路径)
+    const p = await open(browser, MD)
+    await typeIn(p, 0, 'CCC', ' local')
+    await wait(100)
+    await p.evaluate(() => window.__upage.fire('Unified.md', window.__upage.vault.get('Unified.md')))
+    await wait(3000)
+    const d = await disk(p)
+    const c = await copies(p)
+    const t = await toasts(p)
+    record('D6 打字中 fire、盘上内容没变 → 零副本零提示、字照常落盘', c.length === 0 && t.length === 0 && d === MD.replace('CCC\n', 'CCC local\n'), JSON.stringify({ d, copies: c.map(([k]) => k), toasts: t.map((x) => x.text) }))
+    await p.close()
+  }
+  {
+    // D7 新建笔记的流程:标题回车改名 → 实例按新路径重挂 → 立刻接着打正文。重挂的补读等打字静默,
+    // 读回的正是自己改名前写下的那版(用户实际路径里最常见的假冲突触发点)。
+    const p = await open(browser, MD)
+    await p.click('.amx-title-input')
+    await p.keyboard.press('Meta+A')
+    await p.keyboard.type('Meeting', { delay: 50 })
+    await p.evaluate((s) => { window.__d7old = document.querySelector(s) }, PM)
+    await p.keyboard.press('Enter')
+    // 等的是**重挂后的新实例**接住焦点(旧实例在改名 IPC 窗口里还握着焦点,那几击落进退休实例是另一条既有竞速,
+    // 基线同样会丢 —— D7 只验回灌的假冲突,不和它搅在一起)。
+    await p.waitForFunction((s) => { const pm = document.querySelector(s); return !!pm && pm !== window.__d7old && pm.contains(document.activeElement) }, PM, { timeout: 5000 })
+    await p.keyboard.type('hello body', { delay: 60 })
+    await wait(3500)
+    const d = await p.evaluate(() => window.__upage.vault.get('Meeting.md'))
+    const c = await copies(p)
+    const t = await toasts(p)
+    record('D7 标题回车改名后立刻打正文 → 零副本零提示、正文落盘', c.length === 0 && t.length === 0 && typeof d === 'string' && d.startsWith('hello body') && d.includes('para3 CCC'), JSON.stringify({ d, copies: c.map(([k]) => k), toasts: t.map((x) => x.text) }))
+    await p.close()
+  }
+  {
+    // D8 在途自写:盘先落、ack 晚回(web PUT / 网络盘)。写在路上时接着打字 + 自写回声到达 → 回灌若不先等写链
+    // 落定,读到的是自己刚写出去的那版、lastSaved 还是上一版,就会把它当外部改动保全。
+    const p = await open(browser, MD)
+    await p.evaluate(() => { window.__upage.writeLagMs = 1500 })
+    await typeIn(p, 0, 'CCC', ' local')
+    await wait(1000) // 防抖 800ms 已到:写已落盘、ack 还在路上
+    const inflight = await p.evaluate(() => window.__upage.vault.get('Unified.md'))
+    await p.keyboard.type(' more')
+    await p.evaluate(() => window.__upage.fire('Unified.md', window.__upage.vault.get('Unified.md')))
+    await wait(5000)
+    await p.evaluate(() => { window.__upage.writeLagMs = 0 })
+    const d = await disk(p)
+    const c = await copies(p)
+    const t = await toasts(p)
+    record('D8 在途自写的回声(盘先落 ack 晚回)× 接着打字 → 零副本零提示、两段字都落盘',
+      inflight.includes('CCC local') && c.length === 0 && t.length === 0 && d === MD.replace('CCC\n', 'CCC local more\n'),
+      JSON.stringify({ inflight: inflight.includes('CCC local'), d, copies: c.map(([k]) => k), toasts: t.map((x) => x.text) }))
     await p.close()
   }
 }

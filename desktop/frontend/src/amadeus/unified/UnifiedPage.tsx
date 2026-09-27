@@ -1576,6 +1576,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
       pipe.reconcileBusy++
       try {
         await awaitTypingQuiet()
+        // 在途的自写先落定再读(评审 D-03 返修):宿主可能先落盘、后回 ack(web PUT / 网络盘),此间读到的是
+        // **自己**刚写出去的那版,而 lastSaved 还停在上一版 → 下面会把它当外部改动保全成冲突副本。
+        // chain 恒不 reject;写链从不等回灌(CAS 让位那条是 fire-and-forget),这里等不出死锁。
+        await pipe.chain
         const raw = await amadeus.readTextFile(path)
         if (raw == null || pipe.dead || pipe.retired) return // 读失败/已卸载:保持现状,绝不清空
         if (raw === pipe.lastSaved && !pipe.pending) return // 自写回声兜底
@@ -1585,7 +1589,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           // 不打断输入。但被盖掉的盘上版本**必须**留底(拍板 #6,评审 D-03:此前这里只换基线,外部那版静默
           // 蒸发、零提示):登记为待保全,finally 的补发在写之前先落冲突副本 + error 级提示,副本没保住就不写。
           // (pending 却 isPristine = 只是编辑器把上一版规范化了一下,不算用户改动 → 照常回灌,不出副本。)
-          if (raw !== composeFm(pipe.fm, pipe.body)) pipe.unpreserved = raw
+          // ⚠️ 只有盘上**真的离开了本实例的基线**才算外部改动(评审 D-03 返修 B1):raw === lastSaved = 盘上还是
+          //    自己上次写的那版(挂载补读、自写回声、改名重挂后接着打字、切篇后立刻打字),没有任何东西要保全;
+          //    漏了这一项,每次「读回自己 + 手上有未落盘的字」都会凭空生出一份冲突副本 + error 提示。
+          if (raw !== pipe.lastSaved && raw !== composeFm(pipe.fm, pipe.body)) pipe.unpreserved = raw
           pipe.lastSaved = raw
           return
         }

@@ -1660,7 +1660,11 @@ if (new URLSearchParams(location.search).has('dock')) {
       }
       vault.set(p, text)
       writes.push({ path: p, text })
-      return Promise.resolve(typeof opts?.base === 'string' ? { ok: true } : undefined)
+      // `__upage.writeLagMs = n`:盘先落、ack 晚 n ms 才回(web PUT / 网络盘的形态)—— 回灌在这段里读到的是
+      // 自己刚写出去的那版(评审 D-03 返修:check:unifiedcas D8)。
+      const lag = (window as unknown as { __upage?: { writeLagMs?: number } }).__upage?.writeLagMs ?? 0
+      const ack = typeof opts?.base === 'string' ? { ok: true as const } : undefined
+      return lag > 0 ? new Promise((r) => setTimeout(() => r(ack), lag)) : Promise.resolve(ack)
     },
     onExternalChange: (cb: (p: string) => void) => {
       listeners.add(cb)
@@ -1709,6 +1713,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     writes,
     casRejects,
     failWrites: 0,
+    writeLagMs: 0,
     probe: upageProbe,
     probe2: upageProbe2,
     /** `&udual`:卸载第二个实例(= 关掉那个标签;走真卸载冲洗)。 */
