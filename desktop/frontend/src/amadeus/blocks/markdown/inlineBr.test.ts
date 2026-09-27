@@ -5,6 +5,7 @@
 // 真浏览器那一半(打开零写、编辑别处后远处逐字):npm run check:rtcorpus 的 d06.*。
 import { describe, expect, it } from 'vitest'
 import { TextSelection } from '@milkdown/kit/prose/state'
+import { DOMParser, DOMSerializer } from '@milkdown/kit/prose/model'
 import { bootEditor, roundTrip } from './parseFidelity.testkit'
 import { inlineBrToBreak } from './inlineBr'
 
@@ -25,9 +26,21 @@ describe('行内 <br> 逐字往返', () => {
   it('渲染成真换行(<br> 元素),不是字面原子、也不是被删', async () => {
     const b = await bootEditor('hello<br>world\n')
     try {
-      const html = b.view.dom.innerHTML
-      expect(html).toMatch(/hello<br[^>]*>world/)
-      expect(html).not.toContain('data-type="html"')
+      const p = b.view.dom.querySelector('p')!
+      expect([...p.childNodes].map((n) => n.nodeName)).toEqual(['#text', 'BR', '#text'])
+      expect(p.querySelector('br')!.getAttribute('data-md-br')).toBe('<br>') // 原文随 DOM 走:粘贴链路靠它
+      expect(b.view.dom.querySelector('[data-type="html"]')).toBeNull()
+    } finally { await b.destroy() }
+  })
+
+  it('粘贴链路(plugin-clipboard:md → PM → DOM → parseSlice)也保留 <br> 原文', async () => {
+    const b = await bootEditor('x\n')
+    try {
+      const { schema } = b.view.state
+      const dom = DOMSerializer.fromSchema(schema).serializeFragment(b.parse('a<br/>b\n').content)
+      const slice = DOMParser.fromSchema(schema).parseSlice(dom)
+      b.view.dispatch(b.view.state.tr.replaceWith(0, b.view.state.doc.content.size, slice.content))
+      expect(b.md()).toBe('a<br/>b\n')
     } finally { await b.destroy() }
   })
 

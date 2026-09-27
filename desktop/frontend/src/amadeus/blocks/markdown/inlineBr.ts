@@ -58,6 +58,17 @@ export const hardbreakWithHtmlSchema = hardbreakSchema.extendSchema((prev) => (c
   return {
     ...base,
     attrs: { ...(base.attrs ?? {}), html: { default: null } },
+    // 原文也进 DOM:粘贴走 plugin-clipboard 的「md → PM → DOM → parseSlice」,不带上它 `<br>` 在粘贴后退成 `\` 换行。
+    parseDOM: [
+      { tag: 'br[data-md-br]', getAttrs: (dom) => ({ html: (dom as HTMLElement).getAttribute('data-md-br') }) },
+      ...(base.parseDOM ?? []),
+    ],
+    toDOM: (node) => {
+      const spec = base.toDOM!(node) as [string, Record<string, unknown>, ...unknown[]]
+      return typeof node.attrs.html === 'string' && spec[0] === 'br'
+        ? [spec[0], { ...spec[1], 'data-md-br': node.attrs.html }, ...spec.slice(2)] as never
+        : spec as never
+    },
     parseMarkdown: {
       match: base.parseMarkdown.match,
       runner: (state, node, type) => {
