@@ -274,4 +274,13 @@ describe('Codex 评审(09-27 跟进轮)', () => {
     expect(isKnownSafeBash('cat -- -n', ws)).toBe(false);
     expect(isKnownSafeBash('rg SECRET -- readme.md', ws)).toBe(true);
   });
+
+  it('带参数的 rg 旗标(-r 即 --replace、-E 即 --encoding)会吃掉后面的 `--`,不许出现在免批集里(Codex 二轮复核)', () => {
+    expect(isKnownSafeBash('rg -r -- --pre=sh needle readme.md', ws)).toBe(false);
+    expect(isKnownSafeBash('rg -E -- --pre=sh needle readme.md', ws)).toBe(false);
+    expect(isKnownSafeBash('rg -r X needle readme.md', ws)).toBe(false);
+    // grep 的 -r / -E 不带参数,照旧免批
+    expect(isKnownSafeBash('grep -r -E needle src', ws)).toBe(true);
+    expect(isKnownSafeBash('rg -n -i needle readme.md', ws)).toBe(true);
+  });
 });

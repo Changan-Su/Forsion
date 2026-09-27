@@ -240,11 +240,14 @@ function touchesCredentials(program: string, args: string[], cwd: string): boole
 }
 
 /** Options a known-safe rg/grep may carry. Deliberately absent: rg `-L`/`--follow` and grep `-R` (they dereference symlinks
- * inside the tree, which a root check cannot see), `--pre` and every option with side effects. Note grep's `-L` is
- * --files-without-match (harmless) while rg's `-L` is --follow — hence per-program sets. */
-const SAFE_SEARCH_FLAGS = ['-n', '-i', '-l', '-c', '-r', '-v', '-w', '-F', '-E', '--files', '--hidden', '--no-ignore', '--no-config', '--line-number', '--ignore-case', '--fixed-strings', '--files-with-matches', '--count'];
+ * inside the tree, which a root check cannot see), `--pre` and every option with side effects, and **every option that takes
+ * a value**: rg's `-r` (--replace) and `-E` (--encoding) would swallow a following `--` as their argument, so
+ * `rg -r -- --pre=sh x f` runs `sh` while the `--` split above thinks option parsing ended (Codex 09-27 re-review).
+ * Same letters mean different things per program (grep `-L` = files-without-match, `-r` = recursive, `-E` = extended
+ * regex — all argument-free) — hence per-program sets. */
+const SAFE_SEARCH_FLAGS = ['-n', '-i', '-l', '-c', '-v', '-w', '-F', '--files', '--hidden', '--no-ignore', '--no-config', '--line-number', '--ignore-case', '--fixed-strings', '--files-with-matches', '--count'];
 const SAFE_RG_FLAGS = new Set(SAFE_SEARCH_FLAGS);
-const SAFE_GREP_FLAGS = new Set([...SAFE_SEARCH_FLAGS, '-L']);
+const SAFE_GREP_FLAGS = new Set([...SAFE_SEARCH_FLAGS, '-r', '-E', '-L']);
 
 /** Only simple unquoted word tokens are classified. Shell parsing remains the shell's job. */
 export function isKnownSafeBash(command: string, cwd: string = process.cwd()): boolean {
