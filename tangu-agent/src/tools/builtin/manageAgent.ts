@@ -11,6 +11,7 @@ import type { ToolProvider } from '../toolRegistry.js';
 import { listAgents, getAgent, saveAgent, deleteAgent, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN, DEFAULT_MAX_ITERATIONS } from '../../agents/agentRegistry.js';
 import { THINKING_LEVELS } from '../../llm/modelCapabilities.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
+import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
 
 /** 自我判定用展示身份优先:shareDefaultMemory 的 agent 其 currentAgentSlug()=xyra,拿它比对会漏拦自己。 */
 const selfSlug = (): string | undefined => currentDisplayAgentSlug() || currentAgentSlug();
@@ -55,6 +56,9 @@ export const manageAgentProvider: ToolProvider = {
       },
       execute: async (args, ctx) => {
         const action = String(args.action || '');
+        // 远程污点 run 只许 list(P0 第三轮 E5;审批闸同一判定先拦一道,这里兜住绕过闸的调用方)。
+        const remoteDenied = effectiveRemote(ctx) ? remoteManagementDenied('manage_agent', args.action) : null;
+        if (remoteDenied) return `Error: ${remoteDenied}`;
         try {
           if (action === 'list') {
             const all = await listAgents();

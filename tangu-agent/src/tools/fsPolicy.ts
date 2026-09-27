@@ -11,7 +11,7 @@ import os from 'node:os';
 import type { ToolContext } from './toolTypes.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../seams/runContext.js';
-import { protectedHostPaths, credentialPaths, forsionConfigPaths, matchProtected, credentialReadTarget, remoteForbiddenRoot, withinForsionDomains, remoteHomeStartupTarget, remoteCwdForbidden, foldCase, canonicalFuturePath } from '../sandbox/hostSandboxProtection.js';
+import { protectedHostPaths, credentialPaths, forsionConfigPaths, matchProtected, credentialReadTarget, remoteForbiddenRoot, withinForsionDomains, remoteHomeStartupTarget, remoteCwdForbidden, foldCase, canonicalFuturePath, pathWithin } from '../sandbox/hostSandboxProtection.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
 
 /** agent 自己目录里的身份/自进化文件:generic 写工具(write_file/edit_file/apply_patch…)一律硬拒——
@@ -64,20 +64,26 @@ function realResolve(abs: string): string {
   return canonicalFuturePath(abs);
 }
 
-/** 路径里有 `.agents` / `.codex` 段(别的 agent 工具的技能 / 配置目录)。macOS / Windows 按大小写折叠:`.Agents` 就是 `.agents`(评审 B#4)。 */
+/** 路径段按宿主文件系统的比较口径归一:macOS / Windows 默认大小写不敏感(`.GIT` 就是 `.git`,`.Agents` 就是 `.agents`,评审 B#4 /
+ *  P0 第三轮 E4);Windows 还会吞掉段尾的点和空格(`.git.` / `.git ` 打开的就是 `.git`)。platform 参数只给测试(Linux CI 上验另两个平台)。 */
+export function metadataSegment(part: string, platform: NodeJS.Platform = process.platform): string {
+  const seg = platform === 'darwin' || platform === 'win32' ? part.toLowerCase() : part;
+  return platform === 'win32' ? seg.replace(/[. ]+$/, '') : seg;
+}
+const metaSegment = (part: string): string => metadataSegment(part);
+const hasSegment = (p: string, names: string[]): boolean => p.split(path.sep).some((part) => names.includes(metaSegment(part)));
+
+/** 路径里有 `.agents` / `.codex` 段(别的 agent 工具的技能 / 配置目录)。 */
 function isAgentMetadataPath(p: string): boolean {
-  return p.split(path.sep).some((part) => {
-    const seg = foldCase ? part.toLowerCase() : part;
-    return seg === '.agents' || seg === '.codex';
-  });
+  return hasSegment(p, ['.agents', '.codex']);
 }
 
 /** 受保护位置:.git 元数据目录内部 + 家目录凭据/密钥目录。 */
 function isProtected(abs: string): boolean {
   // 路径里出现 `.git` 段即视为 .git 内部(对齐 Codex forbidden_agent_metadata_write);
-  // `.gitignore` 等是独立段名,不会误命中。
-  if (abs.split(path.sep).includes('.git')) return true;
-  return PROTECTED_HOME_DIRS.some((d) => isInside(abs, path.join(HOME, d)));
+  // `.gitignore` 等是独立段名,不会误命中。大小写按宿主文件系统折叠:mac 上写 `.GIT/hooks/pre-commit` 落的就是真 hook。
+  if (hasSegment(abs, ['.git'])) return true;
+  return PROTECTED_HOME_DIRS.some((d) => pathWithin(abs, path.join(HOME, d))); // 大小写折叠:mac 上 ~/.SSH 就是 ~/.ssh
 }
 
 export interface WritePathVerdict {
@@ -104,7 +110,7 @@ export function protectedRemoteWrite(abs: string): string | null {
   if (hit) return hit;
   // 项目里的 .tangu/(旧 .forsion/)工作区控制目录:项目技能 / 项目指令会被下一次本机 run 装载(§6.6 远端不许改项目指令 / 设置 / 技能)。
   // 家目录域内的已由上面判过(Library 例外里同样禁),这里只管家目录之外。
-  if (!withinForsionDomains(abs) && resolved.split(path.sep).some((part) => part.toLowerCase() === '.tangu' || part.toLowerCase() === '.forsion')) return resolved;
+  if (!withinForsionDomains(abs) && resolved.split(path.sep).some((part) => ['.tangu', '.forsion'].includes(metaSegment(part.toLowerCase())))) return resolved;
   return null;
 }
 
@@ -115,8 +121,10 @@ export function protectedLocalWrite(abs: string): string | null {
 }
 
 export interface ReadPathVerdict { ok: boolean; reason: string }
-/** 契约 C4 · 读:凭据文件对**所有** run 读硬拒(read_file / read_document / view_image;search_files 在搜索侧排除)。
- *  防的是「run 读出 forsion_token 再去批准别处的审批」(§6.4-1);按 realpath 判,软链进来同样拒。 */
+/** 契约 C4 · 读:凭据文件对**所有** run 的**结构化读工具**硬拒(read_file / read_document / view_image;search_files 在搜索侧排除;
+ *  Library 文件端点 / 通道发文件同样过这道)。防的是「run 读出 forsion_token 再去批准别处的审批」(§6.4-1);按 realpath 判,软链进来同样拒。
+ *  ⚠️ shell(run_bash / run_background)读同一个文件不在这里:known-safe 捷径碰到凭据就不再免批、改走审批 —— 审批是 D1 下的同意,
+ *  不是硬拒;要彻底隔离得开宿主沙箱(方案 §6.8)。 */
 export function checkReadPath(abs: string): ReadPathVerdict {
   const hit = credentialReadTarget(abs);
   return hit ? { ok: false, reason: `Access denied: ${abs} is a protected credential file and cannot be read by agents.` } : { ok: true, reason: '' };
@@ -131,7 +139,7 @@ export function checkWritePath(ctx: ToolContext, abs: string): WritePathVerdict 
   }
   if (ctx.hostSandbox && ctx.hostSandbox.mode !== 'off' && (
     isAgentMetadataPath(resolved) ||
-    protectedHostPaths().some((protectedPath) => isInside(resolved, protectedPath) || isInside(path.resolve(abs), protectedPath))
+    protectedHostPaths().some((protectedPath) => pathWithin(resolved, protectedPath) || pathWithin(path.resolve(abs), protectedPath))
   )) return { ok: false, hardDeny: true, reason: `Host sandbox protects runtime configuration or metadata: ${resolved}` };
   if (isProtected(resolved)) {
     return { ok: false, hardDeny: true, reason: `受保护路径,禁止写入:${resolved}` };
@@ -142,7 +150,9 @@ export function checkWritePath(ctx: ToolContext, abs: string): WritePathVerdict 
     for (const slug of new Set([currentAgentSlug(), currentDisplayAgentSlug()])) {
       if (!slug) continue;
       const dir = realResolve(path.join(agentsDir(), slug));
-      if (isInside(resolved, dir) && SELF_PROTECTED_AGENT_FILES.has(path.relative(dir, resolved))) {
+      // 大小写折叠比(mac 上 Soul.md 就是 SOUL.md):SELF_PROTECTED_AGENT_FILES 按原名存,比的时候两边都折。
+      const rel = pathWithin(resolved, dir) ? path.relative(foldCase ? dir.toLowerCase() : dir, foldCase ? resolved.toLowerCase() : resolved) : '';
+      if (rel && [...SELF_PROTECTED_AGENT_FILES].some((f) => (foldCase ? f.toLowerCase() : f) === rel)) {
         return {
           ok: false,
           hardDeny: true,

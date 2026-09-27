@@ -15,8 +15,9 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { publish } from './eventBus.js';
 import { isOutsideWorkspace, writableRoots, protectedLocalWrite, protectedRemoteWrite } from '../tools/fsPolicy.js';
-import { credentialPaths, matchProtected, pathWithin, canonicalFuturePath } from '../sandbox/hostSandboxProtection.js';
-import { clampApprovalMode, effectiveRemote, remoteApprovalCap, type CapMode, type RemoteInfo } from './remoteOrigin.js';
+import { credentialPaths, credentialReadTarget, pathWithin, canonicalFuturePath, procTreeTouched } from '../sandbox/hostSandboxProtection.js';
+import { existsSync } from 'node:fs';
+import { clampApprovalMode, effectiveRemote, remoteApprovalCap, remoteManagementDenied, type CapMode, type RemoteInfo } from './remoteOrigin.js';
 import { writeTargetsOf } from '../tools/writeTargets.js';
 import type { ToolCall } from '../core/types.js';
 import { runHooks } from '../hooks/index.js';
@@ -58,11 +59,10 @@ function nextApprovalId(): string {
  *   custom    : 按 config.json approval 段的 base 档(逐条规则的命中判定在 gateToolCall)
  * 只读工具（read_file/list_dir/web_search/...）永不在此返回 true。
  */
-/** 远程污点 run 里按「跑命令」档审批的持久化后续执行入口(§6.6):它们建的规则 / 日程条目日后以**完全通行**
- *  无人值守地跑(automation.ts 强制 full-auto),不拦 = 远端在 auto-edit 上限下借一条自动化把自己升成 full-auto。 */
-const REMOTE_COMMAND_TOOLS = new Set(['manage_automation', 'manage_schedule']);
+// 远程污点 run 的持久化后续执行入口(manage_automation / manage_schedule,§6.6)与 Agent / 技能管理面不走审批档:
+// 写动作在 gateToolCall 入口按 remoteManagementDenied 硬拒(按 D1 远端能批自己的卡,「要审批」挡不住),list 与本机同档。
 
-export function toolNeedsApproval(name: string, mode: ApprovalMode | undefined, opts?: { userBrowser?: boolean; remote?: boolean }): boolean {
+export function toolNeedsApproval(name: string, mode: ApprovalMode | undefined, opts?: { userBrowser?: boolean }): boolean {
   if (mode === 'custom') mode = customRules().base;
   if (!mode || mode === 'full-auto') return false;
   const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch';
@@ -76,8 +76,7 @@ export function toolNeedsApproval(name: string, mode: ApprovalMode | undefined, 
     // 操作已登录网站,与 browser_task 同档;没接管时它们只动 Tangu 自己的后台浏览器,照旧免批。由调用方判定后传入。
     (opts?.userBrowser === true && USER_BROWSER_ACTIONS.has(name)) ||
     // 插件工具经 capabilities.approval:'command' 自声明并入本档(核心不硬编码插件工具名;如 computer-use 的 act_ui)。
-    declaredApproval(name) === 'command' ||
-    (opts?.remote === true && REMOTE_COMMAND_TOOLS.has(name));
+    declaredApproval(name) === 'command';
   if (mode === 'readonly') return writesFiles || runsCommands;
   if (mode === 'auto-edit') return runsCommands;
   return false;
@@ -234,10 +233,43 @@ function touchesCredentials(program: string, args: string[], cwd: string): boole
   const roots = recursive && !paths.length ? [cwd] : paths;
   return roots.some((a) => {
     const abs = path.resolve(cwd, a);
-    if (matchProtected(abs, creds)) return true;
+    // credentialReadTarget = the credential list (literal + realpath) plus, on Linux, /proc/self/** and /proc/<pid>/environ & co.
+    if (credentialReadTarget(abs)) return true;
     if (!recursive) return false;
+    if (procTreeTouched(abs)) return true;
     const real = canonicalFuturePath(abs);
     return creds.some((c) => pathWithin(c, abs) || pathWithin(c, real));
+  });
+}
+
+/** The git work tree containing `dir` (nearest ancestor holding a `.git` dir or file), or null outside any repo. */
+function gitToplevel(dir: string): string | null {
+  let cur = path.resolve(dir);
+  for (;;) {
+    if (existsSync(path.join(cur, '.git'))) return cur;
+    const parent = path.dirname(cur);
+    if (parent === cur) return null;
+    cur = parent;
+  }
+}
+
+/** Contract C4 for `git diff` / `git show` (review F#0): given a path outside the work tree, `git diff` silently switches to
+ * `--no-index` and prints the file — `git diff --no-ext-diff --no-textconv ~/.forsion/auth.json /dev/null` read the token
+ * with zero approvals. Known-safe only when inside a repo, and every operand (revisions resolve harmlessly as in-tree names)
+ * passes the same credential check as `cat` and lies inside the toplevel in both its literal and its realpath form
+ * (`link/auth.json` with link -> ~/.forsion is literally inside, canonically outside). A repo whose tree contains a
+ * credential file (a dotfiles repo at ~) is never known-safe for diff/show either: their output is file content. */
+function gitReadStaysInRepo(sub: string, args: string[], cwd: string): boolean {
+  if (args.includes('--no-index')) return false;
+  const operands = splitOptions(args).operands;
+  const top = gitToplevel(cwd);
+  if (!top) return !['diff', 'show'].includes(sub) && operands.length === 0;
+  const tops = [...new Set([top, canonicalFuturePath(top)])];
+  if (['diff', 'show'].includes(sub) && credentialPaths().some((c) => tops.some((t) => pathWithin(c, t)))) return false;
+  return operands.every((a) => {
+    const abs = path.resolve(cwd, a);
+    if (credentialReadTarget(abs)) return false;
+    return [abs, canonicalFuturePath(abs)].every((f) => tops.some((t) => pathWithin(f, t)));
   });
 }
 
@@ -277,7 +309,8 @@ export function isKnownSafeBash(command: string, cwd: string = process.cwd()): b
   // unless callers explicitly disable both extension mechanisms.
   if (['diff', 'show'].includes(sub) && !(rest.includes('--no-ext-diff') && rest.includes('--no-textconv'))) return false;
   if (!['status', 'diff', 'show', 'log', 'rev-parse', 'describe'].includes(sub)) return false;
-  return rest.every((a) => !a.startsWith('-') || a === '--' || SAFE_GIT_FLAGS.has(a) || /^--max-count=[0-9]+$/.test(a));
+  if (!rest.every((a) => !a.startsWith('-') || a === '--' || SAFE_GIT_FLAGS.has(a) || /^--max-count=[0-9]+$/.test(a))) return false;
+  return gitReadStaysInRepo(sub, rest, cwd);
 }
 
 // 路径抽取已迁 tools/writeTargets.ts(检查点快照共用同一口径,见该文件头注)。
@@ -458,9 +491,13 @@ export async function gateToolCall(
   const canonical = canonicalToolName(call.function.name);
   if (canonical !== call.function.name) call = { ...call, function: { ...call.function, name: canonical } };
   const name = call.function.name;
+  const remote = effectiveRemote({ remote: ctx.remote, runId });
+  // 远程污点 run 改 Agent / 技能 / 自动化 / 日程(P0 第三轮 E5 / E6):硬拒,排在一切放行捷径(custom allow / hook allow /
+  // 改参重闸 / 总允许)之前,也不看 execMode —— 工具实现里还有同一个判定兜底。
+  const mgmtDenied = remote ? remoteManagementDenied(name, parseCallArgs(call).action) : null;
+  if (mgmtDenied) return { action: 'reject', rejectReason: mgmtDenied };
   // host 模式全部过闸;非 host 仅 MCP 工具过闸(本地形态的 sandbox 会话也可能挂 MCP)。
   if (ctx.execMode !== 'host' && !name.startsWith('mcp__')) return { action: 'approve' };
-  const remote = effectiveRemote({ remote: ctx.remote, runId });
   const cap: CapMode | undefined = remote ? remoteApprovalCap() : undefined;
 
   // 契约 C4 · 保护路径写入(凭据 + ~/.forsion(-dev) 配置):远程污点 → 硬拒(不进审批 —— 按 D1 会被推到远端批,
@@ -522,7 +559,7 @@ export async function gateToolCall(
     // 接管态的点按类工具只能作用在绑定过的用户标签上 → 「有活绑定」即要批(与执行侧同一真源,不另探端口);
     // 无人值守 run 本就不接管,也就不因此排队审批
     const userBrowser = mode !== 'full-auto' && USER_BROWSER_ACTIONS.has(name) && !ctx.approvalDeferral && await userBrowserBound();
-    if (!toolNeedsApproval(name, mode, { userBrowser, remote: !!remote })) return { action: 'approve' };
+    if (!toolNeedsApproval(name, mode, { userBrowser })) return { action: 'approve' };
     // 改参重闸不走「总允许」捷径:同会话另一张卡刚点了总允许,也不能让这次改过的参数跳过下面的 hook(Codex 09-27 复审)。
     // 远程污点 run 也不走:本机在这个会话里点过的「总允许 run_bash」会让远程 run 越过上限档(C3)。
     if (!editedOnCard && !remote && isAlwaysAllowed(ctx.sessionId, name)) return { action: 'approve' };
@@ -600,5 +637,5 @@ async function capWouldAsk(
   if (name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) return false;
   if (ctx.execMode === 'host' && writeEscalationNeeded(call, { cwd: ctx.cwd, remote })) return true; // 远程不认额外可写根,也不认 C8 禁用的 cwd
   const userBrowser = USER_BROWSER_ACTIONS.has(name) && !ctx.approvalDeferral && await userBrowserBound();
-  return toolNeedsApproval(name, cap, { userBrowser, remote: true });
+  return toolNeedsApproval(name, cap, { userBrowser });
 }

@@ -144,7 +144,10 @@ router.post('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => 
     const remote = parseRemoteOrigin(req.headers);
     const badCwd = remote ? remoteCwdViolation(project_path, rawCfg?.cwd) : null;
     if (badCwd) return res.status(400).json(remoteCwdErrorBody(badCwd));
-    const initCfg = remote ? { ...applyRemoteConfigWrite({}, rawCfg || {}), remoteOrigin: remoteOriginMarker(remote) } : rawCfg;
+    // preset 是会话事实(不在 C7 可写白名单里,因为既有会话的 preset 远端改不了):**建会话**时远端带来的、经 validSessionFacts 校验的
+    // preset 原子落库 —— 否则远端建的空 Chat 会话重载后被当 Work 初始化(P0 第三轮 E7)。
+    const remotePreset = remote && rawCfg && Object.prototype.hasOwnProperty.call(rawCfg, 'preset') ? { preset: rawCfg.preset } : {};
+    const initCfg = remote ? { ...applyRemoteConfigWrite({}, rawCfg || {}, undefined, { create: true }), ...remotePreset, remoteOrigin: remoteOriginMarker(remote) } : rawCfg;
     const factErr = validSessionFacts(initCfg);
     if (factErr) return res.status(400).json({ detail: factErr });
     const id = uuidv4();

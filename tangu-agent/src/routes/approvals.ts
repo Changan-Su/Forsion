@@ -21,7 +21,7 @@ import { resolveInquiry } from '../services/inquiries.js';
 import { parseDeskShotBody, resolveDeskShot } from '../services/deskCapture.js';
 import { resolveUiAction } from '../services/uiAck.js';
 import { normalizeUiValues, sanitizeText } from './runs.js';
-import { parseRemoteOrigin, remoteArgsOverrideRejected, remoteArgsOverrideBody } from '../services/remoteOrigin.js';
+import { parseRemoteOrigin, remoteArgsOverrideRejected, remoteArgsOverrideBody, taintRunRemote } from '../services/remoteOrigin.js';
 
 const router = Router();
 
@@ -152,6 +152,10 @@ router.post('/agent/runs/:runId/inquiries/:inquiryId', authMiddleware, async (re
     if (!run) return res.status(404).json({ detail: 'Run not found' });
     const ok = resolveInquiry(req.params.inquiryId, answer.slice(0, 4000), req.params.runId);
     if (!ok) return res.status(410).json({ detail: 'inquiry is no longer pending' });
+    // 远端的答案(最长 4000 字自由文本)从这一刻起就在驱动这条 run —— 与远端 steer 同理染色(P0 第三轮 E8,评审 F#1):
+    // 之后的审批按远程钳、保护路径写入硬拒。只在兑现成功后登记;与 resolveInquiry 同一同步段,run 的续跑(微任务)必在其后。
+    const remote = parseRemoteOrigin(req.headers);
+    if (remote) taintRunRemote(req.params.runId, remote);
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'inquiry failed' });
@@ -168,6 +172,9 @@ router.post('/agent/runs/:runId/captures/:shotId', authMiddleware, async (req: A
     if (!run) return res.status(404).json({ detail: 'Run not found' });
     const ok = resolveDeskShot(req.params.runId, req.params.shotId, parseDeskShotBody(req.body));
     if (!ok) return res.status(410).json({ detail: 'capture is no longer pending' });
+    // 远端回的截图进了模型上下文(图里的文字同样能驱动 run)→ 同询问、steer 一样染色(P0 第三轮 E8)。
+    const remote = parseRemoteOrigin(req.headers);
+    if (remote) taintRunRemote(req.params.runId, remote);
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'capture failed' });

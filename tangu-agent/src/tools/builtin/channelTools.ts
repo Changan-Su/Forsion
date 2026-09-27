@@ -9,6 +9,7 @@ import path from 'node:path';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import { wechatRemote } from '../../services/wechatRemote.js';
+import { checkReadPath } from '../fsPolicy.js';
 
 const MAX_MEDIA_BYTES = 50 * 1024 * 1024; // 50MB;超过 iLink 普遍拒收
 
@@ -20,6 +21,9 @@ async function sendMedia(ctx: ToolContext, rawPath: string, kind: 'image' | 'fil
   const rel = String(rawPath || '').trim();
   if (!rel) return 'Error: path is required';
   const abs = resolveInCwd(ctx, rel);
+  // 契约 C4:发给通道对端 = 读出去(P0 第三轮 E9)。凭据文件(按 realpath,软链改名同样拦)一个字节都不发。
+  const readGuard = checkReadPath(abs);
+  if (!readGuard.ok) return `Error: ${readGuard.reason}`;
   let buf: Buffer;
   try {
     const st = await fs.stat(abs);

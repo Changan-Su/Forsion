@@ -15,6 +15,7 @@ import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
 import { applyHarnessEdit, loadHarness, appendHarnessCandidates, MAX_ENTRIES, TITLE_MAX, BODY_MAX, EVIDENCE_MAX } from '../../agents/harnessStore.js';
 import { getAgent, isValidSlug } from '../../agents/agentRegistry.js';
+import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
 
 export const manageHarnessProvider: ToolProvider = {
   id: 'builtin:manage_harness',
@@ -61,6 +62,9 @@ export const manageHarnessProvider: ToolProvider = {
         // shareDefaultMemory 的 agent 其 currentAgentSlug()=xyra,拿它写会写进别人家(Codex 评审 #3)。
         const slug = currentDisplayAgentSlug() || currentAgentSlug() || DEFAULT_AGENT_SLUG;
         const action = String(args.action || '');
+        // 远程污点 run 只许 list(P0 第三轮,Codex 评审 P1):工作笔记注入下一次本机 run 的系统提示;propose 写别的 Agent 的候选收件箱。
+        const remoteDenied = effectiveRemote(ctx) ? remoteManagementDenied('manage_harness', args.action) : null;
+        if (remoteDenied) return `Error: ${remoteDenied}`;
         try {
           if (action === 'propose') {
             // 只追加对方的候选收件箱(.harness-raw.md),不碰 HARNESS.md:候选是提名非资产,采纳权在对方的 /refine。

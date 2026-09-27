@@ -300,7 +300,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
     },
     execute: async (args, ctx): Promise<string> => {
       const abs = resolvePath(ctx, String(args.path ?? ''));
-      // 凭据文件(auth.json / provider-auth.json / 设备密钥 …)对所有 run 读硬拒(契约 C4,方案 §6.4-1)。
+      // 凭据文件(auth.json / provider-auth.json / 设备密钥 / 引擎 .env 与 config.json …)对所有 run 读硬拒(契约 C4,方案 §6.4-1)。
+      // 硬拒的是结构化读工具;shell 读同一个文件走审批(已接受的边界,见 hostSandboxProtection.credentialPaths)。
       const readGuard = checkReadPath(abs);
       if (!readGuard.ok) return `Error: ${readGuard.reason}`;
       // 图片文件文本读取没有意义(会吐二进制乱码)——引导模型改用 view_image「看」图。

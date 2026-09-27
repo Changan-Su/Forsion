@@ -49,7 +49,7 @@ import { getAgent, isValidSlug, DEFAULT_MAX_ITERATIONS, libDirOf, type NormalAge
 import { loadHarness, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
-import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, remoteApprovalCap, remoteOf } from './remoteOrigin.js';
+import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, remoteApprovalCap, remoteOf, REMOTE_WRITABLE_CONFIG_KEYS } from './remoteOrigin.js';
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
 import { onUserRunDone, onUserRunStart, type HistorianForkSeed } from './localHistorian.js';
 import { normalizeImageAttachments, toImageParts } from './imageAttachments.js';
@@ -756,16 +756,21 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
     const storedHasPreset = !!stored && Object.prototype.hasOwnProperty.call(stored, 'preset');
     const storedPreset = parsePreset(stored?.preset);
+    // 远程污点 run 不经这里改写既有会话的事实(P0 第三轮 E7):preset 不在远程写白名单(C7)里 —— 存值有就按存值跑(空白会话也一样),
+    // 没有就按请求跑这一轮、但不落库(本机下一次 run 再定)。远端建会话时要定 preset,走 POST /agent/sessions(那里经校验原子落库)。
+    const remoteRun = !!effectiveRemote({ remote, runId });
     if (!storedHasPreset || storedPreset !== preset) {
       const blank = (await deps().state.countSessionMessages(sessionId)) === 0;
-      if (!blank && storedHasPreset) {
-        console.warn(`[agent-core] run=${runId} preset locked: session=${storedPreset ?? 'work'} requested=${preset ?? 'work'} (session already has messages)`);
+      if ((!blank || remoteRun) && storedHasPreset) {
+        console.warn(`[agent-core] run=${runId} preset locked: session=${storedPreset ?? 'work'} requested=${preset ?? 'work'} (${remoteRun ? 'remote run' : 'session already has messages'})`);
         void publish(runId, 'status', { warning: 'preset_locked', preset: storedPreset ?? 'work', requested: preset ?? 'work' });
         preset = storedPreset;
-      } else {
+      } else if (!remoteRun) {
         patch.preset = preset ?? null; // null = 显式锁定为 work;只有缺键(老会话)才允许后来者改写一次
       }
     }
+    // 远程污点 run 的写回只剩 C7 白名单键(今天就是 agentSlug —— 远端本就能经 PATCH config 选 Agent)。
+    if (remoteRun) for (const k of Object.keys(patch)) if (!REMOTE_WRITABLE_CONFIG_KEYS.has(k)) delete patch[k];
     if (Object.keys(patch).length) {
       ac.signal.throwIfAborted();
       // 写前现读再合:上面读存值到这儿隔着几次 await(团队会话的 getTeam 是真文件 I/O),期间用户在输入区切的档(PUT)不能被旧对象整份盖回去 —— 审批闸现读的就是它(Codex 09-21 P1)。

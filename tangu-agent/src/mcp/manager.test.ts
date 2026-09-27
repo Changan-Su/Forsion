@@ -384,3 +384,20 @@ describe('M6 结果:不可信围栏 + 图片取出', () => {
     expect(innerText(r.text)).toBe('here is the picture');
   }, 20_000);
 });
+
+describe('C2 stdio 子进程环境(P0 第三轮 E10)', () => {
+  it('清单 env 想把 TANGU_TOKEN / TANGU_LOCAL_TOKEN 加回来 → 子进程照样拿不到;其余 env 原样(修复前:原样透传)', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    process.env.TANGU_TOKEN = 'engine-own-token';
+    try {
+      const m = await managerFor({ s: { command: process.execPath, args: [FIXTURE], env: { FAKE_MCP_TOOLS: 'env', TANGU_TOKEN: 'from-mcp-json', tangu_local_token: 'from-mcp-json-lower', MY_TOOL_KEY: 'kept' } } });
+      const env = m.toolsForRun().get('mcp__s__env')!;
+      expect(env).toBeTruthy();
+      const read = async (name: string) => innerText((await m.callTool(env, { text: name })).text);
+      expect(await read('TANGU_TOKEN')).toBe('(unset)');
+      expect(await read('tangu_local_token')).toBe('(unset)');
+      expect(await read('MY_TOOL_KEY')).toBe('kept'); // 用户给这个 server 的 key 照给
+      expect(await read('FAKE_MCP_TOOLS')).toBe('env');
+    } finally { delete process.env.TANGU_TOKEN; }
+  }, 20_000);
+});

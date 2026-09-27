@@ -18,6 +18,7 @@ import { mkdirSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { agentsDir, memoryDir, userMdFile, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
+import { credentialReadTarget } from '../sandbox/hostSandboxProtection.js';
 import { builtinAgentAvatar } from './builtinAvatars.js';
 import { LEGACY_PERSONAS, LEGACY_MUSE_PROMPTS, LEGACY_MUSE_DESCRIPTION } from './legacyPersonas.js';
 import { ARIOSO_SYSTEM_PROMPT, ARIOSO_SOUL, ARIA_SYSTEM_PROMPT, ARIA_SOUL, RECITA_SYSTEM_PROMPT, RECITA_SOUL } from './personaPrompts.js';
@@ -965,14 +966,37 @@ export function libDirOf(slug: string): string {
 
 export interface LibraryFileMeta { name: string; size: number; isBinary: boolean; mtimeMs: number }
 
-export async function listLibraryFiles(slug: string): Promise<LibraryFileMeta[]> {
+/** Library 的真实根目录;远端请求(P0 第三轮,Codex 评审 P2)另要求它真的住在这个 Agent 的目录里 —— 用户可以把 Library 链到别处
+ *  (本机界面照旧可读),但那样一来远端经本端点就能列 / 读链过去的任意目录。不满足 / 不存在 → null。 */
+async function libraryRoot(dir: string, remote: boolean): Promise<string | null> {
+  try {
+    const realDir = await fs.realpath(dir);
+    if (remote) {
+      const realAgent = await fs.realpath(path.dirname(dir));
+      const rel = path.relative(realAgent, realDir);
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+    }
+    return realDir;
+  } catch { return null; }
+}
+const within = (child: string, parent: string): boolean => {
+  const rel = path.relative(parent, child);
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+};
+
+export async function listLibraryFiles(slug: string, opts: { remote?: boolean } = {}): Promise<LibraryFileMeta[]> {
   const dir = libDirOf(slug);
+  const root = await libraryRoot(dir, !!opts.remote);
+  if (!root) return [];
   let names: string[];
-  try { names = await fs.readdir(dir); } catch { return []; }
+  try { names = await fs.readdir(root); } catch { return []; }
   const out: LibraryFileMeta[] = [];
   for (const name of names) {
     try {
-      const st = await fs.stat(path.join(dir, name));
+      const p = path.join(root, name);
+      // 远端只列真实路径仍在 Library 里、且不是凭据的条目(软链出去的只露名字和大小也不给)。
+      if (opts.remote) { const real = await fs.realpath(p); if (!within(real, root) || credentialReadTarget(real)) continue; }
+      const st = await fs.stat(p);
       if (!st.isFile()) continue;
       out.push({ name, size: st.size, isBinary: !isTextExt(name), mtimeMs: Math.floor(st.mtimeMs) });
     } catch { /* ignore */ }
@@ -981,14 +1005,36 @@ export async function listLibraryFiles(slug: string): Promise<LibraryFileMeta[]>
   return out;
 }
 
-export async function readLibraryFile(slug: string, name: string): Promise<{ name: string; isBinary: boolean; content?: string; dataBase64?: string; mimeType?: string } | null> {
+export async function readLibraryFile(slug: string, name: string, opts: { remote?: boolean } = {}): Promise<{ name: string; isBinary: boolean; content?: string; dataBase64?: string; mimeType?: string } | null> {
   const dir = libDirOf(slug);
   const safe = sanitizeLibraryName(name);
+  // realpath 钳制(P0 第三轮 E9,同 workspace 读路由的 insideWorkspace):Library 里的软链可以指向任何地方(auth.json、别的 Agent 的
+  // 私有文件),本端点对远端开放 —— 真实路径必须仍在这个 Agent 的 Library 之内,且不是凭据文件(C4)。不满足一律按「不存在」回,不泄露存在性。
+  // 先打开、读完再复核(Codex 复审 P1):先查后读留着换链窗口(查的时候 Library 在家,读的时候已被换成外链)。读的是 fd,
+  // 复核按**读完之后**的路径重新解析 —— 它得仍在 Library(远端:Library 仍在 Agent 目录)里、不是凭据,且与 fd 是同一个文件(dev + ino);
+  // 换过去再换回来也骗不过:路径解析到的是原文件,身份对不上刚读的那个。
+  // Linux 另按内核给的 fd 真实路径(/proc/self/fd/N)判,与路径解析无关、不再有窗口。⚠️ 残余(macOS / Windows,Node 没有 openat /
+  // F_GETPATH):能在 realpath 与 stat 之间把 Library 来回换三次的攻击者仍可能读到外部文件 —— 这要求能反复改名 agents/<slug>/Library
+  // 本身,远程污点 run 的结构化写工具做不到(只有批准过的 shell,而批准 = 同意,D1),本机恶意进程本就读得到那些文件。
+  let fh: import('node:fs/promises').FileHandle | undefined;
   try {
-    const buf = await fs.readFile(path.join(dir, safe));
+    fh = await fs.open(path.join(dir, safe), 'r');
+    const st = await fh.stat();
+    if (!st.isFile()) return null;
+    const buf = await fh.readFile();
+    const root = await libraryRoot(dir, !!opts.remote);
+    if (!root) return null;
+    const real = await fs.realpath(path.join(root, safe));
+    if (!within(real, root) || credentialReadTarget(real)) return null;
+    const now = await fs.stat(real);
+    if (now.dev !== st.dev || now.ino !== st.ino) return null;
+    if (process.platform === 'linux') {
+      const kernelPath = await fs.readlink(`/proc/self/fd/${fh.fd}`).catch(() => null); // 没挂 /proc 的环境退回上面的路径复核
+      if (kernelPath !== null && (!within(kernelPath, root) || credentialReadTarget(kernelPath))) return null;
+    }
     if (isTextExt(safe)) return { name: safe, isBinary: false, content: buf.toString('utf8') };
     return { name: safe, isBinary: true, dataBase64: buf.toString('base64'), mimeType: LIBRARY_MIME_BY_EXT[extOf(safe)] || 'application/octet-stream' };
-  } catch { return null; }
+  } catch { return null; } finally { await fh?.close().catch(() => {}); }
 }
 
 export async function writeLibraryFile(slug: string, name: string, body: { content?: string; dataBase64?: string; isBinary?: boolean }): Promise<{ name: string }> {
