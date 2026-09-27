@@ -63,12 +63,20 @@ export interface UnitHostDeps {
   savePairing: (p: UnitPairing) => Promise<void>
   clearPairing: () => Promise<void>
   log: (msg: string) => void
-  /** 通道读看门狗:这么久一个字节都没收到(网关 15s 一次心跳)就断开重连。缺省 45_000;0 = 关(只给测试用)。 */
+  /** 通道读看门狗:这么久一个字节都没收到(网关 15s 一次心跳)就断开重连。缺省 45_000;0 = 关(只给测试用)。
+   *  入册请求(register)共用这个时限:半开连接上的入册同样会一直挂着。 */
   readIdleMs?: number
+  /** 回包请求的时限(测试可调小):整包回包(respond)的总时长 = 它 × 2;流式回传(streamBack)只管
+   *  「连上并开始上传」—— 引擎事件流本身可以一直开着,不设总时限。缺省 60_000。 */
+  requestTimeoutMs?: number
+  /** 打云端网关用的 fetch(测试注入;缺省全局 fetch)。本机 unitWeb 那一跳永远用全局 fetch。 */
+  hubFetch?: typeof fetch
 }
 
 /** 缺省读看门狗:网关心跳 15s × 3。 */
 const CHANNEL_READ_IDLE_MS = 45_000
+/** 缺省回包时限:流式回传「连上并开始上传」的上限;整包回包按它的两倍(隧道信封最大 ~10MB,慢上行要时间)。 */
+const HUB_REQUEST_TIMEOUT_MS = 60_000
 
 export interface UnitHostStatus {
   running: boolean
@@ -101,6 +109,12 @@ export class UnitHost {
   constructor(deps: UnitHostDeps) {
     this.deps = deps
   }
+
+  private hubFetch(input: string, init?: RequestInit): Promise<Response> {
+    return (this.deps.hubFetch ?? fetch)(input, init)
+  }
+
+  private get requestTimeoutMs(): number { return this.deps.requestTimeoutMs ?? HUB_REQUEST_TIMEOUT_MS }
 
   status(): UnitHostStatus {
     return {
@@ -175,7 +189,7 @@ export class UnitHost {
         if (!token) throw new Error('未登录 Forsion 账号')
         let pairing = this.deps.getPairing()
         if (!pairing) {
-          pairing = await this.register(cloudUrl, token, conn.signal)
+          pairing = await this.register(cloudUrl, token, conn)
           // 入册在途时被 stop()(停用 / 换账号):这份配对属于旧的那一轮,绝不写回(Codex 评审 P1)
           if (conn.signal.aborted) throw new Error('入册期间通道已被停用')
           await this.deps.savePairing(pairing)
@@ -191,7 +205,7 @@ export class UnitHost {
         }, idleMs) : null
         let resp: Response
         try {
-          resp = await fetch(`${apiBase(cloudUrl)}/units/${pairing.unitId}/channel`, {
+          resp = await this.hubFetch(`${apiBase(cloudUrl)}/units/${pairing.unitId}/channel`, {
             headers: {
               Authorization: `Bearer ${token}`,
               'X-Unit-Secret': pairing.secret,
@@ -238,17 +252,28 @@ export class UnitHost {
     }
   }
 
-  private async register(cloudUrl: string, token: string, signal: AbortSignal): Promise<UnitPairing> {
-    const r = await fetch(`${apiBase(cloudUrl)}/units/register`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: hostname(), platform: process.platform }),
-      signal,
-    })
-    if (!r.ok) throw new Error(`设备入册失败 HTTP ${r.status}`)
-    const j = (await r.json()) as { unitId?: string; secret?: string }
-    if (!j.unitId || !j.secret) throw new Error('设备入册响应缺字段')
-    return { unitId: j.unitId, secret: j.secret }
+  /** 入册:与通道同一个看门狗时限(评审 A-desktop#4)—— 半开连接上的入册不设时限就一直挂到下一次唤醒。
+   *  超时 = 中止本轮连接(conn),主循环照常退避重试。 */
+  private async register(cloudUrl: string, token: string, conn: AbortController): Promise<UnitPairing> {
+    const idleMs = this.deps.readIdleMs ?? CHANNEL_READ_IDLE_MS
+    const timer = idleMs ? setTimeout(() => {
+      this.deps.log(`[unit-host] 设备入册 ${Math.round(idleMs / 1000)}s 未返回,中止重试`)
+      conn.abort()
+    }, idleMs) : null
+    try {
+      const r = await this.hubFetch(`${apiBase(cloudUrl)}/units/register`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: hostname(), platform: process.platform }),
+        signal: conn.signal,
+      })
+      if (!r.ok) throw new Error(`设备入册失败 HTTP ${r.status}`)
+      const j = (await r.json()) as { unitId?: string; secret?: string }
+      if (!j.unitId || !j.secret) throw new Error('设备入册响应缺字段')
+      return { unitId: j.unitId, secret: j.secret }
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
 
   /** 解析通道 SSE,逐信封派活(信封间互不阻塞)。读看门狗:readIdleMs 内一个字节都没有 → 断开本条连接。 */
@@ -369,15 +394,19 @@ export class UnitHost {
     }
   }
 
+  /** 整包回包:有总时限(评审 A-desktop#4)—— 网关半开时不设时限,这次派发的在飞记录就一直挂着。 */
   private async respond(dispatchId: string, status: number, ct: string, body: Buffer, extraHeaders?: Record<string, string>): Promise<void> {
     const { cloudUrl, token } = this.deps.getCreds()
     const pairing = this.deps.getPairing()
     if (!pairing) return
-    await fetch(`${apiBase(cloudUrl)}/units/${pairing.unitId}/resp/${dispatchId}`, {
+    const ms = this.requestTimeoutMs * 2
+    await this.hubFetch(`${apiBase(cloudUrl)}/units/${pairing.unitId}/resp/${dispatchId}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'X-Unit-Secret': pairing.secret, 'Content-Type': 'application/json' },
       body: JSON.stringify({ status, headers: { 'content-type': ct, ...extraHeaders }, bodyB64: body.toString('base64') }),
-    }).catch((e) => this.deps.log(`[unit-host] 回包失败: ${e?.message || e}`))
+      ...(ms ? { signal: AbortSignal.timeout(ms) } : {}),
+    }).then((r) => { void r.body?.cancel().catch(() => {}) })
+      .catch((e) => this.deps.log(`[unit-host] 回包失败: ${e?.name === 'TimeoutError' ? `${Math.round(ms / 1000)}s 未完成` : e?.message || e}`))
   }
 
   /** 边收边回传(event-stream 与一切大响应);上行失败(客户端已断)→ 中止本机引擎读取。 */
@@ -391,17 +420,41 @@ export class UnitHost {
     const url = `${apiBase(cloudUrl)}/units/${pairing.unitId}/stream/${dispatchId}?status=${engineResp.status}&ct=${encodeURIComponent(ct)}`
       + (csp ? `&csp=${encodeURIComponent(csp)}` : '')
       + (xcto ? `&xcto=${encodeURIComponent(xcto)}` : '')
+    // 「连上并开始上传」看门狗(评审 A-desktop#4):网关要等上行结束才回响应,fetch 的 promise 在整条流期间都不 resolve,
+    // 没法按响应头计时;改看 fetch 第一次**拉**请求体 —— undici 在连接建立、请求头写出之后才开始拉。
+    // highWaterMark 0 = 构造时不预拉,第一次 pull 必然来自上传端。拉到之后事件流可以一直开着,不再设限。
+    const src = engineResp.body
+    if (!src) return
+    const reader = src.getReader()
+    let started = false
+    const ms = this.requestTimeoutMs
+    const connectTimer = ms ? setTimeout(() => {
+      if (started) return
+      this.deps.log(`[unit-host] 流式回传 ${Math.round(ms / 1000)}s 未连上网关,中止本次派发`)
+      ctrl.abort()
+    }, ms) : null
+    const body = new ReadableStream<Uint8Array>({
+      async pull(c) {
+        if (!started) { started = true; if (connectTimer) clearTimeout(connectTimer) }
+        const { done, value } = await reader.read()
+        if (done) c.close()
+        else c.enqueue(value)
+      },
+      cancel(reason) { return reader.cancel(reason) },
+    }, { highWaterMark: 0 })
     try {
-      await fetch(url, {
+      await this.hubFetch(url, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'X-Unit-Secret': pairing.secret, 'Content-Type': 'application/octet-stream' },
-        body: engineResp.body,
+        body,
         signal: ctrl.signal,
         duplex: 'half',
       } as RequestInit)
     } catch (e: any) {
       this.deps.log(`[unit-host] 流式回传中断: ${e?.message || e}`)
-      try { await engineResp.body?.cancel() } catch { /* 已断 */ }
+      try { await reader.cancel() } catch { /* 已断 */ }
+    } finally {
+      if (connectTimer) clearTimeout(connectTimer)
     }
   }
 }

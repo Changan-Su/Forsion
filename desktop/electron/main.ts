@@ -2217,7 +2217,7 @@ app.whenReady().then(async () => {
         return { unitPairedDevices: unitPairedCache }
       })
     } finally {
-      // P2P 是站着的信道,建立后逐请求走 x-unit-internal——不收的话被撤销的设备继续全权访问,
+      // P2P 是站着的信道,建立后逐请求走 x-unit-p2p(unitWeb 的 per-boot p2pSecret,与隧道分钥)——不收的话被撤销的设备继续全权访问,
       // 直到信道偶然断开(Codex H2)。粗粒度全收(含账号态会话):撤销是低频动作,重连便宜。落盘失败也照收。
       // ponytail: 按主体(pairHash)定向收要把身份穿进 PeerEntry,撤销频率撑不起那台机器
       await closeAllP2p()

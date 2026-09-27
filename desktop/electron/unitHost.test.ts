@@ -26,6 +26,9 @@ interface Hub {
   channels: http.ServerResponse[]
   registers: http.ServerResponse[]
   streamed: string[]
+  /** holdResp = /resp/ 收下不回(网关半开);respClosed 记下被客户端掐掉的 /resp/ 请求。 */
+  holdResp: boolean
+  respClosed: string[]
   mode: ChannelMode
   dispatch: (env: { id: string; method: string; path: string; accept?: string }) => void
   endChannel: () => void
@@ -38,7 +41,8 @@ function fakeHub(): Promise<Hub> {
   const registers: http.ServerResponse[] = []
   const streamed: string[] = []
   const timers = new Set<ReturnType<typeof setInterval>>()
-  const hub: Partial<Hub> = { channels, registers, streamed, mode: 'silent' }
+  const respClosed: string[] = []
+  const hub: Partial<Hub> = { channels, registers, streamed, respClosed, holdResp: false, mode: 'silent' }
   const server = http.createServer((req, res) => {
     const url = req.url || ''
     if (url.endsWith('/units/register')) { registers.push(res); return } // 挂住:由测试决定何时回
@@ -52,6 +56,12 @@ function fakeHub(): Promise<Hub> {
         timers.add(t)
         res.on('close', () => { clearInterval(t); timers.delete(t) })
       }
+      return
+    }
+    if (url.includes('/resp/') && hub.holdResp) {
+      streamed.push(url.split('?')[0])
+      req.on('data', () => {})
+      res.on('close', () => { if (!res.writableEnded) respClosed.push(url) })
       return
     }
     if (url.includes('/stream/') || url.includes('/resp/')) {
@@ -85,6 +95,7 @@ function fakeUnitWeb(): Promise<{ url: string; hits: string[]; cut: string[]; cl
   const cut: string[] = []
   const server = http.createServer((req, res) => {
     hits.push(req.url || '')
+    if (req.url === '/small') { res.writeHead(200, { 'Content-Type': 'application/json', 'Content-Length': 2 }); res.end('{}'); return }
     res.on('close', () => { if (!res.writableEnded) cut.push(req.url || '') })
     res.writeHead(200, { 'Content-Type': 'text/event-stream' })
     res.write('data: one\n\n')
@@ -97,7 +108,7 @@ function fakeUnitWeb(): Promise<{ url: string; hits: string[]; cut: string[]; cl
   })
 }
 
-function host(hub: Hub, web: { url: string } | null, readIdleMs: number, opts?: { unpaired?: boolean }): { h: UnitHost; logs: string[]; saved: unknown[] } {
+function host(hub: Hub, web: { url: string } | null, readIdleMs: number, opts?: { unpaired?: boolean; requestTimeoutMs?: number; hubFetch?: typeof fetch }): { h: UnitHost; logs: string[]; saved: unknown[] } {
   const logs: string[] = []
   const saved: unknown[] = []
   const h = new UnitHost({
@@ -109,6 +120,8 @@ function host(hub: Hub, web: { url: string } | null, readIdleMs: number, opts?: 
     clearPairing: async () => {},
     log: (m) => logs.push(m),
     readIdleMs,
+    ...(opts?.requestTimeoutMs !== undefined ? { requestTimeoutMs: opts.requestTimeoutMs } : {}),
+    ...(opts?.hubFetch ? { hubFetch: opts.hubFetch } : {}),
   })
   return { h, logs, saved }
 }
@@ -216,6 +229,72 @@ describe('UnitHost 通道看门狗 / 唤醒重连 / 信封中止', () => {
       expect(web.cut).toEqual([])
       hub.endChannel() // 网关侧通道结束(重启 / 顶替 / 1h 上限)
       expect(await until(() => web.cut.includes('/hang-a') && web.cut.includes('/hang-b'))).toBe(true)
+    } finally { h.stop(); web.close(); hub.close() }
+  })
+
+  // ── 评审 A-desktop#4:入册 / 回包 / 流式回传的时限 ──
+  it('入册挂住(网关收下不回):按看门狗时限中止并重试,不会一直挂到下一次唤醒', async () => {
+    const hub = await fakeHub()
+    const { h, logs, saved } = host(hub, null, 300, { unpaired: true })
+    try {
+      h.start()
+      expect(await until(() => hub.registers.length === 1)).toBe(true)
+      // 300ms 时限 + 1s 退避 → 第二次入册
+      expect(await until(() => hub.registers.length >= 2, 4000)).toBe(true)
+      expect(logs.some((l) => l.includes('入册') && l.includes('未返回'))).toBe(true)
+      expect(saved).toEqual([])
+    } finally { h.stop(); hub.close() }
+  })
+
+  it('整包回包挂住(网关半开):到时限掐掉 /resp/ 请求', async () => {
+    const hub = await fakeHub()
+    hub.holdResp = true
+    const web = await fakeUnitWeb()
+    const { h, logs } = host(hub, web, 0, { requestTimeoutMs: 150 }) // 回包时限 = 2 × 150ms
+    try {
+      h.start()
+      expect(await until(() => hub.channels.length === 1)).toBe(true)
+      hub.dispatch({ id: 'env-s', method: 'GET', path: '/small' })
+      expect(await until(() => hub.streamed.some((p) => p.endsWith('/resp/env-s')))).toBe(true)
+      expect(await until(() => hub.respClosed.some((p) => p.endsWith('/resp/env-s')), 3000)).toBe(true)
+      expect(logs.some((l) => l.includes('回包失败') && l.includes('未完成'))).toBe(true)
+    } finally { h.stop(); web.close(); hub.close() }
+  })
+
+  it('流式回传连不上网关(请求体一直没被拉):到时限中止本次派发,本机引擎读取被掐', async () => {
+    const hub = await fakeHub()
+    const web = await fakeUnitWeb()
+    const stalled: string[] = []
+    const hubFetch = ((input: string, init?: RequestInit): Promise<Response> => {
+      if (!String(input).includes('/stream/')) return fetch(input, init)
+      stalled.push(String(input))
+      // 连接永远建不起来:不拉请求体、不回响应,只认中止信号(= 半开 / 黑洞网络)
+      return new Promise<Response>((_res, rej) => { init?.signal?.addEventListener('abort', () => rej(new Error('aborted'))) })
+    }) as typeof fetch
+    const { h, logs } = host(hub, web, 0, { requestTimeoutMs: 200, hubFetch })
+    try {
+      h.start()
+      expect(await until(() => hub.channels.length === 1)).toBe(true)
+      hub.dispatch({ id: 'env-x', method: 'GET', path: '/hang-x', accept: 'text/event-stream' })
+      expect(await until(() => stalled.length === 1)).toBe(true)
+      expect(await until(() => web.cut.includes('/hang-x'), 3000)).toBe(true)
+      expect(logs.some((l) => l.includes('未连上网关'))).toBe(true)
+      expect(h.abortEnvelope('env-x')).toBe(false) // 已摘除
+    } finally { h.stop(); web.close(); hub.close() }
+  })
+
+  it('流式回传连上了(真 fetch 真网关):时限只管「开始上传」,长事件流过了时限照样开着', async () => {
+    const hub = await fakeHub()
+    const web = await fakeUnitWeb()
+    const { h } = host(hub, web, 0, { requestTimeoutMs: 200 })
+    try {
+      h.start()
+      expect(await until(() => hub.channels.length === 1)).toBe(true)
+      hub.dispatch({ id: 'env-l', method: 'GET', path: '/hang-l', accept: 'text/event-stream' })
+      expect(await until(() => hub.streamed.some((p) => p.endsWith('/stream/env-l')))).toBe(true)
+      await sleep(800) // 4 倍时限
+      expect(web.cut).not.toContain('/hang-l')
+      expect(h.abortEnvelope('env-l')).toBe(true) // 仍在飞
     } finally { h.stop(); web.close(); hub.close() }
   })
 })
