@@ -20,9 +20,10 @@ type WriteResult = void | { ok: true } | { ok: false; current: string }
 function harness() {
   const pipe = { retired: false, fm: '', body: 'Unsaved note', lastSaved: 'Old note', pending: true, timer: null, chain: Promise.resolve(), unpreserved: null as string | null }
   const writeTextFile = vi.fn<(path: string, content: string, opts?: { base?: string }) => Promise<WriteResult>>()
-  // 写盘安全件(评审 G1-01 / D-03)在组件里住在 writeNow 前面,这里注入桩:只验 writeNow 的控制流。
+  // 写盘安全件(评审 G1-01 / D-03 / D-04)在组件里住在 writeNow 前面,这里注入桩:只验 writeNow 的控制流。
   const safety = {
     preserveExternal: vi.fn<(content: string) => Promise<void>>(async () => {}),
+    noteWriteFailed: vi.fn<(error: unknown) => void>(),
     noteWriteOk: vi.fn<() => void>(),
     isPristine: vi.fn<() => boolean>(() => false),
     reconcileNow: vi.fn<() => void>(),
@@ -75,13 +76,22 @@ describe('unified editor account-switch persistence barrier', () => {
   })
 })
 
-describe('unified editor write safety (review 2026-09-27 D-03 / G1-01)', () => {
+describe('unified editor write safety (review 2026-09-27 D-03 / D-04 / G1-01)', () => {
   it('every write carries the fingerprint of what the editor believes is on disk', async () => {
     const h = harness()
     h.writeTextFile.mockResolvedValueOnce(undefined)
     await h.writeNow()
     expect(h.writeTextFile).toHaveBeenCalledWith('Note.md', composeFm('', 'Unsaved note'), { base: textFingerprint('Old note') })
     expect(h.noteWriteOk).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed ordinary save is reported (toast / unsaved bar / backoff) instead of being swallowed', async () => {
+    const h = harness()
+    const error = new Error('EACCES: permission denied')
+    h.writeTextFile.mockRejectedValueOnce(error)
+    await h.writeNow()
+    expect(h.noteWriteFailed).toHaveBeenCalledWith(error)
+    expect(h.noteWriteOk).not.toHaveBeenCalled()
   })
 
   it('CAS reject with local edits: the disk version is preserved first, then the local version is written on the new base', async () => {
@@ -100,6 +110,7 @@ describe('unified editor write safety (review 2026-09-27 D-03 / G1-01)', () => {
     h.preserveExternal.mockRejectedValueOnce(new Error('ENOSPC'))
     await h.writeNow()
     expect(h.writeTextFile).toHaveBeenCalledTimes(1) // only the rejected CAS attempt — no overwrite
+    expect(h.noteWriteFailed).toHaveBeenCalled()
     expect(h.pipe).toMatchObject({ pending: true, unpreserved: 'Theirs', lastSaved: 'Theirs' })
   })
 

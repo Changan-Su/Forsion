@@ -1645,8 +1645,14 @@ if (new URLSearchParams(location.search).has('dock')) {
   Object.assign(g.amadeus ?? (g.amadeus = {}), {
     readTextFile: (p: string) => Promise.resolve(vault.get(p) ?? null),
     // 与桌面主进程同一份契约(fs/vaultHandlers 的 writeTextFile):带 base 且盘上指纹不符 → 不写、回现文;
-    // 文件不在 = 无冲突;不带 base 回 undefined —— 早先这里静默吞掉第三个参数,CAS 一路在台架里根本造不出来。
+    // 文件不在 = 无冲突;不带 base 回 undefined。写失败注入:`__upage.failWrites = n`(接下来 n 次写抛错,
+    // Infinity = 一直失败)—— 早先这里静默吞掉第三个参数,CAS 与写失败两条路在台架里根本造不出来。
     writeTextFile: (p: string, text: string, opts?: { base?: string }) => {
+      const api = (window as unknown as { __upage?: { failWrites?: number } }).__upage
+      if (api && (api.failWrites ?? 0) > 0) {
+        api.failWrites = (api.failWrites ?? 0) - 1
+        return Promise.reject(new Error('EACCES: permission denied (harness)'))
+      }
       const cur = vault.get(p)
       if (typeof opts?.base === 'string' && cur != null && textFingerprint(cur) !== opts.base) {
         casRejects.push({ path: p, text, current: cur })
@@ -1702,6 +1708,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     vault,
     writes,
     casRejects,
+    failWrites: 0,
     probe: upageProbe,
     probe2: upageProbe2,
     /** `&udual`:卸载第二个实例(= 关掉那个标签;走真卸载冲洗)。 */

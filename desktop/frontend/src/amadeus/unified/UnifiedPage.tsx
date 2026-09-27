@@ -40,9 +40,11 @@ import { usePageStore, useScopedPageStore, flushAllScopes, remapScopePaths, casc
 import '../../views/chat2/sidebar2.css'
 import { editorExtensionGen, subscribeEditorExtensions } from '../plugins/editorExtensions'
 import { announceUnifiedWrite, registerUnifiedPipe, retireUnifiedPath } from './lifecycle'
+import { AlertCircle, History } from 'lucide-react'
 import type { TextWriteResult } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
-import { toastConflictCopy, writeConflictCopy } from './writeSafety'
+import { formatDateTime } from '../../format/time'
+import { SAVE_RETRY_MS, clearDraft, isElectronHost, readDraft, stashDraft, toastConflictCopy, toastSaveFailed, writeConflictCopy, type UnsavedDraft } from './writeSafety'
 import { docHeadings } from './outline'
 import { isLoneBlockId, trailingBlockId } from '@amadeus-shared/pdfLink'
 import { useUiOverlay } from '../../amadeusOverlayStore'
@@ -220,6 +222,13 @@ interface Pipe {
   unpreserved: string | null
   /** 已保全过的内容指纹:同一版本不出第二份冲突副本。 */
   preserved: Set<string>
+  /** 写盘失败中(D-04):页面挂「未保存」条、按 SAVE_RETRY_MS 退避重试、恢复信号(online/可见/聚焦)补写。成功一次即清。 */
+  failed: boolean
+  retryTimer: ReturnType<typeof setTimeout> | null
+  retryN: number
+  /** 本实例最近一次存进本机的草稿内容(D-04)。写成功时凭它删草稿:成功写下的是此刻的全文,是那份草稿的超集;
+   *  按「此刻写的内容」比对会漏删 —— 失败后又打了字,存着的那份旧草稿就成了下次打开时的假提示。 */
+  stashed: string | null
   dead: boolean
   /** 改名/删除/移动后本实例退休:任何后续写盘都会把旧路径的文件写回来(复活幽灵文件),一律禁止。 */
   retired: boolean
@@ -896,7 +905,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   const pipeRef = useRef<Pipe | null>(null)
   if (!pipeRef.current) {
     const { fmText, body } = splitFm(initial)
-    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly }
+    pipeRef.current = { fm: fmText, body, lastSaved: diskRaw ?? initial, pending: false, timer: null, reconcileBusy: 0, unpreserved: null, preserved: new Set(), failed: false, retryTimer: null, retryN: 0, stashed: null, dead: false, retired: false, sawRows: false, ownedCards: new Set(), chain: Promise.resolve(), readOnly }
   }
   const pipe = pipeRef.current
   const [fmVer, setFmVer] = useState(0) // fm 变更驱动 chrome 重渲(pipe 本身是 ref)
@@ -1311,7 +1320,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     return true
   }
 
-  // ── 写盘安全(评审 2026-09-27 波次 0a:D-03 / G1-01)。这几件被 writeNow 调用,但**刻意放在它前面**
+  // ── 写盘安全(评审 2026-09-27 波次 0a:D-03 / D-04 / G1-01)。这几件被 writeNow 调用,但**刻意放在它前面**
   //    (writeFailures.test 把 writeNow 那段源码切出来单独求值,这几件在测试里是注入的桩)。
 
   /** 本实例相对基线(lastSaved)**有没有用户自己的改动**:fm 逐字相同,且正文 = 编辑器对基线的规范化结果 → 没有。
@@ -1329,6 +1338,7 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
   /** 回灌入口(住在下面的回灌 effect 里,按路径重装);CAS 让位与同窗通知从这里进。 */
   const reconcileRef = useRef<(() => void) | null>(null)
   const reconcileNow = (): void => { reconcileRef.current?.() }
+  const [saveFailed, setSaveFailed] = useState(false)
 
   /** 盘上那版要被本地版本盖掉 → 先落冲突副本(与云同步同名)+ error 级提示。写不进去就抛,writeNow 据此不写。 */
   const preserveExternal = async (content: string): Promise<void> => {
@@ -1340,8 +1350,42 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
     void scoped.getState().refreshPages() // 副本是新文件:树 / 补全要看得见它
   }
 
-  /** 写成功:通知同窗同路径的其它实例回灌(G1-01,跨窗那半在主进程)。 */
+  /** 写失败(D-04):首次即提示 + 「未保存」条;按退避补写;草稿同步存进本机(渲染层随时可能被关)。 */
+  const noteWriteFailed = (error: unknown): void => {
+    pipe.stashed = composeFm(pipe.fm, pipe.body)
+    stashDraft(vaultRoot, path, pipe.stashed, pipe.lastSaved)
+    if (!pipe.failed) {
+      pipe.failed = true
+      setSaveFailed(true)
+      toastSaveFailed(path, error)
+    }
+    if (pipe.retryTimer || pipe.dead || pipe.retired) return // 已卸载:草稿在本机,下次打开提示恢复
+    const delay = SAVE_RETRY_MS[Math.min(pipe.retryN, SAVE_RETRY_MS.length - 1)]
+    pipe.retryN++
+    pipe.retryTimer = setTimeout(() => {
+      pipe.retryTimer = null
+      if (pipe.dead || pipe.retired || !pipe.pending) return
+      if (pipe.reconcileBusy) return // 回灌收尾会补发(押后回灌 × 冻结保存的互斥契约)
+      void writeNow()
+    }, delay)
+  }
+
+  /** 写成功:清失败态与本次会话存下的草稿;通知同窗同路径的其它实例回灌(G1-01,跨窗那半在主进程)。 */
   const noteWriteOk = (): void => {
+    if (pipe.retryTimer) {
+      clearTimeout(pipe.retryTimer)
+      pipe.retryTimer = null
+    }
+    pipe.retryN = 0
+    if (pipe.failed) {
+      pipe.failed = false
+      setSaveFailed(false)
+    }
+    // 只删**本实例存的**那份(别的会话留下、恢复条还在等用户决定的草稿不碰)。
+    if (pipe.stashed != null) {
+      clearDraft(vaultRoot, path, pipe.stashed)
+      pipe.stashed = null
+    }
     announceUnifiedWrite(path, pipe)
   }
 
@@ -1365,8 +1409,9 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           res = await amadeus.writeTextFile(path, text, { base: textFingerprint(pipe.lastSaved) })
         } catch (error) {
           pipe.pending = true // 写失败保留草稿;严格切号屏障必须拒绝,不能随后 retire 丢掉待写内容。
+          noteWriteFailed(error)
           if (strict) throw error
-          return // 普通自动保存仍按原行为,下一次编辑/卸载再试。
+          return // 普通自动保存:退避重试 / 恢复信号 / 下一次编辑 / 卸载再试。
         }
         if (res && res.ok === false) {
           // CAS 拒写:盘上已不是本实例的基线 —— 同篇的另一个实例 / 窗口,或外部写者刚写过。
@@ -1375,9 +1420,10 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             continue
           }
           if (++conflicts > 3) {
-            // 每轮都被拒 = 有人在持续写,或宿主写入时改写了内容;别无限循环地出副本,按写失败处理(留待下次再试)。
+            // 每轮都被拒 = 有人在持续写,或宿主写入时改写了内容;别无限循环地出副本,按写失败退避。
             const error = new Error('The note kept changing on disk while saving')
             pipe.pending = true
+            noteWriteFailed(error)
             if (strict) throw error
             return
           }
@@ -1603,13 +1649,53 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
         pipe.pending = false
         return
       }
+      // D-04:写是异步的,切走 / 关窗后未必来得及完成,也可能失败 —— 先同步把草稿存进本机,写成功再删
+      // (noteWriteOk);下次打开同一篇若草稿 ≠ 盘上内容,提示恢复,绝不自动覆盖。
+      pipe.stashed = text
+      stashDraft(vaultRoot, path, text, pipe.lastSaved)
       void writeNow()
     }
-    window.addEventListener('beforeunload', flush)
+    const onUnload = (e: BeforeUnloadEvent): void => {
+      flush()
+      // 离开确认只在 web / 移动宿主、且**真有写不进去的内容**时拦。Electron 里绝不拦:渲染层 beforeunload 的
+      // 返回值会无提示地阻止窗口关闭(用户退不出去),桌面走切号 / 退出的冲洗握手;正常防抖期的内容上一行已存成草稿。
+      if (pipe.failed && pipe.pending && !isElectronHost()) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', onUnload)
     return () => {
       pipe.dead = true
-      window.removeEventListener('beforeunload', flush)
+      window.removeEventListener('beforeunload', onUnload)
       flush()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [path])
+
+  // D-04 补写:写失败后网络恢复 / 窗口回到前台 / 重新聚焦时立刻再试一次(不等退避到点,也不等下一次击键)。
+  useEffect(() => {
+    const kick = (): void => {
+      if (!pipe.failed || !pipe.pending || pipe.dead || pipe.retired) return
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      if (pipe.retryTimer) {
+        clearTimeout(pipe.retryTimer)
+        pipe.retryTimer = null
+      }
+      if (pipe.reconcileBusy) return // 回灌收尾会补发
+      void writeNow()
+    }
+    window.addEventListener('online', kick)
+    window.addEventListener('focus', kick)
+    document.addEventListener('visibilitychange', kick)
+    return () => {
+      window.removeEventListener('online', kick)
+      window.removeEventListener('focus', kick)
+      document.removeEventListener('visibilitychange', kick)
+      if (pipe.retryTimer) {
+        clearTimeout(pipe.retryTimer)
+        pipe.retryTimer = null
+      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
@@ -1694,10 +1780,55 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
           clearTimeout(pipe.timer)
           pipe.timer = null
         }
+        if (pipe.retryTimer) {
+          clearTimeout(pipe.retryTimer)
+          pipe.retryTimer = null
+        }
       },
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
+
+  // D-04 草稿恢复:上次卸载冲洗没写成(磁盘满 / 无权限 / 离线 / 窗口先关了)时存在本机的那份。
+  // 只提示,**绝不自动覆盖**盘上内容;草稿 = 盘上内容(其实写成了)时静默删掉。
+  const [draft, setDraft] = useState<UnsavedDraft | null>(() => {
+    if (readOnly) return null
+    const d = readDraft(vaultRoot, path)
+    if (!d) return null
+    if (d.text === (diskRaw ?? initial)) {
+      clearDraft(vaultRoot, path)
+      return null
+    }
+    return d
+  })
+  const discardDraft = (): void => {
+    clearDraft(vaultRoot, path)
+    setDraft(null)
+  }
+  const restoreDraft = (): void => {
+    const d = draft
+    setDraft(null)
+    if (!d || readOnly || pipe.retired) return
+    syncFromEditor()
+    const disk = pipe.lastSaved
+    const local = composeFm(pipe.fm, pipe.body)
+    // 恢复会盖掉的那一版先登记保全(writeNow 开头落冲突副本):打开后已经打过字 → 保全本地这版(它就是盘上版 +
+    // 新打的字);没打过字但草稿之后盘上又被别处写过(基线指纹对不上)→ 保全盘上那版。都不是 = 纯恢复,无可保全。
+    const keep = local !== disk ? local : textFingerprint(disk) !== d.base ? disk : null
+    if (keep != null && keep !== d.text) pipe.unpreserved = keep
+    const { fmText, body } = splitFm(d.text)
+    pipe.fm = fmText
+    setFmVer((v) => v + 1)
+    if (body !== pipe.body) {
+      pipe.ownedCards.clear() // 与回灌同一条纪律:重 parse 前归属集合换世代
+      pipe.body = body
+      if (!hostApi.current?.applyBody(body)) setEditorKey((k) => k + 1)
+    }
+    syncSrcDraft()
+    pipe.pending = true
+    pipe.stashed = d.text // 认领这份草稿:写成功后 noteWriteOk 删掉它
+    void writeNow()
+  }
 
   useEffect(() => {
     if (!probe) return
@@ -1849,6 +1980,32 @@ export function UnifiedPage({ path, initial, diskRaw, probe, onRenamed, onCanvas
             void writeNow()
           }}
         />}
+        {/* 写盘状态条(D-04):写失败 → 常驻「未保存」+ 立即重试;上次没写成的草稿 → 恢复 / 丢弃。
+            样式复用全局 `.mk-notice` 提示条(base.css),本处只在 amadeus-host.css 里改宽度与外距。 */}
+        {!readOnly && saveFailed && (
+          <div className="mk-notice is-error unified-savebar" data-save="failed" role="alert">
+            <AlertCircle size={15} />
+            <div className="mk-notice-body"><span>{t('unisave.failed.bar')}</span></div>
+            <button type="button" className="btn sm" onClick={() => {
+              if (pipe.retryTimer) {
+                clearTimeout(pipe.retryTimer)
+                pipe.retryTimer = null
+              }
+              void writeNow()
+            }}>{t('unisave.failed.retry')}</button>
+          </div>
+        )}
+        {!readOnly && draft && (
+          <div className="mk-notice unified-savebar" data-save="draft" role="status">
+            <History size={15} />
+            <div className="mk-notice-body">
+              <span>{t('unisave.draft.bar', { time: formatDateTime(draft.at) })}</span>
+              <small>{t('unisave.draft.hint')}</small>
+            </div>
+            <button type="button" className="btn sm primary" onClick={restoreDraft}>{t('unisave.draft.restore')}</button>
+            <button type="button" className="btn sm" onClick={discardDraft}>{t('unisave.draft.discard')}</button>
+          </div>
+        )}
       </div>
       )}
       {mode === 'source' ? (
