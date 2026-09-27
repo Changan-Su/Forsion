@@ -323,9 +323,17 @@ function userEntryLabel(text: string): string {
 
 // 条目按「标签行 + 正文 + 空行」拼接:正文(工具结果、图片转写、MCP 文本)自己写一行 `[User]` 就能冒充一条新的
 // 用户条目,再被 Goal 段逐字引用(集成 Codex 二轮 P1)。所有正文里**行首**的转写标签一律中和 —— 只把那个 `[`
-// 换成全角 `［`,其余字节不动(路径 / 报错原样留给 Facts 段)。
-const LABEL_LINE_RE = /^([ \t]*)\[(?=[ \t]*(?:(?:user|assistant|tool|existing summary|new conversation)\b|…))/gim;
+// 换成全角 `［`,其余字节不动(路径 / 报错原样留给 Facts 段)。「行首」容忍任意水平空白与零宽格式字符(三轮:
+// `\u200B[User]`、全角空格缩进肉眼看同样是行首);换行认 \n \r U+2028 U+2029(m 标志的 ^)。
+// ⚠️ 截断(middle)会在尾段前新插一个换行,把原本行中的 `x[User]` 变成行首 —— 截断之后必须再中和一次(三轮 P1)。
+const LEAD = String.raw`(?:[^\S\r\n\u2028\u2029]|[\u180E\u200B-\u200D\u2060\uFEFF])*`;
+const LABEL_LINE_RE = new RegExp(String.raw`^(${LEAD})\[(?=${LEAD}(?:(?:user|assistant|tool|existing summary|new conversation)\b|…))`, 'gimu');
 const defang = (s: string): string => s.replace(LABEL_LINE_RE, '$1［');
+/** 截断后的条目:首行是本函数自己写的标签,原样留;其后正文(含截断新造出的行首)再中和一次。 */
+const defangBody = (entry: string): string => {
+  const nl = entry.indexOf('\n');
+  return nl < 0 ? entry : entry.slice(0, nl + 1) + defang(entry.slice(nl + 1));
+};
 
 /** 消息 → 转写条目 + 上一检查点正文;顺手把 tool_calls 与上一检查点的文件操作块累进 fileOps。 */
 function transcriptEntries(msgs: ChatMessage[], fileOps: FileOps): { prevSummary: string; entries: string[] } {
@@ -355,7 +363,7 @@ function transcriptEntries(msgs: ChatMessage[], fileOps: FileOps): { prevSummary
       }
     } else if (m.role === 'tool') {
       const name = callNames.get(String(m.tool_call_id ?? '')) || 'tool';
-      entries.push(`[Tool result: ${name}]\n${middle(text, TRANSCRIPT_TOOL_RESULT_HEAD, TRANSCRIPT_TOOL_RESULT_TAIL)}`);
+      entries.push(`[Tool result: ${name}]\n${defang(middle(text, TRANSCRIPT_TOOL_RESULT_HEAD, TRANSCRIPT_TOOL_RESULT_TAIL))}`);
     }
   }
   return { prevSummary, entries };
@@ -379,7 +387,7 @@ export function buildTranscript(msgs: ChatMessage[], fileOps: FileOps, budgetTok
   if (kept.length && total > room) {
     const last = kept[kept.length - 1];
     const budgetChars = Math.max(2_000, room * 2); // 粗估 ASCII 4 字符/token、CJK 1 字符/token,取 2 作保守换算
-    if (last.length > budgetChars) kept[kept.length - 1] = middle(last, Math.floor(budgetChars * 0.7), Math.floor(budgetChars * 0.3));
+    if (last.length > budgetChars) kept[kept.length - 1] = defangBody(middle(last, Math.floor(budgetChars * 0.7), Math.floor(budgetChars * 0.3)));
   }
   const marker = start
     ? `[… ${start} earlier entries omitted from this compaction input to fit the summarizer's window; keep relying on the existing summary for them …]\n\n`
