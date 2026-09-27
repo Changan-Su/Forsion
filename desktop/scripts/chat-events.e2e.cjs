@@ -108,13 +108,18 @@ async function main() {
       await picker.locator('[data-workspace-mode="sessions"]').click().catch(() => {})
       await win.waitForTimeout(1000)
     }
-    const row = win.locator('.t2s-srow', { hasText: '端到端会话' }).first()
-    if (!(await row.count().catch(() => 0))) {
+    // 列表异步加载:有界等行出现;点完再确认 s1 真成了活动会话(同名行 ≠ 切过去了)
+    const navFail = async (why) => {
       const shot = path.join(os.tmpdir(), 'forsion-chatev-nav-fail.png')
       await win.screenshot({ path: shot }).catch(() => {})
-      throw new Error(`没找到会话行「端到端会话」;截图 ${shot}`)
+      throw new Error(`${why};截图 ${shot}`)
     }
+    const row = win.locator(`.t2s-srow[data-sel-id="${SESSION.id}"]`).first()
+    if (!(await row.waitFor({ timeout: 10_000 }).then(() => true, () => false))) await navFail('没找到会话行「端到端会话」')
     await row.click()
+    if (!(await win.locator(`.t2s-srow.active[data-sel-id="${SESSION.id}"]`).first().waitFor({ timeout: 10_000 }).then(() => true, () => false))) {
+      await navFail('点了会话行但 s1 没成为活动会话')
+    }
     await win.waitForTimeout(1200)
 
     // ── 场景 A:工具卡 diff(P1)+ 成本闸(H3)+ 自动压缩(H4)+ 上下文分解(H5/H8/B2)+ 思考降档(H6)
