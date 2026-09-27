@@ -106,5 +106,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] || '').href) {
     imageB64: process.env.FAKE_MCP_IMAGE_B64 || undefined,
     imageText: process.env.FAKE_MCP_IMAGE_TEXT || undefined,
   });
+  // FAKE_MCP_PIDFILE:起来就写 pid(测试据此核「dispose 后没有孤儿子进程」);
+  // FAKE_MCP_INIT_DELAY_MS:推迟接上 stdio —— 客户端的 initialize 在管道里干等,模拟「连接进行中」。
+  if (process.env.FAKE_MCP_PIDFILE) (await import('node:fs')).writeFileSync(process.env.FAKE_MCP_PIDFILE, String(process.pid));
+  const delay = Number(process.env.FAKE_MCP_INIT_DELAY_MS) || 0;
+  if (delay) await new Promise((r) => setTimeout(r, delay));
   await server.connect(new StdioServerTransport());
 }

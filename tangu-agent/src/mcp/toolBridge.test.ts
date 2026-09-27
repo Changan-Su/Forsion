@@ -62,25 +62,35 @@ describe('contentToText', () => {
     expect(contentToText({ isError: true, content: [] })).toEqual({ text: '(empty result)', isError: true });
   });
   it('summarizes image blocks', () => {
-    const r = contentToText({ content: [{ type: 'image', mimeType: 'image/png', data: 'AAAA' }] });
+    const r = contentToText({ content: [{ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }] }); // PNG 魔数
     expect(r.text).toContain('[image: image/png');
   });
 });
 
 describe('contentToResult(M6)', () => {
   const png = 'iVBORw0KGgo=';
+  it('jpeg / gif / webp 按魔数认', () => {
+    const r = contentToResult({ content: [
+      { type: 'image', mimeType: 'image/jpeg', data: '/9j/4AAQSkZJRg==' },
+      { type: 'image', mimeType: 'image/gif', data: Buffer.from('GIF89a..').toString('base64') },
+      { type: 'image', mimeType: 'image/webp', data: Buffer.from('RIFF\0\0\0\0WEBPVP8 ').toString('base64') },
+    ] });
+    expect(r.images.map((i) => i.mimeType)).toEqual(['image/jpeg', 'image/gif', 'image/webp']);
+  });
   it('位图块取出为图片,不留占位', () => {
     const r = contentToResult({ content: [{ type: 'text', text: 'cap' }, { type: 'image', mimeType: 'IMAGE/PNG', data: png }] });
     expect(r).toEqual({ text: 'cap', isError: false, images: [{ mimeType: 'image/png', data: png }] });
   });
-  it('矢量 / 非 base64 / 超 5MB → 不回灌,文本里给占位', () => {
+  it('矢量 / 非 base64 / 超 5MB / 魔数与 MIME 不符 → 不回灌,文本里给占位', () => {
     const r = contentToResult({ content: [
       { type: 'image', mimeType: 'image/svg+xml', data: png },
       { type: 'image', mimeType: 'image/png', data: 'not base64!' },
       { type: 'image', mimeType: 'image/png', data: 'A'.repeat(Math.ceil((MCP_IMAGE_MAX_BYTES + 10) * 4 / 3)) },
+      { type: 'image', mimeType: 'image/png', data: '/9j/4AAQSkZJRg==' }, // 声明 png、实为 jpeg 头
+      { type: 'image', mimeType: 'image/jpeg', data: 'AAAAAAAAAAAA' }, // 合法 base64,不是图
     ] });
     expect(r.images).toEqual([]);
-    expect(r.text.match(/\[image omitted/g)?.length).toBe(3);
+    expect(r.text.match(/\[image omitted/g)?.length).toBe(5);
   });
   it(`单次最多回灌 ${MCP_IMAGES_PER_CALL} 张`, () => {
     const r = contentToResult({ content: Array.from({ length: MCP_IMAGES_PER_CALL + 2 }, () => ({ type: 'image', mimeType: 'image/png', data: png })) });

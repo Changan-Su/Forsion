@@ -4,12 +4,13 @@
  * 每条都在去掉对应修复的代码上实跑过、确认为红(负对照)。`dev_` 保留前缀见 config.test.ts。
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createMcpManager, type McpManager } from './manager.js';
+import { createMcpManager, sessionGone, type McpManager } from './manager.js';
+import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { startHttpServer, RED_DOT_PNG_B64 } from '../../test/fixtures/fake-mcp-server.mjs';
 
 const FIXTURE = fileURLToPath(new URL('../../test/fixtures/fake-mcp-server.mjs', import.meta.url));
@@ -142,6 +143,43 @@ describe('M3 断线自愈', () => {
     expect(before.size).toBe(0);
     const r = await m.callTool(m.toolsForRun().get('mcp__late__echo')!, { text: 'hi' });
     expect(innerText(r.text)).toBe('late:hi');
+  }, 30_000);
+});
+
+describe('M3 边界', () => {
+  it('session 失效判定只认分发前的拒绝:404 与 SDK 两句固定 400 文案,其余 400 不重发', () => {
+    const e = (code: number, body: string) => new StreamableHTTPError(code, `Error POSTing to endpoint: ${body}`);
+    expect(sessionGone(e(404, 'Session not found'), true)).toBe(true);
+    expect(sessionGone(e(400, '{"error":{"message":"Bad Request: Server not initialized"}}'), true)).toBe(true);
+    expect(sessionGone(e(400, '{"error":{"message":"Bad Request: No valid session ID provided"}}'), true)).toBe(true);
+    expect(sessionGone(e(400, 'invalid session_name: already exists'), true)).toBe(false); // 可能是执行后才报的错
+    expect(sessionGone(e(500, 'Session not found'), true)).toBe(false);
+    expect(sessionGone(e(404, 'Session not found'), false)).toBe(false); // 本来就没有 session
+    expect(sessionGone(new Error('fetch failed'), true)).toBe(false);
+  });
+
+  it('dispose 时正在 initialize 的 stdio server 也被关掉:返回后不留子进程、不再重连', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const pidFile = join(dir, 'slow.pid');
+    const file = join(dir, 'mcp-slow.json');
+    writeFileSync(file, JSON.stringify({ mcpServers: { slow: {
+      command: process.execPath, args: [FIXTURE], env: { FAKE_MCP_TAG: 'slow', FAKE_MCP_PIDFILE: pidFile, FAKE_MCP_INIT_DELAY_MS: '8000' },
+    } } }));
+    const m = createMcpManager(file, FAST);
+    const started = m.start();
+    expect(await waitFor(() => existsSync(pidFile), 8000)).toBe(true);
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    rmSync(pidFile);
+    const t0 = Date.now();
+    await m.dispose();
+    // 关掉在飞的 initialize,而不是干等它 8s 后自己完成(SDK 的 stdio close 先给 2s 优雅退出再 SIGTERM,所以下限约 2s)
+    expect(Date.now() - t0).toBeLessThan(5000);
+    const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    expect(await waitFor(() => !alive(), 1500)).toBe(true); // 先核子进程,再等 start 收尾
+    await started;
+    await new Promise((r) => setTimeout(r, 300));
+    expect(existsSync(pidFile)).toBe(false); // 没有被后台重试重新拉起
   }, 30_000);
 });
 

@@ -60,8 +60,9 @@ interface ServerEntry {
   tools: LoadedMcpTool[];
   status: McpServerStatus['status'];
   error?: string;
-  lastReconnectAt?: number; // 上次懒重连尝试时刻(冷却用)
+  lastReconnectAt?: number; // 最近一次连接尝试时刻(懒重连冷却用;后台重试也记)
   connecting: Promise<void> | null; // 在飞的连接(后台重试与懒重连共用一次)
+  pendingClient: Client | null; // 正在 initialize 的 client(dispose 要能关掉它,否则留下 stdio 子进程)
   retryTimer: ReturnType<typeof setTimeout> | null;
   retryAttempt: number;
   connectedAt: number;
@@ -78,10 +79,16 @@ export interface McpManager {
   dispose(): Promise<void>;
 }
 
-/** 有状态 Streamable HTTP 的 session 失效:规范是 404;SDK 示例 server 对未知 session 回 400 且文案带 session。 */
-function sessionGone(e: unknown, hadSession: boolean): boolean {
+/**
+ * 有状态 Streamable HTTP 的 session 失效(会重发,所以只认「分发工具之前就拒掉」的形态):
+ *   - 404:规范口径(未知 Mcp-Session-Id 必须回 404);
+ *   - 400 只认 SDK 的两句固定文案:单 transport server 重启后的「Server not initialized」
+ *     (webStandardStreamableHttp.validateSession)与 SDK 示例 server 的「No valid session ID provided」。
+ *   其余 400 一律交还调用方 —— 可能是工具已执行后才报的错,重发就是重复副作用。
+ */
+export function sessionGone(e: unknown, hadSession: boolean): boolean {
   if (!hadSession || !(e instanceof StreamableHTTPError)) return false;
-  return e.code === 404 || (e.code === 400 && /session/i.test(e.message));
+  return e.code === 404 || (e.code === 400 && /Server not initialized|No valid session ID provided/.test(e.message));
 }
 
 export function createMcpManager(configFile?: string, opts: McpManagerOptions = {}): McpManager {
@@ -172,7 +179,9 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
     const stale = entry.client;
     entry.client = null;
     if (stale) await stale.close().catch(() => {}); // entry.client 已换掉 → 它的 onclose 不会再触发重连
+    if (disposed) return;
     entry.status = 'connecting';
+    entry.lastReconnectAt = Date.now(); // 懒重连冷却按「最近一次尝试」算,后台尝试也算
     let client: Client | null = null;
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
@@ -186,6 +195,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       }
       const c = new Client({ name: 'tangu-agent', version: '1.0.0' });
       client = c;
+      entry.pendingClient = c;
       c.onclose = () => onClientClosed(entry, c);
       const timeout = new Promise<never>((_, rej) => {
         timer = setTimeout(() => rej(new Error(`connect 超时(${connectTimeoutMs / 1000}s)`)), connectTimeoutMs);
@@ -216,6 +226,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       }
     } finally {
       if (timer) clearTimeout(timer);
+      if (client && entry.pendingClient === client) entry.pendingClient = null;
     }
   }
 
@@ -225,7 +236,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       for (const [name, c] of enabledServers(cfg)) {
         servers.push({
           name, cfg: c, transport: inferTransport(c), client: null, tools: [], status: 'connecting',
-          connecting: null, retryTimer: null, retryAttempt: 0, connectedAt: 0, configError: false,
+          connecting: null, pendingClient: null, retryTimer: null, retryAttempt: 0, connectedAt: 0, configError: false,
         });
       }
       // 失败互不阻断;并行连(没连上的转后台重试,不拖启动)
@@ -267,10 +278,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       if (entry.status !== 'connected' || !entry.client) {
         const now = Date.now();
         if (entry.connecting) await entry.connecting;
-        else if (now - (entry.lastReconnectAt || 0) >= reconnectCooldownMs) {
-          entry.lastReconnectAt = now;
-          await connect(entry);
-        }
+        else if (now - (entry.lastReconnectAt || 0) >= reconnectCooldownMs) await connect(entry);
         if (entry.status !== 'connected' || !entry.client) {
           return { text: `Error: MCP server "${bridged.serverName}" 未连接`, isError: true };
         }
@@ -290,8 +298,9 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
         } catch (e) {
           if (!sessionGone(e, hadSession)) throw e;
           console.warn(`[mcp] ${entry.name}: session 已失效(server 重启?),重新 initialize 后重发一次`);
-          entry.lastReconnectAt = Date.now();
-          await connect(entry); // doConnect 先关掉旧 client(不会触发 onclose 重连)
+          // 只重建「撞上 404 的那个」client:并发的另一次调用可能已经换上新 session,别把它关掉再建一遍
+          if (entry.client === client) await connect(entry); // doConnect 先关掉旧 client(不会触发 onclose 重连)
+          else if (entry.connecting) await entry.connecting;
           if (entry.status !== 'connected' || !entry.client) throw e;
           result = await invoke(entry.client);
         }
@@ -317,7 +326,9 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
     async dispose() {
       disposed = true;
       for (const s of servers) clearRetry(s);
-      await Promise.all(servers.map((s) => s.client?.close().catch(() => {})));
+      // 在飞的 initialize 一并关掉(connect 随之失败),再等它们收尾 —— 返回时不留子进程、不再起新连接
+      await Promise.all(servers.flatMap((s) => [s.client, s.pendingClient]).map((c) => c?.close().catch(() => {})));
+      await Promise.all(servers.map((s) => s.connecting?.catch(() => {})));
       servers.length = 0;
     },
   };

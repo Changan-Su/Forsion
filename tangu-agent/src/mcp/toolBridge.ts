@@ -93,12 +93,21 @@ export const MCP_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 /** 单次调用最多回灌几张(loop 每轮总共收 8 张,留余量给同轮其他工具);多出的给占位说明。 */
 export const MCP_IMAGES_PER_CALL = 4;
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+/** 文件头魔数:声明的 MIME 与真实字节对不上的图(或根本不是图)不回灌 —— 坏图会让之后整轮模型请求被 provider 拒掉。 */
+function magicMatches(mimeType: string, head: Buffer): boolean {
+  if (mimeType === 'image/png') return head.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+  if (mimeType === 'image/jpeg') return head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
+  if (mimeType === 'image/gif') return /^GIF8[79]a/.test(head.subarray(0, 6).toString('latin1'));
+  if (mimeType === 'image/webp') return head.subarray(0, 4).toString('latin1') === 'RIFF' && head.subarray(8, 12).toString('latin1') === 'WEBP';
+  return false;
+}
 
 function usableImage(b: any): McpImage | null {
   const mimeType = typeof b?.mimeType === 'string' ? b.mimeType.toLowerCase() : '';
   const data = typeof b?.data === 'string' ? b.data.replace(/\s+/g, '') : '';
   if (!IMAGE_MIMES.has(mimeType) || !data || Math.floor((data.length * 3) / 4) > MCP_IMAGE_MAX_BYTES) return null;
-  return BASE64_RE.test(data) ? { mimeType, data } : null; // data 进 data: URL,只收纯 base64 字符
+  if (!BASE64_RE.test(data)) return null; // data 进 data: URL,只收纯 base64 字符
+  return magicMatches(mimeType, Buffer.from(data.slice(0, 16), 'base64')) ? { mimeType, data } : null;
 }
 
 /** MCP CallToolResult.content → 文本部分(未加围栏)+ 可回灌的图片。 */
