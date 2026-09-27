@@ -1138,11 +1138,12 @@ try {
     if (sid) { const list = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages'); museSays = list.filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n'); }
     const blockedBy = blocked();
     const twoCycles = advanced(second) && !blockedBy;
-    // Space 写了就必须能装出 home;没写不算错(两个周期里有更要紧的事是正当结果),只记一笔供跨次比对。
+    // Space 判定**只记不判**:它是 Node 里对渲染进程的近似,两向都可能有偏差,不该把一个真跑通的模型场景判红;
+    // 看 detail 里的「Space …」跨次比对即可(⚠️ = 判定为装不出 home,拿 scripts/muse-space-verdict.mjs 复核)。没写不算错。
     const space = await museSpaceVerdict(join(home, 'agents', 'muse', 'Space'), health?.version);
     const spaceAsks = approvals.filter((a) => JSON.stringify(a).includes('/Space/')).length; // Space 目录三档免审:排进审批 = 提示词又把它说成「Library 外」
-    const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && space.ok && !spaceAsks;
-    return { ok, detail: `${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.text};自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
+    const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && !spaceAsks; // 审批队列是引擎真实状态,照判
+    return { ok, detail: `${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.ok ? '' : '⚠️'}${space.text};自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
   });
   // ── musewake(09-24,opt-in,单独跑:`--only musewake`):「用户睡了、没事可做」时 Muse 会不会自己 set_next_wake,
   // 引擎会不会真的跳过心跳,用户一动能不能立刻醒。作息按**当前钟点**播:活跃窗口 = 现在 +6h 起 10 个小时(每天每小时一行,
