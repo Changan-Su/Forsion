@@ -9,9 +9,11 @@
 //   verify-integrity-3/d18-rt.cjs 的 21 份、verify-integrity-2/d12b.cjs + d11d12.cjs、verify-rich-5/tags.cjs,
 //   加上 D-06 / R-01 / D-12 各自的复现串(verify-rich-1/br.cjs、math*.cjs、verify-integrity-1/d02_*.cjs)。
 //
-// 三个桶(别把白名单做宽 —— 白名单用**黄金输出**断言,新的噪音照样红):
+// 四个桶(别把白名单做宽 —— 白名单用**黄金输出**断言,新的噪音照样红):
 //   verbatim  必须逐字。红 = exit 1。
 //   whitelist 评审附录 A / 拍板表里认定的既定规范化,断言「恰好规范成这个样子」,第二轮必须逐字。红 = exit 1。
+//   stable    首轮允许偏离(修前就有的一次性丢失,另记在残余风险里),但**第二轮必须逐字**(相对首轮落盘)——
+//             专抓「越存越多」(R-01 返修:读写两侧认公式不一致,反斜杠每存翻一倍,首轮看不出)。红 = exit 1。
 //   pending   已知未修、归别的波次/包(D-18/D-05/R-25 → 0b;D-01 → 0a 另一包)。按逐字断言但只记 XFAIL,
 //             不算红;**意外通过**打 XPASS —— 修的人把它挪进 verbatim 桶。
 // 另:任何桶打开即写盘、或命中 forbid(比「没修」更坏的形态),一律红。
@@ -41,7 +43,7 @@ const M = 'EDITHERE'
 const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice('--only='.length)
 const DUMP = process.argv.includes('--dump')
 
-const V = 'verbatim', W = 'whitelist', P = 'pending'
+const V = 'verbatim', W = 'whitelist', S = 'stable', P = 'pending'
 /** golden:whitelist 桶第一轮的期望落盘(含首段的 Z)。forbid:任何桶都不许出现的形态;require:落盘必须含的形态。
  *  visible:打开后正文 innerText 必须含这段(「看得见」—— D-06 的换行、D-12 的定义行)。 */
 const CASES = [
@@ -100,6 +102,14 @@ const CASES = [
   { id: 'r01.escape_outside_math', bucket: V, why: '公式外的转义不许被补回(对照)', md: `${M}\n\nliteral \\*not em\\* and \\_x\\_ and $\\{y\\}$\n` },
   // 被转义的 `$` 不当定界符 —— 这条的旧病是 D-11(转义被剥,0b),但**绝不能**被本修复变成 `\\$x\\$`。
   { id: 'r01.escaped_dollars', bucket: P, why: 'D-11(0b):转义被剥', md: `${M}\n\nnot math: \\$x\\$ ok\n`, forbid: /\\\\\$/ },
+  // R-01 返修(评审阻断 R-01-growth):行内代码 / 链接地址里的 `$`、粗体里的货币挨着公式 —— 返修前每存一次反斜杠翻一倍。
+  // 两侧现按同一份原文认公式:这些行里的公式可能认不出(首轮反斜杠一次性丢掉 = 修前行为),但第二轮必须逐字。
+  { id: 'r01.grow_code_dollar', bucket: S, md: `${M}\n\n用\`$\`包裹公式,例如$\\{a,b\\}$\n`, forbid: /\\\\\{/ },
+  { id: 'r01.grow_code_home', bucket: S, md: `${M}\n\n先设置\`$HOME\`,再看集合$\\{a,b\\}$\n`, forbid: /\\\\\{/ },
+  { id: 'r01.grow_link_url', bucket: S, md: `${M}\n\n[文档](http://x/?$top=1)里$\\{a\\}$\n`, forbid: /\\\\\{/ },
+  { id: 'r01.grow_strong_currency', bucket: S, md: `${M}\n\n价格**$5**,集合$\\{a\\}$\n`, forbid: /\\\\\{/ },
+  { id: 'r01.grow_escaped_dollar', bucket: S, md: `${M}\n\n$a \\$,x$\\{b\\}$\n`, forbid: /\\\\\{/ },
+  { id: 'r01.code_path_verbatim', bucket: V, md: `${M}\n\nshell 里 \`echo $PATH\`之后$x\\_1$\n` },
 
   // ── D-12:链接定义行 / `[标签]: 值` / 引用式链接(verify-integrity-2/d12b.cjs、d11d12.cjs)──
   { id: 'd12.cn_label_line', bucket: V, md: `${M}\n\n会议记录\n\n[重要]: 明天开会\n\n[TODO]: 回复邮件\n\n结尾\n`, visible: '[重要]: 明天开会' },
@@ -196,7 +206,7 @@ async function runCase(browser, c) {
   }
   const one = await typeAndSave(page, M, 'Z')
   await page.close()
-  const want1 = c.bucket === W ? c.golden : c.md.replace(M, M + 'Z')
+  const want1 = c.bucket === W ? c.golden : c.bucket === S ? null : c.md.replace(M, M + 'Z') // stable 首轮不比
   r.rounds.push({ out: one.out, want: want1, note: one.note })
   // 第二轮:用第一轮的落盘重开再编辑(pending 桶第一轮就不逐字,第二轮不跑)。
   if (c.bucket !== P && one.out != null) {
@@ -267,7 +277,7 @@ async function main() {
     const forbidden = (c.forbid ? r.rounds.find((x) => x.out != null && c.forbid.test(x.out)) : null)
       || (c.require ? r.rounds.find((x) => x.out == null || !c.require.test(x.out)) : null)
     const openDirty = r.openWrites.some((n) => n !== 0)
-    const exact = r.rounds.every((x) => x.out != null && x.out === x.want)
+    const exact = r.rounds.every((x) => x.out != null && (x.want == null || x.out === x.want))
     const pageErr = r.errs.filter((e) => !/Failed to load resource/.test(e))
     let tag
     if (c.bucket === P) tag = exact ? 'XPASS' : 'XFAIL'
@@ -286,6 +296,7 @@ async function main() {
       if (DUMP) console.log(`        round${i + 1} out: ${JSON.stringify(x.out)}`)
       if ((tag === 'FAIL' || (tag === 'XPASS' && DUMP)) && x.out !== x.want) {
         if (x.out == null) { console.log(`        round${i + 1}: 没有落盘 ${x.note || ''}`); continue }
+        if (x.want == null) { console.log(`        round${i + 1} out(stable 首轮不比): ${JSON.stringify(x.out)}`); continue }
         console.log(`        round${i + 1} diff(- 期望 / + 实际):`)
         for (const l of lineDiff(x.want, x.out).slice(0, 12)) console.log('          ' + l)
       }
