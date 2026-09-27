@@ -422,6 +422,15 @@ const summariesOf = async (sessionId) => {
   try { return db.prepare('SELECT summary, through_timestamp, through_message_id, through_tool_call_id FROM session_summaries WHERE session_id = ? ORDER BY through_timestamp').all(sessionId); }
   finally { db.close(); }
 };
+/** 每个 Muse 周期**第一次**模型调用的 prompt token(按周期先后):量开局上下文有没有把之前周期的对话整段带进来(09-27)。 */
+const museFirstPrompts = async () => {
+  const { default: Database } = await import('better-sqlite3');
+  const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+  try {
+    return db.prepare(`SELECT (SELECT json_extract(e.payload, '$.prompt') FROM agent_run_events e WHERE e.run_id = r.id AND e.type = 'usage' ORDER BY e.created_at, e.rowid LIMIT 1) AS p
+      FROM agent_runs r JOIN chat_sessions s ON s.id = r.session_id WHERE s.kind = 'muse' ORDER BY r.created_at`).all().map((x) => Number(x.p) || 0); // 0 = 这个周期还没有 usage;不滤,滤了周期序号会错位
+  } finally { db.close(); }
+};
 const asList = (x, key) => Array.isArray(x) ? x : Array.isArray(x?.[key]) ? x[key] : Array.isArray(x?.rows) ? x.rows : [];
 
 // 桌面 work 会话的 per-run 配置(execMode/cwd 只经 agent_config 传,见 agentLoop.ts:581;appStore.ts:1553 同形)。
@@ -1167,8 +1176,15 @@ try {
     // 看 detail 里的「Space …」跨次比对即可(⚠️ = 判定为装不出 home,拿 scripts/muse-space-verdict.mjs 复核)。没写不算错。
     const space = await museSpaceVerdict(join(home, 'agents', 'muse', 'Space'), health?.version);
     const spaceAsks = approvals.filter((a) => JSON.stringify(a).includes('/Space/')).length; // Space 目录三档免审:排进审批 = 提示词又把它说成「Library 外」
-    const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && !spaceAsks; // 审批队列是引擎真实状态,照判
-    return { ok, detail: `${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.ok ? '' : '⚠️'}${space.text};自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
+    // 开局上下文(09-27):每个周期一个新会话 → 周期 2 第一次调用不该带着周期 1 的整段对话(连工具结果)。
+    // 旧行为实测 ×2.6(1.8 万 → 4.6 万 token;实机攒到 17–20 万,2 小时心跳下每轮都按缓存未命中计费)。判据 ≤ ×1.5;
+    // 周期 2 已起却 60s 还没返回首轮 = 这次没量到 → 判红(写「?」),不拿「没量到」冒充通过(Codex 09-27)。
+    let firsts = [];
+    for (const t0 = Date.now(); Date.now() - t0 < 60_000; await sleep(2000)) { firsts = await museFirstPrompts().catch(() => []); if (firsts[1] > 0) break; }
+    const [p1, p2] = firsts;
+    const replayOk = !twoCycles || (!!(p1 && p2) && p2 <= p1 * 1.5); // 周期 2 没起另由 twoCycles 判红
+    const ok = twoCycles && (journal.trim().length > 0 || todos.length > 0 || approvals.length > 0) && !spaceAsks && replayOk; // 审批队列、开局上下文都是引擎真实状态,照判
+    return { ok, detail: `${slept ? `周期 1 后${slept};` : ''}周期 2 ${twoCycles ? '已起' : blockedBy ? `被 token 预算挡(${blockedBy})` : '600s 未起'}(lastCycleAt ${firstCycleAt || '?'}→${Number(second?.lastCycleAt) || '?'},restarts ${second?.restartsThisWindow ?? '?'});起周期时计费/毛量 ${spent || '?'};开局上下文 ${p1 || '?'}→${p2 || '?'} token${p1 && p2 ? `(×${(p2 / p1).toFixed(2)}${replayOk ? '' : ' ⚠️带着上一周期的对话'})` : twoCycles ? '(⚠️周期 2 首轮 60s 未返回,没量到)' : ''};Journal ${journal.trim() ? '有' : '无'};todo ${todos.length};审批 ${approvals.length}${spaceAsks ? `(其中 Space ${spaceAsks} 条)` : ''};Space ${space.ok ? '' : '⚠️'}${space.text};自排日程 ${museSchedule.length}${museSchedule.length ? `(${museSchedule.join(' | ')})` : ''};error ${(second || started).lastError || '无'}`, output: museSays, journal, todos, approvals, status: second || started };
   });
   // ── musewake(09-24,opt-in,单独跑:`--only musewake`):「用户睡了、没事可做」时 Muse 会不会自己 set_next_wake,
   // 引擎会不会真的跳过心跳,用户一动能不能立刻醒。作息按**当前钟点**播:活跃窗口 = 现在 +6h 起 10 个小时(每天每小时一行,
