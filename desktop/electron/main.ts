@@ -1123,16 +1123,19 @@ async function doRefreshUnitHost(): Promise<void> {
     console.error('[unit-web] 启动失败:', e?.message || e)
     return
   }
-  unitHost = new UnitHost({
+  const host: UnitHost = new UnitHost({
     getCreds: () => ({ cloudUrl: unitHostCloudUrl, token: loadTanguCreds().token || '' }),
     getUnitWeb: () => ({ url: unitWeb ? `http://127.0.0.1:${unitWeb.port}` : null, internalSecret: unitWeb?.internalSecret ?? '' }),
     getLanUrl: () => unitLanUrl(),
     getPairing: () => unitHostPairing,
-    savePairing: async (p) => { unitHostPairing = p; await saveConfig({ unitHostId: p.unitId, unitHostSecret: p.secret }) },
-    clearPairing: async () => { unitHostPairing = null; await saveConfig({ unitHostId: '', unitHostSecret: '' }) },
+    // 入册回包到达时这个 host 已被 refreshUnitHost 换掉(停用 / 换账号):旧那一轮的配对不许落盘(Codex 评审 P1)。
+    // 残余窗口(检查通过后才换号)由通道 403/404 → clearPairing → 重新入册自愈。
+    savePairing: async (p) => { if (unitHost !== host) return; unitHostPairing = p; await saveConfig({ unitHostId: p.unitId, unitHostSecret: p.secret }) },
+    clearPairing: async () => { if (unitHost !== host) return; unitHostPairing = null; await saveConfig({ unitHostId: '', unitHostSecret: '' }) },
     log: (m) => console.log(m),
   })
-  unitHost.start()
+  unitHost = host
+  host.start()
 }
 let unitPairedCache: PairedDevice[] = []
 
