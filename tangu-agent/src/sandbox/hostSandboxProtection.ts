@@ -1,17 +1,25 @@
 import path from 'node:path';
 import os from 'node:os';
-import { realpathSync } from 'node:fs';
+import { realpathSync, lstatSync, readlinkSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { configFile, tanguHome, forsionSharedDir, agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../seams/runContext.js';
 
-/** Resolve the nearest existing ancestor too, so a missing config under a home symlink is protected. */
-export function canonicalFuturePath(input: string): string {
+/** Resolve the nearest existing ancestor too, so a missing config under a home symlink is protected.
+ *  A *dangling* symlink (its target does not exist yet) makes realpath fail, yet a write through it creates the target —
+ *  so it is followed by hand (readlink, relative to its own directory) instead of being treated as a plain missing name
+ *  (Codex 09-27: ws/link -> ~/.zshrc with no ~/.zshrc used to resolve to ws/link). Hop limit guards symlink loops. */
+export function canonicalFuturePath(input: string, hops = 0): string {
   let cursor = path.resolve(input);
   const tail: string[] = [];
   for (;;) {
     try { return path.join(realpathSync(cursor), ...tail.reverse()); }
     catch {
+      if (hops < 40) {
+        let link: string | null = null;
+        try { if (lstatSync(cursor).isSymbolicLink()) link = readlinkSync(cursor); } catch { /* not there */ }
+        if (link !== null) return canonicalFuturePath(path.join(path.resolve(path.dirname(cursor), link), ...tail.reverse()), hops + 1);
+      }
       const parent = path.dirname(cursor);
       if (parent === cursor) return path.resolve(input);
       tail.push(path.basename(cursor)); cursor = parent;
@@ -127,19 +135,23 @@ export function remoteForbiddenRoot(abs: string): string | null {
   const homes = tanguHomes();
   const roots = withCanonical([...forsionDomains(), ...homes, ...[desktopUserDataDir()].filter((d): d is string => !!d)]);
   const libBases = withCanonical(homes);
-  const literal = path.resolve(abs);
-  const real = canonicalFuturePath(abs);
-  // 例外只认**真实路径**落在 Library 里:Library 里的软链指向别处(别的 Agent 的技能目录…)不算(Codex 二轮)。
+  // Library 例外按**每一种形态**各判:字面与真实路径里,凡落在禁区的那个形态,自己也得落在 Library 里才算例外。
+  //   · Library 里的软链指向别处(别的 Agent 的技能目录…):真实路径在禁区、不在 Library → 禁(Codex 二轮);
+  //   · 禁区里的软链指向 Library(~/.forsion/tangu/skills-link → Library):字面路径在禁区、不在 Library → 禁 ——
+  //     引擎按字面路径装载 skills/,内容落在 Library 也照样生效(Codex 09-27 跟进轮);
+  //   · 项目里的软链指向 Library:字面路径不在禁区,真实路径在 Library → 放行。
   // Library 里的 .tangu/ 与旧 .forsion/ 工作区控制目录(项目技能 / 项目指令)照样禁:私聊的 cwd 就是 Library,
   // 写进去的技能下一次本机 run 会装载。
-  const inLibrary = libBases.some((h) => {
-    if (!pathWithin(real, h)) return false;
-    const parts = path.relative(foldCase ? h.toLowerCase() : h, foldCase ? real.toLowerCase() : real).split(path.sep);
+  const inLibrary = (p: string): boolean => libBases.some((h) => {
+    if (!pathWithin(p, h)) return false;
+    const parts = path.relative(foldCase ? h.toLowerCase() : h, foldCase ? p.toLowerCase() : p).split(path.sep);
     return parts.length >= 3 && ['agents', 'teams', 'engines'].includes(parts[0]) && parts[1] !== '' && parts[2].toLowerCase() === 'library'
       && !parts.slice(3).some((seg) => seg.toLowerCase() === '.tangu' || seg.toLowerCase() === '.forsion');
   });
-  if (inLibrary) return null;
-  for (const r of roots) if (pathWithin(literal, r) || pathWithin(real, r)) return r;
+  for (const f of new Set([path.resolve(abs), canonicalFuturePath(abs)])) {
+    if (inLibrary(f)) continue;
+    for (const r of roots) if (pathWithin(f, r)) return r;
+  }
   return null;
 }
 
@@ -177,9 +189,12 @@ export function remoteHomeStartupTarget(abs: string): string | null {
   for (const f of forms) {
     if (SHELL_STARTUP_NAMES.has(path.basename(f).toLowerCase())) return f;
   }
-  if (withinForsionDomains(abs)) return null;
+  const domainRoots = withCanonical([...forsionDomains(), ...tanguHomes(), ...[desktopUserDataDir()].filter((d): d is string => !!d)]);
   const homes = withCanonical([os.homedir()]);
   for (const f of forms) {
+    // 按形态各判:只有**这个形态本身**落在 Forsion / 引擎家目录里才交给 remoteForbiddenRoot(它有 Library 例外)。
+    // ~/.local 是指向某 Agent Library 的软链时,真实路径在 Library,字面路径 ~/.local/bin 却在 PATH 上 —— 字面形态照样按点目录拒(Codex 09-27 跟进轮)。
+    if (domainRoots.some((r) => pathWithin(f, r))) continue;
     for (const h of homes) {
       if (!pathWithin(f, h)) continue;
       const rel = path.relative(foldCase ? h.toLowerCase() : h, foldCase ? f.toLowerCase() : f);

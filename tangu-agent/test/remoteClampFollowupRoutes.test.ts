@@ -190,6 +190,11 @@ describe('工作区路由:真实路径钳在会话工作区内(软链逃逸)', (
       expect(existsSync(join(outside, 'pwned.txt'))).toBe(false);
       expect(readFileSync(join(outside, 'secret.txt'), 'utf8')).toBe('OUTSIDE-SECRET');
       expect(existsSync(join(dir, 'new', 'a.txt'))).toBe(true);
+      // 悬空软链(目标还不存在):上传不许跟着它在工作区外建文件(Codex 评审 09-27 跟进轮)
+      symlinkSync(join(outside, 'created-via-dangle.txt'), join(dir, 'dangle.txt'));
+      const up2 = await send('POST', '/agent/workspace/upload', { sessionId: sid, files: [{ path: 'dangle.txt', content: 'x' }] });
+      expect(up2.body.saved).toBe(0);
+      expect(existsSync(join(outside, 'created-via-dangle.txt'))).toBe(false);
       const del = await send('POST', '/agent/workspace/delete', { sessionId: sid, path: 'link/victim.txt' });
       expect(del.body.ok).toBe(false);
       expect(existsSync(join(outside, 'victim.txt'))).toBe(true);

@@ -214,10 +214,19 @@ const SAFE_GIT_FLAGS = new Set([
  * Recursive roots are compared in both the literal and the realpath form: rg and `grep -r` follow a symlink given as a root
  * (`rg SECRET link` with link -> ~/.forsion reads auth.json), so a lexical check alone lets that through (review B#1).
  * Symlinks *inside* the tree are only followed with rg -L/--follow or grep -R — those flags are not on the safe list. */
+/** Split at the first `--`: before it, dash-words are options; after it, *everything* is an operand
+ * (`rg SECRET -- -n` reads a file literally named `-n` — Codex 09-27). */
+function splitOptions(args: string[]): { options: string[]; operands: string[] } {
+  const i = args.indexOf('--');
+  const before = i < 0 ? args : args.slice(0, i);
+  const after = i < 0 ? [] : args.slice(i + 1);
+  return { options: before.filter((a) => a.startsWith('-') && a !== '-'), operands: [...before.filter((a) => !a.startsWith('-') || a === '-'), ...after] };
+}
+
 function touchesCredentials(program: string, args: string[], cwd: string): boolean {
   const creds = credentialPaths();
-  const operands = args.filter((a) => a !== '--' && !a.startsWith('-'));
-  const recursive = program === 'rg' || ((program === 'grep') && args.some((a) => a === '-r' || a === '-R'));
+  const { options, operands } = splitOptions(args);
+  const recursive = program === 'rg' || ((program === 'grep') && options.some((a) => a === '-r' || a === '-R'));
   // grep/rg: first operand is the pattern; no path operands = search cwd (rg always, grep only when recursive).
   const paths = program === 'rg' || program === 'grep' ? operands.slice(1) : operands;
   const roots = recursive && !paths.length ? [cwd] : paths;
@@ -252,7 +261,7 @@ export function isKnownSafeBash(command: string, cwd: string = process.cwd()): b
   if (program === 'rg' || program === 'grep') {
     const flags = program === 'rg' ? SAFE_RG_FLAGS : SAFE_GREP_FLAGS;
     if (program === 'rg' && process.env.RIPGREP_CONFIG_PATH) return false;
-    return args.every((a) => !a.startsWith('-') || a === '--' || flags.has(a));
+    return splitOptions(args).options.every((a) => flags.has(a));
   }
   if (program !== 'git') return false;
   const [sub, ...rest] = args;

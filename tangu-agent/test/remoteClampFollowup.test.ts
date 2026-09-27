@@ -244,3 +244,34 @@ describe('#6 / #7 保护路径', () => {
     rmSync(outside, { recursive: true, force: true });
   });
 });
+
+describe('Codex 评审(09-27 跟进轮)', () => {
+  it('悬空软链:目标还不存在时照样按目标判(远程写家目录点文件 / 本机写凭据)', async () => {
+    const probe = join(HOME, `.tangu-dangle-probe-${Date.now()}`); // 不存在;只建工作区里的链接,不写目标
+    symlinkSync(probe, join(ws, 'dangle'));
+    expect(checkWritePath(toolCtx({ remote: REMOTE }), join(ws, 'dangle')).hardDeny).toBe(true);
+    symlinkSync(join(home, 'provider-auth.json'), join(ws, 'dangle-cred')); // 凭据文件尚不存在
+    expect((await gate(call('write_file', { path: join(ws, 'dangle-cred'), content: '{}' }), { approvalMode: 'full-auto' })).asked).toBe(true);
+    // 悬空链接指向工作区外的普通位置:本机 auto-edit 也按越界写问(以前按「在工作区里」直接放)
+    const out = mkdtempSync(join(tmpdir(), 'tangu-remote-fu-dangle-'));
+    symlinkSync(join(out, 'new.txt'), join(ws, 'dangle-out'));
+    expect((await gate(call('write_file', { path: join(ws, 'dangle-out'), content: 'x' }), { approvalMode: 'auto-edit' })).asked).toBe(true);
+    rmSync(out, { recursive: true, force: true });
+  });
+
+  it('Forsion 家目录里指向 Library 的软链:字面路径不在 Library 就不吃例外(skills-link → Library)', () => {
+    const lib = join(home, 'agents', 'cx', 'Library');
+    mkdirSync(join(lib, 'sk'), { recursive: true });
+    symlinkSync(join(lib, 'sk'), join(home, 'skills-link'));
+    expect(checkWritePath(toolCtx({ remote: REMOTE }), join(home, 'skills-link', 'SKILL.md')).hardDeny).toBe(true);
+    expect(checkWritePath(toolCtx({ cwd: lib, remote: REMOTE }), join(lib, 'sk', 'SKILL.md'))).toMatchObject({ ok: true, hardDeny: false });
+  });
+
+  it('`--` 之后的参数一律是操作数:名叫 -n 的软链指向凭据 → 不免批', () => {
+    symlinkSync(join(home, 'auth.json'), join(ws, '-n'));
+    expect(isKnownSafeBash('rg SECRET -- -n', ws)).toBe(false);
+    expect(isKnownSafeBash('grep SECRET -- -n', ws)).toBe(false);
+    expect(isKnownSafeBash('cat -- -n', ws)).toBe(false);
+    expect(isKnownSafeBash('rg SECRET -- readme.md', ws)).toBe(true);
+  });
+});

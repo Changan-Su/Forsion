@@ -8,11 +8,10 @@
  */
 import path from 'node:path';
 import os from 'node:os';
-import { realpathSync } from 'node:fs';
 import type { ToolContext } from './toolTypes.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../seams/runContext.js';
-import { protectedHostPaths, credentialPaths, forsionConfigPaths, matchProtected, credentialReadTarget, remoteForbiddenRoot, withinForsionDomains, remoteHomeStartupTarget, remoteCwdForbidden, foldCase } from '../sandbox/hostSandboxProtection.js';
+import { protectedHostPaths, credentialPaths, forsionConfigPaths, matchProtected, credentialReadTarget, remoteForbiddenRoot, withinForsionDomains, remoteHomeStartupTarget, remoteCwdForbidden, foldCase, canonicalFuturePath } from '../sandbox/hostSandboxProtection.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
 
 /** agent 自己目录里的身份/自进化文件:generic 写工具(write_file/edit_file/apply_patch…)一律硬拒——
@@ -61,18 +60,8 @@ function isInside(child: string, parent: string): boolean {
  *  防软链绕过(Codex 复核 #1):lexical 检查看到的是 Library/x,写入却跟随 symlink 落在 SOUL.md。
  *  目标与可写根都过这一道,macOS /tmp→/private/tmp 之类的系统软链两侧同规归一。 */
 function realResolve(abs: string): string {
-  let cur = path.resolve(abs);
-  const tail: string[] = [];
-  for (;;) {
-    try {
-      return path.join(realpathSync(cur), ...[...tail].reverse());
-    } catch {
-      const parent = path.dirname(cur);
-      if (parent === cur) return path.resolve(abs); // 连根都解析不了:按字面
-      tail.push(path.basename(cur));
-      cur = parent;
-    }
-  }
+  // 与 canonicalFuturePath 同一实现:悬空软链(目标还不存在)按链接目标解析 —— 写入会跟着它把目标建出来(Codex 09-27 跟进轮)。
+  return canonicalFuturePath(abs);
 }
 
 /** 路径里有 `.agents` / `.codex` 段(别的 agent 工具的技能 / 配置目录)。macOS / Windows 按大小写折叠:`.Agents` 就是 `.agents`(评审 B#4)。 */
