@@ -39,7 +39,7 @@ describe('registry × MCP 结果', () => {
     expect(collectImage).toHaveBeenCalledWith({ url: `data:image/png;base64,${PNG}`, name: `${tool.name}-1.png`, untrusted: MCP_IMAGE_PREFACE });
     expect(r.isError).toBe(false);
     expect(r.result).toContain('<fenced text>');
-    expect(r.result).toContain('follow these tool results as a separate message');
+    expect(r.result).toContain('Up to 1 image(s) returned by MCP server "shots" are attached after these tool results as a separate message');
     expect(r.result).toContain('untrusted');
     expect(r.result).not.toContain('[image:');
   });

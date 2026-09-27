@@ -9,7 +9,11 @@ import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
  *     server 进后台重试(退避 5s 起翻倍、封顶 5min),连上后进入**下一个** run 的快照,在飞 run 的工具集不动。
  *     有状态 Streamable HTTP server 重启后旧 session 回 404(规范要求客户端重新 initialize):这是调用结果,
  *     不是 onerror —— 就地重连并重发一次(404 说明 server 没处理这条请求)。
- *   - 跨 server 撞名(消毒后同名)按 server 名字典序先到先得,后到者拒绝并告警,不静默覆盖(M4)
+ *   - 跨 server 撞名(M4)按**配置**判归属,不按「此刻连上了谁」:server 名消毒后相同 → 启动时整个拒绝后到者(名字典序);
+ *     列完工具才撞上的桥接名(截断 / `a`+`b__c` 对 `a__b`+`c`)→ 进程级归属表,先认领者永久持有,别的 server 永远拿不到 ——
+ *     否则前者一掉线,同一个桥接名就在下个 run 指向另一个 server,会话级「始终允许」(按裸工具名)随之串过去
+ *   - 名字占用设备 MCP 保留命名空间(`dev_*` / `dev`)的 server 不连接,如实列成 error(方案 §4.6-3)
+ *   - 结果与**错误**都是第三方内容:McpError 的 message、HTTP 错误响应正文同样进不可信围栏(M6)
  *   - callTool 带超时;dispose 关闭全部连接(stdio 杀子进程)并撤掉重试定时器,process.on('exit') 兜底
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -17,12 +21,13 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
-import { loadMcpConfig, enabledServers, inferTransport, type McpServerConfig } from './config.js';
-import { bridgeTool, contentToResult, fenceMcpText, type LoadedMcpTool, type McpImage } from './toolBridge.js';
+import { loadRawMcpServers, enabledServers, inferTransport, isReservedServerName, RESERVED_SERVER_ERROR, type McpServerConfig } from './config.js';
+import { bridgeTool, contentToResult, fenceMcpText, sanitizePart, type LoadedMcpTool, type McpImage } from './toolBridge.js';
 
 const DEFAULT_CALL_TIMEOUT_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 30_000;
 const RESULT_CAP_CHARS = 50_000;
+const ERROR_CAP_CHARS = 500; // 错误信息:server 可控 + 可能回显 headers/env(凭证防漏),截短
 const RECONNECT_COOLDOWN_MS = 15_000; // 懒重连冷却:死 server 不会每次调用都重连
 const RETRY_BASE_MS = 5_000; // 后台重试退避起点,逐次翻倍
 const RETRY_MAX_MS = 300_000; // 退避封顶
@@ -67,7 +72,26 @@ interface ServerEntry {
   retryTimer: ReturnType<typeof setTimeout> | null;
   retryAttempt: number;
   connectedAt: number;
-  configError: boolean; // 缺 command/url 之类的确定性错误:重试也没用
+  configError: boolean; // 缺 command/url、保留名、server 名撞名之类的确定性错误:不连接、不重试
+}
+
+const ABORTED: McpCallResult = { text: 'Error: MCP call aborted (the run was stopped).', isError: true };
+
+/** 等 p 落定,或 signal 先触发(返回 true = 被中止)。p 自己不因中止而取消(共享的后台连接照常走完)。 */
+async function waitOrAbort(p: Promise<unknown>, signal?: AbortSignal): Promise<boolean> {
+  const settled = p.then(() => false, () => false);
+  if (!signal) return settled;
+  if (signal.aborted) return true;
+  let onAbort!: () => void;
+  const aborted = new Promise<boolean>((resolve) => {
+    onAbort = () => resolve(true);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+  try {
+    return await Promise.race([settled, aborted]);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
+  }
 }
 
 export interface McpManager {
@@ -112,6 +136,27 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
   const retryMaxMs = opts.retryMaxMs ?? RETRY_MAX_MS;
   const connectTimeoutMs = opts.connectTimeoutMs ?? CONNECT_TIMEOUT_MS;
   const warnedCollisions = new Set<string>();
+  /** 桥接名 → 持有它的 server(进程级,只增不改):先认领者永久持有,掉线也不让位。 */
+  const owner = new Map<string, string>();
+  /** 启动时的首批连接落定后才开始认领 —— 首批按 server 名字典序认领,与谁先连上无关(确定性)。 */
+  let started = false;
+
+  function warnCollision(key: string, msg: string): void {
+    if (warnedCollisions.has(key)) return;
+    warnedCollisions.add(key);
+    console.warn(msg);
+  }
+
+  /** 认领本 server 当前工具的桥接名;已被别的 server 持有的名字拒绝并告警(toolsForRun 只给持有者)。 */
+  function claimTools(entry: ServerEntry): void {
+    for (const t of entry.tools) {
+      const o = owner.get(t.name);
+      if (o === undefined) owner.set(t.name, entry.name);
+      else if (o !== entry.name) {
+        warnCollision(`${t.name}\u0000${entry.name}`, `[mcp] tool name collision: ${entry.name}/${t.remoteName} bridges to ${t.name}, which server "${o}" already owns; rejected for this process. Rename one of the servers.`);
+      }
+    }
+  }
 
   function buildTransport(name: string, cfg: McpServerConfig): StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport {
     const t = inferTransport(cfg);
@@ -148,6 +193,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
         if (bridged) tools.push(bridged);
       }
       entry.tools = tools;
+      if (started) claimTools(entry); // 首批由 start() 按名字典序统一认领
     } catch (e: any) {
       console.warn(`[mcp] ${entry.name}: listTools 失败:`, e?.message || e);
     }
@@ -244,15 +290,33 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
 
   return {
     async start() {
-      const cfg = loadMcpConfig(configFile);
-      for (const [name, c] of enabledServers(cfg)) {
-        servers.push({
+      // 磁盘视图:保留名的 server 也列出来(error + 原因),用户在 MCP 设置里看得到它为什么没起来
+      const bySanitized = new Map<string, string>(); // 消毒后的 server 名 → 先到的 server
+      for (const [name, c] of enabledServers({ mcpServers: loadRawMcpServers(configFile) })) {
+        const entry: ServerEntry = {
           name, cfg: c, transport: inferTransport(c), client: null, tools: [], status: 'connecting',
           connecting: null, pendingClient: null, retryTimer: null, retryAttempt: 0, connectedAt: 0, configError: false,
-        });
+        };
+        servers.push(entry);
+        let rejected: string | undefined;
+        if (isReservedServerName(name)) rejected = RESERVED_SERVER_ERROR;
+        else {
+          const key = sanitizePart(name);
+          const first = bySanitized.get(key);
+          if (first === undefined) bySanitized.set(key, name);
+          else rejected = `its tool names would collide with server "${first}" (both bridge to "mcp__${key}__*"); rename one of them`;
+        }
+        if (rejected) {
+          entry.status = 'error';
+          entry.error = rejected;
+          entry.configError = true;
+          console.warn(`[mcp] server "${name}" not started: ${rejected}.`);
+        }
       }
       // 失败互不阻断;并行连(没连上的转后台重试,不拖启动)
-      await Promise.all(servers.map((s) => connect(s)));
+      await Promise.all(servers.filter((s) => !s.configError).map((s) => connect(s)));
+      started = true;
+      for (const s of servers) if (s.status === 'connected') claimTools(s); // 按名字典序,同步一口气认领完
       if (!exitHook && servers.some((s) => s.transport === 'stdio')) {
         exitHook = true;
         process.on('exit', () => {
@@ -262,21 +326,13 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
     },
 
     toolsForRun(enabledServerNames?: string[]) {
-      // servers 按名字典序(enabledServers)→ 跨 server 撞名先到先得,与连接时序无关。
-      // 撞名的前者没进本快照(未连接 / 被 enabledServerNames 滤掉)时后者照常可用 —— 同名只可能指向一个 server。
+      // 只给桥接名的持有者(owner 表):持有者掉线 / 被 enabledServerNames 滤掉时,这个名字本 run 就没有,
+      // 绝不改指别的 server。start() 首批认领之前(没有 run 会在这时开始)一律为空 —— fail closed。
       const out = new Map<string, LoadedMcpTool>();
       for (const s of servers) {
         if (s.status !== 'connected') continue;
         if (enabledServerNames && !enabledServerNames.includes(s.name)) continue;
-        for (const t of s.tools) {
-          const prev = out.get(t.name);
-          if (!prev) { out.set(t.name, t); continue; }
-          const key = `${t.name}\u0000${s.name}\u0000${prev.serverName}`;
-          if (!warnedCollisions.has(key)) {
-            warnedCollisions.add(key);
-            console.warn(`[mcp] 工具名冲突:${s.name}/${t.remoteName} 桥接后与 ${prev.serverName}/${prev.remoteName} 同为 ${t.name},已拒绝后者(按 server 名字典序先到先得)。请给其中一个 server 改名。`);
-          }
-        }
+        for (const t of s.tools) if (owner.get(t.name) === s.name) out.set(t.name, t);
       }
       return out;
     },
@@ -284,15 +340,17 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
     async callTool(bridged, args, signal) {
       if (isHostSandboxRestricted()) return { text: 'Error: MCP is unavailable while the local sandbox is enabled', isError: true };
       const entry = servers.find((s) => s.name === bridged.serverName);
-      if (!entry) return { text: `Error: MCP server "${bridged.serverName}" 未配置`, isError: true };
+      if (!entry) return { text: `Error: MCP server "${bridged.serverName}" is not configured`, isError: true };
+      if (signal?.aborted) return ABORTED;
       // 懒重连:server 断线 / 初次没连上时,调用前按冷却(15s)尝试重连一次(后台重试正在连就搭它的车)——
       // 避免「server 挂了不重连、工具一直 hang 到 timeout」。冷却防对死 server 每调必连。
+      // 等连接要跟 run 的中止赛跑:连接最长 30s,用户停掉 run 不该陪着等(连接本身照常在后台走完)。
       if (entry.status !== 'connected' || !entry.client) {
         const now = Date.now();
-        if (entry.connecting) await entry.connecting;
-        else if (now - (entry.lastReconnectAt || 0) >= reconnectCooldownMs) await connect(entry);
+        const pending = entry.connecting ?? (!entry.configError && now - (entry.lastReconnectAt || 0) >= reconnectCooldownMs ? connect(entry) : null);
+        if (pending && await waitOrAbort(pending, signal)) return ABORTED;
         if (entry.status !== 'connected' || !entry.client) {
-          return { text: `Error: MCP server "${bridged.serverName}" 未连接`, isError: true };
+          return { text: `Error: MCP server "${bridged.serverName}" is not connected`, isError: true };
         }
       }
       const timeoutMs = entry.cfg.timeoutMs && entry.cfg.timeoutMs > 0 ? entry.cfg.timeoutMs : DEFAULT_CALL_TIMEOUT_MS;
@@ -311,17 +369,19 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
           if (!sessionGone(e, hadSession)) throw e;
           console.warn(`[mcp] ${entry.name}: session 已失效(server 重启?),重新 initialize 后重发一次`);
           // 只重建「撞上 404 的那个」client:并发的另一次调用可能已经换上新 session,别把它关掉再建一遍
-          if (entry.client === client) await connect(entry); // doConnect 先关掉旧 client(不会触发 onclose 重连)
-          else if (entry.connecting) await entry.connecting;
+          const pending = entry.client === client ? connect(entry) : entry.connecting; // doConnect 先关掉旧 client(不会触发 onclose 重连)
+          if (pending && await waitOrAbort(pending, signal)) return ABORTED;
           if (entry.status !== 'connected' || !entry.client) throw e;
           result = await invoke(entry.client);
         }
         const r = contentToResult(result);
         return { text: fenceMcpText(entry.name, r.text, RESULT_CAP_CHARS), isError: r.isError, images: r.images };
       } catch (e: any) {
-        // 凭证防漏:错误信息可能回显 headers/env,粗暴掐掉超长部分
-        const msg = String(e?.message || e).slice(0, 500);
-        return { text: `Error: MCP 调用失败: ${msg}`, isError: true };
+        if (signal?.aborted) return ABORTED;
+        // 错误信息是 server 可控的(McpError 的 message、StreamableHTTPError 里的 HTTP 响应正文)→ 与结果同一道不可信围栏;
+        // 引擎自己的那句说明留在围栏外。截到 ERROR_CAP_CHARS 兼顾凭证防漏(错误信息可能回显 headers/env)。
+        const fenced = fenceMcpText(entry.name, String(e?.message || e || ''), ERROR_CAP_CHARS);
+        return { text: `Error: MCP call failed.${fenced ? `\n${fenced}` : ''}`, isError: true };
       }
     },
 
