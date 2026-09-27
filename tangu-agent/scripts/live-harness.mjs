@@ -732,7 +732,7 @@ try {
     const tool = 'mcp__fake__image';
     const ev = await run(`live-mcp-${Date.now()}`, `Call the tool ${tool} exactly once (it takes no arguments). Then answer in one short line: the label code it returned, and the number shown in the picture it returned.`);
     const full = ev.toolResults.find((r) => r.name === tool)?.full || '';
-    const fenced = mcpFenceOk(full, 'fake', MCP_PWN) && full.includes('are attached after these tool results as a separate message');
+    const fenced = mcpFenceOk(full, 'fake', MCP_PWN) && full.includes('may be attached after these tool results as a separate message');
     const code = ev.content.includes(MCP_MARK);
     // 数字之间的分隔符不算读错(实测把 3745 念成「374.5」):要判的是图到没到,不是 OCR 细节;猜中随机四位数的概率 1/320
     const seen = ev.content.replace(/(\d)[\s.,·'-]+(?=\d)/g, '$1').includes(MCP_DIGITS);

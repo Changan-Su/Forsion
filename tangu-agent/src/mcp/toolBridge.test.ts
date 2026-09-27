@@ -161,6 +161,8 @@ describe('mcpResultForModel(M6 图片)', () => {
   it('说明不许诺张数:loop 每轮有图片上限,超出的会被丢掉', () => {
     const r = mcpResultForModel({ text: 't', isError: false, images: [img, img, img] }, { name: 'mcp__s__x', serverName: 's' }, () => {});
     expect(r).toContain('Up to 3 image(s) returned by MCP server "s"');
+    expect(r).toContain('may be attached'); // 本轮额度已满时一张也收不进:不许断言「已附上」
+    expect(r).not.toContain('are attached');
     expect(r).toContain('images beyond the per-round image limit are dropped');
     expect(r).toContain('untrusted');
   });

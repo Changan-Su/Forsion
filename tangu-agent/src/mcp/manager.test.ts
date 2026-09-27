@@ -209,11 +209,11 @@ describe('M3 边界 · 中止', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const file = join(dir, 'mcp-hang.json');
     writeFileSync(file, JSON.stringify({ mcpServers: { slow: {
-      command: process.execPath, args: [FIXTURE], env: { FAKE_MCP_TAG: 'slow', FAKE_MCP_INIT_DELAY_MS: '8000' },
+      command: process.execPath, args: [FIXTURE], env: { FAKE_MCP_TAG: 'slow', FAKE_MCP_INIT_DELAY_MS: '4000' },
     } } }));
     const m = createMcpManager(file, FAST);
     managers.push(m);
-    const started = m.start(); // 连接在飞(server 8s 后才接上 stdio)
+    const started = m.start(); // 连接在飞(server 4s 后才接上 stdio)
     const tool: LoadedMcpTool = {
       name: 'mcp__slow__echo', serverName: 'slow', remoteName: 'echo',
       definition: { type: 'function', function: { name: 'mcp__slow__echo', description: '', parameters: { type: 'object', properties: {} } } },
@@ -228,7 +228,43 @@ describe('M3 边界 · 中止', () => {
     const pre = new AbortController();
     pre.abort();
     expect((await m.callTool(tool, { text: 'x' }, pre.signal)).text).toContain('aborted'); // 已中止:不碰连接
-    void started.catch(() => {});
+    // 中止只是不再等,共享的后台连接照常走完:之后同一个工具正常可用
+    await started;
+    expect(m.listStatus()[0].status).toBe('connected');
+    const ok = await m.callTool(tool, { text: 'y' });
+    expect(ok.isError).toBe(false);
+    expect(innerText(ok.text)).toBe('slow:y');
+  }, 30_000);
+
+  it('session 失效(404)后重新 initialize 期间 run 被中止 → 立即返回,不陪着等连接超时', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const port = await freePort();
+    const srv = await startHttpServer({ port, stateful: true, tag: 'h1' });
+    httpServers.push(srv);
+    const m = await managerFor({ h: { url: srv.url } }, { ...FAST, connectTimeoutMs: 10_000 });
+    const echo = m.toolsForRun().get('mcp__h__echo')!;
+    expect(innerText((await m.callTool(echo, { text: 'a' })).text)).toBe('h1:a');
+    await srv.stop();
+    await settle();
+    expect((await m.callTool(echo, { text: 'down' })).isError).toBe(true); // 顺带清掉连接池里的死 keep-alive 连接
+    // 「重启」成一个带旧 session 的请求一律 404、initialize 永远不回的 server —— 重新 initialize 会挂到连接超时
+    const { createServer: createHttp } = await import('node:http');
+    let initSeen = false;
+    const hang = createHttp((req, res) => {
+      if (req.headers['mcp-session-id']) { res.writeHead(404, { 'content-type': 'application/json' }); res.end('{}'); return; }
+      if (req.method === 'POST') initSeen = true; // 不回:initialize 在飞
+    });
+    await new Promise<void>((r) => hang.listen(port, '127.0.0.1', () => r()));
+    httpServers.push({ stop: async () => { hang.closeAllConnections(); await new Promise<void>((r) => hang.close(() => r())); } });
+    const ac = new AbortController();
+    setTimeout(() => ac.abort(), 300);
+    const t0 = Date.now();
+    const r = await m.callTool(echo, { text: 'b' }, ac.signal);
+    expect(Date.now() - t0).toBeLessThan(3000);
+    expect(initSeen).toBe(true); // 真走到了 session 失效 → 重新 initialize 那条分支
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain('aborted');
   }, 30_000);
 });
 
