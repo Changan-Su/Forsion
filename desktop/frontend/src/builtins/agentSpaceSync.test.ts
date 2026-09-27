@@ -93,6 +93,21 @@ describe('syncAgentSpace 回写', () => {
     expect(posted).toHaveBeenCalledTimes(2)
   })
 
+  it('两版的回写同时在途、旧版的失败晚到 → 不覆盖新版待重发的那条', async () => {
+    let failV1: (e: unknown) => void = () => {}
+    posted.mockImplementationOnce(() => new Promise((_, rej) => { failV1 = rej }))
+    afterReload({ plugins: [muse], activeIds: [], views: [], lastSetupError: { 'agent-muse': 'boom v1' } })
+    await run(30) // v1 的回写在途
+    posted.mockRejectedValueOnce(new Error('engine down'))
+    afterReload({ plugins: [muse], activeIds: [], views: [], lastSetupError: { 'agent-muse': 'boom v2' } })
+    await run(31) // v2 的回写先失败 → 记下待重发
+    failV1(new Error('engine down')) // v1 的失败晚到
+    await vi.advanceTimersByTimeAsync(0)
+    await run(31) // 同戳:重发的必须是 v2 那条
+    expect(posted).toHaveBeenCalledTimes(3)
+    expect(posted.mock.calls[2][1]).toBe('Space plugin failed to load: boom v2')
+  })
+
   it('挂载失败的回写 POST 失败 → 撤销标记,下次挂载再报', async () => {
     const home = { id: 'home' }
     posted.mockRejectedValueOnce(new Error('engine down'))

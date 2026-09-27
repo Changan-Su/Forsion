@@ -13,6 +13,10 @@ const loadedStamp = new Map<string, number>()
 const reportedStamp = new Map<string, number>()
 /** 回写 POST 失败(引擎一时不可用)的那条加载失败:同戳的后续轮询在「戳没变」处直接返回、不再重查,只能记下来在那儿重发(Codex 09-27) */
 const unsentReport = new Map<string, { stamp: number; text: string }>()
+/** 只记仍是当前这一版的:两版的回写同时在途、旧版的失败晚到时,不许把新版待重发的那条覆盖掉(Codex 09-27) */
+const keepUnsent = (slug: string, r: { stamp: number; text: string }): void => {
+  if (loadedStamp.get(slug) === r.stamp) unsentReport.set(slug, r)
+}
 
 /** 装上了、没抛错,却没注册主槽视图 —— 同样要回写,否则就是静默失败。09-27 实机:Muse 从 09-11 首建起每一版 main.js
  *  都整份包成 `function setup(ctx) { … }` 却从不调用,求值只声明了一个函数,零注册零报错;Space 一直是空白态,
@@ -32,7 +36,7 @@ export async function syncAgentSpace(cfg: TanguDesktopConfig, slug: string, stam
   const unsent = unsentReport.get(slug)
   if (unsent) {
     unsentReport.delete(slug)
-    if (unsent.stamp === stamp) void postMuseFeedback(cfg, unsent.text).catch(() => { unsentReport.set(slug, unsent) })
+    if (unsent.stamp === stamp) void postMuseFeedback(cfg, unsent.text).catch(() => keepUnsent(slug, unsent))
   }
   if (loadedStamp.get(slug) === stamp) return
   loadedStamp.set(slug, stamp) // 先记后做:并发调用只有一个真跑
@@ -50,7 +54,7 @@ export async function syncAgentSpace(cfg: TanguDesktopConfig, slug: string, stam
   const report = (text: string): void => {
     if (reportedStamp.get(slug) === stamp) return
     reportedStamp.set(slug, stamp) // 同一份内容只报一次
-    void postMuseFeedback(cfg, text).catch(() => { unsentReport.set(slug, { stamp, text }) })
+    void postMuseFeedback(cfg, text).catch(() => keepUnsent(slug, { stamp, text }))
   }
   // blocked 不止 invalid:apiVersion / minAppVersion 门禁挡下同样一声不吭地不渲染
   const err = st.lastSetupError[id] || (p.blocked ? p.blockedReason || `manifest.json blocked (${p.blocked}): check apiVersion / minAppVersion` : '')
