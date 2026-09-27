@@ -982,7 +982,7 @@ async function doRefreshUnitHost(): Promise<void> {
   const webDeps = {
     getEngine: () => {
       const st = backend.getStatus()
-      return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken() }
+      return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken(), remoteMark: backend.remoteMarkSecret() }
     },
     confirmPair: async (info: { name: string; code: string; ip: string }): Promise<boolean> => {
       // 开发测试后门:**双闸**——非打包(app.isPackaged=false)且显式 FORSION_UNIT_AUTO_PAIR=1,

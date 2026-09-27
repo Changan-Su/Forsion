@@ -1,8 +1,11 @@
 /**
  * 内置 tangu-server 托管(方案 B):spawn `node dist/standalone/main.js` 子进程。
  *   - 空闲端口探测(listen(0))+ 失败重试
- *   - token:standalone 是单 token 模型(forsion_token 既调云端也作本地端点鉴权),
- *     经 env TANGU_TOKEN 传入(不上进程列表);留空则子进程回退 `tangu login` 存的凭证
+ *   - token:本地端点鉴权与云端凭据**分离**(设备能力 MCP 方案 §6.2-9,契约 C2):
+ *     TANGU_LOCAL_TOKEN = 每次 App 启动随机生成的本机引擎令牌(渲染层 / unitWeb / MCP 桥都用它);
+ *     TANGU_TOKEN = forsion_token,只用于引擎调云端(未登录则不传,引擎自己回退 auth.json);
+ *     TANGU_REMOTE_MARK_SECRET = 远端来源标记密钥(unitWeb 盖 x-forsion-remote-mark,引擎验,契约 C1)。
+ *     三者都走 env,不上进程列表。
  *   - /health 轮询就绪(300ms × 20s 超时)
  *   - stdout/stderr 环形缓冲 200 行(设置页可查看)
  *   - 意外退出指数退避自动重启(≤3 次),before-quit SIGTERM→3s→SIGKILL
@@ -14,7 +17,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer } from 'node:net'
 import { existsSync, readFileSync, statSync, writeFileSync, mkdirSync, chmodSync } from 'node:fs'
 import { join, dirname } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { randomBytes, randomUUID } from 'node:crypto'
 import { forsionHomeDir, tanguDataDir, defaultWorkspaceDir } from './forsionHome'
 import { amadeusConfigPath } from './amadeus/settings'
 import { composeEnginePath, pathKeyOf, withBundledGit } from './envPath'
@@ -131,7 +134,11 @@ export class BackendManager {
   private listeners = new Set<(st: BackendStatus) => void>()
   private spawnedEntry: string | null = null
   private spawnedAt = 0
-  private spawnToken: string | null = null
+  /** 本机引擎令牌(TANGU_LOCAL_TOKEN):每个 App 进程(= 每次启动)一枚,引擎重启沿用 —— 渲染层缓存的
+   *  cfg.token 跨 ensureBackend 重启照样有效。与 forsion_token 无关,auth.json 续期 / 换号都不动它。 */
+  private readonly localEngineToken = randomBytes(32).toString('hex')
+  /** 远端来源标记密钥(TANGU_REMOTE_MARK_SECRET):同样每次启动一枚,只在主进程与引擎之间。 */
+  private readonly remoteMark = randomBytes(32).toString('hex')
 
   onStatus(cb: (st: BackendStatus) => void): () => void {
     this.listeners.add(cb)
@@ -158,33 +165,33 @@ export class BackendManager {
     }
   }
 
-  /** 桌面 ↔ 托管引擎的共享密钥:**引擎在跑时恒返回它 spawn 时拿到的那枚**(= env 快照)。
+  /** 桌面 ↔ 托管引擎的本机令牌(= spawn 时的 TANGU_LOCAL_TOKEN):渲染层 cfg.token、unitWeb 的 /engine 反代、
+   *  MCP 桥、主进程自己打引擎,全都用它。
    *
-   *  ⚠️ 不许实时重读 auth.json:引擎的本地端点鉴权是**逐字比对** `TANGU_TOKEN` 那枚快照,而 auth.json
-   *  会被 24h 滑动续期改写(refreshAuthSliding 刻意不重启引擎 —— 它假定「两边同为旧串所以照样对得上」)。
-   *  渲染层的 cfg.token 确实是 boot 时的同一次快照,该假定成立;但 unitWeb 的 /engine 反代是**每个请求
-   *  现取**,于是设备页把新串发给只认旧串的引擎 → `/engine/agent/*` 整片 401,页面报「会话列表加载失败:
-   *  Unauthorized」,而免鉴权的 /engine/health 照常 200。2026-09-03 在连开三天的安装版上实测复现。
-   *
-   *  没有托管子进程时(external 形态 / 已停 / 重启窗口)回落实时值 —— 那时没有要对齐的对面。 */
+   *  它**不是** forsion_token,也不随 auth.json 变:以前两者是同一枚,于是 24h 滑动续期改写 auth.json 后
+   *  (refreshAuthSliding 刻意不重启引擎),每请求现取的 /engine 反代把新串发给只认旧快照的引擎 →
+   *  设备页 `/engine/agent/*` 整片 401(2026-09-03 实测)。本机令牌与云端凭据分离后,这一类「快照漂移」
+   *  从结构上不存在了;顺带 forsion_token 不再下发渲染层、不再是本机端点的钥匙。 */
   getToken(): string {
-    return this.child && this.spawnToken ? this.spawnToken : this.freshToken()
+    return this.localEngineToken
   }
 
-  /** 实时登录态:~/.forsion/auth.json(登录态唯一真源)> 本地回退令牌。
-   *  最后一档保证 **未登录 Forsion 也能独立运行**:standalone 后端 validate 强制要 token(没 token 直接
-   *  exit),且本地端点用同一 token 鉴权。无 Forsion 凭证时回退一个持久化的本地随机令牌——后端照常启动、
-   *  端点仍鉴权(不裸奔),云端调用会 401 但已优雅降级(/agent/models 只少了 forsion 模型,BYOK/订阅照常)。 */
-  private freshToken(): string {
+  /** unitWeb 盖 x-forsion-remote-mark 用的密钥(与 spawn 时的 TANGU_REMOTE_MARK_SECRET 同一枚)。 */
+  remoteMarkSecret(): string {
+    return this.remoteMark
+  }
+
+  /** 实时 forsion_token(~/.forsion/auth.json,登录态唯一真源);未登录 = null。只用于引擎调云端(TANGU_TOKEN)。 */
+  private cloudToken(): string | null {
     try {
       const creds = JSON.parse(readFileSync(join(forsionHomeDir(), 'auth.json'), 'utf8'))
       if (creds.token) return String(creds.token)
-    } catch { /* 无 auth.json → 回退本地令牌 */ }
-    return this.localToken()
+    } catch { /* 无 auth.json = 未登录 */ }
+    return null
   }
 
-  /** 本地回退令牌(渲染端↔后端的共享密钥;仅在无 Forsion 凭证时用)。持久化到 ~/.tangu/desktop-local-token,
-   *  随机生成一次、chmod 600。用随机值而非常量:本地能跑 host shell 的端点不应被任意本机进程命中。 */
+  /** 外部 agent 接 Forsion MCP 端点的稳定本地密钥(设置「高级」开关开启时才被接受)。持久化到
+   *  ~/.forsion/desktop-local-token,随机生成一次、chmod 600;不随云登录轮换,也不是引擎令牌。 */
   private cachedLocalToken: string | null = null
   private localToken(): string {
     if (this.cachedLocalToken) return this.cachedLocalToken
@@ -199,8 +206,7 @@ export class BackendManager {
     return tok
   }
 
-  /** Claude→MCP 端点守门用的稳定本地密钥(= 无 Forsion 凭证时的本地回退令牌;不随云登录轮换,
-   *  也不把云 token 递给外部 agent)。见 electron/mcpServer.ts。 */
+  /** Claude→MCP 端点守门用的稳定本地密钥(不随云登录轮换,也不把云 token 递给外部 agent)。见 electron/mcpServer.ts。 */
   localSecret(): string {
     return this.localToken()
   }
@@ -264,10 +270,15 @@ export class BackendManager {
       const env: NodeJS.ProcessEnv = { ...process.env }
       if (!useSystemNode) env.ELECTRON_RUN_AS_NODE = '1'
       else delete env.ELECTRON_RUN_AS_NODE
-      // 凭证走 env,不出现在 ps 输出。用 getToken()(auth.json > 本地回退令牌)——
-      // **始终非空**,保证后端 validate(强制要 token)通过、无 Forsion 登录也能独立启动(BYOK/订阅可用)。
+      // 凭证走 env,不出现在 ps 输出(契约 C1 / C2)。本机令牌恒非空 → 引擎 validate 通过、未登录也能独立启动
+      // (BYOK / 订阅可用)。TANGU_TOKEN 只给云端调用:未登录就不传 —— 连同 dev shell 里可能继承来的同名变量一起删,
+      // 引擎自己回退读 auth.json(同样为空)。
       env.TANGU_HOME = tanguDataDir() // 三重保险之③:软链被删也不分脑(引擎私有数据在 tangu/ 子目录;auth/config/activity 引擎经 forsionSharedDir 落父目录=共享域)
-      env.TANGU_TOKEN = this.spawnToken = this.freshToken() // 钉住这一枚:getToken() 此后恒返回它
+      env.TANGU_LOCAL_TOKEN = this.localEngineToken
+      env.TANGU_REMOTE_MARK_SECRET = this.remoteMark
+      const cloudToken = this.cloudToken()
+      if (cloudToken) env.TANGU_TOKEN = cloudToken
+      else delete env.TANGU_TOKEN
       // 渲染层直接起的 run 会在请求体自报 desktop/<版本>;微信/TG/QQ 则由引擎后台起 run,
       // 没有这个请求方。宿主在 spawn 时把同一个真实 App 版本交给引擎,供通道 run 写入 input.client;
       // 源通道仍单独保留在 input.source.channel,不拿 wechat/telegram/qq 污染「端×版本」维度。

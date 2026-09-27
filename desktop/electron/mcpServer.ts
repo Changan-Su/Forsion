@@ -29,12 +29,12 @@ const HOST = '127.0.0.1'
 export interface EngineAccess {
   /** 引擎就绪时 http://127.0.0.1:<port>,否则 null(App 未起/后端崩) */
   url: string | null
-  /** 引擎 authMiddleware 认的 token(= 渲染端用的那个;云登录后是云 token,否则本地回退令牌) */
+  /** 引擎 authMiddleware 认的本机引擎令牌(TANGU_LOCAL_TOKEN,= 渲染端用的那个;与 forsion_token 分离,契约 C2) */
   token: string
 }
 
 export interface McpDeps {
-  /** 取当前引擎地址+token,每次调用现取(引擎端口是动态探测的、登录态会变) */
+  /** 取当前引擎地址+本机令牌,每次调用现取(引擎端口是动态探测的,重启会换) */
   getEngine: () => EngineAccess
   /** 外部 agent 那一跳的守门密钥:桌面本地密钥,稳定、不随云登录轮换。仅 externalEnabled() 时被接受。 */
   localSecret: string
