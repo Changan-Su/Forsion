@@ -280,16 +280,27 @@ describe('仓库自带会执行程序的配置(gitTrust)', () => {
     expect(git(cwd, 'show', 'HEAD:a.txt')).toBe('formatted');
   });
 
-  it.skipIf(process.platform === 'win32')('钩子加了一个没过目的普通文件 → 撤回(按最终提交 vs 基准权威复核);首次提交也能撤', async () => {
+  it.skipIf(process.platform === 'win32')('钩子加了一个没过目的普通文件:分支上 → 撤回;首次提交 / 游离 HEAD → 证明不了是自己的,只报 commit_unverified 不撤', async () => {
     const cwd = repo('hook-extra');
     const hooks = dir('hook-extra/.githooks');
     git(cwd, 'config', 'core.hooksPath', '.githooks');
-    writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\necho x > unreviewed.txt\ngit add unreviewed.txt\n', { mode: 0o755 });
+    // 追加写:每次提交钩子都真的改了它(原样重写的话第二次就没有改动,复核自然过)
+    writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\necho x >> unreviewed.txt\ngit add unreviewed.txt\n', { mode: 0o755 });
     writeFileSync(path.join(cwd, 'a.txt'), 'a');
-    const err = await gitCommit(cwd, 'first', true).catch((e) => e);
+    const first = await gitCommit(cwd, 'first', true).catch((e) => e);
+    expect(first.code).toBe('commit_unverified');
+    expect(git(cwd, 'log', '-1', '--format=%s')).toBe('first'); // 首次提交不撤
+    writeFileSync(path.join(cwd, 'a.txt'), 'on branch');
+    const head = git(cwd, 'rev-parse', 'HEAD');
+    const err = await gitCommit(cwd, 'second', true).catch((e) => e);
     expect(err.code).toBe('hook_changed_commit');
     expect(err.detail).toContain('unreviewed.txt');
-    expect(() => git(cwd, 'rev-parse', '--verify', 'HEAD')).toThrow(); // 首次提交撤回 = 回到还没有提交的样子
+    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(head); // 分支上的撤回了
+    git(cwd, 'reset', '-q', '--hard'); git(cwd, 'checkout', '-q', '--detach'); // 丢掉撤回后留在工作区的钩子改动,只剩一处过目的改动
+    writeFileSync(path.join(cwd, 'a.txt'), 'detached change');
+    const detached = await gitCommit(cwd, 'detached', true).catch((e) => e);
+    expect(detached.code).toBe('commit_unverified');
+    expect(git(cwd, 'log', '-1', '--format=%s')).toBe('detached'); // 游离 HEAD 不撤
   });
 
   it.skipIf(process.platform === 'win32')('post-commit 钩子又提交了一次 → 认不准是哪个提交:commit_unverified,什么都不撤', async () => {

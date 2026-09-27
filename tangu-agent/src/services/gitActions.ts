@@ -335,7 +335,8 @@ export function assertWithinReviewed(entries: StagedEntry[], reviewed: Map<strin
  *  expect = 提交框里那份清单的指纹:重算对不上就拒(changes_changed)。
  *  **权威复核在提交之后**:以「新提交 vs 提交前的基准」的全部改动为准 —— 每条都得在过目的清单里、类型一致,再过安全检查
  *  (凭据 / 体量 / 嵌套仓)。钩子(lint-staged 之类在已确认路径内改格式照常放行)、别的 git 进程在检查与提交之间塞进来的东西都逃不过;
- *  不过关就带旧值条件撤回这次提交(工作区与 index 保留原样)。提交前那几道只是省得白建提交的早退。 */
+ *  分支上的提交不过关就带旧值条件撤回(工作区与 index 保留原样);首次提交 / 游离 HEAD 证明不了是自己的,只报 commit_unverified。
+ *  提交前那几道只是省得白建提交的早退。 */
 export async function gitCommit(cwd: string, message: unknown, trust?: boolean, expect?: unknown): Promise<{ sha: string; subject: string; stagedOnly: boolean }> {
   const text = typeof message === 'string' ? message.replace(/\0/g, '').replace(/\r\n/g, '\n').trim() : '';
   if (!text) throw new GitActionError('empty_message', 'The commit message is empty');
@@ -412,8 +413,10 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
     assertWithinReviewed(final, reviewed);
     await assertStagedSafe(cwd, final);
   } catch (e) {
-    if (!identified) throw new GitActionError('commit_unverified', 'The commit does not match the reviewed list, and without a reflog it could not be safely undone; check the repository', e instanceof GitActionError ? e.detail : String((e as Error)?.message || e));
-    const undone = await runAction(cwd, base ? ['update-ref', '-m', 'forsion: undo commit', ref, base, ours] : ['update-ref', '-d', ref, ours]).catch(() => null);
+    // 只撤能证明是自己的、撤得干净的:分支上的非首次提交。首次提交(钩子删掉分支会连 reflog 一起抹掉,链证明不了)与游离 HEAD
+    // (撤回前 HEAD 若被切成分支,update-ref HEAD 会顺着改那个分支)一律不撤,交给用户看
+    if (!identified || !base || ref === 'HEAD') throw new GitActionError('commit_unverified', 'The commit does not match the reviewed list and could not be safely undone; check the repository', e instanceof GitActionError ? e.detail : String((e as Error)?.message || e));
+    const undone = await runAction(cwd, ['update-ref', '-m', 'forsion: undo commit', ref, base, ours]).catch(() => null);
     if (!undone || undone.code !== 0) throw new GitActionError('commit_unverified', 'A commit hook changed the commit and it could not be undone; check the repository', tail(undone?.stderr || ''));
     const inner = e instanceof GitActionError ? e : null;
     throw new GitActionError('hook_changed_commit', 'A git hook changed the commit so it no longer matches the reviewed list; the commit was undone', inner?.detail || String((e as Error)?.message || e));
