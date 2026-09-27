@@ -93,12 +93,29 @@ export const MCP_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
 /** 单次调用最多回灌几张(loop 每轮总共收 8 张,留余量给同轮其他工具);多出的给占位说明。 */
 export const MCP_IMAGES_PER_CALL = 4;
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
-/** 文件头魔数:声明的 MIME 与真实字节对不上的图(或根本不是图)不回灌 —— 坏图会让之后整轮模型请求被 provider 拒掉。 */
-function magicMatches(mimeType: string, head: Buffer): boolean {
-  if (mimeType === 'image/png') return head.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-  if (mimeType === 'image/jpeg') return head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff;
-  if (mimeType === 'image/gif') return /^GIF8[79]a/.test(head.subarray(0, 6).toString('latin1'));
-  if (mimeType === 'image/webp') return head.subarray(0, 4).toString('latin1') === 'RIFF' && head.subarray(8, 12).toString('latin1') === 'WEBP';
+const PNG_SIG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+const PNG_IEND = Buffer.from([0, 0, 0, 0, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82]);
+/**
+ * 按真实字节核对格式(头 + 收尾结构):声明的 MIME 与字节对不上、或被截断的图不回灌 —— 坏图会让之后整轮模型请求
+ * 被 provider 拒掉。不解码像素,只核结构:PNG 头 + IHDR + IEND 收尾;JPEG SOI + 末尾 EOI(容忍少量尾随填充);
+ * GIF 头 + 结尾 0x3B;WebP 的 RIFF 长度字段与实际长度一致。宁可错拒(退回占位说明)也不送坏图。
+ */
+function imageLooksComplete(mimeType: string, buf: Buffer): boolean {
+  if (mimeType === 'image/png') {
+    return buf.length >= 8 + 25 + 12 && buf.subarray(0, 8).equals(PNG_SIG) && buf.subarray(12, 16).toString('latin1') === 'IHDR'
+      && buf.subarray(buf.length - 12).equals(PNG_IEND);
+  }
+  if (mimeType === 'image/jpeg') {
+    if (buf.length < 4 || buf[0] !== 0xff || buf[1] !== 0xd8 || buf[2] !== 0xff) return false;
+    const tail = buf.subarray(Math.max(2, buf.length - 64));
+    for (let i = tail.length - 2; i >= 0; i--) if (tail[i] === 0xff && tail[i + 1] === 0xd9) return true;
+    return false;
+  }
+  if (mimeType === 'image/gif') return buf.length > 13 && /^GIF8[79]a/.test(buf.subarray(0, 6).toString('latin1')) && buf[buf.length - 1] === 0x3b;
+  if (mimeType === 'image/webp') {
+    return buf.length >= 16 && buf.subarray(0, 4).toString('latin1') === 'RIFF' && buf.subarray(8, 12).toString('latin1') === 'WEBP'
+      && buf.readUInt32LE(4) + 8 === buf.length;
+  }
   return false;
 }
 
@@ -107,7 +124,7 @@ function usableImage(b: any): McpImage | null {
   const data = typeof b?.data === 'string' ? b.data.replace(/\s+/g, '') : '';
   if (!IMAGE_MIMES.has(mimeType) || !data || Math.floor((data.length * 3) / 4) > MCP_IMAGE_MAX_BYTES) return null;
   if (!BASE64_RE.test(data)) return null; // data 进 data: URL,只收纯 base64 字符
-  return magicMatches(mimeType, Buffer.from(data.slice(0, 16), 'base64')) ? { mimeType, data } : null;
+  return imageLooksComplete(mimeType, Buffer.from(data, 'base64')) ? { mimeType, data } : null;
 }
 
 /** MCP CallToolResult.content → 文本部分(未加围栏)+ 可回灌的图片。 */

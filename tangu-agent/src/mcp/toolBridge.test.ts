@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+
+/** 完整的 1×1 PNG(头 + IHDR + IDAT + IEND)。 */
+const RED_DOT = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==';
 import { schemaUsable, bridgeName, bridgeTool, contentToText, contentToResult, fenceMcpText, MCP_IMAGES_PER_CALL, MCP_IMAGE_MAX_BYTES } from './toolBridge.js';
 
 describe('schemaUsable', () => {
@@ -62,18 +65,23 @@ describe('contentToText', () => {
     expect(contentToText({ isError: true, content: [] })).toEqual({ text: '(empty result)', isError: true });
   });
   it('summarizes image blocks', () => {
-    const r = contentToText({ content: [{ type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }] }); // PNG 魔数
+    const r = contentToText({ content: [{ type: 'image', mimeType: 'image/png', data: RED_DOT }] });
     expect(r.text).toContain('[image: image/png');
   });
 });
 
 describe('contentToResult(M6)', () => {
-  const png = 'iVBORw0KGgo=';
-  it('jpeg / gif / webp 按魔数认', () => {
+  const png = RED_DOT;
+  it('jpeg / gif / webp 按头 + 收尾结构认', () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46, 0x49, 0x46, 0, 0xff, 0xd9]);
+    const gif = Buffer.concat([Buffer.from('GIF89a'), Buffer.alloc(8), Buffer.from([0x3b])]);
+    const webpBody = Buffer.concat([Buffer.from('WEBPVP8 '), Buffer.alloc(8)]);
+    const webpLen = Buffer.alloc(4); webpLen.writeUInt32LE(webpBody.length);
+    const webp = Buffer.concat([Buffer.from('RIFF'), webpLen, webpBody]);
     const r = contentToResult({ content: [
-      { type: 'image', mimeType: 'image/jpeg', data: '/9j/4AAQSkZJRg==' },
-      { type: 'image', mimeType: 'image/gif', data: Buffer.from('GIF89a..').toString('base64') },
-      { type: 'image', mimeType: 'image/webp', data: Buffer.from('RIFF\0\0\0\0WEBPVP8 ').toString('base64') },
+      { type: 'image', mimeType: 'image/jpeg', data: jpeg.toString('base64') },
+      { type: 'image', mimeType: 'image/gif', data: gif.toString('base64') },
+      { type: 'image', mimeType: 'image/webp', data: webp.toString('base64') },
     ] });
     expect(r.images.map((i) => i.mimeType)).toEqual(['image/jpeg', 'image/gif', 'image/webp']);
   });
@@ -81,16 +89,18 @@ describe('contentToResult(M6)', () => {
     const r = contentToResult({ content: [{ type: 'text', text: 'cap' }, { type: 'image', mimeType: 'IMAGE/PNG', data: png }] });
     expect(r).toEqual({ text: 'cap', isError: false, images: [{ mimeType: 'image/png', data: png }] });
   });
-  it('矢量 / 非 base64 / 超 5MB / 魔数与 MIME 不符 → 不回灌,文本里给占位', () => {
+  it('矢量 / 非 base64 / 超 5MB / 魔数与 MIME 不符 / 截断 → 不回灌,文本里给占位', () => {
     const r = contentToResult({ content: [
       { type: 'image', mimeType: 'image/svg+xml', data: png },
       { type: 'image', mimeType: 'image/png', data: 'not base64!' },
       { type: 'image', mimeType: 'image/png', data: 'A'.repeat(Math.ceil((MCP_IMAGE_MAX_BYTES + 10) * 4 / 3)) },
       { type: 'image', mimeType: 'image/png', data: '/9j/4AAQSkZJRg==' }, // 声明 png、实为 jpeg 头
       { type: 'image', mimeType: 'image/jpeg', data: 'AAAAAAAAAAAA' }, // 合法 base64,不是图
+      { type: 'image', mimeType: 'image/png', data: 'iVBORw0KGgo=' }, // 只有 PNG 文件头(截断)
+      { type: 'image', mimeType: 'image/png', data: RED_DOT.slice(0, -8) }, // 丢了 IEND 收尾
     ] });
     expect(r.images).toEqual([]);
-    expect(r.text.match(/\[image omitted/g)?.length).toBe(5);
+    expect(r.text.match(/\[image omitted/g)?.length).toBe(7);
   });
   it(`单次最多回灌 ${MCP_IMAGES_PER_CALL} 张`, () => {
     const r = contentToResult({ content: Array.from({ length: MCP_IMAGES_PER_CALL + 2 }, () => ({ type: 'image', mimeType: 'image/png', data: png })) });

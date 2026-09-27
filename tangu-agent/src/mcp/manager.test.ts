@@ -14,7 +14,9 @@ import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamable
 import { startHttpServer, RED_DOT_PNG_B64 } from '../../test/fixtures/fake-mcp-server.mjs';
 
 const FIXTURE = fileURLToPath(new URL('../../test/fixtures/fake-mcp-server.mjs', import.meta.url));
-const FAST = { reconnectCooldownMs: 0, retryBaseMs: 50, retryMaxMs: 200, connectTimeoutMs: 10_000 };
+const FAST = { reconnectCooldownMs: 0, retryBaseMs: 50, retryMaxMs: 200, connectTimeoutMs: 20_000 };
+/** 进程内 server 关停后让客户端连接池先处理完 FIN(真实重启有间隔;同进程紧接着调会撞上还没回收的 keep-alive 连接)。 */
+const settle = () => new Promise((r) => setTimeout(r, 200));
 
 let dir: string;
 let prevHome: string | undefined;
@@ -101,11 +103,13 @@ describe('M3 断线自愈', () => {
     expect(innerText((await m.callTool(echo, { text: 'a' })).text)).toBe('h1:a');
 
     await srv.stop();
+    await settle();
     const down = await m.callTool(echo, { text: 'b' });
     expect(down.isError).toBe(true); // 掉线期间如实报错,不挂死
 
     srv = await startHttpServer({ port, stateful: true, tag: 'h2' });
     httpServers.push(srv);
+    await settle();
     const up = await m.callTool(echo, { text: 'c' });
     expect(up.isError).toBe(false);
     expect(innerText(up.text)).toBe('h2:c');
@@ -121,6 +125,7 @@ describe('M3 断线自愈', () => {
     const echo = m.toolsForRun().get('mcp__x__echo')!;
     expect(innerText((await m.callTool(echo, { text: 'a' })).text)).toBe('x1:a');
     await srv.stop();
+    await settle();
     // 掉线期间的调用如实报错。它顺带让 fetch 连接池丢掉被 server 关掉的 keep-alive 连接 —— 不经这一步、紧接着
     // 重启就调,首个 POST 会撞上死连接报 fetch failed(真实重启有间隔,池早已收到 FIN;是测试时序的产物)。
     expect((await m.callTool(echo, { text: 'down' })).isError).toBe(true);
@@ -149,10 +154,14 @@ describe('M3 断线自愈', () => {
 describe('M3 边界', () => {
   it('session 失效判定只认分发前的拒绝:404 与 SDK 两句固定 400 文案,其余 400 不重发', () => {
     const e = (code: number, body: string) => new StreamableHTTPError(code, `Error POSTing to endpoint: ${body}`);
+    const sdk = (message: string, id: unknown = null) => JSON.stringify({ jsonrpc: '2.0', error: { code: -32000, message }, id });
     expect(sessionGone(e(404, 'Session not found'), true)).toBe(true);
-    expect(sessionGone(e(400, '{"error":{"message":"Bad Request: Server not initialized"}}'), true)).toBe(true);
-    expect(sessionGone(e(400, '{"error":{"message":"Bad Request: No valid session ID provided"}}'), true)).toBe(true);
+    expect(sessionGone(e(400, sdk('Bad Request: Server not initialized')), true)).toBe(true);
+    expect(sessionGone(e(400, sdk('Bad Request: No valid session ID provided')), true)).toBe(true);
     expect(sessionGone(e(400, 'invalid session_name: already exists'), true)).toBe(false); // 可能是执行后才报的错
+    expect(sessionGone(e(400, 'tool failed after write: Bad Request: Server not initialized'), true)).toBe(false); // 只是「含这句话」
+    expect(sessionGone(e(400, sdk('Bad Request: Server not initialized', 7)), true)).toBe(false); // 针对某条请求的错误
+    expect(sessionGone(e(400, sdk('Bad Request: Server not initialized, retrying')), true)).toBe(false);
     expect(sessionGone(e(500, 'Session not found'), true)).toBe(false);
     expect(sessionGone(e(404, 'Session not found'), false)).toBe(false); // 本来就没有 session
     expect(sessionGone(new Error('fetch failed'), true)).toBe(false);
@@ -180,6 +189,26 @@ describe('M3 边界', () => {
     await started;
     await new Promise((r) => setTimeout(r, 300));
     expect(existsSync(pidFile)).toBe(false); // 没有被后台重试重新拉起
+  }, 30_000);
+});
+
+describe('M3 边界 · SSE', () => {
+  it('SSE 流开了却不发 endpoint:dispose 不陪着干等连接超时', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { createServer: createHttp } = await import('node:http');
+    let opened = false;
+    const hang = createHttp((_req, res) => { opened = true; res.writeHead(200, { 'content-type': 'text/event-stream' }); res.write(': hi\n\n'); });
+    await new Promise<void>((r) => hang.listen(0, '127.0.0.1', () => r()));
+    httpServers.push({ stop: async () => { hang.closeAllConnections(); await new Promise<void>((r) => hang.close(() => r())); } });
+    const file = join(dir, 'mcp-sse.json');
+    writeFileSync(file, JSON.stringify({ mcpServers: { sse: { transport: 'sse', url: `http://127.0.0.1:${(hang.address() as any).port}/sse` } } }));
+    const m = createMcpManager(file, { ...FAST, connectTimeoutMs: 20_000 });
+    const started = m.start();
+    expect(await waitFor(() => opened, 5000)).toBe(true);
+    const t0 = Date.now();
+    await m.dispose();
+    expect(Date.now() - t0).toBeLessThan(8000); // 上限 5s,而不是等满 20s 的连接超时
+    void started.catch(() => {});
   }, 30_000);
 });
 

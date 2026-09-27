@@ -26,6 +26,7 @@ const RESULT_CAP_CHARS = 50_000;
 const RECONNECT_COOLDOWN_MS = 15_000; // 懒重连冷却:死 server 不会每次调用都重连
 const RETRY_BASE_MS = 5_000; // 后台重试退避起点,逐次翻倍
 const RETRY_MAX_MS = 300_000; // 退避封顶
+const DISPOSE_WAIT_MS = 5_000; // dispose 等在飞连接收尾的上限(SDK stdio close 自带 2s 优雅退出 + 2s SIGTERM)
 const STABLE_MS = 60_000; // 连上后撑过这么久再断,才把退避清零(连上即崩的 server 不会 5s 一次地无限拉起)
 
 export interface McpServerStatus {
@@ -82,13 +83,24 @@ export interface McpManager {
 /**
  * 有状态 Streamable HTTP 的 session 失效(会重发,所以只认「分发工具之前就拒掉」的形态):
  *   - 404:规范口径(未知 Mcp-Session-Id 必须回 404);
- *   - 400 只认 SDK 的两句固定文案:单 transport server 重启后的「Server not initialized」
- *     (webStandardStreamableHttp.validateSession)与 SDK 示例 server 的「No valid session ID provided」。
+ *   - 400 只认 SDK 两处分发前拒绝的**原样 JSON-RPC 错误体**(id:null、文案逐字):单 transport server 重启后的
+ *     「Bad Request: Server not initialized」(webStandardStreamableHttp.validateSession)与 SDK 示例 server 的
+ *     「Bad Request: No valid session ID provided」。正文里只是「含这句话」不算。
  *   其余 400 一律交还调用方 —— 可能是工具已执行后才报的错,重发就是重复副作用。
  */
+const PRE_DISPATCH_400 = new Set(['Bad Request: Server not initialized', 'Bad Request: No valid session ID provided']);
 export function sessionGone(e: unknown, hadSession: boolean): boolean {
   if (!hadSession || !(e instanceof StreamableHTTPError)) return false;
-  return e.code === 404 || (e.code === 400 && /Server not initialized|No valid session ID provided/.test(e.message));
+  if (e.code === 404) return true;
+  if (e.code !== 400) return false;
+  const i = e.message.indexOf('{'); // SDK:`Streamable HTTP error: Error POSTing to endpoint: <响应正文>`
+  if (i < 0) return false;
+  try {
+    const body = JSON.parse(e.message.slice(i));
+    return body?.jsonrpc === '2.0' && body.id === null && body.error?.code === -32000 && PRE_DISPATCH_400.has(body.error?.message);
+  } catch {
+    return false;
+  }
 }
 
 export function createMcpManager(configFile?: string, opts: McpManagerOptions = {}): McpManager {
@@ -328,7 +340,14 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       for (const s of servers) clearRetry(s);
       // 在飞的 initialize 一并关掉(connect 随之失败),再等它们收尾 —— 返回时不留子进程、不再起新连接
       await Promise.all(servers.flatMap((s) => [s.client, s.pendingClient]).map((c) => c?.close().catch(() => {})));
-      await Promise.all(servers.map((s) => s.connecting?.catch(() => {})));
+      // 等收尾有上限:SSE 流开了却迟迟不发 endpoint 时,close 不会让 SDK 的 start() 结束,干等会拖满连接超时。
+      // 超时后照样返回 —— 迟到的连接在 doConnect 里见 disposed 自己关掉。
+      let cap: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        Promise.all(servers.map((s) => s.connecting?.catch(() => {}))),
+        new Promise<void>((resolve) => { cap = setTimeout(resolve, DISPOSE_WAIT_MS); cap.unref?.(); }),
+      ]);
+      if (cap) clearTimeout(cap);
       servers.length = 0;
     },
   };
