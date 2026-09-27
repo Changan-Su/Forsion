@@ -91,6 +91,8 @@ export async function startRun(
       //    所以哪怕目录为空也要送(送空数组 ≠ 不送)。目录随端而异是正确行为。
       ui_commands: buildCommandCatalog(),
       ui_settings: readUiSettings(),
+      // 同类握手:本端有输入框上方的审批托盘(views/chat2/ApprovalTray),待批卡能攒多张、各自兑现。
+      approval_tray: true,
       message: params.message,
       attachments: params.attachments || [],
       agent_config: params.agentConfig || {},

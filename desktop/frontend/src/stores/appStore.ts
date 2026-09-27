@@ -134,6 +134,7 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
         result: res ? String(res.content ?? '') : undefined, isError: res?.isError || false,
         startedAt: res?.startedAt, elapsedMs: res?.elapsedMs, outputChars: res?.outputChars,
         parallelGroup: res?.parallelGroup, artifactPath: res?.artifactPath, done: true,
+        ...(res?.parked === true ? { parked: true } : {}),
         contentOffset: typeof rawOffset === 'number' && Number.isInteger(rawOffset) && rawOffset >= 0 ? rawOffset : undefined,
       }
     })
@@ -1071,8 +1072,13 @@ export const useApp = create<AppState>((set, get) => ({
           return { ...m, toolEvents: evs, segments: pushToolSeg(m.segments, pl.id), ...(m.live ? { live: undefined } : {}) }
         })
         break
-      case 'tool_result':
-        patchMessage(sessionId, assistantId, (m) => {
+      case 'tool_result': {
+        // 挂起的调用(审批托盘)在用户拍板后才出真结果,那时 run 早切到了后面的段 —— 按工具 id 找回它所在的消息。
+        const list = get().messagesBySession[sessionId] || []
+        const owner = list.find((m) => m.id === assistantId)?.toolEvents?.some((tt) => tt.id === pl.id)
+          ? assistantId
+          : [...list].reverse().find((m) => m.toolEvents?.some((tt) => tt.id === pl.id))?.id ?? assistantId
+        patchMessage(sessionId, owner, (m) => {
           const evs = (m.toolEvents || []).slice()
           const i = evs.findIndex((tt) => tt.id === pl.id)
           if (i >= 0) {
@@ -1080,6 +1086,7 @@ export const useApp = create<AppState>((set, get) => ({
               ...evs[i], result: String(pl.result ?? ''), isError: !!pl.isError, done: true,
               startedAt: pl.startedAt ?? evs[i].startedAt, elapsedMs: pl.elapsedMs, outputChars: pl.outputChars,
               parallelGroup: pl.parallelGroup ?? evs[i].parallelGroup, artifactPath: pl.artifactPath,
+              parked: pl.parked === true || undefined,
             }
             // sketch 完成即上卡(挂 tool_result 不挂 tool_call:引擎尺寸闸拒掉的不画;callId 去重防 SSE 重放双画)
             const sk = sketchFromToolEvent(evs[i])
@@ -1092,6 +1099,7 @@ export const useApp = create<AppState>((set, get) => ({
         if (!pl.isError) get().deskAutoShow(sessionId, String(pl.id)) // 成功:磁盘真身顶格(覆盖直播格)
         get().deskLiveClear(sessionId, String(pl.id)) // 失败/未切换成功的直播格残留在此清场(成功路径上是 no-op)
         break
+      }
       case 'display_file':
         patchMessage(sessionId, assistantId, (m) => ({
           ...m, displayFiles: [...(m.displayFiles || []), { name: pl.name, mime: pl.mime, path: pl.path, dataUrl: pl.dataUrl }],
@@ -1156,18 +1164,21 @@ export const useApp = create<AppState>((set, get) => ({
         // 用闭包常量 assistantId 会落到一条不存在的消息上 —— 一律走 ref.current)。
         patchMessage(sessionId, targetOf(pl), (m) => ({
           ...m, live: undefined, work: m.work ? { ...m.work, waiting: true } : m.work,
-          approvals: [...(m.approvals || []), { approvalId: pl.approvalId, runId: String(pl.runId || runId), name: pl.name, arguments: pl.arguments, preview: pl.preview || '', status: 'pending' as const, ...(reason ? { reason } : {}) }],
+          approvals: [...(m.approvals || []), { approvalId: pl.approvalId, runId: String(pl.runId || runId), name: pl.name, arguments: pl.arguments, preview: pl.preview || '', status: 'pending' as const, ...(reason ? { reason } : {}), ...(typeof pl.toolCallId === 'string' ? { toolCallId: pl.toolCallId } : {}) }],
         }))
         if (typeof pl.agentSlug === 'string') setTeamStatus(sessionId, pl.agentSlug, 'waiting')
         break
       }
-      case 'approval_result':
-        patchMessage(sessionId, targetOf(pl), (m) => ({
+      case 'approval_result': {
+        // 挂起的审批(托盘 run)拍板时 run 往往已切到后面的段:按 approvalId 找回挂着它的消息,否则卡会一直留在托盘里(Codex 09-27)
+        const owner = (get().messagesBySession[sessionId] || []).find((m) => m.approvals?.some((a) => a.approvalId === pl.approvalId))?.id ?? targetOf(pl)
+        patchMessage(sessionId, owner, (m) => ({
           ...m, work: m.work ? { ...m.work, waiting: false } : m.work,
           approvals: (m.approvals || []).map((a) => a.approvalId === pl.approvalId ? { ...a, status: pl.action === 'reject' ? ('rejected' as const) : ('approved' as const) } : a),
         }))
         if (typeof pl.agentSlug === 'string') setTeamStatus(sessionId, pl.agentSlug, 'working')
         break
+      }
       case 'session_title':
         // Historian 在 run 起点只凭用户消息出了标题 → 不等 done 后 6s 那次刷新。
         void get().refreshSessions(get().cfg).catch(() => {})
@@ -1480,6 +1491,7 @@ export const useApp = create<AppState>((set, get) => ({
           // 计划「批准并自动开始」:**先**消费本 run 的标记(endRun 会兜底清掉一切终结 run 的标记),
           // 再 endRun 清 running,最后发 kickoff(此刻无活跃 run → 正常起新 run 而非误走 steer)。
           const autoKick = planAutoStart.delete(runId)
+          expireRunPrompts(set, sessionId, runId)
           endRun(set, get, sessionId, runId)
           if (autoKick) void get().send(t('plan.autoKickoff'), [], undefined, undefined, undefined, sessionId)
         }
@@ -1494,6 +1506,7 @@ export const useApp = create<AppState>((set, get) => ({
           approvals: (m.approvals || []).map((a) => (a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
           inquiries: (m.inquiries || []).map((q) => (q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
         }))
+        expireRunPrompts(set, sessionId, runId)
         endRun(set, get, sessionId, runId) // planAutoStart 的作废清理在 endRun 里统一做(含 stop/看门狗路径)
         // 托管模式下 token 过期不会让本地端点 401,而是表现为 run 出错(后端→云端 401)。做一次真实 whoami 复检,
         // 仅确认凭证已失效才提示重登录(避免把模型/网络错误误判为过期)。
@@ -1664,6 +1677,7 @@ export const useApp = create<AppState>((set, get) => ({
       })
       stoppedRuns.add(runId)
       ac.abort() // 停掉还在空转的 SSE 重连循环
+      expireRunPrompts(set, sessionId, runId) // 引擎查实已不跑:它那边的审批早没了,托盘里别留死卡
       endRun(set, get, sessionId, runId)
     })() }, 30000))
     void subscribeRunEvents(get().cfg, runId, (ev) => get().reduceEvent(sessionId, runId, assistantRef, ev), ac.signal)
@@ -3285,6 +3299,29 @@ export function steerAcceptPatch(
   const stillRunning = s.runningBySession[sessionId] === runId
   if (already || !stillRunning) return sent
   return { ...sent, steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: [...(s.steerPendingBySession[sessionId] || []), item] } }
+}
+
+/** run 已确定终结(done / error / 看门狗查实引擎不在跑):该 run 的待批审批与询问一律置过期。
+ *  按 runId 扫整个会话 —— 待批的不一定挂在当前气泡上(run 往后跑会切段,审批托盘从全会话收集),
+ *  只置灰当前气泡会在托盘里留下永远批不动的死卡。SSE 断流那条路不调:引擎可能还在等,卡得留着能批
+ *  (真死了点一下会 410 → decideApproval 自己置灰)。 */
+function expireRunPrompts(set: (fn: (s: AppState) => Partial<AppState>) => void, sessionId: string, runId: string): void {
+  set((s) => {
+    const list = s.messagesBySession[sessionId]
+    const live = (m: UiMessage): boolean =>
+      !!m.approvals?.some((a) => a.runId === runId && a.status === 'pending') || !!m.inquiries?.some((q) => q.runId === runId && q.status === 'pending')
+    if (!list?.some(live)) return {}
+    return {
+      messagesBySession: {
+        ...s.messagesBySession,
+        [sessionId]: list.map((m) => (!live(m) ? m : {
+          ...m,
+          approvals: m.approvals?.map((a) => (a.runId === runId && a.status === 'pending' ? { ...a, status: 'expired' as const } : a)),
+          inquiries: m.inquiries?.map((q) => (q.runId === runId && q.status === 'pending' ? { ...q, status: 'expired' as const } : q)),
+        })),
+      },
+    }
+  })
 }
 
 /** run 结束清理(对齐 App.tsx endRun):删句柄/订阅 + 清 running + 非活跃则标未读。 */

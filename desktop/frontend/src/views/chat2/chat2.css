@@ -993,3 +993,13 @@
 .t2-user-refs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; white-space: normal; }
 .t2-user-refs:last-child { margin-bottom: 0; }
 .t2-user-refs .attach-chip { max-width: 240px; }
+
+/* 流里给待批审批留的一行指路(卡本身在输入框上方的托盘里) */
+.t2-apv-pointer { display: flex; align-items: center; gap: 6px; font-size: var(--ui-font-meta, 12px); margin: 4px 0; }
+/* 挂起审批的结局(<approval_update> 落库行):每张一行。和打断标记一样是给模型的机器行,对人只是一行说明;输出在原工具卡里。 */
+.t2-apv-update { display: flex; flex-direction: column; align-items: center; gap: 2px; margin: 4px 0; }
+.t2-apv-update-row { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.t2-apv-update-row[data-status='approved'] svg { color: var(--green); }
+.t2-apv-update-row:not([data-status='approved']) svg { color: var(--danger); }
+.t2-apv-update-what { flex-shrink: 0; color: var(--text-muted); }
+.t2-apv-update-preview { min-width: 0; font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

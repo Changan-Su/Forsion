@@ -26,6 +26,7 @@
  *   npm run live:harness -- --only churn                     # 同会话 6 连发的后续调用命中画像(不设命中率阈值,六个 run 须跑完)
  *   npm run live:harness -- --only ttft --ttft-rounds 5      # 首 token 延迟:preset(chat|work)× 思考档(off|medium)2×2,每格 N 会话 × 2 轮(冷/热缓存),交错跑
  *   npm run live:harness -- --only teamapproval              # 团队 × 完全通行(09-21 反馈):成员 config 自带 auto-edit / run 启动后才切档,两条都须 0 次审批;改审批闸 / teamRuns 档位后跑
+ *   npm run live:harness -- --only parked                    # 审批挂起(09-27 审批托盘):要批的调用挂起、真模型先干别的且不重试,收尾后才批 → 按原参数执行、结局回灌再收尾;改 approvals park / agentLoop 挂起兑现 / parkedToolResult 措辞后跑
  *   npm run live:harness -- --only coding                    # 改 agents/codingPrompt.ts / skills/forsion-plugin 后跑:Coding 人格面对插件项目须指向 Sandbox 面板、且不自己动手 git init/commit(版本由宿主管)
  *   npm run live:harness -- --only refine                    # 自进化闭环(09-18):Historian 自动档提名 → 收件箱 → /refine 采纳写 HARNESS.md → 新会话系统提示带上;改 REFINE_DIRECTIVE / harnessStore / 判官 harness 字段 / 注入槽后跑
  *   npm run live:harness -- --only browsertabs              # 读用户已打开的浏览器标签(09-24):起临时 headless Chrome 冒充用户浏览器;改 browser_tabs / 浏览器提示词后跑(CHROME_BIN 可指定)
@@ -62,7 +63,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc'];
+const KEYS = ['personas', 'rename', 'chat', 'tool', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc'];
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // --compaction '<json>':写进隔离 home 的 config.json `compaction` 段(设置页写的就是这段);--filler N:autocompact 灌的段数(负对照用)。
@@ -71,7 +72,7 @@ const FILLER = Math.max(0, Math.floor(Number(opt('filler', 0)) || 0));
 // opt-in:缺省全量跑里**不带**这几个 —— cache 7 个 run / churn 6 个 run(都慢),cache 与 recall-unprompted
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
-const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
+const OPT_IN = new Set(['musewake', 'personas', 'rename', 'teamapproval', 'parked', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc']); // ttft:一次 40 个 run,只在量延迟时显式 --only ttft;refine 改写 Historian 配置且等判官,单独跑
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
@@ -516,6 +517,54 @@ async function run(sessionId, message, timeoutMs = 240_000, extraAgentConfig = {
   } finally { clearTimeout(timer); ev.wallMs = Date.now() - t0; }
   return ev;
 }
+/** parked 专用:按桌面口径带 approval_tray 起 run;审批**先不批** —— 等引擎报 awaiting_approval(模型已收尾、收尾闸门在等拍板)
+ *  再批,批之前 onBeforeApprove() 拍一张现场(别的活干完没有)。兜底:awaitingMs 内等不到就照样批(记下来,判据按红)。 */
+async function runParked(sessionId, message, { onBeforeApprove, awaitingMs = 150_000, timeoutMs = 300_000 } = {}) {
+  const t0 = Date.now();
+  const { runId } = await api('/agent/runs', { method: 'POST', body: JSON.stringify({ session_id: sessionId, model_id: MODEL, message, agent_config: { ...AGENT_CONFIG }, approval_tray: true }) });
+  const ev = { runId, toolCalls: [], toolResults: [], approvals: [], awaiting: 0, approvedAtMs: null, approvedOnAwaiting: false, beforeApprove: null, content: '', done: false, error: null, wallMs: 0 };
+  const pending = [];
+  let awaitingSeen = false;
+  const approveNext = async (onAwaiting) => {
+    const p = pending.shift();
+    if (!p) return;
+    ev.beforeApprove = onBeforeApprove ? onBeforeApprove() : null;
+    ev.approvedAtMs = Date.now() - t0;
+    ev.approvedOnAwaiting = onAwaiting;
+    await api(`/agent/runs/${runId}/approvals/${p.approvalId}`, { method: 'POST', body: JSON.stringify({ action: 'approve' }) }).catch((err) => { ev.approveError = String(err.message); });
+  };
+  const fallback = setInterval(() => { if (pending.length && !awaitingSeen && Date.now() - t0 > awaitingMs) void approveNext(false); }, 1000);
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${base}/agent/runs/${runId}/events`, { headers: { Authorization: `Bearer ${TOKEN}` }, signal: ac.signal });
+    if (!res.ok || !res.body) { ev.error = `events ${res.status}`; return ev; }
+    let buf = '';
+    outer: for await (const chunk of res.body) {
+      buf += Buffer.from(chunk).toString('utf8');
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const frame = buf.slice(0, i); buf = buf.slice(i + 2);
+        for (const line of frame.split('\n')) {
+          if (!line.startsWith('data:')) continue;
+          let e; try { e = JSON.parse(line.slice(5).trim()); } catch { continue; }
+          const p = e.payload || {};
+          if (e.type === 'tool_call') ev.toolCalls.push({ id: p.id, name: p.name, args: String(p.arguments || '').slice(0, 400), atMs: Date.now() - t0 });
+          else if (e.type === 'tool_result') ev.toolResults.push({ id: p.id, name: p.name, parked: !!p.parked, isError: !!p.isError, result: String(p.result || '').slice(0, 1500), atMs: Date.now() - t0 });
+          else if (e.type === 'approval_request') { ev.approvals.push({ approvalId: p.approvalId, name: p.name, toolCallId: p.toolCallId, args: String(p.arguments || '').slice(0, 400) }); pending.push(p); }
+          else if (e.type === 'status' && p.phase === 'awaiting_approval') { ev.awaiting += 1; awaitingSeen = true; await approveNext(true); awaitingSeen = false; }
+          else if (e.type === 'done') { ev.done = true; ev.content = String(p.content || ''); break outer; }
+          else if (e.type === 'error') { ev.error = String(p.error || 'error'); break outer; }
+        }
+      }
+    }
+    if (!ev.done && !ev.error) ev.error = 'SSE 结束但无 done/error';
+  } catch (e) {
+    ev.error = ac.signal.aborted ? `run ${timeoutMs / 1000}s 超时` : String(e?.message || e);
+    if (ac.signal.aborted) await api(`/agent/runs/${runId}/abort`, { method: 'POST', body: '{}' }).catch(() => {});
+  } finally { clearInterval(fallback); clearTimeout(timer); ev.wallMs = Date.now() - t0; }
+  return ev;
+}
 const ttft = (ev) => ev.usages?.[0]?.ttftMs ?? ev.ttftMs ?? null;
 /** 只看 **usages[0]** = 本 run 的第一次模型调用:后续轮天然高命中,会把「新会话共享不共享头」这个信号冲掉。 */
 const hit0 = (ev) => { const u = ev.usages?.[0]; const p = Number(u?.prompt) || 0; return p ? (Number(u?.cached) || 0) / p : null; };
@@ -640,6 +689,56 @@ try {
     const hit = ev.content.includes(MARKER);
     const anchors = anchorsOk(ev);
     return { ok: !ev.error && ev.toolCalls.length > 0 && hit && anchors, detail: ev.error || `工具 ${ev.toolCalls.join(',') || '无'};标记${hit ? '命中' : '未命中'};done 锚点${anchors ? '对齐' : `不对齐(${JSON.stringify(ev.toolOffsets)})`}${ev.approvals ? `;代批 ${ev.approvals}${ev.approveError ? '(失败:' + ev.approveError + ')' : ''}` : ''}`, output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
+  });
+
+  // ── parked(09-27,opt-in):审批托盘 run 的挂起语义。真模型要满足:① 被挂起的调用不重试(整场只有一张审批、一次 run_bash)
+  // ② 挂起期间把不依赖它的活干完(批之前 notes.md 已写好)③ 没别的可干就收尾 —— 引擎报 awaiting_approval 才批
+  // ④ 批后按**原参数**执行(stamp.txt 内容 = 命令里的戳)⑤ <approval_update> 落库、run 正常 done。
+  await scenario('parked', 'parked 审批挂起不打断 agent', async () => {
+    if (EXEC_MODE !== 'host') return { ok: false, skipped: true, detail: '只在 host 形态有审批' };
+    const dir = join(workspace, `parked-${Date.now()}`);
+    mkdirSync(dir, { recursive: true });
+    const stampTok = `PARKED-${randomUUID().slice(0, 8)}`;
+    const stampFile = join(dir, 'stamp.txt');
+    const sideFile = join(dir, 'notes.md');
+    const sid = `live-parked-${Date.now()}`;
+    const ev = await runParked(sid,
+      `Two independent tasks in ${dir}:\n` +
+      `1. First, run exactly this shell command with run_bash: echo ${stampTok} > ${stampFile}\n` +
+      `2. Then create ${sideFile} containing the single line SIDE-DONE.\n` +
+      'When both are done, tell me in one line what each file contains.',
+      { onBeforeApprove: () => ({ side: existsSync(sideFile) ? readFileSync(sideFile, 'utf8').trim() : null, stamp: existsSync(stampFile) }) });
+    const bashCalls = ev.toolCalls.filter((c) => c.name === 'run_bash');
+    const parkedRes = ev.toolResults.find((r) => r.parked);
+    const stampNow = existsSync(stampFile) ? readFileSync(stampFile, 'utf8').trim() : null;
+    const msgs = asList(await api(`/agent/sessions/${sid}/messages`).catch(() => []), 'messages');
+    const updates = msgs.filter((m) => m.role === 'user' && String(m.content || '').startsWith('<approval_update>'));
+    // 批后的真结果要回到那次调用自己的工具结果里落库(回放 / 重载读它),回灌行只带拍板结论、不带输出
+    const bashId = bashCalls[0]?.id;
+    const savedBash = msgs.flatMap((m) => (Array.isArray(m.tool_results) ? m.tool_results : [])).find((t) => t?.tool_call_id === bashId);
+    const checks = {
+      oneApproval: ev.approvals.length === 1 && ev.approvals[0].name === 'run_bash',
+      noRetry: bashCalls.length === 1,
+      parkedPlaceholder: !!parkedRes,
+      sideBeforeApprove: ev.beforeApprove?.side === 'SIDE-DONE' && ev.beforeApprove?.stamp === false,
+      approvedAtFinishGate: ev.approvedOnAwaiting,
+      ranOriginalArgs: stampNow === stampTok,
+      updatePersisted: updates.length === 1 && String(updates[0].content).includes('[approved] run_bash'),
+      resultPutBack: !!savedBash && !savedBash.parked && !String(savedBash.content || '').includes("Waiting for the user's approval"),
+      done: ev.done && !ev.error,
+    };
+    const mentions = ev.content.includes(stampTok) || ev.content.includes('SIDE-DONE');
+    const bad = Object.entries(checks).filter(([, v]) => !v).map(([k]) => k);
+    return {
+      ok: !bad.length, inconclusive: !bad.length && !mentions,
+      detail: ev.error || (bad.length ? `未过:${bad.join(',')}` : '全过') +
+        `;审批 ${ev.approvals.length} 张 / run_bash ${bashCalls.length} 次;批前现场 ${JSON.stringify(ev.beforeApprove)};` +
+        `${ev.approvedOnAwaiting ? '收尾闸门等拍板时批' : '⚠️没等到 awaiting_approval(兜底批)'};stamp=${stampNow};回灌 ${updates.length} 条;` +
+        `终稿${mentions ? '提到了结局' : '没提结局(不计红,读原话)'}`,
+      // 时间线拼进 output(report.md 逐场景打印 output):看得出「挂起 → 先干别的 → 收尾 → 批 → 执行」的真实先后
+      output: `${ev.content}\n\n[timeline]\n${[...ev.toolCalls.map((c) => `${c.atMs}ms call ${c.name}`), ...ev.toolResults.map((r) => `${r.atMs}ms result ${r.name}${r.parked ? ' (parked)' : ''}`), ev.approvedAtMs != null ? `${ev.approvedAtMs}ms approve` : ''].filter(Boolean).sort((a, b) => parseInt(a) - parseInt(b)).join('\n')}`,
+      toolCalls: ev.toolCalls.map((c) => c.name),
+    };
   });
 
   // Coding 人格的产品契约(09-21):插件项目没有网页预览,得走 Coding Studio 的 Sandbox 面板;版本历史由**宿主**用 git 管,

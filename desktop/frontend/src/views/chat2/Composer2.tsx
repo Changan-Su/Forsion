@@ -235,6 +235,8 @@ export const Composer2: React.FC<{
   sessionId?: string | null
   /** Chatbox 自身向上延伸的内联 header（如额度提醒）；必须留在卡内共享同一主题材质。 */
   advisory?: React.ReactNode
+  /** 审批托盘(ChatView 按本会话的待批审批组装):卡外、紧贴输入卡上沿,与 steer 等待区同列。 */
+  approvalTray?: React.ReactNode
   /** 只给桌面首页等高意图入口开;触屏不应自动弹软键盘。 */
   autoFocus?: boolean
   disabled: boolean
@@ -330,7 +332,7 @@ export const Composer2: React.FC<{
   /** 「立即插话」:打断当前 run,把等待区消息强发。 */
   onSteerNow?: () => void
 }> = ({
-  sessionId, advisory, autoFocus, disabled, disabledPlaceholder, running, execConfig, teamApproval,
+  sessionId, advisory, approvalTray, autoFocus, disabled, disabledPlaceholder, running, execConfig, teamApproval,
   models, modelsResponse, modelId, onModelChange, engines, engineId,
   engineModels, engineModelId, onEngineModelChange, engineCommands,
   thinkingLevel: sessionThinkingLevel, onThinkingChange,
@@ -1339,6 +1341,7 @@ export const Composer2: React.FC<{
             </div>
           </div>
         )}
+        {approvalTray}
         <ChatBoxSurface ref={cardRef} className={dragOver ? 'dragover' : undefined}>
           {advisory}
           {hint && <div className="t2c-hint">{hint}</div>}

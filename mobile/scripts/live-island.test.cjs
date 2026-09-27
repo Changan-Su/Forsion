@@ -9,6 +9,7 @@ const { buildSync } = require('esbuild') // ponytail: 借 vite 的传递依赖(�
 const src = buildSync({
   entryPoints: [path.resolve(__dirname, '../src/liveIslandDerive.ts')],
   bundle: true, write: false, logLevel: 'silent', platform: 'node', format: 'cjs',
+  alias: { '@': path.resolve(__dirname, '../../desktop/frontend/src') }, // 同 vite.config 的 '@' = 桌面渲染层
 }).outputFiles[0].text
 const mod = { exports: {} }
 new Function('module', 'exports', src)(mod, mod.exports)
@@ -66,6 +67,13 @@ check('7 审批已批完不再算待办,回落到工具/正文', () => {
   const r = deriveIsland({ a: 'r1' }, { a: [asst({ content: 'ok', approvals: [{ approvalId: 'p', runId: 'r1', name: 'bash', preview: '', status: 'approved' }] })] }, sessions, since({}), tr)
   assert.equal(r.text, 'island.writing')
   assert.equal(r.chip, '')
+})
+
+check('7b 待批审批挂在更早的段上(run 往后跑切出了新段)照样上岛', () => {
+  const early = { ...asst({ approvals: [{ approvalId: 'p', runId: 'r1', name: 'bash', preview: '', status: 'pending' }] }), id: 'm0', status: 'done' }
+  const r = deriveIsland({ a: 'r1' }, { a: [early, asst({ content: 'still working' })] }, sessions, since({}), tr)
+  assert.equal(r.text, 'island.approval{"tool":"bash"}')
+  assert.equal(r.chip, 'island.chipApproval')
 })
 
 check('8 都没有待办 → 最近开跑的占岛', () => {

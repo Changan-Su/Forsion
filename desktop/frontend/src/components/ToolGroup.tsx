@@ -5,13 +5,18 @@
  * 复用 .tool-card-body/.label 样式;+增/-删 best-effort(算不出就只显目标)。
  */
 import React, { useMemo, useState } from 'react'
-import { ChevronRight, ChevronDown, XCircle, CheckCircle2, Terminal } from 'lucide-react'
+import { ChevronRight, ChevronDown, XCircle, CheckCircle2, Terminal, PauseCircle } from 'lucide-react'
 import { AnimatedCollapse } from './AnimatedUI'
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
-import { useI18n } from '../i18n'
-import type { ToolEvent } from '../types'
+import { registerMessages, useI18n } from '../i18n'
+import type { ApprovalRequest, ToolEvent } from '../types'
 import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
+
+registerMessages({
+  'tool.parked.waiting': { zh: '已挂起，等你在输入框上方批准。Agent 先做别的，拍板后结果会补在这里。', en: 'Parked until you approve it above the input box. The agent carries on meanwhile; the result lands here once you decide.' },
+  'tool.parked.past': { zh: '当时挂起等你批准，结局见后面的审批结果。', en: 'This call was parked for your approval; see the approval result further down.' },
+})
 
 type Kind = 'write' | 'edit' | 'run' | 'read' | 'search' | 'browse' | 'other'
 interface Desc { kind: Kind; verbKey: string; target: string; adds?: number; dels?: number; isFile: boolean }
@@ -91,7 +96,7 @@ const Stat: React.FC<{ d: Desc }> = ({ d }) =>
     </span>
   ) : null
 
-const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean }> = ({ ev, desc, running }) => {
+const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: boolean }> = ({ ev, desc, running, waiting }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   // 只在展开时构造 diff(P1:文件修改类工具详情渲染 diff 而非裸 JSON)
@@ -112,7 +117,8 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean }> = ({ ev
         </span>
         <Stat d={desc} />
         <span className="tool-row-status">
-          {ev.done && ev.isError ? <XCircle size={11} style={{ color: 'var(--danger)' }} /> : null}
+          {ev.parked ? <PauseCircle size={11} style={{ color: waiting ? 'var(--accent-ink)' : 'var(--text-faint)' }} />
+            : ev.done && ev.isError ? <XCircle size={11} style={{ color: 'var(--danger)' }} /> : null}
         </span>
       </button>
       <AnimatedCollapse open={open}>
@@ -128,14 +134,16 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean }> = ({ ev
               )}
             </>
           ) : ev.arguments ? (<><div className="label">{t('tool.argsLabel')}</div>{fmtArgs(ev.arguments)}</>) : null}
-          {ev.result !== undefined && (<><div className="label">{t('tool.resultLabel')}</div>{ev.result || t('tool.empty')}</>)}
+          {/* 挂起的占位结果是写给模型的英文说明,对人换成一句本地化的状态 */}
+          {ev.parked ? (<><div className="label">{t('tool.resultLabel')}</div>{t(waiting ? 'tool.parked.waiting' : 'tool.parked.past')}</>)
+            : ev.result !== undefined && (<><div className="label">{t('tool.resultLabel')}</div>{ev.result || t('tool.empty')}</>)}
         </div>
       </AnimatedCollapse>
     </div>
   )
 }
 
-export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean }> = ({ events, running }) => {
+export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean; approvals?: ApprovalRequest[] }> = ({ events, running, approvals }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   if (!events.length) return null
@@ -156,6 +164,9 @@ export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean }> = (
 
   const allDone = groupedEvents.every((e) => e.done)
   const anyErr = groupedEvents.some((e) => e.isError)
+  // 挂起的调用「还在等你」= 它那张审批仍 pending(审批与工具卡按 toolCallId 对上;重载后审批不在 → 只算「当时挂起」)
+  const waitingIds = new Set((approvals || []).filter((a) => a.status === 'pending' && a.toolCallId).map((a) => a.toolCallId!))
+  const anyParked = groupedEvents.some((e) => e.parked)
   const active = !!running && groupedEvents.length > 0 && !allDone
   // 运行中:展示第一个未完成的调用作为「当前」;都完成则无。
   const curIdx = running ? groupedEvents.findIndex((e) => !e.done) : -1
@@ -180,12 +191,13 @@ export const ToolGroup: React.FC<{ events: ToolEvent[]; running?: boolean }> = (
               <span className={`tool-group-sum${active ? ' chat-run-shimmer-text' : ''}`}>{summary}</span>
             )}
             <span className="tool-group-status">
-              {allDone ? (anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} /> : <CheckCircle2 size={13} style={{ color: 'var(--green)' }} />) : null}
+              {anyParked ? <PauseCircle size={13} style={{ color: groupedEvents.some((e) => e.parked && waitingIds.has(e.id)) ? 'var(--accent-ink)' : 'var(--text-faint)' }} />
+                : allDone ? (anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} /> : <CheckCircle2 size={13} style={{ color: 'var(--green)' }} />) : null}
             </span>
           </button>
           <AnimatedCollapse open={open}>
             <div className="tool-group-list">
-              {groupedEvents.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} running={!!running} />)}
+              {groupedEvents.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} running={!!running} waiting={waitingIds.has(ev.id)} />)}
             </div>
           </AnimatedCollapse>
         </div>

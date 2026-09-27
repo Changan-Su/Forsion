@@ -4,7 +4,7 @@
  * 接 UiMessage,故可直接喂真实 store 数据(集成期用);回调可选(预览传空)。
  */
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type Ref } from 'react'
-import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare } from 'lucide-react'
+import { Copy, RotateCcw, GitBranch, Pencil, ChevronRight, ChevronDown, Volume2, Square, Loader2, LogIn, Zap, History as HistoryIcon, FileCode2, MessageSquare, ShieldQuestion, CircleCheck, CircleX } from 'lucide-react'
 import * as api from '../../services/backendService'
 import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, ToolEvent, InquiryRequest, SketchItem, LiveWait } from '../../types'
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
@@ -22,10 +22,19 @@ registerMessages({
   'chat.team.workingIdle': { zh: '工作中', en: 'Working' },
   'chat.team.waiting': { zh: '等待你的审批', en: 'Waiting for your approval' },
   'chat.team.done': { zh: '已完成', en: 'Done' },
+  'chat.approval.pointer': { zh: '{name} 等你批准 · 在输入框上方', en: '{name} is waiting for your approval · above the input box' },
+  'chat.approval.pointerN': { zh: '{n} 项操作等你批准 · 在输入框上方', en: '{n} actions are waiting for your approval · above the input box' },
+  'chat.approval.update.approved': { zh: '已批准并执行 {name}', en: 'Approved and ran {name}' },
+  'chat.approval.update.failed': { zh: '已批准，{name} 执行出错', en: 'Approved; {name} ran with an error' },
+  'chat.approval.update.rejected': { zh: '已拒绝 {name}（没有执行）', en: 'Rejected {name} (not run)' },
 })
+const UPDATE_KEY = {
+  approved: 'chat.approval.update.approved',
+  failed: 'chat.approval.update.failed',
+  rejected: 'chat.approval.update.rejected',
+} as const
 import { ToolGroup } from '../../components/ToolGroup'
 import { useSpeechReveal } from './useSpeechReveal'
-import { ApprovalCard } from '../../components/ApprovalCard'
 import { InquiryCard, PlanCard, TodoList } from '../../components/InquiryCard'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
@@ -35,6 +44,7 @@ import { useEdgeNudge } from '@lcl/engine'
 import { splitSuggestions, type SuggestState, type TaskCard } from './suggest'
 
 import { TaskCards, type TaskLanding } from './TaskCards'
+import { APPROVAL_UPDATE_OPEN, parseApprovalUpdate } from './approvalQueue'
 export type { TaskLanding }
 import './chat2.css'
 
@@ -187,7 +197,6 @@ export interface MessageHandlers {
   /** 任务卡(```forsion-task)的落点点击:卡片本身什么也不做,点了才发消息 / 建 Muse 日程。
    *  返回 false = 没做成(卡片保留按钮);其余(true / void)= 做成,卡片定格。 */
   onTask?: (card: TaskCard, landing: TaskLanding) => boolean | void | Promise<boolean | void>
-  onApproval?: (approvalId: string, action: 'approve' | 'approve_always' | 'reject', argsOverride?: Record<string, unknown>) => void
   onInquiry?: (inquiryId: string, answer: string) => void | Promise<boolean | void>
   /** 回退到本条消息的时刻(B1):仅代码 / 仅对话 / 两者。 */
   onRewind?: (mode: 'code' | 'conversation' | 'both') => void
@@ -305,6 +314,22 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
     if (msg.content.startsWith('<turn_interrupted>')) {
       return <div ref={rootRef} className="t2-sys t2-interrupted">⏹ {t('msg.interrupted')}</div>
     }
+    // 挂起审批的结局回灌(引擎落库的 <approval_update> user 行):同理不是用户说的话 —— 每张一行结局。
+    // 输出不在这里(引擎把真结果放回了原工具卡),这一行只说谁批了什么。
+    if (msg.content.startsWith(APPROVAL_UPDATE_OPEN)) {
+      const rows = parseApprovalUpdate(msg.content)
+      return (
+        <div ref={rootRef} className="t2-sys t2-apv-update" data-approval-update={rows.length}>
+          {rows.map((r) => (
+            <div key={r.callId} className="t2-apv-update-row" data-status={r.status}>
+              {r.status === 'approved' ? <CircleCheck size={12} /> : <CircleX size={12} />}
+              <span className="t2-apv-update-what">{t(UPDATE_KEY[r.status], { name: r.name })}</span>
+              <span className="t2-apv-update-preview" title={r.preview}>{r.preview}</span>
+            </div>
+          ))}
+        </div>
+      )
+    }
     const name = userName || t('chat.you')
     // 输入框「已选择」芯片发送时拼成正文第一行;气泡里还原成同一套芯片(U-11)。
     // 目录标题用剥掉引用后的正文;复制 / 编辑仍拿原始 msg.content(发的是什么就是什么)。
@@ -358,6 +383,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
   const { text: body, items: suggestions, tasks } = splitSuggestions(msg.content, { streaming })
   // 计划审阅的询问归计划卡(专属三态按钮),不再另起一张通用问答卡。
   const planInq = pickPlanInquiry(msg)
+  const pendingApv = (msg.approvals || []).filter((a) => a.status === 'pending')
   const voiceMode = !!voice?.on && (msg.status === 'done' || msg.status === 'stopped')
   // 顺序段里已消费的 Sketch 不许再在底部画一次。旧历史/语音消息走尾部兼容路径。
   const availableSketchIds = new Set((msg.sketches || []).map((item) => item.callId))
@@ -400,7 +426,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
               return parts.length ? (
                 <Fragment key={i}>
                   {parts.map((part, j) => part.t === 'tools'
-                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${j}`} events={part.events} running={msg.status === 'streaming'} />
+                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${j}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} />
                     : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} />)}
                 </Fragment>
               ) : null
@@ -408,7 +434,7 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
           }
           return (
             <>
-              {!!msg.toolEvents?.length && <ToolGroup events={msg.toolEvents} running={msg.status === 'streaming'} />}
+              {!!msg.toolEvents?.length && <ToolGroup events={msg.toolEvents} running={msg.status === 'streaming'} approvals={msg.approvals} />}
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} cfg={voice!.cfg} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
@@ -475,7 +501,14 @@ export function EditorialMessage({ msg, avatarUrl, agentNameFallback, userName, 
           <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} />
         )}
         {!!trailingSketches.length && <SketchCards items={trailingSketches} />}
-        {msg.approvals?.map((a) => <ApprovalCard key={a.approvalId} req={a} onDecide={(act, args) => handlers?.onApproval?.(a.approvalId, act, args)} />)}
+        {/* 审批卡在输入框上方的托盘里批(ApprovalTray);流里只留一行指路,已兑现的不留痕 —— 结局看工具卡。
+            团队成员的占位气泡已有「等待你的审批」那行,不重复。 */}
+        {!msg.work && pendingApv.length > 0 && (
+          <div className="t2-dim t2-apv-pointer" data-approval-pointer={pendingApv.length}>
+            <ShieldQuestion size={12} />
+            {pendingApv.length === 1 ? t('chat.approval.pointer', { name: pendingApv[0].name }) : t('chat.approval.pointerN', { n: pendingApv.length })}
+          </div>
+        )}
         {msg.inquiries?.filter((q) => q !== planInq).map((q) => <InquiryCard key={q.inquiryId} req={q} onAnswer={(ans) => handlers?.onInquiry?.(q.inquiryId, ans)} />)}
         {msg.status === 'error' && (
           <div className="t2-tool err">

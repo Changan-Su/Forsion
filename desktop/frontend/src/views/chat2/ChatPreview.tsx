@@ -3,6 +3,8 @@ import { useMemo, useRef, useState } from 'react'
 import type { SessionRecord, UiMessage, WorkspaceDescriptor } from '../../types'
 import { EditorialMessage } from './EditorialMessage'
 import { Composer2 } from './Composer2'
+import { ApprovalTray } from './ApprovalTray'
+import { pendingApprovalsOf } from './approvalQueue'
 import { SidebarPane } from './SidebarPane'
 import { EmptyState2 } from './EmptyState2'
 import { RightPanel } from '../../components/RightPanel'
@@ -54,7 +56,10 @@ function buildSample(t: TFn): UiMessage[] {
     {
       id: 'a2', role: 'assistant', agentName: 'Tangu', status: 'done', timestamp: 3,
       content: t('chatpreview.msg.buildFirst'),
-      approvals: [{ approvalId: 'ap1', runId: 'r1', name: 'run_bash', arguments: JSON.stringify({ command: 'npm run build && npx tsc --noEmit' }), preview: 'npm run build && npx tsc --noEmit', status: 'pending' }],
+      approvals: [
+        { approvalId: 'ap1', runId: 'r1', name: 'run_bash', arguments: JSON.stringify({ command: 'npm run build && npx tsc --noEmit' }), preview: '$ npm run build && npx tsc --noEmit', status: 'pending', reason: { kind: 'mode', mode: 'auto-edit' } },
+        { approvalId: 'ap2', runId: 'r1', name: 'write_file', arguments: JSON.stringify({ path: '/etc/hosts', content: '127.0.0.1 tangu.local\n' }), preview: '⚠ Write outside the workspace · write /etc/hosts (22 chars)', status: 'pending', reason: { kind: 'escalate', mode: 'auto-edit' } },
+      ],
     },
     {
       id: 'a3', role: 'assistant', agentName: 'Tangu', status: 'done', timestamp: 4, content: '',
@@ -120,7 +125,6 @@ export function ChatPreview() {
                   key={m.id}
                   msg={m}
                   handlers={{
-                    onApproval: (_id, decision, args) => setAction(`approval:${decision}:${String(args?.command || '')}`),
                     onInquiry: (_id, answer) => setAction(`inquiry:${answer}`),
                   }}
                 />
@@ -129,6 +133,9 @@ export function ChatPreview() {
           </div>
         )}
         <Composer2
+          approvalTray={empty ? undefined : (
+            <ApprovalTray items={pendingApprovalsOf(sample)} onDecide={(_mid, _id, decision, args) => setAction(`approval:${decision}:${String(args?.command || '')}`)} />
+          )}
           disabled={false}
           running={false}
           execConfig={{ execMode: 'host', approvalMode: 'auto-edit' }}
