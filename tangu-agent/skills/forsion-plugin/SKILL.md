@@ -188,7 +188,7 @@ ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
 |---|---|---|
 | `registerCommand` | 命令面板(+ 可选 agent 面) | id 处于全局命名空间,裸名会互顶;默认只做导航,**动作性能力要么走引擎侧 agent/技能(通用纪律 5),要么给这条命令声明 `invoke`**(见下) |
 | `registerSlashItem` | 笔记里的 `/` | 静态 `scaffold`,或动态 `run()`(先建文件再返回嵌入语法) |
-| `registerView` | 独立标签页(`ctx.openView(id)` 打开) | **DOM 挂载**(`mount(el, view?)` 返 disposer;`view.extendView` 可开临时扩展),外置插件的主力;加 `workspaceSource` 可让左栏跟着它切到自家列表 |
+| `registerView` | 独立标签页(`ctx.openView(id)` 打开) | **DOM 挂载**(`mount(el, view?)` 返 disposer;可以是 async —— resolve 出的就是 disposer,reject 算挂载失败;`view.extendView` 可开临时扩展),外置插件的主力;加 `workspaceSource` 可让左栏跟着它切到自家列表。**样式不隔离**:选择器挂自家根类名,配色只用 `var(--bg)` / `--bg-card` / `--text` / `--text-muted` / `--border` / `--accent`(自造的变量名宿主没有,会落到你写死的兜底色) |
 | `openFloatingPanel` | 第六种 Floating Panel | 先注册 view，再按相对 id 打开；桌面是真原生窗口，Web 是不可拖动居中面板；可选链兼容旧宿主 |
 | `openMiniPanel` | 320×420 Mini Panel | 不建 Space 也能直开紧凑 view；用 `mainViewId` 声明回主面板的目标；仅原生桌面宿主提供 |
 | `registerListSource` | **统一左栏**里的一条列表(收藏/任务/订阅…) | 宿主渲染,与会话/笔记行同一套 UI;⚠️`subscribe()` 里**必须重读一次数据**,见下 |

@@ -333,7 +333,8 @@ function PlugViewHarness() {
     el.textContent = ''
     let cleanup: (() => void) | void
     try {
-      cleanup = v.item.mount(el)
+      const r = v.item.mount(el)
+      cleanup = typeof r === 'function' ? r : undefined // ponytail: 台架不接 async mount 的清理;真宿主(pluginViews.tsx)接
     } catch (e) {
       ;(window as unknown as { __pvError?: string }).__pvError = String(e)
       throw e
