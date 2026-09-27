@@ -270,6 +270,18 @@ describe('C4 凭据 / 本机配置', () => {
     expect(checkWritePath({ ...local, cwd: ws, remote: REMOTE }, join(home, 'agents', 'other', 'config.toml')).hardDeny).toBe(true);
     expect(checkWritePath({ ...local, cwd: ws, remote: REMOTE }, join(home, 'agents', 'bo', 'Library', 'note.md')).hardDeny).toBe(false);
     expect(checkWritePath({ ...local, cwd: ws }, join(home, 'skills', 'evil', 'SKILL.md')).hardDeny).toBe(false); // 本机:照旧(越界写走审批)
+    // Codex 二轮:Library 例外里的 .tangu/ 控制目录(私聊 cwd = Library,项目技能会被本机下一次 run 装载)与指向别处的软链都不算例外
+    const lib = join(home, 'agents', 'bo', 'Library');
+    mkdirSync(join(home, 'skills', 'victim'), { recursive: true });
+    mkdirSync(lib, { recursive: true });
+    symlinkSync(join(home, 'skills', 'victim'), join(lib, 'link'));
+    expect(checkWritePath({ ...local, cwd: lib, remote: REMOTE }, join(lib, '.tangu', 'skills', 'evil', 'SKILL.md')).hardDeny).toBe(true);
+    expect(checkWritePath({ ...local, cwd: lib, remote: REMOTE }, join(lib, 'link', 'SKILL.md')).hardDeny).toBe(true);
+    expect(checkWritePath({ ...local, cwd: lib, remote: REMOTE }, join(lib, 'notes', 'a.md'))).toMatchObject({ ok: true, hardDeny: false });
+    // 家目录之外的项目:.tangu/ 控制目录对远程同样禁,普通源码照写
+    expect(checkWritePath({ ...local, cwd: ws, remote: REMOTE }, join(ws, '.tangu', 'skills', 'x', 'SKILL.md')).hardDeny).toBe(true);
+    expect(checkWritePath({ ...local, cwd: ws, remote: REMOTE }, join(ws, 'src', 'a.ts'))).toMatchObject({ ok: true, hardDeny: false });
+    expect(checkWritePath({ ...local, cwd: ws }, join(ws, '.tangu', 'skills', 'x', 'SKILL.md')).hardDeny).toBe(false); // 本机不受影响
     // 写工具本身也拒(闸被绕过时的第二道)
     expect(await HOST_TOOLS.write_file.execute({ path: cfg, content: '{}' }, { ...local, remote: REMOTE })).toMatch(/Remote sessions cannot write protected/);
     expect(existsSync(cfg)).toBe(false);

@@ -167,6 +167,14 @@ describe('远程污点 run × 真 loop', () => {
     } finally { rmSync(extra, { recursive: true, force: true }); }
   });
 
+  it('⑦ 远端 steer 染的色在外部引擎分支收尾时同样清掉(不经 runLoop 的 finally;Codex 二轮)', async () => {
+    await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = 'S'`, [JSON.stringify({ soloEngineId: 'codex' })]);
+    const r = await run({}, false, true);
+    expect(r.status).toBe('done');
+    await new Promise((res) => setTimeout(res, 20)); // 任务 finally 在终态落库之后一拍
+    expect(effectiveRemote({ runId: r.runId })).toBeUndefined();
+  });
+
   it('⑤ 远程 run 进不了外部引擎私聊会话:明确失败、不回落自有 loop(负对照:本机交给引擎)', async () => {
     await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = 'S'`, [JSON.stringify({ soloEngineId: 'codex' })]);
     expect((await run({}, false)).status).toBe('done');

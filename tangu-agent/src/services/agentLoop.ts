@@ -236,7 +236,8 @@ export function startRun(runId: string): void {
       if (sid && sessionActive.get(sid) === runId) advanceQueue(sid);
       setTimeout(() => cleanup(runId), 30_000);
     }
-  }).finally(() => { runTasks.delete(runId); });
+  // 远端 steer 染的色在**所有**收尾路径清掉(准备阶段失败 / 外部引擎分支不经 runLoop 的 finally —— Codex 二轮)。
+  }).finally(() => { runTasks.delete(runId); clearRunRemoteTaint(runId); });
   runTasks.set(runId, task);
 }
 

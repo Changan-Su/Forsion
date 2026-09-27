@@ -133,6 +133,9 @@ function formatHits(hits: SearchHit[], truncatedScan: boolean): string {
 /** host 模式优先 ripgrep(ENOENT 回退 nodeSearch)。 */
 async function rgSearch(cwd: string, pattern: string, include?: string, signal?: AbortSignal, caseSensitive = false, exclude: string[] = []): Promise<string | null> {
   checkSearchAbort(signal);
+  // 凭据路径里带 glob 元字符(用户名 / 目录名含 [ ] 等)时 `!/rel` 不再字面匹配,rg 会先打开再被结果过滤兜住 ——
+  // 不冒这个险:交回 Node 扫描(它按名跳过,打开之前)。转义在 Windows 的 globset 上不可靠,不走那条路。
+  if (exclude.some((rel) => /[*?[\]{}\\!]/.test(rel))) return null;
   const args = ['-n', '--no-messages', '--max-count', '50', '--max-filesize', '1M', caseSensitive ? '--case-sensitive' : '--ignore-case', '-e', pattern];
   if (include) args.push('--glob', include);
   // 排除放在 include 之后(rg 的 glob 后者优先);`!/rel` 锚定到搜索根,iglob 大小写不敏感(macOS / Windows 文件系统同名)。

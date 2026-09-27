@@ -112,17 +112,29 @@ function desktopUserDataDir(): string | null {
  * state.db 都会在下一次**本机** run 里生效。唯一例外:agents|teams|engines/<名>/Library(私聊 / 团队 / 引擎会话的 cwd
  * 就是它们,是工作区不是配置)。命中返回所在禁区根,否则 null。
  */
+/** 目标(字面或真实路径)是否落在 Forsion 家目录 / 引擎 home / 桌面 userData 之内。 */
+export function withinForsionDomains(abs: string): boolean {
+  const roots = withCanonical([...forsionDomains(), ...tanguHomes(), ...[desktopUserDataDir()].filter((d): d is string => !!d)]);
+  const forms = [path.resolve(abs), canonicalFuturePath(abs)];
+  return roots.some((r) => forms.some((f) => pathWithin(f, r)));
+}
+
 export function remoteForbiddenRoot(abs: string): string | null {
   const homes = tanguHomes();
   const roots = withCanonical([...forsionDomains(), ...homes, ...[desktopUserDataDir()].filter((d): d is string => !!d)]);
   const libBases = withCanonical(homes);
-  const forms = [path.resolve(abs), canonicalFuturePath(abs)];
-  const inLibrary = forms.some((f) => libBases.some((h) => {
-    if (!pathWithin(f, h)) return false;
-    const parts = path.relative(foldCase ? h.toLowerCase() : h, foldCase ? f.toLowerCase() : f).split(path.sep);
-    return parts.length >= 3 && ['agents', 'teams', 'engines'].includes(parts[0]) && parts[1] !== '' && parts[2].toLowerCase() === 'library';
-  }));
+  const literal = path.resolve(abs);
+  const real = canonicalFuturePath(abs);
+  // 例外只认**真实路径**落在 Library 里:Library 里的软链指向别处(别的 Agent 的技能目录…)不算(Codex 二轮)。
+  // Library 里的 .tangu/ 与旧 .forsion/ 工作区控制目录(项目技能 / 项目指令)照样禁:私聊的 cwd 就是 Library,
+  // 写进去的技能下一次本机 run 会装载。
+  const inLibrary = libBases.some((h) => {
+    if (!pathWithin(real, h)) return false;
+    const parts = path.relative(foldCase ? h.toLowerCase() : h, foldCase ? real.toLowerCase() : real).split(path.sep);
+    return parts.length >= 3 && ['agents', 'teams', 'engines'].includes(parts[0]) && parts[1] !== '' && parts[2].toLowerCase() === 'library'
+      && !parts.slice(3).some((seg) => seg.toLowerCase() === '.tangu' || seg.toLowerCase() === '.forsion');
+  });
   if (inLibrary) return null;
-  for (const r of roots) if (forms.some((f) => pathWithin(f, r))) return r;
+  for (const r of roots) if (pathWithin(literal, r) || pathWithin(real, r)) return r;
   return null;
 }

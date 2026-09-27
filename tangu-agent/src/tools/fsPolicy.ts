@@ -12,7 +12,7 @@ import { realpathSync } from 'node:fs';
 import type { ToolContext } from './toolTypes.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../seams/runContext.js';
-import { protectedHostPaths, credentialPaths, forsionConfigPaths, matchProtected, credentialReadTarget, remoteForbiddenRoot } from '../sandbox/hostSandboxProtection.js';
+import { protectedHostPaths, credentialPaths, forsionConfigPaths, matchProtected, credentialReadTarget, remoteForbiddenRoot, withinForsionDomains } from '../sandbox/hostSandboxProtection.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
 
 /** agent 自己目录里的身份/自进化文件:generic 写工具(write_file/edit_file/apply_patch…)一律硬拒——
@@ -94,7 +94,12 @@ export function protectedRemoteWrite(abs: string): string | null {
   const resolved = realResolve(abs);
   if (resolved.split(path.sep).some((part) => part === '.agents' || part === '.codex')) return resolved;
   // Forsion 家目录 / 引擎 home / 桌面 userData 整片(Agent / 团队 / 引擎的 Library 除外),再加宿主沙箱那张表(引擎包、agent 身份文件)。
-  return remoteForbiddenRoot(abs) ?? matchProtected(abs, [...credentialPaths(), ...forsionConfigPaths(), ...protectedHostPaths()]);
+  const hit = remoteForbiddenRoot(abs) ?? matchProtected(abs, [...credentialPaths(), ...forsionConfigPaths(), ...protectedHostPaths()]);
+  if (hit) return hit;
+  // 项目里的 .tangu/(旧 .forsion/)工作区控制目录:项目技能 / 项目指令会被下一次本机 run 装载(§6.6 远端不许改项目指令 / 设置 / 技能)。
+  // 家目录域内的已由上面判过(Library 例外里同样禁),这里只管家目录之外。
+  if (!withinForsionDomains(abs) && resolved.split(path.sep).some((part) => part.toLowerCase() === '.tangu' || part.toLowerCase() === '.forsion')) return resolved;
+  return null;
 }
 
 /** 契约 C4 · 本机 run 写凭据 / ~/.forsion(-dev) 配置:每次都要人批(完全通行也要,不吃「总允许」)。
