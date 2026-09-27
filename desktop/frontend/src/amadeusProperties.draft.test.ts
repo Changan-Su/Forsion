@@ -5,7 +5,7 @@
  *  「白点一下」就把旧值写回(外部改动被静默回滚)。这里钉:
  *  ① 外部 prop 变了 → 框里即时显示新值,聚焦再失焦 onCommit 零次(值框、数字框、键名框、原文框);
  *  ② 真打字 → 失焦照常提交一次(修法不能是「一律不写」);
- *  ③ 打字中同字段被外部改了 → 草稿保留 + 冲突标记;Esc 放弃草稿 → 显示外部值,失焦零提交。
+ *  ③ 打字中同字段被外部改了 → 草稿保留 + 冲突标记;Esc 放弃草稿 → 显示外部值,失焦零提交;输入法组合中的 Esc(取消候选)不算放弃,草稿保留。
  *  **负对照**:把任一框改回 `defaultValue` + 失焦比 DOM 值 → ① 红。
  *  ponytail: createElement 而非 JSX,免为一个用例把 vitest include 扩到 .tsx。 */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
@@ -121,6 +121,43 @@ describe('属性面板受控草稿(C-01)', () => {
     expect(valueInputs()[0].classList.contains('amx-prop-conflict')).toBe(false)
     act(() => { el.blur() })
     expect(commits).toEqual([])
+  })
+
+  // 输入法组合中按 Esc = 取消候选,不是放弃草稿(评审返修 C-01-ime-esc)。三框共用 useFieldDraft,逐个钉。
+  // 负对照:onEscape 摘掉 isComposing/229 判断 → 草稿被清、零提交,本例红。真组合版见 unified-page.check PR5。
+  it('输入法组合中按 Esc(isComposing / keyCode 229)不丢草稿,失焦照常提交一次(值框/键名框/原文框)', () => {
+    const composingEsc = (el: HTMLElement, init: KeyboardEventInit): void => {
+      act(() => { el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, ...init })) })
+    }
+    render('status: todo\ncount: 3')
+    openPanel()
+    const val = valueInputs()[0]
+    act(() => { val.focus() })
+    typeInto(val, 'todo项目')
+    composingEsc(val, { isComposing: true })
+    expect(valueInputs()[0].value).toBe('todo项目')
+    act(() => { val.blur() })
+    expect(commits).toEqual(['status: todo项目\ncount: 3'])
+
+    commits = []
+    render('status: todo\ncount: 3')
+    const key = keyInputs()[1]
+    act(() => { key.focus() })
+    typeInto(key, 'count数')
+    composingEsc(key, { keyCode: 229 })
+    expect(keyInputs()[1].value).toBe('count数')
+    act(() => { key.blur() })
+    expect(commits).toEqual(['status: todo\ncount数: 3'])
+
+    commits = []
+    render('status: [未闭合\nnote: 旧A')
+    const ta = host.querySelector<HTMLTextAreaElement>('.amx-props-raw')!
+    act(() => { ta.focus() })
+    typeInto(ta, 'status: [未闭合\nnote: 旧A项目')
+    composingEsc(ta, { isComposing: true })
+    expect(host.querySelector<HTMLTextAreaElement>('.amx-props-raw')!.value).toBe('status: [未闭合\nnote: 旧A项目')
+    act(() => { ta.blur() })
+    expect(commits).toEqual(['status: [未闭合\nnote: 旧A项目'])
   })
 
   it('别处插入一个键(idx 平移)不丢正在打的草稿,提交落在对的键上', () => {

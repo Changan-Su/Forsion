@@ -267,6 +267,39 @@ async function main() {
         JSON.stringify(r))
       await pg.close()
     }
+
+    // PR5 输入法组合中按 Esc(取消候选)≠ 放弃草稿(评审返修 C-01-ime-esc):已上屏的字保住,失焦照常落盘。
+    // ⚠️ 合成 KeyboardEvent 的 isComposing 到不了 React,必须 CDP 真组合(同 P28)。keyCode 27/229 两种时序都跑。
+    // 负对照(实跑):useFieldDraft.onEscape 摘掉组合态判断 → afterEsc 回到 'todo'、零写入,本例红。
+    // 台架噪声(别追):组合中**不拦**的 CDP Esc 之后 headless 会持续派 Unidentified keydown(kc189/0),
+    // about:blank 上无监听的裸 <input> 同样复现,页面关掉才停 —— CDP 产物,与本组件无关,也不影响断言。
+    {
+      const out = {}
+      for (const kc of [27, 229]) {
+        const pg = await openProps(SEED)
+        const cdp = await pg.context().newCDPSession(pg)
+        await (await pg.$$('.amx-prop-row .amx-prop-input'))[0].click()
+        await pg.keyboard.press('End')
+        await cdp.send('Input.imeSetComposition', { text: 'xiang', selectionStart: 5, selectionEnd: 5 })
+        await cdp.send('Input.insertText', { text: '项目' }) // 上屏 → 草稿 todo项目
+        await pg.waitForTimeout(100)
+        await cdp.send('Input.imeSetComposition', { text: 'jin', selectionStart: 3, selectionEnd: 3 }) // 新一段候选未上屏
+        await pg.waitForTimeout(50)
+        await cdp.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: kc, nativeVirtualKeyCode: kc })
+        await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: kc })
+        await cdp.send('Input.imeSetComposition', { text: '', selectionStart: 0, selectionEnd: 0 }) // 取消候选 = 组合置空
+        await pg.waitForTimeout(100)
+        const afterEsc = (await vals(pg))[0]
+        const w0 = await nWrites(pg)
+        await pg.evaluate(() => document.activeElement.blur())
+        await pg.waitForTimeout(1200)
+        out[`kc${kc}`] = { afterEsc, dw: (await nWrites(pg)) - w0, line: (await disk(pg)).split('\n')[1] }
+        await pg.close()
+      }
+      record('PR5 输入法组合中 Esc 不丢草稿:已上屏「项目」保住,失焦落盘 status: todo项目(keyCode 27/229)',
+        Object.values(out).every((r) => r.afterEsc === 'todo项目' && r.dw === 1 && r.line === 'status: todo项目'),
+        JSON.stringify(out))
+    }
   }
 
   // ── P7-P11:块交互层(blockLayer.ts:⠿/＋/菜单/块选中/拖拽)────────────────────

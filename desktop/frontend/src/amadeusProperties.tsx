@@ -14,7 +14,7 @@
  *  时提交(判据 draftToCommit)。⚠️ 别改回 `defaultValue` + 失焦比较 DOM 值:DOM 里是挂载时的旧值,
  *  外部改动后「白点一下」就把旧值写回盘(外部改动静默回滚,源码模式刚改的也被撤回)。
  *  聚焦打字中同一字段被外部改了:草稿本地胜(不吞正在打的字,同 D-03 拍板 #6),但标 conflict 讲明,
- *  Esc 放弃草稿 = 接受外部值。仪器:amadeusProperties.model.test.ts(判据)、amadeusProperties.draft.test.ts
+ *  Esc 放弃草稿 = 接受外部值(输入法组合中的 Esc 只取消候选,不动草稿)。仪器:amadeusProperties.model.test.ts(判据)、amadeusProperties.draft.test.ts
  *  (DOM)、unified-page.check 的 PR 组(真浏览器三变体)。 */
 import { useEffect, useMemo, useState, type KeyboardEvent } from 'react'
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
@@ -98,9 +98,12 @@ function useFieldDraft(current: string) {
       setDraft(null)
       return draftToCommit(draft, base, current, norm)
     },
-    /** Esc:有草稿才吞键 —— 放弃草稿 = 接受当前值(不 blur:blur 会拿旧闭包里的草稿去提交)。 */
+    /** Esc:有草稿才吞键 —— 放弃草稿 = 接受当前值(不 blur:blur 会拿旧闭包里的草稿去提交)。
+     *  ⚠️ 输入法组合中的 Esc 是「取消候选」,不是放弃草稿:不判组合态会把已上屏的字连同草稿一起清掉、
+     *  失焦零写入(静默吞字)。keyCode 229 兜 Safari 类「compositionend 先于 keydown」的时序。
+     *  仪器:amadeusProperties.draft.test.ts、unified-page.check PR5(真 CDP 组合)。 */
     onEscape: (e: KeyboardEvent<HTMLElement>): void => {
-      if (e.key !== 'Escape' || draft === null) return
+      if (e.key !== 'Escape' || e.nativeEvent.isComposing || e.keyCode === 229 || draft === null) return
       e.preventDefault()
       e.stopPropagation()
       setDraft(null)
