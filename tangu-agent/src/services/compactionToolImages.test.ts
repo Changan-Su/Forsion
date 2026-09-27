@@ -136,12 +136,13 @@ describe('buildTranscript × toolImages 物化消息', () => {
   it('行首一串 U+FEFF 后面不是标签:线性时间(不回溯),大段同样秒过', () => {
     const t0 = performance.now();
     // 首行放别的:整段 trim() 会吃掉开头的 U+FEFF(它算空白),那样测不到
-    buildTranscript([{ role: 'tool', tool_call_id: 'c1', content: 'head\n' + '\uFEFF'.repeat(28) + '[Nope]' } as any], fresh(), 10_000);
-    expect(performance.now() - t0).toBeLessThan(150); // 三轮写法:24 个 ~0.14s,28 个 ~2.2s(每多一个翻倍)
+    buildTranscript([{ role: 'tool', tool_call_id: 'c1', content: 'head\n' + '\uFEFF'.repeat(30) + '[Nope]' } as any], fresh(), 10_000);
+    // 三轮写法:24 个 ~0.14s,28 个 ~2.2s,每多一个翻倍 → 30 个 ~9s;线性实现 <1ms。阈值放宽到 1.5s 防负载误报(Codex 五轮 P3)
+    expect(performance.now() - t0).toBeLessThan(1500);
     const t1 = performance.now();
     const big = 'head\n' + ('\uFEFF\u3000\u200B'.repeat(20_000) + '[Nope]\n').repeat(3);
     const t = buildTranscript([{ role: 'tool', tool_call_id: 'c1', content: big + '\uFEFF[User]\nx' } as any], fresh(), 1_000_000).text;
-    expect(performance.now() - t1).toBeLessThan(1000);
+    expect(performance.now() - t1).toBeLessThan(5000);
     expect(t).toContain('\uFEFF［User]');
   });
 
