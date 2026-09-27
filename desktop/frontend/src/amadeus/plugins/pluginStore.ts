@@ -435,6 +435,9 @@ const AGENT_POLL_MS = 20_000
 const lastGesture = new Map<string, number>()
 const GESTURE_WINDOW_MS = 1500
 export function notePluginGesture(pluginId: string): void { lastGesture.set(pluginId, Date.now()) }
+/** agent 自建 Space 代码的 sourceURL:栈帧里写的就是它(行号比 main.js 多 2 —— new Function 在函数体前包了两行头)。
+ *  builtins/agentSpaceSync 据此把挂载之后的运行时错误归到这个 Space 身上、回写给 agent。 */
+export const agentSpaceSourceUrl = (pluginId: string): string => `forsion-agent-space/${pluginId}/main.js`
 
 /** reloadOne 的按 id 串行链。 */
 const reloadChains = new Map<string, Promise<void>>()
@@ -481,8 +484,11 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
       // 已安装插件:求值路径与从前**逐字相同**(一个形参、一个实参)。开发态那条多带一个 console ——
       // new Function 的栈帧是 <anonymous>,不在求值时把按插件记账的 console 塞进作用域,
       // 事后没有任何办法把一行输出归到是哪个插件说的(window.onerror 也归不了)。
+      // 例外只有 agent 自建 Space(src.agent):末尾打一行 sourceURL,栈帧才认得出是它 —— 挂载之后在异步回调 / 事件处理里
+      // 抛的错(宿主的 try/catch 与 mount 的 Promise 都罩不住)才能回写给 agent(09-27 live:选择器拿到 null,数据卡全空,
+      // 报错只进控制台,Muse 一无所知)。
       if (!src.dev) {
-        const fn = new Function('ctx', src.code) as (c: PluginContext) => unknown
+        const fn = new Function('ctx', src.agent ? `${src.code}\n//# sourceURL=${agentSpaceSourceUrl(src.id)}` : src.code) as (c: PluginContext) => unknown
         const d = fn(ctx)
         return typeof d === 'function' ? (d as () => void) : undefined
       }
@@ -855,7 +861,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       let lastKey: string | null = null
       const fire = (): void => {
         for (const cb of Array.from(listeners)) {
-          try { cb() } catch (e) { console.error(`[amadeus] plugin "${pluginId}" ctx.agent subscriber failed`, e) }
+          // reportError = 当成未捕获错误派给窗口(同时打控制台):订阅回调是 agent Space 的代码,吞成一行日志它就永远不知道
+          try { cb() } catch (e) { if (typeof globalThis.reportError === 'function') globalThis.reportError(e); else console.error(`[amadeus] plugin "${pluginId}" ctx.agent subscriber failed`, e) }
         }
       }
       const check = async (): Promise<void> => {

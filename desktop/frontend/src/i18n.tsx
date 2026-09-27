@@ -3804,7 +3804,8 @@ function broadcastLocale(l: Locale): void {
   _locale = l
   broadcastPrefs() // 跨窗:设置浮窗切了语言,主窗不能等到重启才跟上
   for (const cb of Array.from(localeSubs)) {
-    try { cb(l) } catch (e) { console.error('[i18n] locale subscriber failed', e) }
+    // reportError 派给窗口(同时打控制台):插件经 ctx.subscribeLocale 挂的回调抛错,agent 自建 Space 的由 agentSpaceSync 认领回写
+    try { cb(l) } catch (e) { if (typeof globalThis.reportError === 'function') globalThis.reportError(e); else console.error('[i18n] locale subscriber failed', e) }
   }
 }
 /** 模块级切换(无 Provider 也成立:台架/非 React 宿主)。Provider 在时由它驱动 React 状态。 */

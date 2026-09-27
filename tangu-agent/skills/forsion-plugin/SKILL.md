@@ -158,7 +158,8 @@ Space 应该**从数据渲染**,别把状态、时间、待办写死在 main.js 
 | `library.list()` / `library.read(path)` | 你的 Library:目录树 / 读一个文本文件(相对路径如 `'Journal/2026-09-27.md'`,≤1MB;越界、隐藏文件、不存在 → reject) |
 | `subscribe(cb)` | 周期结束、睡醒、待批数或待办数变化、`updateTodo` 之后回调(宿主约 20 秒查一次);返回退订,禁用/重载宿主统一收 |
 
-全部是 Promise,后端没就绪会 reject —— 自己画空态,别让 mount 抛错(mount 抛错也会以 `[feedback]` 回到你)。
+数据调用(status / todos / schedule / library / updateTodo)是 Promise,后端没就绪会 reject —— 自己画空态,别让 mount 抛错(mount 抛错也会以 `[feedback]` 回到你);`subscribe` 同步返回退订。
+**挂载之后抛的错也回到你**(2026-09-27 起):宿主给你的代码打了 `sourceURL`,异步回调 / 事件处理 / 定时器 / 订阅回调里没接住的错,按栈帧认出是你的,以 `[feedback]` 回写、带 `main.js` 的行号(同一条只报一次,每版内容最多 3 条)。「没收到反馈」不再只意味着「装上了」—— 但宿主自己造的 reject(如后端没就绪)没有你的栈帧,照旧要你自己接。
 手势闸防的是「顺手写个定时器 / 挂载时就标掉」这类失误,**不是安全边界**(插件与宿主同一个渲染进程);审批队列不开放。
 
 ```js

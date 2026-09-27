@@ -77,6 +77,20 @@ describe('ctx.agent', () => {
     expect(cb).toHaveBeenCalledTimes(1)
   })
 
+  it('订阅回调抛错交给 reportError(派给窗口 error,由 agentSpaceSync 认领回写),不再只吞成一行日志;别的订阅者照常', async () => {
+    const report = vi.fn()
+    vi.stubGlobal('reportError', report)
+    const agent = ctxs['agent-muse'].agent!
+    const boom = new Error('boom in subscriber')
+    const ok = vi.fn()
+    agent.subscribe(() => { throw boom })
+    agent.subscribe(ok)
+    notePluginGesture('agent-muse')
+    await agent.updateTodo('t1', 'done')
+    expect(report).toHaveBeenCalledWith(boom)
+    expect(ok).toHaveBeenCalledTimes(1)
+  })
+
   it('重载后旧实例上的点击不授权新实例;待办换了一条(条数不变)也回调', async () => {
     notePluginGesture('agent-muse')
     usePluginStore.getState().disable('agent-muse')

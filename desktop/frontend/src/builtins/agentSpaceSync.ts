@@ -5,7 +5,7 @@
  * 装上了却没注册 home 视图)经 /agent/special/muse/feedback 回写成 [feedback] 行,Muse 下个周期自己修。
  * 调用点:MuseView 轮询(4s)+ MuseHome 挂载(20s),按戳去重,谁先看到谁做;应用刚起第一次观察到戳会白重载一次(无害)。
  */
-import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { agentSpaceSourceUrl, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { postMuseFeedback } from '../services/backendService'
 import type { TanguDesktopConfig } from '../types'
 
@@ -25,6 +25,7 @@ const NO_HOME = 'Space plugin loaded but had registered no "home" view 3 seconds
 export const agentPluginId = (slug: string): string => `agent-${slug}`
 
 export async function syncAgentSpace(cfg: TanguDesktopConfig, slug: string, stamp: number | null | undefined): Promise<void> {
+  if (slug === 'muse') hookRuntimeErrors(cfg)
   if (typeof stamp !== 'number') return // 旧引擎没有戳 → 不同步(启动时装的那份就是全部)
   if (loadedStamp.get(slug) === stamp) return
   loadedStamp.set(slug, stamp) // 先记后做:并发调用只有一个真跑
@@ -70,5 +71,51 @@ export function reportAgentSpaceMountError(cfg: TanguDesktopConfig, slug: string
     .catch(() => { sent.delete(text) })
 }
 
+/** 挂载之后的运行时错误(异步回调 / 事件处理 / 定时器 / 订阅回调里抛的):宿主的 try/catch 与 mount 的 Promise 都罩不住,
+ *  从前只进控制台。09-27 live:Muse 的 Space 选择器拿到 null,异步 draw 里 TypeError,数据卡全空,它一无所知。
+ *  pluginStore 给 agent Space 的代码打了 sourceURL → 栈帧认得出是它 → 回写成 [feedback],带 main.js 行号。
+ *  每份内容(戳)同一条只报一次、最多 3 条;POST 失败撤销标记,下次再报。
+ *  ponytail: 只认栈里有它的帧 —— 宿主代码里造出来的 reject(ctx.agent.status() 的「backend not ready」)没它的帧,归不了;
+ *  要认就得给 ctx.agent 的 Promise 打标,目前不值当。 */
+const RUNTIME_MAX = 3
+let runtimeCfg: TanguDesktopConfig | null = null
+let runtimeReported = new Map<string, Set<string>>()
+let runtimeHooked = false
+
+/** 栈里有 agent Space 代码的帧 → 回写文案;不是它的 → null。行号减 2:new Function 包了 `function anonymous(ctx\n) {\n` 两行头。 */
+export function agentSpaceRuntimeError(err: unknown, sourceUrl: string): string | null {
+  const stack = String((err as { stack?: unknown } | null)?.stack ?? '')
+  const at = stack.indexOf(sourceUrl)
+  if (at < 0) return null
+  const pos = /^:(\d+):\d+/.exec(stack.slice(at + sourceUrl.length))
+  const line = pos ? Number(pos[1]) - 2 : 0
+  const e = err as { name?: unknown; message?: unknown }
+  return `Your Space's code threw after it loaded${line > 0 ? ` (main.js line ${line})` : ''}: ` +
+    `${String(e.name || 'Error')}: ${String(e.message ?? '').slice(0, 300)}. ` +
+    'The view keeps whatever it drew before the error, so it can look fine while its data never arrives.'
+}
+
+/** 窗口级 error / unhandledrejection 的入口(导出给测试)。 */
+export function noteAgentSpaceRuntimeError(err: unknown): void {
+  const cfg = runtimeCfg
+  const text = cfg && agentSpaceRuntimeError(err, agentSpaceSourceUrl(agentPluginId('muse')))
+  if (!cfg || !text) return
+  const key = String(loadedStamp.get('muse') ?? 'boot')
+  let seen = runtimeReported.get(key)
+  if (!seen) runtimeReported.set(key, (seen = new Set()))
+  if (seen.has(text) || seen.size >= RUNTIME_MAX) return
+  seen.add(text)
+  const sent = seen
+  void postMuseFeedback(cfg, text).catch(() => { sent.delete(text) })
+}
+
+function hookRuntimeErrors(cfg: TanguDesktopConfig): void {
+  runtimeCfg = cfg
+  if (runtimeHooked || typeof window === 'undefined') return
+  runtimeHooked = true
+  window.addEventListener('error', (e) => noteAgentSpaceRuntimeError(e.error))
+  window.addEventListener('unhandledrejection', (e) => noteAgentSpaceRuntimeError(e.reason))
+}
+
 /** 测试用:清掉戳记忆。 */
-export function __resetAgentSpaceSync(): void { loadedStamp.clear(); reportedStamp.clear(); mountReported = new WeakMap() }
+export function __resetAgentSpaceSync(): void { loadedStamp.clear(); reportedStamp.clear(); mountReported = new WeakMap(); runtimeReported = new Map(); runtimeCfg = null }
