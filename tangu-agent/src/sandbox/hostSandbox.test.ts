@@ -90,6 +90,22 @@ describe.skipIf(!native)('real OS host sandbox (temporary paths only)', () => {
     expect(await fs.readFile(git, 'utf8')).toBe('original');
     expect(await fs.readFile(outside, 'utf8')).toBe('outside');
   });
+  // P0 第三轮 E4:macOS 默认卷大小写不敏感,`.GIT/config` 就是 `.git/config` —— 规则按字面 `.git` 比会被大小写变体绕过。
+  // Linux 大小写敏感,`.GIT` 是另一个目录,不在此列。
+  it.skipIf(process.platform !== 'darwin')('protects git metadata reached through a case variant (.GIT)', async () => {
+    const { ctx, cwd } = await fixture();
+    await fs.mkdir(path.join(cwd, '.git', 'hooks'), { recursive: true });
+    const git = path.join(cwd, '.git/config');
+    await fs.writeFile(git, 'original');
+    for (const target of ['.GIT/config', '.Git/hooks/pre-commit', '.AGENTS/skill.md']) {
+      const result = await command(ctx, ['/bin/sh', '-c', 'mkdir -p "$(dirname "$1")" && echo changed > "$1"', 'sh', path.join(cwd, target)]);
+      expect(result.code, `${target}: ${result.output}`).not.toBe(0);
+    }
+    expect(await fs.readFile(git, 'utf8')).toBe('original');
+    await expect(fs.access(path.join(cwd, '.git', 'hooks', 'pre-commit'))).rejects.toThrow();
+    // 负对照:同一沙箱里普通文件照写
+    expect((await command(ctx, ['/bin/sh', '-c', 'echo ok > "$1"', 'sh', path.join(cwd, 'plain.txt')])).code).toBe(0);
+  });
   it('blocks configuration changes and renaming a parent to replace that configuration', async () => {
     const { ctx, cwd } = await fixture();
     const home = path.join(cwd, 'test-home');

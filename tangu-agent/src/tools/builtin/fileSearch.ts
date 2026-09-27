@@ -12,16 +12,18 @@ import { listWorkspaceMetas, readWorkspaceFileRaw, scopeOf } from '../fileWorksp
 import { runBoundedProcess } from '../../utils/boundedProcess.js';
 import { FileSearchWorker, checkSearchAbort, searchAbortError } from './fileSearchWorker.js';
 import path from 'node:path';
-import { canonicalFuturePath, credentialPaths, matchProtected, pathWithin } from '../../sandbox/hostSandboxProtection.js';
+import { canonicalFuturePath, credentialPaths, matchProtected, pathWithin, procCredentialTarget } from '../../sandbox/hostSandboxProtection.js';
 import { toolSubprocessEnv } from '../../sandbox/credentialEnv.js';
 
 /**
- * 契约 C4:凭据文件对所有 run 读硬拒 —— 内容搜索**打开之前**就排除(cwd 在家目录时 rg 会走进
+ * 契约 C4:结构化读工具对所有 run 读凭据硬拒 —— 内容搜索**打开之前**就排除(cwd 在家目录时 rg 会走进
  * ~/Library/Application Support/<桌面>/tangu-desktop-config.json;在 ~/.forsion 里则直接命中 auth.json)。
+ * (shell 里的 rg / grep 走审批,不在这里:见 approvals.isKnownSafeBash。)
  * 返回搜索根下凭据路径的相对 posix 形态(rg 用 `--iglob !/<rel>`、回退扫描按名跳过);根本身就在凭据路径里 → null(整次拒)。
+ * Linux 的 /proc 整棵按凭据目录对待(/proc/self/environ 就是引擎自己的 env;搜 /proc 从来不是正经需求)。
  */
 function credentialExclusions(baseDir: string): string[] | null {
-  const creds = credentialPaths();
+  const creds = [...credentialPaths(), ...(process.platform === 'linux' ? ['/proc'] : [])];
   const bases = [...new Set([path.resolve(baseDir), canonicalFuturePath(baseDir)])];
   if (bases.some((b) => matchProtected(b, creds))) return null;
   const rels = new Set<string>();
@@ -41,7 +43,7 @@ function dropCredentialLines(text: string, baseDir: string): string {
   const creds = credentialPaths();
   return text.split('\n').filter((line) => {
     const m = /^(.*?):\d+:/.exec(line);
-    return !m || !matchProtected(path.resolve(baseDir, m[1]), creds);
+    return !m || !(matchProtected(path.resolve(baseDir, m[1]), creds) || procCredentialTarget(path.resolve(baseDir, m[1])));
   }).join('\n');
 }
 

@@ -68,18 +68,71 @@ function tanguHomes(): string[] {
 }
 const withCanonical = (list: string[]): string[] => [...new Set([...list.map((p) => path.resolve(p)), ...list.map(canonicalFuturePath)])];
 
-/** 凭据:所有 run 读硬拒(read_file / read_document / view_image / search_files / known-safe 的 cat 类捷径);写入本机要批、远程硬拒。 */
+/** 引擎 home 里明文存着密钥的文件(P0 第三轮 E2):.env(loadTanguEnv 灌进 process.env 的 KEY=VALUE)、旧 mcp.json(server 的 env / headers)、
+ *  旧 providers.json(provider API key)。新形态的这些值都在 config.json 里 —— 它另按「引擎配置」整份收进来(见 credentialPaths)。 */
+const TANGU_SECRET_NAMES = ['.env', 'mcp.json', 'providers.json', 'config.json'];
+
+/** Electron userData 目录名:正式 / dev(`-dev` 后缀,main.ts 未打包时 setPath)/ 历史品牌名。与桌面 unitHostScope.USERDATA_SIBLINGS
+ *  同一张表(那边再多一条就在这里加一条):同一台机器装着 dev 与正式两套时,一套的 run 不许读另一套的 tangu-desktop-config.json
+ *  (unitHostSecret)、remotesync(.dev).json(S3 / WebDAV / Dropbox 凭据)、Local Storage(登录态)。 */
+const USERDATA_NAMES = ['Forsion', 'forsion-desktop', 'forsion-desktop-dev', 'tangu-agent-desktop', 'tangu-agent-desktop2', 'Tangu Agent', 'Tangu Agent 2.0'];
+
+/** 平台的 appData 父目录(Electron 的 app.getPath('appData') 同一口径):darwin ~/Library/Application Support、win32 %APPDATA%、
+ *  其余 $XDG_CONFIG_HOME 或 ~/.config。引擎独立推算(standalone / CLI 形态也生效),不依赖桌面传参。 */
+function platformAppDataDir(): string {
+  if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support');
+  if (process.platform === 'win32') return process.env.APPDATA?.trim() || path.join(os.homedir(), 'AppData', 'Roaming');
+  return process.env.XDG_CONFIG_HOME?.trim() || path.join(os.homedir(), '.config');
+}
+
+/** 本机所有 Forsion 桌面 userData 目录:宿主给的那一个(dirname FORSION_AMADEUS_CONFIG)+ 它与平台 appData 下的全部兄弟名(含 `-dev` 变体)。 */
+function desktopUserDataDirs(): string[] {
+  const own = desktopUserDataDir();
+  const parents = [...new Set([platformAppDataDir(), ...(own ? [path.dirname(own)] : [])])];
+  const names = [...new Set(USERDATA_NAMES.flatMap((n) => [n, `${n}-dev`]))];
+  return [...new Set([...(own ? [own] : []), ...parents.flatMap((p) => names.map((n) => path.join(p, n)))])];
+}
+
+/** 凭据读清单(契约 C4):**结构化读工具**硬拒(read_file / read_document / view_image / search_files),known-safe 的 cat / rg / git diff
+ *  捷径碰到它们就不再免批;写入本机要批、远程硬拒。
+ *  ⚠️ 已接受的边界:shell(run_bash / run_background)照样能读这些文件 —— 那条路是**审批**把关,不是硬拒(D1 下本机或远端的人批准了
+ *  那条命令就是同意);要彻底隔离得靠宿主沙箱(方案 §6.8)。
+ *  引擎自己读自己的配置(core/config.ts、loadTanguEnv、mcp/config.ts)直接走 fs,不经这张表 —— 拒的是工具,不是引擎。 */
 export function credentialPaths(): string[] {
   const out: string[] = [];
   for (const d of forsionDomains()) {
-    out.push(...CREDENTIAL_FILE_NAMES.map((n) => path.join(d, n)), path.join(d, 'secrets'));
+    out.push(...CREDENTIAL_FILE_NAMES.map((n) => path.join(d, n)), path.join(d, 'secrets'), path.join(d, 'config.json'));
   }
-  for (const h of tanguHomes()) out.push(path.join(h, 'worker-key'));
-  // 桌面配置(userData/tangu-desktop-config.json,存着设备通道密钥):引擎不知道 Electron 的 userData,
-  // 但宿主给的 FORSION_AMADEUS_CONFIG 就住在 userData 里(backendManager.amadeusConfigPath)。
-  const amadeusCfg = process.env.FORSION_AMADEUS_CONFIG?.trim();
-  if (amadeusCfg) out.push(path.join(path.dirname(amadeusCfg), 'tangu-desktop-config.json'));
+  // 引擎配置 config.json(provider key、MCP headers / env 都在里面)不一定在共享域:纯 standalone 形态它就在 ~/.tangu 里。
+  out.push(configFile());
+  for (const h of tanguHomes()) out.push(path.join(h, 'worker-key'), ...TANGU_SECRET_NAMES.map((n) => path.join(h, n)));
+  // 桌面 userData(自己的 + 兄弟的):tangu-desktop-config.json(设备通道密钥 / cloudToken)、remotesync(.dev).json、
+  // Local Storage / Cookies(登录态)都在里面,整目录收。引擎不知道 Electron 的 userData,但宿主给的 FORSION_AMADEUS_CONFIG
+  // 就住在 userData 里(backendManager.amadeusConfigPath),兄弟目录按同一个 appData 父目录推。
+  out.push(...desktopUserDataDirs());
   return withCanonical(out);
+}
+
+/** Linux /proc 里带秘密的条目(read_file 在**引擎进程内**执行:/proc/self/environ 就是引擎自己的 env,
+ *  TANGU_TOKEN / TANGU_LOCAL_TOKEN / TANGU_REMOTE_MARK_SECRET 都在里面 —— C2 剥子进程环境挡不住这条)。
+ *  /proc/self、/proc/thread-self、/proc/<引擎 pid> 整棵;别的 pid 只拒这些条目(fd / root / cwd / map_files 是通往任意文件的魔法链接)。 */
+const PROC_PID_SECRETS = new Set(['environ', 'cmdline', 'mem', 'maps', 'smaps', 'smaps_rollup', 'pagemap', 'auxv', 'fd', 'fdinfo', 'map_files', 'root', 'cwd', 'exe', 'stack', 'syscall', 'task']);
+/** Linux 上目标(字面或真实路径)是否落在 /proc 的秘密条目里 → 返回命中形态;其它平台没有 /proc,恒 null。 */
+export function procCredentialTarget(abs: string): string | null {
+  if (process.platform !== 'linux') return null;
+  for (const f of new Set([path.resolve(abs), canonicalFuturePath(abs)])) {
+    const rel = path.posix.relative('/proc', f.split(path.sep).join('/'));
+    if (!rel || rel.startsWith('..') || path.posix.isAbsolute(rel)) continue;
+    const [first, second] = rel.split('/');
+    if (first === 'self' || first === 'thread-self') return f;
+    if (/^\d+$/.test(first) && (Number(first) === process.pid || (second !== undefined && PROC_PID_SECRETS.has(second)))) return f;
+  }
+  return null;
+}
+/** 递归读取的根(rg / grep -r / search_files)会不会走进 /proc(Linux:根是 /proc 本身、它的祖先、或它里面)。 */
+export function procTreeTouched(abs: string): boolean {
+  if (process.platform !== 'linux') return false;
+  return [path.resolve(abs), canonicalFuturePath(abs)].some((f) => pathWithin(f, '/proc') || pathWithin('/proc', f));
 }
 
 /** ~/.forsion(-dev) 下的本机配置:写入本机要批(完全通行也要)、远程硬拒。 */
@@ -107,9 +160,9 @@ export function matchProtected(abs: string, list: string[]): string | null {
   return null;
 }
 
-/** 读凭据文件?(所有 run 一律拒)。 */
+/** 读凭据文件?(结构化读工具对所有 run 一律拒;Linux 另含 /proc 的秘密条目)。 */
 export function credentialReadTarget(abs: string): string | null {
-  return matchProtected(abs, credentialPaths());
+  return matchProtected(abs, credentialPaths()) ?? procCredentialTarget(abs);
 }
 
 /** Electron userData(桌面配置 / 本地存储所在):宿主给的 FORSION_AMADEUS_CONFIG 就住在里面;没给(非桌面形态)→ null。 */
@@ -131,6 +184,16 @@ export function withinForsionDomains(abs: string): boolean {
   return roots.some((r) => forms.some((f) => pathWithin(f, r)));
 }
 
+/** 这个(已解析的)路径形态是否在引擎 home 的 agents|teams|engines/<名>/Library 之内,且不在其中的 .tangu / .forsion 控制目录里。 */
+function inEngineLibrary(p: string, libBases: string[] = withCanonical(tanguHomes())): boolean {
+  return libBases.some((h) => {
+    if (!pathWithin(p, h)) return false;
+    const parts = path.relative(foldCase ? h.toLowerCase() : h, foldCase ? p.toLowerCase() : p).split(path.sep);
+    return parts.length >= 3 && ['agents', 'teams', 'engines'].includes(parts[0]) && parts[1] !== '' && parts[2].toLowerCase() === 'library'
+      && !parts.slice(3).some((seg) => seg.toLowerCase() === '.tangu' || seg.toLowerCase() === '.forsion');
+  });
+}
+
 export function remoteForbiddenRoot(abs: string): string | null {
   const homes = tanguHomes();
   const roots = withCanonical([...forsionDomains(), ...homes, ...[desktopUserDataDir()].filter((d): d is string => !!d)]);
@@ -142,14 +205,8 @@ export function remoteForbiddenRoot(abs: string): string | null {
   //   · 项目里的软链指向 Library:字面路径不在禁区,真实路径在 Library → 放行。
   // Library 里的 .tangu/ 与旧 .forsion/ 工作区控制目录(项目技能 / 项目指令)照样禁:私聊的 cwd 就是 Library,
   // 写进去的技能下一次本机 run 会装载。
-  const inLibrary = (p: string): boolean => libBases.some((h) => {
-    if (!pathWithin(p, h)) return false;
-    const parts = path.relative(foldCase ? h.toLowerCase() : h, foldCase ? p.toLowerCase() : p).split(path.sep);
-    return parts.length >= 3 && ['agents', 'teams', 'engines'].includes(parts[0]) && parts[1] !== '' && parts[2].toLowerCase() === 'library'
-      && !parts.slice(3).some((seg) => seg.toLowerCase() === '.tangu' || seg.toLowerCase() === '.forsion');
-  });
   for (const f of new Set([path.resolve(abs), canonicalFuturePath(abs)])) {
-    if (inLibrary(f)) continue;
+    if (inEngineLibrary(f, libBases)) continue;
     for (const r of roots) if (pathWithin(f, r)) return r;
   }
   return null;
@@ -223,12 +280,30 @@ function remoteCwdProtectedDirs(): string[] {
  * 字面与真实路径两种形态都判(软链指到家目录一样拒);路径不存在不抛(canonicalFuturePath 解析最深已存在的祖先)。
  * 相对路径按引擎进程 cwd 解析 —— 与 loop 里文件工具的解析口径一致。
  */
+/** 应用配置 / 数据区(P0 第三轮 E11,C8 加固):远程 cwd 落在它们**之内**也拒(不只是祖先)。
+ *  ~/Library(macOS:Application Support / Preferences / Cookies / Keychains / LaunchAgents …)、~/AppData 与 %APPDATA% / %LOCALAPPDATA%
+ *  (Windows)、XDG 配置 / 数据 / 状态目录(~/.config、~/.local/share、~/.local/state 及其 $XDG_* 覆盖)。
+ *  cwd 在 auto-edit 下是免审批的可写根:落在 ~/Library/Application Support/<别的应用> 里 = 那个应用的配置随便写。
+ *  ⚠️ iCloud Drive(~/Library/Mobile Documents)也在 ~/Library 下,同样拒 —— 远程会话要用其中的项目,得在本机开。 */
+function remoteAppConfigDirs(): string[] {
+  const h = os.homedir();
+  const env = (k: string): string[] => { const v = process.env[k]?.trim(); return v && path.isAbsolute(v) ? [v] : []; };
+  return withCanonical([
+    path.join(h, 'Library'), path.join(h, 'AppData'), ...env('APPDATA'), ...env('LOCALAPPDATA'),
+    path.join(h, '.config'), path.join(h, '.local', 'share'), path.join(h, '.local', 'state'),
+    ...env('XDG_CONFIG_HOME'), ...env('XDG_DATA_HOME'), ...env('XDG_STATE_HOME'),
+  ]);
+}
+
 export function remoteCwdForbidden(p: string): boolean {
   const forms = [...new Set([path.resolve(p), canonicalFuturePath(p)])];
   const homes = withCanonical([os.homedir()]);
   const protectedDirs = remoteCwdProtectedDirs();
+  const appDirs = remoteAppConfigDirs();
   return forms.some((f) =>
     f === path.parse(f).root
     || homes.some((h) => pathWithin(h, f)) // 家目录本身或其祖先(/Users、/home …)
-    || protectedDirs.some((d) => pathWithin(d, f)));
+    || protectedDirs.some((d) => pathWithin(d, f))
+    // 应用配置区之内:引擎 home 的 Agent / 团队 / 引擎 Library 例外(引擎 home 被放进 ~/Library 时,私聊的 cwd 就在这里)
+    || (appDirs.some((d) => pathWithin(f, d)) && !inEngineLibrary(f)));
 }

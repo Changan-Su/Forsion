@@ -23,6 +23,7 @@ import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { loadRawMcpServers, enabledServers, inferTransport, isReservedServerName, RESERVED_SERVER_ERROR, type McpServerConfig } from './config.js';
 import { bridgeTool, contentToResult, fenceMcpText, sanitizePart, type LoadedMcpTool, type McpImage } from './toolBridge.js';
+import { toolSubprocessEnv } from '../sandbox/credentialEnv.js';
 
 const DEFAULT_CALL_TIMEOUT_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 30_000;
@@ -165,12 +166,13 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       return new StdioClientTransport({
         command: cfg.command,
         args: cfg.args ?? [],
-        // 子进程只继承显式 env + PATH/HOME 基本面(对齐 hermes 的 env 白名单思路)
-        env: {
+        // 子进程只继承显式 env + PATH/HOME 基本面(对齐 hermes 的 env 白名单思路)。
+        // 合成**之后**再剥引擎凭据(契约 C2,P0 第三轮 E10):清单的 env 想把 TANGU_TOKEN / TANGU_LOCAL_TOKEN 加回来也不行。
+        env: toolSubprocessEnv({
           PATH: process.env.PATH ?? '',
           HOME: process.env.HOME ?? '',
           ...(cfg.env ?? {}),
-        },
+        }) as Record<string, string>,
         stderr: 'ignore',
       });
     }

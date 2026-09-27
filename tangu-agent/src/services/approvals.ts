@@ -15,7 +15,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { publish } from './eventBus.js';
 import { isOutsideWorkspace, writableRoots, protectedLocalWrite, protectedRemoteWrite } from '../tools/fsPolicy.js';
-import { credentialPaths, matchProtected, pathWithin, canonicalFuturePath } from '../sandbox/hostSandboxProtection.js';
+import { credentialPaths, credentialReadTarget, pathWithin, canonicalFuturePath, procTreeTouched } from '../sandbox/hostSandboxProtection.js';
+import { existsSync } from 'node:fs';
 import { clampApprovalMode, effectiveRemote, remoteApprovalCap, type CapMode, type RemoteInfo } from './remoteOrigin.js';
 import { writeTargetsOf } from '../tools/writeTargets.js';
 import type { ToolCall } from '../core/types.js';
@@ -234,10 +235,43 @@ function touchesCredentials(program: string, args: string[], cwd: string): boole
   const roots = recursive && !paths.length ? [cwd] : paths;
   return roots.some((a) => {
     const abs = path.resolve(cwd, a);
-    if (matchProtected(abs, creds)) return true;
+    // credentialReadTarget = the credential list (literal + realpath) plus, on Linux, /proc/self/** and /proc/<pid>/environ & co.
+    if (credentialReadTarget(abs)) return true;
     if (!recursive) return false;
+    if (procTreeTouched(abs)) return true;
     const real = canonicalFuturePath(abs);
     return creds.some((c) => pathWithin(c, abs) || pathWithin(c, real));
+  });
+}
+
+/** The git work tree containing `dir` (nearest ancestor holding a `.git` dir or file), or null outside any repo. */
+function gitToplevel(dir: string): string | null {
+  let cur = path.resolve(dir);
+  for (;;) {
+    if (existsSync(path.join(cur, '.git'))) return cur;
+    const parent = path.dirname(cur);
+    if (parent === cur) return null;
+    cur = parent;
+  }
+}
+
+/** Contract C4 for `git diff` / `git show` (review F#0): given a path outside the work tree, `git diff` silently switches to
+ * `--no-index` and prints the file — `git diff --no-ext-diff --no-textconv ~/.forsion/auth.json /dev/null` read the token
+ * with zero approvals. Known-safe only when inside a repo, and every operand (revisions resolve harmlessly as in-tree names)
+ * passes the same credential check as `cat` and lies inside the toplevel in both its literal and its realpath form
+ * (`link/auth.json` with link -> ~/.forsion is literally inside, canonically outside). A repo whose tree contains a
+ * credential file (a dotfiles repo at ~) is never known-safe for diff/show either: their output is file content. */
+function gitReadStaysInRepo(sub: string, args: string[], cwd: string): boolean {
+  if (args.includes('--no-index')) return false;
+  const operands = splitOptions(args).operands;
+  const top = gitToplevel(cwd);
+  if (!top) return !['diff', 'show'].includes(sub) && operands.length === 0;
+  const tops = [...new Set([top, canonicalFuturePath(top)])];
+  if (['diff', 'show'].includes(sub) && credentialPaths().some((c) => tops.some((t) => pathWithin(c, t)))) return false;
+  return operands.every((a) => {
+    const abs = path.resolve(cwd, a);
+    if (credentialReadTarget(abs)) return false;
+    return [abs, canonicalFuturePath(abs)].every((f) => tops.some((t) => pathWithin(f, t)));
   });
 }
 
@@ -277,7 +311,8 @@ export function isKnownSafeBash(command: string, cwd: string = process.cwd()): b
   // unless callers explicitly disable both extension mechanisms.
   if (['diff', 'show'].includes(sub) && !(rest.includes('--no-ext-diff') && rest.includes('--no-textconv'))) return false;
   if (!['status', 'diff', 'show', 'log', 'rev-parse', 'describe'].includes(sub)) return false;
-  return rest.every((a) => !a.startsWith('-') || a === '--' || SAFE_GIT_FLAGS.has(a) || /^--max-count=[0-9]+$/.test(a));
+  if (!rest.every((a) => !a.startsWith('-') || a === '--' || SAFE_GIT_FLAGS.has(a) || /^--max-count=[0-9]+$/.test(a))) return false;
+  return gitReadStaysInRepo(sub, rest, cwd);
 }
 
 // 路径抽取已迁 tools/writeTargets.ts(检查点快照共用同一口径,见该文件头注)。

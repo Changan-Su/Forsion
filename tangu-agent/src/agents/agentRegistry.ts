@@ -18,6 +18,7 @@ import { mkdirSync, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { agentsDir, memoryDir, userMdFile, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
+import { credentialReadTarget } from '../sandbox/hostSandboxProtection.js';
 import { builtinAgentAvatar } from './builtinAvatars.js';
 import { LEGACY_PERSONAS, LEGACY_MUSE_PROMPTS, LEGACY_MUSE_DESCRIPTION } from './legacyPersonas.js';
 import { ARIOSO_SYSTEM_PROMPT, ARIOSO_SOUL, ARIA_SYSTEM_PROMPT, ARIA_SOUL, RECITA_SYSTEM_PROMPT, RECITA_SOUL } from './personaPrompts.js';
@@ -985,7 +986,13 @@ export async function readLibraryFile(slug: string, name: string): Promise<{ nam
   const dir = libDirOf(slug);
   const safe = sanitizeLibraryName(name);
   try {
-    const buf = await fs.readFile(path.join(dir, safe));
+    // realpath 钳制(P0 第三轮 E9,同 workspace 读路由的 insideWorkspace):Library 里的软链可以指向任何地方(auth.json、别的 Agent 的
+    // 私有文件),本端点对远端开放 —— 真实路径必须仍在这个 Agent 的 Library 之内,且不是凭据文件(C4)。不满足一律按「不存在」回,不泄露存在性。
+    const real = await fs.realpath(path.join(dir, safe));
+    const realDir = await fs.realpath(dir);
+    const rel = path.relative(realDir, real);
+    if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || credentialReadTarget(real)) return null;
+    const buf = await fs.readFile(real);
     if (isTextExt(safe)) return { name: safe, isBinary: false, content: buf.toString('utf8') };
     return { name: safe, isBinary: true, dataBase64: buf.toString('base64'), mimeType: LIBRARY_MIME_BY_EXT[extOf(safe)] || 'application/octet-stream' };
   } catch { return null; }

@@ -17,6 +17,7 @@ import type { ToolProvider } from '../toolRegistry.js';
 import type { AppProfile } from '../../seams/appProfile.js';
 import type { ToolContext } from '../toolTypes.js';
 import { effectiveRemote, type RemoteInfo } from '../../services/remoteOrigin.js';
+import { remoteCwdForbidden } from '../../sandbox/hostSandboxProtection.js';
 
 // 只在「Agent 私聊 + 本轮 @ 了项目」的 run 里可见(agentLoop 把 realpath 放进 ctx.dispatchTargets);子代理 / 讨论 run / 云端不可见。
 const guard = (profile: AppProfile, ctx: ToolContext): boolean =>
@@ -41,6 +42,10 @@ export interface DispatchInput {
 
 /** 建项目会话 + 首个 run(纯逻辑,路由/工具共用;不检查目录存在,调用方先验)。返回新会话与 run 的 id。 */
 export async function dispatchProjectSession(p: DispatchInput): Promise<{ sessionId: string; runId: string }> {
+  // 契约 C8 对派生会话同样成立(P0 第三轮 E11):远程污点的调用方派出的会话,cwd 就是这个项目目录 —— 与远程 POST /agent/sessions 同一道校验。
+  if (p.remote && remoteCwdForbidden(p.projectPath)) {
+    throw new Error(`A remote session cannot use ${p.projectPath} as a project folder (the home folder, app configuration folders and folders that contain protected configuration are not allowed).`);
+  }
   const sessionId = uuidv4();
   const projectName = (p.projectName || path.basename(p.projectPath) || 'Project').slice(0, 255);
   const title = (p.title || p.message).replace(/\s+/g, ' ').trim().slice(0, 80) || 'New Chat';
@@ -112,6 +117,9 @@ export const dispatchProvider: ToolProvider = {
         try { real = realpathSync(projectPath); } catch { return 'Error: project_path does not exist'; }
         if (!(ctx.dispatchTargets || []).includes(real)) return 'Error: project_path must be one of the projects the user @-mentioned in this message';
         if (isForbiddenProjectRoot(real)) return 'Error: refusing to use the filesystem root or the home directory as a project';
+        if (effectiveRemote(ctx) && remoteCwdForbidden(real)) {
+          return 'Error: a remote session cannot start a project session in this folder (app configuration and folders that contain protected configuration are not allowed); ask the user to start it on the host computer';
+        }
         const modelId = ctx.modelId || ctx.profile?.defaultModelId || '';
         if (!modelId) return 'Error: no model available (the run carries no modelId)';
         try {
