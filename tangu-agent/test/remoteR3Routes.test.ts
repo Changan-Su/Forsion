@@ -14,7 +14,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import express from 'express';
 import type { Server } from 'node:http';
-import { mkdtempSync, rmSync, writeFileSync, symlinkSync, mkdirSync, realpathSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, symlinkSync, mkdirSync, realpathSync, renameSync, unlinkSync, promises as fsp } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -259,6 +259,59 @@ describe('E9 Library 文件读:realpath 钳制 + C4 读闸', () => {
     // 负对照:本机请求(用户自己把 Library 链到了别处)照旧读得到
     expect((await send('GET', '/agent/agents/lk/library/file?name=x.txt', null)).body.content).toBe('EXTERNAL-SECRET');
     expect((await send('GET', '/agent/agents/lk/library', null)).body.files.map((f: any) => f.name)).toEqual(['x.txt']);
+  });
+});
+
+describe('E9 Library 读的换链竞态(Codex 第三轮复审 P1)', () => {
+  /** 在 Agent 目录里放一个真的 Library(INSIDE)和一个外部目录(EXTERNAL);swap() 把 Library 换成指向外部的软链,back() 换回来。 */
+  function fixture(slug: string) {
+    const agentDir = join(home, 'agents', slug);
+    const lib = join(agentDir, 'Library');
+    mkdirSync(lib, { recursive: true });
+    writeFileSync(join(agentDir, 'config.toml'), `name = "${slug}"\n`);
+    writeFileSync(join(lib, 'x.txt'), 'INSIDE');
+    const ext = join(ws, `external-${slug}`);
+    mkdirSync(ext, { recursive: true });
+    writeFileSync(join(ext, 'x.txt'), 'EXTERNAL-SECRET');
+    return {
+      swap: () => { renameSync(lib, `${lib}.real`); symlinkSync(ext, lib); },
+      back: () => { unlinkSync(lib); renameSync(`${lib}.real`, lib); },
+    };
+  }
+
+  it('校验通过之后 Library 被换成外链:远端读不到外部内容(修复前:校验与读取之间换链,原样回外部文件)', async () => {
+    const f = fixture('race1');
+    const orig = fsp.realpath.bind(fsp);
+    let swapped = false;
+    const spy = vi.spyOn(fsp, 'realpath').mockImplementation((async (p: any, ...rest: any[]) => {
+      const out = await (orig as any)(p, ...rest);
+      if (!swapped) { swapped = true; f.swap(); } // 第一次解析之后就换:夹在「校验」与「读取」之间
+      return out;
+    }) as any);
+    try {
+      const r = await send('GET', '/agent/agents/race1/library/file?name=x.txt', null, REMOTE_HDR);
+      expect(JSON.stringify(r.body)).not.toContain('EXTERNAL-SECRET');
+    } finally { spy.mockRestore(); if (swapped) f.back(); }
+  });
+
+  it('打开前换成外链、读完立刻换回:按读到的那个文件的身份复核,照样拒(负对照:不换链时照读)', async () => {
+    const f = fixture('race2');
+    const origOpen = fsp.open.bind(fsp);
+    const origReal = fsp.realpath.bind(fsp);
+    let phase = 0;
+    const openSpy = vi.spyOn(fsp, 'open').mockImplementation((async (p: any, ...rest: any[]) => {
+      if (phase === 0 && String(p).includes('race2')) { phase = 1; f.swap(); }
+      return (origOpen as any)(p, ...rest);
+    }) as any);
+    const realSpy = vi.spyOn(fsp, 'realpath').mockImplementation((async (p: any, ...rest: any[]) => {
+      if (phase === 1) { phase = 2; f.back(); } // 复核开始前换回原样
+      return (origReal as any)(p, ...rest);
+    }) as any);
+    try {
+      const r = await send('GET', '/agent/agents/race2/library/file?name=x.txt', null, REMOTE_HDR);
+      expect(JSON.stringify(r.body)).not.toContain('EXTERNAL-SECRET');
+    } finally { openSpy.mockRestore(); realSpy.mockRestore(); if (phase === 1) f.back(); }
+    expect((await send('GET', '/agent/agents/race2/library/file?name=x.txt', null, REMOTE_HDR)).body.content).toBe('INSIDE');
   });
 });
 

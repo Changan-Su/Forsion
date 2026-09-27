@@ -966,26 +966,37 @@ export function libDirOf(slug: string): string {
 
 export interface LibraryFileMeta { name: string; size: number; isBinary: boolean; mtimeMs: number }
 
-/** 远端请求(P0 第三轮,Codex 评审 P2):Library 根本身得真的住在这个 Agent 的目录里 —— 用户可以把 Library 链到别处(本机界面照旧可读),
- *  但那样一来远端经本端点就能列 / 读链过去的任意目录。不满足 → 当作空 / 不存在。 */
-async function libraryRootHome(dir: string): Promise<boolean> {
+/** Library 的真实根目录;远端请求(P0 第三轮,Codex 评审 P2)另要求它真的住在这个 Agent 的目录里 —— 用户可以把 Library 链到别处
+ *  (本机界面照旧可读),但那样一来远端经本端点就能列 / 读链过去的任意目录。不满足 / 不存在 → null。 */
+async function libraryRoot(dir: string, remote: boolean): Promise<string | null> {
   try {
     const realDir = await fs.realpath(dir);
-    const realAgent = await fs.realpath(path.dirname(dir));
-    const rel = path.relative(realAgent, realDir);
-    return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
-  } catch { return false; }
+    if (remote) {
+      const realAgent = await fs.realpath(path.dirname(dir));
+      const rel = path.relative(realAgent, realDir);
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null;
+    }
+    return realDir;
+  } catch { return null; }
 }
+const within = (child: string, parent: string): boolean => {
+  const rel = path.relative(parent, child);
+  return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+};
 
 export async function listLibraryFiles(slug: string, opts: { remote?: boolean } = {}): Promise<LibraryFileMeta[]> {
   const dir = libDirOf(slug);
-  if (opts.remote && !(await libraryRootHome(dir))) return [];
+  const root = await libraryRoot(dir, !!opts.remote);
+  if (!root) return [];
   let names: string[];
-  try { names = await fs.readdir(dir); } catch { return []; }
+  try { names = await fs.readdir(root); } catch { return []; }
   const out: LibraryFileMeta[] = [];
   for (const name of names) {
     try {
-      const st = await fs.stat(path.join(dir, name));
+      const p = path.join(root, name);
+      // 远端只列真实路径仍在 Library 里、且不是凭据的条目(软链出去的只露名字和大小也不给)。
+      if (opts.remote) { const real = await fs.realpath(p); if (!within(real, root) || credentialReadTarget(real)) continue; }
+      const st = await fs.stat(p);
       if (!st.isFile()) continue;
       out.push({ name, size: st.size, isBinary: !isTextExt(name), mtimeMs: Math.floor(st.mtimeMs) });
     } catch { /* ignore */ }
@@ -997,18 +1008,26 @@ export async function listLibraryFiles(slug: string, opts: { remote?: boolean } 
 export async function readLibraryFile(slug: string, name: string, opts: { remote?: boolean } = {}): Promise<{ name: string; isBinary: boolean; content?: string; dataBase64?: string; mimeType?: string } | null> {
   const dir = libDirOf(slug);
   const safe = sanitizeLibraryName(name);
-  if (opts.remote && !(await libraryRootHome(dir))) return null;
+  // realpath 钳制(P0 第三轮 E9,同 workspace 读路由的 insideWorkspace):Library 里的软链可以指向任何地方(auth.json、别的 Agent 的
+  // 私有文件),本端点对远端开放 —— 真实路径必须仍在这个 Agent 的 Library 之内,且不是凭据文件(C4)。不满足一律按「不存在」回,不泄露存在性。
+  // 先打开、读完再复核(Codex 复审 P1):先查后读留着换链窗口(查的时候 Library 在家,读的时候已被换成外链)。读的是 fd,
+  // 复核按**读完之后**的路径重新解析 —— 它得仍在 Library(远端:Library 仍在 Agent 目录)里、不是凭据,且与 fd 是同一个文件(dev + ino);
+  // 换过去再换回来也骗不过:路径解析到的是原文件,身份对不上刚读的那个。
+  let fh: import('node:fs/promises').FileHandle | undefined;
   try {
-    // realpath 钳制(P0 第三轮 E9,同 workspace 读路由的 insideWorkspace):Library 里的软链可以指向任何地方(auth.json、别的 Agent 的
-    // 私有文件),本端点对远端开放 —— 真实路径必须仍在这个 Agent 的 Library 之内,且不是凭据文件(C4)。不满足一律按「不存在」回,不泄露存在性。
-    const real = await fs.realpath(path.join(dir, safe));
-    const realDir = await fs.realpath(dir);
-    const rel = path.relative(realDir, real);
-    if (!rel || rel.startsWith('..') || path.isAbsolute(rel) || credentialReadTarget(real)) return null;
-    const buf = await fs.readFile(real);
+    fh = await fs.open(path.join(dir, safe), 'r');
+    const st = await fh.stat();
+    if (!st.isFile()) return null;
+    const buf = await fh.readFile();
+    const root = await libraryRoot(dir, !!opts.remote);
+    if (!root) return null;
+    const real = await fs.realpath(path.join(root, safe));
+    if (!within(real, root) || credentialReadTarget(real)) return null;
+    const now = await fs.stat(real);
+    if (now.dev !== st.dev || now.ino !== st.ino) return null;
     if (isTextExt(safe)) return { name: safe, isBinary: false, content: buf.toString('utf8') };
     return { name: safe, isBinary: true, dataBase64: buf.toString('base64'), mimeType: LIBRARY_MIME_BY_EXT[extOf(safe)] || 'application/octet-stream' };
-  } catch { return null; }
+  } catch { return null; } finally { await fh?.close().catch(() => {}); }
 }
 
 export async function writeLibraryFile(slug: string, name: string, body: { content?: string; dataBase64?: string; isBinary?: boolean }): Promise<{ name: string }> {
