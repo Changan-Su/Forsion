@@ -333,7 +333,10 @@ async function main() {
     const streakState = () => win.evaluate(() => {
       const s = document.querySelector('.t2c-row .pill-ultra-streaks')
       const a = s?.getAnimations({ subtree: true }) || []
-      return { n: a.length, op: s ? +(+getComputedStyle(s).opacity).toFixed(2) : -1, rate: a.length ? +a[0].playbackRate.toFixed(2) : -1, state: a[0]?.playState || '' }
+      // 四条必须同速同态:只看第一条的话,另外三条全速乱跑也能过
+      const rates = new Set(a.map((x) => x.playbackRate.toFixed(2)))
+      const states = new Set(a.map((x) => x.playState))
+      return { n: a.length, op: s ? +(+getComputedStyle(s).opacity).toFixed(2) : -1, rate: rates.size === 1 ? +[...rates][0] : -1, state: states.size === 1 ? [...states][0] : 'mixed' }
     })
     const idle = await streakState()
     stub.script([{ type: 'done', payload: {}, delay: 3000 }])

@@ -123,21 +123,23 @@ function useStreakRamp(ref: React.RefObject<HTMLSpanElement | null>, active: boo
     const el = ref.current
     if (!el) return
     if (seen.current !== el) { seen.current = el; rate.current = 0 } // 刚挂上的新动画从静止起步
-    const anims = el.getAnimations?.({ subtree: true }) ?? [] // jsdom 没有 getAnimations;减少动效时 display:none 也是空
+    // 每帧现取:减少动效开关一翻,CSS 会重建这几条动画,攥着旧对象就调不到新的(jsdom 没有 getAnimations)
+    const anims = (): Animation[] => el.getAnimations?.({ subtree: true }) ?? []
     const from = rate.current
     const to = active ? 1 : 0
     const dur = STREAK_RAMP_MS * Math.abs(to - from)
-    if (active) anims.forEach((a) => a.play())
+    if (active) anims().forEach((a) => a.play())
     const t0 = performance.now()
     let raf = 0
     const step = (now: number): void => {
       const p = dur ? Math.min(1, (now - t0) / dur) : 1
       const r = from + (to - from) * p * p * (3 - 2 * p)
+      const list = anims()
       rate.current = r
-      anims.forEach((a) => { a.playbackRate = r })
+      list.forEach((a) => { a.playbackRate = r })
       el.style.opacity = String(Math.min(1, r * 2))
       if (p < 1) raf = requestAnimationFrame(step)
-      else if (!active) anims.forEach((a) => a.pause())
+      else if (!active) list.forEach((a) => a.pause())
     }
     raf = requestAnimationFrame(step)
     return () => cancelAnimationFrame(raf)
