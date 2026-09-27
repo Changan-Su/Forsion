@@ -149,7 +149,7 @@ async function main() {
       // 胶囊:模型名照常字色,「Ultra」单独成标签(09-27 美化),名字里不再拼「· Ultra」
       pillTag: document.querySelector('.t2c-row .model-pill-btn .pill-ultra-tag')?.textContent || '',
       pillName: document.querySelector('.t2c-row .model-pill-btn .pill-marquee')?.textContent || '',
-      ringAnim: (() => { const b = document.querySelector('.t2c-row .model-pill-btn'); return b ? getComputedStyle(b, '::before').animationName : '' })(),
+      ringAnim: (() => { const b = document.querySelector('.t2c-row .model-pill-btn'); return b ? `${getComputedStyle(b, '::before').animationName} | ${getComputedStyle(b, '::after').animationName}` : '' })(),
       describedBy: (() => { const el = document.querySelector('.cm-effort-input'); const id = el?.getAttribute('aria-describedby'); return !!id && document.getElementById(id)?.textContent || '' })(),
     }))
     const patch = lastPatch(stub, 'local')
@@ -157,7 +157,7 @@ async function main() {
     check('U3b 滑杆与药丸换 Ultra 皮(值「Ultra」、四路光流、说明行)',
       /is-ultra/.test(ui.effort) && ui.value.trim() === 'Ultra' && ui.streaks === 4 && ui.note.length > 0 && /is-ultra/.test(ui.pill), JSON.stringify(ui))
     check('U3c 切进 Ultra 的那一下放了冲击波,动画完就卸载', burstSeen === 1 && ui.burstLeft === 0, `seen=${burstSeen} left=${ui.burstLeft}`)
-    check('U3g 胶囊:「Ultra」单独成标签、模型名不带「· Ultra」、描边流光在转', ui.pillTag === 'Ultra' && !/Ultra/.test(ui.pillName) && ui.ringAnim === 'ultra-pill-spin',
+    check('U3g 胶囊:「Ultra」单独成标签、模型名不带「· Ultra」、底下两团柔光都在漂', ui.pillTag === 'Ultra' && !/Ultra/.test(ui.pillName) && /ultra-pill-aurora-a/.test(ui.ringAnim) && /ultra-pill-aurora-b/.test(ui.ringAnim),
       JSON.stringify({ pillTag: ui.pillTag, pillName: ui.pillName, ringAnim: ui.ringAnim }))
     // U3h:名字被挤窄(Ultra 标签占位 / 窄栏)时跑马灯要重新量,位移 = 实际溢出量(原来只在文字变化时量、写死按 160px 框算)
     const marquee = await win.evaluate(async () => {

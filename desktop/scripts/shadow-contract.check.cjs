@@ -70,7 +70,6 @@ const EFFECT_EXCEPTIONS = new Map([
   ['frontend/src/styles/base.css|.cm-row-v.is-max.is-ultra, .cm-effort.is-max.is-ultra .cm-effort-value|filter', 'Ultra 档位文字辉光'],
   ['frontend/src/styles/base.css|.cm-effort.is-max.is-ultra .cm-effort-range|box-shadow', 'Ultra 档位轨道辉光'],
   ['frontend/src/styles/base.css|.cm-effort.is-max.is-ultra .cm-effort-thumb|box-shadow', 'Ultra 档位滑块辉光'],
-  ['frontend/src/styles/base.css|.composer-chip.model-pill-btn.is-max.is-ultra::after|box-shadow', 'Ultra 胶囊柔光(只呼吸 opacity)'],
 ])
 
 const INTERACTION_EXCEPTIONS = new Map([
