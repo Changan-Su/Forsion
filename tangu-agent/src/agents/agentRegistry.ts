@@ -1013,6 +1013,9 @@ export async function readLibraryFile(slug: string, name: string, opts: { remote
   // 先打开、读完再复核(Codex 复审 P1):先查后读留着换链窗口(查的时候 Library 在家,读的时候已被换成外链)。读的是 fd,
   // 复核按**读完之后**的路径重新解析 —— 它得仍在 Library(远端:Library 仍在 Agent 目录)里、不是凭据,且与 fd 是同一个文件(dev + ino);
   // 换过去再换回来也骗不过:路径解析到的是原文件,身份对不上刚读的那个。
+  // Linux 另按内核给的 fd 真实路径(/proc/self/fd/N)判,与路径解析无关、不再有窗口。⚠️ 残余(macOS / Windows,Node 没有 openat /
+  // F_GETPATH):能在 realpath 与 stat 之间把 Library 来回换三次的攻击者仍可能读到外部文件 —— 这要求能反复改名 agents/<slug>/Library
+  // 本身,远程污点 run 的结构化写工具做不到(只有批准过的 shell,而批准 = 同意,D1),本机恶意进程本就读得到那些文件。
   let fh: import('node:fs/promises').FileHandle | undefined;
   try {
     fh = await fs.open(path.join(dir, safe), 'r');
@@ -1025,6 +1028,10 @@ export async function readLibraryFile(slug: string, name: string, opts: { remote
     if (!within(real, root) || credentialReadTarget(real)) return null;
     const now = await fs.stat(real);
     if (now.dev !== st.dev || now.ino !== st.ino) return null;
+    if (process.platform === 'linux') {
+      const kernelPath = await fs.readlink(`/proc/self/fd/${fh.fd}`).catch(() => null); // 没挂 /proc 的环境退回上面的路径复核
+      if (kernelPath !== null && (!within(kernelPath, root) || credentialReadTarget(kernelPath))) return null;
+    }
     if (isTextExt(safe)) return { name: safe, isBinary: false, content: buf.toString('utf8') };
     return { name: safe, isBinary: true, dataBase64: buf.toString('base64'), mimeType: LIBRARY_MIME_BY_EXT[extOf(safe)] || 'application/octet-stream' };
   } catch { return null; } finally { await fh?.close().catch(() => {}); }

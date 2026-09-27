@@ -309,6 +309,8 @@ describe('E9 Library 读的换链竞态(Codex 第三轮复审 P1)', () => {
     }) as any);
     try {
       const r = await send('GET', '/agent/agents/race2/library/file?name=x.txt', null, REMOTE_HDR);
+      expect(phase).toBe(2); // 换链真的发生在「打开之前」与「复核之前」(实现不走 fd 打开时这条就红,不会空跑过)
+      expect(r.status).toBe(404);
       expect(JSON.stringify(r.body)).not.toContain('EXTERNAL-SECRET');
     } finally { openSpy.mockRestore(); realSpy.mockRestore(); if (phase === 1) f.back(); }
     expect((await send('GET', '/agent/agents/race2/library/file?name=x.txt', null, REMOTE_HDR)).body.content).toBe('INSIDE');
