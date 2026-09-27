@@ -283,4 +283,12 @@ describe('Codex 评审(09-27 跟进轮)', () => {
     expect(isKnownSafeBash('grep -r -E needle src', ws)).toBe(true);
     expect(isKnownSafeBash('rg -n -i needle readme.md', ws)).toBe(true);
   });
+
+  it('rg --files 没有模式参数,首个操作数就是路径:列凭据目录 / 经软链列 Forsion 家目录都不免批(Codex 三轮复核)', () => {
+    mkdirSync(join(home, 'secrets'), { recursive: true });
+    expect(isKnownSafeBash(`rg --files ${join(home, 'secrets')}`, ws)).toBe(false);
+    expect(isKnownSafeBash('rg --files link', ws)).toBe(false);
+    expect(isKnownSafeBash('rg --files', ws)).toBe(true);
+    expect(isKnownSafeBash('rg --files .', ws)).toBe(true);
+  });
 });

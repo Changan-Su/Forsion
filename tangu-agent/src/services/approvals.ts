@@ -228,7 +228,9 @@ function touchesCredentials(program: string, args: string[], cwd: string): boole
   const { options, operands } = splitOptions(args);
   const recursive = program === 'rg' || ((program === 'grep') && options.some((a) => a === '-r' || a === '-R'));
   // grep/rg: first operand is the pattern; no path operands = search cwd (rg always, grep only when recursive).
-  const paths = program === 'rg' || program === 'grep' ? operands.slice(1) : operands;
+  // `rg --files` takes no pattern — every operand is a path to list (Codex 09-27 third pass).
+  const takesPattern = program === 'grep' || (program === 'rg' && !options.includes('--files'));
+  const paths = takesPattern ? operands.slice(1) : operands;
   const roots = recursive && !paths.length ? [cwd] : paths;
   return roots.some((a) => {
     const abs = path.resolve(cwd, a);
