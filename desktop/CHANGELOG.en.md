@@ -2,6 +2,14 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## Unreleased
+
+- **The device page (this computer's Forsion opened from another device) is safer**. The following now only work on this computer itself: installing plugins; changing external engines, messaging channels, model providers, web search, hooks and approval rules; permanently deleting sessions or messages in a session; listing read-aloud voices; and emptying the notes trash or permanently deleting items from it. Trying them on the device page shows "This action is only available on that device itself, not over a remote connection". Archiving sessions still works.
+- Tasks started from the device page run at most in the "Auto edit" approval mode by default, even when "Full auto" is selected. On the device page, approval cards can only be approved or rejected as is: the command can't be edited and "Always allow this session" isn't offered. Sessions from the device page can't use the filesystem root, the home folder or a folder holding protected configuration as their working folder.
+- The host files the device page can browse are limited to the working folder, the notes vault and project folders added on this computer; session folders changed from the device page no longer widen what can be read. Right after updating, the device page may briefly report that the engine isn't ready.
+- The local engine now uses its own local token instead of your Forsion account token.
+- MCP: the server names `dev` and anything starting with `dev_` are reserved for built-in developer tools. Existing servers with those names stop loading and show an error in their status; renaming them brings them back. Error and text results from MCP tools are marked as external data before they reach the model, and images they return are treated as untrusted content.
+
 ## 2.11.4 (2026-09-23)
 
 - **New "PROJECT details"**. In the Tangu Space, when the current session belongs to a local project folder (including the Tangu default folder, but not the vault), the details panel on the right turns into a project page, just like TEAM details: "Agents" lists the agents and teams that have worked in this project, and you can start a new session with any of them or set one as the project default; "Git" shows the branch, how far it is ahead of / behind upstream, changes and recent commits, and opens the project in a terminal with one click.
