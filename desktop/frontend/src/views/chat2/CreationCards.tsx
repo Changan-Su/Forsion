@@ -8,7 +8,7 @@ import { useEffect, useState } from 'react'
 import { AppWindow, Code2, FolderInput, Loader2, Sparkles } from 'lucide-react'
 import { setActiveSpace } from '@lcl/engine'
 import { registerMessages, translate, useI18n } from '../../i18n'
-import { useApp } from '../../stores/appStore'
+import { lockSessionMove, unlockSessionMove, useApp } from '../../stores/appStore'
 import { useCodeStudio } from '../../stores/codeStudioStore'
 import { normPath } from '../coding/studioModel'
 import { resolveInside } from './creationPath'
@@ -96,9 +96,12 @@ function CreationCardView({ card, sessionId }: { card: CreationCard; sessionId?:
     const api = window.tangu
     if (!api?.productsCreate || !api.productsAdopt || busy) return
     setBusy(true); setError('')
+    // 跑着的时候不动:agent 正往原目录写,挪过去后续话还会被当成插话塞进这一轮。从这里起到挪完(含复制那几秒)锁住这条会话,期间不许发新消息
+    if (sessionId && useApp.getState().runningBySession[sessionId]) { setError(t('creation.err.running')); setBusy(false); return }
+    if (sessionId) lockSessionMove(sessionId)
+    let moved = false
+    let created = ''
     try {
-      // 跑着的时候不动:agent 正往原目录写,挪过去后续话还会被当成插话塞进这一轮
-      if (sessionId && useApp.getState().runningBySession[sessionId]) throw new Error(t('creation.err.running'))
       let dir: string
       let name: string
       if (adding) {
@@ -109,14 +112,18 @@ function CreationCardView({ card, sessionId }: { card: CreationCard; sessionId?:
         dir = r.dir; name = r.name
       }
       const app = useApp.getState()
-      const moved = sessionId ? (await app.moveSessionToProject(sessionId, dir, name)) === 'moved' : false
+      moved = sessionId ? (await app.moveSessionToProject(sessionId, dir, name)) === 'moved' : false
       if (!moved) { app.setNewChatWs({ key: dir, name, kind: 'local', path: dir }); app.setActiveId(null) }
       setMade({ dir, name, moved })
-      // 新做的作品:点按钮就是「好,做成作品」—— 替用户接一句,agent 下一轮就在作品文件夹里写(新的 cwd 在系统提示里)
-      if (moved && !adding && sessionId) void app.send(t('creation.continuePrompt', { name }), [], undefined, undefined, undefined, sessionId)
+      created = name
     } catch (e: any) {
       setError(String(e?.message || e))
-    } finally { setBusy(false) }
+    } finally {
+      if (sessionId) unlockSessionMove(sessionId)
+      setBusy(false)
+    }
+    // 新做的作品:点按钮就是「好,做成作品」—— 替用户接一句,agent 下一轮就在作品文件夹里写(新的 cwd 在系统提示里)
+    if (moved && !adding && sessionId) void useApp.getState().send(t('creation.continuePrompt', { name: created }), [], undefined, undefined, undefined, sessionId)
   }
   const openStudio = (): void => {
     if (!done) return

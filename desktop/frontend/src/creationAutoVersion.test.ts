@@ -70,6 +70,26 @@ describe('installCreationAutoVersion', () => {
     expect(commit).toHaveBeenCalledTimes(1)
   })
 
+  it('查状态那一下里同一作品又跑起来一个 run → 这次不存', async () => {
+    const commit = vi.fn(async () => ({ id: 'x' }))
+    const status = vi.fn(async () => {
+      useApp.setState({ runningBySession: { b: 'r9' } } as never) // 查状态的同时,b 在同一个作品里开跑
+      return { available: true, state: 'owned', dirty: true, writable: true }
+    })
+    ;(window as any).tangu = { codeStudioGitCommit: commit, codeStudioGitStatus: status, codeProjectsRoot: async () => ROOT }
+    useApp.setState({
+      sessions: [{ id: 'a', project_path: `${ROOT}/game` }, { id: 'b', project_path: `${ROOT}/game` }],
+      configBySession: {}, messagesBySession: {}, runningBySession: { a: 'r1' },
+    } as never)
+    const off = installCreationAutoVersion()
+    await tick()
+    useApp.setState({ runningBySession: {} } as never)
+    await tick(); await tick()
+    off?.()
+    expect(status).toHaveBeenCalled()
+    expect(commit).not.toHaveBeenCalled()
+  })
+
   it('没有 git IPC(web / 移动端)→ 整个不装', () => {
     ;(window as any).tangu = {}
     const before = useApp.getState()

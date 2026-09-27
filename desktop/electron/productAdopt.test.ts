@@ -78,6 +78,8 @@ describe('adoptIntoProjects', () => {
     expect(await code(adoptIntoProjects(root, path.join(cwd, 'secrets'), 'x', { home, within: cwd }))).toBe('outside')
     expect(await code(adoptIntoProjects(root, cwd, 'x', { home, within: cwd, strict: true }))).toBe('outside')
     expect(await code(adoptIntoProjects(root, path.join(cwd, 'game'), 'ok', { home, within: cwd, strict: true }))).toBe('ok')
+    w(path.join(cwd, '..draft', 'index.html')) // 名字以 .. 开头的子目录是合法的
+    expect(await code(adoptIntoProjects(root, path.join(cwd, '..draft'), 'draft', { home, within: cwd, strict: true }))).toBe('ok')
   })
 
   it('排除名单不分大小写:.GIT / NODE_MODULES / .Forsion-Connect.json 都不带过去', async () => {

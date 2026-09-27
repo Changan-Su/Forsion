@@ -60,7 +60,8 @@ export async function createCreationDir(projectsRoot: string, name: string): Pro
 
 const inside = (child: string, parent: string): boolean => {
   const rel = path.relative(parent, child)
-  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+  // 只认整段的 `..`:`..draft` 是合法的子目录名
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel))
 }
 
 /** 源目录闸(realpath 之后判)。within:源必须在它里面(strict = 不能就是它本身)。 */

@@ -19,6 +19,9 @@ export function isCreationDir(cwd: string, root: string): boolean {
 
 const cwdOf = (s: ReturnType<typeof useApp.getState>, sid: string): string =>
   s.configBySession[sid]?.cwd || s.sessions.find((x) => x.id === sid)?.project_path || ''
+/** 这个作品里还有 run 在跑(它还在写,这时存会把半截改动一起提交)。 */
+const busyIn = (s: ReturnType<typeof useApp.getState>, cwd: string): boolean =>
+  Object.keys(s.runningBySession).some((sid) => key(cwdOf(s, sid)) === key(cwd))
 
 /** 返回退订(测试用;应用里装一次不退)。 */
 export function installCreationAutoVersion(): (() => void) | undefined {
@@ -33,7 +36,7 @@ export function installCreationAutoVersion(): (() => void) | undefined {
       const cwd = cwdOf(s, sid)
       if (!isCreationDir(cwd, root)) continue
       // 同一作品里还有别的 run 在跑:它还在写,这时存会把半截改动一起提交 —— 等最后一个停下再存
-      if (Object.keys(s.runningBySession).some((other) => key(cwdOf(s, other)) === key(cwd))) continue
+      if (busyIn(s, cwd)) continue
       void saveVersion(cwd, sid)
     }
   })
@@ -42,7 +45,8 @@ export function installCreationAutoVersion(): (() => void) | undefined {
 async function saveVersion(cwd: string, sid: string): Promise<void> {
   try {
     const status = await window.tangu!.codeStudioGitStatus!(cwd)
-    if (!status?.writable) return
+    // 查状态那一下里又有 run 在这个作品里跑起来了:这次不存,等它停下再存(窗口缩到一次 IPC;提交本身在宿主里跑,没法和 run 原子)
+    if (!status?.writable || busyIn(useApp.getState(), cwd)) return
     const label = autoVersionName(useApp.getState().messagesBySession[sid] || [])
     await window.tangu!.codeStudioGitCommit!(cwd, { name: label, auto: true, untitled: translate('studio.history.untitled') })
   } catch (e) { console.warn('[creations] 自动存版本失败', e) }

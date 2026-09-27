@@ -507,6 +507,11 @@ function rememberDefaults(patch: Partial<StoredDesktopConfig>): void {
  *  只有服务端按键合并才管得住,另开。 */
 const approvalWrites = new Map<string, { issued: number; pending: number; mode: AgentConfig['approvalMode']; stored: AgentConfig['approvalMode']; err: Error | null }>()
 /** 会话配置落库一律按键合并:只发这次改的键(api.patchSessionConfig);老引擎没有 PATCH → 回落整对象 PUT(本地最新整对象)。 */
+/** 正在「进造物」的会话(作品卡从点下到挪完,含复制那几秒):期间不许起新 run —— 否则这一轮写到旧目录,会话却已经指到新目录。 */
+const movingSessions = new Set<string>()
+export const lockSessionMove = (sid: string): void => { movingSessions.add(sid) }
+export const unlockSessionMove = (sid: string): void => { movingSessions.delete(sid) }
+
 function saveSessionConfig(sid: string, patch: Partial<AgentConfig>): Promise<unknown> {
   return api.patchSessionConfig(useApp.getState().cfg, sid, patch, () => useApp.getState().configBySession[sid] || {})
 }
@@ -2341,9 +2346,15 @@ export const useApp = create<AppState>((set, get) => ({
       await saveSessionConfig(sessionId, { cwd: dir, execMode: 'host' })
       return 'moved'
     } catch (e: any) {
-      restore()
-      if (sessionSaved) void api.updateSession(get().cfg, sessionId, prev).catch(() => {})
-      get().toast(get().tr('app.moveToProjectFail', { e: e?.message || e }), true)
+      // 会话已改、配置没存上:把会话改回去;改不回去就如实说「挪了一半」,本地留服务端的真实状态(会话在新项目、工作目录还是旧的)
+      const reverted = !sessionSaved || await api.updateSession(get().cfg, sessionId, prev).then(() => true, () => false)
+      if (reverted) restore()
+      else set((s) => {
+        const configBySession = { ...s.configBySession }
+        if (prevCfg) configBySession[sessionId] = prevCfg; else delete configBySession[sessionId]
+        return { configBySession }
+      })
+      get().toast(get().tr(reverted ? 'app.moveToProjectFail' : 'app.moveToProjectHalf', { e: e?.message || e, name }), true)
       return 'failed'
     }
   },
@@ -2522,6 +2533,7 @@ export const useApp = create<AppState>((set, get) => ({
     track('chat.send')
     const t = get().tr
     let sid = targetSessionId === undefined ? get().activeId : targetSessionId
+    if (sid && movingSessions.has(sid)) { get().toast(t('app.sessionMoving'), true); return false }
     const stopping = sid && get().stoppingBySession[sid]
     if (stopping && !(await stopRequests.get(stopping))) return false
     const wasNewChat = !sid

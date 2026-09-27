@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRunEvent, AuthStatusInfo, SessionRecord, UiMessage } from '../types'
 import { DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, sessionWorkspaceKey } from '../types'
-import { useApp, recordToUi, withAmadeusWorkspace, type AppState } from './appStore'
+import { useApp, recordToUi, withAmadeusWorkspace, lockSessionMove, unlockSessionMove, type AppState } from './appStore'
 import { usePageStore } from '../amadeus/store/pageStore'
 import '../i18n.generated'
 import { translationValues } from '../i18n'
@@ -957,5 +957,21 @@ describe('moveSessionToProject', () => {
     expect(st.sessions[0].project_path).toBe('/w')
     expect(st.configBySession.m1.cwd).toBe('/w')
     expect(updateSessionMock.mock.calls[1]?.[2]).toEqual({ project_path: '/w', project_name: 'w', projectless: false })
+  })
+
+  it('配置没存上、会话也改不回去 → failed + 「挪了一半」:本地留服务端的真实状态(会话在新项目、工作目录还是旧的)', async () => {
+    patchConfigMock.mockRejectedValue(new Error('boom'))
+    updateSessionMock.mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('down'))
+    expect(await useApp.getState().moveSessionToProject('m1', '/c/app', 'app')).toBe('failed')
+    const st = useApp.getState()
+    expect(st.sessions[0].project_path).toBe('/c/app')
+    expect(st.configBySession.m1.cwd).toBe('/w')
+    expect((st.toast as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('app.moveToProjectHalf')
+  })
+
+  it('挪的过程中(作品卡锁住会话)不许发新消息', async () => {
+    lockSessionMove('m1')
+    try { expect(await useApp.getState().send('hi', [], undefined, undefined, undefined, 'm1')).toBe(false) } finally { unlockSessionMove('m1') }
+    expect((useApp.getState().toast as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('app.sessionMoving')
   })
 })
