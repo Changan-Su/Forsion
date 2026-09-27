@@ -16,6 +16,7 @@ import { publish } from '../../services/eventBus.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { AppProfile } from '../../seams/appProfile.js';
 import type { ToolContext } from '../toolTypes.js';
+import { effectiveRemote, type RemoteInfo } from '../../services/remoteOrigin.js';
 
 // 只在「Agent 私聊 + 本轮 @ 了项目」的 run 里可见(agentLoop 把 realpath 放进 ctx.dispatchTargets);子代理 / 讨论 run / 云端不可见。
 const guard = (profile: AppProfile, ctx: ToolContext): boolean =>
@@ -34,6 +35,8 @@ export function isForbiddenProjectRoot(p: string): boolean {
 export interface DispatchInput {
   userId: string; appId: string; modelId: string; agentSlug?: string;
   projectPath: string; projectName?: string; title?: string; message: string; parentSessionId?: string;
+  /** 远程污点(契约 C5):派遣出的项目会话首个 run 照抄 —— 项目默认审批档可能是完全通行。 */
+  remote?: RemoteInfo;
 }
 
 /** 建项目会话 + 首个 run(纯逻辑,路由/工具共用;不检查目录存在,调用方先验)。返回新会话与 run 的 id。 */
@@ -60,7 +63,7 @@ export async function dispatchProjectSession(p: DispatchInput): Promise<{ sessio
   const runId = uuidv4();
   await createRun({
     id: runId, sessionId, userId: p.userId, appId: p.appId, modelId, assistantMessageId: uuidv4(),
-    input: { message: p.message, userMessageId: uuidv4(), attachments: [], agentConfig },
+    input: { message: p.message, userMessageId: uuidv4(), attachments: [], agentConfig, ...(p.remote ? { remote: p.remote } : {}) },
   });
   const { enqueueRun } = await import('../../services/agentLoop.js');
   enqueueRun(sessionId, runId);
@@ -115,7 +118,7 @@ export const dispatchProvider: ToolProvider = {
           const { sessionId, runId } = await dispatchProjectSession({
             userId: ctx.userId, appId: ctx.appId, modelId, agentSlug: ctx.agentSlug,
             projectPath: real, projectName: args.project_name ? String(args.project_name) : undefined, title: args.title ? String(args.title) : undefined,
-            message, parentSessionId: ctx.sessionId,
+            message, parentSessionId: ctx.sessionId, remote: effectiveRemote(ctx),
           });
           // 侧栏被告知(方案 §5.4 硬化 ②):前端据此刷新会话列表并提示;不等 listSessions 轮询(它没有轮询)。
           if (ctx.runId) void publish(ctx.runId, 'session_created', { sessionId, runId, projectPath, projectName: args.project_name ? String(args.project_name) : path.basename(projectPath) });

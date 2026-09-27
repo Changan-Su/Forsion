@@ -33,6 +33,19 @@ describe('applyAgentActivation', () => {
     expect(old.systemPrompt).toBe(LEGACY_PERSONAS[0].systemPrompt);
   });
 
+  it('远程污点 run(approvalCap):Agent 定义填进来的审批档钳到上限;会话显式值不经这里;负对照:本机照填定义值', async () => {
+    const get = async () => def({ approvalMode: 'full-auto' });
+    const local: any = { agentSlug: 'researcher' };
+    await applyAgentActivation(local, 'u1', get, null);
+    expect(local.approvalMode).toBe('full-auto');
+    const remote: any = { agentSlug: 'researcher' };
+    await applyAgentActivation(remote, 'u1', get, null, { approvalCap: 'auto-edit' });
+    expect(remote.approvalMode).toBe('auto-edit');
+    const ro: any = { agentSlug: 'researcher' };
+    await applyAgentActivation(ro, 'u1', async () => def({ approvalMode: 'readonly' }), null, { approvalCap: 'auto-edit' });
+    expect(ro.approvalMode).toBe('readonly');
+  });
+
   it('无 agentSlug → 默认作用域,不读任何源', async () => {
     const cfg: any = {};
     const r = await applyAgentActivation(cfg, 'u1', NONE, null);

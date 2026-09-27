@@ -13,6 +13,7 @@ import { resolveProfile } from '../seams/appProfile.js';
 import { createRun, getRunForUser, listActiveRunsBySession, listEventsFrom } from '../services/runStore.js';
 import { enqueueRun, abortRun, enqueueSteer, expediteSteer, cancelSteer, waitForRunSettlement } from '../services/agentLoop.js';
 import { subscribe, type AgentEvent } from '../services/eventBus.js';
+import { parseRemoteOrigin, sanitizeRemoteAgentConfig, taintRunRemote } from '../services/remoteOrigin.js';
 
 const router = Router();
 
@@ -141,6 +142,10 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
     if (agent_config != null && (typeof agent_config !== 'object' || Array.isArray(agent_config))) {
       return res.status(400).json({ detail: 'agent_config must be an object' });
     }
+    // 远程来源(契约 C1:unitWeb 盖的 x-forsion-remote):剥 verifyCommand / engineId / extraRoots / 设备能力,审批档钳到上限。
+    // ⚠️ 手机分支的顶层 client_capabilities 握手合进来时,远程请求必须丢弃它:本机引擎给它注册的手机工具,回执打的是云端。
+    const remote = parseRemoteOrigin(req.headers);
+    const agentConfig = remote ? sanitizeRemoteAgentConfig(agent_config || {}) : agent_config || {};
     // 客户端面标识(desktop/2.7.4 等,统计维度,与 app_id 正交)。客户端自报,白名单校验后
     // 随 input 落库(不加列:input 本就是 JSONB,免动 stateStore 接缝);不合法静默丢弃。
     const clientTag = normalizeClientTag(client);
@@ -193,8 +198,10 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
       modelId,
       assistantMessageId,
       input: {
-        message, userMessageId, attachments: attachments || [], agentConfig: agent_config || {},
+        message, userMessageId, attachments: attachments || [], agentConfig,
         ...(clientTag ? { client: clientTag } : {}),
+        // 远程污点:只由这里(与派生 run 的显式抄写)落进 input,loop / 审批闸据此钳制;请求体里的同名字段不作数。
+        ...(remote ? { remote } : {}),
         // 直接来自客户端输入区(审批档据此在审批时现读会话设置,见 agentLoop.approvalModeSessionId)。
         // 不能拿 client 标签判:createRun 会把它抄进派生 run(团队成员 / 讨论),那些 run 的档不归自己的会话管。
         origin: 'client',
@@ -362,6 +369,9 @@ router.post('/agent/runs/:id/steer', authMiddleware, async (req: AuthRequest, re
     }
     const run = await getRunForUser(req.params.id, userId);
     if (!run) return res.status(404).json({ detail: 'Run not found' });
+    // 远端 steer 本机 run:注入的文字从下一迭代起驱动它 → 先染色,审批闸 / 路径策略从此按远程钳制(C3)。
+    const remote = parseRemoteOrigin(req.headers);
+    if (remote) taintRunRemote(req.params.id, remote);
     const userMessageId = uuidv4();
     const ok = enqueueSteer(req.params.id, {
       id: userMessageId,

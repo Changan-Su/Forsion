@@ -80,6 +80,16 @@ describe('start_project_session', () => {
     expect(msgs[0]).toMatchObject({ role: 'user', content: 'Write README' });
   });
 
+  it('远程污点(C5):远程 run 派遣的项目会话首个 run 带 input.remote(项目默认档可能是完全通行);负对照:本机派遣不带', async () => {
+    const { project } = await setup();
+    const ctx: any = { userId: 'u1', sessionId: 'solo-1', appId: 'tangu', modelId: 'm1', agentSlug: DEFAULT_AGENT_SLUG, profile: createTanguProfile({ sandboxMode: 'none' }), execMode: 'host', dispatchTargets: [realpathSync(project)] };
+    const inputOf = async (out: string): Promise<any> => { const r = await getRun(out.match(/run (\S+)\)/)![1]); return typeof r!.input === 'string' ? JSON.parse(r!.input) : r!.input; };
+    const remoteOut = String(await tool().execute({ project_path: project, message: 'Write README' }, { ...ctx, remote: { via: 'tunnel', marked: true } }));
+    expect((await inputOf(remoteOut)).remote).toEqual({ via: 'tunnel', marked: true });
+    const localOut = String(await tool().execute({ project_path: project, message: 'Write README' }, ctx));
+    expect((await inputOf(localOut)).remote).toBeUndefined();
+  });
+
   it('参数校验:相对路径 / 不存在 / 非目录 / 不在本轮 @ 过的项目里 / 根目录与家目录 → 文本错误,不建会话', async () => {
     const { project } = await setup();
     const other = join(home!, 'other'); mkdirSync(other, { recursive: true });

@@ -37,6 +37,7 @@ import { query } from '../core/db.js';
 import { isHistorianBusy } from '../services/localHistorian.js';
 import { hasHistorianTask } from '../services/historianSession.js';
 import { createRun } from '../services/runStore.js';
+import { parseRemoteOrigin, sanitizeRemoteAgentConfig } from '../services/remoteOrigin.js';
 import { enqueueRun } from '../services/agentLoop.js';
 import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt, SPECIAL_AGENTS_DEFAULTS } from '../services/specialAgentsConfig.js';
 import { loadUserHistorianConfig, saveUserHistorianConfig, type UserHistorianConfig } from '../services/historianConfig.js';
@@ -285,6 +286,9 @@ router.post('/agent/special/muse/todos/inject', authMiddleware, async (req: Auth
       const parsed = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null;
       if (parsed && typeof parsed === 'object') sessionAgentConfig = parsed;
     } catch { /* 坏 JSON → 空配置,与旧行为一致 */ }
+    // 远程来源(契约 C1):注入 run 同样带污点、同样过字段钳制(它照抄会话存值当 agentConfig)。
+    const remote = parseRemoteOrigin(req.headers);
+    if (remote) sessionAgentConfig = sanitizeRemoteAgentConfig(sessionAgentConfig);
 
     // 取选中 TODO（限本人）。
     const placeholders = todoIds.map(() => '?').join(',');
@@ -305,7 +309,7 @@ router.post('/agent/special/muse/todos/inject', authMiddleware, async (req: Auth
     const userMessageId = uuidv4();
     await createRun({
       id: runId, sessionId, userId, appId: profile.appId, modelId, assistantMessageId,
-      input: { message, userMessageId, attachments: [], agentConfig: sessionAgentConfig },
+      input: { message, userMessageId, attachments: [], agentConfig: sessionAgentConfig, ...(remote ? { remote } : {}) },
     });
     enqueueRun(sessionId, runId);
 

@@ -35,6 +35,7 @@ import { loadSkillLoadout, type SkillLoadout } from './skillLoadout.js';
 import { loadCustomTools } from '../tools/customTools.js';
 import { AUTONOMY_SECTION, TOOL_FAILURE_SECTION, hostEnvSection } from '../profiles/promptSections.js';
 import type { ChatMessage } from '../core/types.js';
+import { effectiveRemote } from './remoteOrigin.js';
 
 // 24(原 8):8 轮连一条常规链路都跑不完 —— 09-06 青鸟视频那次,子代理第 8 轮刚诊断出根因就被截断
 // (use_skill → 定位脚本 → 转录 → ASR → 落盘 → 报告 已占 7 轮,一次报错就没了)。
@@ -282,6 +283,8 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   if (p.engineId && p.grantTools?.length) {
     throw new Error(`grantTools does not apply to engine delegation ('${p.engineId}' runs its own tools and never sees ${p.grantTools.join(', ')})`);
   }
+  // 远程污点 run 不许把活交给外部 ACP 引擎:它的工具 / 进程不经本引擎审批闸与路径策略,远程档位上限对它不生效(同 dispatchRun 的口径)。
+  if (p.engineId && effectiveRemote(parentCtx)) throw new Error('External engines cannot be used from a remote session. Delegate without an engine, or continue on the host computer.');
   if (p.engineId) return runEngineSubAgent(p, p.engineId);
   const runId = parentCtx.runId || '';
   const subId = uuidv4(); // 子聊天区据此把本子代理的流式内容归到一个气泡组(同 run 内可多个子代理)
@@ -522,6 +525,8 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
           // 否则同一笔会写到父代理头上 —— 判定在 pendingApprovals,这里只把真实身份如实报上去。
           ...(skillSlug ? { execAgentSlug: skillSlug } : {}),
           sessionId: parentCtx.sessionId, execMode: parentCtx.execMode, approvalMode: parentCtx.approvalMode, modeSessionId: parentCtx.approvalModeSessionId,
+          // 远程污点随父 run(C5):子代理的调用同样钳到远程上限;父 run 中途被远端 steer 染上的也算(runId 即父 run)。
+          remote: effectiveRemote(parentCtx), unattended: !!parentCtx.automationOrigin || !!parentCtx.muse,
           // 越界写升级按真实工作区判定、PermissionRequest hook 需要 profile(Codex 评审 #3)
           cwd: parentCtx.cwd, extraRoots: parentCtx.extraRoots, profile: parentCtx.profile,
         },

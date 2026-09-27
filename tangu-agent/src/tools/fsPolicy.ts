@@ -12,7 +12,8 @@ import { realpathSync } from 'node:fs';
 import type { ToolContext } from './toolTypes.js';
 import { agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../seams/runContext.js';
-import { protectedHostPaths } from '../sandbox/hostSandboxProtection.js';
+import { protectedHostPaths, credentialPaths, forsionConfigPaths, matchProtected, credentialReadTarget } from '../sandbox/hostSandboxProtection.js';
+import { effectiveRemote } from '../services/remoteOrigin.js';
 
 /** agent 自己目录里的身份/自进化文件:generic 写工具(write_file/edit_file/apply_patch…)一律硬拒——
  *  人格(SOUL/config)归用户在设置里改;工作笔记必须走 manage_harness 的快照/封顶/脱敏管线,
@@ -82,9 +83,38 @@ export interface WritePathVerdict {
   reason: string;
 }
 
+/**
+ * 契约 C4 · 写:凭据 + ~/.forsion(-dev) 本机配置。远程污点 run 连同宿主沙箱那张表(引擎包、agent 身份文件、.agents/.codex)
+ * 一律硬拒 —— **不依赖宿主沙箱**,也不进审批(按 D1 审批会被推到远端批,与「只在本机」矛盾);本机 run 见 protectedLocalWrite。
+ * 返回命中的路径,没命中 null。只管结构化写工具;run_bash 在沙箱关闭时写这些路径仍拦不住(方案 §6.8 残余风险)。
+ */
+export function protectedRemoteWrite(abs: string): string | null {
+  const resolved = realResolve(abs);
+  if (resolved.split(path.sep).some((part) => part === '.agents' || part === '.codex')) return resolved;
+  return matchProtected(abs, [...credentialPaths(), ...forsionConfigPaths(), ...protectedHostPaths()]);
+}
+
+/** 契约 C4 · 本机 run 写凭据 / ~/.forsion(-dev) 配置:每次都要人批(完全通行也要,不吃「总允许」)。
+ *  刻意不含宿主沙箱那张全表 —— 引擎包目录也在里头,本机完全通行地开发 tangu-agent 会被每次写都问一遍。 */
+export function protectedLocalWrite(abs: string): string | null {
+  return matchProtected(abs, [...credentialPaths(), ...forsionConfigPaths()]);
+}
+
+export interface ReadPathVerdict { ok: boolean; reason: string }
+/** 契约 C4 · 读:凭据文件对**所有** run 读硬拒(read_file / read_document / view_image;search_files 在搜索侧排除)。
+ *  防的是「run 读出 forsion_token 再去批准别处的审批」(§6.4-1);按 realpath 判,软链进来同样拒。 */
+export function checkReadPath(abs: string): ReadPathVerdict {
+  const hit = credentialReadTarget(abs);
+  return hit ? { ok: false, reason: `Access denied: ${abs} is a protected credential file and cannot be read by agents.` } : { ok: true, reason: '' };
+}
+
 /** 判定一次 host 写入路径。abs 应为已解析的绝对路径;内部再做 realpath 归一(防软链)。 */
 export function checkWritePath(ctx: ToolContext, abs: string): WritePathVerdict {
   const resolved = realResolve(abs);
+  if (effectiveRemote(ctx)) {
+    const hit = protectedRemoteWrite(abs);
+    if (hit) return { ok: false, hardDeny: true, reason: `Remote sessions cannot write protected configuration or credentials: ${resolved}` };
+  }
   if (ctx.hostSandbox && ctx.hostSandbox.mode !== 'off' && (
     resolved.split(path.sep).some((part) => part === '.agents' || part === '.codex') ||
     protectedHostPaths().some((protectedPath) => isInside(resolved, protectedPath) || isInside(path.resolve(abs), protectedPath))

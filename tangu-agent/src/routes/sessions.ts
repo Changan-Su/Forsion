@@ -32,6 +32,7 @@ import { recoverTeamOutputs } from '../services/teamOutputs.js';
 import { withKeyLock } from '../core/keyLock.js';
 import { answerAside, normalizeAsideInput } from '../services/aside.js';
 import { normalizeClientTag } from './runs.js';
+import { parseRemoteOrigin, sanitizeRemoteAgentConfig, applyRemoteConfigWrite, type RemoteInfo } from '../services/remoteOrigin.js';
 
 const router = Router();
 
@@ -86,6 +87,13 @@ function parseMaybeJson(v: any): any {
   try { return JSON.parse(v); } catch { return null; }
 }
 
+/** 会话级远程标记(§6.5 持久化对象继承污点):远端建的 / 分支出的会话记一笔,分支照抄 agent_config 即继承。
+ *  ⚠️ 只作记录(急停登记表 / P1 的远程活动面读它),**绝不**当授权依据:桌面会把存值当 agent_config 回传,
+ *  引擎唯一认的污点是 run.input.remote(路由解析 + 派生 run 显式抄写)。远端写配置改不了它(见 REMOTE_STRIPPED_CONFIG_KEYS)。 */
+export function remoteOriginMarker(remote: RemoteInfo): Record<string, unknown> {
+  return { ...(remote.via ? { via: remote.via } : {}), marked: remote.marked, at: new Date().toISOString() };
+}
+
 export function rowToSession(r: any): any {
   return { ...r, agent_config: parseMaybeJson(r.agent_config), projectless: !!r.projectless };
 }
@@ -130,7 +138,10 @@ router.post('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => 
     if (!profile) return res.status(400).json({ detail: `unknown app_id: ${app_id}` });
     // 初始 agent_config 与建会话同一条 INSERT(原子):客户端不必再补一次 PUT——补 PUT 失败会留下没有 preset/execMode 的
     // chat 会话,重载后被当 work 初始化(creview 09-07 F2)。老客户端不传 → null,行为不变。
-    const initCfg = agent_config && typeof agent_config === 'object' && !Array.isArray(agent_config) ? agent_config : null;
+    const rawCfg = agent_config && typeof agent_config === 'object' && !Array.isArray(agent_config) ? agent_config : null;
+    // 远程建会话:初始配置同样过字段钳制 —— 否则远端种下的 verifyCommand / extraRoots 会被本机下一次打开这个会话时原样带进本机 run。
+    const remote = parseRemoteOrigin(req.headers);
+    const initCfg = remote ? { ...sanitizeRemoteAgentConfig(rawCfg || {}), remoteOrigin: remoteOriginMarker(remote) } : rawCfg;
     const factErr = validSessionFacts(initCfg);
     if (factErr) return res.status(400).json({ detail: factErr });
     const id = uuidv4();
@@ -165,6 +176,13 @@ router.post('/agent/sessions/:id/branch', authMiddleware, async (req: AuthReques
     const title = typeof req.body?.title === 'string' ? req.body.title : undefined;
     const r = await branchSession({ sourceSessionId: req.params.id, userId, appId: s.app_id, messageId, title });
     if (!r) return res.status(404).json({ detail: 'branch source/message not found' });
+    // 分支照抄源会话 agent_config(源会话的远程标记随之继承);远端发起的分支自己再记一笔。
+    const remote = parseRemoteOrigin(req.headers);
+    if (remote) {
+      const [row] = await query<any[]>(`SELECT agent_config FROM chat_sessions WHERE id = ?`, [r.id]);
+      const cfg = parseMaybeJson(row?.agent_config);
+      await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = ?`, [JSON.stringify({ ...(cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg : {}), remoteOrigin: remoteOriginMarker(remote) }), r.id]);
+    }
     const rows = await query<any[]>(`SELECT ${SESSION_COLS} FROM chat_sessions WHERE id = ?`, [r.id]);
     res.json({ session: rowToSession(rows[0]), copied: r.copied });
   } catch (e: any) {
@@ -744,7 +762,10 @@ async function writeSessionConfig(req: AuthRequest, res: Response, body: Record<
       const active = await query<any[]>(`SELECT 1 FROM agent_runs WHERE session_id = ? AND status IN ('queued','running') LIMIT 1`, [id]);
       if (active.length) return void res.status(409).json({ detail: 'session identity is locked while a run is active' });
     }
-    const cfg = applySessionFactLock(stored, merge ? mergeConfigPatch(stored, body) : body, msgCount);
+    const merged = applySessionFactLock(stored, merge ? mergeConfigPatch(stored, body) : body, msgCount);
+    // 远程写(契约 C1/C3):受保护键(verifyCommand / engineId / extraRoots / devices …)保留存值、审批档不许抬过上限。
+    const remote = parseRemoteOrigin(req.headers);
+    const cfg = remote ? applyRemoteConfigWrite(stored, merged) : merged;
     // 锁合并之后再校验一次:请求体单看合法(只带 soloEngineId),合并回存值的 soloAgentSlug 就成了双身份 —— 这种写整条拒绝(creview 09-16 P0)。
     const mergedErr = validSessionFacts(cfg);
     if (mergedErr) return void res.status(400).json({ detail: mergedErr });

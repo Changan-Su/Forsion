@@ -10,6 +10,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
 import { createRun, getRun, updateRunStatus } from './runStore.js';
+import type { RemoteInfo } from './remoteOrigin.js';
 import { subscribe, type AgentEvent } from './eventBus.js';
 import { storedApprovalMode } from './approvals.js';
 import type { NormalAgentDef } from '../agents/agentRegistry.js';
@@ -46,6 +47,8 @@ export interface MemberActivation {
   approvalMode?: string;
   /** 团队 run 的审批档来自团队会话的设置(客户端发起):成员子 run 在审批时现读团队会话此刻的档(用户中途切档当场生效)。 */
   followSessionMode?: boolean;
+  /** 远程污点(契约 C5):成员子 run 的 input.remote 照抄 —— 否则远端经团队模式就能让成员按会话存的完全通行跑。 */
+  remote?: RemoteInfo;
   signal: AbortSignal;
   /** 子会话 / 子 run 建好、入队之前回调(团队 run 据此发 team_member start,带上 id)。 */
   onStarted?: (ids: { sessionId: string; runId: string }) => void;
@@ -155,7 +158,7 @@ export const activateMember: ActivateMember = async (a) => {
       appId: a.appId,
       modelId: a.member.model || a.modelId,
       assistantMessageId: uuidv4(),
-      input: { message: a.delta, userMessageId: uuidv4(), attachments: [], agentConfig: memberRunConfig(a) },
+      input: { message: a.delta, userMessageId: uuidv4(), attachments: [], agentConfig: memberRunConfig(a), ...(a.remote ? { remote: a.remote } : {}) },
     });
     // 先订阅再入队:子 run 的首批事件(status / 审批)不能漏。
     let settle!: () => void;

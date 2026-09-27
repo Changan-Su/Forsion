@@ -11,6 +11,19 @@ import { getSessionDir } from '../../sandbox/sessionSandbox.js';
 import { listWorkspaceMetas, readWorkspaceFileRaw, scopeOf } from '../fileWorkspace.js';
 import { runBoundedProcess } from '../../utils/boundedProcess.js';
 import { FileSearchWorker, checkSearchAbort, searchAbortError } from './fileSearchWorker.js';
+import path from 'node:path';
+import { credentialPaths, matchProtected } from '../../sandbox/hostSandboxProtection.js';
+import { toolSubprocessEnv } from '../../sandbox/credentialEnv.js';
+
+/** 契约 C4:凭据文件对所有 run 读硬拒 —— 内容搜索同样不许把它们的行吐出来(cwd 在家目录时 rg 会走进
+ *  ~/Library/Application Support/<桌面>/tangu-desktop-config.json;在 ~/.forsion 里则直接命中 auth.json)。 */
+function dropCredentialLines(text: string, baseDir: string): string {
+  const creds = credentialPaths();
+  return text.split('\n').filter((line) => {
+    const m = /^(.*?):\d+:/.exec(line);
+    return !m || !matchProtected(path.resolve(baseDir, m[1]), creds);
+  }).join('\n');
+}
 
 const MAX_FILES_VISITED = 5000;
 const MAX_MATCHES = 200;
@@ -103,7 +116,7 @@ async function rgSearch(cwd: string, pattern: string, include?: string, signal?:
   const args = ['-n', '--no-messages', '--max-count', '50', '--max-filesize', '1M', caseSensitive ? '--case-sensitive' : '--ignore-case', '-e', pattern];
   if (include) args.push('--glob', include);
   args.push('.');
-  const result = await runBoundedProcess('rg', args, { cwd, signal, timeoutMs: 30_000, maxOutputBytes: MAX_OUTPUT_CHARS * 4 });
+  const result = await runBoundedProcess('rg', args, { cwd, env: toolSubprocessEnv(), signal, timeoutMs: 30_000, maxOutputBytes: MAX_OUTPUT_CHARS * 4 });
   checkSearchAbort(signal);
   if (result.reason === 'aborted') throw searchAbortError(signal);
   if (result.cleanupTimedOut) throw new Error('Search process shutdown was not acknowledged');
@@ -113,8 +126,8 @@ async function rgSearch(cwd: string, pattern: string, include?: string, signal?:
   }
   if (result.reason === 'timeout') throw new Error('Search timed out');
   if (result.reason !== 'output-limit' && result.code !== 0 && result.code !== 1) return `Error: rg exited ${result.code} (check the regular expression syntax)`;
-  if (!result.stdout.trim()) return '(no matches)';
-  const text = result.stdout.trimEnd();
+  const text = dropCredentialLines(result.stdout, cwd).trimEnd();
+  if (!text.trim()) return '(no matches)';
   return text.slice(0, MAX_OUTPUT_CHARS) + (text.length > MAX_OUTPUT_CHARS || result.reason === 'output-limit' ? '\n…[truncated]' : '')
     + `\n${text.split('\n').length} matching line(s)`;
 }
@@ -203,7 +216,9 @@ export const fileSearchProvider: ToolProvider = {
         try {
           if (!baseDir) return await cloudSearch(ctx, worker);
           const result = await worker.run<{ hits: SearchHit[]; capped: boolean }>({ type: 'scan', base: baseDir });
-          return formatHits(result.hits, result.capped);
+          // 同 dropCredentialLines:凭据文件的命中行不出工具结果(C4)。云端 / 会话工作区里没有它们,照样过一遍无害。
+          const creds = credentialPaths();
+          return formatHits(result.hits.filter((h) => !matchProtected(path.resolve(baseDir, h.file), creds)), result.capped);
         } finally { await worker.dispose(); }
       }),
     },

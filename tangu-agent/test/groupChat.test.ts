@@ -22,7 +22,7 @@ let home: string;
 let events: Array<{ type: string; payload: any }>;
 let finals: Array<{ content: string; modelId: string }>;
 let statuses: Array<{ status: string; extra: any }>;
-let acts: Array<{ slug: string; nth: number; delta: string; approvalMode?: string; followSessionMode?: boolean }>;
+let acts: Array<{ slug: string; nth: number; delta: string; approvalMode?: string; followSessionMode?: boolean; remote?: any }>;
 /** 每位成员「说完这句要不要继续」:true = 这条发言以 DONE 收尾。 */
 let doneDecider: (slug: string, nth: number) => boolean;
 let inquiryAnswer: string;
@@ -30,7 +30,7 @@ let inquiryAnswer: string;
 const fakeActivate: ActivateMember = async (a) => {
   const slug = a.member.slug;
   const nth = acts.filter((x) => x.slug === slug).length + 1;
-  acts.push({ slug, nth, delta: a.delta, approvalMode: a.approvalMode, followSessionMode: a.followSessionMode });
+  acts.push({ slug, nth, delta: a.delta, approvalMode: a.approvalMode, followSessionMode: a.followSessionMode, remote: a.remote });
   a.onStarted?.({ sessionId: `ws-${slug}`, runId: `child-${slug}-${nth}` });
   await new Promise((r) => setTimeout(r, 3));
   return { status: 'done', text: `${slug}-speech-${nth}${doneDecider(slug, nth) ? '\nDONE' : ''}`, sessionId: `ws-${slug}`, runId: `child-${slug}-${nth}` };
@@ -117,6 +117,20 @@ describe('runGroupChat', () => {
     acts = [];
     await runGroupChat(params({ agentConfig: { groupNoSummary: true, groupAgents: ['alpha', 'beta'], groupMaxRounds: 1 } }));
     expect(acts.every((a) => a.approvalMode === undefined && !a.followSessionMode)).toBe(true);
+  });
+
+  it('远程污点随激活下发到每位成员(C5);团队 run 起跑后才被远端 steer 染上的,之后的激活也带上(负对照:本机团队 run 不带)', async () => {
+    doneDecider = () => true;
+    await runGroupChat(params({ remote: { via: 'tunnel', marked: true }, agentConfig: { groupNoSummary: true, groupAgents: ['alpha', 'beta'], groupMaxRounds: 1 } }));
+    expect(acts.map((a) => a.remote)).toEqual([{ via: 'tunnel', marked: true }, { via: 'tunnel', marked: true }]);
+    acts = [];
+    await runGroupChat(params({ agentConfig: { groupNoSummary: true, groupAgents: ['alpha', 'beta'], groupMaxRounds: 1 } }));
+    expect(acts.every((a) => a.remote === undefined)).toBe(true);
+    acts = [];
+    const { taintRunRemote } = await import('../src/services/remoteOrigin.js');
+    taintRunRemote('r-steered', { via: 'p2p', marked: false });
+    await runGroupChat(params({ runId: 'r-steered', agentConfig: { groupNoSummary: true, groupAgents: ['alpha', 'beta'], groupMaxRounds: 1 } }));
+    expect(acts.map((a) => a.remote)).toEqual([{ via: 'p2p', marked: false }, { via: 'p2p', marked: false }]);
   });
 
   it('every member ending with DONE stops the discussion (no vote step, no vote events)', async () => {
