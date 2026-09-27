@@ -16,7 +16,8 @@ import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
 registerMessages({
   'tool.parked.waiting': { zh: '已挂起，等你在输入框上方批准。Agent 先做别的，拍板后结果会补在这里。', en: 'Parked until you approve it above the input box. The agent carries on meanwhile; the result lands here once you decide.' },
   'tool.parked.past': { zh: '当时挂起等你批准，结局见后面的审批结果。', en: 'This call was parked for your approval; see the approval result further down.' },
-  'tool.waitingYou': { zh: '等你回复 · 在输入框上方', en: 'Waiting for your reply · above the input box' },
+  // 不写「在输入框上方」:紧挨着的指路行 / 计划卡 / 团队 work 行已经说了在哪答,这里再写一遍是重复
+  'tool.waitingYou': { zh: '等你回复', en: 'Waiting for your reply' },
 })
 
 /** 这两个工具就是「问你」本身:调用挂着 = 在等你在托盘里答,不是在跑,别用流光装忙。 */
