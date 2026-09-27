@@ -110,7 +110,8 @@ describe('C1a 预算口径:跨全部 Muse 会话', () => {
 
 // 落库 kickoff 的长度帽:防膨胀。09-27 从 2500 放到 3000 —— 加了 ctx.agent 契约;且每个周期一个新会话后它不再被
 // 逐周期回放,只随本周期发一次(多 200 来字符 ≈ 60 token,对 ~1.8 万的开局上下文可以忽略)。
-const MAX_KICKOFF = 3000;
+// 同日再放到 3500:补 ctx.agent 返回字段与配色变量表(dev 首个 ctx.agent 版 Space 猜错字段、用了不存在的 --panel),实测 3300。
+const MAX_KICKOFF = 3500;
 
 describe('C1b kickoff 拆分', () => {
   const cfg = { ...SPECIAL_AGENTS_DEFAULTS.muse, mode: 'ask' as const, escalateTo: '', notify: 'immediate' as const };
@@ -136,7 +137,11 @@ describe('C1b kickoff 拆分', () => {
       expect(message).toMatch(/Library and your Space folder|authorized folders and your Space folder/);
       expect(message).toContain('call ctx.registerView({ id: "home", ... }) at the top level');
       expect(message).toContain('Do not wrap the file in function setup(ctx)');
-      expect(message).toContain('ctx.agent.todos()'); // 09-27:从数据渲染,别写死
+      expect(message).toContain('ctx.agent.todos("pending")'); // 09-27:从数据渲染,别写死
+      // 09-27 dev 首个 ctx.agent 版 Space:不给返回字段就猜 status().status;不给变量表就用宿主没有的 --panel
+      expect(message).toContain('ctx.agent.status() → { running, lastCycleAt');
+      expect(message).toContain('var(--bg-card)');
+      expect(message).not.toMatch(/--panel|--surface|--card\b/);
       expect(message).toContain('never edit it just to refresh status or timestamps');
       expect(message).toContain('works only inside a click handler');
       expect(message.length).toBeLessThan(MAX_KICKOFF);
