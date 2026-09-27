@@ -243,3 +243,17 @@ describe('E9 通道发文件过 C4 读闸', () => {
     expect(sent.calls).toHaveLength(1);
   });
 });
+
+describe('E4 保护路径段的平台口径(纯函数:Linux CI 上也跑,Codex 第三轮评审 P3)', () => {
+  it('darwin / win32 折叠大小写;win32 另吞段尾点与空格;linux 原样', async () => {
+    const { metadataSegment } = await import('../src/tools/fsPolicy.js');
+    expect(metadataSegment('.GIT', 'darwin')).toBe('.git');
+    expect(metadataSegment('.Git', 'win32')).toBe('.git');
+    expect(metadataSegment('.git.', 'win32')).toBe('.git');
+    expect(metadataSegment('.GIT . ', 'win32')).toBe('.git');
+    expect(metadataSegment('.AGENTS', 'darwin')).toBe('.agents');
+    expect(metadataSegment('.GIT', 'linux')).toBe('.GIT'); // Linux 大小写敏感:.GIT 是另一个目录
+    expect(metadataSegment('.git.', 'darwin')).toBe('.git.'); // 吞尾点只在 Windows
+    expect(metadataSegment('.gitignore', 'darwin')).toBe('.gitignore');
+  });
+});

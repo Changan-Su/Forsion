@@ -175,13 +175,14 @@ export function applyRemoteConfigWrite(stored: unknown, next: Record<string, any
 }
 
 // ── P0 第三轮 E5 / E6:远程污点 run 不许动的持久化管理面。────────────────────────────────────────
-/** Agent 定义 / 技能 / 自动化规则 / 日程:它们在下一次**本机** run(或到点无人值守、强制 full-auto 的自动化 run)里生效,
+/** Agent 定义 / 技能 / 工作笔记(HARNESS.md,及 propose 写进别的 Agent 的候选收件箱)/ 自动化规则 / 日程:
+ *  它们在下一次**本机** run(或到点无人值守、强制 full-auto 的自动化 run)里生效,
  *  远端借一条 run 改它们 = 把自己的指令种进本机。只放行 list;其余动作(create / update / delete / set / remove,以及明天新加的动作)
  *  一律硬拒 —— 不进审批:按 D1 远端能批自己的卡,弹卡挡不住。审批闸与工具实现两处共用这一个判定。 */
-const REMOTE_READONLY_MANAGEMENT = new Set(['manage_agent', 'manage_skill', 'manage_automation', 'manage_schedule']);
+const REMOTE_READONLY_MANAGEMENT = new Set(['manage_agent', 'manage_skill', 'manage_harness', 'manage_automation', 'manage_schedule']);
 export function remoteManagementDenied(tool: string, action: unknown): string | null {
   if (!REMOTE_READONLY_MANAGEMENT.has(tool) || action === 'list') return null;
-  return `Remote sessions cannot create, change or delete agents, skills, automations or schedules (${tool} action "${String(action ?? '')}"): they take effect in later runs on the host computer. Only action "list" is available here; ask the user to make this change on the host computer.`;
+  return `Remote sessions cannot create, change or delete agents, skills, working notes, automations or schedules (${tool} action "${String(action ?? '')}"): they take effect in later runs on the host computer. Only action "list" is available here; ask the user to make this change on the host computer.`;
 }
 
 // ── 中途染色:远端对一个**本机**起的在飞 run 发 steer,注入的文字从下一个迭代起就在驱动它 → 这条 run 从此按远程钳制。

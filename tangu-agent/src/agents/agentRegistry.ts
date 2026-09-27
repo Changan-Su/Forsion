@@ -966,8 +966,20 @@ export function libDirOf(slug: string): string {
 
 export interface LibraryFileMeta { name: string; size: number; isBinary: boolean; mtimeMs: number }
 
-export async function listLibraryFiles(slug: string): Promise<LibraryFileMeta[]> {
+/** 远端请求(P0 第三轮,Codex 评审 P2):Library 根本身得真的住在这个 Agent 的目录里 —— 用户可以把 Library 链到别处(本机界面照旧可读),
+ *  但那样一来远端经本端点就能列 / 读链过去的任意目录。不满足 → 当作空 / 不存在。 */
+async function libraryRootHome(dir: string): Promise<boolean> {
+  try {
+    const realDir = await fs.realpath(dir);
+    const realAgent = await fs.realpath(path.dirname(dir));
+    const rel = path.relative(realAgent, realDir);
+    return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel);
+  } catch { return false; }
+}
+
+export async function listLibraryFiles(slug: string, opts: { remote?: boolean } = {}): Promise<LibraryFileMeta[]> {
   const dir = libDirOf(slug);
+  if (opts.remote && !(await libraryRootHome(dir))) return [];
   let names: string[];
   try { names = await fs.readdir(dir); } catch { return []; }
   const out: LibraryFileMeta[] = [];
@@ -982,9 +994,10 @@ export async function listLibraryFiles(slug: string): Promise<LibraryFileMeta[]>
   return out;
 }
 
-export async function readLibraryFile(slug: string, name: string): Promise<{ name: string; isBinary: boolean; content?: string; dataBase64?: string; mimeType?: string } | null> {
+export async function readLibraryFile(slug: string, name: string, opts: { remote?: boolean } = {}): Promise<{ name: string; isBinary: boolean; content?: string; dataBase64?: string; mimeType?: string } | null> {
   const dir = libDirOf(slug);
   const safe = sanitizeLibraryName(name);
+  if (opts.remote && !(await libraryRootHome(dir))) return null;
   try {
     // realpath 钳制(P0 第三轮 E9,同 workspace 读路由的 insideWorkspace):Library 里的软链可以指向任何地方(auth.json、别的 Agent 的
     // 私有文件),本端点对远端开放 —— 真实路径必须仍在这个 Agent 的 Library 之内,且不是凭据文件(C4)。不满足一律按「不存在」回,不泄露存在性。

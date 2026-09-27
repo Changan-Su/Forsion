@@ -243,6 +243,23 @@ describe('E9 Library 文件读:realpath 钳制 + C4 读闸', () => {
     expect(ok.status).toBe(200);
     expect(ok.body.content).toBe('hello library');
   });
+
+  it('Library 根本身是软链、指到 Agent 目录之外:远端读 / 列都够不着(本机自己的界面照旧)(Codex 第三轮评审 P2)', async () => {
+    const agentDir = join(home, 'agents', 'lk');
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(join(agentDir, 'config.toml'), 'name = "lk"\n');
+    const ext = join(ws, 'external-lib');
+    mkdirSync(ext, { recursive: true });
+    writeFileSync(join(ext, 'x.txt'), 'EXTERNAL-SECRET');
+    symlinkSync(ext, join(agentDir, 'Library'));
+    const r = await send('GET', '/agent/agents/lk/library/file?name=x.txt', null, REMOTE_HDR);
+    expect(r.status).toBe(404);
+    expect(JSON.stringify(r.body)).not.toContain('EXTERNAL-SECRET');
+    expect((await send('GET', '/agent/agents/lk/library', null, REMOTE_HDR)).body.files).toEqual([]);
+    // 负对照:本机请求(用户自己把 Library 链到了别处)照旧读得到
+    expect((await send('GET', '/agent/agents/lk/library/file?name=x.txt', null)).body.content).toBe('EXTERNAL-SECRET');
+    expect((await send('GET', '/agent/agents/lk/library', null)).body.files.map((f: any) => f.name)).toEqual(['x.txt']);
+  });
 });
 
 describe('E11 C8 加固 + 派生项目会话', () => {

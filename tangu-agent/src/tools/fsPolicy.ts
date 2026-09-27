@@ -65,11 +65,12 @@ function realResolve(abs: string): string {
 }
 
 /** 路径段按宿主文件系统的比较口径归一:macOS / Windows 默认大小写不敏感(`.GIT` 就是 `.git`,`.Agents` 就是 `.agents`,评审 B#4 /
- *  P0 第三轮 E4);Windows 还会吞掉段尾的点和空格(`.git.` / `.git ` 打开的就是 `.git`)。 */
-function metaSegment(part: string): string {
-  const seg = foldCase ? part.toLowerCase() : part;
-  return process.platform === 'win32' ? seg.replace(/[. ]+$/, '') : seg;
+ *  P0 第三轮 E4);Windows 还会吞掉段尾的点和空格(`.git.` / `.git ` 打开的就是 `.git`)。platform 参数只给测试(Linux CI 上验另两个平台)。 */
+export function metadataSegment(part: string, platform: NodeJS.Platform = process.platform): string {
+  const seg = platform === 'darwin' || platform === 'win32' ? part.toLowerCase() : part;
+  return platform === 'win32' ? seg.replace(/[. ]+$/, '') : seg;
 }
+const metaSegment = (part: string): string => metadataSegment(part);
 const hasSegment = (p: string, names: string[]): boolean => p.split(path.sep).some((part) => names.includes(metaSegment(part)));
 
 /** 路径里有 `.agents` / `.codex` 段(别的 agent 工具的技能 / 配置目录)。 */

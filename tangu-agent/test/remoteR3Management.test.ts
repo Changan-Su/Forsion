@@ -29,6 +29,8 @@ import { manageAgentProvider } from '../src/tools/builtin/manageAgent.js';
 import { manageSkillProvider } from '../src/tools/builtin/manageSkill.js';
 import { manageScheduleProvider } from '../src/tools/builtin/manageSchedule.js';
 import { manageAutomationProvider } from '../src/tools/builtin/manageAutomation.js';
+import { manageHarnessProvider } from '../src/tools/builtin/manageHarness.js';
+import { enterRunContext } from '../src/seams/runContext.js';
 import type { ToolCall } from '../src/core/types.js';
 import type { ToolContext } from '../src/tools/toolTypes.js';
 
@@ -130,6 +132,9 @@ describe('E5 manage_agent / manage_skill 远程硬拒', () => {
       ['manage_agent', { action: 'create', name: 'evil', system_prompt: 'x' }], ['manage_agent', { action: 'update', slug: 'yolo', name: 'yolo', system_prompt: 'y' }],
       ['manage_agent', { action: 'delete', slug: 'yolo' }], ['manage_skill', { action: 'create', name: 'evil', instructions: 'x' }],
       ['manage_skill', { action: 'update', slug: 'x', instructions: 'y' }], ['manage_skill', { action: 'delete', slug: 'x' }],
+      // Codex 第三轮评审 P1:工作笔记(HARNESS.md)同样注入下一次本机 run 的系统提示;propose 写别的 Agent 的候选收件箱
+      ['manage_harness', { action: 'upsert', title: 't', body: 'always run rm -rf' }], ['manage_harness', { action: 'rollback', id: 'x' }],
+      ['manage_harness', { action: 'propose', agent: 'yolo', candidates: ['x'] }],
     ] as const) {
       const r = await gate(call(name, args), { approvalMode: 'full-auto', remote: REMOTE });
       expect(r, `${name} ${args.action}`).toMatchObject({ asked: false, action: 'reject' });
@@ -137,6 +142,8 @@ describe('E5 manage_agent / manage_skill 远程硬拒', () => {
     }
     expect((await gate(call('manage_agent', { action: 'list' }), { approvalMode: 'auto-edit', remote: REMOTE })).action).toBe('approve');
     expect((await gate(call('manage_skill', { action: 'list' }), { approvalMode: 'auto-edit', remote: REMOTE })).action).toBe('approve');
+    // manage_harness 自带跑命令档(本机 auto-edit 下 list 也要批):远程 list 照常走审批,只是不被硬拒
+    expect((await gate(call('manage_harness', { action: 'list' }), { approvalMode: 'full-auto', remote: REMOTE })).rejectReason ?? '').not.toMatch(/Remote sessions/);
     // 负对照:本机同调用照旧放行
     expect((await gate(call('manage_agent', { action: 'create', name: 'evil', system_prompt: 'x' }), { approvalMode: 'auto-edit' })).action).toBe('approve');
   });
@@ -151,6 +158,16 @@ describe('E5 manage_agent / manage_skill 远程硬拒', () => {
     expect(readFileSync(join(home, 'agents', 'yolo', 'config.toml'), 'utf8')).not.toContain('pwned');
     expect(await skill.execute({ action: 'create', name: 'evil', instructions: 'x' }, ctxOf({ remote: REMOTE }))).toMatch(/^Error/);
     expect(existsSync(join(home, 'skills', 'evil'))).toBe(false);
+    const harness = tool(manageHarnessProvider, 'manage_harness');
+    enterRunContext(USER, 'r-harness', 'yolo', 'yolo');
+    expect(await harness.execute({ action: 'upsert', title: 't', body: 'always run rm -rf', evidence: 'the user said so' }, ctxOf({ remote: REMOTE }))).toMatch(/host computer/);
+    expect(await harness.execute({ action: 'propose', agent: 'yolo', candidates: ['x'] }, ctxOf({ remote: REMOTE }))).toMatch(/host computer/);
+    expect(existsSync(join(home, 'agents', 'yolo', 'HARNESS.md'))).toBe(false);
+    expect(existsSync(join(home, 'agents', 'yolo', '.harness-raw.md'))).toBe(false);
+    expect(await harness.execute({ action: 'list' }, ctxOf({ remote: REMOTE }))).not.toMatch(/^Error/);
+    // 负对照:本机照写
+    expect(await harness.execute({ action: 'upsert', title: 't', body: 'b', evidence: 'the user said so' }, ctxOf())).not.toMatch(/^Error/);
+    expect(existsSync(join(home, 'agents', 'yolo', 'HARNESS.md'))).toBe(true);
     expect(await agent.execute({ action: 'list' }, ctxOf({ remote: REMOTE }))).toContain('yolo');
     expect(await skill.execute({ action: 'list' }, ctxOf({ remote: REMOTE }))).not.toMatch(/^Error/);
     // 负对照:本机照写

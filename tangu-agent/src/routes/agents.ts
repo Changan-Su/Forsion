@@ -27,6 +27,7 @@ import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
 import { agentSyncPermission, agentSyncScope, setAgentSyncPermission } from '../services/cloudSyncAccount.js';
 import { loadHarness, readJournal, applyHarnessEdit, peekHarnessCandidates } from '../agents/harnessStore.js';
 import { renameAgent, AgentRenameError } from '../agents/agentRename.js';
+import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 
 const router = Router();
 
@@ -368,7 +369,7 @@ router.get('/agent/agents/:slug/library', authMiddleware, async (req: AuthReques
   if (!ensureLocal(res)) return;
   try {
     if (!(await getAgent(req.params.slug))) return res.status(404).json({ detail: 'Agent not found' });
-    res.json({ files: await listLibraryFiles(req.params.slug) });
+    res.json({ files: await listLibraryFiles(req.params.slug, { remote: !!parseRemoteOrigin(req.headers) }) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list library failed' });
   }
@@ -377,7 +378,7 @@ router.get('/agent/agents/:slug/library', authMiddleware, async (req: AuthReques
 router.get('/agent/agents/:slug/library/file', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
-    const f = await readLibraryFile(req.params.slug, String(req.query.name || ''));
+    const f = await readLibraryFile(req.params.slug, String(req.query.name || ''), { remote: !!parseRemoteOrigin(req.headers) });
     if (!f) return res.status(404).json({ detail: 'file not found' });
     res.json(f);
   } catch (e: any) {
