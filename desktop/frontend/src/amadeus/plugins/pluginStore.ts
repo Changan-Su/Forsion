@@ -436,8 +436,10 @@ const lastGesture = new Map<string, number>()
 const GESTURE_WINDOW_MS = 1500
 export function notePluginGesture(pluginId: string): void { lastGesture.set(pluginId, Date.now()) }
 /** agent 自建 Space 代码的 sourceURL:栈帧里写的就是它(行号比 main.js 多 2 —— new Function 在函数体前包了两行头)。
- *  builtins/agentSpaceSync 据此把挂载之后的运行时错误归到这个 Space 身上、回写给 agent。 */
-export const agentSpaceSourceUrl = (pluginId: string): string => `forsion-agent-space/${pluginId}/main.js`
+ *  builtins/agentSpaceSync 据此把挂载之后的运行时错误归到这个 Space 身上、回写给 agent。
+ *  带加载序号:返回的是**当前这一版**的地址 —— 旧版漏清的定时器在重载后还会抛,不许算到新版头上(Codex 09-27)。 */
+const agentLoads = new Map<string, number>()
+export const agentSpaceSourceUrl = (pluginId: string): string => `forsion-agent-space/${pluginId}/${agentLoads.get(pluginId) ?? 0}/main.js`
 
 /** reloadOne 的按 id 串行链。 */
 const reloadChains = new Map<string, Promise<void>>()
@@ -488,6 +490,7 @@ function toPlugin(src: ExternalPluginSource): AmadeusPlugin {
       // 抛的错(宿主的 try/catch 与 mount 的 Promise 都罩不住)才能回写给 agent(09-27 live:选择器拿到 null,数据卡全空,
       // 报错只进控制台,Muse 一无所知)。
       if (!src.dev) {
+        if (src.agent) agentLoads.set(src.id, (agentLoads.get(src.id) ?? 0) + 1)
         const fn = new Function('ctx', src.agent ? `${src.code}\n//# sourceURL=${agentSpaceSourceUrl(src.id)}` : src.code) as (c: PluginContext) => unknown
         const d = fn(ctx)
         return typeof d === 'function' ? (d as () => void) : undefined

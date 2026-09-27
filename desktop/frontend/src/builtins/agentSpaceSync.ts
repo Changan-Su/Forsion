@@ -71,18 +71,22 @@ export function reportAgentSpaceMountError(cfg: TanguDesktopConfig, slug: string
     .catch(() => { sent.delete(text) })
 }
 
-/** 挂载之后的运行时错误(异步回调 / 事件处理 / 定时器 / 订阅回调里抛的):宿主的 try/catch 与 mount 的 Promise 都罩不住,
+/** 挂载之后没接住的错误(异步回调 / 事件处理 / 定时器 / 订阅回调里抛的):宿主的 try/catch 与 mount 的 Promise 都罩不住,
  *  从前只进控制台。09-27 live:Muse 的 Space 选择器拿到 null,异步 draw 里 TypeError,数据卡全空,它一无所知。
- *  pluginStore 给 agent Space 的代码打了 sourceURL → 栈帧认得出是它 → 回写成 [feedback],带 main.js 行号。
- *  每份内容(戳)同一条只报一次、最多 3 条;POST 失败撤销标记,下次再报。
- *  ponytail: 只认栈里有它的帧 —— 宿主代码里造出来的 reject(ctx.agent.status() 的「backend not ready」)没它的帧,归不了;
- *  要认就得给 ctx.agent 的 Promise 打标,目前不值当。 */
+ *  pluginStore 给 agent Space 当前这一版的代码打了 sourceURL → 栈里有它的帧 → 回写成 [feedback],带 main.js 行号。
+ *  文案是中性的「在你的 Space 里没接住」:错可能是它自己的代码抛的,也可能是它调的宿主接口 reject 了、它没接(异步栈里
+ *  照样有它 await 的那一帧)—— 两种的修法都落在那一行。只认当前这一版(旧版漏清的定时器不算);同一条只报一次、最多 3 条,
+ *  POST 失败撤销标记。
+ *  ponytail: 去重只在本渲染进程 —— 两个窗口同时开着 Muse Space 撞上同一个错会各报一条,要紧再挪到引擎侧按文本去重;
+ *  栈里一帧都没有它的(宿主自己的定时器 reject)归不了。 */
 const RUNTIME_MAX = 3
 let runtimeCfg: TanguDesktopConfig | null = null
-let runtimeReported = new Map<string, Set<string>>()
+let runtimeKey = ''
+let runtimeSeen = new Set<string>()
 let runtimeHooked = false
 
-/** 栈里有 agent Space 代码的帧 → 回写文案;不是它的 → null。行号减 2:new Function 包了 `function anonymous(ctx\n) {\n` 两行头。 */
+/** 栈里有 agent Space 当前这一版代码的帧 → 回写文案(行号取栈里它的第一帧);不是它的 → null。
+ *  行号减 2:new Function 包了 `function anonymous(ctx\n) {\n` 两行头。 */
 export function agentSpaceRuntimeError(err: unknown, sourceUrl: string): string | null {
   const stack = String((err as { stack?: unknown } | null)?.stack ?? '')
   const at = stack.indexOf(sourceUrl)
@@ -90,23 +94,22 @@ export function agentSpaceRuntimeError(err: unknown, sourceUrl: string): string 
   const pos = /^:(\d+):\d+/.exec(stack.slice(at + sourceUrl.length))
   const line = pos ? Number(pos[1]) - 2 : 0
   const e = err as { name?: unknown; message?: unknown }
-  return `Your Space's code threw after it loaded${line > 0 ? ` (main.js line ${line})` : ''}: ` +
+  return `An error went unhandled in your Space after it loaded${line > 0 ? ` (main.js line ${line})` : ''}: ` +
     `${String(e.name || 'Error')}: ${String(e.message ?? '').slice(0, 300)}. ` +
-    'The view keeps whatever it drew before the error, so it can look fine while its data never arrives.'
+    'The view keeps whatever it drew before, so it can look fine while its data never arrives: fix that line, or catch the error there and draw an empty state.'
 }
 
 /** 窗口级 error / unhandledrejection 的入口(导出给测试)。 */
 export function noteAgentSpaceRuntimeError(err: unknown): void {
   const cfg = runtimeCfg
-  const text = cfg && agentSpaceRuntimeError(err, agentSpaceSourceUrl(agentPluginId('muse')))
+  const url = agentSpaceSourceUrl(agentPluginId('muse'))
+  const text = cfg && agentSpaceRuntimeError(err, url)
   if (!cfg || !text) return
-  const key = String(loadedStamp.get('muse') ?? 'boot')
-  let seen = runtimeReported.get(key)
-  if (!seen) runtimeReported.set(key, (seen = new Set()))
+  if (url !== runtimeKey) { runtimeKey = url; runtimeSeen = new Set() } // 换了一版:重新计,旧版的记录不留
+  const seen = runtimeSeen
   if (seen.has(text) || seen.size >= RUNTIME_MAX) return
   seen.add(text)
-  const sent = seen
-  void postMuseFeedback(cfg, text).catch(() => { sent.delete(text) })
+  void postMuseFeedback(cfg, text).catch(() => { seen.delete(text) })
 }
 
 function hookRuntimeErrors(cfg: TanguDesktopConfig): void {
@@ -118,4 +121,4 @@ function hookRuntimeErrors(cfg: TanguDesktopConfig): void {
 }
 
 /** 测试用:清掉戳记忆。 */
-export function __resetAgentSpaceSync(): void { loadedStamp.clear(); reportedStamp.clear(); mountReported = new WeakMap(); runtimeReported = new Map(); runtimeCfg = null }
+export function __resetAgentSpaceSync(): void { loadedStamp.clear(); reportedStamp.clear(); mountReported = new WeakMap(); runtimeKey = ''; runtimeSeen = new Set(); runtimeCfg = null }

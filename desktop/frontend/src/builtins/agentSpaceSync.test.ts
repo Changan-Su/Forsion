@@ -98,26 +98,34 @@ describe('syncAgentSpace 回写', () => {
     expect(posted).not.toHaveBeenCalled()
   })
 
-  // 挂载之后的运行时错误:用与宿主同形的 new Function + sourceURL 造真栈(Node 与 Electron 同一个 V8)
+  // 挂载之后没接住的错误:用与宿主同形的 new Function + sourceURL 造真栈(Node 与 Electron 同一个 V8)
   const url = agentSpaceSourceUrl('agent-muse')
-  const throwFromSpace = (body: string): unknown => {
-    const inner = (new Function('ctx', `${body}\n//# sourceURL=${url}`) as (c: unknown) => () => void)({})
+  const throwFromSpace = (body: string, at = url): unknown => {
+    const inner = (new Function('ctx', `${body}\n//# sourceURL=${at}`) as (c: unknown) => () => void)({})
     try { inner() } catch (e) { return e }
     throw new Error('fixture did not throw')
   }
   const withHome = { plugins: [muse], activeIds: ['agent-muse'], views: [{ pluginId: 'agent-muse', item: { id: 'home' } }] }
 
-  it('运行时错误按 sourceURL 认领:行号换算回 main.js;宿主自己的错 / 非 Error 不认', () => {
+  it('按当前这一版的 sourceURL 认领:行号换算回 main.js;宿主自己的错 / 非 Error / 别的 agent / 旧版漏清的定时器都不认', () => {
     const text = agentSpaceRuntimeError(throwFromSpace('const box = null\nreturn () => { box.innerHTML = 1 }'), url)
-    expect(text).toMatch(/threw after it loaded \(main\.js line 2\): TypeError: Cannot set properties of null/)
+    expect(text).toMatch(/went unhandled in your Space after it loaded \(main\.js line 2\): TypeError: Cannot set properties of null/)
     expect(agentSpaceRuntimeError(new Error('backend not ready'), url)).toBeNull()
     expect(agentSpaceRuntimeError('just a string', url)).toBeNull()
     expect(agentSpaceRuntimeError(throwFromSpace('return () => { null.x = 1 }'), agentSpaceSourceUrl('agent-other'))).toBeNull()
+    expect(agentSpaceRuntimeError(throwFromSpace('return () => { null.x = 1 }', 'forsion-agent-space/agent-muse/7/main.js'), url)).toBeNull()
   })
 
-  it('运行时错误回写:同一条只报一次、每份内容最多 3 条,换了戳重新计,POST 失败撤销标记', async () => {
+  it('Space await 的宿主接口 reject 了、它没接 → 也认(异步栈里有它那一帧),行号落在 await 那行;文案不说是它的代码抛的', async () => {
+    const host = { status: async () => { await null; throw new Error('backend not ready') } } // 宿主代码:栈帧里没有 sourceURL
+    const draw = (new Function('ctx', `return async () => {\n  await ctx.status()\n}\n//# sourceURL=${url}`) as (c: unknown) => () => Promise<void>)(host)
+    const err = await draw().catch((e: unknown) => e)
+    expect(agentSpaceRuntimeError(err, url)).toMatch(/^An error went unhandled in your Space after it loaded \(main\.js line 2\): Error: backend not ready/)
+  })
+
+  it('回写:同一条只报一次、每版最多 3 条;POST 失败撤销标记;没见过 Muse 的 cfg 不报', async () => {
     noteAgentSpaceRuntimeError(throwFromSpace('return () => { null.a = 1 }'))
-    expect(posted).not.toHaveBeenCalled() // 还没见过 Muse 的 cfg(Muse 界面没开过):不报
+    expect(posted).not.toHaveBeenCalled() // Muse 界面没开过:不报
     afterReload(withHome)
     await run(10)
     const a = throwFromSpace('return () => { null.a = 1 }')
@@ -127,12 +135,13 @@ describe('syncAgentSpace 回写', () => {
     expect(posted.mock.calls[0][1]).toMatch(/main\.js line 1\): TypeError/)
     for (const k of ['b', 'c', 'd']) noteAgentSpaceRuntimeError(throwFromSpace(`return () => { null.${k} = 1 }`))
     expect(posted).toHaveBeenCalledTimes(3) // 上限 3:d 不报
+    __resetAgentSpaceSync()
     afterReload(withHome)
-    await run(11) // 新内容
+    await run(11)
     posted.mockRejectedValueOnce(new Error('engine down'))
     noteAgentSpaceRuntimeError(a)
     await vi.advanceTimersByTimeAsync(0)
     noteAgentSpaceRuntimeError(a)
-    expect(posted).toHaveBeenCalledTimes(5) // 新戳重新计;POST 失败那次撤销了标记,再报一次
+    expect(posted).toHaveBeenCalledTimes(5) // POST 失败那次撤销了标记,再报一次
   })
 })

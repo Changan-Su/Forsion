@@ -249,8 +249,8 @@ async function main() {
     // 挂载之后的运行时错误:宿主的 try/catch 与 mount 的 Promise 都罩不住 —— 代码带 sourceURL,窗口 error / unhandledrejection 认领回写
     fs.writeFileSync(path.join(space, 'main.js'), RUNTIME_THROWS, 'utf8'); bump()
     const runtimeShown = await visible(win, '.muse-runtime', 12_000)
-    const asyncErr = /threw after it loaded \(main\.js line 4\): TypeError: Cannot set properties of null \(setting 'innerHTML'\)/
-    const timerErr = /threw after it loaded \(main\.js line 6\): TypeError: Cannot set properties of null \(setting 'textContent'\)/
+    const asyncErr = /went unhandled in your Space after it loaded \(main\.js line 4\): TypeError: Cannot set properties of null \(setting 'innerHTML'\)/
+    const timerErr = /went unhandled in your Space after it loaded \(main\.js line 6\): TypeError: Cannot set properties of null \(setting 'textContent'\)/
     const count = (re) => feedback.filter((x) => re.test(x)).length
     const t5 = Date.now()
     while (Date.now() - t5 < 10_000 && !(count(asyncErr) && count(timerErr))) await win.waitForTimeout(300)
