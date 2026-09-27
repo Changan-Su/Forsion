@@ -243,8 +243,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const gitErrorOf = (e: any, retry?: () => void): GitErr => {
     // git 进程超时(引擎回的是 400 + git_timeout):提交 / 推送可能已经做完了 —— 与断连同样按「结果未确认」处理并重读
     if (e?.code === 'git_timeout') { setReloadAt((n) => n + 1); return { message: t('projectProfile.git.unconfirmed'), info: typeof e?.info === 'string' ? e.info : undefined } }
-    // 提交过程中仓库被别的东西改了(post-commit 钩子又提交 / 撤回失败):不猜结果,说清楚并重读
-    if (e?.code === 'commit_unverified') { setReloadAt((n) => n + 1); return { message: t('projectProfile.git.err.commit_unverified'), info: typeof e?.info === 'string' ? e.info : undefined } }
+    // 提交已经落下但复核不过(钩子加了清单外的东西)/ 提交过程中仓库被别的东西改了、没法确认:不猜、不撤,说清楚并重读
+    if (e?.code === 'commit_unverified' || e?.code === 'hook_changed_commit') { setReloadAt((n) => n + 1); return { message: t(`projectProfile.git.err.${e.code}`), info: typeof e?.info === 'string' ? e.info : undefined } }
     if (typeof e?.code === 'string') return {
       message: GIT_ERROR_CODES.has(e.code) ? t(`projectProfile.git.err.${e.code}`) : String(e?.message || e),
       info: typeof e?.info === 'string' && e.info ? e.info : undefined,
@@ -310,6 +310,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     void gitRun('git-commit', (trust) => gitCommitProject(s.cfg, session.id, message, pending?.token, trust).catch(async (e) => {
       // 看完之后改动又变了:重新列出这次会提交的东西(保留已写好的信息),让用户再过目一次
       if (e?.code === 'changes_changed') await gitPendingProject(s.cfg, session.id).then(setPending).catch(() => {})
+      // 提交已经落下(复核不过 / 没法确认):收起提交框,再点一次 = 重复提交
+      if (e?.code === 'hook_changed_commit' || e?.code === 'commit_unverified') { setCommitDraft(null); setPending(null) }
       throw e
     }), (r) => {
       applyContext(r.context); setCommitDraft(null); setPending(null)

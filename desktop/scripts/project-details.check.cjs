@@ -337,6 +337,17 @@ async function run(app, win, stub, seen, home, ctx) {
   await initBtn.click()
   await until(async () => (await writeRow.count()) === 1)
   check('6l 创建 → POST git/init { sessionId };面板回到仓库摘要,出现写动作行(无远端 → 没有推送键)', seen.gitInits.length === 1 && seen.gitInits[0].sessionId === 'pd-main' && await writeRow.count() === 1 && await writeRow.locator('[data-git-action="push"]').count() === 0, JSON.stringify(seen.gitInits))
+  // 提交落下了,但钩子往里加了清单外的东西:引擎不撤(认不准哪个是我们的提交),本地化说明 + 点名文件,提交框收起、状态重读
+  const getsBeforeHook = seen.ctxGets.length
+  seen.hookOnce = true
+  await writeRow.locator('[data-git-action="commit"]').click()
+  await form.waitFor()
+  await until(async () => (await form.locator('textarea').inputValue()).length > 0)
+  await form.locator('[data-git-action="commit-confirm"]').click()
+  await gitError.waitFor()
+  const hookText = (await gitError.textContent()) || ''
+  const hookClosed = await until(async () => (await form.count()) === 0)
+  check('6l2 钩子往提交里加了清单外的文件 → 「提交已完成…没有撤回」+ 点名 .env;提交框收起、重读状态', /提交已完成/.test(hookText) && /没有撤回/.test(hookText) && /\.env/.test(hookText) && hookClosed && seen.ctxGets.length > getsBeforeHook, hookText)
   check('6m Git 写动作之后仍不横向溢出', await noOverflow(profile), await overflowReport(profile))
 
   // ── 6n 设置 → Git:三项都落到 PUT /agent/git-settings(文本框失焦才写,开关立即写)──
@@ -598,6 +609,7 @@ async function main() {
       const b = await body(); seen.gitCommits.push(b)
       // 清单指纹对不上(用户看完之后又冒出文件)→ 引擎回 changes_changed;桌面应重新拉清单、保留信息,等用户再点
       if (seen.staleOnce) { seen.staleOnce = false; return { __code: 400, body: { detail: 'changed', error: 'changes_changed' } } }
+      if (seen.hookOnce) { seen.hookOnce = false; return { __code: 400, body: { detail: 'hook', error: 'hook_changed_commit', info: 'A .env' } } }
       const subject = String(b.message).split('\n')[0]
       ctx.git = { ...ctx.git, staged: 0, unstaged: 0, untracked: 0, changesTotal: 0, changes: [], ahead: (ctx.git.ahead || 0) + 1, commits: [{ sha: 'c'.repeat(40), short: 'ccccccc', at: Date.now(), subject }, ...(ctx.git.commits || [])] }
       return { commit: { sha: 'c'.repeat(40), subject, stagedOnly: false }, context: ctx }

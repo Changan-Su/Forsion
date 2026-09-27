@@ -259,7 +259,7 @@ describe('仓库自带会执行程序的配置(gitTrust)', () => {
     expect((await gitCommit(cwd, 'again')).subject).toBe('again'); // 信任记在宿主侧,下次不再问
   });
 
-  it.skipIf(process.platform === 'win32')('信任过的钩子在复核之后又暂存了凭据 → 撤回这次提交(工作区不动);只改格式的钩子照常提交', async () => {
+  it.skipIf(process.platform === 'win32')('信任过的钩子在复核之后又暂存了凭据 → hook_changed_commit 点名 .env,提交留着不撤;只改格式的钩子照常提交', async () => {
     const cwd = repo('hook-restage');
     writeFileSync(path.join(cwd, 'a.txt'), 'a');
     git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
@@ -267,43 +267,30 @@ describe('仓库自带会执行程序的配置(gitTrust)', () => {
     git(cwd, 'config', 'core.hooksPath', '.githooks');
     writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\necho "TOKEN=x" > .env\ngit add .env\n', { mode: 0o755 });
     writeFileSync(path.join(cwd, 'a.txt'), 'changed');
-    const head = git(cwd, 'rev-parse', 'HEAD');
     const err = await gitCommit(cwd, 'sneaky', true).catch((e) => e);
     expect(err.code).toBe('hook_changed_commit');
     expect(err.detail).toContain('.env');
-    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(head);            // 提交撤回了
-    expect(readFileSync(path.join(cwd, 'a.txt'), 'utf8')).toBe('changed'); // 用户的改动还在
+    expect(git(cwd, 'log', '-1', '--format=%s')).toBe('sneaky'); // 不撤:认不准哪个是我们的提交,交给用户处理
     // 只改格式的钩子(lint-staged 那类):tree 变了但没有违规 → 照常提交
+    git(cwd, 'reset', '-q', '--soft', 'HEAD~1'); git(cwd, 'reset', '-q'); rmSync(path.join(cwd, '.env')); // 退回但工作区不动(钩子目录也在工作区里)
     writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\nprintf "formatted" > a.txt\ngit add a.txt\n', { mode: 0o755 });
-    rmSync(path.join(cwd, '.env')); git(cwd, 'reset', '-q');
     expect((await gitCommit(cwd, 'formatted by hook')).subject).toBe('formatted by hook');
     expect(git(cwd, 'show', 'HEAD:a.txt')).toBe('formatted');
   });
 
-  it.skipIf(process.platform === 'win32')('钩子加了一个没过目的普通文件:分支上 → 撤回;首次提交 / 游离 HEAD → 证明不了是自己的,只报 commit_unverified 不撤', async () => {
+  it.skipIf(process.platform === 'win32')('钩子加了一个没过目的普通文件(首次提交也一样)→ hook_changed_commit 点名它,提交留着', async () => {
     const cwd = repo('hook-extra');
     const hooks = dir('hook-extra/.githooks');
     git(cwd, 'config', 'core.hooksPath', '.githooks');
-    // 追加写:每次提交钩子都真的改了它(原样重写的话第二次就没有改动,复核自然过)
-    writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\necho x >> unreviewed.txt\ngit add unreviewed.txt\n', { mode: 0o755 });
+    writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\necho x > unreviewed.txt\ngit add unreviewed.txt\n', { mode: 0o755 });
     writeFileSync(path.join(cwd, 'a.txt'), 'a');
-    const first = await gitCommit(cwd, 'first', true).catch((e) => e);
-    expect(first.code).toBe('commit_unverified');
-    expect(git(cwd, 'log', '-1', '--format=%s')).toBe('first'); // 首次提交不撤
-    writeFileSync(path.join(cwd, 'a.txt'), 'on branch');
-    const head = git(cwd, 'rev-parse', 'HEAD');
-    const err = await gitCommit(cwd, 'second', true).catch((e) => e);
+    const err = await gitCommit(cwd, 'first', true).catch((e) => e);
     expect(err.code).toBe('hook_changed_commit');
     expect(err.detail).toContain('unreviewed.txt');
-    expect(git(cwd, 'rev-parse', 'HEAD')).toBe(head); // 分支上的撤回了
-    git(cwd, 'reset', '-q', '--hard'); git(cwd, 'checkout', '-q', '--detach'); // 丢掉撤回后留在工作区的钩子改动,只剩一处过目的改动
-    writeFileSync(path.join(cwd, 'a.txt'), 'detached change');
-    const detached = await gitCommit(cwd, 'detached', true).catch((e) => e);
-    expect(detached.code).toBe('commit_unverified');
-    expect(git(cwd, 'log', '-1', '--format=%s')).toBe('detached'); // 游离 HEAD 不撤
+    expect(git(cwd, 'log', '-1', '--format=%s')).toBe('first');
   });
 
-  it.skipIf(process.platform === 'win32')('post-commit 钩子又提交了一次 → 认不准是哪个提交:commit_unverified,什么都不撤', async () => {
+  it.skipIf(process.platform === 'win32')('post-commit 钩子又提交了一次 → 父提交对不上:commit_unverified,什么都不动', async () => {
     const cwd = repo('hook-post');
     writeFileSync(path.join(cwd, 'a.txt'), 'a');
     git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
@@ -313,14 +300,14 @@ describe('仓库自带会执行程序的配置(gitTrust)', () => {
     writeFileSync(path.join(cwd, 'a.txt'), 'changed');
     const err = await gitCommit(cwd, 'mine', true).catch((e) => e);
     expect(err.code).toBe('commit_unverified');
-    expect(git(cwd, 'log', '-2', '--format=%s')).toBe('extra\nmine'); // 不猜、不撤:原样交给用户检查
+    expect(git(cwd, 'log', '-2', '--format=%s')).toBe('extra\nmine');
   });
 
-  it.skipIf(process.platform === 'win32')('post-commit 钩子 amend 了这次提交 / 切了分支 → 认不准:commit_unverified,什么都不撤', async () => {
-    for (const [name, hook] of [
+  it.skipIf(process.platform === 'win32')('post-commit 钩子 amend 只动了过目的文件 → 照常成功(返回改过的那个);切了分支 → commit_unverified', async () => {
+    for (const [name, hook, expected] of [
       // amend 得真改点东西:同一秒内原样 amend 出来的是同一个提交对象,引用根本不动
-      ['hook-amend', '[ -f .amended ] && exit 0\ntouch .amended\necho extra >> a.txt\ngit add a.txt\ngit commit -q --amend --no-edit\n'],
-      ['hook-switch', 'git switch -q -c elsewhere\n'],
+      ['hook-amend', '[ -f .git/amended ] && exit 0\ntouch .git/amended\necho extra >> a.txt\ngit add a.txt\ngit commit -q --amend --no-edit\n', 'ok'],
+      ['hook-switch', 'git switch -q -c elsewhere\n', 'commit_unverified'],
     ] as const) {
       const cwd = repo(name);
       writeFileSync(path.join(cwd, 'a.txt'), 'a');
@@ -329,63 +316,35 @@ describe('仓库自带会执行程序的配置(gitTrust)', () => {
       git(cwd, 'config', 'core.hooksPath', '.githooks');
       writeFileSync(path.join(hooks, 'post-commit'), `#!/bin/sh\n${hook}`, { mode: 0o755 });
       writeFileSync(path.join(cwd, 'a.txt'), 'changed');
-      const err = await gitCommit(cwd, 'mine', true).catch((e) => e);
-      expect(err.code, name).toBe('commit_unverified');
-      expect(git(cwd, 'log', '-1', '--format=%s'), name).toBe('mine'); // 没去撤任何东西
+      const r = await gitCommit(cwd, 'mine', true).catch((e) => e);
+      expect(r instanceof GitActionError ? r.code : 'ok', name).toBe(expected);
+      if (expected === 'ok') expect(r.sha, name).toBe(git(cwd, 'rev-parse', 'HEAD'));
+      expect(git(cwd, 'log', '-1', '--format=%s'), name).toBe('mine');
     }
   });
 
-  it.skipIf(process.platform === 'win32')('post-commit 钩子 reset 回基准再提交(同父、最新一条也是普通提交)→ reflog 多了不止一条:commit_unverified,不撤钩子的提交', async () => {
+  it.skipIf(process.platform === 'win32')('post-commit 钩子 reset 回基准再提交、带进没过目的文件 → hook_changed_commit,钩子的提交留着', async () => {
     const cwd = repo('hook-reset-recommit');
     writeFileSync(path.join(cwd, 'a.txt'), 'a');
     git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
     const base = git(cwd, 'rev-parse', 'HEAD');
     const hooks = dir('hook-reset-recommit/.githooks');
     git(cwd, 'config', 'core.hooksPath', '.githooks');
-    writeFileSync(path.join(hooks, 'post-commit'), '#!/bin/sh\n[ -f .done ] && exit 0\ntouch .done\ngit reset -q --soft HEAD~1\necho y > b.txt\ngit add b.txt .done\ngit commit -qm again\n', { mode: 0o755 });
+    writeFileSync(path.join(hooks, 'post-commit'), '#!/bin/sh\n[ -f .git/hook-done ] && exit 0\ntouch .git/hook-done\ngit reset -q --soft HEAD~1\necho y > b.txt\ngit add b.txt\ngit commit -qm again\n', { mode: 0o755 });
     writeFileSync(path.join(cwd, 'a.txt'), 'changed');
-    expect(await codeOf(gitCommit(cwd, 'mine', true))).toBe('commit_unverified');
-    expect(git(cwd, 'log', '-1', '--format=%s')).toBe('again'); // 钩子的提交原样留着
+    const err = await gitCommit(cwd, 'mine', true).catch((e) => e);
+    expect(err.code).toBe('hook_changed_commit');
+    expect(err.detail).toContain('b.txt');
+    expect(git(cwd, 'log', '-1', '--format=%s')).toBe('again');
     expect(git(cwd, 'rev-parse', 'HEAD~1')).toBe(base);
   });
 
-  it.skipIf(process.platform === 'win32')('同一秒里两条一模一样的 reset(钩子 reset 回基准再提交)→ 前两条比不出来,条数比得出:commit_unverified,不撤钩子的提交', async () => {
-    const cwd = repo('same-second-reset');
-    const FIXED = '2026-01-01T00:00:00+0000'; // reflog 的时间取提交者时间:钉死它,两次 reset 格式化后逐字相同
-    writeFileSync(path.join(cwd, 'a.txt'), 'a');
-    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
-    git(cwd, 'commit', '-q', '--allow-empty', '-m', 'tmp');
-    execFileSync('git', ['-C', cwd, 'reset', '-q', '--soft', 'HEAD~1'], { stdio: 'pipe', env: { ...process.env, GIT_COMMITTER_DATE: FIXED } });
-    const hooks = dir('same-second-reset/.githooks');
-    git(cwd, 'config', 'core.hooksPath', '.githooks');
-    writeFileSync(path.join(hooks, 'post-commit'), `#!/bin/sh\n[ -f .git/hook-done ] && exit 0\ntouch .git/hook-done\nGIT_COMMITTER_DATE='${FIXED}' git reset -q --soft HEAD~1\necho y > extra.txt\ngit add extra.txt\ngit commit -qm again\n`, { mode: 0o755 });
-    writeFileSync(path.join(cwd, 'a.txt'), 'b');
-    expect(await codeOf(gitCommit(cwd, 'mine', true))).toBe('commit_unverified');
-    expect(git(cwd, 'log', '-1', '--format=%s')).toBe('again'); // 钩子的提交原样
-  });
-
-  it.skipIf(process.platform === 'win32')('提交前 reflog 是空的(清过)→ 链没有前一条可接:钩子塞了文件只报 commit_unverified,不撤', async () => {
-    const cwd = repo('empty-reflog');
-    writeFileSync(path.join(cwd, 'a.txt'), 'a');
-    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
-    git(cwd, 'reflog', 'expire', '--expire=now', '--all');
-    const hooks = dir('empty-reflog/.githooks');
-    git(cwd, 'config', 'core.hooksPath', '.githooks');
-    writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\necho x >> extra.txt\ngit add extra.txt\n', { mode: 0o755 });
-    writeFileSync(path.join(cwd, 'a.txt'), 'b');
-    expect(await codeOf(gitCommit(cwd, 'mine', true))).toBe('commit_unverified');
-    expect(git(cwd, 'log', '-1', '--format=%s')).toBe('mine');
-  });
-
   it.skipIf(process.platform === 'win32')('钩子把分支改成指向别的分支的符号引用 → HEAD 解析变了:commit_unverified,两个分支都不动', async () => {
-    // 撤回那一步的 --no-deref 防的是「最后一次检查之后」才发生的同类并发改动(钩子造不出那个窗口,手动探针对照过:
-    // 不带它 update-ref 会顺着符号引用把 other 撤回基准)
     const cwd = repo('undo-symref');
     writeFileSync(path.join(cwd, 'a.txt'), 'a');
     git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
     const hooks = dir('undo-symref/.githooks');
     git(cwd, 'config', 'core.hooksPath', '.githooks');
-    writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\necho x >> extra.txt\ngit add extra.txt\n', { mode: 0o755 });
     writeFileSync(path.join(hooks, 'post-commit'), '#!/bin/sh\ngit branch other\ngit symbolic-ref refs/heads/main refs/heads/other\n', { mode: 0o755 });
     writeFileSync(path.join(cwd, 'a.txt'), 'b');
     expect(await codeOf(gitCommit(cwd, 'mine', true))).toBe('commit_unverified');
@@ -396,21 +355,6 @@ describe('仓库自带会执行程序的配置(gitTrust)', () => {
     const cwd = repo('sep-subject');
     writeFileSync(path.join(cwd, 'a.txt'), 'a');
     expect((await gitCommit(cwd, 'a\x1fb')).subject).toBe('a\x1fb');
-  });
-
-  it.skipIf(process.platform === 'win32')('关了 reflog:正常提交照常成功;钩子塞了没过目的文件 → 认不准不敢撤,报 commit_unverified', async () => {
-    const cwd = repo('no-reflog');
-    git(cwd, 'config', 'core.logAllRefUpdates', 'false');
-    writeFileSync(path.join(cwd, 'a.txt'), 'a');
-    git(cwd, 'add', '.'); git(cwd, 'commit', '-qm', 'base');
-    writeFileSync(path.join(cwd, 'a.txt'), 'b');
-    expect((await gitCommit(cwd, 'normal')).subject).toBe('normal');
-    const hooks = dir('no-reflog/.githooks');
-    git(cwd, 'config', 'core.hooksPath', '.githooks');
-    writeFileSync(path.join(hooks, 'pre-commit'), '#!/bin/sh\necho x > extra.txt\ngit add extra.txt\n', { mode: 0o755 });
-    writeFileSync(path.join(cwd, 'a.txt'), 'c');
-    expect(await codeOf(gitCommit(cwd, 'with extra', true))).toBe('commit_unverified');
-    expect(git(cwd, 'log', '-1', '--format=%s')).toBe('with extra'); // 没撤(认不准就不撤)
   });
 
   it('改名的原路径也进指纹:同一个目标、来源换了 → 指纹不同', () => {

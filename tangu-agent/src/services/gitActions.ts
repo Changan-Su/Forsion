@@ -335,8 +335,7 @@ export function assertWithinReviewed(entries: StagedEntry[], reviewed: Map<strin
  *  expect = 提交框里那份清单的指纹:重算对不上就拒(changes_changed)。
  *  **权威复核在提交之后**:以「新提交 vs 提交前的基准」的全部改动为准 —— 每条都得在过目的清单里、类型一致,再过安全检查
  *  (凭据 / 体量 / 嵌套仓)。钩子(lint-staged 之类在已确认路径内改格式照常放行)、别的 git 进程在检查与提交之间塞进来的东西都逃不过;
- *  分支上的提交不过关就带旧值条件撤回(工作区与 index 保留原样);首次提交 / 游离 HEAD 证明不了是自己的,只报 commit_unverified。
- *  提交前那几道只是省得白建提交的早退。 */
+ *  不过关报 hook_changed_commit 并列出来,**提交留着不撤**(为什么见提交后那段)。提交前那几道只是省得白建提交的早退。 */
 export async function gitCommit(cwd: string, message: unknown, trust?: boolean, expect?: unknown): Promise<{ sha: string; subject: string; stagedOnly: boolean }> {
   const text = typeof message === 'string' ? message.replace(/\0/g, '').replace(/\r\n/g, '\n').trim() : '';
   if (!text) throw new GitActionError('empty_message', 'The commit message is empty');
@@ -354,7 +353,7 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
   const reviewed = reviewedStatuses(scope.files, stagedOnly);
   const baseR = await readGit(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD'], { timeoutMs: 5000 });
   const base = baseR.code === 0 ? baseR.stdout.trim() : null;
-  // 提交会落在哪个分支引用上(游离 HEAD 时就是 HEAD 本身);提交后据此认准「刚才这一个」并只撤这个引用
+  // 提交会落在哪个分支引用上(游离 HEAD 时就是 HEAD 本身);提交后核对 HEAD 还解析到它
   const refR = await readGit(cwd, ['symbolic-ref', '-q', 'HEAD'], { timeoutMs: 5000 });
   const ref = refR.code === 0 && refR.stdout.trim() ? refR.stdout.trim() : 'HEAD';
   let addedByUs = false;
@@ -372,42 +371,28 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
     if (addedByUs) await unstageAll(cwd); // 是我们暂存的就退回去:用户看到的仓库状态与点提交之前一致
     throw e;
   }
-  // 提交前该引用 reflog 的最新一条(首次提交 / 没开 reflog = 空):提交后要看到「正好多了我们这一条」。读失败 = null,之后按认不准处理
-  const logBefore = base ? await reflogTop(cwd, ref, 1).catch(() => null) : [];
-  const countBefore = logBefore?.length ? await reflogCount(cwd, ref).catch(() => null) : null;
   const committed = await runAction(cwd, ['commit', '-F', '-'], { input: `${text}\n` });
   if (committed.code !== 0 && /tell me who you are|unable to auto-detect email address|auto-detection is disabled/i.test(committed.stderr)) {
     throw new GitActionError('no_identity', 'git does not know your name and email yet', tail(committed.stderr));
   }
   must(committed, 'commit');
-  // 认准「刚才这一个」提交:还在原来的分支引用上;该引用的 reflog 正好在提交前那条之上多了一条普通提交(post-commit 钩子 amend /
-  // 再提交 / reset 回基准再提交都会多出别的条目);父提交等于基准。认不准 / 提交后的任何读取失败都不猜:报 commit_unverified,
-  // 界面说清楚并重读 —— 提交可能已经在了,只是没法复核。
-  let ours = '';
-  let subject = '';
+  // 提交后复核:HEAD 还解析到原来的分支引用、新提交的父提交是基准,再按「新提交 vs 基准」的全部改动核对清单与安全检查。
+  // 读不到 / 对不上(post-commit 钩子又提交了一次、切了分支…)= commit_unverified:提交可能已经在了,只是没法确认,界面说清楚并重读。
+  // **不自动撤回**:钩子是用户信任过才会跑的代码,能改写引用和 reflog,宿主没有可靠的办法认出「哪一个是我们的提交」,
+  // 猜着撤会撤错(09-27 Codex 十轮评审一路收窄到这个结论);正常的钩子(重新生成 dist/ 或 lockfile 再 git add)也会让每次提交都被撤。
+  // 内容不合清单 → hook_changed_commit 列出多出来的,提交留着给用户处理(推送之前先看)。
+  let ours: string;
+  let subject: string;
   let final: StagedEntry[];
-  // 没有 reflog(core.logAllRefUpdates=false)时认不出别人动没动过引用:正常提交照样放行,只是万一要撤回时不敢撤(见下)
-  let identified = false;
   try {
     const nowRef = await readGit(cwd, ['symbolic-ref', '-q', 'HEAD'], { timeoutMs: 5000 });
     if ((nowRef.code === 0 && nowRef.stdout.trim() ? nowRef.stdout.trim() : 'HEAD') !== ref) throw new Error('the branch changed while committing');
-    const logAfter = logBefore ? await reflogTop(cwd, ref, logBefore.length + 1) : [];
-    if (logAfter.length) {
-      const [line, ...rest] = logAfter;
-      if (!/^commit(?: \(initial\))?:/.test(line.slice(nthSep(line, 2) + 1))) throw new Error('the latest update of the branch is not this commit');
-      if (rest.join('\n') !== logBefore!.join('\n')) throw new Error('the branch was updated more than once while committing');
-      // 条数也得正好多一条:同一秒里两条一模一样的 reset(同一目标、同一说明)格式化后分不出来,条数分得出
-      if (countBefore !== null && await reflogCount(cwd, ref) !== countBefore + 1) throw new Error('the branch was updated more than once while committing');
-      // 链得接在提交前那一条上才算认准:提交前没有 reflog(首次提交 / 清过)或条数没读到时,这一条是谁写的证明不了
-      ours = line.slice(0, nthSep(line, 1)); identified = logBefore!.length > 0 && countBefore !== null;
-    } else {
-      ours = must(await readGit(cwd, ['rev-parse', '--verify', ref]), 'rev-parse').stdout.trim();
-    }
-    if (!ours) throw new Error('the new commit could not be read');
+    ours = must(await readGit(cwd, ['rev-parse', '--verify', ref]), 'rev-parse').stdout.trim();
     const info = must(await readGit(cwd, ['log', '-1', '--format=%P%x1f%s', ours]), 'log').stdout.replace(/\n$/, '');
-    const parents = info.slice(0, nthSep(info, 1)).split(/\s+/).filter(Boolean);
-    subject = info.slice(nthSep(info, 1) + 1);
-    if (base ? parents.length !== 1 || parents[0] !== base : parents.length !== 0) throw new Error('the commit has an unexpected parent');
+    const sep = info.indexOf('\x1f'); // 标题里也可能有 \x1f:只按第一个切
+    const parents = info.slice(0, sep).split(/\s+/).filter(Boolean);
+    subject = info.slice(sep + 1);
+    if (sep < 0 || (base ? parents.length !== 1 || parents[0] !== base : parents.length !== 0)) throw new Error('the commit has an unexpected parent');
     const diff = must(await readGit(cwd, ['diff-tree', '-r', '--raw', '-z', '--no-renames', '--no-abbrev', '--no-commit-id', ...(base ? [base, ours] : ['--root', ours])], { maxOutputBytes: 8 * 1024 * 1024 }), 'diff-tree').stdout;
     final = parseRaw(diff);
   } catch (e) {
@@ -417,36 +402,10 @@ export async function gitCommit(cwd: string, message: unknown, trust?: boolean, 
     assertWithinReviewed(final, reviewed);
     await assertStagedSafe(cwd, final);
   } catch (e) {
-    // 只撤能证明是自己的、撤得干净的:认准了(见上;首次提交不算)且在分支上。游离 HEAD 不撤(撤回前 HEAD 若被切成分支,
-    // update-ref HEAD 会顺着改那个分支);分支本身也不跟随符号引用(--no-deref),撤回只动这一个引用
-    if (!identified || ref === 'HEAD') throw new GitActionError('commit_unverified', 'The commit does not match the reviewed list and could not be safely undone; check the repository', e instanceof GitActionError ? e.detail : String((e as Error)?.message || e));
-    const undone = await runAction(cwd, ['update-ref', '--no-deref', '-m', 'forsion: undo commit', ref, base!, ours]).catch(() => null);
-    if (!undone || undone.code !== 0) throw new GitActionError('commit_unverified', 'A commit hook changed the commit and it could not be undone; check the repository', tail(undone?.stderr || ''));
     const inner = e instanceof GitActionError ? e : null;
-    throw new GitActionError('hook_changed_commit', 'A git hook changed the commit so it no longer matches the reviewed list; the commit was undone', inner?.detail || String((e as Error)?.message || e));
+    throw new GitActionError('hook_changed_commit', 'A git hook changed the commit so it no longer matches the reviewed list; the commit was kept, check it before pushing', inner?.detail || String((e as Error)?.message || e));
   }
   return { sha: ours, subject, stagedOnly };
-}
-
-/** 引用 reflog 最新的 n 条(新的在前),每条「提交 \x1f 带时间的选择子 \x1f 说明」—— 带时间,前后两次读能逐条比对。
- *  引用还不存在时 git 报错(调用方按空处理);存在但没有 reflog = 空。 */
-async function reflogTop(cwd: string, ref: string, n: number): Promise<string[]> {
-  const r = must(await readGit(cwd, ['reflog', 'show', '--date=raw', '-n', String(n), '--format=%H%x1f%gd%x1f%gs', ref], { timeoutMs: 5000 }), 'reflog');
-  return r.stdout.split('\n').filter(Boolean);
-}
-
-/** 引用 reflog 的总条数(同一个提交出现几次就算几条)。 */
-async function reflogCount(cwd: string, ref: string): Promise<number> {
-  const n = Number(must(await readGit(cwd, ['rev-list', '--walk-reflogs', '--count', ref], { timeoutMs: 5000 }), 'rev-list').stdout.trim());
-  if (!Number.isInteger(n)) throw new Error('the reflog could not be counted');
-  return n;
-}
-
-/** 第 k 个 \x1f 的位置(说明里也可能有 \x1f,只按前面几个切);没有就是串尾。 */
-function nthSep(s: string, k: number): number {
-  let i = -1;
-  for (let j = 0; j < k; j++) { i = s.indexOf('\x1f', i + 1); if (i < 0) return s.length; }
-  return i;
 }
 
 /** 把 index 退回 HEAD(还没有提交的新仓 = 清空)。只在「index 是我们刚 add -A 的」时用。 */
