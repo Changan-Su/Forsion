@@ -407,6 +407,66 @@ describe('身份文件的位置', () => {
     expect(existsSync(path.join(a, '.tangu'))).toBe(false)
   })
 
+  it('旧位置的身份文件坏了 → 就地重铸(不在 .tangu/ 另铸一份,老版本读到的是同一个)', async () => {
+    const dir = await project('broken-root', { 'index.html': 'x' })
+    await fs.writeFile(path.join(dir, PRODUCT_SIDECAR), 'not json {')
+    const p = (await scanProducts(root)).find((x) => x.name === 'broken-root')!
+    expect(JSON.parse(await fs.readFile(path.join(dir, PRODUCT_SIDECAR), 'utf8')).id).toBe(p.id)
+    expect(existsSync(path.join(dir, '.tangu'))).toBe(false)
+  })
+
+  it('根目录与 .tangu/ 各有一个不同的身份(装回老版本时它在根目录另铸了一个)→ 以根目录那份为准(老版本只认它),.tangu/ 那份同步成同一个;只有 .tangu/ 的不往根目录添文件', async () => {
+    const dir = await project('diverged', { 'index.html': 'x' })
+    await writeSidecarFile(dir, JSON.stringify({ version: 1, id: 'p_aaaaaaaaaaaa', createdAt: 1 }))
+    await fs.writeFile(path.join(dir, PRODUCT_SIDECAR), JSON.stringify({ version: 1, id: 'p_bbbbbbbbbbbb', createdAt: 2 }))
+    expect((await scanProducts(root)).find((x) => x.name === 'diverged')!.id).toBe('p_bbbbbbbbbbbb')
+    expect((await sidecarOf(dir)).id).toBe('p_bbbbbbbbbbbb')
+    expect(JSON.parse(await fs.readFile(path.join(dir, PRODUCT_SIDECAR), 'utf8')).id).toBe('p_bbbbbbbbbbbb')
+    const fresh = await project('only-tangu', { 'index.html': 'x' })
+    await scanProducts(root)
+    expect(existsSync(path.join(fresh, PRODUCT_SIDECAR))).toBe(false)
+  })
+
+  it('⚠️别的项目的 .tangu/ 被整个拷进老项目(模板、技能、AGENTS.md 常这么搬)→ 老项目照旧是自己,拷来的那份同步回它;源项目的 id 不受牵连', async () => {
+    const q = await project('old-q', { 'index.html': 'x' }) // 先建 = 目录更老:按 .tangu/ 优先的读法,它会抢走源项目的 id
+    await fs.writeFile(path.join(q, PRODUCT_SIDECAR), JSON.stringify({ version: 1, id: 'p_cccccccccccc', createdAt: 1 }))
+    const src = await project('source', { 'index.html': 'x' })
+    const pid = (await scanProducts(root)).find((x) => x.name === 'source')!.id
+    await copySidecar(src, q)
+    const list = await scanProducts(root)
+    expect(list.find((x) => x.name === 'old-q')!.id).toBe('p_cccccccccccc')
+    expect(list.find((x) => x.name === 'source')!.id).toBe(pid)
+    expect(JSON.parse(await fs.readFile(path.join(q, PRODUCT_SIDECAR), 'utf8')).id).toBe('p_cccccccccccc')
+    expect((await sidecarOf(q)).id).toBe('p_cccccccccccc')
+    expect((await sidecarOf(src)).id).toBe(pid)
+  })
+
+  it('访达复制一个两处都有身份的项目(根目录 + .tangu/,同一个 id)→ 副本重铸,两处都换成新 id;原件不动', async () => {
+    const sc = JSON.stringify({ version: 1, id: 'p_dddddddddddd', createdAt: 1 })
+    const original = await project('both-orig', { 'index.html': 'x' })
+    await fs.writeFile(path.join(original, PRODUCT_SIDECAR), sc)
+    await writeSidecarFile(original, sc)
+    const copy = await project('both-copy', { 'index.html': 'x' })
+    await fs.writeFile(path.join(copy, PRODUCT_SIDECAR), sc)
+    await writeSidecarFile(copy, sc)
+    const list = await scanProducts(root)
+    const cid = list.find((x) => x.name === 'both-copy')!.id
+    expect(list.find((x) => x.name === 'both-orig')!.id).toBe('p_dddddddddddd')
+    expect(cid).not.toBe('p_dddddddddddd')
+    expect(JSON.parse(await fs.readFile(path.join(copy, PRODUCT_SIDECAR), 'utf8')).id).toBe(cid)
+    expect((await sidecarOf(copy)).id).toBe(cid)
+    expect(JSON.parse(await fs.readFile(path.join(original, PRODUCT_SIDECAR), 'utf8')).id).toBe('p_dddddddddddd')
+  })
+
+  it('根目录那份坏了、.tangu/ 有身份 → 用 .tangu/ 的并把根目录修成同一个(老版本不会另铸);同一次索引里的改名两处都写,不被修好的根目录盖回去', async () => {
+    const dir = await project('broken-root-2', { 'index.html': 'x' })
+    await writeSidecarFile(dir, JSON.stringify({ version: 1, id: 'p_eeeeeeeeeeee', createdAt: 1 }))
+    await fs.writeFile(path.join(dir, PRODUCT_SIDECAR), 'not json {')
+    await updateProduct(root, 'p_eeeeeeeeeeee', { name: 'Renamed' }) // 修根目录与改名落在同一次索引里
+    expect(JSON.parse(await fs.readFile(path.join(dir, PRODUCT_SIDECAR), 'utf8'))).toMatchObject({ id: 'p_eeeeeeeeeeee', name: 'Renamed' })
+    expect((await scanProducts(root)).find((x) => x.id === 'p_eeeeeeeeeeee')!.name).toBe('Renamed')
+  })
+
   it('新铸的身份只写进 .tangu/;.tangu 是软链(克隆来的仓可以自带 .tangu -> 别处)→ 不从那里读、不往那里写', async () => {
     const fresh = await project('fresh', { 'index.html': 'x' })
     await scanProducts(root)

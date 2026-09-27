@@ -1,7 +1,7 @@
 /**
  * Creations(造物)Space 的产物注册表 —— 托管根(~/Forsion/Project)的每个直接子目录 = 一个产物;
  * 另加本机「原地加入造物」的外部文件夹(宿主侧登记,见 productTrust.externalCreationRoots,由调用方传入)。
- * 身份落在项目目录里的 sidecar(`.tangu/.forsion-product.json`;兼容读 `.forsion/` 与老版本的根目录那份)而**不在路径里**:改文件夹名 / 挪位置之后,
+ * 身份落在项目目录里的 sidecar(新铸的写 `.tangu/.forsion-product.json`;老版本放在根目录的那份在就以它为准,也认 `.forsion/`)而**不在路径里**:改文件夹名 / 挪位置之后,
  * 桌面快捷方式与预览的稳定源都还认得同一个产物。sidecar 只说明「它是谁」:外部文件夹是不是造物,只看宿主侧登记。
  *
  * 无 Electron 依赖(纯 node fs/path/crypto),宿主只负责 IPC 信任;containment 在这里,
@@ -10,7 +10,7 @@
 import { existsSync, promises as fs, type Dirent, type Stats } from 'node:fs'
 import path from 'node:path'
 import { randomBytes } from 'node:crypto'
-import { PRODUCT_SIDECAR, PRODUCT_SIDECAR_PATHS, effectivePluginId, type ProductKind, type ProductSummary } from '../shared/products'
+import { PRODUCT_SIDECAR_NEW, PRODUCT_SIDECAR_PATHS, effectivePluginId, type ProductKind, type ProductSummary } from '../shared/products'
 import { dirIdentity, type DirIdentity } from './dirIdentity'
 
 /** 本机登记过的外部造物(调用方从 productTrust 取:真实路径 + 登记时的目录身份)。 */
@@ -111,16 +111,23 @@ async function sidecarAt(dir: string, rel: string): Promise<string | null> {
   return (await isFile(file)) ? file : null
 }
 
-/** 按位置顺序找身份:第一份身份齐全的赢;都不齐时带回第一份读得出的对象(重铸时保留它的未知字段)。at = 身份来自哪个位置(之后写回那里)。 */
-async function readRaw(dir: string): Promise<{ raw: Record<string, unknown> | null; at: string | null }> {
+/**
+ * 按读序(PRODUCT_SIDECAR_PATHS:根目录 → `.tangu/` → `.forsion/`)读身份。raw = 第一份身份齐全的;都不齐时是第一份读得出的对象
+ * (重铸时沿用它的未知字段)。files = 每个**实际存在**的身份文件位置 → 它的 id(坏 JSON / 没 id = null),读序不变 —— 之后这几份一律收敛到同一个身份。
+ */
+async function readRaw(dir: string): Promise<{ raw: Record<string, unknown> | null; files: Map<string, string | null> }> {
+  const files = new Map<string, string | null>()
+  let winner: Sidecar | null = null
   let first: Record<string, unknown> | null = null
   for (const rel of PRODUCT_SIDECAR_PATHS) {
     const file = await sidecarAt(dir, rel)
-    const raw = file ? await readJsonObject(file) : null
-    if (identified(raw)) return { raw, at: rel }
+    if (!file) continue
+    const raw = await readJsonObject(file)
+    files.set(rel, identified(raw) ? raw.id : null)
+    if (!winner && identified(raw)) winner = raw
     first ??= raw
   }
-  return { raw: first, at: null }
+  return { raw: winner ?? first, files }
 }
 
 /**
@@ -137,10 +144,10 @@ const identified = (raw: Record<string, unknown> | null): raw is Sidecar =>
 const mint = (base: Record<string, unknown> | null): Sidecar => ({ ...(base ?? {}), version: 1, id: newId(), createdAt: Date.now() })
 
 /** 原子写:同目录 tmp + rename(半截文件不会被下次扫描读到)。不是密文,不需要 0600。
- *  写回身份原来所在的位置(at);新铸的身份写进 `.tangu/`(没有就建;是软链 / 文件就拒,绝不写穿)。
+ *  at = 相对项目根的位置;`.tangu/` 没有就建(是软链 / 文件就拒,绝不写穿)。
  *  ⚠️不搬旧位置、不删旧文件:新旧版本会同时读写同一批造物(比如 dev 与正式版、升级后又装回老版本),老版本只认根目录那份 ——
  *    搬走 / 删掉它,老版本就当它没有身份、重铸一个新 id(快捷方式与预览里存的本地数据一起断)。 */
-async function writeSidecar(dir: string, sidecar: Sidecar, at: string = PRODUCT_SIDECAR_PATHS[0]): Promise<void> {
+async function writeSidecar(dir: string, sidecar: Sidecar, at: string): Promise<void> {
   const parts = at.split('/')
   if (parts.length > 1) {
     await fs.mkdir(path.join(dir, parts[0])).catch((e: NodeJS.ErrnoException) => { if (e?.code !== 'EEXIST') throw e })
@@ -212,7 +219,8 @@ export async function detectKind(dir: string): Promise<{ kind: ProductKind; entr
 
 // ── 索引(一遍扫全表)───────────────────────────────────────────────────────────
 
-interface Indexed { root: string; name: string; sidecar: Sidecar; at: string; updatedAt: number; external: boolean; dir: DirIdentity }
+/** targets = 这个产物的身份文件(读序);改名等写入要一份不落地写全,见 updateProduct。 */
+interface Indexed { root: string; name: string; sidecar: Sidecar; targets: string[]; updatedAt: number; external: boolean; dir: DirIdentity }
 
 /** 同一个目录只喊一次,别让每次 products:list 都往日志里刷同一行。 */
 const warned = new Set<string>()
@@ -279,7 +287,7 @@ const readName = (value: unknown, fallback: string): string => (nameIssue(value)
  * 就该立刻看见,缓存的失效逻辑比这几毫秒贵。
  */
 async function index(rootReal: string | null, externals: readonly ExternalRoot[] = []): Promise<Indexed[]> {
-  interface Found { root: string; name: string; raw: Record<string, unknown> | null; sidecar: Sidecar | null; at: string | null; updatedAt: number; birth: number; external: boolean; dir: DirIdentity }
+  interface Found { root: string; name: string; raw: Record<string, unknown> | null; sidecar: Sidecar | null; files: Map<string, string | null>; updatedAt: number; birth: number; external: boolean; dir: DirIdentity }
   const found: Found[] = []
   const add = async (root: string, name: string, external: boolean, expect?: DirIdentity): Promise<void> => {
     try {
@@ -287,10 +295,10 @@ async function index(rootReal: string | null, externals: readonly ExternalRoot[]
       if (st.isSymbolicLink() || !st.isDirectory()) return // 软链项目一律不认,绝不跟随
       // 外部造物:用它之前再核一次目录身份 —— 调用方核过之后这个路径被换成了别的目录,就不收(更不往里写 sidecar)
       if (expect && (st.dev !== expect.dev || st.ino !== expect.ino)) return
-      const { raw, at } = await readRaw(root)
+      const { raw, files } = await readRaw(root)
       // ⚠️先 stat 再补 sidecar:写 sidecar 会顶起目录 mtime,updatedAt 要的是补写**之前**那个,
       //   否则首次扫描会把整个栅格按「刚才补了谁」重排。
-      found.push({ root, name, raw, sidecar: identified(raw) ? raw : null, at, updatedAt: st.mtimeMs, birth: birthOf(st), external, dir: { dev: st.dev, ino: st.ino } })
+      found.push({ root, name, raw, sidecar: identified(raw) ? raw : null, files, updatedAt: st.mtimeMs, birth: birthOf(st), external, dir: { dev: st.dev, ino: st.ino } })
     } catch { /* 单个项目坏掉(权限/竞态删除)不拖垮整张表 */ }
   }
   // 托管根读不了(权限)只少了托管的那部分,外部造物照样列
@@ -331,16 +339,23 @@ async function index(rootReal: string | null, externals: readonly ExternalRoot[]
   }
   const indexed: Indexed[] = []
   for (const f of found) {
-    let sidecar = f.sidecar
     try {
-      // 重铸:原来有身份文件的写回原位置(重复 id 的输家也是 —— 老版本读到的与新版本一致),什么都没有的写进 `.tangu/`
-      const at = f.at ?? PRODUCT_SIDECAR_PATHS[0]
-      if (!sidecar || losers.has(f)) {
-        sidecar = mint(f.raw)
-        if (!(await stillThere(f))) continue
-        await writeSidecar(f.root, sidecar, at)
+      const minted = !f.sidecar || losers.has(f)
+      const sidecar = minted ? mint(f.raw) : f.sidecar!
+      // 已有的每一份身份文件都收敛到同一个身份(坏的、拷进来的、重复 id 的输家那几份一起):老版本只读根目录那份,
+      // 别处留着的旧 id 也不许哪天冒出来。一份都没有 → 只写 `.tangu/`,不往根目录添文件。
+      const targets = f.files.size ? [...f.files.keys()] : [PRODUCT_SIDECAR_NEW]
+      const stale = targets.filter((rel) => f.files.get(rel) !== sidecar.id)
+      if (stale.length && !(await stillThere(f))) continue
+      for (const rel of stale) {
+        try { await writeSidecar(f.root, sidecar, rel) } catch (e) {
+          // 新铸的必须落进读序第一份(下次读到的就是它),否则就是个落盘上不存在的临时身份 → 这一行不给(同只读盘);
+          // 已有身份时只是少同步了一份副本,不影响这一行
+          if (minted && rel === targets[0]) throw e
+          warnOnce(`${f.root}:${rel}`, `[products] 身份文件没能同步:${path.join(f.root, rel)}`, e)
+        }
       }
-      indexed.push({ root: f.root, name: f.name, sidecar, at, updatedAt: f.updatedAt, external: f.external, dir: f.dir })
+      indexed.push({ root: f.root, name: f.name, sidecar, targets, updatedAt: f.updatedAt, external: f.external, dir: f.dir })
     } catch (e) {
       // 写不进 sidecar(只读盘/权限):跳过,别给出一个落盘上不存在的临时身份。
       // ponytail: 行为不改(这一行就是会从栅格里消失),但**至少喊一声** —— 否则用户看到的是产物凭空没了,
@@ -470,7 +485,8 @@ export async function updateProduct(
     // 一个字段都没变(空 patch = 渲染层一次没带字段的往返)就别写:原子写会换掉 inode、顶起目录 mtime,
     // 于是这一行在 updatedAt 倒序的栅格里凭空跳到最前面 —— 什么都没改,位置却动了。
     if (JSON.stringify(next) === JSON.stringify(hit.sidecar)) return hit
-    await writeSidecar(hit.root, next, hit.at)
+    // 每一份都写:只写一份的话,别处那份(比如刚在这次索引里修好的根目录)按读序赢回来,改动凭空丢失
+    for (const rel of hit.targets) await writeSidecar(hit.root, next, rel)
     // 写完目录 mtime 变了,updatedAt 重新取一次,别让刚改完的产物在栅格里排到旧位置。
     const updatedAt = await fs.stat(hit.root).then((st) => st.mtimeMs).catch(() => hit.updatedAt)
     return { ...hit, sidecar: next, updatedAt }

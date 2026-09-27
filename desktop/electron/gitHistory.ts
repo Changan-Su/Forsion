@@ -78,7 +78,7 @@ const DARWIN_EXTRA = [
 const CONNECT_SIDECAR = '.forsion-connect.json'
 /** 暂存与恢复一律把两个边车排除在 pathspec 之外:`.gitignore` 护不住**已经被跟踪**的文件(agent / 用户 `add -f` 过一次就算),
  *  而恢复到一个没有它的旧提交会把它从磁盘上删掉 —— 产物 id、快捷方式、稳定源一起断。 */
-const SIDECARS = [...PRODUCT_SIDECAR_PATHS, CONNECT_SIDECAR] // 身份文件的三个位置(`.tangu/` / `.forsion/` / 老版本的根目录)+ 发布标记
+const SIDECARS = [...PRODUCT_SIDECAR_PATHS, CONNECT_SIDECAR] // 身份文件的三个位置(老版本的根目录 / `.tangu/` / `.forsion/`)+ 发布标记
 const SIDECAR_EXCLUDES = SIDECARS.map((p) => `:(exclude,top)${p}`)
 /** 旧快照(codeStudioProjects)由宿主兜底排除的那几类文件名,git 这条路不能反而放行:提交是永久的,之后一 push 就泄露。
  *  判据与那边逐字同源(按分隔符成词,`secretSanta.tsx` 不算,`secrets.json` / `my-credentials.yml` 算)。 */

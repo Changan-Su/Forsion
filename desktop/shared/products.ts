@@ -5,9 +5,12 @@ export type ProductKind = 'web' | 'plugin' | 'unknown'
 
 /** 项目目录里的身份文件名。id 在文件里不在路径里 → 改文件夹名 / 挪位置,快捷方式与稳定源都不死。 */
 export const PRODUCT_SIDECAR = '.forsion-product.json'
-/** 身份文件的位置(相对项目根,正斜杠)。新铸的写第一个 —— 项目里 Forsion 的东西都在 `.tangu/`(AGENTS.md、项目技能、计划、图标);
- *  读按顺序认,兼容 `.forsion/` 与老版本放在根目录的那份。已有的身份原来在哪就写回哪,**不搬不删**(老版本只认根目录那份)。 */
-export const PRODUCT_SIDECAR_PATHS = [`.tangu/${PRODUCT_SIDECAR}`, `.forsion/${PRODUCT_SIDECAR}`, PRODUCT_SIDECAR] as const
+/** 新铸的身份写这里 —— 项目里 Forsion 的东西都在 `.tangu/`(AGENTS.md、项目技能、计划、图标)。 */
+export const PRODUCT_SIDECAR_NEW = `.tangu/${PRODUCT_SIDECAR}`
+/** 身份文件的位置(相对项目根,正斜杠),也是**读序**:老版本放在根目录的那份在就以它为准 —— 老版本只认它,新旧版本对同一个文件夹
+ *  必须说同一个 id;`.tangu/` 又是用户 / agent 常在项目之间整个拷来拷去的目录(模板、技能),拷进来的身份不能盖过项目自己的。
+ *  其次 `.tangu/`,再兼容 `.forsion/`。已有的几份一律收敛成同一个身份,**不搬不删**。 */
+export const PRODUCT_SIDECAR_PATHS = [PRODUCT_SIDECAR, PRODUCT_SIDECAR_NEW, `.forsion/${PRODUCT_SIDECAR}`] as const
 
 /** 插件的**生效 id**:清单里的 id 合法(kebab-case)就用它,否则退回目录名,两者都不合法 → null。
  *  产物注册表与插件装载器(electron/amadeus/ipc.ts 的 pluginIdOf)**必须是同一条规则** —— 两边各判各的时,
