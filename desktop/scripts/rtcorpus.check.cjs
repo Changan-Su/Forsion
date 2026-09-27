@@ -42,7 +42,8 @@ const ONLY = (process.argv.find((a) => a.startsWith('--only=')) || '').slice('--
 const DUMP = process.argv.includes('--dump')
 
 const V = 'verbatim', W = 'whitelist', P = 'pending'
-/** golden:whitelist 桶第一轮的期望落盘(含首段的 Z)。forbid:任何桶都不许出现的形态。 */
+/** golden:whitelist 桶第一轮的期望落盘(含首段的 Z)。forbid:任何桶都不许出现的形态;require:落盘必须含的形态。
+ *  visible:打开后正文 innerText 必须含这段(「看得见」—— D-06 的换行、D-12 的定义行)。 */
 const CASES = [
   // ── d18-rt 的 21 份(verify-integrity-3/d18-rt.cjs)────────────────────────────────
   { id: 'd18.ordered_tight', bucket: V, md: `${M}\n\n1. a\n2. b\n` },
@@ -68,7 +69,7 @@ const CASES = [
   { id: 'd18.task_upper_X', bucket: W, why: '附录 A D-05:`[X]`→`[x]` 是规范化;`-`→`*` 列表符(拍板 #17 未改缺省)', md: `${M}\n\n- [X] Done\n`, golden: `${M}Z\n\n* [x] Done\n` },
 
   // ── D-06:行内 / 单元格 / 列表项里的 `<br>`(verify-rich-1/br.cjs、verify-keyboard-1/v01-br.cjs、d06_br.cjs)──
-  { id: 'd06.para', bucket: V, md: `${M}\n\nhello<br>world\n\nOther.\n` },
+  { id: 'd06.para', bucket: V, md: `${M}\n\nhello<br>world\n\nOther.\n`, visible: 'hello\nworld' },
   { id: 'd06.para_variants', bucket: V, md: `${M}\n\nline a<br>line b<br/>line c<br />line d<br >line e\n` },
   { id: 'd06.para_upper_attr', bucket: V, md: `${M}\n\nx<BR>y 与 x<br class="k">y\n` },
   { id: 'd06.cjk', bucket: V, md: `${M}\n\n第一行<br>第二行\n\n甲<br>乙\n` },
@@ -99,11 +100,14 @@ const CASES = [
   { id: 'r01.escaped_dollars', bucket: P, why: 'D-11(0b):转义被剥', md: `${M}\n\nnot math: \\$x\\$ ok\n`, forbid: /\\\\\$/ },
 
   // ── D-12:链接定义行 / `[标签]: 值` / 引用式链接(verify-integrity-2/d12b.cjs、d11d12.cjs)──
-  { id: 'd12.cn_label_line', bucket: V, md: `${M}\n\n会议记录\n\n[重要]: 明天开会\n\n[TODO]: 回复邮件\n\n结尾\n` },
+  { id: 'd12.cn_label_line', bucket: V, md: `${M}\n\n会议记录\n\n[重要]: 明天开会\n\n[TODO]: 回复邮件\n\n结尾\n`, visible: '[重要]: 明天开会' },
   { id: 'd12.en_label', bucket: V, md: `${M}\n\nnotes\n\n[Note]: remember-this\n` },
   { id: 'd12.unused_defs', bucket: V, md: `${M}\n\ntext\n\n[bookmark]: https://example.com\n[other]: https://other.com "t"\n` },
   { id: 'd12.reflink', bucket: V, md: `${M}\n\nsee [a][1] and [b][] and [c]\n\n[1]: http://example.com "Title"\n[b]: http://x.y\n[c]: /c\n` },
   { id: 'd12.def_in_quote', bucket: V, md: `${M}\n\n> 引文\n>\n> [ref]: https://q.example\n` },
+  { id: 'd12.def_multiline_in_list', bucket: V, md: `${M}\n\n* [a]: http://x.example\n  "title"\n` },
+  // 定义下一行紧跟正文:落盘时两段之间补一个空行(与 `text\n# h` 同一类块间 join,D-18 / 0b);定义行本身必须还在。
+  { id: 'd12.def_then_text', bucket: P, why: 'D-18(0b):块间补空行', md: `${M}\n\n[a]: x\ntext\n`, require: /\n\[a\]: x\n/ },
   { id: 'd12.def_escapes', bucket: V, md: `${M}\n\n[a_b]: https://x.com/a_b*c "t_1"\n\n[k]: <https://x.com/y z>\n` },
 
   // ── R-25 行首 #tag(verify-rich-5/tags.cjs)─────────────────────────────────────────
@@ -184,6 +188,10 @@ async function runCase(browser, c) {
   // 第一轮
   let page = await open(browser, c.md, errs)
   r.openWrites.push(await writeCount(page))
+  if (c.visible) {
+    const shown = await page.evaluate((s) => document.querySelector(s).innerText, PM)
+    if (!shown.includes(c.visible)) r.errs.push(`看不见:正文 innerText 不含 ${JSON.stringify(c.visible)}(实际 ${JSON.stringify(shown.slice(0, 120))})`)
+  }
   const one = await typeAndSave(page, M, 'Z')
   await page.close()
   const want1 = c.bucket === W ? c.golden : c.md.replace(M, M + 'Z')
@@ -250,7 +258,8 @@ async function main() {
   const tally = { PASS: 0, FAIL: 0, XFAIL: 0, XPASS: 0 }
   for (const [k, r] of results.entries()) {
     const c = cases[k]
-    const forbidden = c.forbid ? r.rounds.find((x) => x.out != null && c.forbid.test(x.out)) : null
+    const forbidden = (c.forbid ? r.rounds.find((x) => x.out != null && c.forbid.test(x.out)) : null)
+      || (c.require ? r.rounds.find((x) => x.out == null || !c.require.test(x.out)) : null)
     const openDirty = r.openWrites.some((n) => n !== 0)
     const exact = r.rounds.every((x) => x.out != null && x.out === x.want)
     const pageErr = r.errs.filter((e) => !/Failed to load resource/.test(e))
@@ -262,8 +271,8 @@ async function main() {
     if (tag === 'FAIL') red++
     const extra = [
       openDirty ? `openWrites=${JSON.stringify(r.openWrites)}` : '',
-      forbidden ? `命中 forbid ${c.forbid}` : '',
-      pageErr.length ? `pageerror=${JSON.stringify(pageErr.slice(0, 2))}` : '',
+      forbidden ? `命中 forbid ${c.forbid || ''} / 缺 require ${c.require || ''}` : '',
+      pageErr.length ? `errs=${JSON.stringify(pageErr.slice(0, 2))}` : '',
       c.why ? `(${c.why})` : '',
     ].filter(Boolean).join('  ')
     console.log(`${tag.padEnd(5)}  [${c.bucket}] ${c.id}${extra ? '  ' + extra : ''}`)

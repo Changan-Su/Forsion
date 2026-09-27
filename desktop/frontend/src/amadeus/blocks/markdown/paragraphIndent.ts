@@ -11,17 +11,18 @@
  *  $node 对同名节点 filter+append —— paragraph 被挪到 schema 节点序**尾部**,heading 顶替它成为
  *  缺省块类型,新建/切分块全部变 H1(实测 e2e 栽过,两种错法都别再犯)。
  */
-import { blockquoteSchema, bulletListSchema, commonmark, hardbreakClearMarkPlugin, hardbreakSchema, headingAttr, headingIdGenerator, headingSchema, orderedListSchema, paragraphAttr, paragraphSchema, remarkAddOrderInListPlugin } from '@milkdown/kit/preset/commonmark'
+import { blockquoteSchema, bulletListSchema, commonmark, hardbreakClearMarkPlugin, hardbreakSchema, headingAttr, headingIdGenerator, headingSchema, linkSchema, orderedListSchema, paragraphAttr, paragraphSchema, remarkAddOrderInListPlugin } from '@milkdown/kit/preset/commonmark'
 import type { EditorState, Transaction } from '@milkdown/kit/prose/state'
 import type { ResolvedPos } from '@milkdown/kit/prose/model'
 import { MAX_INDENT } from '@amadeus-shared/indentIo'
 import { indentedBlockquoteSchema, indentedBulletListSchema, indentedOrderedListSchema, indentMarker, markdownBlockIndent } from './structuralIndent'
 import { hardbreakClearMarkKeepAttrs, hardbreakWithHtmlSchema, inlineBrRemark, keepsTrailingBr } from './inlineBr'
 import { mathEscapeRemark } from './mathLivePreview'
+import { linkWithRefSchema, pristineRaw, refDefinitionsRemark } from './refDefinitions'
 
 export const clampIndent = (n: number): number => Math.max(0, Math.min(MAX_INDENT, Math.floor(n) || 0))
 
-type MdNode = { type: string; value?: string; children?: MdNode[]; data?: { amadeusIndent?: number } }
+type MdNode = { type: string; value?: string; children?: MdNode[]; data?: { amadeusIndent?: number; amadeusRaw?: string } }
 export type TextAlignment = 'left' | 'center' | 'right'
 
 const ALIGN_MARK = /^<span data-amadeus-align="(left|center|right)"><\/span>$/
@@ -46,12 +47,14 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
   const base = prev(ctx)
   return {
     ...base,
-    attrs: { ...(base.attrs ?? {}), indent: { default: 0 }, align: { default: 'left' } },
+    // raw:D-12 的「定义行字面段落」原文(见 ./refDefinitions);没被动过就原样写回。
+    attrs: { ...(base.attrs ?? {}), indent: { default: 0 }, align: { default: 'left' }, raw: { default: null } },
     parseDOM: [{
       tag: 'p',
       getAttrs: (dom) => ({
         indent: clampIndent(Number((dom as HTMLElement).getAttribute('data-indent'))),
         align: normalizeTextAlignment((dom as HTMLElement).getAttribute('data-align') || (dom as HTMLElement).style.textAlign),
+        raw: (dom as HTMLElement).getAttribute('data-md-raw'), // 粘贴链路(md → PM → DOM → parseSlice)靠它带回原文
       }),
     }],
     toDOM: (node) => {
@@ -60,6 +63,7 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
       const align = normalizeTextAlignment(node.attrs.align)
       if (indent) attrs['data-indent'] = String(indent)
       if (align !== 'left') attrs['data-align'] = align
+      if (typeof node.attrs.raw === 'string') attrs['data-md-raw'] = node.attrs.raw
       return ['p', attrs, 0]
     },
     parseMarkdown: {
@@ -82,7 +86,8 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
             children = rest ? [{ ...first, value: rest }, ...children!.slice(1)] : children!.slice(1)
           }
         }
-        state.openNode(type, indent || align !== 'left' ? { indent, align } : undefined)
+        const raw = (node as MdNode).data?.amadeusRaw ?? null
+        state.openNode(type, indent || align !== 'left' || raw != null ? { indent, align, raw } : undefined)
         if (children?.length) state.next(children as never)
         else if (!children) state.addText(((node as MdNode).value || '') as string)
         state.closeNode()
@@ -91,6 +96,14 @@ const paragraphIndentSchema = paragraphSchema.extendSchema((prev) => (ctx) => {
     toMarkdown: {
       match: base.toMarkdown.match,
       runner: (state, node) => {
+        // 没被动过的定义行字面段落(D-12):原文逐字写回,不经 remark 转义。
+        const literal = pristineRaw(node)
+        if (literal != null) {
+          state.openNode('paragraph')
+          state.addNode('html', undefined, literal)
+          state.closeNode()
+          return
+        }
         const indent = clampIndent(node.attrs.indent as number)
         const align = normalizeTextAlignment(node.attrs.align)
         // 末尾是带原文的 `<br>`(D-06,见 ./inlineBr):不走 preset 的 serializeText,它会把尾随 hardbreak 掐掉。
@@ -164,6 +177,7 @@ const headingAlignmentSchema = headingSchema.extendSchema((prev) => (ctx) => {
 const PARSE_FIDELITY = [
   ...inlineBrRemark, // D-06:行内 / 单元格里的 `<br>` → 带原文的 break(否则被 preserve-empty-line 删掉)
   ...mathEscapeRemark, // R-01:公式里被 markdown 当转义吃掉的反斜杠补回(须在 inlineBr 之后:`<br>` 已是换行)
+  ...refDefinitionsRemark, // D-12:定义行 → 字面段落、引用 → 带 ref 的链接(须在 remark-inline-links 之前,它会删定义)
 ]
 const presetWithReplacements = commonmark.map((p) =>
   (p as unknown) === (paragraphSchema.node as unknown) ? paragraphIndentSchema.node
@@ -179,6 +193,8 @@ const presetWithReplacements = commonmark.map((p) =>
   : (p as unknown) === (hardbreakSchema.node as unknown) ? hardbreakWithHtmlSchema.node
   : (p as unknown) === (hardbreakSchema.ctx as unknown) ? hardbreakWithHtmlSchema.ctx
   : (p as unknown) === (hardbreakClearMarkPlugin as unknown) ? hardbreakClearMarkKeepAttrs
+  : (p as unknown) === (linkSchema.mark as unknown) ? linkWithRefSchema.mark
+  : (p as unknown) === (linkSchema.ctx as unknown) ? linkWithRefSchema.ctx
   : p)
 export const commonmarkWithIndent = presetWithReplacements.flatMap((p) =>
   (p as unknown) === (remarkAddOrderInListPlugin.options as unknown) ? [...PARSE_FIDELITY, p] : [p])

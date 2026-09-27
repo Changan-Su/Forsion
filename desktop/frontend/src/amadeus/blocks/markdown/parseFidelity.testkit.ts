@@ -10,7 +10,7 @@ import { commonmarkWithIndent } from './paragraphIndent'
 import { structuralIndentRemark } from './structuralIndent'
 import { cjkFriendlyRemark } from './cjkFriendly'
 import { attentionSerializer } from './attentionFlanking'
-import { blankLineRemark } from './softBreak'
+import { blankLineRemark, softBreakRemark } from './softBreak'
 import { calloutTitleRemark } from './callout'
 import { normalizeSerializedMd } from './MarkdownBlock'
 
@@ -23,7 +23,8 @@ export interface Booted {
   destroy(): Promise<void>
 }
 
-export async function bootEditor(initial: string): Promise<Booted> {
+/** v3 = 旧 PageView 宿主(mindmap / dashboard)那一套:softBreakRemark 代替 blankLineRemark(MarkdownBlock 的 `unified ? … : …`)。 */
+export async function bootEditor(initial: string, opts: { v3?: boolean } = {}): Promise<Booted> {
   const root = document.createElement('div')
   document.body.appendChild(root)
   const ed = await Editor.make()
@@ -36,7 +37,7 @@ export async function bootEditor(initial: string): Promise<Booted> {
     .use(structuralIndentRemark)
     .use(cjkFriendlyRemark)
     .use(attentionSerializer)
-    .use(blankLineRemark)
+    .use(opts.v3 ? softBreakRemark : blankLineRemark)
     .use(calloutTitleRemark)
     .create()
   const view = ed.action((ctx) => ctx.get(editorViewCtx))
@@ -49,7 +50,7 @@ export async function bootEditor(initial: string): Promise<Booted> {
 }
 
 /** 打开 → 原样存盘(不编辑)。逐字保真 = 返回值 === 输入。 */
-export async function roundTrip(md: string): Promise<string> {
-  const b = await bootEditor(md)
+export async function roundTrip(md: string, opts: { v3?: boolean } = {}): Promise<string> {
+  const b = await bootEditor(md, opts)
   try { return b.md() } finally { await b.destroy() }
 }

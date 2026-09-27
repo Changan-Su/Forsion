@@ -95,6 +95,17 @@ export function splitParagraph(p: MdNode): MdNode[] {
   // 这里若一并过滤,那个空行每次重开笔记就少一个(实测:a⏎⏎b 重开后 a、b 贴到了一起)。
   while (lines.length && lines[0].length === 0) lines.shift()
   while (lines.length && lines[lines.length - 1].length === 0) lines.pop()
+  // 定义行字面段落(./refDefinitions,D-12)带着整组原文:拆成多段后每段只认自己那一行,
+  // 否则每段都「正文 ≠ 原文」,落盘全被转义成 `\[…]`。对不上行数就不认(按普通段落写,内容不丢)。
+  const raw = p?.data?.amadeusRaw
+  if (typeof raw === 'string' && lines.length > 1) {
+    const rawLines = raw.split('\n')
+    return lines.map((children, i) => ({
+      ...p,
+      children,
+      data: { ...p.data, amadeusRaw: rawLines.length === lines.length ? rawLines[i] : undefined },
+    }))
+  }
   return lines.map((children) => ({ ...p, children }))
 }
 
